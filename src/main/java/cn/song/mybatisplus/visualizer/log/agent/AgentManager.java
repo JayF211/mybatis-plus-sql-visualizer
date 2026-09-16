@@ -63,7 +63,7 @@ public final class AgentManager implements Disposable {
     private final Project project;
 
     /** 在线态：任一会话活跃且最近窗口内有心跳/事件。UI 状态行/接管切换依据。 */
-    private volatile boolean online = false;
+    public volatile boolean online = false;
 
     private final CopyOnWriteArrayList<AgentSession> sessions = new CopyOnWriteArrayList<>();
 

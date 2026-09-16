@@ -114,6 +114,11 @@ public class SqlLogHistoryRoundTripTest {
                 .collect(Collectors.toList());
         assertEquals(2, noDuration.size());
         noDuration.forEach(e -> assertNull("无耗时条目读回 null", e.executionTimeMs()));
+
+        // T-LogHistoryRowNo：round-trip 读回条目按文件内顺序带序号（写端不持久化，读端派生）
+        List<LogSqlEntry> today = SqlLogFileReader.INSTANCE.readFromFile(files[0]);
+        assertEquals("今天文件 3 条按顺序号 1..3", List.of(1L, 2L, 3L),
+                today.stream().map(LogSqlEntry::sequenceNumber).toList());
     }
 
     @Test
@@ -216,5 +221,76 @@ public class SqlLogHistoryRoundTripTest {
                 List.of(Boolean.FALSE, Boolean.TRUE),
                 result.getParamHints().stream().map(h -> h.getQuote()).collect(Collectors.toList()));
         assertNull(result.getWarning());
+    }
+
+    // ---------- M56 T-M56-00：扩展字段（mapperStatement/errorText/requestTag/updateCount）回环 ----------
+
+    @Test
+    public void 真实链路_扩展字段条目写读回环_四字段不丢() throws Exception {
+        File dir = tempDir();
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        saver.configure(dir.getAbsolutePath(), "sql-history-$yyyy-MM-dd$.sql", null);
+        // agent 通道形态：无参数、无占位符，但扩展字段齐备——pd 行须因扩展字段在场而写入
+        LogSqlEntry captured = new LogSqlEntry(
+                "UPDATE user SET name = 'x' WHERE id = 7",
+                "UPDATE user SET name = 'x' WHERE id = 7",
+                List.of(),
+                1724567890000L,
+                null,
+                LogSqlEntry.computeSummary("UPDATE user SET name = 'x' WHERE id = 7"),
+                SqlSource.UNKNOWN,
+                2L,
+                null,
+                0,
+                List.of(),
+                0L,
+                "com.example.mapper.UserMapper.updateName",
+                null,
+                "req-88",
+                1L,
+                null);
+        saver.write(captured);
+        saver.close();
+
+        File[] files = Objects.requireNonNull(dir.listFiles(f -> f.getName().endsWith(".sql")));
+        assertEquals(1, files.length);
+        LogSqlEntry read = SqlLogFileReader.INSTANCE.readFromFile(files[0]).get(0);
+        assertEquals("mapperStatement 回环", captured.mapperStatement(), read.mapperStatement());
+        assertEquals("requestTag 回环", captured.requestTag(), read.requestTag());
+        assertEquals("updateCount 回环", captured.updateCount(), read.updateCount());
+        assertNull("无报错条目回环 null", read.errorText());
+    }
+
+    @Test
+    public void 真实链路_报错条目写读回环_errorText不丢() throws Exception {
+        File dir = tempDir();
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        saver.configure(dir.getAbsolutePath(), "sql-history-$yyyy-MM-dd$.sql", null);
+        saver.write(new LogSqlEntry(
+                "SELECT * FROM no_such_table",
+                "SELECT * FROM no_such_table",
+                List.of(),
+                1724567890001L,
+                null,
+                LogSqlEntry.computeSummary("SELECT * FROM no_such_table"),
+                SqlSource.UNKNOWN,
+                null,
+                null,
+                0,
+                List.of(),
+                0L,
+                null,
+                "BadSqlGrammarException: Table 'no_such_table' doesn't exist",
+                null,
+                null,
+                null));
+        saver.close();
+        LogSqlEntry read = SqlLogFileReader.INSTANCE
+                .readFromFile(Objects.requireNonNull(dir.listFiles(f -> f.getName().endsWith(".sql")))[0]).get(0);
+        assertEquals(
+                "errorText 回环",
+                "BadSqlGrammarException: Table 'no_such_table' doesn't exist",
+                read.errorText());
+        assertNull(read.mapperStatement());
     }
 }

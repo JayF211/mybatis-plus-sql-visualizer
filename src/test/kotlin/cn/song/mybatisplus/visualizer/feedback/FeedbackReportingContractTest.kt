@@ -36,4 +36,7 @@ class FeedbackReportingContractTest {
         val version = FeedbackReporting.ideVersion()
         assertTrue("ideVersion 应为 null 或非空平台名", version == null || version.isNotBlank())
     }
+
+    // T-MarketInternal（2026-09-14）：`错误池归属判定` 用例随 isPluginError 删除——
+    // 错误池读取走 MessagePool（262 Internal API），市场整改整体摘除，无新数据源可锁。
 }

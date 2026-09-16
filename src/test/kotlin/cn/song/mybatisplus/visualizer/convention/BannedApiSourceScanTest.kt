@@ -9,8 +9,10 @@ import java.io.File
  *
  * 收录的每条规则都对应一个「编译通过、headless 测试全绿、只有真机/特定发行版才炸」的历史坑，
  * 见 docs/memory-archive/pitfalls/ 与全局平台陷阱清单：
- *  - ActionToolbar 刷新 API（updateActionsAsync/updateActionsImmediately/updateImmediately）：
- *    沙盒中不可靠，刷新必须走 UIUtil.uiTraverser + 反射 setIcon + repaint 路线；
+ *  - ActionToolbar 刷新：updateActionsAsync/updateImmediately 旧式 API 沙盒中不可靠仍禁用；
+ *    T-UiNative T-UN-11（2026-09-16）起「uiTraverser + 反射 getAction + setIcon」hack 退役，
+ *    刷新钦定 ActionToolbar.updateActionsImmediately()（真实 IDE 工具栏可见场景可靠），
+ *    动作图标/灰置一律由 AnAction.update() 声明——反射强改按钮回归本规则把关；
  *  - JBIconButton / SmallIconButton / InlineIconButton / IconUtil：IPGP 发行版裁剪平台类
  *    （编译实证不可用，SqlToJavaPanel/IconScaler 注释即当年事故现场），须自建替代；
  *  - `BrowserUtil.browse(`：不走沙盒隔离直接 ShellExecute 拉起宿主机浏览器
@@ -66,14 +68,25 @@ class BannedApiSourceScanTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun `禁用ActionToolbar沙盒不可靠刷新API`() {
-        for (api in listOf("updateActionsAsync(", "updateActionsImmediately(", "updateImmediately(")) {
+    fun `禁用ActionToolbar旧式刷新API与反射强改按钮hack`() {
+        // T-UiNative T-UN-11（2026-09-16）方向反转：原规则钦定的「uiTraverser+反射 getAction+
+        // setIcon/repaint」路线是沙盒 workaround，随反射 hack 退役改为禁用对象——真实 IDE 中
+        // 工具栏可见，原生更新机制可靠；刷新统一走 updateActionsImmediately()。
+        for (api in listOf("updateActionsAsync(", "updateImmediately(")) {
             assertNoHits(
                 api,
-                "沙盒中不可靠，真机表现不可复现",
-                "刷新走 UIUtil.uiTraverser + 反射 getAction + setIcon/repaint 路线",
+                "旧式刷新 API 沙盒中不可靠，真机表现不可复现",
+                "刷新走 ActionToolbar.updateActionsImmediately()，图标/灰置由 AnAction.update() 声明",
             )
         }
+        val hack = mainSources()
+            .filter { (_, code) -> code.contains("\"ActionButton\"") || code.contains("getMethod(\"getAction\")") }
+            .map { (path, _) -> path }
+        assertTrue(
+            "src/main 出现 ActionToolbar 反射强改按钮 hack（T-UN-11 已退役）：$hack。" +
+                "刷新改走 toolbar.updateActionsImmediately()，动作外观由 AnAction.update() 声明",
+            hack.isEmpty(),
+        )
     }
 
     @Test
@@ -109,6 +122,24 @@ class BannedApiSourceScanTest {
             .map { (path, _) -> path }
         assertTrue(
             "含 createFileFromText( 的文件无 ReadAction 保护（EDT 直调 262 read access 硬抛）：$bad",
+            bad.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `方言setMapping反射只允许DialectPreMapping单入口`() {
+        // T-ExecSlowOps F1：SqlDialectMappings.setMapping 平台硬要求 EDT（handleMappingChange →
+        // reparseFiles → runWriteAction → VcsVFSListener.beforeContentsChange 断言），262 真机
+        // 后台预热线程反射直调必炸 "Access is allowed from EDT only"。方言映射唯一入口是
+        // DialectPreMapping.ensureMapped（BGT 读探测 + invokeLater 派 EDT），新调用点禁止绕开。
+        val allowed = "src/main/java/cn/song/mybatisplus/visualizer/execute/DialectPreMapping.java"
+        val bad = mainSources()
+            .filter { (_, code) -> code.contains("\"setMapping\"") }
+            .map { (path, _) -> path }
+            .filter { it != allowed }
+        assertTrue(
+            "setMapping 反射出现在 $allowed 之外（线程语义收口被绕开，BGT 直调 EDT-only API 必抛）：$bad。" +
+                "方言映射统一走 DialectPreMapping.ensureMapped",
             bad.isEmpty(),
         )
     }

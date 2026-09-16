@@ -38,6 +38,36 @@ public class SqlLogFileReaderTest {
     }
 
     @Test
+    public void 解析新版格式_logTime读回回归() throws Exception {
+        // T-AgentDialectLoop 回归锁：毫秒分数曾为嵌套捕获组占位第 4 组，logTime 永远读丢
+        String content = "--- source: a/A.java:9 | time: 5ms | 2026-08-25 10:00:00.123 | logTime: 1724567890123 ---\nSELECT 1\n\n";
+        LogSqlEntry entry = SqlLogFileReader.INSTANCE.parseContent(content).get(0);
+        assertEquals(1724567890123L, entry.logTimestamp().longValue());
+    }
+
+    @Test
+    public void 解析新版格式_logTime缺省为null() throws Exception {
+        String content = "--- source: a/A.java:9 | time: 5ms | 2026-08-25 10:00:00.123 ---\nSELECT 1\n\n";
+        LogSqlEntry entry = SqlLogFileReader.INSTANCE.parseContent(content).get(0);
+        assertNull(entry.logTimestamp());
+    }
+
+    @Test
+    public void 解析新版格式_db读回_T_AgentDialectLoop() throws Exception {
+        String content = "--- source: unknown | time: — | 2026-08-25 10:00:00.123 | logTime: 1724567890123 | db: DM（达梦） ---\nSELECT 1\n\n";
+        LogSqlEntry entry = SqlLogFileReader.INSTANCE.parseContent(content).get(0);
+        assertEquals(1724567890123L, entry.logTimestamp().longValue());
+        assertEquals("DM（达梦）", entry.databaseName());
+    }
+
+    @Test
+    public void 解析新版格式_db缺省为null() throws Exception {
+        String content = "--- source: unknown | time: — | 2026-08-25 10:00:00.123 ---\nSELECT 1\n\n";
+        LogSqlEntry entry = SqlLogFileReader.INSTANCE.parseContent(content).get(0);
+        assertNull(entry.databaseName());
+    }
+
+    @Test
     public void 解析新版格式_unknown_source() throws Exception {
         String content = "--- source: unknown | time: — | 2026-08-25 10:00:00.123 ---\nSELECT 1\n\n";
         List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.parseContent(content);
@@ -302,5 +332,56 @@ public class SqlLogFileReaderTest {
         assertEquals("pd 行不劈块：v2 条目 + F-43 条目", 2, entries.size());
         assertEquals("SELECT '1'", entries.get(0).restoredSql());
         assertEquals("SELECT 2", entries.get(1).restoredSql());
+    }
+
+    // ---------- T-LogHistoryRowNo：文件内条目顺序号 ----------
+
+    @Test
+    public void parseContent注入文件内顺序号_连续() throws Exception {
+        String content = ""
+            + "--- source: A.java:1 | time: 1ms | 2026-08-25 10:00:00.000 ---\n"
+            + "SELECT 1\n\n"
+            + "--- source: B.java:2 | time: 2ms | 2026-08-25 10:00:01.000 ---\n"
+            + "SELECT 2\n\n"
+            + "--- source: C.java:3 | time: 3ms | 2026-08-25 10:00:02.000 ---\n"
+            + "SELECT 3\n\n";
+        List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.parseContent(content);
+        assertEquals(List.of(1L, 2L, 3L), entries.stream().map(LogSqlEntry::sequenceNumber).toList());
+    }
+
+    @Test
+    public void parseContent混合格式顺序号按文件解析顺序() throws Exception {
+        // 新旧格式混合：序号按文件出现顺序连续（不按格式分组）
+        String content = ""
+            + "-- source: UserMapper.java:10 | time: 3ms | 2026-08-31 17:30:00.000 --\n"
+            + "SELECT 1\n\n"
+            + "-- 2026-08-31 09:00:00\n"
+            + "SELECT 2\n\n"
+            + "--- source: OrderMapper.java:20 | time: 10ms | 2026-08-31 17:30:01.000 ---\n"
+            + "SELECT 3\n\n";
+        List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.parseContent(content);
+        assertEquals(3, entries.size());
+        assertEquals(List.of(1L, 2L, 3L), entries.stream().map(LogSqlEntry::sequenceNumber).toList());
+    }
+
+    @Test
+    public void readAll多文件每文件内序号独立从1起() throws Exception {
+        File dir = Files.createTempDirectory("loghistrow-").toFile();
+        dir.deleteOnExit();
+        Files.writeString(new File(dir, "a.sql").toPath(),
+            "--- source: A.java:1 | time: 1ms | 2026-08-25 10:00:00.000 ---\nSELECT 1\n\n" +
+                "--- source: B.java:2 | time: 2ms | 2026-08-25 10:00:01.000 ---\nSELECT 2\n\n");
+        Files.writeString(new File(dir, "b.sql").toPath(),
+            "--- source: C.java:1 | time: 3ms | 2026-08-25 10:00:02.000 ---\nSELECT 3\n\n");
+        // 历史面板按单文件展示：每文件内序号各自 1..N（不跨文件连续）
+        assertEquals(List.of(1L, 2L),
+            SqlLogFileReader.INSTANCE.readFromFile(new File(dir, "a.sql")).stream().map(LogSqlEntry::sequenceNumber).toList());
+        assertEquals(List.of(1L),
+            SqlLogFileReader.INSTANCE.readFromFile(new File(dir, "b.sql")).stream().map(LogSqlEntry::sequenceNumber).toList());
+    }
+
+    @Test
+    public void 空内容序号无影响() throws Exception {
+        assertTrue(SqlLogFileReader.INSTANCE.parseContent("").isEmpty());
     }
 }

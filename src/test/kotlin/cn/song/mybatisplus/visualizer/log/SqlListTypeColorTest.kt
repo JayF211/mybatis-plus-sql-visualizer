@@ -1,9 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.awt.Color
 
@@ -11,13 +9,12 @@ import java.awt.Color
  * [SqlListTypeColor] 纯逻辑单测（T-CrudColor）。
  *
  * 覆盖：样式归一化（未知值兜底 bar）、类型→标记色（四类型 / 关闭 / OTHER / 非法色值回退）、
- * `#RRGGBB` 解析容错（缺 `#`、非法字符、空串、超长一律回退且不抛）、
- * 混色线性（0→base、1→tint、中间逐通道）、暗色描边提亮（亮色原样返回 / 暗色达亮度阈值）。
+ * `#RRGGBB` 解析容错（缺 `#`、非法字符、空串、超长一律回退且不抛）、混色线性（0→base、1→tint、中间逐通道）。
+ * （T-UN-09：选中描边退役，`ensureOutlineContrast` 提亮算法与 `usesSelectionFill` 已随删，相关用例移除。）
  *
  * 全部走**纯函数重载**（[SqlListTypeColor.parseHex] / [SqlListTypeColor.blend] /
- * [SqlListTypeColor.colorOf] 三参版 / [SqlListTypeColor.styleOf] 单参版 /
- * [SqlListTypeColor.ensureOutlineContrast]），零平台依赖——读设置的薄壳由
- * SqlLogPanelRendererUiTest 等平台用例覆盖。
+ * [SqlListTypeColor.colorOf] 三参版 / [SqlListTypeColor.styleOf] 单参版），零平台依赖——
+ * 读设置的薄壳由 SqlLogPanelRendererUiTest 等平台用例覆盖。
  */
 class SqlListTypeColorTest {
 
@@ -118,12 +115,11 @@ class SqlListTypeColorTest {
 
     @Test
     fun `混色_暗色底实测值与设计稿一致`() {
-        // 设计稿色值表（计划 §1.2.1）复现：blend(#1E1F22, 类型色, 0.14 / 0.30)
+        // 设计稿色值表（计划 §1.2.1）复现：blend(#1E1F22, 类型色, 0.14)
         val dark = Color(0x1E1F22)
         assertEquals(Color(0x242D3E), SqlListTypeColor.blend(dark, Color(0x4A86E8), SqlListTypeColor.MIX_NORMAL))
         assertEquals(Color(0x243328), SqlListTypeColor.blend(dark, Color(0x4CAF50), SqlListTypeColor.MIX_NORMAL))
         assertEquals(Color(0x372124), SqlListTypeColor.blend(dark, Color(0xD32F2F), SqlListTypeColor.MIX_NORMAL))
-        assertEquals(Color(0x5A3C22), SqlListTypeColor.blend(dark, Color(0xE67E22), SqlListTypeColor.MIX_SELECTED))
     }
 
     @Test
@@ -132,49 +128,5 @@ class SqlListTypeColorTest {
         assertEquals(Color(0xE6EEFC), SqlListTypeColor.blend(light, Color(0x4A86E8), SqlListTypeColor.MIX_NORMAL))
         assertEquals(Color(0xE6F4E7), SqlListTypeColor.blend(light, Color(0x4CAF50), SqlListTypeColor.MIX_NORMAL))
         assertEquals(Color(0xF9E2E2), SqlListTypeColor.blend(light, Color(0xD32F2F), SqlListTypeColor.MIX_NORMAL))
-        assertEquals(Color(0xF8D8BD), SqlListTypeColor.blend(light, Color(0xE67E22), SqlListTypeColor.MIX_SELECTED))
-    }
-
-    // ---------- 描边对比度保障 ----------
-
-    @Test
-    fun `描边色_亮色主题原样返回`() {
-        val color = Color(0x3574F0)
-        assertEquals("亮色主题不应改动描边色", color, SqlListTypeColor.ensureOutlineContrast(color, false))
-        val darkSelection = Color(0x2E436E)
-        assertEquals("亮色主题下即使是暗色的低亮度色也应原样返回",
-            darkSelection, SqlListTypeColor.ensureOutlineContrast(darkSelection, false))
-    }
-
-    @Test
-    fun `描边色_暗色主题低亮度被提亮`() {
-        val darkSelection = Color(0x2E436E) // Darcula selectionBackground，亮度约 0.26
-        val out = SqlListTypeColor.ensureOutlineContrast(darkSelection, true)
-        assertTrue("暗色下应提亮到可见阈值以上（亮度 ${SqlListTypeColor.brightnessOf(out)}）",
-            SqlListTypeColor.brightnessOf(out) >= 0.45)
-    }
-
-    @Test
-    fun `描边色_已足够亮的不动`() {
-        val bright = Color(0x548AF7)
-        assertEquals("已达标不应再改动", bright, SqlListTypeColor.ensureOutlineContrast(bright, true))
-    }
-
-    @Test
-    fun `描边色_四类默认色在暗色下均达阈值`() {
-        StatementType.values().filter { it != StatementType.OTHER }.forEach { type ->
-            val out = SqlListTypeColor.ensureOutlineContrast(SqlListTypeColor.defaultOf(type), true)
-            assertTrue("$type 默认色在暗色下应达亮度阈值（亮度 ${SqlListTypeColor.brightnessOf(out)}）",
-                SqlListTypeColor.brightnessOf(out) >= 0.45)
-        }
-    }
-
-    // ---------- 平台填充判定 ----------
-
-    @Test
-    fun `平台选中填充_仅色条样式为true`() {
-        assertTrue(SqlListTypeColor.usesSelectionFill(SqlListTypeColor.STYLE_BAR))
-        assertEquals(false, SqlListTypeColor.usesSelectionFill(SqlListTypeColor.STYLE_BACKGROUND))
-        assertEquals(false, SqlListTypeColor.usesSelectionFill(SqlListTypeColor.STYLE_OFF))
     }
 }

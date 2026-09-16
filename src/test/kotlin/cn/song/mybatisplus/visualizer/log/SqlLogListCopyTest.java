@@ -79,4 +79,37 @@ public class SqlLogListCopyTest extends BasePlatformTestCase {
         );
         assertEquals("SELECT * FROM t WHERE id = 10;", list.textFor(0, e));
     }
+
+    // ---------- T-ListPreviewCopy：右键批量复制 + 右键选中收敛 ----------
+
+    @Test
+    public void testBatchCopySql多选拼接与内置CtrlC同构() throws Exception {
+        List<LogSqlEntry> entries = List.of(
+            entry("SELECT * FROM t WHERE id = 1", "SELECT * FROM t WHERE id = 1"),
+            entry("UPDATE t SET name = 'a' WHERE id = 2", "UPDATE t SET name = 'a' WHERE id = 2"));
+        String joined = SqlLogPanelKt.batchCopySql(entries);
+        assertEquals("多条换行拼接、逐条分号收尾", "SELECT * FROM t WHERE id = 1;\nUPDATE t SET name = 'a' WHERE id = 2;", joined);
+        assertTrue("拼接后仍为纯文本", !joined.contains("<html"));
+    }
+
+    @Test
+    public void testBatchCopySql单条与分号不重复() throws Exception {
+        assertEquals("SELECT 1;", SqlLogPanelKt.batchCopySql(List.of(entry("SELECT 1", "SELECT 1"))));
+        assertEquals("已有分号不重复追加", "SELECT 1;", SqlLogPanelKt.batchCopySql(List.of(entry("SELECT 1;", "SELECT 1;"))));
+        assertEquals("空列表空串", "", SqlLogPanelKt.batchCopySql(List.of()));
+    }
+
+    @Test
+    public void testResolveContextMenuSelection命中行在多选内保留多选() throws Exception {
+        int[] kept = SqlLogPanelKt.resolveContextMenuSelection(new int[]{0, 2, 5}, 2);
+        assertTrue("命中行在集合内应保留原多选（复制项=批量复制）", java.util.Arrays.equals(new int[]{0, 2, 5}, kept));
+    }
+
+    @Test
+    public void testResolveContextMenuSelection命中行不在集合内收敛为该行() throws Exception {
+        int[] collapsed = SqlLogPanelKt.resolveContextMenuSelection(new int[]{0, 2, 5}, 4);
+        assertTrue("命中行不在集合内应收敛为该行（右键=切换操作目标）", java.util.Arrays.equals(new int[]{4}, collapsed));
+        int[] single = SqlLogPanelKt.resolveContextMenuSelection(new int[]{1}, 1);
+        assertTrue("单选右键自身保持单选", java.util.Arrays.equals(new int[]{1}, single));
+    }
 }

@@ -50,6 +50,7 @@ public class HistorySqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
 
     @Test
     public void test缺源码位置_nullSource_无法跳转_NoSource() throws Exception {
+        // T-JumpCapture：NoSource 的生产侧行为 = SourceCaptureGuide 引导弹框（headless 不触弹窗，仅断言解析分支）
         HistorySqlLogPanel panel = new HistorySqlLogPanel(getProject());
         panel.refreshForTest();
         try {

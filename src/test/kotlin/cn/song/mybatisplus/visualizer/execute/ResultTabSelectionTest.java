@@ -161,6 +161,44 @@ public class ResultTabSelectionTest extends BasePlatformTestCase {
         assertNull(DataSourceSelector.pickResultTab(new Content[0], Set.of(), 40));
     }
 
+    // ==================== 场景五：空名占位（T-ExplainFirstNative 首点病灶） ====================
+
+    /**
+     * DBN 首次执行先 add 空名 Content 再异步改名/建网格（262 真机 21:06:45 实证
+     * `contentAdded: `）。空名 ∉ 空快照集合恒真，此前第 1 拍即被当新结果选中并强制换入
+     * （网格尚未构建），事后无人补换入 → 结果滞留原生控制台。
+     */
+    @Test
+    public void testBlankNamePlaceholderNotPickedAsNew() {
+        Content blank = new FakeContent("").proxy;
+        assertNull("空名占位不得当新结果选中",
+                DataSourceSelector.pickResultTab(new Content[]{blank}, Set.of(), 1));
+        assertNull("阈值后空名占位也不得复用（不是结果）",
+                DataSourceSelector.pickResultTab(new Content[]{blank}, Set.of(), DataSourceSelector.REUSE_ACCEPT_TICKS));
+    }
+
+    /** 空名占位与旧名 Tab 并存：不选空名，走旧 Tab 阈值语义。 */
+    @Test
+    public void testBlankNameWithStaleTabWaitsForThreshold() {
+        Content blank = new FakeContent("").proxy;
+        Content stale = new FakeContent("Result 1").proxy;
+        assertNull(DataSourceSelector.pickResultTab(new Content[]{blank, stale}, Set.of("Result 1"), 1));
+        Content picked = DataSourceSelector.pickResultTab(
+                new Content[]{blank, stale}, Set.of("Result 1"), DataSourceSelector.REUSE_ACCEPT_TICKS);
+        assertEquals("阈值后选中的是具名旧 Tab 而非占位", "Result 1", picked.getDisplayName());
+    }
+
+    /** 占位改名后（"" → "Result 1"）第 1 拍即选中——真机首点病灶的完整链路复现。 */
+    @Test
+    public void testPlaceholderRenamedPickedImmediately() {
+        FakeContent placeholder = new FakeContent("");
+        Set<String> preExisting = DataSourceSelector.resultContents(new FakeUi(new Content[]{placeholder.proxy}))
+                .stream().map(Content::getDisplayName).collect(Collectors.toSet());
+        placeholder.displayName = "Result 1"; // DBN 异步改名+建网格
+        Content picked = DataSourceSelector.pickResultTab(new Content[]{placeholder.proxy}, preExisting, 1);
+        assertEquals("改名后应立即选中并换入", "Result 1", picked.getDisplayName());
+    }
+
     // ==================== resultContents 反射读取 ====================
 
     @Test

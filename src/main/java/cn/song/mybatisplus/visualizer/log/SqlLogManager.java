@@ -56,7 +56,7 @@ public final class SqlLogManager implements Disposable {
     private volatile boolean capturing;
 
     /** M56 T-M56-09：EP 双轨单测缝——直设捕捉态（生产路径经 startCapture 状态机）。 */
-    void setCapturingForTest(boolean value) {
+    public void setCapturingForTest(boolean value) {
         capturing = value;
     }
 

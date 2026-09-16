@@ -200,4 +200,43 @@ public class LogEntryPreviewRecognizerTest {
         assertTrue(noBinding.getUnresolvedParams().isEmpty());
         assertNotNull("缺绑定行应有引导警告", noBinding.getWarning());
     }
+
+    // ------------------------------------------------------------------
+    // T-ListParamCollect：命名参数条目的集合值预填
+    // ------------------------------------------------------------------
+
+    @Test
+    public void 命名参数条目_集合值预填为元素清单() throws Exception {
+        // 与解析器同构的数据：SQL 中 `:name` 出现顺序 ⇔ params 顺序（本例 2 个引用 2 个参数）
+        RecognizedLogPreview named = LogEntryPreviewRecognizerKt.toRecognizedPreview(entry(
+                "SELECT * FROM t WHERE ((\"deleted\" = :param1) AND (\"id\" IN (:param3)))",
+                List.of(
+                        new LogSqlParam("0", null),
+                        new LogSqlParam("[6b31d693xxxxx7f4979b]", null))));
+        assertFalse("命名参数条目无 ? 占位符 → 不走参数行通道", named.recognized());
+        // IN 位置的集合值剥括号为元素清单，非 IN 位置原样
+        assertEquals(
+                Map.of("param1", "0", "param3", "6b31d693xxxxx7f4979b"),
+                named.initialValues());
+        assertTrue("命名参数条目仍无参数行来源", named.unresolvedParams().isEmpty());
+    }
+
+    @Test
+    public void 命名参数条目_参数数与引用数不齐时不预填() throws Exception {
+        // 防御：refs 与 params 数量不符时整体弃用（宁可空表，不把值错位配到别的参数名上）
+        RecognizedLogPreview mismatched = LogEntryPreviewRecognizerKt.toRecognizedPreview(entry(
+                "SELECT * FROM t WHERE a = :p1",
+                List.of(new LogSqlParam("1", null), new LogSqlParam("2", null))));
+        assertTrue(mismatched.initialValues().isEmpty());
+    }
+
+    @Test
+    public void 占位符条目_不受集合值预填影响() throws Exception {
+        // `?` 条目（含 `:name` 混排的极端形态）仍按占位符通道预填，行为不变
+        RecognizedLogPreview recognized = LogEntryPreviewRecognizerKt.toRecognizedPreview(entry(
+                "SELECT * FROM t WHERE a = ? AND note = ':x'",
+                List.of(new LogSqlParam("1", "Long"))));
+        assertTrue(recognized.recognized());
+        assertEquals(Map.of("param1", "1"), recognized.initialValues());
+    }
 }

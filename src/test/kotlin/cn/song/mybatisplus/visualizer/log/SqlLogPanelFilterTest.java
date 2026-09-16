@@ -221,6 +221,83 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
         assertFalse("历史自动保存默认关闭", enabled);
     }
 
+    // ---------- M56 T-M56-00：聚焦过滤层（filterByFocus 纯函数，插 filterByType→filterBySearch 之间） ----------
+
+    /** 构造带扩展字段的条目。 */
+    private static LogSqlEntry focusedEntry(String sql, String mapperStatement, String requestTag) {
+        return new LogSqlEntry(sql, sql, List.of(), System.currentTimeMillis(), null,
+                LogSqlEntry.computeSummary(sql), SqlSource.UNKNOWN, null, null, 0, List.of(), 0L,
+                mapperStatement, null, requestTag, null, null);
+    }
+
+    private static LogSqlEntry focusedEntry(String sql) {
+        return focusedEntry(sql, null, null);
+    }
+
+    @Test
+    public void testFocusNullPassthrough() throws Exception {
+        List<LogSqlEntry> entries = List.of(focusedEntry("SELECT 1"), focusedEntry("SELECT 2"));
+        assertEquals(entries, SqlLogPanelKt.filterByFocus(entries, null));
+        // 全空维度等价不过滤
+        assertEquals(entries, SqlLogPanelKt.filterByFocus(entries, new SqlLogPanelKt.FocusFilter(null, null)));
+    }
+
+    @Test
+    public void testFocusByMapperStatement() throws Exception {
+        List<LogSqlEntry> entries = List.of(
+            focusedEntry("SELECT 1", "com.x.UserMapper.selectById", null),
+            focusedEntry("SELECT 2", "com.x.OrderMapper.list", null),
+            focusedEntry("SELECT 3"));
+        List<LogSqlEntry> filtered = SqlLogPanelKt.filterByFocus(entries,
+            new SqlLogPanelKt.FocusFilter("com.x.UserMapper.selectById", null));
+        assertEquals(List.of("SELECT 1"), filtered.stream().map(LogSqlEntry::restoredSql).toList());
+    }
+
+    @Test
+    public void testFocusMethodIgnoreCase() throws Exception {
+        List<LogSqlEntry> entries = List.of(focusedEntry("SELECT 1", "com.x.UserMapper.selectById", null));
+        assertEquals(
+            entries,
+            SqlLogPanelKt.filterByFocus(entries,
+                new SqlLogPanelKt.FocusFilter("COM.X.USERMAPPER.SELECTBYID", null)));
+    }
+
+    @Test
+    public void testFocusByRequestTag() throws Exception {
+        List<LogSqlEntry> entries = List.of(
+            focusedEntry("SELECT 1", null, "req-A"),
+            focusedEntry("SELECT 2", null, "req-B"),
+            focusedEntry("SELECT 3", null, "req-A"));
+        List<LogSqlEntry> filtered = SqlLogPanelKt.filterByFocus(entries,
+            new SqlLogPanelKt.FocusFilter(null, "req-A"));
+        assertEquals(List.of("SELECT 1", "SELECT 3"), filtered.stream().map(LogSqlEntry::restoredSql).toList());
+    }
+
+    @Test
+    public void testFocusMethodAndTagConjunctive() throws Exception {
+        List<LogSqlEntry> entries = List.of(
+            focusedEntry("SELECT 1", "com.x.A.get", "req-A"),
+            focusedEntry("SELECT 2", "com.x.B.get", "req-A"),
+            focusedEntry("SELECT 3", "com.x.A.get", "req-B"));
+        List<LogSqlEntry> filtered = SqlLogPanelKt.filterByFocus(entries,
+            new SqlLogPanelKt.FocusFilter("com.x.A.get", "req-A"));
+        assertEquals(List.of("SELECT 1"), filtered.stream().map(LogSqlEntry::restoredSql).toList());
+    }
+
+    @Test
+    public void testFocusFilterPipelineOrderWithTypeAndSearch() throws Exception {
+        // 管线叠加：filterByType → filterByFocus → filterBySearch 与 refreshList 一致
+        List<LogSqlEntry> entries = List.of(
+            focusedEntry("SELECT alpha", "com.x.A.get", null),
+            focusedEntry("SELECT alpha2", "com.x.B.get", null),
+            focusedEntry("UPDATE alpha3", "com.x.A.get", null));
+        List<LogSqlEntry> filtered = SqlLogPanelKt.filterByFocus(
+            SqlLogPanelKt.filterByType(entries, java.util.Set.of(StatementType.SELECT)),
+            new SqlLogPanelKt.FocusFilter("com.x.A.get", null));
+        List<LogSqlEntry> searched = SqlLogPanelKt.filterBySearch(filtered, "alpha");
+        assertEquals(List.of("SELECT alpha"), searched.stream().map(LogSqlEntry::restoredSql).toList());
+    }
+
     /** 等待 EDT 调度完成。 */
     private void waitForEdt() {
         ApplicationManager.getApplication().invokeAndWait(() -> {

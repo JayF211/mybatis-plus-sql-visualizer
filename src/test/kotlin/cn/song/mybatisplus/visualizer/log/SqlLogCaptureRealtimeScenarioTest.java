@@ -41,12 +41,19 @@ public class SqlLogCaptureRealtimeScenarioTest {
                     e.restoredSql(),
                     e.params(),
                     e.timestamp(),
+                    e.logTimestamp(),
                     e.summary(),
                     e.source(),
                     time != null ? time : e.executionTimeMs(),
                     e.sourceFile(),
                     e.sourceLine(),
-                    0L));
+                    e.sourceCandidates(),
+                    0L,
+                    e.mapperStatement(),
+                    e.errorText(),
+                    e.requestTag(),
+                    e.updateCount(),
+                    e.databaseName()));
         }
         return result;
     }

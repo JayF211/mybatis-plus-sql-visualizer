@@ -597,6 +597,10 @@ public class ErrorReportDialog extends DialogWrapper {
      * 附件行用中性表述（attachmentFailed）——状态行只在失败时出现，「帖子已提交，但…」的成功语境
      * 在失败现场自相矛盾（真机第二轮截图实证：同屏出现「提交失败」与「帖子已提交」）。
      */
+    public static String failureStatusText(String message) {
+        return failureStatusText(message, null);
+    }
+
     public static String failureStatusText(String message, @Nullable String warning) {
         String head = MpSqlVisualizerBundle.message("error.report.dialog.status.failed", message);
         if (warning == null || warning.isBlank()) {

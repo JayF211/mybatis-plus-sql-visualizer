@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
@@ -39,10 +40,14 @@ class CopyFeedbackUiTest : BasePlatformTestCase() {
         super.tearDown()
     }
 
-    /** 读剪贴板文本；非文本内容（系统剪贴板可能持有任意 flavor）按 null 处理。 */
+    /**
+     * 读剪贴板文本（T-UiNative P0）：复制收口走平台 CopyPasteManager，headless 测试环境下
+     * 其内容仅存平台句柄、不回写系统剪贴板（旧行为是直写 Toolkit 同步可见）——
+     * 断言改读 [CopyPasteManager.getContents]，与生产「非 headless 时写穿系统剪贴板」一致。
+     */
     private fun clipboardText(): String? = runCatching {
-        Toolkit.getDefaultToolkit().systemClipboard.getContents(null)
-            ?.getTransferData(DataFlavor.stringFlavor) as? String
+        CopyPasteManager.getInstance()
+            .getContents<String>(DataFlavor.stringFlavor)
     }.getOrNull()
 
     private fun waitForEdt() = UIUtil.dispatchAllInvocationEvents()
@@ -127,9 +132,8 @@ class CopyFeedbackUiTest : BasePlatformTestCase() {
      */
     fun testPreviewPanelCopyErrorReturnsFalseWithoutWarning() {
         val sentinel = "__copyfix_sentinel__"
-        Toolkit.getDefaultToolkit().systemClipboard.setContents(
-            java.awt.datatransfer.StringSelection(sentinel), null,
-        )
+        // T-UiNative P0：哨兵植入与断言同走平台 CopyPasteManager（headless 下内容存平台句柄）
+        CopyPasteManager.getInstance().setContents(java.awt.datatransfer.StringSelection(sentinel))
         val panel = SqlPreviewPanel(project)
         panel.clear()
         assertTrue("无警示时 copyError 应返回 false（不触发反馈）", !panel.copyError())

@@ -44,6 +44,12 @@ public record AgentEvent(
     String url
 ) {
 
+    /** T-AgentDialectLoop：copy(url=…) 的 Java 等价（测试/回填用）。 */
+    public AgentEvent withUrl(String newUrl) {
+        return new AgentEvent(sql, timestamp, durationNanos, updateCount, errorText, sourceFile, sourceLine,
+                sourceCandidates, methodKey, requestTag, params, threadName, newUrl);
+    }
+
     /** 便捷构造器：sourceCandidates 缺省为空列表（Kotlin 默认参数）。 */
     public AgentEvent(String sql, long timestamp, long durationNanos, Long updateCount, String errorText,
                       String sourceFile, int sourceLine, String methodKey, String requestTag,

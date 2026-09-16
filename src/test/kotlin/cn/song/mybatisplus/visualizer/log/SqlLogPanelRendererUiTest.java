@@ -5,9 +5,7 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.ui.SimpleColoredComponent;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -87,6 +85,13 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
         return new LogSqlEntry(sql, sql, List.<LogSqlParam>of(), 1_700_000_000_000L, sourceFile, sourceLine, ms);
     }
 
+    /** agent 通道形态条目（source=AGENT，可带目标库/影响行数/报错）。 */
+    private static LogSqlEntry agentEntry(String sql, String databaseName, Long updateCount, String errorText) {
+        return new LogSqlEntry(sql, sql, List.<LogSqlParam>of(), 1_700_000_000_000L, null,
+                LogSqlEntry.computeSummary(sql), SqlSource.AGENT, null, null, 0, List.of(), 0L,
+                null, errorText, null, updateCount, databaseName);
+    }
+
     @Test
     public void test渲染组件为片段通道_非HTML标签() throws Exception {
         LogEntryListCellRenderer r = render(entry("SELECT * FROM user"));
@@ -108,6 +113,19 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
         assertFalse("元信息行不应混入 SQL", meta.contains("SELECT"));
         assertTrue("SQL 行完整保留语句（含分号结束符）",
                 joinedText(r.getSqlLine()).contains("SELECT * FROM repeated WHERE id = 1;"));
+    }
+
+    @Test
+    public void test目标库角标_有库名渲染到元信息行() throws Exception {
+        // T-AgentDialectLoop：agent 条目带 databaseName → 元信息行出现 [MySQL] 角标
+        String meta = joinedText(render(agentEntry("SELECT 1", "MySQL", null, null)).metaLine);
+        assertTrue("元信息行应含目标库角标", meta.contains("[MySQL] "));
+    }
+
+    @Test
+    public void test目标库角标_未知库名不显示() throws Exception {
+        String meta = joinedText(render(agentEntry("SELECT 1", null, null, null)).metaLine);
+        assertFalse("无 databaseName 不应显示角标", meta.contains("[MySQL]"));
     }
 
     @Test
@@ -330,49 +348,40 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test背景样式_未选中与选中混色比例不同且不铺平台填充() throws Exception {
+    public void test背景样式_未选中淡背景混色_选中走平台填充() throws Exception {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND, () -> {
             Color bg = list.getBackground();
             Color update = new Color(0xE67E22);
             render(entry("UPDATE user SET a = 1"));
-            assertEquals("未选中应为 14% 混色",
+            assertEquals("未选中应为 14% 混色（类型淡背景标记保留）",
                 SqlListTypeColor.blend(bg, update, SqlListTypeColor.MIX_NORMAL), renderer.getBackground());
             render(entry("UPDATE user SET a = 1"), true);
-            assertEquals("选中应为 30% 混色",
-                SqlListTypeColor.blend(bg, update, SqlListTypeColor.MIX_SELECTED), renderer.getBackground());
-            assertNotEquals("选中态**不铺**平台选中填充（否则类型色被覆盖丢失）",
+            assertEquals("选中态交给平台选中色（T-UN-09 描边退役）",
                 list.getSelectionBackground(), renderer.getBackground());
         });
     }
 
     @Test
-    public void test背景样式_选中态描边且两状态insets逐边相等() throws Exception {
+    public void test背景样式_选中态不再安装描边边框() throws Exception {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND, () -> {
             render(entry("UPDATE user SET a = 1"));
-            assertEquals("未选中应为普通边框", renderer.normalBorder, renderer.getBorder());
+            assertSame("未选中应为普通边框", renderer.normalBorder, renderer.getBorder());
             render(entry("UPDATE user SET a = 1"), true);
-            assertEquals("选中应为描边边框（同一实例，锁零分配引用切换）",
-                renderer.selectedBorder, renderer.getBorder());
-
-            java.awt.Insets normal = renderer.normalBorder.getBorderInsets(renderer);
-            java.awt.Insets selected = renderer.selectedBorder.getBorderInsets(renderer);
-            assertEquals("上", normal.top, selected.top);
-            assertEquals("左", normal.left, selected.left);
-            assertEquals("下", normal.bottom, selected.bottom);
-            assertEquals("右", normal.right, selected.right);
+            assertSame("选中态恢复平台选中绘制，边框与未选中一致（描边已退役）",
+                renderer.normalBorder, renderer.getBorder());
         });
     }
 
     @Test
-    public void test背景样式_选中态前景不转白_色条样式仍转白() throws Exception {
+    public void test背景样式与色条样式_选中态前景均走selectionForeground() throws Exception {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND, () -> {
             render(entry("SELECT 1", 5L, null, 0), true);
-            assertEquals("淡底上白字不可见 → 背景样式不取 selectionForeground",
-                list.getForeground(), renderer.metaLine.getForeground());
+            assertEquals("选中态底色已是平台选中填充，前景应转 selectionForeground（T-UN-09）",
+                list.getSelectionForeground(), renderer.metaLine.getForeground());
         });
         withCrudColors(SqlListTypeColor.STYLE_BAR, () -> {
             render(entry("SELECT 1", 5L, null, 0), true);
-            assertEquals("色条样式走平台填充，前景仍为 selectionForeground（现状不变）",
+            assertEquals("色条样式选中前景仍为 selectionForeground（现状不变）",
                 list.getSelectionForeground(), renderer.metaLine.getForeground());
         });
     }
@@ -414,15 +423,14 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test背景样式_选中与未选中之间切换会换边框实例() throws Exception {
+    public void test背景样式_选中与未选中边框恒同一实例() throws Exception {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND, () -> {
             render(entry("UPDATE t SET a = 1"));
             javax.swing.border.Border normal = renderer.getBorder();
             render(entry("UPDATE t SET a = 1"), true);
-            javax.swing.border.Border selected = renderer.getBorder();
-            assertNotSame("选中态必须换成描边边框（守卫不能把该变更也拦掉）", normal, selected);
+            assertSame("描边退役后选中/未选中共用同一 Border（不再切换）", normal, renderer.getBorder());
             render(entry("UPDATE t SET a = 1"));
-            assertSame("回到未选中应换回原 Border 实例", normal, renderer.getBorder());
+            assertSame("回到未选中仍是同一实例", normal, renderer.getBorder());
         });
     }
 
@@ -443,5 +451,37 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
         } finally {
             pluginSettings.setLogTimestampEnabled(savedTs);
         }
+    }
+
+    // ---------- M56 T-M56-02/05：来源角标（已移除）/ 影响行数 / 报错同列 ----------
+
+    @Test
+    public void test增强来源角标已移除_两通道均不显示() throws Exception {
+        // 用户要求移除：增强为默认捕获通道，逐行标来源属噪音
+        LogSqlEntry agent = agentEntry("SELECT 1", null, null, null);
+        assertFalse("AGENT 来源不应再显示增强角标", joinedText(render(agent).metaLine).contains("[⚡增强]"));
+        LogSqlEntry bridge = entry("SELECT 1");
+        assertFalse("桥来源同样不显示", joinedText(render(bridge).metaLine).contains("[⚡增强]"));
+    }
+
+    @Test
+    public void test影响行数负值不显示_负行数守卫() throws Exception {
+        // JDBC getUpdateCount 在结果为 ResultSet 时返回 -1（无有效计数）→ 不得渲染「(-1 rows)」
+        LogSqlEntry neg = agentEntry("SELECT 1", null, -1L, null);
+        assertFalse("负值影响行数应不显示", joinedText(render(neg).metaLine).contains("rows)"));
+        LogSqlEntry zero = agentEntry("UPDATE t SET a = 1", null, 0L, null);
+        assertTrue("0 行是合法计数，应显示", joinedText(render(zero).metaLine).contains("(0 rows)"));
+    }
+
+    @Test
+    public void test影响行数与报错片段同列() throws Exception {
+        LogSqlEntry err = agentEntry("UPDATE t SET a = 1", null, 3L, "SQLException: Data too long for column 'a'");
+        String meta = joinedText(render(err).metaLine);
+        assertTrue("应含影响行数片段", meta.contains("(3 rows)"));
+        assertTrue("应含报错片段（单行截断）", meta.contains("⛔ SQLException: Data too long"));
+        // 无报错无行数的普通条目不显示
+        String ok = joinedText(render(entry("SELECT 1")).metaLine);
+        assertFalse("普通条目不应有行数片段", ok.contains("rows)"));
+        assertFalse("普通条目不应有报错片段", ok.contains("⛔"));
     }
 }

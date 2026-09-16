@@ -169,7 +169,7 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
         val panel = newPanel()
         try {
             val directTexts = panel.toolbarForTest().components.filterIsInstance<JButton>().map { it.text }.toSet()
-            for (key in listOf("panel.more", "panel.format", "panel.keywordWrap", "panel.refresh")) {
+            for (key in listOf("panel.more", "panel.format", "panel.keywordWrap", "panel.refresh", "panel.explain")) {
                 val expected = MpSqlVisualizerBundle.message(key)
                 assertTrue("直显按钮应含 $key($expected)", expected in directTexts)
             }

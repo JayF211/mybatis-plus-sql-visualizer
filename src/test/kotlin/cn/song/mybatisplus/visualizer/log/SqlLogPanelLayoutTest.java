@@ -18,7 +18,12 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * SQL 日志面板布局 / 兼容性 UI 测试（F-44-5 全插件 UI 测试）。
+ * SQL 日志面板布局 / 兼容性 UI 测试（F-44-5 全插件 UI 测试）：
+ *
+ * 用户反馈「布局错乱 / 不兼容」——重点锁定工具栏（尤其是 WrapLayout 换行后「SQL类型筛选项消失」缺陷）：
+ *  - 工具栏关键组件（SQL类型标签/按钮、去重勾选、帮助动作组；捕捉开关 T-UN-11 起挂标题栏）构建即存在；
+ *  - 默认可见性正确（排序方式选择器恒可见、搜索条默认隐藏）；
+ *  - 窄侧边栏下 WrapLayout 不裁切 SQL类型按钮（按钮 y 落在面板高度内，而非被单行高度裁掉）。
  */
 public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
 
@@ -50,10 +55,12 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
             assertNotNull("SQL类型按钮应存在", panel.getTypeFilterButtonForTest());
             assertNotNull("去重勾选框应存在", panel.getDedupeCheckBoxForTest());
             assertNotNull("搜索条应存在", panel.getSearchFieldForTest());
-            assertTrue("工具栏动作组应含 ≥5 个动作（捕捉/清空/设置/搜索/帮助）",
-                    panel.toolbarGroup.getChildActionsOrStubs().length >= 5);
+            assertTrue("工具栏动作组应含 ≥4 个动作（清空/设置/搜索/帮助）",
+                    panel.toolbarGroup.getChildActionsOrStubs().length >= 4);
+            assertNotNull("捕捉开关动作应存在（标题栏挂载用）", panel.getCaptureToggleAction());
 
-            assertEquals("默认无耗时信息，排序按钮应隐藏", false, panel.getDurationSortLabel().isVisible());
+            // 默认可见性：排序方式选择器恒可见（默认时间升序）；搜索条默认隐藏；慢查询标签隐藏
+            assertEquals("排序方式选择器应恒可见", true, panel.getSortButtonForTest().isVisible());
             assertEquals("搜索条默认隐藏", false, panel.getSearchFieldForTest().isVisible());
             assertEquals("默认无慢查询，计数标签应隐藏/为空", false,
                     panel.getSlowQueryLabelForTest() == null ? false : panel.getSlowQueryLabelForTest().isVisible());
@@ -63,7 +70,7 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void testInjectdurationinfosortsshows() throws Exception {
+    public void test注入耗时信息_排序方式选择器保持可见() throws Exception {
         SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
         try {
             manager.getEntries().addEntry(new LogSqlEntry(
@@ -75,7 +82,8 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
                     0,
                     1500L));
             waitForEdt();
-            assertEquals("检测到耗时信息，排序按钮应显示", true, panel.getDurationSortLabel().isVisible());
+            assertEquals("有耗时信息时排序方式选择器仍可见", true, panel.getSortButtonForTest().isVisible());
+            assertEquals("默认排序方式为时间升序", SortMode.TIME_ASC, panel.getCurrentSortMode());
         } finally {
             panel.dispose();
         }
@@ -95,7 +103,7 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
             JPanel left = new JPanel(new WrapLayout());
             left.add(panel.getTypeFilterLabelForTest());
             left.add(panel.getTypeFilterButtonForTest());
-            if (panel.getDurationSortLabel().isVisible()) left.add(panel.getDurationSortLabel());
+            if (panel.getSortButtonForTest().isVisible()) left.add(panel.getSortButtonForTest());
             left.add(new JButton("W".repeat(50)));
             holder.add(left, BorderLayout.CENTER);
             holder.doLayout();

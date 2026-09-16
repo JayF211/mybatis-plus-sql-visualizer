@@ -2939,6 +2939,24 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return psiFile;
     }
 
+    /**
+     * 创建预览 PSI 文件（测试缝，T-PreviewExecDs-01d）：抽取 createEditor 中
+     * PsiFileFactory 创建逻辑为独立方法，供测试直接调用（绕过 EDT 回调 +
+     * EditorFactory 创建）。
+     *
+     * <p>T-M42：PsiFileFactory.createFileFromText 在 EDT 上直接调用会触发
+     * 2026.2 平台 markGenerated 树遍历 softAssertReadAccess 硬抛——包
+     * ReadAction（EDT 上同步执行，语义不变）。
+     */
+    PsiFile createPreviewFileForTest(Project proj, String sql) {
+        return ReadAction.compute(
+                (com.intellij.openapi.util.ThrowableComputable<PsiFile, RuntimeException>) () -> {
+                    com.intellij.openapi.fileTypes.FileType fileType =
+                            com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getStdFileType("SQL");
+                    return PsiFileFactory.getInstance(proj).createFileFromText("preview.sql", fileType, sql);
+                });
+    }
+
     PreviewResult currentForTest() {
         return current;
     }

@@ -1,11 +1,11 @@
 package cn.song.mybatisplus.visualizer.log;
 
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.util.ui.UIUtil;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
@@ -19,7 +19,7 @@ import java.util.List;
  *
  * 此前仅覆盖转换逻辑（LogToSqlPanelTest），编辑器 L&F 与格式切换的真实渲染未测——用户点名
  * 「编辑器 L&F / 格式切换未测」。本测试模拟真实面板打开：
- *  - 面板构建即出输入/结果编辑器（不崩）、空态灰字提示随内容显隐；
+ *  - 面板构建即出输入/结果编辑器（不崩），空态提示接线既有文案键（T-UN-14 迁编辑器原生 placeholder）；
  *  - 真实转换：MyBatis 日志（Preparing/Parameters）经解析 → 参数被替换进 SQL、默认格式化输出含换行；
  *  - 格式切换：关闭格式化 → 同一条 SQL 输出为原样单行（无换行），证明格式开关真实生效；
  *  - 布局：非空标签有正首选尺寸（编辑器在 headless 下 preferredSize 不可靠，跳过，仅断言标签层）。
@@ -46,18 +46,16 @@ public class LogToSqlPanelUiTest extends BasePlatformTestCase {
         LogToSqlPanel panel = new LogToSqlPanel(getProject());
         try {
             waitForEdt();
-            assertNotNull("输入区空态提示应存在", panel.inputHintLabelForTest());
-            assertNotNull("结果区空态提示应存在", panel.resultHintLabelForTest());
-            // 初始空输入：输入区提示应可见（引导文案）
-            assertTrue("初始输入区提示应可见", panel.inputHintLabelForTest().isVisible());
-
-            // 填入内容后提示隐藏；清空后再次可见（真实交互显隐）
-            panel.setInputForTest("Preparing: SELECT 1");
-            waitForEdt();
-            assertFalse("有内容后输入区提示应隐藏", panel.inputHintLabelForTest().isVisible());
-            panel.setInputForTest("");
-            waitForEdt();
-            assertTrue("清空后输入区提示应再次可见", panel.inputHintLabelForTest().isVisible());
+            // T-UiNative T-UN-14：空态提示已迁编辑器原生 placeholder（空文档时由编辑器原生绘制），
+            // 自摆 hintLabel 删除——断言两区 placeholder 均接线既有文案键
+            assertEquals(
+                "输入区 placeholder 应接线文案键",
+                MpSqlVisualizerBundle.message("log.panel.hint.input"),
+                panel.inputPlaceholderForTest());
+            assertEquals(
+                "结果区 placeholder 应接线文案键",
+                MpSqlVisualizerBundle.message("log.panel.hint.result"),
+                panel.resultPlaceholderForTest());
         } finally {
             panel.dispose();
         }
@@ -106,6 +104,11 @@ public class LogToSqlPanelUiTest extends BasePlatformTestCase {
         LogToSqlPanel panel = new LogToSqlPanel(getProject());
         try {
             waitForEdt();
+            // T-UiNative T-UN-14：空态灰字提示迁编辑器 placeholder 后，面板常态只有底部状态行
+            // 是文字标签——先真实转换一次让状态行有文案，再断言无非空标签渲染塌缩
+            panel.setInputForTest("Preparing: SELECT * FROM user WHERE id = ?\nParameters: 1(Integer)");
+            panel.convertForTest();
+            waitForEdt();
             List<JBLabel> nonEmptyLabels = new ArrayList<>();
             for (Component comp : allComponents(panel)) {
                 if (comp instanceof JBLabel) {
@@ -115,7 +118,7 @@ public class LogToSqlPanelUiTest extends BasePlatformTestCase {
                     }
                 }
             }
-            assertTrue("面板应含非空标签（提示/状态等）", !nonEmptyLabels.isEmpty());
+            assertTrue("面板应含非空标签（状态行）", !nonEmptyLabels.isEmpty());
             List<String> zeroTexts = new ArrayList<>();
             for (JBLabel label : nonEmptyLabels) {
                 if (label.getPreferredSize().width <= 0 || label.getPreferredSize().height <= 0) {

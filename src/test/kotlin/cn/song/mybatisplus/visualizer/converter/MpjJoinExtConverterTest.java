@@ -77,6 +77,14 @@ public class MpjJoinExtConverterTest {
         return new WrapperArg.ColumnArg(cref(column));
     }
 
+    private static WrapperArg.ColumnArg colEntity(String column, String entityClass) {
+        return new WrapperArg.ColumnArg(new ColumnRef(null, column, null, null, null, entityClass));
+    }
+
+    private static WrapperArg.ColumnArg colAliasEntity(String tableAlias, String column, String entityClass) {
+        return new WrapperArg.ColumnArg(new ColumnRef(tableAlias, column, null, null, null, entityClass));
+    }
+
     private static WrapperArg.ColumnArg colA(String tableAlias, String column) {
         return new WrapperArg.ColumnArg(crefAlias(tableAlias, column));
     }
@@ -548,5 +556,122 @@ public class MpjJoinExtConverterTest {
             sql
         );
         assertTrue("setTableName/pageByMain 不产生额外 SQL 片段", !sql.contains("getTableName"));
+    }
+
+    // ------------------------------------------------------------------
+    // T-MpjColAlias：联表实体 lambda 列归属 join 别名（真机 1054 复现）
+    // ------------------------------------------------------------------
+
+    @Test
+    public void mpjJoin_select关联实体lambda列归属join别名() throws Exception {
+        // T-MpjColAlias 真机复现：selectAll(主表) + select(StationInfoEntity::getStationName) +
+        // leftJoin(Class, "st", 左列, "t", 右列)。接收者实体类命中 join 映射 → 列归 st 而非主表 t
+        // （修复前补主表别名渲染 t.station_name，car_device_info 无此列，执行报 1054）
+        WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
+            call("selectAll", List.of(val("DeviceInfoEntity"))),
+            call("select", List.of(
+                colEntity("station_name", "StationInfoEntity")
+            )),
+            call("leftJoin", List.of(
+                entityRef(stationTable),
+                val("st"),
+                col("station_id"),
+                val("t"),
+                col("id")
+            )),
+            call("eq", List.of(col("id"), val("1")))
+        ));
+        String sql = SqlGenerator.INSTANCE.generate(MpjLambdaConverter.INSTANCE.convert(chain, table));
+        assertEquals(
+            """
+            SELECT t.id, t.station_id, t.share_scheme_id, st.station_name
+            FROM car_device_info t
+            LEFT JOIN station_info st ON st.station_id = t.id
+            WHERE t.id = 1
+            """.stripTrailing(),
+            sql
+        );
+    }
+
+    @Test
+    public void mpjJoin_select主实体lambda列保持主表别名() throws Exception {
+        // 回归：接收者 = 主实体类 → 不改写，仍归主表别名
+        WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
+            call("select", List.of(
+                colEntity("station_id", "DeviceInfoEntity")
+            )),
+            call("leftJoin", List.of(
+                entityRef(stationTable),
+                val("st"),
+                col("station_id"),
+                val("t"),
+                col("id")
+            ))
+        ));
+        String sql = SqlGenerator.INSTANCE.generate(MpjLambdaConverter.INSTANCE.convert(chain, table));
+        assertTrue("主实体列保持 t.：" + sql, sql.contains("SELECT t.station_id"));
+    }
+
+    @Test
+    public void mpjJoin_select未知实体lambda列保持主表别名() throws Exception {
+        // 回归：接收者实体类不在任何 join 映射（非联表列/单表误带 entityClass）→ 原样走主表别名
+        WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
+            call("select", List.of(
+                colEntity("device_name", "DeviceOtherEntity")
+            )),
+            call("leftJoin", List.of(
+                entityRef(stationTable),
+                val("st"),
+                col("station_id"),
+                val("t"),
+                col("id")
+            ))
+        ));
+        String sql = SqlGenerator.INSTANCE.generate(MpjLambdaConverter.INSTANCE.convert(chain, table));
+        assertTrue("未知实体列保持 t.：" + sql, sql.contains("SELECT t.device_name"));
+    }
+
+    @Test
+    public void mpjJoin_已带别名lambda列不覆盖() throws Exception {
+        // 回归：tableAlias 已有值（如 selectAs 字符串显式限定形态）→ 归属逻辑不覆盖
+        WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
+            call("select", List.of(
+                colAliasEntity("x", "station_name", "StationInfoEntity")
+            )),
+            call("leftJoin", List.of(
+                entityRef(stationTable),
+                val("st"),
+                col("station_id"),
+                val("t"),
+                col("id")
+            ))
+        ));
+        String sql = SqlGenerator.INSTANCE.generate(MpjLambdaConverter.INSTANCE.convert(chain, table));
+        assertTrue("显式别名保留 x.：" + sql, sql.contains("SELECT x.station_name"));
+    }
+
+    @Test
+    public void mpjJoin_嵌套条件关联实体列归属join别名() throws Exception {
+        // and(nested) 体内的关联实体 lambda 列同样归属 join 别名（NestedArg 递归重写）
+        WrapperChain chain = chain(WrapperType.MPJ_LAMBDA, "DeviceInfoEntity", List.of(
+            call("selectAll", List.of(val("DeviceInfoEntity"))),
+            call("leftJoin", List.of(
+                entityRef(stationTable),
+                val("st"),
+                col("station_id"),
+                val("t"),
+                col("id")
+            )),
+            call("and", List.of(
+                nestedArg(nested(List.of(
+                    call("eq", List.of(
+                        colEntity("station_name", "StationInfoEntity"),
+                        valPh("keyword")
+                    ))
+                )))
+            ))
+        ));
+        String sql = SqlGenerator.INSTANCE.generate(MpjLambdaConverter.INSTANCE.convert(chain, table));
+        assertTrue("嵌套体内关联列归 st.：" + sql, sql.contains("(st.station_name = ?)"));
     }
 }

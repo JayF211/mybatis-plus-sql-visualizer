@@ -1,6 +1,5 @@
 package cn.song.mybatisplus.visualizer.log
 
-import cn.song.mybatisplus.visualizer.history.SqlHistoryPanel
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
@@ -224,6 +223,52 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         assertEquals(42, anchor1!!.y) // 第二行下缘
     }
 
+    // ---------- T-ListPreviewCopy：多选守卫 + 预览文本格式化 ----------
+
+    fun test多选进行中单击不排程预览() {
+        val list = fixedList("SELECT 1;", "SELECT 2;", "SELECT 3;")
+        list.selectedIndices = intArrayOf(0, 2) // Ctrl 多选（真实链路 mousePressed 已更新选中再回调 mouseClicked）
+        val cp = SqlClickPreview(project, list) { i -> SqlLogPanelKt.withTerminator(list.model.getElementAt(i).restoredSql) }
+        cp.onClick(1, Point(5, 10)) // 落在第 0 行内
+        assertFalse("多选进行中单击不应排程预览", cp.isScheduled)
+        assertNull("多选进行中单击不应弹窗", cp.currentPopup)
+
+        // 空白区单击仍走取消语义（守卫不遮蔽既有收表关旧）
+        cp.onClick(1, Point(5, 500))
+        assertFalse(cp.isScheduled)
+        assertNull(cp.currentPopup)
+    }
+
+    fun test多选恢复单选后单击恢复排程() {
+        val list = fixedList("SELECT 1;", "SELECT 2;", "SELECT 3;")
+        val cp = SqlClickPreview(project, list) { i -> SqlLogPanelKt.withTerminator(list.model.getElementAt(i).restoredSql) }
+        try {
+            list.selectedIndices = intArrayOf(0, 2)
+            cp.onClick(1, Point(5, 10))
+            assertFalse("多选中不排程", cp.isScheduled)
+
+            list.selectedIndices = intArrayOf(1) // 收回单选（如点击第三行把多选收敛为该行）
+            cp.onClick(1, Point(5, 30)) // 落在第 1 行内
+            assertTrue("恢复单选后单击应恢复排程预览", cp.isScheduled)
+        } finally {
+            // 挂起定时器 300ms 后会在 EDT 真弹带编辑器的预览浮窗——测试内必须停表，防编辑器泄漏
+            cp.dispose()
+        }
+    }
+
+    fun testClickPreviewSql关闭格式化为原文加分号() {
+        assertEquals("SELECT 1;", SqlClickPreview.clickPreviewSql("SELECT 1", false))
+        assertEquals("已有分号不重复", "SELECT 1;", SqlClickPreview.clickPreviewSql("SELECT 1;", false))
+        assertEquals("空 SQL 不追加分号", "", SqlClickPreview.clickPreviewSql("", false))
+    }
+
+    fun testClickPreviewSql开启格式化为多行加缩进() {
+        val formatted = SqlClickPreview.clickPreviewSql("SELECT t.id,t.name FROM t WHERE t.id = 1", true)
+        assertTrue("开启设置时应多行格式化", formatted.contains('\n'))
+        assertTrue("分号收尾", formatted.endsWith(";"))
+        assertTrue("关键字换行（FROM 独立成行）", formatted.contains("FROM"))
+    }
+
     // ---------- 三面板接线 ----------
 
     fun testSqlLogPanel空列表单击不排程_双击关预览() {
@@ -256,21 +301,6 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         val panel = HistorySqlLogPanel(project)
         try {
             val cp = panel.sqlClickPreviewForTest
-            cp.onClick(1, Point(5, 5))
-            assertFalse(cp.isScheduled)
-            assertNull(cp.currentPopup)
-            cp.onClick(2, Point(5, 5))
-            assertFalse(cp.isScheduled)
-            assertNull(cp.currentPopup)
-        } finally {
-            panel.dispose()
-        }
-    }
-
-    fun testSqlHistoryPanel空列表单击不排程_双击关预览() {
-        val panel = SqlHistoryPanel(project)
-        try {
-            val cp = panel.clickPreviewForTest
             cp.onClick(1, Point(5, 5))
             assertFalse(cp.isScheduled)
             assertNull(cp.currentPopup)

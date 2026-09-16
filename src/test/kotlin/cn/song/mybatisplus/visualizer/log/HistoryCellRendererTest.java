@@ -1,12 +1,12 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import static cn.song.mybatisplus.visualizer.config.PluginSettings.LOG_TIMESTAMP_SOURCE_CAPTURE;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.ui.SimpleColoredComponent;
 import com.intellij.ui.SimpleTextAttributes;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import org.junit.Test;
@@ -62,17 +62,27 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     /** 既有用例锁定单行语义（T-ListMode 默认关键字换行——模式相关行为由专区用例显式切模式锁定）。 */
     private String savedDisplayMode;
 
+    // T-AgentDialectLoop 修复串染：保存值曾用「finally 里现读」——set 之后现读到的已是改后值，
+    // 还原恒失败并把 HH:mm:ss 泄漏到同 worker 后续类（新测试类改变分片内类顺序后暴露）。
+    // 改为 setUp 捕获 / tearDown 统一还原（与 SqlLogSearchRowTimeTest 同范式）。
+    private String savedTsFormat = "";
+    private boolean savedTsEnabled = true;
+
     @Override
     protected void setUp() throws Exception {
         super.setUp();
         PluginSettings.State state = PluginSettings.getInstance().getState();
         savedDisplayMode = state.getLogListSqlDisplayMode();
+        savedTsFormat = state.getLogTimestampFormat();
+        savedTsEnabled = state.getLogTimestampEnabled();
         state.setLogListSqlDisplayMode("SINGLE_LINE");
     }
 
     @Override
     protected void tearDown() throws Exception {
         PluginSettings.State state = PluginSettings.getInstance().getState();
+        state.setLogTimestampFormat(savedTsFormat);
+        state.setLogTimestampEnabled(savedTsEnabled);
         state.setLogListSqlDisplayMode(savedDisplayMode != null
                 ? savedDisplayMode : PluginSettings.DEFAULT_LOG_LIST_DISPLAY_MODE);
         super.tearDown();
@@ -86,9 +96,9 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
         String meta = joinedText(r.metaLine);
         String sql = joinedText(r.getSqlLine());
         assertTrue("含 SQL 关键字", sql.contains("SELECT"));
-        assertTrue("无耗时显示占位符 —", meta.contains("[—]"));
+        assertTrue("无耗时显示占位符 —（与日志页同款无括号）", meta.contains("—"));
         assertTrue("无源码显示占位符 unknown", meta.contains("[unknown]"));
-        assertFalse("无耗时不出现 ms", meta.contains("ms]"));
+        assertFalse("无耗时不出现 ms", meta.contains("ms"));
         assertFalse("渲染文本不应为 HTML 包裹", sql.startsWith("<html>"));
     }
 
@@ -96,7 +106,7 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     public void test二级条目_含源码位置_渲染元信息行() throws Exception {
         HistoryCellRenderer r = renderSql(sqlEntry("SELECT 1", "UserMapper.java", 12, 3L));
         String meta = joinedText(r.metaLine);
-        assertTrue("应渲染耗时 [3ms]", meta.contains("[3ms]"));
+        assertTrue("应渲染耗时 3ms（与日志页同款无括号）", meta.contains("3ms"));
         assertTrue("应渲染源码 [UserMapper.java:12]", meta.contains("[UserMapper.java:12]"));
         assertFalse("SQL 不应混入元信息行", meta.contains("SELECT"));
     }
@@ -127,7 +137,7 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     public void test二级条目_元信息在上SQL在下两行显示() throws Exception {
         HistoryCellRenderer r = renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", "OrderDao.java", 9, 30L));
         String meta = joinedText(r.metaLine);
-        assertTrue("耗时占位应在元信息行", meta.contains("[30ms]"));
+        assertTrue("耗时应在元信息行", meta.contains("30ms"));
         assertTrue("来源应在元信息行", meta.contains("[OrderDao.java:9]"));
         assertTrue("SQL 应在 SQL 行", joinedText(r.getSqlLine()).contains("SELECT"));
         assertFalse("来源不应混入 SQL 行", joinedText(r.getSqlLine()).contains("OrderDao.java"));
@@ -138,7 +148,7 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     public void test二级条目_空耗时与未知来源占位渲染在元信息行() throws Exception {
         HistoryCellRenderer r = renderSql(sqlEntry("SELECT * FROM user", null, 0, null));
         String meta = joinedText(r.metaLine);
-        assertTrue("空耗时占位 [—] 应在元信息行", meta.contains("[—]"));
+        assertTrue("空耗时占位 — 应在元信息行", meta.contains("—"));
         assertTrue("未知来源占位 [unknown] 应在元信息行", meta.contains("[unknown]"));
         assertTrue("SQL 应在 SQL 行", joinedText(r.getSqlLine()).contains("SELECT"));
     }
@@ -258,35 +268,27 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
     }
 
     @Test
-    public void test二级条目_背景样式_未选中与选中混色比例不同且不铺平台填充() throws Exception {
+    public void test二级条目_背景样式_未选中淡背景混色_选中走平台填充() throws Exception {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND, () -> {
             java.awt.Color bg = list.getBackground();
             renderSql(sqlEntry("UPDATE user SET a = 1", null, 0, null));
-            assertEquals("未选中 14% 混色",
+            assertEquals("未选中 14% 混色（类型淡背景标记保留）",
                     SqlListTypeColor.blend(bg, new java.awt.Color(0xE67E22), SqlListTypeColor.MIX_NORMAL),
                     sqlRenderer.getBackground());
             renderSql(sqlEntry("UPDATE user SET a = 1", null, 0, null), true);
-            assertEquals("选中 30% 混色",
-                    SqlListTypeColor.blend(bg, new java.awt.Color(0xE67E22), SqlListTypeColor.MIX_SELECTED),
-                    sqlRenderer.getBackground());
-            assertNotEquals("选中态不铺平台填充", list.getSelectionBackground(), sqlRenderer.getBackground());
+            assertEquals("选中态交给平台选中色（T-UN-09 描边退役）",
+                    list.getSelectionBackground(), sqlRenderer.getBackground());
         });
     }
 
     @Test
-    public void test二级条目_背景样式_选中态描边且两状态insets逐边相等() throws Exception {
+    public void test二级条目_背景样式_选中态不再安装描边边框() throws Exception {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND, () -> {
             renderSql(sqlEntry("UPDATE user SET a = 1", null, 0, null));
-            assertEquals(sqlRenderer.normalBorder, sqlRenderer.getBorder());
+            assertSame("未选中为普通边框", sqlRenderer.normalBorder, sqlRenderer.getBorder());
             renderSql(sqlEntry("UPDATE user SET a = 1", null, 0, null), true);
-            assertEquals(sqlRenderer.selectedBorder, sqlRenderer.getBorder());
-
-            java.awt.Insets normal = sqlRenderer.normalBorder.getBorderInsets(sqlRenderer);
-            java.awt.Insets selected = sqlRenderer.selectedBorder.getBorderInsets(sqlRenderer);
-            assertEquals("上", normal.top, selected.top);
-            assertEquals("左", normal.left, selected.left);
-            assertEquals("下", normal.bottom, selected.bottom);
-            assertEquals("右", normal.right, selected.right);
+            assertSame("选中态恢复平台选中绘制，边框与未选中一致（描边已退役）",
+                    sqlRenderer.normalBorder, sqlRenderer.getBorder());
         });
     }
 
@@ -309,5 +311,105 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
             assertEquals(null, barColorAfterRender("SELECT * FROM user"));
             assertEquals(list.getBackground(), sqlRenderer.getBackground());
         });
+    }
+
+    // ---------- T-LogHistoryRowNo：历史列表行号片段 ----------
+
+    @Test
+    public void test二级条目_行号片段在元信息行最前() throws Exception {
+        HistoryCellRenderer r = renderSql(sqlEntry("SELECT 1", null, 0, null).withSequenceNumber(12L));
+        String meta = joinedText(r.metaLine);
+        assertTrue("元信息行含行号 #12", meta.contains("#12 "));
+        assertTrue("行号应在片段序列最前", meta.startsWith("#12 "));
+        assertFalse("SQL 不混入元信息行", meta.contains("SELECT"));
+    }
+
+    @Test
+    public void test二级条目_无行号条目不渲染行号片段() throws Exception {
+        // sequenceNumber=0：旧文件读回 / 未注入条目
+        HistoryCellRenderer r = renderSql(sqlEntry("SELECT 1", null, 0, null));
+        assertFalse("无行号不渲染 # 前缀", joinedText(r.metaLine).contains("#"));
+    }
+
+    @Test
+    public void test二级条目_行号在耗时占位之前() throws Exception {
+        LogSqlEntry e = sqlEntry("SELECT 1", "UserMapper.java", 3, 3L).withSequenceNumber(5L);
+        String meta = joinedText(renderSql(e).metaLine);
+        int idxRow = meta.indexOf("#5 ");
+        int idxDur = meta.indexOf("3ms");
+        assertTrue("应同时含行号与耗时", idxRow >= 0 && idxDur >= 0);
+        assertTrue("行号在耗时之前", idxRow < idxDur);
+    }
+
+    @Test
+    public void test二级条目_元信息顺序与日志页一致_时间在耗时前() throws Exception {
+        // 用户反馈：历史页原为「耗时 → 时间」，与日志页「时间 → 耗时」相反
+        PluginSettings.State s = PluginSettings.getInstance().getState();
+        boolean savedTs = s.getLogTimestampEnabled();
+        String savedSrc = s.getLogTimestampSource();
+        try {
+            s.setLogTimestampEnabled(true);
+            s.setLogTimestampSource(LOG_TIMESTAMP_SOURCE_CAPTURE);
+            LogSqlEntry e = sqlEntry("SELECT 1", "UserMapper.java", 3, 3L).withSequenceNumber(5L);
+            String meta = joinedText(renderSql(e).metaLine);
+            int idxRow = meta.indexOf("#5 ");
+            int idxTs = meta.indexOf("[");
+            int idxDur = meta.indexOf("3ms");
+            assertTrue("应含行号/时间/耗时", idxRow >= 0 && idxTs >= 0 && idxDur >= 0);
+            assertTrue("行号在最前", idxRow < idxTs);
+            assertTrue("时间应在耗时之前（对齐日志页）", idxTs < idxDur);
+        } finally {
+            s.setLogTimestampEnabled(savedTs);
+            s.setLogTimestampSource(savedSrc);
+        }
+    }
+
+    // ---------- T-JdbcThreadBucket F3：历史页时间戳跟随设置（2026-09-15 移除硬编码 yyyy-MM-dd HH:mm:ss） ----------
+
+    private static final long TEST_TIMESTAMP = 1_700_000_000_000L;
+
+    private String expectedFormatted(String pattern) {
+        try {
+            return new java.text.SimpleDateFormat(pattern).format(new java.util.Date(TEST_TIMESTAMP));
+        } catch (IllegalArgumentException e) {
+            return new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new java.util.Date(TEST_TIMESTAMP));
+        }
+    }
+
+    private void setTimestampFormat(String format) {
+        PluginSettings.getInstance().getState().setLogTimestampFormat(format);
+    }
+
+    private void setTimestampEnabled(boolean enabled) {
+        PluginSettings.getInstance().getState().setLogTimestampEnabled(enabled);
+    }
+
+    @Test
+    public void test历史页时间戳_跟随设置格式() throws Exception {
+        String fmt = "HH:mm:ss";
+        String expected = expectedFormatted(fmt); // 系统时区下的 HH:mm:ss
+        setTimestampFormat(fmt);
+        setTimestampEnabled(true);
+        HistoryCellRenderer r = renderSql(sqlEntry("SELECT 1", null, 0, 3L));
+        String meta = joinedText(r.metaLine);
+        assertTrue("应渲染为设置格式 HH:mm:ss（期望 " + expected + "，实际 meta=" + meta + "）",
+                meta.contains("[" + expected + "]"));
+    }
+
+    @Test
+    public void test历史页时间戳_显示开关关闭则隐藏() throws Exception {
+        setTimestampEnabled(false);
+        HistoryCellRenderer r = renderSql(sqlEntry("SELECT 1", null, 0, 3L));
+        String meta = joinedText(r.metaLine);
+        assertFalse("关闭时间戳后不应含时间片段 " + meta, meta.contains(expectedFormatted("yyyy-MM-dd")));
+    }
+
+    @Test
+    public void test历史页时间戳_非法pattern回退默认() throws Exception {
+        setTimestampFormat("not-a-valid-pattern-%%");
+        HistoryCellRenderer r = renderSql(sqlEntry("SELECT 1", null, 0, 3L));
+        String meta = joinedText(r.metaLine);
+        String expected = expectedFormatted("not-a-valid-pattern-%%"); // 回退默认 yyyy-MM-dd HH:mm:ss
+        assertTrue("非法 pattern 应回退默认格式（期望 " + expected + "）", meta.contains("[" + expected + "]"));
     }
 }

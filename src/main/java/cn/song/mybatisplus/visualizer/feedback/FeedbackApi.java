@@ -411,6 +411,10 @@ public final class FeedbackApi {
             this.warning = warning;
         }
 
+        public SubmissionOutcome(SubmitResult result) {
+            this(result, null);
+        }
+
         public SubmitResult getResult() {
             return result;
         }

@@ -23,7 +23,8 @@ class HelpDialogTest : BasePlatformTestCase() {
         val panel = SqlLogPanel(project, SqlLogManager(project))
         try {
             val children = panel.toolbarGroup.getChildren(null).toList()
-            assertEquals("工具栏组应有 5 项（捕捉/清空/设置/搜索/帮助）", 5, children.size)
+            // T-UiNative T-UN-11：捕捉开关迁工具窗标题栏，工具栏组余 4 项（清空/设置/搜索/帮助）
+            assertEquals("工具栏组应有 4 项（清空/设置/搜索/帮助）", 4, children.size)
             // update 由工具栏生命周期驱动（headless 不布局不触发），手动走一次——
             // 图标/文案写入 event.presentation（2024.3 AnAction 无 getPresentation()）
             val events = children.map {

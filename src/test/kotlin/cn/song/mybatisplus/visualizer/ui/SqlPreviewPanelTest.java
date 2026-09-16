@@ -34,16 +34,15 @@ import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.psi.PsiFile;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import com.intellij.ui.OnePixelSplitter;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.ui.components.JBTextField;
 import com.intellij.util.ui.UIUtil;
-import java.awt.Color;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Toolkit;
 import java.awt.datatransfer.Transferable;
-import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -52,9 +51,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import javax.swing.JCheckBox;
-import javax.swing.JSplitPane;
 import javax.swing.SwingUtilities;
-import javax.swing.plaf.basic.BasicSplitPaneUI;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
@@ -896,24 +893,18 @@ panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of(), 
         panel.clear();
     }
 
-    public void testSplitDividerPaintedAsPanelBackground() throws Exception {
-        // T-M26.1：分隔条绘制应等于面板底色
+    public void testSplitIsNativeOnePixelSplitter() throws Exception {
+        // T-M26.1→T-UiNative P0：左右分栏换平台 OnePixelSplitter——分隔条由平台绘制（原生主题
+        // 融合 + 比例持久化键 mpvs.preview.splitter），替代旧 ThemedSplitPane 覆写 paint 粉刷。
+        // 断言：分栏是平台 Splitter（持久化键就位）且 proportion 契约可用
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
-        JSplitPane split = panel.splitPaneForTest();
+        OnePixelSplitter split = panel.splitPaneForTest();
         assertNotNull("应存在左右分栏", split);
+        assertEquals("mpvs.preview.splitter", split.getSplitterProportionKey());
         split.setSize(300, 100);
         split.doLayout();
-        if (split.getDividerLocation() < 0) split.setDividerLocation(150);
-        int loc = split.getDividerLocation();
-        assertTrue("分隔条应已布局", loc >= 0);
-        ((BasicSplitPaneUI) split.getUI()).getDivider().setBackground(Color.WHITE);
-        BufferedImage img = new BufferedImage(300, 100, BufferedImage.TYPE_INT_RGB);
-        java.awt.Graphics g = img.createGraphics();
-        split.paint(g);
-        g.dispose();
-        Color expected = UIUtil.getPanelBackground();
-        int expRgb = new Color(expected.getRed(), expected.getGreen(), expected.getBlue()).getRGB();
-        assertEquals("分隔条像素应等于面板底色", expRgb, img.getRGB(loc + split.getDividerSize() / 2, 50));
+        split.setProportion(0.4f);
+        assertEquals(0.4f, split.getProportion(), 1e-6f);
         panel.clear();
     }
 
@@ -921,20 +912,20 @@ panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of(), 
         // T-M26.3：全选/全不选回挂「动态条件」分区标题行右侧
         String longExpr = "stationIds != null and stationIds.size() > 0";
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
-        JSplitPane split = panel.splitPaneForTest();
+        OnePixelSplitter split = panel.splitPaneForTest();
         // 先布局再 showResult：截断上限按视口宽度计算
         split.setSize(500, 120);
         split.doLayout();
-        if (split.getDividerLocation() < 0) split.setDividerLocation(250);
+        split.setProportion(0.5f);
         split.doLayout();
-        ((JBScrollPane) split.getLeftComponent()).doLayout();
+        ((JBScrollPane) split.getFirstComponent()).doLayout();
         panel.showResult(dynamicResult(
                 List.of(
                         new Condition.Simple(new ColumnRef(null, "station_id", null, null, null, null, null), "IN",
                                 new SqlValue.Placeholder("stationIds"),
                                 new ConditionToggle("c0", "true", true, "station_id IN (?)", "stationIds", List.of("stationIds")))),
                 List.of(new ConditionView("c0", longExpr, "true", true, "stationIds", List.of("stationIds")))));
-        JBScrollPane scroll = (JBScrollPane) split.getLeftComponent();
+        JBScrollPane scroll = (JBScrollPane) split.getFirstComponent();
         javax.swing.JViewport viewport = scroll.getViewport();
         javax.swing.JButton button = panel.toggleSelectButtonForTest();
         // 按钮在参数面板内
@@ -1011,8 +1002,8 @@ panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of(), 
     }
 
     public void testVerticalNonInsertFallsBackToFormat() throws Exception {
-        // T-VStack·扩面 + InThreshold：非 INSERT 输入 = format + 横向组展开（长 IN 列表纵向化，
-        // 与格式化按钮可区分；阈值 5——2 元素短清单保持同行）
+        // T-VStack·扩面 + InAll：非 INSERT 输入 = format + 横向组展开（多元素 IN 列表一律纵向化，
+        // 与格式化按钮可区分；单元素形态保持同行）
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
         panel.showResult(result(
                 "select id from tbl where id in (1, 2, 3, 4, 5)",
@@ -1022,6 +1013,15 @@ panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of(), 
         assertTrue("SELECT 应按 format 全展开：" + text, text.contains("SELECT\n") && text.contains("FROM tbl"));
         assertTrue("长 IN 列表应纵向化：" + text, text.contains("IN\n"));
         panel.clear();
+
+        SqlPreviewPanel panel2 = new SqlPreviewPanel(getProject());
+        panel2.showResult(result(
+                "select id from tbl where id in (1, 2)",
+                "select id from tbl"));
+        panel2.formatVertical();
+        String shortText = panel2.editorForTest().getDocument().getText();
+        assertTrue("2 元素 IN 也应纵向化：" + shortText, shortText.contains("IN\n"));
+        panel2.clear();
     }
 
     public void testVerticalAnnotationFollowsSetting() throws Exception {

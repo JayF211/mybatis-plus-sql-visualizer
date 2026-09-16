@@ -246,15 +246,19 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
         assertTrue(MpSqlVisualizerBundle.message("logToSql.sendTo").isBlank() == false);
     }
 
+    /**
+     * T-UiNative T-UN-14：空态提示迁编辑器原生 placeholder（EditorEx.setPlaceholder）——
+     * 显隐由编辑器随空文档/焦点原生管理，自摆 hintLabel 已删除；
+     * 断言两区 placeholder 均接线既有文案键（语义保持：空态有引导文案）。
+     */
     @Test
-    public void testHintLabelsShowWhenEmptyAndHideOnContent() throws Exception {
-        // 空文档 → 提示可见；输入日志后 → 隐藏（结果区同理）
-        assertTrue("初始输入区空 → 提示应可见", panel.inputHintLabelForTest().isVisible());
-        assertTrue("初始结果区空 → 提示应可见", panel.resultHintLabelForTest().isVisible());
-        panel.setInputForTest("==>  Preparing: SELECT * FROM user WHERE id = ?");
-        assertTrue("输入日志后输入区提示应隐藏", !panel.inputHintLabelForTest().isVisible());
-        panel.setInputForTest("");
-        assertTrue("清空输入 → 提示恢复可见", panel.inputHintLabelForTest().isVisible());
+    public void testPlaceholderTextsWiredToBundleKeys() throws Exception {
+        assertEquals(
+            MpSqlVisualizerBundle.message("log.panel.hint.input"),
+            panel.inputPlaceholderForTest());
+        assertEquals(
+            MpSqlVisualizerBundle.message("log.panel.hint.result"),
+            panel.resultPlaceholderForTest());
     }
 
     // ---------- T-AutoFold F4-c：转换产出后结果区程序性折叠 ----------

@@ -1,6 +1,5 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import kotlin.Pair;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -56,8 +55,7 @@ public class SqlLogConsoleBridgeMarkerTest {
     public void 标记后无SQL_暂存保留() throws Exception {
         BridgeLineContext ctx = newCtx();
         SqlLogConsoleBridgeKt.processConsoleLine("SQLVIS-SOURCE|com/x.java|5", ctx, null, () -> {});
-        assertEquals("com/x.java", ctx.pendingSource.getFirst());
-        assertEquals(5, (int) ctx.pendingSource.getSecond());
+        assertEquals(new SourceMarkerData("com/x.java", 5), ctx.pendingSource);
     }
 
     @Test
@@ -78,6 +76,55 @@ public class SqlLogConsoleBridgeMarkerTest {
         SqlLogConsoleBridgeKt.processConsoleLine("==>  Preparing: SELECT * FROM t2", ctx, null, () -> {});
         List<LogSqlEntry> e2 = SqlLogConsoleBridgeKt.processConsoleLine("==>  Parameters: 2(Long)", ctx, null, () -> {});
         assertEquals("b/B.java", e2.get(0).sourceFile());
+    }
+
+    // ---------- T-IntrUpg-01：拦截器自位污染标记防线 ----------
+
+    @Test
+    public void 自位污染标记不暂存_条目无位置() throws Exception {
+        BridgeLineContext ctx = newCtx();
+        // 旧拷贝件上报的自位标记（真机截图形态：SqlSourceInterceptor.java:62）
+        assertTrue(SqlLogConsoleBridgeKt.processConsoleLine("SQLVIS-SOURCE|cn/song/mpjdemo/config/SqlSourceInterceptor.java|62", ctx, null, () -> {}).isEmpty());
+        assertNull("防线：自位标记不得暂存", ctx.pendingSource);
+        SqlLogConsoleBridgeKt.processConsoleLine("==>  Preparing: SELECT * FROM t", ctx, null, () -> {});
+        List<LogSqlEntry> entries = SqlLogConsoleBridgeKt.processConsoleLine("==>  Parameters: 1(Long)", ctx, null, () -> {});
+        assertEquals(1, entries.size());
+        assertNull("自位污染位置不落条目（落无位置引导链路）", entries.get(0).sourceFile());
+    }
+
+    @Test
+    public void 防线不粘滞_自位标记后正常标记照常生效() throws Exception {
+        BridgeLineContext ctx = newCtx();
+        SqlLogConsoleBridgeKt.processConsoleLine("SQLVIS-SOURCE|cn/song/config/SqlSourceInterceptor.java|62", ctx, null, () -> {});
+        SqlLogConsoleBridgeKt.processConsoleLine("SQLVIS-SOURCE|cn/song/service/UserService.java|87", ctx, null, () -> {});
+        SqlLogConsoleBridgeKt.processConsoleLine("==>  Preparing: SELECT * FROM t", ctx, null, () -> {});
+        List<LogSqlEntry> entries = SqlLogConsoleBridgeKt.processConsoleLine("==>  Parameters: 1(Long)", ctx, null, () -> {});
+        assertEquals("cn/song/service/UserService.java", entries.get(0).sourceFile());
+        assertEquals(87, entries.get(0).sourceLine());
+    }
+
+    // ---------- M56 T-M56-00：标记第 4/5 段 → mapperStatement/requestTag ----------
+
+    @Test
+    public void 四段标记_mapper语句id写入条目() throws Exception {
+        BridgeLineContext ctx = newCtx();
+        SqlLogConsoleBridgeKt.processConsoleLine("SQLVIS-SOURCE|a/A.java|1|com.a.mapper.AMapper.selectById", ctx, null, () -> {});
+        SqlLogConsoleBridgeKt.processConsoleLine("==>  Preparing: SELECT * FROM t1", ctx, null, () -> {});
+        List<LogSqlEntry> entries = SqlLogConsoleBridgeKt.processConsoleLine("==>  Parameters: 1(Long)", ctx, null, () -> {});
+        assertEquals(1, entries.size());
+        assertEquals("com.a.mapper.AMapper.selectById", entries.get(0).mapperStatement());
+        assertNull(entries.get(0).requestTag());
+    }
+
+    @Test
+    public void 五段标记_mapper语句id与请求标签写入条目() throws Exception {
+        BridgeLineContext ctx = newCtx();
+        SqlLogConsoleBridgeKt.processConsoleLine("SQLVIS-SOURCE|a/A.java|1|com.a.mapper.AMapper.selectById|req-7", ctx, null, () -> {});
+        SqlLogConsoleBridgeKt.processConsoleLine("==>  Preparing: SELECT * FROM t1", ctx, null, () -> {});
+        List<LogSqlEntry> entries = SqlLogConsoleBridgeKt.processConsoleLine("==>  Parameters: 1(Long)", ctx, null, () -> {});
+        assertEquals(1, entries.size());
+        assertEquals("com.a.mapper.AMapper.selectById", entries.get(0).mapperStatement());
+        assertEquals("req-7", entries.get(0).requestTag());
     }
 
     // ---------- T-LogDedupeMpMark：MP 分页 COUNT 标记逐条判定 ----------
@@ -139,9 +186,10 @@ public class SqlLogConsoleBridgeMarkerTest {
     public void 多行JdbcTemplate语句端到端捕获并标记MP分页() throws Exception {
         BridgeLineContext ctx = newCtx();
         // 用户反馈样本（2026-09-08）：TLog TID 前缀 + SQL 跨行 + `]` 独占末行
+        // 线程 token 与 namedLine 一致（cache-preheat-1），T-JdbcThreadBucket 分桶后 named 行冲刷同桶残句
         List<String> sample = List.of(
-            "2026-09-08 11:21:11.066 [TID: AFFCDDCD81F34B929A55E587382D58E8] [http-nio-0.0.0.0-6608-exec-5] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:711 - Executing prepared SQL query",
-            "2026-09-08 11:21:11.066 [TID: AFFCDDCD81F34B929A55E587382D58E8] [http-nio-0.0.0.0-6608-exec-5] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:643 - Executing prepared SQL statement [SELECT COUNT(1)",
+            "2026-09-08 11:21:11.066 [TID: AFFCDDCD81F34B929A55E587382D58E8] [cache-preheat-1] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:711 - Executing prepared SQL query",
+            "2026-09-08 11:21:11.066 [TID: AFFCDDCD81F34B929A55E587382D58E8] [cache-preheat-1] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:643 - Executing prepared SQL statement [SELECT COUNT(1)",
             "        FROM ipm_ImplementTask t",
             "        WHERE t.deleted = 0",
             "        AND EXISTS (SELECT 1 FROM ipm_ProjectSubject p WHERE p.id = t.projectId AND p.deleted = 0)",

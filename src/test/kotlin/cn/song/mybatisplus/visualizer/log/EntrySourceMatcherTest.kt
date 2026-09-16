@@ -86,4 +86,41 @@ class EntrySourceMatcherTest {
         val matched = EntrySourceMatcher.match(entries, anchorFile, 10)
         assertEquals(listOf("win"), matched.map { it.restoredSql() })
     }
+
+    // ---- T-JumpPath-03：段对齐后缀互含（锚点项目根相对 vs 条目包式源码根相对） ----
+
+    @Test
+    fun `sameFile 表驱动`() {
+        val table = listOf(
+            // 等值
+            Triple("a/b/S.java", "a/b/S.java", true),
+            // 条目包式路径是锚点项目根相对路径的段对齐后缀（真机实锤形态：多模块含模块前缀）
+            Triple("mod/src/main/java/cn/song/a/S.java", "cn/song/a/S.java", true),
+            Triple("cn/song/a/S.java", "mod/src/main/java/cn/song/a/S.java", true),
+            // 段不齐不命中：后缀虽同形但 `/` 段边界错位（xmod 前缀假命中防线）
+            Triple("xmod/src/main/java/cn/song/a/S.java", "mod/src/main/java/cn/song/a/S.java", false),
+            Triple("src/main/java/com/demo/UserService.java", "demo/UserService.java", true),
+            Triple("src/main/java/com/xdemo/UserService.java", "demo/UserService.java", false),
+            // 裸文件名段对齐互含
+            Triple("cn/song/A.java", "A.java", true),
+            Triple("cn/song/BA.java", "A.java", false),
+        )
+        for ((a, b, expected) in table) {
+            assertEquals("sameFile($a, $b)", expected, EntrySourceMatcher.sameFile(a, b))
+            assertEquals("sameFile($b, $a) 对称性", expected, EntrySourceMatcher.sameFile(b, a))
+        }
+    }
+
+    @Test
+    fun `锚点项目根形态与条目包式形态互含命中`() {
+        // 真机场景：gutter 锚点 = 项目根相对（多模块含模块前缀），条目 sourceFile = 拦截器包式路径
+        val entries = listOf(
+            entry("join", sourceFile = "cn/song/mpjdemo/service/CarService.java", sourceLine = 42),
+            entry("other", sourceFile = "cn/song/other/CarService.java", sourceLine = 42),
+        )
+        val matched = EntrySourceMatcher.match(
+            entries, "mybatis-plus-join-demo/src/main/java/cn/song/mpjdemo/service/CarService.java", 45,
+        )
+        assertEquals(listOf("join"), matched.map { it.restoredSql() })
+    }
 }

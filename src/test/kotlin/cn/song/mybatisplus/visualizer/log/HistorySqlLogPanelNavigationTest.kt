@@ -161,6 +161,24 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
         }
     }
 
+    fun test二级SQL列表_安装速度搜索() {
+        // T-UiNative T-UN-05：历史二级 SQL 列表构造于 CardLayout 隐藏卡，速度搜索须可见后生效。
+        // 断言「已安装」用两参 getSupply(comp, true)（checkShowing=false 直读安装的 supply——
+        // 单参版含 isPopupActive() 过滤，headless 无活动弹窗恒 null，不适用于安装断言）。
+        writeHistoryFile("sql-history-2026-08-31.sql", f44FileContent(listOf(Triple("SELECT 1", "A.java:1", 1L))))
+
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+        try {
+            panel.openFileForTest(panel.fileListEntries.first())
+            assertTrue(
+                "二级 SQL 列表应已安装速度搜索（checkShowing=false 可解析到 supply），但未命中",
+                com.intellij.ui.speedSearch.SpeedSearchSupply.getSupply(panel.sqlListForTest, true) != null,
+            )
+        } finally {
+            panel.dispose()
+        }
+    }
+
     fun test一级搜索过滤文件名() {
         writeHistoryFile("sql-history-2026-08-31.sql", f44FileContent(listOf(Triple("SELECT 1", "A.java:1", 1L))))
         writeHistoryFile("sql-history-2026-08-30.sql", f44FileContent(listOf(Triple("SELECT 2", "A.java:2", 1L))))
@@ -261,16 +279,71 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             panel.onDisplayModeChanged() // 等价 SETTINGS_CHANGE_TOPIC 广播后的处理
 
             assertEquals(
-                "combo 选中态应回同步设置值",
-                cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().sqlListDisplayMode().ordinal,
-                panel.displayModeComboForTest.selectedIndex,
-            )
-            assertEquals(
                 "行高应随模式重设（单行=固定高，多行=-1 可变）",
                 cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().sqlListDisplayMode() == SqlListDisplayMode.SINGLE_LINE,
                 panel.sqlListFixedCellHeightForTest != -1,
             )
+            // T-MergeFollowup-03：模式切换改走 applySqlSearch 全量重建（repaint 不重算 JList 行高布局缓存）
+            assertEquals(
+                "模式切换后二级列表条目应经全量重建保持不丢",
+                1,
+                panel.sqlListEntries.size,
+            )
         } finally {
+            panel.dispose()
+        }
+    }
+
+    /**
+     * T-MergeFollowup-03（复查二轮）防回归：多次切换显示模式后 BasicListUI 的 cellHeights 布局缓存
+     * 必须失效（updateUI 重装 UI）——旧行高框内画新多行内容即真机「文字重叠/间距挤压/字号错乱」。
+     * 判据：每次切换后 [javax.swing.JList.getCellBounds] 行高须等于当前模式渲染器 preferred 高
+     * （缓存未失效时 getCellBounds 返回旧缓存高度，与多行展开的新渲染高度不一致）。
+     */
+    fun test多次切换显示模式后行高布局缓存失效() {
+        val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
+        val savedMode = settings.state.logListSqlDisplayMode
+        // 多列 SELECT：FORMATTED 竖排展开后渲染行数远大于单行，行高差可判
+        writeHistoryFile(
+            "sql-history-2026-09-14.sql",
+            f44FileContent(
+                listOf(Triple("SELECT id, station_id, share_scheme_id, device_name, station_name FROM car_device_info", "SqlSourceInterceptor.java:621", 3L)),
+            ),
+        )
+
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+        try {
+            panel.openFileForTest(panel.fileListEntries.first())
+            assertEquals(1, panel.sqlListEntries.size)
+
+            fun assertCellHeightMatchesRenderer(stage: String) {
+                @Suppress("UNCHECKED_CAST")
+                val renderer = panel.sqlListForTest.cellRenderer as javax.swing.ListCellRenderer<Any?>
+                panel.sqlListForTest.getCellBounds(0, 0)!!.let { bounds ->
+                    val renderedPreferred = renderer
+                        .getListCellRendererComponent(panel.sqlListForTest, panel.sqlListEntries.single(), 0, false, false)
+                        .preferredSize.height
+                    assertEquals(
+                        "$stage：切换后 JList 行高布局缓存应失效（cellBounds 高度 = 当前模式渲染 preferred）",
+                        renderedPreferred,
+                        bounds.height,
+                    )
+                }
+            }
+
+            listOf(
+                SqlListDisplayMode.SINGLE_LINE,
+                SqlListDisplayMode.FORMATTED,
+                SqlListDisplayMode.KEYWORD_WRAP,
+                SqlListDisplayMode.FORMATTED,
+                SqlListDisplayMode.SINGLE_LINE,
+            ).forEach { mode ->
+                settings.state.logListSqlDisplayMode = mode.name
+                panel.onDisplayModeChanged() // 等价 SETTINGS_CHANGE_TOPIC 广播后的处理
+                assertCellHeightMatchesRenderer("切至 $mode")
+            }
+        } finally {
+            settings.state.logListSqlDisplayMode = savedMode
             panel.dispose()
         }
     }
