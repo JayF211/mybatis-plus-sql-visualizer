@@ -217,12 +217,13 @@ object DataSourceSelector {
         project: Project,
         onResultsReady: ((javax.swing.JComponent) -> Unit)? = null,
         onError: ((String) -> Unit)? = null,
+        onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     ): Boolean {
         val console = preparedConsole ?: return false
         val editor = preparedEditor ?: return false
         val scriptModel = preparedScriptModel ?: return false
         val execOption = preparedExecOption ?: return false
-        executeOnConsole(project, console, editor, scriptModel, execOption, preparedUi, onResultsReady, onError)
+        executeOnConsole(project, console, editor, scriptModel, execOption, preparedUi, onResultsReady, onError, onErrorRich)
         return true
     }
 
@@ -245,9 +246,10 @@ object DataSourceSelector {
         onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)? = null,
         onError: ((String) -> Unit)? = null,
         callback: ((Boolean) -> Unit)? = null,
+        onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     ) {
         chooseAndPrepare(project, sql, executeAfterPrepare = true,
-            onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback)
+            onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback, onErrorRich = onErrorRich)
     }
 
     /**
@@ -264,6 +266,7 @@ object DataSourceSelector {
         onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)?,
         onError: ((String) -> Unit)?,
         callback: ((Boolean) -> Unit)?,
+        onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         if (!ExecuteSqlSupport.isAvailable()) {
@@ -276,7 +279,7 @@ object DataSourceSelector {
         // M36.5.5：共享控制台命中（last-used 数据源一致且控制台仍有效）→ 直接复用——
         // 不同步 session/连接/临时文件/方言映射，规避"第二个会话连接永不发起"挂死（见字段注释）。
         // 显式执行路径同样复用（结果落在已嵌入面板）；用户切换数据源走弹窗 → 新建并替换共享缓存。
-        if (reuseSharedConsole(project, sql, executeAfterPrepare, onConsole, onEditor, onError, callback)) return
+        if (reuseSharedConsole(project, sql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich)) return
 
         // 临时文件 + VF + PsiFile：Runner 上下文 + 控制台挂载点（VF 须保持引用）
         val temp = createTempPsiFile(project, sql)
@@ -294,7 +297,7 @@ object DataSourceSelector {
         var chosenRunnerName: String? = null
         val sessionConsumer = com.intellij.util.Consumer<Any> { session ->
             LOG.info("[M36] session created: ${session?.javaClass?.name}, attaching console (execute=$executeAfterPrepare, ds=$chosenRunnerName)")
-            prepareInConsole(project, session, vf, executeAfterPrepare, chosenRunnerName, onConsole, onEditor, onError)
+            prepareInConsole(project, session, vf, executeAfterPrepare, chosenRunnerName, onConsole, onEditor, onError, onErrorRich)
         }
 
         val runners = getAttachDataSourceRunners(psiFile, sql, sessionConsumer)
@@ -359,6 +362,7 @@ object DataSourceSelector {
         onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)?,
         onError: ((String) -> Unit)?,
         callback: ((Boolean) -> Unit)?,
+        onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     ): Boolean {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val console = sharedConsole ?: return false
@@ -476,7 +480,7 @@ object DataSourceSelector {
         clearConsolePrompt(console, LOG)
         LOG.info("[M36] shared console reused (ds=$dsName, execute=$executeAfterPrepare, liveResult=${liveResult != null})")
         if (executeAfterPrepare) {
-            executeOnConsole(project, console, editor, refreshedModel ?: scriptModel, execOption, sharedUi, onResultsReady = null, onError = onError)
+            executeOnConsole(project, console, editor, refreshedModel ?: scriptModel, execOption, sharedUi, onResultsReady = null, onError = onError, onErrorRich = onErrorRich)
         }
         callback?.invoke(true)
         return true
@@ -1137,6 +1141,7 @@ object DataSourceSelector {
         onConsole: ((javax.swing.JComponent) -> Unit)?,
         onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)?,
         onError: ((String) -> Unit)?,
+        onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
@@ -1202,7 +1207,7 @@ object DataSourceSelector {
                 val ed = editor ?: return
                 // M36.2：编辑器就绪回调（调用方注入插件补全上下文，与原生补全叠加）
                 onEditor?.invoke(ed)
-                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, ed)
+                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, ed, onErrorRich)
             } else {
                 ApplicationManager.getApplication().executeOnPooledThread {
                     var editor: com.intellij.openapi.editor.Editor? = null
@@ -1217,7 +1222,7 @@ object DataSourceSelector {
                         if (resolved != null) {
                             onEditor?.invoke(resolved)
                             runCatching {
-                                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, resolved)
+                                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, resolved, onErrorRich)
                             }.onFailure { e ->
                                 LOG.warn("[M36] prepareInConsole(editor async wait) FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
                                 val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
@@ -1261,6 +1266,7 @@ object DataSourceSelector {
         console: Any,
         document: com.intellij.openapi.editor.Document?,
         editor: com.intellij.openapi.editor.Editor,
+        onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
@@ -2235,6 +2241,7 @@ object DataSourceSelector {
         ui: Any?,
         onResultsReady: ((javax.swing.JComponent) -> Unit)?,
         onError: ((String) -> Unit)?,
+        onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
         dsName: String? = sharedDataSourceName,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
@@ -2450,7 +2457,11 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                                                             cause,
                                                         )
                                                         // M36.5.45：native 执行链失败必须通知 UI（此前仅 LOG.warn，用户看不到任何错误）
+                                                        // T-ErrorLocate T-EL-02：富通道并行投递（SQLState/errorCode/驱动位置结构化），
+                                                        // 旧 onError(String) 消费方零改动
                                                         ApplicationManager.getApplication().invokeLater({
+                                                            runCatching { onErrorRich?.invoke(ErrorPositionExtractor.buildInfo(cause, cause.message ?: cause.toString())) }
+                                                                .onFailure { LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", it) }
                                                             onError?.invoke(cause.message ?: cause.toString())
                                                         }, com.intellij.openapi.application.ModalityState.any())
                                                     }
@@ -2486,6 +2497,8 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                         // 48s 挂起），换入/重试/提示全不跑 → "执行中"卡住。any() 使任务在模态
                         // pump 中照常执行（纯 Swing 更新，安全）。
                         ApplicationManager.getApplication().invokeLater({
+                            runCatching { onErrorRich?.invoke(ErrorPositionExtractor.buildInfo(cause, msg)) }
+                                .onFailure { LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", it) }
                             onError?.invoke(msg)
                         }, com.intellij.openapi.application.ModalityState.any())
                         return@executeOnPooledThread
@@ -2500,6 +2513,8 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         }.onFailure { e ->
             LOG.warn("[M36] executeOnConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
             val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+            runCatching { onErrorRich?.invoke(ErrorPositionExtractor.buildInfo(cause, cause.message ?: cause.toString())) }
+                .onFailure { LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", it) }
             onError?.invoke(cause.message ?: cause.toString())
         }
     }

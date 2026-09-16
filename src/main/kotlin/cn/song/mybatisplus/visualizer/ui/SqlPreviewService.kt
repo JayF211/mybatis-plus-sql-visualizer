@@ -97,6 +97,16 @@ class SqlPreviewService(private val project: Project) {
     /** 文件级解析缓存（F-20）：文件内容变更（modificationStamp）即失效。 */
     private val cache = WrapperCache()
 
+    /**
+     * T-ErrorLocate T-EL-03：最近一次预览的源锚点（文件 + 0 基光标行），错误定位动作消费。
+     * 预览触发入口（ConvertToSqlAction）刷新；null = 本会话尚未有可解析锚点（定位按钮不出现）。
+     * 单槽即可：预览弹窗每项目至多一个（M36.5.47 单例化），同刻只有一个错误面板可定位。
+     */
+    var lastPreviewSourceAnchor: SourceAnchor? = null
+
+    /** 预览源锚点（文件 + 0 基行）。 */
+    data class SourceAnchor(val file: com.intellij.openapi.vfs.VirtualFile, val line0: Int)
+
     init {
         // T-PerfTail #1：编辑器关闭即清理该文件的 WrapperCache 条目——长会话中条目数随打开
         // 文件集有界（LRU 512 上限之外的主动回收）。连接绑定 project Disposable，项目关闭自动注销。

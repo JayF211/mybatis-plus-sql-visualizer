@@ -62,6 +62,16 @@ class ConvertToSqlAction : AnAction() {
         // F-46：当前代码位置（文件名:行号），来源列默认值（XML/Java 共用）
         val sourceLocation = "${file.name}:${editor.document.getLineNumber(editor.caretModel.offset) + 1}"
 
+        // T-ErrorLocate T-EL-03：登记可解析源锚点（文件+0 基行），执行失败时错误定位动作消费。
+        // 单槽按项目覆盖（预览弹窗每项目至多一个，同刻只有一个错误面板可定位）。
+        runCatching {
+            file.virtualFile?.let { vf ->
+                val line0 = editor.document.getLineNumber(editor.caretModel.offset)
+                project.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor =
+                    SqlPreviewService.SourceAnchor(vf, line0)
+            }
+        }
+
         // T-M24-04：XML mapper 文件 → 预览光标所在语句（不在语句内 → 首个语句）
         // T-M29.6：选择区优先——选中段落内多条语句时弹选择栏（与 Java 选择区候选交互一致）
         // F-45：<pages> XML 文件 → maintainPage 预览

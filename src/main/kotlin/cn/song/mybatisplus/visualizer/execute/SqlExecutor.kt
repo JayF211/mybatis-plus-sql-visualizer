@@ -37,20 +37,23 @@ object SqlExecutor {
         onConsole: ((javax.swing.JComponent) -> Unit)? = null,
         onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)? = null,
         onError: ((String) -> Unit)? = null,
+        onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     ) {
         DataSourceSelector.selectAndExecute(
             project, sql,
             onConsole = onConsole,
             onEditor = onEditor,
             onError = onError,
-        ) { success ->
-            if (!success) {
-                // Community 或失败时提示
-                if (!ExecuteSqlSupport.isAvailable()) {
-                    showInfo(project, MpSqlVisualizerBundle.message("execute.noDatabase"))
+            onErrorRich = onErrorRich,
+            callback = { success ->
+                if (!success) {
+                    // Community 或失败时提示
+                    if (!ExecuteSqlSupport.isAvailable()) {
+                        showInfo(project, MpSqlVisualizerBundle.message("execute.noDatabase"))
+                    }
                 }
-            }
-        }
+            },
+        )
     }
 
     /**
@@ -89,9 +92,10 @@ object SqlExecutor {
         project: Project,
         onResultsReady: ((javax.swing.JComponent) -> Unit)? = null,
         onError: ((String) -> Unit)? = null,
+        onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     ): Boolean {
         if (!ExecuteSqlSupport.isAvailable()) return false
-        return DataSourceSelector.executePrepared(project, onResultsReady, onError)
+        return DataSourceSelector.executePrepared(project, onResultsReady, onError, onErrorRich)
     }
 
     /** 控制台是否已就绪（[prepareConsole] 成功后 true）。 */

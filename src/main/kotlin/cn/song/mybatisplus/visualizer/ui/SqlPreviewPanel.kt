@@ -722,6 +722,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                         onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
                         onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
                         onError = { errorMsg -> resultPanel.showError(errorMsg) },
+            onErrorRich = { info -> showErrorRichWithLocate(info) },
                     )
                     return
                 }
@@ -737,6 +738,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 proj,
                 onResultsReady = { fullConsole -> embedConsole(fullConsole) },
                 onError = { errorMsg -> resultPanel.showError(errorMsg) },
+            onErrorRich = { info -> showErrorRichWithLocate(info) },
             )
             if (executed) return
         }
@@ -745,6 +747,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
             onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
             onError = { errorMsg -> resultPanel.showError(errorMsg) },
+            onErrorRich = { info -> showErrorRichWithLocate(info) },
         )
     }
 
@@ -838,6 +841,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                         onError = { errorMsg ->
                             resultPanel.showError(errorMsg)
                         },
+                        onErrorRich = { info -> showErrorRichWithLocate(info) },
                     )
                     return
                 }
@@ -855,6 +859,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 onError = { errorMsg ->
                     resultPanel.showError(errorMsg)
                 },
+                onErrorRich = { info -> showErrorRichWithLocate(info) },
             )
             if (executed) return
         }
@@ -866,7 +871,31 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             onError = { errorMsg ->
                 resultPanel.showError(errorMsg)
             },
+            onErrorRich = { info -> showErrorRichWithLocate(info) },
         )
+    }
+
+    /**
+     * T-ErrorLocate T-EL-03：错误定位——跳转到预览源锚点（语句起始行）。
+     *
+     * 诚实降级定案：驱动报错位置（Position/at line）指向**被执行 SQL 文本**的字符/行，
+     * 与 mapper 原文行不一一对应（动态 SQL 拼接、参数注入后行号必然错位），v1 只承诺
+     * 「语句起始行」跳转 + 按钮 tooltip 如实说明，绝不虚标精确跳转。
+     * 锚点来自 [SqlPreviewService.lastPreviewSourceAnchor]（预览触发时登记）；
+     * 无锚点（gutter 面等未登记入口）定位按钮不出现。
+     */
+    private fun locateErrorSource() {
+        val proj = project ?: return
+        val anchor = runCatching { proj.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor }
+            .getOrNull() ?: return
+        runCatching {
+            com.intellij.openapi.fileEditor.OpenFileDescriptor(proj, anchor.file, anchor.line0, 0).navigate(true)
+        }
+    }
+
+    /** T-ErrorLocate：执行调用点共用的富错误回调（错误呈现 + 可解析锚点时附定位动作）。 */
+    private fun showErrorRichWithLocate(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo) {
+        resultPanel.showErrorRich(info) { locateErrorSource() }
     }
 
     /**
@@ -906,6 +935,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             onError = { errorMsg ->
                 resultPanel.showError(errorMsg)
             },
+            onErrorRich = { info -> showErrorRichWithLocate(info) },
         )
     }
 

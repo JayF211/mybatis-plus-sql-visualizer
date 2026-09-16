@@ -70,6 +70,22 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
     /** M36.5.48：当前错误文本（供复制按钮使用）。 */
     private var currentError: String? = null
 
+    /** T-ErrorLocate T-EL-03：错误定位按钮（同 errorCopyButton 款式，仅错误态出现——
+     * 渲染后 SQL 与 mapper 原文行不一一对应，v1 承诺语句起始行 + tooltip 如实说明，绝不虚标精确）。 */
+    private val errorLocateButton = JButton(MpSqlVisualizerBundle.message("execute.error.locate")).apply {
+        isVisible = false
+        isOpaque = false
+        isContentAreaFilled = false
+        border = JBUI.Borders.empty(1, 6)
+        font = font.deriveFont(11f)
+        foreground = JBColor.namedColor("Link.activeForeground", JBColor.GRAY)
+        margin = JBUI.insets(0, 6, 0, 6)
+        addActionListener { locateHandler?.invoke() }
+    }
+
+    /** T-ErrorLocate：定位动作（宿主面板注入——需要 project + 预览源锚点，面板自身不可知）。 */
+    private var locateHandler: (() -> Unit)? = null
+
     /** M36.5.49：面板状态——防止 error 被后续 showEmpty/showLoading 误清（"一闪而过"）。 */
     private enum class State { EMPTY, LOADING, ERROR, SUCCESS }
     private var state = State.EMPTY
@@ -85,6 +101,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         val east = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 2, 0)).apply {
             isOpaque = false
             border = JBUI.Borders.empty()
+            add(errorLocateButton)
             add(errorCopyButton)
         }
         add(east, BorderLayout.EAST)
@@ -109,6 +126,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         state = State.EMPTY
         currentError = null
         errorCopyButton.isVisible = false
+        errorLocateButton.isVisible = false
         setLoadingIconVisible(false)
         val dsInfo = if (dataSourceName.isNotEmpty()) {
             " | ${MpSqlVisualizerBundle.message("execute.datasource.label", dataSourceName)}"
@@ -127,6 +145,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         state = State.LOADING
         currentError = null
         errorCopyButton.isVisible = false
+        errorLocateButton.isVisible = false
         setLoadingIconVisible(true)
         infoLabel.text = if (dataSourceName.isNotEmpty()) {
             "<html>${MpSqlVisualizerBundle.message("execute.result.loading")} | " +
@@ -151,6 +170,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         state = State.SUCCESS
         currentError = null
         errorCopyButton.isVisible = false
+        errorLocateButton.isVisible = false
         setLoadingIconVisible(false)
         val dsInfo = if (dataSourceName.isNotEmpty()) {
             " | ${MpSqlVisualizerBundle.message("execute.datasource.label", dataSourceName)}"
@@ -174,6 +194,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         state = State.SUCCESS
         currentError = null
         errorCopyButton.isVisible = false
+        errorLocateButton.isVisible = false
         setLoadingIconVisible(false)
         val dsInfo = if (dataSourceName.isNotEmpty()) {
             " | ${MpSqlVisualizerBundle.message("execute.datasource.label", dataSourceName)}"
@@ -205,9 +226,37 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         errorCopyButton.isVisible = true
         errorCopyButton.revalidate()
         errorCopyButton.repaint()
+        locateHandler = null
+        errorLocateButton.isVisible = false
         showContent()
         revalidate()
         repaint()
+    }
+
+    /**
+     * T-ErrorLocate T-EL-03：富错误呈现——在 [showError] 基础上追加「定位到出错位置」动作。
+     *
+     * 显隐先例对齐 errorCopyButton（仅错误时出现，不做常驻）；[locate] 为宿主注入的跳转动作
+     * （预览面板持有 project 与预览源锚点，本面板不可知），null = 锚点不可解析、按钮不出现。
+     * v1 落点为语句起始行（诚实降级）：驱动报的字符位置指向**被执行 SQL 文本**，与 mapper 原文
+     * 行不一一对应（动态 SQL 拼接/参数注入），绝不虚标精确——tooltip 注明。
+     *
+     * @param info   执行链富错误信息（T-EL-02 富通道投递）
+     * @param locate 定位动作；null = 不显示定位按钮
+     */
+    fun showErrorRich(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo, locate: (() -> Unit)?) {
+        showError(info.message)
+        locateHandler = locate
+        if (locate != null) {
+            errorLocateButton.toolTipText = if (info.positionChar != null) {
+                MpSqlVisualizerBundle.message("execute.error.locate.tooltip.position", info.positionChar)
+            } else {
+                MpSqlVisualizerBundle.message("execute.error.locate.tooltip.start")
+            }
+            errorLocateButton.isVisible = true
+            errorLocateButton.revalidate()
+            errorLocateButton.repaint()
+        }
     }
 
     /**
@@ -217,6 +266,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         state = State.EMPTY
         currentError = null
         errorCopyButton.isVisible = false
+        errorLocateButton.isVisible = false
         setLoadingIconVisible(false)
         infoLabel.text = ""
         isVisible = false

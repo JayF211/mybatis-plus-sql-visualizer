@@ -103,10 +103,19 @@ class ExplainTool : McpToolsetSupport("mpsv_explain") {
             runCatching {
                 McpDbExecutor.executeQuery(target.project, target.ds, target.explainSql, McpExplainFormatter.MAX_ROWS)
             }.getOrElse { e ->
+                // T-ErrorLocate T-EL-04：驱动错误消息携带位置信号（PG `Position: N` / `at line N`）时
+                // 附 errorPosition 文本行——agent 可定位再自修复；匹配不到/多 marker 即不加（诚实降级，
+                // ErrorPositionExtractor 的 marker 单一性门控与「基建语句不带位置」同源）。
+                val causeMsg = e.message ?: e.javaClass.simpleName
+                val pos = cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor.extractPosition(causeMsg)
                 throwExpected(
                     McpToolErrors.code(
                         McpToolErrors.DATASOURCE_UNREACHABLE,
-                        "EXPLAIN failed on '${target.dialectName}' data source: ${firstLine(e.message ?: e.javaClass.simpleName)}",
+                        "EXPLAIN failed on '${target.dialectName}' data source: ${firstLine(causeMsg)}" +
+                            if (pos != null) {
+                                val kind = if (pos.second) "char" else "line"
+                                "\nerrorPosition: $kind ${pos.first}"
+                            } else "",
                     ),
                 )
             }
