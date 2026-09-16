@@ -13,7 +13,7 @@ import javax.swing.JPanel
  * SQL 日志面板布局 / 兼容性 UI 测试（F-44-5 全插件 UI 测试）：
  *
  * 用户反馈「布局错乱 / 不兼容」——重点锁定工具栏（尤其是 WrapLayout 换行后「SQL类型筛选项消失」缺陷）：
- *  - 工具栏关键组件（SQL类型标签/按钮、去重勾选、帮助/捕捉动作组）构建即存在；
+ *  - 工具栏关键组件（SQL类型标签/按钮、去重勾选、帮助动作组；捕捉开关 T-UN-11 起挂标题栏）构建即存在；
  *  - 默认可见性正确（无耗时不显示排序按钮、搜索条默认隐藏）；
  *  - 窄侧边栏下 WrapLayout 不裁切 SQL类型按钮（按钮 y 落在面板高度内，而非被单行高度裁掉）。
  */
@@ -43,7 +43,9 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             assertNotNull("SQL类型按钮应存在", panel.typeFilterButtonForTest)
             assertNotNull("去重勾选框应存在", panel.dedupeCheckBoxForTest)
             assertNotNull("搜索条应存在", panel.searchFieldForTest)
-            assertTrue("工具栏动作组应含 ≥5 个动作（捕捉/清空/设置/搜索/帮助）", panel.toolbarGroup.childActionsOrStubs.size >= 5)
+            // T-UiNative T-UN-11：捕捉开关迁工具窗标题栏（captureToggleAction），工具栏组含 4 个动作
+            assertTrue("工具栏动作组应含 ≥4 个动作（清空/设置/搜索/帮助）", panel.toolbarGroup.childActionsOrStubs.size >= 4)
+            assertNotNull("捕捉开关动作应存在（标题栏挂载用）", panel.captureToggleAction)
 
             // 默认可见性：排序方式选择器恒可见（默认时间升序）；搜索条默认隐藏；慢查询标签隐藏
             assertEquals("排序方式选择器应恒可见", true, panel.sortButtonForTest.isVisible)

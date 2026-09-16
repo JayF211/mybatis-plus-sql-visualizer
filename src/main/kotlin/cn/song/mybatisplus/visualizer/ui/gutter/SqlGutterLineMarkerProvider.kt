@@ -179,11 +179,18 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
                 com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
                     if (project.isDisposed) return@invokeLater
                     if (matched.isEmpty()) {
-                        com.intellij.openapi.ui.Messages.showInfoMessage(
-                            project,
-                            MpSqlVisualizerBundle.message("gutter.popup.recent.empty"),
-                            MpSqlVisualizerBundle.message("gutter.popup.recent"),
-                        )
+                        // T-UiNative T-UN-02：无记录提示改轻通知（原模态弹窗——纯告知无需打断）；
+                        // 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）
+                        if (!com.intellij.openapi.application.ApplicationManager.getApplication().isUnitTestMode) {
+                            runCatching {
+                                com.intellij.notification.Notification(
+                                    NOTIFICATION_GROUP_ID,
+                                    MpSqlVisualizerBundle.message("gutter.popup.recent"),
+                                    MpSqlVisualizerBundle.message("gutter.popup.recent.empty"),
+                                    com.intellij.notification.NotificationType.INFORMATION,
+                                ).notify(project)
+                            }
+                        }
                         return@invokeLater
                     }
                     val entryStep = object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<cn.song.mybatisplus.visualizer.log.LogSqlEntry>(
@@ -240,6 +247,9 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
     companion object {
         private val SQL_PREVIEW_ICON: Icon =
             IconLoader.getIcon("/icons/sqlGutter.svg", SqlGutterLineMarkerProvider::class.java)
+
+        /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
     }
 }
 

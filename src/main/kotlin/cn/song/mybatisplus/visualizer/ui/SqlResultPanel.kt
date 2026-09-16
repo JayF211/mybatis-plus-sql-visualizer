@@ -1,15 +1,16 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
+import com.intellij.ui.AnimatedIcon
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.FlowLayout
-import java.awt.Toolkit
-import java.awt.datatransfer.StringSelection
 import javax.swing.JButton
+import javax.swing.SwingConstants
 
 /**
  * SQL 执行结果面板（M36）：在 SQL 预览面板下方展示执行状态与结果摘要。
@@ -33,6 +34,18 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
     private val infoLabel = JBLabel().apply {
         foreground = JBColor.GRAY
         border = JBUI.Borders.empty(1, 4)
+    }
+
+    /**
+     * T-UiNative T-UN-14：加载态转圈接原生 [AnimatedIcon.Default]（243 javap 核实），
+     * 与既有文案并排（WEST 位，仅 LOADING 态可见）；原纯文字 JBLabel 加载态的
+     * 文案键（"execute.result.loading"）沿用不变，测试断言文字仍成立。
+     * 文字用空串（而非 JBLabel(Icon) 构造器）——保持 text 非 null，组件遍历类
+     * 测试（SqlResultPanelUiTest/SqlPreviewPanelUiTest 的非空标签断言）零适配。
+     */
+    private val loadingIconLabel = JBLabel("", AnimatedIcon.Default(), SwingConstants.CENTER).apply {
+        isVisible = false
+        border = JBUI.Borders.empty(0, 4, 0, 0)
     }
 
     /** M36.5.48：错误复制按钮（仅 showError 时可见），一键复制完整错误文本到剪贴板。
@@ -65,6 +78,8 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         // 无边框 + 透明背景，与预览面板融为一体
         border = JBUI.Borders.empty()
         isOpaque = false
+        // T-UiNative T-UN-14：加载转圈放左侧（CENTER 是 infoLabel 文案，EAST 是错误复制按钮）
+        add(loadingIconLabel, BorderLayout.WEST)
         add(infoLabel, BorderLayout.CENTER)
         // M36.5.48：错误复制按钮放右侧（CENTER 是 infoLabel）
         val east = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 2, 0)).apply {
@@ -82,6 +97,11 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         isVisible = true
     }
 
+    /** T-UiNative T-UN-14：转圈图标随状态显隐（仅 showLoading 打开，其余状态统一关闭）。 */
+    private fun setLoadingIconVisible(visible: Boolean) {
+        loadingIconLabel.isVisible = visible
+    }
+
     /**
      * 显示临时文件已打开状态（提示用户 Ctrl+Enter 执行）。
      */
@@ -89,6 +109,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         state = State.EMPTY
         currentError = null
         errorCopyButton.isVisible = false
+        setLoadingIconVisible(false)
         val dsInfo = if (dataSourceName.isNotEmpty()) {
             " | ${MpSqlVisualizerBundle.message("execute.datasource.label", dataSourceName)}"
         } else ""
@@ -100,12 +121,13 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
     }
 
     /**
-     * 显示执行中状态。
+     * 显示执行中状态（T-UiNative T-UN-14：转圈为原生 [AnimatedIcon.Default]，文字沿用既有键）。
      */
     fun showLoading(dataSourceName: String = "") {
         state = State.LOADING
         currentError = null
         errorCopyButton.isVisible = false
+        setLoadingIconVisible(true)
         infoLabel.text = if (dataSourceName.isNotEmpty()) {
             "<html>${MpSqlVisualizerBundle.message("execute.result.loading")} | " +
                 "${MpSqlVisualizerBundle.message("execute.datasource.label", dataSourceName)}</html>"
@@ -129,6 +151,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         state = State.SUCCESS
         currentError = null
         errorCopyButton.isVisible = false
+        setLoadingIconVisible(false)
         val dsInfo = if (dataSourceName.isNotEmpty()) {
             " | ${MpSqlVisualizerBundle.message("execute.datasource.label", dataSourceName)}"
         } else ""
@@ -151,6 +174,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         state = State.SUCCESS
         currentError = null
         errorCopyButton.isVisible = false
+        setLoadingIconVisible(false)
         val dsInfo = if (dataSourceName.isNotEmpty()) {
             " | ${MpSqlVisualizerBundle.message("execute.datasource.label", dataSourceName)}"
         } else ""
@@ -170,6 +194,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
     fun showError(error: String) {
         state = State.ERROR
         currentError = error
+        setLoadingIconVisible(false)
         // M36.5.53：转义 HTML（错误含 < > & [charset] 等会破坏布局），并有界显示——
         // 长错误不横向挤压（infoLabel 单行 + tooltip 完整），复制按钮在 EAST 不被挤掉。
         val esc = error.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -192,6 +217,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         state = State.EMPTY
         currentError = null
         errorCopyButton.isVisible = false
+        setLoadingIconVisible(false)
         infoLabel.text = ""
         isVisible = false
         revalidate()
@@ -223,8 +249,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
 
     /** M36.5.48：复制文本到系统剪贴板。 */
     private fun copyToClipboard(text: String) {
-        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-        clipboard.setContents(StringSelection(text), null)
+        UiTextClipboard.copy(text)
     }
 
     /** M36.5.48：当前错误文本（测试断言用）。 */

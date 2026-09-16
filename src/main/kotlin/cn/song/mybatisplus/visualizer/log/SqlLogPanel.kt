@@ -7,6 +7,8 @@ import cn.song.mybatisplus.visualizer.config.SettingsChangeListener
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.util.Disposer
@@ -21,13 +23,16 @@ import javax.swing.JComponent
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.options.ShowSettingsUtil
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
-import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.SearchTextField
 import com.intellij.ui.SimpleColoredComponent
+import com.intellij.ui.speedSearch.SpeedSearchUtil
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
@@ -43,8 +48,7 @@ import java.awt.Graphics
 import java.awt.GridBagLayout
 import java.awt.GridLayout
 import java.awt.Insets
-import java.awt.Toolkit
-import java.awt.datatransfer.StringSelection
+import java.awt.Point
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
@@ -52,6 +56,8 @@ import java.awt.event.MouseEvent
 import java.text.SimpleDateFormat
 import java.util.Date
 import com.intellij.ui.JBColor
+import com.intellij.ui.ListSpeedSearch
+import com.intellij.ui.awt.RelativePoint
 import javax.swing.BorderFactory
 import javax.swing.Box
 import javax.swing.BoxLayout
@@ -60,7 +66,6 @@ import javax.swing.Icon
 import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JLabel
-import javax.swing.JMenuItem
 import javax.swing.JRadioButtonMenuItem
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
@@ -113,7 +118,10 @@ internal const val REFRESH_CHUNK_SIZE = 30
  * open：internal 类默认 final，测试子类经公开包装访问 protected itemToText。
  */
 internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : JBList<LogSqlEntry>(model) {
-    override fun itemToText(index: Int, element: LogSqlEntry): String = withTerminator(element.restoredSql)
+    override fun itemToText(index: Int, element: LogSqlEntry): String = textFor(element)
+
+    /** 速度搜索与 Ctrl+C 复制共用的条目文本。 */
+    internal fun textFor(element: LogSqlEntry): String = withTerminator(element.restoredSql)
 }
 
 /**
@@ -503,11 +511,18 @@ class SqlLogPanel(
     internal val slowQueryLabelForTest: JLabel? get() = slowQueryLabel
 
     /**
+     * 捕捉开关动作（T-UiNative T-UN-11）：挂工具窗标题栏（SqlLogToolWindowFactory 调
+     * ToolWindow.setTitleActions），面板工具栏不再含捕捉按钮。图标/文案在 [CaptureAction.update]
+     * 按 manager.capturing 态输出；测试断言直接读 captureToggleAction.presentation，不依赖按钮刷新。
+     */
+    val captureToggleAction: AnAction = CaptureAction()
+
+    /**
      * 工具栏动作组（T-M39：internal 供测试断言帮助入口存在性；
      * update 由工具栏生命周期驱动，headless 测试手动触发；须在 init 前声明）。
+     * T-UiNative T-UN-11：捕捉开关迁工具窗标题栏（[captureToggleAction]），此处不再包含。
      */
     internal val toolbarGroup = DefaultActionGroup(
-        CaptureAction(),
         ClearAction(),
         SettingsAction(),
         ShowSearchAction(), // 搜索在帮助左侧（用户指定排序）
@@ -519,11 +534,16 @@ class SqlLogPanel(
     /** 缓冲变更 → 列表刷新（manager.uiNotifyListener 回调链；EDT 执行）。 */
     private val uiRefreshListener: () -> Unit = { refreshList() }
 
-    /** capturing 状态变化 → 刷新工具栏捕捉按钮图标/文案。 */
+    /** capturing 状态变化 → 刷新捕捉动作 presentation（T-UiNative T-UN-11：动作挂工具窗标题栏，
+     *  图标/文案由 [CaptureAction.update] 按 capturing 态输出）。 */
     private val capturingUiListener: () -> Unit = {
         LOG.info("SqlLogPanel.capturingListener: 触发")
         ApplicationManager.getApplication().invokeLater {
-            updateCaptureButtonIcon()
+            // T-UiNative T-UN-11：反射 hack（updateCaptureButtonIcon 遍历组件树强改 ActionButton 图标）
+            // 退役——回归平台更新机制。真实 IDE 中工具窗可见，isShowing 满足，updateActionsImmediately
+            // 正常执行；沙盒/单测中组件不可见时平台会跳过更新——测试断言直接读
+            // captureToggleAction.presentation，不依赖按钮刷新。
+            _toolbarRef?.updateActionsImmediately()
         }
     }
 
@@ -587,10 +607,9 @@ class SqlLogPanel(
         manager.addUiListener(uiRefreshListener)
         refreshList()
 
-        // capturing 变化 → 刷新工具栏按钮图标/文案
-        // 注意：updateActionsAsync()/updateActionsImmediately() 在组件不可见时会跳过更新
-        // （ToolbarUpdater$MyUpdateRunnable 检查 isShowing，沙盒中工具栏可能不可见），
-        // 故直接遍历 ActionButton 设置图标（绕过平台更新机制）
+        // capturing 变化 → 刷新捕捉动作（T-UiNative T-UN-11：动作挂工具窗标题栏，presentation
+        // 由 CaptureAction.update 按 capturing 态输出；监听经平台更新机制刷新，沙盒测试断言直读
+        // captureToggleAction.presentation）
         manager.addCapturingListener(capturingUiListener)
     }
 
@@ -638,7 +657,8 @@ class SqlLogPanel(
         // T-DisplayModeToSettings：显示模式入口迁设置页「列表显示」（工具栏按钮移除）
         // O-1：工具栏慢查询计数标签
         slowQueryLabel = JLabel().apply {
-            foreground = Color(0xD32F2F) // 红色
+            // T-UN-13（T-UiNative）：写死红 → namedColor（亮值不变，主题可覆写）
+            foreground = MpvsUiColors.SLOW_RED
             font = font.deriveFont(Font.BOLD)
             isVisible = false // 默认隐藏，有慢查询时显示
         }
@@ -768,15 +788,19 @@ class SqlLogPanel(
      * 一键设置——同步刷新弹窗内勾选框选中态 + 按钮文案 + 列表（弹窗保持打开，立即可见）。
      */
     private fun showTypeFilterPopup() {
-        val popup = JPopupMenu()
-        popup.add(buildTypeFilterContent())
-        popup.show(typeFilterButton, 0, typeFilterButton.height + 2)
+        // T-UiNative P1a：JPopupMenu 外壳 → 平台 JBPopup（createComponentPopupBuilder 承载 JCheckBox 面板；
+        // 触发源是工具栏按钮 ActionListener 无 MouseEvent，锚点沿用原 show 坐标——按钮正下方 2px）
+        val contentPanel = buildTypeFilterContent()
+        JBPopupFactory.getInstance().createComponentPopupBuilder(contentPanel, contentPanel).apply {
+            setRequestFocus(false)
+            setCancelOnClickOutside(true)
+        }.createPopup().show(RelativePoint(typeFilterButton, Point(0, typeFilterButton.height + 2)))
     }
 
     /**
      * T-SelToggle：构建弹窗内容（勾选框区 + 分隔线 + 底部切换按钮），赋值 [typePopupCheckBoxes]
      * 与 [typePopupToggleButton]。与 [showTypeFilterPopup] 拆分是纯提取（行为零变更），
-     * 使测试可脱离 `popup.show` 直接驱动勾选框/切换按钮（headless 下 JPopupMenu.show 不可靠）。
+     * 使测试可脱离 `popup.show` 直接驱动勾选框/切换按钮（headless 下弹层 show 不可靠）。
      */
     private fun buildTypeFilterContent(): JPanel {
         val content = JPanel()
@@ -854,31 +878,6 @@ class SqlLogPanel(
 
     // ---------- 工具栏动作 ----------
 
-    /** 直接更新捕捉按钮图标（绕过 ActionToolbar 更新机制——沙盒中 isShowing 检查会导致更新被跳过）。 */
-    private fun updateCaptureButtonIcon() {
-        val toolbar = _toolbarRef ?: return
-        val capturing = manager.capturing
-        val icon = if (capturing) AllIcons.Actions.Suspend else AllIcons.Actions.Execute
-        val text = MpSqlVisualizerBundle.message(if (capturing) "log.panel.stop" else "log.panel.capture")
-        // 遍历工具栏组件树，找到 ActionButton 并通过 getAction() 匹配 CaptureAction
-        com.intellij.util.ui.UIUtil.uiTraverser(toolbar.component)
-            .preOrderDfsTraversal()
-            .filter { it.javaClass.simpleName == "ActionButton" }
-            .forEach { btn ->
-                val action = try {
-                    btn.javaClass.getMethod("getAction").invoke(btn)
-                } catch (_: Throwable) { null }
-                if (action is CaptureAction) {
-                    (btn as? javax.swing.AbstractButton)?.let {
-                        it.icon = icon
-                        it.text = text
-                        it.repaint()
-                    }
-                    LOG.info("updateCaptureButtonIcon: 设置图标=${if (capturing) "停止" else "捕捉"}")
-                }
-            }
-    }
-
     /** T-Perf-17：historyPanel 当前是否已注册到 Disposer 树（防重复注册守卫标志）。 */
     private var historyPanelRegistered = false
 
@@ -931,9 +930,13 @@ class SqlLogPanel(
         return dir.isDirectory && dir.listFiles { f -> f.extension == "sql" }?.isNotEmpty() == true
     }
 
-    /** 工具栏引用（capturing 变化时刷新按钮状态）。 */
+    /** 工具栏引用（capturing 变化时经平台更新机制刷新动作 presentation，T-UN-11）。 */
     private var _toolbarRef: ActionToolbar? = null
 
+    /**
+     * 捕捉开关（T-UiNative T-UN-11：挂工具窗标题栏，经 [captureToggleAction] 暴露）。
+     * 图标/文案在 update 按 manager.capturing 态输出（平台更新机制驱动，不再反射强改按钮）。
+     */
     private inner class CaptureAction : AnAction() {
         override fun update(e: AnActionEvent) {
             if (manager.capturing) {
@@ -1075,6 +1078,9 @@ class SqlLogPanel(
         list.emptyText.text = MpSqlVisualizerBundle.message("log.panel.empty")
         list.cellRenderer = LogEntryListCellRenderer().also { entryCellRenderer = it }
         applyListCellHeight()
+        // T-UiNative T-UN-05（本次修复）：主日志列表构造即可见，速度搜索在此挂载（不移进
+        // SqlEntryList.init——历史二级列表复用它却构造于 CardLayout 隐藏卡，构造期挂载不生效）
+        ListSpeedSearch.installOn(list) { element -> withTerminator(element.restoredSql) }
         list.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
@@ -1354,19 +1360,27 @@ class SqlLogPanel(
             is LogJumpTarget.Precise ->
                 OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
             is LogJumpTarget.NoSource ->
-                Messages.showInfoMessage(
-                    project,
-                    MpSqlVisualizerBundle.message("log.panel.jumpToSource.noSource"),
-                    MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
-                )
+                showJumpToast(MpSqlVisualizerBundle.message("log.panel.jumpToSource.noSource"))
             is LogJumpTarget.NotFound ->
-                Messages.showInfoMessage(
-                    project,
-                    MpSqlVisualizerBundle.message("log.panel.jumpToSource.notFound", target.sourceFile),
-                    MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
-                )
+                showJumpToast(MpSqlVisualizerBundle.message("log.panel.jumpToSource.notFound", target.sourceFile))
             is LogJumpTarget.MissingSource ->
                 SourceCaptureGuide.showMissingSourceDialog(project)
+        }
+    }
+
+    /**
+     * T-UiNative T-UN-02：跳转无源码提示改轻通知（原模态弹窗——纯告知无需打断）。
+     * 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）。
+     */
+    private fun showJumpToast(content: String) {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
+                content,
+                NotificationType.INFORMATION,
+            ).notify(project)
         }
     }
 
@@ -1399,59 +1413,97 @@ class SqlLogPanel(
         list.selectedIndices = resolveContextMenuSelection(list.selectedIndices, index)
         val entry = list.model.getElementAt(index)
         val selectedEntries = list.selectedIndices.map { list.model.getElementAt(it) }
-        val menu = JPopupMenu()
-        menu.add(
-            JMenuItem(copyMenuText("log.panel.copy", "log.panel.copySelected", selectedEntries.size)).apply {
-                addActionListener {
-                    Toolkit.getDefaultToolkit().systemClipboard
-                        .setContents(StringSelection(batchCopySql(selectedEntries)), null)
-                }
-            },
-        )
+        // T-UiNative P1a：JPopupMenu+JMenuItem → 平台 DefaultActionGroup+AnAction（ActionPopupMenu 承载）
+        val group = DefaultActionGroup()
+        group.add(CopySqlAction(selectedEntries))
         // T-LogSearchRowTime：复制时间戳（所见即所复制的纯时间文本，无方括号）；
-        // 显示开关关闭时无片段可复制 → 菜单项置灰
+        // 显示开关关闭时无片段可复制 → 菜单项置灰（置灰逻辑在 CopyTimestampAction.update）
         val timestampClip = batchCopyTimestamps(selectedEntries)
-        menu.add(
-            JMenuItem(copyMenuText("log.panel.copyTimestamp", "log.panel.copyTimestampSelected", selectedEntries.size)).apply {
-                isEnabled = timestampClip.isNotEmpty()
-                addActionListener {
-                    if (timestampClip.isNotEmpty()) {
-                        Toolkit.getDefaultToolkit().systemClipboard
-                            .setContents(StringSelection(timestampClip), null)
-                    }
-                }
-            },
-        )
-        menu.add(
-            JMenuItem(MpSqlVisualizerBundle.message("log.panel.delete")).apply {
-                addActionListener { manager.entries.removeEntry(entry) }
-            },
-        )
+        group.add(CopyTimestampAction(selectedEntries, timestampClip))
+        group.add(DeleteSqlAction(entry))
         // T-M37 P1：发送到 SQL → Java 转换（第三 tab）——还原 SQL 写入输入区并切换选中该 tab
-        menu.add(
-            JMenuItem(MpSqlVisualizerBundle.message("log.panel.sendToReverse")).apply {
-                addActionListener {
-                    sqlToJavaPanel.setInputSql(entry.restoredSql)
-                    tabs.selectedComponent = sqlToJavaPanel
-                }
-            },
-        )
+        group.add(SendToSqlToJavaAction(entry))
         // T-M38：发送到日志转 SQL（第二 tab）——条目渲染回日志文本并立即转换
-        menu.add(
-            JMenuItem(MpSqlVisualizerBundle.message("logToSql.sendTo")).apply {
-                addActionListener {
-                    logToSqlPanel.loadFromEntry(entry)
-                    tabs.selectedComponent = logToSqlPanel
-                }
-            },
-        )
+        group.add(SendToLogToSqlAction(entry))
         // O-1：日志 ↔ 源码关联跳转（Phase A）
-        menu.add(
-            JMenuItem(MpSqlVisualizerBundle.message("log.panel.jumpToSource")).apply {
-                addActionListener { jumpToSource(entry) }
-            },
-        )
-        menu.show(list, e.x, e.y)
+        group.add(JumpToSourceAction(entry))
+        val popup = ActionManager.getInstance().createActionPopupMenu("mpvs.log.list", group)
+        // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
+        popup.setTargetComponent(list)
+        popup.component.show(list, e.x, e.y)
+    }
+
+    // ---------- T-UiNative P1a：列表右键菜单动作（原 JMenuItem 语义平移，update 设文案/灰置，actionPerformed 平移原监听体） ----------
+
+    /** 复制 SQL：多选批量逐行拼接（[batchCopySql]），单选复制该行。 */
+    private inner class CopySqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = copyMenuText("log.panel.copy", "log.panel.copySelected", entries.size)
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            UiTextClipboard.copy(batchCopySql(entries))
+        }
+    }
+
+    /** 复制时间戳：显示开关关闭时无片段可复制 → update 置灰。 */
+    private inner class CopyTimestampAction(private val entries: List<LogSqlEntry>, private val clip: String) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = copyMenuText("log.panel.copyTimestamp", "log.panel.copyTimestampSelected", entries.size)
+            e.presentation.isEnabled = clip.isNotEmpty()
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            if (clip.isNotEmpty()) {
+                UiTextClipboard.copy(clip)
+            }
+        }
+    }
+
+    /** 删除被右键的条目。 */
+    private inner class DeleteSqlAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.delete")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            manager.entries.removeEntry(entry)
+        }
+    }
+
+    /** 发送到 SQL → Java 转换（第三 tab）。 */
+    private inner class SendToSqlToJavaAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.sendToReverse")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            sqlToJavaPanel.setInputSql(entry.restoredSql)
+            tabs.selectedComponent = sqlToJavaPanel
+        }
+    }
+
+    /** 发送到日志转 SQL（第二 tab）。 */
+    private inner class SendToLogToSqlAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("logToSql.sendTo")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            logToSqlPanel.loadFromEntry(entry)
+            tabs.selectedComponent = logToSqlPanel
+        }
+    }
+
+    /** 跳转到源码（无位置→引导捕获弹窗，无提示/文件丢失→toast——原 jumpToSource 分支原样复用）。 */
+    private inner class JumpToSourceAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.jumpToSource")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            jumpToSource(entry)
+        }
     }
 
     /** 面板销毁：释放单击预览弹窗与日志转 SQL / SQL→Java 面板编辑器（manager 生命周期由项目 @Service 管理）。 */
@@ -1527,6 +1579,8 @@ class SqlLogPanel(
     companion object {
         private val LOG = Logger.getInstance(SqlLogPanel::class.java)
         private const val TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar"
+        /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
         /** T-Perf-24（自 dev 移植）：搜索输入防抖窗口（毫秒）。 */
         private const val SEARCH_DEBOUNCE_MS = 200
         internal const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
@@ -1551,30 +1605,24 @@ class SqlLogPanel(
 
 // =================== 文件级：列表渲染辅助（internal 渲染器与 SqlLogPanel 共用） ===================
 
-/** 元信息灰（时间戳/来源/徽章；与原 HTML 通道 #9E9E9E 一致）。 */
-private val LIST_META_GRAY = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, Color(0x9E9E9E))
+/** 元信息灰（时间戳/来源/徽章；与原 HTML 通道 #9E9E9E 一致）。T-UN-13（T-UiNative）：改 namedColor，亮值不变。 */
+private val LIST_META_GRAY = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.META_GRAY)
 
 /**
- * T-CrudColor：按标记形态应用「色条 / 整行淡背景 + 选中描边」——**两个列表渲染器共用**（§1.2.1）。
+ * T-CrudColor：按标记形态应用「色条 / 整行淡背景」——**两个列表渲染器共用**（§1.2.1）。
  *
  * 三分支：
  *  - 关闭 / OTHER（[tint] = null）→ 与改造前逐字节一致；
- *  - [SqlListTypeColor.STYLE_BAR] → 色条着色，单元格背景仍走平台选中填充（色条不受影响，选中不丢色）；
- *  - [SqlListTypeColor.STYLE_BACKGROUND] → 底色与列表背景混色（选中时提高比例），**不铺**平台选中填充，
- *    选中由「描边 + 色调加深」共同表达。
- *
- * [selectedBorder] 预建后此处只切引用 + 改色（[SqlListSelectionOutline.setColor]），热路径零分配；
- * 描边色经 [SqlListTypeColor.ensureOutlineContrast]——暗色主题下 `selectionBackground`
- * （`#2E436E`）压在加深后的行底色上几乎不可见，必须提亮。
+ *  - [SqlListTypeColor.STYLE_BAR] → 色条着色，单元格背景走平台选中填充（色条不受影响，选中不丢色）；
+ *  - [SqlListTypeColor.STYLE_BACKGROUND] → **未选中**行底色与列表背景淡混色（类型标记）；
+ *    选中行交给平台选中填充（T-UN-09 描边退役——自研选中视觉整体下线，不再干预 Border）。
  */
 internal fun applyCrudColorMark(
     cell: JPanel,
     colorBar: JPanel,
     normalBorder: Border,
-    selectedBorder: SqlListSelectionOutline,
     tint: Color?,
     isSelected: Boolean,
-    cellHasFocus: Boolean,
     list: javax.swing.JList<*>?,
 ) {
     val listBg = list?.background ?: cell.background
@@ -1592,30 +1640,15 @@ internal fun applyCrudColorMark(
         }
         SqlListTypeColor.STYLE_BACKGROUND -> {
             setOpaqueIfChanged(colorBar, false)
-            if (tint == null) {
-                setBorderIfChanged(cell, normalBorder)
-                setBackgroundIfChanged(cell, if (isSelected) selectionBg else listBg)
-            } else {
-                setBackgroundIfChanged(
-                    cell,
-                    SqlListTypeColor.blend(
-                        listBg,
-                        tint,
-                        if (isSelected) SqlListTypeColor.MIX_SELECTED else SqlListTypeColor.MIX_NORMAL,
-                    ),
-                )
-                if (isSelected) {
-                    val raw = if (cellHasFocus) selectionBg
-                    else javax.swing.UIManager.getColor("List.selectionInactiveBackground") ?: selectionBg
-                    // setColor 只改字段、不触发 Swing 属性变更（无 repaint 副作用），故无需守卫
-                    selectedBorder.setColor(
-                        SqlListTypeColor.ensureOutlineContrast(raw, SqlListTypeColor.brightnessOf(listBg) < 0.5)
-                    )
-                    setBorderIfChanged(cell, selectedBorder)
-                } else {
-                    setBorderIfChanged(cell, normalBorder)
-                }
-            }
+            setBorderIfChanged(cell, normalBorder)
+            setBackgroundIfChanged(
+                cell,
+                when {
+                    isSelected -> selectionBg
+                    tint == null -> listBg
+                    else -> SqlListTypeColor.blend(listBg, tint, SqlListTypeColor.MIX_NORMAL)
+                },
+            )
         }
         else -> { // STYLE_OFF
             setOpaqueIfChanged(colorBar, false)
@@ -1674,11 +1707,12 @@ internal fun formatTimestampFragment(entry: LogSqlEntry): Pair<String, SimpleTex
 internal fun formatDurationFragment(ms: Long?, isSelected: Boolean): Pair<String, SimpleTextAttributes> {
     val threshold = PluginSettings.getInstance().state.slowQueryThresholdMs
     val color = when {
-        isSelected -> Color(0xFFFFFF)
-        ms == null -> Color(0x9E9E9E)          // 灰：无耗时
-        ms >= threshold -> Color(0xD32F2F)     // 红：慢查询
-        ms >= threshold / 2 -> Color(0xE67E22) // 橙：偏慢
-        else -> Color(0x4CAF50)                // 绿：正常
+        // T-UN-13（T-UiNative）：五档写死色 → namedColor（亮值不变）
+        isSelected -> MpvsUiColors.DURATION_SELECTED
+        ms == null -> MpvsUiColors.DURATION_NONE   // 灰：无耗时
+        ms >= threshold -> MpvsUiColors.DURATION_SLOW // 红：慢查询
+        ms >= threshold / 2 -> MpvsUiColors.DURATION_WARN // 橙：偏慢
+        else -> MpvsUiColors.DURATION_OK           // 绿：正常
     }
     val text = ms?.let { "${it}ms" } ?: "—"
     return "$text " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color)
@@ -1760,29 +1794,10 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
         isOpaque = false
     }
 
-    /** 未选中态 Border（分隔线 + 内边距）。 */
+    /** 未选中态 Border（分隔线 + 内边距；T-UN-09 描边退役后选中态同样只用它，选中视觉归平台绘制）。 */
     internal val normalBorder: Border = BorderFactory.createCompoundBorder(
         BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
         EmptyBorder(5, 5, 5, 8), // 左 5 + 色条 3 = 原 8
-    )
-
-    /**
-     * T-CrudColor：选中态描边 Border（[SqlListTypeColor.STYLE_BACKGROUND] 专用）。
-     * 预建一次、渲染时只切引用 + 改色（[SqlListSelectionOutline.setColor]），热路径零分配。
-     * 内层分隔线为**透明占位**：仅占 1px inset，不绘制——否则灰线会画在蓝框内部把底边割断。
-     */
-    internal val selectedBorder: SqlListSelectionOutline = SqlListSelectionOutline(
-        SqlListTypeColor.OUTLINE_WIDTH,
-        JBColor.foreground(),
-        BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(0, 0, 1, 0, SqlListTypeColor.TRANSPARENT),
-            EmptyBorder(
-                5 - SqlListTypeColor.OUTLINE_WIDTH,
-                5 - SqlListTypeColor.OUTLINE_WIDTH,
-                5 - SqlListTypeColor.OUTLINE_WIDTH,
-                8 - SqlListTypeColor.OUTLINE_WIDTH,
-            ),
-        ),
     )
 
     init {
@@ -1812,17 +1827,14 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
         isSelected: Boolean,
         cellHasFocus: Boolean,
     ): java.awt.Component {
-        val listBg = list?.background ?: background
-        val selectionBg = list?.selectionBackground ?: listBg
         val entry = value as? LogSqlEntry
 
         // T-CrudColor：标记形态分派（读设置 + 纯函数；热路径零分配）
-        val style = SqlListTypeColor.styleOf()
         val tint = entry?.let { SqlListTypeColor.colorOf(it.statementType) }
-        // 背景色样式下底色是淡色调而非饱和选中填充：若按选中态取白字，亮色主题下不可见；
-        // 且耗时着色会被抹成白色、丢失快/慢信号。故仅在色条样式（走平台填充）时按选中态取前景。
-        val useSelectionFill = isSelected && SqlListTypeColor.usesSelectionFill(style)
-        applyCrudColorMark(this, colorBar, normalBorder, selectedBorder, tint, isSelected, cellHasFocus, list)
+        // T-UN-09：选中描边退役后，三种样式的选中行统一走平台选中填充 → 前景按选中态取
+        // selectionForeground（耗时着色随 formatDurationFragment 的选中白语义）
+        val useSelectionFill = isSelected
+        applyCrudColorMark(this, colorBar, normalBorder, tint, isSelected, list)
 
         val fg = if (useSelectionFill) (list?.selectionForeground ?: JBColor.foreground())
         else (list?.foreground ?: JBColor.foreground())
@@ -1852,10 +1864,14 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
         }
         // SQL 高亮行在下（T-ListMode：行数随显示模式伸缩）；选中态保留 SQL 高亮原色
         ensureSqlLineCount(if (lineFragments != null) lineFragments.size else 1)
+        // T-UiNative speed search 高亮：对元信息行与各 SQL 行施加匹配片段高亮（平台 applySpeedSearchHighlighting
+        // 依 supply.matchingFragments 精确命中区间；fragments 文本已在上面 append，此处在片段级叠加 STYLE_SEARCH_MATCH）
+        list?.let { l -> SpeedSearchUtil.applySpeedSearchHighlighting(l, metaLine, false, useSelectionFill) }
         sqlLinePool.forEachIndexed { i, comp ->
             comp.foreground = fg
             comp.clear()
             lineFragments?.getOrNull(i)?.forEach { f -> comp.append(f.text, f.attributes) }
+            list?.let { l -> SpeedSearchUtil.applySpeedSearchHighlighting(l, comp, false, useSelectionFill) }
         }
         // T-ClickPreview：不设 toolTipText（悬停逐行弹气泡 = 条目多时卡顿根因），预览改单击触发
         return this

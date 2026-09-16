@@ -1,22 +1,28 @@
 package cn.song.mybatisplus.visualizer.ui.diagram
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.icons.AllIcons
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileChooser.FileChooserFactory
 import com.intellij.openapi.fileChooser.FileSaverDescriptor
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.VirtualFileWrapper
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBLoadingPanel
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
-import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.Graphics
 import java.awt.Graphics2D
@@ -25,10 +31,7 @@ import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.imageio.ImageIO
-import javax.swing.JButton
 import javax.swing.JComponent
-import javax.swing.JPanel
-import javax.swing.JProgressBar
 import javax.swing.SwingConstants
 
 /**
@@ -36,32 +39,22 @@ import javax.swing.SwingConstants
  *
  * 渲染方案：paintComponent 内直接 Graphics2D 变换绘制，无中间位图。
  * 组件尺寸 = 图表自然尺寸 × zoom，scroll pane 处理溢出。
+ *
+ * T-UiNative T-UN-14：加载态/空态接原生件——加载态由 [JBLoadingPanel] 盖平台转圈
+ * （原 indeterminate JProgressBar 自摆页删除），「无 JOIN」占位与错误态保留原样。
  */
 class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>(BorderLayout()), Disposable {
 
     private var zoom = 1.0
     private var currentModel: DiagramModel? = null
 
-    private val loadingLabel = JBLabel(
-        MpSqlVisualizerBundle.message("diagram.render.loading"), SwingConstants.CENTER,
-    ).apply {
-        foreground = JBColor.GRAY
-        font = UIUtil.getLabelFont()
-    }
-    private val loadingProgress = JProgressBar().apply {
-        isIndeterminate = true
-        maximum = 100
-        foreground = JBColor.GRAY
-        background = UIUtil.getPanelBackground()
-        border = javax.swing.border.EmptyBorder(0, 0, 0, 0)
-    }
-    private val loadingPanel: JComponent = JPanel().apply {
-        background = UIUtil.getPanelBackground()
-        layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS)
-        add(loadingLabel)
-        add(loadingProgress)
-        border = JBUI.Borders.empty(40, 20, 20, 20)
-    }
+    /**
+     * T-UiNative T-UN-14：加载态接原生件——[JBLoadingPanel] 作为 CENTER 容器包住 swapContent
+     * 的目标区（占位/画布/错误态都在其内容层换页），加载时 startLoading 盖平台转圈，
+     * 原自摆 JBLabel + indeterminate JProgressBar 加载页删除；文案沿用既有 "diagram.render.loading" 键。
+     * Disposable 挂面板自身（本类实现 Disposable，dispose 走既有 `Disposer.dispose(this)` 链）。
+     */
+    private val contentLayer = JBLoadingPanel(BorderLayout(), this)
 
     private val placeholderLabel = JBLabel(
         MpSqlVisualizerBundle.message("diagram.placeholder.noJoin"), SwingConstants.CENTER,
@@ -94,21 +87,40 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
 
     init {
         add(buildToolbar(), BorderLayout.NORTH)
+        add(contentLayer, BorderLayout.CENTER)
         swapContent(placeholderLabel)
     }
 
+    /**
+     * T-UiNative T-UN-10：文本 JButton 按钮行 → 平台 ActionToolbar 图标动作组。
+     * 图标均为 AllIcons 既有常量（javap 243 app-client.jar 核实：缩放/导出键都在 General，
+     * Actions 组无 Zoom、Export 字段）；原按钮文案键转 tooltip（presentation.description），
+     * 不新增 bundle 键。
+     */
     private fun buildToolbar(): JComponent {
-        val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2))
-        toolbar.isOpaque = false
-        toolbar.border = JBUI.Borders.empty(2, 8, 2, 4)
-        toolbar.add(JButton(MpSqlVisualizerBundle.message("diagram.zoomIn")).apply { addActionListener { zoomIn() } })
-        toolbar.add(JButton(MpSqlVisualizerBundle.message("diagram.zoomOut")).apply { addActionListener { zoomOut() } })
-        toolbar.add(JButton(MpSqlVisualizerBundle.message("diagram.zoomReset")).apply { addActionListener { zoomReset() } })
-        toolbar.add(javax.swing.JSeparator(javax.swing.SwingConstants.VERTICAL))
-        toolbar.add(JButton(MpSqlVisualizerBundle.message("diagram.exportPng")).apply { addActionListener { exportPng() } })
-        toolbar.add(JButton(MpSqlVisualizerBundle.message("diagram.exportSvg")).apply { addActionListener { exportSvg() } })
-        return toolbar
+        val group = DefaultActionGroup(
+            diagramToolbarAction(AllIcons.General.ZoomIn, "diagram.zoomIn") { zoomIn() },
+            diagramToolbarAction(AllIcons.General.ZoomOut, "diagram.zoomOut") { zoomOut() },
+            diagramToolbarAction(AllIcons.General.ActualZoom, "diagram.zoomReset") { zoomReset() },
+        ).apply { addSeparator() } // 保留原「缩放 | 导出」分隔
+        group.add(diagramToolbarAction(AllIcons.General.Export, "diagram.exportPng") { exportPng() })
+        group.add(diagramToolbarAction(AllIcons.General.Export, "diagram.exportSvg") { exportSvg() })
+        val toolbar = ActionManager.getInstance()
+            .createActionToolbar("mpvs.diagram.toolbar", group, true)
+            .apply { targetComponent = this@DiagramPanel }
+        return toolbar.component
     }
+
+    /** 图标动作（T-UN-10）：icon 固定、tooltip 沿用原按钮 bundle 键、回调直通原按钮逻辑。 */
+    private fun diagramToolbarAction(icon: javax.swing.Icon, tipKey: String, action: () -> Unit): AnAction =
+        object : AnAction() {
+            override fun update(e: AnActionEvent) {
+                e.presentation.icon = icon
+                e.presentation.description = MpSqlVisualizerBundle.message(tipKey)
+            }
+
+            override fun actionPerformed(e: AnActionEvent) = action()
+        }
 
     fun showDiagram(model: DiagramModel) {
         if (model.isEmpty) { showPlaceholder(); return }
@@ -138,12 +150,34 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         repaint()
     }
 
+    /**
+     * T-UiNative T-UN-14：换页目标从面板本体改为 [contentLayer] 内容层
+     * （加载转圈盖在内容层之上，画布/占位/错误态不受影响）。
+     */
     private fun swapContent(component: JComponent) {
         if (currentCenter === component) return
-        currentCenter?.let { remove(it) }
-        add(component, BorderLayout.CENTER)
+        currentCenter?.let { contentLayer.remove(it) }
+        contentLayer.add(component, BorderLayout.CENTER)
         currentCenter = component
     }
+
+    /** T-UiNative T-UN-14：进入加载态——平台转圈 + 既有「加载中」文案键（原自摆进度条删除）。 */
+    fun showLoading() {
+        contentLayer.setLoadingText(MpSqlVisualizerBundle.message("diagram.render.loading"))
+        contentLayer.startLoading()
+        revalidate()
+        repaint()
+    }
+
+    /** T-UiNative T-UN-14：退出加载态（渲染/换页完成后调用）。 */
+    fun hideLoading() {
+        contentLayer.stopLoading()
+        revalidate()
+        repaint()
+    }
+
+    /** T-UiNative T-UN-14：加载态（测试断言用）。 */
+    internal fun isLoadingForTest(): Boolean = contentLayer.isLoading
 
     fun zoomIn() { zoom = (zoom * 1.25).coerceAtMost(5.0); diagramCanvas.setModel(currentModel, zoom); revalidate(); repaint() }
     fun zoomOut() { zoom = (zoom / 1.25).coerceAtLeast(0.2); diagramCanvas.setModel(currentModel, zoom); revalidate(); repaint() }
@@ -165,17 +199,13 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
             }.getOrNull()
             ApplicationManager.getApplication().invokeLater {
                 if (bytes == null) {
-                    Messages.showErrorDialog(proj,
-                        MpSqlVisualizerBundle.message("diagram.export.failed", "render/encode"),
-                        MpSqlVisualizerBundle.message("diagram.export.title"))
+                    showExportError(proj, "render/encode")
                     return@invokeLater
                 }
                 runCatching {
                     saveBytesToFile(proj, bytes, "join_diagram.png", "png")
                 }.onFailure { e ->
-                    Messages.showErrorDialog(proj,
-                        MpSqlVisualizerBundle.message("diagram.export.failed", e.message ?: "unknown"),
-                        MpSqlVisualizerBundle.message("diagram.export.title"))
+                    showExportError(proj, e.message ?: "unknown")
                 }
             }
         }
@@ -191,17 +221,13 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
             }.getOrNull()
             ApplicationManager.getApplication().invokeLater {
                 if (bytes == null) {
-                    Messages.showErrorDialog(proj,
-                        MpSqlVisualizerBundle.message("diagram.export.failed", "render/encode"),
-                        MpSqlVisualizerBundle.message("diagram.export.title"))
+                    showExportError(proj, "render/encode")
                     return@invokeLater
                 }
                 runCatching {
                     saveBytesToFile(proj, bytes, "join_diagram.svg", "svg")
                 }.onFailure { e ->
-                    Messages.showErrorDialog(proj,
-                        MpSqlVisualizerBundle.message("diagram.export.failed", e.message ?: "unknown"),
-                        MpSqlVisualizerBundle.message("diagram.export.title"))
+                    showExportError(proj, e.message ?: "unknown")
                 }
             }
         }
@@ -225,17 +251,43 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
             }
             if (!ApplicationManager.getApplication().isUnitTestMode) {
                 ApplicationManager.getApplication().invokeLater {
-                    Messages.showInfoMessage(proj,
-                        MpSqlVisualizerBundle.message("diagram.export.success", file.absolutePath),
-                        MpSqlVisualizerBundle.message("diagram.export.title"))
+                    runCatching {
+                        Notification(
+                            NOTIFICATION_GROUP_ID,
+                            MpSqlVisualizerBundle.message("diagram.export.title"),
+                            MpSqlVisualizerBundle.message("diagram.export.success", file.absolutePath),
+                            NotificationType.INFORMATION,
+                        ).notify(proj)
+                    }
                 }
             }
+        }
+    }
+
+    /**
+     * T-UiNative T-UN-02：导出失败改 ERROR 轻通知（原模态错误框——失败仍醒目，但不打断）。
+     * 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）。
+     */
+    private fun showExportError(proj: Project, detail: String) {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("diagram.export.title"),
+                MpSqlVisualizerBundle.message("diagram.export.failed", detail),
+                NotificationType.ERROR,
+            ).notify(proj)
         }
     }
 
     override fun dispose() {
         currentModel = null
         Disposer.dispose(this)
+    }
+
+    private companion object {
+        /** T-UiNative T-UN-02：导出成功/失败轻通知组（plugin.xml 已注册）。 */
+        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
     }
 
     /**

@@ -1,8 +1,10 @@
 package cn.song.mybatisplus.visualizer.execute
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 
 /**
  * 执行 SQL 支持（M17）：SQL 预览面板「执行 SQL」按钮的 core 入口。
@@ -19,6 +21,9 @@ import com.intellij.openapi.ui.Messages
 object ExecuteSqlSupport {
 
     private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(ExecuteSqlSupport::class.java)
+
+    /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+    private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
 
     /** Database 插件标记类（插件加载时必在 classpath；探测用，版本无关——绕开 PluginId API 迁移）。 */
     private const val DATABASE_MARKER_CLASS = "com.intellij.database.dataSource.LocalDataSourceManager"
@@ -64,7 +69,19 @@ object ExecuteSqlSupport {
         }
     }
 
+    /**
+     * T-UiNative T-UN-02：Community 降级提示改轻通知（原模态弹窗——纯告知无需打断）。
+     * 测试模式跳过 + runCatching 兜底（headless 无通知系统依赖，原 Messages 亦被 runCatching 吞掉）。
+     */
     private fun showInfo(project: Project, message: String) {
-        runCatching { Messages.showInfoMessage(project, message, MpSqlVisualizerBundle.message("execute.title")) }
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("execute.title"),
+                message,
+                NotificationType.INFORMATION,
+            ).notify(project)
+        }
     }
 }

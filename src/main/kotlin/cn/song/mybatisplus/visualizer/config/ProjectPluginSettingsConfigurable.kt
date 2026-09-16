@@ -4,15 +4,11 @@ import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.project.Project
-import com.intellij.ui.components.JBLabel
-import java.awt.BorderLayout
-import java.awt.GridBagConstraints
-import java.awt.GridBagLayout
-import java.awt.Insets
-import javax.swing.JCheckBox
+import com.intellij.openapi.ui.ComboBox
+import com.intellij.ui.components.JBCheckBox
+import com.intellij.ui.dsl.builder.Cell
+import com.intellij.ui.dsl.builder.panel
 import javax.swing.JComponent
-import javax.swing.JPanel
-import javax.swing.JComboBox
 
 /**
  * 项目级设置页（O-5 Phase B）。
@@ -22,6 +18,12 @@ import javax.swing.JComboBox
  *
  * 仅当「使用项目设置」开启时可编辑其它项；关闭时回退全局 [PluginSettings]。
  *
+ * T-UiNative T-UN-15（试点）：GridBag 手摆布局迁 Kotlin UI DSL v2（`panel { }`）。
+ * 保守迁移——apply/isModified/reset 手写逻辑与 `modified` 标志位原样保留（面板存取仍走
+ * [ProjectPluginSettings] 单例）；原「下拉随开关启用」只是创建期一次性赋值（无动态联动，
+ * 原注释：开启/关闭刷新由 apply 处理），故用 `applyToComponent` 原样复刻，不引入
+ * `enabledIf` 动态联动改变行为。主面板 [PluginSettingsPanel] 的迁移立后续任务。
+ *
  * ⚠️ 20260907-1617 审计：本类同样未注册进 plugin.xml（当前为死类，无挂载点、无联动逻辑，
  * apply 只写 ProjectPluginSettings 不涉自动监听）——保留代码待 O-5 Phase B 后续接线，
  * 接线前不得在其中新增依赖挂载点的联动逻辑（教训见 pitfall-log-startup-capture-regression）。
@@ -29,59 +31,40 @@ import javax.swing.JComboBox
 class ProjectPluginSettingsConfigurable(private val project: Project) : Configurable {
 
     private val projectSettings = ProjectPluginSettings.getInstance(project)
-    private var useProjectCheck: JCheckBox? = null
-    private var dialectCombo: javax.swing.JComboBox<String>? = null
+    private var useProjectCheck: JBCheckBox? = null
+    private var dialectCombo: ComboBox<String>? = null
     private var modified = false
 
     override fun getDisplayName(): String = MpSqlVisualizerBundle.message("plugin.name")
 
     override fun createComponent(): JComponent {
-        val panel = JPanel(GridBagLayout())
-        val gbc = GridBagConstraints().apply {
-            gridx = 0
-            gridy = 0
-            anchor = GridBagConstraints.WEST
-            insets = Insets(4, 6, 4, 6)
-            fill = GridBagConstraints.HORIZONTAL
-            weightx = 1.0
+        // T-UiNative T-UN-15：布局层迁 DSL v2；控件值/启用态的初始灌入与监听经
+        // applyToComponent 复刻原 JCheckBox/JComboBox 行为（doClick/addActionListener 语义不变）
+        val initialDialect = projectSettings.state.dialect.ifBlank {
+            PluginSettings.getInstance().state.dialect
         }
-
-        // 「使用项目设置」开关
-        val check = JCheckBox(MpSqlVisualizerBundle.message("settings.project.useProjectSettings")).apply {
-            isSelected = projectSettings.state.useProjectSettings
-            toolTipText = MpSqlVisualizerBundle.message("settings.project.useProjectSettings.tip")
-            addActionListener {
-                modified = true
-                // 开启/关闭时刷新可用性由 apply 处理
+        lateinit var checkCell: Cell<JBCheckBox>
+        lateinit var comboCell: Cell<ComboBox<String>>
+        val panel = panel {
+            row {
+                checkCell = checkBox(MpSqlVisualizerBundle.message("settings.project.useProjectSettings"))
+                    .applyToComponent {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.project.useProjectSettings.tip")
+                        isSelected = projectSettings.state.useProjectSettings
+                        addActionListener { modified = true }
+                    }
+            }
+            row(MpSqlVisualizerBundle.message("settings.dialect")) {
+                comboCell = comboBox(DialectRegistry.dialects.map { it.name })
+                    .applyToComponent {
+                        selectedItem = initialDialect
+                        isEnabled = projectSettings.state.useProjectSettings
+                        addActionListener { modified = true }
+                    }
             }
         }
-        useProjectCheck = check
-        panel.add(check, gbc)
-
-        gbc.gridy++
-        gbc.insets = Insets(4, 24, 4, 6)  // 缩进
-        gbc.fill = GridBagConstraints.NONE  // 不拉伸，保持自然宽度
-
-        // 方言下拉（示例项，后续可扩展更多）
-        val dialectPanel = JPanel(BorderLayout(8, 0)).apply {
-            add(JBLabel(MpSqlVisualizerBundle.message("settings.dialect")), BorderLayout.WEST)
-            val combo = JComboBox(DialectRegistry.dialects.map { it.name }.toTypedArray())
-            combo.selectedItem = projectSettings.state.dialect.ifBlank {
-                PluginSettings.getInstance().state.dialect
-            }
-            combo.isEnabled = projectSettings.state.useProjectSettings
-            combo.addActionListener { modified = true }
-            add(combo, BorderLayout.CENTER)
-        }
-        dialectCombo = dialectPanel.components.filterIsInstance<JComboBox<*>>().first() as? JComboBox<String>
-        panel.add(dialectPanel, gbc)
-
-        // 底部占位
-        gbc.gridy++
-        gbc.weighty = 1.0
-        gbc.fill = GridBagConstraints.BOTH
-        panel.add(JPanel(), gbc)
-
+        useProjectCheck = checkCell.component
+        dialectCombo = comboCell.component
         return panel
     }
 

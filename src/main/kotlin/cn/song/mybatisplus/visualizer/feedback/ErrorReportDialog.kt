@@ -2,7 +2,9 @@ package cn.song.mybatisplus.visualizer.feedback
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.SafeBrowser
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.ValidationInfo
 import com.intellij.ui.components.JBLabel
@@ -107,8 +109,9 @@ class ErrorReportDialog(
     /** 提交进行中标记：重复点提交直接忽略（T-FeedbackErr 状态机）。 */
     private var isSubmitting = false
 
-    /** 失败状态行文字色（状态行默认继承标签前景色，失败时才染红）。 */
-    private val STATUS_ERROR_COLOR = java.awt.Color(0xC0, 0x39, 0x2B)
+    /** 失败状态行文字色（状态行默认继承标签前景色，失败时才染红）。
+     *  T-UN-13（T-UiNative）：写死红 → namedColor（亮值不变）。 */
+    private val STATUS_ERROR_COLOR = MpvsUiColors.STATUS_ERROR
 
     init {
         title = MpSqlVisualizerBundle.message("error.report.dialog.title")
@@ -126,8 +129,7 @@ class ErrorReportDialog(
         fields.statusCopyHandler = {
             val text = fields.statusLabel.text.orEmpty()
             if (text.isNotBlank()) {
-                com.intellij.openapi.ide.CopyPasteManager.getInstance()
-                    .setContents(java.awt.datatransfer.StringSelection(text))
+                UiTextClipboard.copy(text)
                 cn.song.mybatisplus.visualizer.ui.flashCopied(fields.statusCopyButton)
             }
         }

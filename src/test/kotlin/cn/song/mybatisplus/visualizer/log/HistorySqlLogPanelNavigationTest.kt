@@ -162,6 +162,24 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
         }
     }
 
+    fun test二级SQL列表_安装速度搜索() {
+        // T-UiNative T-UN-05：历史二级 SQL 列表构造于 CardLayout 隐藏卡，速度搜索须可见后生效。
+        // 断言「已安装」用两参 getSupply(comp, true)（checkShowing=false 直读安装的 supply——
+        // 单参版含 isPopupActive() 过滤，headless 无活动弹窗恒 null，不适用于安装断言）。
+        writeHistoryFile("sql-history-2026-08-31.sql", f44FileContent(listOf(Triple("SELECT 1", "A.java:1", 1L))))
+
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+        try {
+            panel.openFileForTest(panel.fileListEntries.first())
+            assertTrue(
+                "二级 SQL 列表应已安装速度搜索（checkShowing=false 可解析到 supply），但未命中",
+                com.intellij.ui.speedSearch.SpeedSearchSupply.getSupply(panel.sqlListForTest, true) != null,
+            )
+        } finally {
+            panel.dispose()
+        }
+    }
+
     fun test一级搜索过滤文件名() {
         writeHistoryFile("sql-history-2026-08-31.sql", f44FileContent(listOf(Triple("SELECT 1", "A.java:1", 1L))))
         writeHistoryFile("sql-history-2026-08-30.sql", f44FileContent(listOf(Triple("SELECT 2", "A.java:2", 1L))))
