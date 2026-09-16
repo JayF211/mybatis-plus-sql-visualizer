@@ -136,7 +136,9 @@ public final class StackLocator {
             }
         }
 
-        // 主位置无调试信息（file 为 null）不可作为定位——候选首位顶上，避免必然失败的位置进列表
+        // 主位置无调试信息（file 为 null）不可作为定位：候选构建已滤掉 null-file 项，取候选首位顶上
+        // （移除后「候选不含主位置」不变量仍成立）；候选缺席则本次不产出位置、不缓存——根治
+        // 「调用方缓存把 null 永久锁进列表」的自毒化（T-AgentCudSource：CUD 恒无源码位置的首要诱因）
         if (primaryFile == null) {
             if (candidates.isEmpty()) {
                 return null;
@@ -151,7 +153,10 @@ public final class StackLocator {
         if (CACHE.size() >= CACHE_MAX) {
             CACHE.clear();
         }
-        CACHE.putIfAbsent(primaryKey, frame);
+        // 缓存守卫：仅有效位置入缓存——null 帧入缓存会让该调用方名下所有后续语句（含 CUD）恒无源码位置
+        if (primaryFile != null) {
+            CACHE.putIfAbsent(primaryKey, frame);
+        }
         return frame;
     }
 
