@@ -78,8 +78,24 @@ class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFil
                 SqlCaptureGate.epActive = true
             }
             val timePrefix = PluginSettings.getInstance().state.logTimePrefix.takeIf { it.isNotBlank() }
-            processConsoleLine(line, ctx, timePrefix) {}.forEach { manager.entries.addEntry(it) }
+            processConsoleLine(line, ctx, timePrefix, {}, onErrorText = ::bindConsoleError)
+                .forEach { manager.entries.addEntry(it) }
             return null // 不做高亮/链接——纯捕获通道
         }
+
+        /**
+         * T-M55-02：错误反向绑定与桥同款（丢弃留 debug 痕）。EP 通道无重放守卫，
+         * rehighlight 重放场景靠同文本幂等绑定兜底（文本相同不再替换实例）。
+         */
+        private fun bindConsoleError(errorText: String) {
+            when (val result = manager.entries.bindErrorToRecent(errorText)) {
+                SqlLogEntryBuffer.ErrorBindResult.BOUND -> {}
+                else -> LOG.debug("EpLineFilter: 错误块绑定丢弃（$result）：${errorText.lineSequence().firstOrNull()?.take(120)}")
+            }
+        }
+    }
+
+    private companion object {
+        private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(SqlConsoleBridgeFilterProvider::class.java)
     }
 }

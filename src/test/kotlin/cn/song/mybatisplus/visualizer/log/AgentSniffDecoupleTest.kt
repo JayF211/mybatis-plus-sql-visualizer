@@ -64,7 +64,7 @@ class AgentSniffDecoupleTest : BasePlatformTestCase() {
         listOf(
             "$ts [main] ==>  Preparing: SELECT * FROM user WHERE id = ?",
             "$ts [main] ==>  Parameters: 1(Long)",
-        ).forEach { processConsoleLine(it, ctx, null) {} }
+        ).forEach { processConsoleLine(it, ctx, null, {}) }
     }
 
     fun test时间显示关闭时嗅探仍采集() {

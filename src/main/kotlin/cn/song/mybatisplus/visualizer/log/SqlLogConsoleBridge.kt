@@ -350,11 +350,13 @@ open class SqlLogConsoleBridge(
                                     context.replayDropCount++
                                 }
                                 else -> {
-                                    processConsoleLine(line, context, timePrefixCache, syncBufferConfig).forEach { buffer.addEntry(it) }
+                                    processConsoleLine(line, context, timePrefixCache, syncBufferConfig, onErrorText = ::bindConsoleError)
+                                        .forEach { buffer.addEntry(it) }
                                 }
                             }
                         } else {
-                            processConsoleLine(line, context, timePrefixCache, syncBufferConfig).forEach { buffer.addEntry(it) }
+                            processConsoleLine(line, context, timePrefixCache, syncBufferConfig, onErrorText = ::bindConsoleError)
+                                .forEach { buffer.addEntry(it) }
                         }
                     },
                 )
@@ -367,6 +369,17 @@ open class SqlLogConsoleBridge(
             }
         }
         LOG.warn("attachFilter: all filter candidates failed on ${console.javaClass.name}")
+    }
+
+    /**
+     * T-M55-02：控制台错误文本反向绑定缓冲最近条目——绑定失败（条目被去重丢弃后缺位/超窗淘汰/
+     * 缓冲为空）显式留 debug 痕，不阻塞主链（生产路径 bindErrorToRecent 的丢弃分支不可静默无痕）。
+     */
+    private fun bindConsoleError(errorText: String) {
+        when (val result = buffer.bindErrorToRecent(errorText)) {
+            SqlLogEntryBuffer.ErrorBindResult.BOUND -> {}
+            else -> LOG.debug("bindConsoleError: 错误块绑定丢弃（$result）：${errorText.lineSequence().firstOrNull()?.take(120)}")
+        }
     }
 
     /**
@@ -632,6 +645,13 @@ internal class BridgeLineContext(
     /** Hibernate 喂行开关（快照同步自 ParserConfig.hibernateEnabled）。 */
     var hibernateEnabled: Boolean = true,
 ) {
+    /**
+     * T-M55-02：正在聚合的执行报错文本块（错误行起，堆栈/`###` 续行追加；null = 块外）。
+     * 逐行累积、经 processConsoleLine 的 onErrorText 回调实时绑定缓冲最近条目——
+     * 最终绑定文本为完整块（首行 + 聚合堆栈），中间态被后一次绑定覆盖。
+     */
+    var pendingError: StringBuilder? = null
+
     /** T-PreviewFlash：重放守卫（每 console 独立；editor 不可得时降级为恒 Process）。 */
     val replayGuard: ConsoleReplayGuard = ConsoleReplayGuard()
 
@@ -653,6 +673,8 @@ internal class BridgeLineContext(
  *  1. 若为本插件源码标记（[SqlSourceInterceptor] 注入）→ 暂存，不喂解析器；
  *     T-IntrUpg-01：自位污染标记（旧模板 isSelf 常量分叉时拦截器上报自身帧）不暂存，
  *     条目落无位置链路（MissingSource 引导 → 立即注入触发升级）；
+ *  1.5) T-M55-02：SQL 执行报错行（[SqlErrorLineRecognizer] 词表命中）→ 旁路聚合错误块并经
+ *     [onErrorText] 实时反向绑定缓冲最近条目（不改控制台输出、不干扰解析器主链）；
  *  2. 喂行到三个解析器（配置快照已由设置变更事件同步——T-LogPerf-04），取出已配对 SQL 条目；
  *  3. 附加耗时解析结果 + 暂存源码位置，写入 [LogSqlEntry]。
  * 纯函数式、无 IDE 依赖，可在单元测试中直接驱动（[SqlLogConsoleBridgeMarkerTest]）。
@@ -682,6 +704,7 @@ internal fun processConsoleLine(
     ctx: BridgeLineContext,
     timePrefix: String?,
     syncBufferConfig: () -> Unit,
+    onErrorText: ((String) -> Unit)? = null,
 ): List<LogSqlEntry> {
     // M56 T-M56-02：增强接管闸门——agent 在线时桥不产出条目，回落即恢复。
     // T-AgentDialectLoop / T-AgentLogTime：接管期间无条件转入日志时间嗅探——把行喂给既有解析器
@@ -703,6 +726,27 @@ internal fun processConsoleLine(
         }
         ctx.pendingSource = marker
         return emptyList()
+    }
+    // 1.5) T-M55-02：SQL 执行报错旁路识别——词表廉价前置判定（O(词表×行长)，无正则），
+    // 命中即聚合错误块并经 onErrorText 实时反向绑定缓冲最近条目（旁路记录，不改控制台输出、
+    // 不影响三解析器主链：错误行随后照常喂解析器，行为与无错误行逐字一致）。
+    // 续行判定先行：### /堆栈帧在块内视为续行（MyBatis ### 续行同时命中错误词表，不得重开块丢首行）。
+    when {
+        ctx.pendingError != null && SqlErrorLineRecognizer.isContinuationLine(line) -> {
+            val sb = ctx.pendingError!!
+            if (sb.length < SqlErrorLineRecognizer.MAX_ERROR_TEXT_LENGTH &&
+                sb.count { it == '\n' } < SqlErrorLineRecognizer.MAX_ERROR_STACK_LINES
+            ) {
+                sb.append('\n').append(line.trim())
+                onErrorText?.invoke(sb.toString())
+            }
+        }
+        SqlErrorLineRecognizer.isErrorLine(line) -> {
+            ctx.pendingError = StringBuilder(SqlErrorLineRecognizer.firstLineText(line))
+            onErrorText?.invoke(ctx.pendingError.toString())
+        }
+        // 块外普通行（含空行放行，容忍堆栈间空行）结束当前错误块
+        !line.isBlank() -> ctx.pendingError = null
     }
     // 2) 喂行到三个解析器（各自忽略不匹配的行；配置快照随设置变更事件刷新，逐行零同步成本）
     ctx.myBatisParser.feed(line)

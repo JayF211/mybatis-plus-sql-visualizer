@@ -261,6 +261,61 @@ class SqlLogEntryBuffer(
         notifyChanged()
     }
 
+    // ---------- T-M55-02：执行报错反向绑定（原地更新最近条目） ----------
+
+    /** 错误反向绑定结果（丢弃原因显式化——桥层据此 LOG.debug，不阻塞主链）。 */
+    enum class ErrorBindResult {
+        /** 已绑定（含同文本幂等重绑）。 */
+        BOUND,
+        /** 缓冲为空（条目已被清空/尚未捕获）→ 错误丢弃。 */
+        DROPPED_EMPTY,
+        /** 最近条目超出绑定时间窗（[errorBindWindowMs]）→ 错误丢弃。 */
+        DROPPED_WINDOW_EXPIRED,
+        /** 错误文本为空 → 无事可绑。 */
+        DROPPED_BLANK,
+    }
+
+    /**
+     * 错误绑定时间窗（毫秒）：异常打印在 Preparing/Parameters 之后，仅反向绑定该窗口内
+     * 入列的最近条目——超窗视为「与缓冲内条目无关的错误」（启动期残留/应用级报错），显式丢弃。
+     */
+    @Volatile
+    var errorBindWindowMs: Long = DEFAULT_ERROR_BIND_WINDOW_MS
+
+    /**
+     * T-M55-02：错误文本反向绑定**时间窗内同控制台最近条目**（原地更新 errorText）。
+     *
+     * - 原地更新 = 队尾条目 copy(errorText=...) 替换——[LogSqlEntry.dedupeKey] 不含 errorText
+     *   （SQL 指纹稳定），去重计数与 ⨉N 徽章语义不受影响；
+     * - 绑定成功走 [notifyChanged]（面板差分刷新；尾位替换在 VisibleDiff 下为全量重建，
+     *   由管理器置脏+幂等 flush 合并频率，错误块逐行多次绑定最终只刷一次 EDT）；
+     * - 条目可能已被去重丢弃/淘汰/清空——此处表现为「最近条目缺位或超窗」，显式返回丢弃原因，
+     *   绝不阻塞主链（错误块解析失败不影响 SQL 捕获）。
+     */
+    fun bindErrorToRecent(errorText: String): ErrorBindResult {
+        if (errorText.isBlank()) return ErrorBindResult.DROPPED_BLANK
+        var replaced = false
+        var result: ErrorBindResult
+        synchronized(entries) {
+            val recent = entries.lastOrNull()
+            result = when {
+                recent == null -> ErrorBindResult.DROPPED_EMPTY
+                System.currentTimeMillis() - recent.timestamp > errorBindWindowMs ->
+                    ErrorBindResult.DROPPED_WINDOW_EXPIRED
+                // 幂等：同一错误块逐行追加会重复绑定，文本相同视为已绑（不替换不刷新）
+                recent.errorText == errorText -> ErrorBindResult.BOUND
+                else -> {
+                    entries.removeLast()
+                    entries.addLast(recent.copy(errorText = errorText))
+                    replaced = true
+                    ErrorBindResult.BOUND
+                }
+            }
+        }
+        if (replaced) notifyChanged()
+        return result
+    }
+
     fun setPaused(paused: Boolean) {
         this.paused = paused
     }
@@ -301,6 +356,9 @@ class SqlLogEntryBuffer(
     companion object {
         private const val DEFAULT_MAX_ENTRIES = 200
         private const val DEFAULT_DEDUPE_WINDOW_MS = 60000L
+
+        /** T-M55-02：错误反向绑定时间窗默认值（慢查询执行期异常打印仍落在窗口内）。 */
+        private const val DEFAULT_ERROR_BIND_WINDOW_MS = 5 * 60_000L
 
         /** T-PerfBatch：内容通知数量阈值——时间窗内累计 N 条才再通知（首条不受限，即时）。 */
         private const val CONTENT_NOTIFY_BATCH = 20

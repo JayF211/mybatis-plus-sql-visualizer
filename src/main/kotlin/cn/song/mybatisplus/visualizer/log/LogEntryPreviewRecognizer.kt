@@ -114,6 +114,23 @@ internal fun countPlaceholders(sql: String): Int = placeholderPositions(sql).siz
 internal fun LogSqlEntry.toPreviewResult(
     formatSql: Boolean,
     literalRecovery: Boolean,
+): PreviewResult = toPreviewResultInternal(formatSql, literalRecovery).withExecutionError(errorText)
+
+/**
+ * T-M55-02：执行报错全文并入预览警示槽——列表行⛔片段之外，预览详情承载完整错误文本：
+ * meta 行红色警示（宽度预算截断展示）+ 横幅 + 「复制错误」按钮一键复制全文（copyError 复制
+ * currentWarning，即本拼接结果）。既有参数未还原警示保留（报错在前，换行分隔）。
+ */
+private fun PreviewResult.withExecutionError(errorText: String?): PreviewResult {
+    val err = errorText?.takeIf { it.isNotBlank() } ?: return this
+    val prefix = MpSqlVisualizerBundle.message("log.preview.executionError")
+    val joined = listOfNotNull(prefix + err, warning).joinToString("\n")
+    return copy(warning = joined)
+}
+
+private fun LogSqlEntry.toPreviewResultInternal(
+    formatSql: Boolean,
+    literalRecovery: Boolean,
 ): PreviewResult {
     val recognized = toRecognizedPreview()
     if (recognized.recognized) {

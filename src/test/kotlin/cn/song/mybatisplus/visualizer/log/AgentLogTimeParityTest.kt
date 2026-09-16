@@ -71,7 +71,7 @@ class AgentLogTimeParityTest {
         SqlCaptureGate.paused.set(true)
         LogTimeCorrelator.clear()
         val ctx = newCtx()
-        consoleLines.forEach { processConsoleLine(it, ctx, null) {} }
+        consoleLines.forEach { processConsoleLine(it, ctx, null, {}) }
         val event = AgentEvent(
             sql = agentSql,
             timestamp = agentCapturedAt,
@@ -209,7 +209,7 @@ class AgentLogTimeParityTest {
             "$first [main] ==> Parameters: 1(Long)",
             "$second [main] ==>  Preparing: SELECT * FROM user WHERE id = ?",
             "$second [main] ==> Parameters: 2(Long)",
-        ).forEach { processConsoleLine(it, ctx, null) {} }
+        ).forEach { processConsoleLine(it, ctx, null, {}) }
 
         fun fire(id: String) = stampLogTime(
             AgentEventAdapter.toEntry(
@@ -238,7 +238,7 @@ class AgentLogTimeParityTest {
             "$first [main] ==> Parameters: 1(Long)",
             "$second [main] ==>  Preparing: SELECT * FROM user WHERE id = ?",
             "$second [main] ==> Parameters: 1(Long)",
-        ).forEach { processConsoleLine(it, ctx, null) {} }
+        ).forEach { processConsoleLine(it, ctx, null, {}) }
 
         val e1 = stampLogTime(entryOf("SELECT * FROM user WHERE id = ?", "1"))
         val e2 = stampLogTime(entryOf("SELECT * FROM user WHERE id = ?", "1"))
