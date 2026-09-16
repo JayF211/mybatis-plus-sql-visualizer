@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.config.SettingsChangeListener
+import cn.song.mybatisplus.visualizer.log.agent.AgentManager
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
@@ -224,6 +225,8 @@ class SqlLogManager(private val project: Project) : Disposable {
         if (manual) PluginSettings.getInstance().state.logAutoCaptureSuppressed = false
         // 解除缓冲暂停（stop 时设置 paused=true 阻止任何入队）
         buffer.paused = false
+        // T-AgentListenSync：联动 agent 恢复采集（后续两分支 capturing 均置 true，统一在此下发）
+        AgentManager.getInstance(project).pushCaptureActive(true)
         if (!hasMainConsole()) {
             // 项目尚未运行（无主运行控制台）：立即进入 armed 态（capturing=true）+ 挂载桥监听——
             // 主控制台出现（contentAdded 监听 / 轮询检测）时自动附着 filter 开始捕捉 SQL
@@ -288,6 +291,9 @@ class SqlLogManager(private val project: Project) : Disposable {
         isWaitingForConsole = false
         // 安全网：暂停缓冲区——即使 Filter 未被成功移除，也无法向缓冲区添加条目
         buffer.paused = true
+        // T-AgentListenSync：联动 agent 真停采（CONFIG disabled=true，应用侧零开销；
+        // 否则 agent 持续采集发送、IDE 侧 addEntry 被 paused 白白丢弃）
+        AgentManager.getInstance(project).pushCaptureActive(false)
         // 自动启动开启时，用户显式停止→置持久化抑制标志（重启后 LogStartupCapture 检查此标志跳过）
         if (PluginSettings.getInstance().state.logAutoCaptureOnStart) {
             PluginSettings.getInstance().state.logAutoCaptureSuppressed = true

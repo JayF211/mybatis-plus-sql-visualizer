@@ -134,6 +134,11 @@ class AgentManager(private val project: Project) : Disposable {
             return false
         }
         sessions.add(session)
+        // B1：新 agent 默认 disabled=false（静态字段初始值），须按当前监听状态立即校正——
+        // 否则「监听关闭状态启动项目」场景新 agent 又开始白采集
+        val active = isListenActive()
+        runCatching { session.sendConfig(disabled = !active) }
+            .onFailure { LOG.warn("attachToPid: 初始 CONFIG 下发失败（pid=$pid）", it) }
         updateOnline()
         return true
     }
@@ -236,10 +241,28 @@ class AgentManager(private val project: Project) : Disposable {
         updateOnline()
     }
 
-    /** 脱敏开关下发（设置变更）。 */
+    /** 脱敏开关下发（设置变更）。disabled 跟随当前监听状态（B2：不写死 false——监听关闭时改设置不得重置为采集）。 */
     fun pushDesensitize(desensitize: Boolean) {
-        sessions.forEach { it.sendConfig(disabled = false, desensitize = desensitize) }
+        val active = isListenActive()
+        sessions.forEach { it.sendConfig(disabled = !active, desensitize = desensitize) }
     }
+
+    /**
+     * 监听开关联动（T-AgentListenSync）：停止监听 → agent 停采（真停，非 IDE 侧丢弃）；
+     * 开启监听 → 恢复采集。由 SqlLogManager.startCapture/stopCapture 调用。
+     * agent 侧 CONFIG 即时生效（volatile 标志），织入点常驻，恢复后下一条 SQL 完整采集。
+     */
+    fun pushCaptureActive(active: Boolean) {
+        if (!isEnhancedActive()) return
+        val desensitize = PluginSettings.getInstance().state.enhancedCaptureDesensitize
+        sessions.forEach { it.sendConfig(disabled = !active, desensitize = desensitize) }
+        LOG.info("pushCaptureActive: active=$active → disabled=${!active}（sessions=${sessions.size}）")
+    }
+
+    /** 当前 SQL 监听是否开启（SqlLogManager.capturing；服务缺失/异常按 false——宁停采勿白采）。 */
+    internal fun isListenActive(): Boolean = runCatching {
+        project.getService(SqlLogManager::class.java).capturing
+    }.getOrDefault(false)
 
     // ---------- pid 解析（复用桥反射骨架；getNativePid 能力探测缺失回退 getProcess().pid()） ----------
 
