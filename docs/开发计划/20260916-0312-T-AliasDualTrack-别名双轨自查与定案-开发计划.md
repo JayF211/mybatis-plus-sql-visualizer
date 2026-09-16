@@ -58,4 +58,14 @@ T-AD-01（定案审查）→ T-AD-02（防御测试）→（条件）T-AD-03 →
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+**2026-09-17 实施完毕（提交 81adf5a，dev 分支直接交付）**
+
+**定案：DBX #22 的坑在本插件不存在**——crud_sql 仅从 MP 实体 PSI 生成（CrudSqlTool 入参仅 filePath/className，无 SELECT/查询结果入口），双轨分离是 T-M46 设计遗产。四路径逐条定案：
+
+- **路径 1 lambda 生成**：SelectColumn expr/alias 两字段分离（SqlReverseParser），生成 `selectAs(实名ref, "别名")`——展示轨与实名轨同现不互染。
+- **路径 2 rawMode 回落**：「expr AS alias」整串保留为**有意行为非缺陷**（MPJQueryWrapper 无 selectAs(String,SFunction) 重载），测试按现状锁。
+- **路径 3 表达式列（如实偏离记录）**：运算表达式列解析层即拒绝（运算符 token 中断 → 抛缺 FROM），计划预设「整串回落」实为「解析拒绝」；字符串回落真正触达面是未映射列（renderSelectRef 拆前缀 → renderColumnRef 整串回落，别名仍单列第二参）。
+- **路径 4 WHERE/ORDER BY**：parseColumnRef 只消费限定名不读 AS，renderCondition/renderOrderBy 走实名；反向证明——条件里误写 SELECT 别名也回落字符串、不被纠偏。
+- **T-AD-03**：未触发（无实错），作废留档。
+- **T-AD-04**：防御测试 7 项全绿（AliasDualTrackDefenseTest），O-18 可关闭；第五轮报告回填留主会话；CHANGELOG 无踩坑修复不记条目（按计划）。
+- **真机走查留人工**（§五）：MCP reverse_sql 传真实含 AS 别名与表达式列的 mapper SQL 复核生成形态。

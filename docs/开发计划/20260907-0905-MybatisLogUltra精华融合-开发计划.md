@@ -169,6 +169,46 @@
 | 页签过滤与差分渲染交互 | 冻结/闪烁回归 | 页签=过滤层不碰 VisibleDiff；LogListFreezeTest 纳入定向回归 |
 | demo 实测形态与预期偏差（MP 内置语句 id、请求标签格式） | 方案返工 | 各任务真机抽查先行于文档定稿；偏差按增量补记 |
 
+## 实施记录（2026-09-17 回填）
+
+**四子任务全部实施完毕（dev 分支，2026-09-17；实施顺序 §4 波次一 01→02 串行、波次二 03∥04 实际按 03→04 相邻提交交付）**
+
+### T-M55-01 跳转双目标（提交 9b33f56）
+
+- 新建 `log/MapperXmlLocator`：statementId 拆 namespace.id → FileTypeIndex 查 mapper XML（仿 HbmXmlEntityResolver 先例）→ PSI 校验 namespace 匹配 → 语句 XmlTag 起始行；自带 ReadAction，EDT/后台均可调。
+- 日志页/历史页右键菜单拆「跳转到 Java」「跳转到 Mapper XML」两项；XML 项仅 mapperStatement 非空且定位成功才显示，失败回退 Java 不劣化。
+- 已知边界：多模块同名 mapper 取第一个 + LOG.info 留痕；MP 内置语句 XML 不存在回退 Java（首批已知边界，真机实测留人工）。
+- 测试：MapperXmlLocatorTest 8 用例 + SqlLogPanelXmlJumpTest 4 用例；跳转/标记回归 36 用例全绿。
+
+### T-M55-02 SQL 执行报错同列（提交 83dc61a）
+
+- 新建 `log/SqlErrorLineRecognizer` 纯函数识别器：常量词表 contains 廉价前置判定（O(词表×行长) 无正则，含词表常量防回潮守护），覆盖 MyBatis `###` 块/Spring DAO/JDBC 家族/Hibernate/参数绑定异常（反超 Ultra 4.0.14 自述边界）；多行堆栈首行入 errorText、续行聚合（30 行/4000 字符上限）。
+- SqlLogConsoleBridge.processConsoleLine 加错误旁路分支：续行判定先行防 `###` 重开块，经 onErrorText 回调绑定；LogFilterProxyHandler 恒返回 null 约束不变，解析器主链零改动；agent 接管期整体短路；EP 通道 SqlConsoleBridgeFilterProvider 同款接线。
+- SqlLogEntryBuffer 新增 bindErrorToRecent：时间窗（默认 5 分钟）内最近条目原地 copy 替换 + 实例替换才 notifyChanged（同文本幂等不刷新）；缓冲为空/超窗显式丢弃（ErrorBindResult）由桥层 LOG.debug 留痕。
+- 渲染/去重零改：formatErrorFragment（M56 已交付）复用；dedupeKey 不含 errorText（SQL 指纹稳定，错误绑定去重代表条目）；toPreviewResult 把报错全文并入预览警示槽（meta 红字+横幅+复制错误按钮全文来源）。
+- 已知边界：异常打印在 Parameters 之后按「最近一条+时间窗」绑定，并发交错控制台误绑成本低于漏绑（计划口径 §风险总表）。
+- 测试：识别器 11 + 桥时序 7 + 缓冲绑定 9 + 预览 4；桥/缓冲/Perf/渲染回归 118 用例全绿（SqlLogConsoleBridgePerfTest 6、LogListFreeze 2、Renderer 31 等）。
+
+### T-M55-03 方法级聚焦页签（提交 41a13a3）
+
+- 新建 `log/FocusTab`（页签模型 + filterByFocusTabs 纯函数）：页签是过滤器不是分组，多开并集过滤，method/request 双类型基础设施一次建齐；不碰 VisibleDiff 与缓冲分组模型。
+- 新建 `log/CallerMethodRangeResolver`：sourceFile+sourceLine → PsiJavaFile → 内层 PsiMethod 行号区间（1-based 含两端），嵌套类/重载/lambda-匿名类按最小包含方法取；Kotlin 调用方返回 null（首批已知边界，沿 F-4 口径）；自带 ReadAction。
+- SqlLogPanel：顶部动态聚焦页签栏（WrapLayout chips + ✕ 关闭 + 隐藏计数提示 i18n），插在 filterByFocus 与 filterBySearch 之间；右键菜单「聚焦调用方方法」（sourceFile 非空可用，解析失败 toast 不静默）；编辑器行槽 ⚡ 入口按计划不做（可选增强留档）。
+- 已知边界：行号区间近似与运行期真实方法边界差异、行号一致性真机抽查——留人工。
+- 测试：区间解析 6 + 过滤纯函数 9 + 页签交互 4；管线回归（Filter 20/StreamingDiff 10/Freeze 2/DedupeToggle 6/Sort 7）全绿。
+
+### T-M55-04 请求级聚合过滤视图（提交 6766040）
+
+- 面板右键「按请求聚焦」（requestTag 非空可用）：入 FocusTab.Request 页签与 03 共用基础设施，呈现保持扁平时间序（无树形/分组头，不碰差分与缓冲分组模型）。
+- K 有界防高基数：addRequestTab 去重 + 上限 8（超限挤掉最早请求页签，method 页签不受挤占）；修复其重复分支原样返回可变入参的别名回写隐患（clear+addAll 自清空）。
+- 无请求标签条目在请求聚焦下隐藏 + 计数提示（与 03 同策略）。
+- 偏离记录：「最近 K 个请求标签下拉」独立入口不另做——右键任意同标签条目等价可达（计划内二选一取轻）；模板第 5 段（MDC sqlvisRequestTag）与条目 requestTag 字段为 M56 已交付，零改动。
+- 测试：面板请求页签 3 + 过滤纯函数 9（含 K 截断/无标签策略）+ 方法页签回归 4。
+
+### 里程碑验收对照（§5）
+
+- 四子任务定向测试全绿、无扩展点变更（未触 plugin.xml）；真机抽查四项（跳 XML/报错同列/聚焦页签/请求标记）留人工统一走 runide-demo-verify-workflow；对外文案附带项（README/Marketplace 强调句）随下次发行窗口执行。
+
 ## 变更记录
 
 - 2026-09-07 M55 立项：Mybatis Log Ultra 精华融合（N-10 后深化调研——updates API 逐版 changeNotes/文档站 i18n/演示 GIF 帧/GitHub 四源证据 + 本仓库代码落点扫描；认知修正三处：方法级聚焦完成度被低估、请求级聚合实为扁平过滤视图、Restful 工具是请求边界触发器；四子任务 T-M55-01 跳转双目标 / 02 执行报错同列并反超参数绑定边界 / 03 方法级聚焦静态近似版 / 04 请求级聚合过滤版 + 标记行格式演化公共约定 + P3 需求池与不吸收清单）。

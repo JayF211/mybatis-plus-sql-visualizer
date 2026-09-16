@@ -61,4 +61,11 @@ T-NC-01（收集+RawResult 扩展）→ T-NC-02（ExplainTool 接线）→ T-NC-
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+**2026-09-17 实施完毕（提交 474852e，dev 分支直接交付）**
+
+- **T-NC-01**：McpDbExecutor 执行前先 drain 一次语句级+连接级 warnings（DBX 口径，防连接复用时上一条陈旧 notices 串扰），执行成功后采集挂 RawResult.notices（默认空清单，既有构造点零感知）；失败路径直接抛出无载体=DBX「出错语句 notices 丢弃」。
+- **T-NC-02**：ExplainTool 输出方言行后尾附 `notices:` 节（每条一行，单条内换行压平）；formatNotices 空清单返回空串保证空 notices 输出逐字节与现状一致（防回归硬门禁）。
+- **T-NC-03 定案**：IDE 面实测定案为真机项，代码侧不做——真机跑 PG NOTICE 场景记录 DBN 原生 Output 区呈现情况后写入结论（无连接句柄，硬做要侵入反射链，成本收益不成立）。
+- **T-NC-04（含计划偏差）**：mcpStub 桩不涉及 Statement 接口面（桩仅 mcpserver 四文件，DBN 链走反射），无需补签名——计划预设的桩扩展不适用，如实记录；取尽走 DBN remote JDBC 镜像自带的 getAllWarnings + clearWarnings（243/262 发行版 javap 实证，免 getNextWarning 链式 RMI 往返），全程 runCatching、个别驱动抛 UnsupportedOperationException 降级空 notices 不连坐查询结果；drainWarnings 取尽内核为顶层纯逻辑函数（反射面在 warningSurfaces 接线）裸 JUnit 直测；McpDbSignatureChecker 登记四处新反射入口（RemoteStatement/RemoteConnection × getAllWarnings/clearWarnings），跨版本核验 243/253/262 全绿。CHANGELOG/变更记录随本轮文档批次同步；第五轮报告 O-16 状态回填留主会话。
+- **测试**：8 例（取尽保序/clearWarnings 必调/异常降级/空白消息过滤/notices 节渲染/空 notices 零差异）。
+- **真机走查留人工**（§五）：PG NOTICE 样例经 MCP explain 链透出 + DBN 原生 Output 呈现核实（T-NC-03 定案依据）。

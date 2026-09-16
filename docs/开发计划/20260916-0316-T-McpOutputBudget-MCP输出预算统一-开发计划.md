@@ -56,4 +56,10 @@ T-MB-01（PerfAdvice 预算）→ T-MB-02（口径登记）→ T-MB-03（测试+
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+**2026-09-17 实施完毕（提交 ced7041，dev 分支直接交付）**
+
+- **T-MB-01**：PerfAdviceTool 补齐全链最后一个无上限工具——条数预算 30（MAX_FINDINGS，超限按 SEVERITY 等级序裁剪 ERROR > WARN > INFO，PerfSeverity 声明序升序即高危在前、稳定排序同级保持原始命中顺序），尾部 [TRUNCATED] 计数后缀恒可见（showing 30 of N）；单条文案截断 200 字符（MAX_ADVICE_CHARS，定案依据：perf 文案本体是 bundle 英文短句全库最长约 140 字符加标识符插值，200 对齐 McpSchemaFormatter.MAX_CELL_CHARS 的 DBX 短文案口径；ExplainTool 的 2000 是计划文本单元格口径不适用）。
+- **防回归硬门禁**：少于上限时零排序零裁剪，输出与无预算版本逐字节一致（排序会打散同严重度内原始命中顺序，只有真超限才付此代价）；头部计数恒为总数（诚实计数）。
+- **T-MB-02**：逻辑分层拆分 perfAdvice = 分析 + renderFindings 纯函数（合成 PerfWarning 清单直测，对齐 CheckSqlTool/MapperCheckTool 分层先例）；McpToolsetSupport 类注释落输出预算登记表（工具名/预算/常量位置三列口径，MetadataInvalidator 登记表同款守卫约定：新增工具或调整预算必须登记对齐）。
+- **T-MB-03**：测试 8 例（新增 5）——45 条裁剪计数/SEVERITY 优先保留（40 INFO + 尾部 5 ERROR 全保留且前移）/恰好 30 条不裁不排序/单条 250 字符截断加省略号/少于上限与无预算版逐字节一致；CHANGELOG Changed 与变更记录行随本轮文档批次同步；第五轮报告 O-20 状态回填（含重定形说明）留主会话。
+- **真机走查留人工**（§五）：问题多的慢 SQL 核对截断形态与 ERROR 级在前。

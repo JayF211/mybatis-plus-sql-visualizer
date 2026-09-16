@@ -57,4 +57,10 @@ T-MC-01（负缓存+失效登记）→（条件）T-MC-02 → T-MC-03（定案+�
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+**2026-09-17 实施完毕（提交 1188cff，dev 分支直接交付）**
+
+- **T-MC-01**：tableMeta 负命中进 per-datasource 负缓存（弱键同正缓存口径，键=数据源×表名小写）；TTL 30s 用时间戳惰性判定（不用定时器）防长会话陈旧、过期即重扫；登记进 MetadataInvalidator（label=DatabaseSchemaResolver.negativeCache），DDL/事务后与正缓存一起清空，守卫注释同步；正命中路径行为不变（扫描探针注入式表驱动测试锁定：同实例返回、零重扫、建表后失效即命中）。
+- **T-MC-02 定案**：表名索引为可选件按计划 P3 自律默认不启用，留实施注释（避免过度工程）。
+- **T-MC-03 定案**：identity 定案不适用（crud_sql 仅实体 PSI 生成、INSERT 无数据行），定案写入测试注释防后续重提；CHANGELOG 记 Changed 性能条目（本轮批次），第五轮报告 O-21 状态回填留主会话。
+- **测试**：NegativeCacheTest 5 + FallbackTest 2 + MetadataInvalidatorTest 13 全绿。
+- **真机走查留人工**（§五）：不存在表名首扫/再查秒回/建表后立查（负缓存已被失效）。

@@ -24,6 +24,26 @@
 
 - **注册进平台 MCP Server 的三只读工具（T-McpToolset，MCP 能力一期）**：`<depends optional="true" config-file="mcp-optional.xml">com.intellij.mcpServer</depends>` 注册 `mcpServer.mcpToolset`，`SqlVisualizerToolset` 三工具面向外部 agent（Claude Code / Cursor / AI Assistant / Junie 经 `use_idea_mcp` 等）暴露——`mpsv_render_sql`（文件+行号或 mapper XML 片段 → 13 类触发面渲染链的真实可执行 SQL，参数回填+降级说明）、`mpsv_schema_context`（表名白名单 → 数据源真实表列注释紧凑上下文，max_tables 默认 8 上限 20 DBX 口径）、`mpsv_explain`（单条 SELECT → 七方言 EXPLAIN 计划文本，headless 同步建连通道）。全部只读三 hint 显式声明（readOnly/idempotent=TRUE、destructive=FALSE），SELECT 白名单 fail closed（JSqlParser 结构判定+关键字粗扫双保险，剥离字面量防误杀），零弹窗（拒绝走 `McpExpectedError`、建连 `setAskPassword(false)`），每次调用 idea.log `[MCP-AUDIT]` 审计。`isExperimental` 显式 false 进稳定工具集；编译期经 `src/mcpStub` 桩源集（262 mcpserver.jar v69 类文件 JDK17 读不了，桩签名逐条 javap 对齐且不进插件 jar）；新反射建连链全入口登记 `McpDbSignatureCrossVersionTest` 跨版本签名护栏。243 明确不支持（旧 EP 形态适配成本>收益），MCP 面需 IDEA 2025.2+（内置）；未装 MCP Server 插件的环境整份 optional 文件不加载零影响。i18n 零新键（agent 文案为英文常量不进 bundle）。verifyPlugin 三目标门禁定案：253 版 McpToolset 接口缺两默认方法 → 桩改抽象钩子强字面量覆写（跨版本桩按最小公共接口面建模）；243 永不可达缺类（mcpserver 类型 + K2 SpillingKt）经 ignored-problems 豁免留痕 + McpScopeSourceScanTest 作用域守卫。全量 **4204/0/0/6** 绿
 
+- **执行错误定位跳转（T-ErrorLocate，N-18）**：预览执行 SQL 报错时不再只有驱动的一行消息——错误信息富化为 SQLState/驱动错误码与驱动报告的出错位置（PostgreSQL `Position: N`、MySQL `at line N` 等），结果面板错误态新增「定位到出错语句」按钮（仅出错时出现），一键跳到预览源中该语句起始行，悬停提示如实注明定位口径、不虚标精确行；多个位置信号并存时放弃归属不乱猜，非 SQL 错误不产出位置。MCP 侧 `mpsv_explain` 执行失败时错误消息附 `errorPosition: line N` 行，外部 agent 可据此定位再自修复
+
+- **SQL 执行报错与日志条目同列展示（T-M55-02）**：控制台的 SQL 执行异常行（MyBatis `###` 错误块、Spring DAO、JDBC 异常家族、参数绑定报错——后者为同类竞品自述不支持的边界）此前被静默丢弃，条目上看不出执行失败；现在异常行被识别并反向绑定到时间窗内最近的对应条目——列表行显示错误片段、预览详情含报错全文（元信息红字 + 横幅 + 复制错误全文），多行堆栈聚合有行数/字符上限，识别走常量词表廉价前置判定不碰解析热路径
+
+- **日志条目可直跳 mapper XML（T-M55-01）**：携带 mapper 语句信息的条目右键菜单新增「跳转到 Mapper XML」——statement id 拆 namespace.id 后索引定位工程内 mapper XML，校验 namespace 匹配落到语句节点起始行；XML 不存在（注解 SQL/MP 内置语句）或定位失败回退「跳转到 Java」，能力不劣化。日志页与历史页同套入口
+
+- **断连后 DDL「失败不等于未生效」判定（T-DdlRecover，O-15）**：执行 CREATE 类 DDL 时连接断开，错误一闪而过、语句是否已生效无从得知。现在连接类异常（SQLState 08xxx/驱动错误码表/消息签名三路判定，死锁、密码错误等明确排除不误判）叠加建表语句时，后台按退避间隔（500ms/1.5s/3s）探测对象是否已存在：检出则在错误上方显示橙色警示条「连接已断开，但对象 t 已存在（探测于…）」，未检出如实注记「已尝试生效性探测：未检出对象」——绝不把「没查到」包装成「没生效」
+
+- **方法级聚焦页签（T-M55-03）**：日志条目右键「聚焦调用方方法」——按源码位置的行号区间静态近似，列表只显示该方法区间内发出的 SQL（无字节码增强的等价实现）；面板顶部动态聚焦页签可多开可关闭，与类型过滤、搜索正确叠加，范围外条目隐藏并显示计数提示。嵌套类/重载/lambda 按最小包含方法取，Kotlin 调用方首批暂不支持（已知边界）
+
+- **请求级聚焦页签（T-M55-04）**：Web 请求内执行的 SQL 已带请求标签，现可右键「按请求聚焦」只看该请求发出的 SQL——呈现保持扁平时间序，页签去重且上限 8 个（超限挤掉最早请求页签）防长压测会话爆列表；无请求标签条目（定时任务/启动期）在聚焦下隐藏并计数
+
+- **首用引导三件套（T-UxOnboard）**：①打开含 MyBatis-Plus 用法的代码文件时，后台文本启发式探测命中后弹一次指路通知（「选中后按 Alt+Shift+Q 即可查看真实 SQL」），本机一次性、重开项目不再出现，设置页可关；②SQL 日志与历史 tab 空态补「控制台自动捕获 + 日志转 SQL 手动粘贴」引导文案，预览编辑器空态接原生占位提示；③会话内首次捕获成功弹通知带「打开面板」动作直达工具窗，历史非空不打扰
+
+- **驱动 notices 消息通道（T-NoticeChannel，O-16）**：PostgreSQL `NOTICE`/`WARNING` 等驱动消息此前对外部 agent 不可见——现在 `mpsv_explain` 执行前先取尽语句级与连接级 warnings（防连接复用时上一条的陈旧消息串扰），执行成功后采集并附在输出 `notices:` 节逐条透出；个别驱动不支持 warnings 接口时静默降级不影响查询结果；无 notices 时输出逐字节不变
+
+- **语句注释命名标注（T-StatementNaming，O-19）**：多语句日志还原的组头与 MCP 输出语句头现可携带语句名——优先取前导注释 `-- Name: x`（大小写不敏感），回退最近一条非空行注释；块注释/XML 注释/分隔线形态不当名、行内尾注释不误取、超 40 字符截断；无注释语句输出逐字节不变。日志转 SQL 组头、`mpsv_render_logs`/`mpsv_rollback_plan`/`mpsv_mapper_check` 语句头同步附名
+
+- **执行计划索引缺失建议（T-ExplainIndex，N-23）**：`mpsv_explain` 返回的执行计划现自动识别高频低效模式并在输出尾附 `index hints` 建议——MySQL 表格式（type=ALL 全表扫大表、key=NULL、Using filesort/temporary）与 PG 文本树（大表 Seq Scan）两方言先行，行数阈值防小表噪音，只提示不执行不改 SQL；无命中零追加，方言不支持静默降级。IDE 原生控制台结果行无程序化读取面，建议先落 MCP 承载位
+
 ### Changed
 
 - **三套语句切分收敛为单一状态机（T-SemicolonGuard，O-13）**：字符串感知切分（引号/注释内分号不切）此前有三处独立实现且行为不一——分类器会把 `'a;b'` 误切两段、注释内分号误切、字符串内 `--` 误剥；收敛为 util/SqlStatementSplitter 单实现（新增括号深度与 BEGIN/END 块感知：存储过程块/`(1;2)` 参数形态不再切碎，无配对 END 保守按原样切分），三处消费方委托迁移，既有行为逐段一致有守卫测试锁死
@@ -34,6 +54,14 @@
 
 - **性能长尾三项治理（T-PerfTail，性能调研报告 §9 发现点全收口）**：① WrapperCache 容量上限 512 + LRU 淘汰（accessOrder LinkedHashMap），编辑器关闭主动清理该文件条目（FileEditorManagerListener.fileClosed），三维修失效与「清除缓存」行为不变，极端长会话条目数有界；② 预览面板预热等待异步化——新增 PrewarmAwait（CompletableFuture + completeOnTimeout 超时预算等价），消除 EDT sleep-poll 形态，回调 invokeLater 回 EDT 装配，超时/失败走既有三级降级链；③ 重放守卫行 0 读取零拷贝——getCharsSequence 视图 subSequence 提取首行替代全文档拷贝（64MB 控制台文档混合态窗口风险收口）；④ plugin.xml 更新检查注释修正（默认关——稳定版由 Marketplace 推送，代码为权威）
 
+- **MCP 工具描述「置信度 vs 证据」叙事统一（T-McpNarrative，N-19）**：`mpsv_render_sql` 描述删除与实现不符的「多语句分隔」句，改如实口径（一次一条、多候选取首个并注明、多语句日志走 `mpsv_render_logs`）；`mpsv_mapper_check` 描述升格并统一落地定位句「校验器给的是置信度评分，这里给的是确定性证据——静态校验器产不出的渲染产物实证」，README 与市场页 MCP 行同步；十工具描述一致性 sweep（deterministic 家族词全覆盖、无旧口径残留），克制不加长——描述是 agent 选择工具的依据
+
+- **MCP perf_advice 输出预算（T-McpOutputBudget，O-20）**：性能建议工具补齐全链最后一个无上限输出——建议最多 30 条（超限按严重级别 ERROR > WARN > INFO 裁剪保高危，尾部「showing 30 of N」计数恒可见）、单条文案 200 字符截断；未超限时输出与此前逐字节一致，各工具输出预算在基类注释集中登记（新增工具必须对齐）
+
+- **元数据查询负命中缓存（T-MetaCheapSource，O-21）**：查询不存在的表名（AI 生成的幻觉表名是高频来源）时，负结果按数据源缓存 30 秒（时间戳惰性判定、过期即重扫），DDL/事务提交后与正缓存一起失效——长会话里同一幻觉表名不再反复触发全库扫描；命中真实表的行为不变
+
+- **错误报告去抖队列上限与日志时间格式化复用（T-PerfSweep3，O-23 #2/#3）**：异常报告去抖队列加上限 64 条（越界提前合并落框、零丢弃）；日志列表时间戳格式化对象按格式串缓存复用，渲染/搜索/复制热路径不再逐条新建（五项收敛中另三项经核实已被前序任务收口，补守护测试防回潮）
+
 ### Test
 
 - **方言 Lab 配方一致性守卫（T-DialectLabMatrix，O-10）**：五容器配方补 healthcheck（各库官方镜像自带工具），新增 database-lab/ 国产库资产（达梦/金仓官方 tar 取得路径 + load 脚本 + 示例片段 + 外部实例验证命令样例）；DockerComposeLabConsistencyTest 不起 Docker 即可校验配方四硬约束（钉版本/端口避让/必填 env/healthcheck）与文档一致性，漂移自证三例。国产库真实容器验证维持「环境受限未验证」诚实口径
@@ -42,6 +70,7 @@
 
 - **增删改（CUD）语句源码位置捕获修复（T-AgentCudSource）**：增强捕获下只有 SELECT 查询捕获到源码位置，INSERT/UPDATE/DELETE 捕获不到。根因=`StackLocator` 调用方缓存把「无调试信息的 null 位置」也缓入（缓存键=首个非框架帧 `class#method`，主位置为 null 时候选首位顶上且可能仍为 null，随后整帧含 null 入缓存）——某调用方一旦解析出 null（CUD 常走的 MP 默认方法 / 代理中间帧无有效 file 即命中），该 `class#method` 名下所有后续语句（含 CUD）恒无源码位置且不再自愈。修复=`StackLocator` 仅缓存有效位置：主位置为 null 时候选挑非 null 顶上、候选全 null 则本次不产出位置不缓存（下次重试）。新增 `StatementSourceLocationTest` 经用户形态调用帧触发真实 CUD 执行（executeUpdate/execute），把「CUD 事件 sourceFile 必指向用户栈帧」锁进绿灯。顺带盘清方言与增强的关系：采集面是 JDBC 接口级、对插件全部方言（含 DM 达梦）一视同仁，唯一耦合点是 `DriverRegistry` 驱动类名单——DM 已登记 `dm.jdbc.driver.DmDriver`，「在线但零捕获」的三类诱因（驱动类名不符/加载时序晚于 retransform/loader 隐藏降级）记录在案
 - **IN 字面量 SQL 预览参数未识别修复（T-InParamRec）**：上游代码把值直接内联进 SQL 文本（非 `?` 绑定参数）时，源码跳转反查入口打开的预览不出现参数行（左栏「无未解析参数」）、值不可编辑——该入口是 M37.1 时代的独立识别实现，漏接了 T-HistParam F4 的字面量恢复能力。现与日志 tab / 历史 tab 收编同一识别通道，字面量（含 IN 列表）原位改写为可编辑参数行，改值即时生效
+- **DDL 执行后元数据缓存兜底失效（T-DdlPostInvalidate，O-17）**：执行前预判失效之外，执行监控三个收尾点（早检错误上报/结果呈现成功/超时收口）再兜底失效一次元数据缓存——执行过程中才出现的 DDL、预判漏判、中途结构变化等窗口全部关死；失败的 DDL 也可能已隐式提交，故成功与失败/超时都失效；失效动作幂等，全程次数有界
 
 ## [2026.9.18-beta.3] - 2026-09-16
 
