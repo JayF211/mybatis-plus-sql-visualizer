@@ -72,6 +72,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     // ---------- 二级：SQL 列表（复用 SqlEntryList——Ctrl+C 复制纯 SQL 链路） ----------
     private val sqlListModel = DefaultListModel<LogSqlEntry>()
     private val sqlList = SqlEntryList(sqlListModel)
+    /** 二级速度搜索是否已安装。构造于 CardLayout 隐藏卡时安装不生效（真机 key 流不达、焦点不在），
+     *  故延后到 [showFileContent]/[loadFileContentSync] 切卡可见后安装（T-UiNative T-UN-05）。 */
+    private var sqlSpeedSearchInstalled = false
     /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
      *  T-ListPreviewCopy：预览文本经 clickPreviewSql——设置「预览时格式化还原 SQL」开启（默认）时多行格式化显示。 */
     private val sqlClickPreview = SqlClickPreview(project, sqlList) {
@@ -284,8 +287,14 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private fun showFileContent(fileEntry: HistoryFileEntry) {
         currentFile = fileEntry
+        // T-UiNative T-UN-05：二级 SQL 列表切卡可见后重挂速度搜索（构造于隐藏卡时 installOn
+        // 仍不生效的兜底；标记防重复装——平台 installOn 重复挂载同一列表不幂等）
+        if (!sqlSpeedSearchInstalled) {
+            sqlSpeedSearchInstalled = true
+            ListSpeedSearch.installOn(sqlList) { entry -> withTerminator(entry.restoredSql) }
+        }
         refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = true）
-        searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.empty")
+        searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.sql")
         cardLayout.show(cards, CARD_SQL)
         // T-Perf-05：立即清空旧文件内容（大文件后台读取期间不残留旧文件条目，防误操作）
         currentEntries = emptyList()
@@ -307,8 +316,14 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 测试缝：同步加载文件内容（生产路径 showFileContent 已后台化，headless 测试需要确定性）。 */
     private fun loadFileContentSync(fileEntry: HistoryFileEntry) {
         currentFile = fileEntry
+        // T-UiNative T-UN-05：二级 SQL 列表可见后确保速度搜索安装（生产 showFileContent 已装，
+        // 此同步路径 headless 下 CardLayout 不见真机 showing，marker 判定可能不触发，故统一补装）
+        if (!sqlSpeedSearchInstalled) {
+            sqlSpeedSearchInstalled = true
+            ListSpeedSearch.installOn(sqlList) { entry -> withTerminator(entry.restoredSql) }
+        }
         refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = true）
-        searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.empty")
+        searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.sql")
         cardLayout.show(cards, CARD_SQL)
         currentEntries = SqlLogFileReader.readFromFile(fileEntry.file)
         applySqlSearch()

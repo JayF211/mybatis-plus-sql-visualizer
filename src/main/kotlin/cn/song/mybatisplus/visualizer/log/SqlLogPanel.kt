@@ -118,11 +118,6 @@ internal const val REFRESH_CHUNK_SIZE = 30
 internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : JBList<LogSqlEntry>(model) {
     override fun itemToText(index: Int, element: LogSqlEntry): String = textFor(element)
 
-    init {
-        // T-UiNative P0：打字即搜（平台 ListSpeedSearch），匹配文本与 Ctrl+C 复制同口径
-        ListSpeedSearch.installOn(this) { element -> textFor(element) }
-    }
-
     /** 速度搜索与 Ctrl+C 复制共用的条目文本。 */
     internal fun textFor(element: LogSqlEntry): String = withTerminator(element.restoredSql)
 }
@@ -997,6 +992,9 @@ class SqlLogPanel(
         list.emptyText.text = MpSqlVisualizerBundle.message("log.panel.empty")
         list.cellRenderer = LogEntryListCellRenderer().also { entryCellRenderer = it }
         applyListCellHeight()
+        // T-UiNative T-UN-05（本次修复）：主日志列表构造即可见，速度搜索在此挂载（不移进
+        // SqlEntryList.init——历史二级列表复用它却构造于 CardLayout 隐藏卡，构造期挂载不生效）
+        ListSpeedSearch.installOn(list) { element -> withTerminator(element.restoredSql) }
         list.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
