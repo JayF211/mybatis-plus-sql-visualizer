@@ -35,7 +35,12 @@ class ExplainTool : McpToolsetSupport("mpsv_explain") {
         dialect: String = "",
     ): String = audit("mpsv_explain") {
         val target = resolveExplainTarget(requireProject(), selectSql, dataSource, dialect)
-        McpExplainFormatter.format(executeExplain(target)) + "\n\ndialect: ${target.dialectName}"
+        val raw = executeExplain(target)
+        // notices 节尾附在方言行后（T-NoticeChannel / O-16）；空清单零追加——输出逐字节与
+        // 现状一致（防回归硬门禁）。失败路径 notices 无从产生：executeExplain 直接 throwExpected，
+        // RawResult 只在成功时存在，天然满足 DBX「出错语句的 notices 丢弃」口径。
+        McpExplainFormatter.format(raw) + "\n\ndialect: ${target.dialectName}" +
+            McpExplainFormatter.formatNotices(raw.notices)
     }
 
     /** explain 前置链（白名单→数据源定位→方言派发，步骤 1~3）。全链非挂起：不进协程状态机，

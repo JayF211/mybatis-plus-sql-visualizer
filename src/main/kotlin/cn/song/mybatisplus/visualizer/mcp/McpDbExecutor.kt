@@ -2,6 +2,34 @@ package cn.song.mybatisplus.visualizer.mcp
 
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
+import java.sql.SQLWarning
+
+/**
+ * warnings 取尽内核（T-NoticeChannel 纯逻辑层）：[surfaces] 每项 = (getAllWarnings 调用,
+ * clearWarnings 调用) 二元组，反射接线在 [McpDbExecutor.warningSurfaces]——本核不碰反射
+ * 与平台类型，裸 JUnit 可直测。顶层函数（非 object 成员）：测试加载本文件门面类时不必
+ * 触发 [McpDbExecutor] 的 Logger 初始化。
+ *
+ * 全程 runCatching：个别驱动对 warnings 抛 UnsupportedOperationException 时降级为不产出
+ * 该面消息，绝不连坐查询结果；clearWarnings 失败同样不丢已取到的消息（下一条语句执行前的
+ * pre-drain 兜底，DBX postgres.rs 同款两件套）。
+ */
+internal fun drainWarnings(vararg surfaces: Pair<() -> List<*>?, () -> Unit>): List<String> =
+    surfaces.flatMap { (getAllWarnings, clearWarnings) ->
+        val messages = runCatching {
+            getAllWarnings()?.mapNotNull { w ->
+                runCatching {
+                    when (w) {
+                        null -> null
+                        is SQLWarning -> w.message
+                        else -> w.toString()
+                    }
+                }.getOrNull()
+            }
+        }.getOrNull().orEmpty()
+        runCatching { clearWarnings() }
+        messages
+    }.filter { it.isNotBlank() }
 
 /**
  * T-McpToolset headless 执行通道（mpsv_explain 专用，反射隔离 DatabaseTools）。
@@ -19,6 +47,9 @@ import com.intellij.openapi.project.Project
  * ```
  * 全反射 + Method 一律从声明接口/类获取（T-Embed-10 跨 classloader 教训）。签名由
  * McpDbSignatureCrossVersionTest 对本机 243/253/262 发行版核验。
+ *
+ * T-NoticeChannel：执行前后经 [warningSurfaces] 取尽语句级与连接级 warnings
+ * （getAllWarnings + clearWarnings，DBN 镜像接口），产出挂 RawResult.notices 供工具层渲染。
  *
  * 数据源发现复用 [cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver] 同链：
  * DataSourceManager.getManagers(project) → getDataSources()，按 DasDataSource.getName() 匹配别名。
@@ -94,9 +125,17 @@ object McpDbExecutor {
                 .invoke(connection)
             val statement = Class.forName(REMOTE_CONNECTION).getMethod("createStatement").invoke(remoteConnection)
             try {
+                val surfaces = warningSurfaces(remoteConnection, statement)
+                // 执行前先 drain 一次（DBX 口径）：DBN 连接可复用，上一条语句/会话遗留的陈旧
+                // notices 不允许串扰进本次结果；返回值丢弃，只做清空。
+                drainWarnings(*surfaces)
                 val resultSet = Class.forName(REMOTE_STATEMENT).getMethod("executeQuery", String::class.java)
                     .invoke(statement, sql)
-                return collect(resultSet, maxRows)
+                val raw = collect(resultSet, maxRows)
+                // 执行成功才采集 notices；失败路径直接抛出（notices 无从产生=DBX「出错丢弃」口径）
+                val notices = drainWarnings(*surfaces)
+                if (notices.isNotEmpty()) LOG.info("McpDbExecutor: drained ${notices.size} driver notice(s)")
+                return raw.copy(notices = notices)
             } finally {
                 runCatching { Class.forName(REMOTE_STATEMENT).getMethod("close").invoke(statement) }
                     .onFailure { LOG.warn("McpDbExecutor: close statement failed", it) }
@@ -106,6 +145,28 @@ object McpDbExecutor {
                 .onFailure { LOG.warn("McpDbExecutor: close connection ref failed", it) }
         }
     }
+
+    /**
+     * warnings 采集面（语句级先、连接级后，执行前 drain 与执行后采集共用同一组 Method 查找）。
+     * getAllWarnings/clearWarnings 在 RemoteStatement 与 RemoteConnection 上均有声明
+     * （243/262 发行版 javap 实证，McpDbSignatureChecker 登记）——DBN remote JDBC 镜像自带
+     * 取尽方法，无需手写 getNextWarning 链式遍历（每次 next 都是一次 RMI 往返）。
+     */
+    private fun warningSurfaces(
+        remoteConnection: Any,
+        statement: Any,
+    ): Array<Pair<() -> List<*>?, () -> Unit>> = arrayOf(
+        {
+            Class.forName(REMOTE_STATEMENT).getMethod("getAllWarnings").invoke(statement) as? List<*>
+        } to {
+            Class.forName(REMOTE_STATEMENT).getMethod("clearWarnings").invoke(statement)
+        },
+        {
+            Class.forName(REMOTE_CONNECTION).getMethod("getAllWarnings").invoke(remoteConnection) as? List<*>
+        } to {
+            Class.forName(REMOTE_CONNECTION).getMethod("clearWarnings").invoke(remoteConnection)
+        },
+    )
 
     /** 采集 ResultSet 行列（读满 [maxRows] 即停，truncated 标记供格式化层提示）。 */
     private fun collect(resultSet: Any, maxRows: Int): McpExplainFormatter.RawResult {

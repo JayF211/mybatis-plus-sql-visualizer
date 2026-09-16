@@ -64,9 +64,14 @@ public class McpDbSignatureChecker {
         missing += check(method(Class.forName("com.intellij.database.dataSource.DatabaseConnectionCore", true, loader), "getRemoteConnection"), "DatabaseConnectionCore.getRemoteConnection()");
         Class<?> remoteConnection = Class.forName("com.intellij.database.remote.jdbc.RemoteConnection", true, loader);
         missing += check(method(remoteConnection, "createStatement"), "RemoteConnection.createStatement()");
+        // T-NoticeChannel：notices 通道（getAllWarnings 取尽 + clearWarnings 清除；语句级/连接级都取）
+        missing += check(method(remoteConnection, "getAllWarnings"), "RemoteConnection.getAllWarnings()");
+        missing += check(method(remoteConnection, "clearWarnings"), "RemoteConnection.clearWarnings()");
         Class<?> remoteStatement = Class.forName("com.intellij.database.remote.jdbc.RemoteStatement", true, loader);
         missing += check(method(remoteStatement, "executeQuery", params("java.lang.String")), "RemoteStatement.executeQuery(String)");
         missing += check(method(remoteStatement, "close"), "RemoteStatement.close()");
+        missing += check(method(remoteStatement, "getAllWarnings"), "RemoteStatement.getAllWarnings()");
+        missing += check(method(remoteStatement, "clearWarnings"), "RemoteStatement.clearWarnings()");
         Class<?> rs = Class.forName("com.intellij.database.remote.jdbc.RemoteResultSet", true, loader);
         missing += check(method(rs, "next"), "RemoteResultSet.next()");
         missing += check(method(rs, "getString", params("int")), "RemoteResultSet.getString(int)");

@@ -15,12 +15,31 @@ object McpExplainFormatter {
     /** 单元格字符预算。 */
     const val MAX_CELL_CHARS = 2000
 
-    /** 已读取的查询结果（适配层采集；[truncated]=采集时已到行数预算上限）。 */
+    /** 已读取的查询结果（适配层采集；[truncated]=采集时已到行数预算上限）。
+     *  [notices]=执行后取尽的驱动 NOTICE/WARNING（T-NoticeChannel；默认空清单，
+     *  空 notices 的输出与无此字段时逐字节一致——防回归硬门禁）。 */
     data class RawResult(
         val headers: List<String>,
         val rows: List<List<String>>,
         val truncated: Boolean = false,
+        val notices: List<String> = emptyList(),
     )
+
+    /**
+     * notices 节渲染（T-NoticeChannel / O-16）：驱动 NOTICE/WARNING 文本每条一行。
+     * 空清单返回空串——拼接进工具输出时零追加，保证「空 notices 输出逐字节与现状一致」。
+     */
+    fun formatNotices(notices: List<String>): String {
+        if (notices.isEmpty()) return ""
+        return buildString {
+            append("\n\nnotices:")
+            notices.forEach { append("\n- ").append(flatNotice(it)) }
+        }
+    }
+
+    /** 单条 notice 压成一行（节内每条一行的契约；换行不丢词只降形态）。 */
+    private fun flatNotice(value: String): String =
+        value.replace("\r\n", "\n").replace('\n', ' ').replace('\r', ' ').trim()
 
     /**
      * 计划文本：列头 + 行 + 截断提示（截断标记来自 [McpExplainFormatter.RawResult.truncated]，
