@@ -1538,6 +1538,8 @@ class SqlLogPanel(
         group.add(JumpToMapperXmlAction(entry))
         // T-M55-03：方法级聚焦（sourceFile 非空时可用；解析失败 toast 提示，无静默吞没）
         group.add(FocusCallerMethodAction(entry))
+        // T-M55-04：按请求聚焦（requestTag 非空时可用；页签 K 有界防高基数爆列表）
+        group.add(FocusRequestAction(entry))
         val popup = ActionManager.getInstance().createActionPopupMenu("mpvs.log.list", group)
         // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
         popup.setTargetComponent(list)
@@ -1658,6 +1660,24 @@ class SqlLogPanel(
                 return
             }
             addFocusTab(tab)
+        }
+    }
+
+    /**
+     * T-M55-04：按请求聚焦——requestTag 非空的条目右键即产生请求页签（同一次请求的多条 SQL
+     * 共享同值，页签内呈现扁平时间序）。页签 K 有界（[addRequestTab] 超限挤掉最早请求页签，
+     * 防长压测会话 requestTag 高基数爆页签栏）；无请求标签条目在请求聚焦下隐藏 + 计数提示
+     * （与 03 方法聚焦同策略）。「最近 K 个请求标签下拉」的独立入口不另做——右键任意
+     * 同标签条目等价可达，计划内「或」二选一取轻。
+     */
+    private inner class FocusRequestAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.focusRequest")
+            e.presentation.isEnabled = !entry.requestTag.isNullOrBlank()
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            entry.requestTag?.takeIf { it.isNotBlank() }?.let { addFocusTab(FocusTab.Request(it)) }
         }
     }
 

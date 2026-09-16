@@ -53,12 +53,13 @@ internal const val FOCUS_REQUEST_TAB_MAX = 8
 
 /**
  * 新增请求页签的准入（纯函数）：去重、K 有界——超限挤掉最早的请求页签（method 页签不受影响，
- * 用户显式聚焦的操作方法不被自动页签顶掉），返回收缩后的页签列表。
+ * 用户显式聚焦的操作方法不被自动页签顶掉），返回收缩后的**新**列表（调用方 clear+addAll 回写，
+ * 不得原样返回入参可变列表——别名回写会自清空）。
  */
 internal fun addRequestTab(tabs: List<FocusTab>, requestTag: String): List<FocusTab> {
     val tag = requestTag.trim()
-    if (tag.isEmpty()) return tabs
-    if (tabs.any { it is FocusTab.Request && it.requestTag == tag }) return tabs
+    if (tag.isEmpty()) return tabs.toList()
+    if (tabs.any { it is FocusTab.Request && it.requestTag == tag }) return tabs.toList()
     val requestTabs = tabs.filterIsInstance<FocusTab.Request>()
     val others = tabs.filter { it !is FocusTab.Request }
     val next = requestTabs + FocusTab.Request(tag)
