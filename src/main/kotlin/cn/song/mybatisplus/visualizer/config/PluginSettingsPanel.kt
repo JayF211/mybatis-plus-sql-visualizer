@@ -584,22 +584,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     text = MpSqlVisualizerBundle.message("settings.log.showDuration")
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.showDuration.tip")
                 })
-                // M56 T-M56-08：增强捕获独立小节（捕获通道设置收尾，远离参数前缀/监听开关区）
-                addRow(p, g, "", enhancedCaptureCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.enhancedCapture")
-                    addActionListener {
-                        if (isSelected && !PluginSettings.getInstance().state.enhancedCaptureConfirmed) {
-                            // T-M56-08：首次启用弹注入确认（确认记忆持久化，重开不弹）
-                            if (EnhancedCaptureConfirmDialog.confirm(null)) {
-                                PluginSettings.getInstance().state.enhancedCaptureConfirmed = true
-                            } else {
-                                isSelected = false
-                            }
-                        }
-                    }
-                })
-                addRow(p, g, "", enhancedDesensitizeCheck.apply { text = MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize") })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.enhancedCapture.status"), enhancedStatusLabel)
             }
 
             // T-DisplayModeToSettings：SQL 列表显示模式（SQL 日志 + SQL 历史 两列表共享一键，设置页唯一入口）
@@ -709,6 +693,22 @@ class PluginSettingsPanel @JvmOverloads constructor(
                         }
                     }
                 })
+                // M56 T-M56-08：增强捕获设置（捕获通道类设置与源码位置捕获同组）
+                addRow(p, g, "", enhancedCaptureCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.enhancedCapture")
+                    addActionListener {
+                        if (isSelected && !PluginSettings.getInstance().state.enhancedCaptureConfirmed) {
+                            // T-M56-08：首次启用弹注入确认（确认记忆持久化，重开不弹）
+                            if (EnhancedCaptureConfirmDialog.confirm(null)) {
+                                PluginSettings.getInstance().state.enhancedCaptureConfirmed = true
+                            } else {
+                                isSelected = false
+                            }
+                        }
+                    }
+                })
+                addRow(p, g, "", enhancedDesensitizeCheck.apply { text = MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize") })
+                addRow(p, g, "", enhancedStatusLabel)
             }
         }
 
