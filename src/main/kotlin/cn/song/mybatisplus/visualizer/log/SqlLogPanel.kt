@@ -1316,6 +1316,8 @@ class SqlLogPanel(
         data object NoSource : LogJumpTarget()
         data class NotFound(val sourceFile: String) : LogJumpTarget()
         data object MissingSource : LogJumpTarget()
+        /** T-M55-01：mapper XML 语句节点（mapperStatement 定位成功才有意义，失败回退 Java 不劣化）。 */
+        data class MapperXml(val virtualFile: VirtualFile, val line: Int) : LogJumpTarget()
     }
 
     /** 统一解析跳转目标：仅依赖捕获位置，不做任何启发式定位。 */
@@ -1348,6 +1350,17 @@ class SqlLogPanel(
         return null
     }
 
+    /**
+     * T-M55-01：XML 目标解析——mapperStatement 非空且 [MapperXmlLocator] 定位成功时返回
+     * [LogJumpTarget.MapperXml]；statementId 缺失 / MP 内置语句 XML 不存在 / 多模块定位失败
+     * 一律返回 null（调用方回退 Java 跳转，不劣化）。定位自带 ReadAction，EDT 直调安全。
+     */
+    internal fun resolveEntryXmlJump(entry: LogSqlEntry): LogJumpTarget.MapperXml? {
+        val statementId = entry.mapperStatement?.takeIf { it.isNotBlank() } ?: return null
+        val location = MapperXmlLocator.locate(project, statementId) ?: return null
+        return LogJumpTarget.MapperXml(location.virtualFile, location.line)
+    }
+
     /** 等价右键「跳转到源码」（供 UI 测试断言精确跳转分支，避 headless 弹窗）。 */
     internal fun jumpToSourceForTest(entry: LogSqlEntry) = jumpToSource(entry)
 
@@ -1358,6 +1371,9 @@ class SqlLogPanel(
     private fun jumpToSource(entry: LogSqlEntry) {
         when (val target = resolveEntryJump(entry)) {
             is LogJumpTarget.Precise ->
+                OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
+            // resolveEntryJump 不产出该分支（XML 目标走 resolveEntryXmlJump/JumpToMapperXmlAction）；防御性导航
+            is LogJumpTarget.MapperXml ->
                 OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
             is LogJumpTarget.NoSource ->
                 showJumpToast(MpSqlVisualizerBundle.message("log.panel.jumpToSource.noSource"))
@@ -1425,8 +1441,9 @@ class SqlLogPanel(
         group.add(SendToSqlToJavaAction(entry))
         // T-M38：发送到日志转 SQL（第二 tab）——条目渲染回日志文本并立即转换
         group.add(SendToLogToSqlAction(entry))
-        // O-1：日志 ↔ 源码关联跳转（Phase A）
+        // O-1：日志 ↔ 源码关联跳转（Phase A）；T-M55-01：拆「跳转到 Java」「跳转到 XML」双目标
         group.add(JumpToSourceAction(entry))
+        group.add(JumpToMapperXmlAction(entry))
         val popup = ActionManager.getInstance().createActionPopupMenu("mpvs.log.list", group)
         // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
         popup.setTargetComponent(list)
@@ -1495,14 +1512,35 @@ class SqlLogPanel(
         }
     }
 
-    /** 跳转到源码（无位置→引导捕获弹窗，无提示/文件丢失→toast——原 jumpToSource 分支原样复用）。 */
+    /** 跳转到 Java 调用方（T-M55-01：与「跳转到 XML」拆分为双目标；无位置→引导捕获弹窗，无提示/文件丢失→toast）。 */
     private inner class JumpToSourceAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.jumpToSource")
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.jumpToJava")
         }
 
         override fun actionPerformed(e: AnActionEvent) {
             jumpToSource(entry)
+        }
+    }
+
+    /**
+     * T-M55-01：跳转到 mapper XML 语句节点。mapperStatement 非空且定位成功才显示
+     * （update 内解析一次并存引用，actionPerformed 复用，单次右键只做一次索引查询）；
+     * 定位失败（XML 不存在/多模块未命中）不显示，原有「跳转到 Java」承担回退，不劣化。
+     */
+    private inner class JumpToMapperXmlAction(private val entry: LogSqlEntry) : AnAction() {
+        private var resolved: LogJumpTarget.MapperXml? = null
+
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.jumpToXml")
+            resolved = resolveEntryXmlJump(entry)
+            e.presentation.isEnabledAndVisible = resolved != null
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            // update 已解析成功才可见可点；防御再解析一次（menu 会话内基本命中缓存外的同结果）
+            val target = resolved ?: resolveEntryXmlJump(entry) ?: return
+            OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
         }
     }
 

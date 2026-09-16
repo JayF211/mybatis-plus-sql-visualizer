@@ -492,6 +492,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         val timestampClip = batchCopyTimestamps(selectedEntries)
         group.add(CopyTimestampAction(selectedEntries, timestampClip))
         group.add(JumpToSourceAction(entry))
+        // T-M55-01：拆「跳转到 XML」双目标（与日志页同套）
+        group.add(JumpToMapperXmlAction(entry))
         val popup = ActionManager.getInstance().createActionPopupMenu("mpvs.history.sql", group)
         // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
         popup.setTargetComponent(sqlList)
@@ -525,14 +527,35 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         }
     }
 
+    /** 跳转到 Java 调用方（T-M55-01：与「跳转到 XML」拆分为双目标，与日志页同套）。 */
     private inner class JumpToSourceAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.Actions.EditSource
-            e.presentation.text = MpSqlVisualizerBundle.message("log.history.jumpToSource")
+            e.presentation.text = MpSqlVisualizerBundle.message("log.history.jumpToJava")
         }
 
         override fun actionPerformed(e: AnActionEvent) {
             jumpToSource(entry)
+        }
+    }
+
+    /**
+     * T-M55-01：跳转到 mapper XML 语句节点。mapperStatement 非空且定位成功才显示
+     * （update 内解析一次并存引用）；定位失败不显示，「跳转到 Java」承担回退，不劣化。
+     */
+    private inner class JumpToMapperXmlAction(private val entry: LogSqlEntry) : AnAction() {
+        private var resolved: HistoryJumpTarget.MapperXml? = null
+
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.FileTypes.Xml
+            e.presentation.text = MpSqlVisualizerBundle.message("log.history.jumpToXml")
+            resolved = resolveXmlJumpTarget(entry)
+            e.presentation.isEnabledAndVisible = resolved != null
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            val target = resolved ?: resolveXmlJumpTarget(entry) ?: return
+            OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
         }
     }
 
@@ -548,6 +571,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         data class Navigate(val virtualFile: com.intellij.openapi.vfs.VirtualFile, val line: Int) : HistoryJumpTarget()
         data object NoSource : HistoryJumpTarget()
         data class NotFound(val sourceFile: String) : HistoryJumpTarget()
+        /** T-M55-01：mapper XML 语句节点（mapperStatement 定位成功才有意义，失败回退 Java 不劣化）。 */
+        data class MapperXml(val virtualFile: com.intellij.openapi.vfs.VirtualFile, val line: Int) : HistoryJumpTarget()
     }
 
     /** 解析跳转目标（与 [jumpToSource] 共用；测试驱动直接断言分支，不触发弹窗）。 */
@@ -559,6 +584,16 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             return HistoryJumpTarget.Navigate(virtualFile, maxOf(0, entry.sourceLine - 1))
         }
         return HistoryJumpTarget.NotFound(entry.sourceFile)
+    }
+
+    /**
+     * T-M55-01：XML 目标解析——与日志页 [SqlLogPanel.resolveEntryXmlJump] 同语义。
+     * mapperStatement 非空且 [MapperXmlLocator] 定位成功才返回；否则 null（回退 Java，不劣化）。
+     */
+    internal fun resolveXmlJumpTarget(entry: LogSqlEntry): HistoryJumpTarget.MapperXml? {
+        val statementId = entry.mapperStatement?.takeIf { it.isNotBlank() } ?: return null
+        val location = MapperXmlLocator.locate(project, statementId) ?: return null
+        return HistoryJumpTarget.MapperXml(location.virtualFile, location.line)
     }
 
     /**
@@ -593,6 +628,10 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
                 }
             }
             is HistoryJumpTarget.Navigate -> {
+                OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
+            }
+            // resolveJumpTarget 不产出该分支（XML 目标走 resolveXmlJumpTarget/JumpToMapperXmlAction）；防御性导航
+            is HistoryJumpTarget.MapperXml -> {
                 OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
             }
         }
