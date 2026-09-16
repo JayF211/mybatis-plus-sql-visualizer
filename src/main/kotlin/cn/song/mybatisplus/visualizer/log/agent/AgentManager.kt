@@ -1,9 +1,13 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.log.LogSqlEntry
 import cn.song.mybatisplus.visualizer.log.LogTimeCorrelator
 import cn.song.mybatisplus.visualizer.log.SqlCaptureGate
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
+import cn.song.mybatisplus.visualizer.log.logTimeKey
+import cn.song.mybatisplus.visualizer.log.logTimeParamSignature
+import cn.song.mybatisplus.visualizer.log.stampLogTime
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
@@ -390,6 +394,9 @@ internal class AgentSession(
     private val output = java.io.DataOutputStream(socket.getOutputStream())
     private val eventDropped = AtomicLong()
 
+    /** T-AgentLogTime：日志时间未命中计数（诊断——键不等 vs 时序赶不上，真机排障一眼分辨）。 */
+    private val timeMiss = AtomicLong()
+
     init {
         socket.soTimeout = 0
         Thread({
@@ -427,11 +434,10 @@ internal class AgentSession(
                 }
                 try {
                     val entry = AgentEventAdapter.toEntry(event)
-                    // T-AgentDialectLoop：接管期间控制台嗅探暂存的「日志行原始时间」按同指纹回填
-                    // （未命中保持 null——显示回落捕获时间，与既有语义一致）
-                    val stamped = if (entry.logTimestamp != null) entry
-                    else LogTimeCorrelator.take(entry.dedupeKey)?.let { entry.copy(logTimestamp = it) } ?: entry
-                    project.getService(SqlLogManager::class.java).entries.addEntry(stamped)
+                    // T-AgentDialectLoop / T-AgentLogTime：接管期间控制台嗅探暂存的「日志行原始时间」
+                    // 按 [logTimeKey]（占位符版 SQL 指纹）取回，参数值序列作次级判别（[stampLogTime]）。
+                    // 未命中回落捕获时间（= execute 开始时刻，与日志行只差毫秒级）并留痕 [logTimeMiss]。
+                    project.getService(SqlLogManager::class.java).entries.addEntry(stampLogTime(entry) ?: logTimeMiss(entry))
                 } catch (t: Throwable) {
                     LOG.warn("EVENT 入队失败（不斩断流）", t)
                 }
@@ -439,6 +445,24 @@ internal class AgentSession(
             // HEARTBEAT/HELLO：lastSeen 已刷新；未知命令忽略（协议向前兼容）
             else -> Unit
         }
+    }
+
+    /**
+     * T-AgentLogTime：日志时间未命中留痕——前 [MISS_LOG_LIMIT] 条逐条打印键与 SQL 头部
+     * （判「两侧 rawSql 不等」），其后每 [MISS_LOG_STEP] 条打一次累计（判「时序赶不上」）。
+     * 未命中只影响时间字段（回落 execute 开始时刻），不影响条目本身，故只记日志不动流程。
+     */
+    private fun logTimeMiss(entry: LogSqlEntry): LogSqlEntry {
+        val n = timeMiss.incrementAndGet()
+        if (n <= MISS_LOG_LIMIT) {
+            LOG.info(
+                "日志时间未命中 #$n（回落捕获时间）：key=${logTimeKey(entry)} " +
+                    "params=${logTimeParamSignature(entry.params).take(60)} sql=${entry.rawSql.take(80)}",
+            )
+        } else if (n % MISS_LOG_STEP == 0L) {
+            LOG.info("日志时间未命中累计 $n 条（最近：key=${logTimeKey(entry)} 相关器存量=${LogTimeCorrelator.size()}）")
+        }
+        return entry
     }
 
     fun sendConfig(disabled: Boolean, desensitize: Boolean =
@@ -461,5 +485,13 @@ internal class AgentSession(
         alive = false
         runCatching { socket.close() }
         onStateChange()
+    }
+
+    private companion object {
+        /** 未命中逐条打印上限（前 N 条够看清两侧 rawSql 差异）。 */
+        const val MISS_LOG_LIMIT = 3L
+
+        /** 逐条打印用尽后的累计打印步长。 */
+        const val MISS_LOG_STEP = 200L
     }
 }

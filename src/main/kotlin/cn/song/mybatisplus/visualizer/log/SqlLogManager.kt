@@ -508,8 +508,6 @@ class SqlLogManager(private val project: Project) : Disposable {
             hibernateParamPrefix = state.logHibernateParamPrefix,
             hibernateEnabled = state.logHibernateEnabled,
             jdbcEnabled = state.logJdbcEnabled,
-            // T-AgentDialectLoop：增强接管期间的日志时间嗅探开关——仅当时间显示开且源=日志时才有意义
-            sniffLogTime = state.logTimestampEnabled && state.logTimestampSource == PluginSettings.LOG_TIMESTAMP_SOURCE_LOG,
         )
     }
 
@@ -561,6 +559,4 @@ data class ParserConfig(
     val hibernateEnabled: Boolean = true,
     // JdbcTemplate 解析器配置（M47）
     val jdbcEnabled: Boolean = true,
-    // T-AgentDialectLoop：增强接管期间日志时间嗅探（LogTimeCorrelator）开关快照
-    val sniffLogTime: Boolean = true,
 )

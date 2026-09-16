@@ -167,6 +167,38 @@ internal fun normalizeSqlWhitespace(sql: String): String =
     sql.trim().replace(Regex("""\s+"""), " ")
 
 /**
+ * T-AgentLogTime：日志时间关联键——**占位符版 rawSql 的指纹**。
+ *
+ * 增强通道的 logTimestamp 是派生的（控制台链嗅探暂存 → agent 事件取回），关联键必须两侧同源：
+ * 控制台侧 rawSql = `Preparing:` 行原文，agent 侧 rawSql = `prepareStatement` 收到的原文，
+ * 二者都不经过参数还原。旧口径用 [LogSqlEntry.dedupeKey]（还原后 SQL 指纹）要求两套还原器
+ * 逐字符一致，布尔参数渲染、注释内 `?` 计数、参数个数守卫三类分叉都会静默失配。
+ *
+ * 与 [LogSqlEntry.dedupeKey] 的分工：dedupeKey 管面板去重（跨通道同 SQL 折叠，语义不动），
+ * 本键只管日志时间配对——错位替换防护（agent 侧「占位符数 ≠ 参数数就不还原」）因此得以保留。
+ */
+internal fun logTimeKey(entry: LogSqlEntry): String = sqlFingerprint(normalizeSqlWhitespace(entry.rawSql))
+
+/**
+ * T-AgentLogTime：日志时间配对的次级判别——参数**值**序列签名。
+ * 同键（同一条 SQL 多次执行）时用它挑参数一致的那条；两侧渲染口径若分叉则退化为队首配对
+ * （近似但不错失），故不做强制相等断言。无参语句两侧都是空串，天然相等。
+ */
+internal fun logTimeParamSignature(params: List<LogSqlParam>): String =
+    params.joinToString("\u0001") { it.value ?: "\u0000" }
+
+/**
+ * T-AgentLogTime：给 agent 条目回填控制台嗅探到的日志时间；未命中返回 null
+ * （调用方回落 [LogSqlEntry.timestamp] 并留痕）。
+ *
+ * 增强通道回填的唯一入口——生产路径（`AgentManager.AgentSession`）与跨通道守卫测试都走它，
+ * 避免测试另抄一份「取键 + take」逻辑而自证（T-AgentDialectLoop 的教训：两侧各自绿、集成不通）。
+ */
+internal fun stampLogTime(entry: LogSqlEntry): LogSqlEntry? =
+    LogTimeCorrelator.take(logTimeKey(entry), logTimeParamSignature(entry.params))
+        ?.let { entry.copy(logTimestamp = it) }
+
+/**
  * 单个日志参数：值 + 类型标注。
  *
  * @param value 参数值文本（MyBatis 打印形态，如 `abc`、`1`、`2025-01-01 12:00:00.0`）；null 表示 `null` 字面量

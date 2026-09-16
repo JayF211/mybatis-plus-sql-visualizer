@@ -8,12 +8,17 @@ import org.junit.Test
 import java.text.SimpleDateFormat
 
 /**
- * T-AgentDialectLoop 嗅探模式测试：增强接管（[SqlCaptureGate.paused]=true）期间，
- * [processConsoleLine] 不产出条目，但把「指纹 → 日志行原始时间」暂存 [LogTimeCorrelator]；
- * agent 事件侧以同指纹取回（agent/桥两通道同 SQL 同指纹为 M56 T-M56-02 既定口径）。
+ * T-AgentDialectLoop / T-AgentLogTime 嗅探态测试：增强接管（[SqlCaptureGate.paused]=true）期间，
+ * [processConsoleLine] 不产出条目，但把「[logTimeKey] → 日志行原始时间」暂存 [LogTimeCorrelator]；
+ * agent 事件侧以同键取回（[stampLogTime]；跨通道端到端守卫见 `AgentLogTimeParityTest`）。
  * 纯逻辑测试，不依赖 IDE 环境；全局态（paused/相关器）随用例收尾还原。
  */
 class SqlCaptureGateSniffTest {
+
+    private val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS")
+
+    /** 日志行时间取「当前时刻往前 500ms」——与墙钟同源，不依赖相关器时间窗规则。 */
+    private fun recentLineTime(): String = sdf.format(java.util.Date(System.currentTimeMillis() - 500))
 
     @After
     fun tearDown() {
@@ -21,8 +26,8 @@ class SqlCaptureGateSniffTest {
         LogTimeCorrelator.clear()
     }
 
-    private fun newCtx(sniff: Boolean = true): BridgeLineContext {
-        val cfg = ParserConfig("Preparing:", "Parameters:", true, 20000, sniffLogTime = sniff)
+    private fun newCtx(): BridgeLineContext {
+        val cfg = ParserConfig("Preparing:", "Parameters:", true, 20000)
         return BridgeLineContext(
             myBatisParser = MyBatisLogParser(
                 sqlPrefix = cfg.sqlPrefix,
@@ -39,43 +44,34 @@ class SqlCaptureGateSniffTest {
             jdbcParser = JdbcTemplateLogParser(enabled = cfg.jdbcEnabled, maxParseLength = cfg.maxParseLength),
             configProvider = { cfg },
             hibernateEnabled = cfg.hibernateEnabled,
-            sniffLogTime = cfg.sniffLogTime,
         )
     }
+
+    /** 期望键：与嗅探侧同源（占位符版 SQL 指纹），由 [logTimeKey] 唯一口径产出。 */
+    private fun keyOf(rawSql: String): String = logTimeKey(
+        LogSqlEntry(rawSql = rawSql, restoredSql = rawSql, params = emptyList(), source = SqlSource.MYBATIS),
+    )
 
     @Test
     fun `嗅探态_零条目产出_日志时间进相关器`() {
         SqlCaptureGate.paused.set(true)
         val ctx = newCtx()
+        val ts = recentLineTime()
         val entries = listOf(
-            "2026-09-16 10:30:45.123 [main] ==>  Preparing: SELECT * FROM user WHERE id = 1",
-            "2026-09-16 10:30:45.124 [main] ==>  Parameters: 1(Long)",
+            "$ts [main] ==>  Preparing: SELECT * FROM user WHERE id = ?",
+            "$ts [main] ==>  Parameters: 1(Long)",
         ).flatMap { processConsoleLine(it, ctx, null) {} }
         assertTrue("接管期间控制台链不产出条目", entries.isEmpty())
         assertEquals(1, LogTimeCorrelator.size())
-        // agent 事件侧回填用同构指纹（restoredSql 归一化后 FNV-1a）
-        val fp = sqlFingerprint(normalizeSqlWhitespace("SELECT * FROM user WHERE id = 1"))
-        val ts = LogTimeCorrelator.take(fp)!!
-        val expected = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").parse("2026-09-16 10:30:45.123").time
-        assertEquals("回填的是日志行原始时间（Preparing 行）", expected, ts)
-    }
-
-    @Test
-    fun `嗅探开关关闭_完全旁路`() {
-        SqlCaptureGate.paused.set(true)
-        val ctx = newCtx(sniff = false)
-        listOf(
-            "2026-09-16 10:30:45.123 [main] ==>  Preparing: SELECT * FROM user WHERE id = 1",
-            "2026-09-16 10:30:45.124 [main] ==>  Parameters: 1(Long)",
-        ).forEach { processConsoleLine(it, ctx, null) {} }
-        assertEquals("时间显示关/时间源=捕获时零成本", 0, LogTimeCorrelator.size())
+        val got = LogTimeCorrelator.take(keyOf("SELECT * FROM user WHERE id = ?"))!!
+        assertEquals("回填的是日志行原始时间（Preparing 行）", sdf.parse(ts).time, got)
     }
 
     @Test
     fun `未接管时正常产出条目_不写相关器`() {
         val ctx = newCtx()
         val entries = listOf(
-            "==>  Preparing: SELECT * FROM user WHERE id = 1",
+            "==>  Preparing: SELECT * FROM user WHERE id = ?",
             "==>  Parameters: 1(Long)",
         ).flatMap { processConsoleLine(it, ctx, null) {} }
         assertEquals("回落态控制台链照常捕获", 1, entries.size)
@@ -87,11 +83,10 @@ class SqlCaptureGateSniffTest {
         SqlCaptureGate.paused.set(true)
         val ctx = newCtx()
         listOf(
-            "==>  Preparing: SELECT * FROM t WHERE id = 9",
+            "==>  Preparing: SELECT * FROM t WHERE id = ?",
             "==>  Parameters: 9(Long)",
         ).forEach { processConsoleLine(it, ctx, null) {} }
-        val fp = sqlFingerprint(normalizeSqlWhitespace("SELECT * FROM t WHERE id = 9"))
-        val ts = LogTimeCorrelator.take(fp)
+        val ts = LogTimeCorrelator.take(keyOf("SELECT * FROM t WHERE id = ?"))
         assertTrue("未解析到时间戳时回落条目捕获时间（>0）", ts != null && ts > 0)
     }
 
@@ -99,6 +94,6 @@ class SqlCaptureGateSniffTest {
     fun `take未命中返回null_回落捕获时间语义`() {
         SqlCaptureGate.paused.set(true)
         LogTimeCorrelator.clear()
-        assertNull(LogTimeCorrelator.take(sqlFingerprint(normalizeSqlWhitespace("SELECT 1"))))
+        assertNull(LogTimeCorrelator.take(keyOf("SELECT 1")))
     }
 }

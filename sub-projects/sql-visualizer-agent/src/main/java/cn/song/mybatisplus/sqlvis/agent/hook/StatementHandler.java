@@ -85,6 +85,10 @@ final class StatementHandler implements InvocationHandler {
             sql = batchSqls.toString();
         }
         final long startNanos = System.nanoTime();
+        // T-AgentLogTime：采集时刻取 execute **开始**那一刻（与 nanoTime 同点）——日志时间相关器
+        // 未命中时回落的「捕获时间」即语句开始执行时刻，与 MyBatis 打印的 Preparing 日志行
+        // （打印于 execute 之前）只差毫秒级；若取在 finally（旧写法），回落值会晚一个执行耗时。
+        final long startMillis = System.currentTimeMillis();
         Object result = null;
         Throwable failure = null;
         try {
@@ -95,7 +99,7 @@ final class StatementHandler implements InvocationHandler {
         } finally {
             final long durationNanos = System.nanoTime() - startNanos;
             try {
-                emitEvent(name, sql, result, failure, durationNanos);
+                emitEvent(name, sql, result, failure, durationNanos, startMillis);
             } catch (Throwable ignore) {
                 // 事件构造/发送失败不影响执行结果
             }
@@ -103,7 +107,8 @@ final class StatementHandler implements InvocationHandler {
         return result;
     }
 
-    private void emitEvent(String op, String sql, Object result, Throwable failure, long durationNanos) {
+    private void emitEvent(String op, String sql, Object result, Throwable failure, long durationNanos,
+                           long startMillis) {
         if (AgentState.isDisabled() || sql == null || sql.isEmpty()) {
             return;
         }
@@ -119,7 +124,7 @@ final class StatementHandler implements InvocationHandler {
         Long updateCount = EventBuilder.extractUpdateCount(op, result, raw);
         SqlEvent event = new SqlEvent();
         event.sql = sql;
-        event.timestamp = System.currentTimeMillis();
+        event.timestamp = startMillis;
         event.durationNanos = durationNanos;
         event.updateCount = updateCount;
         event.errorText = failure == null ? null

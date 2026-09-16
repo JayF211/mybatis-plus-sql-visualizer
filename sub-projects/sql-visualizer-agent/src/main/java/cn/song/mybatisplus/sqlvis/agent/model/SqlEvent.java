@@ -10,7 +10,7 @@ public final class SqlEvent {
 
     /** SQL 文本（PreparedStatement 为 prepare 时的 SQL，Statement 为 execute 参数，批为拼接）。 */
     public String sql;
-    /** 采集时间戳（毫秒）。 */
+    /** 采集时间戳（毫秒）：execute **开始**那一刻（T-AgentLogTime——面板回落值与日志行对齐）。 */
     public long timestamp;
     /** 精确耗时（nanoTime，§4.2 #5——毫秒级 currentTimeMillis 是两竞品共同坑）。 */
     public long durationNanos;

@@ -51,7 +51,6 @@ class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFil
             ),
             configProvider = { parserConfig() },
             hibernateEnabled = parserConfig().hibernateEnabled,
-            sniffLogTime = parserConfig().sniffLogTime,
         )
 
         private fun parserConfig(): ParserConfig {
@@ -65,7 +64,6 @@ class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFil
                 hibernateParamPrefix = state.logHibernateParamPrefix,
                 hibernateEnabled = state.logHibernateEnabled,
                 jdbcEnabled = state.logJdbcEnabled,
-                sniffLogTime = state.logTimestampEnabled && state.logTimestampSource == PluginSettings.LOG_TIMESTAMP_SOURCE_LOG,
             )
         }
 

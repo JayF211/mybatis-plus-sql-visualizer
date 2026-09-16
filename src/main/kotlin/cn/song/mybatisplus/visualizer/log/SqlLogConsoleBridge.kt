@@ -318,7 +318,6 @@ open class SqlLogConsoleBridge(
                     jdbcParser = JdbcTemplateLogParser(enabled = cfg0.jdbcEnabled, maxParseLength = cfg0.maxParseLength),
                     configProvider = parserConfig,
                     hibernateEnabled = cfg0.hibernateEnabled,
-                    sniffLogTime = cfg0.sniffLogTime,
                 )
                 consoleContexts[console] = ctx
                 // T-PreviewFlash：反射缓存 console.getEditor()（ConsoleView.getEditor 为 public）。
@@ -434,7 +433,6 @@ open class SqlLogConsoleBridge(
         ctx.jdbcParser.enabled = cfg.jdbcEnabled
         ctx.jdbcParser.maxParseLength = cfg.maxParseLength
         ctx.hibernateEnabled = cfg.hibernateEnabled
-        ctx.sniffLogTime = cfg.sniffLogTime
     }
 
     /**
@@ -615,9 +613,6 @@ internal class BridgeLineContext(
     var pendingSource: SourceMarkerData? = null,
     /** Hibernate 喂行开关（快照同步自 ParserConfig.hibernateEnabled）。 */
     var hibernateEnabled: Boolean = true,
-    /** T-AgentDialectLoop：增强接管期间日志时间嗅探开关（快照同步自 ParserConfig.sniffLogTime）。 */
-    @Volatile
-    var sniffLogTime: Boolean = true,
 ) {
     /** T-PreviewFlash：重放守卫（每 console 独立；editor 不可得时降级为恒 Process）。 */
     val replayGuard: ConsoleReplayGuard = ConsoleReplayGuard()
@@ -671,11 +666,12 @@ internal fun processConsoleLine(
     syncBufferConfig: () -> Unit,
 ): List<LogSqlEntry> {
     // M56 T-M56-02：增强接管闸门——agent 在线时桥不产出条目，回落即恢复。
-    // T-AgentDialectLoop：接管期间转入日志时间嗅探——把行喂给既有解析器提取「日志行原始时间」
-    // 暂存 LogTimeCorrelator（键=去重指纹，与 agent 事件同构），agent 事件入队前取回回填，
-    // 面板「日志时间」在增强模式下不丢失。开关关（时间显示关/时间源=捕获）时完全旁路零成本。
+    // T-AgentDialectLoop / T-AgentLogTime：接管期间无条件转入日志时间嗅探——把行喂给既有解析器
+    // 提取「日志行原始时间」暂存 LogTimeCorrelator（键=占位符版 SQL 指纹），agent 事件入队前
+    // 取回回填，面板「日志时间」在增强模式下不丢失。日志时间是**数据**：采集不再受「时间显示开
+    // 关/时间源」这类渲染偏好控制（关掉显示只影响渲染，不影响条目字段），故此处零开关判断。
     if (SqlCaptureGate.paused.get()) {
-        if (ctx.sniffLogTime) sniffLogTimestamp(line, ctx)
+        sniffLogTimestamp(line, ctx)
         return emptyList()
     }
     // 1) 实时源码标记 → 暂存（不喂解析器，避免被当成 SQL）
@@ -724,8 +720,9 @@ internal fun processConsoleLine(
 }
 
 /**
- * T-AgentDialectLoop：增强接管期间的日志时间嗅探——复用既有三解析器的配对/时间解析
- * （零新解析逻辑），产出的条目不进面板、仅把「指纹 → 日志时间」暂存 [LogTimeCorrelator]。
+ * T-AgentDialectLoop / T-AgentLogTime：增强接管期间的日志时间嗅探——复用既有三解析器的配对/时间解析
+ * （零新解析逻辑），产出的条目不进面板、仅把「[logTimeKey] → 日志时间」暂存 [LogTimeCorrelator]
+ * （参数值序列作次级判别签名）。
  * 成本口径：每行 3 次 contains 门控（解析器既有门），每条 SQL 一次条目构造 + 指纹，
  * 条目即弃零驻留；源码标记行跳过（条目已弃，无需归属）。
  */
@@ -735,7 +732,7 @@ private fun sniffLogTimestamp(line: String, ctx: BridgeLineContext) {
     ctx.jdbcParser.feed(line)
     val taken = ctx.myBatisParser.takeEntries() + ctx.hibernateParser.takeEntries() + ctx.jdbcParser.takeEntries()
     for (e in taken) {
-        LogTimeCorrelator.put(e.dedupeKey, e.logTimestamp ?: e.timestamp)
+        LogTimeCorrelator.put(logTimeKey(e), e.logTimestamp ?: e.timestamp, logTimeParamSignature(e.params))
     }
 }
 

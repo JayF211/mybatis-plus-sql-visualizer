@@ -136,6 +136,10 @@ class AgentEventAdapterTest {
 
     @Test
     fun dedupeKey与桥通道一致_同一SQL同指纹() {
+        // 口径：dedupeKey 只管面板去重（两侧**手写同一 restoredSql** 时同指纹）。
+        // 注意本用例不是「跨通道集成」守卫——它不经过控制台解析链，故过去的失配（布尔参数渲染、
+        // 注释内 `?`、参数个数守卫）它一概发现不了；日志时间配对的真实守卫见
+        // `AgentLogTimeParityTest`（T-AgentLogTime 立，键已与 dedupeKey 解耦）。
         // agent 通道条目
         val agentEntry = AgentEventAdapter.toEntry(event("SELECT * FROM user WHERE id = 42"))
         // 桥通道同 SQL 条目（restoredSql 相同）
