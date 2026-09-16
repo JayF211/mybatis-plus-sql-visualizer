@@ -1104,8 +1104,9 @@ class SqlLogPanel(
         val gen = ++refreshGeneration
         val snapshot = manager.entries.snapshot()
 
-        // 检测是否含耗时信息（决定是否显示排序按钮）
-        hasAnyDurationInfo = snapshot.any { LogDurationParser.hasDurationInfo(it) }
+        // 检测是否含耗时信息（决定是否显示排序按钮）——结构化字段与文本解析任一命中即显示
+        // （agent 通道耗时为结构化 executionTimeMs，仅看文本解析会让按钮恒隐藏）
+        hasAnyDurationInfo = snapshot.any { durationOf(it) != null }
 
         // 去重丢弃计数快照（徽章渲染数据源）：徽章在元信息行渲染时直读，无缓存失效链
         dedupeCounts = manager.entries.dedupeCountsSnapshot()
@@ -1197,8 +1198,13 @@ class SqlLogPanel(
     /** 按当前排序模式排序条目。 */
     private fun applySort(entries: List<LogSqlEntry>): List<LogSqlEntry> = when (sortMode) {
         SortMode.NONE -> entries
-        SortMode.DURATION_DESC -> entries.sortedByDescending { LogDurationParser.parse(it) ?: -1L }
+        // 耗时取值：结构化字段优先（agent 通道直采），文本解析兜底（控制台通道 p6spy/druid 行）
+        SortMode.DURATION_DESC -> entries.sortedByDescending { durationOf(it) ?: -1L }
     }
+
+    /** 条目耗时（毫秒）：结构化 executionTimeMs 优先，缺失时回退日志文本解析。 */
+    private fun durationOf(entry: LogSqlEntry): Long? =
+        entry.executionTimeMs ?: LogDurationParser.parse(entry)
 
     /** 更新耗时排序按钮可见性 + 文案 + 选中态。 */
     private fun updateSortButton() {
@@ -1613,12 +1619,7 @@ internal fun formatDurationFragment(ms: Long?, isSelected: Boolean): Pair<String
     return "$text " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color)
 }
 
-/** M56 T-M56-02：增强捕获角标（AGENT 来源专属）；非 AGENT 来源返回 null。 */
-internal fun formatAgentBadgeFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
-    if (entry.source != SqlSource.AGENT) return null
-    val color = if (isSelected) Color(0xFFFFFF) else Color(0x7B1FA2)
-    return "[⚡增强] " to SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
-}
+/** M56 T-M56-02：增强捕获角标已按用户要求移除（增强为默认通道，逐行标来源属噪音）。 */
 
 /** T-AgentDialectLoop：目标库角标（agent 通道由连接 URL 推断）；未知返回 null 不显示。 */
 internal fun formatDatabaseFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
@@ -1630,6 +1631,8 @@ internal fun formatDatabaseFragment(entry: LogSqlEntry, isSelected: Boolean): Pa
 /** M56 T-M56-05：影响行数片段（DML 语义；null 未知不显示）。 */
 internal fun formatUpdateCountFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
     val u = entry.updateCount ?: return null
+    // 负值 = 无有效计数（JDBC getUpdateCount 的 -1 语义；旧版 agent 会误报 -1）→ 不显示
+    if (u < 0) return null
     val color = if (isSelected) Color(0xFFFFFF) else Color(0x607D8B)
     return "(${u} rows) " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color)
 }
@@ -1774,8 +1777,7 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
             // T-AgentDialectLoop：目标库角标（耗时后、来源前——与「这条 SQL 跑在哪」的阅读顺序一致）
             formatDatabaseFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
             formatSourceFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
-            // M56 T-M56-02：增强捕获角标（AGENT 来源）；T-M56-05：影响行数与报错同列
-            formatAgentBadgeFragment(entry, isSelected)?.let { (t, a) -> metaLine.append(t, a) }
+            // 注：原「[⚡增强]」来源角标已按用户要求移除（增强为默认捕获通道，逐行标来源属噪音）
             formatUpdateCountFragment(entry, isSelected)?.let { (t, a) -> metaLine.append(t, a) }
             formatErrorFragment(entry)?.let { (t, a) -> metaLine.append(t, a) }
             dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 }?.let { metaLine.append("⨉$it ", LIST_META_GRAY) }

@@ -17,15 +17,19 @@ final class EventBuilder {
     }
 
     /**
-     * 影响行数：executeUpdate/executeLargeUpdate 取返回值；execute(boolean) 为 true 时
+     * 影响行数：executeUpdate/executeLargeUpdate 取返回值；execute(boolean) 为 **false** 时
      * 反射 raw.getUpdateCount()（缓存 Method）；batch 求和（SUCCESS_NO_INFO=-2 跳过）；查询 null。
+     *
+     * <p>JDBC 语义：execute() 返回 true = 首结果为 ResultSet（此时 getUpdateCount() 恒为 -1，
+     * 无意义）；返回 false = 首结果为更新计数（此时 getUpdateCount() 才是真实行数）。
+     * 旧实现条件写成 TRUE 故 SELECT 恒产出 -1 并显示为「(-1 rows)」——本方法同时兜底负值。
      */
     static Long extractUpdateCount(String op, Object result, Object rawStatement) {
         if ("executeUpdate".equals(op) && result instanceof Integer) {
-            return ((Integer) result).longValue();
+            return nonNegative(((Integer) result).longValue());
         }
         if ("executeLargeUpdate".equals(op) && result instanceof Long) {
-            return (Long) result;
+            return nonNegative((Long) result);
         }
         if ("executeBatch".equals(op) && result instanceof int[]) {
             return sumBatch((int[]) result);
@@ -39,19 +43,24 @@ final class EventBuilder {
             }
             return sum;
         }
-        if ("execute".equals(op) && Boolean.TRUE.equals(result)) {
+        if ("execute".equals(op) && Boolean.FALSE.equals(result)) {
             try {
                 Method m = UPDATE_COUNT_METHOD.get();
                 if (m == null) {
                     m = rawStatement.getClass().getMethod("getUpdateCount");
                     UPDATE_COUNT_METHOD.set(m);
                 }
-                return ((Integer) m.invoke(rawStatement)).longValue();
+                return nonNegative(((Integer) m.invoke(rawStatement)).longValue());
             } catch (Throwable ignore) {
                 return null;
             }
         }
         return null;
+    }
+
+    /** 负值 = 无有效计数（JDBC getUpdateCount 的 -1 语义）→ null，不上报垃圾值。 */
+    private static Long nonNegative(long v) {
+        return v >= 0 ? v : null;
     }
 
     private static Long sumBatch(int[] arr) {

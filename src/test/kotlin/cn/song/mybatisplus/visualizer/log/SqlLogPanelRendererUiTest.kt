@@ -413,13 +413,22 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         }
     }
 
-    // ---------- M56 T-M56-02/05：增强角标 / 影响行数 / 报错同列 ----------
+    // ---------- M56 T-M56-02/05：来源角标（已移除）/ 影响行数 / 报错同列 ----------
 
-    fun test增强来源角标仅AGENT来源显示() {
+    fun test增强来源角标已移除_两通道均不显示() {
+        // 用户要求移除：增强为默认捕获通道，逐行标来源属噪音
         val agent = entry("SELECT 1").copy(source = SqlSource.AGENT)
-        assertTrue("AGENT 来源应有增强角标", joinedText(render(agent).metaLine).contains("[⚡增强]"))
+        assertFalse("AGENT 来源不应再显示增强角标", joinedText(render(agent).metaLine).contains("[⚡增强]"))
         val bridge = entry("SELECT 1")
-        assertFalse("桥来源不应有增强角标", joinedText(render(bridge).metaLine).contains("[⚡增强]"))
+        assertFalse("桥来源同样不显示", joinedText(render(bridge).metaLine).contains("[⚡增强]"))
+    }
+
+    fun test影响行数负值不显示_负行数守卫() {
+        // JDBC getUpdateCount 在结果为 ResultSet 时返回 -1（无有效计数）→ 不得渲染「(-1 rows)」
+        val neg = entry("SELECT 1").copy(source = SqlSource.AGENT, updateCount = -1L)
+        assertFalse("负值影响行数应不显示", joinedText(render(neg).metaLine).contains("rows)"))
+        val zero = entry("UPDATE t SET a = 1").copy(source = SqlSource.AGENT, updateCount = 0L)
+        assertTrue("0 行是合法计数，应显示", joinedText(render(zero).metaLine).contains("(0 rows)"))
     }
 
     fun test影响行数与报错片段同列() {

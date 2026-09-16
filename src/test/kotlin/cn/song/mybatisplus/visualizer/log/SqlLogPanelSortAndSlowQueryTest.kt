@@ -84,6 +84,32 @@ class SqlLogPanelSortAndSlowQueryTest : BasePlatformTestCase() {
         }
     }
 
+    fun test增强通道条目_仅结构化耗时_排序按钮可见且按耗时降序() {
+        // agent 通道形态：耗时只在结构化 executionTimeMs，SQL 文本内无耗时（旧实现仅看文本解析
+        // → 按钮恒隐藏且排序取值全空；本用例锁死该回归）
+        val panel = SqlLogPanel(project, manager)
+        try {
+            fun agentEntry(sql: String, ms: Long, ts: Long) = LogSqlEntry(
+                rawSql = sql, restoredSql = sql, params = emptyList(), timestamp = ts,
+                executionTimeMs = ms, source = SqlSource.AGENT,
+            )
+            manager.entries.addEntry(agentEntry("SELECT a FROM t", 12L, 100L))
+            manager.entries.addEntry(agentEntry("SELECT b FROM t", 480L, 200L))
+            manager.entries.addEntry(agentEntry("SELECT c FROM t", 3L, 300L))
+            waitForEdt()
+
+            assertTrue("仅结构化耗时也应显示排序按钮", panel.durationSortLabel.isVisible)
+            panel.durationSortLabel.doClick()
+            waitForEdt()
+            assertEquals("应切到降序", SortMode.DURATION_DESC, panel.currentSortMode)
+            assertEquals("降序首条应为 480ms 的 b", "SELECT b FROM t", panel.visibleEntries[0])
+            assertEquals("降序次条应为 12ms 的 a", "SELECT a FROM t", panel.visibleEntries[1])
+            assertEquals("降序末条应为 3ms 的 c", "SELECT c FROM t", panel.visibleEntries[2])
+        } finally {
+            panel.dispose()
+        }
+    }
+
     fun test注入慢查询_工具栏计数标签可见且含条数() {
         val saved = PluginSettings.getInstance().state.slowQueryThresholdMs
         PluginSettings.getInstance().state.slowQueryThresholdMs = 1000
