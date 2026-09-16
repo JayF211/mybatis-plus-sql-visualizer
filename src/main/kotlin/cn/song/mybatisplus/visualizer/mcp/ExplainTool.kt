@@ -39,8 +39,15 @@ class ExplainTool : McpToolsetSupport("mpsv_explain") {
         // notices 节尾附在方言行后（T-NoticeChannel / O-16）；空清单零追加——输出逐字节与
         // 现状一致（防回归硬门禁）。失败路径 notices 无从产生：executeExplain 直接 throwExpected，
         // RawResult 只在成功时存在，天然满足 DBX「出错语句的 notices 丢弃」口径。
+        // index hints 节（T-ExplainIndex / N-23）：索引缺失类模式建议（同款零追加硬门禁；
+        // 落点定案=T-EI-01 核实 IDE 内嵌控制台无程序化行读取面，MCP 输出为承载位）。
         McpExplainFormatter.format(raw) + "\n\ndialect: ${target.dialectName}" +
-            McpExplainFormatter.formatNotices(raw.notices)
+            McpExplainFormatter.formatNotices(raw.notices) +
+            cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor.formatHints(
+                cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor.advise(
+                    target.dialectName, raw.headers, raw.rows,
+                ),
+            )
     }
 
     /** explain 前置链（白名单→数据源定位→方言派发，步骤 1~3）。全链非挂起：不进协程状态机，
