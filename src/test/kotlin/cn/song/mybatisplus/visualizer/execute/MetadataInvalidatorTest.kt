@@ -127,6 +127,25 @@ class MetadataInvalidatorTest {
     }
 
     @Test
+    fun `收尾兜底_入口收尾双调幂等_计数不翻倍`() {
+        // T-DdlPostInvalidate（O-17）：同一语句入口+收尾双调（收尾含失败路径），幂等语义下
+        // 每次调用都失效一次（引用清空语义无害），预判未命中则零动作——这里断言
+        // 「收尾再调」不抛、动作可重复执行且非 DDL 零动作（对齐 runPostExecutionInvalidate 接线）。
+        var calls = 0
+        MetadataInvalidator.register("test.posthook") { calls++ }
+        try {
+            MetadataInvalidator.invalidateAfterExecution("CREATE TABLE t (id INT)") // 入口
+            MetadataInvalidator.invalidateAfterExecution("CREATE TABLE t (id INT)") // 收尾（成功路径）
+            MetadataInvalidator.invalidateAfterExecution("CREATE TABLE t (id INT)") // 收尾（失败路径同款）
+            assertEquals(3, calls)
+            MetadataInvalidator.invalidateAfterExecution("SELECT 1") // 非 DDL 不动作
+            assertEquals(3, calls)
+        } finally {
+            MetadataInvalidator.unregister("test.posthook")
+        }
+    }
+
+    @Test
     fun `DatabaseSchemaResolver失效幂等安全`() {
         // invalidateAll 幂等且无副作用（无 database 插件环境=空缓存清理；headless 下
         // columnComments 经 isDatabaseAvailable 探测短路返回空 Map——真机走查覆盖真实链路）

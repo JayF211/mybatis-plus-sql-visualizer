@@ -2249,7 +2249,8 @@ object DataSourceSelector {
         // （DBX object_cache 语义：失效须在结果返回前、失效失败只记日志不吞执行结果——
         // Oracle 系 DDL 隐式提交，DDL 报错不代表没提交）。全执行链唯一提交收口点；
         // SQL 文本取控制台编辑器文档（三调用路径共用同一文档，提交时刻即执行内容）。
-        runCatching { MetadataInvalidator.invalidateAfterExecution(editor.document.text) }
+        val executedSql = editor.document.text
+        runCatching { MetadataInvalidator.invalidateAfterExecution(executedSql) }
             .onFailure { LOG.warn("[T-DdlCacheInvalidate] invalidate hook failed (execution continues)", it) }
         // M36.5.52：新执行重置错误去重基线——本次执行产生的错误应上报，不与上次残留混淆。
         lastReportedError = null
@@ -2448,7 +2449,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                                                     doRunMethod.invoke(null, console, info)
                                                     // 真实提交完成——此刻才启动结果监听
                                                     LOG.info("[M36] native query SUBMITTED (starting result watch)")
-                                                    afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false)
+                                                    afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false, sqlText = executedSql)
                                                     } catch (t: Throwable) {
                                                         val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
                                                         LOG.warn(
@@ -2506,7 +2507,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                     // 兜底路径（executeQueries 同步提交）：监听在此启动；原生路径由事务内
                     // afterSubmitted 启动，此处不再重复（防双重监听互相顶掉结果）。
                     if (submitted) {
-                        afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false)
+                        afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false, sqlText = executedSql)
                     }
                 }
             }
@@ -2542,6 +2543,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         LOG: com.intellij.openapi.diagnostic.Logger,
         dsName: String? = null,
         demotedOverride: Boolean = false,
+        sqlText: String? = null,
     ) {
         // M36.5.44：真实提交时刻递增换入代际——作废上一个执行遗留的 refresh Timer（防滞后一轮）。
         swapGeneration++
@@ -2615,7 +2617,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             }
             // ④ 结果 Tab 监听（只认新 Tab 名）
             if (ui != null) {
-                startResultTabRetry(project, ui, onError, preExistingNames, dsName = dsName, demotedOverride = demotedOverride)
+                startResultTabRetry(project, ui, onError, preExistingNames, dsName = dsName, demotedOverride = demotedOverride, sqlText = sqlText)
             }
         }, com.intellij.openapi.application.ModalityState.any())
     }
@@ -2686,6 +2688,18 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      * M36.5.44：接受旧 Tab 复用的阈值降为 [REUSE_ACCEPT_TICKS]（2 拍 0.8s）；且回调校验
      * `generation != swapGeneration` 即停（新执行覆盖旧 watch，防空转造成"执行中..."卡顿）。
      */
+    /**
+     * T-DdlPostInvalidate（O-17）：执行收尾兜底失效——[MetadataInvalidator.invalidateAfterExecution]
+     * 内部先 mayChangeMetadata 预判（命中才动作）且动作幂等，入口+收尾双调全程失效次数有界（1+1）。
+     * **成功与失败/超时收尾都调**（DBX：失败的 DDL 可能已隐式提交——Oracle），把「过程内 DDL/
+     * 预判漏判/中途结构变化」三类窗口关死；动作异常只记日志不吞收尾结果。
+     */
+    private fun runPostExecutionInvalidate(sqlText: String?, LOG: com.intellij.openapi.diagnostic.Logger) {
+        if (sqlText == null) return
+        runCatching { MetadataInvalidator.invalidateAfterExecution(sqlText) }
+            .onFailure { LOG.warn("[T-DdlPostInvalidate] post-execution invalidation failed", it) }
+    }
+
     private fun startResultTabRetry(
         project: Project,
         ui: Any,
@@ -2694,6 +2708,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         generation: Int = swapGeneration,
         dsName: String? = null,
         demotedOverride: Boolean = false,
+        sqlText: String? = null,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val selectRetry = object : java.awt.event.ActionListener {
@@ -2716,6 +2731,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                 extractConsoleError(sharedConsole ?: preparedConsole, LOG)
                     ?.takeIf { it != lastReportedError }?.let { err ->
                         timer.stop()
+                        runPostExecutionInvalidate(sqlText, LOG)
                         lastReportedError = err
                         LOG.info("[M36] early console error detected (attempts=$attempts): ${err.take(120)}")
                         ApplicationManager.getApplication().invokeLater({
@@ -2739,6 +2755,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                 }
                 if (result != null) {
                     timer.stop()
+                    runPostExecutionInvalidate(sqlText, LOG)
                     // M36.5.48 勘误：此处**不**调用 extractConsoleError——结果 Tab 复用成功时
                     // console history 含正常 SQL 文本（如 "WHERE t.id = 1"），会被误判为错误并
                     // onError（日志实证 `extracted console error: WHERE t.id = 1`，误报 + 一闪而过）。
@@ -2770,6 +2787,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                     val limit = if (dumb) 100 else 40
                     if (attempts >= limit) {
                         timer.stop()
+                        runPostExecutionInvalidate(sqlText, LOG)
                         LOG.info("[M36] result tab not appeared after $attempts attempts (dumb=$dumb)")
                         // M36.5.14：提示改走 onError（**面板内显示**，resultPanel.showError）——
                         // 此前 Messages.showWarningDialog 弹窗也会被模态预览窗口遮挡（用户实测
