@@ -10,6 +10,8 @@ enum class SqlSource {
     HIBERNATE,
     /** Spring JdbcTemplate 控制台日志（`Executing prepared SQL statement [SQL]` / `Setting SQL statement parameter value: ...` 格式）。 */
     JDBC,
+    /** agent 字节码通道（M56 增强捕获）：应用 JVM 内 JDBC 执行点 hook 直取的结构化事件。 */
+    AGENT,
     /** 未知来源（兼容旧版本条目）。 */
     UNKNOWN,
 }
@@ -62,12 +64,45 @@ data class LogSqlEntry(
      */
     val sourceLine: Int = 0,
     /**
+     * T-AgentSourceJump：源码位置候选（栈序 [file, line]；仅 agent 通道产出，控制台通道/历史读回为空）。
+     * 主位置在工程内解析失败时，跳转按候选序取首个可解析项——候选全部来自本次执行的真实调用栈，
+     * 非表名等启发式（不会误导）。
+     */
+    val sourceCandidates: List<Pair<String, Int>> = emptyList(),
+    /**
      * T-LogRowNumber：会话内捕获序号（「SQL 日志」列表行号）。由 [SqlLogEntryBuffer.addEntry]
      * 成功入队时分配（单调递增；去重丢弃/暂停/过滤关键字命中的条目不占号），
      * 项目启动（processStarted）或手动清空列表时归零。0 表示无行号
      * （历史文件读回、日志转 SQL round-trip 产出的条目）。
      */
     val sequenceNumber: Long = 0L,
+    // ---------- M56 T-M56-00：agent 通道结构化字段（桥通道经标记行第 4/5 段与 pd 载荷扩展部分承接） ----------
+    /**
+     * mapper 语句 id（如 `com.example.mapper.UserMapper.selectById`）。
+     * agent 通道从 MyBatis Executor 直取；桥通道来自源码标记第 4 段（拦截器 `ms.getId()`）。
+     * null 表示未知（旧条目 / 非 MyBatis 来源）。
+     */
+    val mapperStatement: String? = null,
+    /**
+     * 执行报错（结构化直取：异常类名 + 消息，堆栈截断）；null 表示执行成功。
+     * agent 通道在执行点直捕；桥通道暂无对应日志形态（T-M56-05 前保持 null）。
+     */
+    val errorText: String? = null,
+    /**
+     * 请求级聚合标签（T-M56-07 请求聚合预留）：同一次请求的多条 SQL 共享同值，
+     * 聚焦页签据此分组。桥通道来自源码标记第 5 段（拦截器 MDC 兜底）；null 表示无标签。
+     */
+    val requestTag: String? = null,
+    /**
+     * 影响行数（agent 通道 `getUpdateCount` 直取，DML 语义）；null 表示未知（查询 / 旧条目）。
+     */
+    val updateCount: Long? = null,
+    /**
+     * 目标数据库显示名（T-AgentDialectLoop：agent 通道由连接 URL 子协议映射，
+     * 如 "MySQL" / "DM（达梦）"）；null 表示未知（桥通道 / 旧版 agent / 畸形 URL）。
+     * 展示性字段，不入去重指纹。
+     */
+    val databaseName: String? = null,
 ) {
     /**
      * T-CrudColor：条目语句类型（渲染热路径缓存，惰性计算一次）。
@@ -130,6 +165,38 @@ internal fun sqlFingerprint(sql: String): String {
  */
 internal fun normalizeSqlWhitespace(sql: String): String =
     sql.trim().replace(Regex("""\s+"""), " ")
+
+/**
+ * T-AgentLogTime：日志时间关联键——**占位符版 rawSql 的指纹**。
+ *
+ * 增强通道的 logTimestamp 是派生的（控制台链嗅探暂存 → agent 事件取回），关联键必须两侧同源：
+ * 控制台侧 rawSql = `Preparing:` 行原文，agent 侧 rawSql = `prepareStatement` 收到的原文，
+ * 二者都不经过参数还原。旧口径用 [LogSqlEntry.dedupeKey]（还原后 SQL 指纹）要求两套还原器
+ * 逐字符一致，布尔参数渲染、注释内 `?` 计数、参数个数守卫三类分叉都会静默失配。
+ *
+ * 与 [LogSqlEntry.dedupeKey] 的分工：dedupeKey 管面板去重（跨通道同 SQL 折叠，语义不动），
+ * 本键只管日志时间配对——错位替换防护（agent 侧「占位符数 ≠ 参数数就不还原」）因此得以保留。
+ */
+internal fun logTimeKey(entry: LogSqlEntry): String = sqlFingerprint(normalizeSqlWhitespace(entry.rawSql))
+
+/**
+ * T-AgentLogTime：日志时间配对的次级判别——参数**值**序列签名。
+ * 同键（同一条 SQL 多次执行）时用它挑参数一致的那条；两侧渲染口径若分叉则退化为队首配对
+ * （近似但不错失），故不做强制相等断言。无参语句两侧都是空串，天然相等。
+ */
+internal fun logTimeParamSignature(params: List<LogSqlParam>): String =
+    params.joinToString("\u0001") { it.value ?: "\u0000" }
+
+/**
+ * T-AgentLogTime：给 agent 条目回填控制台嗅探到的日志时间；未命中返回 null
+ * （调用方回落 [LogSqlEntry.timestamp] 并留痕）。
+ *
+ * 增强通道回填的唯一入口——生产路径（`AgentManager.AgentSession`）与跨通道守卫测试都走它，
+ * 避免测试另抄一份「取键 + take」逻辑而自证（T-AgentDialectLoop 的教训：两侧各自绿、集成不通）。
+ */
+internal fun stampLogTime(entry: LogSqlEntry): LogSqlEntry? =
+    LogTimeCorrelator.take(logTimeKey(entry), logTimeParamSignature(entry.params))
+        ?.let { entry.copy(logTimestamp = it) }
 
 /**
  * 单个日志参数：值 + 类型标注。

@@ -223,6 +223,9 @@ open class SqlLogConsoleBridge(
         val hasMain = hasMainConsole()
         // 每轮状态日志（debug——诊断主控制台移除检测）
         LOG.debug("scanAll: hasMainConsole=$hasMain, lastHadMainConsole=$lastHadMainConsole")
+        // T-LPC-05：控制台解析的静默失效计数周期上报（零增量零输出）——解析器内部无 IDE 依赖，
+        // 上报挂在既有轮询上，排障时能直接看到「参数被丢/等待态拦下/残句闭合」各发生多少次。
+        LogParseDiag.takeDeltaReport()?.let { LOG.info(it) }
         // 主控制台移除：上一轮有、当前轮无 → 项目停止
         if (lastHadMainConsole && !hasMain) {
             LOG.info("scanAll: 主控制台已移除（上轮有、当前无），触发 onConsoleRemoved")
@@ -264,6 +267,11 @@ open class SqlLogConsoleBridge(
     }
 
     private fun attachFilter(console: Any) {
+        // M56 T-M56-09：「EP 首行标志」生效 → EP 已覆盖全部控制台，轮询挂载跳过（防双路解析）
+        if (SqlCaptureGate.epActive) {
+            LOG.debug("attachFilter: EP 已生效，轮询挂载跳过 ${console.javaClass.name}")
+            return
+        }
         // BUG FIX（停止后仍捕获）：非捕捉态时不挂载 Filter——守卫轮询/事件回调触发的 scanAll。
         if (!isCapturing()) {
             LOG.debug("attachFilter: 非捕捉态，跳过挂载 ${console.javaClass.name}")
@@ -605,7 +613,7 @@ internal class BridgeLineContext(
     val hibernateParser: HibernateLogParser,
     val jdbcParser: JdbcTemplateLogParser,
     val configProvider: () -> ParserConfig,
-    var pendingSource: Pair<String, Int>? = null,
+    var pendingSource: SourceMarkerData? = null,
     /** Hibernate 喂行开关（快照同步自 ParserConfig.hibernateEnabled）。 */
     var hibernateEnabled: Boolean = true,
 ) {
@@ -636,19 +644,46 @@ internal class BridgeLineContext(
  */
 private val MARKER_DEFENSE_LOG = Logger.getInstance("cn.song.mybatisplus.visualizer.log.SqlSourceMarkerDefense")
 
+/**
+ * M56 T-M56-02：增强捕获接管闸门——agent 在线时置 true，控制台桥的解析入口短路（空转），
+ * 面板只呈现 agent 通道条目；连接丢失/开关关闭回落时置 false 恢复。桥链路本身零改动。
+ * AtomicBoolean：读侧（逐行热路径）单次 volatile 读，写侧（会话状态切换）罕见。
+ */
+object SqlCaptureGate {
+    @JvmField
+    val paused = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * M56 T-M56-09：「EP 首行标志」——consoleFilterProvider EP 的 Filter 首次处理控制台行时
+     * 置 true（会话内粘滞）。桥的轮询据此跳过 addMessageFilter 挂载（EP 已覆盖全部控制台，
+     * 双挂载会双路解析）；定时器本身保留（控制台摘除检测等职责）。
+     */
+    @Volatile
+    var epActive: Boolean = false
+}
+
 internal fun processConsoleLine(
     line: String,
     ctx: BridgeLineContext,
     timePrefix: String?,
     syncBufferConfig: () -> Unit,
 ): List<LogSqlEntry> {
+    // M56 T-M56-02：增强接管闸门——agent 在线时桥不产出条目，回落即恢复。
+    // T-AgentDialectLoop / T-AgentLogTime：接管期间无条件转入日志时间嗅探——把行喂给既有解析器
+    // 提取「日志行原始时间」暂存 LogTimeCorrelator（键=占位符版 SQL 指纹），agent 事件入队前
+    // 取回回填，面板「日志时间」在增强模式下不丢失。日志时间是**数据**：采集不再受「时间显示开
+    // 关/时间源」这类渲染偏好控制（关掉显示只影响渲染，不影响条目字段），故此处零开关判断。
+    if (SqlCaptureGate.paused.get()) {
+        sniffLogTimestamp(line, ctx)
+        return emptyList()
+    }
     // 1) 实时源码标记 → 暂存（不喂解析器，避免被当成 SQL）
     val marker = SqlSourceMarker.parse(line)
     if (marker != null) {
-        if (SqlSourceMarker.isInterceptorSelfPath(marker.first)) {
+        if (SqlSourceMarker.isInterceptorSelfPath(marker.file)) {
             // T-IntrUpg-01 防线：标记指向拦截器文件本身 = 存量旧件自位污染，丢弃不暂存。
             // 留痕含原路径/行号，远程排障定位污染拷贝件用。
-            MARKER_DEFENSE_LOG.info("SqlLogConsoleBridge: 丢弃拦截器自位污染标记 ${marker.first}:${marker.second}（旧版生成文件，建议设置页重新注入升级）")
+            MARKER_DEFENSE_LOG.info("SqlLogConsoleBridge: 丢弃拦截器自位污染标记 ${marker.file}:${marker.line}（旧版生成文件，建议设置页重新注入升级）")
             return emptyList()
         }
         ctx.pendingSource = marker
@@ -676,13 +711,32 @@ internal fun processConsoleLine(
         }
         val duration = lineDuration ?: LogDurationParser.parse(e)
         e.copy(
-            sourceFile = eSrc?.first,
-            sourceLine = eSrc?.second ?: 0,
+            sourceFile = eSrc?.file,
+            sourceLine = eSrc?.line ?: 0,
+            mapperStatement = eSrc?.mapperStatement,
+            requestTag = eSrc?.requestTag,
             executionTimeMs = duration ?: e.executionTimeMs,
         )
     }
     if (ctx.pendingSource != null) ctx.pendingSource = null
     return result
+}
+
+/**
+ * T-AgentDialectLoop / T-AgentLogTime：增强接管期间的日志时间嗅探——复用既有三解析器的配对/时间解析
+ * （零新解析逻辑），产出的条目不进面板、仅把「[logTimeKey] → 日志时间」暂存 [LogTimeCorrelator]
+ * （参数值序列作次级判别签名）。
+ * 成本口径：每行 3 次 contains 门控（解析器既有门），每条 SQL 一次条目构造 + 指纹，
+ * 条目即弃零驻留；源码标记行跳过（条目已弃，无需归属）。
+ */
+private fun sniffLogTimestamp(line: String, ctx: BridgeLineContext) {
+    ctx.myBatisParser.feed(line)
+    if (ctx.hibernateEnabled) ctx.hibernateParser.feed(line)
+    ctx.jdbcParser.feed(line)
+    val taken = ctx.myBatisParser.takeEntries() + ctx.hibernateParser.takeEntries() + ctx.jdbcParser.takeEntries()
+    for (e in taken) {
+        LogTimeCorrelator.put(logTimeKey(e), e.logTimestamp ?: e.timestamp, logTimeParamSignature(e.params))
+    }
 }
 
 /** 组件树中查找实现 `com.intellij.execution.ui.ConsoleView` 接口的组件（接口名匹配，无编译期引用）。 */

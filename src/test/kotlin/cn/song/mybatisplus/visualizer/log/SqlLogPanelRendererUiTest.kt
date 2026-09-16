@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.log.SqlSource
 import com.intellij.ui.SimpleColoredComponent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -86,6 +87,32 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         assertTrue("元信息行含去重徽章", meta.contains("⨉2"))
         assertFalse("元信息行不应混入 SQL", meta.contains("SELECT"))
         assertTrue("SQL 行完整保留语句（含分号结束符）", joinedText(r.sqlLine).contains("SELECT * FROM repeated WHERE id = 1;"))
+    }
+
+    fun test目标库角标_有库名渲染到元信息行() {
+        // T-AgentDialectLoop：agent 条目带 databaseName → 元信息行出现 [MySQL] 角标
+        val e = LogSqlEntry(
+            rawSql = "SELECT 1",
+            restoredSql = "SELECT 1",
+            params = emptyList(),
+            timestamp = 1_700_000_000_000L,
+            source = SqlSource.AGENT,
+            databaseName = "MySQL",
+        )
+        val meta = joinedText(render(e).metaLine)
+        assertTrue("元信息行应含目标库角标", meta.contains("[MySQL] "))
+    }
+
+    fun test目标库角标_未知库名不显示() {
+        val e = LogSqlEntry(
+            rawSql = "SELECT 1",
+            restoredSql = "SELECT 1",
+            params = emptyList(),
+            timestamp = 1_700_000_000_000L,
+            source = SqlSource.AGENT,
+        )
+        val meta = joinedText(render(e).metaLine)
+        assertFalse("无 databaseName 不应显示角标", meta.contains("[MySQL]"))
     }
 
     fun test特殊字符SQL_原文保真() {
@@ -372,5 +399,38 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         } finally {
             pluginSettings.logTimestampEnabled = savedTs
         }
+    }
+
+    // ---------- M56 T-M56-02/05：来源角标（已移除）/ 影响行数 / 报错同列 ----------
+
+    fun test增强来源角标已移除_两通道均不显示() {
+        // 用户要求移除：增强为默认捕获通道，逐行标来源属噪音
+        val agent = entry("SELECT 1").copy(source = SqlSource.AGENT)
+        assertFalse("AGENT 来源不应再显示增强角标", joinedText(render(agent).metaLine).contains("[⚡增强]"))
+        val bridge = entry("SELECT 1")
+        assertFalse("桥来源同样不显示", joinedText(render(bridge).metaLine).contains("[⚡增强]"))
+    }
+
+    fun test影响行数负值不显示_负行数守卫() {
+        // JDBC getUpdateCount 在结果为 ResultSet 时返回 -1（无有效计数）→ 不得渲染「(-1 rows)」
+        val neg = entry("SELECT 1").copy(source = SqlSource.AGENT, updateCount = -1L)
+        assertFalse("负值影响行数应不显示", joinedText(render(neg).metaLine).contains("rows)"))
+        val zero = entry("UPDATE t SET a = 1").copy(source = SqlSource.AGENT, updateCount = 0L)
+        assertTrue("0 行是合法计数，应显示", joinedText(render(zero).metaLine).contains("(0 rows)"))
+    }
+
+    fun test影响行数与报错片段同列() {
+        val err = entry("UPDATE t SET a = 1").copy(
+            source = SqlSource.AGENT,
+            updateCount = 3L,
+            errorText = "SQLException: Data too long for column 'a'",
+        )
+        val meta = joinedText(render(err).metaLine)
+        assertTrue("应含影响行数片段", meta.contains("(3 rows)"))
+        assertTrue("应含报错片段（单行截断）", meta.contains("⛔ SQLException: Data too long"))
+        // 无报错无行数的普通条目不显示
+        val ok = joinedText(render(entry("SELECT 1")).metaLine)
+        assertFalse("普通条目不应有行数片段", ok.contains("rows)"))
+        assertFalse("普通条目不应有报错片段", ok.contains("⛔"))
     }
 }

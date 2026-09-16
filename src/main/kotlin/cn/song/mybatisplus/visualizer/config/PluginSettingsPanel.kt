@@ -199,6 +199,17 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 字面量参数恢复开关（T-HistParam，默认开）：无 `?` 占位符的日志 SQL 把字符串字面量识别为参数。 */
     private val literalParamRecoveryCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.literalParamRecovery"))
 
+    // ---------- M56 T-M56-08：增强捕获（agent 字节码通道；对用户不出现 agent 字样） ----------
+
+    /** 增强捕获开关（默认关）：开启时弹注入确认对话框（JEP 451 预告 + 数据留本机说明）。 */
+    private val enhancedCaptureCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture"))
+
+    /** 脱敏开关（默认开）：对疑似敏感形态打码，agent 采集层执行。 */
+    private val enhancedDesensitizeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize"))
+
+    /** 增强捕获状态行：已挂载 pid=x / 已回落控制台捕获 / 连接中。 */
+    private val enhancedStatusLabel = JBLabel(" ")
+
     /** gutter 预览 SQL 图标开关（M10）。 */
     private val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
     private val joinDiagramNativeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.joinDiagramNative"))
@@ -682,6 +693,22 @@ class PluginSettingsPanel @JvmOverloads constructor(
                         }
                     }
                 })
+                // M56 T-M56-08：增强捕获设置（捕获通道类设置与源码位置捕获同组）
+                addRow(p, g, "", enhancedCaptureCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.enhancedCapture")
+                    addActionListener {
+                        if (isSelected && !PluginSettings.getInstance().state.enhancedCaptureConfirmed) {
+                            // T-M56-08：首次启用弹注入确认（确认记忆持久化，重开不弹）
+                            if (EnhancedCaptureConfirmDialog.confirm(null)) {
+                                PluginSettings.getInstance().state.enhancedCaptureConfirmed = true
+                            } else {
+                                isSelected = false
+                            }
+                        }
+                    }
+                })
+                addRow(p, g, "", enhancedDesensitizeCheck.apply { text = MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize") })
+                addRow(p, g, "", enhancedStatusLabel)
             }
         }
 
@@ -1130,6 +1157,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logTimePrefixField.text.trim() != s.logTimePrefix
             || slowQueryThresholdField.text.trim().toLongOrNull() != s.slowQueryThresholdMs
             || logShowDurationCheck.isSelected != s.showDurationInLogList
+            // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
+            || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
+            || enhancedDesensitizeCheck.isSelected != s.enhancedCaptureDesensitize
             || logHibernateEnabledCheck.isSelected != s.logHibernateEnabled
             || logHibernateSqlPrefixField.text.trim() != s.logHibernateSqlPrefix
             || logHibernateParamPrefixField.text.trim() != s.logHibernateParamPrefix
@@ -1214,6 +1244,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.slowQueryThresholdMs = slowQueryThresholdField.text.trim().toLongOrNull()
                 ?: PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS
             s.showDurationInLogList = logShowDurationCheck.isSelected
+            // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
+            s.enhancedCaptureEnabled = enhancedCaptureCheck.isSelected
+            s.enhancedCaptureDesensitize = enhancedDesensitizeCheck.isSelected
             s.logHibernateEnabled = logHibernateEnabledCheck.isSelected
             s.logHibernateSqlPrefix = logHibernateSqlPrefixField.text.trim()
             s.logHibernateParamPrefix = logHibernateParamPrefixField.text.trim()
@@ -1328,6 +1361,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logTimePrefixField.text = s.logTimePrefix
             slowQueryThresholdField.text = s.slowQueryThresholdMs.toString()
             logShowDurationCheck.isSelected = s.showDurationInLogList
+            // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
+            enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled
+            enhancedDesensitizeCheck.isSelected = s.enhancedCaptureDesensitize
             logHibernateEnabledCheck.isSelected = s.logHibernateEnabled
             logHibernateSqlPrefixField.text = s.logHibernateSqlPrefix
             logHibernateParamPrefixField.text = s.logHibernateParamPrefix

@@ -13,6 +13,16 @@ package cn.song.mybatisplus.visualizer.log
  * 噪声行（`<== Columns:` / `<== Total:` / 业务日志等）自然忽略；
  * 一条语句可跟多条 Parameters 行（极端形态），参数顺序追加。
  * [maxParseLength] 超长截断（防控制台大输出卡顿）。
+ *
+ * T-LogParseConc（并发配对修正，用户实测驱动）：
+ * - **按线程分桶**（[LogThreadRouter]）：并发应用里多线程语句按到达序混排，单槽状态机下另一线程的
+ *   `Preparing:` 行会把本线程尚未收到参数的语句提前闭合、本线程随后的 `Parameters:` 行因无上下文被丢弃
+ *   （参数全丢、`?` 未还原）。故全部状态（`pendingSql`/参数/等待态/续行态）按线程 token 隔离。
+ * - **空 `Parameters:` 行不再吞下一行**：下一行若带日志行特征（[looksLikeLogLine]），说明该语句本身
+ *   无参数（MyBatis 对无参语句打印空前缀行）——闭合且**不吞该行**（按正常流程重新喂入）。旧行为会把
+ *   整行日志当作参数值塞进 `?`（面板出现 `LIMIT 2026-09-16 14:35:00.413 DEBUG …` 这类文字）。
+ * - **多行 SQL 续行**（T-LPC-07）：`Preparing:` 之后的裸文本行（不含日志特征、非空）并入当前 SQL——
+ *   mapper 里格式化的 SQL 不再只留首行，增强通道两侧 rawSql 同形（日志时间相关器得以命中）。
  */
 class MyBatisLogParser(
     private val restorer: LogSqlRestorer = LogSqlRestorer(),
@@ -30,103 +40,175 @@ class MyBatisLogParser(
 ) {
 
     private val entries = mutableListOf<LogSqlEntry>()
-    private var pendingSql: String? = null
-    private var pendingLogLine: String? = null
-    private val pendingParams = mutableListOf<LogSqlParam>()
-    /**
-     * 前缀独占一行兼容（T-M31.xx）：`Preparing:` 行 remainder 为空时置 true，
-     * 等待下一行作为 SQL。下一行非空非关键字行视为 SQL 文本。
-     */
-    private var prefixMatched: Boolean = false
-    /**
-     * Parameters 也独占一行（极端形态）：`Parameters:` 行 remainder 为空时置 true，
-     * 等待下一行作为参数文本。
-     */
-    private var paramPrefixMatched: Boolean = false
 
-    /** 喂入一行控制台输出（任意线程，内部无共享可变状态——解析器实例按 console 隔离）。 */
+    /** 单线程桶：一条语句从 `Preparing:` 到闭合之间的全部状态（T-LogParseConc 按线程隔离）。 */
+    private class Bucket {
+        var pendingSql: String? = null
+        var pendingLogLine: String? = null
+        val pendingParams = mutableListOf<LogSqlParam>()
+
+        /** 前缀独占一行兼容（T-M31.xx）：`Preparing:` 行 remainder 为空 → 等下一行作 SQL。 */
+        var prefixMatched = false
+
+        /** `Parameters:` 行 remainder 为空 → 等下一行作参数文本（T-LogParseConc 加了日志行判别）。 */
+        var paramPrefixMatched = false
+
+        /** 多行 SQL 续行态（T-LPC-07）：下一行是裸文本则并入 `pendingSql`。 */
+        var continuing = false
+    }
+
+    private val router = LogThreadRouter(
+        factory = { Bucket() },
+        // 无线程 token 的裸行（续行 / 「前缀独占一行」的下一行）要落到**正在等待它**的桶——
+        // 否则带前缀的 `Preparing:`（token=main）与其下一行裸 SQL 会分属两个桶，等待态永远完不成
+        isCollecting = { it.continuing || it.prefixMatched || it.paramPrefixMatched },
+        isIdle = { it.pendingSql == null && !it.prefixMatched && !it.paramPrefixMatched },
+    )
+
+    /** 喂入一行控制台输出（任意线程；按线程 token 路由到独立桶——解析器实例按 console 隔离）。 */
     fun feed(line: String) {
+        feedInto(router.bucketFor(line), line)
+    }
+
+    private fun feedInto(bucket: Bucket, line: String) {
         // 分支 1：Preparing 行（有 SQL 同行）
         val sql = extractAfterKeyword(line, sqlPrefix)
         if (sql != null) {
-            closePending() // 上一条未闭合先闭合（无 Parameters 或异常日志）
-            pendingSql = sql.take(maxParseLength)
-            pendingLogLine = line
-            pendingParams.clear()
-            prefixMatched = false
+            closePending(bucket) // 上一条未闭合先闭合（无 Parameters 或异常日志）
+            bucket.pendingSql = sql.take(maxParseLength)
+            bucket.pendingLogLine = line
+            bucket.pendingParams.clear()
+            bucket.prefixMatched = false
+            bucket.paramPrefixMatched = false // T-LogParseConc：等待态随语句切换复位（旧实现残留→吞掉后续整行）
+            bucket.continuing = true
             return
         }
 
         // 分支 2：Preparing 独占一行（remainder 为空）→ 进入等待 SQL 态
-        if (!prefixMatched && isPrefixOnly(line, sqlPrefix)) {
-            prefixMatched = true
-            pendingParams.clear()
+        if (!bucket.prefixMatched && isPrefixOnly(line, sqlPrefix)) {
+            bucket.prefixMatched = true
+            bucket.pendingParams.clear()
             return
         }
 
         // 分支 3：Parameters 独占一行（极端形态）→ 等待下一行参数文本
-        if (!paramPrefixMatched && isPrefixOnly(line, paramPrefix)) {
-            if (prefixMatched) {
+        if (!bucket.paramPrefixMatched && isPrefixOnly(line, paramPrefix)) {
+            if (bucket.prefixMatched) {
                 // 等待 SQL 中看到 Parameters（中间无 SQL 行）→ 放弃等待
-                prefixMatched = false
+                bucket.prefixMatched = false
                 return
             }
-            paramPrefixMatched = true
+            bucket.paramPrefixMatched = true
             return
         }
-        if (paramPrefixMatched) {
-            paramPrefixMatched = false
+        if (bucket.paramPrefixMatched) {
+            bucket.paramPrefixMatched = false
             if (line.isBlank()) return // 跳过空行
-            if (pendingSql == null) return // 无 SQL 上下文，忽略
-            pendingParams += parseParams(line.trim())
-            closePending()
+            if (bucket.pendingSql == null) return // 无 SQL 上下文，忽略
+            // T-LPC-03：等到的行若本身是日志行 → 该语句**无参数**（MyBatis 对无参语句打印空前缀行）。
+            // 闭合且不吞该行（按正常流程重新喂入——含它自己的线程桶路由；本等待态已复位，不会再进本分支）。
+            if (looksLikeLogLine(line, sqlPrefix, paramPrefix)) {
+                LogParseDiag.swallowedLineBlocked.incrementAndGet()
+                closePending(bucket)
+                feed(line)
+                return
+            }
+            bucket.pendingParams += parseParams(line.trim())
+            closePending(bucket)
             return
         }
 
         // 分支 4：Parameters 行（有参数同行）——正常形态
         val paramsText = extractAfterKeyword(line, paramPrefix)
         if (paramsText != null) {
-            prefixMatched = false // 清除等待态（罕见：Preparing 独占一行后紧跟正常 Parameters）
-            if (pendingSql == null) return // 无上下文（未捕获到 Preparing），忽略
-            pendingParams += parseParams(paramsText)
+            bucket.prefixMatched = false // 清除等待态（罕见：Preparing 独占一行后紧跟正常 Parameters）
+            if (bucket.pendingSql == null) {
+                LogParseDiag.paramWithoutContext.incrementAndGet() // T-LPC-05：静默丢弃留痕
+                return
+            }
+            bucket.pendingParams += parseParams(paramsText)
             // 立即闭合——MyBatis 单条语句 Parameters 行后参数完整，立即生成条目避免去重窗口时序问题；
             // 多 Parameters 行（极端）合并逻辑：若下一行仍是 Parameters，pendingParams 已被清空后重开。
-            closePending()
+            closePending(bucket)
             return
         }
 
         // 分支 5：等待 SQL 态 → 此行即 SQL
-        if (prefixMatched) {
+        if (bucket.prefixMatched) {
             if (line.isBlank()) return // 跳过空行
             // 多模块并发时，Hibernate 行可能出现在 Preparing: 独占一行后的等待态 → 跳过并继续等待
             if (looksLikeHibernateLine(line)) {
                 return // 不重置 prefixMatched，继续等 MyBatis SQL
             }
-            pendingSql = line.trim().take(maxParseLength)
-            pendingLogLine = line
-            prefixMatched = false
+            bucket.pendingSql = line.trim().take(maxParseLength)
+            bucket.pendingLogLine = line
+            bucket.prefixMatched = false
+            bucket.continuing = true
             return
         }
 
-        // 分支 6：噪声行（现有逻辑不变）
+        // 分支 6（T-LPC-07）：SQL 续行——仅当本行未被任何正常分支消费、且不像日志行/异构语句行时并入当前 SQL。
+        // 排在等待态之后是必须的：「等下一行参数文本」态下的裸参数行（`42(Long)`）不能被当续行吞掉。
+        if (bucket.continuing) {
+            if (line.isBlank() || looksLikeLogLine(line, sqlPrefix, paramPrefix) || looksLikeForeignStatement(line)) {
+                bucket.continuing = false // 日志行/异构语句行/空行终止续行（本行交回噪声分支）
+            } else {
+                appendContinuation(bucket, line)
+            }
+            return
+        }
+
+        // 分支 7：噪声行（与旧行为一致）
     }
 
-    /** 闭合当前未完成条目（新语句到来 / 面板刷新时调用）。 */
-    fun closePending(): LogSqlEntry? {
-        val sql = pendingSql ?: return null
-        pendingSql = null
-        val logTs = pendingLogLine?.let { LogTimestampParser.parse(it) }
-        pendingLogLine = null
+    /**
+     * 是否像**异构语句行**（其他 ORM/框架的 SQL 行，如 `Hibernate: select …`）——续行判定须拒收：
+     * 这类行本身代表另一条语句，并入会污染 MyBatis 条目的 SQL 正文（`DualParserIntegrationTest` 覆盖）。
+     */
+    private fun looksLikeForeignStatement(line: String): Boolean {
+        val trimmed = line.trim()
+        return looksLikeHibernateLine(line) || HEADER_LIKE_PATTERN.containsMatchIn(trimmed)
+    }
+
+    /** 续行并入（受 [maxParseLength] 约束，超限即终止续行不吞后续）。 */
+    private fun appendContinuation(bucket: Bucket, line: String) {
+        val current = bucket.pendingSql ?: run { bucket.continuing = false; return }
+        val merged = current + "\n" + line.trimEnd()
+        if (merged.length >= maxParseLength) {
+            bucket.continuing = false
+            return
+        }
+        bucket.pendingSql = merged
+    }
+
+    /** 闭合指定桶的未完成条目（新语句到来 / 面板刷新时调用）。 */
+    private fun closePending(bucket: Bucket): LogSqlEntry? {
+        val sql = bucket.pendingSql ?: return null
+        bucket.pendingSql = null
+        bucket.continuing = false
+        val logTs = bucket.pendingLogLine?.let { LogTimestampParser.parse(it) }
+        bucket.pendingLogLine = null
+        val params = bucket.pendingParams.toList()
         val entry = LogSqlEntry(
             rawSql = sql,
-            restoredSql = restorer.restore(sql, pendingParams),
-            params = pendingParams.toList(),
+            restoredSql = restorer.restore(sql, params),
+            params = params,
             source = SqlSource.MYBATIS,
             logTimestamp = logTs,
         )
         entries += entry
-        pendingParams.clear()
+        bucket.pendingParams.clear()
         return entry
+    }
+
+    /** 闭合全部桶的未完成条目（面板刷新 / 粘贴末尾时调用）。 */
+    fun closePending(): LogSqlEntry? {
+        var first: LogSqlEntry? = null
+        for (bucket in router.allBuckets()) {
+            val produced = closePending(bucket)
+            if (first == null) first = produced
+        }
+        return first
     }
 
     /** 取出全部已闭合条目并清空缓冲区（面板刷新用）。 */
@@ -185,6 +267,12 @@ class MyBatisLogParser(
             """binding parameter\s+\[(\d+)\]\s+as\s+\[(\w+)\]\s+-\s+\[(.*)\]""",
             RegexOption.IGNORE_CASE,
         )
+
+        /**
+         * T-LPC-07：`名称: 内容` 形态的行首标识符前缀（如 `Hibernate: select …`）——续行判定拒收，
+         * 避免异构语句行/框架头行被并入 MyBatis 条目的 SQL 正文。
+         */
+        private val HEADER_LIKE_PATTERN = Regex("""^[A-Za-z][A-Za-z0-9_.]{2,}\s*:""")
     }
 }
 

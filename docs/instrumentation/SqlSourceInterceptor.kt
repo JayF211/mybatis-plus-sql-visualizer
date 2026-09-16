@@ -10,9 +10,13 @@
  * 本文件是**自包含示例**：只依赖 MyBatis-Plus + JDK，不依赖 SQL Visualizer 插件本身。
  * 把它复制到你的项目里，注册进 MybatisPlusInterceptor 拦截器链即可（见文件末尾用法）。
  *
- * 标记行格式（须与插件 SqlSourceMarker 保持一致）：
+ * 标记行格式（须与插件 SqlSourceMarker 保持一致，3~5 段）：
  *     SQLVIS-SOURCE|<相对项目根的路径，正斜杠>|<行号>
- * 例：SQLVIS-SOURCE|src/main/java/com/example/service/UserService.java|87
+ *     SQLVIS-SOURCE|<相对项目根的路径，正斜杠>|<行号>|<mapper 语句 id>
+ *     SQLVIS-SOURCE|<相对项目根的路径，正斜杠>|<行号>|<mapper 语句 id>|<请求标签>
+ * 例：SQLVIS-SOURCE|src/main/java/com/example/service/UserService.java|87|com.example.mapper.UserMapper.selectById
+ * 第 4 段为 mapper 语句 id（ms.getId()，null 省略）；第 5 段为请求标签（MDC 兜底，
+ * 仅在第 4 段在场时输出——段位固定不可跳位）。旧版 3 段标记仍被插件完整支持。
  */
 
 package com.example.demo.sqlvisualizer // ← 改成你自己的包名
@@ -43,18 +47,38 @@ class SqlSourceInterceptor(
         resultHandler: ResultHandler<*>,
         boundSql: BoundSql,
     ) {
-        emitSource()
+        emitSource(ms?.id)
     }
 
     override fun beforeUpdate(executor: Executor, ms: MappedStatement, parameter: Any?) {
-        emitSource()
+        emitSource(ms?.id)
     }
 
-    /** 把当前线程调用栈里的真实调用点打印成标记行。 */
-    private fun emitSource() {
+    /**
+     * 把当前线程调用栈里的真实调用点打印成标记行（3~5 段）：
+     * 第 4 段为 mapper 语句 id（ms.getId()，null 省略）；第 5 段为请求标签（MDC 兜底，
+     * 仅在第 4 段在场时输出——段位固定不可跳位）。
+     */
+    private fun emitSource(mapperStatement: String?) {
         val src = locateSource() ?: return
         // 必须打印到 stdout —— 插件的控制台桥捕获的就是 stdout/stderr 文本
-        println("SQLVIS-SOURCE|${src.first}|${src.second}")
+        val sb = StringBuilder("SQLVIS-SOURCE|").append(src.first).append('|').append(src.second)
+        if (!mapperStatement.isNullOrEmpty()) {
+            sb.append('|').append(mapperStatement)
+            val tag = requestTagFromMdc()
+            if (!tag.isNullOrEmpty()) sb.append('|').append(tag)
+        }
+        println(sb)
+    }
+
+    /** 反射读取 MDC 请求标签（org.slf4j.MDC.get("sqlvisRequestTag")），无 slf4j 时静默返回 null。 */
+    private fun requestTagFromMdc(): String? = try {
+        val v = Class.forName("org.slf4j.MDC")
+            .getMethod("get", String::class.java)
+            .invoke(null, "sqlvisRequestTag")
+        v?.toString()
+    } catch (_: Throwable) {
+        null
     }
 
     /** 沿调用栈跳过框架帧和拦截器自身，取第一个用户代码帧。 */

@@ -439,9 +439,21 @@ tasks {
     // （内容为全系列累计）；转正时改为纯数字标题并将累计内容并入正式版块。
     patchPluginXml {
         changeNotes = """
-            <h2>v2026.9.18-beta.1</h2>
+            <h2>v2026.9.18-beta.3</h2>
             <ul>
                 <li>JdbcTemplate 集合参数方括号误入 SQL 修复</li>
+                <li>日志原始时间记录与显示切换</li>
+                <li>日志列表搜索行号/时间 + 右键复制时间戳</li>
+                <li>JdbcTemplate 并发日志交错参数错挂修复</li>
+                <li>历史页时间戳格式跟随设置</li>
+                <li>批量错误报告合并为单个弹窗</li>
+                <li>增强捕获默认开启、脱敏默认关闭</li>
+                <li>增强捕获条目显示目标库与日志原始时间</li>
+                <li>增强捕获耗时与影响行数展示</li>
+                <li>增强捕获源码跳转定位修正</li>
+                <li>三条控制台日志链路并发分桶配对修复</li>
+                <li>日志列表新增「排序方式」选择器</li>
+                <li>SQL 历史页元信息顺序统一</li>
             </ul>
             <h2>v2026.9.14</h2>
             <ul>
@@ -1031,6 +1043,23 @@ tasks.test {
         // T-Embed-03/04/08：B 路径 Database 原生图嵌入链路（虚拟外键注入），同上仅在 testDatabase 运行
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest")
     }
+}
+
+// ---------- M56 T-M56-01：agent fat jar 内嵌主插件资源（resources/agent/mps-sql-agent.jar） ----------
+// 运行时 AgentManager 解压落盘 + deleteOnExit 后经 attach loadAgent 挂载；
+// 落盘失败显式上报（禁静默吞）。跨项目任务经路径引用，配置缓存兼容。
+evaluationDependsOn(":sql-visualizer-agent")
+val agentEmbedDir = layout.buildDirectory.dir("agent-embed")
+val embedAgentJar = tasks.register<Copy>("embedAgentJar") {
+    from(tasks.getByPath(":sql-visualizer-agent:agentFatJar"))
+    into(agentEmbedDir.map { it.dir("agent") })
+    rename { "mps-sql-agent.jar" }
+}
+sourceSets.named("main") {
+    resources.srcDir(agentEmbedDir)
+}
+tasks.named("processResources") {
+    dependsOn(embedAgentJar)
 }
 
 // T-TestPerf-03（2026-09-14）实验结论：不引入纯逻辑并行分桶任务。

@@ -1,7 +1,7 @@
 {
-  "version": "2026.9.18-beta.1",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.9.18-beta.1/mybatis-plus-sql-visualizer-2026.9.18-beta.1.zip",
-  "changeNotes": "JdbcTemplate 集合参数方括号误入 SQL 修复",
-  "publishDate": "2026-09-15",
+  "version": "2026.9.18-beta.3",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.9.18-beta.3/mybatis-plus-sql-visualizer-2026.9.18-beta.3.zip",
+  "changeNotes": "JdbcTemplate 集合参数方括号误入 SQL 修复\n日志原始时间记录与显示切换\n日志列表搜索行号/时间 + 右键复制时间戳\nJdbcTemplate 并发日志交错参数错挂修复\n历史页时间戳格式跟随设置\n批量错误报告合并为单个弹窗\n增强捕获默认开启、脱敏默认关闭\n增强捕获条目显示目标库与日志原始时间\n增强捕获耗时与影响行数展示\n增强捕获源码跳转定位修正\n三条控制台日志链路并发分桶配对修复\n日志列表新增「排序方式」选择器\nSQL 历史页元信息顺序统一",
+  "publishDate": "2026-09-16",
   "sinceBuild": "243"
 }
