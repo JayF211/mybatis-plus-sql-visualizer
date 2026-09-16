@@ -6,6 +6,10 @@
 
 > 已合入 master、随下一个内测版（Gitee 抢先体验通道）发行的内容，发行时本节改写为对应版本号归档。基线 v2026.9.18-beta.3（内测已发行）。
 
+### Changed
+
+- **竖向排列 IN 列表全量逐行展开（T-VStack·InAll）**：预览「竖向排列」对 IN 列表不再按元素数分级——此前 2~4 元素短清单保持同行（2026-09-10 阈值裁定），经用户复议回退：含逗号即 ≥2 元素一律 `(` 自占一行逐元素竖排；单元素形态（`IN (1)` / `IN (?)`）无清单可对齐仍保持同行，子查询 IN 与 LIMIT 分页参数照旧不展开
+
 ### Fixed
 
 - **增删改（CUD）语句源码位置捕获修复（T-AgentCudSource）**：增强捕获下只有 SELECT 查询捕获到源码位置，INSERT/UPDATE/DELETE 捕获不到。根因=`StackLocator` 调用方缓存把「无调试信息的 null 位置」也缓入（缓存键=首个非框架帧 `class#method`，主位置为 null 时候选首位顶上且可能仍为 null，随后整帧含 null 入缓存）——某调用方一旦解析出 null（CUD 常走的 MP 默认方法 / 代理中间帧无有效 file 即命中），该 `class#method` 名下所有后续语句（含 CUD）恒无源码位置且不再自愈。修复=`StackLocator` 仅缓存有效位置：主位置为 null 时候选挑非 null 顶上、候选全 null 则本次不产出位置不缓存（下次重试）。新增 `StatementSourceLocationTest` 经用户形态调用帧触发真实 CUD 执行（executeUpdate/execute），把「CUD 事件 sourceFile 必指向用户栈帧」锁进绿灯。顺带盘清方言与增强的关系：采集面是 JDBC 接口级、对插件全部方言（含 DM 达梦）一视同仁，唯一耦合点是 `DriverRegistry` 驱动类名单——DM 已登记 `dm.jdbc.driver.DmDriver`，「在线但零捕获」的三类诱因（驱动类名不符/加载时序晚于 retransform/loader 隐藏降级）记录在案
