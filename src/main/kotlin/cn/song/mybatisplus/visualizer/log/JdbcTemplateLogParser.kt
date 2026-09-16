@@ -42,7 +42,7 @@ class JdbcTemplateLogParser(
 
     private val entries = mutableListOf<LogSqlEntry>()
 
-    // ----- T-JdbcThreadBucket：按线程 token 分桶的独立状态机（修复并发参数错挂） -----
+    // ----- T-JdbcThreadBucket / T-LogParseConc：按线程 token 分桶的独立状态机（修复并发参数错挂） -----
 
     /** 单线程桶的完整状态机（对应旧解析器实例级字段，现按线程 token 隔离）。 */
     private class ThreadBucket {
@@ -54,23 +54,24 @@ class JdbcTemplateLogParser(
         var multilineNet = 0
         var multilineInString = false
 
-        /** 多行收集态内存占用（用于 [JdbcTemplateLogParser] 超限判定）。 */
+        /** T-LPC-04：多行收集的**首行**（日志时间取它——多行条目的时间此前恒 null 回落捕获时间）。 */
+        var collectingFirstLine: String? = null
+
+        /** 多行收集态内存占用（用于超限判定）。 */
         val byteSize: Int get() = multilineBuffer.length
     }
 
-    /** 线程 token → 独立桶。保持插入顺序以便 closePending 按序冲刷。 */
-    private val buckets = LinkedHashMap<String, ThreadBucket>()
-
-    /** 线程 token 提取失败时的回退桶（与旧单槽状态机同语义，fail-open）。 */
-    private val fallbackBucket = ThreadBucket()
-
-    /** 当前活跃线程桶数上限（防异常形态下内存膨胀；超出时空闲桶冲刷淘汰）。 */
-    private val maxBuckets: Int get() = DEFAULT_MAX_BUCKETS
+    /** 线程分桶路由（T-LogParseConc 起为三解析器共享实现，见 [LogThreadRouter]）。 */
+    private val router = LogThreadRouter(
+        factory = { ThreadBucket() },
+        isCollecting = { it.collecting },
+        isIdle = { it.pendingSql == null && !it.collecting },
+    )
 
     /** 喂入一行控制台输出（任意线程，内部按线程 token 路由到对应桶——解析器实例按 console 隔离）。 */
     fun feed(line: String) {
         if (!enabled) return
-        val bucket = bucketFor(line)
+        val bucket = router.bucketFor(line)
         // 多行收集态：语句跨行累积中（T-JdbcMultiline）
         if (bucket.collecting) {
             if (looksLikeStatementBoundary(line)) {
@@ -115,6 +116,9 @@ class JdbcTemplateLogParser(
                     bucket.multilineBuffer.append(line.substring(openIdx + 1))
                     bucket.multilineNet = probe.net
                     bucket.multilineInString = probe.inString
+                    // T-LPC-04：记首行——多行条目的日志时间取它（此前多行路径不记 pendingLogLine，
+                    // 条目 logTimestamp 恒 null → 面板回落捕获时间，控制台积压时与日志行拉开）
+                    bucket.collectingFirstLine = line
                 }
                 return
             }
@@ -124,7 +128,10 @@ class JdbcTemplateLogParser(
         // 分支 3：参数行
         val param = extractParamFromLine(line)
         if (param != null) {
-            if (bucket.pendingSql == null) return // 无 SQL 上下文，忽略
+            if (bucket.pendingSql == null) {
+                LogParseDiag.paramWithoutContext.incrementAndGet() // T-LPC-05：静默丢弃留痕
+                return
+            }
             bucket.pendingParams += param
             return
         }
@@ -144,12 +151,14 @@ class JdbcTemplateLogParser(
             // 多行残句强制闭合（T-JdbcMultiline）——宁交未闭合残句，不整段丢弃
             val partial = bucket.multilineBuffer.toString()
             if (partial.isNotBlank()) {
+                LogParseDiag.partialMultilineClosed.incrementAndGet() // T-LPC-05
                 finishCollecting(bucket, partial)
             } else {
                 bucket.collecting = false
                 bucket.multilineBuffer.setLength(0)
                 bucket.multilineNet = 0
                 bucket.multilineInString = false
+                bucket.collectingFirstLine = null
             }
         }
 val sql = bucket.pendingSql ?: return null
@@ -174,12 +183,11 @@ val sql = bucket.pendingSql ?: return null
     /** 闭合全部线程桶的未完成条目（面板刷新 / 粘贴末尾时调用）。返回首个产出的条目（保持旧 closePending 返回语义）。 */
     fun closePending(): LogSqlEntry? {
         var first: LogSqlEntry? = null
-        for (bucket in buckets.values) {
+        for (bucket in router.allBuckets()) {
             val produced = closeBucketPending(bucket)
             if (first == null) first = produced
         }
-        val fallbackProduced = closeBucketPending(fallbackBucket)
-        return first ?: fallbackProduced
+        return first
     }
 
     /** 取出全部已闭合条目并清空缓冲区（面板刷新用）。 */
@@ -187,66 +195,6 @@ val sql = bucket.pendingSql ?: return null
         val result = entries.toList()
         entries.clear()
         return result
-    }
-
-    /**
-     * 根据日志行线程 token 路由到对应桶；提取失败回退共享默认桶（fail-open）。
-     *
-     * 续行归属（T-JdbcMultiline）：多行 SQL 的后续行（`FROM t` / `WHERE x = 1]` 等）通常不带日志前缀
-     * （无线程 token），但属于 COLLECTING 态桶的续行——此时路由到唯一 COLLECTING 桶（通常只有一个线程
-     * 处于收集态），避免续行落入默认桶致收集态中断。多个桶同时 COLLECTING 时取首个（极罕见，回退语义可接受）。
-     * 桶数超限时冲刷淘汰空闲桶（无 pendingSql / 非 COLLECTING）防内存膨胀。
-     */
-    private fun bucketFor(line: String): ThreadBucket {
-        val token = extractThreadToken(line)
-        if (token != null) {
-            buckets[token]?.let { return it }
-            // 超限保护：冲刷淘汰空闲桶后新建（空闲 = 无 pendingSql 且非 COLLECTING）
-            if (buckets.size >= maxBuckets) {
-                val iterator = buckets.entries.iterator()
-                while (iterator.hasNext() && buckets.size >= maxBuckets) {
-                    val entry = iterator.next()
-                    if (entry.value.pendingSql == null && !entry.value.collecting) iterator.remove()
-                }
-            }
-            return ThreadBucket().also { buckets[token] = it }
-        }
-        // 无线程 token：多行续行归属到 COLLECTING 桶（唯一收集态桶）；否则回退共享默认桶（fail-open）
-        return buckets.values.firstOrNull { it.collecting } ?: fallbackBucket
-    }
-
-    /**
-     * 从日志行提取线程 token（用于分桶隔离并发语句）。
-     *
-     * 兼容三种形态：
-     * - SkyWalking 注入：`2026-09-15 13:47:17.843 [TID: AE51C…] [http-nio-…-exec-4] DEBUG …`
-     * - logback 默认：`2026-08-21 10:00:00.124 TRACE [main] o.h… : …`
-     * - Spring Boot 默认：`2026-08-24 15:46:42.444 [TID: null] [cache-preheat-1] TRACE …`
-     *
-     * 以日志级别关键词（DEBUG/TRACE/INFO/WARN/ERROR）为锚，取前后 35 字符窗口内最近的非 TID 非纯数字方括号段。
-     * 返回 null 表示无法可靠提取（→ 回退共享默认桶，fail-open）。
-     */
-    private fun extractThreadToken(line: String): String? {
-        // T-PerfSweep2 复查在案热点收口（T-AgentDialectLoop 落码）：级别正则曾在此每行现场编译
-        // （feed→bucketFor→extractThreadToken 逐行路径），提为 companion 常量 LEVEL_KEYWORD_PATTERN
-        val levelMatch = LEVEL_KEYWORD_PATTERN.find(line) ?: return null
-        val levelPos = levelMatch.range.first
-        // level 前 35 字符（SkyWalking: [TID][thread] LEVEL）
-        val beforeLevel = line.substring((levelPos - THREAD_WINDOW).coerceAtLeast(0), levelPos)
-        // level 后 35 字符（logback: LEVEL [thread] logger）
-        val afterLevel = line.substring(levelPos, (levelPos + THREAD_WINDOW).coerceAtMost(line.length))
-
-        fun findThread(s: String): String? =
-            THREAD_BRACKET.findAll(s)
-                .map { it.groupValues[1] }
-                .filter { token ->
-                    !token.startsWith("TID:", ignoreCase = true) && // 排除 SkyWalking 追踪段
-                        !token.matches(PURE_DIGIT) &&                 // 纯数字（column index / 数组下标）
-                        token.isNotBlank()
-                }
-                .lastOrNull()
-
-        return findThread(beforeLevel) ?: findThread(afterLevel)
     }
 
     // ---------- 私有方法（与旧版同逻辑，按桶操作） ----------
@@ -390,6 +338,11 @@ val sql = bucket.pendingSql ?: return null
 
     /** 闭合多行语句：保留内部换行、削首尾空白，回归与单行一致的 pendingSql 生命周期。 */
     private fun finishCollecting(bucket: ThreadBucket, sql: String) {
+        // T-LPC-04：多行条目的日志时间取**收集首行**（该行才是 SQL 所在日志行，含时间戳前缀）——
+        // 此前多行路径不记 pendingLogLine，条目 logTimestamp 恒 null → 面板回落捕获时间，
+        // 控制台行多/管道滞后时与日志行时间拉开（用户实测 209ms）。
+        bucket.pendingLogLine = bucket.collectingFirstLine
+        bucket.collectingFirstLine = null
         bucket.collecting = false
         bucket.multilineBuffer.setLength(0)
         bucket.multilineNet = 0
@@ -444,24 +397,8 @@ val sql = bucket.pendingSql ?: return null
     companion object {
         const val DEFAULT_MAX_PARSE_LENGTH = 20000
 
-        /** T-JdbcThreadBucket：单实例最大线程桶数（超限时空闲桶冲刷淘汰）。 */
-        private const val DEFAULT_MAX_BUCKETS = 64
-
-        /** T-JdbcThreadBucket：线程 token 提取时，日志级别关键词前后窗口大小（字符）。 */
-        private const val THREAD_WINDOW = 35
-
-        /** T-JdbcThreadBucket：匹配行内方括号段（线程名 / TID 段 / 纯数字下标）。 */
-        private val THREAD_BRACKET = Regex("""\[([^\]]*)\]""")
-
-        /** T-JdbcThreadBucket：纯数字判定（column index / 数组下标 / BIGINT 等非线程名）。 */
-        private val PURE_DIGIT = Regex("""\d+""")
-
-        /**
-         * T-JdbcThreadBucket：日志级别关键词锚点（线程 token 提取定位用）。
-         * 曾在 [extractThreadToken] 内每行现场编译（第五轮性能复查在案中低热点），
-         * T-AgentDialectLoop 收口为常量——嗅探模式同样走逐行喂入路径。
-         */
-        private val LEVEL_KEYWORD_PATTERN = Regex("""\b(DEBUG|TRACE|INFO|WARN|ERROR)\b""")
+        // T-LogParseConc：线程 token 提取 / 分桶 / 桶上限已下沉 [LogThreadRouter]（三解析器共享），
+        // 原 THREAD_WINDOW / THREAD_BRACKET / PURE_DIGIT / LEVEL_KEYWORD_PATTERN / DEFAULT_MAX_BUCKETS 随之下沉。
 
         /**
          * SQL 行动作短语（T-JdbcMultiline 自旧「同行 `[...]` 正则」拆出）。

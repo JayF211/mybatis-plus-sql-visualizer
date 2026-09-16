@@ -259,9 +259,9 @@ class AgentLogTimeParityTest {
     // ---------- 未命中面：占位符版原文两侧不同的已知残余（回落语义受 L1 保护） ----------
 
     @Test
-    fun `多行SQL_未命中回落捕获时间_待L5续行落地`() {
-        // MyBatisLogParser 只把 Preparing 行当 SQL、续行当噪声丢弃（L5「多行 SQL 续行」列在册未实施），
-        // 故控制台侧 rawSql 只首行、agent 侧完整多行 → 键不等。L5 落地后本用例应改为命中。
+    fun `多行SQL_续行落地后命中日志行时间`() {
+        // T-LPC-07（2026-09-16 本期实施）：MyBatisLogParser 支持多行 SQL 续行后，控制台侧 rawSql
+        // 与 agent 侧完整 SQL 同形 → 键相等 → 命中。本用例此前记录为「已知未命中（待 L5 落地）」。
         val entry = runChain(
             listOf(
                 "$logLineTime [main] ==>  Preparing: SELECT id, name",
@@ -272,7 +272,7 @@ class AgentLogTimeParityTest {
             "SELECT id, name\nFROM user\nWHERE id = ?",
             listOf(Triple(1, "42", "Long")),
         )
-        assertMissKeepsCaptureTime(entry, "多行 SQL（L5 未实施）")
+        assertHit(entry, "多行 SQL（续行已落地）")
     }
 
     @Test

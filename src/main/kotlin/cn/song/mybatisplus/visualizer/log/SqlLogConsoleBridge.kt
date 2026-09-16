@@ -223,6 +223,9 @@ open class SqlLogConsoleBridge(
         val hasMain = hasMainConsole()
         // 每轮状态日志（debug——诊断主控制台移除检测）
         LOG.debug("scanAll: hasMainConsole=$hasMain, lastHadMainConsole=$lastHadMainConsole")
+        // T-LPC-05：控制台解析的静默失效计数周期上报（零增量零输出）——解析器内部无 IDE 依赖，
+        // 上报挂在既有轮询上，排障时能直接看到「参数被丢/等待态拦下/残句闭合」各发生多少次。
+        LogParseDiag.takeDeltaReport()?.let { LOG.info(it) }
         // 主控制台移除：上一轮有、当前轮无 → 项目停止
         if (lastHadMainConsole && !hasMain) {
             LOG.info("scanAll: 主控制台已移除（上轮有、当前无），触发 onConsoleRemoved")

@@ -187,3 +187,27 @@ MP 分页场景（`selectPage` + `selectPage_mpCount`，COUNT 查询打印空 `P
 3. 时间列（`.SSS` 格式）与控制台对应日志行逐条比对，多行 SQL 也要对得上；
 4. 抽查「参数数量与占位符数量不一致」提示是否还出现（应显著减少）；
 5. 插件日志中 T-LPC-05 的计数项应为 0 或极少。
+
+## 八、交付记录（2026-09-16）
+
+实施范围：**T-LPC-01~05、T-LPC-07、T-LPC-08 全部落地；T-LPC-06（Hibernate 接入分桶）本轮不做**（理由见下）。
+
+| 任务 | 落地 |
+|---|---|
+| T-LPC-01 | 新增 `log/LogThreadRouter.kt`：`threadTokenOf`（三形态 token 提取 + TID/纯数字段排除）、`bucketFor`（分桶 + 空闲桶淘汰 + 无线程行归属）、`allBuckets`/`clear`；`JdbcTemplateLogParser` 改为复用（原 `bucketFor`/`extractThreadToken` 与四个 companion 常量随之下沉）；新增 `LogThreadRouterTest` 7 例 |
+| T-LPC-02 | `MyBatisLogParser` 状态全部按桶隔离（`Bucket`：pendingSql / pendingLogLine / pendingParams / prefixMatched / paramPrefixMatched / continuing）；`closePending()` 改为全桶冲刷 |
+| T-LPC-03 | 空 `Parameters:` 等待态加判别式 `looksLikeLogLine`：等到的行带日志特征 → 该语句判为无参、闭合且**不吞该行**（重新按正常流程喂入并自行路由），计数 `swallowedLineBlocked`；裸文本行维持旧兼容语义（双向用例锁死） |
+| T-LPC-04 | `JdbcTemplateLogParser` 新增 `collectingFirstLine`，`finishCollecting` 以**首行**为 `pendingLogLine`（含残句强制闭合路径）→ 多行条目 `logTimestamp` 不再是 null |
+| T-LPC-05 | 新增 `LogParseDiag`（参数无上下文丢弃 / 空参行拦下 / 残句闭合 / 参数含日志特征被拒）+ `takeDeltaReport()` 增量上报；挂在 `SqlLogConsoleBridge.scanAll()` 既有轮询上（零增量零输出） |
+| T-LPC-07 | `MyBatisLogParser` 支持多行 SQL 续行：`Preparing:` 后的裸文本行并入 `pendingSql`（受 `maxParseLength` 约束），终止条件=空行 / 日志行 / 异构语句行（`Hibernate:` 头、`名称:` 形态）；`AgentLogTimeParityTest` 多行用例由「已知未命中」改判**命中** |
+| T-LPC-08 | `CHANGELOG.md`（[Unreleased] Fixed 新增条目）、`docs/变更记录.md` 新增行、本交付记录 |
+
+**T-LPC-06（Hibernate 分桶）本轮不做的理由**：Hibernate 的 `Hibernate: select …` stdout 副本（`show-sql: true`）**不带日志前缀、提取不到线程 token**，而 logger 副本带 token 分属不同桶——两者分落两桶会破坏 T-HibDualCapture 的「零参数影子条目被参数版取代」合并逻辑（同一条 SQL 可能双份显示）。要安全分桶需让无线程行路由感知隔离槽，属独立改造；且本轮用户症状全在 MyBatis 链路，无 Hibernate 复现场景可验证。留待有实际反馈时按本计划 S1 的同一 router 接入。
+
+**实施中的两处设计修正（都已写入变更记录）**：
+1. 续行判定必须排在「空 `Parameters:` 等待态」**之后**——否则裸参数行（`42(Long)`）会被当续行吞进 SQL（既有兼容语义用例当场红）；
+2. 裸续行（无线程 token）的路由谓词要包含「等待态」桶（`continuing || prefixMatched || paramPrefixMatched`）——否则带 token 的 `Preparing:` 行与其后裸 SQL 行会分属两桶，等待态永远完不成（`带日志框架前缀分行` 既有用例当场红）。
+
+**门禁**：`./gradlew test :sql-visualizer-agent:test` 绿（4m26s；IDE 侧 346 类/4293 用例、agent 侧 9 类/40 用例，0 失败 0 错误）。
+
+**真机验收**见 §七；本次修复同时使 T-AgentLogTime 的「多行 SQL 日志时间走回落」残余消失（两通道 rawSql 恢复同形）。
