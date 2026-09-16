@@ -123,4 +123,10 @@ docs/开发计划 71 件、memory-archive 44 件（bug-fixes 37+pitfalls 7）、
 ## 8. 实施记录
 
 提交链（滚动回填）：
-- （待回填）
+- 8fb1eef C1 立项计划
+- f671228 C2 agent 子项目落位（sub-projects 36 文件直取 + settings/gradle.properties/build.gradle.kts union + agent 42 用例绿 + fat jar 出包）
+- （C3~C9 滚动回填）
+
+过程记录：
+- 生产翻译采用「主会话增量移植 + 五个并行子代理分批」：B（LogThreadRouter/LogParseDiag/LogTimeCorrelator/ListParamRenderer/SourceCaptureGuide）、C（agent IDE 侧七件含 AgentSession 拆分 + EnhancedCaptureConfirmDialog）、D（BatchSubmitter/PendingReportScheduler，三处适配点待 ErrorReportComposer 批次回收）、A（低层 util 五件，限流失败后由主会话补齐）、E（log 六件历史往返 8 个 Java，SqlLogParamCodec.decode 改 DecodedPayload record）、F（config+feedback 增量五件）、G（execute+ui 七件）、H（log 高层九件）。首轮 4 并发触发账户限流（A 失败），后续维持 ≤3 并发。
+- 主会话直改：LogSqlEntry 17 组件 record（含 withLogTimestamp）、SqlSource.AGENT、LogSqlModelsKt（logTimeKey/logTimeParamSignature/stampLogTime）、LogEntryPreviewRecognizerKt（T-InParamRec 统一通道 + T-ListParamCollect 命名参数预填 + JDBC/Hibernate 零参数文案分流）、三解析器线程分桶化（T-LogParseConc/T-HibConc/T-AgentLogTime 采集时刻前移）、SqlSourceMarker 3~5 段宽松化 + SourceMarkerData record + isInterceptorSelfPath、SqlLogConsoleBridge 族（SqlCaptureGate 闸门/EP 首行标志/嗅探回填/自位污染防线/诊断计数上报）、FeedbackApi（SubmissionOutcome/HttpFailure/gzip 根治/附件降级）、Dialect（幂等 EXPLAIN + MySQL 家族裸形态）、MpjLambdaConverter（T-MpjColAlias 列归属重写）、UpdateSource/PluginUpdateRunner（换源诊断日志）、MpSqlVisualizerBundle（messageForIde/AUTO→DynamicBundle.getLocale）、plugin.xml（consoleFilterProvider EP/groupWeight 钉序/根 url）、bundle union（master 为底 + 8 个 k2j 自有键回补，en/zh 648 键对齐）、文档直取 146 件 + 三册 union（CHANGELOG 整取 master、变更记录按日期归位 6 行、MEMORY 回补 7 行 k2j 专属行）。
