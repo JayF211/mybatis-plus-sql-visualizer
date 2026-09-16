@@ -31,8 +31,9 @@ class MapperCheckTool : McpToolsetSupport("mpsv_mapper_check") {
             "(id, kind, parameterType, #{} parameter counts, \${} direct-substitution counts — the " +
             "injection surface). With simulate=true, additionally renders every statement with empty " +
             "simulation parameters and runs write-risk and performance analysis on the RENDERED SQL — " +
-            "deterministic evidence a static-only validator cannot produce (rendering is this plugin's " +
-            "core). Pass 'xmlSnippet' (mapper XML text) or 'filePath' (project-relative or absolute). " +
+            "validators return a confidence score; this returns deterministic evidence a static-only " +
+            "validator cannot produce (rendering is this plugin's core). Pass 'xmlSnippet' (mapper XML " +
+            "text) or 'filePath' (project-relative or absolute). " +
             "Read-only: analysis only — never executes SQL.",
     )
     @McpToolHints(

@@ -17,8 +17,9 @@ class RenderSqlTool : McpToolsetSupport("mpsv_render_sql") {
             "MyBatis annotation SQL (@Select etc.), JPA @Query/derived queries/CriteriaQuery, HQL and " +
             "JdbcTemplate string SQL in the current IntelliJ project, with real parameter values filled in. " +
             "Pass (filePath, line) of the source location (line is 1-based; omit for the first statement), " +
-            "or pass xmlSnippet + sourceType='xml_mapper' for a mapper XML text. When the target yields " +
-            "several statements, each is prefixed with a '-- SQL #N' comment line. This is a deterministic " +
+            "or pass xmlSnippet + sourceType='xml_mapper' for a mapper XML text. One statement per call: " +
+            "when several candidates match the location, the first is rendered and the output notes it; " +
+            "for multi-statement log text use mpsv_render_logs. This is a deterministic " +
             "renderer: it returns the executable SQL itself, not a validation verdict. " +
             "Read-only: never executes SQL.",
     )

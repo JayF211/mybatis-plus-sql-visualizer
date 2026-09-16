@@ -83,7 +83,8 @@
 
     <!-- T-McpToolset MCP 能力一期：com.intellij.mcpServer（平台内置 MCP Server 插件，253+/262 内置，
          243 不支持——旧 EP 形态适配成本>收益，见 CHANGELOG）——mcp-optional.xml 注册
-         mcpServer.mcpToolset（SqlVisualizerToolset 三只读工具）。未装该插件的环境整文件不加载，
+         mcpServer.mcpToolset（十个只读工具，一工具一 toolset 类，清单见 mcp-optional.xml）。
+         未装该插件的环境整文件不加载，
          插件其余功能零影响；编译期类型来自 mcpStub 桩源集（本机构建辅助，见 build.gradle.kts 注释） -->
     <depends optional="true" config-file="mcp-optional.xml">com.intellij.mcpServer</depends>
 

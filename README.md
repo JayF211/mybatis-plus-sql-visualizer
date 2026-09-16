@@ -105,7 +105,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 **MCP：给 AI agent 的确定性 SQL 工具**
 
 - 内置 MCP Server 注册十个只读工具（IDEA 2025.2+，未装 MCP Server 插件的环境零影响）：渲染三件套 `mpsv_render_sql`（源码定位直接渲染可执行 SQL，含真实参数）/ `mpsv_schema_context`（表列结构紧凑上下文）/ `mpsv_explain`（七方言执行计划），工作流四件套 `mpsv_render_logs`（MyBatis/Hibernate/JdbcTemplate 日志还原可执行 SQL）/ `mpsv_check_sql`（静态写风险与类型核查）/ `mpsv_rollback_plan`（回滚预案，不执行）/ `mpsv_perf_advice`（20 条规则性能建议），生成与核查三件套 `mpsv_crud_sql`（实体生成 CRUD）/ `mpsv_reverse_sql`（SQL 转 MyBatis-Plus 代码）/ `mpsv_mapper_check`（mapper 契约 + 渲染产物风险核查）——Claude Code / Cursor / AI Assistant 等 agent 可直接调用
-- 设置页「MCP 工具」子页可整体开关插件 MCP 功能、逐工具启用/禁用（平台工具面在下一次列表/调用即时生效）；与校验类工具的位差一句话：校验器告诉你 SQL 可不可信，这里是渲染器——直接给出可执行的 SQL 本体
+- 设置页「MCP 工具」子页可整体开关插件 MCP 功能、逐工具启用/禁用（平台工具面在下一次列表/调用即时生效）；与校验类工具的位差一句话：校验器给的是置信度评分，这里给的是确定性证据——静态校验器产不出的渲染产物实证
 
 **检查更新（Gitee 抢先体验通道）**
 
