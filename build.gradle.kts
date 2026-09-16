@@ -439,9 +439,14 @@ tasks {
     // （内容为全系列累计）；转正时改为纯数字标题并将累计内容并入正式版块。
     patchPluginXml {
         changeNotes = """
-            <h2>v2026.9.18-beta.1</h2>
+            <h2>v2026.9.18-beta.2</h2>
             <ul>
                 <li>JdbcTemplate 集合参数方括号误入 SQL 修复</li>
+                <li>日志原始时间记录与显示切换</li>
+                <li>日志列表搜索行号/时间 + 右键复制时间戳</li>
+                <li>JdbcTemplate 并发日志交错参数错挂修复</li>
+                <li>历史页时间戳格式跟随设置</li>
+                <li>批量错误报告合并为单个弹窗</li>
             </ul>
             <h2>v2026.9.14</h2>
             <ul>
