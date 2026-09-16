@@ -95,6 +95,9 @@ class MapperCheckTool : McpToolsetSupport("mpsv_mapper_check") {
                 append('\n').append("-- statement #").append(index + 1)
                     .append(": ").append(statement.id)
                     .append(" [").append(statement.kind.name).append("]")
+                    // T-StatementNaming（O-19）：语句前导注释名附注（无注释零差异）
+                    cn.song.mybatisplus.visualizer.util.SqlStatementNamer.nameOf(rendered.sql)
+                        ?.let { append(" [").append(it).append("]") }
                 statement.parameterType?.let { append(" parameterType=").append(it) }
                 append('\n')
                 append("    #{} parameters: ").append(rendered.mappings.size)

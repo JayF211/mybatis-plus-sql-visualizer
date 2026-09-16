@@ -367,7 +367,13 @@ class LogToSqlPanel(
         val out = entries.mapIndexed { index, entry ->
             val base = withTerminator(entry.restoredSql)
             val body = if (formatToggled) SqlFormatter.format(base) else base
-            if (multi) "-- ${MpSqlVisualizerBundle.message("logToSql.status.group", index + 1)}\n$body" else body
+            if (multi) {
+                // T-StatementNaming（O-19）：语句前导注释 `-- Name: x`（或最近行注释）→ 组头附「 [名称]」；
+                // 无注释 nameOf=null 后缀空串——组头逐字节维持现状（硬门禁）
+                val named = cn.song.mybatisplus.visualizer.util.SqlStatementNamer.nameOf(entry.restoredSql)
+                "-- ${MpSqlVisualizerBundle.message("logToSql.status.group", index + 1)}" +
+                    (if (named != null) " [$named]" else "") + "\n$body"
+            } else body
         }.joinToString("\n\n")
         // T-HibDualCapture：string-aware 计数，字符串/注释里的 `?` 不再误计
         val unresolved = entries.count { countPlaceholders(it.restoredSql) > 0 }

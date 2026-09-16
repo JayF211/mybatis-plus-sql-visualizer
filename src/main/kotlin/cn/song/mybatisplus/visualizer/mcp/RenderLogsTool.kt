@@ -91,6 +91,9 @@ class RenderLogsTool : McpToolsetSupport("mpsv_render_logs") {
                 append(" [").append(entry.source.name.lowercase()).append("]")
                 if (entry.sourceLine > 0) append(" log line ").append(entry.sourceLine)
                 entry.executionTimeMs?.let { append(" (").append(it).append("ms)") }
+                // T-StatementNaming（O-19）：语句前导注释名附注（无注释零差异）
+                cn.song.mybatisplus.visualizer.util.SqlStatementNamer.nameOf(entry.restoredSql)
+                    ?.let { append(" [").append(it).append("]") }
                 append("\n").append(entry.restoredSql)
                 if (index < entries.size - 1) append("\n\n")
             }

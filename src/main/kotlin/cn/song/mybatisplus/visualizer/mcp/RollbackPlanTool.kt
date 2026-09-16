@@ -57,7 +57,11 @@ class RollbackPlanTool : McpToolsetSupport("mpsv_rollback_plan") {
             } else {
                 append("rollback statements (").append(result.statements.size).append("):\n")
                 result.statements.forEachIndexed { index, statement ->
-                    append("-- SQL #").append(index + 1).append('\n').append(statement).append('\n')
+                    // T-StatementNaming（O-19）：语句前导注释名附注（无注释零差异）
+                    append("-- SQL #").append(index + 1)
+                    cn.song.mybatisplus.visualizer.util.SqlStatementNamer.nameOf(statement)
+                        ?.let { append(" [").append(it).append("]") }
+                    append('\n').append(statement).append('\n')
                 }
             }
             if (result.warnings.isNotEmpty()) {
