@@ -450,21 +450,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     toolTipText = MpSqlVisualizerBundle.message("settings.autoFold.threshold.tip")
                 })
                 addRow(p, g, "", literalParamRecoveryCheck.apply { text = MpSqlVisualizerBundle.message("settings.literalParamRecovery") })
-                addRow(p, g, "", enhancedCaptureCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.enhancedCapture")
-                    addActionListener {
-                        if (isSelected && !PluginSettings.getInstance().state.enhancedCaptureConfirmed) {
-                            // T-M56-08：首次启用弹注入确认（确认记忆持久化，重开不弹）
-                            if (EnhancedCaptureConfirmDialog.confirm(null)) {
-                                PluginSettings.getInstance().state.enhancedCaptureConfirmed = true
-                            } else {
-                                isSelected = false
-                            }
-                        }
-                    }
-                })
-                addRow(p, g, "", enhancedDesensitizeCheck.apply { text = MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize") })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.enhancedCapture.status"), enhancedStatusLabel)
                 addRow(p, g, "", injectLogicDeleteCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectLogicDelete") })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.logicDeleteValue"), logicDeleteValueField.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.logicDeleteValue.tip")
@@ -556,6 +541,22 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 addRow(p, g, "", logAutoCaptureCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoCapture") })
                 addRow(p, g, "", logAutoOpenCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoOpen") })
                 addRow(p, g, "", logStopOnToolWindowCloseCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.stopOnToolWindowClose") })
+                // M56 T-M56-08：增强捕获三行归位 SQL 日志区组（捕获通道类设置与监听开关聚在一起）
+                addRow(p, g, "", enhancedCaptureCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.enhancedCapture")
+                    addActionListener {
+                        if (isSelected && !PluginSettings.getInstance().state.enhancedCaptureConfirmed) {
+                            // T-M56-08：首次启用弹注入确认（确认记忆持久化，重开不弹）
+                            if (EnhancedCaptureConfirmDialog.confirm(null)) {
+                                PluginSettings.getInstance().state.enhancedCaptureConfirmed = true
+                            } else {
+                                isSelected = false
+                            }
+                        }
+                    }
+                })
+                addRow(p, g, "", enhancedDesensitizeCheck.apply { text = MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize") })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.enhancedCapture.status"), enhancedStatusLabel)
                 addRow(p, g, "", logTimestampCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.timestamp") })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timestampFormat"), logTimestampFormatField.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.timestampFormat.tip")
