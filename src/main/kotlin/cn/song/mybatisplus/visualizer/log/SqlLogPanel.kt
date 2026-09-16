@@ -547,6 +547,21 @@ class SqlLogPanel(
         }
     }
 
+    // ---------- T-M55-03/04：动态聚焦过滤页签栏字段（须在 init 块之前——Kotlin 按文本序初始化，
+    // init 里 buildTopPanel 会读这些字段） ----------
+
+    /** 当前开启的聚焦页签（EDT 读写——右键菜单/页签关闭按钮均在 EDT）。 */
+    private val focusTabs = mutableListOf<FocusTab>()
+
+    /** 聚焦页签栏（工具栏行与搜索条之间；无页签时隐藏不占高度）。 */
+    private val focusTabBar = JPanel(WrapLayout()).apply { isOpaque = false; isVisible = false }
+
+    /** 聚焦隐藏计数提示（聚焦视图下不匹配任何页签的条目数；无页签时隐藏）。 */
+    private val focusHiddenLabel = JLabel().apply {
+        foreground = MpvsUiColors.META_GRAY
+        isVisible = false
+    }
+
     init {
         // 注册子面板到 Disposer 树：父面板 dispose 时级联释放子面板（及其 DocumentListener），
         // 避免 IDE 退出时 ObjectTree 报 Memory leak detected
@@ -613,12 +628,78 @@ class SqlLogPanel(
         manager.addCapturingListener(capturingUiListener)
     }
 
-    // ---------- 顶部区域（工具栏行 + 搜索条） ----------
+    // ---------- T-M55-03/04：动态聚焦过滤页签栏（页签=过滤器，多开并集，可关闭；不碰差分） ----------
+    // 字段（focusTabs/focusTabBar/focusHiddenLabel）声明在类头部 init 块之前（文本序初始化）
 
-    /** 顶部竖向容器：工具栏行（NORTH）+ 搜索条（SOUTH，默认隐藏不占空间）。 */
+    /** 当前开启的聚焦页签（测试断言）。 */
+    internal fun focusTabsForTest(): List<FocusTab> = focusTabs.toList()
+
+    /** 聚焦页签栏子组件数（测试断言：页签数 = chips + 前缀标签 + 计数标签）。 */
+    internal val focusTabBarComponentCountForTest: Int get() = focusTabBar.componentCount
+
+    /** 聚焦隐藏计数提示（测试断言显隐与文案）。 */
+    internal val focusHiddenLabelForTest: JLabel get() = focusHiddenLabel
+
+    /** 测试驱动：等价右键「聚焦调用方方法/按请求聚焦」添加页签。 */
+    internal fun addFocusTabForTest(tab: FocusTab) = addFocusTab(tab)
+
+    /** 测试驱动：等价页签 ✕ 关闭。 */
+    internal fun removeFocusTabForTest(tab: FocusTab) = removeFocusTab(tab)
+
+    private fun addFocusTab(tab: FocusTab) {
+        val next = when (tab) {
+            is FocusTab.Request -> addRequestTab(focusTabs, tab.requestTag)
+            is FocusTab.Method -> if (focusTabs.contains(tab)) focusTabs.toList() else focusTabs + tab
+        }
+        focusTabs.clear()
+        focusTabs.addAll(next)
+        rebuildFocusTabBar()
+        refreshList()
+    }
+
+    private fun removeFocusTab(tab: FocusTab) {
+        if (focusTabs.remove(tab)) {
+            rebuildFocusTabBar()
+            refreshList()
+        }
+    }
+
+    /** 重建页签栏 chips（页签数 = 前缀标签 + N×chip + 计数标签）。 */
+    private fun rebuildFocusTabBar() {
+        focusTabBar.removeAll()
+        focusTabBar.add(JLabel(MpSqlVisualizerBundle.message("log.focus.label")))
+        focusTabs.forEach { focusTabBar.add(buildFocusChip(it)) }
+        focusTabBar.add(focusHiddenLabel)
+        focusTabBar.isVisible = focusTabs.isNotEmpty()
+        focusTabBar.parent?.revalidate()
+        focusTabBar.parent?.repaint()
+    }
+
+    /** 单个聚焦页签 chip：名称 + ✕ 关闭（关闭即摘除过滤器并刷新）。 */
+    private fun buildFocusChip(tab: FocusTab): JComponent {
+        val chip = JPanel(FlowLayout(FlowLayout.LEFT, 2, 0)).apply { isOpaque = false }
+        chip.add(JLabel(tab.label).apply { toolTipText = tab.label })
+        chip.add(JButton(AllIcons.Actions.Close).apply {
+            isFocusable = false
+            toolTipText = MpSqlVisualizerBundle.message("log.focus.close")
+            addActionListener { removeFocusTab(tab) }
+        })
+        return chip
+    }
+
+    /** 右键入口的聚焦页签解析（sourceFile+sourceLine → 方法行号区间页签）；解析失败返回 null。 */
+    internal fun resolveCallerMethodFocus(entry: LogSqlEntry): FocusTab.Method? {
+        val range = CallerMethodRangeResolver.resolve(project, entry.sourceFile, entry.sourceLine) ?: return null
+        return FocusTab.Method(range.sourceFile, range.startLine, range.endLine, range.className, range.methodName)
+    }
+
+    // ---------- 顶部区域（工具栏行 + 聚焦页签栏 + 搜索条） ----------
+
+    /** 顶部竖向容器：工具栏行（NORTH）+ 聚焦页签栏（CENTER，无页签隐藏不占高度）+ 搜索条（SOUTH）。 */
     private fun buildTopPanel(): JPanel {
         val top = JPanel(BorderLayout())
         top.add(buildToolbar(), BorderLayout.NORTH)
+        top.add(focusTabBar, BorderLayout.CENTER)
         top.add(searchField, BorderLayout.SOUTH)
         return top
     }
@@ -1151,12 +1232,23 @@ class SqlLogPanel(
         entryCellRenderer.dedupeCounts = dedupeCounts
 
         val filtered = filterByFocus(filterByType(snapshot, activeFilter), activeFocus)
-        val searched = filterBySearch(filtered, searchText)
+        // T-M55-03/04：动态聚焦页签层（页签=过滤器，多开并集；离散增删走 FullRebuild，差分零改动）
+        val focused = filterByFocusTabs(filtered, focusTabs)
+        val searched = filterBySearch(focused, searchText)
         val newVisible = applySort(searched)
         val evicted = manager.entries.drainEvictedCount()
 
         if (!applyIncremental(newVisible, evicted)) {
             applyFullRebuild(newVisible, gen)
+        }
+
+        // 聚焦隐藏计数提示（聚焦层单独度量：输入 filtered → 输出 focused）
+        if (focusTabs.isEmpty()) {
+            focusHiddenLabel.isVisible = false
+        } else {
+            val hidden = filtered.size - focused.size
+            focusHiddenLabel.text = MpSqlVisualizerBundle.message("log.focus.hidden", hidden.toString())
+            focusHiddenLabel.isVisible = hidden > 0
         }
 
         // O-1：同步慢查询阈值 + 更新计数（Phase C）
@@ -1444,6 +1536,8 @@ class SqlLogPanel(
         // O-1：日志 ↔ 源码关联跳转（Phase A）；T-M55-01：拆「跳转到 Java」「跳转到 XML」双目标
         group.add(JumpToSourceAction(entry))
         group.add(JumpToMapperXmlAction(entry))
+        // T-M55-03：方法级聚焦（sourceFile 非空时可用；解析失败 toast 提示，无静默吞没）
+        group.add(FocusCallerMethodAction(entry))
         val popup = ActionManager.getInstance().createActionPopupMenu("mpvs.log.list", group)
         // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
         popup.setTargetComponent(list)
@@ -1541,6 +1635,29 @@ class SqlLogPanel(
             // update 已解析成功才可见可点；防御再解析一次（menu 会话内基本命中缓存外的同结果）
             val target = resolved ?: resolveEntryXmlJump(entry) ?: return
             OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
+        }
+    }
+
+    /**
+     * T-M55-03：聚焦调用方方法（静态行号区间近似版）——sourceFile 非空时可用；
+     * 点击时解析方法行号区间并加入聚焦页签栏（解析失败 toast，不静默）。
+     * Ultra 的编辑器行槽 ⚡ 入口首批不做（记录为可选增强）。
+     */
+    private inner class FocusCallerMethodAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.focusCallerMethod")
+            // MP 分页 COUNT 标记无用户调用点；其余 sourceFile 非空即可用（解析成败在 action 时点判定）
+            e.presentation.isEnabled = entry.sourceFile != null &&
+                !SourceMarkers.isMpPaginationCount(entry.sourceFile)
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            val tab = resolveCallerMethodFocus(entry)
+            if (tab == null) {
+                showJumpToast(MpSqlVisualizerBundle.message("log.panel.focusCallerMethod.failed"))
+                return
+            }
+            addFocusTab(tab)
         }
     }
 
