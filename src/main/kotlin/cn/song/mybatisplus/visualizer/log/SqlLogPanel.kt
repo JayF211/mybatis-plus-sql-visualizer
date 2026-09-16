@@ -55,14 +55,13 @@ import com.intellij.ui.JBColor
 import javax.swing.BorderFactory
 import javax.swing.Box
 import javax.swing.BoxLayout
-import javax.swing.DefaultComboBoxModel
 import javax.swing.DefaultListModel
 import javax.swing.Icon
 import javax.swing.JButton
 import javax.swing.JCheckBox
-import javax.swing.JComboBox
 import javax.swing.JLabel
 import javax.swing.JMenuItem
+import javax.swing.JRadioButtonMenuItem
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
 import javax.swing.JSeparator
@@ -412,24 +411,16 @@ class SqlLogPanel(
     private val sortLabel = JLabel(MpSqlVisualizerBundle.message("log.sort.label"))
 
     /**
-     * 排序方式选择器（T-LogSortModes）：时间升/降序、耗时升/降序、行号；默认时间升序。
-     * 取代原「耗时排序」双态切换按钮——排序恒有确定方式（默认时间升序=捕获顺序），
-     * 不再依赖「是否检测到耗时」决定显隐。
+     * 排序方式按钮（T-LogSortModes）：点击弹单选菜单，文案显示当前方式；与「SQL类型」按钮同款式
+     * （原生 LaF 扁平按钮 + 右侧下箭头），默认时间升序。取代原「耗时排序」双态切换按钮——
+     * 排序恒有确定方式，不再依赖「是否检测到耗时」决定显隐。
      */
-    /** 排序方式下拉模型（声明先于控件——属性按声明序初始化）。 */
-    private val sortModel = DefaultComboBoxModel<SortOption>().apply {
-        sortOptions().forEach { addElement(it) }
-    }
-
-    private val sortCombo = JComboBox(sortModel).apply {
+    private val sortButton = JButton().apply {
         isFocusable = false
+        icon = AllIcons.General.ArrowDown
+        horizontalTextPosition = SwingConstants.LEFT // 图标在文字右侧（下拉按钮惯例，同 SQL类型）
         toolTipText = MpSqlVisualizerBundle.message("log.sort.label")
-        addActionListener {
-            (selectedItem as? SortOption)?.let { option ->
-                sortMode = option.mode
-                refreshList()
-            }
-        }
+        addActionListener { showSortPopup() }
     }
 
     // ---------- T-ListMode：SQL 显示模式（T-DisplayModeToSettings：入口迁设置页「列表显示」，两列表共享一键） ----------
@@ -452,16 +443,17 @@ class SqlLogPanel(
     /** 当前排序模式（测试断言）。 */
     internal val currentSortMode: SortMode get() = sortMode
 
-    /** 排序方式下拉（测试断言/驱动用）。 */
-    internal val sortComboForTest: JComboBox<*> get() = sortCombo
+    /** 排序方式选择（测试驱动：等价用户在菜单里点选某项）。 */
+    internal fun selectSortModeForTest(mode: SortMode) = applySortMode(mode)
 
-    /** 选择排序方式（测试驱动：等价用户在「排序：」下拉里选中某项）。 */
-    internal fun selectSortModeForTest(mode: SortMode) {
-        val idx = (0 until sortModel.size).firstOrNull {
-            sortModel.getElementAt(it).mode == mode
-        } ?: return
-        sortCombo.selectedIndex = idx
-    }
+    /** 排序按钮（测试断言文案/可见性）。 */
+    internal val sortButtonForTest: JButton get() = sortButton
+
+    /** 排序菜单项文案列表（测试断言选项齐备；构建菜单但不 show）。 */
+    internal fun sortMenuLabelsForTest(): List<String> = buildSortMenuItems().map { it.text }
+
+    /** 当前排序方式按钮文案（测试断言）。 */
+    internal val sortButtonTextForTest: String get() = sortButton.text
 
     /** 去重勾选框（F-44-2 测试驱动：模拟用户勾选「移除重复的sql」验证既有条目立即去重）。 */
     internal val dedupeCheckBoxForTest: JCheckBox get() = dedupeCheckBox
@@ -636,10 +628,11 @@ class SqlLogPanel(
         }
         left.add(typeFilterUnit)
         // 排序方式单元：与 SQL类型单元同构（标签 + 控件打包，折行时同进退）
+        updateSortButtonText()
         val sortUnit = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
             isOpaque = false
             add(sortLabel)
-            add(sortCombo)
+            add(sortButton)
         }
         left.add(sortUnit)
         // T-DisplayModeToSettings：显示模式入口迁设置页「列表显示」（工具栏按钮移除）
@@ -1233,6 +1226,44 @@ class SqlLogPanel(
     }
 
     /** 按当前排序模式排序条目。 */
+    // ---------- 排序方式（T-LogSortModes） ----------
+
+    /** 弹出排序方式单选菜单（与 SQL类型弹窗同款交互；当前项打勾）。 */
+    private fun showSortPopup() {
+        val popup = JPopupMenu()
+        buildSortMenuItems().forEach { popup.add(it) }
+        popup.show(sortButton, 0, sortButton.height + 2)
+    }
+
+    /**
+     * 构建排序菜单项（拆出供测试断言选项齐备——headless 下 JPopupMenu.show 不可靠）。
+     * 单选语义：点选即生效并刷新列表与按钮文案。
+     */
+    private fun buildSortMenuItems(): List<JRadioButtonMenuItem> =
+        sortOptions().map { option ->
+            JRadioButtonMenuItem(option.label, option.mode == sortMode).apply {
+                isFocusable = false
+                addActionListener { applySortMode(option.mode) }
+            }
+        }
+
+    /** 应用排序方式：更新模式 → 刷新列表 → 同步按钮文案。 */
+    private fun applySortMode(mode: SortMode) {
+        if (sortMode == mode) {
+            updateSortButtonText()
+            return
+        }
+        sortMode = mode
+        refreshList()
+        updateSortButtonText()
+    }
+
+    /** 排序按钮文案 = 当前方式标签。 */
+    private fun updateSortButtonText() {
+        sortButton.text = sortOptions().firstOrNull { it.mode == sortMode }?.label
+            ?: MpSqlVisualizerBundle.message("log.sort.time.asc")
+    }
+
     private fun applySort(entries: List<LogSqlEntry>): List<LogSqlEntry> = when (sortMode) {
         // 时间升序（默认）：与捕获顺序一致（sortedBy 稳定，等值保持入列序）
         SortMode.TIME_ASC -> entries.sortedBy { displayTimeOf(it) }

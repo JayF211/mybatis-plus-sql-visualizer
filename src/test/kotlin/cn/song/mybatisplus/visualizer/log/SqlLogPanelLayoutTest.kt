@@ -46,7 +46,7 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             assertTrue("工具栏动作组应含 ≥5 个动作（捕捉/清空/设置/搜索/帮助）", panel.toolbarGroup.childActionsOrStubs.size >= 5)
 
             // 默认可见性：排序方式选择器恒可见（默认时间升序）；搜索条默认隐藏；慢查询标签隐藏
-            assertEquals("排序方式选择器应恒可见", true, panel.sortComboForTest.isVisible)
+            assertEquals("排序方式选择器应恒可见", true, panel.sortButtonForTest.isVisible)
             assertEquals("搜索条默认隐藏", false, panel.searchFieldForTest.isVisible)
             assertEquals("默认无慢查询，计数标签应隐藏/为空", false, panel.slowQueryLabelForTest?.isVisible ?: false)
         } finally {
@@ -68,7 +68,7 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
                 ),
             )
             waitForEdt()
-            assertEquals("有耗时信息时排序方式选择器仍可见", true, panel.sortComboForTest.isVisible)
+            assertEquals("有耗时信息时排序方式选择器仍可见", true, panel.sortButtonForTest.isVisible)
             assertEquals("默认排序方式为时间升序", SortMode.TIME_ASC, panel.currentSortMode)
         } finally {
             panel.dispose()
@@ -90,7 +90,7 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             val left = JPanel(SqlLogPanel.WrapLayout())
             left.add(panel.typeFilterLabelForTest)
             left.add(panel.typeFilterButtonForTest)
-            if (panel.sortComboForTest.isVisible) left.add(panel.sortComboForTest)
+            if (panel.sortButtonForTest.isVisible) left.add(panel.sortButtonForTest)
             // 一个极宽占位件，强制 WrapLayout 折行
             left.add(JButton("W".repeat(50)))
             holder.add(left, BorderLayout.CENTER)

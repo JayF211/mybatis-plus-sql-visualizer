@@ -107,19 +107,18 @@ class SqlLogPanelSortAndSlowQueryTest : BasePlatformTestCase() {
         }
     }
 
-    fun test排序方式选择器_恒可见且含全部选项() {
+    fun test排序方式按钮_恒可见且含全部选项() {
         val panel = SqlLogPanel(project, manager)
         try {
             // 无任何耗时信息时排序方式仍可见（默认时间升序恒可用，不再按耗时显隐）
             manager.entries.addEntry(LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(), timestamp = 1L))
             waitForEdt()
-            assertTrue("排序方式选择器应恒可见", panel.sortComboForTest.isVisible)
-            val modes = (0 until panel.sortComboForTest.model.size)
-                .map { (panel.sortComboForTest.model.getElementAt(it) as SortOption).mode }
+            assertTrue("排序方式按钮应恒可见", panel.sortButtonForTest.isVisible)
+            assertEquals("默认按钮文案应为时间升序", "时间升序", panel.sortButtonTextForTest)
             assertEquals(
-                "应含五种排序方式且默认项在最前",
-                listOf(SortMode.TIME_ASC, SortMode.TIME_DESC, SortMode.DURATION_ASC, SortMode.DURATION_DESC, SortMode.SEQUENCE),
-                modes,
+                "菜单应含五种排序方式且时间升序居首",
+                listOf("时间升序", "时间降序", "耗时升序", "耗时降序", "行号"),
+                panel.sortMenuLabelsForTest(),
             )
         } finally {
             panel.dispose()
