@@ -239,12 +239,12 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 ## 归档记忆（docs/memory-archive/，2026-08-22）
 
-> 从本地记忆系统归档的已完成/已交付内容（180 个文件，2026-09-14 第八次精简后），不再每次会话加载，按需查阅。
+> 从本地记忆系统归档的已完成/已交付内容（216 个文件，2026-09-16 第十次精简后），不再每次会话加载，按需查阅。
 > 全局通用记忆（85 个）备份在 `~/.zcode/cli/memories/global/`。
 
 | 文档 | 用途 |
 |------|------|
-| [README.md](./memory-archive/README.md) | 归档索引（已修复 Bug 123 个 + 已解决踩坑 54 个 + 方法论 1 个 + 用户环境 1 个） |
+| [README.md](./memory-archive/README.md) | 归档索引（已修复 Bug 154 个 + 已解决踩坑 59 个 + 方法论 1 个 + 用户环境 1 个） |
 | [bug-fixes/](./memory-archive/bug-fixes/) | 已修复 Bug：exists/iscrud/reverse/jpa/sql-capture/p051 等 |
 | [pitfalls/](./memory-archive/pitfalls/) | 已解决踩坑：IN 子句/HQL/JPA/gutter/selectCollection/startcapture 等 |
 | [user-context/](./memory-archive/user-context/) | 用户环境：Grok API 中转 |
@@ -271,6 +271,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-16 | 记忆第十次精简（45→28 含索引）：15 个已交付任务/调研记忆归档 bug-fixes（T-AgentDialectLoop/M37 系列闭环/全景审计/性能五轮报告/竞品五轮/T-FeedbackBatch2/T-UiNative/T-PerfSweep2/T-ReleasePerf/四计划批次/T-Intranet/T-ListParamCollect/T-McpToolset2/竞品四轮七任务/T-ShortcutSettings，全部 git 实测交付状态后归档）＋2 个已解决踩坑归档 pitfalls（设置树 groupWeight 排序、idea-plugin@url 零消费）＋feedback-verify-scope 收编 project-test-conventions（验证范围定例）；新建 project-pending-plans 收拢在册未实施计划与合流债索引（dev 94/M56 19/t-uinative 8/K2J 101 提交领先实测）；补录 2 条此前漏索引的活跃踩坑（会话 git 快照过时、cherry-pick 使 --contains 失灵），并删除已归档 t-testperf2 的陈旧索引行；archive 增至 216 个文件（bug-fixes 154、pitfalls 59）、全局 85 个、项目记忆保留 27 核心；精简前全量备份 memory-backup-2026-09-16 |
 | 2026-09-15 | 记忆第九次精简（44→28 含索引）：16 个已交付任务记忆归档 bug-fixes（T-TestPerf2/T-MarketInternal/T-ExplainFirstNative/T-ListPreviewCopy/T-MergeFollowup/T-LogHistoryRowNo/T-JumpCapture/T-JumpPath/T-IntrUpg/T-ExecSlowOps/T-ExplainDbl/T-FeedbackDlg/T-FeedbackErr/T-PreviewExecDs/竞品对比第三·四轮）＋pitfall-edt-slowops-coldpath 升级全局（allowSlowOperations 逃生舱 243+262 双重证伪）；archive 增至 196 个文件（bug-fixes 139）、全局 85 个、项目记忆保留 27 核心；精简前全量备份 memory-backup-2026-09-15 |
 | 2026-09-14 | T-ExplainFirstNative 执行计划首点结果缺失＋EXPLAIN 形态对齐原生（master）：首点病灶=DBN 空名占位结果 Tab 被当新结果第 1 拍强制换入（真机 idea.1.log 21:06 逐行实证，二点快照已含 Result 1 故正常）——pickResultTab/contentAdded 钩子跳过空名、refreshResultsComponent 名称集合变化补换入；EXPLAIN 形态=DatabaseTools jar 反编译定案原生 MySQL 家族跑裸 EXPLAIN 表格行（FORMAT=JSON 自创无消费者），MySQL/MariaDB renderExplainStatement 改 `EXPLAIN <sql>`。全量 4081/0/0/6 绿（独立沙盒，并行铁律隔离）。详见 docs/变更记录.md 同日行 |
 | 2026-09-14 | T-ListPreviewCopy 列表预览默认格式化＋多选防误弹＋多选批量复制（master merge 412a762，4039 绿）：预览统一跟随「预览时格式化还原SQL」设置——clickPreviewSql 先补分号再 SqlFormatter.format，历史双击 buildPreviewResult 弃 formatSql=false 硬编码改读 logFormatSql；多选 selectedIndices>1 时 onClick 停表关旧不排程＋show() 兜底封补选竞态；右键命中行在多选内保留/不在收敛（resolveContextMenuSelection）＋batchCopySql 批量复制（与内置 Ctrl+C 逐字节同构、文案带条数）；坑=测试断言后挂起定时器 300ms 到点 EDT 真弹浮窗致 Editor 泄漏（TraceableDisposable$DisposalException），finally cp.dispose() 停表修复。worktree 独立沙盒 4033 绿＋合并后 4039 绿。详见 docs/变更记录.md 同日行 |
