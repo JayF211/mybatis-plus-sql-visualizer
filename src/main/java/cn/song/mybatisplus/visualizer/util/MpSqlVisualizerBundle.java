@@ -82,22 +82,63 @@ public final class MpSqlVisualizerBundle {
         }
     }
 
+    /**
+     * T-ReportL10n-02：嵌入平台 UI 的文案（如 errorHandler 的「报告到…」菜单项与隐私
+     * 提示）恒按 <b>IDE 显示语言</b> 解析，不经插件语言设置。
+     *
+     * 真机二次反馈：插件语言默认 zh，仅改 AUTO 分支不会生效——这两处文案出现在平台
+     * Internal Errors 界面里，周围全是 IDE 语言，必须跟随 IDE 显示语言才不割裂；
+     * 插件自己的对话框仍走 {@link #message}（跟随插件语言设置），边界与 M23「平台组件文案
+     * 不跟插件语言须显式覆盖」一脉相承。IDE locale 不可用（headless）回退 JVM locale。
+     */
+    @NotNull
+    public static String messageForIde(@NotNull @PropertyKey(resourceBundle = BUNDLE_NAME) String key, Object... params) {
+        String pattern;
+        try {
+            pattern = ResourceBundle.getBundle(BUNDLE_NAME, ideDisplayLocale(), loader(), UTF8_CONTROL).getString(key);
+        } catch (Throwable e) {
+            pattern = key;
+        }
+        if (params == null || params.length == 0) return pattern;
+        try {
+            return MessageFormat.format(pattern, params);
+        } catch (Throwable e) {
+            return pattern;
+        }
+    }
+
     private static ClassLoader loader() {
         return MpSqlVisualizerBundle.class.getClassLoader();
     }
 
     /**
-     * 当前语言 locale：默认简体中文；`en`→English；`AUTO`→跟随 IDE（JVM 默认）；
+     * 当前语言 locale：默认简体中文；`en`→English；`AUTO`→跟随 IDE 显示语言；
      * settings 未注册（测试环境）兜底中文。
      */
     private static Locale currentLocale() {
         try {
             String lang = PluginSettings.getInstance().getState().getLanguage();
             if ("en".equals(lang)) return Locale.ENGLISH;
-            if ("AUTO".equals(lang)) return Locale.getDefault();
+            if ("AUTO".equals(lang)) return ideDisplayLocale();
             return Locale.SIMPLIFIED_CHINESE;
         } catch (Throwable e) {
             return Locale.SIMPLIFIED_CHINESE;
+        }
+    }
+
+    /**
+     * T-ReportL10n：{@code AUTO} 的语言落点从 JVM 进程 locale 改为
+     * {@code com.intellij.DynamicBundle.getLocale()}（IDE 实际显示语言）。真机反馈：IDE 界面
+     * 已切英文（Internal Errors 全英文），「报告到需求池」菜单项仍显示中文——
+     * 语言设置选「跟随系统」时 JVM locale 可能仍是系统中文，与 IDE 显示语言脱节。
+     * 平台入口 243（util-8.jar）/262（intellij.platform.core.jar）javap 实证
+     * {@code public static Locale getLocale()} 同签名；测试/headless 不可用时回退 JVM locale。
+     */
+    static Locale ideDisplayLocale() {
+        try {
+            return com.intellij.DynamicBundle.getLocale();
+        } catch (Throwable e) {
+            return Locale.getDefault();
         }
     }
 }

@@ -4,6 +4,7 @@ import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import com.intellij.util.messages.MessageBusConnection;
 import com.intellij.util.messages.Topic;
+import cn.song.mybatisplus.visualizer.log.agent.AgentManager;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
 
@@ -126,6 +127,15 @@ public final class RunConfigurationProcessListener {
                     manager.onProjectProcessStarted();
                 } catch (Throwable t) {
                     LOG.warn("processStarted: 自动捕捉回调失败（project=" + project.getName() + "）", t);
+                }
+
+                // M56 T-M56-01/02：增强捕获惰性挂载入口（增强未开启/未确认时空操作；
+                // 后台线程等进程就绪 + 3s 去抖再 attach，全程不进 EDT）
+                try {
+                    AgentManager.getInstance(project)
+                            .onProcessAppeared(args != null && args.length > 2 ? args[2] : null);
+                } catch (Throwable t) {
+                    LOG.warn("processStarted: 增强捕获回调失败（project=" + project.getName() + "）", t);
                 }
             }
             return null;

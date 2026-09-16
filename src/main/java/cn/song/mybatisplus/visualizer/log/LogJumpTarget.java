@@ -5,12 +5,16 @@ import org.jetbrains.annotations.NotNull;
 import java.util.Objects;
 
 /**
- * F-44-6：实时日志跳转的统一解析结果。优先级高于 [LiveJumpResolution]：
- * 若条目携带源码位置（由 [SqlSourceInterceptor] 标记注入），直接精确 file:line 跳转；
- * 否则回退到表名启发式（[LiveJumpResolution]）。
+ * F-44-6 / T-JumpCapture：实时日志跳转的统一解析结果。
+ * 跳转完全依赖 SqlSourceInterceptor 捕获的源码位置：
+ * 有位置 → 精确 file:line（{@link LjtPrecise}）或文件已失效（{@link LjtNotFound}）；
+ * MP 分页 COUNT 标记 → {@link LjtNoSource}（无用户调用点，纯提示）；
+ * 无位置 → {@link LjtMissingSource}（引导开启源码捕获，{@link SourceCaptureGuide}）。
+ *
+ * <p>原「按表名搜索 Wrapper」回退已整体移除：同表名 ≠ 同调用点，命中即误导。</p>
  */
 public sealed class LogJumpTarget
-        permits LjtPrecise, LjtNoSource, LjtNotFound, LjtSearchByTable, LjtNoTable {
+        permits LjtPrecise, LjtNoSource, LjtNotFound, LjtMissingSource {
 
     LogJumpTarget() {
     }
@@ -100,44 +104,10 @@ final class LjtNotFound extends LogJumpTarget {
     }
 }
 
-/** 按表名搜索实体（回退路径）。 */
-final class LjtSearchByTable extends LogJumpTarget {
-    @NotNull private final String tableName;
+/** 无捕获位置（T-JumpCapture：引导开启源码捕获拦截器，不再按表名搜索回退）。 */
+final class LjtMissingSource extends LogJumpTarget {
+    public static final LjtMissingSource INSTANCE = new LjtMissingSource();
 
-    public LjtSearchByTable(@NotNull String tableName) {
-        this.tableName = tableName;
-    }
-
-    @NotNull public String getTableName() {
-        return tableName;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (!(o instanceof LjtSearchByTable s)) {
-            return false;
-        }
-        return Objects.equals(tableName, s.tableName);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(tableName);
-    }
-
-    @Override
-    public String toString() {
-        return "SearchByTable(tableName=" + tableName + ")";
-    }
-}
-
-/** SQL 无表名（无法定位实体）。 */
-final class LjtNoTable extends LogJumpTarget {
-    public static final LjtNoTable INSTANCE = new LjtNoTable();
-
-    private LjtNoTable() {
+    private LjtMissingSource() {
     }
 }

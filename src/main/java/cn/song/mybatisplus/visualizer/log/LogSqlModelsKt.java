@@ -47,4 +47,46 @@ public final class LogSqlModelsKt {
     public static String normalizeSqlWhitespace(String sql) {
         return sql.trim().replaceAll("\\s+", " ");
     }
+
+    /**
+     * T-AgentLogTime：日志时间关联键——<b>占位符版 rawSql 的指纹</b>。
+     *
+     * 增强通道的 logTimestamp 是派生的（控制台链嗅探暂存 → agent 事件取回），关联键必须两侧同源：
+     * 控制台侧 rawSql = {@code Preparing:} 行原文，agent 侧 rawSql = {@code prepareStatement} 收到的原文，
+     * 二者都不经过参数还原。旧口径用 {@link LogSqlEntry#dedupeKey()}（还原后 SQL 指纹）要求两套还原器
+     * 逐字符一致，布尔参数渲染、注释内 {@code ?} 计数、参数个数守卫三类分叉都会静默失配。
+     *
+     * 与 dedupeKey 的分工：dedupeKey 管面板去重（跨通道同 SQL 折叠，语义不动），
+     * 本键只管日志时间配对——错位替换防护（agent 侧「占位符数 ≠ 参数数就不还原」）因此得以保留。
+     */
+    public static String logTimeKey(LogSqlEntry entry) {
+        return sqlFingerprint(normalizeSqlWhitespace(entry.rawSql()));
+    }
+
+    /**
+     * T-AgentLogTime：日志时间配对的次级判别——参数<b>值</b>序列签名。
+     * 同键（同一条 SQL 多次执行）时用它挑参数一致的那条；两侧渲染口径若分叉则退化为队首配对
+     * （近似但不错失），故不做强制相等断言。无参语句两侧都是空串，天然相等。
+     */
+    public static String logTimeParamSignature(java.util.List<LogSqlParam> params) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < params.size(); i++) {
+            if (i > 0) sb.append('\u0001');
+            String v = params.get(i).value();
+            sb.append(v != null ? v : "\u0000");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * T-AgentLogTime：给 agent 条目回填控制台嗅探到的日志时间；未命中返回 null
+     * （调用方回落 {@link LogSqlEntry#timestamp()} 并留痕）。
+     *
+     * 增强通道回填的唯一入口——生产路径（AgentManager.AgentSession）与跨通道守卫测试都走它，
+     * 避免测试另抄一份「取键 + take」逻辑而自证（T-AgentDialectLoop 的教训：两侧各自绿、集成不通）。
+     */
+    public static LogSqlEntry stampLogTime(LogSqlEntry entry) {
+        Long logTime = LogTimeCorrelator.take(logTimeKey(entry), logTimeParamSignature(entry.params()));
+        return logTime != null ? entry.withLogTimestamp(logTime) : null;
+    }
 }

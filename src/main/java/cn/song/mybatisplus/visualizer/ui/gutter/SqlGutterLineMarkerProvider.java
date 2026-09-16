@@ -8,7 +8,12 @@ import cn.song.mybatisplus.visualizer.ui.SqlPreviewService;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.codeInsight.daemon.GutterIconNavigationHandler;
 import com.intellij.codeInsight.daemon.LineMarkerInfo;
+import com.intellij.codeInsight.daemon.LineMarkerInfo.LineMarkerGutterIconRenderer;
 import com.intellij.codeInsight.daemon.LineMarkerProvider;
+import com.intellij.notification.Notification;
+import com.intellij.notification.NotificationType;
+import com.intellij.openapi.actionSystem.AnAction;
+import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.editor.markup.GutterIconRenderer;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.IconLoader;
@@ -52,7 +57,10 @@ public class SqlGutterLineMarkerProvider implements LineMarkerProvider {
         if (!gutterEnabled()) return null;
         PsiElement anchor = WrapperAnchorDetector.anchorElement(element);
         if (anchor == null) return null;
-        // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
+        // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用。
+        // T-MergeFollowup-02：覆写 createGutterRenderer——243 平台 LineMarkerGutterIconRenderer 不覆写
+        // getRightButtonClickAction（基类字节码恒 aconst_null），GutterIconNavigationHandler 只接左键 click，
+        // M37.1 的「navigate 里判右键」永远收不到右键事件（真机右键无反应根因）——右键经平台正解 API 接线。
         return new LineMarkerInfo<PsiElement>(
                 anchor,
                 anchor.getTextRange(),
@@ -61,7 +69,17 @@ public class SqlGutterLineMarkerProvider implements LineMarkerProvider {
                 SqlGutterNavigationHandler.INSTANCE,
                 GutterIconRenderer.Alignment.CENTER,
                 () -> MpSqlVisualizerBundle.message("gutter.accessible.name")
-        );
+        ) {
+            @Override
+            public GutterIconRenderer createGutterRenderer() {
+                return new LineMarkerGutterIconRenderer<PsiElement>(this) {
+                    @Override
+                    public AnAction getRightButtonClickAction() {
+                        return new SqlGutterRightClickAction(anchor);
+                    }
+                };
+            }
+        };
     }
 
     /** 读取 gutter 图标开关（测试环境 service 未注册时按默认 true 处理）。 */
@@ -113,7 +131,7 @@ public class SqlGutterLineMarkerProvider implements LineMarkerProvider {
         public void navigate(MouseEvent e, PsiElement elt) {
             long now = System.currentTimeMillis();
             // 防抖：200ms 内重复点击丢弃
-            if (now - lastNavigateTime < DEBOUNCE_MS) return;
+            if (!SqlGutterLineMarkerProviderKt.shouldNavigate(lastNavigateTime, now)) return;
             lastNavigateTime = now;
 
             Project project = elt.getProject();
@@ -126,6 +144,17 @@ public class SqlGutterLineMarkerProvider implements LineMarkerProvider {
 
             // 左键 → 直接预览 SQL（一键路径最短）。
             previewSource(project, elt);
+        }
+
+        /**
+         * 右键入口（T-MergeFollowup-02）：SqlGutterRightClickAction 经平台 getRightButtonClickAction
+         * 分发到此处——与 navigate 共享 200ms 防抖窗口（同 lastNavigateTime），菜单逻辑复用。
+         */
+        void onRightClick(Project project, PsiElement elt, MouseEvent e) {
+            long now = System.currentTimeMillis();
+            if (!SqlGutterLineMarkerProviderKt.shouldNavigate(lastNavigateTime, now)) return;
+            lastNavigateTime = now;
+            showMenuPopup(project, elt, e);
         }
 
         /** 右键菜单：预览 SQL / 最近执行记录。 */
@@ -200,10 +229,19 @@ public class SqlGutterLineMarkerProvider implements LineMarkerProvider {
                 com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater(() -> {
                     if (project.isDisposed()) return;
                     if (matched.isEmpty()) {
-                        com.intellij.openapi.ui.Messages.showInfoMessage(
-                                project,
-                                MpSqlVisualizerBundle.message("gutter.popup.recent.empty"),
-                                MpSqlVisualizerBundle.message("gutter.popup.recent"));
+                        // T-UiNative T-UN-02：无记录提示改轻通知（原模态弹窗——纯告知无需打断）；
+                        // 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）
+                        if (!com.intellij.openapi.application.ApplicationManager.getApplication().isUnitTestMode()) {
+                            try {
+                                new Notification(
+                                        NOTIFICATION_GROUP_ID,
+                                        MpSqlVisualizerBundle.message("gutter.popup.recent"),
+                                        MpSqlVisualizerBundle.message("gutter.popup.recent.empty"),
+                                        NotificationType.INFORMATION).notify(project);
+                            } catch (Throwable ignored) {
+                                // 通知组缺失等异常路径静默跳过
+                            }
+                        }
                         return;
                     }
                     com.intellij.openapi.ui.popup.util.BaseListPopupStep<LogSqlEntry> entryStep =
@@ -249,6 +287,31 @@ public class SqlGutterLineMarkerProvider implements LineMarkerProvider {
         }
     }
 
+    /**
+     * 右键动作（T-MergeFollowup-02）：挂在自定义 renderer 的 getRightButtonClickAction() 上——
+     * 243 平台对 gutter 图标右键只认该 API（LineMarkerGutterIconRenderer 未覆写、基类恒 null，
+     * 平台事件分发层直接分流，GutterIconNavigationHandler 只接左键 click）。
+     * 防抖与菜单逻辑收口 {@link SqlGutterNavigationHandler#onRightClick}。
+     */
+    private static final class SqlGutterRightClickAction extends AnAction {
+
+        private final PsiElement elt;
+
+        SqlGutterRightClickAction(PsiElement elt) {
+            this.elt = elt;
+        }
+
+        @Override
+        public void actionPerformed(@NotNull AnActionEvent e) {
+            if (!(e.getInputEvent() instanceof MouseEvent)) return;
+            MouseEvent mouseEvent = (MouseEvent) e.getInputEvent();
+            SqlGutterNavigationHandler.INSTANCE.onRightClick(elt.getProject(), elt, mouseEvent);
+        }
+    }
+
     private static final Icon SQL_PREVIEW_ICON =
             IconLoader.getIcon("/icons/sqlGutter.svg", SqlGutterLineMarkerProvider.class);
+
+    /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+    private static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
 }

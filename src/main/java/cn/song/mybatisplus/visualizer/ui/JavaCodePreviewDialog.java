@@ -2,8 +2,12 @@ package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.reverse.JavaCommentStripper;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
 import com.intellij.lang.java.JavaLanguage;
 import com.intellij.lang.java.JavaSyntaxHighlighterFactory;
+import com.intellij.notification.Notification;
+import com.intellij.notification.NotificationType;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.EditorFactory;
 import com.intellij.openapi.editor.colors.EditorColorsManager;
@@ -11,7 +15,6 @@ import com.intellij.openapi.editor.ex.EditorEx;
 import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.DialogWrapper;
-import com.intellij.openapi.ui.Messages;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -19,8 +22,6 @@ import javax.swing.Action;
 import javax.swing.JComponent;
 import javax.swing.JScrollPane;
 import java.awt.Dimension;
-import java.awt.Toolkit;
-import java.awt.datatransfer.StringSelection;
 
 /**
  * Java 代码预览弹窗（SQL→MP Java 代码 反向转换的结果展示）。
@@ -100,14 +101,26 @@ public class JavaCodePreviewDialog extends DialogWrapper {
         }
     }
 
-    /** 复制纯 Java 代码到系统剪贴板（剥离说明注释）。 */
+    /**
+     * 复制纯 Java 代码到系统剪贴板（T-M45：剥离说明注释——只复制代码忽略「日志」；
+     * 对齐 SqlPreviewPanel.copySql 的复制实现）。
+     * T-UiNative T-UN-02：复制成功提示改轻通知（原模态弹窗——纯告知无需打断）；测试模式跳过
+     * （对齐 CopyExecutableSqlAction.showToast 约定）。
+     */
     private void copyCode() {
-        Toolkit.getDefaultToolkit().getSystemClipboard()
-                .setContents(new StringSelection(copyText()), null);
-        Messages.showInfoMessage(
-                project,
-                MpSqlVisualizerBundle.message("reverse.copy.done"),
-                MpSqlVisualizerBundle.message("plugin.name"));
+        UiTextClipboard.copy(copyText());
+        if (ApplicationManager.getApplication().isUnitTestMode()) {
+            return;
+        }
+        try {
+            new Notification(
+                    NOTIFICATION_GROUP_ID,
+                    MpSqlVisualizerBundle.message("plugin.name"),
+                    MpSqlVisualizerBundle.message("reverse.copy.done"),
+                    NotificationType.INFORMATION).notify(project);
+        } catch (Throwable ignored) {
+            // 通知组缺失等异常路径静默跳过（复制本身已完成）
+        }
     }
 
     /** 复制文本 = 剥离注释后的当前编辑器内容。 */
@@ -124,6 +137,9 @@ public class JavaCodePreviewDialog extends DialogWrapper {
     public Editor editorForTest() {
         return editor;
     }
+
+    /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+    private static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
 
     public static final int DIALOG_WIDTH = 680;
     public static final int DIALOG_HEIGHT = 420;

@@ -1,9 +1,12 @@
 package cn.song.mybatisplus.visualizer.database;
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import com.intellij.notification.Notification;
+import com.intellij.notification.NotificationAction;
+import com.intellij.notification.NotificationType;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.fileEditor.FileEditorManager;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
@@ -34,6 +37,9 @@ public final class DatabaseConsoleLauncher {
 
     private static final com.intellij.openapi.diagnostic.Logger LOG =
             com.intellij.openapi.diagnostic.Logger.getInstance(DatabaseConsoleLauncher.class);
+
+    /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+    private static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
 
     /** Kotlin object 单例等价（保留 INSTANCE 以支持反射按对象表达式访问）。 */
     public static final DatabaseConsoleLauncher INSTANCE = new DatabaseConsoleLauncher();
@@ -102,27 +108,29 @@ public final class DatabaseConsoleLauncher {
     }
 
     /**
-     * T-M23.6：成功提示改多按钮——{@code [确定, 关闭 SQL 面板]}，点「关闭 SQL 面板」（index 1）
-     * → 触发 {@code onClosePanel}（预览弹窗直接关闭）；失败提示维持单按钮（用户需留在面板修改 SQL）。
+     * T-M23.6：成功提示带「关闭 SQL 面板」动作 → 触发 {@code onClosePanel}（预览弹窗直接关闭）；
+     * 失败提示维持无动作（用户需留在面板修改 SQL）。
+     * T-UiNative T-UN-02：原双按钮模态改轻通知 + expiring 动作（非模态、点动作即过期的平台标准形态）；
+     * 测试模式跳过 + runCatching 兜底（headless 无通知系统依赖，原 Messages 亦被 runCatching 吞掉）。
      */
     private static void showInfo(@NotNull Project project, @NotNull String message, @Nullable Runnable onClosePanel) {
+        if (ApplicationManager.getApplication().isUnitTestMode()) return;
         try {
-            if (onClosePanel == null) {
-                Messages.showInfoMessage(project, message, MpSqlVisualizerBundle.message("execute.title"));
-            } else {
-                String[] options = new String[]{
-                        MpSqlVisualizerBundle.message("dialog.ok"),
+            Notification notification = new Notification(
+                    NOTIFICATION_GROUP_ID,
+                    MpSqlVisualizerBundle.message("execute.title"),
+                    message,
+                    NotificationType.INFORMATION
+            );
+            if (onClosePanel != null) {
+                notification.addAction(NotificationAction.createSimpleExpiring(
                         MpSqlVisualizerBundle.message("dialog.closeSqlPanel"),
-                };
-                int choice = Messages.showDialog(
-                        project, message, MpSqlVisualizerBundle.message("execute.title"),
-                        options, 0, Messages.getInformationIcon());
-                if (choice == 1) {
-                    onClosePanel.run();
-                }
+                        () -> onClosePanel.run()
+                ));
             }
+            notification.notify(project);
         } catch (Throwable ignored) {
-            // 与原 runCatching 等价：弹框异常不影响主流程
+            // headless 无通知系统依赖，与原 runCatching 等价
         }
     }
 }

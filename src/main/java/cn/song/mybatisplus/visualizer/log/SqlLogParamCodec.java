@@ -11,7 +11,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
-import kotlin.Pair;
 
 /**
  * 历史文件参数载荷编解码（T-HistParam F1）：格式 v2 在头部注释行之下新增独立注释行
@@ -19,8 +18,12 @@ import kotlin.Pair;
  * （value/type 可为 null）的 Base64 编码，正文保持可执行 restoredSql（F-43 初心：文件
  * 可直接在数据库工具打开执行）。
  *
- * 选 Base64 加独立注释行的理由：
- * - 参数值可能含 `|`、逗号、`--`、括号、换行等任意文本，明文分隔符方案必然引入转义歧义；
+ * <p>M56 T-M56-00：payload 扩展可选键 {@code m}（mapperStatement）/ {@code e}（errorText）/
+ * {@code q}（requestTag）/ {@code u}（updateCount）——写入端仅在非默认时落键，
+ * 旧 payload（无扩展键）解码出 null，旧历史文件可读。
+ *
+ * <p>选 Base64 加独立注释行的理由：
+ * - 参数值可能含 {@code |}、逗号、{@code --}、括号、换行等任意文本，明文分隔符方案必然引入转义歧义；
  *   Base64 字符集（A-Za-z0-9+/=）与头部解析正则、字段分隔符零冲突，单行形态不破坏
  * [SqlLogFileReader.countInFile] 的头部行计数判据；
  * - 旧版本插件的 Reader 正则锚定行尾，读到 pd 行会把它并进 SQL 正文当注释行——展示冗余
@@ -33,29 +36,72 @@ public final class SqlLogParamCodec {
 
     private static final String RAW_FIELD = "r";
     private static final String PARAMS_FIELD = "p";
+    private static final String MAPPER_FIELD = "m";
+    private static final String ERROR_FIELD = "e";
+    private static final String TAG_FIELD = "q";
+    private static final String UPDATE_COUNT_FIELD = "u";
 
     private static final Gson GSON = new Gson();
 
-    /** 编码 rawSql + params 为 Base64 载荷。 */
+    /**
+     * pd 载荷解码结果。mapperStatement / errorText / requestTag / updateCount 为 M56 扩展字段，
+     * 旧 payload 为 null。
+     */
+    public record DecodedPayload(
+            String rawSql,
+            List<LogSqlParam> params,
+            String mapperStatement,
+            String errorText,
+            String requestTag,
+            Long updateCount) {
+
+        /** 无 M56 扩展字段形态（Kotlin data class 默认参数等价）。 */
+        public DecodedPayload(String rawSql, List<LogSqlParam> params) {
+            this(rawSql, params, null, null, null, null);
+        }
+    }
+
+    /** 编码 rawSql + params 为 Base64 载荷（无 M56 扩展字段形态，等价 encodeEntry 全默认条目）。 */
     public static String encode(String rawSql, List<LogSqlParam> params) {
+        return encodeEntry(new LogSqlEntry(rawSql, rawSql, params));
+    }
+
+    /**
+     * 编码条目为 Base64 载荷：rawSql + params 恒写；M56 扩展字段（mapperStatement/errorText/
+     * requestTag/updateCount）仅非默认时落键，旧版本插件解码端忽略未知键（gson 宽松解析）。
+     */
+    public static String encodeEntry(LogSqlEntry entry) {
         JsonObject obj = new JsonObject();
-        obj.addProperty(RAW_FIELD, rawSql);
+        obj.addProperty(RAW_FIELD, entry.rawSql());
         JsonArray arr = new JsonArray();
-        for (LogSqlParam p : params) {
+        for (LogSqlParam p : entry.params()) {
             JsonArray pair = new JsonArray();
             pair.add(p.value() == null ? JsonNull.INSTANCE : new JsonPrimitive(p.value()));
             pair.add(p.type() == null ? JsonNull.INSTANCE : new JsonPrimitive(p.type()));
             arr.add(pair);
         }
         obj.add(PARAMS_FIELD, arr);
+        if (entry.mapperStatement() != null) {
+            obj.addProperty(MAPPER_FIELD, entry.mapperStatement());
+        }
+        if (entry.errorText() != null) {
+            obj.addProperty(ERROR_FIELD, entry.errorText());
+        }
+        if (entry.requestTag() != null) {
+            obj.addProperty(TAG_FIELD, entry.requestTag());
+        }
+        if (entry.updateCount() != null) {
+            obj.addProperty(UPDATE_COUNT_FIELD, entry.updateCount());
+        }
         return Base64.getEncoder().encodeToString(GSON.toJson(obj).getBytes(StandardCharsets.UTF_8));
     }
 
     /**
-     * 解码 Base64 载荷为 (rawSql, params)；任何形态异常（非法 Base64 / JSON 缺字段 /
+     * 解码 Base64 载荷为 DecodedPayload；任何形态异常（非法 Base64 / JSON 缺字段 /
      * 结构不符 / rawSql 空白）返回 null，调用方把 pd 行降级为普通正文注释行。
+     * M56 扩展键缺失/形态异常按缺省 null 容错（不因扩展键损坏丢弃整条）。
      */
-    public static Pair<String, List<LogSqlParam>> decode(String payload) {
+    public static DecodedPayload decode(String payload) {
         try {
             String decoded = new String(Base64.getDecoder().decode(payload), StandardCharsets.UTF_8);
             JsonElement parsed = JsonParser.parseString(decoded);
@@ -81,9 +127,30 @@ public final class SqlLogParamCodec {
                     params.add(new LogSqlParam(value, type));
                 }
             }
-            return new Pair<>(rawSql, params);
+            return new DecodedPayload(
+                    rawSql,
+                    params,
+                    stringField(json, MAPPER_FIELD),
+                    stringField(json, ERROR_FIELD),
+                    stringField(json, TAG_FIELD),
+                    longField(json, UPDATE_COUNT_FIELD));
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /** M56 扩展字符串键读取：缺失/非原始值/空白按 null（master takeIf 链等价）。 */
+    private static String stringField(JsonObject json, String field) {
+        JsonElement el = json.get(field);
+        if (el == null || !el.isJsonPrimitive()) return null;
+        String s = el.getAsString();
+        return s.isBlank() ? null : s;
+    }
+
+    /** M56 扩展数值键读取：缺失/非原始值/非数值按 null。 */
+    private static Long longField(JsonObject json, String field) {
+        JsonElement el = json.get(field);
+        if (el == null || !el.isJsonPrimitive() || !el.getAsJsonPrimitive().isNumber()) return null;
+        return el.getAsLong();
     }
 }

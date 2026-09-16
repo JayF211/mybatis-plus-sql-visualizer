@@ -71,7 +71,9 @@ public final class PluginUpdateRunner {
         if (!VersionComparator.INSTANCE.isRecognizable(currentVersion)) {
             return new CheckResult.Failure("current version unavailable");
         }
-        String json = fetch.apply(UpdateSource.INSTANCE.manifestUrl());
+        String url = UpdateSource.INSTANCE.manifestUrl();
+        UpdateSource.logOverrideIfAny(url);
+        String json = fetch.apply(url);
         if (json == null) return new CheckResult.Failure("network unavailable");
         UpdateManifest manifest = UpdateManifest.parseManifest(json);
         if (manifest == null) return new CheckResult.Failure("manifest malformed");

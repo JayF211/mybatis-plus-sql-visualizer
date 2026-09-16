@@ -4,11 +4,11 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.SimpleColoredComponent;
 import com.intellij.ui.SimpleTextAttributes;
+import com.intellij.ui.speedSearch.SpeedSearchUtil;
 
 import javax.swing.BorderFactory;
 import javax.swing.JPanel;
 import java.awt.BorderLayout;
-import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.GridLayout;
@@ -44,28 +44,11 @@ public class LogEntryListCellRenderer extends JPanel implements javax.swing.List
      */
     public final JPanel colorBar = new JPanel();
 
-    /** 未选中态 Border（分隔线 + 内边距）。 */
+    /** 未选中态 Border（分隔线 + 内边距；T-UN-09 描边退役后选中态同样只用它，选中视觉归平台绘制）。 */
     public final javax.swing.border.Border normalBorder = BorderFactory.createCompoundBorder(
             BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
             new javax.swing.border.EmptyBorder(5, 5, 5, 8) // 左 5 + 色条 3 = 原 8
     );
-
-    /**
-     * T-CrudColor：选中态描边 Border（{@link SqlListTypeColor#STYLE_BACKGROUND} 专用）。
-     * 预建一次、渲染时只切引用 + 改色（{@link SqlListSelectionOutline#setColor}），热路径零分配。
-     * 内层分隔线为<b>透明占位</b>：仅占 1px inset，不绘制——否则灰线会画在蓝框内部把底边割断。
-     */
-    public final SqlListSelectionOutline selectedBorder = new SqlListSelectionOutline(
-            SqlListTypeColor.OUTLINE_WIDTH,
-            JBColor.foreground(),
-            BorderFactory.createCompoundBorder(
-                    BorderFactory.createMatteBorder(0, 0, 1, 0, SqlListTypeColor.TRANSPARENT),
-                    new javax.swing.border.EmptyBorder(
-                            5 - SqlListTypeColor.OUTLINE_WIDTH,
-                            5 - SqlListTypeColor.OUTLINE_WIDTH,
-                            5 - SqlListTypeColor.OUTLINE_WIDTH,
-                            8 - SqlListTypeColor.OUTLINE_WIDTH)
-            ));
 
     public LogEntryListCellRenderer() {
         super(new BorderLayout());
@@ -118,19 +101,16 @@ public class LogEntryListCellRenderer extends JPanel implements javax.swing.List
             boolean isSelected,
             boolean cellHasFocus
     ) {
-        Color listBg = list != null ? list.getBackground() : getBackground();
-        Color selectionBg = list != null ? list.getSelectionBackground() : listBg;
         LogSqlEntry entry = value instanceof LogSqlEntry ? (LogSqlEntry) value : null;
 
         // T-CrudColor：标记形态分派（读设置 + 纯函数；热路径零分配）
-        String style = SqlListTypeColor.styleOf();
-        Color tint = entry != null ? SqlListTypeColor.colorOf(entry.statementType()) : null;
-        // 背景色样式下底色是淡色调而非饱和选中填充：若按选中态取白字，亮色主题下不可见；
-        // 且耗时着色会被抹成白色、丢失快/慢信号。故仅在色条样式（走平台填充）时按选中态取前景。
-        boolean useSelectionFill = isSelected && SqlListTypeColor.usesSelectionFill(style);
-        SqlLogPanelKt.applyCrudColorMark(this, colorBar, normalBorder, selectedBorder, tint, isSelected, cellHasFocus, list);
+        java.awt.Color tint = entry != null ? SqlListTypeColor.colorOf(entry.statementType()) : null;
+        // T-UN-09：选中描边退役后，三种样式的选中行统一走平台选中填充 → 前景按选中态取
+        // selectionForeground（耗时着色随 formatDurationFragment 的选中白语义）
+        boolean useSelectionFill = isSelected;
+        SqlLogPanelKt.applyCrudColorMark(this, colorBar, normalBorder, tint, isSelected, list);
 
-        Color fg = useSelectionFill
+        java.awt.Color fg = useSelectionFill
                 ? (list != null && list.getSelectionForeground() != null ? list.getSelectionForeground() : JBColor.foreground())
                 : (list != null ? list.getForeground() : JBColor.foreground());
         metaLine.setForeground(fg);
@@ -142,7 +122,7 @@ public class LogEntryListCellRenderer extends JPanel implements javax.swing.List
                 metaLine.append("#" + entry.sequenceNumber() + " ", SqlLogPanelKt.LIST_META_GRAY);
             }
             // T-TwoLine：元信息行（时间戳/耗时/来源/去重徽章）在上，段间距由尾随空格承担
-            kotlin.Pair<String, SimpleTextAttributes> ts = SqlLogPanelKt.formatTimestampFragment(entry.timestamp());
+            kotlin.Pair<String, SimpleTextAttributes> ts = SqlLogPanelKt.formatTimestampFragment(entry);
             if (ts != null) {
                 metaLine.append(ts.getFirst(), ts.getSecond());
             }
@@ -151,9 +131,25 @@ public class LogEntryListCellRenderer extends JPanel implements javax.swing.List
                         SqlLogPanelKt.formatDurationFragment(entry.executionTimeMs(), useSelectionFill);
                 metaLine.append(dur.getFirst(), dur.getSecond());
             }
+            // T-AgentDialectLoop：目标库角标（耗时后、来源前——与「这条 SQL 跑在哪」的阅读顺序一致）
+            kotlin.Pair<String, SimpleTextAttributes> db =
+                    SqlLogPanelKt.formatDatabaseFragment(entry, useSelectionFill);
+            if (db != null) {
+                metaLine.append(db.getFirst(), db.getSecond());
+            }
             kotlin.Pair<String, SimpleTextAttributes> src = SqlLogPanelKt.formatSourceFragment(entry, useSelectionFill);
             if (src != null) {
                 metaLine.append(src.getFirst(), src.getSecond());
+            }
+            // 注：原「[⚡增强]」来源角标已按用户要求移除（增强为默认捕获通道，逐行标来源属噪音）
+            kotlin.Pair<String, SimpleTextAttributes> upd =
+                    SqlLogPanelKt.formatUpdateCountFragment(entry, isSelected);
+            if (upd != null) {
+                metaLine.append(upd.getFirst(), upd.getSecond());
+            }
+            kotlin.Pair<String, SimpleTextAttributes> err = SqlLogPanelKt.formatErrorFragment(entry);
+            if (err != null) {
+                metaLine.append(err.getFirst(), err.getSecond());
             }
             Integer cnt = dedupeCounts.get(entry.dedupeKey());
             if (cnt != null && cnt > 0) {
@@ -163,6 +159,11 @@ public class LogEntryListCellRenderer extends JPanel implements javax.swing.List
         }
         // SQL 高亮行在下（T-ListMode：行数随显示模式伸缩）；选中态保留 SQL 高亮原色
         ensureSqlLineCount(lineFragments != null ? lineFragments.size() : 1);
+        // T-UiNative speed search 高亮：对元信息行与各 SQL 行施加匹配片段高亮（平台 applySpeedSearchHighlighting
+        // 依 supply.matchingFragments 精确命中区间；fragments 文本已在上面 append，此处在片段级叠加 STYLE_SEARCH_MATCH）
+        if (list != null) {
+            SpeedSearchUtil.applySpeedSearchHighlighting(list, metaLine, false, useSelectionFill);
+        }
         for (int i = 0; i < sqlLinePool.size(); i++) {
             SimpleColoredComponent comp = sqlLinePool.get(i);
             comp.setForeground(fg);
@@ -171,6 +172,9 @@ public class LogEntryListCellRenderer extends JPanel implements javax.swing.List
                 for (SqlTextFragment f : lineFragments.get(i)) {
                     comp.append(f.text(), f.attributes());
                 }
+            }
+            if (list != null) {
+                SpeedSearchUtil.applySpeedSearchHighlighting(list, comp, false, useSelectionFill);
             }
         }
         // T-ClickPreview：不设 toolTipText（悬停逐行弹气泡 = 条目多时卡顿根因），预览改单击触发

@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors;
 
 import java.awt.Color;
 import java.util.Map;
@@ -9,13 +10,14 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * SQL 列表 CRUD 类型颜色标记配色门面（T-CrudColor，纯逻辑可单测）。
  *
- * 职责：把「类型 → 标记色」的映射与混色/对比度计算收在一处，供两个列表渲染器
+ * 职责：把「类型 → 标记色」的映射与混色计算收在一处，供两个列表渲染器
  * （{@link LogEntryListCellRenderer} / {@link HistoryCellRenderer}）共用；设置态直读
  * {@link PluginSettings}（与既有 formatTimestampFragment / formatDurationFragment 同范式）。
  *
  * 标记形态（{@code PluginSettings.State.crudColorStyle}）：
  *  - {@link #STYLE_BAR}：左侧色条（默认）——选中态走平台原生填充，色条不受影响；
- *  - {@link #STYLE_BACKGROUND}：整行淡背景——选中态 = 保留类型色调（混色比例提高）+ 描边，不铺平台填充；
+ *  - {@link #STYLE_BACKGROUND}：整行淡背景（仅<b>未选中</b>行）——选中行交给平台选中填充
+ *    （T-UN-09：自研选中描边/选中混色已退役）；
  *  - {@link #STYLE_OFF}：关闭，与改造前逐字节一致。
  *
  * 类型口径与 {@link LogStatementClassifier} 完全一致（即与类型过滤弹窗同源），保证
@@ -29,7 +31,7 @@ public final class SqlListTypeColor {
     /** 左侧色条（默认）。 */
     public static final String STYLE_BAR = "bar";
 
-    /** 整行淡背景（选中态走描边而非平台填充）。 */
+    /** 整行淡背景（仅未选中行；选中行走平台选中填充）。 */
     public static final String STYLE_BACKGROUND = "background";
 
     /** 关闭标记（现状行为）。 */
@@ -38,44 +40,24 @@ public final class SqlListTypeColor {
     /** 未选中行的混色比例（淡色调）。 */
     public static final double MIX_NORMAL = 0.14;
 
-    /** 选中行的混色比例（同色相加深一档，与描边共同表达选中）。 */
-    public static final double MIX_SELECTED = 0.30;
-
-    /** 描边厚度（逻辑像素），安全区间 1..4——上限由渲染器 5px 上内边距约束。 */
-    public static final int OUTLINE_WIDTH = 2;
-
     /**
      * 左侧类型色条宽度（px）。
      * 从左内边距中切分（渲染器左内边距 5 + 色条 3 = 原 8），故文本左缘像素位置与改造前一致。
      */
     public static final int BAR_WIDTH = 3;
 
-    /**
-     * 透明色——选中态内层行分隔线的<b>占位色</b>。
-     * 占 1px inset 保证选中/未选中两状态 insets 逐边相等，但不绘制：否则灰线会画在描边环内部，
-     * 把选中框的底边割断（2026-09-12 用户指出的观感缺陷）。
-     */
-    public static final Color TRANSPARENT = new Color(0, 0, 0, 0);
-
     public static final String DEFAULT_SELECT = "#4A86E8";
     public static final String DEFAULT_INSERT = "#4CAF50";
     public static final String DEFAULT_UPDATE = "#E67E22";
     public static final String DEFAULT_DELETE = "#D32F2F";
 
-    /**
-     * 暗色主题下描边色的最小亮度阈值——低于此值压在深色行底上不可见
-     * （如 Darcula 选中蓝 #2E436E 亮度约 0.26，需提亮）。
-     */
-    private static final double DARK_MIN_BRIGHTNESS = 0.45;
-
-    /** 提亮的最大倍率（防止低饱和色被拉爆成白）。 */
-    private static final double MAX_BRIGHTEN_FACTOR = 2.4;
-
-    // 默认色实例（预建，避免 defaultOf 每次解析/分配）
-    private static final Color COLOR_SELECT = new Color(0x4A86E8);
-    private static final Color COLOR_INSERT = new Color(0x4CAF50);
-    private static final Color COLOR_UPDATE = new Color(0xE67E22);
-    private static final Color COLOR_DELETE = new Color(0xD32F2F);
+    // 默认色实例（预建，避免 defaultOf 每次解析/分配）。
+    // T-UN-13（T-UiNative）：写死兜底色 → namedColor（亮值不变；仅兜底实例收口，
+    // 用户配置链 hexOf/parseHex 原样——设置页 hex 串默认值即上方 DEFAULT_* 常量）。
+    private static final Color COLOR_SELECT = MpvsUiColors.CRUD_SELECT;
+    private static final Color COLOR_INSERT = MpvsUiColors.CRUD_INSERT;
+    private static final Color COLOR_UPDATE = MpvsUiColors.CRUD_UPDATE;
+    private static final Color COLOR_DELETE = MpvsUiColors.CRUD_DELETE;
 
     /**
      * 解析结果缓存（每类型至多 1 条，共 ≤ 4 条）。
@@ -124,11 +106,6 @@ public final class SqlListTypeColor {
             default:
                 return STYLE_BAR;
         }
-    }
-
-    /** 当前样式是否走平台选中填充（仅 {@link #STYLE_BAR} 为 true）。 */
-    public static boolean usesSelectionFill(String style) {
-        return STYLE_BAR.equals(style);
     }
 
     /**
@@ -216,42 +193,6 @@ public final class SqlListTypeColor {
                 mixChannel(base.getRed(), tint.getRed(), r),
                 mixChannel(base.getGreen(), tint.getGreen(), r),
                 mixChannel(base.getBlue(), tint.getBlue(), r));
-    }
-
-    /**
-     * 描边色对比度保障：暗色主题下低亮度色提亮到可见阈值，亮色主题原样返回。
-     *
-     * 背景色样式的选中行底色已被类型色调加深（如 UPDATE 暗色下约 #5A3B22），
-     * 暗色 selectionBackground（#2E436E）压在其上几乎不可见——故描边色不能直接取原色。
-     * 自研纯函数而非用 com.intellij.ui.ColorUtil.brighter：tones 换算语义不直观，
-     * 断言需依赖平台实现细节，行为不可控。
-     */
-    public static Color ensureOutlineContrast(Color color, boolean isDark) {
-        if (!isDark) {
-            return color;
-        }
-        if (brightnessOf(color) >= DARK_MIN_BRIGHTNESS) {
-            return color;
-        }
-        double factor = 1.0;
-        Color candidate = color;
-        while (factor < MAX_BRIGHTEN_FACTOR && brightnessOf(candidate) < DARK_MIN_BRIGHTNESS) {
-            factor *= 1.1;
-            candidate = scaleBrightness(color, factor);
-        }
-        return candidate;
-    }
-
-    /** 感知亮度（0..1，Rec.601 加权）。 */
-    public static double brightnessOf(Color color) {
-        return (0.299 * color.getRed() + 0.587 * color.getGreen() + 0.114 * color.getBlue()) / 255.0;
-    }
-
-    private static Color scaleBrightness(Color color, double factor) {
-        return new Color(
-                (int) Math.min(255.0, color.getRed() * factor),
-                (int) Math.min(255.0, color.getGreen() * factor),
-                (int) Math.min(255.0, color.getBlue() * factor));
     }
 
     /**

@@ -33,6 +33,8 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter;
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors;
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
 import cn.song.mybatisplus.visualizer.xml.ParameterMapping;
 import cn.song.mybatisplus.visualizer.xml.RenderedXmlSql;
 import cn.song.mybatisplus.visualizer.xml.XmlConditionView;
@@ -44,6 +46,8 @@ import com.intellij.codeInsight.completion.CompletionType;
 import com.intellij.codeInsight.lookup.LookupEx;
 import com.intellij.codeInsight.lookup.LookupManager;
 import com.intellij.ide.ui.LafManagerListener;
+import com.intellij.notification.Notification;
+import com.intellij.notification.NotificationAction;
 import com.intellij.notification.NotificationGroupManager;
 import com.intellij.notification.NotificationType;
 import com.intellij.openapi.actionSystem.AnAction;
@@ -56,7 +60,6 @@ import com.intellij.openapi.actionSystem.Shortcut;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.application.ReadAction;
-import com.intellij.openapi.application.WriteIntentReadAction;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.Disposable;
@@ -74,7 +77,6 @@ import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.ui.popup.JBPopupFactory;
 import com.intellij.openapi.ui.popup.PopupStep;
 import com.intellij.openapi.ui.popup.util.BaseListPopupStep;
-import com.intellij.openapi.util.Computable;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.util.TextRange;
 import com.intellij.openapi.vfs.LocalFileSystem;
@@ -84,6 +86,7 @@ import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiFileFactory;
 import com.intellij.psi.PsiManager;
 import com.intellij.ui.JBColor;
+import com.intellij.ui.OnePixelSplitter;
 import com.intellij.ui.TitledSeparator;
 import com.intellij.ui.awt.RelativePoint;
 import com.intellij.ui.components.JBLabel;
@@ -109,12 +112,9 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.FontMetrics;
-import java.awt.Graphics;
 import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.Point;
-import java.awt.Toolkit;
-import java.awt.datatransfer.StringSelection;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.awt.event.HierarchyEvent;
@@ -248,6 +248,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** T-GifRerecord：预热失败标志——await 快速降级用，避免 EDT 空等 2s 后再走降级路径。 */
     private volatile boolean prewarmFailed = false;
     private volatile boolean previewDisposed = false;
+    /** T-PreviewExecDs-01c：已 setMapping 方言的预览 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。 */
+    private volatile VirtualFile previewDialectMappedVf = null;
     private String sourceLocation = null;
 
     private final JBPanel<JBPanel<?>> editorHolder = new JBPanel<JBPanel<?>>(new GridLayout(1, 1)) {{
@@ -400,13 +402,10 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             }
         });
 
-        ThemedSplitPane split = new ThemedSplitPane(paramScroll, editorHolder);
-        split.setResizeWeight(0.3);
-        split.setContinuousLayout(true);
-        split.setOneTouchExpandable(false);
-        split.setDividerSize(3);
-        split.setBorder(JBUI.Borders.empty());
-        split.setBackground(UIUtil.getPanelBackground());
+        // T-UiNative：ThemedSplitPane → 平台 OnePixelSplitter（原生分隔条主题融合 + 比例记忆）
+        OnePixelSplitter split = new OnePixelSplitter(false, "mpvs.preview.splitter", 0.3f);
+        split.setFirstComponent(paramScroll);
+        split.setSecondComponent(editorHolder);
 
         add(split, BorderLayout.CENTER);
         add(resultPanel, BorderLayout.SOUTH);
@@ -426,23 +425,36 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         }
     }
 
-    /** T-M36.6-03：后台预热预览临时文件（占位空内容，createEditor 就绪后按实际 SQL 同步）。 */
+    /** T-M36.6-03 / T-PreviewFlash：后台预热预览临时文件（占位空内容，createEditor 就绪后按实际 SQL 同步）。 */
     private void prewarmPreviewTempFile() {
+        Logger LOG = Logger.getInstance(SqlPreviewPanel.class);
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             if (previewTempFile != null || previewDisposed) return;
             try {
-                java.io.File io = java.io.File.createTempFile("mp-sql-preview-", ".sql");
-                java.nio.file.Files.writeString(io.toPath(), "");
-                io.deleteOnExit();
-                VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(io);
-                // T-GifRerecord：VFS 忙时 refreshAndFindFileByIoFile 偶发查不到新文件（2026.2 沙盒录制期实证，
-                // 00:03 SEVERE 根因）——重试一次再判失败；失败置 prewarmFailed 让 await 快速返回，不空等 2s。
-                if (vf == null) {
-                    Thread.sleep(50);
-                    vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(io);
+                // T-PreviewExecDs-01a：预览临时文件迁项目内 .idea/sql-visualizer/preview/
+                // ——系统 Temp 不在数据源关联范围，Database 插件不解析（M36.5.12 exec 同教训，
+                // 预览路径此前未跟进；旧实现 09:34:40 起持续预热失败后回退裸文档，补全/注释全灭）。
+                java.io.File io = projectPreviewFile();
+                if (io == null) {
+                    prewarmFailed = true;
+                    LOG.warn("[M36] prewarm FAILED: project preview file unavailable (project/basePath null or mkdirs false)");
+                    return;
+                }
+                // T-GifRerecord：VFS 忙时 refreshAndFindFileByIoFile 偶发查不到新文件（2026.2 沙盒
+                // 录制期实证）——旧实现只重试一次仍持续失败（两项目同开 VFS 忙窗口）；T-PreviewExecDs-01b
+                // 加重试到 3 次带退避，失败置 prewarmFailed 让 await 快速返回，不空等预算。
+                LocalFileSystem lfs = LocalFileSystem.getInstance();
+                VirtualFile vf = lfs.refreshAndFindFileByIoFile(io);
+                int retries = 0;
+                while (vf == null && retries < 3 && !previewDisposed) {
+                    Thread.sleep(100L * (retries + 1));
+                    vf = lfs.refreshAndFindFileByIoFile(io);
+                    retries++;
                 }
                 if (vf == null) {
                     prewarmFailed = true;
+                    LOG.warn("[M36] prewarm FAILED: VFS refresh null after " + (retries + 1) + " tries ("
+                            + io.getPath() + ", exists=" + io.exists() + ")");
                     return;
                 }
                 if (previewDisposed) {
@@ -451,20 +463,95 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 }
                 Project proj = project;
                 if (proj == null) return;
+                // T-PreviewExecDs-01c：方言映射须在 findFile/PSI 创建前（映射决定 PSI 语言，
+                // 创建后再映射需 push 重建；exec 路径同款顺序）
+                mapPreviewDialectBeforePsi(proj, vf);
                 final VirtualFile vfFinal = vf;
                 final Project projFinal = proj;
                 PsiFile psi = ReadAction.compute(() -> PsiManager.getInstance(projFinal).findFile(vfFinal));
                 if (psi == null) {
                     prewarmFailed = true;
+                    LOG.warn("[M36] prewarm FAILED: PsiManager.findFile null for " + vf.getName());
                     return;
                 }
                 previewTempFile = vf;
                 prewarmedTempFile = new Pair<>(vf, psi);
-            } catch (Throwable ignored) {
-                // 预热失败不影响预览（createEditor 走同步兜底路径）
+            } catch (Throwable e) {
                 prewarmFailed = true;
+                LOG.warn("[M36] prewarm FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
             }
         });
+    }
+
+    /**
+     * T-PreviewExecDs-01a：项目内预览临时文件——{@code <project>/.idea/sql-visualizer/preview/mpsql-preview.sql}。
+     * 独立子目录（exec/ 互不污染，同 M36.5.13 语义）。文件在项目内容内，Database 插件才能解析
+     * schema 补全/注释。VFS 安全写入三态（document 驱动 > setBinaryContent > FileUtil 兜底），
+     * 杜绝 MemoryDiskConflictResolver 的 File Cache Conflict 弹窗（exec 路径 M36.5.13 同款）。
+     */
+    @Nullable
+    private java.io.File projectPreviewFile() {
+        Project proj = project;
+        if (proj == null) return null;
+        String base = proj.getBasePath();
+        if (base == null) return null;
+        java.io.File dir = new java.io.File(base,
+                ".idea" + java.io.File.separator + cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME
+                        + java.io.File.separator + "preview");
+        if (!dir.exists() && !dir.mkdirs()) return null;
+        java.io.File f = new java.io.File(dir, "mpsql-preview.sql");
+        VirtualFile existing = LocalFileSystem.getInstance().findFileByIoFile(f);
+        if (existing != null) {
+            boolean ok = false;
+            try {
+                // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
+                com.intellij.openapi.application.WriteAction.compute(
+                        (com.intellij.openapi.util.ThrowableComputable<Void, Throwable>) () -> {
+                            Document fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager
+                                    .getInstance().getDocument(existing);
+                            if (fileDoc != null) {
+                                fileDoc.setText(""); // 预热占位空内容，createEditor 装配时按实际 SQL 填充
+                            } else {
+                                existing.setBinaryContent(new byte[0]);
+                            }
+                            return null;
+                        });
+                ok = true;
+            } catch (Throwable ignored) {
+                ok = false;
+            }
+            if (ok) return f;
+        }
+        try {
+            com.intellij.openapi.util.io.FileUtil.writeToFile(f, "");
+        } catch (Throwable ignored) {
+            // ignore
+        }
+        return f;
+    }
+
+    /**
+     * T-PreviewExecDs-01c：预览文件方言预映射（exec 路径 DataSourceSelector.mapDialectBeforePsi 同款）——
+     * PSI 创建时即按映射方言解析，Generic SQL 下 Database 补全不触发。映射匹配与 exec 一致：
+     * SqlDialectMappings.getAvailableValues() 里 language.id == "MySQL" 的实例（MyBatis-Plus 预览
+     * 场景即 MySQL；插件自定义 Dialect 与 Database 方言映射无现成对应，硬编码与 exec 对齐）。
+     * 同 vf 已映射过即幂等短路（避免每次预览点 setMapping 触发 SqlDialectPusher push all dumb）。
+     *
+     * <p>T-ExecSlowOps F1：反射段收编进 {@link cn.song.mybatisplus.visualizer.execute.DialectPreMapping}，
+     * 本方法仅保留「面板级进程内幂等短路」语义 + 成功回写 {@link #previewDialectMappedVf}。真机实锤：
+     * 本方法在 {@link #prewarmPreviewTempFile} 后台线程内调用，旧实现反射直调 {@code setMapping} →
+     * 平台 {@code handleMappingChange → reparseFiles → runWriteAction → VcsVFSListener.beforeContentsChange}
+     * 的 {@code assertEventDispatchThread} 硬抛 RuntimeExceptionWithAttachments（SEVERE ×3）。
+     * DialectPreMapping.ensureMapped 两段式：稳态（workspace.xml 映射幸存/本进程已设）读探测直接跳过，
+     * 仅项目首见经 invokeLater 派 EDT 执行映射并 CountDownLatch 有界等待——映射写归 EDT、慢操作归 BGT，
+     * 两侧 SEVERE 同消。</p>
+     */
+    private void mapPreviewDialectBeforePsi(Project proj, VirtualFile vf) {
+        boolean inProcessMapped = previewDialectMappedVf != null && previewDialectMappedVf.isValid()
+                && previewDialectMappedVf == vf;
+        if (cn.song.mybatisplus.visualizer.execute.DialectPreMapping.ensureMapped(proj, vf, inProcessMapped)) {
+            previewDialectMappedVf = vf;
+        }
     }
 
     /** T-DarkTheme：主题变更回调——重绘面板（命名色已自动更新，仅需触发 UI 刷新）。 */
@@ -498,25 +585,6 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         }
     }
 
-    /**
-     * T-M26.1：分隔条主题化分栏——覆写 paint，在 LAF 绘制完成后把分隔条区域覆盖为面板底色。
-     */
-    private static class ThemedSplitPane extends JSplitPane {
-        ThemedSplitPane(JComponent left, JComponent right) {
-            super(JSplitPane.HORIZONTAL_SPLIT, left, right);
-            setBorder(JBUI.Borders.empty());
-        }
-
-        @Override
-        public void paint(Graphics g) {
-            super.paint(g);
-            int loc = getDividerLocation();
-            if (loc < 0) return;
-            g.setColor(UIUtil.getPanelBackground());
-            g.fillRect(loc, 0, getDividerSize(), getHeight());
-        }
-    }
-
     /** 顶部工具栏。 */
     private JBPanel<JBPanel<?>> toolbar() {
         JBPanel<JBPanel<?>> bar = new JBPanel<JBPanel<?>>() {{
@@ -539,8 +607,10 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.keywordWrap"), this::formatClauseLine));
         // T-VStack：竖向排列（INSERT 列清单/VALUES 逐行竖排 + 值行尾列名配对标注）
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.vertical"), this::formatVertical));
-        // M37.2：EXPLAIN（真实执行计划，静态规则标注同屏对照；dev 侧功能保留内联，
-        // 导入/对比/分享已按 T-PreviewTopOverlap F2 折叠进「更多」菜单）
+        // M37.2：EXPLAIN（真实执行计划，静态规则标注同屏对照）。
+        // T-MergeFollowup-01：master T-PreviewTopOverlap 重构按钮行时把 dev 的 add 行删掉而注释残留，
+        // explainSql() 全树零调用（合并语义丢失无冲突标记实锤）——补回，保持内联高频位（对齐 M37M38 文档 §2.3）。
+        bar.add(smallButton(MpSqlVisualizerBundle.message("panel.explain"), this::explainSql));
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.refresh"), this::refreshView));
         // T-PreviewTopOverlap F2：「更多」折叠菜单入口（低频动作收纳）
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.more"), this::showMoreActionsPopup));
@@ -682,15 +752,23 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         PreviewResult cur = current;
         Dialect dialect = (cur != null && cur.getPreviewModel() != null && cur.getPreviewModel().getDialect() != null)
                 ? cur.getPreviewModel().getDialect() : cn.song.mybatisplus.visualizer.sql.MySqlDialect.INSTANCE;
-        String trimmed = sql.trim();
-        int end = trimmed.length();
-        while (end > 0 && trimmed.charAt(end - 1) == ';') end--;
-        String explainSqlText = dialect.renderExplainStatement(trimmed.substring(0, end));
+        // T-ExplainDbl：幂等包装——首次执行后 EXPLAIN 语句已在控制台文档中，再点一次
+        // 不在已包装文本上二次加前缀（重复前缀 → MySQL 1064）
+        String explainSqlText = dialect.renderExplainStatementIdempotent(sql);
         if (explainSqlText == null) {
-            Messages.showInfoMessage(
-                    proj,
-                    MpSqlVisualizerBundle.message("panel.explain.unsupported", dialect.getName()),
-                    MpSqlVisualizerBundle.message("panel.explain"));
+            // T-UiNative T-UN-02：方言不支持提示改轻通知（原模态弹窗——纯告知无需打断）
+            if (!ApplicationManager.getApplication().isUnitTestMode()) {
+                try {
+                    new Notification(
+                            NOTIFICATION_GROUP_ID,
+                            MpSqlVisualizerBundle.message("panel.explain"),
+                            MpSqlVisualizerBundle.message("panel.explain.unsupported", dialect.getName()),
+                            NotificationType.INFORMATION
+                    ).notify(proj);
+                } catch (Throwable ignored) {
+                    // headless 无通知系统依赖，与原 runCatching 等价
+                }
+            }
             return;
         }
         Logger.getInstance(SqlPreviewPanel.class)
@@ -1409,18 +1487,31 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     public boolean copySql() {
         String raw = firstNonBlankSql();
         if (raw == null) return false;
+        // 复制时剥离 SQL 注释（-- 行注释 + /* */ 块注释），与 Java 代码复制对齐
         String text = SqlCommentStripper.strip(raw);
-        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
+        UiTextClipboard.copy(text);
         if (project != null) {
-            String[] options = new String[]{
-                    MpSqlVisualizerBundle.message("dialog.ok"),
-                    MpSqlVisualizerBundle.message("dialog.closeSqlPanel")
-            };
-            int choice = Messages.showDialog(project,
-                    MpSqlVisualizerBundle.message("dialog.copy.done"),
-                    MpSqlVisualizerBundle.message("plugin.name"),
-                    options, 0, Messages.getInformationIcon());
-            if (choice == 1 && onClosePanelRequested != null) onClosePanelRequested.run();
+            // T-UiNative T-UN-02：复制成功提示改轻通知 + 「关闭 SQL 面板」动作（T-M23.6 原双按钮
+            // 模态改为非模态——点动作等价原 index==1 分支，回调关闭预览弹窗）；
+            // 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）
+            if (!ApplicationManager.getApplication().isUnitTestMode()) {
+                try {
+                    Notification notification = new Notification(
+                            NOTIFICATION_GROUP_ID,
+                            MpSqlVisualizerBundle.message("plugin.name"),
+                            MpSqlVisualizerBundle.message("dialog.copy.done"),
+                            NotificationType.INFORMATION
+                    );
+                    notification.addAction(NotificationAction.createSimpleExpiring(
+                            MpSqlVisualizerBundle.message("dialog.closeSqlPanel"),
+                            () -> {
+                                if (onClosePanelRequested != null) onClosePanelRequested.run();
+                            }));
+                    notification.notify(project);
+                } catch (Throwable ignored) {
+                    // headless 无通知系统依赖，与原 runCatching 等价
+                }
+            }
         }
         return true;
     }
@@ -1645,11 +1736,19 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 }
                 doc = d;
             } catch (Throwable t) {
-                Logger.getInstance(SqlPreviewPanel.class)
-                        .warn("[M36] preview temp file unavailable, fall back to in-memory editor: "
-                                + (t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName()));
-                psiFile = null;
-                doc = EditorFactory.getInstance().createDocument(sql);
+                // T-PreviewExecDs-01d：降级链第二级 = 内存 PSI（PsiFileFactory.createFileFromText，
+                // 无 VFS 文件但保留补全上下文载体）——项目内文件预热失败时不再一步掉到裸 document；
+                // 第三级（原兜底）才是纯内存文档编辑器（无 PSI，补全/注释灭）。
+                Document inMemory = createInMemoryPreviewPsi(sql);
+                if (inMemory != null) {
+                    doc = inMemory;
+                } else {
+                    Logger.getInstance(SqlPreviewPanel.class)
+                            .warn("[M36] preview temp file unavailable, fall back to bare in-memory editor: "
+                                    + (t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName()));
+                    psiFile = null;
+                    doc = EditorFactory.getInstance().createDocument(sql);
+                }
             }
             created = EditorFactory.getInstance().createEditor(doc, proj, sqlFileType, false);
         } else {
@@ -1681,6 +1780,35 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         bindAutoPopup(created);
         // T-AutoFold F4-a：createEditor 支链（含内存文档降级，同一函数收口）——新编辑器按初始内容应用
         cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(created, sql);
+    }
+
+    /**
+     * T-PreviewExecDs-01d：降级链第二级——内存 PSI 预览文档（无项目内 VFS 文件，但保留
+     * {@link SqlCompletionContext} 补全载体，避免掉到裸 document 后补全/注释全灭）。createFileFromText
+     * 包 ReadAction（T-M42 同机制先例：EDT 直调触发 markGenerated softAssertReadAccess 硬抛）。
+     * 失败返回 null，由调用方回落到第三级裸文档。
+     */
+    @Nullable
+    private Document createInMemoryPreviewPsi(String sql) {
+        Project proj = project;
+        if (proj == null) return null;
+        Logger LOG = Logger.getInstance(SqlPreviewPanel.class);
+        try {
+            com.intellij.openapi.fileTypes.FileType fileType =
+                    com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getStdFileType("SQL");
+            PsiFile psi = ReadAction.compute(
+                    (com.intellij.openapi.util.ThrowableComputable<PsiFile, Throwable>) () ->
+                            PsiFileFactory.getInstance(proj)
+                                    .createFileFromText("mpsql-preview-memory.sql", fileType, sql));
+            psiFile = psi;
+            LOG.info("[M36] in-memory PSI preview document created (len=" + sql.length() + ")");
+            Document d = PsiDocumentManager.getInstance(proj).getDocument(psi);
+            return d != null ? d : EditorFactory.getInstance().createDocument(sql);
+        } catch (Throwable e) {
+            LOG.warn("[M36] in-memory PSI preview fallback FAILED: " + e.getMessage());
+            psiFile = null;
+            return null;
+        }
     }
 
     /**
@@ -2456,11 +2584,29 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             metaLabel.setForeground(JBColor.namedColor("ErrorForeground", JBColor.RED));
             if (errorCopyButton != null) errorCopyButton.setVisible(true);
         } else if (unmatched == 0) {
-            Messages.showInfoMessage(proj, MpSqlVisualizerBundle.message("panel.param.import.result.success", matched), title);
+            // T-UiNative T-UN-02：导入结果改轻通知（原模态弹窗——纯告知无需打断）
+            try {
+                new Notification(
+                        NOTIFICATION_GROUP_ID,
+                        title,
+                        MpSqlVisualizerBundle.message("panel.param.import.result.success", matched),
+                        NotificationType.INFORMATION
+                ).notify(proj);
+            } catch (Throwable ignored) {
+                // headless 无通知系统依赖，与原 runCatching 等价
+            }
         } else {
-            Messages.showMessageDialog(proj,
-                    MpSqlVisualizerBundle.message("panel.param.import.result.partial", matched, unmatched, String.join(", ", unmatchedKeys)),
-                    title, Messages.getWarningIcon());
+            // T-UiNative T-UN-02：部分匹配改轻通知（原模态警示框；WARNING 保留原警示图标语义）
+            try {
+                new Notification(
+                        NOTIFICATION_GROUP_ID,
+                        title,
+                        MpSqlVisualizerBundle.message("panel.param.import.result.partial", matched, unmatched, String.join(", ", unmatchedKeys)),
+                        NotificationType.WARNING
+                ).notify(proj);
+            } catch (Throwable ignored) {
+                // headless 无通知系统依赖，与原 runCatching 等价
+            }
         }
     }
 
@@ -2723,7 +2869,10 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         for (PerfWarning warning : warnings) {
             boolean isError = warning.getSeverity() == PerfSeverity.ERROR || warning.getSeverity() == PerfSeverity.WARN;
             String prefix = isError ? "⚠ " : "ℹ ";
-            segments.add(new MetaPerfSegment(prefix + localizeWarning(warning), isError ? "#E05555" : "#3B82F6"));
+            // T-UN-13（T-UiNative）：HTML 段色写死 hex → namedColor 取主题色再注入（亮值不变，
+            // HTML 结构与截断逻辑不动）
+            segments.add(new MetaPerfSegment(prefix + localizeWarning(warning),
+                    MpvsUiColors.htmlHex(isError ? MpvsUiColors.PERF_ERROR_TEXT : MpvsUiColors.PERF_INFO_TEXT)));
         }
         return segments;
     }
@@ -2737,7 +2886,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     public boolean copyError() {
         if (currentWarning == null) return false;
-        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(currentWarning), null);
+        UiTextClipboard.copy(currentWarning);
         return true;
     }
 
@@ -2981,17 +3130,19 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return batchClearButton;
     }
 
-    JSplitPane splitPaneForTest() {
+    /** T-M26.1→T-UiNative：左右分栏（平台 OnePixelSplitter，原生分隔条主题融合 + 比例记忆）。 */
+    OnePixelSplitter splitPaneForTest() {
         return findSplitPane(this);
     }
 
-    private static JSplitPane findSplitPane(java.awt.Container c) {
+    private static OnePixelSplitter findSplitPane(java.awt.Container c) {
         for (Component child : c.getComponents()) {
-            if (child instanceof JSplitPane && ((JSplitPane) child).getOrientation() == JSplitPane.HORIZONTAL_SPLIT) {
-                return (JSplitPane) child;
+            // OnePixelSplitter 的 orientation 为 boolean（false = 水平）
+            if (child instanceof OnePixelSplitter && !((OnePixelSplitter) child).getOrientation()) {
+                return (OnePixelSplitter) child;
             }
             if (child instanceof java.awt.Container) {
-                JSplitPane found = findSplitPane((java.awt.Container) child);
+                OnePixelSplitter found = findSplitPane((java.awt.Container) child);
                 if (found != null) return found;
             }
         }

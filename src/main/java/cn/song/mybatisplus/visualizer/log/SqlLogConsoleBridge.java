@@ -277,6 +277,12 @@ public class SqlLogConsoleBridge {
     public void scanAll() {
         boolean hasMain = hasMainConsole();
         LOG.debug("scanAll: hasMainConsole=" + hasMain + ", lastHadMainConsole=" + lastHadMainConsole);
+        // T-LPC-05：控制台解析的静默失效计数周期上报（零增量零输出）——解析器内部无 IDE 依赖，
+        // 上报挂在既有轮询上，排障时能直接看到「参数被丢/等待态拦下/残句闭合」各发生多少次。
+        String diagReport = LogParseDiag.takeDeltaReport();
+        if (diagReport != null) {
+            LOG.info(diagReport);
+        }
         if (lastHadMainConsole && !hasMain) {
             LOG.info("scanAll: 主控制台已移除（上轮有、当前无），触发 onConsoleRemoved");
             onConsoleRemoved.run();
@@ -368,6 +374,11 @@ public class SqlLogConsoleBridge {
     }
 
     private void attachFilter(Object console) {
+        // M56 T-M56-09：「EP 首行标志」生效 → EP 已覆盖全部控制台，轮询挂载跳过（防双路解析）
+        if (SqlCaptureGate.epActive) {
+            LOG.debug("attachFilter: EP 已生效，轮询挂载跳过 " + console.getClass().getName());
+            return;
+        }
         // BUG FIX（停止后仍捕获）：非捕捉态时不挂载 Filter——守卫轮询/事件回调触发的 scanAll。
         if (!isCapturing.getAsBoolean()) {
             LOG.debug("attachFilter: 非捕捉态，跳过挂载 " + console.getClass().getName());

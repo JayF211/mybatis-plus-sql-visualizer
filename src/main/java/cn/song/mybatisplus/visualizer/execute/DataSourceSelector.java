@@ -22,12 +22,10 @@ import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.EditorFactory;
 import com.intellij.openapi.fileEditor.FileDocumentManager;
-import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.project.ProjectManager;
-import com.intellij.openapi.ui.Messages;
-import com.intellij.openapi.util.Pair;
+import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.util.TextRange;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
@@ -40,8 +38,6 @@ import com.intellij.ui.content.Content;
 import com.intellij.ui.content.ContentManager;
 import com.intellij.ui.content.ContentManagerEvent;
 import com.intellij.ui.content.ContentManagerListener;
-import com.intellij.openapi.application.AccessToken;
-import com.intellij.util.SlowOperations;
 import com.intellij.util.ui.JBUI;
 import com.intellij.util.ui.UIUtil;
 import org.jetbrains.annotations.NotNull;
@@ -52,7 +48,6 @@ import javax.swing.JPanel;
 import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
-import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import java.awt.BorderLayout;
 import java.awt.Component;
@@ -61,12 +56,10 @@ import java.awt.Dimension;
 import java.awt.Graphics;
 import java.awt.GridLayout;
 import java.awt.LayoutManager;
-import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.io.File;
-import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -108,6 +101,9 @@ public final class DataSourceSelector {
     /** 构建版本戳。 */
     private static final String BUILD_STAMP = "M36.8-exec-silent-noop";
 
+    /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+    private static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
+
     /** M36.5.76：OUTFILL 未锚定诊断日志节流（EDT 串行访问，无需同步）。 */
     private static long lastOutFillDiagAt = 0L;
 
@@ -130,8 +126,11 @@ public final class DataSourceSelector {
     private static JComponent sharedFullComponent = null;
     private static String sharedDataSourceName = null;
 
-    /** T-PreviewFlash：mpsql-exec.sql 的 vf+psi 配对缓存（路径稳定，vf 有效即复用，吸收每次预览的 VFS refresh + findFile 慢操作）。 */
-    private static TempPsiFile cachedTempPsiFile = null;
+    /** T-PreviewFlash：mpsql-exec.sql 的 vf+psi 配对缓存（路径稳定，vf 有效即复用，吸收每次预览的 VFS refresh + findFile 慢操作）。
+     *  T-ExecSlowOps F3：{@link #prewarmExecTempFile} 后台线程成为第二写方后须 volatile 跨线程可见。 */
+    private static volatile TempPsiFile cachedTempPsiFile = null;
+    /** T-PreviewExecDs-02 F1：缓存归属项目名（跨项目拒绝诊断用，与 cachedTempPsiFile 同生命周期）。 */
+    private static volatile String cachedTempPsiProjectName = null;
 
     /**
      * T-ExecCopyFix F2a：最近一次 createTempPsiFile 失败的阶段原因（stage 标识或异常摘要），
@@ -140,8 +139,13 @@ public final class DataSourceSelector {
      */
     private static volatile String lastTempFileFailure = null;
 
-    /** T-PreviewFlash：已 setMapping 的 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。 */
-    private static VirtualFile dialectMappedVf = null;
+    /** T-PreviewFlash：已 setMapping 的 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。
+     * T-ExecSlowOps F3：BGT 预热链也会读写，volatile 保证跨线程可见。 */
+    private static volatile VirtualFile dialectMappedVf = null;
+
+    /** T-ExecSlowOps F2：exec 预热进行中标记（并发预览只跑一条真实链，其余直接返回）。 */
+    private static final java.util.concurrent.atomic.AtomicBoolean execPrewarmInFlight =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
 
     /** M36.5.6：结果区换入回调。 */
     private static Consumer<JComponent> pendingOnConsole = null;
@@ -152,8 +156,10 @@ public final class DataSourceSelector {
     /** M36.5.52：最近一次已上报的 SQL 错误文本——早检去重用。 */
     private static String lastReportedError = null;
 
-    /** M36.5.57：本次执行开始时 console history 的长度基线。 */
-    private static int consoleErrorBaseline = 0;
+    /** M36.5.57：本次执行开始时 console history 的长度基线——早检只扫<b>本次执行之后</b>新增的
+     * 文本，忽略 history 里的旧错误残留（否则正常 SQL 会把上个失败的错误"带过来"，用户实测）。
+     * T-PerfSweep2-01：internal 供 ConsoleErrorExtractTest 注入基线（生产路径仅 executeOnConsole 赋值）。 */
+    public static int consoleErrorBaseline = 0;
 
     /** T-ExecSilentNoop：本次执行的提示已发出标记——8s 连接监控与 40 拍超时窗口共用，
      * 保证同一次执行只报一次提示（此前二者各按同一 key 报一次，用户见两次红字）。 */
@@ -296,7 +302,7 @@ public final class DataSourceSelector {
                 if (matched != null) {
                     LOG.info("[M36] silent reuse last runner: " + last);
                     chosenRunnerName[0] = last;
-                    runRunner(matched, true, onError);
+                    runRunner(project, matched, true, onError);
                     if (callback != null) callback.accept(true);
                     return;
                 }
@@ -313,7 +319,7 @@ public final class DataSourceSelector {
         } else if (runners.size() == 1 && shouldBeChosenIfAlone(runners.get(0))) {
             LOG.info("[M36] single runner, run directly");
             chosenRunnerName[0] = getRunnerName(runners.get(0));
-            runRunner(runners.get(0), !executeAfterPrepare, onError);
+            runRunner(project, runners.get(0), !executeAfterPrepare, onError);
             if (callback != null) callback.accept(true);
         } else {
             LOG.info("[M36] show popup with " + runners.size() + " runners");
@@ -325,7 +331,7 @@ public final class DataSourceSelector {
                 if (runner != null) chosenRunnerName[0] = getRunnerName(runner);
                 if (callback != null) callback.accept(runner != null);
                 // 弹窗中用户刚做了主动选择，失败仍需模态引导（silent=false）
-                if (runner != null) runRunner(runner, false, onError);
+                if (runner != null) runRunner(project, runner, false, onError);
             });
         }
     }
@@ -554,9 +560,14 @@ public final class DataSourceSelector {
         return null;
     }
 
-    /** M36.5.48：从 console 历史文档提取真实错误文本。 */
+    /** M36.5.48：从 console 历史文档提取真实错误文本。
+     * T-PerfSweep2-01：getCharsSequence + subSequence 片段读取——本函数被 600ms×8 拍与
+     * 400ms×40/100 拍两个定时器<b>逐拍</b>调用，此前 doc.getText() 每拍整串拷贝全史
+     * （history 随长会话涨到 MB 级后是 EDT 上唯一可感知的 O(全史) 重复分配）。
+     * 只物化 baseline 之后的切片；getCharsSequence 与 getText 同属 Document 接口，
+     * 反射可达性一致，且免去 BadLocationException 面。 */
     @Nullable
-    private static String extractConsoleError(Object console, Logger LOG) {
+    public static String extractConsoleError(Object console, Logger LOG) {
         if (console == null) return null;
         try {
             Object consoleView = console.getClass().getMethod("getConsoleView").invoke(console);
@@ -564,12 +575,19 @@ public final class DataSourceSelector {
             Object historyViewer = consoleView.getClass().getMethod("getHistoryViewer").invoke(consoleView);
             if (historyViewer == null) return null;
             Object doc = historyViewer.getClass().getMethod("getDocument").invoke(historyViewer);
-            if (!(doc instanceof Document)) return null;
-            String text = ((Document) doc).getText();
+            if (doc == null) return null;
+            Object seqObj = doc.getClass().getMethod("getCharsSequence").invoke(doc);
+            if (!(seqObj instanceof CharSequence)) return null;
+            CharSequence seq = (CharSequence) seqObj;
+            // M36.5.57：只扫本次执行之后新增的文本（基线截断）——忽略 history 残留的旧错误。
+            // baseline 可能因 DBN 写入历史而增长；若文本长度 <= 基线说明无新增内容，return null。
             int baseline = consoleErrorBaseline;
-            if (baseline > 0 && text.length() > baseline) {
-                text = text.substring(baseline);
-            } else if (baseline > 0) {
+            String text;
+            if (baseline <= 0) {
+                text = seq.toString();
+            } else if (seq.length() > baseline) {
+                text = seq.subSequence(baseline, seq.length()).toString();
+            } else {
                 return null;
             }
             if (text.isBlank()) return null;
@@ -733,6 +751,10 @@ public final class DataSourceSelector {
         Object shared = sharedConsole;
         final int[] ticks = {0};
         final boolean[] swapped = {false};
+        // T-ExplainFirstNative：结果 Tab 名称集合逐拍快照——集合变化（空名占位改名/新 Tab 出现）
+        // 说明结果内容更新，即使组件实例未变也要补一次换入重绘（首点网格晚于换入构建的兜底）
+        @SuppressWarnings("unchecked")
+        final Set<String>[] lastResultNames = new Set[1];
         Timer timer = new Timer(600, null);
         timer.addActionListener(e -> {
             ticks[0]++;
@@ -754,6 +776,9 @@ public final class DataSourceSelector {
                 return;
             }
             if (shared != null) clearConsolePrompt(shared, LOG);
+            Set<String> names = resultContents(ui).stream().map(Content::getDisplayName).collect(Collectors.toSet());
+            boolean namesChanged = lastResultNames[0] != null && !names.equals(lastResultNames[0]);
+            lastResultNames[0] = names;
             JComponent live = null;
             try {
                 Object c = ui.getClass().getMethod("getComponent").invoke(ui);
@@ -761,7 +786,7 @@ public final class DataSourceSelector {
             } catch (Throwable ignored) {
                 // ignore
             }
-            boolean shouldSwap = live != null && (forceSwapIn && !swapped[0] || live != lastLiveResultSwapped);
+            boolean shouldSwap = live != null && (forceSwapIn && !swapped[0] || live != lastLiveResultSwapped || namesChanged);
             if (shouldSwap && live != null) {
                 JComponent full = swapResultIntoPersistentConsole(sharedFullComponent, live, top, LOG);
                 boolean changed = live != lastLiveResultSwapped;
@@ -771,7 +796,7 @@ public final class DataSourceSelector {
                 preparedFullComponent = full;
                 Consumer<JComponent> cb = pendingOnConsole;
                 if (cb != null) cb.accept(full);
-                LOG.info("[M36] results refreshed (tick=" + ticks[0] + ", forced=" + forceSwapIn + ", instanceChanged=" + changed + ", gen=" + generation + ")");
+                LOG.info("[M36] results refreshed (tick=" + ticks[0] + ", forced=" + forceSwapIn + ", instanceChanged=" + changed + ", namesChanged=" + namesChanged + ", gen=" + generation + ")");
             }
             if (ticks[0] >= 8) {
                 timer.stop();
@@ -802,6 +827,9 @@ public final class DataSourceSelector {
                     if (name == null) return;
                     LOG.info("[M36] contentAdded: " + name);
                     if (name.equalsIgnoreCase("Output") || name.equalsIgnoreCase("输出")) return;
+                    // T-ExplainFirstNative：空名占位（DBN 先 add 后改名）换入必然过早——网格未构建，
+                    // 交由 startResultTabRetry 在改名后 select+换入
+                    if (name.isBlank()) return;
                     Consumer<JComponent> callback = pendingOnConsole;
                     if (callback == null) {
                         LOG.info("[M36] contentAdded swap-in SKIPPED (pendingOnConsole=null)");
@@ -1196,7 +1224,18 @@ public final class DataSourceSelector {
             LOG.warn("[M36] prepareInConsole FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
             // M36.3：通知调用方错误，确保 UI 从「执行中」状态恢复
             Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
-            if (onError != null) onError.accept(cause.getMessage() != null ? cause.getMessage() : cause.toString());
+            // T-PreviewExecDs-03 F3：console 被清扫 dispose 的处置（prepare 链后段撞上时同款
+            // 特判，见 prepareAfterEditorResolved onFailure）
+            if (cause instanceof com.intellij.util.IncorrectOperationException
+                    && cause.getMessage() != null && cause.getMessage().contains("already been disposed")) {
+                LOG.warn("[M36] console disposed during prepareInConsole (swept), clear caches for retry: "
+                        + cause.getMessage().substring(0, Math.min(120, cause.getMessage().length())));
+                clearPrepared();
+                dropSharedConsole();
+                if (onError != null) onError.accept(MpSqlVisualizerBundle.message("execute.console.disposed"));
+            } else {
+                if (onError != null) onError.accept(cause.getMessage() != null ? cause.getMessage() : cause.toString());
+            }
         }
     }
 
@@ -1218,6 +1257,32 @@ public final class DataSourceSelector {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         try {
             Class<?> consoleClass = Class.forName(CONSOLE_CLASS);
+
+            // T-PreviewExecDs-03 F2：getScriptModel 前 isValid 预检 + 三分量诊断——attach 后
+            // console 可能已被 getActiveConsoles 清扫（isValid=false，依赖 facade 数据源加载状态，
+            // 见开发计划 §2.2 反编译实锤）。disposed 直接快速失败（等待无意义，F3 自愈清缓存）；
+            // 未 disposed 但分量失效时，非 EDT 上有界重查等 facade 异步窗口，EDT 不阻塞直走
+            //（getScriptModel 若撞上清扫由 F3 特判接管）。
+            ConsoleValidity initialValidity = probeConsoleValidity(console, project, LOG);
+            if (initialValidity != null && initialValidity.disposed) {
+                LOG.warn("[M36] console DISPOSED right after attach: " + initialValidity);
+                throw new IllegalStateException(MpSqlVisualizerBundle.message("execute.console.disposed"));
+            }
+            if (initialValidity != null && !initialValidity.valid()
+                    && !ApplicationManager.getApplication().isDispatchThread()) {
+                try {
+                    for (int attempt = 0; attempt < 3; attempt++) {
+                        Thread.sleep(300);
+                        ConsoleValidity v = probeConsoleValidity(console, project, LOG);
+                        if (v != null && v.valid()) {
+                            LOG.info("[M36] console valid after retry (attempt=" + (attempt + 1) + ")");
+                        }
+                    }
+                } catch (Throwable ignored) {
+                    // ignore
+                }
+                LOG.warn("[M36] console still invalid after bounded retry: " + probeConsoleValidity(console, project, LOG));
+            }
 
             Object scriptModel = consoleClass.getMethod("getScriptModel").invoke(console);
             Class<?> execOptionClass = Class.forName("com.intellij.database.settings.DatabaseSettings$ExecOption");
@@ -1423,7 +1488,87 @@ public final class DataSourceSelector {
         } catch (Throwable e) {
             LOG.warn("[M36] prepareInConsole FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
             Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
-            if (onError != null) onError.accept(cause.getMessage() != null ? cause.getMessage() : cause.toString());
+            // T-PreviewExecDs-03 F3：console 已被 getActiveConsoles 清扫（Disposer.register 撞
+            // 已 dispose 父节点抛 IncorrectOperationException）→ 清单例缓存（否则下轮执行复用
+            // dead 缓存继续失败）+ 可读文案，不再透平台异常长串。
+            if (cause instanceof com.intellij.util.IncorrectOperationException
+                    && cause.getMessage() != null && cause.getMessage().contains("already been disposed")) {
+                LOG.warn("[M36] console disposed during prepare (swept by getActiveConsoles), clear caches for retry: "
+                        + cause.getMessage().substring(0, Math.min(120, cause.getMessage().length())));
+                clearPrepared();
+                dropSharedConsole();
+                if (onError != null) onError.accept(MpSqlVisualizerBundle.message("execute.console.disposed"));
+            } else {
+                if (onError != null) onError.accept(cause.getMessage() != null ? cause.getMessage() : cause.toString());
+            }
+        }
+    }
+
+    /**
+     * T-PreviewExecDs-03 F2：console 有效性的三分量快照（反编译实锤 {@code isValid} =
+     * {@code !isDisposed && isViewValid && facade.findDataSource(dataSource.uniqueId) != null}）。
+     * 任何一环为 false 即可能被 {@code getActiveConsoles} 清扫 dispose——日志/自愈判定共用。
+     */
+    public static final class ConsoleValidity {
+        public final boolean disposed;
+        public final Boolean viewValid;
+        public final Boolean dsInFacade;
+
+        ConsoleValidity(boolean disposed, Boolean viewValid, Boolean dsInFacade) {
+            this.disposed = disposed;
+            this.viewValid = viewValid;
+            this.dsInFacade = dsInFacade;
+        }
+
+        public boolean valid() {
+            return !disposed && !Boolean.FALSE.equals(viewValid) && !Boolean.FALSE.equals(dsInFacade);
+        }
+
+        @Override
+        public String toString() {
+            return "disposed=" + disposed + ", viewValid=" + viewValid + ", dsInFacade=" + dsInFacade + ", valid=" + valid();
+        }
+    }
+
+    /** T-PreviewExecDs-03 F2：反射探测 console 三分量有效性（任一环节失败降级 null，绝不阻断）。 */
+    @Nullable
+    private static ConsoleValidity probeConsoleValidity(Object console, Project project, Logger LOG) {
+        try {
+            Class<?> consoleClass = Class.forName(CONSOLE_CLASS);
+            boolean disposed;
+            try {
+                // 243 平台仅 Disposable 版本（标 deprecated），无 Object 重载——cast + suppress
+                disposed = (console instanceof com.intellij.openapi.Disposable)
+                        ? Disposer.isDisposed((com.intellij.openapi.Disposable) console) : false;
+            } catch (Throwable t) {
+                disposed = false;
+            }
+            Boolean viewValid = null;
+            try {
+                Object v = consoleClass.getMethod("isViewValid").invoke(console);
+                viewValid = v instanceof Boolean ? (Boolean) v : null;
+            } catch (Throwable ignored) {
+                // 探不到按 null 呈现
+            }
+            Boolean dsInFacade = null;
+            try {
+                Object ds = consoleClass.getMethod("getDataSource").invoke(console);
+                if (ds != null) {
+                    Object id = ds.getClass().getMethod("getUniqueId").invoke(ds);
+                    if (id instanceof String) {
+                        Object facade = Class.forName("com.intellij.database.psi.DbPsiFacade")
+                                .getMethod("getInstance", Project.class).invoke(null, project);
+                        dsInFacade = facade.getClass().getMethod("findDataSource", String.class)
+                                .invoke(facade, id) != null;
+                    }
+                }
+            } catch (Throwable ignored) {
+                // 探不到按 null 呈现
+            }
+            return new ConsoleValidity(disposed, viewValid, dsInFacade);
+        } catch (Throwable e) {
+            LOG.warn("[M36] probeConsoleValidity FAILED: " + e.getMessage());
+            return null;
         }
     }
 
@@ -1929,21 +2074,12 @@ public final class DataSourceSelector {
                         VirtualFile cvf = (VirtualFile) consoleVf;
                         String consoleText = editor.getDocument().getText();
                         WriteAction.run(() -> {
-                            Document fileDoc = FileDocumentManager.getInstance().getDocument(cvf);
-                            if (fileDoc != null && !fileDoc.getText().equals(consoleText)) {
-                                fileDoc.setText(consoleText);
-                                PsiDocumentManager.getInstance(project).commitDocument(fileDoc);
-                            } else if (fileDoc != null) {
-                                PsiDocumentManager.getInstance(project).commitDocument(fileDoc);
-                            } else {
-                                try {
-                                    cvf.setBinaryContent(consoleText.getBytes(StandardCharsets.UTF_8));
-                                } catch (Throwable ignored) {
-                                    // ignore
-                                }
-                            }
+                            // T-ExecDocSync T-EC-01：document 驱动写 + 同临界区落盘（saveDocument）——
+                            // 执行前 console 手改未保存内容与磁盘收口，不留「已修改未保存」窗口
+                            //（M36.5.20 的 commitDocument/PSI 对齐语义保留在 writeVfTextViaDocument 内）
+                            writeVfTextViaDocument(project, cvf, consoleText);
                         });
-                        LOG.info("[M36] console doc synced+committed to vf before execution (" + cvf.getName() + ")");
+                        LOG.info("[M36] console doc synced+committed+saved to vf before execution (" + cvf.getName() + ")");
                     }
                 } catch (Throwable e) {
                     LOG.warn("[M36] sync console doc to vf FAILED: " + e.getMessage());
@@ -2136,7 +2272,9 @@ public final class DataSourceSelector {
                 Timer watch = new Timer(8000, null);
                 watch.addActionListener(e -> {
                     watch.stop();
-                    boolean newTab = resultContents(uiForWatch).stream().anyMatch(c -> !preExistingNames.contains(c.getDisplayName()));
+                    boolean newTab = resultContents(uiForWatch).stream().anyMatch(c ->
+                            c.getDisplayName() != null && !c.getDisplayName().isBlank()
+                                    && !preExistingNames.contains(c.getDisplayName()));
                     boolean namespaceOk;
                     try {
                         Object ns = consoleForWatch.getClass().getMethod("getCurrentNamespace").invoke(consoleForWatch);
@@ -2207,16 +2345,23 @@ public final class DataSourceSelector {
         return c.getDisplayName().equalsIgnoreCase("Output") || c.getDisplayName().equalsIgnoreCase("输出");
     }
 
-    /** M36.5.22b：结果 Tab 选择判定（纯函数）。 */
+    /**
+     * M36.5.22b：结果 Tab 选择判定（纯函数）。
+     *
+     * <p>T-ExplainFirstNative：<b>空名占位不算结果</b>——DBN 首次执行先 add 空名 Content 再异步
+     * 改名/建网格（262 真机 21:06:45 实证 {@code contentAdded: }），空名 ∉ 快照集合恒真会把占位当
+     * 新结果第 1 拍选中并强制换入（网格尚未构建），事后无人补换入 → 结果滞留原生控制台。</p>
+     */
     public static Content pickResultTab(Content[] contents, Set<String> preExistingNames, int attempts) {
         Content newOne = null;
         for (Content c : contents) {
-            if (!isOutputContent(c) && !preExistingNames.contains(c.getDisplayName())) { newOne = c; break; }
+            if (!isOutputContent(c) && !c.getDisplayName().isBlank()
+                    && !preExistingNames.contains(c.getDisplayName())) { newOne = c; break; }
         }
         if (newOne != null) return newOne;
         Content staleOne = null;
         for (Content c : contents) {
-            if (!isOutputContent(c)) { staleOne = c; break; }
+            if (!isOutputContent(c) && !c.getDisplayName().isBlank()) { staleOne = c; break; }
         }
         return (staleOne != null && attempts >= REUSE_ACCEPT_TICKS) ? staleOne : null;
     }
@@ -2261,13 +2406,18 @@ public final class DataSourceSelector {
             } catch (Throwable ignored) {
                 contents = new Content[0];
             }
-            List<String> all = Arrays.stream(contents).map(Content::getDisplayName).collect(Collectors.toList());
-            List<Integer> ids = Arrays.stream(contents).map(System::identityHashCode).collect(Collectors.toList());
             Content result = pickResultTab(contents, preExistingNames, attempts[0]);
             if (result != null && preExistingNames.contains(result.getDisplayName())) {
                 LOG.info("[M36] result tab reused (name=" + result.getDisplayName() + ") - accepting existing tab");
             }
-            LOG.info("[M36] retry#" + attempts[0] + " contents=" + all + ", ids=" + ids + ", select=" + (result != null ? result.getDisplayName() : "null") + ", preExisting=" + preExistingNames);
+            // T-PerfSweep2-01：列表构建仅喂 LOG.debug——debug 关闭时不再逐拍白建两份列表
+            //（400ms 定时器最长 100 拍，此前每拍 2 次 map 空转）。
+            if (LOG.isDebugEnabled()) {
+                List<String> all = Arrays.stream(contents).map(Content::getDisplayName).collect(Collectors.toList());
+                List<Integer> ids = Arrays.stream(contents).map(System::identityHashCode).collect(Collectors.toList());
+                LOG.debug("[M36] retry#" + attempts[0] + " contents=" + all + ", ids=" + ids + ", select="
+                        + (result != null ? result.getDisplayName() : "null") + ", preExisting=" + preExistingNames);
+            }
             if (result != null) {
                 timerHolder[0].stop();
                 try {
@@ -2399,8 +2549,10 @@ public final class DataSourceSelector {
         }
     }
 
-    /** 反射调用 Runner.run：建 session → consumer 回调续接执行。失败（常见：驱动未下载）→ 面板行内回调 + 按 silent 决定是否模态引导。 */
-    private static void runRunner(Object runner, boolean silent, Consumer<String> onError) {
+    /** 反射调用 Runner.run：建 session → consumer 回调续接执行。失败（常见：驱动未下载）→ 面板行内回调 + 按 silent 决定是否模态引导。
+     * T-PreviewExecDs-02 F4：显式传 project——失败路径曾用 openProjects.firstOrNull() 清 last-used
+     * /弹错误框，多项目同开时清的是「第一个打开项目」的记忆（错项目 bug，见开发计划 §2.2）。 */
+    private static void runRunner(Project project, Object runner, boolean silent, Consumer<String> onError) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         try {
             Method method = runner.getClass().getMethod("run");
@@ -2417,19 +2569,27 @@ public final class DataSourceSelector {
                     cause.getMessage() != null ? cause.getMessage() : cause.toString());
             if (onError != null) onError.accept(failMsg);
             if (silent) {
-                Project[] open = ProjectManager.getInstance().getOpenProjects();
-                if (open.length > 0) {
-                    try {
-                        com.intellij.ide.util.PropertiesComponent.getInstance(open[0]).unsetValue(LAST_RUNNER_KEY);
-                    } catch (Throwable ignored) {
-                    }
+                try {
+                    com.intellij.ide.util.PropertiesComponent.getInstance(project).unsetValue(LAST_RUNNER_KEY);
+                } catch (Throwable ignored) {
                 }
                 return;
             }
             // 驱动缺失/连接失败等：提示用户到数据源设置解决（原生 Download Driver 弹窗由 Database 插件触发）
-            Project project = ProjectManager.getInstance().getOpenProjects().length > 0 ? ProjectManager.getInstance().getOpenProjects()[0] : null;
-            if (project == null) return;
-            Messages.showErrorDialog(project, MpSqlVisualizerBundle.message("execute.datasource.failed", cause.getMessage() != null ? cause.getMessage() : cause.toString()), MpSqlVisualizerBundle.message("execute.title"));
+            // T-UiNative T-UN-02：改 ERROR 轻通知（原模态错误框——失败仍醒目，但不打断）；
+            // 测试模式跳过 + runCatching 兜底（对齐 CopyExecutableSqlAction.showToast 约定）
+            if (!ApplicationManager.getApplication().isUnitTestMode()) {
+                try {
+                    new com.intellij.notification.Notification(
+                            NOTIFICATION_GROUP_ID,
+                            MpSqlVisualizerBundle.message("execute.title"),
+                            failMsg,
+                            com.intellij.notification.NotificationType.ERROR
+                    ).notify(project);
+                } catch (Throwable ignored) {
+                    // headless 无通知系统依赖，与原 runCatching 等价
+                }
+            }
         }
     }
 
@@ -2437,9 +2597,15 @@ public final class DataSourceSelector {
     private static void showRunnerPopup(Project project, List<Object> runners, Consumer<Object> callback) {
         List<RunnerItem> items = new ArrayList<>();
         for (Object r : runners) items.add(new RunnerItem(r, getRunnerName(r), getRunnerIcon(r)));
+        // T-PreviewExecDs-02 F5：多项目同开时标题带当前项目名——runner 枚举严格按当前项目
+        // facade（F1 修复后），标题注明归属避免「这是哪来的数据源」困惑；单项目不加噪音。
+        boolean multiProject = ProjectManager.getInstance().getOpenProjects().length > 1;
+        String title = multiProject
+                ? MpSqlVisualizerBundle.message("execute.datasource.select.in", project.getName())
+                : MpSqlVisualizerBundle.message("execute.datasource.select");
         com.intellij.openapi.ui.popup.util.BaseListPopupStep<RunnerItem> step =
                 new com.intellij.openapi.ui.popup.util.BaseListPopupStep<RunnerItem>(
-                        MpSqlVisualizerBundle.message("execute.datasource.select"), items) {
+                        title, items) {
                     @Override
                     public String getTextFor(RunnerItem value) { return value.name; }
                     @Override
@@ -2534,9 +2700,15 @@ public final class DataSourceSelector {
      * 实参，243~262 交集——T-Wia262）——修 262 真机最可能根因：refreshAndFindFileByIoFile 同步
      * VFS refresh 要求 write-safe 语境，262 平台 RefreshSessionImpl.launch 对 EDT-ReadAction
      * 硬抛 "Access is allowed from write thread only"（T-PreviewWiLock 同 API 先例）。WIRA 隐含
-     * 读权限，refresh 后续链不受影响。<b>后台化经评估否决</b>：setMapping 须在 EDT（线程语义未
-     * 验证，M36.5 约束）而 refresh 适合 BGT，双向交接（BGT invokeAndWait 等 EDT 执行映射、
-     * EDT 阻塞等 BGT 产物）形成互锁死锁面——invokeAndWait 须等 EDT 回事件泵，冷路径必超时。</p>
+     * 读权限，refresh 后续链不受影响。</p>
+     *
+     * <p>T-ExecSlowOps F2：<b>本方法自此退化为兜底路径</b>——预览链成功后
+     * {@link #prewarmExecTempFile} 已在后台线程完成 写盘→refresh→方言映射→findFile→填缓存槽，
+     * 弹窗打开后这里 {@link #consumeCachedTempPsiFile} 必命中，EDT 上不再执行 refresh/findFile
+     *（262 真机 "Slow operations are prohibited on EDT" SEVERE 本体，WorkspaceFileIndex
+     * .ensureIsUpToDate）。冷路径仅存于无预览链触达的显式执行首跑等场景。原"后台化经评估
+     * 否决"（BGT 无法安全做 EDT-only 的 setMapping）已被 {@link DialectPreMapping#ensureMapped}
+     * 两段式（BGT 读探测 + invokeLater 派 EDT + 有界 latch 等待，绝不 invokeAndWait）解决。</p>
      */
     private static TempPsiFile createTempPsiFile(Project project, String sql) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
@@ -2556,13 +2728,8 @@ public final class DataSourceSelector {
         // T-PreviewFlash：EDT 同步 VFS refresh + PsiManager.findFile 已被跨点击缓存吸收——
         // mpsql-exec.sql 路径稳定，vf 仍有效时直接复用配对缓存，把
         // WorkspaceFileIndex.ensureIsUpToDate 的 SEVERE 断言移出每次预览的热路径。
-        if (cachedTempPsiFile != null) {
-            if (cachedTempPsiFile.vf.isValid()) {
-                LOG.info("[M36] exec psi cache hit (no VFS refresh): " + cachedTempPsiFile.vf.getName());
-                return cachedTempPsiFile;
-            }
-            cachedTempPsiFile = null;
-        }
+        TempPsiFile cached = consumeCachedTempPsiFile(project);
+        if (cached != null) return cached;
         // T-ExecCopyFix F2b：refresh 段包 WriteIntentReadAction（详见方法 Javadoc）；
         // mapDialect 与 findFile 维持原线程原语义（setMapping 须 EDT；findFile 沿用
         // ReadAction.compute 既有包装，与 T-M36.6-03 前行为一致）。
@@ -2578,6 +2745,12 @@ public final class DataSourceSelector {
             return failTempFile("refreshVfs",
                     "VFS not visible after refresh (" + ioFile.getPath() + ", exists=" + ioFile.exists() + ")");
         }
+        // T-EC-04：VFS 缺条目裸写路径的防御收口——正常恒 no-op，异常残留在此收敛（含落盘）
+        try {
+            syncExecVfContentIfNeeded(project, vf, sql);
+        } catch (Throwable e) {
+            return failTempFile("syncVfContent", e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
         mapDialectBeforePsi(project, vf, LOG);
         PsiFile psi;
         try {
@@ -2588,7 +2761,8 @@ public final class DataSourceSelector {
         if (psi == null) {
             return failTempFile("findPsi", "PsiManager.findFile null (" + vf.getName() + ")");
         }
-        cachedTempPsiFile = new TempPsiFile(vf, psi);
+        // T-PerfSweep2-04：写点统一走 markCachedTempPsiFile（挂一次性项目关闭钩子）
+        markCachedTempPsiFile(project, vf, psi);
         return cachedTempPsiFile;
     }
 
@@ -2601,8 +2775,193 @@ public final class DataSourceSelector {
         return null;
     }
 
-    /** M36.5.12：项目内执行文件路径。 */
-    private static File projectExecFile(Project project, String sql) {
+    /**
+     * T-PreviewExecDs-02 F1：消费 exec 临时文件 vf+psi 缓存——可用（归属当前项目且 vf 有效）
+     * 返回配对，否则清缓存返回 null（走冷路径重建）。供跨项目隔离测试直测。
+     * 跨项目泄漏实锤见开发计划 §2.2：旧实现只查 vf.isValid，在 B 项目执行时返回 A 项目的
+     * vf+psi → runner 按 A 项目 facade 枚举数据源 → 弹窗显示另一项目数据源 → console 因
+     * facade 找不到该数据源被 getActiveConsoles 清扫 → "parent has already been disposed"。
+     */
+    @Nullable
+    public static TempPsiFile consumeCachedTempPsiFile(Project project) {
+        Logger LOG = Logger.getInstance(DataSourceSelector.class);
+        TempPsiFile cached = cachedTempPsiFile;
+        if (cached == null) return null;
+        if (isCacheUsable(project, cached.vf)) {
+            LOG.info("[M36] exec psi cache hit (no VFS refresh): " + cached.vf.getName());
+            return cached;
+        }
+        // 跨项目/失效命中——弃缓存，禁止把别项目的 vf+psi 当当前项目用
+        if (cachedTempPsiProjectName != null && !cachedTempPsiProjectName.equals(project.getName())) {
+            LOG.warn("[M36] exec psi cache REJECTED across project (cached=" + cachedTempPsiProjectName
+                    + ", current=" + project.getName() + "), rebuild");
+        }
+        cachedTempPsiFile = null;
+        cachedTempPsiProjectName = null;
+        return null;
+    }
+
+    /**
+     * T-PreviewExecDs-02 F1：exec 临时文件 vf+psi 缓存是否对当前项目可用——既要 vf 有效，
+     * 也要 vf 归属当前项目（basePath 前缀）。跨项目泄漏根因修复的判定纯函数（表驱动单测）。
+     */
+    public static boolean isCacheUsable(Project project, VirtualFile vf) {
+        if (!vf.isValid()) return false;
+        String base = project.getBasePath();
+        if (base == null) return false;
+        String nBase = com.intellij.openapi.util.io.FileUtil.toSystemIndependentName(base).replaceAll("/+$", "");
+        String nPath = com.intellij.openapi.util.io.FileUtil.toSystemIndependentName(vf.getPath());
+        return nPath.startsWith(nBase + "/");
+    }
+
+    /**
+     * T-EC-03：执行文件单写方锁——BGT 预热（prewarmExecTempFileInner）与 EDT 冷路径
+     *（createTempPsiFile）两条链并发写同一 mpsql-exec.sql 的串行化。临界区毫秒级；
+     * 两个调用点均在普通线程语境（非 WriteAction 内），持本锁再取平台写锁无环。
+     */
+    private static final Object execFileWriteLock = new Object();
+
+    /**
+     * T-EC-02：裸写兜底守卫——仅当该文件当前<b>无已加载 document</b>时才允许绕过 document
+     * 直接写盘。文件有已加载 document（编辑器持有/近期读写）时裸写盘 = 绕过 document 的
+     * 外部改写，叠加 document「已修改未保存」态即触发平台 MemoryDiskConflictResolver
+     * 「File Cache Conflict」模态弹窗（T-ExecDocSync 真机截图实证）。供表驱动测试。
+     */
+    public static boolean canFallBackToRawWrite(VirtualFile vf) {
+        return FileDocumentManager.getInstance().getCachedDocument(vf) == null;
+    }
+
+    /**
+     * T-EC-01：document 驱动写 + <b>同临界区落盘</b>——{@code setText → commitDocument → saveDocument}，
+     * 磁盘=VFS=内存三方在同一写临界区内收口，不留「已修改未保存」窗口（该窗口内任何绕过
+     * document 的磁盘改写都触发 File Cache Conflict 弹窗，弹窗期间 invokeLater 链冻结 →
+     * 执行链卡死）；落盘不再依赖 IDE 自动保存追赶。
+     *
+     * <p><b>仅 EDT 调用</b>（BGT 统一经 {@link #dispatchDocWriteOnEdt} 派发）——T-ExecDocSync 关键发现
+     *（javap + 沙盒堆栈双实证）：262 平台文件 document（非 FREE_THREADED）的 setText 包
+     * CommandProcessor.executeCommand，BGT 直调硬抛 EDT-only 断言（RuntimeExceptionWithAttachments）。
+     * 旧实现 BGT 预热走 document 分支<b>每次必炸</b>，runCatching 吞掉后静默掉进裸写兜底——
+     * 这正是真机 File Cache Conflict 链的本体（非低概率竞态）。</p>
+     *
+     * <p>document 未加载（fileDoc == null，即无冲突面）走 setBinaryContent（VFS+磁盘同步）；
+     * text 相同但 document 仍 modified（用户改后还原等）时同样 commit+save 收敛。</p>
+     */
+    public static void writeVfTextViaDocument(Project project, VirtualFile vf, String text) {
+        Document fileDoc = FileDocumentManager.getInstance().getDocument(vf);
+        if (fileDoc == null) {
+            try {
+                vf.setBinaryContent(text.getBytes(StandardCharsets.UTF_8));
+            } catch (Throwable ignored) {
+                // ignore
+            }
+            return;
+        }
+        if (!fileDoc.getText().equals(text)) {
+            fileDoc.setText(text);
+        }
+        // setText 的 write command 结束时自动 commit；显式 commitDocument 双保险
+        //（同步后同 tick 内 findFile 的 PSI 立即对齐，M36.5.20 语义保留）
+        PsiDocumentManager.getInstance(project).commitDocument(fileDoc);
+        // T-EC-01 核心：同临界区落盘——磁盘即时与内存一致，document 不滞留 modified 态
+        FileDocumentManager.getInstance().saveDocument(fileDoc);
+    }
+
+    /** BGT 派 EDT document 写的有界等待预算（毫秒）——DialectPreMapping 同款取值；EDT 病态冻结时超时放行走守卫降级。 */
+    private static final long EDT_EXEC_DOC_SYNC_WAIT_MS = 2000L;
+
+    /**
+     * T-EC-01/T-EC-03 编排：document 写统一派发 EDT——EDT 调用方同步直执行；BGT 两段式
+     * invokeLater + 有界 latch 等待（DialectPreMapping.ensureMapped 同款：BGT 等 EDT，
+     * EDT 永不反向阻塞，超时自愈不互锁）。失败注入缝 {@link #execWriteActionFailureInjection}
+     * 在 {@link #docWriteOnce} 内统一生效（EDT/BGT 两形态等价）。
+     */
+    private static boolean dispatchDocWriteOnEdt(Project project, VirtualFile vf, String sql) {
+        Logger LOG = Logger.getInstance(DataSourceSelector.class);
+        com.intellij.openapi.application.Application app = ApplicationManager.getApplication();
+        if (app.isDispatchThread()) return docWriteOnce(project, vf, sql);
+        java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        final boolean[] ok = {false};
+        app.invokeLater(() -> {
+            try {
+                ok[0] = docWriteOnce(project, vf, sql);
+            } finally {
+                done.countDown();
+            }
+        });
+        boolean signaled;
+        try {
+            signaled = done.await(EDT_EXEC_DOC_SYNC_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (InterruptedException t) {
+            signaled = false;
+            Thread.currentThread().interrupt();
+        }
+        if (!signaled) {
+            LOG.warn("[M36] exec doc write EDT dispatch timeout after " + EDT_EXEC_DOC_SYNC_WAIT_MS + "ms (EDT busy?)");
+        }
+        return signaled && ok[0];
+    }
+
+    /** document 写单次尝试：WriteAction 内 {@link #writeVfTextViaDocument}；失败原因必达日志（旧 getOrDefault 吞 Throwable 的教训）。 */
+    private static boolean docWriteOnce(Project project, VirtualFile vf, String sql) {
+        try {
+            if (execWriteActionFailureInjection) {
+                throw new IllegalStateException("injected exec WriteAction failure (T-ExecDocSync test seam)");
+            }
+            WriteAction.run(() -> writeVfTextViaDocument(project, vf, sql));
+            return true;
+        } catch (Throwable e) {
+            Logger.getInstance(DataSourceSelector.class)
+                    .warn("[M36] exec doc write FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * T-EC-04：VFS 缺条目裸写路径的防御性收口——raw write 后由调用方 refresh 得到 vf，
+     * 此处探测 document（getCachedDocument，不主动创建）或 VFS 内容与 sql 的分叉，
+     * 命中则经 {@link #dispatchDocWriteOnEdt} 补一次 document 驱动同步（T-EC-01 同款落盘收口，
+     * BGT 调用安全——写侧统一派 EDT）。正常流程恒为 no-op（磁盘刚写入 == sql）；防御
+     * VFS 陈旧条目/裸写与 refresh 之间的外部改写残留。探测包 ReadAction（BGT 无隐式读）。
+     *
+     * @return true = 执行了修复同步（正常流程 false）
+     */
+    public static boolean syncExecVfContentIfNeeded(Project project, VirtualFile vf, String sql) throws Throwable {
+        boolean diverged = ReadAction.compute(
+                (com.intellij.openapi.util.ThrowableComputable<Boolean, Throwable>) () -> {
+                    Document doc = FileDocumentManager.getInstance().getCachedDocument(vf);
+                    String disk = new String(vf.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                    return (doc != null && !doc.getText().equals(sql)) || !disk.equals(sql);
+                });
+        if (!diverged) return false;
+        return dispatchDocWriteOnEdt(project, vf, sql);
+    }
+
+    /**
+     * M36.5.12：项目内执行文件路径——{@code <projectBase>/.idea/sql-visualizer/exec/mpsql-exec.sql}
+     *（F-44-4：目录随插件更名，旧名 mybatis-plus-sql-visualizer 不再使用）。
+     * 目录不存在则创建；文件写入 SQL（覆盖）。与 sql-history 同根（.idea/sql-visualizer/），
+     * 但<b>独立子目录</b> exec（sql-history 读取器只扫 sql-history 子目录，互不污染）。
+     *
+     * <p>M36.5.13/M36.5.43：VFS 已知文件走 document 驱动写（历史：裸 FileUtil.writeToFile 覆盖
+     * 磁盘触发 "File Cache Conflict" 模态弹窗，MemoryDiskConflictResolver，沙盒 12:08:06/
+     * 16:05:39 两次实证）。T-ExecDocSync 三点收口（同一问题族第三轮）：</p>
+     * <ul>
+     *  <li><b>① 同临界区落盘</b>（T-EC-01，{@link #writeVfTextViaDocument}）——补 saveDocument，磁盘即时
+     *      与内存一致，不再留「已修改未保存」窗口（M36.5.43 只改内存、磁盘靠自动保存追赶，
+     *      窗口期内任何外部改盘即弹冲突窗，easy-code-demo 真机截图实证）；</li>
+     *  <li><b>② document 写统一派 EDT</b>（{@link #dispatchDocWriteOnEdt}，DialectPreMapping 两段式同款）——
+     *      262 平台文件 document 的 setText 包 CommandProcessor BGT 硬抛 EDT-only（javap+沙盒
+     *      堆栈双实证）：旧实现 BGT 预热的 document 分支每次必炸、静默掉进裸写兜底 = 真机
+     *      File Cache Conflict 链本体。BGT 预热自此不再降级；</li>
+     *  <li><b>③ 裸写兜底守卫</b>（T-EC-02，{@link #canFallBackToRawWrite}）——document 写失败（含注入缝）
+     *      时只有无已加载 document 才允许裸写盘；有 document 一律抛 writeConflictGuard 拒写
+     *     （宁内容旧一拍，执行前 console doc 同步链会重写并落盘，执行内容不受影响），
+     *      失败原因 Throwable 必达日志（原 getOrDefault(false) 吞掉）；</li>
+     *  <li><b>④ 单写方锁</b>（T-EC-03，{@link #execFileWriteLock}）——串行化 BGT 预热与 EDT 冷路径。</li>
+     * </ul>
+     * <p>VFS 缺条目路径维持裸写 + 调用方 refresh + {@link #syncExecVfContentIfNeeded} 防御收口（T-EC-04）。</p>
+     */
+    public static File projectExecFile(Project project, String sql) throws java.io.IOException {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         String base = project.getBasePath();
         if (base == null) {
@@ -2617,75 +2976,47 @@ public final class DataSourceSelector {
             return null;
         }
         File f = new File(dir, "mpsql-exec.sql");
-        VirtualFile existing = LocalFileSystem.getInstance().findFileByIoFile(f);
-        if (existing != null) {
-            boolean updated = false;
-            try {
-                WriteAction.run(() -> {
-                    Document fileDoc = FileDocumentManager.getInstance().getDocument(existing);
-                    if (fileDoc != null && !fileDoc.getText().equals(sql)) {
-                        fileDoc.setText(sql);
-                        PsiDocumentManager.getInstance(project).commitDocument(fileDoc);
-                    } else if (fileDoc != null) {
-                        PsiDocumentManager.getInstance(project).commitDocument(fileDoc);
-                    } else {
-                        try {
-                            existing.setBinaryContent(sql.getBytes(StandardCharsets.UTF_8));
-                        } catch (Throwable ignored) {
-                            // ignore
-                        }
-                    }
-                });
-                updated = true;
-            } catch (Throwable ignored) {
-                updated = false;
+        synchronized (execFileWriteLock) {
+            VirtualFile existing = LocalFileSystem.getInstance().findFileByIoFile(f);
+            if (existing != null) {
+                // T-EC-01/T-EC-03：document 写统一派 EDT（EDT 直调同步；BGT 派发 + 有界等待）。
+                // 262 实证 document setText BGT 硬抛（见 writeVfTextViaDocument Javadoc）——旧实现
+                // 的 BGT document 分支每次必炸、静默掉进裸写兜底，即真机冲突链本体。
+                boolean updated = dispatchDocWriteOnEdt(project, existing, sql);
+                if (updated) {
+                    LOG.info("[M36] exec file updated via document+save (disk synced in-critical-section): " + f.getName());
+                    return f;
+                }
+                // T-EC-02：裸写兜底守卫——有已加载 document 时禁止绕过 document 裸写盘
+                //（裸写叠加「已修改未保存」态 = File Cache Conflict 弹窗 + invokeLater 链冻结）。
+                // 宁内容旧一拍：执行前 console doc 同步（executeOnConsole，T-EC-01 同款落盘）
+                // 会重写并落盘，执行内容不受影响。
+                if (!canFallBackToRawWrite(existing)) {
+                    throw new IllegalStateException(
+                            "exec file writeConflictGuard: raw write refused, document loaded (" + f.getName() + ")");
+                }
+                LOG.warn("[M36] exec file doc-write FAILED, fallback to raw write (no loaded document): " + f.getName());
             }
-            if (updated) {
-                LOG.info("[M36] exec file updated via VFS (no cache conflict): " + f.getName());
-                return f;
-            }
-        }
-        try {
             com.intellij.openapi.util.io.FileUtil.writeToFile(f, sql);
-        } catch (Throwable ignored) {
-            // ignore
+            return f;
         }
-        return f;
     }
 
-    /** M36.5.3：临时文件方言预映射（MySQL）。 */
+    /**
+     * M36.5.3：临时文件方言预映射（MySQL）——PSI 创建时即按映射解析为 MySQL（否则走
+     * SqlDialectPusher，dumb mode 下被推迟）。任何环节失败静默跳过（保持原行为，仅记录日志）。
+     *
+     * <p>T-ExecSlowOps F1：反射段收编 {@link DialectPreMapping}（与预览路径 mapPreviewDialectBeforePsi
+     * 共用），本方法保留 exec 侧「进程内同 vf 幂等短路」语义 + 成功回写 {@link #dialectMappedVf}；
+     * {@code ensureMapped} 线程自适应——EDT 直调安全（本方法现调用点全在 EDT），BGT 调用自动走两段式派发。</p>
+     */
     private static void mapDialectBeforePsi(Project project, VirtualFile vf, Logger LOG) {
         // T-PreviewFlash：插件侧幂等短路——mpsql-exec.sql 路径稳定，同 vf 已映射过 MySQL 直接跳过，
         // 消除每次预览的点 setMapping（同值 setMapping 仍触发 SqlDialectPusher push all dumb 任务，见沙盒日志）。
-        if (dialectMappedVf != null && dialectMappedVf.isValid() && dialectMappedVf == vf) {
-            LOG.debug("[M36] dialect already mapped for " + vf.getName() + ", skip setMapping");
-            return;
-        }
-        try {
-            Class<?> mappingsClass = Class.forName("com.intellij.sql.dialects.SqlDialectMappings");
-            Object mappings = mappingsClass.getMethod("getInstance", Project.class).invoke(null, project);
-            List<?> values = null;
-            try {
-                Object v = mappingsClass.getMethod("getAvailableValues").invoke(mappings);
-                values = v instanceof List ? (List<?>) v : null;
-            } catch (Throwable ignored) {
-                // ignore
-            }
-            Object mysql = null;
-            if (values != null) {
-                for (Object it : values) {
-                    if (it instanceof Language && ((Language) it).getID().equalsIgnoreCase("MySQL")) { mysql = it; break; }
-                }
-            }
-            if (mysql != null) {
-                mappingsClass.getMethod("setMapping", VirtualFile.class, Object.class).invoke(mappings, vf, mysql);
-                dialectMappedVf = vf;
-                LOG.info("[M36] dialect pre-mapped to MySQL for " + vf.getName());
-            } else {
-                LOG.warn("[M36] MySQL language dialect not found in SqlDialectMappings (fallback to pusher)");
-            }
-        } catch (Throwable e) {
-            LOG.warn("[M36] dialect pre-mapping skipped: " + e.getMessage());
+        boolean inProcessMapped = dialectMappedVf != null && dialectMappedVf.isValid() && dialectMappedVf == vf;
+        if (DialectPreMapping.ensureMapped(project, vf, inProcessMapped)) {
+            dialectMappedVf = vf;
+            LOG.info("[M36] dialect pre-mapped to MySQL for " + vf.getName());
         }
     }
 
@@ -2707,6 +3038,142 @@ public final class DataSourceSelector {
         return cachedTempPsiFile != null;
     }
 
+    /**
+     * T-ExecSlowOps F2：后台预热 exec 临时文件（写盘 → VFS refresh → 方言映射 → findFile →
+     * 填 {@link #cachedTempPsiFile}）——<b>只允许后台线程调用</b>（EDT 直调拒绝并 warn：本链含
+     * refresh/findFile 慢操作，EDT 执行正是 262 真机堆栈①的 SEVERE 本体）。
+     *
+     * <p>由 {@code SqlPreviewService.previewAsync} 在池线程内、{@code invokeLater} 派发弹窗之前调用：弹窗打开后
+     * {@code prepareDefaultConsole → chooseAndPrepare → consumeCachedTempPsiFile} 必命中缓存，EDT 冷路径
+     *（{@link #createTempPsiFile} 的 refresh+findFile）退化为兜底（无预览链触达的显式执行路径首跑等）。</p>
+     *
+     * <p>SQL 一致性：预热写入的是 {@code PreviewResult.sql} 原文，与
+     * 面板渲染文本（格式化/参数回填后）可能不同——与 T-PreviewFlash 缓存命中路径同款语义（缓存命中
+     * 时本就不重写文件，文档内容差异由下游 console doc 同步链吸收：reuseSharedConsole setText /
+     * prepareAfterEditorResolved model 同步 / executeOnConsole 执行前同步）。</p>
+     *
+     * <p>幂等：缓存已对当前项目可用即直接返回（同项目连续预览仅一次真实链）。
+     * Community/无 Database 插件场景安全：本方法不触任何 Database 类，纯 VFS/PSI。</p>
+     */
+    public static void prewarmExecTempFile(Project project, String sql) {
+        Logger LOG = Logger.getInstance(DataSourceSelector.class);
+        if (ApplicationManager.getApplication().isDispatchThread()) {
+            LOG.warn("[M36] prewarmExecTempFile called on EDT — refused (slow ops, T-ExecSlowOps F2)");
+            return;
+        }
+        if (project.isDisposed() || sql.isBlank()) return;
+        TempPsiFile cachedVf = cachedTempPsiFile;
+        if (cachedVf != null && isCacheUsable(project, cachedVf.vf)) {
+            // 缓存命中≠内容新鲜：连续预览 SQL 会变，而缓存命中路径不重写文件——只刷新文件
+            // 内容（projectExecFile doc 驱动三方同步，vf/psi 身份不变），保证 attachConsole
+            // 初始 document 与本条预览 SQL 一致；差量内容比较在 projectExecFile 内部短路。
+            try {
+                projectExecFile(project, sql);
+            } catch (Throwable e) {
+                LOG.warn("[M36] exec prewarm refresh-content failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            }
+            LOG.info("[M36] exec prewarm: cache hit, content refreshed only");
+            return;
+        }
+        // 并发预览（gutter 连点/多面板）只允许一条真实预热链——其余直接返回，弹窗冷路径兜底
+        if (!execPrewarmInFlight.compareAndSet(false, true)) {
+            LOG.info("[M36] exec prewarm skipped (another prewarm in flight)");
+            return;
+        }
+        try {
+            prewarmExecTempFileInner(project, sql, LOG);
+        } finally {
+            execPrewarmInFlight.set(false);
+        }
+    }
+
+    /** {@link #prewarmExecTempFile} 的真实链（已持有 in-flight 标记；仅后台线程调用）。 */
+    private static void prewarmExecTempFileInner(Project project, String sql, Logger LOG) {
+        lastTempFileFailure = null;
+        // T-ExecCopyFix F2b：refresh 段 WriteIntentReadAction（BGT 上 WIRA 合法；与 EDT 冷路径同款包装）
+        File ioFile;
+        try {
+            ioFile = projectExecFile(project, sql);
+        } catch (Throwable e) {
+            LOG.warn("[M36] exec prewarm writeFile failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            return;
+        }
+        if (ioFile == null) return;
+        VirtualFile vf;
+        try {
+            vf = WriteIntentReadAction.compute(
+                    (com.intellij.openapi.util.Computable<VirtualFile>) () ->
+                            LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile));
+        } catch (Throwable e) {
+            LOG.warn("[M36] exec prewarm refreshVfs failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            return;
+        }
+        if (vf == null) {
+            LOG.warn("[M36] exec prewarm: VFS not visible after refresh (" + ioFile.getPath() + ", exists=" + ioFile.exists() + ")");
+            return;
+        }
+        // T-EC-04：同冷路径——裸写残留的防御收口（正常恒 no-op）
+        try {
+            syncExecVfContentIfNeeded(project, vf, sql);
+        } catch (Throwable e) {
+            LOG.warn("[M36] exec prewarm syncVfContent failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            return;
+        }
+        // T-ExecSlowOps F1：BGT 两段式映射（读探测稳态跳过 / 首见派 EDT + 有界等待）
+        boolean inProcessMapped = dialectMappedVf != null && dialectMappedVf.isValid() && dialectMappedVf == vf;
+        if (DialectPreMapping.ensureMapped(project, vf, inProcessMapped)) {
+            dialectMappedVf = vf;
+        }
+        PsiFile psi;
+        try {
+            psi = ReadAction.compute(() -> PsiManager.getInstance(project).findFile(vf));
+        } catch (Throwable e) {
+            LOG.warn("[M36] exec prewarm findPsi failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            return;
+        }
+        if (psi == null) {
+            LOG.warn("[M36] exec prewarm: findFile null (" + vf.getName() + ")");
+            return;
+        }
+        if (project.isDisposed()) return;
+        markCachedTempPsiFile(project, vf, psi);
+        LOG.info("[M36] exec prewarm DONE (cache filled off EDT): " + vf.getName());
+    }
+
+    /** T-PerfSweep2-04：已挂项目关闭钩子的项目集——防对同一项目重复 Disposer.register。 */
+    private static final Set<Project> hookProjectsClose =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+
+    /**
+     * T-ExecSlowOps F2：填 exec 临时文件 vf+psi 缓存槽（项目绑定；BGT/EDT 均可调用——volatile 写）。
+     * T-PerfSweep2-04：同时挂一次性项目关闭钩子——项目关闭即清槽，不再等下次消费顶掉
+     *（此前项目关闭后槽里残留该项目的 vf+psi 强引用至下次写入；isCacheUsable 惰性校验
+     * 保留为双保险）。parentDisposable 默认项目自身，测试注入自有 Disposable 手动触发。
+     */
+    public static void markCachedTempPsiFile(Project project, VirtualFile vf, PsiFile psi) {
+        markCachedTempPsiFile(project, vf, psi, project);
+    }
+
+    /** parentDisposable 显式重载（Kotlin 默认参数 {@code parentDisposable = project} 的显式形态）。 */
+    public static void markCachedTempPsiFile(Project project, VirtualFile vf, PsiFile psi,
+                                             com.intellij.openapi.Disposable parentDisposable) {
+        cachedTempPsiFile = new TempPsiFile(vf, psi);
+        cachedTempPsiProjectName = project.getName();
+        hookProjectClose(project, parentDisposable);
+    }
+
+    private static void hookProjectClose(Project project, com.intellij.openapi.Disposable parentDisposable) {
+        if (!hookProjectsClose.add(project)) return;
+        Disposer.register(parentDisposable, () -> {
+            hookProjectsClose.remove(project);
+            TempPsiFile cached = cachedTempPsiFile;
+            if (cached != null && cached.psi.getProject() == project) {
+                cachedTempPsiFile = null;
+                cachedTempPsiProjectName = null;
+            }
+        });
+    }
+
     /** T-ExecCopyFix F2a：最近一次 createTempPsiFile 失败的阶段原因（成功时 null）。 */
     public static String lastTempFileFailureForTest() {
         return lastTempFileFailure;
@@ -2718,11 +3185,15 @@ public final class DataSourceSelector {
         if (psi == null) {
             throw new IllegalStateException("markCachedTempPsiFileForTest: findFile null for " + vf.getName());
         }
-        cachedTempPsiFile = new TempPsiFile(vf, psi);
+        markCachedTempPsiFile(project, vf, psi);
     }
 
     /** T-ExecCopyFix F2c 测试缝：清缓存槽（测试隔离收尾）。 */
     public static void clearCachedTempPsiFileForTest() {
         cachedTempPsiFile = null;
+        cachedTempPsiProjectName = null;
     }
+
+    /** T-ExecDocSync 测试缝：置 true 时 {@link #docWriteOnce} 注入失败（测 T-EC-02 守卫拒绝路径；EDT/BGT 两形态统一生效）。 */
+    public static boolean execWriteActionFailureInjection = false;
 }

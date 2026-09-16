@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.config.SettingsChangeListener;
+import cn.song.mybatisplus.visualizer.log.agent.AgentManager;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.components.Service;
@@ -53,6 +54,11 @@ public final class SqlLogManager implements Disposable {
 
     /** 捕捉状态（默认关——用户点击「开始捕捉」后才挂载监听）。 */
     private volatile boolean capturing;
+
+    /** M56 T-M56-09：EP 双轨单测缝——直设捕捉态（生产路径经 startCapture 状态机）。 */
+    void setCapturingForTest(boolean value) {
+        capturing = value;
+    }
 
     /** 用户主动开启 SQL 监听标志——点击「捕捉」后置 true，点击「停止」或 dispose 时清零。 */
     private volatile boolean userArmed;
@@ -218,6 +224,8 @@ public final class SqlLogManager implements Disposable {
             PluginSettings.getInstance().getState().setLogAutoCaptureSuppressed(false);
         }
         buffer.setPaused(false);
+        // T-AgentListenSync：联动 agent 恢复采集（后续两分支 capturing 均置 true，统一在此下发）
+        AgentManager.getInstance(project).pushCaptureActive(true);
         if (!hasMainConsole()) {
             capturing = true;
             if (manual) {
@@ -292,6 +300,9 @@ public final class SqlLogManager implements Disposable {
         userArmed = false;
         isWaitingForConsole = false;
         buffer.setPaused(true);
+        // T-AgentListenSync：联动 agent 真停采（CONFIG disabled=true，应用侧零开销；
+        // 否则 agent 持续采集发送、IDE 侧 addEntry 被 paused 白白丢弃）
+        AgentManager.getInstance(project).pushCaptureActive(false);
         if (PluginSettings.getInstance().getState().getLogAutoCaptureOnStart()) {
             PluginSettings.getInstance().getState().setLogAutoCaptureSuppressed(true);
         }

@@ -43,7 +43,7 @@ public final class EntrySourceMatcher {
         String key = normalize(sourceFilePath);
         List<LogSqlEntry> sameFile = new ArrayList<>();
         for (LogSqlEntry entry : entries) {
-            if (entry.sourceFile() != null && normalize(entry.sourceFile()).equals(key)) {
+            if (entry.sourceFile() != null && sameFile(normalize(entry.sourceFile()), key)) {
                 sameFile.add(entry);
             }
         }
@@ -65,6 +65,18 @@ public final class EntrySourceMatcher {
 
     public static List<LogSqlEntry> match(List<LogSqlEntry> entries, String sourceFilePath, int anchorLine) {
         return match(entries, sourceFilePath, anchorLine, DEFAULT_WINDOW);
+    }
+
+    /**
+     * 同一文件判定（T-JumpPath-03）：两种路径形态段对齐后缀互含。
+     *
+     * <p>锚点=项目根相对（多模块含模块前缀，如 {@code mod/src/main/java/cn/song/a/S.java}），
+     * 条目 sourceFile=拦截器包式路径（相对源码根，如 {@code cn/song/a/S.java}）——
+     * 等值比较恒不命中，「最近执行记录」恒空（真机实锤）。段对齐（{@code /} 为界）
+     * 杜绝 {@code xmod/...} 之类后缀假命中。
+     */
+    public static boolean sameFile(String a, String b) {
+        return a.equals(b) || a.endsWith("/" + b) || b.endsWith("/" + a);
     }
 
     /** 路径规约：统一正斜杠、去首尾空白与尾斜杠（Windows 反斜杠来源兼容）。 */

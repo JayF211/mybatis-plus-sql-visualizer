@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors;
 import com.intellij.icons.AllIcons;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.SimpleColoredComponent;
@@ -10,7 +11,6 @@ import javax.swing.BorderFactory;
 import javax.swing.JList;
 import javax.swing.JPanel;
 import java.awt.BorderLayout;
-import java.awt.Color;
 import java.awt.Component;
 import java.util.Locale;
 
@@ -21,9 +21,9 @@ import java.util.Locale;
  */
 public class HistoryFileCellRenderer extends JPanel implements javax.swing.ListCellRenderer<Object> {
 
-    /** 历史面板元信息灰（与原 HTML 通道 #9E9E9E 一致）。 */
+    /** 历史面板元信息灰（与原 HTML 通道 #9E9E9E 一致）。T-UN-13（T-UiNative）：改 namedColor，亮值不变。 */
     private static final SimpleTextAttributes HISTORY_META_GRAY =
-            new SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, new Color(0x9E9E9E));
+            new SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.HISTORY_META_GRAY);
 
     /** 渲染行（internal 供 UI 测试遍历片段断言文本）。 */
     public final SimpleColoredComponent line = new SimpleColoredComponent();

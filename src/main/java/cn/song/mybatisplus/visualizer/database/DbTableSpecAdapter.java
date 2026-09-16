@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.generator.CrudTableSpec;
 import cn.song.mybatisplus.visualizer.generator.DbTypeQuoteHint;
 import cn.song.mybatisplus.visualizer.psi.PsiDialect;
 import com.intellij.database.model.DasColumn;
+import com.intellij.database.model.DasObject;
 import com.intellij.database.model.DasTable;
 import com.intellij.database.model.DasTableKey;
 import com.intellij.database.model.ObjectKind;
@@ -19,12 +20,14 @@ import java.util.Set;
  *
  * <p>自省元数据来源（2024.3.7.1 jar javap 实证）：
  * <ul>
- *  <li>列：{@code DasObject.getDbChildren(DasColumn, ObjectKind.COLUMN)}；</li>
- *  <li>主键：{@code getDbChildren(DasTableKey, ObjectKind.KEY)} → {@code isPrimary()} → {@code getColumnsRef().names()}
- *      （模型类为 DasTableKey，无 DasKey 类）；</li>
+ *  <li>列：{@code DasObject.getDasChildren(ObjectKind.COLUMN)} + {@code filterIsInstance<DasColumn>}（T-MarketInternal：
+ *      原 {@code getDbChildren(Class, kind)} scheduled-for-removal，其方法体即 {@code getDasChildren(kind).filter(clazz)}）；</li>
+ *  <li>主键：{@code getDasChildren(ObjectKind.KEY)} → {@code filterIsInstance<DasTableKey>} → {@code isPrimary()} →
+ *      {@code getColumnsRef().names()}（模型类为 DasTableKey，无 DasKey 类）；</li>
  *  <li>自增：{@code DasTable.getColumnAttrs(col)} 含 {@link DasColumn.Attribute#AUTO_GENERATED}；</li>
- *  <li>类型/注释：{@code DasTypedObject.getDataType().typeName}（类型名原文，引号提示走
- *      {@link DbTypeQuoteHint} 启发）、{@code DasObject.getComment()}。</li>
+ *  <li>类型/注释：{@code DasTypedObject.getDasType().toDataType().typeName}（T-MarketInternal：原
+ *      {@code getDataType()} scheduled-for-removal，其方法体即 {@code getDasType().toDataType()}；类型名原文，
+ *      引号提示走 {@link DbTypeQuoteHint} 启发）、{@code DasObject.getComment()}。</li>
  * </ul>
  *
  * <p>本类与 {@link DbTable} 类引用只经 database-optional.xml 的 action 到达——database 插件不在场时
@@ -43,7 +46,9 @@ public final class DbTableSpecAdapter {
     public static CrudTableSpec toSpec(DbTable table) {
         DasTable das = table.getDasObject();
         Set<String> primaryKeys = new LinkedHashSet<>();
-        for (DasTableKey key : das.getDbChildren(DasTableKey.class, ObjectKind.KEY)) {
+        for (DasObject child : das.getDasChildren(ObjectKind.KEY)) {
+            if (!(child instanceof DasTableKey)) continue;
+            DasTableKey key = (DasTableKey) child;
             if (key.isPrimary()) {
                 // MultiRef.names() 返回 Iterable<String>（javap 实证），逐个加入
                 for (String name : key.getColumnsRef().names()) {
@@ -52,14 +57,16 @@ public final class DbTableSpecAdapter {
             }
         }
         List<CrudColumn> columns = new ArrayList<>();
-        for (DasColumn col : das.getDbChildren(DasColumn.class, ObjectKind.COLUMN)) {
+        for (DasObject child : das.getDasChildren(ObjectKind.COLUMN)) {
+            if (!(child instanceof DasColumn)) continue;
+            DasColumn col = (DasColumn) child;
             String comment = col.getComment();
             columns.add(new CrudColumn(
                     col.getName(),
                     comment != null && !comment.isBlank() ? comment : null,
                     primaryKeys.contains(col.getName()),
                     das.getColumnAttrs(col).contains(DasColumn.Attribute.AUTO_GENERATED),
-                    DbTypeQuoteHint.decide(col.getDataType() != null ? col.getDataType().typeName : null)));
+                    DbTypeQuoteHint.decide(col.getDasType().toDataType().typeName)));
         }
         return new CrudTableSpec(
                 das.getName(),

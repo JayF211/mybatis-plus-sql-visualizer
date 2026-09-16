@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log;
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
 import com.intellij.icons.AllIcons;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.actionSystem.ActionManager;
@@ -11,11 +12,8 @@ import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.actionSystem.DefaultActionGroup;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.command.WriteCommandAction;
-import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.EditorFactory;
-import com.intellij.openapi.editor.event.DocumentEvent;
-import com.intellij.openapi.editor.event.DocumentListener;
 import com.intellij.openapi.editor.HighlighterColors;
 import com.intellij.openapi.editor.colors.EditorColorsManager;
 import com.intellij.openapi.editor.ex.EditorEx;
@@ -28,13 +26,10 @@ import com.intellij.openapi.ui.Splitter;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.util.ui.JBUI;
-import com.intellij.util.ui.UIUtil;
 
 import javax.swing.JPanel;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
-import java.awt.Toolkit;
-import java.awt.datatransfer.StringSelection;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -57,8 +52,15 @@ public class LogToSqlPanel extends JPanel implements Disposable {
     private final Editor inputEditor;
     private final Editor resultEditor;
     private final JBLabel statusLabel;
-    private final JBLabel inputHintLabel;
-    private final JBLabel resultHintLabel;
+
+    /**
+     * T-UiNative T-UN-14：空态提示接编辑器原生 placeholder（两区锚定物均为 EditorFactory
+     * 直建编辑器，实际类型 EditorEx——243 javap 核实有 {@code setPlaceholder(CharSequence)}），
+     * 显隐由编辑器随空文档/焦点原生管理；原自摆 inputHintLabel/resultHintLabel 删除，
+     * 文案键（"log.panel.hint.input" / "log.panel.hint.result"）沿用不变。
+     */
+    private final String inputPlaceholder = MpSqlVisualizerBundle.message("log.panel.hint.input");
+    private final String resultPlaceholder = MpSqlVisualizerBundle.message("log.panel.hint.result");
 
     /** 输出格式切换态：true=多行格式化（默认，用户确认）；false=日志原样压缩。 */
     private boolean formatToggled = true;
@@ -73,29 +75,17 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         this.project = project;
         this.statusLabel = new JBLabel(" ");
         this.statusLabel.setBorder(JBUI.Borders.empty(2, 6, 2, 6));
-        this.inputHintLabel = new JBLabel(MpSqlVisualizerBundle.message("log.panel.hint.input"));
-        this.inputHintLabel.setForeground(UIUtil.getInactiveTextColor());
-        this.inputHintLabel.setBorder(JBUI.Borders.empty(2, 6, 2, 6));
-        this.resultHintLabel = new JBLabel(MpSqlVisualizerBundle.message("log.panel.hint.result"));
-        this.resultHintLabel.setForeground(UIUtil.getInactiveTextColor());
-        this.resultHintLabel.setBorder(JBUI.Borders.empty(2, 6, 2, 6));
         this.inputEditor = createInputEditor();
         this.resultEditor = createResultEditor();
 
-        // 上：日志输入区（工具栏 + 灰字提示 + 编辑器——空文档显示引导文案）
+        // 上：日志输入区（工具栏 + 编辑器——空文档由编辑器原生 placeholder 显示引导文案）
         JPanel inputPanel = new JPanel(new BorderLayout());
-        JPanel inputTop = new JPanel(new BorderLayout());
-        inputTop.add(buildInputToolbar(), BorderLayout.NORTH);
-        inputTop.add(inputHintLabel, BorderLayout.SOUTH);
-        inputPanel.add(inputTop, BorderLayout.NORTH);
+        inputPanel.add(buildInputToolbar(), BorderLayout.NORTH);
         inputPanel.add(inputEditor.getComponent(), BorderLayout.CENTER);
 
-        // 下：SQL 结果区（工具栏 + 灰字提示 + 编辑器）
+        // 下：SQL 结果区（工具栏 + 编辑器）
         JPanel resultPanel = new JPanel(new BorderLayout());
-        JPanel resultTop = new JPanel(new BorderLayout());
-        resultTop.add(buildResultToolbar(), BorderLayout.NORTH);
-        resultTop.add(resultHintLabel, BorderLayout.SOUTH);
-        resultPanel.add(resultTop, BorderLayout.NORTH);
+        resultPanel.add(buildResultToolbar(), BorderLayout.NORTH);
         resultPanel.add(resultEditor.getComponent(), BorderLayout.CENTER);
 
         Splitter splitter = new Splitter(true, 0.5f);
@@ -104,28 +94,6 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         splitter.setShowDividerControls(false);
         add(splitter, BorderLayout.CENTER);
         add(statusLabel, BorderLayout.SOUTH);
-
-        // 空态提示显隐跟随文档内容
-        inputEditor.getDocument().addDocumentListener(new DocumentListener() {
-            @Override
-            public void beforeDocumentChange(DocumentEvent e) {
-            }
-
-            @Override
-            public void documentChanged(DocumentEvent e) {
-                inputHintLabel.setVisible(inputEditor.getDocument().getText().isBlank());
-            }
-        }, this);
-        resultEditor.getDocument().addDocumentListener(new DocumentListener() {
-            @Override
-            public void beforeDocumentChange(DocumentEvent e) {
-            }
-
-            @Override
-            public void documentChanged(DocumentEvent e) {
-                resultHintLabel.setVisible(resultEditor.getDocument().getText().isBlank());
-            }
-        }, this);
     }
 
     // ------------------------------------------------------------------
@@ -188,8 +156,7 @@ public class LogToSqlPanel extends JPanel implements Disposable {
 
         @Override
         public void actionPerformed(AnActionEvent e) {
-            Toolkit.getDefaultToolkit().getSystemClipboard()
-                    .setContents(new StringSelection(resultEditor.getDocument().getText()), null);
+            UiTextClipboard.copy(resultEditor.getDocument().getText());
             status(MpSqlVisualizerBundle.message("logToSql.copy.done"), false);
         }
     }
@@ -397,6 +364,7 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         ex.getSettings().setFoldingOutlineShown(false);
         ex.getSettings().setIndentGuidesShown(false);
         ex.getSettings().setAdditionalPageAtBottom(false);
+        ex.setPlaceholder(inputPlaceholder); // T-UiNative T-UN-14：空态提示原生件
         return editor;
     }
 
@@ -417,17 +385,18 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         ex.getSettings().setFoldingOutlineShown(true);
         ex.getSettings().setIndentGuidesShown(false);
         ex.getSettings().setAdditionalPageAtBottom(false);
+        ex.setPlaceholder(resultPlaceholder); // T-UiNative T-UN-14：空态提示原生件
         return editor;
     }
 
-    /** 测试访问器：输入区空态提示行。 */
-    JBLabel inputHintLabelForTest() {
-        return inputHintLabel;
+    /** T-UiNative T-UN-14：输入区空态提示（原 hintLabel 测试缝，断言 placeholder 文案接线用）。 */
+    String inputPlaceholderForTest() {
+        return inputPlaceholder;
     }
 
-    /** 测试访问器：结果区空态提示行。 */
-    JBLabel resultHintLabelForTest() {
-        return resultHintLabel;
+    /** T-UiNative T-UN-14：结果区空态提示。 */
+    String resultPlaceholderForTest() {
+        return resultPlaceholder;
     }
 
     @Override

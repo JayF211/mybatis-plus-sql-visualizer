@@ -15,6 +15,7 @@ import cn.song.mybatisplus.visualizer.ui.SqlInputEditor;
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog;
 import cn.song.mybatisplus.visualizer.util.IconScaler;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
 import com.intellij.icons.AllIcons;
 import com.intellij.ide.util.gotoByName.ChooseByNameModel;
 import com.intellij.ide.util.gotoByName.ChooseByNamePopup;
@@ -83,8 +84,6 @@ import java.awt.Graphics2D;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.RenderingHints;
-import java.awt.Toolkit;
-import java.awt.datatransfer.StringSelection;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.Collections;
@@ -381,8 +380,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
         @Override
         public void actionPerformed(@NotNull AnActionEvent e) {
             // T-M45：只复制 Java 代码——剥离说明注释（忽略「日志」），粘贴即用
-            Toolkit.getDefaultToolkit().getSystemClipboard()
-                    .setContents(new StringSelection(copyText()), null);
+            UiTextClipboard.copy(copyText());
             status(MpSqlVisualizerBundle.message("reverse.copy.done"), false);
         }
     }

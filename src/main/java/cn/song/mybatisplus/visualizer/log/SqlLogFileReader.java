@@ -44,10 +44,11 @@ public final class SqlLogFileReader {
 
     /**
      * 新版格式头部：兼容 2 或 3 个 `-` 起结（前缀与后缀的 `-` 数量独立，长度匹配即可）。
-     * 捕获组：1=source 2=time 3=timestamp
+     * 捕获组：1=source 2=time 3=timestamp 4=logTime（可选）5=db（可选，T-AgentDialectLoop）。
+     * 毫秒分数为非捕获组——曾误用捕获组占位第 4 组致 logTime 永远读丢（T-AgentDialectLoop 修复）。
      */
     private static final Pattern NEW_HEADER_REGEX = Pattern.compile(
-            "^--+ source: (.+?) \\| time: (.+?) \\| (\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?) --+$");
+            "^--+ source: (.+?) \\| time: (.+?) \\| (\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?)(?: \\| logTime: (\\d+))?(?: \\| db: (.+?))? --+$");
 
     /** 旧版格式头部：-- timestamp（无源码位置和耗时） */
     private static final Pattern OLD_HEADER_REGEX = Pattern.compile(
@@ -131,6 +132,10 @@ public final class SqlLogFileReader {
 
     /**
      * 解析文件内容为 LogSqlEntry 列表。逐行扫描，遇到头部行则开始新块，兼容新旧两种头部混合。
+     *
+     * <p>T-LogHistoryRowNo：返回前按解析顺序注入文件内条目序号（sequenceNumber = 索引+1）——
+     * 历史行号语义 = 文件内顺序号（静态历史无「会话内捕获序号」概念，见开发计划 §1.2）。
+     * 序号是读取层派生的展示属性，不持久化；搜索过滤只删不改造条目实例，序号天然稳定。
      */
     public List<LogSqlEntry> parseContent(String content) {
         List<LogSqlEntry> entries = new ArrayList<>();
@@ -152,7 +157,13 @@ public final class SqlLogFileReader {
             }
         }
         flushBlock(currentLines, entries);
-        return entries;
+        // T-LogHistoryRowNo：按文件内解析顺序注入序号（防御：已有序号的条目不覆盖）
+        List<LogSqlEntry> numbered = new ArrayList<>(entries.size());
+        for (int i = 0; i < entries.size(); i++) {
+            LogSqlEntry entry = entries.get(i);
+            numbered.add(entry.sequenceNumber() == 0L ? entry.withSequenceNumber(i + 1L) : entry);
+        }
+        return numbered;
     }
 
     private void flushBlock(List<String> currentLines, List<LogSqlEntry> out) {
@@ -178,15 +189,17 @@ public final class SqlLogFileReader {
         List<String> bodyLines = contentLines;
         String rawSqlOverride = null;
         List<LogSqlParam> params = List.of();
+        SqlLogParamCodec.DecodedPayload decodedExt = null;
         if (!contentLines.isEmpty()) {
             String first = contentLines.get(0);
             String trimmedFirst = first.trim();
             if (trimmedFirst.startsWith(PD_PREFIX) && trimmedFirst.endsWith(PD_SUFFIX)) {
-                kotlin.Pair<String, java.util.List<LogSqlParam>> decoded = SqlLogParamCodec.decode(
+                SqlLogParamCodec.DecodedPayload payload = SqlLogParamCodec.decode(
                     trimmedFirst.substring(PD_PREFIX.length(), trimmedFirst.length() - PD_SUFFIX.length()));
-                if (decoded != null) {
-                    rawSqlOverride = decoded.getFirst();
-                    params = decoded.getSecond();
+                if (payload != null) {
+                    rawSqlOverride = payload.rawSql();
+                    params = payload.params();
+                    decodedExt = payload;
                     bodyLines = contentLines.subList(1, contentLines.size());
                 }
             }
@@ -210,10 +223,23 @@ public final class SqlLogFileReader {
             if (timestamp == null) {
                 return null;
             }
+            // logTime（可选段，master groupValues[4].toLongOrNull()——未匹配时空串转 null 等价）
+            String logTimeStr = m1.group(4);
+            Long logTime = logTimeStr != null ? toLongOrNull(logTimeStr) : null;
             Pair<String, Integer> src = parseSource(sourceStr);
             Long executionTimeMs = parseDuration(timeStr);
-            return new LogSqlEntry(rawSqlOverride != null ? rawSqlOverride : sql, sql, params, timestamp,
-                    src.getFirst(), src.getSecond(), executionTimeMs);
+            // db（可选段，T-AgentDialectLoop；空白按 null）
+            String dbStr = m1.group(5);
+            String databaseName = dbStr != null && !dbStr.isBlank() ? dbStr : null;
+            String rawSql = rawSqlOverride != null ? rawSqlOverride : sql;
+            return new LogSqlEntry(rawSql, sql, params, timestamp,
+                    logTime, LogSqlEntry.computeSummary(sql), SqlSource.UNKNOWN, executionTimeMs,
+                    src.getFirst(), src.getSecond(), List.of(), 0L,
+                    decodedExt != null ? decodedExt.mapperStatement() : null,
+                    decodedExt != null ? decodedExt.errorText() : null,
+                    decodedExt != null ? decodedExt.requestTag() : null,
+                    decodedExt != null ? decodedExt.updateCount() : null,
+                    databaseName);
         }
 
         Matcher m2 = OLD_HEADER_REGEX.matcher(header);
@@ -223,7 +249,15 @@ public final class SqlLogFileReader {
             if (timestamp == null) {
                 return null;
             }
-            return new LogSqlEntry(rawSqlOverride != null ? rawSqlOverride : sql, sql, params, timestamp);
+            String rawSql = rawSqlOverride != null ? rawSqlOverride : sql;
+            return new LogSqlEntry(rawSql, sql, params, timestamp,
+                    null, LogSqlEntry.computeSummary(sql), SqlSource.UNKNOWN, null,
+                    null, 0, List.of(), 0L,
+                    decodedExt != null ? decodedExt.mapperStatement() : null,
+                    decodedExt != null ? decodedExt.errorText() : null,
+                    decodedExt != null ? decodedExt.requestTag() : null,
+                    decodedExt != null ? decodedExt.updateCount() : null,
+                    null);
         }
 
         return null;

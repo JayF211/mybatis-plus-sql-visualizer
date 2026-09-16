@@ -1,9 +1,11 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.SimpleColoredComponent;
 import com.intellij.ui.SimpleTextAttributes;
+import com.intellij.ui.speedSearch.SpeedSearchUtil;
 
 import javax.swing.BorderFactory;
 import javax.swing.JList;
@@ -13,24 +15,20 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.GridLayout;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * 二级 SQL 列表单元格渲染器（F-44-2；T-LogListFreeze-04 弃 HTML 通道）：
- * 双 {@link SimpleColoredComponent} 两行结构（T-TwoLine 语义保留）：元信息行在上（[耗时] [时间戳] [来源]，
- * 均灰 0x9E9E9E 以与 SQL 视觉分层），SQL 高亮行在下（SqlListFragmentRenderer 分词着色）。
+ * 双 {@link SimpleColoredComponent} 两行结构（T-TwoLine 语义保留）：元信息行在上、SQL 高亮行在下。
  * 原 JLabel-HTML 通道每次 setText 触发 BasicHTML 解析排版 + 可变行高逐条测量 = 列表卡顿根因。
  * internal 供 UI 测试断言各种条目状态（空耗时/空源码/特殊字符/超长 SQL）下的渲染健壮性。
  */
 public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellRenderer<Object> {
 
-    /** 历史面板元信息灰（与原 HTML 通道 #9E9E9E 一致）。 */
+    /** 历史面板元信息灰（与原 HTML 通道 #9E9E9E 一致）。T-UN-13（T-UiNative）：改 namedColor，亮值不变。 */
     private static final SimpleTextAttributes HISTORY_META_GRAY =
-            new SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, new Color(0x9E9E9E));
+            new SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.HISTORY_META_GRAY);
 
     /** 元信息行（internal 供 UI 测试遍历片段断言）。 */
     public final SimpleColoredComponent metaLine = new SimpleColoredComponent();
@@ -46,27 +44,11 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
      */
     public final JPanel colorBar = new JPanel();
 
-    /** 未选中态 Border（分隔线 + 内边距）。 */
+    /** Border（分隔线 + 内边距；T-UN-09 描边退役后选中态同样只用它，选中视觉归平台绘制）。 */
     public final javax.swing.border.Border normalBorder = BorderFactory.createCompoundBorder(
             BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
             javax.swing.BorderFactory.createEmptyBorder(5, 5, 5, 8) // 左 5 + 色条 3 = 原 8
     );
-
-    /**
-     * T-CrudColor：选中态描边 Border（整行淡背景样式专用）。
-     * 预建一次、渲染时只切引用 + 改色，热路径零分配；内层分隔线为透明占位（底边为纯描边）。
-     */
-    public final SqlListSelectionOutline selectedBorder = new SqlListSelectionOutline(
-            SqlListTypeColor.OUTLINE_WIDTH,
-            JBColor.foreground(),
-            BorderFactory.createCompoundBorder(
-                    BorderFactory.createMatteBorder(0, 0, 1, 0, SqlListTypeColor.TRANSPARENT),
-                    javax.swing.BorderFactory.createEmptyBorder(
-                            5 - SqlListTypeColor.OUTLINE_WIDTH,
-                            5 - SqlListTypeColor.OUTLINE_WIDTH,
-                            5 - SqlListTypeColor.OUTLINE_WIDTH,
-                            8 - SqlListTypeColor.OUTLINE_WIDTH)
-            ));
 
     public HistoryCellRenderer() {
         super(new BorderLayout());
@@ -117,8 +99,10 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
         LogSqlEntry entry = value instanceof LogSqlEntry ? (LogSqlEntry) value : null;
         // T-CrudColor：标记形态分派（与日志页共用 applyCrudColorMark，语义完全一致）
         Color tint = entry != null ? SqlListTypeColor.colorOf(entry.statementType()) : null;
-        boolean useSelectionFill = isSelected && SqlListTypeColor.usesSelectionFill(SqlListTypeColor.styleOf());
-        SqlLogPanelKt.applyCrudColorMark(this, colorBar, normalBorder, selectedBorder, tint, isSelected, cellHasFocus, list);
+        // T-UN-09：选中描边退役后，三种样式的选中行统一走平台选中填充 → 前景按选中态取
+        // selectionForeground（与日志页 LogEntryListCellRenderer 同款）
+        boolean useSelectionFill = isSelected;
+        SqlLogPanelKt.applyCrudColorMark(this, colorBar, normalBorder, tint, isSelected, list);
 
         Color fg = useSelectionFill
                 ? (list != null && list.getSelectionForeground() != null ? list.getSelectionForeground() : JBColor.foreground())
@@ -127,8 +111,6 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
         metaLine.clear();
         List<List<SqlTextFragment>> lineFragments = null;
         if (entry != null) {
-            String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(new Date(entry.timestamp()));
-            String duration = entry.executionTimeMs() != null ? entry.executionTimeMs() + "ms" : "—";
             String source;
             if (SourceMarkers.isMpPaginationCount(entry.sourceFile())) {
                 source = "MP 分页计数";
@@ -141,14 +123,37 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
             } else {
                 source = "unknown";
             }
-            // T-TwoLine：元信息行在上（uniform 灰——不按耗时变色避免与 SQL 高亮冲突），SQL 高亮行在下
-            metaLine.append("[" + duration + "] ", HISTORY_META_GRAY);
-            metaLine.append("[" + timestamp + "] ", HISTORY_META_GRAY);
+            // T-TwoLine：元信息行在上、SQL 高亮行在下。**片段与顺序与日志页完全一致**
+            // （行号 → 时间 → 耗时 → 目标库 → 来源；耗时复用日志页 formatDurationFragment，
+            // 按慢查询阈值着色、缺失占位「—」——勿再自拼 [xms]，两页同条目须逐字一致）
+            // T-LogHistoryRowNo：行号片段在最前（0 = 无行号——旧文件/未注入条目；与日志页守卫一致）
+            if (entry.sequenceNumber() > 0) {
+                metaLine.append("#" + entry.sequenceNumber() + " ", HISTORY_META_GRAY);
+            }
+            // T-JdbcThreadBucket F3 + 日志时间：跟随设置（对齐日志页 formatTimestampFragment），
+            // 含非法 pattern 回退默认、显示开关与时间来源（日志时间/捕获时间）语义
+            kotlin.Pair<String, SimpleTextAttributes> ts = SqlLogPanelKt.formatTimestampFragment(entry);
+            if (ts != null) {
+                metaLine.append(ts.getFirst(), ts.getSecond());
+            }
+            kotlin.Pair<String, SimpleTextAttributes> dur =
+                    SqlLogPanelKt.formatDurationFragment(entry.executionTimeMs(), useSelectionFill);
+            metaLine.append(dur.getFirst(), dur.getSecond());
+            // T-AgentDialectLoop：目标库角标（与日志页同款落点：时间/耗时后、来源前）
+            kotlin.Pair<String, SimpleTextAttributes> db =
+                    SqlLogPanelKt.formatDatabaseFragment(entry, useSelectionFill);
+            if (db != null) {
+                metaLine.append(db.getFirst(), db.getSecond());
+            }
             metaLine.append("[" + source + "] ", HISTORY_META_GRAY);
             lineFragments = sqlLineFragmentsFor(entry);
         }
         // T-ListMode：SQL 行数随显示模式伸缩；T-ClickPreview 不设 toolTipText（预览改单击触发）
         ensureSqlLineCount(lineFragments != null ? lineFragments.size() : 1);
+        // T-UiNative speed search 高亮：对元信息行与各 SQL 行施加匹配片段高亮（同主日志列表）
+        if (list != null) {
+            SpeedSearchUtil.applySpeedSearchHighlighting(list, metaLine, false, useSelectionFill);
+        }
         for (int i = 0; i < sqlLinePool.size(); i++) {
             SimpleColoredComponent comp = sqlLinePool.get(i);
             comp.setForeground(fg);
@@ -157,6 +162,9 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
                 for (SqlTextFragment f : lineFragments.get(i)) {
                     comp.append(f.text(), f.attributes());
                 }
+            }
+            if (list != null) {
+                SpeedSearchUtil.applySpeedSearchHighlighting(list, comp, false, useSelectionFill);
             }
         }
         return this;

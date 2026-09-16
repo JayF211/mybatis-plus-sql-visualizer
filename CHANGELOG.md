@@ -4,52 +4,155 @@
 
 ## [Unreleased]
 
-### Added
-
-- **SQL 日志列表行号（T-LogRowNumber）**：列表条目元信息行最前显示 `#N` 会话内捕获序号（第 N 条捕获的 SQL），每次启动项目从 1 重新计数（手动清空列表同样归零）；去重丢弃/暂停/过滤命中的 SQL 不占号，列表不跳号；耗时排序下行号保持可辨认原始捕获顺序
-## [2026.9.14-beta.2] - 2026-09-13
-
-> 内测版第二发：dev 分支（M37 竞品融合 / T-ErrReport / T-ListMode / M39·M44 ORM 扩展 / T-Perf 性能系列等 119 提交）与 t-crudcolor 分支整体回合 master 后的首次发行。dev 侧条目此前已随合并记入 [2026.9.10] 等历史版本块，此处列本版相对 beta.1 的用户可见增量。
-
-### Added
-
-- **SQL 列表 CRUD 类型颜色标记（T-CrudColor）**：SQL 日志页与「SQL 历史」页二级列表支持按语句类型着色标记，颜色与标记形态均可自定义——默认「左侧 3px 色条」（SELECT 蓝 / INSERT 绿 / UPDATE 橙 / DELETE 红，OTHER 不标记）；可选「整行淡背景」（底色与列表背景混色 14%，天然适配亮/暗主题），其**选中态为「保留类型色调（30% 混色）+ 2px 选中描边」而非平台填充**，保证上下键浏览时颜色不丢失、且耗时快/慢着色不再被选中态抹白；样式三选一（色条 / 淡背景 / 关闭，关闭与改造前逐字节一致）。类型判定复用 `LogStatementClassifier`（与类型过滤弹窗同源，故筛出的 SELECT 行绝不会被标成红色）。新增 `SqlListTypeColor`（配色/混色/对比度纯逻辑）与 `SqlListSelectionOutline`（描边 Border，预建复用、热路径零分配）；设置项 5 个（样式 + 四色），不新增复选框
-- **图片素材按用途分层（docs/images）**：新增 `docs/images/design/` 存放开发过程设计稿，与根目录的对外素材（README/插件介绍页/Marketplace 引用的截图与二维码）分离；《文档命名规范-说明文档.md》新增 §图片/设计稿 八条（位置/命名 `{任务号}-{说明}.png`/格式/引用基准=文件相对路径/嵌入语法/禁止内嵌外链（Gitee raw 对 Marketplace 302 防盗链）/分层理由/设计稿须标注非实现截图）
+> 已合入 master、随下一个内测版（Gitee 抢先体验通道）发行的内容，发行时本节改写为对应版本号归档。基线 v2026.9.18-beta.3（内测已发行）。
 
 ### Changed
 
-- **dev 分支整体回合**：M37 竞品融合（gutter 左键直接预览 / 右键菜单与「最近执行记录」反查 / 真实 EXPLAIN 执行计划含达梦·人大金仓 / 多模块源根跳转容错 / 系列预览语义修复）、T-ErrReport 错误一键上报、T-ListMode 三种显示模式、M39/M44 ORM 识别域扩展（EasyQuery / Querydsl / Xbatis / MDS / Spring Data Specification·QueryByExample / JPA 元数据增强）、自动监听被动模式、T-Perf 性能系列（后台扫描 / 增量刷新 / 渲染热路径零分配）——逐项功能入口与验收步骤见 `docs/验收文档/20260913-1225-dev与CrudColor合并master-新增功能验收文档.md`。合并全量 3880/0/6 绿，verifyPlugin 三目标 Compatible
+- **竖向排列 IN 列表全量逐行展开（T-VStack·InAll）**：预览「竖向排列」对 IN 列表不再按元素数分级——此前 2~4 元素短清单保持同行（2026-09-10 阈值裁定），经用户复议回退：含逗号即 ≥2 元素一律 `(` 自占一行逐元素竖排；单元素形态（`IN (1)` / `IN (?)`）无清单可对齐仍保持同行，子查询 IN 与 LIMIT 分页参数照旧不展开
 
-## [2026.9.14-beta.1] - 2026-09-12
+### Fixed
 
-> Gitee 抢先体验通道的首个内测版（`-beta.N` 后缀仅内测通道；正式版 `2026.9.14` 发行时本系列全部内测版的条目统一并入正式版本号）。
+- **增删改（CUD）语句源码位置捕获修复（T-AgentCudSource）**：增强捕获下只有 SELECT 查询捕获到源码位置，INSERT/UPDATE/DELETE 捕获不到。根因=`StackLocator` 调用方缓存把「无调试信息的 null 位置」也缓入（缓存键=首个非框架帧 `class#method`，主位置为 null 时候选首位顶上且可能仍为 null，随后整帧含 null 入缓存）——某调用方一旦解析出 null（CUD 常走的 MP 默认方法 / 代理中间帧无有效 file 即命中），该 `class#method` 名下所有后续语句（含 CUD）恒无源码位置且不再自愈。修复=`StackLocator` 仅缓存有效位置：主位置为 null 时候选挑非 null 顶上、候选全 null 则本次不产出位置不缓存（下次重试）。新增 `StatementSourceLocationTest` 经用户形态调用帧触发真实 CUD 执行（executeUpdate/execute），把「CUD 事件 sourceFile 必指向用户栈帧」锁进绿灯。顺带盘清方言与增强的关系：采集面是 JDBC 接口级、对插件全部方言（含 DM 达梦）一视同仁，唯一耦合点是 `DriverRegistry` 驱动类名单——DM 已登记 `dm.jdbc.driver.DmDriver`，「在线但零捕获」的三类诱因（驱动类名不符/加载时序晚于 retransform/loader 隐藏降级）记录在案
+- **IN 字面量 SQL 预览参数未识别修复（T-InParamRec）**：上游代码把值直接内联进 SQL 文本（非 `?` 绑定参数）时，源码跳转反查入口打开的预览不出现参数行（左栏「无未解析参数」）、值不可编辑——该入口是 M37.1 时代的独立识别实现，漏接了 T-HistParam F4 的字面量恢复能力。现与日志 tab / 历史 tab 收编同一识别通道，字面量（含 IN 列表）原位改写为可编辑参数行，改值即时生效
+
+## [2026.9.18-beta.3] - 2026-09-16
+
+> 内测版（Gitee 抢先体验通道）：基线 v2026.9.18-beta.2，本版为同日内测第三轮——M56 字节码增强全链路整体合入 master（增强捕获默认开启、目标库角标与日志原始时间、耗时/影响行数、源码跳转修正、243 挂载与监听联动、事件零到达根治）+ 三条控制台日志链路并发分桶配对根治（T-LogParseConc / T-HibConc）+ 日志时间与控制台对齐 + 排序方式选择器 + 历史页元信息统一。
+
+### Added
+
+- **增强捕获源码位置回退定位（T-AgentSourceJump）**：仅 IDE 知道工程内有哪些文件——增强事件在源码位置之外多带至多 3 个栈序候选帧，跳转时主位置不在工程内则按序取首个可解析项（候选全部来自本次执行的真实调用栈，非表名等启发式，不会误导）
+- **增强捕获条目显示目标库与日志原始时间（T-AgentDialectLoop）**：字节码增强（M56）事件全链透传连接 URL，面板日志页/历史页元信息行新增目标库角标（如 `[MySQL]`、`[DM（达梦）]`，由 JDBC URL 子协议推断，覆盖全部 9 种方言数据库及 openGauss/GBASE）；agent 在线接管期间控制台日志不再整链短路——后台嗅探日志行原始时间并按同指纹回填到增强条目，「日志时间」在增强模式下照常显示（可关，关闭零成本）；SQL 执行耗时（毫秒级精确）与影响行数、报错信息在增强条目上齐备，与控制台通道同口径去重
+- **停止 SQL 监听时同步停掉应用内采集（T-AgentListenSync）**：监听开关与增强捕获采集开关联动——停止监听向应用 JVM 下发停采指令（此前 agent 仍持续采集并传输、到 IDE 侧被丢弃=白采集白传输）；重新开启即恢复采集；应用启动挂载完成后按当前监听状态校正一次（监听关闭状态启动项目不再白采集），改设置不再误重置采集态
+
+### Fixed
+
+- **Hibernate/JPA 链路并发配对同步修复（T-HibConc）**：与上一版同一缺陷的第三条链路——`HibernateLogParser` 也是单槽状态机，并发下另一线程的语句行会提前闭合本线程的 SQL 块、绑定行被追加进共享参数列表（**A 的 SQL 配 B 的值**）。本轮补齐按线程分桶；难点在 Hibernate 独有的「双副本合并」（`show-sql: true` 的 `Hibernate: ` stdout 副本 + `org.hibernate.SQL` logger 副本）：多行 SQL 正文与 stdout 标志行**都不带日志前缀、提取不到线程 token**，朴素分桶会让正文落回退桶、绑定行落线程桶，合并与参数归属双双失效。故给分桶路由加了一条 Hibernate 专用策略——无 token 行跟随**最近一次出现线程 token 的桶**（MRU），并把零参影子隔离槽**按桶隔离**（并发下不同线程的影子不再互相顶掉，同一 SQL 被两线程执行时各产出独立条目）。仅 stdout 副本（全程无 token）仍回退共享桶，与既有语义一致零劣化
+- **并发下 SQL 日志条目严重不正确修复（T-LogParseConc）**：用户实测「并发时日志不对」并附控制台原文（12 个 Tomcat 线程交错、MP 分页 `selectPage` + `selectPage_mpCount` 成对）。三个根因：① `MyBatisLogParser` 是**单槽状态机、不分线程**——另一线程的语句行会提前闭合本线程尚未收到参数的语句，本线程随后到达的参数行因无上下文被静默丢弃（参数全丢、`?` 未还原），而 `JdbcTemplateLogParser` 早在 T-JdbcThreadBucket 就按线程分桶修过同类问题、MyBatis 从未跟进；② 空 `Parameters:` 行（MP 的 COUNT 语句会打印）触发的「等下一行作为参数文本」兼容态**跨语句残留**，把下一行整行吞成参数值——包括另一线程完整的 `Parameters:` 行，面板于是出现 `LIMIT 2026-09-16 14:35:00.413 DEBUG …` 这类文字；③ 多行 SQL 条目（JdbcTemplate `Executing prepared SQL statement [ … ]` 跨行）**取不到日志时间**（收集路径不记首行）→ 回落插件捕获时刻，控制台行多时与日志行拉开（实测 209ms）。修复：线程分桶下沉为三解析器共享的 `LogThreadRouter`（token 提取 + 分桶 + 空闲桶淘汰，MyBatis 全状态按桶隔离）；空参判别式（下一行若带日志行特征 → 判为无参语句并闭合，且**不吞该行**；裸文本行维持旧兼容语义）；多行 SQL 的日志时间统一取**语句首行**；MyBatis 支持多行 SQL 续行（mapper 里格式化的 SQL 不再只留首行，日志行/异构语句行/空行即终止）；解析期静默失效改为计数并在轮询周期上报（参数无上下文丢弃 / 空参行拦下 / 残行闭合 / 参数含日志特征被拒）。未做：Hibernate 链路分桶（其 `Hibernate: ` stdout 副本无日志前缀，与 logger 副本可能分落两桶而破坏 T-HibDualCapture 的影子合并——无复现场景前不冒险，见计划交付记录）
+- **增强捕获条目时间与控制台日志行对不上修复（T-AgentLogTime）**：增强条目的「日志时间」是靠控制台日志行暂存、再按指纹取回派生的，而键原先用「还原后的 SQL」——两侧还原器各自独立（布尔参数引号、注释内 `?` 计数、参数个数不等三处口径分叉），静默失配后回落显示 agent 采集时刻；该时刻原先又取在 execute **结束**，于是比控制台日志行（打印于执行前）整整晚一个 SQL 耗时——快查看不出，慢查与首次查询即肉眼可见的偏差。三处同修：① 采集时刻前移到 execute 开始；② 关联键改用占位符版 SQL 指纹（两侧同源的原文，不再依赖参数还原口径），参数值序列降为次级判别，同键改排队不再互相顶掉，并加 30s 陈旧项时间窗；③ 日志时间采集不再受「时间显示开关 / 时间来源」这类渲染偏好控制（关掉显示只影响渲染）。另补跨通道端到端守卫用例（真实控制台解析链 + 真实 agent 适配器，覆盖布尔/时间/null 参数、字面量与注释内 `?`、参数个数不等、同 SQL 多次执行等形态），未命中时前 3 条打印键与 SQL 片段留痕。多行 SQL 的日志时间已随 T-LogParseConc 的续行落地转为命中
+- **SQL 历史页元信息顺序与日志页统一**：历史页原为「行号 → 耗时 → 时间」，日志页为「行号 → 时间 → 耗时」，同一条目在两页读法不一致。历史页改用日志页同一套片段与顺序（时间 → 耗时 → 目标库 → 来源），耗时不再自拼 `[xms]` 灰字而是复用日志页片段（按慢查询阈值着色、缺失占位「—」）
+- **agent fat jar 构建工具源从未纳入版本控制（构建缺口）**：`src/reloc` 源集的 `RelocateAsmMain.java` 包名路径含 `build` 段，被 `.gitignore` 通用规则 `build/` 整目录忽略——旧工作区因文件残留本地磁盘而构建看似正常，干净检出/其他工作区必然报 `ClassNotFoundException`。照既有风格补 `!**/src/reloc/**/build/` 例外并纳入源文件
+- **查询条目误显示影响行数「(-1 rows)」修复**：JDBC 语义为 `execute()` 返回 true=首结果是 ResultSet（此时 `getUpdateCount()` 恒为 -1，无意义）、返回 false=首结果是更新计数；采集侧条件写反，导致每条 SELECT 都把 -1 当行数上报。改按正确语义取计数并统一兜底负值（不上报无效计数）
+- **耗时排序按钮在增强捕获下不显示且排序失效修复**：按钮可见性与排序取值原先只看「日志文本里解析出的耗时」（p6spy/druid 行），而增强捕获的耗时是结构化字段、文本内没有——按钮恒隐藏、排序取值全空。改为结构化耗时优先、文本解析兜底，按钮与排序两处统一口径
+- **增强捕获源码位置误选第三方插件帧（T-AgentSourceJump）**：源码位置定位原靠硬编码「框架前缀黑名单」，漏收 PageHelper 等数据层插件——插件帧被误判为用户帧选中，列表显示 `PageInterceptor.java` 且跳转报「源码文件未找到」。改为**按帧来源判定**：开发态用户业务类来自目录（`target/classes`）、第三方依赖恒来自 JAR，据此跳过 JAR 帧（与类名无关，根治黑名单遗漏）；补齐常见数据层家族前缀；并新增候选帧透传 + IDE 侧解析回退双保险。保留安全网：来源不可判或无候选时回退既有行为，杜绝「过滤到空、跳转能力消失」劣化
+- **增强捕获事件零到达根治（agent 事件 JSON 非法）**：agent 事件写出器给首个字段也补了前导逗号，产出 `{,"sql":…}` 非法 JSON——SQL、参数、耗时其实已全部采集到位，却在 IDE 侧解析全量失败被静默丢弃（表现为「增强开着但列表空」）。重写为统一首字段分隔并补格式守卫测试（最小事件/全字段/全空字段/转义四例），堵住跨进程协议两端各自测试绿、合流即断的往返缺口
+- **增强捕获在 243 平台无法挂载（进程 pid 解析双败）**：① 243 平台 `KillableProcessHandler` 并无 `getNativePid`（此前认知有误）；② `getProcess().pid()` 经反射调用时因 `ProcessImpl` 为 JDK 包私有类抛 `IllegalAccessException`（单元测试用可访问的匿名子类故绿、真机必挂）。改为直接接口调用虚分派并补 `OSProcessUtil.getProcessID` 兜底，三步回退
+- **增强捕获断线不透明与脆弱点收口**：会话读循环退出原先静默无日志（掉线原因不可查）→ 补异常栈；超限帧原先直接杀会话 → 改为丢弃该帧继续；agent 侧单事件编码失败原会断开连接（attach 模式重连不可达=一次断永久掉线）→ 改为丢该事件不断连
+- **设置页增强捕获项无法保存（勾选后重开仍未勾选）**：勾选状态与读写判定分区不一致——界面项已归位日志页分组，读写判定却仍留在预览页分支，导致日志页勾选被判「无改动」、平台不落盘。读写判定随分组归位
+- **驱动私有类型参数不再渲染为 `类名@哈希` 垃圾值**：`setObject` 直传未覆写 `toString` 的驱动类型（如 Oracle `oracle.sql.Datum` 族）时降级为 `<类名>` 形态标注
+- **历史文件「日志时间」读回恒丢失修复**：头部正则毫秒分数为嵌套捕获组占位第 4 组，`logTime` 实际在第 5 组——51eb01a 引入的读回断链修复，并支持 `| db:` 字段持久化读回
+
+### Changed
+
+- **「捕获时间」含义明确为语句开始执行时刻（T-AgentLogTime）**：该时间源下显示的一律是 SQL 开始执行那一刻（与耗时字段的区间自洽），设置页说明同步更新。此前增强通道取的是执行结束时刻，与控制台通道（Log 行打印于执行前）口径不一致
+- **增强捕获默认开启、脱敏默认关闭（2026-09-16 用户定案）**：增强捕获自本版起为默认捕获通道（此前默认关需手动开启），脱敏默认关闭（默认采集真实参数值；设置页仍可开启打码）。配套调整确认时机——原设计仅在设置页手动勾选时弹注入确认，默认开启后该路径永不触发（默认勾上的开关将永不 attach）；改为**首次挂载（首次运行项目）时弹一次注入确认**，同意后方注入并持久记忆，拒绝则本次不注入（下次运行再询问），控制台捕获照常回落零劣化——知情同意语义不放宽
+- **日志列表「耗时排序」按钮升级为「排序方式」选择器（T-LogSortModes）**：原为「耗时降序/取消」双态切换按钮、且只在检测到耗时才显示；现改为常驻按钮（点击弹单选菜单，与「SQL类型」按钮同款式），支持**时间升序（默认，即捕获顺序）/ 时间降序 / 耗时升序 / 耗时降序 / 行号**五种方式。耗时与行号缺失的条目恒沉底（两个方向都不让空值顶到前面）；时间排序口径与列表时间列一致（选了「日志时间」源就按日志时间排，避免「看到的时间与排序依据不一致」）
+- **日志列表移除「[⚡增强]」来源角标**：增强捕获已是默认捕获通道，逐行标注来源属噪音（目标库角标与耗时、影响行数等有效信息保留）
+- **设置页增强捕获项归入「源码位置捕获」分组**：与源码拦截器注入开关同组（同为捕获通道设置），并去掉冗余的「增强捕获状态：」标签行（状态值保留、无标签显示）
+- **JdbcTemplate 日志解析热点收口**：线程 token 提取的级别正则从每行现场编译提为常量（喂行热路径，增强嗅探模式同样受益）；`DriverRegistry` 补 `org.opengauss.Driver`（openGauss 3.x）
+## [2026.9.18-beta.2] - 2026-09-16
+
+> 内测版（Gitee 抢先体验通道）：基线 v2026.9.18-beta.1，本版为同日内测第二轮——日志时间增强（原始时间戳记录与显示切换、搜索行号/时间、复制时间戳）+ JdbcTemplate 并发日志交错参数错挂修复（按线程分桶）+ 批量报告合并为单个弹窗 + 发版链路提速（verifyGate 离线化 58%）+ 内网换源诊断日志。
+
+### Added
+
+- **日志原始时间记录与显示切换（20260915-1530）**：捕获 SQL 日志时同时从日志行解析原始时间戳并随条目记录——`LogTimestampParser` 预置 Logback / Log4j2 / Spring Boot 默认、ISO 8601（含时区两种形态）、nginx 风格等常见格式严格解析（非法日期 / 残缺时间戳一律回退），解析失败回退捕获时间；设置页「SQL 日志」新增「时间来源」单选组——「日志时间」（默认，显示日志行解析出的原始时间，未解析到回退捕获时间）与「捕获时间」（插件捕获到日志的时刻），时间戳格式设置对两种来源同样生效；MyBatis / JdbcTemplate / Hibernate 三个解析器统一接线；历史文件随条目保存原始时间（新字段 `logTime`），旧版文件照常读取（回退捕获时间），新版可读全部旧文件
+- **日志列表搜索支持行号/时间 + 右键复制时间戳（T-LogSearchRowTime，20260915-1650 修订一）**：日志页与历史页搜索框在 SQL 内容 / 源文件之外新增两类匹配——`#行号`（`#5` 或 `5` 精确等于第 5 条捕获序号，精确而非包含，搜 `1` 不会命中全部 1xx 行）与时间文本（按列表显示格式「所见即所搜」，时间显示关闭时该分支不参与）；右键菜单新增「复制时间戳」（多选显示「复制时间戳（N 条）」），逐行复制纯时间文本（去显示用方括号），与批量复制 SQL 同构；时间显示关闭时菜单项置灰
+
+### Fixed
+
+- **JdbcTemplate 并发日志交错参数错挂/丢失 + 历史页时间戳格式不跟随设置（20260915-1440）**：`JdbcTemplateLogParser` 每控制台单实例单槽状态机假设「SQL 行→参数行→下一条」严格串行，Tomcat 并发请求日志按到达序混排时 named 单行的 `closePending()` 会强制闭合其它线程的 prepared 残句，该线程随后到达的参数绑定行因 `pendingSql` 已清空被静默丢弃（`?` 残留 + 参数空 → 预览误报「未捕获到参数绑定日志」）——改按日志行线程 token 分桶（`ThreadBucket`），每桶独立 `pendingSql/pendingCollecting` 状态机，无线程 token 的多行续行路由到唯一收集桶，提取失败回退共享桶（fail-open）；零参预览警告按来源分流（JDBC 来源引导 `org.springframework.jdbc.core` 设 TRACE，Hibernate 来源维持原引导）。同修：SQL 历史 tab 二级列表时间戳此前硬编码 `yyyy-MM-dd HH:mm:ss` 从未读设置，与日志页分叉——统一改走 `formatTimestampFragment`（含非法 pattern 回退与显示开关语义），history 包死代码面板顺手对齐防复活分叉
+- **批量报告同一波 submit 合并为一个弹窗（T-FeedbackBatch2）**：262 平台 IdeErrorsDialog「报告全部」逐错误簇循环调 `reportMessage`，每次固定构造长度 1 的事件数组——N 个错误 = N 次独立 submit = N 个弹窗，且每次批次只有 1 条（分节显示「其他 1 条异常」+ 与主预填重复的勾选行），T-FeedbackBatch「平台一次传多条 events」的前提在该平台不成立。修复=提交侧累积合并：PendingCall 队列 + 500ms debounce（自最后一次调用起算，入队取消重排）+ 自首条 3s 强制兜底，flush 合并全部新鲜事件开一个对话框，consumer 合成复合回调（本波每个簇收到同一 `SubmittedReportInfo`，平台侧全部标记已提交）；逐事件指纹去重（整条全命中直接 DUPLICATE 不弹框），提交发起时记录全部条目指纹（原实现只记首条，其余条目 24h 去重从未生效）；对话框分节标题改「本批共 N 条异常」如实计数，批次条目仅 1 条（=主预填自己）不再出分节，头部复选框禁用仅镜像、收集时以主表单「附带异常堆栈」单一事实源回写，消除两处开关不一致丢主堆栈的暗坑
+
+### Changed
+
+- **内网换源生效值补诊断日志（T-Intranet-01）**：内网部署依赖 `mpvs.update.manifest.url` 换源，但此前生产代码无任何「当前生效 URL 是默认还是被覆盖」的日志——现仅在被系统属性覆盖时打印一行 `update manifest url overridden by system property: <url>`（默认路径静默，绝大多数用户不产生噪音），类注释补记「该属性在进程启动时读取一次，改 -D 后须重启」实测结论
+- **发版链路提速（T-ReleasePerf）**：verifyGate 权威门禁离线化（直驱 verifier-cli：`-offline` + 豁免清单 + 独立 verify-home 并发隔离，IPGP `VerifyPluginTask` 判定缺陷字节码实证——collectProblems 按控制台小节标题重数问题行、不读豁免文件）+ `releaseGate` 一命令串行编排（buildPlugin → verifyGate → testShards，任一环失败即停）+ `verifyOnly` 改文案/文档后复用产物重验——三目标兼容性验证 7m26s → 3m06s（-58%），零用例/目标版本删减
+
+### Test
+
+- **日志原始时间**：新增 `LogTimestampParserTest` 14 例（五种格式正负样例、时间戳在级别关键字前 / 行首空白 / 精确边界、无时间戳 / 空行 / 非法日期 / 残缺时间戳回退 null）
+- **搜索行号/时间**：新增 `SqlLogSearchRowTimeTest` 14 例（`#N` / 裸数字精确命中与 1xx 不误中、时间片段所见即所搜与显示关闭不参与、SQL / 摘要语义不变、批量复制纯文本拼接与置灰）
+- **并发分桶**：`JdbcTemplateLogParserTest` +12 例（prepared+named 混排、两线程 prepared 参数不互串、多行收集态与它线程完整语句互不冲刷、裸行回退共享桶、SkyWalking TID 排除、SpringBoot 默认后置线程名、桶数超限冲刷）、`HistoryCellRendererTest` +3 例（跟随设置格式 / 显示开关关闭隐藏 / 非法 pattern 回退默认）；5 个既有测试适配分桶后线程 token 一致化
+- **批量报告合并**：`IdeErrorReportSubmitterTest` 13 例 + `ErrorReportDialogLayoutTest` 23 例（合并 flush / 逐事件去重 / 复合回调 / 兜底时序 / 头部镜像 / 收集单一事实源）
+- **换源诊断**：`UpdateSourceTest` +2 例（属性未设 / 空白走默认源、设值走覆盖源）
+
+## [2026.9.18-beta.1] - 2026-09-15
+
+> 内测版（Gitee 抢先体验通道）：基线 v2026.9.14 正式版，本版增量仅 T-ListParamCollect 一项修复——该修复交付于 2026.9.14 发行提交之后，未入该版发行包，随本内测版发出。
+
+### Fixed
+
+- **JdbcTemplate 命名参数的集合值不再把方括号带进 SQL（T-ListParamCollect）**：Spring `NamedParameterJdbcTemplate` 的 `sql = … IN (:param3) , parameters = {param3=[6b31…]}` 此前把 Java 集合的 `toString()` 原文（含方括号）当成单个字符串渲染成 `IN ('[6b31…]')`——字符串里带着方括号，查出来的永远是空集。现在位于 `IN (...)` 内的集合值剥括号后按元素渲染（单元素即 `IN ('6b31…')`，多元素逗号分隔、数值裸渲染、空集合输出 `NULL`），非 `IN` 位置的值逐字节不变（形如 `[a]` 的普通字符串仍原样加引号）；**不涉及「一个命名参数传多值」**——该日志行的 SQL 是参数解析后的文本，多元素集合运行时会被展开成 `IN (:p1, :p2, …)`，此处只修「方括号不落进 SQL」
+
+### Test
+
+- **JdbcTemplate 集合参数**：新增 `ListParamRendererTest` 9 例（集合拆分、`IN` 识别的大小写/无空格/注释/字符串字面量/嵌套括号/标识符误判、渲染与回调逐元素）；`JdbcTemplateLogParserTest` +6 例（用户真机日志逐字复现并断言产物**不含方括号**、多元素逐元素引号、空集合 `NULL`、非 `IN` 位置形如 `[a]` 的值原样、`IN` 位置单值一致、数值集合裸渲染）；`LogEntryPreviewRecognizerTest` +2 例（命名参数集合值预填为元素清单、引用数与参数数不齐时整体弃用防错位）
+- 本版全量 **4123/0/0/6 绿**（基线 4103 + 本轮 20 例净增）
+
+## [2026.9.14] - 2026-09-14
+
+> 正式版：合并内测版 beta.1（Gitee 抢先体验通道已发行）、beta.2（仅提交未发行，内容直接并入本版）与 09-14 当日全部交付链。dev 分支回合条目（M37 竞品融合 / T-ErrReport / T-ListMode / M39·M44 ORM 扩展 / T-Perf 性能系列等）此前已随合并记入 [2026.9.10] 等历史版本块，此处列本版相对 v2026.9.11 的用户可见增量。
 
 ### Added
 
 - **实体类与数据库表右键生成 CRUD SQL（T-CrudSql）**：双入口 action——实体类（EditorPopupMenu + ProjectViewPopupMenu，判定 MP 注解实体，后台 ReadAction 内 EntityResolver→CrudTableSpec）+ Database 工具窗表节点（DatabaseViewPopupMenu，可选依赖 database-optional.xml，Community 版仅实体侧入口）；一键产出 INSERT / UPDATE / SELECT / DELETE。展示层零新弹窗：候选选择为原生 `JBPopup` 浮层（Recent Files 式——打字按摘要过滤、Enter/双击选定、ESC 关闭、主题色双行渲染器加粗摘要+等宽代码行详情），选中进既有 SqlPreviewService 预览窗口；INSERT/UPDATE 复用 BatchModel 列勾选重建（自增主键默认不勾、`@Version` 列 SET 尾 `= version + 1` + WHERE 追加、逻辑删除变体仅实体侧）；无主键降级 `WHERE 1 = 0` 占位提示。真机反馈三轮：OK/双击进预览（回调 invokeLater 出模态上下文，原同步 show 被模态吞）、候选样式分层、模态对话框整体退出 CRUD 流程
 - **SQL 预览字段列表自动折叠（T-AutoFold）**：宽表 SQL 列清单逐行展开定位困难（官网需求池 FR-0017），新增「SQL 预览字段较多时自动折叠」配置项（默认关，关闭时行为逐字节不变）。程序化 FoldingModel 路线：`SqlAutoFoldPlanner` 纯逻辑规划器（SqlLexer token 流单遍状态机，识别 SELECT/INSERT 列清单、VALUES 每组、UPDATE SET 四类顶层列表，元素数 ≥ 阈值且跨 ≥ 2 行才折叠）+ `SqlAutoFolding.applyTo` 公共应用器唯一收口（UserData 挂本方区域清单，只摘自己的，绝不越权碰平台 ConsoleFolding 区域）。六点位接入：主预览三分支 + 原生 Database 控制台 + 单击预览弹窗 + LogToSqlPanel 结果区 + SqlInputEditor 输入区；阈值默认 10 可配，设置页复选框总数台账 24→25
+- **SQL 列表 CRUD 类型颜色标记（T-CrudColor）**：SQL 日志页与「SQL 历史」页二级列表支持按语句类型着色标记，颜色与标记形态均可自定义——默认「左侧 3px 色条」（SELECT 蓝 / INSERT 绿 / UPDATE 橙 / DELETE 红，OTHER 不标记）；可选「整行淡背景」（底色与列表背景混色 14%，天然适配亮/暗主题），其**选中态为「保留类型色调（30% 混色）+ 2px 选中描边」而非平台填充**，保证上下键浏览时颜色不丢失、且耗时快/慢着色不再被选中态抹白；样式三选一（色条 / 淡背景 / 关闭，关闭与改造前逐字节一致）。类型判定复用 `LogStatementClassifier`（与类型过滤弹窗同源，故筛出的 SELECT 行绝不会被标成红色）。新增 `SqlListTypeColor`（配色/混色/对比度纯逻辑）与 `SqlListSelectionOutline`（描边 Border，预建复用、热路径零分配）；设置项 5 个（样式 + 四色），不新增复选框
+- **SQL 列表多选批量复制（T-ListPreviewCopy）**：SQL 日志页与「SQL 历史」页二级列表 Ctrl/Shift 多选后右键「复制」一次性复制全部选中 SQL（文案带条数，如「复制选中 SQL（3 条）」，逐条分号收尾、换行拼接，与内置 Ctrl+C 多选复制产物一致）；右键命中行已在多选集合内时保留多选，不在集合内时收敛为该行（删除/发送/跳转等其余菜单项仍作用于被右键的行）
+- **SQL 历史列表行号（T-LogHistoryRowNo）**：历史 tab 二级 SQL 列表按文件内条目顺序显示 #N 行号（灰色元信息行最前），搜索过滤下行号稳定不变
+- **多模块注入改为用户勾选选择（T-ModPick）**：多模块项目注入拦截器此前一律全模块生成——新增 `InjectionModulePickerDialog`（DialogWrapper+JBCheckBox 逐模块行=模块名·基础包+旧版待更新标注，默认全选+全选/全不选按钮，空选禁确定）；注入检测后多模块（新建+升级>1）EDT 弹勾选、单模块不打扰直注、取消回滚设置页勾选（新结果态 `InjectionResult.Cancelled`）
+- **图片素材按用途分层（docs/images）**：新增 `docs/images/design/` 存放开发过程设计稿，与根目录的对外素材（README/插件介绍页/Marketplace 引用的截图与二维码）分离；《文档命名规范-说明文档.md》新增 §图片/设计稿 八条（位置/命名 `{任务号}-{说明}.png`/格式/引用基准=文件相对路径/嵌入语法/禁止内嵌外链（Gitee raw 对 Marketplace 302 防盗链）/分层理由/设计稿须标注非实现截图）
 
 ### Changed
 
+- **dev 分支整体回合**：M37 竞品融合（gutter 左键直接预览 / 右键菜单与「最近执行记录」反查 / 真实 EXPLAIN 执行计划含达梦·人大金仓 / 多模块源根跳转容错 / 系列预览语义修复）、T-ErrReport 错误一键上报、T-ListMode 三种显示模式、M39/M44 ORM 识别域扩展（EasyQuery / Querydsl / Xbatis / MDS / Spring Data Specification·QueryByExample / JPA 元数据增强）、自动监听被动模式、T-Perf 性能系列（后台扫描 / 增量刷新 / 渲染热路径零分配）——逐项功能入口与验收步骤见 `docs/验收文档/20260913-1225-dev与CrudColor合并master-新增功能验收文档.md`
 - **全选/全不选双按钮合一为状态切换按钮（T-SelToggle）**：预览「动态条件」「批量列」两分区与日志「类型过滤」弹窗三处并排的「全选」「全不选」按钮各合并为一个随勾选态切换文案的单按钮——全勾显示「全不选」点击清空，其余（空集/部分勾选）显示「全选」点击补满；点击行为与 SQL 产物零变更。预览侧文案收口 `renderSql()` 单点，弹窗侧三处显式同步；i18n 零新键。含前置改动：两分区「清除」按钮移至行末位
+- **单击预览默认格式化显示（T-ListPreviewCopy）**：两页列表单击预览浮层与历史页双击预览弹窗统一跟随设置页既有「预览时格式化还原 SQL」开关（默认开启）——长 SQL 点开即多行缩进展示，与列表格式化模式视觉一致；显式关闭该开关的用户保留原文展示
+- **多选进行中不再触发单击预览（T-ListPreviewCopy）**：Ctrl/Shift 多选时单击行不再弹出单行预览浮层（已打开的浮层一并关闭），多选操作不再被逐行弹出的预览干扰；恢复单选后单击预览正常
+- **显示模式下拉按钮与「SQL类型」完全同构（T-MergeFollowup-04）**：工具栏「显示模式」经两轮返工定稿为普通 JButton + ArrowDown 图标 + JPopupMenu 单选菜单（JRadioButtonMenuItem 勾选当前项），字体边框与「SQL类型：」单元逐像素同构——初版裸 JComboBox 与二版平台 ComboBoxButton 手动创建形态（无 ActionToolbar 驱动 update() 首显空文本、字体偏小无平台按钮边框）均弃用
+- **SQL 显示模式入口迁入插件设置页（T-DisplayModeToSettings）**：两处列表工具栏的下拉按钮移除，设置页 SQL 日志组新开「列表显示」子分组（平台原生下拉，选项文案复用既有三键零新文案）——显示模式收敛为单点设置、两列表即时同步生效；多次切换后的列表行高重算沿用既有强制重装策略兜底
+- **全量测试命令提速（T-TestPerf2）**：`./gradlew testShards` 一条命令即并行跑全量（各片独立沙盒并发），分片改为按历史耗时贪心均衡（原类名哈希两片实测 157.9s / 93.7s 失衡 26%，现两片 125.8s / 125.8s），片数可配；聚合报告直接打印各片与总数四项计数与串行口径对齐。本机串行 4m47s → 2m05s（约 2.3 倍），零用例删减、零断言改动；串行 `test` 保留为权威对照
 
 ### Fixed
 
+- **合并回合四缺陷（T-MergeFollowup）**：① 预览工具栏「执行计划」按钮在 dev 合并中丢失（master 按钮行重构删行无冲突标记、`explainSql()` 全树零调用——「注释与代码矛盾/函数零调用=合并语义丢失」信号沉淀）——补回内联高频位；② gutter 右键菜单无反应根治——243 平台 `LineMarkerGutterIconRenderer` 不覆写 `getRightButtonClickAction`（基类字节码恒 null），改匿名 `LineMarkerInfo` 覆写 `createGutterRenderer` 走平台右键正解 API；③ 日志页多次切换显示模式后列表重叠错乱根治——`BasicListUI` 的 cellHeights 布局缓存不归 Swing layout 管（revalidate 无效、固定→可变 `-1→-1` 不触发 propertyChange、增量刷新无 model 事件，三重失效路径全空），两面板改 `list.updateUI()` 重装 UI 强制布局状态失效；④ 显示模式下拉按钮同构化（见 Changed）
+- **报告对话框真机反馈三波六缺陷（T-FeedbackDlg 系列）**：一波——对话框宽度、灰提示对比度、面板不可拖拽；二波——堆栈勾选显隐窗口跳动（weighty 行显隐须窗口高度补偿 `toggleResizeDelta`）与手动形态堆栈来源缺失（补 `MessagePool` 错误池，243/262 同签名）；三波——手动形态堆栈自主输入（勾选恒显示 + 可编辑粘贴 + 「从错误池导入」按包名过滤候选）与描述框默认高 140→90。形态反复教训沉淀：反馈 UI 不替用户自动决定形态
+- **日志跳转源码仅依赖拦截器捕获位置（T-JumpCapture）**：Wrapper 表名反查回退链会把跳转指到同名表任意文件——回退链整体移除，跳转仅认拦截器捕获的真实位置；缺位置时三按钮引导弹框（打开设置 / 立即注入 / 取消）
+- **多模块源码跳转三缺陷（T-JumpPath）**：① 拦截器 `isSelf` 以构建路径比对，运行时项目根不同则自位污染（自己的日志被当业务位置）——改运行时实际比对封死；② 标记位置包式路径（`cn.song.Foo`）与项目根式路径解析缺失——Resolver 三级解析补 sourceRoots；③ 最近执行反查 `sameFile` 前缀/后缀互含判定恒空——段对齐比较封死；注入侧 `detectPerModule` + `decideAggregate` 多模块逐模块聚合
+- **重复点击执行计划 EXPLAIN 前缀双加致 1064（T-ExplainDbl）**：执行链回写控制台文档后二次点击在前次已含 EXPLAIN 的文本上再包装——`Dialect` 幂等包装 `renderExplainStatementIdempotent` 单点收口；教训：包装 SQL 的按钮必须幂等
+- **MPJ 联表 lambda 列错归主表别名致预览 SQL 执行 1054（T-MpjColAlias）**：联表场景列归属未按 join 别名映射改写——委托前按 join 映射重写列归属
+- **报告需求池文案与 IDE 显示语言不一致（T-ReportL10n / T-ReportL10n2）**：AUTO 语言落点改 `DynamicBundle.getLocale`；边界定案=嵌入平台 UI 的文案恒跟 IDE 语言走（`messageForIde`），插件语言设置默认 zh 非 AUTO，AUTO 改默认不触达该路径
+- **旧生成拦截器自位污染残留与自动升级（T-IntrUpg）**：用户手工拷贝的旧版拦截器 `isSelf` 常量与实际类分叉，位置恒显 `[SqlSourceInterceptor.java:62]`——① 解析防线 `SqlSourceMarker.isInterceptorSelfPath`（包式/项目根式/裸名/反斜杠全形态命中即丢弃不暂存，旧件环境条目落无位置引导链路）；② `needsInterceptorUpgrade` 三条件纯函数（模板生成标记 ∧ 旧常量拼接形态 ∧ 非运行时比对——用户自写文件永不覆盖）；③ 注入链自动升级：检测对已存在文件判形态转升级清单、注入时内容重写（只动拦截器不动 Config）、新键 `log.inject.upgraded`。用户恢复=重新注入 + 应用重启
+- **预览执行链 EDT 慢操作双 SEVERE（T-ExecSlowOps）**：预览/执行临时文件链路 EDT `findFile` 慢操作 SEVERE 与后台方言 `setMapping` 断言对向缺陷——`DialectPreMapping` 两段式映射单入口（后台线程读探测、首见 invokeLater 回 EDT + latch 2s）+ 预热全离 EDT（挂 `previewAsync`，确定性 SQL 守卫 + 防重）+ 四缓存字段 `@Volatile`
+- **SQL 预览补全缺失与执行跨项目数据源错乱（T-PreviewExecDs）**：多项目窗口下预览补全静默失败、执行 SQL 打到另一个项目的数据源——三根因：`cachedTempPsiFile` 跨项目泄漏、共享 console 被平台清扫 dispose 后未感知、Temp 预览文件在项目外 + 预热失败静默。修复=缓存项目绑定、`probeConsoleValidity` 三分量探活 + disposed 特判重挂、runRunner 显式传 project、预览文件迁项目内 + 内存 PSI 三级降级链 + 方言映射
 - **SQL转Java 选类重渲染 MPJ 业务异常逃逸 EDT（T-PickMpjErr）**：SQL→Java 弹窗选定目标类后重渲染时，设计内的 `SqlReverseException`（MPJ 业务异常）从 elementChosen 鼠标回调裸调 `generateCode` 逃逸为未处理异常——新增 `generateCodeOrReport` 单点收口四分支，业务异常转状态栏提示并保留上次渲染结果
-- **MPJ 括号条件反向转换退化（T-ReverseParenWira）**：MPJ 渲染 SQL 的 ON/WHERE 自带括号（`ON (st.station_id = t.id)`、`WHERE (t.id = 1)`），反向转换把单条件括号解析成单子条件条件组——ON 侧联表键提取认不出列对比条件，MPJLambdaWrapper 退化为 MPJQueryWrapper 字符串形态（select 逐列字符串、leftJoin 整段字符串）；WHERE 侧多渲染一层无意义 `nested()`。修复=解析器括号组解析对「组内单条件且非取反」直接解包（`NOT (a = 1)` 取反组仍保留承载 negated 标记），单点收口，生成器零改动。注：本修复与下一条交付于 v2026.9.11 打标签之后，未入该版发行包，随本内测版发出
-- **262 预览准备控制台 Read access 硬抛致控制台静默挂载失败（T-ReverseParenWira）**：双击日志开预览时 attachConsole 反射调用在裸 EDT 执行，DBN 控制台构造链 `ConsoleExecutionEditor.<init>` → `FileDocumentManager.getDocument` 要求调用方已持读权限，262 硬抛 `Read access is allowed from inside read-action only`（T-PreviewSlow 拆包后该断言真机兑现），被吞后控制台从未挂载。修复=attachConsole 包 `WriteIntentReadAction`（隐含读权限满足断言；内部 setHighlighter 的 WIRA 属重入——262 锁实现反编译实证仅持锁为纯 Read 才抛禁嵌套异常）、`getDocument` 单独包 `ReadAction`（不触发 WIRA）；262 真机 idea.log 复验留人工
-- **定时回归测试弹用户系统浏览器（HelpAction 回退守卫）**：自动化任务跑全量测试期间宿主机默认浏览器每隔一段时间被自动拉起打开帮助在线文档——`HelpUiTest` 真实触发 `HelpAction.actionPerformed`，测试沙盒 JCEF 不可用/`openEditor` 抛异常走降级分支 `BrowserUtil.browse`，该 API 不经沙盒隔离直接 ShellExecute 拉起真机浏览器（沙盒 idea.log 与浏览器历史双侧实证）。修复=三处降级出口收敛为私有 `browseOnlineDoc()`，单测模式（`isUnitTestMode`）短路只记日志
+- **MPJ 括号条件反向转换退化（T-ReverseParenWira）**：MPJ 渲染 SQL 的 ON/WHERE 自带括号（`ON (st.station_id = t.id)`、`WHERE (t.id = 1)`），反向转换把单条件括号解析成单子条件条件组——ON 侧联表键提取认不出列对比条件，MPJLambdaWrapper 退化为 MPJQueryWrapper 字符串形态（select 逐列字符串、leftJoin 整段字符串）；WHERE 侧多渲染一层无意义 `nested()`。修复=解析器括号组解析对「组内单条件且非取反」直接解包（`NOT (a = 1)` 取反组仍保留承载 negated 标记），单点收口，生成器零改动
+- **262 预览准备控制台 Read access 硬抛致控制台静默挂载失败（T-ReverseParenWira）**：双击日志开预览时 attachConsole 反射调用在裸 EDT 执行，DBN 控制台构造链 `ConsoleExecutionEditor.<init>` → `FileDocumentManager.getDocument` 要求调用方已持读权限，262 硬抛 `Read access is allowed inside read-action only`，被吞后控制台从未挂载。修复=attachConsole 包 `WriteIntentReadAction`（隐含读权限满足断言；内部 setHighlighter 的 WIRA 属重入）、`getDocument` 单独包 `ReadAction`（不触发 WIRA）
+- **定时回归测试弹用户系统浏览器（HelpAction 回退守卫）**：`HelpUiTest` 真实触发 `HelpAction.actionPerformed`，测试沙盒 JCEF 不可用走降级分支 `BrowserUtil.browse` 直接拉起真机默认浏览器——三处降级出口收敛为私有 `browseOnlineDoc()`，单测模式短路只记日志
+- **插件市场内部 API 整改（T-MarketInternal）**：三版本（2024.3 / 2025.3 / 2026.2）内部 API 与 scheduled-for-removal **双双清零**——IDE 错误池导入链整体摘除（该链路含错误报告提交器、错误对话框在内均为平台内部 API 且无公开替代，手动上报形态收敛为自主粘贴，引导文案并入占位提示）；三处待移除 API 换公开等价物（Database 树子节点取用、数据类型转换、表元素定位改走数据模型注册表，均为方法体等价替换，javap 双版本实证）
+- **设置页子项顺序随语言漂移（T-SettingsOrder）**：插件语言切中文后设置页五个子页按中文名码点重排、与英文版声明序不一致——子页扩展点显式声明递减 `groupWeight` 钉死声明序，与插件语言解耦；配套守卫测试防新增子页漏配
+- **反馈链性能收口（T-PerfSweep2）**：① 控制台错误文本提取改基线片段读取，取消每拍全文档拷贝（600ms×8 与 400ms×40 两个定时器逐拍 EDT 分配消除）；② 需求池响应体读取 2MB 封顶（含 gzip 解压输出），超限截断并归入可读提示；③ 多选批量上报的附件在 EDT 逐条截断并按份数均分预算，瞬时分配有界且不再整节丢内容；④ 待补发上报调度器改单拍链式（不再长时间占用线程、不再静默丢弃新批次）；⑤ 预览临时文件缓存槽挂项目关闭钩子，单槽残留即时回收；⑥ 插件描述中更新检查默认值注释对齐代码
+- **多选错误一次性报告不再撞限流（T-FeedbackBatch）**：IDE 错误列表里勾选多条后点「报告到需求池」，2~5 条**合并成一条帖子**（标题带「等 N 条异常」、描述列 `#N 类名: 消息`、附件换成多节全文），更多条时首发仍是一条合并帖、其余各成独立帖**每 12 分钟错峰补发**——服务端限流是每 IP 每小时 5 次提交，此前「全选后报告」实际只会提交第一条、其余条目被静默丢弃；对话框底部新增「其他 N 条异常」分节，逐条复选框默认全勾、取消即不报该条
+- **报告提交失败不再只剩一条 toast（T-FeedbackErr）**：IDE 内点「报告到需求池」提交被服务端拒绝（400）时，此前只弹一条 `Server returned HTTP response code: 400 for URL: …` 通知，既看不到原因也无法重试。现在：提交时对话框不关闭、按钮转「提交中…」，失败则留在窗内、状态行红字给出**服务端返回的具体原因**（如「标题长度需在 5-200 字符之间」）与重试引导，可改完内容直接再提交，成功才关窗；同时异常堆栈附件上传失败不再连坐整帖（帖子照发、另行提示堆栈未附上）
+- **报告失败诊断与对话框收敛（T-FeedbackErr 第二轮）**：真机反馈两缺陷——①「提交失败：Expected BEGIN_OBJECT but was STRING」实为**响应 gzip 未解压**（平台 `HttpRequests` 默认 `Accept-Encoding: gzip`、Cloudflare 返回压缩响应，服务端实际已入库；手写读取按 `Content-Encoding` 解压修复），非 JSON 响应（代理/CDN 拦截页）改为可读归类并附正文片段与 HTTP 状态；② 失败信息单行渲染把对话框撑到 ~1900px——状态行改可换行文本区；失败现场「帖子已提交」措辞矛盾一并修正；并新增**「复制失败信息」按钮**（对齐 SQL 预览窗口交互，复制后按钮变「已复制」）
+- **错误信息复制按钮与附件编码（T-FeedbackErr 第三轮）**：失败信息行的复制按钮改为与 SQL 预览窗口完全一致（同一文案键、11f 小字、**仅在出错时出现**）；从 IDE 错误池导入堆栈时**自动勾选**「附带异常堆栈」，导入即随帖提交；修复附件 .txt 中文乱码——字节本为合法 UTF-8，乱码源于 `text/plain` 响应头缺 charset （服务端补 `charset=utf-8`，插件侧同时为附件写 UTF-8 BOM 自描述编码）
+- **执行计划首次点击结果不进预览面板（T-ExplainFirstNative）**：首次执行时 DBN 先创建**空名占位**结果 Tab 再异步改名/构建网格，而换入判定以「名称不在提交时刻快照」识别新结果——空名恒判新，重试第 1 拍就选中占位并强制换入（网格尚未构建），事后无人补换入，结果滞留 IDEA 原生控制台、预览面板空白，再点一次才恢复。修复：空名占位不作为结果候选（400ms 换入重试与 contentAdded 钩子两处），结果换入监视每拍快照结果 Tab 名称集合、集合变化（占位改名/新 Tab）即补一次换入重绘兜底
+- **执行计划输出对齐 IDEA 原生表格形态（T-ExplainFirstNative）**：MySQL/MariaDB 由 `EXPLAIN FORMAT=JSON` 改为原生同款 `EXPLAIN <sql>`——本地 DatabaseTools jar 反编译实证，原生 Explain Plan 对 MySQL 家族跑的即裸 EXPLAIN 表格行（`MysqlBaseRawPlanData` 直读 id/select_type/table/type/key_len/rows/filtered/Extra），FORMAT=JSON 属 M37.2 自创形态且全树无渲染器消费，真机网格只能呈现一坨 JSON 文本；现在执行计划结果直接是经典计划表格行（PostgreSQL/KingBase 的 FORMAT JSON 为 PG 家族原生形态，保留不动）
 
-- **预览点击侧边栏闪烁根治：filter 重放守卫 + EDT 慢操作消解（T-PreviewFlash）**：点击 SQL 预览图标侧边栏「SQL 日志」列表闪一次像被刷新，且每次点击 idea.log 刷 4~5 条 "Slow operations are prohibited on EDT"——根因：预览链每次覆盖写临时 SQL 文件 + VFS refresh + 方言重映射制造索引 dumb 窗口，dumb 退出时平台对控制台全文档重跑 message filter，而插件 filter 不幂等——历史行被重放入库/刷新即「闪烁」。修复：新增 `ConsoleReplayGuard` 四态重放守卫（watermark + docStamp + 行 0 文本区分流式/重放/重置/混合，反射解析失败降级直连现状语义）；`SqlPreviewPanel.createEditor` 弃 EDT 同步 VFS/findFile 改有界等待预热产物（createTempFile+refresh+findFile 全移后台线程，消除两处慢操作 SEVERE 热点）。测试：新增 `ConsoleReplayGuardTest` 6 用例
-- **三处弃用 API 换现代等价物（T-DepApi）**：`StdLanguages.JAVA` → `JavaLanguage.INSTANCE`、`FilenameIndex.getFilesByName` → `getVirtualFilesByName(name, scope)`、`Notification.setListener(URL_OPENING_LISTENER)` → `BrowseNotificationAction`（追加「查看发布页」动作）——三平台 verifyPlugin 弃用 40→38（243 5→3 / 253 8→6 / 262 40→38）、experimental 10→8；剩余四项经 javap 三平台核实无等价交集替换保留待平台演进
-- **执行临时文件失败与复制错误反馈（T-ExecCopyFix）**：① 两处「复制错误信息」按钮静默无反馈——`CopyFeedback.flashCopied` 文本按钮适配版（图标换对号 + 文案短暂换「已复制」，一次性 Timer 恢复）；② 执行失败 Failed to create temporary SQL file 零日志无法归因——`createTempPsiFile` 每个 return null 站点分级记录阶段原因，onError 文案改本地化 `execute.tempFile.failed` 携带阶段原因；冷路径 refresh 段包 `WriteIntentReadAction`（262 平台 EDT-ReadAction 同步 VFS refresh 硬抛 write-safe）；`clearPrepared` 不再清临时文件缓存（vf.isValid 守卫已兜底，原实现每次预览切换必落冷路径）
-- **预览刷新后内嵌 Database 丢失：多弹窗僵尸 rehost 监听抢共享控制台根治（T-RefreshDbSteal）**：刷新后 DBN 工具栏消失/参数不再同步右侧 SQL/执行 SQL 跑到 IDEA 控制台三症状同根——每次预览 new 一个 MODELESS 弹窗且从不关闭，旧弹窗的 rehost HierarchyListener 残活把插件级共享控制台抢回废弃面板（真机日志 6 连抢实锤）。四组修复：弹窗单例化（项目级登记表关旧开新）；监听引用入字段 detachConsole/dispose 显式移除（僵尸监听根治），去抖 skip 改单发 800ms Timer 延迟复查幂等重挂；所有权卫队 `consoleAttachedToMe` 判定，showSql/executeSql/createEditor 三处失联先 recoverConsole 重嵌、执行侧恢复未同步落地时放弃 executePrepared 防打在别人的控制台上；createEditor/releaseEditor 带栈埋点补齐真机故障期日志空窗。测试：新增 `RefreshDbStealTest` 8 用例，全量 3188/0/6 绿；真机复验清单留人工
 ### Test
 
 - **CRUD SQL**：`CrudSqlGeneratorTest` 11 例 + `DbTypeQuoteHintTest` 3 例 + `CrudSqlPreviewFlowTest` 3 例；真机反馈轮补 `CrudSqlPreviewPanelRenderTest` 3 例（六种语句逐一喂真实面板）+ doOKAction 回调/双击直开 2 例 + 浮层渲染器冒烟 1 例
 - **自动折叠**：`SqlAutoFoldPlannerTest` 12 例（纯 JUnit 零平台依赖）+ `SqlAutoFoldingTest` 5 例（含只摘本方清单守卫）+ 各点位行为 5 例 + 设置台账/导入导出断言
+- **颜色标记**：`SqlListTypeColorTest` 18 + `SqlListSelectionOutlineTest` 10 + 分类器/两渲染器/设置绑定共 44 例（含选中态 insets 逐边相等防抖动参数化与实例同一性防回退）
 - **按钮合一**：新建 `SqlLogPanelTypePopupToggleTest` 6 例（初始文案/清空回填/逐勾选翻转/部分态回填/未构建 null/重建初始化）；`XmlPreviewPanelTest` 历史错位用法统一 `deselectAllConditions`
-- 本版全量 **3353/0/0/6 绿**，与基线一致零回归
+- **09-14 修复链**：`InjectionModulePickerDialogTest` 4 例（默认全选/全不选清空/联动恢复/行文本）；T-IntrUpg 防线表驱动/桥不暂存/升级判定表驱动/upgraded 键落地 10 例；T-MergeFollowup 五段模式循环行高恒等、右键 renderer、下拉按钮同构断言；T-FeedbackDlg 三波布局与错误池过滤断言；T-PreviewExecDs 缓存项目绑定/console 探活三分量；T-ExecSlowOps 两段式映射与 setMapping 字面量单文件收口守卫
+- **批量报告**：`BatchSubmitterTest` 9 例（合并附件分节 / 单条原样 / 全不勾不带附件 / 阈值边界 / 补发列表与条目勾选 / 间隔常量）+ `ErrorReportComposerTest` +6 例批量合并
+- **反馈链路**：`FeedbackApiTest` 21 例（+4：服务端 4xx 正文优先于通道文案 / 附件被拒降级为不带附件发帖 / 上传抛 HttpFailure 同样降级 / `serverMessageOf` 边界）、`ErrorReportDialogLayoutTest` 14 例（+2：状态行在面板底部且不参与纵向伸缩 / 提交状态机三阶段文案）；回归踩坑修复 `BundleParityGuardTest`——bundle 值用物理续行会被 `java.util.Properties` 解析成 key（中英 key 集合漂移），改单行转义后中英 key 620/620 对齐
+- **执行计划链**：`ResultTabSelectionTest` +3 例（空名占位不作为新结果候选 / 阈值后也不复用空名只选具名旧 Tab / 占位改名后第 1 拍即选中——真机首点病灶的动态代理链路复现）；`DialectExplainTest` MySQL/MariaDB 期望改 `EXPLAIN <sql>`（历史 FORMAT=JSON 已包装文本幂等样例保留，证明升级后二次点击不双前缀）
+- **性能收口（T-PerfSweep2）**：新增 `ConsoleErrorExtractTest`（基线片段读取等价性）、`CachedTempPsiFileTest`（缓存槽收口与项目关闭回收）、`PendingReportSchedulerTest`（单拍链式与队尾顺延），`FeedbackApiTest`/`ErrorReportComposerTest` 扩 8 例，共 22 例
+- **内部 API 整改与设置项钉序**：`IdeErrorReportSubmitterTest`/`FeedbackReportingContractTest` 随错误池导入链摘除同步收敛；`PluginXmlStructureGuardTest` 增「设置子页 groupWeight 按声明序严格递减」守卫（防新增子页漏配或乱序）
+- 本版全量 **4081/0/0/6 绿**，与基线一致零回归；`verifyPlugin` 三目标（IU-243/253/262）Compatible，**三版本 internal API 与 scheduled-for-removal 均为 0**（弃用计数 243=3 / 253=6 / 262=52 无新增）；`./gradlew testShards` 一命令并行全量 2m05s
 
 ## [2026.9.11] - 2026-09-11
 
@@ -144,7 +247,6 @@
 ### Added
 
 - **自研 DAO 字符串 SQL 预览与方法定义锚点贯通（T-DaoSql）**：用户反馈 `beanCruder.selectList(ScheduleVO.class, sql拼接变量, "CUR_USER", userId)` 调用行无预览图标、`selectListPagination` 等分层方法定义处快捷键失效——四处根因一次修复：① 方法名白名单扩展 `DAO_STRING_SQL_METHODS`（selectList/selectListPagination 等 select 族，`isStringSqlMethodCandidate` 统一入口）；② SQL 实参定位泛化（扫描实参列表取第一个字符串形态实参，兼容自研框架 `(Class, sql, ...)` 形态，`hasStringLikeArg` 守卫）；③ JDBC gutter 家族守卫改排除制（UNKNOWN 家族兜底，CUSTOM_DAO/HIBERNATE/JPA 各归专属 provider）+ 批量锚点（场景 D）对字符串 SQL 形态让位去重；④ 新增方法定义锚点 `StringSqlMethodGutterLineMarkerProvider`（方法体内存在字符串 SQL 调用时方法名行显示图标，daemon 快速路径限单方法体结构遍历 + 200K 文本护栏）+ `ConvertToSqlAction` 方法定义 fallback（光标在方法定义名/方法体内任意处 → 方法体候选 0/1/多分发，`collectMethodCandidates` 单一来源）。已知边界：SQL 以对象字段/方法返回值形态运行时构造（`query.getQuery()`）静态不可还原，仅提供入口不预览文本
-- **主源码 Kotlin → Java 全量改写完成**：生产源码（包 `cn.song.mybatisplus.visualizer` 下 model / psi / sql / config / update 五包，共 351 个 `.java`、0 个 `.kt`）全部由 Kotlin 转写为 Java，采用「共存迁移」策略（测试源集保留 140 个 `.kt` + 93 个 `.java`，均可编译可运行）。转换覆盖 `object`→单例 `INSTANCE`、`data class`→`final class` 含值语义 `equals/hashCode`、`sealed`/接口分支 `instanceof` 化、`suspend fun`→`Continuation` 实现、`Regex`→`Pattern`、`record` 访问器 `x()` 等互操作铁律；全量测试 **1421/0/0/6 绿（139 套件）**，`buildPlugin` + `verifyPlugin` 终验通过。与 `master` 对比零功能丢失（4 个类为等价重命名：`Ognl`→`OgnlEvaluator`、`WrapperFormat`→`WrapperFormatKt`、`LogEntryPreviewRecognizer`→`LogEntryPreviewRecognizerKt`、`LogSqlModels`→`LogSqlModelsKt`）。详见 `docs/开发计划/20260901-Kotlin转Java全量改写-进度总结.md`
 
 ### Fixed
 - **IDE 2026.2.1 双击预览潜在必崩修复 + 插件市场发布受阻解除（T-Wia262）**：全量三版本官方兼容性校验（verifyPlugin）在 2026.2（262）平台报字节码级兼容问题——上述双击预览崩溃修复所用的 `WriteIntentReadAction.compute(ThrowableComputable)` 重载在 262 平台已被移除，而双击预览入口预热竞态必输、每次都走该回退分支，真机 2026.2.1 上会 `NoSuchMethodError` 崩溃（原 write-intent 崩溃实为换了一处崩溃）。改用三版本交集重载 `compute(Computable)`（单类型实参消歧，锁语义与执行路径零变化），复跑三版本校验 0 兼容性问题

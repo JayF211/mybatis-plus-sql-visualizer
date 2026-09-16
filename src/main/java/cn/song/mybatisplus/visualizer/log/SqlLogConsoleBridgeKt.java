@@ -1,6 +1,6 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import kotlin.Pair;
+import com.intellij.openapi.diagnostic.Logger;
 
 import java.awt.Component;
 import java.awt.Container;
@@ -9,18 +9,23 @@ import java.util.List;
 import java.util.function.Supplier;
 
 /**
- * {@code SqlLogConsoleBridge.kt} 顶层函数（{@code processConsoleLine} / {@code findConsoleView}）的 Java 承载类。
+ * {@code SqlLogConsoleBridge.kt} 顶层函数（processConsoleLine / findConsoleView）的 Java 承载类。
  */
 public final class SqlLogConsoleBridgeKt {
     private SqlLogConsoleBridgeKt() {
     }
 
+    private static final Logger MARKER_DEFENSE_LOG =
+            Logger.getInstance("cn.song.mybatisplus.visualizer.log.SqlSourceMarkerDefense");
+
     /**
      * 处理一行控制台文本（F-44-6）：
-     *  1. 若为本插件源码标记（[SqlSourceInterceptor] 注入）→ 暂存，不喂解析器；
+     *  1. 若为本插件源码标记（SqlSourceInterceptor 注入）→ 暂存，不喂解析器；
+     *     T-IntrUpg-01：自位污染标记（旧模板 isSelf 常量分叉时拦截器上报自身帧）不暂存，
+     *     条目落无位置链路（MissingSource 引导 → 立即注入触发升级）；
      *  2. 喂行到三个解析器（配置快照已由设置变更事件同步——T-LogPerf-04），取出已配对 SQL 条目；
-     *  3. 附加耗时解析结果 + 暂存源码位置，写入 [LogSqlEntry]。
-     * 纯函数式、无 IDE 依赖，可在单元测试中直接驱动。
+     *  3. 附加耗时解析结果 + 暂存源码位置，写入 LogSqlEntry。
+     * 纯函数式、无 IDE 依赖，可在单元测试中直接驱动（SqlLogConsoleBridgeMarkerTest）。
      */
     public static List<LogSqlEntry> processConsoleLine(
             String line,
@@ -28,9 +33,25 @@ public final class SqlLogConsoleBridgeKt {
             String timePrefix,
             Runnable syncBufferConfig
     ) {
+        // M56 T-M56-02：增强接管闸门——agent 在线时桥不产出条目，回落即恢复。
+        // T-AgentDialectLoop / T-AgentLogTime：接管期间无条件转入日志时间嗅探——把行喂给既有解析器
+        // 提取「日志行原始时间」暂存 LogTimeCorrelator（键=占位符版 SQL 指纹），agent 事件入队前
+        // 取回回填，面板「日志时间」在增强模式下不丢失。日志时间是**数据**：采集不再受「时间显示开
+        // 关/时间源」这类渲染偏好控制（关掉显示只影响渲染，不影响条目字段），故此处零开关判断。
+        if (SqlCaptureGate.paused.get()) {
+            sniffLogTimestamp(line, ctx);
+            return List.of();
+        }
         // 1) 实时源码标记 → 暂存（不喂解析器，避免被当成 SQL）
-        Pair<String, Integer> marker = SqlSourceMarker.parse(line);
+        SourceMarkerData marker = SqlSourceMarker.parse(line);
         if (marker != null) {
+            if (SqlSourceMarker.isInterceptorSelfPath(marker.file())) {
+                // T-IntrUpg-01 防线：标记指向拦截器文件本身 = 存量旧件自位污染，丢弃不暂存。
+                // 留痕含原路径/行号，远程排障定位污染拷贝件用。
+                MARKER_DEFENSE_LOG.info("SqlLogConsoleBridge: 丢弃拦截器自位污染标记 "
+                        + marker.file() + ":" + marker.line() + "（旧版生成文件，建议设置页重新注入升级）");
+                return List.of();
+            }
             ctx.pendingSource = marker;
             return List.of();
         }
@@ -51,33 +72,69 @@ public final class SqlLogConsoleBridgeKt {
         // 解析策略：优先从日志行文本解析（ExecutionTimeParser），命中则统一填入；
         // 未命中时对每个条目尝试从 rawSql/restoredSql 解析（LogDurationParser，覆盖 druid/p6spy 格式）
         Long lineDuration = ExecutionTimeParser.parse(line, timePrefix);
-        Pair<String, Integer> src = ctx.pendingSource;
+        SourceMarkerData src = ctx.pendingSource;
         List<LogSqlEntry> result = new ArrayList<>();
         for (LogSqlEntry e : taken) {
             // F-44-7：MP 分页 COUNT 标记逐条判定（T-LogDedupeMpMark）——批次是「同一行喂入产出的全部条目」，
             // named 行触发 closePending 时批内常有两条（闭合的 prepared 副本 + 本条 named），批级 any 会把
             // 与 COUNT 同批的数据查询一并误标（且连带被判 NoSource 丢失源码跳转）。源码标记优先级不变。
-            Pair<String, Integer> eSrc = src;
+            SourceMarkerData eSrc = src;
             if (eSrc == null && e.restoredSql().stripLeading().toUpperCase(java.util.Locale.ROOT).startsWith("SELECT COUNT(")) {
                 eSrc = SourceMarkers.mpPaginationCount();
             }
             Long duration = lineDuration != null ? lineDuration : LogDurationParser.parse(e);
+            String sourceFile = eSrc != null ? eSrc.file() : e.sourceFile();
+            int sourceLine = eSrc != null ? eSrc.line() : e.sourceLine();
+            String mapperStatement = eSrc != null ? eSrc.mapperStatement() : e.mapperStatement();
+            String requestTag = eSrc != null ? eSrc.requestTag() : e.requestTag();
             result.add(new LogSqlEntry(
                     e.rawSql(),
                     e.restoredSql(),
                     e.params(),
                     e.timestamp(),
+                    e.logTimestamp(),
                     e.summary(),
                     e.source(),
                     duration != null ? duration : e.executionTimeMs(),
-                    eSrc != null ? eSrc.getFirst() : e.sourceFile(),
-                    eSrc != null ? eSrc.getSecond() : e.sourceLine(),
-                    0L));
+                    sourceFile,
+                    sourceLine,
+                    e.sourceCandidates(),
+                    e.sequenceNumber(),
+                    mapperStatement,
+                    e.errorText(),
+                    requestTag,
+                    e.updateCount(),
+                    e.databaseName()));
         }
         if (ctx.pendingSource != null) {
             ctx.pendingSource = null;
         }
         return result;
+    }
+
+    /**
+     * T-AgentDialectLoop / T-AgentLogTime：增强接管期间的日志时间嗅探——复用既有三解析器的配对/时间解析
+     * （零新解析逻辑），产出的条目不进面板、仅把「[logTimeKey] → 日志时间」暂存 LogTimeCorrelator
+     * （参数值序列作次级判别签名）。
+     * 成本口径：每行 3 次 contains 门控（解析器既有门），每条 SQL 一次条目构造 + 指纹，
+     * 条目即弃零驻留；源码标记行跳过（条目已弃，无需归属）。
+     */
+    private static void sniffLogTimestamp(String line, BridgeLineContext ctx) {
+        ctx.myBatisParser.feed(line);
+        if (ctx.hibernateEnabled()) {
+            ctx.hibernateParser.feed(line);
+        }
+        ctx.jdbcParser.feed(line);
+        List<LogSqlEntry> taken = new ArrayList<>();
+        taken.addAll(ctx.myBatisParser.takeEntries());
+        taken.addAll(ctx.hibernateParser.takeEntries());
+        taken.addAll(ctx.jdbcParser.takeEntries());
+        for (LogSqlEntry e : taken) {
+            LogTimeCorrelator.put(
+                    LogSqlModelsKt.logTimeKey(e),
+                    e.logTimestamp() != null ? e.logTimestamp() : e.timestamp(),
+                    LogSqlModelsKt.logTimeParamSignature(e.params()));
+        }
     }
 
     /** 组件树中查找实现 `com.intellij.execution.ui.ConsoleView` 接口的组件（接口名匹配，无编译期引用）。 */

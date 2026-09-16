@@ -1,5 +1,7 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
-<idea-plugin>
+<!-- url：插件官网链接（idea-plugin 根元素属性，官方文档实证——显示在 JetBrains Marketplace 插件页的
+     Plugin Homepage 入口；与 vendor url（厂商页 Gitee）分工互补） -->
+<idea-plugin url="https://sql-visualizer.jvtools.cn">
     <!-- 插件唯一标识（FQN），发布后不可变更 -->
     <id>cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer</id>
 
@@ -79,6 +81,8 @@
 
     <!-- com.intellij 扩展点注册（M3 展示层 + M5 配置系统） -->
     <extensions defaultExtensionNs="com.intellij">
+        <!-- M56 T-M56-09：EP 双轨主通道——控制台行捕获（首行标志生效后桥轮询挂载停转） -->
+        <consoleFilterProvider implementation="cn.song.mybatisplus.visualizer.log.SqlConsoleBridgeFilterProvider"/>
         <!-- 全局配置（application-level，F-16）——@Service(Service.Level.APP) 注解式注册（M16.1 移除 XML
              双注册：官方规范禁止 plugin.xml 与 @Service 并存，双注册导致持久化绑定错实例、语言切换保存失效） -->
 
@@ -96,6 +100,7 @@
         <!-- 界面与操作（gutter图标/语言/快捷键） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.ui"
+                                 groupWeight="50"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.ui"
                                  instance="cn.song.mybatisplus.visualizer.config.UiActionsConfigurable"/>
@@ -103,6 +108,7 @@
         <!-- SQL 预览（方言/参数替换/逻辑删除/多租户/数据权限/反向转换） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.preview"
+                                 groupWeight="40"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.preview"
                                  instance="cn.song.mybatisplus.visualizer.config.SqlPreviewConfigurable"/>
@@ -110,6 +116,7 @@
         <!-- 表名映射（前缀/后缀/移除/忽略字段/推断策略） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.tableMapping"
+                                 groupWeight="30"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.tableMapping"
                                  instance="cn.song.mybatisplus.visualizer.config.TableMappingConfigurable"/>
@@ -117,6 +124,7 @@
         <!-- SQL 日志（前缀/自动捕获/时间戳/格式化/过滤/去重/最大条数/耗时/慢查询/Hibernate/Jdbc/自动保存） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.sqlLog"
+                                 groupWeight="20"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.sqlLog"
                                  instance="cn.song.mybatisplus.visualizer.config.SqlLogConfigurable"/>
@@ -124,6 +132,7 @@
         <!-- 关于（缓存/更新/构建号/导入导出） -->
         <applicationConfigurable parentId="cn.song.mybatisplus.visualizer.settings"
                                  id="cn.song.mybatisplus.visualizer.settings.about"
+                                 groupWeight="10"
                                  bundle="messages.MpSqlVisualizerBundle"
                                  key="settings.section.about"
                                  instance="cn.song.mybatisplus.visualizer.config.AboutConfigurable"/>
@@ -200,7 +209,7 @@
         <completion.contributor language="JAVA"
                                 implementationClass="cn.song.mybatisplus.visualizer.ui.completion.WrapperCompletionContributor"/>
 
-        <!-- M28 插件更新：启动自动检查（开关默认开，State.autoCheckUpdate）——静默检查，
+        <!-- M28 插件更新：启动自动检查（开关默认关，PluginSettings.autoCheckUpdate=false，T-PerfSweep2-06 对齐代码权威；稳定版由 Marketplace 推送，内测期手动开启）——静默检查，
              仅发现新版本时弹通知（[立即更新] 后台下载安装 / [稍后]）；分组显示名走 bundle
              （NotificationGroupEP 无 displayName 属性，243 平台 javap 实证：bundle + key 本地化） -->
         <notificationGroup id="cn.song.mybatisplus.visualizer.updates"
@@ -235,10 +244,8 @@
         <toolWindow id="cn.song.mybatisplus.visualizer.log" anchor="right"
                     icon="/icons/sqlLog.svg"
                     factoryClass="cn.song.mybatisplus.visualizer.log.SqlLogToolWindowFactory"/>
-        <!-- F-44：SQL 历史记录已合并到主侧边栏 tab，不再独立注册
-        <toolWindow id="cn.song.mybatisplus.visualizer.history" anchor="right"
-                    icon="/icons/sqlGutter.svg"
-                    factoryClass="cn.song.mybatisplus.visualizer.history.SqlHistoryToolWindowFactory"/> -->
+        <!-- F-44：SQL 历史记录已合并到主侧边栏 tab，不再独立注册；
+             T-UN-12（T-UiNative）：独立历史 ToolWindow 工厂类已删除 -->
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，

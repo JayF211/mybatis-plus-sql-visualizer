@@ -9,7 +9,7 @@ public abstract class InjectionResult {
     private InjectionResult() {
     }
 
-    /** 注入成功。 */
+    /** 注入成功（多模块时消息含成功模块清单）。 */
     public static final class Success extends InjectionResult {
         private final String message;
 
@@ -48,6 +48,14 @@ public abstract class InjectionResult {
         public static final AlreadyExists INSTANCE = new AlreadyExists();
 
         private AlreadyExists() {
+        }
+    }
+
+    /** 用户在模块选择弹框取消（T-ModPick：多模块工程不再全量注入，先让用户勾选）。 */
+    public static final class Cancelled extends InjectionResult {
+        public static final Cancelled INSTANCE = new Cancelled();
+
+        private Cancelled() {
         }
     }
 }

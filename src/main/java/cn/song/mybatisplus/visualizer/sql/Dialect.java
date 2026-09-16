@@ -80,7 +80,10 @@ public interface Dialect {
      *
      * <p>返回 null → 本方言不支持（调用方按钮降级提示）。支持矩阵真机实证（DBX 通道 2026-09-02）：
      * <ul>
-     *   <li>MySQL 5.7/8.4、MariaDB：{@code EXPLAIN FORMAT=JSON}（MySQL 8.4/5.7 实测，MariaDB 同语法族）；</li>
+     *   <li>MySQL 5.7/8.4、MariaDB：{@code EXPLAIN &lt;sql&gt;}（T-ExplainFirstNative 对齐 IDEA 原生
+     *    MysqlBaseRawPlanData 表格形态——原生 Explain Plan 对 MySQL 家族跑的即裸 EXPLAIN
+     *    表格行，按 id 嵌套建树；M37.2 曾用 {@code EXPLAIN FORMAT=JSON}，属自创形态且全树无
+     *    渲染器消费，真机网格只能呈现一坨 JSON 文本）；</li>
      *   <li>PostgreSQL：{@code EXPLAIN (FORMAT JSON, VERBOSE)}（PG 16 实测）；</li>
      *   <li>KingBase：{@code EXPLAIN (FORMAT JSON)}（KingbaseES V8 实测，PG 兼容完整）；</li>
      *   <li>DM：{@code EXPLAIN &lt;sql&gt;}（DM8 实测，返回 #NSET2 计划文本）；</li>
@@ -93,6 +96,37 @@ public interface Dialect {
      */
     default String renderExplainStatement(String sql) {
         return null;
+    }
+
+    /**
+     * T-ExplainDbl：幂等 EXPLAIN 包装——文本已以 EXPLAIN 关键字开头（词边界、忽略大小写）时
+     * 原样返回（去首尾空白与结尾分号后），否则委托 {@link #renderExplainStatement}。
+     *
+     * 根因场景：首次点击「执行计划」后包装好的 EXPLAIN 语句经执行链写入控制台文档，
+     * 再点一次在已包装文本上二次加前缀 → {@code EXPLAIN FORMAT=JSON EXPLAIN FORMAT=JSON SELECT ...}
+     * → MySQL 1064 语法错误。
+     */
+    default String renderExplainStatementIdempotent(String sql) {
+        String trimmed = sql.trim();
+        while (trimmed.endsWith(";")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1).trim();
+        }
+        if (startsWithExplainKeyword(trimmed)) {
+            return trimmed;
+        }
+        return renderExplainStatement(trimmed);
+    }
+
+    /**
+     * T-ExplainDbl：判断语句是否已以 EXPLAIN 关键字开头——紧随字符须非字母/数字/下划线
+     * （词边界），避免 {@code EXPLAINING_TABLE} 之类标识符误判。
+     */
+    private static boolean startsWithExplainKeyword(String sql) {
+        if (!sql.regionMatches(true, 0, "EXPLAIN", 0, 7)) {
+            return false;
+        }
+        return sql.length() == 7
+                || (!Character.isLetterOrDigit(sql.charAt(7)) && sql.charAt(7) != '_');
     }
 
     /** 共享渲染辅助：MySQL 形态 {@code LIMIT [offset,] count}。 */

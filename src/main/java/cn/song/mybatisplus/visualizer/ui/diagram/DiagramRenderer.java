@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.diagram;
 
 import cn.song.mybatisplus.visualizer.model.JoinType;
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors;
 import com.intellij.ui.JBColor;
 import com.intellij.util.ui.UIUtil;
 import org.jetbrains.annotations.NotNull;
@@ -58,22 +59,24 @@ public final class DiagramRenderer {
     public static final int LABEL_LINE_GAP = 12;
     public static final int LABEL_COLUMN_GAP = 24;
 
-    public static final JBColor SHADOW = new JBColor(new Color(0x00, 0x00, 0x00, 25), new Color(0x00, 0x00, 0x00, 45));
-    public static final JBColor CARD_BG = new JBColor(new Color(0xFF, 0xFF, 0xFF), new Color(0x2D, 0x2F, 0x33));
-    public static final JBColor CARD_BG_ALT = new JBColor(new Color(0xF7, 0xF8, 0xFA), new Color(0x2A, 0x2C, 0x30));
-    public static final JBColor CARD_BORDER = new JBColor(new Color(0xC8, 0xCC, 0xD4), new Color(0x50, 0x53, 0x5A));
-    public static final JBColor MAIN_HDR_BG = new JBColor(new Color(0xDC, 0xE8, 0xDC), new Color(0x2E, 0x3B, 0x2E));
-    public static final JBColor JOIN_HDR_BG = new JBColor(new Color(0xDC, 0xE5, 0xED), new Color(0x2A, 0x30, 0x38));
-    public static final JBColor HEADER_LINE = new JBColor(new Color(0xB8, 0xBC, 0xC4), new Color(0x4A, 0x4E, 0x56));
-    public static final JBColor SEPARATOR = new JBColor(new Color(0xE4, 0xE6, 0xEA), new Color(0x3A, 0x3D, 0x42));
-    public static final JBColor TEXT = new JBColor(new Color(0x1A, 0x1A, 0x1A), new Color(0xBB, 0xBB, 0xBB));
-    public static final JBColor TYPE_COLOR = new JBColor(new Color(0x88, 0x88, 0x88), new Color(0x80, 0x80, 0x80));
-    public static final JBColor PK_COLOR = new JBColor(new Color(0x9A, 0x68, 0x00), new Color(0xE2, 0xC0, 0x79));
-    public static final JBColor LINE_COLOR = new JBColor(new Color(0x55, 0x55, 0x55), new Color(0x77, 0x77, 0x77));
-    public static final JBColor LABEL_BG = new JBColor(new Color(0xFF, 0xFF, 0xFF), new Color(0x33, 0x36, 0x3B));
-    public static final JBColor LABEL_BORDER = new JBColor(new Color(0xC0, 0xC0, 0xC0), new Color(0x50, 0x53, 0x5A));
-    public static final JBColor JOIN_BADGE_BG = new JBColor(new Color(0xE8, 0xEA, 0xED), new Color(0x3A, 0x3D, 0x42));
-    public static final JBColor JOIN_BADGE_TEXT = new JBColor(new Color(0x55, 0x55, 0x55), new Color(0x99, 0x99, 0x99));
+    // T-UN-13（T-UiNative）：16 色板写死双值 → MpvsUiColors namedColor 别名（亮/暗值逐字节平移，
+    // 语义键名见 MpvsUiColors「mpvs.diagram.*」；本类常量名保持不变，调用点零改动）。
+    public static final JBColor SHADOW = MpvsUiColors.DIAGRAM_SHADOW;
+    public static final JBColor CARD_BG = MpvsUiColors.DIAGRAM_CARD_BG;
+    public static final JBColor CARD_BG_ALT = MpvsUiColors.DIAGRAM_CARD_BG_ALT;
+    public static final JBColor CARD_BORDER = MpvsUiColors.DIAGRAM_CARD_BORDER;
+    public static final JBColor MAIN_HDR_BG = MpvsUiColors.DIAGRAM_MAIN_HDR_BG;
+    public static final JBColor JOIN_HDR_BG = MpvsUiColors.DIAGRAM_JOIN_HDR_BG;
+    public static final JBColor HEADER_LINE = MpvsUiColors.DIAGRAM_HEADER_LINE;
+    public static final JBColor SEPARATOR = MpvsUiColors.DIAGRAM_SEPARATOR;
+    public static final JBColor TEXT = MpvsUiColors.DIAGRAM_TEXT;
+    public static final JBColor TYPE_COLOR = MpvsUiColors.DIAGRAM_TYPE_COLOR;
+    public static final JBColor PK_COLOR = MpvsUiColors.DIAGRAM_PK_COLOR;
+    public static final JBColor LINE_COLOR = MpvsUiColors.DIAGRAM_LINE_COLOR;
+    public static final JBColor LABEL_BG = MpvsUiColors.DIAGRAM_LABEL_BG;
+    public static final JBColor LABEL_BORDER = MpvsUiColors.DIAGRAM_LABEL_BORDER;
+    public static final JBColor JOIN_BADGE_BG = MpvsUiColors.DIAGRAM_JOIN_BADGE_BG;
+    public static final JBColor JOIN_BADGE_TEXT = MpvsUiColors.DIAGRAM_JOIN_BADGE_TEXT;
 
     // ------------------------------------------------------------------
     // Layout data classes（本类内嵌套，等价 Kotlin 原 object 内的 data class）

@@ -399,33 +399,125 @@ public final class FeedbackApi {
     }
 
     /**
-     * 提交链路：附件上传（如有）→ 帖子创建。网络/服务端错误统一 {@link SubmitResult.Failure}
-     *（服务端 message 透出，HTTP 异常取 message），不抛出——调用方直接渲染。
+     * 提交结果 + 附件降级提示（T-FeedbackErr）：帖子成功但附件没上传上时
+     * {@code warning} 非空——「报告发出去了，但堆栈没带上」，用户能自己决定要不要补。
      */
-    public static SubmitResult submit(Submission submission) {
-        PostRequest withAttachments;
-        try {
-            AttachmentRef uploaded = null;
-            StackAttachment stack = submission.getStackAttachment();
-            if (stack != null) {
-                String body = sender.postMultipart(
-                        UPLOAD_URL, stack.getFileName(), "text/plain", stack.getContent());
-                // 解析失败抛 IllegalStateException（message 即服务端文案），由外层统一折入 Failure
-                uploaded = parseUploadResponse(body);
-            }
-            withAttachments = submission.getRequest().copy(
-                    uploaded != null ? List.of(uploaded) : List.of());
-        } catch (Throwable t) {
-            LOG.debug("feedback attachment upload failed", t);
-            return new SubmitResult.Failure(t.getMessage() != null ? t.getMessage() : "附件上传失败");
+    public static final class SubmissionOutcome {
+        private final SubmitResult result;
+        private final String warning;
+
+        public SubmissionOutcome(SubmitResult result, String warning) {
+            this.result = result;
+            this.warning = warning;
         }
 
-        try {
-            return parsePostResponse(sender.postJson(POSTS_URL, GSON.toJson(withAttachments)));
-        } catch (Throwable t) {
-            LOG.debug("feedback post failed", t);
-            return new SubmitResult.Failure(t.getMessage() != null ? t.getMessage() : "提交失败");
+        public SubmitResult getResult() {
+            return result;
         }
+
+        public String getWarning() {
+            return warning;
+        }
+    }
+
+    /**
+     * 通道错误 → 用户可读原因（纯函数，T-FeedbackErr）：服务端响应体 {@code message} 永远优先
+     * （那是人写的、能指向具体字段），非 JSON 正文（代理/CDN 拦截页）给可读归类，拿不到才回退
+     * HTTP 通道消息；连通道消息都没有时给兜底句。
+     * 4xx/5xx 在 {@link HttpRequestsSender} 里以 {@link HttpFailure} 抛出（正文已读回），非 HTTP 异常走 cause 链。
+     */
+    static String describeHttpFailure(Throwable error) {
+        if (error == null) {
+            return null;
+        }
+        if (error instanceof HttpFailure) {
+            HttpFailure failure = (HttpFailure) error;
+            String serverMessage = serverMessageOf(failure.getBody());
+            if (serverMessage != null) {
+                return serverMessage;
+            }
+            String hint = nonJsonHint(failure.getBody());
+            if (hint != null) {
+                return hint + "（HTTP " + failure.getStatus() + "）";
+            }
+        }
+        if (error.getCause() != null && error.getCause().getMessage() != null && !error.getCause().getMessage().isBlank()) {
+            return error.getCause().getMessage();
+        }
+        if (error.getMessage() != null && !error.getMessage().isBlank()) {
+            return error.getMessage();
+        }
+        return null;
+    }
+
+    /** 任意响应正文里取服务端 {@code message}（纯函数）：非法 JSON / 非对象 / 缺字段一律 null。 */
+    static String serverMessageOf(String body) {
+        String text = body != null ? body.trim() : "";
+        if (text.isEmpty()) {
+            return null;
+        }
+        try {
+            Map<String, Object> map = GSON.fromJson(text, MAP_TYPE.getType());
+            Object message = map != null ? map.get("message") : null;
+            if (message != null) {
+                String s = String.valueOf(message);
+                return s.isBlank() ? null : s;
+            }
+            return null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * 非 JSON 正文的可读归类（纯函数，T-FeedbackErr 真机第二轮）：本服务所有接口的 2xx 响应
+     * 都是 {@code {...}} 对象；不以 {@code {}@code 开头＝响应被中间层替换——HTML 拦截页（代理/CDN）、网关错误页、
+     * SPA 404 页最常见。Gson lenient 模式对这类正文报「Expected BEGIN_OBJECT but was STRING
+     * at line 1 column 1」，对用户毫无诊断价值，故截取正文片段给出处线索。
+     */
+    static String nonJsonHint(String body) {
+        String text = body != null ? body.trim() : "";
+        if (text.isEmpty()) {
+            return "服务端返回空响应（网络或代理异常）";
+        }
+        if (text.startsWith("{")) {
+            return null;
+        }
+        String snippet = text.length() > 80 ? text.substring(0, 80) : text;
+        snippet = snippet.replaceAll("\\s+", " ");
+        return "服务端返回了非 JSON 响应（疑似代理/CDN 拦截页或网关错误页）：" + snippet;
+    }
+
+    /**
+     * 提交链路：附件上传（如有）→ 帖子创建。
+     *
+     * T-FeedbackErr 降级：附件上传失败<b>不再直接失败整帖</b>——丢掉附件继续提交正文，
+     * 结果里附 {@link SubmissionOutcome} 的 warning 说明堆栈没带上（真机现场：唯一一次 ATTACH 后
+     * 报 400，帖子根本没建；用户填的内容连同堆栈一起丢了）。正文提交失败仍是 {@link SubmitResult.Failure}。
+     */
+    public static SubmissionOutcome submit(Submission submission) {
+        String attachmentWarning = null;
+        AttachmentRef uploaded = null;
+        StackAttachment stack = submission.getStackAttachment();
+        if (stack != null) {
+            try {
+                uploaded = parseUploadResponse(sender.postMultipart(
+                        UPLOAD_URL, stack.getFileName(), "text/plain", stack.getContent()));
+            } catch (Throwable failure) {
+                LOG.debug("feedback attachment upload failed", failure);
+                attachmentWarning = describeHttpFailure(failure) != null ? describeHttpFailure(failure) : "附件上传失败";
+                uploaded = null;
+            }
+        }
+        PostRequest request = submission.getRequest().copy(uploaded != null ? List.of(uploaded) : List.of());
+        SubmitResult result;
+        try {
+            result = parsePostResponse(sender.postJson(POSTS_URL, GSON.toJson(request)));
+        } catch (Throwable failure) {
+            LOG.debug("feedback post failed", failure);
+            result = new SubmitResult.Failure(describeHttpFailure(failure) != null ? describeHttpFailure(failure) : "提交失败");
+        }
+        return new SubmissionOutcome(result, attachmentWarning);
     }
 
     /** 详情页深链（官网已有 postNo 路由约定）。 */
@@ -433,7 +525,7 @@ public final class FeedbackApi {
         return SITE_BASE + "/about/feedback?postNo=" + postNo;
     }
 
-    /** posts 响应解析（纯函数）：code=0 取 data.postNo，否则 message 透出；非法 JSON 归类失败。 */
+    /** posts 响应解析（纯函数）：code=0 取 data.postNo，否则 message 透出；正文不是 JSON 对象时给可读归类。 */
     static SubmitResult parsePostResponse(String body) {
         try {
             Map<String, Object> map = GSON.fromJson(body, MAP_TYPE.getType());
@@ -447,8 +539,8 @@ public final class FeedbackApi {
             }
             Object message = map.get("message");
             return new SubmitResult.Failure(message != null ? String.valueOf(message) : "提交失败（code=" + code + "）");
-        } catch (Throwable t) {
-            return new SubmitResult.Failure("响应解析失败：" + t.getMessage());
+        } catch (Throwable failure) {
+            return new SubmitResult.Failure(nonJsonHint(body) != null ? nonJsonHint(body) : "响应解析失败：" + failure.getMessage());
         }
     }
 
@@ -458,8 +550,13 @@ public final class FeedbackApi {
      * {@link #submit} 捕获后折入 {@link SubmitResult.Failure}——对应 Kotlin 版
      * {@code Result<AttachmentRef>} 的 {@code getOrElse} 早退语义。
      */
-    static AttachmentRef parseUploadResponse(String body) {
-        Map<String, Object> map = GSON.fromJson(body, MAP_TYPE.getType());
+    static AttachmentRef parseUploadResponse(String body) throws IllegalStateException {
+        Map<String, Object> map;
+        try {
+            map = GSON.fromJson(body, MAP_TYPE.getType());
+        } catch (Throwable failure) {
+            throw new IllegalStateException(nonJsonHint(body) != null ? nonJsonHint(body) : "响应解析失败：" + failure.getMessage());
+        }
         Integer code = intOrNull(map.get("code"));
         Object dataRaw = map.get("data");
         Map<?, ?> data = dataRaw instanceof Map ? (Map<?, ?>) dataRaw : null;

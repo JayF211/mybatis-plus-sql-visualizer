@@ -1,8 +1,10 @@
 package cn.song.mybatisplus.visualizer.execute;
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import com.intellij.notification.Notification;
+import com.intellij.notification.NotificationType;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.ui.Messages;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -23,6 +25,9 @@ public final class ExecuteSqlSupport {
 
     private static final com.intellij.openapi.diagnostic.Logger LOG =
             com.intellij.openapi.diagnostic.Logger.getInstance(ExecuteSqlSupport.class);
+
+    /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+    private static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
 
     /** Database 插件标记类（插件加载时必在 classpath；探测用，版本无关）。 */
     private static final String DATABASE_MARKER_CLASS = "com.intellij.database.dataSource.LocalDataSourceManager";
@@ -74,11 +79,21 @@ public final class ExecuteSqlSupport {
         }
     }
 
+    /**
+     * T-UiNative T-UN-02：Community 降级提示改轻通知（原模态弹窗——纯告知无需打断）。
+     * 测试模式跳过 + runCatching 兜底（headless 无通知系统依赖，原 Messages 亦被 runCatching 吞掉）。
+     */
     private static void showInfo(@NotNull Project project, @NotNull String message) {
+        if (ApplicationManager.getApplication().isUnitTestMode()) return;
         try {
-            Messages.showInfoMessage(project, message, MpSqlVisualizerBundle.message("execute.title"));
+            new Notification(
+                    NOTIFICATION_GROUP_ID,
+                    MpSqlVisualizerBundle.message("execute.title"),
+                    message,
+                    NotificationType.INFORMATION
+            ).notify(project);
         } catch (Throwable ignored) {
-            // 测试/headless 环境不抛异常
+            // headless 无通知系统依赖，与原 runCatching 等价
         }
     }
 }

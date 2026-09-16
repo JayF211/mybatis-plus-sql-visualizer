@@ -4,7 +4,10 @@ package cn.song.mybatisplus.visualizer.log;
  * F-44-7：SqlSourceInterceptor 和配置类的代码模板。
  *
  * 生成可直接编译的 Java 源码，用户项目重启后自动生效。
- * 标记行格式与 SqlSourceMarker 保持一致：SQLVIS-SOURCE|&lt;相对路径&gt;|&lt;行号&gt;
+ * 标记行格式与 {@link SqlSourceMarker} 保持一致：
+ * {@code SQLVIS-SOURCE|<相对路径>|<行号>}（3 段，旧版存量形态）
+ * {@code SQLVIS-SOURCE|<相对路径>|<行号>|<mapper 语句 id>}（4 段，M56 T-M56-00 起）
+ * {@code SQLVIS-SOURCE|<相对路径>|<行号>|<mapper 语句 id>|<请求标签>}（5 段，MDC 兜底可选）
  */
 public final class SourceInterceptorTemplates {
 
@@ -38,10 +41,10 @@ import java.util.Set;
  * 在 SQL 执行时捕获调用栈，打印源码标记行到控制台。
  * 插件解析后可实现「跳转到源码」精确跳转。
  *
- * 标记行格式：SQLVIS-SOURCE|<相对路径>|<行号>
- * 例：SQLVIS-SOURCE|src/main/java/com/example/service/UserService.java|87
+ * 标记行格式：SQLVIS-SOURCE|&lt;相对路径&gt;|&lt;行号&gt;[|&lt;mapper 语句 id&gt;[|&lt;请求标签&gt;]]
+ * 例：SQLVIS-SOURCE|src/main/java/com/example/service/UserService.java|87|com.example.mapper.UserMapper.selectById
  *
- * 自动生成于 SQL Visualizer 插件，可安全删除（删除后源码跳转回退为表名搜索）。
+ * 自动生成于 SQL Visualizer 插件，可安全删除（删除后实时日志不再携带源码位置）。
  */
 public class SqlSourceInterceptor implements InnerInterceptor {
 
@@ -59,7 +62,7 @@ public class SqlSourceInterceptor implements InnerInterceptor {
     public void beforeQuery(Executor executor, MappedStatement ms,
             Object parameter, RowBounds rowBounds,
             ResultHandler resultHandler, BoundSql boundSql) throws SQLException {
-        emitSource();
+        emitSource(ms == null ? null : ms.getId());
     }
 
     /**
@@ -68,14 +71,38 @@ public class SqlSourceInterceptor implements InnerInterceptor {
     @SuppressWarnings("unused")
     public void beforeUpdate(Executor executor, MappedStatement ms,
             Object parameter) throws SQLException {
-        emitSource();
+        emitSource(ms == null ? null : ms.getId());
     }
 
-    /** 把当前线程调用栈里的真实调用点打印成标记行。 */
-    private void emitSource() {
+    /**
+     * 把当前线程调用栈里的真实调用点打印成标记行（3~5 段）：
+     * 第 4 段为 mapper 语句 id（ms.getId()，null 省略）；第 5 段为请求标签（MDC 兜底，
+     * 仅在第 4 段在场时输出——段位固定不可跳位）。
+     */
+    private void emitSource(String mapperStatement) {
         String[] src = locateSource();
         if (src != null) {
-            System.out.println("SQLVIS-SOURCE|" + src[0] + "|" + src[1]);
+            StringBuilder sb = new StringBuilder("SQLVIS-SOURCE|")
+                    .append(src[0]).append('|').append(src[1]);
+            if (mapperStatement != null && !mapperStatement.isEmpty()) {
+                sb.append('|').append(mapperStatement);
+                String tag = requestTagFromMdc();
+                if (tag != null && !tag.isEmpty()) {
+                    sb.append('|').append(tag);
+                }
+            }
+            System.out.println(sb);
+        }
+    }
+
+    /** 反射读取 MDC 请求标签（org.slf4j.MDC.get("sqlvisRequestTag")），无 slf4j 时静默返回 null。 */
+    private String requestTagFromMdc() {
+        try {
+            Class<?> mdc = Class.forName("org.slf4j.MDC");
+            Object v = mdc.getMethod("get", String.class).invoke(null, "sqlvisRequestTag");
+            return v == null ? null : v.toString();
+        } catch (Throwable t) {
+            return null;
         }
     }
 
@@ -97,9 +124,13 @@ public class SqlSourceInterceptor implements InnerInterceptor {
         return null;
     }
 
-    /** 是否为拦截器自身（跳过，避免捕获到自己的位置）。 */
+    /**
+     * 是否为拦截器自身（跳过，避免捕获到自己的位置）。
+     * 用运行时类名而非生成期包名常量——用户拷贝/改包/改类名后自跳过依旧生效
+     * （历史缺陷：包名常量与运行类分叉时拦截器自身帧被当成调用点上报）。
+     */
     private boolean isSelf(String cn) {
-        return cn.equals("__BASE__.config.SqlSourceInterceptor");
+        return cn.equals(getClass().getName());
     }
 
     /** 取 str 中 delimiter 最后一次出现之前的子串（兼容 Java 8+，无 Kotlin 扩展方法）。 */

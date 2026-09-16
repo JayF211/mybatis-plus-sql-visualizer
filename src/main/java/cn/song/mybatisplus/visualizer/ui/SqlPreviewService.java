@@ -85,13 +85,14 @@ import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature;
 import cn.song.mybatisplus.visualizer.ui.gutter.HbmNamedQueryGutterLineMarkerProvider;
+import com.intellij.notification.Notification;
+import com.intellij.notification.NotificationType;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.components.Service;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.project.ProjectManager;
-import com.intellij.openapi.ui.Messages;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
@@ -2217,6 +2218,9 @@ public final class SqlPreviewService {
 
     private static final Logger LOG = Logger.getInstance(SqlPreviewService.class);
 
+    /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+    private static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
+
     /** 逻辑删除控制方法名（T-M20-05，MPJ 官方六方法）。 */
     private static final String METHOD_DISABLE_LOGIC_DEL = "disableLogicDel";
     private static final String METHOD_ENABLE_LOGIC_DEL = "enableLogicDel";
@@ -2251,9 +2255,20 @@ public final class SqlPreviewService {
      */
     public static void showResult(@NotNull Project project, @Nullable PreviewResult result, @Nullable String sourceLocation) {
         if (result == null) {
-            Messages.showInfoMessage(project,
-                    MpSqlVisualizerBundle.message("action.notFound.message"),
-                    MpSqlVisualizerBundle.message("action.notFound.title"));
+            // T-UiNative T-UN-02：未找到可转换 Wrapper 提示改轻通知（原模态弹窗——纯告知无需打断）；
+            // 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）
+            if (!ApplicationManager.getApplication().isUnitTestMode()) {
+                try {
+                    new Notification(
+                            NOTIFICATION_GROUP_ID,
+                            MpSqlVisualizerBundle.message("action.notFound.title"),
+                            MpSqlVisualizerBundle.message("action.notFound.message"),
+                            NotificationType.INFORMATION
+                    ).notify(project);
+                } catch (Throwable ignored) {
+                    // headless 无通知系统依赖，与原 runCatching 等价
+                }
+            }
             return;
         }
         // 关旧开新：旧弹窗 dispose 级联释放面板（rehost 监听随之移除），再开新弹窗
@@ -2308,6 +2323,23 @@ public final class SqlPreviewService {
                 result = null;
             }
             final PreviewResult r = result;
+            // T-ExecSlowOps F2：确定性 SQL（无参数开关/批量/XML 模型）预览成功即后台预热
+            // exec 临时文件（写盘→refresh→方言映射→findFile→填缓存槽），弹窗打开后
+            // prepareDefaultConsole 命中缓存，EDT 冷路径（refresh+findFile 慢操作 SEVERE 本体）
+            // 退化为兜底。独立池线程 fire-and-forget——预热含 VFS refresh 有界耗时，不得推迟
+            // 弹窗；带参/批量/XML 预览 SQL 随面板勾选变化，预热内容不可信，跳过。
+            if (r != null && r.getPreviewModel() == null && r.getBatchModel() == null
+                    && r.getXmlModel() == null
+                    && (r.getFillClauses() == null || r.getFillClauses().isEmpty())
+                    && cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()) {
+                ApplicationManager.getApplication().executeOnPooledThread(() -> {
+                    try {
+                        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(project, r.getSql());
+                    } catch (Throwable t) {
+                        LOG.warn("[M36] exec prewarm dispatch failed: " + t.getClass().getSimpleName() + ": " + t.getMessage());
+                    }
+                });
+            }
             ApplicationManager.getApplication().invokeLater(() -> onResult.invoke(r));
         });
     }

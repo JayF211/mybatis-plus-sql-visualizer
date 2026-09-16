@@ -3,6 +3,8 @@ package cn.song.mybatisplus.visualizer.log;
 import javax.swing.JPanel;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors;
 import com.intellij.ui.SimpleTextAttributes;
 
 import java.awt.Color;
@@ -12,6 +14,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * {@code SqlLogPanel.kt} 顶层函数（{@code withTerminator} / {@code filterByType} / {@code filterBySearch} /
@@ -28,6 +31,43 @@ public final class SqlLogPanelKt {
         return (sql.isEmpty() || sql.endsWith(";")) ? sql : sql + ";";
     }
 
+    /**
+     * 右键菜单选中收敛（T-ListPreviewCopy）：命中行已在多选集合内 → 保留原多选（复制项=批量复制）；
+     * 否则收敛为命中行（右键=切换操作目标，与改造前无条件收敛单行等价）。纯函数可独立单测，
+     * 日志 tab 与历史 tab 右键菜单共用。
+     */
+    public static int[] resolveContextMenuSelection(int[] selectedIndices, int hitIndex) {
+        for (int sel : selectedIndices) {
+            if (sel == hitIndex) {
+                return selectedIndices;
+            }
+        }
+        return new int[]{hitIndex};
+    }
+
+    /**
+     * 批量复制文本（T-ListPreviewCopy）：选中条目升序逐条 {@link #withTerminator} 后 {@code "\n"} 拼接——
+     * 与 JBList 内置 Ctrl+C 多选拼接链路（itemToText 逐条 + join("\n")）逐字节同构，
+     * 右键批量复制与键盘复制两条入口产物一致。
+     */
+    public static String batchCopySql(List<LogSqlEntry> entries) {
+        StringBuilder sb = new StringBuilder();
+        for (LogSqlEntry it : entries) {
+            if (sb.length() > 0) {
+                sb.append('\n');
+            }
+            sb.append(withTerminator(it.restoredSql()));
+        }
+        return sb.toString();
+    }
+
+    /** 复制菜单项文案（T-ListPreviewCopy）：多选带条数走 {@code selectedKey}（{0}=条数），单选沿用 {@code baseKey}。 */
+    public static String copyMenuText(String baseKey, String selectedKey, int count) {
+        return count > 1
+                ? MpSqlVisualizerBundle.message(selectedKey, String.valueOf(count))
+                : MpSqlVisualizerBundle.message(baseKey);
+    }
+
     // ---------- T-LogListFreeze：列表刷新分批常量 ----------
 
     /** 首屏立即写入条数（保证快速首屏，EDT 冻结可控）。 */
@@ -38,6 +78,21 @@ public final class SqlLogPanelKt {
 
     /** 同步增量追加条数上限：超过则回退全量重建（全量重建带分批 EDT 写入，大批量更稳）。 */
     public static final int MAX_SYNC_APPEND = 300;
+
+    /** 排序方式下拉项（文案 + 模式）。 */
+    public record SortOption(String label, SortMode mode) {
+    }
+
+    /** 排序方式选项（顺序即下拉序；默认项在首位 = 时间升序）。 */
+    public static List<SortOption> sortOptions() {
+        List<SortOption> options = new ArrayList<>();
+        options.add(new SortOption(MpSqlVisualizerBundle.message("log.sort.time.asc"), SortMode.TIME_ASC));
+        options.add(new SortOption(MpSqlVisualizerBundle.message("log.sort.time.desc"), SortMode.TIME_DESC));
+        options.add(new SortOption(MpSqlVisualizerBundle.message("log.sort.duration.asc"), SortMode.DURATION_ASC));
+        options.add(new SortOption(MpSqlVisualizerBundle.message("log.sort.duration.desc"), SortMode.DURATION_DESC));
+        options.add(new SortOption(MpSqlVisualizerBundle.message("log.sort.sequence"), SortMode.SEQUENCE));
+        return options;
+    }
 
     /** 类型多选弹窗可勾选的类型（OTHER 不单列；全选时 OTHER 一并透传）。 */
     public static final List<StatementType> FILTERABLE_TYPES = List.of(
@@ -69,18 +124,128 @@ public final class SqlLogPanelKt {
     /**
      * 搜索过滤（纯逻辑，可独立单测）：查询词忽略大小写 contains，匹配还原 SQL 与摘要
      * （摘要含参数值的还原 SQL 前缀；参数值是常见检索目标）；空白查询透传全部。
+     *
+     * <p>T-LogSearchRowTime 扩展：
+     * <ul>
+     * <li>行号——{@code #5} / {@code 5} 精确 equals {@link LogSqlEntry#sequenceNumber()}（渲染形态 {@code #123}，所见即可搜；
+     *   精确而非 contains：搜 {@code 1} 不应命中全部 1xx 行；0 = 无行号条目天然不命中任何行号查询）</li>
+     * <li>时间——对显示片段（{@link #timestampDisplayText}，含方括号与设置格式，所见即所搜）contains；
+     *   显示开关关闭时片段为 null，时间分支天然不参与</li>
+     * </ul>
+     * {@code timestampTextOf} 可注入（测试绕开设置读取），默认取当前设置下的真实显示片段。
      */
-    public static List<LogSqlEntry> filterBySearch(List<LogSqlEntry> entries, String query) {
+    public static List<LogSqlEntry> filterBySearch(List<LogSqlEntry> entries, String query,
+            Function<LogSqlEntry, String> timestampTextOf) {
         String q = query.trim();
         if (q.isEmpty()) {
             return entries;
         }
-        String ql = q.toLowerCase(Locale.ENGLISH);
+        Long rowNumber = null;
+        String rowRaw = q.startsWith("#") ? q.substring(1) : q;
+        try {
+            long parsed = Long.parseLong(rowRaw);
+            if (parsed > 0) {
+                rowNumber = parsed;
+            }
+        } catch (NumberFormatException ignored) {
+            // 非纯数字查询 → 行号维度不参与
+        }
         List<LogSqlEntry> result = new ArrayList<>();
         for (LogSqlEntry it : entries) {
-            if (it.restoredSql().toLowerCase(Locale.ENGLISH).contains(ql)
-                    || it.summary().toLowerCase(Locale.ENGLISH).contains(ql)) {
+            boolean match = containsIgnoreCase(it.restoredSql(), q)
+                    || containsIgnoreCase(it.summary(), q)
+                    || (rowNumber != null && it.sequenceNumber() == rowNumber)
+                    || (timestampTextOf != null
+                        && timestampDisplayTextSafe(timestampTextOf, it, q));
+            if (match) {
                 result.add(it);
+            }
+        }
+        return result;
+    }
+
+    /** 免注入重载：默认取当前设置下的真实显示片段（{@link #timestampDisplayText}）。 */
+    public static List<LogSqlEntry> filterBySearch(List<LogSqlEntry> entries, String query) {
+        return filterBySearch(entries, query, SqlLogPanelKt::timestampDisplayText);
+    }
+
+    private static boolean containsIgnoreCase(String text, String q) {
+        return text != null && text.toLowerCase(Locale.ROOT).contains(q.toLowerCase(Locale.ROOT));
+    }
+
+    private static boolean timestampDisplayTextSafe(Function<LogSqlEntry, String> timestampTextOf,
+            LogSqlEntry entry, String q) {
+        String text = timestampTextOf.apply(entry);
+        return text != null && containsIgnoreCase(text, q);
+    }
+
+    /**
+     * 时间显示片段文本（T-LogSearchRowTime）：{@code [yyyy-MM-dd HH:mm:ss]} 形态（去段间距尾随空格），
+     * 与列表渲染逐字节一致（所见即所搜/所复制的单一真源——格式/来源/开关语义全在
+     * {@link #formatTimestampFragment}）；开关关闭返回 null（页面上没有时间片段可搜可复制）。
+     */
+    public static String timestampDisplayText(LogSqlEntry entry) {
+        kotlin.Pair<String, SimpleTextAttributes> fragment = formatTimestampFragment(entry);
+        return fragment == null ? null : fragment.getFirst().trim();
+    }
+
+    /**
+     * 批量复制时间戳（T-LogSearchRowTime）：显示片段去方括号（用户定调：复制出纯时间文本
+     * {@code 2024-01-15 10:30:45}，不带显示装饰括号）逐行拼接，与 {@link #batchCopySql} 同构；
+     * 显示开关关闭时片段为 null 被跳过——全部关闭时返回空串（菜单项据此置灰）。
+     */
+    public static String batchCopyTimestamps(List<LogSqlEntry> entries) {
+        StringBuilder sb = new StringBuilder();
+        for (LogSqlEntry it : entries) {
+            String text = timestampDisplayText(it);
+            if (text == null) {
+                continue;
+            }
+            if (text.startsWith("[") && text.endsWith("]") && text.length() >= 2) {
+                text = text.substring(1, text.length() - 1);
+            }
+            if (sb.length() > 0) {
+                sb.append('\n');
+            }
+            sb.append(text);
+        }
+        return sb.toString();
+    }
+
+    // ---------- M56 T-M56-00：动态聚焦页签过滤 ----------
+
+    /**
+     * M56 T-M56-00：动态聚焦页签过滤层（纯逻辑，插在 {@link #filterByType} 与 {@link #filterBySearch} 之间）。
+     * {@code method} 匹配 {@link LogSqlEntry#mapperStatement()}（agent 通道直取 / 桥通道标记第 4 段，
+     * 忽略大小写）；{@code requestTag} 精确匹配 {@link LogSqlEntry#requestTag()}。
+     * 双条件为「且」；null 维度透传；全 null 等价不过滤。T-M56-06 起 method 扩展真实方法边界
+     * {@code {Class}#{method}} 形态（届时在 {@link #focusMethodKey} 统一登记来源）。
+     */
+    public record FocusFilter(String method, String requestTag) {
+
+        /** 是否为空过滤（全维度 null = 透传）。 */
+        public boolean isPassthrough() {
+            return method == null && requestTag == null;
+        }
+    }
+
+    /** 条目的聚焦 method 键（当前 = mapper 语句 id；T-M56-06 扩展真实方法边界）。 */
+    public static String focusMethodKey(LogSqlEntry entry) {
+        return entry.mapperStatement();
+    }
+
+    public static List<LogSqlEntry> filterByFocus(List<LogSqlEntry> entries, FocusFilter focus) {
+        if (focus == null || focus.isPassthrough()) {
+            return entries;
+        }
+        List<LogSqlEntry> result = new ArrayList<>();
+        for (LogSqlEntry e : entries) {
+            boolean methodOk = focus.method() == null
+                    || (focusMethodKey(e) != null && focusMethodKey(e).equalsIgnoreCase(focus.method()));
+            boolean tagOk = focus.requestTag() == null
+                    || focus.requestTag().equals(e.requestTag());
+            if (methodOk && tagOk) {
+                result.add(e);
             }
         }
         return result;
@@ -184,31 +349,25 @@ public final class SqlLogPanelKt {
 
     // ---------- 列表渲染辅助（T-LogListFreeze-04 片段通道；渲染器与 SqlLogPanel 共用） ----------
 
-    /** 元信息灰（时间戳/来源/徽章；与原 HTML 通道 #9E9E9E 一致）。 */
+    /** 元信息灰（时间戳/来源/徽章；与原 HTML 通道 #9E9E9E 一致）。T-UN-13（T-UiNative）：改 namedColor，亮值不变。 */
     public static final SimpleTextAttributes LIST_META_GRAY =
-            new SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, new Color(0x9E9E9E));
+            new SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.META_GRAY);
 
     /**
-     * T-CrudColor：按标记形态应用「色条 / 整行淡背景 + 选中描边」——<b>两个列表渲染器共用</b>（§1.2.1）。
+     * T-CrudColor：按标记形态应用「色条 / 整行淡背景」——<b>两个列表渲染器共用</b>（§1.2.1）。
      *
      * 三分支：
      *  - 关闭 / OTHER（tint = null）→ 与改造前逐字节一致；
-     *  - {@link SqlListTypeColor#STYLE_BAR} → 色条着色，单元格背景仍走平台选中填充（色条不受影响，选中不丢色）；
-     *  - {@link SqlListTypeColor#STYLE_BACKGROUND} → 底色与列表背景混色（选中时提高比例），<b>不铺</b>平台选中填充，
-     *    选中由「描边 + 色调加深」共同表达。
-     *
-     * selectedBorder 预建后此处只切引用 + 改色（{@link SqlListSelectionOutline#setColor}），热路径零分配；
-     * 描边色经 {@link SqlListTypeColor#ensureOutlineContrast}——暗色主题下 selectionBackground
-     * （#2E436E）压在加深后的行底色上几乎不可见，必须提亮。
+     *  - {@link SqlListTypeColor#STYLE_BAR} → 色条着色，单元格背景走平台选中填充（色条不受影响，选中不丢色）；
+     *  - {@link SqlListTypeColor#STYLE_BACKGROUND} → <b>未选中</b>行底色与列表背景淡混色（类型标记）；
+     *    选中行交给平台选中填充（T-UN-09 描边退役——自研选中视觉整体下线，不再干预 Border）。
      */
     public static void applyCrudColorMark(
             JPanel cell,
             JPanel colorBar,
             javax.swing.border.Border normalBorder,
-            SqlListSelectionOutline selectedBorder,
             Color tint,
             boolean isSelected,
-            boolean cellHasFocus,
             javax.swing.JList<?> list) {
         Color listBg = list != null ? list.getBackground() : cell.getBackground();
         Color selectionBg = list != null ? list.getSelectionBackground() : listBg;
@@ -226,31 +385,10 @@ public final class SqlLogPanelKt {
             }
             case SqlListTypeColor.STYLE_BACKGROUND: {
                 setOpaqueIfChanged(colorBar, false);
-                if (tint == null) {
-                    setBorderIfChanged(cell, normalBorder);
-                    setBackgroundIfChanged(cell, isSelected ? selectionBg : listBg);
-                } else {
-                    setBackgroundIfChanged(
-                            cell,
-                            SqlListTypeColor.blend(
-                                    listBg,
-                                    tint,
-                                    isSelected ? SqlListTypeColor.MIX_SELECTED : SqlListTypeColor.MIX_NORMAL));
-                    if (isSelected) {
-                        Color raw = cellHasFocus
-                                ? selectionBg
-                                : javax.swing.UIManager.getColor("List.selectionInactiveBackground");
-                        if (raw == null) {
-                            raw = selectionBg;
-                        }
-                        // setColor 只改字段、不触发 Swing 属性变更（无 repaint 副作用），故无需守卫
-                        selectedBorder.setColor(
-                                SqlListTypeColor.ensureOutlineContrast(raw, SqlListTypeColor.brightnessOf(listBg) < 0.5));
-                        setBorderIfChanged(cell, selectedBorder);
-                    } else {
-                        setBorderIfChanged(cell, normalBorder);
-                    }
-                }
+                setBorderIfChanged(cell, normalBorder);
+                setBackgroundIfChanged(cell, isSelected ? selectionBg
+                        : (tint == null ? listBg
+                        : SqlListTypeColor.blend(listBg, tint, SqlListTypeColor.MIX_NORMAL)));
                 break;
             }
             default: { // STYLE_OFF
@@ -296,17 +434,28 @@ public final class SqlLogPanelKt {
         }
     }
 
-    /** 时间戳片段：未开启时间戳返回 null。片段文本带尾随空格做段间距（原 HTML span 尾空格语义）。 */
-    public static kotlin.Pair<String, SimpleTextAttributes> formatTimestampFragment(long timestamp) {
+    /**
+     * 时间戳片段（T-LogSearchRowTime 收口为条目级）：未开启时间戳返回 null。
+     * 片段文本带尾随空格做段间距（原 HTML span 尾空格语义）；时间来源跟随设置
+     * （「日志时间」源且条目有原始日志时间时用之，否则捕获时间）——排序口径 displayTimeOf 同规则。
+     */
+    public static kotlin.Pair<String, SimpleTextAttributes> formatTimestampFragment(LogSqlEntry entry) {
         PluginSettings.State state = PluginSettings.getInstance().getState();
         if (!state.getLogTimestampEnabled()) {
             return null;
         }
+        long ts;
+        if (PluginSettings.LOG_TIMESTAMP_SOURCE_LOG.equals(state.getLogTimestampSource())
+                && entry.logTimestamp() != null) {
+            ts = entry.logTimestamp();
+        } else {
+            ts = entry.timestamp();
+        }
         String formatted;
         try {
-            formatted = new SimpleDateFormat(state.getLogTimestampFormat()).format(new Date(timestamp));
+            formatted = new SimpleDateFormat(state.getLogTimestampFormat()).format(new Date(ts));
         } catch (IllegalArgumentException e) {
-            formatted = new SimpleDateFormat(SqlLogPanel.DEFAULT_TIMESTAMP_FORMAT).format(new Date(timestamp));
+            formatted = new SimpleDateFormat(SqlLogPanel.DEFAULT_TIMESTAMP_FORMAT).format(new Date(ts));
         }
         return new kotlin.Pair<>("[" + formatted + "] ", LIST_META_GRAY);
     }
@@ -316,18 +465,57 @@ public final class SqlLogPanelKt {
         long threshold = PluginSettings.getInstance().getState().getSlowQueryThresholdMs();
         Color color;
         if (isSelected) {
-            color = new Color(0xFFFFFF);
+            // T-UN-13（T-UiNative）：五档写死色 → namedColor（亮值不变）
+            color = MpvsUiColors.DURATION_SELECTED;
         } else if (ms == null) {
-            color = new Color(0x9E9E9E);          // 灰：无耗时
+            color = MpvsUiColors.DURATION_NONE;             // 灰：无耗时
         } else if (ms >= threshold) {
-            color = new Color(0xD32F2F);     // 红：慢查询
+            color = MpvsUiColors.DURATION_SLOW;             // 红：慢查询
         } else if (ms >= threshold / 2) {
-            color = new Color(0xE67E22); // 橙：偏慢
+            color = MpvsUiColors.DURATION_WARN;             // 橙：偏慢
         } else {
-            color = new Color(0x4CAF50);                // 绿：正常
+            color = MpvsUiColors.DURATION_OK;               // 绿：正常
         }
         String text = (ms != null) ? (ms + "ms") : "—";
         return new kotlin.Pair<>(text + " ", new SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color));
+    }
+
+    /** M56 T-M56-02：增强捕获角标已按用户要求移除（增强为默认通道，逐行标来源属噪音）。 */
+
+    /** T-AgentDialectLoop：目标库角标（agent 通道由连接 URL 推断）；未知返回 null 不显示。 */
+    public static kotlin.Pair<String, SimpleTextAttributes> formatDatabaseFragment(LogSqlEntry entry, boolean isSelected) {
+        String db = entry.databaseName();
+        if (db == null) {
+            return null;
+        }
+        Color color = isSelected ? new Color(0xFFFFFF) : new Color(0x00695C);
+        return new kotlin.Pair<>("[" + db + "] ", new SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color));
+    }
+
+    /** M56 T-M56-05：影响行数片段（DML 语义；null 未知不显示）。 */
+    public static kotlin.Pair<String, SimpleTextAttributes> formatUpdateCountFragment(LogSqlEntry entry, boolean isSelected) {
+        Long u = entry.updateCount();
+        if (u == null) {
+            return null;
+        }
+        // 负值 = 无有效计数（JDBC getUpdateCount 的 -1 语义；旧版 agent 会误报 -1）→ 不显示
+        if (u < 0) {
+            return null;
+        }
+        Color color = isSelected ? new Color(0xFFFFFF) : new Color(0x607D8B);
+        return new kotlin.Pair<>("(" + u + " rows) ", new SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color));
+    }
+
+    /** M56 T-M56-05：报错片段（errorText 同列展示；红字截断首段，悬停完整文本在预览窗）。 */
+    public static kotlin.Pair<String, SimpleTextAttributes> formatErrorFragment(LogSqlEntry entry) {
+        String err = entry.errorText();
+        if (err == null) {
+            return null;
+        }
+        String oneLine = err.replaceAll("\\s+", " ");
+        String text = oneLine.length() > 80 ? oneLine.substring(0, 80) + "…" : oneLine;
+        return new kotlin.Pair<>("⛔ " + text + " ",
+                new SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, new Color(0xD32F2F)));
     }
 
     /** 来源片段：未知来源返回 null；选中态走组件前景（selectionForeground），非选中灰。 */

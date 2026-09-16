@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.config;
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors;
 import com.intellij.icons.AllIcons;
 import com.intellij.ide.DataManager;
 import com.intellij.openapi.options.Configurable;
@@ -9,33 +10,31 @@ import com.intellij.openapi.options.ex.Settings;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.project.ProjectManager;
 import com.intellij.ui.DoubleClickListener;
-import com.intellij.ui.JBColor;
 import com.intellij.ui.SearchTextField;
+import com.intellij.ui.SimpleColoredComponent;
+import com.intellij.ui.SimpleTextAttributes;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBList;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.util.ui.JBUI;
-import com.intellij.util.ui.UIUtil;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Cursor;
-import java.awt.Font;
-import java.awt.GridBagConstraints;
-import java.awt.GridBagLayout;
+import java.awt.GridLayout;
 import java.awt.event.MouseEvent;
 import java.util.List;
 import java.util.Locale;
 import javax.swing.AbstractButton;
 import javax.swing.BorderFactory;
-import javax.swing.DefaultListCellRenderer;
 import javax.swing.DefaultListModel;
 import javax.swing.Icon;
 import javax.swing.JComponent;
 import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.ListSelectionModel;
+import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.border.Border;
@@ -54,6 +53,10 @@ import org.jetbrains.annotations.NotNull;
  *  - 搜索时显示匹配的设置项（名称 + 所属页面 + 当前值预览）
  */
 public class PluginSettingsFolderConfigurable implements Configurable {
+
+    /** 落地页描述灰（T-UN-20：与日志页 LIST_META_GRAY / 历史页 HISTORY_META_GRAY 同源 namedColor，亮值 0x9E9E9E）。 */
+    private static final SimpleTextAttributes SETTINGS_DESC_GRAY =
+        new SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.META_GRAY);
 
     private final SearchTextField searchField = new SearchTextField();
     private final DefaultListModel<SearchItem> listModel = new DefaultListModel<>();
@@ -294,9 +297,10 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         boolean originalOpaque = comp.isOpaque();
         Border originalBorder = comp.getBorder();
 
-        final Color flash = new JBColor(0xFFFAE6, 0x3A3320);
+        // T-UN-13（T-UiNative）：闪黄两色 → namedColor（亮/暗值均原样平移）
+        final Color flash = MpvsUiColors.HIGHLIGHT_BACKGROUND;
         comp.setOpaque(true);
-        comp.setBorder(BorderFactory.createLineBorder(new JBColor(0xE6C068, 0x6B5B2E), 2));
+        comp.setBorder(BorderFactory.createLineBorder(MpvsUiColors.HIGHLIGHT_BORDER, 2));
 
         int[] count = {0};
         Timer timer = new Timer(250, ev -> {
@@ -411,8 +415,41 @@ public class PluginSettingsFolderConfigurable implements Configurable {
      * 列表渲染器 — 参考 IDEA 原生设置风格。
      * 子页面：图标 + 名称（粗体）+ 描述（灰色小字）
      * 设置项：图标 + 名称 + 所属页面路径
+     *
+     * <p>T-UN-20（T-UiNative）：行渲染归一 {@link SimpleColoredComponent} 片段通道——与日志页
+     * LogEntryListCellRenderer、历史页 HistoryCellRenderer 同款双行结构（名称行在上、描述行在下），
+     * GridBag 行内面板拼接退役。选中态走平台选中填充（背景取列表选中色、文本随 selectionForeground），
+     * 不再自绘选中背景/描边；固定 56px 行高由 list.fixedCellHeight 承担，渲染器只管内容。
      */
-    private static class SearchItemRenderer extends DefaultListCellRenderer {
+    private static final class SearchItemRenderer extends JPanel implements javax.swing.ListCellRenderer<Object> {
+
+        /** 名称行（internal 供测试遍历片段断言文本与着色）。 */
+        final SimpleColoredComponent nameLine = new SimpleColoredComponent();
+
+        /** 描述行（internal 供测试遍历片段断言文本与着色）。 */
+        final SimpleColoredComponent descLine = new SimpleColoredComponent();
+
+        private final JPanel linesPanel = new JPanel(new GridLayout(0, 1));
+
+        private final JBLabel iconLabel = new JBLabel();
+
+        private SearchItemRenderer() {
+            super(new BorderLayout());
+            setOpaque(true);
+            nameLine.setOpaque(false);
+            descLine.setOpaque(false);
+            descLine.setBorder(new EmptyBorder(JBUI.insetsTop(2))); // 原两行间距
+            linesPanel.setOpaque(false);
+            linesPanel.add(nameLine);
+            linesPanel.add(descLine);
+            // 原 GridBag NORTHWEST 锚点语义：图标顶对齐（BorderLayout.WEST 纵向拉伸后需显式置顶）
+            iconLabel.setBorder(new EmptyBorder(JBUI.insetsRight(12)));
+            iconLabel.setVerticalAlignment(SwingConstants.TOP);
+            add(iconLabel, BorderLayout.WEST);
+            add(linesPanel, BorderLayout.CENTER);
+            setBorder(new EmptyBorder(JBUI.insets(8, 16)));
+            setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        }
 
         @Override
         public Component getListCellRendererComponent(JList<?> list,
@@ -421,106 +458,43 @@ public class PluginSettingsFolderConfigurable implements Configurable {
                                                       boolean isSelected,
                                                       boolean cellHasFocus) {
             if (!(value instanceof SearchItem)) {
-                return super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                iconLabel.setIcon(null);
+                nameLine.clear();
+                descLine.clear();
+                return this;
             }
             SearchItem item = (SearchItem) value;
 
-            Color bg = isSelected
-                ? (list != null ? list.getSelectionBackground() : null)
-                : (list != null ? list.getBackground() : null);
+            // 平台选中填充：背景/前景取列表（选中）色，不自绘选中视觉（与日志/历史页渲染器同款）
+            Color listBg = list != null ? list.getBackground() : getBackground();
+            setBackground(isSelected
+                ? (list != null && list.getSelectionBackground() != null ? list.getSelectionBackground() : listBg)
+                : listBg);
             Color fg = isSelected
-                ? (list != null ? list.getSelectionForeground() : null)
-                : (list != null ? list.getForeground() : null);
+                ? (list != null && list.getSelectionForeground() != null ? list.getSelectionForeground() : getForeground())
+                : (list != null ? list.getForeground() : getForeground());
 
+            nameLine.setForeground(fg);
+            descLine.setForeground(fg);
+            nameLine.clear();
+            descLine.clear();
             if (item instanceof SearchItem.PageItem) {
-                return renderPageItem((SearchItem.PageItem) item, bg, fg, isSelected);
+                SearchItem.PageItem page = (SearchItem.PageItem) item;
+                iconLabel.setIcon(page.icon);
+                nameLine.append(MpSqlVisualizerBundle.message(page.labelKey), SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES);
+                descLine.append(MpSqlVisualizerBundle.message(page.descKey), descAttributes(isSelected));
+            } else {
+                SearchItem.FieldItem field = (SearchItem.FieldItem) item;
+                iconLabel.setIcon(AllIcons.Actions.Search);
+                nameLine.append(field.fieldLabel, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES);
+                descLine.append(MpSqlVisualizerBundle.message(field.pageLabelKey), descAttributes(isSelected));
             }
-            return renderFieldItem((SearchItem.FieldItem) item, bg, fg, isSelected);
+            return this;
         }
 
-        private static Component renderPageItem(SearchItem.PageItem item, Color bg, Color fg, boolean isSelected) {
-            JPanel panel = new JPanel(new GridBagLayout());
-            panel.setBackground(bg);
-            panel.setOpaque(true);
-            panel.setBorder(new EmptyBorder(JBUI.insets(8, 16)));
-            panel.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-
-            // 图标
-            JBLabel iconLabel = new JBLabel(item.icon);
-            iconLabel.setBorder(new EmptyBorder(JBUI.insetsRight(12)));
-
-            // 名称 + 描述
-            String name = MpSqlVisualizerBundle.message(item.labelKey);
-            String desc = MpSqlVisualizerBundle.message(item.descKey);
-
-            JPanel textPanel = new JPanel(new GridBagLayout());
-            textPanel.setOpaque(false);
-
-            JBLabel nameLabel = new JBLabel(name);
-            nameLabel.setFont(JBUI.Fonts.label().deriveFont(Font.BOLD));
-            nameLabel.setForeground(fg);
-
-            JBLabel descLabel = new JBLabel(desc);
-            descLabel.setFont(JBUI.Fonts.smallFont());
-            descLabel.setForeground(isSelected ? fg : UIUtil.getContextHelpForeground());
-
-            textPanel.add(nameLabel, new GridBagConstraints(
-                0, 0, 1, 1, 1.0, 0.0,
-                GridBagConstraints.WEST, GridBagConstraints.HORIZONTAL, JBUI.emptyInsets(), 0, 0));
-            textPanel.add(descLabel, new GridBagConstraints(
-                0, 1, 1, 1, 1.0, 0.0,
-                GridBagConstraints.WEST, GridBagConstraints.HORIZONTAL, JBUI.insetsTop(2), 0, 0));
-
-            panel.add(iconLabel, new GridBagConstraints(
-                0, 0, 1, 1, 0.0, 0.0,
-                GridBagConstraints.NORTHWEST, GridBagConstraints.NONE, JBUI.emptyInsets(), 0, 0));
-            panel.add(textPanel, new GridBagConstraints(
-                1, 0, 1, 1, 1.0, 0.0,
-                GridBagConstraints.WEST, GridBagConstraints.HORIZONTAL, JBUI.emptyInsets(), 0, 0));
-
-            return panel;
-        }
-
-        private static Component renderFieldItem(SearchItem.FieldItem item, Color bg, Color fg, boolean isSelected) {
-            JPanel panel = new JPanel(new GridBagLayout());
-            panel.setBackground(bg);
-            panel.setOpaque(true);
-            panel.setBorder(new EmptyBorder(JBUI.insets(8, 16)));
-            panel.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-
-            // 图标
-            JBLabel iconLabel = new JBLabel(AllIcons.Actions.Search);
-            iconLabel.setBorder(new EmptyBorder(JBUI.insetsRight(12)));
-
-            // 字段名 + 所属页面
-            String pageName = MpSqlVisualizerBundle.message(item.pageLabelKey);
-
-            JPanel textPanel = new JPanel(new GridBagLayout());
-            textPanel.setOpaque(false);
-
-            JBLabel fieldLabel = new JBLabel(item.fieldLabel);
-            fieldLabel.setFont(JBUI.Fonts.label().deriveFont(Font.BOLD));
-            fieldLabel.setForeground(fg);
-
-            JBLabel pathLabel = new JBLabel(pageName);
-            pathLabel.setFont(JBUI.Fonts.smallFont());
-            pathLabel.setForeground(isSelected ? fg : UIUtil.getContextHelpForeground());
-
-            textPanel.add(fieldLabel, new GridBagConstraints(
-                0, 0, 1, 1, 1.0, 0.0,
-                GridBagConstraints.WEST, GridBagConstraints.HORIZONTAL, JBUI.emptyInsets(), 0, 0));
-            textPanel.add(pathLabel, new GridBagConstraints(
-                0, 1, 1, 1, 1.0, 0.0,
-                GridBagConstraints.WEST, GridBagConstraints.HORIZONTAL, JBUI.insetsTop(2), 0, 0));
-
-            panel.add(iconLabel, new GridBagConstraints(
-                0, 0, 1, 1, 0.0, 0.0,
-                GridBagConstraints.NORTHWEST, GridBagConstraints.NONE, JBUI.emptyInsets(), 0, 0));
-            panel.add(textPanel, new GridBagConstraints(
-                1, 0, 1, 1, 1.0, 0.0,
-                GridBagConstraints.WEST, GridBagConstraints.HORIZONTAL, JBUI.emptyInsets(), 0, 0));
-
-            return panel;
+        /** 描述行着色：未选中用元信息灰；选中随 selectionForeground（REGULAR）保证可读——与日志页 meta 灰同款。 */
+        private static SimpleTextAttributes descAttributes(boolean isSelected) {
+            return isSelected ? SimpleTextAttributes.REGULAR_ATTRIBUTES : SETTINGS_DESC_GRAY;
         }
     }
 

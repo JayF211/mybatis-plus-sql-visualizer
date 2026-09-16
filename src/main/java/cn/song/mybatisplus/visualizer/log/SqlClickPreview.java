@@ -1,14 +1,15 @@
 package cn.song.mybatisplus.visualizer.log;
 
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
 import com.intellij.icons.AllIcons;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.EditorFactory;
 import com.intellij.openapi.editor.colors.EditorColorsManager;
 import com.intellij.openapi.editor.ex.EditorEx;
 import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter;
-import com.intellij.openapi.ide.CopyPasteManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.popup.JBPopup;
 import com.intellij.openapi.ui.popup.JBPopupFactory;
@@ -20,12 +21,10 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Point;
 import java.awt.Rectangle;
-import java.awt.datatransfer.StringSelection;
 import java.util.function.Consumer;
 import java.util.function.IntFunction;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
-import javax.swing.JComponent;
 import javax.swing.JPanel;
 import javax.swing.Timer;
 
@@ -42,6 +41,8 @@ import javax.swing.Timer;
  * - 单击落在空白区（无行/行下留白）：立即停表并关预览——不借旧选中复活预览（二轮用户反馈：
  *   点其他地方后未再单击 SQL，预览又出现）；
  * - 双击：停定时器 + 关旧预览（随后面板自行 openPreview 走完整弹窗）。
+ * - 多选进行中（Ctrl/Shift/拖框 ≥2 行）单击：不排程、已弹出的关闭（T-ListPreviewCopy 用户反馈：
+ *   同时选择多个 SQL 时不要再出现单击预览）；{@link #show} 到点时兜底复查，封 300ms 延迟窗内补选竞态。
  *
  * 弹窗形态：头部复制/关闭图标按钮 + SQL 高亮可编辑编辑器（三轮用户要求：高亮展示 +
  * 可临时改字段值再复制）。高亮走 {@link SqlListSyntaxHighlighter}（SqlLexer 分词 +
@@ -56,6 +57,16 @@ import javax.swing.Timer;
  * isScheduled/currentPopup 交互断言。
  */
 public class SqlClickPreview {
+
+    /**
+     * 单击预览浮层文本（T-ListPreviewCopy）：分号收尾 + 按设置「预览时格式化还原 SQL」
+     * （logFormatSql，默认开=默认格式化显示）决定是否 {@link SqlFormatter#format} 多行展开。
+     * 与双击弹窗 {@code toPreviewResult} 的 {@code formatIfNeeded(withTerminator(...))} 同序——
+     * 先补分号再格式化（生产已验证的分号处理路径）。纯函数，开关由调用方读设置传入。
+     */
+    static String clickPreviewSql(String sql, boolean formatSql) {
+        return formatSql ? SqlFormatter.format(SqlLogPanelKt.withTerminator(sql)) : SqlLogPanelKt.withTerminator(sql);
+    }
 
     private final Project project;
     private final javax.swing.JList<?> list;
@@ -79,9 +90,16 @@ public class SqlClickPreview {
         this.timer.addActionListener(e -> show());
     }
 
-    /** 列表单击处理：命中行才排程预览；空白区立即收表关预览；双击停表关旧预览。 */
+    /** 列表单击处理：命中行才排程预览；空白区立即收表关预览；双击停表关旧预览；多选进行中不排程。 */
     public void onClick(int clickCount, Point clickPoint) {
         if (clickCount >= 2) {
+            timer.stop();
+            hide();
+            return;
+        }
+        // T-ListPreviewCopy：多选（Ctrl/Shift/拖框 ≥2 行）时单击不再排程预览——多选操作被
+        // 逐行弹出的单行预览干扰；与空白区同语义：停表并关旧
+        if (list.getSelectedIndices().length > 1) {
             timer.stop();
             hide();
             return;
@@ -131,10 +149,14 @@ public class SqlClickPreview {
         return new Point(bounds.x, bounds.y + bounds.height + ANCHOR_GAP_PX);
     }
 
-    /** Timer 到点：对点击时捕获的行弹出预览（新弹前先关旧的）。 */
+    /** Timer 到点：对点击时捕获的行弹出预览（新弹前先关旧的）；已多选则放弃（延迟窗内补选竞态兜底）。 */
     private void show() {
         String sql = pendingSql;
         if (sql == null) return;
+        if (list.getSelectedIndices().length > 1) {
+            hide();
+            return;
+        }
         if (popup != null && popup.isVisible()) popup.cancel();
         JBPopup next = buildPopup(sql);
         popup = next;
@@ -151,7 +173,7 @@ public class SqlClickPreview {
         SqlClickPreviewContent content = buildContent(
                 project,
                 sql,
-                text -> CopyPasteManager.getInstance().setContents(new StringSelection(text)),
+                UiTextClipboard::copy,
                 this::hide
         );
         final Editor editor = content.editor();
@@ -228,7 +250,7 @@ public class SqlClickPreview {
         copyButton.setFocusable(false);
         copyButton.addActionListener(e -> {
             copyText.accept(editor.getDocument().getText()); // 复制当前内容（含用户编辑后文本）
-            flashCopied(copyButton); // 复制成功反馈：复制图标换对号，短暂后恢复
+            cn.song.mybatisplus.visualizer.ui.CopyFeedback.flashCopied(copyButton); // 复制成功反馈：复制图标换对号，短暂后恢复
         });
         JButton closeButton = new JButton(AllIcons.Actions.Close);
         closeButton.setToolTipText(MpSqlVisualizerBundle.message("log.preview.close"));
@@ -243,18 +265,5 @@ public class SqlClickPreview {
         panel.add(header, BorderLayout.NORTH);
         panel.add(editor.getComponent(), BorderLayout.CENTER);
         return new SqlClickPreviewContent(panel, editor);
-    }
-
-    /**
-     * 复制成功反馈：复制按钮图标短暂换成对号（AllIcons.Actions.Checked）再恢复，
-     * 用一次性 Timer（1500ms）复位——不引入常驻定时器，按钮复用即过期。
-     */
-    private static void flashCopied(JButton button) {
-        javax.swing.Icon copyIcon = button.getIcon();
-        button.setIcon(AllIcons.Actions.Checked);
-        Timer reset = new Timer(1500, null);
-        reset.setRepeats(false);
-        reset.addActionListener(e -> button.setIcon(copyIcon));
-        reset.start();
     }
 }

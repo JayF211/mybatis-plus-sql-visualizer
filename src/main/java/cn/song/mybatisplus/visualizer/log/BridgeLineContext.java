@@ -1,7 +1,5 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import kotlin.Pair;
-
 import java.util.function.Supplier;
 
 /**
@@ -15,7 +13,7 @@ final class BridgeLineContext {
     final HibernateLogParser hibernateParser;
     final JdbcTemplateLogParser jdbcParser;
     final Supplier<ParserConfig> configProvider;
-    Pair<String, Integer> pendingSource;
+    SourceMarkerData pendingSource;
     /** Hibernate 喂行开关（快照同步自 ParserConfig.hibernateEnabled）。 */
     boolean hibernateEnabled;
 

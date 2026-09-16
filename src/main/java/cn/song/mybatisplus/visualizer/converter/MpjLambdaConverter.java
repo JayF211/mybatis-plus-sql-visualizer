@@ -102,14 +102,23 @@ public final class MpjLambdaConverter implements WrapperConverter {
             }
             restCalls.add(c);
         }
-        SelectStatement base = new QueryWrapperParser(table, mainAlias)
-                .parse(new WrapperChain(chain.getWrapperType(), chain.getEntityClass(), restCalls, null, false, false, false, false, null));
-
         Map<String, TableInfo> aliasToTable = buildAliasToTable(joinCalls);
         Map<String, String> classToAlias = new HashMap<>();
         for (Map.Entry<String, TableInfo> e : aliasToTable.entrySet()) {
             classToAlias.put(e.getValue().getEntityClassName(), e.getKey());
         }
+
+        // T-MpjColAlias：MPJ 联表列归属——lambda 列接收者是关联实体（如
+        // select(StationInfoEntity::getStationName)）时，列按 join 解析出的关联别名归属
+        // （st.station_name）而非主表别名。QueryWrapperParser 的 columnPrefix 无条件补主表
+        // 别名（withTableAlias 仅空别名时补），不改解析器（单表/MPJ 共用语义不变），
+        // 在委托前重写调用树 ColumnArg 的 tableAlias，覆盖 select/条件/orderBy 全部列入口。
+        List<WrapperCall> attributedRest = new ArrayList<>();
+        for (WrapperCall c : restCalls) {
+            attributedRest.add(attributeJoinColumns(c, classToAlias, chain.getEntityClass()));
+        }
+        SelectStatement base = new QueryWrapperParser(table, mainAlias)
+                .parse(new WrapperChain(chain.getWrapperType(), chain.getEntityClass(), attributedRest, null, false, false, false, false, null));
 
         List<ColumnRef> selectAsColumns = new ArrayList<>();
         for (WrapperCall call : selectAsCalls) {
@@ -344,6 +353,79 @@ public final class MpjLambdaConverter implements WrapperConverter {
             map.put(alias, tableInfo);
         }
         return map;
+    }
+
+    /**
+     * T-MpjColAlias：委托 QueryWrapperParser 前重写调用树中的列别名归属——lambda 列接收者
+     * 实体类命中 join 关联映射（classToAlias）且非主实体类时，把 ColumnArg 列的 tableAlias
+     * 预置为 join 别名；解析器 columnPrefix（withTableAlias 仅空别名补前缀）保留既有归属，
+     * select/条件/orderBy/聚合全部列入口一并修正。
+     *
+     * 根因场景：`select(StationInfoEntity::getStationName)` 原被无条件补主表别名 →
+     * `t.station_name`（car_device_info 无此列，执行报 1054 Unknown column）。
+     * NestedArg 递归处理（and/or 嵌套 lambda 体内的关联列）；字符串列（ValueArg）已含
+     * 别名原样，不触碰。
+     */
+    private static WrapperCall attributeJoinColumns(
+            WrapperCall call, Map<String, String> classToAlias, String mainEntityClass) {
+        if (classToAlias.isEmpty()) return call;
+        boolean changed = false;
+        List<WrapperArg> newArgs = new ArrayList<>();
+        for (WrapperArg arg : call.getArgs()) {
+            if (arg instanceof WrapperArg.ColumnArg columnArg) {
+                ColumnRef attributed = attributeColumn(columnArg.getColumn(), classToAlias, mainEntityClass);
+                if (attributed != columnArg.getColumn()) {
+                    changed = true;
+                    newArgs.add(new WrapperArg.ColumnArg(attributed));
+                } else {
+                    newArgs.add(arg);
+                }
+            } else if (arg instanceof WrapperArg.NestedArg nestedArg) {
+                WrapperChain oldChain = nestedArg.getChain();
+                List<WrapperCall> newCalls = new ArrayList<>();
+                for (WrapperCall inner : oldChain.getCalls()) {
+                    newCalls.add(attributeJoinColumns(inner, classToAlias, mainEntityClass));
+                }
+                if (!newCalls.equals(oldChain.getCalls())) {
+                    changed = true;
+                    newArgs.add(new WrapperArg.NestedArg(new WrapperChain(
+                            oldChain.getWrapperType(), oldChain.getEntityClass(), newCalls,
+                            oldChain.getConstructorAlias(), oldChain.isDeleteConsumed(), oldChain.isCountConsumed(),
+                            oldChain.isExistsConsumed(), oldChain.isUpdateEntityConsumed(), oldChain.getPageLimit())));
+                } else {
+                    newArgs.add(arg);
+                }
+            } else if (arg instanceof WrapperArg.FuncArg funcArg) {
+                List<ColumnRef> cols = new ArrayList<>();
+                boolean colsChanged = false;
+                for (ColumnRef col : funcArg.getColumns()) {
+                    ColumnRef attributed = attributeColumn(col, classToAlias, mainEntityClass);
+                    if (attributed != col) colsChanged = true;
+                    cols.add(attributed);
+                }
+                if (colsChanged) {
+                    changed = true;
+                    newArgs.add(funcArg.copy(cols, funcArg.getValues()));
+                } else {
+                    newArgs.add(arg);
+                }
+            } else {
+                newArgs.add(arg);
+            }
+        }
+        return changed ? call.copy(call.getMethodName(), newArgs) : call;
+    }
+
+    /** 单列归属：仅无别名 lambda 列、接收者实体类 ≠ 主实体类、且命中 join 映射时改写（self-join 主列保主表）。 */
+    private static ColumnRef attributeColumn(ColumnRef column, Map<String, String> classToAlias, String mainEntityClass) {
+        String receiver = column.getEntityClass();
+        if (receiver == null) return column;
+        if (column.getTableAlias() != null) return column;
+        if (receiver.equals(mainEntityClass)) return column;
+        String alias = classToAlias.get(receiver);
+        if (alias == null) return column;
+        return column.copy(alias, column.getColumnName(), column.getAlias(), column.getFunction(),
+                column.getRawExpr(), column.getEntityClass(), column.getType());
     }
 
     /** 解析 selectSub → 子查询列。 */

@@ -18,6 +18,11 @@ public class SqlEntryList extends JBList<LogSqlEntry> {
 
     @Override
     public String itemToText(int index, LogSqlEntry element) {
+        return textFor(element);
+    }
+
+    /** 速度搜索与 Ctrl+C 复制共用的条目文本。 */
+    public String textFor(LogSqlEntry element) {
         return SqlLogPanelKt.withTerminator(element.restoredSql());
     }
 }

@@ -142,6 +142,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private boolean logAutoOpenOnCapture = true;
         private boolean logTimestampEnabled = true;
         private String logTimestampFormat = DEFAULT_LOG_TIMESTAMP_FORMAT;
+        /** 时间戳显示模式：log=日志时间（默认），capture=捕获时间。 */
+        private String logTimestampSource = DEFAULT_LOG_TIMESTAMP_SOURCE;
         private boolean logFormatSql = true;
         /**
          * 字面量参数恢复（T-HistParam F4，默认开）：日志 SQL 无 `?` 占位符（裸 SQL 捕获 /
@@ -219,6 +221,30 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          * 需求池报告邮箱（选填，仅用于官方回复推送通知，不公开）。
          */
         private String reportSubmitterEmail = "";
+
+        // ---------- M56 增强捕获（agent 字节码通道；对用户不出现 agent 字样） ----------
+
+        /**
+         * M56 T-M56-08：增强捕获开关（**默认开**——2026-09-16 用户定案，增强捕获为主通道）。
+         * 开启且经注入确认后，agent 接管捕获源（参数实参直取/精确耗时/影响行数/报错同列/
+         * 精确跳转）；attach 不可用/连接丢失自动回落现有控制台捕获，零劣化。
+         * 注：本项默认开而 {@code enhancedCaptureConfirmed} 默认 false——首次挂载（项目运行）时弹一次
+         * 注入确认，同意后才真正 attach（知情同意不放宽，见 AgentManager 的首次挂载确认请求）。
+         */
+        private boolean enhancedCaptureEnabled = true;
+
+        /**
+         * M56 T-M56-08：注入确认记忆（确认后置 true，不再重复弹）。
+         * 关闭增强不重置本值（重开不再弹）；确认对话框含采集范围/数据留本机/JEP 451 告警预告。
+         * 默认 false：配合 enabled 默认开，首次运行项目时弹一次（设置页手动勾选时亦可确认）。
+         */
+        private boolean enhancedCaptureConfirmed = false;
+
+        /**
+         * M56 T-M56-08：脱敏开关（**默认关**——2026-09-16 用户定案，默认采集真实参数值）。
+         * true 时对疑似敏感形态打码；脱敏在 agent 采集层执行，数据不出应用 JVM 前已处理。
+         */
+        private boolean enhancedCaptureDesensitize = false;
 
         public String getDialect() { return dialect; }
         public void setDialect(String dialect) { this.dialect = dialect; }
@@ -321,6 +347,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public String getLogTimestampFormat() { return logTimestampFormat; }
         public void setLogTimestampFormat(String logTimestampFormat) { this.logTimestampFormat = logTimestampFormat; }
 
+        public String getLogTimestampSource() { return logTimestampSource; }
+        public void setLogTimestampSource(String logTimestampSource) { this.logTimestampSource = logTimestampSource; }
+
         public boolean getLogFormatSql() { return logFormatSql; }
         public void setLogFormatSql(boolean logFormatSql) { this.logFormatSql = logFormatSql; }
 
@@ -413,6 +442,15 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public String getReportSubmitterEmail() { return reportSubmitterEmail; }
         public void setReportSubmitterEmail(String reportSubmitterEmail) { this.reportSubmitterEmail = reportSubmitterEmail; }
 
+        public boolean getEnhancedCaptureEnabled() { return enhancedCaptureEnabled; }
+        public void setEnhancedCaptureEnabled(boolean enhancedCaptureEnabled) { this.enhancedCaptureEnabled = enhancedCaptureEnabled; }
+
+        public boolean getEnhancedCaptureConfirmed() { return enhancedCaptureConfirmed; }
+        public void setEnhancedCaptureConfirmed(boolean enhancedCaptureConfirmed) { this.enhancedCaptureConfirmed = enhancedCaptureConfirmed; }
+
+        public boolean getEnhancedCaptureDesensitize() { return enhancedCaptureDesensitize; }
+        public void setEnhancedCaptureDesensitize(boolean enhancedCaptureDesensitize) { this.enhancedCaptureDesensitize = enhancedCaptureDesensitize; }
+
         /** 浅拷贝（仅复制字段引用/值；供持久化 loadState 触发引用变化）。 */
         @NotNull
         public State copy() {
@@ -450,6 +488,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.logAutoOpenOnCapture = logAutoOpenOnCapture;
             c.logTimestampEnabled = logTimestampEnabled;
             c.logTimestampFormat = logTimestampFormat;
+            c.logTimestampSource = logTimestampSource;
             c.logFormatSql = logFormatSql;
             c.literalParamRecovery = literalParamRecovery;
             c.logFilterKeywords = logFilterKeywords;
@@ -480,6 +519,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.autoInjectSqlSourceInterceptor = autoInjectSqlSourceInterceptor;
             c.reportSubmitterName = reportSubmitterName;
             c.reportSubmitterEmail = reportSubmitterEmail;
+            c.enhancedCaptureEnabled = enhancedCaptureEnabled;
+            c.enhancedCaptureConfirmed = enhancedCaptureConfirmed;
+            c.enhancedCaptureDesensitize = enhancedCaptureDesensitize;
             return c;
         }
 
@@ -503,6 +545,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && logStopOnToolWindowClose == that.logStopOnToolWindowClose
                     && logAutoOpenOnCapture == that.logAutoOpenOnCapture
                     && logTimestampEnabled == that.logTimestampEnabled
+                    && Objects.equals(logTimestampSource, that.logTimestampSource)
                     && logFormatSql == that.logFormatSql
                     && literalParamRecovery == that.literalParamRecovery
                     && logAutoSaveEnabled == that.logAutoSaveEnabled
@@ -517,6 +560,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && historyMaxSize == that.historyMaxSize
                     && autoFoldFieldThreshold == that.autoFoldFieldThreshold
                     && autoInjectSqlSourceInterceptor == that.autoInjectSqlSourceInterceptor
+                    && enhancedCaptureEnabled == that.enhancedCaptureEnabled
+                    && enhancedCaptureConfirmed == that.enhancedCaptureConfirmed
+                    && enhancedCaptureDesensitize == that.enhancedCaptureDesensitize
                     && Objects.equals(dialect, that.dialect)
                     && Objects.equals(language, that.language)
                     && Objects.equals(logicDeleteValue, that.logicDeleteValue)
@@ -562,13 +608,14 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     tablePrefix, tableSuffix, tableNameInference, ignoredFields, removeTablePrefix, removeTableSuffix,
                     autoCheckUpdate, ignoredUpdateVersions, reverseWrapperFormat, reverseManualEntitySelection,
                     logSqlPrefix, logParamPrefix, logMixedPrefix, logAutoCaptureOnStart, logAutoCaptureSuppressed,
-                    logStopOnToolWindowClose, logAutoOpenOnCapture, logTimestampEnabled, logTimestampFormat,
+                    logStopOnToolWindowClose, logAutoOpenOnCapture, logTimestampEnabled, logTimestampFormat, logTimestampSource,
                     logFormatSql, literalParamRecovery, logFilterKeywords, logDedupeWindowMs, logMaxParseLength, logMaxCount,
                     logAutoSaveEnabled, logAutoSavePath, logAutoSaveFileNamePattern, logTimePrefix, slowQueryThresholdMs, showDurationInLogList,
                     crudColorStyle, crudColorSelect, crudColorInsert, crudColorUpdate, crudColorDelete, logListSqlDisplayMode,
                     paramHistoryJson, logHibernateEnabled, logHibernateSqlPrefix, logHibernateParamPrefix, logJdbcEnabled,
                     dynamicTableNameRules, dataPermissionHint, dataPermissionMockCondition, historyMaxSize,
-                    autoInjectSqlSourceInterceptor, reportSubmitterName, reportSubmitterEmail);
+                    autoInjectSqlSourceInterceptor, reportSubmitterName, reportSubmitterEmail,
+                    enhancedCaptureEnabled, enhancedCaptureConfirmed, enhancedCaptureDesensitize);
         }
 
         @Override
@@ -614,6 +661,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
     public static final String DEFAULT_LOG_SQL_PREFIX = "Preparing:";
     public static final String DEFAULT_LOG_PARAM_PREFIX = "Parameters:";
     public static final String DEFAULT_LOG_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss";
+    public static final String DEFAULT_LOG_TIMESTAMP_SOURCE = "log";
+    public static final String LOG_TIMESTAMP_SOURCE_LOG = "log";
+    public static final String LOG_TIMESTAMP_SOURCE_CAPTURE = "capture";
     public static final long DEFAULT_LOG_DEDUPE_WINDOW_MS = 60000L;
     public static final int DEFAULT_LOG_MAX_PARSE_LENGTH = 20000;
     public static final int DEFAULT_LOG_MAX_COUNT = 200;

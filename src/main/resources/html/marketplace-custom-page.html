@@ -158,7 +158,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
   <li><b>控制台 SQL 日志实时捕获</b>：支持 MyBatis / Hibernate / JdbcTemplate 三种日志格式，去重过滤、精确跳转源码</li>
   <li><b>SQL 反向转 Java</b>：一键生成可直接编译的 QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 代码</li>
   <li><b>JOIN 关系图与执行</b>：IDE 原生 ER 图渲染（PNG / SVG 导出）；内嵌原生 Database 控制台直接执行 SQL（Ultimate）</li>
-  <li><b>CRUD SQL 一步直出</b>：实体类 / 数据库表右键生成 INSERT / UPDATE / SELECT / DELETE，列勾选、乐观锁与逻辑删除自动适配</li>
+  <li><b>CRUD SQL 一步直出</b>：实体类 / 项目视图实体节点 / 数据库表右键生成 INSERT / UPDATE / SELECT / DELETE，列勾选、乐观锁与逻辑删除自动适配</li>
   <li><b>触发零门槛</b>：代码左侧 gutter 图标 / 右键菜单 / <code>Alt+Shift+Q</code></li>
 </ul>
 <!-- ========== TAGLINE ========== -->
@@ -266,6 +266,11 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
       <td>单行 / 关键字换行 / 格式化三种显示，SQL 行数随模式伸缩；模式跨会话保留</td>
     </tr>
     <tr>
+      <td>多选批量复制 <span class="tag tag-new">New</span></td>
+      <td>Ctrl / Shift 多选后右键</td>
+      <td>一次性复制全部选中 SQL，逐条分号收尾换行拼接；多选期间单击不再误弹预览浮层</td>
+    </tr>
+    <tr>
       <td>历史与源码定位 <span class="tag tag-new">New</span></td>
       <td>侧边栏「SQL 历史」tab / 双击条目</td>
       <td>历史自动保存、两级导航；精确跳到触发 SQL 的 Service / Controller 行</td>
@@ -286,7 +291,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
   <tbody>
     <tr>
       <td>CRUD SQL 生成 <span class="tag tag-new">New</span></td>
-      <td>实体类 / Database 工具窗表节点右键一步生成 INSERT / UPDATE / SELECT / DELETE；
+      <td>实体类 / 项目视图实体节点 / Database 工具窗表节点右键一步生成 INSERT / UPDATE / SELECT / DELETE；
           列勾选重建、自增主键默认不勾、乐观锁与逻辑删除自动适配</td>
     </tr>
     <tr>

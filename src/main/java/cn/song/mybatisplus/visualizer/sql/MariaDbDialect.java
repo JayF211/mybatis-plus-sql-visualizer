@@ -41,6 +41,6 @@ public final class MariaDbDialect implements Dialect {
 
     @Override
     public String renderExplainStatement(String sql) {
-        return "EXPLAIN FORMAT=JSON " + sql;
+        return "EXPLAIN " + sql;
     }
 }

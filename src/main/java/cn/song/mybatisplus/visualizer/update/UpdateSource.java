@@ -8,12 +8,28 @@ package cn.song.mybatisplus.visualizer.update;
  * 草稿请写 [update/preview.update.json]（不参与检查），发布时复制到 [update/update.json]。
  *
  * 系统属性 `mpvs.update.manifest.url` 可覆盖清单 URL（沙盒/本地 HTTP server 验证用，
- * 与项目「发布前本地验证」惯例一致）。
+ * 与项目「发布前本地验证」惯例一致；内网私有通道亦复用此入口，见 README「内网与离线环境」）。
+ *
+ * 注意：该属性在<b>进程启动时读取一次</b>——manifestUrl 首次调用触发本类初始化，
+ * 覆盖值随即固化；启动后修改 {@code -D} 不生效，须重启 IDE。
  */
 public final class UpdateSource {
 
+    private static final com.intellij.openapi.diagnostic.Logger LOG =
+            com.intellij.openapi.diagnostic.Logger.getInstance(UpdateSource.class);
+
     public static final UpdateSource INSTANCE = new UpdateSource();
     private UpdateSource() {}
+
+    /**
+     * 换源生效时的诊断日志（T-Intranet-01）：仅在被覆盖时打印一行，默认路径静默。
+     * 内网运维排查「配了内网源却仍在打 Gitee」时由此处定位；类初始化保证单次。
+     */
+    public static void logOverrideIfAny(String url) {
+        if (!DEFAULT_MANIFEST_URL.equals(url)) {
+            LOG.info("update manifest url overridden by system property: " + url);
+        }
+    }
 
     /** 插件 id（与 plugin.xml `<id>` 一致；安装/卸载判定与下载文件命名共用）。 */
     public static final String PLUGIN_ID = "cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer";

@@ -6,9 +6,10 @@ import cn.song.mybatisplus.visualizer.sql.Dialect;
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.util.PluginBuildInfo;
-import cn.song.mybatisplus.visualizer.log.InjectionResult;
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
+import cn.song.mybatisplus.visualizer.log.SourceCaptureGuide;
+import cn.song.mybatisplus.visualizer.log.SqlListDisplayMode;
 import cn.song.mybatisplus.visualizer.log.SqlListTypeColor;
-import cn.song.mybatisplus.visualizer.log.SqlSourceInterceptorAutoInjector;
 import cn.song.mybatisplus.visualizer.util.PluginCacheManager;
 import com.intellij.openapi.actionSystem.ActionManager;
 import com.intellij.openapi.actionSystem.AnAction;
@@ -21,7 +22,6 @@ import com.intellij.openapi.fileChooser.FileChooser;
 import com.intellij.openapi.fileChooser.FileChooserDescriptor;
 import com.intellij.openapi.fileChooser.FileChooserFactory;
 import com.intellij.openapi.fileChooser.FileSaverDescriptor;
-import com.intellij.openapi.ide.CopyPasteManager;
 import com.intellij.openapi.keymap.KeymapManager;
 import com.intellij.openapi.keymap.KeymapUtil;
 import com.intellij.openapi.project.Project;
@@ -37,6 +37,7 @@ import com.intellij.ui.JBColor;
 import com.intellij.ui.TitledSeparator;
 import com.intellij.ui.components.JBCheckBox;
 import com.intellij.ui.components.JBLabel;
+import com.intellij.ui.components.JBRadioButton;
 import com.intellij.ui.components.JBTextField;
 import com.intellij.util.ui.JBUI;
 import java.awt.BorderLayout;
@@ -62,6 +63,7 @@ import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.swing.ButtonGroup;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
@@ -304,6 +306,53 @@ public class PluginSettingsPanel {
         return null;
     }
 
+    /**
+     * T-DisplayModeToSettings：SQL 列表显示模式下拉项（value=SqlListDisplayMode.name）。
+     * 与 {@link LanguageOption} 同理必须按 value 判等（JDK17 `JComboBox.setSelectedItem` 按 equals 匹配）。
+     */
+    private static final class ListDisplayModeOption {
+
+        final String value;
+        final String label;
+
+        ListDisplayModeOption(String value, String label) {
+            this.value = value;
+            this.label = label;
+        }
+
+        @Override
+        public String toString() {
+            return label;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof ListDisplayModeOption)) return false;
+            return Objects.equals(value, ((ListDisplayModeOption) o).value);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hashCode(value);
+        }
+    }
+
+    private static ListDisplayModeOption[] listDisplayModeOptions() {
+        return new ListDisplayModeOption[]{
+            new ListDisplayModeOption(SqlListDisplayMode.SINGLE_LINE.name(), MpSqlVisualizerBundle.message("log.list.displayMode.single")),
+            new ListDisplayModeOption(SqlListDisplayMode.KEYWORD_WRAP.name(), MpSqlVisualizerBundle.message("log.list.displayMode.keywordWrap")),
+            new ListDisplayModeOption(SqlListDisplayMode.FORMATTED.name(), MpSqlVisualizerBundle.message("log.list.displayMode.formatted")),
+        };
+    }
+
+    private static ListDisplayModeOption listDisplayModeOptionByValue(String value) {
+        for (ListDisplayModeOption option : listDisplayModeOptions()) {
+            if (Objects.equals(option.value, value)) return option;
+        }
+        return null;
+    }
+
     // ---------- T-CrudColor 颜色控件辅助 ----------
 
     /** 当前下拉选中的样式值（空选兜默认——与渲染器 styleOf 的兜底保持一致）。 */
@@ -312,6 +361,14 @@ public class PluginSettingsPanel {
         return selected instanceof CrudColorStyleOption
             ? ((CrudColorStyleOption) selected).value
             : PluginSettings.CRUD_COLOR_STYLE_BAR;
+    }
+
+    /** 当前下拉选中的显示模式值（空选兜默认——与 PluginSettings.sqlListDisplayMode 的兜底一致）。 */
+    private String selectedListDisplayMode() {
+        Object selected = logDisplayModeCombo.getSelectedItem();
+        return selected instanceof ListDisplayModeOption
+            ? ((ListDisplayModeOption) selected).value
+            : PluginSettings.DEFAULT_LOG_LIST_DISPLAY_MODE;
     }
 
     /** 色板 → `#RRGGBB`（未选色 → 空串，渲染侧按默认色处理）。 */
@@ -357,6 +414,17 @@ public class PluginSettingsPanel {
 
     /** 字面量参数恢复开关（T-HistParam，默认开）：无 `?` 占位符的日志 SQL 把字符串字面量识别为参数。 */
     private final JBCheckBox literalParamRecoveryCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.literalParamRecovery"));
+
+    // ---------- M56 T-M56-08：增强捕获（agent 字节码通道；对用户不出现 agent 字样） ----------
+
+    /** 增强捕获开关（默认关）：开启时弹注入确认对话框（JEP 451 预告 + 数据留本机说明）。 */
+    private final JBCheckBox enhancedCaptureCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture"));
+
+    /** 脱敏开关（默认开）：对疑似敏感形态打码，agent 采集层执行。 */
+    private final JBCheckBox enhancedDesensitizeCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize"));
+
+    /** 增强捕获状态行：已挂载 pid=x / 已回落控制台捕获 / 连接中。 */
+    private final JBLabel enhancedStatusLabel = new JBLabel(" ");
 
     /** gutter 预览 SQL 图标开关（M10）。 */
     private final JBCheckBox gutterIconCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"));
@@ -433,6 +501,9 @@ public class PluginSettingsPanel {
     private final JBCheckBox logStopOnToolWindowCloseCheck = new JBCheckBox();
     private final JBCheckBox logTimestampCheck = new JBCheckBox();
     private final JBTextField logTimestampFormatField = new JBTextField(12);
+    private final JBRadioButton logTimestampSourceLogRadio = new JBRadioButton();
+    private final JBRadioButton logTimestampSourceCaptureRadio = new JBRadioButton();
+    private final ButtonGroup logTimestampSourceGroup = new ButtonGroup();
     private final JBCheckBox logFormatSqlCheck = new JBCheckBox();
     private final JBTextField logFilterKeywordsField = new JBTextField(12);
     private final JBTextField logDedupeField = new JBTextField(12);
@@ -461,6 +532,10 @@ public class PluginSettingsPanel {
     // ---------- T-CrudColor：SQL 列表 CRUD 类型颜色标记 ----------
     /** 标记形态下拉（色条 / 整行淡背景 / 关闭）。 */
     private final JComboBox<CrudColorStyleOption> crudColorStyleCombo = new ComboBox<>();
+
+    /** T-DisplayModeToSettings：SQL 列表显示模式（SQL 日志 + SQL 历史两列表共享一键）。 */
+    private final JComboBox<ListDisplayModeOption> logDisplayModeCombo = new ComboBox<>();
+
     /** 四类型色板（平台原生 ColorPanel，点击弹出取色器）。 */
     private final ColorPanel crudColorSelectPanel = new ColorPanel();
     private final ColorPanel crudColorInsertPanel = new ColorPanel();
@@ -639,6 +714,18 @@ public class PluginSettingsPanel {
                 addRow(p, g, "", logTimestampCheck);
                 logTimestampFormatField.setToolTipText(msg("settings.log.timestampFormat.tip"));
                 addRow(p, g, msg("settings.log.timestampFormat"), logTimestampFormatField);
+                // 时间来源单选组（日志时间 / 捕获时间）
+                logTimestampSourceLogRadio.setText(msg("settings.log.timestampSource.log"));
+                logTimestampSourceLogRadio.setToolTipText(msg("settings.log.timestampSource.log.tip"));
+                logTimestampSourceCaptureRadio.setText(msg("settings.log.timestampSource.capture"));
+                logTimestampSourceCaptureRadio.setToolTipText(msg("settings.log.timestampSource.capture.tip"));
+                logTimestampSourceGroup.add(logTimestampSourceLogRadio);
+                logTimestampSourceGroup.add(logTimestampSourceCaptureRadio);
+                JPanel timestampSourcePanel = new JPanel();
+                timestampSourcePanel.setOpaque(false);
+                timestampSourcePanel.add(logTimestampSourceLogRadio);
+                timestampSourcePanel.add(logTimestampSourceCaptureRadio);
+                addRow(p, g, msg("settings.log.timestampSource"), timestampSourcePanel);
                 logFormatSqlCheck.setText(msg("settings.log.formatSql"));
                 addRow(p, g, "", logFormatSqlCheck);
                 logFilterKeywordsField.setToolTipText(msg("settings.log.filterKeywords.tip"));
@@ -657,6 +744,13 @@ public class PluginSettingsPanel {
                 logShowDurationCheck.setText(msg("settings.log.showDuration"));
                 logShowDurationCheck.setToolTipText(msg("settings.log.showDuration.tip"));
                 addRow(p, g, "", logShowDurationCheck);
+            });
+
+            // T-DisplayModeToSettings：SQL 列表显示模式（SQL 日志 + SQL 历史 两列表共享一键，设置页唯一入口）
+            sectionGroup(panel, gbc, "settings.log.tab.list", (p, g) -> {
+                logDisplayModeCombo.setModel(new DefaultComboBoxModel<>(listDisplayModeOptions()));
+                logDisplayModeCombo.setToolTipText(msg("log.list.displayMode.tip"));
+                addRow(p, g, msg("log.list.displayMode"), logDisplayModeCombo);
             });
 
             // T-CrudColor：SQL 列表 CRUD 类型颜色标记（样式 + 四色；不新增复选框，保持复选框台账不变）
@@ -758,6 +852,23 @@ public class PluginSettingsPanel {
                     }
                 });
                 addRow(p2, g2, "", autoInjectInterceptorCheck);
+                // M56 T-M56-08：增强捕获设置（捕获通道类设置与源码位置捕获同组）
+                enhancedCaptureCheck.setText(msg("settings.enhancedCapture"));
+                enhancedCaptureCheck.addActionListener(e -> {
+                    if (enhancedCaptureCheck.isSelected()
+                            && !PluginSettings.getInstance().getState().getEnhancedCaptureConfirmed()) {
+                        // T-M56-08：首次启用弹注入确认（确认记忆持久化，重开不弹）
+                        if (EnhancedCaptureConfirmDialog.confirm(null)) {
+                            PluginSettings.getInstance().getState().setEnhancedCaptureConfirmed(true);
+                        } else {
+                            enhancedCaptureCheck.setSelected(false);
+                        }
+                    }
+                });
+                addRow(p2, g2, "", enhancedCaptureCheck);
+                enhancedDesensitizeCheck.setText(msg("settings.enhancedCapture.desensitize"));
+                addRow(p2, g2, "", enhancedDesensitizeCheck);
+                addRow(p2, g2, "", enhancedStatusLabel);
             });
         }
 
@@ -809,8 +920,7 @@ public class PluginSettingsPanel {
                 JButton copyButton = new JButton(msg("settings.buildNumber.copy"));
                 copyButton.setEnabled(PluginBuildInfo.mpvBuild() != null);
                 copyButton.addActionListener(e -> {
-                    CopyPasteManager.getInstance().setContents(
-                        new java.awt.datatransfer.StringSelection(PluginBuildInfo.displayText()));
+                    UiTextClipboard.copy(PluginBuildInfo.displayText());
                     String original = copyButton.getText();
                     copyButton.setText(msg("settings.buildNumber.copied"));
                     Timer restore = new Timer(1200, ev -> copyButton.setText(original));
@@ -1147,6 +1257,21 @@ public class PluginSettingsPanel {
         crudColorStyleCombo.setSelectedItem(match);
     }
 
+    /** T-DisplayModeToSettings：显示模式下拉选择入口（测试用）——与用户选择同一路径。 */
+    public void selectListDisplayMode(String value) {
+        for (ListDisplayModeOption option : listDisplayModeOptions()) {
+            if (Objects.equals(option.value, value)) {
+                logDisplayModeCombo.setSelectedItem(option);
+                return;
+            }
+        }
+    }
+
+    /** T-DisplayModeToSettings：当前下拉选中值（测试断言 reset 回填用）。 */
+    public String currentListDisplayModeForTest() {
+        return selectedListDisplayMode();
+    }
+
     /** T-CrudColor：四色色板设置入口（测试用）——与用户取色同一路径。 */
     public void setCrudColor(String which, String hex) {
         Color color = colorOf(hex);
@@ -1217,15 +1342,11 @@ public class PluginSettingsPanel {
     // F-44-7：SqlSourceInterceptor 自动注入
     // ------------------------------------------------------------------
 
-    /** T-Perf-10：注入执行中标志（异步化后防重入——检测期间再次勾选不重复触发）。 */
-    private boolean injectionInProgress = false;
-
     /**
      * 触发拦截器注入（用户勾选开关后调用）。
      *
-     * <p>T-Perf-10：改走 injectAsync——检测阶段
-     * （AnnotatedElementsSearch/findClass/源码目录递归）后台 ReadAction 执行，EDT 不再长冻结；
-     * 结果弹窗在 EDT 回调展示（模态确认/结果类提示保留）。
+     * <p>T-JumpCapture：注入编排与四类结果弹窗收敛到 {@link SourceCaptureGuide}（与「跳转源码」
+     * 引导弹框共用，防重入亦在其中）；面板侧仅保留勾选回滚——仅它持有 checkbox。
      */
     private void triggerInterceptorInjection() {
         Project project = ProjectManager.getInstance().getOpenProjects().length > 0
@@ -1234,38 +1355,14 @@ public class PluginSettingsPanel {
         if (project == null) {
             Messages.showWarningDialog(
                     (Component) null,
-                    "请先打开一个项目，再启用源码捕获拦截器自动注入。",
-                    "源码跳转配置");
+                    MpSqlVisualizerBundle.message("log.inject.noProject"),
+                    MpSqlVisualizerBundle.message("log.inject.title"));
             autoInjectInterceptorCheck.setSelected(false);
             return;
         }
-        if (injectionInProgress) return;
-        injectionInProgress = true;
-        SqlSourceInterceptorAutoInjector.injectAsync(project, result -> {
-            injectionInProgress = false;
-            if (result instanceof InjectionResult.Success) {
-                Messages.showInfoMessage(
-                        project,
-                        ((InjectionResult.Success) result).getMessage(),
-                        "源码跳转配置");
-            } else if (result instanceof InjectionResult.AlreadyExists) {
-                Messages.showInfoMessage(
-                        project,
-                        "配置已存在，无需重复生成。如需重新生成，请手动删除 config 包下的 SqlSourceInterceptor.java 和 SqlVisualizerConfig.java。",
-                        "源码跳转配置");
-                autoInjectInterceptorCheck.setSelected(false);
-            } else if (result instanceof InjectionResult.UnsupportedProject) {
-                Messages.showWarningDialog(
-                        project,
-                        "无法识别项目类型。请确保项目是 Spring Boot + MyBatis-Plus 项目。\n\n"
-                                + "也可手动配置：参考 docs/instrumentation/SqlSourceInterceptor.kt",
-                        "源码跳转配置");
-                autoInjectInterceptorCheck.setSelected(false);
-            } else if (result instanceof InjectionResult.CannotDetectStructure) {
-                Messages.showWarningDialog(
-                        project,
-                        "无法检测项目结构。请确保项目存在 src/main/java 源码目录。",
-                        "源码跳转配置");
+        SourceCaptureGuide.runInjection(project, result -> {
+            boolean success = SourceCaptureGuide.showInjectionResult(project, result);
+            if (!success) {
                 autoInjectInterceptorCheck.setSelected(false);
             }
         });
@@ -1346,6 +1443,7 @@ public class PluginSettingsPanel {
             || logStopOnToolWindowCloseCheck.isSelected() != s.getLogStopOnToolWindowClose()
             || logTimestampCheck.isSelected() != s.getLogTimestampEnabled()
             || !logTimestampFormatField.getText().trim().equals(s.getLogTimestampFormat())
+            || !(logTimestampSourceLogRadio.isSelected() ? "log" : "capture").equals(s.getLogTimestampSource())
             || logFormatSqlCheck.isSelected() != s.getLogFormatSql()
             || !logFilterKeywordsField.getText().trim().equals(s.getLogFilterKeywords())
             || !Objects.equals(parseLongOrNull(logDedupeField.getText().trim()), s.getLogDedupeWindowMs())
@@ -1354,6 +1452,9 @@ public class PluginSettingsPanel {
             || !logTimePrefixField.getText().trim().equals(s.getLogTimePrefix())
             || !Objects.equals(parseLongOrNull(slowQueryThresholdField.getText().trim()), s.getSlowQueryThresholdMs())
             || logShowDurationCheck.isSelected() != s.getShowDurationInLogList()
+            // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
+            || enhancedCaptureCheck.isSelected() != s.getEnhancedCaptureEnabled()
+            || enhancedDesensitizeCheck.isSelected() != s.getEnhancedCaptureDesensitize()
             || logHibernateEnabledCheck.isSelected() != s.getLogHibernateEnabled()
             || !logHibernateSqlPrefixField.getText().trim().equals(s.getLogHibernateSqlPrefix())
             || !logHibernateParamPrefixField.getText().trim().equals(s.getLogHibernateParamPrefix())
@@ -1365,6 +1466,7 @@ public class PluginSettingsPanel {
             // T-CrudColor：仅改样式或仅改某个颜色也必须能启用 Apply
             // （reverseWrapperFormat 漏挂 isModified 导致改动被平台静默丢弃的假开关事故，此处防同类回归）
             || !Objects.equals(selectedCrudColorStyle(), s.getCrudColorStyle())
+            || !Objects.equals(selectedListDisplayMode(), s.getLogListSqlDisplayMode())
             || !Objects.equals(colorHexOf(crudColorSelectPanel), s.getCrudColorSelect())
             || !Objects.equals(colorHexOf(crudColorInsertPanel), s.getCrudColorInsert())
             || !Objects.equals(colorHexOf(crudColorUpdatePanel), s.getCrudColorUpdate())
@@ -1442,6 +1544,7 @@ public class PluginSettingsPanel {
             s.setLogStopOnToolWindowClose(logStopOnToolWindowCloseCheck.isSelected());
             s.setLogTimestampEnabled(logTimestampCheck.isSelected());
             s.setLogTimestampFormat(logTimestampFormatField.getText().trim());
+            s.setLogTimestampSource(logTimestampSourceLogRadio.isSelected() ? "log" : "capture");
             s.setLogFormatSql(logFormatSqlCheck.isSelected());
             s.setLogFilterKeywords(logFilterKeywordsField.getText().trim());
             Long dedupe = parseLongOrNull(logDedupeField.getText().trim());
@@ -1454,6 +1557,9 @@ public class PluginSettingsPanel {
             Long slowQuery = parseLongOrNull(slowQueryThresholdField.getText().trim());
             s.setSlowQueryThresholdMs(slowQuery != null ? slowQuery : PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS);
             s.setShowDurationInLogList(logShowDurationCheck.isSelected());
+            // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
+            s.setEnhancedCaptureEnabled(enhancedCaptureCheck.isSelected());
+            s.setEnhancedCaptureDesensitize(enhancedDesensitizeCheck.isSelected());
             s.setLogHibernateEnabled(logHibernateEnabledCheck.isSelected());
             s.setLogHibernateSqlPrefix(logHibernateSqlPrefixField.getText().trim());
             s.setLogHibernateParamPrefix(logHibernateParamPrefixField.getText().trim());
@@ -1467,6 +1573,8 @@ public class PluginSettingsPanel {
             s.setAutoInjectSqlSourceInterceptor(autoInjectInterceptorCheck.isSelected());
             // T-CrudColor：CRUD 颜色标记（样式 + 四色）
             s.setCrudColorStyle(selectedCrudColorStyle());
+            // T-DisplayModeToSettings：SQL 列表显示模式（apply 后经 SETTINGS_CHANGE_TOPIC 广播，两列表既有监听刷新）
+            s.setLogListSqlDisplayMode(selectedListDisplayMode());
             s.setCrudColorSelect(colorHexOf(crudColorSelectPanel));
             s.setCrudColorInsert(colorHexOf(crudColorInsertPanel));
             s.setCrudColorUpdate(colorHexOf(crudColorUpdatePanel));
@@ -1559,6 +1667,11 @@ public class PluginSettingsPanel {
             logStopOnToolWindowCloseCheck.setSelected(s.getLogStopOnToolWindowClose());
             logTimestampCheck.setSelected(s.getLogTimestampEnabled());
             logTimestampFormatField.setText(s.getLogTimestampFormat());
+            if ("capture".equals(s.getLogTimestampSource())) {
+                logTimestampSourceCaptureRadio.setSelected(true);
+            } else {
+                logTimestampSourceLogRadio.setSelected(true);
+            }
             logFormatSqlCheck.setSelected(s.getLogFormatSql());
             logFilterKeywordsField.setText(s.getLogFilterKeywords());
             logDedupeField.setText(String.valueOf(s.getLogDedupeWindowMs()));
@@ -1567,6 +1680,9 @@ public class PluginSettingsPanel {
             logTimePrefixField.setText(s.getLogTimePrefix());
             slowQueryThresholdField.setText(String.valueOf(s.getSlowQueryThresholdMs()));
             logShowDurationCheck.setSelected(s.getShowDurationInLogList());
+            // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
+            enhancedCaptureCheck.setSelected(s.getEnhancedCaptureEnabled());
+            enhancedDesensitizeCheck.setSelected(s.getEnhancedCaptureDesensitize());
             logHibernateEnabledCheck.setSelected(s.getLogHibernateEnabled());
             logHibernateSqlPrefixField.setText(s.getLogHibernateSqlPrefix());
             logHibernateParamPrefixField.setText(s.getLogHibernateParamPrefix());
@@ -1582,6 +1698,9 @@ public class PluginSettingsPanel {
             // T-CrudColor：CRUD 颜色标记控件回填
             CrudColorStyleOption crudStyle = crudColorStyleOptionByValue(s.getCrudColorStyle());
             crudColorStyleCombo.setSelectedItem(crudStyle != null ? crudStyle : crudColorStyleOptions()[0]);
+            // T-DisplayModeToSettings：显示模式下拉回填
+            ListDisplayModeOption displayMode = listDisplayModeOptionByValue(s.getLogListSqlDisplayMode());
+            logDisplayModeCombo.setSelectedItem(displayMode != null ? displayMode : listDisplayModeOptions()[0]);
             crudColorSelectPanel.setSelectedColor(colorOf(s.getCrudColorSelect()));
             crudColorInsertPanel.setSelectedColor(colorOf(s.getCrudColorInsert()));
             crudColorUpdatePanel.setSelectedColor(colorOf(s.getCrudColorUpdate()));

@@ -3,17 +3,54 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
-> **全局备份**：`~/.zcode/cli/memories/global/`（76 个通用文件）
-> **项目记忆**：保留 28 个核心文件 + MEMORY.md 索引（第七次精简后）
+> **全局备份**：`~/.zcode/cli/memories/global/`（85 个通用文件）
+> **项目记忆**：保留 27 个核心文件 + MEMORY.md 索引（第十次精简后）
 
 ---
 
-## 已修复 Bug（117 个）
+## 已修复 Bug（154 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [t-agent-dialect-loop.md](bug-fixes/t-agent-dialect-loop.md) | T-AgentDialectLoop 字节码增强全方言与日志时间闭环（M56 分支 564356b/e3603c1，20260916，agent 24 绿+主项目 4223/0/0/6 绿）：url 全链透传+目标库角标（JdbcUrlDialects 独立映射禁走 byName 未知回退 MySQL）+接管期日志时间嗅探回填（LogTimeCorrelator 512 FIFO 指纹）+JdbcTemplateLogParser 热点正则提常量；三沉淀=URLClassLoader 父优先遮蔽织入字节致测试空真（须子优先 loader，硬验收在 AttachGateTest）、测试保存值「finally 现读」还原恒失败串染后续类、LogSqlEntry 加构造字段陈旧产物劫持第八犯 |
+| [m37-series-closure.md](bug-fixes/m37-series-closure.md) | M37 竞品融合系列（P-立项-06）全章闭环核实（20260916，无待办）：M37.1/2/3 均 cherry-pick 移植进 master（新 SHA 25367457/ba303301，dev 原 SHA 不被 --contains 命中）；M37.4 Wrapper→测试资产生成实施后整体下线定案（静态骨架价值不足，重做方向=接真实测试框架）；M37.5 Flex 调研暂缓+M38 吸收已落地（锚点负例回归+81 场景金样修 6 个 MP 语义误报） |
+| [t-panorama-audit.md](bug-fixes/t-panorama-audit.md) | 全分支功能全景审计与长期演进（报告+四计划，master 93fe604/322ecfb，20260916）：八域资产×用户可见性，结论=功能深度过剩引导深度不足、短板全在第一次接触；立项 T-UxOnboard/T-ExplainIndex/T-BranchHygiene/T-PerfSweep3；K2J 线只有成本没进展（O-24 决策挂起）；N-20/N-21 市场动作随 N-17 窗口 |
+| [t-perf-round5-report.md](bug-fixes/t-perf-round5-report.md) | 第五轮性能复查（报告+T-PerfSweep3 立项，master 322ecfb，20260916）：默认零开销维持+T-PerfSweep2 六修复二遍实证全落地+FeedbackBatch2 防抖挂平台共享池；中低=JdbcTemplateLogParser:230 每行现场编译正则（一行修）；另 4 低含重放守卫/WrapperCache 两连续三轮在册 |
+| [t-competitive-round5.md](bug-fixes/t-competitive-round5.md) | 第五轮竞品横向对比（报告 master 071b892+十计划 8e4f485，20260916）：MyBatisX 1.7.7 包体解剖证伪盲区威胁（plugin.xml mcp/preview/explain 零命中、since 自收窄 251）；v2026.9.14 已过审上架 +13/日但 0 评论；DBX 清单 v4 #19~#26（#19 错误定位跳转 P0）+Marketplace API 口径沉淀；立项 T-MergeDev2Master 前置+N-18/N-19/O-15~O-21 |
+| [t-feedbackbatch2.md](bug-fixes/t-feedbackbatch2.md) | T-FeedbackBatch2 批量报告多次弹窗合并（merge 751759c，2026-09-15，4173/0/0/6 绿）：262 平台「报告全部」=reportAll 逐簇循环、reportMessage 恒造长度 1 事件数组（字节码实证）；修法=提交器 500ms debounce 累积合并+复合 consumer，批次 ≥2 才出分节；沉淀=javap 输出 CR 字节致 grep 二进制零匹配用 python、DialogWrapper 实例逻辑进 companion 才可 headless 测 |
+| [t-ui-native-research.md](bug-fixes/t-ui-native-research.md) | T-UiNative UI/功能原生化调研+四批次实施（t-uinative 分支 8 提交 eb2f289..b799afb，20260916，4147/0/0/6 绿）：剪贴板统一 UiTextClipboard/19 处模态换通知/OnePixelSplitter/右键 ActionGroup/ListSpeedSearch/选中描边退役/JOIN 图工具栏/33 色 MpvsUiColors/JBLoadingPanel/项目页 UI DSL 试点；四沉淀=243 类在 gradle transforms app-client.jar、CopyPasteManager headless 不回写系统剪贴板、BannedApiSourceScanTest 钦定 updateActionsImmediately、finally「现读还原」测试污染范式已修 |
+| [t-perfsweep2.md](bug-fixes/t-perfsweep2.md) | T-PerfSweep2 第四轮性能复查与六发现点收敛（merge 7edb2fb，2026-09-15，4103 绿）：六任务实施要点与三处修订（03 批量附件固定 8k 改半幅均分、05 自测抓出丢唤醒洞、04 补丁过滤按 hunk 拆提交）；沉淀=测试调生产网络路径必先接 sender seam、BasePlatformTestCase basePath=null 且 VirtualFile 抽象类不可代理、Bash 的 /tmp 对 python.exe 不可见 |
+| [t-releaseperf.md](bug-fixes/t-releaseperf.md) | T-ReleasePerf 发版链路提速（merge e8f0224，20260915）：合 master 后三目标 7m26s→3m06s（-58%）、smoke 35s 验证；releaseGate 一命令/verifyOnly；P2-2 诊断证伪；合并实战=零冲突、worktree remove 撞路径长度限 rm+prune 收尾 |
+| [t-fourplans-20260914.md](bug-fixes/t-fourplans-20260914.md) | 四计划批次交付（r2合流+MCP+PreviewUx+PerfTail，dev bd6e009，4244 绿+verifyGate exit 0 复验）：三大沉淀=跨版本桩按最小公共接口面建模（K2 兼容桥 253 悬空）、K2 SpillingKt 高阶 suspend 结构性发射、IPGP verifyPlugin 不采纳 CLI 豁免（verifyGate 直驱 CLI 为权威门禁）；CHANGELOG 合并条目会落错版本块必查 |
+| [t-intranet.md](bug-fixes/t-intranet.md) | T-Intranet 内网离线可用性审计（merge 3dd613f，4125/0/0/6 绿，20260916 核实）：默认配置内网完全可用，运行期仅 2 出口 4 调用点（更新/反馈通道）均降级不阻塞；无遥测/AI/内嵌 server/账号校验/驱动下载/DTD 联网；新发现=mpvs.update.manifest.url 只在进程启动时读一次（改 -D 需重启 IDE）；口径红线=禁写「完全不联外网」 |
+| [t-listparamcollect.md](bug-fixes/t-listparamcollect.md) | T-ListParamCollect JdbcTemplate 集合参数方括号（merge 9fcc20f，随 v2026.9.18-beta.1 链发行）：只在 IN 位置剥括号、非 IN 逐字节不变、不声称集合传参、零 i18n 键；预览走 restoredSql 回退分支故只改解析器不够；坑=探针文件与构建产物混淆自证循环+isInKeyword 折行变量读写错位 |
+| [t-mcp-toolset2.md](bug-fixes/t-mcp-toolset2.md) | T-McpToolset2 MCP 二期（dev f6533f7 快进合并，4421 绿，20260915）：工具 3→10+设置页门控（总开关+工具级）；一工具一 toolset 类；平台 per-tool 门控只有 toolset 粒度 isEnabled（getEnabledToolsets 每次重新求值即时生效）；七工具核心抽非 suspend 纯函数可测；mcpStub 须挂 testShardN classpath；顺手收口 fe11c97 合并回归三处 |
+| [t-competitive-round4-plans.md](bug-fixes/t-competitive-round4-plans.md) | 第四轮竞品应答七任务（N-16+O-9~O-14，dev c72bf1b，4410 绿 +143 例，20260915）：三处偏差定案与 JSqlParser 5.3 解析形状实证（ParenthesedExpressionList/UnsupportedStatement/Block） |
+| [t-shortcut-settings.md](bug-fixes/t-shortcut-settings.md) | T-ShortcutSettings 快捷键统一设置与 MCP 独立子页（69fac4b+fb64c51+105a9e4，20260915）：5 个插件快捷键收归独立设置节+MCP 独立子页（位列关于上方；平台 Configurable 类名 com.intellij.mcpserver.settings.McpServerSettingsConfigurable，262 jar javap 实证）；编译四坑（Class.forName 强转、runCatching&lt;Unit&gt;、FormBuilder.addSeparator 拒字符串、JBTextField 参为列数） |
+| [t-testperf2.md](bug-fixes/t-testperf2.md) | T-TestPerf2 全量测试一命令并行提速（merge 9e4a314，20260915，4081 绿）：testShards 一命令 3 片真并行 4m47s→2m05s 零用例改动；三大沉淀=build cache 用户级属性优先级覆盖项目（关闭落 settings buildCache.local 才生效）、分片类发现文件名≠类名改内容提取、剪贴板机器级互斥源码扫描亲和同片 |
+| [t-marketinternal.md](bug-fixes/t-marketinternal.md) | T-MarketInternal 插件市场内部API整改（merge 700cf0b，20260915，4081 绿）：262 Internal 6→0 与 for-removal 3→0 双清零；MessagePool 标注 262 才有（243 verifySmoke 盲区）、错误池候选整链删除、findElement 直取链尾 DbModelRegistry |
+| [t-competitive-round4.md](bug-fixes/t-competitive-round4.md) | 第四轮竞品对比（20260915-0123 报告）：N-12 MCP 三工具/N-13 四件套/r2 合流在 t-fourplans 集成链、「竞品 MCP 全空」失效（CodeHelperPro 校验我渲染）、DBX 增量 #14~#18（structuredContent 必须对象）、新建议 N-15/N-16+O-12~O-14 |
+| [t-competitive-round3.md](bug-fixes/t-competitive-round3.md) | 第三轮竞品对比：Marketplace 三连发过审下载翻倍、MCP 规划 N-12 主轨改平台 MCP Server 体系、N-14 平台 LLM API 已证伪、Analyzer 威胁低、评论新端点 comments；r2 分支债清账、t-m56-00/01 待合跟踪 |
+| [t-preview-exec-ds.md](bug-fixes/t-preview-exec-ds.md) | T-PreviewExecDs 预览补全/跨项目数据源（20260914，3978 绿）：Temp 预览文件+预热静默失败、cachedTempPsiFile 跨项目泄漏、console 被清扫 dispose 三根因与 F1~F5+P1-1~4 修复（预览文件迁项目内+内存 PSI 降级链）；P1-5 留二期 |
+| [t-feedbackerr.md](bug-fixes/t-feedbackerr.md) | T-FeedbackErr 上报失败可见性+T-FeedbackBatch 批量限流规避三轮（0f305b4/ed2f92e/4fd5ce4，4083 绿，20260914）：errorStream+服务端 message 优先、gzip 假失败根治（myGzip 默认 true）、2~5 条合并一帖+每 12 分钟错峰补发、附件 charset+BOM 双保险与乱码定性法、D1 诊断法；遗留=附件上传未端到端验证、FR-0023 测试帖待清 |
+| [t-feedbackdlg.md](bug-fixes/t-feedbackdlg.md) | T-FeedbackDlg 报告对话框缺陷三波（8ccb0ac/af01346/0b8c293，4025 绿，20260914）：堆栈勾选跳动 weighty 行须 toggleResizeDelta 高度补偿、手动形态堆栈自主输入+错误池按包名导入；红线=反馈 UI 别替用户自动决定 |
+| [t-explain-dbl.md](bug-fixes/t-explain-dbl.md) | T-ExplainDbl 执行计划 EXPLAIN 前缀双加 1064（merge 18b3f03，3980 绿，20260914）：执行链回写控制台文档后二次包装；Dialect 幂等包装 renderExplainStatementIdempotent；教训=包装 SQL 的按钮须幂等 |
+| [t-exec-slowops.md](bug-fixes/t-exec-slowops.md) | T-ExecSlowOps 线程化双 SEVERE（merge e2a7419，4028 绿，20260914）：DialectPreMapping 两段式映射单入口（BGT 读探测/首见 EDT+latch）+prewarmExecTempFile 挂 previewAsync+四缓存 @Volatile；守卫=setMapping 字面量单文件收口 |
+| [t-intrupg.md](bug-fixes/t-intrupg.md) | T-IntrUpg 旧拦截器自位污染防线与升级（9d09e56，4012 绿，20260914）：isInterceptorSelfPath 解析防线+needsInterceptorUpgrade 三条件纯函数+注入链升级执行；用户恢复=重新注入+应用重启 |
+| [t-jumppath.md](bug-fixes/t-jumppath.md) | T-JumpPath 多模块跳转三缺陷（merge 50a9cc7，4002 绿，20260914）：isSelf 运行时比对封自位污染、Resolver 三级解析补 sourceRoots、sameFile 段对齐封反查恒空、逐模块注入 successMulti |
+| [t-jumpcapture.md](bug-fixes/t-jumpcapture.md) | T-JumpCapture 跳转仅依赖捕获位置（merge 609a90d，3975 绿，20260914）：Wrapper 表名回退链整体删、缺位置 SourceCaptureGuide 三按钮引导弹框 |
+| [t-loghistoryrow-no-plan.md](bug-fixes/t-loghistoryrow-no-plan.md) | T-LogHistoryRowNo SQL 历史列表行号（master dee44ae，4020 绿，20260914）：parseContent 读取层注入文件内顺序号、HistoryCellRenderer 复用 #N 片段 |
+| [t-mergefollowup.md](bug-fixes/t-mergefollowup.md) | T-MergeFollowup 合并反馈四缺陷三轮（806b887~a7bb545，20260914）：243 gutter 右键基类恒 null 须匿名 LineMarkerInfo 覆写 createGutterRenderer、BasicListUI cellHeights 缓存唯一可靠失效=list.updateUI()、下拉按钮与 SQL类型 同构 JButton+ArrowDown+JPopupMenu |
+| [t-listpreviewcopy.md](bug-fixes/t-listpreviewcopy.md) | T-ListPreviewCopy 预览格式化+多选防误弹+批量复制（merge 412a762，4039 绿，20260914）：预览跟随「预览时格式化还原SQL」设置、batchCopySql 与内置 Ctrl+C 逐字节同构；坑=测试挂起定时器真弹浮窗致 Editor 泄漏（finally dispose 停表） |
+| [t-explainfirstnative.md](bug-fixes/t-explainfirstnative.md) | T-ExplainFirstNative 首点结果缺失+EXPLAIN 对齐原生（master，4081 绿，20260914）：DBN 空名占位结果 Tab 被当新结果第 1 拍强制换入；EXPLAIN=原生 MySQL 家族裸 EXPLAIN 表格行；教训=换入去重只认实例身份会漏「实例未变内容已变」 |
+| [t-rollbacksql-plan.md](bug-fixes/t-rollbacksql-plan.md) | 预览回滚 SQL 按钮交付（r2 分支，F1~F6）：262 连接 API 不可达走快照粘贴半自动降级、JSqlParser 5.3 四坑、整行谓词恒 Partial；分支债归第三轮竞品对比跟踪 |
+| [t-crudcolor-plan.md](bug-fixes/t-crudcolor-plan.md) | SQL 日志/历史列表 CRUD 类型颜色标记（44 例，2026-09-13 合入 master）：色条/整行淡背景/关闭三选一 + 四色自定义 + 2px 描边选中态 |
+| [t-mergedevcrudcolor-delivery.md](bug-fixes/t-mergedevcrudcolor-delivery.md) | dev 与 t-crudcolor 两步真 merge master（a5d9307+8d2c919）：master 吸收 dev 全部 119 提交成全功能超集、渲染器组件池×色条融合四定式 |
+| [t-m56-00-delivery.md](bug-fixes/t-m56-00-delivery.md) | M56 消费端先导（feature/t-m56-00-consumer）：条目四字段+AGENT 来源/标记行 3~5 段/pd 载荷扩展回环/聚焦过滤层 |
+| [t-m56-agent-delivery.md](bug-fixes/t-m56-agent-delivery.md) | M56 agent 字节码通道一期（feature/t-m56-01-agent-base）：fat jar/attach 门禁 JDK17+JDK8 双目标实测/IDE 集成/consoleFilterProvider EP 双轨 |
+| [branch-port-loss-audit.md](bug-fixes/branch-port-loss-audit.md) | dev→master 人工移植丢功能全量审计（假开关 4/缺失 9/带病 9）——2026-09-13 真合并 master 后全部回合清账，仅存历史价值 |
 | [project-dynupdate-hotswap.md](bug-fixes/project-dynupdate-hotswap.md) | 自更新免重启热替换交付（master 0fbd13b）：五入口反射+跨版本签名护栏；「未完全卸载」警告=GC 时机非泄漏 |
 | [t-pickmpjerr-delivery.md](bug-fixes/t-pickmpjerr-delivery.md) | SQL转Java 选类重渲染 MPJ 业务异常逃逸 EDT 根治（master 7218078）：generateCodeOrReport 单点收口 |
 | [t-sql2java-regenerate-uncaught.md](bug-fixes/t-sql2java-regenerate-uncaught.md) | 同一笔修复的过程记忆（预览读断言连刷=旧构建，堆栈无 WIRA lambda 帧=判据） |
@@ -219,10 +256,17 @@
 | [project-m54-perf-redline-audit](bug-fixes/project-m54-perf-redline-audit.md) | M54 性能红线全面治理 24 任务交付（perf/redline-hardening 28 提交，2026-09-05，**已合 dev**）——禁卡死/禁拖慢/禁 ERROR 弹窗：LOG.error 与 ERROR 通知清零、3084 用例 0 失败；实施偏差 4 项备忘（T-Perf-23 正则 13/17、T-Perf-13 探针门控、T-Perf-18 URL 键、T-Perf-20 通知替代 HintManager）；真实防抖待 runIde 真机 |
 | [project-log-jump-no-wrapper-rootcause](bug-fixes/project-log-jump-no-wrapper-rootcause.md) | SQL 日志右键跳转「未找到表对应 Wrapper」根因（2026-09-02 分析，**已随 T-ServiceChainSearch/O-6 修复**）——事后搜索 Wrapper 本质不可靠（仅静态工厂不含 IService 链），正解=F-44-7 SqlSourceInterceptor 执行时注入源码位置，含方案 A 实施全程 12 个编译/运行陷阱 |
 
-## 已解决踩坑（52 个）
+## 已解决踩坑（59 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [pitfall-settings-tree-order-locale.md](pitfalls/pitfall-settings-tree-order-locale.md) | 设置树同级排序缺 groupWeight 时中英文子页顺序随语言漂移（中文码点序实证）；修复=plugin.xml 子页显式递减 groupWeight（6177b17）+结构守卫测试；诊断路线=本机 IDEA lib jar 反编译+243 sources jar |
+| [idea-plugin-url-marketplace-only.md](pitfalls/idea-plugin-url-marketplace-only.md) | idea-plugin 根元素 @url 属性在 IDE 插件列表零消费（262 全量扫描实证），展示位仅在 Marketplace 插件页 Homepage（api/plugins/33633 已收录）；想在 IDE 露出官网走 listing 的 Documentation URL；含常量池方法引用扫描法（类名方法名分开 UTF8 不能拼串 grep） |
+| [pitfall-gradle-user-properties-override](pitfalls/pitfall-gradle-user-properties-override.md) | 用户级 `~/.gradle/gradle.properties` 按优先级（GRADLE_USER_HOME > 项目根）**静默覆盖**项目 gradle.properties 的 `org.gradle.caching`/`jvmargs`——项目「关闭 build cache」空转一整天（`5 from cache` 才暴露），修复=落 settings.gradle.kts `buildCache { local { isEnabled = false } }`（T-TestPerf2 实证） |
+| [pitfall-windows-clipboard-cross-jvm-contention](pitfalls/pitfall-windows-clipboard-cross-jvm-contention.md) | Windows 剪贴板全机唯一（`WClipboard.openClipboard` 互斥），并发测试 JVM 互抢报 `cannot open system clipboard`——「剪贴板 flake」的并行放大版；对策=碰 `CopyPasteManager`/`systemClipboard` 的测试类配置期扫描固定同片（零测试代码改动） |
+| [pitfall-shard-class-discovery-filename-vs-class](pitfalls/pitfall-shard-class-discovery-filename-vs-class.md) | 分片类发现不能按「文件名=FQCN」——Kotlin 文件名与类名可不同（`CrudPreviewFlowAndTypesTest.kt` 里是 `DbTypeQuoteHintTest`，3 用例静默漏跑致分片并集 4080≠串行 4083）；改内容提取列 0 顶层 class 声明 + 计数 parity 判绿 |
+| [feedback-runide-hotswap-separation.md](pitfalls/feedback-runide-hotswap-separation.md) | hotswap 服务只挂 runIdeHotSwap、普通 runIde 绝不拉副作用（用户定案 a274e30）——辅助服务按任务职责挂载，不为「点错配置」兜底 |
+| [pitfall-k2j-stale-classes-hijack.md](pitfalls/pitfall-k2j-stale-classes-hijack.md) | K2J 期 build/classes/java/main 陈旧类劫持编译/运行六犯实录——标准前置动作（加 internal 新函数与合并后首跑先清 build/classes+build/kotlin）已收编 pitfall-regression-false-failure-flakes |
 | [pitfall-swing-html-list-renderer.md](pitfalls/pitfall-swing-html-list-renderer.md) | JList+JLabel-HTML 每次 O(N) BasicHTML 解析冻 EDT——根治 SimpleColoredComponent 片段 + 固定行高 |
 | [pitfall-vfs-refresh-write-intent-lock.md](pitfalls/pitfall-vfs-refresh-write-intent-lock.md) | 262 EDT ReadAction 包同步 VFS refresh 硬抛——须 WriteIntentReadAction（27ccfcf） |
 | [pitfall-test-sandbox-browser-leak.md](pitfalls/pitfall-test-sandbox-browser-leak.md) | 测试沙盒 HelpAction 降级分支 BrowserUtil 弹宿主真机浏览器——isUnitTestMode 守卫（56df6d6） |
@@ -277,7 +321,7 @@
 
 ---
 
-## 全局通用记忆（76 个）
+## 全局通用记忆（85 个）
 
 > 已复制到 `~/.zcode/cli/memories/global/`，跨项目复用。
 
@@ -291,13 +335,17 @@
 
 **第七次精简升级（2026-09-13，1 个）**：pitfall-subagent-claims-verify（子代理断言先证伪）
 
+**第八次精简升级（2026-09-14，共 9 个）**：pitfall-wira-not-in-readaction（ReadAction 内开 WIRA 硬抛、WIRA-in-WIRA 合法）/ pitfall-workbuddy-ai-sandbox-eats-nested-refs（WorkBuddy AI 沙盒吞嵌套 ref 事故与恢复法）/ verify-capability-before-claiming（能力验证对照实验，文档站）/ win32-shell-cjk-mojibake、win32-tsx-file-url-import（本机命令行与 TS 验证环境坑，管理后台）/ glm-relay-api-test、zcode-model-config-location、aliyun-token-plan-provider、dots-nova-relay-lines（中转线路与模型配置，管理后台）
+
+**第九次精简升级（2026-09-15，1 个）**：pitfall-edt-slowops-coldpath（SlowOperations 断言仅 EDT 生效、allowSlowOperations 逃生舱 243+262 双重证伪禁再试、线程归位两段式）
+
 ---
 
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 29（含 MEMORY.md） |
-| 全局记忆 global/ | 76 |
-| 归档 archive/ | 172（bug-fixes 117 + pitfalls 52 + methodology 1 + user-context 1 + README） |
-| **合计** | **277** |
+| 项目 memory（保留） | 28（含 MEMORY.md） |
+| 全局记忆 global/ | 85 |
+| 归档 archive/ | 216（bug-fixes 154 + pitfalls 59 + methodology 1 + user-context 1 + README） |
+| **合计** | **329** |

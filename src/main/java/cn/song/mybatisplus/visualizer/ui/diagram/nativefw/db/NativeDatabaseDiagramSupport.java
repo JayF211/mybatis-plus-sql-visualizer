@@ -3,10 +3,10 @@ package cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db;
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModel;
 import cn.song.mybatisplus.visualizer.ui.diagram.EntityNode;
 import cn.song.mybatisplus.visualizer.ui.diagram.RelationshipLine;
+import com.intellij.database.DbModelRegistry;
 import com.intellij.database.model.DasTable;
 import com.intellij.database.model.RawDataSource;
 import com.intellij.database.psi.DbElement;
-import com.intellij.database.psi.DbPsiFacade;
 import com.intellij.database.psi.DataSourceManager;
 import com.intellij.diagram.DiagramBuilder;
 import com.intellij.diagram.DiagramBuilderFactory;
@@ -172,8 +172,15 @@ public final class NativeDatabaseDiagramSupport {
     }
 
     /**
-     * 按表名在全部数据源中定位 {@link DbElement}（遍历 DasModel → DasTable 名称匹配 → DbPsiFacade）。
+     * 按表名在全部数据源中定位 {@link DbElement}（遍历 DasModel → DasTable 名称匹配 → DbModelRegistry）。
      * 任一表未找到时该表缺值；调用方以「全部命中」为 B 路径前置条件。异常返回 null。
+     *
+     * <p>T-MarketInternal：原 {@code DbPsiFacade.findElement(DasObject)} scheduled-for-removal——
+     * 243/262 的实现链为 DbPsiFacadeImpl → DatabaseCoreUiService.findElement →
+     * {@code project.getService(DbModelRegistry).findDbElement(das)}（jar 反编译双版本实证）。
+     * DatabaseCoreUiService.findElement 本身仍标 deprecated，故直取链尾的
+     * {@link DbModelRegistry}（project 级 service，243 database-plugin.jar /
+     * 262 intellij.database.core.impl.jar 均 public、非 deprecated、非 Internal）。
      */
     private static Map<String, DbElement> locateDbTables(Project project, List<String> tableNames) {
         try {
@@ -182,7 +189,7 @@ public final class NativeDatabaseDiagramSupport {
                 wanted.add(n.trim().toLowerCase());
             }
             Map<String, DbElement> found = new LinkedHashMap<>();
-            DbPsiFacade facade = DbPsiFacade.getInstance(project);
+            DbModelRegistry modelRegistry = project.getService(DbModelRegistry.class);
             List<DataSourceManager<?>> managers = DataSourceManager.getManagers(project);
             for (DataSourceManager<?> manager : managers) {
                 if (found.size() == wanted.size()) {
@@ -230,7 +237,7 @@ public final class NativeDatabaseDiagramSupport {
                             continue;
                         }
                         if (wanted.contains(name) && !found.containsKey(name)) {
-                            DbElement dbElement = facade.findElement(table);
+                            DbElement dbElement = modelRegistry.findDbElement(table);
                             if (dbElement != null) {
                                 found.put(name, dbElement);
                             }

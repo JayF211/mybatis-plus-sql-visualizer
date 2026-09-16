@@ -39,9 +39,6 @@ public final class SqlFormatter {
     /** 紧跟 JOIN 的修饰关键字（`LEFT JOIN` 保持同行）。 */
     private static final Set<String> JOIN_QUALIFIERS = Set.copyOf(Arrays.asList("LEFT", "RIGHT", "INNER", "FULL", "CROSS"));
 
-    /** T-VStack·InThreshold：IN 列表逐行展开的最小元素数（<5 保持同行——短清单竖排纯花行高）。 */
-    private static final int IN_EXPAND_MIN_ELEMENTS = 5;
-
     /** 函数名（括号前不空格：`COUNT(`）。T-M29.3：补 CONCAT（MP LIKE 常用）/TRIM_SCALE（项目自定义）及常见函数。 */
     private static final Set<String> FUNCTION_NAMES = Set.copyOf(Arrays.asList(
             "COUNT", "SUM", "MAX", "MIN", "AVG", "COALESCE", "CAST", "CONVERT",
@@ -546,11 +543,11 @@ public final class SqlFormatter {
                 && (first.getSecond().toUpperCase().equals("SELECT") || first.getSecond().toUpperCase().equals("WITH"))) {
             return null;
         }
-        // 顶层（括号内层 depth1）逗号切分；无逗号无需展开
+        // 顶层（括号内层 depth1）逗号切分
         List<String> elements = splitTopLevel(inner);
-        // T-VStack·InThreshold：短清单（<5 元素）保持同行——竖排不产生增量信息（占位符 ? 的对应
-        // 关系靠左侧参数面板顺序对照），纯花行高把相邻条件推出视口；长清单（≥5）才逐行
-        if (elements.size() < IN_EXPAND_MIN_ELEMENTS) return null;
+        // T-VStack·InAll：含逗号即 ≥2 元素一律逐行展开（InThreshold 阈值经用户复议回退——
+        // 短清单数逗号对位反成负担）；仅单元素（无逗号）保持同行——无清单可对齐，竖排纯花行高
+        if (elements.size() < 2) return null;
         StringBuilder body = new StringBuilder();
         body.append(indent).append(trimmed.substring(0, openIdx).stripTrailing()).append('\n');
         body.append(indent).append('(').append('\n');

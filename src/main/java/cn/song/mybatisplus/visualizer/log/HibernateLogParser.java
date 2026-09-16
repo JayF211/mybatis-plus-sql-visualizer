@@ -66,28 +66,41 @@ public class HibernateLogParser {
     private boolean recognizeBareSql;
 
     private final List<LogSqlEntry> entries = new ArrayList<>();
-    private String pendingSql = null;
-    private final List<LogSqlParam> pendingParams = new ArrayList<>();
 
     /**
-     * T-HibDualCapture：零参数闭合条目隔离槽。
+     * 单线程桶：一条语句从 SQL 行起头到闭合之间的全部状态（T-HibConc 按线程隔离）。
      *
-     * {@code show-sql: true} 与 {@code org.hibernate.SQL: debug} 双路打印时，同一条 SQL 在控制台出现两份
-     * （logger 副本多行块 + {@code Hibernate: } stdout 副本），参数绑定行只出现在两份之后——
-     * logger 副本被 {@code Hibernate: } 行提前闭合时产出零参数影子条目，参数全部挂到 stdout 副本上，
-     * 面板层去重拦不住（restoredSql 指纹不同）。零参数条目先进本槽：同一 rawSql 的后继条目
-     * 到达即取代之（参数版上岗、影子丢弃）；不同 SQL 到达时影子照常入列保持产出顺序。
-     *
-     * 槽内条目刻意不随 {@link #takeEntries()} 冲刷（桥接逐行取件，冲刷会让影子在 stdout 副本到达前
-     * 就可见、合并失效）；出口只有 {@link #closePending()}（LogToSqlPanel 收尾先 closePending 再
-     * takeEntries，与既有「末条目滞后一条」契约一致）。
+     * 为什么必须分桶：多线程日志按到达序混排时，单槽状态机下另一线程的语句行会提前闭合本线程
+     * 尚未收全的 SQL 块，本线程的绑定行则被追加进共享的 pendingParams——<b>参数跨线程错挂</b>
+     * （A 的 SQL 配 B 的值）。与 MyBatis/JdbcTemplate 同一根因（T-LogParseConc 已修）。
      */
-    private LogSqlEntry quarantined = null;
+    private static final class Bucket {
+        boolean collecting = false;
+        boolean inComment = false;
+        final StringBuilder multilineBuffer = new StringBuilder();
 
-    // ----- multiline 累积状态 -----
-    private boolean collecting = false;
-    private boolean inComment = false;
-    private final StringBuilder multilineBuffer = new StringBuilder();
+        /** SQL 行原文（日志时间取它；stdout 副本沿用 logger 副本的行，故续收集时不一定刷新）。 */
+        String pendingLogLine = null;
+        final List<LogSqlParam> pendingParams = new ArrayList<>();
+
+        /**
+         * T-HibDualCapture 隔离槽（T-HibConc 起<b>按桶</b>）：本线程产生的零参影子条目，
+         * 等本线程 stdout 副本的参数版到达即取代。实例级共享时并发下不同线程的影子会互相顶掉
+         * （A 的影子被 B 的影子挤出入列、A 的参数版到达时已无从合并 → 面板多出零参重复条目）。
+         * 同线程两副本经 MRU 路由恒同桶，故按桶不影响合并。
+         */
+        LogSqlEntry pendingShadow = null;
+    }
+
+    /**
+     * T-HibConc：线程分桶路由。routeNoTokenToRecent=true 是 Hibernate 专属——多行 SQL 正文与
+     * {@code Hibernate: } stdout 标志行都不带日志前缀（提取不到 token），须跟随同线程的带 token 行。
+     */
+    private final LogThreadRouter<Bucket> router = new LogThreadRouter<>(
+            Bucket::new,
+            b -> b.collecting,
+            b -> !b.collecting && !b.inComment && b.pendingParams.isEmpty() && b.pendingShadow == null,
+            true);
 
     public HibernateLogParser() {
         this(new LogSqlRestorer());
@@ -105,6 +118,11 @@ public class HibernateLogParser {
         this.mixedPrefix = mixedPrefix;
         this.maxParseLength = maxParseLength;
         this.recognizeBareSql = recognizeBareSql;
+    }
+
+    /** 全配置便捷构造（restorer 取默认）——master 具名默认参数形态（EP Filter/桥用）。 */
+    public HibernateLogParser(String sqlPrefix, String paramPrefix, boolean mixedPrefix, int maxParseLength) {
+        this(new LogSqlRestorer(), sqlPrefix, paramPrefix, mixedPrefix, maxParseLength, true);
     }
 
     public LogSqlRestorer getRestorer() {
@@ -151,44 +169,47 @@ public class HibernateLogParser {
         this.recognizeBareSql = recognizeBareSql;
     }
 
-    /** 喂入一行控制台输出（任意线程，内部无共享可变状态——解析器实例按 console 隔离）。 */
+    /** 喂入一行控制台输出（任意线程；按线程 token 路由到独立桶——解析器实例按 console 隔离）。 */
     public void feed(String line) {
-        if (collecting) {
-            feedCollecting(line);
+        Bucket bucket = router.bucketFor(line);
+        if (bucket.collecting) {
+            feedCollecting(bucket, line);
         } else {
-            feedIdle(line);
+            feedIdle(bucket, line);
         }
     }
 
     // ---------- IDLE 状态（等待 SQL 行） ----------
 
-    private void feedIdle(String line) {
+    private void feedIdle(Bucket bucket, String line) {
         // 1. Hibernate: 前缀（含同行 SQL）
-        if (handleHibernatePrefix(line)) {
+        if (handleHibernatePrefix(bucket, line)) {
             return;
         }
 
         // 2. Hibernate: 独占一行（remainder 为空）→ 进入等待态
         if (isPrefixOnly(line, sqlPrefix)) {
-            closePending();
-            collecting = true;
-            pendingParams.clear();
+            closePending(bucket);
+            bucket.collecting = true;
+            bucket.pendingLogLine = line;
+            bucket.pendingParams.clear();
             return;
         }
 
         // 3. 块注释开头
         if (line.stripLeading().startsWith("/*")) {
             CommentState cs = hasUnclosedComment(line);
-            closePending();
-            collecting = true;
-            pendingParams.clear();
+            closePending(bucket);
+            bucket.collecting = true;
+            bucket.pendingLogLine = line;
+            bucket.pendingParams.clear();
             if (cs.unclosed()) {
-                inComment = true;
+                bucket.inComment = true;
             } else {
                 if (!cs.afterComment().isEmpty() && looksLikeSql(cs.afterComment())) {
-                    multilineBuffer.append(cs.afterComment());
+                    bucket.multilineBuffer.append(cs.afterComment());
                 } else {
-                    collecting = false;
+                    bucket.collecting = false;
                 }
             }
             return;
@@ -199,21 +220,19 @@ public class HibernateLogParser {
             String trimmed = line.trim();
             if (!trimmed.toLowerCase().startsWith(paramPrefix.toLowerCase()) &&
                     BARE_SQL_PATTERN.matcher(trimmed).find()) {
-                closePending();
-                collecting = true;
-                multilineBuffer.append(trimmed);
-                pendingParams.clear();
+                closePending(bucket);
+                bucket.collecting = true;
+                bucket.multilineBuffer.append(trimmed);
+                bucket.pendingLogLine = line;
+                bucket.pendingParams.clear();
                 return;
             }
         }
 
-        // 5. 参数绑定行
+        // 5. 参数绑定行——IDLE（无待闭合语句）态下无上下文，丢弃并计数（T-HibConc 与另两解析器同口径）
         LogSqlParam param = extractBindingParam(line);
         if (param != null) {
-            if (pendingSql == null) {
-                return; // 无 SQL 上下文，忽略
-            }
-            pendingParams.add(param);
+            LogParseDiag.paramWithoutContext.incrementAndGet();
             return;
         }
 
@@ -222,16 +241,16 @@ public class HibernateLogParser {
 
     // ---------- COLLECTING 状态（累积多行 SQL） ----------
 
-    private void feedCollecting(String line) {
-        if (inComment) {
+    private void feedCollecting(Bucket bucket, String line) {
+        if (bucket.inComment) {
             // 等待注释块结束符
             int endIdx = line.lastIndexOf("*/");
             if (endIdx >= 0) {
-                inComment = false;
+                bucket.inComment = false;
                 String afterComment = line.substring(endIdx + 2).trim();
                 if (!afterComment.isEmpty() && looksLikeSql(afterComment)) {
-                    if (multilineBuffer.length() + 1 + afterComment.length() <= maxParseLength) {
-                        multilineBuffer.append(" ").append(afterComment);
+                    if (bucket.multilineBuffer.length() + 1 + afterComment.length() <= maxParseLength) {
+                        bucket.multilineBuffer.append(" ").append(afterComment);
                     }
                 }
             }
@@ -239,33 +258,33 @@ public class HibernateLogParser {
         }
 
         // 1. 新 Hibernate: 前缀（含同行 SQL）→ 闭合当前条目，开启新收集
-        if (handleHibernatePrefix(line)) {
+        if (handleHibernatePrefix(bucket, line)) {
             return;
         }
 
-        // 1b. Hibernate: 独占一行 → 闭合当前条目，开启新收集
+        // 1b. Hibernate: 独占一行 → 闭合当前条目，开启新收集（handleHibernatePrefix 不处理空文本）
         if (isPrefixOnly(line, sqlPrefix)) {
-            closePending();
-            collecting = true;
-            inComment = false;
-            multilineBuffer.setLength(0);
-            pendingParams.clear();
+            closePending(bucket);
+            bucket.collecting = true;
+            bucket.inComment = false;
+            bucket.multilineBuffer.setLength(0);
+            bucket.pendingParams.clear();
             return;
         }
 
         // 2. 新块注释开头 → 闭合当前条目，开启新收集
         if (line.stripLeading().startsWith("/*")) {
             CommentState cs = hasUnclosedComment(line);
-            closePending();
-            collecting = true;
-            pendingParams.clear();
+            closePending(bucket);
+            bucket.collecting = true;
+            bucket.pendingParams.clear();
             if (cs.unclosed()) {
-                inComment = true;
+                bucket.inComment = true;
             } else {
                 if (!cs.afterComment().isEmpty() && looksLikeSql(cs.afterComment())) {
-                    multilineBuffer.append(cs.afterComment());
+                    bucket.multilineBuffer.append(cs.afterComment());
                 } else {
-                    collecting = false;
+                    bucket.collecting = false;
                 }
             }
             return;
@@ -274,14 +293,14 @@ public class HibernateLogParser {
         // 3. 参数绑定行 → 追加参数（保持 COLLECTING 以支持多参数）
         LogSqlParam param = extractBindingParam(line);
         if (param != null) {
-            pendingParams.add(param);
+            bucket.pendingParams.add(param);
             return;
         }
 
         // 4. 已有参数后遇到非 SQL 行 → 闭合当前条目，按 IDLE 处理该行
-        if (!pendingParams.isEmpty()) {
-            closePending();
-            feedIdle(line);
+        if (!bucket.pendingParams.isEmpty()) {
+            closePending(bucket);
+            feedIdle(bucket, line);
             return;
         }
 
@@ -291,40 +310,60 @@ public class HibernateLogParser {
         }
 
         // 6. 续行 → 追加到 buffer
-        if (multilineBuffer.length() < maxParseLength) {
-            multilineBuffer.append(" ").append(line.trim());
+        if (bucket.multilineBuffer.length() < maxParseLength) {
+            bucket.multilineBuffer.append(" ").append(line.trim());
         }
     }
 
-    /** 闭合当前未完成条目（新语句到来 / 面板刷新时调用）。 */
+    /** 闭合全部桶的未完成条目（新语句到来 / 面板刷新时调用）。返回首个产出的条目。 */
     public LogSqlEntry closePending() {
+        LogSqlEntry first = null;
+        for (Bucket bucket : router.allBuckets()) {
+            LogSqlEntry produced = closePending(bucket);
+            if (first == null && produced != null) {
+                first = produced;
+            }
+        }
+        return first;
+    }
+
+    /** 闭合指定桶的未完成条目。 */
+    private LogSqlEntry closePending(Bucket bucket) {
         String sql;
-        if (collecting) {
-            String s = take(multilineBuffer.toString().trim(), maxParseLength);
+        if (bucket.collecting) {
+            String s = take(bucket.multilineBuffer.toString().trim(), maxParseLength);
             if (s.isEmpty()) {
                 s = null;
             }
-            collecting = false;
-            inComment = false;
-            multilineBuffer.setLength(0);
+            bucket.collecting = false;
+            bucket.inComment = false;
+            bucket.multilineBuffer.setLength(0);
             sql = s;
         } else {
-            sql = pendingSql;
+            sql = null;
         }
         if (sql == null) {
             return null;
         }
-        pendingSql = null;
+        Long logTs = bucket.pendingLogLine != null ? LogTimestampParser.parse(bucket.pendingLogLine) : null;
+        bucket.pendingLogLine = null;
+        List<LogSqlParam> params = new ArrayList<>(bucket.pendingParams);
+        String restored = restorer.restore(sql, params);
         LogSqlEntry entry = new LogSqlEntry(
                 sql,
-                restorer.restore(sql, pendingParams),
-                new ArrayList<>(pendingParams),
-                SqlSource.HIBERNATE);
-        pendingParams.clear();
+                restored,
+                params,
+                System.currentTimeMillis(),
+                logTs,
+                LogSqlEntry.computeSummary(restored),
+                SqlSource.HIBERNATE,
+                null, null, 0, List.of(), 0L,
+                null, null, null, null, null);
+        bucket.pendingParams.clear();
 
         // T-HibDualCapture：隔离槽合并——同 SQL 后继条目取代零参影子；不同语句影子先入列保序
-        LogSqlEntry shadow = quarantined;
-        quarantined = null;
+        LogSqlEntry shadow = bucket.pendingShadow;
+        bucket.pendingShadow = null;
         if (shadow != null) {
             if (shadow.rawSql().equals(entry.rawSql())) {
                 entries.add(entry);
@@ -333,7 +372,7 @@ public class HibernateLogParser {
             entries.add(shadow);
         }
         if (entry.params().isEmpty()) {
-            quarantined = entry; // 可能是被 stdout 副本覆盖的零参影子，先隔离待并
+            bucket.pendingShadow = entry; // 可能是被 stdout 副本覆盖的零参影子，先隔离待并
             return null;
         }
         entries.add(entry);
@@ -342,11 +381,13 @@ public class HibernateLogParser {
 
     /** 取出全部已闭合条目并清空缓冲区（面板刷新用）。 */
     public List<LogSqlEntry> takeEntries() {
-        // T-HibDualCapture：隔离槽仅在无语句收集中时冲刷——收集中冲刷会让零参影子在
-        // stdout 副本到达前就可见、合并失效；收集中说明当前语句尚未闭合（末条目本就滞后一条）
-        if (!collecting && quarantined != null) {
-            entries.add(quarantined);
-            quarantined = null;
+        // T-HibDualCapture：隔离槽仅在对应桶无语句收集中时冲刷——收集中冲刷会让零参影子在
+        // stdout 副本到达前就可见、合并失效；收集中说明该桶当前语句尚未闭合（末条目本就滞后一条）
+        for (Bucket bucket : router.allBuckets()) {
+            if (!bucket.collecting && bucket.pendingShadow != null) {
+                entries.add(bucket.pendingShadow);
+                bucket.pendingShadow = null;
+            }
         }
         List<LogSqlEntry> result = new ArrayList<>(entries);
         entries.clear();
@@ -358,7 +399,7 @@ public class HibernateLogParser {
     /**
      * 处理 Hibernate: 前缀（含同行 SQL 或同行块注释）。
      */
-    private boolean handleHibernatePrefix(String line) {
+    private boolean handleHibernatePrefix(Bucket bucket, String line) {
         String afterKeyword = extractAfterKeyword(line, sqlPrefix);
         if (afterKeyword == null) {
             return false;
@@ -366,23 +407,25 @@ public class HibernateLogParser {
 
         if (afterKeyword.stripLeading().startsWith("/*")) {
             CommentState cs = hasUnclosedComment(afterKeyword);
-            closePending();
-            collecting = true;
-            pendingParams.clear();
+            closePending(bucket);
+            bucket.collecting = true;
+            bucket.pendingLogLine = line;
+            bucket.pendingParams.clear();
             if (cs.unclosed()) {
-                inComment = true;
+                bucket.inComment = true;
             } else {
                 if (!cs.afterComment().isEmpty() && looksLikeSql(cs.afterComment())) {
-                    multilineBuffer.append(cs.afterComment());
+                    bucket.multilineBuffer.append(cs.afterComment());
                 } else {
-                    collecting = false;
+                    bucket.collecting = false;
                 }
             }
         } else {
-            closePending();
-            collecting = true;
-            multilineBuffer.append(afterKeyword);
-            pendingParams.clear();
+            closePending(bucket);
+            bucket.collecting = true;
+            bucket.multilineBuffer.append(afterKeyword);
+            bucket.pendingLogLine = line;
+            bucket.pendingParams.clear();
         }
         return true;
     }

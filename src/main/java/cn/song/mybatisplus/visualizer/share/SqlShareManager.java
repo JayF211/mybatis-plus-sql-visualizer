@@ -4,20 +4,18 @@ import cn.song.mybatisplus.visualizer.share.format.ExecutableSqlFormatter;
 import cn.song.mybatisplus.visualizer.share.format.MarkdownFormatter;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
 import com.intellij.notification.NotificationGroupManager;
 import com.intellij.notification.NotificationType;
 import com.intellij.openapi.application.ApplicationManager;
-import com.intellij.openapi.ide.CopyPasteManager;
 import com.intellij.openapi.project.Project;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.awt.datatransfer.StringSelection;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.List;
-import java.util.Map;
 
 /**
  * 分享管理器（F-8）：各格式分发 + 剪贴板 / 文件操作。
@@ -159,10 +157,9 @@ public final class SqlShareManager {
         return cut + "\n-- ... [SQL truncated, original length: " + sql.length() + " chars]";
     }
 
-    /** 复制文本到系统剪贴板（优先 CopyPasteManager，降级 Toolkit 剪贴板）。 */
+    /** 复制文本到系统剪贴板（统一走 UiTextClipboard 收口）。 */
     private static void copyToClipboard(@NotNull String text) {
-        StringSelection selection = new StringSelection(text);
-        CopyPasteManager.getInstance().setContents(selection);
+        UiTextClipboard.copy(text);
     }
 
     /** Toast 通知（仅在非测试模式下显示）。 */
