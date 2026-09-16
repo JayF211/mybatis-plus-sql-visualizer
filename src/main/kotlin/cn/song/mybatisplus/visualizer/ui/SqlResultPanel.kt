@@ -260,6 +260,39 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
     }
 
     /**
+     * T-DdlRecover T-DR-03：「断开但已生效」警示条——错误态升级呈现（信息级、无新弹窗）。
+     * 警示不消除错误原文（tooltip 保留原文）；文案口径「对象已存在（可能为本次已生效）」——
+     * 探测命中仅呈现事实与时间戳，不声称「本次执行所建」（同名旧对象恰在场时不误导）。
+     * 仅 ERROR 态生效（防陈旧探测在用户重新执行后误刷）。
+     */
+    fun showDdlEffectiveWarning(target: String, probedAt: String) {
+        if (state != State.ERROR) return
+        val esc = target.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        infoLabel.text = "<html>" +
+            MpSqlVisualizerBundle.message("execute.ddl.effective.warning", esc, probedAt) +
+            "</html>"
+        infoLabel.foreground = JBColor.namedColor("WarningForeground", JBColor.ORANGE)
+        revalidate()
+        repaint()
+    }
+
+    /**
+     * T-DdlRecover T-DR-03：探测未命中的如实注记——错误呈现保持原样，仅 tooltip 追加一行
+     * 「已尝试生效性探测：未检出对象」（绝不把「没查到」包装成「没生效」）。仅 ERROR 态生效。
+     */
+    fun noteDdlProbeMissed() {
+        if (state != State.ERROR) return
+        val miss = MpSqlVisualizerBundle.message("execute.ddl.probe.missed")
+        infoLabel.toolTipText = buildString {
+            append(infoLabel.toolTipText ?: "")
+            if (isNotEmpty()) append("\n")
+            append(miss)
+        }
+        revalidate()
+        repaint()
+    }
+
+    /**
      * 显示空状态（无执行）——M36.5：隐藏面板不占高度。
      */
     fun showEmpty() {

@@ -896,6 +896,44 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-ErrorLocate：执行调用点共用的富错误回调（错误呈现 + 可解析锚点时附定位动作）。 */
     private fun showErrorRichWithLocate(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo) {
         resultPanel.showErrorRich(info) { locateErrorSource() }
+        maybeProbeDdlEffective(info)
+    }
+
+    /**
+     * T-DdlRecover（O-15）T-DR-02：「失败不等于未生效」——执行 DDL 撞连接类断开时，数据库侧
+     * 可能已隐式提交。判定链：连接类异常（SQLState 08xxx / vendor 码 / 签名兜底）∧ 可能改元数据
+     * （MetadataInvalidator 既有预判复用）→ 提取 CREATE 目标表名 → 后台退避探测（500ms/1.5s/3s
+     * 三次，等 DBN 自动重连窗口）→ 命中呈现警示条、未命中 tooltip 如实注记。
+     * 探测/提取任一失败维持原错误呈现（诚实降级）；警示无新弹窗（弹窗克制红线）。
+     */
+    private fun maybeProbeDdlEffective(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo) {
+        val proj = project ?: return
+        if (!cn.song.mybatisplus.visualizer.execute.ConnectionErrorClassifier.isConnectionError(info)) return
+        val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
+            ?: editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
+        if (!cn.song.mybatisplus.visualizer.execute.MetadataInvalidator.mayChangeMetadata(sql)) return
+        val target = cn.song.mybatisplus.visualizer.execute.DdlTargetExtractor.extractCreateTarget(sql) ?: return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            var hit = false
+            for (delayMs in longArrayOf(500, 1500, 3000)) {
+                Thread.sleep(delayMs)
+                val meta = runCatching {
+                    cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.tableMeta(proj, target)
+                }.getOrNull() ?: break
+                if (meta.comment != null || meta.columns.isNotEmpty()) {
+                    hit = true
+                    break
+                }
+            }
+            val probedAt = java.time.LocalTime.now().withNano(0).toString()
+            ApplicationManager.getApplication().invokeLater({
+                if (hit) {
+                    resultPanel.showDdlEffectiveWarning(target, probedAt)
+                } else {
+                    resultPanel.noteDdlProbeMissed()
+                }
+            }, com.intellij.openapi.application.ModalityState.any())
+        }
     }
 
     /**
