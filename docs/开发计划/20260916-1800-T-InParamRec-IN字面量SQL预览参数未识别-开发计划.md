@@ -70,3 +70,5 @@ DEBUG org.springframework.jdbc.core.JdbcTemplate - Executing prepared SQL update
 ## 五、实施记录
 
 > 实施分支 `t-inparamrec`（worktree `mpsv-inparam`），完成后回填。
+>
+> **2026-09-16 已交付**：T-IPR-01 `LogEntryPreviewOpener` 收编 `toPreviewResult`（删除独立识别/回退双分支）；T-IPR-02 新增 `InLiteralRecoveryRegressionTest` 4 例（定向+全量门禁绿）；T-IPR-03 CHANGELOG/变更记录已落盘。注意：实录第二行 `Executing prepared SQL update` 是无 `[SQL]` 文本的头行，不产生条目（既有语义，用例按 1 条断言）。
