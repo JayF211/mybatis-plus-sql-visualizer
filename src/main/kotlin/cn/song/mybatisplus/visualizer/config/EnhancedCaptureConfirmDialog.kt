@@ -28,6 +28,7 @@ class EnhancedCaptureConfirmDialog(parent: Project?) : DialogWrapper(parent, tru
     init {
         title = MpSqlVisualizerBundle.message("settings.enhancedCapture.confirm.title")
         init()
+        setCancelButtonText(MpSqlVisualizerBundle.message("settings.enhancedCapture.confirm.cancel"))
     }
 
     override fun createCenterPanel(): JComponent {
