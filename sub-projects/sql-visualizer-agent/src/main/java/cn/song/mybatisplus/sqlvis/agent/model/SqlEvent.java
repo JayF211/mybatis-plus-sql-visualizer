@@ -22,6 +22,8 @@ public final class SqlEvent {
     public String sourceFile;
     /** 行号（0 未知）。 */
     public int sourceLine;
+    /** 源码位置候选 [file, line]（T-AgentSourceJump：栈序，≤3 条；IDE 侧解析回退用）。 */
+    public List<String[]> sourceCandidates;
     /** 方法聚焦键 {SimpleClass}#{method}（T-M56-06）。 */
     public String methodKey;
     /** 请求聚合标签（MDC 兜底，T-M56-07）。 */

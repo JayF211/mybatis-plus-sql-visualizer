@@ -21,6 +21,8 @@ data class AgentEvent(
     val sourceFile: String?,
     /** 行号（0 未知）。 */
     val sourceLine: Int,
+    /** T-AgentSourceJump：源码位置候选（栈序 [file, line]；旧版 agent 无此键 → 空列表，跳转回退主位置）。 */
+    val sourceCandidates: List<Pair<String, Int>> = emptyList(),
     /** 方法聚焦键 {SimpleClass}#{method}。 */
     val methodKey: String?,
     /** 请求聚合标签。 */
@@ -59,6 +61,7 @@ data class AgentEvent(
                 errorText = o.get("err")?.takeIf { it.isJsonPrimitive }?.asString,
                 sourceFile = o.get("sf")?.takeIf { it.isJsonPrimitive }?.asString,
                 sourceLine = o.get("sl")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0,
+                sourceCandidates = parseCandidates(o.get("cands")),
                 methodKey = o.get("mk")?.takeIf { it.isJsonPrimitive }?.asString,
                 requestTag = o.get("rt")?.takeIf { it.isJsonPrimitive }?.asString,
                 params = params,
@@ -66,6 +69,20 @@ data class AgentEvent(
                 url = o.get("url")?.takeIf { it.isJsonPrimitive }?.asString,
             )
         }.getOrNull()
+
+        /** `cands` 数组解析（[file, line] 对；畸形项跳过——协议演进容错）。 */
+        private fun parseCandidates(el: com.google.gson.JsonElement?): List<Pair<String, Int>> {
+            val arr = el?.takeIf { it.isJsonArray }?.asJsonArray ?: return emptyList()
+            val out = mutableListOf<Pair<String, Int>>()
+            arr.forEach { item ->
+                val pair = item.takeIf { it.isJsonArray }?.asJsonArray ?: return@forEach
+                val file = pair.getOrNull(0)?.takeIf { it.isJsonPrimitive }?.asString
+                if (file.isNullOrBlank()) return@forEach
+                val line = pair.getOrNull(1)?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+                out.add(file to maxOf(line, 0))
+            }
+            return out
+        }
 
         private fun com.google.gson.JsonArray.getOrNull(i: Int) =
             if (size() > i) get(i) else null

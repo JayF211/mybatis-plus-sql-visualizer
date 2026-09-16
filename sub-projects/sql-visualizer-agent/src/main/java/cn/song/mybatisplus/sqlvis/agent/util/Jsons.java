@@ -25,6 +25,23 @@ public final class Jsons {
         if (e.sourceLine > 0) {
             num(sb, first, "sl", e.sourceLine);
         }
+        // T-AgentSourceJump：源码候选（IDE 侧解析回退；[file, line] 对数组）
+        if (e.sourceCandidates != null && !e.sourceCandidates.isEmpty()) {
+            sep(sb, first);
+            sb.append("\"cands\":[");
+            for (int i = 0; i < e.sourceCandidates.size(); i++) {
+                if (i > 0) {
+                    sb.append(',');
+                }
+                String[] c = e.sourceCandidates.get(i);
+                sb.append('[');
+                val(sb, c.length > 0 ? c[0] : null);
+                sb.append(',');
+                sb.append(c.length > 1 ? c[1] : "0");
+                sb.append(']');
+            }
+            sb.append(']');
+        }
         str(sb, first, "mk", e.methodKey);
         str(sb, first, "rt", e.requestTag);
         str(sb, first, "th", e.threadName);

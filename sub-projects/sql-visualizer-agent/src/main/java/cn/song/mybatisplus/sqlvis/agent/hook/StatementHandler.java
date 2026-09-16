@@ -107,7 +107,15 @@ final class StatementHandler implements InvocationHandler {
         if (AgentState.isDisabled() || sql == null || sql.isEmpty()) {
             return;
         }
-        final StackLocator.Frame frame = StackLocator.locate();
+        // T-AgentSourceJump：loader hint 取被织入对象（驱动/连接侧类，开发态=应用 loader）——
+        // StackLocator 据此判定帧来源是否 JAR（L1 来源过滤）；取不到退上下文 loader
+        ClassLoader hint = null;
+        try {
+            hint = raw.getClass().getClassLoader();
+        } catch (Throwable ignore) {
+            // 保持 null，StackLocator 内部退上下文 loader
+        }
+        final StackLocator.Frame frame = StackLocator.locate(hint);
         Long updateCount = EventBuilder.extractUpdateCount(op, result, raw);
         SqlEvent event = new SqlEvent();
         event.sql = sql;
@@ -119,6 +127,7 @@ final class StatementHandler implements InvocationHandler {
         event.sourceFile = frame == null ? null : frame.sourceFile;
         event.sourceLine = frame == null ? 0 : frame.line;
         event.methodKey = frame == null ? null : frame.methodKey;
+        event.sourceCandidates = frame == null ? null : frame.candidates;
         event.requestTag = MdcAccessor.requestTag();
         event.params = params.snapshot(sql, AgentState.isDesensitize());
         event.url = url; // connect 时 URL（面板据此展示目标库类型；测试/池代理下可能为 null）

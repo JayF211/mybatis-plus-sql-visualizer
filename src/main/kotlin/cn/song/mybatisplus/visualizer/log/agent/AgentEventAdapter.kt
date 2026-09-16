@@ -26,6 +26,8 @@ object AgentEventAdapter {
             executionTimeMs = event.durationNanos / 1_000_000L,
             sourceFile = event.sourceFile,
             sourceLine = event.sourceLine,
+            // T-AgentSourceJump：候选帧透传（IDE 侧跳转在主位置解析失败时按序回退）
+            sourceCandidates = event.sourceCandidates,
             // T-M56-06：方法聚焦键（agent 栈帧 {Class}#{method}）——与 mapper 语句 id 同入 mapperStatement
             // 字段语义扩展由 focusMethodKey 统一承载（agent JDBC 层无 mapper id，非冲突）
             mapperStatement = event.methodKey,

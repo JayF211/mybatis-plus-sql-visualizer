@@ -111,6 +111,42 @@ public class CaptureRulesTest {
     }
 
     @Test
+    public void 框架帧过滤规则_数据层插件家族_T_AgentSourceJump() {
+        // PageHelper 漏收即被误选为用户帧（用户实测「跳转报 PageInterceptor.java 未找到」的根因）
+        assertTrue(StackLocator.isFrameworkFrame("com.github.pagehelper.PageInterceptor"));
+        assertTrue(StackLocator.isFrameworkFrame("org.mybatis.spring.SqlSessionTemplate"));
+        assertTrue(StackLocator.isFrameworkFrame("net.sf.jsqlparser.parser.CCJSqlParser"));
+        assertTrue(StackLocator.isFrameworkFrame("org.apache.commons.lang3.StringUtils"));
+        assertTrue(StackLocator.isFrameworkFrame("redis.clients.jedis.Jedis"));
+        // 通用工具库刻意不收（用户业务代码可能直接调用，误收即跳错）
+        assertFalse(StackLocator.isFrameworkFrame("cn.hutool.core.util.StrUtil"));
+    }
+
+    @Test
+    public void 来源判定_JAR与目录与未知_T_AgentSourceJump() {
+        // 本测试类由构建目录加载 → 非 JAR（用户业务代码形态）
+        assertEquals(Boolean.FALSE, StackLocator.loadedFromJar(
+                "cn.song.mybatisplus.sqlvis.agent.CaptureRulesTest",
+                CaptureRulesTest.class.getClassLoader()));
+        // JDK 类无 codeSource → 未知（不武断判为用户帧）
+        assertNull(StackLocator.loadedFromJar("java.lang.String", CaptureRulesTest.class.getClassLoader()));
+        // 不可加载类 → 未知
+        assertNull(StackLocator.loadedFromJar("no.such.Class", CaptureRulesTest.class.getClassLoader()));
+        assertNull(StackLocator.loadedFromJar(null, CaptureRulesTest.class.getClassLoader()));
+    }
+
+    @Test
+    public void locate_候选帧不含主位置且数量有界_T_AgentSourceJump() {
+        StackLocator.Frame f = StackLocator.locate();
+        org.junit.Assert.assertNotNull(f);
+        org.junit.Assert.assertNotNull(f.candidates);
+        org.junit.Assert.assertTrue("候选数应 ≤3", f.candidates.size() <= 3);
+        for (String[] c : f.candidates) {
+            org.junit.Assert.assertNotEquals("候选不得与主位置重复", f.sourceFile, c[0]);
+        }
+    }
+
+    @Test
     public void 相对路径与聚焦键() {
         assertEquals("com/example/service/UserService.java",
                 StackLocator.toRelativePath("com.example.service.UserService", "UserService.java"));

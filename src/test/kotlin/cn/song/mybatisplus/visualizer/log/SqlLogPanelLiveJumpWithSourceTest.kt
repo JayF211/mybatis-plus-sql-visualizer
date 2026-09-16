@@ -37,6 +37,21 @@ class SqlLogPanelLiveJumpWithSourceTest : BasePlatformTestCase() {
     private fun entry(restoredSql: String, sourceFile: String? = null, sourceLine: Int = 0): LogSqlEntry =
         LogSqlEntry(rawSql = restoredSql, restoredSql = restoredSql, params = emptyList(), timestamp = 1L, sourceFile = sourceFile, sourceLine = sourceLine)
 
+    private fun entryWithCandidates(
+        restoredSql: String,
+        sourceFile: String?,
+        sourceLine: Int,
+        candidates: List<Pair<String, Int>>,
+    ): LogSqlEntry = LogSqlEntry(
+        rawSql = restoredSql,
+        restoredSql = restoredSql,
+        params = emptyList(),
+        timestamp = 1L,
+        sourceFile = sourceFile,
+        sourceLine = sourceLine,
+        sourceCandidates = candidates,
+    )
+
     private fun writeRealSource(relativePath: String, content: String): File {
         val f = File(project.basePath!!, relativePath)
         f.parentFile?.mkdirs()
@@ -78,6 +93,62 @@ class SqlLogPanelLiveJumpWithSourceTest : BasePlatformTestCase() {
             val target = panel.resolveEntryJump(entry("SELECT 1", "missing/Missing.java", 5))
             assertTrue(target is SqlLogPanel.LogJumpTarget.NotFound)
             assertEquals("missing/Missing.java", (target as SqlLogPanel.LogJumpTarget.NotFound).sourceFile)
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun test主位置不在工程内_回退候选_首个可解析项() {
+        // T-AgentSourceJump：主位置误选第三方插件帧（PageHelper 的 PageInterceptor 等）
+        // → 按栈序候选取首个工程内可解析项
+        writeRealSource("com/example/service/UserServiceImpl.java", "class UserServiceImpl {}\n")
+        val panel = SqlLogPanel(project, manager)
+        try {
+            val e = entryWithCandidates(
+                "SELECT COUNT(*) FROM user",
+                "com/github/pagehelper/PageInterceptor.java", 132,
+                listOf(
+                    "com/example/service/PageHelper.java" to 7,          // 工程内不存在 → 跳过
+                    "com/example/service/UserServiceImpl.java" to 36,    // 命中
+                ),
+            )
+            val target = panel.resolveEntryJump(e)
+            assertTrue("主位置缺失应回退到候选的 Precise，而非 NotFound", target is SqlLogPanel.LogJumpTarget.Precise)
+            assertEquals("行号 = 候选 line-1", 35, (target as SqlLogPanel.LogJumpTarget.Precise).line)
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun test主位置与候选全不可解析_NotFound不劣化() {
+        val panel = SqlLogPanel(project, manager)
+        try {
+            val e = entryWithCandidates(
+                "SELECT 1",
+                "missing/Primary.java", 5,
+                listOf("missing/A.java" to 1, "missing/B.java" to 2),
+            )
+            val target = panel.resolveEntryJump(e)
+            assertTrue("候选全落空仍应 NotFound（真实失效场景不劣化）", target is SqlLogPanel.LogJumpTarget.NotFound)
+            assertEquals("missing/Primary.java", (target as SqlLogPanel.LogJumpTarget.NotFound).sourceFile)
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun test无主位置_候选可解析_落候选() {
+        // agent 侧主位置无调试信息（file=null）时，候选首位顶上
+        writeRealSource("com/example/service/NavServiceImpl.java", "class NavServiceImpl {}\n")
+        val panel = SqlLogPanel(project, manager)
+        try {
+            val e = entryWithCandidates(
+                "SELECT 1",
+                null, 0,
+                listOf("com/example/service/NavServiceImpl.java" to 12),
+            )
+            val target = panel.resolveEntryJump(e)
+            assertTrue("主位置 null 但有可解析候选 → Precise", target is SqlLogPanel.LogJumpTarget.Precise)
+            assertEquals(11, (target as SqlLogPanel.LogJumpTarget.Precise).line)
         } finally {
             panel.dispose()
         }

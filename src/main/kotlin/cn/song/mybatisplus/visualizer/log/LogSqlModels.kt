@@ -64,6 +64,12 @@ data class LogSqlEntry(
      */
     val sourceLine: Int = 0,
     /**
+     * T-AgentSourceJump：源码位置候选（栈序 [file, line]；仅 agent 通道产出，控制台通道/历史读回为空）。
+     * 主位置在工程内解析失败时，跳转按候选序取首个可解析项——候选全部来自本次执行的真实调用栈，
+     * 非表名等启发式（不会误导）。
+     */
+    val sourceCandidates: List<Pair<String, Int>> = emptyList(),
+    /**
      * T-LogRowNumber：会话内捕获序号（「SQL 日志」列表行号）。由 [SqlLogEntryBuffer.addEntry]
      * 成功入队时分配（单调递增；去重丢弃/暂停/过滤关键字命中的条目不占号），
      * 项目启动（processStarted）或手动清空列表时归零。0 表示无行号

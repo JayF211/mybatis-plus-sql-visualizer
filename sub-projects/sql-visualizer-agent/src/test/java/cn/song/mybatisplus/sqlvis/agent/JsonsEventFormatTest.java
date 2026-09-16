@@ -73,6 +73,29 @@ public class JsonsEventFormatTest {
     }
 
     @Test
+    public void 候选帧_数组格式合法且分隔正确() {
+        SqlEvent e = minimal();
+        e.sourceFile = "com/example/service/UserServiceImpl.java";
+        e.sourceLine = 36;
+        e.sourceCandidates = Arrays.asList(
+                new String[]{"com/example/controller/UserController.java", "48"},
+                new String[]{"com/example/aspect/LogAspect.java", "20"});
+        String json = Jsons.writeEvent(e);
+        assertTrue("应含 cands 数组: " + json, json.contains("\"cands\":[["));
+        assertTrue("候选文件应入数组: " + json, json.contains("com/example/controller/UserController.java"));
+        assertTrue("候选行号应为裸数字: " + json, json.contains("UserController.java\",48]"));
+        assertFalse("不得出现 {, 首逗号: " + json, json.contains("{,"));
+        assertFalse("不得出现相邻双逗号: " + json, json.contains(",,"));
+        assertFalse("不得出现 ,} 尾逗号: " + json, json.contains(",}"));
+    }
+
+    @Test
+    public void 无候选_不写cands键() {
+        String json = Jsons.writeEvent(minimal());
+        assertFalse("无候选不得产出 cands 键: " + json, json.contains("cands"));
+    }
+
+    @Test
     public void 转义仍生效_引号反斜杠控制字符() {
         SqlEvent e = new SqlEvent();
         e.sql = "SELECT 'a\\b'\n\t-- \"x\"";

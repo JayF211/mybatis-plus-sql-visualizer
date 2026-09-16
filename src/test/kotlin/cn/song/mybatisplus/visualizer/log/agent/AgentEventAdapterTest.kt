@@ -64,6 +64,31 @@ class AgentEventAdapterTest {
     }
 
     @Test
+    fun 事件解析_候选帧_T_AgentSourceJump() {
+        val body = """{"sql":"SELECT 1","ts":1,"dn":1,"sf":"com/github/pagehelper/PageInterceptor.java","sl":132,"cands":[["com/example/service/UserServiceImpl.java",36],["com/example/controller/UserController.java",48]]}"""
+        val e = AgentEvent.parse(body)!!
+        assertEquals(2, e.sourceCandidates.size)
+        assertEquals("com/example/service/UserServiceImpl.java" to 36, e.sourceCandidates[0])
+        assertEquals("com/example/controller/UserController.java" to 48, e.sourceCandidates[1])
+    }
+
+    @Test
+    fun 事件解析_无候选键_空列表容错() {
+        // 旧版 agent 无 cands 键：必须空列表（跳转回退主位置），不得抛错
+        val e = AgentEvent.parse("""{"sql":"SELECT 1","ts":1,"dn":1,"sf":"a/A.java","sl":3}""")!!
+        assertEquals(0, e.sourceCandidates.size)
+    }
+
+    @Test
+    fun 事件解析_候选畸形项跳过_不污染() {
+        val body = """{"sql":"SELECT 1","ts":1,"dn":1,"cands":[["ok/A.java",5],["",9],["noLine.java"],123]}"""
+        val e = AgentEvent.parse(body)!!
+        assertEquals("空文件名/非数组项应跳过", 2, e.sourceCandidates.size)
+        assertEquals("ok/A.java" to 5, e.sourceCandidates[0])
+        assertEquals("缺行号项保留且行号归 0", "noLine.java" to 0, e.sourceCandidates[1])
+    }
+
+    @Test
     fun 映射_来源AGENT_耗时纳秒转毫秒_四新字段() {
         val entry = AgentEventAdapter.toEntry(
             event(
