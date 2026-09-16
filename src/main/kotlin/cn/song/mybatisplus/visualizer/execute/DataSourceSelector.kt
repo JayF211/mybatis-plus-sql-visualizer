@@ -2281,22 +2281,12 @@ object DataSourceSelector {
                         val consoleText = editor.document.text
                         @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
                         com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
-                            val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager
-                                .getInstance().getDocument(consoleVf)
-                            when {
-                                fileDoc != null && fileDoc.text != consoleText -> {
-                                    fileDoc.setText(consoleText)
-                                    // setText 的 write command 结束时自动 commit；显式 commitDocument
-                                    // 双保险（同步后同 tick 内 findFile 的 PSI 立即对齐）
-                                    com.intellij.psi.PsiDocumentManager.getInstance(project)
-                                        .commitDocument(fileDoc)
-                                }
-                                fileDoc != null -> com.intellij.psi.PsiDocumentManager.getInstance(project)
-                                    .commitDocument(fileDoc)
-                                fileDoc == null -> consoleVf.setBinaryContent(consoleText.toByteArray())
-                            }
+                            // T-ExecDocSync T-EC-01：document 驱动写 + 同临界区落盘（saveDocument）——
+                            // 执行前 console 手改未保存内容与磁盘收口，不留「已修改未保存」窗口
+                            //（M36.5.20 的 commitDocument/PSI 对齐语义保留在 writeVfTextViaDocument 内）
+                            writeVfTextViaDocument(project, consoleVf, consoleText)
                         }
-                        LOG.info("[M36] console doc synced+committed to vf before execution (${consoleVf.name})")
+                        LOG.info("[M36] console doc synced+committed+saved to vf before execution (${consoleVf.name})")
                     }
                 }.onFailure { e ->
                     LOG.warn("[M36] sync console doc to vf FAILED: ${e.message}")
@@ -2986,6 +2976,12 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         } catch (e: Throwable) {
             return fail("refreshVfs", "${e.javaClass.simpleName}: ${e.message}")
         } ?: return fail("refreshVfs", "VFS not visible after refresh (${ioFile.path}, exists=${ioFile.exists()})")
+        // T-EC-04：VFS 缺条目裸写路径的防御收口——正常恒 no-op，异常残留在此收敛（含落盘）
+        try {
+            syncExecVfContentIfNeeded(project, vf, sql)
+        } catch (e: Throwable) {
+            return fail("syncVfContent", "${e.javaClass.simpleName}: ${e.message}")
+        }
         mapDialectBeforePsi(project, vf, LOG)
         val psi = try {
             ReadAction.compute<PsiFile?, Throwable> {
@@ -3037,19 +3033,143 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
     }
 
     /**
+     * T-EC-03：执行文件单写方锁——BGT 预热（prewarmExecTempFileInner）与 EDT 冷路径
+     * （createTempPsiFile）两条链并发写同一 mpsql-exec.sql 的串行化。临界区毫秒级；
+     * 两个调用点均在普通线程语境（非 WriteAction 内），持本锁再取平台写锁无环。
+     */
+    private val execFileWriteLock = Any()
+
+    /**
+     * T-EC-02：裸写兜底守卫——仅当该文件当前**无已加载 document**时才允许绕过 document
+     * 直接写盘。文件有已加载 document（编辑器持有/近期读写）时裸写盘 = 绕过 document 的
+     * 外部改写，叠加 document「已修改未保存」态即触发平台 MemoryDiskConflictResolver
+     * 「File Cache Conflict」模态弹窗（T-ExecDocSync 真机截图实证）。internal 供表驱动测试。
+     */
+    internal fun canFallBackToRawWrite(vf: com.intellij.openapi.vfs.VirtualFile): Boolean =
+        com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getCachedDocument(vf) == null
+
+    /**
+     * T-EC-01：document 驱动写 + **同临界区落盘**——`setText → commitDocument → saveDocument`，
+     * 磁盘=VFS=内存三方在同一写临界区内收口，不留「已修改未保存」窗口（该窗口内任何绕过
+     * document 的磁盘改写都触发 File Cache Conflict 弹窗，弹窗期间 invokeLater 链冻结 →
+     * 执行链卡死）；落盘不再依赖 IDE 自动保存追赶。
+     *
+     * **仅 EDT 调用**（BGT 统一经 [dispatchDocWriteOnEdt] 派发）——T-ExecDocSync 关键发现
+     * （javap + 沙盒堆栈双实证）：262 平台文件 document（非 FREE_THREADED）的 setText 包
+     * CommandProcessor.executeCommand，BGT 直调硬抛 EDT-only 断言（RuntimeExceptionWithAttachments）。
+     * 旧实现 BGT 预热走 document 分支**每次必炸**，runCatching 吞掉后静默掉进裸写兜底——
+     * 这正是真机 File Cache Conflict 链的本体（非低概率竞态）。
+     *
+     * document 未加载（fileDoc == null，即无冲突面）走 setBinaryContent（VFS+磁盘同步）；
+     * text 相同但 document 仍 modified（用户改后还原等）时同样 commit+save 收敛。
+     * internal 供测试。
+     */
+    internal fun writeVfTextViaDocument(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, text: String) {
+        val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(vf)
+        if (fileDoc == null) {
+            vf.setBinaryContent(text.toByteArray())
+            return
+        }
+        if (fileDoc.text != text) {
+            fileDoc.setText(text)
+        }
+        // setText 的 write command 结束时自动 commit；显式 commitDocument 双保险
+        // （同步后同 tick 内 findFile 的 PSI 立即对齐，M36.5.20 语义保留）
+        com.intellij.psi.PsiDocumentManager.getInstance(project).commitDocument(fileDoc)
+        // T-EC-01 核心：同临界区落盘——磁盘即时与内存一致，document 不滞留 modified 态
+        com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().saveDocument(fileDoc)
+    }
+
+    /** BGT 派 EDT document 写的有界等待预算（毫秒）——DialectPreMapping 同款取值；EDT 病态冻结时超时放行走守卫降级。 */
+    private const val EDT_EXEC_DOC_SYNC_WAIT_MS = 2000L
+
+    /**
+     * T-EC-01/T-EC-03 编排：document 写统一派发 EDT——EDT 调用方同步直执行；BGT 两段式
+     * invokeLater + 有界 latch 等待（DialectPreMapping.ensureMapped 同款：BGT 等 EDT，
+     * EDT 永不反向阻塞，超时自愈不互锁）。失败注入缝 [execWriteActionFailureInjection]
+     * 在 [docWriteOnce] 内统一生效（EDT/BGT 两形态等价）。
+     */
+    private fun dispatchDocWriteOnEdt(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, sql: String): Boolean {
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+        val app = ApplicationManager.getApplication()
+        if (app.isDispatchThread) return docWriteOnce(project, vf, sql)
+        val done = java.util.concurrent.CountDownLatch(1)
+        var ok = false
+        app.invokeLater {
+            try {
+                ok = docWriteOnce(project, vf, sql)
+            } finally {
+                done.countDown()
+            }
+        }
+        val signaled = runCatching {
+            done.await(EDT_EXEC_DOC_SYNC_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        }.getOrDefault(false)
+        if (!signaled) {
+            LOG.warn("[M36] exec doc write EDT dispatch timeout after ${EDT_EXEC_DOC_SYNC_WAIT_MS}ms (EDT busy?)")
+        }
+        return signaled && ok
+    }
+
+    /** document 写单次尝试：WriteAction 内 [writeVfTextViaDocument]；失败原因必达日志（旧 getOrDefault 吞 Throwable 的教训）。 */
+    private fun docWriteOnce(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, sql: String): Boolean = runCatching {
+        if (execWriteActionFailureInjection) {
+            error("injected exec WriteAction failure (T-ExecDocSync test seam)")
+        }
+        @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
+        com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
+            writeVfTextViaDocument(project, vf, sql)
+        }
+        true
+    }.onFailure { e ->
+        com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+            .warn("[M36] exec doc write FAILED: ${e.javaClass.simpleName}: ${e.message}")
+    }.getOrDefault(false)
+
+    /**
+     * T-EC-04：VFS 缺条目裸写路径的防御性收口——raw write 后由调用方 refresh 得到 vf，
+     * 此处探测 document（getCachedDocument，不主动创建）或 VFS 内容与 sql 的分叉，
+     * 命中则经 [dispatchDocWriteOnEdt] 补一次 document 驱动同步（T-EC-01 同款落盘收口，
+     * BGT 调用安全——写侧统一派 EDT）。正常流程恒为 no-op（磁盘刚写入 == sql）；防御
+     * VFS 陈旧条目/裸写与 refresh 之间的外部改写残留。探测包 ReadAction（BGT 无隐式读）。
+     *
+     * @return true = 执行了修复同步（正常流程 false）
+     */
+    internal fun syncExecVfContentIfNeeded(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, sql: String): Boolean {
+        val diverged = ReadAction.compute<Boolean, Throwable> {
+            val doc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getCachedDocument(vf)
+            (doc != null && doc.text != sql) ||
+                vf.inputStream.readBytes().toString(Charsets.UTF_8) != sql
+        }
+        if (!diverged) return false
+        return dispatchDocWriteOnEdt(project, vf, sql)
+    }
+
+    /**
      * M36.5.12：项目内执行文件路径——`<projectBase>/.idea/sql-visualizer/exec/mpsql-exec.sql`
      * （F-44-4：目录随插件更名，旧名 mybatis-plus-sql-visualizer 不再使用）。
      * 目录不存在则创建；文件写入 SQL（覆盖）。与 sql-history 同根（.idea/sql-visualizer/），
      * 但**独立子目录** exec（sql-history 读取器只扫 sql-history 子目录，互不污染）。
      *
-     * M36.5.13：**VFS 安全写入**——文件已在 VFS（上次预览创建过，console 编辑器持有其 document）
-     * 时，直接 FileUtil.writeToFile 覆盖磁盘会触发 "File Cache Conflict" 模态弹窗
-     * （MemoryDiskConflictResolver，沙盒日志 12:08:06 实证），弹窗期间默认 modality 的
-     * invokeLater 全部冻结 → 执行链换入/重试挂起 → "执行中"卡住、结果区停在旧数据。
-     * 改为：vf 已存在 → WriteAction 里 setBinaryContent（VFS/document/磁盘三方同步）；
-     * 不存在 → 写盘后由调用方 refresh。
+     * M36.5.13/M36.5.43：VFS 已知文件走 document 驱动写（历史：裸 FileUtil.writeToFile 覆盖
+     * 磁盘触发 "File Cache Conflict" 模态弹窗，MemoryDiskConflictResolver，沙盒 12:08:06/
+     * 16:05:39 两次实证）。T-ExecDocSync 三点收口（同一问题族第三轮）：
+     *  ① **同临界区落盘**（T-EC-01，[writeVfTextViaDocument]）——补 saveDocument，磁盘即时
+     *     与内存一致，不再留「已修改未保存」窗口（M36.5.43 只改内存、磁盘靠自动保存追赶，
+     *     窗口期内任何外部改盘即弹冲突窗，easy-code-demo 真机截图实证）；
+     *  ② **document 写统一派 EDT**（[dispatchDocWriteOnEdt]，DialectPreMapping 两段式同款）——
+     *     262 平台文件 document 的 setText 包 CommandProcessor BGT 硬抛 EDT-only（javap+沙盒
+     *     堆栈双实证）：旧实现 BGT 预热的 document 分支每次必炸、静默掉进裸写兜底 = 真机
+     *     File Cache Conflict 链本体。BGT 预热自此不再降级；
+     *  ③ **裸写兜底守卫**（T-EC-02，[canFallBackToRawWrite]）——document 写失败（含注入缝）
+     *     时只有无已加载 document 才允许裸写盘；有 document 一律抛 writeConflictGuard 拒写
+     *     （宁内容旧一拍，执行前 console doc 同步链会重写并落盘，执行内容不受影响），
+     *     失败原因 Throwable 必达日志（原 getOrDefault(false) 吞掉）；
+     *  ④ **单写方锁**（T-EC-03，[execFileWriteLock]）——串行化 BGT 预热与 EDT 冷路径。
+     * VFS 缺条目路径维持裸写 + 调用方 refresh + [syncExecVfContentIfNeeded] 防御收口（T-EC-04）。
+     * internal 供测试。
      */
-    private fun projectExecFile(project: Project, sql: String): java.io.File? {
+    internal fun projectExecFile(project: Project, sql: String): java.io.File? {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val base = project.basePath ?: run {
             // T-ExecCopyFix F2a：basePath null 是「无异常的 null」，原来连日志都没有
@@ -3063,40 +3183,31 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             return null
         }
         val f = java.io.File(dir, "mpsql-exec.sql")
-        val existing = LocalFileSystem.getInstance().findFileByIoFile(f)
-        if (existing != null) {
-            val updated = runCatching {
-                @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
-                com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
-                    // M36.5.43：优先 **document 驱动**三方同步（VFS/磁盘/document 一致），杜绝
-                    // MemoryDiskConflictResolver 弹 "File Cache Conflict"（16:05:39 沙盒实证
-                    // documentStamp:1742 vs oldFileStamp:779）。executeOnConsole 里"console doc
-                    // synced+committed to vf"同款模式已被验证无冲突；若仅 setBinaryContent（只改
-                    // VFS+磁盘、不动已打开的 document 内存），console 编辑器 hold 的 document 与
-                    // 磁盘 stamp 不一致 → 弹窗冻结后续换入链。
-                    val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager
-                        .getInstance().getDocument(existing)
-                    when {
-                        fileDoc != null && fileDoc.text != sql -> {
-                            fileDoc.setText(sql)
-                            com.intellij.psi.PsiDocumentManager.getInstance(project)
-                                .commitDocument(fileDoc)
-                        }
-                        fileDoc != null -> com.intellij.psi.PsiDocumentManager.getInstance(project)
-                            .commitDocument(fileDoc)
-                        fileDoc == null -> existing.setBinaryContent(sql.toByteArray())
-                    }
+        synchronized(execFileWriteLock) {
+            val existing = LocalFileSystem.getInstance().findFileByIoFile(f)
+            if (existing != null) {
+                // T-EC-01/T-EC-03：document 写统一派 EDT（EDT 直调同步；BGT 派发 + 有界等待）。
+                // 262 实证 document setText BGT 硬抛（见 writeVfTextViaDocument KDoc）——旧实现
+                // 的 BGT document 分支每次必炸、静默掉进裸写兜底，即真机冲突链本体。
+                val updated = dispatchDocWriteOnEdt(project, existing, sql)
+                if (updated) {
+                    LOG.info("[M36] exec file updated via document+save (disk synced in-critical-section): ${f.name}")
+                    return f
                 }
-                true
-            }.getOrDefault(false)
-            if (updated) {
-                LOG.info("[M36] exec file updated via VFS (no cache conflict): ${f.name}")
-                return f
+                // T-EC-02：裸写兜底守卫——有已加载 document 时禁止绕过 document 裸写盘
+                //（裸写叠加「已修改未保存」态 = File Cache Conflict 弹窗 + invokeLater 链冻结）。
+                // 宁内容旧一拍：执行前 console doc 同步（executeOnConsole，T-EC-01 同款落盘）
+                // 会重写并落盘，执行内容不受影响。
+                if (!canFallBackToRawWrite(existing)) {
+                    throw IllegalStateException(
+                        "exec file writeConflictGuard: raw write refused, document loaded (${f.name})",
+                    )
+                }
+                LOG.warn("[M36] exec file doc-write FAILED, fallback to raw write (no loaded document): ${f.name}")
             }
-            // WriteAction 失败（非 EDT 等）→ 兜底直接写盘（可能 conflict，但不阻塞链路）
+            FileUtil.writeToFile(f, sql)
+            return f
         }
-        FileUtil.writeToFile(f, sql)
-        return f
     }
 
     /**
@@ -3204,6 +3315,13 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             LOG.warn("[M36] exec prewarm: VFS not visible after refresh (${ioFile.path}, exists=${ioFile.exists()})")
             return
         }
+        // T-EC-04：同冷路径——裸写残留的防御收口（正常恒 no-op）
+        try {
+            syncExecVfContentIfNeeded(project, vf, sql)
+        } catch (e: Throwable) {
+            LOG.warn("[M36] exec prewarm syncVfContent failed: ${e.javaClass.simpleName}: ${e.message}")
+            return
+        }
         // T-ExecSlowOps F1：BGT 两段式映射（读探测稳态跳过 / 首见派 EDT + 有界等待）
         val inProcessMapped = dialectMappedVf?.isValid == true && dialectMappedVf === vf
         if (DialectPreMapping.ensureMapped(project, vf, inProcessMapped)) {
@@ -3275,4 +3393,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         cachedTempPsiFile = null
         cachedTempPsiProjectName = null
     }
+
+    /** T-ExecDocSync 测试缝：置 true 时 [docWriteOnce] 注入失败（测 T-EC-02 守卫拒绝路径；EDT/BGT 两形态统一生效）。 */
+    internal var execWriteActionFailureInjection = false
 }
