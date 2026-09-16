@@ -55,6 +55,7 @@ import com.intellij.ui.JBColor
 import javax.swing.BorderFactory
 import javax.swing.Box
 import javax.swing.BoxLayout
+import javax.swing.DefaultComboBoxModel
 import javax.swing.DefaultListModel
 import javax.swing.Icon
 import javax.swing.JButton
@@ -117,9 +118,22 @@ internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : JBList<LogSqlE
 }
 
 /**
- * 排序模式（P-06）：NONE = 正序（默认）；DURATION_DESC = 按耗时降序。
+ * 排序模式（P-06 / T-LogSortModes）：默认 [TIME_ASC]（时间升序 = 捕获顺序，与未排序时观感一致）；
+ * 另支持时间降序、耗时升/降序、行号。耗时缺失的条目恒沉底（两个方向的升降序都不让空值顶到前面）。
  */
-enum class SortMode { NONE, DURATION_DESC }
+enum class SortMode { TIME_ASC, TIME_DESC, DURATION_ASC, DURATION_DESC, SEQUENCE }
+
+/** 排序方式下拉项（文案 + 模式）。 */
+internal data class SortOption(val label: String, val mode: SortMode)
+
+/** 排序方式选项（顺序即下拉序；默认项在首位 = 时间升序）。 */
+internal fun sortOptions(): List<SortOption> = listOf(
+    SortOption(MpSqlVisualizerBundle.message("log.sort.time.asc"), SortMode.TIME_ASC),
+    SortOption(MpSqlVisualizerBundle.message("log.sort.time.desc"), SortMode.TIME_DESC),
+    SortOption(MpSqlVisualizerBundle.message("log.sort.duration.asc"), SortMode.DURATION_ASC),
+    SortOption(MpSqlVisualizerBundle.message("log.sort.duration.desc"), SortMode.DURATION_DESC),
+    SortOption(MpSqlVisualizerBundle.message("log.sort.sequence"), SortMode.SEQUENCE),
+)
 
 /** 类型多选弹窗可勾选的类型（OTHER 不单列；全选时 OTHER 一并透传）。 */
 internal val FILTERABLE_TYPES: List<StatementType> = listOf(
@@ -344,11 +358,8 @@ class SqlLogPanel(
     /** 当前激活的类型过滤集合（默认全选 = 「全部」，含 OTHER 透传）。 */
     private val activeFilter = FILTERABLE_TYPES.toMutableSet()
 
-    /** 排序模式（默认正序）。 */
-    private var sortMode = SortMode.NONE
-
-    /** 是否含耗时信息（决定是否显示排序按钮）。 */
-    private var hasAnyDurationInfo = false
+    /** 排序模式（T-LogSortModes：默认时间升序 = 捕获顺序）。 */
+    private var sortMode = SortMode.TIME_ASC
 
     /** 当前搜索词（搜索条实时同步；空串 = 不过滤）。 */
     private var searchText = ""
@@ -397,10 +408,28 @@ class SqlLogPanel(
         addActionListener { showTypeFilterPopup() }
     }
 
-    /** 耗时排序按钮（JToggleButton，原生 LaF 渲染选中态；检测到耗时信息才显示）。 */
-    private val sortButton = JToggleButton(MpSqlVisualizerBundle.message("log.sort.duration")).apply {
+    /** 排序标签（`排序：`，与 SQL类型标签同款式）。 */
+    private val sortLabel = JLabel(MpSqlVisualizerBundle.message("log.sort.label"))
+
+    /**
+     * 排序方式选择器（T-LogSortModes）：时间升/降序、耗时升/降序、行号；默认时间升序。
+     * 取代原「耗时排序」双态切换按钮——排序恒有确定方式（默认时间升序=捕获顺序），
+     * 不再依赖「是否检测到耗时」决定显隐。
+     */
+    /** 排序方式下拉模型（声明先于控件——属性按声明序初始化）。 */
+    private val sortModel = DefaultComboBoxModel<SortOption>().apply {
+        sortOptions().forEach { addElement(it) }
+    }
+
+    private val sortCombo = JComboBox(sortModel).apply {
         isFocusable = false
-        addActionListener { toggleDurationSort() }
+        toolTipText = MpSqlVisualizerBundle.message("log.sort.label")
+        addActionListener {
+            (selectedItem as? SortOption)?.let { option ->
+                sortMode = option.mode
+                refreshList()
+            }
+        }
     }
 
     // ---------- T-ListMode：SQL 显示模式（T-DisplayModeToSettings：入口迁设置页「列表显示」，两列表共享一键） ----------
@@ -423,8 +452,16 @@ class SqlLogPanel(
     /** 当前排序模式（测试断言）。 */
     internal val currentSortMode: SortMode get() = sortMode
 
-    /** 耗时排序按钮（测试点击用）。 */
-    internal val durationSortLabel: JToggleButton get() = sortButton
+    /** 排序方式下拉（测试断言/驱动用）。 */
+    internal val sortComboForTest: JComboBox<*> get() = sortCombo
+
+    /** 选择排序方式（测试驱动：等价用户在「排序：」下拉里选中某项）。 */
+    internal fun selectSortModeForTest(mode: SortMode) {
+        val idx = (0 until sortModel.size).firstOrNull {
+            sortModel.getElementAt(it).mode == mode
+        } ?: return
+        sortCombo.selectedIndex = idx
+    }
 
     /** 去重勾选框（F-44-2 测试驱动：模拟用户勾选「移除重复的sql」验证既有条目立即去重）。 */
     internal val dedupeCheckBoxForTest: JCheckBox get() = dedupeCheckBox
@@ -598,7 +635,13 @@ class SqlLogPanel(
             add(typeFilterButton)
         }
         left.add(typeFilterUnit)
-        left.add(sortButton)
+        // 排序方式单元：与 SQL类型单元同构（标签 + 控件打包，折行时同进退）
+        val sortUnit = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+            isOpaque = false
+            add(sortLabel)
+            add(sortCombo)
+        }
+        left.add(sortUnit)
         // T-DisplayModeToSettings：显示模式入口迁设置页「列表显示」（工具栏按钮移除）
         // O-1：工具栏慢查询计数标签
         slowQueryLabel = JLabel().apply {
@@ -1104,10 +1147,6 @@ class SqlLogPanel(
         val gen = ++refreshGeneration
         val snapshot = manager.entries.snapshot()
 
-        // 检测是否含耗时信息（决定是否显示排序按钮）——结构化字段与文本解析任一命中即显示
-        // （agent 通道耗时为结构化 executionTimeMs，仅看文本解析会让按钮恒隐藏）
-        hasAnyDurationInfo = snapshot.any { durationOf(it) != null }
-
         // 去重丢弃计数快照（徽章渲染数据源）：徽章在元信息行渲染时直读，无缓存失效链
         dedupeCounts = manager.entries.dedupeCountsSnapshot()
         entryCellRenderer.dedupeCounts = dedupeCounts
@@ -1120,8 +1159,6 @@ class SqlLogPanel(
         if (!applyIncremental(newVisible, evicted)) {
             applyFullRebuild(newVisible, gen)
         }
-
-        updateSortButton()
 
         // O-1：同步慢查询阈值 + 更新计数（Phase C）
         slowQueryCounter.thresholdMs = PluginSettings.getInstance().state.slowQueryThresholdMs
@@ -1197,34 +1234,31 @@ class SqlLogPanel(
 
     /** 按当前排序模式排序条目。 */
     private fun applySort(entries: List<LogSqlEntry>): List<LogSqlEntry> = when (sortMode) {
-        SortMode.NONE -> entries
-        // 耗时取值：结构化字段优先（agent 通道直采），文本解析兜底（控制台通道 p6spy/druid 行）
-        SortMode.DURATION_DESC -> entries.sortedByDescending { durationOf(it) ?: -1L }
+        // 时间升序（默认）：与捕获顺序一致（sortedBy 稳定，等值保持入列序）
+        SortMode.TIME_ASC -> entries.sortedBy { displayTimeOf(it) }
+        SortMode.TIME_DESC -> entries.sortedByDescending { displayTimeOf(it) }
+        // 耗时：结构化字段优先（agent 通道直采），缺失时回退日志文本解析；无耗时沉底
+        SortMode.DURATION_ASC -> entries.sortedBy { durationOf(it) ?: Long.MAX_VALUE }
+        SortMode.DURATION_DESC -> entries.sortedByDescending { durationOf(it) ?: Long.MIN_VALUE }
+        // 行号：无行号（历史读回/round-trip）沉底
+        SortMode.SEQUENCE -> entries.sortedBy { if (it.sequenceNumber > 0) it.sequenceNumber else Long.MAX_VALUE }
     }
 
     /** 条目耗时（毫秒）：结构化 executionTimeMs 优先，缺失时回退日志文本解析。 */
     private fun durationOf(entry: LogSqlEntry): Long? =
         entry.executionTimeMs ?: LogDurationParser.parse(entry)
 
-    /** 更新耗时排序按钮可见性 + 文案 + 选中态。 */
-    private fun updateSortButton() {
-        sortButton.isVisible = hasAnyDurationInfo
-        val sortLabel = when (sortMode) {
-            SortMode.NONE -> MpSqlVisualizerBundle.message("log.sort.duration")
-            SortMode.DURATION_DESC -> MpSqlVisualizerBundle.message("log.sort.duration.desc")
+    /**
+     * 条目显示时间（排序口径）：与列表现行时间列一致——「日志时间」源开启且条目有原始日志时间时
+     * 用之，否则用捕获时间（[formatTimestampFragment] 同规则），避免「看到的时间与排序依据不一致」。
+     */
+    private fun displayTimeOf(entry: LogSqlEntry): Long {
+        val state = PluginSettings.getInstance().state
+        return if (state.logTimestampSource == LOG_TIMESTAMP_SOURCE_LOG) {
+            entry.logTimestamp ?: entry.timestamp
+        } else {
+            entry.timestamp
         }
-        sortButton.text = sortLabel
-        sortButton.toolTipText = sortLabel
-        sortButton.isSelected = sortMode == SortMode.DURATION_DESC
-    }
-
-    /** 切换耗时排序（NONE → DURATION_DESC → NONE）。 */
-    private fun toggleDurationSort() {
-        sortMode = when (sortMode) {
-            SortMode.NONE -> SortMode.DURATION_DESC
-            SortMode.DURATION_DESC -> SortMode.NONE
-        }
-        refreshList()
     }
 
     // ---------- 渲染辅助（F-44-2：片段通道恢复 SQL 高亮 + 耗时） ----------
