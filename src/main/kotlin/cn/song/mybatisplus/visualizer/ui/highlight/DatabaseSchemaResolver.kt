@@ -82,18 +82,53 @@ object DatabaseSchemaResolver {
      * T-Perf-09：TableMeta 缓存——键 = (dataSource 对象弱引用, tableName 小写)。
      * 数据源全量遍历（DasModel.traverser().toList()）代价随 schema 规模线性，JOIN 预览
      * 每打开一次、每个 JOIN 表各触发一次；命中后零遍历。数据源删除后条目随弱键回收；
-     * 表匹配不到（通常=未连接/introspection 未完成）**不缓存负命中**——后续连接成功即可命中。
+     * 表匹配不到（通常=未连接/introspection 未完成）走 [negativeCache] 负命中缓存
+     * （T-MetaCheapSource：TTL + DDL 失效双保险，见下）。
      *
      * T-DdlCacheInvalidate：DDL/事务提交语句执行提交前经 execute/MetadataInvalidator 全量失效
-     * （本缓存是 T-DC-01 盘点出的唯一自持 schema 面——ALTER TABLE 后补全/JOIN 富化拿旧结构
+     * （本缓存与负命中缓存同为此前盘点出的自持 schema 面——ALTER TABLE 后补全/JOIN 富化拿旧结构
      * 是正确性破口，失效走 O(1) 引用清空）。
      */
     private val metaCache =
         java.util.Collections.synchronizedMap(java.util.WeakHashMap<Any, MutableMap<String, TableMeta>>())
 
-    /** T-DdlCacheInvalidate：全量失效（引用置空语义，下次取数零遍历回填）。 */
+    /** T-DdlCacheInvalidate：正缓存全量失效（引用置空语义，下次取数零遍历回填）。 */
     fun invalidateAll() {
         synchronized(metaCache) { metaCache.clear() }
+    }
+
+    // ----------
+    // T-MetaCheapSource（O-21 T-MC-01）：负命中缓存。
+    // agent 场景同一幻觉表名会在一次会话内反复尝试，此前每次未命中都全量遍历 DasModel
+    // （多数据源 × 大模型时一次调用可到秒级）。键 = (dataSource 弱引用, 表名小写)，值 = 记入时间戳；
+    // TTL 30s 用时间戳惰性判定（不用定时器）防长会话陈旧——建表后 30s 内的误报由 MetadataInvalidator
+    // 失效兜底（登记 label 见 execute/MetadataInvalidator init 块，DDL/事务后与正缓存一起清）。
+    // 弱键同 metaCache 口径：数据源删除后条目随弱键回收。
+    //
+    // T-MC-02（表名索引：一次遍历建 name → DasTable 索引，把「逐名全扫」变「一次扫描多次查询」）
+    // 为可选件，按计划 P3 自律**默认不启用**——真机数据显示 T-MC-01 后仍慢才引入，避免过度工程。
+    // ----------
+
+    /** 负缓存 TTL（毫秒）：时间戳惰性过期，过期即重扫，无常驻定时器。 */
+    internal const val NEGATIVE_TTL_MS = 30_000L
+
+    /** 测试专用 TTL 旋钮（生产恒等于 [NEGATIVE_TTL_MS]；调短/归零验证过期语义）。 */
+    @Volatile internal var negativeTtlMs: Long = NEGATIVE_TTL_MS
+
+    private val negativeCache =
+        java.util.Collections.synchronizedMap(java.util.WeakHashMap<Any, MutableMap<String, Long>>())
+
+    /** 负缓存清空（MetadataInvalidator 登记入口；引用置空语义，幂等无害）。 */
+    internal fun clearNegativeCache() {
+        synchronized(negativeCache) { negativeCache.clear() }
+    }
+
+    /** 负命中是否在 TTL 内（过期条目惰性移除，不留定时器）。 */
+    private fun isNegativeCached(ds: Any, cacheKey: String): Boolean {
+        val stamped = synchronized(negativeCache) { negativeCache[ds]?.get(cacheKey) } ?: return false
+        if (System.currentTimeMillis() - stamped <= negativeTtlMs) return true
+        synchronized(negativeCache) { negativeCache[ds]?.remove(cacheKey) }
+        return false
     }
 
     /**
@@ -125,23 +160,43 @@ object DatabaseSchemaResolver {
             LOG.info("DatabaseSchemaResolver: no data sources configured, table=$tableName")
             return TableMeta(null, emptyMap())
         }
-        val dasTableClass = Class.forName(DAS_TABLE)
+        return resolveFromSources(tableName, dataSources)
+    }
+
+    /**
+     * 按数据源逐个解析：正缓存命中 → 负缓存 TTL 内跳过 → 全扫（扫描探针可注入供表驱动测试，
+     * 无 database 插件的单测环境走不了真实反射链；生产 scanProbe 传 null 走既有反射路径，
+     * 正命中回填与返回行为与 T-Perf-09 原实现逐字节一致）。
+     */
+    internal fun resolveFromSources(
+        tableName: String,
+        sources: List<Any>,
+        scanProbe: ((Any, String) -> TableMeta)? = null,
+    ): TableMeta {
+        val scan: (Any, String) -> TableMeta =
+            scanProbe ?: { ds, name -> collectFromDataSource(ds, name, Class.forName(DAS_TABLE)) }
         val cacheKey = tableName.lowercase()
-        for (ds in dataSources) {
+        for (ds in sources) {
             // T-Perf-09：缓存命中直接返回（同一数据源同一表零遍历）
             val cached = synchronized(metaCache) { metaCache[ds]?.get(cacheKey) }
             if (cached != null) return cached
-            val found = collectFromDataSource(ds, tableName, dasTableClass)
+            // T-MetaCheapSource：TTL 内负命中跳过该数据源全扫（introspection 完成后由 DDL
+            // 失效/TTL 过期两条路放开，见 negativeCache 注释）
+            if (isNegativeCached(ds, cacheKey)) continue
+            val found = scan(ds, tableName)
             if (found.columns.isNotEmpty() || found.comment != null) {
                 synchronized(metaCache) {
                     metaCache.getOrPut(ds) { HashMap() }[cacheKey] = found
                 }
                 return found
             }
+            // 该数据源确认没有此表：记负缓存（时间戳，TTL 内同表查询不再全扫）
+            synchronized(negativeCache) {
+                negativeCache.getOrPut(ds) { HashMap() }[cacheKey] = System.currentTimeMillis()
+            }
         }
         // 表在所有数据源都找不到（通常=未连接/introspection 未完成/表不在当前库）
-        // T-Perf-09：负命中不缓存——introspection 完成后同一查询应能命中
-        LOG.info("DatabaseSchemaResolver: table=$tableName not found in ${dataSources.size} data sources")
+        LOG.info("DatabaseSchemaResolver: table=$tableName not found in ${sources.size} data sources")
         return TableMeta(null, emptyMap())
     }
 

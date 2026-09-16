@@ -17,7 +17,9 @@ import net.sf.jsqlparser.parser.CCJSqlParserUtil
  * 解析失败 **fail closed**：按「可能改变」处理（宁多失效不多缓存）。
  *
  * 自持缓存登记处（守卫约定——**新增 schema 缓存必须在此登记**，否则 DDL 后旧结构泄漏）：
- *  - [ui.highlight.DatabaseSchemaResolver]（表/列注释与类型 metaCache，T-DC-01 盘点唯一自持面）
+ *  - [ui.highlight.DatabaseSchemaResolver]（表/列注释与类型 metaCache，T-DC-01 盘点自持面）
+ *  - [ui.highlight.DatabaseSchemaResolver] 负命中缓存（T-MetaCheapSource：不存在的表名在
+ *    TTL 内不再全扫，DDL 建表后必须清空否则新表 30s 内查不到）
  *
  * 其余盘点结论（不登记的证据见开发计划 §八 T-DC-01 盘点表）：DataSourceSelector @Volatile 族
  * 持临时 PSI/方言幂等标记非 schema；DialectPreMapping 探测平台映射无自持缓存；WrapperCache
@@ -52,9 +54,14 @@ object MetadataInvalidator {
     private val invalidationActions = linkedMapOf<String, () -> Unit>()
 
     init {
-        // T-DC-01 盘点唯一自持 schema 面（表/列注释与类型 metaCache）——登记失效
+        // T-DC-01 盘点自持 schema 面（表/列注释与类型 metaCache）——登记失效
         register("DatabaseSchemaResolver.metaCache") {
             cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.invalidateAll()
+        }
+        // T-MetaCheapSource（T-MC-01）：负命中缓存与正缓存一起失效——DDL 建表后同会话立查
+        // 必须能命中新表，负缓存滞留会让 agent 在 TTL 窗口内持续误报「表不存在」
+        register("DatabaseSchemaResolver.negativeCache") {
+            cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.clearNegativeCache()
         }
     }
 
