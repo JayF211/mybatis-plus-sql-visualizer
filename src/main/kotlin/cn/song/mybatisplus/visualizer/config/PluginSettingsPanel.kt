@@ -1117,8 +1117,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || autoFoldCheck.isSelected != s.autoFoldEnabled
             || autoFoldThresholdField.text.trim().toIntOrNull() != s.autoFoldFieldThreshold
             || literalParamRecoveryCheck.isSelected != s.literalParamRecovery
-            || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
-            || enhancedDesensitizeCheck.isSelected != s.enhancedCaptureDesensitize
             || injectLogicDeleteCheck.isSelected != s.injectLogicDelete
             || logicDeleteValueField.text.trim() != s.logicDeleteValue
             || injectTenantLineCheck.isSelected != s.injectTenantLine
@@ -1159,6 +1157,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logTimePrefixField.text.trim() != s.logTimePrefix
             || slowQueryThresholdField.text.trim().toLongOrNull() != s.slowQueryThresholdMs
             || logShowDurationCheck.isSelected != s.showDurationInLogList
+            // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
+            || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
+            || enhancedDesensitizeCheck.isSelected != s.enhancedCaptureDesensitize
             || logHibernateEnabledCheck.isSelected != s.logHibernateEnabled
             || logHibernateSqlPrefixField.text.trim() != s.logHibernateSqlPrefix
             || logHibernateParamPrefixField.text.trim() != s.logHibernateParamPrefix
@@ -1202,8 +1203,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.autoFoldFieldThreshold = autoFoldThresholdField.text.trim().toIntOrNull()
                 ?: PluginSettings.DEFAULT_AUTO_FOLD_FIELD_THRESHOLD
             s.literalParamRecovery = literalParamRecoveryCheck.isSelected
-            s.enhancedCaptureEnabled = enhancedCaptureCheck.isSelected
-            s.enhancedCaptureDesensitize = enhancedDesensitizeCheck.isSelected
             s.injectLogicDelete = injectLogicDeleteCheck.isSelected
             s.logicDeleteValue = logicDeleteValueField.text.trim()
             s.injectTenantLine = injectTenantLineCheck.isSelected
@@ -1245,6 +1244,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.slowQueryThresholdMs = slowQueryThresholdField.text.trim().toLongOrNull()
                 ?: PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS
             s.showDurationInLogList = logShowDurationCheck.isSelected
+            // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
+            s.enhancedCaptureEnabled = enhancedCaptureCheck.isSelected
+            s.enhancedCaptureDesensitize = enhancedDesensitizeCheck.isSelected
             s.logHibernateEnabled = logHibernateEnabledCheck.isSelected
             s.logHibernateSqlPrefix = logHibernateSqlPrefixField.text.trim()
             s.logHibernateParamPrefix = logHibernateParamPrefixField.text.trim()
@@ -1303,8 +1305,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
             autoFoldThresholdField.text = s.autoFoldFieldThreshold.toString()
             autoFoldThresholdField.isEnabled = s.autoFoldEnabled
             literalParamRecoveryCheck.isSelected = s.literalParamRecovery
-            enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled
-            enhancedDesensitizeCheck.isSelected = s.enhancedCaptureDesensitize
             injectLogicDeleteCheck.isSelected = s.injectLogicDelete
             logicDeleteValueField.text = s.logicDeleteValue
             injectTenantLineCheck.isSelected = s.injectTenantLine
@@ -1361,6 +1361,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logTimePrefixField.text = s.logTimePrefix
             slowQueryThresholdField.text = s.slowQueryThresholdMs.toString()
             logShowDurationCheck.isSelected = s.showDurationInLogList
+            // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
+            enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled
+            enhancedDesensitizeCheck.isSelected = s.enhancedCaptureDesensitize
             logHibernateEnabledCheck.isSelected = s.logHibernateEnabled
             logHibernateSqlPrefixField.text = s.logHibernateSqlPrefix
             logHibernateParamPrefixField.text = s.logHibernateParamPrefix
