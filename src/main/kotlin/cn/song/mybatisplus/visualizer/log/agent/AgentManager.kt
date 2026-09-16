@@ -245,16 +245,33 @@ class AgentManager(private val project: Project) : Disposable {
 
     internal fun resolvePid(processHandler: Any?): Long? = runCatching {
         if (processHandler == null) return null
-        // 1) KillableProcessHandler.getNativePid()（243 平台已有；能力探测失败走回退）
+        // 1) KillableProcessHandler.getNativePid()（262+ 平台；243 实测无此方法）
         runCatching {
             val m = processHandler.javaClass.methods.firstOrNull { it.name == "getNativePid" && it.parameterCount == 0 }
             (m?.invoke(processHandler) as? Number)?.toLong()
         }.getOrNull()
-            // 2) ProcessHandler.getProcess().pid()（Java 9+ Process）
+            // 2) getProcess() 直接接口调用 pid()（Java 9+）——禁反射 invoke：ProcessImpl 是 JDK
+            //    package-private 类，getMethod("pid").invoke 会抛 IllegalAccessException
+            //    （测试匿名子类可访问故测试通过、真实环境失败的根因）
             ?: runCatching {
-                val process = processHandler.javaClass.getMethod("getProcess").invoke(processHandler)
-                (process.javaClass.getMethod("pid").invoke(process) as? Number)?.toLong()
+                val process = processHandler.javaClass.getMethod("getProcess").invoke(processHandler) as java.lang.Process
+                process.pid().toLong()
             }.getOrNull()
+            // 3) OSProcessUtil.getProcessID(Process)（243 平台稳定 API，util.jar）
+            ?: runCatching {
+                val process = processHandler.javaClass.getMethod("getProcess").invoke(processHandler) as java.lang.Process
+                com.intellij.execution.process.OSProcessUtil.getProcessID(process).toLong()
+            }.getOrNull()
+            ?: run {
+                val (processRepr, procErr) = try {
+                    val p = processHandler.javaClass.getMethod("getProcess").invoke(processHandler)
+                    (p?.javaClass?.name ?: "null") to null
+                } catch (t: Throwable) {
+                    "N/A" to t.toString()
+                }
+                LOG.warn("resolvePid: 三步回退全失败（handler=${processHandler.javaClass.name}, process=$processRepr, procErr=$procErr）")
+                null
+            }
     }.getOrNull()
 
     /** agent 失败显式上报（禁静默吞）：桥侧继续捕获，用户无感；日志 WARN 留排查锚点。 */
@@ -305,7 +322,10 @@ internal class AgentSession(
                 while (true) {
                     val len = input.readInt()
                     if (len < 0 || len > AgentProtocol.MAX_FRAME_LEN) {
-                        throw EOFException("bad frame len $len")
+                        // 超限帧容错：读掉 body 丢弃继续，不杀会话（一次大事件不应永久掉线）
+                        LOG.warn("frame len=$len 超限（MAX=${AgentProtocol.MAX_FRAME_LEN}）——丢弃该帧继续")
+                        if (len > 0) input.skipNBytes(len.toLong())
+                        continue
                     }
                     val cmd = input.readUnsignedByte()
                     val body = ByteArray(len)
@@ -314,6 +334,7 @@ internal class AgentSession(
                     handleFrame(cmd, String(body, Charsets.UTF_8))
                 }
             } catch (t: Throwable) {
+                LOG.warn("会话读循环退出（pid=$pid, alive 前=$alive）——掉线原因如下", t)
                 alive = false
                 onStateChange()
             }
@@ -325,7 +346,7 @@ internal class AgentSession(
             AgentProtocol.CMD_EVENT -> {
                 val event = AgentEvent.parse(body)
                 if (event == null) {
-                    eventDropped.incrementAndGet()
+                    LOG.warn("EVENT 帧解析失败丢弃（pid=$pid, dropped=${eventDropped.incrementAndGet()}, bodyLen=${body.length}, head=${body.take(120)}）")
                     return
                 }
                 try {

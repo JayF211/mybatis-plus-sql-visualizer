@@ -10,24 +10,28 @@ public final class Jsons {
 
     public static String writeEvent(SqlEvent e) {
         final StringBuilder sb = new StringBuilder(256);
+        // 首字段标志：第一个成员前不得有逗号（否则 IDE 侧 JSON 解析全量失败——
+        // 实证 {,"sql":...} 被丢弃，事件零到达）
+        final boolean[] first = {true};
         sb.append('{');
-        str(sb, "sql", e.sql);
-        sb.append(",\"ts\":").append(e.timestamp);
-        sb.append(",\"dn\":").append(e.durationNanos);
+        str(sb, first, "sql", e.sql);
+        num(sb, first, "ts", e.timestamp);
+        num(sb, first, "dn", e.durationNanos);
         if (e.updateCount != null) {
-            sb.append(",\"u\":").append(e.updateCount);
+            num(sb, first, "u", e.updateCount);
         }
-        str(sb, "err", e.errorText);
-        str(sb, "sf", e.sourceFile);
+        str(sb, first, "err", e.errorText);
+        str(sb, first, "sf", e.sourceFile);
         if (e.sourceLine > 0) {
-            sb.append(",\"sl\":").append(e.sourceLine);
+            num(sb, first, "sl", e.sourceLine);
         }
-        str(sb, "mk", e.methodKey);
-        str(sb, "rt", e.requestTag);
-        str(sb, "th", e.threadName);
-        str(sb, "url", e.url);
+        str(sb, first, "mk", e.methodKey);
+        str(sb, first, "rt", e.requestTag);
+        str(sb, first, "th", e.threadName);
+        str(sb, first, "url", e.url);
         if (e.params != null && !e.params.isEmpty()) {
-            sb.append(",\"p\":[");
+            sep(sb, first);
+            sb.append("\"p\":[");
             for (int i = 0; i < e.params.size(); i++) {
                 if (i > 0) {
                     sb.append(',');
@@ -45,11 +49,26 @@ public final class Jsons {
         return sb.toString();
     }
 
-    private static void str(StringBuilder sb, String key, String value) {
+    /** 成员分隔：首成员无逗号，后续成员补逗号。 */
+    private static void sep(StringBuilder sb, boolean[] first) {
+        if (first[0]) {
+            first[0] = false;
+        } else {
+            sb.append(',');
+        }
+    }
+
+    private static void str(StringBuilder sb, boolean[] first, String key, String value) {
         if (value != null) {
-            sb.append(",\"").append(key).append("\":");
+            sep(sb, first);
+            sb.append('"').append(key).append("\":");
             val(sb, value);
         }
+    }
+
+    private static void num(StringBuilder sb, boolean[] first, String key, long value) {
+        sep(sb, first);
+        sb.append('"').append(key).append("\":").append(value);
     }
 
     private static void val(StringBuilder sb, String value) {

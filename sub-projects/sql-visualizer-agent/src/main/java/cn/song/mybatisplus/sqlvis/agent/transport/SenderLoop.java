@@ -42,11 +42,18 @@ final class SenderLoop implements Runnable {
                 final cn.song.mybatisplus.sqlvis.agent.model.SqlEvent[] slot =
                         new cn.song.mybatisplus.sqlvis.agent.model.SqlEvent[1];
                 while (true) {
-                    // 1) 采集事件尽出（每次最多 64 条防饿死心跳）
+                    // 1) 采集事件尽出（每次最多 64 条防饿死心跳）；单事件编码/写失败只丢该事件
+                    //    （IO 异常外抛走重连；编码异常跳过不断连接）
                     int burst = 0;
                     while (burst < 64 && EventBus.pollEvent(slot, 0)) {
-                        writeFrame(out, EventBus.CMD_EVENT, EventBus.encodeEvent(slot[0]));
-                        burst++;
+                        try {
+                            writeFrame(out, EventBus.CMD_EVENT, EventBus.encodeEvent(slot[0]));
+                            burst++;
+                        } catch (java.io.IOException io) {
+                            throw io;
+                        } catch (Throwable t) {
+                            // 编码失败：丢弃该事件继续（EventBus.droppedCount 可观测）
+                        }
                     }
                     // 2) 入站 CONFIG（非阻塞轮询：超时=无数据）
                     try {
