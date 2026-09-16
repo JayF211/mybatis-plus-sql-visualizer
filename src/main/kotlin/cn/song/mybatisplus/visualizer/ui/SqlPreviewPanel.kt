@@ -217,6 +217,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         isVisible = false
     }
 
+    /**
+     * T-UxOnboard T-UX-02：预览编辑器空态引导（原生 placeholder，显隐由编辑器随空文档管理）。
+     * 常态下预览内容即编辑器全文、placeholder 不可见；用户清空文档后原生提示接管。
+     */
+    private val previewEmptyHint: String = MpSqlVisualizerBundle.message("panel.preview.emptyHint")
+
     /** M36：已内嵌的原生控制台 UI 组件（清空/释放时级联 dispose）。 */
     private var embeddedConsole: JComponent? = null
 
@@ -2077,6 +2083,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             settings.isFoldingOutlineShown = true
             settings.isIndentGuidesShown = false
             settings.isAdditionalPageAtBottom = false
+            setPlaceholder(previewEmptyHint) // T-UxOnboard T-UX-02：空态提示原生件（LogToSqlPanel T-UN-14 同款）
         }
         editorHolder.removeAll()
         // T-M27.1：编辑器组件链补 DataProvider——2025.3 平台编辑器内部改为 UiCompatibleDataProvider
@@ -3287,6 +3294,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** M36.5.39-A2：持久包装容器 + 显示链宿主（ConsoleHostTest 断言用）。 */
     internal fun consoleHostForTest(): JComponent = consoleHost
     internal fun editorHolderForTest(): JComponent = editorHolder
+    /** T-UxOnboard T-UX-02：预览编辑器空态提示文案（placeholder 接线断言用）。 */
+    internal fun previewEmptyHintForTest(): String = previewEmptyHint
     /** M36.5.39-A1：最近一次嵌入 console 的身份 id（sameAsPrev 探针断言用）。 */
     internal fun lastConsoleEmbeddedIdForTest(): Int? = lastConsoleEmbeddedId
     /** T-RefreshDbSteal F3：摘除控制台 + 移除 rehost 监听（生命周期断言用）。 */

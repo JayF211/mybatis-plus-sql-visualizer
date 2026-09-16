@@ -420,6 +420,20 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * true 时对疑似敏感形态打码；脱敏在 agent 采集层执行，数据不出应用 JVM 前已处理。
          */
         var enhancedCaptureDesensitize: Boolean = false,
+
+        // ---------- T-UxOnboard T-UX-01 首用锚点引导 ----------
+
+        /**
+         * 首用锚点引导通知开关（默认开）：项目内首次打开含可预览 SQL（Wrapper 链/XML mapper/
+         * 注解 SQL 任一）的文件时，经预览组弹一次「Alt+Shift+Q 预览」指路通知；关闭后全程静默。
+         */
+        var onboardingAnchorTipEnabled: Boolean = true,
+
+        /**
+         * 首用锚点引导通知已展示（一次性持久化记忆）：展示过一次即置 true，
+         * 重开项目/重启 IDE 不再出现——用户全生命期至多一条。
+         */
+        var onboardingAnchorTipShown: Boolean = false,
     )
 
     private var state = State()

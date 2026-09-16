@@ -203,6 +203,12 @@ class SqlLogEntryBuffer(
     fun snapshot(): List<LogSqlEntry> = synchronized(entries) { entries.toList() }
 
     /**
+     * 当前条目数（T-UxOnboard T-UX-03 增设）：入队热路径（onEntryAccepted 回调）需要 O(1) 判
+     * 「本条是否会话首条」——snapshot() 全量拷贝在流式灌入下是 O(n²) 累积成本，不得用于热路径。
+     */
+    fun size(): Int = synchronized(entries) { entries.size }
+
+    /**
      * T-Perf-03（自 dev 移植）：取走自上次调用以来的头部淘汰条数并归零。
      * 单消费方约定（面板 EDT 刷新）：与 [snapshot] 搭配，用于增量刷新的头部对齐；
      * 其他调用方调用会偷走面板的对齐信息（回退全量重建，正确性不受影响）。

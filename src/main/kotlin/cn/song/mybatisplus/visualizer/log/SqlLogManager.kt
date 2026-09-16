@@ -137,7 +137,12 @@ class SqlLogManager(private val project: Project) : Disposable {
         // 首条捕获也触发，修 D2 老问题语义），目标从独立窗口改为主工具窗 show（不抢焦点）。
         // T-PerfBatch：自动展开挂 onEntryAccepted（每次成功入队即时回调，与列表内容节流解耦——
         // 既有语义「每条都判 maybeAutoShow、60s 防抖收敛」不变）。
-        buffer.onEntryAccepted = autoShowBufferListener
+        // T-UxOnboard T-UX-03：首次捕获成功指路同挂本出口（会话级一次性、历史非空跳过、
+        // headless 静默）——零新增监听链，headless 下决策即短路。
+        buffer.onEntryAccepted = {
+            autoShowBufferListener()
+            FirstCaptureGuide.onEntryAccepted(project, buffer)
+        }
 
         // T-LogPerf-04：设置变更事件驱动——取代逐行 configProvider/syncBufferConfig 同步
         // （捕捉中改前缀/去重/过滤仍即时生效）；连接绑定服务 Disposable，dispose 自动注销

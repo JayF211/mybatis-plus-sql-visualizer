@@ -151,7 +151,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // T-HistParam：字面量参数恢复开关 +1
             // T-AutoFold：SQL 预览字段较多时自动折叠开关 +1
             // M56 T-M56-08：增强捕获开关 + 脱敏开关 +2
-            assertEquals("复选框总数应为 27", 27, texts.size)
+            // T-UxOnboard T-UX-01：首用锚点引导通知开关 +1（界面节）
+            assertEquals("复选框总数应为 28", 28, texts.size)
         } finally {
             settings.state.language = old
         }
