@@ -88,15 +88,61 @@ class AgentManager(private val project: Project) : Disposable {
     // ---------- 挂载入口 ----------
 
     /**
-     * 进程出现回调（RunConfigurationProcessListener.processStarted 转接；增强未开启/未确认时空操作）。
+     * 进程出现回调（RunConfigurationProcessListener.processStarted 转接；增强未开启时空操作）。
      * 后台线程：进程就绪等待 + 3s 去抖 + attach——全程不进 EDT。
+     *
+     * 默认开（2026-09-16 定案）后的确认闸门：enabled 默认 true 而 confirmed 默认 false——
+     * 若沿用「仅设置页勾选时弹确认」，默认勾上的开关将永不弹框、永不 attach（死开关）。
+     * 故未确认时在**首次挂载请求**处征求一次知情同意（EDT 弹框），同意后继续挂载。
      */
     fun onProcessAppeared(processHandler: Any?) {
-        if (!isEnhancedActive()) {
-            LOG.info("onProcessAppeared: 增强未激活（enhancedCaptureEnabled=${PluginSettings.getInstance().state.enhancedCaptureEnabled}, " +
-                "confirmed=${PluginSettings.getInstance().state.enhancedCaptureConfirmed}, disposed=${project.isDisposed}）——跳过挂载")
+        if (!isEnhancedEnabled()) {
+            LOG.info("onProcessAppeared: 增强未开启（enabled=${PluginSettings.getInstance().state.enhancedCaptureEnabled}, " +
+                "disposed=${project.isDisposed}）——跳过挂载")
             return
         }
+        if (!isEnhancedConfirmed()) {
+            LOG.info("onProcessAppeared: 增强已开启但未确认注入——请求确认后挂载")
+            requestConsentThenAttach(processHandler)
+            return
+        }
+        doAttachAsync(processHandler)
+    }
+
+    /**
+     * 首次挂载确认（EDT 弹一次；同意→置 confirmed 并继续挂载，拒绝→本次不注入）。
+     * 确认结果持久化（重开不再弹）；headless 由 [consentProvider] 默认实现直接拒绝。
+     */
+    private fun requestConsentThenAttach(processHandler: Any?) {
+        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+            if (project.isDisposed || !isEnhancedEnabled()) return@invokeLater
+            val accepted = try {
+                consentProvider()
+            } catch (t: Throwable) {
+                LOG.warn("requestConsentThenAttach: 确认框异常——按不同意处理", t)
+                false
+            }
+            if (accepted) {
+                PluginSettings.getInstance().state.enhancedCaptureConfirmed = true
+                LOG.info("requestConsentThenAttach: 用户同意注入——继续挂载")
+                doAttachAsync(processHandler)
+            } else {
+                LOG.info("requestConsentThenAttach: 用户未同意注入——本次不挂载（下次运行再询问）")
+            }
+        }
+    }
+
+    /** 确认提供者（默认弹注入确认框，headless 恒拒绝；测试替换以驱动同意/拒绝分支）。 */
+    internal var consentProvider: () -> Boolean = {
+        if (com.intellij.openapi.application.ApplicationManager.getApplication().isHeadlessEnvironment) {
+            false
+        } else {
+            cn.song.mybatisplus.visualizer.config.EnhancedCaptureConfirmDialog.confirm(null)
+        }
+    }
+
+    /** 实际挂载（后台线程：resolvePid → 3s 去抖 → attach）。 */
+    private fun doAttachAsync(processHandler: Any?) {
         executor.execute {
             try {
                 val pid = resolvePid(processHandler)
@@ -227,10 +273,17 @@ class AgentManager(private val project: Project) : Disposable {
         }
     }
 
-    private fun isEnhancedActive(): Boolean {
+    private fun isEnhancedActive(): Boolean = isEnhancedEnabled() && isEnhancedConfirmed()
+
+    /** 开关已开且项目未销毁（不含确认态）。 */
+    internal fun isEnhancedEnabled(): Boolean {
         val state = PluginSettings.getInstance().state
-        return state.enhancedCaptureEnabled && state.enhancedCaptureConfirmed && !project.isDisposed
+        return state.enhancedCaptureEnabled && !project.isDisposed
     }
+
+    /** 注入确认已达成（同意过一次即持久为 true）。 */
+    internal fun isEnhancedConfirmed(): Boolean =
+        PluginSettings.getInstance().state.enhancedCaptureConfirmed
 
     /** 关闭开关：CONFIG 下发停采集（禁用不卸载语义）→ 会话关闭 → 桥回落。 */
     fun shutdownAll() {

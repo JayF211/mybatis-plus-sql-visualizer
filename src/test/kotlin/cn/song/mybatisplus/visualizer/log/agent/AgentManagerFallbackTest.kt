@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.log.SqlLogManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 
 /**
  * M56 T-M56-01 门禁④：attach 失败 → 回落桥零劣化（闸门不闭合、桥继续捕获）；
@@ -34,6 +35,69 @@ class AgentManagerFallbackTest : BasePlatformTestCase() {
         manager.onProcessAppeared(fakeHandler) // 守卫分支：不 attach 不抛错
         assertFalse("增强关闭时闸门不得闭合", SqlCaptureGate.paused.get())
         assertFalse("增强关闭时不在线", manager.online)
+    }
+
+    // ---------- 默认值与首次挂载确认（2026-09-16 定案：增强捕获默认开、脱敏默认关） ----------
+
+    fun test默认值_增强捕获开_脱敏关_确认未达成() {
+        val fresh = PluginSettings.State()
+        assertTrue("增强捕获默认应开启", fresh.enhancedCaptureEnabled)
+        assertFalse("增强捕获脱敏默认应关闭", fresh.enhancedCaptureDesensitize)
+        assertFalse(
+            "确认默认未达成（默认开启态下首次运行项目弹一次注入确认，知情同意不放宽）",
+            fresh.enhancedCaptureConfirmed,
+        )
+    }
+
+    fun test已开启未确认_首次挂载请求确认_拒绝则不注入() {
+        val state = PluginSettings.getInstance().state
+        state.enhancedCaptureEnabled = true
+        state.enhancedCaptureConfirmed = false
+        var asked = false
+        val saved = manager.consentProvider
+        manager.consentProvider = { asked = true; false }
+        try {
+            manager.onProcessAppeared(FakeProcessHandler(nativePid = 424242L))
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents() // 冲洗 EDT：确认请求在此执行
+            assertTrue("未确认时应征求注入确认", asked)
+            assertFalse("拒绝后不得置 confirmed", state.enhancedCaptureConfirmed)
+            assertFalse("拒绝后闸门不得闭合", SqlCaptureGate.paused.get())
+            assertFalse("拒绝后不在线", manager.online)
+        } finally {
+            manager.consentProvider = saved
+        }
+    }
+
+    fun test已开启未确认_同意后置确认并继续挂载() {
+        val state = PluginSettings.getInstance().state
+        state.enhancedCaptureEnabled = true
+        state.enhancedCaptureConfirmed = false
+        val saved = manager.consentProvider
+        manager.consentProvider = { true }
+        try {
+            // pid 不可达 → attach 必失败，但「同意后继续挂载」路径必须走到（confirmed 置位即证据）
+            manager.onProcessAppeared(FakeProcessHandler(nativePid = 999_999_999L))
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            assertTrue("同意后应置 confirmed", state.enhancedCaptureConfirmed)
+        } finally {
+            manager.consentProvider = saved
+        }
+    }
+
+    fun test已确认_不再弹确认直接挂载() {
+        val state = PluginSettings.getInstance().state
+        state.enhancedCaptureEnabled = true
+        state.enhancedCaptureConfirmed = true
+        var asked = false
+        val saved = manager.consentProvider
+        manager.consentProvider = { asked = true; true }
+        try {
+            manager.onProcessAppeared(FakeProcessHandler(nativePid = 999_999_999L))
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            assertFalse("已确认不应重复弹确认框", asked)
+        } finally {
+            manager.consentProvider = saved
+        }
     }
 
     fun test开启但attach不可达_回落桥零劣化() {
