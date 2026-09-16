@@ -92,10 +92,19 @@ class AgentManager(private val project: Project) : Disposable {
      * 后台线程：进程就绪等待 + 3s 去抖 + attach——全程不进 EDT。
      */
     fun onProcessAppeared(processHandler: Any?) {
-        if (!isEnhancedActive()) return
+        if (!isEnhancedActive()) {
+            LOG.info("onProcessAppeared: 增强未激活（enhancedCaptureEnabled=${PluginSettings.getInstance().state.enhancedCaptureEnabled}, " +
+                "confirmed=${PluginSettings.getInstance().state.enhancedCaptureConfirmed}, disposed=${project.isDisposed}）——跳过挂载")
+            return
+        }
         executor.execute {
             try {
-                val pid = resolvePid(processHandler) ?: return@execute
+                val pid = resolvePid(processHandler)
+                if (pid == null) {
+                    LOG.warn("onProcessAppeared: resolvePid 失败（handler=${processHandler?.javaClass?.name}）——跳过挂载")
+                    return@execute
+                }
+                LOG.info("onProcessAppeared: 目标 pid=$pid，3s 去抖后挂载")
                 // 去抖 3s：等应用初始化热点过去（驱动已加载场景 retransform 直达；未加载场景 transformer 兜底）
                 Thread.sleep(3000)
                 attachToPid(pid)
