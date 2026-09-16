@@ -150,7 +150,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // T-VPairAnno：竖向排列值行尾列名标注开关 +1
             // T-HistParam：字面量参数恢复开关 +1
             // T-AutoFold：SQL 预览字段较多时自动折叠开关 +1
-            assertEquals("复选框总数应为 25", 25, texts.size)
+            // M56 T-M56-08：增强捕获开关 + 脱敏开关 +2
+            assertEquals("复选框总数应为 27", 27, texts.size)
         } finally {
             settings.state.language = old
         }

@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.config.SettingsChangeListener
+import cn.song.mybatisplus.visualizer.log.agent.AgentManager
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
@@ -71,6 +72,11 @@ class SqlLogManager(private val project: Project) : Disposable {
     @Volatile
     var capturing: Boolean = false
         private set
+
+    /** M56 T-M56-09：EP 双轨单测缝——直设捕捉态（生产路径经 startCapture 状态机）。 */
+    internal fun setCapturingForTest(value: Boolean) {
+        capturing = value
+    }
 
     /** 用户主动开启 SQL 监听标志——点击「捕捉」后置 true，点击「停止」或 dispose 时清零。
      *  跨控制台生命周期持久：项目停止后回到 armed 态，下次启动时自动恢复捕捉。 */
@@ -219,6 +225,8 @@ class SqlLogManager(private val project: Project) : Disposable {
         if (manual) PluginSettings.getInstance().state.logAutoCaptureSuppressed = false
         // 解除缓冲暂停（stop 时设置 paused=true 阻止任何入队）
         buffer.paused = false
+        // T-AgentListenSync：联动 agent 恢复采集（后续两分支 capturing 均置 true，统一在此下发）
+        AgentManager.getInstance(project).pushCaptureActive(true)
         if (!hasMainConsole()) {
             // 项目尚未运行（无主运行控制台）：立即进入 armed 态（capturing=true）+ 挂载桥监听——
             // 主控制台出现（contentAdded 监听 / 轮询检测）时自动附着 filter 开始捕捉 SQL
@@ -283,6 +291,9 @@ class SqlLogManager(private val project: Project) : Disposable {
         isWaitingForConsole = false
         // 安全网：暂停缓冲区——即使 Filter 未被成功移除，也无法向缓冲区添加条目
         buffer.paused = true
+        // T-AgentListenSync：联动 agent 真停采（CONFIG disabled=true，应用侧零开销；
+        // 否则 agent 持续采集发送、IDE 侧 addEntry 被 paused 白白丢弃）
+        AgentManager.getInstance(project).pushCaptureActive(false)
         // 自动启动开启时，用户显式停止→置持久化抑制标志（重启后 LogStartupCapture 检查此标志跳过）
         if (PluginSettings.getInstance().state.logAutoCaptureOnStart) {
             PluginSettings.getInstance().state.logAutoCaptureSuppressed = true
@@ -497,6 +508,8 @@ class SqlLogManager(private val project: Project) : Disposable {
             hibernateParamPrefix = state.logHibernateParamPrefix,
             hibernateEnabled = state.logHibernateEnabled,
             jdbcEnabled = state.logJdbcEnabled,
+            // T-AgentDialectLoop：增强接管期间的日志时间嗅探开关——仅当时间显示开且源=日志时才有意义
+            sniffLogTime = state.logTimestampEnabled && state.logTimestampSource == PluginSettings.LOG_TIMESTAMP_SOURCE_LOG,
         )
     }
 
@@ -548,4 +561,6 @@ data class ParserConfig(
     val hibernateEnabled: Boolean = true,
     // JdbcTemplate 解析器配置（M47）
     val jdbcEnabled: Boolean = true,
+    // T-AgentDialectLoop：增强接管期间日志时间嗅探（LogTimeCorrelator）开关快照
+    val sniffLogTime: Boolean = true,
 )

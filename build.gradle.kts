@@ -1038,6 +1038,23 @@ tasks.test {
     }
 }
 
+// ---------- M56 T-M56-01：agent fat jar 内嵌主插件资源（resources/agent/mps-sql-agent.jar） ----------
+// 运行时 AgentManager 解压落盘 + deleteOnExit 后经 attach loadAgent 挂载；
+// 落盘失败显式上报（禁静默吞）。跨项目任务经路径引用，配置缓存兼容。
+evaluationDependsOn(":sql-visualizer-agent")
+val agentEmbedDir = layout.buildDirectory.dir("agent-embed")
+val embedAgentJar = tasks.register<Copy>("embedAgentJar") {
+    from(tasks.getByPath(":sql-visualizer-agent:agentFatJar"))
+    into(agentEmbedDir.map { it.dir("agent") })
+    rename { "mps-sql-agent.jar" }
+}
+sourceSets.named("main") {
+    resources.srcDir(agentEmbedDir)
+}
+tasks.named("processResources") {
+    dependsOn(embedAgentJar)
+}
+
 // T-TestPerf-03（2026-09-14）实验结论：不引入纯逻辑并行分桶任务。
 // 三点实证：① 多 fork 并行平台型测试共享默认 test 沙盒 → PersistentFS 互踩成片失败；
 // ② 独立纯逻辑桶 task 可行（classpath 须复用默认 test 任务成品、排除须统一走 filter 机制——

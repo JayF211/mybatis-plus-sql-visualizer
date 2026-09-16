@@ -1,0 +1,40 @@
+package cn.song.mybatisplus.sqlvis.agent;
+
+import org.junit.Test;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+/** [AgentArgs] 解析测试（§4.3 参数契约）。 */
+public class AgentArgsTest {
+
+    @Test
+    public void 标准形态() {
+        AgentArgs a = AgentArgs.parse("port=53210;logLevel=warn");
+        assertEquals(53210, a.getPort());
+        assertEquals("warn", a.getLogLevel());
+        assertFalse(a.isStartDisabled());
+    }
+
+    @Test
+    public void 逗号分隔与缺省() {
+        AgentArgs a = AgentArgs.parse("port=123,logLevel=info,disable=true");
+        assertEquals(123, a.getPort());
+        assertEquals("info", a.getLogLevel());
+        assertTrue(a.isStartDisabled());
+    }
+
+    @Test
+    public void 无参缺省端口0放弃挂载() {
+        assertEquals(0, AgentArgs.parse(null).getPort());
+        assertEquals(0, AgentArgs.parse("").getPort());
+        assertEquals(0, AgentArgs.parse("logLevel=warn").getPort());
+    }
+
+    @Test
+    public void 非法端口容错() {
+        assertEquals(0, AgentArgs.parse("port=abc").getPort());
+        assertEquals(7, AgentArgs.parse("port=7,unknown=1").getPort());
+    }
+}

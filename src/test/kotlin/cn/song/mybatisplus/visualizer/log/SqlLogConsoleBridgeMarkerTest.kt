@@ -62,7 +62,7 @@ class SqlLogConsoleBridgeMarkerTest {
     fun 标记后无SQL_暂存保留() {
         val ctx = newCtx()
         processConsoleLine("SQLVIS-SOURCE|com/x.java|5", ctx, null, {})
-        assertEquals("com/x.java" to 5, ctx.pendingSource)
+        assertEquals(SourceMarkerData("com/x.java", 5), ctx.pendingSource)
     }
 
     @Test
@@ -108,6 +108,30 @@ class SqlLogConsoleBridgeMarkerTest {
         val entries = processConsoleLine("==>  Parameters: 1(Long)", ctx, null, {})
         assertEquals("cn/song/service/UserService.java", entries[0].sourceFile)
         assertEquals(87, entries[0].sourceLine)
+    }
+
+    // ---------- M56 T-M56-00：标记第 4/5 段 → mapperStatement/requestTag ----------
+
+    @Test
+    fun 四段标记_mapper语句id写入条目() {
+        val ctx = newCtx()
+        processConsoleLine("SQLVIS-SOURCE|a/A.java|1|com.a.mapper.AMapper.selectById", ctx, null, {})
+        processConsoleLine("==>  Preparing: SELECT * FROM t1", ctx, null, {})
+        val entries = processConsoleLine("==>  Parameters: 1(Long)", ctx, null, {})
+        assertEquals(1, entries.size)
+        assertEquals("com.a.mapper.AMapper.selectById", entries[0].mapperStatement)
+        assertNull(entries[0].requestTag)
+    }
+
+    @Test
+    fun 五段标记_mapper语句id与请求标签写入条目() {
+        val ctx = newCtx()
+        processConsoleLine("SQLVIS-SOURCE|a/A.java|1|com.a.mapper.AMapper.selectById|req-7", ctx, null, {})
+        processConsoleLine("==>  Preparing: SELECT * FROM t1", ctx, null, {})
+        val entries = processConsoleLine("==>  Parameters: 1(Long)", ctx, null, {})
+        assertEquals(1, entries.size)
+        assertEquals("com.a.mapper.AMapper.selectById", entries[0].mapperStatement)
+        assertEquals("req-7", entries[0].requestTag)
     }
 
     // ---------- T-LogDedupeMpMark：MP 分页 COUNT 标记逐条判定 ----------

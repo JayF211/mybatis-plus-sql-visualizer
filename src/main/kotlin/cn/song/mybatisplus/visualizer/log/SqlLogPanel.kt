@@ -59,9 +59,9 @@ import javax.swing.DefaultListModel
 import javax.swing.Icon
 import javax.swing.JButton
 import javax.swing.JCheckBox
-import javax.swing.JComboBox
 import javax.swing.JLabel
 import javax.swing.JMenuItem
+import javax.swing.JRadioButtonMenuItem
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
 import javax.swing.JSeparator
@@ -117,9 +117,22 @@ internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : JBList<LogSqlE
 }
 
 /**
- * 排序模式（P-06）：NONE = 正序（默认）；DURATION_DESC = 按耗时降序。
+ * 排序模式（P-06 / T-LogSortModes）：默认 [TIME_ASC]（时间升序 = 捕获顺序，与未排序时观感一致）；
+ * 另支持时间降序、耗时升/降序、行号。耗时缺失的条目恒沉底（两个方向的升降序都不让空值顶到前面）。
  */
-enum class SortMode { NONE, DURATION_DESC }
+enum class SortMode { TIME_ASC, TIME_DESC, DURATION_ASC, DURATION_DESC, SEQUENCE }
+
+/** 排序方式下拉项（文案 + 模式）。 */
+internal data class SortOption(val label: String, val mode: SortMode)
+
+/** 排序方式选项（顺序即下拉序；默认项在首位 = 时间升序）。 */
+internal fun sortOptions(): List<SortOption> = listOf(
+    SortOption(MpSqlVisualizerBundle.message("log.sort.time.asc"), SortMode.TIME_ASC),
+    SortOption(MpSqlVisualizerBundle.message("log.sort.time.desc"), SortMode.TIME_DESC),
+    SortOption(MpSqlVisualizerBundle.message("log.sort.duration.asc"), SortMode.DURATION_ASC),
+    SortOption(MpSqlVisualizerBundle.message("log.sort.duration.desc"), SortMode.DURATION_DESC),
+    SortOption(MpSqlVisualizerBundle.message("log.sort.sequence"), SortMode.SEQUENCE),
+)
 
 /** 类型多选弹窗可勾选的类型（OTHER 不单列；全选时 OTHER 一并透传）。 */
 internal val FILTERABLE_TYPES: List<StatementType> = listOf(
@@ -184,6 +197,35 @@ internal fun batchCopyTimestamps(entries: List<LogSqlEntry>): String =
     entries.mapNotNull { timestampDisplayText(it)?.removeSurrounding("[", "]") }.joinToString("\n")
 
 // ---------- T-Perf-03：流式增量刷新差分（纯逻辑，可独立单测） ----------
+
+/**
+ * M56 T-M56-00：动态聚焦页签过滤层（纯逻辑，插在 [filterByType] 与 [filterBySearch] 之间）。
+ * [FocusFilter.method] 匹配 [LogSqlEntry.mapperStatement]（agent 通道直取 / 桥通道标记第 4 段，
+ * 忽略大小写）；[FocusFilter.requestTag] 精确匹配 [LogSqlEntry.requestTag]。
+ * 双条件为「且」；null 维度透传；全 null 等价不过滤。T-M56-06 起 method 扩展真实方法边界
+ * `{Class}#{method}` 形态（届时在 [focusMethodKey] 统一登记来源）。
+ */
+internal data class FocusFilter(
+    val method: String? = null,
+    val requestTag: String? = null,
+) {
+    /** 是否为空过滤（全维度 null = 透传）。 */
+    val isPassthrough: Boolean get() = method == null && requestTag == null
+}
+
+/** 条目的聚焦 method 键（当前 = mapper 语句 id；T-M56-06 扩展真实方法边界）。 */
+internal fun focusMethodKey(entry: LogSqlEntry): String? = entry.mapperStatement
+
+internal fun filterByFocus(entries: List<LogSqlEntry>, focus: FocusFilter?): List<LogSqlEntry> {
+    if (focus == null || focus.isPassthrough) return entries
+    return entries.filter { e ->
+        val methodOk = focus.method?.let { f ->
+            focusMethodKey(e)?.equals(f, ignoreCase = true) == true
+        } ?: true
+        val tagOk = focus.requestTag?.let { f -> f == e.requestTag } ?: true
+        methodOk && tagOk
+    }
+}
 
 /** 同步增量追加条数上限：超过则回退全量重建（全量重建带分批 EDT 写入，大批量更稳）。 */
 internal const val MAX_SYNC_APPEND = 300
@@ -315,14 +357,18 @@ class SqlLogPanel(
     /** 当前激活的类型过滤集合（默认全选 = 「全部」，含 OTHER 透传）。 */
     private val activeFilter = FILTERABLE_TYPES.toMutableSet()
 
-    /** 排序模式（默认正序）。 */
-    private var sortMode = SortMode.NONE
-
-    /** 是否含耗时信息（决定是否显示排序按钮）。 */
-    private var hasAnyDurationInfo = false
+    /** 排序模式（T-LogSortModes：默认时间升序 = 捕获顺序）。 */
+    private var sortMode = SortMode.TIME_ASC
 
     /** 当前搜索词（搜索条实时同步；空串 = 不过滤）。 */
     private var searchText = ""
+
+    /**
+     * M56 T-M56-00：动态聚焦过滤状态（基础设施；null = 不过滤）。
+     * T-M56-02/06/07 起 agent 通道接管后由页签/请求聚合驱动写入；桥通道恒 null 与现状逐字一致。
+     */
+    @Volatile
+    private var activeFocus: FocusFilter? = null
 
     /** 去重丢弃计数快照（refreshList 后更新；cellRenderer 渲染 ⨉N 徽章用）。 */
     private var dedupeCounts: Map<String, Int> = emptyMap()
@@ -361,10 +407,20 @@ class SqlLogPanel(
         addActionListener { showTypeFilterPopup() }
     }
 
-    /** 耗时排序按钮（JToggleButton，原生 LaF 渲染选中态；检测到耗时信息才显示）。 */
-    private val sortButton = JToggleButton(MpSqlVisualizerBundle.message("log.sort.duration")).apply {
+    /** 排序标签（`排序：`，与 SQL类型标签同款式）。 */
+    private val sortLabel = JLabel(MpSqlVisualizerBundle.message("log.sort.label"))
+
+    /**
+     * 排序方式按钮（T-LogSortModes）：点击弹单选菜单，文案显示当前方式；与「SQL类型」按钮同款式
+     * （原生 LaF 扁平按钮 + 右侧下箭头），默认时间升序。取代原「耗时排序」双态切换按钮——
+     * 排序恒有确定方式，不再依赖「是否检测到耗时」决定显隐。
+     */
+    private val sortButton = JButton().apply {
         isFocusable = false
-        addActionListener { toggleDurationSort() }
+        icon = AllIcons.General.ArrowDown
+        horizontalTextPosition = SwingConstants.LEFT // 图标在文字右侧（下拉按钮惯例，同 SQL类型）
+        toolTipText = MpSqlVisualizerBundle.message("log.sort.label")
+        addActionListener { showSortPopup() }
     }
 
     // ---------- T-ListMode：SQL 显示模式（T-DisplayModeToSettings：入口迁设置页「列表显示」，两列表共享一键） ----------
@@ -387,8 +443,17 @@ class SqlLogPanel(
     /** 当前排序模式（测试断言）。 */
     internal val currentSortMode: SortMode get() = sortMode
 
-    /** 耗时排序按钮（测试点击用）。 */
-    internal val durationSortLabel: JToggleButton get() = sortButton
+    /** 排序方式选择（测试驱动：等价用户在菜单里点选某项）。 */
+    internal fun selectSortModeForTest(mode: SortMode) = applySortMode(mode)
+
+    /** 排序按钮（测试断言文案/可见性）。 */
+    internal val sortButtonForTest: JButton get() = sortButton
+
+    /** 排序菜单项文案列表（测试断言选项齐备；构建菜单但不 show）。 */
+    internal fun sortMenuLabelsForTest(): List<String> = buildSortMenuItems().map { it.text }
+
+    /** 当前排序方式按钮文案（测试断言）。 */
+    internal val sortButtonTextForTest: String get() = sortButton.text
 
     /** 去重勾选框（F-44-2 测试驱动：模拟用户勾选「移除重复的sql」验证既有条目立即去重）。 */
     internal val dedupeCheckBoxForTest: JCheckBox get() = dedupeCheckBox
@@ -413,6 +478,18 @@ class SqlLogPanel(
         activeFilter.clear()
         activeFilter.addAll(types)
         updateTypeFilterButton()
+        refreshList()
+    }
+
+    /**
+     * M56 T-M56-00：设置动态聚焦过滤（页签/请求聚合驱动；null 或全空维度 = 取消聚焦）。
+     * 桥通道不写此状态，行为与现状逐字一致。过滤值变化经 refreshList 全量差分呈现
+     * （离散增删走 FullRebuild，无需特殊增量分支）。
+     */
+    internal fun setFocusFilter(focus: FocusFilter?) {
+        val next = focus?.takeUnless { it.isPassthrough }
+        if (next == activeFocus) return
+        activeFocus = next
         refreshList()
     }
 
@@ -550,7 +627,14 @@ class SqlLogPanel(
             add(typeFilterButton)
         }
         left.add(typeFilterUnit)
-        left.add(sortButton)
+        // 排序方式单元：与 SQL类型单元同构（标签 + 控件打包，折行时同进退）
+        updateSortButtonText()
+        val sortUnit = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+            isOpaque = false
+            add(sortLabel)
+            add(sortButton)
+        }
+        left.add(sortUnit)
         // T-DisplayModeToSettings：显示模式入口迁设置页「列表显示」（工具栏按钮移除）
         // O-1：工具栏慢查询计数标签
         slowQueryLabel = JLabel().apply {
@@ -1044,9 +1128,10 @@ class SqlLogPanel(
      *
      * 执行顺序：
      * 1. [filterByType]：按 [activeFilter] 筛选（全选 = 全部，含 OTHER）
-     * 2. [filterBySearch]：按 [searchText] 搜索（大小写不敏感）
-     * 3. [applySort]：按 [sortMode] 排序（降序耗时）
-     * 4. 差分渲染：T-Perf-03 增量刷新——流式追加免全量重建；无法增量时回退分批全量重建
+     * 2. [filterByFocus]：按 [activeFocus] 聚焦（M56 T-M56-00 基础设施；null = 透传）
+     * 3. [filterBySearch]：按 [searchText] 搜索（大小写不敏感）
+     * 4. [applySort]：按 [sortMode] 排序（降序耗时）
+     * 5. 差分渲染：T-Perf-03 增量刷新——流式追加免全量重建；无法增量时回退分批全量重建
      *
      * T-LogListFreeze-04：HTML 缓存随片段通道退役——徽章计数在渲染时直读 [dedupeCounts]，
      * 原「清缓存/选择性失效」机制一并移除。
@@ -1055,14 +1140,11 @@ class SqlLogPanel(
         val gen = ++refreshGeneration
         val snapshot = manager.entries.snapshot()
 
-        // 检测是否含耗时信息（决定是否显示排序按钮）
-        hasAnyDurationInfo = snapshot.any { LogDurationParser.hasDurationInfo(it) }
-
         // 去重丢弃计数快照（徽章渲染数据源）：徽章在元信息行渲染时直读，无缓存失效链
         dedupeCounts = manager.entries.dedupeCountsSnapshot()
         entryCellRenderer.dedupeCounts = dedupeCounts
 
-        val filtered = filterByType(snapshot, activeFilter)
+        val filtered = filterByFocus(filterByType(snapshot, activeFilter), activeFocus)
         val searched = filterBySearch(filtered, searchText)
         val newVisible = applySort(searched)
         val evicted = manager.entries.drainEvictedCount()
@@ -1070,8 +1152,6 @@ class SqlLogPanel(
         if (!applyIncremental(newVisible, evicted)) {
             applyFullRebuild(newVisible, gen)
         }
-
-        updateSortButton()
 
         // O-1：同步慢查询阈值 + 更新计数（Phase C）
         slowQueryCounter.thresholdMs = PluginSettings.getInstance().state.slowQueryThresholdMs
@@ -1146,30 +1226,70 @@ class SqlLogPanel(
     }
 
     /** 按当前排序模式排序条目。 */
-    private fun applySort(entries: List<LogSqlEntry>): List<LogSqlEntry> = when (sortMode) {
-        SortMode.NONE -> entries
-        SortMode.DURATION_DESC -> entries.sortedByDescending { LogDurationParser.parse(it) ?: -1L }
+    // ---------- 排序方式（T-LogSortModes） ----------
+
+    /** 弹出排序方式单选菜单（与 SQL类型弹窗同款交互；当前项打勾）。 */
+    private fun showSortPopup() {
+        val popup = JPopupMenu()
+        buildSortMenuItems().forEach { popup.add(it) }
+        popup.show(sortButton, 0, sortButton.height + 2)
     }
 
-    /** 更新耗时排序按钮可见性 + 文案 + 选中态。 */
-    private fun updateSortButton() {
-        sortButton.isVisible = hasAnyDurationInfo
-        val sortLabel = when (sortMode) {
-            SortMode.NONE -> MpSqlVisualizerBundle.message("log.sort.duration")
-            SortMode.DURATION_DESC -> MpSqlVisualizerBundle.message("log.sort.duration.desc")
+    /**
+     * 构建排序菜单项（拆出供测试断言选项齐备——headless 下 JPopupMenu.show 不可靠）。
+     * 单选语义：点选即生效并刷新列表与按钮文案。
+     */
+    private fun buildSortMenuItems(): List<JRadioButtonMenuItem> =
+        sortOptions().map { option ->
+            JRadioButtonMenuItem(option.label, option.mode == sortMode).apply {
+                isFocusable = false
+                addActionListener { applySortMode(option.mode) }
+            }
         }
-        sortButton.text = sortLabel
-        sortButton.toolTipText = sortLabel
-        sortButton.isSelected = sortMode == SortMode.DURATION_DESC
-    }
 
-    /** 切换耗时排序（NONE → DURATION_DESC → NONE）。 */
-    private fun toggleDurationSort() {
-        sortMode = when (sortMode) {
-            SortMode.NONE -> SortMode.DURATION_DESC
-            SortMode.DURATION_DESC -> SortMode.NONE
+    /** 应用排序方式：更新模式 → 刷新列表 → 同步按钮文案。 */
+    private fun applySortMode(mode: SortMode) {
+        if (sortMode == mode) {
+            updateSortButtonText()
+            return
         }
+        sortMode = mode
         refreshList()
+        updateSortButtonText()
+    }
+
+    /** 排序按钮文案 = 当前方式标签。 */
+    private fun updateSortButtonText() {
+        sortButton.text = sortOptions().firstOrNull { it.mode == sortMode }?.label
+            ?: MpSqlVisualizerBundle.message("log.sort.time.asc")
+    }
+
+    private fun applySort(entries: List<LogSqlEntry>): List<LogSqlEntry> = when (sortMode) {
+        // 时间升序（默认）：与捕获顺序一致（sortedBy 稳定，等值保持入列序）
+        SortMode.TIME_ASC -> entries.sortedBy { displayTimeOf(it) }
+        SortMode.TIME_DESC -> entries.sortedByDescending { displayTimeOf(it) }
+        // 耗时：结构化字段优先（agent 通道直采），缺失时回退日志文本解析；无耗时沉底
+        SortMode.DURATION_ASC -> entries.sortedBy { durationOf(it) ?: Long.MAX_VALUE }
+        SortMode.DURATION_DESC -> entries.sortedByDescending { durationOf(it) ?: Long.MIN_VALUE }
+        // 行号：无行号（历史读回/round-trip）沉底
+        SortMode.SEQUENCE -> entries.sortedBy { if (it.sequenceNumber > 0) it.sequenceNumber else Long.MAX_VALUE }
+    }
+
+    /** 条目耗时（毫秒）：结构化 executionTimeMs 优先，缺失时回退日志文本解析。 */
+    private fun durationOf(entry: LogSqlEntry): Long? =
+        entry.executionTimeMs ?: LogDurationParser.parse(entry)
+
+    /**
+     * 条目显示时间（排序口径）：与列表现行时间列一致——「日志时间」源开启且条目有原始日志时间时
+     * 用之，否则用捕获时间（[formatTimestampFragment] 同规则），避免「看到的时间与排序依据不一致」。
+     */
+    private fun displayTimeOf(entry: LogSqlEntry): Long {
+        val state = PluginSettings.getInstance().state
+        return if (state.logTimestampSource == LOG_TIMESTAMP_SOURCE_LOG) {
+            entry.logTimestamp ?: entry.timestamp
+        } else {
+            entry.timestamp
+        }
     }
 
     // ---------- 渲染辅助（F-44-2：片段通道恢复 SQL 高亮 + 耗时） ----------
@@ -1195,7 +1315,8 @@ class SqlLogPanel(
     /** 统一解析跳转目标：仅依赖捕获位置，不做任何启发式定位。 */
     internal fun resolveEntryJump(entry: LogSqlEntry): LogJumpTarget {
         if (entry.sourceFile == null) {
-            return LogJumpTarget.MissingSource
+            // T-AgentSourceJump：主位置缺失时仍可落候选（agent 侧主位置无调试信息场景）
+            return resolveCandidateJump(entry) ?: LogJumpTarget.MissingSource
         }
         // F-44-7：MP 分页 COUNT 查询特殊标记 → 无用户调用点可跳转
         if (SourceMarkers.isMpPaginationCount(entry.sourceFile)) {
@@ -1203,11 +1324,22 @@ class SqlLogPanel(
         }
         // M37.1：多源根容错——basePath 直拼失败后按模块 content root 匹配（SourcePathResolver）
         val vf = SourcePathResolver.resolveVirtualFile(project, entry.sourceFile)
-        return if (vf != null) {
-            LogJumpTarget.Precise(vf, maxOf(0, entry.sourceLine - 1))
-        } else {
-            LogJumpTarget.NotFound(entry.sourceFile)
+        if (vf != null) {
+            return LogJumpTarget.Precise(vf, maxOf(0, entry.sourceLine - 1))
         }
+        // T-AgentSourceJump：主位置不在工程内（典型=误选第三方插件帧，如 PageHelper 的 PageInterceptor）
+        // → 按栈序候选取首个可解析项；候选同出本次调用的真实栈，非启发式
+        return resolveCandidateJump(entry) ?: LogJumpTarget.NotFound(entry.sourceFile)
+    }
+
+    /** 候选帧解析回退：栈序取首个能在工程内解析到文件的候选；全落空返回 null。 */
+    private fun resolveCandidateJump(entry: LogSqlEntry): LogJumpTarget? {
+        for ((file, line) in entry.sourceCandidates) {
+            if (SourceMarkers.isMpPaginationCount(file)) continue
+            val vf = SourcePathResolver.resolveVirtualFile(project, file) ?: continue
+            return LogJumpTarget.Precise(vf, maxOf(0, line - 1))
+        }
+        return null
     }
 
     /** 等价右键「跳转到源码」（供 UI 测试断言精确跳转分支，避 headless 弹窗）。 */
@@ -1552,6 +1684,32 @@ internal fun formatDurationFragment(ms: Long?, isSelected: Boolean): Pair<String
     return "$text " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color)
 }
 
+/** M56 T-M56-02：增强捕获角标已按用户要求移除（增强为默认通道，逐行标来源属噪音）。 */
+
+/** T-AgentDialectLoop：目标库角标（agent 通道由连接 URL 推断）；未知返回 null 不显示。 */
+internal fun formatDatabaseFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
+    val db = entry.databaseName ?: return null
+    val color = if (isSelected) Color(0xFFFFFF) else Color(0x00695C)
+    return "[$db] " to SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
+}
+
+/** M56 T-M56-05：影响行数片段（DML 语义；null 未知不显示）。 */
+internal fun formatUpdateCountFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
+    val u = entry.updateCount ?: return null
+    // 负值 = 无有效计数（JDBC getUpdateCount 的 -1 语义；旧版 agent 会误报 -1）→ 不显示
+    if (u < 0) return null
+    val color = if (isSelected) Color(0xFFFFFF) else Color(0x607D8B)
+    return "(${u} rows) " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color)
+}
+
+/** M56 T-M56-05：报错片段（errorText 同列展示；红字截断首段，悬停完整文本在预览窗）。 */
+internal fun formatErrorFragment(entry: LogSqlEntry): Pair<String, SimpleTextAttributes>? {
+    val err = entry.errorText ?: return null
+    val oneLine = err.replace(Regex("\\s+"), " ")
+    val text = if (oneLine.length > 80) oneLine.substring(0, 80) + "…" else oneLine
+    return "⛔ $text " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, Color(0xD32F2F))
+}
+
 /** 来源片段：未知来源返回 null；选中态走组件前景（selectionForeground），非选中灰。 */
 internal fun formatSourceFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
     val source = when {
@@ -1681,7 +1839,12 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
                 val (t, a) = formatDurationFragment(entry.executionTimeMs, useSelectionFill)
                 metaLine.append(t, a)
             }
+            // T-AgentDialectLoop：目标库角标（耗时后、来源前——与「这条 SQL 跑在哪」的阅读顺序一致）
+            formatDatabaseFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
             formatSourceFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
+            // 注：原「[⚡增强]」来源角标已按用户要求移除（增强为默认捕获通道，逐行标来源属噪音）
+            formatUpdateCountFragment(entry, isSelected)?.let { (t, a) -> metaLine.append(t, a) }
+            formatErrorFragment(entry)?.let { (t, a) -> metaLine.append(t, a) }
             dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 }?.let { metaLine.append("⨉$it ", LIST_META_GRAY) }
             sqlLineFragmentsFor(entry)
         } else {

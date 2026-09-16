@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.config.PluginSettings.Companion.LOG_TIMESTAMP_SOURCE_CAPTURE
 import com.intellij.ui.SimpleColoredComponent
 import com.intellij.ui.SimpleTextAttributes
 import org.junit.Assert.assertEquals
@@ -50,35 +51,22 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
     /** 既有用例锁定单行语义（T-ListMode 默认关键字换行——模式相关行为由专区用例显式切模式锁定）。 */
     private var savedDisplayMode: String? = null
 
-    override fun setUp() {
-        super.setUp()
-        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
-        savedDisplayMode = state.logListSqlDisplayMode
-        state.logListSqlDisplayMode = "SINGLE_LINE"
-    }
-
-    override fun tearDown() {
-        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.logListSqlDisplayMode =
-            savedDisplayMode ?: cn.song.mybatisplus.visualizer.config.PluginSettings.DEFAULT_LOG_LIST_DISPLAY_MODE
-        super.tearDown()
-    }
-
     fun test二级条目_片段通道_非HTML标签() {
         val r = renderSql(sqlEntry("SELECT * FROM user", sourceFile = null, ms = null))
         assertTrue("元信息行应为 SimpleColoredComponent（JLabel-HTML 通道不允许回潮）", r.metaLine is SimpleColoredComponent)
         val meta = joinedText(r.metaLine)
         val sql = joinedText(r.sqlLine)
         assertTrue("含 SQL 关键字", sql.contains("SELECT"))
-        assertTrue("无耗时显示占位符 —", meta.contains("[—]"))
+        assertTrue("无耗时显示占位符 —（与日志页同款无括号）", meta.contains("—"))
         assertTrue("无源码显示占位符 unknown", meta.contains("[unknown]"))
-        assertFalse("无耗时不出现 ms", meta.contains("ms]"))
+        assertFalse("无耗时不出现 ms", meta.contains("ms"))
         assertFalse("渲染文本不应为 HTML 包裹", sql.startsWith("<html>"))
     }
 
     fun test二级条目_含源码位置_渲染元信息行() {
         val r = renderSql(sqlEntry("SELECT 1", sourceFile = "UserMapper.java", sourceLine = 12, ms = 3L))
         val meta = joinedText(r.metaLine)
-        assertTrue("应渲染耗时 [3ms]", meta.contains("[3ms]"))
+        assertTrue("应渲染耗时 3ms（与日志页同款无括号）", meta.contains("3ms"))
         assertTrue("应渲染源码 [UserMapper.java:12]", meta.contains("[UserMapper.java:12]"))
         assertFalse("SQL 不应混入元信息行", meta.contains("SELECT"))
     }
@@ -101,7 +89,7 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
     fun test二级条目_元信息在上SQL在下两行显示() {
         val r = renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", sourceFile = "OrderDao.java", sourceLine = 9, ms = 30L))
         val meta = joinedText(r.metaLine)
-        assertTrue("耗时占位应在元信息行", meta.contains("[30ms]"))
+        assertTrue("耗时应在元信息行", meta.contains("30ms"))
         assertTrue("来源应在元信息行", meta.contains("[OrderDao.java:9]"))
         assertTrue("SQL 应在 SQL 行", joinedText(r.sqlLine).contains("SELECT"))
         assertFalse("来源不应混入 SQL 行", joinedText(r.sqlLine).contains("OrderDao.java"))
@@ -111,7 +99,7 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
     fun test二级条目_空耗时与未知来源占位渲染在元信息行() {
         val r = renderSql(sqlEntry("SELECT * FROM user", sourceFile = null, ms = null))
         val meta = joinedText(r.metaLine)
-        assertTrue("空耗时占位 [—] 应在元信息行", meta.contains("[—]"))
+        assertTrue("空耗时占位 — 应在元信息行", meta.contains("—"))
         assertTrue("未知来源占位 [unknown] 应在元信息行", meta.contains("[unknown]"))
         assertTrue("SQL 应在 SQL 行", joinedText(r.sqlLine).contains("SELECT"))
     }
@@ -278,9 +266,30 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         val e = sqlEntry("SELECT 1", sourceFile = "UserMapper.java", sourceLine = 3, ms = 3L).copy(sequenceNumber = 5L)
         val meta = joinedText(renderSql(e).metaLine)
         val idxRow = meta.indexOf("#5 ")
-        val idxDur = meta.indexOf("[3ms]")
+        val idxDur = meta.indexOf("3ms")
         assertTrue("应同时含行号与耗时", idxRow >= 0 && idxDur >= 0)
         assertTrue("行号在耗时之前", idxRow < idxDur)
+    }
+
+    fun test二级条目_元信息顺序与日志页一致_时间在耗时前() {
+        // 用户反馈：历史页原为「耗时 → 时间」，与日志页「时间 → 耗时」相反
+        val savedTs = PluginSettings.getInstance().state.logTimestampEnabled
+        val savedSrc = PluginSettings.getInstance().state.logTimestampSource
+        try {
+            PluginSettings.getInstance().state.logTimestampEnabled = true
+            PluginSettings.getInstance().state.logTimestampSource = LOG_TIMESTAMP_SOURCE_CAPTURE
+            val e = sqlEntry("SELECT 1", sourceFile = "UserMapper.java", sourceLine = 3, ms = 3L).copy(sequenceNumber = 5L)
+            val meta = joinedText(renderSql(e).metaLine)
+            val idxRow = meta.indexOf("#5 ")
+            val idxTs = meta.indexOf("[")
+            val idxDur = meta.indexOf("3ms")
+            assertTrue("应含行号/时间/耗时", idxRow >= 0 && idxTs >= 0 && idxDur >= 0)
+            assertTrue("行号在最前", idxRow < idxTs)
+            assertTrue("时间应在耗时之前（对齐日志页）", idxTs < idxDur)
+        } finally {
+            PluginSettings.getInstance().state.logTimestampEnabled = savedTs
+            PluginSettings.getInstance().state.logTimestampSource = savedSrc
+        }
     }
 
     // ---------- T-JdbcThreadBucket F3：历史页时间戳跟随设置（2026-09-15 移除硬编码 yyyy-MM-dd HH:mm:ss） ----------
@@ -308,10 +317,27 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.logTimestampEnabled = enabled
     }
 
-    private fun restoreTimestampSettings(format: String, enabled: Boolean) {
-        val s = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
-        s.logTimestampFormat = format
-        s.logTimestampEnabled = enabled
+    // T-AgentDialectLoop 修复串染：保存值曾用「finally 里现读」——set 之后现读到的已是改后值，
+    // 还原恒失败并把 HH:mm:ss 泄漏到同 worker 后续类（新测试类改变分片内类顺序后暴露）。
+    // 改为 setUp 捕获 / tearDown 统一还原（与 SqlLogSearchRowTimeTest 同范式）。
+    private var savedTsFormat: String = ""
+    private var savedTsEnabled: Boolean = true
+
+    override fun setUp() {
+        super.setUp()
+        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        savedTsFormat = state.logTimestampFormat
+        savedTsEnabled = state.logTimestampEnabled
+        state.logListSqlDisplayMode = "SINGLE_LINE"
+    }
+
+    override fun tearDown() {
+        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        state.logTimestampFormat = savedTsFormat
+        state.logTimestampEnabled = savedTsEnabled
+        state.logListSqlDisplayMode =
+            savedDisplayMode ?: cn.song.mybatisplus.visualizer.config.PluginSettings.DEFAULT_LOG_LIST_DISPLAY_MODE
+        super.tearDown()
     }
 
     fun test历史页时间戳_跟随设置格式() {
@@ -319,36 +345,24 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         val expected = expectedFormatted(fmt) // 系统时区下的 HH:mm:ss
         setTimestampFormat(fmt)
         setTimestampEnabled(true)
-        try {
-            val r = renderSql(sqlEntry("SELECT 1", ms = 3L))
-            val meta = joinedText(r.metaLine)
-            assertTrue("应渲染为设置格式 HH:mm:ss（期望 $expected，实际 meta=$meta）", meta.contains("[$expected]"))
-        } finally {
-            restoreTimestampSettings(savedTimestampFormat(), savedTimestampEnabled())
-        }
+        val r = renderSql(sqlEntry("SELECT 1", ms = 3L))
+        val meta = joinedText(r.metaLine)
+        assertTrue("应渲染为设置格式 HH:mm:ss（期望 $expected，实际 meta=$meta）", meta.contains("[$expected]"))
     }
 
     fun test历史页时间戳_显示开关关闭则隐藏() {
         setTimestampEnabled(false)
-        try {
-            val r = renderSql(sqlEntry("SELECT 1", ms = 3L))
-            val meta = joinedText(r.metaLine)
-            // 关闭后时间戳片段应不存在（耗时/源码片段仍存在，但无时间）
-            assertFalse("关闭时间戳后不应含时间片段 " + meta, meta.contains(expectedFormatted("yyyy-MM-dd")))
-        } finally {
-            restoreTimestampSettings(savedTimestampFormat(), savedTimestampEnabled())
-        }
+        val r = renderSql(sqlEntry("SELECT 1", ms = 3L))
+        val meta = joinedText(r.metaLine)
+        // 关闭后时间戳片段应不存在（耗时/源码片段仍存在，但无时间）
+        assertFalse("关闭时间戳后不应含时间片段 " + meta, meta.contains(expectedFormatted("yyyy-MM-dd")))
     }
 
     fun test历史页时间戳_非法pattern回退默认() {
         setTimestampFormat("not-a-valid-pattern-%%")
-        try {
-            val r = renderSql(sqlEntry("SELECT 1", ms = 3L))
-            val meta = joinedText(r.metaLine)
-            val expected = expectedFormatted("not-a-valid-pattern-%%") // 回退默认 yyyy-MM-dd HH:mm:ss
-            assertTrue("非法 pattern 应回退默认格式（期望 $expected）", meta.contains("[$expected]"))
-        } finally {
-            restoreTimestampSettings(savedTimestampFormat(), savedTimestampEnabled())
-        }
+        val r = renderSql(sqlEntry("SELECT 1", ms = 3L))
+        val meta = joinedText(r.metaLine)
+        val expected = expectedFormatted("not-a-valid-pattern-%%") // 回退默认 yyyy-MM-dd HH:mm:ss
+        assertTrue("非法 pattern 应回退默认格式（期望 $expected）", meta.contains("[$expected]"))
     }
 }

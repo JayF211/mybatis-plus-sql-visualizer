@@ -14,6 +14,9 @@ import java.util.Base64
  * （value/type 可为 null）的 Base64 编码，正文保持可执行 restoredSql（F-43 初心：文件
  * 可直接在数据库工具打开执行）。
  *
+ * M56 T-M56-00：payload 扩展可选键 `m`（mapperStatement）/ `e`（errorText）/ `q`（requestTag）/
+ * `u`（updateCount）——写入端仅在非默认时落键，旧 payload（无扩展键）解码出 null，旧历史文件可读。
+ *
  * 选 Base64 加独立注释行的理由：
  * - 参数值可能含 `|`、逗号、`--`、括号、换行等任意文本，明文分隔符方案必然引入转义歧义；
  *   Base64 字符集（A-Za-z0-9+/=）与头部解析正则、字段分隔符零冲突，单行形态不破坏
@@ -25,17 +28,44 @@ object SqlLogParamCodec {
 
     private const val RAW_FIELD = "r"
     private const val PARAMS_FIELD = "p"
+    private const val MAPPER_FIELD = "m"
+    private const val ERROR_FIELD = "e"
+    private const val TAG_FIELD = "q"
+    private const val UPDATE_COUNT_FIELD = "u"
 
     private val gson = Gson()
 
-    /** 编码 rawSql + params 为 Base64 载荷。 */
-    fun encode(rawSql: String, params: List<LogSqlParam>): String {
+    /** pd 载荷解码结果。[mapperStatement] / [errorText] / [requestTag] / [updateCount] 为 M56 扩展字段，旧 payload 为 null。 */
+    data class DecodedPayload(
+        val rawSql: String,
+        val params: List<LogSqlParam>,
+        val mapperStatement: String? = null,
+        val errorText: String? = null,
+        val requestTag: String? = null,
+        val updateCount: Long? = null,
+    )
+
+    /** 编码 rawSql + params 为 Base64 载荷（无 M56 扩展字段形态，等价 [encodeEntry] 全默认条目）。 */
+    fun encode(rawSql: String, params: List<LogSqlParam>): String =
+        encodeEntry(
+            LogSqlEntry(
+                rawSql = rawSql,
+                restoredSql = rawSql,
+                params = params,
+            ),
+        )
+
+    /**
+     * 编码条目为 Base64 载荷：rawSql + params 恒写；M56 扩展字段（mapperStatement/errorText/
+     * requestTag/updateCount）仅非默认时落键，旧版本插件解码端忽略未知键（gson 宽松解析）。
+     */
+    fun encodeEntry(entry: LogSqlEntry): String {
         val obj = JsonObject().apply {
-            addProperty(RAW_FIELD, rawSql)
+            addProperty(RAW_FIELD, entry.rawSql)
             add(
                 PARAMS_FIELD,
                 JsonArray().apply {
-                    params.forEach { p ->
+                    entry.params.forEach { p ->
                         add(
                             JsonArray().apply {
                                 add(if (p.value == null) JsonNull.INSTANCE else JsonPrimitive(p.value))
@@ -45,15 +75,20 @@ object SqlLogParamCodec {
                     }
                 },
             )
+            entry.mapperStatement?.let { addProperty(MAPPER_FIELD, it) }
+            entry.errorText?.let { addProperty(ERROR_FIELD, it) }
+            entry.requestTag?.let { addProperty(TAG_FIELD, it) }
+            entry.updateCount?.let { addProperty(UPDATE_COUNT_FIELD, it) }
         }
         return Base64.getEncoder().encodeToString(gson.toJson(obj).toByteArray(Charsets.UTF_8))
     }
 
     /**
-     * 解码 Base64 载荷为 (rawSql, params)；任何形态异常（非法 Base64 / JSON 缺字段 /
+     * 解码 Base64 载荷为 [DecodedPayload]；任何形态异常（非法 Base64 / JSON 缺字段 /
      * 结构不符 / rawSql 空白）返回 null，调用方把 pd 行降级为普通正文注释行。
+     * M56 扩展键缺失/形态异常按缺省 null 容错（不因扩展键损坏丢弃整条）。
      */
-    fun decode(payload: String): Pair<String, List<LogSqlParam>>? = runCatching {
+    fun decode(payload: String): DecodedPayload? = runCatching {
         val json = JsonParser.parseString(String(Base64.getDecoder().decode(payload), Charsets.UTF_8))
             .takeIf { it.isJsonObject }?.asJsonObject ?: return null
         val rawSql = json.get(RAW_FIELD)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() }
@@ -66,6 +101,13 @@ object SqlLogParamCodec {
             val type = if (arr.size() > 1) arr.get(1)?.takeIf { it.isJsonPrimitive }?.asString else null
             params.add(LogSqlParam(value, type))
         }
-        rawSql to params
+        DecodedPayload(
+            rawSql = rawSql,
+            params = params,
+            mapperStatement = json.get(MAPPER_FIELD)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() },
+            errorText = json.get(ERROR_FIELD)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() },
+            requestTag = json.get(TAG_FIELD)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() },
+            updateCount = json.get(UPDATE_COUNT_FIELD)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asLong,
+        )
     }.getOrNull()
 }

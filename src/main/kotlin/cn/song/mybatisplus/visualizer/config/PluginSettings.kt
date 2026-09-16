@@ -381,6 +381,28 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 需求池报告邮箱（选填，仅用于官方回复推送通知，不公开）。
          */
         var reportSubmitterEmail: String = "",
+
+        // ---------- M56 增强捕获（agent 字节码通道；对用户不出现 agent 字样） ----------
+
+        /**
+         * M56 T-M56-08：增强捕获开关（默认关——未开启体验与现状逐字一致）。
+         * 开启且经注入确认后，agent 接管捕获源（参数实参直取/精确耗时/影响行数/报错同列/
+         * 精确跳转）；attach 不可用/连接丢失自动回落现有控制台捕获，零劣化。
+         */
+        var enhancedCaptureEnabled: Boolean = false,
+
+        /**
+         * M56 T-M56-08：注入确认记忆（首次启用弹确认对话框后置 true，不再重复弹）。
+         * 关闭增强不重置本值（重开不再弹）；确认对话框含采集范围/数据留本机/JEP 451 告警预告。
+         */
+        var enhancedCaptureConfirmed: Boolean = false,
+
+        /**
+         * M56 T-M56-08：脱敏开关（默认开——对疑似敏感形态打码）。
+         * false 时完整采集（形态对齐竞品 desensitize 配置）；脱敏在 agent 采集层执行，
+         * 数据不出应用 JVM 前已处理。
+         */
+        var enhancedCaptureDesensitize: Boolean = true,
     )
 
     private var state = State()

@@ -10,6 +10,8 @@ enum class SqlSource {
     HIBERNATE,
     /** Spring JdbcTemplate 控制台日志（`Executing prepared SQL statement [SQL]` / `Setting SQL statement parameter value: ...` 格式）。 */
     JDBC,
+    /** agent 字节码通道（M56 增强捕获）：应用 JVM 内 JDBC 执行点 hook 直取的结构化事件。 */
+    AGENT,
     /** 未知来源（兼容旧版本条目）。 */
     UNKNOWN,
 }
@@ -62,12 +64,45 @@ data class LogSqlEntry(
      */
     val sourceLine: Int = 0,
     /**
+     * T-AgentSourceJump：源码位置候选（栈序 [file, line]；仅 agent 通道产出，控制台通道/历史读回为空）。
+     * 主位置在工程内解析失败时，跳转按候选序取首个可解析项——候选全部来自本次执行的真实调用栈，
+     * 非表名等启发式（不会误导）。
+     */
+    val sourceCandidates: List<Pair<String, Int>> = emptyList(),
+    /**
      * T-LogRowNumber：会话内捕获序号（「SQL 日志」列表行号）。由 [SqlLogEntryBuffer.addEntry]
      * 成功入队时分配（单调递增；去重丢弃/暂停/过滤关键字命中的条目不占号），
      * 项目启动（processStarted）或手动清空列表时归零。0 表示无行号
      * （历史文件读回、日志转 SQL round-trip 产出的条目）。
      */
     val sequenceNumber: Long = 0L,
+    // ---------- M56 T-M56-00：agent 通道结构化字段（桥通道经标记行第 4/5 段与 pd 载荷扩展部分承接） ----------
+    /**
+     * mapper 语句 id（如 `com.example.mapper.UserMapper.selectById`）。
+     * agent 通道从 MyBatis Executor 直取；桥通道来自源码标记第 4 段（拦截器 `ms.getId()`）。
+     * null 表示未知（旧条目 / 非 MyBatis 来源）。
+     */
+    val mapperStatement: String? = null,
+    /**
+     * 执行报错（结构化直取：异常类名 + 消息，堆栈截断）；null 表示执行成功。
+     * agent 通道在执行点直捕；桥通道暂无对应日志形态（T-M56-05 前保持 null）。
+     */
+    val errorText: String? = null,
+    /**
+     * 请求级聚合标签（T-M56-07 请求聚合预留）：同一次请求的多条 SQL 共享同值，
+     * 聚焦页签据此分组。桥通道来自源码标记第 5 段（拦截器 MDC 兜底）；null 表示无标签。
+     */
+    val requestTag: String? = null,
+    /**
+     * 影响行数（agent 通道 `getUpdateCount` 直取，DML 语义）；null 表示未知（查询 / 旧条目）。
+     */
+    val updateCount: Long? = null,
+    /**
+     * 目标数据库显示名（T-AgentDialectLoop：agent 通道由连接 URL 子协议映射，
+     * 如 "MySQL" / "DM（达梦）"）；null 表示未知（桥通道 / 旧版 agent / 畸形 URL）。
+     * 展示性字段，不入去重指纹。
+     */
+    val databaseName: String? = null,
 ) {
     /**
      * T-CrudColor：条目语句类型（渲染热路径缓存，惰性计算一次）。
