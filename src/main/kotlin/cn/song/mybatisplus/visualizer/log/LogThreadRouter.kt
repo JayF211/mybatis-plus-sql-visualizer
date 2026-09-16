@@ -12,7 +12,12 @@ package cn.song.mybatisplus.visualizer.log
  * 路由策略（fail-open，与既有 JdbcTemplate 实现同语义）：
  * - 行内提取到线程 token → 该线程的独立桶（不存在则新建，超上限先淘汰空闲桶）；
  * - 提取不到 token（多行 SQL 的裸续行等）→ 归属当前处于「收集态」的桶（通常唯一），
- *   否则回退共享默认桶——与旧单槽行为一致，不因提取失败而丢行。
+ *   否则回退共享默认桶——与旧单槽行为一致，不因提取失败而丢行；
+ * - [routeNoTokenToRecent]=true 时（T-HibConc，Hibernate 专用）追加一条**次选**：没有收集态桶时
+ *   归属**最近一次出现线程 token 的桶**（MRU）。理由：Hibernate 的多行 SQL 正文与 `Hibernate: `
+ *   stdout 标志行都不带日志前缀，却紧跟在同线程的带 token 行之后；回退共享桶会让「正文落回退桶、
+ *   绑定行落线程桶」分家，双副本合并与参数归属双双失效。MyBatis/JdbcTemplate 不需要该策略（其
+ *   裸行必在等待态桶内），故默认关闭以保持已验证链路零变化。
  *
  * 桶状态由各解析器自定（[B] 泛型），本类只管「哪一行归哪个桶」与容量。
  */
@@ -23,6 +28,8 @@ internal class LogThreadRouter<B : Any>(
     /** 该桶是否空闲（无待闭合状态）——超上限淘汰用，淘汰不作为即丢状态，故只淘汰空闲桶。 */
     private val isIdle: (B) -> Boolean,
     private val maxBuckets: Int = DEFAULT_MAX_BUCKETS,
+    /** 无 token 且无收集态桶时，是否归属最近使用的桶（T-HibConc；默认关闭=回退共享桶）。 */
+    private val routeNoTokenToRecent: Boolean = false,
 ) {
 
     /** 线程 token → 独立桶（保持插入序，便于 closePending 按序冲刷）。 */
@@ -31,15 +38,36 @@ internal class LogThreadRouter<B : Any>(
     /** token 提取失败时的回退桶（与旧单槽状态机同语义）。 */
     private val fallback: B = factory()
 
+    /** 最近一次出现线程 token 的桶（[routeNoTokenToRecent] 的次选归属）。 */
+    private var recent: B? = null
+
     /** 按行路由到对应桶。 */
     fun bucketFor(line: String): B {
         val token = threadTokenOf(line)
         if (token != null) {
-            buckets[token]?.let { return it }
+            buckets[token]?.let { recent = it; return it }
             if (buckets.size >= maxBuckets) evictIdle()
-            return factory().also { buckets[token] = it }
+            return factory().also { buckets[token] = it; recent = it }
         }
-        return buckets.values.firstOrNull { isCollecting(it) } ?: fallback
+        // 无线程 token 行（Hibernate 的多行 SQL 正文 / `Hibernate: ` stdout 标志行等）：
+        // 1) MRU 桶优先——Hibernate 一条日志消息只有一个行首前缀，正文行紧跟在**同线程**那条
+        //    带 token 行之后（stdout 标志行同理），MRU 是最强信号；且这是「下一条消息的正文」
+        //    与「当前块续行」唯一都成立过的解释。
+        //    （两者在观测上不可区分：MRU=B 且 A 在收集时，既可能是 B 的正文行、也可能是 A 的续行；
+        //     按真实控制台的书写节奏，整条消息一次写出、跨消息交错远比跨行交错常见 → 取 MRU。）
+        // 2) 无 MRU 时退「收集态桶」（唯一收集态=确定归属）→ 3) 回退共享桶。
+        if (routeNoTokenToRecent) {
+            recent?.let { return it }
+            val collecting = buckets.values.filter { isCollecting(it) }
+            if (collecting.isNotEmpty()) return collecting.first()
+            return fallback
+        }
+        // MyBatis/JdbcTemplate：收集态桶优先（其裸行必在等待态桶内），否则回退共享桶
+        val collecting = buckets.values.filter { isCollecting(it) }
+        if (collecting.isNotEmpty()) {
+            return collecting.firstOrNull { it === recent } ?: collecting.first()
+        }
+        return fallback
     }
 
     /** 全部桶（分桶在前、回退桶在后）——closePending 全量冲刷用。 */
@@ -51,6 +79,7 @@ internal class LogThreadRouter<B : Any>(
     /** 清空（面板销毁/重挂载时）。 */
     fun clear() {
         buckets.clear()
+        recent = null
     }
 
     /** 淘汰空闲桶直到低于上限（新建桶前调用）。 */
@@ -58,7 +87,10 @@ internal class LogThreadRouter<B : Any>(
         val iterator = buckets.entries.iterator()
         while (iterator.hasNext() && buckets.size >= maxBuckets) {
             val entry = iterator.next()
-            if (isIdle(entry.value)) iterator.remove()
+            if (isIdle(entry.value)) {
+                if (recent === entry.value) recent = null
+                iterator.remove()
+            }
         }
     }
 
