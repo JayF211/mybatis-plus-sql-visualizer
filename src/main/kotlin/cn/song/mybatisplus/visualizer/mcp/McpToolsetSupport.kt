@@ -18,6 +18,18 @@ import com.intellij.openapi.project.Project
  * 接口缺 isEnabled/alwaysIncluded 默认方法即桥悬空（verifyPlugin 实证）；基类提供具体覆写后
  * 子类零接口默认引用，253/262 双清。子类**不得**再覆写三钩子。
  *
+ * **输出预算登记表（T-McpOutputBudget / O-20 守卫约定——新增工具或调整预算必须在此登记对齐，
+ * MetadataInvalidator 缓存登记表同款防漏）**：
+ *  - mpsv_schema_context：maxTables 默认 8 / 硬上限 20、单元格 200 字符、tables 白名单 ≤50
+ *    （常量在 McpSchemaFormatter：DEFAULT_MAX_TABLES / HARD_MAX_TABLES / MAX_CELL_CHARS /
+ *    MAX_TABLE_NAMES）；
+ *  - mpsv_explain：行 ≤200、单元格 2000 字符（常量在 McpExplainFormatter：MAX_ROWS /
+ *    MAX_CELL_CHARS）；notices 节无条数预算（驱动会话通道天然有界，个案个位数）；
+ *  - mpsv_perf_advice：建议 ≤30 条（MAX_FINDINGS，超限 SEVERITY 等级序先裁低级）+ 单条文案
+ *    200 字符（MAX_ADVICE_CHARS，对齐 schema 200 口径）（常量在 PerfAdviceTool）；
+ *  - 其余七工具：输出规模由输入决定天然有界（渲染=源码规模、logs=日志条数、crud/reverse/
+ *    rollback=单实体单语句），不设额外预算。
+ *
  * 注册：mcp-optional.xml `mcpServer.mcpToolset` EP（com.intellij.mcpServer 插件在 253+/262
  * 内置；243 整文件不加载）。线程模型/零弹窗/审计约定与一期一致：协程线程调用（PSI 读包
  * ReadAction 于各服务内部）；拒绝走 [McpExpectedError]；每次调用经 [McpAuditLog] 审计。
