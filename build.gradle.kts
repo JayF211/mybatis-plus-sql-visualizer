@@ -145,8 +145,6 @@ intellijPlatform {
     if (gifRecord) {
         sandboxContainer = layout.buildDirectory.dir("MPSV-GifFresh")
     }
-    // T-SyncK2JMaster176：并行会话隔离（临时——收官提交还原本行）
-    sandboxContainer = layout.buildDirectory.dir("test-sandbox-k2jsync176")
 
     // T-M30：跨版本 API 兼容校验（官方推荐流程）——`./gradlew verifyPlugin` 对目标 IDE
     // 集合做字节码级检查（插件引用的类/方法在目标版本中必须存在）。目标 = 最低支持

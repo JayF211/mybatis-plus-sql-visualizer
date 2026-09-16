@@ -125,7 +125,14 @@ docs/开发计划 71 件、memory-archive 44 件（bug-fixes 37+pitfalls 7）、
 提交链（滚动回填）：
 - 8fb1eef C1 立项计划
 - f671228 C2 agent 子项目落位（sub-projects 36 文件直取 + settings/gradle.properties/build.gradle.kts union + agent 42 用例绿 + fat jar 出包）
-- （C3~C9 滚动回填）
+- cd04ddc C3~C5 生产移植（25 新建翻译 + 57 增量 + 9 退役删除，compileJava 绿）
+- 21e5a81 C6+C8 资源构建与文档同步（plugin.xml/bundle union 648 键/update 双 JSON/文档 146 件直取/三册 union）
+- cc16623 C7 测试移植（31 新建 210 用例 + 44 增量 + 5 删除 + 测试缝收口）
+- （本次收尾提交）C9 收官（.port-sync 锚点推进 9def321 + 沙盒临时行还原 + 台账行）
+
+门禁终值：全量 testShards **4286/0/0/6 绿**（3 分片：1477/1532/1277，基线 3975→4286；master 同源口径 testShards 4299）+ buildPlugin 出包 2026.9.18-beta.3（含内嵌 mps-sql-agent.jar）+ verifyGate 三目标 Compatible（243: 7dep/10exp；253: 1 for-removal/10dep/10exp；262: 2 for-removal/56dep/10exp）。
+
+编译期修复记录（翻译批次收口）：12→2→0 三轮——SqlConsoleBridgeFilterProvider 方法引用错类/contains(':') 字符版/FocusFilter 限定名/VirtualFile+MpSqlVisualizerBundle 缺 import/comparingLong 显式类型/ThrowableComputable Unit→Void；AgentManager throws 补 AttachNotSupportedException+import；测试侧 internal→public 可见性（setCapturingForTest/AgentManager.online）、SubmissionOutcome/failureStatusText 1 参重载、AgentEvent.withUrl、MyBatisLogParser 4 参构造、SqlLogCaptureRealtimeScenarioTest 17 参适配；测试修复两根因=J1 翻译时 restorer 传 null（Kotlin 默认参数语义纠偏，24 失败）+JUnit3 lambda 合成方法坑（NO_OP_RUNNABLE 抽字段，1 失败）。
 
 过程记录：
 - 生产翻译采用「主会话增量移植 + 五个并行子代理分批」：B（LogThreadRouter/LogParseDiag/LogTimeCorrelator/ListParamRenderer/SourceCaptureGuide）、C（agent IDE 侧七件含 AgentSession 拆分 + EnhancedCaptureConfirmDialog）、D（BatchSubmitter/PendingReportScheduler，三处适配点待 ErrorReportComposer 批次回收）、A（低层 util 五件，限流失败后由主会话补齐）、E（log 六件历史往返 8 个 Java，SqlLogParamCodec.decode 改 DecodedPayload record）、F（config+feedback 增量五件）、G（execute+ui 七件）、H（log 高层九件）。首轮 4 并发触发账户限流（A 失败），后续维持 ≤3 并发。
