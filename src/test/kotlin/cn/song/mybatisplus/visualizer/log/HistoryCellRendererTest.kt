@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.config.PluginSettings.Companion.LOG_TIMESTAMP_SOURCE_CAPTURE
 import com.intellij.ui.SimpleColoredComponent
 import com.intellij.ui.SimpleTextAttributes
 import org.junit.Assert.assertEquals
@@ -56,16 +57,16 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         val meta = joinedText(r.metaLine)
         val sql = joinedText(r.sqlLine)
         assertTrue("含 SQL 关键字", sql.contains("SELECT"))
-        assertTrue("无耗时显示占位符 —", meta.contains("[—]"))
+        assertTrue("无耗时显示占位符 —（与日志页同款无括号）", meta.contains("—"))
         assertTrue("无源码显示占位符 unknown", meta.contains("[unknown]"))
-        assertFalse("无耗时不出现 ms", meta.contains("ms]"))
+        assertFalse("无耗时不出现 ms", meta.contains("ms"))
         assertFalse("渲染文本不应为 HTML 包裹", sql.startsWith("<html>"))
     }
 
     fun test二级条目_含源码位置_渲染元信息行() {
         val r = renderSql(sqlEntry("SELECT 1", sourceFile = "UserMapper.java", sourceLine = 12, ms = 3L))
         val meta = joinedText(r.metaLine)
-        assertTrue("应渲染耗时 [3ms]", meta.contains("[3ms]"))
+        assertTrue("应渲染耗时 3ms（与日志页同款无括号）", meta.contains("3ms"))
         assertTrue("应渲染源码 [UserMapper.java:12]", meta.contains("[UserMapper.java:12]"))
         assertFalse("SQL 不应混入元信息行", meta.contains("SELECT"))
     }
@@ -88,7 +89,7 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
     fun test二级条目_元信息在上SQL在下两行显示() {
         val r = renderSql(sqlEntry("SELECT * FROM orders WHERE id = 1", sourceFile = "OrderDao.java", sourceLine = 9, ms = 30L))
         val meta = joinedText(r.metaLine)
-        assertTrue("耗时占位应在元信息行", meta.contains("[30ms]"))
+        assertTrue("耗时应在元信息行", meta.contains("30ms"))
         assertTrue("来源应在元信息行", meta.contains("[OrderDao.java:9]"))
         assertTrue("SQL 应在 SQL 行", joinedText(r.sqlLine).contains("SELECT"))
         assertFalse("来源不应混入 SQL 行", joinedText(r.sqlLine).contains("OrderDao.java"))
@@ -98,7 +99,7 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
     fun test二级条目_空耗时与未知来源占位渲染在元信息行() {
         val r = renderSql(sqlEntry("SELECT * FROM user", sourceFile = null, ms = null))
         val meta = joinedText(r.metaLine)
-        assertTrue("空耗时占位 [—] 应在元信息行", meta.contains("[—]"))
+        assertTrue("空耗时占位 — 应在元信息行", meta.contains("—"))
         assertTrue("未知来源占位 [unknown] 应在元信息行", meta.contains("[unknown]"))
         assertTrue("SQL 应在 SQL 行", joinedText(r.sqlLine).contains("SELECT"))
     }
@@ -265,9 +266,30 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         val e = sqlEntry("SELECT 1", sourceFile = "UserMapper.java", sourceLine = 3, ms = 3L).copy(sequenceNumber = 5L)
         val meta = joinedText(renderSql(e).metaLine)
         val idxRow = meta.indexOf("#5 ")
-        val idxDur = meta.indexOf("[3ms]")
+        val idxDur = meta.indexOf("3ms")
         assertTrue("应同时含行号与耗时", idxRow >= 0 && idxDur >= 0)
         assertTrue("行号在耗时之前", idxRow < idxDur)
+    }
+
+    fun test二级条目_元信息顺序与日志页一致_时间在耗时前() {
+        // 用户反馈：历史页原为「耗时 → 时间」，与日志页「时间 → 耗时」相反
+        val savedTs = PluginSettings.getInstance().state.logTimestampEnabled
+        val savedSrc = PluginSettings.getInstance().state.logTimestampSource
+        try {
+            PluginSettings.getInstance().state.logTimestampEnabled = true
+            PluginSettings.getInstance().state.logTimestampSource = LOG_TIMESTAMP_SOURCE_CAPTURE
+            val e = sqlEntry("SELECT 1", sourceFile = "UserMapper.java", sourceLine = 3, ms = 3L).copy(sequenceNumber = 5L)
+            val meta = joinedText(renderSql(e).metaLine)
+            val idxRow = meta.indexOf("#5 ")
+            val idxTs = meta.indexOf("[")
+            val idxDur = meta.indexOf("3ms")
+            assertTrue("应含行号/时间/耗时", idxRow >= 0 && idxTs >= 0 && idxDur >= 0)
+            assertTrue("行号在最前", idxRow < idxTs)
+            assertTrue("时间应在耗时之前（对齐日志页）", idxTs < idxDur)
+        } finally {
+            PluginSettings.getInstance().state.logTimestampEnabled = savedTs
+            PluginSettings.getInstance().state.logTimestampSource = savedSrc
+        }
     }
 
     // ---------- T-JdbcThreadBucket F3：历史页时间戳跟随设置（2026-09-15 移除硬编码 yyyy-MM-dd HH:mm:ss） ----------

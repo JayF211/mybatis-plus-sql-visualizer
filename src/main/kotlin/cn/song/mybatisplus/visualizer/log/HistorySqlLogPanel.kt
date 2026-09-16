@@ -682,7 +682,6 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
         metaLine.foreground = fg
         metaLine.clear()
         val lineFragments = if (entry != null) {
-            val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
             val source = when {
                 SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
                 entry.sourceFile != null -> {
@@ -692,16 +691,19 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
                 }
                 else -> "unknown"
             }
-            // T-TwoLine：元信息行在上（uniform 灰——不按耗时变色避免与 SQL 高亮冲突），SQL 高亮行在下
+            // T-TwoLine：元信息行在上、SQL 高亮行在下。**片段与顺序与日志页完全一致**
+            // （行号 → 时间 → 耗时 → 目标库 → 来源；耗时复用日志页 formatDurationFragment，
+            // 按慢查询阈值着色、缺失占位「—」——勿再自拼 [xms]，两页同条目须逐字一致）
             // T-LogHistoryRowNo：行号片段在最前（0 = 无行号——旧文件/未注入条目；与日志页守卫一致）
             if (entry.sequenceNumber > 0) {
                 metaLine.append("#${entry.sequenceNumber} ", HISTORY_META_GRAY)
             }
-            metaLine.append("[$duration] ", HISTORY_META_GRAY)
             // T-JdbcThreadBucket F3 + 日志时间：跟随设置（对齐日志页 formatTimestampFragment），
             // 含非法 pattern 回退默认、显示开关与时间来源（日志时间/捕获时间）语义
             formatTimestampFragment(entry)?.let { (t, a) -> metaLine.append(t, a) }
-            // T-AgentDialectLoop：目标库角标（与日志页同款落点：耗时/时间后、来源前）
+            val (durationText, durationAttrs) = formatDurationFragment(entry.executionTimeMs, useSelectionFill)
+            metaLine.append(durationText, durationAttrs)
+            // T-AgentDialectLoop：目标库角标（与日志页同款落点：时间/耗时后、来源前）
             formatDatabaseFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
             metaLine.append("[$source] ", HISTORY_META_GRAY)
             sqlLineFragmentsFor(entry)
