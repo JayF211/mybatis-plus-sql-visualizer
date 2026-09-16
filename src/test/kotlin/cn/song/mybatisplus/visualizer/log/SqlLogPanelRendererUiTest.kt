@@ -2,12 +2,11 @@ package cn.song.mybatisplus.visualizer.log
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.log.SqlSource
 import com.intellij.ui.SimpleColoredComponent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -88,6 +87,32 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         assertTrue("元信息行含去重徽章", meta.contains("⨉2"))
         assertFalse("元信息行不应混入 SQL", meta.contains("SELECT"))
         assertTrue("SQL 行完整保留语句（含分号结束符）", joinedText(r.sqlLine).contains("SELECT * FROM repeated WHERE id = 1;"))
+    }
+
+    fun test目标库角标_有库名渲染到元信息行() {
+        // T-AgentDialectLoop：agent 条目带 databaseName → 元信息行出现 [MySQL] 角标
+        val e = LogSqlEntry(
+            rawSql = "SELECT 1",
+            restoredSql = "SELECT 1",
+            params = emptyList(),
+            timestamp = 1_700_000_000_000L,
+            source = SqlSource.AGENT,
+            databaseName = "MySQL",
+        )
+        val meta = joinedText(render(e).metaLine)
+        assertTrue("元信息行应含目标库角标", meta.contains("[MySQL] "))
+    }
+
+    fun test目标库角标_未知库名不显示() {
+        val e = LogSqlEntry(
+            rawSql = "SELECT 1",
+            restoredSql = "SELECT 1",
+            params = emptyList(),
+            timestamp = 1_700_000_000_000L,
+            source = SqlSource.AGENT,
+        )
+        val meta = joinedText(render(e).metaLine)
+        assertFalse("无 databaseName 不应显示角标", meta.contains("[MySQL]"))
     }
 
     fun test特殊字符SQL_原文保真() {
@@ -277,47 +302,38 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         }
     }
 
-    fun test背景样式_未选中与选中混色比例不同且不铺平台填充() {
+    fun test背景样式_未选中淡背景混色_选中走平台填充() {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
             val bg = list.background
             val update = Color(0xE67E22)
             render(entry("UPDATE user SET a = 1"))
-            assertEquals("未选中应为 14% 混色",
+            assertEquals("未选中应为 14% 混色（类型淡背景标记保留）",
                 SqlListTypeColor.blend(bg, update, SqlListTypeColor.MIX_NORMAL), renderer.background)
             render(entry("UPDATE user SET a = 1"), true)
-            assertEquals("选中应为 30% 混色",
-                SqlListTypeColor.blend(bg, update, SqlListTypeColor.MIX_SELECTED), renderer.background)
-            assertNotEquals("选中态**不铺**平台选中填充（否则类型色被覆盖丢失）",
+            assertEquals("选中态交给平台选中色（T-UN-09 描边退役）",
                 list.selectionBackground, renderer.background)
         }
     }
 
-    fun test背景样式_选中态描边且两状态insets逐边相等() {
+    fun test背景样式_选中态不再安装描边边框() {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
             render(entry("UPDATE user SET a = 1"))
-            assertEquals("未选中应为普通边框", renderer.normalBorder, renderer.border)
+            assertSame("未选中应为普通边框", renderer.normalBorder, renderer.border)
             render(entry("UPDATE user SET a = 1"), true)
-            assertEquals("选中应为描边边框（同一实例，锁零分配引用切换）",
-                renderer.selectedBorder, renderer.border)
-
-            val normal = renderer.normalBorder.getBorderInsets(renderer)
-            val selected = renderer.selectedBorder.getBorderInsets(renderer)
-            assertEquals("上", normal.top, selected.top)
-            assertEquals("左", normal.left, selected.left)
-            assertEquals("下", normal.bottom, selected.bottom)
-            assertEquals("右", normal.right, selected.right)
+            assertSame("选中态恢复平台选中绘制，边框与未选中一致（描边已退役）",
+                renderer.normalBorder, renderer.border)
         }
     }
 
-    fun test背景样式_选中态前景不转白_色条样式仍转白() {
+    fun test背景样式与色条样式_选中态前景均走selectionForeground() {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
             render(entry("SELECT 1", ms = 5L), true)
-            assertEquals("淡底上白字不可见 → 背景样式不取 selectionForeground",
-                list.foreground, renderer.metaLine.foreground)
+            assertEquals("选中态底色已是平台选中填充，前景应转 selectionForeground（T-UN-09）",
+                list.selectionForeground, renderer.metaLine.foreground)
         }
         withCrudColors(SqlListTypeColor.STYLE_BAR) {
             render(entry("SELECT 1", ms = 5L), true)
-            assertEquals("色条样式走平台填充，前景仍为 selectionForeground（现状不变）",
+            assertEquals("色条样式选中前景仍为 selectionForeground（现状不变）",
                 list.selectionForeground, renderer.metaLine.foreground)
         }
     }
@@ -356,15 +372,14 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         }
     }
 
-    fun test背景样式_选中与未选中之间切换会换边框实例() {
+    fun test背景样式_选中与未选中边框恒同一实例() {
         withCrudColors(SqlListTypeColor.STYLE_BACKGROUND) {
             render(entry("UPDATE t SET a = 1"))
             val normal = renderer.border
             render(entry("UPDATE t SET a = 1"), true)
-            val selected = renderer.border
-            assertNotSame("选中态必须换成描边边框（守卫不能把该变更也拦掉）", normal, selected)
+            assertSame("描边退役后选中/未选中共用同一 Border（不再切换）", normal, renderer.border)
             render(entry("UPDATE t SET a = 1"))
-            assertSame("回到未选中应换回原 Border 实例", normal, renderer.border)
+            assertSame("回到未选中仍是同一实例", normal, renderer.border)
         }
     }
 
@@ -384,5 +399,38 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         } finally {
             pluginSettings.logTimestampEnabled = savedTs
         }
+    }
+
+    // ---------- M56 T-M56-02/05：来源角标（已移除）/ 影响行数 / 报错同列 ----------
+
+    fun test增强来源角标已移除_两通道均不显示() {
+        // 用户要求移除：增强为默认捕获通道，逐行标来源属噪音
+        val agent = entry("SELECT 1").copy(source = SqlSource.AGENT)
+        assertFalse("AGENT 来源不应再显示增强角标", joinedText(render(agent).metaLine).contains("[⚡增强]"))
+        val bridge = entry("SELECT 1")
+        assertFalse("桥来源同样不显示", joinedText(render(bridge).metaLine).contains("[⚡增强]"))
+    }
+
+    fun test影响行数负值不显示_负行数守卫() {
+        // JDBC getUpdateCount 在结果为 ResultSet 时返回 -1（无有效计数）→ 不得渲染「(-1 rows)」
+        val neg = entry("SELECT 1").copy(source = SqlSource.AGENT, updateCount = -1L)
+        assertFalse("负值影响行数应不显示", joinedText(render(neg).metaLine).contains("rows)"))
+        val zero = entry("UPDATE t SET a = 1").copy(source = SqlSource.AGENT, updateCount = 0L)
+        assertTrue("0 行是合法计数，应显示", joinedText(render(zero).metaLine).contains("(0 rows)"))
+    }
+
+    fun test影响行数与报错片段同列() {
+        val err = entry("UPDATE t SET a = 1").copy(
+            source = SqlSource.AGENT,
+            updateCount = 3L,
+            errorText = "SQLException: Data too long for column 'a'",
+        )
+        val meta = joinedText(render(err).metaLine)
+        assertTrue("应含影响行数片段", meta.contains("(3 rows)"))
+        assertTrue("应含报错片段（单行截断）", meta.contains("⛔ SQLException: Data too long"))
+        // 无报错无行数的普通条目不显示
+        val ok = joinedText(render(entry("SELECT 1")).metaLine)
+        assertFalse("普通条目不应有行数片段", ok.contains("rows)"))
+        assertFalse("普通条目不应有报错片段", ok.contains("⛔"))
     }
 }

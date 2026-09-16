@@ -62,7 +62,7 @@ class SqlLogConsoleBridgeMarkerTest {
     fun 标记后无SQL_暂存保留() {
         val ctx = newCtx()
         processConsoleLine("SQLVIS-SOURCE|com/x.java|5", ctx, null, {})
-        assertEquals("com/x.java" to 5, ctx.pendingSource)
+        assertEquals(SourceMarkerData("com/x.java", 5), ctx.pendingSource)
     }
 
     @Test
@@ -108,6 +108,30 @@ class SqlLogConsoleBridgeMarkerTest {
         val entries = processConsoleLine("==>  Parameters: 1(Long)", ctx, null, {})
         assertEquals("cn/song/service/UserService.java", entries[0].sourceFile)
         assertEquals(87, entries[0].sourceLine)
+    }
+
+    // ---------- M56 T-M56-00：标记第 4/5 段 → mapperStatement/requestTag ----------
+
+    @Test
+    fun 四段标记_mapper语句id写入条目() {
+        val ctx = newCtx()
+        processConsoleLine("SQLVIS-SOURCE|a/A.java|1|com.a.mapper.AMapper.selectById", ctx, null, {})
+        processConsoleLine("==>  Preparing: SELECT * FROM t1", ctx, null, {})
+        val entries = processConsoleLine("==>  Parameters: 1(Long)", ctx, null, {})
+        assertEquals(1, entries.size)
+        assertEquals("com.a.mapper.AMapper.selectById", entries[0].mapperStatement)
+        assertNull(entries[0].requestTag)
+    }
+
+    @Test
+    fun 五段标记_mapper语句id与请求标签写入条目() {
+        val ctx = newCtx()
+        processConsoleLine("SQLVIS-SOURCE|a/A.java|1|com.a.mapper.AMapper.selectById|req-7", ctx, null, {})
+        processConsoleLine("==>  Preparing: SELECT * FROM t1", ctx, null, {})
+        val entries = processConsoleLine("==>  Parameters: 1(Long)", ctx, null, {})
+        assertEquals(1, entries.size)
+        assertEquals("com.a.mapper.AMapper.selectById", entries[0].mapperStatement)
+        assertEquals("req-7", entries[0].requestTag)
     }
 
     // ---------- T-LogDedupeMpMark：MP 分页 COUNT 标记逐条判定 ----------
@@ -175,9 +199,10 @@ class SqlLogConsoleBridgeMarkerTest {
     fun `多行JdbcTemplate语句端到端捕获并标记MP分页`() {
         val ctx = newCtx()
         // 用户反馈样本（2026-09-08）：TLog TID 前缀 + SQL 跨行 + `]` 独占末行
+        // 线程 token 与 namedLine 一致（cache-preheat-1），T-JdbcThreadBucket 分桶后 named 行冲刷同桶残句
         val sample = listOf(
-            "2026-09-08 11:21:11.066 [TID: AFFCDDCD81F34B929A55E587382D58E8] [http-nio-0.0.0.0-6608-exec-5] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:711 - Executing prepared SQL query",
-            "2026-09-08 11:21:11.066 [TID: AFFCDDCD81F34B929A55E587382D58E8] [http-nio-0.0.0.0-6608-exec-5] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:643 - Executing prepared SQL statement [SELECT COUNT(1)",
+            "2026-09-08 11:21:11.066 [TID: AFFCDDCD81F34B929A55E587382D58E8] [cache-preheat-1] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:711 - Executing prepared SQL query",
+            "2026-09-08 11:21:11.066 [TID: AFFCDDCD81F34B929A55E587382D58E8] [cache-preheat-1] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:643 - Executing prepared SQL statement [SELECT COUNT(1)",
             "        FROM ipm_ImplementTask t",
             "        WHERE t.deleted = 0",
             "        AND EXISTS (SELECT 1 FROM ipm_ProjectSubject p WHERE p.id = t.projectId AND p.deleted = 0)",

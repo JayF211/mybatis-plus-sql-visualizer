@@ -66,9 +66,10 @@ import cn.song.mybatisplus.visualizer.util.TableConfigSignature
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.components.Service
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiElement
@@ -1841,6 +1842,9 @@ class SqlPreviewService(private val project: Project) {
     companion object {
         private val LOG = Logger.getInstance(SqlPreviewService::class.java)
 
+        /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+
         /** 逻辑删除控制方法名（T-M20-05，MPJ 官方六方法；单一来源，评估逻辑 [evaluateLogicDeleteState] 使用）。 */
         private const val METHOD_DISABLE_LOGIC_DEL = "disableLogicDel"
         private const val METHOD_ENABLE_LOGIC_DEL = "enableLogicDel"
@@ -1873,11 +1877,18 @@ class SqlPreviewService(private val project: Project) {
          */
         fun showResult(project: Project, result: PreviewResult?, sourceLocation: String? = null) {
             if (result == null) {
-                Messages.showInfoMessage(
-                    project,
-                    MpSqlVisualizerBundle.message("action.notFound.message"),
-                    MpSqlVisualizerBundle.message("action.notFound.title"),
-                )
+                // T-UiNative T-UN-02：未找到可转换 Wrapper 提示改轻通知（原模态弹窗——纯告知无需打断）；
+                // 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）
+                if (!ApplicationManager.getApplication().isUnitTestMode) {
+                    runCatching {
+                        Notification(
+                            NOTIFICATION_GROUP_ID,
+                            MpSqlVisualizerBundle.message("action.notFound.title"),
+                            MpSqlVisualizerBundle.message("action.notFound.message"),
+                            NotificationType.INFORMATION,
+                        ).notify(project)
+                    }
+                }
                 return
             }
             // 关旧开新：旧弹窗 dispose 级联释放面板（rehost 监听随之移除），再开新弹窗

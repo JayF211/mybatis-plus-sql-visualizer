@@ -22,6 +22,12 @@ package cn.song.mybatisplus.visualizer.log
  * string-aware 净括号计数（单引号字符串内 `[`/`]` 不计数，`''` 转义）归零即闭合；新语句行/参数行/超限
  * 强制闭合残句，`closePending()` 同样冲刷（LogToSqlPanel 粘贴末尾零改动受益）。
  *
+ * T-JdbcThreadBucket（并发参数错挂修复，2026-09-15 立项，根因：单槽状态机假设「SQL 行 → 参数行 → 下一条」严格串行，
+ * Tomcat 并发请求日志按到达序混排，named 行带 `closePending()` 会把其它线程的 prepared 语句强制闭合 → 该线程随后到达的
+ * 参数行因 `pendingSql == null` 被静默丢弃 → 用户实测「有些参数没有正常识别出来」+ 预览提示「未捕获到参数绑定日志」。
+ * 修复：从日志行提取线程 token（`[http-nio-…-exec-4]` 等），按 token 分桶维护独立 pendingSql/pendingCollecting 状态机；
+ * 线程 token 提取失败回退共享默认桶（与旧单槽行为一致，fail-open）。SkyWalking 注入的 `[TID: …]` 段是追踪标识非线程名，须排除）。
+ *
  * [maxParseLength] 超长截断（防控制台大输出卡顿）。
  */
 class JdbcTemplateLogParser(
@@ -35,43 +41,57 @@ class JdbcTemplateLogParser(
 ) {
 
     private val entries = mutableListOf<LogSqlEntry>()
-    private var pendingSql: String? = null
-    private val pendingParams = mutableListOf<IndexedParam>()
 
-    // ----- 多行收集态（T-JdbcMultiline：`[...]` 跨行语句首行进入，`]` 闭合/边界行/超限/closePending 离开） -----
-    private var collecting = false
-    private val multilineBuffer = StringBuilder()
+    // ----- T-JdbcThreadBucket / T-LogParseConc：按线程 token 分桶的独立状态机（修复并发参数错挂） -----
 
-    /** 未闭合 `[` 的净计数（`[` +1 / `]` -1，单引号字符串内不计数）。 */
-    private var multilineNet = 0
+    /** 单线程桶的完整状态机（对应旧解析器实例级字段，现按线程 token 隔离）。 */
+    private class ThreadBucket {
+        var pendingSql: String? = null
+        var pendingLogLine: String? = null
+        val pendingParams = mutableListOf<IndexedParam>()
+        var collecting = false
+        val multilineBuffer = StringBuilder()
+        var multilineNet = 0
+        var multilineInString = false
 
-    /** 单引号字符串态（跨行延续；`''` 为字符串内转义引号）。 */
-    private var multilineInString = false
+        /** T-LPC-04：多行收集的**首行**（日志时间取它——多行条目的时间此前恒 null 回落捕获时间）。 */
+        var collectingFirstLine: String? = null
 
-    /** 喂入一行控制台输出（任意线程，内部无共享可变状态——解析器实例按 console 隔离）。 */
+        /** 多行收集态内存占用（用于超限判定）。 */
+        val byteSize: Int get() = multilineBuffer.length
+    }
+
+    /** 线程分桶路由（T-LogParseConc 起为三解析器共享实现，见 [LogThreadRouter]）。 */
+    private val router = LogThreadRouter(
+        factory = { ThreadBucket() },
+        isCollecting = { it.collecting },
+        isIdle = { it.pendingSql == null && !it.collecting },
+    )
+
+    /** 喂入一行控制台输出（任意线程，内部按线程 token 路由到对应桶——解析器实例按 console 隔离）。 */
     fun feed(line: String) {
         if (!enabled) return
-
+        val bucket = router.bucketFor(line)
         // 多行收集态：语句跨行累积中（T-JdbcMultiline）
-        if (collecting) {
+        if (bucket.collecting) {
             if (looksLikeStatementBoundary(line)) {
                 // 边界行（新语句/NamedParameter/参数行）：强制闭合残句并立即产出，
                 // 防止后续行的参数误挂到残句上
-                closePending()
-                feedIdle(line)
+                closeBucketPending(bucket)
+                feedIdle(bucket, line)
             } else {
-                appendCollecting(line)
+                appendCollecting(bucket, line)
             }
             return
         }
-        feedIdle(line)
+        feedIdle(bucket, line)
     }
 
-    private fun feedIdle(line: String) {
+    private fun feedIdle(bucket: ThreadBucket, line: String) {
         // 分支 1：NamedParameterJdbcTemplate 单行格式（sql = ... , parameters = {...}）
         val namedEntry = extractNamedParamEntry(line)
         if (namedEntry != null) {
-            closePending()
+            closeBucketPending(bucket)
             entries += namedEntry
             return
         }
@@ -85,16 +105,20 @@ class JdbcTemplateLogParser(
                 // 未闭合进入多行收集——含 `[SELECT a[1] FROM t` 这类首个 `]` 并非消息终结符的
                 // 形态（旧同行正则会把 "SELECT a[1" 误提取为完整语句）
                 val probe = scanBrackets(line, openIdx + 1, net = 1, inString = false)
-                closePending()
-                pendingParams.clear()
+                closeBucketPending(bucket)
+                bucket.pendingParams.clear()
                 if (probe.closeIdx >= 0) {
-                    pendingSql = line.substring(openIdx + 1, probe.closeIdx).take(maxParseLength)
+                    bucket.pendingSql = line.substring(openIdx + 1, probe.closeIdx).take(maxParseLength)
+                    bucket.pendingLogLine = line
                 } else {
-                    collecting = true
-                    multilineBuffer.setLength(0)
-                    multilineBuffer.append(line.substring(openIdx + 1))
-                    multilineNet = probe.net
-                    multilineInString = probe.inString
+                    bucket.collecting = true
+                    bucket.multilineBuffer.setLength(0)
+                    bucket.multilineBuffer.append(line.substring(openIdx + 1))
+                    bucket.multilineNet = probe.net
+                    bucket.multilineInString = probe.inString
+                    // T-LPC-04：记首行——多行条目的日志时间取它（此前多行路径不记 pendingLogLine，
+                    // 条目 logTimestamp 恒 null → 面板回落捕获时间，控制台积压时与日志行拉开）
+                    bucket.collectingFirstLine = line
                 }
                 return
             }
@@ -104,45 +128,66 @@ class JdbcTemplateLogParser(
         // 分支 3：参数行
         val param = extractParamFromLine(line)
         if (param != null) {
-            if (pendingSql == null) return // 无 SQL 上下文，忽略
-            pendingParams += param
+            if (bucket.pendingSql == null) {
+                LogParseDiag.paramWithoutContext.incrementAndGet() // T-LPC-05：静默丢弃留痕
+                return
+            }
+            bucket.pendingParams += param
             return
         }
 
         // 分支 4：有 pendingSql 后遇到非参数非 SQL 行 → 闭合当前条目
-        if (pendingSql != null && pendingParams.isNotEmpty()) {
-            closePending()
+        if (bucket.pendingSql != null && bucket.pendingParams.isNotEmpty()) {
+            closeBucketPending(bucket)
         }
     }
 
-    /** 闭合当前未完成条目（新语句到来 / 面板刷新 / 粘贴末尾时调用）。 */
-    fun closePending(): LogSqlEntry? {
-        if (collecting) {
+    /**
+     * 闭合指定线程桶的未完成条目（新语句到来 / 面板刷新 / 粘贴末尾时调用）。
+     * 返回产出的条目（可能为 null，即桶内无 pendingSql）。
+     */
+    private fun closeBucketPending(bucket: ThreadBucket): LogSqlEntry? {
+        if (bucket.collecting) {
             // 多行残句强制闭合（T-JdbcMultiline）——宁交未闭合残句，不整段丢弃
-            val partial = multilineBuffer.toString()
+            val partial = bucket.multilineBuffer.toString()
             if (partial.isNotBlank()) {
-                finishCollecting(partial)
+                LogParseDiag.partialMultilineClosed.incrementAndGet() // T-LPC-05
+                finishCollecting(bucket, partial)
             } else {
-                collecting = false
-                multilineBuffer.setLength(0)
-                multilineNet = 0
-                multilineInString = false
+                bucket.collecting = false
+                bucket.multilineBuffer.setLength(0)
+                bucket.multilineNet = 0
+                bucket.multilineInString = false
+                bucket.collectingFirstLine = null
             }
         }
-        val sql = pendingSql ?: return null
-        pendingSql = null
+val sql = bucket.pendingSql ?: return null
+        bucket.pendingSql = null
+        val logTs = bucket.pendingLogLine?.let { LogTimestampParser.parse(it) }
+        bucket.pendingLogLine = null
         // 按 column index 升序排列（1-based → 0-based 由 restorer 按序处理）
-        val sortedParams = pendingParams.sortedBy { it.index }
+        val sortedParams = bucket.pendingParams.sortedBy { it.index }
             .map { LogSqlParam(it.value, it.mappedType) }
         val entry = LogSqlEntry(
             rawSql = sql,
             restoredSql = restorer.restore(sql, sortedParams),
             params = sortedParams,
             source = SqlSource.JDBC,
+            logTimestamp = logTs,
         )
         entries += entry
-        pendingParams.clear()
+        bucket.pendingParams.clear()
         return entry
+    }
+
+    /** 闭合全部线程桶的未完成条目（面板刷新 / 粘贴末尾时调用）。返回首个产出的条目（保持旧 closePending 返回语义）。 */
+    fun closePending(): LogSqlEntry? {
+        var first: LogSqlEntry? = null
+        for (bucket in router.allBuckets()) {
+            val produced = closeBucketPending(bucket)
+            if (first == null) first = produced
+        }
+        return first
     }
 
     /** 取出全部已闭合条目并清空缓冲区（面板刷新用）。 */
@@ -152,7 +197,7 @@ class JdbcTemplateLogParser(
         return result
     }
 
-    // ---------- 私有方法 ----------
+    // ---------- 私有方法（与旧版同逻辑，按桶操作） ----------
 
     /**
      * 尝试从行中提取 NamedParameterJdbcTemplate 格式的完整条目（单行）。
@@ -177,6 +222,7 @@ class JdbcTemplateLogParser(
             restoredSql = restoredSql,
             params = params,
             source = SqlSource.JDBC,
+            logTimestamp = LogTimestampParser.parse(line),
         )
     }
 
@@ -203,11 +249,15 @@ class JdbcTemplateLogParser(
     /**
      * 替换 SQL 中的命名参数为渲染后的字面量。
      * 无类型标注 → 启发式：数值/true/false 原样，其余引号包裹。
+     *
+     * T-ListParamCollect：IN 子句内的集合值（日志形态 `[a]`/`[a, b]`）剥括号按元素渲染，
+     * 方括号不再落进 SQL 字面量；非 IN 位置行为与改造前逐字节一致。
      */
     private fun replaceNamedParams(sql: String, params: Map<String, String>): String {
+        val inClauseNames = ListParamRenderer.inClauseParamNames(sql)
         var result = sql
         for ((name, value) in params) {
-            val rendered = renderUntyped(value)
+            val rendered = ListParamRenderer.renderParam(value, name in inClauseNames) { renderUntyped(it) }
             result = result.replace(":$name", rendered)
         }
         return result
@@ -270,29 +320,34 @@ class JdbcTemplateLogParser(
             PARAM_LINE_PATTERN.containsMatchIn(line)
 
     /** COLLECTING 态逐行累积；净括号计数归零即闭合（终结 `]` 前的文本即完整 SQL）。 */
-    private fun appendCollecting(line: String) {
-        if (multilineBuffer.length + line.length + 1 >= maxParseLength) {
+    private fun appendCollecting(bucket: ThreadBucket, line: String) {
+        if (bucket.byteSize + line.length + 1 >= maxParseLength) {
             // 累积超限：强制闭合（截断语义与单行快路径一致），不吞后续语句
-            closePending()
+            closeBucketPending(bucket)
             return
         }
-        val lineStart = multilineBuffer.length
-        multilineBuffer.append('\n').append(line)
-        val probe = scanBrackets(line, 0, multilineNet, multilineInString)
-        multilineNet = probe.net
-        multilineInString = probe.inString
+        val lineStart = bucket.multilineBuffer.length
+        bucket.multilineBuffer.append('\n').append(line)
+        val probe = scanBrackets(line, 0, bucket.multilineNet, bucket.multilineInString)
+        bucket.multilineNet = probe.net
+        bucket.multilineInString = probe.inString
         if (probe.closeIdx >= 0) {
-            finishCollecting(multilineBuffer.substring(0, lineStart + 1 + probe.closeIdx))
+            finishCollecting(bucket, bucket.multilineBuffer.substring(0, lineStart + 1 + probe.closeIdx))
         }
     }
 
     /** 闭合多行语句：保留内部换行、削首尾空白，回归与单行一致的 pendingSql 生命周期。 */
-    private fun finishCollecting(sql: String) {
-        collecting = false
-        multilineBuffer.setLength(0)
-        multilineNet = 0
-        multilineInString = false
-        pendingSql = sql.trim().take(maxParseLength)
+    private fun finishCollecting(bucket: ThreadBucket, sql: String) {
+        // T-LPC-04：多行条目的日志时间取**收集首行**（该行才是 SQL 所在日志行，含时间戳前缀）——
+        // 此前多行路径不记 pendingLogLine，条目 logTimestamp 恒 null → 面板回落捕获时间，
+        // 控制台行多/管道滞后时与日志行时间拉开（用户实测 209ms）。
+        bucket.pendingLogLine = bucket.collectingFirstLine
+        bucket.collectingFirstLine = null
+        bucket.collecting = false
+        bucket.multilineBuffer.setLength(0)
+        bucket.multilineNet = 0
+        bucket.multilineInString = false
+        bucket.pendingSql = sql.trim().take(maxParseLength)
     }
 
     /** 括号扫描结果：累计净计数、延续后的字符串态、净计数首次归零处的局部下标（未闭合为 -1）。 */
@@ -341,6 +396,9 @@ class JdbcTemplateLogParser(
 
     companion object {
         const val DEFAULT_MAX_PARSE_LENGTH = 20000
+
+        // T-LogParseConc：线程 token 提取 / 分桶 / 桶上限已下沉 [LogThreadRouter]（三解析器共享），
+        // 原 THREAD_WINDOW / THREAD_BRACKET / PURE_DIGIT / LEVEL_KEYWORD_PATTERN / DEFAULT_MAX_BUCKETS 随之下沉。
 
         /**
          * SQL 行动作短语（T-JdbcMultiline 自旧「同行 `[...]` 正则」拆出）。

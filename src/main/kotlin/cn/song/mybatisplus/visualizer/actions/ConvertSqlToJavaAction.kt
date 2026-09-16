@@ -14,10 +14,11 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 
 /**
  * SQL → MyBatis-Plus Java 代码 转换 Action（SQL 反向链路，P0 + T-M36.2/3 + T-M36.4 共享编排）。
@@ -244,11 +245,17 @@ class ConvertSqlToJavaAction : AnAction() {
     }
 
     private fun showNoSelection(project: Project) {
-        Messages.showInfoMessage(
-            project,
-            MpSqlVisualizerBundle.message("reverse.error.noSelection"),
-            MpSqlVisualizerBundle.message("plugin.name"),
-        )
+        // T-UiNative T-UN-02：未选中文本提示改轻通知（原模态弹窗——纯告知无需打断）；
+        // update() 已拦可见性，本路径为竞态兜底。测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）。
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("plugin.name"),
+                MpSqlVisualizerBundle.message("reverse.error.noSelection"),
+                NotificationType.INFORMATION,
+            ).notify(project)
+        }
     }
 
     // 仅访问编辑器选择区（UI 状态，非 PSI）→ EDT 更新线程安全且无慢操作风险
@@ -264,5 +271,8 @@ class ConvertSqlToJavaAction : AnAction() {
     companion object {
         /** 插件动作 ID（plugin.xml 中注册）。 */
         const val ACTION_ID = "cn.song.mybatisplus.visualizer.ConvertSqlToJava"
+
+        /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
     }
 }

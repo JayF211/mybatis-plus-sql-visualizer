@@ -1,7 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.diagram
 
 import cn.song.mybatisplus.visualizer.model.JoinType
-import com.intellij.ui.JBColor
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import com.intellij.util.ui.UIUtil
 import java.awt.AlphaComposite
 import java.awt.BasicStroke
@@ -47,22 +47,24 @@ object DiagramRenderer {
     const val LABEL_LINE_GAP = 12
     const val LABEL_COLUMN_GAP = 24
 
-    val SHADOW = JBColor(Color(0x00, 0x00, 0x00, 25), Color(0x00, 0x00, 0x00, 45))
-    val CARD_BG = JBColor(Color(0xFF, 0xFF, 0xFF), Color(0x2D, 0x2F, 0x33))
-    val CARD_BG_ALT = JBColor(Color(0xF7, 0xF8, 0xFA), Color(0x2A, 0x2C, 0x30))
-    val CARD_BORDER = JBColor(Color(0xC8, 0xCC, 0xD4), Color(0x50, 0x53, 0x5A))
-    val MAIN_HDR_BG = JBColor(Color(0xDC, 0xE8, 0xDC), Color(0x2E, 0x3B, 0x2E))
-    val JOIN_HDR_BG = JBColor(Color(0xDC, 0xE5, 0xED), Color(0x2A, 0x30, 0x38))
-    val HEADER_LINE = JBColor(Color(0xB8, 0xBC, 0xC4), Color(0x4A, 0x4E, 0x56))
-    val SEPARATOR = JBColor(Color(0xE4, 0xE6, 0xEA), Color(0x3A, 0x3D, 0x42))
-    val TEXT = JBColor(Color(0x1A, 0x1A, 0x1A), Color(0xBB, 0xBB, 0xBB))
-    val TYPE_COLOR = JBColor(Color(0x88, 0x88, 0x88), Color(0x80, 0x80, 0x80))
-    val PK_COLOR = JBColor(Color(0x9A, 0x68, 0x00), Color(0xE2, 0xC0, 0x79))
-    val LINE_COLOR = JBColor(Color(0x55, 0x55, 0x55), Color(0x77, 0x77, 0x77))
-    val LABEL_BG = JBColor(Color(0xFF, 0xFF, 0xFF), Color(0x33, 0x36, 0x3B))
-    val LABEL_BORDER = JBColor(Color(0xC0, 0xC0, 0xC0), Color(0x50, 0x53, 0x5A))
-    val JOIN_BADGE_BG = JBColor(Color(0xE8, 0xEA, 0xED), Color(0x3A, 0x3D, 0x42))
-    val JOIN_BADGE_TEXT = JBColor(Color(0x55, 0x55, 0x55), Color(0x99, 0x99, 0x99))
+    // T-UN-13（T-UiNative）：16 色板写死双值 → MpvsUiColors namedColor 别名（亮/暗值逐字节平移，
+    // 语义键名见 MpvsUiColors「mpvs.diagram.*」；本对象常量名保持不变，调用点零改动）。
+    val SHADOW = MpvsUiColors.DIAGRAM_SHADOW
+    val CARD_BG = MpvsUiColors.DIAGRAM_CARD_BG
+    val CARD_BG_ALT = MpvsUiColors.DIAGRAM_CARD_BG_ALT
+    val CARD_BORDER = MpvsUiColors.DIAGRAM_CARD_BORDER
+    val MAIN_HDR_BG = MpvsUiColors.DIAGRAM_MAIN_HDR_BG
+    val JOIN_HDR_BG = MpvsUiColors.DIAGRAM_JOIN_HDR_BG
+    val HEADER_LINE = MpvsUiColors.DIAGRAM_HEADER_LINE
+    val SEPARATOR = MpvsUiColors.DIAGRAM_SEPARATOR
+    val TEXT = MpvsUiColors.DIAGRAM_TEXT
+    val TYPE_COLOR = MpvsUiColors.DIAGRAM_TYPE_COLOR
+    val PK_COLOR = MpvsUiColors.DIAGRAM_PK_COLOR
+    val LINE_COLOR = MpvsUiColors.DIAGRAM_LINE_COLOR
+    val LABEL_BG = MpvsUiColors.DIAGRAM_LABEL_BG
+    val LABEL_BORDER = MpvsUiColors.DIAGRAM_LABEL_BORDER
+    val JOIN_BADGE_BG = MpvsUiColors.DIAGRAM_JOIN_BADGE_BG
+    val JOIN_BADGE_TEXT = MpvsUiColors.DIAGRAM_JOIN_BADGE_TEXT
 
     // ------------------------------------------------------------------
     // Layout data classes

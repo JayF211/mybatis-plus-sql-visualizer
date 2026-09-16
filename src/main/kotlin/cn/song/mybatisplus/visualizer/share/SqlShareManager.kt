@@ -4,11 +4,10 @@ import cn.song.mybatisplus.visualizer.share.format.ExecutableSqlFormatter
 import cn.song.mybatisplus.visualizer.share.format.MarkdownFormatter
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
-import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
-import java.awt.datatransfer.StringSelection
 import java.io.File
 
 /**
@@ -110,10 +109,9 @@ class SqlShareManager(private val project: Project?) {
         return "$cut\n-- ... [SQL truncated, original length: ${sql.length} chars]"
     }
 
-    /** 复制文本到系统剪贴板（优先 CopyPasteManager，降级 Toolkit 剪贴板）。 */
+    /** 复制文本到系统剪贴板（统一走 UiTextClipboard 收口）。 */
     private fun copyToClipboard(text: String) {
-        val selection = StringSelection(text)
-        CopyPasteManager.getInstance().setContents(selection)
+        UiTextClipboard.copy(text)
     }
 
     /** Toast 通知（仅在非测试模式下显示）。 */

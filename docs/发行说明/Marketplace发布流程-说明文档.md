@@ -155,28 +155,35 @@ flowchart LR
 ## 6. Step ③：构建发行包与本地验证
 
 ```bash
-# 1. 全量测试 + 插件验证（发布前必做）
-./gradlew clean test                     # 全量用例 0 失败（基线随版本增长，见 CHANGELOG）
-./gradlew verifyPlugin                   # 三版本兼容性验证（2026-09-09 起为发版硬性门禁，见下）
+# 发版链路一命令（推荐，T-ReleasePerf-02）：buildPlugin → verifyGate 三目标兼容门禁 → testShards 全量测试
+./gradlew releaseGate
+# 判定：BUILD SUCCESSFUL 即三关全过（门禁 exit 0 且三份 verdict 均 Compatible，测试 0 失败）
 
-# 2. 构建发行包
-./gradlew buildPlugin
-# 产物：build/distributions/mybatis-plus-sql-visualizer-<版本>.zip
+# 分步执行（等价，供排障/单步重跑）：
+./gradlew buildPlugin                # 构建发行包
+./gradlew verifyGate                 # 权威兼容门禁（三目标 243+253+262，离线+豁免清单）
+./gradlew testShards                 # 全量测试（3 片并行）
 
-# 3. 本地冒烟（可选但推荐）
+# 改文案/文档后重验门禁（跳过重打包，产物必须已存在）：
+./gradlew verifyGate -PverifyOnly=true
+
+# 本地冒烟（可选但推荐）
 ./gradlew runIde
 # 在沙盒 IDE 里安装 zip（Settings → Plugins → ⚙ → Install Plugin from Disk），
 # 验证：gutter 图标 / 右键转换 / 日志面板 / 设置页
 ```
 
-> **发版前 verifyPlugin 三版本校验为硬性门禁（2026-09-09 T-Wia262 教训）**：
+> **发版前兼容性门禁（2026-09-09 T-Wia262 教训；2026-09-15 T-ReleasePerf 起由 verifyGate 承担）**：
 > v2026.9.8 发布时 T-PreviewWiLock 引入的 `WriteIntentReadAction.compute(ThrowableComputable)` 重载
-> 在 262 平台已被移除——243 编译基准 javap 核验发现不了，直到 verifyPlugin 字节码级对 262 校验才暴露
-> `NoSuchMethodError` 必崩路径，市场发布受阻、自更新清单被迫回退。此后每次发版前必须
-> `./gradlew verifyPlugin`（不加 `-PverifyIdes` 即跑全量三版本 243/253/262，约 7 分钟），
-> 判定标准：**BUILD SUCCESSFUL + 三份 report.html 均标 Compatible**（0 Compatibility issues）；
-> deprecated/experimental 告警为 warning 级不阻断，但须与上一版计数对比，异常新增要归因。
-> （`-PverifyIdes=243` 单版本快跑仅适用于日常开发，不适用于发版门禁。）
+> 在 262 平台已被移除——243 编译基准 javap 核验发现不了，直到 verifier 字节码级对 262 校验才暴露
+> `NoSuchMethodError` 必崩路径，市场发布受阻、自更新清单被迫回退。此后每次发版前必须跑兼容门禁。
+> **`verifyGate` 直驱 verifier-cli**（`-offline` 断 marketplace 网络抖动 + `-ignored-problems` 豁免清单），
+> 判定标准：**BUILD SUCCESSFUL + `build/reports/pluginVerifierGate/IU-{243,253,262}/.../verification-verdict.txt`
+> 三份均标 Compatible**；deprecated/experimental 告警为 warning 级不阻断，但须与上一版计数对比，异常新增要归因。
+> 换门禁的原因（字节码实证，见 build.gradle.kts failureLevel 处注释）：IPGP 2.18.1 的 `verifyPlugin`
+> 任务判定不采纳 `-ignored-problems` 豁免且输出解析存在竞态（同输入一次过一次挂），已降级为报告生成器。
+> 快速档：`verifySmoke`（仅 243，约 1min）/ `verifyMinimal`（243+262）；`-PverifyIdes=minimal`
+> 中间轮次可省 253（约 5min），**最终发版必须三目标**（253 由 Marketplace 审核侧自行验证）。
 
 > 检查 zip 内容：`unzip -l build/distributions/*.zip | head`——应包含 `lib/*.jar`、`META-INF/plugin.xml`、图标、messages 语言包；**不应**包含测试类或无关依赖。
 > 文件大小上限 400 MB（本项目 zip 预计 <1 MB，无忧）。
@@ -261,7 +268,7 @@ flowchart LR
 |---|---|---|
 | 开源插件缺源码链接 | 双仓库 + 表单填 GitHub 镜像 | 按本流程即满足 |
 | 描述质量差（营销词/空话） | 描述为英文功能清单 + 中文说明，无 "lightweight/simple" 类空词 | ✅ |
-| 兼容性问题（Verifier 报错） | 发布前 `verifyPlugin -PverifyIdes=243` 通过；构建基线 2024.3.7.1 | ✅ |
+| 兼容性问题（Verifier 报错） | 发布前 `verifyGate`（三目标）通过；构建基线 2024.3.7.1 | ✅ |
 | 默认/占位 logo | `META-INF/pluginIcon.svg` 为自绘 MP 蓝图标，非模板默认 | ✅ |
 | 插件名违规（含 Plugin/商标） | 名称无违规词 | ✅ |
 | 广告/隐私问题 | 无广告、无埋点 | ✅ |
@@ -294,7 +301,7 @@ flowchart TD
 | 步骤 | 命令/操作 | 说明 |
 |---|---|---|
 | 升版本 | 改 `gradle.properties`（`YYYY.M.D`） | Marketplace 不接受同版本重复上传 |
-| 构建验证 | `./gradlew clean test buildPlugin verifyPlugin -PverifyIdes=243` | 发布前必做 |
+| 构建验证 | `./gradlew releaseGate`（buildPlugin → verifyGate 三目标门禁 → testShards 全量） | 发布前必做；`-PverifyOnly=true` 可跳过重打包 |
 | Marketplace 上传 | 网页手动，或 `./gradlew publishPlugin -PintellijPlatformPublishingToken=…` | 后续版本可自动化 |
 | 审核状态确认 | 登录作者后台（<https://plugins.jetbrains.com/author/me>）→ My Plugins → 版本列表 | 核对 Pending 更新的版本号与上传内容：预期内的新版本核对 changeNotes 后等审核放行；误传/过期/内容不明的包后台撤回（撤回不可逆，处置前对版本列表截图留档） |
 | 自更新清单 | `./gradlew writeUpdateManifest` → 人工补 changeNotes | 生成 `update/update.json`；changeNotes 末尾补一行 ≤60 字 Marketplace 评分引导（中性措辞，如「好用的话，欢迎到 Marketplace 页评分留言（搜 SQL Visualizer）」，无激励、无模板评语） |
@@ -347,8 +354,8 @@ flowchart TD
 ## 11. 发布检查清单（最终 Checklist）
 
 ```markdown
-□ 1. 测试全绿：./gradlew clean test
-□ 2. 兼容性：./gradlew verifyPlugin -PverifyIdes=243（必要时 +262）
+□ 1. 测试全绿：./gradlew testShards
+□ 2. 兼容门禁：./gradlew verifyGate（三目标，离线；日常档 verifySmoke / -PverifyIdes=minimal）
 □ 3. 发行包：./gradlew buildPlugin，产物 zip 内容核对（无测试类/无关依赖）
 □ 4. 版本号已递增（YYYY.M.D），patchPluginXml.changeNotes 已更新
 □ 5. GitHub 镜像仓库存在且已同步（git push github master）

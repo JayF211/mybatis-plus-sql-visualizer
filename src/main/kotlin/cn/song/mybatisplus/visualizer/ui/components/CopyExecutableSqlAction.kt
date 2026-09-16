@@ -4,11 +4,10 @@ import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
-import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
-import java.awt.datatransfer.StringSelection
 
 /**
  * 一键复制可执行 SQL（O-4 Phase A）。
@@ -16,8 +15,8 @@ import java.awt.datatransfer.StringSelection
  * 取当前面板 SQL（含参数回填与手动编辑），将 `?` 替换为带类型处理的字面值
  * （复用 [ParameterReplacer.buildExecutableSql]），复制到系统剪贴板并 toast 提示。
  *
- * 使用 [CopyPasteManager]（平台稳定 API）：在 headless 测试环境下剪贴板可能不可用，
- * 降级到 [java.awt.datatransfer.Clipboard] 不影响复制逻辑本身。
+ * 复制统一走 [UiTextClipboard]（平台 CopyPasteManager）：在 headless 测试环境下
+ * 剪贴板写入不影响复制逻辑本身。
  */
 class CopyExecutableSqlAction(private val project: Project?) {
 
@@ -72,12 +71,9 @@ class CopyExecutableSqlAction(private val project: Project?) {
         return (originalCount - resultCount).coerceAtLeast(0)
     }
 
-    /** 复制文本到系统剪贴板（优先 CopyPasteManager，降级 Toolkit 剪贴板）。 */
+    /** 复制文本到系统剪贴板（统一走 UiTextClipboard 收口）。 */
     private fun copyToClipboard(text: String) {
-        val selection = StringSelection(text)
-        val pasteManager = CopyPasteManager.getInstance()
-        // CopyPasteManager 自动处理剪贴板冲突（IDE 历史复制内容占用剪贴板时自动释放）
-        pasteManager.setContents(selection)
+        UiTextClipboard.copy(text)
     }
 
     /** Toast 通知（仅在非测试模式下显示，测试模式跳过避免通知系统依赖）。 */

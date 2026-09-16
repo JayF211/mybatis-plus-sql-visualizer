@@ -23,10 +23,11 @@ object SqlLogFileReader {
 
     /**
      * 新版格式头部：兼容 2 或 3 个 `-` 起结（前缀与后缀的 `-` 数量独立，长度匹配即可）。
-     * 捕获组：1=source 2=time 3=timestamp
+     * 捕获组：1=source 2=time 3=timestamp 4=logTime（可选）5=db（可选，T-AgentDialectLoop）。
+     * 毫秒分数为非捕获组——曾误用捕获组占位第 4 组致 logTime 永远读丢（T-AgentDialectLoop 修复）。
      */
     private val NEW_HEADER_REGEX = Regex(
-        """^--+ source: (.+?) \| time: (.+?) \| (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{3})?) --+$"""
+        """^--+ source: (.+?) \| time: (.+?) \| (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{3})?)(?: \| logTime: (\d+))?(?: \| db: (.+?))? --+$"""
     )
 
     /** 旧版格式头部：-- timestamp（无源码位置和耗时） */
@@ -154,13 +155,15 @@ object SqlLogFileReader {
         var bodyLines = contentLines
         var rawSqlOverride: String? = null
         var params: List<LogSqlParam> = emptyList()
+        var decodedExt: SqlLogParamCodec.DecodedPayload? = null
         contentLines.firstOrNull()?.let { first ->
             val trimmedFirst = first.trim()
             if (trimmedFirst.startsWith(PD_PREFIX) && trimmedFirst.endsWith(PD_SUFFIX)) {
                 SqlLogParamCodec.decode(trimmedFirst.removePrefix(PD_PREFIX).removeSuffix(PD_SUFFIX))
-                    ?.let { (raw, decodedParams) ->
-                        rawSqlOverride = raw
-                        params = decodedParams
+                    ?.let { payload ->
+                        rawSqlOverride = payload.rawSql
+                        params = payload.params
+                        decodedExt = payload
                         bodyLines = contentLines.drop(1)
                     }
             }
@@ -176,6 +179,7 @@ object SqlLogFileReader {
             val timeStr = mr.groupValues[2]
             val timestampStr = mr.groupValues[3]
             val timestamp = parseTimestampNew(timestampStr) ?: return null
+            val logTime = mr.groupValues[4].toLongOrNull()
             val (sourceFile, sourceLine) = parseSource(sourceStr)
             val executionTimeMs = parseDuration(timeStr)
             return LogSqlEntry(
@@ -183,9 +187,15 @@ object SqlLogFileReader {
                 restoredSql = sql,
                 params = params,
                 timestamp = timestamp,
+                logTimestamp = logTime,
                 sourceFile = sourceFile,
                 sourceLine = sourceLine,
                 executionTimeMs = executionTimeMs,
+                databaseName = mr.groupValues[5].takeIf { it.isNotBlank() },
+                mapperStatement = decodedExt?.mapperStatement,
+                errorText = decodedExt?.errorText,
+                requestTag = decodedExt?.requestTag,
+                updateCount = decodedExt?.updateCount,
             )
         }
 
@@ -198,6 +208,10 @@ object SqlLogFileReader {
                 restoredSql = sql,
                 params = params,
                 timestamp = timestamp,
+                mapperStatement = decodedExt?.mapperStatement,
+                errorText = decodedExt?.errorText,
+                requestTag = decodedExt?.requestTag,
+                updateCount = decodedExt?.updateCount,
             )
         }
 

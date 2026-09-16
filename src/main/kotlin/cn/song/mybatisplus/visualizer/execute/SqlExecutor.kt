@@ -1,8 +1,10 @@
 package cn.song.mybatisplus.visualizer.execute
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 
 /**
  * SQL 执行引擎（M36，反射隔离）：弹出原生数据源选择 → Database 控制台内嵌执行。
@@ -16,6 +18,9 @@ import com.intellij.openapi.ui.Messages
  * 反射隔离约定：本类仅当 Database 插件已加载时被调用，Community 下永不加载。
  */
 object SqlExecutor {
+
+    /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+    private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
 
     /**
      * 准备 + 执行合一（M36 原语义）：选数据源 → 建控制台 → 直接执行。
@@ -102,7 +107,19 @@ object SqlExecutor {
         DataSourceSelector.releaseForPanel()
     }
 
+    /**
+     * T-UiNative T-UN-02：Community 降级提示改轻通知（原模态弹窗——纯告知无需打断）。
+     * 测试模式跳过 + runCatching 兜底（headless 无通知系统依赖，原 Messages 亦被 runCatching 吞掉）。
+     */
     private fun showInfo(project: Project, message: String) {
-        runCatching { Messages.showInfoMessage(project, message, MpSqlVisualizerBundle.message("execute.title")) }
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("execute.title"),
+                message,
+                NotificationType.INFORMATION,
+            ).notify(project)
+        }
     }
 }

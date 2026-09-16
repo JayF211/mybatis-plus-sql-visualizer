@@ -4,17 +4,27 @@ import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.ActionToolbar
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.JBColor
+import com.intellij.ui.ListSpeedSearch
 import com.intellij.ui.SimpleColoredComponent
+import com.intellij.ui.speedSearch.SpeedSearchUtil
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
@@ -30,16 +40,11 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.border.Border
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 import javax.swing.BorderFactory
 import javax.swing.DefaultListModel
-import javax.swing.JButton
 import javax.swing.JComboBox
-import javax.swing.JMenuItem
 import javax.swing.JPanel
-import javax.swing.JPopupMenu
 import javax.swing.SwingConstants
 
 /**
@@ -59,12 +64,18 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     // ---------- 一级：文件列表 ----------
     private val fileListModel = DefaultListModel<HistoryFileEntry>()
-    private val fileList = JBList<HistoryFileEntry>(fileListModel)
+    private val fileList = JBList<HistoryFileEntry>(fileListModel).also {
+        // T-UiNative P0：一级文件列表打字即搜（平台 ListSpeedSearch，按文件名匹配）
+        ListSpeedSearch.installOn(it) { entry -> entry.displayName }
+    }
     private var allFiles: List<HistoryFileEntry> = emptyList()
 
     // ---------- 二级：SQL 列表（复用 SqlEntryList——Ctrl+C 复制纯 SQL 链路） ----------
     private val sqlListModel = DefaultListModel<LogSqlEntry>()
     private val sqlList = SqlEntryList(sqlListModel)
+    /** 二级速度搜索是否已安装。构造于 CardLayout 隐藏卡时安装不生效（真机 key 流不达、焦点不在），
+     *  故延后到 [showFileContent]/[loadFileContentSync] 切卡可见后安装（T-UiNative T-UN-05）。 */
+    private var sqlSpeedSearchInstalled = false
     /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
      *  T-ListPreviewCopy：预览文本经 clickPreviewSql——设置「预览时格式化还原 SQL」开启（默认）时多行格式化显示。 */
     private val sqlClickPreview = SqlClickPreview(project, sqlList) {
@@ -83,22 +94,40 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         javax.swing.Timer(SEARCH_DEBOUNCE_MS) { applySearch() }.apply { isRepeats = false }
 
     private val searchField = SearchTextField()
-    private val backButton = JButton().apply {
-        icon = AllIcons.Actions.Back
-        toolTipText = MpSqlVisualizerBundle.message("log.history.back.tip")
-        isFocusable = false
-        preferredSize = Dimension(28, 28)
-        border = BorderFactory.createEmptyBorder(2, 2, 2, 2)
-        addActionListener { showFileList() }
-        isVisible = false // 默认一级，不显示返回
+
+    // ---------- T-UiNative T-UN-10：顶部导航动作（原手摆 28×28「仿平台按钮」JButton 平移） ----------
+
+    /** 导航工具栏引用（层级切换后即时刷新 Back 可见性；T-UN-10）。 */
+    private var _navToolbarRef: ActionToolbar? = null
+
+    /** 返回一级（原 backButton）：图标 Back、tooltip 沿用 log.history.back.tip；可见性 = 二级列表（update 输出）。 */
+    private inner class BackAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.Back
+            e.presentation.description = MpSqlVisualizerBundle.message("log.history.back.tip")
+            e.presentation.isVisible = !isShowingFiles
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            showFileList()
+        }
     }
-    private val refreshButton = JButton().apply {
-        icon = AllIcons.Actions.Refresh
-        toolTipText = MpSqlVisualizerBundle.message("log.history.refresh.tip")
-        isFocusable = false
-        preferredSize = Dimension(28, 28)
-        border = BorderFactory.createEmptyBorder(2, 2, 2, 2)
-        addActionListener { refresh() }
+
+    /** 刷新（原 refreshButton）：图标 Refresh、tooltip 沿用 log.history.refresh.tip。 */
+    private inner class RefreshAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.Refresh
+            e.presentation.description = MpSqlVisualizerBundle.message("log.history.refresh.tip")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            refresh()
+        }
+    }
+
+    /** 层级切换后即时刷新导航工具栏（Back 可见性走 update；组件不可见时平台跳过，无副作用）。 */
+    private fun refreshNavToolbar() {
+        _navToolbarRef?.updateActionsImmediately()
     }
 
     /** 二级列表当前行高（测试断言行高随模式重设用）。 */
@@ -173,9 +202,13 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private fun buildUI() {
         // 顶部工具栏：返回（仅二级可见）+ 刷新 + 搜索
+        // T-UiNative T-UN-10：手摆按钮 → 平台 ActionToolbar（Back 可见性由 BackAction.update 按当前层级输出）
+        val navToolbar = ActionManager.getInstance()
+            .createActionToolbar("mpvs.history.nav", DefaultActionGroup(BackAction(), RefreshAction()), true)
+            .apply { targetComponent = this@HistorySqlLogPanel }
+        _navToolbarRef = navToolbar
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
-        toolbar.add(backButton)
-        toolbar.add(refreshButton)
+        toolbar.add(navToolbar.component)
         // T-DisplayModeToSettings：显示模式入口迁设置页「列表显示」（工具栏按钮移除）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         searchField.textEditor.minimumSize = Dimension(200, searchField.textEditor.minimumSize.height)
@@ -247,7 +280,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         currentFile = null
         currentEntries = emptyList()
         sqlClickPreview.hide() // 返回一级时若二级预览弹窗还开着，一并关掉
-        backButton.isVisible = false
+        refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = false）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         cardLayout.show(cards, CARD_FILES)
         applyFileSearch()
@@ -255,8 +288,16 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private fun showFileContent(fileEntry: HistoryFileEntry) {
         currentFile = fileEntry
-        backButton.isVisible = true
-        searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.empty")
+        // T-UiNative T-UN-05：二级 SQL 列表切卡可见后重挂速度搜索（构造于隐藏卡时 installOn
+        // 仍不生效的兜底；标记防重复装——平台 installOn 重复挂载同一列表不幂等）
+        if (!sqlSpeedSearchInstalled) {
+            sqlSpeedSearchInstalled = true
+            ListSpeedSearch.installOn(sqlList) {
+                entry -> withTerminator(entry.restoredSql)
+            }
+        }
+        refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = true）
+        searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.sql")
         cardLayout.show(cards, CARD_SQL)
         // T-Perf-05：立即清空旧文件内容（大文件后台读取期间不残留旧文件条目，防误操作）
         currentEntries = emptyList()
@@ -278,8 +319,16 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 测试缝：同步加载文件内容（生产路径 showFileContent 已后台化，headless 测试需要确定性）。 */
     private fun loadFileContentSync(fileEntry: HistoryFileEntry) {
         currentFile = fileEntry
-        backButton.isVisible = true
-        searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.empty")
+        // T-UiNative T-UN-05：二级 SQL 列表可见后确保速度搜索安装（生产 showFileContent 已装，
+        // 此同步路径 headless 下 CardLayout 不见真机 showing，marker 判定可能不触发，故统一补装）
+        if (!sqlSpeedSearchInstalled) {
+            sqlSpeedSearchInstalled = true
+            ListSpeedSearch.installOn(sqlList) {
+                entry -> withTerminator(entry.restoredSql)
+            }
+        }
+        refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = true）
+        searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.sql")
         cardLayout.show(cards, CARD_SQL)
         currentEntries = SqlLogFileReader.readFromFile(fileEntry.file)
         applySqlSearch()
@@ -351,7 +400,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         // 否则回一级（默认展示文件列表）
         currentFile = null
         currentEntries = emptyList()
-        backButton.isVisible = false
+        refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = false）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         cardLayout.show(cards, CARD_FILES)
         applyFileSearch()
@@ -380,16 +429,24 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         filtered.forEach { fileListModel.addElement(it) }
     }
 
-    /** 二级：按 SQL 内容 / 源文件过滤。 */
+    /**
+     * 二级：按 SQL 内容 / 行号 / 时间 / 源文件过滤（T-LogSearchRowTime 与日志页 filterBySearch
+     * 同款语义——行号 `#5`/`5` 精确 equals、时间按显示片段 contains（所见即所搜，开关关闭不参与）；
+     * 源文件为历史页特有检索目标，保留独立分支。
+     */
     private fun applySqlSearch() {
-        val query = searchField.text.trim().lowercase()
+        val q = searchField.text.trim()
         sqlListModel.clear()
-        val filtered = if (query.isEmpty()) {
+        val filtered = if (q.isEmpty()) {
             currentEntries
         } else {
+            val rowNumber = q.removePrefix("#").toLongOrNull()
             currentEntries.filter { entry ->
-                entry.restoredSql.lowercase().contains(query) ||
-                    entry.sourceFile?.lowercase()?.contains(query) == true
+                entry.restoredSql.contains(q, ignoreCase = true) ||
+                    entry.summary.contains(q, ignoreCase = true) ||
+                    (rowNumber != null && entry.sequenceNumber == rowNumber) ||
+                    timestampDisplayText(entry)?.contains(q, ignoreCase = true) == true ||
+                    entry.sourceFile?.contains(q, ignoreCase = true) == true
             }
         }
         filtered.forEach { sqlListModel.addElement(it) }
@@ -427,17 +484,56 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         val entry = sqlListModel.getElementAt(idx)
         val selectedEntries = sqlList.selectedIndices.map { sqlListModel.getElementAt(it) }
 
-        val menu = JPopupMenu()
-        menu.add(JMenuItem(copyMenuText("log.history.copy", "log.history.copySelected", selectedEntries.size), AllIcons.Actions.Copy).apply {
-            addActionListener {
-                val clipboard = java.awt.Toolkit.getDefaultToolkit().systemClipboard
-                clipboard.setContents(java.awt.datatransfer.StringSelection(batchCopySql(selectedEntries)), null)
+        // T-UiNative P1a：JPopupMenu+JMenuItem → 平台 DefaultActionGroup+AnAction（ActionPopupMenu 承载）
+        val group = DefaultActionGroup()
+        group.add(CopySqlAction(selectedEntries))
+        // T-LogSearchRowTime：复制时间戳（与日志页同款——纯时间文本无方括号；显示关闭时置灰，
+        // 置灰逻辑在 CopyTimestampAction.update）
+        val timestampClip = batchCopyTimestamps(selectedEntries)
+        group.add(CopyTimestampAction(selectedEntries, timestampClip))
+        group.add(JumpToSourceAction(entry))
+        val popup = ActionManager.getInstance().createActionPopupMenu("mpvs.history.sql", group)
+        // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
+        popup.setTargetComponent(sqlList)
+        popup.component.show(sqlList, e.x, e.y)
+    }
+
+    // ---------- T-UiNative P1a：二级右键菜单动作（原 JMenuItem 语义平移，update 设图标/文案/灰置） ----------
+
+    private inner class CopySqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.Copy
+            e.presentation.text = copyMenuText("log.history.copy", "log.history.copySelected", entries.size)
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            UiTextClipboard.copy(batchCopySql(entries))
+        }
+    }
+
+    private inner class CopyTimestampAction(private val entries: List<LogSqlEntry>, private val clip: String) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.Copy
+            e.presentation.text = copyMenuText("log.history.copyTimestamp", "log.history.copyTimestampSelected", entries.size)
+            e.presentation.isEnabled = clip.isNotEmpty()
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            if (clip.isNotEmpty()) {
+                UiTextClipboard.copy(clip)
             }
-        })
-        menu.add(JMenuItem(MpSqlVisualizerBundle.message("log.history.jumpToSource"), AllIcons.Actions.EditSource).apply {
-            addActionListener { jumpToSource(entry) }
-        })
-        menu.show(sqlList, e.x, e.y)
+        }
+    }
+
+    private inner class JumpToSourceAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.EditSource
+            e.presentation.text = MpSqlVisualizerBundle.message("log.history.jumpToSource")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            jumpToSource(entry)
+        }
     }
 
     /**
@@ -483,12 +579,18 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
                 SourceCaptureGuide.showMissingSourceDialog(project)
             }
             is HistoryJumpTarget.NotFound -> {
-                // 文件不存在时提示（项目结构可能已变化）
-                Messages.showInfoMessage(
-                    project,
-                    MpSqlVisualizerBundle.message("log.history.jumpToSource.notFound", target.sourceFile),
-                    MpSqlVisualizerBundle.message("log.history.jumpToSource"),
-                )
+                // 文件不存在时提示（项目结构可能已变化）；T-UiNative T-UN-02：改轻通知（原模态弹窗）
+                // 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）
+                if (!ApplicationManager.getApplication().isUnitTestMode) {
+                    runCatching {
+                        Notification(
+                            NOTIFICATION_GROUP_ID,
+                            MpSqlVisualizerBundle.message("log.history.jumpToSource"),
+                            MpSqlVisualizerBundle.message("log.history.jumpToSource.notFound", target.sourceFile),
+                            NotificationType.INFORMATION,
+                        ).notify(project)
+                    }
+                }
             }
             is HistoryJumpTarget.Navigate -> {
                 OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
@@ -506,6 +608,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         private val LOG = Logger.getInstance(HistorySqlLogPanel::class.java)
         private const val CARD_FILES = "files"
         private const val CARD_SQL = "sql"
+
+        /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
 
         /** T-Perf-05：搜索输入防抖窗口（毫秒）。 */
         private const val SEARCH_DEBOUNCE_MS = 200
@@ -525,8 +630,8 @@ data class HistoryFileEntry(
     val sizeBytes: Long get() = file.length()
 }
 
-/** 历史面板元信息灰（与原 HTML 通道 #9E9E9E 一致）。 */
-private val HISTORY_META_GRAY = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, java.awt.Color(0x9E9E9E))
+/** 历史面板元信息灰（与原 HTML 通道 #9E9E9E 一致）。T-UN-13（T-UiNative）：改 namedColor，亮值不变。 */
+private val HISTORY_META_GRAY = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.HISTORY_META_GRAY)
 
 /**
  * 一级文件列表单元格渲染器（F-44-3；T-LogListFreeze-04 弃 HTML 通道）：
@@ -610,28 +715,10 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
         isOpaque = false
     }
 
-    /** 未选中态 Border（分隔线 + 内边距）。 */
+    /** Border（分隔线 + 内边距；T-UN-09 描边退役后选中态同样只用它，选中视觉归平台绘制）。 */
     internal val normalBorder: Border = BorderFactory.createCompoundBorder(
         BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
         javax.swing.BorderFactory.createEmptyBorder(5, 5, 5, 8), // 左 5 + 色条 3 = 原 8
-    )
-
-    /**
-     * T-CrudColor：选中态描边 Border（整行淡背景样式专用）。
-     * 预建一次、渲染时只切引用 + 改色，热路径零分配；内层分隔线为透明占位（底边为纯描边）。
-     */
-    internal val selectedBorder: SqlListSelectionOutline = SqlListSelectionOutline(
-        SqlListTypeColor.OUTLINE_WIDTH,
-        JBColor.foreground(),
-        BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(0, 0, 1, 0, SqlListTypeColor.TRANSPARENT),
-            javax.swing.BorderFactory.createEmptyBorder(
-                5 - SqlListTypeColor.OUTLINE_WIDTH,
-                5 - SqlListTypeColor.OUTLINE_WIDTH,
-                5 - SqlListTypeColor.OUTLINE_WIDTH,
-                8 - SqlListTypeColor.OUTLINE_WIDTH,
-            ),
-        ),
     )
 
     init {
@@ -657,16 +744,16 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
         val entry = value as? LogSqlEntry
         // T-CrudColor：标记形态分派（与日志页共用 applyCrudColorMark，语义完全一致）
         val tint = entry?.let { SqlListTypeColor.colorOf(it.statementType) }
-        val useSelectionFill = isSelected && SqlListTypeColor.usesSelectionFill(SqlListTypeColor.styleOf())
-        applyCrudColorMark(this, colorBar, normalBorder, selectedBorder, tint, isSelected, cellHasFocus, list)
+        // T-UN-09：选中描边退役后，三种样式的选中行统一走平台选中填充 → 前景按选中态取
+        // selectionForeground（与日志页 LogEntryListCellRenderer 同款）
+        val useSelectionFill = isSelected
+        applyCrudColorMark(this, colorBar, normalBorder, tint, isSelected, list)
 
         val fg = if (useSelectionFill) (list?.selectionForeground ?: JBColor.foreground())
         else (list?.foreground ?: JBColor.foreground())
         metaLine.foreground = fg
         metaLine.clear()
         val lineFragments = if (entry != null) {
-            val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).format(Date(entry.timestamp))
-            val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
             val source = when {
                 SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
                 entry.sourceFile != null -> {
@@ -676,13 +763,20 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
                 }
                 else -> "unknown"
             }
-            // T-TwoLine：元信息行在上（uniform 灰——不按耗时变色避免与 SQL 高亮冲突），SQL 高亮行在下
+            // T-TwoLine：元信息行在上、SQL 高亮行在下。**片段与顺序与日志页完全一致**
+            // （行号 → 时间 → 耗时 → 目标库 → 来源；耗时复用日志页 formatDurationFragment，
+            // 按慢查询阈值着色、缺失占位「—」——勿再自拼 [xms]，两页同条目须逐字一致）
             // T-LogHistoryRowNo：行号片段在最前（0 = 无行号——旧文件/未注入条目；与日志页守卫一致）
             if (entry.sequenceNumber > 0) {
                 metaLine.append("#${entry.sequenceNumber} ", HISTORY_META_GRAY)
             }
-            metaLine.append("[$duration] ", HISTORY_META_GRAY)
-            metaLine.append("[$timestamp] ", HISTORY_META_GRAY)
+            // T-JdbcThreadBucket F3 + 日志时间：跟随设置（对齐日志页 formatTimestampFragment），
+            // 含非法 pattern 回退默认、显示开关与时间来源（日志时间/捕获时间）语义
+            formatTimestampFragment(entry)?.let { (t, a) -> metaLine.append(t, a) }
+            val (durationText, durationAttrs) = formatDurationFragment(entry.executionTimeMs, useSelectionFill)
+            metaLine.append(durationText, durationAttrs)
+            // T-AgentDialectLoop：目标库角标（与日志页同款落点：时间/耗时后、来源前）
+            formatDatabaseFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
             metaLine.append("[$source] ", HISTORY_META_GRAY)
             sqlLineFragmentsFor(entry)
         } else {
@@ -690,10 +784,13 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
         }
         // T-ListMode：SQL 行数随显示模式伸缩；T-ClickPreview 不设 toolTipText（预览改单击触发）
         ensureSqlLineCount(if (lineFragments != null) lineFragments.size else 1)
+        // T-UiNative speed search 高亮：对元信息行与各 SQL 行施加匹配片段高亮（同主日志列表）
+        list?.let { l -> SpeedSearchUtil.applySpeedSearchHighlighting(l, metaLine, false, useSelectionFill) }
         sqlLinePool.forEachIndexed { i, comp ->
             comp.foreground = fg
             comp.clear()
             lineFragments?.getOrNull(i)?.forEach { f -> comp.append(f.text, f.attributes) }
+            list?.let { l -> SpeedSearchUtil.applySpeedSearchHighlighting(l, comp, false, useSelectionFill) }
         }
         return this
     }

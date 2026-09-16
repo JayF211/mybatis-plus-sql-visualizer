@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
@@ -12,8 +13,6 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
-import com.intellij.openapi.editor.event.DocumentEvent
-import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.editor.HighlighterColors
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.ex.EditorEx
@@ -30,8 +29,6 @@ import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.FlowLayout
-import java.awt.Toolkit
-import java.awt.datatransfer.StringSelection
 import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.JPanel
@@ -64,42 +61,26 @@ class LogToSqlPanel(
     // 不再仅靠单行状态红字，横幅承载三要素（哪段没还原/为什么/用户能做什么）
     private val degradationBanner = cn.song.mybatisplus.visualizer.ui.DegradationBanner()
 
-    /** 输入区空文档灰字提示（用户交互引导；有内容自动隐藏）。 */
-    private val inputHintLabel = JBLabel(MpSqlVisualizerBundle.message("log.panel.hint.input")).apply {
-        foreground = UIUtil.getInactiveTextColor()
-        border = JBUI.Borders.empty(2, 6, 2, 6)
-    }
-
-    /** 结果区空文档灰字提示。 */
-    private val resultHintLabel = JBLabel(MpSqlVisualizerBundle.message("log.panel.hint.result")).apply {
-        foreground = UIUtil.getInactiveTextColor()
-        border = JBUI.Borders.empty(2, 6, 2, 6)
-    }
+    /**
+     * T-UiNative T-UN-14：空态提示接编辑器原生 placeholder（两区锚定物均为 EditorFactory
+     * 直建编辑器，实际类型 EditorEx——243 javap 核实有 `setPlaceholder(CharSequence)`），
+     * 显隐由编辑器随空文档/焦点原生管理；文案键（"log.panel.hint.input" / "log.panel.hint.result"）沿用不变。
+     */
+    private val inputPlaceholder: String = MpSqlVisualizerBundle.message("log.panel.hint.input")
+    private val resultPlaceholder: String = MpSqlVisualizerBundle.message("log.panel.hint.result")
 
     /** 输出格式切换态：true=多行格式化（默认，用户确认）；false=日志原样压缩。 */
     private var formatToggled = true
 
     init {
-        // 上：日志输入区（工具栏 + 灰字提示 + 编辑器——空文档显示引导文案）
+        // 上：日志输入区（工具栏 + 编辑器——空文档由编辑器原生 placeholder 显示引导文案）
         val inputPanel = JPanel(BorderLayout())
-        inputPanel.add(
-            JPanel(BorderLayout()).apply {
-                add(buildInputToolbar(), BorderLayout.NORTH)
-                add(inputHintLabel, BorderLayout.SOUTH)
-            },
-            BorderLayout.NORTH,
-        )
+        inputPanel.add(buildInputToolbar(), BorderLayout.NORTH)
         inputPanel.add(inputEditor.component, BorderLayout.CENTER)
 
-        // 下：SQL 结果区（工具栏 + 灰字提示 + 编辑器）
+        // 下：SQL 结果区（工具栏 + 编辑器）
         val resultPanel = JPanel(BorderLayout())
-        resultPanel.add(
-            JPanel(BorderLayout()).apply {
-                add(buildResultToolbar(), BorderLayout.NORTH)
-                add(resultHintLabel, BorderLayout.SOUTH)
-            },
-            BorderLayout.NORTH,
-        )
+        resultPanel.add(buildResultToolbar(), BorderLayout.NORTH)
         resultPanel.add(resultEditor.component, BorderLayout.CENTER)
 
         val splitter = Splitter(true, 0.5f).apply {
@@ -114,17 +95,6 @@ class LogToSqlPanel(
         southHost.add(degradationBanner, BorderLayout.NORTH)
         southHost.add(statusLabel, BorderLayout.SOUTH)
         add(southHost, BorderLayout.SOUTH)
-        // 空态提示显隐跟随文档内容
-        inputEditor.document.addDocumentListener(object : DocumentListener {
-            override fun documentChanged(e: DocumentEvent) {
-                inputHintLabel.isVisible = inputEditor.document.text.isBlank()
-            }
-        }, this)
-        resultEditor.document.addDocumentListener(object : DocumentListener {
-            override fun documentChanged(e: DocumentEvent) {
-                resultHintLabel.isVisible = resultEditor.document.text.isBlank()
-            }
-        }, this)
     }
 
     // ------------------------------------------------------------------
@@ -190,8 +160,7 @@ class LogToSqlPanel(
         }
 
         override fun actionPerformed(e: AnActionEvent) {
-            Toolkit.getDefaultToolkit().systemClipboard
-                .setContents(StringSelection(resultEditor.document.text), null)
+            UiTextClipboard.copy(resultEditor.document.text)
             status(MpSqlVisualizerBundle.message("logToSql.copy.done"), error = false)
         }
     }
@@ -483,6 +452,7 @@ class LogToSqlPanel(
             settings.isFoldingOutlineShown = false
             settings.isIndentGuidesShown = false
             settings.isAdditionalPageAtBottom = false
+            setPlaceholder(inputPlaceholder) // T-UiNative T-UN-14：空态提示原生件
         }
         return editor
     }
@@ -506,15 +476,16 @@ class LogToSqlPanel(
             settings.isFoldingOutlineShown = true
             settings.isIndentGuidesShown = false
             settings.isAdditionalPageAtBottom = false
+            setPlaceholder(resultPlaceholder) // T-UiNative T-UN-14：空态提示原生件
         }
         return editor
     }
 
-    /** 测试访问器：输入区空态提示行（断言灰字文案与空态显隐）。 */
-    internal fun inputHintLabelForTest(): JBLabel = inputHintLabel
+    /** T-UiNative T-UN-14：输入区空态提示（原 hintLabel 测试缝，断言 placeholder 文案接线用）。 */
+    internal fun inputPlaceholderForTest(): String = inputPlaceholder
 
-    /** 测试访问器：结果区空态提示行。 */
-    internal fun resultHintLabelForTest(): JBLabel = resultHintLabel
+    /** T-UiNative T-UN-14：结果区空态提示。 */
+    internal fun resultPlaceholderForTest(): String = resultPlaceholder
 
     override fun dispose() {
         if (disposed) return

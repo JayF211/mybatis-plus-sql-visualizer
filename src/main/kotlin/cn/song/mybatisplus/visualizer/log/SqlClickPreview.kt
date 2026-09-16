@@ -4,13 +4,13 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlHighlightColors
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
-import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopup
 import com.intellij.openapi.ui.popup.JBPopupFactory
@@ -21,7 +21,6 @@ import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Point
-import java.awt.datatransfer.StringSelection
 import javax.swing.BorderFactory
 import javax.swing.JButton
 import javax.swing.JComponent
@@ -163,7 +162,7 @@ internal class SqlClickPreview(
         val content = buildContent(
             project,
             sql,
-            copyText = { CopyPasteManager.getInstance().setContents(StringSelection(it)) },
+            copyText = { UiTextClipboard.copy(it) },
             close = { hide() },
         ).also { editor = it.editor }
         return JBPopupFactory.getInstance()
@@ -241,7 +240,7 @@ internal class SqlClickPreview(
                 isFocusable = false
                 addActionListener {
                     copyText(editor.document.text) // 复制当前内容（含用户编辑后文本）
-                    flashCopied(this) // 复制成功反馈：复制图标换对号，短暂后恢复
+                    cn.song.mybatisplus.visualizer.ui.flashCopied(this) // 复制成功反馈：复制图标换对号，短暂后恢复
                 }
             }
             val closeButton = JButton(AllIcons.Actions.Close).apply {
@@ -260,22 +259,6 @@ internal class SqlClickPreview(
                 add(editor.component, BorderLayout.CENTER)
             }
             return SqlClickPreviewContent(panel, editor)
-        }
-
-        /**
-         * 复制成功反馈：复制按钮图标短暂换成对号（[AllIcons.Actions.Checked]）再恢复，
-         * 用一次性 [Timer]（1500ms）复位——不引入常驻定时器，按钮复用即过期。
-         */
-        private fun flashCopied(button: JButton) {
-            val copyIcon = button.icon
-            button.icon = AllIcons.Actions.Checked
-            Timer(1500, null).apply {
-                isRepeats = false
-                addActionListener {
-                    button.icon = copyIcon
-                }
-                start()
-            }
         }
     }
 }

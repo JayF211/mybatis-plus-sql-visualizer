@@ -40,13 +40,10 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import java.awt.Color
 import java.awt.Toolkit
 import java.awt.datatransfer.Transferable
-import java.awt.image.BufferedImage
 import javax.swing.JButton
 import javax.swing.SwingUtilities
-import javax.swing.plaf.basic.BasicSplitPaneUI
 
 /**
  * SqlPreviewPanel 行为测试（M8/M9）：编辑器视图 + 单行多行切换 + 生命周期 + 参数回填。
@@ -843,30 +840,18 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
-    fun testSplitDividerPaintedAsPanelBackground() {
-        // T-M26.1：分隔条绘制应等于面板底色——真实 IDE 中平台 LAF 委托 Metal，
-        // MetalSplitPaneDivider 以 Metal 主题浅色填充分隔条（与 setBackground 无关），
-        // 深色主题下呈白色竖条纹；ThemedSplitPane 在 paint 尾部覆盖分隔条区域。
-        // 渲染级断言：先人为把分隔条背景污染为白色（模拟 LAF 的浅色绘制），
-        // 再断言渲染后分隔条像素 == 面板底色（覆盖生效；删掉覆盖则本测试失败）
+    fun testSplitIsNativeOnePixelSplitter() {
+        // T-M26.1→T-UiNative P0：左右分栏换平台 OnePixelSplitter——分隔条由平台绘制（原生主题
+        // 融合 + 比例持久化键 mpvs.preview.splitter），替代旧 ThemedSplitPane 覆写 paint 粉刷。
+        // 断言：分栏是平台 Splitter（持久化键就位）且 proportion 契约可用
         val panel = SqlPreviewPanel(project)
         val split = panel.splitPaneForTest()
         assertNotNull("应存在左右分栏", split)
-        split!!.setSize(300, 100)
+        assertEquals("mpvs.preview.splitter", split!!.splitterProportionKey)
+        split.setSize(300, 100)
         split.doLayout()
-        // 修正（headless 测试环境不自动布局分隔条）：手动定位到中间，模拟真实布局
-        if (split.dividerLocation < 0) split.dividerLocation = 150
-        val loc = split.dividerLocation
-        assertTrue("分隔条应已布局", loc >= 0)
-        // 污染：让 BasicSplitPaneDivider（opaque）以白色填充，模拟 LAF 浅色分隔条
-        (split.ui as? BasicSplitPaneUI)?.divider?.background = Color.WHITE
-        val img = BufferedImage(300, 100, BufferedImage.TYPE_INT_RGB)
-        val g = img.createGraphics()
-        split.paint(g)
-        g.dispose()
-        val expected = UIUtil.getPanelBackground()
-        val expRgb = Color(expected.red, expected.green, expected.blue).rgb
-        assertEquals("分隔条像素应等于面板底色", expRgb, img.getRGB(loc + split.dividerSize / 2, 50))
+        split.proportion = 0.4f
+        assertEquals(0.4f, split.proportion, 1e-6f)
         panel.clear()
     }
 
@@ -880,9 +865,9 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         // 先布局再 showResult：截断上限按视口宽度计算（真实 IDE 中 rebuild 发生在面板布局后）
         split.setSize(500, 120)
         split.doLayout()
-        if (split.dividerLocation < 0) split.dividerLocation = 250
+        split.proportion = 0.5f
         split.doLayout()
-        (split.leftComponent as JBScrollPane).doLayout() // 布局 viewport bounds（否则宽度为 0，截断上限回落默认值）
+        (split.firstComponent as JBScrollPane).doLayout() // 布局 viewport bounds（否则宽度为 0，截断上限回落默认值）
         panel.showResult(
             dynamicResult(
                 conditions = listOf(
@@ -892,7 +877,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
                 views = listOf(ConditionView("c0", long, "true", true, "stationIds", listOf("stationIds"))),
             ),
         )
-        val scroll = split.leftComponent as JBScrollPane
+        val scroll = split.firstComponent as JBScrollPane
         val viewport = scroll.viewport
         val button = panel.toggleSelectButtonForTest()!!
         // 按钮在参数面板内（回挂分区标题行，随列表滚动——T-M26.2 曾固定视口外）

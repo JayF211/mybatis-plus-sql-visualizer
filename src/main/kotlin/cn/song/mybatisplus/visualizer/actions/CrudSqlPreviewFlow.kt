@@ -4,6 +4,8 @@ import cn.song.mybatisplus.visualizer.generator.CrudStatement
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopupFactory
@@ -27,6 +29,9 @@ import javax.swing.ListCellRenderer
  * PreviewResult.batchModel 承载。候选 0/1 条时不弹选择（0 条由调用方兜底提示）。
  */
 object CrudSqlPreviewFlow {
+
+    /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+    private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
 
     /** 候选项：表名（标签前缀）+ 语句。 */
     data class Candidate(val tableName: String, val statement: CrudStatement)
@@ -61,13 +66,19 @@ object CrudSqlPreviewFlow {
         }
     }
 
-    /** 兜底提示（update 已拦截可见性，竞态/解析异常路径才会到达）。 */
+    /** 兜底提示（update 已拦截可见性，竞态/解析异常路径才会到达）。
+     * T-UiNative T-UN-02：改轻通知（原模态弹窗——纯告知无需打断）；测试模式跳过
+     * （对齐 CopyExecutableSqlAction.showToast 约定）。 */
     fun showNoneFound(project: Project) {
-        com.intellij.openapi.ui.Messages.showInfoMessage(
-            project,
-            MpSqlVisualizerBundle.message("crudSql.noneFound.message"),
-            MpSqlVisualizerBundle.message("crudSql.noneFound.title"),
-        )
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("crudSql.noneFound.title"),
+                MpSqlVisualizerBundle.message("crudSql.noneFound.message"),
+                NotificationType.INFORMATION,
+            ).notify(project)
+        }
     }
 
     /** 候选摘要：`表名 · 语句种类`（无主键降级追加标注）。纯函数可单测。 */

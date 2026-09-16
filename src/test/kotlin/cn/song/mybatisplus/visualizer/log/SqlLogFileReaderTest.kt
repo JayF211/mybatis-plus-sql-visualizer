@@ -28,6 +28,36 @@ class SqlLogFileReaderTest {
     }
 
     @Test
+    fun `解析新版格式_logTime读回回归`() {
+        // T-AgentDialectLoop 回归锁：毫秒分数曾为嵌套捕获组占位第 4 组，logTime 永远读丢
+        val content = "--- source: a/A.java:9 | time: 5ms | 2026-08-25 10:00:00.123 | logTime: 1724567890123 ---\nSELECT 1\n\n"
+        val entry = SqlLogFileReader.parseContent(content)[0]
+        assertEquals(1724567890123L, entry.logTimestamp!!)
+    }
+
+    @Test
+    fun `解析新版格式_logTime缺省为null`() {
+        val content = "--- source: a/A.java:9 | time: 5ms | 2026-08-25 10:00:00.123 ---\nSELECT 1\n\n"
+        val entry = SqlLogFileReader.parseContent(content)[0]
+        assertNull(entry.logTimestamp)
+    }
+
+    @Test
+    fun `解析新版格式_db读回_T-AgentDialectLoop`() {
+        val content = "--- source: unknown | time: — | 2026-08-25 10:00:00.123 | logTime: 1724567890123 | db: DM（达梦） ---\nSELECT 1\n\n"
+        val entry = SqlLogFileReader.parseContent(content)[0]
+        assertEquals(1724567890123L, entry.logTimestamp!!)
+        assertEquals("DM（达梦）", entry.databaseName)
+    }
+
+    @Test
+    fun `解析新版格式_db缺省为null`() {
+        val content = "--- source: unknown | time: — | 2026-08-25 10:00:00.123 ---\nSELECT 1\n\n"
+        val entry = SqlLogFileReader.parseContent(content)[0]
+        assertNull(entry.databaseName)
+    }
+
+    @Test
     fun `解析新版格式_unknown source`() {
         val content = "--- source: unknown | time: — | 2026-08-25 10:00:00.123 ---\nSELECT 1\n\n"
         val entries = SqlLogFileReader.parseContent(content)

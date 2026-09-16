@@ -160,6 +160,8 @@ intellijPlatform {
     if (gifRecord) {
         sandboxContainer = layout.buildDirectory.dir("MPSV-GifFresh")
     }
+    // T-ListParamCollect：并行会话隔离（临时——用后还原本行）
+    sandboxContainer = layout.buildDirectory.dir("test-sandbox-listparam")
 
     // T-M30：跨版本 API 兼容校验（官方推荐流程）——`./gradlew verifyPlugin` 对目标 IDE
     // 集合做字节码级检查（插件引用的类/方法在目标版本中必须存在）。目标 = 最低支持
@@ -188,10 +190,19 @@ intellijPlatform {
                 }
             }
         }
-        // T-M30.1：失败等级仅保留兼容性问题（IPGP 2.15+ 默认含 INTERNAL_API_USAGES 会失败）——
-        // `PluginManagerCore.getPlugin`（M28 更新功能定位已装插件）为平台 Internal API，
-        // 无公共替代（官方文档即此用法），刻意使用；报告仍生成、问题仍可见。
-        failureLevel = listOf(FailureLevel.COMPATIBILITY_PROBLEMS)
+        // T-M30.1：失败等级——IPGP 2.15+ 默认含 INTERNAL_API_USAGES 会失败，本项目
+        // `PluginManagerCore.getPlugin`（M28 更新功能定位已装插件）为平台 Internal API 且无公共替代
+        // （官方文档即此用法），刻意使用；报告仍生成、问题仍可见。
+        // T-ReleasePerf-01（2026-09-15）：本任务降级为「报告 + 弃用清单生成器」——兼容判定交 verifyGate。
+        // 依据（javap 反编译 IPGP 2.18.1 VerifyPluginTask，证据可复现）：
+        //   ① getOptions() 本身无缺陷，按 getOffline()/getIgnoredProblemsFile() 正确拼 CLI 参数；
+        //   ② 但 verifyOutput() → collectProblems() 的判定**完全基于控制台文本**：用
+        //      FailureLevel.getSectionHeading()（"Compatibility problems" 等小节标题）逐段切分、
+        //      pluginLinePattern = ^Plugin .*? against (\S+): 正则抓问题行，**从不读 -ignored-problems
+        //      命中的信息**——CLI 已豁免的问题在控制台仍逐行打印，于是被重新计数判失败。
+        //      这正是 dev 分支实测「同输入一次过一次挂」的机制（三轮实证）。
+        // 保留除 COMPATIBILITY_PROBLEMS 外的全部等级（当前均 0 命中，三份 verdict 实证）。
+        failureLevel = FailureLevel.entries - setOf(FailureLevel.COMPATIBILITY_PROBLEMS)
     }
 }
 
@@ -203,36 +214,52 @@ tasks.named<VerifyPluginTask>("verifyPlugin") {
         "-Dhttps.proxyHost=127.0.0.1",
         "-Dhttps.proxyPort=7890"
     )
-    // T-McpToolset：243 目标两类「永不可达」缺类豁免（-ignored-problems；清单文件内含完整定案）。
-    // 1) com.intellij.mcpserver.*：平台可选插件类型，mcp-optional.xml 仅在其存在时加载；
-    // 2) kotlin.coroutines.jvm.internal.SpillingKt：K2 挂起帧 null-out 内在函数，仅 mcp 框架
-    //    回调形态发射，243 平台 stdlib（Kotlin 2.0.x）无此类。
-    // 两者在 243 均零可达（适配类零实例化），豁免不计失败但报告留痕；作用域由
-    // McpScopeSourceScanTest 守卫，引用越包即回退本豁免。手工实证：243 单目标
-    // -offline -ignored-problems → exit 0（2026-09-15）；-external-prefixes 对这两类问题无效。
+    // T-ReleasePerf-01（P0-1）：离线化 + 豁免清单——本仓库此前只注入了代理，verifier 每个目标都要
+    // 联网解析该 IDE 的 bundled 插件集（daemon 日志实证：45 次运行 PluginDetailsCache
+    // hits=183/misses=64、单次 247 个插件解析），是 253/262 耗时波动的主因（历史 45 次三目标合计
+    // 最快 144s、中位 446s、最慢 740s，5 倍差）。-offline 只断 marketplace 解析，不改兼容性判定；
+    // 豁免清单只放行「永不可达」缺类（243 上 MCP 桩类型，作用域由 McpScopeSourceScanTest 守卫），
+    // 命中项在报告中仍如实留痕。
+    offline.set(true)
     ignoredProblemsFile.set(layout.projectDirectory.file("dev-support/verifier-ignored-problems.txt"))
-    // IPGP 2.18.1 的任务级判定不采纳 CLI -ignored-problems 的豁免（验证器 exit 0 / 报告已豁免，
-    // 任务仍从控制台文本重数 COMPATIBILITY_PROBLEMS 判失败，且存在输出解析竞态——同输入一次过
-    // 一次挂，三轮实证）。兼容门禁由下方 verifyGate 承担，本任务降级为报告/弃用清单生成器。
-    failureLevel.set(
-        VerifyPluginTask.FailureLevel.entries - setOf(VerifyPluginTask.FailureLevel.COMPATIBILITY_PROBLEMS),
-    )
 }
 
-// T-McpToolset：权威兼容门禁——直驱 verifier-cli（-offline 断 marketplace 网络抖动，
-// -ignored-problems 豁免清单见 dev-support/verifier-ignored-problems.txt）。手工三跑实证
-// exit 0（online/offline × 243 单目标），IPGP 的 verifyPlugin 封装做不到（见上）。
+// T-ReleasePerf-05（P2-1）：权威兼容门禁——直驱 verifier-cli。
+// 为什么不让 IPGP 的 verifyPlugin 承担门禁（字节码实证见上方 failureLevel 处）：
+// 它按控制台小节标题重新计数问题行，不读 -ignored-problems 命中的豁免信息，且输出解析存在竞态
+// （dev 分支三轮实证：同输入一次过一次挂）。故门禁改由本任务直驱 CLI，判定只看退出码。
+// -offline：断 marketplace 元数据解析（历史 45 次运行里 253/262 耗时波动 138s~725s 的主因），
+//           不改兼容性判定；-ignored-problems：豁免清单见 dev-support/verifier-ignored-problems.txt。
+//
+// verifyOnly（T-ReleasePerf-04 / P1-2）：跳过 buildPlugin，直接对已存在的发行包做验证——
+// 改文案/文档后重验不必重打包（Jar 任务带 MPV-Build 时间戳，outputs.upToDateWhen{false} 恒重跑）。
+val verifyOnly = providers.gradleProperty("verifyOnly").orNull?.toBoolean() ?: false
+
 val verifyGate = tasks.register<JavaExec>("verifyGate") {
     group = "verification"
-    description = "发行兼容门禁：verifier-cli -offline -ignored-problems 三目标直验（绕过 IPGP 豁免判定缺陷）"
-    dependsOn("buildPlugin")
+    description = "权威兼容门禁：verifier-cli 直驱（-offline + -ignored-problems；-PverifyIdes / -PverifyOnly）"
+    if (!verifyOnly) {
+        dependsOn("buildPlugin")
+    }
     mainClass.set("com.jetbrains.pluginverifier.PluginVerifierMain")
-    // 配置期捕获（configuration cache 兼容：执行期不触达 project state）
+    // T-ReleasePerf-05：verifier 缓存 home 隔离——默认落在 build/verify-home，避开与其他 verify 会话
+    // 共享全局 ~/.pluginVerifier/extracted-plugins（Windows 文件锁互踩：2026-09-15 真实验证时
+    // 并行会话的 verify 占用该目录，forceRemoveDirectory 失败 exit 1；verifier 支持
+    // -Dplugin.verifier.home.dir 覆盖，javap PluginVerifierMain$verifierHomeDirectory$2 实证）。
+    // 代价=IDE 元数据缓存随 build 目录走，clean 后首次离线重建；IDE 发行本体在 gradle transforms 不受影响。
+    val verifyHome = layout.buildDirectory.dir("verify-home").get().asFile
+    jvmArgs("-Dplugin.verifier.home.dir=${verifyHome.absolutePath}")
+    // 全部路径在配置期解析为值（configuration cache 兼容：执行期不触达 project/layout）
     val pluginVersion = providers.gradleProperty("version").get()
-    val reportsDir = layout.buildDirectory.dir("reports/pluginVerifier").get().asFile
+    val reportsDir = layout.buildDirectory.dir("reports/pluginVerifierGate").get().asFile
     val zipFile = layout.buildDirectory.file("distributions/mybatis-plus-sql-visualizer-$pluginVersion.zip").get().asFile
-    val ignoredFile = rootProject.file("dev-support/verifier-ignored-problems.txt")
+    val ignoredFile = layout.projectDirectory.file("dev-support/verifier-ignored-problems.txt").asFile
     val gradleUserHome = gradle.gradleUserHomeDir
+    // T-ReleasePerf-05：configuration cache 兼容——执行期 lambda 内**不得引用脚本对象**（gradle/providers）。
+    // 实测：lambda 里写 gradle.startParameter / providers.gradleProperty 会整段不可序列化（"cannot serialize
+    // Gradle script object references"），故在配置期捕获为普通值（startParameter 与属性值在配置期已确定）。
+    val invokedTaskNames = gradle.startParameter.taskNames
+    val verifyIdesProperty = providers.gradleProperty("verifyIdes").orNull
     classpath(
         gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
             .walkTopDown().maxDepth(4)
@@ -247,11 +274,21 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
                 ?.flatMap { ver -> ver.resolve("transforms").listFiles()?.asSequence() ?: emptySequence() }
                 ?.map { hash -> hash.resolve("transformed").resolve(name) }
                 ?.firstOrNull { it.isDirectory }
-                ?: error("IDE 发行目录 $name 未在 gradle 缓存 transforms 找到（先跑一次 verifyPlugin）")
+                ?: error("IDE 发行目录 $name 未在 gradle 缓存 transforms 找到（先跑一次 verifyPlugin/构建一次对应平台）")
 
         val ide243 = ideDir("ideaIU-2024.3.7.1-win")
         val jbr = ide243.resolve("jbr").takeIf { it.isDirectory }
-            ?: error("243 发行版缺 jbr（runtime-dir 必需）")
+            ?: error("243 发行版缺 jbr（-runtime-dir 必需）")
+        val verifyIdes = when {
+            invokedTaskNames.contains("verifySmoke") -> "smoke"
+            invokedTaskNames.contains("verifyMinimal") -> "minimal"
+            else -> verifyIdesProperty
+        }
+        val targets = when (verifyIdes) {
+            "smoke" -> listOf(ide243)
+            "minimal" -> listOf(ide243, ideDir("idea-2026.2.1-win"))
+            else -> listOf(ide243, ideDir("idea-2025.3.5-win"), ideDir("idea-2026.2.1-win"))
+        }
         buildList {
             add("check-plugin")
             add("-offline")
@@ -264,11 +301,31 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
             add("-verification-reports-formats")
             add("plain,html")
             add(zipFile.absolutePath)
-            add(ide243.absolutePath)
-            add(ideDir("idea-2025.3.5-win").absolutePath)
-            add(ideDir("idea-2026.2.1-win").absolutePath)
+            targets.forEach { add(it.absolutePath) }
         }
     })
+    // 并发审计锚点：起止毫秒时间戳（与 testShardN 同款，便于事后核对链路时序）。
+    // 配置缓存约束：动作内只引用配置期已解析的值，辅助函数（walkTopDown 链）写在动作体内。
+    doFirst {
+        if (!zipFile.isFile) {
+            throw GradleException(
+                "-PverifyOnly=true 需要已存在的发行包：$zipFile 不存在。" +
+                    "先跑 ./gradlew buildPlugin 产出，或去掉 -PverifyOnly 走完整链路。",
+            )
+        }
+        logger.lifecycle("verifyGate START ${System.currentTimeMillis()} plugin=$zipFile")
+    }
+    doLast {
+        logger.lifecycle("verifyGate END ${System.currentTimeMillis()}")
+        val verdicts = reportsDir.walkTopDown()
+            .filter { it.name == "verification-verdict.txt" }
+            .sortedBy { it.path }
+            .toList()
+        if (verdicts.isEmpty()) {
+            logger.warn("verifyGate: 未找到 verification-verdict.txt，请检查 $reportsDir")
+        }
+        verdicts.forEach { logger.lifecycle("verifyGate verdict [${it.parentFile.parentFile.name}] ${it.readText().trim()}") }
+    }
 }
 
 kotlin {
@@ -402,6 +459,7 @@ tasks {
         })
     }
 
+
     // 本地清单测试集成见 dev-support/run-ide-local-manifest.sh（自动起/停 Python 服务器）
 
     // M18.2 变更说明修复（用户实测：插件详情页「最新变化」显示停留在 M12）——
@@ -415,6 +473,22 @@ tasks {
     // （内容为全系列累计）；转正时改为纯数字标题并将累计内容并入正式版块。
     patchPluginXml {
         changeNotes = """
+            <h2>v2026.9.18-beta.3</h2>
+            <ul>
+                <li>JdbcTemplate 集合参数方括号误入 SQL 修复</li>
+                <li>日志原始时间记录与显示切换</li>
+                <li>日志列表搜索行号/时间 + 右键复制时间戳</li>
+                <li>JdbcTemplate 并发日志交错参数错挂修复</li>
+                <li>历史页时间戳格式跟随设置</li>
+                <li>批量错误报告合并为单个弹窗</li>
+                <li>增强捕获默认开启、脱敏默认关闭</li>
+                <li>增强捕获条目显示目标库与日志原始时间</li>
+                <li>增强捕获耗时与影响行数展示</li>
+                <li>增强捕获源码跳转定位修正</li>
+                <li>三条控制台日志链路并发分桶配对修复</li>
+                <li>日志列表新增「排序方式」选择器</li>
+                <li>SQL 历史页元信息顺序统一</li>
+            </ul>
             <h2>v2026.9.14</h2>
             <ul>
                 <li>SQL 列表 CRUD 类型颜色标记</li>
@@ -578,15 +652,28 @@ tasks {
     }
 
     // T-VerifyPlugin：封装 verifyPlugin 三态验证为独立 task（方便 ./gradlew verifySmoke / verifyFull 调用）
+    // T-ReleasePerf-01（2026-09-15）：verifySmoke / verifyFull 改挂 verifyGate（权威门禁，口头 243 单目标、
+    // 全量三目标），verifyPlugin 退居报告生成器——详见上方 failureLevel 处的判定缺陷字节码实证。
     register("verifySmoke") {
         group = "verification"
-        description = "日常开发快速兼容冒烟（仅 243，约 1.5min，等同于 verifyPlugin -PverifyIdes=smoke）"
-        dependsOn("verifyPlugin")
+        description = "日常开发快速兼容冒烟（仅 243，等同 verifyGate -PverifyIdes=smoke）"
+        dependsOn("verifyGate")
     }
     register("verifyFull") {
         group = "verification"
-        description = "发布前全量验证（三版本 243+253+262，约 14min）"
+        description = "发布前全量验证（三版本 243+253+262，权威门禁 verifyGate）"
         dependsOn("verifyGate")
+    }
+
+    // T-ReleasePerf-02（P0-2）：发版链路一命令编排——按正确时序串行执行：
+    //   buildPlugin（出含 changeNotes 的最终产物）→ verifyGate（对该产物做三目标兼容门禁）
+    //   → testShards（对同一提交跑全量测试）。任一环失败即停（Gradle 依赖失败语义），
+    //   消除「门禁与测试并发抢 CPU + 门禁结论对被测代码时序空挂」两个问题。
+    // 用法：./gradlew releaseGate [-PverifyIdes=...] [-PverifyOnly=true]
+    register("releaseGate") {
+        group = "verification"
+        description = "发版链路一命令：buildPlugin → verifyGate（三目标兼容门禁）→ testShards（全量测试）"
+        dependsOn("buildPlugin", "verifyGate", "testShards")
     }
 
     // M28（内测通道改造）：生成更新清单 update/update.json（Gitee 抢先体验通道数据源）——
@@ -973,6 +1060,12 @@ tasks.register("testShards") {
     }
 }
 
+// T-ReleasePerf-02（P0-2）：releaseGate 的显式串行顺序——dependsOn 只保证「都执行」不保证先后，
+// mustRunAfter 才钉死时序（buildPlugin → verifyGate → testShards）。放在 testShards 注册之后
+// （tasks.named 对未注册任务名会配置期报 not found）。放顶层避免 tasks{} 块内 receiver 类型问题。
+tasks.named<Task>("verifyGate") { mustRunAfter("buildPlugin") }
+tasks.named<Task>("testShards") { mustRunAfter("verifyGate") }
+
 // P-立项-05 真机验证：-Dmpvs.* 透传到测试 JVM（渲染导出 DialectRenderDumpTest / 外部实例入口）
 tasks.test {
     System.getProperties().forEach { (k, v) ->
@@ -990,6 +1083,23 @@ tasks.test {
     }
 }
 
+// ---------- M56 T-M56-01：agent fat jar 内嵌主插件资源（resources/agent/mps-sql-agent.jar） ----------
+// 运行时 AgentManager 解压落盘 + deleteOnExit 后经 attach loadAgent 挂载；
+// 落盘失败显式上报（禁静默吞）。跨项目任务经路径引用，配置缓存兼容。
+evaluationDependsOn(":sql-visualizer-agent")
+val agentEmbedDir = layout.buildDirectory.dir("agent-embed")
+val embedAgentJar = tasks.register<Copy>("embedAgentJar") {
+    from(tasks.getByPath(":sql-visualizer-agent:agentFatJar"))
+    into(agentEmbedDir.map { it.dir("agent") })
+    rename { "mps-sql-agent.jar" }
+}
+sourceSets.named("main") {
+    resources.srcDir(agentEmbedDir)
+}
+tasks.named("processResources") {
+    dependsOn(embedAgentJar)
+}
+
 // T-TestPerf-03（2026-09-14）实验结论：不引入纯逻辑并行分桶任务。
 // 三点实证：① 多 fork 并行平台型测试共享默认 test 沙盒 → PersistentFS 互踩成片失败；
 // ② 独立纯逻辑桶 task 可行（classpath 须复用默认 test 任务成品、排除须统一走 filter 机制——
@@ -999,4 +1109,3 @@ tasks.test {
 // 结论：全量权威=串行 ./gradlew test；真并行=./gradlew testShards 一命令（T-TestPerf2 收编，
 // 时长均衡自动分区；旧「双开终端」用法仍可用但已非必需）；
 // 日常提速最大头=关闭 build cache 根除假失败整轮重跑（gradle.properties）。
-

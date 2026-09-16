@@ -1,9 +1,12 @@
 package cn.song.mybatisplus.visualizer.database
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationAction
+import com.intellij.notification.NotificationType
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
@@ -25,6 +28,9 @@ import com.intellij.openapi.vfs.VirtualFile
 object DatabaseConsoleLauncher {
 
     private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DatabaseConsoleLauncher::class.java)
+
+    /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+    private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
 
     /**
      * 执行入口（经反射调用）：创建临时 .sql 文件并打开（数据源由用户在编辑器右上角选择）。
@@ -76,23 +82,28 @@ object DatabaseConsoleLauncher {
     }
 
     /**
-     * T-M23.6：成功提示改多按钮——`[确定, 关闭 SQL 面板]`，点「关闭 SQL 面板」（index 1）
-     * → 触发 [onClosePanel]（预览弹窗直接关闭）；失败提示维持单按钮（用户需留在面板修改 SQL）。
+     * T-M23.6：成功提示带「关闭 SQL 面板」动作 → 触发 [onClosePanel]（预览弹窗直接关闭）；
+     * 失败提示维持无动作（用户需留在面板修改 SQL）。
+     * T-UiNative T-UN-02：原双按钮模态改轻通知 + expiring 动作（非模态、点动作即过期的平台标准形态）；
+     * 测试模式跳过 + runCatching 兜底（headless 无通知系统依赖，原 Messages 亦被 runCatching 吞掉）。
      */
     private fun showInfo(project: Project, message: String, onClosePanel: Runnable?) {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
         runCatching {
-            if (onClosePanel == null) {
-                Messages.showInfoMessage(project, message, MpSqlVisualizerBundle.message("execute.title"))
-            } else {
-                val options = arrayOf(
-                    MpSqlVisualizerBundle.message("dialog.ok"),
-                    MpSqlVisualizerBundle.message("dialog.closeSqlPanel"),
+            val notification = Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("execute.title"),
+                message,
+                NotificationType.INFORMATION,
+            )
+            onClosePanel?.let {
+                notification.addAction(
+                    NotificationAction.createSimpleExpiring(
+                        MpSqlVisualizerBundle.message("dialog.closeSqlPanel"),
+                    ) { it.run() },
                 )
-                val choice = Messages.showDialog(
-                    project, message, MpSqlVisualizerBundle.message("execute.title"), options, 0, Messages.getInformationIcon(),
-                )
-                if (choice == 1) onClosePanel.run()
             }
+            notification.notify(project)
         }
     }
 }

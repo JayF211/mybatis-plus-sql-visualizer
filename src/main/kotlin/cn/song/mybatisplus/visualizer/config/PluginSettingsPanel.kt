@@ -11,10 +11,10 @@ import cn.song.mybatisplus.visualizer.util.PluginCacheManager
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.PluginBuildInfo
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
-import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.keymap.KeymapManager
 import com.intellij.openapi.keymap.KeymapUtil
@@ -25,8 +25,10 @@ import com.intellij.openapi.ui.MessageDialogBuilder
 import com.intellij.ui.ColorPanel
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBRadioButton
 import com.intellij.ui.TitledSeparator
 import com.intellij.ui.components.JBTextField
+import javax.swing.ButtonGroup
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.Color
@@ -202,6 +204,17 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 字面量参数恢复开关（T-HistParam，默认开）：无 `?` 占位符的日志 SQL 把字符串字面量识别为参数。 */
     private val literalParamRecoveryCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.literalParamRecovery"))
 
+    // ---------- M56 T-M56-08：增强捕获（agent 字节码通道；对用户不出现 agent 字样） ----------
+
+    /** 增强捕获开关（默认关）：开启时弹注入确认对话框（JEP 451 预告 + 数据留本机说明）。 */
+    private val enhancedCaptureCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture"))
+
+    /** 脱敏开关（默认开）：对疑似敏感形态打码，agent 采集层执行。 */
+    private val enhancedDesensitizeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize"))
+
+    /** 增强捕获状态行：已挂载 pid=x / 已回落控制台捕获 / 连接中。 */
+    private val enhancedStatusLabel = JBLabel(" ")
+
     /** gutter 预览 SQL 图标开关（M10）。 */
     private val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
     private val joinDiagramNativeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.joinDiagramNative"))
@@ -276,6 +289,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private val logStopOnToolWindowCloseCheck = JBCheckBox()
     private val logTimestampCheck = JBCheckBox()
     private val logTimestampFormatField = JBTextField(12)
+    private val logTimestampSourceLogRadio = JBRadioButton()
+    private val logTimestampSourceCaptureRadio = JBRadioButton()
+    private val logTimestampSourceGroup = ButtonGroup()
     private val logFormatSqlCheck = JBCheckBox()
     private val logFilterKeywordsField = JBTextField(12)
     private val logDedupeField = JBTextField(12)
@@ -539,6 +555,21 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timestampFormat"), logTimestampFormatField.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.timestampFormat.tip")
                 })
+                // 时间来源单选组（日志时间 / 捕获时间）
+                logTimestampSourceLogRadio.apply {
+                    text = MpSqlVisualizerBundle.message("settings.log.timestampSource.log")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.timestampSource.log.tip")
+                }
+                logTimestampSourceCaptureRadio.apply {
+                    text = MpSqlVisualizerBundle.message("settings.log.timestampSource.capture")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.timestampSource.capture.tip")
+                }
+                logTimestampSourceGroup.add(logTimestampSourceLogRadio)
+                logTimestampSourceGroup.add(logTimestampSourceCaptureRadio)
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timestampSource"), JPanel().apply {
+                    add(logTimestampSourceLogRadio)
+                    add(logTimestampSourceCaptureRadio)
+                })
                 addRow(p, g, "", logFormatSqlCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.formatSql") })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.log.filterKeywords"), logFilterKeywordsField.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.filterKeywords.tip")
@@ -672,6 +703,22 @@ class PluginSettingsPanel @JvmOverloads constructor(
                         }
                     }
                 })
+                // M56 T-M56-08：增强捕获设置（捕获通道类设置与源码位置捕获同组）
+                addRow(p, g, "", enhancedCaptureCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.enhancedCapture")
+                    addActionListener {
+                        if (isSelected && !PluginSettings.getInstance().state.enhancedCaptureConfirmed) {
+                            // T-M56-08：首次启用弹注入确认（确认记忆持久化，重开不弹）
+                            if (EnhancedCaptureConfirmDialog.confirm(null)) {
+                                PluginSettings.getInstance().state.enhancedCaptureConfirmed = true
+                            } else {
+                                isSelected = false
+                            }
+                        }
+                    }
+                })
+                addRow(p, g, "", enhancedDesensitizeCheck.apply { text = MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize") })
+                addRow(p, g, "", enhancedStatusLabel)
             }
         }
 
@@ -728,7 +775,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     add(JButton(MpSqlVisualizerBundle.message("settings.buildNumber.copy")).apply {
                         isEnabled = PluginBuildInfo.mpvBuild() != null
                         addActionListener {
-                            CopyPasteManager.getInstance().setContents(java.awt.datatransfer.StringSelection(PluginBuildInfo.displayText()))
+                            UiTextClipboard.copy(PluginBuildInfo.displayText())
                             val original = text
                             text = MpSqlVisualizerBundle.message("settings.buildNumber.copied")
                             javax.swing.Timer(1200) { text = original }.apply { isRepeats = false; start() }
@@ -1147,6 +1194,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logStopOnToolWindowCloseCheck.isSelected != s.logStopOnToolWindowClose
             || logTimestampCheck.isSelected != s.logTimestampEnabled
             || logTimestampFormatField.text.trim() != s.logTimestampFormat
+            || (if (logTimestampSourceLogRadio.isSelected) "log" else "capture") != s.logTimestampSource
             || logFormatSqlCheck.isSelected != s.logFormatSql
             || logFilterKeywordsField.text.trim() != s.logFilterKeywords
             || logDedupeField.text.trim().toLongOrNull() != s.logDedupeWindowMs
@@ -1155,6 +1203,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logTimePrefixField.text.trim() != s.logTimePrefix
             || slowQueryThresholdField.text.trim().toLongOrNull() != s.slowQueryThresholdMs
             || logShowDurationCheck.isSelected != s.showDurationInLogList
+            // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
+            || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
+            || enhancedDesensitizeCheck.isSelected != s.enhancedCaptureDesensitize
             || logHibernateEnabledCheck.isSelected != s.logHibernateEnabled
             || logHibernateSqlPrefixField.text.trim() != s.logHibernateSqlPrefix
             || logHibernateParamPrefixField.text.trim() != s.logHibernateParamPrefix
@@ -1235,6 +1286,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.logStopOnToolWindowClose = logStopOnToolWindowCloseCheck.isSelected
             s.logTimestampEnabled = logTimestampCheck.isSelected
             s.logTimestampFormat = logTimestampFormatField.text.trim()
+            s.logTimestampSource = if (logTimestampSourceLogRadio.isSelected) "log" else "capture"
             s.logFormatSql = logFormatSqlCheck.isSelected
             s.logFilterKeywords = logFilterKeywordsField.text.trim()
             s.logDedupeWindowMs = logDedupeField.text.trim().toLongOrNull() ?: PluginSettings.DEFAULT_LOG_DEDUPE_WINDOW_MS
@@ -1244,6 +1296,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.slowQueryThresholdMs = slowQueryThresholdField.text.trim().toLongOrNull()
                 ?: PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS
             s.showDurationInLogList = logShowDurationCheck.isSelected
+            // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
+            s.enhancedCaptureEnabled = enhancedCaptureCheck.isSelected
+            s.enhancedCaptureDesensitize = enhancedDesensitizeCheck.isSelected
             s.logHibernateEnabled = logHibernateEnabledCheck.isSelected
             s.logHibernateSqlPrefix = logHibernateSqlPrefixField.text.trim()
             s.logHibernateParamPrefix = logHibernateParamPrefixField.text.trim()
@@ -1363,6 +1418,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logStopOnToolWindowCloseCheck.isSelected = s.logStopOnToolWindowClose
             logTimestampCheck.isSelected = s.logTimestampEnabled
             logTimestampFormatField.text = s.logTimestampFormat
+            if (s.logTimestampSource == "capture") {
+                logTimestampSourceCaptureRadio.isSelected = true
+            } else {
+                logTimestampSourceLogRadio.isSelected = true
+            }
             logFormatSqlCheck.isSelected = s.logFormatSql
             logFilterKeywordsField.text = s.logFilterKeywords
             logDedupeField.text = s.logDedupeWindowMs.toString()
@@ -1371,6 +1431,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logTimePrefixField.text = s.logTimePrefix
             slowQueryThresholdField.text = s.slowQueryThresholdMs.toString()
             logShowDurationCheck.isSelected = s.showDurationInLogList
+            // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
+            enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled
+            enhancedDesensitizeCheck.isSelected = s.enhancedCaptureDesensitize
             logHibernateEnabledCheck.isSelected = s.logHibernateEnabled
             logHibernateSqlPrefixField.text = s.logHibernateSqlPrefix
             logHibernateParamPrefixField.text = s.logHibernateParamPrefix

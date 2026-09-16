@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -403,6 +404,74 @@ class JdbcTemplateLogParserTest {
         assertTrue(entries[1].rawSql.contains("t2"))
     }
 
+    // ========== T-ListParamCollect：IN 集合值（用户真机日志） ==========
+
+    @Test
+    fun `NamedParameter 用户真机样例_集合值方括号不落进SQL`() {
+        val entries = feedAll(
+            parser(),
+            "2026-09-15 10:20:04.176 [TID: null] [cache-preheat-1] TRACE com.AAA.BBB.CCC.orm.impl.dml.DDDObjectRepositoryJdbcImpl Line:260 - " +
+                "sql = SELECT COUNT(*) as count FROM tableA  WHERE ( (\"deleted\" = :param1) AND ((\"deleted\" = :param2) AND (\"id\" IN (:param3))) ) " +
+                ", parameters = {param1=0, param2=0, param3=[6b31d693xxxxx7f4979b]}",
+        )
+        assertEquals(1, entries.size)
+        val restored = entries[0].restoredSql
+        assertTrue("IN 列表元素应独立引号", restored.contains("""IN ('6b31d693xxxxx7f4979b')"""))
+        assertFalse("方括号不得落进 SQL", restored.contains('[') || restored.contains(']'))
+        // 落盘载荷与列表展示的数据源保持原始日志值（未被改写）
+        assertEquals(listOf("0", "0", "[6b31d693xxxxx7f4979b]"), entries[0].params.map { it.value })
+    }
+
+    @Test
+    fun `NamedParameter 集合值多元素_逐元素引号`() {
+        val entries = feedAll(
+            parser(),
+            "sql = SELECT * FROM t WHERE id IN (:ids) , parameters = {ids=[a, b]}",
+        )
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].restoredSql, entries[0].restoredSql.contains("IN ('a', 'b')"))
+    }
+
+    @Test
+    fun `NamedParameter 空集合_渲染为NULL且无方括号`() {
+        val entries = feedAll(
+            parser(),
+            "sql = SELECT * FROM t WHERE id IN (:ids) , parameters = {ids=[]}",
+        )
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].restoredSql, entries[0].restoredSql.contains("IN (NULL)"))
+    }
+
+    @Test
+    fun `NamedParameter 非IN位置形如方括号的值_原样保留`() {
+        val entries = feedAll(
+            parser(),
+            "sql = SELECT * FROM t WHERE tag = :tag , parameters = {tag=[a]}",
+        )
+        assertEquals(1, entries.size)
+        assertTrue("非 IN 位置不得剥括号", entries[0].restoredSql.contains("tag = '[a]'"))
+    }
+
+    @Test
+    fun `NamedParameter IN位置单值非集合_与既有行为一致`() {
+        val entries = feedAll(
+            parser(),
+            "sql = SELECT * FROM t WHERE id IN (:id) , parameters = {id=42}",
+        )
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].restoredSql, entries[0].restoredSql.contains("IN (42)"))
+    }
+
+    @Test
+    fun `NamedParameter 数值集合_裸渲染不加引号`() {
+        val entries = feedAll(
+            parser(),
+            "sql = SELECT * FROM t WHERE id IN (:ids) , parameters = {ids=[1, 2]}",
+        )
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].restoredSql, entries[0].restoredSql.contains("IN (1, 2)"))
+    }
+
     // ========== T-LogDedupeMpMark：双路日志同语句副本（用户控制台序列回放） ==========
 
     @Test
@@ -433,10 +502,11 @@ class JdbcTemplateLogParserTest {
 
     // ========== T-JdbcMultiline：多行 `[...]` 语句收集 ==========
 
-    /** 用户反馈样本（2026-09-08 原样回放）：TLog TID 前缀 + SQL 跨行 + `]` 独占末行。 */
+    /** 用户反馈样本（2026-09-08 原样回放）：TLog TID 前缀 + SQL 跨行 + `]` 独占末行。
+     *  线程 token 与 withPrefix 一致（cache-preheat-1），确保 T-JdbcThreadBucket 分桶后续行正确归属。 */
     private val multilineUserSample = listOf(
-        "2026-09-08 11:21:11.066 [TID: AFFCDDCD81F34B929A55E587382D58E8] [http-nio-0.0.0.0-6608-exec-5] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:711 - Executing prepared SQL query",
-        "2026-09-08 11:21:11.066 [TID: AFFCDDCD81F34B929A55E587382D58E8] [http-nio-0.0.0.0-6608-exec-5] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:643 - Executing prepared SQL statement [SELECT COUNT(1)",
+        "2026-09-08 11:21:11.066 [TID: AFFCDDCD81F34B929A55E587382D58E8] [cache-preheat-1] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:711 - Executing prepared SQL query",
+        "2026-09-08 11:21:11.066 [TID: AFFCDDCD81F34B929A55E587382D58E8] [cache-preheat-1] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:643 - Executing prepared SQL statement [SELECT COUNT(1)",
         "        FROM ipm_ImplementTask t",
         "        WHERE t.deleted = 0",
         "        AND EXISTS (SELECT 1 FROM ipm_ProjectSubject p WHERE p.id = t.projectId AND p.deleted = 0)",
@@ -546,11 +616,18 @@ class JdbcTemplateLogParserTest {
     fun `多行收集 NamedParameter 行边界同理`() {
         val p = parser()
         p.feed(withPrefix("Executing prepared SQL statement [SELECT a"))
+        // named 行来自不同线程 token [x]（T-JdbcThreadBucket 分桶后不再冲刷 cache-preheat-1 的残句）
         p.feed("2026-09-08 09:38:03.600 [TID: null] [x] TRACE c.C Repo Line:1 - sql = SELECT COUNT(*) FROM t , parameters = {p1=0}")
         val entries = p.takeEntries()
-        assertEquals("残句 + named 各一条", 2, entries.size)
-        assertEquals("SELECT a", entries[0].rawSql)
-        assertEquals(SqlSource.JDBC, entries[1].source)
+        // named 行在 [x] 桶独立产出；cache-preheat-1 的残句未被冲刷（仍在收集态）
+        assertEquals("仅 named 条目产出（残句属另一桶，未被冲刷）", 1, entries.size)
+        assertEquals(SqlSource.JDBC, entries[0].source)
+        assertTrue("named 条目含 COUNT", entries[0].rawSql.contains("SELECT COUNT(*)"))
+        // 残句由 closePending 冲刷
+        p.closePending()
+        val rest = p.takeEntries()
+        assertEquals("残句由 closePending 产出", 1, rest.size)
+        assertEquals("SELECT a", rest[0].rawSql)
     }
 
     @Test
@@ -562,5 +639,165 @@ class JdbcTemplateLogParserTest {
         val entries = p.takeEntries()
         assertEquals(1, entries.size)
         assertTrue("截断在 maxParseLength 内", entries[0].rawSql.length <= 60)
+    }
+
+    // ========== T-JdbcThreadBucket：并发日志交错分桶（2026-09-15 修复参数错挂/丢失） ==========
+
+    /** exec-4 线程前缀（prepare + 参数行）。 */
+    private fun withExec4(text: String): String =
+        "2026-09-15 13:47:17.843 [TID: AE51C4E99F0549FC8091D668FBB75428] [http-nio-0.0.0.0-6608-exec-4] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:643 - $text"
+
+    private fun withExec4Trace(text: String): String =
+        "2026-09-15 13:47:17.843 [TID: AE51C4E99F0549FC8091D668FBB75428] [http-nio-0.0.0.0-6608-exec-4] TRACE org.springframework.jdbc.core.StatementCreatorUtils Line:227 - $text"
+
+    /** exec-5 线程前缀（named 单行）。 */
+    private fun withExec5(text: String): String =
+        "2026-09-15 13:47:17.843 [TID: C289731C361F4592A910F19B4F95E97D] [http-nio-0.0.0.0-6608-exec-5] TRACE com.a.b.impl.dml.BizObjectRepositoryJdbcImpl Line:260 - $text"
+
+    /**
+     * 用户实证场景（2026-09-15）：exec-4 prepared 行 → exec-5 named 行 → exec-4 参数行。
+     * 旧单槽状态机：named 行 closePending 强制闭合 exec-4 残句 → exec-4 参数行无上下文丢弃 → ? 残留。
+     * 分桶后：exec-4 与 exec-5 各自独立状态机，参数行正确归位 exec-4 桶。
+     */
+    @Test
+    fun `并发交错_prepared 与 named 行交错_参数行正确归位`() {
+        val p = parser()
+        // 到达序：exec-4 的 prepared 行（挂 pending）
+        p.feed(withExec4("""Executing prepared SQL statement [SELECT "deptId" FROM tableA WHERE ("deleted" = 0) AND (paramA LIKE CONCAT('%',?,'%'))]"""))
+        // exec-5 的 named 行（单行完整，触发其所在桶 closePending）
+        p.feed(withExec5("sql = SELECT COUNT(*) as count FROM ipm_DeptLeadCfg WHERE ( (\"deleted\" = :param1) AND (\"paramA\" LIKE :param2) ) , parameters = {param1=0, param2=%ff808xxxxx01975c7fe43200ba%}"))
+        // exec-4 的参数绑定行（同线程，应归位 exec-4 桶）
+        p.feed(withExec4Trace("Setting SQL statement parameter value: column index 1, parameter value [%ff808xxxxx01975c7fe43200ba%], value class [java.lang.String], SQL type unknown"))
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals("prepared + named 各一条", 2, entries.size)
+
+        // named 条目在 feed 时立即产出（entries 前列），prepared 条目在 closePending 产出（entries 后列）——
+        // 按内容查找而非下标（产出序由分桶逻辑决定）
+        val prepared = entries.find { it.rawSql.contains("CONCAT('%',?,'%')") }
+        assertNotNull("prepared 条目应存在", prepared)
+        assertEquals(SqlSource.JDBC, prepared!!.source)
+        assertTrue("prepared SQL 含 CONCAT", prepared.rawSql.contains("CONCAT('%',?,'%')"))
+        assertEquals("prepared 参数行已回填", 1, prepared.params.size)
+        assertEquals("String", prepared.params[0].type)
+        assertTrue("prepared 还原 SQL 含字面量引号", prepared.restoredSql.contains("'%" + "ff808xxxxx01975c7fe43200ba" + "%'"))
+
+        // named 条目（独立桶，不受 prepared 影响）——按内容查找
+        val named = entries.find { it.rawSql.contains("SELECT COUNT(*)") }
+        assertNotNull("named 条目应存在", named)
+        assertEquals(SqlSource.JDBC, named!!.source)
+        assertTrue("named SQL 含 COUNT", named.rawSql.contains("SELECT COUNT(*)"))
+        assertEquals("named 参数 2 个", 2, named.params.size)
+    }
+
+    /** 两线程各自的 prepared 语句交错参数行，互不串扰。 */
+    @Test
+    fun `并发交错_两线程 prepared 语句参数行不互串`() {
+        val p = parser()
+        // exec-4：2 个参数
+        p.feed(withExec4("""Executing prepared SQL statement [SELECT * FROM a WHERE x = ? AND y = ?]"""))
+        // exec-5：1 个参数
+        p.feed(withExec5("""Executing prepared SQL statement [SELECT * FROM b WHERE z = ?]"""))
+        // exec-5 先到参数（应归 exec-5）
+        p.feed(
+            "2026-09-15 13:47:17.843 [TID: C289731C361F4592A910F19B4F95E97D] [http-nio-0.0.0.0-6608-exec-5] TRACE org.springframework.jdbc.core.StatementCreatorUtils Line:227 - Setting SQL statement parameter value: column index 1, parameter value [b1], value class [java.lang.String], SQL type unknown",
+        )
+        // exec-4 参数（应归 exec-4）
+        p.feed(withExec4Trace("Setting SQL statement parameter value: column index 1, parameter value [a1], value class [java.lang.String], SQL type unknown"))
+        p.feed(withExec4Trace("Setting SQL statement parameter value: column index 2, parameter value [a2], value class [java.lang.String], SQL type unknown"))
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(2, entries.size)
+        val (entryA, entryB) = if (entries[0].rawSql.contains("FROM a")) entries[0] to entries[1] else entries[1] to entries[0]
+        assertEquals("a 参数 2 个", 2, entryA.params.size)
+        assertEquals("b 参数 1 个", 1, entryB.params.size)
+        assertTrue("b 含 b1", entryB.restoredSql.contains("'b1'"))
+    }
+
+    /** 多行语句跨线程交错：exec-4 收集态 + exec-5 完整语句，互不冲刷。 */
+    @Test
+    fun `并发交错_多行收集态与它线程完整语句互不冲刷`() {
+        val p = parser()
+        p.feed(withExec4("Executing prepared SQL statement [SELECT a"))
+        p.feed("        FROM t")
+        // exec-5 完整语句（单行闭合 → pendingSql，不立即产出）
+        p.feed(withExec5("""Executing prepared SQL statement [SELECT b FROM t2]"""))
+        // 分桶后：exec-5 语句不冲刷 exec-4 残句；takeEntries 无产出（exec-5 仍在 pending、exec-4 仍在收集）
+        val drained = p.takeEntries()
+        assertEquals("exec-5 不冲刷 exec-4，无条目产出", 0, drained.size)
+        // exec-4 残句续行闭合（仍属 exec-4 桶）
+        p.feed("WHERE x = 1]")
+        p.closePending()
+        val rest = p.takeEntries()
+        assertEquals("exec-4 残句 + exec-5 完整语句各一条", 2, rest.size)
+        val sqls = rest.map { it.rawSql }
+        assertTrue("含 exec-4 残句", sqls.any { it.startsWith("SELECT a") && it.contains("WHERE x = 1") })
+        assertTrue("含 exec-5 完整语句", sqls.any { it == "SELECT b FROM t2" })
+    }
+
+    /** 线程 token 提取失败（裸行，无方括号）→ 回退共享桶（fail-open，旧行为一致）。 */
+    @Test
+    fun `线程 token 提取失败_裸行回退共享桶_旧行为一致`() {
+        val entries = feedAll(
+            parser(),
+            "Executing prepared SQL statement [SELECT * FROM users WHERE id = ?]",
+            "Setting SQL statement parameter value: column index 1, parameter value [42], value class [java.lang.Integer], SQL type unknown",
+            "Executing prepared SQL statement [SELECT * FROM orders WHERE id = ?]",
+            "Setting SQL statement parameter value: column index 1, parameter value [99], value class [java.lang.Integer], SQL type unknown",
+        )
+        assertEquals(2, entries.size)
+        assertEquals("users 参数值 42", "42", entries[0].params[0].value)
+        assertEquals(1, entries[0].params.size)
+        assertEquals("orders 参数值 99", "99", entries[1].params[0].value)
+    }
+
+    /** 线程 token 提取：SkyWalking TID 段被排除，http-nio 线程名正确提取。 */
+    @Test
+    fun `线程 token 提取_SkyWalking TID 段排除`() {
+        val p = parser()
+        // 显式构造含 TID 的行，验证 token 提取取 http-nio 段而非 TID 段
+        val line = "2026-09-15 13:47:17.843 [TID: AE51C4E99F0549FC8091D668FBB75428] [http-nio-0.0.0.0-6608-exec-99] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:643 - Executing prepared SQL statement [SELECT 1]"
+        p.feed(line)
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(1, entries.size)
+        assertEquals("SELECT 1", entries[0].rawSql)
+    }
+
+    /** 线程 token 提取：Spring Boot 默认格式（LEVEL [thread] logger）。 */
+    @Test
+    fun `线程 token 提取_SpringBoot 默认格式后置线程名`() {
+        val p = parser()
+        p.feed("2026-09-15 13:47:17.843 DEBUG [my-service-thread-7] org.springframework.jdbc.core.JdbcTemplate : Executing prepared SQL statement [SELECT 2]")
+        p.closePending()
+        val entries = p.takeEntries()
+        assertEquals(1, entries.size)
+        assertEquals("SELECT 2", entries[0].rawSql)
+    }
+
+    /** 桶数超限冲刷：空闲桶被淘汰，活跃桶（有 pending）保留。 */
+    @Test
+    fun `桶数超限冲刷_空闲桶淘汰_活跃桶保留`() {
+        val p = parser()
+        // 活跃桶：独立线程 token（不与循环中的 exec-0..69 碰撞）
+        val activePrefix =
+            "2026-09-15 13:47:17.843 [TID: null] [http-nio-0.0.0.0-6608-exec-active] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:643 - "
+        val activeTracePrefix =
+            "2026-09-15 13:47:17.843 [TID: null] [http-nio-0.0.0.0-6608-exec-active] TRACE org.springframework.jdbc.core.StatementCreatorUtils Line:227 - "
+        p.feed(activePrefix + "Executing prepared SQL statement [SELECT * FROM active WHERE id = ?]")
+        // 制造大量完整语句桶（每桶 pendingSql 非空 → 非空闲，不应被淘汰）
+        for (i in 0 until 70) {
+            p.feed(
+                "2026-09-15 13:47:17.843 [TID: null] [http-nio-0.0.0.0-6608-exec-$i] DEBUG org.springframework.jdbc.core.JdbcTemplate Line:643 - Executing prepared SQL statement [SELECT $i FROM dual_$i]",
+            )
+        }
+        // 活跃桶参数行仍能归位（桶未被误淘汰）
+        p.feed(activeTracePrefix + "Setting SQL statement parameter value: column index 1, parameter value [42], value class [java.lang.Integer], SQL type unknown")
+        p.closePending()
+        val entries = p.takeEntries()
+        val activeEntry = entries.find { it.rawSql.contains("active") }
+        assertNotNull("活跃桶 pendingSql 不应被误淘汰", activeEntry)
+        assertEquals("活跃桶参数正确归位", 1, activeEntry!!.params.size)
+        assertEquals("42", activeEntry.params[0].value)
     }
 }

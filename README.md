@@ -96,7 +96,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **SQL 日志工具窗口（主侧边栏，4 个 tab）**
 
-- 自动捕获运行控制台的 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式），还原成可执行 SQL 条目列表：单击轻量预览（可编辑高亮编辑器，改个值直接复制）、双击完整弹窗、右键复制 / 跳转源码
+- 自动捕获运行控制台的 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式），还原成可执行 SQL 条目列表：单击轻量预览（可编辑高亮编辑器，改个值直接复制）、双击完整弹窗、右键复制 / 跳转源码；JdbcTemplate 命名参数为集合值时按元素还原（`IN (:p)` + `[a]` → `IN ('a')`，方括号不落进 SQL）
 - 条目显示耗时（p6spy / MP TimeCount / 自定义前缀），超阈值红色标记并统计慢查询；列表支持 SQL 类型筛选、Ctrl+F 搜索、耗时排序、重复条目去重（⨉N 徽章即时同步）
 - 条目带 `#N` 会话内捕获序号；列表支持单行 / 关键字换行 / 格式化三种显示模式（工具栏下拉即时切换），并按 SELECT / INSERT / UPDATE / DELETE 类型着色标记（左侧色条或整行淡背景，颜色与形态可自定义）
 - 「日志 → SQL」tab 可粘贴整段日志批量还原（多组语句自动分隔）；「历史」tab 浏览自动保存的历史 SQL（两级导航：文件 → 条目），可再次预览与跳转源码
@@ -291,6 +291,58 @@ ORDER BY t1.create_time DESC
 
 该提示在 v2026.9.2 起已优化为可选依赖声明，旧版本可能仍弹确认，直接点 Cancel 跳过不影响使用。
 
+## 内网与离线环境
+
+插件**不需要外网即可完整工作**。SQL 预览、SQL → Java 反转换、控制台日志还原、JOIN 关系图、方言格式化、CRUD SQL 生成等全部核心能力均为本地静态分析与本地渲染，不发起任何网络请求。
+
+### 网络行为
+
+全插件只有两处网络出口，都是可选功能，且失败时降级、不阻塞界面：
+
+| 出口 | 目标 | 默认状态 | 失败表现 |
+|------|------|----------|----------|
+| 检查插件更新 | Gitee 仓库清单 | **关闭**（`设置 → Tools → SQL Visualizer → 更新与诊断 → 抢先体验：启用 Gitee 更新通道`，默认不勾选） | 启动检查静默跳过；设置页手动检查显示「检查更新失败：…」 |
+| 提交问题反馈 | 官网需求池 | 仅在你点「提交」时发出 | 对话框状态行显示失败原因，可复制、可重试 |
+
+除此之外：**无遥测、无埋点、不上报使用数据、无账号或激活码校验、不上传你的代码或 SQL**。插件也不含内嵌网络服务，不监听任何端口。解析 mapper XML 时不会联网拉取 MyBatis DTD（外部实体解析已被关闭），因此在内网 DNS 不通的环境下不会出现加载卡顿。
+
+### 执行 SQL 与 JDBC 驱动
+
+「执行 SQL」走 IDE 原生的 Database 控制台，插件本身不连接数据库、也不下载驱动。需要注意的是：**驱动若不在本地缓存，是 IDE 平台自己去联网下载的**——纯内网环境下这一步会失败。
+
+内网部署时请提前二选一：
+
+- 在 IDE 的 Database 工具窗口中为该数据源手工指定驱动 jar（右键数据源 → 属性 → 驱动页），把驱动文件放到本机任意目录后由「驱动文件」一栏加入
+- 若内网有 Maven 私服（Nexus / Artifactory 等），在该页的「驱动」配置中改用私服上的驱动坐标下载
+
+完成预置后，执行与 EXPLAIN 与联网环境完全一致。
+
+### 内网私有更新通道
+
+如果希望在内网分发更新（不走外网），可用系统属性把更新清单地址整体换掉：
+
+```
+-Dmpvs.update.manifest.url=http://nexus.intranet.local/plugins/update.json
+```
+
+清单为 JSON，只有 `version` 与 `downloadUrl` 是必填：
+
+```json
+{
+  "version": "2026.9.18",
+  "downloadUrl": "http://nexus.intranet.local/plugins/mybatis-plus-sql-visualizer-2026.9.18.zip",
+  "changeNotes": "本次更新内容（纯文本，\n 可换行）",
+  "publishDate": "2026-09-15",
+  "sinceBuild": "243"
+}
+```
+
+`downloadUrl` 指向内网文件服务即可，无域名白名单限制。**该属性在 IDE 启动时读取一次，修改后需要重启 IDE 才会生效**；启动日志中会记录一行「update manifest url overridden by system property: …」，可据此确认换源是否已生效。
+
+### 构建与发版
+
+以上说的都是**运行期**。如果你要在纯内网**构建**本插件或自行发布，还需要 Maven 仓库（项目默认用阿里云镜像 + Maven Central）与 JetBrains 插件门户（Gradle 插件与目标 IDE 发行版的下载来源），需预先配置内网私服与离线缓存。这与内网安装使用是两回事，可以只在运行期无网。
+
 ## 文档
 
 | 文档 | 说明 |
@@ -305,6 +357,8 @@ ORDER BY t1.create_time DESC
 - 构建平台：IntelliJ IDEA Ultimate 2024.3.7.1（最低支持版本编译；数据源 API 在 `com.intellij.database`，仅 Ultimate 捆绑）
 - 兼容性：IDEA 2024.3+（`since-build=243`，Plugin Verifier 按目标 IDE 集合校验）。适配承诺：新版 IntelliJ IDEA 正式版发布后 5 个工作日内完成兼容性验证并发布适配版本（或兼容性说明）；兼容性验证由计划任务每周自动执行（verifyPlugin 三目标 243/253/262），如遇平台破坏性变更导致无法按期适配，在本节与发行说明公示原因与预计时间。
 - Gradle 9.x（Wrapper 内置）
+
+构建与发版需要可访问 Maven 仓库与 JetBrains 插件门户（依赖解析、Gradle 插件、目标 IDE 发行版下载）；纯内网构建需预置私服与离线缓存。注意这与插件安装后的**运行期**无关——运行期不需要外网，见上方「内网与离线环境」。
 
 ## 常用命令
 

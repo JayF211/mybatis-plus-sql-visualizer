@@ -1,13 +1,25 @@
-# verifyPlugin 豁免清单（-ignored-problems 文件，T-McpToolset 2026-09-15 起用）
-# 格式：<plugin_xml_id>:<plugin_version>:<problem_description_regexp_pattern>（三段各自为正则；
-# 版本段用 .* 通配，免逐版维护）。
-# 豁免语义：命中的 problem 不再计入门禁失败判定（exit 0），报告文件仍如实留痕可查。
+# verifyPlugin / verifyGate 豁免清单（-ignored-problems 文件，T-McpToolset 2026-09-15 起用；
+# T-ReleasePerf-01/05 2026-09-15 收编至 master，同时挂到 verifyPlugin 与 verifyGate）
 #
-# 背景：MCP 适配层（cn/song/mybatisplus/visualizer/mcp/）引用的平台 mcpserver 类型与 K2 协程
-# 溢出内在函数，在 243 目标为「永不可达」——<depends optional config-file=mcp-optional.xml>
-# 仅在 com.intellij.mcpServer 插件存在时加载（253+/262 内置），243 上整文件不加载、适配类零
-# 实例化。作用域由 McpScopeSourceScanTest 守卫（mcpserver 引用只许出现在 mcp/ 包与
-# mcp-optional.xml），若引用越包，243 就会真正走到缺类路径，豁免即失效，须回退本清单。
-# 逐条实证见 docs/开发计划/20260914-1247-T-McpToolset-…-开发计划.md §7.5 门禁定案。
+# 格式：plugin_xml_id:plugin_version:problem_description_regexp_pattern（三段各自为正则；
+#       版本段用 .* 通配，免逐版维护。文件存在但无规则行 = 不豁免任何问题，语义安全。）
+# 豁免语义：命中的 problem 不再计入门禁失败判定（verifier-cli 退出码 0），报告文件仍如实留痕可查。
+#
+# 重要：本文件每行都会被解析为规则（含 # 注释行，verifier 不跳过），注释里禁止出现正则元字符
+# （星号、方括号、圆括号、点号等）——实测注释里的星号星号引发 PatternSyntaxException 直接挂。
+# 注释请用纯中文与普通标点（句号、顿号、破折号、引号可用）。
+#
+# 注意（T-ReleasePerf-01 字节码实证）：IPGP 的 verifyPlugin 任务并不采纳本清单——它的
+# verifyOutput 与 collectProblems 按控制台小节标题重新计数（详见 build.gradle.kts 中 failureLevel
+# 处注释），故 verifyPlugin 已降级为报告生成器，权威门禁是直驱 verifier-cli 的 verifyGate。
+# 本清单在 verifyGate 里真正生效（CLI 收到 -ignored-problems，按之豁免后再判退出码）。
+#
+# 当前规则：空
+# master 分支不含 MCP 适配层（cn/song/mybatisplus/visualizer/mcp/ 与 mcp-optional.xml 在 dev，
+# 未合入 master），因此 master 侧无永不可达缺类需要豁免，本文件只保留机制与格式。
+#
+
+# dev 分支含 MCP 适配层（cn/song/mybatisplus/visualizer/mcp/ 与 mcp-optional.xml 在 dev），
+# 上述两类 243 永不可达缺类在此为真实豁免需求，以下两条规则生效中：
 cn\.song\.mybatisplus\.visualizer\.mybatis-plus-sql-visualizer:.*:Package 'com\.intellij\.mcpserver' is not found
 cn\.song\.mybatisplus\.visualizer\.mybatis-plus-sql-visualizer:.*:references an unresolved class kotlin\.coroutines\.jvm\.internal\.SpillingKt

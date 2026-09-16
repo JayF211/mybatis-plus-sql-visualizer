@@ -9,20 +9,22 @@
 
 ```
 parallel_tasks check/register
-  → ① 全量测试
-  → ② verifyPlugin 三目标门禁
-  → ③ 发行文档同步（八处，见下）
-  → ④ 发行提交（单提交，10 文件量级）
-  → ⑤ buildPlugin 产 zip
-  → ⑥ git tag + push master + push tag
-  → ⑦ Gitee API 建发行版 + 上传 zip 附件（见第三节）
-  → ⑧ 回读校验 downloadUrl
+  → ① releaseGate 一键（buildPlugin → verifyGate 三目标门禁 → testShards 全量测试；T-ReleasePerf-02）
+  → ② 发行文档同步（八处，见下）
+  → ③ 发行提交（单提交，10 文件量级）
+  → ④ buildPlugin 产 zip（releaseGate 已产出；若跳过则此处单独跑）
+  → ⑤ git tag + push master + push tag
+  → ⑥ Gitee API 建发行版 + 上传 zip 附件（见第三节）
+  → ⑦ 回读校验 downloadUrl
   → parallel_tasks done
   → 人工收尾：preview.update.json 拷入 update/update.json（独立单文件提交，不进发行提交）
 ```
 
 跑任何 `./gradlew` 前按并行铁律先 `python C:\Users\USER\.zcode\cli\parallel_tasks.py check`，
 有活跃任务先 `register`，全部跑完 `done --name <任务名>` 注销（裸 `done` 注销全部，禁用）。
+说明：2026-09-15 起门禁由 `verifyGate`（直驱 verifier-cli，离线 + 豁免清单）承担，替代 IPGP
+`verifyPlugin`（判定缺陷字节码实证见 build.gradle.kts）；`releaseGate` 把打包/门禁/测试串成一条命令，
+消除「门禁与测试并行抢 CPU + 门禁对被测代码时序空挂」两个问题。
 
 ## 二、准备阶段要点
 
@@ -60,8 +62,10 @@ description / 市场页定位是纯能力陈列，不承担「最近更新」播
 ### 门禁
 
 - 全量测试：total/skipped/failures/errors 四计数记录进发行说明。本次基线 3353/0/0/6。
-- verifyPlugin：BUILD SUCCESSFUL + `build/reports/pluginVerifier/IU-{243,253,262}/report.html`
-  三份 Compatible 0 issues。warning 级弃用计数与上版对比（基线 243=3 / 253=6 / 262=41）留观察不阻断。
+- verifyGate（T-ReleasePerf 起权威门禁）：BUILD SUCCESSFUL +
+  `build/reports/pluginVerifierGate/IU-{243,253,262}/.../verification-verdict.txt` 三份 Compatible。
+  warning 级弃用计数与上版对比（2026-09-18-beta.1 基线 243=3 / 253=6 / 262=52）留观察不阻断。
+  离线 + 独立 verify-home 缓存实测三目标 3m06s（历史 verifyPlugin 中位 7m26s）。
 - 测试假失败两类先证伪再排逻辑：`build/test-results` 中途损坏（`NoSuchFileException:
   ...in-progress-results-generic.bin` + 成片 ClassNotFoundException）→ `rm -rf build/test-results`
   重跑即绿，不是代码问题。

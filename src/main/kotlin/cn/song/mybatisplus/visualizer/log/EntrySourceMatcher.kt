@@ -1,10 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
-import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
-import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
-import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.module.ModuleManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ModuleRootManager
@@ -109,47 +106,20 @@ object SourcePathResolver {
 }
 
 /**
- * 反查条目打开预览弹窗（M37.1）——与 [SqlLogPanel.openPreview] 同链路的独立实现
- * （gutter 无面板实例时可用；SqlLogPanel.openPreview 保持不动避免回归）。
+ * 反查条目打开预览弹窗（M37.1）——与 [SqlLogPanel.openPreview] / `HistorySqlLogPanel` 同链路。
+ *
+ * T-InParamRec：识别通道收编为 [LogSqlEntry.toPreviewResult] 统一入口（此前是 M37.1 时代的
+ * 独立识别/回退双分支实现，T-HistParam F3 统一识别通道时漏接本入口）——字面量恢复
+ * （`literalParamRecovery` 开关）与零参数/数量不匹配分流警告自此三口同源。
  */
 object LogEntryPreviewOpener {
 
     fun open(project: Project, entry: LogSqlEntry) {
         val state = PluginSettings.getInstance().state
-        val recognized = entry.toRecognizedPreview()
-        val result = if (!recognized.recognized) {
-            // 回退：restoredSql + 未解析警告（参数缺失/数量不匹配/纯静态 SQL）
-            val base = withTerminator(entry.restoredSql)
-            val sql = if (state.logFormatSql) SqlFormatter.format(base) else base
-            PreviewResult(
-                sql = sql,
-                compactSql = entry.restoredSql,
-                unresolvedParams = emptyList(),
-                paramTable = null,
-                wrapperType = null,
-                tableName = null,
-                warning = if ('?' in entry.restoredSql) {
-                    MpSqlVisualizerBundle.message("log.preview.unresolvedWarning")
-                } else {
-                    null
-                },
-            )
-        } else {
-            // 识别成功：参数回填形态（param1..N + 日志值预填 + 类型引号提示）
-            val base = withTerminator(recognized.sql)
-            val sql = if (state.logFormatSql) SqlFormatter.format(base) else base
-            PreviewResult(
-                sql = sql,
-                compactSql = withTerminator(recognized.compactSql),
-                unresolvedParams = recognized.unresolvedParams,
-                paramTable = null,
-                wrapperType = null,
-                tableName = null,
-                warning = null,
-                paramHints = recognized.paramHints,
-                initialParamValues = recognized.initialValues,
-            )
-        }
+        val result = entry.toPreviewResult(
+            formatSql = state.logFormatSql,
+            literalRecovery = state.literalParamRecovery,
+        )
         // M37.1：携带来源位置——预览面板可感知/回显 SQL 出处
         SqlPreviewService.showResult(project, result, sourceLocation = entry.sourceFile)
     }

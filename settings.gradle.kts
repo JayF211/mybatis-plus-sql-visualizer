@@ -2,6 +2,16 @@ import org.jetbrains.intellij.platform.gradle.extensions.intellijPlatform
 
 rootProject.name = "mybatis-plus-sql-visualizer"
 
+// 子项目统一收拢于 sub-projects/（目录约定：后续每个独立子项目一个同名目录）。
+// 采用组合构建（include + projectDir 重定向）而非 Cool Request 式完全独立构建——
+// 保住「buildPlugin 自动构建并内嵌 agent jar」的任务依赖链与增量检查。
+//
+// M56 T-M56-01：agent 字节码增强子项目（Java 8 字节码 fat jar，ASM shade relocate 自包含）。
+// 产物 mps-sql-agent.jar 经根项目 embedAgentJar 任务拷入主插件资源 resources/agent/，
+// 运行时解压落盘后经 attach loadAgent 挂载——不进插件 classloader，避免污染插件依赖面。
+include(":sql-visualizer-agent")
+project(":sql-visualizer-agent").projectDir = file("sub-projects/sql-visualizer-agent")
+
 // T-TestPerf2（2026-09-15）：build cache 关闭改落 settings 层。gradle.properties 的
 // org.gradle.caching=false 会被用户级 ~/.gradle/gradle.properties 的 caching=true 按 Gradle
 // 属性优先级（GRADLE_USER_HOME > 项目根）覆盖而空转——实证：冷启动分片构建出现
