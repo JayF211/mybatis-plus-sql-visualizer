@@ -34,6 +34,7 @@ rebel.xml
 build/
 !**/src/main/**/build/
 !**/src/test/**/build/
+!**/src/reloc/**/build/
 
 ### VS Code ###
 .vscode/
@@ -49,6 +50,7 @@ AGENTS
 .reasonix/
 reasonix.toml
 .workbuddy/
+.workbuddy-ai/
 
 ### Mac OS ###
 .DS_Store
@@ -63,7 +65,19 @@ reasonix.toml
 .zcode/
 out/
 
+### 演示 GIF 录制（record/ 只入库可复用脚本，中间产物不进仓库）###
+record/perf/
+record/**/__pycache__/
+
 ### Plugin Verifier（校验产物，不进仓库） ###
 dev-support/verify-target/
 verification-*/
 *.hprof
+
+### 本地凭据（严禁提交） ###
+gitee-token.*
+*.token
+.secrets/
+
+# task-queue 本地运行产物（journal/开关/归档），不进 git
+.tasks/

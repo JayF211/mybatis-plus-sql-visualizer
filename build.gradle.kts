@@ -145,6 +145,8 @@ intellijPlatform {
     if (gifRecord) {
         sandboxContainer = layout.buildDirectory.dir("MPSV-GifFresh")
     }
+    // T-SyncK2JMaster176：并行会话隔离（临时——收官提交还原本行）
+    sandboxContainer = layout.buildDirectory.dir("test-sandbox-k2jsync176")
 
     // T-M30：跨版本 API 兼容校验（官方推荐流程）——`./gradlew verifyPlugin` 对目标 IDE
     // 集合做字节码级检查（插件引用的类/方法在目标版本中必须存在）。目标 = 最低支持
@@ -173,10 +175,19 @@ intellijPlatform {
                 }
             }
         }
-        // T-M30.1：失败等级仅保留兼容性问题（IPGP 2.15+ 默认含 INTERNAL_API_USAGES 会失败）——
-        // `PluginManagerCore.getPlugin`（M28 更新功能定位已装插件）为平台 Internal API，
-        // 无公共替代（官方文档即此用法），刻意使用；报告仍生成、问题仍可见。
-        failureLevel = listOf(FailureLevel.COMPATIBILITY_PROBLEMS)
+        // T-M30.1：失败等级——IPGP 2.15+ 默认含 INTERNAL_API_USAGES 会失败，本项目
+        // `PluginManagerCore.getPlugin`（M28 更新功能定位已装插件）为平台 Internal API 且无公共替代
+        // （官方文档即此用法），刻意使用；报告仍生成、问题仍可见。
+        // T-ReleasePerf-01（2026-09-15）：本任务降级为「报告 + 弃用清单生成器」——兼容判定交 verifyGate。
+        // 依据（javap 反编译 IPGP 2.18.1 VerifyPluginTask，证据可复现）：
+        //   ① getOptions() 本身无缺陷，按 getOffline()/getIgnoredProblemsFile() 正确拼 CLI 参数；
+        //   ② 但 verifyOutput() → collectProblems() 的判定**完全基于控制台文本**：用
+        //      FailureLevel.getSectionHeading()（"Compatibility problems" 等小节标题）逐段切分、
+        //      pluginLinePattern = ^Plugin .*? against (\S+): 正则抓问题行，**从不读 -ignored-problems
+        //      命中的信息**——CLI 已豁免的问题在控制台仍逐行打印，于是被重新计数判失败。
+        //      这正是 dev 分支实测「同输入一次过一次挂」的机制（三轮实证）。
+        // 保留除 COMPATIBILITY_PROBLEMS 外的全部等级（当前均 0 命中，三份 verdict 实证）。
+        failureLevel = FailureLevel.entries - setOf(FailureLevel.COMPATIBILITY_PROBLEMS)
     }
 }
 
@@ -188,6 +199,118 @@ tasks.named<VerifyPluginTask>("verifyPlugin") {
         "-Dhttps.proxyHost=127.0.0.1",
         "-Dhttps.proxyPort=7890"
     )
+    // T-ReleasePerf-01（P0-1）：离线化 + 豁免清单——本仓库此前只注入了代理，verifier 每个目标都要
+    // 联网解析该 IDE 的 bundled 插件集（daemon 日志实证：45 次运行 PluginDetailsCache
+    // hits=183/misses=64、单次 247 个插件解析），是 253/262 耗时波动的主因（历史 45 次三目标合计
+    // 最快 144s、中位 446s、最慢 740s，5 倍差）。-offline 只断 marketplace 解析，不改兼容性判定；
+    // 豁免清单只放行「永不可达」缺类（243 上 MCP 桩类型，作用域由 McpScopeSourceScanTest 守卫），
+    // 命中项在报告中仍如实留痕。
+    offline.set(true)
+    ignoredProblemsFile.set(layout.projectDirectory.file("dev-support/verifier-ignored-problems.txt"))
+}
+
+// T-ReleasePerf-05（P2-1）：权威兼容门禁——直驱 verifier-cli。
+// 为什么不让 IPGP 的 verifyPlugin 承担门禁（字节码实证见上方 failureLevel 处）：
+// 它按控制台小节标题重新计数问题行，不读 -ignored-problems 命中的豁免信息，且输出解析存在竞态
+// （dev 分支三轮实证：同输入一次过一次挂）。故门禁改由本任务直驱 CLI，判定只看退出码。
+// -offline：断 marketplace 元数据解析（历史 45 次运行里 253/262 耗时波动 138s~725s 的主因），
+//           不改兼容性判定；-ignored-problems：豁免清单见 dev-support/verifier-ignored-problems.txt。
+//
+// verifyOnly（T-ReleasePerf-04 / P1-2）：跳过 buildPlugin，直接对已存在的发行包做验证——
+// 改文案/文档后重验不必重打包（Jar 任务带 MPV-Build 时间戳，outputs.upToDateWhen{false} 恒重跑）。
+val verifyOnly = providers.gradleProperty("verifyOnly").orNull?.toBoolean() ?: false
+
+val verifyGate = tasks.register<JavaExec>("verifyGate") {
+    group = "verification"
+    description = "权威兼容门禁：verifier-cli 直驱（-offline + -ignored-problems；-PverifyIdes / -PverifyOnly）"
+    if (!verifyOnly) {
+        dependsOn("buildPlugin")
+    }
+    mainClass.set("com.jetbrains.pluginverifier.PluginVerifierMain")
+    // T-ReleasePerf-05：verifier 缓存 home 隔离——默认落在 build/verify-home，避开与其他 verify 会话
+    // 共享全局 ~/.pluginVerifier/extracted-plugins（Windows 文件锁互踩：2026-09-15 真实验证时
+    // 并行会话的 verify 占用该目录，forceRemoveDirectory 失败 exit 1；verifier 支持
+    // -Dplugin.verifier.home.dir 覆盖，javap PluginVerifierMain$verifierHomeDirectory$2 实证）。
+    // 代价=IDE 元数据缓存随 build 目录走，clean 后首次离线重建；IDE 发行本体在 gradle transforms 不受影响。
+    val verifyHome = layout.buildDirectory.dir("verify-home").get().asFile
+    jvmArgs("-Dplugin.verifier.home.dir=${verifyHome.absolutePath}")
+    // 全部路径在配置期解析为值（configuration cache 兼容：执行期不触达 project/layout）
+    val pluginVersion = providers.gradleProperty("version").get()
+    val reportsDir = layout.buildDirectory.dir("reports/pluginVerifierGate").get().asFile
+    val zipFile = layout.buildDirectory.file("distributions/mybatis-plus-sql-visualizer-$pluginVersion.zip").get().asFile
+    val ignoredFile = layout.projectDirectory.file("dev-support/verifier-ignored-problems.txt").asFile
+    val gradleUserHome = gradle.gradleUserHomeDir
+    // T-ReleasePerf-05：configuration cache 兼容——执行期 lambda 内**不得引用脚本对象**（gradle/providers）。
+    // 实测：lambda 里写 gradle.startParameter / providers.gradleProperty 会整段不可序列化（"cannot serialize
+    // Gradle script object references"），故在配置期捕获为普通值（startParameter 与属性值在配置期已确定）。
+    val invokedTaskNames = gradle.startParameter.taskNames
+    val verifyIdesProperty = providers.gradleProperty("verifyIdes").orNull
+    classpath(
+        gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
+            .walkTopDown().maxDepth(4)
+            .filter { it.isFile && it.name.matches(Regex("verifier-cli-.+-all\\.jar")) }
+            .firstOrNull() ?: error("verifier-cli jar 未在 gradle 缓存找到（先跑一次 verifyPlugin 重建缓存）"),
+    )
+    argumentProviders.add(CommandLineArgumentProvider {
+        val guh = gradleUserHome
+        fun ideDir(name: String): File =
+            guh.resolve("caches").listFiles()?.asSequence()
+                ?.filter { it.resolve("transforms").isDirectory }
+                ?.flatMap { ver -> ver.resolve("transforms").listFiles()?.asSequence() ?: emptySequence() }
+                ?.map { hash -> hash.resolve("transformed").resolve(name) }
+                ?.firstOrNull { it.isDirectory }
+                ?: error("IDE 发行目录 $name 未在 gradle 缓存 transforms 找到（先跑一次 verifyPlugin/构建一次对应平台）")
+
+        val ide243 = ideDir("ideaIU-2024.3.7.1-win")
+        val jbr = ide243.resolve("jbr").takeIf { it.isDirectory }
+            ?: error("243 发行版缺 jbr（-runtime-dir 必需）")
+        val verifyIdes = when {
+            invokedTaskNames.contains("verifySmoke") -> "smoke"
+            invokedTaskNames.contains("verifyMinimal") -> "minimal"
+            else -> verifyIdesProperty
+        }
+        val targets = when (verifyIdes) {
+            "smoke" -> listOf(ide243)
+            "minimal" -> listOf(ide243, ideDir("idea-2026.2.1-win"))
+            else -> listOf(ide243, ideDir("idea-2025.3.5-win"), ideDir("idea-2026.2.1-win"))
+        }
+        buildList {
+            add("check-plugin")
+            add("-offline")
+            add("-ignored-problems")
+            add(ignoredFile.absolutePath)
+            add("-verification-reports-dir")
+            add(reportsDir.absolutePath)
+            add("-runtime-dir")
+            add(jbr.absolutePath)
+            add("-verification-reports-formats")
+            add("plain,html")
+            add(zipFile.absolutePath)
+            targets.forEach { add(it.absolutePath) }
+        }
+    })
+    // 并发审计锚点：起止毫秒时间戳（与 testShardN 同款，便于事后核对链路时序）。
+    // 配置缓存约束：动作内只引用配置期已解析的值，辅助函数（walkTopDown 链）写在动作体内。
+    doFirst {
+        if (!zipFile.isFile) {
+            throw GradleException(
+                "-PverifyOnly=true 需要已存在的发行包：$zipFile 不存在。" +
+                    "先跑 ./gradlew buildPlugin 产出，或去掉 -PverifyOnly 走完整链路。",
+            )
+        }
+        logger.lifecycle("verifyGate START ${System.currentTimeMillis()} plugin=$zipFile")
+    }
+    doLast {
+        logger.lifecycle("verifyGate END ${System.currentTimeMillis()}")
+        val verdicts = reportsDir.walkTopDown()
+            .filter { it.name == "verification-verdict.txt" }
+            .sortedBy { it.path }
+            .toList()
+        if (verdicts.isEmpty()) {
+            logger.warn("verifyGate: 未找到 verification-verdict.txt，请检查 $reportsDir")
+        }
+        verdicts.forEach { logger.lifecycle("verifyGate verdict [${it.parentFile.parentFile.name}] ${it.readText().trim()}") }
+    }
 }
 
 kotlin {
@@ -237,8 +360,11 @@ tasks.withType<Test>().configureEach {
     }
     // 默认 test（含平台型测试）保持串行（maxParallelForks=1）：多 fork 共享默认 test 沙盒，
     // PersistentFS 互踩（2026-09-14 T-TestPerf-03 实证 testForks=4 成片 PersistentFSConnector
-    // 异常；分片任务注释同根因先例 191 失败）。安全并行走 testFast（纯逻辑桶）/ testShard1|2
-    // （独立沙盒双开），见下方 testFast 定义。
+    // 异常；分片任务注释同根因先例 191 失败）。安全并行走分片（./gradlew testShards 一命令，
+    // 各片独立沙盒并发执行），见下方 testShards 定义。
+    // T-TestPerf2：测试 JVM 堆可临时覆盖（Gradle Test 默认 maxHeapSize=512m），用法
+    // -PtestHeapSize=2g；缺省不动，是否转正由实测收益定（见 T-TestPerf2 计划 P9）。
+    providers.gradleProperty("testHeapSize").orNull?.let { maxHeapSize = it }
 }
 
 
@@ -318,6 +444,7 @@ tasks {
         })
     }
 
+
     // 本地清单测试集成见 dev-support/run-ide-local-manifest.sh（自动起/停 Python 服务器）
 
     // M18.2 变更说明修复（用户实测：插件详情页「最新变化」显示停留在 M12）——
@@ -331,7 +458,23 @@ tasks {
     // （内容为全系列累计）；转正时改为纯数字标题并将累计内容并入正式版块。
     patchPluginXml {
         changeNotes = """
-            <h2>v2026.9.14-beta.2</h2>
+            <h2>v2026.9.18-beta.3</h2>
+            <ul>
+                <li>JdbcTemplate 集合参数方括号误入 SQL 修复</li>
+                <li>日志原始时间记录与显示切换</li>
+                <li>日志列表搜索行号/时间 + 右键复制时间戳</li>
+                <li>JdbcTemplate 并发日志交错参数错挂修复</li>
+                <li>历史页时间戳格式跟随设置</li>
+                <li>批量错误报告合并为单个弹窗</li>
+                <li>增强捕获默认开启、脱敏默认关闭</li>
+                <li>增强捕获条目显示目标库与日志原始时间</li>
+                <li>增强捕获耗时与影响行数展示</li>
+                <li>增强捕获源码跳转定位修正</li>
+                <li>三条控制台日志链路并发分桶配对修复</li>
+                <li>日志列表新增「排序方式」选择器</li>
+                <li>SQL 历史页元信息顺序统一</li>
+            </ul>
+            <h2>v2026.9.14</h2>
             <ul>
                 <li>SQL 列表 CRUD 类型颜色标记</li>
                 <li>gutter 左键直接预览与最近执行反查</li>
@@ -343,6 +486,12 @@ tasks {
                 <li>实体类与数据库表右键生成 CRUD SQL</li>
                 <li>SQL 预览字段列表自动折叠</li>
                 <li>全选全不选双按钮合一为状态切换按钮</li>
+                <li>SQL 列表多选批量复制</li>
+                <li>多模块注入勾选选择</li>
+                <li>插件市场内部 API 整改</li>
+                <li>执行计划首点结果缺失修复</li>
+                <li>报告提交失败原因可见与多条错误合并上报</li>
+                <li>设置页子项顺序随语言漂移修复</li>
                 <li>SQL 转 Java 选类重渲染异常逃逸修复</li>
                 <li>MPJ 括号条件反向转换退化修复</li>
                 <li>262 预览控制台静默挂载失败修复</li>
@@ -488,15 +637,28 @@ tasks {
     }
 
     // T-VerifyPlugin：封装 verifyPlugin 三态验证为独立 task（方便 ./gradlew verifySmoke / verifyFull 调用）
+    // T-ReleasePerf-01（2026-09-15）：verifySmoke / verifyFull 改挂 verifyGate（权威门禁，口头 243 单目标、
+    // 全量三目标），verifyPlugin 退居报告生成器——详见上方 failureLevel 处的判定缺陷字节码实证。
     register("verifySmoke") {
         group = "verification"
-        description = "日常开发快速兼容冒烟（仅 243，约 1.5min，等同于 verifyPlugin -PverifyIdes=smoke）"
-        dependsOn("verifyPlugin")
+        description = "日常开发快速兼容冒烟（仅 243，等同 verifyGate -PverifyIdes=smoke）"
+        dependsOn("verifyGate")
     }
     register("verifyFull") {
         group = "verification"
-        description = "发布前全量验证（三版本 243+253+262，约 14min）"
-        dependsOn("verifyPlugin")
+        description = "发布前全量验证（三版本 243+253+262，权威门禁 verifyGate）"
+        dependsOn("verifyGate")
+    }
+
+    // T-ReleasePerf-02（P0-2）：发版链路一命令编排——按正确时序串行执行：
+    //   buildPlugin（出含 changeNotes 的最终产物）→ verifyGate（对该产物做三目标兼容门禁）
+    //   → testShards（对同一提交跑全量测试）。任一环失败即停（Gradle 依赖失败语义），
+    //   消除「门禁与测试并发抢 CPU + 门禁结论对被测代码时序空挂」两个问题。
+    // 用法：./gradlew releaseGate [-PverifyIdes=...] [-PverifyOnly=true]
+    register("releaseGate") {
+        group = "verification"
+        description = "发版链路一命令：buildPlugin → verifyGate（三目标兼容门禁）→ testShards（全量测试）"
+        dependsOn("buildPlugin", "verifyGate", "testShards")
     }
 
     // M28（内测通道改造）：生成更新清单 update/update.json（Gitee 抢先体验通道数据源）——
@@ -527,15 +689,35 @@ tasks {
     }
 }
 
-// 并行分片测试（2026-08-15 提速；2026-09-14 T-TestPerf-04 收编）：测试类自动分区 2 片。
-// 用法：双开终端各跑一片实现真并行（./gradlew testShard1 与 ./gradlew testShard2，同项目内
-// 多任务不并行，testShards 聚合只是串行兜底）；权威串行全量仍是 ./gradlew test。
+// 并行分片测试（2026-08-15 提速；2026-09-14 T-TestPerf-04 自动分区；2026-09-15 T-TestPerf2
+// 时长均衡分区 + 片数可配 + 一命令并行与聚合报告）。
+// 用法：./gradlew testShards 一命令即真并行（org.gradle.parallel=true，各片任务并发执行，
+// 并发实证与提速数据见 docs/开发计划/20260915-0238-T-TestPerf2 计划 §六）；串行权威全量
+// 仍是 ./gradlew test（对照口径保留）。
 // 前提：每片独立 sandbox 目录——多 worker 共享 .intellijPlatform/sandbox/.../system-test 会
 // PersistentFS 互踩损坏（实证：191 失败 + 卡死），分片隔离后无共享写点。
-// 包含清单为配置期扫描 src/test 自动分区（稳定哈希），新增测试类零维护；DB 集成三类只在 testDatabase。
+// 包含清单为配置期扫描 src/test 自动分区（时长权重贪心均衡，详见 testIde 块注释），
+// 新增测试类零维护自动进片；DB 集成三类只在 testDatabase。
 // M36.5.23：DB 集成测试默认 demo 项目路径（顶层求值，避免 task lambda 捕获 Project 破坏配置缓存）
 val mpDemoProjectDirDefault = rootProject.projectDir.parentFile
     .resolve("mybatis-plus-sql-visualizer-demo").absolutePath
+
+// T-TestPerf2：Gradle JUnit XML testsuite 根属性解析（只读文件头，避免大文件全读）与结果文件枚举。
+// 供配置期时长权重与 testShards 聚合报告两处复用；解析失败静默跳过（半截 XML 不挡分区）。
+fun parseTestSuiteAttrs(f: File): Map<String, String>? = runCatching {
+    val head = f.useLines { lines -> lines.take(8).joinToString("\n") }
+    val tag = head.substringAfter("<testsuite", "").substringBefore(">")
+    if (tag.isEmpty()) null
+    else Regex("([\\w.-]+)=\"([^\"]*)\"").findAll(tag).associate { it.groupValues[1] to it.groupValues[2] }
+}.getOrNull()
+
+fun listSuiteXmls(dir: File): List<File> =
+    dir.listFiles { f: File -> f.isFile && f.name.startsWith("TEST-") && f.name.endsWith(".xml") }?.toList() ?: emptyList()
+
+// T-TestPerf2：分片数，-PtestShardCount=N（默认 3，上限 6；6C12T 实测 3 片最优，2 片慢 ~40%）。
+// 顶层声明——分片注册（testIde 块内）与聚合报告（testShards 任务）两处共用。
+val testShardCount = providers.gradleProperty("testShardCount").orNull
+    ?.toIntOrNull()?.coerceIn(1, 6) ?: 3
 
 intellijPlatformTesting {
     // T-DynUpdate 热替换本地验证沙盒（配套 dev-support/hotswap-local-server.py 与
@@ -613,49 +795,112 @@ intellijPlatformTesting {
         }
     }
     testIde {
-        // T-TestPerf-04（2026-09-14）：分片包含清单自动分区——配置期扫描 src/test 测试源码
-        // 推导 FQCN，按类名稳定哈希（String.hashCode + floorMod，跨 JVM 确定）均分到各片。
-        // 旧手工白名单的「新增测试类默认不进分片」漂移陷阱根除，新类零维护自动进片。
+        // T-TestPerf-04（2026-09-14）分片包含清单自动分区 + T-TestPerf2（2026-09-15）时长均衡：
+        // 配置期扫描 src/test 推导 FQCN 全集（DB 集成三类仍只在 testDatabase，与默认 test 口径一致），
+        // 权重来自 build/test-results 下历史 XML（test/ 与 testShardN/ 全扫，同类取 mtime 最新——
+        // 串行与分片互相喂养）；无数据类取已知权重中位数，全新检出零数据时全体同权，
+        // 退化为按类名字典序贪心均分，仍确定性。贪心排序键 = (时长降序, 类名升序)，
+        // 同输入必得同分区——双开终端两进程与配置缓存复用前后结果一致。
+        // 配置缓存语义与类发现一致：新增测试类/时长变化在下一次配置失效后生效，短暂失衡不影响正确性。
+        // 片数：-PtestShardCount=N（默认 3）。旧类名哈希两片实测失衡 26%（157.9s/93.7s），
+        // 时长均衡两片 125.8s/125.8s——并行墙钟被重片拖死的问题根除（数据见 T-TestPerf2 计划 §二）。
+        // 单遍扫描测试源码：Triple(包名, 顶层测试类名列表, 原文)。类名从内容提取而非文件名——
+        // Kotlin 文件名≠类名合法（实证 CrudPreviewFlowAndTypesTest.kt 内是 class DbTypeQuoteHintTest，
+        // 3 用例曾被「文件名=FQCN」旧法漏掉，分片并集比串行少 3）；列 0 的 class 声明含 Kotlin/Java
+        // 常见修饰符；无顶层类声明时回退文件名（嵌套类套件等形态）。新增测试类零维护自动进片。
         // DB 集成三类仍只在 testDatabase 运行（与默认 test 的排除口径一致）。
         val dbIntegrationClasses = setOf(
             "cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest",
             "cn.song.mybatisplus.visualizer.execute.DataSourceSelectorIntegrationTest",
             "cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest",
         )
-        val discoveredTestClasses: List<String> = run {
-            val names = mutableListOf<String>()
-            file("src/test/kotlin").walkTopDown()
-                .filter { it.isFile && (it.name.endsWith("Test.kt") || it.name.endsWith("Test.java")) }
-                .forEach { f ->
-                    val pkg = Regex("""^\s*package\s+([\w.]+)""", RegexOption.MULTILINE)
-                        .find(f.readText())?.groupValues?.get(1) ?: return@forEach
-                    names += "$pkg.${f.name.substringBeforeLast('.')}"
-                }
-            names.filter { it !in dbIntegrationClasses }.sorted()
-        }
-        fun shardClasses(index: Int, shards: Int): List<String> =
-            discoveredTestClasses.filter { Math.floorMod(it.hashCode(), shards) == index }
-
-        register("testShard1") {
-            testFramework(TestFrameworkType.Platform)
-            sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/shard1"))
-            task {
-                // IPGP 只给默认 test 任务自动配置 sourceSets 输出，分片任务需补齐
-                testClassesDirs = sourceSets["test"].output.classesDirs
-                classpath = classpath + sourceSets["test"].output
-                filter {
-                    shardClasses(0, 2).forEach { includeTestsMatching(it) }
+        val testFileEntries: List<Triple<String, List<String>, String>> = file("src/test/kotlin").walkTopDown()
+            .filter { it.isFile && (it.name.endsWith("Test.kt") || it.name.endsWith("Test.java")) }
+            .map { f ->
+                val text = f.readText()
+                val pkg = Regex("""^\s*package\s+([\w.]+)""", RegexOption.MULTILINE)
+                    .find(text)?.groupValues?.get(1) ?: ""
+                val classNames = Regex(
+                    """(?m)^(?:public\s+|internal\s+|open\s+|abstract\s+|final\s+|data\s+|sealed\s+|annotation\s+)*class\s+(\w+)\b""",
+                ).findAll(text).mapNotNull { it.groupValues[1].takeIf { cn -> cn.endsWith("Test") } }.toList()
+                Triple(pkg, classNames.ifEmpty { listOf(f.name.substringBeforeLast('.')) }, text)
+            }.toList()
+        val discoveredTestClasses: List<String> = testFileEntries
+            .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
+            .filter { it !in dbIntegrationClasses }
+            .sorted()
+        // 时长权重表：discoveredTestClasses 全集覆盖（已知→实测秒数，未知→已知中位数）
+        val durationWeights: Map<String, Double> = run {
+            val resultDirs = sequenceOf(file("build/test-results/test")) +
+                (1..testShardCount).asSequence().map { file("build/test-results/testShard$it") }
+            val best = HashMap<String, Pair<Long, Double>>() // FQCN -> (mtime, seconds)
+            for (dir in resultDirs) {
+                if (!dir.isDirectory) continue
+                for (f in listSuiteXmls(dir)) {
+                    val attrs = parseTestSuiteAttrs(f) ?: continue
+                    val name = attrs["name"] ?: continue
+                    val time = attrs["time"]?.toDoubleOrNull() ?: continue
+                    val mtime = f.lastModified()
+                    val prev = best[name]
+                    if (prev == null || mtime >= prev.first) best[name] = mtime to time
                 }
             }
+            val known = best.values.map { it.second }.sorted()
+            val median = if (known.isEmpty()) 1.0 else known[known.size / 2]
+            discoveredTestClasses.associateWith { best[it]?.second ?: median }
         }
-        register("testShard2") {
-            testFramework(TestFrameworkType.Platform)
-            sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/shard2"))
-            task {
-                testClassesDirs = sourceSets["test"].output.classesDirs
-                classpath = classpath + sourceSets["test"].output
-                filter {
-                    shardClasses(1, 2).forEach { includeTestsMatching(it) }
+        // 机器级全局资源亲和（T-TestPerf2 补丁）：Windows 剪贴板全机唯一（WClipboard.openClipboard
+        // 互斥），并发分片 JVM 互抢 → cannot open system clipboard（2026-09-15 冷启动第一跑
+        // shard2 实证 1 例，假失败清单「剪贴板 flake」的并行放大版）。测试源码含
+        // CopyPasteManager/systemClipboard 的类固定进第 1 片——片内串行天然无争用，不改任何测试代码；
+        // 与类发现同源单遍扫描，新增剪贴板用例零维护。
+        val machineGlobalAffinityClasses: Set<String> = testFileEntries
+            .filter { (_, _, text) -> text.contains("CopyPasteManager") || text.contains("systemClipboard") }
+            .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
+            .toSet()
+        // 贪心均衡：亲和类先固定第 1 片（discoveredTestClasses 已字典序，分区确定性不变），
+        // 其余逐类放入当前最轻片（并列取最小下标，minByOrNull 语义即确定性）
+        val shardAssignment: List<List<String>> = run {
+            val shards = List(testShardCount) { mutableListOf<String>() }
+            val loads = DoubleArray(testShardCount)
+            discoveredTestClasses.filter { it in machineGlobalAffinityClasses }.forEach { name ->
+                shards[0] += name
+                loads[0] += durationWeights[name] ?: 0.0
+            }
+            durationWeights.entries
+                .filter { it.key !in machineGlobalAffinityClasses }
+                .sortedWith(compareByDescending<Map.Entry<String, Double>> { it.value }.thenBy { it.key })
+                .forEach { entry ->
+                    val target = loads.indices.minByOrNull { loads[it] }!!
+                    shards[target] += entry.key
+                    loads[target] += entry.value
+                }
+            shards
+        }
+        logger.lifecycle(
+            "testShards: $testShardCount shards duration-balanced, loads=" +
+                shardAssignment.indices.joinToString(" ") { i ->
+                    "shard${i + 1}=%.1fs/%dclasses".format(
+                        shardAssignment[i].sumOf { durationWeights[it] ?: 0.0 },
+                        shardAssignment[i].size,
+                    )
+                }
+        )
+        for (i in 1..testShardCount) {
+            val idx = i - 1
+            register("testShard$i") {
+                testFramework(TestFrameworkType.Platform)
+                sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/shard$i"))
+                task {
+                    // IPGP 只给默认 test 任务自动配置 sourceSets 输出，分片任务需补齐
+                    testClassesDirs = sourceSets["test"].output.classesDirs
+                    classpath = classpath + sourceSets["test"].output
+                    filter {
+                        shardAssignment[idx].forEach { includeTestsMatching(it) }
+                    }
+                    // 并发审计锚点：起止毫秒时间戳，验证一命令多片是否真并行（T-TestPerf-05）
+                    doFirst { logger.lifecycle("testShard$i START ${System.currentTimeMillis()}") }
+                    doLast { logger.lifecycle("testShard$i END ${System.currentTimeMillis()}") }
                 }
             }
         }
@@ -744,9 +989,63 @@ intellijPlatformTesting {
 
 tasks.register("testShards") {
     group = "verification"
-    description = "分片全量测试（自动分区 2 片；真并行请双开终端各跑一片，本聚合任务为串行兜底）"
-    dependsOn("testShard1", "testShard2")
+    description =
+        "分片全量测试（时长均衡自动分区 $testShardCount 片，一命令真并行；-PtestShardCount 调片数）"
+    dependsOn(*(1..testShardCount).map { "testShard$it" }.toTypedArray())
+    // 聚合报告（T-TestPerf2）：分片跑完直接打印各片与总数四元组，与串行口径的计数 parity 目测即得。
+    // 配置缓存约束：结果目录在配置期解析为 File，doLast 只做文件 IO 不触达 Project/layout，
+    // 且解析辅助函数须定义在 doLast 体内——引用脚本顶层函数会整段不可序列化（实证报错）。
+    val shardResultDirs = (1..testShardCount).map { file("build/test-results/testShard$it") }
+    doLast {
+        fun suiteXmls(dir: File): List<File> =
+            dir.listFiles { f: File -> f.isFile && f.name.startsWith("TEST-") && f.name.endsWith(".xml") }?.toList() ?: emptyList()
+        fun suiteAttrs(f: File): Map<String, String>? = runCatching {
+            val head = f.useLines { lines -> lines.take(8).joinToString("\n") }
+            val tag = head.substringAfter("<testsuite", "").substringBefore(">")
+            if (tag.isEmpty()) null
+            else Regex("([\\w.-]+)=\"([^\"]*)\"").findAll(tag).associate { it.groupValues[1] to it.groupValues[2] }
+        }.getOrNull()
+        var total = 0
+        var failed = 0
+        var errored = 0
+        var skipped = 0
+        var execSeconds = 0.0
+        shardResultDirs.forEachIndexed { idx, dir ->
+            var n = 0
+            var f = 0
+            var e = 0
+            var s = 0
+            var t = 0.0
+            val xmls = suiteXmls(dir)
+            if (xmls.isEmpty()) {
+                logger.lifecycle("testShard${idx + 1}: $dir 下无结果 XML（该分片未跑？）")
+            }
+            for (xml in xmls) {
+                val attrs = suiteAttrs(xml) ?: continue
+                fun num(key: String) = attrs[key]?.toDoubleOrNull() ?: 0.0
+                n += num("tests").toInt()
+                f += num("failures").toInt()
+                e += num("errors").toInt()
+                s += num("skipped").toInt()
+                t += num("time")
+            }
+            logger.lifecycle(
+                "testShard${idx + 1}: tests=$n failures=$f errors=$e skipped=$s time=%.1fs".format(t),
+            )
+            total += n; failed += f; errored += e; skipped += s; execSeconds += t
+        }
+        logger.lifecycle(
+            "SHARD TOTAL: tests=$total failures=$failed errors=$errored skipped=$skipped " +
+                "(parity 口径 = 串行 ./gradlew test 计数；两者同出一份自动分区清单，DB 集成三类都在 testDatabase)"
+        )
+    }
 }
+
+// T-ReleasePerf-02（P0-2）：releaseGate 的显式串行顺序——dependsOn 只保证「都执行」不保证先后，
+// mustRunAfter 才钉死时序（buildPlugin → verifyGate → testShards）。放在 testShards 注册之后
+// （tasks.named 对未注册任务名会配置期报 not found）。放顶层避免 tasks{} 块内 receiver 类型问题。
+tasks.named<Task>("verifyGate") { mustRunAfter("buildPlugin") }
+tasks.named<Task>("testShards") { mustRunAfter("verifyGate") }
 
 // P-立项-05 真机验证：-Dmpvs.* 透传到测试 JVM（渲染导出 DialectRenderDumpTest / 外部实例入口）
 tasks.test {
@@ -765,12 +1064,29 @@ tasks.test {
     }
 }
 
+// ---------- M56 T-M56-01：agent fat jar 内嵌主插件资源（resources/agent/mps-sql-agent.jar） ----------
+// 运行时 AgentManager 解压落盘 + deleteOnExit 后经 attach loadAgent 挂载；
+// 落盘失败显式上报（禁静默吞）。跨项目任务经路径引用，配置缓存兼容。
+evaluationDependsOn(":sql-visualizer-agent")
+val agentEmbedDir = layout.buildDirectory.dir("agent-embed")
+val embedAgentJar = tasks.register<Copy>("embedAgentJar") {
+    from(tasks.getByPath(":sql-visualizer-agent:agentFatJar"))
+    into(agentEmbedDir.map { it.dir("agent") })
+    rename { "mps-sql-agent.jar" }
+}
+sourceSets.named("main") {
+    resources.srcDir(agentEmbedDir)
+}
+tasks.named("processResources") {
+    dependsOn(embedAgentJar)
+}
+
 // T-TestPerf-03（2026-09-14）实验结论：不引入纯逻辑并行分桶任务。
 // 三点实证：① 多 fork 并行平台型测试共享默认 test 沙盒 → PersistentFS 互踩成片失败；
 // ② 独立纯逻辑桶 task 可行（classpath 须复用默认 test 任务成品、排除须统一走 filter 机制——
 //    legacy exclude 与 filter 混用时 filter 优先级覆盖 exclude、159 条 exclude 全被忽略）；
 // ③ 但 2246 个纯逻辑分类用例中 68 个（forks=1 对照同败）隐性依赖同 worker JVM 里
 //    平台测试先建立的 Application/LaF 状态，脱离平台桶即红——作为快测任务会误报。
-// 结论：全量权威=串行 ./gradlew test；真并行=分片自动分区双开终端（见 testShard1/2）；
+// 结论：全量权威=串行 ./gradlew test；真并行=./gradlew testShards 一命令（T-TestPerf2 收编，
+// 时长均衡自动分区；旧「双开终端」用法仍可用但已非必需）；
 // 日常提速最大头=关闭 build cache 根除假失败整轮重跑（gradle.properties）。
-
