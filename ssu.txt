@@ -1,0 +1,458 @@
+Compiled from "SpeedSearchUtil.java"
+public final class com.intellij.ui.speedSearch.SpeedSearchUtil {
+  public static java.lang.String getDefaultHardSeparators();
+    Code:
+       0: ldc           #7                  // String \u001f
+       2: areturn
+
+  public static void applySpeedSearchHighlighting(javax.swing.JComponent, com.intellij.ui.SimpleColoredComponent, boolean, boolean);
+    Code:
+       0: aload_0
+       1: ifnonnull     8
+       4: iconst_0
+       5: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+       8: aload_1
+       9: ifnonnull     16
+      12: iconst_1
+      13: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+      16: aload_0
+      17: invokestatic  #9                  // Method com/intellij/ui/speedSearch/SpeedSearchSupply.getSupply:(Ljavax/swing/JComponent;)Lcom/intellij/ui/speedSearch/SpeedSearchSupply;
+      20: astore        4
+      22: aload         4
+      24: ifnonnull     28
+      27: return
+      28: aload         4
+      30: aload_1
+      31: iload_2
+      32: iload_3
+      33: invokestatic  #15                 // Method applySpeedSearchHighlighting:(Lcom/intellij/ui/speedSearch/SpeedSearchSupply;Lcom/intellij/ui/SimpleColoredComponent;ZZ)V
+      36: return
+
+  public static void applySpeedSearchHighlighting(com.intellij.ui.speedSearch.SpeedSearchSupply, com.intellij.ui.SimpleColoredComponent, boolean, boolean);
+    Code:
+       0: aload_0
+       1: ifnonnull     8
+       4: iconst_2
+       5: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+       8: aload_1
+       9: ifnonnull     16
+      12: iconst_3
+      13: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+      16: aload_1
+      17: iload_2
+      18: invokevirtual #21                 // Method com/intellij/ui/SimpleColoredComponent.getCharSequence:(Z)Ljava/lang/CharSequence;
+      21: invokeinterface #27,  1           // InterfaceMethod java/lang/CharSequence.toString:()Ljava/lang/String;
+      26: astore        4
+      28: aload_0
+      29: aload         4
+      31: invokevirtual #33                 // Method com/intellij/ui/speedSearch/SpeedSearchSupply.matchingFragments:(Ljava/lang/String;)Ljava/lang/Iterable;
+      34: astore        5
+      36: aload_1
+      37: aload         5
+      39: iload_3
+      40: invokestatic  #37                 // Method applySpeedSearchHighlighting:(Lcom/intellij/ui/SimpleColoredComponent;Ljava/lang/Iterable;Z)V
+      43: return
+
+  public static void applySpeedSearchHighlighting(com.intellij.ui.SimpleColoredComponent, java.lang.Iterable<? extends com.intellij.openapi.util.TextRange>, boolean);
+    Code:
+       0: aload_0
+       1: ifnonnull     8
+       4: iconst_4
+       5: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+       8: aload_1
+       9: ifnull        21
+      12: aload_1
+      13: invokeinterface #40,  1           // InterfaceMethod java/lang/Iterable.iterator:()Ljava/util/Iterator;
+      18: goto          22
+      21: aconst_null
+      22: astore_3
+      23: aload_3
+      24: ifnull        36
+      27: aload_3
+      28: invokeinterface #46,  1           // InterfaceMethod java/util/Iterator.hasNext:()Z
+      33: ifne          37
+      36: return
+      37: iload_2
+      38: iconst_1
+      39: invokestatic  #52                 // Method com/intellij/util/ui/UIUtil.getTreeBackground:(ZZ)Ljava/awt/Color;
+      42: astore        4
+      44: aload_0
+      45: invokevirtual #58                 // Method com/intellij/ui/SimpleColoredComponent.iterator:()Lcom/intellij/ui/SimpleColoredComponent$ColoredIterator;
+      48: astore        5
+      50: aload_3
+      51: invokeinterface #61,  1           // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      56: checkcast     #65                 // class com/intellij/openapi/util/TextRange
+      59: astore        6
+      61: aload         5
+      63: invokeinterface #67,  1           // InterfaceMethod com/intellij/ui/SimpleColoredComponent$ColoredIterator.hasNext:()Z
+      68: ifeq          260
+      71: aload         5
+      73: invokeinterface #70,  1           // InterfaceMethod com/intellij/ui/SimpleColoredComponent$ColoredIterator.next:()Ljava/lang/Object;
+      78: pop
+      79: aload         5
+      81: invokeinterface #71,  1           // InterfaceMethod com/intellij/ui/SimpleColoredComponent$ColoredIterator.getOffset:()I
+      86: istore        7
+      88: aload         5
+      90: invokeinterface #75,  1           // InterfaceMethod com/intellij/ui/SimpleColoredComponent$ColoredIterator.getEndOffset:()I
+      95: istore        8
+      97: aload         6
+      99: iload         7
+     101: iload         8
+     103: invokevirtual #78                 // Method com/intellij/openapi/util/TextRange.intersectsStrict:(II)Z
+     106: ifne          112
+     109: goto          61
+     112: aload         5
+     114: invokeinterface #82,  1           // InterfaceMethod com/intellij/ui/SimpleColoredComponent$ColoredIterator.getTextAttributes:()Lcom/intellij/ui/SimpleTextAttributes;
+     119: astore        9
+     121: new           #86                 // class com/intellij/ui/SimpleTextAttributes
+     124: dup
+     125: aload         4
+     127: aload         9
+     129: invokevirtual #88                 // Method com/intellij/ui/SimpleTextAttributes.getFgColor:()Ljava/awt/Color;
+     132: aconst_null
+     133: aload         9
+     135: invokevirtual #92                 // Method com/intellij/ui/SimpleTextAttributes.getStyle:()I
+     138: bipush        64
+     140: ior
+     141: invokespecial #95                 // Method com/intellij/ui/SimpleTextAttributes."<init>":(Ljava/awt/Color;Ljava/awt/Color;Ljava/awt/Color;I)V
+     144: astore        10
+     146: aload         6
+     148: invokevirtual #98                 // Method com/intellij/openapi/util/TextRange.getStartOffset:()I
+     151: iload         7
+     153: if_icmple     175
+     156: aload         5
+     158: aload         6
+     160: invokevirtual #98                 // Method com/intellij/openapi/util/TextRange.getStartOffset:()I
+     163: iload         7
+     165: isub
+     166: aload         9
+     168: invokeinterface #101,  3          // InterfaceMethod com/intellij/ui/SimpleColoredComponent$ColoredIterator.split:(ILcom/intellij/ui/SimpleTextAttributes;)I
+     173: istore        7
+     175: aload         6
+     177: invokevirtual #105                // Method com/intellij/openapi/util/TextRange.getEndOffset:()I
+     180: iload         8
+     182: if_icmpgt     227
+     185: aload         5
+     187: aload         6
+     189: invokevirtual #105                // Method com/intellij/openapi/util/TextRange.getEndOffset:()I
+     192: iload         7
+     194: isub
+     195: aload         10
+     197: invokeinterface #101,  3          // InterfaceMethod com/intellij/ui/SimpleColoredComponent$ColoredIterator.split:(ILcom/intellij/ui/SimpleTextAttributes;)I
+     202: istore        7
+     204: aload_3
+     205: invokeinterface #46,  1           // InterfaceMethod java/util/Iterator.hasNext:()Z
+     210: ifeq          260
+     213: aload_3
+     214: invokeinterface #61,  1           // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     219: checkcast     #65                 // class com/intellij/openapi/util/TextRange
+     222: astore        6
+     224: goto          245
+     227: aload         5
+     229: iload         8
+     231: iload         7
+     233: isub
+     234: aload         10
+     236: invokeinterface #101,  3          // InterfaceMethod com/intellij/ui/SimpleColoredComponent$ColoredIterator.split:(ILcom/intellij/ui/SimpleTextAttributes;)I
+     241: pop
+     242: goto          61
+     245: aload         6
+     247: iload         7
+     249: iload         8
+     251: invokevirtual #78                 // Method com/intellij/openapi/util/TextRange.intersectsStrict:(II)Z
+     254: ifne          146
+     257: goto          61
+     260: return
+
+  public static void appendFragmentsForSpeedSearch(javax.swing.JComponent, java.lang.String, com.intellij.ui.SimpleTextAttributes, boolean, com.intellij.ui.SimpleColoredComponent);
+    Code:
+       0: aload_0
+       1: ifnonnull     8
+       4: iconst_5
+       5: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+       8: aload_1
+       9: ifnonnull     17
+      12: bipush        6
+      14: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+      17: aload_2
+      18: ifnonnull     26
+      21: bipush        7
+      23: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+      26: aload         4
+      28: ifnonnull     36
+      31: bipush        8
+      33: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+      36: aload_0
+      37: invokestatic  #9                  // Method com/intellij/ui/speedSearch/SpeedSearchSupply.getSupply:(Ljavax/swing/JComponent;)Lcom/intellij/ui/speedSearch/SpeedSearchSupply;
+      40: astore        5
+      42: aload         5
+      44: ifnull        71
+      47: aload         5
+      49: aload_1
+      50: invokevirtual #33                 // Method com/intellij/ui/speedSearch/SpeedSearchSupply.matchingFragments:(Ljava/lang/String;)Ljava/lang/Iterable;
+      53: astore        6
+      55: aload         6
+      57: ifnull        71
+      60: aload         4
+      62: aload_1
+      63: aload         6
+      65: aload_2
+      66: iload_3
+      67: invokestatic  #106                // Method appendSpeedSearchColoredFragments:(Lcom/intellij/ui/SimpleColoredComponent;Ljava/lang/String;Ljava/lang/Iterable;Lcom/intellij/ui/SimpleTextAttributes;Z)V
+      70: return
+      71: aload         4
+      73: aload_1
+      74: aload_2
+      75: invokevirtual #110                // Method com/intellij/ui/SimpleColoredComponent.append:(Ljava/lang/String;Lcom/intellij/ui/SimpleTextAttributes;)V
+      78: return
+
+  public static void appendColoredFragmentForMatcher(java.lang.String, com.intellij.ui.SimpleColoredComponent, com.intellij.ui.SimpleTextAttributes, com.intellij.util.text.Matcher, java.awt.Color, boolean);
+    Code:
+       0: aload_0
+       1: ifnonnull     9
+       4: bipush        9
+       6: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+       9: aload_2
+      10: ifnonnull     18
+      13: bipush        10
+      15: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+      18: aload_3
+      19: instanceof    #114                // class com/intellij/psi/codeStyle/MinusculeMatcher
+      22: ifeq          38
+      25: ldc           #116                // String ide.highlight.match.in.selected.only
+      27: invokestatic  #118                // Method com/intellij/openapi/util/registry/Registry.is:(Ljava/lang/String;)Z
+      30: ifeq          45
+      33: iload         5
+      35: ifne          45
+      38: aload_1
+      39: aload_0
+      40: aload_2
+      41: invokevirtual #110                // Method com/intellij/ui/SimpleColoredComponent.append:(Ljava/lang/String;Lcom/intellij/ui/SimpleTextAttributes;)V
+      44: return
+      45: aload_3
+      46: checkcast     #114                // class com/intellij/psi/codeStyle/MinusculeMatcher
+      49: aload_0
+      50: invokevirtual #124                // Method com/intellij/psi/codeStyle/MinusculeMatcher.matchingFragments:(Ljava/lang/String;)Lcom/intellij/util/containers/FList;
+      53: astore        6
+      55: aload_1
+      56: aload         6
+      58: ifnull        65
+      61: iconst_1
+      62: goto          66
+      65: iconst_0
+      66: invokevirtual #127                // Method com/intellij/ui/SimpleColoredComponent.setDynamicSearchMatchHighlighting:(Z)V
+      69: aload         6
+      71: ifnull        132
+      74: aload_2
+      75: invokevirtual #88                 // Method com/intellij/ui/SimpleTextAttributes.getFgColor:()Ljava/awt/Color;
+      78: astore        7
+      80: aload_2
+      81: invokevirtual #92                 // Method com/intellij/ui/SimpleTextAttributes.getStyle:()I
+      84: istore        8
+      86: new           #86                 // class com/intellij/ui/SimpleTextAttributes
+      89: dup
+      90: iload         8
+      92: aload         7
+      94: invokespecial #131                // Method com/intellij/ui/SimpleTextAttributes."<init>":(ILjava/awt/Color;)V
+      97: astore        9
+      99: new           #86                 // class com/intellij/ui/SimpleTextAttributes
+     102: dup
+     103: aload         4
+     105: aload         7
+     107: aconst_null
+     108: iload         8
+     110: bipush        64
+     112: ior
+     113: invokespecial #95                 // Method com/intellij/ui/SimpleTextAttributes."<init>":(Ljava/awt/Color;Ljava/awt/Color;Ljava/awt/Color;I)V
+     116: astore        10
+     118: aload_1
+     119: aload_0
+     120: aload         6
+     122: aload         9
+     124: aload         10
+     126: invokestatic  #134                // Method appendColoredFragments:(Lcom/intellij/ui/SimpleColoredComponent;Ljava/lang/String;Ljava/lang/Iterable;Lcom/intellij/ui/SimpleTextAttributes;Lcom/intellij/ui/SimpleTextAttributes;)V
+     129: goto          138
+     132: aload_1
+     133: aload_0
+     134: aload_2
+     135: invokevirtual #110                // Method com/intellij/ui/SimpleColoredComponent.append:(Ljava/lang/String;Lcom/intellij/ui/SimpleTextAttributes;)V
+     138: return
+
+  public static void appendSpeedSearchColoredFragments(com.intellij.ui.SimpleColoredComponent, java.lang.String, java.lang.Iterable<? extends com.intellij.openapi.util.TextRange>, com.intellij.ui.SimpleTextAttributes, boolean);
+    Code:
+       0: aload_0
+       1: ifnonnull     9
+       4: bipush        11
+       6: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+       9: aload_1
+      10: ifnonnull     18
+      13: bipush        12
+      15: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+      18: aload_2
+      19: ifnonnull     27
+      22: bipush        13
+      24: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+      27: aload_3
+      28: ifnonnull     36
+      31: bipush        14
+      33: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+      36: aload_3
+      37: invokevirtual #88                 // Method com/intellij/ui/SimpleTextAttributes.getFgColor:()Ljava/awt/Color;
+      40: astore        5
+      42: iload         4
+      44: iconst_1
+      45: invokestatic  #52                 // Method com/intellij/util/ui/UIUtil.getTreeBackground:(ZZ)Ljava/awt/Color;
+      48: astore        6
+      50: aload_3
+      51: invokevirtual #92                 // Method com/intellij/ui/SimpleTextAttributes.getStyle:()I
+      54: istore        7
+      56: new           #86                 // class com/intellij/ui/SimpleTextAttributes
+      59: dup
+      60: iload         7
+      62: aload         5
+      64: invokespecial #131                // Method com/intellij/ui/SimpleTextAttributes."<init>":(ILjava/awt/Color;)V
+      67: astore        8
+      69: new           #86                 // class com/intellij/ui/SimpleTextAttributes
+      72: dup
+      73: aload         6
+      75: aload         5
+      77: aconst_null
+      78: iload         7
+      80: bipush        64
+      82: ior
+      83: invokespecial #95                 // Method com/intellij/ui/SimpleTextAttributes."<init>":(Ljava/awt/Color;Ljava/awt/Color;Ljava/awt/Color;I)V
+      86: astore        9
+      88: aload_0
+      89: aload_1
+      90: aload_2
+      91: aload         8
+      93: aload         9
+      95: invokestatic  #134                // Method appendColoredFragments:(Lcom/intellij/ui/SimpleColoredComponent;Ljava/lang/String;Ljava/lang/Iterable;Lcom/intellij/ui/SimpleTextAttributes;Lcom/intellij/ui/SimpleTextAttributes;)V
+      98: return
+
+  public static void appendColoredFragments(com.intellij.ui.SimpleColoredComponent, java.lang.String, java.lang.Iterable<? extends com.intellij.openapi.util.TextRange>, com.intellij.ui.SimpleTextAttributes, com.intellij.ui.SimpleTextAttributes);
+    Code:
+       0: new           #138                // class java/util/ArrayList
+       3: dup
+       4: invokespecial #140                // Method java/util/ArrayList."<init>":()V
+       7: astore        5
+       9: aload_2
+      10: invokeinterface #40,  1           // InterfaceMethod java/lang/Iterable.iterator:()Ljava/util/Iterator;
+      15: astore        6
+      17: aload         6
+      19: invokeinterface #46,  1           // InterfaceMethod java/util/Iterator.hasNext:()Z
+      24: ifeq          67
+      27: aload         6
+      29: invokeinterface #61,  1           // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      34: checkcast     #65                 // class com/intellij/openapi/util/TextRange
+      37: astore        7
+      39: aload         5
+      41: aload         7
+      43: aload_1
+      44: invokevirtual #141                // Method com/intellij/openapi/util/TextRange.substring:(Ljava/lang/String;)Ljava/lang/String;
+      47: aload         7
+      49: invokevirtual #98                 // Method com/intellij/openapi/util/TextRange.getStartOffset:()I
+      52: invokestatic  #145                // Method java/lang/Integer.valueOf:(I)Ljava/lang/Integer;
+      55: invokestatic  #151                // Method com/intellij/openapi/util/Pair.create:(Ljava/lang/Object;Ljava/lang/Object;)Lcom/intellij/openapi/util/Pair;
+      58: invokeinterface #157,  2          // InterfaceMethod java/util/List.add:(Ljava/lang/Object;)Z
+      63: pop
+      64: goto          17
+      67: iconst_0
+      68: istore        6
+      70: aload         5
+      72: invokeinterface #163,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      77: astore        7
+      79: aload         7
+      81: invokeinterface #46,  1           // InterfaceMethod java/util/Iterator.hasNext:()Z
+      86: ifeq          211
+      89: aload         7
+      91: invokeinterface #61,  1           // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      96: checkcast     #152                // class com/intellij/openapi/util/Pair
+      99: astore        8
+     101: aload         8
+     103: getfield      #164                // Field com/intellij/openapi/util/Pair.second:Ljava/lang/Object;
+     106: checkcast     #146                // class java/lang/Integer
+     109: invokevirtual #168                // Method java/lang/Integer.intValue:()I
+     112: iload         6
+     114: if_icmple     139
+     117: aload_0
+     118: aload_1
+     119: iload         6
+     121: aload         8
+     123: getfield      #164                // Field com/intellij/openapi/util/Pair.second:Ljava/lang/Object;
+     126: checkcast     #146                // class java/lang/Integer
+     129: invokevirtual #168                // Method java/lang/Integer.intValue:()I
+     132: invokevirtual #171                // Method java/lang/String.substring:(II)Ljava/lang/String;
+     135: aload_3
+     136: invokevirtual #110                // Method com/intellij/ui/SimpleColoredComponent.append:(Ljava/lang/String;Lcom/intellij/ui/SimpleTextAttributes;)V
+     139: aload_0
+     140: aload_1
+     141: aload         8
+     143: getfield      #164                // Field com/intellij/openapi/util/Pair.second:Ljava/lang/Object;
+     146: checkcast     #146                // class java/lang/Integer
+     149: invokevirtual #168                // Method java/lang/Integer.intValue:()I
+     152: aload         8
+     154: getfield      #164                // Field com/intellij/openapi/util/Pair.second:Ljava/lang/Object;
+     157: checkcast     #146                // class java/lang/Integer
+     160: invokevirtual #168                // Method java/lang/Integer.intValue:()I
+     163: aload         8
+     165: getfield      #176                // Field com/intellij/openapi/util/Pair.first:Ljava/lang/Object;
+     168: checkcast     #172                // class java/lang/String
+     171: invokevirtual #179                // Method java/lang/String.length:()I
+     174: iadd
+     175: invokevirtual #171                // Method java/lang/String.substring:(II)Ljava/lang/String;
+     178: aload         4
+     180: invokevirtual #110                // Method com/intellij/ui/SimpleColoredComponent.append:(Ljava/lang/String;Lcom/intellij/ui/SimpleTextAttributes;)V
+     183: aload         8
+     185: getfield      #164                // Field com/intellij/openapi/util/Pair.second:Ljava/lang/Object;
+     188: checkcast     #146                // class java/lang/Integer
+     191: invokevirtual #168                // Method java/lang/Integer.intValue:()I
+     194: aload         8
+     196: getfield      #176                // Field com/intellij/openapi/util/Pair.first:Ljava/lang/Object;
+     199: checkcast     #172                // class java/lang/String
+     202: invokevirtual #179                // Method java/lang/String.length:()I
+     205: iadd
+     206: istore        6
+     208: goto          79
+     211: iload         6
+     213: aload_1
+     214: invokevirtual #179                // Method java/lang/String.length:()I
+     217: if_icmpge     231
+     220: aload_0
+     221: aload_1
+     222: iload         6
+     224: invokevirtual #182                // Method java/lang/String.substring:(I)Ljava/lang/String;
+     227: aload_3
+     228: invokevirtual #110                // Method com/intellij/ui/SimpleColoredComponent.append:(Ljava/lang/String;Lcom/intellij/ui/SimpleTextAttributes;)V
+     231: return
+
+  public static void applySpeedSearchHighlightingFiltered(javax.swing.JTree, java.lang.Object, com.intellij.ui.SimpleColoredComponent, boolean, boolean);
+    Code:
+       0: aload_0
+       1: ifnonnull     9
+       4: bipush        15
+       6: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+       9: aload_1
+      10: ifnonnull     18
+      13: bipush        16
+      15: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+      18: aload_2
+      19: ifnonnull     27
+      22: bipush        17
+      24: invokestatic  #285                // Method $$$reportNull$$$0:(I)V
+      27: aload_0
+      28: invokestatic  #9                  // Method com/intellij/ui/speedSearch/SpeedSearchSupply.getSupply:(Ljavax/swing/JComponent;)Lcom/intellij/ui/speedSearch/SpeedSearchSupply;
+      31: astore        5
+      33: aload         5
+      35: ifnull        55
+      38: aload         5
+      40: aload_1
+      41: invokevirtual #185                // Method com/intellij/ui/speedSearch/SpeedSearchSupply.isObjectFilteredOut:(Ljava/lang/Object;)Z
+      44: ifne          55
+      47: aload_0
+      48: aload_2
+      49: iload_3
+      50: iload         4
+      52: invokestatic  #188                // Method applySpeedSearchHighlighting:(Ljavax/swing/JComponent;Lcom/intellij/ui/SimpleColoredComponent;ZZ)V
+      55: return
+}

@@ -32,6 +32,7 @@ import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.SearchTextField
 import com.intellij.ui.SimpleColoredComponent
+import com.intellij.ui.speedSearch.SpeedSearchUtil
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
@@ -1699,10 +1700,14 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
         }
         // SQL 高亮行在下（T-ListMode：行数随显示模式伸缩）；选中态保留 SQL 高亮原色
         ensureSqlLineCount(if (lineFragments != null) lineFragments.size else 1)
+        // T-UiNative speed search 高亮：对元信息行与各 SQL 行施加匹配片段高亮（平台 applySpeedSearchHighlighting
+        // 依 supply.matchingFragments 精确命中区间；fragments 文本已在上面 append，此处在片段级叠加 STYLE_SEARCH_MATCH）
+        list?.let { l -> SpeedSearchUtil.applySpeedSearchHighlighting(l, metaLine, false, useSelectionFill) }
         sqlLinePool.forEachIndexed { i, comp ->
             comp.foreground = fg
             comp.clear()
             lineFragments?.getOrNull(i)?.forEach { f -> comp.append(f.text, f.attributes) }
+            list?.let { l -> SpeedSearchUtil.applySpeedSearchHighlighting(l, comp, false, useSelectionFill) }
         }
         // T-ClickPreview：不设 toolTipText（悬停逐行弹气泡 = 条目多时卡顿根因），预览改单击触发
         return this

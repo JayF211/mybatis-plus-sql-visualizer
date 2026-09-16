@@ -24,6 +24,7 @@ import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.JBColor
 import com.intellij.ui.ListSpeedSearch
 import com.intellij.ui.SimpleColoredComponent
+import com.intellij.ui.speedSearch.SpeedSearchUtil
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
@@ -291,7 +292,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         // 仍不生效的兜底；标记防重复装——平台 installOn 重复挂载同一列表不幂等）
         if (!sqlSpeedSearchInstalled) {
             sqlSpeedSearchInstalled = true
-            ListSpeedSearch.installOn(sqlList) { entry -> withTerminator(entry.restoredSql) }
+            ListSpeedSearch.installOn(sqlList) {
+                entry -> withTerminator(entry.restoredSql)
+            }
         }
         refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = true）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.sql")
@@ -320,7 +323,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         // 此同步路径 headless 下 CardLayout 不见真机 showing，marker 判定可能不触发，故统一补装）
         if (!sqlSpeedSearchInstalled) {
             sqlSpeedSearchInstalled = true
-            ListSpeedSearch.installOn(sqlList) { entry -> withTerminator(entry.restoredSql) }
+            ListSpeedSearch.installOn(sqlList) {
+                entry -> withTerminator(entry.restoredSql)
+            }
         }
         refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = true）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.sql")
@@ -775,10 +780,13 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
         }
         // T-ListMode：SQL 行数随显示模式伸缩；T-ClickPreview 不设 toolTipText（预览改单击触发）
         ensureSqlLineCount(if (lineFragments != null) lineFragments.size else 1)
+        // T-UiNative speed search 高亮：对元信息行与各 SQL 行施加匹配片段高亮（同主日志列表）
+        list?.let { l -> SpeedSearchUtil.applySpeedSearchHighlighting(l, metaLine, false, useSelectionFill) }
         sqlLinePool.forEachIndexed { i, comp ->
             comp.foreground = fg
             comp.clear()
             lineFragments?.getOrNull(i)?.forEach { f -> comp.append(f.text, f.attributes) }
+            list?.let { l -> SpeedSearchUtil.applySpeedSearchHighlighting(l, comp, false, useSelectionFill) }
         }
         return this
     }
