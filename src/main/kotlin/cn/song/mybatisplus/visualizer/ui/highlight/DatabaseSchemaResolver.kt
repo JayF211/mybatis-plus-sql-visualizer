@@ -126,7 +126,9 @@ object DatabaseSchemaResolver {
     /** 负命中是否在 TTL 内（过期条目惰性移除，不留定时器）。 */
     private fun isNegativeCached(ds: Any, cacheKey: String): Boolean {
         val stamped = synchronized(negativeCache) { negativeCache[ds]?.get(cacheKey) } ?: return false
-        if (System.currentTimeMillis() - stamped <= negativeTtlMs) return true
+        // 严格小于：TTL=0 语义=立即过期（同一毫秒内也不新鲜）——负缓存 TTL 测试的确定性
+        // 依赖此边界（<= 形态下同毫秒调用判新鲜，分片负载下曾致 flake expected 2 was 1）
+        if (System.currentTimeMillis() - stamped < negativeTtlMs) return true
         synchronized(negativeCache) { negativeCache[ds]?.remove(cacheKey) }
         return false
     }
