@@ -27,6 +27,7 @@ class AgentManagerFallbackTest : BasePlatformTestCase() {
         manager.shutdownAll()
         PluginSettings.getInstance().state.enhancedCaptureEnabled = false
         PluginSettings.getInstance().state.enhancedCaptureConfirmed = false
+        PluginSettings.getInstance().state.enhancedCaptureConsentCooldownUntil = 0
         super.tearDown()
     }
 
@@ -47,6 +48,83 @@ class AgentManagerFallbackTest : BasePlatformTestCase() {
             "确认默认未达成（默认开启态下首次运行项目弹一次注入确认，知情同意不放宽）",
             fresh.enhancedCaptureConfirmed,
         )
+    }
+
+    // ---------- T-PS4-01：确认流触发面收窄 + 拒绝冷却（性能第六轮「高」级发现） ----------
+
+    fun test非主配置启动_未确认时静默跳过确认弹窗() {
+        val state = PluginSettings.getInstance().state
+        state.enhancedCaptureEnabled = true
+        state.enhancedCaptureConfirmed = false
+        state.enhancedCaptureConsentCooldownUntil = 0
+        var asked = false
+        val saved = manager.consentProvider
+        manager.consentProvider = { asked = true; false }
+        try {
+            // HTTP 请求/测试/profiler 等非模块型进程（mainLaunch=false）：不弹确认
+            manager.onProcessAppeared(FakeProcessHandler(nativePid = 424242L), mainLaunch = false)
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            assertFalse("非主配置启动不得弹确认弹窗", asked)
+        } finally {
+            manager.consentProvider = saved
+        }
+    }
+
+    fun test拒绝后进入冷卄_冷卄期内主配置启动零弹窗() {
+        val state = PluginSettings.getInstance().state
+        state.enhancedCaptureEnabled = true
+        state.enhancedCaptureConfirmed = false
+        // 拒绝后的冷卄截止（未来 1 小时）
+        state.enhancedCaptureConsentCooldownUntil = System.currentTimeMillis() + 3_600_000L
+        var asked = false
+        val saved = manager.consentProvider
+        manager.consentProvider = { asked = true; false }
+        try {
+            manager.onProcessAppeared(FakeProcessHandler(nativePid = 424242L))
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            assertFalse("冷卄期内不得再弹确认", asked)
+            assertFalse("冷卄不改变确认门槛（confirmed 仍未置位）", state.enhancedCaptureConfirmed)
+        } finally {
+            manager.consentProvider = saved
+        }
+    }
+
+    fun test冷卄过期后_主配置启动再次弹确认() {
+        val state = PluginSettings.getInstance().state
+        state.enhancedCaptureEnabled = true
+        state.enhancedCaptureConfirmed = false
+        // 冷卄已过去（截止时刻在过去）
+        state.enhancedCaptureConsentCooldownUntil = System.currentTimeMillis() - 1_000L
+        var asked = false
+        val saved = manager.consentProvider
+        manager.consentProvider = { asked = true; false }
+        try {
+            manager.onProcessAppeared(FakeProcessHandler(nativePid = 424242L))
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            assertTrue("冷卄过期后主配置启动应再次询问", asked)
+            // 再拒绝 → 冷卄重新起算（拒绝即进冷卄）
+            assertTrue("拒绝后冷卄截止应设到未来", state.enhancedCaptureConsentCooldownUntil > System.currentTimeMillis())
+        } finally {
+            manager.consentProvider = saved
+        }
+    }
+
+    fun test同意后清冷却_confirmed持久化() {
+        val state = PluginSettings.getInstance().state
+        state.enhancedCaptureEnabled = true
+        state.enhancedCaptureConfirmed = false
+        // 冷卄已过期（弹窗可达）；同意后应清零
+        state.enhancedCaptureConsentCooldownUntil = System.currentTimeMillis() - 1_000L
+        val saved = manager.consentProvider
+        manager.consentProvider = { true }
+        try {
+            manager.onProcessAppeared(FakeProcessHandler(nativePid = 999_999_999L))
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            assertTrue("同意后确认持久化", state.enhancedCaptureConfirmed)
+            assertEquals("同意即清冷卄", 0L, state.enhancedCaptureConsentCooldownUntil)
+        } finally {
+            manager.consentProvider = saved
+        }
     }
 
     fun test已开启未确认_首次挂载请求确认_拒绝则不注入() {

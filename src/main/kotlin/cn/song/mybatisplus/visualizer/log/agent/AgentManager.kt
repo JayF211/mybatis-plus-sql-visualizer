@@ -47,6 +47,12 @@ class AgentManager(private val project: Project) : Disposable {
         private val LOG = Logger.getInstance(AgentManager::class.java)
         const val AGENT_RESOURCE = "/agent/mps-sql-agent.jar"
 
+        /** T-PS4-01：拒绝冷却窗（24h——拒绝后冷却期内不再弹确认；冷却只作用于弹窗频率不改变同意门槛）。 */
+        const val CONSENT_COOLDOWN_MS = 24 * 60 * 60 * 1000L
+
+        /** T-PS4-03：挂载去抖窗（等应用初始化热点；同 pid 窗内重复排队跳过）。 */
+        const val DEBOUNCE_MS = 3_000L
+
         fun getInstance(project: Project): AgentManager = project.getService(AgentManager::class.java)
     }
 
@@ -83,11 +89,21 @@ class AgentManager(private val project: Project) : Disposable {
                 if (!state.enhancedCaptureEnabled) {
                     executor.execute { shutdownAll() }
                 } else {
+                    // T-PS4-01：off→on 沿重置拒绝冷却——用户显式重新表达意愿，下次启动即可再问
+                    if (!lastKnownEnabled) {
+                        state.enhancedCaptureConsentCooldownUntil = 0
+                        LOG.info("[T-PS4-01] 增强捕获重新开启——拒绝冷却已重置")
+                    }
                     executor.execute { pushDesensitize(state.enhancedCaptureDesensitize) }
                 }
+                lastKnownEnabled = state.enhancedCaptureEnabled
             },
         )
     }
+
+    /** 设置沿检测：上次设置事件时的增强捕获开关（T-PS4-01 冷却重置的 off→on 沿判定）。 */
+    @Volatile
+    private var lastKnownEnabled: Boolean = PluginSettings.getInstance().state.enhancedCaptureEnabled
 
     // ---------- 挂载入口 ----------
 
@@ -98,14 +114,28 @@ class AgentManager(private val project: Project) : Disposable {
      * 默认开（2026-09-16 定案）后的确认闸门：enabled 默认 true 而 confirmed 默认 false——
      * 若沿用「仅设置页勾选时弹确认」，默认勾上的开关将永不弹框、永不 attach（死开关）。
      * 故未确认时在**首次挂载请求**处征求一次知情同意（EDT 弹框），同意后继续挂载。
+     *
+     * T-PS4-01（性能第六轮「高」级发现）：①触发面收窄——确认弹窗仅对主配置启动触发
+     * （[mainLaunch]，复用 isModuleBasedLaunch 判定），HTTP 请求/测试/profiler 等非模块型
+     * 进程静默跳过（此前每进程启动挨一次模态弹窗）；②拒绝冷却——拒绝后 24h 内不再弹
+     * （[CONSENT_COOLDOWN_MS]），设置页关闭再开启增强捕获时重置（保留改主意入口）。
+     * 已 confirmed 的 attach 链路维持现状（增强捕获主通道语义不变）。
      */
-    fun onProcessAppeared(processHandler: Any?) {
+    fun onProcessAppeared(processHandler: Any?, mainLaunch: Boolean = true) {
         if (!isEnhancedEnabled()) {
             LOG.info("onProcessAppeared: 增强未开启（enabled=${PluginSettings.getInstance().state.enhancedCaptureEnabled}, " +
                 "disposed=${project.isDisposed}）——跳过挂载")
             return
         }
         if (!isEnhancedConfirmed()) {
+            if (!mainLaunch) {
+                LOG.info("onProcessAppeared: 增强未确认且非主配置启动（HTTP/测试/profiler 等）——静默跳过确认弹窗")
+                return
+            }
+            if (System.currentTimeMillis() < consentCooldownUntil()) {
+                LOG.info("onProcessAppeared: 拒绝冷却期内（剩余 ${consentCooldownUntil() - System.currentTimeMillis()}ms）——不再弹确认")
+                return
+            }
             LOG.info("onProcessAppeared: 增强已开启但未确认注入——请求确认后挂载")
             requestConsentThenAttach(processHandler)
             return
@@ -113,8 +143,12 @@ class AgentManager(private val project: Project) : Disposable {
         doAttachAsync(processHandler)
     }
 
+    /** 拒绝冷却截止时间戳（0=无冷却；设置字段持久化，重开 IDE 冷却仍有效）。 */
+    internal fun consentCooldownUntil(): Long =
+        PluginSettings.getInstance().state.enhancedCaptureConsentCooldownUntil
+
     /**
-     * 首次挂载确认（EDT 弹一次；同意→置 confirmed 并继续挂载，拒绝→本次不注入）。
+     * 首次挂载确认（EDT 弹一次；同意→置 confirmed 并继续挂载，拒绝→进 24h 冷却本次不注入）。
      * 确认结果持久化（重开不再弹）；headless 由 [consentProvider] 默认实现直接拒绝。
      */
     private fun requestConsentThenAttach(processHandler: Any?) {
@@ -126,12 +160,16 @@ class AgentManager(private val project: Project) : Disposable {
                 LOG.warn("requestConsentThenAttach: 确认框异常——按不同意处理", t)
                 false
             }
+            val state = PluginSettings.getInstance().state
             if (accepted) {
-                PluginSettings.getInstance().state.enhancedCaptureConfirmed = true
+                state.enhancedCaptureConfirmed = true
+                state.enhancedCaptureConsentCooldownUntil = 0
                 LOG.info("requestConsentThenAttach: 用户同意注入——继续挂载")
                 doAttachAsync(processHandler)
             } else {
-                LOG.info("requestConsentThenAttach: 用户未同意注入——本次不挂载（下次运行再询问）")
+                // T-PS4-01：拒绝进冷却——冷却只影响弹窗频率，下次主配置启动过了冷却窗仍会再问
+                state.enhancedCaptureConsentCooldownUntil = System.currentTimeMillis() + CONSENT_COOLDOWN_MS
+                LOG.info("requestConsentThenAttach: 用户未同意注入——本次不挂载，${CONSENT_COOLDOWN_MS / 3_600_000}h 内不再询问")
             }
         }
     }
@@ -145,7 +183,14 @@ class AgentManager(private val project: Project) : Disposable {
         }
     }
 
-    /** 实际挂载（后台线程：resolvePid → 3s 去抖 → attach）。 */
+    /**
+     * 实际挂载（后台线程：resolvePid → 3s 去抖 → attach）。
+     *
+     * T-PS4-03：pendingPids 去抖真实化——同 pid 3s 内重复排队（快速重启/重复 Run）直接跳过
+     * （兑现 [pendingPids] 声明处注释；此前声明未用，同 pid 每次都在单线程池里串行等待 3s）。
+     * 单线程池串行性质维持：跨 pid 的 3s sleep 依次排队（等应用初始化的合理去抖，accept
+     * 超时 10s 亦串行不放大）；pendingPids 条目按 pid 累积（进程数量级，可忽略）。
+     */
     private fun doAttachAsync(processHandler: Any?) {
         executor.execute {
             try {
@@ -154,9 +199,16 @@ class AgentManager(private val project: Project) : Disposable {
                     LOG.warn("onProcessAppeared: resolvePid 失败（handler=${processHandler?.javaClass?.name}）——跳过挂载")
                     return@execute
                 }
+                // 去抖真实化：3s 内同 pid 已排队/尝试过 → 跳过（put 返回旧值即上次尝试时刻）
+                val now = System.currentTimeMillis()
+                val lastAttempt = pendingPids.put(pid, now)
+                if (lastAttempt != null && now - lastAttempt < DEBOUNCE_MS) {
+                    LOG.info("onProcessAppeared: pid=$pid ${now - lastAttempt}ms 内已尝试——去抖跳过")
+                    return@execute
+                }
                 LOG.info("onProcessAppeared: 目标 pid=$pid，3s 去抖后挂载")
                 // 去抖 3s：等应用初始化热点过去（驱动已加载场景 retransform 直达；未加载场景 transformer 兜底）
-                Thread.sleep(3000)
+                Thread.sleep(DEBOUNCE_MS)
                 attachToPid(pid)
             } catch (t: Throwable) {
                 LOG.warn("onProcessAppeared: 惰性 attach 失败（非致命，桥继续捕获）", t)
@@ -206,17 +258,27 @@ class AgentManager(private val project: Project) : Disposable {
         return AgentSession(project, pid, socket, onStateChange = { updateOnline() })
     }
 
-    /** 解压 agent jar 到临时目录（deleteOnExit；失败 null 由调用方显式上报——禁静默吞）。 */
-    private fun extractAgentJar(): File? = runCatching {
-        val stream = javaClass.getResourceAsStream(AGENT_RESOURCE)
-            ?: error("资源 $AGENT_RESOURCE 缺失（构建未内嵌 agent jar）")
-        stream.use { input ->
-            val out = File.createTempFile("mps-sql-agent", ".jar")
-            out.deleteOnExit()
-            out.outputStream().use { input.copyTo(it) }
-            out
-        }
-    }.getOrNull()
+    /**
+     * 解压 agent jar 到临时目录（T-PS4-03：提取一次缓存到服务字段复用——每进程 attach 不再
+     * 重复解压，deleteOnExit 仅首次提取登记一次；失败 null 由调用方显式上报——禁静默吞）。
+     */
+    @Volatile
+    private var cachedAgentJar: File? = null
+
+    private fun extractAgentJar(): File? {
+        cachedAgentJar?.takeIf { it.isFile }?.let { return it }
+        return runCatching {
+            val stream = javaClass.getResourceAsStream(AGENT_RESOURCE)
+                ?: error("资源 $AGENT_RESOURCE 缺失（构建未内嵌 agent jar）")
+            stream.use { input ->
+                val out = File.createTempFile("mps-sql-agent", ".jar")
+                out.deleteOnExit()
+                out.outputStream().use { output -> input.copyTo(output) }
+                cachedAgentJar = out
+                out
+            }
+        }.getOrNull()
+    }
 
     /**
      * attach + loadAgent（端口下发）+ accept 握手。
@@ -271,7 +333,12 @@ class AgentManager(private val project: Project) : Disposable {
     private fun sweepOffline() {
         val dead = sessions.filter { !it.alive }
         if (dead.isNotEmpty()) {
-            dead.forEach { it.close() }
+            dead.forEach {
+                it.close()
+                // T-PS4-03：死会话顺带清 pid 表——进程已死，pid 表残留会让「OS 复用同 pid 的
+                // 新进程」被幂等表误判已挂载而漏挂
+                attachedPids.remove(it.pid)
+            }
             sessions.removeAll(dead.toSet())
             updateOnline()
         }

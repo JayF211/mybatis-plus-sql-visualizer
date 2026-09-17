@@ -327,6 +327,16 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var executionTimeoutSeconds: Int = DEFAULT_EXECUTION_TIMEOUT_SECONDS,
 
+        // ---------- T-PS4-01：增强捕获确认拒绝冷却 ----------
+
+        /**
+         * 注入确认拒绝冷却截止时间戳（毫秒）：用户拒绝增强捕获注入后，冷却窗内（24h，
+         * [cn.song.mybatisplus.visualizer.log.agent.AgentManager.CONSENT_COOLDOWN_MS]）同项目
+         * 进程启动不再弹确认（拒绝不持久化的补偿——此前每进程启动都挨一次模态弹窗）。
+         * 关闭再开启增强捕获（设置页 off→on 沿）时清零重置。0=无冷却。
+         */
+        var enhancedCaptureConsentCooldownUntil: Long = 0,
+
         // ---------- F-6 拦截器模拟增强（TenantLine / DynamicTableName / DataPermission） ----------
 
         /**

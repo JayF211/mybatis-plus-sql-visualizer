@@ -164,7 +164,10 @@ internal fun sqlFingerprint(sql: String): String {
  * 大小写与分号不动——COUNT 前缀判定、达梦带引号标识符大小写均不受影响。
  */
 internal fun normalizeSqlWhitespace(sql: String): String =
-    sql.trim().replace(Regex("""\s+"""), " ")
+    sql.trim().replace(WHITESPACE_RUN_REGEX, " ")
+
+/** T-PS4-04：空白折叠正则提文件级常量（dedupeKey lazy/stampLogTime/桥嗅探三路共用，一处受益三路）。 */
+private val WHITESPACE_RUN_REGEX = Regex("""\s+""")
 
 /**
  * T-AgentLogTime：日志时间关联键——**占位符版 rawSql 的指纹**。
@@ -183,9 +186,11 @@ internal fun logTimeKey(entry: LogSqlEntry): String = sqlFingerprint(normalizeSq
  * T-AgentLogTime：日志时间配对的次级判别——参数**值**序列签名。
  * 同键（同一条 SQL 多次执行）时用它挑参数一致的那条；两侧渲染口径若分叉则退化为队首配对
  * （近似但不错失），故不做强制相等断言。无参语句两侧都是空串，天然相等。
+ * T-PS4-05：签名无字节上界修正——单值截断 [PARAM_SIGNATURE_MAX_CHARS]（超长 blob/JSON
+ * 参数不再整串进签名，相关器内存有界）。
  */
 internal fun logTimeParamSignature(params: List<LogSqlParam>): String =
-    params.joinToString("\u0001") { it.value ?: "\u0000" }
+    params.joinToString("\u0001") { (it.value ?: "\u0000").take(PARAM_SIGNATURE_MAX_CHARS) }
 
 /**
  * T-AgentLogTime：给 agent 条目回填控制台嗅探到的日志时间；未命中返回 null
@@ -194,6 +199,12 @@ internal fun logTimeParamSignature(params: List<LogSqlParam>): String =
  * 增强通道回填的唯一入口——生产路径（`AgentManager.AgentSession`）与跨通道守卫测试都走它，
  * 避免测试另抄一份「取键 + take」逻辑而自证（T-AgentDialectLoop 的教训：两侧各自绿、集成不通）。
  */
+/**
+ * T-PS4-05：签名单值截断上限（256 字符）。两侧（桥嗅探 put 与 agent take）共用本函数
+ * 天然等价；次级判别失配本就设计为退化为队首配对（LogTimeCorrelator注释），语义风险可控。
+ */
+internal const val PARAM_SIGNATURE_MAX_CHARS = 256
+
 internal fun stampLogTime(entry: LogSqlEntry): LogSqlEntry? =
     LogTimeCorrelator.take(logTimeKey(entry), logTimeParamSignature(entry.params))
         ?.let { entry.copy(logTimestamp = it) }

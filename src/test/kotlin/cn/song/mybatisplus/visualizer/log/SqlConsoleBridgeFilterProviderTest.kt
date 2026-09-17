@@ -66,4 +66,7 @@ class SqlConsoleBridgeFilterProviderTest : BasePlatformTestCase() {
         filter.applyFilter("another line", 12)
         assertTrue("粘滞标志不回退", SqlCaptureGate.epActive)
     }
+
+    // T-PS4-02：timePrefix 缓存路径无独立行为用例——applyFilter 已全量走缓存（本类 3 例即覆盖），
+    // 自定义前缀刷新行为留真机走查（计划 §五.2 条目 2 同源）。
 }

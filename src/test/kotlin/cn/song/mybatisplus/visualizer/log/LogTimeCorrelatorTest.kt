@@ -111,6 +111,35 @@ class LogTimeCorrelatorTest {
     }
 
     @Test
+    fun `T-PS4-05_超长参数截断后两侧同签名仍配对命中`() {
+        LogTimeCorrelator.clear()
+        // 超长 blob 参数（>256 字符）：两侧共用 logTimeParamSignature 单函数，截断后签名一致
+        val longValue = "x".repeat(PARAM_SIGNATURE_MAX_CHARS)
+        assertEquals(
+            "两侧同源截断，签名应逐字符一致",
+            logTimeParamSignature(listOf(LogSqlParam(longValue, "String"))),
+            logTimeParamSignature(listOf(LogSqlParam(longValue, "String"))),
+        )
+        assertEquals(
+            "截断后签名长度有界（首个值 = 上限 + 分隔符前缀）",
+            PARAM_SIGNATURE_MAX_CHARS,
+            logTimeParamSignature(listOf(LogSqlParam(longValue, "String"))).length,
+        )
+        // 配对语义：同键同（截断后）签名命中而非退队首
+        val t1 = now() - 3000
+        val t2 = now()
+        LogTimeCorrelator.put("fpLong", t1, logTimeParamSignature(listOf(LogSqlParam(longValue, "String"))))
+        LogTimeCorrelator.put("fpLong", t2, logTimeParamSignature(listOf(LogSqlParam("other", "String"))))
+        assertEquals(
+            "超长参数经截断签名仍精确配对",
+            t1,
+            LogTimeCorrelator.take("fpLong", logTimeParamSignature(listOf(LogSqlParam(longValue, "String")))),
+        )
+    }
+
+    /** 测试内引用截断上限（避免测试硬编码 256 与实现漂移）。 */
+
+    @Test
     fun `clear清空`() {
         LogTimeCorrelator.put("fp", now())
         LogTimeCorrelator.clear()

@@ -115,9 +115,10 @@ object RunConfigurationProcessListener {
                 }
 
                 // M56 T-M56-01/02：增强捕获惰性挂载入口（增强未开启/未确认时空操作；
-                // 后台线程等进程就绪 + 3s 去抖再 attach，全程不进 EDT）
+                // 后台线程等进程就绪 + 3s 去抖再 attach，全程不进 EDT）。
+                // T-PS4-01：mainLaunch 同源传递——未确认时的确认弹窗仅对主配置启动触发。
                 try {
-                    project.getService(AgentManager::class.java).onProcessAppeared(args?.getOrNull(2))
+                    project.getService(AgentManager::class.java).onProcessAppeared(args?.getOrNull(2), isMainLaunch)
                 } catch (t: Throwable) {
                     LOG.warn("processStarted: 增强捕获回调失败（project=${project.name}）", t)
                 }

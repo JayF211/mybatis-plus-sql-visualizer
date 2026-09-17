@@ -333,6 +333,12 @@ open class SqlLogConsoleBridge(
                     arrayOf(filterIface),
                     LogFilterProxyHandler { line, endOffset ->
                         val context = consoleContexts[console] ?: return@LogFilterProxyHandler
+                        // T-PS4-02：EP 生效短路——平台 filter 链中 EP 先于后挂的桥 filter 执行，
+                        // epActive 置位即代表本行已由 EP 通道解析过，桥侧跳过（关闭「先开捕捉
+                        // 后 Run」时序下已挂载桥 filter 的恒定 ×2 解析税）。armed-waiting 时序
+                        // 本就单路（epActive 置位前桥未挂载），双轨窗口收敛为「桥挂载前到达的
+                        // 首行之前」；条目仍靠缓冲去重兜底，捕捉结果与单路时序一致。
+                        if (SqlCaptureGate.epActive) return@LogFilterProxyHandler
                         // T-PreviewFlash：重放守卫——rehighlight 全文档重跑 filter 时丢弃历史行（平台契约要求幂等）。
                         // 守卫依赖反射取到的编辑器文档（stamp/行0）；取不到（非真 ConsoleViewImpl，如测试桩）
                         // 则降级停用，直连现状语义——绝不能因守卫误丢正常流式行。

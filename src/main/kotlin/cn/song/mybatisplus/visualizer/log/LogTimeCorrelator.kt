@@ -26,7 +26,7 @@ package cn.song.mybatisplus.visualizer.log
  */
 object LogTimeCorrelator {
 
-    /** 键上限（512 键 × 单键 ≤ [PER_KEY_CAPACITY] 条 ≈ 数万字节封顶）。 */
+    /** 键上限（512 键；T-PS4-05 单值签名截断 256 字符后典型占用 MB 级封顶，旧「数万字节」口径失真已修）。 */
     private const val CAPACITY = 512
 
     /** 单键队列上限（同一条 SQL 连续执行的待配对条数；防循环里同语句刷爆队列）。 */
