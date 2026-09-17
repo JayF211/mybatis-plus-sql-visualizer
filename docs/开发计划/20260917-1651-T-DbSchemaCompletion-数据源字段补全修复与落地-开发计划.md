@@ -140,6 +140,18 @@ val columnKind = objectKindClass.enumConstants?.firstOrNull { (it as Enum<*>).na
 | `ui/highlight/SqlCompletionCandidates.kt` | 新文件：`ColumnCandidate` / `mergeColumnCandidates` / `columnLookupElement`（纯逻辑） |
 | `ui/highlight/SqlCompletionContributor.kt` | 列候选改消费合并结果（实体列 ∪ 库列、tailText 带 DB 类型串），去掉补全期的数据源反射调用 |
 | `ui/SqlPreviewPanel.kt` | 上下文携带 `columnsCached` 结果；`prefetchSchemaForCompletion` + `completionTables`（`TableExtractor` 提取 + 主表）；`showResult` / `onNativeEditorReady` 两处触发；`refreshCompletionContext` 同步原生控制台编辑器 userData |
+| `src/test/java/PlatformSignatureChecker.java` | 追加第 6 项跨版本检查：`ObjectKind.COLUMN` 静态字段可读（打印 `enumConstants/isEnum` 实况）；类路径收集补 `plugins/DatabaseTools/lib(/modules)` |
+| `src/test/.../update/PlatformSignatureCrossVersionTest.kt` | KDoc 登记新反射入口（约定：新增反射入口必登记本守卫） |
 | 测试 | 新增 `DatabaseSchemaResolverObjectKindTest`(3) / `DatabaseSchemaResolverBailTest`(3) / `SqlCompletionCandidatesTest`(5)，`SqlCompletionContributorTest` 加列候选渲染断言(1) |
+
+**真实 DBN 类取证（不依赖沙盒 GUI 的硬验证）**：用发行版自带 JBR 跑反射探针，对**本机 243（IU-243.28141.41）与 262（IU-262.10968.63，即用户日常 IDE 同版）**两份真实 `com.intellij.database.model.ObjectKind` 实测，结论一致：
+
+```
+INFO ObjectKind.COLUMN enumConstants=null isEnum=false value=column    → RESULT OK
+```
+
+即：①`enumConstants` 恒 null、`isEnum=false`（旧实现必然早退，**且 243 同样如此——不是 262 回归，是代码假设一错到底**）；②`getField("COLUMN").get(null)` 在两版上都取到值（修复路径成立）。
+
+该验证据源已沉淀为**跨版本守卫**：`PlatformSignatureChecker` 追加第 6 项检查（`ObjectKind.COLUMN` 静态字段可读 + 打印 `enumConstants/isEnum` 实况；未捆绑 Database Tools 的发行版打印 SKIP 不计缺失），并按项目约定「新增反射入口必登记 PlatformSignatureCrossVersionTest」由 `PlatformSignatureCrossVersionTest` 在本机 243/253/262 三族上执行（实测三族均通过）。同时补了 DBN 不在 `lib` 下（在 `plugins/DatabaseTools/lib`）且依赖 `lib` 的 DynamicBundle 的类路径收集——单 DBN jar 加载会 `NoClassDefFoundError: com/intellij/DynamicBundle`。
 
 **遗留（真机复验项，交用户）**：日志出现 `DatabaseSchemaResolver scan: ... hit=true, foundColumns>0` 与 `[T-DbSchemaCompletion] schema 预热: resolved>0`；QUERY/单表预览（截图场景）能补出实体类没有的库列；无数据源/Community 下候选与改动前一致。另：原稿"若原生 DBN 补全仍不出现库对象则单独立项"仍挂着——本次只补插件侧。

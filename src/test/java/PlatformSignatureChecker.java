@@ -22,6 +22,13 @@ public class PlatformSignatureChecker {
         collectJars(lib, urls);
         File modules = new File(lib, "modules");
         collectJars(modules, urls);
+        // T-DbSchemaCompletion：Database Tools 是 bundled 插件（plugins/DatabaseTools/lib），
+        // 不在 lib 下——ObjectKind 检查（见 #6）需要它，且它依赖 lib 里的 DynamicBundle
+        // （单 DBN jar 加载会 NoClassDefFoundError: com/intellij/DynamicBundle，实测）。
+        File distroRoot = lib.getParentFile();
+        File dbnLib = new File(distroRoot, "plugins/DatabaseTools/lib");
+        collectJars(dbnLib, urls);
+        collectJars(new File(dbnLib, "modules"), urls);
         URLClassLoader loader = new URLClassLoader(urls.toArray(new URL[0]), null);
 
         int missing = 0;
@@ -58,11 +65,45 @@ public class PlatformSignatureChecker {
         Class<?> core = Class.forName("com.intellij.ide.plugins.PluginManagerCore", true, loader);
         missing += check(byNameAndCount(core, "findPlugin", 1), "findPlugin(1 param)");
 
+        // 6. T-DbSchemaCompletion：DatabaseSchemaResolver 新增的反射入口——
+        //    `ObjectKind.COLUMN` 必须是可读的 public static final 字段。DBN 的 ObjectKind 是
+        //    手写 type-safe enum（非 java.lang.Enum，enumConstants 恒 null）：历史上按 enumConstants
+        //    取，于是数据源 schema 列遍历一次都没执行过且静默无日志（真机潜伏数周）。
+        //    Database Tools 未捆绑的发行版（Community/裁剪包）跳过本项，不计缺失。
+        missing += checkObjectKindColumn(loader);
+
         if (missing > 0) {
             System.out.println("RESULT MISSING " + missing);
             System.exit(1);
         }
         System.out.println("RESULT OK");
+    }
+
+    /**
+     * 校验 `ObjectKind.COLUMN` 可按静态字段读出；Database Tools 缺席时打印 SKIP 返回 0。
+     *
+     * 同时打印 `enumConstants` 实况——该值恒为 null 是「不能按枚举取」的直接证据，
+     * 漂移时这一行就是判据。
+     */
+    private static int checkObjectKindColumn(ClassLoader loader) {
+        try {
+            Class<?> kind = Class.forName("com.intellij.database.model.ObjectKind", true, loader);
+            Object[] constants = kind.getEnumConstants();
+            Object column = kind.getField("COLUMN").get(null);
+            System.out.println("INFO ObjectKind.COLUMN enumConstants=" + (constants == null ? "null" : "non-null")
+                    + " isEnum=" + kind.isEnum() + " value=" + column);
+            if (column == null) {
+                System.out.println("MISS ObjectKind.COLUMN static field resolves to null");
+                return 1;
+            }
+            return 0;
+        } catch (ClassNotFoundException e) {
+            System.out.println("SKIP DatabaseTools (Database Tools) not bundled: " + e.getMessage());
+            return 0;
+        } catch (Throwable t) {
+            System.out.println("MISS ObjectKind.COLUMN resolve failed: " + t);
+            return 1;
+        }
     }
 
     private static int check(Method m, String label) {

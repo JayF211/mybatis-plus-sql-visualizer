@@ -16,6 +16,11 @@ import java.io.File
  * 自带 JBR 运行 [PlatformSignatureChecker]，以与生产一致的弹性匹配逻辑解析动态安装五入口。
  * 任何目标版本的签名漂移都会在本地测试失败，不再依赖真实用户踩雷。
  *
+ * T-DbSchemaCompletion 追加第 6 项：`DatabaseSchemaResolver` 的反射入口 `ObjectKind.COLUMN`
+ * （静态字段读法）——DBN 的 ObjectKind 是手写 type-safe enum、`enumConstants` 恒 null，历史上按
+ * 枚举取导致 schema 列遍历从未执行且静默无日志；本项在捆绑 Database Tools 的发行版上验证该入口
+ * 可用，未捆绑者打印 SKIP 不计缺失。
+ *
  * 发行版缺失时按 Assume 跳过对应家族（CI 机器可能只装部分版本）；一个家族都没有则整类跳过。
  */
 class PlatformSignatureCrossVersionTest {
