@@ -214,7 +214,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（一行一个前缀，如 `com.corp.engine.`）。
      * Apply 后经 CONFIG 热下发 agent（即时生效，无需重启应用），IDE 侧候选解析同步过滤。
      */
-    private val frameSkipPrefixesField = com.intellij.ui.components.JBTextArea(3, 24)
+    private val frameSkipPrefixesField = com.intellij.ui.components.JBTextArea(3, 24).apply {
+        // T-SourceJumpFunnel：空态灰色占位提示（悬停 tooltip 之外的第一眼引导）
+        emptyText.text = MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.placeholder")
+    }
 
     /** gutter 预览 SQL 图标开关（M10）。 */
     private val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
