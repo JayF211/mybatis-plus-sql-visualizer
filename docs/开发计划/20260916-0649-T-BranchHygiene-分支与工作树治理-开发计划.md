@@ -66,3 +66,5 @@ T-BH-01（核验）→ T-BH-02（留底）→ T-BH-03（清理，t-mcp-toolset2 
 - **执行细节**：r2-backup worktree 目录为 Windows 长路径残留，`git worktree remove` 后用 Python rmtree 清理物理目录；全程零源码/文档工作区改动。
 - **T-BH-04 终态盘点（实测 2026-09-17）**：`git branch` = dev/master/feature/kotlin-to-java 三条活线；`git worktree list` = 主工作树（master）+ dev worktree + kotlin-to-java worktree 三处；被删引用均有 tag 或 reflog 留底，`git log <tag> -1` 可达。docs/MEMORY 台账同步留主会话。
 - **验收对照**：§四三条全过（活线收敛/留底可达/清理过程 git status 干净）。
+
+**2026-09-17 合流后终态核对（T-BranchHygiene 收尾闭环，盘点 §2.4 第二项）**：master 合入 dev（3552d4b）后的拓扑实测——`git branch` = dev / master / feature/kotlin-to-java 三条活线 **+ feature/dialect-auto-infer、t-execdocgate 两个在途任务分支**（前者为 T-DialectAutoInfer 立项会话的任务分支、后者为 T-ExecDocGate 在途工作树含未提交改动，均系并行会话**活跃任务**而非清理残留，任务收口时按本计划同款流程自清）；`git worktree list` 对应四处 + 主工作树。活线集合与本计划 §三 T-BH-04 预期一致（活线内零残留）。本计划就此闭环。
