@@ -769,7 +769,23 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // 执行的结果/错误（用户"执行第二个 SQL 后预览第一个，状态栏还显示之前的错误"）。
             // 嵌入后 showEmpty 清空；执行路径走 onResultsReady（成功）清 / onError（失败）显示，
             // 与本预览回调互不影响。
-            onConsole = { consoleComponent -> embedConsole(consoleComponent); resultPanel.showEmpty() },
+            onConsole = { consoleComponent ->
+                embedConsole(consoleComponent)
+                resultPanel.showEmpty()
+                // T-PreviewConsoleFmt：控制台挂在这个 exec 文件上（其文档就是该文件文档），而文件
+                // 内容由预览链预热写成**预览原文**（裸单行）——挂载后不重渲染，用户看到的就是裸
+                // SQL（真机 20260917 日志：showSql createEditor len=274/16 行 → 预热原文 → attach
+                // 后控制台显示 1 行）。嵌入完成即按当前渲染文本回填一次；必须排在此处而非
+                // onNativeEditorReady —— showSql 的 nativeDoc 分支要求 consoleAttachedToMe()
+                // （= embeddedConsole 已进 consoleHost），挂载回调那一刻尚未满足。
+                ApplicationManager.getApplication().invokeLater({
+                    if (com.intellij.openapi.util.Disposer.isDisposed(this)) return@invokeLater
+                    runCatching { renderSql() }.onFailure { e ->
+                        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                            .warn("[M36] post-attach re-render FAILED: ${e.javaClass.simpleName}: ${e.message}")
+                    }
+                }, com.intellij.openapi.application.ModalityState.any())
+            },
             onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
             // 默认准备失败（无数据源等）静默——不打扰预览；执行时再走全链提示
             onError = null,
@@ -2949,6 +2965,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // ------------------------------------------------------------------
 
     internal fun editorForTest(): Editor? = editor
+
+    /** T-PreviewConsoleFmt 测试缝：模拟控制台文档已就绪（nativeDoc 指向该文档）。 */
+    internal fun markNativeDocForTest(doc: com.intellij.openapi.editor.Document) {
+        nativeEditorDoc = doc
+    }
+
+    /** T-PreviewConsoleFmt 测试缝：挂载后回填渲染的等价入口。 */
+    internal fun renderSqlForTest() = renderSql()
     /** T-AutoFold F5：登记的原生控制台编辑器引用（支链①接入断言用）。 */
     internal fun nativeConsoleEditorForTest(): Editor? = nativeConsoleEditor
     internal fun psiFileForTest(): PsiFile? = psiFile
