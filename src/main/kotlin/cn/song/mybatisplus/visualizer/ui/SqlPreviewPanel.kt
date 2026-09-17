@@ -772,6 +772,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             onConsole = { consoleComponent ->
                 embedConsole(consoleComponent)
                 resultPanel.showEmpty()
+                // T-PreviewFast P7：请求→控制台可见（第三段锚点，用户感知的「预览快不快」）
+                runCatching {
+                    val req = SqlPreviewService.lastPreviewRequestMs
+                    if (req > 0) {
+                        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                            .info("[T-PreviewFast] request→console-visible: ${System.currentTimeMillis() - req}ms")
+                    }
+                }
                 // T-PreviewConsoleFmt：控制台挂在这个 exec 文件上（其文档就是该文件文档），而文件
                 // 内容由预览链预热写成**预览原文**（裸单行）——挂载后不重渲染，用户看到的就是裸
                 // SQL（真机 20260917 日志：showSql createEditor len=274/16 行 → 预热原文 → attach
@@ -1420,14 +1428,27 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * FORMAT 强制格式化、KEYWORD_WRAP / VERTICAL 走对应变换（二者对非 INSERT 已内含 format，
      * 无需叠加）。
      */
+    /**
+     * T-PreviewFast P6：显示模式变换 **单槽缓存**——同一 (SQL, 模式, 压缩态, 格式化设置) 组合
+     * 只做一次 SqlFormatter 变换。命中场景：挂载后回填渲染与紧随其后的参数/勾选重渲染
+     * （内容未变时反复走格式化管线是纯浪费，大 SQL 上尤甚）。
+     */
+    private var formatCacheKey: String? = null
+    private var formatCacheValue: String? = null
+
     private fun applyDisplayMode(sql: String): String {
         if (compactMode) return sql
-        return when (displayMode) {
+        val key = "$displayMode|$compactMode|${formatSqlSetting()}|$sql"
+        formatCacheValue?.let { cached -> if (formatCacheKey == key) return cached }
+        val out = when (displayMode) {
             PreviewDisplayMode.NORMAL -> if (formatSqlSetting()) SqlFormatter.format(sql) else sql
             PreviewDisplayMode.FORMAT -> SqlFormatter.format(sql)
             PreviewDisplayMode.KEYWORD_WRAP -> SqlFormatter.formatClauseLine(sql)
             PreviewDisplayMode.VERTICAL -> SqlFormatter.formatVertical(sql, verticalPairAnnotationSetting())
         }
+        formatCacheKey = key
+        formatCacheValue = out
+        return out
     }
 
     /**
@@ -1674,7 +1695,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 fLogger.info("[M36] showSql branch=nativeDoc: len=${text.length}, attachedToMe=${consoleAttachedToMe()}")
                 suppressAutoPopup = true
                 try {
-                    WriteCommandAction.runWriteCommandAction(project) { nativeDoc.setText(text) }
+                    // T-PreviewFast P4：程序性写入开闸——否则本次写入会触发执行文件的 1.5s 防抖
+                    // 自动落盘（内容刚由本写入落盘，再写一遍纯属自己与自己抢）
+                    cn.song.mybatisplus.visualizer.execute.ExecDocAutosaveGate.suppressDuring {
+                        WriteCommandAction.runWriteCommandAction(project) { nativeDoc.setText(text) }
+                    }
                 } finally {
                     suppressAutoPopup = false
                 }

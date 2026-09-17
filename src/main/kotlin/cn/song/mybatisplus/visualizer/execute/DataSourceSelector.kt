@@ -3085,19 +3085,28 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      * internal 供测试。
      */
     internal fun writeVfTextViaDocument(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, text: String) {
-        val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(vf)
-        if (fileDoc == null) {
-            vf.setBinaryContent(text.toByteArray())
-            return
+        // T-PreviewFast P4：程序性写入整段开闸——文档变更事件同步派发给自动落盘监听，
+        // 闸门开着即跳过（内容由本函数自己落盘，无需 1.5s 后再写一遍）
+        ExecDocAutosaveGate.suppressDuring {
+            val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(vf)
+            if (fileDoc == null) {
+                vf.setBinaryContent(text.toByteArray())
+            } else {
+                if (fileDoc.text != text) {
+                    fileDoc.setText(text)
+                }
+                // setText 的 write command 结束时自动 commit；显式 commitDocument 双保险
+                // （同步后同 tick 内 findFile 的 PSI 立即对齐，M36.5.20 语义保留）
+                com.intellij.psi.PsiDocumentManager.getInstance(project).commitDocument(fileDoc)
+                // T-EC-01 核心：同临界区落盘——磁盘即时与内存一致，document 不滞留 modified 态
+                // T-PreviewFast P5：落盘前先判「已修改未保存」——内容本就一致时（连续预览同一
+                // SQL 的常见路径）跳过磁盘写，消除每次预览的无效落盘与随之而来的 VFS/索引噪音
+                val fdm = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+                if (fdm.isDocumentUnsaved(fileDoc)) {
+                    fdm.saveDocument(fileDoc)
+                }
+            }
         }
-        if (fileDoc.text != text) {
-            fileDoc.setText(text)
-        }
-        // setText 的 write command 结束时自动 commit；显式 commitDocument 双保险
-        // （同步后同 tick 内 findFile 的 PSI 立即对齐，M36.5.20 语义保留）
-        com.intellij.psi.PsiDocumentManager.getInstance(project).commitDocument(fileDoc)
-        // T-EC-01 核心：同临界区落盘——磁盘即时与内存一致，document 不滞留 modified 态
-        com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().saveDocument(fileDoc)
     }
 
     /** BGT 派 EDT document 写的有界等待预算（毫秒）——DialectPreMapping 同款取值；EDT 病态冻结时超时放行走守卫降级。 */
@@ -3108,11 +3117,24 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      * invokeLater + 有界 latch 等待（DialectPreMapping.ensureMapped 同款：BGT 等 EDT，
      * EDT 永不反向阻塞，超时自愈不互锁）。失败注入缝 [execWriteActionFailureInjection]
      * 在 [docWriteOnce] 内统一生效（EDT/BGT 两形态等价）。
+     *
+     * T-PreviewFast P2：`waitBudgetMs <= 0` 时走 **fire-and-forget**（派发后立即返回 true）——
+     * 预热是投机性写入，T-ExecDocSync3 取消裸写后超时已无副作用，没必要让 BGT 白等 2 秒。
      */
-    private fun dispatchDocWriteOnEdt(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, sql: String): Boolean {
+    private fun dispatchDocWriteOnEdt(
+        project: Project,
+        vf: com.intellij.openapi.vfs.VirtualFile,
+        sql: String,
+        waitBudgetMs: Long = EDT_EXEC_DOC_SYNC_WAIT_MS,
+    ): Boolean {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val app = ApplicationManager.getApplication()
         if (app.isDispatchThread) return docWriteOnce(project, vf, sql)
+        if (waitBudgetMs <= 0L) {
+            app.invokeLater { runCatching { docWriteOnce(project, vf, sql) } }
+            LOG.info("[M36] exec doc write dispatched fire-and-forget (T-PreviewFast P2)")
+            return true
+        }
         val done = java.util.concurrent.CountDownLatch(1)
         var ok = false
         app.invokeLater {
@@ -3123,10 +3145,10 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             }
         }
         val signaled = runCatching {
-            done.await(EDT_EXEC_DOC_SYNC_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+            done.await(waitBudgetMs, java.util.concurrent.TimeUnit.MILLISECONDS)
         }.getOrDefault(false)
         if (!signaled) {
-            LOG.warn("[M36] exec doc write EDT dispatch timeout after ${EDT_EXEC_DOC_SYNC_WAIT_MS}ms (EDT busy?)")
+            LOG.warn("[M36] exec doc write EDT dispatch timeout after ${waitBudgetMs}ms (EDT busy?)")
         }
         return signaled && ok
     }
@@ -3213,6 +3235,9 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
     }
 
     private fun scheduleExecDocAutosave(doc: com.intellij.openapi.editor.Document) {
+        // T-PreviewFast P4：程序性写入不排自动落盘——闸门开着说明本次变更来自插件写入
+        //（写入方自己已落盘），防抖落盘只为用户手改兜底
+        if (ExecDocAutosaveGate.isSuppressed()) return
         val vf = runCatching {
             com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getFile(doc)
         }.getOrNull() ?: return
@@ -3311,9 +3336,12 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      *     「VFS 已有该文件即绝不裸写」，冷启动 EDT 忙场景彻底无冲突面；
      *  ④ **单写方锁**（T-EC-03，[execFileWriteLock]）——串行化 BGT 预热与 EDT 冷路径。
      * VFS 缺条目路径维持裸写 + 调用方 refresh + [syncExecVfContentIfNeeded] 防御收口（T-EC-04）。
+     * T-PreviewFast P1/P2：差量快路径（内容已一致即返回）+ 预热非阻塞派发（`nonBlocking=true`）。
      * internal 供测试。
+     *
+     * @param nonBlocking true = 预热等投机性调用：BGT 派发不等 EDT（fire-and-forget，P2）
      */
-    internal fun projectExecFile(project: Project, sql: String): java.io.File? {
+    internal fun projectExecFile(project: Project, sql: String, nonBlocking: Boolean = false): java.io.File? {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val base = project.basePath ?: run {
             // T-ExecCopyFix F2a：basePath null 是「无异常的 null」，原来连日志都没有
@@ -3330,10 +3358,22 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         synchronized(execFileWriteLock) {
             val existing = LocalFileSystem.getInstance().findFileByIoFile(f)
             if (existing != null) {
+                // T-PreviewFast P1：**差量快路径**——派发前先判当前内容是否已等于目标 SQL。相同则
+                // 直接返回，不派发、不落盘、不等 EDT（连续预览同一 SQL 是常见形态：真机日志 14:17
+                // 五连预览每次都白付 2s 派发等待 + 一次无效落盘 + 一轮索引噪音）。
+                // 判据双源：document 文本（有已加载文档时，UI 所见为准）或 vf 内容（无文档时）。
+                if (execFileContentMatches(project, existing, sql)) {
+                    LOG.info("[M36] exec file content already matches — write SKIPPED (T-PreviewFast P1): ${f.name}")
+                    return f
+                }
                 // T-EC-01/T-EC-03：document 写统一派 EDT（EDT 直调同步；BGT 派发 + 有界等待）。
                 // 262 实证 document setText BGT 硬抛（见 writeVfTextViaDocument KDoc）——旧实现
                 // 的 BGT document 分支每次必炸、静默掉进裸写兜底，即真机冲突链本体。
-                val updated = dispatchDocWriteOnEdt(project, existing, sql)
+                // T-PreviewFast P2：预热调用（unblocking=true）走 fire-and-forget，不再等满 2 秒。
+                val updated = dispatchDocWriteOnEdt(
+                    project, existing, sql,
+                    waitBudgetMs = if (nonBlocking) 0L else EDT_EXEC_DOC_SYNC_WAIT_MS,
+                )
                 if (updated) {
                     LOG.info("[M36] exec file updated via document+save (disk synced in-critical-section): ${f.name}")
                     return f
@@ -3429,15 +3469,17 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             // 内容（projectExecFile doc 驱动三方同步，vf/psi 身份不变），保证 attachConsole
             // 初始 document 与本条预览 SQL 一致；差量内容比较在 projectExecFile 内部短路。
             //
-            // T-PreviewConsoleFmt：**控制台已挂在该文件上时跳过刷新**——该文件文档即控制台文档，
-            // 而预热写的是「预览原文」（裸单行），会把面板刚渲染进控制台的格式化文本盖掉
-            //（真机日志 20260917：showSql createEditor len=274/16 行 → prewarm 原文 → attach 显示
-            // 1 行裸 SQL）。面板渲染链随后会把当前文本写回该文档，无需预热越权改写。
-            if (isConsoleAttachedToVf(cachedVf)) {
-                LOG.info("[M36] exec prewarm: cache hit, console attached — content refresh SKIPPED (T-PreviewConsoleFmt)")
+            // T-PreviewConsoleFmt F2 + T-PreviewFast P3：**该文件正被编辑器打开时跳过内容刷新**——
+            // 有人正看着这份内容时预热不得改写（预热写的是「预览原文」裸单行，会盖掉面板渲染进
+            // 控制台的格式化文本；真机 20260917 日志：showSql createEditor len=274/16 行 → prewarm
+            // 原文 → attach 显示 1 行）。判据为「文档已加载且挂了编辑器」——原 `console.getVirtualFile
+            // () === vf` 判据实机从未命中（SKIPPED 计数 0 / refreshed 10），已退役。
+            if (isExecDocOpenInEditor(cachedVf)) {
+                LOG.info("[M36] exec prewarm: cache hit, exec doc open in editor — content refresh SKIPPED (T-PreviewFast P3)")
                 return
             }
-            runCatching { projectExecFile(project, sql) }.onFailure { e ->
+            // T-PreviewFast P2：非阻塞派发——预热是投机性写入，没必要让 BGT 等满 2 秒
+            runCatching { projectExecFile(project, sql, nonBlocking = true) }.onFailure { e ->
                 LOG.warn("[M36] exec prewarm refresh-content failed: ${e.javaClass.simpleName}: ${e.message}")
             }
             LOG.info("[M36] exec prewarm: cache hit, content refreshed only")
@@ -3456,18 +3498,39 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
     }
 
     /**
-     * T-PreviewConsoleFmt：共享控制台当前是否挂在指定 exec 文件上——命中即代表该文件文档就是
-     * 控制台文档，此时预热改写文件内容会直接改掉用户眼前的控制台文本。internal 供测试。
+     * T-PreviewFast P1：exec 文件当前内容是否已等于目标 SQL——差量快路径判据（双源）。
+     *
+     * 有已加载 document 时以 **document 文本**为准（UI/控制台所见即权威，也是落盘会写入的内容）；
+     * 无 document 时读 **vf 内容**。两者比对失败（异常/不可读）一律返回 false（保守走正常写入路径）。
+     * internal 供测试。
      */
-    internal fun isConsoleAttachedToVf(vf: com.intellij.openapi.vfs.VirtualFile): Boolean {
-        val console = sharedConsole ?: return false
-        if (cachedTempPsiFile?.first !== vf) return false
-        return runCatching {
-            val attached = console.javaClass.getMethod("getVirtualFile").invoke(console)
-                as? com.intellij.openapi.vfs.VirtualFile
-            attached === vf
-        }.getOrDefault(false)
-    }
+    internal fun execFileContentMatches(
+        project: Project,
+        vf: com.intellij.openapi.vfs.VirtualFile,
+        sql: String,
+    ): Boolean = runCatching {
+        val doc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getCachedDocument(vf)
+        if (doc != null) {
+            doc.text == sql
+        } else {
+            vf.inputStream.readBytes().toString(Charsets.UTF_8) == sql
+        }
+    }.getOrDefault(false)
+
+    /**
+     * T-PreviewFast P3：exec 文件是否**正被编辑器打开**（= 有人正在看这份内容）——预热据此决定
+     * 是否跳过内容刷新。
+     *
+     * 取代 T-PreviewConsoleFmt 的 `console.getVirtualFile() === vf` 判据：真机实测该等式从未成立
+     * （`content refresh SKIPPED` 计数 0 而 `content refreshed only` 10 次），预热因此每次仍改写
+     * 文件、与面板回填互相覆盖一轮。改判「该 vf 的文档已加载且挂了编辑器」——语义正是
+     * 「别改用户眼前的内容」，且不依赖 DBN 内部方法。internal 供测试。
+     */
+    internal fun isExecDocOpenInEditor(vf: com.intellij.openapi.vfs.VirtualFile): Boolean = runCatching {
+        val doc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getCachedDocument(vf)
+            ?: return false
+        com.intellij.openapi.editor.EditorFactory.getInstance().getEditors(doc).isNotEmpty()
+    }.getOrDefault(false)
 
     /** [prewarmExecTempFile] 的真实链（已持有 in-flight 标记；仅后台线程调用）。 */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用

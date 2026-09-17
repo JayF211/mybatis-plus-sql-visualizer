@@ -140,6 +140,22 @@ class ExecDocSync2Test : BasePlatformTestCase() {
         assertFalse("无主文档应 no-op", DataSourceSelector.autosaveExecDocNow(orphan))
     }
 
+    // ======================== T-PreviewFast P4：程序性写入闸门 ========================
+
+    /**
+     * P4：程序性写入（插件回填/同步）期间闸门生效——防抖自动落盘只为用户手改兜底，
+     * 插件自己的写入由写入方落盘，不该 1.5s 后再写一遍（真机每次预览多一次 autosaved）。
+     */
+    fun testProgrammaticWriteSuppressesDebouncedAutosave() {
+        assertFalse("闸门外：不抑制（用户键入路径）", ExecDocAutosaveGate.isSuppressed())
+        var inside = false
+        ExecDocAutosaveGate.suppressDuring { inside = ExecDocAutosaveGate.isSuppressed() }
+        assertTrue("闸门内：抑制生效", inside)
+        assertFalse("闸门退出后复位（异常安全）", ExecDocAutosaveGate.isSuppressed())
+        runCatching { ExecDocAutosaveGate.suppressDuring<Unit> { error("boom") } }
+        assertFalse("异常退出亦复位", ExecDocAutosaveGate.isSuppressed())
+    }
+
     // ======================== F5/F6：路径过滤器表驱动 ========================
 
     fun testIsExecVfPathTableDriven() {

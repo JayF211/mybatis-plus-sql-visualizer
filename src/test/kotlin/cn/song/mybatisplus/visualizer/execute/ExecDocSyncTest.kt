@@ -122,6 +122,49 @@ class ExecDocSyncTest : BasePlatformTestCase() {
         assertEquals("VFS 无条目时裸写创建（首次）", "SELECT 1", diskText())
     }
 
+    // ======================== T-PreviewFast：差量快路径（P1）与判据（P3） ========================
+
+    /** P1 判据表驱动：内容一致（document 源 / vf 源）→ true；不一致 → false。 */
+    fun testExecFileContentMatchesTableDriven() {
+        writeIo("SELECT 1")
+        val vf = refreshVf()!!
+        assertTrue("无 document 时读 vf 内容：一致 → true", DataSourceSelector.execFileContentMatches(project, vf, "SELECT 1"))
+        assertFalse("无 document 时读 vf 内容：不一致 → false", DataSourceSelector.execFileContentMatches(project, vf, "SELECT 2"))
+
+        FileDocumentManager.getInstance().getDocument(vf)
+        assertTrue("有 document 时以 document 文本为准：一致 → true", DataSourceSelector.execFileContentMatches(project, vf, "SELECT 1"))
+        assertFalse("有 document 时以 document 文本为准：不一致 → false", DataSourceSelector.execFileContentMatches(project, vf, "SELECT 2"))
+    }
+
+    /**
+     * P1 核心：目标内容与现状一致 → **不派发、不落盘**（真机连续预览同一 SQL 的主路径）。
+     * 断言手段：注入 WriteAction 失败——若快路径生效，注入根本不会执行，磁盘与文档均无变化且不抛。
+     */
+    fun testIdenticalContentShortCircuitsWithoutWrite() {
+        writeIo("SELECT 1")
+        val vf = refreshVf()!!
+        val doc = FileDocumentManager.getInstance().getDocument(vf)
+        assertNotNull(doc)
+        DataSourceSelector.execWriteActionFailureInjection = true
+        try {
+            val f = DataSourceSelector.projectExecFile(project, "SELECT 1")
+            assertNotNull("快路径应正常返回文件路径", f)
+            assertEquals("内容一致：磁盘不动", "SELECT 1", diskText())
+            assertFalse("内容一致：文档不得被标脏", FileDocumentManager.getInstance().isDocumentUnsaved(doc!!))
+        } finally {
+            DataSourceSelector.execWriteActionFailureInjection = false
+        }
+    }
+
+    /** P3 判据：exec 文件「正被编辑器打开」才为真——文档加载但无编辑器时仍为 false（预热可刷新）。 */
+    fun testIsExecDocOpenInEditorReflectsEditorPresence() {
+        writeIo("SELECT 1")
+        val vf = refreshVf()!!
+        assertFalse("无已加载 document → false", DataSourceSelector.isExecDocOpenInEditor(vf))
+        FileDocumentManager.getInstance().getDocument(vf)
+        assertFalse("document 已加载但无编辑器 → false", DataSourceSelector.isExecDocOpenInEditor(vf))
+    }
+
     // ======================== T-EC-04：裸写路径防御收口 ========================
 
     /** 文件不存在（首次执行）：裸写创建 + refresh 可见 + 防御收口 no-op。 */
