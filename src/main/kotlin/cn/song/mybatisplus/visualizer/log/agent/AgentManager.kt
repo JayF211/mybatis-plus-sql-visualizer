@@ -92,6 +92,14 @@ class AgentManager(private val project: Project) : Disposable {
     // ---------- 挂载入口 ----------
 
     /**
+     * T-DialectAutoInfer：最近一次 agent 捕获的连接 URL（活跃会话优先，按会话加入序取最后值；
+     * 全部离线/无会话 → null——推断层回落数据源探测）。纯读、无锁（CopyOnWriteArrayList 快照遍历）。
+     */
+    fun lastConnectionUrl(): String? =
+        sessions.lastOrNull { it.alive && it.lastConnectionUrl != null }?.lastConnectionUrl
+            ?: sessions.lastOrNull { it.lastConnectionUrl != null }?.lastConnectionUrl
+
+    /**
      * 进程出现回调（RunConfigurationProcessListener.processStarted 转接；增强未开启时空操作）。
      * 后台线程：进程就绪等待 + 3s 去抖 + attach——全程不进 EDT。
      *
@@ -394,6 +402,11 @@ internal class AgentSession(
     private val output = java.io.DataOutputStream(socket.getOutputStream())
     private val eventDropped = AtomicLong()
 
+    /** T-DialectAutoInfer：最近一次事件携带的连接 URL（connect 时捕获，会话内记忆；null=旧版 agent/未捕获）。 */
+    @Volatile
+    var lastConnectionUrl: String? = null
+        private set
+
     /** T-AgentLogTime：日志时间未命中计数（诊断——键不等 vs 时序赶不上，真机排障一眼分辨）。 */
     private val timeMiss = AtomicLong()
 
@@ -433,6 +446,8 @@ internal class AgentSession(
                     return
                 }
                 try {
+                    // T-DialectAutoInfer：connect URL 会话内记忆（推断依据；null 容错——旧版 agent 无此键）
+                    event.url?.takeIf { it.isNotBlank() }?.let { lastConnectionUrl = it }
                     val entry = AgentEventAdapter.toEntry(event)
                     // T-AgentDialectLoop / T-AgentLogTime：接管期间控制台嗅探暂存的「日志行原始时间」
                     // 按 [logTimeKey]（占位符版 SQL 指纹）取回，参数值序列作次级判别（[stampLogTime]）。
