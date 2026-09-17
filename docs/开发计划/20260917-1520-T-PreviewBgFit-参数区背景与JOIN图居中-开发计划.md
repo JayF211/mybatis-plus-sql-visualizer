@@ -81,5 +81,27 @@ setFitContentAfterLayout(boolean)`，工具栏那个开关就是它的 toggle �
 |---|---|---|
 | 背景修复只覆盖深色 | 只按截图主题修，浅色主题可能反白 | 显式用 `UIUtil.getPanelBackground()` 命名色（两主题各自解析），走查项 2 覆盖浅色 |
 | 自适应打断用户手动的缩放/平移 | 每次布局都自动 fit | `fitContentAfterLayout` 是平台既有设置（用户可在图工具栏关闭其 toggle 语义）；首次 fit 仅一次 |
-| 图未布局完就 fit | fit 在布局前执行会得到错误视口 | 首次显示 + 有尺寸后触发，并补一次延后 fit 吸收异步布局 |
+| 图未布局完就 fit | fit 在布局前执行会得到错误视口 | 开关必须在布局触发前置位（见下），另有尺寸兜底补拍 |
 | 隔离边界 | `NativeJoinDiagramSupport` 已按 try/catch 兜底（Community/无 Diagrams） | 新增代码同处该边界内，异常仍走原降级（自绘图） |
+
+## 九、第二轮修正（真机复验反馈：第一张图仍不居中、第二张正常）
+
+真机反馈「第一个 SQL 的 join 图没居中，第二个正常」——**竞态**，定位如下：
+
+`NativeJoinDiagramOpener.buildEmbeddableEditor` 的画布填充是
+`builder.queryUpdate()...runAsync()`（**异步**），而首轮我只在它**返回之后**（`buildTabComponent` 里）
+才置 `fitContentAfterLayout`。布局管线（`GraphLayoutServiceImpl` 字节码实证）只在**布局收尾那一刻**
+读该开关并调 `GraphAnimationService.fitContent(view)`——异步布局若已越过判定点，开关就白置了；
+第一张图恰好越过（不居中）、第二张赶上（正常），与观察完全吻合。
+
+修正：
+1. 新增 `NativeJoinDiagramOpener.enableAutoFit(builder)`，并把调用**前移到两条建图路径的
+   `queryUpdate` 之前**（JOIN 路径 `buildEmbeddableEditor` 步骤 3.5；DATABASE 路径
+   `NativeDatabaseDiagramSupport.buildEmbeddableEditor`）——开关先置位，异步布局收尾即自适应；
+2. `NativeJoinDiagramSupport.installDefaultFitContent` 退为**视口尺寸兜底**：首次显示且有尺寸后
+   补 `fitContent(true)`，最多 2 次（间隔递增，非轮询），吸收「布局收尾早于组件拿到最终尺寸」；
+3. 守卫落到 `testDatabase` 的 `HeavyNativeDatabaseDiagramJoinChainTest`：建图组件后断言
+   `settings.isFitContentAfterLayout == true` 与 `view.fitContentOnResize == true`。
+
+**诚实口径**：该守卫用例在本机仍走绿跳（DB 集成链的驱动管线未通，见 T-ExecDocGate 计划 §七 记录的
+平台侧断点），断言**已写入但本机未真正执行**；本机的有效验证仍是用户的真机复验。

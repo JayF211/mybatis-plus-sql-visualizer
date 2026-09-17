@@ -179,6 +179,15 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
             edgeNames.any { it?.startsWith("SQLV_JOIN") == true },
         )
 
+        // T-PreviewBgFit（问题二守卫）：原生图须置「布局后自适应」+「尺寸变化后保持自适应」——
+        // 布局管线只在开关置位后才于布局收尾调 fitContent（GraphLayoutServiceImpl 字节码实证），
+        // 而我们手工建图无平台标签页路径的置位时机（真机实证：同会话第一张图不居中、第二张正常）。
+        assertTrue(
+            "原生图应开启「布局后自适应」（否则打开即停默认缩放/左上角）",
+            b.presentationModel.settings.isFitContentAfterLayout,
+        )
+        assertTrue("原生图应开启「尺寸变化后保持自适应」", b.view.fitContentOnResize)
+
         NativeDatabaseDiagramSupport.disposeNativeEditor(comp)
         assertTrue(
             "dispose 后虚拟外键登记应清空",

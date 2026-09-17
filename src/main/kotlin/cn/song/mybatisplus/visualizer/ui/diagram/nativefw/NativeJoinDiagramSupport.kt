@@ -72,32 +72,30 @@ object NativeJoinDiagramSupport {
      * 异常一律吞掉（与 buildTabComponent 同隔离语义），不影响图展示。
      */
     private fun installDefaultFitContent(host: JComponent, editor: Disposable) {
+        // 主机制在 opener：开关必须在异步布局触发前置位（见 buildEmbeddableEditor 步骤 3.5），
+        // 此处只做**视口尺寸兜底**——异步布局收尾时 fit 可能早于组件拿到最终尺寸。
         val builder = runCatching { NativeJoinDiagramOpener.builderOf(editor) }.getOrNull() ?: return
-        val presenter = runCatching { builder.presentationModel }.getOrNull()
-        // ① 平台开关：布局后自动自适应（= 工具栏「布局后自适应」toggle 的实现语义）
-        runCatching { presenter?.settings?.setFitContentAfterLayout(true) }
-            .onFailure { LOG.warn("Enable fitContentAfterLayout failed", it) }
-        // ② 视口尺寸变化（拖分隔条/拉窗口）后保持自适应（= 平台 setFitContentOnResize）
-        runCatching { builder.view.setFitContentOnResize(true) }
-            .onFailure { LOG.warn("Enable fitContentOnResize failed", it) }
+        NativeJoinDiagramOpener.enableAutoFit(builder)
+        val graphBuilder = runCatching { builder.presentationModel.graphBuilder }.getOrNull() ?: return
 
-        val graphBuilder = runCatching { presenter?.graphBuilder }.getOrNull() ?: return
-        var fitted = false
-        val fit: () -> Unit = fit@{
-            // 未显示/无尺寸时不消费一次性机会（等下一次 shown/resized 事件）
-            if (fitted || !host.isShowing || host.width <= 0 || host.height <= 0) return@fit
-            fitted = true
+        var fits = 0
+        fun fitOnce() {
+            if (!host.isShowing || host.width <= 0 || host.height <= 0) return
+            if (fits >= MAX_FALLBACK_FITS) return
+            fits++
             runCatching { graphBuilder.fitContent(true) }
                 .onFailure { LOG.warn("Initial fitContent failed", it) }
-            // 异步布局可能在首帧后收尾——延后再补一次（仍与【调整内容】同参）
-            javax.swing.Timer(700) { ev ->
-                (ev.source as? javax.swing.Timer)?.stop()
-                runCatching { graphBuilder.fitContent(true) }
-            }.apply { isRepeats = false; start() }
+            if (fits < MAX_FALLBACK_FITS) {
+                // 异步布局/渲染收尾可能在首帧之后——有限次延后补拍（非轮询）
+                javax.swing.Timer(fits * 900) { ev ->
+                    (ev.source as? javax.swing.Timer)?.stop()
+                    fitOnce()
+                }.apply { isRepeats = false; start() }
+            }
         }
         host.addComponentListener(object : java.awt.event.ComponentAdapter() {
-            override fun componentShown(e: java.awt.event.ComponentEvent) = fit()
-            override fun componentResized(e: java.awt.event.ComponentEvent) = fit()
+            override fun componentShown(e: java.awt.event.ComponentEvent) = fitOnce()
+            override fun componentResized(e: java.awt.event.ComponentEvent) = fitOnce()
         })
     }
 
@@ -132,6 +130,12 @@ object NativeJoinDiagramSupport {
 
     /** 快照驻留上限：预览面板长期打开时防注册表无限累积。 */
     private const val MAX_SNAPSHOTS = 32
+
+    /**
+     * T-PreviewBgFit：视口尺寸兜底 fit 的最大次数（含首次）——异步布局收尾可能晚于首帧，
+     * 但不得退化成轮询（最多 2 次，间隔递增）。
+     */
+    private const val MAX_FALLBACK_FITS = 2
 
     /** clientProperty key：组件 → 内部 FileEditor（dispose 用）。 */
     private const val NATIVE_EDITOR_KEY = "mpsql.native.join.editor"
