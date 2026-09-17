@@ -964,12 +964,14 @@ class SqlToJavaPanel(
                     }
                     Triple(main, subEntities as Map<String, JavaCodeGenerator.EntityTarget>, listOfNotNull(main))
                 }
+                // T-WSC-02：render → setResultText → WriteCommandAction 写结果区文档，属文档写入回调，
+                // 不能用 any()（恒 write-unsafe，见 DocWriteContext KDoc）——改 nonModal。
                 ApplicationManager.getApplication().invokeLater({
                     if (project.isDisposed) return@invokeLater
                     cacheCandidates = resolved.third
                     cacheSubEntities = resolved.second
                     render(result, resolved.third, format, resolved.second)
-                }, ModalityState.any())
+                }, ModalityState.nonModal())
             }
         }.show()
     }

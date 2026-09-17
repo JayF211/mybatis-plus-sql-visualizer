@@ -141,4 +141,99 @@ class BannedApiSourceScanTest {
             bad.isEmpty(),
         )
     }
+
+    // ------------------------------------------------------------------
+    // write-safe 上下文（T-WriteSafeCtx：2026-09-17 真机 Write-unsafe context 事故）
+    // ------------------------------------------------------------------
+
+    /** src/main 原文（**不剥注释**——豁免标注要在原文上认；CRLF/缩进原样保留）。 */
+    private fun rawMainSources(): List<Pair<String, String>> =
+        repoRoot().resolve("src/main/kotlin").walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') to it.readText() }
+            .toList()
+
+    /**
+     * 括号配平取出每个 `invokeLater(` 调用的完整文本（含闭括号）与起始行号。
+     *
+     * 精确匹配 `invokeLater(`，故 `invokeLaterWriteSafe(`/`invokeLaterOnWriteThread(`（正确形态）
+     * 天然不在扫描面内。
+     */
+    private fun invokeLaterCalls(code: String): List<Pair<Int, String>> {
+        val out = ArrayList<Pair<Int, String>>()
+        var idx = code.indexOf("invokeLater(")
+        while (idx >= 0) {
+            var depth = 0
+            var j = idx + "invokeLater".length
+            while (j < code.length) {
+                if (code[j] == '(') depth++
+                else if (code[j] == ')') {
+                    depth--
+                    if (depth == 0) break
+                }
+                j++
+            }
+            if (j < code.length) {
+                out.add(code.take(idx).count { it == '\n' } + 1 to code.substring(idx, j + 1))
+            }
+            idx = code.indexOf("invokeLater(", idx + 1)
+        }
+        return out
+    }
+
+    /** 取调用行**向上连续的注释/空行块**（豁免标注的合法位置：紧贴调用行上方）。 */
+    private fun leadingCommentBlock(code: String, callLine: Int): String {
+        val lines = code.lines()
+        val sb = StringBuilder()
+        var i = callLine - 2 // callLine 是 1-based，减 2 = 上一行的 0-based 下标
+        while (i >= 0) {
+            val t = lines[i].trim()
+            if (t.isEmpty() || t.startsWith("//")) {
+                sb.insert(0, lines[i] + "\n")
+                i--
+            } else {
+                break
+            }
+        }
+        return sb.toString()
+    }
+
+    @Test
+    fun `禁止在any模态回调里做文档写`() {
+        // T-WriteSafeCtx（2026-09-17 真机堆栈：Write-unsafe context! current modality=NON_MODAL，
+        // 栈底 SqlPreviewPanel.showSql:1711-1712）。平台契约（243 源码实证）：`ModalityState.nonModal()`
+        // 恒 write-safe、`any()` 恒 write-unsafe（TransactionGuard.java:73-76 原文）——posted runnable
+        // 不算用户活动（IdeEventQueue.kt:1054），`wrapLaterInvocation` 对非 write-safe 模态走 else 分支
+        // （TransactionGuardImpl.java:201）不套 runWithWritingAllowed，于是写文档必触发
+        // TransactionGuardImpl:141-145 的 LOG.error（生产 SEVERE + 「Plugin to blame」+ FUS 上报，
+        // 单测 logger 直接抛）。
+        //
+        // 修法三选一：① 写入类回调改 ModalityState.nonModal()；② 幂等重算的入口经 DocWriteContext
+        // （runWriteSafe / invokeLaterWriteSafe）自愈投递；③ 确属纯 UI/只读，在调用行上方加
+        // `// write-safe: <理由>` 标注（守卫按「调用行向上连续的注释块」识别豁免）。
+        val writeTokens = listOf(
+            "setText(", "insertString(", "replaceString(", "runWriteCommandAction", "commitDocument(",
+            "saveDocument(", "setBinaryContent", "writeVfTextViaDocument(", "docWriteOnce(",
+            "dispatchDocWriteOnEdt(", "writeConsoleOutput(", "refreshConsoleModel(",
+            "prepareAfterEditorResolved(", "attachConsole(", "prewarmExecTempFile(",
+            "prewarmPreviewTempFile(", "syncExecVfContentIfNeeded(", "renderSql(", "showSql(",
+            "recoverConsole(", "setResultText(", "createEditor(", "render(", "WriteAction.",
+        )
+        val offenders = ArrayList<String>()
+        for ((path, raw) in rawMainSources()) {
+            for ((line, body) in invokeLaterCalls(raw)) {
+                if (!body.contains("ModalityState.any()")) continue
+                if (leadingCommentBlock(raw, line).contains("write-safe:")) continue
+                // 令牌判定只看代码（剥掉 body 内的注释，避免「注释里提到 setText」误报）
+                val stripped = stripComments(body)
+                val hit = writeTokens.filter { stripped.contains(it) }
+                if (hit.isNotEmpty()) offenders.add("$path:$line → ${hit.joinToString("/")}")
+            }
+        }
+        assertTrue(
+            "在 ModalityState.any()（恒 write-unsafe）排出的回调里做文档写，命中 ${offenders.size} 处：$offenders。" +
+                "改 ModalityState.nonModal()、或经 DocWriteContext 投递、或对纯 UI 站点加 `// write-safe: <理由>` 标注",
+            offenders.isEmpty(),
+        )
+    }
 }

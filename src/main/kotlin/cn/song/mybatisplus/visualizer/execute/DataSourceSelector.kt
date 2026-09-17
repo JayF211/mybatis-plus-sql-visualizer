@@ -408,6 +408,7 @@ object DataSourceSelector {
                 val consoleForModel = console
                 val vfForModel = consoleVf
                 com.intellij.openapi.project.DumbService.getInstance(project).runWhenSmart {
+                    // write-safe: 无 document 写（反射替换 DBN script model）
                     ApplicationManager.getApplication().invokeLater({
                         runCatching {
                             refreshConsoleModel(project, consoleForModel, vfForModel, LOG)
@@ -459,6 +460,7 @@ object DataSourceSelector {
         // 接近底部，bottom（DBN Output/Tx 结果区占位）收起不显示，满足"未执行不显示结果面板"。
         if (!executeAfterPrepare) {
             (full as? javax.swing.JSplitPane)?.let { sp ->
+                // write-safe: UI-only（纯 Swing/只读，无文档写）
                 ApplicationManager.getApplication().invokeLater({
                     sp.setDividerLocation(1.0)
                     sp.revalidate()
@@ -702,6 +704,7 @@ object DataSourceSelector {
                             doc.insertString(doc.textLength, "$append$text")
                         }
                         // 滚到末尾（新输出可见）
+                        // write-safe: 无 document 写（反射替换 DBN script model）
                         com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater({
                             runCatching {
                                 // 滚动到底：LanguageConsoleView 的 caret/scrollPosition
@@ -791,10 +794,13 @@ object DataSourceSelector {
                         lastReportedError = err
                         LOG.info("[M36] refresh console error detected (tick=$ticks): ${err.take(120)}")
                         // M36.5.70：把错误写入 Output 控制台可视区（DBN 报错时 Output 内容视图 0x0 不显示）
+                        // T-WSC-02：writeConsoleOutput 内部是文档写（runWriteCommandAction + insertString），
+                        // 且上游是 Swing Timer 拍（Timer 活动同样非用户活动）——必须 write-safe 模态投递，
+                        // any() 恒 write-unsafe（见 DocWriteContext KDoc）。
                         ApplicationManager.getApplication().invokeLater({
                             writeConsoleOutput(shared ?: preparedConsole, "执行失败: $err\n", isError = true)
                             onError?.invoke(err)
-                        }, com.intellij.openapi.application.ModalityState.any())
+                        }, com.intellij.openapi.application.ModalityState.nonModal())
                         return
                     }
                 // M36.5.13：每拍清提示符（压制执行后重设）
@@ -932,7 +938,10 @@ object DataSourceSelector {
                         }.onFailure { e ->
                             LOG.warn("[M36] contentAdded rewrite FAILED: ${e.message}")
                         }
-                    }, com.intellij.openapi.application.ModalityState.any())
+                        // T-WSC-02：本回调写 console 文档（setText + commitDocument + saveDocument）且用的是
+                        // 快照文本、不幂等——必须「投递时即 write-safe」，不能用重投递自愈，故 any() 改
+                        // nonModal（any() 恒 write-unsafe，见 DocWriteContext KDoc）。
+                    }, com.intellij.openapi.application.ModalityState.nonModal())
                 }
             })
             LOG.info("[M36] results hook attached (contentAdded -> embed results)")
@@ -960,6 +969,7 @@ object DataSourceSelector {
         if (!LOG.isDebugEnabled) return
         // M36.5.13：ModalityState.any()——模态弹窗期间探针照常执行（默认 modality 下 invokeLater
         // 被冻结：沙盒 12:09:55→12:10:50 延迟 55s 实证，探针日志失去诊断价值）
+        // write-safe: UI-only（纯 Swing/只读，无文档写）
         ApplicationManager.getApplication().invokeLater({
             runCatching {
                 // M36.5.10：整个探针体包 ReadAction——lazy PSI 经 DataManager.getDataContext
@@ -1230,6 +1240,10 @@ object DataSourceSelector {
                         if (editor == null) Thread.sleep(20)
                     }
                     val resolved = editor
+                    // T-WSC-02：本块经 prepareAfterEditorResolved 写 console 文档（`:1354`
+                    // WriteAction.compute { writeVfTextViaDocument }）——文档写回调一律 write-safe
+                    // 模态，any() 恒 write-unsafe（见 DocWriteContext KDoc）。代价：模态弹窗存续期
+                    // 准备链延后到弹窗关闭，正是平台对「改模型」要求的语义。
                     ApplicationManager.getApplication().invokeLater({
                         LOG.info("[M36] editor=$resolved (async wait)")
                         if (resolved != null) {
@@ -1242,7 +1256,7 @@ object DataSourceSelector {
                                 onError?.invoke(cause.message ?: cause.toString())
                             }
                         }
-                    }, com.intellij.openapi.application.ModalityState.any())
+                    }, com.intellij.openapi.application.ModalityState.nonModal())
                 }
             }
         }.onFailure { e ->
@@ -1365,6 +1379,7 @@ object DataSourceSelector {
                     val vfForModel = consoleVf
                     com.intellij.openapi.project.DumbService.getInstance(project).runWhenSmart {
                         // 延迟到 dialpct push 完全结束后（dumb 退出 + 一次 EDT 泵）再重建
+                        // write-safe: UI-only（纯 Swing/只读，无文档写）
                         ApplicationManager.getApplication().invokeLater({
                             runCatching {
                                 refreshConsoleModel(project, consoleForModel, vfForModel, LOG)
@@ -1625,6 +1640,7 @@ object DataSourceSelector {
             // 执行时 realignSplitDivider 展开 60%。用 invokeLater 等组件布局后再设 divider。
             if (!executeAfterPrepare) {
                 (component as? javax.swing.JSplitPane)?.let { sp ->
+                    // write-safe: UI-only（纯 Swing/只读，无文档写）
                     ApplicationManager.getApplication().invokeLater({
                         sp.setDividerLocation(1.0)
                         sp.revalidate()
@@ -1985,6 +2001,7 @@ object DataSourceSelector {
      * 调用方：执行结果换入（force=true）、预览折叠后布局漂移兜底（force=false）。 */
     private fun realignSplitDivider(sp: javax.swing.JSplitPane, force: Boolean = false) {
         // ① invokeLater 下一拍（组件已 add 到树）
+        // write-safe: UI-only（纯 Swing/只读，无文档写）
         ApplicationManager.getApplication().invokeLater({
             realignDividerOnce(sp, force)
         }, com.intellij.openapi.application.ModalityState.any())
@@ -2019,6 +2036,7 @@ object DataSourceSelector {
         }
         // M36.5.75：布局级修复 Output 控制台 44px 塌缩（替代 M36.5.72/73 的 fillOutputConsole
         // 一次性 setSize——被平台 EditorMergedHorizontalScrollBarLayout 每轮 layout 压回，必然失效）
+        // write-safe: UI-only（纯 Swing/只读，无文档写）
         ApplicationManager.getApplication().invokeLater({
             installOutputHistoryFillLayout(sp, log)
         }, com.intellij.openapi.application.ModalityState.any())
@@ -2425,6 +2443,7 @@ object DataSourceSelector {
                                     // 6729ms）。因此**所有"提交后"动作（8s 监控 / 结果 Tab 监听 /
                                     // 换入）必须在 doRunQueryInConsole 真正返回后**才启动，否则监听
                                     // 窗口会在真实提交前跑完并把上一轮结果顶进面板（滞后一轮真因）。
+                                    // write-safe: UI-only（纯 Swing/只读，无文档写）
                                     ApplicationManager.getApplication().invokeLater({
                                         if (generation != executionGeneration) {
                                             LOG.warn("[M36] execution submit cancelled at EDT (generation $generation != ${executionGeneration})")
@@ -2441,6 +2460,7 @@ object DataSourceSelector {
                                                             LOG.warn("[M36] native findScriptModel returned null (nothing to run?)")
                                                             // M36.5.48：findScriptModel 空 = 无可执行语句——显示**真实原因**，
                                                             // 而非笼统凭据超时提示（此前误用 execute.credential.hint，误导用户查密码/驱动）。
+                                                            // write-safe: UI-only（纯 Swing/只读，无文档写）
                                                             ApplicationManager.getApplication().invokeLater({
                                                                 onError?.invoke(MpSqlVisualizerBundle.message("execute.noStatement"))
                                                             }, com.intellij.openapi.application.ModalityState.any())
@@ -2459,6 +2479,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                                                             cause,
                                                         )
                                                         // M36.5.45：native 执行链失败必须通知 UI（此前仅 LOG.warn，用户看不到任何错误）
+                                                        // write-safe: UI-only（纯 Swing/只读，无文档写）
                                                         ApplicationManager.getApplication().invokeLater({
                                                             onError?.invoke(cause.message ?: cause.toString())
                                                         }, com.intellij.openapi.application.ModalityState.any())
@@ -2494,6 +2515,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                         // 打开期间默认 modality 的 invokeLater 冻结（沙盒 12:10:02→12:10:50 实证
                         // 48s 挂起），换入/重试/提示全不跑 → "执行中"卡住。any() 使任务在模态
                         // pump 中照常执行（纯 Swing 更新，安全）。
+                        // write-safe: UI-only（纯 Swing/只读，无文档写）
                         ApplicationManager.getApplication().invokeLater({
                             onError?.invoke(msg)
                         }, com.intellij.openapi.application.ModalityState.any())
@@ -2539,6 +2561,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
     ) {
         // M36.5.44：真实提交时刻递增换入代际——作废上一个执行遗留的 refresh Timer（防滞后一轮）。
         swapGeneration++
+        // write-safe: UI-only（纯 Swing/只读，无文档写）
         ApplicationManager.getApplication().invokeLater({
             // ① 快照：本次提交时已存在的结果 Tab **名称**（判定"新结果"的基线）。
             // M36.5.22b：实例身份判定失效——DBN 复用同一个 Content 实例并改名/更新
@@ -2712,6 +2735,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                         timer.stop()
                         lastReportedError = err
                         LOG.info("[M36] early console error detected (attempts=$attempts): ${err.take(120)}")
+                        // write-safe: UI-only（纯 Swing/只读，无文档写）
                         ApplicationManager.getApplication().invokeLater({
                             onError?.invoke(err)
                         }, com.intellij.openapi.application.ModalityState.any())
@@ -2784,10 +2808,12 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                                 else -> MpSqlVisualizerBundle.message("execute.timeout.hint")
                             }
                             LOG.info("[M36] result tab not appeared, no console error (dumb=$dumb, demoted=$demotedOverride) - hint via 40-tick window")
+                            // write-safe: UI-only（纯 Swing/只读，无文档写）
                             ApplicationManager.getApplication().invokeLater({
                                 onError?.invoke(fallbackHint)
                             }, com.intellij.openapi.application.ModalityState.any())
                         } else if (realError != null) {
+                            // write-safe: UI-only（纯 Swing/只读，无文档写）
                             ApplicationManager.getApplication().invokeLater({
                                 onError?.invoke(realError)
                             }, com.intellij.openapi.application.ModalityState.any())

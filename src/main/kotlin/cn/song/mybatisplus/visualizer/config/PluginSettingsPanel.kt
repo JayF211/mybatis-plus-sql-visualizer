@@ -1448,6 +1448,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 val text = String(file.contentsToByteArray(), Charsets.UTF_8)
                 applyImportedText(text)
             }
+            // write-safe: UI-only（纯 Swing/只读，无文档写）
             com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater({
                 outcome.onSuccess {
                     reset()
@@ -1484,6 +1485,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 val outcome = runCatching {
                     writeExportedFile(java.io.File(saved.file.absolutePath))
                 }
+                // write-safe: UI-only（纯 Swing/只读，无文档写）
                 com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater({
                     outcome.onSuccess {
                         showStatus(MpSqlVisualizerBundle.message("settings.export.success"), isError = false)

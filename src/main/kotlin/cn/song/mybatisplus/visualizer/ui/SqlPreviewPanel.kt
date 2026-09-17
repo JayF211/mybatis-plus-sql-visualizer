@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper
+import cn.song.mybatisplus.visualizer.execute.DocWriteContext
 import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor
 import cn.song.mybatisplus.visualizer.model.BatchColumn
@@ -797,13 +798,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 // 后控制台显示 1 行）。嵌入完成即按当前渲染文本回填一次；必须排在此处而非
                 // onNativeEditorReady —— showSql 的 nativeDoc 分支要求 consoleAttachedToMe()
                 // （= embeddedConsole 已进 consoleHost），挂载回调那一刻尚未满足。
+                // T-WSC-01：此处回调**会写文档**（renderSql → showSql → document.setText），故必须用
+                // write-safe 模态——原 ModalityState.any() 恒 write-unsafe，真机报 Write-unsafe context
+                // （见 DocWriteContext KDoc 与计划 20260917-1555 §一）。nonModal 的代价是模态弹窗存续期
+                // 回填延后到弹窗关闭——这正是平台对「改文档」要求的语义。
                 ApplicationManager.getApplication().invokeLater({
                     if (com.intellij.openapi.util.Disposer.isDisposed(this)) return@invokeLater
                     runCatching { renderSql() }.onFailure { e ->
                         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
                             .warn("[M36] post-attach re-render FAILED: ${e.javaClass.simpleName}: ${e.message}")
                     }
-                }, com.intellij.openapi.application.ModalityState.any())
+                }, com.intellij.openapi.application.ModalityState.nonModal())
             },
             onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
             // 默认准备失败（无数据源等）静默——不打扰预览；执行时再走全链提示
@@ -835,6 +840,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // M36.5.77：execute 路径（previewMode=false）即使同实例也要确保 divider 展开——
             // preview 时折叠为 1.0；execute 后必须恢复 0.6 显示结果区。
             if (!previewMode && consoleComponent is javax.swing.JSplitPane) {
+                // write-safe: UI-only（纯 Swing/只读，无文档写）
                 ApplicationManager.getApplication().invokeLater({
                     if (consoleComponent.height > 0) {
                         consoleComponent.setDividerLocation(0.6)
@@ -864,6 +870,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // 的 `if (height<200) return` 在布局初期塌缩时不触发，导致"预览 SQL 编辑器塌缩"，
             // 执行后才被 swap 的 realignSplitDivider 恢复（用户截图：预览布局问题，点执行后恢复）。
             // invokeLater 下一拍组件已在树中，强制 60%（编辑器主导），不依赖 resize 时机。
+            // write-safe: UI-only（纯 Swing/只读，无文档写）
             ApplicationManager.getApplication().invokeLater({
                 if (sp.height > 0) {
                     // M36.5.77：预览（previewMode=true）折叠底部（divider=1.0），隐藏无内容的
@@ -968,6 +975,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
                 .info("[M36] console component released by DBN (id=${System.identityHashCode(e.component)}) → re-host (since=${since}ms)")
             // ModalityState.any()：模态弹窗 pump 期间重挂照常执行（纯 Swing 操作安全，M36.5.13 教训）
+            // write-safe: UI-only（纯 Swing/只读，无文档写）
             ApplicationManager.getApplication().invokeLater({
                 rehostConsoleForTest(e.component as? JComponent ?: return@invokeLater)
             }, com.intellij.openapi.application.ModalityState.any())
@@ -1338,6 +1346,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 按当前压缩/多行模式 + 动态条件启用集合 + 参数回填重渲染 SQL 编辑器。 */
     private fun renderSql() {
+        // T-WSC-01：写安全自愈闸——renderSql 是面板全部文档写入的唯一上游（showSql 三条分支
+        // 都写文档：nativeDoc / 自建 editor / createEditor），而写入合法性取决于「这次 EDT 活动
+        // 是否 write-safe」（见 DocWriteContext KDoc）。非 write-safe（如 invokeLater(any) 排出的
+        // 活动、Timer 拍）时重投递到 nonModal 的下一拍；renderSql 幂等重算，不会写出过期文本
+        // ——这正是闸门放在 renderSql 而非 showSql(text) 的原因（后者收的是调用时刻的快照）。
+        if (!DocWriteContext.isWriteAllowedNow()) {
+            DocWriteContext.invokeLaterWriteSafe(this, "SqlPreviewPanel.renderSql") { renderSql() }
+            return
+        }
         val result = current ?: return
         val model = result.previewModel
         val batch = result.batchModel

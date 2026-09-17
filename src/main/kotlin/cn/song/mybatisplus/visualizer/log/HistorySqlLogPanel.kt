@@ -226,6 +226,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         project.messageBus.connect(this).subscribe(
             PluginSettings.SETTINGS_CHANGE_TOPIC,
             cn.song.mybatisplus.visualizer.config.SettingsChangeListener {
+                // write-safe: UI-only（纯 Swing/只读，无文档写）
                 ApplicationManager.getApplication().invokeLater(
                     { onDisplayModeChanged() },
                     com.intellij.openapi.application.ModalityState.any(),
