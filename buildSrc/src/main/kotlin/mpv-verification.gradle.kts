@@ -60,7 +60,13 @@ tasks.named<VerifyPluginTask>("verifyPlugin") {
         "-Dhttp.proxyHost=127.0.0.1",
         "-Dhttp.proxyPort=7890",
         "-Dhttps.proxyHost=127.0.0.1",
-        "-Dhttps.proxyPort=7890"
+        "-Dhttps.proxyPort=7890",
+        // T-VerifierHomeIso（2026-09-17 master 9578ccc，本拆分合流时回植至本 convention）：
+        // verifier-cli 1.410 在缺省 home（~/.pluginVerifier）下提取插件 zip 恒败（2×2 矩阵实证：
+        // 1.410×默认home 恒败、1.410×隔离home 与 1.409×任一 home 全绿；verifyGate 走 walkTopDown
+        // 字典序实际取 1.409 故独活）。显式隔离，并与 verifyGate 共用同一 build/verify-home
+        //（同 zip 提取缓存互享，~/.pluginVerifier 污染源整类摘除）。
+        "-Dplugin.verifier.home.dir=" + layout.buildDirectory.dir("verify-home").get().asFile.absolutePath,
     )
     // T-ReleasePerf-01（P0-1）：离线化 + 豁免清单——本仓库此前只注入了代理，verifier 每个目标都要
     // 联网解析该 IDE 的 bundled 插件集（daemon 日志实证：45 次运行 PluginDetailsCache

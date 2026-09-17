@@ -185,3 +185,8 @@ T-BS-00（基线四指纹）→ T-BS-01（buildSrc 骨架 + changeNotes 外置�
 4. **testShards 绝对数 4279 vs beta.3 4299**：差 20 系 cbec1ee..dc047bd 间 18 文件测试源演化（390+/612-，T-VStack·InAll 重做与 t-uinative 合入）所致——T-VStack·InAll 台账记载同测试源时期串行全量即 4279，与本次分片全量吻合，非拆分丢测。
 
 **遗留**：dev 分支 build.gradle.kts 同款单文件结构留待 T-MergeDev2Master——合流时以 master（本拆分后形态）为准，按计划 §2.2 清单回植 dev 五处独有增量（mcpStub 源集三处→root、testShardN 桩挂载一行→mpv-testing、snakeyaml→root dependencies；verify 目标维持 master 2026.2.3）。
+
+**合流补充（2026-09-17 09:4x，并入 master 9578ccc T-VerifierHomeIso）**：
+
+- 实施期间 master 并行落了 9578ccc（verifyPlugin home 隔离，改动恰在本拆分搬走的 verifyPlugin 块）——合并时 build.gradle.kts 取拆分侧，**T-VH-01 的 `-Dplugin.verifier.home.dir` 行连同其 2×2 矩阵注释已回植 mpv-verification.gradle.kts**（verifyPlugin 块新家），03 篇 :34（其 T-VH-04 补注）与 :37（本计划改笔）双改自动合并共存，变更记录两行并保留。
+- **附带发现（移交，非本任务修复）**：合流后实测 IPGP `verifyPlugin`（smoke/minimal 复跑 4 次）**确定性判败** `[DEPRECATED_API_USAGES, EXPERIMENTAL_API_USAGES]`——verdict 双目标全 Compatible 但任务失败。证据链：failureLevel 自 T-M30.1 起即 `entries - COMPATIBILITY_PROBLEMS`（含这两级，前提「其余 0 命中」）；本机最新报告 243 目标 6 deprecated + 14 experimental、262 目标 55 deprecated + 14 experimental（T-VerifyIde2623 晨间 verifyGate verdict 同数）；本拆分对 failureLevel/verifyPlugin 配置零改动、产物 plugin.xml 与基线字节一致 ⇒ 判败与拆分无关，系用量自旧基线后混入、而 verifyPlugin 已降级退出全部门禁（releaseGate/verifySmoke/verifyFull 均走 verifyGate）长期无人触达所致。T-VerifierHomeIso T-VH-02 记录的 08:37「minimal 绿」与本轮同命令 4 连挂矛盾——同报告内容（deprecated-usages.txt 6 行/experimental 14 行逐字节同）下绿败不一，指向其 documented 控制台解析竞态或 verdict 级误读。修复属 failureLevel 政策调整（行为变更），留 T-VerifierHomeIso 域另决。
