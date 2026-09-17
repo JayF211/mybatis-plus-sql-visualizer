@@ -124,6 +124,111 @@ class BannedApiSourceScanTest {
         )
     }
 
+    // ------------------------------------------------------------------
+    // 第二轮守卫（T-TestGuard2，2026-09-17）：0914 后新增坑档的结构断言
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `模态弹窗只允许白名单内既有场景`() {
+        // 弹窗克制红线（docs/开发计划/20260906-0180）+ T-UiNative「模态轻提示改平台通知」定案：
+        // 轻提示/进度/结果反馈一律走平台 Notification（无打断、可聚合），模态 Messages/JOptionPane
+        // 只保留「用户必须做选择或知情确认」的场景。白名单 = 现存合法场景快照（T-TestGuard2 实测 3 文件），
+        // 新增模态弹窗须在此显式加白并在调用点注释场景依据，否则守卫红——拦截「顺手弹个窗」回潮。
+        // SourceCaptureGuide：跳转引导三按钮弹框（用户决策点）+ 引导结果 info/warning；
+        // SqlPreviewPanel：执行前 YesNo 确认；PluginSettingsPanel：配置异常 warning。
+        val whitelist = setOf(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SourceCaptureGuide.kt",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt",
+        )
+        val found = mainSources()
+            .filter { (_, code) ->
+                code.contains("Messages.show") || Regex("JOptionPane\\.show\\w+Dialog").containsMatchIn(code)
+            }
+            .map { (path, _) -> path }
+        val extra = found - whitelist
+        assertTrue(
+            "src/main 出现白名单外的模态弹窗（$extra）。弹窗克制红线：轻提示/进度/结果走平台 Notification，" +
+                "确属「用户必须选择/知情确认」场景才可加白本守卫并在调用点注释依据",
+            extra.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `buildSrc脚本禁用fileContents的asText读取`() {
+        // T-BS-01 实录（pitfall-filecontents-charset）：providers.fileContents().asText 按 JVM
+        // 平台默认字符集解码，本机 GBK daemon 把 UTF-8 的 change-notes 读成乱码（集合→闆嗗悎）。
+        // 正确形态 = asBytes + toString(Charsets.UTF_8) 显式解码（mpv-release.gradle.kts 先例）。
+        val bad = repoRoot().resolve("buildSrc/src/main/kotlin").walkTopDown()
+            .filter { it.isFile && it.extension == "kts" }
+            .filter { stripComments(it.readText()).contains(".asText") }
+            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') }
+            .toList()
+        assertTrue(
+            "buildSrc 脚本出现 fileContents().asText（按 daemon 平台字符集解码，GBK 机器读 UTF-8 文件乱码）：$bad。" +
+                "改 asBytes().toString(Charsets.UTF_8) 显式解码",
+            bad.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `网络出口收口锚点_FeedbackApi须含errorStream与ContentEncoding处理`() {
+        // HttpRequests 两坑（全局 pitfall-http-error-body-swallowed）：① readString 只读成功流，
+        // 4xx 正文被丢，须自读 errorStream；② myGzip 默认 true 自动协商 gzip，手写读取须按
+        // Content-Encoding 解压。两者收口在 FeedbackApi 的 HttpRequestsSender（postJsonWithBody +
+        // readBody）。此守卫防收口被拆散/退化——任何一侧锚点消失即红。
+        val feedback = stripComments(
+            repoRoot().resolve("src/main/kotlin/cn/song/mybatisplus/visualizer/feedback/FeedbackApi.kt").readText(),
+        )
+        assertTrue(
+            "FeedbackApi.kt 丢失 errorStream 读取（4xx 正文将被 readString 丢弃，用户只看到裸状态码）——" +
+                "网络出口收口被拆散，恢复 HttpRequestsSender 的错误正文读取",
+            feedback.contains("errorStream"),
+        )
+        assertTrue(
+            "FeedbackApi.kt 丢失 gzip 解压处理（myGzip 默认协商 gzip，手写读取不解压得二进制乱码）——" +
+                "恢复 readBody 的 contentEncoding 判别 + GZIPInputStream 解压分支",
+            feedback.contains("contentEncoding") && feedback.contains("GZIPInputStream"),
+        )
+        // UpdateApi 走平台 readString（成功流+自动解压，GET manifest 场景定案合法）——
+        // 禁手写原始响应流，防止有人绕开收口自造读取。
+        val update = stripComments(
+            repoRoot().resolve("src/main/kotlin/cn/song/mybatisplus/visualizer/update/UpdateApi.kt").readText(),
+        )
+        val raw = listOf("getInputStream(", "openStream(").filter { update.contains(it) }
+        assertTrue(
+            "UpdateApi.kt 出现手写原始响应流读取（$raw）——绕开平台 readString 会同时踩 4xx 正文丢失与 gzip 不解压两坑。" +
+                "清单/下载统一走平台 readString/readBytes",
+            raw.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `剪贴板写入只允许收口与白名单直用`() {
+        // T-UiNative P0：剪贴板统一走 util.UiTextClipboard（进平台复制栈，Ctrl+Shift+V 可回贴），
+        // 此前直写 Toolkit.systemClipboard 与 CopyPasteManager 双轨。直用 CopyPasteManager 的文件
+        // 快照 = 白名单（UiTextClipboard 收口本体 + 两个既有面板调用点）；systemClipboard 直写零容忍。
+        val whitelist = setOf(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/util/UiTextClipboard.kt",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/components/CopyExecutableSqlAction.kt",
+        )
+        val direct = mainSources()
+            .filter { (_, code) -> code.contains("CopyPasteManager") }
+            .map { (path, _) -> path }
+        val extra = direct - whitelist
+        assertTrue(
+            "src/main 出现白名单外的 CopyPasteManager 直用（$extra）——剪贴板写入统一走 util.UiTextClipboard.copy，" +
+                "确属特殊场景（如编辑器复制栈交互）才可加白本守卫并注释依据",
+            extra.isEmpty(),
+        )
+        assertNoHits(
+            "getSystemClipboard",
+            "直写系统剪贴板绕开平台复制栈（与 CopyPasteManager 双轨，T-UiNative P0 已收口）",
+            "改走 util.UiTextClipboard.copy",
+        )
+    }
+
     @Test
     fun `方言setMapping反射只允许DialectPreMapping单入口`() {
         // T-ExecSlowOps F1：SqlDialectMappings.setMapping 平台硬要求 EDT（handleMappingChange →

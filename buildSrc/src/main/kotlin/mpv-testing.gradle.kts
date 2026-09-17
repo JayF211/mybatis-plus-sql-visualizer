@@ -64,9 +64,73 @@ fun listSuiteXmls(dir: File): List<File> =
     dir.listFiles { f: File -> f.isFile && f.name.startsWith("TEST-") && f.name.endsWith(".xml") }?.toList() ?: emptyList()
 
 // T-TestPerf2：分片数，-PtestShardCount=N（默认 3，上限 6；6C12T 实测 3 片最优，2 片慢 ~40%）。
+// T-TestPerf3（2026-09-17）4 片复测：3m02s vs 3 片 2m03s——4 片并发超出物理核竞争反而慢，
+// 默认 3 片定案维持。
 // 顶层声明——分片注册（testIde 块内）与聚合报告（testShards 任务）两处共用。
 val testShardCount = providers.gradleProperty("testShardCount").orNull
     ?.toIntOrNull()?.coerceIn(1, 6) ?: 3
+
+// 测试源码单遍扫描（T-TestPerf3 提为顶层：分片分区与 testFast 划桶两处共用；内容提取类名，
+// Kotlin 文件名≠类名合法——CrudPreviewFlowAndTypesTest.kt 内是 DbTypeQuoteHintTest 的先例）。
+// Triple(包名, 顶层测试类名列表, 原文)。
+val testFileEntries: List<Triple<String, List<String>, String>> = file("src/test/kotlin").walkTopDown()
+    .filter { it.isFile && (it.name.endsWith("Test.kt") || it.name.endsWith("Test.java")) }
+    .map { f ->
+        val text = f.readText()
+        val pkg = Regex("""^\s*package\s+([\w.]+)""", RegexOption.MULTILINE)
+            .find(text)?.groupValues?.get(1) ?: ""
+        val classNames = Regex(
+            """(?m)^(?:public\s+|internal\s+|open\s+|abstract\s+|final\s+|data\s+|sealed\s+|annotation\s+)*class\s+(\w+)\b""",
+        ).findAll(text).mapNotNull { it.groupValues[1].takeIf { cn -> cn.endsWith("Test") } }.toList()
+        Triple(pkg, classNames.ifEmpty { listOf(f.name.substringBeforeLast('.')) }, text)
+    }.toList()
+
+// T-TestPerf3（2026-09-17）：testFast 秒级反馈通道。
+// 划桶规则（保守）：源码零 `com.intellij` 引用的测试类才进快桶——凡是 import 平台类的
+// 一律留平台桶。第一轮 T-TestPerf-03 实证 68 个「纯逻辑」用例隐性依赖同 worker JVM 平台
+// 测试先建立的 Application/LaF 状态（脱离平台桶即红）；本轮基线数据（平台型 1790 用例
+// 222.1s = 94.7%、纯逻辑 2531 用例 12.5s = 5.3%）同时证伪了「纯逻辑分桶给全量提速」的
+// 价值（12.5s 总量无提速空间，68 例债务清偿亦无收益——正式销账，勿再立项）。
+// 本任务的价值重定位：**日常开发的秒级反馈**——改纯逻辑面（parser/converter/tokenizer/
+// 守卫测试）时 ./gradlew testFast 半分钟内验证，不必等 4 分钟全量。全量权威仍是 test/testShards。
+// classpath 复用默认 test 任务成品（IPGP 把平台 jar 直配任务不进 sourceSets.runtimeClasspath，
+// T-TestPerf-03 实验趟通）；DB 集成四类 import 平台 Database 链天然不进桶；forks=1（12s 总量
+// 无并行收益，避免新假失败形态）。
+val fastBucketClasses: List<String> = testFileEntries
+    .filter { (_, _, text) -> !text.contains("com.intellij") }
+    .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
+    // 隐性平台依赖排除名单：测试源码无 com.intellij 字面引用，但被测生产类内部走平台 UI/
+    // 静态状态，脱离平台 JVM 即红（testFast 首跑 4 类 28 例实证；失败形态=NoClassDefFoundError
+    // UIUtil / Application NPE / Must be precomputed）。新类踩同坑时在此追加。
+    .filter { it !in setOf(
+        "cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanelTest",
+        "cn.song.mybatisplus.visualizer.ui.diagram.DiagramRendererTest",
+        "cn.song.mybatisplus.visualizer.actions.CrudSqlPreviewFlowTest",
+        "cn.song.mybatisplus.visualizer.feedback.ErrorReportDialogLayoutTest",
+    ) }
+
+tasks.register<Test>("testFast") {
+    group = "verification"
+    description =
+        "纯逻辑快测（源码零 com.intellij 引用的测试类，秒级反馈通道；全量权威仍是 test/testShards）"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    // classpath 三段构造（T-TestPerf3 实测两轮定案）：
+    //  ① main+test output **前置**——PluginBuildInfo 的「开发/测试形态类从 classes 目录加载、
+    //     无 jar 可读 → mpvBuild()=null」是测试前提（testMpvBuildNullInTestEnvironment）；
+    //     直接复用默认 test 成品 classpath 时插件自身 jar（IPGP/mcpStub 挂载、含构建脚本注入的
+    //     MPV-Build manifest）排在可达位，类解析撞 jar 读出真实构建时间戳 → 假失败；
+    //  ② 平台 jar 仍须复用默认 test 成品（IPGP 平台 jar 直配任务、不进 sourceSets.runtimeClasspath，
+    //     T-TestPerf-03 趟通；生产类 companion 的 Logger.getInstance 等静态初始化在类加载期解析平台类）；
+    //  ③ 剔除插件自身 jar——①前置后它只剩干扰面（manifest 读取前提 + 陈旧产物劫持形态）无收益。
+    classpath = sourceSets["main"].output + sourceSets["test"].output +
+        tasks.named<Test>("test").get().classpath.filter {
+            !it.name.startsWith("mybatis-plus-sql-visualizer-")
+        }
+    filter {
+        fastBucketClasses.forEach { includeTestsMatching(it) }
+    }
+    maxParallelForks = 1
+}
 
 intellijPlatformTesting {
     testIde {
@@ -79,10 +143,9 @@ intellijPlatformTesting {
         // 配置缓存语义与类发现一致：新增测试类/时长变化在下一次配置失效后生效，短暂失衡不影响正确性。
         // 片数：-PtestShardCount=N（默认 3）。旧类名哈希两片实测失衡 26%（157.9s/93.7s），
         // 时长均衡两片 125.8s/125.8s——并行墙钟被重片拖死的问题根除（数据见 T-TestPerf2 计划 §二）。
-        // 单遍扫描测试源码：Triple(包名, 顶层测试类名列表, 原文)。类名从内容提取而非文件名——
-        // Kotlin 文件名≠类名合法（实证 CrudPreviewFlowAndTypesTest.kt 内是 class DbTypeQuoteHintTest，
-        // 3 用例曾被「文件名=FQCN」旧法漏掉，分片并集比串行少 3）；列 0 的 class 声明含 Kotlin/Java
-        // 常见修饰符；无顶层类声明时回退文件名（嵌套类套件等形态）。新增测试类零维护自动进片。
+        // 类发现走顶层 testFileEntries（T-TestPerf3 提升为顶层，与 testFast 划桶共用单遍扫描）；
+        // 列 0 的 class 声明含 Kotlin/Java 常见修饰符；无顶层类声明时回退文件名（嵌套类套件等形态）。
+        // 新增测试类零维护自动进片。
         // DB 集成三类仍只在 testDatabase 运行（与默认 test 的排除口径一致）。
         val dbIntegrationClasses = setOf(
             "cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest",
@@ -91,17 +154,6 @@ intellijPlatformTesting {
             // T-ExecDocGate：执行文档落盘纪律断言（testDatabase 通道，Database 插件链）
             "cn.song.mybatisplus.visualizer.execute.ExecDocGateIntegrationTest",
         )
-        val testFileEntries: List<Triple<String, List<String>, String>> = file("src/test/kotlin").walkTopDown()
-            .filter { it.isFile && (it.name.endsWith("Test.kt") || it.name.endsWith("Test.java")) }
-            .map { f ->
-                val text = f.readText()
-                val pkg = Regex("""^\s*package\s+([\w.]+)""", RegexOption.MULTILINE)
-                    .find(text)?.groupValues?.get(1) ?: ""
-                val classNames = Regex(
-                    """(?m)^(?:public\s+|internal\s+|open\s+|abstract\s+|final\s+|data\s+|sealed\s+|annotation\s+)*class\s+(\w+)\b""",
-                ).findAll(text).mapNotNull { it.groupValues[1].takeIf { cn -> cn.endsWith("Test") } }.toList()
-                Triple(pkg, classNames.ifEmpty { listOf(f.name.substringBeforeLast('.')) }, text)
-            }.toList()
         val discoveredTestClasses: List<String> = testFileEntries
             .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
             .filter { it !in dbIntegrationClasses }
