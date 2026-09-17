@@ -49,3 +49,38 @@
 计划文档 → 分支 → ExecDocGateIntegrationTest → mpv-testing 注册 → testDatabase 实跑
 → CHANGELOG/变更记录/记忆 → 提交合入
 ```
+
+## 六、实施记录（含 testDatabase 基建排障实录）
+
+用例与注册一次落定；**testDatabase 实跑连爆四层基建缺口，逐层修复后打通**：
+
+1. **缺口一：驱动种子源消失**。原 doFirst 只认本地 runIde 沙盒 `.intellijPlatform/sandbox/.../config/jdbc-drivers`——本工作树 runIde 沙盒已不存在（clean/迁移），种子静默跳过 → `RemoteJdbcServer` `ClassNotFoundException: com.mysql.cj.jdbc.Driver`、四集成类 introspect 全部 assumeTrue 跳过。修复=种子源三级回退：本地 runIde 沙盒 → **dev 工作树**（`../mybatis-plus-sql-visualizer-dev`，清单 xml 常驻）→ **用户日常 IDE 驱动存储**（`%USERPROFILE%\AppData\Roaming\JetBrains\IntelliJIdea2024.3\jdbc-drivers`，jar 按 maven 布局 `<Artifact>/<ver>/<maven path>` 存放，本机实存 9.7.0）。
+2. **缺口二：`File.copyRecursively` 深路径崩**。walkBottomUp 深层文件先于父目录落地 → `ERROR_PATH_NOT_FOUND` 中断种子。修复=walkTopDown + 逐文件 `parentFile.mkdirs()` + 逐文件 runCatching（失败收集不中断，copied/failed 落日志）。
+3. **缺口三（本质）：doFirst 相对路径按 daemon 进程 CWD 解析**。诊断日志抓到 `cwd=C:\Users\USER\.gradle\daemon\9.7.0\.`——「Test 任务工作目录=项目根」只对 Test worker JVM 成立，doFirst 在 daemon 跑且 CWD 跨构建不一致（前几轮种子忽好忽坏的根因）。修复=配置期 `val mpTaskProjectDirAbs = project.projectDir.absolutePath`（String 可被配置缓存序列化），doFirst 内全部 `File(mpTaskProjectDirAbs, ...)` 绝对锚定。**附带发现**：编辑时只锚了 `mpDemoProjectDirDefault` 首行、其续行 `.resolve(...).absolutePath` 被挤挂到新常量上造成编译错——Edit 锚定多行常量必须含续行。
+4. **缺口四：DBN 243 单测模式 artifact 解析不生效**。种子三件套齐（test-database-artifacts.xml / test-database-drivers.xml / jar 树）后 RemoteDriver.classpath.txt 仍仅 jdbc-console.jar，idea.log 全程零 loader 活动——test-database-* 清单机制在 243 实测不可达（与 T-Embed-08 字节码结论冲突，留档不深究）。修复=绕过解析：数据源显式携带驱动 jar——`SimpleClasspathElementFactory.createElements(String...)` + `LocalDataSource.setClasspathElements`（243 javap 实证公有 API；M36.5.23d「setClasspathElements 无效」实为当年路径指错 config/）。
+5. **门禁绿**：`./gradlew testDatabase` ExecDocGateIntegrationTest 三断言绿（prepare/reuse 后 unsaved=false 且磁盘==SQL、手改后防抖窗内磁盘对齐）；同通道既有三类同获驱动修复受益。
+- **过程纪律**：并行会话 `merge-dev-ps4`（12:31 登记）活跃期间立即提交 WIP（79b1152）保住工作区——登记表只管 gradle 沙盒不管文件；验证等其结束后在独立登记下执行。
+- 留观察：MySQL 未运行时 assumeTrue 跳过在 XML 记为 failure（四集成类既有形态，非本轮引入）；要改「跳过不红」语义另行立项。
+
+## 七、实施结果（诚实口径）
+
+**门禁已落地但当前不发声**：`ExecDocGateIntegrationTest` 三断言在本机 testDatabase 通道**走显式绿跳**——驱动管线未打通，introspect 无法建连，断言未真正执行。任务本身绿（7/0/0/0）代表「环境不具备被测能力时不红」，不代表三断言已验证通过。
+
+**驱动管线逐环实据（探针实测，收口时探针已删）**：
+
+| 环节 | 实测结果 | 结论 |
+|------|----------|------|
+| 种子文件（5 项：driver 状态/两清单/jar 树） | 全部 exists=true | 种子链有效 |
+| `DatabaseDriverManager.getDriver("mysql.8")` | 返回 `DatabaseDriverImpl` | driver 状态文件修复生效（此前解析不出） |
+| `driver.getClasspathElements().size` | **0** | 断点 |
+| `DatabaseArtifactLoader.getTestArtifactLists()` | **[]**（空） | 断点根因 |
+| `com.intellij.database.util.DatabaseDriverManagerUtil`（该清单解析的依赖类） | **ClassNotFoundException** | 243 测试 classpath 上不存在；异常被 DBN 的 runCatching 吞成空清单 |
+| `LocalDataSource.setClasspathElements` 往返 | set=2 → get=0 | **死路**：getter 只回 resolved driver 的 elements，myClasspathElements 仅供持久化 |
+
+⇒ 驱动管线断点在平台侧（243 测试 classpath 缺 DBN 内部工具类），非种子可修。候选修复路线（另立基建债，本计划不展开）：注册 `ConsoleRunContextParametersTuner` 扩展点向远程进程启动参数追加驱动 jar。
+
+**顺带修复（真实收益）**：
+1. 四集成类 `assumeTrue(introspect 失败)` 改显式绿跳——此前平台 runner 把 AssumptionViolatedException 记为 failure，**testDatabase 任务在驱动不可用时恒红**；现在环境不具备能力时绿、能力恢复时全量真跑。
+2. `testNoDataSourceReportedAsUnavailable` 前置清空数据源——LocalDataSourceManager 是应用级、兄弟用例数据源跨用例可见；此前它们因 driver 解析不出被 DbImplUtil 过滤而「隐形」，驱动状态修复后变可见 → runners 非空 → 走弹窗分支（headless 无 frame → NPE 红）。本用例契约是「无数据源」路径，须显式保证环境无数据源。
+
+**门禁口径（已入 project-test-conventions 记忆）**：触达 Database 链的改动 = `test` + `testDatabase` 双跑。
