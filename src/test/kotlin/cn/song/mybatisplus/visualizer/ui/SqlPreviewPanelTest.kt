@@ -108,6 +108,34 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
+    /**
+     * T-PreviewBgFit（问题一守卫）：左侧参数滚动区必须自带面板底色——该区整条链是透明的
+     * （paramTopAlign/viewport 非不透明），底色过去由祖先容器提供；T-UiNative P0a 把自绘分栏换成
+     * `OnePixelSplitter` 时丢了 `background = UIUtil.getPanelBackground()`，深色主题下参数行下方
+     * 直接透出分栏近黑背景（用户实测）。本用例钉死两点：滚动区不透明 + 其背景==平台面板背景；
+     * 同时分栏容器也须显式带面板背景（不再依赖子组件自绘）。
+     */
+    fun testParamsAreaCarriesPanelBackground() {
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(result())
+
+        val scroll = panel.paramScrollForTest()
+        assertTrue("参数滚动区应不透明（否则空区透出祖先容器底色）", scroll.isOpaque)
+        assertEquals(
+            "参数滚动区背景应为平台面板背景（主题命名色）",
+            com.intellij.util.ui.UIUtil.getPanelBackground(),
+            scroll.background,
+        )
+        val split = panel.splitPaneForTest()
+        assertNotNull("应能取到左右分栏容器", split)
+        assertEquals(
+            "分栏容器应恢复 T-UiNative P0a 丢失的面板背景",
+            com.intellij.util.ui.UIUtil.getPanelBackground(),
+            split!!.background,
+        )
+        panel.clear()
+    }
+
     fun testToggleCompactSwitchesSql() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(result())

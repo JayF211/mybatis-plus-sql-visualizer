@@ -47,11 +47,58 @@ object NativeJoinDiagramSupport {
                 add(editor.component, BorderLayout.CENTER)
                 Disposer.register(parent, editor)
                 putClientProperty(NATIVE_EDITOR_KEY, editor)
+                installDefaultFitContent(this, editor)
             }
         } catch (t: Throwable) {
             LOG.warn("Native JOIN diagram unavailable, falling back to built-in renderer", t)
             null
         }
+    }
+
+    /**
+     * T-PreviewBgFit（问题二）：原生 JOIN 图**默认自适应居中**。
+     *
+     * 平台对「图打开后居中」有专门机制（243 平台 jar 反编译实证）：
+     *  - `GraphSettings.isFitContentAfterLayout()/setFitContentAfterLayout(boolean)`——工具栏那个
+     *    「布局后自适应」开关的实现（`FitContentAfterLayoutAction extends AbstractGraphToggleAction`），
+     *  - 工具栏【调整内容】= `FitContentAction` → `GraphBuilder.fitContent(true)`（字节码 iconst_1）。
+     *
+     * 这两个动作只在**独立图编辑器标签页**路径被平台触发；我们是手工构造 `UmlFileEditorImpl`
+     * 并取其 component 嵌入预览面板，开关从未置位、也没有「布局完成后」的钩子 → 图停在默认缩放/
+     * 位置（左上角），用户实测「JOIN 图默认没居中，点【调整内容】才对」。此处补两步：
+     *  ① 置 fitContentAfterLayout=true（此后任何布局自动自适应，与平台开关同语义）；
+     *  ② 组件首次显示且有尺寸后调 `fitContent(true)`（与【调整内容】完全同参），并在稍后补一次
+     *     以吸收异步布局收尾。
+     * 异常一律吞掉（与 buildTabComponent 同隔离语义），不影响图展示。
+     */
+    private fun installDefaultFitContent(host: JComponent, editor: Disposable) {
+        val builder = runCatching { NativeJoinDiagramOpener.builderOf(editor) }.getOrNull() ?: return
+        val presenter = runCatching { builder.presentationModel }.getOrNull()
+        // ① 平台开关：布局后自动自适应（= 工具栏「布局后自适应」toggle 的实现语义）
+        runCatching { presenter?.settings?.setFitContentAfterLayout(true) }
+            .onFailure { LOG.warn("Enable fitContentAfterLayout failed", it) }
+        // ② 视口尺寸变化（拖分隔条/拉窗口）后保持自适应（= 平台 setFitContentOnResize）
+        runCatching { builder.view.setFitContentOnResize(true) }
+            .onFailure { LOG.warn("Enable fitContentOnResize failed", it) }
+
+        val graphBuilder = runCatching { presenter?.graphBuilder }.getOrNull() ?: return
+        var fitted = false
+        val fit: () -> Unit = fit@{
+            // 未显示/无尺寸时不消费一次性机会（等下一次 shown/resized 事件）
+            if (fitted || !host.isShowing || host.width <= 0 || host.height <= 0) return@fit
+            fitted = true
+            runCatching { graphBuilder.fitContent(true) }
+                .onFailure { LOG.warn("Initial fitContent failed", it) }
+            // 异步布局可能在首帧后收尾——延后再补一次（仍与【调整内容】同参）
+            javax.swing.Timer(700) { ev ->
+                (ev.source as? javax.swing.Timer)?.stop()
+                runCatching { graphBuilder.fitContent(true) }
+            }.apply { isRepeats = false; start() }
+        }
+        host.addComponentListener(object : java.awt.event.ComponentAdapter() {
+            override fun componentShown(e: java.awt.event.ComponentEvent) = fit()
+            override fun componentResized(e: java.awt.event.ComponentEvent) = fit()
+        })
     }
 
     /**

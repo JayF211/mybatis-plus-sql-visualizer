@@ -149,7 +149,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // 保证行宽不超出视口（标题行右侧按钮不被推出）
     private val paramScroll = JBScrollPane(paramTopAlign).apply {
         preferredSize = Dimension(240, 200)
-        isOpaque = false
+        // T-PreviewBgFit（问题一）：本面板自身给出面板底色——左侧参数区整条链是透明的
+        //（paramTopAlign/viewport 均非不透明，M36.5 起用于与父容器融合），底色一直靠祖先容器提供；
+        // T-UiNative P0a 把自绘 ThemedSplitPane（当时显式设了 UIUtil.getPanelBackground()）换成平台
+        // OnePixelSplitter 时丢了那层背景，深色主题下参数行下方直接透出 splitter 的近黑背景。
+        // 恢复祖先背景之外再让本滚动区成不透明面板灰，今后再换容器也不会复发。
+        isOpaque = true
+        background = com.intellij.util.ui.UIUtil.getPanelBackground()
         viewport.isOpaque = false
         // M36.5：去 LAF 默认 viewport 描边（左侧白色内边框根因）
         border = JBUI.Borders.empty()
@@ -354,6 +360,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val split = OnePixelSplitter(false, "mpvs.preview.splitter", 0.3f).apply {
             firstComponent = paramScroll
             secondComponent = editorHolder
+            // T-PreviewBgFit（问题一）：恢复 T-UiNative P0a 换组件时丢掉的容器背景——
+            // 原 ThemedSplitPane 显式设过 `background = UIUtil.getPanelBackground()`，OnePixelSplitter
+            // 版本漏了它，左侧透明参数区于是透出分栏自身背景（深色主题近黑）。
+            // T-DarkTheme：命名色按主题解析，浅/深主题各自正确（主题切换由 LafManagerListener 触发重绘）。
+            background = com.intellij.util.ui.UIUtil.getPanelBackground()
         }
         // M36.5：删除 verticalSplit 下半区——控制台已内嵌右侧，底部仅保留状态行
         //（resultPanel SOUTH，无内容时隐藏不占高度，错误/执行状态正常显示）
@@ -3103,6 +3114,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun toggleSelectButtonForTest(): JButton? = toggleSelectButton
     internal fun clearButtonForTest(): JButton? = clearButton
     internal fun batchClearButtonForTest(): JButton? = batchClearButton
+
+    /** T-PreviewBgFit 测试缝：左侧参数滚动区（背景/不透明断言用）。 */
+    internal fun paramScrollForTest(): JBScrollPane = paramScroll
+
     /** T-M26.1→T-UiNative：左右分栏（平台 OnePixelSplitter，原生分隔条主题融合 + 比例记忆）。 */
     internal fun splitPaneForTest(): OnePixelSplitter? {
         fun find(c: java.awt.Container): OnePixelSplitter? {
