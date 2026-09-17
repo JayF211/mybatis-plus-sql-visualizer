@@ -165,4 +165,23 @@ T-BS-00（基线四指纹）→ T-BS-01（buildSrc 骨架 + changeNotes 外置�
 
 每步之间可独立中止：T-BS-01 后中止 = 单文件 -170 行收益落袋；T-BS-0x 任一步验证不过 = 该 convention 退回 root，其余步不受牵连。
 
-## 九、实施记录（实施后回填）
+## 九、实施记录（2026-09-17 已实施交付，t-buildscriptsplit 六提交 7e3e40f..b586aa1 + 台账提交，工作树 mybatis-plus-sql-visualizer-bs）
+
+**已实施交付（2026-09-17，master @ dc047bd 锚点，分支 t-buildscriptsplit）**：
+
+- **T-BS-00 ✅**：基线四指纹捕获——分区行 `testShards: 3 shards duration-balanced, loads=shard1=115.0s/115classes shard2=115.0s/115classes shard3=115.0s/115classes`、tasks 清单、plugin.xml 33153 字节、zip 7 条目、配置缓存复用。附实测认知：指纹行只在真实配置时打印（配置缓存复用时静默），捕获须 `--no-configuration-cache`。
+- **T-BS-01 ✅（7e3e40f）**：buildSrc 骨架 + changeNotes 外置；**新坑**：`providers.fileContents().asText` 走 JVM 平台默认字符集，本机 GBK daemon 把 UTF-8 读成乱码（「集合」→「闆嗗悎」，plugin.xml 膨胀 2679 字节暴露）——改 `asBytes` + UTF-8 显式解码后 plugin.xml 与基线逐字节一致。
+- **T-BS-02 ✅（909db98）**：mpv-verification 六块迁移；预编译脚本访问器（intellijPlatform/pluginVerification/named\<VerifyPluginTask\>/register\<JavaExec\>）一次编译全生成，**R2 风险实证通过**；verifySmoke 绿（IU-243 Compatible，2m45s）+ 分区指纹一致。
+- **T-BS-03 ✅（bf3c404）**：mpv-testing 迁移；分区指纹与基线逐字节一致（同提交同输入同分区）；verifyGate/releaseGate/testShards/testShard1/testDatabase/hotswapServerStop/runIdeHotSwap/writeUpdateManifest 等 10 任务注册点查全部通过。
+- **T-BS-04 ✅（7db1953）**：mpv-runide 四块迁移 + 注册点查通过（runIde 噪音修复与热替换链路真机走查留 §六）。
+- **T-BS-05 ✅（b586aa1）**：mpv-release + root 收口 **195 行**（1073→195）；终局门禁全套绿：plugin.xml 的 change-notes CDATA 与 html 逐字节一致（version/sinceBuild/zip 7 条目不变）+ testShards 全量 **4279/0/0/6**（3 片真并行，5m33s）+ verifySmoke Compatible + gifRecord 闸门负测试（配置期 fail-fast，文案与基线一致）+ 配置缓存连续两次复用。
+- **T-BS-06 ✅（本提交）**：03 篇 :37（顺带纠正该行原本「从 CHANGELOG.md 注入」的过期描述）、Gitee 发行工作流 :45、Marketplace 流程 :65/:358、变更记录总册行（倒序插顶）、CHANGELOG [Unreleased] Changed 行、本节回填。
+
+**勘误与偏离（诚实记录）**：
+
+1. **§3.2 被实测修正**：计划担心的「fileContents 不登记配置缓存输入导致陈旧」不成立——fileContents 是执行期懒读，编辑 html 即生效；真正的坑是字符集（asText 平台默认 → 必须 asBytes + UTF-8）。方案形态不变，实现按实测落地。
+2. **验收标准 1 换径**：`tasks --all` 在基线 dc047bd 即因 embedAgentJar→agentFatJar 的 asmFat 配置解析独占锁报错失败（Gradle 9.7 既有问题，`--no-configuration-cache` 同败，非本拆分引入），「清单一致」改由逐任务 `help --task` 点查 + 分区指纹承担；基线与拆分后同位同因失败本身即一致性证据。既有问题按零行为边界不修，留档待需用时另立项。
+3. **基线产物文件灭失**：T-BS-00 存临时目录的 plugin.xml/zip-names 在 T-BS-05 复验前被 Windows 临时目录自动清理——改用更强证明（当前产物 CDATA 与 html 数据源逐字节对照）；T-BS-01/02 阶段的间接基线字节比对已闭环前期等价性，链条无断点。
+4. **testShards 绝对数 4279 vs beta.3 4299**：差 20 系 cbec1ee..dc047bd 间 18 文件测试源演化（390+/612-，T-VStack·InAll 重做与 t-uinative 合入）所致——T-VStack·InAll 台账记载同测试源时期串行全量即 4279，与本次分片全量吻合，非拆分丢测。
+
+**遗留**：dev 分支 build.gradle.kts 同款单文件结构留待 T-MergeDev2Master——合流时以 master（本拆分后形态）为准，按计划 §2.2 清单回植 dev 五处独有增量（mcpStub 源集三处→root、testShardN 桩挂载一行→mpv-testing、snakeyaml→root dependencies；verify 目标维持 master 2026.2.3）。

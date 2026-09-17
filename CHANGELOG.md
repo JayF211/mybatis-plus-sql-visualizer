@@ -8,6 +8,7 @@
 
 ### Changed
 
+- **构建脚本拆分分治（T-BuildScriptSplit）**：`build.gradle.kts`（1073 行）分治为 buildSrc 四个 convention 插件——mpv-verification 兼容验证门禁 / mpv-testing 测试与分片 / mpv-runide 开发沙盒与热替换 / mpv-release 发版链路（块级逐字搬运、注释随迁，零逻辑改写），根脚本收口至 195 行；changeNotes 数据外置 `gradle/plugin-change-notes.html`，发版只编辑该文件。全部任务名/命令行用法/产物形态不变：plugin.xml change-notes 与数据源逐字节一致、testShards 全量 4279/0/0/6 绿、verifyGate Compatible、gifRecord 发布闸门原样生效
 - **兼容校验目标追平 IDEA 2026.2.3（T-VerifyIde2623）**：本机 IDE 升级 2026.2.3 后，verifyGate/pluginVerification「最新版本」目标自 2026.2.1 升至 2026.2.3（minimal 与全量两分支同步），门禁覆盖与用户实际运行 IDE 对齐；构建基准 2024.3.7.1（243）与 GIF 录制态 2026.2.1 均为刻意钉死项不动
 - **竖向排列 IN 列表全量逐行展开（T-VStack·InAll）**：预览「竖向排列」对 IN 列表不再按元素数分级——此前 2~4 元素短清单保持同行（2026-09-10 阈值裁定），经用户复议回退：含逗号即 ≥2 元素一律 `(` 自占一行逐元素竖排；单元素形态（`IN (1)` / `IN (?)`）无清单可对齐仍保持同行，子查询 IN 与 LIMIT 分页参数照旧不展开
 

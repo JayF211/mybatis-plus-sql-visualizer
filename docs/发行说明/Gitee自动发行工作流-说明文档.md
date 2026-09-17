@@ -42,7 +42,7 @@ parallel_tasks check/register
 | 1 | `docs/发行说明/{YYYYMMDD}-{HHMM}-{主题}-发行说明.md` | 新建，完整发行说明（新增/修复/测试/兼容性/安装/反馈）；全文同时作为 Gitee 发行版正文 |
 | 2 | `CHANGELOG.md` | `[Unreleased]` → `[{版本}] - {日期}`，Keep a Changelog 格式 |
 | 3 | `gradle.properties` | `version=`；内测通道追加 `-beta.N` 后缀 |
-| 4 | `build.gradle.kts` `patchPluginXml.changeNotes` | 新增 `<h2>v{版本}</h2>` 块置顶（红线：只主标题、无括号、无冒号副题） |
+| 4 | `gradle/plugin-change-notes.html`（T-BuildScriptSplit 起外置，原 `build.gradle.kts` `patchPluginXml.changeNotes` 内联） | 新增 `<h2>v{版本}</h2>` 块置顶（红线：只主标题、无括号、无冒号副题） |
 | 5 | `plugin.xml` `<description>` | 仅当出现新能力类别时并入一条；无新类别不动（「最近更新」节已整体移除，见下） |
 | 6 | `update/preview.update.json` | 新版本号 + downloadUrl + changeNotes（与 #4 同文案）+ publishDate + sinceBuild |
 | 7 | `marketplace-custom-page.html` | 功能矩阵行 + 「为什么选它」按能力类别判定；单源（docs 副本已删） |
