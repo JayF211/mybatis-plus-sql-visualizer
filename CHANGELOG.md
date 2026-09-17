@@ -47,6 +47,7 @@
 - **执行链超时护栏补齐（T-ExecTimeoutGuard，O-25）**：执行/EXPLAIN 链此前无任何超时兜底——挂死查询（锁等待、笛卡尔积、远端库网络黑洞）会永远停在 loading。新增设置项「执行超时」（秒，默认 30、0=不限，SQL 预览分组）：MCP explain 直连链逐语句 setQueryTimeout（RemoteStatement 镜像，243/262 签名核验）；多语句脚本预算随语句数线性放大（封顶 ×8，DBX 1ed06f2 同款公式，纯函数交付）；超时形态异常先请求取消再报错（消息附 `timed out after Ns`，agent 可读）；共享控制台链 DBN 托管无语句句柄 v1 不覆盖（登记在案，诚实降级）
 
 ### Changed
+- **JOIN 图 JOIN 表改整表列口径（T-DgmFullCols）**：预览 JOIN 图此前主表画实体整表列、JOIN 表只画 SQL 参与列（ON/SELECT 引用到的，常仅一两个 join key），同一张图里两张表节点一大一小，与 IDEA Database 原生「显示图」观感差得远。现 JOIN 表与主表同口径——实体整表列（>50 列时只留主键列），被引用列追加在后（SQL 原始列名可能不在实体中）；数据源里存在而实体未映射的列也一并补进节点（按库顺序追加在实体列之后，带 DB COMMENT 与真实类型串），宽表由 50 列上限兜底。
 
 - **性能七项收敛（T-PerfSweep4，性能第六轮报告 §5 发现点全收口）**：①「高」级发现——增强捕获确认拒绝后的每进程重复弹模态框销账：确认弹窗仅主配置启动触发（HTTP 请求/测试/profiler 进程静默跳过）+ 拒绝后 24h 冷却（持久化，重开 IDE 仍有效；设置页关闭再开启重置、同意即清）——冷却只作用于弹窗频率不改变同意门槛；②捕捉开启 × 控制台已存时序的 EP+桥双路解析恒 ×2 封口（桥 handler 首行 epActive 短路）+ EP 逐行 timePrefix 读设置改缓存；③attach 链治理：同 pid 3s 内重复排队去抖落地（声明已久的 pendingPids 兑现）、agent jar 提取一次复用（deleteOnExit 不再累积）、死会话顺带清 pid 表（防 OS 复用 pid 误判已挂载）；④agent 事件链现场正则提常量（三路共用一处受益）；⑤日志时间配对签名单值截断 256 字符（超长 blob 参数不再整串驻留）；⑥⑦WrapperCache LRU 与重放守卫首行区间读经合流后实测确认已由 T-PerfTail 收口（复核销账，未重复实施）
 

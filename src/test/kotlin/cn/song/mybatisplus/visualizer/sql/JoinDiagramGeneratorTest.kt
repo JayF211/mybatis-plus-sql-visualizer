@@ -508,6 +508,80 @@ class JoinDiagramGeneratorTest {
         assertEquals("邮箱", model.entities[0].columns.first { it.name == "email" }.comment)
     }
 
+    // ---- T-DgmFullCols JOIN 表整表列口径（2026-09-17：与主表一致，观感对齐 Database 原生「显示图」） ----
+
+    @Test
+    fun `join table shows full entity columns not only referenced ones`() {
+        // 此前 JOIN 表只画「SELECT 引用列 + ON 列」，通常就一两个 join key，与主表"整表口径"不对称
+        val stmt = SelectStatement(
+            table = userTable, tableAlias = "u",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.INNER, tableName = "dept", alias = "d", tableInfo = deptTable,
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "u", columnName = "dept_id"),
+                            right = ColumnRef(tableAlias = "d", columnName = "id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        val dept = model.entities.first { it.alias == "d" }
+        assertEquals("JOIN 表 = 实体整表列（id 主键 + name），不再只剩 ON 引用的 id", listOf("id", "name"), dept.columns.map { it.name })
+        assertEquals("实体主键标记保留", true, dept.columns.first { it.name == "id" }.isPk)
+    }
+
+    @Test
+    fun `join table keeps referenced column absent from entity`() {
+        // SQL 原始列名可能不在实体里（selectAs/拼接列）——引用列无论实体有没有都保留
+        val stmt = SelectStatement(
+            table = userTable, tableAlias = "u",
+            selectColumns = listOf(ColumnRef(tableAlias = "d", columnName = "raw_pseudo_col")),
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "dept", alias = "d", tableInfo = deptTable,
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "u", columnName = "dept_id"),
+                            right = ColumnRef(tableAlias = "d", columnName = "id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        val dept = model.entities.first { it.alias == "d" }
+        assertEquals(listOf("id", "name", "raw_pseudo_col"), dept.columns.map { it.name })
+    }
+
+    @Test
+    fun `join table over column cap falls back to pk plus referenced columns`() {
+        // 与主表同款上限：实体 >50 列时只留主键列；被引用列仍追加（它们可能不在实体里）
+        val wideTable = TableInfo(
+            entityClassName = "WideEntity", tableName = "wide",
+            columns = List(60) { idx -> if (idx == 0) ColumnInfo("id", "id", isId = true) else ColumnInfo("f$idx", "f_$idx") },
+        )
+        val stmt = SelectStatement(
+            table = userTable, tableAlias = "u",
+            selectColumns = listOf(ColumnRef(tableAlias = "w", columnName = "ref_only")),
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT, tableName = "wide", alias = "w", tableInfo = wideTable,
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "u", columnName = "id"),
+                            right = ColumnRef(tableAlias = "w", columnName = "id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertEquals(listOf("id", "ref_only"), model.entities.first { it.alias == "w" }.columns.map { it.name })
+    }
+
     // ---- T-Embed-07 JOIN 表字段空缺陷（转换器原始别名） ----
 
     @Test

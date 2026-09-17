@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.model.JoinClause
 import cn.song.mybatisplus.visualizer.model.JoinType
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.ui.diagram.ColumnEntry
+import cn.song.mybatisplus.visualizer.ui.diagram.DIAGRAM_MAX_COLUMNS
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModel
 import cn.song.mybatisplus.visualizer.ui.diagram.EntityNode
 import cn.song.mybatisplus.visualizer.ui.diagram.RelationshipLine
@@ -14,17 +15,17 @@ import cn.song.mybatisplus.visualizer.ui.diagram.RelationshipLine
  *
  * 将 [SelectStatement] 中的 JOIN 关系映射为 [DiagramModel]：
  *  - 主表 → 绿色实体（含列信息，PK 标 *）
- *  - JOIN 表 → 蓝色实体
+ *  - JOIN 表 → 蓝色实体（T-DgmFullCols：同为**实体整表列**口径，参与列补充在后）
  *  - JOIN 类型 → 关系线样式（LEFT/INNER/RIGHT/FULL）
  *  - ON 条件 → 关系线标签
- *  - 列数 > 50 时仅显示主键列（避免图过大）
+ *  - 列数 > [DIAGRAM_MAX_COLUMNS] 时仅显示主键列（避免图过大；数据源独有列也受此上限约束）
  *
  * 无 JOIN 时返回空模型（调用方据此决定是否展示标签页）。
  */
 object JoinDiagramGenerator {
 
-    /** 列数上限：超过此值仅显示主键列。 */
-    private const val MAX_COLUMNS = 50
+    /** 列数上限：超过此值仅显示主键列（[DIAGRAM_MAX_COLUMNS]，与富化器追加口径共用）。 */
+    private const val MAX_COLUMNS = DIAGRAM_MAX_COLUMNS
 
     /**
      * 构建 JOIN 关系图的结构化模型。
@@ -244,7 +245,10 @@ object JoinDiagramGenerator {
 
     /**
      * 提取 JOIN 表的列信息，来源：
-     * 1. selectColumns 中引用该 JOIN 表的列（含 selectAs 映射的列）
+     * 0. **T-DgmFullCols：实体整表列**（与主表 [pickColumns] 同口径：≤[MAX_COLUMNS] 全画、
+     *    超限仅键列）——此前 JOIN 表只画「SELECT 引用列 + ON 列 + fill 列」，通常就一两个 join key，
+     *    与主表"整表口径"不对称，观感也和 IDEA Database 原生「显示图」差得远
+     * 1. selectColumns 中引用该 JOIN 表的列（含 selectAs 映射的列）——补充实体里没有的列
      * 2. ON 条件中引用该 JOIN 表的列
      * 3. FillClause 中该 JOIN 表的 selectColumns
      *
@@ -255,9 +259,30 @@ object JoinDiagramGenerator {
      * 二者取并集匹配，否则 JOIN 表列全部落空（ON 标签因走 aliasMap 映射而正常，更具迷惑性）。
      */
     private fun extractJoinColumns(join: JoinClause, joinAlias: String, stmt: SelectStatement): List<ColumnEntry> {
-        val columns = mutableListOf<ColumnEntry>()
-        val seen = mutableSetOf<String>()
+        // 有序去重表：键=列名，值=已合并的列（顺序即渲染顺序，实体列先入故排在前）
+        val byName = LinkedHashMap<String, ColumnEntry>()
         val acceptedAliases = setOf(joinAlias, join.alias).filter { it.isNotBlank() }.toSet()
+
+        /**
+         * 写入/合并一列。同名冲突逐维度合并且不降级：
+         *  - type：T-DgmFullCols 保序后 [overrideType] 用于保住原优先级「ColumnRef.type (selectAs) >
+         *    tableInfo 字段推断」——selectAs 的显式类型必须能覆盖实体推断值，否则实体的空类型会把
+         *    已知类型顶掉（回归实证：s03_lambdaJoin 的 VARCHAR 变 null）
+         *  - comment：已有优先（都来自实体，取先到者）
+         *  - isPk：任一为真即真（实体是唯一 PK 来源，引用侧恒 false）
+         */
+        fun put(name: String, type: String?, comment: String?, isPk: Boolean, overrideType: Boolean = false) {
+            val current = byName[name]
+            byName[name] = if (current == null) {
+                ColumnEntry(name, type, isPk, comment)
+            } else {
+                current.copy(
+                    type = if (overrideType) (type ?: current.type) else (current.type ?: type),
+                    comment = current.comment ?: comment,
+                    isPk = current.isPk || isPk,
+                )
+            }
+        }
 
         // Helper: resolve SQL type from tableInfo by column name
         fun sqlTypeFromTable(colName: String): String? {
@@ -274,25 +299,31 @@ object JoinDiagramGenerator {
         fun belongsToJoin(ref: cn.song.mybatisplus.visualizer.model.ColumnRef): Boolean =
             ref.tableAlias != null && ref.tableAlias in acceptedAliases
 
+        // 0. T-DgmFullCols：实体整表列（无实体信息时跳过——字符串 join / 类名兜底场景仍只画参与列，
+        //    数据源独有列由 DiagramSchemaEnricher 按表名追加）
+        join.tableInfo?.columns?.let { all ->
+            val picked = if (all.size <= MAX_COLUMNS) all else all.filter { it.isId }
+            for (col in picked) {
+                put(col.columnName, javaTypeToSqlType(col.fieldType), col.comment, isPk = col.isId)
+            }
+        }
+
         // 1. From selectColumns (includes selectAs results, with type from ColumnRef.type)
         for (col in stmt.selectColumns) {
-            if (belongsToJoin(col) && !seen.contains(col.columnName)) {
-                seen.add(col.columnName)
-                val sqlType = javaTypeToSqlType(col.type) ?: sqlTypeFromTable(col.columnName)
-                columns.add(ColumnEntry(name = col.columnName, type = sqlType, isPk = false, comment = commentFromTable(col.columnName)))
+            if (belongsToJoin(col)) {
+                val sqlType = javaTypeToSqlType(col.type)
+                put(col.columnName, sqlType ?: sqlTypeFromTable(col.columnName), commentFromTable(col.columnName), isPk = false, overrideType = sqlType != null)
             }
         }
 
         // 2. From ON conditions (resolve type from tableInfo)
         for (cond in join.onConditions) {
             if (cond is Condition.ColumnComparison) {
-                if (belongsToJoin(cond.right) && !seen.contains(cond.right.columnName)) {
-                    seen.add(cond.right.columnName)
-                    columns.add(ColumnEntry(name = cond.right.columnName, type = sqlTypeFromTable(cond.right.columnName), isPk = false, comment = commentFromTable(cond.right.columnName)))
+                if (belongsToJoin(cond.right)) {
+                    put(cond.right.columnName, sqlTypeFromTable(cond.right.columnName), commentFromTable(cond.right.columnName), isPk = false)
                 }
-                if (belongsToJoin(cond.left) && !seen.contains(cond.left.columnName)) {
-                    seen.add(cond.left.columnName)
-                    columns.add(ColumnEntry(name = cond.left.columnName, type = sqlTypeFromTable(cond.left.columnName), isPk = false, comment = commentFromTable(cond.left.columnName)))
+                if (belongsToJoin(cond.left)) {
+                    put(cond.left.columnName, sqlTypeFromTable(cond.left.columnName), commentFromTable(cond.left.columnName), isPk = false)
                 }
             }
         }
@@ -301,14 +332,11 @@ object JoinDiagramGenerator {
         stmt.fillClauses?.forEach { fill ->
             if (fill.childAlias == joinAlias || fill.childAlias == join.alias) {
                 for (col in fill.selectColumns) {
-                    if (!seen.contains(col.columnName)) {
-                        seen.add(col.columnName)
-                        columns.add(ColumnEntry(name = col.columnName, type = sqlTypeFromTable(col.columnName), isPk = false, comment = commentFromTable(col.columnName)))
-                    }
+                    put(col.columnName, sqlTypeFromTable(col.columnName), commentFromTable(col.columnName), isPk = false)
                 }
             }
         }
 
-        return columns
+        return byName.values.toList()
     }
 }

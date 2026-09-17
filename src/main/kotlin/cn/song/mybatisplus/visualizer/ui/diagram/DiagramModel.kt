@@ -20,11 +20,19 @@ data class DiagramModel(
 }
 
 /**
+ * 列数上限：节点列数超过此值只画主键列（避免图过大撑爆画布）。
+ *
+ * T-DgmFullCols 起由生成器（实体列裁剪）与富化器（数据源独有列追加）共用一个口径——
+ * 两处各自维护会让"实体 40 列 + 库 20 列"这类组合绕过上限。
+ */
+internal const val DIAGRAM_MAX_COLUMNS = 50
+
+/**
  * 实体节点（对应数据库表）。
  *
  * @param alias     表别名（已 sanitize，用于标识）
  * @param tableName 表名（用于显示）
- * @param columns   列列表（已裁剪：总数 >50 时仅保留 PK）
+ * @param columns   列列表（已裁剪 + 已富化：总数 >[DIAGRAM_MAX_COLUMNS] 时仅保留 PK）
  * @param isMain    是否主表（控制颜色：true = 绿色，false = 蓝色）
  * @param joinType  JOIN 类型（仅 JOIN 表有效，用于卡片标题标注）
  */
