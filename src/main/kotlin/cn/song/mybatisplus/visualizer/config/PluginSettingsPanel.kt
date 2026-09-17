@@ -247,6 +247,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** JDBC 模板 SQL 字符串预览开关：queryForList/update 等方法的字符串 SQL 实参显示预览图标。 */
     private val jdbcSqlPreviewCheck = JBCheckBox()
 
+    /** T-ExecTimeoutGuard：执行超时（秒，0=不限）——JBIntSlider 过重，JBTextField + 数字容错。 */
+    private val executionTimeoutField = JBTextField(8)
+
     /** 表前缀输入框（T-M16.2-03）：统一加在所有表名前，全局语义（@TableName 显式表名同样生效）。 */
     private val tablePrefixField = JBTextField(12)
 
@@ -488,6 +491,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 addRow(p, g, "", jdbcSqlPreviewCheck.apply {
                     text = MpSqlVisualizerBundle.message("settings.preview.jdbc")
                     toolTipText = MpSqlVisualizerBundle.message("settings.preview.jdbc.tip")
+                })
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.preview.executionTimeout"), executionTimeoutField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.preview.executionTimeout.tip")
                 })
             }
         }
@@ -1185,6 +1191,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || dataPermissionHintCheck.isSelected != s.dataPermissionHint
             || dataPermissionMockConditionField.text.trim() != s.dataPermissionMockCondition
             || jdbcSqlPreviewCheck.isSelected != s.jdbcSqlPreviewEnabled
+            || executionTimeoutField.text.trim().toIntOrNull() != s.executionTimeoutSeconds
 
     private fun isModifiedTableMapping(s: PluginSettings.State): Boolean =
         tablePrefixField.text.trim() != s.tablePrefix
@@ -1278,6 +1285,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.dataPermissionHint = dataPermissionHintCheck.isSelected
             s.dataPermissionMockCondition = dataPermissionMockConditionField.text.trim()
             s.jdbcSqlPreviewEnabled = jdbcSqlPreviewCheck.isSelected
+            s.executionTimeoutSeconds = executionTimeoutField.text.trim().toIntOrNull()
+                ?: PluginSettings.DEFAULT_EXECUTION_TIMEOUT_SECONDS
         }
         if (SECTION_TABLE_MAPPING in sections) {
             s.tablePrefix = tablePrefixField.text.trim()
@@ -1394,6 +1403,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             dataPermissionHintCheck.isSelected = s.dataPermissionHint
             dataPermissionMockConditionField.text = s.dataPermissionMockCondition
             jdbcSqlPreviewCheck.isSelected = s.jdbcSqlPreviewEnabled
+            executionTimeoutField.text = s.executionTimeoutSeconds.toString()
         }
         if (SECTION_TABLE_MAPPING in sections) {
             tablePrefixField.text = s.tablePrefix

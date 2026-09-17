@@ -113,7 +113,12 @@ class ExplainTool : McpToolsetSupport("mpsv_explain") {
     private suspend fun executeExplain(target: ExplainTarget): McpExplainFormatter.RawResult =
         withContext(Dispatchers.IO) {
             runCatching {
-                McpDbExecutor.executeQuery(target.project, target.ds, target.explainSql, McpExplainFormatter.MAX_ROWS)
+                // T-ExecTimeoutGuard：设置项「执行超时」透传（0=不限；explain 单语句取每语句基础值）
+                McpDbExecutor.executeQuery(
+                    target.project, target.ds, target.explainSql, McpExplainFormatter.MAX_ROWS,
+                    timeoutSeconds = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
+                        .state.executionTimeoutSeconds,
+                )
             }.getOrElse { e ->
                 // T-ErrorLocate T-EL-04：驱动错误消息携带位置信号（PG `Position: N` / `at line N`）时
                 // 附 errorPosition 文本行——agent 可定位再自修复；匹配不到/多 marker 即不加（诚实降级，

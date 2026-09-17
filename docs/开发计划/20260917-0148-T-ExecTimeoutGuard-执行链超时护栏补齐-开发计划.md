@@ -68,4 +68,13 @@ T-ET-01（现状核实圈定接入点）→ T-ET-02（预算公式+设置项）�
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+**已实施（2026-09-17，dev 分支随「2.2 五计划 + T-PerfSweep4 + 尾巴项」批次）**：
+
+- **T-ET-01（现状核实）**：主链 `setQueryTimeout` 零命中证实；`RemoteStatement`（DBN remote JDBC 镜像）javap 实证 243（jdbc-console.jar）与 262（intellij.database.jdbcConsole.jar）同形声明 `setQueryTimeout(int)/getQueryTimeout()/cancel()`，`RemoteConnection.cancelAll()` 在位；共享控制台链执行走 `console.executeQueries(editor, scriptModel, execOption)`（DBN 托管语句生命周期）且 `DatabaseSettings.ExecOption` 无超时面——**该点 v1 不支持，如实登记**（计划 §三允许的诚实降级）。
+- **T-ET-02**：`execute/ExecutionTimeoutGuard.kt` 纯函数——`timeoutBudgetSeconds(base, count)`（单语句=基础值；多语句=基础值×语句数封顶 ×8；0=不限）+ `perStatementTimeoutSeconds`；设置项「执行超时」（秒，默认 30、0=不限）落 PluginSettings.State `executionTimeoutSeconds` + SQL 预览分组面板行 + 双语键 `settings.preview.executionTimeout(.tip)` + isModified/apply/reset 四接线。
+- **T-ET-03**：`McpDbExecutor.executeQuery` 增 `timeoutSeconds` 参数（默认 0=不限，ExplainTool 从设置项透传）——执行前 setQueryTimeout（设置失败不拦执行，护栏尽力而为）；`InvocationTargetException.targetException` 经 `isTimeoutLike` 判中超时形态先 `Statement.cancel()` 收尾（RMI 尽力而为，失败只记日志不吞超时事实）再冒泡 `SQLException("query timed out after Ns (cancel requested); original: …")`；语句/连接 close 既有 finally 收口不变（无悬挂半开连接）。
+- **T-ET-04**：MCP 链同公式接入（explain 单语句取每语句基础值）；超时输出附 `timed out after Ns` 英文文本行（不引 JSON，agent 可读）。
+- **T-ET-05**：`ExecutionTimeoutGuardTest` 8 例（预算公式单语句/线性/封顶 8 倍与 9 条起裁/0=不限、超时判定 SQLTimeoutException/57014/消息签名、非超时反例语法错·连接拒绝·死锁、InvocationTargetException 解包、循环 cause 链深度 8 有界不挂死）；`McpDbSignatureChecker` 登记两条新反射入口（RemoteStatement.setQueryTimeout(int)/cancel()）跨版本核验；H2/信创驱动真机超时用例按「环境受限未验证」口径留真机走查。
+- **共享控制台链接入点登记（v1 不覆盖）**：DBN 托管无语句句柄；预算函数作为该链接入时的规格先行交付（消费方接线时按 timeoutBudgetSeconds 取看门狗上限，类注释已载明）。
+- T-ET-04 文档回填：CHANGELOG [Unreleased] Added、变更记录行、第六轮报告 §8 状态回填（随批次统一落）。
+- 门禁：ExecutionTimeoutGuardTest 8 例定向绿；全量 testShards 随批次终门禁。真机走查 §五三条留人工。

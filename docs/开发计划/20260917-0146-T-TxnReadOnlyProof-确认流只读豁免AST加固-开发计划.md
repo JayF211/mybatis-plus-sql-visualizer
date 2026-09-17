@@ -77,4 +77,11 @@ T-TR-01（二级证明纯函数+表驱动）→ T-TR-02（消费方零改动验�
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+**已实施（2026-09-17，dev 分支随「2.2 五计划 + T-PerfSweep4 + 尾巴项」批次）**：
+
+- **T-TR-01**：`SqlTypeClassifier.classify` 命中 QUERY 名单后追加 `proveReadOnly(statement, keyword)` 二级证明——WITH 路径 `words.drop(1)` 出现 DML 字即不豁免；EXPLAIN 路径 ANALYZE|ANALYSE 与 DML 字并存即不豁免（`EXPLAIN (ANALYZE, BUFFERS) DELETE` 变体同拦）；SELECT 路径 `intoWrites` 逐 INTO 判后随 token（OUTFILE/DUMPFILE/标识符→不豁免，@ 会话变量维持豁免，INTO 居尾畸形 fail-closed）。词法门控三件：`maskQuoted`（字符串字面量 '' 转义 + `…"…" 引号标识符整体屏蔽）+ `WORD_REGEX` 字边界（列名 deleted_at 不误判）+ `INTO_WORD_REGEX`（POINT 内含 INTO 不误配）。JSqlParser AST 精确化按计划为可选增强，v1 词法先行未做。
+- **T-TR-02**：三处确认流消费方 diff 为零（豁免收窄只在分类器内部，classify 签名不变）；文案零新增。
+- **T-TR-03**：`SqlTypeClassifierTest` 新增 19 例——三盲区各正反例（可写 CTE 3 拦+普通 CTE/字面量内关键字/列名 deleted_at 3 放行；EXPLAIN ANALYZE 3 拦+普通 EXPLAIN/ANALYZE SELECT 2 放行；SELECT INTO 4 拦+@var 放行）+ 防回归（普通 SELECT 分类仍 QUERY、可写 CTE 判 UNKNOWN 非 DML、混合脚本、注释内关键字）。
+- **T-TR-04**：CHANGELOG [Unreleased] Fixed、变更记录行、第六轮报告 §8 状态回填（随批次统一落）。
+- 门禁：SqlTypeClassifierTest 43 例定向绿（含既有 24 例）；全量 testShards 随批次终门禁。
+- 真机走查 §五三条留人工。

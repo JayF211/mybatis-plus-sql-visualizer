@@ -44,6 +44,8 @@
 
 - **执行计划索引缺失建议（T-ExplainIndex，N-23）**：`mpsv_explain` 返回的执行计划现自动识别高频低效模式并在输出尾附 `index hints` 建议——MySQL 表格式（type=ALL 全表扫大表、key=NULL、Using filesort/temporary）与 PG 文本树（大表 Seq Scan）两方言先行，行数阈值防小表噪音，只提示不执行不改 SQL；无命中零追加，方言不支持静默降级。IDE 原生控制台结果行无程序化读取面，建议先落 MCP 承载位
 
+- **执行链超时护栏补齐（T-ExecTimeoutGuard，O-25）**：执行/EXPLAIN 链此前无任何超时兜底——挂死查询（锁等待、笛卡尔积、远端库网络黑洞）会永远停在 loading。新增设置项「执行超时」（秒，默认 30、0=不限，SQL 预览分组）：MCP explain 直连链逐语句 setQueryTimeout（RemoteStatement 镜像，243/262 签名核验）；多语句脚本预算随语句数线性放大（封顶 ×8，DBX 1ed06f2 同款公式，纯函数交付）；超时形态异常先请求取消再报错（消息附 `timed out after Ns`，agent 可读）；共享控制台链 DBN 托管无语句句柄 v1 不覆盖（登记在案，诚实降级）
+
 ### Changed
 
 - **三套语句切分收敛为单一状态机（T-SemicolonGuard，O-13）**：字符串感知切分（引号/注释内分号不切）此前有三处独立实现且行为不一——分类器会把 `'a;b'` 误切两段、注释内分号误切、字符串内 `--` 误剥；收敛为 util/SqlStatementSplitter 单实现（新增括号深度与 BEGIN/END 块感知：存储过程块/`(1;2)` 参数形态不再切碎，无配对 END 保守按原样切分），三处消费方委托迁移，既有行为逐段一致有守卫测试锁死
@@ -68,6 +70,7 @@
 
 ### Fixed
 
+- **确认流只读豁免三盲区收窄（T-TxnReadOnlyProof，N-21）**：免确认白名单（SELECT/SHOW/EXPLAIN/WITH）存在三个真实豁免盲区——可写 CTE（`WITH del AS (DELETE …) SELECT` 首关键字 WITH 免确认直通真执行）、`EXPLAIN ANALYZE`（PG 语义真实执行被修饰语句）、`SELECT INTO OUTFILE/新表`（写文件/建表）。现对白名单语句做只读二级证明（词法宽门控+字边界匹配+字符串字面量屏蔽，宁错弹不放过），盲区命中改判需确认（fail-closed），普通 SELECT/CTE/EXPLAIN 豁免逐字节不变；三处确认流消费方零改动
 - **执行文件「文件缓冲区冲突」（File Cache Conflict）第三轮根治（T-ExecDocSync，条目补落）**：执行临时文件 `mpsql-exec.sql` 弹「已在内存中和磁盘上对该文件进行更改」。根因三点：document 驱动写只改内存不落盘（滞留「已修改未保存」窗口）；WriteAction 失败兜底无条件裸写盘（绕过 document = 冲突的外部改写条件）；后台预热与 EDT 冷路径双写方不互斥。修复=document 写统一派 EDT + 同临界区落盘（setText→commit→saveDocument）+ 有已加载 document 时拒绝裸写兜底（宁内容旧一拍）+ 单写方锁串行化双写方
 - **执行文件「文件缓冲区冲突」第四轮根治——console 侧「已修改未保存」窗口清零（T-ExecDocSync2）**：第三轮收口只覆盖插件自有写点，漏了 Database 控制台侧——控制台挂载在 exec 文件本体上（控制台编辑器文档即该文件 document），复用/准备/换入链的四处文档同步只 commit 不落盘，用户手改控制台更是插件拦不到的未保存源；窗口期内任意外部改盘（git 触碰 / 双 IDE 实例）+ VFS 刷新即弹冲突，且弹窗点「保留内存更改」后自我放大。修复=四处同步统一收口为「setText→commit→saveDocument」同临界区落盘 + 两处 VFS 刷新前强制收敛 + 执行文档 1.5s 防抖自动落盘 + 冲突探针（复发时 idea.log 落现场指纹取证）
 - **DDL 执行后元数据缓存兜底失效（T-DdlPostInvalidate，O-17）**：执行前预判失效之外，执行监控三个收尾点（早检错误上报/结果呈现成功/超时收口）再兜底失效一次元数据缓存——执行过程中才出现的 DDL、预判漏判、中途结构变化等窗口全部关死；失败的 DDL 也可能已隐式提交，故成功与失败/超时都失效；失效动作幂等，全程次数有界

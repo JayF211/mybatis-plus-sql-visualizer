@@ -24,6 +24,12 @@ object SqlTypeClassifier {
     /** DDL 关键字（需确认）。 */
     private val DDL_KEYWORDS = setOf("CREATE", "ALTER", "DROP", "TRUNCATE")
 
+    /** 二级证明词法扫描：标识符形态词（字边界匹配，列名 deleted_at 不会被拆成 DELETE）。 */
+    private val WORD_REGEX = Regex("[A-Za-z_][A-Za-z0-9_]*")
+
+    /** 二级证明词法扫描：INTO 字（\b 双侧边界，POINT 内含 INTO 不误配）。 */
+    private val INTO_WORD_REGEX = Regex("\\bINTO\\b")
+
     /**
      * 判断 SQL 是否为查询类语句（免确认直接执行）。
      *
@@ -51,17 +57,128 @@ object SqlTypeClassifier {
     /**
      * 对单条 SQL 语句分类。
      *
+     * T-TxnReadOnlyProof（N-21）：首关键字命中免确认名单后追加只读二级证明——三个真实
+     * 豁免盲区（可写 CTE / EXPLAIN ANALYZE 真执行写 / SELECT INTO 建表与写文件）任一
+     * 命中即改判 UNKNOWN（需确认，fail-closed）；证明不了的形态一律维持确认弹窗。
+     *
      * @param statement 单条 SQL 语句（已去除注释）
      * @return 分类结果
      */
     fun classify(statement: String): SqlType {
         val keyword = extractKeyword(statement) ?: return SqlType.UNKNOWN
+        if (QUERY_KEYWORDS.contains(keyword) && !proveReadOnly(statement, keyword)) {
+            return SqlType.UNKNOWN
+        }
         return when {
             QUERY_KEYWORDS.contains(keyword) -> SqlType.QUERY
             DML_KEYWORDS.contains(keyword) -> SqlType.DML
             DDL_KEYWORDS.contains(keyword) -> SqlType.DDL
             else -> SqlType.UNKNOWN
         }
+    }
+
+    /**
+     * QUERY 名单语句的只读二级证明（T-TxnReadOnlyProof，词法宽门控：宁错弹不放过）。
+     *
+     * 三个盲区（对齐 DBX「只读豁免必须逐语句证明且 fail-closed」）：
+     *  1. 可写 CTE：`WITH del AS (DELETE …) SELECT * FROM del`——WITH 后正文出现
+     *     INSERT/UPDATE/DELETE/MERGE 字（含尾随主语句形态），不豁免；
+     *  2. EXPLAIN ANALYZE：PG 语义 ANALYZE 会**真实执行**被修饰语句——正文同时出现
+     *     ANALYZE|ANALYSE 字与 DML 字，不豁免（`EXPLAIN SELECT` 无 ANALYZE 不受影响）；
+     *  3. SELECT INTO：`INTO OUTFILE|DUMPFILE`（MySQL 写服务端文件）或 `INTO <identifier>`
+     *     建表（PG SELECT … INTO new_table），不豁免；`INTO @var` 会话变量维持豁免。
+     *
+     * 词法门控对字符串字面量与引号标识符先屏蔽再按字边界匹配（列名 deleted_at 不误判）；
+     * JSqlParser AST 精确化为可选增强，v1 词法先行（与计划 §三 T-TR-01 一致）。
+     *
+     * @return true=证明只读（维持 QUERY 豁免）；false=存在写证据或证明不了（转需确认）
+     */
+    private fun proveReadOnly(statement: String, keyword: String): Boolean {
+        val masked = maskQuoted(statement).uppercase()
+        val words = WORD_REGEX.findAll(masked).map { it.value }.toList()
+        return when (keyword) {
+            // WITH：CTE 体内或尾随主语句出现写关键字即不豁免（drop(1) 跳过 WITH 自身）
+            "WITH" -> words.drop(1).none { it in DML_KEYWORDS }
+            // EXPLAIN：ANALYZE|ANALYSE 与 DML 字并存即不豁免（EXPLAIN (ANALYZE, BUFFERS) DELETE 变体同拦）
+            "EXPLAIN" -> !(words.any { it == "ANALYZE" || it == "ANALYSE" } && words.any { it in DML_KEYWORDS })
+            // SELECT：任一 INTO 后随 OUTFILE/DUMPFILE/标识符即不豁免（@var 会话变量除外）
+            "SELECT" -> !intoWrites(masked)
+            else -> true
+        }
+    }
+
+    /**
+     * SELECT 语句的 INTO 写语义判定：任一 `INTO` 字后随 OUTFILE/DUMPFILE（MySQL 写文件）
+     * 或普通标识符（PG 建表）即有写证据；`INTO @var`/`INTO @@global.x` 会话变量形态无写；
+     * INTO 位于语句尾部（畸形）按证明不了处理（fail-closed）。
+     */
+    private fun intoWrites(maskedUpper: String): Boolean {
+        var match = INTO_WORD_REGEX.find(maskedUpper)
+        while (match != null) {
+            val rest = maskedUpper.substring(match.range.last + 1)
+            val afterInto = rest.trimStart()
+            when {
+                // INTO 后无内容：畸形形态，证明不了 → 有写证据（fail-closed）
+                afterInto.isEmpty() -> return true
+                // 会话变量（@v / @@global.v）：维持豁免，继续看后续 INTO
+                afterInto[0] == '@' -> {}
+                else -> return true
+            }
+            match = INTO_WORD_REGEX.find(rest)
+        }
+        return false
+    }
+
+    /**
+     * 屏蔽字符串字面量（'…'，含 '' 转义）与 `…`/"…" 引号标识符——字面量内的关键字
+     * （如 'delete from t' 常量值）不参与二级证明词法扫描；替换为空格保持偏移稳定。
+     */
+    private fun maskQuoted(sql: String): String {
+        val sb = StringBuilder(sql.length)
+        var i = 0
+        while (i < sql.length) {
+            val c = sql[i]
+            when (c) {
+                '\'' -> {
+                    sb.append(' ')
+                    i++
+                    while (i < sql.length) {
+                        if (sql[i] == '\'') {
+                            if (i + 1 < sql.length && sql[i + 1] == '\'') {
+                                // '' 转义：字面量内引号
+                                sb.append("  ")
+                                i += 2
+                            } else {
+                                sb.append(' ')
+                                i++
+                                break
+                            }
+                        } else {
+                            sb.append(' ')
+                            i++
+                        }
+                    }
+                }
+                '`', '"' -> {
+                    val quote = c
+                    sb.append(' ')
+                    i++
+                    while (i < sql.length && sql[i] != quote) {
+                        sb.append(' ')
+                        i++
+                    }
+                    if (i < sql.length) {
+                        sb.append(' ')
+                        i++
+                    }
+                }
+                else -> {
+                    sb.append(c)
+                    i++
+                }
+            }
+        }
+        return sb.toString()
     }
 
     /**

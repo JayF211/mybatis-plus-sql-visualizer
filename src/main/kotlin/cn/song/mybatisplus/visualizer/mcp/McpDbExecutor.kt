@@ -111,8 +111,19 @@ object McpDbExecutor {
      * 在指定数据源上执行只读查询并采集行列文本（EXPLAIN 用）。
      * 密码未保存/不可达等建连失败以 SQLException 冒泡，适配层按
      * [McpToolErrors.DATASOURCE_UNREACHABLE] 包装为 agent 可读错误（零弹窗 fail closed）。
+     *
+     * T-ExecTimeoutGuard（O-25）：[timeoutSeconds] > 0 时执行前 setQueryTimeout（驱动级
+     * 建议值，RemoteStatement 镜像 243/262 javap 同形）；超时形态异常（[cn.song.mybatisplus.
+     * visualizer.execute.ExecutionTimeoutGuard.isTimeoutLike]）先 Statement.cancel() 收尾
+     * 再冒泡，消息尾附 `timed out after Ns`（agent 可读，不引 JSON）。
      */
-    fun executeQuery(project: Project, dataSource: Any, sql: String, maxRows: Int): McpExplainFormatter.RawResult {
+    fun executeQuery(
+        project: Project,
+        dataSource: Any,
+        sql: String,
+        maxRows: Int,
+        timeoutSeconds: Int = 0,
+    ): McpExplainFormatter.RawResult {
         val manager = Class.forName(DCM).getMethod("getInstance").invoke(null)
         val builder = Class.forName(DCM).getMethod("build", Project::class.java, Class.forName(CONNECTION_POINT))
             .invoke(manager, project, dataSource)
@@ -125,17 +136,41 @@ object McpDbExecutor {
                 .invoke(connection)
             val statement = Class.forName(REMOTE_CONNECTION).getMethod("createStatement").invoke(remoteConnection)
             try {
+                // 超时护栏：驱动级建议值，设置 0=不限；设置失败不拦执行（护栏尽力而为语义）
+                if (timeoutSeconds > 0) {
+                    runCatching {
+                        Class.forName(REMOTE_STATEMENT).getMethod("setQueryTimeout", Int::class.javaPrimitiveType)
+                            .invoke(statement, timeoutSeconds)
+                    }.onFailure { LOG.info("McpDbExecutor: setQueryTimeout unsupported by driver, guard off", it) }
+                }
                 val surfaces = warningSurfaces(remoteConnection, statement)
                 // 执行前先 drain 一次（DBX 口径）：DBN 连接可复用，上一条语句/会话遗留的陈旧
                 // notices 不允许串扰进本次结果；返回值丢弃，只做清空。
                 drainWarnings(*surfaces)
-                val resultSet = Class.forName(REMOTE_STATEMENT).getMethod("executeQuery", String::class.java)
-                    .invoke(statement, sql)
-                val raw = collect(resultSet, maxRows)
-                // 执行成功才采集 notices；失败路径直接抛出（notices 无从产生=DBX「出错丢弃」口径）
-                val notices = drainWarnings(*surfaces)
-                if (notices.isNotEmpty()) LOG.info("McpDbExecutor: drained ${notices.size} driver notice(s)")
-                return raw.copy(notices = notices)
+                try {
+                    val resultSet = Class.forName(REMOTE_STATEMENT).getMethod("executeQuery", String::class.java)
+                        .invoke(statement, sql)
+                    val raw = collect(resultSet, maxRows)
+                    // 执行成功才采集 notices；失败路径直接抛出（notices 无从产生=DBX「出错丢弃」口径）
+                    val notices = drainWarnings(*surfaces)
+                    if (notices.isNotEmpty()) LOG.info("McpDbExecutor: drained ${notices.size} driver notice(s)")
+                    return raw.copy(notices = notices)
+                } catch (e: java.lang.reflect.InvocationTargetException) {
+                    // T-ExecTimeoutGuard：超时先收尾再报错——cancel 请求（RMI 镜像尽力而为）
+                    // 后再冒泡带 timed out 标记的异常；cancel 失败不吞超时事实（如实措辞）
+                    val target = e.targetException
+                    if (cn.song.mybatisplus.visualizer.execute.ExecutionTimeoutGuard.isTimeoutLike(target)) {
+                        runCatching {
+                            Class.forName(REMOTE_STATEMENT).getMethod("cancel").invoke(statement)
+                        }.onFailure { LOG.warn("McpDbExecutor: cancel after timeout failed", it) }
+                        throw java.sql.SQLException(
+                            "query timed out after ${timeoutSeconds}s (cancel requested); " +
+                                "original: ${target?.message ?: target?.javaClass?.simpleName}",
+                            target,
+                        )
+                    }
+                    throw e
+                }
             } finally {
                 runCatching { Class.forName(REMOTE_STATEMENT).getMethod("close").invoke(statement) }
                     .onFailure { LOG.warn("McpDbExecutor: close statement failed", it) }

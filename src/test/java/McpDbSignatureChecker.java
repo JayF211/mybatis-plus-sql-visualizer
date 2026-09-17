@@ -72,6 +72,9 @@ public class McpDbSignatureChecker {
         missing += check(method(remoteStatement, "close"), "RemoteStatement.close()");
         missing += check(method(remoteStatement, "getAllWarnings"), "RemoteStatement.getAllWarnings()");
         missing += check(method(remoteStatement, "clearWarnings"), "RemoteStatement.clearWarnings()");
+        // T-ExecTimeoutGuard：超时护栏（setQueryTimeout 驱动级建议值 + cancel 超时收尾）
+        missing += check(method(remoteStatement, "setQueryTimeout", params("int")), "RemoteStatement.setQueryTimeout(int)");
+        missing += check(method(remoteStatement, "cancel"), "RemoteStatement.cancel()");
         Class<?> rs = Class.forName("com.intellij.database.remote.jdbc.RemoteResultSet", true, loader);
         missing += check(method(rs, "next"), "RemoteResultSet.next()");
         missing += check(method(rs, "getString", params("int")), "RemoteResultSet.getString(int)");

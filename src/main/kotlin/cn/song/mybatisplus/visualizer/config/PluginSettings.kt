@@ -318,6 +318,15 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 启用 JdbcTemplate / NamedParameterJdbcTemplate SQL 字符串预览（默认开）。 */
         var jdbcSqlPreviewEnabled: Boolean = true,
 
+        // ---------- T-ExecTimeoutGuard：执行超时护栏 ----------
+
+        /**
+         * 执行超时（秒，每语句基础值）：MCP explain 直连链 setQueryTimeout 驱动级建议值；
+         * 多语句脚本预算按语句数线性放大（封顶 ×8，见 [cn.song.mybatisplus.visualizer.execute.
+         * ExecutionTimeoutGuard]）。0=不限。默认 30。
+         */
+        var executionTimeoutSeconds: Int = DEFAULT_EXECUTION_TIMEOUT_SECONDS,
+
         // ---------- F-6 拦截器模拟增强（TenantLine / DynamicTableName / DataPermission） ----------
 
         /**
@@ -517,6 +526,10 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** 默认 SQL 历史记录上限（F-7，非收藏条目）。 */
         const val DEFAULT_HISTORY_MAX_SIZE = 200
+
+        /** 默认执行超时（秒；0=不限）——单一定义点在 ExecutionTimeoutGuard，State 侧引用避免双份字面量。 */
+        const val DEFAULT_EXECUTION_TIMEOUT_SECONDS =
+            cn.song.mybatisplus.visualizer.execute.ExecutionTimeoutGuard.DEFAULT_TIMEOUT_SECONDS
 
         // ---------- T-CrudColor：SQL 列表 CRUD 类型颜色标记默认值 ----------
         // 单一真源在 SqlListTypeColor（语义与其渲染同处一处），State 侧只引用，避免双份字面量漂移。
