@@ -1802,6 +1802,15 @@ class SqlPreviewService(private val project: Project) {
     companion object {
         private val LOG = Logger.getInstance(SqlPreviewService::class.java)
 
+        /**
+         * T-PreviewFast P7：最近一次预览请求的起始时刻（点击/快捷键入口记时）。三段耗时的锚点：
+         * 请求 → 弹窗（[showResult] 记）→ 控制台可见（面板 embedConsole 记）。仅诊断用，
+         * 无锁 volatile 读写，取不到 0 即忽略。
+         */
+        @Volatile
+        var lastPreviewRequestMs: Long = 0L
+            internal set
+
         /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
 
@@ -1836,6 +1845,13 @@ class SqlPreviewService(private val project: Project) {
          * @param sourceLocation 当前代码位置（文件名:行号），来源列默认值；null 表示未知
          */
         fun showResult(project: Project, result: PreviewResult?, sourceLocation: String? = null) {
+            // T-PreviewFast P7：请求→弹窗耗时（第二段锚点；后续控制台可见由面板记）
+            runCatching {
+                val req = lastPreviewRequestMs
+                if (req > 0 && result != null) {
+                    LOG.info("[T-PreviewFast] request→dialog: ${System.currentTimeMillis() - req}ms")
+                }
+            }
             if (result == null) {
                 // T-UiNative T-UN-02：未找到可转换 Wrapper 提示改轻通知（原模态弹窗——纯告知无需打断）；
                 // 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）
@@ -1886,6 +1902,9 @@ class SqlPreviewService(private val project: Project) {
          */
         @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
         fun previewAsync(project: Project, compute: () -> PreviewResult?, onResult: (PreviewResult?) -> Unit) {
+            // T-PreviewFast P7：三段耗时埋点起点（点击/快捷键触发即记时）——真机排障时直接给出
+            // 「请求→弹窗」「弹窗→控制台可见」两段数字，取代靠多条阶段日志手工推时序
+            lastPreviewRequestMs = System.currentTimeMillis()
             ApplicationManager.getApplication().executeOnPooledThread {
                 val result = try {
                     ReadAction.compute<PreviewResult?, Throwable> { compute() }
