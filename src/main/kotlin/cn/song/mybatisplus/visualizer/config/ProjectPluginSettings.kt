@@ -36,8 +36,14 @@ class ProjectPluginSettings : PersistentStateComponent<ProjectPluginSettings.Sta
         /** 是否启用项目级设置（false 时使用全局 [PluginSettings] 值）。 */
         var useProjectSettings: Boolean = false,
 
-        /** 项目级数据库方言（空字符串表示使用全局）。 */
+        /** 项目级数据库方言（空字符串表示使用全局；仅项目级 auto 关闭时生效）。 */
         var dialect: String = "",
+
+        /**
+         * T-DialectAutoInfer：项目级方言模式（null=使用全局——与「空=不覆盖」语义同构）。
+         * true=项目强制智能推断；false=项目按 [dialect]（非空时）手动指定。
+         */
+        var dialectAuto: Boolean? = null,
 
         /** 项目级参数替换开关（null 表示使用全局）。 */
         var replaceParams: Boolean? = null,
@@ -78,6 +84,14 @@ class ProjectPluginSettings : PersistentStateComponent<ProjectPluginSettings.Sta
 
     /** 当前项目是否启用了项目级设置。 */
     fun isEnabled(): Boolean = state.useProjectSettings
+
+    /**
+     * T-DialectAutoInfer：有效方言模式（项目级 dialectAuto 非 null 且已启用项目设置时优先，
+     * 否则回退全局 dialectAuto）。
+     */
+    fun effectiveDialectAuto(): Boolean =
+        if (state.useProjectSettings && state.dialectAuto != null) state.dialectAuto!!
+        else PluginSettings.getInstance().state.dialectAuto
 
     /** 项目级方言（未启用或空则回退全局）。 */
     fun effectiveDialect(): String =

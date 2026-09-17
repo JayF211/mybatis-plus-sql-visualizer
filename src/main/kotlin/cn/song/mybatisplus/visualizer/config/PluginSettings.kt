@@ -32,7 +32,16 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
      */
     @Suppress("DataClassShouldBeImmutable")
     data class State(
-        /** 数据库方言（对应 [cn.song.mybatisplus.visualizer.sql.DialectRegistry] 的名称）。 */
+        /**
+         * T-DialectAutoInfer：方言模式——true=智能推断（默认，跟随 agent 捕获连接 > IDE 数据源，
+         * 未命中回退 MySQL）；false=按 [dialect] 手动指定。
+         * 旧配置无此字段 → XmlSerializer 缺省 true（语义变化：从不动方言设置的老用户自动进入
+         * 推断模式，CHANGELOG 已明示）。
+         */
+        var dialectAuto: Boolean = true,
+
+        /** 数据库方言（对应 [cn.song.mybatisplus.visualizer.sql.DialectRegistry] 的名称）；
+         * 仅 [dialectAuto]=false 时生效（手动指定值）。 */
         var dialect: String = DEFAULT_DIALECT,
 
         /** 是否替换参数（F-16 配置项；true 时 psi 层变量追踪内联，false 保留 `?`）。 */
