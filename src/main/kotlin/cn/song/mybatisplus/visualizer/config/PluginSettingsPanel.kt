@@ -312,6 +312,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private val logAutoSaveBrowseButton = JButton("...")
     private val logAutoSavePatternField = JBTextField(20)
     private val logAutoSavePatternPreview = JBLabel(" ")
+    /** T-HistoryFileRetention：历史文件保留上限（0 = 不限/全量）。 */
+    private val logAutoSaveMaxFilesField = JBTextField(12)
 
     // ---------- F-44-7 SqlSourceInterceptor 自动注入 ----------
     private val autoInjectInterceptorCheck = JBCheckBox()
@@ -651,6 +653,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
                         logAutoSavePathField.isEnabled = enabled
                         logAutoSaveBrowseButton.isEnabled = enabled
                         logAutoSavePatternField.isEnabled = enabled
+                        logAutoSaveMaxFilesField.isEnabled = enabled // T-HistoryFileRetention
                         updateAutoSavePreview()
                     }
                 })
@@ -688,6 +691,13 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 addRow(p, g, "", logAutoSavePatternPreview.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.preview.tip")
                 })
+                // T-HistoryFileRetention：历史文件保留上限（防磁盘爆炸；0 = 全量保留）
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.autoSave.maxFiles"),
+                    logAutoSaveMaxFilesField.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.maxFiles.tip")
+                        emptyText.text = PluginSettings.DEFAULT_LOG_AUTO_SAVE_MAX_FILES.toString()
+                    }
+                )
             }
 
             // F-44-7：SqlSourceInterceptor 自动注入（源码位置捕获）
@@ -1183,6 +1193,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logAutoSaveCheck.isSelected != s.logAutoSaveEnabled
             || logAutoSavePathField.text.trim() != s.logAutoSavePath
             || logAutoSavePatternField.text.trim() != s.logAutoSaveFileNamePattern
+            || (logAutoSaveMaxFilesField.text.trim().toIntOrNull() ?: PluginSettings.DEFAULT_LOG_AUTO_SAVE_MAX_FILES) != s.logAutoSaveMaxFiles
             || autoInjectInterceptorCheck.isSelected != s.autoInjectSqlSourceInterceptor
             // T-CrudColor：仅改样式或仅改某个颜色也必须能启用 Apply
             // （reverseWrapperFormat 漏挂 isModified 导致改动被平台静默丢弃的假开关事故，此处防同类回归）
@@ -1274,6 +1285,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.logAutoSavePath = logAutoSavePathField.text.trim()
             s.logAutoSaveFileNamePattern = logAutoSavePatternField.text.trim()
                 .ifEmpty { PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
+            s.logAutoSaveMaxFiles = logAutoSaveMaxFilesField.text.trim().toIntOrNull()
+                ?: PluginSettings.DEFAULT_LOG_AUTO_SAVE_MAX_FILES // T-HistoryFileRetention
             s.autoInjectSqlSourceInterceptor = autoInjectInterceptorCheck.isSelected
             // T-CrudColor：CRUD 颜色标记（样式 + 四色）
             s.crudColorStyle = selectedCrudColorStyle()
@@ -1391,10 +1404,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logAutoSaveCheck.isSelected = s.logAutoSaveEnabled
             logAutoSavePathField.text = s.logAutoSavePath
             logAutoSavePatternField.text = s.logAutoSaveFileNamePattern
+            logAutoSaveMaxFilesField.text = s.logAutoSaveMaxFiles.toString() // T-HistoryFileRetention
             val autoSaveEnabled = s.logAutoSaveEnabled
             logAutoSavePathField.isEnabled = autoSaveEnabled
             logAutoSaveBrowseButton.isEnabled = autoSaveEnabled
             logAutoSavePatternField.isEnabled = autoSaveEnabled
+            logAutoSaveMaxFilesField.isEnabled = autoSaveEnabled // T-HistoryFileRetention
             updateAutoSavePreview()
             // T-CrudColor：CRUD 颜色标记控件回填
             crudColorStyleCombo.selectedItem = crudColorStyleOptions()

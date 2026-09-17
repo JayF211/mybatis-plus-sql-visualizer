@@ -308,10 +308,11 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
                 indices.none { it < 0 } && indices.zipWithNext().all { (a, b) -> a < b },
             )
             // placeholder：3 个支持多值的输入栏 + 日志过滤关键字 + F-43 保存路径 + F-43 文件名模板
+            // + T-HistoryFileRetention 文件保留上限（默认 30 提示）
             // （添加表前缀/后缀单值 + shortcut 只读框均不计入）
             val zhHints = mutableListOf<String>()
             collectTextFieldEmptyTexts(panel.getRoot(), zhHints)
-            assertEquals("placeholder 应设置于 6 个输入栏（+F-43 保存路径+文件名模板）", 6, zhHints.size)
+            assertEquals("placeholder 应设置于 7 个输入栏（+F-43 保存路径+文件名模板+文件保留上限）", 7, zhHints.size)
             // 多值输入栏 + 日志过滤关键字的 placeholder 为「多个时使用;来分隔」
             val multiValueHints = zhHints.count { it == "多个时使用;来分隔" }
             assertEquals("多值输入栏 placeholder 数量应为 4", 4, multiValueHints)
@@ -321,7 +322,7 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             panel.rebuild()
             val enHints = mutableListOf<String>()
             collectTextFieldEmptyTexts(panel.getRoot(), enHints)
-            assertEquals("英文 placeholder 数量为 6（+F-43 保存路径+文件名模板）", 6, enHints.size)
+            assertEquals("英文 placeholder 数量为 7（+F-43 保存路径+文件名模板+文件保留上限）", 7, enHints.size)
         } finally {
             settings.loadState(snapshot)
         }

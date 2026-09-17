@@ -445,7 +445,12 @@ class SqlLogManager(private val project: Project) : Disposable {
         // T-SqlHistoryFull：写入来源从「仅淘汰写」改为「入队成功即写」——历史记录全量 SQL；
         // onEvicted 置空防重复（成功入队已写过，被淘汰条目不再二次写盘）
         if (state.logAutoSaveEnabled) {
-            autoSaver.configure(state.logAutoSavePath, state.logAutoSaveFileNamePattern, project.basePath)
+            autoSaver.configure(
+                state.logAutoSavePath,
+                state.logAutoSaveFileNamePattern,
+                project.basePath,
+                state.logAutoSaveMaxFiles, // T-HistoryFileRetention：历史文件保留上限
+            )
             buffer.onEntryStored = { entry -> autoSaver.submit(entry) }
             buffer.onEvicted = null
         } else {

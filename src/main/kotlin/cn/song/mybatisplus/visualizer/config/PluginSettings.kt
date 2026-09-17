@@ -242,6 +242,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var logAutoSaveFileNamePattern: String = DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN,
 
+        /**
+         * 历史 SQL 文件保留上限（T-HistoryFileRetention）：保存目录下历史文件（按文件名基名归并
+         * 滚动块）超过该数量时，在后台写批之后自动删除最旧文件，防止磁盘空间爆炸。
+         * 0 或负数 = 不限制（全量保留）。默认 [DEFAULT_LOG_AUTO_SAVE_MAX_FILES]。
+         */
+        var logAutoSaveMaxFiles: Int = DEFAULT_LOG_AUTO_SAVE_MAX_FILES,
+
         // ---------- O-1 日志窗口差异化（执行耗时 / 慢查询） ----------
 
         /**
@@ -477,6 +484,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** 自动保存历史 SQL 默认文件名模板（F-43）。 */
         const val DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN = "sql-history-\$yyyy-MM-dd\$.sql"
+
+        /** 历史 SQL 文件保留上限默认值（T-HistoryFileRetention）：默认留最近 30 个文件（按日模板≈约一个月），防磁盘膨胀；0/负 = 全量保留。 */
+        const val DEFAULT_LOG_AUTO_SAVE_MAX_FILES = 30
 
         // ---------- O-1 日志窗口差异化默认值 ----------
         const val DEFAULT_LOG_TIME_PREFIX = "Time:"
