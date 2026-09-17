@@ -430,14 +430,13 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         filtered.forEach { fileListModel.addElement(it) }
     }
 
-    /**
+/**
      * 二级：按 SQL 内容 / 行号 / 时间 / 源文件过滤（T-LogSearchRowTime 与日志页 filterBySearch
-     * 同款语义——行号 `#5`/`5` 精确 equals、时间按显示片段 contains（所见即所搜，开关关闭不参与）；
+     * 同款语义：行号 `#5`/`5` 精确 equals、时间按显示片段 contains（所见即所搜，开关关闭不参与）；
      * 源文件为历史页特有检索目标，保留独立分支。
      */
     private fun applySqlSearch() {
         val q = searchField.text.trim()
-        sqlListModel.clear()
         val filtered = if (q.isEmpty()) {
             currentEntries
         } else {
@@ -450,7 +449,39 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
                     entry.sourceFile?.contains(q, ignoreCase = true) == true
             }
         }
-        filtered.forEach { sqlListModel.addElement(it) }
+        fillSqlList(filtered)
+    }
+
+    /**
+     * T-SqlHistoryFull：列表分批填充（复用实时面板 applyFullRebuild 范式）——列表模型全量同步
+     * 填充在条目千百级时产生上千次模型变更事件 + 布局失效，是历史打开卡顿主源。
+     * 改为：ignoreRepaint 批量抑制布局 + 首屏 30 条立即写入 + 剩余每 30 条 invokeLater 追加；
+     * gen 代际守卫——新一轮 fillSqlList（重新加载/搜索/刷新）启动即终止旧分块链，杜绝幽灵/重复条目。
+     */
+    private fun fillSqlList(entries: List<LogSqlEntry>) {
+        val gen = ++bgGeneration
+        sqlList.ignoreRepaint = true
+        sqlListModel.clear()
+        if (entries.isNotEmpty()) {
+            sqlListModel.addAll(entries.take(REFRESH_FIRST_BATCH_SIZE))
+        }
+        sqlList.ignoreRepaint = false
+        sqlList.revalidate()
+        sqlList.repaint()
+
+        if (entries.size > REFRESH_FIRST_BATCH_SIZE) {
+            val iterator = entries.drop(REFRESH_FIRST_BATCH_SIZE).iterator()
+            fun appendNext() {
+                if (gen != bgGeneration || project.isDisposed) return // 新一轮已启动，旧链终止
+                val chunk = mutableListOf<LogSqlEntry>()
+                repeat(REFRESH_CHUNK_SIZE) { if (iterator.hasNext()) chunk.add(iterator.next()) }
+                sqlListModel.addAll(chunk)
+                if (iterator.hasNext()) {
+                    ApplicationManager.getApplication().invokeLater { appendNext() }
+                }
+            }
+            ApplicationManager.getApplication().invokeLater { appendNext() }
+        }
     }
 
     private fun getHistoryDir(): String {
@@ -618,6 +649,12 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
         /** T-Perf-05：搜索输入防抖窗口（毫秒）。 */
         private const val SEARCH_DEBOUNCE_MS = 200
+
+        /** T-SqlHistoryFull：二级列表分批填充——首屏立即写入条数（与实时面板同值，快速首屏）。 */
+        private const val REFRESH_FIRST_BATCH_SIZE = 30
+
+        /** T-SqlHistoryFull：二级列表分批填充——每块 invokeLater 追加条数（防 EDT 长冻结）。 */
+        private const val REFRESH_CHUNK_SIZE = 30
     }
 }
 
