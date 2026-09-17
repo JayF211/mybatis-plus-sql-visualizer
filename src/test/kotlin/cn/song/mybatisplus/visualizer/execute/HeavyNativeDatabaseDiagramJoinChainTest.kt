@@ -188,9 +188,22 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
         )
         assertTrue("原生图应开启「尺寸变化后保持自适应」", b.view.fitContentOnResize)
 
-        NativeDatabaseDiagramSupport.disposeNativeEditor(comp)
+        // T-EmbedFkOrder F3 回归（本次真机故障形态）：清理**无关旧组件**不得抹掉当前图的虚拟外键登记——
+        // 修复前 disposeNativeEditor 的 finally 里 JoinFkRegistry.clear() 会把刚登记的整批抹掉，
+        // 于是换图再预览时 Database 原生图只剩节点没连线（用户实测"一张有连线、另一张没有"）。
+        val stale = javax.swing.JPanel()
+        stale.putClientProperty("mpsql.native.database.editor", com.intellij.openapi.util.Disposer.newDisposable())
+        NativeDatabaseDiagramSupport.disposeNativeEditor(stale)
         assertTrue(
-            "dispose 后虚拟外键登记应清空",
+            "释放无关旧组件后，当前图的虚拟外键登记必须仍在（否则连线丢失）",
+            JoinFkRegistry.find("station_info", "car_device_info").isNotEmpty(),
+        )
+
+        NativeDatabaseDiagramSupport.disposeNativeEditor(comp)
+        // T-EmbedFkOrder F2：dispose 不再顺带清理注册表，清理改由「整图卸载」显式调用
+        NativeDatabaseDiagramSupport.clearRegisteredFk()
+        assertTrue(
+            "显式整图卸载后，虚拟外键登记应清空",
             JoinFkRegistry.find("station_info", "car_device_info").isEmpty(),
         )
     }
