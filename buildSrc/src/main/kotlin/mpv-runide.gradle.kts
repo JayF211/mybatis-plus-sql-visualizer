@@ -148,3 +148,5 @@ intellijPlatformTesting {
         }
     }
 }
+
+// 本地清单测试集成见 dev-support/run-ide-local-manifest.sh（自动起/停 Python 服务器）
