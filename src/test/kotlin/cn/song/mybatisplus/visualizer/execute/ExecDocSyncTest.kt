@@ -9,7 +9,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import java.io.File
 
 /**
@@ -71,57 +70,56 @@ class ExecDocSyncTest : BasePlatformTestCase() {
         )
     }
 
-    // ======================== T-EC-02：裸写兜底守卫 ========================
+    // ============ T-ExecDocSync3：VFS 已有该文件即绝不裸写（T-EC-02 守卫退役） ============
 
-    /** canFallBackToRawWrite 表驱动：无已加载 document → 允许；有 → 禁止。 */
-    fun testCanFallBackToRawWriteTableDriven() {
+    /**
+     * 核心回归（第四轮真机日志实证的收口）：WriteAction 失败/EDT 派发超时 → **磁盘一律不动**，
+     * 且不再抛异常（旧 writeConflictGuard 已退役）。
+     *
+     * 真机失败链（2026-09-17 真实 IDE 2024.3 日志）：EDT 忙（冷启动索引）→ dispatch 有界等待 2s
+     * 超时返回 false → 旧守卫查 getCachedDocument 得 null（彼时排队中的 EDT 写任务尚未执行、
+     * document 还没建）→ 放行裸写改盘 → 排队任务随后建出 document 并标脏 → 裸写引发的 VFS 变更
+     * 落到这个新文档上 → MemoryDiskConflictResolver 弹「重载 mpsql-exec.sql？」。即插件与自己的
+     * 排队写赛跑。此用例钉死「VFS 有该文件时不裸写」。
+     */
+    fun testNoRawWriteWhenDocWriteFailsAndVfExists() {
         writeIo("SELECT 1")
-        val vf = refreshVf()
-        assertTrue(
-            "无已加载 document → 允许裸写兜底（无冲突面）",
-            DataSourceSelector.canFallBackToRawWrite(vf!!),
-        )
-        FileDocumentManager.getInstance().getDocument(vf)
-        assertFalse(
-            "有已加载 document → 禁止裸写兜底（绕过 document 改盘 = 冲突外部条件）",
-            DataSourceSelector.canFallBackToRawWrite(vf),
-        )
+        refreshVf() // vf 在 VFS（= 存在 document 可能），不预加载 document —— 正是真机超时那一刻的形态
+        DataSourceSelector.execWriteActionFailureInjection = true
+        try {
+            val f = DataSourceSelector.projectExecFile(project, "SELECT 2")
+            assertNotNull("应返回文件路径（调用方需要 ioFile 做 refresh/映射）", f)
+            assertEquals(
+                "T-ExecDocSync3：裸写必须被跳过——磁盘保持旧值（宁旧一拍，由后续 console doc 同步链收敛）",
+                "SELECT 1",
+                diskText(),
+            )
+        } finally {
+            DataSourceSelector.execWriteActionFailureInjection = false
+        }
     }
 
-    /** WriteAction 失败（注入缝）+ document 已加载 → writeConflictGuard 拒写，磁盘不被改。 */
-    fun testGuardRefusesRawWriteWhenDocumentLoaded() {
+    /** document 已加载时同样不裸写（原守卫拒绝路径的等价保证，改为不抛异常、不落盘）。 */
+    fun testNoRawWriteWhenDocWriteFailsAndDocumentLoaded() {
         writeIo("SELECT 1")
         val vf = refreshVf()
         FileDocumentManager.getInstance().getDocument(vf!!)
         DataSourceSelector.execWriteActionFailureInjection = true
         try {
-            try {
-                DataSourceSelector.projectExecFile(project, "SELECT 2")
-                fail("守卫必须拒绝裸写（writeConflictGuard）")
-            } catch (e: IllegalStateException) {
-                assertTrue(
-                    "拒绝原因应携带 writeConflictGuard 阶段标识，实际：${e.message}",
-                    e.message!!.contains("writeConflictGuard"),
-                )
-            }
-            assertEquals("守卫拒绝后磁盘不得被改（宁旧一拍，不弹冲突模态窗）", "SELECT 1", diskText())
+            val f = DataSourceSelector.projectExecFile(project, "SELECT 2")
+            assertNotNull(f)
+            assertEquals("有 document 时不得裸写（旧守卫语义保留，只是不再抛异常）", "SELECT 1", diskText())
         } finally {
             DataSourceSelector.execWriteActionFailureInjection = false
         }
     }
 
-    /** WriteAction 失败（注入缝）+ 无已加载 document → 裸写兜底合法放行。 */
-    fun testRawWriteFallbackWhenNoDocumentLoaded() {
-        writeIo("SELECT 1")
-        refreshVf() // vf 在 VFS，但 document 不加载（不调 getDocument）
-        DataSourceSelector.execWriteActionFailureInjection = true
-        try {
-            val f = DataSourceSelector.projectExecFile(project, "SELECT 2")
-            assertNotNull("放行路径应返回文件", f)
-            assertEquals("无已加载 document 时裸写兜底合法（无冲突面）", "SELECT 2", diskText())
-        } finally {
-            DataSourceSelector.execWriteActionFailureInjection = false
-        }
+    /** 首次创建（VFS 无条目）→ 裸写仍合法（无 vf 可挂 document，无冲突面）。 */
+    fun testRawWriteStillUsedWhenVfMissing() {
+        assertFalse("前置：文件应不存在", execFile.exists())
+        val f = DataSourceSelector.projectExecFile(project, "SELECT 1")
+        assertNotNull(f)
+        assertEquals("VFS 无条目时裸写创建（首次）", "SELECT 1", diskText())
     }
 
     // ======================== T-EC-04：裸写路径防御收口 ========================
