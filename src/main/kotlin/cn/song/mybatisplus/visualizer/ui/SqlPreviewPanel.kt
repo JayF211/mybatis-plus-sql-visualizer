@@ -1147,10 +1147,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 }
             }
         } else {
-            // 无 JOIN：移除 diagram 标签页（恢复纯 SQL 视图）
+            // 无 JOIN：整图卸载（移除 diagram 标签页 + 释放原生图 + 回收虚拟外键登记）
             removeDiagramTab()
-            diagramPanel.clear()
-            clearNativeDiagram()
+            unloadJoinDiagram()
         }
     }
 
@@ -1163,6 +1162,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      */
     private fun showJoinDiagram(model: DiagramModel) {
         val nativeEnabled = PluginSettings.getInstance().state.joinDiagramNative
+        // T-EmbedFkOrder F1：**必须先清旧图、再建新图**——旧图 dispose 会清空 JOIN 虚拟外键注册表
+        //（JoinFkRegistry），顺序颠倒会把新图刚登记的 ON 条件整批抹掉：Database 原生图于是只剩节点
+        // 没有连线（真机实证：同一面板里"一张图有连线、另一张没有"；含子查询的走 wrapper 路径不读
+        // 注册表，故不受影响）。清理集中在此处（建图之前），登记之后不再有人清它。
+        clearNativeDiagram()
         val native = if (nativeEnabled) {
             // T-Embed-03 降级链：Database 原生图（真实 DbTable + 虚拟外键 JOIN 线）优先，
             // 数据源缺席/表未定位/框架异常回落 A 路径自实现 Provider，再回落自绘渲染器
@@ -1174,7 +1178,6 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         } else {
             null
         }
-        clearNativeDiagram()
         diagramTabHost.removeAll()
         if (native != null) {
             currentNativeDiagram = native
@@ -1187,7 +1190,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         diagramTabHost.repaint()
     }
 
-    /** 释放并移除当前原生图组件（内部 FileEditor 经 clientProperty 定位后 dispose）。 */
+    /**
+     * 释放并移除当前原生图组件（内部 FileEditor 经 clientProperty 定位后 dispose）。
+     *
+     * T-EmbedFkOrder F2：本方法**不**清理 JOIN 虚拟外键注册表——它可能在建新图之前被调用（此时
+     * 新图尚未登记，清了也无害），也可能在换图/卸载时被调用（此时若清会把刚登记的抹掉）。
+     * 注册表的清理职责在明确语义点：登记前自带 clear 与 [unloadJoinDiagram]。
+     */
     private fun clearNativeDiagram() {
         currentNativeDiagram?.let {
             // 两条原生路径的 clientProperty key 不同，各 dispose 一次（未命中为 no-op）
@@ -1196,6 +1205,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             diagramTabHost.remove(it)
         }
         currentNativeDiagram = null
+    }
+
+    /** T-EmbedFkOrder F2：整图卸载（无 JOIN/面板清空）——释放原生图并回收虚拟外键登记。 */
+    private fun unloadJoinDiagram() {
+        clearNativeDiagram()
+        diagramPanel.clear()
+        cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport.clearRegisteredFk()
     }
 
     /** 确保内容区为标签页模式（含 SQL + 可选的 JOIN 图）。 */
@@ -1673,10 +1689,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         metaLineText = ""
         metaPerfSegments = emptyList()
         lastMetaBudget = -1
-        // F-1：清除图集 + 恢复纯 SQL 视图
+        // F-1：清除图集 + 恢复纯 SQL 视图（整图卸载含虚拟外键回收）
         removeDiagramTab()
-        diagramPanel.clear()
-        clearNativeDiagram()
+        unloadJoinDiagram()
         // M36：清空结果面板 + 摘除内嵌控制台
         resultPanel.clear()
         detachConsole()
