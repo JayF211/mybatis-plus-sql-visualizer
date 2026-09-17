@@ -32,6 +32,9 @@ object DiagramSchemaEnricher {
  *
  * 逐维度回落：表注释 DB COMMENT 优先，数据库没写（null/空白）回落实体类注释；
  * 列类型/列注释同理。表在数据源匹配不到（comment 与 columns 双缺）时整表保留原值。
+ *
+ * T-DgmFullCols：列集合也不再只按实体列富化——**数据源里有而实体没映射的列一并补进来**
+ * （实体过时 / 审计列 / 未映射列），与主表「整表口径」一致，观感对齐原生「显示图」。
  */
 internal fun applyTableMeta(
     model: DiagramModel,
@@ -43,14 +46,36 @@ internal fun applyTableMeta(
         entity.copy(
             // T-Embed-09：表头注释数据库 COMMENT 优先，数据库没写才回落实体类注释
             tableComment = meta.comment ?: entity.tableComment,
-            columns = entity.columns.map { column ->
-                val columnMeta = meta.columns[column.name] ?: return@map column
-                column.copy(
-                    type = columnMeta.typeSpec ?: column.type,
-                    comment = columnMeta.comment ?: column.comment,
-                )
-            },
+            columns = mergeColumns(entity.columns, meta.columns),
         )
     }
     return model.copy(entities = entities)
+}
+
+/**
+ * T-DgmFullCols：实体列在前（按列名取数据源注释/类型；实体没写注释就由库补），
+ * **数据源独有列按库顺序追加**在后。
+ *
+ * 顺序刻意保持「实体列在前」——那是用户熟悉的那份字段顺序，库里多出来的列跟在后面，不打乱它。
+ * 追加后若超过 [DIAGRAM_MAX_COLUMNS] 就整体放弃追加（宁少不撑爆画布，与生成器裁剪同一口径）。
+ *
+ * 库独有列不标主键：`ColumnMeta` 只有 notNull/类型/注释、没有键信息，用 notNull 近似会误导（一期不标）。
+ */
+private fun mergeColumns(
+    entityColumns: List<ColumnEntry>,
+    dbColumns: Map<String, DatabaseSchemaResolver.ColumnMeta>,
+): List<ColumnEntry> {
+    val merged = entityColumns.map { column ->
+        val columnMeta = dbColumns[column.name] ?: return@map column
+        column.copy(
+            type = columnMeta.typeSpec ?: column.type,
+            comment = columnMeta.comment ?: column.comment,
+        )
+    }
+    val known = entityColumns.mapTo(mutableSetOf()) { it.name.lowercase() }
+    val extras = dbColumns.entries
+        .filter { it.key.lowercase() !in known }
+        .map { (name, meta) -> ColumnEntry(name, meta.typeSpec, isPk = false, comment = meta.comment) }
+    if (extras.isEmpty() || merged.size + extras.size > DIAGRAM_MAX_COLUMNS) return merged
+    return merged + extras
 }

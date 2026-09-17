@@ -214,10 +214,16 @@ class NativeJoinDiagramScenariosTest {
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals(4, model.entities.size)
-        // 真实契约：MAX_COLUMNS 裁剪仅作用于主表；JOIN 表列 = 被引用列（selectColumns + ON 条件），
-        // dev 表即使 60 列也只显示 select/ON 引用到的列（图保持精简的天然机制）
+        // T-DgmFullCols 契约（2026-09-17 变更，取代此前「MAX_COLUMNS 只作用于主表、JOIN 表列 = 仅被引用列」）：
+        // JOIN 表与主表同口径——实体整表列（>50 列时裁到主键列），被引用列（selectColumns + ON）
+        // 无论实体里有没有都保留（SQL 原始列名可能不在实体中）。dev 实体 60 列 → 只剩主键 id，
+        // 两个被引用列追加在后。
         val dev = model.entities.first { it.alias == "dev" }
-        assertEquals(listOf("station_identification_uuid_reference", "user_id"), dev.columns.map { it.name })
+        assertEquals(
+            "60 列实体裁到主键列 + 被引用列追加",
+            listOf("id", "station_identification_uuid_reference", "user_id"),
+            dev.columns.map { it.name },
+        )
 
         val id = JoinDiagramSnapshotRegistry.put(model, "JOIN Diagram: 4 tables")
         val graph = JoinDiagramGraph.build(JoinDiagramSnapshotRegistry.get(id), SqlJoinDiagramProvider())
