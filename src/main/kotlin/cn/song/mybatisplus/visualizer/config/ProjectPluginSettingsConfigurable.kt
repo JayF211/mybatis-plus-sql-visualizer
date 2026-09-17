@@ -31,6 +31,11 @@ import javax.swing.JComponent
  * 「写了却没人信」的假状态（后续读者会误以为它参与判定）；控件监听器也不再为置位而挂。
  * isModified() 逐项比对控件与 state（null 语义：checkbox 勾选态与 state 值按
  * 「null 视为全局值」比较）。
+ *
+ * T-DialectAutoInfer：方言下拉首项为「智能推断」哨兵——选中即项目级 dialectAuto=true，
+ * 选具体方言名即 dialectAuto=false 并把值写进 dialect（state.dialectAuto=null 表示跟随全局，
+ * 显示项按全局模式推导，见 [expectedDialectItem]）。哨兵项不复活 T-RA-04 删除的 modified
+ * 标志位：apply 只按控件显示值甄别两种语义写 state，isModified 仍走纯逐项比对。
  */
 class ProjectPluginSettingsConfigurable(private val project: Project) : Configurable {
 
@@ -66,6 +71,9 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
 
     private fun fieldTip(): String = MpSqlVisualizerBundle.message("settings.project.field.tip")
 
+    /** T-DialectAutoInfer：「智能推断」哨兵项（createComponent 时按当前语言初始化）。 */
+    private val autoItem: String = MpSqlVisualizerBundle.message("settings.dialect.auto")
+
     override fun getDisplayName(): String = MpSqlVisualizerBundle.message("plugin.name")
 
     override fun createComponent(): JComponent {
@@ -74,6 +82,9 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         // T-UiNative T-UN-15：布局层迁 DSL v2；控件初始值经 applyToComponent 灌入。
         // T-RA-04：原先每个控件都挂 addActionListener { modified = true } 只为置标志位，
         // 标志位删除后这些监听器一并移除（isModified 逐项比对控件显示值，无需变更通知）。
+        // T-DialectAutoInfer：auto 哨兵项=「智能推断」；项目级 dialectAuto null=跟随全局，
+        // 显示项由 [expectedDialectItem] 按有效模式推导（与 reset/isModified 同源）。
+        val initialDialect = expectedDialectItem(st, global)
         lateinit var checkCell: Cell<JBCheckBox>
         lateinit var comboCell: Cell<ComboBox<String>>
         lateinit var replaceParamsCell: Cell<JBCheckBox>
@@ -93,9 +104,9 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                     }
             }
             row(MpSqlVisualizerBundle.message("settings.dialect")) {
-                comboCell = comboBox(DialectRegistry.dialects.map { it.name })
+                comboCell = comboBox(listOf(autoItem) + DialectRegistry.dialects.map { it.name })
                     .applyToComponent {
-                        selectedItem = st.dialect.ifBlank { global.dialect }
+                        selectedItem = initialDialect
                     }
             }
             row {
@@ -172,6 +183,20 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         return panel
     }
 
+    /**
+     * T-DialectAutoInfer：方言下拉应显示的项——有效模式为推断时显示哨兵项「智能推断」，
+     * 否则显示项目手动值（空则回退全局手动值）。
+     *
+     * createComponent / reset / isModified 三处共用同一推导：T-RA-04 起 isModified 是「控件显示值
+     * vs state」的逐项比对，哨兵项使显示值与 `state.dialect` 不再一一对应（auto 模式下 state.dialect
+     * 是保留的手动值、并非显示值），故必须由同一函数把 state 反推成显示项，否则哨兵项会让未改动
+     * 的页面每次打开都误报已修改。
+     */
+    private fun expectedDialectItem(st: ProjectPluginSettings.State, global: PluginSettings.State): String {
+        val auto = st.dialectAuto ?: global.dialectAuto
+        return if (auto) autoItem else st.dialect.ifBlank { global.dialect }
+    }
+
     /** 三态布尔比对：state 为 null 视为全局值，与勾选态比较。 */
     private fun boolDiffers(check: JBCheckBox?, stateValue: Boolean?, globalValue: Boolean): Boolean {
         check ?: return false
@@ -192,7 +217,9 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         if ((useProjectCheck?.isSelected ?: st.useProjectSettings) != st.useProjectSettings) return true
         // 方言控件显示值回灌全局兜底（st.dialect 空时显示 global.dialect），比对须对齐同语义，
         // 否则「项目级方言未配置」在每次打开设置页都误报已修改（实证：reset 前未改动 isModified=true）
-        if ((dialectCombo?.selectedItem as? String ?: st.dialect.ifBlank { global.dialect }) != st.dialect.ifBlank { global.dialect }) return true
+        // T-DialectAutoInfer：期望显示项含哨兵项分支，与 createComponent/reset 同源推导
+        val dialectShown = dialectCombo?.selectedItem as? String ?: expectedDialectItem(st, global)
+        if (dialectShown != expectedDialectItem(st, global)) return true
         if (boolDiffers(replaceParamsCheck, st.replaceParams, global.replaceParams)) return true
         if (boolDiffers(formatSqlCheck, st.formatSql, global.formatSql)) return true
         if (boolDiffers(injectLogicDeleteCheck, st.injectLogicDelete, global.injectLogicDelete)) return true
@@ -210,7 +237,16 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
     override fun apply() {
         val st = projectSettings.state
         useProjectCheck?.let { st.useProjectSettings = it.isSelected }
-        dialectCombo?.let { st.dialect = it.selectedItem as? String ?: "" }
+        // T-DialectAutoInfer：哨兵项=项目级推断（true）；具体方言=手动（false + 值）。
+        // auto 分支不改 st.dialect——手动值作为记忆保留，切回手动时不必重选
+        (dialectCombo?.selectedItem as? String)?.let { selected ->
+            if (selected == autoItem) {
+                st.dialectAuto = true
+            } else {
+                st.dialectAuto = false
+                st.dialect = selected
+            }
+        }
         replaceParamsCheck?.let { st.replaceParams = it.isSelected }
         formatSqlCheck?.let { st.formatSql = it.isSelected }
         injectLogicDeleteCheck?.let { st.injectLogicDelete = it.isSelected }
@@ -225,7 +261,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         val st = projectSettings.state
         val global = globalState
         useProjectCheck?.isSelected = st.useProjectSettings
-        dialectCombo?.selectedItem = st.dialect.ifBlank { global.dialect }
+        dialectCombo?.selectedItem = expectedDialectItem(st, global)
         replaceParamsCheck?.isSelected = st.replaceParams ?: global.replaceParams
         formatSqlCheck?.isSelected = st.formatSql ?: global.formatSql
         injectLogicDeleteCheck?.isSelected = st.injectLogicDelete ?: global.injectLogicDelete
