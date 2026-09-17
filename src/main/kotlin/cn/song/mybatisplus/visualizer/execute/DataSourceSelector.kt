@@ -3063,13 +3063,10 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
     private val execFileWriteLock = Any()
 
     /**
-     * T-EC-02：裸写兜底守卫——仅当该文件当前**无已加载 document**时才允许绕过 document
-     * 直接写盘。文件有已加载 document（编辑器持有/近期读写）时裸写盘 = 绕过 document 的
-     * 外部改写，叠加 document「已修改未保存」态即触发平台 MemoryDiskConflictResolver
-     * 「File Cache Conflict」模态弹窗（T-ExecDocSync 真机截图实证）。internal 供表驱动测试。
+     * T-EC-02 的裸写守卫（canFallBackToRawWrite）已由 T-ExecDocSync3 整体退役——真机日志实证其
+     * 判据不可靠（EDT 忙时 getCachedDocument 恒 null，而排队中的写任务随后会建出 document），
+     * 现策略见 [projectExecFile] 内注释：VFS 已有该文件即绝不裸写。
      */
-    internal fun canFallBackToRawWrite(vf: com.intellij.openapi.vfs.VirtualFile): Boolean =
-        com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getCachedDocument(vf) == null
 
     /**
      * T-EC-01：document 驱动写 + **同临界区落盘**——`setText → commitDocument → saveDocument`，
@@ -3310,6 +3307,8 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      *     时只有无已加载 document 才允许裸写盘；有 document 一律抛 writeConflictGuard 拒写
      *     （宁内容旧一拍，执行前 console doc 同步链会重写并落盘，执行内容不受影响），
      *     失败原因 Throwable 必达日志（原 getOrDefault(false) 吞掉）；
+     *     → **T-ExecDocSync3 退役**（第四轮真机日志实证判据不可靠，见方法内注释）：改为
+     *     「VFS 已有该文件即绝不裸写」，冷启动 EDT 忙场景彻底无冲突面；
      *  ④ **单写方锁**（T-EC-03，[execFileWriteLock]）——串行化 BGT 预热与 EDT 冷路径。
      * VFS 缺条目路径维持裸写 + 调用方 refresh + [syncExecVfContentIfNeeded] 防御收口（T-EC-04）。
      * internal 供测试。
@@ -3339,17 +3338,25 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                     LOG.info("[M36] exec file updated via document+save (disk synced in-critical-section): ${f.name}")
                     return f
                 }
-                // T-EC-02：裸写兜底守卫——有已加载 document 时禁止绕过 document 裸写盘
-                //（裸写叠加「已修改未保存」态 = File Cache Conflict 弹窗 + invokeLater 链冻结）。
-                // 宁内容旧一拍：执行前 console doc 同步（executeOnConsole，T-EC-01 同款落盘）
-                // 会重写并落盘，执行内容不受影响。
-                if (!canFallBackToRawWrite(existing)) {
-                    throw IllegalStateException(
-                        "exec file writeConflictGuard: raw write refused, document loaded (${f.name})",
-                    )
-                }
-                LOG.warn("[M36] exec file doc-write FAILED, fallback to raw write (no loaded document): ${f.name}")
+                // T-ExecDocSync3（第四轮真机复现的收口，20260917 真实 IDE 日志实证）：**VFS 已有
+                // 该文件时一律不裸写盘**。原 T-EC-02 兜底守卫查 getCachedDocument==null 就放行裸写，
+                // 实机证伪——EDT 忙（冷启动/索引，日志同刻可见 DumbService enter dumb mode）时
+                // dispatch 有界等待 2s 超时返回 false，此刻「排队的 EDT 写任务」尚未执行、document
+                // 也还没建，getCachedDocument 恒 null；随之而来的裸写先改盘（12,590），排队任务
+                // 随后 ExecutionException 建出 document（resolver 日志 oldFileStamp:0 = 文档建于文件
+                // 写入之前）并标脏，裸写引发的 VFS 变更落到这个刚建的文档上 →
+                // MemoryDiskConflictResolver「重载 mpsql-exec.sql？」弹窗（12,609），23ms 后文档写入
+                // 才自己落盘（12,613）。即**插件与自己的排队写赛跑**，而非外部改盘。
+                // 宁内容旧一拍：排队任务/later 的 console doc 同步链（attachConsole 后的
+                // prepareAfterEditorResolved、executeOnConsole 执行前 T-EC-01 同款同步）都会重写并
+                // 落盘，执行内容不受影响。附带收益：冷启动 EDT 忙时不再有裸写 → 该场景彻底无冲突面。
+                LOG.warn(
+                    "[M36] exec doc-write not completed (EDT dispatch timeout/WriteAction failure); " +
+                        "raw write SKIPPED to avoid File Cache Conflict (T-ExecDocSync3): ${f.name}",
+                )
+                return f
             }
+            // VFS 无该条目（首次创建）：不可能存在 document（无 vf 可挂），裸写安全
             FileUtil.writeToFile(f, sql)
             return f
         }
