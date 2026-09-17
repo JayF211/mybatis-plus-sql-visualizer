@@ -40,9 +40,12 @@ class SqlPreviewServiceConfigTest : BasePlatformTestCase() {
 
     fun testDialectConfigPaginationRendersByDialect() {
         // 配置方言 PostgreSQL → last("limit 5, 10") 渲染为 PG 语法（LIMIT 10 OFFSET 5）
+        // T-DialectAutoInfer：测试须走手动模式（dialectAuto 默认 true 会走推断链无视手动值）
         val settings = PluginSettings.getInstance()
         val old = settings.state.dialect
+        val oldAuto = settings.state.dialectAuto
         settings.state.dialect = "PostgreSQL"
+        settings.state.dialectAuto = false
         try {
             myFixture.configureByText(
                 "Demo.java",
@@ -66,6 +69,7 @@ class SqlPreviewServiceConfigTest : BasePlatformTestCase() {
             assertTrue("不应使用 MySQL 写法: ${result.sql}", !result.sql.contains("LIMIT 5, 10"))
         } finally {
             settings.state.dialect = old
+            settings.state.dialectAuto = oldAuto
         }
     }
 
