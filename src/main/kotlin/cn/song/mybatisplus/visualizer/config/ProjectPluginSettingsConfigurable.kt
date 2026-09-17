@@ -35,14 +35,19 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
     private var dialectCombo: ComboBox<String>? = null
     private var modified = false
 
+    /** T-DialectAutoInfer：「智能推断」哨兵项（createComponent 时按当前语言初始化）。 */
+    private val autoItem: String = MpSqlVisualizerBundle.message("settings.dialect.auto")
+
     override fun getDisplayName(): String = MpSqlVisualizerBundle.message("plugin.name")
 
     override fun createComponent(): JComponent {
         // T-UiNative T-UN-15：布局层迁 DSL v2；控件值/启用态的初始灌入与监听经
         // applyToComponent 复刻原 JCheckBox/JComboBox 行为（doClick/addActionListener 语义不变）
-        val initialDialect = projectSettings.state.dialect.ifBlank {
-            PluginSettings.getInstance().state.dialect
-        }
+        // T-DialectAutoInfer：auto 哨兵项=「智能推断」；项目级 dialectAuto null=跟随全局
+        val projectAuto = projectSettings.state.dialectAuto
+        val effectiveAuto = projectAuto ?: PluginSettings.getInstance().state.dialectAuto
+        val initialDialect = if (effectiveAuto) autoItem
+        else projectSettings.state.dialect.ifBlank { PluginSettings.getInstance().state.dialect }
         lateinit var checkCell: Cell<JBCheckBox>
         lateinit var comboCell: Cell<ComboBox<String>>
         val panel = panel {
@@ -55,7 +60,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                     }
             }
             row(MpSqlVisualizerBundle.message("settings.dialect")) {
-                comboCell = comboBox(DialectRegistry.dialects.map { it.name })
+                comboCell = comboBox(listOf(autoItem) + DialectRegistry.dialects.map { it.name })
                     .applyToComponent {
                         selectedItem = initialDialect
                         isEnabled = projectSettings.state.useProjectSettings
@@ -74,15 +79,22 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         val check = useProjectCheck ?: return
         val combo = dialectCombo ?: return
         projectSettings.state.useProjectSettings = check.isSelected
-        projectSettings.state.dialect = combo.selectedItem as? String ?: ""
+        // T-DialectAutoInfer：哨兵项=项目级推断（true）；具体方言=手动（false + 值）
+        val selected = combo.selectedItem as? String ?: ""
+        if (selected == autoItem) {
+            projectSettings.state.dialectAuto = true
+        } else {
+            projectSettings.state.dialectAuto = false
+            projectSettings.state.dialect = selected
+        }
         modified = false
     }
 
     override fun reset() {
         useProjectCheck?.isSelected = projectSettings.state.useProjectSettings
-        dialectCombo?.selectedItem = projectSettings.state.dialect.ifBlank {
-            PluginSettings.getInstance().state.dialect
-        }
+        val resetAuto = projectSettings.state.dialectAuto ?: PluginSettings.getInstance().state.dialectAuto
+        dialectCombo?.selectedItem = if (resetAuto) autoItem
+        else projectSettings.state.dialect.ifBlank { PluginSettings.getInstance().state.dialect }
         modified = false
     }
 

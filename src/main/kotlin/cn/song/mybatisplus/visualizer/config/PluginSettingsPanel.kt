@@ -178,8 +178,16 @@ class PluginSettingsPanel @JvmOverloads constructor(
     // 表单控件
     // ------------------------------------------------------------------
 
-    /** 方言下拉（选项来自方言注册表）。 */
-    private val dialectCombo = JComboBox(DialectRegistry.dialects.map { it.name }.toTypedArray())
+    /** 方言下拉（选项来自方言注册表；T-DialectAutoInfer 首项为「智能推断」）。 */
+    private val dialectCombo = JComboBox(
+        (listOf(MpSqlVisualizerBundle.message("settings.dialect.auto")) + DialectRegistry.dialects.map { it.name }).toTypedArray(),
+    )
+
+    /** T-DialectAutoInfer：「智能推断」哨兵项（显示文案随语言变化，写入 state 前须甄别）。 */
+    private val autoDialectItem: String = MpSqlVisualizerBundle.message("settings.dialect.auto")
+
+    /** T-DialectAutoInfer：推断状态只读行（当前推断结果/依据，或手动指定值）。 */
+    private val dialectInferredLabel = javax.swing.JLabel()
 
     /** 参数替换开关。 */
     private val replaceParamsCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.replaceParams"))
@@ -438,6 +446,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
         if (SECTION_PREVIEW in sections) {
             sectionGroup("settings.section.preview") { p, g ->
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.dialect"), dialectCombo)
+                addRow(p, g, "", dialectInferredLabel)
+                dialectCombo.addActionListener {
+                    if (dialectCombo.selectedItem == autoDialectItem) refreshInferredLabel()
+                }
                 addRow(p, g, "", replaceParamsCheck.apply { text = MpSqlVisualizerBundle.message("settings.replaceParams") })
                 addRow(p, g, "", formatCheck.apply { text = MpSqlVisualizerBundle.message("settings.formatSql") })
                 addRow(p, g, "", verticalPairAnnotationCheck.apply { text = MpSqlVisualizerBundle.message("settings.verticalPairAnnotation") })
@@ -1109,8 +1121,37 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || (SECTION_UPDATE_DIAGNOSTICS in sections && updateSection.autoCheckCheck.isSelected != s.autoCheckUpdate)
     }
 
+    /**
+     * T-DialectAutoInfer：刷新推断状态行——推断模式显示当前推断结果（含依据 URL），
+     * 手动模式显示手动值。惰性调用（reset/选中哨兵项时），不做监听器常驻。
+     */
+    internal fun refreshInferredLabel() {
+        dialectInferredLabel.text = when (dialectCombo.selectedItem as? String) {
+            autoDialectItem -> {
+                val agentUrl = runCatching {
+                    cn.song.mybatisplus.visualizer.log.agent.AgentManager.getInstance(
+                        ProjectManager.getInstance().openProjects.firstOrNull() ?: return run {
+                            dialectInferredLabel.text = MpSqlVisualizerBundle.message("settings.dialect.inferred.none")
+                        },
+                    ).lastConnectionUrl()
+                }.getOrNull()
+                val dataSourceUrl = runCatching {
+                    cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.firstUrl(
+                        ProjectManager.getInstance().openProjects.firstOrNull(),
+                    )
+                }.getOrNull()
+                val inferred = cn.song.mybatisplus.visualizer.sql.DialectInference.infer(agentUrl, dataSourceUrl)
+                val name = inferred.dialectName
+                    ?: MpSqlVisualizerBundle.message("settings.dialect.inferred.none")
+                MpSqlVisualizerBundle.message("settings.dialect.inferred", name)
+            }
+            else -> MpSqlVisualizerBundle.message("settings.dialect.manual", dialectCombo.selectedItem as? String ?: "")
+        }
+    }
+
     private fun isModifiedPreview(s: PluginSettings.State): Boolean =
-        dialectCombo.selectedItem != s.dialect
+        (dialectCombo.selectedItem == autoDialectItem) != s.dialectAuto
+            || (dialectCombo.selectedItem != autoDialectItem && dialectCombo.selectedItem != s.dialect)
             || replaceParamsCheck.isSelected != s.replaceParams
             || formatCheck.isSelected != s.formatSql
             || verticalPairAnnotationCheck.isSelected != s.verticalPairAnnotation
@@ -1195,7 +1236,14 @@ class PluginSettingsPanel @JvmOverloads constructor(
         // 触发调用方 rebuild；消费后清除标记（后续 apply 幂等）
         val languageChanged = languagePending || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
         if (SECTION_PREVIEW in sections) {
-            s.dialect = dialectCombo.selectedItem as? String ?: PluginSettings.DEFAULT_DIALECT
+            // T-DialectAutoInfer：哨兵项=推断模式；具体方言=手动模式（保留原值语义）
+            val selected = dialectCombo.selectedItem as? String
+            if (selected == autoDialectItem) {
+                s.dialectAuto = true
+            } else {
+                s.dialectAuto = false
+                s.dialect = selected ?: PluginSettings.DEFAULT_DIALECT
+            }
             s.replaceParams = replaceParamsCheck.isSelected
             s.formatSql = formatCheck.isSelected
             s.verticalPairAnnotation = verticalPairAnnotationCheck.isSelected
@@ -1297,7 +1345,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
     fun reset() {
         val s = settings.state
         if (SECTION_PREVIEW in sections) {
-            dialectCombo.selectedItem = s.dialect
+            // T-DialectAutoInfer：auto→选中哨兵项；手动→选中方言名（不存在时回落首项哨兵）
+            dialectCombo.selectedItem = if (s.dialectAuto) autoDialectItem else s.dialect
+            if (dialectCombo.selectedItem != autoDialectItem && dialectCombo.selectedItem != s.dialect) {
+                dialectCombo.selectedItem = autoDialectItem
+            }
+            refreshInferredLabel()
             replaceParamsCheck.isSelected = s.replaceParams
             formatCheck.isSelected = s.formatSql
             verticalPairAnnotationCheck.isSelected = s.verticalPairAnnotation
