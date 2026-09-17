@@ -108,12 +108,15 @@ object DynamicInstallSupport {
      * 校验下载包：zip 可打开、能定位 plugin.xml、`<id>` 与 [UpdateSource.PLUGIN_ID] 一致、
      * `<version>` 非空。plugin.xml 查找顺序：zip 内直属 `META-INF/plugin.xml`（解包态布局）
      * → 内层 lib 目录下插件 jar 的 `META-INF/plugin.xml`（IPGP buildPlugin 布局）。
+     *
+     * T-UpdateZipBounds：plugin.xml 读取有界（[MAX_DESCRIPTOR_XML_BYTES]，实测 KB 级 ×100
+     * 余量）——谎报头的巨量条目不进字符串。
      */
     internal fun validateArtifact(zip: Path): ArtifactCheck = runCatching {
         ZipFile(zip.toFile()).use { zf ->
             val direct = zf.getEntry("META-INF/plugin.xml")
             if (direct != null) {
-                return@runCatching checkDescriptorXml(zf.getInputStream(direct).readBytes().decodeToString())
+                return@runCatching checkDescriptorXml(readDescriptorBounded(zf.getInputStream(direct)))
             }
             val libJars = zf.entries().asSequence()
                 .filter { !it.isDirectory && it.name.endsWith(".jar") && it.name.contains("/lib/") }
@@ -124,7 +127,7 @@ object DynamicInstallSupport {
                     var scanned = 0
                     while (next != null && scanned < MAX_INNER_ENTRIES) {
                         if (next.name.equals("META-INF/plugin.xml", ignoreCase = true)) {
-                            return@runCatching checkDescriptorXml(inner.readBytes().decodeToString())
+                            return@runCatching checkDescriptorXml(readDescriptorBounded(inner))
                         }
                         next = inner.nextEntry
                         scanned++
@@ -134,6 +137,23 @@ object DynamicInstallSupport {
             ArtifactCheck.Invalid("META-INF/plugin.xml not found in artifact (direct or lib/*.jar)")
         }
     }.getOrElse { ArtifactCheck.Invalid("artifact not readable: ${it.message}") }
+
+    /** plugin.xml 有界读取（超限判 Invalid——KB 级文件读出 MB 级即异常包）。 */
+    private fun readDescriptorBounded(stream: java.io.InputStream): String {
+        val buf = ByteArray(64 * 1024)
+        val out = java.io.ByteArrayOutputStream()
+        var read = 0L
+        stream.use {
+            while (true) {
+                val n = it.read(buf)
+                if (n < 0) break
+                read += n
+                if (read > MAX_DESCRIPTOR_XML_BYTES) error("plugin.xml implausibly large (> $MAX_DESCRIPTOR_XML_BYTES bytes)")
+                out.write(buf, 0, n)
+            }
+        }
+        return out.toByteArray().decodeToString()
+    }
 
     /** plugin.xml 文本 → id/version 校验（regex 提取，无 XML 依赖）。 */
     private fun checkDescriptorXml(xml: String): ArtifactCheck {
@@ -153,6 +173,9 @@ object DynamicInstallSupport {
         Regex("<$tag>(.*?)</$tag>", RegexOption.DOT_MATCHES_ALL).find(xml)?.groupValues?.getOrNull(1)
 
     private const val MAX_INNER_ENTRIES = 2000
+
+    /** plugin.xml 读取上限（实测 KB 级，×100 余量；超限即异常包）。 */
+    internal const val MAX_DESCRIPTOR_XML_BYTES = 1024 * 1024
 
     // ------------------------------------------------------------------
     // 平台反射门面（F0 实证的五入口；探测一次缓存，缺失整体降级）

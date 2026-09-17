@@ -93,8 +93,16 @@ object PluginUpdateRunner {
             if (!isValidZip(temp)) {
                 InstallResult.Failed("download is not a valid plugin archive")
             } else {
-                LOG.info("downloadAndInstall: zip valid, calling install")
-                install(temp.toPath())
+                // T-UpdateZipBounds（O-29）：有界守卫——条目数/单条目/总量三重上限 + 头谎报
+                // 截断检测，异常包（zip bomb/谎报头）拦在平台解压器之前（快失败不触平台安装）
+                when (val guard = UpdateZipGuard.check(temp.toPath())) {
+                    is UpdateZipGuard.GuardResult.Reject ->
+                        InstallResult.Failed("update package rejected: ${guard.reason}")
+                    UpdateZipGuard.GuardResult.Ok -> {
+                        LOG.info("downloadAndInstall: zip valid, calling install")
+                        install(temp.toPath())
+                    }
+                }
             }
         } catch (e: Exception) {
             LOG.warn("downloadAndInstall: failed — ${e.message}", e)
