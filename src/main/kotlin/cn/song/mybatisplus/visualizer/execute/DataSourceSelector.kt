@@ -402,6 +402,8 @@ object DataSourceSelector {
                     // File Cache Conflict 弹窗（第四轮根因 G2，开发计划 §1.2）
                     writeVfTextViaDocument(project, consoleVf, sql)
                 }
+                // T-ConsoleDbContext B：复用链同样对齐库上下文（控制台可能来自别的库记忆）
+                LOG.info("[M36] shared console db-context: ${ExecConsoleContext.alignToDataSourceDatabase(console)}")
                 // M36.5.24g：dumb 退出后重建（同 prepareInConsole）
                 val consoleForModel = console
                 val vfForModel = consoleVf
@@ -599,8 +601,13 @@ object DataSourceSelector {
             // 取错误行及其后非空行构成可读上下文（错误消息通常多行，后随详情）
             val idx = lines.indexOf(errorLine)
             val excerpt = lines.subList(idx, (idx + 4).coerceAtMost(lines.size)).joinToString("\n")
-            LOG.info("[M36] extracted console error: ${excerpt.take(160)}")
-            excerpt
+            // T-ConsoleDbContext A：附「当前库 / 数据源 / 数据源默认库」上下文——真实事故中 SQL 本身
+            // 没问题，是执行落在了错的库（mpj_demo 的 user 表没有 username → 1054），而裸 MySQL 报文
+            // 看不出这一层；带上上下文后一眼可归因
+            val ctxLine = ExecConsoleContext.describeContext(console)
+            val enriched = if (ctxLine != null) "$excerpt\n$ctxLine" else excerpt
+            LOG.info("[M36] extracted console error: ${enriched.take(200)}")
+            enriched
         }.getOrNull()
     }
 
@@ -1343,6 +1350,12 @@ object DataSourceSelector {
                         // 不再滞留「已修改未保存」（第四轮根因 G3，开发计划 §1.2）
                         writeVfTextViaDocument(project, consoleVf, consoleText)
                     }
+                    // T-ConsoleDbContext B：控制台就绪即把库上下文对齐到「数据源 URL 里的库」——
+                    // DBN 的文件→数据源映射与库记忆会把会话钉在别的库上（真机事故：exec 文件被映射
+                    // 到 mpj_demo@localhost，而 SQL 属于 jpa_demo → Unknown column 'u.username'）。
+                    // 用户定案：预览默认以数据源 URL 的库为准；用户之后在控制台手调库，记忆照常保留
+                    //（对齐只在「与数据源默认库不一致」时切一次，已一致即 no-op，不会覆盖用户后来的选择）。
+                    LOG.info("[M36] console db-context: ${ExecConsoleContext.alignToDataSourceDatabase(console)}")
                     // M36.5.24g：fresh 构造 + set 移入 DumbService.runWhenSmart——22:30 实证：
                     // attachConsole 后 SqlDialectPusher 的 dumb task（58.443 运行 → 58.714 exit）
                     // 触发 PSI 重建；在 dumb mode 中构造的 fresh（58.302，stmts=1）被 push 后
