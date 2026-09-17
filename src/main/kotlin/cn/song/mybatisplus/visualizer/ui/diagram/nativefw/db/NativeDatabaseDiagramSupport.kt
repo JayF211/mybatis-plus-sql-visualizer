@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db
 
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModel
+import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramOpener
 import com.intellij.database.model.DasObject
 import com.intellij.database.model.DasTable
 import com.intellij.database.model.RawDataSource
@@ -217,6 +218,10 @@ object NativeDatabaseDiagramSupport {
         val editor: FileEditor = Class.forName("com.intellij.uml.UmlFileEditorImpl")
             .getDeclaredConstructor(DiagramBuilder::class.java, VirtualFile::class.java)
             .newInstance(builder, umlFile) as FileEditor
+
+        // T-PreviewBgFit（问题二）：同 JOIN 路径——开关必须在**异步布局触发之前**置位，
+        // 布局管线收尾时才读得到它并自适应（见 NativeJoinDiagramOpener.enableAutoFit 注释）。
+        NativeJoinDiagramOpener.enableAutoFit(builder)
 
         builder.queryUpdate()
             .withDataReload()
