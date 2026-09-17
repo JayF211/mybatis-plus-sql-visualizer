@@ -286,6 +286,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // 自绘 DiagramPanel 共用此容器按需切换；切换时旧原生编辑器即时 dispose 防 FileEditor 泄漏
     private val diagramTabHost = javax.swing.JPanel(java.awt.BorderLayout())
     private var currentNativeDiagram: JComponent? = null
+    /**
+     * T-DbSchemaCompletion：待补刷富化的图（首次富化一点数据源信息都没拿到时记下）。
+     *
+     * 仅存"上一次富化空手而归"的那个 [PreviewResult]——数据源建连（原生控制台就绪）后据此补刷一次，
+     * 刷完置空；新预览替换 current 时旧值自然失配，无需额外清理。
+     */
+    private var diagramEnrichRetryTarget: PreviewResult? = null
     // F-45：maintainPage 列信息（仅 <pages> 预览非 null 时显示标签页）
     private var columnInfoPanel: JComponent? = null
     /** 内容区卡片：null=无内容 / "sql"=SQL编辑 / "sql+diagram"=SQL编辑 + JOIN图标签页。 */
@@ -995,6 +1002,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-DbSchemaCompletion：控制台就绪 = 数据源已 attach/建连，此刻的 schema 预热最容易命中
         //（预览打开常早于建连，那时 getModel() 还是 null）
         current?.let { prefetchSchemaForCompletion(it) }
+        // T-DbSchemaCompletion：同一窗口下 JOIN 图也一样——首次富化空手（模型未加载）时补刷一次，
+        // 否则那张图会永远停在实体注释上（库里有 COMMENT，用户看到的是"JOIN 图没有字段注释"）。
+        // 只补一次：target 命中即置空；富化确实拿到数据时从不登记，不会无谓重建图。
+        val retryTarget = current
+        if (retryTarget != null && diagramEnrichRetryTarget === retryTarget) {
+            diagramEnrichRetryTarget = null
+            updateDiagramTab(retryTarget)
+        }
         // T-AutoFold F5：登记控制台编辑器引用（折叠应用目标）；就绪即按当前文档内容应用一次
         //（prepareConsole 链可能已同步 SQL 进文档，早于下一次 showSql）
         nativeConsoleEditor = consoleEditor
@@ -1359,18 +1374,20 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 return
             }
             com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+                val base = JoinDiagramGenerator.buildDiagramModel(stmt)
                 val enriched = try {
-                    cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher.enrich(
-                        proj,
-                        JoinDiagramGenerator.buildDiagramModel(stmt),
-                    )
+                    cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher.enrich(proj, base)
                 } catch (t: Throwable) {
                     com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
                         .warn("[T-Perf-09] diagram schema enrich failed, showing un-enriched model", t)
-                    JoinDiagramGenerator.buildDiagramModel(stmt)
+                    base
                 }
+                // T-DbSchemaCompletion：本次富化是否一点数据源信息都没拿到（结构相等 = 没改动）。
+                // 命中就说明模型未加载（预览打开常早于数据源建连）——记下来供数据源就绪后的补刷。
+                val contributed = enriched != base
                 com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
                     if (current !== result || project?.isDisposed == true) return@invokeLater
+                    if (!contributed) diagramEnrichRetryTarget = result
                     showJoinDiagram(enriched)
                 }
             }

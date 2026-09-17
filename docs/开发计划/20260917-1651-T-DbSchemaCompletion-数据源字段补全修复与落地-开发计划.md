@@ -126,6 +126,30 @@ val columnKind = objectKindClass.enumConstants?.firstOrNull { (it as Enum<*>).na
 | 修复后 `scan:` 仍未出现 | 说明还有第二处断裂（model/traverser 为 null），按新加的 reason 日志分支继续定位；本次已把该路径改成必留日志，不会再静默 |
 | 静默失败的教训 | 本次根因能潜伏至今，靠的是"无日志早退 + 误导性 not found"；凡回落/早退分支一律要求可诊断日志，写进评审口径 |
 
+## 九、同批伴随修复：JOIN 图字段注释缺失（用户追加报障）
+
+**报障**：JOIN 预览页复用 IDEA Database 插件「显示图」，但我们的 JOIN 图缺字段注释（用户给的原生显示图截图里每列都有 `/* 姓名 */` 这样的注释）。
+
+**核查（渲染链无缺陷）**：262 的图框架 `uml/lib/uml-support.jar` 里 `components/DiagramNodeItemComponent` 的常量池实证，它调用的正是我们重写的
+`getItemName(Object,Object,DiagramBuilder): SimpleColoredText` 与对应三参 `getItemType`——与 `joinItemNameText` / `joinItemTypeText` 对齐，
+注释由 `ColumnEntry.comment` 内联渲染成 `/* 注释 */`。所以缺的不是渲染，是**数据**：
+
+- JOIN 图列注释有两条来源：实体（`TableInfo.columns[].comment`，含 javadoc/注解提取）与数据源富化（[DiagramSchemaEnricher]）；
+- demo 工程 MPJ 侧 `UserDO`（`@TableName("\"user\"")`，对应 `mpj_demo.user`）的字段**一个注释都没写**，实体这一路为空；
+- 数据源那一路随 ObjectKind 静默早退一起死（§二）——两路全空，于是 JOIN 图整片字段注释为空，而库里每列都有 COMMENT（原生显示图直接读库所以有）。
+  表头注释同理（原生显示图 `user /* 用户表 */`）。
+
+**根因同一**：修好 §4.1 的 ObjectKind 取法后，`applyTableMeta` 按列名把 DB COMMENT/类型串回填到**声明了列的实体行**上（实体没写注释就由库补上），
+JOIN 图字段注释与类型串一并恢复。
+
+**附带缺口（本次一并修）**：富化只发生在 `updateDiagramTab` 建图时一次；预览打开常早于数据源建连，那一拍 `getModel()` 为 null → 富化空手而归，
+且**不重试** → 该图的字段注释会一直空着（与 §4.2 补全侧同一个「数据源晚连接」窗口）。修复：建图时记下"本次富化一点数据源信息都没拿到"
+（`enriched == base` 结构相等即未改动），原生控制台就绪（数据源已连）时补刷一次该图；只在确实空手时才登记，拿到过数据就从不重跑，避免无谓重建。
+
+**明确不做**：不把数据库独有列（实体未映射的列）画进 JOIN 图。IDEA 原生「显示图」画的是**整张表**，我们的 JOIN 图画的是**这条 SQL 参与的列**，
+这是既有产品差异（表名/别名与 ON 列的语义也依赖它），不在本次范围。
+
+
 ## 八、实施记录
 
 **状态**：P0-1 + P0-2 已实施（分支 `t-dbschemacompletion`，基线 dev ed3e1f1）；P1 未实施。
@@ -142,6 +166,8 @@ val columnKind = objectKindClass.enumConstants?.firstOrNull { (it as Enum<*>).na
 | `ui/SqlPreviewPanel.kt` | 上下文携带 `columnsCached` 结果；`prefetchSchemaForCompletion` + `completionTables`（`TableExtractor` 提取 + 主表）；`showResult` / `onNativeEditorReady` 两处触发；`refreshCompletionContext` 同步原生控制台编辑器 userData |
 | `src/test/java/PlatformSignatureChecker.java` | 追加第 6 项跨版本检查：`ObjectKind.COLUMN` 静态字段可读（打印 `enumConstants/isEnum` 实况）；类路径收集补 `plugins/DatabaseTools/lib(/modules)` |
 | `src/test/.../update/PlatformSignatureCrossVersionTest.kt` | KDoc 登记新反射入口（约定：新增反射入口必登记本守卫） |
+| `ui/diagram/DiagramSchemaEnricher.kt` | 无改动（本次仅确认其消费语义）；测试新增 `dbCommentFillsEntityColumnsWithoutComment`（实体列无注释 → DB COMMENT/类型串回填） |
+| `ui/SqlPreviewPanel.kt`（JOIN 图侧） | `diagramEnrichRetryTarget`：首次富化空手时登记，控制台就绪补刷一次（§九） |
 | 测试 | 新增 `DatabaseSchemaResolverObjectKindTest`(3) / `DatabaseSchemaResolverBailTest`(3) / `SqlCompletionCandidatesTest`(5)，`SqlCompletionContributorTest` 加列候选渲染断言(1) |
 
 **真实 DBN 类取证（不依赖沙盒 GUI 的硬验证）**：用发行版自带 JBR 跑反射探针，对**本机 243（IU-243.28141.41）与 262（IU-262.10968.63，即用户日常 IDE 同版）**两份真实 `com.intellij.database.model.ObjectKind` 实测，结论一致：
