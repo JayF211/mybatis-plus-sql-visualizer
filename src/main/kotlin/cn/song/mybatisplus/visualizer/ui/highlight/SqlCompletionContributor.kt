@@ -26,6 +26,8 @@ private val LOG = Logger.getInstance(SqlCompletionContributor::class.java)
  *  - M16：列名/表名补全项**展示注释**（withTailText 灰色尾缀）且**支持注释关键词检索**
  *    （withLookupString——输入"设备名"可命中 `name` 列）；**位置感知**过滤
  *    （FROM/JOIN 后只提示表名、WHERE/ON/HAVING/GROUP BY/ORDER BY 后只提示列名）
+ *  - T-DbSchemaCompletion：列候选加入**数据源 schema 列**（库里存在而实体类没有的列），
+ *    同名列注释/类型取数据源，tailText 追加 DB 类型串（候选合并见 [mergeColumnCandidates]）
  *
  * M16.2 修复（M16 回归）：
  *  - 上下文载体由**仅 PSI 文件 userData** 改为 **Editor userData 优先 + PSI 兜底**（[resolveContext]）——
@@ -120,23 +122,14 @@ class SqlCompletionContributor : CompletionContributor() {
                     }
                     // 列名：WHERE/ON/HAVING/GROUP BY/ORDER BY 后、SELECT 列位或子句无法判定
                     if (clause != SqlClause.TABLE) {
-                        val colComments = provider.columnsWithComments(ctx)
-                        // M35 方案 B：数据源 schema 注释优先（DB COMMENT 比实体注释权威）；
-                        // 按实体表名查数据源列注释，命中则覆盖同名列的实体注释。
-                        // T-Perf-09：补全改消费已缓存结果（columnCommentsCached）——autopopup
-                        // 下每标识符字符触发一次，直查 schema 会在 EDT 做数据源全量遍历；
-                        // 缓存未命中回落实体注释，缓存由 JOIN 富化后台预取填充。
-                        val project = parameters.editor.project
-                        val schemaComments = if (project != null && ctx.tableName != null)
-                            DatabaseSchemaResolver.columnCommentsCached(project, ctx.tableName)
-                        else emptyMap()
-                        val merged = if (schemaComments.isEmpty()) colComments
-                        else colComments.map { (col, comment) ->
-                            col to (schemaComments[col] ?: comment)
-                        }
-                        merged.forEach { (col, comment) ->
-                            if (prefix.prefixMatches(col)) {
-                                result.addElement(withComment(LookupElementBuilder.create(col), comment))
+                        // T-DbSchemaCompletion：候选 = 实体列 ∪ 数据源 schema 列。此前数据源列只用于
+                        // 覆盖同名列注释，**库里存在而实体类没有的列补不出来**（用户实测缺口）。
+                        // 数据源列由预览预热写入 SqlCompletionContext（columnsCached 只读缓存），
+                        // 本处零遍历——autopopup 每敲一个标识符字符都走这里（T-Perf-09 红线）；
+                        // 同名列注释/类型取数据源（M35 优先级），tailText 追加 DB 类型串标注来源。
+                        mergeColumnCandidates(ctx).forEach { candidate ->
+                            if (prefix.prefixMatches(candidate.name)) {
+                                result.addElement(columnLookupElement(candidate))
                             }
                         }
                     }

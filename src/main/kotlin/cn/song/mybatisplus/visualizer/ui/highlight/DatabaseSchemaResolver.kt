@@ -15,9 +15,14 @@ import com.intellij.openapi.project.Project
  * 也能编译/加载（与 [ExecuteSqlSupport] 同一隔离策略）。插件可用性经 `Class.forName`
  * 探测标记类判定，不可用时空转（补全不展示数据源注释，仍用实体注释）。
  *
- * 遍历路径：`DataSourceManager.getManagers(project)` → `getDataSources()` → 每个
- * `DbDataSource.getDasObject()` → `DasModel.traverser().toList()` 筛 `DasTable` →
- * 按名匹配 → `DasTable.getDasChildren(ObjectKind.COLUMN)` → 每列 `getName()/getComment()`。
+ * 遍历路径：`DataSourceManager.getManagers(project)` → `getDataSources()` → 每个数据源的
+ * `DasDataSource.getModel()` → `DasModel.traverser()` 迭代筛 `DasTable` → 按名匹配 →
+ * `DasObject.getDasChildren(ObjectKind.COLUMN)` → 每列 `getName()/getComment()/getDataType()`。
+ *
+ * 消费面：JOIN 图富化（[cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher]）、
+ * EXPLAIN 目标表结构、MCP schema 工具，以及 **T-DbSchemaCompletion 的补全候选**
+ * （[columnsCached] 只读缓存 + [prefetchTables] 后台预热——数据源列不再只当注释用，
+ * 库里存在而实体类没有的列也进补全候选）。
  */
 object DatabaseSchemaResolver {
 
@@ -45,27 +50,51 @@ object DatabaseSchemaResolver {
         columnMeta(project, tableName).mapValues { it.value.comment ?: "" }
 
     /**
-     * T-Perf-09：仅读缓存的列注释（补全 autopopup 热路径专用）——命中返回缓存值；
-     * 未命中返回空 Map（调用方回落实体注释），**不触发数据源全量遍历**。
-     * 缓存由 JOIN 富化后台预取（DiagramSchemaEnricher.enrich）或首次 [tableMeta] 调用填充。
+     * T-DbSchemaCompletion：多表 schema 列并集（**只读缓存，不触发遍历**）。
+     *
+     * 补全 autopopup 热路径专用（T-Perf-09 红线：候选生成不做数据源遍历）——命中返回缓存值，
+     * 未命中（或数据源未连接/未预热）返回空 Map，调用方回落到实体列。缓存由 [prefetchTables]
+     * 在预览打开、控制台就绪时后台填充（JOIN 富化路径经 [tableMeta] 同源填充）。
+     *
+     * 多表并集按列名去重（同名跨表列取首次命中）：补全上下文是「本文档涉及的表」的扁平视图，
+     * 跨表同名列不细分（别名限定补全见计划 §六「明确不做」）。
      */
-    fun columnCommentsCached(project: Project?, tableName: String?): Map<String, String> {
-        if (project == null || tableName.isNullOrBlank()) return emptyMap()
+    fun columnsCached(project: Project?, tableNames: Collection<String>): Map<String, ColumnMeta> {
+        if (project == null || tableNames.isEmpty()) return emptyMap()
         if (!isDatabaseAvailable()) return emptyMap()
         val dataSources = dataSources(project) ?: return emptyMap()
-        val out = linkedMapOf<String, String>()
+        val out = linkedMapOf<String, ColumnMeta>()
         synchronized(metaCache) {
-            for (ds in dataSources) {
-                metaCache[ds]?.get(tableName.lowercase())?.let { meta ->
-                    // T-TestAssertReal：收录条件放宽后仅非空标记列会带空注释进缓存——
-                    // 补全侧只消费 comment，过滤 blank 保持放宽前消费语义
-                    meta.columns.forEach { (col, m) ->
-                        m.comment?.takeIf { it.isNotBlank() }?.let { out.putIfAbsent(col, it) }
-                    }
+            for (name in tableNames) {
+                if (name.isBlank()) continue
+                val key = name.lowercase()
+                for (ds in dataSources) {
+                    metaCache[ds]?.get(key)?.columns?.forEach { (col, meta) -> out.putIfAbsent(col, meta) }
                 }
             }
         }
         return out
+    }
+
+    /**
+     * T-DbSchemaCompletion：预热若干表的 schema 缓存（供 [columnsCached] 零遍历读取）。
+     *
+     * **调用方负责线程**（BGT 执行；内部 [tableMeta] 自带 ReadAction）；Community、无数据源、
+     * 表名为空时立即返回 0。返回真正解析到内容的表数——调用方据此判定是否有必要刷新补全上下文。
+     *
+     * 数据源晚连接（`getModel()` 为 null）时本方法解析 0 张且**不留负缓存**（见 [resolveFromSources]
+     * 的 bail 语义），控制台就绪后重新触发即可命中。
+     */
+    fun prefetchTables(project: Project?, tableNames: Collection<String>): Int {
+        if (project == null) return 0
+        if (!isDatabaseAvailable()) return 0
+        var resolved = 0
+        for (name in tableNames) {
+            if (name.isBlank()) continue
+            val meta = runCatching { tableMeta(project, name) }.getOrNull() ?: continue
+            if (meta.columns.isNotEmpty() || meta.comment != null) resolved++
+        }
+        return resolved
     }
 
     /**
@@ -144,16 +173,25 @@ object DatabaseSchemaResolver {
         return ReadAction.compute<TableMeta, Throwable> { tryCompute(project, tableName) }
     }
 
-    /** 数据源侧元数据（表注释为 null 时该维度缺失，调用方逐维度回落）。 */
-    data class TableMeta(val comment: String?, val columns: Map<String, ColumnMeta>)
+    /**
+     * 数据源侧元数据（表注释为 null 时该维度缺失，调用方逐维度回落）。
+     *
+     * @param scanBailed T-DbSchemaCompletion：本次**没能查**（数据源模型未加载 / ObjectKind 取不到 /
+     *   反射链异常），区别于「查了、确认没有此表」。调用方据此决定是否记负缓存——把"查不了"当
+     *   "不存在"会让数据源晚连接时 30s 内的补全与富化全被负缓存挡掉（T-MetaCheapSource 语义缺口）。
+     */
+    data class TableMeta(
+        val comment: String?,
+        val columns: Map<String, ColumnMeta>,
+        val scanBailed: Boolean = false,
+    )
 
     /** 数据源侧列元数据（均为 null 时表示该维度缺失，调用方逐维度回落）。 */
     data class ColumnMeta(val comment: String?, val typeSpec: String?, val notNull: Boolean? = null)
 
     // T-TestAssertReal：notNull 取自 DasTypedObject.isNotNull()（javap 实证，DasColumn extends
     // DasTypedObject）。收录条件放宽为「comment/typeSpec 非空 或 notNull==true」后，仅非空标记
-    // 列（comment/typeSpec 双空）也会进 Map——只消费 comment 的调用点（columnCommentsCached）
-    // 自行过滤 blank 保持放宽前语义。
+    // 列（comment/typeSpec 双空）也会进 Map——只消费 comment 的调用点自行过滤 blank 保持放宽前语义。
     private fun tryCompute(project: Project, tableName: String): TableMeta {
         val dataSources = dataSources(project) ?: return TableMeta(null, emptyMap()).also {
             LOG.warn("DatabaseSchemaResolver: dataSources(project) reflection failed, table=$tableName")
@@ -168,7 +206,10 @@ object DatabaseSchemaResolver {
     /**
      * 按数据源逐个解析：正缓存命中 → 负缓存 TTL 内跳过 → 全扫（扫描探针可注入供表驱动测试，
      * 无 database 插件的单测环境走不了真实反射链；生产 scanProbe 传 null 走既有反射路径，
-     * 正命中回填与返回行为与 T-Perf-09 原实现逐字节一致）。
+     * 正命中回填与返回行为与 T-Perf-09 原实现一致）。
+     *
+     * T-DbSchemaCompletion：查不了（`scanBailed`）与"确认没有"分道——前者不写负缓存、不短路
+     * 后续数据源、下次调用重试；聚合结果仅在**所有**数据源都查不了时才标 `scanBailed`。
      */
     internal fun resolveFromSources(
         tableName: String,
@@ -178,6 +219,7 @@ object DatabaseSchemaResolver {
         val scan: (Any, String) -> TableMeta =
             scanProbe ?: { ds, name -> collectFromDataSource(ds, name, Class.forName(DAS_TABLE)) }
         val cacheKey = tableName.lowercase()
+        var bailed = 0
         for (ds in sources) {
             // T-Perf-09：缓存命中直接返回（同一数据源同一表零遍历）
             val cached = synchronized(metaCache) { metaCache[ds]?.get(cacheKey) }
@@ -192,14 +234,28 @@ object DatabaseSchemaResolver {
                 }
                 return found
             }
+            // T-DbSchemaCompletion：查不了的（模型未加载 / ObjectKind 取不到）**不写负缓存**——
+            // 否则数据源晚连接时会把 30s 内的补全、JOIN 富化全挡掉，且负缓存"过期前不再重试"
+            // 恰好卡住刚连上的那一分钟。继续看下一个数据源，都不行就留给下次调用重试。
+            if (found.scanBailed) {
+                bailed++
+                continue
+            }
             // 该数据源确认没有此表：记负缓存（时间戳，TTL 内同表查询不再全扫）
             synchronized(negativeCache) {
                 negativeCache.getOrPut(ds) { HashMap() }[cacheKey] = System.currentTimeMillis()
             }
         }
-        // 表在所有数据源都找不到（通常=未连接/introspection 未完成/表不在当前库）
-        LOG.info("DatabaseSchemaResolver: table=$tableName not found in ${sources.size} data sources")
-        return TableMeta(null, emptyMap())
+        // 表在所有数据源都没拿到（通常=未连接/introspection 未完成/表不在当前库）
+        if (bailed > 0) {
+            LOG.info(
+                "DatabaseSchemaResolver: table=$tableName 无法解析——$bailed/${sources.size} 个数据源" +
+                    "查不了（模型未加载/ObjectKind 取不到，原因见上方 scan 行），未记负缓存、下次调用重试",
+            )
+        } else {
+            LOG.info("DatabaseSchemaResolver: table=$tableName not found in ${sources.size} data sources")
+        }
+        return TableMeta(null, emptyMap(), scanBailed = bailed > 0 && bailed == sources.size)
     }
 
     /** database 插件是否可用（Ultimate/DataGrip）。 */
@@ -223,7 +279,39 @@ object DatabaseSchemaResolver {
         dsList
     }.getOrNull()
 
-    /** 从单个数据源收集匹配表的表注释 + 列元数据（遍历 DasModel.traverser().toList()）。 */
+    /**
+     * 取 DBN `ObjectKind` 的具名常量（T-DbSchemaCompletion 根因修复）。
+     *
+     * **别再写 `enumConstants`**：`com.intellij.database.model.ObjectKind` 是 DBN 手写的
+     * type-safe enum（`Object` 子类 implements `Comparable` + public static final 常量 +
+     * `ourKinds` 注册表 + `values()`），**不是 `java.lang.Enum`**——262.10968.63 字节码实证：
+     * 类文件中 `java/lang/Enum` 出现 0 次、无 `$VALUES`/`valueOf`/`ordinal`。`Class.enumConstants`
+     * 对它恒返回 null，历史上本处正是这么写的，于是每次调用都在该行静默早退、列遍历一次都没执行过，
+     * 而早退无日志，上层只打印误导性的 `not found in N data sources`（真机 23 次调用 scan 行 0 次，
+     * 同名表其实存在于 information_schema）。同仓非反射调用（`DbTableSpecAdapter` 的
+     * `ObjectKind.COLUMN`）一直正常，取静态字段即可。
+     *
+     * 取不到时返回 null 由调用方按「查不了」处理（不写负缓存 + 留日志），不做 API 形态猜测。
+     */
+    internal fun resolveObjectKind(kindClass: Class<*>, name: String): Any? =
+        runCatching { kindClass.getField(name).get(null) }.getOrNull()
+
+    /** ObjectKind 可用常量名（排障用：取不到 COLUMN 时把实际字段列进日志，一眼看出 API 漂移）。 */
+    private fun kindConstantNames(kindClass: Class<*>): String =
+        runCatching { kindClass.fields.joinToString("/") { it.name } }.getOrDefault("?")
+
+    /** 数据源显示名（日志用；取不到返回 `?`）。 */
+    private fun dsName(ds: Any): String = runCatching {
+        Class.forName(DAS_DATA_SOURCE).getMethod("getName").invoke(ds) as? String
+    }.getOrNull() ?: "?"
+
+    /**
+     * 从单个数据源收集匹配表的表注释 + 列元数据（遍历 DasModel，命中即取列）。
+     *
+     * T-DbSchemaCompletion：**任何"查不了"的情形都不再静默早退**——统一置 `bail` 原因，
+     * 函数末尾那行 scan 日志必打（此前 model/traverser/columnKind 三处 null 直接 `return`，
+     * 既无日志又丢掉了"没查"与"没有"的区别）。
+     */
     private fun collectFromDataSource(ds: Any, tableName: String, dasTableClass: Class<*>): TableMeta {
         var tableComment: String? = null
         val out = linkedMapOf<String, ColumnMeta>()
@@ -231,6 +319,7 @@ object DatabaseSchemaResolver {
         // 分辨 elements 空遍历 / DasTable 筛不出 / 名称不匹配三种情形
         var scannedTables = 0
         var hit = false
+        var bail: String? = null
         runCatching {
             val dasObjClass = Class.forName(DAS_OBJECT)
             val dasColumnClass = Class.forName(DAS_COLUMN)
@@ -238,9 +327,16 @@ object DatabaseSchemaResolver {
             // getModel() 声明在父接口 DasDataSource（B 路径 locateDbTables 直调 ds.model 同源）——
             // 旧链 getDasObject().getModel() 反射 NoSuchMethodException 被吞 → 全量静默回落
             val model = Class.forName(DAS_DATA_SOURCE).getMethod("getModel").invoke(ds)
-                ?: return TableMeta(null, emptyMap())
+            if (model == null) {
+                // 数据源未连接/未内省（预览打开常早于建连）：不是"没有此表"，不能记负缓存
+                bail = "数据源模型未加载(getModel=null)"
+                return@runCatching
+            }
             val traverser = Class.forName(DAS_MODEL).getMethod("traverser").invoke(model)
-                ?: return TableMeta(null, emptyMap())
+            if (traverser == null) {
+                bail = "DasModel.traverser=null"
+                return@runCatching
+            }
             // 16:09 沙盒日志实证：DasModel.traverser() 返回 JBTreeTraverser（extends
             // FilteredTraverserBase，非 JBIterable 子类）——对 JBIterable 取 toList invoke 抛
             // IllegalArgumentException: object is not an instance of declaring class。
@@ -250,16 +346,21 @@ object DatabaseSchemaResolver {
                 // java.util.Iterator 为 JDK 接口，cast 后 hasNext/next 直调（避免再反射一层）
                 val iterator = java.lang.Iterable::class.java.getMethod("iterator")
                     .invoke(traverser) as java.util.Iterator<*>
-                val out = mutableListOf<Any?>()
-                while (iterator.hasNext()) out.add(iterator.next())
-                out
+                val collected = mutableListOf<Any?>()
+                while (iterator.hasNext()) collected.add(iterator.next())
+                collected
             } catch (e: Throwable) {
+                bail = "遍历 DasModel 失败: ${e.javaClass.simpleName}"
                 LOG.warn("DatabaseSchemaResolver: traverse elements failed", e)
-                return TableMeta(null, emptyMap())
+                return@runCatching
             }
             val objectKindClass = Class.forName(OBJECT_KIND)
-            val columnKind = objectKindClass.enumConstants?.firstOrNull { (it as Enum<*>).name == "COLUMN" }
-                ?: return TableMeta(null, emptyMap())
+            // T-DbSchemaCompletion：ObjectKind 非 java.lang.Enum，不能走 enumConstants（恒 null）
+            val columnKind = resolveObjectKind(objectKindClass, "COLUMN")
+            if (columnKind == null) {
+                bail = "ObjectKind.COLUMN 取不到（实际常量：${kindConstantNames(objectKindClass)}）"
+                return@runCatching
+            }
             val getNameM = dasObjClass.getMethod("getName")
             val getCommentM = dasObjClass.getMethod("getComment")
             val getChildrenM = dasObjClass.getMethod("getDasChildren", objectKindClass)
@@ -301,12 +402,14 @@ object DatabaseSchemaResolver {
             }
         }.onFailure { e ->
             // 升 WARN+堆栈：真机排障依赖此行（仅消息无法定位炸点，16:09 日志教训）
+            bail = "反射链异常: ${e.javaClass.simpleName}: ${e.message}"
             LOG.warn("DatabaseSchemaResolver.collectFromDataSource failed", e)
         }
         LOG.info(
-            "DatabaseSchemaResolver scan: table=$tableName, tablesScanned=$scannedTables, " +
-                "hit=$hit, foundColumns=${out.size}, tableComment=${tableComment != null}",
+            "DatabaseSchemaResolver scan: table=$tableName, ds=${dsName(ds)}, bail=${bail ?: "-"}, " +
+                "tablesScanned=$scannedTables, hit=$hit, foundColumns=${out.size}, " +
+                "tableComment=${tableComment != null}",
         )
-        return TableMeta(tableComment, out)
+        return TableMeta(tableComment, out, scanBailed = bail != null)
     }
 }

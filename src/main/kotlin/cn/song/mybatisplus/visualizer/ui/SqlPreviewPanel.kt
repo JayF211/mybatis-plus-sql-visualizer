@@ -286,6 +286,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // 自绘 DiagramPanel 共用此容器按需切换；切换时旧原生编辑器即时 dispose 防 FileEditor 泄漏
     private val diagramTabHost = javax.swing.JPanel(java.awt.BorderLayout())
     private var currentNativeDiagram: JComponent? = null
+    /**
+     * T-DbSchemaCompletion：待补刷富化的图（首次富化一点数据源信息都没拿到时记下）。
+     *
+     * 仅存"上一次富化空手而归"的那个 [PreviewResult]——数据源建连（原生控制台就绪）后据此补刷一次，
+     * 刷完置空；新预览替换 current 时旧值自然失配，无需额外清理。
+     */
+    private var diagramEnrichRetryTarget: PreviewResult? = null
     // F-45：maintainPage 列信息（仅 <pages> 预览非 null 时显示标签页）
     private var columnInfoPanel: JComponent? = null
     /** 内容区卡片：null=无内容 / "sql"=SQL编辑 / "sql+diagram"=SQL编辑 + JOIN图标签页。 */
@@ -992,6 +999,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         consoleEditor.putUserData(SqlCompletionContext.KEY, ctx)
         consoleEditor.document.let { SqlCompletionContributor.registerContext(it, ctx) }
         nativeEditorDoc = consoleEditor.document
+        // T-DbSchemaCompletion：控制台就绪 = 数据源已 attach/建连，此刻的 schema 预热最容易命中
+        //（预览打开常早于建连，那时 getModel() 还是 null）
+        current?.let { prefetchSchemaForCompletion(it) }
+        // T-DbSchemaCompletion：同一窗口下 JOIN 图也一样——首次富化空手（模型未加载）时补刷一次，
+        // 否则那张图会永远停在实体注释上（库里有 COMMENT，用户看到的是"JOIN 图没有字段注释"）。
+        // 只补一次：target 命中即置空；富化确实拿到数据时从不登记，不会无谓重建图。
+        val retryTarget = current
+        if (retryTarget != null && diagramEnrichRetryTarget === retryTarget) {
+            diagramEnrichRetryTarget = null
+            updateDiagramTab(retryTarget)
+        }
         // T-AutoFold F5：登记控制台编辑器引用（折叠应用目标）；就绪即按当前文档内容应用一次
         //（prepareConsole 链可能已同步 SQL 进文档，早于下一次 showSql）
         nativeConsoleEditor = consoleEditor
@@ -1319,6 +1337,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         modeButton.text = modeButtonText()
         rebuildLeftPanel(result)
         refreshCompletionContext()
+        // T-DbSchemaCompletion：后台预热本文档涉及表的数据源 schema，完成后再刷一次上下文
+        //（数据源列进补全候选；不依赖 JOIN 图，落 T-PreviewExecDs 遗留的 P1-5）
+        prefetchSchemaForCompletion(result)
         renderSql()
         updateMeta(result)
         // F-1：更新 JOIN 图标签页（仅 SELECT 含 JOIN 时显示）
@@ -1353,18 +1374,20 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 return
             }
             com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+                val base = JoinDiagramGenerator.buildDiagramModel(stmt)
                 val enriched = try {
-                    cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher.enrich(
-                        proj,
-                        JoinDiagramGenerator.buildDiagramModel(stmt),
-                    )
+                    cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher.enrich(proj, base)
                 } catch (t: Throwable) {
                     com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
                         .warn("[T-Perf-09] diagram schema enrich failed, showing un-enriched model", t)
-                    JoinDiagramGenerator.buildDiagramModel(stmt)
+                    base
                 }
+                // T-DbSchemaCompletion：本次富化是否一点数据源信息都没拿到（结构相等 = 没改动）。
+                // 命中就说明模型未加载（预览打开常早于数据源建连）——记下来供数据源就绪后的补刷。
+                val contributed = enriched != base
                 com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
                     if (current !== result || project?.isDisposed == true) return@invokeLater
+                    if (!contributed) diagramEnrichRetryTarget = result
                     showJoinDiagram(enriched)
                 }
             }
@@ -1539,6 +1562,56 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         editor?.putUserData(SqlCompletionContext.KEY, ctx)
         psiFile?.putUserData(SqlCompletionContext.KEY, ctx)
         editor?.document?.let { SqlCompletionContributor.registerContext(it, ctx) }
+        // T-DbSchemaCompletion：预览实际输入面是原生控制台（Ultimate），它的上下文只在
+        // onNativeEditorReady 挂过一次——不在此同步，schema 预热完成后控制台仍读旧上下文，
+        // 库里独有的列照旧补不出来（且控制台端编辑器 userData 优先级高于 document 兜底）。
+        nativeConsoleEditor?.let { console ->
+            console.putUserData(SqlCompletionContext.KEY, ctx)
+            SqlCompletionContributor.registerContext(console.document, ctx)
+        }
+    }
+
+    /**
+     * T-DbSchemaCompletion：补全 schema 预热涉及的表——SQL 里出现的表（含 JOIN）+ 预览主表。
+     *
+     * 表名取自 [TableExtractor]（纯词法，无 PSI）；解析不到时只剩主表兜底。带别名/括号的误提取
+     * 最多导致一次未命中（现在不写负缓存，见 [DatabaseSchemaResolver.resolveFromSources]），无害。
+     */
+    private fun completionTables(result: PreviewResult?): List<String> {
+        if (result == null) return emptyList()
+        return (cn.song.mybatisplus.visualizer.sql.extract.TableExtractor.extract(result.sql) +
+            listOfNotNull(result.tableName))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+    }
+
+    /**
+     * T-DbSchemaCompletion：后台预热「本文档涉及的表」的数据源 schema，完成后刷新补全上下文。
+     *
+     * 快照判据与 T-Perf-09 的 JOIN 富化同款（`current === result` 才应用）——新预览打开即作废迟到结果。
+     * 数据源未连接时 `getModel()` 为 null → 解析 0 张且不留负缓存，控制台就绪（数据源已连）时会经
+     * [onNativeEditorReady] 再触发一次，覆盖「预览早于建连」的窗口（真机日志实证该窗口存在）。
+     *
+     * 补全热路径不做任何遍历：本方法只在后台把结果填进 [DatabaseSchemaResolver] 缓存，
+     * 之后 [buildCompletionContext] 只读缓存（T-Perf-09 红线）。
+     */
+    private fun prefetchSchemaForCompletion(result: PreviewResult) {
+        val proj = project ?: return
+        val tables = completionTables(result)
+        if (tables.isEmpty()) return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val resolved = runCatching {
+                cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.prefetchTables(proj, tables)
+            }.getOrDefault(0)
+            com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                .info("[T-DbSchemaCompletion] schema 预热: tables=${tables.size}, resolved=$resolved, list=$tables")
+            if (resolved == 0) return@executeOnPooledThread
+            ApplicationManager.getApplication().invokeLater {
+                if (current !== result || project?.isDisposed == true) return@invokeLater
+                refreshCompletionContext()
+            }
+        }
     }
 
     /** 由当前预览结果构造补全上下文（表名/列名/注释；M16.2 抽为复用函数，Editor 与 PSI 同源）。 */
@@ -1550,6 +1623,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         tableComment = current?.tableComment,
         // T-M27.4：联表候选表（XML 预览经 resolveXml 注入；预览补全表名候选）
         candidateTables = current?.candidateTables.orEmpty(),
+        // T-DbSchemaCompletion：数据源 schema 列（库里存在而实体类没有的列也是候选）。
+        // 只读预热缓存（columnsCached 不触发遍历）；未预热/无数据源时空 Map = 改动前语义。
+        schemaColumns = cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
+            .columnsCached(project, completionTables(current)),
     )
 
     /**
