@@ -27,6 +27,7 @@ object SettingsIO {
     fun exportToJson(state: PluginSettings.State): String = buildString {
         appendLine("{")
         appendLine("  \"version\": $CURRENT_VERSION,")
+        appendLine("  \"dialectAuto\": ${state.dialectAuto},")
         appendLine("  \"dialect\": ${jsonString(state.dialect)},")
         appendLine("  \"replaceParams\": ${state.replaceParams},")
         appendLine("  \"formatSql\": ${state.formatSql},")
@@ -71,6 +72,7 @@ object SettingsIO {
         }
         val state = PluginSettings.State()
         // 版本 <= CURRENT_VERSION：逐字段读取，缺失则保留默认值
+        map.getBoolean("dialectAuto")?.let { state.dialectAuto = it }
         map.getString("dialect")?.let { state.dialect = it }
         map.getBoolean("replaceParams")?.let { state.replaceParams = it }
         map.getBoolean("formatSql")?.let { state.formatSql = it }

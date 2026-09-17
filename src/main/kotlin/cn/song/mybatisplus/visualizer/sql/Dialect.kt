@@ -401,4 +401,35 @@ object DialectRegistry {
      */
     fun byName(name: String?): Dialect =
         dialects.firstOrNull { it.name == name } ?: MySqlDialect
+
+    /**
+     * T-DialectAutoInfer：**渲染方言统一读取**（全部渲染消费点收口此函数）。
+     *
+     * - [cn.song.mybatisplus.visualizer.config.PluginSettings.State.dialectAuto]=false →
+     *   手动方言（`byName(state.dialect)`，项目级覆盖由调用方先解析成传入名）。
+     * - true → 智能推断（[DialectInference.infer]：agent 最近连接 URL > IDE 数据源 URL），
+     *   未命中回退 [MySqlDialect]（与 [byName] 未知回退语义一致）。
+     *
+     * @param manualDialectName 手动模式下的方言名（null=按全局设置自查）
+     * @param project 数据源探测用项目（null=跳过数据源层，仅 agent URL）
+     */
+    fun effective(
+        manualDialectName: String? = null,
+        project: com.intellij.openapi.project.Project? = null,
+    ): Dialect {
+        val settings = runCatching {
+            cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        }.getOrNull()
+        val auto = settings?.dialectAuto ?: true
+        if (!auto) return byName(manualDialectName ?: settings.dialect)
+        val agentUrl = runCatching {
+            cn.song.mybatisplus.visualizer.log.agent.AgentManager.getInstance(project ?: return fallbackFrom(settings))
+        }.getOrNull()?.lastConnectionUrl()
+        val inferred = DialectInference.infer(agentUrl, cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.firstUrl(project))
+        return inferred.dialectName?.let { byName(it) } ?: MySqlDialect
+    }
+
+    /** 手动模式无项目上下文时的兜底（按全局手动值）。 */
+    private fun fallbackFrom(settings: cn.song.mybatisplus.visualizer.config.PluginSettings.State?): Dialect =
+        byName(settings?.dialect)
 }

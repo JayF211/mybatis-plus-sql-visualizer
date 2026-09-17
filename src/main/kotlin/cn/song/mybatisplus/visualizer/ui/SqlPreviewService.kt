@@ -1556,11 +1556,21 @@ class SqlPreviewService(private val project: Project) {
      * 当前方言（配置未加载时默认 MySQL）。
      */
     /**
-     * O-5：当前方言（项目级优先，回退全局）。
+     * O-5：当前方言（项目级优先，回退全局）；T-DialectAutoInfer：auto 开启时智能推断。
      */
-    fun currentDialect(): Dialect = DialectRegistry.byName(effectiveDialectName())
+    fun currentDialect(): Dialect =
+        if (effectiveDialectAuto()) DialectRegistry.effective(project = project)
+        else DialectRegistry.byName(effectiveDialectName())
 
-    /** O-5：有效方言名称（项目级优先，回退全局）。 */
+    /**
+     * T-DialectAutoInfer：有效方言模式（项目级 dialectAuto 非 null 且启用项目设置时优先，
+     * 否则全局）。
+     */
+    private fun effectiveDialectAuto(): Boolean =
+        effective({ runCatching { PluginSettings.getInstance().state.dialectAuto }.getOrDefault(true) },
+                  { projectSettings?.takeIf { it.isEnabled() }?.state?.dialectAuto })
+
+    /** O-5：有效方言名称（项目级优先，回退全局；手动模式专用）。 */
     private fun effectiveDialectName(): String =
         effective({ settings?.state?.dialect ?: PluginSettings.DEFAULT_DIALECT },
                   { projectSettings?.effectiveDialect() })
