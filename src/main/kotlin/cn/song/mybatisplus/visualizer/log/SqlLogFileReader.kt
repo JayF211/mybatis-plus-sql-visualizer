@@ -196,6 +196,9 @@ object SqlLogFileReader {
                 errorText = decodedExt?.errorText,
                 requestTag = decodedExt?.requestTag,
                 updateCount = decodedExt?.updateCount,
+                sourceCandidates = decodedExt?.sourceCandidates ?: emptyList(),
+                candidateClasses = decodedExt?.candidateClasses ?: emptyList(),
+                stackDigest = decodedExt?.stackDigest,
             )
         }
 
@@ -212,6 +215,9 @@ object SqlLogFileReader {
                 errorText = decodedExt?.errorText,
                 requestTag = decodedExt?.requestTag,
                 updateCount = decodedExt?.updateCount,
+                sourceCandidates = decodedExt?.sourceCandidates ?: emptyList(),
+                candidateClasses = decodedExt?.candidateClasses ?: emptyList(),
+                stackDigest = decodedExt?.stackDigest,
             )
         }
 

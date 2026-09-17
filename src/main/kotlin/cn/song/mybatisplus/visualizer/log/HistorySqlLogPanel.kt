@@ -551,16 +551,19 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         data class NotFound(val sourceFile: String) : HistoryJumpTarget()
     }
 
-    /** 解析跳转目标（与 [jumpToSource] 共用；测试驱动直接断言分支，不触发弹窗）。 */
-    internal fun resolveJumpTarget(entry: LogSqlEntry): HistoryJumpTarget {
-        if (entry.sourceFile == null) return HistoryJumpTarget.NoSource
-        // M37.1：多源根容错——basePath 直拼失败后按模块 content root 匹配（SourcePathResolver）
-        val virtualFile = SourcePathResolver.resolveVirtualFile(project, entry.sourceFile)
-        if (virtualFile != null) {
-            return HistoryJumpTarget.Navigate(virtualFile, maxOf(0, entry.sourceLine - 1))
+    /**
+     * 解析跳转目标（与 [jumpToSource] 共用；测试驱动直接断言分支，不触发弹窗）。
+     * T-SourceJumpFunnel P0-5：判定收敛到 [EntryJumpResolver]（与实时面板同一实现）——
+     * 主位置不在工程内（自研框架汇聚门面帧）时按候选栈序回退，本面板此前无此能力。
+     */
+    internal fun resolveJumpTarget(entry: LogSqlEntry): HistoryJumpTarget =
+        when (val target = EntryJumpResolver.resolve(project, entry)) {
+            is EntryJumpResolver.JumpTarget.Precise ->
+                HistoryJumpTarget.Navigate(target.virtualFile, target.line)
+            EntryJumpResolver.JumpTarget.NoSource -> HistoryJumpTarget.NoSource
+            is EntryJumpResolver.JumpTarget.NotFound -> HistoryJumpTarget.NotFound(target.sourceFile)
+            EntryJumpResolver.JumpTarget.MissingSource -> HistoryJumpTarget.NoSource
         }
-        return HistoryJumpTarget.NotFound(entry.sourceFile)
-    }
 
     /**
      * 跳转到产生该 SQL 的源码位置（测试驱动；等价右键「跳转到源码」）。

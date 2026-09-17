@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.sqlvis.agent.transport;
 
 import cn.song.mybatisplus.sqlvis.agent.AgentState;
+import cn.song.mybatisplus.sqlvis.agent.util.StackLocator;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -103,6 +104,56 @@ final class SenderLoop implements Runnable {
             AgentState.setDesensitize(payload.contains("\"desensitize\":false")
                     || payload.contains("\"desensitize\": false") ? false : true);
         }
+        // T-SourceJumpFunnel P1-3：用户登记的帧过滤前缀（"skipPrefixes":["a.","b."]；缺省键=清空）。
+        // 极简提取：定位键名后逐项扫描双引号对，支持 \" 转义（IDE 侧同规则转义）。
+        if (payload.contains("\"skipPrefixes\"")) {
+            StackLocator.setExtraSkipPrefixes(extractSkipPrefixes(payload));
+        } else {
+            StackLocator.setExtraSkipPrefixes(new String[0]);
+        }
+    }
+
+    /** 从 CONFIG payload 提取 "skipPrefixes":[...] 项（无该键/畸形返回空组）。 */
+    static String[] extractSkipPrefixes(String payload) {
+        final String key = "\"skipPrefixes\":";
+        final int k = payload.indexOf(key);
+        if (k < 0) {
+            return new String[0];
+        }
+        int i = k + key.length();
+        while (i < payload.length() && payload.charAt(i) != '[') {
+            i++;
+        }
+        if (i >= payload.length()) {
+            return new String[0];
+        }
+        i++; // past '['
+        final java.util.List<String> out = new java.util.ArrayList<String>(4);
+        final StringBuilder cur = new StringBuilder(32);
+        boolean inStr = false;
+        boolean escaped = false;
+        for (; i < payload.length(); i++) {
+            final char c = payload.charAt(i);
+            if (inStr) {
+                if (escaped) {
+                    cur.append(c);
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    out.add(cur.toString());
+                    cur.setLength(0);
+                    inStr = false;
+                } else {
+                    cur.append(c);
+                }
+            } else if (c == '"') {
+                inStr = true;
+            } else if (c == ']') {
+                break;
+            }
+        }
+        return out.toArray(new String[0]);
     }
 
     private String readPayload(DataInputStream in, int cmd) throws IOException {

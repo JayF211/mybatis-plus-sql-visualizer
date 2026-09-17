@@ -25,7 +25,8 @@ public final class Jsons {
         if (e.sourceLine > 0) {
             num(sb, first, "sl", e.sourceLine);
         }
-        // T-AgentSourceJump：源码候选（IDE 侧解析回退；[file, line] 对数组）
+        // T-AgentSourceJump：源码候选（IDE 侧解析回退；T-SourceJumpFunnel 增厚为
+        // [file, line, className, method] 四列——列尾追加，旧 IDE 按下标只读前两列，双向兼容）
         if (e.sourceCandidates != null && !e.sourceCandidates.isEmpty()) {
             sep(sb, first);
             sb.append("\"cands\":[");
@@ -38,12 +39,20 @@ public final class Jsons {
                 val(sb, c.length > 0 ? c[0] : null);
                 sb.append(',');
                 sb.append(c.length > 1 ? c[1] : "0");
+                if (c.length > 2) {
+                    sb.append(',');
+                    val(sb, c[2]);
+                    sb.append(',');
+                    val(sb, c.length > 3 ? c[3] : null);
+                }
                 sb.append(']');
             }
             sb.append(']');
         }
         str(sb, first, "mk", e.methodKey);
         str(sb, first, "rt", e.requestTag);
+        // T-SourceJumpFunnel P2-2：调用栈快照（「类#方法:行」×≤16 帧，人工往上追踪用）
+        str(sb, first, "sd", e.stackDigest);
         str(sb, first, "th", e.threadName);
         str(sb, first, "url", e.url);
         if (e.params != null && !e.params.isEmpty()) {

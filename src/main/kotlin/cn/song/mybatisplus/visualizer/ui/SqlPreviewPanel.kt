@@ -2875,11 +2875,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         currentWarning = xmlWarning ?: result.warning
         val warningLine = currentWarning?.let { "   ⚠ $it" } ?: ""
+        // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示，悬停 tooltip 全文）
+        val stackLine = result.stackDigest?.let { sd ->
+            "   " + MpSqlVisualizerBundle.message("panel.meta.stackDigest") + " " +
+                (if (sd.length > 120) sd.substring(0, 120) + "…" else sd)
+        } ?: ""
         // T-SqlPerf：性能建议文案单独一行（HTML 换行）。
         // T-PreviewTopOverlap F3：原文分段缓存，label 文本按宽度预算重拼（applyMetaTruncation）
         metaLineText = meta + warningLine
         metaPerfSegments = buildPerfSegments(result)
-        metaLabel.toolTipText = meta + warningLine + metaPerfSegments.joinToString("；") { it.text }
+        metaLabel.toolTipText = meta + warningLine + stackLine +
+            (result.stackDigest?.let { "\n" + MpSqlVisualizerBundle.message("panel.meta.stackDigest") + " $it" } ?: "") +
+            metaPerfSegments.joinToString("；") { it.text }
         metaLabel.foreground = if (currentWarning != null) {
             // T-DarkTheme：IDE 标准错误前景命名色（亮暗主题自适应；暗色下非亮红不刺眼）
             JBColor.namedColor("ErrorForeground", JBColor.RED)

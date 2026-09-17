@@ -1318,35 +1318,18 @@ class SqlLogPanel(
         data object MissingSource : LogJumpTarget()
     }
 
-    /** 统一解析跳转目标：仅依赖捕获位置，不做任何启发式定位。 */
-    internal fun resolveEntryJump(entry: LogSqlEntry): LogJumpTarget {
-        if (entry.sourceFile == null) {
-            // T-AgentSourceJump：主位置缺失时仍可落候选（agent 侧主位置无调试信息场景）
-            return resolveCandidateJump(entry) ?: LogJumpTarget.MissingSource
+    /**
+     * 统一解析跳转目标：仅依赖捕获位置，不做任何启发式定位。
+     * T-SourceJumpFunnel P0-5：判定逻辑收敛到 [EntryJumpResolver]（实时/历史两面板共用同一实现，
+     * 历史面板由此获得候选回退能力），本函数只做类型转接。
+     */
+    internal fun resolveEntryJump(entry: LogSqlEntry): LogJumpTarget =
+        when (val target = EntryJumpResolver.resolve(project, entry)) {
+            is EntryJumpResolver.JumpTarget.Precise -> LogJumpTarget.Precise(target.virtualFile, target.line)
+            EntryJumpResolver.JumpTarget.NoSource -> LogJumpTarget.NoSource
+            is EntryJumpResolver.JumpTarget.NotFound -> LogJumpTarget.NotFound(target.sourceFile)
+            EntryJumpResolver.JumpTarget.MissingSource -> LogJumpTarget.MissingSource
         }
-        // F-44-7：MP 分页 COUNT 查询特殊标记 → 无用户调用点可跳转
-        if (SourceMarkers.isMpPaginationCount(entry.sourceFile)) {
-            return LogJumpTarget.NoSource
-        }
-        // M37.1：多源根容错——basePath 直拼失败后按模块 content root 匹配（SourcePathResolver）
-        val vf = SourcePathResolver.resolveVirtualFile(project, entry.sourceFile)
-        if (vf != null) {
-            return LogJumpTarget.Precise(vf, maxOf(0, entry.sourceLine - 1))
-        }
-        // T-AgentSourceJump：主位置不在工程内（典型=误选第三方插件帧，如 PageHelper 的 PageInterceptor）
-        // → 按栈序候选取首个可解析项；候选同出本次调用的真实栈，非启发式
-        return resolveCandidateJump(entry) ?: LogJumpTarget.NotFound(entry.sourceFile)
-    }
-
-    /** 候选帧解析回退：栈序取首个能在工程内解析到文件的候选；全落空返回 null。 */
-    private fun resolveCandidateJump(entry: LogSqlEntry): LogJumpTarget? {
-        for ((file, line) in entry.sourceCandidates) {
-            if (SourceMarkers.isMpPaginationCount(file)) continue
-            val vf = SourcePathResolver.resolveVirtualFile(project, file) ?: continue
-            return LogJumpTarget.Precise(vf, maxOf(0, line - 1))
-        }
-        return null
-    }
 
     /** 等价右键「跳转到源码」（供 UI 测试断言精确跳转分支，避 headless 弹窗）。 */
     internal fun jumpToSourceForTest(entry: LogSqlEntry) = jumpToSource(entry)

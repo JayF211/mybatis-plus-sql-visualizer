@@ -405,6 +405,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * true 时对疑似敏感形态打码；脱敏在 agent 采集层执行，数据不出应用 JVM 前已处理。
          */
         var enhancedCaptureDesensitize: Boolean = false,
+
+        /**
+         * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（用户登记的自研框架包名，一行一个，
+         * 如 `com.corp.engine.`）。agent 侧栈帧判定并入（CONFIG 热下发），IDE 侧候选解析同步过滤。
+         * 空 = 未登记。
+         */
+        var sourceFrameSkipPrefixes: String = "",
     )
 
     private var state = State()

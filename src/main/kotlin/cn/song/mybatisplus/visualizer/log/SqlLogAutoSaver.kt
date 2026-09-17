@@ -229,7 +229,8 @@ class SqlLogAutoSaver(
             // pd 行（载荷扩展键，仅非默认落键）——否则 agent 通道结构化信息在历史文件丢失。
             if (entry.params.isNotEmpty() || countPlaceholders(entry.rawSql) > 0 ||
                 entry.mapperStatement != null || entry.errorText != null ||
-                entry.requestTag != null || entry.updateCount != null
+                entry.requestTag != null || entry.updateCount != null ||
+                entry.sourceCandidates.isNotEmpty() || entry.stackDigest != null
             ) {
                 w.write("-- pd: ${SqlLogParamCodec.encodeEntry(entry)} --\n")
             }

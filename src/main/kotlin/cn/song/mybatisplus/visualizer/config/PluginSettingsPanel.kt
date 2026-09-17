@@ -210,6 +210,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 增强捕获状态行：已挂载 pid=x / 已回落控制台捕获 / 连接中。 */
     private val enhancedStatusLabel = JBLabel(" ")
 
+    /**
+     * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（一行一个前缀，如 `com.corp.engine.`）。
+     * Apply 后经 CONFIG 热下发 agent（即时生效，无需重启应用），IDE 侧候选解析同步过滤。
+     */
+    private val frameSkipPrefixesField = com.intellij.ui.components.JBTextArea(3, 24)
+
     /** gutter 预览 SQL 图标开关（M10）。 */
     private val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
     private val joinDiagramNativeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.joinDiagramNative"))
@@ -709,6 +715,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 })
                 addRow(p, g, "", enhancedDesensitizeCheck.apply { text = MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize") })
                 addRow(p, g, "", enhancedStatusLabel)
+                // T-SourceJumpFunnel P1-3：帧过滤前缀（自研框架包名登记，热下发 agent）
+                frameSkipPrefixesField.apply {
+                    text = PluginSettings.getInstance().state.sourceFrameSkipPrefixes
+                    toolTipText = MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.tip")
+                }
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes"), frameSkipPrefixesField)
             }
         }
 
@@ -1160,6 +1172,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
             || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
             || enhancedDesensitizeCheck.isSelected != s.enhancedCaptureDesensitize
+            || frameSkipPrefixesField.text.trim() != s.sourceFrameSkipPrefixes.trim()
             || logHibernateEnabledCheck.isSelected != s.logHibernateEnabled
             || logHibernateSqlPrefixField.text.trim() != s.logHibernateSqlPrefix
             || logHibernateParamPrefixField.text.trim() != s.logHibernateParamPrefix
@@ -1247,6 +1260,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             s.enhancedCaptureEnabled = enhancedCaptureCheck.isSelected
             s.enhancedCaptureDesensitize = enhancedDesensitizeCheck.isSelected
+            // T-SourceJumpFunnel P1-3：前缀规范化（逐行 trim、去空行）写回；下发走 SETTINGS_CHANGE_TOPIC
+            s.sourceFrameSkipPrefixes = frameSkipPrefixesField.text.lines()
+                .map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
             s.logHibernateEnabled = logHibernateEnabledCheck.isSelected
             s.logHibernateSqlPrefix = logHibernateSqlPrefixField.text.trim()
             s.logHibernateParamPrefix = logHibernateParamPrefixField.text.trim()
@@ -1364,6 +1380,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled
             enhancedDesensitizeCheck.isSelected = s.enhancedCaptureDesensitize
+            frameSkipPrefixesField.text = s.sourceFrameSkipPrefixes
             logHibernateEnabledCheck.isSelected = s.logHibernateEnabled
             logHibernateSqlPrefixField.text = s.logHibernateSqlPrefix
             logHibernateParamPrefixField.text = s.logHibernateParamPrefix
