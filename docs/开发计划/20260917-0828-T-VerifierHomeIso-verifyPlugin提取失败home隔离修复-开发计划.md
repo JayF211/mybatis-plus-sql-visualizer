@@ -76,4 +76,10 @@ T-VH-01（jvmArgs 注入隔离 home）→ T-VH-02（smoke→minimal 验证 + ver
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+**已实施交付（2026-09-17 当日完成，T-VH-01~04 全闭环）**：
+
+- **T-VH-01 ✅**：`verifyPlugin` jvmArgs 块追加 `-Dplugin.verifier.home.dir` → `build/verify-home`（与 verifyGate 共用），注释带矩阵结论。
+- **T-VH-02 ✅**：`verifyPlugin -PverifyIdes=minimal` 绿——IU-243.28141.41 Compatible / IU-262.10968.63 Compatible（08:37 报告，minimal 覆盖 smoke 的 243 目标）；修复链全程 `~/.pluginVerifier` 零写入（89 条目、根 mtime 08:10 前后不变）；verifyGate smoke 复跑 **BUILD SUCCESSFUL in 43s / Compatible**（08:57），共用 home 互不破坏。
+- **T-VH-03（机制定案 + 决策）**：TRACE 重跑拿不到被吞异常栈（slf4j 属性对该 logger 绑定无效），但意外把矩阵**精化出第三维——home 缓存状态**：默认 home 带旧版缓存（`ides` 8-12 / `loaded-plugins` 9-15 所写）时 1.410 恒败（三次复现全在此态）；经 1.409 跑一轮重建缓存后，同 home 同版本 1.410 亦 **Compatible**（27.3s）；全新空 home 1.410 直接过（C 格）。**机制定案一句话：1.410 不兼容旧版 verifier 写下的陈旧 home 缓存**。**决策=不钉 1.409**：显式 home 指向 build/verify-home 后与缓存状态天然无关（该 home 只由本仓两任务写入），钉版本属多余约束面。
+- **T-VH-04 ✅**：03 篇 §2 `verifyPlugin` 行补注版本分叉与 home 隔离事实；变更记录总册行倒序插顶。
+- **附带记录**：①verifyGate 首次复跑撞 `prepareSandbox` 复制 jsqlparser 进陈旧沙盒 `build/test-sandbox-listparam` 的 Windows 内存映射锁（ERROR_USER_MAPPED_FILE），重试即愈——已知沙盒锁假失败类，与本修复无关（该 sandboxContainer 临时行系 T-ListParamCollect 遗留「用后还原」未做，另行记挂）；②并行 T-BuildScriptSplit（bs-worktree 沙盒，计划 dc047bd 已入库）在途，实施前核实 buildSrc 未建，落点 build.gradle.kts 照旧。
