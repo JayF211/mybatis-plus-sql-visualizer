@@ -242,8 +242,8 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 ## 归档记忆（docs/memory-archive/，2026-08-22）
 
-> 从本地记忆系统归档的已完成/已交付内容（216 个文件，2026-09-16 第十次精简后），不再每次会话加载，按需查阅。
-> 全局通用记忆（85 个）备份在 `~/.zcode/cli/memories/global/`。
+> 从本地记忆系统归档的已完成/已交付内容（227 个文件，2026-09-17 第十一次精简后），不再每次会话加载，按需查阅。
+> 全局通用记忆（94 个）备份在 `~/.zcode/cli/memories/global/`。
 
 | 文档 | 用途 |
 |------|------|
@@ -274,6 +274,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-17 | 记忆第十一次精简（48→29 含索引）：5 个已交付任务归档 bug-fixes（M55 Ultra 融合/T-ExecDocSync/T-InParamRec/T-LogSortModes/T-AgentSourceJump，全部 git 实测交付状态后归档）＋6 个已解决踩坑归档 pitfalls（speedsearch 隐藏卡失效与高亮渲染器双条=5b0e2c3/f65d9ae 已落码后归档、双端协议往返缺口、JDBC execute 行数语义、Mermaid 节点 ID 跨图串扰、夹具形态不一致[教训收编 project-test-conventions]）＋8 条跨项目踩坑/环境升级全局（ghfast push 重写/MSYS 首斜杠/gradle 代理直连/子代理限流 ≤3/Kotlin 块注释嵌套/反射 JDK 内部类/HttpRequests 双坑/无图模型 OCR 回落）＋新建全局 pitfall-document-bgthread-edt-only（262 Document.isModified 移除+setText BGT EDT-only）；MEMORY.md 索引去重（speedsearch 双条、归档区尾部错位条目）并压缩活跃长条目；project-pending-plans 补 T-ExecDocSync 尾款（CHANGELOG 条目+真机走查三条）、合流债实测刷新（dev 领先 117 已全推送/master·k2j 与远程同步，push 留底债清零只剩 T-MergeDev2Master）；archive 增至 227 个文件（bug-fixes 159、pitfalls 65）、全局 94 个、项目记忆保留 28 核心；精简前全量备份 memory-backup-2026-09-17 |
 | 2026-09-16 | 记忆第十次精简（45→28 含索引）：15 个已交付任务/调研记忆归档 bug-fixes（T-AgentDialectLoop/M37 系列闭环/全景审计/性能五轮报告/竞品五轮/T-FeedbackBatch2/T-UiNative/T-PerfSweep2/T-ReleasePerf/四计划批次/T-Intranet/T-ListParamCollect/T-McpToolset2/竞品四轮七任务/T-ShortcutSettings，全部 git 实测交付状态后归档）＋2 个已解决踩坑归档 pitfalls（设置树 groupWeight 排序、idea-plugin@url 零消费）＋feedback-verify-scope 收编 project-test-conventions（验证范围定例）；新建 project-pending-plans 收拢在册未实施计划与合流债索引（dev 94/M56 19/t-uinative 8/K2J 101 提交领先实测）；补录 2 条此前漏索引的活跃踩坑（会话 git 快照过时、cherry-pick 使 --contains 失灵），并删除已归档 t-testperf2 的陈旧索引行；archive 增至 216 个文件（bug-fixes 154、pitfalls 59）、全局 85 个、项目记忆保留 27 核心；精简前全量备份 memory-backup-2026-09-16 |
 | 2026-09-15 | **M56 master 全量合入 feature/t-m56-01-agent-base（三次合并收口：cebd037 首环 248 提交 + da37ad5 二次 T-Intranet/v2026.9.18-beta.1 + d0ae910 三次 T-ReleasePerf/日志原始时间/JdbcTemplate 并发修复/日志列表搜索行号时间）**：master 功能全部吸收。首环 11 文件 12 冲突块全解决（union×8/语义融合×3：SqlLogAutoSaver 融合 master DateTimeFormatter+批量 flush 与 M56 encodeEntry 扩展字段、SqlLogPanel 渲染融合 useSelectionFill+agent 角标、bundle 以 master 版为底叠加 M56 增强捕获 6 键）；合并后修复两处：bundle 被 PS5.1 Set-Content 写入 UTF-8 BOM 致 Properties 解析出 ?# 幽灵键（改 .NET 无 BOM 写回）+ AgentProtocolSyncTest 定位链漏跟 a1bf63e 子项目迁移（教训：目录迁移必须全局 grep 旧路径）。二次 1 冲突（变更记录 union）、三次 merge-tree 预演零冲突 29 文件自动合并（embedAgentJar 链/bundle en=zh=635 全等/agent badge 6 处/设置双方字段并列，四语义点复核通过）。全量 testShards **4200/0/0/6 绿**（1315+1512+1373，跳过=Docker；首跑 327 例 NoSuchMethodError=合并加字段后陈旧产物劫持，清 build/classes+build/kotlin 复绿）+ agent 21 用例绿；buildPlugin 出 2026.9.18-beta.1.zip（7.10MB，主 jar 内嵌 agent/mps-sql-agent.jar 306.7KB）；verifyGate 三目标 Compatible（243 弃用 3/253 弃用 6/262 弃用 52 均历史基线、experimental 14 非失败级别，2m17s）。备份分支 backup-m56-pre-master-merge-20260915，未推送远程。详见 docs/开发计划/20260915-1250-M56-MasterMerge 交接文档 |
 | 2026-09-15 | 记忆第九次精简（44→28 含索引）：16 个已交付任务记忆归档 bug-fixes（T-TestPerf2/T-MarketInternal/T-ExplainFirstNative/T-ListPreviewCopy/T-MergeFollowup/T-LogHistoryRowNo/T-JumpCapture/T-JumpPath/T-IntrUpg/T-ExecSlowOps/T-ExplainDbl/T-FeedbackDlg/T-FeedbackErr/T-PreviewExecDs/竞品对比第三·四轮）＋pitfall-edt-slowops-coldpath 升级全局（allowSlowOperations 逃生舱 243+262 双重证伪）；archive 增至 196 个文件（bug-fixes 139）、全局 85 个、项目记忆保留 27 核心；精简前全量备份 memory-backup-2026-09-15 |
