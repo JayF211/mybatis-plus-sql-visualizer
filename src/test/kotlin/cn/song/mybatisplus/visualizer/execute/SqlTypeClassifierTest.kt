@@ -402,4 +402,15 @@ class SqlTypeClassifierTest {
         assertTrue("注释内写关键字的普通 CTE 查询仍免确认",
             SqlTypeClassifier.isQuery("/* update rows */ WITH c AS (SELECT 1) SELECT * FROM c"))
     }
+
+    @Test
+    fun testTsqlControlFlowBatchFallsToUnknownNeedsConfirm() {
+        // T-TsqlBatchSplit T-TB-02：整批 T-SQL 控制流（IF/BEGIN 起头）分类落 UNKNOWN → 需确认
+        // （fail-closed 既有行为钉死——拆分器批首合并后控制流批以整批进确认流）
+        assertEquals("裸 IF…ELSE 批判 UNKNOWN",
+            SqlType.UNKNOWN,
+            SqlTypeClassifier.classify("IF @x = 1 UPDATE t SET a = 1; ELSE INSERT INTO t VALUES (1)"))
+        assertFalse("整批 T-SQL 控制流需确认",
+            SqlTypeClassifier.isQuery("IF EXISTS (SELECT 1 FROM t) BEGIN DELETE FROM t; END"))
+    }
 }

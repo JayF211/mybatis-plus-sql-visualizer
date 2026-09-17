@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier
 import cn.song.mybatisplus.visualizer.log.LogToSqlPanel
 import cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverter
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -271,4 +272,70 @@ class SqlStatementSplitterTest {
         "CALL p(1; 2);",
         "BEGIN\n  SELECT 1;\nEND;\nSELECT 2;",
     )
+
+    // ======================== T-SQL 控制流批不可拆（T-TsqlBatchSplit / O-28） ========================
+
+    @Test
+    fun `TSQL_IF_ELSE双BEGIN形态整批不拆`() {
+        // DBX 1a7b44f 同款样例：两分支 BEGIN/END 包裹，块感知已保护内层分号
+        val sql = "IF EXISTS (SELECT 1 FROM t WHERE id = 1) " +
+            "BEGIN UPDATE t SET x = 1; END ELSE BEGIN INSERT INTO t VALUES (1); END;"
+        assertEquals(1, split(sql).size)
+        assertEquals(1, stripped(sql).size)
+    }
+
+    @Test
+    fun `TSQL_裸IF_ELSE跨顶层分号合并为整批`() {
+        // 两分支各自以顶层 `;` 终结且无 BEGIN/END——逐段切分会产出 ELSE 起头碎句
+        val sql = "IF @x = 1 UPDATE t SET a = 1;\nELSE INSERT INTO t VALUES (1);"
+        val parts = split(sql)
+        assertEquals("裸 IF…ELSE 形态整批不拆", 1, parts.size)
+        assertTrue("批首保留 IF", parts[0].startsWith("IF @x = 1"))
+        assertTrue("ELSE 并入同批", parts[0].contains("ELSE INSERT INTO t VALUES (1)"))
+    }
+
+    @Test
+    fun `TSQL_ELSE_IF链逐级并入`() {
+        val sql = "IF @a = 1 SELECT 1; ELSE IF @b = 2 SELECT 2; ELSE SELECT 3;"
+        assertEquals("ELSE IF 链整批不拆", 1, split(sql).size)
+    }
+
+    @Test
+    fun `TSQL_嵌套BEGIN_END配对`() {
+        val sql = "IF @x = 1 BEGIN IF @y = 2 BEGIN DELETE FROM t; END END"
+        assertEquals(1, split(sql).size)
+    }
+
+    @Test
+    fun `TSQL_批后独立语句不误并`() {
+        // IF 批已闭合（无 ELSE 起头后续段）→ 后续独立语句正常切分
+        val parts = split("IF @x = 1 SELECT 1; SELECT 2;")
+        assertEquals(listOf("IF @x = 1 SELECT 1", "SELECT 2"), parts)
+    }
+
+    @Test
+    fun `TSQL_配对失衡整段保留不抛异常`() {
+        // 截断批（BEGIN 未闭合）：继续吞后续段直到批尾（宁整勿碎）
+        val parts = split("IF @x = 1 BEGIN UPDATE t SET x = 1; DELETE FROM t2")
+        assertEquals("失衡批整段保留", 1, parts.size)
+        assertTrue(parts[0].contains("DELETE FROM t2"))
+    }
+
+    @Test
+    fun `TSQL_控制流关键字在字符串注释内不误判`() {
+        // 字符串字面量内的 IF/ELSE/BEGIN 不触发批首识别（首段仍 SELECT）
+        assertEquals(2, split("SELECT 'IF BEGIN ELSE' FROM t; SELECT 2;").size)
+        // 前导注释内的 IF 不当批首——首关键字跳过注释取真实词（stripped 口径断言；
+        // split 保留注释故用 stripped 验证批首识别未触发）
+        assertEquals(listOf("SELECT 1", "SELECT 2"), stripped("-- IF something\nSELECT 1; SELECT 2;"))
+    }
+
+    @Test
+    fun `TSQL_MySQL函数IF不误吞`() {
+        // MySQL `IF()` 是函数不出现在语句首位；SELECT 起头不触发合并
+        assertEquals(
+            listOf("SELECT IF(a > 1, 'x', 'y') FROM t", "SELECT 2"),
+            split("SELECT IF(a > 1, 'x', 'y') FROM t; SELECT 2;"),
+        )
+    }
 }

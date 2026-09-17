@@ -72,6 +72,7 @@
 
 ### Fixed
 
+- **T-SQL 控制流批不可拆（T-TsqlBatchSplit，O-28）**：多语句拆分器对 T-SQL 控制流批新增批首识别（DBX 1a7b44f 同型）——裸 `IF …; ELSE …;` 形态（两分支各以顶层分号终结、无 BEGIN/END 包裹）此前被拆成以 ELSE 起头的碎句（进确认流逐条弹窗、进执行报误导性语法错），现 ELSE 起头段与配对失衡的截断批整批合并（宁整勿碎 fail-closed）；批首限定 IF（语句首 IF 无方言歧义，MySQL `IF()` 函数不误吞），裸 `BEGIN; …; COMMIT` 事务语法维持既有保守切分不吞；整批 T-SQL 分类落 UNKNOWN 需确认（既有 fail-closed 钉死）；三消费方零改动
 - **确认流只读豁免三盲区收窄（T-TxnReadOnlyProof，N-21）**：免确认白名单（SELECT/SHOW/EXPLAIN/WITH）存在三个真实豁免盲区——可写 CTE（`WITH del AS (DELETE …) SELECT` 首关键字 WITH 免确认直通真执行）、`EXPLAIN ANALYZE`（PG 语义真实执行被修饰语句）、`SELECT INTO OUTFILE/新表`（写文件/建表）。现对白名单语句做只读二级证明（词法宽门控+字边界匹配+字符串字面量屏蔽，宁错弹不放过），盲区命中改判需确认（fail-closed），普通 SELECT/CTE/EXPLAIN 豁免逐字节不变；三处确认流消费方零改动
 - **执行文件「文件缓冲区冲突」（File Cache Conflict）第三轮根治（T-ExecDocSync，条目补落）**：执行临时文件 `mpsql-exec.sql` 弹「已在内存中和磁盘上对该文件进行更改」。根因三点：document 驱动写只改内存不落盘（滞留「已修改未保存」窗口）；WriteAction 失败兜底无条件裸写盘（绕过 document = 冲突的外部改写条件）；后台预热与 EDT 冷路径双写方不互斥。修复=document 写统一派 EDT + 同临界区落盘（setText→commit→saveDocument）+ 有已加载 document 时拒绝裸写兜底（宁内容旧一拍）+ 单写方锁串行化双写方
 - **执行文件「文件缓冲区冲突」第四轮根治——console 侧「已修改未保存」窗口清零（T-ExecDocSync2）**：第三轮收口只覆盖插件自有写点，漏了 Database 控制台侧——控制台挂载在 exec 文件本体上（控制台编辑器文档即该文件 document），复用/准备/换入链的四处文档同步只 commit 不落盘，用户手改控制台更是插件拦不到的未保存源；窗口期内任意外部改盘（git 触碰 / 双 IDE 实例）+ VFS 刷新即弹冲突，且弹窗点「保留内存更改」后自我放大。修复=四处同步统一收口为「setText→commit→saveDocument」同临界区落盘 + 两处 VFS 刷新前强制收敛 + 执行文档 1.5s 防抖自动落盘 + 冲突探针（复发时 idea.log 落现场指纹取证）
