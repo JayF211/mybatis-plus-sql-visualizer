@@ -992,6 +992,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         consoleEditor.putUserData(SqlCompletionContext.KEY, ctx)
         consoleEditor.document.let { SqlCompletionContributor.registerContext(it, ctx) }
         nativeEditorDoc = consoleEditor.document
+        // T-DbSchemaCompletion：控制台就绪 = 数据源已 attach/建连，此刻的 schema 预热最容易命中
+        //（预览打开常早于建连，那时 getModel() 还是 null）
+        current?.let { prefetchSchemaForCompletion(it) }
         // T-AutoFold F5：登记控制台编辑器引用（折叠应用目标）；就绪即按当前文档内容应用一次
         //（prepareConsole 链可能已同步 SQL 进文档，早于下一次 showSql）
         nativeConsoleEditor = consoleEditor
@@ -1319,6 +1322,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         modeButton.text = modeButtonText()
         rebuildLeftPanel(result)
         refreshCompletionContext()
+        // T-DbSchemaCompletion：后台预热本文档涉及表的数据源 schema，完成后再刷一次上下文
+        //（数据源列进补全候选；不依赖 JOIN 图，落 T-PreviewExecDs 遗留的 P1-5）
+        prefetchSchemaForCompletion(result)
         renderSql()
         updateMeta(result)
         // F-1：更新 JOIN 图标签页（仅 SELECT 含 JOIN 时显示）
@@ -1539,6 +1545,56 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         editor?.putUserData(SqlCompletionContext.KEY, ctx)
         psiFile?.putUserData(SqlCompletionContext.KEY, ctx)
         editor?.document?.let { SqlCompletionContributor.registerContext(it, ctx) }
+        // T-DbSchemaCompletion：预览实际输入面是原生控制台（Ultimate），它的上下文只在
+        // onNativeEditorReady 挂过一次——不在此同步，schema 预热完成后控制台仍读旧上下文，
+        // 库里独有的列照旧补不出来（且控制台端编辑器 userData 优先级高于 document 兜底）。
+        nativeConsoleEditor?.let { console ->
+            console.putUserData(SqlCompletionContext.KEY, ctx)
+            SqlCompletionContributor.registerContext(console.document, ctx)
+        }
+    }
+
+    /**
+     * T-DbSchemaCompletion：补全 schema 预热涉及的表——SQL 里出现的表（含 JOIN）+ 预览主表。
+     *
+     * 表名取自 [TableExtractor]（纯词法，无 PSI）；解析不到时只剩主表兜底。带别名/括号的误提取
+     * 最多导致一次未命中（现在不写负缓存，见 [DatabaseSchemaResolver.resolveFromSources]），无害。
+     */
+    private fun completionTables(result: PreviewResult?): List<String> {
+        if (result == null) return emptyList()
+        return (cn.song.mybatisplus.visualizer.sql.extract.TableExtractor.extract(result.sql) +
+            listOfNotNull(result.tableName))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+    }
+
+    /**
+     * T-DbSchemaCompletion：后台预热「本文档涉及的表」的数据源 schema，完成后刷新补全上下文。
+     *
+     * 快照判据与 T-Perf-09 的 JOIN 富化同款（`current === result` 才应用）——新预览打开即作废迟到结果。
+     * 数据源未连接时 `getModel()` 为 null → 解析 0 张且不留负缓存，控制台就绪（数据源已连）时会经
+     * [onNativeEditorReady] 再触发一次，覆盖「预览早于建连」的窗口（真机日志实证该窗口存在）。
+     *
+     * 补全热路径不做任何遍历：本方法只在后台把结果填进 [DatabaseSchemaResolver] 缓存，
+     * 之后 [buildCompletionContext] 只读缓存（T-Perf-09 红线）。
+     */
+    private fun prefetchSchemaForCompletion(result: PreviewResult) {
+        val proj = project ?: return
+        val tables = completionTables(result)
+        if (tables.isEmpty()) return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val resolved = runCatching {
+                cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.prefetchTables(proj, tables)
+            }.getOrDefault(0)
+            com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                .info("[T-DbSchemaCompletion] schema 预热: tables=${tables.size}, resolved=$resolved, list=$tables")
+            if (resolved == 0) return@executeOnPooledThread
+            ApplicationManager.getApplication().invokeLater {
+                if (current !== result || project?.isDisposed == true) return@invokeLater
+                refreshCompletionContext()
+            }
+        }
     }
 
     /** 由当前预览结果构造补全上下文（表名/列名/注释；M16.2 抽为复用函数，Editor 与 PSI 同源）。 */
@@ -1550,6 +1606,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         tableComment = current?.tableComment,
         // T-M27.4：联表候选表（XML 预览经 resolveXml 注入；预览补全表名候选）
         candidateTables = current?.candidateTables.orEmpty(),
+        // T-DbSchemaCompletion：数据源 schema 列（库里存在而实体类没有的列也是候选）。
+        // 只读预热缓存（columnsCached 不触发遍历）；未预热/无数据源时空 Map = 改动前语义。
+        schemaColumns = cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
+            .columnsCached(project, completionTables(current)),
     )
 
     /**
