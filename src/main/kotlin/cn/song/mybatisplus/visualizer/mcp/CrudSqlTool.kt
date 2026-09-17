@@ -23,6 +23,9 @@ import com.intellij.psi.search.GlobalSearchScope
  * `CrudSqlGenerator.generate`（零 PSI 纯生成，无主键降级 `1 = 0` 占位与 IDE 口径一致）。
  * PSI 定位包 ReadAction（McpSourceLocator 同款线程模型）；**只生成不执行**。
  * 逻辑分层同 [CheckSqlTool]：[resolveSpec]/[crudOutput] 非 suspend 可测，挂起方法只做 audit 包装。
+ *
+ * 双轨别名约定（T-DmlAliasGuard，O-27）：产物 DML 目标位禁别名（约定全文见
+ * CrudSqlGenerator 类头），守卫测试 `DmlAliasGuardTest` 覆盖本链出口。
  */
 class CrudSqlTool : McpToolsetSupport("mpsv_crud_sql") {
 

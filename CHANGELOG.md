@@ -66,6 +66,8 @@
 
 ### Test
 
+- **DML 目标表禁别名防回归守卫（T-DmlAliasGuard，O-27）**：三条 SQL 生成链（crud_sql 四件套 / 回滚 SQL / MCP crud 出口）现状零别名，本守卫把不变量锁进绿灯——「别名只允许出现在查询源位（FROM/JOIN），INSERT INTO / UPDATE / DELETE FROM 目标位禁别名」（DBX 9bf52da 同款语义位约束）；MySQL/PG/达梦三方言形态覆盖，注入别名形态守卫自证必红，生成链生产行为零改动
+
 - **方言 Lab 配方一致性守卫（T-DialectLabMatrix，O-10）**：五容器配方补 healthcheck（各库官方镜像自带工具），新增 database-lab/ 国产库资产（达梦/金仓官方 tar 取得路径 + load 脚本 + 示例片段 + 外部实例验证命令样例）；DockerComposeLabConsistencyTest 不起 Docker 即可校验配方四硬约束（钉版本/端口避让/必填 env/healthcheck）与文档一致性，漂移自证三例。国产库真实容器验证维持「环境受限未验证」诚实口径
 
 ### Fixed

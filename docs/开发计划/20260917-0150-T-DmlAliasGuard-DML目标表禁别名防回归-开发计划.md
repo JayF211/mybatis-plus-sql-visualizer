@@ -56,4 +56,9 @@ T-DG-01（守卫测试）→ T-DG-02（约定成文）→ T-DG-03（文档回填
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+**已实施（2026-09-17，dev 分支随「2.2 五计划 + T-PerfSweep4 + 尾巴项」批次）**：
+
+- **T-DG-01**：新增 `generator/DmlAliasGuardTest` 4 用例——①crud 四件套（含逻辑删除变体，`CrudStatement.result.sql` 最终渲染形态）× MySQL/PG/达梦三方言目标位无别名；②RollbackSqlGenerator 三路产物（INSERT→DELETE / UPDATE / DELETE 的 statements + countCheckSql + snapshotSelectSql）无别名；③SELECT 源位（FROM/JOIN 含子查询源）不受约束（未来加别名属新决策）；④守卫有效性自证——INSERT/UPDATE/DELETE 目标位注入 `AS x`（大小写两形态）必红。判定内核：空白归一 + 目标位正则（含引号标识符形态）+ 目标 token 后 `\s+AS\s+\w` 检出，断言不变量非产物逐字节。
+- **T-DG-02**：双轨约定成文三处——`CrudSqlGenerator` 类头（约定全文：别名只允许查询源位 FROM/JOIN，DML 目标位禁别名，INSERT 目标不收别名、UPDATE/DELETE 目标别名是部分方言语法错）、`RollbackSqlGenerator` 类头（产物现状零别名 + 引用主约定）、`CrudSqlTool` 类头（MCP 出口覆盖登记）。
+- **T-DG-03**：CHANGELOG [Unreleased] Test 行、变更记录行、第六轮报告 §8 状态回填（随批次统一落）。
+- 生产行为零改动（只加测试与注释）；门禁：DmlAliasGuardTest 定向绿；全量随批次终门禁。

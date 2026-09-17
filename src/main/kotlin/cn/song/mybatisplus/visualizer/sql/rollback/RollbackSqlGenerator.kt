@@ -43,6 +43,11 @@ import net.sf.jsqlparser.statement.update.UpdateSet
  * 复用 `SqlTypeClassifier`（isQuery/getFirstKeyword）的调用方保持不变。
  *
  * 零 PSI / 零 IDE 依赖（仅 JSqlParser + SqlCommentStripper），普通 JUnit 可直接覆盖。
+ *
+ * 双轨别名约定（T-DmlAliasGuard，O-27）：**别名只允许出现在查询源位（FROM/JOIN），DML
+ * 目标位（INSERT INTO / UPDATE / DELETE FROM 后紧跟的表名）禁别名**——本链产物（DELETE
+ * 回滚/重插模板/COUNT 自查/快照 SELECT）现状零别名，未来重构引入别名先撞
+ * `DmlAliasGuardTest` 红灯（约定全文见 CrudSqlGenerator 类头与计划 20260917-0150）。
  */
 object RollbackSqlGenerator {
 
