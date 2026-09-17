@@ -62,7 +62,7 @@ flowchart LR
 |---|---|---|
 | 补充 `pluginIcon_dark.svg` | 目前只有亮色图标（`META-INF/pluginIcon.svg`）；dark 候选图在 `src/main/resources/icons/candidates/pluginIcon_dark.svg`，启用它或换正式图 | P1 |
 | 检查插件包内是否混入无关文件 | 官方：不要把库重打包进主 jar（Plugin Verifier 会误报）；本插件运行时零第三方依赖，风险低 | P2 |
-| 确认 jar 内 changeNotes | `patchPluginXml.changeNotes` 已显式配置（build.gradle.kts），Marketplace 页面的 What's new 取自上传 zip | ✅ |
+| 确认 jar 内 changeNotes | 内容源 `gradle/plugin-change-notes.html` 经 `patchPluginXml` 注入（T-BuildScriptSplit 起外置），Marketplace 页面的 What's new 取自上传 zip | ✅ |
 | README 补 Marketplace 安装说明 | 可选；README 已有功能/触发方式说明 | P3 |
 | 决定 Marketplace 页面截图 | 推荐 1200×760，展示预览弹窗/日志面板实际效果 | P1（上传表单需要） |
 
@@ -357,7 +357,7 @@ flowchart TD
 □ 1. 测试全绿：./gradlew testShards
 □ 2. 兼容门禁：./gradlew verifyGate（三目标，离线；日常档 verifySmoke / -PverifyIdes=minimal）
 □ 3. 发行包：./gradlew buildPlugin，产物 zip 内容核对（无测试类/无关依赖）
-□ 4. 版本号已递增（YYYY.M.D），patchPluginXml.changeNotes 已更新
+□ 4. 版本号已递增（YYYY.M.D），gradle/plugin-change-notes.html 已更新（新 <h2> 块置顶）
 □ 5. GitHub 镜像仓库存在且已同步（git push github master）
 □ 6. Gitee Release 已建，zip 已附
 □ 7. update.json 已生成（writeUpdateManifest）+ changeNotes 人工补充 + 双推

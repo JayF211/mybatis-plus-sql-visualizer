@@ -3,17 +3,22 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
-> **全局备份**：`~/.zcode/cli/memories/global/`（85 个通用文件）
-> **项目记忆**：保留 27 个核心文件 + MEMORY.md 索引（第十次精简后）
+> **全局备份**：`~/.zcode/cli/memories/global/`（94 个通用文件）
+> **项目记忆**：保留 28 个核心文件 + MEMORY.md 索引（第十一次精简后）
 
 ---
 
-## 已修复 Bug（154 个）
+## 已修复 Bug（159 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [project-m55-ultra-absorb.md](bug-fixes/project-m55-ultra-absorb.md) | M55 Ultra 精华融合四子任务交付 dev（20260917，9b33f56/83dc61a/41a13a3/6766040，log 包 1034 用例绿）：01 跳转 mapper XML 双菜单/02 报错同列/03 方法聚焦页签/04 请求聚焦；标记行 3~5 段格式演化由 M56 T-M56-00 提前交付（消费端缺口才是 M55 本体）；含 Ultra 官方素材 UI 时代定案与 M56 agent 路线决策史；真机走查四项留人工（续踪 project-pending-plans） |
+| [t-exec-doc-sync.md](bug-fixes/t-exec-doc-sync.md) | T-ExecDocSync 执行文件 File Cache Conflict 根治（master a7ca191，4180/0/6 绿）：旧 BGT 预热 document 分支每炸必裸写兜底=真机弹窗链本体；两条 262 Document API 硬发现（isModified 移除/setText BGT EDT-only）已升全局 pitfall-document-bgthread-edt-only；尾款（CHANGELOG 条目+真机走查三条）在 project-pending-plans 续踪 |
+| [t-inparamrec.md](bug-fixes/t-inparamrec.md) | T-InParamRec IN 字面量 SQL 预览参数未识别（master d98e4e9，全量门禁绿）：根因=字面量 SQL 零绑定行+LogEntryPreviewOpener 独立分支漏接 literalRecovery；三预览入口收编 toPreviewResult 统一通道；教训=多入口能力收编须 grep 全部调用点 |
+| [t-log-sort-modes.md](bug-fixes/t-log-sort-modes.md) | T-LogSortModes 日志列表排序方式选择器（aaecc79，取代耗时双态按钮）：默认时间升序=捕获顺序、选择器恒可见、空值双向沉底、时间口径跟显示时间源；Kotlin 下 DefaultComboBoxModel 无 List 构造器 |
+| [t-agent-source-jump.md](bug-fixes/t-agent-source-jump.md) | T-AgentSourceJump 增强捕获源码跳转修正（edb053e+三项收口 a496abb）：框架帧黑名单漏收 PageHelper 致误选插件帧→JAR 来源过滤+前缀补齐+候选帧 cands+fat jar 安全网；行数语义写反致「(-1 rows)」；(⚡增强) 角标按用户要求移除勿再加；耗时排序改结构化优先 |
 | [t-agent-dialect-loop.md](bug-fixes/t-agent-dialect-loop.md) | T-AgentDialectLoop 字节码增强全方言与日志时间闭环（M56 分支 564356b/e3603c1，20260916，agent 24 绿+主项目 4223/0/0/6 绿）：url 全链透传+目标库角标（JdbcUrlDialects 独立映射禁走 byName 未知回退 MySQL）+接管期日志时间嗅探回填（LogTimeCorrelator 512 FIFO 指纹）+JdbcTemplateLogParser 热点正则提常量；三沉淀=URLClassLoader 父优先遮蔽织入字节致测试空真（须子优先 loader，硬验收在 AttachGateTest）、测试保存值「finally 现读」还原恒失败串染后续类、LogSqlEntry 加构造字段陈旧产物劫持第八犯 |
 | [m37-series-closure.md](bug-fixes/m37-series-closure.md) | M37 竞品融合系列（P-立项-06）全章闭环核实（20260916，无待办）：M37.1/2/3 均 cherry-pick 移植进 master（新 SHA 25367457/ba303301，dev 原 SHA 不被 --contains 命中）；M37.4 Wrapper→测试资产生成实施后整体下线定案（静态骨架价值不足，重做方向=接真实测试框架）；M37.5 Flex 调研暂缓+M38 吸收已落地（锚点负例回归+81 场景金样修 6 个 MP 语义误报） |
 | [t-panorama-audit.md](bug-fixes/t-panorama-audit.md) | 全分支功能全景审计与长期演进（报告+四计划，master 93fe604/322ecfb，20260916）：八域资产×用户可见性，结论=功能深度过剩引导深度不足、短板全在第一次接触；立项 T-UxOnboard/T-ExplainIndex/T-BranchHygiene/T-PerfSweep3；K2J 线只有成本没进展（O-24 决策挂起）；N-20/N-21 市场动作随 N-17 窗口 |
@@ -256,10 +261,16 @@
 | [project-m54-perf-redline-audit](bug-fixes/project-m54-perf-redline-audit.md) | M54 性能红线全面治理 24 任务交付（perf/redline-hardening 28 提交，2026-09-05，**已合 dev**）——禁卡死/禁拖慢/禁 ERROR 弹窗：LOG.error 与 ERROR 通知清零、3084 用例 0 失败；实施偏差 4 项备忘（T-Perf-23 正则 13/17、T-Perf-13 探针门控、T-Perf-18 URL 键、T-Perf-20 通知替代 HintManager）；真实防抖待 runIde 真机 |
 | [project-log-jump-no-wrapper-rootcause](bug-fixes/project-log-jump-no-wrapper-rootcause.md) | SQL 日志右键跳转「未找到表对应 Wrapper」根因（2026-09-02 分析，**已随 T-ServiceChainSearch/O-6 修复**）——事后搜索 Wrapper 本质不可靠（仅静态工厂不含 IService 链），正解=F-44-7 SqlSourceInterceptor 执行时注入源码位置，含方案 A 实施全程 12 个编译/运行陷阱 |
 
-## 已解决踩坑（59 个）
+## 已解决踩坑（65 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [pitfall-speedsearch-cards-hidden.md](pitfalls/pitfall-speedsearch-cards-hidden.md) | ListSpeedSearch 构造于 CardLayout 隐藏卡仅对可见列表生效——已修复（5b0e2c3 安装移出共享父类 init、切卡可见后按需装+守卫标志）；单参 getSupply headless 恒 null、断言用两参 getSupply(comp,true) |
+| [pitfall-speedsearch-highlight-renderer.md](pitfalls/pitfall-speedsearch-highlight-renderer.md) | speed search 匹配高亮是渲染器职责（SpeedSearchUtil.applySpeedSearchHighlighting；setDynamicSearchMatchHighlighting 不存在被编译证伪）——已落码（f65d9ae）归档 |
+| [pitfall-dual-end-protocol-roundtrip-gap.md](pitfalls/pitfall-dual-end-protocol-roundtrip-gap.md) | 双端协议往返缺口：手写序列化↔对端解析两端各自绿、合流即断（Jsons.writeEvent 首成员逗号）——已修+JsonsEventFormatTest 格式守卫；教训=手写序列化器必配格式守卫与往返用例、静默丢弃点必打日志 |
+| [pitfall-jdbc-execute-rows-semantics.md](pitfalls/pitfall-jdbc-execute-rows-semantics.md) | JDBC execute() 返 true=首结果 ResultSet（getUpdateCount -1 是哨兵）、返 false 才是更新计数——条件写反致 SELECT 显示「(-1 rows)」已修；负值转 null（0 合法须显示）、四态测试 |
+| [pitfall-mermaid-node-id-collision.md](pitfalls/pitfall-mermaid-node-id-collision.md) | Mermaid 节点 ID 作用域是单张图，边引用未定义 ID 静默造孤立节点不报错——改图前先 grep 当前图节点边集，勿凭通读记忆连边 |
+| [pitfall-test-fixture-shape-mismatch.md](pitfalls/pitfall-test-fixture-shape-mismatch.md) | 测试夹具形态不一致假绿三例（结构化字段 vs 文本解析/替身可访问性/单端协议断言）——教训已收编项目记忆 project-test-conventions fixture 节 |
 | [pitfall-settings-tree-order-locale.md](pitfalls/pitfall-settings-tree-order-locale.md) | 设置树同级排序缺 groupWeight 时中英文子页顺序随语言漂移（中文码点序实证）；修复=plugin.xml 子页显式递减 groupWeight（6177b17）+结构守卫测试；诊断路线=本机 IDEA lib jar 反编译+243 sources jar |
 | [idea-plugin-url-marketplace-only.md](pitfalls/idea-plugin-url-marketplace-only.md) | idea-plugin 根元素 @url 属性在 IDE 插件列表零消费（262 全量扫描实证），展示位仅在 Marketplace 插件页 Homepage（api/plugins/33633 已收录）；想在 IDE 露出官网走 listing 的 Documentation URL；含常量池方法引用扫描法（类名方法名分开 UTF8 不能拼串 grep） |
 | [pitfall-gradle-user-properties-override](pitfalls/pitfall-gradle-user-properties-override.md) | 用户级 `~/.gradle/gradle.properties` 按优先级（GRADLE_USER_HOME > 项目根）**静默覆盖**项目 gradle.properties 的 `org.gradle.caching`/`jvmargs`——项目「关闭 build cache」空转一整天（`5 from cache` 才暴露），修复=落 settings.gradle.kts `buildCache { local { isEnabled = false } }`（T-TestPerf2 实证） |
@@ -321,7 +332,7 @@
 
 ---
 
-## 全局通用记忆（85 个）
+## 全局通用记忆（94 个）
 
 > 已复制到 `~/.zcode/cli/memories/global/`，跨项目复用。
 
@@ -339,13 +350,15 @@
 
 **第九次精简升级（2026-09-15，1 个）**：pitfall-edt-slowops-coldpath（SlowOperations 断言仅 EDT 生效、allowSlowOperations 逃生舱 243+262 双重证伪禁再试、线程归位两段式）
 
+**第十一次精简升级（2026-09-17，9 个）**：pitfall-github-push-ghfast-rewrite（push 被 ghfast.top 重写挡：https://&lt;login&gt;@github.com 形态+git -c http.proxy；GCM 标签≠实际 login）/ pitfall-msys-leading-slash-arg-mangling（Git Bash 首斜杠正则参数被 MSYS 改写，改 awk/-e）/ pitfall-proxy-upstream-dead-nonproxyhosts（gradle 代理上游死，-Dhttp.nonProxyHosts="*" 直连绕过）/ pitfall-subagent-parallel-rate-limit（4 路并发子代理触发 1302 限流，上限 ≤3；互读在途产物假告警）/ pitfall-kotlin-nested-block-comment（注释写字面 /* 开嵌套吞成员）/ pitfall-reflect-jdk-internal-class-access（反射 package-private 实现类按声明类可见性检查抛异常，改接口 cast）/ pitfall-http-error-body-swallowed（HttpRequests readString 丢 4xx 正文+myGzip 自动协商 gzip 手写读取不解压）/ pitfall-no-image-input-ocr-fallback（无图模型三视觉通道全断→PS CopyFromScreen 截屏+tesseract OCR 坐标路线）/ pitfall-document-bgthread-edt-only（262 Document.isModified 移除+文件 document setText BGT 硬抛 EDT-only，BGT 改文档唯一路线=派 EDT）
+
 ---
 
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 28（含 MEMORY.md） |
-| 全局记忆 global/ | 85 |
-| 归档 archive/ | 216（bug-fixes 154 + pitfalls 59 + methodology 1 + user-context 1 + README） |
-| **合计** | **329** |
+| 项目 memory（保留） | 29（含 MEMORY.md） |
+| 全局记忆 global/ | 94 |
+| 归档 archive/ | 227（bug-fixes 159 + pitfalls 65 + methodology 1 + user-context 1 + README） |
+| **合计** | **350** |

@@ -1,0 +1,179 @@
+<h2>v2026.9.18-beta.4</h2>
+<ul>
+    <li>增强捕获升级为默认通道，条目显示目标库、原始时间与真实耗时/影响行数</li>
+    <li>增强捕获源码跳转定位修正</li>
+    <li>三条控制台日志链路并发分桶配对修复</li>
+    <li>JdbcTemplate 集合参数方括号误入 SQL 修复</li>
+    <li>批量错误报告合并为单个弹窗</li>
+    <li>日志原始时间记录与显示切换、历史页格式跟随设置</li>
+    <li>日志列表行号/时间搜索 + 原生 SpeedSearch</li>
+    <li>日志列表新增「排序方式」选择器</li>
+    <li>SQL 历史页元信息顺序统一</li>
+    <li>模态轻提示改为平台通知</li>
+    <li>右键菜单与弹层改用原生组件</li>
+    <li>JOIN 图与历史导航按钮行迁原生工具栏</li>
+    <li>加载态与占位符接原生组件</li>
+    <li>界面配色统一跟随平台主题</li>
+    <li>IN 字面量 SQL 预览参数未识别修复</li>
+    <li>增删改语句源码位置捕获修复</li>
+    <li>IN 列表全量竖向排列</li>
+</ul>
+<h2>v2026.9.14</h2>
+<ul>
+    <li>SQL 列表 CRUD 类型颜色标记</li>
+    <li>gutter 左键直接预览与最近执行反查</li>
+    <li>真实 EXPLAIN 执行计划</li>
+    <li>错误与反馈一键上报官网需求池</li>
+    <li>SQL 列表三种显示模式</li>
+    <li>更多 ORM 预览支持</li>
+    <li>大日志列表性能优化</li>
+    <li>实体类与数据库表右键生成 CRUD SQL</li>
+    <li>SQL 预览字段列表自动折叠</li>
+    <li>全选全不选双按钮合一为状态切换按钮</li>
+    <li>SQL 列表多选批量复制</li>
+    <li>多模块注入勾选选择</li>
+    <li>插件市场内部 API 整改</li>
+    <li>执行计划首点结果缺失修复</li>
+    <li>报告提交失败原因可见与多条错误合并上报</li>
+    <li>设置页子项顺序随语言漂移修复</li>
+    <li>SQL 转 Java 选类重渲染异常逃逸修复</li>
+    <li>MPJ 括号条件反向转换退化修复</li>
+    <li>262 预览控制台静默挂载失败修复</li>
+</ul>
+<h2>v2026.9.11</h2>
+<ul>
+    <li>自更新免重启热替换</li>
+    <li>SQL 历史页参数识别丢失根治</li>
+    <li>无占位符 SQL 字面量参数恢复</li>
+    <li>262 平台热替换探测失败回退修复</li>
+    <li>更新通知入口去重与卸载警告缓解</li>
+</ul>
+<h2>v2026.9.10</h2>
+<ul>
+    <li>双击日志预览弹窗加载卡顿根治</li>
+    <li>预览打开 EDT 读权限断言刷屏全库排雷</li>
+    <li>Hibernate 双份日志参数分裂根治</li>
+    <li>竖向排列 VALUES 行尾列名标注配置项 + IN 列表展开阈值</li>
+    <li>预览顶部元信息压按钮行修复</li>
+    <li>执行 SQL 首次静默不执行修复 + 预览显示模式持久化</li>
+    <li>更新检查版本比较改用 IDEA 内置比较器</li>
+    <li>SQL 日志列表行号两处续修</li>
+</ul>
+<h2>v2026.9.9</h2>
+<ul>
+    <li>SQL 日志列表增加行号：会话内捕获序号，项目启动清零</li>
+    <li>预览刷新后内嵌 Database 丢失根治：多弹窗僵尸监听抢共享控制台</li>
+    <li>执行临时文件失败可见化 + 复制错误信息按钮对号反馈</li>
+    <li>预览点击侧边栏闪烁根治：日志重放守卫 + EDT 慢操作消解</li>
+    <li>三处弃用 API 换现代等价物：三平台兼容性报告再收敛</li>
+    <li>单击预览四轮优化：编辑器高亮与列表同色 + 可编辑焦点修复</li>
+    <li>单击预览复制按钮点击换对号反馈</li>
+    <li>双击预览无数据源时不再抢占侧边栏</li>
+    <li>2026.2 平台兼容性修复：插件市场发布受阻解除</li>
+    <li>发现 SQL 自动打开日志窗口假开关复活</li>
+    <li>dev 已修转换语义/定位误报/导入导出反馈批量移植</li>
+    <li>INSERT 租户列子开关接线 + 关闭工具窗停止监听开关转正</li>
+    <li>启动项目清除自动展开会话抑制</li>
+</ul>
+<h2>v2026.9.8</h2>
+<ul>
+    <li>SQL 日志列表 EDT 冻结 16 秒根治</li>
+    <li>SQL 列表悬停卡顿改单击预览：SQL 高亮可编辑编辑器，临时改字段值再复制</li>
+    <li>多行 JdbcTemplate 日志漏捕获修复</li>
+    <li>SQL 日志去重失效 + MP 分页计数误标双根因修复</li>
+    <li>SQL 日志双击预览平台断言硬抛崩溃修复</li>
+    <li>自研 DAO 字符串 SQL 预览 + 方法定义处锚点贯通</li>
+    <li>「项目启动时自动开始监听」联动失效与手动停止后永不自动捕捉修复</li>
+    <li>设置页缓存信息恒 0 B 修复</li>
+</ul>
+<h2>v2026.9.4</h2>
+<ul>
+    <li>JdbcTemplate / NamedParameterJdbcTemplate SQL 字符串源码预览</li>
+    <li>JOIN 图换用 IDEA 原生图框架</li>
+    <li>JOIN 图渲染对齐 Database 原生显示图</li>
+    <li>JOIN 图 B 路径：直接内嵌 Database 原生显示图 + 虚拟外键 JOIN 线</li>
+    <li>非 Wrapper 预览快捷键贯通 + @NamedQuery 实体级预览</li>
+    <li>SQL 日志列表 EDT 冻结修复 + 自动保存历史 SQL 无限递归修复</li>
+    <li>SqlFormatter 关键字分派修复 + SQL 预览关键字选择粘连修复</li>
+</ul>
+<h2>v2026.9.2</h2>
+<ul>
+    <li>SQL 预览面板原生 Database 控制台内嵌</li>
+    <li>SQL 预览原生语法高亮 + 智能补全</li>
+    <li>JPA/Hibernate：HQL 关联字段解析 + Hibernate XML 映射支持 + maintainPage XML 预览</li>
+    <li>SQL 日志合并主侧边栏 + 精确跳转源码 + 自动保存历史 + 两级导航</li>
+    <li>JOIN 关系图自绘 Swing 引擎</li>
+    <li>Spring JdbcTemplate SQL 日志捕获</li>
+    <li>设置页左侧树导航 + 折叠面板 + 搜索过滤</li>
+</ul>
+<h2>v2026.8.21</h2>
+<ul>
+    <li>JPA/Hibernate SQL 预览支持</li>
+    <li>Hibernate/JPA SQL 日志捕获支持</li>
+    <li>SQL→Java 反向子查询 JOIN 解析 + MConsumer 形态</li>
+    <li>JPA 分页修复（Pageable → LIMIT）+ @Query 路由优先</li>
+    <li>JPQL IN 子句三层修复 + 复制时剥离注释</li>
+</ul>
+<h2>v2026.8.20</h2>
+<ul>
+    <li>参数导入交互体验升级</li>
+    <li>内存泄漏修复（面板 Disposer 树注册）</li>
+    <li>SQL 监听手动启动无需等待项目运行 + 解析兼容前缀与 SQL 分行形态</li>
+    <li>插件自更新静默失败修复</li>
+    <li>SQL→Java 调用类校验+ 当前打开类智能识别</li>
+    <li>MPJ 工厂链 selectAll 双图标修复</li>
+    <li>IN 子句参数多值回填 + 关键字换行格式化</li>
+    <li>ReadAction.compute 废弃 API 修复</li>
+</ul>
+<h2>v2026.8.19</h2>
+<ul>
+    <li>废弃API全量清理 + 插件更新机制修复</li>
+    <li>IService 内置 CRUD 方法预览支持无 Entity 后缀实体类</li>
+    <li>功能截图替换 + Marketplace Custom Page</li>
+</ul>
+<h2>v2026.8.18</h2>
+<ul>
+    <li>监听启动时机修正</li>
+    <li>关闭工具窗口时停止监听设置生效</li>
+    <li>SQL 日志列表改为正序 + 工具栏捕捉按钮状态实时刷新</li>
+    <li>项目停止后监听不关闭修复</li>
+    <li>第一条 SQL 丢失修复 + 手动停止后重启不再自动开启</li>
+    <li>SQL→Java 联表反向转换修复</li>
+    <li>invocationHasMpj 接口继承 + 泛型超类型误判修复</li>
+    <li>selectAs 字符串联接 + VO-only + VO 属性方法引用修复</li>
+    <li>实体选择弹窗唯一推断时跳过+ notificationGroup schema 报错修复</li>
+</ul>
+<h2>v2026.8.17</h2>
+<ul>
+    <li>SQL→Java 生成代码三改进</li>
+    <li>调用方法按调用类真实 API 选择</li>
+    <li>UPSERT 按方言渲染与反向分页宽容</li>
+    <li>日志五项修复</li>
+    <li>三处图标统一优化 + 功能截图 5 张入库</li>
+    <li>SQL→Java 右键预览高亮 + 快捷键可配置</li>
+    <li>SQL→Java 调用形态按 MPJ 1.5.6 实证重写 + 性能修复</li>
+    <li>手动选择实体类 + AUTO 形态 @TableName 反查 + ? 占位符反向识别</li>
+</ul>
+<h2>v2026.8.16</h2>
+<ul>
+    <li>SQL 日志工具窗口 + SQL→Java 双向转换</li>
+    <li>反向联表修复</li>
+    <li>invocationHasMpj 接口继承 + 泛型超类型误判修复</li>
+    <li>实体选择弹窗唯一推断时跳过 + notificationGroup schema 报错修复</li>
+</ul>
+<h2>v2026.8.15</h2>
+<ul>
+    <li>XML + 注解动态 SQL 预览引擎</li>
+    <li>更新链路全面兼容</li>
+    <li>SQL→Java 反向 ? 占位符识别缺陷修复</li>
+</ul>
+<h2>v2026.8.14</h2>
+<ul>
+    <li>官方 API 全覆盖 + 批量参数增强</li>
+    <li>SQL→Java 反向转换增强 + 方言全兼容</li>
+</ul>
+<h2>v2026.8.13</h2>
+<ul>
+    <li>首发版本：MP SQL 预览弹窗 + Gutter 图标 + 工具窗口</li>
+    <li>基础正向渲染 + 历史参数召回</li>
+</ul>

@@ -399,17 +399,12 @@ object DataSourceSelector {
             if (consoleVf != null) {
                 @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
                 com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
-                    val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager
-                        .getInstance().getDocument(consoleVf)
-                    when {
-                        fileDoc != null && fileDoc.text != sql -> {
-                            fileDoc.setText(sql)
-                            com.intellij.psi.PsiDocumentManager.getInstance(project).commitDocument(fileDoc)
-                        }
-                        fileDoc != null -> com.intellij.psi.PsiDocumentManager.getInstance(project)
-                            .commitDocument(fileDoc)
-                        fileDoc == null -> consoleVf.setBinaryContent(sql.toByteArray())
-                    }
+                    // T-ExecDocSync2 F1：同步收口为 writeVfTextViaDocument（T-EC-01 语义超集：
+                    // setText-if-differ + commit + saveDocument；fileDoc==null 走 setBinaryContent）。
+                    // 原实现只 commit 不落盘——console document 即 exec 文件 document（attachConsole
+                    // 挂载点同文件），滞留「已修改未保存」+ 窗口期任意外部改盘 + VFS refresh =
+                    // File Cache Conflict 弹窗（第四轮根因 G2，开发计划 §1.2）
+                    writeVfTextViaDocument(project, consoleVf, sql)
                 }
                 // M36.5.24g：dumb 退出后重建（同 prepareInConsole）
                 val consoleForModel = console
@@ -906,6 +901,22 @@ object DataSourceSelector {
                                         ?: return@runCatching
                                 ) {
                                     consoleDoc.setText(currentSql)
+                                    // T-ExecDocSync2 F3：同临界区落盘——console document 即 exec 文件
+                                    // document（attachConsole 挂载点），只 setText 不落盘滞留
+                                    // 「已修改未保存」窗口（第四轮根因 G4，开发计划 §1.2）。
+                                    // 落盘失败不回滚改写本身（显示优先），仅记录
+                                    runCatching {
+                                        val p = console.javaClass.getMethod("getProject").invoke(console)
+                                            as? com.intellij.openapi.project.Project
+                                        if (p != null) {
+                                            com.intellij.psi.PsiDocumentManager.getInstance(p)
+                                                .commitDocument(consoleDoc)
+                                            com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+                                                .saveDocument(consoleDoc)
+                                        }
+                                    }.onFailure { e ->
+                                        LOG.warn("[M36] contentAdded post-rewrite save FAILED: ${e.message}")
+                                    }
                                 }
                                 // 光标移到文档开头（用户体验：能立即看到第一条 SQL）
                                 runCatching {
@@ -1334,18 +1345,9 @@ object DataSourceSelector {
                     val consoleText = (document as com.intellij.openapi.editor.Document).text
                     @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
                     com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
-                        val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager
-                            .getInstance().getDocument(consoleVf)
-                        when {
-                            fileDoc != null && fileDoc.text != consoleText -> {
-                                fileDoc.setText(consoleText)
-                                com.intellij.psi.PsiDocumentManager.getInstance(project)
-                                    .commitDocument(fileDoc)
-                            }
-                            fileDoc != null -> com.intellij.psi.PsiDocumentManager.getInstance(project)
-                                .commitDocument(fileDoc)
-                            fileDoc == null -> consoleVf.setBinaryContent(consoleText.toByteArray())
-                        }
+                        // T-ExecDocSync2 F2：同 F1 收口——commit 后补 saveDocument，console document
+                        // 不再滞留「已修改未保存」（第四轮根因 G3，开发计划 §1.2）
+                        writeVfTextViaDocument(project, consoleVf, consoleText)
                     }
                     // M36.5.24g：fresh 构造 + set 移入 DumbService.runWhenSmart——22:30 实证：
                     // attachConsole 后 SqlDialectPusher 的 dumb task（58.443 运行 → 58.714 exit）
@@ -3014,6 +3016,17 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         // mpsql-exec.sql 路径稳定，vf 仍有效时直接复用配对缓存，把
         // WorkspaceFileIndex.ensureIsUpToDate 的 SEVERE 断言移出每次预览的热路径。
         consumeCachedTempPsiFile(project)?.let { return it }
+        // T-ExecDocSync2 F4：refresh 前强制收敛——写点之后、refresh 之前若被用户键入/其他写方
+        // 插入（doc modified-unsaved + 磁盘≠文档），refresh 恰会命中 MemoryDiskConflictResolver
+        // 弹窗条件；findFileByIoFile（与 projectExecFile 内裸调同形态）命中即过一遍分叉探测 +
+        // EDT 派发 doc 写收敛，正常恒 no-op。详见 prewarmExecTempFileInner 同款注释。
+        try {
+            LocalFileSystem.getInstance().findFileByIoFile(ioFile)?.let { vf0 ->
+                syncExecVfContentIfNeeded(project, vf0, sql)
+            }
+        } catch (e: Throwable) {
+            return fail("preRefreshConverge", "${e.javaClass.simpleName}: ${e.message}")
+        }
         // T-ExecCopyFix F2b：refresh 段包 WriteIntentReadAction（详见方法 KDoc）；
         // mapDialect 与 findFile 维持原线程原语义（setMapping 须 EDT；findFile 沿用
         // ReadAction.compute 既有包装，与 T-M36.6-03 前行为一致）。
@@ -3194,6 +3207,128 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         return dispatchDocWriteOnEdt(project, vf, sql)
     }
 
+    // ------------------------------------------------------------------
+    // T-ExecDocSync2 F5/F6：执行文档防抖自动落盘 + 冲突探针（第四轮）
+    // ------------------------------------------------------------------
+
+    /**
+     * exec 文件 VFS 路径匹配（F5 自动落盘 / F6 探针共用过滤器；VFS 路径恒 '/' 分隔）。
+     * internal 供表驱动测试。
+     */
+    internal fun isExecVfPath(path: String): Boolean =
+        path.endsWith("/${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}/exec/mpsql-exec.sql")
+
+    /** 防抖窗（毫秒）——连击合并，窗内 modified-unsaved 暴露面上界。 */
+    private const val EXEC_DOC_AUTOSAVE_DELAY_MS = 1500L
+
+    /** F5 防抖调度器（daemon，不阻 IDE 退出；任务本身极轻——路径过滤后仅换句柄）。 */
+    private val execDocAutosaveExecutor =
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+            Thread(r, "mpv-exec-doc-autosave").apply { isDaemon = true }
+        }
+
+    /** F5 待执行的防抖任务（新变更到达即顶掉旧任务）。 */
+    private val execDocAutosavePending =
+        java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Future<*>?>(null)
+
+    private val execDocListenerInstalled = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** F6 探针已安装项目集（连接随项目 disposable 自动断开，此处只防重复安装）。 */
+    private val conflictProbeProjects =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<Project, Boolean>())
+
+    /**
+     * F5：应用级 document 变更监听（惰性安装一次）——exec 文档每次变更（用户在控制台手改/
+     * 插件 setText）后 1.5s 防抖自动落盘。动机：console 编辑器文档即 exec 文件 document
+     * （attachConsole 挂载点），用户手改滞留「已修改未保存」是第四轮冲突弹窗「内存中更改」
+     * 一半的唯一插件拦不到的源头；帧失活自动保存最快也要切帧才触发，防抖落盘把暴露面压到
+     * 防抖窗内。落盘方向恒 doc→disk（saveDocument），不回读不改写用户内容。
+     */
+    private fun installExecDocAutosaveListener() {
+        if (!execDocListenerInstalled.compareAndSet(false, true)) return
+        com.intellij.openapi.editor.EditorFactory.getInstance().eventMulticaster
+            .addDocumentListener(object : com.intellij.openapi.editor.event.DocumentListener {
+                override fun documentChanged(e: com.intellij.openapi.editor.event.DocumentEvent) {
+                    scheduleExecDocAutosave(e.document)
+                }
+            })
+    }
+
+    private fun scheduleExecDocAutosave(doc: com.intellij.openapi.editor.Document) {
+        val vf = runCatching {
+            com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getFile(doc)
+        }.getOrNull() ?: return
+        if (vf == null || !isExecVfPath(vf.path)) return
+        val prev = execDocAutosavePending.getAndSet(
+            execDocAutosaveExecutor.schedule(
+                { flushExecDocAutosave(doc) },
+                EXEC_DOC_AUTOSAVE_DELAY_MS,
+                java.util.concurrent.TimeUnit.MILLISECONDS,
+            ),
+        )
+        prev?.cancel(false)
+    }
+
+    private fun flushExecDocAutosave(doc: com.intellij.openapi.editor.Document) {
+        ApplicationManager.getApplication().invokeLater {
+            runCatching {
+                if (!autosaveExecDocNow(doc)) return@invokeLater
+                com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+                    .info("[M36] exec doc autosaved (debounced ${EXEC_DOC_AUTOSAVE_DELAY_MS}ms, T-ExecDocSync2 F5)")
+            }.onFailure { e ->
+                com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+                    .warn("[M36] exec doc autosave FAILED: ${e.javaClass.simpleName}: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * F5 原语：EDT 上守卫落盘——doc 无主文件/已失效/未修改即 no-op（false）；确需落盘包
+     * WriteAction saveDocument（T-EC-01 同款落盘语义）。internal 供测试。
+     */
+    internal fun autosaveExecDocNow(doc: com.intellij.openapi.editor.Document): Boolean {
+        val fdm = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+        val vf = runCatching { fdm.getFile(doc) }.getOrNull()
+        if (vf == null || !vf.isValid) return false
+        // 262：Document.isModified 已从接口移除——「已修改未保存」唯一查询是 isDocumentUnsaved
+        if (!fdm.isDocumentUnsaved(doc)) return false
+        @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
+        com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
+            fdm.saveDocument(doc)
+        }
+        return true
+    }
+
+    /**
+     * F6：冲突探针——「文件缓冲区冲突」弹窗（MemoryDiskConflictResolver）响应的是平台对修改中
+     * document 发起的 reload，reload 前平台经 FileDocumentManagerListener.beforeFileContentReload
+     * 广播（与弹窗实现同 topic，监听先后不保证，故仅取证不拦截）。exec 文件命中即落 warn 指纹
+     * （doc/vf 长度与 stamp、unsaved 态）：F1-F5 全上后若真机仍复发，idea.log 直出现场数据，
+     * 替代人工复现排查。经项目 messageBus 连接（随项目 disposable 自动断开）。
+     */
+    private fun installExecConflictProbe(project: Project) {
+        if (!conflictProbeProjects.add(project)) return
+        project.messageBus.connect(project).subscribe(
+            com.intellij.openapi.fileEditor.FileDocumentManagerListener.TOPIC,
+            object : com.intellij.openapi.fileEditor.FileDocumentManagerListener {
+                override fun beforeFileContentReload(
+                    vf: com.intellij.openapi.vfs.VirtualFile,
+                    document: com.intellij.openapi.editor.Document,
+                ) {
+                    if (!isExecVfPath(vf.path)) return
+                    val fdm = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+                    com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+                        .warn(
+                            "[T-ExecDocSync2][conflict-probe] reload-with-unsaved-doc: ${vf.path}" +
+                                ", docLen=${document.textLength}, docStamp=${document.modificationStamp}" +
+                                ", vfLen=${vf.length}, vfStamp=${vf.modificationStamp}" +
+                                ", unsaved=${runCatching { fdm.isDocumentUnsaved(document) }.getOrNull()}",
+                        )
+                }
+            },
+        )
+    }
+
     /**
      * M36.5.12：项目内执行文件路径——`<projectBase>/.idea/sql-visualizer/exec/mpsql-exec.sql`
      * （F-44-4：目录随插件更名，旧名 mybatis-plus-sql-visualizer 不再使用）。
@@ -3352,6 +3487,18 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             LOG.warn("[M36] exec prewarm writeFile failed: ${e.javaClass.simpleName}: ${e.message}")
             return
         } ?: return
+        // T-ExecDocSync2 F4：refresh 前强制收敛——projectExecFile 的 doc 写在 EDT 落盘后、本
+        // refresh 之前，用户在控制台（document 即 exec 文件 document）键入可插入 modified-unsaved
+        // 态；此时 refresh 命中「doc 已修改 && 磁盘≠文档」即弹 File Cache Conflict（第四轮残余竞态，
+        // 开发计划 §1.3）。findFileByIoFile（与 projectExecFile 内裸调同形态，prewarm DONE 日志
+        // 实证 BGT 可调）命中即过一遍分叉探测 + EDT 派发收敛，正常恒 no-op。
+        try {
+            LocalFileSystem.getInstance().findFileByIoFile(ioFile)?.let { vf0 ->
+                syncExecVfContentIfNeeded(project, vf0, sql)
+            }
+        } catch (e: Throwable) {
+            LOG.warn("[M36] exec prewarm pre-refresh converge FAILED: ${e.javaClass.simpleName}: ${e.message}")
+        }
         val vf = try {
             com.intellij.openapi.application.WriteIntentReadAction
                 .compute<com.intellij.openapi.vfs.VirtualFile?> {
@@ -3411,12 +3558,27 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         cachedTempPsiFile = vf to psi
         cachedTempPsiProjectName = project.name
         hookProjectClose(project, parentDisposable)
+        // T-ExecDocSync2 F5/F6 挂载点：exec 缓存槽建立即安装防抖自动落盘监听（应用级惰性一次）
+        // 与冲突探针（项目级一次）；非 exec 路径 vf 进不来本方法，路径过滤双保险。
+        // 安装段 runCatching 降级——探针 connect 在无 messageBus 的代理桩项目上 NPE
+        // （CachedTempPsiFileTest 全代理桩实证）；两件均为增强件，失败仅失去防抖落盘
+        // 与冲突取证，不得阻断缓存主链
+        if (isExecVfPath(vf.path)) {
+            runCatching {
+                installExecDocAutosaveListener()
+                installExecConflictProbe(project)
+            }.onFailure { e ->
+                com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+                    .warn("[M36] exec doc autosave/probe install skipped: ${e.javaClass.simpleName}: ${e.message}")
+            }
+        }
     }
 
     private fun hookProjectClose(project: Project, parentDisposable: com.intellij.openapi.Disposable) {
         if (!hookProjectsClose.add(project)) return
         Disposer.register(parentDisposable) {
             hookProjectsClose.remove(project)
+            conflictProbeProjects.remove(project)
             val cached = cachedTempPsiFile
             if (cached != null && cached.second.project == project) {
                 cachedTempPsiFile = null

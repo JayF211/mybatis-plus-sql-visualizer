@@ -4,7 +4,8 @@ VERIFIER="C:/Users/USER/.gradle/caches/modules-2/files-2.1/org.jetbrains.intelli
 PLUGIN_DIR="F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer/dev-support/verify-target"
 IDE_243="C:/Users/USER/.gradle/caches/9.7.0/transforms/cfd9113040487d86d63d9022472046cb/transformed/ideaIU-2024.3.7.1-win"
 IDE_253="C:/Users/USER/.gradle/caches/9.7.0/transforms/99985a92ea912855260eaa386f9b0240/transformed/idea-2025.3.5-win"
-IDE_262="C:/Users/USER/.gradle/caches/9.7.0/transforms/af228bcb143270d170c2bd6debbba1c3/transformed/idea-2026.2.1-win"
+# T-VerifyIde2623：动态发现替代写死 hash 目录（caches 版本号/transform hash 每次换版本都变）
+IDE_262=$(ls -d C:/Users/USER/.gradle/caches/*/transforms/*/transformed/idea-2026.2.3-win 2>/dev/null | head -1)
 
 JAVA="C:/Users/USER/.jdks/ms-17.0.19/bin/java.exe"
 

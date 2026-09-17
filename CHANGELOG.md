@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-> 已合入 master、随下一个内测版（Gitee 抢先体验通道）发行的内容，发行时本节改写为对应版本号归档。基线 v2026.9.18-beta.3（内测已发行）。
+> 已合入 master、随下一个内测版（Gitee 抢先体验通道）发行的内容，发行时本节改写为对应版本号归档。基线 v2026.9.18-beta.4（内测已发行）。
 
 ### Added
 
@@ -68,9 +68,38 @@
 
 ### Fixed
 
-- **增删改（CUD）语句源码位置捕获修复（T-AgentCudSource）**：增强捕获下只有 SELECT 查询捕获到源码位置，INSERT/UPDATE/DELETE 捕获不到。根因=`StackLocator` 调用方缓存把「无调试信息的 null 位置」也缓入（缓存键=首个非框架帧 `class#method`，主位置为 null 时候选首位顶上且可能仍为 null，随后整帧含 null 入缓存）——某调用方一旦解析出 null（CUD 常走的 MP 默认方法 / 代理中间帧无有效 file 即命中），该 `class#method` 名下所有后续语句（含 CUD）恒无源码位置且不再自愈。修复=`StackLocator` 仅缓存有效位置：主位置为 null 时候选挑非 null 顶上、候选全 null 则本次不产出位置不缓存（下次重试）。新增 `StatementSourceLocationTest` 经用户形态调用帧触发真实 CUD 执行（executeUpdate/execute），把「CUD 事件 sourceFile 必指向用户栈帧」锁进绿灯。顺带盘清方言与增强的关系：采集面是 JDBC 接口级、对插件全部方言（含 DM 达梦）一视同仁，唯一耦合点是 `DriverRegistry` 驱动类名单——DM 已登记 `dm.jdbc.driver.DmDriver`，「在线但零捕获」的三类诱因（驱动类名不符/加载时序晚于 retransform/loader 隐藏降级）记录在案
-- **IN 字面量 SQL 预览参数未识别修复（T-InParamRec）**：上游代码把值直接内联进 SQL 文本（非 `?` 绑定参数）时，源码跳转反查入口打开的预览不出现参数行（左栏「无未解析参数」）、值不可编辑——该入口是 M37.1 时代的独立识别实现，漏接了 T-HistParam F4 的字面量恢复能力。现与日志 tab / 历史 tab 收编同一识别通道，字面量（含 IN 列表）原位改写为可编辑参数行，改值即时生效
+- **执行文件「文件缓冲区冲突」（File Cache Conflict）第三轮根治（T-ExecDocSync，条目补落）**：执行临时文件 `mpsql-exec.sql` 弹「已在内存中和磁盘上对该文件进行更改」。根因三点：document 驱动写只改内存不落盘（滞留「已修改未保存」窗口）；WriteAction 失败兜底无条件裸写盘（绕过 document = 冲突的外部改写条件）；后台预热与 EDT 冷路径双写方不互斥。修复=document 写统一派 EDT + 同临界区落盘（setText→commit→saveDocument）+ 有已加载 document 时拒绝裸写兜底（宁内容旧一拍）+ 单写方锁串行化双写方
+- **执行文件「文件缓冲区冲突」第四轮根治——console 侧「已修改未保存」窗口清零（T-ExecDocSync2）**：第三轮收口只覆盖插件自有写点，漏了 Database 控制台侧——控制台挂载在 exec 文件本体上（控制台编辑器文档即该文件 document），复用/准备/换入链的四处文档同步只 commit 不落盘，用户手改控制台更是插件拦不到的未保存源；窗口期内任意外部改盘（git 触碰 / 双 IDE 实例）+ VFS 刷新即弹冲突，且弹窗点「保留内存更改」后自我放大。修复=四处同步统一收口为「setText→commit→saveDocument」同临界区落盘 + 两处 VFS 刷新前强制收敛 + 执行文档 1.5s 防抖自动落盘 + 冲突探针（复发时 idea.log 落现场指纹取证）
 - **DDL 执行后元数据缓存兜底失效（T-DdlPostInvalidate，O-17）**：执行前预判失效之外，执行监控三个收尾点（早检错误上报/结果呈现成功/超时收口）再兜底失效一次元数据缓存——执行过程中才出现的 DDL、预判漏判、中途结构变化等窗口全部关死；失败的 DDL 也可能已隐式提交，故成功与失败/超时都失效；失效动作幂等，全程次数有界
+
+## [2026.9.18-beta.4] - 2026-09-17
+
+> 内测版（Gitee 抢先体验通道）：基线 v2026.9.18-beta.3，本版为同日内测第四轮——界面组件全面原生化首轮落地（T-UiNative：日志/历史列表原生 SpeedSearch、模态轻提示改平台通知、右键菜单与弹层原生、JOIN 图/历史导航按钮行迁原生工具栏、原生加载态与占位符、配色跟随平台主题）+ 增删改（CUD）语句源码位置捕获修复 + IN 字面量 SQL 预览参数识别 + IN 列表全量竖向排列；内附构建脚本拆分分治（T-BuildScriptSplit）与兼容校验目标追平 IDEA 2026.2.3（T-VerifyIde2623）。
+
+### Added
+
+- **界面组件全面原生化首轮落地（T-UiNative，P0a/P0b/P1a/P1b/P2 五批次合入）**：日志主列表与历史二级 SQL 列表接入原生 `SpeedSearch`（匹配高亮与平台一致，历史二级按需可见后安装、占位文案修正）；19 处预览相关模态轻提示改平台通知（复制成功「关闭面板」动作保真）；右键菜单迁 `ActionGroup`+`ActionPopupMenu`、类型过滤弹层换 `JBPopup`（选中视觉回归平台默认，移除自定义 selection outline、类型色条保留）；JOIN 图与历史导航按钮行迁 `ActionToolbar`、SQL 捕捉开关挂工具窗标题栏（退役反射改图标 hack）；加载态与占位符接原生件（`JBLoadingPanel`/`AnimatedIcon`/`EditorEx.setPlaceholder`）；33 项写死颜色集中为 `MpvsUiColors` namedColor、设置落地页行渲染器归一 `SimpleColoredComponent`；项目级设置页迁 Kotlin UI DSL v2 试点
+- **增删改（CUD）语句源码位置捕获修复（T-AgentCudSource）**：增强捕获下 INSERT/UPDATE/DELETE 捕获不到源码位置。根因=`StackLocator` 调用方缓存把「无调试信息的 null 位置」也缓存（某调用方解析出 null（CUD 常走的 MP 默认方法/代理中间帧）后，该 `class#method` 名下所有后续语句恒无源码位置且不再自愈）。修复=仅缓存有效位置：主位置 null 时候选挑非 null 顶上、候选全 null 则本次不产出不缓存（下次重试）。新增 `StatementSourceLocationTest` 2 例经真实 CUD 执行把「CUD 事件 sourceFile 必指向用户栈帧」锁进绿灯；顺带盘清方言与增强捕获关系（采集面为 JDBC 接口级、对全部方言一视同仁）
+- **IN 字面量 SQL 预览参数未识别修复（T-InParamRec）**：上游把值直接内联进 SQL（非 `?` 绑定参数）时，源码跳转反查入口打开的预览不出现参数行、值不可编辑——该入口是 M37.1 时代独立实现，漏接字面量恢复能力。现与日志 tab / 历史 tab 收编同一识别通道，字面量（含 IN 列表）原位改写为可编辑参数行
+
+### Changed
+
+- **构建脚本拆分分治（T-BuildScriptSplit）**：`build.gradle.kts`（1073 行）分治为 buildSrc 四个 convention 插件——mpv-verification 兼容验证门禁 / mpv-testing 测试与分片 / mpv-runide 开发沙盒与热替换 / mpv-release 发版链路（块级逐字搬运、注释随迁，零逻辑改写），根脚本收口至 195 行；changeNotes 数据外置 `gradle/plugin-change-notes.html`，发版只编辑该文件。全部任务名/命令行用法/产物形态不变：plugin.xml change-notes 与数据源逐字节一致、testShards 全量 4279/0/0/6 绿、verifyGate Compatible、gifRecord 发布闸门原样生效
+- **兼容校验目标追平 IDEA 2026.2.3（T-VerifyIde2623）**：本机 IDE 升级 2026.2.3 后，verifyGate/pluginVerification「最新版本」目标自 2026.2.1 升至 2026.2.3（minimal 与全量两分支同步），门禁覆盖与用户实际运行 IDE 对齐；构建基准 2024.3.7.1（243）与 GIF 录制态 2026.2.1 均为刻意钉死项不动
+- **竖向排列 IN 列表全量逐行展开（T-VStack·InAll）**：预览「竖向排列」对 IN 列表不再按元素数分级——此后 2~4 元素短清单保持同行（2026-09-10 阈值裁定）经用户复议回退：含逗号即 ≥2 元素一律 `(` 自占一行逐元素竖排；单元素形态（`IN (1)` / `IN (?)`）无清单可对齐仍保持同行，子查询 IN 与 LIMIT 分页参数照旧不展开
+- **增强捕获确认弹窗标题与取消按钮文案**：标题补插件名前缀（`SQL Visualizer - 启用增强捕获`），Cancel 按钮走插件 bundle（原走平台 CommonBundle 跟 IDE 语言包致中英混排），补 confirm.cancel 键
+
+### Fixed
+
+- **verifyPlugin 提取失败 home 隔离修复（T-VerifierHomeIso，内附）**：1.410 与陈旧默认 home 缓存组合的提取失败，`-Dplugin.verifier.home.dir` 隔离后 fix 目标恢复（含 verifySmoke/verifyFull 两态与 2×2 矩阵注释）
+
+### Test
+
+- **T-UiNative 全链**：SpeedSearch 安装断言、SpeedSearch 匹配高亮、右键菜单迁 ActionPopupMenu、加载态/占位符、namedColor 配色、设置页 Kul UI DSL 落地页行渲染器等用例随各批次落地，全量门禁 4147 绿基线
+- **CUD 源码位置**：`StatementSourceLocationTest` 2 例（真实 executeUpdate/execute 触发、断言 sourceFile 指向用户栈帧）
+- **IN 字面量**：`InLiteralRecoveryRegressionTest` 4 例（用户实录多行 SQL 喂真实解析器：零占位符零绑定行事实钉死 / 统一通道字面量恢复产出参数行 / 开关关闭维持现状 / 按 paramHints 回填往返）
+- **IN 竖向排列**：SqlFormatterTest 反转 6 例 + 新增 2 例 + SqlPreviewPanelTest 补面板级断言
+- 本版全量 testShards（4279/0/0/6，6 跳过为 Docker）+ agent 子项目 test 绿，`verifyGate` 三目标（IU-243/253/262）Compatible
 
 ## [2026.9.18-beta.3] - 2026-09-16
 

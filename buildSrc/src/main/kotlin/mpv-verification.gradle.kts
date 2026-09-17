@@ -1,0 +1,210 @@
+import org.gradle.process.CommandLineArgumentProvider
+import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
+import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
+import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask.FailureLevel
+
+plugins {
+    id("org.jetbrains.intellij.platform")
+}
+
+// T-BuildScriptSplit：兼容验证门禁分治——块级逐字搬运自根 build.gradle.kts（锚点 dc047bd），
+// 注释随迁；验收=基线指纹比对（plugin.xml 字节/tasks 清单/分区日志行/verifySmoke 绿）。
+
+// T-M30：跨版本 API 兼容校验（官方推荐流程）——`./gradlew verifyPlugin` 对目标 IDE
+// 集合做字节码级检查（插件引用的类/方法在目标版本中必须存在）。目标 = 最低支持
+// 版本 + 中段版本 + 最新版本；首次运行下载各发行版（体积大，gradle.properties 已配代理）。
+// T-M31.1/2 提速：验证耗时与版本数线性（243≈1min / 253≈5.7min / 262≈7.5min，字节码分析不可缓存）——
+// 三态 `-PverifyIdes`：默认全量三版本（发布/里程碑）；minimal 边界 243+262（253 被两头覆盖）；
+// smoke 只 243 构建基准（约 1.5min，日常每次开发后兼容冒烟；高版本 API 移除风险由发布前全量兜底）。
+intellijPlatform {
+    pluginVerification {
+        ides {
+            // T-VerifyPlugin：从任务名推断验证模式（./gradlew verifySmoke / verifyMinimal 自动选择对应 IDE 集合）
+            val verifyIdes = when {
+                gradle.startParameter.taskNames.contains("verifySmoke") -> "smoke"
+                gradle.startParameter.taskNames.contains("verifyMinimal") -> "minimal"
+                else -> providers.gradleProperty("verifyIdes").orNull
+            }
+            when (verifyIdes) {
+                "smoke" -> create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
+                "minimal" -> {
+                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
+                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.3")
+                }
+                else -> {
+                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2024.3.7.1")
+                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2025.3.5")
+                    create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.2.3")
+                }
+            }
+        }
+        // T-M30.1：失败等级——IPGP 2.15+ 默认含 INTERNAL_API_USAGES 会失败，本项目
+        // `PluginManagerCore.getPlugin`（M28 更新功能定位已装插件）为平台 Internal API 且无公共替代
+        // （官方文档即此用法），刻意使用；报告仍生成、问题仍可见。
+        // T-ReleasePerf-01（2026-09-15）：本任务降级为「报告 + 弃用清单生成器」——兼容判定交 verifyGate。
+        // 依据（javap 反编译 IPGP 2.18.1 VerifyPluginTask，证据可复现）：
+        //   ① getOptions() 本身无缺陷，按 getOffline()/getIgnoredProblemsFile() 正确拼 CLI 参数；
+        //   ② 但 verifyOutput() → collectProblems() 的判定**完全基于控制台文本**：用
+        //      FailureLevel.getSectionHeading()（"Compatibility problems" 等小节标题）逐段切分、
+        //      pluginLinePattern = ^Plugin .*? against (\S+): 正则抓问题行，**从不读 -ignored-problems
+        //      命中的信息**——CLI 已豁免的问题在控制台仍逐行打印，于是被重新计数判失败。
+        //      这正是 dev 分支实测「同输入一次过一次挂」的机制（三轮实证）。
+        // 保留除 COMPATIBILITY_PROBLEMS 外的全部等级（当前均 0 命中，三份 verdict 实证）。
+        failureLevel = FailureLevel.entries - setOf(FailureLevel.COMPATIBILITY_PROBLEMS)
+    }
+}
+
+// Plugin Verifier 是独立子进程，systemProp 代理不自动透传——显式注入（Clash 7890）
+tasks.named<VerifyPluginTask>("verifyPlugin") {
+    jvmArgs(
+        "-Dhttp.proxyHost=127.0.0.1",
+        "-Dhttp.proxyPort=7890",
+        "-Dhttps.proxyHost=127.0.0.1",
+        "-Dhttps.proxyPort=7890",
+        // T-VerifierHomeIso（2026-09-17 master 9578ccc，本拆分合流时回植至本 convention）：
+        // verifier-cli 1.410 在缺省 home（~/.pluginVerifier）下提取插件 zip 恒败（2×2 矩阵实证：
+        // 1.410×默认home 恒败、1.410×隔离home 与 1.409×任一 home 全绿；verifyGate 走 walkTopDown
+        // 字典序实际取 1.409 故独活）。显式隔离，并与 verifyGate 共用同一 build/verify-home
+        //（同 zip 提取缓存互享，~/.pluginVerifier 污染源整类摘除）。
+        "-Dplugin.verifier.home.dir=" + layout.buildDirectory.dir("verify-home").get().asFile.absolutePath,
+    )
+    // T-ReleasePerf-01（P0-1）：离线化 + 豁免清单——本仓库此前只注入了代理，verifier 每个目标都要
+    // 联网解析该 IDE 的 bundled 插件集（daemon 日志实证：45 次运行 PluginDetailsCache
+    // hits=183/misses=64、单次 247 个插件解析），是 253/262 耗时波动的主因（历史 45 次三目标合计
+    // 最快 144s、中位 446s、最慢 740s，5 倍差）。-offline 只断 marketplace 解析，不改兼容性判定；
+    // 豁免清单只放行「永不可达」缺类（243 上 MCP 桩类型，作用域由 McpScopeSourceScanTest 守卫），
+    // 命中项在报告中仍如实留痕。
+    offline.set(true)
+    ignoredProblemsFile.set(layout.projectDirectory.file("dev-support/verifier-ignored-problems.txt"))
+}
+
+// T-ReleasePerf-05（P2-1）：权威兼容门禁——直驱 verifier-cli。
+// 为什么不让 IPGP 的 verifyPlugin 承担门禁（字节码实证见上方 failureLevel 处）：
+// 它按控制台小节标题重新计数问题行，不读 -ignored-problems 命中的豁免信息，且输出解析存在竞态
+// （dev 分支三轮实证：同输入一次过一次挂）。故门禁改由本任务直驱 CLI，判定只看退出码。
+// -offline：断 marketplace 元数据解析（历史 45 次运行里 253/262 耗时波动 138s~725s 的主因），
+//           不改兼容性判定；-ignored-problems：豁免清单见 dev-support/verifier-ignored-problems.txt。
+//
+// verifyOnly（T-ReleasePerf-04 / P1-2）：跳过 buildPlugin，直接对已存在的发行包做验证——
+// 改文案/文档后重验不必重打包（Jar 任务带 MPV-Build 时间戳，outputs.upToDateWhen{false} 恒重跑）。
+val verifyOnly = providers.gradleProperty("verifyOnly").orNull?.toBoolean() ?: false
+
+val verifyGate = tasks.register<JavaExec>("verifyGate") {
+    group = "verification"
+    description = "权威兼容门禁：verifier-cli 直驱（-offline + -ignored-problems；-PverifyIdes / -PverifyOnly）"
+    if (!verifyOnly) {
+        dependsOn("buildPlugin")
+    }
+    mainClass.set("com.jetbrains.pluginverifier.PluginVerifierMain")
+    // T-ReleasePerf-05：verifier 缓存 home 隔离——默认落在 build/verify-home，避开与其他 verify 会话
+    // 共享全局 ~/.pluginVerifier/extracted-plugins（Windows 文件锁互踩：2026-09-15 真实验证时
+    // 并行会话的 verify 占用该目录，forceRemoveDirectory 失败 exit 1；verifier 支持
+    // -Dplugin.verifier.home.dir 覆盖，javap PluginVerifierMain$verifierHomeDirectory$2 实证）。
+    // 代价=IDE 元数据缓存随 build 目录走，clean 后首次离线重建；IDE 发行本体在 gradle transforms 不受影响。
+    val verifyHome = layout.buildDirectory.dir("verify-home").get().asFile
+    jvmArgs("-Dplugin.verifier.home.dir=${verifyHome.absolutePath}")
+    // 全部路径在配置期解析为值（configuration cache 兼容：执行期不触达 project/layout）
+    val pluginVersion = providers.gradleProperty("version").get()
+    val reportsDir = layout.buildDirectory.dir("reports/pluginVerifierGate").get().asFile
+    val zipFile = layout.buildDirectory.file("distributions/mybatis-plus-sql-visualizer-$pluginVersion.zip").get().asFile
+    val ignoredFile = layout.projectDirectory.file("dev-support/verifier-ignored-problems.txt").asFile
+    val gradleUserHome = gradle.gradleUserHomeDir
+    // T-ReleasePerf-05：configuration cache 兼容——执行期 lambda 内**不得引用脚本对象**（gradle/providers）。
+    // 实测：lambda 里写 gradle.startParameter / providers.gradleProperty 会整段不可序列化（"cannot serialize
+    // Gradle script object references"），故在配置期捕获为普通值（startParameter 与属性值在配置期已确定）。
+    val invokedTaskNames = gradle.startParameter.taskNames
+    val verifyIdesProperty = providers.gradleProperty("verifyIdes").orNull
+    classpath(
+        gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
+            .walkTopDown().maxDepth(4)
+            .filter { it.isFile && it.name.matches(Regex("verifier-cli-.+-all\\.jar")) }
+            .firstOrNull() ?: error("verifier-cli jar 未在 gradle 缓存找到（先跑一次 verifyPlugin 重建缓存）"),
+    )
+    argumentProviders.add(CommandLineArgumentProvider {
+        val guh = gradleUserHome
+        fun ideDir(name: String): File =
+            guh.resolve("caches").listFiles()?.asSequence()
+                ?.filter { it.resolve("transforms").isDirectory }
+                ?.flatMap { ver -> ver.resolve("transforms").listFiles()?.asSequence() ?: emptySequence() }
+                ?.map { hash -> hash.resolve("transformed").resolve(name) }
+                ?.firstOrNull { it.isDirectory }
+                ?: error("IDE 发行目录 $name 未在 gradle 缓存 transforms 找到（先跑一次 verifyPlugin/构建一次对应平台）")
+
+        val ide243 = ideDir("ideaIU-2024.3.7.1-win")
+        val jbr = ide243.resolve("jbr").takeIf { it.isDirectory }
+            ?: error("243 发行版缺 jbr（-runtime-dir 必需）")
+        val verifyIdes = when {
+            invokedTaskNames.contains("verifySmoke") -> "smoke"
+            invokedTaskNames.contains("verifyMinimal") -> "minimal"
+            else -> verifyIdesProperty
+        }
+        val targets = when (verifyIdes) {
+            "smoke" -> listOf(ide243)
+            "minimal" -> listOf(ide243, ideDir("idea-2026.2.3-win"))
+            else -> listOf(ide243, ideDir("idea-2025.3.5-win"), ideDir("idea-2026.2.3-win"))
+        }
+        buildList {
+            add("check-plugin")
+            add("-offline")
+            add("-ignored-problems")
+            add(ignoredFile.absolutePath)
+            add("-verification-reports-dir")
+            add(reportsDir.absolutePath)
+            add("-runtime-dir")
+            add(jbr.absolutePath)
+            add("-verification-reports-formats")
+            add("plain,html")
+            add(zipFile.absolutePath)
+            targets.forEach { add(it.absolutePath) }
+        }
+    })
+    // 并发审计锚点：起止毫秒时间戳（与 testShardN 同款，便于事后核对链路时序）。
+    // 配置缓存约束：动作内只引用配置期已解析的值，辅助函数（walkTopDown 链）写在动作体内。
+    doFirst {
+        if (!zipFile.isFile) {
+            throw GradleException(
+                "-PverifyOnly=true 需要已存在的发行包：$zipFile 不存在。" +
+                    "先跑 ./gradlew buildPlugin 产出，或去掉 -PverifyOnly 走完整链路。",
+            )
+        }
+        logger.lifecycle("verifyGate START ${System.currentTimeMillis()} plugin=$zipFile")
+    }
+    doLast {
+        logger.lifecycle("verifyGate END ${System.currentTimeMillis()}")
+        val verdicts = reportsDir.walkTopDown()
+            .filter { it.name == "verification-verdict.txt" }
+            .sortedBy { it.path }
+            .toList()
+        if (verdicts.isEmpty()) {
+            logger.warn("verifyGate: 未找到 verification-verdict.txt，请检查 $reportsDir")
+        }
+        verdicts.forEach { logger.lifecycle("verifyGate verdict [${it.parentFile.parentFile.name}] ${it.readText().trim()}") }
+    }
+}
+
+// T-VerifyPlugin：封装 verifyPlugin 三态验证为独立 task（方便 ./gradlew verifySmoke / verifyFull 调用）
+// T-ReleasePerf-01（2026-09-15）：verifySmoke / verifyFull 改挂 verifyGate（权威门禁，口头 243 单目标、
+// 全量三目标），verifyPlugin 退居报告生成器——详见上方 failureLevel 处的判定缺陷字节码实证。
+tasks {
+    register("verifySmoke") {
+        group = "verification"
+        description = "日常开发快速兼容冒烟（仅 243，等同 verifyGate -PverifyIdes=smoke）"
+        dependsOn("verifyGate")
+    }
+    register("verifyFull") {
+        group = "verification"
+        description = "发布前全量验证（三版本 243+253+262，权威门禁 verifyGate）"
+        dependsOn("verifyGate")
+    }
+
+    // T-ReleasePerf-02（P0-2）：发版链路一命令编排——按正确时序串行执行：
+    //   buildPlugin（出含 changeNotes 的最终产物）→ verifyGate（对该产物做三目标兼容门禁）
+    //   → testShards（对同一提交跑全量测试）。任一环失败即停（Gradle 依赖失败语义），
+    //   消除「门禁与测试并发抢 CPU + 门禁结论对被测代码时序空挂」两个问题。
+    // 用法：./gradlew releaseGate [-PverifyIdes=...] [-PverifyOnly=true]
+    register("releaseGate") {
+        group = "verification"
+        description = "发版链路一命令：buildPlugin → verifyGate（三目标兼容门禁）→ testShards（全量测试）"
+        dependsOn("buildPlugin", "verifyGate", "testShards")
+    }
+}

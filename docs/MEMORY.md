@@ -229,6 +229,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 文档 | 用途 |
 |------|------|
+| [20260917-1011-界面组件全面原生化首轮与CUD源码捕获-发行说明.md](./发行说明/20260917-1011-界面组件全面原生化首轮与CUD源码捕获-发行说明.md) | v2026.9.18-beta.4 内测版发行说明（Gitee 抢先体验通道；基线 2026.9.18-beta.3 同日内测第四轮——界面组件全面原生化首轮 T-UiNative：日志/历史列表原生 SpeedSearch、模态轻提示改平台通知、右键菜单与弹层原生、JOIN 图/历史导航按钮行迁原生工具栏、原生加载态与占位符、配色跟随平台主题；增删改 CUD 语句源码位置捕获修复 T-AgentCudSource、IN 字面量 SQL 预览参数识别 T-InParamRec、IN 列表全量竖向排列 T-VStack·InAll；内附构建脚本拆分 T-BuildScriptSplit 与兼容校验目标追平 T-VerifyIde2623） |
 | [20260916-1550-M56字节码增强全链合入与捕获并发分桶根治-发行说明.md](./发行说明/20260916-1550-M56字节码增强全链合入与捕获并发分桶根治-发行说明.md) | v2026.9.18-beta.3 内测版发行说明（Gitee 抢先体验通道；基线 2026.9.18-beta.2 同日内测第三轮——M56 字节码增强全链合入 master：增强捕获默认开启+脱敏默认关闭+首挂载注入确认、目标库角标与日志原始时间、耗时/影响行数、源码跳转修正、243 挂载与监听联动、事件零到达根治；三条日志链路（MyBatis/JdbcTemplate/Hibernate）并发分桶配对根治；日志时间与控制台对齐；排序方式选择器；历史页元信息统一） |
 | [20260916-0900-日志时间增强-JdbcTemplate并发修复-批量报告合并-发行说明.md](./发行说明/20260916-0900-日志时间增强-JdbcTemplate并发修复-批量报告合并-发行说明.md) | v2026.9.18-beta.2 内测版发行说明（Gitee 抢先体验通道；基线 2026.9.18-beta.1 同日内测第二轮——日志原始时间记录与显示切换 + 搜索行号/时间 + 复制时间戳 + JdbcTemplate 并发分桶修复 + 历史页时间戳跟随设置 + 批量报告合并 + 发版链路提速 -58% + 内网换源诊断日志） |
 | [20260915-1240-JDBC集合参数方括号误入SQL修复-发行说明.md](./发行说明/20260915-1240-JDBC集合参数方括号误入SQL修复-发行说明.md) | v2026.9.18-beta.1 内测版发行说明（Gitee 抢先体验通道；基线 2026.9.14 的单项修复版——T-ListParamCollect JdbcTemplate 命名参数集合值剥括号按元素渲染、非 IN 位置逐字节不变；全量 4123/0/0/6 绿） |
@@ -257,8 +258,8 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 ## 归档记忆（docs/memory-archive/，2026-08-22）
 
-> 从本地记忆系统归档的已完成/已交付内容（216 个文件，2026-09-16 第十次精简后），不再每次会话加载，按需查阅。
-> 全局通用记忆（85 个）备份在 `~/.zcode/cli/memories/global/`。
+> 从本地记忆系统归档的已完成/已交付内容（227 个文件，2026-09-17 第十一次精简后），不再每次会话加载，按需查阅。
+> 全局通用记忆（94 个）备份在 `~/.zcode/cli/memories/global/`。
 
 | 文档 | 用途 |
 |------|------|
@@ -290,6 +291,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-17 | 记忆第十一次精简（48→29 含索引）：5 个已交付任务归档 bug-fixes（M55 Ultra 融合/T-ExecDocSync/T-InParamRec/T-LogSortModes/T-AgentSourceJump，全部 git 实测交付状态后归档）＋6 个已解决踩坑归档 pitfalls（speedsearch 隐藏卡失效与高亮渲染器双条=5b0e2c3/f65d9ae 已落码后归档、双端协议往返缺口、JDBC execute 行数语义、Mermaid 节点 ID 跨图串扰、夹具形态不一致[教训收编 project-test-conventions]）＋8 条跨项目踩坑/环境升级全局（ghfast push 重写/MSYS 首斜杠/gradle 代理直连/子代理限流 ≤3/Kotlin 块注释嵌套/反射 JDK 内部类/HttpRequests 双坑/无图模型 OCR 回落）＋新建全局 pitfall-document-bgthread-edt-only（262 Document.isModified 移除+setText BGT EDT-only）；MEMORY.md 索引去重（speedsearch 双条、归档区尾部错位条目）并压缩活跃长条目；project-pending-plans 补 T-ExecDocSync 尾款（CHANGELOG 条目+真机走查三条）、合流债实测刷新（dev 领先 117 已全推送/master·k2j 与远程同步，push 留底债清零只剩 T-MergeDev2Master）；archive 增至 227 个文件（bug-fixes 159、pitfalls 65）、全局 94 个、项目记忆保留 28 核心；精简前全量备份 memory-backup-2026-09-17 |
 | 2026-09-16 | 记忆第十次精简（45→28 含索引）：15 个已交付任务/调研记忆归档 bug-fixes（T-AgentDialectLoop/M37 系列闭环/全景审计/性能五轮报告/竞品五轮/T-FeedbackBatch2/T-UiNative/T-PerfSweep2/T-ReleasePerf/四计划批次/T-Intranet/T-ListParamCollect/T-McpToolset2/竞品四轮七任务/T-ShortcutSettings，全部 git 实测交付状态后归档）＋2 个已解决踩坑归档 pitfalls（设置树 groupWeight 排序、idea-plugin@url 零消费）＋feedback-verify-scope 收编 project-test-conventions（验证范围定例）；新建 project-pending-plans 收拢在册未实施计划与合流债索引（dev 94/M56 19/t-uinative 8/K2J 101 提交领先实测）；补录 2 条此前漏索引的活跃踩坑（会话 git 快照过时、cherry-pick 使 --contains 失灵），并删除已归档 t-testperf2 的陈旧索引行；archive 增至 216 个文件（bug-fixes 154、pitfalls 59）、全局 85 个、项目记忆保留 27 核心；精简前全量备份 memory-backup-2026-09-16 |
 | 2026-09-15 | **M56 master 全量合入 feature/t-m56-01-agent-base（三次合并收口：cebd037 首环 248 提交 + da37ad5 二次 T-Intranet/v2026.9.18-beta.1 + d0ae910 三次 T-ReleasePerf/日志原始时间/JdbcTemplate 并发修复/日志列表搜索行号时间）**：master 功能全部吸收。首环 11 文件 12 冲突块全解决（union×8/语义融合×3：SqlLogAutoSaver 融合 master DateTimeFormatter+批量 flush 与 M56 encodeEntry 扩展字段、SqlLogPanel 渲染融合 useSelectionFill+agent 角标、bundle 以 master 版为底叠加 M56 增强捕获 6 键）；合并后修复两处：bundle 被 PS5.1 Set-Content 写入 UTF-8 BOM 致 Properties 解析出 ?# 幽灵键（改 .NET 无 BOM 写回）+ AgentProtocolSyncTest 定位链漏跟 a1bf63e 子项目迁移（教训：目录迁移必须全局 grep 旧路径）。二次 1 冲突（变更记录 union）、三次 merge-tree 预演零冲突 29 文件自动合并（embedAgentJar 链/bundle en=zh=635 全等/agent badge 6 处/设置双方字段并列，四语义点复核通过）。全量 testShards **4200/0/0/6 绿**（1315+1512+1373，跳过=Docker；首跑 327 例 NoSuchMethodError=合并加字段后陈旧产物劫持，清 build/classes+build/kotlin 复绿）+ agent 21 用例绿；buildPlugin 出 2026.9.18-beta.1.zip（7.10MB，主 jar 内嵌 agent/mps-sql-agent.jar 306.7KB）；verifyGate 三目标 Compatible（243 弃用 3/253 弃用 6/262 弃用 52 均历史基线、experimental 14 非失败级别，2m17s）。备份分支 backup-m56-pre-master-merge-20260915，未推送远程。详见 docs/开发计划/20260915-1250-M56-MasterMerge 交接文档 |
 | 2026-09-15 | 第四轮竞品应答七任务全交付（N-16+O-9~O-14，master 合入 dev fe11c97 基线）：T-McpGuard（structuredContent 字节码实证分支 a 零改码+位差叙事四处+竞品哨兵脚本）/T-UnboundedWriteGuard（七规则探测器+三确认流消息升级）/T-DialectLabMatrix（配方守卫+database-lab 国产库资产）/T-DollarInjectMark（引擎直替计数+DOLLAR_INJECT 横幅）/T-DdlCacheInvalidate（元数据失效挂 executeOnConsole）/T-SemicolonGuard（三处切分收敛单实现+括号深度 BEGIN/END）/T-BatchInMerge（等值批删 IN 合并参考行）；三处偏差定案留痕（O-9 PARTIAL→warnings 诚实降级、O-11 引擎忠实计数、O-14 adText 提示位）。全量 testShards 360类/4410/0/0/6 绿（基线 350/4267 → +10 类 +143 例）。详见 docs/变更记录.md 同日七行与各计划 §八 |
