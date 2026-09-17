@@ -11,6 +11,10 @@
 - **执行文件「文件缓冲区冲突」（File Cache Conflict）第三轮根治（T-ExecDocSync，条目补落）**：执行临时文件 `mpsql-exec.sql` 弹「已在内存中和磁盘上对该文件进行更改」。根因三点：document 驱动写只改内存不落盘（滞留「已修改未保存」窗口）；WriteAction 失败兜底无条件裸写盘（绕过 document = 冲突的外部改写条件）；后台预热与 EDT 冷路径双写方不互斥。修复=document 写统一派 EDT + 同临界区落盘（setText→commit→saveDocument）+ 有已加载 document 时拒绝裸写兜底（宁内容旧一拍）+ 单写方锁串行化双写方
 - **执行文件「文件缓冲区冲突」第四轮根治——console 侧「已修改未保存」窗口清零（T-ExecDocSync2）**：第三轮收口只覆盖插件自有写点，漏了 Database 控制台侧——控制台挂载在 exec 文件本体上（控制台编辑器文档即该文件 document），复用/准备/换入链的四处文档同步只 commit 不落盘，用户手改控制台更是插件拦不到的未保存源；窗口期内任意外部改盘（git 触碰 / 双 IDE 实例）+ VFS 刷新即弹冲突，且弹窗点「保留内存更改」后自我放大。修复=四处同步统一收口为「setText→commit→saveDocument」同临界区落盘 + 两处 VFS 刷新前强制收敛 + 执行文档 1.5s 防抖自动落盘 + 冲突探针（复发时 idea.log 落现场指纹取证）
 
+### Test
+
+- **执行文档落盘纪律 DB 集成门禁（T-ExecDocGate）**：testDatabase 通道新增 `ExecDocGateIntegrationTest` 三断言——prepareConsole 后 / reuseSharedConsole 链后 exec 文档必须「未修改未保存」且磁盘==SQL；控制台手改后防抖窗内磁盘对齐——把第三/四轮失误模式钉进 CI。配套修复 testDatabase 基建：驱动种子源三级回退（本地 runIde 沙盒 → dev 工作树沙盒 → 日常 IDE 驱动存储，绝对路径锚定——daemon CWD 实测不可靠）+ 数据源显式携带驱动 jar classpath（DBN 243 单测模式 artifact 解析不生效，javap 实证 API 后改走 `SimpleClasspathElementFactory.createElements` + `setClasspathElements`）
+
 ## [2026.9.18-beta.4] - 2026-09-17
 
 > 内测版（Gitee 抢先体验通道）：基线 v2026.9.18-beta.3，本版为同日内测第四轮——界面组件全面原生化首轮落地（T-UiNative：日志/历史列表原生 SpeedSearch、模态轻提示改平台通知、右键菜单与弹层原生、JOIN 图/历史导航按钮行迁原生工具栏、原生加载态与占位符、配色跟随平台主题）+ 增删改（CUD）语句源码位置捕获修复 + IN 字面量 SQL 预览参数识别 + IN 列表全量竖向排列；内附构建脚本拆分分治（T-BuildScriptSplit）与兼容校验目标追平 IDEA 2026.2.3（T-VerifyIde2623）。

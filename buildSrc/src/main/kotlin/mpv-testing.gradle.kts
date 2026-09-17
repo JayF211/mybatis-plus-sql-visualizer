@@ -88,6 +88,8 @@ intellijPlatformTesting {
             "cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest",
             "cn.song.mybatisplus.visualizer.execute.DataSourceSelectorIntegrationTest",
             "cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest",
+            // T-ExecDocGate：执行文档落盘纪律断言（testDatabase 通道，Database 插件链）
+            "cn.song.mybatisplus.visualizer.execute.ExecDocGateIntegrationTest",
         )
         val testFileEntries: List<Triple<String, List<String>, String>> = file("src/test/kotlin").walkTopDown()
             .filter { it.isFile && (it.name.endsWith("Test.kt") || it.name.endsWith("Test.java")) }
@@ -198,6 +200,11 @@ intellijPlatformTesting {
                 systemProperty("http.proxyPort", "7890")
                 systemProperty("https.proxyHost", "127.0.0.1")
                 systemProperty("https.proxyPort", "7890")
+                // T-ExecDocGate 20260917：doFirst 需要项目根绝对路径——相对路径在 doFirst 按
+                // daemon CWD 解析（实测为 .gradle/daemon/<ver>，跨构建不一致）；直接捕获
+                // project 字符串又是脚本对象引用（配置缓存拒绝）。inputs.property 是官方
+                // CC 兼容通道：执行期经 inputs.properties 读回
+                inputs.property("mpProjectDirAbs", project.projectDir.absolutePath)
                 // 沙盒首次启动前预置 runIde 沙盒已下载的 jdbc-drivers（MySQL Connector/J），
                 // 免集成测试联网下驱动；runIde 沙盒不存在时静默跳过（首次连接时 DBN 自行下载）。
                 // 注意：doFirst 内不可引用 rootProject/layout（配置缓存不支持序列化 Project），
@@ -206,36 +213,70 @@ intellijPlatformTesting {
                 // DBN 从 config_testDatabase/jdbc-drivers 读 driver 文件，复制到 `config/` 无效
                 //（实证：RemoteDriver.classpath.txt 只含 jdbc-console.jar，缺 mysql jar → ClassNotFound）。
                 doFirst {
-                    val srcDrivers = File(".intellijPlatform/sandbox/mybatis-plus-sql-visualizer/IU-2024.3.7.1/config/jdbc-drivers")
-                    val dstDrivers = File("build/test-sandbox/database/config_testDatabase/jdbc-drivers")
-                    if (srcDrivers.isDirectory && !dstDrivers.isDirectory) {
-                        dstDrivers.parentFile.mkdirs()
-                        srcDrivers.copyRecursively(dstDrivers)
-                        logger.lifecycle("testDatabase: jdbc-drivers pre-seeded to config_testDatabase (${srcDrivers.name})")
+                    // T-ExecDocGate 20260917：种子源三级回退（本地 runIde 沙盒 → dev 工作树沙盒 →
+                    // 日常 IDE 驱动存储）。runIde 沙盒 clean 后原版静默跳过 → 驱动缺失 →
+                    // RemoteJdbcServer ClassNotFound（四集成类 introspect 全跳，本日实测）。
+                    // 一切路径绝对锚定（见上方 inputs.property 注释）。
+                    val root = inputs.properties["mpProjectDirAbs"] as String
+                    val configRoot = File(root, "build/test-sandbox/database/config_testDatabase")
+                    val driverDir = File(configRoot, "jdbc-drivers")
+                    val sandboxDrivers = File(
+                        root,
+                        ".intellijPlatform/sandbox/mybatis-plus-sql-visualizer/IU-2024.3.7.1/config/jdbc-drivers",
+                    )
+                    val devSandboxDrivers = File(
+                        root,
+                        "../mybatis-plus-sql-visualizer-dev/.intellijPlatform/sandbox/mybatis-plus-sql-visualizer/IU-2024.3.7.1/config/jdbc-drivers",
+                    )
+                    // ① artifact 清单：两级沙盒源（xml；通常不含 jar）
+                    if (!File(driverDir, "jdbc-drivers.xml").isFile) {
+                        val src = listOf(sandboxDrivers, devSandboxDrivers).firstOrNull { it.isDirectory }
+                        if (src != null) {
+                            driverDir.mkdirs()
+                            File(src, "jdbc-drivers.xml").copyTo(File(driverDir, "jdbc-drivers.xml"))
+                            logger.lifecycle("testDatabase: jdbc-drivers.xml pre-seeded from ${src.path}")
+                        }
                     }
-                    // M36.5.23d：driver 就绪状态——databaseDrivers.xml 记录 mysql.8 已配置 artifact
-                    // （LocalDatabaseDriverManager）。测试沙盒缺此文件 → DBN 认为 driver 未配置 →
-                    // RemoteDriver.classpath.txt 缺 mysql jar → ClassNotFoundException。一并复制。
-                    val srcDriverState = File(".intellijPlatform/sandbox/mybatis-plus-sql-visualizer/IU-2024.3.7.1/config/options/databaseDrivers.xml")
-                    val dstOptions = File("build/test-sandbox/database/config_testDatabase/options")
-                    val dstDriverState = File(dstOptions, "databaseDrivers.xml")
-                    if (srcDriverState.isFile && !dstDriverState.isFile) {
-                        dstOptions.mkdirs()
-                        srcDriverState.copyTo(dstDriverState)
-                        logger.lifecycle("testDatabase: databaseDrivers.xml pre-seeded (driver ready state)")
+                    // ② jar 树：日常 IDE 驱动存储（Roaming，maven 布局；本机实存 9.7.0）。
+                    //    逐文件 mkdirs——copyRecursively walkBottomUp 深层文件先于父目录落地会
+                    //    ERROR_PATH_NOT_FOUND（实测）
+                    val artifactVersion = "9.7.0"
+                    val roamingVersionDir = File(
+                        System.getProperty("user.home"),
+                        "AppData/Roaming/JetBrains/IntelliJIdea2024.3/jdbc-drivers/MySQL ConnectorJ/$artifactVersion",
+                    )
+                    val versionDir = File(driverDir, "MySQL ConnectorJ/$artifactVersion")
+                    if (roamingVersionDir.isDirectory && !versionDir.isDirectory) {
+                        var copied = 0
+                        roamingVersionDir.walkTopDown().filter { it.isFile }.forEach { f ->
+                            val out = File(versionDir, f.relativeTo(roamingVersionDir).path)
+                            out.parentFile.mkdirs()
+                            if (runCatching { f.copyTo(out, overwrite = true) }.isSuccess) copied++
+                        }
+                        logger.lifecycle("testDatabase: mysql connector jar tree pre-seeded (copied=$copied)")
                     }
-                    // T-Embed-08：单元测试模式下 DatabaseArtifactLoader 只认 config 根的
-                    // test-database-artifacts.xml 作为 artifact 清单（getTestArtifactLists，
-                    // 字节码实证）——缺失时 getArtifactClasspathElements 恒空 → 远程 JDBC 进程
-                    // ClassNotFound。把同一份 jdbc-drivers.xml 目录清单复制为测试清单即可。
-                    val srcArtifactList = File("build/test-sandbox/database/config_testDatabase/jdbc-drivers/jdbc-drivers.xml")
-                    val dstArtifactList = File("build/test-sandbox/database/config_testDatabase/test-database-artifacts.xml")
-                    if (srcArtifactList.isFile && !dstArtifactList.isFile) {
-                        srcArtifactList.copyTo(dstArtifactList)
-                        logger.lifecycle("testDatabase: test-database-artifacts.xml seeded (unit-test artifact list)")
+                    // ③ driver 就绪状态：必须含 mysql.8 的 artifact 版本条目（真实 IDE 同款；
+                    //    空壳文件时 DBN 不知道 mysql.8 解析哪个版本 → classpath 恒空 → CNFE）
+                    val driverState = File(configRoot, "options/databaseDrivers.xml")
+                    if (!driverState.isFile || driverState.readText().contains("mysql.8").not()) {
+                        File(configRoot, "options").mkdirs()
+                        driverState.writeText(
+                            "<application>\n" +
+                                "  <component name=\"LocalDatabaseDriverManager\" version=\"201\">\n" +
+                                "    <driver id=\"mysql.8\">\n" +
+                                "      <artifact id=\"MySQL ConnectorJ\" name=\"MySQL ConnectorJ\" use=\"true\" version=\"$artifactVersion\" />\n" +
+                                "    </driver>\n" +
+                                "  </component>\n" +
+                                "</application>\n",
+                        )
                     }
-                    // 同理：单测模式下驱动定义（含已下载版本）走 test-database-drivers.xml——
-                    // 缺失时 DatabaseDriver 的 artifact ref 无具体 version → classpath 仍为空。
+                    // ④ 单测模式 artifact 清单副本 + ⑤ driver 定义钉版本（T-Embed-08 原逻辑）
+                    val manifest = File(driverDir, "jdbc-drivers.xml")
+                    val dstArtifactList = File(configRoot, "test-database-artifacts.xml")
+                    if (manifest.isFile && !dstArtifactList.isFile) {
+                        manifest.copyTo(dstArtifactList)
+                        logger.lifecycle("testDatabase: test-database-artifacts.xml seeded")
+                    }
                     val dstTestDrivers = File("build/test-sandbox/database/config_testDatabase/test-database-drivers.xml")
                     if (!dstTestDrivers.isFile) {
                         dstTestDrivers.writeText(
@@ -256,6 +297,8 @@ intellijPlatformTesting {
                 includeTestsMatching("cn.song.mybatisplus.visualizer.execute.DataSourceSelectorIntegrationTest")
                 // T-Embed-03/04/08：B 路径 Database 原生图 + 虚拟外键 JOIN 线真实链路
                 includeTestsMatching("cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest")
+                // T-ExecDocGate：执行文档落盘纪律断言（prepare/reuse/手改防抖三断言）
+                includeTestsMatching("cn.song.mybatisplus.visualizer.execute.ExecDocGateIntegrationTest")
             }
             }
         }
@@ -330,6 +373,8 @@ tasks.test {
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.DataSourceSelectorIntegrationTest")
         // T-Embed-03/04/08：B 路径 Database 原生图嵌入链路（虚拟外键注入），同上仅在 testDatabase 运行
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest")
+        // T-ExecDocGate：执行文档落盘纪律断言，同上仅在 testDatabase 运行
+        excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.ExecDocGateIntegrationTest")
     }
 }
 
