@@ -3428,6 +3428,15 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             // 缓存命中≠内容新鲜：连续预览 SQL 会变，而缓存命中路径不重写文件——只刷新文件
             // 内容（projectExecFile doc 驱动三方同步，vf/psi 身份不变），保证 attachConsole
             // 初始 document 与本条预览 SQL 一致；差量内容比较在 projectExecFile 内部短路。
+            //
+            // T-PreviewConsoleFmt：**控制台已挂在该文件上时跳过刷新**——该文件文档即控制台文档，
+            // 而预热写的是「预览原文」（裸单行），会把面板刚渲染进控制台的格式化文本盖掉
+            //（真机日志 20260917：showSql createEditor len=274/16 行 → prewarm 原文 → attach 显示
+            // 1 行裸 SQL）。面板渲染链随后会把当前文本写回该文档，无需预热越权改写。
+            if (isConsoleAttachedToVf(cachedVf)) {
+                LOG.info("[M36] exec prewarm: cache hit, console attached — content refresh SKIPPED (T-PreviewConsoleFmt)")
+                return
+            }
             runCatching { projectExecFile(project, sql) }.onFailure { e ->
                 LOG.warn("[M36] exec prewarm refresh-content failed: ${e.javaClass.simpleName}: ${e.message}")
             }
@@ -3444,6 +3453,20 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         } finally {
             execPrewarmInFlight.set(false)
         }
+    }
+
+    /**
+     * T-PreviewConsoleFmt：共享控制台当前是否挂在指定 exec 文件上——命中即代表该文件文档就是
+     * 控制台文档，此时预热改写文件内容会直接改掉用户眼前的控制台文本。internal 供测试。
+     */
+    internal fun isConsoleAttachedToVf(vf: com.intellij.openapi.vfs.VirtualFile): Boolean {
+        val console = sharedConsole ?: return false
+        if (cachedTempPsiFile?.first !== vf) return false
+        return runCatching {
+            val attached = console.javaClass.getMethod("getVirtualFile").invoke(console)
+                as? com.intellij.openapi.vfs.VirtualFile
+            attached === vf
+        }.getOrDefault(false)
     }
 
     /** [prewarmExecTempFile] 的真实链（已持有 in-flight 标记；仅后台线程调用）。 */
