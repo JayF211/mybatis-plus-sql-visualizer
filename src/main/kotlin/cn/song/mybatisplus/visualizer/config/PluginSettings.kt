@@ -42,6 +42,14 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var formatSql: Boolean = true,
 
         /**
+         * 空参数填充策略（T-PT-04）：参数值为空时的回填形态——[EMPTY_PARAM_FILL_NULL]（默认，
+         * 渲染 `NULL`）或 [EMPTY_PARAM_FILL_EMPTY_STRING]（渲染 `''`）。
+         * 消费点 = SqlPreviewPanel.renderParamValue 的空值分支，且仅对**带 mapper 签名类型信息**的
+         * 参数行生效（无类型信息路径保留 `?` 占位提示，行为与升级前一致）。
+         */
+        var emptyParamFill: String = DEFAULT_EMPTY_PARAM_FILL,
+
+        /**
          * 竖向排列 VALUES 行尾配对列名标注（T-VPairAnno）：true=显示（默认，T-VStack 以来行为不变），
          * false=仅竖排不追加标注注释（用户自带注释不受影响）。
          * 仅作用于预览面板竖向排列显示模式（[cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter.formatVertical]
@@ -490,6 +498,17 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** 默认界面语言（M14，用户要求默认中文）。 */
         const val DEFAULT_LANGUAGE = "zh"
+
+        // ---------- T-PT-04：空参数填充策略 ----------
+
+        /** 空参数填充策略：NULL 字面量（默认）。 */
+        const val EMPTY_PARAM_FILL_NULL = "NULL"
+
+        /** 空参数填充策略：空字符串字面量 `''`。 */
+        const val EMPTY_PARAM_FILL_EMPTY_STRING = "EMPTY_STRING"
+
+        /** 空参数填充策略默认值（NULL 字面量，贴近 MyBatis 绑定 null 的真实效果）。 */
+        const val DEFAULT_EMPTY_PARAM_FILL = EMPTY_PARAM_FILL_NULL
 
         /** 表名推断策略：驼峰转下划线（默认，对齐 MP，`BikeDeviceInfoEntity` → `bike_device_info`）。 */
         const val INFERENCE_SNAKE = "SNAKE"

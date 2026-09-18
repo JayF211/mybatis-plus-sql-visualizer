@@ -100,6 +100,34 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
         }
     }
 
+    /** T-PT-04：空参数填充策略（NULL 字面量 / 空字符串）读写链——isModified / apply / reset 三处接线。 */
+    fun testEmptyParamFillStrategyBinding() {
+        val settings = PluginSettings.getInstance()
+        val old = settings.state.emptyParamFill
+        try {
+            settings.state.emptyParamFill = PluginSettings.EMPTY_PARAM_FILL_NULL
+            val configurable = AllSectionsConfigurable()
+            configurable.createComponent()
+            val panel = configurable.panelForTest()
+            assertFalse("初始应与配置一致（无变化）", configurable.isModified())
+
+            panel.selectEmptyParamFill(PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING)
+            assertTrue("切到空字符串档应检测到变化", configurable.isModified())
+            configurable.apply()
+            assertEquals(
+                "apply 后 state.emptyParamFill 应为 EMPTY_STRING",
+                PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING,
+                settings.state.emptyParamFill,
+            )
+
+            configurable.reset()
+            assertFalse("reset 后应回到与配置一致（无变化）", configurable.isModified())
+            assertEquals("reset 不应改写配置", PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING, settings.state.emptyParamFill)
+        } finally {
+            settings.state.emptyParamFill = old
+        }
+    }
+
     fun testCacheInfoAndClearButton() {
         val configurable = AllSectionsConfigurable()
         configurable.createComponent()

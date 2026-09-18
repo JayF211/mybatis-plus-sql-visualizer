@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.AnnotationSqlParser
+import cn.song.mybatisplus.visualizer.xml.ParamTypeInfo
 import cn.song.mybatisplus.visualizer.xml.XmlParseException
 import cn.song.mybatisplus.visualizer.xml.XmlScriptException
 import cn.song.mybatisplus.visualizer.xml.XmlStatementKind
@@ -98,7 +99,7 @@ object AnnotationSqlPreviewService {
         }
         val sql = values.joinToString(" ").trim()
         val method = PsiTreeUtil.getParentOfType(annotation, PsiMethod::class.java)
-        return buildResult(sql, shortName, paramNames(method), warnings, project)
+        return buildResult(sql, shortName, paramTypes(method), warnings, project)
     }
 
     // ------------------------------------------------------------------
@@ -128,7 +129,7 @@ object AnnotationSqlPreviewService {
         if (sql == null) {
             return nullResult(MpSqlVisualizerBundle.message("annotation.provider.notSupported"))
         }
-        return buildResult(sql, shortName, paramNames(mapperMethod), warnings, project)
+        return buildResult(sql, shortName, paramTypes(mapperMethod), warnings, project)
     }
 
     /** Provider type 解析：value/type 属性（PsiClassObjectAccessExpression）→ PsiClass。 */
@@ -174,34 +175,40 @@ object AnnotationSqlPreviewService {
     /**
      * 方法参数 mock 名（对齐 ParamNameResolver）：@Param 值优先，否则实际参数名；
      * 多参数或含 @Param 时补 `param1..N`（GENERIC_NAME_CACHE）。
+     *
+     * T-PT-01：同步扩为「名字 + 类型类别」对——`param1..N` 按位置继承对应参数的类型类别，
+     * 供参数面板按签名挂占位提示与 mock 值分派。
      */
-    internal fun paramNames(method: PsiMethod?): List<String> {
-        if (method == null) return emptyList()
+    internal fun paramTypes(method: PsiMethod?): Map<String, ParamTypeInfo> {
+        if (method == null) return emptyMap()
         val parameters = method.parameterList.parameters
-        if (parameters.isEmpty()) return emptyList()
+        if (parameters.isEmpty()) return emptyMap()
         var hasParamAnnotation = false
-        val names = parameters.map { param ->
+        val named = parameters.map { param ->
             val paramAnno = param.annotations.firstOrNull { it.qualifiedName?.substringAfterLast('.') == "Param" }
-            if (paramAnno != null) {
+            val name = if (paramAnno != null) {
                 hasParamAnnotation = true
                 paramAnno.findAttributeValue(null)?.let { (it as? com.intellij.psi.PsiLiteralExpression)?.value?.toString() }
                     ?: param.name
             } else {
                 param.name
             }
+            name to XmlParamTypeResolver.typeInfoOf(param.type)
         }
-        return if (parameters.size > 1 || hasParamAnnotation) {
-            names + (1..parameters.size).map { "param$it" }
-        } else {
-            names
+        val result = named.toMap().toMutableMap()
+        if (parameters.size > 1 || hasParamAnnotation) {
+            // param1..N 与位置参数同类别（MyBatis ParamMap 键名，类型跟随被命名参数）
+            named.forEachIndexed { index, (_, info) -> result["param${index + 1}"] = info }
         }
+        return result
     }
 
-    /** 模型 → 结果（解析异常兜底 warning；T-M25.2 静态常量引用经 project 解析注入）。 */
+    /** 模型 → 结果（解析异常兜底 warning；T-M25.2 静态常量引用经 project 解析注入）。
+     *  T-PT-01：paramTypes 为「参数名 → 类型类别」，名字作 mock 键、类别入预览模型（占位提示/mock 分派）。 */
     private fun buildResult(
         sql: String,
         shortName: String,
-        paramNames: List<String>,
+        paramTypes: Map<String, ParamTypeInfo>,
         warnings: MutableList<String>,
         project: Project?,
     ): PreviewResult {
@@ -213,7 +220,7 @@ object AnnotationSqlPreviewService {
         }
         return try {
             val staticValues = XmlPreviewService.resolveStaticFields(sql, project, warnings)
-            val model = AnnotationSqlParser().parse(sql, kind, paramNames, staticValues)
+            val model = AnnotationSqlParser().parse(sql, kind, paramTypes.keys.toList(), staticValues, paramTypes)
             XmlPreviewService.toResult(model, warnings)
         } catch (e: XmlParseException) {
             nullResult(e.message ?: "SQL 解析失败。")

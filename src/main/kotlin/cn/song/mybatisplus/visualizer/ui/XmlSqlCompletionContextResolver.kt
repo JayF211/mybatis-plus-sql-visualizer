@@ -118,7 +118,8 @@ object XmlSqlCompletionContextResolver {
         return SourceSqlContext(
             main = mainTable?.let { buildMainContext(it) },
             candidates = buildCandidates(project, mainTable),
-            paramNames = AnnotationSqlPreviewService.paramNames(method),
+            // T-PT-01：paramTypes 键序 = 命名参数序 + param1..N（与旧 paramNames 列表逐项一致）
+            paramNames = AnnotationSqlPreviewService.paramTypes(method).keys.toList(),
         )
     }
 
