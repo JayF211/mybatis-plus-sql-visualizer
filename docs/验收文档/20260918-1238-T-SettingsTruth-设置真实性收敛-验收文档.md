@@ -27,6 +27,7 @@
 | 5 | **设置守卫测试**：`SettingsRealityGuardTest` 四断言（写而不读 / 摆而不绑 / 声明而不消费 / 幽灵键），先红后绿自验证 | 仅测试面 | 内部 | 3eb05c3 |
 | 6 | **存量幽灵 bundle 键清理**：`settings.update.envNotSupported`（全历史零消费）、`settings.search.placeholder`（消费点已随重构删除）双语四行删除 | 无用户可见面（死文案） | 内部 | d586487 |
 | 7 | **全量门禁收口**：P4 三缺陷修复（ComboBox 同值 set 派发事件致 modified 误置 / logicDeleteValue 灌值被清空 / 用例锚点字面量语义） | 设置页「项目（当前项目）」页交互正确性 | 用户可见 | 89a4651 |
+| 8 | **项目页文案与全局页对齐**（20260918 用户真机反馈）：推断策略下拉由枚举原值 `SNAKE`/`CAMEL` 改为**本地化文案**（复用全局面板 bundle 键）；8 个项目级重复标签键收编为全局键（消除「表名推断 vs 表名推断策略」「添加表名前缀 vs 添加表前缀」等措辞漂移）；节点名改语言中性 `SQL Visualizer (Project)` | 设置 → Tools → 「SQL Visualizer (Project)」全页 | 用户可见 | cc2263e 后续 |
 
 ## 三、分项验收步骤（真机走查，留人工）
 
@@ -62,8 +63,10 @@
 
 | 步骤 | 操作 | 预期 |
 |------|------|------|
-| 1 | 打开 设置 → Tools 分组 | 出现新节点「**SQL Visualizer（当前项目）**」，与全局「SQL Visualizer」平级（不在其下套娃） |
-| 2 | 打开该页 | 共 10 项：使用项目设置（总开关）+ 方言 + 参数替换 / 格式化 / 逻辑删除注入（三态勾选）+ 逻辑删除值 / 表前缀 / 表后缀 / 忽略字段（文本框）+ 表名推断策略（下拉） |
+| 1 | 打开 设置 → Tools 分组 | 出现新节点「**SQL Visualizer (Project)**」，与全局「SQL Visualizer」平级（不在其下套娃） |
+| 2 | 打开该页 | 共 10 项：使用项目设置（总开关）+ 数据库方言 + 参数替换 / 格式化 / 逻辑删除注入（三态勾选）+ 逻辑删除值 / 表前缀 / 表后缀 / 忽略字段（文本框）+ 表名推断策略（下拉） |
+| 2b | **逐行核对标签文案与全局面板是否一致**（用户 20260918 反馈项） | 「表名推断策略」「添加表前缀」「添加表后缀」「逻辑删除值」「忽略字段名」等与本插件全局设置页**逐字相同**（不再出现项目页自造措辞） |
+| 2c | 展开「表名推断策略」下拉 | 选项为**中文文案**「自动驼峰转下划线（默认）」「保留驼峰」，**不得出现 `SNAKE`/`CAMEL` 裸枚举值** |
 | 3 | 未改动时观察「应用」按钮 | **灰置**（未修改；此前的同值灌值误报已修） |
 | 4 | 勾选「使用项目设置」，把表前缀设为 `p_`，应用 | 预览该项目 Wrapper 语句，表名为 `p_xxx`（项目级覆盖全局） |
 | 5 | 取消勾选「使用项目设置」，应用 | 预览回退全局设置的表名（无前缀） |
@@ -87,7 +90,7 @@
 | SettingsRealityGuardTest（新增，4 断言） | 绿；先红后绿已验（临时插 `var fakeDeadField` → 断言一捕获 → 撤除转绿） |
 | SettingsTruthTest（新增） | 绿——反射断言 autoInject 字段不存在 / 双语 tooltip 声明 / statusSummary 三态文案 + 3 广播点 + 面板接线 |
 | SqlPreviewServiceProjectSettingsTest（新增） | 绿——项目级覆盖保留 `?` / 关闭回退全局 / 表前缀覆盖与回退 / 同文件缓存失效 |
-| ProjectPluginSettingsConfigurableTest（扩至 5 例） | 绿——十控件结构 / isModified / apply 十项写回 / 空值灌全局且 reset 不写 state |
+| ProjectPluginSettingsConfigurableTest（扩至 5 例） | 绿——十控件结构 / isModified / apply 十项写回 / 空值灌全局且 reset 不写 state；**新增回归守卫：下拉项文案 == 全局面板 bundle 键文案且不得为枚举原值；行标签复用全局键文案** |
 | PluginXmlStructureGuardTest（收窄 + 新增） | 绿——projectConfigurable 不套娃应用级之下 + id 不重复 + 注册存在性 |
 | 既有设置面测试 | PluginSettingsPanelBindingTest / UiTest / PersistenceTest / SettingsIOTest / BundleParityGuardTest 全绿 |
 | 幽灵键扫描 | `settings.log.filterBar`、`settings.update.envNotSupported`、`settings.search.placeholder` 双语零残留 |
@@ -100,6 +103,7 @@
 | 增强捕获状态行显示真实会话态（挂载 pid / 中断回落 / 空） | ☑️待真机（3.2） |
 | 搜索「筛选」不再命中幽灵项；13 项补录可命中并跳转 | ☑️待真机（3.3） |
 | 项目级设置页出现、10 控件可读写、覆盖与回退生效 | ☑️待真机（3.4） |
+| 项目页文案与全局面板逐字一致、推断下拉为本地化文案 | ☑️待真机（3.4-2b/2c） |
 | 全局面板无回归（各子页读写与语言切换） | ☑️待真机（3.5） |
 | 全量回归 test 4406/0/0/6 + agent 绿 | ✅自动化 |
 | 假配置守卫四断言在册（防回潮） | ✅自动化 |
@@ -112,6 +116,7 @@
 - **多项目同开时项目级表设置取值**：`EntityResolver`/`JpaEntityResolver` 的 `effectiveTableSetting` 取 `ProjectManager.openProjects` 首个项目（无 project 参数可传的静态链），两个项目各自启用不同项目级表配置时取值有歧义。缓存键含实体所在项目，结果不会跨项目漂移，仅取值面受此限；单项目主流场景无影响。**独立复核定级 P3，在册待后续收口。**
 - **状态行文案未 bundle 化**：「已挂载 pid=…」「连接中断，已回落控制台捕获」为 AgentManager 内中文硬编码（面板其余 UI 均走 bundle），英文界面下状态行仍为中文。**P3 观察项在册。**
 - **守卫断言三的宽松性**：`effective*` 消费判定为「方法名出现在非 config 包任一文本」（KDoc 提及亦算命中），属防回潮的宽松守卫而非严格调用点分析。**P3 观察项在册。**
+- **设置树节点名跟 IDE 语言、面板内容跟插件语言**（平台固有）：configurable 的显示名由 plugin.xml 的 `bundle`+`key` 经平台 `ResourceBundle`（`BundleBase`）解析，**跟 IDE locale**；而面板内文案走插件自管理 bundle（跟插件语言设置）。全局页当初即以「两种语言写同一串 `SQL Visualizer`」规避此错位；项目页首版写成带翻译的括号（zh 全角/en 半角）故在英文 IDE 下露出英文后缀。现按同一惯例改语言中性 `SQL Visualizer (Project)`——**节点名在任何语言组合下都不再与面板内容错位**。若后续希望节点名跟插件语言，需去掉 EP 的 `key` 让 `getDisplayName()` 生效（未采用，因该行为需真机确认）。
 - **设置导入的重置副作用（尾款，未处理）**：`SettingsIO.importFromJson` 新建 `State()` 后仅覆盖 21 项，未导出字段（含全部 SQL 日志配置）会被重置为默认值。属设计内子集语义，但接近「假导入」观感，候选任务 T-SettingsIoScope 待定夺。
 - **旧配置文件兼容**：`mp-sql-visualizer.xml` 中残留的 `autoInjectSqlSourceInterceptor` 属性由 XmlSerializer 自动忽略，无需迁移动作。
 - **合并冲突面**：`AgentManager.kt` 与并行会话 T-PS4-01/03（`sweepOffline` 改 internal、拒绝冷却窗、attach 去抖窗）相撞，已保留 master 侧签名与注释并叠加 P2 新增成员；三个广播点接线完整（已 grep 核实）。

@@ -147,7 +147,22 @@
 - **冲突**：`AgentManager.kt` —— 并行会话 T-PS4-01/03 把 `sweepOffline` 改 `internal` 并加注释，与本分支 P2 在同位置插入成员相撞。解法=保留 master 侧签名与注释、叠加 P2 新增成员（`statusSummary`/`everAttached`/`publishStatusChanged`），三广播点完整。
 - **合并后修**：`SettingsRealityGuardTest` 断言二 CRLF 脆弱性——本机 `core.autocrlf=true` 检出为 CRLF，而 Java 正则 `.` 不匹配 回车符，全匹配失配；改为行尾归一再做行扫描（分支工作树为 LF 故未暴露）。
 
-### 6.5 验证结果
+### 6.5 后续修复（20260918 用户真机反馈）
+
+**反馈**：项目级设置页「表名推断」下拉显示 `SNAKE` 裸枚举值，与全局设置页同项文案不一致（语言不一致）。
+
+**根因**：项目页下拉用 `comboBox(listOf(PluginSettings.INFERENCE_SNAKE, PluginSettings.INFERENCE_CAMEL))` 直接以常量值作显示项（无 label 层），而全局面板走 `InferenceOption(value, label)` + `settings.tableNameInference.snake/.camel` bundle 文案。
+
+**修法**（三处一并收口，避免只修症状）：
+1. 项目页引入同款 `InferenceOption` data class（值 + 本地化文案，复用全局 bundle 键），构建/回灌/取值三处按 equals 匹配（`setSelectedItem` 传裸值会静默 return）；
+2. **8 个项目级重复标签键收编为全局键**——`settings.project.{replaceParams,formatSql,injectLogicDelete,logicDeleteValue,tablePrefix,tableSuffix,tableNameInference,ignoredFields}` 与全局键语义重复且措辞漂移（表名推断 vs 表名推断策略、添加表名前缀 vs 添加表前缀），删双语 16 行改用全局键，项目页与全局页逐字一致；
+3. 节点名改**语言中性** `SQL Visualizer (Project)`（原 zh「（当前项目）」/en「(Current Project)」——configurable 显示名由平台 `ResourceBundle`/`BundleBase` 按 **IDE locale** 解析，而面板内容跟插件语言，英文 IDE + 中文插件时露出英文后缀；全局页当初即以两语言同串规避，项目页现按同惯例对齐）。
+
+**回归守卫**：`ProjectPluginSettingsConfigurableTest` 新增断言——下拉项文案须等于全局面板同一组 bundle 键文案、且不得为枚举原值；行标签须含全局键文案。防「裸值当显示项 / 标签键自造」同类回潮。
+
+**验证**：settings 面 + i18n 面定向测试全绿；全量 test 见 6.6。
+
+### 6.6 验证结果
 
 - 合并树全量 `test`：**4406/0/0/6 绿**；`:sql-visualizer-agent:test` 绿。
 - 独立复核（写验分离）通过；三项 P3 观察项在册（多项目同开项目级表设置取值歧义 / 状态行文案未 bundle 化 / 守卫断言三 KDoc 宽松命中）。

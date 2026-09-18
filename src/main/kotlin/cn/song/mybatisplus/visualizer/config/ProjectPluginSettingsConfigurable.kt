@@ -39,9 +39,23 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
     private var logicDeleteValueField: JBTextField? = null
     private var tablePrefixField: JBTextField? = null
     private var tableSuffixField: JBTextField? = null
-    private var inferenceCombo: ComboBox<String>? = null
+    private var inferenceCombo: ComboBox<InferenceOption>? = null
     private var ignoredFieldsField: JBTextField? = null
     private var modified = false
+
+    /**
+     * 表名推断策略下拉项：值 + 当前语言下的显示文案（复用全局面板同一组 bundle 键，
+     * 禁用枚举原值直接当显示项——否则中文界面出现 `SNAKE`/`CAMEL` 裸值，与全局页文案不一致）。
+     * 必须为 data class：JDK17 `JComboBox.setSelectedItem` 按 equals 匹配（见 [PluginSettingsPanel] 同类教训）。
+     */
+    private data class InferenceOption(val value: String, val label: String) {
+        override fun toString(): String = label
+    }
+
+    private fun inferenceOptions(): Array<InferenceOption> = arrayOf(
+        InferenceOption(PluginSettings.INFERENCE_SNAKE, MpSqlVisualizerBundle.message("settings.tableNameInference.snake")),
+        InferenceOption(PluginSettings.INFERENCE_CAMEL, MpSqlVisualizerBundle.message("settings.tableNameInference.camel")),
+    )
 
     /** 全局设置（测试环境未注册 service 时兜底默认 State）。 */
     private val globalState: PluginSettings.State
@@ -64,7 +78,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         lateinit var logicDeleteValueCell: Cell<JBTextField>
         lateinit var tablePrefixCell: Cell<JBTextField>
         lateinit var tableSuffixCell: Cell<JBTextField>
-        lateinit var inferenceCell: Cell<ComboBox<String>>
+        lateinit var inferenceCell: Cell<ComboBox<InferenceOption>>
         lateinit var ignoredFieldsCell: Cell<JBTextField>
         val panel = panel {
             row {
@@ -83,7 +97,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                     }
             }
             row {
-                replaceParamsCell = checkBox(MpSqlVisualizerBundle.message("settings.project.replaceParams"))
+                replaceParamsCell = checkBox(MpSqlVisualizerBundle.message("settings.replaceParams"))
                     .applyToComponent {
                         toolTipText = fieldTip()
                         isSelected = st.replaceParams ?: global.replaceParams
@@ -91,7 +105,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                     }
             }
             row {
-                formatSqlCell = checkBox(MpSqlVisualizerBundle.message("settings.project.formatSql"))
+                formatSqlCell = checkBox(MpSqlVisualizerBundle.message("settings.formatSql"))
                     .applyToComponent {
                         toolTipText = fieldTip()
                         isSelected = st.formatSql ?: global.formatSql
@@ -99,14 +113,14 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                     }
             }
             row {
-                injectLogicDeleteCell = checkBox(MpSqlVisualizerBundle.message("settings.project.injectLogicDelete"))
+                injectLogicDeleteCell = checkBox(MpSqlVisualizerBundle.message("settings.injectLogicDelete"))
                     .applyToComponent {
                         toolTipText = fieldTip()
                         isSelected = st.injectLogicDelete ?: global.injectLogicDelete
                         addActionListener { modified = true }
                     }
             }
-            row(MpSqlVisualizerBundle.message("settings.project.logicDeleteValue")) {
+            row(MpSqlVisualizerBundle.message("settings.logicDeleteValue")) {
                 logicDeleteValueCell = textField()
                     .applyToComponent {
                         toolTipText = fieldTip()
@@ -125,7 +139,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                         text = st.logicDeleteValue.ifBlank { global.logicDeleteValue }
                     }
             }
-            row(MpSqlVisualizerBundle.message("settings.project.tablePrefix")) {
+            row(MpSqlVisualizerBundle.message("settings.tablePrefix")) {
                 tablePrefixCell = textField()
                     .applyToComponent {
                         toolTipText = fieldTip()
@@ -133,7 +147,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                         addActionListener { modified = true }
                     }
             }
-            row(MpSqlVisualizerBundle.message("settings.project.tableSuffix")) {
+            row(MpSqlVisualizerBundle.message("settings.tableSuffix")) {
                 tableSuffixCell = textField()
                     .applyToComponent {
                         toolTipText = fieldTip()
@@ -141,14 +155,17 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                         addActionListener { modified = true }
                     }
             }
-            row(MpSqlVisualizerBundle.message("settings.project.tableNameInference")) {
-                inferenceCell = comboBox(listOf(PluginSettings.INFERENCE_SNAKE, PluginSettings.INFERENCE_CAMEL))
+            row(MpSqlVisualizerBundle.message("settings.tableNameInference")) {
+                inferenceCell = comboBox(inferenceOptions().toList())
                     .applyToComponent {
-                        selectedItem = st.tableNameInference.ifBlank { global.tableNameInference }
+                        // 按 equals 匹配 data class 选项（传裸值会静默选不中，见 PluginSettingsPanel M19 教训）
+                        selectedItem = inferenceOptions().firstOrNull {
+                            it.value == st.tableNameInference.ifBlank { global.tableNameInference }
+                        } ?: inferenceOptions().first()
                         addActionListener { modified = true }
                     }
             }
-            row(MpSqlVisualizerBundle.message("settings.project.ignoredFields")) {
+            row(MpSqlVisualizerBundle.message("settings.ignoredFields")) {
                 ignoredFieldsCell = textField()
                     .applyToComponent {
                         toolTipText = fieldTip()
@@ -197,7 +214,10 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         if (stringDiffers(logicDeleteValueField, st.logicDeleteValue.ifBlank { global.logicDeleteValue })) return true
         if (stringDiffers(tablePrefixField, st.tablePrefix.ifBlank { global.tablePrefix })) return true
         if (stringDiffers(tableSuffixField, st.tableSuffix.ifBlank { global.tableSuffix })) return true
-        if ((inferenceCombo?.selectedItem as? String ?: st.tableNameInference.ifBlank { global.tableNameInference }) != st.tableNameInference.ifBlank { global.tableNameInference }) return true
+        // 推断策略下拉按 data class 选项取值（控件未建时回落 state 值 → 恒等不误报）
+        val inferenceShown = (inferenceCombo?.selectedItem as? InferenceOption)?.value
+            ?: st.tableNameInference.ifBlank { global.tableNameInference }
+        if (inferenceShown != st.tableNameInference.ifBlank { global.tableNameInference }) return true
         if (stringDiffers(ignoredFieldsField, st.ignoredFields.ifBlank { global.ignoredFields })) return true
         return false
     }
@@ -212,7 +232,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         logicDeleteValueField?.let { st.logicDeleteValue = it.text.trim() }
         tablePrefixField?.let { st.tablePrefix = it.text.trim() }
         tableSuffixField?.let { st.tableSuffix = it.text.trim() }
-        inferenceCombo?.let { st.tableNameInference = it.selectedItem as? String ?: "" }
+        inferenceCombo?.let { st.tableNameInference = (it.selectedItem as? InferenceOption)?.value ?: "" }
         ignoredFieldsField?.let { st.ignoredFields = it.text.trim() }
         modified = false
     }
@@ -228,7 +248,10 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         logicDeleteValueField?.text = st.logicDeleteValue.ifBlank { global.logicDeleteValue }
         tablePrefixField?.text = st.tablePrefix.ifBlank { global.tablePrefix }
         tableSuffixField?.text = st.tableSuffix.ifBlank { global.tableSuffix }
-        inferenceCombo?.selectedItem = st.tableNameInference.ifBlank { global.tableNameInference }
+        // 回灌按 data class 选项 equals 匹配（传裸值 setSelectedItem 静默 return，选中不生效）
+        inferenceCombo?.selectedItem = inferenceOptions().firstOrNull {
+            it.value == st.tableNameInference.ifBlank { global.tableNameInference }
+        } ?: inferenceOptions().first()
         ignoredFieldsField?.text = st.ignoredFields.ifBlank { global.ignoredFields }
         // 初始灌入/重灌时 setText 会触发自定义 Document 的 insertString → modified=true 误置
         // （实证：构造后未改动 isModified=true），在回灌完成后统一复位——与 IDE Settings 框架
