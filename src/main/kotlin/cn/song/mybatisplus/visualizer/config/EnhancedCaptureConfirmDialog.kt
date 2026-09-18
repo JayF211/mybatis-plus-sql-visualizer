@@ -58,6 +58,26 @@ class EnhancedCaptureConfirmDialog(parent: Project?) : DialogWrapper(parent, tru
     var outcome: EnhancedCaptureConsent = EnhancedCaptureConsent.REJECTED
         private set
 
+    /**
+     * 第三动作：关闭增强捕获并不再询问（T-PS4-01 用户明确新增需求；照 DialogWrapperExitAction 惯例）。
+     *
+     * **声明位置是硬约束，不得下移到 [init] 块之后**：Kotlin 属性初始化按文本顺序执行，而平台的
+     * `DialogWrapper.init()`（在下方 init 块里调用）会回调 [createActions]——此刻本字段尚未赋值，
+     * 传进动作数组的是 null，平台按「无此按钮」处理（T-CaptureTruth 实证：243 平台
+     * `DialogWrapper.init()` 字节码直调 `createActions()`；沙盒日志无「确认框异常」= 平台容忍 null
+     * 而非抛错，第三按钮静默消失）。守卫测试 `DialogWrapperActionOrderGuardTest` 防回潮。
+     */
+    private val disableCaptureAction: DialogWrapperExitAction =
+        object : DialogWrapperExitAction(
+            MpSqlVisualizerBundle.message("settings.enhancedCapture.confirm.disable"),
+            DISABLE_EXIT_CODE,
+        ) {
+            override fun doAction(e: java.awt.event.ActionEvent) {
+                outcome = EnhancedCaptureConsent.DISABLE_CAPTURE
+                super.doAction(e)
+            }
+        }
+
     init {
         title = MpSqlVisualizerBundle.message("settings.enhancedCapture.confirm.title")
         init()
@@ -82,16 +102,4 @@ class EnhancedCaptureConfirmDialog(parent: Project?) : DialogWrapper(parent, tru
     override fun getOKAction(): Action = super.getOKAction().apply {
         putValue(Action.NAME, MpSqlVisualizerBundle.message("settings.enhancedCapture.confirm.ok"))
     }
-
-    /** 第三动作：关闭增强捕获并不再询问（T-PS4-01 用户明确新增需求；照 DialogWrapperExitAction 惯例）。 */
-    private val disableCaptureAction: DialogWrapperExitAction =
-        object : DialogWrapperExitAction(
-            MpSqlVisualizerBundle.message("settings.enhancedCapture.confirm.disable"),
-            DISABLE_EXIT_CODE,
-        ) {
-            override fun doAction(e: java.awt.event.ActionEvent) {
-                outcome = EnhancedCaptureConsent.DISABLE_CAPTURE
-                super.doAction(e)
-            }
-        }
 }
