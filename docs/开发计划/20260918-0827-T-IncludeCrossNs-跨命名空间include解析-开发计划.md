@@ -65,8 +65,8 @@ T-IC-01（轻量收集入口）→ T-IC-02（跨文件解析器）→ T-IC-03（
 
 - 实施分支/工作树：`t-include-cross-ns`（工作树 `mpsv-icns`），基线 `8a3a6ff`（dev 合流后 master）
 - 提交：`1ea06f7`（实施提交：代码 + 测试 + CHANGELOG + 变更记录总册；本 §八 回填为紧随的 docs 提交）
-- 门禁：定向 `XmlIncludeExpanderTest` 16 例绿（8 既有**零改动** + 8 新增）、`XmlCrossNsFragmentResolverTest` 10 例绿（LightPlatform：真实 FileTypeIndex + PSI + 项目内真实 mapper 文件）、`testFast` 全量绿；全量 `testShards` **4965/0/0/6 绿**（432 套件，3 片并行 3m12s）
-- 环境备注（诚实口径）：前两轮 testShards 分别撞 11 例 / 8 例失败，全部为机器级剪贴板争用（`cannot open system clipboard`，SqlPreviewPanelTest / XmlPreviewPanelTest / PluginSettingsPanelBindingTest 等面板类）与 `Container is already disposed`——同机另有三个工作树（mpsv-stfix/mpsv-eap/mpsv-sig）并行跑测试；两轮失败集不同（非确定性）、两处面板类隔离复跑即绿、与本任务改动零关联（不涉剪贴板/容器生命周期），第三轮全绿 4965/0/0/6
+- 门禁：定向 `XmlIncludeExpanderTest` 16 例绿（8 既有**零改动** + 8 新增）、`XmlCrossNsFragmentResolverTest` 11 例绿（LightPlatform：真实 FileTypeIndex + PSI + 项目内真实 mapper 文件）、`testFast` 全量绿；全量 `testShards` **4966/0/0/6 绿**（432 套件，3 片并行 2m51s，**最终树复跑**，含紧随的 1 例动态 refid 用例）
+- 环境备注（诚实口径）：四轮 testShards 中第 1/2 轮分别撞 11 例 / 8 例失败，全部为机器级剪贴板争用（`cannot open system clipboard`，SqlPreviewPanelTest / XmlPreviewPanelTest / PluginSettingsPanelBindingTest 等面板类）与 `Container is already disposed`——同机另有三个工作树（mpsv-stfix/mpsv-eap/mpsv-sig）并行跑测试；两轮失败集不同（非确定性）、两处面板类隔离复跑即绿、与本任务改动零关联（不涉剪贴板/容器生命周期），第 3/4 轮全绿
 
 任务落点：
 

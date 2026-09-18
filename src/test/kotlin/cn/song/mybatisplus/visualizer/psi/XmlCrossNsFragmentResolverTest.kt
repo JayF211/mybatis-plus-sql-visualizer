@@ -67,6 +67,18 @@ class XmlCrossNsFragmentResolverTest : BasePlatformTestCase() {
         assertEquals("SELECT t1.id FROM t", result.sql.replace(Regex("\\s+"), " ").trim())
     }
 
+    fun test动态全限定refid_property解析后跨文件展开() {
+        addMapper("src/main/resources/mapper/BaseMapper.xml", baseMapper)
+        // refid 含 `${}`：先按 include 自带 property 静态替换出全限定 refid，再跨文件查表
+        val result = preview("""
+            <mapper namespace="com.demo.OrderMapper">
+              <select id="s1">SELECT <include refid="${'$'}{ns}"><property name="ns" value="com.demo.BaseMapper.cols"/></include> FROM t</select>
+            </mapper>
+        """.trimIndent())
+        assertNull("property 解析出的全限定 refid 应跨文件展开：${result.warning}", result.warning)
+        assertEquals("SELECT id, name FROM t", result.sql.replace(Regex("\\s+"), " ").trim())
+    }
+
     fun test歧义_同名片段多文件重复声明_降级() {
         // 非法但存在：同 namespace 声明在两个文件（MyBatis 运行时后注册覆盖，本插件歧义降级）
         addMapper(
