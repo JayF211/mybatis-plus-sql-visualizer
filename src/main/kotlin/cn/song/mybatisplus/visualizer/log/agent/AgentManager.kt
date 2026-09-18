@@ -429,14 +429,8 @@ class AgentManager(private val project: Project) : Disposable {
         sessions.forEach { it.sendConfig(disabled = !active, desensitize = desensitize) }
     }
 
-    /**
-     * T-SourceJumpFunnel P1-3：帧过滤前缀热下发（设置变更）。sendConfig 读设置现拼
-     * skipPrefixes——设置页 Apply → SETTINGS_CHANGE_TOPIC → 既有监听走 pushDesensitize
-     * 即已携带新前缀，无需独立通道；本函数仅为语义命名入口（空实现保留扩展位）。
-     */
-    fun pushFrameSkipPrefixes() {
-        pushDesensitize(PluginSettings.getInstance().state.enhancedCaptureDesensitize)
-    }
+    // T-PS4-14③：pushFrameSkipPrefixes 死代码已删除（全仓库零调用）——帧过滤前缀的真实下发链为
+    // SETTINGS_CHANGE_TOPIC 监听（本类 init）→ executor → pushDesensitize/sendConfig（sendConfig 读设置现拼 skipPrefixes）。
 
     /**
      * 监听开关联动（T-AgentListenSync）：停止监听 → agent 停采（真停，非 IDE 侧丢弃）；
