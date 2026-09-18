@@ -35,7 +35,11 @@
 
 桶归属：对照集落 `testFast` 快桶（测试源码零 `com.intellij` 字面引用），与前序探针的桶归属一致——真引擎驱动是纯 JVM 操作，mybatis jar 在 testFast 的 classpath 上可达（实测已跑通）。
 
-驱动不可用时的口径：**硬失败**（不 skip）。依据：① `RealEngineDriver` 自身 KDoc 明写「调用方断言红，禁止静默跳过：跳过=对照集形同不存在」；② mybatis jar 由 `build.gradle.kts` 的 `testImplementation("org.mybatis:mybatis:3.5.19")` 显式声明，已在测试依赖图内——仓内软跳先例（`DialectDockerVerificationTest` 探测 Docker daemon）的适用前提是「被测能力不在本机依赖图内」，此处不成立；③ 对照集是回归资产，静默降级即退化为装饰。
+用例构成（4 个）：① 一致面 25 条逐字节相等；② 已知差异 6 条按登记形态断言；③ 引擎版本钉住（见下）；④ P20 归因钉（见 §4）。
+
+驱动不可用时的口径：**硬失败**（不 skip）。依据：① `RealEngineDriver` 自身 KDoc 明写「调用方断言红，禁止静默跳过：跳过=对照集形同不存在」；② 真引擎 jar 经 `testImplementation(libs.mp.core)`（`com.baomidou:mybatis-plus-core:3.5.17`）传递带入 `org.mybatis:mybatis:3.5.19`，已在测试依赖图内——仓内软跳先例（`DialectDockerVerificationTest` 探测 Docker daemon）的适用前提是「被测能力不在本机依赖图内」，此处不成立；③ 对照集是回归资产，静默降级即退化为装饰。
+
+引擎版本钉住：真引擎版本由**传递依赖**决定（本仓不显式声明 `org.mybatis:mybatis`，构建改动为零），mybatis-plus 升级会静默换掉被对照的引擎版本。故对照集另有版本钉住用例：jar 文件名 + 隔离 loader 载入类的包 `implementationVersion` 两路核验 3.5.19，失败消息直指「对照结论需重新评估」。期望值与自研管线声称复刻的目标版本同源（`xml/XmlSqlRenderer.kt:52` 的 KDoc 字面量；生产侧无常量可引，故在测试内显式钉住并注释交叉引用）。
 
 ## 2. 差异清单（6 条）
 
@@ -135,20 +139,21 @@
 
 做法：临时让自研渲染器在 `trim` 标签语义上偏离——`xml/TrimSqlNode.kt` 的 `applyPrefix` 中把 `for (toRemove in prefixesToOverride)` 改为 `for (toRemove in emptyList<String>())`（等价于「prefixOverrides 永不裁剪」），跑对照集，再还原。命中 P4 / P5 / P24 三条逐字节一致场景（都含 `where` 或自定义 `prefixOverrides`）。
 
-三次实测（`./gradlew testFast --tests "cn.song.mybatisplus.visualizer.xml.fidelity.RealEngineFidelityTest" -Pkotlin.compiler.execution.strategy=in-process`）：
+三次实测（`./gradlew testFast --tests "cn.song.mybatisplus.visualizer.xml.fidelity.RealEngineFidelityTest" -Pkotlin.compiler.execution.strategy=in-process`，均为最终态：对照集 4 用例，含版本钉住与 P20 归因钉）：
 
 改前（基线）：
 
 ```
 > Task :testFast
-BUILD SUCCESSFUL in 2m 55s
+BUILD SUCCESSFUL in 2m 20s
 ```
 
 `build/test-results/testFast/TEST-cn.song.mybatisplus.visualizer.xml.fidelity.RealEngineFidelityTest.xml`：
 
 ```xml
 <testsuite name="cn.song.mybatisplus.visualizer.xml.fidelity.RealEngineFidelityTest"
-           tests="3" skipped="0" failures="0" errors="0" time="4.346">
+           tests="4" skipped="0" failures="0" errors="0"
+           timestamp="2026-09-18T23:39:42.454Z" time="3.286">
 ```
 
 改后（故意偏离 `trim` 语义）：
@@ -156,15 +161,15 @@ BUILD SUCCESSFUL in 2m 55s
 ```
 > Task :testFast
 RealEngineFidelityTest > 一致面 25 条：SQL 文本与参数队列逐字节相等 FAILED
-    java.lang.AssertionError at RealEngineFidelityTest.kt:76
-3 tests completed, 1 failed
-BUILD FAILED in 1m 23s
+4 tests completed, 1 failed
+BUILD FAILED in 50s
 ```
 
 失败详情（同上 XML 的 `<failure>`）：
 
-```
-<testsuite … tests="3" skipped="0" failures="1" errors="0" time="3.606">
+```xml
+<testsuite … tests="4" skipped="0" failures="1" errors="0"
+           timestamp="2026-09-18T23:41:09.032Z" time="2.335">
 java.lang.AssertionError: 标签语义一致面出现 3 条偏差：
 P4 where + set trim: SQL 不一致
     真引擎=[UPDATE t SET a = ? WHERE a = ?]
@@ -181,12 +186,13 @@ P24 include with property: SQL 不一致
 
 ```
 > Task :testFast
-BUILD SUCCESSFUL in 59s
+BUILD SUCCESSFUL in 41s
 ```
 
 ```xml
 <testsuite name="cn.song.mybatisplus.visualizer.xml.fidelity.RealEngineFidelityTest"
-           tests="3" skipped="0" failures="0" errors="0" time="2.49">
+           tests="4" skipped="0" failures="0" errors="0"
+           timestamp="2026-09-18T23:42:10.105Z" time="2.238">
 ```
 
 `git diff --stat src/main` 为空（渲染主链无残留改动）。
@@ -200,7 +206,8 @@ BUILD SUCCESSFUL in 59s
   -Pkotlin.compiler.execution.strategy=in-process
 ```
 
-- 首次跑会因 `testImplementation("org.mybatis:mybatis:3.5.19")` 拉依赖（本地 Gradle 缓存已有 3.5.19）；jar 定位三路兜底见 `RealEngineDriver.locateMybatisJar`。
+- 真引擎 jar 不在 `build.gradle.kts` 里显式声明——经 `testImplementation(libs.mp.core)`（mybatis-plus-core:3.5.17）传递带入 `org.mybatis:mybatis:3.5.19`，复核命令：`./gradlew dependencies --configuration testRuntimeClasspath`；版本漂移由对照集的版本钉住用例兜底。
+- jar 定位三路兜底见 `RealEngineDriver.locateMybatisJar`（宿主 classpath 资源 → `java.class.path` → Gradle 缓存）。
 - 真引擎日志已置 `NoLoggingImpl`，测试输出无 mybatis 噪音。
 - 全量门禁仍是 `test` / `testShards`（本类自动进分片）。
 

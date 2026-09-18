@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.xml.OgnlEvaluator
 import cn.song.mybatisplus.visualizer.xml.RenderedXmlSql
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
 import cn.song.mybatisplus.visualizer.xml.XmlSqlRenderer
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -40,9 +41,14 @@ import org.junit.Test
  * ## 驱动不可用时的口径：硬失败（不 skip）
  * `RealEngineDriver.create()` 在 jar 缺失时抛 [RealEngineUnavailableException] → 本类构造期即红。
  * 依据：① [RealEngineDriver] 自身 KDoc「调用方断言红，禁止静默跳过：跳过=对照集形同不存在」；
- * ② mybatis jar 由 `build.gradle.kts` 的 `testImplementation("org.mybatis:mybatis:3.5.19")` 显式声明，
- * 已在测试依赖图内（仓内软跳先例 `DialectDockerVerificationTest` 的 Docker 探测适用前提是「被测能力
- * 不在本机依赖图内」，此处不成立）；③ 对照集是回归资产，静默降级即退化为装饰。
+ * ② 真引擎 jar 经 `testImplementation(libs.mp.core)`（mybatis-plus-core:3.5.17）传递带入
+ * `org.mybatis:mybatis:3.5.19`，已在测试依赖图内（仓内软跳先例 `DialectDockerVerificationTest`
+ * 的 Docker 探测适用前提是「被测能力不在本机依赖图内」，此处不成立）；③ 对照集是回归资产，
+ * 静默降级即退化为装饰。
+ *
+ * ## 引擎版本钉住
+ * 真引擎版本由传递依赖决定（非本仓显式声明）→ 升级 mybatis-plus 会静默换掉被对照的引擎版本，
+ * 故本类另有版本钉住用例（jar 文件名 + 隔离 loader 包 `implementationVersion` 两路核验 3.5.19）。
  */
 class RealEngineFidelityTest {
 
@@ -177,6 +183,41 @@ class RealEngineFidelityTest {
             EvalResult.Ok(true),
             OgnlEvaluator.evaluate("u.name != null", mapOf("u" to MockObject(mapOf("name" to "a")))),
         )
+    }
+
+    /**
+     * 引擎版本钉住（T-TailSweep2 G1 补充）：对照集的价值取决于「对比的是哪个引擎版本」——
+     * 真引擎 jar **不由本仓显式声明**，而是经 `testImplementation(libs.mp.core)`
+     * （`com.baomidou:mybatis-plus-core:3.5.17`）传递带入 `org.mybatis:mybatis:3.5.19`，
+     * 故版本漂移（mp-core 升级 → 传递 mybatis 变版）会**静默**改变对照结论。本断言把它变响亮。
+     *
+     * 期望值 [EXPECTED_ENGINE_VERSION] 与自研管线声称复刻的目标版本同源（`xml/XmlSqlRenderer.kt:52`
+     * 的「复刻 MyBatis 3.5.19 `DynamicSqlSource.getBoundSql`」KDoc 字面量——生产侧无常量可引，
+     * 此处显式钉住并在失败消息里交叉引用该处）。两路核验：jar 文件名 + 隔离 loader 载入类的
+     * 包 `implementationVersion`（来自 jar 清单）。
+     */
+    @Test
+    fun `引擎版本钉住：实际加载的真引擎 jar 版本与声称复刻的目标一致`() {
+        val jarName = File(driver.mybatisJarPath).name
+        val fromJarName = Regex("""mybatis-(\d+\.\d+\.\d+)\.jar""").find(jarName)?.groupValues?.get(1)
+        assertEquals(
+            "真引擎 jar 版本与自研管线声称复刻的目标版本不一致，对照结论需重新评估" +
+                "（期望 $EXPECTED_ENGINE_VERSION，声称处 xml/XmlSqlRenderer.kt:52）：$jarName",
+            EXPECTED_ENGINE_VERSION,
+            fromJarName,
+        )
+        // 包版本来自 jar 清单 Implementation-Version（隔离 loader 从 jar 载入的类才有）；缺失时只按文件名核验并留痕
+        val fromManifest = driver.loadIsolated(ISOLATED_PROBE_CLASS).`package`?.implementationVersion
+        if (fromManifest == null) {
+            println("[fidelity] jar 清单无 Implementation-Version，本次仅按文件名核验引擎版本：$jarName")
+        } else {
+            assertEquals(
+                "隔离 loader 载入的引擎包版本与期望不一致（jar 名=$jarName）：对照结论需重新评估",
+                EXPECTED_ENGINE_VERSION,
+                fromManifest,
+            )
+        }
+        println("[fidelity] 引擎 jar = ${driver.mybatisJarPath}（版本 $EXPECTED_ENGINE_VERSION，jar 名与包版本两路核验）")
     }
 
     // ------------------------------------------------------------------
@@ -386,6 +427,15 @@ class RealEngineFidelityTest {
     private companion object {
         const val NAMESPACE = "n"
         const val STATEMENT_ID = "s1"
+
+        /**
+         * 期望的真引擎版本——与 `xml/XmlSqlRenderer.kt:52` 声称复刻的 MyBatis 版本同源（3.5.19）。
+         * 该处是 KDoc 字面量、生产侧无常量可引，故在此显式钉住（漂移即红，见版本钉住用例）。
+         */
+        const val EXPECTED_ENGINE_VERSION = "3.5.19"
+
+        /** 隔离 loader 包版本探测类（真引擎核心类；其 `Package` 版本来自 jar 清单）。 */
+        const val ISOLATED_PROBE_CLASS = "org.apache.ibatis.session.Configuration"
     }
 }
 

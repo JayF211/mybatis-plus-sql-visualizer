@@ -52,9 +52,13 @@ internal class RealEngineException(
  * 其余委派宿主 loader（用户实体/DTO/测试类由宿主提供）。故即使宿主 classpath 上也有 mybatis，
  * 真引擎类与其内置 OGNL 的静态状态仍落在隔离 loader 内（不污染宿主，也不被宿主遮蔽）。
  *
- * 依赖决策点（计划 §二 T-FS-01）：取 **(a) `testImplementation("org.mybatis:mybatis:3.5.19")`**——
- * 显式、可复现、生产依赖图不变；红线边界＝**零 mybatis 依赖只约束 `implementation`（生产域），
- * 测试域不受限**。jar 定位以宿主 classpath 资源为准，Gradle 缓存路径仅作兜底（见 [locateMybatisJar]）。
+ * 依赖来源（计划 §二 T-FS-01 首个决策点，实测销账）：真引擎 jar **经 `testImplementation(libs.mp.core)`
+ * 传递带入**——`com.baomidou:mybatis-plus-core:3.5.17` 编译期依赖 `org.mybatis:mybatis:3.5.19`，该传递项
+ * 已在 `testRuntimeClasspath` 上可达（`./gradlew dependencies --configuration testRuntimeClasspath` 可复核），
+ * 故**无需显式声明 `testImplementation("org.mybatis:mybatis:3.5.19")`**（构建改动为零，计划 §二 的 (a)/(b) 两
+ * 备选均不需要）。红线边界＝**零 mybatis 依赖只约束 `implementation`（生产域），测试域不受限**。
+ * 传递版本有静默漂移风险，由对照集 `RealEngineFidelityTest` 的版本钉住断言兜底。
+ * jar 定位以宿主 classpath 资源为准，Gradle 缓存路径仅作兜底（见 [locateMybatisJar]）。
  */
 internal class RealEngineDriver private constructor(
     private val isolated: ClassLoader,
@@ -174,7 +178,7 @@ internal class RealEngineDriver private constructor(
             val jarPath = locateMybatisJar()
                 ?: throw RealEngineUnavailableException(
                     "未定位到 mybatis jar：宿主 classpath 资源 / java.class.path / Gradle 缓存三路均未命中" +
-                        "（依赖决策点 (a) 的前提是 testImplementation 已生效）",
+                        "（真引擎 jar 应经 testImplementation(libs.mp.core) → mybatis-plus-core 传递带入）",
                 )
             val isolated = newIsolatedLoader(jarPath)
             return try {
