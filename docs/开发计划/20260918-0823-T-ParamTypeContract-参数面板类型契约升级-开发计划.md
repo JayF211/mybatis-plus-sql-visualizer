@@ -68,4 +68,67 @@ T-PT-01（契约升级）→ T-PT-03（mock 分派）→ T-PT-02（校验与占�
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+- 实施分支：t-param-type-contract（git 工作树 mpsv-ptc，基线 8a3a6ff = dev 合流后 master）。
+- 交付范围：T-PT-01 ~ T-PT-05 全部条目，测试与文档同步。
+
+### T-PT-01 契约升级（布尔 → 类型类别）
+
+- 新增 `xml/ParamKind.kt`：`ParamKind { TEXT, NUMBER, TEMPORAL, COLLECTION, OBJECT, UNKNOWN }`
+  + `ParamTypeInfo(kind, nullable)`。**枚举刻意落 xml 层**（`XmlPreviewModel` 及其单测零 PSI/IDE 依赖的架构约束不变），psi 层只做映射。
+- `XmlParamTypeResolver`：新增 `resolveTypes`（主输出）与内部映射 `kindOf/kindOfTypeText/typeInfoOf`；
+  `resolveQuotes` 降为派生包装（`kind.quoteRequired`），既有 Heavy 用例零改动。
+- `XmlPreviewModel`：新增 `paramTypes` 字段与 `paramTypeFor/kindFor`（精确匹配优先、前缀兜底，与 `quoteFor` 同规则）；
+  `from(...)` 新增 `paramTypes` 参数，非空时 `paramQuotes` 由其派生（**布尔通道 = 派生视图**，`quoteFor` 实现零改动）。
+- 映射清单：String/CharSequence→TEXT；整型浮点族原语与包装类 + BigDecimal→NUMBER（判定复用 `ParamQuote.decide`，杜绝两份数值名单漂移）；
+  `java.time.*` 与 `java.util.Date`（简单名 Date/Calendar 兼容）→TEMPORAL；List/Collection/Set/Queue 族与数组→COLLECTION；Map 族与用户项目 DTO→OBJECT；其余一律 UNKNOWN。
+- 收窄两处（宁缺勿错）：`byte[]`/`Byte[]` 按 BLOB 语义落 UNKNOWN（不按集合提示展开）；枚举、boolean、char、`java.sql.Timestamp` 落 UNKNOWN（映射不到即现状）。
+- 键形态定案：**DTO 参数不产出顶层键**（键 = `p.字段名` 路径，与升级前引号映射键形态逐键一致）；
+  故 OBJECT 类别实际由 Map 参数（键 = 参数名）与注解路径的 DTO 参数承载。
+- 注解侧：`AnnotationSqlPreviewService.paramNames(List)` 扩为 `paramTypes(Map)`（名字 + 类别，`param1..N` 按位置继承类别）；
+  `AnnotationSqlParser.parse` 追加 `paramTypes` 可选参数；`XmlSqlCompletionContextResolver` 的补全参数名改取 `paramTypes(...).keys`（键序与旧列表逐项一致）。
+- **TEMPORAL 引号行为显式定案**：`quoteRequired = true`（引号档）——升级前 `LocalDate` 即落引号档（未命中数值集），
+  本次把「日期无特判」升格为显式规则，行为逐值不变（防回归断言：`resolveQuotes` 与 `kind.quoteRequired` 逐键相等 + `quoteFor` 与显式布尔通道逐值相等）。
+
+### T-PT-03 mock 分派
+
+- `XmlPreviewModel.mockBindings` 占位值按类别分派：NUMBER→`1`、TEMPORAL→`'2026-01-01 00:00:00'`（带引号字面量，`${}` 直替后即为合法 SQL 字面量）、
+  COLLECTION→`MockIterable(2)`、OBJECT→`MockObject()`、TEXT/UNKNOWN→`"1"`（现状）。
+- 无类型信息（含 DTO 顶层键缺席）一律维持 `"1"`——验收 3 的「行为与现状一致」由此成立。
+- 已知边界：COLLECTION 类别参数若出现在 `${}` 直替里会展开为 `MockIterable` 的 toString（`${集合}` 本身不是合法 SQL 用法，登记观察）。
+
+### T-PT-02 占位提示与校验
+
+- `buildParamRow` 按类别挂 `emptyText`（NUMBER/TEMPORAL/COLLECTION/OBJECT 四档；TEXT 不提示）；
+  UNKNOWN 走参数命名启发式（zMyBatis `ParameterInputDialog` 同款）：`s` 结尾或含 list/ids/array/collection → 数组提示，
+  单数词排除表 26 词（status/address/class/business…），`ss` 结尾天然排除。
+- 行尾淡色警示标：NUMBER 非数字、TEMPORAL 非可解析日期时显示 `⚠` + tooltip 说明（`JBColor` 明暗双档）；
+  **校验是提示不是闸门**——`renderValue`/`renderSingleValue` 渲染链零改动，值照原样进 SQL。
+- 日期控件（DatePicker）按计划列为可选增强，v1 只做文本 + 校验。
+
+### T-PT-04 空参数填充策略
+
+- `PluginSettings.State` 新增 `emptyParamFill`（`NULL` 默认 / `EMPTY_STRING`）；设置页 SQL 预览分组新增单选（双语键 5 个）；
+  `isModifiedPreview/apply/reset` 三处接线 + 测试缝 `selectEmptyParamFill`。
+- **实施偏离（一处，显式定案）**：策略仅对**带 mapper 签名类型信息**的参数行生效；无类型信息路径（日志还原/JPA/旧文本路径等）
+  的空输入保留 `?` 占位。依据 = §四 验收 3「无类型信息（UNKNOWN）时行为与现状一致」，
+  且既有契约用例 `SqlPreviewPanelTest.testParamBackfillEmptyKeepsPlaceholder`（留空保留 `?`）为设计态；
+  计划原文「空输入按策略出 NULL/''」未限定范围，此处按验收标准收窄。
+- 未引入「执行后自动复制」（计划明示）。
+
+### T-PT-05 测试与文档
+
+- 新增 `xml/XmlParamKindTest`（6 例，纯逻辑进 testFast）：派生引号视图、精确/前缀命中、mock 分派六类别、无类型信息现状一致。
+- 新增 `ui/SqlPreviewPanelParamKindTest`（5 例，headless）：emptyText 四类别 + UNKNOWN 启发式（含排除词）、
+  NUMBER/TEMPORAL 警示与「不阻塞渲染」、空输入策略两档（含 IN 列表形态与有值输入不受影响）。
+- `heavy/HeavyXmlParamTypeResolverTest` 扩 2 例：真实 PSI 六类别映射（含枚举/byte[]/嵌套 DTO/Map/List/原语 nullable）、
+  `resolveQuotes` 派生一致性逐键断言。
+- `config/PluginSettingsPanelBindingTest` 扩 1 例：空参数填充策略 isModified/apply/reset 读写链。
+- 文档：`docs/变更记录.md` 总册行 + `CHANGELOG.md [Unreleased]` 条目 + 本节回填。
+
+### 门禁与现状核实勘误
+
+- 门禁：`./gradlew testFast` 绿；全量 `./gradlew testShards` **4961/0/0/6 绿**（本分支基线计数，含新增 14 例）。
+- §二 现状核实表结论成立（读取链已存在、类型只被加工成布尔引号映射、输入控件清一色 JBTextField、mock 统一 `"1"`），
+  但两处行号锚点已随并行交付漂移，以当前代码为准：`buildParamRow` 实为 `SqlPreviewPanel.kt:2843`（表内 2434）、
+  `ParamQuote.decide` 实为 `sql/ParamQuote.kt:29`（表内 47-65）；`MockIterable` 定义在 `xml/Ognl.kt:28`（表内指向 XmlPreviewModel）。
+

@@ -8,6 +8,8 @@
 
 ### Added
 
+- **参数面板类型契约升级（T-ParamTypeContract，N-26 / Z-3+Z-4+Z-13）**：XML mapper 参数从「猜」升级为「按签名」——`XmlParamTypeResolver` 输出由布尔引号映射扩为类型类别契约（`ParamKind`：TEXT/NUMBER/TEMPORAL/COLLECTION/OBJECT/UNKNOWN + nullable 标记，枚举落 xml 层保持该类零 PSI 依赖；布尔引号通道降级为派生视图，`quoteFor` 行为逐值不变）。参数输入行按类别给占位提示（数字 `42` / 日期 `2026-01-01 12:00:00` / 集合 `[1, 2, 3]` / 对象 `{"id": 1}`；无类型信息走参数命名启发式——`s` 结尾或含 ids·list，排除 status/address 等单数词），NUMBER 输入非数字、TEMPORAL 非可解析日期时行尾给淡色警示标（提示不是闸门，值照原样进 SQL，渲染链零改动）。mock 占位值按类别分派（NUMBER→`1`、TEMPORAL→`'2026-01-01 00:00:00'`、COLLECTION→可迭代 mock、OBJECT→属性对象；无类型信息维持 `"1"`）。设置页「SQL 预览」组新增「空参数填充策略」单选（NULL 字面量 / 空字符串，默认 NULL）——带签名信息的参数行留空时按策略出 `NULL`/`''`，无类型信息路径保留 `?` 占位（行为与升级前一致）。映射不到一律 UNKNOWN（宁缺勿错）；`byte[]` 按 BLOB 落 UNKNOWN，日期无特判的引号行为显式定案（TEMPORAL 走引号档）
+
 - **MCP 工具二期扩容 + 设置页门控（T-McpToolset2）**：平台 MCP Server 工具从 3 个扩到 10 个——新增 `mpsv_render_logs`（MyBatis/Hibernate/JdbcTemplate 日志还原可执行 SQL）、`mpsv_check_sql`（静态写风险与类型核查）、`mpsv_rollback_plan`（回滚预案，只产出不执行）、`mpsv_perf_advice`（20 条规则性能建议）、`mpsv_crud_sql`（实体类生成 CRUD 四件套）、`mpsv_reverse_sql`（SQL 转 MyBatis-Plus 代码）、`mpsv_mapper_check`（mapper 契约核查 + 可选 simulate 对渲染产物做写风险/性能分析——校验器给不出的证据形态）；全部只读三 hint、拒绝走 McpExpectedError、每调用 `[MCP-AUDIT]` 审计。设置页「MCP 工具」子页新增门控区：总开关（整体启停插件 MCP 功能）+ 十工具逐项启用/禁用 + 全部启用/禁用切换按钮——平台工具面在下一次工具列表/调用即时生效（262 mcpserver.jar 字节码实证 getEnabledToolsets 每次重新求值）。一工具一 toolset 类（平台 per-tool 门控只有 toolset 粒度 isEnabled），McpToolsetSupport 基类三钩子字面量覆写保持 253 兼容
 
 - **执行确认升级为无界写发现清单（T-UnboundedWriteGuard，O-9）**：执行 UPDATE/DELETE 前的二次确认对话框在静态检查命中无界写特征时列出发现（无 WHERE 全表 / 恒真条件如 `1=1` / OR 分支恒真 / `LIKE '%'` 纯通配 / WHERE 仅常量 / 子查询提示 / 无法解析请人工确认）——同一对话框形态零新弹窗，无发现时文案逐字节不变（高频确认不添乱）；规则集对齐 DBX `sql_risk.rs`，JSqlParser AST 权威、解析失败 fail closed。预览执行、日志转 SQL 执行、回滚执行三处确认流共用；回滚视图对恒真/纯通配 WHERE 追加「快照将覆盖全表」警示

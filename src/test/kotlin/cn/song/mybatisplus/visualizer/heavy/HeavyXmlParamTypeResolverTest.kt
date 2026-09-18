@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.heavy
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel
 import cn.song.mybatisplus.visualizer.ui.XmlParamTypeResolver
 import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
+import cn.song.mybatisplus.visualizer.xml.ParamKind
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.util.Computable
 import com.intellij.openapi.vfs.VfsUtil
@@ -12,6 +13,7 @@ import com.intellij.testFramework.HeavyPlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
 /**
@@ -161,6 +163,91 @@ class HeavyXmlParamTypeResolverTest : HeavyPlatformTestCase() {
         assertTrue(XmlParamTypeResolver.resolveQuotes(project, "com.example.Unknown", "statistics").isEmpty())
         assertTrue(XmlParamTypeResolver.resolveQuotes(project, "com.example.SettlementMapper", "unknown").isEmpty())
         assertTrue(XmlParamTypeResolver.resolveQuotes(null, "com.example.SettlementMapper", "statistics").isEmpty())
+    }
+
+    // ------------------------------------------------------------------
+    // T-PT-01：类型类别映射（Heavy 真实 PSI resolve）
+    // ------------------------------------------------------------------
+
+    /** 覆盖六类别 + 边界形态：数值族 / 时间 / 文本 / 集合 / Map / 枚举 / byte[] / 嵌套 DTO。 */
+    private val kindMapper = """
+        package com.example;
+
+        import java.math.BigDecimal;
+        import java.time.LocalDate;
+        import java.util.Date;
+        import java.util.List;
+        import java.util.Map;
+
+        public enum Status { A, B }
+
+        public class InnerKindDTO {
+            private LocalDate innerDate;
+        }
+
+        public class KindDTO {
+            private Integer id;
+            private int pageNum;
+            private String name;
+            private LocalDate startDate;
+            private Date createdAt;
+            private BigDecimal amount;
+            private List<String> tags;
+            private Status status;
+            private byte[] blob;
+            private InnerKindDTO inner;
+        }
+
+        public interface KindMapper {
+            void byKinds(@org.apache.ibatis.annotations.Param("p") KindDTO p,
+                         @org.apache.ibatis.annotations.Param("ids") List<Long> ids,
+                         @org.apache.ibatis.annotations.Param("params") Map<String, Object> params,
+                         @org.apache.ibatis.annotations.Param("keyword") String keyword,
+                         @org.apache.ibatis.annotations.Param("bytes") byte[] bytes,
+                         @org.apache.ibatis.annotations.Param("flag") boolean flag);
+        }
+    """.trimIndent()
+
+    fun testParamKindsMappedBySignature() {
+        addSourceFile("KindMapper.java", kindMapper)
+        val types = XmlParamTypeResolver.resolveTypes(project, "com.example.KindMapper", "byKinds")
+        // DTO 参数键 = 字段路径（不产出顶层键——与升级前引号映射键形态一致）
+        assertNull("DTO 参数不产出顶层键", types["p"])
+        assertEquals(ParamKind.NUMBER, types["p.id"]?.kind)
+        assertEquals(ParamKind.NUMBER, types["p.pageNum"]?.kind)
+        assertEquals(ParamKind.TEXT, types["p.name"]?.kind)
+        assertEquals(ParamKind.TEMPORAL, types["p.startDate"]?.kind)
+        assertEquals(ParamKind.TEMPORAL, types["p.createdAt"]?.kind)
+        assertEquals(ParamKind.NUMBER, types["p.amount"]?.kind)
+        assertEquals(ParamKind.COLLECTION, types["p.tags"]?.kind)
+        assertEquals("枚举映射不到 → UNKNOWN（宁缺勿错）", ParamKind.UNKNOWN, types["p.status"]?.kind)
+        assertEquals("byte[] 按 BLOB 语义落 UNKNOWN", ParamKind.UNKNOWN, types["p.blob"]?.kind)
+        assertEquals("嵌套 DTO 继续递归（键为字段路径）", ParamKind.TEMPORAL, types["p.inner.innerDate"]?.kind)
+        // 顶层参数
+        assertEquals(ParamKind.COLLECTION, types["ids"]?.kind)
+        assertEquals(ParamKind.OBJECT, types["params"]?.kind)
+        assertEquals(ParamKind.TEXT, types["keyword"]?.kind)
+        assertEquals(ParamKind.UNKNOWN, types["bytes"]?.kind)
+        assertEquals(ParamKind.UNKNOWN, types["flag"]?.kind)
+        // nullable 标记：原语类型非空
+        assertEquals(false, types["p.pageNum"]?.nullable)
+        assertEquals(true, types["p.id"]?.nullable)
+        assertEquals(false, types["flag"]?.nullable)
+    }
+
+    fun testResolveQuotesDerivesFromKindsAndKeepsLegacyValues() {
+        addSourceFile("KindMapper.java", kindMapper)
+        val types = XmlParamTypeResolver.resolveTypes(project, "com.example.KindMapper", "byKinds")
+        val quotes = XmlParamTypeResolver.resolveQuotes(project, "com.example.KindMapper", "byKinds")
+        // 派生视图：NUMBER→false、其余 true（逐键一致，防回归断言）
+        assertEquals(types.mapValues { (_, info) -> info.kind.quoteRequired }, quotes)
+        assertEquals(false, quotes["p.id"])
+        assertEquals(false, quotes["p.amount"])
+        assertEquals(true, quotes["p.name"])
+        assertEquals(true, quotes["p.startDate"])
+        assertEquals(true, quotes["p.tags"])
+        assertEquals(true, quotes["p.status"])
+        assertEquals(true, quotes["params"])
     }
 
     fun testEndToEndPanelBackfillByParamType() {

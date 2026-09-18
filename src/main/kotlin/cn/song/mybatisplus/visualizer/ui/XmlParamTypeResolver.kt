@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.sql.ParamQuote
+import cn.song.mybatisplus.visualizer.xml.ParamKind
+import cn.song.mybatisplus.visualizer.xml.ParamTypeInfo
 import com.intellij.openapi.project.Project
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiClass
@@ -8,61 +10,138 @@ import com.intellij.psi.PsiClassType
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiParameter
 import com.intellij.psi.PsiPrimitiveType
+import com.intellij.psi.PsiType
 import com.intellij.psi.search.GlobalSearchScope
 
 /**
- * XML 参数类型解析器（T-M29.5）：按 mapper 方法签名解析参数 Java 类型 → 回填引号映射。
+ * XML 参数类型解析器（T-M29.5 / T-PT-01）：按 mapper 方法签名解析参数 Java 类型 →
+ * 参数类型类别映射（[ParamTypeInfo]）。
  *
  * 链路：XML `<mapper namespace>` → [JavaPsiFacade.findClass]（真实 IDE resolve）→ 语句 id 对应
- * 接口方法 → 参数列表：`@Param("p")` 值 / 参数名 → 参数类型：
+ * 接口方法 → 参数列表：`@Param("p")` 值 / 参数名 → 参数类型类别：
  *  - **DTO/实体**（非 java.* 非枚举）：逐字段解析类型（含父类字段、嵌套 DTO 递归），
- *    键 = `p.字段名`，值 = [ParamQuote.decide]（LocalDate → true 引号、Integer → false 裸渲染——
- *    与真实 JDBC 绑定效果一致）；
- *  - **Map / 基本类型 / 其他简单类型**：键 = 参数名，值 = 类型判定（Map → true，数值 → false）；
+ *    键 = `p.字段名`，值 = 字段类型类别；
+ *  - **Map / 基本类型 / 其他简单类型**：键 = 参数名，值 = 类型类别（Map → OBJECT，数值 → NUMBER）；
  *  - 注解类不可解析（测试沙盒）时按短名兜底；无 @Param 用参数名。
  *
+ * 类型映射规则（T-PT-01，见 [kindOf]）：String/CharSequence→TEXT、数值族→NUMBER、
+ * `java.time.*` 与 `java.util.Date`→TEMPORAL、List/Collection/Set 族与数组→COLLECTION、
+ * DTO/Map→OBJECT；映射不到一律 UNKNOWN（行为=升级前，宁缺勿错）。
+ *
  * 不可解析（LightPlatform 跨文件 resolve 不可用 / namespace 缺失 / 方法缺失）→ 空映射，
- * 面板对未命中参数兜底引号（T-M29.4 行为）。
+ * 面板对未命中参数兜底（T-M29.4 引号行为 + T-PT-02 无类型信息不提示）。
  */
 object XmlParamTypeResolver {
 
     private const val PARAM_ANNOTATION = "org.apache.ibatis.annotations.Param"
 
-    /** 解析语句参数引号映射。@param project 不可用（null）时返回空映射。 */
-    fun resolveQuotes(project: Project?, namespace: String?, statementId: String): Map<String, Boolean> {
+    /** 时间类型简单名（含 java.time.* 各形态 + java.util.Date 族）。 */
+    private val TEMPORAL_SIMPLE_NAMES = setOf(
+        "LocalDate", "LocalDateTime", "LocalTime", "OffsetDateTime", "OffsetTime",
+        "ZonedDateTime", "Instant", "Year", "YearMonth", "MonthDay", "Date", "Calendar",
+    )
+
+    /** 字符序列简单名（TEXT）。 */
+    private val TEXT_SIMPLE_NAMES = setOf("String", "CharSequence")
+
+    /** 集合简单名（COLLECTION）：JDK 集合族——List/Collection 之外含 Set/Queue 等同族形态。 */
+    private val COLLECTION_SIMPLE_NAMES = setOf(
+        "List", "ArrayList", "LinkedList", "Collection", "Set", "HashSet", "LinkedHashSet",
+        "TreeSet", "SortedSet", "NavigableSet", "Queue", "Deque", "ArrayDeque", "Vector", "Stack", "Iterable",
+    )
+
+    /** 键值对象简单名（OBJECT）：Map 族——按属性路径取值，不整体内联。 */
+    private val OBJECT_SIMPLE_NAMES = setOf(
+        "Map", "HashMap", "LinkedHashMap", "TreeMap", "SortedMap", "NavigableMap",
+        "ConcurrentHashMap", "Hashtable", "Properties",
+    )
+
+    /** 解析语句参数类型类别映射。@param project 不可用（null）时返回空映射。 */
+    fun resolveTypes(project: Project?, namespace: String?, statementId: String): Map<String, ParamTypeInfo> {
         if (project == null || namespace.isNullOrEmpty()) return emptyMap()
         val mapperClass = JavaPsiFacade.getInstance(project)
             .findClass(namespace, GlobalSearchScope.allScope(project)) ?: return emptyMap()
         val method = mapperClass.findMethodsByName(statementId, false).firstOrNull() ?: return emptyMap()
-        val result = mutableMapOf<String, Boolean>()
+        val result = mutableMapOf<String, ParamTypeInfo>()
         for (param in method.parameterList.parameters) {
             val paramName = paramNameOf(param) ?: continue
             val type = param.type
             val psiClass = (type as? PsiClassType)?.resolve()
             when {
                 psiClass == null -> {
-                    // 基本类型/不可解析：直接按类型判定（property = 参数名）
-                    result[paramName] = ParamQuote.decide(type.canonicalText) ?: true
+                    // 基本类型/数组/不可解析：直接按类型文本判定（property = 参数名）
+                    result[paramName] = typeInfoOf(type)
                 }
-                isDtoLike(psiClass) -> collectFieldQuotes(paramName, psiClass, result)
-                else -> result[paramName] = ParamQuote.decide(psiClass.qualifiedName) ?: true
+                isDtoLike(psiClass) -> collectFieldTypes(paramName, psiClass, result)
+                else -> result[paramName] = typeInfoOf(type, psiClass)
             }
         }
         return result
     }
 
-    /** DTO/实体字段递归收集：`p.字段名` → 引号；嵌套 DTO 继续递归（`p.dto.x`）。 */
-    private fun collectFieldQuotes(prefix: String, psiClass: PsiClass, sink: MutableMap<String, Boolean>) {
+    /**
+     * T-PT-01：参数类型类别映射的**派生引号视图**（T-M29.5 布尔通道保留）——
+     * NUMBER→false、其余 true；与升级前 [ParamQuote.decide] 逐值等价（防回归断言见 Heavy 用例）。
+     */
+    fun resolveQuotes(project: Project?, namespace: String?, statementId: String): Map<String, Boolean> =
+        resolveTypes(project, namespace, statementId).mapValues { (_, info) -> info.kind.quoteRequired }
+
+    /** DTO/实体字段递归收集：`p.字段名` → 类型类别；嵌套 DTO 继续递归（`p.dto.x`）。 */
+    private fun collectFieldTypes(prefix: String, psiClass: PsiClass, sink: MutableMap<String, ParamTypeInfo>) {
         for (field in psiClass.allFields) {
             val key = "$prefix.${field.name}"
             val fieldClass = (field.type as? PsiClassType)?.resolve()
             if (fieldClass != null && isDtoLike(fieldClass)) {
-                collectFieldQuotes(key, fieldClass, sink)
+                collectFieldTypes(key, fieldClass, sink)
             } else {
-                sink[key] = ParamQuote.decide(field.type.canonicalText) ?: true
+                sink[key] = typeInfoOf(field.type, fieldClass)
             }
         }
     }
+
+    /** PSI 类型 → 类型信息（psi 层唯一映射入口；注解侧参数同用）。 */
+    internal fun typeInfoOf(type: PsiType, psiClass: PsiClass? = (type as? PsiClassType)?.resolve()): ParamTypeInfo =
+        ParamTypeInfo(
+            kind = kindOf(type, psiClass),
+            // 原语类型（int/long 等）无 null 语义；其余保守视为可空
+            nullable = type !is PsiPrimitiveType,
+        )
+
+    /**
+     * PSI 类型 → 类别（T-PT-01）：先按类型文本映射（简单名/全限定名两形态归一，与 [ParamQuote] 同口径），
+     * 未命中且可解析为用户项目类（非 JDK、非枚举）→ OBJECT；其余 → [ParamKind.UNKNOWN]。
+     */
+    internal fun kindOf(type: PsiType, psiClass: PsiClass?): ParamKind {
+        kindOfTypeText(type.canonicalText)?.let { return it }
+        if (psiClass != null && isDtoLike(psiClass)) return ParamKind.OBJECT
+        return ParamKind.UNKNOWN
+    }
+
+    /**
+     * 类型文本 → 类别（命中返回类别，未命中返回 null 交由调用方判 DTO 兜底）。
+     *
+     * 泛型先剥壳（`java.util.List<java.lang.String>` → `java.util.List`）；
+     * NUMBER 判定复用 [ParamQuote.decide]（升级前数值集单一来源，杜绝两份数值名单漂移）；
+     * 数组→COLLECTION，但 `byte[]`/`Byte[]` 按 BLOB 语义落 UNKNOWN（T-PT-01 收窄，见实施记录）。
+     */
+    internal fun kindOfTypeText(typeText: String?): ParamKind? {
+        if (typeText.isNullOrBlank()) return null
+        val bare = typeText.substringBefore('<').trim()
+        val simple = bare.substringAfterLast('.')
+        return when {
+            bare.startsWith("java.time.") || simple in TEMPORAL_SIMPLE_NAMES -> ParamKind.TEMPORAL
+            ParamQuote.decide(bare) == false -> ParamKind.NUMBER
+            simple in TEXT_SIMPLE_NAMES -> ParamKind.TEXT
+            simple in COLLECTION_SIMPLE_NAMES -> ParamKind.COLLECTION
+            simple in OBJECT_SIMPLE_NAMES -> ParamKind.OBJECT
+            simple.endsWith("[]") -> if (isByteArray(simple)) ParamKind.UNKNOWN else ParamKind.COLLECTION
+            else -> null
+        }
+    }
+
+    /** 字节数组（BLOB 语义，不按集合提示展开）。 */
+    private fun isByteArray(simpleName: String): Boolean =
+        simpleName == "byte[]" || simpleName == "Byte[]" || simpleName == "java.lang.Byte[]"
 
     /** DTO/实体判定：非 JDK 类、非枚举——用户项目类视为可展开字段的对象（Map/List/String 等在 java.* 天然排除）。 */
     private fun isDtoLike(psiClass: PsiClass): Boolean {

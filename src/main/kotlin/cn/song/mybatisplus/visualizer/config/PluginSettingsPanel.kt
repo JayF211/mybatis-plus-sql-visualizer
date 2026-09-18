@@ -140,6 +140,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     // ---------- T-CrudColor 颜色控件辅助 ----------
 
+    /** T-PT-04：当前选中的空参数填充策略（NULL 档为默认——空选/异常态一律落默认档）。 */
+    private fun selectedEmptyParamFill(): String =
+        if (emptyParamFillEmptyRadio.isSelected) PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING
+        else PluginSettings.DEFAULT_EMPTY_PARAM_FILL
+
     /** 当前下拉选中的样式值（空选兜默认——与渲染器 styleOf 的兜底保持一致）。 */
     private fun selectedCrudColorStyle(): String =
         (crudColorStyleCombo.selectedItem as? CrudColorStyleOption)?.value
@@ -328,6 +333,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /** 界面语言下拉（M14：默认简体中文；跟随系统 / English 可选）。 */
     private val languageCombo = JComboBox<LanguageOption>()
+
+    /** T-PT-04：空参数填充策略单选（NULL 字面量 / 空字符串）。 */
+    private val emptyParamFillNullRadio = JBRadioButton()
+    private val emptyParamFillEmptyRadio = JBRadioButton()
+    private val emptyParamFillGroup = ButtonGroup()
 
     /** 反向转换 Wrapper 形态下拉（T-M36.3：AUTO/QUERY/LAMBDA/MPJ_LAMBDA）。 */
     private val reverseFormatCombo = JComboBox<ReverseFormatOption>()
@@ -530,6 +540,21 @@ class PluginSettingsPanel @JvmOverloads constructor(
             sectionGroup("settings.section.preview") { p, g ->
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.dialect"), dialectCombo)
                 addRow(p, g, "", replaceParamsCheck.apply { text = MpSqlVisualizerBundle.message("settings.replaceParams") })
+                // T-PT-04：空参数填充策略（参数值为空时回填 NULL 字面量还是空字符串）
+                emptyParamFillNullRadio.apply {
+                    text = MpSqlVisualizerBundle.message("settings.emptyParamFill.null")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.emptyParamFill.null.tip")
+                }
+                emptyParamFillEmptyRadio.apply {
+                    text = MpSqlVisualizerBundle.message("settings.emptyParamFill.empty")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.emptyParamFill.empty.tip")
+                }
+                emptyParamFillGroup.add(emptyParamFillNullRadio)
+                emptyParamFillGroup.add(emptyParamFillEmptyRadio)
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.emptyParamFill"), JPanel().apply {
+                    add(emptyParamFillNullRadio)
+                    add(emptyParamFillEmptyRadio)
+                })
                 addRow(p, g, "", formatCheck.apply { text = MpSqlVisualizerBundle.message("settings.formatSql") })
                 addRow(p, g, "", verticalPairAnnotationCheck.apply { text = MpSqlVisualizerBundle.message("settings.verticalPairAnnotation") })
                 addRow(p, g, "", autoFoldCheck.apply {
@@ -1171,6 +1196,15 @@ class PluginSettingsPanel @JvmOverloads constructor(
         manualEntityCheck.isSelected = checked
     }
 
+    /** T-PT-04：空参数填充策略选择入口（测试用）——与用户点选同一路径（isModified/apply 检测）。 */
+    internal fun selectEmptyParamFill(value: String) {
+        if (value == PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING) {
+            emptyParamFillEmptyRadio.isSelected = true
+        } else {
+            emptyParamFillNullRadio.isSelected = true
+        }
+    }
+
     /** T-TenantLine：多租户注入开关设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
     internal fun setInjectTenantLineCheck(checked: Boolean) {
         injectTenantLineCheck.isSelected = checked
@@ -1268,6 +1302,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
         dialectCombo.selectedItem != s.dialect
             || replaceParamsCheck.isSelected != s.replaceParams
             || formatCheck.isSelected != s.formatSql
+            || selectedEmptyParamFill() != s.emptyParamFill
             || verticalPairAnnotationCheck.isSelected != s.verticalPairAnnotation
             || autoFoldCheck.isSelected != s.autoFoldEnabled
             || autoFoldThresholdField.text.trim().toIntOrNull() != s.autoFoldFieldThreshold
@@ -1362,6 +1397,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.dialect = dialectCombo.selectedItem as? String ?: PluginSettings.DEFAULT_DIALECT
             s.replaceParams = replaceParamsCheck.isSelected
             s.formatSql = formatCheck.isSelected
+            // T-PT-04：空参数填充策略（NULL 字面量 / 空字符串）
+            s.emptyParamFill = selectedEmptyParamFill()
             s.verticalPairAnnotation = verticalPairAnnotationCheck.isSelected
             s.autoFoldEnabled = autoFoldCheck.isSelected
             s.autoFoldFieldThreshold = autoFoldThresholdField.text.trim().toIntOrNull()
@@ -1484,6 +1521,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             dialectCombo.selectedItem = s.dialect
             replaceParamsCheck.isSelected = s.replaceParams
             formatCheck.isSelected = s.formatSql
+            // T-PT-04：空参数填充策略回填（非 EMPTY_STRING 一律按默认 NULL 档选中——旧配置/非法值容错）
+            emptyParamFillEmptyRadio.isSelected = s.emptyParamFill == PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING
+            emptyParamFillNullRadio.isSelected = s.emptyParamFill != PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING
             verticalPairAnnotationCheck.isSelected = s.verticalPairAnnotation
             autoFoldCheck.isSelected = s.autoFoldEnabled
             autoFoldThresholdField.text = s.autoFoldFieldThreshold.toString()

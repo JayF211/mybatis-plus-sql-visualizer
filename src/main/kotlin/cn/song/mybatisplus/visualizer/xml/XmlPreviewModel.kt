@@ -69,6 +69,12 @@ class XmlPreviewModel private constructor(
      * 由 XmlParamTypeResolver 按 mapper 方法签名参数 Java 类型解析（DTO 字段类型 → ParamQuote）；
      * Map/无类型信息参数不含键（面板兜底引号）。 */
     val paramQuotes: Map<String, Boolean> = emptyMap(),
+    /**
+     * 参数类型类别映射（T-PT-01）：参数路径（`@Param` 值.字段 / 参数名）→ [ParamTypeInfo]——
+     * 由 XmlParamTypeResolver 按 mapper 方法签名参数 Java 类型映射（psi 层只做映射，类别枚举在 xml 层）。
+     * 无类型信息不含键（面板按 UNKNOWN 兜底：无占位提示、mock 占位 "1"、引号兜底）。
+     */
+    val paramTypes: Map<String, ParamTypeInfo> = emptyMap(),
     private val rootNode: SqlNode,
 ) {
 
@@ -81,6 +87,18 @@ class XmlPreviewModel private constructor(
         paramQuotes[source]?.let { return it }
         return paramQuotes.entries.firstOrNull { (key, _) -> source.startsWith("$key.") }?.value
     }
+
+    /**
+     * T-PT-01：参数路径 → 类型信息（精确匹配优先、前缀匹配兜底，命中规则与 [quoteFor] 一致）。
+     * 未命中返回 null（调用方按 [ParamKind.UNKNOWN] 兜底）。
+     */
+    fun paramTypeFor(source: String): ParamTypeInfo? {
+        paramTypes[source]?.let { return it }
+        return paramTypes.entries.firstOrNull { (key, _) -> source.startsWith("$key.") }?.value
+    }
+
+    /** T-PT-01：参数路径 → 类型类别（无类型信息 → [ParamKind.UNKNOWN]）。 */
+    fun kindFor(source: String): ParamKind = paramTypeFor(source)?.kind ?: ParamKind.UNKNOWN
 
     fun defaultState(): XmlPreviewState = XmlPreviewState(
         enabledIds = conditionViews.filter { it.defaultEnabled }.map { it.id }.toSet(),
@@ -103,9 +121,10 @@ class XmlPreviewModel private constructor(
         val bindings = mutableMapOf<String, Any?>()
         // 变量/参数名占位双写：_parameter 对象属性 + bindings 顶层（对齐 MyBatis ContextMap →
         // _parameter fallback：`${param1}` 与 `_parameter.param1` 均可取到占位 "1"）
-        val mockProps = (variables + paramProps).associateWith { "1" }
+        // T-PT-03：占位值按类型类别分派（有类型信息才分派，无类型信息维持 "1"——行为=升级前）
+        val mockProps = (variables + paramProps).associateWith { mockValueOf(it) }
         bindings[DynamicContext.PARAMETER_OBJECT_KEY] = MockObject(mockProps)
-        mockProps.keys.forEach { bindings[it] = "1" }
+        mockProps.keys.forEach { bindings[it] = mockValueOf(it) }
         bindings[DynamicContext.DATABASE_ID_KEY] = null
         forEachViews.forEach { view ->
             bindings[view.collectionExpr] = if (view.collectionExpr in state.forEachNulls) {
@@ -120,9 +139,27 @@ class XmlPreviewModel private constructor(
         return bindings
     }
 
+    /**
+     * T-PT-03：变量/参数占位值按类型类别分派——NUMBER→`1`、TEMPORAL→[TEMPORAL_MOCK_VALUE]、
+     * COLLECTION→[MockIterable]、OBJECT→[MockObject]；TEXT/UNKNOWN（无类型信息）→ `"1"`（升级前行为）。
+     */
+    private fun mockValueOf(name: String): Any? = when (paramTypeFor(name)?.kind ?: ParamKind.UNKNOWN) {
+        ParamKind.NUMBER -> 1
+        ParamKind.TEMPORAL -> TEMPORAL_MOCK_VALUE
+        ParamKind.COLLECTION -> MockIterable(DEFAULT_FOREACH_SIZE)
+        ParamKind.OBJECT -> MockObject()
+        ParamKind.TEXT, ParamKind.UNKNOWN -> "1"
+    }
+
     companion object {
         /** foreach 默认展开次数（IN 场景两元素可直观展示 separator）。 */
         const val DEFAULT_FOREACH_SIZE = 2
+
+        /**
+         * T-PT-03：TEMPORAL 参数占位值——带引号的日期字面量（`${}` 直替进 SQL 后即为合法字面量；
+         * `test` 表达式里为非空字符串，判真与升级前的 "1" 一致）。
+         */
+        const val TEMPORAL_MOCK_VALUE = "'2026-01-01 00:00:00'"
 
         /** 启发式默认勾选态：含 `== null` → false（变量默认非 null），其余 true（保守展开）。 */
         fun defaultTruth(test: String): Boolean = !test.contains("== null")
@@ -130,7 +167,9 @@ class XmlPreviewModel private constructor(
         /** 由解析出的语句构建预览模型（变量收集 + 条件/foreach/bind 视图）。
          *  T-M25-02：注解场景额外注入方法参数名（@Param 值/实际名/param1..N，MyBatis 多参数 Map 键）。
          *  T-M25.2：staticFieldValues 为 `@class@field` → 值（PSI 层解析用户项目常量类）。
-         *  T-M26-B：extraBindings 为 MP 占位 mock（`ew` → 片段对象）。 */
+         *  T-M26-B：extraBindings 为 MP 占位 mock（`ew` → 片段对象）。
+         *  T-PT-01：paramTypes 为参数类型类别映射；非空时 [paramQuotes] 由其派生
+         *  （NUMBER→false、其余 true），升级前显式传入的布尔通道继续可用（既有单测形态）。 */
         fun from(
             statement: XmlStatement,
             errors: List<String>,
@@ -138,6 +177,7 @@ class XmlPreviewModel private constructor(
             staticFieldValues: Map<String, Any?> = emptyMap(),
             extraBindings: Map<String, Any?> = emptyMap(),
             paramQuotes: Map<String, Boolean> = emptyMap(),
+            paramTypes: Map<String, ParamTypeInfo> = emptyMap(),
         ): XmlPreviewModel {
             val conditionViews = mutableListOf<XmlConditionView>()
             val forEachViews = mutableListOf<XmlForEachView>()
@@ -160,7 +200,13 @@ class XmlPreviewModel private constructor(
                 paramProps = paramProps,
                 staticFieldValues = staticFieldValues,
                 extraBindings = extraBindings,
-                paramQuotes = paramQuotes,
+                // T-PT-01：布尔引号通道降级为派生视图——有类型类别时由类别派生（NUMBER→false 其余 true）
+                paramQuotes = if (paramTypes.isNotEmpty()) {
+                    paramTypes.mapValues { (_, info) -> info.kind.quoteRequired }
+                } else {
+                    paramQuotes
+                },
+                paramTypes = paramTypes,
                 rootNode = statement.node,
             )
         }

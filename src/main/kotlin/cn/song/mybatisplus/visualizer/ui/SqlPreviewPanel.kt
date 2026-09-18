@@ -33,6 +33,7 @@ import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import cn.song.mybatisplus.visualizer.xml.XmlConditionView
 import cn.song.mybatisplus.visualizer.xml.XmlForEachView
+import cn.song.mybatisplus.visualizer.xml.ParamKind
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewState
 import cn.song.mybatisplus.visualizer.xml.PagesColumn
@@ -162,6 +163,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         border = JBUI.Borders.empty()
     }
     private val paramFields = mutableListOf<JBTextField>()
+    // T-PT-02：普通参数行行尾校验警示标（与 paramFields 同序，仅 buildParamRow 产出）
+    private val paramWarnLabels = mutableListOf<JBLabel>()
     private val conditionCheckBoxes = mutableListOf<JCheckBox>()
     private var autoPopupDisposable: Disposable? = null
     private val conditionValueFields = mutableListOf<JBTextField>()
@@ -2451,6 +2454,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun rebuildLeftPanel(result: PreviewResult) {
         paramPanel.removeAll()
         paramFields.clear()
+        paramWarnLabels.clear()
         conditionCheckBoxes.clear()
         conditionValueFields.clear()
         batchCheckBoxes.clear()
@@ -2839,26 +2843,91 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         renderSql() // 第二次渲染：按值回填
     }
 
-    /** 普通参数行：`#<source>` 标签 + 值输入框。 */
+    /** 普通参数行：`#<source>` 标签 + 值输入框（T-PT-02：按签名类型类别挂占位提示与行尾校验警示）。 */
     private fun buildParamRow(source: String, labelWidth: Int): JBPanel<JBPanel<*>> {
+        val kind = paramKindOf(source)
+        // T-PT-02：行尾淡色警示标（校验是提示不是闸门——值照原样渲染，渲染链 renderValue 行为不动）
+        val warnLabel = JBLabel("").apply {
+            foreground = PARAM_WARN_FOREGROUND
+            isVisible = false
+        }
         // T-HibDualCapture：8 列放不下 16 字符日期值（视口滚到尾部被当成「值截断」），下限放宽到 16 列
         val field = JBTextField(16).apply {
             text = paramValues[source] ?: ""
+            emptyText.text = paramEmptyText(source, kind)
             // 长值超框宽时光标钉回首字符，视口停在头部；完整值以 tooltip 兜底
             if (text.isNotEmpty()) caretPosition = 0
             toolTipText = paramTooltip(source, text)
+            updateParamWarning(warnLabel, kind, text)
             document.addDocumentListener(object : DocumentListener {
-                override fun insertUpdate(e: DocumentEvent?) = onParamFieldText(source, this@apply)
-                override fun removeUpdate(e: DocumentEvent?) = onParamFieldText(source, this@apply)
-                override fun changedUpdate(e: DocumentEvent?) = onParamFieldText(source, this@apply)
+                override fun insertUpdate(e: DocumentEvent?) = onParamFieldText(source, this@apply, warnLabel, kind)
+                override fun removeUpdate(e: DocumentEvent?) = onParamFieldText(source, this@apply, warnLabel, kind)
+                override fun changedUpdate(e: DocumentEvent?) = onParamFieldText(source, this@apply, warnLabel, kind)
             })
         }
         paramFields += field
+        paramWarnLabels += warnLabel
         // T-M19.4-01：FlowLayout 间距 (4,2) → (8,6)——参数名较长时视觉"贴太近"（用户实测）
         return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6)).apply {
             add(paramLabel(source, labelWidth))
             add(field)
+            add(warnLabel)
             border = JBUI.Borders.empty(0, 8, 2, 8)
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // T-PT-02：按签名类型类别的占位提示与校验（提示不是闸门——渲染链零改动）
+    // ------------------------------------------------------------------
+
+    /** 参数 source 的类型类别（无类型信息 → UNKNOWN，行为=升级前）。 */
+    private fun paramKindOf(source: String): ParamKind =
+        current?.xmlModel?.kindFor(source) ?: ParamKind.UNKNOWN
+
+    /** 占位提示（emptyText）：有类型信息按类别；UNKNOWN 走参数命名启发式（zMyBatis 同款，仅提示）。 */
+    private fun paramEmptyText(source: String, kind: ParamKind): String = when (kind) {
+        ParamKind.NUMBER -> MpSqlVisualizerBundle.message("panel.param.emptyText.number")
+        ParamKind.TEMPORAL -> MpSqlVisualizerBundle.message("panel.param.emptyText.temporal")
+        ParamKind.COLLECTION -> MpSqlVisualizerBundle.message("panel.param.emptyText.collection")
+        ParamKind.OBJECT -> MpSqlVisualizerBundle.message("panel.param.emptyText.object")
+        ParamKind.TEXT -> ""
+        ParamKind.UNKNOWN -> if (looksLikeCollectionName(source)) {
+            MpSqlVisualizerBundle.message("panel.param.emptyText.collection")
+        } else {
+            ""
+        }
+    }
+
+    /**
+     * 集合命名启发式（T-PT-02，zMyBatis ParameterInputDialog 同款）：参数名以 `s` 结尾
+     * （排除 status/address 等单数词）或含 list/ids/array/collection → 按数组提示。
+     */
+    private fun looksLikeCollectionName(source: String): Boolean {
+        val name = source.substringAfterLast('.').lowercase()
+        if (name in COLLECTION_NAME_EXCEPTIONS) return false
+        if (name.contains("list") || name.contains("ids") || name.contains("array") || name.contains("collection")) {
+            return true
+        }
+        return name.endsWith("s") && !name.endsWith("ss")
+    }
+
+    /** 行尾校验警示（NUMBER 非数字 / TEMPORAL 非可解析日期）：淡色标记 + tooltip 说明，不阻塞渲染。 */
+    private fun updateParamWarning(label: JBLabel, kind: ParamKind, value: String?) {
+        val message = paramWarningOf(kind, value)
+        label.text = if (message == null) "" else PARAM_WARN_MARK
+        label.toolTipText = message
+        label.isVisible = message != null
+    }
+
+    private fun paramWarningOf(kind: ParamKind, value: String?): String? {
+        if (value.isNullOrBlank()) return null
+        val trimmed = value.trim()
+        return when (kind) {
+            ParamKind.NUMBER -> if (NUMBER_REGEX.matches(trimmed)) null
+            else MpSqlVisualizerBundle.message("panel.param.warn.number")
+            ParamKind.TEMPORAL -> if (DATE_REGEX.matches(trimmed)) null
+            else MpSqlVisualizerBundle.message("panel.param.warn.temporal")
+            else -> null
         }
     }
 
@@ -2934,9 +3003,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /**
      * T-HibDualCapture：参数框文本变更（含导入回填等程序化 setText 触发的文档事件）——
      * tooltip 随值同步，其余走既有回填链路。
+     * T-PT-02：行尾校验警示随值同步（默认参数无警示标，调用方为 buildParamRow）。
      */
-    private fun onParamFieldText(source: String, field: JBTextField) {
+    private fun onParamFieldText(
+        source: String,
+        field: JBTextField,
+        warnLabel: JBLabel? = null,
+        kind: ParamKind = ParamKind.UNKNOWN,
+    ) {
         field.toolTipText = paramTooltip(source, field.text)
+        warnLabel?.let { updateParamWarning(it, kind, field.text) }
         onParamChanged(source, field.text)
     }
 
@@ -3218,7 +3294,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             if (c == '?') {
                 val source = sources.getOrNull(paramIndex)
                 val v = source?.let { paramValues[it] }
-                sb.append(renderParamValue(v, hints.getOrNull(paramIndex)))
+                sb.append(renderParamValue(v, hints.getOrNull(paramIndex), source))
                 paramIndex++
             } else {
                 sb.append(c)
@@ -3228,14 +3304,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         return sb.toString()
     }
 
-    private fun renderParamValue(v: String?, hint: ParamHint?): String {
-        if (v.isNullOrBlank()) return "?"
+    private fun renderParamValue(v: String?, hint: ParamHint?, source: String? = null): String {
+        // 未填写（paramValues 未播种的 source，非标准路径）保留 `?` 兜底提示
+        if (v == null) return "?"
+        // T-PT-04：空输入按设置策略出 NULL / ''（默认 NULL）——**仅对带签名类型信息的参数**生效；
+        // 无类型信息（UNKNOWN）保留 `?` 占位提示，行为与升级前一致（验收 3）
+        if (v.isBlank()) return if (hasSignatureTypeInfo(source)) emptyParamLiteral() else "?"
         val like = hint?.likePosition
         // M19.6（用户实测）：IN 列表多值回填——逗号分割，每个值独立渲染（引号规则同单值），
         // 输入 `1,2` → `('1','2')`（原实现拼成 `'1,2'` 单值）
         if (hint?.inList == true) {
             val parts = v.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-            if (parts.isEmpty()) return "?"
+            // 逗号分割后无有效值（如 `,` 形态）：按空输入档处理
+            if (parts.isEmpty()) return if (hasSignatureTypeInfo(source)) emptyParamLiteral() else "?"
             return parts.joinToString(", ") { renderSingleValue(it, hint) }
         }
         val escaped = v.replace("'", "''")
@@ -3250,6 +3331,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             else -> renderSingleValue(v, hint)
         }
     }
+
+    /**
+     * T-PT-04：空参数填充字面量——按设置「空参数填充策略」出 `NULL`（默认）或 `''`。
+     * 作用于 [renderParamValue] 的空值分支，且仅当参数带签名类型信息（[hasSignatureTypeInfo]）。
+     */
+    private fun emptyParamLiteral(): String =
+        if (PluginSettings.getInstance().state.emptyParamFill == PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING) "''"
+        else "NULL"
+
+    /** T-PT-04：参数是否带签名类型信息（XML/注解 mapper 参数行）——决定空输入是否走填充策略。 */
+    private fun hasSignatureTypeInfo(source: String?): Boolean =
+        source != null && paramKindOf(source) != ParamKind.UNKNOWN
 
     /** 单值渲染（M19.6 抽取，IN 列表各值与普通参数共用）：String 列恒引号、数值恒原样、未知走数字启发式。 */
     private fun renderSingleValue(raw: String, hint: ParamHint?): String {
@@ -3586,6 +3679,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun paramFieldTooltipForTest(index: Int): String? = paramFields.getOrNull(index)?.toolTipText
     /** T-HibDualCapture：第 index 个普通参数框的光标位置（应钉 0，视口停在值头部）。 */
     internal fun paramFieldCaretForTest(index: Int): Int = paramFields.getOrNull(index)?.caretPosition ?: -1
+    /** T-PT-02：第 index 个普通参数框的占位提示（emptyText，按类型类别）。 */
+    internal fun paramEmptyTextForTest(index: Int): String? = paramFields.getOrNull(index)?.emptyText?.text
+    /** T-PT-02：第 index 个普通参数行的校验警示文案（无警示返回 null；不阻塞渲染）。 */
+    internal fun paramWarningForTest(index: Int): String? =
+        paramWarnLabels.getOrNull(index)?.takeIf { it.isVisible }?.toolTipText
     internal fun conditionCheckboxForTest(index: Int): JCheckBox? = conditionCheckBoxes.getOrNull(index)
     internal fun conditionValueFieldForTest(index: Int): JBTextField? = conditionValueFields.getOrNull(index)
     /** T-M23-04：第 index 个批量列级勾选复选框（toggle 列按 BatchModel 顺序）。 */
@@ -3646,6 +3744,29 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         private val NUMBER_REGEX = Regex("-?\\d+(\\.\\d+)?")
         /** T-M24-04：XML 压缩视图的空白归一化（多行文本节点 / 段间空格）。 */
         private val WHITESPACE_REGEX = Regex("\\s+")
+
+        /**
+         * T-PT-02：TEMPORAL 参数的可解析日期形态——`yyyy` / `yyyy-M-d` / 追加 ` HH:mm[:ss[.SSS]]`
+         * （`T` 分隔兼容 ISO 形态；只做提示，不阻塞渲染）。
+         */
+        private val DATE_REGEX = Regex(
+            "\\d{4}(-\\d{1,2}(-\\d{1,2}([ T]\\d{1,2}:\\d{2}(:\\d{2}(\\.\\d{1,9})?)?)?)?)?",
+        )
+
+        /** T-PT-02：行尾校验警示标（淡色，深浅主题各一档）。 */
+        private const val PARAM_WARN_MARK = "⚠"
+        private val PARAM_WARN_FOREGROUND = JBColor(0xB8860B, 0xD9A343)
+
+        /**
+         * T-PT-02：集合命名启发式的单数词排除表——以 `s` 结尾但语义为单数（状态/地址等），
+         * 不做数组提示（宁缺勿错：提示只是占位文案）。
+         */
+        private val COLLECTION_NAME_EXCEPTIONS = setOf(
+            "status", "address", "class", "business", "progress", "process", "access", "alias",
+            "analysis", "radius", "series", "species", "news", "pass", "glass", "mass", "press",
+            "stress", "success", "express", "compass", "canvas", "atlas", "bias", "lens",
+            "physics", "politics",
+        )
 
         /** T-Perf-04：参数击键 renderSql 防抖窗口（毫秒）。 */
         private const val RENDER_DEBOUNCE_MS = 150
