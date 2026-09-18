@@ -137,6 +137,9 @@ object XmlPreviewService {
             tableComment = entityContext?.tableComment,
             warning = errors.joinToString("；").ifEmpty { null },
             xmlModel = model,
+            // T-InjectionGate T-IG-01：`${}` raw 拼接事实透传（解析期 token 收集，非最终文本 regex——
+            // 成功替换为模拟值后文本里已无 `${}` 痕迹）
+            hasDollarRawSegments = model.hasDollarRawSegments,
         )
     }
 

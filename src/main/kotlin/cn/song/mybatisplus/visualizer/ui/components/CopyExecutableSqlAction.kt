@@ -23,6 +23,14 @@ class CopyExecutableSqlAction(private val project: Project?) {
     companion object {
         /** 通知分组 id（plugin.xml 注册）。 */
         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+
+        /**
+         * T-InjectionGate T-IG-03：产物含 `${}` raw 段时的头部标记注释。
+         *
+         * 复制不是执行——这条链不弹确认（弹窗克制红线：模态确认只留给执行），改让风险随产物走：
+         * 产物粘到别处时读者能看到 raw 段带的是模拟值。SQL 注释行（`--`）不改产物可执行性。
+         */
+        internal const val DOLLAR_RAW_MARKER = "-- contains \${} raw segments (mock values)"
     }
 
     /**
@@ -52,7 +60,11 @@ class CopyExecutableSqlAction(private val project: Project?) {
             )
         }
 
-        copyToClipboard(executableSql)
+        // T-InjectionGate T-IG-03：含 `${}` raw 段（解析期事实，见 PreviewResult.hasDollarRawSegments）
+        // 时产物头部加标记注释；无 raw 段产物逐字节不变
+        val product = if (panel.hasDollarRawSegments()) "$DOLLAR_RAW_MARKER\n$executableSql" else executableSql
+
+        copyToClipboard(product)
 
         val replacedCount = countReplaced(sql, executableSql)
         val message = if (sources.isEmpty()) {

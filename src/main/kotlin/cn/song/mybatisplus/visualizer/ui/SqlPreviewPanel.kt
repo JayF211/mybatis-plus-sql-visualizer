@@ -335,6 +335,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-DollarInjectMark：最近一次 XML 渲染的 `${}` 直替计数（非 XML 路径恒 0）。 */
     private var xmlDollarSubstitutions = 0
 
+    /**
+     * T-InjectionGate T-IG-02：本面板实例内已确认过 `${}` raw 段执行（会话级记忆）。
+     *
+     * 同一面板确认一次后不再重复弹（常用 `${orderBy}` 场景的确认疲劳缓解）；记忆随面板实例
+     * 存活——面板 dispose 即失效（工具窗换预览内容不重置，与 T-DollarInjectMark 的 IDE 会话级
+     * 关闭记忆同向）。@Volatile：执行入口可能在非 EDT 触发（弹窗按钮回调），读写可见性保守处理。
+     */
+    @Volatile
+    private var dollarRawConfirmedInSession = false
+
     // P-05：参数历史缓存 + debounce 写回
     private val paramHistoryCache = ParamHistoryCache()
     /** P-05：debounce 写回调度器（Swing Timer，500ms 延迟，restart 实现防抖）。 */
@@ -809,6 +819,33 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             ?: editor?.document?.text?.takeIf { it.isNotBlank() }
 
     /**
+     * T-InjectionGate T-IG-02：`${}` 原文拼接段的执行确认闸门（[executeSql]/[explainSql] 共用）。
+     *
+     * 判定信号取自 [PreviewResult.hasDollarRawSegments]（解析期 `${` token 收集的渲染期事实，
+     * 不是最终文本 regex——`${}` 成功替换为模拟值后文本里已无痕迹，regex 会漏掉全部成功场景）。
+     * 含 raw 段且本面板未确认过 → 弹确认框（复用 DML 二次确认同款 YesNo 形态与 warning 图标，
+     * 标题同 [MpSqlVisualizerBundle] 的 `execute.confirm.dml`，消息说明 raw 段当前填的是模拟值）；
+     * 用户选 NO → 中止；选 YES → 记会话级记忆，本面板后续执行不再重复弹。
+     *
+     * 范围：只在 XML/注解预览链生效（Wrapper/JPA/日志还原链无 `${}` 概念，该字段恒 false）。
+     *
+     * @return true = 放行（无 raw 段 / 已确认过 / 本次确认通过）
+     */
+    private fun confirmDollarRawSegments(proj: Project): Boolean {
+        if (current?.hasDollarRawSegments != true) return true
+        if (dollarRawConfirmedInSession) return true
+        val confirm = Messages.showYesNoDialog(
+            proj,
+            MpSqlVisualizerBundle.message("execute.confirm.dollarRaw.message", DOLLAR_TOKEN),
+            MpSqlVisualizerBundle.message("execute.confirm.dml"),
+            Messages.getWarningIcon(),
+        )
+        if (confirm != Messages.YES) return false
+        dollarRawConfirmedInSession = true
+        return true
+    }
+
+    /**
      * 执行 SQL（M36）：
      *  1. SQL 类型分类 → 非查询语句二次确认
      *  2. 创建临时上下文文件 → 原生数据源弹窗 → 选中后自动执行
@@ -842,6 +879,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             )
             if (confirm != Messages.YES) return
         }
+        // T-InjectionGate T-IG-02：`${}` raw 拼接段确认门（DML 分类判定之后追加——预览产物里的
+        // raw 段带的是模拟值，执行前须用户确认值真实性；NO 直接中止，不落快照不执行）
+        if (!confirmDollarRawSegments(proj)) return
         // T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（回滚弹窗据此提供粘贴回填工作流）
         registerRollbackSnapshotIfNeeded(sql, null)
 
@@ -992,6 +1032,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
             .info("[M37.2] explainSql: dialect=${dialect.name}, len=${explainSql.length}")
+        // T-InjectionGate T-IG-03：EXPLAIN 本就真实执行——`${}` raw 段同门控（旁路不得绕开执行闸门）；
+        // 方言不支持（上方已 return，未执行）不弹
+        if (!confirmDollarRawSegments(proj)) return
         resultPanel.showLoading()
         SqlExecutor.execute(
             proj, explainSql, null, true,
@@ -3571,6 +3614,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** O-4：当前参数值快照（source → 用户输入值）。 */
     fun paramValuesSnapshot(): Map<String, String> = paramValues.toMap()
+
+    /**
+     * T-InjectionGate T-IG-01：当前预览语句是否含 `${}` 原文拼接段（[PreviewResult.hasDollarRawSegments]
+     * 面板侧读口——复制可执行 SQL 的产物标记注释据此追加）。
+     */
+    fun hasDollarRawSegments(): Boolean = current?.hasDollarRawSegments == true
 
     /** F-8：当前预览的表名（可 null）。 */
     fun currentTableName(): String? = current?.tableName

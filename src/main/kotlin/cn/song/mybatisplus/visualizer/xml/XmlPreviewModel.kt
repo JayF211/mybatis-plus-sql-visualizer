@@ -75,6 +75,10 @@ class XmlPreviewModel private constructor(
      * 由 XmlParamTypeResolver 按 mapper 方法签名参数 Java 类型解析（DTO 字段类型 → ParamQuote）；
      * Map/无类型信息参数不含键（面板兜底引号）。 */
     val paramQuotes: Map<String, Boolean> = emptyMap(),
+    /** T-InjectionGate T-IG-01：语句文本含未转义的 `${}` 直替 token（解析期事实，与替换成功与否无关——
+     *  成功替换为模拟值后产物文本里已无 `${}` 痕迹，最终文本 regex 会漏掉全部成功场景）。
+     *  执行/EXPLAIN 前的 `${}` 确认闸门据此判定「产物含 raw 原文拼接段」。默认 false，既有调用点零影响。 */
+    val hasDollarRawSegments: Boolean = false,
     private val rootNode: SqlNode,
 ) {
 
@@ -150,7 +154,9 @@ class XmlPreviewModel private constructor(
             val bindViews = mutableListOf<XmlBindView>()
             val variables = mutableSetOf<String>()
             val paramProps = mutableSetOf<String>()
-            collect(statement.node, conditionViews, forEachViews, bindViews, variables, paramProps)
+            // T-InjectionGate T-IG-01：解析期 `${}` token 收集（非空即「含 raw 原文拼接段」）
+            val dollarTokens = mutableListOf<String>()
+            collect(statement.node, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens)
             variables.remove(DynamicContext.PARAMETER_OBJECT_KEY)
             variables.remove(DynamicContext.DATABASE_ID_KEY)
             paramProps += extraParamProps
@@ -167,6 +173,7 @@ class XmlPreviewModel private constructor(
                 staticFieldValues = staticFieldValues,
                 extraBindings = extraBindings,
                 paramQuotes = paramQuotes,
+                hasDollarRawSegments = dollarTokens.isNotEmpty(),
                 rootNode = statement.node,
             )
         }
@@ -193,18 +200,22 @@ class XmlPreviewModel private constructor(
             bindViews: MutableList<XmlBindView>,
             variables: MutableSet<String>,
             paramProps: MutableSet<String>,
+            dollarTokens: MutableList<String>,
         ) {
             when (node) {
                 is MixedSqlNode ->
-                    node.children.forEach { collect(it, conditionViews, forEachViews, bindViews, variables, paramProps) }
+                    node.children.forEach {
+                        collect(it, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens)
+                    }
                 is StaticTextSqlNode -> Unit
                 is TextSqlNode -> {
-                    val dollarTokens = mutableListOf<String>()
+                    val tokens = mutableListOf<String>()
                     TokenParser.parse(node.text, "\${", "}") { token ->
-                        dollarTokens += token
+                        tokens += token
                         token
                     }
-                    dollarTokens.forEach { collectExpressionPaths(it, variables, paramProps) }
+                    dollarTokens += tokens
+                    tokens.forEach { collectExpressionPaths(it, variables, paramProps) }
                 }
                 is IfSqlNode -> {
                     // T-ExprAstPrecheck T-EP-03：构建条件行时对 test 表达式跑支持面预检（纯 AST 遍历，
@@ -218,17 +229,22 @@ class XmlPreviewModel private constructor(
                         classification.reason,
                         classification.detail,
                     )
-                    collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps)
+                    collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens)
                 }
                 is ChooseSqlNode -> {
                     // when 本身是 IfSqlNode，递归 collect 统一处理（此处不重复添加）
-                    node.whenNodes.forEach { collect(it, conditionViews, forEachViews, bindViews, variables, paramProps) }
-                    node.defaultNode?.let { collect(it, conditionViews, forEachViews, bindViews, variables, paramProps) }
+                    node.whenNodes.forEach {
+                        collect(it, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens)
+                    }
+                    node.defaultNode?.let {
+                        collect(it, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens)
+                    }
                 }
-                is TrimSqlNode -> collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps)
+                is TrimSqlNode ->
+                    collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens)
                 is ForeachSqlNode -> {
                     forEachViews += XmlForEachView(node.collectionExpression, node.item)
-                    collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps)
+                    collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens)
                 }
                 is VarDeclSqlNode -> {
                     bindViews += XmlBindView(node.name, node.expression)
