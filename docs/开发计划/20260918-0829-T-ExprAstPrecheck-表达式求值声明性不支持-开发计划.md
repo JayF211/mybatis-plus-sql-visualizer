@@ -81,6 +81,6 @@ T-EP-01（分类器+表驱动测试）→ T-EP-02（if test 静默点收口）�
 2. 计划 §三 T-EP-04 要求「白名单方法 + 不匹配载体」边界用例（`map.length()` 形态）归 `EVAL_FALLBACK`。载体信息在 xml 层不可得（零 PSI），实现改为：接收者载体可静态判定时（字面量/列表字面量）按实际载体判，不可判定时要求该方法对全部容器载体（字符串/集合/Map）都有实现才算载体无关。故 `list.size()`、`list.isEmpty()`、`x.toString()` 仍在支持面内（对齐 §五 走查第 2 条），`map.length()`、`map.containsKey()`、`str.startsWith()`、`list.contains()` 归降级档——后者比计划字面更宽：常见写法 `_parameter.title.startsWith('x')` 也会带标注。这是「不新造类型推断」与「真静默降级点要标出来」之间的取舍，若嫌噪可在 `CARRIER_AGNOSTIC` 处放宽。
 3. 计划 §三 T-EP-03 标注示例为「不支持的表达式形态：三元运算」——行内标注只留档位短句（「不支持的表达式形态」/「含运行期降级调用」），具体构造名与解析器原文进 tooltip，避免行内文案随解析器消息变长撑破条件行。
 
-**已知边界（未覆盖，留档）**：`foreach` 体内的 `if` 求值失败仍不产生可见 errors——`PrefixedContext`/`FilteredContext` 各自持有 `DynamicContext.errors` 列表且未转发（与 `bind` 错误同源既有形态），本任务按计划范围未改该文件。实证：`<foreach>` 内放 `<if test="not valid @@ expression">` 无开关覆盖渲染后 `errors=[]`。若需覆盖，改法是 `DynamicContext.errors` 转 `open` 并在两个子上下文按既有 `bindings`/`staticFieldValues` 同款委托覆写（约 5 行），代价是逐迭代重复同一错误行。
+**已知边界（未覆盖，留档）**：`foreach` 体内的 `if` 求值失败仍不产生可见 errors——`PrefixedContext`/`FilteredContext` 各自持有 `DynamicContext.errors` 列表且未转发（与 `bind` 错误同源既有形态），本任务按计划范围未改该文件。实证：`<foreach>` 内放 `<if test="not valid @@ expression">` 无开关覆盖渲染后 `errors=[]`。若需覆盖，改法是 `DynamicContext.errors` 转 `open` 并在两个子上下文按既有 `bindings`/`staticFieldValues` 同款委托覆写（约 5 行），代价是逐迭代重复同一错误行。 **该尾款已单列为 `20260919-0426-T-TailSweep2-…-开发计划.md` 的 T-FS-07**（含去重策略要求）。
 
 **真机走查（§五）**：未执行，留人工。
