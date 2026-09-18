@@ -139,9 +139,8 @@ intellijPlatform {
     if (gifRecord) {
         sandboxContainer = layout.buildDirectory.dir("MPSV-GifFresh")
     }
-    // T-ListParamCollect：并行会话隔离（临时——用后还原本行）
-    // T-HqlInhCols：本任务沙盒（临时——用后还原本行）
-    sandboxContainer = layout.buildDirectory.dir("mpsv-thic-sandbox")
+    // 注：并行会话临时隔离请在本块内临时加自己的 sandboxContainer（用后还原并立即提交），
+    // 勿让任务专属沙盒名随提交入库（T-ListParamCollect/T-HqlInhCols 两轮实证）。
 }
 
 kotlin {
