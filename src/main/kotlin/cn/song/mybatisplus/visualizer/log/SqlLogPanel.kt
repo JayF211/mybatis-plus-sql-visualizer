@@ -1105,6 +1105,10 @@ class SqlLogPanel(
                     enhancedStatus = runCatching {
                         AgentManager.getInstance(project).statusSummary()
                     }.getOrNull(),
+                    // T-RA-03：两个「行去哪了」计数——守卫误丢行 / EP 短路后条目未落到本面板时，
+                    // 它们是面板唯一可见的证据（此前生产侧零读取，故障被伪装成「控制台没输出」）。
+                    replayDropped = manager.consoleBridge.replayDropCount,
+                    epShortCircuited = manager.consoleBridge.epActiveShortCircuitCount.get(),
                 ),
             )
         } else {
