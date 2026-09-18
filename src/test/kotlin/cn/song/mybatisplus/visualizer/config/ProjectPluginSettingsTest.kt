@@ -1,9 +1,13 @@
 package cn.song.mybatisplus.visualizer.config
 
+import cn.song.mybatisplus.visualizer.sql.DialectRegistry
+import cn.song.mybatisplus.visualizer.sql.OracleDialect
+import cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect
 import com.intellij.openapi.components.service
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -131,5 +135,133 @@ class ProjectPluginSettingsTest : BasePlatformTestCase() {
         assertEquals("dialect 默认空（使用全局）", "", state.dialect)
         assertEquals("tablePrefix 默认空", "", state.tablePrefix)
         assertEquals("tableNameInference 默认空", "", state.tableNameInference)
+        assertNull("dialectAuto 默认 null（跟随全局）", state.dialectAuto)
+    }
+
+    // ------------------------------------------------------------------
+    // T-TS-FixC：方言模式（auto/manual）口径 —— 此前 effectiveDialectAuto 零测试引用
+    // ------------------------------------------------------------------
+
+    /**
+     * `effectiveDialectAuto()` 四组合矩阵（项目级 × 全局）。
+     *
+     * 优先级语义：项目级是**显式声明**、全局是**默认值**——故项目级「启用 + dialectAuto 非 null」
+     * 时项目值压过全局（含项目 true 压过全局 false）；总开关关闭或 dialectAuto=null 时跟随全局。
+     */
+    @Test
+    fun testEffectiveDialectAutoMatrix() {
+        val ps = project.service<ProjectPluginSettings>()
+        val global = PluginSettings.getInstance()
+        val psSnapshot = ps.getState().copy()
+        val globalSnapshot = global.getState().copy()
+
+        try {
+            // ① 项目 true + 全局 false → 项目值（核心组合：项目级「智能推断」不得被全局关闭吞掉）
+            ps.state.useProjectSettings = true
+            ps.state.dialectAuto = true
+            global.state.dialectAuto = false
+            assertTrue("项目 true + 全局 false → true", ps.effectiveDialectAuto())
+
+            // ② 项目 false + 全局 true → 项目值
+            ps.state.dialectAuto = false
+            global.state.dialectAuto = true
+            assertFalse("项目 false + 全局 true → false", ps.effectiveDialectAuto())
+
+            // ③ 项目 null（未覆盖）+ 全局 false → 跟随全局
+            ps.state.dialectAuto = null
+            global.state.dialectAuto = false
+            assertFalse("项目未覆盖 → 跟随全局 false", ps.effectiveDialectAuto())
+
+            // ④ 总开关关闭 → 项目值（哪怕非 null）不生效，跟随全局
+            ps.state.useProjectSettings = false
+            ps.state.dialectAuto = true
+            global.state.dialectAuto = false
+            assertFalse("总开关关闭 → 项目值不生效，跟随全局 false", ps.effectiveDialectAuto())
+
+            global.state.dialectAuto = true
+            assertTrue("总开关关闭 + 全局 true → true", ps.effectiveDialectAuto())
+        } finally {
+            ps.loadState(psSnapshot)
+            global.loadState(globalSnapshot)
+        }
+    }
+
+    /**
+     * `DialectRegistry.effective` 直接用例（auto/manual 两分支此前零直接测试引用）。
+     *
+     * 为什么放在本文件：直接调用需要真实 Application（[PluginSettings] 是 app 级服务）与项目级
+     * 服务（[ProjectPluginSettings]），纯 JUnit 的 DialectTest 装不下（那里只钉「服务不可用」的
+     * 兜底分支）；而这里正是「项目级 × 全局」优先级语义的归属地。
+     *
+     * 测试环境推断链必然未命中（无 agent 会话、无 IDE 数据源）→ auto=true 的期望 = `byName(null)`。
+     */
+    @Test
+    fun testDialectRegistryEffectiveMatrix() {
+        val ps = project.service<ProjectPluginSettings>()
+        val global = PluginSettings.getInstance()
+        val psSnapshot = ps.getState().copy()
+        val globalSnapshot = global.getState().copy()
+        val inferredFallback = DialectRegistry.byName(null)
+
+        try {
+            // ① 项目 true + 全局 false → 推断（修复前返回全局手动值 PostgreSQL = 缺陷）
+            ps.state.useProjectSettings = true
+            ps.state.dialectAuto = true
+            ps.state.dialect = "Oracle"
+            global.state.dialectAuto = false
+            global.state.dialect = "PostgreSQL"
+            assertEquals(
+                "项目 true + 全局 false → auto 分支（推断回退 MySQL）",
+                inferredFallback,
+                DialectRegistry.effective(project = project),
+            )
+
+            // ② 项目 false + 全局 false → 手动分支取项目级 dialect
+            ps.state.dialectAuto = false
+            ps.state.dialect = "Oracle"
+            assertEquals(
+                "项目 false → 手动分支取项目级 dialect",
+                OracleDialect,
+                DialectRegistry.effective(project = project),
+            )
+
+            // ③ 项目 false + 全局 true → 项目手动值压过全局推断
+            global.state.dialectAuto = true
+            assertEquals(
+                "项目 false + 全局 true → 项目手动值",
+                OracleDialect,
+                DialectRegistry.effective(project = project),
+            )
+
+            // ④ 项目未覆盖（总开关关）+ 全局 false → 全局手动值
+            ps.state.useProjectSettings = false
+            global.state.dialectAuto = false
+            assertEquals(
+                "项目不生效 + 全局 false → 全局手动值",
+                PostgreSQLDialect,
+                DialectRegistry.effective(project = project),
+            )
+
+            // ⑤ 项目不生效 + 全局 true → 推断
+            global.state.dialectAuto = true
+            assertEquals(
+                "项目不生效 + 全局 true → 推断回退 MySQL",
+                inferredFallback,
+                DialectRegistry.effective(project = project),
+            )
+
+            // ⑥ 无项目上下文（psi 侧无参调用点的形态）：推断链不可用 → 回退全局手动值。
+            // 这是有意边界（见 DialectRegistry.effective KDoc），不是缺陷——钉住防回潮。
+            global.state.dialectAuto = true
+            global.state.dialect = "Oracle"
+            assertEquals(
+                "project=null 无探测上下文 → 全局手动值（不进入推断）",
+                OracleDialect,
+                DialectRegistry.effective(project = null),
+            )
+        } finally {
+            ps.loadState(psSnapshot)
+            global.loadState(globalSnapshot)
+        }
     }
 }

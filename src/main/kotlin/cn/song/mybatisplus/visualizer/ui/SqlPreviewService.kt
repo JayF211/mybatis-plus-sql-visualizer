@@ -1623,33 +1623,17 @@ class SqlPreviewService(private val project: Project) {
     }.distinct()
 
     /**
-     * 当前方言（配置未加载时默认 MySQL）。
-     */
-    /**
-     * O-5：当前方言（项目级优先，回退全局）；T-DialectAutoInfer：auto 开启时智能推断。
-     */
-    fun currentDialect(): Dialect =
-        if (effectiveDialectAuto()) DialectRegistry.effective(project = project)
-        else DialectRegistry.byName(effectiveDialectName())
-
-    /**
-     * T-DialectAutoInfer：有效方言模式（项目级 dialectAuto 非 null 且启用项目设置时优先，
-     * 否则全局）。
+     * O-5：当前方言（配置未加载时默认 MySQL）；T-DialectAutoInfer：auto 开启时智能推断。
      *
-     * T-TS-06：项目级分支改走 [ProjectPluginSettings.effectiveDialectAuto]（与其余 effective*
-     * 同口径——回退语义内置在项目级方法里，此处仅透传）。原实现直读
-     * `projectSettings?.takeIf { it.isEnabled() }?.state?.dialectAuto` 绕开了该方法，
-     * 使其成为零消费的死方法（守卫断言三的限定接收者口径查获）；两式语义等价：
-     * 启用且 dialectAuto 非 null → 项目值，否则回退全局。
+     * T-TS-FixC：**方言模式（auto/manual）不在本层判定**，整段委托 [DialectRegistry.effective]，
+     * 本方法只负责把宿主 [project] 传下去。为什么不像其余 effective* 那样写
+     * 「项目值 ?: 全局值」两段式：方言的模式判定是**跨层**的——项目级 auto 与全局 auto 参与同一次
+     * 判定（项目级 true 必须压过全局 false），而项目级手动方言名又要压过全局手动值；拆成
+     * 「先在本层算 auto、再让下层算 manual」就会出现两个事实源，正是本次缺陷的成因
+     * （本层按项目级判 auto=true 进 effective，下层却按全局 false 返回全局手动值）。
+     * 收口后优先级语义见 [DialectRegistry.effective] 的 KDoc：模式与手动值均「项目级 > 全局」。
      */
-    private fun effectiveDialectAuto(): Boolean =
-        effective({ runCatching { PluginSettings.getInstance().state.dialectAuto }.getOrDefault(true) },
-                  { projectSettings?.effectiveDialectAuto() })
-
-    /** O-5：有效方言名称（项目级优先，回退全局；手动模式专用）。 */
-    private fun effectiveDialectName(): String =
-        effective({ settings?.state?.dialect ?: PluginSettings.DEFAULT_DIALECT },
-                  { projectSettings?.effectiveDialect() })
+    fun currentDialect(): Dialect = DialectRegistry.effective(project = project)
 
     /**
      * 是否格式化输出（true=多行缩进，false=压缩；O-5：项目级优先）。

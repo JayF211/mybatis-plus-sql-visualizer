@@ -2,6 +2,10 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
+import cn.song.mybatisplus.visualizer.sql.DialectRegistry
+import cn.song.mybatisplus.visualizer.sql.MySqlDialect
+import cn.song.mybatisplus.visualizer.sql.OracleDialect
+import cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiLocalVariable
@@ -201,5 +205,97 @@ class SqlPreviewServiceProjectSettingsTest : BasePlatformTestCase() {
             "类名兜底推断（实体类不可解析）应按项目级表前缀修饰表名: $sql",
             sql.contains("FROM proj_unknown_entity"),
         )
+    }
+
+    // ------------------------------------------------------------------
+    // T-TS-FixC：方言模式（auto/manual）四组合矩阵 —— 项目级 auto × 全局 auto
+    // ------------------------------------------------------------------
+
+    /**
+     * 测试环境的推断链必然未命中：无 agent 会话（`AgentManager.lastConnectionUrl` 为 null）、
+     * 无 IDE 数据源（DatabaseTools 不在测试类路径 → `DataSourceUrlProbe.firstUrl` 为 null），
+     * 故 auto=true 的期望值 = `byName(null)` = MySQL。这样「推断生效」与「手动值生效」在断言上
+     * 可区分（全局手动值刻意设为 PostgreSQL，与 MySQL 不同）。
+     */
+    private val inferredFallback = DialectRegistry.byName(null)
+
+    /**
+     * 核心缺陷用例（T-TS-FixC）：项目级 auto=true + 全局 auto=false。
+     *
+     * 修复前 `DialectRegistry.effective` 只读全局 `PluginSettings.dialectAuto`，而
+     * `SqlPreviewService.currentDialect()` 已按项目级判为 auto → 进入 effective 后又被全局
+     * false 拉回手动分支，返回全局手动值 PostgreSQL——项目级「智能推断」被静默忽略。
+     */
+    fun test项目级auto为真_全局auto为假_项目级推断必须生效() {
+        val global = PluginSettings.getInstance().state
+        global.dialectAuto = false
+        global.dialect = "PostgreSQL"
+        val ps = ProjectPluginSettings.getInstance(project).state
+        ps.useProjectSettings = true
+        ps.dialectAuto = true
+        // 项目级 dialect 仅在项目显式关闭自身 auto 时生效（见 State.dialectAuto KDoc）——
+        // 此处非空 Oracle 属「不生效的残值」，不得被 auto 分支读走
+        ps.dialect = "Oracle"
+
+        assertEquals(
+            "项目级 auto=true 应压过全局 auto=false（推断未命中 → MySQL 回退），不得返回全局手动值",
+            inferredFallback,
+            newService().currentDialect(),
+        )
+    }
+
+    /** 项目级 auto=false + 全局 auto=true → 项目手动值（项目级显式关闭压过全局推断）。 */
+    fun test项目级auto为假_全局auto为真_项目手动方言生效() {
+        val global = PluginSettings.getInstance().state
+        global.dialectAuto = true
+        global.dialect = "PostgreSQL"
+        val ps = ProjectPluginSettings.getInstance(project).state
+        ps.useProjectSettings = true
+        ps.dialectAuto = false
+        ps.dialect = "Oracle"
+
+        assertEquals("项目级手动值应生效", OracleDialect, newService().currentDialect())
+    }
+
+    /** 项目未覆盖 auto（null）+ 全局 auto=false → 跟随全局手动模式，手动值取项目级 effectiveDialect。 */
+    fun test项目未覆盖auto_跟随全局为假_项目手动方言值生效() {
+        val global = PluginSettings.getInstance().state
+        global.dialectAuto = false
+        global.dialect = "PostgreSQL"
+        val ps = ProjectPluginSettings.getInstance(project).state
+        ps.useProjectSettings = true
+        ps.dialectAuto = null
+        ps.dialect = "Oracle"
+
+        assertEquals(
+            "项目未覆盖 auto → 跟随全局 false；手动值取项目级 dialect（非全局 PostgreSQL）",
+            OracleDialect,
+            newService().currentDialect(),
+        )
+    }
+
+    /** 总开关关闭 + 全局 auto=false → 项目级全不生效，取全局手动值。 */
+    fun test总开关关闭_全局auto为假_取全局手动值() {
+        val global = PluginSettings.getInstance().state
+        global.dialectAuto = false
+        global.dialect = "PostgreSQL"
+        val ps = ProjectPluginSettings.getInstance(project).state
+        ps.useProjectSettings = false
+        ps.dialectAuto = true // 总开关关闭 → 残值不生效
+        ps.dialect = "Oracle"
+
+        assertEquals("总开关关闭应回退全局手动值", PostgreSQLDialect, newService().currentDialect())
+    }
+
+    /** 项目与全局均 auto=true → 推断链生效（未命中 → MySQL 回退），全局手动值不得泄漏。 */
+    fun test项目与全局auto均为真_推断回退MySQL() {
+        val global = PluginSettings.getInstance().state
+        global.dialectAuto = true
+        global.dialect = "PostgreSQL"
+        val ps = ProjectPluginSettings.getInstance(project).state
+        ps.useProjectSettings = false
+        ps.dialect = "Oracle"
+
+        assertEquals("auto=true 应走推断链（未命中回退 MySQL）", inferredFallback, newService().currentDialect())
     }
 }
