@@ -3,17 +3,22 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
-> **全局备份**：`~/.zcode/cli/memories/global/`（94 个通用文件）
-> **项目记忆**：保留 28 个核心文件 + MEMORY.md 索引（第十一次精简后）
+> **全局备份**：`~/.zcode/cli/memories/global/`（102 个通用文件）
+> **项目记忆**：保留 23 个核心文件 + MEMORY.md 索引（第十二次精简后）
 
 ---
 
-## 已修复 Bug（159 个）
+## 已修复 Bug（164 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [coolrequest-rabbitmq-tool.md](bug-fixes/coolrequest-rabbitmq-tool.md) | Cool Request RabbitMQ 小工具独立交付（跨项目，F:\code\Java\Github\SongRenShuo\cool-request-tool-rabbitmq）：走查四轮修复（错 vhost null 报错统一翻译/非法 Headers 拦截+NO_ROUTE 检测/Peek 按钮叠放/406 冲突四组合试探+Type AUTO 档+EditorTextField 无 project 构造）真机验证通过；公开仓已建+PR #1 提交 houxinlin/cool-request-tools 待作者合并；构建=IDEA jbr JDK25+字面通配 classpath（git bash 须 MSYS2_ARG_CONV_EXCL）；版本规则=tools-rep 1.0-SNAPSHOT 一版到底 |
+| [project-m56-agent-bytecode.md](bug-fixes/project-m56-agent-bytecode.md) | M56 agent 字节码增强一期（T-M56-00~09，随 v2026.9.18-beta.3 发行成默认通道）：connect 织入+动态代理包装主路径、ASM Tree API、sub-projects/sql-visualizer-agent 内嵌；挂载链路端到端（AgentLoadException(0) 良性/resolvePid 三步回退/Jsons 首成员逗号已修）；免注入文件通道（-javaagent）=二期在册续踪 project-pending-plans |
+| [project-kotlin-to-java-port-sync.md](bug-fixes/project-kotlin-to-java-port-sync.md) | K2J 移植与 T-SyncK2JMaster176 交付（锚点→9def321，176 提交同步含 M56 agent 全链，testShards 4286 绿+verifyGate 三目标 Compatible）：沉淀=is- 前缀访问器显式调用/split 语义差异/测试沙盒旧 jar 遮蔽等；O-24 增量同步决策续踪 project-pending-plans |
+| [project-merge-dev-batch-round6.md](bug-fixes/project-merge-dev-batch-round6.md) | 20260917 dev 批次第六轮交付图谱：五计划+T-PerfSweep4+尾巴批次提交映射与关键定案（TSQL 批首仅 IF/超时护栏控制台链不覆盖/ZipGuard 双路谎报/冷却 24h/heredoc 反斜杠 JSON 层陷阱） |
+| [project-competitive-round7.md](bug-fixes/project-competitive-round7.md) | 竞品横向对比第七轮（zMyBatis 全仓库解剖：真引擎求值最值得偷师、精华 Z-1~Z-13、定案不做可信执行器对标；Marketplace 快照 290 下载 0 评论第四周；DBX v6 #35/#36）；编号 N-24~N-27/O-30~O-33 已移交 project-pending-plans 续踪 |
 | [project-m55-ultra-absorb.md](bug-fixes/project-m55-ultra-absorb.md) | M55 Ultra 精华融合四子任务交付 dev（20260917，9b33f56/83dc61a/41a13a3/6766040，log 包 1034 用例绿）：01 跳转 mapper XML 双菜单/02 报错同列/03 方法聚焦页签/04 请求聚焦；标记行 3~5 段格式演化由 M56 T-M56-00 提前交付（消费端缺口才是 M55 本体）；含 Ultra 官方素材 UI 时代定案与 M56 agent 路线决策史；真机走查四项留人工（续踪 project-pending-plans） |
 | [t-exec-doc-sync.md](bug-fixes/t-exec-doc-sync.md) | T-ExecDocSync 执行文件 File Cache Conflict 根治（master a7ca191，4180/0/6 绿）：旧 BGT 预热 document 分支每炸必裸写兜底=真机弹窗链本体；两条 262 Document API 硬发现（isModified 移除/setText BGT EDT-only）已升全局 pitfall-document-bgthread-edt-only；尾款（CHANGELOG 条目+真机走查三条）在 project-pending-plans 续踪 |
 | [t-inparamrec.md](bug-fixes/t-inparamrec.md) | T-InParamRec IN 字面量 SQL 预览参数未识别（master d98e4e9，全量门禁绿）：根因=字面量 SQL 零绑定行+LogEntryPreviewOpener 独立分支漏接 literalRecovery；三预览入口收编 toPreviewResult 统一通道；教训=多入口能力收编须 grep 全部调用点 |
@@ -261,10 +266,14 @@
 | [project-m54-perf-redline-audit](bug-fixes/project-m54-perf-redline-audit.md) | M54 性能红线全面治理 24 任务交付（perf/redline-hardening 28 提交，2026-09-05，**已合 dev**）——禁卡死/禁拖慢/禁 ERROR 弹窗：LOG.error 与 ERROR 通知清零、3084 用例 0 失败；实施偏差 4 项备忘（T-Perf-23 正则 13/17、T-Perf-13 探针门控、T-Perf-18 URL 键、T-Perf-20 通知替代 HintManager）；真实防抖待 runIde 真机 |
 | [project-log-jump-no-wrapper-rootcause](bug-fixes/project-log-jump-no-wrapper-rootcause.md) | SQL 日志右键跳转「未找到表对应 Wrapper」根因（2026-09-02 分析，**已随 T-ServiceChainSearch/O-6 修复**）——事后搜索 Wrapper 本质不可靠（仅静态工厂不含 IService 链），正解=F-44-7 SqlSourceInterceptor 执行时注入源码位置，含方案 A 实施全程 12 个编译/运行陷阱 |
 
-## 已解决踩坑（65 个）
+## 已解决踩坑（69 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [pitfall-dbn-objectkind-not-java-enum.md](pitfalls/pitfall-dbn-objectkind-not-java-enum.md) | DBN `ObjectKind` 是 type-safe enum 手写类（非 java.lang.Enum），反射 enumConstants 恒 null → DatabaseSchemaResolver 每次调用静默早退、schema 链全程空转且日志谎报 "not found in N data sources"；修法=getField("COLUMN").get(null)（T-DbSchemaCompletion 已交付，另 `To many roots from database` 是平台噪音非根因） |
+| [pitfall-dbn-perfile-datasource-mapping.md](pitfalls/pitfall-dbn-perfile-datasource-mapping.md) | `.idea/data_source_mapping.xml` 把 exec 文件钉到数据源、控制台库上下文随之而定，与插件按数据源名选的 runner 错位 → 42S22/1054 Unknown column（跨库同名表陷阱）；已修 T-ConsoleDbContext（d51cc0a：预览默认以数据源 URL 库为准、手调记忆保留、错误行附当前库） |
+| [pitfall-console-doc-is-file-doc.md](pitfalls/pitfall-console-doc-is-file-doc.md) | attachConsole 挂在 exec 文件本体，写该文件≡改用户眼前控制台文本——File Cache Conflict 五轮与预览裸单行两类 bug 的共同底层；预热写原文+挂载后须回填渲染（回填点须在 embedConsole 之后）；写入成本直落眼前→差量快路径+程序性写入闸门（T-PreviewFast P1/P4） |
+| [pitfall-ui-component-swap-drops-state.md](pitfalls/pitfall-ui-component-swap-drops-state.md) | 自绘组件换平台组件易丢显式状态（预览参数区变黑=T-UiNative P0a 换 OnePixelSplitter 丢 UIUtil.getPanelBackground，深色主题才显形）；定位=git show 替换提交 grep `Opaque|background|border`；修法两层（恢复祖先背景+末端自持命名色）+结构守卫用例 |
 | [pitfall-speedsearch-cards-hidden.md](pitfalls/pitfall-speedsearch-cards-hidden.md) | ListSpeedSearch 构造于 CardLayout 隐藏卡仅对可见列表生效——已修复（5b0e2c3 安装移出共享父类 init、切卡可见后按需装+守卫标志）；单参 getSupply headless 恒 null、断言用两参 getSupply(comp,true) |
 | [pitfall-speedsearch-highlight-renderer.md](pitfalls/pitfall-speedsearch-highlight-renderer.md) | speed search 匹配高亮是渲染器职责（SpeedSearchUtil.applySpeedSearchHighlighting；setDynamicSearchMatchHighlighting 不存在被编译证伪）——已落码（f65d9ae）归档 |
 | [pitfall-dual-end-protocol-roundtrip-gap.md](pitfalls/pitfall-dual-end-protocol-roundtrip-gap.md) | 双端协议往返缺口：手写序列化↔对端解析两端各自绿、合流即断（Jsons.writeEvent 首成员逗号）——已修+JsonsEventFormatTest 格式守卫；教训=手写序列化器必配格式守卫与往返用例、静默丢弃点必打日志 |
@@ -352,13 +361,15 @@
 
 **第十一次精简升级（2026-09-17，9 个）**：pitfall-github-push-ghfast-rewrite（push 被 ghfast.top 重写挡：https://&lt;login&gt;@github.com 形态+git -c http.proxy；GCM 标签≠实际 login）/ pitfall-msys-leading-slash-arg-mangling（Git Bash 首斜杠正则参数被 MSYS 改写，改 awk/-e）/ pitfall-proxy-upstream-dead-nonproxyhosts（gradle 代理上游死，-Dhttp.nonProxyHosts="*" 直连绕过）/ pitfall-subagent-parallel-rate-limit（4 路并发子代理触发 1302 限流，上限 ≤3；互读在途产物假告警）/ pitfall-kotlin-nested-block-comment（注释写字面 /* 开嵌套吞成员）/ pitfall-reflect-jdk-internal-class-access（反射 package-private 实现类按声明类可见性检查抛异常，改接口 cast）/ pitfall-http-error-body-swallowed（HttpRequests readString 丢 4xx 正文+myGzip 自动协商 gzip 手写读取不解压）/ pitfall-no-image-input-ocr-fallback（无图模型三视觉通道全断→PS CopyFromScreen 截屏+tesseract OCR 坐标路线）/ pitfall-document-bgthread-edt-only（262 Document.isModified 移除+文件 document setText BGT 硬抛 EDT-only，BGT 改文档唯一路线=派 EDT）
 
+**第十二次精简升级（2026-09-18，8 个）**：idea-262-platform-jar-verify（262 平台类查 intellij.platform.ide.jar 常量池，执行/VM 参数类在 util-8 与 plugins 全盘扫描）/ user-env-jdk8（本机 JDK8=D:/HuanJing/Java/jdk1.8.0_181 即 PATH 默认；H2 2.x 是 Java 11 字节码、JDK8 目标换 1.4.200）/ reference-zcode-subagent-storage（ZCode 子智能体四作用域路径+状态文件+frontmatter+A→B 迁移要点）/ pitfall-embedded-native-loses-auto-behavior（手工构造编辑器嵌面板丢平台默认行为，JOIN 图 fitContent 实例；布局竞态指纹=异步任务收尾消费的设置须在触发前置位）/ pitfall-filecontents-charset（Gradle fileContents().asText 按 JVM 默认字符集 GBK 解码，须 asBytes+UTF-8 显式）/ pitfall-log-first-not-code-reasoning（同一 bug 修三轮仍复发=都在按代码推演；真机日志同秒多行直接锁因果链）/ pitfall-parallel-merge-wipes-worktree（并行登记表只管 gradle 沙盒，合并会清工作区未提交改动，改完立即提交）/ pitfall-stale-session-git-snapshot（会话启动 git 快照只抓一次，判交付状态先重跑 git 实测）
+
 ---
 
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 29（含 MEMORY.md） |
-| 全局记忆 global/ | 94 |
-| 归档 archive/ | 227（bug-fixes 159 + pitfalls 65 + methodology 1 + user-context 1 + README） |
-| **合计** | **350** |
+| 项目 memory（保留） | 24（含 MEMORY.md） |
+| 全局记忆 global/ | 102 |
+| 归档 archive/ | 236（bug-fixes 164 + pitfalls 69 + methodology 1 + user-context 1 + README） |
+| **合计** | **362** |
