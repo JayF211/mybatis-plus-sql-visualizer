@@ -7,6 +7,7 @@ package cn.song.mybatisplus.visualizer.xml
  * - appendSql：段间以单个空格分隔（对齐 3.5.13+ 的 StringJoiner(" ") 行为），最终 getSql() 去首尾空白
  * - conditionOverrides：条件开关覆盖（预览面板直接决定 if/when 真假，id = test 表达式原文）
  * - protectedBindNames：bind 覆盖名（面板输入的覆盖值优先于表达式求值）
+ * - errors：渲染期错误（判重表，嵌套子上下文须转发 delegate，否则内层错误静默）
  *
  * 预览引擎专用扩展（conditionOverrides / protectedBindNames / errors）不影响运行时复刻语义。
  */
@@ -26,8 +27,16 @@ open class DynamicContext(
      */
     open val bindings: MutableMap<String, Any?> = initialBindings.toMutableMap()
 
-    /** 渲染期错误提示（如 foreach collection 为 null 且 nullable=false、表达式解析失败）。 */
-    val errors = mutableListOf<String>()
+    /**
+     * 渲染期错误提示（如 foreach collection 为 null 且 nullable=false、表达式解析失败）。
+     *
+     * T-FS-07：①判重表——`<foreach>` 逐迭代会把同一表达式同一原因重复登记 N 次，
+     * 用户看到的 `⚠` 警示行（`errors.joinToString("；")`）不该被同一句话刷屏，故同文案只留首现一行
+     * （判重键 = 完整错误文案，已含表达式原文与原因，天然等价于「同表达式同原因」）；
+     * ②子上下文（Foreach 的 Prefixed/Filtered、Trim 的 filtered）覆写本属性转发 delegate——
+     * 此前各自持有独立列表，内层 `<if>` 求值失败被丢弃（静默，与 `${}`/bind/顶层 if 形态不一致）。
+     */
+    open val errors: MutableList<String> = DedupErrorList()
 
     /**
      * `${}` 直替计数（T-DollarInjectMark）：TextSqlNode 每求值一个 `${}` token 经
@@ -74,4 +83,46 @@ open class DynamicContext(
         const val PARAMETER_OBJECT_KEY = "_parameter"
         const val DATABASE_ID_KEY = "_databaseId"
     }
+}
+
+/**
+ * 判重错误表（T-FS-07）：LinkedHashSet 语义的 [MutableList]——保首现顺序、同文案只留一行。
+ *
+ * 只用于 [DynamicContext.errors]（MyBatis 无此概念，属预览引擎专用扩展）；保留 MutableList 形态
+ * 使既有写入点（`context.errors += msg`）与既有测试无需改动。`add(index, element)` 忽略索引——
+ * 判重集合无插入位置语义，仓内既有写入只有 `+=` / `add(msg)` 两种形态。
+ */
+private class DedupErrorList : AbstractMutableList<String>() {
+
+    private val seen = LinkedHashSet<String>()
+
+    override val size: Int get() = seen.size
+
+    override fun get(index: Int): String = seen.elementAt(index)
+
+    override fun add(index: Int, element: String) {
+        seen.add(element)
+    }
+
+    override fun removeAt(index: Int): String = get(index).also { seen.remove(it) }
+
+    /** 判重集合无「按位替换」语义：旧值移除、新值追加到末尾（仓内无调用点，仅为满足 MutableList 契约）。 */
+    override fun set(index: Int, element: String): String {
+        val previous = get(index)
+        if (previous != element) {
+            seen.remove(previous)
+            seen.add(element)
+        }
+        return previous
+    }
+
+    override fun add(element: String): Boolean = seen.add(element)
+
+    override fun clear() = seen.clear()
+
+    override fun contains(element: String): Boolean = seen.contains(element)
+
+    override fun indexOf(element: String): Int = seen.indexOf(element)
+
+    override fun iterator(): MutableIterator<String> = seen.iterator()
 }
