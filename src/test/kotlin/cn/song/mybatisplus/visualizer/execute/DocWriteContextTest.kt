@@ -167,8 +167,13 @@ class DocWriteContextTest : BasePlatformTestCase() {
     //
     // 判据说明：单测环境 isWriteAllowedNow 因 isUnitTestMode 一律放行（见 DocWriteContext KDoc），
     // 「非 EDT / 无写意图」无法在 fixture 里自然构造，故用 writeAllowedProbe 注入「当前不可写」
-    // ——与上方各例同一口径，覆盖的是闸门的分支行为而非真实判据本身（后者由 isWriteAllowedNow
-    // 自己的用例 testProbeOverridesBuiltinJudgement / testUnitTestModeAllowsWriteByDefault 钉住）。
+    // ——与上方各例同一口径，覆盖的是闸门的分支行为而非真实判据本身。真实判据里已覆盖的只有
+    // testProbeOverridesBuiltinJudgement（探针优先级）与 testUnitTestModeAllowsWriteByDefault
+    // （单测短路）；DocWriteContext 的另两条判据分支（非 EDT、TransactionGuard.isWritingAllowed）
+    // **无单测覆盖**，按计划 §五 交真机门禁验证——勿把本例当作「真实判据已验证」的证据。
+    //
+    // 两例须配对使用：testResultTextWritesInlineWhenContextAllowed 单独看无判别力（直写实现同样通过），
+    // 判别力来自 testResultTextDefersInsteadOfWritingWhenContextUnsafe（摘掉 runWriteSafe 即红）。
 
     private fun newReversePanel(): SqlToJavaPanel = SqlToJavaPanel(project)
 
