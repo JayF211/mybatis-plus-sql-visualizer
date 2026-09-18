@@ -58,8 +58,34 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
      * 的目标区（占位/画布/错误态都在其内容层换页），加载时 startLoading 盖平台转圈，
      * 原自摆 JBLabel + indeterminate JProgressBar 加载页删除；文案沿用既有 "diagram.render.loading" 键。
      * Disposable 挂面板自身（本类实现 Disposable，dispose 走既有 `Disposer.dispose(this)` 链）。
+     *
+     * T-F8：本层只在「未注入宿主加载面」时出转圈（独立使用/单测）；预览面板场景转圈由
+     * [hostLoadingPanel] 出，原因见该字段 KDoc。
      */
     private val contentLayer = JBLoadingPanel(BorderLayout(), this)
+
+    /**
+     * T-F8：宿主加载面（预览面板注入）——本面板的转圈实际画在哪一层。
+     *
+     * 为什么必须由宿主出图：唯一真正的耗时段是 `SqlPreviewPanel.updateDiagramTab` 的**后台 schema
+     * 富化**，而原生图路径（默认设置 `joinDiagramNative = true`，Ultimate 真机默认）下
+     * `showJoinDiagram` 的 `diagramTabHost.removeAll()` 会把本面板摘出层级——自摆转圈根本不可见，
+     * 这正是审计项 F8「showLoading/hideLoading 全仓零调用点」之外的第二层失效。宿主层
+     * （预览面板把整个 JOIN 图标签页包进 JBLoadingPanel）对原生/自绘两条路径都可见。
+     *
+     * 为什么是「转交」而不是「两层同开」：同页两层 LoadingDecorator 各持一条独立动画时间线
+     * （每个实例一个 AnimatedIcon/Animator，转圈相位互不同步），会叠成双圈；且宿主层已完整覆盖
+     * 本面板区域（面板是其 CENTER 内容），面板侧再转一圈纯属重复。
+     */
+    private var hostLoadingPanel: JBLoadingPanel? = null
+
+    /** T-F8：注入宿主加载面（预览面板的标签页级 [JBLoadingPanel]）。 */
+    internal fun bindHostLoadingPanel(panel: JBLoadingPanel) {
+        hostLoadingPanel = panel
+    }
+
+    /** 当前出转圈的层：宿主注入优先，否则本面板 [contentLayer]。 */
+    private fun loadingTarget(): JBLoadingPanel = hostLoadingPanel ?: contentLayer
 
     private val placeholderLabel = JBLabel(
         MpSqlVisualizerBundle.message("diagram.placeholder.noJoin"), SwingConstants.CENTER,
@@ -189,6 +215,8 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         errorTextArea.text = MpSqlVisualizerBundle.message("diagram.render.failed", message)
         // 长摘要自动换行后默认停在末尾，从顶部看起更符合「读错误」的顺序
         errorTextArea.caretPosition = 0
+        // T-F8：错误页顶上即「加载已结束」（渲染失败也是一种收尾），转圈必须同时摘下
+        stopLoadingInternal()
         swapContent(errorScroll)
         revalidate()
         repaint()
@@ -201,6 +229,9 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
     internal fun errorTextForTest(): String = errorTextArea.text
 
     fun clear() {
+        // T-F8：整图卸载必须复位加载态——加载期间（后台富化未回 EDT）用户切到无 JOIN 的 SQL
+        // 或面板被清空时，转圈若不复位会留在已卸载的空页上永不消失
+        stopLoadingInternal()
         currentModel = null
         diagramCanvas.setModel(null, zoom)
         showPlaceholder()
@@ -214,6 +245,8 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
     }
 
     private fun showPlaceholder() {
+        // T-F8：空态是「无图」而非「加载中」——空模型换页即收尾，转圈同时摘下
+        stopLoadingInternal()
         swapContent(placeholderLabel)
         revalidate()
         repaint()
@@ -232,21 +265,48 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
 
     /** T-UiNative T-UN-14：进入加载态——平台转圈 + 既有「加载中」文案键（原自摆进度条删除）。 */
     fun showLoading() {
-        contentLayer.setLoadingText(MpSqlVisualizerBundle.message("diagram.render.loading"))
-        contentLayer.startLoading()
+        loadingTarget().apply {
+            setLoadingText(MpSqlVisualizerBundle.message("diagram.render.loading"))
+            startLoading()
+        }
         revalidate()
         repaint()
+        loadingProbeForTest?.invoke(true)
     }
 
     /** T-UiNative T-UN-14：退出加载态（渲染/换页完成后调用）。 */
     fun hideLoading() {
-        contentLayer.stopLoading()
+        stopLoadingInternal()
+        loadingProbeForTest?.invoke(false)
+    }
+
+    /**
+     * T-F8：内部安全停止——不发探针（探针只报显式 API 调用，见 [loadingProbeForTest]）。
+     *
+     * 供 [clear]/[showPlaceholder]/[showError] 三条「加载态不再成立」的路径统一收口：
+     * 加载期间无 JOIN 卸载、模型为空、渲染失败时都必须摘转圈，否则转圈留在空页/错误页上永不消失
+     * （对齐 SqlResultPanel「仅 showLoading 打开、其余状态统一关闭」的既有约定）。
+     */
+    private fun stopLoadingInternal() {
+        loadingTarget().stopLoading()
         revalidate()
         repaint()
     }
 
     /** T-UiNative T-UN-14：加载态（测试断言用）。 */
-    internal fun isLoadingForTest(): Boolean = contentLayer.isLoading
+    internal fun isLoadingForTest(): Boolean = loadingTarget().isLoading
+
+    /**
+     * T-F8：加载态接线探针（测试用）——[showLoading]/[hideLoading] 末尾回调。
+     *
+     * 只报这两次「显式 API 调用」，内部安全停止（[clear]/[showPlaceholder]/[showError] 里的复位）
+     * 不回调：接线用例要断的是「谁在什么时刻进了/出了加载态」，内部复位属状态自愈，由
+     * [isLoadingForTest] 观测即可，混进同一序列会让「进入→渲染→退出」的顺序断言失真。
+     */
+    internal var loadingProbeForTest: ((Boolean) -> Unit)? = null
+
+    /** T-F8：是否已渲染出图（测试用）——接线用例据此断言「停转圈发生在渲染之后」。 */
+    internal fun hasModelForTest(): Boolean = currentModel != null
 
     fun zoomIn() { zoom = (zoom * 1.25).coerceAtMost(5.0); applyZoomToCanvas() }
     fun zoomOut() { zoom = (zoom / 1.25).coerceAtLeast(0.2); applyZoomToCanvas() }

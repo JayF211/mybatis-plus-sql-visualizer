@@ -151,4 +151,41 @@ class DiagramPanelTest {
         panel.showDiagram(joinDiagramModel)
         assertFalse("失败后再次渲染应恢复画布", panel.isErrorPageForTest())
     }
+
+    /**
+     * T-F8：加载态状态机——翻转 + 渲染期间不摘转圈。
+     *
+     * 为什么「渲染期间不得提前摘」是本面板的契约：真正的耗时段在调用方（[SqlPreviewPanel] 的
+     * 后台 schema 富化），面板只负责「进/出加载态」两件事；若 [showDiagram] 自己摘转圈，
+     * 富化窗口内用户看不到任何反馈（这正是 F8 审计项里 T-UN-14 转圈从未出现的形态）。
+     */
+    @Test
+    fun `加载态翻转且渲染期间不摘转圈`() {
+        val panel = DiagramPanel()
+        val seq = mutableListOf<Boolean>()
+        panel.loadingProbeForTest = { seq += it }
+
+        panel.showLoading()
+        assertTrue("showLoading 后应处于加载态", panel.isLoadingForTest())
+
+        panel.showDiagram(joinDiagramModel)
+        assertTrue("渲染本身不得摘转圈——摘转圈是调用方的收尾动作", panel.isLoadingForTest())
+
+        panel.hideLoading()
+        assertFalse("hideLoading 后应退出加载态", panel.isLoadingForTest())
+        assertEquals("加载态应恰好翻转一次进入 + 一次退出", listOf(true, false), seq)
+    }
+
+    /**
+     * T-F8：`clear()` 复位加载态——加载期间无 JOIN / 面板清空（整图卸载）时必须摘转圈，
+     * 否则转圈留在已卸载的空标签页上永不消失（用户只看到「一直在加载」）。
+     */
+    @Test
+    fun `clear 复位加载态防整图卸载卡转圈`() {
+        val panel = DiagramPanel()
+        panel.showLoading()
+        assertTrue("前置：应处于加载态", panel.isLoadingForTest())
+        panel.clear()
+        assertFalse("clear 必须复位加载态", panel.isLoadingForTest())
+    }
 }
