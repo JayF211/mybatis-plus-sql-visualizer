@@ -48,9 +48,8 @@ public class SqlLogToolWindowFactory implements ToolWindowFactory {
 
         SqlLogManager manager = project.getService(SqlLogManager.class);
         SqlLogPanel panel = new SqlLogPanel(project, manager);
-        // T-UiNative T-UN-11：捕捉开关挂工具窗标题栏（原面板内反射 hack 退役）。
-        // 工厂创建时 toolWindow 尚未激活也可安全调用（平台支持先设后显）。
-        toolWindow.setTitleActions(java.util.List.of(panel.getCaptureToggleAction()));
+        // T-CaptureBack：捕捉开关已回归面板工具栏（T-UN-11 曾挂标题栏，新 UI 下悬停才可见
+        // 致入口不可发现），不再用 setTitleActions 挂载，避免标题栏残留重复入口。
         // content 标题留空（标题栏由 stripe 标题唯一承担，避免重复显示）
         var content = toolWindow.getContentManager().getFactory().createContent(panel, "", false);
         content.setDisposer(panel);

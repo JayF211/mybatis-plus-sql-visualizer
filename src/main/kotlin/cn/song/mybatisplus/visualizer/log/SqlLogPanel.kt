@@ -511,18 +511,19 @@ class SqlLogPanel(
     internal val slowQueryLabelForTest: JLabel? get() = slowQueryLabel
 
     /**
-     * 捕捉开关动作（T-UiNative T-UN-11）：挂工具窗标题栏（SqlLogToolWindowFactory 调
-     * ToolWindow.setTitleActions），面板工具栏不再含捕捉按钮。图标/文案在 [CaptureAction.update]
-     * 按 manager.capturing 态输出；测试断言直接读 captureToggleAction.presentation，不依赖按钮刷新。
+     * 捕捉开关动作（T-CaptureBack）：回迁面板工具栏首位（T-UN-11 曾迁工具窗标题栏，
+     * 新 UI 下标题栏动作悬停才可见致入口不可发现，回归面板）。图标/文案在 [CaptureAction.update]
+     * 按 manager.capturing 态输出；测试断言直接读 presentation，不依赖按钮刷新。
      */
     val captureToggleAction: AnAction = CaptureAction()
 
     /**
      * 工具栏动作组（T-M39：internal 供测试断言帮助入口存在性；
      * update 由工具栏生命周期驱动，headless 测试手动触发；须在 init 前声明）。
-     * T-UiNative T-UN-11：捕捉开关迁工具窗标题栏（[captureToggleAction]），此处不再包含。
+     * T-CaptureBack：捕捉开关回迁首位（捕捉/清空/设置/搜索/帮助；搜索在帮助左侧为用户指定排序）。
      */
     internal val toolbarGroup = DefaultActionGroup(
+        captureToggleAction, // 捕捉开关（回迁面板工具栏首位，T-CaptureBack）
         ClearAction(),
         SettingsAction(),
         ShowSearchAction(), // 搜索在帮助左侧（用户指定排序）
@@ -942,7 +943,8 @@ class SqlLogPanel(
             if (manager.capturing) {
                 e.presentation.icon = AllIcons.Actions.Suspend
                 e.presentation.text = MpSqlVisualizerBundle.message("log.panel.stop")
-                e.presentation.description = if (manager.isWaitingForConsole) "已开启 SQL 监听，等待项目运行" else null
+                e.presentation.description = if (manager.isWaitingForConsole)
+                    MpSqlVisualizerBundle.message("log.panel.capture.waiting.desc") else null
             } else {
                 e.presentation.icon = AllIcons.Actions.Execute
                 e.presentation.text = MpSqlVisualizerBundle.message("log.panel.capture")

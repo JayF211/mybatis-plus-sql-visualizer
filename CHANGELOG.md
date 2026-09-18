@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- **捕捉开关回归面板工具栏（T-CaptureBack）**：SQL 日志面板的「捕捉」按钮消失——第一轮反馈是按钮不见，第二轮截图实证按钮其实存在、只是平时不渲染。根因=界面原生化 T-UN-11 把捕捉开关从面板内工具栏迁到了工具窗标题栏（`setTitleActions`），而新 UI 下标题栏动作需悬停/激活才可见，入口在用户视角「消失」，且空态文案「点击『捕捉』」与实物位置割裂。修复=捕捉开关回迁面板工具栏首位，工厂侧移除标题栏挂载（单一入口），状态刷新沿用既定 `updateActionsImmediately` 展示链（T-UN-11 的反射 hack 退役收益保留）；顺手把「已开启 SQL 监听，等待项目运行」硬编码文案改走既有 bundle 键
+
 - **定时回归任务不再弹出真机浏览器（T-BrowserLeak2）**：用户真机 Edge 每隔一段时间自动打开 `sql-visualizer.jvtools.cn/about/feedback` 与 `example.invalid/never-opened` 两页。根因是 2026-09-11 帮助页弹浏览器第一轮修复的残余——测试 `SafeBrowserTest` 为验证「测试环境不弹浏览器」而直调这两个真实 URL，但 `SafeBrowser` 守卫写成「有 Application 且 isUnitTestMode 才短路」，纯 JUnit 无平台 Application 的测试进程反而被放行，`BrowserUtil.browse` 降级 `Desktop.browse` 直接 ShellExecute 拉起默认浏览器，定时任务每天跑全量测试即周期性弹窗。修复=守卫语义反转为 fail-safe 默认拦（`app == null || isUnitTestMode` 一律短路，真机 IDE 宿主行为零变化）；测试断言改为直接验证判定函数 `isTestEnvironment()`（不再依赖「没弹」这种不可观测副作用）；守卫测试补位——`BrowserUtil.browse` 禁用扫描扩展到 src/test、SafeBrowser fail-safe 守卫形态加锚点防回退
 
 - **HQL 继承/抽象类实体「列信息未解析」降级修复（T-HqlInhCols）**：HQL 预览出现 `列信息未解析，降级为 x.*`，实体类继承父类（含抽象类）时更易触发。根因链：实体解析返回「表信息在但列清单为空」时被直接当作成功短路，跳过了 hbm 映射兜底与实体别名反查；且 HQL `FROM 别名` 里的 JPA `@Entity(name=...)` 实体名全链无读取点，别名形态的实体名不被替换成表名。修复=①实体解析空列不再短路（先试更优候选，找不到才保留原结果，表名替换不丢）；②新增 `@Entity(name=...)` 实体名反查（类名快路径未命中时兜底，带 PSI 修改计数缓存）；③SELECT 展开降级注释分两档——「实体不可解析」与「实体可解析但列空（提示检查继承链父类映射）」，诊断方向可区分；④`@Inheritance(JOINED/TABLE_PER_CLASS)` 预览附边界说明注释（父类字段实际存于父表/子类独立表，列清单按单表口径合并）；⑤补三级抽象父类链、隔代 `@Transient` 排除、实体别名读取等守卫测试
