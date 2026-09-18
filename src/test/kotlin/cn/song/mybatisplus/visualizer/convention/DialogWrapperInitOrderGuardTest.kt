@@ -129,4 +129,34 @@ class DialogWrapperInitOrderGuardTest {
             body.second.contains("disableCaptureAction"),
         )
     }
+
+    /**
+     * T-ConsentTruth T-CN-02：**状态可达性守卫**——确认框枚举的每个常量都必须存在写入点。
+     *
+     * 现场：T-PS4-01 三态化把 `showAndGet()` 换成 `show()` + 读 outcome，只接上 DISABLE_CAPTURE，
+     * `ACCEPTED` 全仓无赋值 → `confirm()` 恒 false → 增强捕获经 UI 完全不可达（用户报障
+     * 「点确认但开启标识没变且不生效」）。
+     *
+     * 守卫数据驱动（遍历枚举 values），因此**将来新增状态而忘了接线，本守卫自动红**——
+     * 不必为每个状态各写一条断言。豁免：字段初值本身就是产出点的那一态（REJECTED = X 关闭按拒绝）。
+     */
+    @Test
+    fun test_确认框每个结果态都必须存在写入点() {
+        val (_, lines) = dialogSources().firstOrNull { it.first.endsWith("EnhancedCaptureConfirmDialog.kt") }
+            ?: error("未找到 EnhancedCaptureConfirmDialog.kt")
+        val src = lines.joinToString("\n")
+        val initializer = Regex("var outcome: EnhancedCaptureConsent = EnhancedCaptureConsent\\.(\\w+)")
+            .find(src)?.groupValues?.get(1)
+        assertTrue("应能从字段初值读出默认态（正则失效？）", initializer != null)
+
+        val unreachable = cn.song.mybatisplus.visualizer.config.EnhancedCaptureConsent.values()
+            .filter { it.name != initializer }
+            .filterNot { src.contains("outcome = EnhancedCaptureConsent.${it.name}") }
+            .map { it.name }
+        assertTrue(
+            "确认框存在不可达结果态（枚举加了状态却忘了接线）：$unreachable——" +
+                "默认态（$initializer）之外的每一态都必须有 `outcome = EnhancedCaptureConsent.X` 写入点",
+            unreachable.isEmpty(),
+        )
+    }
 }

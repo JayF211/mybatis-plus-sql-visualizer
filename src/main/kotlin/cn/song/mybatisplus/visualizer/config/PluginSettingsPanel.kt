@@ -815,6 +815,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
                             } else {
                                 isSelected = false
                             }
+                            // T-ConsentTruth T-CN-03：确认结果直接写全局 state，不经过 AgentManager 的
+                            // 状态广播——不在这里补一次刷新的话，五态状态行会停在旧文案（如仍显示
+                            // 「未授权注入——下次启动主配置时会询问」），直到下一次 attach/掉线才纠正。
+                            refreshEnhancedStatusLabel()
                         }
                     }
                 })

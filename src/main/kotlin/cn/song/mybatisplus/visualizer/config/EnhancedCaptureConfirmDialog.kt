@@ -102,4 +102,22 @@ class EnhancedCaptureConfirmDialog(parent: Project?) : DialogWrapper(parent, tru
     override fun getOKAction(): Action = super.getOKAction().apply {
         putValue(Action.NAME, MpSqlVisualizerBundle.message("settings.enhancedCapture.confirm.ok"))
     }
+
+    /**
+     * T-ConsentTruth T-CN-01：OK（「同意并启用」）的结果写入——**三态里唯一必须显式接线的一态**。
+     *
+     * 缺陷现场（T-PS4-01 `0fbd147` 引入，2026-09-18）：三态化改造把
+     * `showAndGet()`（布尔值本身即「是否按了 OK」）换成 `show()` + 读 [outcome]，却只接上了
+     * [EnhancedCaptureConsent.DISABLE_CAPTURE]——本方法缺失时 `outcome` 停在初值 REJECTED，
+     * 于是 `confirm()` 恒 false：设置页勾选被自身弹回、应用启动弹窗把「同意」记成「拒绝」并写 24h
+     * 冷却，**增强捕获经 UI 完全不可达**（用户报障「点确认但开启标识没变且不生效」）。
+     *
+     * public（平台原为 protected）是运行期测试缝：headless 下直调本方法断言三态可达，惯例同
+     * `EntitySelectionDialog.doOKAction()` / `ParamImportDialogTest` / `SqlPreviewDialogTest`。
+     * 另由 `DialogWrapperInitOrderGuardTest` 的状态可达性守卫遍历枚举防「加状态忘接线」回潮。
+     */
+    public override fun doOKAction() {
+        outcome = EnhancedCaptureConsent.ACCEPTED
+        super.doOKAction()
+    }
 }
