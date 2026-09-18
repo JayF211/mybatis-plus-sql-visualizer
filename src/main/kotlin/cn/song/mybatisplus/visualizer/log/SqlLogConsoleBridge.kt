@@ -266,7 +266,12 @@ open class SqlLogConsoleBridge(
         attachFilter(console)
     }
 
-    private fun attachFilter(console: Any) {
+    /** T-PS4-02：epActive 短路触发行计数（防误伤可观测——计划 §六：debug 计数日志 + 测试计数探针。
+     *  若平台 filter 链时序反转致短路误伤丢行，本计数与对应 debug 日志即排查锚点）。 */
+    val epActiveShortCircuitCount = java.util.concurrent.atomic.AtomicLong()
+
+    /** T-PS4-02：internal 测试缝——两时序单路化测试直接对桩控制台挂载桥 filter（scanAll 需真实组件树）。 */
+    internal fun attachFilter(console: Any) {
         // M56 T-M56-09：「EP 首行标志」生效 → EP 已覆盖全部控制台，轮询挂载跳过（防双路解析）
         if (SqlCaptureGate.epActive) {
             LOG.debug("attachFilter: EP 已生效，轮询挂载跳过 ${console.javaClass.name}")
@@ -332,6 +337,17 @@ open class SqlLogConsoleBridge(
                     filterIface.classLoader,
                     arrayOf(filterIface),
                     LogFilterProxyHandler { line, endOffset ->
+                        // T-PS4-02 双路解析封口：平台 filter 链中 EP（consoleFilterProvider）先于后挂的
+                        // 桥 filter 执行，行到达时 SqlCaptureGate.epActive 必已置位（EP 首行标志，会话内
+                        // 粘滞）——桥侧直接短路不解析。此前主流时序（控制台先存在→点捕捉→桥照挂）每行
+                        // EP+桥双路 processConsoleLine，解析 CPU 恒 ×2，仅靠缓冲去重保条目不重；短路后
+                        // 条目由 EP 单路产出，去重兜底语义保留。短路只省「重复解析」不省「解析本身」。
+                        // 防误伤可观测（计划 §六）：计数 + debug 日志（计数即测试探针/丢行排查锚点）。
+                        if (SqlCaptureGate.epActive) {
+                            val total = epActiveShortCircuitCount.incrementAndGet()
+                            if (LOG.isDebugEnabled) LOG.debug("bridge filter: EP 已生效，短路桥侧重复解析（累计 $total 行）")
+                            return@LogFilterProxyHandler
+                        }
                         val context = consoleContexts[console] ?: return@LogFilterProxyHandler
                         // T-PreviewFlash：重放守卫——rehighlight 全文档重跑 filter 时丢弃历史行（平台契约要求幂等）。
                         // 守卫依赖反射取到的编辑器文档（stamp/行0）；取不到（非真 ConsoleViewImpl，如测试桩）
@@ -406,10 +422,29 @@ open class SqlLogConsoleBridge(
         }
     }
 
-    /** 捕捉中逐行使用的 timePrefix 缓存（T-LogPerf-04：仅设置变更/挂载时刷新）。 */
+    /** 捕捉中逐行使用的 timePrefix 缓存（T-LogPerf-04：仅设置变更/挂载时刷新）。
+     *  T-PS4-02：EP 通道（[SqlConsoleBridgeFilterProvider]）逐行同项共用本缓存（单一事实源，
+     *  刷新点与桥完全一致：挂载 attachFilter + 设置变更 refreshConsoleContexts）——取代 EP 侧
+     *  每行现场读 PluginSettings。EP 首行可早于桥挂载到达（startCapture 先置 capturing 再
+     *  scanAll），挂载点刷新未发生时由 [currentTimePrefix] 惰性补种一次。 */
     @Volatile
     var timePrefixCache: String? = null
         private set
+
+    /** T-PS4-02：补种标记（尽力而为可见性，无同步——最坏并发下多读一次设置，无正确性影响，
+     *  同 line0 缓存的尽力而为口径）。 */
+    @Volatile
+    private var timePrefixSeeded = false
+
+    /** T-PS4-02：EP 逐行取 timePrefix 的统一入口——未播种时惰性读一次设置，此后返回缓存值
+     *  （挂载/设置变更事件照常覆盖刷新）。 */
+    fun currentTimePrefix(): String? {
+        if (!timePrefixSeeded) {
+            timePrefixCache = PluginSettings.getInstance().state.logTimePrefix.takeIf { it.isNotBlank() }
+            timePrefixSeeded = true
+        }
+        return timePrefixCache
+    }
 
     /**
      * T-LogPerf-04：设置变更事件驱动刷新——[SqlLogManager] 订阅 SETTINGS_CHANGE_TOPIC 后调用，

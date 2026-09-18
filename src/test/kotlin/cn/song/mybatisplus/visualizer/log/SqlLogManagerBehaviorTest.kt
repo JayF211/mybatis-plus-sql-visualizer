@@ -424,10 +424,9 @@ class SqlLogManagerBehaviorTest : BasePlatformTestCase() {
     /** T16：attachFilter 的 isCapturing 守卫——非捕捉态时不挂载 Filter。 */
     fun testT16_AttachFilter_notCapturing_skipsAttach() {
         val bridge = SpyBridge(attachResult = true, isCapturing = { false })
-        // 通过反射调用私有 attachFilter 方法验证守卫
-        val method = SqlLogConsoleBridge::class.java.getDeclaredMethod("attachFilter", Any::class.java)
-        method.isAccessible = true
-        method.invoke(bridge, Any())
+        // T-PS4-02：attachFilter 自 private 改 internal（测试缝，Kotlin internal 字节码名会被
+        // 改写致 getDeclaredMethod 失配）——同模块测试直接调用，守卫断言语义不变
+        bridge.attachFilter(Any())
         assertTrue("非捕捉态时 attachFilter 不应挂载", bridge.attachedConsoles.isEmpty())
     }
 
