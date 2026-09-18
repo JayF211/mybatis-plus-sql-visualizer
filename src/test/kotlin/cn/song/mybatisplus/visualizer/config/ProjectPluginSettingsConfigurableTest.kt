@@ -7,24 +7,30 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import javax.swing.JCheckBox
 import javax.swing.JComboBox
+import javax.swing.JTextField
 
 /**
- * 项目级设置页测试（F-44 续 · 补用例大波次）：此前 0 测试。
- * 覆盖 Configurable 契约与交互：createComponent 构建「使用项目设置」开关 + 方言下拉；
- * 构造后 isModified=false；勾选开关触发 modified 翻转；apply 写回 ProjectPluginSettings 且 isModified 复位。
- * 通过组件遍历取开关/下拉，无需新增生产缝。tearDown 还原项目设置状态。
+ * 项目级设置页测试（F-44 续 + T-SettingsTruth P4 面板扩容）：
+ *  - createComponent 构建「使用项目设置」开关 + 十项可覆盖字段（State 十字段一一对应）
+ *  - 构造后 isModified=false；各控件改动触发 modified 翻转
+ *  - apply 写回 ProjectPluginSettings 且 isModified 复位；reset 回灌 state 值
+ *  - 空值语义：state null/空字段时控件灌全局值；字符串字段 apply 时 trim
+ * 通过组件遍历取控件，无需新增生产缝。tearDown 还原项目/全局设置状态。
  */
 class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
 
-    private var savedUseProject: Boolean? = null
+    private var savedProjectState: ProjectPluginSettings.State? = null
+    private var savedGlobalState: PluginSettings.State? = null
 
     override fun setUp() {
         super.setUp()
-        savedUseProject = ProjectPluginSettings.getInstance(myFixture.project).state.useProjectSettings
+        savedProjectState = ProjectPluginSettings.getInstance(myFixture.project).state.copy()
+        savedGlobalState = PluginSettings.getInstance().state.copy()
     }
 
     override fun tearDown() {
-        ProjectPluginSettings.getInstance(myFixture.project).state.useProjectSettings = savedUseProject ?: false
+        ProjectPluginSettings.getInstance(myFixture.project).loadState(savedProjectState!!)
+        PluginSettings.getInstance().loadState(savedGlobalState!!)
         super.tearDown()
     }
 
@@ -34,27 +40,40 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         return list
     }
 
-    fun testCreateComponent_含使用项目设置开关与方言下拉() {
-        val cfg = ProjectPluginSettingsConfigurable(myFixture.project)
+    private fun newConfig(): ProjectPluginSettingsConfigurable =
+        ProjectPluginSettingsConfigurable(myFixture.project)
+
+    private fun clicks(check: JCheckBox, selected: Boolean) {
+        if (check.isSelected != selected) check.doClick()
+    }
+
+    fun testCreateComponent_含使用项目设置开关与十项可覆盖字段() {
+        val cfg = newConfig()
         val comp = cfg.createComponent()
         assertNotNull(comp)
         val checks = all(comp).filterIsInstance<JCheckBox>()
-        assertEquals("应有一个使用项目设置开关", 1, checks.size)
+        // 开关 + 参数替换 + 格式化 + 逻辑删除注入 = 4 个 checkbox
+        assertEquals("应有 4 个 checkbox（开关 + 3 个覆盖项）", 4, checks.size)
         val combos = all(comp).filterIsInstance<JComboBox<*>>()
-        assertTrue("应有方言下拉", combos.isNotEmpty())
-        assertTrue("方言下拉应有可选项", (combos.first() as JComboBox<*>).itemCount > 0)
+        // 方言下拉 + 推断策略下拉
+        assertEquals("应有 2 个下拉（方言 + 推断策略）", 2, combos.size)
+        assertTrue("方言下拉应有可选项", combos[0].itemCount > 0)
+        assertEquals("推断策略下拉应有 SNAKE/CAMEL 两项", 2, combos[1].itemCount)
+        val texts = all(comp).filterIsInstance<JTextField>().filter { it !is com.intellij.ui.components.JBCheckBox }
+        // 逻辑删除值 + 表前缀 + 表后缀 + 忽略字段
+        assertEquals("应有 4 个文本框", 4, texts.size)
         cfg.disposeUIResources()
     }
 
     fun testIsModified_构造后未改动为false() {
-        val cfg = ProjectPluginSettingsConfigurable(myFixture.project)
+        val cfg = newConfig()
         cfg.createComponent()
         assertFalse("构造后未改动 isModified 应为 false", cfg.isModified())
         cfg.disposeUIResources()
     }
 
     fun test勾选使用项目设置_isModified翻转且apply写回() {
-        val cfg = ProjectPluginSettingsConfigurable(myFixture.project)
+        val cfg = newConfig()
         val comp = cfg.createComponent()
         val check = all(comp).filterIsInstance<JCheckBox>().first()
         assertFalse(cfg.isModified())
@@ -66,6 +85,74 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
             "apply 应将使用项目设置写回",
             ProjectPluginSettings.getInstance(myFixture.project).state.useProjectSettings,
         )
+        cfg.disposeUIResources()
+    }
+
+    fun testApply_十项字段全部写回() {
+        val cfg = newConfig()
+        val comp = cfg.createComponent()
+        val checks = all(comp).filterIsInstance<JCheckBox>()
+        val useProject = checks[0]
+        val replaceParams = checks[1]
+        val formatSql = checks[2]
+        val injectLogicDelete = checks[3]
+        val combos = all(comp).filterIsInstance<JComboBox<*>>()
+        val texts = all(comp).filterIsInstance<JTextField>().filter { it !is com.intellij.ui.components.JBCheckBox }
+
+        clicks(useProject, true)
+        clicks(replaceParams, false)
+        clicks(formatSql, false)
+        clicks(injectLogicDelete, false)
+        combos[0].selectedItem = "PostgreSQL"
+        texts[0].text = "1" // 逻辑删除值
+        texts[1].text = "t_" // 表前缀
+        texts[2].text = "_log" // 表后缀
+        combos[1].selectedItem = PluginSettings.INFERENCE_CAMEL
+        texts[3].text = " temp ; created " // 忽略字段（apply 应 trim）
+
+        assertTrue(cfg.isModified())
+        cfg.apply()
+        assertFalse(cfg.isModified())
+
+        val st = ProjectPluginSettings.getInstance(myFixture.project).state
+        assertTrue(st.useProjectSettings)
+        assertEquals(false, st.replaceParams)
+        assertEquals(false, st.formatSql)
+        assertEquals(false, st.injectLogicDelete)
+        assertEquals("PostgreSQL", st.dialect)
+        assertEquals("1", st.logicDeleteValue)
+        assertEquals("t_", st.tablePrefix)
+        assertEquals("_log", st.tableSuffix)
+        assertEquals(PluginSettings.INFERENCE_CAMEL, st.tableNameInference)
+        assertEquals("temp ; created", st.ignoredFields)
+        cfg.disposeUIResources()
+    }
+
+    fun testReset_空值控件回灌全局值且回写不改state() {
+        val global = PluginSettings.getInstance().state
+        global.tablePrefix = "g_"
+        global.replaceParams = false
+        val st = ProjectPluginSettings.getInstance(myFixture.project).state
+        st.useProjectSettings = true
+        st.replaceParams = null
+        st.tablePrefix = ""
+
+        val cfg = newConfig()
+        val comp = cfg.createComponent()
+        val checks = all(comp).filterIsInstance<JCheckBox>()
+        val texts = all(comp).filterIsInstance<JTextField>().filter { it !is com.intellij.ui.components.JBCheckBox }
+        // null → 全局值；空字符串 → 全局值
+        assertEquals("replaceParams null 应灌全局值", false, checks[1].isSelected)
+        assertEquals("tablePrefix 空应灌全局值", "g_", texts[1].text)
+        assertFalse("reset 前未改动不应 modified", cfg.isModified())
+
+        // 控件改回全局一致值后 reset 应还原（不改 state）
+        texts[1].text = "x_"
+        assertTrue(cfg.isModified())
+        cfg.reset()
+        assertEquals("reset 后 tablePrefix 控件回灌 state+全局兜底", "g_", texts[1].text)
+        assertFalse(cfg.isModified())
+        assertEquals("reset 不应写 state", "", st.tablePrefix)
         cfg.disposeUIResources()
     }
 }

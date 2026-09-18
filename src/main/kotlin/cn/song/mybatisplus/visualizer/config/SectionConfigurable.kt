@@ -61,7 +61,8 @@ abstract class SectionConfigurable(
 
     override fun disposeUIResources() {
         if (::panel.isInitialized) {
-            // 清理面板资源
+            // T-SettingsTruth P2：断开面板 messageBus 连接（增强捕获状态行订阅），防 IDE 退出 leak 告警
+            panel.disposeResources()
         }
     }
 

@@ -133,6 +133,10 @@ class McpConfigurable : Configurable {
         )
     }
 
+    /** 跳转平台 MCP Server 设置页。弹窗白名单依据（BannedApiSourceScanTest「模态弹窗只允许
+     *  白名单内既有场景」）：目标 configurable 类不可用（IDEA < 2025.2 或未装 MCP Server 插件）
+     *  时警告属「配置不可用、用户必须知情」场景，与 PluginSettingsPanel 配置异常 warning 同类
+     *  ——按钮点了无反应不可接受，需明确告知前置条件。 */
     private fun openMcpServerSettings() {
         val project = ProjectManager.getInstance().openProjects.firstOrNull() ?: return
         val configurableClass = runCatching {

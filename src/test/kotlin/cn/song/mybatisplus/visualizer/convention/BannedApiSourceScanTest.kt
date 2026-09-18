@@ -164,14 +164,19 @@ class BannedApiSourceScanTest {
     fun `模态弹窗只允许白名单内既有场景`() {
         // 弹窗克制红线（docs/开发计划/20260906-0180）+ T-UiNative「模态轻提示改平台通知」定案：
         // 轻提示/进度/结果反馈一律走平台 Notification（无打断、可聚合），模态 Messages/JOptionPane
-        // 只保留「用户必须做选择或知情确认」的场景。白名单 = 现存合法场景快照（T-TestGuard2 实测 3 文件），
+        // 只保留「用户必须做选择或知情确认」的场景。白名单 = 现存合法场景快照（T-TestGuard2 实测 3 文件，
+        // T-MergeDev2Master 合流后补 2 文件——dev 侧早于本守卫落地的同类别场景），
         // 新增模态弹窗须在此显式加白并在调用点注释场景依据，否则守卫红——拦截「顺手弹个窗」回潮。
         // SourceCaptureGuide：跳转引导三按钮弹框（用户决策点）+ 引导结果 info/warning；
-        // SqlPreviewPanel：执行前 YesNo 确认；PluginSettingsPanel：配置异常 warning。
+        // SqlPreviewPanel：执行前 YesNo 确认；PluginSettingsPanel：配置异常 warning；
+        // LogToSqlPanel：DML 执行前 YesNo 确认（与预览面板同交互，ExecuteConfirmMessages 同款）；
+        // McpConfigurable：「前往 MCP Server 设置」目标不可用时 warning（与 PluginSettingsPanel 配置不可用同类）。
         val whitelist = setOf(
             "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SourceCaptureGuide.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.kt",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/config/McpConfigurable.kt",
         )
         val found = mainSources()
             .filter { (_, code) ->

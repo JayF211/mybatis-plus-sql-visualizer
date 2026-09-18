@@ -256,7 +256,9 @@ class LogToSqlPanel(
 
     /** 执行单条语句：非查询先 DML 二次确认（与预览面板执行同交互），随后送原生控制台链路。
      *  T-UnboundedWriteGuard：确认消息经 ExecuteConfirmMessages——命中无界写特征时同一对话框
-     *  列出发现（不新增弹窗形态/步骤），无发现时文案逐字节不变。 */
+     *  列出发现（不新增弹窗形态/步骤），无发现时文案逐字节不变。
+     *  弹窗白名单依据（BannedApiSourceScanTest「模态弹窗只允许白名单内既有场景」）：非查询提交前
+     *  的 YesNo 确认属「用户必须做选择」场景，与 SqlPreviewPanel 执行确认同类。 */
     private fun executeStatement(sql: String) {
         val isQuery = cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier.isQuery(sql)
         if (!isQuery) {
