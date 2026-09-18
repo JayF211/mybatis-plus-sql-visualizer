@@ -25,8 +25,6 @@ data class AgentEvent(
     val sourceCandidates: List<Pair<String, Int>> = emptyList(),
     /** T-SourceJumpFunnel：候选帧类名（与 sourceCandidates 栈序对齐，可能少于候选数——旧 agent 无类名列）。 */
     val candidateClasses: List<String> = emptyList(),
-    /** T-SourceJumpFunnel：候选帧方法名（与 sourceCandidates 栈序对齐）。 */
-    val candidateMethods: List<String> = emptyList(),
     /** 方法聚焦键 {SimpleClass}#{method}。 */
     val methodKey: String?,
     /** 请求聚合标签。 */
@@ -59,6 +57,8 @@ data class AgentEvent(
                     )
                 }
             }
+            // T-PS4-14①：同一 JSON 数组只解析一遍（原 parseCandidates + 两处 parseCandidateRows 共三遍）
+            val cands = parseCandidateRows(o.get("cands"))
             AgentEvent(
                 sql = sql,
                 timestamp = o.get("ts")?.asLong ?: System.currentTimeMillis(),
@@ -67,9 +67,8 @@ data class AgentEvent(
                 errorText = o.get("err")?.takeIf { it.isJsonPrimitive }?.asString,
                 sourceFile = o.get("sf")?.takeIf { it.isJsonPrimitive }?.asString,
                 sourceLine = o.get("sl")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0,
-                sourceCandidates = parseCandidates(o.get("cands")),
-                candidateClasses = parseCandidateRows(o.get("cands")).mapNotNull { it.className },
-                candidateMethods = parseCandidateRows(o.get("cands")).mapNotNull { it.method },
+                sourceCandidates = cands.map { it.file to it.line },
+                candidateClasses = cands.mapNotNull { it.className },
                 methodKey = o.get("mk")?.takeIf { it.isJsonPrimitive }?.asString,
                 requestTag = o.get("rt")?.takeIf { it.isJsonPrimitive }?.asString,
                 stackDigest = o.get("sd")?.takeIf { it.isJsonPrimitive }?.asString,
@@ -79,13 +78,10 @@ data class AgentEvent(
             )
         }.getOrNull()
 
-        /** `cands` 数组解析（[file, line] 对；畸形项跳过——协议演进容错）。 */
-        private fun parseCandidates(el: com.google.gson.JsonElement?): List<Pair<String, Int>> =
-            parseCandidateRows(el).map { it.file to it.line }
-
         /**
-         * T-SourceJumpFunnel：`cands` 全列解析（[file, line, className, method] 四列；
-         * 列尾追加协议——旧 agent 两列时 className/method 为 null 不入名单）。
+         * T-SourceJumpFunnel：`cands` 数组解析（[file, line, className] 三列；畸形项跳过——协议演进容错）。
+         * T-PS4-14①：sourceCandidates/candidateClasses 共用本次解析派生，不再各调一遍。
+         * T-PS4-14②：第四列 method 协议历史遗留零消费方（candidateMethods 已删），不再解析。
          */
         private fun parseCandidateRows(el: com.google.gson.JsonElement?): List<CandidateRow> {
             val arr = el?.takeIf { it.isJsonArray }?.asJsonArray ?: return emptyList()
@@ -96,14 +92,13 @@ data class AgentEvent(
                 if (file.isNullOrBlank()) return@forEach
                 val line = pair.getOrNull(1)?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
                 val cn = pair.getOrNull(2)?.takeIf { it.isJsonPrimitive }?.asString
-                val mn = pair.getOrNull(3)?.takeIf { it.isJsonPrimitive }?.asString
-                out.add(CandidateRow(file, maxOf(line, 0), cn, mn))
+                out.add(CandidateRow(file, maxOf(line, 0), cn))
             }
             return out
         }
 
-        /** 候选行（T-SourceJumpFunnel）：file/line 必有，className/method 旧 agent 缺省。 */
-        internal data class CandidateRow(val file: String, val line: Int, val className: String?, val method: String?)
+        /** 候选行（T-SourceJumpFunnel）：file/line 必有，className 旧 agent 缺省（四列协议第四列已废弃）。 */
+        internal data class CandidateRow(val file: String, val line: Int, val className: String?)
 
         private fun com.google.gson.JsonArray.getOrNull(i: Int) =
             if (size() > i) get(i) else null
