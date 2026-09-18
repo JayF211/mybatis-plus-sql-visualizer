@@ -196,15 +196,11 @@ class SettingsRealityGuardTest {
         //  - settings.update.checkFailed / installFailed：UpdateSection.kt:246
         //    「"settings.update.${if (pendingManifest == null) "checkFailed" else "installFailed"}"」动态拼，
         //    StartupUpdateCheck.kt:159 另有 installFailed 直引；两键保留白名单。
-        //  - settings.update.envNotSupported：全历史零消费（76c7ae79 引入 bundle 键时 UpdateSection
-        //    即无引用——环境守卫文案从未接进状态机；P5 守卫首跑查获的存量幽灵键，属残留待清，先白名单挂账）。
-        //  - settings.search.placeholder：c26802b0 曾在 PluginSettingsFolderConfigurable 消费，
-        //    后续重构 SearchTextField 简化时引用被删、键未删——存量幽灵键，白名单挂账待清。
+        //  - settings.update.envNotSupported / settings.search.placeholder：P5 守卫首跑查获的存量幽灵键，
+        //    已随 T-SettingsTruth 收尾删除双语两键（对齐 P3 filterBar 先例），不再豁免。
         val whitelist = setOf(
             "settings.update.checkFailed",
             "settings.update.installFailed",
-            "settings.update.envNotSupported",
-            "settings.search.placeholder",
         )
         val texts = mainSources().map { (p, t) -> p to t }
         val xmlText = mainFile("src/main/resources/META-INF/plugin.xml").readText()
