@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.psi.jpa
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
 import cn.song.mybatisplus.visualizer.model.AssociationInfo
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.ColumnRole
@@ -58,7 +59,7 @@ class JpaEntityResolver {
         val className = entityClass.name ?: return TableInfo("", "", emptyList())
         val file = entityClass.containingFile ?: return resolveInternal(entityClass)
         val qName = entityClass.qualifiedName ?: className
-        val configSig = TableConfigSignature.projectSignature()
+        val configSig = TableConfigSignature.projectSignature(entityClass.project)
 
         // T-Perf-18：缓存键不持 PsiFile 强引用（VirtualFile.url 字符串标识）
         val key = JpaCacheKey(file.virtualFile?.url, System.identityHashCode(file), qName, configSig)
@@ -668,8 +669,9 @@ class JpaEntityResolver {
          * 设置服务不可用时兜底默认 SNAKE。
          */
         private fun inferTableName(className: String): String {
-            val strategy = runCatching { PluginSettings.getInstance().state.tableNameInference }
-                .getOrDefault(PluginSettings.INFERENCE_SNAKE)
+            val strategy = effectiveTableSetting { it.effectiveTableNameInference() }
+                ?: runCatching { PluginSettings.getInstance().state.tableNameInference }
+                    .getOrDefault(PluginSettings.INFERENCE_SNAKE)
             return if (strategy == PluginSettings.INFERENCE_CAMEL) {
                 className.replaceFirstChar { it.lowercaseChar() }
             } else {
@@ -706,17 +708,43 @@ class JpaEntityResolver {
                 .getOrDefault("")
                 .split(';').map { it.trim() }.filter { it.isNotEmpty() }
 
+        /**
+         * T-SettingsTruth P4：项目级表配置读取入口——当前项目 [ProjectPluginSettings] 启用时
+         * effectiveXxx 覆盖全局；无项目上下文/服务不可用时返回 empty（调用方回退全局设置）。
+         */
+        /**
+         * T-SettingsTruth P4：项目级表配置读取入口——当前项目 [ProjectPluginSettings] 启用时
+         * effectiveXxx 覆盖全局；无项目上下文/服务不可用/项目值为空时返回 null
+         * （调用方回退全局设置，与原全局读取行为一致）。
+         *
+         * @param get 从项目级设置读取有效值
+         */
+        private fun effectiveTableSetting(get: (ProjectPluginSettings) -> String): String? {
+            // runCatching 包裹整体：纯单测（无 Application/ProjectManager 实例）与无打开项目时
+            // 一律降级 null → 调用方回退全局设置，与原全局读取行为一致
+            return runCatching {
+                val project = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull()
+                    ?: return null
+                get(ProjectPluginSettings.getInstance(project)).ifBlank { null }
+            }.getOrNull()
+        }
+
         private fun tablePrefix(): String =
-            runCatching { PluginSettings.getInstance().state.tablePrefix }.getOrDefault("")
+            effectiveTableSetting { it.effectiveTablePrefix() }
+                ?: runCatching { PluginSettings.getInstance().state.tablePrefix }.getOrDefault("")
 
         private fun tableSuffix(): String =
-            runCatching { PluginSettings.getInstance().state.tableSuffix }.getOrDefault("")
+            effectiveTableSetting { it.effectiveTableSuffix() }
+                ?: runCatching { PluginSettings.getInstance().state.tableSuffix }.getOrDefault("")
 
         private fun removeTablePrefixList(): List<String> = listSetting { it.removeTablePrefix }
 
         private fun removeTableSuffixList(): List<String> = listSetting { it.removeTableSuffix }
 
         /** 忽略字段名集合（`;` 分隔，按 Java 字段名匹配）。 */
-        private fun ignoredFieldNames(): Set<String> = listSetting { it.ignoredFields }.toSet()
+        private fun ignoredFieldNames(): Set<String> =
+            (effectiveTableSetting { it.effectiveIgnoredFields() }
+                ?: runCatching { PluginSettings.getInstance().state.ignoredFields }.getOrDefault(""))
+                .split(';').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
     }
 }

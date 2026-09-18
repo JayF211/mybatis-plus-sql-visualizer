@@ -187,7 +187,7 @@ class SqlPreviewService(private val project: Project) {
         // M14.6：缓存键含「替换 ? 占位符」开关，开关切换后不命中旧结果
         // T-M19.4（用户实测：表名配置修改后预览不生效）：缓存键含**表配置签名**——设置变更
         // （文件戳不变的场景）不再命中旧解析结果
-        val resolveVariables = settings?.state?.replaceParams ?: true
+        val resolveVariables = effectiveReplaceParams()
         val located = cache.getOrCompute(file, anchor.textRange.startOffset, resolveVariables, tableConfigSignature()) {
             WrapperLocator.locateWithTable(anchor, resolveVariables)
         }
@@ -256,7 +256,7 @@ class SqlPreviewService(private val project: Project) {
             // logicDelToOn/logicDelToWhere 仅控制**副表** deleted 条件位置（ON / WHERE 末尾），不再影响主表注入
             // （旧实现把二者当作全局开关是错误近似，见 [evaluateLogicDeleteState]）
             val logicDelete = evaluateLogicDeleteState(located.chain.calls)
-            val baseStatement = if (settings?.state?.injectLogicDelete ?: true) {
+            val baseStatement = if (effectiveInjectLogicDelete()) {
                 injectLogicDeleteCondition(table, statement, logicDelete)
             } else {
                 statement
@@ -361,7 +361,7 @@ class SqlPreviewService(private val project: Project) {
         val jpaCrud = batchCall?.let {
             JpaCrudOperationConverter.convert(
                 it,
-                resolveVariables = settings?.state?.replaceParams ?: true,
+                resolveVariables = effectiveReplaceParams(),
             )
         }
         if (jpaCrud != null) {
@@ -384,8 +384,8 @@ class SqlPreviewService(private val project: Project) {
         val batch = batchCall?.let {
             BatchOperationConverter.convert(
                 it,
-                injectLogicDelete = settings?.state?.injectLogicDelete ?: true,
-                resolveVariables = settings?.state?.replaceParams ?: true,
+                injectLogicDelete = effectiveInjectLogicDelete(),
+                resolveVariables = effectiveReplaceParams(),
                 // D2：INSERT 租户列追加 = 主开关 AND 子开关（injectTenantOnInsert）；UPDATE 的 SET 租户注入
                 // 走主开关（见上方 enhanceUpdateSet 链），不受本参数影响
                 injectTenantLine = (settings?.state?.injectTenantLine ?: true) &&
@@ -1034,7 +1034,7 @@ class SqlPreviewService(private val project: Project) {
         val call = generateSequence(anchor) { it.parent }
             .filterIsInstance<PsiMethodCallExpression>()
             .firstOrNull() ?: return null
-        val preview = SpecificationQueryConverter.convert(call, settings?.state?.replaceParams ?: true) ?: return null
+        val preview = SpecificationQueryConverter.convert(call, effectiveReplaceParams()) ?: return null
         val result = PreviewResult(
             sql = preview.sql,
             compactSql = preview.sql.replace(Regex("\\s+"), " ").trim(),
@@ -1058,7 +1058,7 @@ class SqlPreviewService(private val project: Project) {
         val call = generateSequence(anchor) { it.parent }
             .filterIsInstance<PsiMethodCallExpression>()
             .firstOrNull() ?: return null
-        val preview = QueryByExampleConverter.convert(call, settings?.state?.replaceParams ?: true) ?: return null
+        val preview = QueryByExampleConverter.convert(call, effectiveReplaceParams()) ?: return null
         val result = PreviewResult(
             sql = preview.sql,
             compactSql = preview.sql.replace(Regex("\\s+"), " ").trim(),
@@ -1275,7 +1275,8 @@ class SqlPreviewService(private val project: Project) {
         state: LogicDeleteState,
     ): SqlStatement {
         // T-M31.18：逻辑删除值可配置（默认 0，用户可调整——对齐 MP logic-delete-value）
-        val logicDeleteValue = PluginSettings.getInstance().state.logicDeleteValue.ifBlank { "0" }
+        // T-SettingsTruth P4：项目级 logicDeleteValue 覆盖（空回退全局，再兜底 "0"）
+        val logicDeleteValue = effectiveLogicDeleteValue().ifBlank { "0" }
         return when (statement) {
             is SelectStatement -> {
                 var conditions = statement.conditions
@@ -1571,6 +1572,45 @@ class SqlPreviewService(private val project: Project) {
     fun formatSql(): Boolean =
         effective({ settings?.state?.formatSql ?: true },
                   { projectSettings?.effectiveFormatSql() })
+
+    // T-SettingsTruth P4：以下 7 项直读点全部改走项目级 effective——
+    // useProjectSettings 开启时项目级覆盖全局，关闭/null/空回退全局（回退语义在
+    // ProjectPluginSettings.effectiveXxx 内置，此处仅透传；effectiveString 由零调用转正）。
+
+    /** 有效参数替换开关（项目级优先，回退全局）。 */
+    private fun effectiveReplaceParams(): Boolean =
+        effective({ settings?.state?.replaceParams ?: true },
+                  { projectSettings?.effectiveReplaceParams() })
+
+    /** 有效逻辑删除注入开关（项目级优先，回退全局）。 */
+    private fun effectiveInjectLogicDelete(): Boolean =
+        effective({ settings?.state?.injectLogicDelete ?: true },
+                  { projectSettings?.effectiveInjectLogicDelete() })
+
+    /** 有效逻辑删除值（项目级优先，空回退全局）。 */
+    private fun effectiveLogicDeleteValue(): String =
+        effectiveString(settings?.state?.logicDeleteValue ?: "",
+                        projectSettings?.effectiveLogicDeleteValue())
+
+    /** 有效表前缀（项目级优先，空回退全局）。 */
+    private fun effectiveTablePrefix(): String =
+        effectiveString(settings?.state?.tablePrefix ?: "",
+                        projectSettings?.effectiveTablePrefix())
+
+    /** 有效表后缀（项目级优先，空回退全局）。 */
+    private fun effectiveTableSuffix(): String =
+        effectiveString(settings?.state?.tableSuffix ?: "",
+                        projectSettings?.effectiveTableSuffix())
+
+    /** 有效表名推断策略（项目级优先，空回退全局）。 */
+    private fun effectiveTableNameInference(): String =
+        effectiveString(settings?.state?.tableNameInference ?: PluginSettings.INFERENCE_SNAKE,
+                        projectSettings?.effectiveTableNameInference())
+
+    /** 有效忽略字段名（项目级优先，空回退全局）。 */
+    private fun effectiveIgnoredFields(): String =
+        effectiveString(settings?.state?.ignoredFields ?: "",
+                        projectSettings?.effectiveIgnoredFields())
 
     /**
      * 风险警示（F-09/F-10 + F-6 Phase C BlockAttack 增强 + DataPermission 占位提示）。
