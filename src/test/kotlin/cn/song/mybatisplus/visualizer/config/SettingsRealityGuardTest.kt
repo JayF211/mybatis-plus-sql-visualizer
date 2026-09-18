@@ -9,13 +9,14 @@ import java.io.File
  *
  * 四断言对应四类「假配置」形态（docs/开发计划/20260918-0809-T-SettingsTruth §P5）：
  *  - 断言一「写而不读」：[PluginSettings.State] 每个 var 字段在 src/main 非 config 包存在
- *    大小写不敏感消费（覆盖 Java getXxx 访问器；SettingsIO 属 config 包天然排除其纯导入导出
- *    读写；KDoc 中出现亦算——宽松无害）。P1 删除的 autoInjectSqlSourceInterceptor 假开关由此防回潮。
+ *    **词边界**消费（覆盖 Java getXxx 访问器；SettingsIO 属 config 包天然排除其纯导入导出
+ *    读写）。P1 删除的 autoInjectSqlSourceInterceptor 假开关由此防回潮。
  *  - 断言二「摆而不绑」：[PluginSettingsPanel] 每个可编辑控件字段必须在 apply() 与 reset()
  *    函数体中各出现（isModified 系列不强制——历史上有意豁免的展示件多）；按钮/纯展示 label
  *    进白名单豁免。防「面板摆了控件却不进读写链」的摆设件回潮。
- *  - 断言三「声明而不消费」：[ProjectPluginSettings] 每个 `fun effectiveXxx` 在 src/main
- *    非 config 包存在调用。P4 接线前 7 个 effective* 零调用的半接线状态由此防回潮。
+ *  - 断言三「声明而不消费」：[ProjectPluginSettings] 每个 `fun effectiveXxx` 与项目级总开关
+ *    `isEnabled` 在 src/main 非 config 包存在**调用形态**（同名函数定义处不算）。P4 接线前
+ *    7 个 effective* 零调用的半接线状态由此防回潮。
  *  - 断言四「幽灵键」：bundle 中 `settings.*` / `configurable.*` / `log.list.displayMode*`
  *    键必须被 src/main 引用或列白名单。防 P3「搜索索引收录不存在设置」同类幽灵文案回潮。
  *
@@ -25,8 +26,15 @@ import java.io.File
  *  - BundleParityGuardTest（i18n 包）：中英 key 集合全等 + 占位符形态 + 引用键必存在——
  *    本文件断言四是反方向（bundle 键必须被引用），互补不重叠。
  *
- * 函数体切片按行扫描（`fun apply(` / `fun reset(` 到下一个 4 空格缩进的成员声明/收尾 `}`），
- * 与 BannedApiSourceScanTest 同款「定位 src/main、读文本断言」形态。
+ * T-Fix-SettingsScope 收紧（2026-09-18）：断言一/二/三原口径为「整文件文本 / 切片子串命中，
+ * 注释与更长标识符都算消费」，能过但堵不住三类真实缺口——
+ *  - 同名遮蔽：[SqlPreviewService] 的私有 helper 与 [ProjectPluginSettings] 的 effective* 有 7 个
+ *    同名（`private fun effectiveTablePrefix(): String`）；删掉真实调用 `ps.effectiveTablePrefix()`
+ *    后 helper 定义仍在 → 断言三照旧绿；
+ *  - 子串后门：`tablePrefix` ⊂ `removeTablePrefix`，字段真死也能被另一个标识符兜住；
+ *  - 扫描面遗漏：断言三只扫 `fun effective\w+\(`，项目级总开关 `isEnabled()`（唯一读点）不在面内。
+ * 现口径 = 先剥离注释（KDoc/注释提及不算消费）再按词边界（断言一）或调用形态（断言三）判定，
+ * 断言三另从判定面剔除同名函数定义处。收紧后实测仍全绿（缺口 ① 之外的存量接线均真实）。
  */
 class SettingsRealityGuardTest {
 
@@ -44,6 +52,26 @@ class SettingsRealityGuardTest {
     }
 
     private fun mainFile(rel: String): File = repoRoot().resolve(rel)
+
+    /**
+     * 剥离 block 注释与行注释（自 BannedApiSourceScanTest 搬入复用）。
+     *
+     * 字符串字面量中的 `//` 会被连带截断——只可能产生漏报不产生误报，可接受。
+     * 断言二依赖行结构（apply/reset 切片按 4 空格缩进定位函数边界），不能用本函数
+     * （block 注释整段删除会合并行、错切边界），改用 [stripCommentsKeepLines]。
+     */
+    private fun stripComments(source: String): String =
+        source
+            .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
+            .lineSequence()
+            .joinToString("\n") { it.substringBefore("//") }
+
+    /** 同 [stripComments]，但注释内容替换为等量空白、换行原样保留（行数不变）。 */
+    private fun stripCommentsKeepLines(source: String): String =
+        Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL)
+            .replace(source) { m -> m.value.map { c -> if (c == '\n' || c == '\r') c else ' ' }.joinToString("") }
+            .lineSequence()
+            .joinToString("\n") { it.substringBefore("//") }
 
     /** src/main 全部 .kt/.java（含路径与文本，路径统一 / 分隔）。 */
     private fun mainSources(): List<Pair<String, String>> =
@@ -70,17 +98,25 @@ class SettingsRealityGuardTest {
         val fields = Regex("""\n\s+var\s+(\w+)\s*[:=]""").findAll(stateBody).map { it.groupValues[1] }.toList()
         assertTrue("State 应解析出 var 字段（正则失效？）", fields.size >= 60)
 
-        val lowered = nonConfigSources().map { (p, t) -> p to t.lowercase() }
+        // 注释剥离后再判消费：KDoc/注释里提一句字段名不算消费（T-Fix-SettingsScope 收紧）
+        val code = nonConfigSources().map { (p, t) -> p to stripComments(t) }
         // 间接消费别名：字段本身不出现在非 config 包，但经 config 包同名/派生访问器转出后真实驱动行为
         // （logListSqlDisplayMode → sqlListDisplayMode()，消费点 SqlLogPanel.kt / HistorySqlLogPanel.kt）。
         // 显式登记而非泛化匹配——新增别名须留注释可审计。
         val alias = mapOf("logListSqlDisplayMode" to "sqlListDisplayMode")
         val dead = fields.filter { f ->
-            val probe = (alias[f] ?: f).lowercase()
-            lowered.none { (_, t) -> probe in t }
+            val probe = alias[f] ?: f
+            // 词边界判定：`tablePrefix` 不再被 `removeTablePrefix` 这类更长标识符兜住（子串口径后门）
+            val identifier = Regex("""(?<![\w$])${Regex.escape(probe)}(?![\w$])""")
+            // Java 访问器形态：Kotlin `var xxx` 的 Java 消费方只能走 getXxx()
+            // （logStopOnToolWindowClose 的消费点在 src/main/java 的 ToolWindow 监听链）
+            val javaAccessor = Regex(
+                """(?<![\w$])get${Regex.escape(probe.replaceFirstChar { it.uppercaseChar() })}(?![\w$])""",
+            )
+            code.none { (_, t) -> identifier.containsMatchIn(t) || javaAccessor.containsMatchIn(t) }
         }
         assertTrue(
-            "PluginSettings.State 存在「写而不读」的死字段（非 config 包零消费，含大小写变体）：$dead。" +
+            "PluginSettings.State 存在「写而不读」的死字段（非 config 包剥注释后零词边界消费）：$dead。" +
                 "T-SettingsTruth 定案：设置项必须真实驱动行为——删字段（如 P1 的 autoInjectSqlSourceInterceptor 纯动作开关）" +
                 "或接线消费点，不得留假配置",
             dead.isEmpty(),
@@ -141,8 +177,10 @@ class SettingsRealityGuardTest {
             return lines.subList(start, start + 1 + end).joinToString("\n")
         }
 
-        val applyBody = body("apply")
-        val resetBody = body("reset")
+        // 切片后剥注释：原口径「注释行也算绑定/回填」——KDoc 或行尾注释里提一句控件名即过守卫
+        // （T-Fix-SettingsScope 收紧）。边界定位仍用未剥注释的 lines（见 stripCommentsKeepLines 注释）
+        val applyBody = stripCommentsKeepLines(body("apply"))
+        val resetBody = stripCommentsKeepLines(body("reset"))
         // 间接绑定别名：combo 不直现于 apply()，经 selectedXxx() helper 读值（helper 内引用控件，
         // helper 被 apply 调用）——登记而非泛化匹配，新增别名须留注释可审计。
         //  - crudColorStyleCombo → selectedCrudColorStyle()（apply :1343 / reset :1466 直现）
@@ -165,19 +203,32 @@ class SettingsRealityGuardTest {
     }
 
     // ------------------------------------------------------------------
-    // 断言三（声明而不消费）：ProjectPluginSettings 每个 effectiveXxx 有 config 外调用
+    // 断言三（声明而不消费）：effectiveXxx 与总开关 isEnabled 有 config 外调用
     // ------------------------------------------------------------------
 
     @Test
-    fun `ProjectPluginSettings每个effective方法在非config包存在调用`() {
+    fun `ProjectPluginSettings每个effective方法与总开关在非config包存在调用`() {
         val projSrc = mainFile("src/main/kotlin/cn/song/mybatisplus/visualizer/config/ProjectPluginSettings.kt").readText()
-        val methods = Regex("""fun (effective\w+)\(""").findAll(projSrc).map { it.groupValues[1] }.toList()
-        assertTrue("ProjectPluginSettings 应声明 effective* 方法（含 isEnabled 语义则另计）", methods.isNotEmpty())
+        val effective = Regex("""fun (effective\w+)\(""").findAll(projSrc).map { it.groupValues[1] }.toList()
+        assertTrue("ProjectPluginSettings 应声明 effective* 方法", effective.isNotEmpty())
+        // 项目级总开关：`isEnabled()` 是全部 effective* 的唯一闸门，此前不在扫描面内
+        // （关掉总开关即全项目级覆盖失效，漏接它与漏接任一 effective* 同责）
+        val methods = effective + "isEnabled"
 
-        val texts = nonConfigSources().map { (p, t) -> p to t }
-        val dead = methods.filter { m -> texts.none { (_, t) -> m in t } }
+        val code = nonConfigSources().map { (p, t) -> p to stripComments(t) }
+        val dead = methods.filter { m ->
+            // 调用形态：标识符后随 `(`；且从判定面剔除同名函数定义处——
+            // 否则 SqlPreviewService 的私有 helper `private fun effectiveTablePrefix(): String`
+            // 会把「删掉真实调用 ps.effectiveTablePrefix()」的漏接照旧兜绿（同名遮蔽缺口）
+            val call = Regex("""(?<![\w$])${Regex.escape(m)}\s*\(""")
+            val definition = Regex("""fun\s+${Regex.escape(m)}\s*\(""")
+            code.none { (_, t) ->
+                val defSpans = definition.findAll(t).map { it.range }.toList()
+                call.findAll(t).any { c -> defSpans.none { d -> c.range.first in d } }
+            }
+        }
         assertTrue(
-            "ProjectPluginSettings 存在零调用的 effective*（声明而不消费的半接线死面）：$dead。" +
+            "ProjectPluginSettings 存在零调用的 effective*/isEnabled（声明而不消费的半接线死面）：$dead。" +
                 "T-SettingsTruth P4 定案：项目级覆盖项必须真实进入读取链（SqlPreviewService/EntityResolver），" +
                 "否则删除方法走瘦身方案，不得留假接线",
             dead.isEmpty(),

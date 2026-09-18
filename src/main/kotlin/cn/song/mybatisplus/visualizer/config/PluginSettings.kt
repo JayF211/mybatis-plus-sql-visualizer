@@ -604,14 +604,16 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /**
          * 从 JSON 字符串导入并覆盖当前全局配置（O-5：设置导入导出）；委托 [SettingsIO.importFromJson]。
          *
+         * 以当前状态为底合并（T-Fix-SettingsScope）：文件只承载 [SettingsIO.exportToJson] 的
+         * 21 个可覆盖项，State 其余 56 个字段（参数历史 / 增强捕获授权记忆 / 反馈身份 /
+         * 日志自动保存目录 / 全局项等）不在文件里，必须保留现值而非回落出厂默认——
+         * 全局项（language 等）由此自然保留，无需再单独抄回。
+         *
          * @throws SettingsIO.ImportException JSON 格式错误或版本不兼容
          */
         fun fromJson(json: String) {
-            val imported = SettingsIO.importFromJson(json)
             val instance = getInstance()
-            // 保留全局项（language 等），仅覆盖可覆盖项
-            imported.language = instance.state.language
-            instance.loadState(imported)
+            instance.loadState(SettingsIO.importFromJson(json, instance.state.copy()))
         }
     }
 }

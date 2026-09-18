@@ -7,6 +7,9 @@ package cn.song.mybatisplus.visualizer.config
  * 手动 JSON 实现（无 kotlinx.serialization 依赖）——覆盖可覆盖项（方言/参数替换/表名映射/
  * 多租户/数据权限），不含全局项（界面语言/快捷键/更新通道）。
  *
+ * 导出面是 State 的子集，故导入按「JSON 出现的键才覆盖、未出现的键保留现值」合并
+ * （见 [importFromJson] 的 base 形参）——否则文件未承载的字段会被静默重置。
+ *
  * 格式：扁平 JSON 对象（string/boolean/number/array）；版本号 [CURRENT_VERSION] 用于前向兼容。
  */
 object SettingsIO {
@@ -56,21 +59,33 @@ object SettingsIO {
     // ------------------------------------------------------------------
 
     /**
-     * 从 JSON 字符串解析状态（缺失字段使用默认值，未知字段忽略）。
+     * 从 JSON 字符串解析状态。
+     *
+     * 合并语义（T-Fix-SettingsScope）：以 [base] 为底，仅覆盖 JSON 中**实际出现**的键；
+     * JSON 未出现的键保留 [base] 的现值，未知字段忽略。
+     *
+     * 为什么必须以现值为底：[exportToJson] 只写 21 个可覆盖项，而 [PluginSettings.State]
+     * 有 77 个 var 字段。若以新建出厂默认态为底，一次导入会把参数历史（paramHistoryJson）、
+     * 增强捕获授权记忆、反馈身份、日志自动保存目录等**文件里根本没有的字段**静默重置为
+     * 出厂默认——用户侧表现为不可见的数据丢失（本文件 KDoc 自称「不含全局项」，却又把
+     * autoCheckUpdate/ignoredUpdateVersions 一并重置，自相矛盾）。
      *
      * @param json JSON 字符串
-     * @return 恢复后的 State（不含全局项如 language/shortcut，保持当前值）
+     * @param base 未出现在 JSON 中的键的取值来源（默认出厂默认态，供「只要文件值」的调用方使用）
+     * @return 恢复后的 State（不含全局项如 language/shortcut，保持 base 现值）
      * @throws ImportException JSON 格式错误或版本不兼容
      */
-    fun importFromJson(json: String): PluginSettings.State {
+    fun importFromJson(json: String, base: PluginSettings.State = PluginSettings.State()): PluginSettings.State {
         val map = parseJson(json)
         val version = (map["version"] as? Number)?.toInt()
             ?: throw ImportException("缺少 version 字段")
         if (version > CURRENT_VERSION) {
             throw ImportException("配置文件版本不匹配（文件版本 $version > 当前支持版本 $CURRENT_VERSION）")
         }
-        val state = PluginSettings.State()
-        // 版本 <= CURRENT_VERSION：逐字段读取，缺失则保留默认值
+        // copy() 而非直接改写 base：调用方传入的多为活状态（instance.state.copy()），
+        // 就地改写会污染它
+        val state = base.copy()
+        // 版本 <= CURRENT_VERSION：逐字段读取，缺失则保留 base 现值
         map.getString("dialect")?.let { state.dialect = it }
         map.getBoolean("replaceParams")?.let { state.replaceParams = it }
         map.getBoolean("formatSql")?.let { state.formatSql = it }
