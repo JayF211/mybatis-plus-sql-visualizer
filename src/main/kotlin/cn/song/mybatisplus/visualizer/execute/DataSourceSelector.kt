@@ -1183,6 +1183,22 @@ object DataSourceSelector {
     }
 
     /**
+     * T-TS-09：控制台编辑器不可得时的用户可读提示（[prepareInConsole] 两条静默分支共用）。
+     *
+     * 复用既有键 `execute.failed`（"执行 SQL 失败：{0}"）＋技术性明细参数：明细是诊断串而非文案，
+     * 与 `execute.tempFile.failed` 传 [lastTempFileFailure] 同款（新增专用键要动双语 bundle，
+     * 不在本任务写集内）。
+     *
+     * @param path 触发的分支（sync = 非 EDT 同步轮询 / async = EDT 异步等待）——排障时据此定位，
+     *             两条分支的成因不同（同步：调用方在非 EDT；异步：EDT 首查未命中后后台轮询）
+     */
+    private fun consoleEditorUnavailableMessage(path: String): String =
+        MpSqlVisualizerBundle.message(
+            "execute.failed",
+            "控制台编辑器不可得（$path：400ms 内 getEditors(consoleDocument) 恒空，无一方为该文档建过编辑器）",
+        )
+
+    /**
      * 准备链续接（consumer 回调内调用）：session → attachConsole → 编辑器/scriptModel →
      * 缓存已备控制台 → 拼合组件回调 →（可选）立即执行。
      *
@@ -1264,7 +1280,20 @@ object DataSourceSelector {
                     }
                 }
                 LOG.info("[M36] editor=$editor")
-                val ed = editor ?: return
+                if (editor == null) {
+                    // T-TS-09：原为静默 `?: return`——非 EDT 调用方（本分支只在非 EDT 到达）在控制台
+                    // 文档无人建编辑器时永久拿不到任何回调，UI 停在「执行中」且 errors=[]（驱动管线打通
+                    // 前观测到的「120s 不就绪 + 错误为空」正是此处与下方异步分支两处静默共同造成）。
+                    // 只补通知，不改准备链语义（onEditor/onConsole 仍只在成功路径触发）。
+                    LOG.warn("[M36] console editor unavailable after 400ms wait (sync path), abort prepare")
+                    // write-safe: UI-only（纯 Swing/只读，无文档写）——onError 由面板直接刷状态栏，
+                    // 本分支在非 EDT 线程上，须归位 EDT（同下方异步分支语义）
+                    ApplicationManager.getApplication().invokeLater({
+                        onError?.invoke(consoleEditorUnavailableMessage("sync"))
+                    }, com.intellij.openapi.application.ModalityState.any())
+                    return
+                }
+                val ed = editor
                 // M36.2：编辑器就绪回调（调用方注入插件补全上下文，与原生补全叠加）
                 onEditor?.invoke(ed)
                 prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, ed, onErrorRich)
@@ -1292,6 +1321,13 @@ object DataSourceSelector {
                                 val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
                                 onError?.invoke(cause.message ?: cause.toString())
                             }
+                        } else {
+                            // T-TS-09：原为「无 else」——EDT 调用方（测试/面板准备链的常态）轮询 400ms
+                            // 仍取不到编辑器时，本函数就此静默结束：调用方既无 onError 也无 callback，
+                            // 面板停在「执行中」且 errors=[]，与上面的同步分支同款不可诊断（20260918
+                            // 基线 idea.log `[M36] editor=null (async wait)` 实证）。只补通知，不改语义。
+                            LOG.warn("[M36] console editor unavailable after 400ms wait (async path), abort prepare")
+                            onError?.invoke(consoleEditorUnavailableMessage("async"))
                         }
                     }, com.intellij.openapi.application.ModalityState.nonModal())
                 }

@@ -69,7 +69,20 @@ object NativeDatabaseDiagramSupport {
             val located = ReadAction.compute<Map<String, DbElement>, Throwable> {
                 locateDbTables(project, tableNames)
             }
-            if (located == null || located.size < tableNames.size) return null
+            if (located == null || located.size < tableNames.size) {
+                // T-TS-08：此处原为静默 `return null`，是「用例绿 ≠ B 路径已验证」不可诊断的根因——
+                // HeavyNativeDatabaseDiagramJoinChainTest 在 component==null 处软跳（五组断言全未
+                // 执行却计为绿），而日志里既没有降级痕迹也没有原因，无法区分「B 路径真跑过」与
+                // 「从未进入」。降级本身是设计内契约（见类注释），只补可诊断性，不改行为。
+                val foundKeys = located?.keys ?: emptySet()
+                LOG.warn(
+                    "Native Database diagram (B path) not taken: located=$foundKeys " +
+                        "wanted=$tableNames missing=${tableNames.filter { it.trim().lowercase() !in foundKeys }} " +
+                        "—— 缺表 = 该表未在已内省的数据源模型里定位到（数据源未内省 / 表名不匹配 / " +
+                        "DbModelRegistry 无对应 DbElement），按契约回落 A 路径",
+                )
+                return null
+            }
             LOG.info("Native Database diagram (B path) taking over: tables=${located.keys}")
             registerJoinForeignKeys(model, located)
 
@@ -145,30 +158,68 @@ object NativeDatabaseDiagramSupport {
         return try {
             val wanted = tableNames.map { it.trim().lowercase() }.toSet()
             val found = mutableMapOf<String, DbElement>()
+            // T-TS-08：定位链的逐段计数——调用方只在「全部命中」时才走 B 路径，缺表时仅凭
+            // 命中集合无法判断卡在哪一段（无数据源 / 数据源未内省(model=null) / traverser 不可迭代 /
+            // 表名没匹配 / DbElement 没登记），故把每段读数一并留痕（纯日志，无控制流影响）。
+            var managers = 0
+            var dataSources = 0
+            var modelNull = 0
+            var traverserMiss = 0
+            var roots = 0
+            var iterated = 0
+            var dasTables = 0
+            var nameHits = 0
+            var registryMiss = 0
+            val dsClasses = LinkedHashSet<String>()
             val modelRegistry = project.getService(com.intellij.database.DbModelRegistry::class.java)
             for (manager in DataSourceManager.getManagers(project)) {
+                managers++
                 if (found.size == wanted.size) break
                 val sources: List<RawDataSource> = manager.dataSources
                 for (ds in sources) {
+                    dataSources++
+                    dsClasses.add(ds.javaClass.simpleName)
                     if (found.size == wanted.size) break
                     // RawDataSource → DasDataSource.getModel()（DasModel），编译期直调
-                    val model = runCatching { ds.model }.getOrNull() ?: continue
+                    val model = runCatching { ds.model }.getOrNull()
+                    if (model == null) {
+                        modelNull++
+                        continue
+                    }
+                    // model 非 null 却遍历不出表时，须区分「模型是空的（未同步内省结果）」与
+                    // 「模型有根但遍历器没吐出东西」——roots 读数正是这个分界（本地实测的关键证据）
+                    roots += runCatching { model.modelRoots.toList().size }.getOrDefault(-1)
                     // T-Perf-09：惰性迭代 + 命中即停（此前 toList() 全量物化再筛——数千表 schema
                     // 下即使全部命中也遍历完整棵模型）；model 为 null（未内省）已在上行跳过
                     val elements = runCatching { model.traverser() }.getOrNull()
                         ?.let { it as? Iterable<*> }
-                        ?: continue
+                    if (elements == null) {
+                        traverserMiss++
+                        continue
+                    }
                     for (element in elements) {
+                        iterated++
                         if (found.size == wanted.size) break
                         if (element !is DasTable) continue
+                        dasTables++
                         val name = element.name?.lowercase() ?: continue
                         if (name in wanted && name !in found) {
-                            val dbElement = modelRegistry.findDbElement(element) ?: continue
+                            nameHits++
+                            val dbElement = modelRegistry.findDbElement(element)
+                            if (dbElement == null) {
+                                registryMiss++
+                                continue
+                            }
                             found[name] = dbElement
                         }
                     }
                 }
             }
+            LOG.info(
+                "B path locateDbTables: wanted=$wanted found=${found.keys} managers=$managers " +
+                    "dataSources=$dataSources(dsClasses=$dsClasses) modelNull=$modelNull traverserMiss=$traverserMiss " +
+                    "roots=$roots iterated=$iterated dasTables=$dasTables nameHits=$nameHits registryMiss=$registryMiss",
+            )
             found
         } catch (t: Throwable) {
             LOG.warn("NativeDatabaseDiagramSupport.locateDbTables failed: ${t}")

@@ -30,6 +30,20 @@ import javax.xml.parsers.DocumentBuilderFactory
  * NativeDatabaseDiagramSupport.buildTabComponent（DATABASE provider + 真实 DbTable 节点）→
  * 断言数据模型含 ≥2 节点、连接线来自虚拟外键（SQLV_JOIN 前缀）、dispose 回收登记。
  *
+ * ## ⚠ 本类的「绿」不等于「B 路径已验证」（T-TS-08 复核口径）
+ *
+ * 用例有三级软返回（introspect 失败 / `buildTabComponent` 返回 null / 编辑器未挂接），
+ * 命中任一即 `println + return` 记绿，**五组断言一组都不执行**。20260918 复核实测：本环境走的
+ * 就是 `component == null` 那条（XML `system-out` 实证 `[DB-IT] SKIP: B 路径链路不可用…`），
+ * 即**B 路径在本环境从未被真跑过**——「9 例 JUnit 绿」是事实，「B 路径已验证」不是。
+ * 相应地：
+ *  - 产品侧 `NativeDatabaseDiagramSupport.kt` 的降级点已补日志（`B path not taken: …` +
+ *    `locateDbTables` 四段计数），降级原因（无数据源 / 未内省 / 表名不匹配 / DbElement 未登记）
+ *    在 idea.log 里可查——修复前该点静默，是「绿≠已验证」不可诊断的根因；
+ *  - 本环境的可跑性结论与未验证边界记录在
+ *    `docs/调研报告/20260918-testDatabase驱动管线打通-记录.md` §六；
+ *  - 让 B 路径真跑（补真实工程/表定位夹具）属独立工作量，未在本轮范围内。
+ *
  * 环境依赖（与 DataSourceSelectorIntegrationTest 同源）：demo 兄弟目录的
  * dataSources.xml + 本地 MySQL 已启动且含 car_device_info/station_info 表。
  */
@@ -180,7 +194,13 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
             project, model, "JOIN Diagram: car_device_info", testRootDisposable,
         )
         if (component == null) {
-            println("[DB-IT] SKIP: B 路径链路不可用（表定位失败或框架异常，应降级 A 路径）——沙盒无真实 IDE 项目/VFS 夹具")
+            // T-TS-08：本分支是本环境实际命中的那一条（见类注释）——绿是「未验证」而不是「已验证」。
+            // 降级原因已由产品侧日志给出（idea.log grep "B path not taken" / "B path locateDbTables"）
+            println(
+                "[DB-IT] SKIP: B 路径链路不可用（表定位失败或框架异常，应降级 A 路径）" +
+                    "——注意：本用例记绿但 B 路径**未验证**（五组断言未执行）；降级原因见 idea.log 的 " +
+                    "\"B path not taken\" / \"B path locateDbTables\" 两行",
+            )
             return
         }
         val comp = component!!
