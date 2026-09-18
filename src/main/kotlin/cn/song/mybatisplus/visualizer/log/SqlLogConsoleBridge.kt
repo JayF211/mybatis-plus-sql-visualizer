@@ -390,10 +390,15 @@ open class SqlLogConsoleBridge(
      * 任一环失败即守卫降级停用（editor null），行为等同现状语义，绝不阻塞 Filter 挂载。
      * `getEditor` 实现类缺失该方法时 docStamp/line0 读取器为 null，守卫 decide 恒 Process。
      * T-PerfSweep F1：反射 Method 在挂载时解析一次（此前逐行 getMethod）；行 0 文本按
-     * stamp 失效缓存——重放风暴中同 stamp 连续行只付一次 O(文档大小) 拷贝（缓存为
-     * 尽力而为：Filter 回调线程间可见性无同步，最坏退化为多算一次拷贝，无正确性影响）。
+     * stamp 失效缓存——重放风暴中同 stamp 连续行只付一次首行读取（缓存为
+     * 尽力而为：Filter 回调线程间可见性无同步，最坏退化为多算一次，无正确性影响）。
+     * T-PS4-06：行 0 读取改 `getCharsSequence` 首行区间读（[0, 首个行分隔)）——Document
+     * charsSequence 是免拷贝视图，行区间 toString 只拷贝首行；此前 `getText` 全文档拷贝
+     * （O(全史)）在 stamp 变化后的首个混合态行仍要付一次，调用面归零（doc 反射句柄中
+     * 不再解析 getText——桩文档缺失该方法时守卫照常工作）。
+     * T-PS4-06：internal 测试缝——line0 区间读测试直接对反射桩调用（经 attachFilter 须真实组件树）。
      */
-    private fun attachReplayGuard(console: Any, ctx: BridgeLineContext) {
+    internal fun attachReplayGuard(console: Any, ctx: BridgeLineContext) {
         runCatching {
             val getEditor = console.javaClass.getMethod("getEditor")
             val editor = getEditor.invoke(console) ?: return
@@ -401,7 +406,8 @@ open class SqlLogConsoleBridge(
             val getDoc = editor.javaClass.getMethod("getDocument")
             val doc = getDoc.invoke(editor) ?: return
             val getStamp = doc.javaClass.getMethod("getModificationStamp")
-            val getText = doc.javaClass.getMethod("getText")
+            // T-PS4-06：首行区间读的免拷贝视图入口（Document.getCharsSequence 为平台 Document 接口方法）
+            val getCharsSequence = doc.javaClass.getMethod("getCharsSequence")
             ctx.docStampReader = {
                 runCatching {
                     (getStamp.invoke(doc) as? Number)?.toLong() ?: Long.MIN_VALUE
@@ -413,13 +419,32 @@ open class SqlLogConsoleBridge(
                 runCatching {
                     val stamp = (getStamp.invoke(doc) as? Number)?.toLong() ?: Long.MIN_VALUE
                     if (stamp != cachedStamp) {
-                        cachedLine0 = (getText.invoke(doc) as? String ?: "").lineSequence().firstOrNull()
+                        cachedLine0 = (getCharsSequence.invoke(doc) as? CharSequence)?.let { readFirstLineOf(it) }
                         cachedStamp = stamp
                     }
                     cachedLine0
                 }.getOrNull()
             }
         }
+    }
+
+    /**
+     * T-PS4-06：charsSequence 首行区间读（[0, 首个行分隔)）——逐字复刻既有
+     * `getText().lineSequence().firstOrNull()` 语义防行为漂移：
+     * 行分隔按 lineSequence 口径认 `\n` 与 `\r`（`\r\n`/`\r` 同为分隔）；无行分隔取全文
+     * （单行文档场景）；空文档为 null。行 0 与守卫 lineText（平台 getLineEndOffset 侧，
+     * 不含分隔符）同源同口径，混合态文本比对不失配。
+     */
+    private fun readFirstLineOf(chars: CharSequence): String? {
+        if (chars.isEmpty()) return null
+        val nl = chars.indexOf('\n')
+        val cr = chars.indexOf('\r')
+        val end = when {
+            nl < 0 -> cr
+            cr < 0 -> nl
+            else -> minOf(nl, cr)
+        }
+        return if (end < 0) chars.toString() else chars.subSequence(0, end).toString()
     }
 
     /** 捕捉中逐行使用的 timePrefix 缓存（T-LogPerf-04：仅设置变更/挂载时刷新）。
