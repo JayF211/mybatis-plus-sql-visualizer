@@ -7,7 +7,9 @@ import cn.song.mybatisplus.visualizer.model.JoinClause
 import cn.song.mybatisplus.visualizer.model.JoinType
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.TableInfo
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -119,5 +121,34 @@ class DiagramPanelTest {
         panel.showDiagram(joinDiagramModel)
         panel.clear()
         assertEquals(1.0, panel.zoomForTest(), 0.001)
+    }
+
+    @Test
+    fun `showError 接线错误页并显示异常摘要`() {
+        val panel = DiagramPanel()
+        val detail = "IllegalStateException: measure boom"
+        panel.showError(detail)
+        assertTrue("showError 后内容层应换到错误页（原 errorScroll 全仓零引用，从未接过线）", panel.isErrorPageForTest())
+        assertEquals(
+            "错误页文本应为 diagram.render.failed 的格式化结果",
+            MpSqlVisualizerBundle.message("diagram.render.failed", detail),
+            panel.errorTextForTest(),
+        )
+    }
+
+    @Test
+    fun `渲染抛异常时落错误页且不向调用方穿透`() {
+        val panel = DiagramPanel()
+        panel.showDiagram(joinDiagramModel)
+        assertFalse("正常渲染不应进错误页", panel.isErrorPageForTest())
+        // 真实测量/布局对结构合法的模型不抛，用注入的失败动作复现错误路径（T-RA-02）
+        panel.renderGuarded(joinDiagramModel) { throw IllegalStateException("measure boom") }
+        assertTrue("渲染失败应换到错误页（原实现异常穿透到弹窗构造，用户看不到原因）", panel.isErrorPageForTest())
+        val text = panel.errorTextForTest()
+        assertTrue("错误页应含异常类名，实际=$text", text.contains("IllegalStateException"))
+        assertTrue("错误页应含异常摘要，实际=$text", text.contains("measure boom"))
+        // 失败后回到「无图」语义：再次正常渲染应恢复画布，不被坏模型卡死
+        panel.showDiagram(joinDiagramModel)
+        assertFalse("失败后再次渲染应恢复画布", panel.isErrorPageForTest())
     }
 }

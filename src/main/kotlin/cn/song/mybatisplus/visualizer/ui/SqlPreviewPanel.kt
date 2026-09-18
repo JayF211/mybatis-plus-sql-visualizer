@@ -180,8 +180,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // 右：可编辑 SQL 编辑器（PSI 支撑，补全用）
     private var editor: Editor? = null
 
-    /** T-M27.2：自建 autopopup 的文档监听器与调度防重入标志（平台 autopopup 对非文件编辑器不生效）。 */
-    private var autoPopupListener: com.intellij.openapi.editor.event.DocumentListener? = null
+    /**
+     * T-M27.2：自建 autopopup 的调度防重入标志（平台 autopopup 对非文件编辑器不生效）。
+     * T-RA-02：监听器本体不再用字段记账——T-M52 起移除职责全在 [autoPopupDisposable]
+     * （`addDocumentListener(listener, disposable)`，dispose 即摘），原 `autoPopupListener`
+     * 字段自此只写不读，已删；细节见 [bindAutoPopup]。
+     */
     private var autoPopupScheduled = false
 
     /** T-M27.4：渲染 setText 期间抑制自建 autopopup（格式化替换整文档不触发补全）。 */
@@ -2027,11 +2031,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 }
             }
         }
-        // T-M52：双参数版（Disposable 管理监听生命周期，releaseEditor 时自动移除）
+        // T-M52：双参数版（Disposable 管理监听生命周期，releaseEditor 时自动移除）。
+        // T-RA-02：移除职责只归 autoPopupDisposable——不要再用字段存 listener 做「记账」，
+        // 那会让「谁负责摘监听」出现两个说法（T-M52 前的手动 removeDocumentListener 已删，
+        // 二次移除会报 "Can't remove document listener"）。重新注册前先 dispose 旧 disposable，
+        // 防同一文档挂上两个 listener。
         if (autoPopupDisposable != null) Disposer.dispose(autoPopupDisposable!!)
         autoPopupDisposable = Disposer.newDisposable("SqlPreviewPanel.autoPopup")
         created.document.addDocumentListener(listener, autoPopupDisposable!!)
-        autoPopupListener = listener
     }
 
     /** 释放当前编辑器（幂等）。 */
@@ -2041,8 +2048,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
             .info("[M36] releaseEditor: editor=${System.identityHashCode(editor)}, nativeDoc=${nativeEditorDoc != null}", Throwable("releaseEditor path"))
         editor?.let {
-            // T-M52：监听器由 Disposable 管理，dispose 即移除（无需手动 removeDocumentListener）
-            autoPopupListener = null
+            // T-M52：监听器由 Disposable 管理，dispose 即移除（无需手动 removeDocumentListener，
+            // 也不再有 listener 字段需要置 null——T-RA-02 删除）
             autoPopupDisposable?.let { d -> Disposer.dispose(d) }
             autoPopupDisposable = null
             EditorFactory.getInstance().releaseEditor(it)
