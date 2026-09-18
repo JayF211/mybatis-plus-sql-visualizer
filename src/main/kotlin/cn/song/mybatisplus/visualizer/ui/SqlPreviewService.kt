@@ -1633,10 +1633,16 @@ class SqlPreviewService(private val project: Project) {
     /**
      * T-DialectAutoInfer：有效方言模式（项目级 dialectAuto 非 null 且启用项目设置时优先，
      * 否则全局）。
+     *
+     * T-TS-06：项目级分支改走 [ProjectPluginSettings.effectiveDialectAuto]（与其余 effective*
+     * 同口径——回退语义内置在项目级方法里，此处仅透传）。原实现直读
+     * `projectSettings?.takeIf { it.isEnabled() }?.state?.dialectAuto` 绕开了该方法，
+     * 使其成为零消费的死方法（守卫断言三的限定接收者口径查获）；两式语义等价：
+     * 启用且 dialectAuto 非 null → 项目值，否则回退全局。
      */
     private fun effectiveDialectAuto(): Boolean =
         effective({ runCatching { PluginSettings.getInstance().state.dialectAuto }.getOrDefault(true) },
-                  { projectSettings?.takeIf { it.isEnabled() }?.state?.dialectAuto })
+                  { projectSettings?.effectiveDialectAuto() })
 
     /** O-5：有效方言名称（项目级优先，回退全局；手动模式专用）。 */
     private fun effectiveDialectName(): String =

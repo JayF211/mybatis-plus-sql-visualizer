@@ -15,7 +15,8 @@ import java.io.File
  *    函数体中各出现（isModified 系列不强制——历史上有意豁免的展示件多）；按钮/纯展示 label
  *    进白名单豁免。防「面板摆了控件却不进读写链」的摆设件回潮。
  *  - 断言三「声明而不消费」：[ProjectPluginSettings] 每个 `fun effectiveXxx` 与项目级总开关
- *    `isEnabled` 在 src/main 非 config 包存在**调用形态**（同名函数定义处不算）。P4 接线前
+ *    `isEnabled` 在 src/main 非 config 包存在**带接收者限定的调用形态**（`ps.effectiveXxx(` /
+ *    `projectSettings?.effectiveXxx(` / `it.effectiveXxx(`；裸调用与函数定义处不算）。P4 接线前
  *    7 个 effective* 零调用的半接线状态由此防回潮。
  *  - 断言四「幽灵键」：bundle 中 `settings.*` / `configurable.*` / `log.list.displayMode*`
  *    键必须被 src/main 引用或列白名单。防 P3「搜索索引收录不存在设置」同类幽灵文案回潮。
@@ -35,6 +36,17 @@ import java.io.File
  *  - 扫描面遗漏：断言三只扫 `fun effective\w+\(`，项目级总开关 `isEnabled()`（唯一读点）不在面内。
  * 现口径 = 先剥离注释（KDoc/注释提及不算消费）再按词边界（断言一）或调用形态（断言三）判定，
  * 断言三另从判定面剔除同名函数定义处。收紧后实测仍全绿（缺口 ① 之外的存量接线均真实）。
+ *
+ * T-TS-06 二次收紧（2026-09-18）：上一版断言三仍对 4 个符号（`effectiveReplaceParams` /
+ * `effectiveInjectLogicDelete` / `effectiveLogicDeleteValue` / `isEnabled`）可构造假绿——
+ * 判定只要求「标识符后随 `(`」，于是**裸调用同名私有 helper** 也算消费：删掉 helper 体内的
+ * `projectSettings?.effectiveXxx()`（对项目级设置的真实消费）后，helper 的调用点
+ * `effectiveReplaceParams()` 仍在 → 照旧绿（`isEnabled` 同理：`McpToolGate.isEnabled(toolName)`
+ * 与 `ps.isEnabled()` 同形，且判定面未限定文件）。现口径 = 调用须**带接收者限定符**（`.`/`?.`）
+ * 且落在**剥注释后直接引用 [ProjectPluginSettings] 的文件**内（实例来源必在该文件出现；
+ * 不逐个推断接收者类型——lambda 参数 `it.effectiveTablePrefix()` 无法静态定型，故取双条件近似）。
+ * 收紧后实测又查获一处真死面：`ProjectPluginSettings.effectiveDialectAuto()` 零真实调用
+ * （SqlPreviewService 的同名私有 helper 直读 `state.dialectAuto` 绕开了它）→ 已改走项目级方法。
  */
 class SettingsRealityGuardTest {
 
@@ -189,9 +201,15 @@ class SettingsRealityGuardTest {
             "crudColorStyleCombo" to listOf("selectedCrudColorStyle()", "crudColorStyleCombo"),
             "logDisplayModeCombo" to listOf("selectedListDisplayMode()", "logDisplayModeCombo"),
         )
+        // T-TS-06：词边界判定（原为子串 `f in body`）——`logAutoSavePathField` 这类字段名是
+        // `xxxLogAutoSavePathField` 的子串，控件真没进 apply/reset 也能被子串兜住（同断言一的后门）。
+        fun boundIn(bodyText: String, f: String): Boolean {
+            val probes = alias[f] ?: listOf(f)
+            return probes.any { Regex("""(?<![\w$])${Regex.escape(it)}(?![\w$])""").containsMatchIn(bodyText) }
+        }
         val editable = fields.filter { it !in PANEL_WHITELIST }
-        val missingInApply = editable.filter { f -> alias[f]?.none { it in applyBody } ?: (f !in applyBody) }
-        val missingInReset = editable.filter { f -> alias[f]?.none { it in resetBody } ?: (f !in resetBody) }
+        val missingInApply = editable.filterNot { f -> boundIn(applyBody, f) }
+        val missingInReset = editable.filterNot { f -> boundIn(resetBody, f) }
         assertTrue(
             "面板可编辑控件未在 apply() 函数体绑定（改动保存即静默丢弃）：$missingInApply",
             missingInApply.isEmpty(),
@@ -215,12 +233,27 @@ class SettingsRealityGuardTest {
         // （关掉总开关即全项目级覆盖失效，漏接它与漏接任一 effective* 同责）
         val methods = effective + "isEnabled"
 
-        val code = nonConfigSources().map { (p, t) -> p to stripComments(t) }
+        // T-TS-06：判定面 = 非 config 包**且**剥注释后直接引用 ProjectPluginSettings 的文件。
+        // 为什么加文件级条件：消费方唯一合法形态是「ProjectPluginSettings 实例.方法」，而实例来源
+        // （`ProjectPluginSettings.getInstance(project)` / 类型标注）必然出现在该文件；同名函数
+        // （McpToolsetSupport 的 `McpToolGate.isEnabled(toolName)`）与同名私有 helper
+        // （SqlPreviewService 的 `effectiveReplaceParams()`）所在文件不引用本类，天然出局——
+        // 这正是上一版把 `isEnabled` 判绿的路径。
+        // 有意保留的局限：不逐个推断接收者类型（lambda 参数 `it.effectiveTablePrefix()` 无法静态
+        // 定型，推断会制造漏报），故取「文件引用本类 + 调用带接收者」双条件近似；残留漏报面仅剩
+        // 「同一文件内他类的同名调用」。
+        val psReference = Regex("""(?<![\w$])ProjectPluginSettings(?![\w$])""")
+        val code = nonConfigSources()
+            .map { (p, t) -> p to stripComments(t) }
+            .filter { (_, t) -> psReference.containsMatchIn(t) }
         val dead = methods.filter { m ->
-            // 调用形态：标识符后随 `(`；且从判定面剔除同名函数定义处——
-            // 否则 SqlPreviewService 的私有 helper `private fun effectiveTablePrefix(): String`
-            // 会把「删掉真实调用 ps.effectiveTablePrefix()」的漏接照旧兜绿（同名遮蔽缺口）
-            val call = Regex("""(?<![\w$])${Regex.escape(m)}\s*\(""")
+            // 调用形态（T-TS-06 收紧）：标识符前须有接收者限定符（`.` / `?.`）——裸调用
+            // `effectiveReplaceParams()` 消费的是**同名私有 helper**，不构成项目级设置方法的消费；
+            // 原口径据此对 4 个符号可构造假绿：删掉 helper 体内的
+            // `projectSettings?.effectiveXxx()` 后裸调用仍在 → 照旧绿。
+            val call = Regex("""\.\s*${Regex.escape(m)}\s*\(""")
+            // 扩展函数定义形态（`fun ProjectPluginSettings.effectiveXxx(`）自带接收者点号，
+            // 会被上式误判为调用，故仍剔除同名函数定义跨度（原口径的剔除逻辑保留）。
             val definition = Regex("""fun\s+${Regex.escape(m)}\s*\(""")
             code.none { (_, t) ->
                 val defSpans = definition.findAll(t).map { it.range }.toList()
@@ -228,9 +261,11 @@ class SettingsRealityGuardTest {
             }
         }
         assertTrue(
-            "ProjectPluginSettings 存在零调用的 effective*/isEnabled（声明而不消费的半接线死面）：$dead。" +
+            "ProjectPluginSettings 存在零限定调用的 effective*/isEnabled（声明而不消费的半接线死面）：$dead。" +
                 "T-SettingsTruth P4 定案：项目级覆盖项必须真实进入读取链（SqlPreviewService/EntityResolver），" +
-                "否则删除方法走瘦身方案，不得留假接线",
+                "否则删除方法走瘦身方案，不得留假接线；T-TS-06 口径：消费须写成带接收者的调用" +
+                "（`ps.effectiveXxx(` / `projectSettings?.effectiveXxx(` / `it.effectiveXxx(`）" +
+                "且所在文件直接引用 ProjectPluginSettings",
             dead.isEmpty(),
         )
     }
