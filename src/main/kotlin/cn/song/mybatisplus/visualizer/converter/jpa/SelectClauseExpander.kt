@@ -72,7 +72,7 @@ internal object SelectClauseExpander {
         if (!hasSelect) {
             // 无 SELECT 子句：补主表列清单；列元数据不可得时降级为 alias.*（与显式 SELECT 分支一致）
             val rootAlias = aliasColumns.keys.first()
-            return "$selectKeyword ${renderColumns(rootAlias, aliasColumns[rootAlias])} " + sql.substring(fromIdx)
+            return "$selectKeyword ${renderColumns(rootAlias, aliasColumns[rootAlias], table)} " + sql.substring(fromIdx)
         }
 
         val (distinct, itemText) = splitDistinct(selectRegion)
@@ -84,7 +84,7 @@ internal object SelectClauseExpander {
             val item = raw.trim()
             if (aliasColumns.containsKey(item)) {
                 changed = true
-                renderColumns(item, aliasColumns[item])
+                renderColumns(item, aliasColumns[item], table)
             } else {
                 item
             }
@@ -98,9 +98,15 @@ internal object SelectClauseExpander {
     }
 
     /** 渲染单个别名的展开结果：`alias.col1, alias.col2` 或降级 `alias.*`。 */
-    private fun renderColumns(alias: String, columns: List<String>?): String {
+    private fun renderColumns(alias: String, columns: List<String>?, table: TableInfo): String {
         if (columns.isNullOrEmpty()) {
-            return "$alias.* /* 列信息未解析，降级为 $alias.* */"
+            // T-HqlInhCols：降级注释分两档——实体不可解析（fallback 表）与实体可解析但列空
+            // （继承链/映射异常，指向检查父类映射），两档诊断方向不同
+            return if (table.entityClassName.isBlank()) {
+                "$alias.* /* 实体不可解析，降级为 $alias.* */"
+            } else {
+                "$alias.* /* 实体 ${table.entityClassName} 列信息未解析（检查继承链父类映射），降级为 $alias.* */"
+            }
         }
         return columns.joinToString(", ") { "$alias.$it" }
     }

@@ -133,7 +133,7 @@ class HqlConverterSelectExpandTest {
         val result = HqlConverter.convert(hql, userTable)
         // 主表有列元数据 → 展开；JOIN 副表无列元数据 → 降级 d.*
         assertEquals(
-            "SELECT $expanded, d.* /* 列信息未解析，降级为 d.* */ FROM user_entity u " +
+            "SELECT $expanded, d.* /* 实体 UserEntity 列信息未解析（检查继承链父类映射），降级为 d.* */ FROM user_entity u " +
                 "LEFT JOIN department d ON d.id = u.department_id /* 推断的ON条件，请验证 */",
             result.sql,
         )
@@ -183,7 +183,7 @@ class HqlConverterSelectExpandTest {
         val hql = "SELECT u FROM EmptyEntity u WHERE u.id = :id"
         val result = HqlConverter.convert(hql, emptyTable)
         assertEquals(
-            "SELECT u.* /* 列信息未解析，降级为 u.* */ FROM empty_table u WHERE u.id = ?",
+            "SELECT u.* /* 实体 EmptyEntity 列信息未解析（检查继承链父类映射），降级为 u.* */ FROM empty_table u WHERE u.id = ?",
             result.sql,
         )
     }
@@ -192,7 +192,7 @@ class HqlConverterSelectExpandTest {
     fun `nullTableInfo_degradesToStar`() {
         val hql = "SELECT u FROM UserEntity u WHERE u.username = :username"
         val result = HqlConverter.convert(hql, null)
-        assertTrue("应降级为 u.*", result.sql.startsWith("SELECT u.* /* 列信息未解析，降级为 u.* */ FROM unknown_table u"))
+        assertTrue("应降级为 u.*", result.sql.startsWith("SELECT u.* /* 实体不可解析，降级为 u.* */ FROM unknown_table u"))
     }
 
     // ------------------------------------------------------------------
@@ -233,8 +233,88 @@ class HqlConverterSelectExpandTest {
         val hql = "from UserEntity"
         val result = HqlConverter.convert(hql, null)
         assertEquals(
-            "SELECT unknown_table.* /* 列信息未解析，降级为 unknown_table.* */ from unknown_table",
+            "SELECT unknown_table.* /* 实体不可解析，降级为 unknown_table.* */ from unknown_table",
             result.sql,
         )
+    }
+
+    // ------------------------------------------------------------------
+    // 9. T-HqlInhCols：实体别名（@Entity(name=...)）与继承链列空两档注释
+    // ------------------------------------------------------------------
+
+    /** 实体别名传入时，FROM 子句中的别名实体名同样替换为表名（HQL `FROM Alias` JPA 语义）。 */
+    @Test
+    fun `entityAlias_fromClauseReplacedByTableName`() {
+        val hql = "SELECT u FROM UserInfo u WHERE u.username = :username"
+        val result = HqlConverter.convert(hql, userTable, entityAlias = "UserInfo")
+        assertEquals("SELECT $expanded FROM user_entity u WHERE u.username = ?", result.sql)
+    }
+
+    /** 别名与类名不同时双形态均命中：类名与实体别名在任意位置出现都被替换。 */
+    @Test
+    fun `entityAlias_bothClassAndAliasReplaced`() {
+        val hql = "SELECT u FROM UserEntity u JOIN FETCH u.department d WHERE UserEntity.status = :s"
+        val result = HqlConverter.convert(hql, userTable, entityAlias = "User")
+        assertTrue("类名应替换", result.sql.contains("FROM user_entity u"))
+        assertFalse("类名不应残留", result.sql.contains("UserEntity"))
+    }
+
+    /** 别名与类名相同（最常见形态）不重复替换。 */
+    @Test
+    fun `entityAlias_sameAsClassName_noDoubleReplace`() {
+        val hql = "SELECT u FROM UserEntity u"
+        val result = HqlConverter.convert(hql, userTable, entityAlias = "UserEntity")
+        assertEquals("SELECT $expanded FROM user_entity u", result.sql)
+    }
+
+    /** 别名为 null/空白时行为与历史版本一致（entityAlias 可选参数默认路径）。 */
+    @Test
+    fun `entityAlias_null_behavesAsLegacy`() {
+        val hql = "SELECT u FROM UserEntity u"
+        assertEquals(
+            "SELECT $expanded FROM user_entity u",
+            HqlConverter.convert(hql, userTable, entityAlias = null).sql,
+        )
+        assertEquals(
+            "SELECT $expanded FROM user_entity u",
+            HqlConverter.convert(hql, userTable, entityAlias = "  ").sql,
+        )
+    }
+
+    /** 两档注释其一：实体可解析但列空 → 指向检查继承链父类映射。 */
+    @Test
+    fun `inheritanceChainEmptyColumns_twoTierComment_resolvedEntity`() {
+        val abstractParentTable = TableInfo(
+            entityClassName = "AbstractBaseEntity",
+            tableName = "t_base",
+            columns = emptyList(),
+        )
+        val hql = "SELECT b FROM AbstractBaseEntity b"
+        val result = HqlConverter.convert(hql, abstractParentTable)
+        assertTrue(
+            "实体可解析列空应有继承链提示: ${result.sql}",
+            result.sql.contains("/* 实体 AbstractBaseEntity 列信息未解析（检查继承链父类映射），降级为 b.* */"),
+        )
+        assertFalse("不应误报实体不可解析", result.sql.contains("实体不可解析"))
+    }
+
+    /** 两档注释其二：实体不可解析（fallback 表）→ 实体不可解析档。 */
+    @Test
+    fun `inheritanceChainEmptyColumns_twoTierComment_unresolvedEntity`() {
+        val hql = "SELECT x FROM MissingEntity x"
+        val result = HqlConverter.convert(hql, null)
+        assertTrue(
+            "实体不可解析应有对应档注释: ${result.sql}",
+            result.sql.contains("/* 实体不可解析，降级为 x.* */"),
+        )
+    }
+
+    /** 防回归：JOIN 副表别名降级路径（列空 + 主表实体非空）形态不变，仅文案随两档机制。 */
+    @Test
+    fun `joinSideAlias_degradeCommentStillPresent`() {
+        val hql = "SELECT u, d FROM UserEntity u JOIN FETCH u.department d"
+        val result = HqlConverter.convert(hql, userTable)
+        assertTrue("副表降级注释应存在: ${result.sql}", result.sql.contains("d.* /*"))
+        assertTrue("主表应展开", result.sql.startsWith("SELECT $expanded, "))
     }
 }

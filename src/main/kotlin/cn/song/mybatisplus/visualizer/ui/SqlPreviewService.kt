@@ -51,6 +51,7 @@ import cn.song.mybatisplus.visualizer.psi.jpa.DerivedMethodLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.HbmXmlEntityResolver
 import cn.song.mybatisplus.visualizer.psi.jpa.HbmXmlMapping
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
+import cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader
 import cn.song.mybatisplus.visualizer.psi.jpa.JpqlQueryLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.NamedQueryLocator
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlLocator
@@ -812,7 +813,11 @@ class SqlPreviewService(private val project: Project) {
 
         val table = resolveHqlTable(info.entityClass, info.entityClassName, info.hql)
         // Wave1 第三参 project：激活 PSI 级 JOIN ON 与子查询实体映射
-        val result = HqlConverter.convert(info.hql, table, project)
+        // T-HqlInhCols：@Entity(name=...) 实体别名透传，别名形态 HQL 实体名才能被表名替换
+        val result = HqlConverter.convert(
+            info.hql, table, project,
+            entityAlias = info.entityClass?.let { runCatching { JpaMetadataReader.entityNameOf(it) }.getOrNull() },
+        )
         // 参数名提取：
         // 1. 追踪 setParameter 结果（位置参数用 valueExpr 即变量名，命名参数用 paramName）
         // 2. 若为空（链式调用场景），直接从 HQL 提取
@@ -945,7 +950,17 @@ class SqlPreviewService(private val project: Project) {
         }
         val table = resolveHqlTable(null, info.entityClassName, info.hql)
         // Wave1 第三参 project：激活 PSI 级 JOIN ON 与子查询实体映射
-        val result = HqlConverter.convert(info.hql, table, project)
+        // T-HqlInhCols：别名反查命中时从解析出的 PsiClass 读实体别名透传（此链无 entityClass 入参）
+        val resolvedEntityClass = table?.entityClassName?.takeIf { it.isNotBlank() }?.let {
+            runCatching {
+                com.intellij.psi.JavaPsiFacade.getInstance(project)
+                    .findClass(info.entityClassName ?: it, com.intellij.psi.search.GlobalSearchScope.allScope(project))
+            }.getOrNull()
+        }
+        val result = HqlConverter.convert(
+            info.hql, table, project,
+            entityAlias = resolvedEntityClass?.let { runCatching { JpaMetadataReader.entityNameOf(it) }.getOrNull() },
+        )
         val paramNames = info.parameters.map { if (it.isPositional) it.valueExpr else it.paramName }.ifEmpty {
             extractParamNamesFromHql(info.hql)
         }
@@ -999,6 +1014,7 @@ class SqlPreviewService(private val project: Project) {
                 val entityName = query.name.substringBefore('.', "").trim()
                     .ifBlank { null } ?: extractEntityNameFromHql(query.queryText)
                 val table = resolveHqlTable(null, entityName, query.queryText)
+                // T-HqlInhCols：hbm 项目实体别名多由 XML <entity-name> 承载，注解读不到即 null，安全
                 val result = HqlConverter.convert(query.queryText, table, project)
                 val enhancedSql = applyJpaMethodEnhancements(hostMethod, result.sql, table, native = false)
                 buildJpaPreviewResult(
@@ -1663,28 +1679,40 @@ class SqlPreviewService(private val project: Project) {
      * 解析 HQL 对应的实体表信息。
      *
      * 优先使用 entityClass（PsiClass 直接解析）；
-     * 否则按 entityClassName 查找 @Entity 类；
-     * 最后从 HQL 的 FROM 子句提取类名查找。
+     * 否则按 entityClassName 查找 @Entity 类（含 @Entity(name=...) 实体别名反查）；
+     * 最后从 HQL 的 FROM 子句提取类名查找 / hbm 映射兜底。
+     *
+     * T-HqlInhCols：列空结果不再直接短路——JpaEntityResolver 异常路径返回
+     * 非空 TableInfo 但列为空（如继承链解析失败/抽象父类映射异常），若在此短路
+     * 会跳过 hbm 兜底与别名反查，下游展开器必出「列信息未解析」降级注释；
+     * 判据改为「非 null 且列非空」，列空时继续走后续路径。
      */
     private fun resolveHqlTable(entityClass: PsiClass?, entityClassName: String?, hql: String): TableInfo? {
         val resolver = JpaEntityResolver()
         val project = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull() ?: return null
         val className = entityClassName ?: extractEntityNameFromHql(hql)
 
-        // 路径 1：有 PsiClass 直接解析（JPA 注解）
+        // 路径 1：有 PsiClass 直接解析（JPA 注解）。列空不短路到「更弱的路径」——
+        // 夹具/局部类场景路径 2/3 反而找不到该类；列空仅在「有更好的候选」时被替换：
+        // 即后续路径找到的表列非空才覆盖，否则保留路径 1 结果（含表名与实体类名，
+        // 展开器照常给「列信息未解析」诊断，不丢 FROM 表名替换）。
+        var resolved: TableInfo? = null
         if (entityClass != null) {
             val table = resolver.resolve(entityClass)
-            if (table != null) return table
+            if (table.columns.isNotEmpty()) return table
+            resolved = table
         }
 
-        // 路径 2：按类名查找 @Entity 类（JPA 注解）
+        // 路径 2：按类名查找 @Entity 类（JPA 注解）；列空不短路
         if (className != null) {
             val scope = com.intellij.psi.search.GlobalSearchScope.allScope(project)
             val psiClass = com.intellij.psi.JavaPsiFacade.getInstance(project).findClass(className, scope)
                 ?: findClassByShortName(project, className, scope)
+                ?: findClassByEntityName(project, className, scope)
             if (psiClass != null) {
                 val table = resolver.resolve(psiClass)
-                if (table != null) return table
+                if (table.columns.isNotEmpty()) return table
+                if (resolved == null) resolved = table
             }
         }
 
@@ -1696,8 +1724,70 @@ class SqlPreviewService(private val project: Project) {
             }
         }
 
-        return null
+        return resolved
     }
+
+    /**
+     * T-HqlInhCols：按 @Entity(name=...) 实体别名查找实体类。
+     *
+     * HQL `FROM Alias` 的 Alias 可为实体名（JPA 语义）而非类名——
+     * 类名快路径（findClass/findClassByShortName）未命中时按注解值反查。
+     * 扫描结果（实体名 → 全限定名）缓存于 Project userData，以
+     * PsiModificationTracker.modificationCount 失效（照抄 EntityClassFinder 的
+     * @TableName 反查同款缓存惯例；未命中也入缓存防重复全量扫描）。
+     */
+    private fun findClassByEntityName(
+        project: com.intellij.openapi.project.Project,
+        entityName: String,
+        scope: com.intellij.psi.search.GlobalSearchScope,
+    ): PsiClass? {
+        if (entityName.isBlank()) return null
+        val current = com.intellij.psi.util.PsiModificationTracker.getInstance(project).modificationCount
+        val existing = project.getUserData(ENTITY_NAME_CACHE_KEY)
+        val cache = if (existing != null && existing.count == current) existing
+        else EntityNameLookupCache(current, mutableMapOf()).also { project.putUserData(ENTITY_NAME_CACHE_KEY, it) }
+
+        val key = entityName.lowercase()
+        val cached = cache.names[key]
+        if (cached != null) {
+            val shortName = cached.substringAfterLast('.')
+            return com.intellij.psi.search.PsiShortNamesCache.getInstance(project)
+                .getClassesByName(shortName, scope)
+                .firstOrNull { it.qualifiedName == cached }
+        }
+        if (cached != null || (cached == null && cache.names.containsKey(key) && cache.names[key] == null)) return null
+        // 已知未命中（空串哨兵值）快速返回
+        if (cache.names.containsKey(key)) return null
+
+        // 慢路径：全量扫项目类短名，匹配 @Entity(name=...) 注解值（jakarta/javax/短名三轨）
+        var matchedQName: String? = null
+        val namesCache = com.intellij.psi.search.PsiShortNamesCache.getInstance(project)
+        for (shortName in namesCache.getAllClassNames()) {
+            for (clazz in namesCache.getClassesByName(shortName, scope)) {
+                if (clazz.isInterface || clazz.isEnum || clazz.isAnnotationType) continue
+                val alias = JpaMetadataReader.entityNameOf(clazz) ?: continue
+                if (alias.equals(entityName, ignoreCase = true)) {
+                    matchedQName = clazz.qualifiedName
+                    break
+                }
+            }
+            if (matchedQName != null) break
+        }
+        cache.names[key] = matchedQName ?: ""
+        if (matchedQName == null) return null
+        val shortName = matchedQName.substringAfterLast('.')
+        return namesCache.getClassesByName(shortName, scope)
+            .firstOrNull { it.qualifiedName == matchedQName }
+    }
+
+    /** 实体别名反查缓存条目：modificationCount + 实体名→全限定名（空串=已知未命中）。 */
+    private data class EntityNameLookupCache(
+        val count: Long,
+        val names: MutableMap<String, String>,
+    )
+
+    private val ENTITY_NAME_CACHE_KEY =
+        com.intellij.openapi.util.Key.create<EntityNameLookupCache>("mp-visualizer.entityNameLookupCache")
 
     /**
      * 从 HQL 的 FROM 子句提取实体类名。

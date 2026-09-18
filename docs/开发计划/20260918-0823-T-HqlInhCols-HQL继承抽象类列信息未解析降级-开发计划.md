@@ -71,3 +71,11 @@
 | 别名替换误伤 | HQL 中其他位置出现同名标识符 | mapEntityToTable 维持既有「词边界 + 全词命中」替换形态，仅扩判据不改替换机制 |
 | JOINED 策略列口径 | 本次只加注释不改写 | 验收只验注释存在，不验拆表语义；文档写明边界 |
 | 测试锚点漂移 | 注释文案改动波及既有 4 处断言 | 同一提交内同步改锚点，HqlConverterSelectExpandTest 全绿为准 |
+
+---
+
+## 变更记录
+
+| 日期 | 变更 |
+|---|---|
+| 2026-09-18 | 实施交付（分支 t-hqlinh-cols，工作树 mpsv-thic）：T-HIC-01 空列回退以「更优候选替换」语义落地（resolveHqlTable 列空时先试路径 2/3，找不到才保留原结果——首版直接返回 null 被 PreviewEndToEndTest.testNamedParam_tableNameResolved 夹具局部类场景抓出回归后修正）；T-HIC-02 entityNameOf + findClassByEntityName 慢路径（EntityNameLookupCache，modificationCount 失效）+ mapEntityToTable 别名替换 + convert 新增 entityAlias 参数（previewHql/previewJpql 两链透传）；T-HIC-03 降级注释两档（实体不可解析 / 实体 X 列信息未解析（检查继承链父类映射））+ SelectExpand 测试锚点同步与 8 新用例；T-HIC-04 inheritanceBoundaryComment（JOINED/TABLE_PER_CLASS 边界标注）；T-HIC-05 JpaEntityResolverTest 3 新用例（三级抽象链/隔代 Transient/entityNameOf）+ CHANGELOG Unreleased。**门禁：全量 test 4343/0/0/6 绿**（含陈旧产物 NoSuchMethodError 假失败，clean 复核排除）；真机走查清单留人工。build.gradle.kts 沙盒行用后待还原 |
