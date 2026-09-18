@@ -4,6 +4,8 @@ import cn.song.mybatisplus.visualizer.actions.ConvertSqlToJavaAction
 import cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction
 import cn.song.mybatisplus.visualizer.log.SourceCaptureGuide
 import cn.song.mybatisplus.visualizer.log.SqlListTypeColor
+import cn.song.mybatisplus.visualizer.log.agent.AgentManager
+import cn.song.mybatisplus.visualizer.log.agent.AgentStatusListener
 import cn.song.mybatisplus.visualizer.util.PluginCacheManager
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -70,7 +72,7 @@ import javax.swing.event.DocumentListener
 class PluginSettingsPanel @JvmOverloads constructor(
     private val settings: PluginSettings,
     private val sections: Set<String> = SECTION_ALL,
-) {
+) : com.intellij.openapi.Disposable {
     companion object {
         const val SECTION_PREVIEW = "preview"
         const val SECTION_TABLE_MAPPING = "tableMapping"
@@ -209,6 +211,41 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /** 增强捕获状态行：已挂载 pid=x / 已回落控制台捕获 / 连接中。 */
     private val enhancedStatusLabel = JBLabel(" ")
+
+    /** T-SettingsTruth P2：AgentManager 状态行 messageBus 连接（disposeResources 断开）。 */
+    private var agentStatusConnection: com.intellij.openapi.Disposable? = null
+
+    /**
+     * T-SettingsTruth P2：聚合各打开项目的 AgentManager 状态写入增强捕获状态行。
+     * 无任何活动会话（各项目均 null）→ 显示空串；多项目以「；」连接。
+     */
+    internal fun refreshEnhancedStatusLabel() {
+        val text = ProjectManager.getInstance().openProjects
+            .mapNotNull { p ->
+                runCatching {
+                    if (p.isDisposed) null else AgentManager.getInstance(p).statusSummary()
+                }.getOrNull()
+            }
+            .filterNotNull()
+            .joinToString("；")
+        enhancedStatusLabel.text = text.ifEmpty { " " }
+    }
+
+    /**
+     * T-SettingsTruth P2：面板资源清理（messageBus 连接断开）。
+     * 由 [SectionConfigurable.disposeUIResources] 调用；防 IDE 退出 ObjectTree leak 告警。
+     */
+    internal fun disposeResources() {
+        val connection = agentStatusConnection
+        if (connection != null) {
+            runCatching { com.intellij.openapi.util.Disposer.dispose(connection) }
+        }
+        agentStatusConnection = null
+    }
+
+    override fun dispose() {
+        disposeResources()
+    }
 
     /**
      * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（一行一个前缀，如 `com.corp.engine.`）。
@@ -367,6 +404,21 @@ class PluginSettingsPanel @JvmOverloads constructor(
         buildSections(rootPanel)
         reset()
         refreshCacheInfo()
+        // T-SettingsTruth P2：订阅 app 级增强捕获状态 Topic，AgentManager 状态迁移点刷新状态行。
+        // connection 注册到面板 Disposable 树（防 IDE 退出 Memory leak detected）。
+        agentStatusConnection = com.intellij.openapi.application.ApplicationManager.getApplication()
+            .messageBus.connect()
+            .also { connection ->
+                com.intellij.openapi.util.Disposer.register(this@PluginSettingsPanel, connection)
+                connection.subscribe(AgentManager.AGENT_STATUS_TOPIC, object : AgentStatusListener {
+                    override fun onStatusChanged() {
+                        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                            refreshEnhancedStatusLabel()
+                        }
+                    }
+                })
+            }
+        refreshEnhancedStatusLabel()
         // M19（用户实测：设置切语言确定后重开仍原样——平台 Settings 框架 OK 仅对「当前选中页」且
         // isModified()==true 的 configurable 调用 apply()，改完语言切到其他页再确定即被静默跳过；
         // M16.3 roaming 修复只覆盖磁盘持久化链路）：
@@ -1421,8 +1473,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
             crudColorInsertPanel.selectedColor = colorOf(s.crudColorInsert)
             crudColorUpdatePanel.selectedColor = colorOf(s.crudColorUpdate)
             crudColorDeletePanel.selectedColor = colorOf(s.crudColorDelete)
-            autoInjectInterceptorCheck.isSelected = s.autoInjectSqlSourceInterceptor
+            // T-SettingsTruth P1：autoInjectInterceptorCheck 为纯动作开关，不回填 state（不保存状态）
         }
+        // T-SettingsTruth P2：页面打开/Reset 即见当前增强捕获状态
+        if (SECTION_SQL_LOG in sections) refreshEnhancedStatusLabel()
     }
 
     // ------------------------------------------------------------------
