@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.execute
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -46,5 +47,16 @@ class ExecConsoleContextDegradedTest {
     @Test
     fun `describe_异类型控制台_返回null`() {
         assertNull(ExecConsoleContext.describeContext(Any()))
+    }
+
+    @Test
+    fun `align_null控制台_不误报URL无库标注`() {
+        // T-SI-03 ① 的「未能确定默认库」标注只在拿到真实 JdbcConsole、URL 确实无库时出现；
+        // 非 JdbcConsole 降级分支不得带该标记——否则日志里两种「取不到库」混为一谈。
+        val result = ExecConsoleContext.alignToDataSourceDatabase(null)
+        assertFalse(
+            "降级分支不得带 URL 无库标注，实际: $result",
+            result.contains(ExecConsoleContext.UNDETERMINED_MARKER),
+        )
     }
 }

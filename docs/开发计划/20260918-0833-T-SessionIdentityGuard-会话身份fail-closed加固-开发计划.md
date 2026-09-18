@@ -66,4 +66,79 @@ T-SI-01（复用接探测）→ T-SI-02（UUID 记忆）→ T-SI-03（对齐收�
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+实施分支 t-session-identity-guard（合流后基线 8a3a6ff），全部条目 T-SI-01 ~ T-SI-04 落地，
+T-SI-05 为真机验证项（不占开发量，见下）。
+
+**立项核实表的两处修正**（计划 §一 表格为立项时实测，实施时逐条复核）：
+
+1. 表 #1「复用判定只比显示名 + `console.isValid()`，数据源删除/重建后旧 console 仍 valid」——
+   该前提不成立。243/262 双版本 `javap -c` 实证：`JdbcConsole.isValid()` =
+   `super.isValid() && isTargetValid()`，而 `isTargetValid()` =
+   `DataSourceUtil.isDataSourceValid(facade, getDataSource())`，该方法字节码即
+   `facade.findDataSource(ds.getUniqueId()) != null`——**`isValid()` 早已内含 `dsInFacade` 分量**。
+   故 T-SI-01 的探测在现行 DBN 下与 `isValid()` 同源（非新增判据），真实收益是两点：
+   身份被拒时把三分量快照进 warn 日志（此前只有一句 `shared console invalid`，看不出是哪一环），
+   以及**清 last-used 记忆**（旧实现只丢会话不清记忆，下一轮仍按显示名静默命中同名数据源——
+   这才是残留的「猜」）。判据仍按计划接成独立分量（`reuseIdentityAccepted`），
+   DBN 若在后续版本把 facade 反查移出 `isValid()`，复用路径不会随之失守。
+2. 表 #2/#3a/#3b/#4 的行为描述与当前代码一致，仅行号漂移（#1 由 :370/:374-376 移到 :393/:397-411，
+   #2 由 :307 移到 :314-337，#4 由 :1311-1325 移到 :1338-1356）；#3a/#3b 行号未变。
+
+**T-SI-01（复用身份接探测）**：`reuseSharedConsole` 复用判定接 `probeConsoleValidity` 三分量，
+新增纯函数 `DataSourceSelector.reuseIdentityAccepted(identity)`（`identity == null` 为探测降级，
+放行——探测失败不得把正常复用打成每次重建连接）。拒绝时 `dropSharedConsole()`，
+且仅当 `identity.dsInFacade == false`（数据源已从 facade 消失）才 `forgetLastRunner(project)`；
+disposed 等其它失效不误清用户记忆（避免为一次 IDE 清扫让用户多点一次选择）。
+
+**T-SI-02（记忆键升级 UUID）**：新增 `PropertiesComponent` 键
+`mpsql.visualizer.last.runner.id`（数据源 UUID），旧键 `mpsql.visualizer.last.runner`（显示名）
+读写保留——旧键兼容读取一个版本，废弃计划已写进 CHANGELOG。命中顺序落在纯函数
+`resolveLastUsedRunnerIndex(memory, runnerNames, dataSourceNameById)`：UUID 精确命中
+（经 `DataSourceSettings.getDataSourceById` + `getName` 反射封装取该 UUID 的**当前**名，
+数据源改名后仍命中——这是 UUID 相对显示名的增益）→ 名字唯一命中（旧版记忆兼容路径）→
+未命中/同名多条（`ambiguous=true`，调用方清记忆走弹窗）。写入侧：控制台建好后经
+`consoleDataSourceId(console)`（`getDataSource()` + `DataSourceSettings.getUniqueId` 反射封装）
+取 UUID；弹窗路径尚无控制台时**清掉身份键**而不是留着上一轮的 UUID（身份说谎比没有身份更糟）；
+`runRunner` 静默失败与身份拒绝两处统一走 `forgetLastRunner` 清双键。
+
+**T-SI-03（对齐 fail-open 两点收口）**：①URL 无库不再静默跳过——`undeterminedDiagnostic`
+如实标注「未能确定默认库（数据源 URL 未指定库：…），当前=X」，`describeContext` 的上下文行
+同步把「数据源默认库=?」哑值换成同标记（该行是错误提示可见面，风险表要求的「只进
+describeContext、不弹窗不加警告级」按此落地）；②`switchSchema` 未生效退回 `setSearchPath`
+强设后读回校验（`readBackMismatch`，大小写不敏感），不一致时 `LOG.warn` + 返回带
+`库上下文对齐未生效` 标记的诊断串（目标/实际/命名空间/数据源/是否走强设），v1 只告警不阻断。
+
+**实施偏离（一处，已按诚实口径记录）**：计划写「`select current_database()`/`current_schema()`
+轻量读回」——243/262 双版本 javap 实证 `JdbcConsole` 与 `DatabaseSession` 均**无同步语句 API**
+（无 `getConnection`/`executeQuery` 一类入口，`DatabaseConnectionPoint` 亦无 `getDatabaseName`），
+走 `DatabaseConnectionManager.build + createBlocking` 建连跑查询对「控制台就绪即对齐」这条
+同步准备链过重（会引入建连延迟与失败面）。故 v1 读回面 = DBN 会话状态
+（`getSearchPath().getCurrent()` + `getCurrentNamespace()` 附注），服务端实读回列 T-SI-05。
+另：`ObjectKind.DATABASE` 硬编码对 PG 等 schema 型方言是否正确，按计划留 T-SI-05 真机判定，
+本轮未分支（`getCurrentNamespace()` 只作诊断附注、不参与判定，避免 PG 的 schema 名与库名
+不同造成假告警）。
+
+**T-SI-04（测试与文档）**：新增 `SessionIdentityGuardTest` 23 例（复用身份 4 / 记忆命中 9 /
+读回校验与告警 6 / 无库标注 4），全部走纯函数面故进默认 test 与 testFast 快测桶；
+`ExecConsoleContextDegradedTest` 补 1 例（降级分支不得带 URL 无库标记，防两种「取不到库」混为一谈）。
+验收 2 的三条防回归断言在位：唯一数据源静默直跑（空记忆恒「未命中且非歧义」，不干扰
+`runners.size==1 && shouldBeChosenIfAlone` 直跑分支）、DBN 正常对齐（`contextLine` 有库分支
+逐字节等于旧格式）、正常复用（三分量全绿放行）。bundle 零新增键（诊断文案沿用
+`ExecConsoleContext` 既有硬编码中文诊断惯例，与 `describeContext` 原格式同源），
+故无 en/zh 双语与占位符面变更；未新增任何模态弹窗。
+
+**门禁**：testFast 2652/0/0/6 绿（含新类 23 例）；testShards 4971/0/0/6 绿
+（shard1 1867 / shard2 1579 / shard3 1525，本轮无 flake，未触发隔离复跑）；
+跑前已按主调度统一登记，未自行调用 parallel_tasks.py。
+
+**T-SI-05 真机验证项（待走查，未验证）**：
+
+1. PG/schema 型方言下 `ObjectKind.DATABASE` 对齐行为实录——正确（无需分支）或需按方言分流，
+   两态都要留实录；顺带确认 PG 场景 `readBackMismatch` 不产生假告警。
+2. 数据源删除后复用路径的拒绝表现：预览执行后删除数据源 → 再次预览应「不复用旧会话、重新弹选择」
+   （而非等连接失败才报错），且 idea.log 有 `shared console identity rejected` 行。
+3. 建两条同名数据源 → 预览应弹选择而非静默取首条；选定后 UUID 记忆命中（日志带 `memory id=`）。
+4. URL 无库数据源 + DBN 映射钉库场景：预览头/错误上下文出现「当前=X」标注（`未能确定默认库`）。
+5. 服务端实读回（`select current_database()`）在真实连接上的行为——本轮未实现（见实施偏离），
+   真机确认「会话状态读回」是否足以覆盖「强设成功但服务端未切换」的形态；若不足，另立任务补建连读回。
+
