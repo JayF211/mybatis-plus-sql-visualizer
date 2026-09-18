@@ -1742,6 +1742,27 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     // 自动落盘（内容刚由本写入落盘，再写一遍纯属自己与自己抢）
                     cn.song.mybatisplus.visualizer.execute.ExecDocAutosaveGate.suppressDuring {
                         WriteCommandAction.runWriteCommandAction(project) { nativeDoc.setText(text) }
+                        // T-PS4-12 定案①：同临界区落盘（照 DataSourceSelector.writeVfTextViaDocument
+                        // 手法，isDocumentUnsaved → saveDocument）——闸门前提「内容由本写入落盘」
+                        // 在此成真，formatted 文本不再滞留 modified-unsaved（第七轮审计发现本体）。
+                        //
+                        // 「磁盘存原文还是 formatted」核实结论（T-PreviewConsoleFmt F1/F2 +
+                        // T-PreviewFast P1/P3 定例）：挂载后磁盘跟随 document 是既定语义——
+                        //  1) ConsoleFmt F1 定例 = 控制台挂载后渲染链把 formatted 回填进控制台
+                        //     文档，文档内容（=控制台所见）即权威；
+                        //  2) T-PreviewFast P1 `execFileContentMatches` 定例 = 有已加载 document
+                        //     时以 document 文本为准（注释原文「也是落盘会写入的内容」）；
+                        //  3) 「磁盘存预览原文」仅是预热路径的写入，且只发生在文档未挂编辑器时
+                        //     （ConsoleFmt F2 + PreviewFast P3：文档打开时预热跳过内容刷新）；
+                        //  4) 落盘 formatted 不改变执行语义：执行链执行前同步的是控制台文档内容，
+                        //     用户手改兜底（F5）落盘的同样是 document 内容。
+                        // 故本写入落盘 formatted 与既有定例一致；孤儿文档（getFile null，测试缝
+                        // createDocument 形态）无盘可落，自然跳过。
+                        val fdm = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+                        val vf = fdm.getFile(nativeDoc)
+                        if (vf != null && fdm.isDocumentUnsaved(nativeDoc)) {
+                            fdm.saveDocument(nativeDoc)
+                        }
                     }
                 } finally {
                     suppressAutoPopup = false
