@@ -32,7 +32,9 @@ open class DynamicContext(
      *
      * T-FS-07：①判重表——`<foreach>` 逐迭代会把同一表达式同一原因重复登记 N 次，
      * 用户看到的 `⚠` 警示行（`errors.joinToString("；")`）不该被同一句话刷屏，故同文案只留首现一行
-     * （判重键 = 完整错误文案，已含表达式原文与原因，天然等价于「同表达式同原因」）；
+     * （判重键 = 完整错误文案：9 个写入点里 8 个的文案内嵌表达式原文 + 原因，天然等价于「同表达式同原因」；
+     * 例外是 [IfSqlNode] 的「bind 表达式被 `||` 包裹」提示，文案固定不含表达式名——同一语句里两条不同的
+     * `||X||` bind 会并成一行，只丢「条数」不丢可区分信息，属可接受边界）；
      * ②子上下文（Foreach 的 Prefixed/Filtered、Trim 的 filtered）覆写本属性转发 delegate——
      * 此前各自持有独立列表，内层 `<if>` 求值失败被丢弃（静默，与 `${}`/bind/顶层 if 形态不一致）。
      */
@@ -91,6 +93,12 @@ open class DynamicContext(
  * 只用于 [DynamicContext.errors]（MyBatis 无此概念，属预览引擎专用扩展）；保留 MutableList 形态
  * 使既有写入点（`context.errors += msg`）与既有测试无需改动。`add(index, element)` 忽略索引——
  * 判重集合无插入位置语义，仓内既有写入只有 `+=` / `add(msg)` 两种形态。
+ *
+ * **只支持「追加 + 按值删」语义，不支持位置型写入**（T-FS-07 独立复核注记）：`add(index, element)`
+ * 忽略索引、`set(index, element)` 把新值挪到末尾（且新值已存在时会缩容）。当前仓内对 `.errors`
+ * 无任何位置型调用点（`listIterator().set/add`、`sort`、`subList` 写入、`addAll(index, …)` 全仓零处），
+ * 故无实际后果；日后若有人用位置型操作，行为会静默偏离 List 契约（`modCount` 也不自增，CME 保护失效）
+ * ——需要位置语义时应改用普通 `mutableListOf`，而不是改本类。
  */
 private class DedupErrorList : AbstractMutableList<String>() {
 
