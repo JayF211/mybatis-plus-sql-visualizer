@@ -8,9 +8,11 @@ import com.intellij.database.dataSource.LocalDataSourceManager
 import com.intellij.database.util.GuardedRef
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.WriteAction
+import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.progress.EmptyProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
+import com.intellij.testFramework.LightProjectDescriptor
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -41,6 +43,24 @@ import javax.xml.parsers.DocumentBuilderFactory
  * 运行：`./gradlew testDatabase`（demo MySQL 未运行则 skip 不 fail）。
  */
 class ExecDocGateIntegrationTest : BasePlatformTestCase() {
+
+    /** introspect 期间持有的连接守卫（close 即释放连接，见 [introspectDataSource] 内注释）。 */
+    private var introspectRef: GuardedRef<*>? = null
+
+    /** 控制台编辑器夹具的持有标记（造/释放见 [DbIntegrationProjectSupport.installExecEditor]）。 */
+    private var execEditor: Editor? = null
+
+    /**
+     * 稳定 light 工程目录（testDatabase 通道五类共用，根因见 [DbIntegrationProjectSupport] 类注释）：
+     * 默认描述符下工程目录 = JVM 里首个用例的 unitTest 临时目录，被属主用例 tearDown 递归删除 →
+     * exec 文件写盘与 VFS 分叉（基线 `refreshVfs: VFS not visible after refresh`），本类三断言全红。
+     */
+    override fun getProjectDescriptor(): LightProjectDescriptor = DbIntegrationProjectSupport.descriptor
+
+    override fun setUp() {
+        super.setUp()
+        DbIntegrationProjectSupport.allowRootAccess(testRootDisposable)
+    }
 
     private val demoProjectDir: File
         get() = File(System.getProperty("mpDemoProjectDir", "../mybatis-plus-sql-visualizer-demo"))
@@ -125,7 +145,12 @@ class ExecDocGateIntegrationTest : BasePlatformTestCase() {
         }
         val ref = future.get() ?: return@runCatching "createBlocking future null"
         val loaded = waitUntil(90_000) { !LocalDataSourceManager.getInstance(project).isLoading(ds) }
-        ref.close()
+        // 不在此 close：GuardedRef.close() 释放连接（DatabaseConnectionManager.releaseConnection 语义，
+        // 见 Builder.createBlockingNonCancellable 返回 GuardedRef<DatabaseConnection>），引擎随之终止；
+        // 控制台/session 是连接的下游——连接先死则控制台 attach 后立刻被 DBN 回收（20260918 实测
+        // `console DISPOSED right after attach: disposed=true`）。守卫留到 tearDown 关闭，
+        // 等价真机里用户会话持着连接（用例结束即释放，不跨用例泄漏）。
+        introspectRef = ref
         if (loaded) null else "isLoading 未结束（90s 超时）"
     }.getOrElse { e ->
         val cause = (e as? java.util.concurrent.ExecutionException)?.cause ?: e
@@ -182,6 +207,9 @@ class ExecDocGateIntegrationTest : BasePlatformTestCase() {
             return
         }
 
+        // ⓪ 清空应用级残留数据源（跨用例存活，多一条即退化成多 runner 弹窗分支）——
+        //    必须在建本用例数据源**之前**：放在其后会把刚建的数据源一并清掉
+        DbIntegrationProjectSupport.clearDataSources(project)
         val ds = createDataSource(info)
         val introspectError = introspectDataSource(ds)
         if (introspectError != null) {
@@ -191,6 +219,22 @@ class ExecDocGateIntegrationTest : BasePlatformTestCase() {
 
         // ① prepareConsole(sqlA)：attachConsole 后文档与磁盘必须已收口（T-EC-01）
         val sqlA = "SELECT 1 AS docgate_a"
+        // ①a 前置：发现链收敛到恰好 1 个 runner（facade 相对 LocalDataSourceManager 有异步窗口，
+        //     见 DbIntegrationProjectSupport.awaitRunners KDoc）
+        val psiA = DbIntegrationProjectSupport.ensureExecFile(project, sqlA)
+        assertNotNull("临时执行 PsiFile 应可构造（VFS/方言映射）", psiA)
+        val runners = DbIntegrationProjectSupport.awaitRunners(psiA!!.second, sqlA, expected = 1)
+        assertEquals(
+            "唯一数据源契约要求发现链恰好 1 个 runner（实际=${runners.map { DbIntegrationProjectSupport.runnerName(it) }}）",
+            1,
+            runners.size,
+        )
+        // ①b 控制台编辑器夹具：控制台文档即 exec 文件文档（JdbcConsole.getDocument() 字节码实证），
+        //     headless 下无人为它建编辑器 → prepareInConsole 的 getEditors(consoleDocument) 恒空 →
+        //     静默返回（基线 idea.log `[M36] editor=null (async wait)`，120s 不就绪且 errors=[]）
+        execEditor = DbIntegrationProjectSupport.installExecEditor(project)
+        assertNotNull("控制台编辑器夹具应可建（prepareConsole 依赖 getEditors(consoleDocument) 非空）", execEditor)
+
         var readyA = false
         val errorsA = mutableListOf<String>()
         DataSourceSelector.prepareConsole(
@@ -201,9 +245,13 @@ class ExecDocGateIntegrationTest : BasePlatformTestCase() {
             onError = { errorsA.add(it) },
             callback = { },
         )
+        val readyAInTime = DbIntegrationProjectSupport.waitWithPump(120_000) { readyA }
+        if (!readyAInTime) {
+            println("[DB-IT] prepareConsole 未就绪诊断: ${DbIntegrationProjectSupport.diagnoseConsoleState(project, ds)}")
+        }
         assertTrue(
             "prepareConsole 120s 内未就绪 (errors=$errorsA)",
-            waitUntil(120_000) { readyA },
+            readyAInTime,
         )
         assertExecDocSaved(sqlA, "① prepare 后")
 
@@ -221,7 +269,7 @@ class ExecDocGateIntegrationTest : BasePlatformTestCase() {
         )
         assertTrue(
             "二次 prepareConsole 120s 内未就绪 (errors=$errorsB)",
-            waitUntil(120_000) { readyB },
+            DbIntegrationProjectSupport.waitWithPump(120_000) { readyB },
         )
         // 回退 F1 时：编辑器 setText 只改内存，磁盘停留 sqlA、文档滞留 unsaved → 此处红
         assertExecDocSaved(sqlB, "② reuse 后")
@@ -230,7 +278,7 @@ class ExecDocGateIntegrationTest : BasePlatformTestCase() {
         val sqlC = "SELECT 3 AS docgate_c"
         val editor = selectorField("preparedEditor") as com.intellij.openapi.editor.Editor
         WriteAction.runAndWait<Throwable> { editor.document.setText(sqlC) }
-        val autosaved = waitUntil(10_000) { diskText() == sqlC }
+        val autosaved = DbIntegrationProjectSupport.waitWithPump(10_000) { diskText() == sqlC }
         assertTrue(
             "控制台手改后 10s 内磁盘未对齐（F5 防抖自动落盘失效？回退即此红）",
             autosaved,
@@ -239,9 +287,16 @@ class ExecDocGateIntegrationTest : BasePlatformTestCase() {
     }
 
     override fun tearDown() {
-        runCatching { DataSourceSelector.clearPrepared() }
-        // T-TestDbDriver：object 单例 temp Psi 缓存跨用例存活，fixture 临时目录每用例一换 → 显式清（详见
-        // DataSourceSelectorIntegrationTest.tearDown 同款注释）。
+        introspectRef?.let { runCatching { it.close() } }
+        introspectRef = null
+        // 夹具编辑器必须先释放：平台 TestApplicationKt.checkEditorsReleased 对每个存活编辑器硬抛
+        DbIntegrationProjectSupport.detachDbnConsole(project)
+        DbIntegrationProjectSupport.releaseExecEditors(project)
+        // 单例的 prepared/shared 槽位跨用例存活——面板关闭语义的清理是 releaseForPanel
+        // （clearPrepared + dropSharedConsole + 清 pendingOnConsole），用例边界用它，避免下个用例
+        // 经 reuseSharedConsole 命中本用例的控制台/编辑器（详见 DataSourceSelectorIntegrationTest 同款注释）
+        runCatching { DataSourceSelector.releaseForPanel() }
+        // T-TestDbDriver：object 单例 temp Psi 缓存跨用例存活，fixture 临时目录每用例一换 → 显式清。
         runCatching { DataSourceSelector.clearCachedTempPsiFileForTest() }
         super.tearDown()
     }

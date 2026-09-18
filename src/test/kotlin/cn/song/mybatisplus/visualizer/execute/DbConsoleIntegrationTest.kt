@@ -7,6 +7,8 @@ import com.intellij.database.dataSource.LocalDataSource
 import com.intellij.database.dataSource.LocalDataSourceManager
 import com.intellij.database.util.GuardedRef
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.editor.Editor
+import com.intellij.testFramework.LightProjectDescriptor
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -37,6 +39,24 @@ import javax.xml.parsers.DocumentBuilderFactory
  * 运行：`./gradlew testDatabase`
  */
 class DbConsoleIntegrationTest : BasePlatformTestCase() {
+
+    /** introspect 期间持有的连接守卫（close 即释放连接，见 [introspectDataSource] 内注释）。 */
+    private var introspectRef: GuardedRef<*>? = null
+
+    /** 控制台编辑器夹具的持有标记（造/释放见 [DbIntegrationProjectSupport.installExecEditor]）。 */
+    private var execEditor: Editor? = null
+
+    /**
+     * 稳定 light 工程目录（testDatabase 通道五类共用，根因见 [DbIntegrationProjectSupport] 类注释）：
+     * 默认描述符下 `project.basePath` = JVM 里首个用例的 unitTest 临时目录，被属主用例 tearDown
+     * 递归删除 → 后续用例的 exec 文件写盘与 VFS 分叉（基线 `refreshVfs: VFS not visible after refresh`）。
+     */
+    override fun getProjectDescriptor(): LightProjectDescriptor = DbIntegrationProjectSupport.descriptor
+
+    override fun setUp() {
+        super.setUp()
+        DbIntegrationProjectSupport.allowRootAccess(testRootDisposable)
+    }
 
     private val demoProjectDir: File
         get() = File(System.getProperty("mpDemoProjectDir", "../mybatis-plus-sql-visualizer-demo"))
@@ -145,7 +165,12 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         }
         val ref = future.get() ?: return@runCatching "createBlocking future null"
         val loaded = waitUntil(90_000) { !LocalDataSourceManager.getInstance(project).isLoading(ds) }
-        ref.close()
+        // 不在此 close：GuardedRef.close() 释放连接（DatabaseConnectionManager.releaseConnection 语义，
+        // 见 Builder.createBlockingNonCancellable 返回 GuardedRef<DatabaseConnection>），引擎随之终止；
+        // 控制台/session 是连接的下游——连接先死则控制台 attach 后立刻被 DBN 回收（20260918 实测
+        // `console DISPOSED right after attach: disposed=true`）。守卫留到 tearDown 关闭，
+        // 等价真机里用户会话持着连接（用例结束即释放，不跨用例泄漏）。
+        introspectRef = ref
         if (loaded) null else "isLoading 未结束（90s 超时）"
     }.getOrElse { e ->
         val cause = (e as? java.util.concurrent.ExecutionException)?.cause ?: e
@@ -190,6 +215,10 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         assumeTrue("demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}", info != null)
         val dsInfo = info!!
 
+        // ⓪ 清空应用级残留数据源：LocalDataSourceManager 跨用例存活，本用例走的是「唯一数据源静默
+        //    复用」契约，多一条残留即退化成多 runner 弹窗分支（headless 无 frame → NPE，基线实证）
+        DbIntegrationProjectSupport.clearDataSources(project)
+
         // ① 创建数据源（连接信息来自 demo 项目）
         val ds = createDataSource(dsInfo)
 
@@ -202,113 +231,47 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
             return
         }
 
-        // 诊断：dump 数据源列表 + DbImplUtil 过滤结果，定位 runner 空原因（BasePlatformTestCase
-        // 吞 stdout，诊断信息累积到字符串，失败时塞进 assertion message）
-        val diag = StringBuilder()
-        runCatching {
-            val mgr = LocalDataSourceManager.getInstance(project)
-            val all = mgr.dataSources
-            diag.append("LocalDataSourceManager.dataSources count=${all.size}\n")
-            all.forEach {
-                diag.append("  ds name=${it.name} uniqueId=${it.uniqueId} driver=${it.databaseDriver?.id} workingDir=${it.workingDir}\n")
-            }
-            // 直接调 DbImplUtil.getAppropriateDataSourcesForExec 看过滤——psiFile 来自 prepareConsole
-            // 内部创建（.idea/.../exec/mpsql-exec.sql），此处无法直接取，但能验证数据源可见性
-            diag.append("DataSource visible: ${all.isNotEmpty()}\n")
-            // DbPsiFacade（PSI 层）数据源列表——getAppropriateDataSourcesForExec 从这里取
-            runCatching {
-                val psiFacade = Class.forName("com.intellij.database.psi.DbPsiFacade")
-                    .getMethod("getInstance", com.intellij.openapi.project.Project::class.java)
-                    .invoke(null, project)
-                val psiDs = psiFacade.javaClass.getMethod("getDataSources").invoke(psiFacade) as List<*>
-                diag.append("DbPsiFacade.getDataSources count=${psiDs.size}\n")
-                psiDs.forEach { diag.append("  psi ds=$it\n") }
-            }.onFailure { diag.append("DbPsiFacade dump failed: ${it.javaClass.simpleName}: ${it.message}\n") }
-            // 逐步执行 createTempPsiFile 的 4 步（不走 runCatching.getOrNull 吞异常），
-            // 精确定位 null 源
-            try {
-                val base = project.basePath ?: error("project.basePath null")
-                val dir = java.io.File(base, ".idea/${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}/exec").apply { mkdirs() }
-                val f = java.io.File(dir, "mpsql-exec.sql").apply { writeText("SELECT 1") }
-                diag.append("step1 file written: ${f.absolutePath}\n")
-                val vf = com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f)
-                    ?: error("refreshAndFindFileByIoFile null")
-                diag.append("step2 vf=${vf.path}\n")
-                val mappings = com.intellij.sql.dialects.SqlDialectMappings.getInstance(project)
-                @Suppress("UNCHECKED_CAST")
-                val values = mappings.javaClass.getMethod("getAvailableValues").invoke(mappings) as List<Any?>
-                diag.append("step3 available dialects=${values.map { (it as? com.intellij.lang.Language)?.id }}\n")
-                val mysql = values.firstOrNull {
-                    (it as? com.intellij.lang.Language)?.id.equals("MySQL", ignoreCase = true)
-                }
-                diag.append("step3b mysql dialect=${mysql?.let { (it as com.intellij.lang.Language).id }}\n")
-                if (mysql != null) {
-                    mappings.javaClass.getMethod("setMapping", com.intellij.openapi.vfs.VirtualFile::class.java, Any::class.java)
-                        .invoke(mappings, vf, mysql)
-                    diag.append("step3c mapping set OK\n")
-                }
-                val psi = com.intellij.psi.PsiManager.getInstance(project).findFile(vf)
-                diag.append("step4 psi=${psi?.javaClass?.simpleName} dialect=${psi?.language?.id}\n")
-                val appropriate = Class.forName("com.intellij.database.util.DbImplUtil")
-                    .getMethod("getAppropriateDataSourcesForExec", com.intellij.psi.PsiFile::class.java)
-                    .invoke(null, psi) as Iterable<*>
-                diag.append("step5 getAppropriateDataSourcesForExec=${appropriate.count()}\n")
-                // 复现过滤条件 lambda$1（isValid/SqlDataSource）+ lambda$2（dialect similarTo）
-                val sqlDialect = Class.forName("com.intellij.database.util.DbImplUtil")
-                    .getMethod("getSqlLanguageDialectForExec", com.intellij.psi.PsiFile::class.java)
-                    .invoke(null, psi)
-                diag.append("step6 sqlDialectForExec=${sqlDialect} (${(sqlDialect as? com.intellij.lang.Language)?.id})\n")
-                val dbDialect = runCatching {
-                    sqlDialect?.javaClass?.getMethod("getDatabaseDialect")?.invoke(sqlDialect)
-                }.getOrNull()
-                diag.append("step6b dbDialect=${dbDialect?.javaClass?.simpleName} id=${(dbDialect as? com.intellij.lang.Language)?.id}\n")
-                runCatching {
-                    val psiFacade = Class.forName("com.intellij.database.psi.DbPsiFacade")
-                        .getMethod("getInstance", com.intellij.openapi.project.Project::class.java)
-                        .invoke(null, project)
-                    val psiDs = psiFacade.javaClass.getMethod("getDataSources").invoke(psiFacade) as List<*>
-                    val dsEl = psiDs.first()
-                    val isValid = dsEl?.javaClass?.getMethod("isValid")?.invoke(dsEl)
-                    diag.append("step7 psi ds isValid=$isValid class=${dsEl?.javaClass?.simpleName}\n")
-                    val dsDialect = Class.forName("com.intellij.database.util.DbImplUtilCore")
-                        .getMethod("getDatabaseDialect", Class.forName("com.intellij.database.psi.DbElement"))
-                        .invoke(null, dsEl)
-                    diag.append("step8 ds dialect=${dsDialect?.javaClass?.simpleName} id=${(dsDialect as? com.intellij.lang.Language)?.id}\n")
-                    if (dbDialect != null && dsDialect != null) {
-                        val similar = dbDialect.javaClass.getMethod("similarTo", Class.forName("com.intellij.database.dialects.DatabaseDialect"))
-                            .invoke(dbDialect, dsDialect)
-                        diag.append("step9 similarTo=$similar\n")
-                    // lambda$4: SqlDataSource.containsFile(vf) —— 文件-数据源包含检查
-                    val sqlDs = dsEl?.javaClass?.getMethod("getDelegate")?.invoke(dsEl)
-                    val contains = runCatching {
-                        sqlDs?.javaClass?.getMethod("containsFile", com.intellij.openapi.vfs.VirtualFile::class.java)
-                            ?.invoke(sqlDs, vf) as? Boolean
-                    }.getOrNull()
-                    diag.append("step10 SqlDataSource.containsFile(vf)=$contains sqlDsClass=${sqlDs?.javaClass?.simpleName}\n")
-                    // 看数据源 workingDir + file mapping
-                    val wd = dsEl?.javaClass?.getMethod("getWorkingDir")?.invoke(dsEl)
-                    diag.append("step11 ds workingDir=$wd\n")
-                    }
-                }.onFailure { diag.append("filter repro FAILED: ${it.javaClass.simpleName}: ${it.message}\n") }
-            } catch (e: Throwable) {
-                diag.append("step FAILED: ${e.javaClass.simpleName}: ${e.message}\n")
-                e.stackTrace.take(6).forEach { diag.append("  at $it\n") }
-            }
-        }.onFailure { diag.append("dump failed: ${it.javaClass.simpleName}: ${it.message}\n") }
+        // 本用例执行 SQL（诊断 dump 与准备链共用同一文本）
+        val execSql = "SELECT id, station_id FROM car_device_info WHERE id = 1"
 
+        // 诊断 dump 只在断言失败时求值（见 [runnerDiag]）：该 dump 自身会写 exec 文件、重建 PSI、
+        // 重设方言映射，放在准备链之前会污染被测状态（20260918 实测：前置 dump 让控制台 attach 后
+        // 即被 DBN 回收——排查代码本身成了故障源）
         // ② prepareConsole：唯一数据源 → 静默复用 → 控制台就绪回调
+        // ②a 前置：发现链收敛到恰好 1 个 runner（本用例契约是「唯一数据源静默复用」，多一条残留即
+        //     走弹窗分支、少一条即回调 false；facade 相对 LocalDataSourceManager 有异步窗口，见
+        //     DbIntegrationProjectSupport.awaitRunners KDoc）
+        val execPsi = DbIntegrationProjectSupport.ensureExecFile(project, execSql)
+        assertNotNull("临时执行 PsiFile 应可构造（VFS/方言映射）", execPsi)
+        val runners = DbIntegrationProjectSupport.awaitRunners(execPsi!!.second, execSql, expected = 1)
+        assertEquals(
+            "唯一数据源契约要求发现链恰好 1 个 runner（实际=${runners.map { DbIntegrationProjectSupport.runnerName(it) }}）",
+            1,
+            runners.size,
+        )
+        // ②b 控制台编辑器夹具：控制台文档即 exec 文件文档（JdbcConsole.getDocument() 字节码实证），
+        //     headless 下无人为它建编辑器 → prepareInConsole 的 getEditors(consoleDocument) 恒空 →
+        //     静默返回（基线 idea.log `[M36] editor=null (async wait)`，120s 不就绪且 errors=[]）
+        execEditor = DbIntegrationProjectSupport.installExecEditor(project)
+        assertNotNull("控制台编辑器夹具应可建（prepareConsole 依赖 getEditors(consoleDocument) 非空）", execEditor)
+
         var consoleReady = false
         val errors = mutableListOf<String>()
         var prepared = false
         DataSourceSelector.prepareConsole(
             project = project,
-            sql = "SELECT id, station_id FROM car_device_info WHERE id = 1",
+            sql = execSql,
             onConsole = { consoleReady = true },
             onEditor = { },
             onError = { errors.add(it) },
             callback = { prepared = it },
         )
-        assertTrue("prepareConsole 120s 内未就绪 (errors=$errors, diag=\n$diag)", waitUntil(120_000) { consoleReady })
+        val consoleReadyInTime = DbIntegrationProjectSupport.waitWithPump(120_000) { consoleReady }
+        if (!consoleReadyInTime) {
+            println("[DB-IT] prepareConsole 未就绪诊断: ${DbIntegrationProjectSupport.diagnoseConsoleState(project, ds)}")
+            println("[DB-IT] runner diag: " + runnerDiag(execSql))
+        }
+        assertTrue("prepareConsole 120s 内未就绪 (errors=$errors)", consoleReadyInTime)
         assertTrue("prepareConsole callback 应返回 true", prepared)
         assertTrue("控制台就绪后 isPrepared() 应为 true", DataSourceSelector.isPrepared())
         assertTrue("prepare 阶段不应有错误 (errors=$errors)", errors.isEmpty())
@@ -326,7 +289,10 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
             onResultsReady = { resultsReady = true },
             onError = { execErrors.add(it) },
         )
-        assertTrue("首次执行 60s 内无结果 Tab (errors=$execErrors)", waitUntil(60_000) { resultTabNames().isNotEmpty() })
+        assertTrue(
+            "首次执行 60s 内无结果 Tab (errors=$execErrors)",
+            DbIntegrationProjectSupport.waitWithPump(60_000) { resultTabNames().isNotEmpty() },
+        )
         assertTrue("onResultsReady 应被回调", resultsReady)
         val firstTabs = resultTabNames()
         assertTrue("首次执行后应有结果 Tab (tabs=$firstTabs)", firstTabs.isNotEmpty())
@@ -345,7 +311,7 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
             onResultsReady = { secondReady = true },
             onError = { execErrors.add(it) },
         )
-        val newTabAppeared = waitUntil(60_000) { resultTabNames().any { it != firstTabName } }
+        val newTabAppeared = DbIntegrationProjectSupport.waitWithPump(60_000) { resultTabNames().any { it != firstTabName } }
         val secondTabs = resultTabNames()
         assertTrue(
             "第二次执行后未出现新结果 Tab（滞后一轮回归）：first=$firstTabName, second=$secondTabs, errors=$execErrors",
@@ -360,11 +326,122 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         assertNotNull(dsInfo)
     }
 
+
+    /**
+     * runner 发现链诊断 dump（**惰性**：只在断言失败时求值）。
+     *
+     * 内容全是「读状态 + 复现 createTempPsiFile 的 4 步」：复现步骤会写 exec 文件、重建 PSI、
+     * 重设方言映射——这些写点若发生在 prepareConsole 之前，会与被测准备链互相干扰
+     *（20260918 实测：前置 dump 让控制台 attach 后即被 DBN 回收，排查代码成了故障源）。
+     * 故改为失败时求值：诊断能力不减，被测状态不再被诊断代码扰动。
+     */
+    private fun runnerDiag(execSql: String): String {
+        val diag = StringBuilder()
+            runCatching {
+                val mgr = LocalDataSourceManager.getInstance(project)
+                val all = mgr.dataSources
+                diag.append("LocalDataSourceManager.dataSources count=${all.size}\n")
+                all.forEach {
+                    diag.append("  ds name=${it.name} uniqueId=${it.uniqueId} driver=${it.databaseDriver?.id} workingDir=${it.workingDir}\n")
+                }
+                // 直接调 DbImplUtil.getAppropriateDataSourcesForExec 看过滤——psiFile 来自 prepareConsole
+                // 内部创建（.idea/.../exec/mpsql-exec.sql），此处无法直接取，但能验证数据源可见性
+                diag.append("DataSource visible: ${all.isNotEmpty()}\n")
+                // DbPsiFacade（PSI 层）数据源列表——getAppropriateDataSourcesForExec 从这里取
+                runCatching {
+                    val psiFacade = Class.forName("com.intellij.database.psi.DbPsiFacade")
+                        .getMethod("getInstance", com.intellij.openapi.project.Project::class.java)
+                        .invoke(null, project)
+                    val psiDs = psiFacade.javaClass.getMethod("getDataSources").invoke(psiFacade) as List<*>
+                    diag.append("DbPsiFacade.getDataSources count=${psiDs.size}\n")
+                    psiDs.forEach { diag.append("  psi ds=$it\n") }
+                }.onFailure { diag.append("DbPsiFacade dump failed: ${it.javaClass.simpleName}: ${it.message}\n") }
+                // 逐步执行 createTempPsiFile 的 4 步（不走 runCatching.getOrNull 吞异常），
+                // 精确定位 null 源
+                try {
+                    val base = project.basePath ?: error("project.basePath null")
+                    val dir = java.io.File(base, ".idea/${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}/exec").apply { mkdirs() }
+                    val f = java.io.File(dir, "mpsql-exec.sql").apply { writeText(execSql) }
+                    diag.append("step1 file written: ${f.absolutePath}\n")
+                    val vf = com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f)
+                        ?: error("refreshAndFindFileByIoFile null")
+                    diag.append("step2 vf=${vf.path}\n")
+                    val mappings = com.intellij.sql.dialects.SqlDialectMappings.getInstance(project)
+                    @Suppress("UNCHECKED_CAST")
+                    val values = mappings.javaClass.getMethod("getAvailableValues").invoke(mappings) as List<Any?>
+                    diag.append("step3 available dialects=${values.map { (it as? com.intellij.lang.Language)?.id }}\n")
+                    val mysql = values.firstOrNull {
+                        (it as? com.intellij.lang.Language)?.id.equals("MySQL", ignoreCase = true)
+                    }
+                    diag.append("step3b mysql dialect=${mysql?.let { (it as com.intellij.lang.Language).id }}\n")
+                    if (mysql != null) {
+                        mappings.javaClass.getMethod("setMapping", com.intellij.openapi.vfs.VirtualFile::class.java, Any::class.java)
+                            .invoke(mappings, vf, mysql)
+                        diag.append("step3c mapping set OK\n")
+                    }
+                    val psi = com.intellij.psi.PsiManager.getInstance(project).findFile(vf)
+                    diag.append("step4 psi=${psi?.javaClass?.simpleName} dialect=${psi?.language?.id}\n")
+                    val appropriate = Class.forName("com.intellij.database.util.DbImplUtil")
+                        .getMethod("getAppropriateDataSourcesForExec", com.intellij.psi.PsiFile::class.java)
+                        .invoke(null, psi) as Iterable<*>
+                    diag.append("step5 getAppropriateDataSourcesForExec=${appropriate.count()}\n")
+                    // 复现过滤条件 lambda$1（isValid/SqlDataSource）+ lambda$2（dialect similarTo）
+                    val sqlDialect = Class.forName("com.intellij.database.util.DbImplUtil")
+                        .getMethod("getSqlLanguageDialectForExec", com.intellij.psi.PsiFile::class.java)
+                        .invoke(null, psi)
+                    diag.append("step6 sqlDialectForExec=${sqlDialect} (${(sqlDialect as? com.intellij.lang.Language)?.id})\n")
+                    val dbDialect = runCatching {
+                        sqlDialect?.javaClass?.getMethod("getDatabaseDialect")?.invoke(sqlDialect)
+                    }.getOrNull()
+                    diag.append("step6b dbDialect=${dbDialect?.javaClass?.simpleName} id=${(dbDialect as? com.intellij.lang.Language)?.id}\n")
+                    runCatching {
+                        val psiFacade = Class.forName("com.intellij.database.psi.DbPsiFacade")
+                            .getMethod("getInstance", com.intellij.openapi.project.Project::class.java)
+                            .invoke(null, project)
+                        val psiDs = psiFacade.javaClass.getMethod("getDataSources").invoke(psiFacade) as List<*>
+                        val dsEl = psiDs.first()
+                        val isValid = dsEl?.javaClass?.getMethod("isValid")?.invoke(dsEl)
+                        diag.append("step7 psi ds isValid=$isValid class=${dsEl?.javaClass?.simpleName}\n")
+                        val dsDialect = Class.forName("com.intellij.database.util.DbImplUtilCore")
+                            .getMethod("getDatabaseDialect", Class.forName("com.intellij.database.psi.DbElement"))
+                            .invoke(null, dsEl)
+                        diag.append("step8 ds dialect=${dsDialect?.javaClass?.simpleName} id=${(dsDialect as? com.intellij.lang.Language)?.id}\n")
+                        if (dbDialect != null && dsDialect != null) {
+                            val similar = dbDialect.javaClass.getMethod("similarTo", Class.forName("com.intellij.database.dialects.DatabaseDialect"))
+                                .invoke(dbDialect, dsDialect)
+                            diag.append("step9 similarTo=$similar\n")
+                        // lambda$4: SqlDataSource.containsFile(vf) —— 文件-数据源包含检查
+                        val sqlDs = dsEl?.javaClass?.getMethod("getDelegate")?.invoke(dsEl)
+                        val contains = runCatching {
+                            sqlDs?.javaClass?.getMethod("containsFile", com.intellij.openapi.vfs.VirtualFile::class.java)
+                                ?.invoke(sqlDs, vf) as? Boolean
+                        }.getOrNull()
+                        diag.append("step10 SqlDataSource.containsFile(vf)=$contains sqlDsClass=${sqlDs?.javaClass?.simpleName}\n")
+                        // 看数据源 workingDir + file mapping
+                        val wd = dsEl?.javaClass?.getMethod("getWorkingDir")?.invoke(dsEl)
+                        diag.append("step11 ds workingDir=$wd\n")
+                        }
+                    }.onFailure { diag.append("filter repro FAILED: ${it.javaClass.simpleName}: ${it.message}\n") }
+                } catch (e: Throwable) {
+                    diag.append("step FAILED: ${e.javaClass.simpleName}: ${e.message}\n")
+                    e.stackTrace.take(6).forEach { diag.append("  at $it\n") }
+                }
+            }.onFailure { diag.append("dump failed: ${it.javaClass.simpleName}: ${it.message}\n") }
+
+        return diag.toString()
+    }
+
     override fun tearDown() {
-        runCatching { DataSourceSelector.clearPrepared() }
-        // T-TestDbDriver：object 单例的 temp Psi 缓存跨用例存活（clearPrepared 刻意不清，见 T-ExecCopyFix F2c）——
-        // 而 BasePlatformTestCase 每个用例换一套 fixture 临时目录，残留缓存指向已拆目录 →
-        // 「VFS not visible after refresh / 另一个程序正在使用此文件」。用例间必须显式清缓存。
+        introspectRef?.let { runCatching { it.close() } }
+        introspectRef = null
+        // 夹具编辑器必须先释放：平台 TestApplicationKt.checkEditorsReleased 对每个存活编辑器硬抛
+        DbIntegrationProjectSupport.detachDbnConsole(project)
+        DbIntegrationProjectSupport.releaseExecEditors(project)
+        // 单例的 prepared/shared 槽位跨用例存活——面板关闭语义的清理是 releaseForPanel
+        // （clearPrepared + dropSharedConsole + 清 pendingOnConsole），用例边界用它，避免下个用例
+        // 经 reuseSharedConsole 命中本用例的控制台/编辑器（详见 DataSourceSelectorIntegrationTest 同款注释）
+        runCatching { DataSourceSelector.releaseForPanel() }
+        // T-TestDbDriver：object 单例 temp Psi 缓存跨用例存活，fixture 临时目录每用例一换 → 显式清。
         runCatching { DataSourceSelector.clearCachedTempPsiFileForTest() }
         super.tearDown()
     }

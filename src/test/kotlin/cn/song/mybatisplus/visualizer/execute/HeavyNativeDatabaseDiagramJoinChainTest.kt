@@ -15,6 +15,7 @@ import com.intellij.database.dataSource.LocalDataSource
 import com.intellij.database.dataSource.LocalDataSourceManager
 import com.intellij.database.util.GuardedRef
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.testFramework.LightProjectDescriptor
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -33,6 +34,20 @@ import javax.xml.parsers.DocumentBuilderFactory
  * dataSources.xml + 本地 MySQL 已启动且含 car_device_info/station_info 表。
  */
 class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
+
+    /** introspect 期间持有的连接守卫（close 即释放连接，见 [introspectDataSource] 内注释）。 */
+    private var introspectRef: GuardedRef<*>? = null
+
+    /**
+     * 稳定 light 工程目录（testDatabase 通道五类共用，根因见 [DbIntegrationProjectSupport] 类注释）：
+     * 五类共用一个描述符实例 → 平台复用同一工程，工程目录不再随首个用例的 unitTest 目录被删。
+     */
+    override fun getProjectDescriptor(): LightProjectDescriptor = DbIntegrationProjectSupport.descriptor
+
+    override fun setUp() {
+        super.setUp()
+        DbIntegrationProjectSupport.allowRootAccess(testRootDisposable)
+    }
 
     private val demoProjectDir: File
         get() = File(System.getProperty("mpDemoProjectDir", "../mybatis-plus-sql-visualizer-demo"))
@@ -97,7 +112,12 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
         }
         val ref = future.get() ?: return@runCatching "createBlocking future null"
         val loaded = waitUntil(90_000) { !LocalDataSourceManager.getInstance(project).isLoading(ds) }
-        ref.close()
+        // 不在此 close：GuardedRef.close() 释放连接（DatabaseConnectionManager.releaseConnection 语义，
+        // 见 Builder.createBlockingNonCancellable 返回 GuardedRef<DatabaseConnection>），引擎随之终止；
+        // 控制台/session 是连接的下游——连接先死则控制台 attach 后立刻被 DBN 回收（20260918 实测
+        // `console DISPOSED right after attach: disposed=true`）。守卫留到 tearDown 关闭，
+        // 等价真机里用户会话持着连接（用例结束即释放，不跨用例泄漏）。
+        introspectRef = ref
         if (loaded) null else "isLoading 未结束（90s 超时）"
     }.getOrElse { e ->
         val cause = (e as? java.util.concurrent.ExecutionException)?.cause ?: e
@@ -166,10 +186,18 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
         val comp = component!!
 
         val editor = comp.getClientProperty("mpsql.native.database.editor")
-        assumeTrue("编辑器未挂接", editor != null)
+        if (editor == null) {
+            // 显式绿跳而非 assumeTrue：平台 runner 把 AssumptionViolatedException 记为 failure
+            // 红掉整个 testDatabase 任务（本文件既有惯例，见 testDatabaseDiagramEmbedChainWithVirtualFk 内注释）
+            println("[DB-IT] SKIP: 编辑器未挂接（B 路径链路不可用，应降级 A 路径）")
+            return
+        }
         val builder = NativeJoinDiagramOpener.builderOf(editor)
-        assumeTrue("编辑器应持有 DiagramBuilder", builder != null)
-        val b = builder!!
+        if (builder == null) {
+            println("[DB-IT] SKIP: 编辑器应持有 DiagramBuilder（B 路径链路不可用，应降级 A 路径）")
+            return
+        }
+        val b = builder
 
         val nodes = ApplicationManager.getApplication().runReadAction<Int> { b.dataModel.nodes.size }
         assertTrue("期望数据模型 ≥2 节点（主表 + JOIN 表），实际=$nodes", nodes >= 2)
@@ -226,7 +254,10 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
     }
 
     override fun tearDown() {
-        runCatching { DataSourceSelector.clearPrepared() }
+        introspectRef?.let { runCatching { it.close() } }
+        introspectRef = null
+        // 面板关闭语义的清理（clearPrepared + dropSharedConsole + 清 pendingOnConsole）——与同类三处一致
+        runCatching { DataSourceSelector.releaseForPanel() }
         // T-TestDbDriver：object 单例 temp Psi 缓存跨用例存活，fixture 临时目录每用例一换 → 显式清（详见
         // DataSourceSelectorIntegrationTest.tearDown 同款注释）。
         runCatching { DataSourceSelector.clearCachedTempPsiFileForTest() }

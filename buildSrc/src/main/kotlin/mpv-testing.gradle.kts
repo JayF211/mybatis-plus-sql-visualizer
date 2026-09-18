@@ -246,6 +246,19 @@ intellijPlatformTesting {
             task {
                 testClassesDirs = sourceSets["test"].output.classesDirs
                 classpath = classpath + sourceSets["test"].output
+                // T-Fix-TestDb 20260918：**每类一个测试 JVM**（forkEvery=1）。DB 集成类依赖的 DBN
+                // 状态是**应用级**的：数据源（LocalDataSourceManager）、控制台登记
+                // （JdbcConsole$ScriptingDatabaseSessionClientHolder 的 project user data 列表）、
+                // 引擎/会话、DbPsiFacade 快照——同 JVM 内跨类串扰已实测出多条失败：
+                //   ① 前序类残留数据源让「恰好 N 个 runner」契约读到别人建的数据源；
+                //   ② 移除数据源触发的引擎终止与后一类的 attachConsole 并发 → DBN 清扫
+                //      （getActiveClients 逐条 dispose isValid()=false 的控制台）顺手回收刚建的控制台
+                //      （`console DISPOSED right after attach`，插件 T-PreviewExecDs-03 F3 同款现象）；
+                //   ③ exec 文件路径在同一个 light 工程里恒定 → 控制台/文档/VFS 状态跨类残留。
+                // 测试侧已做的隔离（稳定工程目录 + 用例边界摘控制台/清文档）无法消除①②的竞态，
+                // 因为它们来自应用级单例；分 JVM 是这类「共享应用级状态」平台测试的标准隔离手段。
+                // 代价：5 个类各一次 JVM 冷启动（约 +2~3 分钟）。
+                forkEvery = 1
                 // M36.5.23：DB 集成测试配置
                 //  - mpDemoProjectDir：demo 项目路径（读 dataSources.xml 连接信息），默认兄弟目录。
                 //    密码硬编码在测试里（root/root，从 demo application.yml 复制，本地开发库无敏感性）。

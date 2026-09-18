@@ -8,8 +8,10 @@ import com.intellij.database.dataSource.LocalDataSourceManager
 import com.intellij.database.util.GuardedRef
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.sql.dialects.SqlDialectMappings
+import com.intellij.testFramework.LightProjectDescriptor
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -47,6 +49,23 @@ import javax.xml.parsers.DocumentBuilderFactory
  * 运行：`./gradlew testDatabase`
  */
 class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
+
+    /** introspect 期间持有的连接守卫（close 即释放连接，见 [introspectDataSource] 内注释）。 */
+    private var introspectRef: GuardedRef<*>? = null
+
+    /** 控制台编辑器夹具的持有标记（造/释放见 [DbIntegrationProjectSupport.installExecEditor]）。 */
+    private var execEditor: Editor? = null
+
+    /**
+     * 稳定 light 工程目录（testDatabase 通道五类共用，根因见 [DbIntegrationProjectSupport] 类注释）：
+     * 默认描述符下工程目录 = JVM 里首个用例的 unitTest 临时目录，被属主用例 tearDown 递归删除。
+     */
+    override fun getProjectDescriptor(): LightProjectDescriptor = DbIntegrationProjectSupport.descriptor
+
+    override fun setUp() {
+        super.setUp()
+        DbIntegrationProjectSupport.allowRootAccess(testRootDisposable)
+    }
 
     private val demoProjectDir: File
         get() = File(System.getProperty("mpDemoProjectDir", "../mybatis-plus-sql-visualizer-demo"))
@@ -135,7 +154,12 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
         }
         val ref = future.get() ?: return@runCatching "createBlocking future null"
         val loaded = waitUntil(90_000) { !LocalDataSourceManager.getInstance(project).isLoading(ds) }
-        ref.close()
+        // 不在此 close：GuardedRef.close() 释放连接（DatabaseConnectionManager.releaseConnection 语义，
+        // 见 Builder.createBlockingNonCancellable 返回 GuardedRef<DatabaseConnection>），引擎随之终止；
+        // 控制台/session 是连接的下游——连接先死则控制台 attach 后立刻被 DBN 回收（20260918 实测
+        // `console DISPOSED right after attach: disposed=true`）。守卫留到 tearDown 关闭，
+        // 等价真机里用户会话持着连接（用例结束即释放，不跨用例泄漏）。
+        introspectRef = ref
         if (loaded) null else "isLoading 未结束（90s 超时）"
     }.getOrElse { e ->
         val cause = (e as? java.util.concurrent.ExecutionException)?.cause ?: e
@@ -153,51 +177,10 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
     }
 
     /**
-     * 构造临时 .sql PsiFile（与 DataSourceSelector.createTempPsiFile 等价的最小集：
-     * 项目内 `.idea/sql-visualizer/exec/mpsql-exec.sql` + MySQL 方言预映射 + PsiFile）。
-     * runner 发现按文件 working-dir 匹配数据源，故必须落在项目内。
+     * 反射探针与收敛等待的实现已收编 [DbIntegrationProjectSupport]
+     * （discoverRunners / runnerName / awaitRunners）——本类与另外两个 DB 集成类共用同一份探针，
+     * 语义不变：直接调真实平台 API `DatabaseRunners.getAttachDataSourceRunners`，不绕插件封装。
      */
-    private fun buildExecPsiFile(sql: String): Pair<com.intellij.openapi.vfs.VirtualFile, com.intellij.psi.PsiFile>? {
-        val base = project.basePath ?: return null
-        val dir = File(base, ".idea/sql-visualizer/exec").apply { mkdirs() }
-        val f = File(dir, "mpsql-exec.sql").apply { writeText(sql) }
-        val vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(f) ?: return null
-        val mappings = SqlDialectMappings.getInstance(project)
-        @Suppress("UNCHECKED_CAST")
-        val values = mappings.javaClass.getMethod("getAvailableValues").invoke(mappings) as List<Any?>
-        val mysql = values.firstOrNull { (it as? com.intellij.lang.Language)?.id.equals("MySQL", ignoreCase = true) }
-        if (mysql != null) {
-            mappings.javaClass.getMethod("setMapping", com.intellij.openapi.vfs.VirtualFile::class.java, Any::class.java)
-                .invoke(mappings, vf, mysql)
-        }
-        return ReadAction.compute<com.intellij.psi.PsiFile?, Throwable> { com.intellij.psi.PsiManager.getInstance(project).findFile(vf) }
-            ?.let { vf to it }
-    }
-
-    /**
-     * 反射探针：直接调真实平台 API `DatabaseRunners.getAttachDataSourceRunners`
-     * （与 DataSourceSelector.getAttachDataSourceRunners 同签名的反射调用）。
-     * 这是 DataSourceSelector 选择逻辑的真实集成基础——本骨架直接验证平台契约，不绕插件封装。
-     * sessionConsumer 仅注册回调（不执行），discovery 阶段安全。
-     */
-    private fun discoverRunners(psiFile: com.intellij.psi.PsiFile, sql: String): List<Any> {
-        val consumer = com.intellij.util.Consumer<Any> { /* discovery only: registers callback */ }
-        return runCatching {
-            val clazz = Class.forName("com.intellij.database.console.DatabaseRunners")
-            val method = clazz.getMethod(
-                "getAttachDataSourceRunners",
-                com.intellij.psi.PsiFile::class.java,
-                String::class.java,
-                com.intellij.util.Consumer::class.java,
-            )
-            (method.invoke(null, psiFile, sql, consumer) as? List<*>)?.filterNotNull() ?: emptyList()
-        }.getOrDefault(emptyList())
-    }
-
-    /** 反射读取 Runner 显示名（数据源名，如 `mpj_demo@localhost-itest`）。 */
-    private fun runnerName(runner: Any): String = runCatching {
-        runner.javaClass.getMethod("getDisplayName").also { it.isAccessible = true }.invoke(runner) as? String
-    }.getOrNull() ?: "Unknown"
 
     /** 反射读取 DataSourceSelector 的 object 私有字段（sharedDataSourceName/preparedConsole）。 */
     private fun selectorField(name: String): Any? =
@@ -214,12 +197,23 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
      * 建的数据源跨用例可见；此前它们因 driver 解析不出去而被 DbImplUtil 过滤「隐形」，驱动种子
      * 修复后 resolveDriver 生效、残留变可见 → runners 非空 → 走弹窗分支（headless 无 frame
      * → NPE 红）。契约是「无数据源」路径，就须保证环境确实无数据源。
+     *
+     * 20260918：清空后还须**有界等待发现链收敛到 0**（见 [awaitRunners]）——否则取样落在
+     * facade 尚未跟上的中间态上，仍会走弹窗分支。
      */
     @Test
     fun testNoDataSourceReportedAsUnavailable() {
         assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable())
-        val mgr = com.intellij.database.dataSource.LocalDataSourceManager.getInstance(project)
-        mgr.dataSources.toList().forEach { runCatching { mgr.removeDataSource(it) } }
+        val removed = DbIntegrationProjectSupport.clearDataSources(project)
+        val psi = DbIntegrationProjectSupport.ensureExecFile(project, "SELECT 1")
+        assumeTrue("临时执行 PsiFile 构造失败（VFS/方言映射）", psi != null)
+        val runners = DbIntegrationProjectSupport.awaitRunners(psi!!.second, "SELECT 1", expected = 0)
+        assertEquals(
+            "清空数据源后平台不应再发现 runner（清掉=$removed，残留=${DbIntegrationProjectSupport.dataSourceNames(project)}，" +
+                "发现=${runners.map { DbIntegrationProjectSupport.runnerName(it) }}）",
+            0,
+            runners.size,
+        )
         var cbResult: Boolean? = null
         val errors = mutableListOf<String>()
         DataSourceSelector.prepareConsole(
@@ -238,13 +232,17 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
     /**
      * 单数据源发现契约：真实平台 API `getAttachDataSourceRunners` 返回恰好 1 个 runner，
      * 且 runner 显示名含数据源名。验证选择逻辑「单数据源」分支的输入正确（DB 相关，环境门控）。
+     *
+     * 20260918：① 前置清空 + 数据源名带唯一后缀——名字断言才有区分度（同名残留会让「含数据源名」
+     * 恒真）；② 发现结果有界等待收敛（[awaitRunners]）。
      */
     @Test
     fun testSingleSourceDiscoverableByRunner() {
         assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable())
         val info = readDemoDataSource("mpj_demo")
         assumeTrue("demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}", info != null)
-        val ds = createDataSource(info!!)
+        DbIntegrationProjectSupport.clearDataSources(project)
+        val ds = createDataSource(info!!, "-single")
         val introspectError = introspectDataSource(ds)
         // T-ExecDocGate：显式绿跳（assumeTrue 会被平台 runner 记为 failure 红任务）
         if (introspectError != null) {
@@ -252,27 +250,38 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
             return
         }
 
-        val psi = buildExecPsiFile("SELECT id FROM car_device_info WHERE id = 1")
+        val sql = "SELECT id FROM car_device_info WHERE id = 1"
+        val psi = DbIntegrationProjectSupport.ensureExecFile(project, sql)
         assumeTrue("临时执行 PsiFile 构造失败（VFS/方言映射）", psi != null)
         val (_, psiFile) = psi!!
 
-        val runners = discoverRunners(psiFile, "SELECT id FROM car_device_info WHERE id = 1")
-        assertEquals("单数据源时平台应返回恰好 1 个 runner", 1, runners.size)
-        val name = runnerName(runners.first())
+        val runners = DbIntegrationProjectSupport.awaitRunners(psiFile, sql, expected = 1)
+        assertEquals(
+            "单数据源时平台应返回恰好 1 个 runner（实际=${runners.map { DbIntegrationProjectSupport.runnerName(it) }}，" +
+                "应用级数据源=${DbIntegrationProjectSupport.dataSourceNames(project)}）",
+            1,
+            runners.size,
+        )
+        val name = DbIntegrationProjectSupport.runnerName(runners.first())
         assertTrue("runner 显示名应含数据源名 '${ds.name}'，实际='$name'", name.contains(ds.name))
     }
 
     /**
      * 多数据源发现契约：创建 2 个数据源，真实平台 API 返回 2 个 runner。
      * 验证选择逻辑「多数据源」分支的输入（N 个 → 弹出选择框）正确（DB 相关，环境门控）。
+     *
+     * 20260918：前置清空 + 两个唯一后缀名 + 有界收敛（同单数据源用例）；tearDown 的
+     * `FileSystemException: 另一个程序正在使用此文件` 随稳定工程目录一并消失
+     * （根因见 [DbIntegrationProjectSupport] 类注释——该异常与断言无关，是工程目录被删）。
      */
     @Test
     fun testMultiSourceDiscoveryReturnsAllRunners() {
         assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable())
         val info = readDemoDataSource("mpj_demo")
         assumeTrue("demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}", info != null)
-        val ds1 = createDataSource(info!!, "")
-        val ds2 = createDataSource(info, "2")
+        DbIntegrationProjectSupport.clearDataSources(project)
+        val ds1 = createDataSource(info!!, "-multi1")
+        val ds2 = createDataSource(info, "-multi2")
         val e1 = introspectDataSource(ds1)
         val e2 = introspectDataSource(ds2)
         // T-ExecDocGate：显式绿跳（同上）
@@ -281,13 +290,19 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
             return
         }
 
-        val psi = buildExecPsiFile("SELECT id FROM car_device_info WHERE id = 1")
+        val sql = "SELECT id FROM car_device_info WHERE id = 1"
+        val psi = DbIntegrationProjectSupport.ensureExecFile(project, sql)
         assumeTrue("临时执行 PsiFile 构造失败（VFS/方言映射）", psi != null)
         val (_, psiFile) = psi!!
 
-        val runners = discoverRunners(psiFile, "SELECT id FROM car_device_info WHERE id = 1")
-        assertEquals("多数据源时平台应返回 2 个 runner（选择分支输入）", 2, runners.size)
-        val names = runners.map { runnerName(it) }
+        val runners = DbIntegrationProjectSupport.awaitRunners(psiFile, sql, expected = 2)
+        assertEquals(
+            "多数据源时平台应返回 2 个 runner（选择分支输入，实际=${runners.map { DbIntegrationProjectSupport.runnerName(it) }}，" +
+                "应用级数据源=${DbIntegrationProjectSupport.dataSourceNames(project)}）",
+            2,
+            runners.size,
+        )
+        val names = runners.map { DbIntegrationProjectSupport.runnerName(it) }
         assertTrue("runner 列表应含 ds1=${ds1.name}，实际=$names", names.any { it.contains(ds1.name) })
         assertTrue("runner 列表应含 ds2=${ds2.name}，实际=$names", names.any { it.contains(ds2.name) })
     }
@@ -295,13 +310,19 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
     /**
      * 单数据源静默选择契约：prepareConsole 对唯一数据源应**不弹选择框**直接选中 →
      * isPrepared()=true 且 sharedDataSourceName==数据源名。证明选择决策正确（DB 相关，环境门控）。
+     *
+     * 20260918：前置清空 + 唯一名 + 有界收敛，另加**控制台编辑器夹具**——控制台文档即 exec 文件
+     * 文档（`JdbcConsole.getDocument()` 字节码实证），headless 下无人为它建编辑器 →
+     * `prepareInConsole` 的 `getEditors(consoleDocument)` 恒空 → 静默返回 → 120s 不就绪且
+     * errors=[]（基线 idea.log `[M36] editor=null (async wait)` 实证）。
      */
     @Test
     fun testPrepareConsoleSilentlySelectsSingleSource() {
         assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable())
         val info = readDemoDataSource("mpj_demo")
         assumeTrue("demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}", info != null)
-        val ds = createDataSource(info!!)
+        DbIntegrationProjectSupport.clearDataSources(project)
+        val ds = createDataSource(info!!, "-silent")
         val introspectError = introspectDataSource(ds)
         // T-ExecDocGate：显式绿跳（assumeTrue 会被平台 runner 记为 failure 红任务）
         if (introspectError != null) {
@@ -309,15 +330,36 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
             return
         }
 
+        val sql = "SELECT id, station_id FROM car_device_info WHERE id = 1"
+        val psi = DbIntegrationProjectSupport.ensureExecFile(project, sql)
+        assumeTrue("临时执行 PsiFile 构造失败（VFS/方言映射）", psi != null)
+        val (_, psiFile) = psi!!
+        // 单数据源是静默选择分支的输入，先钉住（残留数据源会让契约退化成弹窗分支）
+        val runners = DbIntegrationProjectSupport.awaitRunners(psiFile, sql, expected = 1)
+        assertEquals(
+            "静默选择契约要求发现链恰好给出 1 个 runner（实际=${runners.map { DbIntegrationProjectSupport.runnerName(it) }}）",
+            1,
+            runners.size,
+        )
+        execEditor = DbIntegrationProjectSupport.installExecEditor(project)
+        assertNotNull("控制台编辑器夹具应可建（prepareConsole 依赖 getEditors(consoleDocument) 非空）", execEditor)
+
         var prepared = false
         val errors = mutableListOf<String>()
         DataSourceSelector.prepareConsole(
             project = project,
-            sql = "SELECT id, station_id FROM car_device_info WHERE id = 1",
+            sql = sql,
             onError = { errors.add(it) },
             callback = { prepared = it },
         )
-        assertTrue("prepareConsole 120s 内未就绪 (errors=$errors)", waitUntil(120_000) { DataSourceSelector.isPrepared() })
+        val preparedInTime = DbIntegrationProjectSupport.waitWithPump(120_000) { DataSourceSelector.isPrepared() }
+        if (!preparedInTime) {
+            println("[DB-IT] prepareConsole 未就绪诊断: ${DbIntegrationProjectSupport.diagnoseConsoleState(project, ds)}")
+        }
+        assertTrue(
+            "prepareConsole 120s 内未就绪 (errors=$errors)",
+            preparedInTime,
+        )
         assertTrue("prepareConsole callback 应返回 true", prepared)
         assertTrue("准备阶段不应有错误 (errors=$errors)", errors.isEmpty())
         val selected = selectorField("sharedDataSourceName") as? String
@@ -325,7 +367,15 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
     }
 
     override fun tearDown() {
-        runCatching { DataSourceSelector.clearPrepared() }
+        introspectRef?.let { runCatching { it.close() } }
+        introspectRef = null
+        DbIntegrationProjectSupport.detachDbnConsole(project)
+        DbIntegrationProjectSupport.releaseExecEditors(project)
+        // T-PreviewExecDs-03 / M36.5.10：单例的 prepared/shared 槽位跨用例存活（clearPrepared 只清
+        // prepared，shared 控制台仍在）——下一个用例会经 reuseSharedConsole 命中上个用例的控制台，
+        // 而该控制台的编辑器/文档属于上个用例的夹具。面板关闭语义的清理是 releaseForPanel
+        // （clearPrepared + dropSharedConsole + 清 pendingOnConsole），用例边界用它。
+        runCatching { DataSourceSelector.releaseForPanel() }
         // T-TestDbDriver：object 单例的 temp Psi 缓存跨用例存活（clearPrepared 刻意不清，见 T-ExecCopyFix F2c）——
         // 而 BasePlatformTestCase 每个用例换一套 fixture 临时目录，残留缓存指向已拆目录 →
         // 「VFS not visible after refresh / 另一个程序正在使用此文件」。用例间必须显式清缓存。
