@@ -1195,7 +1195,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      *
      * T-EmbedFkOrder F2：本方法**不**清理 JOIN 虚拟外键注册表——它可能在建新图之前被调用（此时
      * 新图尚未登记，清了也无害），也可能在换图/卸载时被调用（此时若清会把刚登记的抹掉）。
-     * 注册表的清理职责在明确语义点：登记前自带 clear 与 [unloadJoinDiagram]。
+     * 注册表的清理职责在明确语义点（三点口径）：登记前自带 clear、[unloadJoinDiagram]（无 JOIN/
+     * 面板清空）与面板 [dispose]（T-PS4-14④）。
      */
     private fun clearNativeDiagram() {
         currentNativeDiagram?.let {
@@ -1742,6 +1743,27 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     // 自动落盘（内容刚由本写入落盘，再写一遍纯属自己与自己抢）
                     cn.song.mybatisplus.visualizer.execute.ExecDocAutosaveGate.suppressDuring {
                         WriteCommandAction.runWriteCommandAction(project) { nativeDoc.setText(text) }
+                        // T-PS4-12 定案①：同临界区落盘（照 DataSourceSelector.writeVfTextViaDocument
+                        // 手法，isDocumentUnsaved → saveDocument）——闸门前提「内容由本写入落盘」
+                        // 在此成真，formatted 文本不再滞留 modified-unsaved（第七轮审计发现本体）。
+                        //
+                        // 「磁盘存原文还是 formatted」核实结论（T-PreviewConsoleFmt F1/F2 +
+                        // T-PreviewFast P1/P3 定例）：挂载后磁盘跟随 document 是既定语义——
+                        //  1) ConsoleFmt F1 定例 = 控制台挂载后渲染链把 formatted 回填进控制台
+                        //     文档，文档内容（=控制台所见）即权威；
+                        //  2) T-PreviewFast P1 `execFileContentMatches` 定例 = 有已加载 document
+                        //     时以 document 文本为准（注释原文「也是落盘会写入的内容」）；
+                        //  3) 「磁盘存预览原文」仅是预热路径的写入，且只发生在文档未挂编辑器时
+                        //     （ConsoleFmt F2 + PreviewFast P3：文档打开时预热跳过内容刷新）；
+                        //  4) 落盘 formatted 不改变执行语义：执行链执行前同步的是控制台文档内容，
+                        //     用户手改兜底（F5）落盘的同样是 document 内容。
+                        // 故本写入落盘 formatted 与既有定例一致；孤儿文档（getFile null，测试缝
+                        // createDocument 形态）无盘可落，自然跳过。
+                        val fdm = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+                        val vf = fdm.getFile(nativeDoc)
+                        if (vf != null && fdm.isDocumentUnsaved(nativeDoc)) {
+                            fdm.saveDocument(nativeDoc)
+                        }
                     }
                 } finally {
                     suppressAutoPopup = false
@@ -3031,6 +3053,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-Perf-16：释放 DataSourceSelector 单例滞留引用（弹窗关闭此前不走 clear 按钮路径——
         // prepared/shared/pendingOnConsole 强引用已关闭面板与原生控制台，堆转储滞留整棵面板树）
         SqlExecutor.releaseForPanel()
+        // T-PS4-14④：面板 dispose 是 JOIN 虚拟外键注册表的最后语义回收点（T-EmbedFkOrder
+        // 「显式语义点回收」三点口径：登记前 registerJoinForeignKeys 自带 clear + 无 JOIN 路径
+        // unloadJoinDiagram + 面板 dispose）——最后一张 JOIN 图建图的登记此前驻留到下次建图，
+        // 残留期 JoinVirtualFkProvider EP 会给用户自开的 Database 图补出旧连线。runCatching
+        // 照邻居清理件风格（释放失败不阻断 dispose 链）
+        runCatching {
+            cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport.clearRegisteredFk()
+        }
         // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
         Disposer.dispose(this)
     }
