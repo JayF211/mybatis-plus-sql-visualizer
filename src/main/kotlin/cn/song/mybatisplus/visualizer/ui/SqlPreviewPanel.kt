@@ -1489,11 +1489,30 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // 这里只「进」；「出」收口在 showJoinDiagram 末尾（单一收口点，两条分支都过它）。
             diagramPanel.showLoading()
             if (proj == null) {
-                showJoinDiagram(JoinDiagramGenerator.buildDiagramModel(stmt))
+                // T-TS-05：buildDiagramModel 移入 try——抛在 showJoinDiagram 调用**之前**时，
+                // showJoinDiagram 的 finally 根本没机会执行，转圈会留在宿主层。
+                try {
+                    showJoinDiagram(JoinDiagramGenerator.buildDiagramModel(stmt))
+                } catch (t: Throwable) {
+                    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                        .warn("[T-F8] join diagram build failed (no project), loading cleared by finally", t)
+                }
                 return
             }
             com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
-                val base = JoinDiagramGenerator.buildDiagramModel(stmt)
+                // T-TS-05：建模型同样在 try 内——本拍一旦抛，pooled 线程终止、下面的 invokeLater
+                // 永不投递，转圈就永远留在宿主层（收尾方只剩 showJoinDiagram，而它不会被调用）。
+                val base = try {
+                    JoinDiagramGenerator.buildDiagramModel(stmt)
+                } catch (t: Throwable) {
+                    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                        .warn("[T-F8] join diagram model build failed (background)", t)
+                    // 回 EDT 摘转圈：作废判定同下面那拍——转圈属于「当前加载」，不能摘后一次预览的
+                    com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                        if (current === result && project?.isDisposed != true) diagramPanel.hideLoading()
+                    }
+                    return@executeOnPooledThread
+                }
                 val enriched = try {
                     cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher.enrich(proj, base)
                 } catch (t: Throwable) {
@@ -1511,7 +1530,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     // 要么走无 JOIN 分支（unloadJoinDiagram → diagramPanel.clear() 复位）。
                     if (current !== result || project?.isDisposed == true) return@invokeLater
                     if (!contributed) diagramEnrichRetryTarget = result
-                    showJoinDiagram(enriched)
+                    // T-TS-05：建图异常不逃逸到平台事件泵——逃逸只会让平台记一条无上下文的错，
+                    // 而转圈已由 showJoinDiagram 的 finally 摘下；这里补一条带上下文的 warn 便于定位。
+                    try {
+                        showJoinDiagram(enriched)
+                    } catch (t: Throwable) {
+                        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                            .warn("[T-F8] join diagram build failed (post-enrich), loading cleared by finally", t)
+                    }
                 }
             }
         } else {
@@ -1531,38 +1557,62 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * T-F8：本方法末尾是加载态的**唯一收口点**——两条调用分支（[updateDiagramTab] 的无 project
      * 同步分支与后台富化回 EDT 分支）都经此，故「摘转圈」写在这里而不是各调用点：结构上保证
      * 转圈一定晚于渲染被摘（原生图建图/自绘测量都在本方法内同步完成），调用方也不会漏收尾。
+     *
+     * T-TS-05：收尾改成 `try { … } finally`——原生框架建图（`buildTabComponent` 反射链/文件编辑器
+     * 创建）与自绘测量都可能抛，原先的「顺序执行 + 末尾摘转圈」在异常逃逸时直接跳过摘转圈那行，
+     * 用户看到的是转圈永远留在宿主层（且异常还会顺着 EDT 事件泵往上冒）。finally 保证「进过加载态
+     * 就一定出」，异常照旧向上抛给调用方的带日志兜底。
      */
     private fun showJoinDiagram(model: DiagramModel) {
-        val nativeEnabled = PluginSettings.getInstance().state.joinDiagramNative
-        // T-EmbedFkOrder F1：**必须先清旧图、再建新图**——旧图 dispose 会清空 JOIN 虚拟外键注册表
-        //（JoinFkRegistry），顺序颠倒会把新图刚登记的 ON 条件整批抹掉：Database 原生图于是只剩节点
-        // 没有连线（真机实证：同一面板里"一张图有连线、另一张没有"；含子查询的走 wrapper 路径不读
-        // 注册表，故不受影响）。清理集中在此处（建图之前），登记之后不再有人清它。
-        clearNativeDiagram()
-        val native = if (nativeEnabled) {
-            // T-Embed-03 降级链：Database 原生图（真实 DbTable + 虚拟外键 JOIN 线）优先，
-            // 数据源缺席/表未定位/框架异常回落 A 路径自实现 Provider，再回落自绘渲染器
-            (project?.let {
-                cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport
-                    .buildTabComponent(it, model, MpSqlVisualizerBundle.message("diagram.tab.title"), this)
-            })
-                ?: NativeJoinDiagramSupport.buildTabComponent(project, model, MpSqlVisualizerBundle.message("diagram.tab.title"), this)
-        } else {
-            null
+        try {
+            // T-TS-05 测试缝：注入一个会抛的 render 复现建图异常路径（正常为 null）。
+            // 为什么需要缝：结构合法的模型在测试沙盒里几乎不抛（同 DiagramPanel.renderGuarded 的
+            // 单独成函数理由），异常兜底路径否则只能靠人工改线上代码才验得出来。
+            val injectedRender = diagramRenderForTest
+            if (injectedRender != null) {
+                injectedRender(model)
+                return
+            }
+            val nativeEnabled = PluginSettings.getInstance().state.joinDiagramNative
+            // T-EmbedFkOrder F1：**必须先清旧图、再建新图**——旧图 dispose 会清空 JOIN 虚拟外键注册表
+            //（JoinFkRegistry），顺序颠倒会把新图刚登记的 ON 条件整批抹掉：Database 原生图于是只剩节点
+            // 没有连线（真机实证：同一面板里"一张图有连线、另一张没有"；含子查询的走 wrapper 路径不读
+            // 注册表，故不受影响）。清理集中在此处（建图之前），登记之后不再有人清它。
+            clearNativeDiagram()
+            val native = if (nativeEnabled) {
+                // T-Embed-03 降级链：Database 原生图（真实 DbTable + 虚拟外键 JOIN 线）优先，
+                // 数据源缺席/表未定位/框架异常回落 A 路径自实现 Provider，再回落自绘渲染器
+                (project?.let {
+                    cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport
+                        .buildTabComponent(it, model, MpSqlVisualizerBundle.message("diagram.tab.title"), this)
+                })
+                    ?: NativeJoinDiagramSupport.buildTabComponent(project, model, MpSqlVisualizerBundle.message("diagram.tab.title"), this)
+            } else {
+                null
+            }
+            diagramTabHost.removeAll()
+            if (native != null) {
+                currentNativeDiagram = native
+                diagramTabHost.add(native, java.awt.BorderLayout.CENTER)
+            } else {
+                diagramTabHost.add(diagramPanel, java.awt.BorderLayout.CENTER)
+                diagramPanel.showDiagram(model)
+            }
+            diagramTabHost.revalidate()
+            diagramTabHost.repaint()
+        } finally {
+            // T-F8：图已换入 → 退出加载态（渲染失败时 showDiagram 内部已落错误页并复位，此处幂等）。
+            // T-TS-05：异常路径同样必须走到这里——否则转圈永留宿主层。
+            diagramPanel.hideLoading()
         }
-        diagramTabHost.removeAll()
-        if (native != null) {
-            currentNativeDiagram = native
-            diagramTabHost.add(native, java.awt.BorderLayout.CENTER)
-        } else {
-            diagramTabHost.add(diagramPanel, java.awt.BorderLayout.CENTER)
-            diagramPanel.showDiagram(model)
-        }
-        diagramTabHost.revalidate()
-        diagramTabHost.repaint()
-        // T-F8：图已换入 → 退出加载态（渲染失败时 showDiagram 内部已落错误页并复位，此处幂等）
-        diagramPanel.hideLoading()
     }
+
+    /**
+     * T-TS-05 异常兜底测试缝：非 null 时 [showJoinDiagram] 的换图动作改走它（注入会抛的 render）。
+     *
+     * 只在测试里赋值；生产恒 null（多一次空判，无语义影响）。
+     */
+    internal var diagramRenderForTest: ((DiagramModel) -> Unit)? = null
 
     /**
      * 释放并移除当前原生图组件（内部 FileEditor 经 clientProperty 定位后 dispose）。
@@ -3742,6 +3792,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** T-F8：当前是否走原生图路径（「停转圈时图已换入」的另一分支——原生路径不经过 [diagramPanel]）。 */
     internal fun hasNativeDiagramForTest(): Boolean = currentNativeDiagram != null
+
+    /**
+     * T-TS-05：JOIN 图标签页的加载面（测试断言用）——标签页内容必须**是它**。
+     *
+     * 与 [diagramPanelForTest] 的 `isLoadingForTest` 互补：后者只断「加载态为真」，把标签页内容改回
+     * [diagramTabHost]（加载面不在层级里）也照样为真；真机默认原生图路径下 [diagramPanel] 被
+     * `removeAll()` 摘出层级，转圈根本画不出来。故需按对象身份断结构。
+     */
+    internal fun diagramLoadingHostForTest(): JBLoadingPanel = diagramLoadingHost
+
+    /** T-TS-05：内容区标签页容器（测试断言用；未切到标签页模式时为 null）。 */
+    internal fun contentTabPaneForTest(): javax.swing.JTabbedPane? = contentTabPane
 
     /** T-RefreshDbSteal F3：当前挂接的 rehost 监听是否仍在组件上（解绑断言用）。 */
     internal fun rehostListenerAttachedForTest(): Boolean {

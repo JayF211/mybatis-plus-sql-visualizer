@@ -41,6 +41,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import javax.swing.JButton
 import javax.swing.SwingUtilities
@@ -184,6 +185,82 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         )
         panel.clear()
         assertFalse("整图卸载后不得卡转圈", panel.diagramPanelForTest().isLoadingForTest())
+    }
+
+    /**
+     * T-TS-05 第二层失效守卫（一）：JOIN 图标签页的内容**必须**是宿主加载面板。
+     *
+     * 为什么单独立项：`testDiagramLoadingWrapsBackgroundEnrichment` 断的「进/出序列 + 退出时图已换入」
+     * 在「把 addTab 目标改回 `diagramTabHost`」之后**仍然全绿**——探针挂在 [DiagramPanel] 的显式 API 上，
+     * 与转圈画在哪一层无关。而真机默认原生图路径下 `showJoinDiagram` 的 `diagramTabHost.removeAll()`
+     * 会把图面板摘出层级，加载面不在标签页内容里的那一刻，转圈就再也画不出来（F8 的原始形态）。
+     */
+    fun testDiagramTabContentIsHostLoadingPanel() {
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(joinResult())
+        val host = panel.diagramLoadingHostForTest()
+        val tabPane = panel.contentTabPaneForTest()
+        assertNotNull("JOIN 预览应切到标签页模式（否则没有加载面可挂）", tabPane)
+        val tabContents = (0 until tabPane!!.tabCount).map { tabPane.getComponentAt(it) }
+        assertTrue(
+            "JOIN 图标签页内容必须是宿主加载面板（实际标签页内容=$tabContents）；" +
+                "改回 diagramTabHost 则原生图路径下转圈被 removeAll 摘出层级、永不出现",
+            tabContents.any { it === host },
+        )
+        assertTrue("加载窗口内宿主层应在转（宿主即真机默认路径下唯一可见的加载面）", host.isLoading)
+        panel.clear()
+    }
+
+    /**
+     * T-TS-05 第二层失效守卫（二）：图面板的出圈层**必须**是宿主加载面板。
+     *
+     * 与用例（一）互补：`isLoadingForTest` 读的是委托结果，删掉 [DiagramPanel.bindHostLoadingPanel]
+     * 注入后它照样自洽地反映面板内部 `contentLayer`——单看它为真断不出「转圈画在了哪一层」。
+     * 故这里按对象身份断「出圈层 === 宿主」，让注入被删这件事必红。
+     */
+    fun testDiagramPanelLoadingTargetIsHostLoadingPanel() {
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(joinResult())
+        val host = panel.diagramLoadingHostForTest()
+        assertSame(
+            "图面板出圈层必须是宿主加载面板（删掉 bindHostLoadingPanel 注入即回落到面板内部层——" +
+                "原生图路径下该层被 removeAll 摘出层级，转圈不可见）",
+            host,
+            panel.diagramPanelForTest().loadingTargetForTest(),
+        )
+        assertTrue(
+            "面板加载态 API 必须反映宿主层（isLoadingForTest 断的是委托结果，宿主侧同步为真）",
+            host.isLoading && panel.diagramPanelForTest().isLoadingForTest(),
+        )
+        panel.clear()
+    }
+
+    /**
+     * T-TS-05 异常兜底：建图抛异常时转圈必须被摘下。
+     *
+     * 原实现是「顺序执行 + 末尾摘转圈」：`JoinDiagramGenerator.buildDiagramModel` 与原生框架建图
+     * 都在 try 之外/无 finally 保护，一旦抛异常（原生图反射链、文件编辑器创建、自绘测量），
+     * 摘转圈那行直接被跳过——用户看到的是转圈永远留在宿主层；后台路径上异常还会让 pooled 线程
+     * 终止、`invokeLater` 永不投递，收尾方（`showJoinDiagram`）根本不会被调用。
+     * 修复 = `try { … } finally { hideLoading() }` + buildDiagramModel 移入 try + 调用方带日志兜底。
+     */
+    fun testDiagramRenderFailureClearsLoading() {
+        val panel = SqlPreviewPanel(project)
+        panel.diagramRenderForTest = { throw IllegalStateException("diagram boom") }
+        panel.showResult(joinResult())
+        val deadline = System.currentTimeMillis() + 10_000
+        while (panel.diagramPanelForTest().isLoadingForTest() && System.currentTimeMillis() < deadline) {
+            // 修复前建图异常会从 EDT 拍逃逸到事件泵（转圈卡住的同一根因）；本用例要断的是转圈状态，
+            // 故吞掉逃逸异常继续排空队列——修复后（finally + 调用方带日志兜底）不会有异常逃逸。
+            runCatching { UIUtil.dispatchAllInvocationEvents() }
+            Thread.sleep(20)
+        }
+        assertFalse(
+            "建图抛异常后必须摘转圈（原实现异常逃逸会跳过摘转圈那行，转圈永留宿主层）",
+            panel.diagramPanelForTest().isLoadingForTest(),
+        )
+        assertFalse("宿主层同样不得卡转圈", panel.diagramLoadingHostForTest().isLoading)
+        panel.clear()
     }
 
     /**
