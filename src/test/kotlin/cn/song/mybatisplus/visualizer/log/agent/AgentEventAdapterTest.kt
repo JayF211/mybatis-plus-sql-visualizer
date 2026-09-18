@@ -135,6 +135,29 @@ class AgentEventAdapterTest {
     }
 
     @Test
+    fun 数值判定常量_行为等价防回潮() {
+        // T-PS4-04：isNumericType/isNumericLike 两条正则提 object 级常量（renderParam 逐参数调用，
+        // agent 会话读线程热路径）。常量为 private，本用例按行为等价钉住语义防回潮：
+        // 回退「每次 matches(Regex(...)) 现场编译」行为不变测试仍绿（性能项），但模式被改坏必红。
+        fun render(value: String?, type: String?) =
+            AgentEventAdapter.restore("SELECT ?", listOf(LogSqlParam(value, type)))
+        // 数值形态 + 数值类型 → 直出（整数/负数/小数全形态）
+        assertEquals("SELECT 7", render("7", "Long"))
+        assertEquals("SELECT -3", render("-3", "Integer"))
+        assertEquals("SELECT 1.5", render("1.5", "Double"))
+        assertEquals("SELECT 0.25", render("0.25", "BigDecimal"))
+        // 数值形态 + String 类型 → 加引号（类型判定拦住）
+        assertEquals("SELECT '7'", render("7", "String"))
+        assertEquals("SELECT '1.5'", render("1.5", null))
+        // 非数值形态 + 数值类型 → 加引号（形态判定拦住）
+        assertEquals("SELECT 'abc'", render("abc", "Long"))
+        assertEquals("SELECT '1,5'", render("1,5", "Double"))
+        assertEquals("SELECT '+1'", render("+1", "Long"))
+        assertEquals("SELECT '1e3'", render("1e3", "Double"))
+        assertEquals("SELECT ' 7'", render(" 7", "Long"))
+    }
+
+    @Test
     fun dedupeKey与桥通道一致_同一SQL同指纹() {
         // 口径：dedupeKey 只管面板去重（两侧**手写同一 restoredSql** 时同指纹）。
         // 注意本用例不是「跨通道集成」守卫——它不经过控制台解析链，故过去的失配（布尔参数渲染、

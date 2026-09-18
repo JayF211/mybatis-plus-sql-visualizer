@@ -173,7 +173,10 @@ internal fun sqlFingerprint(sql: String): String {
  * 大小写与分号不动——COUNT 前缀判定、达梦带引号标识符大小写均不受影响。
  */
 internal fun normalizeSqlWhitespace(sql: String): String =
-    sql.trim().replace(Regex("""\s+"""), " ")
+    sql.trim().replace(WHITESPACE_RUN_REGEX, " ")
+
+/** T-PS4-04：空白折叠正则提文件级常量（dedupeKey lazy/stampLogTime/桥嗅探三路共用，一处受益三路）。 */
+private val WHITESPACE_RUN_REGEX = Regex("""\s+""")
 
 /**
  * T-AgentLogTime：日志时间关联键——**占位符版 rawSql 的指纹**。
