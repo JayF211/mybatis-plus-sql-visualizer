@@ -58,4 +58,15 @@ bug 账统计 → 工程量核算 → spike 试钻（限时）→ 三方案对�
 
 ## 七、实施记录（实施后回填）
 
-（未实施）
+**已完成（2026-09-18，分支 `t-fidelity-eval`，基线 8a3a6ff）。**
+
+**产出**：`docs/调研报告/20260918-T-FidelityEval-高保真求值模式评估报告.md`；变更记录总册顶部表格已追加入库行；本计划 §七 回填。只产出 docs，未碰生产源码；spike 代码只在系统临时目录 `%TEMP%\mpsv-fidelity-spike\`，主源码树与工作树干净。评估型任务无产品变更，未写 CHANGELOG。
+
+**四问结论摘要**：
+
+1. **收益量化**：自研求值管线历史缺陷账 **15 条**（M24 至 T-DollarInjectMark，三源交叉：git 全分支 log + 变更记录 M24~M29 段 + memory-archive）。按计划口径二分——标签/表达式/解析语义 **3 条（20%）**、mock 值语义 **3 条（20%）**、面板回填/接线/性能/显示/MP 生态 **9 条（60%）**。提交号：`d5dcd55` `18fadbe` `0e2eb2c` `b17d691` `a19b3bd` `a60bf4a` `06ebb9a` `3a35139` `347d162` `70f8383` `80f1be9` `c322f32` `9b6af09` `c3ee1bd` `aa607c4` `3959a8e`。两条关键补充：foreach/trim/choose 标签语义自 M24 落地后**零缺陷回修**（`ForeachSqlNode.kt` 仅被静态字段、显示 trim、计数转发与 Kotlin→Java 移植改过），反驳「标签语义维护税高」的立项前提；另在册未修 1 条 `IfSqlNode.kt:19-23`（if test 求值失败静默 true 不记错，即 O-31 的 T-EP-02），是真引擎唯一能覆盖而自研尚缺的实质缺口。结论与计划预判一致：**历史偏差大头不在标签语义**。
+2. **成本核算**：完整旁路 **11~17 人天**；最小可用旁路 **7~10 人天**。分阶段——P1 配置输入最小方案 2~3（隐藏成本：mapper 解析期 `resultType`/`parameterType`/别名解析失败即硬失败）；P2 参数真实类型对象构造 3~4（复用 `ui/XmlParamTypeResolver` 读取链，与 T-ParamTypeContract 的 T-PT-01/T-PT-03 共建，可延后）；P3 用户库 URL 收集 + child-first 隔离 classloader 3~4（全仓零 `LibraryUtil`/`OrderRootType` 先例，估算置信度最低）；P4 e2e 测试基建 1~2（与方案 C 完全重叠）；P5 对照结果展示 2~4（含「条件开关模型无法被真引擎保留」的交互冲突）。字面量化层可基本复用（真引擎 `parameterMappings.property` 序列与 `RenderedXmlSql.mappings` 同形，面板消费链 `SqlPreviewPanel.kt:1741-1749` 与 MCP `MapperCheckTool.kt:94-103` 走适配器即可）。
+3. **架构红线核对 + spike**：零 mybatis 依赖红线成立（`build.gradle.kts:103` implementation 仅 jsqlparser）。限时 spike 在本会话内跑通（**SPIKE RESULT: PASS**）——headless JDK8 + 手工 javac/java，mybatis 3.5.19 jar 取自 gradle cache，未给插件加依赖、未跑 gradle；`SpikeMain.java` 编译期 classpath 不含 mybatis，全链路 `Class.forName(..., isolated)` + Method 从声明类取。实录要点：宿主 `Class.forName("org.apache.ibatis.session.Configuration")` → CNFE；隔离 loader 载入 mybatis 与用户实体；官方 DOCTYPE 由 jar 内 DTD 本地解析；`if`/`foreach`/嵌套 `foreach`/`${}`/`@demo.Const@FLAG`/用户实体对象作 `_parameter` 全部按预期工作，`?` 队列顺序与 SQL 一致；两个一次性 loader 的 `OgnlRuntime` 为不同 Class，OGNL 全局 accessor 静态表不跨 loader（宿主零污染，Z-10 配套机制层确认可行）。失败形态实录（旁路脆弱性证据）：`||X||` 真引擎抛 `ExpressionSyntaxException: Malformed OGNL expression`；mapper 解析期 `resultType` 指向隔离 classpath 不存在的类 → `BuilderException: Could not resolve type alias 'demo.Missing'`，即硬失败而非降级。**未验证项（环境受限未验证）**：262 平台库 URL 收集、读权限包裹、真实插件 classloader 委派、loader 生命周期与失效重建、真实用户项目（多模块 / mybatis-plus 包装 / 别名注册表）解析成功率五项均未在 IDE 平台验证。
+4. **替代方案对照**：A 真引擎生产旁路（7~17 人天，收益面 20%，且模型层与现行「条件开关为分支唯一真值源」不兼容）／B 同工程量投自研（O-31 AST 预检层 + if test 静默点修复 + N-26 mock 分派，3.5~5 人天，零生产风险）／C 只建语义对照测试集（测试基建用真引擎生成期望产物钉住自研行为，不进生产路径，1~2 人天，对照协议已核实可行：自研 `XmlSqlRenderer.render` 接受任意 bindings，可绕开 mock 层喂同一批真实值）。
+
+**建议**：**go-替代——方案 C 为主 + 方案 B 并行，方案 A 建议 no-go**（no-go 不是因为做不到，spike 已证明机制可行；而是收益 20%、成本 7~17 人天、且要放弃 M24 建立的条件开关交互）。交用户定案；Z-1 从吸收清单改记「评估后定案」，本任务终结。
