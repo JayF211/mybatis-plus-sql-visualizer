@@ -53,6 +53,25 @@ import java.nio.file.Paths
  *  - ksuid 后缀使每次 JVM 运行都是新目录（跨运行无残留状态），同一 JVM 内恒定
  *    （五个类共用一个 descriptor 实例 → 平台判等复用同一工程）。
  *
+ * ## 为什么需要 [deleteOwnProjectDir] / [sweepOrphanProjectDirs]（T-TS-08）
+ *
+ * 「平台不删」是本目录设计的**前提**（上一条），代价是它也没有任何清理路径：`forkEvery = 1`
+ * 下每个测试类一个 JVM → 每轮 `testDatabase` 恒定新增 5 个目录。20260918 复核实测已积 28 个、
+ * 每轮 +5，属无界增长（磁盘与 `%TEMP%` 条目污染，且每次真机排障都要在一堆同名目录里认路）。
+ * 本对象因此自管清理，两条互补：
+ *  ① **关闭钩子**（[deleteOwnProjectDir]）——本 JVM 退出时递归删自己的目录，只删自己 ksuid
+ *     后缀那一个，零跨进程风险。**实测（20260918 本轮五轮实跑）：子项全部删净，但目录项本身被占**
+ *     （删完立刻手工 `rmdir` 成功 → 占位者随本 JVM 一起消失；进一步对照实验排除了「子进程占位」：
+ *     钩子里先 `ProcessHandle.descendants()` 收掉全部子进程再删，照样失败），故占位者是**本进程内的
+ *     句柄**（最可能是平台 VFS 的文件监听），只在进程真正退出时释放。10×500ms 重试赢不了这个竞态，
+ *     故实现是「有界重试 + 失败留痕 + **刻意留下孤儿标记**」：删不掉时目录里只剩 [OWNER_LOCK_NAME]，
+ *     交给②在后续 JVM 里精确收走（不抛错、不影响测试结论）。
+ *  ② **孤儿清扫**（[sweepOrphanProjectDirs]）——JVM 启动时回收同前缀目录，判据不是时长而是
+ *     **属主存活标记**（[OWNER_LOCK_NAME] 上的文件锁，OS 在属主 JVM 退出时自动释放）：
+ *     抢得到锁 = 属主已死 → 可删；抢不到 = 属主仍在跑 → 跳过。这使①留下的空壳在**下一轮开跑时
+ *     即清零**（不必等阈值），且「不误删正在用的目录」是精确判据而非概率（并行会话/并行分片
+ *     各持自己的锁）。无标记文件的老目录（本修复前遗留）回落到闲置时长阈值 [STALE_AFTER_MS]。
+ *
  * ## 为什么需要 [installExecEditor]（控制台编辑器夹具）
  *
  * `JdbcConsole.getDocument()` 的字节码是
@@ -70,11 +89,158 @@ object DbIntegrationProjectSupport {
     /** exec 临时文件目录名（与 `SqlLogAutoSaver.DATA_DIR_NAME` 一致，路径形态见 [DataSourceSelector.projectExecFile]）。 */
     private const val DATA_DIR_NAME = "sql-visualizer"
 
+    /** 本对象自管目录的前缀（[sweepOrphanProjectDirs] 按它认领同族目录）。 */
+    private const val PROJECT_DIR_PREFIX = "mpsql-db-itest-"
+
+    /** 属主存活标记文件名（[sweepOrphanProjectDirs] 的活性判据，见类注释）。 */
+    private const val OWNER_LOCK_NAME = ".mpsql-owner.lock"
+
+    /** 无标记文件的老目录（本修复前遗留）的回落阈值：闲置超过此时长才清扫。 */
+    private const val STALE_AFTER_MS = 2 * 60 * 60 * 1000L
+
+    /**
+     * 无标记**空目录**的回落宽限：空目录只可能是「内容已被删净、目录项被占」的残骸，
+     * 留 60s 宽限是为了不碰「属主刚建目录、标记文件还没落地」的瞬时窗口（实测该窗口内目录也为空）。
+     */
+    private const val EMPTY_GRACE_MS = 60 * 1000L
+
+    /** 关闭钩子里删自己目录的重试次数/间隔（见 [deleteOwnProjectDir] 的实测说明）。 */
+    private const val CLEANUP_ATTEMPTS = 10
+    private const val CLEANUP_RETRY_MS = 500L
+
     /** 整个测试 JVM 共用的工程目录（系统 temp 根下，不含 `unitTest_` 前缀）。 */
     val projectDir: Path = Paths.get(
         System.getProperty("java.io.tmpdir"),
-        "mpsql-db-itest-${Ksuid.generate()}",
+        "$PROJECT_DIR_PREFIX${Ksuid.generate()}",
     )
+
+    /**
+     * 属主存活标记：本 JVM 独占持有 [projectDir] 下 [OWNER_LOCK_NAME] 的文件锁，**JVM 一退出
+     * OS 即释放**——下一轮 JVM 据此判定「这个目录的属主已经不在」，无需任何超时猜测。
+     * 拿不到（极端情况：目录不可写）时为 null，此时本目录只会被时长阈值规则回收，不会误删。
+     */
+    private val ownerLock: java.nio.channels.FileChannel? = runCatching {
+        Files.createDirectories(projectDir)
+        java.nio.channels.FileChannel.open(
+            projectDir.resolve(OWNER_LOCK_NAME),
+            java.nio.file.StandardOpenOption.CREATE,
+            java.nio.file.StandardOpenOption.WRITE,
+        ).also { it.lock() }
+    }.onFailure {
+        println("[DB-IT] owner lock unavailable: ${it.javaClass.simpleName}: ${it.message}")
+    }.getOrNull()
+
+    init {
+        // 顺序有意：先回收孤儿目录（含上一轮删失败的），再登记本 JVM 的关闭钩子
+        sweepOrphanProjectDirs()
+        runCatching {
+            Runtime.getRuntime().addShutdownHook(Thread({ deleteOwnProjectDir() }, "mpsql-db-itest-cleanup"))
+        }.onFailure {
+            println("[DB-IT] addShutdownHook(project dir cleanup) failed: ${it.javaClass.simpleName}: ${it.message}")
+        }
+    }
+
+    /**
+     * 递归删除 [projectDir]（本 JVM 的工程目录），带重试；失败只留痕不抛。
+     *
+     * 两步：
+     *  ① 关 [ownerLock]——Windows 删不掉自己持有锁的文件，不关则标记文件必留（目录连带留）；
+     *  ② 重试 + 留孤儿标记——**子项总是删得掉，卡住的是目录项本身**（本轮五轮实跑全是这个形态：
+     *     子项删净、`Files.delete(dir)` 失败）。占位者经对照实验排除：先
+     *     `ProcessHandle.current().descendants()` 收掉本 JVM 全部子进程（DBN 的 RemoteJdbcServer 等，
+     *     实测确有 3 个，`stubborn=[]`）**再删，照样失败**——故占位者是**本进程内的句柄**
+     *     （最可能是平台 VFS 的文件监听），它只在进程真正退出时才释放，而本钩子跑在退出之前，
+     *     这个竞态在本进程内无解。于是设计成两段式：本钩子尽力删（删净子项、刻意留下
+     *     [OWNER_LOCK_NAME] 作孤儿标记），目录项交给 [sweepOrphanProjectDirs] 在**后续 JVM**
+     *     （那时本进程已死、句柄已释放）收走。
+     */
+    private fun deleteOwnProjectDir() {
+        runCatching { ownerLock?.close() }
+        var ok = false
+        repeat(CLEANUP_ATTEMPTS) {
+            if (ok) return@repeat
+            ok = deleteRecursively(projectDir, keepLockFile = true)
+            if (!ok) runCatching { Thread.sleep(CLEANUP_RETRY_MS) }
+        }
+        if (ok) {
+            println("[DB-IT] project dir cleaned: $projectDir")
+        } else {
+            println("[DB-IT] project dir not fully removed (目录项被本进程句柄占，已留孤儿标记供后续 JVM 收走): $projectDir")
+        }
+    }
+
+    /**
+     * 回收同前缀的**孤儿**目录（不含本 JVM 自己的），判据见 [isOwnerGone]。
+     *
+     * 单个目录删除失败不影响其余（并行会话的目录可能正好被占用——那种情况判据本就会跳过）。
+     */
+    private fun sweepOrphanProjectDirs() {
+        val tmp = Paths.get(System.getProperty("java.io.tmpdir"))
+        val orphans = runCatching {
+            Files.list(tmp).use { stream ->
+                stream.filter { Files.isDirectory(it) && it.fileName.toString().startsWith(PROJECT_DIR_PREFIX) }
+                    .filter { it != projectDir }
+                    .filter { isOwnerGone(it) }
+                    .toList()
+            }
+        }.getOrElse {
+            println("[DB-IT] orphan project dir sweep skipped: ${it.javaClass.simpleName}: ${it.message}")
+            return
+        }
+        if (orphans.isEmpty()) return
+        val cleaned = orphans.filter { deleteRecursively(it) }
+        println("[DB-IT] orphan project dirs swept: ${cleaned.size}/${orphans.size}（候选=${orphans.map { it.fileName }}）")
+    }
+
+    /**
+     * 该目录的属主是否已不在（= 可以删）：
+     *  - **有存活标记** → 试抢它的文件锁：抢到 = 属主 JVM 已退出（OS 已释放锁），可删；
+     *    抢不到 = 属主仍在跑（或另一个清扫者正在删它），跳过。这是「不误删正在用的目录」的精确判据。
+     *  - **无标记且为空** → 只可能是「内容已删净、目录项被占」的残骸（活目录必有标记与工程文件），
+     *    超过 [EMPTY_GRACE_MS] 即可删。此规则是实测补出来的：标记会被清扫链自己删掉
+     *    （抢锁成功后连标记一起删），此时若目录项仍被占，剩下的空目录既无标记、又不到时长阈值。
+     *  - **无标记且非空** → 老目录（本修复前遗留）或他方工作树产物：回落到闲置时长阈值
+     *    [STALE_AFTER_MS]（单轮 `testDatabase` 最坏路径也在 20 分钟内结束，2 小时足够；
+     *    活跃目录的 mtime 会随用例写盘持续刷新）。
+     */
+    private fun isOwnerGone(dir: Path): Boolean {
+        val lockPath = dir.resolve(OWNER_LOCK_NAME)
+        if (Files.exists(lockPath)) {
+            return runCatching {
+                java.nio.channels.FileChannel.open(lockPath, java.nio.file.StandardOpenOption.WRITE).use { ch ->
+                    val lock = ch.tryLock()
+                    if (lock == null) false else {
+                        lock.release()
+                        true
+                    }
+                }
+            }.getOrDefault(false)
+        }
+        return runCatching {
+            val age = System.currentTimeMillis() - Files.getLastModifiedTime(dir).toMillis()
+            val empty = Files.list(dir).use { it.findFirst().isEmpty }
+            (empty && age > EMPTY_GRACE_MS) || age > STALE_AFTER_MS
+        }.getOrDefault(false)
+    }
+
+    /**
+     * 递归删除（先子后父）；返回目录是否真的消失。任何单个条目失败都不中断其余。
+     *
+     * @param keepLockFile true = 跳过 [OWNER_LOCK_NAME]（见 [deleteOwnProjectDir] 的孤儿标记说明）；
+     *                     仅删自己目录时用——孤儿清扫要连标记一起删掉。
+     */
+    private fun deleteRecursively(dir: Path, keepLockFile: Boolean = false): Boolean {
+        if (!Files.exists(dir)) return true
+        runCatching {
+            Files.walk(dir).use { stream ->
+                stream.sorted(Comparator.reverseOrder()).forEach { p ->
+                    if (keepLockFile && p.fileName?.toString() == OWNER_LOCK_NAME) return@forEach
+                    runCatching { Files.delete(p) }
+                }
+            }
+        }
+        return !Files.exists(dir)
+    }
 
     /**
      * 五个 DB 集成类共用的工程描述符（`getProjectDescriptor()` 返回它）。
@@ -168,6 +334,10 @@ object DbIntegrationProjectSupport {
      * 实测：测试侧 `File.writeText` 裸写盘 + 后续 refresh 就撞上）。控制台文档即 exec 文件文档
      * （见类注释），故该文档在控制台挂过之后一直存在，裸写必炸。
      *
+     * **T-TS-08 补正**：上面的纪律原先只写在注释里、实现却仍无条件先裸写盘（见方法内注释）——
+     * 该不一致在「前一个用例留下未保存的 exec 文档」时必然触发硬抛，本轮已按注释口径改实现
+     * （有文档只走文档写；saveDocument 的 from-save 事件被冲突判定直接放过）。
+     *
      * 返回的 PsiFile 已做 MySQL 方言预映射——runner 发现按文件 working-dir 匹配数据源，
      * 故文件必须落在项目内（[projectDir]）。
      */
@@ -178,9 +348,15 @@ object DbIntegrationProjectSupport {
         val fdm = FileDocumentManager.getInstance()
         val cachedVf = lfs.findFileByIoFile(f)
         val cachedDoc = cachedVf?.let { fdm.getCachedDocument(it) }
-        // 磁盘先行：磁盘与文档内容恒等（内容即最终内容）
-        if (!f.isFile || f.readText() != sql) f.writeText(sql)
         if (cachedDoc != null) {
+            // T-TS-08：**有文档就只走文档写**，绝不裸写盘（原实现无条件先 `f.writeText(sql)`，
+            // 与其自身 KDoc 的「有文档走文档写、只有无文档才裸写盘」相反）。差别是硬伤不是洁癖：
+            // `MemoryDiskConflictResolver.beforeContentChange` 只对**非 save 来源**的磁盘内容变更
+            // 登记冲突（源码实证 `if (event.isFromSave()) return;` + `isDocumentUnsaved(document)`
+            // + 戳不等），而 `saveDocument` 产生的是 from-save 事件、直接被放过。于是裸写盘在
+            // 「文档已改未存 + 戳不同」时登记冲突，随后在**任意一次**文档写里硬抛
+            // `Unexpected memory-disk conflict in tests`——20260918 实测：本夹具自己的裸写盘就是
+            // 触发器（前一个用例留下未保存文档 → 本用例裸写盘 → prepareConsole 的文档写炸掉）。
             if (cachedDoc.text != sql) {
                 @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
                 WriteAction.compute<Unit, Throwable> { cachedDoc.setText(sql) }
@@ -191,6 +367,13 @@ object DbIntegrationProjectSupport {
             // 也不留下 unsaved 态给下一个用例。
             (cachedDoc as? DocumentEx)?.setModificationStamp(cachedVf!!.modificationStamp)
             fdm.saveDocument(cachedDoc)
+            // 兜底：文档未改（saveDocument 不落盘）而磁盘内容仍不对（盘被外部改过）时才裸写盘——
+            // 此刻 isDocumentUnsaved 为假，登记冲突的两个前提都不成立，安全。
+            // （`Document.isModified` 已从接口移除，判未保存走 FileDocumentManager#isDocumentUnsaved）
+            if (!fdm.isDocumentUnsaved(cachedDoc) && (!f.isFile || f.readText() != sql)) f.writeText(sql)
+        } else {
+            // 无文档：只能裸写盘（此后 refresh 建 VFS 条目 → 首读建文档，不存在「已改未存」的旧文档）
+            if (!f.isFile || f.readText() != sql) f.writeText(sql)
         }
         val vf = lfs.refreshAndFindFileByIoFile(f) ?: return null
         val mappings = com.intellij.sql.dialects.SqlDialectMappings.getInstance(project)
@@ -227,13 +410,20 @@ object DbIntegrationProjectSupport {
     /**
      * tearDown：收口 exec 文档并释放**该文档上的全部编辑器**。
      *
-     * 两步都不能省：
+     * 三步都不能省：
      *  ① `saveDocument`——文档若滞留「已修改未保存」，下一用例的写盘/refresh 会撞
      *    `MemoryDiskConflictResolver` 硬抛（见 [ensureExecFile] KDoc）；
      *  ② 释放全部编辑器——平台 `TestApplicationKt.checkEditorsReleased` 对**每个**存活编辑器
      *    硬抛（源码实证），而该文档上的编辑器不止测试侧造的那一个：`attachConsole` 之后
      *    DBN 控制台自己的视图也会为同一份文档建编辑器（20260918 实测：只放行测试侧那一个仍报
      *    `Editor EditorImpl[...mpsql-exec.sql] hasn't been released`）。
+     *  ③ **释放后再落盘一次**（T-TS-08 补）——释放编辑器本身会提交挂起的文档变更（PSI commit
+     *    把文档重新标成 modified），若停在①的落盘结果上，文档会以「已改未存」状态进入平台
+     *    `super.tearDown()`；平台 teardown 对项目文件存在**非 save 来源**的写，而
+     *    `MemoryDiskConflictResolver.beforeContentChange` 只对非 save 写登记冲突（前提：
+     *    `isDocumentUnsaved` + 戳不同）→ 冲突被登记，随后在**下一个用例**的任意一次文档写里硬抛
+     *    （20260918 实测：报错点是下一个用例的 `prepareConsole`，登记点正是 `super.tearDown()`）。
+     *    这一步把「用例边界文档必为已保存态」钉死，与用例内容无关。
      */
     fun releaseExecEditors(project: Project) {
         val fdm = FileDocumentManager.getInstance()
@@ -252,6 +442,12 @@ object DbIntegrationProjectSupport {
         factory.allEditors.forEach { ed ->
             runCatching { factory.releaseEditor(ed) }.onFailure {
                 println("[DB-IT] releaseEditor($ed) failed: ${it.javaClass.simpleName}: ${it.message}")
+            }
+        }
+        // ③ 见 KDoc：释放编辑器可能把文档重新标脏，必须再收一次
+        if (doc != null && fdm.isDocumentUnsaved(doc)) {
+            runCatching { fdm.saveDocument(doc) }.onFailure {
+                println("[DB-IT] saveDocument(mpsql-exec.sql) after release failed: ${it.javaClass.simpleName}: ${it.message}")
             }
         }
     }

@@ -35,6 +35,8 @@ import javax.xml.parsers.DocumentBuilderFactory
  *      prepareConsole 静默复用（不弹选择框）→ isPrepared()=true 且 sharedDataSourceName==数据源名
  *      （证明「按单数据源自动选中」的选择决策正确，无弹窗）。
  *   3. **多数据源** → 真实平台 API 返回 N 个 runner（选择分支的输入：N 个 → 弹出选择框）。
+ *   4. **控制台编辑器不可得**（T-TS-09）→ prepareConsole 必须回调 onError，不静默挂死
+ *      （修复前 `prepareInConsole` 两处静默返回，调用方无任何回调）。
  *
  * 运行环境：`testDatabase` 任务（独立沙盒、Database 插件真实加载、复用 runIde 沙盒 MySQL 驱动）。
  * 默认 `test` 任务已排除本类（其 classpath 剥离 database jar，否则类加载即 NoClassDefFoundError）。
@@ -364,6 +366,88 @@ class DataSourceSelectorIntegrationTest : BasePlatformTestCase() {
         assertTrue("准备阶段不应有错误 (errors=$errors)", errors.isEmpty())
         val selected = selectorField("sharedDataSourceName") as? String
         assertEquals("静默选择应记录唯一数据源名（无弹窗）", ds.name, selected)
+    }
+
+    /**
+     * T-TS-09：**控制台编辑器不可得 → 必须回调 onError**（可诊断性缺口直测）。
+     *
+     * 与 [testPrepareConsoleSilentlySelectsSingleSource] 是同一准备链的**反面输入**：那条用例
+     * 用 [DbIntegrationProjectSupport.installExecEditor] 补上真实 IDE 里由控制台 UI 提供的编辑器，
+     * 本用例**不补**——`prepareInConsole` 用 `getEditors(consoleDocument)` 反查执行用编辑器，
+     * 恒空时修复前是两处静默（`:1267` 同步路径 `?: return`、`:1284` 异步路径无 else）：
+     * 调用方既收不到 onError 也收不到 callback，面板停在「执行中」且 errors=[]——正是驱动管线
+     * 打通前观测到的「120s 不就绪 + 错误为空」的成因（基线 idea.log `[M36] editor=null (async wait)`）。
+     *
+     * 断言口径：onError 在 60s 内到达，且准备链未走完（isPrepared()=false）。打印实际文案即可看出
+     * 命中的是 sync（非 EDT 轮询）还是 async（EDT 异步等待）分支——两条分支成因不同，都由本用例覆盖。
+     *
+     * 环境门槛同本类其余 DB 用例（testDatabase 任务 + demo 数据源 + 本地 MySQL）。
+     */
+    @Test
+    fun testPrepareConsoleWithoutConsoleEditorReportsError() {
+        assumeTrue("Database 插件未加载（应在 testDatabase 任务下运行）", ExecuteSqlSupport.isAvailable())
+        val info = readDemoDataSource("mpj_demo")
+        assumeTrue("demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}", info != null)
+        DbIntegrationProjectSupport.clearDataSources(project)
+        val ds = createDataSource(info!!, "-noeditor")
+        val introspectError = introspectDataSource(ds)
+        // T-ExecDocGate：显式绿跳（assumeTrue 会被平台 runner 记为 failure 红任务）
+        if (introspectError != null) {
+            println("[DB-IT] SKIP: introspect 失败（MySQL 未运行/驱动管线未修复）: $introspectError")
+            return
+        }
+
+        // SQL **刻意与紧随其后的 testPrepareConsoleSilentlySelectsSingleSource 逐字相同**：
+        // exec 文件是五类共用的**同一路径**，而 `writeVfTextViaDocument` 在「文档内容 != 目标文本」
+        // 时才 setText+save，save 内部会 `VirtualFile.refresh()`，该 refresh 触发的 VFS 内容变更事件
+        // **不带 from-save 标记** → `MemoryDiskConflictResolver` 登记冲突，随后在事件队列 flush 时
+        // 若文档/文件戳仍不等就硬抛 `Unexpected memory-disk conflict in tests`（本轮堆栈实证：
+        // writeVfTextViaDocument:3370 → doSaveDocument:377 → VirtualFile.refresh:674 →
+        // RefreshSessionImpl.fireEventsInWriteAction → beforeContentChange:57）。
+        // 让本用例留下的内容与下一个用例一致，下一个用例就整段跳过 setText+save，不再走那条登记链。
+        val sql = "SELECT id, station_id FROM car_device_info WHERE id = 1"
+        val psi = DbIntegrationProjectSupport.ensureExecFile(project, sql)
+        assumeTrue("临时执行 PsiFile 构造失败（VFS/方言映射）", psi != null)
+        val (_, psiFile) = psi!!
+        // 单数据源是静默选择分支的输入，先钉住（残留数据源会让准备链退化成弹窗分支）
+        val runners = DbIntegrationProjectSupport.awaitRunners(psiFile, sql, expected = 1)
+        assertEquals(
+            "本用例要求发现链恰好给出 1 个 runner（实际=${runners.map { DbIntegrationProjectSupport.runnerName(it) }}）",
+            1,
+            runners.size,
+        )
+        // 前置钉死「编辑器不可得」：控制台文档即 exec 文件文档（见 DbIntegrationProjectSupport 类注释），
+        // 先释放其上全部存活编辑器——forkEvery=1 下本类用例同 JVM，前序用例的夹具可能残留，
+        // 不显式释放则本用例的前置条件取决于执行顺序（顺序依赖假失败）。
+        DbIntegrationProjectSupport.releaseExecEditors(project)
+
+        var cbResult: Boolean? = null
+        val errors = mutableListOf<String>()
+        DataSourceSelector.prepareConsole(
+            project = project,
+            sql = sql,
+            onError = { errors.add(it) },
+            callback = { cbResult = it },
+        )
+        val notified = DbIntegrationProjectSupport.waitWithPump(60_000) { errors.isNotEmpty() }
+        assertTrue(
+            "编辑器不可得时 onError 必须回调（修复前此处静默返回：面板停在「执行中」且 errors=[]，" +
+                "callback 也永不触发）——errors=$errors, callback=$cbResult",
+            notified,
+        )
+        assertFalse("准备链不应走完（无编辑器 → prepareAfterEditorResolved 未执行）", DataSourceSelector.isPrepared())
+        println("[DB-IT] editor-unavailable onError: ${errors.first()}")
+
+        // 显式收口（不等 tearDown）：本用例把控制台挂上后**中止**了准备链，这是既有用例都没有过的
+        // 状态（其余用例要么走完整链、要么从未 attach）。**立即**摘控制台 + 落盘，把「文档已改未存」
+        // 的窗口压到最短——该窗口内任何**非 save 来源**的写盘（DBN 控制台自身、平台 teardown 都会做）
+        // 都会被 MemoryDiskConflictResolver 登记成冲突，并在**下一个用例**的任意一次文档写里硬抛
+        // `Unexpected memory-disk conflict in tests`（20260918 实测：报错点是下一个用例的
+        // prepareConsole）。故意不在这里额外 pump 事件队列——pump 只会拉长该窗口。
+        DbIntegrationProjectSupport.detachDbnConsole(project)
+        DbIntegrationProjectSupport.releaseExecEditors(project)
+        runCatching { DataSourceSelector.releaseForPanel() }
+        runCatching { DataSourceSelector.clearCachedTempPsiFileForTest() }
     }
 
     override fun tearDown() {
