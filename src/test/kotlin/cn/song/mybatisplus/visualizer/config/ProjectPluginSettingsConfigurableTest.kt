@@ -5,7 +5,9 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JComboBox
 import javax.swing.JTextField
@@ -180,5 +182,298 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         assertFalse(cfg.isModified())
         assertEquals("reset 不应写 state", "", st.tablePrefix)
         cfg.disposeUIResources()
+    }
+
+    // ------------------------------------------------------------------
+    // T-ProjectSettingsScope P1/P2：总开关分态呈现 + 「重置为跟随全局」
+    // ------------------------------------------------------------------
+
+    /**
+     * 造一份「项目自定义值」与「与之逐项不同的全局值」，用于分态呈现断言。
+     * 全局 `dialectAuto=false` 是关键：否则关闭态方言显示的是「智能推断」哨兵项而非全局方言名。
+     */
+    private fun seedDivergentValues() {
+        val global = PluginSettings.getInstance().state
+        global.dialectAuto = false
+        global.dialect = "MySQL"
+        global.replaceParams = false
+        global.formatSql = true
+        global.injectLogicDelete = false
+        global.logicDeleteValue = "g1"
+        global.tablePrefix = "g_"
+        global.tableSuffix = "_g"
+        global.tableNameInference = PluginSettings.INFERENCE_CAMEL
+        global.ignoredFields = "gIgnore"
+
+        val st = ProjectPluginSettings.getInstance(myFixture.project).state
+        st.useProjectSettings = false
+        st.dialectAuto = false
+        st.dialect = "PostgreSQL"
+        st.replaceParams = true
+        st.formatSql = false
+        st.injectLogicDelete = true
+        st.logicDeleteValue = "p1"
+        st.tablePrefix = "p_"
+        st.tableSuffix = "_p"
+        st.tableNameInference = PluginSettings.INFERENCE_SNAKE
+        st.ignoredFields = "pIgnore"
+    }
+
+    private fun checksOf(comp: java.awt.Component) = all(comp).filterIsInstance<JCheckBox>()
+
+    private fun combosOf(comp: java.awt.Component) = all(comp).filterIsInstance<JComboBox<*>>()
+
+    private fun textsOf(comp: java.awt.Component) = all(comp).filterIsInstance<JTextField>()
+
+    /** P1 用例一：关闭态 9 项一律显示全局生效值（页面所见即运行时所用），并置灰。 */
+    fun test关闭总开关_九项控件显示全局生效值且置灰() {
+        seedDivergentValues()
+        val cfg = newConfig()
+        val comp = cfg.createComponent()
+        val checks = checksOf(comp)
+        val combos = combosOf(comp)
+        val texts = textsOf(comp)
+
+        assertEquals("关闭态方言应显示全局方言名", "MySQL", combos[0].selectedItem)
+        assertEquals("关闭态 replaceParams 应显示全局值", false, checks[1].isSelected)
+        assertEquals("关闭态 formatSql 应显示全局值", true, checks[2].isSelected)
+        assertEquals("关闭态 injectLogicDelete 应显示全局值", false, checks[3].isSelected)
+        assertEquals("关闭态 logicDeleteValue 应显示全局值", "g1", texts[0].text)
+        assertEquals("关闭态 tablePrefix 应显示全局值", "g_", texts[1].text)
+        assertEquals("关闭态 tableSuffix 应显示全局值", "_g", texts[2].text)
+        assertEquals("关闭态 ignoredFields 应显示全局值", "gIgnore", texts[3].text)
+        assertEquals(
+            "关闭态推断策略应显示全局值",
+            MpSqlVisualizerBundle.message("settings.tableNameInference.camel"),
+            combos[1].selectedItem.toString(),
+        )
+
+        assertFalse("关闭态方言下拉应置灰", combos[0].isEnabled)
+        assertFalse("关闭态 replaceParams 应置灰", checks[1].isEnabled)
+        assertFalse("关闭态 formatSql 应置灰", checks[2].isEnabled)
+        assertFalse("关闭态 injectLogicDelete 应置灰", checks[3].isEnabled)
+        assertFalse("关闭态 logicDeleteValue 应置灰", texts[0].isEnabled)
+        assertFalse("关闭态 tablePrefix 应置灰", texts[1].isEnabled)
+        assertFalse("关闭态 tableSuffix 应置灰", texts[2].isEnabled)
+        assertFalse("关闭态 ignoredFields 应置灰", texts[3].isEnabled)
+        assertFalse("关闭态推断策略下拉应置灰", combos[1].isEnabled)
+        cfg.disposeUIResources()
+    }
+
+    /** P1 用例二：关闭态 apply 不得把「显示的全局值」写成项目自定义值（钉住静默丢数据）。 */
+    fun test关闭总开关_apply不写回九项残值() {
+        seedDivergentValues()
+        val st = ProjectPluginSettings.getInstance(myFixture.project).state
+        val cfg = newConfig()
+        cfg.createComponent()
+        cfg.apply()
+
+        assertEquals("apply 不得覆盖方言残值", "PostgreSQL", st.dialect)
+        assertEquals("apply 不得覆盖 dialectAuto 残值", false, st.dialectAuto)
+        assertEquals("apply 不得覆盖 replaceParams 残值", true, st.replaceParams)
+        assertEquals("apply 不得覆盖 formatSql 残值", false, st.formatSql)
+        assertEquals("apply 不得覆盖 injectLogicDelete 残值", true, st.injectLogicDelete)
+        assertEquals("apply 不得覆盖逻辑删除值残值", "p1", st.logicDeleteValue)
+        assertEquals("apply 不得覆盖表前缀残值", "p_", st.tablePrefix)
+        assertEquals("apply 不得覆盖表后缀残值", "_p", st.tableSuffix)
+        assertEquals("apply 不得覆盖推断策略残值", PluginSettings.INFERENCE_SNAKE, st.tableNameInference)
+        assertEquals("apply 不得覆盖忽略字段残值", "pIgnore", st.ignoredFields)
+        assertFalse("总开关自身仍按控件态写回", st.useProjectSettings)
+        cfg.disposeUIResources()
+
+        // 第二段：关闭态下「空/null = 跟随全局」的字段，apply 后必须仍为空/null——
+        // 修复前会把显示的全局值写成硬覆盖值（state 语义被静默改写：跟随全局 → 覆盖为当时全局值）
+        val st2 = ProjectPluginSettings.getInstance(myFixture.project).state
+        st2.useProjectSettings = false
+        st2.tablePrefix = ""
+        st2.replaceParams = null
+        val cfg2 = newConfig()
+        cfg2.createComponent()
+        cfg2.apply()
+        assertEquals("关闭态 apply 不得把空字段写成硬覆盖值", "", st2.tablePrefix)
+        assertNull("关闭态 apply 不得把 null 开关写成硬覆盖值", st2.replaceParams)
+        cfg2.disposeUIResources()
+    }
+
+    /** P1 用例三：关闭态 isModified 恒 false（否则控件显示全局值 vs state 残值会恒报「已修改」）。 */
+    fun test关闭总开关_isModified恒false() {
+        seedDivergentValues()
+        val cfg = newConfig()
+        cfg.createComponent()
+        assertFalse("关闭态（控件显示全局值、state 存残值）不得报已修改", cfg.isModified())
+        cfg.apply()
+        assertFalse("关闭态 apply 后仍不得报已修改", cfg.isModified())
+        cfg.disposeUIResources()
+
+        val reopened = newConfig()
+        reopened.createComponent()
+        assertFalse("关闭态重开设置页不得报已修改", reopened.isModified())
+        reopened.disposeUIResources()
+    }
+
+    /** P1 用例四：切换总开关即时联动 9 项的可用性与显示值（无需 apply）。 */
+    fun test切换总开关_九项可用性与显示值联动() {
+        seedDivergentValues()
+        val cfg = newConfig()
+        val comp = cfg.createComponent()
+        val check = checksOf(comp).first()
+        val combos = combosOf(comp)
+        val texts = textsOf(comp)
+
+        assertFalse("初始总开关应关闭", check.isSelected)
+        assertFalse("初始关闭态应置灰", texts[1].isEnabled)
+        assertEquals("初始关闭态应显示全局值", "g_", texts[1].text)
+        assertEquals("初始关闭态方言应显示全局值", "MySQL", combos[0].selectedItem)
+
+        check.doClick() // 勾选：立即变为可编辑并显示项目自定义值
+        assertTrue("勾选后应可编辑", texts[1].isEnabled)
+        assertEquals("勾选后应显示项目自定义值", "p_", texts[1].text)
+        assertEquals("勾选后方言应显示项目自定义值", "PostgreSQL", combos[0].selectedItem)
+        assertEquals("勾选后 replaceParams 应显示项目自定义值", true, checksOf(comp)[1].isSelected)
+
+        check.doClick() // 取消勾选：回到置灰 + 全局值
+        assertFalse("取消勾选后应置灰", texts[1].isEnabled)
+        assertEquals("取消勾选后应回到全局值", "g_", texts[1].text)
+        assertEquals("取消勾选后方言应回到全局值", "MySQL", combos[0].selectedItem)
+
+        check.doClick() // 再次勾选：项目自定义值仍在（未被全局值覆盖）
+        assertTrue("再次勾选应可编辑", texts[1].isEnabled)
+        assertEquals("再次勾选应恢复项目自定义值", "p_", texts[1].text)
+        assertEquals("再次勾选方言应恢复项目自定义值", "PostgreSQL", combos[0].selectedItem)
+        cfg.disposeUIResources()
+    }
+
+    /** P2：重置按钮清空 9 项（dialectAuto 一并归 null），总开关保持不动。 */
+    fun test重置为跟随全局_九项归零且总开关保持() {
+        val global = PluginSettings.getInstance().state
+        global.tablePrefix = "g_"
+        val st = ProjectPluginSettings.getInstance(myFixture.project).state
+        st.useProjectSettings = true
+        st.dialectAuto = false
+        st.dialect = "PostgreSQL"
+        st.replaceParams = true
+        st.formatSql = false
+        st.injectLogicDelete = true
+        st.logicDeleteValue = "1"
+        st.tablePrefix = "p_"
+        st.tableSuffix = "_p"
+        st.tableNameInference = PluginSettings.INFERENCE_CAMEL
+        st.ignoredFields = "pIgnore"
+
+        val cfg = newConfig()
+        val comp = cfg.createComponent()
+        val resetButton = all(comp).filterIsInstance<JButton>()
+            .firstOrNull { it.text == MpSqlVisualizerBundle.message("settings.project.reset") }
+        assertNotNull("项目页应有「重置为跟随全局」按钮", resetButton)
+        resetButton!!.doClick()
+
+        assertEquals("dialect 应归空", "", st.dialect)
+        assertNull("dialectAuto 应归 null（跟随全局）", st.dialectAuto)
+        assertNull("replaceParams 应归 null", st.replaceParams)
+        assertNull("formatSql 应归 null", st.formatSql)
+        assertNull("injectLogicDelete 应归 null", st.injectLogicDelete)
+        assertEquals("logicDeleteValue 应归空", "", st.logicDeleteValue)
+        assertEquals("tablePrefix 应归空", "", st.tablePrefix)
+        assertEquals("tableSuffix 应归空", "", st.tableSuffix)
+        assertEquals("tableNameInference 应归空", "", st.tableNameInference)
+        assertEquals("ignoredFields 应归空", "", st.ignoredFields)
+        assertTrue("总开关不得被重置按钮改动", st.useProjectSettings)
+
+        // 控件随之刷新：开启态下 9 项全空 = 跟随全局，故显示全局值
+        assertEquals("重置后控件应回灌全局值", "g_", textsOf(comp)[1].text)
+        assertFalse("重置后不应报已修改", cfg.isModified())
+        cfg.disposeUIResources()
+    }
+
+    /**
+     * P3 前置对照实验（落地为路由守卫）：设置搜索的 navigateTo 走
+     * `Settings.find(类)` = `ConfigurableVisitor.findByType(类, 设置树根组)`，
+     * 故「登记进搜索索引」是否等于可跳转，取决于项目级 configurable 在不在设置树里。
+     *
+     * 实测：项目上下文命中（ConfigurableWrapper），project=null（Welcome 屏设置）不命中——
+     * 后者本就没有项目页，属已知边界。正对照：同一棵树必须能找到全局页，证明查找机制本身有效。
+     */
+    fun testP3路由断言_项目级configurable在项目上下文设置树中可被find命中() {
+        val projectGroup = com.intellij.openapi.options.ex.ConfigurableExtensionPointUtil
+            .getConfigurableGroup(myFixture.project, true)
+        assertNotNull(
+            "项目上下文设置树应含项目级设置页（否则搜索索引登记项点不动=幽灵项）",
+            com.intellij.openapi.options.ex.ConfigurableVisitor.findByType(
+                ProjectPluginSettingsConfigurable::class.java,
+                listOf(projectGroup),
+            ),
+        )
+        assertNotNull(
+            "正对照：同一设置树应能找到全局设置页（证明查找机制非恒非空）",
+            com.intellij.openapi.options.ex.ConfigurableVisitor.findByType(
+                PluginSettingsFolderConfigurable::class.java,
+                listOf(projectGroup),
+            ),
+        )
+        val appGroup = com.intellij.openapi.options.ex.ConfigurableExtensionPointUtil
+            .getConfigurableGroup(null as com.intellij.openapi.project.Project?, true)
+        // 对照记录（非断言）：Welcome 屏设置（无项目）本就没有项目页，该上下文下条目点不动属已知边界
+        println(
+            "P3-PROBE project=null（Welcome 屏）树中项目页 = " +
+                com.intellij.openapi.options.ex.ConfigurableVisitor.findByType(
+                    ProjectPluginSettingsConfigurable::class.java,
+                    listOf(appGroup),
+                ),
+        )
+    }
+
+    /** 渲染器片段拼接文本（helper 与 PluginSettingsFolderConfigurableTest 同款）。 */
+    private fun joinedText(component: com.intellij.ui.SimpleColoredComponent): String {
+        val sb = StringBuilder()
+        val it = component.iterator()
+        while (it.hasNext()) sb.append(it.next())
+        return sb.toString()
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun renderedLines(
+        list: com.intellij.ui.components.JBList<*>,
+        value: Any?,
+    ): List<com.intellij.ui.SimpleColoredComponent> =
+        all((list.cellRenderer as javax.swing.ListCellRenderer<Any?>)
+            .getListCellRendererComponent(list, value, 0, false, false))
+            .filterIsInstance<com.intellij.ui.SimpleColoredComponent>()
+
+    /**
+     * P3 登记守卫：10 项（总开关 + 9 项可覆盖字段）逐个可被搜索命中，且命中行的「所属页面」
+     * 指向项目页 displayName——即条目确实路由到 [ProjectPluginSettingsConfigurable]。
+     * 遍历方式照抄 PluginSettingsFolderConfigurableTest（该文件归另一并行子任务所有，本地复制最小 helper）。
+     */
+    fun testP3搜索索引_十个项目页条目可命中且路由项目页() {
+        val cfg = PluginSettingsFolderConfigurable()
+        val comp = cfg.createComponent()
+        val list = all(comp).filterIsInstance<com.intellij.ui.components.JBList<*>>().first()
+        val search = all(comp).filterIsInstance<com.intellij.ui.SearchTextField>().first()
+        val pageName = MpSqlVisualizerBundle.message("configurable.settings.project.displayName")
+        val projectKeys = listOf(
+            "settings.project.useProjectSettings",
+            "settings.dialect",
+            "settings.replaceParams",
+            "settings.formatSql",
+            "settings.injectLogicDelete",
+            "settings.logicDeleteValue",
+            "settings.tablePrefix",
+            "settings.tableSuffix",
+            "settings.tableNameInference",
+            "settings.ignoredFields",
+        )
+        for (key in projectKeys) {
+            val label = MpSqlVisualizerBundle.message(key)
+            search.text = label
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            val routedToProjectPage = (0 until list.model.size).any { idx ->
+                val lines = renderedLines(list, list.model.getElementAt(idx))
+                lines.size == 2 && joinedText(lines[1]) == pageName
+            }
+            assertTrue(
+                "搜索「$label」应命中所属页面为「$pageName」的项目页条目",
+                routedToProjectPage,
+            )
+        }
     }
 }
