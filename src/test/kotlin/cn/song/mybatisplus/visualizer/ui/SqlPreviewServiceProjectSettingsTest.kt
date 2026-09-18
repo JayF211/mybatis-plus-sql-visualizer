@@ -165,4 +165,41 @@ class SqlPreviewServiceProjectSettingsTest : BasePlatformTestCase() {
             service.preview(anchor())!!.compactSql.trim(),
         )
     }
+
+    // ------------------------------------------------------------------
+    // T-TS-07：类名兜底路径的显式 project 取值口径
+    // ------------------------------------------------------------------
+
+    /**
+     * 实体类**不可解析**（`UnknownEntity` 未声明）→ 表名走类名兜底推断——
+     * 该路径原先不传 project（取「首个打开项目」），T-TS-07 改为传宿主 PSI 所属项目。
+     *
+     * 单项目夹具无法区分「本项目」与「首个打开项目」（二者同指本测试项目），故本用例钉的是
+     * **兜底路径确实读项目级表配置**（传参链未断）；多项目区分能力见验收留档。
+     */
+    fun test类名兜底推断_按项目级表前缀修饰() {
+        PluginSettings.getInstance().state.tablePrefix = ""
+        val ps = ProjectPluginSettings.getInstance(project).state
+        ps.useProjectSettings = true
+        ps.tablePrefix = "proj_"
+
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<UnknownEntity> w = new LambdaQueryWrapper<UnknownEntity>()
+                        .eq(UnknownEntity::getId, 1001L);
+                }
+            }
+            """.trimIndent(),
+        )
+        val sql = newService().preview(anchor())!!.compactSql
+        assertTrue(
+            "类名兜底推断（实体类不可解析）应按项目级表前缀修饰表名: $sql",
+            sql.contains("FROM proj_unknown_entity"),
+        )
+    }
 }

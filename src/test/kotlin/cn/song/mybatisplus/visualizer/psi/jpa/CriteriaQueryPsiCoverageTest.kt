@@ -1,6 +1,9 @@
 package cn.song.mybatisplus.visualizer.psi.jpa
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
 import cn.song.mybatisplus.visualizer.converter.jpa.CriteriaQueryConverter
+import cn.song.mybatisplus.visualizer.model.SelectStatement
 import com.intellij.psi.PsiMethod
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -477,6 +480,55 @@ class CriteriaQueryPsiCoverageTest : BasePlatformTestCase() {
         val stmt = CriteriaQueryConverter.convert(model!!)
         val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(stmt)
         assertTrue("SQL 应包含函数比较: $sql", sql.contains("LOWER(username) = 'admin'"))
+    }
+
+    // ------------------------------------------------------------------
+    // T-TS-07：类名兜底推断的显式 project 取值口径
+    // ------------------------------------------------------------------
+
+    /**
+     * 项目级 + 全局表配置同时设定并断言，finally 各自还原快照（两个服务都跨用例共享）。
+     */
+    private fun withProjectTableConfig(
+        useProjectSettings: Boolean,
+        projectPrefix: String,
+        globalPrefix: String = "",
+        block: () -> Unit,
+    ) {
+        val global = PluginSettings.getInstance()
+        val globalSnapshot = global.getState().copy()
+        val proj = ProjectPluginSettings.getInstance(project)
+        val projSnapshot = proj.getState().copy()
+        try {
+            global.state.tableNameInference = PluginSettings.INFERENCE_SNAKE
+            global.state.tablePrefix = globalPrefix
+            proj.state.useProjectSettings = useProjectSettings
+            proj.state.tablePrefix = projectPrefix
+            block()
+        } finally {
+            global.loadState(globalSnapshot)
+            proj.loadState(projSnapshot)
+        }
+    }
+
+    fun test端到端_显式project按该项目表配置修饰类名兜底表名() {
+        // T-TS-07：CriteriaQuery 的实体/join 表名只有类名字符串（JoinModel 不带 PsiClass），
+        // 恒走类名兜底推断——显式 project 是该路径唯一的取值口径来源
+        val model = CriteriaQueryModel(
+            entityClassName = "UserEntity",
+            entityClass = null,
+            joins = listOf(JoinModel(fieldName = "dept", entityClassName = "DeptEntity")),
+        )
+        withProjectTableConfig(useProjectSettings = true, projectPrefix = "proj_") {
+            val stmt = CriteriaQueryConverter.convert(model, project = project) as SelectStatement
+            assertEquals("主表类名兜底应按项目级前缀修饰", "proj_user_entity", stmt.table.tableName)
+            assertEquals("join 表名同口径", "proj_dept_entity", stmt.joins[0].tableName)
+        }
+        withProjectTableConfig(useProjectSettings = false, projectPrefix = "proj_") {
+            val stmt = CriteriaQueryConverter.convert(model, project = project) as SelectStatement
+            assertEquals("项目级关闭应回退全局（无前缀）", "user_entity", stmt.table.tableName)
+            assertEquals("join 表名同口径", "dept_entity", stmt.joins[0].tableName)
+        }
     }
 
     companion object {

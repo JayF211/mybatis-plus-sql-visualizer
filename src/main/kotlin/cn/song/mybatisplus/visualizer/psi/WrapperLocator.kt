@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassObjectAccessExpression
@@ -471,7 +472,8 @@ object WrapperLocator {
         val entityFromArg = if (entityClass == null) entityClassFromConstructorArg(newExpr) else null
         // 实参解析出的实体（T-M20-03）与类型实参解析结果一致地参与 table/chain 全链路
         val resolvedEntity = entityClass ?: entityFromArg
-        val table: TableInfo? = resolveTableInfo(resolvedEntity, typeArgName ?: resolvedEntity?.name)
+        // T-TS-07：兜底推断显式传本 new 表达式所属项目（多项目同开时不再受「首个打开项目」影响）
+        val table: TableInfo? = resolveTableInfo(resolvedEntity, typeArgName ?: resolvedEntity?.name, newExpr.project)
         val constructorAlias = extractConstructorAlias(newExpr)
 
         // 宿主 = 包含该 new 表达式的最外层表达式（如 list(new W().select(...).eq(...)) 的整个调用）
@@ -561,8 +563,8 @@ object WrapperLocator {
         // XB（M44）：xbatis 链实体解析——xbatis @Table 注解实体走 JpaEntityResolver
         // （@Table value / @TableField / @TableId / @Ignore 轨），MP 兼容注解实体走既有 MP EntityResolver
         var table: TableInfo? = when {
-            wrapperType == WrapperType.XBATIS -> resolveTableInfoForXbatis(entityClass, typeArgName)
-            else -> resolveTableInfo(entityClass, typeArgName)
+            wrapperType == WrapperType.XBATIS -> resolveTableInfoForXbatis(entityClass, typeArgName, factoryCall.project)
+            else -> resolveTableInfo(entityClass, typeArgName, factoryCall.project)
         }
         if (table == null) {
             table = inferEntityFromChain(factoryCall)
@@ -722,11 +724,13 @@ object WrapperLocator {
             ?.let { return EntityResolver().resolve(it) }
 
         // 文本兜底：类名推断表名（走统一推断策略 + 修饰链，T-M19.4 全局语义）+ getter 属性列（与既有命名策略兜底一致）
+        // T-TS-07：显式传宿主表达式所属项目——多项目同开且项目级表配置不同时，兜底推断不再
+        // 受「首个打开项目」影响（宿主是 PSI，project 必可得）
         val columns = refs.map { it.second }.distinct()
             .map { ColumnInfo(fieldName = it, columnName = NamingStrategy.toSnakeCase(it)) }
         return TableInfo(
             entityClassName = className,
-            tableName = EntityResolver.inferDecoratedTableName(className),
+            tableName = EntityResolver.inferDecoratedTableName(className, host.project),
             columns = columns,
         )
     }
@@ -946,9 +950,10 @@ object WrapperLocator {
             typeArgName = initTypeArg
         }
         // XB（M44）：xbatis 变量声明形态实体解析与工厂形态同轨（xbatis @Table → JpaEntityResolver）
+        // T-TS-07：兜底推断显式传变量所属项目（多项目同开时不再受「首个打开项目」影响）
         val table: TableInfo? = when {
-            wrapperType == WrapperType.XBATIS -> resolveTableInfoForXbatis(entityClass, typeArgName)
-            else -> resolveTableInfo(entityClass, typeArgName)
+            wrapperType == WrapperType.XBATIS -> resolveTableInfoForXbatis(entityClass, typeArgName, variable.project)
+            else -> resolveTableInfo(entityClass, typeArgName, variable.project)
         }
         val constructorAlias = extractConstructorAlias(variable.initializer)
 
@@ -1260,15 +1265,22 @@ object WrapperLocator {
      * XB（M44）：xbatis 链实体表解析。实体类标注 xbatis @Table → [JpaEntityResolver]
      * （@Table value / @TableField / @TableId / @Ignore 轨）；MP 兼容注解（@TableName）实体
      * → 既有 MP [EntityResolver]。实体类缺失时类型参数类名按命名策略兜底（与 resolveTableInfo 一致）。
+     *
+     * @param project 调用方 PSI 元素所属项目（T-TS-07）；null = 未提供，兜底推断沿用
+     *   「首个打开项目」的既有语义（纯单测/无 PSI 上下文）
      */
-    private fun resolveTableInfoForXbatis(entityClass: PsiClass?, typeArgName: String?): TableInfo? {
+    private fun resolveTableInfoForXbatis(
+        entityClass: PsiClass?,
+        typeArgName: String?,
+        project: Project? = null,
+    ): TableInfo? {
         // PsiTypeParameter 守卫：变量声明 `QueryChain<T>` 等未推断泛型场景下实体解析到类型形参，
         // 不可作实体（推断表名 "t"、列清单空——宁缺不可错）
         if (entityClass == null || entityClass is PsiTypeParameter) {
             val name = typeArgName?.takeIf { it != entityClass?.name } ?: return null
             return TableInfo(
                 entityClassName = name,
-                tableName = EntityResolver.inferDecoratedTableName(name),
+                tableName = EntityResolver.inferDecoratedTableName(name, project),
                 columns = emptyList(),
             )
         }
@@ -1488,13 +1500,20 @@ object WrapperLocator {
      * 解析实体表信息；实体类不可解析时，用类型参数类名按命名策略推断表名
      * （列名由 getter → 命名策略兜底，见 [cn.song.mybatisplus.visualizer.psi.ArgResolver.resolveLambdaColumn]）。
      * T-M19.4：兜底推断走统一入口（策略 + 修饰链，全局语义，与 [EntityResolver.resolve] 一致）。
+     *
+     * @param project 调用方 PSI 元素所属项目（T-TS-07）；null = 未提供，兜底推断沿用
+     *   「首个打开项目」的既有语义（纯单测/无 PSI 上下文）
      */
-    private fun resolveTableInfo(entityClass: PsiClass?, typeArgName: String?): TableInfo? {
+    private fun resolveTableInfo(
+        entityClass: PsiClass?,
+        typeArgName: String?,
+        project: Project? = null,
+    ): TableInfo? {
         entityClass?.let { return EntityResolver().resolve(it) }
         val name = typeArgName ?: return null
         return TableInfo(
             entityClassName = name,
-            tableName = EntityResolver.inferDecoratedTableName(name),
+            tableName = EntityResolver.inferDecoratedTableName(name, project),
             columns = emptyList(),
         )
     }

@@ -22,6 +22,7 @@ import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
 import cn.song.mybatisplus.visualizer.psi.jpa.PredicateModel
 import cn.song.mybatisplus.visualizer.psi.jpa.SubqueryModel
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
+import com.intellij.openapi.project.Project
 
 /**
  * CriteriaQuery → SqlStatement 转换器（F-JPA-02，T-J4/T-J6/T-J7/T-J17）。
@@ -65,27 +66,34 @@ object CriteriaQueryConverter {
      * @param model CriteriaQueryLocator 输出的中间模型
      * @param overrideTable 可选的表信息覆盖（测试/外部传入预解析表信息用）；
      *                      null 时按 model.entityClass 或 model.entityClassName 解析
+     * @param project 调用方项目（T-TS-07）：实体类不可解析时的**类名兜底推断**按该项目读取
+     *   项目级表配置；null = 未提供，兜底推断沿用「首个打开项目」的既有语义（纯单测/无项目上下文）。
+     *   JOIN/子查询的类名兜底（[convertJoins]/[renderSubQuery]）恒无 PsiClass，全靠本参数定型
      * @return 按 model.operation 返回 Select / Update / Delete 语句模型；
      *         无法解析实体时返回全 Raw 降级的 SELECT
      */
-    fun convert(model: CriteriaQueryModel, overrideTable: TableInfo? = null): SqlStatement {
-        val tableInfo = overrideTable ?: resolveTableInfo(model)
+    fun convert(
+        model: CriteriaQueryModel,
+        overrideTable: TableInfo? = null,
+        project: Project? = null,
+    ): SqlStatement {
+        val tableInfo = overrideTable ?: resolveTableInfo(model, project)
         return when (model.operation) {
-            CriteriaOperation.UPDATE -> convertUpdate(model, tableInfo)
+            CriteriaOperation.UPDATE -> convertUpdate(model, tableInfo, project)
             CriteriaOperation.DELETE -> DeleteStatement(
                 table = tableInfo,
-                conditions = convertPredicates(model.predicates, tableInfo),
+                conditions = convertPredicates(model.predicates, tableInfo, project),
             )
-            CriteriaOperation.SELECT -> convertSelect(model, tableInfo)
+            CriteriaOperation.SELECT -> convertSelect(model, tableInfo, project)
         }
     }
 
-    private fun convertSelect(model: CriteriaQueryModel, tableInfo: TableInfo): SelectStatement {
-        val conditions = convertPredicates(model.predicates, tableInfo)
+    private fun convertSelect(model: CriteriaQueryModel, tableInfo: TableInfo, project: Project?): SelectStatement {
+        val conditions = convertPredicates(model.predicates, tableInfo, project)
         val groupBy = convertGroupBy(model.groupBys, tableInfo)
-        val having = convertHaving(model.havings, tableInfo)
+        val having = convertHaving(model.havings, tableInfo, project)
         val orderBy = convertOrderBy(model.orderBys, tableInfo)
-        val joins = convertJoins(model.joins, tableInfo)
+        val joins = convertJoins(model.joins, tableInfo, project)
         val selectColumns = convertSelectColumns(model.selectColumns, tableInfo)
 
         return SelectStatement(
@@ -101,8 +109,8 @@ object CriteriaQueryConverter {
     }
 
     /** CriteriaUpdate → UpdateStatement（T-J6）：set 子句转 SetClause，where 谓词转 conditions。 */
-    private fun convertUpdate(model: CriteriaQueryModel, tableInfo: TableInfo): UpdateStatement {
-        val conditions = convertPredicates(model.predicates, tableInfo)
+    private fun convertUpdate(model: CriteriaQueryModel, tableInfo: TableInfo, project: Project?): UpdateStatement {
+        val conditions = convertPredicates(model.predicates, tableInfo, project)
         val sets = model.setClauses.map { clause ->
             SetClause(
                 column = ColumnRef(columnName = resolveColumnName(clause.fieldName, tableInfo)),
@@ -119,10 +127,11 @@ object CriteriaQueryConverter {
     /**
      * 解析实体表信息。
      *
-     * 优先通过 entityClass PsiClass 走 JpaEntityResolver 解析（@Table/@Column 注解）；
-     * 不可解析时按命名策略由类名推断表名。
+     * 优先通过 entityClass PsiClass 走 JpaEntityResolver 解析（@Table/@Column 注解，其内部
+     * 自带 `entityClass.project`）；不可解析时按命名策略由类名推断表名——此路须 [project]
+     * （T-TS-07：显式传入后不再受「首个打开项目」影响）。
      */
-    private fun resolveTableInfo(model: CriteriaQueryModel): TableInfo {
+    private fun resolveTableInfo(model: CriteriaQueryModel, project: Project?): TableInfo {
         val entityClass = model.entityClass
         if (entityClass != null) {
             return JpaEntityResolver().resolve(entityClass)
@@ -130,13 +139,13 @@ object CriteriaQueryConverter {
         val className = model.entityClassName ?: model.resultClassName ?: "UnknownEntity"
         return TableInfo(
             entityClassName = className,
-            tableName = JpaEntityResolver.inferDecoratedTableName(className),
+            tableName = JpaEntityResolver.inferDecoratedTableName(className, project),
             columns = emptyList(),
         )
     }
 
-    /** 子查询实体表信息（仅类名可推断，列映射为空，按命名策略兜底）。 */
-    private fun resolveSubTableInfo(sub: SubqueryModel): TableInfo {
+    /** 子查询实体表信息（仅类名可推断，列映射为空，按命名策略兜底；[project] 见 [convert]）。 */
+    private fun resolveSubTableInfo(sub: SubqueryModel, project: Project?): TableInfo {
         val className = sub.entityClassName ?: return TableInfo(
             entityClassName = "UnknownEntity",
             tableName = "unknown_entity",
@@ -144,7 +153,7 @@ object CriteriaQueryConverter {
         )
         return TableInfo(
             entityClassName = className,
-            tableName = JpaEntityResolver.inferDecoratedTableName(className),
+            tableName = JpaEntityResolver.inferDecoratedTableName(className, project),
             columns = emptyList(),
         )
     }
@@ -220,18 +229,25 @@ object CriteriaQueryConverter {
 
     /**
      * 转换谓词列表为 Condition 列表。
+     *
+     * [project] 仅用于子查询的类名兜底表名推断（T-TS-07），一路透传到 [renderSubQuery]。
      */
     private fun convertPredicates(
         predicates: List<PredicateModel>,
         tableInfo: TableInfo,
+        project: Project?,
     ): List<Condition> {
-        return predicates.map { convertPredicate(it, tableInfo) }
+        return predicates.map { convertPredicate(it, tableInfo, project) }
     }
 
     /**
-     * 转换单个 PredicateModel 为 Condition。
+     * 转换单个 PredicateModel 为 Condition（[project] 见 [convertPredicates]）。
      */
-    private fun convertPredicate(predicate: PredicateModel, tableInfo: TableInfo): Condition = when (predicate) {
+    private fun convertPredicate(
+        predicate: PredicateModel,
+        tableInfo: TableInfo,
+        project: Project?,
+    ): Condition = when (predicate) {
         is PredicateModel.Simple -> {
             val column = resolveColumnRef(predicate.fieldName, tableInfo)
             Condition.Simple(column, predicate.op, sqlValue(predicate.valueExpression))
@@ -296,7 +312,7 @@ object CriteriaQueryConverter {
             }
             Condition.Group(
                 connector = connector,
-                children = predicate.children.map { convertPredicate(it, tableInfo) },
+                children = predicate.children.map { convertPredicate(it, tableInfo, project) },
                 negated = predicate.negated,
             )
         }
@@ -321,7 +337,7 @@ object CriteriaQueryConverter {
 
         // EXISTS 子查询（T-J17/J13）：有界渲染，降级注释
         is PredicateModel.Exists -> {
-            val subSql = renderSubQuery(predicate.subQuery)
+            val subSql = renderSubQuery(predicate.subQuery, project)
             if (subSql != null) {
                 Condition.Raw((if (predicate.negated) "NOT " else "") + "EXISTS $subSql")
             } else {
@@ -331,7 +347,7 @@ object CriteriaQueryConverter {
 
         // 列 IN 子查询（T-J17/J13）
         is PredicateModel.InSubQuery -> {
-            val subSql = renderSubQuery(predicate.subQuery)
+            val subSql = renderSubQuery(predicate.subQuery, project)
             if (subSql != null) {
                 val col = resolveColumnName(predicate.fieldName, tableInfo)
                 val op = if (predicate.negated) "NOT IN" else "IN"
@@ -407,9 +423,10 @@ object CriteriaQueryConverter {
     private fun convertHaving(
         havings: List<PredicateModel>,
         tableInfo: TableInfo,
+        project: Project?,
     ): Condition? {
         if (havings.isEmpty()) return null
-        val conditions = havings.map { convertPredicate(it, tableInfo) }
+        val conditions = havings.map { convertPredicate(it, tableInfo, project) }
         return if (conditions.size == 1) {
             conditions[0]
         } else {
@@ -449,20 +466,24 @@ object CriteriaQueryConverter {
      *    列别名归属按 get 调用接收者变量判定（join 变量 → join 别名，root/未知 → 主表）
      *  - 无显式 ON → 既有外键推断：alias.id = root_<fk>_column
      *  - fetch 调用与 join 同形渲染（EAGER 抓取合并入主查询的静态近似）
+     *
+     * T-TS-07：join 表名只有类名字符串（[cn.song.mybatisplus.visualizer.psi.jpa.JoinModel]
+     * 不带 PsiClass），恒走类名兜底推断——[project] 是唯一取值口径来源（见 [convert]）。
      */
     private fun convertJoins(
         joins: List<cn.song.mybatisplus.visualizer.psi.jpa.JoinModel>,
         tableInfo: TableInfo,
+        project: Project?,
     ): List<JoinClause> {
         return joins.map { join ->
             val entityClassName = join.entityClassName ?: join.fieldName
-            val tableName = JpaEntityResolver.inferDecoratedTableName(entityClassName)
+            val tableName = JpaEntityResolver.inferDecoratedTableName(entityClassName, project)
             // 别名优先级：显式别名 > join 返回值变量名 > 关联属性名首字母小写
             val alias = join.alias ?: join.variableName
                 ?: join.fieldName.replaceFirstChar { it.lowercaseChar() }
 
             val onConditions = if (join.onPredicates.isNotEmpty()) {
-                join.onPredicates.map { convertOnPredicate(it, tableInfo, join, alias) }
+                join.onPredicates.map { convertOnPredicate(it, tableInfo, join, alias, project) }
             } else {
                 inferJoinOnConditions(join, tableInfo, alias)
             }
@@ -476,12 +497,13 @@ object CriteriaQueryConverter {
         }
     }
 
-    /** 显式 ON 谓词转换：ColumnEquals 按变量归属补表别名，其余谓词走通用转换。 */
+    /** 显式 ON 谓词转换：ColumnEquals 按变量归属补表别名，其余谓词走通用转换（[project] 见 [convert]）。 */
     private fun convertOnPredicate(
         predicate: PredicateModel,
         tableInfo: TableInfo,
         join: cn.song.mybatisplus.visualizer.psi.jpa.JoinModel,
         joinAlias: String,
+        project: Project?,
     ): Condition {
         if (predicate is PredicateModel.ColumnEquals) {
             return Condition.ColumnComparison(
@@ -495,7 +517,7 @@ object CriteriaQueryConverter {
                 ),
             )
         }
-        return convertPredicate(predicate, tableInfo)
+        return convertPredicate(predicate, tableInfo, project)
     }
 
     /** get 接收者变量 → 表别名：join 变量 → join 别名；root/未知 → 主表（无别名）。 */
@@ -555,10 +577,12 @@ object CriteriaQueryConverter {
      *
      * 有界：degradedReason 非空（correlate / 多层嵌套）或谓词无法全部静态渲染时返回 null，
      * 由调用方降级注释。占位符以 `?` 文本呈现（不参与面板参数收集，属已知边界）。
+     *
+     * [project] 透传给子查询表名的类名兜底推断（T-TS-07，子查询模型无 PsiClass）。
      */
-    private fun renderSubQuery(sub: SubqueryModel): String? {
+    private fun renderSubQuery(sub: SubqueryModel, project: Project?): String? {
         if (sub.degradedReason != null) return null
-        val subTable = resolveSubTableInfo(sub)
+        val subTable = resolveSubTableInfo(sub, project)
         val selectColumn = sub.selectFieldName?.let { resolveColumnName(it, subTable) } ?: "*"
         val whereParts = sub.predicates.map { predicateToSqlText(it, subTable) }
         // 有界：谓词无法全部渲染（嵌套子查询等）→ 整体降级

@@ -794,7 +794,9 @@ class SqlPreviewService(private val project: Project) {
         // 1. 用 CriteriaQueryLocator.locate(anchor) 获取 CriteriaQueryModel
         val model = CriteriaQueryLocator.locate(anchor) ?: return null
         // 2. CriteriaQueryConverter.convert(model) → SelectStatement
-        var statement = CriteriaQueryConverter.convert(model)
+        // T-TS-07：显式传本服务所属项目——实体类/join/子查询的**类名兜底推断**按该项目读取
+        // 项目级表配置（原先传 null → 取「首个打开项目」，多项目同开时表名修饰错项目）
+        var statement = CriteriaQueryConverter.convert(model, project = project)
         val hostMethod = PsiTreeUtil.getParentOfType(anchor, PsiMethod::class.java)
         // 3. 参数名：从包含 CriteriaQuery 的宿主方法参数列表提取
         val paramNames = hostMethod?.parameterList?.parameters?.map { it.name } ?: emptyList()

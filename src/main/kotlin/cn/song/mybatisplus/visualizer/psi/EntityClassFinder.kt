@@ -105,7 +105,9 @@ class EntityClassFinder(private val project: Project) {
                 if (isVoDto(clazz)) continue
                 val className = clazz.name ?: continue
                 val annotated = tableNameAnnotation(clazz)
-                val resolvedTable = annotated ?: EntityResolver.inferDecoratedTableName(className)
+                // T-TS-07：显式传候选类所属项目（= 本 finder 的项目，scope 亦为 projectScope）——
+                // 反查表名的兜底推断不再受「首个打开项目」影响；clazz 是 PSI，project 必可得
+                val resolvedTable = annotated ?: EntityResolver.inferDecoratedTableName(className, clazz.project)
                 if (resolvedTable.equals(tableName, ignoreCase = true)) {
                     result.add(clazz)
                 }
