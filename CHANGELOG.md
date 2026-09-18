@@ -8,6 +8,8 @@
 
 ### Added
 
+- **预览 `${}` 注入确认闸门（T-InjectionGate）**：含 `${}` 直替的 XML/注解预览在「执行 SQL」与「EXPLAIN」前弹确认框（说明 raw 段当前以模拟值填充、执行前请确认值真实性），选否即中止（不登记回滚快照、不执行），确认一次后同一面板不再重复弹——不新增弹窗形态，只在既有执行流程加一道门。判定信号取自解析期 `${` token 事实而非最终文本 regex（`${}` 成功替换为模拟值后产物文本里已无痕迹，regex 会漏掉全部成功场景）；纯 `#{}` 预览与 Wrapper/JPA/日志还原链零影响（该链本无 `${}` 概念），无 `${}` 语句的执行路径逐字节不变。复制可执行 SQL 不做弹窗（复制不是执行），改在产物头部加一行 `-- contains ${} raw segments (mock values)` 注释让风险随产物走
+
 - **MCP 工具二期扩容 + 设置页门控（T-McpToolset2）**：平台 MCP Server 工具从 3 个扩到 10 个——新增 `mpsv_render_logs`（MyBatis/Hibernate/JdbcTemplate 日志还原可执行 SQL）、`mpsv_check_sql`（静态写风险与类型核查）、`mpsv_rollback_plan`（回滚预案，只产出不执行）、`mpsv_perf_advice`（20 条规则性能建议）、`mpsv_crud_sql`（实体类生成 CRUD 四件套）、`mpsv_reverse_sql`（SQL 转 MyBatis-Plus 代码）、`mpsv_mapper_check`（mapper 契约核查 + 可选 simulate 对渲染产物做写风险/性能分析——校验器给不出的证据形态）；全部只读三 hint、拒绝走 McpExpectedError、每调用 `[MCP-AUDIT]` 审计。设置页「MCP 工具」子页新增门控区：总开关（整体启停插件 MCP 功能）+ 十工具逐项启用/禁用 + 全部启用/禁用切换按钮——平台工具面在下一次工具列表/调用即时生效（262 mcpserver.jar 字节码实证 getEnabledToolsets 每次重新求值）。一工具一 toolset 类（平台 per-tool 门控只有 toolset 粒度 isEnabled），McpToolsetSupport 基类三钩子字面量覆写保持 253 兼容
 
 - **执行确认升级为无界写发现清单（T-UnboundedWriteGuard，O-9）**：执行 UPDATE/DELETE 前的二次确认对话框在静态检查命中无界写特征时列出发现（无 WHERE 全表 / 恒真条件如 `1=1` / OR 分支恒真 / `LIKE '%'` 纯通配 / WHERE 仅常量 / 子查询提示 / 无法解析请人工确认）——同一对话框形态零新弹窗，无发现时文案逐字节不变（高频确认不添乱）；规则集对齐 DBX `sql_risk.rs`，JSqlParser AST 权威、解析失败 fail closed。预览执行、日志转 SQL 执行、回滚执行三处确认流共用；回滚视图对恒真/纯通配 WHERE 追加「快照将覆盖全表」警示
