@@ -2,18 +2,27 @@
 
 # SQL Visualizer Changelog
 
-## [Unreleased]
+## [2026.9.18] - 2026-09-18
 
-> 已合入 master、随下一个内测版（Gitee 抢先体验通道）发行的内容，发行时本节改写为对应版本号归档。基线 v2026.9.18-beta.4（内测已发行）。
+> 正式版：内测系列 v2026.9.18-beta.1 ~ beta.4 内容并入本版，另含 beta.4 之后合入 master 的增量（性能收敛 T-PerfSweep4、设置真实性 T-SettingsTruth、历史全量化与保留上限、汇聚入口跳源码上溯等）。
+
+### Added
+
+- **项目级设置页（T-SettingsTruth P4）**：`plugin.xml` 注册 `projectConfigurable`（tools 顶层防套娃，双语 displayName「SQL Visualizer（当前项目）」）；面板扩容为 10 控件（增强捕获开关 + 方言 + 3 项 tri-state 勾选 + 逻辑删除值 + 表前缀/后缀 + 推断策略下拉 + 忽略字段，apply/isModified 逐项比对 + trim）；`ProjectPluginSettings` 7 个零调用 `effective*` 转正，预览服务全部参数替换/逻辑删除/表配置直读点改走 `effective*`，`EntityResolver` / `JpaEntityResolver` 表配置读取经 `effectiveTableSetting` 项目级覆盖（无项目上下文或异常时降级回退全局），缓存签名走项目维
+- **SQL 历史全量化与保留上限（T-SqlHistoryFull / T-HistoryFileRetention）**：历史条目全量落盘（不再达上限后丢弃后续条目）并消除历史打开卡顿；新增历史文件保留上限配置项，按插件命名模板文件族自动裁剪防磁盘膨胀（60 秒节流），自定义目录下用户自有的 .sql 文件永不计数、永不删除
+- **汇聚入口跳源码上溯（T-SourceJumpFunnel）**：agent `StackLocator` 判定收敛（候选增厚四列 8 条 / 缓存仅 L1 命中写入 / 上顶路径收敛 / 动态前缀热下发）+ IDE 统一跳转解析器 `EntryJumpResolver`（实时/历史两面板共用，历史面板补候选回退）+ cands/sd 双端协议列尾追加（新旧双向兼容）+ 栈快照详情展示 + 设置页帧过滤前缀
 
 ### Changed
 
 - **性能收敛十三项（T-PerfSweep4）**：捕捉开启时控制台日志不再双路解析（每行只走增强或轮询单通道，解析成本减半）；增强捕获每条 SQL 只做一次调用栈捕获且 fat jar 部署下源码定位缓存正常生效（高频 SQL 应用的采集开销明显下降）；日志时间配对签名按 256 字符截断、数值判定与空白规范化正则常量化；历史文件保留上限裁剪加 60 秒节流；设置变更触发的历史落盘排水限批（默认 500 条），界面线程不再承担整批磁盘写；执行文件自动落盘监听随插件容器释放并带身份快判，全局键击过滤成本进一步降低
 - **预览链 2 秒阻塞消除（T-PreviewFast）**：点击预览后控制台 SQL 区固定要等约 2 秒才出现。真机日志定位：exec 文件写入无差量快路径——内容与磁盘已一致时仍要派发 EDT 并等满 2000ms 有界等待、再无条件落盘（连续预览同一 SQL 的主路径每次都白付），且预热属投机写入却在后台线程白等；另程序性写入会触发自己的 1.5s 防抖落盘。修复=内容一致即直接返回（不派发不落盘）、预热派发改非阻塞、落盘前判「已修改未保存」、程序性写入不再触发防抖落盘、显示模式变换加单槽缓存；新增「请求 → 弹窗 → 控制台可见」三段耗时埋点（日志前缀 `[T-PreviewFast]`）便于后续回归对照
+- **设置真实性收敛（T-SettingsTruth P1~P3）**：假开关 `autoInjectSqlSourceInterceptor` 改纯动作（勾选即注入、无论成败终态复位未勾选、不持久化，双语 tooltip 明示「本开关不保存状态」）；增强捕获状态行接线（`AgentManager.statusSummary` 三态文案 + 应用级 `AGENT_STATUS_TOPIC` 在 attach 成功/摘除/关停三迁移点广播，面板订阅聚合 openProjects 写 `enhancedStatusLabel`、reset 即拉现值、disposeResources 断连）；设置搜索索引清幽灵 `filterBar` 分组并补录 13 项真实未索引设置（preview 5 / sqlLog 8 / ui 1）；顺带清两枚存量幽灵 bundle 键（`settings.update.envNotSupported` 全历史零消费 / `settings.search.placeholder` 消费点已随重构删除）
 
 ### Fixed
 
 - **捕捉开关回归面板工具栏（T-CaptureBack）**：SQL 日志面板的「捕捉」按钮消失——第一轮反馈是按钮不见，第二轮截图实证按钮其实存在、只是平时不渲染。根因=界面原生化 T-UN-11 把捕捉开关从面板内工具栏迁到了工具窗标题栏（`setTitleActions`），而新 UI 下标题栏动作需悬停/激活才可见，入口在用户视角「消失」，且空态文案「点击『捕捉』」与实物位置割裂。修复=捕捉开关回迁面板工具栏首位，工厂侧移除标题栏挂载（单一入口），状态刷新沿用既定 `updateActionsImmediately` 展示链（T-UN-11 的反射 hack 退役收益保留）；顺手把「已开启 SQL 监听，等待项目运行」硬编码文案改走既有 bundle 键
+
+- **帧过滤前缀输入框被 GridBag 压扁不可见修复（T-FramePrefixVisibility）**：设置页「帧过滤前缀」多行输入框在真机上几乎不可见（真机截图定谳 H4）。修复=`JBTextArea` preferredSize 高度保底 ≥60px + lineWrap，并补平台标准文本框边框（`UIUtil.getTextFieldBorder`）与编辑区背景（`getTextFieldBackground`）+ 内部留白 + 长词换行，深色主题下框体辨识度提升；新增组件树守卫测试 `FrameSkipPrefixesFieldVisibilityTest`
 
 - **定时回归任务不再弹出真机浏览器（T-BrowserLeak2）**：用户真机 Edge 每隔一段时间自动打开 `sql-visualizer.jvtools.cn/about/feedback` 与 `example.invalid/never-opened` 两页。根因是 2026-09-11 帮助页弹浏览器第一轮修复的残余——测试 `SafeBrowserTest` 为验证「测试环境不弹浏览器」而直调这两个真实 URL，但 `SafeBrowser` 守卫写成「有 Application 且 isUnitTestMode 才短路」，纯 JUnit 无平台 Application 的测试进程反而被放行，`BrowserUtil.browse` 降级 `Desktop.browse` 直接 ShellExecute 拉起默认浏览器，定时任务每天跑全量测试即周期性弹窗。修复=守卫语义反转为 fail-safe 默认拦（`app == null || isUnitTestMode` 一律短路，真机 IDE 宿主行为零变化）；测试断言改为直接验证判定函数 `isTestEnvironment()`（不再依赖「没弹」这种不可观测副作用）；守卫测试补位——`BrowserUtil.browse` 禁用扫描扩展到 src/test、SafeBrowser fail-safe 守卫形态加锚点防回退
 
@@ -36,6 +45,7 @@
 ### Test
 
 - **执行文档落盘纪律 DB 集成门禁（T-ExecDocGate）**：testDatabase 通道新增 `ExecDocGateIntegrationTest` 三断言——prepareConsole 后 / reuseSharedConsole 链后 exec 文档必须「未修改未保存」且磁盘==SQL；控制台手改后防抖窗内磁盘对齐——把第三/四轮失误模式钉进 CI。配套修复 testDatabase 基建：驱动种子源三级回退（本地 runIde 沙盒 → dev 工作树沙盒 → 日常 IDE 驱动存储，绝对路径锚定——daemon CWD 实测不可靠）+ 数据源显式携带驱动 jar classpath（DBN 243 单测模式 artifact 解析不生效，javap 实证 API 后改走 `SimpleClasspathElementFactory.createElements` + `setClasspathElements`）
+- **测试守卫第二轮与秒级反馈通道（T-TestGuard2 / T-TestPerf3）**：`testFast` 秒级反馈通道；守卫族扩展——设置真实性四断言 `SettingsRealityGuardTest`（State 写而不读 / 面板控件 apply-reset 绑定 / ProjectPluginSettings effective* 非 config 消费 / bundle 幽灵键扫描，白名单注证据行号）、组件树可见性 `FrameSkipPrefixesFieldVisibilityTest`、`BannedApiSourceScanTest` 禁扫范围扩展到 src/test 并含守卫文案自豁免与 SafeBrowser fail-safe 形态锚点
 
 ## [2026.9.18-beta.4] - 2026-09-17
 
