@@ -24,8 +24,8 @@ class SqlDifferTest {
         val old = "SELECT id\nFROM tbl"
         val new = "SELECT name\nFROM users"
         val diff = SqlDiffer.computeDiff(old, new)
-        // 2 行删除 + 2 行新增 = 4 个变更条目
-        assertEquals("完全不同应产生 4 个变更", 4, diff.size)
+        // 2 行删除 + 2 行新增 = 4 个差异条目
+        assertEquals("完全不同应产生 4 个差异条目", 4, diff.size)
         val changed = diff.filter { it.type != DiffType.EQUAL }
         assertEquals(4, changed.size)
     }
@@ -35,9 +35,9 @@ class SqlDifferTest {
         val old = "SELECT id\nFROM tbl\nWHERE id = 1"
         val new = "SELECT id\nFROM users\nWHERE id = 1"
         val diff = SqlDiffer.computeDiff(old, new)
-        // 中间行从 "FROM tbl" 变为 "FROM users"：1 行删除 + 1 行新增
+        // 中间行从 "FROM tbl" 改写为 "FROM users"：1 行删除 + 1 行新增（无 CHANGE 类型，见下方决策用例）
         val changed = diff.filter { it.type != DiffType.EQUAL }
-        assertEquals("中间行变更应产生 2 个变更条目", 2, changed.size)
+        assertEquals("中间行改写应产生 2 个差异条目", 2, changed.size)
         val deleted = changed.filter { it.type == DiffType.DELETE }
         val inserted = changed.filter { it.type == DiffType.INSERT }
         assertEquals(1, deleted.size)
@@ -114,7 +114,21 @@ class SqlDifferTest {
         val elapsed = System.currentTimeMillis() - start
         assertTrue("1000 行 diff 应在 100ms 内完成（实际 ${elapsed}ms）", elapsed < 100)
         val changed = diff.filter { it.type != DiffType.EQUAL }
-        // 1 行变更 = 1 删除 + 1 新增 = 2 个条目
-        assertEquals("仅 1 行变更（2 个条目）", 2, changed.size)
+        // 1 行改写 = 1 删除 + 1 新增 = 2 个差异条目
+        assertEquals("仅 1 行改写（2 个差异条目）", 2, changed.size)
+    }
+
+    @Test
+    fun `computeDiff_行改写_表达为删除加新增对而非CHANGE`() {
+        // 决策留痕：DiffType 不应再声明 CHANGE——差异类型的唯一消费形态是按类型分派的渲染，
+        // 而该渲染器（O-4 DiffHighlighter）已整体移除、对比入口改走 IDEA 原生 Diff，
+        // 产出 CHANGE 只会得到无人读取的不可达常量。故「修改一行」固定为 DELETE + INSERT 成对表达。
+        val diff = SqlDiffer.computeDiff("SELECT id\nFROM tbl", "SELECT id\nFROM users")
+        assertEquals(listOf(DiffType.DELETE, DiffType.INSERT), diff.map { it.type })
+        assertEquals(
+            "DiffType 不应再声明无产出点的 CHANGE",
+            setOf("INSERT", "DELETE", "EQUAL"),
+            DiffType.values().map { it.name }.toSet(),
+        )
     }
 }
