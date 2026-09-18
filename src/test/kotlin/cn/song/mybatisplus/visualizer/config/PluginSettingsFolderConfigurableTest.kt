@@ -110,12 +110,18 @@ class PluginSettingsFolderConfigurableTest : BasePlatformTestCase() {
         search.text = fieldLabel
         UIUtil.dispatchAllInvocationEvents()
         assertTrue("搜索应命中设置项", list.model.size > 0)
-        val hits = (0 until list.model.size)
-            .map { renderedLines(list, list.model.getElementAt(it)) }
-            .filter { it.size == 2 && joinedText(it[0]) == fieldLabel }
-        assertTrue("应渲染出设置项行", hits.isNotEmpty())
-        assertEquals("设置项次行应为所属页面名", MpSqlVisualizerBundle.message("settings.section.preview"), joinedText(hits[0][1]))
-        val fieldIter = hits[0][0].iterator(); fieldIter.next()
+        // T-ProjectSettingsScope P3 增补：项目页同项文案入索引后，同一查询会命中**多条同名字段行**
+        // （全局方言 + 项目方言）。渲染器是共享实例（nameLine/descLine 复用），逐条渲染后再断言
+        // 会让所有行都指向最后渲染的那一份——故改为「先定位首个命中项的下标，再重渲染该项」，
+        // 断言面与原意一致（字段名行加粗、次行为所属页面名）。
+        val matchedIndex = (0 until list.model.size).firstOrNull { idx ->
+            val lines = renderedLines(list, list.model.getElementAt(idx))
+            lines.size == 2 && joinedText(lines[0]) == fieldLabel
+        }
+        assertTrue("应渲染出设置项行", matchedIndex != null)
+        val lines = renderedLines(list, list.model.getElementAt(matchedIndex!!))
+        assertEquals("设置项次行应为所属页面名", MpSqlVisualizerBundle.message("settings.section.preview"), joinedText(lines[1]))
+        val fieldIter = lines[0].iterator(); fieldIter.next()
         assertTrue("字段名片段应加粗", fieldIter.textAttributes.style and SimpleTextAttributes.STYLE_BOLD != 0)
     }
 }

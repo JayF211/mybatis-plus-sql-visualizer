@@ -484,6 +484,25 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.update.versionInfo"), "", "settings.section.about", a))
             fields.add(SearchableField(b.message("settings.buildNumber"), b.message("settings.buildNumber.tip"), "settings.section.about", a))
 
+            // T-ProjectSettingsScope P3：项目级设置页 10 项（总开关 + 9 项可覆盖字段）。
+            // 前置对照实验（ProjectPluginSettingsConfigurableTest 内探针）：项目上下文下
+            // `Settings.find(ProjectPluginSettingsConfigurable::class.java)` 命中
+            // （ConfigurableVisitor.findByType 走 Configurable.PROJECT_CONFIGURABLE，project=null 时为 null），
+            // 故本页条目可跳转，不是 T-SettingsTruth P3 清理过的「幽灵搜索项」形态。
+            // 文案键复用全局页同项（T-SettingsTruth 6.5 已把项目页标签收编为全局键），
+            // 仅 pageLabelKey 指向项目页 displayName——用户在同一批关键词下同时看到两个作用域。
+            val pj = ProjectPluginSettingsConfigurable::class.java
+            fields.add(SearchableField(b.message("settings.project.useProjectSettings"), b.message("settings.project.useProjectSettings.tip"), "configurable.settings.project.displayName", pj))
+            fields.add(SearchableField(b.message("settings.dialect"), "", "configurable.settings.project.displayName", pj))
+            fields.add(SearchableField(b.message("settings.replaceParams"), b.message("settings.replaceParams"), "configurable.settings.project.displayName", pj))
+            fields.add(SearchableField(b.message("settings.formatSql"), b.message("settings.formatSql"), "configurable.settings.project.displayName", pj))
+            fields.add(SearchableField(b.message("settings.injectLogicDelete"), b.message("settings.injectLogicDelete"), "configurable.settings.project.displayName", pj))
+            fields.add(SearchableField(b.message("settings.logicDeleteValue"), b.message("settings.logicDeleteValue.tip"), "configurable.settings.project.displayName", pj))
+            fields.add(SearchableField(b.message("settings.tablePrefix"), b.message("settings.tablePrefix.tip"), "configurable.settings.project.displayName", pj))
+            fields.add(SearchableField(b.message("settings.tableSuffix"), b.message("settings.tableSuffix.tip"), "configurable.settings.project.displayName", pj))
+            fields.add(SearchableField(b.message("settings.tableNameInference"), b.message("settings.tableNameInference.tip"), "configurable.settings.project.displayName", pj))
+            fields.add(SearchableField(b.message("settings.ignoredFields"), b.message("settings.ignoredFields.tip"), "configurable.settings.project.displayName", pj))
+
             return fields
         }
     }
