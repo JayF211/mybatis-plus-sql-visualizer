@@ -8,6 +8,8 @@
 
 ### Added
 
+- **增强捕获启动即捕获（premain 通道，T-M56Phase2-Premain）**：此前增强捕获靠 attach 热挂载——用户点 Run 后要等进程出现、再静默 3 秒才挂载，应用启动阶段（框架初始化、数据源探活、Flyway/Liquibase 迁移）发出的 SQL 全落在挂载完成之前，只能靠控制台桥补；JDK 21+ 下动态挂载还会在目标进程控制台打 JEP 451 告警。现在开启增强捕获并同意注入后，插件在 Java 运行配置启动前把 `-javaagent` 写进 VM 参数，agent 在目标 JVM 的 `premain` 阶段就完成 SQL 织入：启动期 SQL 直接进增强通道，且启动加载是 JVM 认定的预期路径，不再产生动态挂载告警。未开启增强捕获、或尚未同意注入时零注入（首次运行的注入确认弹窗语义不变）；jar 落盘/端口协商/注入任一步失败都只回落既有 attach 与桥捕获，绝不影响运行配置本身。attach 链原样保留
+
 - **MCP 工具二期扩容 + 设置页门控（T-McpToolset2）**：平台 MCP Server 工具从 3 个扩到 10 个——新增 `mpsv_render_logs`（MyBatis/Hibernate/JdbcTemplate 日志还原可执行 SQL）、`mpsv_check_sql`（静态写风险与类型核查）、`mpsv_rollback_plan`（回滚预案，只产出不执行）、`mpsv_perf_advice`（20 条规则性能建议）、`mpsv_crud_sql`（实体类生成 CRUD 四件套）、`mpsv_reverse_sql`（SQL 转 MyBatis-Plus 代码）、`mpsv_mapper_check`（mapper 契约核查 + 可选 simulate 对渲染产物做写风险/性能分析——校验器给不出的证据形态）；全部只读三 hint、拒绝走 McpExpectedError、每调用 `[MCP-AUDIT]` 审计。设置页「MCP 工具」子页新增门控区：总开关（整体启停插件 MCP 功能）+ 十工具逐项启用/禁用 + 全部启用/禁用切换按钮——平台工具面在下一次工具列表/调用即时生效（262 mcpserver.jar 字节码实证 getEnabledToolsets 每次重新求值）。一工具一 toolset 类（平台 per-tool 门控只有 toolset 粒度 isEnabled），McpToolsetSupport 基类三钩子字面量覆写保持 253 兼容
 
 - **执行确认升级为无界写发现清单（T-UnboundedWriteGuard，O-9）**：执行 UPDATE/DELETE 前的二次确认对话框在静态检查命中无界写特征时列出发现（无 WHERE 全表 / 恒真条件如 `1=1` / OR 分支恒真 / `LIKE '%'` 纯通配 / WHERE 仅常量 / 子查询提示 / 无法解析请人工确认）——同一对话框形态零新弹窗，无发现时文案逐字节不变（高频确认不添乱）；规则集对齐 DBX `sql_risk.rs`，JSqlParser AST 权威、解析失败 fail closed。预览执行、日志转 SQL 执行、回滚执行三处确认流共用；回滚视图对恒真/纯通配 WHERE 追加「快照将覆盖全表」警示
