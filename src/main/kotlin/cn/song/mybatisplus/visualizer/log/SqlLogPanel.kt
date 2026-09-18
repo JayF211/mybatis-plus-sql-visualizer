@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.config.PluginSettings.Companion.LOG_TIMESTAMP_SOURCE_LOG
 import cn.song.mybatisplus.visualizer.config.SqlLogConfigurable
 import cn.song.mybatisplus.visualizer.config.SettingsChangeListener
+import cn.song.mybatisplus.visualizer.log.agent.AgentManager
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -545,6 +546,8 @@ class SqlLogPanel(
             // 正常执行；沙盒/单测中组件不可见时平台会跳过更新——测试断言直接读
             // captureToggleAction.presentation，不依赖按钮刷新。
             _toolbarRef?.updateActionsImmediately()
+            // T-CaptureTruth T-CT-03：捕捉态变化 → 诊断行立即跟上（起停捕捉是用户最先看的时刻）
+            syncDiagnostics()
         }
     }
 
@@ -1155,6 +1158,51 @@ class SqlLogPanel(
         }
     }
 
+    // ---------- T-CaptureTruth T-CT-03：零产出诊断 ----------
+
+    /**
+     * 诊断刷新定时器（仅「捕捉中且零条目」时运行）。
+     *
+     * 为什么需要定时器：零产出意味着缓冲不发任何通知，而控制台行数/增强挂载态都在变——不主动拉取
+     * 的话诊断行会永远停在「捕捉开始那一刻」的快照上，恰好在用户真正想知道「为什么还是没有」时失语。
+     * 2s 与桥轮询同频（[SqlLogConsoleBridge] POLL_INTERVAL_MS）；命中条目或停止捕捉即停表，常态零开销。
+     */
+    private var diagnosticsTimer: javax.swing.Timer? = null
+
+    /**
+     * 诊断行同步（EDT）：更新列表空态文案 + 管理定时器生命周期。
+     * 取数全部为只读内存态（buffer 快照 / 桥计数 / AgentManager 状态），不触发平台调用。
+     */
+    private fun syncDiagnostics() {
+        val active = manager.capturing && manager.entries.snapshot().isEmpty()
+        val text = if (active) {
+            captureDiagnosticsText(
+                CaptureDiagnostics(
+                    capturing = true,
+                    waitingForConsole = manager.isWaitingForConsole,
+                    entryCount = 0,
+                    consolesAttached = manager.consoleBridge.attachedConsoles.size,
+                    linesSeen = manager.consoleBridge.consoleLinesSeen.get(),
+                    enhancedStatus = runCatching {
+                        AgentManager.getInstance(project).statusSummary()
+                    }.getOrNull(),
+                ),
+            )
+        } else {
+            null
+        }
+        list.emptyText.text = text ?: MpSqlVisualizerBundle.message("log.panel.empty")
+        if (active) {
+            if (diagnosticsTimer == null) {
+                diagnosticsTimer = javax.swing.Timer(DIAGNOSTICS_TICK_MS) { syncDiagnostics() }
+                    .apply { isRepeats = true; start() }
+            }
+        } else {
+            diagnosticsTimer?.stop()
+            diagnosticsTimer = null
+        }
+    }
+
     // ---------- 条目列表 ----------
 
     private fun buildListPane(): JBScrollPane {
@@ -1228,6 +1276,8 @@ class SqlLogPanel(
     private fun refreshList() {
         val gen = ++refreshGeneration
         val snapshot = manager.entries.snapshot()
+        // T-CaptureTruth T-CT-03：条目变化同步诊断行（有条目即还原默认空态文案并停表）
+        syncDiagnostics()
 
         // 去重丢弃计数快照（徽章渲染数据源）：徽章在元信息行渲染时直读，无缓存失效链
         dedupeCounts = manager.entries.dedupeCountsSnapshot()
@@ -1670,6 +1720,9 @@ class SqlLogPanel(
     override fun dispose() {
         // T-Perf-24：停止搜索防抖 Timer（防晚到 apply 触碰已销毁面板）
         searchDebounceTimer.stop()
+        // T-CaptureTruth T-CT-03：停止诊断定时器（同上，防晚到 syncDiagnostics 触碰已销毁列表）
+        diagnosticsTimer?.stop()
+        diagnosticsTimer = null
         // T-Perf-15：注销 manager 监听器（防面板销毁后仍被回调——每条新 SQL invokeLater 调已销毁面板）
         manager.removeUiListener(uiRefreshListener)
         manager.removeCapturingListener(capturingUiListener)
@@ -1743,6 +1796,8 @@ class SqlLogPanel(
         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
         /** T-Perf-24（自 dev 移植）：搜索输入防抖窗口（毫秒）。 */
         private const val SEARCH_DEBOUNCE_MS = 200
+        /** T-CaptureTruth T-CT-03：零产出诊断刷新间隔（与桥轮询同频 2s）。 */
+        private const val DIAGNOSTICS_TICK_MS = 2000
         internal const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
         /** T-M39：帮助文档 URL（降级系统浏览器打开）。
          *  2026-08-31 改为自建站点 jvtools.cn（可自主接入国内 CDN；

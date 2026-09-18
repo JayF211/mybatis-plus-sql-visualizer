@@ -105,3 +105,65 @@
 - **P5 断言四的动态键白名单**是宽松机制（人工维护），防误报而非防恶意；若后续动态拼 key 增多，再考虑 message() 调用点静态收集。
 - **SettingsIO 导入重置副作用**（导入仅覆盖 21 项，其余字段重置为默认）核查中确认属设计内行为，但语义上接近「假导入」——不在本任务处理，立候选任务 T-SettingsIoScope（导入前 diff 预览或全量导出）由用户定夺。
 - 用户侧文档（README/官网帮助页）经 grep 实测未单独描述上述任一开关，交付时复核一次即可，不触发八处同步全流程。
+
+## 六、实施记录（20260918 交付回填）
+
+**交付形态**：sam 调度并行实施——工作树 `mpsv-settings-truth`（分支 `t-settings-truth`，基 master `2ce49ca`），三波派发（P1+P2 与 P3 并行 → P4 → P5），合并树独立复核后并入 master。
+
+### 6.1 任务 → 提交映射
+
+| 子项 | 提交 | 落点摘要 |
+|------|------|---------|
+| 立项（计划文档） | `2ce49ca` | docs/开发计划/20260918-0809 |
+| P3 搜索索引 | `fd29e59` | PluginSettingsFolderConfigurable 删 filterBar 条目 + 补录 13 项；双语 bundle 删两键 |
+| P1 假开关 | `19de6f3` | PluginSettings 删字段；面板删三处绑定 + 成败均回弹；双语 tooltip 补说明 |
+| P2 状态行接线 | `19de6f3` | AgentManager `statusSummary` + `AGENT_STATUS_TOPIC` + 三广播点；面板订阅/聚合/disposeResources；SectionConfigurable 接线 |
+| P4 项目级接线 | `6fa282f` | plugin.xml 注册 projectConfigurable；Configurable 扩 10 控件；SqlPreviewService 7 直读点 + effectiveString 转正；EntityResolver/JpaEntityResolver effectiveTableSetting；TableConfigSignature.projectSignature(project) |
+| P5 守卫测试 | `3eb05c3` | SettingsRealityGuardTest 四断言（先红后绿已验） |
+| 幽灵键收尾 | `d586487` | 删 `settings.update.envNotSupported` / `settings.search.placeholder` 双语四行；白名单收窄至两枚真动态键 |
+| 门禁收口 | `89a4651` | P4 三缺陷修复 + 用例锚点对齐（见 6.3） |
+| 合入 master | `6b3e31e` | merge（唯一冲突 AgentManager.kt，见 6.4） |
+
+### 6.2 与计划的偏离
+
+1. **P4 走「补完接线」而非兜底瘦身**：用户拍板补完（计划 §五 曾列二选一）。`BatchOperationConverter` 的 `tenantColumnName`/`injectTenantLine` 不属项目级 State 字段范围，维持全局读取（非本子项七字段之列，已在交付报告注明）。
+2. **P5 断言二白名单新增 `autoInjectInterceptorCheck`**：P1 定案后该控件为纯动作开关（不进 apply/reset），须豁免，否则守卫与 P1 语义自相矛盾。
+3. **额外产出**：守卫断言四首跑抓出两枚存量幽灵 bundle 键（计划未预见），按 P3 filterBar 先例清理并收窄白名单。
+4. **P4 面板控件数由计划的「8 行」实为 10 项**（总开关 + 方言 + 三 tri-state 勾选 + 四文本框 + 一下拉），计划 §二 表述为「8 行」指可覆盖项行数，实际含开关与方言共 10 控件。
+
+### 6.3 门禁暴露的问题（testFast 未覆盖，全量 test 抓出）
+
+| # | 问题 | 根因 | 修法 |
+|---|------|------|------|
+| 1 | 设置页未改动却显示「已修改」 | 平台 ComboBox 对**同值** `setSelectedItem` 也派发 ActionEvent（262 实证），createComponent/reset 灌值即置 `modified=true` | isModified 去掉 `modified` 标志位短路，改纯逐项比对（标志位降级为不可信） |
+| 2 | 逻辑删除值字段对全局兜底值恒误报 | 先 `setText` 后换自定义 `PlainDocument`，换 document 清空了已灌值 | 先换 document 再 setText |
+| 3 | 项目级 replaceParams 覆盖用例红 | 用例锚点用**字面量实参**（`eq(::getId, 1001L)`），而字面量恒内联是 ArgResolver 既有语义（M14.6 起开关只拦变量追踪） | 用例改变量实参，对齐被测语义 |
+
+另：合并后首跑出现 `PluginSettings$State.copy$default` 成片 NoSuchMethodError，为陈旧编译产物劫持（State 签名变化后旧 class 残留），清 `build/classes`+`build/kotlin` 后消失——非真回归。
+
+### 6.4 合并与冲突
+
+- master 在分支实施期间被并行会话推进 10 提交（T-PerfSweep4 并入 / T-HqlInhCols / T-BrowserLeak2 / T-CaptureBack / T-FramePrefixVisibility），双方共同触及 6 文件；`git merge-tree` 预演判定仅 1 处真冲突。
+- **冲突**：`AgentManager.kt` —— 并行会话 T-PS4-01/03 把 `sweepOffline` 改 `internal` 并加注释，与本分支 P2 在同位置插入成员相撞。解法=保留 master 侧签名与注释、叠加 P2 新增成员（`statusSummary`/`everAttached`/`publishStatusChanged`），三广播点完整。
+- **合并后修**：`SettingsRealityGuardTest` 断言二 CRLF 脆弱性——本机 `core.autocrlf=true` 检出为 CRLF，而 Java 正则 `.` 不匹配 回车符，全匹配失配；改为行尾归一再做行扫描（分支工作树为 LF 故未暴露）。
+
+### 6.5 后续修复（20260918 用户真机反馈）
+
+**反馈**：项目级设置页「表名推断」下拉显示 `SNAKE` 裸枚举值，与全局设置页同项文案不一致（语言不一致）。
+
+**根因**：项目页下拉用 `comboBox(listOf(PluginSettings.INFERENCE_SNAKE, PluginSettings.INFERENCE_CAMEL))` 直接以常量值作显示项（无 label 层），而全局面板走 `InferenceOption(value, label)` + `settings.tableNameInference.snake/.camel` bundle 文案。
+
+**修法**（三处一并收口，避免只修症状）：
+1. 项目页引入同款 `InferenceOption` data class（值 + 本地化文案，复用全局 bundle 键），构建/回灌/取值三处按 equals 匹配（`setSelectedItem` 传裸值会静默 return）；
+2. **8 个项目级重复标签键收编为全局键**——`settings.project.{replaceParams,formatSql,injectLogicDelete,logicDeleteValue,tablePrefix,tableSuffix,tableNameInference,ignoredFields}` 与全局键语义重复且措辞漂移（表名推断 vs 表名推断策略、添加表名前缀 vs 添加表前缀），删双语 16 行改用全局键，项目页与全局页逐字一致；
+3. 节点名改**语言中性** `SQL Visualizer (Project)`（原 zh「（当前项目）」/en「(Current Project)」——configurable 显示名由平台 `ResourceBundle`/`BundleBase` 按 **IDE locale** 解析，而面板内容跟插件语言，英文 IDE + 中文插件时露出英文后缀；全局页当初即以两语言同串规避，项目页现按同惯例对齐）。
+
+**回归守卫**：`ProjectPluginSettingsConfigurableTest` 新增断言——下拉项文案须等于全局面板同一组 bundle 键文案、且不得为枚举原值；行标签须含全局键文案。防「裸值当显示项 / 标签键自造」同类回潮。
+
+**验证**：settings 面 + i18n 面定向测试全绿；全量 test 见 6.6。
+
+### 6.6 验证结果
+
+- 合并树全量 `test`：**4406/0/0/6 绿**；`:sql-visualizer-agent:test` 绿。
+- 独立复核（写验分离）通过；三项 P3 观察项在册（多项目同开项目级表设置取值歧义 / 状态行文案未 bundle 化 / 守卫断言三 KDoc 宽松命中）。
+- 真机走查五项留人工，见 [验收文档](../验收文档/20260918-1238-T-SettingsTruth-设置真实性收敛-验收文档.md)。

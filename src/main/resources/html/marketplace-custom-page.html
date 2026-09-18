@@ -156,6 +156,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
   <li><b>SQL 来源全覆盖</b>：Wrapper 链与服务链、MPJ 联表、XML 动态标签、<code>@Select</code> 注解 SQL、Spring Data 派生查询、CriteriaQuery、HQL / <code>@Query</code>、JdbcTemplate 与自研 DAO 字符串 SQL</li>
   <li><b>真实参数一键回填</b>：<code>?</code> 占位符替换为实际值（LIKE 自动拼百分号、按字段类型加引号）；OGNL 条件勾选模拟；9 种数据库方言自动格式化</li>
   <li><b>控制台 SQL 日志实时捕获</b>：支持 MyBatis / Hibernate / JdbcTemplate 三种日志格式，去重过滤、精确跳转源码</li>
+  <li><b>增强捕获默认开启</b>：向运行中的应用挂载轻量 agent 直接采集真实执行，不依赖日志格式，附目标库、毫秒级耗时与影响行数</li>
   <li><b>SQL 反向转 Java</b>：一键生成可直接编译的 QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 代码</li>
   <li><b>JOIN 关系图与执行</b>：IDE 原生 ER 图渲染（PNG / SVG 导出）；内嵌原生 Database 控制台直接执行 SQL（Ultimate）</li>
   <li><b>CRUD SQL 一步直出</b>：实体类 / 项目视图实体节点 / 数据库表右键生成 INSERT / UPDATE / SELECT / DELETE，列勾选、乐观锁与逻辑删除自动适配</li>
@@ -251,6 +252,11 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
       <td>监听运行控制台还原可执行 SQL；支持 MyBatis / Hibernate / JdbcTemplate 三种日志格式；耗时展示与慢查询标记；可配置项目启动即自动监听</td>
     </tr>
     <tr>
+      <td>增强捕获 <span class="tag tag-new">New</span></td>
+      <td>设置页开关（默认开启）</td>
+      <td>向运行中的应用进程挂载轻量 agent，直接采集 JDBC 层真实执行：不依赖日志格式，附目标库角标、毫秒级耗时、影响行数与报错信息；首次运行项目弹一次注入确认，拒绝后 24 小时内不再打扰，控制台捕获照常回落</td>
+    </tr>
+    <tr>
       <td>单击预览 <span class="tag tag-new">New</span></td>
       <td>单击日志列表条目</td>
       <td>SQL 高亮可编辑编辑器轻量预览；临时改一个字段值后点「复制」即可取编辑后文本（双击仍开完整弹窗）</td>
@@ -273,7 +279,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
     <tr>
       <td>历史与源码定位 <span class="tag tag-new">New</span></td>
       <td>侧边栏「SQL 历史」tab / 双击条目</td>
-      <td>历史自动保存、两级导航；精确跳到触发 SQL 的 Service / Controller 行</td>
+      <td>历史自动保存、两级导航；精确跳到触发 SQL 的 Service / Controller 行；历史条目全量落盘并按保留上限自动裁剪，自定义目录下用户自有的 .sql 文件不受影响</td>
     </tr>
     <tr>
       <td>去重 / 过滤</td>
@@ -389,6 +395,15 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
   请到 <a href="https://sql-visualizer.jvtools.cn/about/feedback" target="_blank">官网需求池</a> 提交反馈，
   建议附上：插件版本号（设置页「关于」可一键复制内部构建号）、IDE 版本（<code>Help → About</code>）、
   复现步骤与示例代码、相关日志或截图。
+</div>
+
+<input type="checkbox" id="faq-8" class="faq-toggle">
+<label for="faq-8" class="faq-question">运行项目时弹出的「启用增强捕获」确认框是什么？</label>
+<div class="faq-answer">
+  增强捕获需要向应用进程挂载一个轻量 agent，才能直接采集真实执行（目标库、耗时、影响行数）。
+  首次运行项目时询问一次：同意即生效并记住选择；拒绝则本次不注入、24 小时内不再询问，
+  控制台日志捕获照常工作。弹窗第三个按钮「关闭增强捕获并不再询问」可一键关掉，
+  之后在设置页「增强捕获」分组随时可重新开启。
 </div>
 
 <hr/>

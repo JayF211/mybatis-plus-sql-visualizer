@@ -131,6 +131,28 @@ class BannedApiSourceScanTest {
     }
 
     @Test
+    fun `测试代码禁碰真实系统剪贴板统一走内存假实现`() {
+        // T-ClipboardIso（2026-09-18 用户真机反馈）：Windows 剪贴板是全机唯一互斥资源
+        // （WClipboard.openClipboard）——用户在跑测试时复制内容、或并行会话/分片 JVM 抢占，
+        // 测试里的 systemClipboard 读写即抛 `cannot open system clipboard`（实证：
+        // SqlPreviewPanelTest setUp 快照处单类 10 例全红），且测试写入会覆盖用户自己的剪贴板。
+        // 故 src/test 禁直连系统剪贴板：一律 installFakeClipboard（testutil）替换平台服务。
+        // 唯一豁免 = testutil 假实现本体（不含系统剪贴板访问，仅作类型引用）。
+        val bad = repoRoot().resolve("src/test/kotlin").walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .filter { it.name != "BannedApiSourceScanTest.kt" } // 本守卫自身报错文案含该片段，须自豁免
+            .filter { it.name != "FakeClipboard.kt" } // 假实现本体（不含 systemClipboard 访问）
+            .filter { it.readText().let { t -> t.contains("systemClipboard") || t.contains("getSystemClipboard") } }
+            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') }
+            .toList()
+        assertTrue(
+            "src/test 出现系统剪贴板直连（$bad）——用户复制/并行会话占用时必抛 cannot open system " +
+                "clipboard（整类用例假失败），且会覆盖用户剪贴板；改走 testutil.installFakeClipboard",
+            bad.isEmpty(),
+        )
+    }
+
+    @Test
     fun `SafeBrowser守卫语义_无Application必短路锚点`() {
         // T-BL2-03：守卫语义锚点防回退——isTestEnvironment 必须是「app == null || isUnitTestMode」
         // fail-safe 形态；若有人改回「app != null &&」（白名单放行），无 Application 测试进程会真开浏览器。

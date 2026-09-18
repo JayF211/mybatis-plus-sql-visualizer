@@ -8,10 +8,12 @@ import com.intellij.openapi.project.Project
  * M56 T-M56-09：consoleFilterProvider EP 双轨——EP 为主捕获通道（平台在控制台创建时自动
  * 装配本 provider 返回的 Filter，无轮询发现面），反射轮询降为兜底。
  *
- * 「EP 首行标志」生效判定：EP Filter 首次真正处理控制台行时置 [SqlCaptureGate.epActive]
- * （会话内粘滞）——桥的常驻轮询据此跳过 addMessageFilter 挂载（EP 已覆盖全部控制台，
- * 双挂载会双路解析）；定时器本身保留（控制台摘除检测等职责）。真机门禁：runIde 观测
- * EP 生效且轮询停转——留人工（本验收项计划标注「真机门禁先行」）。
+ * 「EP 实证产出」生效判定（T-CaptureTruth T-CT-04 收窄）：EP Filter 真正**产出过一条 SQL 条目**
+ * 时才置 [SqlCaptureGate.epActive]（会话内粘滞）——桥据此短路自身的重复解析；桥的**挂载面不再
+ * 跳过**（T-CT-04 起），即 EP 未在链上或对该控制台产不出条目时，桥照常解析保底。
+ * 原口径「EP 被调用过即置位 + 桥挂载面跳过」的双重假设从未真机验证（下方真机门禁项），
+ * 一旦不成立就是静默零捕获——故改为「先交条目再获信任」。
+ * 真机门禁：runIde 观测 EP 与桥的单路化（短路计数递增且条目不重）——留人工。
  *
  * 每个 Filter 实例持有独立 [BridgeLineContext]（平台每控制台创建一次 provider 调用，
  * 实例即 per-console 状态）；重放守卫降级为直通（EP Filter 不持有 console 引用，取不到
@@ -71,22 +73,21 @@ class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFil
             )
         }
 
-        private var firstLineSeen = false
-
         override fun applyFilter(line: String, entireLength: Int): Filter.Result? {
             // 捕捉态守卫（与桥同款状态机）：非捕捉态零处理
             if (!manager.capturing) return null
-            if (!firstLineSeen) {
-                firstLineSeen = true
-                // 「EP 首行标志」：EP 通道实证生效 → 桥轮询跳过 filter 挂载（会话内粘滞）
-                SqlCaptureGate.epActive = true
-            }
             // T-PS4-02：timePrefix 不再逐行读 PluginSettings——经 manager 桥侧缓存取（对齐桥侧
             // timePrefixCache 形态，刷新点一致：挂载/设置变更；EP 首行早于桥挂载时惰性补种）。
             // 值语义与原逐行读取一致（blank 归 null）。
             val timePrefix = manager.consoleBridge.currentTimePrefix()
-            processConsoleLine(line, ctx, timePrefix, {}, onErrorText = ::bindConsoleError)
-                .forEach { manager.entries.addEntry(it) }
+            val produced = processConsoleLine(line, ctx, timePrefix, {}, onErrorText = ::bindConsoleError)
+            // T-CaptureTruth T-CT-04：置位条件由「处理过任意一行」收窄为「实证产出过条目」——
+            // EP 被平台调用 ≠ EP 真在链上产出（覆盖不全时原口径会封死桥的回落通道 → 静默零捕获）。
+            // 置位前桥侧照常解析；置位后桥只短路重复解析，条目仍由 EP 单路产出。
+            if (produced.isNotEmpty() && !SqlCaptureGate.epActive) {
+                SqlCaptureGate.epActive = true
+            }
+            produced.forEach { manager.entries.addEntry(it) }
             return null // 不做高亮/链接——纯捕获通道
         }
 

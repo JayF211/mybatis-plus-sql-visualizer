@@ -270,13 +270,18 @@ open class SqlLogConsoleBridge(
      *  若平台 filter 链时序反转致短路误伤丢行，本计数与对应 debug 日志即排查锚点）。 */
     val epActiveShortCircuitCount = java.util.concurrent.atomic.AtomicLong()
 
+    /**
+     * T-CaptureTruth T-CT-03：控制台观测行数（每行进入桥 filter 即 +1，短路行也计）。
+     * 面板零产出诊断用——「已扫描 N 行 / 产出 0 条」是区分「控制台压根没输出」与
+     * 「有输出但没匹配到 SQL 日志」的唯一信号（后者指向日志级别/前缀配置）。
+     */
+    val consoleLinesSeen = java.util.concurrent.atomic.AtomicLong()
+
     /** T-PS4-02：internal 测试缝——两时序单路化测试直接对桩控制台挂载桥 filter（scanAll 需真实组件树）。 */
     internal fun attachFilter(console: Any) {
-        // M56 T-M56-09：「EP 首行标志」生效 → EP 已覆盖全部控制台，轮询挂载跳过（防双路解析）
-        if (SqlCaptureGate.epActive) {
-            LOG.debug("attachFilter: EP 已生效，轮询挂载跳过 ${console.javaClass.name}")
-            return
-        }
+        // T-CaptureTruth T-CT-04：**不再**因 epActive 跳过挂载。原挂载面守卫的收益只是省一次代理
+        // 分配，代价却是「EP 未覆盖该控制台时该控制台彻底无解析器」——封口改由 handler 逐行短路承担
+        // （epActive 置位后桥仍挂载但不再解析，CPU 收益与原先等价），挂载面则始终保底。
         // BUG FIX（停止后仍捕获）：非捕捉态时不挂载 Filter——守卫轮询/事件回调触发的 scanAll。
         if (!isCapturing()) {
             LOG.debug("attachFilter: 非捕捉态，跳过挂载 ${console.javaClass.name}")
@@ -337,12 +342,15 @@ open class SqlLogConsoleBridge(
                     filterIface.classLoader,
                     arrayOf(filterIface),
                     LogFilterProxyHandler { line, endOffset ->
-                        // T-PS4-02 双路解析封口：平台 filter 链中 EP（consoleFilterProvider）先于后挂的
-                        // 桥 filter 执行，行到达时 SqlCaptureGate.epActive 必已置位（EP 首行标志，会话内
-                        // 粘滞）——桥侧直接短路不解析。此前主流时序（控制台先存在→点捕捉→桥照挂）每行
-                        // EP+桥双路 processConsoleLine，解析 CPU 恒 ×2，仅靠缓冲去重保条目不重；短路后
-                        // 条目由 EP 单路产出，去重兜底语义保留。短路只省「重复解析」不省「解析本身」。
-                        // 防误伤可观测（计划 §六）：计数 + debug 日志（计数即测试探针/丢行排查锚点）。
+                        // T-CaptureTruth T-CT-03：控制台观测行计数（短路行也计——「桥看到过多少行」是
+                        // 面板零产出诊断的输入）
+                        consoleLinesSeen.incrementAndGet()
+                        // T-PS4-02 双路解析封口 / T-CaptureTruth T-CT-04 语义收窄：平台 filter 链中 EP
+                        // （consoleFilterProvider）先于后挂的桥 filter 执行，且 epActive 只在 EP **实证
+                        // 产出过条目**后才置位——置位即意味着「EP 在本会话确实在链上且确实能产出」，桥侧
+                        // 短路重复解析（条目由 EP 单路产出）。EP 不在链上/产不出条目时 epActive 恒 false，
+                        // 桥照常解析：这正是回落通道的保底（原口径「EP 被调用过就封口」会让未覆盖的控制台
+                        // 静默零捕获）。防误伤可观测：计数 + debug 日志（计数即测试探针/丢行排查锚点）。
                         if (SqlCaptureGate.epActive) {
                             val total = epActiveShortCircuitCount.incrementAndGet()
                             if (LOG.isDebugEnabled) LOG.debug("bridge filter: EP 已生效，短路桥侧重复解析（累计 $total 行）")
@@ -742,9 +750,15 @@ object SqlCaptureGate {
     val paused = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /**
-     * M56 T-M56-09：「EP 首行标志」——consoleFilterProvider EP 的 Filter 首次处理控制台行时
-     * 置 true（会话内粘滞）。桥的轮询据此跳过 addMessageFilter 挂载（EP 已覆盖全部控制台，
-     * 双挂载会双路解析）；定时器本身保留（控制台摘除检测等职责）。
+     * M56 T-M56-09：「EP 首行标志」——consoleFilterProvider EP 的 Filter 处理控制台行时置 true
+     * （会话内粘滞）。桥据此短路自身的重复解析（条目由 EP 单路产出）。
+     *
+     * T-CaptureTruth T-CT-04 **语义收窄**：置位条件由「EP 处理过任意一行」改为「EP 实证产出过条目」。
+     * 原口径下 EP 只要被平台调用一次就封死桥侧解析，而 EP 对某类控制台是否真在链上、是否真能产出
+     * 从未真机验证（provider KDoc 自述「真机门禁留人工」）——一旦 EP 覆盖不全，桥的回落通道已被
+     * 自己封死 = **静默零捕获**（与 T-CaptureTruth 立项现场同类症状）。收窄后：EP 必须先交出一条
+     * SQL 条目才获信任；EP 不在链上或对该控制台产不出条目时，桥照常解析（代价仅是「全程无 SQL 的
+     * 会话」多跑几道解析门，无条目可建，成本可忽略）。
      */
     @Volatile
     var epActive: Boolean = false

@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.config
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -59,6 +60,29 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         assertEquals("应有 2 个下拉（方言 + 推断策略）", 2, combos.size)
         assertTrue("方言下拉应有可选项", combos[0].itemCount > 0)
         assertEquals("推断策略下拉应有 SNAKE/CAMEL 两项", 2, combos[1].itemCount)
+        // 20260918 用户真机反馈回归守卫：下拉项须为**本地化文案**，不得把枚举原值当显示项
+        // （原实现 comboBox(listOf(INFERENCE_SNAKE, INFERENCE_CAMEL)) 致中文界面显示裸值
+        //  `SNAKE`/`CAMEL`，与全局设置页同项文案不一致）。断言显示文本 == 全局面板同一组 bundle 键。
+        val inferenceLabels = (0 until combos[1].itemCount).map { combos[1].getItemAt(it).toString() }
+        assertEquals(
+            "推断策略下拉项文案须复用全局面板 bundle 键",
+            listOf(
+                MpSqlVisualizerBundle.message("settings.tableNameInference.snake"),
+                MpSqlVisualizerBundle.message("settings.tableNameInference.camel"),
+            ),
+            inferenceLabels,
+        )
+        assertFalse(
+            "下拉不得显示枚举原值（应显示本地化文案）：$inferenceLabels",
+            inferenceLabels.any { it == PluginSettings.INFERENCE_SNAKE || it == PluginSettings.INFERENCE_CAMEL },
+        )
+        // 行标签亦须复用全局键（原项目级重复键措辞漂移：表名推断/添加表名前缀 等已收编）
+        // 注：DSL v2 row(label) 生成的是普通 JLabel（非 JBLabel），故按 JLabel 收集
+        val labels = all(comp).filterIsInstance<javax.swing.JLabel>().map { it.text }
+        assertTrue(
+            "行标签应复用全局键文案「${MpSqlVisualizerBundle.message("settings.tableNameInference")}」：$labels",
+            labels.contains(MpSqlVisualizerBundle.message("settings.tableNameInference")),
+        )
         val texts = all(comp).filterIsInstance<JTextField>().filter { it !is com.intellij.ui.components.JBCheckBox }
         // 逻辑删除值 + 表前缀 + 表后缀 + 忽略字段
         assertEquals("应有 4 个文本框", 4, texts.size)
@@ -107,7 +131,9 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         texts[0].text = "1" // 逻辑删除值
         texts[1].text = "t_" // 表前缀
         texts[2].text = "_log" // 表后缀
-        combos[1].selectedItem = PluginSettings.INFERENCE_CAMEL
+        // 推断策略下拉持有 data class 选项（值+本地化文案），按 getItemAt 选第二项（CAMEL）
+        // ——直接赋裸值 "CAMEL" 会因 equals 不匹配静默 return（JDK17 setSelectedItem 语义）
+        combos[1].selectedItem = combos[1].getItemAt(1)
         texts[3].text = " temp ; created " // 忽略字段（apply 应 trim）
 
         assertTrue(cfg.isModified())

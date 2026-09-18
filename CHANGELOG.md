@@ -4,7 +4,32 @@
 
 ## [Unreleased]
 
-> 已合入 master、随下一个内测版（Gitee 抢先体验通道）发行的内容，发行时本节改写为对应版本号归档。基线 v2026.9.18-beta.4（内测已发行）。
+### Added
+
+- **捕获零产出时的链路诊断（T-CaptureTruth T-CT-03）**：捕捉中却一条都捕不到时，SQL 日志面板空态第二行直接给出卡点——增强通道当前状态（未启用 / 未授权 / 等待应用进程 / 已挂载 pid / 已回落）、控制台已挂载数与已扫描行数，并按「等待项目运行 / 控制台暂无输出 / 有输出但没匹配到 SQL 日志」三档给出可执行下一步（后者直接指向 mapper 日志级别或改用增强捕获）。此前零产出只剩一个空列表，用户无从判断是没接上、没输出还是没匹配上
+
+### Changed
+
+- **增强捕获状态行补全「开着但没生效」两态（T-CaptureTruth T-CT-01）**：设置页状态行原先把「开关开着但从未授权注入」与「正常运行」一起收敛成空白，而复选框仍显示勾选，用户据此以为增强在正常工作、实际一条都捕不到。现按五态如实呈现，未授权时明示「未授权注入」并带冷却剩余小时数；增强关闭时才显示空白。顺带把状态行文案全部走 bundle（此前硬编码中文）
+- **控制台封口改为「实证产出后才封口」（T-CaptureTruth T-CT-04）**：增强捕获开启时，控制台桥曾只要检测到 EP 通道被调用过一次就永久停用自身解析（假设 EP 已覆盖全部控制台）。该假设从未真机验证，一旦不成立即整会话静默零捕获。现改为 EP 必须先真的交出一条 SQL 条目才获信任，且桥的挂载不再跳过——EP 未在链上或对该控制台产不出条目时，桥照常捕获；EP 真产出后 CPU 收益与原先一致
+
+### Fixed
+
+- **确认框第三按钮「关闭增强捕获并不再询问」从未显示（T-CaptureTruth T-CT-07）**：该按钮声明在 `init {}` 块之后，而平台在对话框构造期（`init()` 内）就会回调 `createActions()`——此刻该字段仍是 null（Kotlin 属性按文本顺序初始化，非空类型不拦），平台容忍 null 并静默不渲染按钮，用户只看到「同意并启用 / 取消」，因而误以为功能没做。修复=属性声明上移到 `init {}` 之前，并新增全仓守卫测试（凡 `DialogWrapper` 子类的 `createActions()` 引用后声明属性即失败）
+- **未授权后没有恢复入口（T-CaptureTruth T-CT-02）**：拒绝注入确认后进入 24 小时静默冷却——期间不再询问也不再挂载，而唯一恢复路径是「设置页取消勾选 → 应用 → 重新勾选 → 应用」，复选框本就显示勾选态，用户不可能想到。现设置页新增「重新授权」按钮（仅未授权态可见），点击即清零冷却并重弹确认；确认框正文补一条「取消的代价」说明
+- **设置页打开多次泄漏面板（T-CaptureTruth T-CT-05）**：面板把自身注册进 Disposer 树（父节点未注册 → 落 ROOT 子节点），而设置页关闭路径只断开订阅、不 dispose 面板，IDE 退出时每个打开过的设置页都报一条 `Memory leak detected`（沙盒实测 6 例）。现改为连接由面板显式断开、不再把自身挂进 Disposer 树，并加守卫断言防回潮
+- **一个从未执行过的守卫测试（T-CaptureTruth T-CT-01 附带）**：`SettingsTruthTest` 既无 `@Test` 注解也不继承 JUnit3 `TestCase`，其三个用例（含把上述状态行缺陷钉成「期望行为」的那条断言）从未被任何 runner 发现——交付时记录的「守卫全绿」是假绿。现补注解使其真正生效，并把语义断言改为运行期测试
+- **增强捕获的授权确认点了「同意」却被记成「拒绝」（T-ConsentTruth）**：设置里勾选「增强捕获」→ 弹窗点「同意并启用」后，复选框自己弹回未勾选、设置也存不下去，增强捕获实际从未启用。根因=确认框三态化改造（T-PS4-01）把「是否按了确定」从 `showAndGet()` 的返回值改成读取对话框结果字段，却只接上了「关闭增强捕获」一态——「同意」这一态全仓没有任何写入点，于是确认判定恒为假：设置页走「弹回未勾选」分支，应用启动弹窗则把「同意」记成「拒绝」并写入 24 小时冷却。也就是说增强捕获**经界面完全无法授权**。修复=把确定动作接回「同意」态；同时补运行期用例与「每个结果态都必须有写入点」的源码守卫（该类缺陷此前是测试盲区：既有测试注入的是假确认提供者，绕开了真实对话框）
+
+## [2026.9.18] - 2026-09-18
+
+> 正式版：内测系列 v2026.9.18-beta.1 ~ beta.4 内容并入本版，另含 beta.4 之后合入 master 的增量（性能收敛 T-PerfSweep4、设置真实性 T-SettingsTruth、历史全量化与保留上限、汇聚入口跳源码上溯等）。
+
+### Added
+
+- **项目级设置页（T-SettingsTruth P4）**：`plugin.xml` 注册 `projectConfigurable`（tools 顶层防套娃，双语 displayName「SQL Visualizer（当前项目）」）；面板扩容为 10 控件（增强捕获开关 + 方言 + 3 项 tri-state 勾选 + 逻辑删除值 + 表前缀/后缀 + 推断策略下拉 + 忽略字段，apply/isModified 逐项比对 + trim）；`ProjectPluginSettings` 7 个零调用 `effective*` 转正，预览服务全部参数替换/逻辑删除/表配置直读点改走 `effective*`，`EntityResolver` / `JpaEntityResolver` 表配置读取经 `effectiveTableSetting` 项目级覆盖（无项目上下文或异常时降级回退全局），缓存签名走项目维
+- **SQL 历史全量化与保留上限（T-SqlHistoryFull / T-HistoryFileRetention）**：历史条目全量落盘（不再达上限后丢弃后续条目）并消除历史打开卡顿；新增历史文件保留上限配置项，按插件命名模板文件族自动裁剪防磁盘膨胀（60 秒节流），自定义目录下用户自有的 .sql 文件永不计数、永不删除
+- **汇聚入口跳源码上溯（T-SourceJumpFunnel）**：agent `StackLocator` 判定收敛（候选增厚四列 8 条 / 缓存仅 L1 命中写入 / 上顶路径收敛 / 动态前缀热下发）+ IDE 统一跳转解析器 `EntryJumpResolver`（实时/历史两面板共用，历史面板补候选回退）+ cands/sd 双端协议列尾追加（新旧双向兼容）+ 栈快照详情展示 + 设置页帧过滤前缀
 
 ### Added
 
@@ -79,6 +104,7 @@
 
 - **性能收敛十三项（T-PerfSweep4）**：捕捉开启时控制台日志不再双路解析（每行只走增强或轮询单通道，解析成本减半）；增强捕获每条 SQL 只做一次调用栈捕获且 fat jar 部署下源码定位缓存正常生效（高频 SQL 应用的采集开销明显下降）；日志时间配对签名按 256 字符截断、数值判定与空白规范化正则常量化；历史文件保留上限裁剪加 60 秒节流；设置变更触发的历史落盘排水限批（默认 500 条），界面线程不再承担整批磁盘写；执行文件自动落盘监听随插件容器释放并带身份快判，全局键击过滤成本进一步降低
 - **预览链 2 秒阻塞消除（T-PreviewFast）**：点击预览后控制台 SQL 区固定要等约 2 秒才出现。真机日志定位：exec 文件写入无差量快路径——内容与磁盘已一致时仍要派发 EDT 并等满 2000ms 有界等待、再无条件落盘（连续预览同一 SQL 的主路径每次都白付），且预热属投机写入却在后台线程白等；另程序性写入会触发自己的 1.5s 防抖落盘。修复=内容一致即直接返回（不派发不落盘）、预热派发改非阻塞、落盘前判「已修改未保存」、程序性写入不再触发防抖落盘、显示模式变换加单槽缓存；新增「请求 → 弹窗 → 控制台可见」三段耗时埋点（日志前缀 `[T-PreviewFast]`）便于后续回归对照
+- **设置真实性收敛（T-SettingsTruth P1~P3）**：假开关 `autoInjectSqlSourceInterceptor` 改纯动作（勾选即注入、无论成败终态复位未勾选、不持久化，双语 tooltip 明示「本开关不保存状态」）；增强捕获状态行接线（`AgentManager.statusSummary` 三态文案 + 应用级 `AGENT_STATUS_TOPIC` 在 attach 成功/摘除/关停三迁移点广播，面板订阅聚合 openProjects 写 `enhancedStatusLabel`、reset 即拉现值、disposeResources 断连）；设置搜索索引清幽灵 `filterBar` 分组并补录 13 项真实未索引设置（preview 5 / sqlLog 8 / ui 1）；顺带清两枚存量幽灵 bundle 键（`settings.update.envNotSupported` 全历史零消费 / `settings.search.placeholder` 消费点已随重构删除）
 
 ### Fixed
 
@@ -86,6 +112,8 @@
 - **共享会话复用与数据源记忆不再「猜」（T-SessionIdentityGuard）**：预览执行链上有四处静默猜测，现全部收成 fail-closed。①共享控制台复用：判定接上三分量身份探测（复用 attach 路径既有探测），身份不可信即弃会话，数据源已从 facade 消失时同时清掉数据源记忆（旧实现只丢会话不清记忆，下一轮仍按显示名静默命中同名数据源）；②last-used 数据源记忆升级为「UUID 为主 + 显示名回退」双字段（旧显示名键保留读写，兼容一个版本，下个内测版后废弃），命中顺序=UUID 精确命中（数据源改名也认）→ 显示名唯一命中 → 否则弃记忆走弹窗，**同名多条数据源不再静默取首条**；③URL 未指定库的数据源不再静默跳过库上下文对齐——诊断与错误上下文行如实标注「未能确定默认库，当前=X」；④`setSearchPath` 强设后读回校验，与目标库不一致时记警告日志并附实际库（只告警不阻断，避免只读场景被对齐失败拦死）
 
 - **捕捉开关回归面板工具栏（T-CaptureBack）**：SQL 日志面板的「捕捉」按钮消失——第一轮反馈是按钮不见，第二轮截图实证按钮其实存在、只是平时不渲染。根因=界面原生化 T-UN-11 把捕捉开关从面板内工具栏迁到了工具窗标题栏（`setTitleActions`），而新 UI 下标题栏动作需悬停/激活才可见，入口在用户视角「消失」，且空态文案「点击『捕捉』」与实物位置割裂。修复=捕捉开关回迁面板工具栏首位，工厂侧移除标题栏挂载（单一入口），状态刷新沿用既定 `updateActionsImmediately` 展示链（T-UN-11 的反射 hack 退役收益保留）；顺手把「已开启 SQL 监听，等待项目运行」硬编码文案改走既有 bundle 键
+
+- **帧过滤前缀输入框被 GridBag 压扁不可见修复（T-FramePrefixVisibility）**：设置页「帧过滤前缀」多行输入框在真机上几乎不可见（真机截图定谳 H4）。修复=`JBTextArea` preferredSize 高度保底 ≥60px + lineWrap，并补平台标准文本框边框（`UIUtil.getTextFieldBorder`）与编辑区背景（`getTextFieldBackground`）+ 内部留白 + 长词换行，深色主题下框体辨识度提升；新增组件树守卫测试 `FrameSkipPrefixesFieldVisibilityTest`
 
 - **定时回归任务不再弹出真机浏览器（T-BrowserLeak2）**：用户真机 Edge 每隔一段时间自动打开 `sql-visualizer.jvtools.cn/about/feedback` 与 `example.invalid/never-opened` 两页。根因是 2026-09-11 帮助页弹浏览器第一轮修复的残余——测试 `SafeBrowserTest` 为验证「测试环境不弹浏览器」而直调这两个真实 URL，但 `SafeBrowser` 守卫写成「有 Application 且 isUnitTestMode 才短路」，纯 JUnit 无平台 Application 的测试进程反而被放行，`BrowserUtil.browse` 降级 `Desktop.browse` 直接 ShellExecute 拉起默认浏览器，定时任务每天跑全量测试即周期性弹窗。修复=守卫语义反转为 fail-safe 默认拦（`app == null || isUnitTestMode` 一律短路，真机 IDE 宿主行为零变化）；测试断言改为直接验证判定函数 `isTestEnvironment()`（不再依赖「没弹」这种不可观测副作用）；守卫测试补位——`BrowserUtil.browse` 禁用扫描扩展到 src/test、SafeBrowser fail-safe 守卫形态加锚点防回退
 
@@ -120,6 +148,7 @@
 - **方言 Lab 配方一致性守卫（T-DialectLabMatrix，O-10）**：五容器配方补 healthcheck（各库官方镜像自带工具），新增 database-lab/ 国产库资产（达梦/金仓官方 tar 取得路径 + load 脚本 + 示例片段 + 外部实例验证命令样例）；DockerComposeLabConsistencyTest 不起 Docker 即可校验配方四硬约束（钉版本/端口避让/必填 env/healthcheck）与文档一致性，漂移自证三例。国产库真实容器验证维持「环境受限未验证」诚实口径
 
 - **执行文档落盘纪律 DB 集成门禁（T-ExecDocGate）**：testDatabase 通道新增 `ExecDocGateIntegrationTest` 三断言——prepareConsole 后 / reuseSharedConsole 链后 exec 文档必须「未修改未保存」且磁盘==SQL；控制台手改后防抖窗内磁盘对齐——把第三/四轮失误模式钉进 CI。配套修复 testDatabase 基建：驱动种子源三级回退（本地 runIde 沙盒 → dev 工作树沙盒 → 日常 IDE 驱动存储，绝对路径锚定——daemon CWD 实测不可靠）+ 数据源显式携带驱动 jar classpath（DBN 243 单测模式 artifact 解析不生效，javap 实证 API 后改走 `SimpleClasspathElementFactory.createElements` + `setClasspathElements`）
+- **测试守卫第二轮与秒级反馈通道（T-TestGuard2 / T-TestPerf3）**：`testFast` 秒级反馈通道；守卫族扩展——设置真实性四断言 `SettingsRealityGuardTest`（State 写而不读 / 面板控件 apply-reset 绑定 / ProjectPluginSettings effective* 非 config 消费 / bundle 幽灵键扫描，白名单注证据行号）、组件树可见性 `FrameSkipPrefixesFieldVisibilityTest`、`BannedApiSourceScanTest` 禁扫范围扩展到 src/test 并含守卫文案自豁免与 SafeBrowser fail-safe 形态锚点
 
 ## [2026.9.18-beta.4] - 2026-09-17
 

@@ -58,6 +58,26 @@ class EnhancedCaptureConfirmDialog(parent: Project?) : DialogWrapper(parent, tru
     var outcome: EnhancedCaptureConsent = EnhancedCaptureConsent.REJECTED
         private set
 
+    /**
+     * 第三动作：关闭增强捕获并不再询问（T-PS4-01 用户明确新增需求；照 DialogWrapperExitAction 惯例）。
+     *
+     * **声明位置是硬约束，不得下移到 [init] 块之后**：Kotlin 属性初始化按文本顺序执行，而平台的
+     * `DialogWrapper.init()`（在下方 init 块里调用）会回调 [createActions]——此刻本字段尚未赋值，
+     * 传进动作数组的是 null，平台按「无此按钮」处理（T-CaptureTruth 实证：243 平台
+     * `DialogWrapper.init()` 字节码直调 `createActions()`；沙盒日志无「确认框异常」= 平台容忍 null
+     * 而非抛错，第三按钮静默消失）。守卫测试 `DialogWrapperActionOrderGuardTest` 防回潮。
+     */
+    private val disableCaptureAction: DialogWrapperExitAction =
+        object : DialogWrapperExitAction(
+            MpSqlVisualizerBundle.message("settings.enhancedCapture.confirm.disable"),
+            DISABLE_EXIT_CODE,
+        ) {
+            override fun doAction(e: java.awt.event.ActionEvent) {
+                outcome = EnhancedCaptureConsent.DISABLE_CAPTURE
+                super.doAction(e)
+            }
+        }
+
     init {
         title = MpSqlVisualizerBundle.message("settings.enhancedCapture.confirm.title")
         init()
@@ -83,15 +103,21 @@ class EnhancedCaptureConfirmDialog(parent: Project?) : DialogWrapper(parent, tru
         putValue(Action.NAME, MpSqlVisualizerBundle.message("settings.enhancedCapture.confirm.ok"))
     }
 
-    /** 第三动作：关闭增强捕获并不再询问（T-PS4-01 用户明确新增需求；照 DialogWrapperExitAction 惯例）。 */
-    private val disableCaptureAction: DialogWrapperExitAction =
-        object : DialogWrapperExitAction(
-            MpSqlVisualizerBundle.message("settings.enhancedCapture.confirm.disable"),
-            DISABLE_EXIT_CODE,
-        ) {
-            override fun doAction(e: java.awt.event.ActionEvent) {
-                outcome = EnhancedCaptureConsent.DISABLE_CAPTURE
-                super.doAction(e)
-            }
-        }
+    /**
+     * T-ConsentTruth T-CN-01：OK（「同意并启用」）的结果写入——**三态里唯一必须显式接线的一态**。
+     *
+     * 缺陷现场（T-PS4-01 `0fbd147` 引入，2026-09-18）：三态化改造把
+     * `showAndGet()`（布尔值本身即「是否按了 OK」）换成 `show()` + 读 [outcome]，却只接上了
+     * [EnhancedCaptureConsent.DISABLE_CAPTURE]——本方法缺失时 `outcome` 停在初值 REJECTED，
+     * 于是 `confirm()` 恒 false：设置页勾选被自身弹回、应用启动弹窗把「同意」记成「拒绝」并写 24h
+     * 冷却，**增强捕获经 UI 完全不可达**（用户报障「点确认但开启标识没变且不生效」）。
+     *
+     * public（平台原为 protected）是运行期测试缝：headless 下直调本方法断言三态可达，惯例同
+     * `EntitySelectionDialog.doOKAction()` / `ParamImportDialogTest` / `SqlPreviewDialogTest`。
+     * 另由 `DialogWrapperInitOrderGuardTest` 的状态可达性守卫遍历枚举防「加状态忘接线」回潮。
+     */
+    public override fun doOKAction() {
+        outcome = EnhancedCaptureConsent.ACCEPTED
+        super.doOKAction()
+    }
 }
