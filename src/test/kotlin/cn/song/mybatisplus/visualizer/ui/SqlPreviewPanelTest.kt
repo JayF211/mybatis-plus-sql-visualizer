@@ -111,10 +111,21 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
-    /** T-F8：含 JOIN 的预览结果（驱动 updateDiagramTab → 后台 schema 富化 → 回 EDT 渲染）。 */
-    private fun joinResult(): PreviewResult {
+    /**
+     * T-F8：含 JOIN 的预览结果（驱动 updateDiagramTab → 后台 schema 富化 → 回 EDT 渲染）。
+     *
+     * @param mainTable     主表元数据；T-TS-FixA 用它注入「列清单取 size 即抛」的替身，触发
+     *                      [cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator.buildDiagramModel]
+     *                      的异常路径
+     * @param selectColumns 显式 SELECT 列（默认空 = `SELECT *` 语义）
+     */
+    private fun joinResult(
+        mainTable: TableInfo = tableInfo(),
+        selectColumns: List<ColumnRef> = emptyList(),
+    ): PreviewResult {
         val statement = SelectStatement(
-            table = tableInfo(),
+            table = mainTable,
+            selectColumns = selectColumns,
             tableAlias = "u",
             joins = listOf(
                 JoinClause(
@@ -257,6 +268,52 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         }
         assertFalse(
             "建图抛异常后必须摘转圈（原实现异常逃逸会跳过摘转圈那行，转圈永留宿主层）",
+            panel.diagramPanelForTest().isLoadingForTest(),
+        )
+        assertFalse("宿主层同样不得卡转圈", panel.diagramLoadingHostForTest().isLoading)
+        panel.clear()
+    }
+
+    /**
+     * T-TS-FixA：列清单替身——只有 `size` 抛异常，迭代/按索引取值全部委托真实列表。
+     *
+     * 为什么只让 `size` 抛：[JoinDiagramGenerator.buildDiagramModel] 的首个可能抛点是
+     * `pickColumns(tableInfo)` 的 `tableInfo.columns.size`；渲染链上唯一同样读 `size` 的是
+     * `SELECT *` 的全列展开（`SqlGenerator` 读 `table.allColumnNames`），故用例显式给出
+     * selectColumns 绕开它——其余列清单访问（按列名查字段类型等）走迭代/按名查找，不受影响。
+     */
+    private fun sizeExplodingColumns(delegate: List<ColumnInfo>): List<ColumnInfo> =
+        object : AbstractList<ColumnInfo>() {
+            override val size: Int get() = throw IllegalStateException("diagram model boom")
+            override fun get(index: Int): ColumnInfo = delegate[index]
+            override fun iterator(): Iterator<ColumnInfo> = delegate.iterator()
+        }
+
+    /**
+     * T-TS-FixA：无 project 的**同步分支**上建图模型抛异常，转圈同样必须被摘下。
+     *
+     * 与 [testDiagramRenderFailureClearsLoading] 互补——后者走后台富化分支、在 [showJoinDiagram]
+     * 内部注入；本用例走 `proj == null` 的同步分支，那里 `buildDiagramModel(stmt)` 是
+     * `showJoinDiagram` 的**实参**：实参一抛，方法根本没进入，其 `finally`（唯一收口点）不会执行。
+     * 原实现的 catch 只 warn 不摘圈，于是 `showLoading()` 打开的转圈永留宿主层（直到下一次预览
+     * 或整图卸载）——两条分支对同一异常的处理不对称，本用例钉住补齐后的行为。
+     *
+     * 触发走**输入**而非注入缝：给主表列清单塞一个「取 size 即抛」的替身。显式给 selectColumns 是
+     * 必需的——渲染拍的列展开（`SqlGenerator` 仅在 `selectColumns` 为空时读 `table.allColumnNames`）
+     * 与建图拍读的是**同一个** `size` 访问器，不显式给列清单异常会先落在 renderSql，红的原因就跑偏了。
+     */
+    fun testDiagramModelBuildFailureWithoutProjectClearsLoading() {
+        val panel = SqlPreviewPanel(null)
+        panel.showResult(
+            joinResult(
+                mainTable = tableInfo().copy(columns = sizeExplodingColumns(tableInfo().columns)),
+                selectColumns = listOf(ColumnRef(tableAlias = "u", columnName = "id")),
+            ),
+        )
+        // 无 project → 同步分支：showResult 返回时该跑的都跑完了，无需排空 EDT 队列
+        assertFalse(
+            "无 project 同步分支：buildDiagramModel 抛在 showJoinDiagram 之前、finally 不会执行——" +
+                "catch 不摘圈则转圈永留宿主层",
             panel.diagramPanelForTest().isLoadingForTest(),
         )
         assertFalse("宿主层同样不得卡转圈", panel.diagramLoadingHostForTest().isLoading)

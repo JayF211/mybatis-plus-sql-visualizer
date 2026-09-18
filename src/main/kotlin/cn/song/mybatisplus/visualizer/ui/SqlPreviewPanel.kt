@@ -1486,7 +1486,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             val proj = project
             // T-F8：加载态包住「后台富化 + 回 EDT 换页」整段（showJoinDiagram 本体与 locateDbTables
             // 都在 EDT 同步跑，同一 EDT 事件内 startLoading 画不出来，故起止点必须跨事件）。
-            // 这里只「进」；「出」收口在 showJoinDiagram 末尾（单一收口点，两条分支都过它）。
+            // 这里只「进」；「出」的主收口点是 showJoinDiagram 末尾（正常路径两条分支都过它）。
+            // T-TS-FixA：主收口点只在 showJoinDiagram **被进入**时生效——建模型抛在调用之前时
+            // 它不会执行，故两条分支各自的 catch 内还必须显式摘圈（异常路径的收口点）。
             diagramPanel.showLoading()
             if (proj == null) {
                 // T-TS-05：buildDiagramModel 移入 try——抛在 showJoinDiagram 调用**之前**时，
@@ -1494,8 +1496,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 try {
                     showJoinDiagram(JoinDiagramGenerator.buildDiagramModel(stmt))
                 } catch (t: Throwable) {
+                    // T-TS-FixA：本 catch 是这条分支的**唯一**收尾方——buildDiagramModel 是
+                    // showJoinDiagram 的**实参**，实参求值期抛出时方法根本没进入，其 finally
+                    // （唯一收口点）不会执行；此处不摘圈，上面 showLoading() 打开的转圈就永留宿主层，
+                    // 直到下一次预览或整图卸载（对照后台富化分支：那边同样在异常时显式摘圈，
+                    // 两条分支对同一异常的处理必须对称）。
+                    // 线程：updateDiagramTab 由 showResult 在 EDT 上同步调用，本 catch 亦在 EDT，
+                    // 直接摘即可——invokeLater 归位只服务于跨线程的后台富化分支。
+                    diagramPanel.hideLoading()
                     com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
-                        .warn("[T-F8] join diagram build failed (no project), loading cleared by finally", t)
+                        .warn("[T-F8] join diagram build failed (no project), loading cleared here", t)
                 }
                 return
             }
@@ -1554,9 +1564,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * （缩放/布局/折叠/导出全框架托管）；Diagrams 插件缺席或框架异常（buildTabComponent 返回 null）
      * 自动降级自绘 [DiagramPanel]，与 Community 行为一致。
      *
-     * T-F8：本方法末尾是加载态的**唯一收口点**——两条调用分支（[updateDiagramTab] 的无 project
-     * 同步分支与后台富化回 EDT 分支）都经此，故「摘转圈」写在这里而不是各调用点：结构上保证
-     * 转圈一定晚于渲染被摘（原生图建图/自绘测量都在本方法内同步完成），调用方也不会漏收尾。
+     * T-F8：本方法末尾是加载态的**主收口点**——两条调用分支（[updateDiagramTab] 的无 project
+     * 同步分支与后台富化回 EDT 分支）正常路径都经此，故「摘转圈」写在这里而不是各调用点：结构上
+     * 保证转圈一定晚于渲染被摘（原生图建图/自绘测量都在本方法内同步完成），调用方也不会漏收尾。
+     * T-TS-FixA：主收口点只覆盖「进得来」的情形——建模型抛在**调用之前**（实参求值期）时本方法
+     * 不会被进入，故两条分支的 catch 内各自还有一层异常收口（见 [updateDiagramTab]）。
      *
      * T-TS-05：收尾改成 `try { … } finally`——原生框架建图（`buildTabComponent` 反射链/文件编辑器
      * 创建）与自绘测量都可能抛，原先的「顺序执行 + 末尾摘转圈」在异常逃逸时直接跳过摘转圈那行，
