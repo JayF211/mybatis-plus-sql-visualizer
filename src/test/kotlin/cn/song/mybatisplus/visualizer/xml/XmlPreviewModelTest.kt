@@ -228,4 +228,81 @@ class XmlPreviewModelTest {
         assertEquals(false, mixed.quoteFor("p.dicCreditStatus"))
         assertEquals(true, mixed.quoteFor("p.settlementStartDate"))
     }
+
+    // ------------------------------------------------------------------
+    // T-ExprAstPrecheck T-EP-02：if test 求值失败不再静默
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `if求值失败记错误_默认展开行为不变`() {
+        val parsed = XmlMapperParser().parse("""
+            <mapper namespace="n">
+              <select id="s1">SELECT * FROM t
+                <if test="not valid @@ expression">WHERE a = 1</if>
+              </select>
+            </mapper>
+        """.trimIndent())
+        // 开关缺席（无 conditionOverrides）→ 走表达式求值兜底：解析失败仍默认展开 true，但必须记 errors
+        val rendered = XmlSqlRenderer().render(parsed.statements.single().node, bindings = emptyMap())
+        assertEquals("SELECT * FROM t WHERE a = 1", compact(rendered.sql))
+        assertTrue(
+            "求值失败的 test 应留下可见错误：${rendered.errors}",
+            rendered.errors.any { it.contains("条件表达式无法求值，已按 true 展开——可在预览面板用开关覆盖") },
+        )
+        // 表达式原文随错误一并带出（用户据此定位是哪条条件）
+        assertTrue(
+            "错误应含 test 原文：${rendered.errors}",
+            rendered.errors.any { it.contains("not valid @@ expression") },
+        )
+    }
+
+    @Test
+    fun `if求值成功的test不记错误`() {
+        val parsed = XmlMapperParser().parse("""
+            <mapper namespace="n">
+              <select id="s1">SELECT * FROM t
+                <if test="a != null">WHERE a = 1</if>
+              </select>
+            </mapper>
+        """.trimIndent())
+        val rendered = XmlSqlRenderer().render(parsed.statements.single().node, bindings = mapOf("a" to "1"))
+        assertEquals("SELECT * FROM t WHERE a = 1", compact(rendered.sql))
+        assertTrue("求值成功不应记错误：${rendered.errors}", rendered.errors.isEmpty())
+    }
+
+    // ------------------------------------------------------------------
+    // T-ExprAstPrecheck T-EP-03：条件行支持面预检标注
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `条件行支持面标注_三档与展开行为无关`() {
+        val m = model("""
+            <mapper namespace="n">
+              <select id="s1">SELECT * FROM t
+                <if test="a != null and a.size() > 0">AND a = 1</if>
+                <if test="a ? b : c">AND b = 2</if>
+                <if test="map.length() > 0">AND c = 3</if>
+              </select>
+            </mapper>
+        """.trimIndent())
+        val byId = m.conditionViews.associateBy { it.id }
+
+        val supported = byId.getValue("a != null and a.size() > 0")
+        assertEquals(ExprSupport.SUPPORTED, supported.support)
+        assertEquals(null, supported.supportReason)
+        assertEquals(null, supported.supportDetail)
+
+        val syntax = byId.getValue("a ? b : c")
+        assertEquals(ExprSupport.UNSUPPORTED_SYNTAX, syntax.support)
+        assertEquals(ExprReason.SYNTAX, syntax.supportReason)
+        assertTrue("解析失败应带解析器消息：${syntax.supportDetail}", !syntax.supportDetail.isNullOrBlank())
+
+        val fallback = byId.getValue("map.length() > 0")
+        assertEquals(ExprSupport.EVAL_FALLBACK, fallback.support)
+        assertEquals(ExprReason.NARROW_CARRIER, fallback.supportReason)
+        assertEquals("length", fallback.supportDetail)
+
+        // 标注只是提示：默认渲染三个条件全部按启发式展开（行为零变化）
+        assertEquals("SELECT * FROM t AND a = 1 AND b = 2 AND c = 3", compact(m.renderSql().sql))
+    }
 }
