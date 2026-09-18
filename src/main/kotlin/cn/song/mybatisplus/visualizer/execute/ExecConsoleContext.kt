@@ -47,6 +47,15 @@ object ExecConsoleContext {
         "库上下文对齐：${current ?: "?"} → $after（数据源=${ds?.name}，URL 库=$target）"
     }.getOrElse { e -> "库上下文对齐跳过（${e.javaClass.simpleName}: ${e.message}）" }
 
+    /**
+     * T-MysqlGStrip：控制台数据源的 JDBC URL（`\G` 剥离的方言判定输入）；取不到返回 null。
+     * 走的是本对象既有的 `JdbcConsole.getDataSource().getUrl()` 面（[alignToDataSourceDatabase]
+     * 同源 API），失败一律 null → 调用方按「方言不可得 → 默认剥离」处理。
+     */
+    fun dataSourceUrl(console: Any?): String? = runCatching {
+        (console as? JdbcConsole)?.dataSource?.url
+    }.getOrNull()
+
     /** A：错误提示附带的上下文行——「当前库 / 数据源 / 数据源默认库」。 */
     fun describeContext(console: Any?): String? = runCatching {
         val c = console as? JdbcConsole ?: return@runCatching null

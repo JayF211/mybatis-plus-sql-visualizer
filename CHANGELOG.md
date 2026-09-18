@@ -80,6 +80,8 @@
 
 ### Fixed
 
+- **MySQL 命令行习惯的 `\G` 后缀不再报语法错（T-MysqlGStrip，O-32）**：从 mysql 客户端复制过来的 `SELECT 1\G`（垂直输出后缀）粘进预览面板/控制台执行时，文本原样发给服务端报语法错。现提交前剥掉最后一语句行尾的 `\G`/`\g`（允许尾随空白，允许分号在 `\G` 之前或之后），并把剥后文本同步回编辑器（所见即所执行）；注释行与字符串字面量里的 `\G` 不碰（`SELECT '\G'` 原样透传）；历史记录仍保留你粘进来的原文；非 MySQL 数据源不剥离。规则对齐 DataGrip 同项处理
+
 - **捕捉开关回归面板工具栏（T-CaptureBack）**：SQL 日志面板的「捕捉」按钮消失——第一轮反馈是按钮不见，第二轮截图实证按钮其实存在、只是平时不渲染。根因=界面原生化 T-UN-11 把捕捉开关从面板内工具栏迁到了工具窗标题栏（`setTitleActions`），而新 UI 下标题栏动作需悬停/激活才可见，入口在用户视角「消失」，且空态文案「点击『捕捉』」与实物位置割裂。修复=捕捉开关回迁面板工具栏首位，工厂侧移除标题栏挂载（单一入口），状态刷新沿用既定 `updateActionsImmediately` 展示链（T-UN-11 的反射 hack 退役收益保留）；顺手把「已开启 SQL 监听，等待项目运行」硬编码文案改走既有 bundle 键
 
 - **定时回归任务不再弹出真机浏览器（T-BrowserLeak2）**：用户真机 Edge 每隔一段时间自动打开 `sql-visualizer.jvtools.cn/about/feedback` 与 `example.invalid/never-opened` 两页。根因是 2026-09-11 帮助页弹浏览器第一轮修复的残余——测试 `SafeBrowserTest` 为验证「测试环境不弹浏览器」而直调这两个真实 URL，但 `SafeBrowser` 守卫写成「有 Application 且 isUnitTestMode 才短路」，纯 JUnit 无平台 Application 的测试进程反而被放行，`BrowserUtil.browse` 降级 `Desktop.browse` 直接 ShellExecute 拉起默认浏览器，定时任务每天跑全量测试即周期性弹窗。修复=守卫语义反转为 fail-safe 默认拦（`app == null || isUnitTestMode` 一律短路，真机 IDE 宿主行为零变化）；测试断言改为直接验证判定函数 `isTestEnvironment()`（不再依赖「没弹」这种不可观测副作用）；守卫测试补位——`BrowserUtil.browse` 禁用扫描扩展到 src/test、SafeBrowser fail-safe 守卫形态加锚点防回退

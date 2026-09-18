@@ -277,13 +277,19 @@ object DataSourceSelector {
             return
         }
 
+        // T-MysqlGStrip T-MG-02：提交链总口——SQL 文本进入 exec 文件/控制台文档之前剥离 MySQL CLI
+        // 的 `\G` 后缀（DBX #35）。此点数据源尚未选定（runner 弹窗在下方），方言不可得 → 按计划
+        // §三 定案默认剥离（`\G` 非任何方言合法语法，剥离无害）。剥后文本写入 exec 文件，
+        // 控制台编辑器所见即所执行；历史链在预览侧记录原文，不受此处影响（两态分离）。
+        val submitSql = stripGSuffixForSubmit(sql, null).submitText
+
         // M36.5.5：共享控制台命中（last-used 数据源一致且控制台仍有效）→ 直接复用——
         // 不同步 session/连接/临时文件/方言映射，规避"第二个会话连接永不发起"挂死（见字段注释）。
         // 显式执行路径同样复用（结果落在已嵌入面板）；用户切换数据源走弹窗 → 新建并替换共享缓存。
-        if (reuseSharedConsole(project, sql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich)) return
+        if (reuseSharedConsole(project, submitSql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich)) return
 
         // 临时文件 + VF + PsiFile：Runner 上下文 + 控制台挂载点（VF 须保持引用）
-        val temp = createTempPsiFile(project, sql)
+        val temp = createTempPsiFile(project, submitSql)
         if (temp == null) {
             // T-ExecCopyFix F2a：携带阶段原因（stage 标识/异常摘要），本地化文案——
             // 用户真机曾只见笼统英文 "Failed to create temporary SQL file"，无从归因
@@ -301,7 +307,7 @@ object DataSourceSelector {
             prepareInConsole(project, session, vf, executeAfterPrepare, chosenRunnerName, onConsole, onEditor, onError, onErrorRich)
         }
 
-        val runners = getAttachDataSourceRunners(psiFile, sql, sessionConsumer)
+        val runners = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer)
         LOG.info("[M36] runners=${runners.size}")
 
         // M36.5：last-used 数据源静默命中（仅 prepareConsole 路径；显式执行保持弹窗可选）
@@ -2279,11 +2285,27 @@ object DataSourceSelector {
         dsName: String? = sharedDataSourceName,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+        // T-MysqlGStrip T-MG-02：提交链总口（已备控制台路径）——提交文本源是控制台编辑器文档，
+        // 执行前剥离 `\G` 后缀并把剥后文本**回写编辑器文档**（所见=所执行，避免显示/执行分叉）。
+        // 回写复用既有 T-ExecDocSync 写纪律（dispatchDocWriteOnEdt → writeVfTextViaDocument：
+        // setText→commit→saveDocument 同临界区，BGT 调用派 EDT），不新开写路径。
+        // 方言按控制台数据源 JDBC URL 判定：非 MySQL 系方言不剥；URL 不可得 → 默认剥离（计划 §三定案）。
+        val consoleVfForG = runCatching {
+            console.javaClass.getMethod("getVirtualFile").invoke(console) as? com.intellij.openapi.vfs.VirtualFile
+        }.getOrNull()
+        val gStrip = stripGSuffixForSubmit(editor.document.text, ExecConsoleContext.dataSourceUrl(console))
+        if (gStrip.stripped) {
+            LOG.info(
+                "[T-MysqlGStrip] stripped \\G suffix before submit " +
+                    "(len ${gStrip.original.length}->${gStrip.submitText.length}, vf=${consoleVfForG?.name})",
+            )
+            if (consoleVfForG != null) dispatchDocWriteOnEdt(project, consoleVfForG, gStrip.submitText)
+        }
         // T-DdlCacheInvalidate（O-12）：DDL/事务提交语句在提交前失效插件自持 schema 缓存
         // （DBX object_cache 语义：失效须在结果返回前、失效失败只记日志不吞执行结果——
         // Oracle 系 DDL 隐式提交，DDL 报错不代表没提交）。全执行链唯一提交收口点；
         // SQL 文本取控制台编辑器文档（三调用路径共用同一文档，提交时刻即执行内容）。
-        val executedSql = editor.document.text
+        val executedSql = if (gStrip.stripped) gStrip.submitText else editor.document.text
         runCatching { MetadataInvalidator.invalidateAfterExecution(executedSql) }
             .onFailure { LOG.warn("[T-DdlCacheInvalidate] invalidate hook failed (execution continues)", it) }
         // M36.5.52：新执行重置错误去重基线——本次执行产生的错误应上报，不与上次残留混淆。
@@ -2329,7 +2351,9 @@ object DataSourceSelector {
                     val consoleVf = consoleClass.getMethod("getVirtualFile").invoke(console)
                         as? com.intellij.openapi.vfs.VirtualFile
                     if (consoleVf != null) {
-                        val consoleText = editor.document.text
+                        // T-MysqlGStrip：剥离后的文本才是本次执行内容（回写失败时编辑器文档可能仍是
+                        // 原文，此处以剥后文本为准收敛 vf，保证提交内容恒定无 `\G`）
+                        val consoleText = if (gStrip.stripped) gStrip.submitText else editor.document.text
                         @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
                         com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
                             // T-ExecDocSync T-EC-01：document 驱动写 + 同临界区落盘（saveDocument）——
@@ -3146,6 +3170,21 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      * 判据不可靠（EDT 忙时 getCachedDocument 恒 null，而排队中的写任务随后会建出 document），
      * 现策略见 [projectExecFile] 内注释：VFS 已有该文件即绝不裸写。
      */
+
+    /**
+     * T-MysqlGStrip T-MG-02：提交链总口的 `\G` 剥离决策（[chooseAndPrepare] 新建控制台链与
+     * [executeOnConsole] 已备控制台链共用同一入口）。
+     *
+     * @param dataSourceUrl 控制台数据源 JDBC URL（方言判定输入）；null = 方言不可得 →
+     *                      [MysqlClientGSuffix.stripForDialect] 按 MySQL 处理（默认剥离）
+     * @return 两态结果——[MysqlClientGSuffix.Result.submitText] 进 exec 文件/控制台文档，
+     *         [MysqlClientGSuffix.Result.original] 留给历史链（历史记原文、提交文本剥离）
+     *
+     * internal 供 headless 用例直测（沙盒默认 test 任务无 Database 插件，
+     * chooseAndPrepare/executeOnConsole 在默认 test 任务不可达——ExecTempFileFixTest 同款口径）。
+     */
+    internal fun stripGSuffixForSubmit(sqlText: String, dataSourceUrl: String?): MysqlClientGSuffix.Result =
+        MysqlClientGSuffix.stripForDialect(sqlText, MysqlClientGSuffix.dialectFromUrl(dataSourceUrl))
 
     /**
      * T-EC-01：document 驱动写 + **同临界区落盘**——`setText → commitDocument → saveDocument`，
