@@ -209,26 +209,52 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 脱敏开关（默认开）：对疑似敏感形态打码，agent 采集层执行。 */
     private val enhancedDesensitizeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize"))
 
-    /** 增强捕获状态行：已挂载 pid=x / 已回落控制台捕获 / 连接中。 */
+    /** 增强捕获状态行：已挂载 pid=x / 未授权注入 / 已回落控制台捕获（T-CaptureTruth T-CT-01 五态）。 */
     private val enhancedStatusLabel = JBLabel(" ")
+
+    /**
+     * T-CaptureTruth T-CT-02：重新授权按钮——仅在「开关开着但未授权」时露出（拒绝冷却期的恢复入口）。
+     *
+     * 监听器在字段初始化时挂一次：本面板 [rebuild]（语言切换）会重跑 buildSections，若在 addRow
+     * 处挂监听会随重建叠加重复回调。
+     */
+    private val enhancedReauthButton = JButton(MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth")).apply {
+        toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth.tip")
+        isVisible = false
+        addActionListener { onReauthorizeClicked() }
+    }
+
+    /** T-CaptureTruth T-CT-02：对首个「待授权」项目重走确认流（多项目取值歧义属既有边界）。 */
+    private fun onReauthorizeClicked() {
+        ProjectManager.getInstance().openProjects
+            .firstOrNull { p ->
+                runCatching { !p.isDisposed && AgentManager.getInstance(p).needsReauthorization() }
+                    .getOrDefault(false)
+            }
+            ?.let { p -> runCatching { AgentManager.getInstance(p).requestReauthorization() } }
+        refreshEnhancedStatusLabel()
+    }
 
     /** T-SettingsTruth P2：AgentManager 状态行 messageBus 连接（disposeResources 断开）。 */
     private var agentStatusConnection: com.intellij.openapi.Disposable? = null
 
     /**
-     * T-SettingsTruth P2：聚合各打开项目的 AgentManager 状态写入增强捕获状态行。
-     * 无任何活动会话（各项目均 null）→ 显示空串；多项目以「；」连接。
+     * T-SettingsTruth P2 / T-CaptureTruth T-CT-01/02：聚合各打开项目的 AgentManager 状态写入增强捕获
+     * 状态行，并按「是否存在待授权项目」控制重新授权按钮可见性。
+     * 无任何活动叙事（各项目均 null）→ 显示空串；多项目以「；」连接。
      */
     internal fun refreshEnhancedStatusLabel() {
-        val text = ProjectManager.getInstance().openProjects
-            .mapNotNull { p ->
-                runCatching {
-                    if (p.isDisposed) null else AgentManager.getInstance(p).statusSummary()
-                }.getOrNull()
-            }
+        val agents = ProjectManager.getInstance().openProjects.mapNotNull { p ->
+            runCatching { if (p.isDisposed) null else AgentManager.getInstance(p) }.getOrNull()
+        }
+        val text = agents
+            .mapNotNull { a -> runCatching { a.statusSummary() }.getOrNull() }
             .filterNotNull()
             .joinToString("；")
         enhancedStatusLabel.text = text.ifEmpty { " " }
+        enhancedReauthButton.isVisible = agents.any { a ->
+            runCatching { a.needsReauthorization() }.getOrDefault(false)
+        }
     }
 
     /**
@@ -417,11 +443,13 @@ class PluginSettingsPanel @JvmOverloads constructor(
         reset()
         refreshCacheInfo()
         // T-SettingsTruth P2：订阅 app 级增强捕获状态 Topic，AgentManager 状态迁移点刷新状态行。
-        // connection 注册到面板 Disposable 树（防 IDE 退出 Memory leak detected）。
+        // T-CaptureTruth T-CT-05：**不得** Disposer.register(this@PluginSettingsPanel, connection)——
+        // 面板自身不在 Disposer 树里，register 会把它挂成 ROOT_DISPOSABLE 子节点，而 Configurable
+        // 链路只调 disposeResources() 不 dispose 面板，IDE 退出即报 Memory leak（沙盒实测 6 例，
+        // 栈指本行）。连接生命周期由 disposeResources() 显式承担。
         agentStatusConnection = com.intellij.openapi.application.ApplicationManager.getApplication()
             .messageBus.connect()
             .also { connection ->
-                com.intellij.openapi.util.Disposer.register(this@PluginSettingsPanel, connection)
                 connection.subscribe(AgentManager.AGENT_STATUS_TOPIC, object : AgentStatusListener {
                     override fun onStatusChanged() {
                         com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
@@ -792,6 +820,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 })
                 addRow(p, g, "", enhancedDesensitizeCheck.apply { text = MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize") })
                 addRow(p, g, "", enhancedStatusLabel)
+                // T-CaptureTruth T-CT-02：重新授权入口（仅未授权态可见，文本随语言重建刷新）
+                addRow(p, g, "", enhancedReauthButton.apply {
+                    text = MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth.tip")
+                })
                 // T-SourceJumpFunnel P1-3：帧过滤前缀（自研框架包名登记，热下发 agent）
                 frameSkipPrefixesField.apply {
                     text = PluginSettings.getInstance().state.sourceFrameSkipPrefixes

@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.log.SqlLogManager
 import cn.song.mybatisplus.visualizer.log.logTimeKey
 import cn.song.mybatisplus.visualizer.log.logTimeParamSignature
 import cn.song.mybatisplus.visualizer.log.stampLogTime
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
@@ -196,8 +197,29 @@ class AgentManager(private val project: Project) : Disposable {
         return clockMs() - rejectedAt < rejectCooldownMs
     }
 
-    private fun remainingRejectCooldownMs(): Long =
+    internal fun remainingRejectCooldownMs(): Long =
         (rejectCooldownMs - (clockMs() - PluginSettings.getInstance().state.enhancedCaptureRejectedAtMs)).coerceAtLeast(0)
+
+    /**
+     * T-CaptureTruth T-CT-02：重新授权入口（设置页「重新授权」按钮 / 面板链路诊断行的恢复动作）。
+     *
+     * 语义 = 清零拒绝冷却（与「关闭→再开启」上升沿同一条重置语义，抽为单一入口）后立即重走确认流：
+     * 同意 → 置 confirmed 并（有进程句柄时）挂载；拒绝 → 重新计时冷却。此前用户被拒后唯一恢复路径是
+     * 「设置页取消勾选→应用→重新勾选→应用」，而复选框本就显示勾选态，实际无从下手（T-CaptureTruth 根因之二）。
+     *
+     * 无进程句柄：本入口不携带 processStarted 事件，故只恢复授权、不尝试挂载——挂载由下一次
+     * 应用进程启动承接（状态行随即转「已授权，等待应用进程启动后挂载」）。
+     */
+    fun requestReauthorization() {
+        if (!isEnhancedEnabled()) {
+            LOG.info("requestReauthorization: 增强未开启——忽略")
+            return
+        }
+        PluginSettings.getInstance().state.enhancedCaptureRejectedAtMs = 0L
+        LOG.info("requestReauthorization: 拒绝冷却已清零，重走注入确认流")
+        publishStatusChanged()
+        requestConsentThenAttach(null)
+    }
 
     /**
      * 首次挂载确认（EDT 弹一次）。T-PS4-01 三态语义：
@@ -222,6 +244,15 @@ class AgentManager(private val project: Project) : Disposable {
             when (outcome) {
                 EnhancedCaptureConsent.ACCEPTED -> {
                     state.enhancedCaptureConfirmed = true
+                    // T-CaptureTruth T-CT-01：三态结果都广播——否则设置页状态行要等下一次
+                    // attach/掉线才刷新，用户点完同意/拒绝后看到的是过期文案。
+                    publishStatusChanged()
+                    if (processHandler == null) {
+                        // T-CaptureTruth T-CT-02：重新授权入口无进程句柄——只恢复授权，
+                        // 挂载由下一次应用进程启动承接（避免 resolvePid(null) 的误导性 WARN）。
+                        LOG.info("requestConsentThenAttach: 用户同意注入——已授权，等待应用进程启动后挂载")
+                        return@invokeLater
+                    }
                     LOG.info("requestConsentThenAttach: 用户同意注入——继续挂载")
                     doAttachAsync(processHandler)
                 }
@@ -231,10 +262,12 @@ class AgentManager(private val project: Project) : Disposable {
                     // 后续任何进程启动都不再进入本确认流，也不 attach。
                     state.enhancedCaptureEnabled = false
                     LOG.info("requestConsentThenAttach: 用户选择关闭增强捕获并不再询问——总开关已持久化关闭")
+                    publishStatusChanged()
                 }
                 EnhancedCaptureConsent.REJECTED -> {
                     state.enhancedCaptureRejectedAtMs = clockMs()
                     LOG.info("requestConsentThenAttach: 用户拒绝注入——进入 ${rejectCooldownMs}ms 冷却（冷却期内不重复弹，不改同意门槛）")
+                    publishStatusChanged()
                 }
             }
         }
@@ -406,22 +439,19 @@ class AgentManager(private val project: Project) : Disposable {
     }
 
     /**
-     * T-SettingsTruth P2：状态行文案（设置页增强捕获状态行展示）。
-     * - null = 无活动会话（无状态行叙事）；
-     * - 有活跃会话 =「已挂载 pid=x[,y]」；
-     * - 曾成功挂载但会话已中断（掉线摘除 / shutdownAll 回落后）=「连接中断，已回落控制台捕获」。
+     * T-SettingsTruth P2 / T-CaptureTruth T-CT-01：状态行文案（设置页增强捕获状态行展示）。
+     * 本函数只取数，文案由纯函数 [agentStatusText] 产出（五态全分支可单测）。
      * 只读内存集合（CopyOnWriteArrayList/ConcurrentHashMap），任意线程安全。
      */
-    internal fun statusSummary(): String? {
-        val live = sessions.filter { it.alive }
-        if (live.isNotEmpty()) {
-            return live.joinToString(prefix = "已挂载 ", separator = ",") { "pid=${it.pid}" }
-        }
-        if (everAttached.get()) {
-            return "连接中断，已回落控制台捕获"
-        }
-        return null
-    }
+    internal fun statusSummary(): String? = agentStatusText(
+        AgentStatusSnapshot(
+            enabled = isEnhancedEnabled(),
+            confirmed = isEnhancedConfirmed(),
+            rejectCooldownRemainingMs = remainingRejectCooldownMs(),
+            livePids = sessions.filter { it.alive }.map { it.pid },
+            everAttached = everAttached.get(),
+        ),
+    )
 
     /** T-SettingsTruth P2：是否发生过成功挂载（区分「从未挂载」与「挂载后中断回落」）。 */
     private val everAttached = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -460,6 +490,13 @@ class AgentManager(private val project: Project) : Disposable {
     /** 注入确认已达成（同意过一次即持久为 true）。 */
     internal fun isEnhancedConfirmed(): Boolean =
         PluginSettings.getInstance().state.enhancedCaptureConfirmed
+
+    /**
+     * T-CaptureTruth T-CT-02：是否处于「开关开着但未授权」（含拒绝冷却期）——设置页据此露出
+     * 重新授权按钮。区别于 [isEnhancedActive]：未授权态下增强功能实际不工作，状态行与按钮
+     * 就是为了把这一真相摆到用户面前。
+     */
+    internal fun needsReauthorization(): Boolean = isEnhancedEnabled() && !isEnhancedConfirmed()
 
     /** 关闭开关：CONFIG 下发停采集（禁用不卸载语义）→ 会话关闭 → 桥回落。 */
     fun shutdownAll() {
@@ -550,6 +587,54 @@ class AgentManager(private val project: Project) : Disposable {
             SqlCaptureGate.paused.set(false)
         }
     }
+}
+
+/** T-CaptureTruth T-CT-01：增强捕获状态行输入快照（纯数据，[agentStatusText] 入参，零平台依赖）。 */
+internal data class AgentStatusSnapshot(
+    val enabled: Boolean,
+    val confirmed: Boolean,
+    val rejectCooldownRemainingMs: Long,
+    val livePids: List<Long>,
+    val everAttached: Boolean,
+)
+
+/**
+ * T-CaptureTruth T-CT-01：增强捕获状态行文案（纯函数，五态全分支可单测）。
+ *
+ * 立项动因：原实现只有「有活会话 / 曾挂载 / 其余 null」三态——**「开关开着但从未授权」落进 null
+ * 分支**，设置页状态行渲染成空白而复选框仍显示勾选，用户读作「开着且没事」，实际一条都捕不到
+ * （T-CaptureTruth 根因之三；旧守卫断言「无会话应返回 null」把该行为钉死，本次一并改）。
+ *
+ * 五态：
+ *  1. 关闭（!enabled）→ null（复选框未勾选，无需叙事）；
+ *  2. 有活会话 →「已挂载 pid=…」；
+ *  3. 未授权 + 冷却中 → 含剩余小时与「重新授权」指引（冷却原本静默，用户无从得知被拒过）；
+ *  4. 未授权 + 无冷却 → 下次启动主配置时会询问；
+ *  5. 已授权：曾挂载过 → 连接中断已回落控制台捕获；从未挂载 → 等待应用进程启动后挂载。
+ */
+internal fun agentStatusText(s: AgentStatusSnapshot): String? {
+    if (!s.enabled) return null
+    if (s.livePids.isNotEmpty()) {
+        return MpSqlVisualizerBundle.message(
+            "settings.enhancedCapture.status.attached",
+            s.livePids.joinToString(",") { "pid=$it" },
+        )
+    }
+    if (!s.confirmed) {
+        if (s.rejectCooldownRemainingMs > 0) {
+            // 小时向上取整（不足 1 小时也显示 1，避免「剩 0 小时」的歧义）
+            val hours = ((s.rejectCooldownRemainingMs + 3_599_999L) / 3_600_000L).coerceAtLeast(1L)
+            return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.unauthorizedCooldown", hours)
+        }
+        return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.unauthorizedPending")
+    }
+    return MpSqlVisualizerBundle.message(
+        if (s.everAttached) {
+            "settings.enhancedCapture.status.fellBack"
+        } else {
+            "settings.enhancedCapture.status.authorizedWaiting"
+        },
+    )
 }
 
 /**
