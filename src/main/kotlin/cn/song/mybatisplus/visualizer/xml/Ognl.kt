@@ -69,6 +69,48 @@ sealed interface EvalResult {
     data class Err(val message: String) : EvalResult
 }
 
+/**
+ * 表达式支持面分档（T-ExprAstPrecheck T-EP-01）：把「求值失败/静默降级」提前成声明性判定。
+ *
+ * 支持面清单不另造语义，直接取自本文件既有事实：解析器能产出的 AST 节点与运算符、
+ * [OgnlEvaluator.KNOWN_METHODS] 方法白名单、[OgnlEvaluator] 的属性/getter 访问语义。
+ */
+enum class ExprSupport {
+    /** 语法与语义都在受限子集内（含属性链、下标、getter 形态、载体无关的白名单方法）。 */
+    SUPPORTED,
+
+    /** 语法即超出受限子集（三元 / 赋值 / lambda / 静态方法 / new 等），解析返回 [ParseResult.Err]。 */
+    UNSUPPORTED_SYNTAX,
+
+    /** 语法可解析，但含求值期降级形态（未知方法链 / 载体受限的白名单方法 / 静态字段引用）——求值会返回 null 而不报错。 */
+    EVAL_FALLBACK,
+}
+
+/** 分档理由码（T-EP-03 条件行标注 tooltip 用；UI 侧映射 bundle 文案，xml 层不持有文案）。 */
+enum class ExprReason {
+    /** 解析失败（[ExprSupport.UNSUPPORTED_SYNTAX] 的唯一理由）。 */
+    SYNTAX,
+
+    /** 未知方法调用：不在白名单内且非 getter 形态，求值静默返回 null。 */
+    UNKNOWN_METHOD,
+
+    /** 白名单方法在接收者载体上无实现（如 `length()` 只对字符串有实现），求值静默返回 null。 */
+    NARROW_CARRIER,
+
+    /** 静态字段引用：取值由 PSI 层注入，xml 层无法判定可用性，未注入时求值为 null。 */
+    STATIC_FIELD,
+}
+
+/**
+ * 分类结论：档位 + 理由码 + 细节（方法名 / `@类@字段` / 解析错误消息）。
+ * [ExprSupport.SUPPORTED] 时 [reason] 与 [detail] 均为 null。
+ */
+data class ExprClassification(
+    val support: ExprSupport,
+    val reason: ExprReason? = null,
+    val detail: String? = null,
+)
+
 object OgnlEvaluator {
 
     /**
@@ -269,6 +311,122 @@ object OgnlEvaluator {
     }
 
     // ------------------------------------------------------------------
+    // 支持面分类（T-ExprAstPrecheck T-EP-01）
+    // ------------------------------------------------------------------
+
+    /** 表达式支持面分档（三档，见 [ExprSupport]）；供条件行声明性标注使用，纯 AST 遍历、零 PSI。 */
+    fun classify(text: String): ExprSupport = classifyDetail(text).support
+
+    /**
+     * 分类结论（含理由码与细节）。解析失败即 [ExprSupport.UNSUPPORTED_SYNTAX]；解析成功后按
+     * [collectFallbacks] 遍历 AST 收集降级形态（首个命中即结论），无命中为 [ExprSupport.SUPPORTED]。
+     */
+    fun classifyDetail(text: String): ExprClassification =
+        when (val parsed = parse(text)) {
+            is ParseResult.Err -> ExprClassification(ExprSupport.UNSUPPORTED_SYNTAX, ExprReason.SYNTAX, parsed.message)
+            is ParseResult.Ok -> {
+                val findings = mutableListOf<ExprClassification>()
+                collectFallbacks(parsed.expr, findings)
+                findings.firstOrNull() ?: ExprClassification(ExprSupport.SUPPORTED)
+            }
+        }
+
+    /** 降级形态遍历（结构照抄 [collectStaticRefs]：Chain 先基础表达式、再逐步骤及其实参/下标）。 */
+    private fun collectFallbacks(expr: OgnlExpr, out: MutableList<ExprClassification>) {
+        when (expr) {
+            is OgnlExpr.StaticFieldRef ->
+                out += ExprClassification(ExprSupport.EVAL_FALLBACK, ExprReason.STATIC_FIELD, "@${expr.className}@${expr.fieldName}")
+            is OgnlExpr.Chain -> {
+                collectFallbacks(expr.base, out)
+                expr.steps.forEachIndexed { index, step ->
+                    when (step) {
+                        is ChainStep.Property -> Unit
+                        is ChainStep.Method -> {
+                            // 接收者载体只在方法为链首步且基础表达式本身可判定时成立（如 `'x'.length()`）；
+                            // `a.b.length()` 的接收者是上一级的求值结果，类型未知
+                            methodFallback(if (index == 0) staticCarrier(expr.base) else null, step.name)?.let { out += it }
+                            step.args.forEach { collectFallbacks(it, out) }
+                        }
+                        is ChainStep.Index -> collectFallbacks(step.expr, out)
+                    }
+                }
+            }
+            is OgnlExpr.Unary -> collectFallbacks(expr.operand, out)
+            is OgnlExpr.Binary -> {
+                collectFallbacks(expr.left, out)
+                collectFallbacks(expr.right, out)
+            }
+            else -> Unit
+        }
+    }
+
+    /**
+     * 方法调用的降级判定（null = 落在支持面内）：
+     *  - 白名单方法（[METHOD_CARRIERS]）：接收者载体已知时要求该载体有实现；载体未知时要求方法对
+     *    全部容器载体（[CARRIER_AGNOSTIC]）都有实现——否则实际类型一换就静默返回 null；
+     *  - getter 形态（`getX()` / `isX()`）走属性访问语义，属支持面；
+     *  - 其余方法名不在白名单内 → 未知方法（求值静默返回 null）。
+     */
+    private fun methodFallback(receiverCarrier: ExprCarrier?, name: String): ExprClassification? {
+        val carriers = METHOD_CARRIERS[name]
+        if (carriers == null) {
+            return if (isGetterName(name)) {
+                null
+            } else {
+                ExprClassification(ExprSupport.EVAL_FALLBACK, ExprReason.UNKNOWN_METHOD, name)
+            }
+        }
+        val supported = if (receiverCarrier != null) {
+            receiverCarrier in carriers
+        } else {
+            CARRIER_AGNOSTIC.all { it in carriers }
+        }
+        return if (supported) null else ExprClassification(ExprSupport.EVAL_FALLBACK, ExprReason.NARROW_CARRIER, name)
+    }
+
+    /** 接收者的静态载体：仅 AST 自身可判定时返回非 null（变量引用 / 链式结果 / 算术结果类型未知）。 */
+    private fun staticCarrier(expr: OgnlExpr): ExprCarrier? = when (expr) {
+        is OgnlExpr.ListLiteral -> ExprCarrier.COLLECTION
+        is OgnlExpr.Literal -> if (expr.value is CharSequence) ExprCarrier.CHAR_SEQUENCE else ExprCarrier.OTHER
+        else -> null
+    }
+
+    /**
+     * getter 形态判定（`getX()` / `isX()`，OGNL 属性访问语义）——直接复用 [firstPropName] 的方法分支
+     * 判据，与 [method] 的 getter 推断、[collectPaths] 的路径收集同源（三处不会漂移）。
+     */
+    private fun isGetterName(name: String): Boolean =
+        firstPropName(ChainStep.Method(name, emptyList())) != null
+
+    /** 值载体（[METHOD_CARRIERS] 与 [staticCarrier] 用）：容器类载体 + 标量兜底。 */
+    private enum class ExprCarrier { CHAR_SEQUENCE, COLLECTION, MAP, ARRAY, OTHER }
+
+    /**
+     * 方法白名单 → 该方法在求值器中实现了的载体（与 [method] 的 known 分支一一对应，同一事实的
+     * 声明式投影）。[KNOWN_METHODS] 由此派生，两处清单不会漂移。
+     */
+    private val METHOD_CARRIERS: Map<String, Set<ExprCarrier>> = mapOf(
+        "size" to setOf(ExprCarrier.CHAR_SEQUENCE, ExprCarrier.COLLECTION, ExprCarrier.MAP, ExprCarrier.ARRAY),
+        "length" to setOf(ExprCarrier.CHAR_SEQUENCE),
+        "isEmpty" to setOf(ExprCarrier.CHAR_SEQUENCE, ExprCarrier.COLLECTION, ExprCarrier.MAP),
+        "contains" to setOf(ExprCarrier.CHAR_SEQUENCE, ExprCarrier.COLLECTION),
+        "containsKey" to setOf(ExprCarrier.MAP),
+        "startsWith" to setOf(ExprCarrier.CHAR_SEQUENCE),
+        "endsWith" to setOf(ExprCarrier.CHAR_SEQUENCE),
+        "toString" to ExprCarrier.values().toSet(),
+    )
+
+    /**
+     * 接收者类型未知时要求方法对全部容器载体都有实现才算「载体无关」——载体集合取自
+     * [METHOD_CARRIERS] 的并集（xml 层 bindings 可能取到的值：字符串 / 集合 / Map 等）。
+     */
+    private val CARRIER_AGNOSTIC: Set<ExprCarrier> = setOf(
+        ExprCarrier.CHAR_SEQUENCE,
+        ExprCarrier.COLLECTION,
+        ExprCarrier.MAP,
+    )
+
+    // ------------------------------------------------------------------
     // 求值
     // ------------------------------------------------------------------
 
@@ -421,9 +579,8 @@ object OgnlEvaluator {
         return null
     }
 
-    private val KNOWN_METHODS = setOf(
-        "size", "length", "isEmpty", "contains", "containsKey", "startsWith", "endsWith", "toString",
-    )
+    /** 方法白名单（T-ExprAstPrecheck T-EP-01：由 [METHOD_CARRIERS] 派生，分类器与求值器共用同一清单）。 */
+    private val KNOWN_METHODS: Set<String> = METHOD_CARRIERS.keys
 
     private fun index(current: Any?, key: Any?): Any? = when (current) {
         is List<*> -> (key as? Number)?.toInt()?.let { current.getOrNull(it) }

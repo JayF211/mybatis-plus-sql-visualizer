@@ -6,11 +6,17 @@ package cn.song.mybatisplus.visualizer.xml
  * @param id             条件标识 = test 表达式原文（启用集合元素；同表达式多处出现共享开关）
  * @param label          人读条件文本（复选框标签 = 表达式）
  * @param defaultEnabled 默认勾选态（启发式：含 `== null` → false，其余 true——保守展开）
+ * @param support        表达式支持面分档（T-ExprAstPrecheck T-EP-03 预检产物，xml 层字符串，零 PSI）
+ * @param supportReason  分档理由码（标注 tooltip 用；SUPPORTED 时为 null）
+ * @param supportDetail  理由细节（方法名 / `@类@字段` / 解析错误消息）
  */
 data class XmlConditionView(
     val id: String,
     val label: String,
     val defaultEnabled: Boolean,
+    val support: ExprSupport = ExprSupport.SUPPORTED,
+    val supportReason: ExprReason? = null,
+    val supportDetail: String? = null,
 )
 
 /** foreach 视图：collection 表达式（面板集合值/null 控件按表达式定位）+ item 名（T-M25.4 集合值回填键前缀）。 */
@@ -201,7 +207,17 @@ class XmlPreviewModel private constructor(
                     dollarTokens.forEach { collectExpressionPaths(it, variables, paramProps) }
                 }
                 is IfSqlNode -> {
-                    conditionViews += XmlConditionView(node.test, node.test, defaultTruth(node.test))
+                    // T-ExprAstPrecheck T-EP-03：构建条件行时对 test 表达式跑支持面预检（纯 AST 遍历，
+                    // 零 PSI）——标注只是提示，展开行为仍由面板开关与 T-EP-02 的错误记录管
+                    val classification = OgnlEvaluator.classifyDetail(node.test)
+                    conditionViews += XmlConditionView(
+                        node.test,
+                        node.test,
+                        defaultTruth(node.test),
+                        classification.support,
+                        classification.reason,
+                        classification.detail,
+                    )
                     collect(node.contents, conditionViews, forEachViews, bindViews, variables, paramProps)
                 }
                 is ChooseSqlNode -> {

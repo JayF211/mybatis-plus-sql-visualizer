@@ -2,9 +2,11 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.intellij.ui.components.JBLabel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -54,8 +56,10 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         </mapper>
     """.trimIndent()
 
-    private fun xmlResult(): PreviewResult {
-        val parsed = XmlMapperParser().parse(mapper)
+    private fun xmlResult(): PreviewResult = xmlResultOf(mapper)
+
+    private fun xmlResultOf(source: String): PreviewResult {
+        val parsed = XmlMapperParser().parse(source)
         val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
         val rendered = model.renderSql()
         return PreviewResult(
@@ -339,4 +343,61 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
+    /**
+     * T-ExprAstPrecheck T-EP-03：条件行支持面标注——SUPPORTED 行不占位；
+     * 不支持语法/运行期降级各渲染一条淡色标注，理由进 tooltip。
+     */
+    fun testXmlConditionSupportAnnotation() {
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            xmlResultOf(
+                """
+                <mapper namespace="com.example.BizMapper">
+                  <select id="s1" resultType="map">SELECT * FROM t
+                    <if test="type != null">AND type = #{type}</if>
+                    <if test="a ? b : c">AND a = 1</if>
+                    <if test="map.length() &gt; 0">AND b = 2</if>
+                  </select>
+                </mapper>
+                """.trimIndent(),
+            ),
+        )
+
+        assertEquals("支持面内的条件行不应有标注", 0, conditionAnnotations(panel, 0).size)
+
+        val unsupported = conditionAnnotations(panel, 1)
+        assertEquals(1, unsupported.size)
+        assertEquals(
+            MpSqlVisualizerBundle.message("panel.xml.expr.unsupported"),
+            unsupported.single().text,
+        )
+        assertTrue(
+            "不支持语法行的 tooltip 应给理由：${unsupported.single().toolTipText}",
+            unsupported.single().toolTipText.contains("三元"),
+        )
+
+        val fallback = conditionAnnotations(panel, 2)
+        assertEquals(1, fallback.size)
+        assertEquals(
+            MpSqlVisualizerBundle.message("panel.xml.expr.fallback"),
+            fallback.single().text,
+        )
+        assertTrue(
+            "降级行的 tooltip 应点名方法：${fallback.single().toolTipText}",
+            fallback.single().toolTipText.contains("length"),
+        )
+
+        // 标注只是提示：三个条件仍按启发式默认全部展开
+        assertEquals(
+            "SELECT * FROM t AND type = ? AND a = 1 AND b = 2",
+            compact(panel.editorForTest()!!.document.text),
+        )
+        panel.clear()
+    }
+
+    /** 条件行内的标注标签（复选框所在行 panel 的 JBLabel 子组件）。 */
+    private fun conditionAnnotations(panel: SqlPreviewPanel, index: Int): List<JBLabel> {
+        val checkBox = panel.conditionCheckboxForTest(index) ?: return emptyList()
+        return (checkBox.parent?.components ?: emptyArray()).filterIsInstance<JBLabel>()
+    }
 }

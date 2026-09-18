@@ -64,4 +64,23 @@ T-EP-01（分类器+表驱动测试）→ T-EP-02（if test 静默点收口）�
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+分支 `t-expr-ast-precheck`（工作树 mpsv-eap，基线 8a3a6ff = dev 合流后）。实施提交：**6f3eb2f**（T-EP-01~04 一次交付，含测试与 bundle）。
+
+| 任务 | 落点 | 说明 |
+|---|---|---|
+| T-EP-01 | `xml/Ognl.kt` | `classify(text): ExprSupport` + `classifyDetail`（理由码 + 细节）；`collectFallbacks` 照 `collectStaticRefs` 结构遍历；`METHOD_CARRIERS` 载体表，`KNOWN_METHODS` 由该表派生 |
+| T-EP-02 | `xml/IfSqlNode.kt` | 求值失败分支记 `context.errors`（展开行为不变） |
+| T-EP-03 | `xml/XmlPreviewModel.kt` + `ui/SqlPreviewPanel.kt` + bundle | `XmlConditionView` 三字段（默认 SUPPORTED）+ 条件行淡色标注与 tooltip；6 个新键 en/zh 同加 |
+| T-EP-04 | `OgnlExprClassifyTest`（新）+ `XmlPreviewModelTest` + `XmlPreviewPanelTest` | 表驱动 39 例表达式（21 支持 / 8 不支持语法 / 10 降级）+ 理由码细节 + 边界 + 漂移防线；错误记录 2 例；标注字段 1 例；标注渲染 1 例 |
+
+**门禁**：`testFast` 2635/0/0/6 绿（含新类 4 例与扩用例）；全量 `testShards` **4955/0/0/6 绿**（基线 = 本分支未改前 4947，本任务新增 8 例为算术推算，未单独复跑基线）。首跑 shard3 四例假失败（`SqlConsoleBridgeFilterProviderTest` 三例 `AlreadyDisposedException: Container is already disposed`、`SqlLogListFreezeGuardTest` 一例注入器断言转储），两例隔离复跑 3/3 与 3/3 全绿后复跑全量绿——判为分片并发环境 flake，与本任务改动（xml/ui 面）无交集。
+
+**实施偏离（三处，均以当前代码为准）**：
+
+1. 计划 §三 T-EP-01 写「照抄 `collectStaticRefs` 遍历结构」并列举支持面为「AST 节点类型枚举 + `evalBinary` op 集合 + `KNOWN_METHODS`」。实际落点未另立 op 常量集合：解析器能产出的运算符集合与 `evalBinary` 的 when 分支逐一对应（`or/||/and/&&/==/!=/</>/<=/>=/in/notin/+ - * / %` 与 `!/not/-`），分类器改为在表驱动测试里钉住这些 op 的档位，避免引入不可达分支与永不产出的 bundle 文案。
+2. 计划 §三 T-EP-04 要求「白名单方法 + 不匹配载体」边界用例（`map.length()` 形态）归 `EVAL_FALLBACK`。载体信息在 xml 层不可得（零 PSI），实现改为：接收者载体可静态判定时（字面量/列表字面量）按实际载体判，不可判定时要求该方法对全部容器载体（字符串/集合/Map）都有实现才算载体无关。故 `list.size()`、`list.isEmpty()`、`x.toString()` 仍在支持面内（对齐 §五 走查第 2 条），`map.length()`、`map.containsKey()`、`str.startsWith()`、`list.contains()` 归降级档——后者比计划字面更宽：常见写法 `_parameter.title.startsWith('x')` 也会带标注。这是「不新造类型推断」与「真静默降级点要标出来」之间的取舍，若嫌噪可在 `CARRIER_AGNOSTIC` 处放宽。
+3. 计划 §三 T-EP-03 标注示例为「不支持的表达式形态：三元运算」——行内标注只留档位短句（「不支持的表达式形态」/「含运行期降级调用」），具体构造名与解析器原文进 tooltip，避免行内文案随解析器消息变长撑破条件行。
+
+**已知边界（未覆盖，留档）**：`foreach` 体内的 `if` 求值失败仍不产生可见 errors——`PrefixedContext`/`FilteredContext` 各自持有 `DynamicContext.errors` 列表且未转发（与 `bind` 错误同源既有形态），本任务按计划范围未改该文件。实证：`<foreach>` 内放 `<if test="not valid @@ expression">` 无开关覆盖渲染后 `errors=[]`。若需覆盖，改法是 `DynamicContext.errors` 转 `open` 并在两个子上下文按既有 `bindings`/`staticFieldValues` 同款委托覆写（约 5 行），代价是逐迭代重复同一错误行。
+
+**真机走查（§五）**：未执行，留人工。

@@ -31,6 +31,8 @@ import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
+import cn.song.mybatisplus.visualizer.xml.ExprReason
+import cn.song.mybatisplus.visualizer.xml.ExprSupport
 import cn.song.mybatisplus.visualizer.xml.XmlConditionView
 import cn.song.mybatisplus.visualizer.xml.XmlForEachView
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
@@ -2777,7 +2779,37 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         conditionCheckBoxes += checkBox
         return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
             add(checkBox)
+            // T-ExprAstPrecheck T-EP-03：表达式超出支持面时补淡色标注（提示，不改展开行为）
+            xmlConditionAnnotation(view)?.let { add(it) }
             border = JBUI.Borders.empty(0, 8, 2, 8)
+        }
+    }
+
+    /**
+     * T-ExprAstPrecheck T-EP-03：条件行的支持面标注（SUPPORTED 返回 null 不占位）。
+     * 用上下文提示色（淡）以与条件标签区分；理由进 tooltip，行内只留档位短句。
+     */
+    private fun xmlConditionAnnotation(view: XmlConditionView): JBLabel? {
+        val text = when (view.support) {
+            ExprSupport.SUPPORTED -> return null
+            ExprSupport.UNSUPPORTED_SYNTAX -> MpSqlVisualizerBundle.message("panel.xml.expr.unsupported")
+            ExprSupport.EVAL_FALLBACK -> MpSqlVisualizerBundle.message("panel.xml.expr.fallback")
+        }
+        return JBLabel(text).apply {
+            foreground = UIUtil.getContextHelpForeground()
+            toolTipText = xmlConditionAnnotationTooltip(view)
+        }
+    }
+
+    /** 标注 tooltip：按理由码取文案，附细节（方法名 / 静态字段引用 / 解析错误消息）。 */
+    private fun xmlConditionAnnotationTooltip(view: XmlConditionView): String {
+        val detail = view.supportDetail.orEmpty()
+        return when (view.supportReason) {
+            ExprReason.SYNTAX -> MpSqlVisualizerBundle.message("panel.xml.expr.reason.syntax", detail)
+            ExprReason.UNKNOWN_METHOD -> MpSqlVisualizerBundle.message("panel.xml.expr.reason.unknownMethod", detail)
+            ExprReason.NARROW_CARRIER -> MpSqlVisualizerBundle.message("panel.xml.expr.reason.narrowCarrier", detail)
+            ExprReason.STATIC_FIELD -> MpSqlVisualizerBundle.message("panel.xml.expr.reason.staticField", detail)
+            null -> view.label
         }
     }
 
