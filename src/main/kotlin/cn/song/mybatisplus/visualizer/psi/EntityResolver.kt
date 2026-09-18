@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.model.ColumnRole
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature
+import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiAnnotationMemberValue
 import com.intellij.psi.PsiArrayInitializerMemberValue
@@ -84,7 +85,8 @@ class EntityResolver {
         // T-M19.4（用户反馈：@TableName 应为最高优先级）：**显式 @TableName 即最终表名**——
         // 豁免推断策略与修饰链（添加/移除表名前缀后缀仅作用于**推断表名**；
         // T-M16.2-03 的「全局语义」按用户反馈收窄为推断语义）
-        val tableName = annotationValue(entityClass, TABLE_NAME) ?: decorateTableName(inferTableName(className))
+        val tableName = annotationValue(entityClass, TABLE_NAME)
+            ?: decorateTableName(inferTableName(className, entityClass.project), entityClass.project)
 
         // T-M16.2-02：递归父类收集字段（父类字段在前；@TableLogic/@TableId/@TableField 标注随字段本身生效）
         val fields = collectFieldsIncludingSuper(entityClass)
@@ -92,7 +94,7 @@ class EntityResolver {
         // SELECT 全列展开/参数对照/补全列集合（resolveColumn 返回 null 跳过；@TableField(exist=false) 注解优先）
         // T-M23.3：按角色分组稳定排序（PRIMARY 置顶 → BUSINESS 居中 → AUDIT/SYSTEM 沉底，
         // 组内保持声明顺序）——三处消费点（SELECT 全列/批量面板/补全）共用 columns 自动统一生效
-        val columns = fields.mapNotNull { field -> resolveColumn(field, ignoredFieldNames()) }
+        val columns = fields.mapNotNull { field -> resolveColumn(field, ignoredFieldNames(entityClass.project)) }
             .sortedWith(compareBy { it.role })
         // T-M15-07：逻辑删除列（@TableLogic 标注字段，X07——真实项目 BaseEntity.deleted + 全局 logic-delete-field；
         // T-M16.2-02 修复：父类字段同样识别，继承实体的 deleted 不再丢失）
@@ -488,9 +490,11 @@ class EntityResolver {
          *    （用户反馈：文案「保留驼峰」与行为一致；BikeDeviceInfoEntity → bikeDeviceInfoEntity，
          *    BikeDeviceInfo → bikeDeviceInfo）。
          * 设置服务不可用时兜底默认 SNAKE。
+         *
+         * @param project 实体所属项目（决定读哪一份项目级设置；null 见 [effectiveTableSetting]）
          */
-        private fun inferTableName(className: String): String {
-            val strategy = effectiveTableSetting { it.effectiveTableNameInference() }
+        private fun inferTableName(className: String, project: Project? = null): String {
+            val strategy = effectiveTableSetting({ it.effectiveTableNameInference() }, project)
                 ?: PluginSettings.INFERENCE_SNAKE
             return if (strategy == PluginSettings.INFERENCE_CAMEL) {
                 className.replaceFirstChar { it.lowercaseChar() }
@@ -504,20 +508,27 @@ class EntityResolver {
          * `最终表名 = 添加前缀 + 移除后缀(移除前缀(表名)) + 添加后缀`；
          *  - 移除前缀/后缀：`;` 分隔，首个匹配（大小写敏感），不匹配则不修饰（M19.4-R2）；
          *  - 添加前缀/后缀：**单值**（用户反馈定稿，不再 `;` 分隔拼接；T-M16.2-03 原语义）。
+         *
+         * @param project 实体所属项目（决定读哪一份项目级设置；null 见 [effectiveTableSetting]）
          */
-        private fun decorateTableName(raw: String): String {
+        private fun decorateTableName(raw: String, project: Project? = null): String {
             val removedPrefix = removeTablePrefixList().firstOrNull { raw.startsWith(it) }?.let { raw.removePrefix(it) } ?: raw
             val removedSuffix = removeTableSuffixList().firstOrNull { removedPrefix.endsWith(it) }?.let { removedPrefix.removeSuffix(it) } ?: removedPrefix
-            return tablePrefix() + removedSuffix + tableSuffix()
+            return tablePrefix(project) + removedSuffix + tableSuffix(project)
         }
 
         /**
          * T-M19.4（用户实测：表名配置在部分路径不生效）：实体类不可解析的**兜底推断**统一入口——
          * 按配置推断策略（SNAKE/CAMEL）+ 统一修饰链，与 [resolve] 的推断路径语义一致。
          * WrapperLocator 文本兜底、MpjLambdaConverter 子表推断等全部走此函数（全局语义）。
+         *
+         * @param project 调用方已知的所属项目；调用方只有类名字符串时留空——
+         *   留空沿改动前的「首个打开项目」取值（见 [effectiveTableSetting]），不引入新行为。
          */
         @JvmStatic
-        fun inferDecoratedTableName(className: String): String = decorateTableName(inferTableName(className))
+        @JvmOverloads
+        fun inferDecoratedTableName(className: String, project: Project? = null): String =
+            decorateTableName(inferTableName(className, project), project)
 
         /**
          * T-M19.4：`;` 分隔配置解析为列表（trim + 去空；设置服务不可用时兜底空列表——
@@ -529,37 +540,36 @@ class EntityResolver {
                 .split(';').map { it.trim() }.filter { it.isNotEmpty() }
 
         /**
-         * T-SettingsTruth P4：项目级表配置读取入口——当前项目 [ProjectPluginSettings] 启用时
-         * effectiveXxx 覆盖全局；无项目上下文/服务不可用时回退全局设置（设置服务不可用时
-         * 整体降级，与原全局读取行为一致）。
+         * T-SettingsTruth P4 / T-Fix-SettingsScope：项目级表配置读取入口——[project] 对应项目
+         * 的 [ProjectPluginSettings] 启用时 effectiveXxx 覆盖全局；无项目上下文/服务不可用/
+         * 项目值为空时返回 null（调用方回退全局设置，与原全局读取行为一致）。
          *
-         * @param get 从项目级设置读取有效值
-         */
-        /**
-         * T-SettingsTruth P4：项目级表配置读取入口——当前项目 [ProjectPluginSettings] 启用时
-         * effectiveXxx 覆盖全局；无项目上下文/服务不可用/项目值为空时返回 null
-         * （调用方回退全局设置，与原全局读取行为一致）。
+         * [project] 为 null 时沿用改动前的「首个打开项目」：多项目同开时该取值取决于 IDE
+         * 打开顺序（本次修复的歧义点），但**显式传入 project 的路径已不再受它影响**；
+         * 只有「仅有类名字符串、拿不到 PsiClass」的兜底调用方才会走到这里。
          *
-         * @param get 从项目级设置读取有效值
+         * @param get     从项目级设置读取有效值
+         * @param project 目标项目；null = 未提供（兜底路径）
          */
-        private fun effectiveTableSetting(get: (ProjectPluginSettings) -> String): String? {
+        private fun effectiveTableSetting(get: (ProjectPluginSettings) -> String, project: Project? = null): String? {
             // runCatching 包裹整体：纯单测（无 Application/ProjectManager 实例）与无打开项目时
             // 一律降级 null → 调用方回退全局设置，与原全局读取行为一致
             return runCatching {
-                val project = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull()
+                val target = project
+                    ?: com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull()
                     ?: return null
-                get(ProjectPluginSettings.getInstance(project)).ifBlank { null }
+                get(ProjectPluginSettings.getInstance(target)).ifBlank { null }
             }.getOrNull()
         }
 
         /** T-M16.2-03 全局语义：添加表前缀（**单值**，用户反馈定稿）。 */
-        private fun tablePrefix(): String =
-            effectiveTableSetting { it.effectiveTablePrefix() }
+        private fun tablePrefix(project: Project? = null): String =
+            effectiveTableSetting({ it.effectiveTablePrefix() }, project)
                 ?: runCatching { PluginSettings.getInstance().state.tablePrefix }.getOrDefault("")
 
         /** T-M16.2-03 全局语义：添加表后缀（**单值**，用户反馈定稿）。 */
-        private fun tableSuffix(): String =
-            effectiveTableSetting { it.effectiveTableSuffix() }
+        private fun tableSuffix(project: Project? = null): String =
+            effectiveTableSetting({ it.effectiveTableSuffix() }, project)
                 ?: runCatching { PluginSettings.getInstance().state.tableSuffix }.getOrDefault("")
 
         /** T-M19.4：移除表名前缀列表（`;` 分隔，最终表名首个匹配移除）。 */
@@ -569,8 +579,8 @@ class EntityResolver {
         private fun removeTableSuffixList(): List<String> = listSetting { it.removeTableSuffix }
 
         /** T-M19.4：忽略字段名集合（`;` 分隔，按 Java 字段名匹配）。 */
-        private fun ignoredFieldNames(): Set<String> =
-            (effectiveTableSetting { it.effectiveIgnoredFields() }
+        private fun ignoredFieldNames(project: Project? = null): Set<String> =
+            (effectiveTableSetting({ it.effectiveIgnoredFields() }, project)
                 ?: runCatching { PluginSettings.getInstance().state.ignoredFields }.getOrDefault(""))
                 .split(';').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
     }

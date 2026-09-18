@@ -362,4 +362,53 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             settings.loadState(snapshot)
         }
     }
+
+    // ------------------------------------------------------------------
+    // T-Fix-SettingsScope：设置导入不得静默重置文件里没有的字段
+    // ------------------------------------------------------------------
+
+    fun testImportJsonKeepsFieldsAbsentFromFile() {
+        // [SettingsIO.exportToJson] 只写 21 个「可覆盖项」键，而 State 有 71 个 var 字段。
+        // 导入必须按「JSON 未出现的键保留现值」合并：否则一次导入会把参数历史、增强捕获
+        // 授权记忆、反馈身份、日志自动保存目录等文件里根本没有的字段静默重置为出厂默认
+        // （用户侧表现为不可见的数据丢失，且 [SettingsIO] KDoc 自称「不含全局项」却又把
+        // autoCheckUpdate/ignoredUpdateVersions 一并重置，自相矛盾）。
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.paramHistoryJson = """[{"sql":"select 1"}]"""
+            settings.state.enhancedCaptureConfirmed = true
+            settings.state.reportSubmitterName = "tester"
+            settings.state.logAutoSavePath = "D:/logs"
+            settings.state.historyMaxSize = 42
+            settings.state.showGutterIcon = false
+            settings.state.autoCheckUpdate = true
+            settings.state.ignoredUpdateVersions = "1.2.3"
+
+            PluginSettings.fromJson(
+                """
+                {
+                  "version": ${SettingsIO.CURRENT_VERSION},
+                  "dialect": "PostgreSQL",
+                  "tablePrefix": "imported_"
+                }
+                """.trimIndent(),
+            )
+
+            // 文件里出现的键 → 被文件值覆盖
+            assertEquals("文件中的 dialect 应覆盖现值", "PostgreSQL", settings.state.dialect)
+            assertEquals("文件中的 tablePrefix 应覆盖现值", "imported_", settings.state.tablePrefix)
+            // 文件里没有的键 → 保留现值
+            assertEquals("参数历史应保留", """[{"sql":"select 1"}]""", settings.state.paramHistoryJson)
+            assertEquals("增强捕获授权记忆应保留", true, settings.state.enhancedCaptureConfirmed)
+            assertEquals("反馈身份应保留", "tester", settings.state.reportSubmitterName)
+            assertEquals("日志自动保存目录应保留", "D:/logs", settings.state.logAutoSavePath)
+            assertEquals("历史上限应保留", 42, settings.state.historyMaxSize)
+            assertEquals("Gutter 图标开关应保留", false, settings.state.showGutterIcon)
+            assertEquals("更新检查开关应保留（SettingsIO 自称不含全局项）", true, settings.state.autoCheckUpdate)
+            assertEquals("忽略版本列表应保留", "1.2.3", settings.state.ignoredUpdateVersions)
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
 }

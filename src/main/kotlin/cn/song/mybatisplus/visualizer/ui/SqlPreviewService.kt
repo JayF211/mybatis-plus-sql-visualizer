@@ -724,7 +724,8 @@ class SqlPreviewService(private val project: Project) {
                 paramTable = ParameterReplacer.buildParamTable(allParamNames),
                 paramHints = hints,
                 wrapperType = null,
-                tableName = table?.tableName ?: info.entityClass?.name?.let { JpaEntityResolver.inferDecoratedTableName(it) } ?: "",
+                tableName = table?.tableName
+                    ?: info.entityClass?.name?.let { JpaEntityResolver.inferDecoratedTableName(it, project) } ?: "",
                 columns = table?.allColumnNames ?: emptyList(),
             )
         }
@@ -807,7 +808,7 @@ class SqlPreviewService(private val project: Project) {
         // CriteriaQueryConverter 解析条件树，SqlGenerator 生成的 SQL 含 ? 占位符
         val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement)
         val resolvedTable = model.entityClass?.let { JpaEntityResolver().resolve(it) }
-        val tableName = model.entityClassName?.let { JpaEntityResolver.inferDecoratedTableName(it) } ?: ""
+        val tableName = model.entityClassName?.let { JpaEntityResolver.inferDecoratedTableName(it, project) } ?: ""
         // T-J10/J15/J22：方法级增强（Sort ORDER BY/锁/hints/返回类型 notes；LIMIT 已在语句模型级挂载，
         // 分页/排序 notes 由上方分析透传）
         val enhancedSql = applyJpaMethodEnhancements(
@@ -1779,7 +1780,9 @@ class SqlPreviewService(private val project: Project) {
      */
     private fun resolveHqlTable(entityClass: PsiClass?, entityClassName: String?, hql: String): TableInfo? {
         val resolver = JpaEntityResolver()
-        val project = com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull() ?: return null
+        // T-Fix-SettingsScope：下方 project 一律取本服务绑定的 [project]，勿用
+        // openProjects.firstOrNull()——多项目同开时后者取谁取决于 IDE 打开顺序，会在 B 项目里
+        // 按 A 项目的项目级表配置修饰表名，并使 GlobalSearchScope/JavaPsiFacade 落到错误的项目范围。
         val className = entityClassName ?: extractEntityNameFromHql(hql)
 
         // 路径 1：有 PsiClass 直接解析（JPA 注解）。列空不短路到「更弱的路径」——
