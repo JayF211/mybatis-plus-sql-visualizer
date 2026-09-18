@@ -1155,8 +1155,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             return
         }
         SourceCaptureGuide.runInjection(project) { result ->
-            val success = SourceCaptureGuide.showInjectionResult(project, result)
-            if (!success) autoInjectInterceptorCheck.isSelected = false
+            SourceCaptureGuide.showInjectionResult(project, result)
+            // T-SettingsTruth P1：纯动作开关——无论成败，终态复位未勾选（成功=动作完成即复位）
+            autoInjectInterceptorCheck.isSelected = false
         }
     }
 
@@ -1246,7 +1247,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logAutoSavePathField.text.trim() != s.logAutoSavePath
             || logAutoSavePatternField.text.trim() != s.logAutoSaveFileNamePattern
             || (logAutoSaveMaxFilesField.text.trim().toIntOrNull() ?: PluginSettings.DEFAULT_LOG_AUTO_SAVE_MAX_FILES) != s.logAutoSaveMaxFiles
-            || autoInjectInterceptorCheck.isSelected != s.autoInjectSqlSourceInterceptor
             // T-CrudColor：仅改样式或仅改某个颜色也必须能启用 Apply
             // （reverseWrapperFormat 漏挂 isModified 导致改动被平台静默丢弃的假开关事故，此处防同类回归）
             || selectedCrudColorStyle() != s.crudColorStyle
@@ -1339,7 +1339,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 .ifEmpty { PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
             s.logAutoSaveMaxFiles = logAutoSaveMaxFilesField.text.trim().toIntOrNull()
                 ?: PluginSettings.DEFAULT_LOG_AUTO_SAVE_MAX_FILES // T-HistoryFileRetention
-            s.autoInjectSqlSourceInterceptor = autoInjectInterceptorCheck.isSelected
             // T-CrudColor：CRUD 颜色标记（样式 + 四色）
             s.crudColorStyle = selectedCrudColorStyle()
             // T-DisplayModeToSettings：SQL 列表显示模式（apply 后经 SETTINGS_CHANGE_TOPIC 广播，两列表既有监听刷新）

@@ -368,14 +368,8 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var historyMaxSize: Int = DEFAULT_HISTORY_MAX_SIZE,
 
         // ---------- F-44-7 SqlSourceInterceptor 自动注入 ----------
-
-        /**
-         * F-44-7：自动注入 SqlSourceInterceptor（源码位置捕获）。
-         * 开启后，插件在用户项目中自动生成拦截器类和配置类，
-         * 应用重启后实时日志携带源码位置，实现精确跳转。
-         * 默认关——用户需主动开启并按提示确认生成。
-         */
-        var autoInjectSqlSourceInterceptor: Boolean = false,
+        // T-SettingsTruth P1：原 var autoInjectSqlSourceInterceptor 字段已删除——该开关为纯动作
+        // （勾选立即注入一次），不保存状态，终态恒未勾选；旧 XML 残留属性由 XmlSerializer 自动忽略。
 
         // ---------- T-ErrReport 错误一键上报官网需求池 ----------
 
