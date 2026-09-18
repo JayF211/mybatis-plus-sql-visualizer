@@ -56,21 +56,43 @@ import java.nio.file.Paths
  * ## 为什么需要 [deleteOwnProjectDir] / [sweepOrphanProjectDirs]（T-TS-08）
  *
  * 「平台不删」是本目录设计的**前提**（上一条），代价是它也没有任何清理路径：`forkEvery = 1`
- * 下每个测试类一个 JVM → 每轮 `testDatabase` 恒定新增 5 个目录。20260918 复核实测已积 28 个、
- * 每轮 +5，属无界增长（磁盘与 `%TEMP%` 条目污染，且每次真机排障都要在一堆同名目录里认路）。
- * 本对象因此自管清理，两条互补：
- *  ① **关闭钩子**（[deleteOwnProjectDir]）——本 JVM 退出时递归删自己的目录，只删自己 ksuid
- *     后缀那一个，零跨进程风险。**实测（20260918 本轮五轮实跑）：子项全部删净，但目录项本身被占**
- *     （删完立刻手工 `rmdir` 成功 → 占位者随本 JVM 一起消失；进一步对照实验排除了「子进程占位」：
+ * 下每个测试类一个 JVM → 每轮 `testDatabase` 恒定新增 4 个目录（**T-TS-08 独立复核实测修正**：5 个
+ * 集成类里 `DbDriverPipelineTest` 不建 light 工程、从不触发本对象，其 XML 的 system-out 恒为空，
+ * 故每轮 4 个 JVM 各留一个目录而非 5 个）。20260918 复核实测已积 28 个、每轮 +4，属无界增长
+ * （磁盘与 `%TEMP%` 条目污染，且每次真机排障都要在一堆同名目录里认路）。本对象因此自管清理，两条互补：
+ *  ① **关闭钩子**（[deleteOwnProjectDir]）——本 JVM 退出时删自己目录的**子项**，只碰自己 ksuid
+ *     后缀那一个，零跨进程风险。**实测（20260918 五轮实跑 + 独立复核）：子项全部删净，但目录项本身
+ *     被占**（删完立刻手工 `rmdir` 成功 → 占位者随本 JVM 一起消失；进一步对照实验排除了「子进程占位」：
  *     钩子里先 `ProcessHandle.descendants()` 收掉全部子进程再删，照样失败），故占位者是**本进程内的
- *     句柄**（最可能是平台 VFS 的文件监听），只在进程真正退出时释放。10×500ms 重试赢不了这个竞态，
- *     故实现是「有界重试 + 失败留痕 + **刻意留下孤儿标记**」：删不掉时目录里只剩 [OWNER_LOCK_NAME]，
- *     交给②在后续 JVM 里精确收走（不抛错、不影响测试结论）。
+ *     句柄**（最可能是平台 VFS 的文件监听），只在进程真正退出时释放，而本钩子跑在退出之前——
+ *     **这个时点目录项无解**。于是实现只做「删净子项 + 刻意留下 [OWNER_LOCK_NAME] 作孤儿标记」，
+ *     目录项交给②在后续 JVM（那时本进程已死、句柄已释放）收走（不抛错、不影响测试结论）。
+ *
+ *     **不再重试（T-TS-08 独立复核条件一）**：原实现是 `deleteRecursively(projectDir, keepLockFile = true)`
+ *     外面套 10×500ms 重试，而 `keepLockFile = true` 会跳过锁标记 → 目录恒非空 → 末尾
+ *     `Files.delete(dir)` 必失败 → 返回值**结构性恒 false**，10 次重试一次都不可能成功，只是每个测试
+ *     JVM 白等约 5s。删掉重试后语义不变（子项一次删净、目录项交给②），单轮 4 个 JVM 省下约 20s。
  *  ② **孤儿清扫**（[sweepOrphanProjectDirs]）——JVM 启动时回收同前缀目录，判据不是时长而是
  *     **属主存活标记**（[OWNER_LOCK_NAME] 上的文件锁，OS 在属主 JVM 退出时自动释放）：
- *     抢得到锁 = 属主已死 → 可删；抢不到 = 属主仍在跑 → 跳过。这使①留下的空壳在**下一轮开跑时
- *     即清零**（不必等阈值），且「不误删正在用的目录」是精确判据而非概率（并行会话/并行分片
- *     各持自己的锁）。无标记文件的老目录（本修复前遗留）回落到闲置时长阈值 [STALE_AFTER_MS]。
+ *     抢得到锁 = 属主已死 → 可删；抢不到 = 属主仍在跑 → 跳过。这是「不误删正在用的目录」的精确判据
+ *     （并行会话/并行分片各持自己的锁）。无标记文件的老目录（本修复前遗留）回落到闲置时长阈值
+ *     [STALE_AFTER_MS]，且须先过内容结构校验 [hasProjectSignature]（见下）。
+ *
+ *     **实测的收走形态（T-TS-08 独立复核条件二，三轮连跑读数）**：抢锁**几乎总是成功**（属主钩子
+ *     已关锁），但紧接着的「删目录项」多半失败——Gradle 在属主 JVM 真正退出前就起来了下一个 JVM，
+ *     目录项还被那个正在退出的进程占着 → 这一轮只删掉了标记，**留下一个空目录**，交规则②在
+ *     [EMPTY_GRACE_MS]（60s）后收走。单轮耗时以分钟计，故同一轮内的后续 JVM 就能把它收干净；
+ *     每轮结束时恒定剩 **2 空 + 1 标记 ≈ 3 个**（实测三轮：3 → 3 → 3，不随轮次增长）。
+ *     纳入清扫面前另有**结构校验**（[hasProjectSignature] + 目录名形态，T-TS-08 独立复核条件三）：
+ *     同前缀不等于同族，非空候选必须带本项目特征（锁标记 / `light_temp.ipr` / `.idea`）才删。
+ *
+ *  **可观测性**：钩子行只进 **Gradle 控制台**（测试 JVM 的 stdout 直通，实测可见
+ *  `[DB-IT] project dir handed off to next-JVM sweep: …（子项删除失败=0，除锁标记外剩余=0）`），
+ *  **不进测试 XML**（XML 在用例结束即封口，而钩子跑在用例之后）——即门禁产物里看不到它。故
+ *  「上一轮残留几个、为什么没收走」由**下一个 JVM 的 init 期** [sweepOrphanProjectDirs] 一行报出
+ *  （格式 `orphan project dirs swept: cleaned/total（上一轮残留=N，候选=[…]，未收走=N=…，删除失败=N=…）`，
+ *  进 XML 的 system-out）。
+ *  该行是「漏桶是否收敛」在门禁里唯一的观测面，改判据时不要把它降级成只在失败时打印。
  *
  * ## 为什么需要 [installExecEditor]（控制台编辑器夹具）
  *
@@ -95,6 +117,22 @@ object DbIntegrationProjectSupport {
     /** 属主存活标记文件名（[sweepOrphanProjectDirs] 的活性判据，见类注释）。 */
     private const val OWNER_LOCK_NAME = ".mpsql-owner.lock"
 
+    /** 平台 light 工程描述符文件名（[descriptor] 的产物，同时是本族目录的**内容特征**之一）。 */
+    private const val PROJECT_FILE_NAME = "light_temp.ipr"
+
+    /** 项目级配置目录名（平台建工程时立刻创建，本族目录的**内容特征**之一）。 */
+    private const val IDEA_DIR_NAME = ".idea"
+
+    /**
+     * 本族目录名形态：前缀 + KSUID。**27 是本机实测值**（20260918 逐个量既有目录名，3/3 恒 27 字符；
+     * 与 KSUID 规范一致：20 字节 → base62 定长 27 字符）。
+     *
+     * 用于 [sweepOrphanProjectDirs] 的**名字级结构校验**——空目录没有任何内容可查（见 [isOwnerGone]），
+     * 名字形态是它唯一可用的结构判据。名字形态不符的候选不删、只在 swept 行报数（形态不符=N），
+     * 故万一平台改了 KSUID 长度，症状是日志里的计数而不是静默不清理。
+     */
+    private val PROJECT_DIR_NAME = Regex("^$PROJECT_DIR_PREFIX[0-9A-Za-z]{27}$")
+
     /** 无标记文件的老目录（本修复前遗留）的回落阈值：闲置超过此时长才清扫。 */
     private const val STALE_AFTER_MS = 2 * 60 * 60 * 1000L
 
@@ -103,10 +141,6 @@ object DbIntegrationProjectSupport {
      * 留 60s 宽限是为了不碰「属主刚建目录、标记文件还没落地」的瞬时窗口（实测该窗口内目录也为空）。
      */
     private const val EMPTY_GRACE_MS = 60 * 1000L
-
-    /** 关闭钩子里删自己目录的重试次数/间隔（见 [deleteOwnProjectDir] 的实测说明）。 */
-    private const val CLEANUP_ATTEMPTS = 10
-    private const val CLEANUP_RETRY_MS = 500L
 
     /** 整个测试 JVM 共用的工程目录（系统 temp 根下，不含 `unitTest_` 前缀）。 */
     val projectDir: Path = Paths.get(
@@ -117,15 +151,32 @@ object DbIntegrationProjectSupport {
     /**
      * 属主存活标记：本 JVM 独占持有 [projectDir] 下 [OWNER_LOCK_NAME] 的文件锁，**JVM 一退出
      * OS 即释放**——下一轮 JVM 据此判定「这个目录的属主已经不在」，无需任何超时猜测。
-     * 拿不到（极端情况：目录不可写）时为 null，此时本目录只会被时长阈值规则回收，不会误删。
+     *
+     * 拿不到（极端情况：目录不可写）时为 null，并**把半成品标记文件删掉**：留着它就是留一个
+     * 「存在但无人持锁」的标记，而 [isOwnerGone] 对「有标记」的分支判据是「抢得到锁 = 属主已死」，
+     * 于是本 JVM 还活着就会被下一个 JVM 判定为孤儿删掉——这比没有标记更危险。删掉标记后本目录
+     * 只剩内容/时长判据：目录里会有 `light_temp.ipr` 与 `.idea`（平台建工程时立刻写入），故按
+     * 非空分支的 [STALE_AFTER_MS]（2h）回收；只有「空目录」这一种形态会走 [EMPTY_GRACE_MS]（60s），
+     * 而空目录窗口（目录刚建、平台尚未写盘）实测远小于 60s，故不会误收活目录。
      */
     private val ownerLock: java.nio.channels.FileChannel? = runCatching {
         Files.createDirectories(projectDir)
-        java.nio.channels.FileChannel.open(
-            projectDir.resolve(OWNER_LOCK_NAME),
+        val lockPath = projectDir.resolve(OWNER_LOCK_NAME)
+        val channel = java.nio.channels.FileChannel.open(
+            lockPath,
             java.nio.file.StandardOpenOption.CREATE,
             java.nio.file.StandardOpenOption.WRITE,
-        ).also { it.lock() }
+        )
+        try {
+            channel.lock()
+            channel
+        } catch (e: Throwable) {
+            // 先关句柄再删文件：Windows 下打开中的文件删不掉（删了也是 delete-pending），
+            // 留着半成品标记反而更危险（见 KDoc）
+            runCatching { channel.close() }
+            runCatching { Files.deleteIfExists(lockPath) }
+            throw e
+        }
     }.onFailure {
         println("[DB-IT] owner lock unavailable: ${it.javaClass.simpleName}: ${it.message}")
     }.getOrNull()
@@ -141,69 +192,103 @@ object DbIntegrationProjectSupport {
     }
 
     /**
-     * 递归删除 [projectDir]（本 JVM 的工程目录），带重试；失败只留痕不抛。
+     * 本 JVM 退出时清理 [projectDir]：关锁标记 → 删净全部子项（**保留** [OWNER_LOCK_NAME] 作孤儿标记）。
      *
-     * 两步：
-     *  ① 关 [ownerLock]——Windows 删不掉自己持有锁的文件，不关则标记文件必留（目录连带留）；
-     *  ② 重试 + 留孤儿标记——**子项总是删得掉，卡住的是目录项本身**（本轮五轮实跑全是这个形态：
-     *     子项删净、`Files.delete(dir)` 失败）。占位者经对照实验排除：先
-     *     `ProcessHandle.current().descendants()` 收掉本 JVM 全部子进程（DBN 的 RemoteJdbcServer 等，
-     *     实测确有 3 个，`stubborn=[]`）**再删，照样失败**——故占位者是**本进程内的句柄**
-     *     （最可能是平台 VFS 的文件监听），它只在进程真正退出时才释放，而本钩子跑在退出之前，
-     *     这个竞态在本进程内无解。于是设计成两段式：本钩子尽力删（删净子项、刻意留下
-     *     [OWNER_LOCK_NAME] 作孤儿标记），目录项交给 [sweepOrphanProjectDirs] 在**后续 JVM**
-     *     （那时本进程已死、句柄已释放）收走。
+     * **刻意不试删目录项、也不重试**（T-TS-08 独立复核条件一）：
+     *  - 不试删——目录项被**本进程内的句柄**占着（平台 VFS 的文件监听，见类注释的对照实验），
+     *    该句柄只在进程真正退出时释放，而本钩子跑在退出之前，这个竞态在本进程内无解；
+     *  - 不重试——原实现的 `deleteRecursively(projectDir, keepLockFile = true)` 跳过锁标记 →
+     *    目录恒非空 → 末尾 `Files.delete(dir)` 必失败 → 返回值结构性恒 false，10×500ms 重试
+     *    **一次都不可能成功**，只让每个测试 JVM 白等约 5s（单轮 5 个 JVM ≈ 25s）。
+     *
+     * 删不掉的东西（目录项本身）由 [sweepOrphanProjectDirs] 在**后续 JVM** 里按锁标记精确收走。
+     * 本方法内的 println 只进 **Gradle 控制台**（测试 JVM stdout 直通），**不进测试 XML**（XML 在
+     * 用例结束即封口，钩子跑在其后），故它只作真机/本地排障用；「上一轮残留多少、为什么没收走」
+     * 由下一个 JVM 的 init 期 swept 行报出（进 XML，见 [sweepOrphanProjectDirs]）。
      */
     private fun deleteOwnProjectDir() {
         runCatching { ownerLock?.close() }
-        var ok = false
-        repeat(CLEANUP_ATTEMPTS) {
-            if (ok) return@repeat
-            ok = deleteRecursively(projectDir, keepLockFile = true)
-            if (!ok) runCatching { Thread.sleep(CLEANUP_RETRY_MS) }
-        }
-        if (ok) {
-            println("[DB-IT] project dir cleaned: $projectDir")
-        } else {
-            println("[DB-IT] project dir not fully removed (目录项被本进程句柄占，已留孤儿标记供后续 JVM 收走): $projectDir")
-        }
+        val (failed, remaining) = deleteRecursivelyReport(projectDir, keepLockFile = true)
+        println(
+            "[DB-IT] project dir handed off to next-JVM sweep: $projectDir" +
+                "（子项删除失败=${failed.size}${if (failed.isEmpty()) "" else "=" + failed}，" +
+                // 保留锁标记是设计的一部分（见 KDoc），故这里报的是「除标记外还剩什么」而非「目录是否消失」
+                "除锁标记外剩余=${remaining.size}${if (remaining.isEmpty()) "" else "=" + remaining}）",
+        )
     }
 
     /**
      * 回收同前缀的**孤儿**目录（不含本 JVM 自己的），判据见 [isOwnerGone]。
      *
      * 单个目录删除失败不影响其余（并行会话的目录可能正好被占用——那种情况判据本就会跳过）。
+     *
+     * **本行日志是清理链唯一的门禁可观测面**（进测试 XML 的 system-out）：每次 init 都无条件打印，
+     * 含「上一轮残留数」「候选」「收走数」「未收走清单（带形态/原因）」「删除失败原因」。
+     * 漏桶是否收敛就靠这几段读数判断，故不要在无候选时提前 return 掉这一行。
      */
     private fun sweepOrphanProjectDirs() {
         val tmp = Paths.get(System.getProperty("java.io.tmpdir"))
-        val orphans = runCatching {
+        val siblings = runCatching {
             Files.list(tmp).use { stream ->
                 stream.filter { Files.isDirectory(it) && it.fileName.toString().startsWith(PROJECT_DIR_PREFIX) }
                     .filter { it != projectDir }
-                    .filter { isOwnerGone(it) }
                     .toList()
             }
         }.getOrElse {
             println("[DB-IT] orphan project dir sweep skipped: ${it.javaClass.simpleName}: ${it.message}")
             return
         }
-        if (orphans.isEmpty()) return
-        val cleaned = orphans.filter { deleteRecursively(it) }
-        println("[DB-IT] orphan project dirs swept: ${cleaned.size}/${orphans.size}（候选=${orphans.map { it.fileName }}）")
+        val orphans = siblings.filter { isOwnerGone(it) }
+        val offShape = siblings.filter { !PROJECT_DIR_NAME.matches(it.fileName.toString()) }
+        val failed = mutableListOf<String>()
+        val cleaned = orphans.filter { dir ->
+            val (deleteFailures, _) = deleteRecursivelyReport(dir, keepLockFile = false)
+            if (deleteFailures.isNotEmpty()) failed += "${dir.fileName}:" + deleteFailures.take(3)
+            !Files.exists(dir)
+        }
+        val leftover = siblings.filter { Files.exists(it) }.map { describeResidue(it) }
+        println(
+            "[DB-IT] orphan project dirs swept: ${cleaned.size}/${orphans.size}" +
+                "（上一轮残留=${siblings.size}，候选=${orphans.map { it.fileName }}，" +
+                "未收走=${leftover.size}${if (leftover.isEmpty()) "" else "=" + leftover}，" +
+                "删除失败=${failed.size}${if (failed.isEmpty()) "" else "=" + failed}，" +
+                "名字形态不符=${offShape.size}${if (offShape.isEmpty()) "" else "=" + offShape.map { it.fileName }}）",
+        )
     }
 
+    /** 残留目录的形态描述（诊断用）：空 / 只剩锁标记 / 其余子项名（判据是否命中一眼可读）。 */
+    private fun describeResidue(dir: Path): String {
+        val entries = listEntryNames(dir)
+        val shape = when {
+            entries.isEmpty() -> "空"
+            entries == listOf(OWNER_LOCK_NAME) -> "仅锁标记"
+            entries.contains(OWNER_LOCK_NAME) -> "锁标记+" + entries.filter { it != OWNER_LOCK_NAME }
+            else -> entries.toString()
+        }
+        return "${dir.fileName}:$shape"
+    }
+
+    /** 目录直接子项名列表；列不出来时返回单元素说明（诊断不因读目录失败而中断）。 */
+    private fun listEntryNames(dir: Path): List<String> = runCatching {
+        Files.list(dir).use { stream -> stream.map { it.fileName.toString() }.toList() }
+    }.getOrElse { listOf("<list failed: ${it.javaClass.simpleName}>") }
+
     /**
-     * 该目录的属主是否已不在（= 可以删）：
+     * 该目录的属主是否已不在（= 可以删）。先过**结构校验**，再看活性：
+     *  - **目录名形态**（[PROJECT_DIR_NAME]）——同前缀不等于同族；空目录没有任何内容可查，
+     *    名字形态是它唯一可用的结构判据，故对所有候选先卡这一道。
      *  - **有存活标记** → 试抢它的文件锁：抢到 = 属主 JVM 已退出（OS 已释放锁），可删；
      *    抢不到 = 属主仍在跑（或另一个清扫者正在删它），跳过。这是「不误删正在用的目录」的精确判据。
      *  - **无标记且为空** → 只可能是「内容已删净、目录项被占」的残骸（活目录必有标记与工程文件），
      *    超过 [EMPTY_GRACE_MS] 即可删。此规则是实测补出来的：标记会被清扫链自己删掉
      *    （抢锁成功后连标记一起删），此时若目录项仍被占，剩下的空目录既无标记、又不到时长阈值。
-     *  - **无标记且非空** → 老目录（本修复前遗留）或他方工作树产物：回落到闲置时长阈值
-     *    [STALE_AFTER_MS]（单轮 `testDatabase` 最坏路径也在 20 分钟内结束，2 小时足够；
-     *    活跃目录的 mtime 会随用例写盘持续刷新）。
+     *  - **无标记且非空** → 必须先通过**内容结构校验** [hasProjectSignature]（带本项目特征文件/
+     *    子目录），再按闲置时长阈值 [STALE_AFTER_MS] 判定：老目录（本修复前遗留）会过校验，
+     *    而「同前缀的无关目录」过不了——这就是条件三要补的那道闸（单轮 `testDatabase` 最坏路径
+     *    也在 20 分钟内结束，2 小时足够；活跃目录的 mtime 会随用例写盘持续刷新）。
      */
     private fun isOwnerGone(dir: Path): Boolean {
+        if (!PROJECT_DIR_NAME.matches(dir.fileName.toString())) return false
         val lockPath = dir.resolve(OWNER_LOCK_NAME)
         if (Files.exists(lockPath)) {
             return runCatching {
@@ -219,27 +304,49 @@ object DbIntegrationProjectSupport {
         return runCatching {
             val age = System.currentTimeMillis() - Files.getLastModifiedTime(dir).toMillis()
             val empty = Files.list(dir).use { it.findFirst().isEmpty }
-            (empty && age > EMPTY_GRACE_MS) || age > STALE_AFTER_MS
+            if (empty) age > EMPTY_GRACE_MS else hasProjectSignature(dir) && age > STALE_AFTER_MS
         }.getOrDefault(false)
     }
 
     /**
-     * 递归删除（先子后父）；返回目录是否真的消失。任何单个条目失败都不中断其余。
+     * 内容结构校验：该目录是否带**本项目特征**（[OWNER_LOCK_NAME] / [PROJECT_FILE_NAME] / [IDEA_DIR_NAME]）。
+     *
+     * 用途只有一个：让「同前缀但与本项目无关」的目录（他人工作树、同名实验目录）不进清扫面。
+     * 三个特征都是本对象自己或平台建工程时**必然**产生的（[descriptor] 落 `light_temp.ipr`、
+     * 平台在其旁建 `.idea/`、本对象持锁标记），故不会漏收自己的目录。
+     * 空目录没有内容可校验，走 [PROJECT_DIR_NAME] 的名字形态判据（见 [isOwnerGone]）。
+     */
+    private fun hasProjectSignature(dir: Path): Boolean =
+        Files.exists(dir.resolve(OWNER_LOCK_NAME)) ||
+            Files.exists(dir.resolve(PROJECT_FILE_NAME)) ||
+            Files.isDirectory(dir.resolve(IDEA_DIR_NAME))
+
+    /**
+     * 递归删除（先子后父），返回 `(删除失败条目, 删除后仍存在的条目)`——都只记名字，不记绝对路径
+     * （免把日志撑爆）。任何单个条目失败都不中断其余（删得掉多少算多少）。
      *
      * @param keepLockFile true = 跳过 [OWNER_LOCK_NAME]（见 [deleteOwnProjectDir] 的孤儿标记说明）；
-     *                     仅删自己目录时用——孤儿清扫要连标记一起删掉。
+     *                     仅删自己目录时用——孤儿清扫要连标记一起删掉（那时属主已确认死亡）。
+     *                     **此时目录项必然仍在**（它就是这个标记的父目录），故调用方的成功判据
+     *                     不是「目录消失」而是「除标记外没有别的条目剩下」。
      */
-    private fun deleteRecursively(dir: Path, keepLockFile: Boolean = false): Boolean {
-        if (!Files.exists(dir)) return true
+    private fun deleteRecursivelyReport(dir: Path, keepLockFile: Boolean): Pair<List<String>, List<String>> {
+        if (!Files.exists(dir)) return emptyList<String>() to emptyList()
+        val failed = mutableListOf<String>()
         runCatching {
             Files.walk(dir).use { stream ->
                 stream.sorted(Comparator.reverseOrder()).forEach { p ->
                     if (keepLockFile && p.fileName?.toString() == OWNER_LOCK_NAME) return@forEach
-                    runCatching { Files.delete(p) }
+                    runCatching { Files.delete(p) }.onFailure {
+                        // keepLockFile 时**目录项自身**必然删不掉（刻意保留的标记还在里面 → DirectoryNotEmpty），
+                        // 那是设计不是故障，混进「子项删除失败」只会让排障绕远路
+                        if (keepLockFile && p == dir) return@onFailure
+                        failed += "${p.fileName}:${it.javaClass.simpleName}"
+                    }
                 }
             }
-        }
-        return !Files.exists(dir)
+        }.onFailure { failed += "walk:${it.javaClass.simpleName}" }
+        return failed to listEntryNames(dir).filterNot { keepLockFile && it == OWNER_LOCK_NAME }
     }
 
     /**
@@ -253,7 +360,7 @@ object DbIntegrationProjectSupport {
             // 平台不保证工程目录存在（默认路径落在 UsefulTestCase 已建好的 unitTest 目录里）——
             // 本路径由我们自己给，须先建出来，否则 store 落盘时父目录缺失
             Files.createDirectories(projectDir)
-            return projectDir.resolve("light_temp.ipr")
+            return projectDir.resolve(PROJECT_FILE_NAME)
         }
     }
 
