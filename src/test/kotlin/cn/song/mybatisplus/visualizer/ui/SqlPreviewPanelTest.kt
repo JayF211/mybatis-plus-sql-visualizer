@@ -108,6 +108,34 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
+    /**
+     * T-PreviewBgFit（问题一守卫）：左侧参数滚动区必须自带面板底色——该区整条链是透明的
+     * （paramTopAlign/viewport 非不透明），底色过去由祖先容器提供；T-UiNative P0a 把自绘分栏换成
+     * `OnePixelSplitter` 时丢了 `background = UIUtil.getPanelBackground()`，深色主题下参数行下方
+     * 直接透出分栏近黑背景（用户实测）。本用例钉死两点：滚动区不透明 + 其背景==平台面板背景；
+     * 同时分栏容器也须显式带面板背景（不再依赖子组件自绘）。
+     */
+    fun testParamsAreaCarriesPanelBackground() {
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(result())
+
+        val scroll = panel.paramScrollForTest()
+        assertTrue("参数滚动区应不透明（否则空区透出祖先容器底色）", scroll.isOpaque)
+        assertEquals(
+            "参数滚动区背景应为平台面板背景（主题命名色）",
+            com.intellij.util.ui.UIUtil.getPanelBackground(),
+            scroll.background,
+        )
+        val split = panel.splitPaneForTest()
+        assertNotNull("应能取到左右分栏容器", split)
+        assertEquals(
+            "分栏容器应恢复 T-UiNative P0a 丢失的面板背景",
+            com.intellij.util.ui.UIUtil.getPanelBackground(),
+            split!!.background,
+        )
+        panel.clear()
+    }
+
     fun testToggleCompactSwitchesSql() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(result())
@@ -1382,8 +1410,41 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
-    fun testTableNameCompletionInWhereClauseWithCandidates() {
-        if (Language.findLanguageByID("SQL") == null) return // 测试环境无 SQL 语言（DatabaseTools 未加载），真实 IDE 才执行补全断言
+    /**
+     * T-PreviewConsoleFmt：控制台文档（= exec 文件文档）持有预览原文（裸单行）时，
+     * 渲染链必须把**格式化文本**回填进该文档——真机日志实证：面板自建编辑器拿到 16 行格式化
+     * 文本（len=274），但控制台挂载读的是文件内容（预热写的预览原文，1 行 len=231），挂载后
+     * 无重渲染 → 用户看到裸单行 SQL。本用例钉死「渲染回填 nativeDoc」这一环（触发点见
+     * prepareDefaultConsole 的 onConsole 回填，真机由 embedConsole 后 invokeLater 执行）。
+     */
+    fun testRenderRepublishesFormattedTextIntoNativeConsoleDoc() {
+        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            result(
+                sql = "select  id ,name  from t  where id=1",
+                compact = "select id,name from t where id=1",
+            ),
+        )
+        // 模拟控制台就绪且已嵌入本面板（showSql 的 nativeDoc 分支要求 consoleAttachedToMe）
+        panel.embedConsoleForTest(javax.swing.JPanel())
+        assertTrue("前置：控制台应视为已挂到本面板", panel.consoleAttachedToMeForTest())
+        // 控制台文档持有「预览原文」裸单行（挂载时 DBN 读的正是文件内容）
+        val consoleDoc = com.intellij.openapi.editor.EditorFactory.getInstance()
+            .createDocument("select  id ,name  from t  where id=1")
+        panel.markNativeDocForTest(consoleDoc)
+
+        panel.renderSqlForTest() // = 挂载后的回填渲染
+
+        assertEquals(
+            "控制台文档应被回填为格式化文本（否则控制台显示裸单行）",
+            "SELECT\n    id,\n    name\nFROM t\nWHERE id = 1",
+            consoleDoc.text,
+        )
+        panel.clear()
+    }
+
+    fun testTableNameCompletionInWhereClauseWithCandidates() {        if (Language.findLanguageByID("SQL") == null) return // 测试环境无 SQL 语言（DatabaseTools 未加载），真实 IDE 才执行补全断言
         // T-M27.4：表名全位置提示——WHERE 后输入表名前缀也提示（主表 + 联表候选），
         // 不再限定 FROM/JOIN 后（输入 me → merchant_entity 命中）
         val panel = SqlPreviewPanel(project)

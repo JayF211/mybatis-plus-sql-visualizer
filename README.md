@@ -2,7 +2,7 @@
 
 > **服务未启，SQL 先知**
 
-MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试利器——IntelliJ IDEA 插件：Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），控制台日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。支持 IDEA 2024.3 及以上版本，[功能矩阵与在线文档](https://sql-visualizer.jvtools.cn)见官网。
+MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试利器——IntelliJ IDEA 插件：Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），SQL 日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。支持 IDEA 2024.3 及以上版本，[功能矩阵与在线文档](https://sql-visualizer.jvtools.cn)见官网。
 > **别的插件给你文本，我们给你可执行的 SQL。**
 > 三条理由：Wrapper 链静态生成 SQL 预览（无需运行代码，市场上唯一）；预览即可一键执行验证（内嵌 IDEA 原生数据库控制台）；支持达梦/人大金仓等 9 种数据库方言（含信创场景）。
 
@@ -10,11 +10,11 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **编码期（写代码时，静态预览）**：Wrapper 链（Lambda / Query / Update / Delete / MPJ 联表 / 服务链）、XML 动态 SQL（if/foreach/OGNL）、注解 SQL、JPA 派生方法 / JPQL / Criteria、HQL —— gutter 图标一键预览最终 SQL（含逻辑删除、乐观锁、多租户拦截器模拟渲染），并支持 SQL 反向转 Java 代码、实体类 / 数据库表右键生成 CRUD SQL。
 
-**运行期（跑起来后，动态还原）**：控制台 SQL 日志自动捕获，`?` 占位符参数填充为可执行 SQL（MyBatis / Hibernate / JdbcTemplate 三族日志），日志条目与源码双向跳转，历史 SQL 落盘与两级导航。
+**运行期（跑起来后，动态还原）**：控制台 SQL 日志自动捕获，`?` 占位符参数填充为可执行 SQL（MyBatis / Hibernate / JdbcTemplate 三族日志，并发多线程交错按线程分桶还原）；字节码增强捕获为默认通道，无需应用开启 SQL 日志，即得真实参数、执行耗时、影响行数与真实源码位置；日志条目与源码双向跳转，历史 SQL 全量落盘与两级导航。
 
 **验证（随时）**：预览结果内嵌原生数据库控制台一键执行，EXPLAIN 执行计划（7 种方言真机验证），SQL 性能规则引擎与静态标注对照，JOIN 关系图可视化。
 
-本插件原名为 MyBatis-Plus SQL Visualizer，现更名 SQL Visualizer——仍全面支持 MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate，插件 ID 与升级链路不变。IntelliJ IDEA 插件：MyBatis-Plus / MyBatis-Plus-Join 的 SQL 调试利器——Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），控制台日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。支持 IDEA 2024.3 及以上版本。
+本插件原名为 MyBatis-Plus SQL Visualizer，现更名 SQL Visualizer——仍全面支持 MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate，插件 ID 与升级链路不变。
 
 ## 功能演示
 
@@ -95,11 +95,12 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **SQL 日志工具窗口（主侧边栏，4 个 tab）**
 
-- 自动捕获运行控制台的 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式），还原成可执行 SQL 条目列表：单击轻量预览（可编辑高亮编辑器，改个值直接复制）、双击完整弹窗、右键复制 / 跳转源码；JdbcTemplate 命名参数为集合值时按元素还原（`IN (:p)` + `[a]` → `IN ('a')`，方括号不落进 SQL）
-- 条目显示耗时（p6spy / MP TimeCount / 自定义前缀），超阈值红色标记并统计慢查询；列表支持 SQL 类型筛选、Ctrl+F 搜索、耗时排序、重复条目去重（⨉N 徽章即时同步）
-- 条目带 `#N` 会话内捕获序号；列表支持单行 / 关键字换行 / 格式化三种显示模式（工具栏下拉即时切换），并按 SELECT / INSERT / UPDATE / DELETE 类型着色标记（左侧色条或整行淡背景，颜色与形态可自定义）
-- 「日志 → SQL」tab 可粘贴整段日志批量还原（多组语句自动分隔）；「历史」tab 浏览自动保存的历史 SQL（两级导航：文件 → 条目），可再次预览与跳转源码
-- 双击/右键「跳转到源码」：应用注册内置 `InnerInterceptor` 示例（`docs/instrumentation/SqlSourceInterceptor.kt`）后可精确定位到触发 SQL 的代码行；未注册时按表名智能搜索实体近似跳转
+- 两种捕获通道，条目统一还原成可执行 SQL 列表：**增强捕获**（字节码增强，默认通道）在首次运行项目时弹一次注入确认，同意后 agent 挂载到应用 JVM、在 JDBC 接口层直接采集——无需应用开启 SQL 日志，真实参数（默认不脱敏，设置页可开启打码）、执行耗时、影响行数、报错信息、目标库角标（`[MySQL]`、`[DM（达梦）]` 等，按 JDBC URL 推断，覆盖全部 9 种方言及 openGauss / GBASE）开箱即得；**控制台捕获**自动识别 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式，并发多线程交错的日志按线程分桶还原，参数不错挂不丢失），JdbcTemplate 命名参数为集合值时按元素还原（`IN (:p)` + `[a]` → `IN ('a')`，方括号不落进 SQL）；停止监听时同步停掉应用内采集
+- 单击条目轻量预览（可编辑高亮编辑器，改个值直接复制；零占位符的字面量 SQL 与 IN 列表同样识别出可编辑参数行）、双击完整弹窗、右键复制 / 复制时间戳 / 跳转源码
+- 条目元信息：`#N` 会话内捕获序号、时间（时间来源可选「日志时间」——自动识别 Logback / Log4j2 / Spring Boot 默认、ISO 8601 等常见格式的原始时间戳，解析不到回退捕获时间；或「捕获时间」）、耗时（增强条目为毫秒级精确值，控制台通道解析 p6spy / MP TimeCount / 自定义前缀）、影响行数；超阈值红色标记并统计慢查询
+- 列表支持 SQL 类型筛选、Ctrl+F 搜索（SQL 内容 / 源文件 / `#行号` / 时间文本）、排序方式选择器（时间升 / 降序、耗时升 / 降序、行号）、重复条目去重（⨉N 徽章即时同步）、Ctrl/Shift 多选批量复制；条目按 SELECT / INSERT / UPDATE / DELETE 类型着色标记（左侧色条或整行淡背景，颜色与形态可自定义），单行 / 关键字换行 / 格式化三种显示模式在设置页「列表显示」切换、即时生效
+- 「日志 → SQL」tab 可粘贴整段日志批量还原（多组语句自动分隔）；「历史」tab 浏览全量落盘的历史 SQL（两级导航：文件 → 条目；条目持久化参数与原始时间，新版可读全部旧文件），可再次预览与跳转源码；历史文件超出保留上限自动清理最旧（默认 30 个，可配全量保留）
+- 「跳转到源码」：增强捕获条目取自真实调用栈，直达执行 SQL 的代码行——自研框架统一入口的调用自动上溯跳过框架帧定位业务代码（框架前缀可在设置页配置，实时与历史面板共用同一解析）；控制台通道可注册内置 `InnerInterceptor` 示例（`docs/instrumentation/SqlSourceInterceptor.kt`）获得同等的精确定位，未配置时弹引导一键注入
 
 **检查更新（Gitee 抢先体验通道）**
 
@@ -108,7 +109,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 **其他**
 
 - SQL 执行（IntelliJ IDEA Ultimate + Database 插件）：预览面板内嵌原生 Database 控制台，选数据源后即可执行并查看真实结果表格与错误信息；Community 版优雅降级提示
-- JOIN 关系图：联表查询在预览面板「关系图」tab 由 IDE 原生 Diagrams 框架渲染（Community 降级自绘渲染），支持 PNG / SVG 导出
+- JOIN 关系图：联表查询在预览面板「关系图」tab 由 IDE 原生 Diagrams 框架渲染（Community 降级自绘渲染），打开默认自适应居中，支持 PNG / SVG 导出
 - 性能建议与复杂度：预览时按规则集给出 `SELECT *`、无索引列等性能提示与 SQL 复杂度评分
 - 对比与分享：当前 SQL 与上次预览并排 Diff（IDEA 原生 Diff）；一键复制可执行 SQL；分享为 Markdown / HTML 报告
 - 批量操作预览：`save` / `updateBatchById` 等批量 SQL 按列展开，参数可逐列勾选；`saveOrUpdate` 冲突子句按方言渲染（MySQL `ON DUPLICATE KEY UPDATE` / PG `ON CONFLICT` 等）
@@ -180,7 +181,7 @@ ORDER BY t1.create_time DESC
 - **JPA / Hibernate**：Repository 派生方法、`@Query`、Criteria 链、HQL（含自定义 DAO）行左侧 gutter 图标，点击即预览
 - **SQL → Java**：选中 SQL 文本右键 → `Convert SQL to MP Java Code`（或 Alt+Shift+J）；侧边栏工具窗口「SQL → Java」tab 粘贴即转
 - **CRUD SQL**：实体类文件 / 项目视图实体节点 / Database 工具窗表节点右键 → 生成 CRUD SQL，浮层选定语句后进入预览
-- **SQL 日志**：侧边栏「SQL Visualizer」工具窗口点「捕捉」开始监听控制台；双击日志条目预览还原 SQL；「日志 → SQL」tab 粘贴日志批量还原；「历史」tab 浏览自动保存的历史 SQL
+- **SQL 日志**：增强捕获默认开启——首次运行项目弹注入确认后自动采集；也可侧边栏「SQL Visualizer」工具窗口点「捕捉」监听控制台日志；双击日志条目预览还原 SQL；「日志 → SQL」tab 粘贴日志批量还原；「历史」tab 浏览自动保存的历史 SQL
 - **帮助**：工具窗口工具栏「?」按钮在内嵌浏览器打开功能与快捷键一览（本地页面，无网络依赖）
 
 ### 配置
@@ -219,14 +220,17 @@ ORDER BY t1.create_time DESC
 | 配置项 | 默认值 | 作用 |
 |--------|--------|------|
 | SQL / 参数前缀 | `Preparing:` / `Parameters:` | 控制台日志识别前缀（「混合前缀」开启后可同时识别两种格式；另支持 Hibernate / JdbcTemplate 前缀与耗时前缀配置） |
+| 增强捕获 | 开 | 字节码增强捕获通道：首次运行项目弹注入确认，同意后 agent 挂载应用 JVM 直接采集（无需开启 SQL 日志）；参数脱敏默认关闭、可开启打码；停止监听联动停采 |
 | 自动捕捉 | 关 | 运行 / 调试项目时自动开始监听控制台（进程级被动监听；手动点「停止捕捉」后本会话不再自动弹回） |
 | 发现 SQL 自动打开窗口 | 开 | 捕获到 SQL 时自动展开日志工具窗口（60 秒防抖、不抢编辑器焦点；手动关闭后本次会话不再自动弹出） |
-| 时间戳显示 | 开 | 条目列表显示捕获时间（格式可配，默认 `yyyy-MM-dd HH:mm:ss`） |
-| 耗时显示 / 慢查询阈值 | - | 解析 p6spy / TimeCount / 自定义前缀耗时，超阈值红色标记并统计慢查询 |
+| 时间来源 | 日志时间 | 条目时间取日志行解析的原始时间戳（自动识别 Logback / Log4j2 / Spring Boot 默认、ISO 8601 等常见格式，解析不到回退捕获时间），或插件捕获时刻 |
+| 时间戳显示 | 开 | 条目列表显示时间（格式可配，默认 `yyyy-MM-dd HH:mm:ss`，对两种时间来源同样生效） |
+| 耗时显示 / 慢查询阈值 | - | 增强条目为结构化毫秒级耗时；控制台通道解析 p6spy / TimeCount / 自定义前缀耗时，超阈值红色标记并统计慢查询 |
 | 最大条数 | 可配 | 日志条目上限（M46），超出自动淘汰 |
 | 去重窗口 | 60000 ms | 相同 SQL 在窗口内重复不显示（勾选「移除重复的sql」可立即裁剪既有条目，⨉N 徽章计数） |
 | 移除包含关键字 | 空 | 过滤包含指定关键字的日志行（`;` 分隔多值） |
-| 自动保存捕获的 SQL | 关 | 条目自动追加到 `.idea/sql-visualizer/sql-history/`，供「历史」tab 浏览 |
+| 自动保存捕获的 SQL | 关 | 条目全量落盘到 `.idea/sql-visualizer/sql-history/`（不受列表最大条数限制），供「历史」tab 浏览 |
+| 历史文件保留上限 | 30 | 保存目录内历史文件超过上限自动清理最旧（0 = 全量保留） |
 
 **界面与操作**
 

@@ -4,6 +4,7 @@ import cn.song.mybatisplus.sqlvis.agent.AgentState;
 import cn.song.mybatisplus.sqlvis.agent.model.SqlEvent;
 import cn.song.mybatisplus.sqlvis.agent.transport.EventBus;
 import cn.song.mybatisplus.sqlvis.agent.util.MdcAccessor;
+import cn.song.mybatisplus.sqlvis.agent.util.StackDigest;
 import cn.song.mybatisplus.sqlvis.agent.util.StackLocator;
 
 import java.lang.reflect.InvocationHandler;
@@ -133,6 +134,7 @@ final class StatementHandler implements InvocationHandler {
         event.sourceLine = frame == null ? 0 : frame.line;
         event.methodKey = frame == null ? null : frame.methodKey;
         event.sourceCandidates = frame == null ? null : frame.candidates;
+        event.stackDigest = StackDigest.build();
         event.requestTag = MdcAccessor.requestTag();
         event.params = params.snapshot(sql, AgentState.isDesensitize());
         event.url = url; // connect 时 URL（面板据此展示目标库类型；测试/池代理下可能为 null）

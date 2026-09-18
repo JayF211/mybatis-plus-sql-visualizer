@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db
 
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModel
+import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramOpener
 import com.intellij.database.model.DasObject
 import com.intellij.database.model.DasTable
 import com.intellij.database.model.RawDataSource
@@ -92,15 +93,21 @@ object NativeDatabaseDiagramSupport {
         }
     }
 
-    /** 释放嵌入的 Database 图编辑器（换图/清空调用），并回收虚拟外键登记。 */
+    /**
+     * 释放嵌入的 Database 图编辑器（换图/清空调用）。
+     *
+     * T-EmbedFkOrder F2：**不再在此清空 [JoinFkRegistry]**——dispose 只负责释放编辑器，清空注册表
+     * 会误伤「当前图」刚登记的虚拟外键（真机故障：`showJoinDiagram` 先建新图登记、后清旧图，
+     * 旧图 dispose 把新登记整批抹掉 → 只剩节点没连线）。清理职责改为显式语义点：
+     * 登记前 `registerJoinForeignKeys` 自带 clear（新图恰好只留自己的 FK）、无 JOIN 移除标签页与
+     * 面板 clear() 时调用 [clearRegisteredFk]。
+     */
     fun disposeNativeEditor(component: JComponent?) {
         try {
             val editor = component?.getClientProperty(NATIVE_EDITOR_KEY) as? Disposable
             editor?.let { Disposer.dispose(it) }
         } catch (t: Throwable) {
             // 释放失败不阻断降级链
-        } finally {
-            JoinFkRegistry.clear()
         }
     }
 
@@ -217,6 +224,10 @@ object NativeDatabaseDiagramSupport {
         val editor: FileEditor = Class.forName("com.intellij.uml.UmlFileEditorImpl")
             .getDeclaredConstructor(DiagramBuilder::class.java, VirtualFile::class.java)
             .newInstance(builder, umlFile) as FileEditor
+
+        // T-PreviewBgFit（问题二）：同 JOIN 路径——开关必须在**异步布局触发之前**置位，
+        // 布局管线收尾时才读得到它并自适应（见 NativeJoinDiagramOpener.enableAutoFit 注释）。
+        NativeJoinDiagramOpener.enableAutoFit(builder)
 
         builder.queryUpdate()
             .withDataReload()

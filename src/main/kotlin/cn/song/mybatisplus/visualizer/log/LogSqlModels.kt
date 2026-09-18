@@ -70,6 +70,15 @@ data class LogSqlEntry(
      */
     val sourceCandidates: List<Pair<String, Int>> = emptyList(),
     /**
+     * T-SourceJumpFunnel：候选帧类名（与 [sourceCandidates] 栈序对齐，旧 agent 事件可能缺类名列 → 空）。
+     * 展示性字段（选帧弹层/NotFound 提示），**body 内属性不参与 equals/hashCode**——但 sourceCandidates
+     * 在主构造里，本字段也在主构造，须评估 equals 影响：去重走 dedupeKey（惰性指纹），data class equals
+     * 变化不影响面板去重口径（T-CrudColor 同理定案）。
+     */
+    val candidateClasses: List<String> = emptyList(),
+    /** T-SourceJumpFunnel：调用栈快照「类#方法:行 ← …」（仅 agent 通道；详情面板人工往上追踪用）。 */
+    val stackDigest: String? = null,
+    /**
      * T-LogRowNumber：会话内捕获序号（「SQL 日志」列表行号）。由 [SqlLogEntryBuffer.addEntry]
      * 成功入队时分配（单调递增；去重丢弃/暂停/过滤关键字命中的条目不占号），
      * 项目启动（processStarted）或手动清空列表时归零。0 表示无行号

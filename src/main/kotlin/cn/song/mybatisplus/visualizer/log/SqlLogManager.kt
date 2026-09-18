@@ -442,10 +442,19 @@ class SqlLogManager(private val project: Project) : Disposable {
         buffer.maxEntries = state.logMaxCount
         // F-43：自动保存历史 SQL（T-Perf-12：submit 异步批量写——回调只投递无锁队列，
         // 磁盘 IO 全部在专用写线程，控制台输出热路径不再同步 flush）
+        // T-SqlHistoryFull：写入来源从「仅淘汰写」改为「入队成功即写」——历史记录全量 SQL；
+        // onEvicted 置空防重复（成功入队已写过，被淘汰条目不再二次写盘）
         if (state.logAutoSaveEnabled) {
-            autoSaver.configure(state.logAutoSavePath, state.logAutoSaveFileNamePattern, project.basePath)
-            buffer.onEvicted = { entry -> autoSaver.submit(entry) }
+            autoSaver.configure(
+                state.logAutoSavePath,
+                state.logAutoSaveFileNamePattern,
+                project.basePath,
+                state.logAutoSaveMaxFiles, // T-HistoryFileRetention：历史文件保留上限
+            )
+            buffer.onEntryStored = { entry -> autoSaver.submit(entry) }
+            buffer.onEvicted = null
         } else {
+            buffer.onEntryStored = null
             buffer.onEvicted = null
         }
     }
@@ -520,6 +529,7 @@ class SqlLogManager(private val project: Project) : Disposable {
         bridge.detach()
         buffer.removeListener(uiNotifyListener)
         buffer.onEntryAccepted = null
+        buffer.onEntryStored = null
         buffer.onDedupeCountsChanged = null
         buffer.onContentNotifySuppressed = null
         uiListeners.clear()

@@ -22,8 +22,10 @@ public final class SqlEvent {
     public String sourceFile;
     /** 行号（0 未知）。 */
     public int sourceLine;
-    /** 源码位置候选 [file, line]（T-AgentSourceJump：栈序，≤3 条；IDE 侧解析回退用）。 */
+    /** 源码位置候选 [file, line, className, method]（T-AgentSourceJump 栈序；T-SourceJumpFunnel 增厚四列 ≤8 条；IDE 侧解析回退用）。 */
     public List<String[]> sourceCandidates;
+    /** 调用栈快照「类#方法:行」压缩单串（T-SourceJumpFunnel P2-2，≤16 帧超长截断；人工往上追踪用）。 */
+    public String stackDigest;
     /** 方法聚焦键 {SimpleClass}#{method}（T-M56-06）。 */
     public String methodKey;
     /** 请求聚合标签（MDC 兜底，T-M56-07）。 */

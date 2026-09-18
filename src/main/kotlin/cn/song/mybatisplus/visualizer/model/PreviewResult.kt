@@ -65,4 +65,9 @@ data class PreviewResult(
      * 默认空 map，既有构造点零影响（向后兼容）。
      */
     val namedParamHints: Map<String, ParamHint> = emptyMap(),
+    /**
+     * T-SourceJumpFunnel P2-2：调用栈快照「类#方法:行 ← …」（栈顶在左；agent 通道产出，
+     * 日志/历史条目双击预览透传）。null = 无（桥通道 / 旧条目），面板不显示栈节点。
+     */
+    val stackDigest: String? = null,
 )

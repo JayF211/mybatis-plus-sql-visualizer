@@ -38,6 +38,7 @@ internal object FeedbackReporting {
         ApplicationManager.getApplication().executeOnPooledThread {
             val outcome = runCatching { FeedbackApi.submit(submission) }
                 .getOrElse { FeedbackApi.SubmissionOutcome(FeedbackApi.SubmitResult.Failure(it.message ?: "submit failed")) }
+            // write-safe: UI-only（纯 Swing/只读，无文档写）
             ApplicationManager.getApplication().invokeLater(
                 {
                     onProgress(false)

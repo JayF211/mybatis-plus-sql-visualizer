@@ -29,6 +29,8 @@ import com.intellij.uml.UmlVirtualFileSystem
  */
 object NativeJoinDiagramOpener {
 
+    private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(NativeJoinDiagramOpener::class.java)
+
     /** 经 VFS 注册表解析已初始化的 UmlVirtualFile（URL = uml://<providerId>/<fqn>）。 */
     private fun createVirtualFile(snapshotId: String, title: String): UmlVirtualFileSystem.UmlVirtualFile {
         val url = "${UmlVirtualFileSystem.PROTOCOL_PREFIX}${SqlJoinDiagramProvider.ID}/$snapshotId"
@@ -67,13 +69,20 @@ object NativeJoinDiagramOpener {
             DiagramBuilderFactory.getInstance().createBuilder(project, provider, element, umlFile)
         }
 
+        // 3.5 T-PreviewBgFit（问题二·第二轮）：**必须在触发布局之前**置「布局后自适应」——
+        // 布局管线（GraphLayoutServiceImpl 字节码实证）在每次布局收尾时读
+        // GraphSettings.isFitContentAfterLayout()，为真则 GraphAnimationService.fitContent(view)。
+        // 步骤 5 的 queryUpdate 是 **runAsync**（异步）：若在它之后再置开关，本次布局可能已越过
+        // 该判定点 → 图停默认缩放/左上角（真机实证：同一会话里第一张图不居中、第二张正常，纯竞态）。
+        enableAutoFit(builder)
+
         // 4. 构造编辑器（UmlFileEditorImpl 为 internal，反射实例化；构造器签名 (DiagramBuilder, VirtualFile)）。
         @Suppress("UNCHECKED_CAST")
         val editor: FileEditor = Class.forName("com.intellij.uml.UmlFileEditorImpl")
             .getDeclaredConstructor(DiagramBuilder::class.java, VirtualFile::class.java)
             .newInstance(builder, umlFile) as FileEditor
 
-        // 5. 触发画布填充（对应 ShowDiagramBase.afterDiagramIsShown）。
+        // 5. 触发画布填充（对应 ShowDiagramBase.afterDiagramIsShown）——异步，故开关必须先置位（步骤 3.5）。
         builder.queryUpdate()
             .withDataReload()
             .withRelayout()
@@ -81,6 +90,17 @@ object NativeJoinDiagramOpener {
             .runAsync()
 
         return editor
+    }
+
+    /**
+     * T-PreviewBgFit：置「布局后自适应」+「尺寸变化后保持自适应」——平台工具栏两个 toggle 的设置项，
+     * 布局管线与视口在各自时机消费。须在任何布局触发**之前**调用（见 buildEmbeddableEditor 步骤 3.5）。
+     */
+    internal fun enableAutoFit(builder: DiagramBuilder) {
+        runCatching { builder.presentationModel.settings.setFitContentAfterLayout(true) }
+            .onFailure { LOG.warn("Enable fitContentAfterLayout failed", it) }
+        runCatching { builder.view.setFitContentOnResize(true) }
+            .onFailure { LOG.warn("Enable fitContentOnResize failed", it) }
     }
 
     /** 以 IDE 编辑器独立标签页打开（复用 UmlEditorProvider 的 FileEditorProvider 注册）。 */

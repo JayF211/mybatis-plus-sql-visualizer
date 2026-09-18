@@ -38,6 +38,10 @@ class SqlLogAutoSaver(
     private var currentResolvedName: String = ""  // 当前解析后的文件名（不含滚动序号）
     private var currentIndex: Int = 1  // 当前滚动序号（1=无后缀）
 
+    /** T-HistoryFileRetention：历史文件保留上限（按基名归并的组数）。<=0 = 全量保留。 */
+    @Volatile
+    private var maxFiles: Int = 0
+
     // ---------- T-Perf-12：异步批量写（淘汰条目投递无锁队列 + 专用单线程执行器） ----------
 
     /** 在途淘汰条目队列（控制台输出线程投递，写线程消费）。 */
@@ -71,7 +75,14 @@ class SqlLogAutoSaver(
         return new
     }
 
-    /** 写任务：整批一次 flush；写期间新到条目重新调度（不丢条）。 */
+    /**
+     * 写任务：整批一次 flush；写期间新到条目重新调度（不丢条）。
+     * T-SqlHistoryFull：@Synchronized 与 [close] 在同一监视器串行——此前无锁 drainAndWrite 与 close
+     * 并发时，后台已 poll 未写完的批次会在 close 关闭 writer 后被 writeEntry 的 currentFile==null 分支
+     * 跳过丢条（2 万条风暴压测丢 9 千，dispose 与风暴写并发的既有缺陷，T-SqlHistoryFull 全量化放大触发面）。
+     * writeBatch 本身 @Synchronized 重入，此处持锁串行即可保证「先写完全部再关闭」或「先清空写完全部」，两序都不丢。
+     */
+    @Synchronized
     private fun drainAndWrite() {
         drainScheduled.set(false)
         val batch = mutableListOf<LogSqlEntry>()
@@ -79,7 +90,54 @@ class SqlLogAutoSaver(
             val e = pendingEntries.poll() ?: break
             batch.add(e)
         }
-        if (batch.isNotEmpty()) writeBatch(batch)
+        if (batch.isNotEmpty()) {
+            writeBatch(batch)
+            // T-HistoryFileRetention：写批之后在同写线程裁剪超限历史文件（不阻塞捕获热路径；与写串行无竞态）
+            pruneRetainedFiles()
+        }
+    }
+
+    /** T-HistoryFileRetention：历史文件保留上限裁剪——目录下逻辑历史文件（按基名归并滚动块）超过上限时删最旧组。
+     *  仅在写批后台线程调用（@Synchronized 串行）；maxFiles<=0 表示全量保留不删。
+     *  归并口径：`sql-history-2026-09-17.sql` 与 `sql-history-2026-09-17.2.sql` 是同一逻辑文件的滚动块，
+     *  按基名归并为 1 组计——否则单文件自行滚动多块会误删跨天文件。超限按组内文件时间戳最旧组整组删。
+     */
+    @Synchronized
+    internal fun pruneRetainedFiles() {
+        if (maxFiles <= 0) return
+        val dir = File(saveDir)
+        if (!dir.isDirectory) return
+        val files = dir.listFiles { f -> f.isFile && f.extension.equals("sql", ignoreCase = true) } ?: return
+        if (files.isEmpty()) return
+        // 按基名（去滚动序号）归并：base -> 该逻辑文件的组成文件
+        val groups = files.groupBy { baseNameOf(it.name) }
+        if (groups.size <= maxFiles) return
+        // 按「组内最新文件时间戳」作组年龄下限排序（取组内最年轻文件代表该组，跨天视为新组），最旧在前的组先删
+        val oldestFirst = groups.entries.sortedBy { (_, g) -> g.maxOfOrNull { it.lastModified() } ?: 0L }
+        val toDelete = oldestFirst.take(oldestFirst.size - maxFiles)
+        for ((_, g) in toDelete) {
+            g.forEach { f ->
+                runCatching { f.delete() }.onFailure {
+                    LOG.warn("T-HistoryFileRetention: 删除历史文件失败 ${f.absolutePath}", it)
+                }
+            }
+        }
+    }
+
+    /** 文件名取滚动序号前基名：`xxx.sql` → `xxx`；`xxx.2.sql` → `xxx`；`xxx.yyy.sql` 视作整体（无滚动序号不拆分）。 */
+    private fun baseNameOf(fileName: String): String {
+        val dot = fileName.lastIndexOf('.')
+        if (dot <= 0) return fileName
+        // 去掉扩展名后若形如 `xxx.N`（N 为数字且前面还有扩展名前的点），剥掉滚动序号段
+        val stem = fileName.substring(0, dot)
+        val secondDot = stem.lastIndexOf('.')
+        if (secondDot > 0) {
+            val numPart = stem.substring(secondDot + 1)
+            if (numPart.isNotEmpty() && numPart.all { it.isDigit() }) {
+                return stem.substring(0, secondDot)
+            }
+        }
+        return stem
     }
 
     /** close 前同步清空在途队列（不丢条；close 持有同一监视器，写任务串行）。 */
@@ -97,12 +155,14 @@ class SqlLogAutoSaver(
      * @param customPath 用户自定义目录（空串 = 默认 .idea 路径）
      * @param pattern 文件名模板（空串 = 默认模板）
      * @param projectBasePath 项目基路径（默认路径计算用）
+     * @param maxFiles T-HistoryFileRetention：历史文件保留上限（基名归并组数，<=0 = 全量保留）
      */
     @Synchronized
-    fun configure(customPath: String, pattern: String, projectBasePath: String?) {
+    fun configure(customPath: String, pattern: String, projectBasePath: String?, maxFiles: Int = 0) {
         close()
         saveDir = resolveDir(customPath, projectBasePath)
         fileNamePattern = pattern.ifBlank { PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
+        this.maxFiles = maxFiles
         currentResolvedName = ""
         currentIndex = 1
     }
@@ -229,7 +289,8 @@ class SqlLogAutoSaver(
             // pd 行（载荷扩展键，仅非默认落键）——否则 agent 通道结构化信息在历史文件丢失。
             if (entry.params.isNotEmpty() || countPlaceholders(entry.rawSql) > 0 ||
                 entry.mapperStatement != null || entry.errorText != null ||
-                entry.requestTag != null || entry.updateCount != null
+                entry.requestTag != null || entry.updateCount != null ||
+                entry.sourceCandidates.isNotEmpty() || entry.stackDigest != null
             ) {
                 w.write("-- pd: ${SqlLogParamCodec.encodeEntry(entry)} --\n")
             }

@@ -467,6 +467,14 @@ internal object JpaMetadataReader {
     )
 
     /**
+     * @Entity(name=...) 实体别名（T-HqlInhCols）：jakarta/javax 双包 + 短名三轨（findFlex）。
+     * HQL/JPQL `FROM <实体名>` 可用该别名而非类名；未指定或读不到返回 null。
+     */
+    fun entityNameOf(clazz: PsiClass): String? = runCatching {
+        findFlex(clazz, "jakarta.persistence.Entity")?.let { attrString(it, "name") }
+    }.getOrDefault(null)
+
+    /**
      * 类是否疑似 ORM 映射实体（SD10 嵌套实体跳过判定的保守守卫）：
      * @Entity / @Table（jakarta/javax/relational 全限定名或短名）注解，或类内任一字段标注 @Id
      * （jakarta/javax/spring-data）。@Embeddable/@MappedSuperclass 值对象不算。

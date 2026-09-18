@@ -313,6 +313,15 @@ class AgentManager(private val project: Project) : Disposable {
     }
 
     /**
+     * T-SourceJumpFunnel P1-3：帧过滤前缀热下发（设置变更）。sendConfig 读设置现拼
+     * skipPrefixes——设置页 Apply → SETTINGS_CHANGE_TOPIC → 既有监听走 pushDesensitize
+     * 即已携带新前缀，无需独立通道；本函数仅为语义命名入口（空实现保留扩展位）。
+     */
+    fun pushFrameSkipPrefixes() {
+        pushDesensitize(PluginSettings.getInstance().state.enhancedCaptureDesensitize)
+    }
+
+    /**
      * 监听开关联动（T-AgentListenSync）：停止监听 → agent 停采（真停，非 IDE 侧丢弃）；
      * 开启监听 → 恢复采集。由 SqlLogManager.startCapture/stopCapture 调用。
      * agent 侧 CONFIG 即时生效（volatile 标志），织入点常驻，恢复后下一条 SQL 完整采集。
@@ -483,7 +492,10 @@ internal class AgentSession(
     fun sendConfig(disabled: Boolean, desensitize: Boolean =
         PluginSettings.getInstance().state.enhancedCaptureDesensitize) {
         try {
-            val body = AgentProtocol.configBody(disabled, desensitize).toByteArray(Charsets.UTF_8)
+            // T-SourceJumpFunnel P1-3：随 CONFIG 附带用户登记的帧过滤前缀（热下发；旧 agent 忽略该键）
+            val prefixes = PluginSettings.getInstance().state.sourceFrameSkipPrefixes
+                .lineSequence().filter { it.isNotBlank() }.toList()
+            val body = AgentProtocol.configBody(disabled, desensitize, prefixes).toByteArray(Charsets.UTF_8)
             synchronized(output) {
                 output.writeInt(body.size)
                 output.write(AgentProtocol.CMD_CONFIG)

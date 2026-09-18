@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper
+import cn.song.mybatisplus.visualizer.execute.DocWriteContext
 import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor
 import cn.song.mybatisplus.visualizer.model.BatchColumn
@@ -149,7 +150,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // 保证行宽不超出视口（标题行右侧按钮不被推出）
     private val paramScroll = JBScrollPane(paramTopAlign).apply {
         preferredSize = Dimension(240, 200)
-        isOpaque = false
+        // T-PreviewBgFit（问题一）：本面板自身给出面板底色——左侧参数区整条链是透明的
+        //（paramTopAlign/viewport 均非不透明，M36.5 起用于与父容器融合），底色一直靠祖先容器提供；
+        // T-UiNative P0a 把自绘 ThemedSplitPane（当时显式设了 UIUtil.getPanelBackground()）换成平台
+        // OnePixelSplitter 时丢了那层背景，深色主题下参数行下方直接透出 splitter 的近黑背景。
+        // 恢复祖先背景之外再让本滚动区成不透明面板灰，今后再换容器也不会复发。
+        isOpaque = true
+        background = com.intellij.util.ui.UIUtil.getPanelBackground()
         viewport.isOpaque = false
         // M36.5：去 LAF 默认 viewport 描边（左侧白色内边框根因）
         border = JBUI.Borders.empty()
@@ -354,6 +361,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val split = OnePixelSplitter(false, "mpvs.preview.splitter", 0.3f).apply {
             firstComponent = paramScroll
             secondComponent = editorHolder
+            // T-PreviewBgFit（问题一）：恢复 T-UiNative P0a 换组件时丢掉的容器背景——
+            // 原 ThemedSplitPane 显式设过 `background = UIUtil.getPanelBackground()`，OnePixelSplitter
+            // 版本漏了它，左侧透明参数区于是透出分栏自身背景（深色主题近黑）。
+            // T-DarkTheme：命名色按主题解析，浅/深主题各自正确（主题切换由 LafManagerListener 触发重绘）。
+            background = com.intellij.util.ui.UIUtil.getPanelBackground()
         }
         // M36.5：删除 verticalSplit 下半区——控制台已内嵌右侧，底部仅保留状态行
         //（resultPanel SOUTH，无内容时隐藏不占高度，错误/执行状态正常显示）
@@ -769,7 +781,35 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // 执行的结果/错误（用户"执行第二个 SQL 后预览第一个，状态栏还显示之前的错误"）。
             // 嵌入后 showEmpty 清空；执行路径走 onResultsReady（成功）清 / onError（失败）显示，
             // 与本预览回调互不影响。
-            onConsole = { consoleComponent -> embedConsole(consoleComponent); resultPanel.showEmpty() },
+            onConsole = { consoleComponent ->
+                embedConsole(consoleComponent)
+                resultPanel.showEmpty()
+                // T-PreviewFast P7：请求→控制台可见（第三段锚点，用户感知的「预览快不快」）
+                runCatching {
+                    val req = SqlPreviewService.lastPreviewRequestMs
+                    if (req > 0) {
+                        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                            .info("[T-PreviewFast] request→console-visible: ${System.currentTimeMillis() - req}ms")
+                    }
+                }
+                // T-PreviewConsoleFmt：控制台挂在这个 exec 文件上（其文档就是该文件文档），而文件
+                // 内容由预览链预热写成**预览原文**（裸单行）——挂载后不重渲染，用户看到的就是裸
+                // SQL（真机 20260917 日志：showSql createEditor len=274/16 行 → 预热原文 → attach
+                // 后控制台显示 1 行）。嵌入完成即按当前渲染文本回填一次；必须排在此处而非
+                // onNativeEditorReady —— showSql 的 nativeDoc 分支要求 consoleAttachedToMe()
+                // （= embeddedConsole 已进 consoleHost），挂载回调那一刻尚未满足。
+                // T-WSC-01：此处回调**会写文档**（renderSql → showSql → document.setText），故必须用
+                // write-safe 模态——原 ModalityState.any() 恒 write-unsafe，真机报 Write-unsafe context
+                // （见 DocWriteContext KDoc 与计划 20260917-1555 §一）。nonModal 的代价是模态弹窗存续期
+                // 回填延后到弹窗关闭——这正是平台对「改文档」要求的语义。
+                ApplicationManager.getApplication().invokeLater({
+                    if (com.intellij.openapi.util.Disposer.isDisposed(this)) return@invokeLater
+                    runCatching { renderSql() }.onFailure { e ->
+                        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                            .warn("[M36] post-attach re-render FAILED: ${e.javaClass.simpleName}: ${e.message}")
+                    }
+                }, com.intellij.openapi.application.ModalityState.nonModal())
+            },
             onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
             // 默认准备失败（无数据源等）静默——不打扰预览；执行时再走全链提示
             onError = null,
@@ -800,6 +840,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // M36.5.77：execute 路径（previewMode=false）即使同实例也要确保 divider 展开——
             // preview 时折叠为 1.0；execute 后必须恢复 0.6 显示结果区。
             if (!previewMode && consoleComponent is javax.swing.JSplitPane) {
+                // write-safe: UI-only（纯 Swing/只读，无文档写）
                 ApplicationManager.getApplication().invokeLater({
                     if (consoleComponent.height > 0) {
                         consoleComponent.setDividerLocation(0.6)
@@ -829,6 +870,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // 的 `if (height<200) return` 在布局初期塌缩时不触发，导致"预览 SQL 编辑器塌缩"，
             // 执行后才被 swap 的 realignSplitDivider 恢复（用户截图：预览布局问题，点执行后恢复）。
             // invokeLater 下一拍组件已在树中，强制 60%（编辑器主导），不依赖 resize 时机。
+            // write-safe: UI-only（纯 Swing/只读，无文档写）
             ApplicationManager.getApplication().invokeLater({
                 if (sp.height > 0) {
                     // M36.5.77：预览（previewMode=true）折叠底部（divider=1.0），隐藏无内容的
@@ -933,6 +975,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
                 .info("[M36] console component released by DBN (id=${System.identityHashCode(e.component)}) → re-host (since=${since}ms)")
             // ModalityState.any()：模态弹窗 pump 期间重挂照常执行（纯 Swing 操作安全，M36.5.13 教训）
+            // write-safe: UI-only（纯 Swing/只读，无文档写）
             ApplicationManager.getApplication().invokeLater({
                 rehostConsoleForTest(e.component as? JComponent ?: return@invokeLater)
             }, com.intellij.openapi.application.ModalityState.any())
@@ -1104,10 +1147,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 }
             }
         } else {
-            // 无 JOIN：移除 diagram 标签页（恢复纯 SQL 视图）
+            // 无 JOIN：整图卸载（移除 diagram 标签页 + 释放原生图 + 回收虚拟外键登记）
             removeDiagramTab()
-            diagramPanel.clear()
-            clearNativeDiagram()
+            unloadJoinDiagram()
         }
     }
 
@@ -1120,6 +1162,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      */
     private fun showJoinDiagram(model: DiagramModel) {
         val nativeEnabled = PluginSettings.getInstance().state.joinDiagramNative
+        // T-EmbedFkOrder F1：**必须先清旧图、再建新图**——旧图 dispose 会清空 JOIN 虚拟外键注册表
+        //（JoinFkRegistry），顺序颠倒会把新图刚登记的 ON 条件整批抹掉：Database 原生图于是只剩节点
+        // 没有连线（真机实证：同一面板里"一张图有连线、另一张没有"；含子查询的走 wrapper 路径不读
+        // 注册表，故不受影响）。清理集中在此处（建图之前），登记之后不再有人清它。
+        clearNativeDiagram()
         val native = if (nativeEnabled) {
             // T-Embed-03 降级链：Database 原生图（真实 DbTable + 虚拟外键 JOIN 线）优先，
             // 数据源缺席/表未定位/框架异常回落 A 路径自实现 Provider，再回落自绘渲染器
@@ -1131,7 +1178,6 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         } else {
             null
         }
-        clearNativeDiagram()
         diagramTabHost.removeAll()
         if (native != null) {
             currentNativeDiagram = native
@@ -1144,7 +1190,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         diagramTabHost.repaint()
     }
 
-    /** 释放并移除当前原生图组件（内部 FileEditor 经 clientProperty 定位后 dispose）。 */
+    /**
+     * 释放并移除当前原生图组件（内部 FileEditor 经 clientProperty 定位后 dispose）。
+     *
+     * T-EmbedFkOrder F2：本方法**不**清理 JOIN 虚拟外键注册表——它可能在建新图之前被调用（此时
+     * 新图尚未登记，清了也无害），也可能在换图/卸载时被调用（此时若清会把刚登记的抹掉）。
+     * 注册表的清理职责在明确语义点：登记前自带 clear 与 [unloadJoinDiagram]。
+     */
     private fun clearNativeDiagram() {
         currentNativeDiagram?.let {
             // 两条原生路径的 clientProperty key 不同，各 dispose 一次（未命中为 no-op）
@@ -1153,6 +1205,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             diagramTabHost.remove(it)
         }
         currentNativeDiagram = null
+    }
+
+    /** T-EmbedFkOrder F2：整图卸载（无 JOIN/面板清空）——释放原生图并回收虚拟外键登记。 */
+    private fun unloadJoinDiagram() {
+        clearNativeDiagram()
+        diagramPanel.clear()
+        cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport.clearRegisteredFk()
     }
 
     /** 确保内容区为标签页模式（含 SQL + 可选的 JOIN 图）。 */
@@ -1303,6 +1362,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 按当前压缩/多行模式 + 动态条件启用集合 + 参数回填重渲染 SQL 编辑器。 */
     private fun renderSql() {
+        // T-WSC-01：写安全自愈闸——renderSql 是面板全部文档写入的唯一上游（showSql 三条分支
+        // 都写文档：nativeDoc / 自建 editor / createEditor），而写入合法性取决于「这次 EDT 活动
+        // 是否 write-safe」（见 DocWriteContext KDoc）。非 write-safe（如 invokeLater(any) 排出的
+        // 活动、Timer 拍）时重投递到 nonModal 的下一拍；renderSql 幂等重算，不会写出过期文本
+        // ——这正是闸门放在 renderSql 而非 showSql(text) 的原因（后者收的是调用时刻的快照）。
+        if (!DocWriteContext.isWriteAllowedNow()) {
+            DocWriteContext.invokeLaterWriteSafe(this, "SqlPreviewPanel.renderSql") { renderSql() }
+            return
+        }
         val result = current ?: return
         val model = result.previewModel
         val batch = result.batchModel
@@ -1404,14 +1472,27 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * FORMAT 强制格式化、KEYWORD_WRAP / VERTICAL 走对应变换（二者对非 INSERT 已内含 format，
      * 无需叠加）。
      */
+    /**
+     * T-PreviewFast P6：显示模式变换 **单槽缓存**——同一 (SQL, 模式, 压缩态, 格式化设置) 组合
+     * 只做一次 SqlFormatter 变换。命中场景：挂载后回填渲染与紧随其后的参数/勾选重渲染
+     * （内容未变时反复走格式化管线是纯浪费，大 SQL 上尤甚）。
+     */
+    private var formatCacheKey: String? = null
+    private var formatCacheValue: String? = null
+
     private fun applyDisplayMode(sql: String): String {
         if (compactMode) return sql
-        return when (displayMode) {
+        val key = "$displayMode|$compactMode|${formatSqlSetting()}|$sql"
+        formatCacheValue?.let { cached -> if (formatCacheKey == key) return cached }
+        val out = when (displayMode) {
             PreviewDisplayMode.NORMAL -> if (formatSqlSetting()) SqlFormatter.format(sql) else sql
             PreviewDisplayMode.FORMAT -> SqlFormatter.format(sql)
             PreviewDisplayMode.KEYWORD_WRAP -> SqlFormatter.formatClauseLine(sql)
             PreviewDisplayMode.VERTICAL -> SqlFormatter.formatVertical(sql, verticalPairAnnotationSetting())
         }
+        formatCacheKey = key
+        formatCacheValue = out
+        return out
     }
 
     /**
@@ -1608,10 +1689,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         metaLineText = ""
         metaPerfSegments = emptyList()
         lastMetaBudget = -1
-        // F-1：清除图集 + 恢复纯 SQL 视图
+        // F-1：清除图集 + 恢复纯 SQL 视图（整图卸载含虚拟外键回收）
         removeDiagramTab()
-        diagramPanel.clear()
-        clearNativeDiagram()
+        unloadJoinDiagram()
         // M36：清空结果面板 + 摘除内嵌控制台
         resultPanel.clear()
         detachConsole()
@@ -1658,7 +1738,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 fLogger.info("[M36] showSql branch=nativeDoc: len=${text.length}, attachedToMe=${consoleAttachedToMe()}")
                 suppressAutoPopup = true
                 try {
-                    WriteCommandAction.runWriteCommandAction(project) { nativeDoc.setText(text) }
+                    // T-PreviewFast P4：程序性写入开闸——否则本次写入会触发执行文件的 1.5s 防抖
+                    // 自动落盘（内容刚由本写入落盘，再写一遍纯属自己与自己抢）
+                    cn.song.mybatisplus.visualizer.execute.ExecDocAutosaveGate.suppressDuring {
+                        WriteCommandAction.runWriteCommandAction(project) { nativeDoc.setText(text) }
+                    }
                 } finally {
                     suppressAutoPopup = false
                 }
@@ -2791,11 +2875,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         currentWarning = xmlWarning ?: result.warning
         val warningLine = currentWarning?.let { "   ⚠ $it" } ?: ""
+        // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示，悬停 tooltip 全文）
+        val stackLine = result.stackDigest?.let { sd ->
+            "   " + MpSqlVisualizerBundle.message("panel.meta.stackDigest") + " " +
+                (if (sd.length > 120) sd.substring(0, 120) + "…" else sd)
+        } ?: ""
         // T-SqlPerf：性能建议文案单独一行（HTML 换行）。
         // T-PreviewTopOverlap F3：原文分段缓存，label 文本按宽度预算重拼（applyMetaTruncation）
         metaLineText = meta + warningLine
         metaPerfSegments = buildPerfSegments(result)
-        metaLabel.toolTipText = meta + warningLine + metaPerfSegments.joinToString("；") { it.text }
+        metaLabel.toolTipText = meta + warningLine + stackLine +
+            (result.stackDigest?.let { "\n" + MpSqlVisualizerBundle.message("panel.meta.stackDigest") + " $it" } ?: "") +
+            metaPerfSegments.joinToString("；") { it.text }
         metaLabel.foreground = if (currentWarning != null) {
             // T-DarkTheme：IDE 标准错误前景命名色（亮暗主题自适应；暗色下非亮红不刺眼）
             JBColor.namedColor("ErrorForeground", JBColor.RED)
@@ -2949,6 +3040,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // ------------------------------------------------------------------
 
     internal fun editorForTest(): Editor? = editor
+
+    /** T-PreviewConsoleFmt 测试缝：模拟控制台文档已就绪（nativeDoc 指向该文档）。 */
+    internal fun markNativeDocForTest(doc: com.intellij.openapi.editor.Document) {
+        nativeEditorDoc = doc
+    }
+
+    /** T-PreviewConsoleFmt 测试缝：挂载后回填渲染的等价入口。 */
+    internal fun renderSqlForTest() = renderSql()
     /** T-AutoFold F5：登记的原生控制台编辑器引用（支链①接入断言用）。 */
     internal fun nativeConsoleEditorForTest(): Editor? = nativeConsoleEditor
     internal fun psiFileForTest(): PsiFile? = psiFile
@@ -3054,6 +3153,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun toggleSelectButtonForTest(): JButton? = toggleSelectButton
     internal fun clearButtonForTest(): JButton? = clearButton
     internal fun batchClearButtonForTest(): JButton? = batchClearButton
+
+    /** T-PreviewBgFit 测试缝：左侧参数滚动区（背景/不透明断言用）。 */
+    internal fun paramScrollForTest(): JBScrollPane = paramScroll
+
     /** T-M26.1→T-UiNative：左右分栏（平台 OnePixelSplitter，原生分隔条主题融合 + 比例记忆）。 */
     internal fun splitPaneForTest(): OnePixelSplitter? {
         fun find(c: java.awt.Container): OnePixelSplitter? {
