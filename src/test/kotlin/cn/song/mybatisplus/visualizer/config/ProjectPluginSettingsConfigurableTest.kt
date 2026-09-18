@@ -588,4 +588,150 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
             )
         }
     }
+
+    // ------------------------------------------------------------------
+    // T-FS-08：开启态「清空文本项 = 跟随全局」的语义定案 + 三处同源
+    // ------------------------------------------------------------------
+
+    /**
+     * T-FS-08 守卫：开启态把文本项清空后 apply = 用户显式声明「回到跟随全局」。
+     *
+     * 定案依据（为何不是「清空 = 显式空值」）：项目页**没有逐字段的「跟随全局」复选框**，
+     * 单字段的「回到跟随全局」在 UI 上唯一的表达方式就是清空该字段（tooltip
+     * [settings.project.field.tip] 与 [ProjectPluginSettings.State] 各文本字段的 KDoc 均已
+     * 写死「空串 = 使用全局」）；页面上唯一的显式入口是整页「重置为跟随全局」按钮，
+     * 若把清空定成「显式空值」，单字段的跟随全局将无 UI 入口。state 侧同向：9 项里 3 个
+     * 布尔项是 `null = 跟随全局`，文本项 `空串 = 跟随全局`（[ProjectPluginSettings.effectiveXxx]
+     * 一律 `isNotBlank()` 回退），改成「显式空值」需把 String 改 String? 并连带持久化格式
+     * 与全部 effective 取值口径。
+     *
+     * 缺陷形态（修复前）：清空 → apply 把 state 写成空串（= 跟随全局）→ 控件仍停在空串，
+     * 而 state 推导出的显示值是全局值 → [ProjectPluginSettingsConfigurable.isModified] 逐项比对
+     * 恒报已修改（用户点「应用」后按钮不灭，重开设置页显示又变回全局值）。
+     * 修复口径：apply 写回后按同一取值函数（[ProjectPluginSettingsConfigurable.refreshControls] →
+     * shownText/expectedDialectItem）重新推导控件显示值，「显示 ≡ 派生(state)」不变量在 apply 后成立。
+     */
+    fun testTFS08_开启态清空文本项并apply_按跟随全局回灌且isModified复位() {
+        val global = PluginSettings.getInstance().state
+        global.logicDeleteValue = "g1"
+        global.tablePrefix = "g_"
+        global.tableSuffix = "_g"
+        global.ignoredFields = "gIgnore"
+
+        val st = ProjectPluginSettings.getInstance(myFixture.project).state
+        st.useProjectSettings = true
+        st.logicDeleteValue = "p1"
+        st.tablePrefix = "p_"
+        st.tableSuffix = "_p"
+        st.ignoredFields = "pIgnore"
+
+        val cfg = newConfig()
+        val comp = cfg.createComponent()
+        val texts = textsOf(comp)
+        assertEquals("文本项应为 4 个（逻辑删除值/表前缀/表后缀/忽略字段）", 4, texts.size)
+        assertEquals(
+            "开启态初始应显示项目自定义值",
+            listOf("p1", "p_", "_p", "pIgnore"),
+            texts.map { it.text },
+        )
+        assertFalse("初始不应报已修改", cfg.isModified())
+
+        val globalShown = listOf("g1", "g_", "_g", "gIgnore")
+        for (i in texts.indices) {
+            texts[i].text = "" // 用户清空 = 回到跟随全局（页面无逐字段「跟随全局」开关，清空即该语义）
+            assertTrue("清空第 ${i + 1} 项后应报已修改", cfg.isModified())
+            cfg.apply()
+            assertEquals(
+                "清空第 ${i + 1} 项 apply 后控件应回灌全局生效值（页面所见即运行时所用）",
+                globalShown[i],
+                texts[i].text,
+            )
+            assertFalse("清空第 ${i + 1} 项 apply 后不得恒报已修改", cfg.isModified())
+        }
+
+        assertEquals("logicDeleteValue 应归空（跟随全局）", "", st.logicDeleteValue)
+        assertEquals("tablePrefix 应归空（跟随全局）", "", st.tablePrefix)
+        assertEquals("tableSuffix 应归空（跟随全局）", "", st.tableSuffix)
+        assertEquals("ignoredFields 应归空（跟随全局）", "", st.ignoredFields)
+        val settings = ProjectPluginSettings.getInstance(myFixture.project)
+        assertEquals("运行时有效值应回落到全局", "g1", settings.effectiveLogicDeleteValue())
+        assertEquals("运行时有效值应回落到全局", "g_", settings.effectiveTablePrefix())
+
+        // 重开设置页同形：显示全局值、不报已修改（钉住「回灌后控件与 state 同源」）
+        val reopened = newConfig()
+        val reopenedComp = reopened.createComponent()
+        assertEquals("重开后应显示全局生效值", globalShown, textsOf(reopenedComp).map { it.text })
+        assertFalse("重开后不应报已修改", reopened.isModified())
+        cfg.disposeUIResources()
+        reopened.disposeUIResources()
+    }
+
+    /**
+     * T-FS-08 同源守卫：apply 只在「控件显示值 != state 推导值」时写回（T-TS-FixG7），
+     * 而「清空后 apply」必须真的写回（不能被该门控吞掉）——两者是同一条判据的两面。
+     *
+     * 本用例把「清空 = 跟随全局」在**已有覆盖的项目值**上验一次：state 非空时清空必须归空；
+     * 若门控写成「state 非空即跳过」这类别的判据，此用例必红（state 会残留 p_，运行时不再跟随全局）。
+     */
+    fun testTFS08_清空已有覆盖值_apply后state归空而非残留() {
+        val global = PluginSettings.getInstance().state
+        global.tablePrefix = "g_"
+        val st = ProjectPluginSettings.getInstance(myFixture.project).state
+        st.useProjectSettings = true
+        st.tablePrefix = "p_"
+
+        val cfg = newConfig()
+        val comp = cfg.createComponent()
+        textsOf(comp)[1].text = ""
+        cfg.apply()
+        assertEquals("清空必须写回空串（回到跟随全局）", "", st.tablePrefix)
+        assertEquals("有效值回落到全局", "g_", ProjectPluginSettings.getInstance(myFixture.project).effectiveTablePrefix())
+        assertEquals("控件回灌全局值", "g_", textsOf(comp)[1].text)
+        assertFalse("apply 后不应报已修改", cfg.isModified())
+        cfg.disposeUIResources()
+    }
+
+    // ------------------------------------------------------------------
+    // T-FS-09：navigateTo 高亮目标定位（DSL v2 生成的组件）
+    // ------------------------------------------------------------------
+
+    /**
+     * T-FS-09 守卫：项目页 10 项搜索条目在其页面上**均能定位到高亮目标**。
+     *
+     * 缺陷形态（修复前）：[PluginSettingsFolderConfigurable] 的 `findComponent` 只认
+     * `JBLabel`，而项目页走 DSL v2（`row(label)` 生成的是普通 `JLabel`）→ 6 行
+     * （方言下拉 / 推断策略下拉 / 4 个文本框）的行标签定位不到，双击搜索项只跳页不闪烁，
+     * 用户看到「跳了但不亮」的隐性缺陷；全局页用 `JBLabel(label)` 摆行标签，故不受影响。
+     *
+     * 边界（如实登记）：闪烁本身是视觉行为，headless 只能断言「目标可定位」这半边；
+     * 真机走查见交付汇报的「环境受限未验证」清单。
+     */
+    fun testTFS09_十项搜索条目在项目页均可定位到高亮目标() {
+        val page = ProjectPluginSettingsConfigurable(myFixture.project).createComponent()
+        val folder = PluginSettingsFolderConfigurable()
+        val projectKeys = listOf(
+            "settings.project.useProjectSettings",
+            "settings.dialect",
+            "settings.replaceParams",
+            "settings.formatSql",
+            "settings.injectLogicDelete",
+            "settings.logicDeleteValue",
+            "settings.tablePrefix",
+            "settings.tableSuffix",
+            "settings.tableNameInference",
+            "settings.ignoredFields",
+        )
+        val missed = projectKeys.filter {
+            folder.findHighlightTargetForTest(page, MpSqlVisualizerBundle.message(it)) == null
+        }
+        assertTrue(
+            "以下搜索条目的 hint 在项目页定位不到任何控件（双击条目会「跳了但不亮」）：$missed",
+            missed.isEmpty(),
+        )
+        // 正对照：不存在的 hint 必须定位不到（证明查找不是恒真，上面的断言有判别力）
+        assertNull(
+            "正对照：乱串 hint 不得命中任何控件",
+            folder.findHighlightTargetForTest(page, "TFS09-NO-SUCH-HINT-XYZ"),
+        )
+    }
 }
