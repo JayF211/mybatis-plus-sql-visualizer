@@ -27,6 +27,8 @@ class AgentConsentFlowTest : BasePlatformTestCase() {
     override fun setUp() {
         super.setUp()
         manager = AgentManager.getInstance(project)
+        // 防御性还原默认时间源（实例可能跨测试类复用，防前类注入的 clockMs 闭包污染冷却判定）
+        manager.clockMs = { System.currentTimeMillis() }
         val state = PluginSettings.getInstance().state
         state.enhancedCaptureEnabled = true
         state.enhancedCaptureConfirmed = false

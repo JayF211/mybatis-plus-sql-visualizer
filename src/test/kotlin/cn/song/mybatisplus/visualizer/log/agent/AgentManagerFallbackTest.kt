@@ -24,6 +24,8 @@ class AgentManagerFallbackTest : BasePlatformTestCase() {
         PluginSettings.getInstance().state.enhancedCaptureConfirmed = false
         PluginSettings.getInstance().state.enhancedCaptureRejectedAtMs = 0
         manager.rejectCooldownMs = AgentManager.DEFAULT_REJECT_COOLDOWN_MS
+        // 防御性还原默认时间源（实例可能跨测试类复用）
+        manager.clockMs = { System.currentTimeMillis() }
     }
 
     override fun tearDown() {

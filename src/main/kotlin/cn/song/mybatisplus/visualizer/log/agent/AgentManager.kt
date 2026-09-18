@@ -54,6 +54,12 @@ class AgentManager(private val project: Project) : Disposable {
          */
         const val DEFAULT_REJECT_COOLDOWN_MS = 24L * 60 * 60 * 1000
 
+        /** attach 排队去抖窗默认值（T-PS4-03）：同 pid 窗口内重复启动不重复排队（与挂载前静默等待解耦）。 */
+        const val DEFAULT_ATTACH_DEBOUNCE_MS = 3_000L
+
+        /** 挂载前静默等待（T-PS4-03 提常量与去抖窗解耦）：等应用初始化热点过去。 */
+        private const val ATTACH_SETTLE_DELAY_MS = 3_000L
+
         fun getInstance(project: Project): AgentManager = project.getService(AgentManager::class.java)
     }
 
@@ -62,21 +68,27 @@ class AgentManager(private val project: Project) : Disposable {
     var online: Boolean = false
         private set
 
-    private val sessions = CopyOnWriteArrayList<AgentSession>()
+    /** 会话表。internal 为同模块守护测试缝（T-PS4-03 sweepOffline 清表断言）；生产链路勿直接读写。 */
+    internal val sessions = CopyOnWriteArrayList<AgentSession>()
 
-    /** 幂等表：pid → attach 时间戳（同一 pid 不二次 attach）。 */
-    private val attachedPids = ConcurrentHashMap<Long, Long>()
+    /** 幂等表：pid → attach 时间戳（同一 pid 不二次 attach）。internal 为同模块守护测试缝（T-PS4-03）。 */
+    internal val attachedPids = ConcurrentHashMap<Long, Long>()
 
     /**
-     * 惰性挂载去抖：pid → 上次尝试时间（3s 内重复启动不重复 attach）。
+     * 惰性挂载去抖（T-PS4-03 落地）：pid → 上次排队时刻——同 pid 在 [attachDebounceMs] 窗口内
+     * 重复启动不重复排队（声明多年未用，本次兑现为真实去抖表；attach 任务完成时摘除条目，
+     * 失败后的同 pid 后续启动可再排队，成功则由 attachedPids 幂等表兜底去重）。
      * internal 为同模块守护测试缝（T-PS4-01 静默跳过断言 / T-PS4-03 去抖落地）；生产链路勿直接读写。
      */
     internal val pendingPids = ConcurrentHashMap<Long, Long>()
 
-    // ---------- T-PS4-01 测试缝：冷却窗与时间源可注入（生产链路勿改默认值） ----------
+    // ---------- T-PS4-01/03 测试缝：冷却窗、去抖窗与时间源可注入（生产链路勿改默认值） ----------
 
     /** 拒绝冷却窗（默认 [DEFAULT_REJECT_COOLDOWN_MS]；测试注入短窗驱动冷却语义）。 */
     internal var rejectCooldownMs: Long = DEFAULT_REJECT_COOLDOWN_MS
+
+    /** attach 排队去抖窗（默认 [DEFAULT_ATTACH_DEBOUNCE_MS]；测试注入短窗驱动去抖语义）。 */
+    internal var attachDebounceMs: Long = DEFAULT_ATTACH_DEBOUNCE_MS
 
     /** 时间源（冷却判断与 attach 排队去抖共用；默认系统时钟，测试注入可控时钟）。 */
     internal var clockMs: () -> Long = { System.currentTimeMillis() }
@@ -225,21 +237,35 @@ class AgentManager(private val project: Project) : Disposable {
         }
     }
 
-    /** 实际挂载（后台线程：resolvePid → 3s 去抖 → attach）。 */
+    /** 实际挂载（阻塞等待与 attach 全链在单线程 executor；T-PS4-03：pid 解析与排队去抖前移到请求线程）。 */
     private fun doAttachAsync(processHandler: Any?) {
+        // T-PS4-03：去抖必须在「排队时刻」判定——若迟到 executor 任务起跑才查表，静默等待已把
+        // 窗口耗尽、判定失真。pid 解析是轻反射（getNativePid/getProcess().pid()，无阻塞等待），
+        // 前移到请求线程安全；重活（静默等待 + attach）仍留在 executor，不进调用线程。
+        val pid = resolvePid(processHandler)
+        if (pid == null) {
+            LOG.warn("onProcessAppeared: resolvePid 失败（handler=${processHandler?.javaClass?.name}）——跳过挂载")
+            return
+        }
+        val now = clockMs()
+        val lastQueued = pendingPids[pid]
+        if (lastQueued != null && now - lastQueued < attachDebounceMs) {
+            LOG.info("onProcessAppeared: pid=$pid 去抖窗内重复启动（距上次排队 ${now - lastQueued}ms < ${attachDebounceMs}ms）——不重复排队（T-PS4-03）")
+            return
+        }
+        pendingPids[pid] = now
         executor.execute {
             try {
-                val pid = resolvePid(processHandler)
-                if (pid == null) {
-                    LOG.warn("onProcessAppeared: resolvePid 失败（handler=${processHandler?.javaClass?.name}）——跳过挂载")
-                    return@execute
-                }
-                LOG.info("onProcessAppeared: 目标 pid=$pid，3s 去抖后挂载")
-                // 去抖 3s：等应用初始化热点过去（驱动已加载场景 retransform 直达；未加载场景 transformer 兜底）
-                Thread.sleep(3000)
+                LOG.info("onProcessAppeared: 目标 pid=$pid，${ATTACH_SETTLE_DELAY_MS}ms 静默等待后挂载")
+                // 静默等待：等应用初始化热点过去（驱动已加载场景 retransform 直达；未加载场景 transformer 兜底）。
+                // 单线程池串行性质：executor 仅此一条工作线程，跨 pid 的静默等待天然串行排队——
+                // 多进程先后启动时后者在前者等待结束后才进入 attach，不会并发压目标 JVM，维持既有语义。
+                Thread.sleep(ATTACH_SETTLE_DELAY_MS)
                 attachToPid(pid)
             } catch (t: Throwable) {
                 LOG.warn("onProcessAppeared: 惰性 attach 失败（非致命，桥继续捕获）", t)
+            } finally {
+                pendingPids.remove(pid)
             }
         }
     }
@@ -286,17 +312,30 @@ class AgentManager(private val project: Project) : Disposable {
         return AgentSession(project, pid, socket, onStateChange = { updateOnline() })
     }
 
-    /** 解压 agent jar 到临时目录（deleteOnExit；失败 null 由调用方显式上报——禁静默吞）。 */
-    private fun extractAgentJar(): File? = runCatching {
-        val stream = javaClass.getResourceAsStream(AGENT_RESOURCE)
-            ?: error("资源 $AGENT_RESOURCE 缺失（构建未内嵌 agent jar）")
-        stream.use { input ->
-            val out = File.createTempFile("mps-sql-agent", ".jar")
-            out.deleteOnExit()
-            out.outputStream().use { input.copyTo(it) }
-            out
-        }
-    }.getOrNull()
+    /** agent jar 提取一次缓存（T-PS4-03）：解压 + deleteOnExit 登记只做一次；失败不缓存（下次 attach 重试）。 */
+    @Volatile
+    private var cachedAgentJar: File? = null
+
+    /**
+     * 解压 agent jar 到临时目录（T-PS4-03：提取一次缓存到服务字段复用，deleteOnExit 仅登记一次；
+     * 原「每次 createSession 解压一个新临时文件」会随 attach 次数累积 deleteOnExit 登记与磁盘文件，
+     * 直到 IDE 退出才统一回收。失败 null 由调用方显式上报——禁静默吞）。
+     */
+    private fun extractAgentJar(): File? {
+        cachedAgentJar?.let { return it }
+        val extracted = runCatching {
+            val stream = javaClass.getResourceAsStream(AGENT_RESOURCE)
+                ?: error("资源 $AGENT_RESOURCE 缺失（构建未内嵌 agent jar）")
+            stream.use { input ->
+                val out = File.createTempFile("mps-sql-agent", ".jar")
+                out.deleteOnExit()
+                out.outputStream().use { input.copyTo(it) }
+                out
+            }
+        }.getOrNull()
+        if (extracted != null) cachedAgentJar = extracted
+        return extracted
+    }
 
     /**
      * attach + loadAgent（端口下发）+ accept 握手。
@@ -348,11 +387,15 @@ class AgentManager(private val project: Project) : Disposable {
         if (!online) LogTimeCorrelator.clear()
     }
 
-    private fun sweepOffline() {
+    /** 在线态巡检（5s）：心跳窗口过期/连接死亡 → 会话摘除 → 桥回落。internal 为同模块守护测试缝（T-PS4-03）。 */
+    internal fun sweepOffline() {
         val dead = sessions.filter { !it.alive }
         if (dead.isNotEmpty()) {
             dead.forEach { it.close() }
             sessions.removeAll(dead.toSet())
+            // T-PS4-03：死会话顺带清幂等表——pid 对应进程已消亡，残留会让该 pid 复用/重启后
+            // 无法重挂；[shutdownAll] 的全表清空语义保留不动。
+            dead.forEach { attachedPids.remove(it.pid) }
             updateOnline()
         }
     }
@@ -375,6 +418,8 @@ class AgentManager(private val project: Project) : Disposable {
         sessions.forEach { it.close() }
         sessions.clear()
         attachedPids.clear()
+        // T-PS4-03：关闭开关同时清排队去抖表——关后不应残留排队记忆（3s 窗内的重复启动照常重判）
+        pendingPids.clear()
         updateOnline()
     }
 
@@ -452,6 +497,9 @@ class AgentManager(private val project: Project) : Disposable {
         runCatching {
             sessions.forEach { it.close() }
             sessions.clear()
+            // T-PS4-03：服务随 project 生命周期，去抖/幂等表一并清空（不引入跨项目残留）
+            pendingPids.clear()
+            attachedPids.clear()
             executor.shutdownNow()
             monitor.shutdownNow()
             SqlCaptureGate.paused.set(false)
