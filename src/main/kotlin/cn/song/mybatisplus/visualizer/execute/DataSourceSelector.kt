@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.execute
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.io.FileUtil
@@ -3250,7 +3251,15 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
     private val execDocAutosavePending =
         java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Future<*>?>(null)
 
-    private val execDocListenerInstalled = java.util.concurrent.atomic.AtomicBoolean(false)
+    /**
+     * T-PS4-11 快判缓存：上次命中 exec 路径的 document（**弱引用**——防强引用滞留已关闭文档，
+     * GC 后 get()==null 自然退回原链探测）。companion 监听是应用级的，IDE 全局每次文档变更
+     * 都会进 [scheduleExecDocAutosave]；exec 文档连续变更（用户在控制台键入）是唯一需要跟进
+     * 落盘的形态，其余文档每次都白付 getFile + endsWith。identity 比对（===）而非 equals，
+     * document 换实例（文件关闭重开）即视为未命中。
+     */
+    private val lastExecDocRef =
+        java.util.concurrent.atomic.AtomicReference<java.lang.ref.WeakReference<com.intellij.openapi.editor.Document>?>(null)
 
     /** F6 探针已安装项目集（连接随项目 disposable 自动断开，此处只防重复安装）。 */
     private val conflictProbeProjects =
@@ -3264,23 +3273,33 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      * 防抖窗内。落盘方向恒 doc→disk（saveDocument），不回读不改写用户内容。
      */
     private fun installExecDocAutosaveListener() {
-        if (!execDocListenerInstalled.compareAndSet(false, true)) return
-        com.intellij.openapi.editor.EditorFactory.getInstance().eventMulticaster
-            .addDocumentListener(object : com.intellij.openapi.editor.event.DocumentListener {
+        // T-PS4-11：改两参重载 addDocumentListener(listener, disposable)，挂 [ExecDocAutosaveHost]
+        // （应用级轻服务 = Disposable parent）——此前单参裸装、装后永不卸载，插件动态卸载
+        // （DynamicInstallSupport → 平台 unloadPlugin）后监听残活并钉住旧 classloader，正是
+        // 动态卸载屏障要杜绝的形态。挂靠定案依据见 [ExecDocAutosaveHost] KDoc。
+        ExecDocAutosaveHost.getInstance().ensureListenerInstalled(
+            object : com.intellij.openapi.editor.event.DocumentListener {
                 override fun documentChanged(e: com.intellij.openapi.editor.event.DocumentEvent) {
                     scheduleExecDocAutosave(e.document)
                 }
-            })
+            },
+        )
     }
 
     private fun scheduleExecDocAutosave(doc: com.intellij.openapi.editor.Document) {
         // T-PreviewFast P4：程序性写入不排自动落盘——闸门开着说明本次变更来自插件写入
-        //（写入方自己已落盘），防抖落盘只为用户手改兜底
+        //（写入方自己已落盘），防抖落盘只为用户手改兜底。保持最先判（闸门语义先于快判，
+        // 程序性写入高频路径不因快判命中而漏抑制）
         if (ExecDocAutosaveGate.isSuppressed()) return
-        val vf = runCatching {
-            com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getFile(doc)
-        }.getOrNull() ?: return
-        if (vf == null || !isExecVfPath(vf.path)) return
+        // T-PS4-11 快判：上次命中的 document 直接身份比对短路（免 getFile + endsWith）；
+        // 未命中走原链探测回退，确认命中后更新缓存。弱引用被 GC 后 get()==null 视为未命中。
+        if (lastExecDocRef.get()?.get() !== doc) {
+            val vf = runCatching {
+                com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getFile(doc)
+            }.getOrNull() ?: return
+            if (vf == null || !isExecVfPath(vf.path)) return
+            lastExecDocRef.set(java.lang.ref.WeakReference(doc))
+        }
         val prev = execDocAutosavePending.getAndSet(
             execDocAutosaveExecutor.schedule(
                 { flushExecDocAutosave(doc) },
@@ -3700,4 +3719,75 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
 
     /** T-ExecDocSync 测试缝：置 true 时 [docWriteOnce] 注入失败（测 T-EC-02 守卫拒绝路径；EDT/BGT 两形态统一生效）。 */
     internal var execWriteActionFailureInjection = false
+
+    /** T-PS4-11 测试缝：防抖任务是否在途（未完成）——监听生效/卸载的行为断言点。 */
+    internal fun execDocAutosaveScheduledForTest(): Boolean =
+        execDocAutosavePending.get()?.isDone == false
+
+    /** T-PS4-11 测试缝：取消在途防抖任务并清快判缓存（测试隔离收尾，不触碰宿主挂载态）。 */
+    internal fun resetExecDocAutosaveForTest() {
+        execDocAutosavePending.getAndSet(null)?.cancel(false)
+        lastExecDocRef.set(null)
+    }
+}
+
+/**
+ * T-PS4-11：F5 防抖自动落盘监听的挂靠宿主（应用级轻服务，Disposable parent）。
+ *
+ * 挂靠定案：监听以两参重载挂到本服务实例持有的子 Disposable 上，而不是「自建应用级
+ * Disposable + 订阅 DynamicPluginListener 在卸载回调里手动 dispose」——本插件的动态卸载走
+ * [cn.song.mybatisplus.visualizer.update.DynamicInstallSupport] → 平台 `DynamicPlugins
+ * .unloadPlugin`，平台卸载会 dispose 插件应用级容器并级联释放其中的服务（轻服务实例注册于
+ * 容器 Disposer 树），以其为根的监听随之自动移除，插件卸载时监听随类加载器一并释放；而
+ * DynamicInstallSupport KDoc 明示卸载/装载回调内只宜触达平台 API 与纯函数（调用栈运行在
+ * 将被卸载的旧 classloader 上），回调里反手 dispose 自身类有 classloader 时序风险。容器
+ * 级联释放即平台对「插件级应用监听」的惯例挂法。
+ *
+ * 服务惰性实例化（首次 [getInstance] 才创建）与监听「惰性装一次」语义一致；正常应用退出时
+ * 应用容器 dispose 同样级联移除监听。子 Disposable 缓解重挂：宿主被容器 dispose 后实例不可
+ * 再作 parent（Disposer 拒绝已 dispose 节点），但仅卸载监听（测试卸载模拟/极端重装）时 dispose
+ * 子节点即可重挂——容器级卸载（服务 dispose）则 [dispose] 复位后同实例不再可用，新容器装载
+ * 新类自然拿到新宿主。
+ */
+@Service(Service.Level.APP)
+internal class ExecDocAutosaveHost : com.intellij.openapi.Disposable {
+
+    companion object {
+        fun getInstance(): ExecDocAutosaveHost =
+            ApplicationManager.getApplication().getService(ExecDocAutosaveHost::class.java)
+    }
+
+    /** 当前挂载的子 Disposable（null = 未挂载）。经 eventMulticaster 两参重载挂监听。 */
+    private var attached: com.intellij.openapi.Disposable? = null
+
+    /** F5 监听挂载（幂等；仅未挂载时装，重复调用 no-op）。 */
+    fun ensureListenerInstalled(listener: com.intellij.openapi.editor.event.DocumentListener) {
+        synchronized(this) {
+            if (attached != null) return
+            val parent = Disposer.newDisposable("ExecDocAutosaveHost.listener")
+            com.intellij.openapi.editor.EditorFactory.getInstance().eventMulticaster
+                .addDocumentListener(listener, parent)
+            Disposer.register(this, parent)
+            attached = parent
+        }
+    }
+
+    /** T-PS4-11 测试缝：仅卸载监听（dispose 子节点），宿主可重挂——模拟「监听随 Disposable 卸载」。 */
+    internal fun detachListenerForTest() {
+        synchronized(this) {
+            attached?.let { Disposer.dispose(it) }
+            attached = null
+        }
+    }
+
+    /** T-PS4-11 测试缝：监听是否在挂（attach 幂等判重 + 卸载断言用）。 */
+    internal val isListenerAttached: Boolean
+        get() = synchronized(this) { attached != null }
+
+    override fun dispose() {
+        // 子节点经 Disposer 树级联 dispose（监听随之移除）；复位挂载态。
+        // 宿主已随插件容器 dispose 后实例不再作 parent（重挂会抛 already disposed）——
+        // 生产语义即「插件已卸载，旧类不应再装监听」，仅测试卸载模拟走 detachListenerForTest。
+        synchronized(this) { attached = null }
+    }
 }

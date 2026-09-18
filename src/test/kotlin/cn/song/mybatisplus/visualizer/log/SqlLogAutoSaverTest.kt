@@ -411,17 +411,19 @@ class SqlLogAutoSaverTest {
         saver.close()
     }
 
-    /** 自定义目录同样生效（maxFiles 生效于 configure 传入的目录）。 */
+    /** 自定义目录同样生效（maxFiles 生效于 configure 传入的目录）。
+     *  T-PS4-10 后：裁剪只认领本插件名族——族内超限删最旧，族外文件（init.sql）不计数零删除。 */
     @Test
     fun `上限裁剪_自定义目录生效`() {
         val saver = SqlLogAutoSaver()
         val customDir = tempDir()
-        saver.configure(customDir, "log.sql", null, maxFiles = 1)
-        makeFile(customDir, "log.sql", 1000)
-        makeFile(customDir, "other-2026-09-15.sql", 2000)
-        makeFile(customDir, "other-2026-09-16.sql", 3000)
+        saver.configure(customDir, "log-\$yyyy-MM-dd\$.sql", null, maxFiles = 1)
+        makeFile(customDir, "log-2026-09-10.sql", 1000)
+        makeFile(customDir, "log-2026-09-15.sql", 2000)
+        makeFile(customDir, "init.sql", 900)
         saver.pruneRetainedFiles()
-        assertEquals("保留 1 个逻辑文件", 1, File(customDir).listFiles()!!.size)
+        assertEquals("族内删最旧、族外用户文件零删除",
+            listOf("init.sql", "log-2026-09-15.sql"), File(customDir).listFiles()!!.map { it.name }.sorted())
         saver.close()
     }
 }

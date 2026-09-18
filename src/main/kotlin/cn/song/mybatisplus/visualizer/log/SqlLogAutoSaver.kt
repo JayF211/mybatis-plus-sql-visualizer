@@ -29,6 +29,17 @@ class SqlLogAutoSaver(
     private val clock: () -> Long = System::currentTimeMillis,
     /** 单文件滚动阈值（默认 100MB），测试注入小值用。 */
     internal val rollThresholdBytes: Long = 100L * 1024 * 1024,
+    /**
+     * T-PS4-10：两次历史文件裁剪的最小间隔（默认 60s）——风暴期每非空写批不再重复全目录
+     * listFiles+stat+排序。测试注入小值/可变时钟用。
+     */
+    internal val pruneMinIntervalMs: Long = DEFAULT_PRUNE_MIN_INTERVAL_MS,
+    /**
+     * T-PS4-13：configure 路径 close 时单次同步排水条数上限（默认 500）——调用线程常为 EDT，
+     * 风暴在途积压大时限批排水，超出部分留在队列由后续 submit 重建的写线程补写（不丢条）。
+     * 测试注入小值用；dispose 路径走无参 close 全量排水不受此限。
+     */
+    internal val configureDrainLimit: Int = DEFAULT_CONFIGURE_DRAIN_LIMIT,
 ) {
 
     private var writer: BufferedWriter? = null
@@ -41,6 +52,16 @@ class SqlLogAutoSaver(
     /** T-HistoryFileRetention：历史文件保留上限（按基名归并的组数）。<=0 = 全量保留。 */
     @Volatile
     private var maxFiles: Int = 0
+
+    /**
+     * T-PS4-10：本插件历史文件名族匹配正则（由 [fileNamePattern] 推导，configure 时重建）。
+     * null = 无法安全认领（configure 未跑过 / 模板无字面段可锚定）——放弃裁剪，宁漏删不误删。
+     */
+    @Volatile
+    private var familyRegex: Regex? = null
+
+    /** T-PS4-10：上次实际执行裁剪扫描的时刻（节流基准；仅 [pruneRetainedFiles] 的监视器内读写）。-1 = 从未扫描。 */
+    private var lastPruneAtMs: Long = -1L
 
     // ---------- T-Perf-12：异步批量写（淘汰条目投递无锁队列 + 专用单线程执行器） ----------
 
@@ -97,20 +118,35 @@ class SqlLogAutoSaver(
         }
     }
 
-    /** T-HistoryFileRetention：历史文件保留上限裁剪——目录下逻辑历史文件（按基名归并滚动块）超过上限时删最旧组。
+    /** T-HistoryFileRetention：历史文件保留上限裁剪——目录下**本插件名族**的逻辑历史文件（按基名归并滚动块）
+     *  超过上限时删最旧组。
      *  仅在写批后台线程调用（@Synchronized 串行）；maxFiles<=0 表示全量保留不删。
+     *  T-PS4-10 安全门：归组前按 [familyRegex]（由 fileNamePattern 推导的渲染名族，见 [buildFamilyRegex]）
+     *  过滤——非本插件命名的 .sql（自定义保存目录下用户自有脚本，第七轮审计数据安全发现）不计数、永不删除。
+     *  **定案口径：宁漏删不误删**——用户改模板后旧命名文件因固定段对不上而脱管、不再被裁剪（放任漏删）；
+     *  全通配模板无字面段可锚定则整体放弃裁剪。绝不为兜底删量放宽匹配去碰用户文件。
      *  归并口径：`sql-history-2026-09-17.sql` 与 `sql-history-2026-09-17.2.sql` 是同一逻辑文件的滚动块，
      *  按基名归并为 1 组计——否则单文件自行滚动多块会误删跨天文件。超限按组内文件时间戳最旧组整组删。
+     *  T-PS4-10 节流：距上次裁剪扫描不足 [pruneMinIntervalMs]（默认 60s）直接跳过——风暴期每非空写批
+     *  不再重复全目录 listFiles+stat+排序（写线程内一个时间戳判断；lastPruneAtMs 由本方法监视器内串行读写）。
      */
     @Synchronized
     internal fun pruneRetainedFiles() {
         if (maxFiles <= 0) return
+        val family = familyRegex ?: return
+        val now = clock()
+        val last = lastPruneAtMs
+        if (last >= 0 && now - last < pruneMinIntervalMs) return
+        lastPruneAtMs = now
         val dir = File(saveDir)
         if (!dir.isDirectory) return
         val files = dir.listFiles { f -> f.isFile && f.extension.equals("sql", ignoreCase = true) } ?: return
         if (files.isEmpty()) return
+        // T-PS4-10：先按本插件名族过滤再归组——非匹配 .sql 不计数、不参与删除候选
+        val ours = files.filter { family.matches(baseNameOf(it.name)) }
+        if (ours.isEmpty()) return
         // 按基名（去滚动序号）归并：base -> 该逻辑文件的组成文件
-        val groups = files.groupBy { baseNameOf(it.name) }
+        val groups = ours.groupBy { baseNameOf(it.name) }
         if (groups.size <= maxFiles) return
         // 按「组内最新文件时间戳」作组年龄下限排序（取组内最年轻文件代表该组，跨天视为新组），最旧在前的组先删
         val oldestFirst = groups.entries.sortedBy { (_, g) -> g.maxOfOrNull { it.lastModified() } ?: 0L }
@@ -122,6 +158,38 @@ class SqlLogAutoSaver(
                 }
             }
         }
+    }
+
+    /**
+     * T-PS4-10：由文件名模板推导「本插件历史文件名族」匹配正则——对滚动序号剥离后的基名
+     * （见 [baseNameOf]）做整串匹配。模板尾部扩展名（.sql，大小写不敏感）先剥除，随后
+     * $日期占位符$ 段替换为通配 `.*`、其余字面段原样转义。定案采用「占位段通配 + 字面段锚定」
+     * 而非纯前缀 startsWith：无占位符的固定模板（如 `log.sql`）也能把滚动块 `log.2.sql`
+     * （基名同为 log）纳入名族，避免滚动块脱管泄漏。
+     * 安全约束（宁漏删不误删）：
+     *  - 整串锚定且必须含至少一个字面段——全通配模板（如 `$yyyy$.sql`）无法与任意用户 .sql
+     *    区分，返回 null 放弃裁剪；
+     *  - 匹配区分大小写（本插件生成名大小写固定，更严匹配只会漏删不会误删）。
+     */
+    private fun buildFamilyRegex(pattern: String): Regex? {
+        val stem = pattern.replace(Regex("""\.sql$""", RegexOption.IGNORE_CASE), "")
+        val sb = StringBuilder()
+        var idx = 0
+        var hasLiteral = false
+        for (m in PLACEHOLDER_REGEX.findAll(stem)) {
+            if (m.range.first > idx) {
+                sb.append(Regex.escape(stem.substring(idx, m.range.first)))
+                hasLiteral = true
+            }
+            sb.append(".*")
+            idx = m.range.last + 1
+        }
+        if (idx < stem.length) {
+            sb.append(Regex.escape(stem.substring(idx)))
+            hasLiteral = true
+        }
+        if (!hasLiteral) return null
+        return Regex(sb.toString())
     }
 
     /** 文件名取滚动序号前基名：`xxx.sql` → `xxx`；`xxx.2.sql` → `xxx`；`xxx.yyy.sql` 视作整体（无滚动序号不拆分）。 */
@@ -140,12 +208,20 @@ class SqlLogAutoSaver(
         return stem
     }
 
-    /** close 前同步清空在途队列（不丢条；close 持有同一监视器，写任务串行）。 */
-    private fun drainPendingSync() {
+    /**
+     * close 前同步排水在途队列（close 持有同一监视器，与写任务串行；不丢条）。
+     * T-PS4-13：maxEntries 限单次同步排水批量（configure 路径默认 [configureDrainLimit]，
+     * EDT 不承担整批磁盘写）——只 poll 到上限为止，**超出部分留在队列不清空**，
+     * 由后续 submit → ensureExecutor 重建的写线程经 drainAndWrite 补写；<=0 表示本轮不排水。
+     */
+    private fun drainPendingSync(maxEntries: Int) {
+        if (maxEntries <= 0) return
+        var drained = 0
         val batch = mutableListOf<LogSqlEntry>()
-        while (true) {
+        while (drained < maxEntries) {
             val e = pendingEntries.poll() ?: break
             batch.add(e)
+            drained++
         }
         if (batch.isNotEmpty()) writeBatch(batch)
     }
@@ -159,10 +235,14 @@ class SqlLogAutoSaver(
      */
     @Synchronized
     fun configure(customPath: String, pattern: String, projectBasePath: String?, maxFiles: Int = 0) {
-        close()
+        // T-PS4-13：configure 链调用线程常为 EDT（设置变更）——限批同步排水防长批磁盘写阻塞
+        close(configureDrainLimit)
         saveDir = resolveDir(customPath, projectBasePath)
         fileNamePattern = pattern.ifBlank { PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
         this.maxFiles = maxFiles
+        // T-PS4-10：按当前模板重建本插件名族匹配正则；节流基准复位（重配后首个写批即刻获得裁剪机会）
+        familyRegex = buildFamilyRegex(fileNamePattern)
+        lastPruneAtMs = -1L
         currentResolvedName = ""
         currentIndex = 1
     }
@@ -333,18 +413,25 @@ class SqlLogAutoSaver(
     /** 当前打开的保存文件（测试访问 + 状态展示用）。 */
     fun currentFile(): File? = currentFile
 
+    /** T-PS4-13 测试访问器：在途队列余量（限批排水后未落盘条目数）。 */
+    internal fun pendingCount(): Int = pendingEntries.size
+
     /**
      * 关闭文件句柄（manager dispose 或路径变更时调用）。
-     * T-Perf-12：先同步清空在途队列（不丢条），再停写线程、关句柄；
+     * T-Perf-12：先同步排水在途队列（不丢条），再停写线程、关句柄；
      * 后续 configure/submit 可重建执行器。
+     * T-PS4-13：[maxDrainEntries] 限单次同步排水批量——configure 路径传 [configureDrainLimit]
+     * （EDT 限批），超出上限的条目**留在队列不清空**（旧实现此处 clear 会把余量丢掉），
+     * 后续 submit → ensureExecutor 重建写线程时由 drainAndWrite 一并补写；
+     * **dispose 路径（SqlLogManager.dispose → 无参 close）保持全量排水语义不变**（终态不丢条）。
      */
     @Synchronized
-    fun close() {
-        drainPendingSync()
+    fun close(maxDrainEntries: Int = Int.MAX_VALUE) {
+        drainPendingSync(maxDrainEntries)
         executor?.shutdownNow()
         executor = null
         drainScheduled.set(false)
-        pendingEntries.clear()
+        // T-PS4-13：不再 clear——限批排水后余量留在队列待补写；全量排水（dispose）后队列本已空
         closeWriter()
     }
 
@@ -379,5 +466,11 @@ class SqlLogAutoSaver(
         private val DEFAULT_DIR = "$DATA_DIR_NAME${File.separator}sql-history"
         /** 匹配 $变量$ 占位符。 */
         private val PLACEHOLDER_REGEX = Regex("""\$([^$]+)\$""")
+
+        /** T-PS4-10：两次历史文件裁剪扫描的最小间隔——风暴期写批密集时避免重复全目录扫描。 */
+        internal const val DEFAULT_PRUNE_MIN_INTERVAL_MS = 60_000L
+
+        /** T-PS4-13：configure 路径 close 单次同步排水条数上限（EDT 不承担超长批磁盘写）。 */
+        internal const val DEFAULT_CONFIGURE_DRAIN_LIMIT = 500
     }
 }

@@ -77,7 +77,10 @@ class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFil
                 // 「EP 首行标志」：EP 通道实证生效 → 桥轮询跳过 filter 挂载（会话内粘滞）
                 SqlCaptureGate.epActive = true
             }
-            val timePrefix = PluginSettings.getInstance().state.logTimePrefix.takeIf { it.isNotBlank() }
+            // T-PS4-02：timePrefix 不再逐行读 PluginSettings——经 manager 桥侧缓存取（对齐桥侧
+            // timePrefixCache 形态，刷新点一致：挂载/设置变更；EP 首行早于桥挂载时惰性补种）。
+            // 值语义与原逐行读取一致（blank 归 null）。
+            val timePrefix = manager.consoleBridge.currentTimePrefix()
             processConsoleLine(line, ctx, timePrefix) {}.forEach { manager.entries.addEntry(it) }
             return null // 不做高亮/链接——纯捕获通道
         }

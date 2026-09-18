@@ -408,6 +408,15 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var enhancedCaptureConfirmed: Boolean = false,
 
         /**
+         * T-PS4-01：注入确认「拒绝时刻」毫秒时间戳（持久化，随本 XML 跨 IDE 重启存活）；0 = 无拒绝记忆。
+         * 拒绝后进入 24h 冷却（窗口在 AgentManager.DEFAULT_REJECT_COOLDOWN_MS）：冷却期内不再重复弹
+         * 确认框（冷却只作用于弹窗频率、不改变同意门槛——保守口径，冷却过期后再弹一次）。
+         * 设置页「关闭 → 再开启」增强捕获时由 AgentManager 的 SETTINGS_CHANGE_TOPIC 监听清零重置，
+         * 保留用户改主意的入口；增强捕获总开关关闭时本值无意义（关闭增强 > 冷却）。
+         */
+        var enhancedCaptureRejectedAtMs: Long = 0L,
+
+        /**
          * M56 T-M56-08：脱敏开关（**默认关**——2026-09-16 用户定案，默认采集真实参数值）。
          * true 时对疑似敏感形态打码；脱敏在 agent 采集层执行，数据不出应用 JVM 前已处理。
          */

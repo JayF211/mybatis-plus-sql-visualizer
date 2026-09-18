@@ -123,9 +123,13 @@ object AgentEventAdapter {
         else -> "'" + p.value.replace("'", "''") + "'"
     }
 
-    private fun isNumericType(type: String?): Boolean = type != null && type.matches(
-        Regex("(Int|Integer|Long|Short|Byte|Double|Float|BigDecimal|BigInteger|Numeric|Decimal)"),
-    )
+    private fun isNumericType(type: String?): Boolean = type != null && type.matches(NUMERIC_TYPE_REGEX)
 
-    private fun isNumericLike(v: String): Boolean = v.matches(Regex("-?\\d+(\\.\\d+)?"))
+    private fun isNumericLike(v: String): Boolean = v.matches(NUMERIC_LIKE_REGEX)
+
+    /** T-PS4-04：正则提常量（每参数两处现场编译 → object 级单例；T-PerfSweep F2 惯例）。 */
+    private val NUMERIC_TYPE_REGEX =
+        Regex("(Int|Integer|Long|Short|Byte|Double|Float|BigDecimal|BigInteger|Numeric|Decimal)")
+
+    private val NUMERIC_LIKE_REGEX = Regex("-?\\d+(\\.\\d+)?")
 }

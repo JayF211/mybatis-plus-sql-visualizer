@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
+import cn.song.mybatisplus.visualizer.config.EnhancedCaptureConsent
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.log.SqlCaptureGate
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
@@ -21,12 +22,17 @@ class AgentManagerFallbackTest : BasePlatformTestCase() {
         manager = AgentManager.getInstance(project)
         PluginSettings.getInstance().state.enhancedCaptureEnabled = false
         PluginSettings.getInstance().state.enhancedCaptureConfirmed = false
+        PluginSettings.getInstance().state.enhancedCaptureRejectedAtMs = 0
+        manager.rejectCooldownMs = AgentManager.DEFAULT_REJECT_COOLDOWN_MS
+        // 防御性还原默认时间源（实例可能跨测试类复用）
+        manager.clockMs = { System.currentTimeMillis() }
     }
 
     override fun tearDown() {
         manager.shutdownAll()
         PluginSettings.getInstance().state.enhancedCaptureEnabled = false
         PluginSettings.getInstance().state.enhancedCaptureConfirmed = false
+        PluginSettings.getInstance().state.enhancedCaptureRejectedAtMs = 0
         super.tearDown()
     }
 
@@ -55,7 +61,7 @@ class AgentManagerFallbackTest : BasePlatformTestCase() {
         state.enhancedCaptureConfirmed = false
         var asked = false
         val saved = manager.consentProvider
-        manager.consentProvider = { asked = true; false }
+        manager.consentProvider = { asked = true; EnhancedCaptureConsent.REJECTED }
         try {
             manager.onProcessAppeared(FakeProcessHandler(nativePid = 424242L))
             com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents() // 冲洗 EDT：确认请求在此执行
@@ -73,7 +79,7 @@ class AgentManagerFallbackTest : BasePlatformTestCase() {
         state.enhancedCaptureEnabled = true
         state.enhancedCaptureConfirmed = false
         val saved = manager.consentProvider
-        manager.consentProvider = { true }
+        manager.consentProvider = { EnhancedCaptureConsent.ACCEPTED }
         try {
             // pid 不可达 → attach 必失败，但「同意后继续挂载」路径必须走到（confirmed 置位即证据）
             manager.onProcessAppeared(FakeProcessHandler(nativePid = 999_999_999L))
@@ -90,7 +96,7 @@ class AgentManagerFallbackTest : BasePlatformTestCase() {
         state.enhancedCaptureConfirmed = true
         var asked = false
         val saved = manager.consentProvider
-        manager.consentProvider = { asked = true; true }
+        manager.consentProvider = { asked = true; EnhancedCaptureConsent.ACCEPTED }
         try {
             manager.onProcessAppeared(FakeProcessHandler(nativePid = 999_999_999L))
             com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
