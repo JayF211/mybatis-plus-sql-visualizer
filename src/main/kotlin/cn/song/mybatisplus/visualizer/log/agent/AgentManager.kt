@@ -604,7 +604,10 @@ class AgentManager(private val project: Project) : Disposable {
                 runCatching { socket.close() }
                 return
             }
-            val session = AgentSession(project, pid, socket, onStateChange = { updateOnline() })
+            // T-ReachAudit T-RA-01 合流补位：会话时间源须与管理器同源注入（[createSession] 同款）——
+            // 缺省真实时钟时，假时钟驱动的心跳窗口判定两侧不同源（manager 算出的「已过期」被真实
+            // 时间戳的 lastSeen 抵消），premain 通道建立的半死会话不会被巡检摘除，封口在此复活
+            val session = AgentSession(project, pid, socket, onStateChange = { updateOnline() }, clockMs = clockMs)
             sessions.add(session)
             if (pid > 0L) attachedPids[pid] = clockMs()
             // B1 同款：新 agent 默认 disabled=false，须按当前监听状态立即校正
