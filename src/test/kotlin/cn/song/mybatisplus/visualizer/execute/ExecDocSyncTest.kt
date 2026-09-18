@@ -5,6 +5,7 @@ import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -231,7 +232,80 @@ class ExecDocSyncTest : BasePlatformTestCase() {
         )
     }
 
+    // ============ T-FixWriteSafe：BGT 有界派发的 write-safe 闸门（T-WriteSafeCtx 留档补口） ============
+
+    /**
+     * 闸门判「不可写」：派发出去的那一拍**不得**自行写文档，而要转 nonModal 投递并把控制权**立即**
+     * 交还调用方——调用方按 T-ExecDocSync3 记 "raw write SKIPPED"、不裸写，内容由延后那一拍收敛。
+     *
+     * 线程形态照生产：工作线程裸调 [DataSourceSelector.projectExecFile]（BGT 派发 + 2s 有界等待），
+     * 测试 EDT 泵事件队列替它执行那一拍。两条判据各自钉死一个语义：
+     *  - `deferredCount` 递增 = 闸门拦下了同步写、改投递（**改前此断言必红**：写体会在排到的那一拍里
+     *    直接执行，计数不动）；
+     *  - 耗时 < 1800ms = 不白等 `EDT_EXEC_DOC_SYNC_WAIT_MS` 预算（若闸门在不可写时仍等满 2s，必 ≥2000ms）。
+     * 注意此处**不能**断言「磁盘仍是旧值」：nonModal 那一拍在无模态存续时同样立刻可执行，可能就在
+     * 同一次泵事件里跑掉——生产亦如此（延后到模态结束，而不是永远延后）。
+     */
+    fun testBoundedDispatchDefersWriteWhenContextUnsafe() {
+        writeIo("SELECT 1")
+        refreshVf()
+        DocWriteContext.writeAllowedProbe = { false }
+        try {
+            val before = DocWriteContext.deferredCount.get()
+            val (elapsed, returned) = projectExecFileOnBackgroundPumpingEdt("SELECT 2")
+
+            assertNotNull("派发未完成也应返回文件路径（调用方需要它做 refresh/映射）", returned)
+            assertEquals("不可写：应转 nonModal 投递一拍（而非在那一拍里同步写）", before + 1, DocWriteContext.deferredCount.get())
+            assertTrue("不可写时必须立即交还调用方，不得白等 2s 预算（实测 ${elapsed}ms）", elapsed < 1800)
+
+            // 延后那一拍（nonModal）跑在 write-safe 上下文里 → 内容收敛（幂等写，重跑安全）
+            DocWriteContext.writeAllowedProbe = { true }
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals("延后那一拍应把 SQL 写进文档并落盘", "SELECT 2", diskText())
+        } finally {
+            DocWriteContext.writeAllowedProbe = null
+        }
+    }
+
+    /** 闸门判「可写」（常态：默认模态=NON_MODAL，平台已套 runWithWritingAllowed）：就地写、同拍交还，零投递——改前行为逐字保留。 */
+    fun testBoundedDispatchWritesInlineWhenContextAllowed() {
+        writeIo("SELECT 1")
+        refreshVf()
+        DocWriteContext.writeAllowedProbe = { true }
+        try {
+            val before = DocWriteContext.deferredCount.get()
+            val (elapsed, returned) = projectExecFileOnBackgroundPumpingEdt("SELECT 2")
+
+            assertNotNull(returned)
+            assertEquals("可写：派发那一拍就应落盘（有界等待等到它）", "SELECT 2", diskText())
+            assertEquals("可写：闸门不得产生投递", before, DocWriteContext.deferredCount.get())
+            assertTrue("可写路径不得引入额外等待（实测 ${elapsed}ms）", elapsed < 1800)
+        } finally {
+            DocWriteContext.writeAllowedProbe = null
+        }
+    }
+
     // ======================== 辅助 ========================
+
+    /**
+     * 工作线程裸调 [DataSourceSelector.projectExecFile]（生产 BGT 预热/提交链同形态——正是
+     * [DataSourceSelector.dispatchDocWriteOnEdt] 两段式派发的唯一触发面），测试 EDT（= 测试线程，
+     * `BasePlatformTestCase.runInDispatchThread()==true`）循环泵事件队列替它执行派发出去的那一拍。
+     * 返回 (耗时ms, 返回值)；耗时含工作线程全链时长，故可判「有没有白等有界预算」。
+     */
+    private fun projectExecFileOnBackgroundPumpingEdt(sql: String): Pair<Long, java.io.File?> {
+        val holder = java.util.concurrent.atomic.AtomicReference<java.io.File?>()
+        val worker = Thread { holder.set(DataSourceSelector.projectExecFile(project, sql)) }
+        val start = System.currentTimeMillis()
+        worker.start()
+        while (worker.isAlive && System.currentTimeMillis() - start < 10_000) {
+            UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(5)
+        }
+        worker.join(2_000)
+        assertFalse("工作线程不应卡死（有界派发未交还？）", worker.isAlive)
+        return System.currentTimeMillis() - start to holder.get()
+    }
 
     private fun writeIo(content: String) {
         assertTrue("exec 目录应可创建", execFile.parentFile.exists() || execFile.parentFile.mkdirs())

@@ -3348,6 +3348,22 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      *
      * T-PreviewFast P2：`waitBudgetMs <= 0` 时走 **fire-and-forget**（派发后立即返回 true）——
      * 预热是投机性写入，T-ExecDocSync3 取消裸写后超时已无副作用，没必要让 BGT 白等 2 秒。
+     *
+     * T-FixWriteSafe（T-WriteSafeCtx 留档补口）：两处投递原用 1 参 `invokeLater`，即隐式
+     * `ModalityState.defaultModalityState()`。平台源码实证（`openapi/application/modality.kt`：
+     * `defaultModalityImpl()` 依次取 `ProgressManager.currentProgressModality` → 线程/协程上下文
+     * modality → NON_MODAL）：BGT 常态取到 NON_MODAL（`TransactionGuardImpl:37` 构造期即登记为
+     * write-safe，与显式 `nonModal()` 等价），但**在模态进度/带 modality 上下文里会取到该模态**；
+     * 若该模态本身是「写不安全进入」的（`enteredModality:188-190` 存的是进入那一刻
+     * `myWritingAllowed` 的快照），排队的 runnable 就在该模态事件泵内以 write-unsafe 身份执行 →
+     * 改文档即 `Write-unsafe context!`。故两处投递的**写体**统一过 [DocWriteContext] 闸门：
+     *  - fire-and-forget：整拍改以 nonModal 投递（`invokeLaterWriteSafe`）——本路径无有界等待，
+     *    模态存续期延后一拍正是「模态期间禁改文档」的正确语义，不会撞任何预算；
+     *  - 有界等待：**保留默认模态投递**（保证能在该模态事件泵内执行，常态与改前逐字一致），
+     *    只把写体过闸（`runWriteSafe`）：常态判为可写 → 就地写 + 同拍 countDown；仅当判为不安全
+     *    才转 nonModal 投递并**立即** countDown（ok=false）——不让调用方白等 2 秒预算。延后那一拍
+     *    重跑 [docWriteOnce] 是幂等的（内容相同不 setText、已落盘不 saveDocument），且该超时/未完成
+     *    路径已由 T-ExecDocSync3 定为无害（不裸写、内容旧一拍由后续同步链收敛）。
      */
     private fun dispatchDocWriteOnEdt(
         project: Project,
@@ -3359,7 +3375,10 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         val app = ApplicationManager.getApplication()
         if (app.isDispatchThread) return docWriteOnce(project, vf, sql)
         if (waitBudgetMs <= 0L) {
-            app.invokeLater { runCatching { docWriteOnce(project, vf, sql) } }
+            // project 即 owner disposable：项目关闭后丢弃该拍（写目标就是项目内临时文件，重跑无意义）
+            DocWriteContext.invokeLaterWriteSafe(project, "exec prewarm doc write (fire-and-forget)") {
+                runCatching { docWriteOnce(project, vf, sql) }
+            }
             LOG.info("[M36] exec doc write dispatched fire-and-forget (T-PreviewFast P2)")
             return true
         }
@@ -3367,7 +3386,9 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         var ok = false
         app.invokeLater {
             try {
-                ok = docWriteOnce(project, vf, sql)
+                DocWriteContext.runWriteSafe(project, "exec doc sync (bounded)") {
+                    ok = docWriteOnce(project, vf, sql)
+                }
             } finally {
                 done.countDown()
             }
