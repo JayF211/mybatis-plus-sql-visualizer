@@ -389,7 +389,22 @@ class BannedApiSourceScanTest {
         return out.toString()
     }
 
-    /** 涂白一个字符串字面量（`"…"` 或原始 `"""…"""`）的内容；返回下一个待处理下标。 */
+    /**
+     * 涂白一个字符串字面量（`"…"` / 原始 `"""…"""` / 含 `${…}` 模板的普通字符串）的内容；
+     * 返回下一个待处理下标。
+     *
+     * **模板表达式（T-FS-06 独立复核阻断项修复）**：`"a${b("c")}d"` 这类构造里，`${…}` 内的
+     * `"c"` 是**嵌套字符串**。早期实现遇首个未转义 `"` 即结束外层字符串 → in-string 状态翻转，
+     * 字符串正文被当代码暴露、模板内的真实代码被涂白，于是后续站点实参区被正文里的 `)` 提前配平到 0
+     * （实测 `execute/DataSourceSelector.kt:1009` 实参区被截断到 9414/13999 字符而不再含
+     * `ModalityState.any()`、`:2684` 配平返回 −1 整条站点被丢弃 → 两个真实站点脱离两条规则覆盖，
+     * 而当前 0 offender 让绿灯看不出收窄；同类构造仓内 47 文件 / 127 处）。
+     *
+     * 修法：整段字符串（含模板表达式）一律涂白——模板里的代码虽是真代码，但它位于字符串内部、
+     * 不参与调用结构，涂白后配平与令牌判定都只看调用本体；`${` 开模板、模板内 `{`/`}` 计数配对、
+     * 模板内 `"` 递归按字符串处理，故外层字符串的结束引号总能被正确找到。**严格保长、保行**
+     * （换行原样输出），行号因此与原文一致。未闭合的普通字符串仍在行尾收手（不吞后续行）。
+     */
     private fun maskStringLiteral(source: String, start: Int, out: StringBuilder): Int {
         if (source.startsWith("\"\"\"", start)) {
             out.append("\"\"\"")
@@ -406,20 +421,42 @@ class BannedApiSourceScanTest {
         }
         out.append('"')
         var i = start + 1
+        var templateDepth = 0
         while (i < source.length) {
             val c = source[i]
-            if (c == '\\' && i + 1 < source.length) {
-                out.append("  ")
-                i += 2
-                continue
+            when {
+                c == '\\' && i + 1 < source.length -> {
+                    out.append("  ")
+                    i += 2
+                }
+                // 未闭合（不该出现）：不吞后续行——仅在外层字符串（非模板表达式内）收手
+                c == '\n' && templateDepth == 0 -> return i
+                c == '$' && i + 1 < source.length && source[i + 1] == '{' -> {
+                    out.append("  ")
+                    templateDepth++
+                    i += 2
+                }
+                templateDepth > 0 && c == '{' -> {
+                    out.append(' ')
+                    templateDepth++
+                    i++
+                }
+                templateDepth > 0 && c == '}' -> {
+                    out.append(' ')
+                    templateDepth--
+                    i++
+                }
+                // 模板表达式里的嵌套字符串（`"a${b("c")}d"`）——递归涂白，否则外层引号会被误判为结束
+                templateDepth > 0 && c == '"' -> i = maskStringLiteral(source, i, out)
+                c == '"' -> {
+                    out.append('"')
+                    return i + 1
+                }
+                else -> {
+                    out.append(if (c == '\n') '\n' else ' ')
+                    i++
+                }
             }
-            if (c == '\n') return i // 未闭合（不该出现）：不吞后续行
-            if (c == '"') {
-                out.append('"')
-                return i + 1
-            }
-            out.append(' ')
-            i++
         }
         return i
     }
@@ -477,12 +514,14 @@ class BannedApiSourceScanTest {
      *     前缀写法不影响；负向后顾 `(?<![A-Za-z0-9_])` 保证不误吃 `invokeLaterWriteSafe` /
      *     `invokeLaterOnWriteThread`（正确形态）。
      *
-     * 已知边界（全部是**漏报**方向，不误报）：`invokeLater` 与 `(` 之间插空白、`)` 与 `{` 之间夹注释、
+     * 已知边界（全部是**漏报**方向，不误报；T-FS-06 独立复核逐条实测订正）：`invokeLater` 与 `(` 之间插空白、
      * 1 参 `invokeLater(runnable)`（写体在别处的 Runnable 定义里，本扫描面不可判定）、
      * **`invokeLater({ … })`（括号内 lambda 且完全不写模态实参）**——默认模态规则按「省略实参列表
      * 或实参区含 `defaultModalityState()`」判定，此形态两者都不满足故漏报（仓内 0 处）。收编需把判据
      * 改成「实参区无 any()/nonModal() 模态令牌即视为默认模态」，会连带改变对自定义模态的判定
      * （`stateForComponent` 等），本轮只登记边界不扩判据。
+     * ~~`)` 与 `{` 之间夹注释~~ **不是边界**：注释已被 [maskNonCode] 涂白、[trailingLambdaBody] 跳空白
+     * 后仍能命中（复核实测 `app.invokeLater(ModalityState.nonModal()) /* c */ { … }` 命中）——旧表述过保守。
      */
     private fun invokeLaterSites(code: String): List<InvokeLaterSite> {
         val out = ArrayList<InvokeLaterSite>()
@@ -849,6 +888,34 @@ class BannedApiSourceScanTest {
                 "${defaultModalityWriteOffenders(braceInString)}",
             1,
             defaultModalityWriteOffenders(braceInString).size,
+        )
+
+        // ---- 字符串模板 ${…} 内嵌字符串（T-FS-06 独立复核阻断项）：掩码器 in-string 状态不得翻转 ----
+        // 反例原状：遇首个未转义 `"` 即结束外层字符串 → 正文被当代码、模板内代码被涂白 → 后续站点的
+        // 实参区被正文里的 `)` 提前配平到 0（实测 execute/DataSourceSelector.kt:1009 实参区被截断到
+        // 9414/13999 字符而不再含 ModalityState.any()、:2684 整条站点被丢弃）。
+        // 样本形态照抄该文件：模板内嵌字符串在前，带 any() 实参的站点在后。
+        val templateNestedString = listOf(
+            "src/main/kotlin/x/TemplateNested.kt" to """
+                class TemplateNested {
+                    fun go(doc: Document, api: Any?, probe: String) {
+                        LOG.info("api=${'$'}{api?.javaClass?.simpleName} probe=${'$'}{probe("x")} tail")
+                        app.invokeLater({ doc.setText("boom") }, ModalityState.any())
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "模板表达式内嵌字符串不得翻转掩码器状态（否则其后带 any() 实参的站点会脱离覆盖）：" +
+                "${anyModalityWriteOffenders(templateNestedString)}",
+            1,
+            anyModalityWriteOffenders(templateNestedString).size,
+        )
+        assertEquals(
+            "该站点归 any() 规则，不得被默认模态规则重复计入：" +
+                "${defaultModalityWriteOffenders(templateNestedString)}",
+            0,
+            defaultModalityWriteOffenders(templateNestedString).size,
         )
 
         // ---- 工具函数自证：stripComments 不保行 / maskNonCode 保行（行号错位=豁免标注认错行）----
