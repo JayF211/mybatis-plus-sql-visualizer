@@ -74,6 +74,7 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.TitledSeparator
 import com.intellij.ui.OnePixelSplitter
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBLoadingPanel
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
@@ -301,6 +302,21 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // T-Dgm-04：标签页宿主——原生图框架组件（joinDiagramNative=true 且 Diagrams 插件可用）与
     // 自绘 DiagramPanel 共用此容器按需切换；切换时旧原生编辑器即时 dispose 防 FileEditor 泄漏
     private val diagramTabHost = javax.swing.JPanel(java.awt.BorderLayout())
+    /**
+     * T-F8：JOIN 图标签页的加载面——包住整个 [diagramTabHost]，转圈盖在标签页内容之上。
+     *
+     * 为什么加载面必须在宿主层而不是图面板内部：唯一真正的耗时段是 [updateDiagramTab] 的
+     * **后台 schema 富化**（冷缓存按 schema 规模线性），而原生图路径（默认设置
+     * `joinDiagramNative = true`，Ultimate 真机默认）下 [showJoinDiagram] 的
+     * `diagramTabHost.removeAll()` 会把 [diagramPanel] 摘出层级——面板内部自摆的转圈在默认配置下
+     * 根本不可见（审计项 F8：T-UN-14 接的转圈从未出现过，showLoading/hideLoading 全仓零调用点）。
+     * 宿主层对原生/自绘两条渲染路径都可见，是唯一能覆盖真机默认路径的加载面。
+     *
+     * 转圈层由平台 [JBLoadingPanel] 提供（独立 loadingLayer 盖在内容层之上，不替换内容，
+     * 2 参构造 startDelayMs=-1 使 startLoading/stopLoading 同步改可见性）。
+     * Disposable 挂本面板（[JBLoadingPanel] 的 2 参构造要求父 Disposable）。
+     */
+    private val diagramLoadingHost = JBLoadingPanel(BorderLayout(), this)
     private var currentNativeDiagram: JComponent? = null
     /**
      * T-DbSchemaCompletion：待补刷富化的图（首次富化一点数据源信息都没拿到时记下）。
@@ -447,6 +463,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-Dgm-04：标签页实际展示 diagramTabHost（内嵌原生组件或 diagramPanel）
         diagramTabHost.isOpaque = false
         diagramTabHost.add(diagramPanel, java.awt.BorderLayout.CENTER)
+        // T-F8：加载面在宿主层（标签页内容 = 加载面板 → diagramTabHost），并把它交给图面板出图
+        //（面板自身的 contentLayer 在原生路径下不可见，见 diagramLoadingHost KDoc）
+        diagramLoadingHost.add(diagramTabHost, BorderLayout.CENTER)
+        diagramPanel.bindHostLoadingPanel(diagramLoadingHost)
 
         // T-M36.6-03：预热线程提前创建临时 SQL 文件 + VFS refresh + PSI 解析（后台线程慢操作合法），
         // createEditor（EDT）优先消费预热产物——243 平台 EDT/EDT-ReadAction 均禁止慢操作
@@ -1464,6 +1484,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // T-Embed-02：数据源可用时把列类型/注释升级为 DB 真实值（int(11)/DB COMMENT），缺席静默回落
             val stmt = statement as SelectStatement
             val proj = project
+            // T-F8：加载态包住「后台富化 + 回 EDT 换页」整段（showJoinDiagram 本体与 locateDbTables
+            // 都在 EDT 同步跑，同一 EDT 事件内 startLoading 画不出来，故起止点必须跨事件）。
+            // 这里只「进」；「出」收口在 showJoinDiagram 末尾（单一收口点，两条分支都过它）。
+            diagramPanel.showLoading()
             if (proj == null) {
                 showJoinDiagram(JoinDiagramGenerator.buildDiagramModel(stmt))
                 return
@@ -1481,6 +1505,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 // 命中就说明模型未加载（预览打开常早于数据源建连）——记下来供数据源就绪后的补刷。
                 val contributed = enriched != base
                 com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                    // T-F8：作废分支**不得**摘转圈——迟到的作废回调若停加载态，会把后一次预览
+                    // 刚打开的转圈一起摘掉（转圈是「当前加载」的状态，不是本次回调的状态）。
+                    // 此时加载态的归属方是后一次预览：它要么自己收尾（showJoinDiagram 末尾），
+                    // 要么走无 JOIN 分支（unloadJoinDiagram → diagramPanel.clear() 复位）。
                     if (current !== result || project?.isDisposed == true) return@invokeLater
                     if (!contributed) diagramEnrichRetryTarget = result
                     showJoinDiagram(enriched)
@@ -1499,6 +1527,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 原生路径：快照登记 → UmlEditorProvider.createEditor → 组件嵌入 [diagramTabHost]
      * （缩放/布局/折叠/导出全框架托管）；Diagrams 插件缺席或框架异常（buildTabComponent 返回 null）
      * 自动降级自绘 [DiagramPanel]，与 Community 行为一致。
+     *
+     * T-F8：本方法末尾是加载态的**唯一收口点**——两条调用分支（[updateDiagramTab] 的无 project
+     * 同步分支与后台富化回 EDT 分支）都经此，故「摘转圈」写在这里而不是各调用点：结构上保证
+     * 转圈一定晚于渲染被摘（原生图建图/自绘测量都在本方法内同步完成），调用方也不会漏收尾。
      */
     private fun showJoinDiagram(model: DiagramModel) {
         val nativeEnabled = PluginSettings.getInstance().state.joinDiagramNative
@@ -1528,6 +1560,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         diagramTabHost.revalidate()
         diagramTabHost.repaint()
+        // T-F8：图已换入 → 退出加载态（渲染失败时 showDiagram 内部已落错误页并复位，此处幂等）
+        diagramPanel.hideLoading()
     }
 
     /**
@@ -1566,7 +1600,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val pane = JTabbedPane().apply {
             addTab(MpSqlVisualizerBundle.message("panel.tab.sql"), center)
             if (addDiagramTab) {
-                addTab(MpSqlVisualizerBundle.message("diagram.tab.title"), diagramTabHost)
+                // T-F8：标签页内容是加载面板（内含 diagramTabHost）——转圈盖住整页，
+                // 原生/自绘两条路径共用同一个加载面
+                addTab(MpSqlVisualizerBundle.message("diagram.tab.title"), diagramLoadingHost)
             }
         }
         // F-42 修复：渲染完成时组件可能处于 hidden（标签页未被选中），swapContent/revalidate
@@ -3685,6 +3721,23 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun consoleAttachedToMeForTest(): Boolean = consoleAttachedToMe()
     /** T-RollbackSql：执行状态面板（executeAdhocSql 结果反馈断言用）。 */
     internal fun resultPanelForTest(): SqlResultPanel = resultPanel
+
+    /**
+     * T-F8：JOIN 图加载态接线探针（测试用）——转发到 [DiagramPanel.loadingProbeForTest]。
+     *
+     * 接线用例据此断「进入加载态 → 渲染 → 退出加载态」的时序（时序为何必须如此见
+     * [updateDiagramTab] 与 [showJoinDiagram] 的 KDoc）。
+     */
+    internal fun diagramLoadingProbeForTest(probe: (Boolean) -> Unit) {
+        diagramPanel.loadingProbeForTest = probe
+    }
+
+    /** T-F8：JOIN 图面板（「停转圈时图已渲染」的断言入口）。 */
+    internal fun diagramPanelForTest(): DiagramPanel = diagramPanel
+
+    /** T-F8：当前是否走原生图路径（「停转圈时图已换入」的另一分支——原生路径不经过 [diagramPanel]）。 */
+    internal fun hasNativeDiagramForTest(): Boolean = currentNativeDiagram != null
+
     /** T-RefreshDbSteal F3：当前挂接的 rehost 监听是否仍在组件上（解绑断言用）。 */
     internal fun rehostListenerAttachedForTest(): Boolean {
         val console = embeddedConsole ?: return false

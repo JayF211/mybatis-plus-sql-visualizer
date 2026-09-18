@@ -8,6 +8,8 @@ import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.ConditionToggle
 import cn.song.mybatisplus.visualizer.model.ConditionView
+import cn.song.mybatisplus.visualizer.model.JoinClause
+import cn.song.mybatisplus.visualizer.model.JoinType
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.OrderByItem
 import cn.song.mybatisplus.visualizer.model.PreviewResult
@@ -106,6 +108,82 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         assertNotNull(second)
         assertEquals("SELECT 2 FROM t2", second!!.document.text)
         panel.clear()
+    }
+
+    /** T-F8：含 JOIN 的预览结果（驱动 updateDiagramTab → 后台 schema 富化 → 回 EDT 渲染）。 */
+    private fun joinResult(): PreviewResult {
+        val statement = SelectStatement(
+            table = tableInfo(),
+            tableAlias = "u",
+            joins = listOf(
+                JoinClause(
+                    type = JoinType.LEFT,
+                    tableName = "user_address",
+                    alias = "a",
+                    onConditions = listOf(
+                        Condition.ColumnComparison(
+                            left = ColumnRef(tableAlias = "u", columnName = "id"),
+                            right = ColumnRef(tableAlias = "a", columnName = "user_id"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val sql = "SELECT u.id, u.name FROM car_device_info u " +
+            "LEFT JOIN user_address a ON u.id = a.user_id"
+        return PreviewResult(
+            sql = sql,
+            compactSql = sql,
+            unresolvedParams = emptyList(),
+            paramTable = null,
+            wrapperType = WrapperType.LAMBDA_QUERY,
+            tableName = "car_device_info",
+            columns = listOf("id", "name"),
+            previewModel = SqlPreviewModel(
+                statement, MySqlDialect, formatSql = false, conditionViews = emptyList(),
+            ),
+        )
+    }
+
+    /**
+     * T-F8 接线守卫：JOIN 图加载态必须包住「进后台富化 → 回 EDT 渲染 → 收尾」整段。
+     *
+     * 审计项 F8 的形态是 `DiagramPanel.showLoading/hideLoading` 全仓零调用点——T-UN-14 接的
+     * JBLoadingPanel 转圈永远不会出现。本用例钉两件事：
+     *  ① 探针序列为「进入 → 退出」（修复前为空序列，即红）；
+     *  ② 退出时图**已换入**（停转圈若早于渲染，用户在唯一的耗时段里看不到任何反馈）。
+     *     「已换入」按两条渲染路径取或：原生图路径（Diagrams 插件在测试沙盒里已加载 →
+     *     [SqlPreviewPanel.hasNativeDiagramForTest]，与真机默认配置同路径）或自绘路径
+     *     （[DiagramPanel.hasModelForTest]）。
+     *
+     * 富化在 `executeOnPooledThread` 上、结果经 `invokeLater` 回 EDT，故需排空 EDT 队列收口；
+     * 有界等待避免测试环境异常时挂死。
+     */
+    fun testDiagramLoadingWrapsBackgroundEnrichment() {
+        val panel = SqlPreviewPanel(project)
+        val events = mutableListOf<Boolean>()
+        var renderedWhenStopped = false
+        panel.diagramLoadingProbeForTest { loading ->
+            events += loading
+            if (!loading) {
+                renderedWhenStopped = panel.hasNativeDiagramForTest() ||
+                    panel.diagramPanelForTest().hasModelForTest()
+            }
+        }
+        panel.showResult(joinResult())
+        val deadline = System.currentTimeMillis() + 10_000
+        while (events.size < 2 && System.currentTimeMillis() < deadline) {
+            UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(20)
+        }
+        assertEquals("加载态序列应为 进入 → 退出", listOf(true, false), events)
+        assertTrue(
+            "停转圈必须发生在图已换入之后（提前摘则富化窗口内零反馈；" +
+                "native=${panel.hasNativeDiagramForTest()}, rendered=${panel.diagramPanelForTest().hasModelForTest()}）",
+            renderedWhenStopped,
+        )
+        panel.clear()
+        assertFalse("整图卸载后不得卡转圈", panel.diagramPanelForTest().isLoadingForTest())
     }
 
     /**
