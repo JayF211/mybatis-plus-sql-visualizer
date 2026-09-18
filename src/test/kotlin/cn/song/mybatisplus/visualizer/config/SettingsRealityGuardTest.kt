@@ -200,9 +200,22 @@ class SettingsRealityGuardTest {
         //    StartupUpdateCheck.kt:159 另有 installFailed 直引；两键保留白名单。
         //  - settings.update.envNotSupported / settings.search.placeholder：P5 守卫首跑查获的存量幽灵键，
         //    已随 T-SettingsTruth 收尾删除双语两键（对齐 P3 filterBar 先例），不再豁免。
+        //  - settings.mcp.tool.desc.<tail> 十键（T-McpToolset2，dev 侧）：McpConfigurable.kt:112
+        //    「"settings.mcp.tool.desc." + toolName.removePrefix("mpsv_").replace("_", "")」动态拼，
+        //    尾段由工具名派生（mpsv_render_sql → rendersql），静态扫描不可判定；十键保留白名单。
         val whitelist = setOf(
             "settings.update.checkFailed",
             "settings.update.installFailed",
+            "settings.mcp.tool.desc.rendersql",
+            "settings.mcp.tool.desc.schemacontext",
+            "settings.mcp.tool.desc.explain",
+            "settings.mcp.tool.desc.renderlogs",
+            "settings.mcp.tool.desc.checksql",
+            "settings.mcp.tool.desc.rollbackplan",
+            "settings.mcp.tool.desc.perfadvice",
+            "settings.mcp.tool.desc.crudsql",
+            "settings.mcp.tool.desc.reversesql",
+            "settings.mcp.tool.desc.mappercheck",
         )
         val texts = mainSources().map { (p, t) -> p to t }
         val xmlText = mainFile("src/main/resources/META-INF/plugin.xml").readText()
