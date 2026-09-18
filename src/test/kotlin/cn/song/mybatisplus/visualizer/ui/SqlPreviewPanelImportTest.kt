@@ -9,10 +9,10 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
-import java.awt.datatransfer.Transferable
 import javax.swing.JButton
+import cn.song.mybatisplus.visualizer.testutil.FakeClipboardManager
+import cn.song.mybatisplus.visualizer.testutil.installFakeClipboard
 
 /**
  * P-05：[SqlPreviewPanel] 参数批量导入 / 历史召回集成测试。
@@ -22,18 +22,17 @@ import javax.swing.JButton
  */
 class SqlPreviewPanelImportTest : BasePlatformTestCase() {
 
-    // 测试前快照系统剪贴板，tearDown 恢复，避免剪贴板导入测试污染用户剪贴板
-    private var clipboardSnapshot: Transferable? = null
+    /** T-ClipboardIso：内存剪贴板（测试全程不碰系统剪贴板）。 */
+    private lateinit var clipboard: FakeClipboardManager
 
     override fun setUp() {
         super.setUp()
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = false }
-        clipboardSnapshot = Toolkit.getDefaultToolkit().systemClipboard.getContents(null)
+        clipboard = installFakeClipboard(testRootDisposable)
     }
 
     override fun tearDown() {
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true }
-        runCatching { Toolkit.getDefaultToolkit().systemClipboard.setContents(clipboardSnapshot, null) }
         super.tearDown()
     }
 

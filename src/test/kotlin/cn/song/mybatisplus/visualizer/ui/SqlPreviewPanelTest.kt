@@ -40,10 +40,10 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import java.awt.Toolkit
-import java.awt.datatransfer.Transferable
 import javax.swing.JButton
 import javax.swing.SwingUtilities
+import cn.song.mybatisplus.visualizer.testutil.FakeClipboardManager
+import cn.song.mybatisplus.visualizer.testutil.installFakeClipboard
 
 /**
  * SqlPreviewPanel 行为测试（M8/M9）：编辑器视图 + 单行多行切换 + 生命周期 + 参数回填。
@@ -52,20 +52,20 @@ import javax.swing.SwingUtilities
  */
 class SqlPreviewPanelTest : BasePlatformTestCase() {
 
-    // 测试前快照系统剪贴板，tearDown 恢复，避免 copySql/copyError 污染用户剪贴板
-    private var clipboardSnapshot: Transferable? = null
+    /** T-ClipboardIso：内存剪贴板（测试全程不碰系统剪贴板——原快照/还原写法在用户复制或
+     *  并行会话占用剪贴板时会在 setUp 抛 cannot open system clipboard，且还原失败会污染用户剪贴板）。 */
+    private lateinit var clipboard: FakeClipboardManager
 
     // T-M27.4：渲染文本断言类测试关闭自动格式化（默认开启的格式化行为由
     // SqlFormatterTest + testRenderAutoFormatsSql 专项覆盖；此处模拟"关闭格式化"场景）
     override fun setUp() {
         super.setUp()
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = false }
-        clipboardSnapshot = Toolkit.getDefaultToolkit().systemClipboard.getContents(null)
+        clipboard = installFakeClipboard(testRootDisposable)
     }
 
     override fun tearDown() {
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true }
-        runCatching { Toolkit.getDefaultToolkit().systemClipboard.setContents(clipboardSnapshot, null) }
         super.tearDown()
     }
 
