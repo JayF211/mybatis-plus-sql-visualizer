@@ -217,6 +217,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private val frameSkipPrefixesField = com.intellij.ui.components.JBTextArea(3, 24).apply {
         // T-SourceJumpFunnel：空态灰色占位提示（悬停 tooltip 之外的第一眼引导）
         emptyText.text = MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.placeholder")
+        lineWrap = true
+        // T-FramePrefixVisibility F1：GridBag 外层高度不足时行被压缩，fill=NONE 下多行文本框
+        // 会塌成一条细线（真机截图实证：标签可见、框不可见）——锁定首选高度兜底
+        preferredSize = java.awt.Dimension(preferredSize.width, preferredSize.height.coerceAtLeast(60))
     }
 
     /** gutter 预览 SQL 图标开关（M10）。 */
