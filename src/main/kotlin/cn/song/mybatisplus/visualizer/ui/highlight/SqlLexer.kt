@@ -17,7 +17,6 @@ import com.intellij.psi.tree.IElementType
 class SqlLexer : LexerBase() {
 
     private var myBuffer: CharSequence = ""
-    private var myStart = 0
     private var myEnd = 0
     private var myTokenStart = 0
     private var myTokenEnd = 0
@@ -28,7 +27,6 @@ class SqlLexer : LexerBase() {
 
     override fun start(buffer: CharSequence, startOffset: Int, endOffset: Int, initialState: Int) {
         myBuffer = buffer
-        myStart = startOffset
         myEnd = endOffset
         myTokenStart = startOffset
         myTokenEnd = startOffset

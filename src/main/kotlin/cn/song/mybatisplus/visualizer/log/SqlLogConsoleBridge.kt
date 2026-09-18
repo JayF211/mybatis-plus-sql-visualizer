@@ -277,6 +277,19 @@ open class SqlLogConsoleBridge(
      */
     val consoleLinesSeen = java.util.concurrent.atomic.AtomicLong()
 
+    /**
+     * T-RA-03：重放丢弃行累计（跨全部已挂载控制台求和），SQL 日志面板链路诊断行取数入口。
+     *
+     * 为什么要在桥这层聚合：计数本体按 console 存在 [BridgeLineContext]（重放守卫每控制台独立
+     * 实例，`rehighlight` 重放面也各自独立），而面板只持有桥；逐 console 明细对「零产出排障」
+     * 无价值，用户要的是「一共被守卫丢了多少行」。
+     *
+     * 此前该计数只自增、生产侧零读取——守卫误丢行（把正常流式行判成重放）时面板依旧显示
+     * 「已扫描 N 行 / 产出 0 条」，用户无从区分「控制台没输出」与「输出被守卫吃掉了」。
+     */
+    val replayDropCount: Long
+        get() = synchronized(consoleContexts) { consoleContexts.values.sumOf { it.replayDropCount.get() } }
+
     /** T-PS4-02：internal 测试缝——两时序单路化测试直接对桩控制台挂载桥 filter（scanAll 需真实组件树）。 */
     internal fun attachFilter(console: Any) {
         // T-CaptureTruth T-CT-04：**不再**因 epActive 跳过挂载。原挂载面守卫的收益只是省一次代理
@@ -377,7 +390,7 @@ open class SqlLogConsoleBridge(
                                 context.line0Reader,
                             )) {
                                 ConsoleReplayGuard.Decision.Replay -> {
-                                    context.replayDropCount++
+                                    context.replayDropCount.incrementAndGet()
                                 }
                                 else -> {
                                     processConsoleLine(line, context, timePrefixCache, syncBufferConfig, onErrorText = ::bindConsoleError)
@@ -429,7 +442,6 @@ open class SqlLogConsoleBridge(
         runCatching {
             val getEditor = console.javaClass.getMethod("getEditor")
             val editor = getEditor.invoke(console) ?: return
-            ctx.replayGuardEditor = editor
             val getDoc = editor.javaClass.getMethod("getDocument")
             val doc = getDoc.invoke(editor) ?: return
             val getStamp = doc.javaClass.getMethod("getModificationStamp")
@@ -714,17 +726,20 @@ internal class BridgeLineContext(
     /** T-PreviewFlash：重放守卫（每 console 独立；editor 不可得时降级为恒 Process）。 */
     val replayGuard: ConsoleReplayGuard = ConsoleReplayGuard()
 
-    /** 反射缓存的控制台 Editor（ConsoleView.getEditor，守护判定降级用；null = 守卫不读文档）。 */
-    var replayGuardEditor: Any? = null
-
     /** 控制台文档 modificationStamp 读取函数（editor 不可得时为 null）。 */
     var docStampReader: (() -> Long)? = null
 
     /** 控制台首行文本读取函数（混合态判定用；editor 不可得时为 null）。 */
     var line0Reader: (() -> String?)? = null
 
-    /** 重放丢弃行累计计数（debug 日志验证锚点）。 */
-    var replayDropCount: Long = 0
+    /**
+     * 重放丢弃行累计计数（T-RA-03：面板链路诊断行经 [SqlLogConsoleBridge.replayDropCount] 读取）。
+     *
+     * AtomicLong 而非普通 Long：自增在控制台出线程（filter 回调），读取在 EDT（诊断定时器），
+     * 普通字段无可见性保证（JIT 可长期持寄存器值）——诊断计数一旦读到陈旧 0 就恰好复现
+     * 「守卫误丢行却无证据」的原始故障，故与 [SqlLogConsoleBridge.consoleLinesSeen] 同口径。
+     */
+    val replayDropCount = java.util.concurrent.atomic.AtomicLong()
 }
 
 /**

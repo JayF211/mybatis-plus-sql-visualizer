@@ -42,6 +42,11 @@ import javax.swing.SwingConstants
  *
  * T-UiNative T-UN-14：加载态/空态接原生件——加载态由 [JBLoadingPanel] 盖平台转圈
  * （原 indeterminate JProgressBar 自摆页删除），「无 JOIN」占位与错误态保留原样。
+ *
+ * T-RA-02：错误态接线——渲染（[DiagramRenderer] 测量/布局）抛异常时落 [errorScroll] 错误页，
+ * 文案键 `diagram.render.failed`，由 [renderGuarded] 统一兜底。此前该错误页只有声明没有接线
+ * （84d4407「直接 Graphics2D 渲染」重写时删掉了 showError 与 try/catch，字段与文案键一起悬空），
+ * 类 KDoc 宣称的错误态与实际不符——本次把实现补上，表述与实现对齐。
  */
 class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>(BorderLayout()), Disposable {
 
@@ -60,6 +65,14 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
         MpSqlVisualizerBundle.message("diagram.placeholder.noJoin"), SwingConstants.CENTER,
     ).apply { foreground = JBColor.GRAY }
 
+    /**
+     * T-RA-02：渲染失败页——[contentLayer] 的第三个换页目标（另两个是 [placeholderLabel] 与 [scrollPane]）。
+     *
+     * 84d4407 把渲染改为直接 Graphics2D 后删掉了 `showError`，这两个字段与 bundle 键
+     * `diagram.render.failed` 一起悬空（全仓含测试零引用），类 KDoc 却仍宣称有错误态。
+     * 现由 [showError] 接线：渲染失败时用户看到失败原因，而不是上一态/空画布。
+     * 用 JTextArea（非 JBLabel）是为了长异常摘要可换行、可选中复制。
+     */
     private val errorTextArea = javax.swing.JTextArea().apply {
         isEditable = false
         font = UIUtil.getLabelFont()
@@ -122,14 +135,70 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
             override fun actionPerformed(e: AnActionEvent) = action()
         }
 
+    /**
+     * 展示模型（空模型 → 「无 JOIN」占位）。
+     *
+     * T-RA-02：测量先于换页——测量失败时错误页直接顶上，不留半成品画布（原顺序是先换页再测量，
+     * 测量一抛就只剩一个空画布）；失败判定与错误页切换都在 [renderGuarded] 内。
+     */
     fun showDiagram(model: DiagramModel) {
         if (model.isEmpty) { showPlaceholder(); return }
         currentModel = model
+        if (!renderGuarded(model) { diagramCanvas.setModel(it, zoom) }) return
         swapContent(scrollPane)
-        diagramCanvas.setModel(model, zoom)
         revalidate()
         repaint()
     }
+
+    /**
+     * T-RA-02：渲染动作的统一兜底。
+     *
+     * 为什么必须有：本面板的渲染 try/catch 在 84d4407「直接 Graphics2D 渲染」重写时被删掉，
+     * 只留下 [errorTextArea]/[errorScroll] 与文案键 `diagram.render.failed` 悬空；而调用链
+     * `SqlPreviewPanel.showJoinDiagram`（:1187）→ `updateDiagramTab`（:1118）→ `showResult`（:1059）
+     * → `SqlPreviewDialog.init`（:33）→ `SqlPreviewService.showResult`（:1977）**全程无 catch**——
+     * 渲染一抛，异常直接穿到 DialogWrapper 构造，弹窗起不来且用户看不到任何原因。
+     *
+     * 单独成函数（而非把 try/catch 内联进 [showDiagram]）是为了让失败路径可测：结构合法的模型在
+     * [DiagramRenderer.measurePreferredSize] 里几乎不抛，公开 API 复现不出错误页。
+     *
+     * @return true = 渲染成功；false = 已落错误页（调用方不得再换页/重绘）
+     */
+    internal fun renderGuarded(model: DiagramModel, render: (DiagramModel) -> Unit): Boolean =
+        try {
+            render(model)
+            true
+        } catch (t: Throwable) {
+            // 失败即回到「无图」语义：画布与 currentModel 一起清空，后续缩放/切页不再重试坏模型
+            //（否则每次缩放都在同一处再抛一次）。warn 留痕：真机只有这里能看到渲染失败现场。
+            com.intellij.openapi.diagnostic.Logger.getInstance(DiagramPanel::class.java)
+                .warn("JOIN diagram render failed", t)
+            currentModel = null
+            diagramCanvas.setModel(null, zoom)
+            showError("${t.javaClass.simpleName}: ${t.message ?: "unknown"}")
+            false
+        }
+
+    /**
+     * T-RA-02：渲染失败的错误页（[errorScroll] 接到内容层换页目标）。
+     *
+     * @param message 异常摘要——调用方拼 `异常类名: message`（比裸 message 更利于定位）。
+     *                文案沿用既有键 `diagram.render.failed`（双语齐备、此前零引用），不新增键。
+     */
+    fun showError(message: String) {
+        errorTextArea.text = MpSqlVisualizerBundle.message("diagram.render.failed", message)
+        // 长摘要自动换行后默认停在末尾，从顶部看起更符合「读错误」的顺序
+        errorTextArea.caretPosition = 0
+        swapContent(errorScroll)
+        revalidate()
+        repaint()
+    }
+
+    /** T-RA-02：错误页是否当前页（测试断言用）。 */
+    internal fun isErrorPageForTest(): Boolean = currentCenter === errorScroll
+
+    /** T-RA-02：错误页文本（测试断言用）。 */
+    internal fun errorTextForTest(): String = errorTextArea.text
 
     fun clear() {
         currentModel = null
@@ -179,10 +248,21 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
     /** T-UiNative T-UN-14：加载态（测试断言用）。 */
     internal fun isLoadingForTest(): Boolean = contentLayer.isLoading
 
-    fun zoomIn() { zoom = (zoom * 1.25).coerceAtMost(5.0); diagramCanvas.setModel(currentModel, zoom); revalidate(); repaint() }
-    fun zoomOut() { zoom = (zoom / 1.25).coerceAtLeast(0.2); diagramCanvas.setModel(currentModel, zoom); revalidate(); repaint() }
-    fun zoomReset() { zoom = 1.0; diagramCanvas.setModel(currentModel, zoom); revalidate(); repaint() }
+    fun zoomIn() { zoom = (zoom * 1.25).coerceAtMost(5.0); applyZoomToCanvas() }
+    fun zoomOut() { zoom = (zoom / 1.25).coerceAtLeast(0.2); applyZoomToCanvas() }
+    fun zoomReset() { zoom = 1.0; applyZoomToCanvas() }
     fun zoomForTest(): Double = zoom
+
+    /**
+     * T-RA-02：缩放重建画布尺寸走同一兜底（[renderGuarded]）——缩放是工具栏动作回调，
+     * 里面抛异常只进平台日志，用户侧表现为「点缩放没反应」（同族静默失效）。
+     */
+    private fun applyZoomToCanvas() {
+        val model = currentModel ?: return
+        renderGuarded(model) { diagramCanvas.setModel(it, zoom) }
+        revalidate()
+        repaint()
+    }
 
     private fun exportPng() {
         val model = currentModel ?: return

@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -23,7 +24,8 @@ class AgentStatusTextTest {
         cooldownMs: Long = 0L,
         livePids: List<Long> = emptyList(),
         everAttached: Boolean = false,
-    ) = AgentStatusSnapshot(enabled, confirmed, cooldownMs, livePids, everAttached)
+        heartbeatExpired: Boolean = false,
+    ) = AgentStatusSnapshot(enabled, confirmed, cooldownMs, livePids, everAttached, heartbeatExpired)
 
     @Test
     fun test关闭态无叙事() {
@@ -76,6 +78,14 @@ class AgentStatusTextTest {
     }
 
     @Test
+    fun test心跳过期回落文案与断连区分() {
+        val heartbeat = agentStatusText(snap(confirmed = true, everAttached = true, heartbeatExpired = true))
+        val disconnect = agentStatusText(snap(confirmed = true, everAttached = true))
+        assertTrue("心跳过期应明示心跳中断：$heartbeat", heartbeat!!.contains("心跳中断"))
+        assertFalse("心跳态不得与断连态同文案：$heartbeat", heartbeat == disconnect)
+    }
+
+    @Test
     fun test五态文案互不重复() {
         val texts = listOf(
             agentStatusText(snap(enabled = false)),
@@ -84,6 +94,7 @@ class AgentStatusTextTest {
             agentStatusText(snap(cooldownMs = 0L)),
             agentStatusText(snap(confirmed = true, everAttached = false)),
             agentStatusText(snap(confirmed = true, everAttached = true)),
+            agentStatusText(snap(confirmed = true, everAttached = true, heartbeatExpired = true)),
         )
         val nonNull = texts.filterNotNull()
         assertEquals("五个非空态文案应互不相同（防两态收敛成同一句）", nonNull.size, nonNull.toSet().size)

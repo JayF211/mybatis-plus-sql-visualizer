@@ -153,6 +153,8 @@ intellijPlatformTesting {
             "cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest",
             // T-ExecDocGate：执行文档落盘纪律断言（testDatabase 通道，Database 插件链）
             "cn.song.mybatisplus.visualizer.execute.ExecDocGateIntegrationTest",
+            // T-TestDbDriver：驱动解析管线回归（artifact 清单/版本解析/classpath 落点）
+            "cn.song.mybatisplus.visualizer.execute.DbDriverPipelineTest",
         )
         val discoveredTestClasses: List<String> = testFileEntries
             .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
@@ -328,25 +330,25 @@ intellijPlatformTesting {
                         )
                     }
                     // ④ 单测模式 artifact 清单副本 + ⑤ driver 定义钉版本（T-Embed-08 原逻辑）
+                    // T-TestDbDriver 20260918：落点改 config 根下的 options/ ——
+                    // DatabaseArtifactLoaderImpl.getTestArtifactLists() 经
+                    // DatabaseDriverManagerImpl.existentTestPath(name) 只认
+                    // `<homePath>/dbe/database/testResources/<name>` 与 `<configPath>/options/<name>`
+                    // （bytecode 常量池 \u0001/options/\u0001 实证）；原落 config 根 → 探针实测
+                    // getTestArtifactLists() 恒空（该文件从未被 DBN 读到）。
                     val manifest = File(driverDir, "jdbc-drivers.xml")
-                    val dstArtifactList = File(configRoot, "test-database-artifacts.xml")
+                    val dstArtifactList = File(configRoot, "options/test-database-artifacts.xml")
                     if (manifest.isFile && !dstArtifactList.isFile) {
+                        dstArtifactList.parentFile.mkdirs()
                         manifest.copyTo(dstArtifactList)
-                        logger.lifecycle("testDatabase: test-database-artifacts.xml seeded")
+                        logger.lifecycle("testDatabase: test-database-artifacts.xml seeded (options/)")
                     }
-                    val dstTestDrivers = File("build/test-sandbox/database/config_testDatabase/test-database-drivers.xml")
-                    if (!dstTestDrivers.isFile) {
-                        dstTestDrivers.writeText(
-                            """
-                            <drivers>
-                              <driver id="mysql.8">
-                                <artifact id="MySQL ConnectorJ" name="MySQL Connector/J" use="true" version="9.7.0"/>
-                              </driver>
-                            </drivers>
-                            """.trimIndent(),
-                        )
-                        logger.lifecycle("testDatabase: test-database-drivers.xml seeded (driver with pinned artifact version)")
-                    }
+                    // ⑤ driver 定义（test-database-drivers.xml）不再由本块落盘：
+                    //    ① DBN 在单测模式显式忽略该名——DatabaseDriverManagerImpl.existentTestPath
+                    //       bytecode 实证 `isUnitTestMode() && name.endsWith("test-database-drivers.xml")`
+                    //       → 直接 return null；② 原落盘用的是相对路径 `build/test-sandbox/...`，
+                    //       按 Gradle daemon 进程 CWD 解析（见上方注释实测）。落盘职责归测试侧
+                    //       DbIntegrationSeedSupport（PathManager.getConfigPath() 绝对锚定）。
                 }
                 filter {
                 includeTestsMatching("cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest")
@@ -356,6 +358,8 @@ intellijPlatformTesting {
                 includeTestsMatching("cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest")
                 // T-ExecDocGate：执行文档落盘纪律断言（prepare/reuse/手改防抖三断言）
                 includeTestsMatching("cn.song.mybatisplus.visualizer.execute.ExecDocGateIntegrationTest")
+                // T-TestDbDriver：驱动解析管线回归
+                includeTestsMatching("cn.song.mybatisplus.visualizer.execute.DbDriverPipelineTest")
             }
             }
         }
@@ -432,6 +436,8 @@ tasks.test {
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest")
         // T-ExecDocGate：执行文档落盘纪律断言，同上仅在 testDatabase 运行
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.ExecDocGateIntegrationTest")
+        // T-TestDbDriver：驱动解析管线回归，同上仅在 testDatabase 运行
+        excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.DbDriverPipelineTest")
     }
 }
 

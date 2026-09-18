@@ -30,7 +30,9 @@ import javax.swing.SwingConstants
  */
 class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
 
-    private val statusLabel = JBLabel()
+    // T-RA-02：原 `statusLabel`（JBLabel）已删——自 M36 引入起就从未进过任何容器（无 add 调用），
+    // 面板全部状态（EMPTY/LOADING/ERROR/SUCCESS）都经下方 infoLabel 单行展示，不存在独立的
+    // 「状态行 + 信息行」分工；留着只会让后来者以为还有一条没接线的状态行。
     private val infoLabel = JBLabel().apply {
         foreground = JBColor.GRAY
         border = JBUI.Borders.empty(1, 4)

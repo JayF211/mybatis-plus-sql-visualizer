@@ -104,8 +104,8 @@ class ExecDocGateIntegrationTest : BasePlatformTestCase() {
         ds.javaClass.getDeclaredMethod("setDriverRef", String::class.java).apply { isAccessible = true }
             .invoke(ds, "mysql.8")
         ds.resolveDriver()
-        // T-ExecDocGate：驱动种子 + 数据源显式携带驱动 jar classpath（背景与 API 实证见助手 KDoc）
-        DbIntegrationSeedSupport.wireDriverClasspath(ds)
+        // T-TestDbDriver：驱动种子文件 + 驱动 artifact 版本钉定（管线全貌与 API 实证见助手 KDoc）
+        DbIntegrationSeedSupport.prepareDriverPipeline()
         ds.workingDir = project.basePath
         ds.passwordStorage = LocalDataSource.Storage.MEMORY
         mgr.addDataSource(ds)
@@ -237,4 +237,13 @@ class ExecDocGateIntegrationTest : BasePlatformTestCase() {
         )
         assertExecDocSaved(sqlC, "③ 手改防抖后")
     }
+
+    override fun tearDown() {
+        runCatching { DataSourceSelector.clearPrepared() }
+        // T-TestDbDriver：object 单例 temp Psi 缓存跨用例存活，fixture 临时目录每用例一换 → 显式清（详见
+        // DataSourceSelectorIntegrationTest.tearDown 同款注释）。
+        runCatching { DataSourceSelector.clearCachedTempPsiFileForTest() }
+        super.tearDown()
+    }
+
 }
