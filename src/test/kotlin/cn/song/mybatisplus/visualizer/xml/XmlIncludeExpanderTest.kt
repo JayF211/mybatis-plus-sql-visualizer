@@ -120,4 +120,134 @@ class XmlIncludeExpanderTest {
         assertEquals("SELECT * FROM t WHERE 1 = 1 AND status = ?", compact(result.sql))
         assertEquals("status", result.mappings.single().property)
     }
+
+    // ------------------------------------------------------------------
+    // T-IC-01 轻量片段收集入口（collectFragments）：只收集不展开
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `collectFragments_只收集片段不展开语句`() {
+        val fragments = XmlMapperParser().collectFragments("""
+            <mapper namespace="n">
+              <sql id="cols">id, name</sql>
+              <sql id="cond"><if test="status != null">AND status = #{status}</if></sql>
+              <select id="s1">SELECT <include refid="cols"/> FROM t</select>
+            </mapper>
+        """.trimIndent())
+        // 只有顶层 <sql id> 入表（语句不收集）
+        assertEquals(setOf("cols", "cond"), fragments.keys)
+        assertEquals("id, name", fragments.getValue("cols"))
+        // 片段内部原样保留：动态标签不渲染、include 不展开
+        assertEquals("""<if test="status != null">AND status = #{status}</if>""", fragments.getValue("cond"))
+    }
+
+    @Test
+    fun `collectFragments_保留子标签属性与CDATA`() {
+        val fragments = XmlMapperParser().collectFragments("""
+            <mapper namespace="n">
+              <sql id="c"><![CDATA[SELECT a < 1]]> &amp; <include refid="x"/></sql>
+            </mapper>
+        """.trimIndent())
+        val text = fragments.getValue("c")
+        assertTrue("CDATA 原样保留：$text", text.contains("<![CDATA[SELECT a < 1]]>"))
+        assertTrue("文本实体按 XML 规则转义：$text", text.contains("&amp;"))
+        assertTrue("自闭合子标签原样保留：$text", text.contains("""<include refid="x"/>"""))
+    }
+
+    @Test
+    fun `collectFragments_根非mapper或非良构_返回空表`() {
+        assertTrue(XmlMapperParser().collectFragments("<configuration><sql id=\"a\">x</sql></configuration>").isEmpty())
+        assertTrue(XmlMapperParser().collectFragments("<mapper><select id=\"s\">").isEmpty())
+    }
+
+    // ------------------------------------------------------------------
+    // T-IC-02 跨命名空间片段（CrossNamespaceFragments 注入展开）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `跨命名空间refid_注入片段表后展开`() {
+        // 目标片段文本取自 collectFragments 产物（序列化 → 重新解析往返）
+        val external = XmlMapperParser().collectFragments("""
+            <mapper namespace="base">
+              <sql id="Cols"><if test="status != null">AND status = #{status}</if></sql>
+            </mapper>
+        """.trimIndent()).getValue("Cols")
+        val parsed = XmlMapperParser().parse(
+            """
+            <mapper namespace="n">
+              <select id="s1">SELECT * FROM t WHERE 1 = 1 <include refid="base.Cols"/></select>
+            </mapper>
+            """.trimIndent(),
+            CrossNamespaceFragments(fragments = mapOf("base.Cols" to external)),
+        )
+        val m = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
+        assertTrue("跨文件片段应展开且无错误：${m.errors}", m.errors.isEmpty())
+        assertEquals("SELECT * FROM t WHERE 1 = 1 AND status = ?", compact(m.renderSql().sql))
+    }
+
+    @Test
+    fun `跨命名空间片段_property穿透`() {
+        val parsed = XmlMapperParser().parse(
+            """
+            <mapper namespace="n">
+              <select id="s1">SELECT <include refid="base.AliasCol"><property name="alias" value="t1"/></include> FROM t</select>
+            </mapper>
+            """.trimIndent(),
+            CrossNamespaceFragments(fragments = mapOf("base.AliasCol" to "${'$'}{alias}.id, ${'$'}{alias}.name")),
+        )
+        val m = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
+        assertTrue(m.errors.isEmpty())
+        assertEquals("SELECT t1.id, t1.name FROM t", compact(m.renderSql().sql))
+    }
+
+    @Test
+    fun `跨命名空间片段_跨文件环检测`() {
+        val parsed = XmlMapperParser().parse(
+            """
+            <mapper namespace="n">
+              <select id="s1">SELECT * FROM t <include refid="b.F2"/></select>
+            </mapper>
+            """.trimIndent(),
+            CrossNamespaceFragments(
+                fragments = mapOf(
+                    "b.F2" to """<include refid="a.F1"/>y""",
+                    "a.F1" to """<include refid="b.F2"/>x""",
+                ),
+            ),
+        )
+        val m = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
+        assertTrue("跨文件环应报错：${m.errors}", m.errors.any { it.contains("cycle") || it.contains("too deep") })
+        // 环截断后 include 不残留（渲染不报 Unknown element）
+        assertTrue(compact(m.renderSql().sql).startsWith("SELECT * FROM t"))
+    }
+
+    @Test
+    fun `跨命名空间片段_解析失败原因入警示并移除`() {
+        val parsed = XmlMapperParser().parse(
+            """
+            <mapper namespace="n">
+              <select id="s1">SELECT * FROM t <include refid="other.SqlId"/></select>
+            </mapper>
+            """.trimIndent(),
+            CrossNamespaceFragments(failures = mapOf("other.SqlId" to "未找到 namespace 为 other 的 mapper 文件")),
+        )
+        val m = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
+        assertTrue("警示应含具体原因：${m.errors}", m.errors.any { it.contains("未找到 namespace 为 other") })
+        assertEquals("SELECT * FROM t", compact(m.renderSql().sql))
+    }
+
+    @Test
+    fun `跨命名空间片段_文本非良构_降级不中断`() {
+        val parsed = XmlMapperParser().parse(
+            """
+            <mapper namespace="n">
+              <select id="s1">SELECT * FROM t <include refid="base.Bad"/></select>
+            </mapper>
+            """.trimIndent(),
+            CrossNamespaceFragments(fragments = mapOf("base.Bad" to """<if test="a">AND a = 1""")),
+        )
+        val m = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
+        assertTrue("片段文本无法解析应报错：${m.errors}", m.errors.any { it.contains("无法解析为 XML") })
+        assertEquals("SELECT * FROM t", compact(m.renderSql().sql))
+    }
 }

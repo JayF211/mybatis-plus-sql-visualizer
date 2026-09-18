@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
+import cn.song.mybatisplus.visualizer.psi.XmlCrossNsFragmentResolver
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.xml.MockObject
 import cn.song.mybatisplus.visualizer.xml.XmlEwExpander
@@ -25,6 +26,9 @@ import com.intellij.psi.search.GlobalSearchScope
  * - 参数对照表复用 [ParameterReplacer.buildParamTable]（`#{}` 属性名清单，顺序对应 `?`）；
  * - T-M25.2：传入 [project] 时解析 `@class@field` 静态常量引用（用户项目常量类字段初始值，
  *   经 PSI 常量求值器取值）注入渲染——MyBatis mapper 常见 OGNL 常量写法。
+ * - T-IC-02：传入 [project] 时另经 [XmlCrossNsFragmentResolver] 解析跨命名空间 include
+ *   （`refid="otherNamespace.sqlId"`）并注入展开；无 [project]（纯文本链）传空表，
+ *   行为与改动前逐字节一致。
  */
 object XmlPreviewService {
 
@@ -35,7 +39,9 @@ object XmlPreviewService {
         entityContext: SqlCompletionContext? = null,
     ): PreviewResult {
         val (model, staticWarnings) = try {
-            val parsed = XmlMapperParser().parse(fileText)
+            // T-IC-02：跨命名空间 include 片段表（无 project → 空表，纯文本链行为不变）
+            val crossNamespace = XmlCrossNsFragmentResolver.resolve(fileText, project)
+            val parsed = XmlMapperParser().parse(fileText, crossNamespace)
             val statement = parsed.statements.firstOrNull { it.id == statementId } ?: parsed.statements.firstOrNull()
                 ?: return emptyResult("未找到可预览的 SQL 语句（mapper 中无 select/insert/update/delete）。")
             val warnings = mutableListOf<String>()
