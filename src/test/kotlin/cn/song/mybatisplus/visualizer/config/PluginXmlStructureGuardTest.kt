@@ -13,7 +13,8 @@ import org.junit.Test
  *  - `<action` 缺 `class=`：整个插件无法加载（bug-fixes/project-plugin-xml-kotlin-optional.md）；
  *  - description 内嵌外链 `<img`：Marketplace 302 防盗链全部图挂（pitfalls/pitfall-gitee-hotlink-302.md）；
  *  - `projectConfigurable` 与父级同名套娃（bug-fixes/project-settings-no-nested-configurable.md）；
- *    当前架构为 applicationConfigurable 文件夹 + 子页，不注册 projectConfigurable；
+ *    T-SettingsTruth P4 起项目级设置页合法注册（parentId=tools 顶层），守卫收窄为
+ *    「不得挂应用级 configurable 之下 + id 不与 applicationConfigurable 重复」；
  *  - `completion.contributor` 缺 `language=`：全语言注册不被调度、静默失效
  *    （bug-fixes/project-native-sql-highlighting.md，M34 补全失效根因之一）；
  *  - `notificationGroup` 带 `displayName=`：NotificationGroupEP 无该属性（243 javap 实证），
@@ -77,13 +78,43 @@ class PluginXmlStructureGuardTest {
 
     @Test
     fun `不存在projectConfigurable注册`() {
+        // T-SettingsTruth P4：项目级设置页已合法注册（parentId=tools 顶层，与全局页平级）。
+        // 保留守卫但收窄为「防套娃」：projectConfigurable 不得挂在应用级 configurable
+        // （id=cn.song.mybatisplus.visualizer.settings）之下——平台限制，项目级节点挂应用级
+        // configurable 之下不渲染（bug-fixes/project-settings-no-nested-configurable.md）。
         for ((name, xml) in strippedXmls()) {
+            val bad = tagsOf(xml, "projectConfigurable").filter {
+                it.contains("""parentId="cn.song.mybatisplus.visualizer.settings"""")
+            }
             assertHolds(
-                "$name 出现 projectConfigurable（防与 applicationConfigurable 同 id 同 key 套娃；" +
-                    "如需项目级分区页，本守卫连同套娃断言一起改造）",
-                !xml.contains("<projectConfigurable"),
+                "$name 存在挂在应用级 configurable 之下的 projectConfigurable（防套娃；" +
+                    "项目级须挂 tools 顶层与全局页平级）：$bad",
+                bad.isEmpty(),
             )
+            // 项目级注册与全局页 id 不得重复
+            val projIds = tagsOf(xml, "projectConfigurable")
+                .mapNotNull { Regex("""id="([^"]+)"""").find(it)?.groupValues?.get(1) }
+            val appIds = tagsOf(xml, "applicationConfigurable")
+                .mapNotNull { Regex("""id="([^"]+)"""").find(it)?.groupValues?.get(1) }
+            val dup = projIds.intersect(appIds.toSet())
+            assertHolds("$name projectConfigurable 与 applicationConfigurable id 重复：$dup", dup.isEmpty())
         }
+    }
+
+    @Test
+    fun `项目级设置页已注册且挂tools顶层`() {
+        // T-SettingsTruth P4 接线守卫：ProjectPluginSettingsConfigurable 必须注册为
+        // projectConfigurable 且 parentId=tools（防回归为死类）
+        val xml = strippedXmls().first { it.first == "plugin.xml" }.second
+        val proj = tagsOf(xml, "projectConfigurable").filter {
+            it.contains("""instance="cn.song.mybatisplus.visualizer.config.ProjectPluginSettingsConfigurable"""")
+        }
+        assertHolds("项目级设置页 projectConfigurable 注册数应为 1，实际 ${proj.size}", proj.size == 1)
+        assertHolds(
+            "项目级设置页必须挂 tools 顶层（不得挂应用级 configurable 之下）",
+            proj[0].contains("""parentId="tools""""),
+        )
+        assertHolds("项目级设置页须声明 bundle+key 本地化", proj[0].contains("bundle=") && proj[0].contains("key="))
     }
 
     @Test

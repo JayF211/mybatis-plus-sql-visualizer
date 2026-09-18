@@ -97,6 +97,14 @@
                                  key="configurable.settings.displayName"
                                  instance="cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable"/>
 
+        <!-- T-SettingsTruth P4：项目级设置页（project-level）——项目级 configurable 不得挂在
+             应用级 configurable 之下（平台限制），挂 tools 顶层与全局页平级 -->
+        <projectConfigurable parentId="tools"
+                             id="cn.song.mybatisplus.visualizer.settings.project"
+                             bundle="messages.MpSqlVisualizerBundle"
+                             key="configurable.settings.project.displayName"
+                             instance="cn.song.mybatisplus.visualizer.config.ProjectPluginSettingsConfigurable"/>
+
         <!-- 子页面顺序由 groupWeight 决定：平台 Weighted.COMPARATOR 按 weight 降序优先、displayName
              自然比较兜底；不设 weight 时 displayName 比较会随插件语言变化导致中英文子项顺序不一致
              （中文按码点序重排），故显式声明与声明序一致的递减 weight（ui=50 → about=10）。

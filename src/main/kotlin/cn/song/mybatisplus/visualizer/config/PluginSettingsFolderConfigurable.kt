@@ -420,6 +420,11 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.dataPermissionMockCondition"), b.message("settings.dataPermissionMockCondition.tip"), "settings.section.preview", p))
             fields.add(SearchableField(b.message("settings.reverseWrapperFormat"), b.message("settings.reverseWrapperFormat.tip"), "settings.section.preview", p))
             fields.add(SearchableField(b.message("settings.reverseManualEntitySelection"), b.message("settings.reverseManualEntitySelection.tip"), "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.verticalPairAnnotation"), "", "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.autoFold.enabled"), b.message("settings.autoFold.enabled.tip"), "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.autoFold.threshold"), b.message("settings.autoFold.threshold.tip"), "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.literalParamRecovery"), "", "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.preview.jdbc"), b.message("settings.preview.jdbc.tip"), "settings.section.preview", p))
 
             // 表名映射
             val t = TableMappingConfigurable::class.java
@@ -432,7 +437,6 @@ class PluginSettingsFolderConfigurable : Configurable {
 
             // SQL 日志
             val l = SqlLogConfigurable::class.java
-            fields.add(SearchableField(b.message("settings.log.filterBar"), b.message("settings.log.filterBar.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.sqlPrefix"), b.message("settings.log.sqlPrefix.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.paramPrefix"), b.message("settings.log.paramPrefix.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.mixedPrefix"), b.message("settings.log.mixedPrefix.tip"), "settings.section.sqlLog", l))
@@ -455,6 +459,13 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.log.autoSave"), b.message("settings.log.autoSave.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.autoSave.path"), b.message("settings.log.autoSave.path.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.autoSave.pattern"), b.message("settings.log.autoSave.pattern.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.autoSave.maxFiles"), b.message("settings.log.autoSave.maxFiles.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.timestampSource"), b.message("settings.log.timestampSource.log.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("log.list.displayMode"), b.message("log.list.displayMode.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.log.crudColor.style"), b.message("settings.log.crudColor.style.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.enhancedCapture"), b.message("settings.enhancedCapture.status"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.enhancedCapture.desensitize"), "", "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.sourceFrameSkipPrefixes"), b.message("settings.sourceFrameSkipPrefixes.tip"), "settings.section.sqlLog", l))
 
             // 界面与操作
             val u = UiActionsConfigurable::class.java
@@ -462,6 +473,7 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.language"), "", "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.shortcut"), b.message("settings.shortcut.tip"), "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.shortcut.sqlToJava"), "", "settings.section.ui", u))
+            fields.add(SearchableField(b.message("settings.joinDiagramNative"), b.message("settings.joinDiagramNative.tip"), "settings.section.ui", u))
 
             // 关于
             val a = AboutConfigurable::class.java

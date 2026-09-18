@@ -13,6 +13,7 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
+import com.intellij.util.messages.Topic
 import com.sun.tools.attach.VirtualMachine
 import java.io.DataInputStream
 import java.io.EOFException
@@ -41,6 +42,13 @@ import java.util.concurrent.atomic.AtomicLong
  * - 在线态：最近 [AgentProtocol.ONLINE_WINDOW_MS] 内有心跳/事件（§4.3）。
  * - 随 project dispose 摘除：会话全关 + 连接池线程停转。
  */
+/**
+ * T-SettingsTruth P2：增强捕获状态行广播（app 级 Topic，设置页面板订阅后刷新状态行）。
+ */
+interface AgentStatusListener {
+    fun onStatusChanged()
+}
+
 @Service(Service.Level.PROJECT)
 class AgentManager(private val project: Project) : Disposable {
 
@@ -61,6 +69,13 @@ class AgentManager(private val project: Project) : Disposable {
         private const val ATTACH_SETTLE_DELAY_MS = 3_000L
 
         fun getInstance(project: Project): AgentManager = project.getService(AgentManager::class.java)
+
+        /** T-SettingsTruth P2：增强捕获状态变更 Topic（app 级；仿 PluginSettings.SETTINGS_CHANGE_TOPIC）。 */
+        @JvmField
+        val AGENT_STATUS_TOPIC: Topic<AgentStatusListener> = Topic.create(
+            "MpSqlVisualizerAgentStatusChange",
+            AgentStatusListener::class.java,
+        )
     }
 
     /** 在线态：任一会话活跃且最近窗口内有心跳/事件。UI 状态行/接管切换依据。 */
@@ -296,6 +311,9 @@ class AgentManager(private val project: Project) : Disposable {
         runCatching { session.sendConfig(disabled = !active) }
             .onFailure { LOG.warn("attachToPid: 初始 CONFIG 下发失败（pid=$pid）", it) }
         updateOnline()
+        // T-SettingsTruth P2：attach 成功 → 状态行「已挂载 pid=x」
+        everAttached.set(true)
+        publishStatusChanged()
         return true
     }
 
@@ -387,6 +405,35 @@ class AgentManager(private val project: Project) : Disposable {
         if (!online) LogTimeCorrelator.clear()
     }
 
+    /**
+     * T-SettingsTruth P2：状态行文案（设置页增强捕获状态行展示）。
+     * - null = 无活动会话（无状态行叙事）；
+     * - 有活跃会话 =「已挂载 pid=x[,y]」；
+     * - 曾成功挂载但会话已中断（掉线摘除 / shutdownAll 回落后）=「连接中断，已回落控制台捕获」。
+     * 只读内存集合（CopyOnWriteArrayList/ConcurrentHashMap），任意线程安全。
+     */
+    internal fun statusSummary(): String? {
+        val live = sessions.filter { it.alive }
+        if (live.isNotEmpty()) {
+            return live.joinToString(prefix = "已挂载 ", separator = ",") { "pid=${it.pid}" }
+        }
+        if (everAttached.get()) {
+            return "连接中断，已回落控制台捕获"
+        }
+        return null
+    }
+
+    /** T-SettingsTruth P2：是否发生过成功挂载（区分「从未挂载」与「挂载后中断回落」）。 */
+    private val everAttached = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** T-SettingsTruth P2：状态迁移点广播（attach 成功 / sweepOffline 摘除 / shutdownAll）。 */
+    private fun publishStatusChanged() {
+        runCatching {
+            com.intellij.openapi.application.ApplicationManager.getApplication()
+                .messageBus.syncPublisher(AGENT_STATUS_TOPIC).onStatusChanged()
+        }.onFailure { LOG.warn("publishStatusChanged 广播失败（非致命）", it) }
+    }
+
     /** 在线态巡检（5s）：心跳窗口过期/连接死亡 → 会话摘除 → 桥回落。internal 为同模块守护测试缝（T-PS4-03）。 */
     internal fun sweepOffline() {
         val dead = sessions.filter { !it.alive }
@@ -397,6 +444,8 @@ class AgentManager(private val project: Project) : Disposable {
             // 无法重挂；[shutdownAll] 的全表清空语义保留不动。
             dead.forEach { attachedPids.remove(it.pid) }
             updateOnline()
+            // T-SettingsTruth P2：掉线摘除 → 状态行「连接中断，已回落控制台捕获」
+            publishStatusChanged()
         }
     }
 
@@ -421,6 +470,8 @@ class AgentManager(private val project: Project) : Disposable {
         // T-PS4-03：关闭开关同时清排队去抖表——关后不应残留排队记忆（3s 窗内的重复启动照常重判）
         pendingPids.clear()
         updateOnline()
+        // T-SettingsTruth P2：回落链完成 → 状态行「连接中断，已回落控制台捕获」
+        publishStatusChanged()
     }
 
     /** 脱敏开关下发（设置变更）。disabled 跟随当前监听状态（B2：不写死 false——监听关闭时改设置不得重置为采集）。 */
