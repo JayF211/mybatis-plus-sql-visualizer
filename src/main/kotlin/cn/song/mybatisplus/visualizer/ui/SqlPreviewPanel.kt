@@ -2483,6 +2483,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 val prev = ed.document.getText(TextRange.create(insertEnd - 1, insertEnd)).firstOrNull() ?: return
                 if (!prev.isLetterOrDigit() && prev != '_') { return }
                 autoPopupScheduled = true
+                // write-safe: 同 SqlInputEditor.bindAutoPopup——本拍只由**用户输入活动**派生
+                // （程序性写入经 suppressAutoPopup 抑制，不调度补全），无进度模态时平台取模态链
+                // （defaultModalityImpl）落 NON_MODAL（恒 write-safe，见 DocWriteContext KDoc）；
+                // commitDocument 只做 PSI 同步、不改文档文本。改投递为 nonModal 会把补全弹窗延后到
+                // 模态关闭后，输入期补全退化。
                 ApplicationManager.getApplication().invokeLater {
                     autoPopupScheduled = false
                     val ed2 = editor ?: return@invokeLater
