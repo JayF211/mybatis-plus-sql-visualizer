@@ -34,6 +34,12 @@ class SqlLogAutoSaver(
      * listFiles+stat+排序。测试注入小值/可变时钟用。
      */
     internal val pruneMinIntervalMs: Long = DEFAULT_PRUNE_MIN_INTERVAL_MS,
+    /**
+     * T-PS4-13：configure 路径 close 时单次同步排水条数上限（默认 500）——调用线程常为 EDT，
+     * 风暴在途积压大时限批排水，超出部分留在队列由后续 submit 重建的写线程补写（不丢条）。
+     * 测试注入小值用；dispose 路径走无参 close 全量排水不受此限。
+     */
+    internal val configureDrainLimit: Int = DEFAULT_CONFIGURE_DRAIN_LIMIT,
 ) {
 
     private var writer: BufferedWriter? = null
@@ -202,12 +208,20 @@ class SqlLogAutoSaver(
         return stem
     }
 
-    /** close 前同步清空在途队列（不丢条；close 持有同一监视器，写任务串行）。 */
-    private fun drainPendingSync() {
+    /**
+     * close 前同步排水在途队列（close 持有同一监视器，与写任务串行；不丢条）。
+     * T-PS4-13：maxEntries 限单次同步排水批量（configure 路径默认 [configureDrainLimit]，
+     * EDT 不承担整批磁盘写）——只 poll 到上限为止，**超出部分留在队列不清空**，
+     * 由后续 submit → ensureExecutor 重建的写线程经 drainAndWrite 补写；<=0 表示本轮不排水。
+     */
+    private fun drainPendingSync(maxEntries: Int) {
+        if (maxEntries <= 0) return
+        var drained = 0
         val batch = mutableListOf<LogSqlEntry>()
-        while (true) {
+        while (drained < maxEntries) {
             val e = pendingEntries.poll() ?: break
             batch.add(e)
+            drained++
         }
         if (batch.isNotEmpty()) writeBatch(batch)
     }
@@ -221,7 +235,8 @@ class SqlLogAutoSaver(
      */
     @Synchronized
     fun configure(customPath: String, pattern: String, projectBasePath: String?, maxFiles: Int = 0) {
-        close()
+        // T-PS4-13：configure 链调用线程常为 EDT（设置变更）——限批同步排水防长批磁盘写阻塞
+        close(configureDrainLimit)
         saveDir = resolveDir(customPath, projectBasePath)
         fileNamePattern = pattern.ifBlank { PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
         this.maxFiles = maxFiles
@@ -398,18 +413,25 @@ class SqlLogAutoSaver(
     /** 当前打开的保存文件（测试访问 + 状态展示用）。 */
     fun currentFile(): File? = currentFile
 
+    /** T-PS4-13 测试访问器：在途队列余量（限批排水后未落盘条目数）。 */
+    internal fun pendingCount(): Int = pendingEntries.size
+
     /**
      * 关闭文件句柄（manager dispose 或路径变更时调用）。
-     * T-Perf-12：先同步清空在途队列（不丢条），再停写线程、关句柄；
+     * T-Perf-12：先同步排水在途队列（不丢条），再停写线程、关句柄；
      * 后续 configure/submit 可重建执行器。
+     * T-PS4-13：[maxDrainEntries] 限单次同步排水批量——configure 路径传 [configureDrainLimit]
+     * （EDT 限批），超出上限的条目**留在队列不清空**（旧实现此处 clear 会把余量丢掉），
+     * 后续 submit → ensureExecutor 重建写线程时由 drainAndWrite 一并补写；
+     * **dispose 路径（SqlLogManager.dispose → 无参 close）保持全量排水语义不变**（终态不丢条）。
      */
     @Synchronized
-    fun close() {
-        drainPendingSync()
+    fun close(maxDrainEntries: Int = Int.MAX_VALUE) {
+        drainPendingSync(maxDrainEntries)
         executor?.shutdownNow()
         executor = null
         drainScheduled.set(false)
-        pendingEntries.clear()
+        // T-PS4-13：不再 clear——限批排水后余量留在队列待补写；全量排水（dispose）后队列本已空
         closeWriter()
     }
 
@@ -447,5 +469,8 @@ class SqlLogAutoSaver(
 
         /** T-PS4-10：两次历史文件裁剪扫描的最小间隔——风暴期写批密集时避免重复全目录扫描。 */
         internal const val DEFAULT_PRUNE_MIN_INTERVAL_MS = 60_000L
+
+        /** T-PS4-13：configure 路径 close 单次同步排水条数上限（EDT 不承担超长批磁盘写）。 */
+        internal const val DEFAULT_CONFIGURE_DRAIN_LIMIT = 500
     }
 }
