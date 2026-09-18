@@ -8,7 +8,10 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 调用栈定位（T-M56-04 / T-AgentSourceJump / T-SourceJumpFunnel）：execute 时取一次栈，跳过框架/基础设施帧，取用户代码帧。
+ * 调用栈定位（T-M56-04 / T-AgentSourceJump / T-SourceJumpFunnel / T-PS4-09）：
+ * execute 时对本次栈快照扫描一次，跳过框架/基础设施帧，取用户代码帧；同一快照还可喂
+ * {@link StackDigest} 产摘要——产线经 {@link #locate(StackTraceElement[], ClassLoader)} 携栈出口
+ * 一次捕获两用（T-PS4-09，禁每条 SQL 两次 getStackTrace）。
  *
  * <p>三层判定（T-AgentSourceJump）：
  * <ol>
@@ -25,13 +28,21 @@ import java.util.concurrent.ConcurrentHashMap;
  * 同一个汇聚帧。对策：
  * <ol>
  *   <li><b>候选增厚</b>：{@link Frame#candidates} 每条含 [file, line, className, method] 四列（列尾追加，旧 IDE 只读前两列兼容）；</li>
- *   <li><b>缓存防合流</b>：仅 L1 目录帧命中时写缓存（安全网/上顶路径结果不缓存，每次重算——汇聚场景下一次错不能处处错）；</li>
+ *   <li><b>缓存防合流</b>：整帧缓存仅 L1 目录帧命中时写（安全网/上顶路径的<b>整帧结果</b>不缓存——汇聚场景下
+ *       「第一个调用者」的候选列会服务此后一切业务语句，一次错=处处错）；T-PS4-09 起安全网另缓存
+ *       「判定」（主位置身份+校验，候选列与行号每执行重建，不复蹈整帧合流缺陷），见 locate 内注释；</li>
  *   <li><b>上顶收敛</b>：主位置优先取首个「带调试信息」的候选，无调试信息的 null-file 帧不再顶上（M4 修复）；</li>
- *   <li><b>诊断打点</b>：{@code logLevel=info} 时输出判定路径（primaryKey / 来源路径 L1|SAFETY|PROMOTE / pool 帧），真机定谳用。</li>
+ *   <li><b>诊断打点</b>：{@code logLevel=info} 时输出判定路径（primaryKey / 来源路径 L1|SAFETY / pool 帧），真机定谳用；
+ *       仅全量判定路径（缓存双 miss）输出，缓存命中路径静默。</li>
  * </ol>
  *
- * <p>热点红线（§4.2 #5）：L1 命中的主流路径仍走调用方缓存（key = 选中帧 class#method）；缓存有界（512）。
- * 安全网路径不缓存——其重算频率上界 = 走安全网的调用方种类数（有界），不触 per-execute 全栈解析红线。
+ * <p>T-PS4-09 两段式扫描与缓存（热点红线 §4.2 #5）：
+ * <ol>
+ *   <li><b>缓存查询前移</b>：key = 首个非框架帧 class#method，前缀扫描到即查 {@link #CACHE}——
+ *       命中路径到此为止，不再全栈建 pool（原实现在 pool 构建之后才查缓存，命中白付全栈成本）；</li>
+ *   <li><b>安全网判定缓存</b>：fat jar（全 JAR 来源）恒走安全网，原实现每执行全量重扫 pool 并逐帧
+ *       {@code Class.forName} 解析来源；现按 key 缓存「判定」跳过逐帧来源解析（策略 A，详见写入点注释）。</li>
+ * </ol>
  *
  * <p>框架帧过滤规则与 IDE 侧 CallerSourceLocator 对齐（agent 侧独立副本——agent 不引 IDE 类）；
  * 动态前缀（用户登记的自研框架包名）经 CONFIG 下发，见 {@link #setExtraSkipPrefixes(String[])}。
@@ -69,8 +80,17 @@ public final class StackLocator {
     /** 候选帧上限（IDE 侧解析回退用；过深无意义且加长事件体）。T-SourceJumpFunnel：3→8——汇聚门面下深层业务帧须可见。 */
     private static final int MAX_CANDIDATES = 8;
 
+    /** 调用方整帧缓存：key = 首个非框架帧 class#method。有界（512，溢出整体清空——既有粗粒度策略）。 */
     private static final ConcurrentHashMap<String, Frame> CACHE = new ConcurrentHashMap<String, Frame>();
     private static final int CACHE_MAX = 512;
+
+    /**
+     * T-PS4-09 安全网「判定」缓存（策略 A）：key → [via, 主位置 className, 主位置 method]。
+     * 只存判定不存结果帧——整帧入缓存会冻结行号与候选列（P0-3 缺陷形态，禁）；
+     * 命中须经「身份在场」校验（见 locate），有界同 {@link #CACHE_MAX}。
+     * 包内可见 = 同包测试断言/清场通道，产线勿外用。
+     */
+    static final ConcurrentHashMap<String, String[]> SAFETY_DECISIONS = new ConcurrentHashMap<String, String[]>();
 
     public static final class Frame {
         public final String sourceFile;
@@ -78,7 +98,7 @@ public final class StackLocator {
         public final String methodKey;
         /** 栈序候选 [file, line, className, method]（T-SourceJumpFunnel 增厚至四列；≤8 条，排除主位置；IDE 侧解析回退用）。 */
         public final List<String[]> candidates;
-        /** 诊断：主位置判定路径（L1 / SAFETY / PROMOTE），info 日志与测试断言用。 */
+        /** 诊断：主位置判定路径（L1=目录帧命中 / SAFETY=安全网，上顶收敛与首帧兜底均计入 SAFETY）。info 日志与测试断言用。 */
         public final String via;
 
         Frame(String sourceFile, int line, String methodKey, List<String[]> candidates, String via) {
@@ -91,7 +111,7 @@ public final class StackLocator {
     }
 
     public static Frame locate() {
-        return locate(null);
+        return locate((ClassLoader) null);
     }
 
     /**
@@ -99,46 +119,87 @@ public final class StackLocator {
      *             用于判定帧来源是否 JAR；null 时取下线程上下文 loader。
      */
     public static Frame locate(ClassLoader hint) {
-        final ClassLoader loader = resolveLoader(hint);
-        final StackTraceElement[] stack = Thread.currentThread().getStackTrace();
-        // [0]=getStackTrace [1]=locate [2]=executeWithCapture [3]=invoke 反射帧——从 0 扫描无妨，
-        // 反射/agent 自身帧被前缀规则跳过
-        final List<String[]> pool = new ArrayList<String[]>(8);   // 非框架帧（栈序）：[file, line, className, method]
-        String lastNonFrameworkKey = null;
+        // 自捕获出口保留（兼容/测试）；产线主路径走下方携栈出口（T-PS4-09 一次捕获两用）
+        return locate(Thread.currentThread().getStackTrace(), hint);
+    }
 
-        for (StackTraceElement f : stack) {
+    /**
+     * T-PS4-09 携栈出口（一次捕获两用）：调用方已持有本线程快照时复用之——StatementHandler 用同一
+     * 快照喂本入口与 {@link StackDigest#build(StackTraceElement[])}，消除每条 SQL 第二次全栈捕获。
+     *
+     * @param stack 须为当前线程 {@code Thread.currentThread().getStackTrace()} 的原样产物
+     *              （本方法按数组内容扫描，不再自取、不校验线程归属）。
+     * @param hint  能看见应用类的 ClassLoader；null 时取下线程上下文 loader。
+     */
+    public static Frame locate(StackTraceElement[] stack, ClassLoader hint) {
+        final ClassLoader loader = resolveLoader(hint);
+        // ── 阶段一（廉价前缀扫描）：key = 首个非框架帧 class#method。
+        // [0]=getStackTrace [1]=locate 自身帧——从 0 扫描无妨，反射/agent 自身帧被前缀规则跳过
+        String entryKey = null;
+        int firstNonFramework = -1;
+        for (int i = 0; i < stack.length; i++) {
+            if (!isFrameworkFrame(stack[i].getClassName())) {
+                entryKey = stack[i].getClassName() + "#" + stack[i].getMethodName();
+                firstNonFramework = i;
+                break;
+            }
+        }
+        if (entryKey == null) {
+            return null;   // 全栈皆框架帧（原「pool 为空」语义）
+        }
+        // 缓存查询前移（T-PS4-09）：命中路径到此为止，不再全栈建 pool。
+        // 命中返回缓存整帧（行号/候选列冻结为首次入缓存时的值）——既有 L1 整帧缓存语义，行为等价保留。
+        final Frame cached = CACHE.get(entryKey);
+        if (cached != null) {
+            return cached;
+        }
+
+        // ── 阶段二（miss 才付）：非框架帧 pool（栈序）：[file, line, className, method]。
+        // 首帧（firstNonFramework 处）必入池，pool 恒非空。
+        final List<String[]> pool = new ArrayList<String[]>(8);
+        for (int i = firstNonFramework; i < stack.length; i++) {
+            final StackTraceElement f = stack[i];
             final String cn = f.getClassName();
             if (isFrameworkFrame(cn)) {
                 continue;
-            }
-            if (lastNonFrameworkKey == null) {
-                lastNonFrameworkKey = cn + "#" + f.getMethodName();
             }
             final String file = toRelativePath(cn, f.getFileName());
             final int line = f.getLineNumber() >= 0 ? f.getLineNumber() : 0;
             pool.add(new String[]{file, String.valueOf(line), cn, f.getMethodName()});
         }
-        if (pool.isEmpty()) {
-            return null;
-        }
 
-        final Frame cached = lastNonFrameworkKey == null ? null : CACHE.get(lastNonFrameworkKey);
-        if (cached != null) {
-            return cached;
-        }
-
-        // L1 来源过滤：优先取「非 JAR 来源」帧（开发态用户业务类在目录）
         String primaryFile = null;
         int primaryLine = 0;
         String primaryKey = null;
         String via = "SAFETY";
-        for (String[] c : pool) {
-            if (Boolean.FALSE.equals(loadedFromJar(c[2], loader))) {
-                primaryFile = c[0];
-                primaryLine = Integer.parseInt(c[1]);
-                primaryKey = c[2] + "#" + c[3];
-                via = "L1";
-                break;
+
+        // 安全网判定缓存（T-PS4-09 策略 A）命中：须通过「身份在场」校验——缓存的主位置身份仍出现在
+        // 本执行 pool 中才复用（即 via 一致性的廉价形态：身份在场 = 当前栈形与判定时同构），跳过
+        // 逐帧 Class.forName 来源解析。校验失败（引擎内部路径变化、无调试信息链路漂移）落回全量路径
+        // 并在写入点刷新判定。
+        final String[] decision = SAFETY_DECISIONS.get(entryKey);
+        if (decision != null) {
+            for (String[] c : pool) {
+                if (decision[1].equals(c[2]) && decision[2].equals(c[3])) {
+                    primaryFile = c[0];
+                    primaryLine = Integer.parseInt(c[1]);
+                    primaryKey = c[2] + "#" + c[3];
+                    via = decision[0];
+                    break;
+                }
+            }
+        }
+
+        // L1 来源过滤：优先取「非 JAR 来源」帧（开发态用户业务类在目录）
+        if (primaryFile == null) {
+            for (String[] c : pool) {
+                if (Boolean.FALSE.equals(loadedFromJar(c[2], loader))) {
+                    primaryFile = c[0];
+                    primaryLine = Integer.parseInt(c[1]);
+                    primaryKey = c[2] + "#" + c[3];
+                    via = "L1";
+                    break;
+                }
             }
         }
         // P0-4 上顶收敛：L1 无命中 → 优先取首个「带调试信息」的非框架帧（安全网不劣化、
@@ -180,17 +241,49 @@ public final class StackLocator {
 
         final Frame frame = new Frame(primaryFile, Math.max(primaryLine, 0),
                 simpleMethodKey(primaryKey), candidates, via);
-        // T-SourceJumpFunnel P0-3 缓存防合流：仅 L1 目录帧命中才写缓存——安全网结果若被缓存，
-        // 汇聚场景下「第一个调用者」的引擎帧会服务此后一切业务语句（一次错=处处错）。
-        // L1 命中（主流路径）仍走缓存热路径；安全网路径重算频率上界=调用方种类数，有界。
-        if ("L1".equals(via) && CACHE.size() >= CACHE_MAX) {
-            CACHE.clear();
-        }
-        if ("L1".equals(via)) {
-            CACHE.putIfAbsent(lastNonFrameworkKey, frame);
-        }
-        diagnose(lastNonFrameworkKey, frame, pool, loader);
+        writeCaches(entryKey, frame, via, primaryKey);
+        diagnose(entryKey, frame, pool, loader);
         return frame;
+    }
+
+    /**
+     * 缓存写入（T-SourceJumpFunnel P0-3 定案 + T-PS4-09 策略 A），仅全量判定路径到达：
+     *
+     * <p><b>P0-3 缓存防合流（定案依据，禁回退）</b>：整帧结果缓存会冻结「候选列 + 行号」。自研框架
+     * 汇聚门面（不经 MyBatis）下所有业务调用共享同一汇聚帧 → 同一 key——若把安全网/上顶的整帧结果
+     * 入缓存，「第一个调用者」的引擎帧与候选列会服务此后一切业务语句（一次错=处处错）。故整帧缓存
+     * 仅 L1 目录帧命中才写（主流开发态路径），与 T-PS4-09 前一致。
+     *
+     * <p><b>T-PS4-09 策略 A（安全网判定缓存）为何不复蹈 P0-3</b>：缓存的是「判定」（via + 主位置身份
+     * class#method），不是结果帧——候选列与行号每执行从当前栈重建，各调用方自身的业务帧信息永不冻结，
+     * 合流缺陷赖以发生的「整帧服务后续一切调用」不成立。且命中须校验主位置身份仍在本执行 pool 中
+     * （不在即全量重算并刷新判定），引擎内部路径变化可自愈。被冻结的身份本身对共享 key 的调用方是
+     * 确定性相同的（安全网取首个带调试信息帧，共享汇聚帧在各调用方栈中同形，重算也得到同一身份），
+     * 冻结它不产生调用方间分歧。原实现安全网每执行全量重扫的所谓「上界=调用方种类数」并不成立——
+     * fat jar 下每条 SQL 都在重扫（per-execute 全栈解析），正是本策略消除的成本。
+     *
+     * <p>已知残面（如实记录）：混合部署下同 key 先被全 JAR 调用链写成 SAFETY 判定、后被含目录帧的
+     * 调用链命中时，判定在场会掩盖一次 L1 机会（主位置落到 JAR 帧）——候选列仍含该目录帧兜底，
+     * 可恢复；且共享 key 的合流面在既有 L1 整帧缓存下本就存在（先到的 L1 结果同样服务后续调用者），
+     * 非本策略新增。
+     */
+    private static void writeCaches(String entryKey, Frame frame, String via, String primaryKey) {
+        if ("L1".equals(via)) {
+            if (CACHE.size() >= CACHE_MAX) {
+                CACHE.clear();
+            }
+            CACHE.putIfAbsent(entryKey, frame);
+            // 同 key 的 SAFETY 判定已被 L1 证伪，清除（判定缓存与整帧缓存互斥合流）
+            SAFETY_DECISIONS.remove(entryKey);
+        } else {
+            if (SAFETY_DECISIONS.size() >= CACHE_MAX) {
+                SAFETY_DECISIONS.clear();
+            }
+            // 拆开存 className/method，命中校验按两段比较，免逐帧拼串
+            final int hash = primaryKey.indexOf('#');
+            SAFETY_DECISIONS.put(entryKey,
+                    new String[]{via, primaryKey.substring(0, hash), primaryKey.substring(hash + 1)});
+        }
     }
 
     /** T-SourceJumpFunnel P0-1 诊断打点：logLevel=info 时输出判定路径（真机定谳 M2/M3/M4 用），默认档零输出。 */
@@ -243,11 +336,27 @@ public final class StackLocator {
         return className.contains("$Proxy");
     }
 
+    /** T-PS4-09 测试注入口（包内可见）：非 null 时替代默认来源判定（fat jar 模拟/计数探针）；产线恒 null，仅一次 volatile 读。 */
+    interface JarOriginProbe {
+        Boolean isFromJar(String className, ClassLoader loader);
+    }
+
+    static volatile JarOriginProbe jarOriginProbe;
+
     /**
      * 帧来源是否 JAR（L1）：true=第三方依赖；false=目录（开发态用户业务代码）；null=未知
      * （类不可加载 / codeSource 缺失——不武断判为用户帧，仅在安全网阶段兜底采用）。
      */
     public static Boolean loadedFromJar(String className, ClassLoader loader) {
+        final JarOriginProbe probe = jarOriginProbe;
+        if (probe != null) {
+            return probe.isFromJar(className, loader);
+        }
+        return defaultLoadedFromJar(className, loader);
+    }
+
+    /** 默认来源判定（codeSource 路径形态；注入口非 null 时被替代）。 */
+    static Boolean defaultLoadedFromJar(String className, ClassLoader loader) {
         if (className == null) {
             return null;
         }
@@ -262,6 +371,12 @@ public final class StackLocator {
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    /** 仅供同包测试清场（两缓存为全局静态，跨用例隔离用）；产线勿调。 */
+    static void clearLocatorCachesForTest() {
+        CACHE.clear();
+        SAFETY_DECISIONS.clear();
     }
 
     private static ClassLoader resolveLoader(ClassLoader hint) {
