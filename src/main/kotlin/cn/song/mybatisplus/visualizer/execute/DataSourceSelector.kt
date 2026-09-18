@@ -49,6 +49,13 @@ object DataSourceSelector {
     private const val LAST_RUNNER_KEY = "mpsql.visualizer.last.runner"
 
     /**
+     * T-SI-02：last-used 记忆的**身份键**（数据源 UUID，LocalDataSource.getUniqueId）。
+     * 旧键（显示名）继续读写，兼容一个版本后废弃（见 CHANGELOG [Unreleased]）；命中判定以
+     * UUID 为主、显示名为回退——显示名同名多条时旧实现静默取首条，属「猜」，已弃。
+     */
+    private const val LAST_RUNNER_ID_KEY = "mpsql.visualizer.last.runner.id"
+
+    /**
      * M36.5.21b：构建版本戳——与源码同文件维护，每次执行打日志。
      * 判定法：沙盒日志若与本串不符 = 沙盒跑旧 jar（未重启 IDE），先重启再排查。
      */
@@ -305,16 +312,27 @@ object DataSourceSelector {
         LOG.info("[M36] runners=${runners.size}")
 
         // M36.5：last-used 数据源静默命中（仅 prepareConsole 路径；显式执行保持弹窗可选）
+        // T-SI-02：命中判定升级为「UUID 精确命中 → 名字唯一命中」，同名多条判歧义弃记忆走弹窗
+        //（旧实现 firstOrNull 静默取首条，选错数据源时用户无从察觉）。
         if (!executeAfterPrepare) {
-            val last = lastRunnerName(project)
-            if (last != null) {
-                runners.firstOrNull { getRunnerName(it) == last }?.let { matched ->
-                    LOG.info("[M36] silent reuse last runner: $last")
-                    chosenRunnerName = last
-                    runRunner(project, matched, silent = true, onError)
-                    callback?.invoke(true)
-                    return
-                }
+            val memory = lastUsedRunner(project)
+            val resolution = resolveLastUsedRunnerIndex(memory, runners.map { getRunnerName(it) }) { id ->
+                runCatching {
+                    DataSourceSettings.getDataSourceById(project, id)?.let { DataSourceSettings.getName(it) }
+                }.getOrNull()
+            }
+            val matched = resolution.index?.let { runners.getOrNull(it) }
+            if (matched != null) {
+                val matchedName = getRunnerName(matched)
+                LOG.info("[M36] silent reuse last runner: $matchedName (memory id=${memory.dataSourceId})")
+                chosenRunnerName = matchedName
+                runRunner(project, matched, silent = true, onError)
+                callback?.invoke(true)
+                return
+            }
+            if (resolution.ambiguous) {
+                LOG.info("[M36] last-used memory ambiguous (id=${memory.dataSourceId}, name=${memory.displayName}) - drop memory, show popup")
+                forgetLastRunner(project)
             }
         }
 
@@ -379,9 +397,16 @@ object DataSourceSelector {
         val valid = runCatching {
             console.javaClass.getMethod("isValid").invoke(console) == true && !editor.isDisposed
         }.getOrDefault(false)
-        if (!valid) {
-            LOG.info("[M36] shared console invalid (ds=$dsName), drop and rebuild")
+        // T-SI-01：复用身份 fail-closed——复用判定从「显示名相等 + isValid」升级为「显示名相等 +
+        // isValid + 三分量探测的 dsInFacade 分量」（复用 attach 路径既有探测，不重造）。复用是
+        // 低频路径，探测是内存级反查（DbPsiFacade.findDataSource），成本可接受。
+        // 身份被拒时弃共享会话并清 last-used 记忆——旧实现只丢会话不清记忆，下一轮仍会按显示名
+        // 静默命中（同名数据源场景直接钉错库），与 attach 路径同规：身份不可信即弃，不猜。
+        val identity = probeConsoleValidity(console, project, LOG)
+        if (!valid || !reuseIdentityAccepted(identity)) {
+            LOG.warn("[M36] shared console identity rejected (ds=$dsName, isValid=$valid, $identity), drop session")
             dropSharedConsole()
+            if (identity?.dsInFacade == false) forgetLastRunner(project)
             return false
         }
         runCatching {
@@ -1637,7 +1662,9 @@ object DataSourceSelector {
             // SplitPane）→ 回退 buildConsoleSplitPane 重建 → A4 身份漂移。预留给执行复用。
             sharedFullComponent = fullComponent
             sharedDataSourceName = dataSourceName
-            if (dataSourceName != null) rememberRunnerName(project, dataSourceName)
+            // T-SI-02：控制台已建，数据源 UUID 从此可取（LocalDataSource.getUniqueId）——
+            // 记忆升级为「UUID + 显示名」双字段，下次预览按身份命中而非猜名字
+            if (dataSourceName != null) rememberRunner(project, dataSourceName, consoleDataSourceId(console))
 
             // 4.7 内嵌（同步，已在 EDT）
             onConsole?.invoke(component)
@@ -1693,6 +1720,14 @@ object DataSourceSelector {
         val valid: Boolean get() = !disposed && viewValid != false && dsInFacade != false
         override fun toString(): String = "disposed=$disposed, viewValid=$viewValid, dsInFacade=$dsInFacade, valid=$valid"
     }
+
+    /**
+     * T-SI-01：共享会话复用身份判定（纯函数，默认 test 通道可覆盖）——在 `console.isValid()`
+     * 与编辑器未释放之外，把 [ConsoleValidity] 的 `dsInFacade` 分量作为**独立判据**接进复用
+     * 判定（复用 attach 路径既有探测，不重造）。`identity == null` 表示探测不可用（降级），
+     * 按现状放行——探测失败不得把正常复用打成重建（宁可用旧会话，也不每次预览重建连接）。
+     */
+    internal fun reuseIdentityAccepted(identity: ConsoleValidity?): Boolean = identity == null || identity.valid
 
     /** T-PreviewExecDs-03 F2：反射探测 console 三分量有效性（任一环节失败降级 null，绝不阻断）。 */
     private fun probeConsoleValidity(console: Any, project: Project, LOG: com.intellij.openapi.diagnostic.Logger): ConsoleValidity? =
@@ -2867,16 +2902,92 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
     }
 
     /** M36.5：读取 last-used 数据源名（prepareConsole 静默复用；异常兜底 null）。 */
-    private fun lastRunnerName(project: Project): String? = runCatching {
-        com.intellij.ide.util.PropertiesComponent.getInstance(project).getValue(LAST_RUNNER_KEY)
-    }.getOrNull()
+    private fun lastRunnerName(project: Project): String? = lastUsedRunner(project).displayName
 
     /** M36.5：记录 last-used 数据源名。 */
     private fun rememberRunnerName(project: Project, name: String) {
+        rememberRunner(project, name, null)
+    }
+
+    /**
+     * T-SI-02：last-used 记忆（UUID 身份 + 显示名，双字段）。
+     * [dataSourceId] 来自 LocalDataSource.getUniqueId（[DataSourceSettings] 既有反射封装）。
+     */
+    internal data class LastUsedMemory(val dataSourceId: String?, val displayName: String?)
+
+    /**
+     * T-SI-02：记忆命中解析结果。[index] 命中 runner 下标；[ambiguous] 表示「记忆在、但同名
+     * 多条无法唯一对应」——调用方据此清记忆走弹窗（不猜首条）。
+     */
+    internal data class LastUsedResolution(val index: Int?, val ambiguous: Boolean)
+
+    /**
+     * T-SI-02：last-used 记忆命中判定（纯函数，默认 test 通道可覆盖）。
+     *
+     * 命中顺序（UUID 优先，名字回退，皆不唯一即弃）：
+     *  1. UUID 精确命中——[dataSourceNameById] 取该 UUID 当前的数据源名（数据源被改名也认，
+     *     这是 UUID 相对显示名的增益），再按该名在 runner 列表里唯一匹配；
+     *  2. 名字命中且唯一——旧键（显示名）兼容路径，升级用户无感；
+     *  3. 其余（未命中 / 同名多条）→ 弃记忆，调用方走弹窗重新选择。
+     *
+     * [dataSourceNameById] 返回 null 表示该 UUID 的数据源已不存在——UUID 分量失效，退回名字判定。
+     */
+    internal fun resolveLastUsedRunnerIndex(
+        memory: LastUsedMemory,
+        runnerNames: List<String>,
+        dataSourceNameById: (String) -> String?,
+    ): LastUsedResolution {
+        val id = memory.dataSourceId?.takeIf { it.isNotBlank() }
+        if (id != null) {
+            val dsName = runCatching { dataSourceNameById(id) }.getOrNull()
+            if (!dsName.isNullOrBlank()) {
+                val hits = runnerNames.indices.filter { runnerNames[it] == dsName }
+                if (hits.size == 1) return LastUsedResolution(hits.first(), false)
+                if (hits.size > 1) return LastUsedResolution(null, true)
+            }
+        }
+        val name = memory.displayName?.takeIf { it.isNotBlank() }
+        if (name != null) {
+            val hits = runnerNames.indices.filter { runnerNames[it] == name }
+            if (hits.size == 1) return LastUsedResolution(hits.first(), false)
+            if (hits.size > 1) return LastUsedResolution(null, true)
+        }
+        return LastUsedResolution(null, false)
+    }
+
+    /** T-SI-02：读 last-used 记忆双字段（异常兜底全空）。 */
+    private fun lastUsedRunner(project: Project): LastUsedMemory = runCatching {
+        val pc = com.intellij.ide.util.PropertiesComponent.getInstance(project)
+        LastUsedMemory(pc.getValue(LAST_RUNNER_ID_KEY), pc.getValue(LAST_RUNNER_KEY))
+    }.getOrDefault(LastUsedMemory(null, null))
+
+    /**
+     * T-SI-02：写 last-used 记忆。[dataSourceId] 取不到（弹窗路径尚无控制台）时**清掉身份键**
+     * ——留着上一轮的 UUID 会指认另一个数据源（身份说谎比没有身份更糟）。
+     */
+    private fun rememberRunner(project: Project, name: String, dataSourceId: String?) {
         runCatching {
-            com.intellij.ide.util.PropertiesComponent.getInstance(project).setValue(LAST_RUNNER_KEY, name)
+            val pc = com.intellij.ide.util.PropertiesComponent.getInstance(project)
+            pc.setValue(LAST_RUNNER_KEY, name)
+            if (dataSourceId.isNullOrBlank()) pc.unsetValue(LAST_RUNNER_ID_KEY)
+            else pc.setValue(LAST_RUNNER_ID_KEY, dataSourceId)
         }
     }
+
+    /** T-SI-02：清 last-used 记忆（两个键一起清，避免半截身份残留）。 */
+    private fun forgetLastRunner(project: Project) {
+        runCatching {
+            val pc = com.intellij.ide.util.PropertiesComponent.getInstance(project)
+            pc.unsetValue(LAST_RUNNER_KEY)
+            pc.unsetValue(LAST_RUNNER_ID_KEY)
+        }
+    }
+
+    /** T-SI-02：从已建控制台取数据源 UUID（复用 [DataSourceSettings] 既有反射封装；取不到 null）。 */
+    private fun consoleDataSourceId(console: Any?): String? = runCatching {
+        val ds = console?.javaClass?.getMethod("getDataSource")?.invoke(console) ?: return null
+        DataSourceSettings.getUniqueId(ds)
+    }.getOrNull()
 
     /**
      * 反射调用 DatabaseRunners.getAttachDataSourceRunners 获取原生 Runner 列表。
@@ -2939,9 +3050,8 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             val failMsg = MpSqlVisualizerBundle.message("execute.datasource.failed", cause.message ?: cause.toString())
             onError?.invoke(failMsg)
             if (silent) {
-                runCatching {
-                    com.intellij.ide.util.PropertiesComponent.getInstance(project).unsetValue(LAST_RUNNER_KEY)
-                }
+                // T-SI-02：两个键一起清（只清旧键会留下指认另一个数据源的 UUID 身份）
+                forgetLastRunner(project)
                 return
             }
             // 驱动缺失/连接失败等：提示用户到数据源设置解决（原生 Download Driver 弹窗由 Database 插件触发）

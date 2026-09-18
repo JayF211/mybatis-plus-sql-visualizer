@@ -74,6 +74,8 @@
 
 ### Fixed
 
+- **共享会话复用与数据源记忆不再「猜」（T-SessionIdentityGuard）**：预览执行链上有四处静默猜测，现全部收成 fail-closed。①共享控制台复用：判定接上三分量身份探测（复用 attach 路径既有探测），身份不可信即弃会话，数据源已从 facade 消失时同时清掉数据源记忆（旧实现只丢会话不清记忆，下一轮仍按显示名静默命中同名数据源）；②last-used 数据源记忆升级为「UUID 为主 + 显示名回退」双字段（旧显示名键保留读写，兼容一个版本，下个内测版后废弃），命中顺序=UUID 精确命中（数据源改名也认）→ 显示名唯一命中 → 否则弃记忆走弹窗，**同名多条数据源不再静默取首条**；③URL 未指定库的数据源不再静默跳过库上下文对齐——诊断与错误上下文行如实标注「未能确定默认库，当前=X」；④`setSearchPath` 强设后读回校验，与目标库不一致时记警告日志并附实际库（只告警不阻断，避免只读场景被对齐失败拦死）
+
 - **捕捉开关回归面板工具栏（T-CaptureBack）**：SQL 日志面板的「捕捉」按钮消失——第一轮反馈是按钮不见，第二轮截图实证按钮其实存在、只是平时不渲染。根因=界面原生化 T-UN-11 把捕捉开关从面板内工具栏迁到了工具窗标题栏（`setTitleActions`），而新 UI 下标题栏动作需悬停/激活才可见，入口在用户视角「消失」，且空态文案「点击『捕捉』」与实物位置割裂。修复=捕捉开关回迁面板工具栏首位，工厂侧移除标题栏挂载（单一入口），状态刷新沿用既定 `updateActionsImmediately` 展示链（T-UN-11 的反射 hack 退役收益保留）；顺手把「已开启 SQL 监听，等待项目运行」硬编码文案改走既有 bundle 键
 
 - **定时回归任务不再弹出真机浏览器（T-BrowserLeak2）**：用户真机 Edge 每隔一段时间自动打开 `sql-visualizer.jvtools.cn/about/feedback` 与 `example.invalid/never-opened` 两页。根因是 2026-09-11 帮助页弹浏览器第一轮修复的残余——测试 `SafeBrowserTest` 为验证「测试环境不弹浏览器」而直调这两个真实 URL，但 `SafeBrowser` 守卫写成「有 Application 且 isUnitTestMode 才短路」，纯 JUnit 无平台 Application 的测试进程反而被放行，`BrowserUtil.browse` 降级 `Desktop.browse` 直接 ShellExecute 拉起默认浏览器，定时任务每天跑全量测试即周期性弹窗。修复=守卫语义反转为 fail-safe 默认拦（`app == null || isUnitTestMode` 一律短路，真机 IDE 宿主行为零变化）；测试断言改为直接验证判定函数 `isTestEnvironment()`（不再依赖「没弹」这种不可观测副作用）；守卫测试补位——`BrowserUtil.browse` 禁用扫描扩展到 src/test、SafeBrowser fail-safe 守卫形态加锚点防回退
@@ -101,6 +103,8 @@
 - **DDL 执行后元数据缓存兜底失效（T-DdlPostInvalidate，O-17）**：执行前预判失效之外，执行监控三个收尾点（早检错误上报/结果呈现成功/超时收口）再兜底失效一次元数据缓存——执行过程中才出现的 DDL、预判漏判、中途结构变化等窗口全部关死；失败的 DDL 也可能已隐式提交，故成功与失败/超时都失效；失效动作幂等，全程次数有界
 
 ### Test
+
+- **会话身份守卫用例（T-SessionIdentityGuard，T-SI-04）**：新增 `SessionIdentityGuardTest` 23 例——复用身份拒绝（`dsInFacade=false` 弃会话 / disposed / 探测降级放行）、记忆命中（UUID 精确、UUID 改名后仍命中、UUID 优先于显示名、UUID 失效回退名字唯一、同名多条判歧义弃记忆、未命中不误判歧义）、读回校验与告警文案、URL 无库标注文案；三条主路径防回归断言在位（空记忆不干扰唯一数据源静默直跑、`describeContext` 有库分支逐字节不变、三分量全绿正常复用放行）。用例全走纯函数面，故同时进默认 test 与 testFast 快测桶；`ExecConsoleContextDegradedTest` 补 1 例（降级分支不得带 URL 无库标记）
 
 - **DML 目标表禁别名防回归守卫（T-DmlAliasGuard，O-27）**：三条 SQL 生成链（crud_sql 四件套 / 回滚 SQL / MCP crud 出口）现状零别名，本守卫把不变量锁进绿灯——「别名只允许出现在查询源位（FROM/JOIN），INSERT INTO / UPDATE / DELETE FROM 目标位禁别名」（DBX 9bf52da 同款语义位约束）；MySQL/PG/达梦三方言形态覆盖，注入别名形态守卫自证必红，生成链生产行为零改动
 
