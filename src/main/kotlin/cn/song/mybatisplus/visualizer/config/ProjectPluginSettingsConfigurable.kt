@@ -46,6 +46,12 @@ import javax.swing.JLabel
  * vs state 残值恒报已修改）。
  *
  * T-ProjectSettingsScope P2：「重置为跟随全局」按钮清除 9 项残值（总开关不动，见 [resetToGlobal]）。
+ *
+ * T-TS-FixG7（P1 同类缺陷的第二处出口，独立复核抓出）：开启态 [apply] **只写回「控件显示值 !=
+ * state 推导值」的项**。原实现无条件写回 9 项，会把「空/null = 跟随全局」的项钉成当时的全局快照
+ * （重置 → 改一项 → apply 即触发），全局值日后变更本项目不再跟随而 UI 数值不变。
+ * 语义定案：**「重置后没碰过的项继续跟随全局，碰过的项才成为覆盖」**——「碰过」以
+ * 「控件显示值是否仍等于 state 推导值」判定，与 [isModified] 同源，不引入额外的跟随标记/抑制标志。
  */
 class ProjectPluginSettingsConfigurable(private val project: Project) : Configurable {
 
@@ -261,6 +267,9 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
      *
      * 直接改 state 而非只改控件显示值：关闭态 [apply] 不写这 9 项，只改控件则残值永远清不掉；
      * 开启态把「显示的全局值」写进 state 又会变成硬覆盖值，与「跟随全局」语义相反。
+     *
+     * T-TS-FixG7：重置后控件按 P1 回灌全局值，但 [apply] 只写回「被用户动过」的项，
+     * 故回灌本身不会再把这些项钉成当时的全局快照（详见 [apply] 的 T-TS-FixG7 注释）。
      */
     private fun resetToGlobal() {
         val st = projectSettings.state
@@ -345,30 +354,71 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
 
     override fun apply() {
         val st = projectSettings.state
+        val global = globalState
         val showProject = showProjectNow()
         st.useProjectSettings = showProject
         // T-ProjectSettingsScope P1：关闭态不写 9 项——此时控件显示的是**全局生效值**，
         // 无条件写回会把全局值（以及空/null 字段的全局兜底值）当成项目自定义值钉进 state：
         // 用户重开总开关后发现自定义值已被覆盖，或「跟随全局」被悄悄改成硬覆盖值。
         if (!showProject) return
-        // T-DialectAutoInfer：哨兵项=项目级推断（true）；具体方言=手动（false + 值）。
-        // auto 分支不改 st.dialect——手动值作为记忆保留，切回手动时不必重选
+        // T-TS-FixG7：开启态**只写回「控件显示值 != state 推导值」的项**——判据与 [isModified] 的
+        // 逐项比对同源（boolDiffers/stringDiffers/expectedDialectItem），即「用户确实动过这一项」。
+        //
+        // 原实现无条件写回全部 9 项，会把「空/null = 跟随全局」的项钉成**当时的全局快照**：
+        // 开启态点「重置为跟随全局」（9 项置空 → [refreshControls] 按 P1 回灌全局值）→ 用户再改
+        // 任意一项使 isModified()==true → apply 把 9 个控件的显示值（= 全局值）写进 state →
+        // 「跟随全局」被静默改成硬覆盖：全局值日后变更本项目不再跟随，而 UI 数值与重置瞬间逐字相同，
+        // 用户看不出差别。这与 P1 要消灭的是同一类缺陷（页面语义与运行时语义不一致），只是出口在 apply。
+        //
+        // 跳过「未编辑项」不会丢用户值：非空/非 null 的 state 值经 shownBool/shownText 推导后
+        // 恒等于控件显示值，故真正改过的项（含把字段清空以回到「跟随全局」）一律仍写回。
+        // 不采用「resetToGlobal 打跟随标记 + 编辑时逐项清标记」方案：该标记只覆盖 reset 一条路径
+        // （对话框取消/重开后标记随实例丢弃，且初始打开时 state 为空的项同样会被钉成全局快照），
+        // 还要额外维护监听器与灌值抑制标志——能在同一处用纯比对表达，就不再添一份需人工同步的状态
+        // （T-RA-04 判定：标志位类状态一旦无人可信即应删除，此处无必要引入）。
         (dialectCombo?.selectedItem as? String)?.let { selected ->
-            if (selected == autoItem) {
-                st.dialectAuto = true
-            } else {
-                st.dialectAuto = false
-                st.dialect = selected
+            if (selected != expectedDialectItem(st, global, showProject)) {
+                // T-DialectAutoInfer：哨兵项=项目级推断（true）；具体方言=手动（false + 值）。
+                // auto 分支不改 st.dialect——手动值作为记忆保留，切回手动时不必重选
+                if (selected == autoItem) {
+                    st.dialectAuto = true
+                } else {
+                    st.dialectAuto = false
+                    st.dialect = selected
+                }
             }
         }
-        replaceParamsCheck?.let { st.replaceParams = it.isSelected }
-        formatSqlCheck?.let { st.formatSql = it.isSelected }
-        injectLogicDeleteCheck?.let { st.injectLogicDelete = it.isSelected }
-        logicDeleteValueField?.let { st.logicDeleteValue = it.text.trim() }
-        tablePrefixField?.let { st.tablePrefix = it.text.trim() }
-        tableSuffixField?.let { st.tableSuffix = it.text.trim() }
-        inferenceCombo?.let { st.tableNameInference = (it.selectedItem as? InferenceOption)?.value ?: "" }
-        ignoredFieldsField?.let { st.ignoredFields = it.text.trim() }
+        replaceParamsCheck?.let {
+            if (boolDiffers(it, st.replaceParams, global.replaceParams)) st.replaceParams = it.isSelected
+        }
+        formatSqlCheck?.let {
+            if (boolDiffers(it, st.formatSql, global.formatSql)) st.formatSql = it.isSelected
+        }
+        injectLogicDeleteCheck?.let {
+            if (boolDiffers(it, st.injectLogicDelete, global.injectLogicDelete)) {
+                st.injectLogicDelete = it.isSelected
+            }
+        }
+        logicDeleteValueField?.let {
+            if (stringDiffers(it, st.logicDeleteValue, global.logicDeleteValue)) {
+                st.logicDeleteValue = it.text.trim()
+            }
+        }
+        tablePrefixField?.let {
+            if (stringDiffers(it, st.tablePrefix, global.tablePrefix)) st.tablePrefix = it.text.trim()
+        }
+        tableSuffixField?.let {
+            if (stringDiffers(it, st.tableSuffix, global.tableSuffix)) st.tableSuffix = it.text.trim()
+        }
+        inferenceCombo?.let { combo ->
+            val selected = (combo.selectedItem as? InferenceOption)?.value ?: ""
+            if (selected != st.tableNameInference.ifBlank { global.tableNameInference }) {
+                st.tableNameInference = selected
+            }
+        }
+        ignoredFieldsField?.let {
+            if (stringDiffers(it, st.ignoredFields, global.ignoredFields)) st.ignoredFields = it.text.trim()
+        }
     }
 
     override fun reset() {

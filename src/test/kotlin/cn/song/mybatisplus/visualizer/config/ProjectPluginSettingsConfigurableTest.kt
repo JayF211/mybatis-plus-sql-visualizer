@@ -386,6 +386,118 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
     }
 
     /**
+     * T-TS-FixG7 阻断项守卫：开启态点「重置为跟随全局」后再改任意一项并 apply，
+     * **其余 8 项必须仍为 ""/null（跟随全局）**，不得被钉成「当时的全局快照」。
+     *
+     * 缺陷路径（原实现）：resetToGlobal 把 9 项置空 → refreshControls 按 P1 回灌全局值
+     * → 用户改一项使 isModified()==true → apply 无条件写回 9 个控件的显示值（= 全局值）
+     * → state 里的「跟随全局」被静默改成硬覆盖：全局值日后变更本项目不再跟随，
+     * 而 UI 数值与重置瞬间完全相同、用户看不出差别。作者原用例
+     * [test重置为跟随全局_九项归零且总开关保持] 只断言点击瞬间的 state，从不调 apply，故给了假绿。
+     */
+    fun test重置后改一项再apply_其余八项仍跟随全局() {
+        val global = PluginSettings.getInstance().state
+        global.dialectAuto = false
+        global.dialect = "MySQL"
+        global.replaceParams = false
+        global.formatSql = true
+        global.injectLogicDelete = false
+        global.logicDeleteValue = "g1"
+        global.tablePrefix = "g_"
+        global.tableSuffix = "_g"
+        global.tableNameInference = PluginSettings.INFERENCE_CAMEL
+        global.ignoredFields = "gIgnore"
+
+        val st = ProjectPluginSettings.getInstance(myFixture.project).state
+        st.useProjectSettings = true
+        st.dialectAuto = false
+        st.dialect = "PostgreSQL"
+        st.replaceParams = true
+        st.formatSql = false
+        st.injectLogicDelete = true
+        st.logicDeleteValue = "p1"
+        st.tablePrefix = "p_"
+        st.tableSuffix = "_p"
+        st.tableNameInference = PluginSettings.INFERENCE_SNAKE
+        st.ignoredFields = "pIgnore"
+
+        val cfg = newConfig()
+        val comp = cfg.createComponent()
+        val resetButton = all(comp).filterIsInstance<JButton>()
+            .firstOrNull { it.text == MpSqlVisualizerBundle.message("settings.project.reset") }
+        assertNotNull("项目页应有「重置为跟随全局」按钮", resetButton)
+        resetButton!!.doClick()
+        assertFalse("重置后不应报已修改", cfg.isModified())
+
+        // 用户显式改一项（忽略字段），此时其余 8 项控件显示的仍是回灌进来的全局值
+        textsOf(comp)[3].text = "edited"
+        assertTrue("改一项后应报已修改", cfg.isModified())
+        cfg.apply()
+        assertFalse("apply 后应复位", cfg.isModified())
+
+        assertEquals("dialect 应仍为跟随全局（空）", "", st.dialect)
+        assertNull("dialectAuto 应仍为 null（跟随全局）", st.dialectAuto)
+        assertNull("replaceParams 应仍为 null（跟随全局）", st.replaceParams)
+        assertNull("formatSql 应仍为 null（跟随全局）", st.formatSql)
+        assertNull("injectLogicDelete 应仍为 null（跟随全局）", st.injectLogicDelete)
+        assertEquals("logicDeleteValue 应仍为空（跟随全局）", "", st.logicDeleteValue)
+        assertEquals("tablePrefix 应仍为空（跟随全局）", "", st.tablePrefix)
+        assertEquals("tableSuffix 应仍为空（跟随全局）", "", st.tableSuffix)
+        assertEquals("tableNameInference 应仍为空（跟随全局）", "", st.tableNameInference)
+        assertEquals("用户改过的那一项应写回", "edited", st.ignoredFields)
+        cfg.disposeUIResources()
+    }
+
+    /**
+     * 灌值守卫（T-TS-FixG7 补）：injectLogicDelete 的灌值此前无「非控件默认态」断言覆盖——
+     * 种子 `global.injectLogicDelete=false` 与 JBCheckBox 默认未勾选同值，且开启态断言只覆盖
+     * replaceParams，故把 [ProjectPluginSettingsConfigurable.refreshControls] 里该行灌值删掉，
+     * 全套用例仍绿（假绿盲区）。
+     *
+     * 本用例让灌值表达式的两个分支各断言一次 **true**（控件默认值为 false，漏灌必红）：
+     *  - 段一 关闭态分支（`else globalValue`）：全局 true + 项目 false → 关闭态须显示 true；
+     *  - 段二 开启态分支（`stateValue ?: globalValue`）：全局 false + 项目 true → 开启态须显示 true。
+     */
+    fun test灌值守卫_逻辑删除注入两分支均显示非控件默认值() {
+        val global = PluginSettings.getInstance().state
+        val st = ProjectPluginSettings.getInstance(myFixture.project).state
+
+        // 段一：关闭态显示全局值 true（漏灌则控件停在默认 false）
+        global.injectLogicDelete = true
+        st.useProjectSettings = false
+        st.injectLogicDelete = false
+        val off = newConfig()
+        val offComp = off.createComponent()
+        assertEquals(
+            "关闭态 injectLogicDelete 应显示全局值 true",
+            true,
+            checksOf(offComp)[3].isSelected,
+        )
+        off.disposeUIResources()
+
+        // 段二：开启态显示项目值 true（漏灌则控件停在默认 false）
+        global.injectLogicDelete = false
+        st.useProjectSettings = true
+        st.injectLogicDelete = true
+        val on = newConfig()
+        val onComp = on.createComponent()
+        assertEquals(
+            "开启态 injectLogicDelete 应显示项目值 true",
+            true,
+            checksOf(onComp)[3].isSelected,
+        )
+        // 同一种子下切到关闭态：应回到全局值 false（防「断言方向写反」的假守卫）
+        val master = checksOf(onComp).first()
+        master.doClick()
+        assertEquals(
+            "关闭态 injectLogicDelete 应回到全局值 false",
+            false,
+            checksOf(onComp)[3].isSelected,
+        )
+        on.disposeUIResources()
+    }
+
+    /**
      * P3 前置对照实验（落地为路由守卫）：设置搜索的 navigateTo 走
      * `Settings.find(类)` = `ConfigurableVisitor.findByType(类, 设置树根组)`，
      * 故「登记进搜索索引」是否等于可跳转，取决于项目级 configurable 在不在设置树里。
