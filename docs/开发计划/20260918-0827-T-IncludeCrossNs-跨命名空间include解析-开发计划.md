@@ -63,4 +63,37 @@ T-IC-01（轻量收集入口）→ T-IC-02（跨文件解析器）→ T-IC-03（
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+- 实施分支/工作树：`t-include-cross-ns`（工作树 `mpsv-icns`），基线 `8a3a6ff`（dev 合流后 master）
+- 提交：`1ea06f7`（实施提交：代码 + 测试 + CHANGELOG + 变更记录总册；本 §八 回填为紧随的 docs 提交）
+- 门禁：定向 `XmlIncludeExpanderTest` 16 例绿（8 既有**零改动** + 8 新增）、`XmlCrossNsFragmentResolverTest` 11 例绿（LightPlatform：真实 FileTypeIndex + PSI + 项目内真实 mapper 文件）、`testFast` 全量绿；全量 `testShards` **4966/0/0/6 绿**（432 套件，3 片并行 2m51s，**最终树复跑**，含紧随的 1 例动态 refid 用例）
+- 环境备注（诚实口径）：四轮 testShards 中第 1/2 轮分别撞 11 例 / 8 例失败，全部为机器级剪贴板争用（`cannot open system clipboard`，SqlPreviewPanelTest / XmlPreviewPanelTest / PluginSettingsPanelBindingTest 等面板类）与 `Container is already disposed`——同机另有三个工作树（mpsv-stfix/mpsv-eap/mpsv-sig）并行跑测试；两轮失败集不同（非确定性）、两处面板类隔离复跑即绿、与本任务改动零关联（不涉剪贴板/容器生命周期），第 3/4 轮全绿
+
+任务落点：
+
+| 任务 | 落点 |
+|---|---|
+| T-IC-01 | `xml/XmlMapperParser.kt`：`collectFragments(fileText)`（公开，id → 片段内部 XML 文本）、`collectMapperFragments`（internal，附根 namespace）、手写片段序列化（保留子标签/属性/CDATA/注释，文本与属性值按 XML 规则转义） |
+| T-IC-02 | 新增 `xml/CrossNamespaceFragments.kt`（片段表 + 失败原因表）；新增 `psi/XmlCrossNsFragmentResolver.kt`（FileTypeIndex 扫描 + PSI 预筛 + `collect` 纯逻辑归并）；`xml/XmlMapperParser.scanIncludes`（当前文件扫描：根 namespace / 本文件片段 id / 含 `.` 的 refid，property 已静态替换）；`xml/XmlIncludeExpander.expand(..., crossNamespace)` 合并展开（跨文件片段文本经 wrapper 解析 + `Document.importNode` 插入本文档） |
+| T-IC-03 | `ui/XmlPreviewService.preview` 单点接线（`resolve(fileText, project)`；`project == null` 直接空表）；注解 `<script>` 链与 `MapperCheckTool`（纯文本、无 project）维持现状 |
+| T-IC-04 | 测试两处（上述两文件）；文档三处（本 §八 + CHANGELOG [Unreleased] Added + 变更记录总册） |
+
+实施偏离（对照 §三 方案与 §六 风险）：
+
+1. **目标文件定位用 PSI 而非纯 VFS 文本**：`XmlFile.rootTag` 取 namespace 做预筛、`file.text` 交 `collectFragments`——与 `MapperXmlLocator`/`HbmXmlEntityResolver` 先例同款，且 `file.text` 是**内存文本**（未保存编辑参与解析，比磁盘版本更准）。代价是候选文件各一次 PSI 解析（平台缓存兜底）。
+2. **§六「收集范围限定与当前文件同目录+同模块」未采用**：解析器入参只有文件文本（无 VirtualFile），拿不到当前文件路径；改为 projectScope + PSI 预筛（非 mapper / namespace 不匹配的 XML 不做 DOM 解析），并保持惰性触发（仅当本文件存在未解析的全限定 refid 才遍历）。
+3. **片段文本序列化未用平台 `LSSerializer`**：实测其 `writeToString` 对独立 CDATA 节点不写闭合 `]]>`、对 Element 节点附带 XML 声明，无法直接往返；改手写序列化，CDATA/实体/属性换行按 XML 规则保真（用例钉住）。
+4. `XmlIncludeExpander` 两个既有私有函数（`propertyMap`/`resolveRefid`）由 `private` 改 `internal`，供当前文件扫描复用（不复刻 property 替换语义）。
+5. 旧降级文案在**无 project / 无失败原因**路径逐字节保留（`cross-namespace include is not supported.`），仅在解析器给出具体原因时改走新文案——对齐验收标准 2「纯文本链行为逐字节不变」。
+6. **第七轮报告 §12 Z-8 落地备注未回填**：本批七份计划（Z-2/Z-3/Z-4/Z-6/Z-7/Z-8/#35）都要求回填同一报告文件，七个并行工作树同改一文件必成冲突；落地事实已写入 CHANGELOG 与变更记录总册，报告回填建议合流后由主调度统一批量做。
+
+未验证项 / 真机待走查（§五 三项全部留人工）：
+
+- 真实项目形态跨命名空间 include 预览（含片段内容、无降级行）、目标文件关闭/删除后回退降级、大项目多 mapper 预览耗时——本机未走查。
+- 目标文件未落盘（新建未保存）不在 FileTypeIndex 内 → 该 refid 降级；同 namespace 声明在多文件按歧义降级（MyBatis 运行时为后注册覆盖，差异已入 CHANGELOG）。
+- 跨文件片段内的**裸** refid 只查引用方本文件片段表（MyBatis 同语义）；该片段只存在于同 namespace 的**其它**文件时降级——v1 边界，补 `当前namespace.裸id` 候选需展开期持有当前 namespace。
+- MCP `MapperCheckTool`（纯文本无 project）与注解 `<script>` include 维持现状。
+
+现状核实表勘误（§二 行号锚点随 dev 合流漂移，行为描述与当前代码一致）：
+
+- 跨命名空间边界行由 `CHANGELOG.md:678` → 现 758（M24 版本节，历史记录不改写）；`HbmXmlEntityResolver.kt` 的 FileTypeIndex 用法由 `:157` → 现 `:167-175`；`XmlMapperParser.kt:51-58`（片段收集 + 语句展开）→ 现 `:69-79`（本次改动前即 51-58）。
+- 另核实到一处计划未列的调用点：`mcp/MapperCheckTool.kt:71` 直调 `XmlMapperParser().parse(text)`（纯文本、无 project），不参与跨命名空间解析（无 IDE 上下文可用），按 T-IC-03 边界维持现状。

@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.xml
 
 import org.w3c.dom.Element
+import org.w3c.dom.Node
 import org.xml.sax.EntityResolver
 import org.xml.sax.InputSource
 import java.io.StringReader
@@ -28,6 +29,19 @@ data class XmlMapperModel(
 /** 解析失败（非良构 XML / 根元素不是 mapper）。 */
 class XmlParseException(message: String) : RuntimeException(message)
 
+/** mapper 文件轻量片段扫描结果（T-IC-01）：根 namespace + 顶层 `<sql id>` 片段内部 XML 文本。 */
+data class XmlMapperFragments(
+    val namespace: String?,
+    val fragments: Map<String, String>,
+)
+
+/** 当前 mapper 文本的 include 扫描结果（T-IC-02）：根 namespace + 本文件片段 id + 待跨命名空间解析的 refid。 */
+data class XmlIncludeScan(
+    val namespace: String?,
+    val localFragmentIds: Set<String>,
+    val dottedRefIds: Set<String>,
+)
+
 /**
  * mapper 文件解析器（T-M24-01）：JDK DOM 解析（secure-processing，禁 DTD/外部实体），
  * 提取 `<mapper>` 下的 select/insert/update/delete 语句。
@@ -35,10 +49,14 @@ class XmlParseException(message: String) : RuntimeException(message)
  * - 先收集 `<sql id>` 片段供 include 展开（[XmlIncludeExpander]，同文件）；
  * - 语句解析前展开 include（就地修改 DOM）；
  * - 根元素非 `<mapper>` → [XmlParseException]；非良构 XML → 异常带解析器错误信息。
+ *
+ * T-IC-02：入参 [CrossNamespaceFragments] 为跨命名空间片段表（由 psi 层
+ * [cn.song.mybatisplus.visualizer.psi.XmlCrossNsFragmentResolver] 提供；无 project 的纯文本链传空表，
+ * 行为与改动前逐字节一致）。
  */
 class XmlMapperParser {
 
-    fun parse(fileText: String): XmlMapperModel {
+    fun parse(fileText: String, crossNamespace: CrossNamespaceFragments = CrossNamespaceFragments.EMPTY): XmlMapperModel {
         val document = parseDocument(fileText)
         val root: Element = document.documentElement ?: throw XmlParseException("XML 文档为空。")
         if (root.tagName != "mapper") {
@@ -55,7 +73,7 @@ class XmlMapperParser {
         val statements = childElements(root)
             .filter { it.tagName in STATEMENT_TAGS }
             .map { element ->
-                XmlIncludeExpander.expand(element, fragments, errors)
+                XmlIncludeExpander.expand(element, fragments, errors, crossNamespace)
                 XmlStatement(
                     id = element.getAttribute("id"),
                     kind = kindOf(element.tagName),
@@ -65,6 +83,103 @@ class XmlMapperParser {
             }
         return XmlMapperModel(namespace, statements, errors)
     }
+
+    /**
+     * T-IC-01：轻量片段收集——只扫顶层 `<sql id>` 片段（id → 片段内部 XML 文本），
+     * **不建语句树、不展开 include、零 PSI 依赖**（跨命名空间解析的目标文件侧入口）。
+     *
+     * 根元素非 `<mapper>` 或文本非良构 → 空表（调用方按「未找到」降级，绝不抛出）。
+     * 同名 id 取后声明者（对齐 MyBatis `configuration.sqlFragments.put` 覆盖语义）。
+     */
+    fun collectFragments(fileText: String): Map<String, String> =
+        collectMapperFragments(fileText)?.fragments ?: emptyMap()
+
+    /** 与 [collectFragments] 同一次解析：额外返回根 namespace（跨命名空间按 namespace 匹配目标文件）。 */
+    internal fun collectMapperFragments(fileText: String): XmlMapperFragments? {
+        val root = runCatching { parseDocument(fileText).documentElement }.getOrNull() ?: return null
+        if (root.tagName != "mapper") return null
+        val fragments = childElements(root)
+            .filter { it.tagName == "sql" && it.getAttribute("id").isNotEmpty() }
+            .associate { it.getAttribute("id") to serializeChildren(it) }
+        return XmlMapperFragments(root.getAttribute("namespace").ifEmpty { null }, fragments)
+    }
+
+    /**
+     * T-IC-02：扫描当前 mapper 文本——根 namespace、顶层片段 id 集、**含 `.` 且本文件无同名片段的**
+     * include refid 集（refid 中的 `${name}` 已按 include 自带 property 静态替换，与展开期同语义）。
+     *
+     * 根元素非 `<mapper>` 或文本非良构 → null（调用方不做跨命名空间收集，沿用既有降级）。
+     */
+    internal fun scanIncludes(fileText: String): XmlIncludeScan? {
+        val root = runCatching { parseDocument(fileText).documentElement }.getOrNull() ?: return null
+        if (root.tagName != "mapper") return null
+        val localIds = childElements(root)
+            .filter { it.tagName == "sql" && it.getAttribute("id").isNotEmpty() }
+            .mapTo(mutableSetOf()) { it.getAttribute("id") }
+        val dotted = mutableSetOf<String>()
+        collectDottedRefIds(root, localIds, dotted)
+        return XmlIncludeScan(root.getAttribute("namespace").ifEmpty { null }, localIds, dotted)
+    }
+
+    private fun collectDottedRefIds(element: Element, localIds: Set<String>, out: MutableSet<String>) {
+        val children = element.childNodes
+        for (i in 0 until children.length) {
+            val child = children.item(i) as? Element ?: continue
+            if (child.tagName == "include") {
+                val refid = XmlIncludeExpander.resolveRefid(
+                    child.getAttribute("refid"),
+                    XmlIncludeExpander.propertyMap(child),
+                )
+                if (refid.contains('.') && refid !in localIds) out += refid
+            }
+            collectDottedRefIds(child, localIds, out)
+        }
+    }
+
+    /**
+     * 片段内部 XML 文本序列化（T-IC-01）：保留子标签/属性/CDATA/注释，文本与属性值按 XML 规则转义，
+     * 供跨命名空间传递后重新解析（平台 LSSerializer 对独立 CDATA 节点不写闭合 `]]>`，故手写）。
+     */
+    private fun serializeChildren(element: Element): String {
+        val sb = StringBuilder()
+        val children = element.childNodes
+        for (i in 0 until children.length) appendNode(sb, children.item(i))
+        return sb.toString()
+    }
+
+    private fun appendNode(sb: StringBuilder, node: Node) {
+        when (node.nodeType) {
+            Node.ELEMENT_NODE -> {
+                val element = node as Element
+                sb.append('<').append(element.tagName)
+                val attrs = element.attributes
+                for (i in 0 until attrs.length) {
+                    val attr = attrs.item(i)
+                    sb.append(' ').append(attr.nodeName).append("=\"").append(escapeAttr(attr.nodeValue)).append('"')
+                }
+                val children = element.childNodes
+                if (children.length == 0) {
+                    sb.append("/>")
+                } else {
+                    sb.append('>')
+                    for (i in 0 until children.length) appendNode(sb, children.item(i))
+                    sb.append("</").append(element.tagName).append('>')
+                }
+            }
+            Node.TEXT_NODE -> sb.append(escapeText(node.nodeValue))
+            Node.CDATA_SECTION_NODE ->
+                sb.append("<![CDATA[").append(node.nodeValue.orEmpty().replace("]]>", "]]]]><![CDATA[>")).append("]]>")
+            Node.COMMENT_NODE -> sb.append("<!--").append(node.nodeValue.orEmpty()).append("-->")
+            else -> Unit // 处理指令等 mapper 片段不出现的节点类型：忽略
+        }
+    }
+
+    private fun escapeText(text: String?): String = text.orEmpty()
+        .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    private fun escapeAttr(text: String?): String = text.orEmpty()
+        .replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;")
+        .replace("\n", "&#10;").replace("\r", "&#13;").replace("\t", "&#9;")
 
     /** 解析 XML 文本为 DOM（安全配置：禁 DTD/外部实体）。注解 `<script>` 等片段解析复用（T-M25-02）。 */
     internal fun parseDocument(fileText: String): org.w3c.dom.Document =

@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.xml
 
+import org.w3c.dom.Document
 import org.w3c.dom.Element
 import org.w3c.dom.Node
 
@@ -9,17 +10,32 @@ import org.w3c.dom.Node
  * - `<include refid="...">` 在**加载期**内联展开：深拷贝 `<sql id>` 片段的子节点到 include 位置；
  * - `<property name value>` 为**静态字符串替换**：只作用于片段中的 `${name}`（`#{}` 不替换），
  *   嵌套 include 继承外层 property（子 property 覆盖同名）；
- * - refid 支持 `${name}`（property 解析后查表）；跨命名空间 refid（含 `.` 且本文件无此片段）
- *   → 错误记录并移除 include（预览不中断）；
+ * - refid 支持 `${name}`（property 解析后查表）；
+ * - 跨命名空间 refid（含 `.` 且本文件无此片段）→ 查 [CrossNamespaceFragments]（T-IC-02）：
+ *   命中则按目标文件片段文本展开（跨文件），未命中或解析失败 → 错误记录并移除 include（预览不中断）；
  * - 自引用/过深嵌套 → 错误记录（深度上限 [MAX_DEPTH]）。
+ *
+ * MyBatis 语义对齐：片段表键为全限定 `namespace.id`，而 refid 不含 `.` 时补当前 namespace——
+ * 本展开器以「本文件片段表键为裸 id + 跨命名空间表键为全限定 refid」等价表达：
+ * 裸 refid 命中本文件，含 `.` 的 refid 命中跨文件表；跨文件片段内的**裸** refid 仍按引用方本文件查表
+ * （对齐 MyBatis 给裸 refid 补当前 namespace 的语义；该片段只存在于同 namespace 的**其它**文件时降级，
+ * v1 边界，见 `psi/XmlCrossNsFragmentResolver` KDoc）。
  */
 object XmlIncludeExpander {
 
     const val MAX_DEPTH = 20
 
+    /** 跨命名空间片段文本重新解析用的包装根元素名（片段文本可能含多个顶层节点）。 */
+    private const val FRAGMENT_WRAPPER = "mpv-cross-ns-fragment"
+
     /** 展开语句元素中的全部 include（就地修改 DOM）。 */
-    fun expand(statement: Element, fragments: Map<String, Element>, errors: MutableList<String>) {
-        expandRecursive(statement, fragments, errors, 0, emptySet())
+    fun expand(
+        statement: Element,
+        fragments: Map<String, Element>,
+        errors: MutableList<String>,
+        crossNamespace: CrossNamespaceFragments = CrossNamespaceFragments.EMPTY,
+    ) {
+        expandRecursive(statement, fragments, errors, 0, emptySet(), crossNamespace)
     }
 
     /**
@@ -32,6 +48,7 @@ object XmlIncludeExpander {
         errors: MutableList<String>,
         depth: Int,
         chain: Set<String>,
+        crossNamespace: CrossNamespaceFragments,
     ) {
         if (element.tagName == "include") {
             if (depth > MAX_DEPTH) {
@@ -48,25 +65,43 @@ object XmlIncludeExpander {
             }
             val target = fragments[refid]
             if (target == null) {
-                errors += "Include refid '$refid' not found in this mapper (cross-namespace include is not supported)."
+                val external = crossNamespace.fragments[refid]
+                if (external != null) {
+                    val copies = externalChildren(element, external, props, errors)
+                    if (copies == null) {
+                        element.parentNode?.removeChild(element)
+                        return
+                    }
+                    replaceNode(element, copies)
+                    copies.filterIsInstance<Element>().forEach {
+                        expandRecursive(it, fragments, errors, depth + 1, chain + refid, crossNamespace)
+                    }
+                    return
+                }
+                val reason = crossNamespace.failures[refid]
+                errors += if (reason != null) {
+                    "Include refid '$refid' not found in this mapper（跨命名空间片段解析失败：$reason）。"
+                } else {
+                    "Include refid '$refid' not found in this mapper (cross-namespace include is not supported)."
+                }
                 element.parentNode?.removeChild(element)
                 return
             }
             val copies = copyChildren(target, props)
             replaceNode(element, copies)
             copies.filterIsInstance<Element>()
-                .forEach { expandRecursive(it, fragments, errors, depth + 1, chain + refid) }
+                .forEach { expandRecursive(it, fragments, errors, depth + 1, chain + refid, crossNamespace) }
             return
         }
         // 快照遍历（展开会修改子节点集合）
         val children = element.childNodes
         val snapshot = (0 until children.length).map { children.item(it) }
         for (child in snapshot) {
-            if (child is Element) expandRecursive(child, fragments, errors, depth + 1, chain)
+            if (child is Element) expandRecursive(child, fragments, errors, depth + 1, chain, crossNamespace)
         }
     }
 
-    private fun propertyMap(include: Element): Map<String, String> {
+    internal fun propertyMap(include: Element): Map<String, String> {
         val props = mutableMapOf<String, String>()
         val children = include.childNodes
         for (i in 0 until children.length) {
@@ -80,8 +115,38 @@ object XmlIncludeExpander {
     }
 
     /** refid 中的 `${name}` 按 property 静态替换（不在 property 中的保留原样，后续查表必然失败）。 */
-    private fun resolveRefid(refid: String, props: Map<String, String>): String =
+    internal fun resolveRefid(refid: String, props: Map<String, String>): String =
         TokenParser.parse(refid, "\${", "}") { props[it] ?: "\${$it}" }
+
+    /**
+     * 跨命名空间片段（T-IC-02）：目标 mapper 片段内部 XML 文本 → 当前语句所在文档的节点。
+     *
+     * 片段文本来自其它文件的 DOM 序列化，属**另一文档**，必须经 [Document.importNode] 才能插入本文档；
+     * 解析失败（片段文本非良构等）→ 错误记录并返回 null（调用方移除 include，预览不中断）。
+     * property 静态替换在拷贝体上施加，语义与同文件展开一致。
+     */
+    private fun externalChildren(
+        include: Element,
+        innerXml: String,
+        props: Map<String, String>,
+        errors: MutableList<String>,
+    ): List<Node>? {
+        val owner = include.ownerDocument ?: return null
+        val wrapper = "<$FRAGMENT_WRAPPER>$innerXml</$FRAGMENT_WRAPPER>"
+        val root = runCatching { XmlMapperParser().parseDocument(wrapper).documentElement }.getOrNull()
+        if (root == null) {
+            errors += "Include refid '${include.getAttribute("refid")}' 跨命名空间片段解析失败：片段文本无法解析为 XML。"
+            return null
+        }
+        val result = mutableListOf<Node>()
+        val children = root.childNodes
+        for (i in 0 until children.length) {
+            val copy = owner.importNode(children.item(i), true)
+            applyProperties(copy, props)
+            result += copy
+        }
+        return result
+    }
 
     /** 深拷贝片段子节点：文本节点与属性值中的 `${name}` 按 property 替换（不污染原始片段）。 */
     private fun copyChildren(target: Element, props: Map<String, String>): List<Node> {
