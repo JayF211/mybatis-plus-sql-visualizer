@@ -8,6 +8,8 @@
 
 ### Added
 
+- **XML 动态条件支持面预检标注（T-ExprAstPrecheck）**：XML 预览面板的动态条件行此前对超出受限 OGNL 支持面的 test 表达式毫无表示——用户看到的是「条件展开了」，看不出这个条件其实没算出来（三元、静态方法、`new` 这类写法解析即失败；未知方法链、静态字段引用这类写法求值时静默返回 null）。现在条件行会带一条淡色标注：语法超出受限子集（三元运算、赋值、lambda、静态方法、`new` 等）标「不支持的表达式形态」，语法可解析但含运行期降级形态标「含运行期降级调用」，悬停给出具体理由（解析器原文 / 方法名 / `@类@字段`）。判定在 xml 层纯 AST 遍历完成，零 PSI、零新语义——支持面清单直接从求值器既有事实投影（方法白名单的载体实现表与白名单共用一份，不会漂移），故 `list.size()`、`list.isEmpty()`、`_parameter.getTitle()` 这类常见写法不标注，`map.length()`（`length` 只对字符串有实现）、`list.remove(0)`、`@常量类@字段` 这类会标注。标注只是提示，条件展开行为与勾选开关语义零变化
+
 - **MCP 工具二期扩容 + 设置页门控（T-McpToolset2）**：平台 MCP Server 工具从 3 个扩到 10 个——新增 `mpsv_render_logs`（MyBatis/Hibernate/JdbcTemplate 日志还原可执行 SQL）、`mpsv_check_sql`（静态写风险与类型核查）、`mpsv_rollback_plan`（回滚预案，只产出不执行）、`mpsv_perf_advice`（20 条规则性能建议）、`mpsv_crud_sql`（实体类生成 CRUD 四件套）、`mpsv_reverse_sql`（SQL 转 MyBatis-Plus 代码）、`mpsv_mapper_check`（mapper 契约核查 + 可选 simulate 对渲染产物做写风险/性能分析——校验器给不出的证据形态）；全部只读三 hint、拒绝走 McpExpectedError、每调用 `[MCP-AUDIT]` 审计。设置页「MCP 工具」子页新增门控区：总开关（整体启停插件 MCP 功能）+ 十工具逐项启用/禁用 + 全部启用/禁用切换按钮——平台工具面在下一次工具列表/调用即时生效（262 mcpserver.jar 字节码实证 getEnabledToolsets 每次重新求值）。一工具一 toolset 类（平台 per-tool 门控只有 toolset 粒度 isEnabled），McpToolsetSupport 基类三钩子字面量覆写保持 253 兼容
 
 - **执行确认升级为无界写发现清单（T-UnboundedWriteGuard，O-9）**：执行 UPDATE/DELETE 前的二次确认对话框在静态检查命中无界写特征时列出发现（无 WHERE 全表 / 恒真条件如 `1=1` / OR 分支恒真 / `LIKE '%'` 纯通配 / WHERE 仅常量 / 子查询提示 / 无法解析请人工确认）——同一对话框形态零新弹窗，无发现时文案逐字节不变（高频确认不添乱）；规则集对齐 DBX `sql_risk.rs`，JSqlParser AST 权威、解析失败 fail closed。预览执行、日志转 SQL 执行、回滚执行三处确认流共用；回滚视图对恒真/纯通配 WHERE 追加「快照将覆盖全表」警示
@@ -47,6 +49,8 @@
 - **执行链超时护栏补齐（T-ExecTimeoutGuard，O-25）**：执行/EXPLAIN 链此前无任何超时兜底——挂死查询（锁等待、笛卡尔积、远端库网络黑洞）会永远停在 loading。新增设置项「执行超时」（秒，默认 30、0=不限，SQL 预览分组）：MCP explain 直连链逐语句 setQueryTimeout（RemoteStatement 镜像，243/262 签名核验）；多语句脚本预算随语句数线性放大（封顶 ×8，DBX 1ed06f2 同款公式，纯函数交付）；超时形态异常先请求取消再报错（消息附 `timed out after Ns`，agent 可读）；共享控制台链 DBN 托管无语句句柄 v1 不覆盖（登记在案，诚实降级）
 
 ### Changed
+
+- **if test 求值失败不再静默（T-ExprAstPrecheck，行为变更）**：XML 预览里 `if` 的 test 表达式求值失败（解析报错）时，此前是静默默认展开 true、不记任何错误——预览产物与真实运行时可能就此分叉而无人知晓。现在仍是默认展开 true（面板开关依旧是分支唯一真值源，此处只是开关缺席时的容错兜底），但会记一条可见错误「条件表达式无法求值，已按 true 展开——可在预览面板用开关覆盖：<表达式原文>（<解析器消息>）」，与 `${}`/bind 的失败形态对齐。既有预览若依赖静默展开、且 test 写法本就超出受限子集，会多出一行 `⚠` 警示——这是把看不见的分叉摆到明面上。已知边界：`foreach` 体内的 `if` 因过滤上下文的错误列表未回传根上下文，仍不产生该警示（与 `bind` 同源既有形态，本次未扩面）
 
 - **JOIN 图 JOIN 表改整表列口径（T-DgmFullCols）**：预览 JOIN 图此前主表画实体整表列、JOIN 表只画 SQL 参与列（ON/SELECT 引用到的，常仅一两个 join key），同一张图里两张表节点一大一小，与 IDEA Database 原生「显示图」观感差得远。现 JOIN 表与主表同口径——实体整表列（>50 列时只留主键列），被引用列追加在后（SQL 原始列名可能不在实体中）；数据源里存在而实体未映射的列也一并补进节点（按库顺序追加在实体列之后，带 DB COMMENT 与真实类型串），宽表由 50 列上限兜底。
 
