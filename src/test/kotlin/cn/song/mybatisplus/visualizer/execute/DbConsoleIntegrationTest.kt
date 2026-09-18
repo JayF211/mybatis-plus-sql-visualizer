@@ -104,8 +104,8 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         ds.javaClass.getDeclaredMethod("setDriverRef", String::class.java).apply { isAccessible = true }
             .invoke(ds, "mysql.8")
         ds.resolveDriver()
-        // T-ExecDocGate：驱动种子 + 数据源显式携带驱动 jar classpath（背景见助手 KDoc）
-        DbIntegrationSeedSupport.wireDriverClasspath(ds)
+        // T-TestDbDriver：驱动种子文件 + 驱动 artifact 版本钉定（管线全貌见助手 KDoc）
+        DbIntegrationSeedSupport.prepareDriverPipeline()
         // M36.5.23d：driver 文件由 DBN 从 config_<task>/jdbc-drivers 加载（build.gradle.kts doFirst
         // 预置）——不再需要手动 setClasspathElements（曾指向错误路径 config/ 无效）。
         // working-dir = 项目根目录：DbImplUtil.getAppropriateDataSourcesForExec(psiFile) 按文件
@@ -362,6 +362,10 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
 
     override fun tearDown() {
         runCatching { DataSourceSelector.clearPrepared() }
+        // T-TestDbDriver：object 单例的 temp Psi 缓存跨用例存活（clearPrepared 刻意不清，见 T-ExecCopyFix F2c）——
+        // 而 BasePlatformTestCase 每个用例换一套 fixture 临时目录，残留缓存指向已拆目录 →
+        // 「VFS not visible after refresh / 另一个程序正在使用此文件」。用例间必须显式清缓存。
+        runCatching { DataSourceSelector.clearCachedTempPsiFileForTest() }
         super.tearDown()
     }
 }

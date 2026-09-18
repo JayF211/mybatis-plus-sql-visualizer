@@ -76,8 +76,8 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
         ds.javaClass.getDeclaredMethod("setDriverRef", String::class.java).apply { isAccessible = true }
             .invoke(ds, "mysql.8")
         ds.resolveDriver()
-        // T-ExecDocGate：驱动种子 + 数据源显式携带驱动 jar classpath（背景见助手 KDoc）
-        DbIntegrationSeedSupport.wireDriverClasspath(ds)
+        // T-TestDbDriver：驱动种子文件 + 驱动 artifact 版本钉定（管线全貌见助手 KDoc）
+        DbIntegrationSeedSupport.prepareDriverPipeline()
         ds.workingDir = project.basePath
         ds.passwordStorage = LocalDataSource.Storage.MEMORY
         mgr.addDataSource(ds)
@@ -159,7 +159,10 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
         val component = NativeDatabaseDiagramSupport.buildTabComponent(
             project, model, "JOIN Diagram: car_device_info", testRootDisposable,
         )
-        assumeTrue("B 路径链路不可用（表定位失败或框架异常，应降级 A 路径）", component != null)
+        if (component == null) {
+            println("[DB-IT] SKIP: B 路径链路不可用（表定位失败或框架异常，应降级 A 路径）——沙盒无真实 IDE 项目/VFS 夹具")
+            return
+        }
         val comp = component!!
 
         val editor = comp.getClientProperty("mpsql.native.database.editor")
@@ -221,4 +224,13 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
             (method.invoke(edge) as? com.intellij.diagram.DiagramRelationshipInfo)?.label
         }.getOrNull()
     }
+
+    override fun tearDown() {
+        runCatching { DataSourceSelector.clearPrepared() }
+        // T-TestDbDriver：object 单例 temp Psi 缓存跨用例存活，fixture 临时目录每用例一换 → 显式清（详见
+        // DataSourceSelectorIntegrationTest.tearDown 同款注释）。
+        runCatching { DataSourceSelector.clearCachedTempPsiFileForTest() }
+        super.tearDown()
+    }
+
 }
