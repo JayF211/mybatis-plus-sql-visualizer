@@ -92,6 +92,12 @@
     <extensions defaultExtensionNs="com.intellij">
         <!-- M56 T-M56-09：EP 双轨主通道——控制台行捕获（首行标志生效后桥轮询挂载停转） -->
         <consoleFilterProvider implementation="cn.song.mybatisplus.visualizer.log.SqlConsoleBridgeFilterProvider"/>
+        <!-- T-M56Phase2-Premain：启动即捕获补位——Java 运行配置准备期向 VM 参数注入
+             -javaagent:<agent jar 绝对路径>=port=<n>;logLevel=warn（EP 由 com.intellij.java 声明，
+             :66 硬依赖已在位；注册形态与平台自家十余处 runConfigurationExtension 同形，无需 epName）。
+             是否注入由 AgentManager 的「增强开关 + 注入确认」两道闸门决定：未开启/未确认零注入，
+             注入链任何失败只记日志、回落 attach/桥，不影响用户 Run -->
+        <runConfigurationExtension implementation="cn.song.mybatisplus.visualizer.log.agent.PremainRunConfigurationExtension"/>
         <!-- 全局配置（application-level，F-16）——@Service(Service.Level.APP) 注解式注册（M16.1 移除 XML
              双注册：官方规范禁止 plugin.xml 与 @Service 并存，双注册导致持久化绑定错实例、语言切换保存失效） -->
 

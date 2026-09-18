@@ -68,6 +68,27 @@ class AgentManager(private val project: Project) : Disposable {
         /** 挂载前静默等待（T-PS4-03 提常量与去抖窗解耦）：等应用初始化热点过去。 */
         private const val ATTACH_SETTLE_DELAY_MS = 3_000L
 
+        // ---------- T-M56Phase2-Premain 常量 ----------
+
+        /**
+         * premain 通道等待 agent 回连的时长：agent 侧 `SenderLoop` 连接失败按 1s→5s 退避**无限重连**
+         * （SenderLoop.java:87），故本窗口只决定「IDE 等多久后放弃这个端口」，不是连接窗口。
+         */
+        internal const val PREMAIN_ACCEPT_TIMEOUT_MS = 120_000L
+
+        /**
+         * premain 通道在场时跳过 attach 的窗口（T-M56P2-04）：远小于 [PREMAIN_ACCEPT_TIMEOUT_MS]——
+         * 窗口内认为「本次启动的 agent 会走 premain」，窗口外回归 attach 主路径。收窄的理由是
+         * premain 失效（jar 被外部删除/目标 JVM 拒载）时不能让 attach 被长期压制（零劣化）。
+         */
+        internal const val PREMAIN_SKIP_ATTACH_WINDOW_MS = 30_000L
+
+        /** 同时挂起的 premain 通道上限：`updateJavaParameters` 每次 Run 都会触发，防重复准备泄漏 ServerSocket。 */
+        internal const val MAX_PREMAIN_CHANNELS = 4
+
+        /** HELLO 首帧读取超时（agent 连上后立即发 HELLO，秒级足够；超时按「pid 未知」处理不丢会话）。 */
+        private const val HELLO_READ_TIMEOUT_MS = 5_000
+
         fun getInstance(project: Project): AgentManager = project.getService(AgentManager::class.java)
 
         /** T-SettingsTruth P2：增强捕获状态变更 Topic（app 级；仿 PluginSettings.SETTINGS_CHANGE_TOPIC）。 */
@@ -96,6 +117,12 @@ class AgentManager(private val project: Project) : Disposable {
      * internal 为同模块守护测试缝（T-PS4-01 静默跳过断言 / T-PS4-03 去抖落地）；生产链路勿直接读写。
      */
     internal val pendingPids = ConcurrentHashMap<Long, Long>()
+
+    /**
+     * T-M56Phase2-Premain：待回连的 premain 通道表（启动前协商的端口 → 监听 socket）。
+     * internal 为同模块守护测试缝；生产链路勿直接读写。
+     */
+    internal val premainChannels = CopyOnWriteArrayList<PremainChannel>()
 
     // ---------- T-PS4-01/03 测试缝：冷却窗、去抖窗与时间源可注入（生产链路勿改默认值） ----------
 
@@ -254,6 +281,12 @@ class AgentManager(private val project: Project) : Disposable {
 
     /** 实际挂载（阻塞等待与 attach 全链在单线程 executor；T-PS4-03：pid 解析与排队去抖前移到请求线程）。 */
     private fun doAttachAsync(processHandler: Any?) {
+        // T-M56Phase2-Premain（T-M56P2-04）：premain 通道在场 → 本次启动已注入 -javaagent，跳过 attach。
+        // 反方向（premain 回连先到）由 attachedPids 兜底：回连时已写表，attachToPid 的 putIfAbsent 挡下。
+        if (hasPendingPremainChannel()) {
+            LOG.info("onProcessAppeared: premain 通道在场（启动即捕获已注入）——跳过 attach（T-M56Phase2）")
+            return
+        }
         // T-PS4-03：去抖必须在「排队时刻」判定——若迟到 executor 任务起跑才查表，静默等待已把
         // 窗口耗尽、判定失真。pid 解析是轻反射（getNativePid/getProcess().pid()，无阻塞等待），
         // 前移到请求线程安全；重活（静默等待 + attach）仍留在 executor，不进调用线程。
@@ -391,6 +424,212 @@ class AgentManager(private val project: Project) : Disposable {
         }
     }
 
+    // ---------- T-M56Phase2-Premain：启动即捕获补位 ----------
+
+    /**
+     * premain 注入准备（`PremainRunConfigurationExtension.updateJavaParameters` 的唯一入口）：
+     * 过四道闸门 → 产出 `-javaagent:…` VM 选项字符串，null = 本次不注入。
+     *
+     * 闸门顺序与副作用解耦（零劣化的关键）：开关/确认两道为假时**不提取 jar、不协商端口**——
+     * 这两步在未开启态纯属浪费（且端口协商会开 ServerSocket）。判定本身走纯函数
+     * [PremainInjection.decide]，此处只负责按序求值事实与打日志。
+     *
+     * 注意确认闸门：未确认态不注入，首次运行的知情同意仍由既有 attach 链在进程启动后弹一次
+     * （[onProcessAppeared]）——确认后的后续运行才吃到 premain，该语义本任务不改。
+     */
+    internal fun preparePremainVmOption(): String? {
+        val enabled = isEnhancedEnabled()
+        val confirmed = isEnhancedConfirmed()
+        if (!enabled || !confirmed) {
+            val reason = (PremainInjection.decide(enabled, confirmed) as PremainInjection.Decision.Skip).reason
+            LOG.info("premain 注入跳过：$reason（不提取 jar、不协商端口）")
+            return null
+        }
+        val jar = extractPremainAgentJar()
+        val port = if (jar != null) openPremainChannel() else null
+        return when (val decision = PremainInjection.decide(true, true, jar != null, port)) {
+            is PremainInjection.Decision.Inject -> {
+                LOG.info("premain 注入：端口 ${decision.port} 已前置协商（agent 回连前不阻塞用户 Run）")
+                PremainInjection.vmOption(jar!!.absolutePath, decision.port)
+            }
+            is PremainInjection.Decision.Skip -> {
+                LOG.warn("premain 注入跳过：${decision.reason}——回落 attach/桥（零劣化）")
+                null
+            }
+        }
+    }
+
+    /**
+     * 端口前置协商（T-M56P2-01）：开 loopback 端口 + 起守护 accept 线程，立即返回端口。
+     * 与 attach 链的 [attachAndOffer] 同一套「`ServerSocket(0, 1, loopback)` 取端口」思路，
+     * 差别只在**端口生命周期前移到进程启动之前**——agent 侧 `EventBus.start(port)` 起
+     * `SenderLoop` 后按 1s→5s 退避无限重连，端口先开不丢连接。
+     *
+     * 返回 null 的两条路径（绑定失败 / 挂起通道超上限）都只记日志：调用方回落 attach/桥。
+     */
+    internal fun openPremainChannel(): Int? {
+        prunePremainChannels()
+        if (premainChannels.size >= MAX_PREMAIN_CHANNELS) {
+            LOG.warn("openPremainChannel: 挂起通道已达上限 $MAX_PREMAIN_CHANNELS——本次不注入（回落 attach/桥）")
+            return null
+        }
+        val server = try {
+            ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        } catch (t: Throwable) {
+            LOG.warn("openPremainChannel: 端口前置协商失败——本次不注入（回落 attach/桥）", t)
+            return null
+        }
+        val channel = PremainChannel(server.localPort, server, clockMs())
+        premainChannels.add(channel)
+        Thread({ acceptPremain(channel) }, "mps-agent-premain-${channel.port}").apply { isDaemon = true }.start()
+        LOG.info("openPremainChannel: 端口 ${channel.port} 已前置协商（挂起 ${premainChannels.size} 个）")
+        return channel.port
+    }
+
+    /** premain 通道是否在场（[doAttachAsync] 跳过判据）：未认领且准备时刻在跳过窗内。 */
+    internal fun hasPendingPremainChannel(): Boolean {
+        val now = clockMs()
+        return premainChannels.any { !it.claimed && now - it.preparedAtMs <= PREMAIN_SKIP_ATTACH_WINDOW_MS }
+    }
+
+    /** 清理过期/已认领通道（关 socket 幂等——accept 线程 finally 也会关一次）。 */
+    private fun prunePremainChannels() {
+        val now = clockMs()
+        premainChannels.removeAll { channel ->
+            val stale = channel.claimed || now - channel.preparedAtMs > PREMAIN_ACCEPT_TIMEOUT_MS
+            if (stale) runCatching { channel.server.close() }
+            stale
+        }
+    }
+
+    /** premain accept 线程体：等到回连（或超时）后交 [onPremainConnected]，无论如何都摘除通道。 */
+    private fun acceptPremain(channel: PremainChannel) {
+        try {
+            channel.server.soTimeout = PREMAIN_ACCEPT_TIMEOUT_MS.toInt()
+            val socket = channel.server.accept()
+            channel.claimed = true
+            onPremainConnected(socket)
+        } catch (t: Throwable) {
+            LOG.info(
+                "premain 通道 ${channel.port} 未收到回连（${t.javaClass.simpleName}: ${t.message}）" +
+                    "——该进程回落 attach/桥（零劣化）",
+            )
+        } finally {
+            runCatching { channel.server.close() }
+            premainChannels.remove(channel)
+        }
+    }
+
+    /**
+     * premain 回连处理（T-M56P2-04 幂等）：读 HELLO 取 pid → 建会话 → 写幂等表。
+     *
+     * 去重判据是「同 pid 是否有**活动会话**」而非查 [attachedPids]：premain 是更强通道（启动期
+     * 就能织入，无 3s 静默等待），先到者优先，写表时覆盖——否则 attach 先占表会让 premain 连接
+     * 被误丢，反而丢掉唯一一条可用连接。
+     */
+    private fun onPremainConnected(socket: Socket) {
+        try {
+            if (!isEnhancedActive()) {
+                LOG.info("premain 回连到达但增强捕获已关闭/未确认——丢弃连接")
+                runCatching { socket.close() }
+                return
+            }
+            val pid = readHelloPid(socket)
+            if (pid > 0L && sessions.any { it.alive && it.pid == pid }) {
+                LOG.info("premain 回连 pid=$pid 已有活动会话——丢弃重复连接（幂等）")
+                runCatching { socket.close() }
+                return
+            }
+            val session = AgentSession(project, pid, socket, onStateChange = { updateOnline() })
+            sessions.add(session)
+            if (pid > 0L) attachedPids[pid] = clockMs()
+            // B1 同款：新 agent 默认 disabled=false，须按当前监听状态立即校正
+            val active = isListenActive()
+            runCatching { session.sendConfig(disabled = !active) }
+                .onFailure { LOG.warn("premain: 初始 CONFIG 下发失败（pid=$pid）", it) }
+            everAttached.set(true)
+            updateOnline()
+            publishStatusChanged()
+            LOG.info("premain 会话建立：pid=$pid（启动即捕获，attach 链已跳过）")
+        } catch (t: Throwable) {
+            LOG.warn("premain 回连处理失败——丢弃连接（回落桥）", t)
+            runCatching { socket.close() }
+        }
+    }
+
+    /**
+     * 读首帧 HELLO（`{"pid":<n>}`，SenderLoop.java:39）取 agent 自报 pid；非 HELLO/超时/畸形返回 0。
+     *
+     * 用裸 `DataInputStream` 读且只读一帧：它不做预读缓冲，剩余字节原样留给随后构造的
+     * [AgentSession]（其内部另起 `DataInputStream` 走同一 socket 输入流），不会吞掉后续帧。
+     */
+    internal fun readHelloPid(socket: Socket): Long = runCatching {
+        socket.soTimeout = HELLO_READ_TIMEOUT_MS
+        val input = DataInputStream(socket.getInputStream())
+        val len = input.readInt()
+        if (len <= 0 || len > AgentProtocol.MAX_FRAME_LEN) return@runCatching 0L
+        val cmd = input.readUnsignedByte()
+        val body = ByteArray(len)
+        input.readFully(body)
+        if (cmd != AgentProtocol.CMD_HELLO) return@runCatching 0L
+        Regex("\"pid\"\\s*:\\s*(\\d+)").find(String(body, Charsets.UTF_8))
+            ?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+    }.getOrElse {
+        LOG.info("readHelloPid: HELLO 未取到（${it.javaClass.simpleName}: ${it.message}）——按 pid 未知继续")
+        0L
+    }
+
+    /** premain 专用 jar 落盘路径缓存（与 attach 的 [cachedAgentJar] 分开，语义不同见 [extractPremainAgentJar]）。 */
+    @Volatile
+    private var cachedPremainAgentJar: File? = null
+
+    /**
+     * premain 专用 agent jar 落盘（T-M56P2-02）。与 attach 的 [extractAgentJar] 分开的理由是
+     * `-javaagent` 与 `loadAgent` 对文件的要求根本不同：
+     *
+     * - `loadAgent` 在调用当次读文件 → 随机临时名 + `deleteOnExit` 足够；
+     * - `-javaagent` 由**目标 JVM 在启动时**读，且打不开 agent jar 时 JVM 会在初始化阶段直接终止
+     *   （`Error occurred during initialization of VM`）——`deleteOnExit` 与「IDE 退出 / 子 JVM 启动」
+     *   之间存在删除竞态，随机名又会让同会话重复 Run 每次新路径、旧文件堆积。
+     *
+     * 故落盘策略：插件临时目录（[PathManager.getPluginTempPath]，不可用回落 `java.io.tmpdir`）+
+     * 按内容 CRC32 定名（同一构建产物永远同一路径，重复 Run 复用）+ 「临时文件 + ATOMIC_MOVE 覆盖改名」
+     * （并发/多项目同时准备只收敛到同一份完整文件）+ **不登记 deleteOnExit**。残留单文件约 500KB
+     * 落在插件临时目录，由 OS 临时目录自行回收，换「进程启动时文件必然在位」。
+     */
+    private fun extractPremainAgentJar(): File? {
+        cachedPremainAgentJar?.let { if (it.isFile && it.length() > 0L) return it }
+        val extracted = runCatching {
+            val bytes = javaClass.getResourceAsStream(AGENT_RESOURCE)
+                ?.use { it.readBytes() }
+                ?: error("资源 $AGENT_RESOURCE 缺失（构建未内嵌 agent jar）")
+            val dir = File(premainAgentDir(), "mpsv-agent")
+            if (!dir.isDirectory && !dir.mkdirs()) error("premain agent 目录不可建：$dir")
+            val crc = java.util.zip.CRC32().apply { update(bytes) }.value
+            val target = File(dir, "mps-sql-agent-$crc.jar")
+            if (target.isFile && target.length() == bytes.size.toLong()) return@runCatching target
+            val tmp = File(dir, "mps-sql-agent-$crc.jar.tmp")
+            tmp.outputStream().use { it.write(bytes) }
+            try {
+                java.nio.file.Files.move(
+                    tmp.toPath(), target.toPath(),
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                )
+            } catch (e: java.nio.file.AtomicMoveNotSupportedException) {
+                java.nio.file.Files.move(tmp.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            }
+            target
+        }.getOrNull()
+        if (extracted != null) cachedPremainAgentJar = extracted
+        return extracted
+    }
+
+    /** premain jar 目录根：插件临时目录优先（平台 API 在 headless 测试环境可能未初始化，故带回退）。 */
+    private fun premainAgentDir(): File = runCatching {
+        File(com.intellij.openapi.application.PathManager.getPluginTempPath())
+    }.getOrElse { File(System.getProperty("java.io.tmpdir") ?: ".") }
+
     // ---------- 会话/在线态 ----------
 
     private fun updateOnline() {
@@ -461,6 +700,12 @@ class AgentManager(private val project: Project) : Disposable {
     internal fun isEnhancedConfirmed(): Boolean =
         PluginSettings.getInstance().state.enhancedCaptureConfirmed
 
+    /** 关闭全部待回连通道（shutdownAll/dispose 共用）。accept 线程会因 socket 关闭而退出。 */
+    private fun closePremainChannels() {
+        premainChannels.forEach { runCatching { it.server.close() } }
+        premainChannels.clear()
+    }
+
     /** 关闭开关：CONFIG 下发停采集（禁用不卸载语义）→ 会话关闭 → 桥回落。 */
     fun shutdownAll() {
         sessions.forEach { it.sendConfig(disabled = true) }
@@ -469,6 +714,9 @@ class AgentManager(private val project: Project) : Disposable {
         attachedPids.clear()
         // T-PS4-03：关闭开关同时清排队去抖表——关后不应残留排队记忆（3s 窗内的重复启动照常重判）
         pendingPids.clear()
+        // T-M56Phase2-Premain：待回连通道一并关掉（关后即便 agent 回连也会被 isEnhancedActive 挡下，
+        // 此处提前关是防 socket 挂到超时才回收）
+        closePremainChannels()
         updateOnline()
         // T-SettingsTruth P2：回落链完成 → 状态行「连接中断，已回落控制台捕获」
         publishStatusChanged()
@@ -545,11 +793,26 @@ class AgentManager(private val project: Project) : Disposable {
             // T-PS4-03：服务随 project 生命周期，去抖/幂等表一并清空（不引入跨项目残留）
             pendingPids.clear()
             attachedPids.clear()
+            // T-M56Phase2-Premain：待回连通道随项目销毁一并关闭
+            closePremainChannels()
             executor.shutdownNow()
             monitor.shutdownNow()
             SqlCaptureGate.paused.set(false)
         }
     }
+}
+
+/**
+ * T-M56Phase2-Premain：一条待回连的 premain 通道——启动前协商出的 loopback 端口 + 其监听 socket。
+ * [claimed] 由 accept 线程在收到回连时置位（[AgentManager.hasPendingPremainChannel] 与 prune 的判据）。
+ */
+internal class PremainChannel(
+    val port: Int,
+    val server: ServerSocket,
+    val preparedAtMs: Long,
+) {
+    @Volatile
+    var claimed: Boolean = false
 }
 
 /**
