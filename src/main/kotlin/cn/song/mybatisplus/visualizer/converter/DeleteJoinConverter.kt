@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperArg
 import cn.song.mybatisplus.visualizer.model.WrapperCall
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
+import com.intellij.openapi.project.Project
 
 /**
  * DeleteJoinWrapper 转换器（T-M21-08，MPJ 官方联表删除，1.4.5+，原 P3-01 提前）：
@@ -34,7 +35,7 @@ object DeleteJoinConverter : WrapperConverter {
 
     override val supportedTypes: Set<WrapperType> = setOf(WrapperType.DELETE_JOIN)
 
-    override fun convert(chain: WrapperChain, table: TableInfo): SqlStatement {
+    override fun convert(chain: WrapperChain, table: TableInfo, project: Project?): SqlStatement {
         // 主表别名：构造别名 > setAlias("x") 方法（官方 API）> 默认 t
         val mainAlias = chain.constructorAlias
             ?: chain.calls.firstOrNull { it.methodName == SET_ALIAS }
@@ -42,9 +43,10 @@ object DeleteJoinConverter : WrapperConverter {
             ?: MAIN_ALIAS_DEFAULT
 
         // 联表子句（渲染于 FROM 之后、WHERE 之前；deleteAll 的目标列表依赖 join 别名）
+        // T-FS-04：project 透传至类名兜底推断
         val joins = chain.calls
             .filter { it.methodName in MpjJoinSupport.JOIN_METHODS }
-            .mapNotNull { MpjJoinSupport.parseJoin(it, mainAlias) }
+            .mapNotNull { MpjJoinSupport.parseJoin(it, mainAlias, project) }
 
         // 删除目标表（delete/deleteAll 控制删除哪些表）
         val deleteTargets = parseDeleteTargets(chain, table, mainAlias, joins)

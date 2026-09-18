@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.model.SqlStatement
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
+import com.intellij.openapi.project.Project
 
 /**
  * LambdaDeleteWrapper 转换器（F-10，MP 3.5+）：`DELETE FROM 表 WHERE ...`。
@@ -17,7 +18,7 @@ object LambdaDeleteConverter : WrapperConverter {
 
     override val supportedTypes: Set<WrapperType> = setOf(WrapperType.LAMBDA_DELETE)
 
-    override fun convert(chain: WrapperChain, table: TableInfo): SqlStatement {
+    override fun convert(chain: WrapperChain, table: TableInfo, project: Project?): SqlStatement {
         val conditions = QueryWrapperParser(table).parse(chain).conditions
         return DeleteStatement(table, conditions)
     }

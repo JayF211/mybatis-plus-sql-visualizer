@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.model.SqlStatement
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
+import com.intellij.openapi.project.Project
 
 /**
  * LambdaQueryWrapper 转换器（F-01）：委托 [QueryWrapperParser] 实现。
@@ -14,6 +15,6 @@ object LambdaQueryConverter : WrapperConverter {
 
     override val supportedTypes: Set<WrapperType> = setOf(WrapperType.LAMBDA_QUERY)
 
-    override fun convert(chain: WrapperChain, table: TableInfo): SqlStatement =
+    override fun convert(chain: WrapperChain, table: TableInfo, project: Project?): SqlStatement =
         QueryWrapperParser(table).parse(chain)
 }

@@ -12,6 +12,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperCall
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.psi.EntityResolver
+import com.intellij.openapi.project.Project
 
 /**
  * Wrapper 转换器 SPI（T-M4-01，F-01/09/10/11/12 扩展点）。
@@ -27,11 +28,15 @@ interface WrapperConverter {
     /**
      * 将 Wrapper 调用链转换为 SQL 语句模型。
      *
-     * @param chain 调用链（PSI 解析产物）
-     * @param table 实体解析的表信息
+     * @param chain   调用链（PSI 解析产物）
+     * @param table   实体解析的表信息
+     * @param project 调用方项目（T-FS-04）：**类名兜底推断**（联表/collection 子表的实体类
+     *   PSI 不可解析时）按该项目读取项目级表配置（前缀/后缀/推断策略）。null = 未提供，
+     *   沿用「首个打开项目」的既有语义（见 [EntityResolver.inferDecoratedTableName]）——
+     *   纯单测与无项目上下文的调用方不受影响，与改动前逐字节一致。
      * @return 语句模型（交给 SqlGenerator 渲染）
      */
-    fun convert(chain: WrapperChain, table: TableInfo): SqlStatement
+    fun convert(chain: WrapperChain, table: TableInfo, project: Project? = null): SqlStatement
 }
 
 /**
@@ -61,12 +66,13 @@ object ConverterRegistry {
     /**
      * 转换调用链。
      *
-     * @param chain 调用链
-     * @param table 表信息
+     * @param chain   调用链
+     * @param table   表信息
+     * @param project 调用方项目（T-FS-04，语义见 [WrapperConverter.convert]）；null = 未提供
      * @return 语句模型；无匹配转换器时返回 null
      */
-    fun convert(chain: WrapperChain, table: TableInfo): SqlStatement? =
-        converters.firstOrNull { chain.wrapperType in it.supportedTypes }?.convert(chain, table)
+    fun convert(chain: WrapperChain, table: TableInfo, project: Project? = null): SqlStatement? =
+        converters.firstOrNull { chain.wrapperType in it.supportedTypes }?.convert(chain, table, project)
 }
 
 // ---------------------------------------------------------------------------
@@ -120,8 +126,10 @@ internal object MpjJoinSupport {
      *
      * @param call      join 调用（psi 层已解析实参）
      * @param mainAlias 主表别名（ON 右列归属）
+     * @param project   调用方项目（T-FS-04）：类名兜底推断（关联实体类 PSI 不可解析时）
+     *   按该项目读项目级表配置；null = 未提供（沿用「首个打开项目」既有语义）
      */
-    fun parseJoin(call: WrapperCall, mainAlias: String): JoinClause? {
+    fun parseJoin(call: WrapperCall, mainAlias: String, project: Project? = null): JoinClause? {
         val type = when (call.methodName) {
             "leftJoin" -> JoinType.LEFT
             "innerJoin" -> JoinType.INNER
@@ -164,10 +172,9 @@ internal object MpjJoinSupport {
         if (className.isEmpty()) return null
 
         // T-M19.4：子表推断走统一入口（策略 + 修饰链，全局语义）
-        // T-TS-07 留档：此处兜底未传 project（[WrapperCall] 模型不含 project，converter SPI
-        // 亦无项目入参）——多项目同开时表名修饰仍取「首个打开项目」；穿参需改 SPI 签名或给模型
-        // 加平台字段，另批处理（psi 侧兜底调用方已在本批显式传 project）
-        val tableName = tableInfo?.tableName ?: EntityResolver.inferDecoratedTableName(className)
+        // T-FS-04：类名兜底推断显式传调用方 project——多项目同开且项目级表配置不同时，
+        // 表名修饰不再受「首个打开项目」影响（project 由 SPI 入参透传，null 时行为不变）
+        val tableName = tableInfo?.tableName ?: EntityResolver.inferDecoratedTableName(className, project)
         var alias = className.replaceFirstChar { it.lowercaseChar() }
         val onConditions = mutableListOf<Condition>()
 
