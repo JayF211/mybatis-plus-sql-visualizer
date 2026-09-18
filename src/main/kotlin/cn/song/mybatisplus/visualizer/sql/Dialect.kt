@@ -419,31 +419,69 @@ object DialectRegistry {
     /**
      * T-DialectAutoInfer：**渲染方言统一读取**（全部渲染消费点收口此函数）。
      *
-     * - [cn.song.mybatisplus.visualizer.config.PluginSettings.State.dialectAuto]=false →
-     *   手动方言（`byName(state.dialect)`，项目级覆盖由调用方先解析成传入名）。
-     * - true → 智能推断（[DialectInference.infer]：agent 最近连接 URL > IDE 数据源 URL），
-     *   未命中回退 [MySqlDialect]（与 [byName] 未知回退语义一致）。
+     * T-TS-FixC：auto/manual 的**模式判定与手动值解析的唯一事实源在本函数内部**，按
+     * 「项目级 > 全局」逐层解析（项目级语义由
+     * [cn.song.mybatisplus.visualizer.config.ProjectPluginSettings] 的 effective* 方法承载）：
      *
-     * @param manualDialectName 手动模式下的方言名（null=按全局设置自查）
-     * @param project 数据源探测用项目（null=跳过数据源层，仅 agent URL）
+     *  1. 模式：项目级 [cn.song.mybatisplus.visualizer.config.ProjectPluginSettings.effectiveDialectAuto]
+     *     （启用项目设置且 dialectAuto 非 null 时取项目值）> 全局
+     *     [cn.song.mybatisplus.visualizer.config.PluginSettings.State.dialectAuto]（默认 true）。
+     *     为什么项目级是权威：项目级「智能推断」是用户对该项目的**显式声明**，全局值只是**默认值**
+     *     （与 ProjectPluginSettings.State 的「空/未覆盖=跟随全局」语义同构）。此前本函数直读全局
+     *     auto，于是「项目 true + 全局 false」组合下项目声明被静默忽略——调用方已按项目级判为 auto
+     *     进入本函数，却被全局 false 拉回手动分支返回全局手动值（T-TS-FixC 验证者实测口径缺陷）。
+     *  2. auto=true → 智能推断（[DialectInference.infer]：agent 最近连接 URL > IDE 数据源 URL），
+     *     未命中回退 [MySqlDialect]（与 [byName] 未知回退语义一致）。
+     *  3. auto=false → 手动值：项目级
+     *     [cn.song.mybatisplus.visualizer.config.ProjectPluginSettings.effectiveDialect]
+     *     （启用且非空）> 全局 [cn.song.mybatisplus.visualizer.config.PluginSettings.State.dialect]。
+     *
+     * 边界（**有意为之，非缺陷**）：[project]=null 时推断链不可用——[cn.song.mybatisplus.visualizer.log.agent.AgentManager]
+     * 与 [DataSourceUrlProbe] 都要求项目上下文，故落回手动值（无项目则取全局手动值）。psi 侧
+     * [cn.song.mybatisplus.visualizer.psi.currentDialect] 的调用点全部为无参调用，因此 PSI 路径
+     * auto 推断不生效（与合流前一致，无回归）；要让 PSI 路径生效，须由调用方传入宿主 PSI 项目。
+     *
+     * @param project 数据源探测与项目级设置读取用项目（null=无项目上下文，见上「边界」）
      */
-    fun effective(
-        manualDialectName: String? = null,
-        project: com.intellij.openapi.project.Project? = null,
-    ): Dialect {
+    fun effective(project: com.intellij.openapi.project.Project? = null): Dialect {
         val settings = runCatching {
             cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
         }.getOrNull()
-        val auto = settings?.dialectAuto ?: true
-        if (!auto) return byName(manualDialectName ?: settings.dialect)
+        // 手动值只解析一次：auto 分支的兜底与手动分支必须同源，否则两个分支会再次分叉
+        val manualName = projectManualDialectName(project) ?: settings?.dialect
+        val auto = projectDialectAuto(project) ?: settings?.dialectAuto ?: true
+        if (!auto) return byName(manualName)
         val agentUrl = runCatching {
-            cn.song.mybatisplus.visualizer.log.agent.AgentManager.getInstance(project ?: return fallbackFrom(settings))
+            cn.song.mybatisplus.visualizer.log.agent.AgentManager.getInstance(project ?: return byName(manualName))
         }.getOrNull()?.lastConnectionUrl()
-        val inferred = DialectInference.infer(agentUrl, cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.firstUrl(project))
+        val inferred = DialectInference.infer(agentUrl, DataSourceUrlProbe.firstUrl(project))
         return inferred.dialectName?.let { byName(it) } ?: MySqlDialect
     }
 
-    /** 手动模式无项目上下文时的兜底（按全局手动值）。 */
-    private fun fallbackFrom(settings: cn.song.mybatisplus.visualizer.config.PluginSettings.State?): Dialect =
-        byName(settings?.dialect)
+    /**
+     * T-TS-FixC：项目级有效方言模式（null=无项目上下文/项目级服务不可用，调用方按全局判定）。
+     *
+     * 复用 [cn.song.mybatisplus.visualizer.config.ProjectPluginSettings.effectiveDialectAuto] 而非直读
+     * `state.dialectAuto`：项目级方法内部已内置「总开关关闭 / dialectAuto=null → 跟随全局」回退语义，
+     * 直读会把这层回退丢掉（T-TS-06 已在 SqlPreviewService 侧踩过同款）。
+     */
+    private fun projectDialectAuto(project: com.intellij.openapi.project.Project?): Boolean? =
+        project?.let { p ->
+            runCatching {
+                cn.song.mybatisplus.visualizer.config.ProjectPluginSettings.getInstance(p).effectiveDialectAuto()
+            }.getOrNull()
+        }
+
+    /**
+     * T-TS-FixC：项目级有效手动方言名（null=无项目上下文/项目级服务不可用，调用方按全局判定）。
+     *
+     * 同样复用 [cn.song.mybatisplus.visualizer.config.ProjectPluginSettings.effectiveDialect]
+     * （启用且非空才取项目值，否则已回退全局）。
+     */
+    private fun projectManualDialectName(project: com.intellij.openapi.project.Project?): String? =
+        project?.let { p ->
+            runCatching {
+                cn.song.mybatisplus.visualizer.config.ProjectPluginSettings.getInstance(p).effectiveDialect()
+            }.getOrNull()
+        }
 }

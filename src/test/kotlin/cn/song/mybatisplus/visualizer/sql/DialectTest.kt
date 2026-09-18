@@ -240,4 +240,20 @@ class DialectTest {
         // 不带方言参数（默认 MySQL）
         assertEquals("10", SqlGenerator.generate(statement).substringAfter("LIMIT "))
     }
+
+    /**
+     * T-TS-FixC：`DialectRegistry.effective` 的兜底分支直接用例（此前零直接引用）。
+     *
+     * 纯环境（无平台 Application）下 PluginSettings 服务不可用 → 按全局默认 auto=true 进推断链，
+     * 而 project=null 时探测链不可用 → 回退 `byName(null)`。psi 侧无参 `currentDialect()` 调用点
+     * 全靠这条兜底，不得抛异常。
+     *
+     * auto/manual 的「项目级 × 全局」矩阵需要真实 app 服务与项目级服务，落在
+     * ProjectPluginSettingsTest.testDialectRegistryEffectiveMatrix。
+     */
+    @Test
+    fun `effective_无平台设置上下文_兜底MySQL`() {
+        assertEquals(MySqlDialect, DialectRegistry.effective())
+        assertEquals(MySqlDialect, DialectRegistry.effective(project = null))
+    }
 }
