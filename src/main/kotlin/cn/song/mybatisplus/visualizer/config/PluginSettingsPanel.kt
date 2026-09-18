@@ -218,9 +218,17 @@ class PluginSettingsPanel @JvmOverloads constructor(
         // T-SourceJumpFunnel：空态灰色占位提示（悬停 tooltip 之外的第一眼引导）
         emptyText.text = MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.placeholder")
         lineWrap = true
+        wrapStyleWord = true
         // T-FramePrefixVisibility F1：GridBag 外层高度不足时行被压缩，fill=NONE 下多行文本框
         // 会塌成一条细线（真机截图实证：标签可见、框不可见）——锁定首选高度兜底
         preferredSize = java.awt.Dimension(preferredSize.width, preferredSize.height.coerceAtLeast(60))
+        // T-FramePrefixVisibility F1b：深色主题下 JBTextArea 默认背景与面板几乎同色，输入框
+        // 「看不出是个框」（真机截图二轮反馈）——按平台编辑器标准形态补边框+背景区分度
+        background = com.intellij.util.ui.UIUtil.getTextFieldBackground()
+        border = javax.swing.border.CompoundBorder(
+            com.intellij.util.ui.UIUtil.getTextFieldBorder(),
+            javax.swing.border.EmptyBorder(4, 6, 4, 6),
+        )
     }
 
     /** gutter 预览 SQL 图标开关（M10）。 */
