@@ -139,6 +139,12 @@ class SqlInputEditor(
                 val prev = ed.document.getText(TextRange.create(insertEnd - 1, insertEnd)).firstOrNull() ?: return
                 if (!prev.isLetterOrDigit() && prev != '_') return
                 autoPopupScheduled = true
+                // write-safe: 本拍只由**用户输入活动**派生——documentChanged 在用户键入/粘贴的那次
+                // 活动内同步派发（本编辑器的唯一程序性写入 setSql 经 suppress 抑制，不调度补全），
+                // 无进度模态时平台取模态链（defaultModalityImpl：进度模态 → 上下文模态 → NON_MODAL）
+                // 落 NON_MODAL（恒 write-safe，见 DocWriteContext KDoc）；且 commitDocument 只把文档
+                // 变更同步进 PSI、不改文档文本。改投递为 nonModal 会把补全弹窗延后到模态关闭后，
+                // 用户输入期间的补全语义退化——故按平台语义显式声明豁免而非改投递。
                 ApplicationManager.getApplication().invokeLater {
                     autoPopupScheduled = false
                     val ed2 = editor

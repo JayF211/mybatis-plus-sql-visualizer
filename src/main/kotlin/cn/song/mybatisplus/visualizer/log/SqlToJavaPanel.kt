@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.execute.DocWriteContext
 import cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator
 import cn.song.mybatisplus.visualizer.reverse.JavaCommentStripper
 import cn.song.mybatisplus.visualizer.reverse.ReverseJoin
@@ -835,7 +836,10 @@ class SqlToJavaPanel(
                         }
                         cacheCandidates = payload.first
                         cacheSubEntities = subEntities
-                        render(result, payload.first, format, subEntities)
+                        // T-TS-03：写体显式过闸——render 内的 setResultText 写结果区文档；本拍由 BGT 派发
+                        DocWriteContext.runWriteSafe(project, "reverse render dispatch (auto infer)") {
+                            render(result, payload.first, format, subEntities)
+                        }
                     } else {
                         showEntitySelection(result, payload.first, payload.second, format)
                     }
@@ -848,7 +852,10 @@ class SqlToJavaPanel(
                 // 现状：副表候选逐表处理（开关关闭时多候选不弹窗，取第一个）
                 resolveSubEntities(payload.second, result.joins) { subEntities ->
                     cacheSubEntities = subEntities
-                    render(result, payload.first, format, subEntities)
+                    // T-TS-03：同上一处——本回调可能由模态选择弹窗关闭后触发，写体统一过闸
+                    DocWriteContext.runWriteSafe(project, "reverse render dispatch (sub entities)") {
+                        render(result, payload.first, format, subEntities)
+                    }
                 }
             }
         }
@@ -887,7 +894,9 @@ class SqlToJavaPanel(
                     format,
                     buildInvocation(),
                 )
-                setResultText(code)
+                // T-TS-03：写体显式过闸（[setResultText] 内同样过闸，这里是「哪次活动在写」的语义
+                // 声明点：本拍由 BGT 派发，模态进度下 defaultModalityState 可能取到写不安全模态）
+                DocWriteContext.runWriteSafe(project, "reverse batch result write") { setResultText(code) }
                 val finalSuccess = parseResults.count { it.result != null }
                 val failed = statements.size - finalSuccess
                 val msg = if (failed > 0) {
@@ -1088,10 +1097,20 @@ class SqlToJavaPanel(
             base
         }
 
-    /** 结果区写文本（WriteCommandAction——平台线程检查强制 write action）。 */
+    /**
+     * 结果区写文本（WriteCommandAction——平台线程检查强制 write action）。
+     *
+     * T-TS-03：写体统一过 [DocWriteContext] 闸门。`WriteCommandAction` 只声明「这是一次命令式写」，
+     * **不赋予 write-safe 资格**——合法性取决于这次 EDT 活动本身有没有资格（posted runnable 一律不算
+     * 用户活动，见 DocWriteContext KDoc）。本方法的调用方里有 BGT 派发的 `invokeLater` 拍（批量转换
+     * [convertBatch]）与模态选择弹窗的回调，这些活动不保证 write-safe；闸门判为不可写时转 nonModal
+     * 投递一拍。写体幂等（重投递写入的是同一份文本，文档内容不变），重跑无害。
+     */
     private fun setResultText(text: String) {
-        WriteCommandAction.runWriteCommandAction(project) {
-            resultEditor.document.setText(text)
+        DocWriteContext.runWriteSafe(project, "reverse panel result write") {
+            WriteCommandAction.runWriteCommandAction(project) {
+                resultEditor.document.setText(text)
+            }
         }
     }
 

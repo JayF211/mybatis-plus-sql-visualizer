@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.convention
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -24,6 +25,10 @@ import java.io.File
  *
  * 扫描前剥离 // 与 block 注释：历史事故现场常以注释形态留在代码里（JBIconButton 用法
  * 记录、updateActionsAsync 备注等），不剥会误报。
+ *
+ * write-safe 上下文两条规则（T-WriteSafeCtx + T-TS-04）：「`ModalityState.any()` 排出的回调里做文档写」
+ * 与「默认模态（尾随 lambda 形态 `invokeLater { … }`）排出的回调里做文档写」——豁免口径一致
+ * （调用行上方 `// write-safe: <理由>` 标注，或写体已过 `DocWriteContext` 闸门）。
  */
 class BannedApiSourceScanTest {
 
@@ -321,7 +326,8 @@ class BannedApiSourceScanTest {
      * 括号配平取出每个 `invokeLater(` 调用的完整文本（含闭括号）与起始行号。
      *
      * 精确匹配 `invokeLater(`，故 `invokeLaterWriteSafe(`/`invokeLaterOnWriteThread(`（正确形态）
-     * 天然不在扫描面内。
+     * 天然不在扫描面内。**尾随 lambda 形态**（`invokeLater { … }`，省略模态实参）由
+     * [invokeLaterLambdaCalls] 单独提取——两者的 body 取法不同（实参区 vs 花括号体），不可合并。
      */
     private fun invokeLaterCalls(code: String): List<Pair<Int, String>> {
         val out = ArrayList<Pair<Int, String>>()
@@ -345,6 +351,71 @@ class BannedApiSourceScanTest {
         return out
     }
 
+    /**
+     * 尾随 lambda 形态的 `invokeLater { … }`（**不带实参列表**）——隐式
+     * `ModalityState.defaultModalityState()` 投递。
+     *
+     * T-TS-04：只扫 [invokeLaterCalls] 的括号形态会让这一类整片漏网（线上四处真实站点全是此形态）。
+     * 花括号配平取调用体；只认「`invokeLater` 后紧跟 `{`」这一种写法，故
+     * `invokeLater({ … }, ModalityState.nonModal())`（显式 write-safe 模态）与
+     * `invokeLater(ModalityState.any()) { … }`（实参形态，归 any() 规则）天然不在扫描面内。
+     * 字符串模板 `"${x}"` 的花括号成对，不影响配平。
+     */
+    private fun invokeLaterLambdaCalls(code: String): List<Pair<Int, String>> {
+        val out = ArrayList<Pair<Int, String>>()
+        val regex = Regex("""(?<![A-Za-z0-9_])invokeLater\s*\{""")
+        for (m in regex.findAll(code)) {
+            val open = code.indexOf('{', m.range.first)
+            var depth = 0
+            var j = open
+            while (j < code.length) {
+                when (code[j]) {
+                    '{' -> depth++
+                    '}' -> {
+                        depth--
+                        if (depth == 0) break
+                    }
+                }
+                j++
+            }
+            if (j < code.length) {
+                out.add(code.take(open).count { it == '\n' } + 1 to code.substring(open, j + 1))
+            }
+        }
+        return out
+    }
+
+    /** 闸门令牌：body 内出现即视为写体已过 [cn.song.mybatisplus.visualizer.execute.DocWriteContext] 闸门。 */
+    private val writeGateTokens = listOf("DocWriteContext.runWriteSafe", "DocWriteContext.invokeLaterWriteSafe")
+
+    /**
+     * 默认模态投递里的写文档站点（尾随 lambda 形态）扫描——T-TS-04。
+     *
+     * 豁免三选一（与 `any()` 规则同口径）：
+     *  ① 调用行上方连续注释块含 `write-safe:` 理由标注；
+     *  ② body 内出现闸门令牌（`DocWriteContext.runWriteSafe` / `invokeLaterWriteSafe`）——写体已过闸；
+     *  ③ 无写入令牌（本规则只拦写文档）。
+     *
+     * 单独成函数（而非内联进 @Test）是为了让规则本身可自证：合成源码样本能直接喂进来，
+     * 否则「规则看不见尾随 lambda」这种空绿只能靠人工改线上代码才验得出来。
+     *
+     * @return `List<"路径:行号 → 命中令牌">`
+     */
+    private fun trailingLambdaWriteOffenders(sources: List<Pair<String, String>>): List<String> {
+        val offenders = ArrayList<String>()
+        for ((path, raw) in sources) {
+            for ((line, body) in invokeLaterLambdaCalls(raw)) {
+                if (leadingCommentBlock(raw, line).contains("write-safe:")) continue
+                if (writeGateTokens.any { body.contains(it) }) continue
+                // 令牌判定只看代码（剥掉 body 内注释，避免「注释里提到 setText」误报）
+                val stripped = stripComments(body)
+                val hit = writeTokens.filter { stripped.contains(it) }
+                if (hit.isNotEmpty()) offenders.add("$path:$line → ${hit.joinToString("/")}")
+            }
+        }
+        return offenders
+    }
+
     /** 取调用行**向上连续的注释/空行块**（豁免标注的合法位置：紧贴调用行上方）。 */
     private fun leadingCommentBlock(code: String, callLine: Int): String {
         val lines = code.lines()
@@ -362,6 +433,22 @@ class BannedApiSourceScanTest {
         return sb.toString()
     }
 
+    /**
+     * 文档写入令牌：命中即认为该回调在做文档写（`any()` 规则与尾随 lambda 规则共用同一份名单）。
+     *
+     * 名单里既有平台 API（`setText(` / `commitDocument(` / `WriteAction.`），也有本仓库自己的
+     * 写入收口（`writeVfTextViaDocument(` / `dispatchDocWriteOnEdt(` / `setResultText(` …）——
+     * 后者是「一次调用背后就是一次文档写」的语义单位，只看平台 API 会漏掉整条自建写链。
+     */
+    private val writeTokens = listOf(
+        "setText(", "insertString(", "replaceString(", "runWriteCommandAction", "commitDocument(",
+        "saveDocument(", "setBinaryContent", "writeVfTextViaDocument(", "docWriteOnce(",
+        "dispatchDocWriteOnEdt(", "writeConsoleOutput(", "refreshConsoleModel(",
+        "prepareAfterEditorResolved(", "attachConsole(", "prewarmExecTempFile(",
+        "prewarmPreviewTempFile(", "syncExecVfContentIfNeeded(", "renderSql(", "showSql(",
+        "recoverConsole(", "setResultText(", "createEditor(", "render(", "WriteAction.",
+    )
+
     @Test
     fun `禁止在any模态回调里做文档写`() {
         // T-WriteSafeCtx（2026-09-17 真机堆栈：Write-unsafe context! current modality=NON_MODAL，
@@ -375,19 +462,13 @@ class BannedApiSourceScanTest {
         // 修法三选一：① 写入类回调改 ModalityState.nonModal()；② 幂等重算的入口经 DocWriteContext
         // （runWriteSafe / invokeLaterWriteSafe）自愈投递；③ 确属纯 UI/只读，在调用行上方加
         // `// write-safe: <理由>` 标注（守卫按「调用行向上连续的注释块」识别豁免）。
-        val writeTokens = listOf(
-            "setText(", "insertString(", "replaceString(", "runWriteCommandAction", "commitDocument(",
-            "saveDocument(", "setBinaryContent", "writeVfTextViaDocument(", "docWriteOnce(",
-            "dispatchDocWriteOnEdt(", "writeConsoleOutput(", "refreshConsoleModel(",
-            "prepareAfterEditorResolved(", "attachConsole(", "prewarmExecTempFile(",
-            "prewarmPreviewTempFile(", "syncExecVfContentIfNeeded(", "renderSql(", "showSql(",
-            "recoverConsole(", "setResultText(", "createEditor(", "render(", "WriteAction.",
-        )
         val offenders = ArrayList<String>()
         for ((path, raw) in rawMainSources()) {
             for ((line, body) in invokeLaterCalls(raw)) {
                 if (!body.contains("ModalityState.any()")) continue
                 if (leadingCommentBlock(raw, line).contains("write-safe:")) continue
+                // 写体已过闸门（runWriteSafe 判为不可写时会转 nonModal 投递）→ 与标注同等的豁免
+                if (writeGateTokens.any { body.contains(it) }) continue
                 // 令牌判定只看代码（剥掉 body 内的注释，避免「注释里提到 setText」误报）
                 val stripped = stripComments(body)
                 val hit = writeTokens.filter { stripped.contains(it) }
@@ -397,6 +478,84 @@ class BannedApiSourceScanTest {
         assertTrue(
             "在 ModalityState.any()（恒 write-unsafe）排出的回调里做文档写，命中 ${offenders.size} 处：$offenders。" +
                 "改 ModalityState.nonModal()、或经 DocWriteContext 投递、或对纯 UI 站点加 `// write-safe: <理由>` 标注",
+            offenders.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `尾随lambda写文档守卫自证_合成样本必红`() {
+        // T-TS-04：新规则的**负向自证**。旧提取器只认 `invokeLater(`，而线上四处真实站点
+        // （SqlInputEditor:142 / SqlPreviewPanel:2486 / SqlToJavaPanel:820,881）全是省略括号、
+        // 隐式 defaultModalityState 的尾随 lambda 形态——规则看不见它们等于空绿。
+        // 用合成源码钉住三态：违规必报 / 过闸放行 / 带理由标注放行（豁免不得变成「一律放行」）。
+        val violating = listOf(
+            "src/main/kotlin/x/Bad.kt" to """
+                class Bad {
+                    fun go() {
+                        ApplicationManager.getApplication().invokeLater {
+                            editor.document.setText("boom")
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        val found = trailingLambdaWriteOffenders(violating)
+        assertEquals(
+            "尾随 lambda（隐式 defaultModalityState）里写文档必须被新规则命中，实际命中 ${found.size} 处：$found",
+            1,
+            found.size,
+        )
+
+        val gated = listOf(
+            "src/main/kotlin/x/Gated.kt" to """
+                class Gated {
+                    fun go() {
+                        app.invokeLater {
+                            DocWriteContext.runWriteSafe(project, "reason") { editor.document.setText("ok") }
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "写体已过 DocWriteContext 闸门的站点不得误判（闸门感知豁免）：${trailingLambdaWriteOffenders(gated)}",
+            0,
+            trailingLambdaWriteOffenders(gated).size,
+        )
+
+        val annotated = listOf(
+            "src/main/kotlin/x/Annotated.kt" to """
+                class Annotated {
+                    fun go() {
+                        // write-safe: 用户输入触发的补全前置提交（PSI 同步，不改文档文本）
+                        app.invokeLater {
+                            PsiDocumentManager.getInstance(project).commitDocument(doc)
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "带 `// write-safe: <理由>` 标注的站点应豁免：${trailingLambdaWriteOffenders(annotated)}",
+            0,
+            trailingLambdaWriteOffenders(annotated).size,
+        )
+    }
+
+    @Test
+    fun `禁止在默认模态尾随lambda里做文档写`() {
+        // T-TS-04：`invokeLater { … }`（省略模态实参）取 `ModalityState.defaultModalityState()`，
+        // 平台侧 `defaultModalityImpl()` 依次取 ProgressManager.currentProgressModality → 线程/协程
+        // 上下文 modality → NON_MODAL（DataSourceSelector T-FixWriteSafe 已逐帧实证）：**常态**落
+        // NON_MODAL 恒 write-safe，但**在模态进度/带 modality 上下文里**取到该模态——若该模态是
+        // 「写不安全进入」的，排队的 runnable 就在该模态事件泵内以 write-unsafe 身份执行，改文档
+        // 即 `Write-unsafe context!`。故写入类回调只有两条合规出路：写体过 DocWriteContext 闸门，
+        // 或调用行上方带理由的 `// write-safe:` 标注（用户输入活动内创建的拍属后者）。
+        val offenders = trailingLambdaWriteOffenders(rawMainSources())
+        assertTrue(
+            "在默认模态（defaultModalityState）排出的尾随 lambda 回调里做文档写，命中 ${offenders.size} 处：$offenders。" +
+                "写体过 DocWriteContext.runWriteSafe / invokeLaterWriteSafe 闸门，或对纯 UI/用户输入触发的站点" +
+                "加 `// write-safe: <理由>` 标注",
             offenders.isEmpty(),
         )
     }

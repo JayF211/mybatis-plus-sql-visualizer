@@ -297,6 +297,16 @@ class DiagramPanel(private val project: Project? = null) : JBPanel<DiagramPanel>
     internal fun isLoadingForTest(): Boolean = loadingTarget().isLoading
 
     /**
+     * T-TS-05：出转圈的层（测试断言用）。
+     *
+     * 与 [isLoadingForTest] 的区别：后者读的是**委托结果**，宿主注入被删掉后仍能自洽地读回
+     * [contentLayer]——单看它断不出「转圈画在了哪一层」。真机默认原生图路径下本面板会被
+     * `diagramTabHost.removeAll()` 摘出层级，[contentLayer] 上的转圈根本不可见（F8 的原始形态），
+     * 故第二层失效只能靠「出圈层 === 宿主加载面板」这种结构断言钉住。
+     */
+    internal fun loadingTargetForTest(): JBLoadingPanel = loadingTarget()
+
+    /**
      * T-F8：加载态接线探针（测试用）——[showLoading]/[hideLoading] 末尾回调。
      *
      * 只报这两次「显式 API 调用」，内部安全停止（[clear]/[showPlaceholder]/[showError] 里的复位）
