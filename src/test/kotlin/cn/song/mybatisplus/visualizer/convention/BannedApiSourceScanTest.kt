@@ -26,9 +26,18 @@ import java.io.File
  * 扫描前剥离 // 与 block 注释：历史事故现场常以注释形态留在代码里（JBIconButton 用法
  * 记录、updateActionsAsync 备注等），不剥会误报。
  *
- * write-safe 上下文两条规则（T-WriteSafeCtx + T-TS-04）：「`ModalityState.any()` 排出的回调里做文档写」
- * 与「默认模态（尾随 lambda 形态 `invokeLater { … }`）排出的回调里做文档写」——豁免口径一致
+ * write-safe 上下文两条规则（T-WriteSafeCtx + T-TS-04 + T-FS-06）：「`ModalityState.any()` 排出的
+ * 回调里做文档写」与「默认模态（`defaultModalityState()` 语义）排出的回调里做文档写」——豁免口径一致
  * （调用行上方 `// write-safe: <理由>` 标注，或写体已过 `DocWriteContext` 闸门）。
+ * T-FS-06 补两处缺口：①此前默认模态规则要求 `invokeLater` 后**紧跟** `{`、`any()` 规则只扫括号实参区，
+ * 于是 `invokeLater({ … }, ModalityState.defaultModalityState())`（显式默认模态 + **括号内** lambda）
+ * 两条规则都不覆盖（旧 KDoc 记为「双规则盲区」的 `invokeLater(ModalityState.any()) { … }` 形态
+ * **编译不过**——平台 `Application` 只有 `invokeLater(Runnable[, ModalityState[, Condition]])` 一族
+ * 重载，不存在 `(ModalityState, Runnable)`，`util-8.jar` javap 实证；故那是一条不可达的「盲区」，
+ * 真正可达且被漏掉的是本形态）；现由 [invokeLaterSites] 一次取全「实参区 + 尾随 lambda 体」后各归其规则。②花括号配平此前跑在未剥注释的
+ * 原文上：注释/字符串里不成对 `{` 会让 body 越过 lambda 边界（**过报**，把 lambda 外的合法写报成
+ * 违规），不成对 `}` 则提前截断（**漏报**）；现跑在 [maskNonCode]（剥注释 + 涂白字符串字面量、
+ * **逐行保行**）后的文本上。
  */
 class BannedApiSourceScanTest {
 
@@ -323,104 +332,265 @@ class BannedApiSourceScanTest {
             .toList()
 
     /**
-     * 括号配平取出每个 `invokeLater(` 调用的完整文本（含闭括号）与起始行号。
+     * 配平/提取专用文本：注释与字符串、字符字面量的**内容**替换为等长空白，换行与其余字符原样保留。
      *
-     * 精确匹配 `invokeLater(`，故 `invokeLaterWriteSafe(`/`invokeLaterOnWriteThread(`（正确形态）
-     * 天然不在扫描面内。**尾随 lambda 形态**（`invokeLater { … }`，省略模态实参）由
-     * [invokeLaterLambdaCalls] 单独提取——两者的 body 取法不同（实参区 vs 花括号体），不可合并。
+     * 为什么不复用 [stripComments]：
+     *  - **保行**——提取出的行号要回喂 [leadingCommentBlock]（它读原文找 `// write-safe:` 标注），
+     *    行号错位等于豁免认错行；而 [stripComments] 把 block 注释**整段删掉**（连同其中的换行），
+     *    多行 block 注释之后的全部行号一律前移（实测：`"a\n/* x\ny */\nb\nc\n"` 里的 `b` 由
+     *    第 4 行前移到第 3 行，即该函数**不保行**；断言见自证用例 `TFS06自证_…`）。
+     *  - **涂白而非删除**——保持片段内的字符距离，提取出的 body 可直接做令牌匹配
+     *    （`setText("x")` 涂白成 `setText(   )`，令牌 `setText(` 照旧命中）。
+     *
+     * 为什么必须剥（T-FS-06 缺口二）：花括号配平此前跑在**原文**上，注释/字符串里不成对 `{` 会让
+     * body 延伸越过 lambda 边界 → **过报**（把 lambda 之外的合法写报成违规）；不成对 `}` 则提前
+     * 截断 → **漏报**。字符串/字符字面量是同一类错配源（`"{"` / `'{'` 都不是花括号），一并涂白。
      */
-    private fun invokeLaterCalls(code: String): List<Pair<Int, String>> {
-        val out = ArrayList<Pair<Int, String>>()
+    private fun maskNonCode(source: String): String {
+        val out = StringBuilder(source.length)
+        var i = 0
+        while (i < source.length) {
+            val c = source[i]
+            when {
+                // 行注释：涂到行尾（换行留给下一轮原样保留）
+                c == '/' && source.startsWith("//", i) -> {
+                    while (i < source.length && source[i] != '\n') {
+                        out.append(' ')
+                        i++
+                    }
+                }
+                // block 注释（Kotlin 允许嵌套，按深度配对）：涂白，换行保留
+                c == '/' && source.startsWith("/*", i) -> {
+                    var depth = 0
+                    while (i < source.length) {
+                        if (source.startsWith("/*", i)) {
+                            depth++
+                            out.append("  ")
+                            i += 2
+                        } else if (source.startsWith("*/", i)) {
+                            depth--
+                            out.append("  ")
+                            i += 2
+                            if (depth == 0) break
+                        } else {
+                            out.append(if (source[i] == '\n') '\n' else ' ')
+                            i++
+                        }
+                    }
+                }
+                c == '"' -> i = maskStringLiteral(source, i, out)
+                c == '\'' -> i = maskCharLiteral(source, i, out)
+                else -> {
+                    out.append(c)
+                    i++
+                }
+            }
+        }
+        return out.toString()
+    }
+
+    /** 涂白一个字符串字面量（`"…"` 或原始 `"""…"""`）的内容；返回下一个待处理下标。 */
+    private fun maskStringLiteral(source: String, start: Int, out: StringBuilder): Int {
+        if (source.startsWith("\"\"\"", start)) {
+            out.append("\"\"\"")
+            var i = start + 3
+            while (i < source.length) {
+                if (source.startsWith("\"\"\"", i)) {
+                    out.append("\"\"\"")
+                    return i + 3
+                }
+                out.append(if (source[i] == '\n') '\n' else ' ')
+                i++
+            }
+            return i
+        }
+        out.append('"')
+        var i = start + 1
+        while (i < source.length) {
+            val c = source[i]
+            if (c == '\\' && i + 1 < source.length) {
+                out.append("  ")
+                i += 2
+                continue
+            }
+            if (c == '\n') return i // 未闭合（不该出现）：不吞后续行
+            if (c == '"') {
+                out.append('"')
+                return i + 1
+            }
+            out.append(' ')
+            i++
+        }
+        return i
+    }
+
+    /** 涂白字符字面量 `'x'` / `'\n'` 的内容（`'{'` 不是花括号——同类错配源）；非字面量原样放行。 */
+    private fun maskCharLiteral(source: String, start: Int, out: StringBuilder): Int {
+        var i = start + 1
+        while (i < source.length && source[i] != '\n' && i - start <= 10) {
+            if (source[i] == '\\') {
+                i += 2
+                continue
+            }
+            if (source[i] == '\'') {
+                out.append('\'').append(" ".repeat(i - start - 1)).append('\'')
+                return i + 1
+            }
+            i++
+        }
+        out.append('\'')
+        return start + 1
+    }
+
+    /**
+     * `invokeLater` 调用站点：**括号实参区**与**尾随 lambda 体**一次取全（T-FS-06 缺口一的修法）。
+     *
+     * 提取跑在 [maskNonCode] 后的文本上（配平必须避开注释/字符串里的假括号），行号因涂白保行
+     * 而与原文一致，可直接回喂 [leadingCommentBlock]。
+     */
+    private data class InvokeLaterSite(
+        /** 调用起始行号（1-based，与 [rawMainSources] 的原文行号对齐）。 */
+        val line: Int,
+        /** 括号实参区（含括号）；省略实参列表的尾随 lambda 形态为 null。 */
+        val args: String?,
+        /** 尾随 lambda 体（含花括号）；无尾随 lambda 为 null。 */
+        val lambdaBody: String?,
+    ) {
+        /**
+         * 写体扫描面 = 实参区 + 尾随 lambda 体。
+         *
+         * `invokeLater { … }` 的写体在**花括号**里、
+         * `invokeLater({ … }, ModalityState.any())` 的写体在**实参区**里——只看任一侧都会漏
+         * （T-FS-06 缺口一即后者曾被默认模态规则漏掉：该规则原先要求 `invokeLater` 后紧跟 `{`，
+         * 而此形态紧跟的是 `(`）。
+         */
+        val body: String = (args ?: "") + (lambdaBody ?: "")
+    }
+
+    /**
+     * 扫出全部 `invokeLater` 调用站点，覆盖四种写法：
+     *  ① `invokeLater({ … }, ModalityState.any())`——写体在实参区；
+     *  ② `invokeLater({ … }, ModalityState.defaultModalityState())`——实参区含显式默认模态
+     *     （T-FS-06 缺口一：旧默认模态规则要求 `invokeLater` 后紧跟 `{`，此形态整片漏网）；
+     *  ③ `invokeLater { … }`——省略实参的尾随 lambda（隐式 `defaultModalityState()`）；
+     *  ④ 链式前缀 `ApplicationManager.getApplication().invokeLater(…)`——`invokeLater(` 是子串匹配，
+     *     前缀写法不影响；负向后顾 `(?<![A-Za-z0-9_])` 保证不误吃 `invokeLaterWriteSafe` /
+     *     `invokeLaterOnWriteThread`（正确形态）。
+     *
+     * 已知边界（全部是**漏报**方向，不误报）：`invokeLater` 与 `(` 之间插空白、`)` 与 `{` 之间夹注释、
+     * 1 参 `invokeLater(runnable)`（写体在别处的 Runnable 定义里，本扫描面不可判定）、
+     * **`invokeLater({ … })`（括号内 lambda 且完全不写模态实参）**——默认模态规则按「省略实参列表
+     * 或实参区含 `defaultModalityState()`」判定，此形态两者都不满足故漏报（仓内 0 处）。收编需把判据
+     * 改成「实参区无 any()/nonModal() 模态令牌即视为默认模态」，会连带改变对自定义模态的判定
+     * （`stateForComponent` 等），本轮只登记边界不扩判据。
+     */
+    private fun invokeLaterSites(code: String): List<InvokeLaterSite> {
+        val out = ArrayList<InvokeLaterSite>()
+        // 形态 ①②④：带实参列表；其后可跟尾随 lambda
         var idx = code.indexOf("invokeLater(")
         while (idx >= 0) {
-            var depth = 0
-            var j = idx + "invokeLater".length
-            while (j < code.length) {
-                if (code[j] == '(') depth++
-                else if (code[j] == ')') {
-                    depth--
-                    if (depth == 0) break
-                }
-                j++
-            }
-            if (j < code.length) {
-                out.add(code.take(idx).count { it == '\n' } + 1 to code.substring(idx, j + 1))
+            val open = idx + "invokeLater".length
+            val close = matchingDelimiter(code, open, '(', ')')
+            if (close >= 0) {
+                out.add(
+                    InvokeLaterSite(
+                        line = code.take(idx).count { it == '\n' } + 1,
+                        args = code.substring(open, close + 1),
+                        lambdaBody = trailingLambdaBody(code, close + 1),
+                    ),
+                )
             }
             idx = code.indexOf("invokeLater(", idx + 1)
+        }
+        // 形态 ③：省略实参列表的尾随 lambda
+        for (m in Regex("""(?<![A-Za-z0-9_])invokeLater\s*\{""").findAll(code)) {
+            val open = code.indexOf('{', m.range.first)
+            val close = matchingDelimiter(code, open, '{', '}')
+            if (close >= 0) {
+                out.add(
+                    InvokeLaterSite(
+                        line = code.take(open).count { it == '\n' } + 1,
+                        args = null,
+                        lambdaBody = code.substring(open, close + 1),
+                    ),
+                )
+            }
         }
         return out
     }
 
-    /**
-     * 尾随 lambda 形态的 `invokeLater { … }`（**不带实参列表**）——隐式
-     * `ModalityState.defaultModalityState()` 投递。
-     *
-     * T-TS-04：只扫 [invokeLaterCalls] 的括号形态会让这一类整片漏网（线上四处真实站点全是此形态）。
-     * 花括号配平取调用体；只认「`invokeLater` 后紧跟 `{`」这一种写法，故
-     * `invokeLater({ … }, ModalityState.nonModal())`（显式 write-safe 模态）天然不在扫描面内。
-     *
-     * **两处已知边界（T-TailSweep 独立复核实测订正，勿照旧文理解）**：
-     *  - `invokeLater(ModalityState.any()) { … }`（实参 + 尾随 lambda）**两条规则都不覆盖**——本函数要求
-     *    `invokeLater` 后紧跟 `{`，而 any() 规则只扫括号实参区、不含尾随 lambda 体。这是**双规则盲区**
-     *    （当前仓内 0 处），不是「归 any() 规则」；新增该形态的写文档站点会被静默放过。
-     *  - 配平跑在**未剥注释的原文**上（本文件其余扫描才剥注释）：字符串或注释里出现**不成对 `{`** 会让
-     *    body 延伸越过 lambda 边界 → **过报**（把 lambda 外的文档写报进来）；不成对 `}` 则提前截断 → 漏报。
-     *    故「只可能漏报」不成立；已用合成源码用例覆盖三态（违规必报/过闸放行/标注放行）。
-     */
-    private fun invokeLaterLambdaCalls(code: String): List<Pair<Int, String>> {
-        val out = ArrayList<Pair<Int, String>>()
-        val regex = Regex("""(?<![A-Za-z0-9_])invokeLater\s*\{""")
-        for (m in regex.findAll(code)) {
-            val open = code.indexOf('{', m.range.first)
-            var depth = 0
-            var j = open
-            while (j < code.length) {
-                when (code[j]) {
-                    '{' -> depth++
-                    '}' -> {
-                        depth--
-                        if (depth == 0) break
-                    }
-                }
-                j++
+    /** 从 [open] 处的开括号配平到对应闭括号下标；配不平（延伸到文末）返回 -1。 */
+    private fun matchingDelimiter(code: String, open: Int, openChar: Char, closeChar: Char): Int {
+        var depth = 0
+        var i = open
+        while (i < code.length) {
+            val c = code[i]
+            if (c == openChar) depth++
+            else if (c == closeChar) {
+                depth--
+                if (depth == 0) return i
             }
-            if (j < code.length) {
-                out.add(code.take(open).count { it == '\n' } + 1 to code.substring(open, j + 1))
-            }
+            i++
         }
-        return out
+        return -1
+    }
+
+    /** [from] 起跳过空白（含换行）后紧跟 `{` 时取尾随 lambda 体；否则 null。 */
+    private fun trailingLambdaBody(code: String, from: Int): String? {
+        var i = from
+        while (i < code.length && code[i].isWhitespace()) i++
+        if (i >= code.length || code[i] != '{') return null
+        val close = matchingDelimiter(code, i, '{', '}')
+        return if (close >= 0) code.substring(i, close + 1) else null
     }
 
     /** 闸门令牌：body 内出现即视为写体已过 [cn.song.mybatisplus.visualizer.execute.DocWriteContext] 闸门。 */
     private val writeGateTokens = listOf("DocWriteContext.runWriteSafe", "DocWriteContext.invokeLaterWriteSafe")
 
     /**
-     * 默认模态投递里的写文档站点（尾随 lambda 形态）扫描——T-TS-04。
+     * 通用扫描：对满足 [isTarget] 的 `invokeLater` 站点判定「回调里做文档写」，
+     * 返回 `List<"路径:行号 → 命中令牌">`。
      *
-     * 豁免三选一（与 `any()` 规则同口径）：
+     * 豁免三选一（两条规则同口径）：
      *  ① 调用行上方连续注释块含 `write-safe:` 理由标注；
-     *  ② body 内出现闸门令牌（`DocWriteContext.runWriteSafe` / `invokeLaterWriteSafe`）——写体已过闸；
-     *  ③ 无写入令牌（本规则只拦写文档）。
+     *  ② 写体已过闸门（[writeGateTokens]）；
+     *  ③ 无写入令牌（本族规则只拦写文档）。
      *
+     * 令牌判定只看代码——body 取自 [maskNonCode] 后的文本，注释与字符串里的 `setText` 字样不算写。
      * 单独成函数（而非内联进 @Test）是为了让规则本身可自证：合成源码样本能直接喂进来，
-     * 否则「规则看不见尾随 lambda」这种空绿只能靠人工改线上代码才验得出来。
-     *
-     * @return `List<"路径:行号 → 命中令牌">`
+     * 否则「规则看不见某形态」这种空绿只能靠人工改线上代码才验得出来。
      */
-    private fun trailingLambdaWriteOffenders(sources: List<Pair<String, String>>): List<String> {
+    private fun invokeLaterWriteOffenders(
+        sources: List<Pair<String, String>>,
+        isTarget: (InvokeLaterSite) -> Boolean,
+    ): List<String> {
         val offenders = ArrayList<String>()
         for ((path, raw) in sources) {
-            for ((line, body) in invokeLaterLambdaCalls(raw)) {
-                if (leadingCommentBlock(raw, line).contains("write-safe:")) continue
-                if (writeGateTokens.any { body.contains(it) }) continue
-                // 令牌判定只看代码（剥掉 body 内注释，避免「注释里提到 setText」误报）
-                val stripped = stripComments(body)
-                val hit = writeTokens.filter { stripped.contains(it) }
-                if (hit.isNotEmpty()) offenders.add("$path:$line → ${hit.joinToString("/")}")
+            for (site in invokeLaterSites(maskNonCode(raw))) {
+                if (!isTarget(site)) continue
+                if (leadingCommentBlock(raw, site.line).contains("write-safe:")) continue
+                if (writeGateTokens.any { site.body.contains(it) }) continue
+                val hit = writeTokens.filter { site.body.contains(it) }
+                if (hit.isNotEmpty()) offenders.add("$path:${site.line} → ${hit.joinToString("/")}")
             }
         }
         return offenders
     }
+
+    /** `ModalityState.any()`（恒 write-unsafe）规则的站点判定。 */
+    private fun anyModalityWriteOffenders(sources: List<Pair<String, String>>): List<String> =
+        invokeLaterWriteOffenders(sources) { it.args?.contains("ModalityState.any()") == true }
+
+    /**
+     * 默认模态规则——`defaultModalityState()` 语义的两种等价写法：
+     *  ① 省略实参的尾随 lambda `invokeLater { … }`（[InvokeLaterSite.args] == null）；
+     *  ② 显式实参 `invokeLater({ … }, ModalityState.defaultModalityState())`（T-FS-06 补口，此前漏网）。
+     * `nonModal()`（恒 write-safe）与 `any()`（另由 [anyModalityWriteOffenders] 管）都不在此列。
+     */
+    private fun defaultModalityWriteOffenders(sources: List<Pair<String, String>>): List<String> =
+        invokeLaterWriteOffenders(sources) {
+            it.args == null || it.args.contains("ModalityState.defaultModalityState()")
+        }
 
     /** 取调用行**向上连续的注释/空行块**（豁免标注的合法位置：紧贴调用行上方）。 */
     private fun leadingCommentBlock(code: String, callLine: Int): String {
@@ -468,19 +638,10 @@ class BannedApiSourceScanTest {
         // 修法三选一：① 写入类回调改 ModalityState.nonModal()；② 幂等重算的入口经 DocWriteContext
         // （runWriteSafe / invokeLaterWriteSafe）自愈投递；③ 确属纯 UI/只读，在调用行上方加
         // `// write-safe: <理由>` 标注（守卫按「调用行向上连续的注释块」识别豁免）。
-        val offenders = ArrayList<String>()
-        for ((path, raw) in rawMainSources()) {
-            for ((line, body) in invokeLaterCalls(raw)) {
-                if (!body.contains("ModalityState.any()")) continue
-                if (leadingCommentBlock(raw, line).contains("write-safe:")) continue
-                // 写体已过闸门（runWriteSafe 判为不可写时会转 nonModal 投递）→ 与标注同等的豁免
-                if (writeGateTokens.any { body.contains(it) }) continue
-                // 令牌判定只看代码（剥掉 body 内的注释，避免「注释里提到 setText」误报）
-                val stripped = stripComments(body)
-                val hit = writeTokens.filter { stripped.contains(it) }
-                if (hit.isNotEmpty()) offenders.add("$path:$line → ${hit.joinToString("/")}")
-            }
-        }
+        //
+        // T-FS-06 缺口一：站点判定改为「实参区含 any()」，写体扫描面 = 实参区 + **尾随 lambda 体**——
+        // `invokeLater({ editor.document.setText(…) }, ModalityState.any())` 的写体在实参区。
+        val offenders = anyModalityWriteOffenders(rawMainSources())
         assertTrue(
             "在 ModalityState.any()（恒 write-unsafe）排出的回调里做文档写，命中 ${offenders.size} 处：$offenders。" +
                 "改 ModalityState.nonModal()、或经 DocWriteContext 投递、或对纯 UI 站点加 `// write-safe: <理由>` 标注",
@@ -505,7 +666,7 @@ class BannedApiSourceScanTest {
                 }
             """.trimIndent(),
         )
-        val found = trailingLambdaWriteOffenders(violating)
+        val found = defaultModalityWriteOffenders(violating)
         assertEquals(
             "尾随 lambda（隐式 defaultModalityState）里写文档必须被新规则命中，实际命中 ${found.size} 处：$found",
             1,
@@ -524,9 +685,9 @@ class BannedApiSourceScanTest {
             """.trimIndent(),
         )
         assertEquals(
-            "写体已过 DocWriteContext 闸门的站点不得误判（闸门感知豁免）：${trailingLambdaWriteOffenders(gated)}",
+            "写体已过 DocWriteContext 闸门的站点不得误判（闸门感知豁免）：${defaultModalityWriteOffenders(gated)}",
             0,
-            trailingLambdaWriteOffenders(gated).size,
+            defaultModalityWriteOffenders(gated).size,
         )
 
         val annotated = listOf(
@@ -542,9 +703,9 @@ class BannedApiSourceScanTest {
             """.trimIndent(),
         )
         assertEquals(
-            "带 `// write-safe: <理由>` 标注的站点应豁免：${trailingLambdaWriteOffenders(annotated)}",
+            "带 `// write-safe: <理由>` 标注的站点应豁免：${defaultModalityWriteOffenders(annotated)}",
             0,
-            trailingLambdaWriteOffenders(annotated).size,
+            defaultModalityWriteOffenders(annotated).size,
         )
     }
 
@@ -557,12 +718,155 @@ class BannedApiSourceScanTest {
         // 「写不安全进入」的，排队的 runnable 就在该模态事件泵内以 write-unsafe 身份执行，改文档
         // 即 `Write-unsafe context!`。故写入类回调只有两条合规出路：写体过 DocWriteContext 闸门，
         // 或调用行上方带理由的 `// write-safe:` 标注（用户输入活动内创建的拍属后者）。
-        val offenders = trailingLambdaWriteOffenders(rawMainSources())
+        //
+        // T-FS-06 补口：显式 `invokeLater({ … }, ModalityState.defaultModalityState())` 与省略实参的
+        // 尾随 lambda 是**同一语义**（同一份 defaultModalityImpl 取值链），此前只认后者。
+        val offenders = defaultModalityWriteOffenders(rawMainSources())
         assertTrue(
-            "在默认模态（defaultModalityState）排出的尾随 lambda 回调里做文档写，命中 ${offenders.size} 处：$offenders。" +
+            "在默认模态（defaultModalityState）排出的回调里做文档写，命中 ${offenders.size} 处：$offenders。" +
                 "写体过 DocWriteContext.runWriteSafe / invokeLaterWriteSafe 闸门，或对纯 UI/用户输入触发的站点" +
                 "加 `// write-safe: <理由>` 标注",
             offenders.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `TFS06自证_显式模态实参写法必报且配平不越界`() {
+        // ---- 缺口一：显式默认模态 + 括号内 lambda 此前两条规则都不覆盖 ----
+        // 旧默认模态规则要求 `invokeLater` 后紧跟 `{`、any() 规则只扫含 any() 的实参区，于是
+        // `invokeLater({ … }, ModalityState.defaultModalityState())` 整片漏网（当前仓内 0 处，属预防性
+        // 守卫——必须用合成样本把「新规则看得见它」钉住，否则将来落地即静默）。
+        // 样本一律用**可编译**的真实写法（平台无 `(ModalityState, Runnable)` 重载，见类 KDoc）。
+        val anyArgLambda = listOf(
+            "src/main/kotlin/x/ChainedAny.kt" to """
+                class ChainedAny {
+                    fun go(doc: Document) {
+                        ApplicationManager.getApplication().invokeLater({ doc.setText("boom") }, ModalityState.any())
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "any() 实参的写文档站点必须被 any() 规则命中（链式前缀 ApplicationManager.getApplication(). " +
+                "一并覆盖）：${anyModalityWriteOffenders(anyArgLambda)}",
+            1,
+            anyModalityWriteOffenders(anyArgLambda).size,
+        )
+        assertEquals(
+            "同一站点归 any() 规则，不得被默认模态规则重复计入：" +
+                "${defaultModalityWriteOffenders(anyArgLambda)}",
+            0,
+            defaultModalityWriteOffenders(anyArgLambda).size,
+        )
+
+        val nonModalArg = listOf(
+            "src/main/kotlin/x/NonModalArg.kt" to """
+                class NonModalArg {
+                    fun go(doc: Document) {
+                        app.invokeLater({ doc.setText("ok") }, ModalityState.nonModal())
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "nonModal() 实参恒 write-safe，两条规则都不得报：" +
+                "${anyModalityWriteOffenders(nonModalArg) + defaultModalityWriteOffenders(nonModalArg)}",
+            0,
+            anyModalityWriteOffenders(nonModalArg).size + defaultModalityWriteOffenders(nonModalArg).size,
+        )
+
+        // 显式 defaultModalityState 实参 = 与省略实参的尾随 lambda 同一语义（T-FS-06 顺带补口）
+        val explicitDefault = listOf(
+            "src/main/kotlin/x/ExplicitDefault.kt" to """
+                class ExplicitDefault {
+                    fun go(doc: Document) {
+                        app.invokeLater({ doc.setText("boom") }, ModalityState.defaultModalityState())
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "显式 defaultModalityState 实参 + 尾随 lambda 必须被默认模态规则命中：" +
+                "${defaultModalityWriteOffenders(explicitDefault)}",
+            1,
+            defaultModalityWriteOffenders(explicitDefault).size,
+        )
+
+        // ---- 缺口二：配平必须先剥注释/涂白字符串，否则过报（body 越界）或漏报（body 被截断）----
+        val unbalancedOpenInComment = listOf(
+            "src/main/kotlin/x/UnbalancedOpen.kt" to """
+                class UnbalancedOpen {
+                    fun go(doc: Document) {
+                        app.invokeLater {
+                            // 注释里的不成对左花括号 {
+                            touchUi()
+                        }
+                        WriteAction.compute<Unit, Throwable> { doc.setText("outside") }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "lambda 体注释里不成对 `{` 不得让 body 越过 lambda 边界（否则 lambda 外 WriteAction 里的" +
+                "合法写被过报——实测原状即红）：${defaultModalityWriteOffenders(unbalancedOpenInComment)}",
+            0,
+            defaultModalityWriteOffenders(unbalancedOpenInComment).size,
+        )
+
+        val unbalancedCloseInComment = listOf(
+            "src/main/kotlin/x/UnbalancedClose.kt" to """
+                class UnbalancedClose {
+                    fun go(doc: Document) {
+                        app.invokeLater {
+                            // 注释里的不成对右花括号 }
+                            doc.setText("boom")
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "注释里不成对 `}` 不得提前截断 body 而漏掉其后的真违规：" +
+                "${defaultModalityWriteOffenders(unbalancedCloseInComment)}",
+            1,
+            defaultModalityWriteOffenders(unbalancedCloseInComment).size,
+        )
+
+        val braceInString = listOf(
+            "src/main/kotlin/x/BraceInString.kt" to """
+                class BraceInString {
+                    fun go(doc: Document) {
+                        app.invokeLater {
+                            val s = "} 字符串里的花括号不算花括号"
+                            doc.setText(s)
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "字符串字面量里的 `}` 不得提前截断 body（同类错配源，一并涂白）：" +
+                "${defaultModalityWriteOffenders(braceInString)}",
+            1,
+            defaultModalityWriteOffenders(braceInString).size,
+        )
+
+        // ---- 工具函数自证：stripComments 不保行 / maskNonCode 保行（行号错位=豁免标注认错行）----
+        val multilineBlockComment = "a\n/* x\ny */\nb\nc\n"
+        assertEquals(
+            "stripComments 把多行 block 注释整段删除（含其中的换行）→ 其后行号前移，不可用于回推行号",
+            2,
+            stripComments(multilineBlockComment).lines().indexOfFirst { it.trim() == "b" },
+        )
+        assertEquals(
+            "maskNonCode 逐行保行（注释涂白、换行保留）——配平提取的行号才能回喂 leadingCommentBlock",
+            3,
+            maskNonCode(multilineBlockComment).lines().indexOfFirst { it.trim() == "b" },
+        )
+        assertEquals(
+            "maskNonCode 不增删行（原文 5 行 + 末尾空串 = 6 项）",
+            multilineBlockComment.lines().size,
+            maskNonCode(multilineBlockComment).lines().size,
         )
     }
 }
