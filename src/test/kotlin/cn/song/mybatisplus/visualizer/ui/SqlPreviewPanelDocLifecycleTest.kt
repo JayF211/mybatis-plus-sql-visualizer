@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.WrapperType
+import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.JoinFkRegistry
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.application.WriteAction
 import com.intellij.openapi.application.WriteIntentReadAction
@@ -127,6 +128,31 @@ class SqlPreviewPanelDocLifecycleTest : BasePlatformTestCase() {
             )
         } finally {
             panel.clear()
+        }
+    }
+
+    // ======================== T-PS4-14④：dispose 回收注册表 ========================
+
+    /**
+     * 面板 dispose 后 [JoinFkRegistry] 应为空。沙盒无 Database 插件（原生 JOIN 建图链走
+     * HeavyNativeDatabaseDiagramJoinChainTest 的 testDatabase 通道），此处按 SqlPreviewPanelTest
+     * 惯例直接 put 模拟「最后一张 JOIN 图建图登记」，断言 dispose 的回收语义。
+     */
+    fun testDisposeClearsJoinFkRegistry() {
+        JoinFkRegistry.clearForTest()
+        try {
+            JoinFkRegistry.put("order", "user", "user_id", "id")
+            assertTrue("前置：注册表应非空", JoinFkRegistry.find("order", "user").isNotEmpty())
+
+            val panel = SqlPreviewPanel(project)
+            panel.dispose()
+
+            assertTrue(
+                "T-PS4-14④ 核心：面板 dispose 后注册表应为空（残留期 EP 不得给用户自开 Database 图补旧连线）",
+                JoinFkRegistry.find("order", "user").isEmpty(),
+            )
+        } finally {
+            JoinFkRegistry.clearForTest()
         }
     }
 }

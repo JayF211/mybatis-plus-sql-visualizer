@@ -1195,7 +1195,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      *
      * T-EmbedFkOrder F2：本方法**不**清理 JOIN 虚拟外键注册表——它可能在建新图之前被调用（此时
      * 新图尚未登记，清了也无害），也可能在换图/卸载时被调用（此时若清会把刚登记的抹掉）。
-     * 注册表的清理职责在明确语义点：登记前自带 clear 与 [unloadJoinDiagram]。
+     * 注册表的清理职责在明确语义点（三点口径）：登记前自带 clear、[unloadJoinDiagram]（无 JOIN/
+     * 面板清空）与面板 [dispose]（T-PS4-14④）。
      */
     private fun clearNativeDiagram() {
         currentNativeDiagram?.let {
@@ -3052,6 +3053,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-Perf-16：释放 DataSourceSelector 单例滞留引用（弹窗关闭此前不走 clear 按钮路径——
         // prepared/shared/pendingOnConsole 强引用已关闭面板与原生控制台，堆转储滞留整棵面板树）
         SqlExecutor.releaseForPanel()
+        // T-PS4-14④：面板 dispose 是 JOIN 虚拟外键注册表的最后语义回收点（T-EmbedFkOrder
+        // 「显式语义点回收」三点口径：登记前 registerJoinForeignKeys 自带 clear + 无 JOIN 路径
+        // unloadJoinDiagram + 面板 dispose）——最后一张 JOIN 图建图的登记此前驻留到下次建图，
+        // 残留期 JoinVirtualFkProvider EP 会给用户自开的 Database 图补出旧连线。runCatching
+        // 照邻居清理件风格（释放失败不阻断 dispose 链）
+        runCatching {
+            cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport.clearRegisteredFk()
+        }
         // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
         Disposer.dispose(this)
     }
