@@ -70,6 +70,8 @@ class AgentEventAdapterTest {
         assertEquals(2, e.sourceCandidates.size)
         assertEquals("com/example/service/UserServiceImpl.java" to 36, e.sourceCandidates[0])
         assertEquals("com/example/controller/UserController.java" to 48, e.sourceCandidates[1])
+        // 两列旧 agent 协议：无类名列 → candidateClasses 空（可能少于候选数）
+        assertEquals(0, e.candidateClasses.size)
     }
 
     @Test
@@ -77,15 +79,29 @@ class AgentEventAdapterTest {
         // 旧版 agent 无 cands 键：必须空列表（跳转回退主位置），不得抛错
         val e = AgentEvent.parse("""{"sql":"SELECT 1","ts":1,"dn":1,"sf":"a/A.java","sl":3}""")!!
         assertEquals(0, e.sourceCandidates.size)
+        assertEquals(0, e.candidateClasses.size)
     }
 
     @Test
     fun 事件解析_候选畸形项跳过_不污染() {
-        val body = """{"sql":"SELECT 1","ts":1,"dn":1,"cands":[["ok/A.java",5],["",9],["noLine.java"],123]}"""
+        // 四列/含 null 类名形态混入：跳过语义不变（T-PS4-14 解析合一后仍逐项容错）
+        val body = """{"sql":"SELECT 1","ts":1,"dn":1,"cands":[["ok/A.java",5,"com.ok.A","m1"],["",9,"com.x","m"],["noLine.java"],123,["null/B.java",7,null,"m2"]]}"""
         val e = AgentEvent.parse(body)!!
-        assertEquals("空文件名/非数组项应跳过", 2, e.sourceCandidates.size)
+        assertEquals("空文件名/非数组项/非数组元素应跳过", 3, e.sourceCandidates.size)
         assertEquals("ok/A.java" to 5, e.sourceCandidates[0])
         assertEquals("缺行号项保留且行号归 0", "noLine.java" to 0, e.sourceCandidates[1])
+        assertEquals("null/B.java" to 7, e.sourceCandidates[2])
+        assertEquals("类名缺失项不入名单、有效项按序入名单", listOf("com.ok.A"), e.candidateClasses)
+    }
+
+    @Test
+    fun `T_PS4_14_解析合一_四列旧协议兼容与字段对齐`() {
+        // 四列协议（file/line/className/method）：sourceCandidates/candidateClasses 从同一次解析派生
+        // （原实现同一 JSON 数组解析三遍）；第四列 method 协议遗留零消费方，残留不串位不抛错
+        val body = """{"sql":"SELECT 1","ts":1,"dn":1,"cands":[["a/S.java",10,"com.a.S","doQuery"],["b/C.java",20,"com.b.C","onClick"]]}"""
+        val e = AgentEvent.parse(body)!!
+        assertEquals(listOf("a/S.java" to 10, "b/C.java" to 20), e.sourceCandidates)
+        assertEquals("类名与候选栈序对齐", listOf("com.a.S", "com.b.C"), e.candidateClasses)
     }
 
     @Test
