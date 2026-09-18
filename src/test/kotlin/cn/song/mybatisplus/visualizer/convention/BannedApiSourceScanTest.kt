@@ -113,6 +113,38 @@ class BannedApiSourceScanTest {
     }
 
     @Test
+    fun `测试代码禁直调BrowserUtil_browse统一走SafeBrowser`() {
+        // T-BrowserLeak2（2026-09-18）：SafeBrowserTest 直调真实 URL 曾致定时回归每次真开 Edge
+        // （守卫「app != null && isUnitTestMode」在无 Application 环境放行）。src/test 同样禁直调，
+        // 统一走 util.SafeBrowser——其 fail-safe 守卫在无 Application 环境恒短路。
+        val bad = repoRoot().resolve("src/test/kotlin").walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .filter { it.name != "BannedApiSourceScanTest.kt" } // 本守卫自身的报错文案含该片段，须自豁免
+            .filter { stripComments(it.readText()).contains("BrowserUtil.browse(") }
+            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') }
+            .toList()
+        assertTrue(
+            "src/test 出现 BrowserUtil.browse( 直调（$bad）——测试进程触达即弹宿主机浏览器，" +
+                "统一改走 util.SafeBrowser",
+            bad.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `SafeBrowser守卫语义_无Application必短路锚点`() {
+        // T-BL2-03：守卫语义锚点防回退——isTestEnvironment 必须是「app == null || isUnitTestMode」
+        // fail-safe 形态；若有人改回「app != null &&」（白名单放行），无 Application 测试进程会真开浏览器。
+        val code = stripComments(
+            repoRoot().resolve("src/main/kotlin/cn/song/mybatisplus/visualizer/util/SafeBrowser.kt").readText(),
+        )
+        assertTrue(
+            "SafeBrowser.kt 丢失 fail-safe 守卫形态（app == null || isUnitTestMode）——" +
+                "无平台 Application 的测试进程会放行 BrowserUtil 并弹宿主机浏览器（T-BrowserLeak2 实录）",
+            code.contains("app == null || app.isUnitTestMode"),
+        )
+    }
+
+    @Test
     fun `createFileFromText调用点文件必须含ReadAction保护`() {
         val bad = mainSources()
             .filter { (_, code) -> code.contains("createFileFromText(") }
