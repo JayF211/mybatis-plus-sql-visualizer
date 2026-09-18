@@ -13,7 +13,7 @@ import javax.swing.JTextField
 /**
  * 项目级设置页测试（F-44 续 + T-SettingsTruth P4 面板扩容）：
  *  - createComponent 构建「使用项目设置」开关 + 十项可覆盖字段（State 十字段一一对应）
- *  - 构造后 isModified=false；各控件改动触发 modified 翻转
+ *  - 构造后 isModified=false；各控件改动后 isModified 逐项比对为真（T-RA-04 起无标志位）
  *  - apply 写回 ProjectPluginSettings 且 isModified 复位；reset 回灌 state 值
  *  - 空值语义：state null/空字段时控件灌全局值；字符串字段 apply 时 trim
  * 通过组件遍历取控件，无需新增生产缝。tearDown 还原项目/全局设置状态。
@@ -101,7 +101,7 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         val comp = cfg.createComponent()
         val check = all(comp).filterIsInstance<JCheckBox>().first()
         assertFalse(cfg.isModified())
-        check.doClick() // 触发 actionPerformed → modified=true
+        check.doClick() // 触发 actionPerformed；isModified 由逐项比对得出（无标志位）
         assertTrue("勾选后应标记为已修改", cfg.isModified())
         cfg.apply()
         assertFalse("apply 后 isModified 应复位", cfg.isModified())

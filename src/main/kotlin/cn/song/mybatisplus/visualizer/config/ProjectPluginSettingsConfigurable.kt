@@ -24,9 +24,13 @@ import javax.swing.JComponent
  * 字符串字段空 = 使用全局（tooltip 说明，[settings.project.field.tip]）。
  *
  * T-UiNative T-UN-15（试点）：GridBag 手摆布局迁 Kotlin UI DSL v2（`panel { }`）。
- * apply/isModified/reset 手写逻辑与 `modified` 标志位范式保留（面板存取仍走
- * [ProjectPluginSettings] 单例）；isModified 除标志位外逐项比对控件与 state
- * （null 语义：checkbox 勾选态与 state 值按「null 视为全局值」比较）。
+ * apply/isModified/reset 手写逻辑保留（面板存取仍走 [ProjectPluginSettings] 单例）。
+ *
+ * T-RA-04 判定：原 `modified` 标志位已删除。T-SettingsTruth 认定该标志位不可信后
+ * isModified() 改纯逐项比对，标志位只剩 13 处写入、零读取——保留等于在类里留一份
+ * 「写了却没人信」的假状态（后续读者会误以为它参与判定）；控件监听器也不再为置位而挂。
+ * isModified() 逐项比对控件与 state（null 语义：checkbox 勾选态与 state 值按
+ * 「null 视为全局值」比较）。
  */
 class ProjectPluginSettingsConfigurable(private val project: Project) : Configurable {
 
@@ -41,7 +45,6 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
     private var tableSuffixField: JBTextField? = null
     private var inferenceCombo: ComboBox<InferenceOption>? = null
     private var ignoredFieldsField: JBTextField? = null
-    private var modified = false
 
     /**
      * 表名推断策略下拉项：值 + 当前语言下的显示文案（复用全局面板同一组 bundle 键，
@@ -68,8 +71,9 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
     override fun createComponent(): JComponent {
         val st = projectSettings.state
         val global = globalState
-        // T-UiNative T-UN-15：布局层迁 DSL v2；控件值/启用态的初始灌入与监听经
-        // applyToComponent 复刻原 JCheckBox/JComboBox 行为（addActionListener 语义不变）
+        // T-UiNative T-UN-15：布局层迁 DSL v2；控件初始值经 applyToComponent 灌入。
+        // T-RA-04：原先每个控件都挂 addActionListener { modified = true } 只为置标志位，
+        // 标志位删除后这些监听器一并移除（isModified 逐项比对控件显示值，无需变更通知）。
         lateinit var checkCell: Cell<JBCheckBox>
         lateinit var comboCell: Cell<ComboBox<String>>
         lateinit var replaceParamsCell: Cell<JBCheckBox>
@@ -86,14 +90,12 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                     .applyToComponent {
                         toolTipText = MpSqlVisualizerBundle.message("settings.project.useProjectSettings.tip")
                         isSelected = st.useProjectSettings
-                        addActionListener { modified = true }
                     }
             }
             row(MpSqlVisualizerBundle.message("settings.dialect")) {
                 comboCell = comboBox(DialectRegistry.dialects.map { it.name })
                     .applyToComponent {
                         selectedItem = st.dialect.ifBlank { global.dialect }
-                        addActionListener { modified = true }
                     }
             }
             row {
@@ -101,7 +103,6 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                     .applyToComponent {
                         toolTipText = fieldTip()
                         isSelected = st.replaceParams ?: global.replaceParams
-                        addActionListener { modified = true }
                     }
             }
             row {
@@ -109,7 +110,6 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                     .applyToComponent {
                         toolTipText = fieldTip()
                         isSelected = st.formatSql ?: global.formatSql
-                        addActionListener { modified = true }
                     }
             }
             row {
@@ -117,25 +117,14 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                     .applyToComponent {
                         toolTipText = fieldTip()
                         isSelected = st.injectLogicDelete ?: global.injectLogicDelete
-                        addActionListener { modified = true }
                     }
             }
             row(MpSqlVisualizerBundle.message("settings.logicDeleteValue")) {
                 logicDeleteValueCell = textField()
                     .applyToComponent {
                         toolTipText = fieldTip()
-                        // 须先换 document 再 setText：后换 document 会清空已设文本（实证：
-                        // 初始灌值空 → isModified 对 global 兜底值恒误报 modified）
-                        document = object : javax.swing.text.PlainDocument() {
-                            override fun insertString(offs: Int, str: String?, attr: javax.swing.text.AttributeSet?) {
-                                super.insertString(offs, str, attr)
-                                modified = true
-                            }
-                            override fun remove(offs: Int, len: Int) {
-                                super.remove(offs, len)
-                                modified = true
-                            }
-                        }
+                        // T-RA-04：此处原装自定义 PlainDocument 仅用于置 modified 标志位，
+                        // 标志位删除后一并移除（默认文档已满足灌值/编辑需求）
                         text = st.logicDeleteValue.ifBlank { global.logicDeleteValue }
                     }
             }
@@ -144,7 +133,6 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                     .applyToComponent {
                         toolTipText = fieldTip()
                         text = st.tablePrefix.ifBlank { global.tablePrefix }
-                        addActionListener { modified = true }
                     }
             }
             row(MpSqlVisualizerBundle.message("settings.tableSuffix")) {
@@ -152,7 +140,6 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                     .applyToComponent {
                         toolTipText = fieldTip()
                         text = st.tableSuffix.ifBlank { global.tableSuffix }
-                        addActionListener { modified = true }
                     }
             }
             row(MpSqlVisualizerBundle.message("settings.tableNameInference")) {
@@ -162,7 +149,6 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                         selectedItem = inferenceOptions().firstOrNull {
                             it.value == st.tableNameInference.ifBlank { global.tableNameInference }
                         } ?: inferenceOptions().first()
-                        addActionListener { modified = true }
                     }
             }
             row(MpSqlVisualizerBundle.message("settings.ignoredFields")) {
@@ -170,7 +156,6 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                     .applyToComponent {
                         toolTipText = fieldTip()
                         text = st.ignoredFields.ifBlank { global.ignoredFields }
-                        addActionListener { modified = true }
                     }
             }
         }
@@ -202,11 +187,11 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         val st = projectSettings.state
         val global = globalState
         // 平台 ComboBox 对同值 setSelectedItem 也派发 ActionEvent（262 实证）——
-        // createComponent/reset 初始灌值即误置 modified=true，标志位不可作为唯一判据；
-        // 改为纯逐项比对（控件显示值 vs state+全局兜底语义），modified 仅作加速短路不可信。
+        // createComponent/reset 初始灌值即会误报「已修改」；故本方法一律逐项比对
+        // （控件显示值 vs state+全局兜底语义），不依赖任何标志位（T-RA-04 已删除原标志位）。
         if ((useProjectCheck?.isSelected ?: st.useProjectSettings) != st.useProjectSettings) return true
         // 方言控件显示值回灌全局兜底（st.dialect 空时显示 global.dialect），比对须对齐同语义，
-        // 否则「项目级方言未配置」在每次打开设置页都误报 modified（实证：reset 前未改动 isModified=true）
+        // 否则「项目级方言未配置」在每次打开设置页都误报已修改（实证：reset 前未改动 isModified=true）
         if ((dialectCombo?.selectedItem as? String ?: st.dialect.ifBlank { global.dialect }) != st.dialect.ifBlank { global.dialect }) return true
         if (boolDiffers(replaceParamsCheck, st.replaceParams, global.replaceParams)) return true
         if (boolDiffers(formatSqlCheck, st.formatSql, global.formatSql)) return true
@@ -234,7 +219,6 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         tableSuffixField?.let { st.tableSuffix = it.text.trim() }
         inferenceCombo?.let { st.tableNameInference = (it.selectedItem as? InferenceOption)?.value ?: "" }
         ignoredFieldsField?.let { st.ignoredFields = it.text.trim() }
-        modified = false
     }
 
     override fun reset() {
@@ -253,10 +237,6 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
             it.value == st.tableNameInference.ifBlank { global.tableNameInference }
         } ?: inferenceOptions().first()
         ignoredFieldsField?.text = st.ignoredFields.ifBlank { global.ignoredFields }
-        // 初始灌入/重灌时 setText 会触发自定义 Document 的 insertString → modified=true 误置
-        // （实证：构造后未改动 isModified=true），在回灌完成后统一复位——与 IDE Settings 框架
-        // 「reset 后未改动」约定一致；用户真实编辑发生在 reset 之后，不受影响。
-        modified = false
     }
 
     override fun disposeUIResources() {

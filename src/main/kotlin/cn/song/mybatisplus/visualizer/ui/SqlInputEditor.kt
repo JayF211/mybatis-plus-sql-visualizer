@@ -41,7 +41,6 @@ class SqlInputEditor(
 
     private var psiFile: PsiFile? = null
 
-    private var autoPopupListener: com.intellij.openapi.editor.event.DocumentListener? = null
     private var autoPopupScheduled = false
 
     /** 程序性写入（setSql）期间抑制自建 autopopup（对齐 T-M27.4）。 */
@@ -159,17 +158,18 @@ class SqlInputEditor(
             }
         }
         created.document.addDocumentListener(listener, this)
-        autoPopupListener = listener
     }
 
     /** 释放编辑器（幂等）。 */
     override fun dispose() {
         if (released) return
         released = true
-        // 注意：autoPopupListener 经 addDocumentListener(listener, this) 注册，
-        // Disposer 释放本对象时自动移除 listener——此处不能再手动 removeDocumentListener，
-        // 否则 listener 已被自动移除后二次移除报 "Can't remove document listener"
-        autoPopupListener = null
+        // T-RA-04 判定：listener 经 addDocumentListener(listener, this) 以本对象为父 Disposable
+        // 注册，宿主 SqlToJavaPanel 已把它注册进 Disposer 树（SqlToJavaPanel.kt:180
+        // `Disposer.register(this, inputEditor)`），释放时由平台自动摘除 listener——
+        // 因此这里既不能也不必手动 removeDocumentListener（listener 已被自动移除后再摘会抛
+        // "Can't remove document listener"）。原先用于记账的 autoPopupListener 字段全仓零读取，
+        // 已随本次审计删除，注册方式与生命周期约束不变。
         EditorFactory.getInstance().releaseEditor(editor)
         psiFile = null
     }
