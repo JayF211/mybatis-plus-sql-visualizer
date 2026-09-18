@@ -109,6 +109,25 @@ class AgentManager(private val project: Project) : Disposable {
     /** 时间源（冷却判断与 attach 排队去抖共用；默认系统时钟，测试注入可控时钟）。 */
     internal var clockMs: () -> Long = { System.currentTimeMillis() }
 
+    /**
+     * T-ReachAudit T-RA-01：心跳窗口（默认 [AgentProtocol.ONLINE_WINDOW_MS]；测试注入短窗驱动过期语义）。
+     *
+     * 此前该窗口只存在于协议常量与 KDoc（[AgentProtocol.ONLINE_WINDOW_MS] 全仓零消费、[AgentSession.lastSeen]
+     * 有写无读），在线态只看 socket 是否断开——agent 侧停摆但连接仍在时 `online` 恒 true，控制台桥被
+     * `SqlCaptureGate.paused` 一直封着，两条通道同时零产出且无超时恢复。现按协议既有语义落地。
+     */
+    internal var heartbeatWindowMs: Long = AgentProtocol.ONLINE_WINDOW_MS
+
+    /**
+     * T-ReachAudit T-RA-01：会话健康判定——socket 未断**且**窗口内有过心跳/事件。
+     * 纯判定（可单测）：`now - lastSeen` 用注入时钟，故测试可推进时间而不真等 30s。
+     */
+    private fun isSessionHealthy(session: AgentSession): Boolean =
+        session.alive && (clockMs() - session.lastSeen) <= heartbeatWindowMs
+
+    /** T-ReachAudit T-RA-01：最近一次摘除是否因心跳过期（区分「连接断开」与「应用侧无响应」两类回落）。 */
+    private val heartbeatDropDetected = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /** 「关闭 → 再开启增强捕获」边沿检测（SETTINGS_CHANGE 监听重置拒绝冷却用）。 */
     private var lastKnownEnabled = PluginSettings.getInstance().state.enhancedCaptureEnabled
 
@@ -346,6 +365,8 @@ class AgentManager(private val project: Project) : Disposable {
         updateOnline()
         // T-SettingsTruth P2：attach 成功 → 状态行「已挂载 pid=x」
         everAttached.set(true)
+        // T-ReachAudit T-RA-01：新会话挂上即清「心跳过期」标记——回落文案只描述最近一次摘除原因
+        heartbeatDropDetected.set(false)
         publishStatusChanged()
         return true
     }
@@ -360,7 +381,9 @@ class AgentManager(private val project: Project) : Disposable {
             return null
         }
         val socket = attachAndOffer(jar, pid) ?: return null
-        return AgentSession(project, pid, socket, onStateChange = { updateOnline() })
+        // T-ReachAudit T-RA-01：会话与管理器共用同一时间源（心跳窗口判定跨「记 lastSeen」与
+        // 「算过期」两侧，不同源则测试无法推进时间）
+        return AgentSession(project, pid, socket, onStateChange = { updateOnline() }, clockMs = clockMs)
     }
 
     /** agent jar 提取一次缓存（T-PS4-03）：解压 + deleteOnExit 登记只做一次；失败不缓存（下次 attach 重试）。 */
@@ -428,7 +451,8 @@ class AgentManager(private val project: Project) : Disposable {
 
     private fun updateOnline() {
         val wasOnline = online
-        online = sessions.any { it.alive }
+        // T-ReachAudit T-RA-01：在线态 = 存在**健康**会话（socket 未断 + 心跳窗口内），不再只看 socket
+        online = sessions.any { isSessionHealthy(it) }
         if (online != wasOnline) {
             LOG.info("增强捕获在线态切换: $wasOnline -> $online")
         }
@@ -448,8 +472,11 @@ class AgentManager(private val project: Project) : Disposable {
             enabled = isEnhancedEnabled(),
             confirmed = isEnhancedConfirmed(),
             rejectCooldownRemainingMs = remainingRejectCooldownMs(),
-            livePids = sessions.filter { it.alive }.map { it.pid },
+            // T-ReachAudit T-RA-01：只把**健康**会话算作「已挂载」——半死会话（socket 在、心跳停）
+            // 若仍显示「已挂载 pid=…」，用户会以为捕获正常，实际两条通道都已零产出
+            livePids = sessions.filter { isSessionHealthy(it) }.map { it.pid },
             everAttached = everAttached.get(),
+            heartbeatExpired = heartbeatDropDetected.get(),
         ),
     )
 
@@ -464,10 +491,18 @@ class AgentManager(private val project: Project) : Disposable {
         }.onFailure { LOG.warn("publishStatusChanged 广播失败（非致命）", it) }
     }
 
-    /** 在线态巡检（5s）：心跳窗口过期/连接死亡 → 会话摘除 → 桥回落。internal 为同模块守护测试缝（T-PS4-03）。 */
+    /**
+     * 在线态巡检（5s）：心跳窗口过期/连接死亡 → 会话摘除 → 桥回落。
+     * internal 为同模块守护测试缝（T-PS4-03）。
+     *
+     * T-ReachAudit T-RA-01：摘除面由 `!alive` 扩为 `!isSessionHealthy`——半死会话（socket 在、心跳停）
+     * 此前永远不会被摘除，控制台桥也就永远回不来；现按协议语义在窗口过期后摘除并回落。
+     */
     internal fun sweepOffline() {
-        val dead = sessions.filter { !it.alive }
+        val dead = sessions.filter { !isSessionHealthy(it) }
         if (dead.isNotEmpty()) {
+            // 仍 alive 却过期 = 心跳停摆（应用侧卡死/织入异常），与 socket 断开区分开供状态行叙述
+            heartbeatDropDetected.set(dead.any { it.alive })
             dead.forEach { it.close() }
             sessions.removeAll(dead.toSet())
             // T-PS4-03：死会话顺带清幂等表——pid 对应进程已消亡，残留会让该 pid 复用/重启后
@@ -596,6 +631,8 @@ internal data class AgentStatusSnapshot(
     val rejectCooldownRemainingMs: Long,
     val livePids: List<Long>,
     val everAttached: Boolean,
+    /** T-ReachAudit T-RA-01：最近一次摘除是否因心跳过期（应用侧无响应，而非连接断开）。 */
+    val heartbeatExpired: Boolean = false,
 )
 
 /**
@@ -610,7 +647,8 @@ internal data class AgentStatusSnapshot(
  *  2. 有活会话 →「已挂载 pid=…」；
  *  3. 未授权 + 冷却中 → 含剩余小时与「重新授权」指引（冷却原本静默，用户无从得知被拒过）；
  *  4. 未授权 + 无冷却 → 下次启动主配置时会询问；
- *  5. 已授权：曾挂载过 → 连接中断已回落控制台捕获；从未挂载 → 等待应用进程启动后挂载。
+ *  5. 已授权：曾挂载过 → 回落文案（T-RA-01 起区分「连接断开」与「心跳过期/应用无响应」两因）；
+ *    从未挂载 → 等待应用进程启动后挂载。
  */
 internal fun agentStatusText(s: AgentStatusSnapshot): String? {
     if (!s.enabled) return null
@@ -628,13 +666,18 @@ internal fun agentStatusText(s: AgentStatusSnapshot): String? {
         }
         return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.unauthorizedPending")
     }
-    return MpSqlVisualizerBundle.message(
-        if (s.everAttached) {
-            "settings.enhancedCapture.status.fellBack"
-        } else {
-            "settings.enhancedCapture.status.authorizedWaiting"
-        },
-    )
+    if (s.everAttached) {
+        // T-ReachAudit T-RA-01：心跳过期 = 应用侧停摆（socket 未断），与真断连的处置不同——
+        // 前者用户该去看应用进程，后者只是连接掉了，故分开叙述
+        return MpSqlVisualizerBundle.message(
+            if (s.heartbeatExpired) {
+                "settings.enhancedCapture.status.heartbeatLost"
+            } else {
+                "settings.enhancedCapture.status.fellBack"
+            },
+        )
+    }
+    return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.authorizedWaiting")
 }
 
 /**
@@ -646,6 +689,12 @@ internal class AgentSession(
     val pid: Long,
     private val socket: Socket,
     private val onStateChange: () -> Unit,
+    /**
+     * T-ReachAudit T-RA-01：时间源（默认系统时钟）。与 [AgentManager.clockMs] 同源注入——心跳窗口判定
+     * 跨「会话记 lastSeen」与「管理器算过期」两侧，两侧时钟不同源则测试无法推进时间（假时钟一注入，
+     * 真实时间戳的 lastSeen 会让会话永远健康），真机也无差异。
+     */
+    private val clockMs: () -> Long = { System.currentTimeMillis() },
 ) {
 
     private val LOG = Logger.getInstance(AgentSession::class.java)
@@ -655,7 +704,7 @@ internal class AgentSession(
         private set
 
     @Volatile
-    var lastSeen: Long = System.currentTimeMillis()
+    var lastSeen: Long = clockMs()
         private set
 
     private val output = java.io.DataOutputStream(socket.getOutputStream())
@@ -680,7 +729,7 @@ internal class AgentSession(
                     val cmd = input.readUnsignedByte()
                     val body = ByteArray(len)
                     input.readFully(body)
-                    lastSeen = System.currentTimeMillis()
+                    lastSeen = clockMs()
                     handleFrame(cmd, String(body, Charsets.UTF_8))
                 }
             } catch (t: Throwable) {
