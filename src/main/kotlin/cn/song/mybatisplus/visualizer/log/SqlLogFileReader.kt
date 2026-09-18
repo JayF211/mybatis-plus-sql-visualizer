@@ -58,7 +58,9 @@ object SqlLogFileReader {
 
     fun readFromFile(file: File): List<LogSqlEntry> {
         if (!file.exists()) return emptyList()
-        return parseContent(file.readText())
+        // T-SqlHistoryFull：整读 file.readText() → 流式逐行（单文件滚动阈值 100MB，整读内存峰值可达文件体量；
+        // 逐行消费只在解析块内累积当前块，峰值≈单条 SQL）。解析结果与整读路径完全一致。
+        return file.bufferedReader().useLines { lines -> parseContent(lines) }
     }
 
     /**
@@ -106,7 +108,18 @@ object SqlLogFileReader {
      * 历史行号语义 = 文件内顺序号（静态历史无「会话内捕获序号」概念，见开发计划 §1.2）。
      * 序号是读取层派生的展示属性，不持久化；搜索过滤只删不改造条目实例，序号天然稳定。
      */
-    fun parseContent(content: String): List<LogSqlEntry> {
+    fun parseContent(content: String): List<LogSqlEntry> =
+        parseContent(content.lineSequence())
+
+    /**
+     * 解析文件内容为 LogSqlEntry 列表（T-SqlHistoryFull：流式逐行输入源）。
+     * 逐行扫描，遇到头部行则开始新块，兼容新旧两种头部混合。
+     *
+     * T-LogHistoryRowNo：返回前按解析顺序注入文件内条目序号（sequenceNumber = 索引+1）——
+     * 历史行号语义 = 文件内顺序号（静态历史无「会话内捕获序号」概念，见开发计划 §1.2）。
+     * 序号是读取层派生的展示属性，不持久化；搜索过滤只删不改造条目实例，序号天然稳定。
+     */
+    fun parseContent(lines: Sequence<String>): List<LogSqlEntry> {
         val entries = mutableListOf<LogSqlEntry>()
         val currentLines = mutableListOf<String>()
 
@@ -117,7 +130,7 @@ object SqlLogFileReader {
             currentLines.clear()
         }
 
-        for (line in content.lines()) {
+        for (line in lines) {
             // 检测新版头部（兼容 2/3 个 `-`：-- source 或 --- source）
             // 此处不能用 startsWith 严格判别「-- source」——旧版 F-43 的「-- 2026-08-31 ...」也会匹配，
             // 故先看是否为新版结构（含 "source:" 与 "time:" 关键字）——具体交由正则捕获 timestamp/format ，
@@ -196,6 +209,9 @@ object SqlLogFileReader {
                 errorText = decodedExt?.errorText,
                 requestTag = decodedExt?.requestTag,
                 updateCount = decodedExt?.updateCount,
+                sourceCandidates = decodedExt?.sourceCandidates ?: emptyList(),
+                candidateClasses = decodedExt?.candidateClasses ?: emptyList(),
+                stackDigest = decodedExt?.stackDigest,
             )
         }
 
@@ -212,6 +228,9 @@ object SqlLogFileReader {
                 errorText = decodedExt?.errorText,
                 requestTag = decodedExt?.requestTag,
                 updateCount = decodedExt?.updateCount,
+                sourceCandidates = decodedExt?.sourceCandidates ?: emptyList(),
+                candidateClasses = decodedExt?.candidateClasses ?: emptyList(),
+                stackDigest = decodedExt?.stackDigest,
             )
         }
 

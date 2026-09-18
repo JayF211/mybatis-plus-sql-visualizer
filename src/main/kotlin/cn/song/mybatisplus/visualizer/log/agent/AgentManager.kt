@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
+import cn.song.mybatisplus.visualizer.config.EnhancedCaptureConsent
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry
 import cn.song.mybatisplus.visualizer.log.LogTimeCorrelator
@@ -47,11 +48,17 @@ class AgentManager(private val project: Project) : Disposable {
         private val LOG = Logger.getInstance(AgentManager::class.java)
         const val AGENT_RESOURCE = "/agent/mps-sql-agent.jar"
 
-        /** T-PS4-01：拒绝冷却窗（24h——拒绝后冷却期内不再弹确认；冷却只作用于弹窗频率不改变同意门槛）。 */
-        const val CONSENT_COOLDOWN_MS = 24 * 60 * 60 * 1000L
+        /**
+         * 拒绝冷却默认窗（T-PS4-01）：24h。冷却只作用于确认弹窗频率、不改变同意门槛（保守口径——
+         * 冷却过期后再弹一次，用户仍可同意）；设置页关闭再开启增强捕获时重置。
+         */
+        const val DEFAULT_REJECT_COOLDOWN_MS = 24L * 60 * 60 * 1000
 
-        /** T-PS4-03：挂载去抖窗（等应用初始化热点；同 pid 窗内重复排队跳过）。 */
-        const val DEBOUNCE_MS = 3_000L
+        /** attach 排队去抖窗默认值（T-PS4-03）：同 pid 窗口内重复启动不重复排队（与挂载前静默等待解耦）。 */
+        const val DEFAULT_ATTACH_DEBOUNCE_MS = 3_000L
+
+        /** 挂载前静默等待（T-PS4-03 提常量与去抖窗解耦）：等应用初始化热点过去。 */
+        private const val ATTACH_SETTLE_DELAY_MS = 3_000L
 
         fun getInstance(project: Project): AgentManager = project.getService(AgentManager::class.java)
     }
@@ -61,13 +68,33 @@ class AgentManager(private val project: Project) : Disposable {
     var online: Boolean = false
         private set
 
-    private val sessions = CopyOnWriteArrayList<AgentSession>()
+    /** 会话表。internal 为同模块守护测试缝（T-PS4-03 sweepOffline 清表断言）；生产链路勿直接读写。 */
+    internal val sessions = CopyOnWriteArrayList<AgentSession>()
 
-    /** 幂等表：pid → attach 时间戳（同一 pid 不二次 attach）。 */
-    private val attachedPids = ConcurrentHashMap<Long, Long>()
+    /** 幂等表：pid → attach 时间戳（同一 pid 不二次 attach）。internal 为同模块守护测试缝（T-PS4-03）。 */
+    internal val attachedPids = ConcurrentHashMap<Long, Long>()
 
-    /** 惰性挂载去抖：pid → 上次尝试时间（3s 内重复启动不重复 attach）。 */
-    private val pendingPids = ConcurrentHashMap<Long, Long>()
+    /**
+     * 惰性挂载去抖（T-PS4-03 落地）：pid → 上次排队时刻——同 pid 在 [attachDebounceMs] 窗口内
+     * 重复启动不重复排队（声明多年未用，本次兑现为真实去抖表；attach 任务完成时摘除条目，
+     * 失败后的同 pid 后续启动可再排队，成功则由 attachedPids 幂等表兜底去重）。
+     * internal 为同模块守护测试缝（T-PS4-01 静默跳过断言 / T-PS4-03 去抖落地）；生产链路勿直接读写。
+     */
+    internal val pendingPids = ConcurrentHashMap<Long, Long>()
+
+    // ---------- T-PS4-01/03 测试缝：冷却窗、去抖窗与时间源可注入（生产链路勿改默认值） ----------
+
+    /** 拒绝冷却窗（默认 [DEFAULT_REJECT_COOLDOWN_MS]；测试注入短窗驱动冷却语义）。 */
+    internal var rejectCooldownMs: Long = DEFAULT_REJECT_COOLDOWN_MS
+
+    /** attach 排队去抖窗（默认 [DEFAULT_ATTACH_DEBOUNCE_MS]；测试注入短窗驱动去抖语义）。 */
+    internal var attachDebounceMs: Long = DEFAULT_ATTACH_DEBOUNCE_MS
+
+    /** 时间源（冷却判断与 attach 排队去抖共用；默认系统时钟，测试注入可控时钟）。 */
+    internal var clockMs: () -> Long = { System.currentTimeMillis() }
+
+    /** 「关闭 → 再开启增强捕获」边沿检测（SETTINGS_CHANGE 监听重置拒绝冷却用）。 */
+    private var lastKnownEnabled = PluginSettings.getInstance().state.enhancedCaptureEnabled
 
     private val executor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "mps-agent-manager").apply { isDaemon = true }
@@ -86,24 +113,21 @@ class AgentManager(private val project: Project) : Disposable {
             PluginSettings.SETTINGS_CHANGE_TOPIC,
             cn.song.mybatisplus.visualizer.config.SettingsChangeListener {
                 val state = PluginSettings.getInstance().state
+                // T-PS4-01：关闭 → 再开启的上升沿重置拒绝冷却（保留用户改主意的入口；
+                // 仅此边沿重置，其余设置变更不动冷却，防改无关设置白涮 24h 冷却窗）
+                if (state.enhancedCaptureEnabled && !lastKnownEnabled) {
+                    state.enhancedCaptureRejectedAtMs = 0L
+                    LOG.info("设置变更：增强捕获重新开启——拒绝冷却已重置")
+                }
+                lastKnownEnabled = state.enhancedCaptureEnabled
                 if (!state.enhancedCaptureEnabled) {
                     executor.execute { shutdownAll() }
                 } else {
-                    // T-PS4-01：off→on 沿重置拒绝冷却——用户显式重新表达意愿，下次启动即可再问
-                    if (!lastKnownEnabled) {
-                        state.enhancedCaptureConsentCooldownUntil = 0
-                        LOG.info("[T-PS4-01] 增强捕获重新开启——拒绝冷却已重置")
-                    }
                     executor.execute { pushDesensitize(state.enhancedCaptureDesensitize) }
                 }
-                lastKnownEnabled = state.enhancedCaptureEnabled
             },
         )
     }
-
-    /** 设置沿检测：上次设置事件时的增强捕获开关（T-PS4-01 冷却重置的 off→on 沿判定）。 */
-    @Volatile
-    private var lastKnownEnabled: Boolean = PluginSettings.getInstance().state.enhancedCaptureEnabled
 
     // ---------- 挂载入口 ----------
 
@@ -115,25 +139,28 @@ class AgentManager(private val project: Project) : Disposable {
      * 若沿用「仅设置页勾选时弹确认」，默认勾上的开关将永不弹框、永不 attach（死开关）。
      * 故未确认时在**首次挂载请求**处征求一次知情同意（EDT 弹框），同意后继续挂载。
      *
-     * T-PS4-01（性能第六轮「高」级发现）：①触发面收窄——确认弹窗仅对主配置启动触发
-     * （[mainLaunch]，复用 isModuleBasedLaunch 判定），HTTP 请求/测试/profiler 等非模块型
-     * 进程静默跳过（此前每进程启动挨一次模态弹窗）；②拒绝冷却——拒绝后 24h 内不再弹
-     * （[CONSENT_COOLDOWN_MS]），设置页关闭再开启增强捕获时重置（保留改主意入口）。
-     * 已 confirmed 的 attach 链路维持现状（增强捕获主通道语义不变）。
+     * T-PS4-01 触发面收窄：未确认态的确认弹窗仅对主配置启动（[isMainConfigLaunch]）触发；
+     * HTTP Client/测试/profiler 等非主配置进程在未确认态**静默跳过**（不弹窗、不入 attach 队列），
+     * 杜绝「拒绝注入的用户每进程启动挨一次 EDT 模态弹窗」。已 confirmed 的 attach 链路维持对
+     * 所有进程触发不变（增强捕获主通道语义零变化）。
+     *
+     * @param isMainConfigLaunch 是否主业务配置启动（ModuleBasedConfiguration 子类，与
+     *   RunConfigurationProcessListener.isModuleBasedLaunch 同源判定）。默认 true =
+     *   保守按主配置处理（未知调用方保留既有弹窗语义，知情同意不静默吞）；生产唯一调用点显式传参。
      */
-    fun onProcessAppeared(processHandler: Any?, mainLaunch: Boolean = true) {
+    fun onProcessAppeared(processHandler: Any?, isMainConfigLaunch: Boolean = true) {
         if (!isEnhancedEnabled()) {
             LOG.info("onProcessAppeared: 增强未开启（enabled=${PluginSettings.getInstance().state.enhancedCaptureEnabled}, " +
                 "disposed=${project.isDisposed}）——跳过挂载")
             return
         }
         if (!isEnhancedConfirmed()) {
-            if (!mainLaunch) {
-                LOG.info("onProcessAppeared: 增强未确认且非主配置启动（HTTP/测试/profiler 等）——静默跳过确认弹窗")
+            if (!isMainConfigLaunch) {
+                LOG.info("onProcessAppeared: 增强已开启但未确认且非主配置进程——静默跳过（不弹窗不入队，T-PS4-01）")
                 return
             }
-            if (System.currentTimeMillis() < consentCooldownUntil()) {
-                LOG.info("onProcessAppeared: 拒绝冷却期内（剩余 ${consentCooldownUntil() - System.currentTimeMillis()}ms）——不再弹确认")
+            if (isInRejectCooldown()) {
+                LOG.info("onProcessAppeared: 拒绝冷却期内（${remainingRejectCooldownMs()}ms）——不弹窗不排队（T-PS4-01）")
                 return
             }
             LOG.info("onProcessAppeared: 增强已开启但未确认注入——请求确认后挂载")
@@ -143,75 +170,102 @@ class AgentManager(private val project: Project) : Disposable {
         doAttachAsync(processHandler)
     }
 
-    /** 拒绝冷却截止时间戳（0=无冷却；设置字段持久化，重开 IDE 冷却仍有效）。 */
-    internal fun consentCooldownUntil(): Long =
-        PluginSettings.getInstance().state.enhancedCaptureConsentCooldownUntil
+    /**
+     * 拒绝冷却判断（T-PS4-01）：自持久化的「拒绝时刻」（[PluginSettings.State.enhancedCaptureRejectedAtMs]）
+     * 起 [rejectCooldownMs] 窗口内为 true。冷却只作用于弹窗频率、不改变同意门槛（保守口径——
+     * 冷却过期后再弹一次）；总开关关闭时本判断不会被走到（enabled 门在前，关闭增强 > 冷却）。
+     */
+    internal fun isInRejectCooldown(): Boolean {
+        val rejectedAt = PluginSettings.getInstance().state.enhancedCaptureRejectedAtMs
+        if (rejectedAt <= 0L) return false
+        return clockMs() - rejectedAt < rejectCooldownMs
+    }
+
+    private fun remainingRejectCooldownMs(): Long =
+        (rejectCooldownMs - (clockMs() - PluginSettings.getInstance().state.enhancedCaptureRejectedAtMs)).coerceAtLeast(0)
 
     /**
-     * 首次挂载确认（EDT 弹一次；同意→置 confirmed 并继续挂载，拒绝→进 24h 冷却本次不注入）。
+     * 首次挂载确认（EDT 弹一次）。T-PS4-01 三态语义：
+     * - 同意 → 置 confirmed 持久化并继续挂载（此后任何进程都不再弹）；
+     * - 拒绝 → 持久化「拒绝时刻」进入 [DEFAULT_REJECT_COOLDOWN_MS] 冷却（冷却期内不重复弹，
+     *   冷却过期后再弹一次；冷却只作用于弹窗频率、不改变同意门槛——保守口径）；
+     * - 关闭增强 → 总开关 enhancedCaptureEnabled 置 false 持久化（语义优先级：关闭增强 > 冷却，
+     *   总开关关闭后冷却无意义），此后任何进程启动都不弹窗、不 attach，直到用户在设置页重新开启
+     *   （重开的上升沿由 SETTINGS_CHANGE 监听重置冷却）。
      * 确认结果持久化（重开不再弹）；headless 由 [consentProvider] 默认实现直接拒绝。
      */
     private fun requestConsentThenAttach(processHandler: Any?) {
         com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
             if (project.isDisposed || !isEnhancedEnabled()) return@invokeLater
-            val accepted = try {
+            val outcome = try {
                 consentProvider()
             } catch (t: Throwable) {
-                LOG.warn("requestConsentThenAttach: 确认框异常——按不同意处理", t)
-                false
+                LOG.warn("requestConsentThenAttach: 确认框异常——按拒绝处理（进冷却）", t)
+                EnhancedCaptureConsent.REJECTED
             }
             val state = PluginSettings.getInstance().state
-            if (accepted) {
-                state.enhancedCaptureConfirmed = true
-                state.enhancedCaptureConsentCooldownUntil = 0
-                LOG.info("requestConsentThenAttach: 用户同意注入——继续挂载")
-                doAttachAsync(processHandler)
-            } else {
-                // T-PS4-01：拒绝进冷却——冷却只影响弹窗频率，下次主配置启动过了冷却窗仍会再问
-                state.enhancedCaptureConsentCooldownUntil = System.currentTimeMillis() + CONSENT_COOLDOWN_MS
-                LOG.info("requestConsentThenAttach: 用户未同意注入——本次不挂载，${CONSENT_COOLDOWN_MS / 3_600_000}h 内不再询问")
+            when (outcome) {
+                EnhancedCaptureConsent.ACCEPTED -> {
+                    state.enhancedCaptureConfirmed = true
+                    LOG.info("requestConsentThenAttach: 用户同意注入——继续挂载")
+                    doAttachAsync(processHandler)
+                }
+                EnhancedCaptureConsent.DISABLE_CAPTURE -> {
+                    // 「关闭增强捕获并不再询问」：总开关持久化关闭（与设置页 Apply 同通道，
+                    // XmlSerializer 随平台自动保存落盘）。enabled 门在 onProcessAppeared 入口，
+                    // 后续任何进程启动都不再进入本确认流，也不 attach。
+                    state.enhancedCaptureEnabled = false
+                    LOG.info("requestConsentThenAttach: 用户选择关闭增强捕获并不再询问——总开关已持久化关闭")
+                }
+                EnhancedCaptureConsent.REJECTED -> {
+                    state.enhancedCaptureRejectedAtMs = clockMs()
+                    LOG.info("requestConsentThenAttach: 用户拒绝注入——进入 ${rejectCooldownMs}ms 冷却（冷却期内不重复弹，不改同意门槛）")
+                }
             }
-        }
-    }
-
-    /** 确认提供者（默认弹注入确认框，headless 恒拒绝；测试替换以驱动同意/拒绝分支）。 */
-    internal var consentProvider: () -> Boolean = {
-        if (com.intellij.openapi.application.ApplicationManager.getApplication().isHeadlessEnvironment) {
-            false
-        } else {
-            cn.song.mybatisplus.visualizer.config.EnhancedCaptureConfirmDialog.confirm(null)
         }
     }
 
     /**
-     * 实际挂载（后台线程：resolvePid → 3s 去抖 → attach）。
-     *
-     * T-PS4-03：pendingPids 去抖真实化——同 pid 3s 内重复排队（快速重启/重复 Run）直接跳过
-     * （兑现 [pendingPids] 声明处注释；此前声明未用，同 pid 每次都在单线程池里串行等待 3s）。
-     * 单线程池串行性质维持：跨 pid 的 3s sleep 依次排队（等应用初始化的合理去抖，accept
-     * 超时 10s 亦串行不放大）；pendingPids 条目按 pid 累积（进程数量级，可忽略）。
+     * 确认提供者（默认弹注入确认框三态结果，headless 恒拒绝；测试替换以驱动同意/关闭/拒绝分支）。
+     * T-PS4-01 三态：ACCEPTED 同意 / DISABLE_CAPTURE 关闭增强并不再询问 / REJECTED 拒绝（进冷却）。
      */
+    internal var consentProvider: () -> EnhancedCaptureConsent = {
+        if (com.intellij.openapi.application.ApplicationManager.getApplication().isHeadlessEnvironment) {
+            EnhancedCaptureConsent.REJECTED
+        } else {
+            cn.song.mybatisplus.visualizer.config.EnhancedCaptureConfirmDialog.confirmOutcome(null)
+        }
+    }
+
+    /** 实际挂载（阻塞等待与 attach 全链在单线程 executor；T-PS4-03：pid 解析与排队去抖前移到请求线程）。 */
     private fun doAttachAsync(processHandler: Any?) {
+        // T-PS4-03：去抖必须在「排队时刻」判定——若迟到 executor 任务起跑才查表，静默等待已把
+        // 窗口耗尽、判定失真。pid 解析是轻反射（getNativePid/getProcess().pid()，无阻塞等待），
+        // 前移到请求线程安全；重活（静默等待 + attach）仍留在 executor，不进调用线程。
+        val pid = resolvePid(processHandler)
+        if (pid == null) {
+            LOG.warn("onProcessAppeared: resolvePid 失败（handler=${processHandler?.javaClass?.name}）——跳过挂载")
+            return
+        }
+        val now = clockMs()
+        val lastQueued = pendingPids[pid]
+        if (lastQueued != null && now - lastQueued < attachDebounceMs) {
+            LOG.info("onProcessAppeared: pid=$pid 去抖窗内重复启动（距上次排队 ${now - lastQueued}ms < ${attachDebounceMs}ms）——不重复排队（T-PS4-03）")
+            return
+        }
+        pendingPids[pid] = now
         executor.execute {
             try {
-                val pid = resolvePid(processHandler)
-                if (pid == null) {
-                    LOG.warn("onProcessAppeared: resolvePid 失败（handler=${processHandler?.javaClass?.name}）——跳过挂载")
-                    return@execute
-                }
-                // 去抖真实化：3s 内同 pid 已排队/尝试过 → 跳过（put 返回旧值即上次尝试时刻）
-                val now = System.currentTimeMillis()
-                val lastAttempt = pendingPids.put(pid, now)
-                if (lastAttempt != null && now - lastAttempt < DEBOUNCE_MS) {
-                    LOG.info("onProcessAppeared: pid=$pid ${now - lastAttempt}ms 内已尝试——去抖跳过")
-                    return@execute
-                }
-                LOG.info("onProcessAppeared: 目标 pid=$pid，3s 去抖后挂载")
-                // 去抖 3s：等应用初始化热点过去（驱动已加载场景 retransform 直达；未加载场景 transformer 兜底）
-                Thread.sleep(DEBOUNCE_MS)
+                LOG.info("onProcessAppeared: 目标 pid=$pid，${ATTACH_SETTLE_DELAY_MS}ms 静默等待后挂载")
+                // 静默等待：等应用初始化热点过去（驱动已加载场景 retransform 直达；未加载场景 transformer 兜底）。
+                // 单线程池串行性质：executor 仅此一条工作线程，跨 pid 的静默等待天然串行排队——
+                // 多进程先后启动时后者在前者等待结束后才进入 attach，不会并发压目标 JVM，维持既有语义。
+                Thread.sleep(ATTACH_SETTLE_DELAY_MS)
                 attachToPid(pid)
             } catch (t: Throwable) {
                 LOG.warn("onProcessAppeared: 惰性 attach 失败（非致命，桥继续捕获）", t)
+            } finally {
+                pendingPids.remove(pid)
             }
         }
     }
@@ -258,26 +312,29 @@ class AgentManager(private val project: Project) : Disposable {
         return AgentSession(project, pid, socket, onStateChange = { updateOnline() })
     }
 
-    /**
-     * 解压 agent jar 到临时目录（T-PS4-03：提取一次缓存到服务字段复用——每进程 attach 不再
-     * 重复解压，deleteOnExit 仅首次提取登记一次；失败 null 由调用方显式上报——禁静默吞）。
-     */
+    /** agent jar 提取一次缓存（T-PS4-03）：解压 + deleteOnExit 登记只做一次；失败不缓存（下次 attach 重试）。 */
     @Volatile
     private var cachedAgentJar: File? = null
 
+    /**
+     * 解压 agent jar 到临时目录（T-PS4-03：提取一次缓存到服务字段复用，deleteOnExit 仅登记一次；
+     * 原「每次 createSession 解压一个新临时文件」会随 attach 次数累积 deleteOnExit 登记与磁盘文件，
+     * 直到 IDE 退出才统一回收。失败 null 由调用方显式上报——禁静默吞）。
+     */
     private fun extractAgentJar(): File? {
-        cachedAgentJar?.takeIf { it.isFile }?.let { return it }
-        return runCatching {
+        cachedAgentJar?.let { return it }
+        val extracted = runCatching {
             val stream = javaClass.getResourceAsStream(AGENT_RESOURCE)
                 ?: error("资源 $AGENT_RESOURCE 缺失（构建未内嵌 agent jar）")
             stream.use { input ->
                 val out = File.createTempFile("mps-sql-agent", ".jar")
                 out.deleteOnExit()
-                out.outputStream().use { output -> input.copyTo(output) }
-                cachedAgentJar = out
+                out.outputStream().use { input.copyTo(it) }
                 out
             }
         }.getOrNull()
+        if (extracted != null) cachedAgentJar = extracted
+        return extracted
     }
 
     /**
@@ -330,16 +387,15 @@ class AgentManager(private val project: Project) : Disposable {
         if (!online) LogTimeCorrelator.clear()
     }
 
-    private fun sweepOffline() {
+    /** 在线态巡检（5s）：心跳窗口过期/连接死亡 → 会话摘除 → 桥回落。internal 为同模块守护测试缝（T-PS4-03）。 */
+    internal fun sweepOffline() {
         val dead = sessions.filter { !it.alive }
         if (dead.isNotEmpty()) {
-            dead.forEach {
-                it.close()
-                // T-PS4-03：死会话顺带清 pid 表——进程已死，pid 表残留会让「OS 复用同 pid 的
-                // 新进程」被幂等表误判已挂载而漏挂
-                attachedPids.remove(it.pid)
-            }
+            dead.forEach { it.close() }
             sessions.removeAll(dead.toSet())
+            // T-PS4-03：死会话顺带清幂等表——pid 对应进程已消亡，残留会让该 pid 复用/重启后
+            // 无法重挂；[shutdownAll] 的全表清空语义保留不动。
+            dead.forEach { attachedPids.remove(it.pid) }
             updateOnline()
         }
     }
@@ -362,6 +418,8 @@ class AgentManager(private val project: Project) : Disposable {
         sessions.forEach { it.close() }
         sessions.clear()
         attachedPids.clear()
+        // T-PS4-03：关闭开关同时清排队去抖表——关后不应残留排队记忆（3s 窗内的重复启动照常重判）
+        pendingPids.clear()
         updateOnline()
     }
 
@@ -370,6 +428,9 @@ class AgentManager(private val project: Project) : Disposable {
         val active = isListenActive()
         sessions.forEach { it.sendConfig(disabled = !active, desensitize = desensitize) }
     }
+
+    // T-PS4-14③：pushFrameSkipPrefixes 死代码已删除（全仓库零调用）——帧过滤前缀的真实下发链为
+    // SETTINGS_CHANGE_TOPIC 监听（本类 init）→ executor → pushDesensitize/sendConfig（sendConfig 读设置现拼 skipPrefixes）。
 
     /**
      * 监听开关联动（T-AgentListenSync）：停止监听 → agent 停采（真停，非 IDE 侧丢弃）；
@@ -430,6 +491,9 @@ class AgentManager(private val project: Project) : Disposable {
         runCatching {
             sessions.forEach { it.close() }
             sessions.clear()
+            // T-PS4-03：服务随 project 生命周期，去抖/幂等表一并清空（不引入跨项目残留）
+            pendingPids.clear()
+            attachedPids.clear()
             executor.shutdownNow()
             monitor.shutdownNow()
             SqlCaptureGate.paused.set(false)
@@ -535,7 +599,10 @@ internal class AgentSession(
     fun sendConfig(disabled: Boolean, desensitize: Boolean =
         PluginSettings.getInstance().state.enhancedCaptureDesensitize) {
         try {
-            val body = AgentProtocol.configBody(disabled, desensitize).toByteArray(Charsets.UTF_8)
+            // T-SourceJumpFunnel P1-3：随 CONFIG 附带用户登记的帧过滤前缀（热下发；旧 agent 忽略该键）
+            val prefixes = PluginSettings.getInstance().state.sourceFrameSkipPrefixes
+                .lineSequence().filter { it.isNotBlank() }.toList()
+            val body = AgentProtocol.configBody(disabled, desensitize, prefixes).toByteArray(Charsets.UTF_8)
             synchronized(output) {
                 output.writeInt(body.size)
                 output.write(AgentProtocol.CMD_CONFIG)

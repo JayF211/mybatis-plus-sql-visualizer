@@ -84,6 +84,13 @@ class SqlLogEntryBuffer(
     /** 条目被淘汰时的回调（最早条目超出上限时被移除）；用于自动保存历史 SQL（F-43）。 */
     var onEvicted: ((LogSqlEntry) -> Unit)? = null
 
+    /**
+     * T-SqlHistoryFull：成功入队回调（非暂停/过滤/去重丢弃）——历史「全量」写入出口，带条目标。
+     * 与 [onEntryAccepted] 的分工：onEntryAccepted 是「有新 SQL」即时语义（无参数）；
+     * 本回调把成功入队条目交给写盘方（自动保存），每条成功入队触发一次。
+     */
+    var onEntryStored: ((LogSqlEntry) -> Unit)? = null
+
     /** T-PerfBatch：每次成功入队（非暂停/过滤/去重丢弃）即回调——「有新 SQL」语义（自动展开）
      * 的即时性出口；去重丢弃分支不回调（重复 SQL 不是新 SQL，且空缓冲不可能产生重复）。 */
     var onEntryAccepted: (() -> Unit)? = null
@@ -109,12 +116,15 @@ class SqlLogEntryBuffer(
         if (isFiltered(entry.restoredSql)) return false
         var duplicate = false
         val evictedEntries = mutableListOf<LogSqlEntry>()
+        var storedEntry: LogSqlEntry? = null
         synchronized(entries) {
             if (dedupeEnabled && isDuplicate(entry)) {
                 duplicate = true
             } else {
                 // T-LogRowNumber：入队时分配捕获序号（去重丢弃/暂停/过滤不占号，列表不跳号）
-                entries.addLast(addNumbered(entry))
+                val added = addNumbered(entry)
+                storedEntry = added
+                entries.addLast(added)
                 while (entries.size > maxEntries) {
                     evictedEntries.add(entries.removeFirst())
                     evictedSinceDrain.incrementAndGet() // T-Perf-03：头部淘汰计数（面板增量刷新）
@@ -128,7 +138,10 @@ class SqlLogEntryBuffer(
         }
         // T-Perf-12（自 dev 移植）：onEvicted 回调移出 synchronized(entries)——回调链（自动保存磁盘写）
         // 在锁内同步执行会阻塞 EDT snapshot() 抢同一把锁（控制台输出热路径互相卡）
+        // T-SqlHistoryFull：被淘汰条目先经 onEntryStored 写过（入队成功即写），此处 onEvicted 不再重复消费
         evictedEntries.forEach { onEvicted?.invoke(it) }
+        // T-SqlHistoryFull：成功入队即写历史——「全量」出口（含随后被淘汰的条目，它们也先进了列表）
+        storedEntry?.let { onEntryStored?.invoke(it) }
         onEntryAccepted?.invoke() // 「有新 SQL」语义即时出口（自动展开等），先于内容节流
         notifyContentChangedThrottled()
         return true

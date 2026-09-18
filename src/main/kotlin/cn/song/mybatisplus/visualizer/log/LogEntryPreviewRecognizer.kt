@@ -169,6 +169,7 @@ private fun LogSqlEntry.toPreviewResultInternal(
     return PreviewResult(
         sql = formatIfNeeded(base, formatSql),
         compactSql = restoredSql,
+        stackDigest = stackDigest,
         unresolvedParams = emptyList(),
         paramTable = null,
         wrapperType = null,

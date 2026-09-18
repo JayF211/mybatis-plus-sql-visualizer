@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.execute
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.io.FileUtil
@@ -406,10 +407,13 @@ object DataSourceSelector {
                     // File Cache Conflict 弹窗（第四轮根因 G2，开发计划 §1.2）
                     writeVfTextViaDocument(project, consoleVf, sql)
                 }
+                // T-ConsoleDbContext B：复用链同样对齐库上下文（控制台可能来自别的库记忆）
+                LOG.info("[M36] shared console db-context: ${ExecConsoleContext.alignToDataSourceDatabase(console)}")
                 // M36.5.24g：dumb 退出后重建（同 prepareInConsole）
                 val consoleForModel = console
                 val vfForModel = consoleVf
                 com.intellij.openapi.project.DumbService.getInstance(project).runWhenSmart {
+                    // write-safe: 无 document 写（反射替换 DBN script model）
                     ApplicationManager.getApplication().invokeLater({
                         runCatching {
                             refreshConsoleModel(project, consoleForModel, vfForModel, LOG)
@@ -461,6 +465,7 @@ object DataSourceSelector {
         // 接近底部，bottom（DBN Output/Tx 结果区占位）收起不显示，满足"未执行不显示结果面板"。
         if (!executeAfterPrepare) {
             (full as? javax.swing.JSplitPane)?.let { sp ->
+                // write-safe: UI-only（纯 Swing/只读，无文档写）
                 ApplicationManager.getApplication().invokeLater({
                     sp.setDividerLocation(1.0)
                     sp.revalidate()
@@ -603,8 +608,13 @@ object DataSourceSelector {
             // 取错误行及其后非空行构成可读上下文（错误消息通常多行，后随详情）
             val idx = lines.indexOf(errorLine)
             val excerpt = lines.subList(idx, (idx + 4).coerceAtMost(lines.size)).joinToString("\n")
-            LOG.info("[M36] extracted console error: ${excerpt.take(160)}")
-            excerpt
+            // T-ConsoleDbContext A：附「当前库 / 数据源 / 数据源默认库」上下文——真实事故中 SQL 本身
+            // 没问题，是执行落在了错的库（mpj_demo 的 user 表没有 username → 1054），而裸 MySQL 报文
+            // 看不出这一层；带上上下文后一眼可归因
+            val ctxLine = ExecConsoleContext.describeContext(console)
+            val enriched = if (ctxLine != null) "$excerpt\n$ctxLine" else excerpt
+            LOG.info("[M36] extracted console error: ${enriched.take(200)}")
+            enriched
         }.getOrNull()
     }
 
@@ -699,6 +709,7 @@ object DataSourceSelector {
                             doc.insertString(doc.textLength, "$append$text")
                         }
                         // 滚到末尾（新输出可见）
+                        // write-safe: 无 document 写（反射替换 DBN script model）
                         com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater({
                             runCatching {
                                 // 滚动到底：LanguageConsoleView 的 caret/scrollPosition
@@ -788,10 +799,13 @@ object DataSourceSelector {
                         lastReportedError = err
                         LOG.info("[M36] refresh console error detected (tick=$ticks): ${err.take(120)}")
                         // M36.5.70：把错误写入 Output 控制台可视区（DBN 报错时 Output 内容视图 0x0 不显示）
+                        // T-WSC-02：writeConsoleOutput 内部是文档写（runWriteCommandAction + insertString），
+                        // 且上游是 Swing Timer 拍（Timer 活动同样非用户活动）——必须 write-safe 模态投递，
+                        // any() 恒 write-unsafe（见 DocWriteContext KDoc）。
                         ApplicationManager.getApplication().invokeLater({
                             writeConsoleOutput(shared ?: preparedConsole, "执行失败: $err\n", isError = true)
                             onError?.invoke(err)
-                        }, com.intellij.openapi.application.ModalityState.any())
+                        }, com.intellij.openapi.application.ModalityState.nonModal())
                         return
                     }
                 // M36.5.13：每拍清提示符（压制执行后重设）
@@ -929,7 +943,10 @@ object DataSourceSelector {
                         }.onFailure { e ->
                             LOG.warn("[M36] contentAdded rewrite FAILED: ${e.message}")
                         }
-                    }, com.intellij.openapi.application.ModalityState.any())
+                        // T-WSC-02：本回调写 console 文档（setText + commitDocument + saveDocument）且用的是
+                        // 快照文本、不幂等——必须「投递时即 write-safe」，不能用重投递自愈，故 any() 改
+                        // nonModal（any() 恒 write-unsafe，见 DocWriteContext KDoc）。
+                    }, com.intellij.openapi.application.ModalityState.nonModal())
                 }
             })
             LOG.info("[M36] results hook attached (contentAdded -> embed results)")
@@ -957,6 +974,7 @@ object DataSourceSelector {
         if (!LOG.isDebugEnabled) return
         // M36.5.13：ModalityState.any()——模态弹窗期间探针照常执行（默认 modality 下 invokeLater
         // 被冻结：沙盒 12:09:55→12:10:50 延迟 55s 实证，探针日志失去诊断价值）
+        // write-safe: UI-only（纯 Swing/只读，无文档写）
         ApplicationManager.getApplication().invokeLater({
             runCatching {
                 // M36.5.10：整个探针体包 ReadAction——lazy PSI 经 DataManager.getDataContext
@@ -1228,6 +1246,10 @@ object DataSourceSelector {
                         if (editor == null) Thread.sleep(20)
                     }
                     val resolved = editor
+                    // T-WSC-02：本块经 prepareAfterEditorResolved 写 console 文档（`:1354`
+                    // WriteAction.compute { writeVfTextViaDocument }）——文档写回调一律 write-safe
+                    // 模态，any() 恒 write-unsafe（见 DocWriteContext KDoc）。代价：模态弹窗存续期
+                    // 准备链延后到弹窗关闭，正是平台对「改模型」要求的语义。
                     ApplicationManager.getApplication().invokeLater({
                         LOG.info("[M36] editor=$resolved (async wait)")
                         if (resolved != null) {
@@ -1240,7 +1262,7 @@ object DataSourceSelector {
                                 onError?.invoke(cause.message ?: cause.toString())
                             }
                         }
-                    }, com.intellij.openapi.application.ModalityState.any())
+                    }, com.intellij.openapi.application.ModalityState.nonModal())
                 }
             }
         }.onFailure { e ->
@@ -1349,6 +1371,12 @@ object DataSourceSelector {
                         // 不再滞留「已修改未保存」（第四轮根因 G3，开发计划 §1.2）
                         writeVfTextViaDocument(project, consoleVf, consoleText)
                     }
+                    // T-ConsoleDbContext B：控制台就绪即把库上下文对齐到「数据源 URL 里的库」——
+                    // DBN 的文件→数据源映射与库记忆会把会话钉在别的库上（真机事故：exec 文件被映射
+                    // 到 mpj_demo@localhost，而 SQL 属于 jpa_demo → Unknown column 'u.username'）。
+                    // 用户定案：预览默认以数据源 URL 的库为准；用户之后在控制台手调库，记忆照常保留
+                    //（对齐只在「与数据源默认库不一致」时切一次，已一致即 no-op，不会覆盖用户后来的选择）。
+                    LOG.info("[M36] console db-context: ${ExecConsoleContext.alignToDataSourceDatabase(console)}")
                     // M36.5.24g：fresh 构造 + set 移入 DumbService.runWhenSmart——22:30 实证：
                     // attachConsole 后 SqlDialectPusher 的 dumb task（58.443 运行 → 58.714 exit）
                     // 触发 PSI 重建；在 dumb mode 中构造的 fresh（58.302，stmts=1）被 push 后
@@ -1358,6 +1386,7 @@ object DataSourceSelector {
                     val vfForModel = consoleVf
                     com.intellij.openapi.project.DumbService.getInstance(project).runWhenSmart {
                         // 延迟到 dialpct push 完全结束后（dumb 退出 + 一次 EDT 泵）再重建
+                        // write-safe: UI-only（纯 Swing/只读，无文档写）
                         ApplicationManager.getApplication().invokeLater({
                             runCatching {
                                 refreshConsoleModel(project, consoleForModel, vfForModel, LOG)
@@ -1618,6 +1647,7 @@ object DataSourceSelector {
             // 执行时 realignSplitDivider 展开 60%。用 invokeLater 等组件布局后再设 divider。
             if (!executeAfterPrepare) {
                 (component as? javax.swing.JSplitPane)?.let { sp ->
+                    // write-safe: UI-only（纯 Swing/只读，无文档写）
                     ApplicationManager.getApplication().invokeLater({
                         sp.setDividerLocation(1.0)
                         sp.revalidate()
@@ -1978,6 +2008,7 @@ object DataSourceSelector {
      * 调用方：执行结果换入（force=true）、预览折叠后布局漂移兜底（force=false）。 */
     private fun realignSplitDivider(sp: javax.swing.JSplitPane, force: Boolean = false) {
         // ① invokeLater 下一拍（组件已 add 到树）
+        // write-safe: UI-only（纯 Swing/只读，无文档写）
         ApplicationManager.getApplication().invokeLater({
             realignDividerOnce(sp, force)
         }, com.intellij.openapi.application.ModalityState.any())
@@ -2012,6 +2043,7 @@ object DataSourceSelector {
         }
         // M36.5.75：布局级修复 Output 控制台 44px 塌缩（替代 M36.5.72/73 的 fillOutputConsole
         // 一次性 setSize——被平台 EditorMergedHorizontalScrollBarLayout 每轮 layout 压回，必然失效）
+        // write-safe: UI-only（纯 Swing/只读，无文档写）
         ApplicationManager.getApplication().invokeLater({
             installOutputHistoryFillLayout(sp, log)
         }, com.intellij.openapi.application.ModalityState.any())
@@ -2426,6 +2458,7 @@ object DataSourceSelector {
                                     // 6729ms）。因此**所有"提交后"动作（8s 监控 / 结果 Tab 监听 /
                                     // 换入）必须在 doRunQueryInConsole 真正返回后**才启动，否则监听
                                     // 窗口会在真实提交前跑完并把上一轮结果顶进面板（滞后一轮真因）。
+                                    // write-safe: UI-only（纯 Swing/只读，无文档写）
                                     ApplicationManager.getApplication().invokeLater({
                                         if (generation != executionGeneration) {
                                             LOG.warn("[M36] execution submit cancelled at EDT (generation $generation != ${executionGeneration})")
@@ -2442,6 +2475,7 @@ object DataSourceSelector {
                                                             LOG.warn("[M36] native findScriptModel returned null (nothing to run?)")
                                                             // M36.5.48：findScriptModel 空 = 无可执行语句——显示**真实原因**，
                                                             // 而非笼统凭据超时提示（此前误用 execute.credential.hint，误导用户查密码/驱动）。
+                                                            // write-safe: UI-only（纯 Swing/只读，无文档写）
                                                             ApplicationManager.getApplication().invokeLater({
                                                                 onError?.invoke(MpSqlVisualizerBundle.message("execute.noStatement"))
                                                             }, com.intellij.openapi.application.ModalityState.any())
@@ -2462,6 +2496,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                                                         // M36.5.45：native 执行链失败必须通知 UI（此前仅 LOG.warn，用户看不到任何错误）
                                                         // T-ErrorLocate T-EL-02：富通道并行投递（SQLState/errorCode/驱动位置结构化），
                                                         // 旧 onError(String) 消费方零改动
+                                                        // write-safe: UI-only（纯 Swing/只读，无文档写）
                                                         ApplicationManager.getApplication().invokeLater({
                                                             runCatching { onErrorRich?.invoke(ErrorPositionExtractor.buildInfo(cause, cause.message ?: cause.toString())) }
                                                                 .onFailure { LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", it) }
@@ -2499,6 +2534,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                         // 打开期间默认 modality 的 invokeLater 冻结（沙盒 12:10:02→12:10:50 实证
                         // 48s 挂起），换入/重试/提示全不跑 → "执行中"卡住。any() 使任务在模态
                         // pump 中照常执行（纯 Swing 更新，安全）。
+                        // write-safe: UI-only（纯 Swing/只读，无文档写）
                         ApplicationManager.getApplication().invokeLater({
                             runCatching { onErrorRich?.invoke(ErrorPositionExtractor.buildInfo(cause, msg)) }
                                 .onFailure { LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", it) }
@@ -2549,6 +2585,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
     ) {
         // M36.5.44：真实提交时刻递增换入代际——作废上一个执行遗留的 refresh Timer（防滞后一轮）。
         swapGeneration++
+        // write-safe: UI-only（纯 Swing/只读，无文档写）
         ApplicationManager.getApplication().invokeLater({
             // ① 快照：本次提交时已存在的结果 Tab **名称**（判定"新结果"的基线）。
             // M36.5.22b：实例身份判定失效——DBN 复用同一个 Content 实例并改名/更新
@@ -2736,6 +2773,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                         runPostExecutionInvalidate(sqlText, LOG)
                         lastReportedError = err
                         LOG.info("[M36] early console error detected (attempts=$attempts): ${err.take(120)}")
+                        // write-safe: UI-only（纯 Swing/只读，无文档写）
                         ApplicationManager.getApplication().invokeLater({
                             onError?.invoke(err)
                         }, com.intellij.openapi.application.ModalityState.any())
@@ -2810,10 +2848,12 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                                 else -> MpSqlVisualizerBundle.message("execute.timeout.hint")
                             }
                             LOG.info("[M36] result tab not appeared, no console error (dumb=$dumb, demoted=$demotedOverride) - hint via 40-tick window")
+                            // write-safe: UI-only（纯 Swing/只读，无文档写）
                             ApplicationManager.getApplication().invokeLater({
                                 onError?.invoke(fallbackHint)
                             }, com.intellij.openapi.application.ModalityState.any())
                         } else if (realError != null) {
+                            // write-safe: UI-only（纯 Swing/只读，无文档写）
                             ApplicationManager.getApplication().invokeLater({
                                 onError?.invoke(realError)
                             }, com.intellij.openapi.application.ModalityState.any())
@@ -3102,13 +3142,10 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
     private val execFileWriteLock = Any()
 
     /**
-     * T-EC-02：裸写兜底守卫——仅当该文件当前**无已加载 document**时才允许绕过 document
-     * 直接写盘。文件有已加载 document（编辑器持有/近期读写）时裸写盘 = 绕过 document 的
-     * 外部改写，叠加 document「已修改未保存」态即触发平台 MemoryDiskConflictResolver
-     * 「File Cache Conflict」模态弹窗（T-ExecDocSync 真机截图实证）。internal 供表驱动测试。
+     * T-EC-02 的裸写守卫（canFallBackToRawWrite）已由 T-ExecDocSync3 整体退役——真机日志实证其
+     * 判据不可靠（EDT 忙时 getCachedDocument 恒 null，而排队中的写任务随后会建出 document），
+     * 现策略见 [projectExecFile] 内注释：VFS 已有该文件即绝不裸写。
      */
-    internal fun canFallBackToRawWrite(vf: com.intellij.openapi.vfs.VirtualFile): Boolean =
-        com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getCachedDocument(vf) == null
 
     /**
      * T-EC-01：document 驱动写 + **同临界区落盘**——`setText → commitDocument → saveDocument`，
@@ -3127,19 +3164,28 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      * internal 供测试。
      */
     internal fun writeVfTextViaDocument(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, text: String) {
-        val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(vf)
-        if (fileDoc == null) {
-            vf.setBinaryContent(text.toByteArray())
-            return
+        // T-PreviewFast P4：程序性写入整段开闸——文档变更事件同步派发给自动落盘监听，
+        // 闸门开着即跳过（内容由本函数自己落盘，无需 1.5s 后再写一遍）
+        ExecDocAutosaveGate.suppressDuring {
+            val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(vf)
+            if (fileDoc == null) {
+                vf.setBinaryContent(text.toByteArray())
+            } else {
+                if (fileDoc.text != text) {
+                    fileDoc.setText(text)
+                }
+                // setText 的 write command 结束时自动 commit；显式 commitDocument 双保险
+                // （同步后同 tick 内 findFile 的 PSI 立即对齐，M36.5.20 语义保留）
+                com.intellij.psi.PsiDocumentManager.getInstance(project).commitDocument(fileDoc)
+                // T-EC-01 核心：同临界区落盘——磁盘即时与内存一致，document 不滞留 modified 态
+                // T-PreviewFast P5：落盘前先判「已修改未保存」——内容本就一致时（连续预览同一
+                // SQL 的常见路径）跳过磁盘写，消除每次预览的无效落盘与随之而来的 VFS/索引噪音
+                val fdm = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+                if (fdm.isDocumentUnsaved(fileDoc)) {
+                    fdm.saveDocument(fileDoc)
+                }
+            }
         }
-        if (fileDoc.text != text) {
-            fileDoc.setText(text)
-        }
-        // setText 的 write command 结束时自动 commit；显式 commitDocument 双保险
-        // （同步后同 tick 内 findFile 的 PSI 立即对齐，M36.5.20 语义保留）
-        com.intellij.psi.PsiDocumentManager.getInstance(project).commitDocument(fileDoc)
-        // T-EC-01 核心：同临界区落盘——磁盘即时与内存一致，document 不滞留 modified 态
-        com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().saveDocument(fileDoc)
     }
 
     /** BGT 派 EDT document 写的有界等待预算（毫秒）——DialectPreMapping 同款取值；EDT 病态冻结时超时放行走守卫降级。 */
@@ -3150,11 +3196,24 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      * invokeLater + 有界 latch 等待（DialectPreMapping.ensureMapped 同款：BGT 等 EDT，
      * EDT 永不反向阻塞，超时自愈不互锁）。失败注入缝 [execWriteActionFailureInjection]
      * 在 [docWriteOnce] 内统一生效（EDT/BGT 两形态等价）。
+     *
+     * T-PreviewFast P2：`waitBudgetMs <= 0` 时走 **fire-and-forget**（派发后立即返回 true）——
+     * 预热是投机性写入，T-ExecDocSync3 取消裸写后超时已无副作用，没必要让 BGT 白等 2 秒。
      */
-    private fun dispatchDocWriteOnEdt(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, sql: String): Boolean {
+    private fun dispatchDocWriteOnEdt(
+        project: Project,
+        vf: com.intellij.openapi.vfs.VirtualFile,
+        sql: String,
+        waitBudgetMs: Long = EDT_EXEC_DOC_SYNC_WAIT_MS,
+    ): Boolean {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val app = ApplicationManager.getApplication()
         if (app.isDispatchThread) return docWriteOnce(project, vf, sql)
+        if (waitBudgetMs <= 0L) {
+            app.invokeLater { runCatching { docWriteOnce(project, vf, sql) } }
+            LOG.info("[M36] exec doc write dispatched fire-and-forget (T-PreviewFast P2)")
+            return true
+        }
         val done = java.util.concurrent.CountDownLatch(1)
         var ok = false
         app.invokeLater {
@@ -3165,10 +3224,10 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             }
         }
         val signaled = runCatching {
-            done.await(EDT_EXEC_DOC_SYNC_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+            done.await(waitBudgetMs, java.util.concurrent.TimeUnit.MILLISECONDS)
         }.getOrDefault(false)
         if (!signaled) {
-            LOG.warn("[M36] exec doc write EDT dispatch timeout after ${EDT_EXEC_DOC_SYNC_WAIT_MS}ms (EDT busy?)")
+            LOG.warn("[M36] exec doc write EDT dispatch timeout after ${waitBudgetMs}ms (EDT busy?)")
         }
         return signaled && ok
     }
@@ -3231,7 +3290,15 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
     private val execDocAutosavePending =
         java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Future<*>?>(null)
 
-    private val execDocListenerInstalled = java.util.concurrent.atomic.AtomicBoolean(false)
+    /**
+     * T-PS4-11 快判缓存：上次命中 exec 路径的 document（**弱引用**——防强引用滞留已关闭文档，
+     * GC 后 get()==null 自然退回原链探测）。companion 监听是应用级的，IDE 全局每次文档变更
+     * 都会进 [scheduleExecDocAutosave]；exec 文档连续变更（用户在控制台键入）是唯一需要跟进
+     * 落盘的形态，其余文档每次都白付 getFile + endsWith。identity 比对（===）而非 equals，
+     * document 换实例（文件关闭重开）即视为未命中。
+     */
+    private val lastExecDocRef =
+        java.util.concurrent.atomic.AtomicReference<java.lang.ref.WeakReference<com.intellij.openapi.editor.Document>?>(null)
 
     /** F6 探针已安装项目集（连接随项目 disposable 自动断开，此处只防重复安装）。 */
     private val conflictProbeProjects =
@@ -3245,20 +3312,33 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      * 防抖窗内。落盘方向恒 doc→disk（saveDocument），不回读不改写用户内容。
      */
     private fun installExecDocAutosaveListener() {
-        if (!execDocListenerInstalled.compareAndSet(false, true)) return
-        com.intellij.openapi.editor.EditorFactory.getInstance().eventMulticaster
-            .addDocumentListener(object : com.intellij.openapi.editor.event.DocumentListener {
+        // T-PS4-11：改两参重载 addDocumentListener(listener, disposable)，挂 [ExecDocAutosaveHost]
+        // （应用级轻服务 = Disposable parent）——此前单参裸装、装后永不卸载，插件动态卸载
+        // （DynamicInstallSupport → 平台 unloadPlugin）后监听残活并钉住旧 classloader，正是
+        // 动态卸载屏障要杜绝的形态。挂靠定案依据见 [ExecDocAutosaveHost] KDoc。
+        ExecDocAutosaveHost.getInstance().ensureListenerInstalled(
+            object : com.intellij.openapi.editor.event.DocumentListener {
                 override fun documentChanged(e: com.intellij.openapi.editor.event.DocumentEvent) {
                     scheduleExecDocAutosave(e.document)
                 }
-            })
+            },
+        )
     }
 
     private fun scheduleExecDocAutosave(doc: com.intellij.openapi.editor.Document) {
-        val vf = runCatching {
-            com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getFile(doc)
-        }.getOrNull() ?: return
-        if (vf == null || !isExecVfPath(vf.path)) return
+        // T-PreviewFast P4：程序性写入不排自动落盘——闸门开着说明本次变更来自插件写入
+        //（写入方自己已落盘），防抖落盘只为用户手改兜底。保持最先判（闸门语义先于快判，
+        // 程序性写入高频路径不因快判命中而漏抑制）
+        if (ExecDocAutosaveGate.isSuppressed()) return
+        // T-PS4-11 快判：上次命中的 document 直接身份比对短路（免 getFile + endsWith）；
+        // 未命中走原链探测回退，确认命中后更新缓存。弱引用被 GC 后 get()==null 视为未命中。
+        if (lastExecDocRef.get()?.get() !== doc) {
+            val vf = runCatching {
+                com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getFile(doc)
+            }.getOrNull() ?: return
+            if (vf == null || !isExecVfPath(vf.path)) return
+            lastExecDocRef.set(java.lang.ref.WeakReference(doc))
+        }
         val prev = execDocAutosavePending.getAndSet(
             execDocAutosaveExecutor.schedule(
                 { flushExecDocAutosave(doc) },
@@ -3349,11 +3429,16 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      *     时只有无已加载 document 才允许裸写盘；有 document 一律抛 writeConflictGuard 拒写
      *     （宁内容旧一拍，执行前 console doc 同步链会重写并落盘，执行内容不受影响），
      *     失败原因 Throwable 必达日志（原 getOrDefault(false) 吞掉）；
+     *     → **T-ExecDocSync3 退役**（第四轮真机日志实证判据不可靠，见方法内注释）：改为
+     *     「VFS 已有该文件即绝不裸写」，冷启动 EDT 忙场景彻底无冲突面；
      *  ④ **单写方锁**（T-EC-03，[execFileWriteLock]）——串行化 BGT 预热与 EDT 冷路径。
      * VFS 缺条目路径维持裸写 + 调用方 refresh + [syncExecVfContentIfNeeded] 防御收口（T-EC-04）。
+     * T-PreviewFast P1/P2：差量快路径（内容已一致即返回）+ 预热非阻塞派发（`nonBlocking=true`）。
      * internal 供测试。
+     *
+     * @param nonBlocking true = 预热等投机性调用：BGT 派发不等 EDT（fire-and-forget，P2）
      */
-    internal fun projectExecFile(project: Project, sql: String): java.io.File? {
+    internal fun projectExecFile(project: Project, sql: String, nonBlocking: Boolean = false): java.io.File? {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val base = project.basePath ?: run {
             // T-ExecCopyFix F2a：basePath null 是「无异常的 null」，原来连日志都没有
@@ -3370,25 +3455,45 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         synchronized(execFileWriteLock) {
             val existing = LocalFileSystem.getInstance().findFileByIoFile(f)
             if (existing != null) {
+                // T-PreviewFast P1：**差量快路径**——派发前先判当前内容是否已等于目标 SQL。相同则
+                // 直接返回，不派发、不落盘、不等 EDT（连续预览同一 SQL 是常见形态：真机日志 14:17
+                // 五连预览每次都白付 2s 派发等待 + 一次无效落盘 + 一轮索引噪音）。
+                // 判据双源：document 文本（有已加载文档时，UI 所见为准）或 vf 内容（无文档时）。
+                if (execFileContentMatches(project, existing, sql)) {
+                    LOG.info("[M36] exec file content already matches — write SKIPPED (T-PreviewFast P1): ${f.name}")
+                    return f
+                }
                 // T-EC-01/T-EC-03：document 写统一派 EDT（EDT 直调同步；BGT 派发 + 有界等待）。
                 // 262 实证 document setText BGT 硬抛（见 writeVfTextViaDocument KDoc）——旧实现
                 // 的 BGT document 分支每次必炸、静默掉进裸写兜底，即真机冲突链本体。
-                val updated = dispatchDocWriteOnEdt(project, existing, sql)
+                // T-PreviewFast P2：预热调用（unblocking=true）走 fire-and-forget，不再等满 2 秒。
+                val updated = dispatchDocWriteOnEdt(
+                    project, existing, sql,
+                    waitBudgetMs = if (nonBlocking) 0L else EDT_EXEC_DOC_SYNC_WAIT_MS,
+                )
                 if (updated) {
                     LOG.info("[M36] exec file updated via document+save (disk synced in-critical-section): ${f.name}")
                     return f
                 }
-                // T-EC-02：裸写兜底守卫——有已加载 document 时禁止绕过 document 裸写盘
-                //（裸写叠加「已修改未保存」态 = File Cache Conflict 弹窗 + invokeLater 链冻结）。
-                // 宁内容旧一拍：执行前 console doc 同步（executeOnConsole，T-EC-01 同款落盘）
-                // 会重写并落盘，执行内容不受影响。
-                if (!canFallBackToRawWrite(existing)) {
-                    throw IllegalStateException(
-                        "exec file writeConflictGuard: raw write refused, document loaded (${f.name})",
-                    )
-                }
-                LOG.warn("[M36] exec file doc-write FAILED, fallback to raw write (no loaded document): ${f.name}")
+                // T-ExecDocSync3（第四轮真机复现的收口，20260917 真实 IDE 日志实证）：**VFS 已有
+                // 该文件时一律不裸写盘**。原 T-EC-02 兜底守卫查 getCachedDocument==null 就放行裸写，
+                // 实机证伪——EDT 忙（冷启动/索引，日志同刻可见 DumbService enter dumb mode）时
+                // dispatch 有界等待 2s 超时返回 false，此刻「排队的 EDT 写任务」尚未执行、document
+                // 也还没建，getCachedDocument 恒 null；随之而来的裸写先改盘（12,590），排队任务
+                // 随后 ExecutionException 建出 document（resolver 日志 oldFileStamp:0 = 文档建于文件
+                // 写入之前）并标脏，裸写引发的 VFS 变更落到这个刚建的文档上 →
+                // MemoryDiskConflictResolver「重载 mpsql-exec.sql？」弹窗（12,609），23ms 后文档写入
+                // 才自己落盘（12,613）。即**插件与自己的排队写赛跑**，而非外部改盘。
+                // 宁内容旧一拍：排队任务/later 的 console doc 同步链（attachConsole 后的
+                // prepareAfterEditorResolved、executeOnConsole 执行前 T-EC-01 同款同步）都会重写并
+                // 落盘，执行内容不受影响。附带收益：冷启动 EDT 忙时不再有裸写 → 该场景彻底无冲突面。
+                LOG.warn(
+                    "[M36] exec doc-write not completed (EDT dispatch timeout/WriteAction failure); " +
+                        "raw write SKIPPED to avoid File Cache Conflict (T-ExecDocSync3): ${f.name}",
+                )
+                return f
             }
+            // VFS 无该条目（首次创建）：不可能存在 document（无 vf 可挂），裸写安全
             FileUtil.writeToFile(f, sql)
             return f
         }
@@ -3460,7 +3565,18 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             // 缓存命中≠内容新鲜：连续预览 SQL 会变，而缓存命中路径不重写文件——只刷新文件
             // 内容（projectExecFile doc 驱动三方同步，vf/psi 身份不变），保证 attachConsole
             // 初始 document 与本条预览 SQL 一致；差量内容比较在 projectExecFile 内部短路。
-            runCatching { projectExecFile(project, sql) }.onFailure { e ->
+            //
+            // T-PreviewConsoleFmt F2 + T-PreviewFast P3：**该文件正被编辑器打开时跳过内容刷新**——
+            // 有人正看着这份内容时预热不得改写（预热写的是「预览原文」裸单行，会盖掉面板渲染进
+            // 控制台的格式化文本；真机 20260917 日志：showSql createEditor len=274/16 行 → prewarm
+            // 原文 → attach 显示 1 行）。判据为「文档已加载且挂了编辑器」——原 `console.getVirtualFile
+            // () === vf` 判据实机从未命中（SKIPPED 计数 0 / refreshed 10），已退役。
+            if (isExecDocOpenInEditor(cachedVf)) {
+                LOG.info("[M36] exec prewarm: cache hit, exec doc open in editor — content refresh SKIPPED (T-PreviewFast P3)")
+                return
+            }
+            // T-PreviewFast P2：非阻塞派发——预热是投机性写入，没必要让 BGT 等满 2 秒
+            runCatching { projectExecFile(project, sql, nonBlocking = true) }.onFailure { e ->
                 LOG.warn("[M36] exec prewarm refresh-content failed: ${e.javaClass.simpleName}: ${e.message}")
             }
             LOG.info("[M36] exec prewarm: cache hit, content refreshed only")
@@ -3477,6 +3593,41 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             execPrewarmInFlight.set(false)
         }
     }
+
+    /**
+     * T-PreviewFast P1：exec 文件当前内容是否已等于目标 SQL——差量快路径判据（双源）。
+     *
+     * 有已加载 document 时以 **document 文本**为准（UI/控制台所见即权威，也是落盘会写入的内容）；
+     * 无 document 时读 **vf 内容**。两者比对失败（异常/不可读）一律返回 false（保守走正常写入路径）。
+     * internal 供测试。
+     */
+    internal fun execFileContentMatches(
+        project: Project,
+        vf: com.intellij.openapi.vfs.VirtualFile,
+        sql: String,
+    ): Boolean = runCatching {
+        val doc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getCachedDocument(vf)
+        if (doc != null) {
+            doc.text == sql
+        } else {
+            vf.inputStream.readBytes().toString(Charsets.UTF_8) == sql
+        }
+    }.getOrDefault(false)
+
+    /**
+     * T-PreviewFast P3：exec 文件是否**正被编辑器打开**（= 有人正在看这份内容）——预热据此决定
+     * 是否跳过内容刷新。
+     *
+     * 取代 T-PreviewConsoleFmt 的 `console.getVirtualFile() === vf` 判据：真机实测该等式从未成立
+     * （`content refresh SKIPPED` 计数 0 而 `content refreshed only` 10 次），预热因此每次仍改写
+     * 文件、与面板回填互相覆盖一轮。改判「该 vf 的文档已加载且挂了编辑器」——语义正是
+     * 「别改用户眼前的内容」，且不依赖 DBN 内部方法。internal 供测试。
+     */
+    internal fun isExecDocOpenInEditor(vf: com.intellij.openapi.vfs.VirtualFile): Boolean = runCatching {
+        val doc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getCachedDocument(vf)
+            ?: return false
+        com.intellij.openapi.editor.EditorFactory.getInstance().getEditors(doc).isNotEmpty()
+    }.getOrDefault(false)
 
     /** [prewarmExecTempFile] 的真实链（已持有 in-flight 标记；仅后台线程调用）。 */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
@@ -3607,4 +3758,75 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
 
     /** T-ExecDocSync 测试缝：置 true 时 [docWriteOnce] 注入失败（测 T-EC-02 守卫拒绝路径；EDT/BGT 两形态统一生效）。 */
     internal var execWriteActionFailureInjection = false
+
+    /** T-PS4-11 测试缝：防抖任务是否在途（未完成）——监听生效/卸载的行为断言点。 */
+    internal fun execDocAutosaveScheduledForTest(): Boolean =
+        execDocAutosavePending.get()?.isDone == false
+
+    /** T-PS4-11 测试缝：取消在途防抖任务并清快判缓存（测试隔离收尾，不触碰宿主挂载态）。 */
+    internal fun resetExecDocAutosaveForTest() {
+        execDocAutosavePending.getAndSet(null)?.cancel(false)
+        lastExecDocRef.set(null)
+    }
+}
+
+/**
+ * T-PS4-11：F5 防抖自动落盘监听的挂靠宿主（应用级轻服务，Disposable parent）。
+ *
+ * 挂靠定案：监听以两参重载挂到本服务实例持有的子 Disposable 上，而不是「自建应用级
+ * Disposable + 订阅 DynamicPluginListener 在卸载回调里手动 dispose」——本插件的动态卸载走
+ * [cn.song.mybatisplus.visualizer.update.DynamicInstallSupport] → 平台 `DynamicPlugins
+ * .unloadPlugin`，平台卸载会 dispose 插件应用级容器并级联释放其中的服务（轻服务实例注册于
+ * 容器 Disposer 树），以其为根的监听随之自动移除，插件卸载时监听随类加载器一并释放；而
+ * DynamicInstallSupport KDoc 明示卸载/装载回调内只宜触达平台 API 与纯函数（调用栈运行在
+ * 将被卸载的旧 classloader 上），回调里反手 dispose 自身类有 classloader 时序风险。容器
+ * 级联释放即平台对「插件级应用监听」的惯例挂法。
+ *
+ * 服务惰性实例化（首次 [getInstance] 才创建）与监听「惰性装一次」语义一致；正常应用退出时
+ * 应用容器 dispose 同样级联移除监听。子 Disposable 缓解重挂：宿主被容器 dispose 后实例不可
+ * 再作 parent（Disposer 拒绝已 dispose 节点），但仅卸载监听（测试卸载模拟/极端重装）时 dispose
+ * 子节点即可重挂——容器级卸载（服务 dispose）则 [dispose] 复位后同实例不再可用，新容器装载
+ * 新类自然拿到新宿主。
+ */
+@Service(Service.Level.APP)
+internal class ExecDocAutosaveHost : com.intellij.openapi.Disposable {
+
+    companion object {
+        fun getInstance(): ExecDocAutosaveHost =
+            ApplicationManager.getApplication().getService(ExecDocAutosaveHost::class.java)
+    }
+
+    /** 当前挂载的子 Disposable（null = 未挂载）。经 eventMulticaster 两参重载挂监听。 */
+    private var attached: com.intellij.openapi.Disposable? = null
+
+    /** F5 监听挂载（幂等；仅未挂载时装，重复调用 no-op）。 */
+    fun ensureListenerInstalled(listener: com.intellij.openapi.editor.event.DocumentListener) {
+        synchronized(this) {
+            if (attached != null) return
+            val parent = Disposer.newDisposable("ExecDocAutosaveHost.listener")
+            com.intellij.openapi.editor.EditorFactory.getInstance().eventMulticaster
+                .addDocumentListener(listener, parent)
+            Disposer.register(this, parent)
+            attached = parent
+        }
+    }
+
+    /** T-PS4-11 测试缝：仅卸载监听（dispose 子节点），宿主可重挂——模拟「监听随 Disposable 卸载」。 */
+    internal fun detachListenerForTest() {
+        synchronized(this) {
+            attached?.let { Disposer.dispose(it) }
+            attached = null
+        }
+    }
+
+    /** T-PS4-11 测试缝：监听是否在挂（attach 幂等判重 + 卸载断言用）。 */
+    internal val isListenerAttached: Boolean
+        get() = synchronized(this) { attached != null }
+
+    override fun dispose() {
+        // 子节点经 Disposer 树级联 dispose（监听随之移除）；复位挂载态。
+        // 宿主已随插件容器 dispose 后实例不再作 parent（重挂会抛 already disposed）——
+        // 生产语义即「插件已卸载，旧类不应再装监听」，仅测试卸载模拟走 detachListenerForTest。
+        synchronized(this) { attached = null }
+    }
 }

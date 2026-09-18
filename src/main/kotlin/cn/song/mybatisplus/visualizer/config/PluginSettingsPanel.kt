@@ -215,6 +215,27 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 增强捕获状态行：已挂载 pid=x / 已回落控制台捕获 / 连接中。 */
     private val enhancedStatusLabel = JBLabel(" ")
 
+    /**
+     * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（一行一个前缀，如 `com.corp.engine.`）。
+     * Apply 后经 CONFIG 热下发 agent（即时生效，无需重启应用），IDE 侧候选解析同步过滤。
+     */
+    private val frameSkipPrefixesField = com.intellij.ui.components.JBTextArea(3, 24).apply {
+        // T-SourceJumpFunnel：空态灰色占位提示（悬停 tooltip 之外的第一眼引导）
+        emptyText.text = MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.placeholder")
+        lineWrap = true
+        wrapStyleWord = true
+        // T-FramePrefixVisibility F1：GridBag 外层高度不足时行被压缩，fill=NONE 下多行文本框
+        // 会塌成一条细线（真机截图实证：标签可见、框不可见）——锁定首选高度兜底
+        preferredSize = java.awt.Dimension(preferredSize.width, preferredSize.height.coerceAtLeast(60))
+        // T-FramePrefixVisibility F1b：深色主题下 JBTextArea 默认背景与面板几乎同色，输入框
+        // 「看不出是个框」（真机截图二轮反馈）——按平台编辑器标准形态补边框+背景区分度
+        background = com.intellij.util.ui.UIUtil.getTextFieldBackground()
+        border = javax.swing.border.CompoundBorder(
+            com.intellij.util.ui.UIUtil.getTextFieldBorder(),
+            javax.swing.border.EmptyBorder(4, 6, 4, 6),
+        )
+    }
+
     /** gutter 预览 SQL 图标开关（M10）。 */
     private val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
     private val joinDiagramNativeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.joinDiagramNative"))
@@ -314,6 +335,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private val logAutoSaveBrowseButton = JButton("...")
     private val logAutoSavePatternField = JBTextField(20)
     private val logAutoSavePatternPreview = JBLabel(" ")
+    /** T-HistoryFileRetention：历史文件保留上限（0 = 不限/全量）。 */
+    private val logAutoSaveMaxFilesField = JBTextField(12)
 
     // ---------- F-44-7 SqlSourceInterceptor 自动注入 ----------
     private val autoInjectInterceptorCheck = JBCheckBox()
@@ -661,6 +684,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
                         logAutoSavePathField.isEnabled = enabled
                         logAutoSaveBrowseButton.isEnabled = enabled
                         logAutoSavePatternField.isEnabled = enabled
+                        logAutoSaveMaxFilesField.isEnabled = enabled // T-HistoryFileRetention
                         updateAutoSavePreview()
                     }
                 })
@@ -698,6 +722,13 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 addRow(p, g, "", logAutoSavePatternPreview.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.preview.tip")
                 })
+                // T-HistoryFileRetention：历史文件保留上限（防磁盘爆炸；0 = 全量保留）
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.autoSave.maxFiles"),
+                    logAutoSaveMaxFilesField.apply {
+                        toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.maxFiles.tip")
+                        emptyText.text = PluginSettings.DEFAULT_LOG_AUTO_SAVE_MAX_FILES.toString()
+                    }
+                )
             }
 
             // F-44-7：SqlSourceInterceptor 自动注入（源码位置捕获）
@@ -728,6 +759,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 })
                 addRow(p, g, "", enhancedDesensitizeCheck.apply { text = MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize") })
                 addRow(p, g, "", enhancedStatusLabel)
+                // T-SourceJumpFunnel P1-3：帧过滤前缀（自研框架包名登记，热下发 agent）
+                frameSkipPrefixesField.apply {
+                    text = PluginSettings.getInstance().state.sourceFrameSkipPrefixes
+                    toolTipText = MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.tip")
+                }
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes"), frameSkipPrefixesField)
             }
         }
 
@@ -1226,6 +1263,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
             || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
             || enhancedDesensitizeCheck.isSelected != s.enhancedCaptureDesensitize
+            || frameSkipPrefixesField.text.trim() != s.sourceFrameSkipPrefixes.trim()
             || logHibernateEnabledCheck.isSelected != s.logHibernateEnabled
             || logHibernateSqlPrefixField.text.trim() != s.logHibernateSqlPrefix
             || logHibernateParamPrefixField.text.trim() != s.logHibernateParamPrefix
@@ -1233,6 +1271,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logAutoSaveCheck.isSelected != s.logAutoSaveEnabled
             || logAutoSavePathField.text.trim() != s.logAutoSavePath
             || logAutoSavePatternField.text.trim() != s.logAutoSaveFileNamePattern
+            || (logAutoSaveMaxFilesField.text.trim().toIntOrNull() ?: PluginSettings.DEFAULT_LOG_AUTO_SAVE_MAX_FILES) != s.logAutoSaveMaxFiles
             || autoInjectInterceptorCheck.isSelected != s.autoInjectSqlSourceInterceptor
             // T-CrudColor：仅改样式或仅改某个颜色也必须能启用 Apply
             // （reverseWrapperFormat 漏挂 isModified 导致改动被平台静默丢弃的假开关事故，此处防同类回归）
@@ -1322,6 +1361,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             s.enhancedCaptureEnabled = enhancedCaptureCheck.isSelected
             s.enhancedCaptureDesensitize = enhancedDesensitizeCheck.isSelected
+            // T-SourceJumpFunnel P1-3：前缀规范化（逐行 trim、去空行）写回；下发走 SETTINGS_CHANGE_TOPIC
+            s.sourceFrameSkipPrefixes = frameSkipPrefixesField.text.lines()
+                .map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
             s.logHibernateEnabled = logHibernateEnabledCheck.isSelected
             s.logHibernateSqlPrefix = logHibernateSqlPrefixField.text.trim()
             s.logHibernateParamPrefix = logHibernateParamPrefixField.text.trim()
@@ -1330,6 +1372,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.logAutoSavePath = logAutoSavePathField.text.trim()
             s.logAutoSaveFileNamePattern = logAutoSavePatternField.text.trim()
                 .ifEmpty { PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
+            s.logAutoSaveMaxFiles = logAutoSaveMaxFilesField.text.trim().toIntOrNull()
+                ?: PluginSettings.DEFAULT_LOG_AUTO_SAVE_MAX_FILES // T-HistoryFileRetention
             s.autoInjectSqlSourceInterceptor = autoInjectInterceptorCheck.isSelected
             // T-CrudColor：CRUD 颜色标记（样式 + 四色）
             s.crudColorStyle = selectedCrudColorStyle()
@@ -1461,6 +1505,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled
             enhancedDesensitizeCheck.isSelected = s.enhancedCaptureDesensitize
+            frameSkipPrefixesField.text = s.sourceFrameSkipPrefixes
             logHibernateEnabledCheck.isSelected = s.logHibernateEnabled
             logHibernateSqlPrefixField.text = s.logHibernateSqlPrefix
             logHibernateParamPrefixField.text = s.logHibernateParamPrefix
@@ -1468,10 +1513,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logAutoSaveCheck.isSelected = s.logAutoSaveEnabled
             logAutoSavePathField.text = s.logAutoSavePath
             logAutoSavePatternField.text = s.logAutoSaveFileNamePattern
+            logAutoSaveMaxFilesField.text = s.logAutoSaveMaxFiles.toString() // T-HistoryFileRetention
             val autoSaveEnabled = s.logAutoSaveEnabled
             logAutoSavePathField.isEnabled = autoSaveEnabled
             logAutoSaveBrowseButton.isEnabled = autoSaveEnabled
             logAutoSavePatternField.isEnabled = autoSaveEnabled
+            logAutoSaveMaxFilesField.isEnabled = autoSaveEnabled // T-HistoryFileRetention
             updateAutoSavePreview()
             // T-CrudColor：CRUD 颜色标记控件回填
             crudColorStyleCombo.selectedItem = crudColorStyleOptions()
@@ -1545,6 +1592,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 val text = String(file.contentsToByteArray(), Charsets.UTF_8)
                 applyImportedText(text)
             }
+            // write-safe: UI-only（纯 Swing/只读，无文档写）
             com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater({
                 outcome.onSuccess {
                     reset()
@@ -1581,6 +1629,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 val outcome = runCatching {
                     writeExportedFile(java.io.File(saved.file.absolutePath))
                 }
+                // write-safe: UI-only（纯 Swing/只读，无文档写）
                 com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater({
                     outcome.onSuccess {
                         showStatus(MpSqlVisualizerBundle.message("settings.export.success"), isError = false)

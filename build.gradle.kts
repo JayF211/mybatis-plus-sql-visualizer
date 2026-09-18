@@ -160,7 +160,8 @@ intellijPlatform {
         sandboxContainer = layout.buildDirectory.dir("MPSV-GifFresh")
     }
     // T-ListParamCollect：并行会话隔离（临时——用后还原本行）
-    sandboxContainer = layout.buildDirectory.dir("test-sandbox-listparam")
+    // T-HqlInhCols：本任务沙盒（临时——用后还原本行）
+    sandboxContainer = layout.buildDirectory.dir("mpsv-thic-sandbox")
 }
 
 kotlin {

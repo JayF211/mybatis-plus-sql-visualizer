@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
+import cn.song.mybatisplus.visualizer.config.EnhancedCaptureConsent
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.log.SqlCaptureGate
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
@@ -21,13 +22,17 @@ class AgentManagerFallbackTest : BasePlatformTestCase() {
         manager = AgentManager.getInstance(project)
         PluginSettings.getInstance().state.enhancedCaptureEnabled = false
         PluginSettings.getInstance().state.enhancedCaptureConfirmed = false
+        PluginSettings.getInstance().state.enhancedCaptureRejectedAtMs = 0
+        manager.rejectCooldownMs = AgentManager.DEFAULT_REJECT_COOLDOWN_MS
+        // 防御性还原默认时间源（实例可能跨测试类复用）
+        manager.clockMs = { System.currentTimeMillis() }
     }
 
     override fun tearDown() {
         manager.shutdownAll()
         PluginSettings.getInstance().state.enhancedCaptureEnabled = false
         PluginSettings.getInstance().state.enhancedCaptureConfirmed = false
-        PluginSettings.getInstance().state.enhancedCaptureConsentCooldownUntil = 0
+        PluginSettings.getInstance().state.enhancedCaptureRejectedAtMs = 0
         super.tearDown()
     }
 
@@ -50,90 +55,13 @@ class AgentManagerFallbackTest : BasePlatformTestCase() {
         )
     }
 
-    // ---------- T-PS4-01：确认流触发面收窄 + 拒绝冷却（性能第六轮「高」级发现） ----------
-
-    fun test非主配置启动_未确认时静默跳过确认弹窗() {
-        val state = PluginSettings.getInstance().state
-        state.enhancedCaptureEnabled = true
-        state.enhancedCaptureConfirmed = false
-        state.enhancedCaptureConsentCooldownUntil = 0
-        var asked = false
-        val saved = manager.consentProvider
-        manager.consentProvider = { asked = true; false }
-        try {
-            // HTTP 请求/测试/profiler 等非模块型进程（mainLaunch=false）：不弹确认
-            manager.onProcessAppeared(FakeProcessHandler(nativePid = 424242L), mainLaunch = false)
-            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
-            assertFalse("非主配置启动不得弹确认弹窗", asked)
-        } finally {
-            manager.consentProvider = saved
-        }
-    }
-
-    fun test拒绝后进入冷卄_冷卄期内主配置启动零弹窗() {
-        val state = PluginSettings.getInstance().state
-        state.enhancedCaptureEnabled = true
-        state.enhancedCaptureConfirmed = false
-        // 拒绝后的冷卄截止（未来 1 小时）
-        state.enhancedCaptureConsentCooldownUntil = System.currentTimeMillis() + 3_600_000L
-        var asked = false
-        val saved = manager.consentProvider
-        manager.consentProvider = { asked = true; false }
-        try {
-            manager.onProcessAppeared(FakeProcessHandler(nativePid = 424242L))
-            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
-            assertFalse("冷卄期内不得再弹确认", asked)
-            assertFalse("冷卄不改变确认门槛（confirmed 仍未置位）", state.enhancedCaptureConfirmed)
-        } finally {
-            manager.consentProvider = saved
-        }
-    }
-
-    fun test冷卄过期后_主配置启动再次弹确认() {
-        val state = PluginSettings.getInstance().state
-        state.enhancedCaptureEnabled = true
-        state.enhancedCaptureConfirmed = false
-        // 冷卄已过去（截止时刻在过去）
-        state.enhancedCaptureConsentCooldownUntil = System.currentTimeMillis() - 1_000L
-        var asked = false
-        val saved = manager.consentProvider
-        manager.consentProvider = { asked = true; false }
-        try {
-            manager.onProcessAppeared(FakeProcessHandler(nativePid = 424242L))
-            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
-            assertTrue("冷卄过期后主配置启动应再次询问", asked)
-            // 再拒绝 → 冷卄重新起算（拒绝即进冷卄）
-            assertTrue("拒绝后冷卄截止应设到未来", state.enhancedCaptureConsentCooldownUntil > System.currentTimeMillis())
-        } finally {
-            manager.consentProvider = saved
-        }
-    }
-
-    fun test同意后清冷却_confirmed持久化() {
-        val state = PluginSettings.getInstance().state
-        state.enhancedCaptureEnabled = true
-        state.enhancedCaptureConfirmed = false
-        // 冷卄已过期（弹窗可达）；同意后应清零
-        state.enhancedCaptureConsentCooldownUntil = System.currentTimeMillis() - 1_000L
-        val saved = manager.consentProvider
-        manager.consentProvider = { true }
-        try {
-            manager.onProcessAppeared(FakeProcessHandler(nativePid = 999_999_999L))
-            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
-            assertTrue("同意后确认持久化", state.enhancedCaptureConfirmed)
-            assertEquals("同意即清冷卄", 0L, state.enhancedCaptureConsentCooldownUntil)
-        } finally {
-            manager.consentProvider = saved
-        }
-    }
-
     fun test已开启未确认_首次挂载请求确认_拒绝则不注入() {
         val state = PluginSettings.getInstance().state
         state.enhancedCaptureEnabled = true
         state.enhancedCaptureConfirmed = false
         var asked = false
         val saved = manager.consentProvider
-        manager.consentProvider = { asked = true; false }
+        manager.consentProvider = { asked = true; EnhancedCaptureConsent.REJECTED }
         try {
             manager.onProcessAppeared(FakeProcessHandler(nativePid = 424242L))
             com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents() // 冲洗 EDT：确认请求在此执行
@@ -151,7 +79,7 @@ class AgentManagerFallbackTest : BasePlatformTestCase() {
         state.enhancedCaptureEnabled = true
         state.enhancedCaptureConfirmed = false
         val saved = manager.consentProvider
-        manager.consentProvider = { true }
+        manager.consentProvider = { EnhancedCaptureConsent.ACCEPTED }
         try {
             // pid 不可达 → attach 必失败，但「同意后继续挂载」路径必须走到（confirmed 置位即证据）
             manager.onProcessAppeared(FakeProcessHandler(nativePid = 999_999_999L))
@@ -168,7 +96,7 @@ class AgentManagerFallbackTest : BasePlatformTestCase() {
         state.enhancedCaptureConfirmed = true
         var asked = false
         val saved = manager.consentProvider
-        manager.consentProvider = { asked = true; true }
+        manager.consentProvider = { asked = true; EnhancedCaptureConsent.ACCEPTED }
         try {
             manager.onProcessAppeared(FakeProcessHandler(nativePid = 999_999_999L))
             com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()

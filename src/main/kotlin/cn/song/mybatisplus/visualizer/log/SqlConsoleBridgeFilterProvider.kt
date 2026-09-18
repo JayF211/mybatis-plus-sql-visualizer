@@ -28,21 +28,6 @@ class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFil
 
     companion object {
         private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(SqlConsoleBridgeFilterProvider::class.java)
-
-        /**
-         * T-PS4-02：EP 通道 timePrefix 缓存（对齐桥侧 timePrefixCache 形态）——逐行不再读
-         * PluginSettings；provider 级共享（单一设置项，跨控制台共享正确），懒初始化 +
-         * [refreshEpTimePrefixCache]（SqlLogManager 设置变更处理器调用，与桥侧刷新同点）。
-         */
-        @Volatile
-        private var epTimePrefixCache: String? = null
-
-        private fun readTimePrefix(): String? =
-            PluginSettings.getInstance().state.logTimePrefix.takeIf { it.isNotBlank() }
-
-        fun refreshEpTimePrefixCache() {
-            epTimePrefixCache = readTimePrefix()
-        }
     }
 
     /** EP 行过滤器：实例即 per-console 解析状态。 */
@@ -96,8 +81,10 @@ class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFil
                 // 「EP 首行标志」：EP 通道实证生效 → 桥轮询跳过 filter 挂载（会话内粘滞）
                 SqlCaptureGate.epActive = true
             }
-            // T-PS4-02：timePrefix 走缓存（懒初始化 + 设置变更刷新），逐行不再读 PluginSettings
-            val timePrefix = epTimePrefixCache ?: readTimePrefix()?.also { epTimePrefixCache = it }
+            // T-PS4-02：timePrefix 不再逐行读 PluginSettings——经 manager 桥侧缓存取（对齐桥侧
+            // timePrefixCache 形态，刷新点一致：挂载/设置变更；EP 首行早于桥挂载时惰性补种）。
+            // 值语义与原逐行读取一致（blank 归 null）。
+            val timePrefix = manager.consoleBridge.currentTimePrefix()
             processConsoleLine(line, ctx, timePrefix, {}, onErrorText = ::bindConsoleError)
                 .forEach { manager.entries.addEntry(it) }
             return null // 不做高亮/链接——纯捕获通道

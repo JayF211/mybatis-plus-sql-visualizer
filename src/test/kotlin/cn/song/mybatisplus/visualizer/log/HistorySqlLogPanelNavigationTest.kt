@@ -95,6 +95,31 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
         }
     }
 
+    /*
+     * T-SqlHistoryFull：全量历史 → 单文件条目成百上千，二级列表分批填充（首屏 30 + 每 30 追加）。
+     * 断言分批后最终条目完整、顺序保持、且不产生幽灵/重复（gen 代际守卫）。
+     */
+    fun test二级大文件_分批填充最终完整且顺序保持() {
+        // 100 条（> 首屏 30），每条独立 SQL 避免去重干扰
+        val n = 100
+        val entries = (1..n).map { Triple("SELECT * FROM big_table WHERE id = $it", "BigMapper.java:$it", it.toLong()) }
+        writeHistoryFile("sql-history-2026-09-17.sql", f44FileContent(entries))
+
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+        try {
+            panel.openFileForTest(panel.fileListEntries.first())
+            // 反复 pump EDT，驱动 invokeLater 分块追加走完（与 SqlLogPanel 验证同法）
+            repeat(20) { com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents() }
+            assertEquals("分批后最终条目完整", n, panel.sqlListEntries.size)
+            assertEquals("首条顺序保持", "SELECT * FROM big_table WHERE id = 1", panel.sqlListEntries[0].restoredSql)
+            assertEquals("末条顺序保持", "SELECT * FROM big_table WHERE id = 100", panel.sqlListEntries[n - 1].restoredSql)
+            // 无重复（同一性——分批追加不得重复填同一实例）
+            assertEquals("无重复条目", n, panel.sqlListEntries.distinct().size)
+        } finally {
+            panel.dispose()
+        }
+    }
+
     fun test双击文件进入二级_SQL逐条展示_含耗时源码() {
         writeHistoryFile(
             "sql-history-2026-08-31.sql",

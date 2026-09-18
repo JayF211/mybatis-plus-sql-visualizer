@@ -69,9 +69,17 @@ object HqlConverter {
      * @param tableInfo 实体表信息（列映射用）；可为 null，此时仅做参数替换
      * @param project   项目（J7 JOIN ON 注解级解析 / J13 子查询实体映射用）；
      *                  null 时两处降级为关联元数据 / 跳过，行为与历史版本一致
+     * @param entityAlias @Entity(name=...) 实体别名（T-HqlInhCols）；HQL `FROM Alias`
+     *                  的 Alias 是实体名而非类名，传入后 mapEntityToTable 同样按别名替换表名。
+     *                  null 时行为与历史版本一致
      * @return Result（转换后 SQL + 语句模型）
      */
-    fun convert(hql: String, tableInfo: TableInfo? = null, project: Project? = null): Result {
+    fun convert(
+        hql: String,
+        tableInfo: TableInfo? = null,
+        project: Project? = null,
+        entityAlias: String? = null,
+    ): Result {
         val table = tableInfo ?: createFallbackTable()
 
         // 0. 检测 IN 子句参数（在命名参数替换前检测）
@@ -97,7 +105,7 @@ object HqlConverter {
 
         // 7. 实体名 → 表名映射
         if (!table.entityClassName.isBlank()) {
-            sql = mapEntityToTable(sql, table)
+            sql = mapEntityToTable(sql, table, entityAlias)
             // 8. 关联字段路径映射：alias.field.id → 外键列名（须在属性映射之前）
             sql = mapAssociationPath(sql, table)
             // 9. 属性名 → 列名映射
@@ -144,7 +152,10 @@ object HqlConverter {
 
         return Result(
             sql = sql,
-            statement = SelectStatement(table = table, comment = advancedConstructComment(sql)),
+            statement = SelectStatement(
+                table = table,
+                comment = advancedConstructComment(sql) ?: inheritanceBoundaryComment(table),
+            ),
             inClauseParams = inClauseParams,
         )
     }
@@ -243,6 +254,20 @@ object HqlConverter {
         }
     }
 
+    /**
+     * T-HIC-04：@Inheritance(JOINED/TABLE_PER_CLASS) 边界标注——只注释不改行为。
+     * JOINED 把父类字段存于父表（SELECT 需跨表连接），TABLE_PER_CLASS 每子类独立表；
+     * 本插件列清单按「父类字段合并进子表」的单表口径渲染，与实际建表不符时
+     * 预览产物需自行改写。SINGLE_TABLE（默认）合并语义正确，不标注。
+     */
+    private fun inheritanceBoundaryComment(table: TableInfo): String? = when (table.inheritanceStrategy) {
+        "JOINED", "TABLE_PER_CLASS" ->
+            "/* @Inheritance(${table.inheritanceStrategy})：父类字段实际存于" +
+                (if (table.inheritanceStrategy == "JOINED") "父表（JOIN 连接获取）" else "各子类独立表") +
+                "，列清单按单表口径合并，执行前请按实际建表改写 */"
+        else -> null
+    }
+
     // ------------------------------------------------------------------
     // MEMBER OF
     // ------------------------------------------------------------------
@@ -267,12 +292,24 @@ object HqlConverter {
     /**
      * 将 HQL 中的实体类名映射为数据库表名。
      * 仅在 TableInfo 有效时调用。
+     * T-HqlInhCols：`@Entity(name=...)` 实体别名同样命中替换（HQL `FROM Alias` 的
+     * Alias 是实体名而非类名，JPA 语义）；别名经 entityAlias 参数传入，
+     * resolve 链由 JpaMetadataReader.entityNameOf 读取。
      */
-    private fun mapEntityToTable(hql: String, table: TableInfo): String {
+    private fun mapEntityToTable(hql: String, table: TableInfo, entityAlias: String? = null): String {
         if (table.entityClassName.isBlank()) return hql
-        val entityPattern = Regex("\\b${Regex.escape(table.entityClassName)}\\b")
-        return entityPattern.replace(hql, table.tableName)
+        var result = hql
+        entityPattern(table.entityClassName)?.let { result = it.replace(result, table.tableName) }
+        val alias = entityAlias?.takeIf { it.isNotBlank() && it != table.entityClassName }
+        if (alias != null) {
+            entityPattern(alias)?.let { result = it.replace(result, table.tableName) }
+        }
+        return result
     }
+
+    /** 实体标识符全词匹配 Pattern（词边界防子串误伤；构造失败容错返回 null）。 */
+    private fun entityPattern(identifier: String): Regex? =
+        runCatching { Regex("\\b${Regex.escape(identifier)}\\b") }.getOrNull()
 
     // ------------------------------------------------------------------
     // 关联字段路径映射

@@ -30,4 +30,21 @@ object AgentProtocol {
     /** CONFIG 帧 body：禁用/脱敏开关（agent 侧极简 contains 解析对应——键序固定）。 */
     fun configBody(disabled: Boolean, desensitize: Boolean): String =
         """{"disabled":$disabled,"desensitize":$desensitize}"""
+
+    /**
+     * T-SourceJumpFunnel P1-3：CONFIG 帧扩展 body——追加用户登记的帧过滤前缀
+     * （`"skipPrefixes":["a.","b."]`；空列表省略键，旧 agent contains 解析天然忽略未知键）。
+     * 前缀文本 JSON 转义走最简 deny-list（反斜杠/引号/控制字符），与 [configBody] 的
+     * 固定布尔键序兼容（agent 侧 disabled/desensitize 判定不受追加键影响）。
+     */
+    fun configBody(disabled: Boolean, desensitize: Boolean, skipPrefixes: List<String>): String {
+        val clean = skipPrefixes.map { it.trim() }.filter { it.isNotEmpty() }
+        if (clean.isEmpty()) return configBody(disabled, desensitize)
+        val arr = clean.joinToString(",") { p ->
+            "\"" + p.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\b", "\\b").replace("\u000c", "\\f")
+                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + "\""
+        }
+        return """{"disabled":$disabled,"desensitize":$desensitize,"skipPrefixes":[$arr]}"""
+    }
 }

@@ -256,6 +256,22 @@ class AgentLogTimeParityTest {
         ),
     )
 
+    @Test
+    fun `超长参数截断后_仍命中日志行时间`() {
+        // T-PS4-05：>256 字符参数两侧共用 logTimeParamSignature 截断——真实控制台链 put 与
+        // agent take 签名一致，仍精确配对（不退队首不落空）
+        val longValue = "x".repeat(PARAM_SIGNATURE_MAX_CHARS + 100)
+        val entry = runChain(
+            listOf(
+                "$logLineTime [main] ==>  Preparing: SELECT * FROM t WHERE blob = ?",
+                "$logLineTime [main] ==> Parameters: $longValue(String)",
+            ),
+            "SELECT * FROM t WHERE blob = ?",
+            listOf(Triple(1, longValue, "String")),
+        )
+        assertHit(entry, "超长参数截断")
+    }
+
     // ---------- 未命中面：占位符版原文两侧不同的已知残余（回落语义受 L1 保护） ----------
 
     @Test

@@ -32,6 +32,10 @@ object SqlLogParamCodec {
     private const val ERROR_FIELD = "e"
     private const val TAG_FIELD = "q"
     private const val UPDATE_COUNT_FIELD = "u"
+    // T-SourceJumpFunnel：候选 [file, line] 对数组 + 候选类名 + 栈快照（历史读回后跳转回退仍可用）
+    private const val CANDS_FIELD = "cd"
+    private const val CAND_CLASSES_FIELD = "cc"
+    private const val STACK_DIGEST_FIELD = "sd"
 
     private val gson = Gson()
 
@@ -43,6 +47,12 @@ object SqlLogParamCodec {
         val errorText: String? = null,
         val requestTag: String? = null,
         val updateCount: Long? = null,
+        /** T-SourceJumpFunnel：候选 [file, line]（栈序）；旧 payload 为空。 */
+        val sourceCandidates: List<Pair<String, Int>> = emptyList(),
+        /** T-SourceJumpFunnel：候选类名（栈序对齐）；旧 payload 为空。 */
+        val candidateClasses: List<String> = emptyList(),
+        /** T-SourceJumpFunnel：调用栈快照；旧 payload 为 null。 */
+        val stackDigest: String? = null,
     )
 
     /** 编码 rawSql + params 为 Base64 载荷（无 M56 扩展字段形态，等价 [encodeEntry] 全默认条目）。 */
@@ -79,6 +89,24 @@ object SqlLogParamCodec {
             entry.errorText?.let { addProperty(ERROR_FIELD, it) }
             entry.requestTag?.let { addProperty(TAG_FIELD, it) }
             entry.updateCount?.let { addProperty(UPDATE_COUNT_FIELD, it) }
+            // T-SourceJumpFunnel：候选/栈快照（非默认才落键，旧版本解码端忽略未知键）
+            if (entry.sourceCandidates.isNotEmpty()) {
+                add(
+                    CANDS_FIELD,
+                    JsonArray().apply {
+                        entry.sourceCandidates.forEach { (file, line) ->
+                            add(JsonArray().apply { add(file); add(line) })
+                        }
+                    },
+                )
+            }
+            if (entry.candidateClasses.isNotEmpty()) {
+                add(
+                    CAND_CLASSES_FIELD,
+                    JsonArray().apply { entry.candidateClasses.forEach { add(it) } },
+                )
+            }
+            entry.stackDigest?.let { addProperty(STACK_DIGEST_FIELD, it) }
         }
         return Base64.getEncoder().encodeToString(gson.toJson(obj).toByteArray(Charsets.UTF_8))
     }
@@ -108,6 +136,27 @@ object SqlLogParamCodec {
             errorText = json.get(ERROR_FIELD)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() },
             requestTag = json.get(TAG_FIELD)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() },
             updateCount = json.get(UPDATE_COUNT_FIELD)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asLong,
+            sourceCandidates = run {
+                val arr = json.get(CANDS_FIELD)?.takeIf { it.isJsonArray }?.asJsonArray
+                val out = mutableListOf<Pair<String, Int>>()
+                arr?.forEach { el ->
+                    val pair = el.takeIf { it.isJsonArray }?.asJsonArray ?: return@forEach
+                    val file = pair.getOrNull(0)?.takeIf { it.isJsonPrimitive }?.asString ?: return@forEach
+                    val line = pair.getOrNull(1)?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+                    out.add(file to maxOf(line, 0))
+                }
+                out
+            },            candidateClasses = run {
+                val arr = json.get(CAND_CLASSES_FIELD)?.takeIf { it.isJsonArray }?.asJsonArray
+                val out = mutableListOf<String>()
+                arr?.forEach { el ->
+                    el.takeIf { it.isJsonPrimitive }?.asString?.let { out.add(it) }
+                }
+                out
+            },
+            stackDigest = json.get(STACK_DIGEST_FIELD)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() },
         )
     }.getOrNull()
+
+    private fun com.google.gson.JsonArray.getOrNull(i: Int) = if (size() > i) get(i) else null
 }

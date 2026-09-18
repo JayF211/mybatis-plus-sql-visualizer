@@ -147,6 +147,52 @@ class SqlLogEntryBufferTest {
         assertEquals(listOf("SELECT 1"), evicted)
     }
 
+    // ---------- T-SqlHistoryFull：onEntryStored 全量写入回调 ----------
+
+    @Test
+    fun `onEntryStored 每次成功入队触发`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 5)
+        val stored = mutableListOf<String>()
+        buf.onEntryStored = { e -> stored.add(e.restoredSql) }
+        buf.addEntry(entry("A"))
+        buf.addEntry(entry("B"))
+        buf.addEntry(entry("C"))
+        assertEquals(listOf("A", "B", "C"), stored)
+    }
+
+    @Test
+    fun `onEntryStored 覆盖被淘汰条目(全量)且不含去重丢弃`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 2)
+        val stored = mutableListOf<String>()
+        buf.onEntryStored = { e -> stored.add(e.restoredSql) }
+        buf.addEntry(entry("A"))
+        buf.addEntry(entry("B"))
+        buf.addEntry(entry("A")) // 去重窗口内重复（A 仍在列表第一）→ 丢弃，不入 stored
+        buf.addEntry(entry("C")) // 淘汰 A，但 A 已入队成功 → 已在 stored
+        assertEquals("被淘汰条目也在全量历史中，去重丢弃不在", listOf("A", "B", "C"), stored)
+    }
+
+    @Test
+    fun `onEntryStored 在暂停和过滤时不触发`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 5)
+        val stored = mutableListOf<String>()
+        buf.onEntryStored = { e -> stored.add(e.restoredSql) }
+        buf.filterKeywords = listOf("DROP")
+        buf.paused = true
+        buf.addEntry(entry("DROP TABLE x")) // 过滤命中去重判定前被拦 → 不入
+        buf.addEntry(entry("SELECT 1")) // 暂停态 → 不入
+        assertEquals("暂停/过滤条目不进全量历史", 0, stored.size)
+    }
+
+    @Test
+    fun `onEntryStored null 时无异常`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 1)
+        buf.onEntryStored = null
+        buf.addEntry(entry("SELECT 1"))
+        buf.addEntry(entry("SELECT 2"))
+        assertEquals(1, buf.snapshot().size)
+    }
+
     @Test
     fun `onEvicted=null 时无异常`() {
         val buf = SqlLogEntryBuffer(maxEntries = 1)

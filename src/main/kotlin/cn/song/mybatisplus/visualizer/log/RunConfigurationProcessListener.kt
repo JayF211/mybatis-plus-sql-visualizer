@@ -116,7 +116,10 @@ object RunConfigurationProcessListener {
 
                 // M56 T-M56-01/02：增强捕获惰性挂载入口（增强未开启/未确认时空操作；
                 // 后台线程等进程就绪 + 3s 去抖再 attach，全程不进 EDT）。
-                // T-PS4-01：mainLaunch 同源传递——未确认时的确认弹窗仅对主配置启动触发。
+                // T-PS4-01 触发面收窄：未确认态的确认弹窗仅对主配置启动触发（复用上方
+                // isMainLaunch 同源判定），HTTP 请求/测试/profiler 等非主配置进程在未确认态
+                // 静默跳过——杜绝「拒绝注入的用户每进程启动挨一次模态弹窗」；已确认的 attach
+                // 链路维持对所有进程触发不变（增强捕获主通道语义零变化）。
                 try {
                     project.getService(AgentManager::class.java).onProcessAppeared(args?.getOrNull(2), isMainLaunch)
                 } catch (t: Throwable) {

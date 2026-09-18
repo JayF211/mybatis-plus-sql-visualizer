@@ -242,6 +242,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var logAutoSaveFileNamePattern: String = DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN,
 
+        /**
+         * 历史 SQL 文件保留上限（T-HistoryFileRetention）：保存目录下历史文件（按文件名基名归并
+         * 滚动块）超过该数量时，在后台写批之后自动删除最旧文件，防止磁盘空间爆炸。
+         * 0 或负数 = 不限制（全量保留）。默认 [DEFAULT_LOG_AUTO_SAVE_MAX_FILES]。
+         */
+        var logAutoSaveMaxFiles: Int = DEFAULT_LOG_AUTO_SAVE_MAX_FILES,
+
         // ---------- O-1 日志窗口差异化（执行耗时 / 慢查询） ----------
 
         /**
@@ -326,16 +333,6 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * ExecutionTimeoutGuard]）。0=不限。默认 30。
          */
         var executionTimeoutSeconds: Int = DEFAULT_EXECUTION_TIMEOUT_SECONDS,
-
-        // ---------- T-PS4-01：增强捕获确认拒绝冷却 ----------
-
-        /**
-         * 注入确认拒绝冷却截止时间戳（毫秒）：用户拒绝增强捕获注入后，冷却窗内（24h，
-         * [cn.song.mybatisplus.visualizer.log.agent.AgentManager.CONSENT_COOLDOWN_MS]）同项目
-         * 进程启动不再弹确认（拒绝不持久化的补偿——此前每进程启动都挨一次模态弹窗）。
-         * 关闭再开启增强捕获（设置页 off→on 沿）时清零重置。0=无冷却。
-         */
-        var enhancedCaptureConsentCooldownUntil: Long = 0,
 
         // ---------- F-6 拦截器模拟增强（TenantLine / DynamicTableName / DataPermission） ----------
 
@@ -435,6 +432,15 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var enhancedCaptureConfirmed: Boolean = false,
 
         /**
+         * T-PS4-01：注入确认「拒绝时刻」毫秒时间戳（持久化，随本 XML 跨 IDE 重启存活）；0 = 无拒绝记忆。
+         * 拒绝后进入 24h 冷却（窗口在 AgentManager.DEFAULT_REJECT_COOLDOWN_MS）：冷却期内不再重复弹
+         * 确认框（冷却只作用于弹窗频率、不改变同意门槛——保守口径，冷却过期后再弹一次）。
+         * 设置页「关闭 → 再开启」增强捕获时由 AgentManager 的 SETTINGS_CHANGE_TOPIC 监听清零重置，
+         * 保留用户改主意的入口；增强捕获总开关关闭时本值无意义（关闭增强 > 冷却）。
+         */
+        var enhancedCaptureRejectedAtMs: Long = 0L,
+
+        /**
          * M56 T-M56-08：脱敏开关（**默认关**——2026-09-16 用户定案，默认采集真实参数值）。
          * true 时对疑似敏感形态打码；脱敏在 agent 采集层执行，数据不出应用 JVM 前已处理。
          */
@@ -453,6 +459,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 重开项目/重启 IDE 不再出现——用户全生命期至多一条。
          */
         var onboardingAnchorTipShown: Boolean = false,
+
+        /**
+         * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（用户登记的自研框架包名，一行一个，
+         * 如 `com.corp.engine.`）。agent 侧栈帧判定并入（CONFIG 热下发），IDE 侧候选解析同步过滤。
+         * 空 = 未登记。
+         */
+        var sourceFrameSkipPrefixes: String = "",
     )
 
     private var state = State()
@@ -518,6 +531,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** 自动保存历史 SQL 默认文件名模板（F-43）。 */
         const val DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN = "sql-history-\$yyyy-MM-dd\$.sql"
+
+        /** 历史 SQL 文件保留上限默认值（T-HistoryFileRetention）：默认留最近 30 个文件（按日模板≈约一个月），防磁盘膨胀；0/负 = 全量保留。 */
+        const val DEFAULT_LOG_AUTO_SAVE_MAX_FILES = 30
 
         // ---------- O-1 日志窗口差异化默认值 ----------
         const val DEFAULT_LOG_TIME_PREFIX = "Time:"

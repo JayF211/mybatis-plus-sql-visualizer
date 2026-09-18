@@ -266,7 +266,12 @@ open class SqlLogConsoleBridge(
         attachFilter(console)
     }
 
-    private fun attachFilter(console: Any) {
+    /** T-PS4-02：epActive 短路触发行计数（防误伤可观测——计划 §六：debug 计数日志 + 测试计数探针。
+     *  若平台 filter 链时序反转致短路误伤丢行，本计数与对应 debug 日志即排查锚点）。 */
+    val epActiveShortCircuitCount = java.util.concurrent.atomic.AtomicLong()
+
+    /** T-PS4-02：internal 测试缝——两时序单路化测试直接对桩控制台挂载桥 filter（scanAll 需真实组件树）。 */
+    internal fun attachFilter(console: Any) {
         // M56 T-M56-09：「EP 首行标志」生效 → EP 已覆盖全部控制台，轮询挂载跳过（防双路解析）
         if (SqlCaptureGate.epActive) {
             LOG.debug("attachFilter: EP 已生效，轮询挂载跳过 ${console.javaClass.name}")
@@ -332,6 +337,17 @@ open class SqlLogConsoleBridge(
                     filterIface.classLoader,
                     arrayOf(filterIface),
                     LogFilterProxyHandler { line, endOffset ->
+                        // T-PS4-02 双路解析封口：平台 filter 链中 EP（consoleFilterProvider）先于后挂的
+                        // 桥 filter 执行，行到达时 SqlCaptureGate.epActive 必已置位（EP 首行标志，会话内
+                        // 粘滞）——桥侧直接短路不解析。此前主流时序（控制台先存在→点捕捉→桥照挂）每行
+                        // EP+桥双路 processConsoleLine，解析 CPU 恒 ×2，仅靠缓冲去重保条目不重；短路后
+                        // 条目由 EP 单路产出，去重兜底语义保留。短路只省「重复解析」不省「解析本身」。
+                        // 防误伤可观测（计划 §六）：计数 + debug 日志（计数即测试探针/丢行排查锚点）。
+                        if (SqlCaptureGate.epActive) {
+                            val total = epActiveShortCircuitCount.incrementAndGet()
+                            if (LOG.isDebugEnabled) LOG.debug("bridge filter: EP 已生效，短路桥侧重复解析（累计 $total 行）")
+                            return@LogFilterProxyHandler
+                        }
                         val context = consoleContexts[console] ?: return@LogFilterProxyHandler
                         // T-PS4-02：EP 生效短路——平台 filter 链中 EP 先于后挂的桥 filter 执行，
                         // epActive 置位即代表本行已由 EP 通道解析过，桥侧跳过（关闭「先开捕捉
@@ -393,13 +409,15 @@ open class SqlLogConsoleBridge(
      * 任一环失败即守卫降级停用（editor null），行为等同现状语义，绝不阻塞 Filter 挂载。
      * `getEditor` 实现类缺失该方法时 docStamp/line0 读取器为 null，守卫 decide 恒 Process。
      * T-PerfSweep F1：反射 Method 在挂载时解析一次（此前逐行 getMethod）；行 0 文本按
-     * stamp 失效缓存——重放风暴中同 stamp 连续行只付一次行 0 提取成本（缓存为
+     * stamp 失效缓存——重放风暴中同 stamp 连续行只付一次首行读取（缓存为
      * 尽力而为：Filter 回调线程间可见性无同步，最坏退化为多算一次，无正确性影响）。
-     * T-PerfTail #3：行 0 读取零拷贝——`getCharsSequence()`（CharSequence 视图，不复制）
-     * 取首行 subSequence 再 toString，仅付 O(行 0 长度) 拷贝，替代旧 `getText()` 的
-     * O(文档大小) 全文档拷贝（数十 MB 控制台文档混合态窗口的残余风险收口）。
+     * T-PS4-06：行 0 读取改 `getCharsSequence` 首行区间读（[0, 首个行分隔)）——Document
+     * charsSequence 是免拷贝视图，行区间 toString 只拷贝首行；此前 `getText` 全文档拷贝
+     * （O(全史)）在 stamp 变化后的首个混合态行仍要付一次，调用面归零（doc 反射句柄中
+     * 不再解析 getText——桩文档缺失该方法时守卫照常工作）。
+     * T-PS4-06：internal 测试缝——line0 区间读测试直接对反射桩调用（经 attachFilter 须真实组件树）。
      */
-    private fun attachReplayGuard(console: Any, ctx: BridgeLineContext) {
+    internal fun attachReplayGuard(console: Any, ctx: BridgeLineContext) {
         runCatching {
             val getEditor = console.javaClass.getMethod("getEditor")
             val editor = getEditor.invoke(console) ?: return
@@ -407,6 +425,7 @@ open class SqlLogConsoleBridge(
             val getDoc = editor.javaClass.getMethod("getDocument")
             val doc = getDoc.invoke(editor) ?: return
             val getStamp = doc.javaClass.getMethod("getModificationStamp")
+            // T-PS4-06：首行区间读的免拷贝视图入口（Document.getCharsSequence 为平台 Document 接口方法）
             val getCharsSequence = doc.javaClass.getMethod("getCharsSequence")
             ctx.docStampReader = {
                 runCatching {
@@ -419,8 +438,7 @@ open class SqlLogConsoleBridge(
                 runCatching {
                     val stamp = (getStamp.invoke(doc) as? Number)?.toLong() ?: Long.MIN_VALUE
                     if (stamp != cachedStamp) {
-                        val seq = getCharsSequence.invoke(doc) as? CharSequence
-                        cachedLine0 = seq?.let { firstLineText(it) }
+                        cachedLine0 = (getCharsSequence.invoke(doc) as? CharSequence)?.let { readFirstLineOf(it) }
                         cachedStamp = stamp
                     }
                     cachedLine0
@@ -429,10 +447,48 @@ open class SqlLogConsoleBridge(
         }
     }
 
-    /** 捕捉中逐行使用的 timePrefix 缓存（T-LogPerf-04：仅设置变更/挂载时刷新）。 */
+    /**
+     * T-PS4-06：charsSequence 首行区间读（[0, 首个行分隔)）——逐字复刻既有
+     * `getText().lineSequence().firstOrNull()` 语义防行为漂移：
+     * 行分隔按 lineSequence 口径认 `\n` 与 `\r`（`\r\n`/`\r` 同为分隔）；无行分隔取全文
+     * （单行文档场景）；空文档为 null。行 0 与守卫 lineText（平台 getLineEndOffset 侧，
+     * 不含分隔符）同源同口径，混合态文本比对不失配。
+     */
+    private fun readFirstLineOf(chars: CharSequence): String? {
+        if (chars.isEmpty()) return null
+        val nl = chars.indexOf('\n')
+        val cr = chars.indexOf('\r')
+        val end = when {
+            nl < 0 -> cr
+            cr < 0 -> nl
+            else -> minOf(nl, cr)
+        }
+        return if (end < 0) chars.toString() else chars.subSequence(0, end).toString()
+    }
+
+    /** 捕捉中逐行使用的 timePrefix 缓存（T-LogPerf-04：仅设置变更/挂载时刷新）。
+     *  T-PS4-02：EP 通道（[SqlConsoleBridgeFilterProvider]）逐行同项共用本缓存（单一事实源，
+     *  刷新点与桥完全一致：挂载 attachFilter + 设置变更 refreshConsoleContexts）——取代 EP 侧
+     *  每行现场读 PluginSettings。EP 首行可早于桥挂载到达（startCapture 先置 capturing 再
+     *  scanAll），挂载点刷新未发生时由 [currentTimePrefix] 惰性补种一次。 */
     @Volatile
     var timePrefixCache: String? = null
         private set
+
+    /** T-PS4-02：补种标记（尽力而为可见性，无同步——最坏并发下多读一次设置，无正确性影响，
+     *  同 line0 缓存的尽力而为口径）。 */
+    @Volatile
+    private var timePrefixSeeded = false
+
+    /** T-PS4-02：EP 逐行取 timePrefix 的统一入口——未播种时惰性读一次设置，此后返回缓存值
+     *  （挂载/设置变更事件照常覆盖刷新）。 */
+    fun currentTimePrefix(): String? {
+        if (!timePrefixSeeded) {
+            timePrefixCache = PluginSettings.getInstance().state.logTimePrefix.takeIf { it.isNotBlank() }
+            timePrefixSeeded = true
+        }
+        return timePrefixCache
+    }
 
     /**
      * T-LogPerf-04：设置变更事件驱动刷新——[SqlLogManager] 订阅 SETTINGS_CHANGE_TOPIC 后调用，
@@ -550,17 +606,6 @@ open class SqlLogConsoleBridge(
         internal fun nextFastDelay(currentMs: Int, backoff: Boolean): Int =
             if (!backoff) FAST_POLL_INTERVAL_MS
             else (currentMs * 2).coerceAtMost(POLL_INTERVAL_MS)
-
-        /**
-         * T-PerfTail #3：行 0 文本零拷贝提取（纯函数便于单测）——对 CharSequence 视图只读前缀
-         * 后 toString（O(首行长度)），不再全文档拷贝。语义与旧 `getText().lineSequence().firstOrNull()`
-         * 逐一对齐：空文档 → null（守卫按 Reset 处理）；无换行 → 全文；`\n` 开头 → 空串（首行为空行）。
-         */
-        internal fun firstLineText(seq: CharSequence): String? =
-            if (seq.isEmpty()) null
-            else seq.indexOf('\n').let { nl ->
-                if (nl >= 0) seq.subSequence(0, nl).toString() else seq.toString()
-            }
 
         /** T-LogPerf-03：短路判定（纯函数便于单测）——已知 console 且已挂载时跳过重新扫描。 */
         internal fun shouldSkipRescan(cachedConsole: Any?, attachedConsoles: Collection<Any>): Boolean =

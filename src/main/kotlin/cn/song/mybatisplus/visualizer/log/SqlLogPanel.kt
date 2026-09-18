@@ -511,18 +511,19 @@ class SqlLogPanel(
     internal val slowQueryLabelForTest: JLabel? get() = slowQueryLabel
 
     /**
-     * 捕捉开关动作（T-UiNative T-UN-11）：挂工具窗标题栏（SqlLogToolWindowFactory 调
-     * ToolWindow.setTitleActions），面板工具栏不再含捕捉按钮。图标/文案在 [CaptureAction.update]
-     * 按 manager.capturing 态输出；测试断言直接读 captureToggleAction.presentation，不依赖按钮刷新。
+     * 捕捉开关动作（T-CaptureBack）：回迁面板工具栏首位（T-UN-11 曾迁工具窗标题栏，
+     * 新 UI 下标题栏动作悬停才可见致入口不可发现，回归面板）。图标/文案在 [CaptureAction.update]
+     * 按 manager.capturing 态输出；测试断言直接读 presentation，不依赖按钮刷新。
      */
     val captureToggleAction: AnAction = CaptureAction()
 
     /**
      * 工具栏动作组（T-M39：internal 供测试断言帮助入口存在性；
      * update 由工具栏生命周期驱动，headless 测试手动触发；须在 init 前声明）。
-     * T-UiNative T-UN-11：捕捉开关迁工具窗标题栏（[captureToggleAction]），此处不再包含。
+     * T-CaptureBack：捕捉开关回迁首位（捕捉/清空/设置/搜索/帮助；搜索在帮助左侧为用户指定排序）。
      */
     internal val toolbarGroup = DefaultActionGroup(
+        captureToggleAction, // 捕捉开关（回迁面板工具栏首位，T-CaptureBack）
         ClearAction(),
         SettingsAction(),
         ShowSearchAction(), // 搜索在帮助左侧（用户指定排序）
@@ -1023,7 +1024,8 @@ class SqlLogPanel(
             if (manager.capturing) {
                 e.presentation.icon = AllIcons.Actions.Suspend
                 e.presentation.text = MpSqlVisualizerBundle.message("log.panel.stop")
-                e.presentation.description = if (manager.isWaitingForConsole) "已开启 SQL 监听，等待项目运行" else null
+                e.presentation.description = if (manager.isWaitingForConsole)
+                    MpSqlVisualizerBundle.message("log.panel.capture.waiting.desc") else null
             } else {
                 e.presentation.icon = AllIcons.Actions.Execute
                 e.presentation.text = MpSqlVisualizerBundle.message("log.panel.capture")
@@ -1412,35 +1414,18 @@ class SqlLogPanel(
         data class MapperXml(val virtualFile: VirtualFile, val line: Int) : LogJumpTarget()
     }
 
-    /** 统一解析跳转目标：仅依赖捕获位置，不做任何启发式定位。 */
-    internal fun resolveEntryJump(entry: LogSqlEntry): LogJumpTarget {
-        if (entry.sourceFile == null) {
-            // T-AgentSourceJump：主位置缺失时仍可落候选（agent 侧主位置无调试信息场景）
-            return resolveCandidateJump(entry) ?: LogJumpTarget.MissingSource
+    /**
+     * 统一解析跳转目标：仅依赖捕获位置，不做任何启发式定位。
+     * T-SourceJumpFunnel P0-5：判定逻辑收敛到 [EntryJumpResolver]（实时/历史两面板共用同一实现，
+     * 历史面板由此获得候选回退能力），本函数只做类型转接。
+     */
+    internal fun resolveEntryJump(entry: LogSqlEntry): LogJumpTarget =
+        when (val target = EntryJumpResolver.resolve(project, entry)) {
+            is EntryJumpResolver.JumpTarget.Precise -> LogJumpTarget.Precise(target.virtualFile, target.line)
+            EntryJumpResolver.JumpTarget.NoSource -> LogJumpTarget.NoSource
+            is EntryJumpResolver.JumpTarget.NotFound -> LogJumpTarget.NotFound(target.sourceFile)
+            EntryJumpResolver.JumpTarget.MissingSource -> LogJumpTarget.MissingSource
         }
-        // F-44-7：MP 分页 COUNT 查询特殊标记 → 无用户调用点可跳转
-        if (SourceMarkers.isMpPaginationCount(entry.sourceFile)) {
-            return LogJumpTarget.NoSource
-        }
-        // M37.1：多源根容错——basePath 直拼失败后按模块 content root 匹配（SourcePathResolver）
-        val vf = SourcePathResolver.resolveVirtualFile(project, entry.sourceFile)
-        if (vf != null) {
-            return LogJumpTarget.Precise(vf, maxOf(0, entry.sourceLine - 1))
-        }
-        // T-AgentSourceJump：主位置不在工程内（典型=误选第三方插件帧，如 PageHelper 的 PageInterceptor）
-        // → 按栈序候选取首个可解析项；候选同出本次调用的真实栈，非启发式
-        return resolveCandidateJump(entry) ?: LogJumpTarget.NotFound(entry.sourceFile)
-    }
-
-    /** 候选帧解析回退：栈序取首个能在工程内解析到文件的候选；全落空返回 null。 */
-    private fun resolveCandidateJump(entry: LogSqlEntry): LogJumpTarget? {
-        for ((file, line) in entry.sourceCandidates) {
-            if (SourceMarkers.isMpPaginationCount(file)) continue
-            val vf = SourcePathResolver.resolveVirtualFile(project, file) ?: continue
-            return LogJumpTarget.Precise(vf, maxOf(0, line - 1))
-        }
-        return null
-    }
 
     /**
      * T-M55-01：XML 目标解析——mapperStatement 非空且 [MapperXmlLocator] 定位成功时返回

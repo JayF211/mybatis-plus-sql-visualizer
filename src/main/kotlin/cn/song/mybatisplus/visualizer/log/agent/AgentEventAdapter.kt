@@ -28,6 +28,9 @@ object AgentEventAdapter {
             sourceLine = event.sourceLine,
             // T-AgentSourceJump：候选帧透传（IDE 侧跳转在主位置解析失败时按序回退）
             sourceCandidates = event.sourceCandidates,
+            // T-SourceJumpFunnel：候选类名与栈快照透传（选帧弹层/NotFound 提示/详情面板往上追踪）
+            candidateClasses = event.candidateClasses,
+            stackDigest = event.stackDigest,
             // T-M56-06：方法聚焦键（agent 栈帧 {Class}#{method}）——与 mapper 语句 id 同入 mapperStatement
             // 字段语义扩展由 focusMethodKey 统一承载（agent JDBC 层无 mapper id，非冲突）
             mapperStatement = event.methodKey,

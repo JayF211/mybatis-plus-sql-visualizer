@@ -70,6 +70,15 @@ data class LogSqlEntry(
      */
     val sourceCandidates: List<Pair<String, Int>> = emptyList(),
     /**
+     * T-SourceJumpFunnel：候选帧类名（与 [sourceCandidates] 栈序对齐，旧 agent 事件可能缺类名列 → 空）。
+     * 展示性字段（选帧弹层/NotFound 提示），**body 内属性不参与 equals/hashCode**——但 sourceCandidates
+     * 在主构造里，本字段也在主构造，须评估 equals 影响：去重走 dedupeKey（惰性指纹），data class equals
+     * 变化不影响面板去重口径（T-CrudColor 同理定案）。
+     */
+    val candidateClasses: List<String> = emptyList(),
+    /** T-SourceJumpFunnel：调用栈快照「类#方法:行 ← …」（仅 agent 通道；详情面板人工往上追踪用）。 */
+    val stackDigest: String? = null,
+    /**
      * T-LogRowNumber：会话内捕获序号（「SQL 日志」列表行号）。由 [SqlLogEntryBuffer.addEntry]
      * 成功入队时分配（单调递增；去重丢弃/暂停/过滤关键字命中的条目不占号），
      * 项目启动（processStarted）或手动清空列表时归零。0 表示无行号
@@ -186,11 +195,17 @@ internal fun logTimeKey(entry: LogSqlEntry): String = sqlFingerprint(normalizeSq
  * T-AgentLogTime：日志时间配对的次级判别——参数**值**序列签名。
  * 同键（同一条 SQL 多次执行）时用它挑参数一致的那条；两侧渲染口径若分叉则退化为队首配对
  * （近似但不错失），故不做强制相等断言。无参语句两侧都是空串，天然相等。
- * T-PS4-05：签名无字节上界修正——单值截断 [PARAM_SIGNATURE_MAX_CHARS]（超长 blob/JSON
- * 参数不再整串进签名，相关器内存有界）。
+ * T-PS4-05：join 前逐值截断 [PARAM_SIGNATURE_MAX_CHARS]——超长 blob/JSON 参数不再整串进签名，
+ * 相关器驻留有界（桥嗅探 put 与 agent take 共用本函数，截断天然等价）。
  */
 internal fun logTimeParamSignature(params: List<LogSqlParam>): String =
     params.joinToString("\u0001") { (it.value ?: "\u0000").take(PARAM_SIGNATURE_MAX_CHARS) }
+
+/**
+ * T-PS4-05：签名单值截断上限（256 字符）。两侧（桥嗅探 put 与 agent take）走同一函数天然等价；
+ * 次级判别失配本就设计为退化为队首配对（LogTimeCorrelator 注释），语义风险可控。
+ */
+internal const val PARAM_SIGNATURE_MAX_CHARS = 256
 
 /**
  * T-AgentLogTime：给 agent 条目回填控制台嗅探到的日志时间；未命中返回 null
@@ -199,12 +214,6 @@ internal fun logTimeParamSignature(params: List<LogSqlParam>): String =
  * 增强通道回填的唯一入口——生产路径（`AgentManager.AgentSession`）与跨通道守卫测试都走它，
  * 避免测试另抄一份「取键 + take」逻辑而自证（T-AgentDialectLoop 的教训：两侧各自绿、集成不通）。
  */
-/**
- * T-PS4-05：签名单值截断上限（256 字符）。两侧（桥嗅探 put 与 agent take）共用本函数
- * 天然等价；次级判别失配本就设计为退化为队首配对（LogTimeCorrelator注释），语义风险可控。
- */
-internal const val PARAM_SIGNATURE_MAX_CHARS = 256
-
 internal fun stampLogTime(entry: LogSqlEntry): LogSqlEntry? =
     LogTimeCorrelator.take(logTimeKey(entry), logTimeParamSignature(entry.params))
         ?.let { entry.copy(logTimestamp = it) }

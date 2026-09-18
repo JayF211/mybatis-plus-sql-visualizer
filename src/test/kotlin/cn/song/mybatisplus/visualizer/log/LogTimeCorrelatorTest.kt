@@ -110,6 +110,33 @@ class LogTimeCorrelatorTest {
         assertEquals("最老的被丢弃、留下的仍按签名配对", base, LogTimeCorrelator.take("fp", "sig13")!!)
     }
 
+    // ---------- T-PS4-05：签名单值截断（>256 字符参数两侧同源，配对不因截断失灵） ----------
+
+    @Test
+    fun `超长参数截断后两侧同签名仍配对命中`() {
+        LogTimeCorrelator.clear()
+        // 超长 blob 参数（>256 字符）：桥嗅探 put 与 agent take 共用 logTimeParamSignature 单函数，
+        // 截断后签名一致——配对仍精确命中而非退队首
+        val longValue = "x".repeat(PARAM_SIGNATURE_MAX_CHARS + 100)
+        val signature = logTimeParamSignature(listOf(LogSqlParam(longValue, "String")))
+        assertEquals("截断后签名长度有界（单值 = 上限）", PARAM_SIGNATURE_MAX_CHARS, signature.length)
+        // 配对语义：同键同（截断后）签名优先命中
+        val t1 = now() - 3000
+        val t2 = now()
+        LogTimeCorrelator.put("fpLong", t1, signature)
+        LogTimeCorrelator.put("fpLong", t2, logTimeParamSignature(listOf(LogSqlParam("other", "String"))))
+        assertEquals("超长参数经截断签名仍精确配对", t1, LogTimeCorrelator.take("fpLong", signature)!!)
+        assertEquals("另一签名条目仍可取", t2, LogTimeCorrelator.take("fpLong", "other")!!)
+        // 多值签名：每个值各自截断（超长值不再整串进签名，相关器驻留有界）
+        val segments = logTimeParamSignature(
+            listOf(LogSqlParam(longValue, "String"), LogSqlParam("short", "String")),
+        ).split('\u0001')
+        assertEquals("首值截断到上限", PARAM_SIGNATURE_MAX_CHARS, segments[0].length)
+        assertEquals("短值不受影响", "short", segments[1])
+        // null 值哨兵不受截断影响
+        assertEquals("\u0000", logTimeParamSignature(listOf(LogSqlParam(null, null))))
+    }
+
     @Test
     fun `T-PS4-05_超长参数截断后两侧同签名仍配对命中`() {
         LogTimeCorrelator.clear()
