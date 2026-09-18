@@ -110,7 +110,8 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                 logicDeleteValueCell = textField()
                     .applyToComponent {
                         toolTipText = fieldTip()
-                        text = st.logicDeleteValue.ifBlank { global.logicDeleteValue }
+                        // 须先换 document 再 setText：后换 document 会清空已设文本（实证：
+                        // 初始灌值空 → isModified 对 global 兜底值恒误报 modified）
                         document = object : javax.swing.text.PlainDocument() {
                             override fun insertString(offs: Int, str: String?, attr: javax.swing.text.AttributeSet?) {
                                 super.insertString(offs, str, attr)
@@ -121,6 +122,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                                 modified = true
                             }
                         }
+                        text = st.logicDeleteValue.ifBlank { global.logicDeleteValue }
                     }
             }
             row(MpSqlVisualizerBundle.message("settings.project.tablePrefix")) {
@@ -180,19 +182,23 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
     }
 
     override fun isModified(): Boolean {
-        if (modified) return true
         val st = projectSettings.state
         val global = globalState
+        // 平台 ComboBox 对同值 setSelectedItem 也派发 ActionEvent（262 实证）——
+        // createComponent/reset 初始灌值即误置 modified=true，标志位不可作为唯一判据；
+        // 改为纯逐项比对（控件显示值 vs state+全局兜底语义），modified 仅作加速短路不可信。
         if ((useProjectCheck?.isSelected ?: st.useProjectSettings) != st.useProjectSettings) return true
-        if ((dialectCombo?.selectedItem as? String ?: st.dialect) != st.dialect) return true
+        // 方言控件显示值回灌全局兜底（st.dialect 空时显示 global.dialect），比对须对齐同语义，
+        // 否则「项目级方言未配置」在每次打开设置页都误报 modified（实证：reset 前未改动 isModified=true）
+        if ((dialectCombo?.selectedItem as? String ?: st.dialect.ifBlank { global.dialect }) != st.dialect.ifBlank { global.dialect }) return true
         if (boolDiffers(replaceParamsCheck, st.replaceParams, global.replaceParams)) return true
         if (boolDiffers(formatSqlCheck, st.formatSql, global.formatSql)) return true
         if (boolDiffers(injectLogicDeleteCheck, st.injectLogicDelete, global.injectLogicDelete)) return true
-        if (stringDiffers(logicDeleteValueField, st.logicDeleteValue)) return true
-        if (stringDiffers(tablePrefixField, st.tablePrefix)) return true
-        if (stringDiffers(tableSuffixField, st.tableSuffix)) return true
-        if ((inferenceCombo?.selectedItem as? String ?: st.tableNameInference) != st.tableNameInference) return true
-        if (stringDiffers(ignoredFieldsField, st.ignoredFields)) return true
+        if (stringDiffers(logicDeleteValueField, st.logicDeleteValue.ifBlank { global.logicDeleteValue })) return true
+        if (stringDiffers(tablePrefixField, st.tablePrefix.ifBlank { global.tablePrefix })) return true
+        if (stringDiffers(tableSuffixField, st.tableSuffix.ifBlank { global.tableSuffix })) return true
+        if ((inferenceCombo?.selectedItem as? String ?: st.tableNameInference.ifBlank { global.tableNameInference }) != st.tableNameInference.ifBlank { global.tableNameInference }) return true
+        if (stringDiffers(ignoredFieldsField, st.ignoredFields.ifBlank { global.ignoredFields })) return true
         return false
     }
 
@@ -224,6 +230,9 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         tableSuffixField?.text = st.tableSuffix.ifBlank { global.tableSuffix }
         inferenceCombo?.selectedItem = st.tableNameInference.ifBlank { global.tableNameInference }
         ignoredFieldsField?.text = st.ignoredFields.ifBlank { global.ignoredFields }
+        // 初始灌入/重灌时 setText 会触发自定义 Document 的 insertString → modified=true 误置
+        // （实证：构造后未改动 isModified=true），在回灌完成后统一复位——与 IDE Settings 框架
+        // 「reset 后未改动」约定一致；用户真实编辑发生在 reset 之后，不受影响。
         modified = false
     }
 

@@ -64,14 +64,33 @@ class SqlPreviewServiceProjectSettingsTest : BasePlatformTestCase() {
 
     fun test项目级开启_replaceParamsFalse_覆盖全局保留占位符() {
         // 全局 replaceParams=true；项目级开启且 replaceParams=false → 预览保留 ?
+        // 注意锚点须选 eq(1001L) 的方法调用：字面量常量恒内联是 ArgResolver 既有语义
+        // （M14.6 起字面量不受开关影响，开关只拦变量追踪），断言须用变量实参面。
+        // 原实现直读全局变量已删除？——否：本用例变量锚点取 PsiMethodCallExpression
+        // （eq 调用本身），变量求值链路经 WrapperLocator.resolveVariables 门。
         PluginSettings.getInstance().state.replaceParams = true
         val ps = ProjectPluginSettings.getInstance(project).state
         ps.useProjectSettings = true
         ps.replaceParams = false
 
-        myFixture.configureByText("Demo.java", demoFile)
+        val demo = """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    long pid = 1001L;
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, pid);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+            }
+        """.trimIndent()
+        myFixture.configureByText("Demo.java", demo)
+        // 锚点=eq 调用（PsiMethodCallExpression 首个即 eq；实体类声明在文件后部无方法调用干扰）
+        val eqCall = PsiTreeUtil.findChildOfType(myFixture.file, PsiMethodCallExpression::class.java)!!
         // 每次新建 service 实例现读现生效（项目级 apply 后无需广播）
-        val result = newService().preview(anchor())!!
+        val result = newService().preview(eqCall)!!
         assertTrue("项目级 replaceParams=false 应保留 ? 占位符: ${result.sql}", result.sql.contains("?"))
         assertTrue("不应出现全局替换后的 1001: ${result.sql}", !result.sql.contains("1001"))
     }
@@ -82,8 +101,22 @@ class SqlPreviewServiceProjectSettingsTest : BasePlatformTestCase() {
         ps.useProjectSettings = false
         ps.replaceParams = false // 关闭时项目值不生效
 
-        myFixture.configureByText("Demo.java", demoFile)
-        val result = newService().preview(anchor())!!
+        val demo = """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    long pid = 1001L;
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, pid);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+            }
+        """.trimIndent()
+        myFixture.configureByText("Demo.java", demo)
+        val eqCall = PsiTreeUtil.findChildOfType(myFixture.file, PsiMethodCallExpression::class.java)!!
+        val result = newService().preview(eqCall)!!
         assertTrue("项目级关闭应回退全局 true（占位符被替换）: ${result.sql}", result.sql.contains("1001"))
     }
 
