@@ -357,9 +357,15 @@ class BannedApiSourceScanTest {
      *
      * T-TS-04：只扫 [invokeLaterCalls] 的括号形态会让这一类整片漏网（线上四处真实站点全是此形态）。
      * 花括号配平取调用体；只认「`invokeLater` 后紧跟 `{`」这一种写法，故
-     * `invokeLater({ … }, ModalityState.nonModal())`（显式 write-safe 模态）与
-     * `invokeLater(ModalityState.any()) { … }`（实参形态，归 any() 规则）天然不在扫描面内。
-     * 字符串模板 `"${x}"` 的花括号成对，不影响配平。
+     * `invokeLater({ … }, ModalityState.nonModal())`（显式 write-safe 模态）天然不在扫描面内。
+     *
+     * **两处已知边界（T-TailSweep 独立复核实测订正，勿照旧文理解）**：
+     *  - `invokeLater(ModalityState.any()) { … }`（实参 + 尾随 lambda）**两条规则都不覆盖**——本函数要求
+     *    `invokeLater` 后紧跟 `{`，而 any() 规则只扫括号实参区、不含尾随 lambda 体。这是**双规则盲区**
+     *    （当前仓内 0 处），不是「归 any() 规则」；新增该形态的写文档站点会被静默放过。
+     *  - 配平跑在**未剥注释的原文**上（本文件其余扫描才剥注释）：字符串或注释里出现**不成对 `{`** 会让
+     *    body 延伸越过 lambda 边界 → **过报**（把 lambda 外的文档写报进来）；不成对 `}` 则提前截断 → 漏报。
+     *    故「只可能漏报」不成立；已用合成源码用例覆盖三态（违规必报/过闸放行/标注放行）。
      */
     private fun invokeLaterLambdaCalls(code: String): List<Pair<Int, String>> {
         val out = ArrayList<Pair<Int, String>>()

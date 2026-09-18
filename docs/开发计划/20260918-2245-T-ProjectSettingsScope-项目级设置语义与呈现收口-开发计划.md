@@ -176,7 +176,19 @@
 7. **P3 落地**：按第 3 步结论登记或记录不登记理由；
 8. **门禁与交付**：`testFast` → 全量 `test` → CHANGELOG/变更记录同步 → 真机走查（§七）→ 验收文档。
 
-## 十、实施记录（实施后回填）
+## 十、实施记录（2026-09-19 回填）
+
+- 实施：T-TailSweep G7 / `T-TS-13`，分支 `t-ts-projsettings`（`a7c3742`）+ 阻断项修正 `t-ts-fix-g7`（`96579a7`），已并入 master。
+- **D1 决策：方案 A**（用户 2026-09-18 定案）——保留总开关，关闭态置灰并显示全局生效值。
+- P1：四处联动收敛到单一入口 `refreshControls(showProject)`（createComponent / reset / 总开关监听器共用），9 项灌值 + `projectValueCells` 统一 `enabled(showProject)` + apply 分态写入 + isModified 分态比对；可选增强（关闭态范围提示行）一并做。
+- P2：`row { button(...) }` 形态照抄「恢复默认颜色」（**行号订正：参照点现为 `PluginSettingsPanel.kt:768-777`，原写 `:754-762` 已移位**）；行为=9 项归零/null、总开关不动、直接改 state（关闭态 apply 不写这 9 项，只改控件残值清不掉）。
+- P3：**对照实验结论=支持**（`Settings.find` = `ConfigurableVisitor.findByType(type, myGroups)`，生产构树含 `PROJECT_CONFIGURABLE` 扩展；headless 真跑命中 + 正对照）→ 登记 10 项。
+  **越界申报**：登记后 `PluginSettingsFolderConfigurableTest.kt:113-121` 既有断言失效（共享渲染器导致各行指向最后渲染那份），改该文件 6 行——不在 G7 声明写集内，验证者判定「改动必要且未放宽断言，'二者只能留一'论断成立」，此处补记。
+- P4：选 (a)，仅改双语 bundle（两个 tip + 两个 success 键明示「全局设置」）。
+- P5：`ProjectPluginSettingsConfigurableTest` 扩 7 个用例（P1 四条 + P2 一条 + P3 探针/索引两条）；**回放验证**：修复前真红 4~5 条（作者原文「3 条」属低报），apply/isModified 两条用注释式回放验证判别力。
+- **阻断项修正（`96579a7`）**：验证者推演「开启态 reset 后编辑任一项并 apply → 全部 9 项被写回 → '跟随全局'静默钉成当时的全局快照」，且现有 P2 用例不调 apply（假绿）。修法=**apply 逐项门控**（只写回「控件显示值 ≠ state 推导值」的项，判据与 `isModified` 同源，零新增可变状态；顺带消除 apply 与 isModified 的判据不对称）；并补 `injectLogicDelete` 灌值守卫（验证者指出删该行现有用例全绿——实测关闭态分支确无覆盖）。先红后绿：阻断项用例修复前 `expected:<[]> but was:<[MySQL]>`。
+- 未验证：真机走查七项（关闭态置灰与全局页逐字一致、切开关/应用/重开值保留、重置后 XML 归空、关闭态不出现「已修改」、并排两页文案一致、P3 实际跳转与高亮）；P3 的 `focusTarget` 高亮对 DSL v2 的 `JLabel` 与文本框大概率不生效（已登记 §七）。
+（实施后回填）
 
 待实施。回填要求：
 
