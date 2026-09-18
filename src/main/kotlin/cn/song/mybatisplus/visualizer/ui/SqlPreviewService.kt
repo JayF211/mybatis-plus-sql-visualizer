@@ -299,7 +299,8 @@ class SqlPreviewService(private val project: Project) {
                     // 独有字段被静默丢弃；跨方言渲染与否由 SqlGenerator 按 [Dialect.supportsDeleteLimit] 决定）
                     DeleteStatement(table, parsed.conditions, limit = parsed.limit)
                 }
-                else -> ConverterRegistry.convert(located.chain, table) ?: return null
+                // T-FS-04：显式传本服务绑定的 project（converter 内类名兜底推断的项目级表配置口径）
+                else -> ConverterRegistry.convert(located.chain, table, project) ?: return null
             }
             // T-M15-07：逻辑删除注入（@TableLogic 实体 + 配置开启）——查询/计数/exists/删除自动追加 `AND deleted = 0`
             // （对齐 MyBatis-Plus 全局 logic-delete-field 配置；UPDATE 不注入——更新可能修改 deleted 本身）
@@ -1724,9 +1725,12 @@ class SqlPreviewService(private val project: Project) {
      * MPJ 类型由此保留**主表别名与 JOIN**（`selectJoinCount`/`exists` 的联表过滤语义：
      * 单表 QueryWrapperParser 会静默丢弃 join 调用，INNER JOIN 的行数语义会丢失）；
      * 非 SelectStatement 结果（异常路径）回退单表解析。与 `else -> ConverterRegistry.convert` 分支同源。
+     *
+     * T-FS-04：显式传本服务绑定的 [project]——converter 内「关联/collection 子表实体类 PSI 不可解析」
+     * 的类名兜底推断据此读项目级表配置（不再受「首个打开项目」影响）。
      */
     private fun parseQueryLike(chain: cn.song.mybatisplus.visualizer.model.WrapperChain, table: TableInfo): SelectStatement =
-        (ConverterRegistry.convert(chain, table) as? SelectStatement) ?: QueryWrapperParser(table).parse(chain)
+        (ConverterRegistry.convert(chain, table, project) as? SelectStatement) ?: QueryWrapperParser(table).parse(chain)
 
     /**
      * 逻辑删除注入状态（T-M20-05）：MPJ 官方六方法按源码顺序求值的结果，驱动 [injectLogicDeleteCondition]。
