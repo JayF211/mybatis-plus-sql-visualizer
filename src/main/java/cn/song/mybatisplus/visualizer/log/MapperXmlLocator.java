@@ -115,24 +115,120 @@ public final class MapperXmlLocator {
      * 项目内全部 mapper XML（{@code .xml} 后缀 + 根元素 {@code <mapper>}）。
      * XmlFileType 在 262 平台不可直接引用（IPGP 裁剪），按 HbmXmlEntityResolver 同款用
      * FileTypeManager 取标准 XML 类型；索引异常按空列表处理（优雅降级，绝不抛出）。
+     *
+     * <p>T-PS5-05：走 {@link #mapperXmlVirtualFiles} 单槽缓存（索引遍历 + 非 mapper XML 的 PSI 解析
+     * 只在缓存未命中时发生）。
      */
     @NotNull
     private static List<XmlFile> findMapperXmlFiles(@NotNull Project project) {
         try {
-            com.intellij.openapi.fileTypes.FileType xmlFileType =
-                FileTypeManager.getInstance().getStdFileType("XML");
             List<XmlFile> result = new ArrayList<>();
-            for (VirtualFile vf : FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project))) {
+            for (VirtualFile vf : mapperXmlVirtualFiles(project)) {
                 PsiFile psiFile = PsiManager.getInstance(project).findFile(vf);
-                if (!(psiFile instanceof XmlFile xmlFile)) continue;
-                if (xmlFile.getRootTag() == null || !"mapper".equals(xmlFile.getRootTag().getName())) continue;
-                result.add(xmlFile);
+                if (psiFile instanceof XmlFile xmlFile) {
+                    result.add(xmlFile);
+                }
             }
             return result;
         } catch (Throwable ignored) {
             // runCatching 等价：索引异常按空列表处理（优雅降级，绝不抛出）
             return List.of();
         }
+    }
+
+    /** T-PS5-05：mapper XML 文件列表单槽缓存条目（项目弱引用 + 文件列表 + 时间戳）。 */
+    private static final class FileListSlot {
+
+        private final java.lang.ref.WeakReference<Project> project;
+        private final List<VirtualFile> files;
+        private final long atMs;
+
+        private FileListSlot(java.lang.ref.WeakReference<Project> project, List<VirtualFile> files, long atMs) {
+            this.project = project;
+            this.files = files;
+            this.atMs = atMs;
+        }
+    }
+
+    /**
+     * T-PS5-05：缓存 TTL 上界（毫秒）。新增 mapper XML 后至多一个窗口内跳转仍按旧列表
+     * （删除由 {@link VirtualFile#isValid()} 即时兜底：任一缓存文件失效即刻重扫）。
+     * 测试注入短窗驱动过期语义。
+     */
+    public static long fileListTtlMs = 5_000L;
+
+    /** T-PS5-05 测试缝：时间源（默认系统时钟）。 */
+    public static java.util.function.LongSupplier clockMs = System::currentTimeMillis;
+
+    /** T-PS5-05 测试缝：索引全扫计数（断言命中路径零遍历）。 */
+    public static final java.util.concurrent.atomic.AtomicInteger indexScanCount =
+        new java.util.concurrent.atomic.AtomicInteger(0);
+
+    private static volatile FileListSlot fileListSlot = null;
+
+    /** T-PS5-05 测试缝：清空文件列表缓存（用例隔离；生产链路无调用点）。 */
+    public static void clearFileListCacheForTest() {
+        fileListSlot = null;
+    }
+
+    /**
+     * T-PS5-05：mapper XML 的 VirtualFile 列表（索引 + PSI 根元素预筛）——<b>单槽缓存</b>。
+     *
+     * <p>为什么要缓存：大项目（数千 XML）每次跳转都全项目扫描索引 + 逐个 PSI 解析根元素判
+     * {@code <mapper>}，首跳百毫秒级且发生在 EDT ReadAction 内。缓存只存<b>已筛出的 mapper XML</b>
+     * （VirtualFile 而非 PsiFile：PSI 可能被平台失效，取用前统一 {@link VirtualFile#isValid()} 校验）。
+     *
+     * <p>失效纪律（<b>禁引 PsiTreeChangeListener/EditorFactoryListener</b>——红线族维持 0）：
+     * <ul>
+     * <li>TTL 上界（默认 5s，新增文件最多滞后一个窗口）；</li>
+     * <li>取用时 {@code isValid} 全检，任一失效（删除/改名）即重扫一次；</li>
+     * <li>项目身份不匹配（多项目同开）不命中，重扫。</li>
+     * </ul>
+     *
+     * <p>单槽 + 项目弱引用（不挂项目 Disposable、不加监听器）：无跨项目泄漏，项目关闭后条目随
+     * GC 回收；多项目交替访问退化为重扫（与无缓存等价，无正确性风险）。
+     */
+    @NotNull
+    private static List<VirtualFile> mapperXmlVirtualFiles(@NotNull Project project) {
+        long now = clockMs.getAsLong();
+        FileListSlot slot = fileListSlot;
+        if (slot != null) {
+            if (slot.project.get() == project
+                    && now - slot.atMs <= fileListTtlMs
+                    && allValid(slot.files)) {
+                return slot.files;
+            }
+        }
+        indexScanCount.incrementAndGet();
+        List<VirtualFile> files;
+        try {
+            com.intellij.openapi.fileTypes.FileType xmlFileType =
+                FileTypeManager.getInstance().getStdFileType("XML");
+            List<VirtualFile> result = new ArrayList<>();
+            for (VirtualFile vf : FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project))) {
+                PsiFile psiFile = PsiManager.getInstance(project).findFile(vf);
+                if (!(psiFile instanceof XmlFile xmlFile)) continue;
+                if (xmlFile.getRootTag() == null || !"mapper".equals(xmlFile.getRootTag().getName())) continue;
+                VirtualFile file = xmlFile.getVirtualFile();
+                if (file != null) {
+                    result.add(file);
+                }
+            }
+            files = result;
+        } catch (Throwable ignored) {
+            // runCatching 等价：索引异常按空列表处理（优雅降级，绝不抛出）
+            files = List.of();
+        }
+        fileListSlot = new FileListSlot(new java.lang.ref.WeakReference<>(project), files, now);
+        return files;
+    }
+
+    /** Kotlin {@code files.all { it.isValid }} 等价：空列表为 true。 */
+    private static boolean allValid(List<VirtualFile> files) {
+        for (VirtualFile file : files) {
+            if (!file.isValid()) return false;
+        }
+        return true;
     }
 
     /**

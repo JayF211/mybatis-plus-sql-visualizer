@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.xml;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -192,6 +193,28 @@ public class XmlPreviewModel {
     public ParamKind kindFor(String source) {
         ParamTypeInfo info = paramTypeFor(source);
         return info != null ? info.kind() : ParamKind.UNKNOWN;
+    }
+
+    /**
+     * T-PC2-04（D1=B 定案）：执行 / EXPLAIN 前提示所需的「签名类型未能识别」参数清单
+     * （按 {@code sources} 顺序去重）。
+     *
+     * <p>判定口径：<b>在 {@link #getParamTypes()} 中有条目且类别为 {@link ParamKind#UNKNOWN}</b>
+     * （boolean / {@code byte[]} / 枚举等——类型读到了但映射不到类别，执行时以字面 {@code ?} 提交）。
+     * <b>无类型信息</b>（键不在 {@code paramTypes}：mapper 接口不可解析 / 参数未参与签名解析）<b>不计入</b>
+     * ——与 T-PT-02「无类型信息不提示」同向，也避免「接口解析不到 → 每次执行都提示」的噪音面。
+     *
+     * @param sources 面板参数行来源（{@code PreviewResult.unresolvedParams}，即渲染出的 {@code #{}} 属性序列）
+     */
+    public List<String> unknownParamSources(Collection<String> sources) {
+        List<String> result = new ArrayList<>();
+        for (String source : sources) {
+            ParamTypeInfo info = paramTypeFor(source);
+            if (info != null && info.kind() == ParamKind.UNKNOWN && !result.contains(source)) {
+                result.add(source);
+            }
+        }
+        return result;
     }
 
     public XmlPreviewState defaultState() {

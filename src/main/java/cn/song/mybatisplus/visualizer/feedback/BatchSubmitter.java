@@ -30,22 +30,35 @@ public final class BatchSubmitter {
      */
     public static final int BATCH_MERGE_MAX = ErrorReportComposer.BATCH_MERGE_MAX;
 
-    /** 对话框里的一条批量条目：内容 + 是否附带堆栈（勾选默认开，同单条形态）。 */
+    /**
+     * 对话框里的一条批量条目：内容 + 是否附带堆栈（勾选默认开，同单条形态）。
+     *
+     * <p>T-ErrorReportRedact（D1=B）：{@code includeMessage} = 该条目的 message 全文是否随帖子外传。
+     * 默认 <b>false</b>（脱敏形态：标题/描述只出异常类名）——由对话框的「附带异常消息全文」
+     * 开关在收集时统一回写（与 {@code attachStack} 同款的逐条传输策略标记）。</p>
+     */
     public static final class BatchItem {
         private final String title;
         private final String message;
         private final String stackTraceText;
         private boolean attachStack;
+        private boolean includeMessage;
 
         public BatchItem(String title, String message, String stackTraceText) {
-            this(title, message, stackTraceText, true);
+            this(title, message, stackTraceText, true, false);
         }
 
         public BatchItem(String title, String message, String stackTraceText, boolean attachStack) {
+            this(title, message, stackTraceText, attachStack, false);
+        }
+
+        public BatchItem(String title, String message, String stackTraceText, boolean attachStack,
+                         boolean includeMessage) {
             this.title = title;
             this.message = message;
             this.stackTraceText = stackTraceText;
             this.attachStack = attachStack;
+            this.includeMessage = includeMessage;
         }
 
         public String getTitle() {
@@ -66,6 +79,14 @@ public final class BatchSubmitter {
 
         public void setAttachStack(boolean attachStack) {
             this.attachStack = attachStack;
+        }
+
+        public boolean getIncludeMessage() {
+            return includeMessage;
+        }
+
+        public void setIncludeMessage(boolean includeMessage) {
+            this.includeMessage = includeMessage;
         }
     }
 
@@ -146,12 +167,26 @@ public final class BatchSubmitter {
         return followUps;
     }
 
-    /** 批量条目 → 独立帖子载荷（纯函数）：沿用首发的时间/版本上下文，标题描述各自组装。 */
+    /**
+     * 批量条目 → 独立帖子载荷（纯函数）：沿用首发的时间/版本上下文，标题描述各自组装。
+     *
+     * <p>T-ErrorReportRedact（D1=B）：{@link BatchItem#getIncludeMessage()} 决定该条帖子走哪种形态——
+     * false（默认）走脱敏形态（标题只出类名、描述出类名 + 栈帧摘要 + cause 链），
+     * true 时逐字节等于改前形态（标题 {@code 类名: 消息首行}、描述 message 全文）。
+     * 附件与消息开关无关（各自条目的 {@link BatchItem#getAttachStack()} 独立决定）。</p>
+     */
     public static FeedbackApi.Submission submissionFor(FeedbackApi.Submission template, BatchItem item) {
         FeedbackApi.PostRequest templateRequest = template.getRequest();
         FeedbackApi.PostRequest request = templateRequest.copy(
-                ErrorReportComposer.buildTitle(item.getTitle(), item.getMessage()),
-                ErrorReportComposer.buildDescription(item.getMessage(), null, null),
+                item.getIncludeMessage()
+                        ? ErrorReportComposer.buildTitle(item.getTitle(), item.getMessage())
+                        : ErrorReportComposer.buildRedactedTitle(item.getTitle()),
+                item.getIncludeMessage()
+                        ? ErrorReportComposer.buildDescription(item.getMessage(), null, null)
+                        : ErrorReportComposer.buildRedactedDescription(
+                                item.getTitle(),
+                                item.getStackTraceText(),
+                                item.getMessage() != null && !item.getMessage().isBlank()),
                 templateRequest.getType(),
                 ErrorReportComposer.guessCategory(item.getStackTraceText()),
                 templateRequest.getSubmitterName(),

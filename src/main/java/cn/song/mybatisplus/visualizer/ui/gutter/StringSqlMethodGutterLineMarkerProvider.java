@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.ui.gutter;
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
 import cn.song.mybatisplus.visualizer.psi.PreviewReceiverResolver;
+import cn.song.mybatisplus.visualizer.psi.PsiSnapshot;
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateMethodDetector;
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlLocator;
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlPreviewService;
@@ -14,7 +15,6 @@ import com.intellij.codeInsight.daemon.LineMarkerInfo;
 import com.intellij.codeInsight.daemon.LineMarkerProvider;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ReadAction;
-import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.markup.GutterIconRenderer;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.IconLoader;
@@ -28,7 +28,6 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.awt.event.MouseEvent;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import javax.swing.Icon;
@@ -154,25 +153,15 @@ public class StringSqlMethodGutterLineMarkerProvider implements LineMarkerProvid
      * @param sourceLocation 来源位置（`文件名:行号`，可空）
      */
     public static void previewMethodCandidates(Project project, PsiMethod method, String sourceLocation) {
+        // T-PCP-02：捕获锚点方法快照（文件 + textRange + 文档 modificationStamp），后台读取前校验。
+        // 包 ReadAction 以保留本入口「EDT / 后台均可调用」的既有语义（EDT 下 compute 内联，无额外开销）。
+        PsiSnapshot snapshot = ReadAction.compute(() -> PsiSnapshot.capture(method));
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             // T-M23.8 模式：候选 + 显示行一并后台 ReadAction 预计算（弹窗只渲染）
             Pair<List<JdbcTemplateSqlLocator.JdbcTemplateSqlCall>, List<SqlSelectionDialog.Row>> payload;
             try {
-                payload = ReadAction.compute(() -> {
-                    List<JdbcTemplateSqlLocator.JdbcTemplateSqlCall> calls =
-                            JdbcTemplateSqlPreviewService.collectMethodCandidates(method);
-                    List<SqlSelectionDialog.Row> rows = new ArrayList<>();
-                    for (JdbcTemplateSqlLocator.JdbcTemplateSqlCall call : calls) {
-                        Document document = call.callExpression().getContainingFile().getViewProvider().getDocument();
-                        int line = document != null
-                                ? document.getLineNumber(call.callExpression().getTextRange().getStartOffset()) + 1
-                                : 0;
-                        rows.add(SqlSelectionDialog.Row.of(
-                                call.methodName() + "（第 " + line + " 行）",
-                                call.sqlString()));
-                    }
-                    return new Pair<>(calls, rows);
-                });
+                payload = ReadAction.compute(
+                        () -> StringSqlMethodGutterLineMarkerProviderKt.validatedMethodRows(method, snapshot));
             } catch (Throwable t) {
                 payload = new Pair<>(Collections.emptyList(), Collections.emptyList());
             }

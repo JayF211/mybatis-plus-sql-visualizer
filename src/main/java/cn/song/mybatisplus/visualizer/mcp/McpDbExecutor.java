@@ -2,6 +2,7 @@
 package cn.song.mybatisplus.visualizer.mcp;
 
 import cn.song.mybatisplus.visualizer.mcp.McpDbExecutorKt.WarningSurface;
+import cn.song.mybatisplus.visualizer.util.FatalErrors;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 
@@ -10,6 +11,7 @@ import java.lang.reflect.Method;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * T-McpToolset headless 执行通道（mpsv_explain 专用，反射隔离 DatabaseTools）。
@@ -61,6 +63,9 @@ public final class McpDbExecutor {
     private static final String REMOTE_STATEMENT = "com.intellij.database.remote.jdbc.RemoteStatement";
     private static final String REMOTE_RESULT_SET = "com.intellij.database.remote.jdbc.RemoteResultSet";
     private static final String REMOTE_META = "com.intellij.database.remote.jdbc.RemoteResultSetMetaData";
+
+    /** T-McpAuditTrail T-MAT-01：失败文本上限（历史文件单条元数据行，不落整段堆栈）。 */
+    private static final int ERROR_TEXT_LIMIT = 200;
 
     /** database 插件是否在场（Ultimate/DataGrip）。 */
     public static boolean isDatabaseAvailable() {
@@ -126,6 +131,28 @@ public final class McpDbExecutor {
     }
 
     /**
+     * 一次执行的结果载体（T-McpAuditTrail / T-MAT-01）：只含 JDK 类型，不引平台/IDE 服务类型——
+     * 回调注入形态正是为了不把 {@link McpDbExecutor} 的 headless 边界与
+     * {@code cn.song.mybatisplus.visualizer.log.SqlLogManager} 之类的项目级服务绑在一起
+     * （依赖留在工具层）。
+     *
+     * @param executedSql 实际交给驱动的语句文本（explain 通道=EXPLAIN 包装句）。<b>注意</b>：历史入库
+     *   必须用调用方自己持有的<b>原始</b> selectSql，不得落本字段（T-MAT-02：包装句首 token 为
+     *   {@code EXPLAIN}，{@code cn.song.mybatisplus.visualizer.log.LogStatementClassifier} 会判
+     *   {@code OTHER} → 无类型染色）。
+     * @param elapsedMs 本次执行耗时（含建连与取数，毫秒）
+     * @param errorText 失败时的「异常类名: 首行消息」（截断）；成功为 null
+     * @param dataSourceName 数据源显示名（反射 DasDataSource.getName；不可达/headless 为 null）
+     */
+    public record ExecutedOutcome(
+        String executedSql,
+        long elapsedMs,
+        String errorText,
+        String dataSourceName
+    ) {
+    }
+
+    /**
      * 在指定数据源上执行只读查询并采集行列文本（EXPLAIN 用）。
      * 密码未保存/不可达等建连失败以异常冒泡，适配层按
      * {@link McpToolErrors#DATASOURCE_UNREACHABLE} 包装为 agent 可读错误（零弹窗 fail closed）。
@@ -134,7 +161,48 @@ public final class McpDbExecutor {
      * 建议值，RemoteStatement 镜像 243/262 javap 同形）；超时形态异常
      * （{@code cn.song.mybatisplus.visualizer.execute.ExecutionTimeoutGuard.isTimeoutLike}）先
      * Statement.cancel() 收尾再冒泡，消息尾附 {@code timed out after Ns}（agent 可读，不引 JSON）。</p>
+     *
+     * <p>T-McpRowBudget（O-36）：{@code maxRows} 先过 {@link McpDbExecutorKt#channelRowBudget} 兜底钳制
+     * 再进采集——调用方（含未来新增的执行类工具）传什么都不会突破
+     * {@link McpExplainFormatter#HARD_MAX_ROWS}。</p>
+     *
+     * <p>T-McpAuditTrail（T-MAT-01）：{@code onExecuted} 为执行链唯一出口钩子——成功与失败<b>两条路径</b>
+     * 都回调一次（失败回调后异常原样冒泡）。钩子是旁路：自身抛异常只记日志，绝不连坐执行结果
+     * 或吞掉失败（审计不得成为门控）。null（默认）时零行为差异——既有调用点逐字节不变。</p>
      */
+    public static McpExplainFormatter.RawResult executeQuery(
+        Project project,
+        Object dataSource,
+        String sql,
+        int maxRows,
+        int timeoutSeconds,
+        Consumer<ExecutedOutcome> onExecuted
+    ) throws Exception {
+        long started = System.currentTimeMillis();
+        try {
+            McpExplainFormatter.RawResult result =
+                executeQueryInternal(project, dataSource, sql, maxRows, timeoutSeconds);
+            notifyExecuted(onExecuted, sql, System.currentTimeMillis() - started, null, dataSource);
+            return result;
+        } catch (Throwable e) {
+            // T-FatalPassthrough（合流收口，T-FP-03 守卫要求）：JVM 级致命错误不投审计钩子——
+            // 钩子会构造 ExecutedOutcome（反射取数据源名 + 文本构造）并落历史，内存/链接已损坏时
+            // 继续这些副作用只会把现场搅乱；fatal 原样透传给平台/进程级通道。反射链须先解包：
+            // 目标方法抛出的 Error 被 Method.invoke 包进 InvocationTargetException（普通异常），
+            // 只判外层会漏判（与 errorTextOf 同款解包口径，见 util/FatalErrors.java 用法说明）。
+            Throwable cause = e instanceof InvocationTargetException ite ? ite.getTargetException() : e;
+            if (FatalErrors.isFatal(cause)) {
+                // master 的 `throw cause` 直译：Java 的 `throws Exception` 装不下 Throwable/Error，
+                // 经同包 sneakyThrow 擦除类型后抛出——运行时抛出的仍是 cause 实例本身（语义等价）。
+                throw McpToolsetSupport.<RuntimeException>sneakyThrow(cause);
+            }
+            notifyExecuted(onExecuted, sql, System.currentTimeMillis() - started, e, dataSource);
+            // 同上：master `throw e` 直译——原异常实例原样冒泡（调用方按 Throwable 兜底）。
+            throw McpToolsetSupport.<RuntimeException>sneakyThrow(e);
+        }
+    }
+
+    /** Kotlin 默认参数等价重载：onExecuted 缺省 null（未接线的调用点零开销）。 */
     public static McpExplainFormatter.RawResult executeQuery(
         Project project,
         Object dataSource,
@@ -142,6 +210,73 @@ public final class McpDbExecutor {
         int maxRows,
         int timeoutSeconds
     ) throws Exception {
+        return executeQuery(project, dataSource, sql, maxRows, timeoutSeconds, null);
+    }
+
+    /**
+     * 钩子投递（T-MAT-01）：hook 为 null 时<b>立即返回</b>——耗时以外的任何采集（反射取数据源名、
+     * 异常文本构造）都不发生，未接线的调用点零开销。
+     */
+    private static void notifyExecuted(
+        Consumer<ExecutedOutcome> hook,
+        String sql,
+        long elapsedMs,
+        Throwable failure,
+        Object dataSource
+    ) {
+        if (hook == null) {
+            return;
+        }
+        ExecutedOutcome outcome = new ExecutedOutcome(
+            sql,
+            elapsedMs,
+            failure != null ? errorTextOf(failure) : null,
+            dataSourceName(dataSource)
+        );
+        try {
+            hook.accept(outcome);
+        } catch (Throwable t) {
+            LOG.warn("McpDbExecutor: onExecuted hook failed (execution result unaffected)", t);
+        }
+    }
+
+    /**
+     * 失败文本（T-MAT-01）：异常类名 + 首行消息，{@link #ERROR_TEXT_LIMIT} 截断。
+     *
+     * <p>反射调用链里异常被包在 {@code InvocationTargetException} 中（其 message 恒 null），故先解包取
+     * 目标异常——否则历史里只剩一个类名，排障无信息。多行堆栈只取首行（历史文件单条正文，
+     * 不落整段堆栈）。</p>
+     */
+    private static String errorTextOf(Throwable e) {
+        Throwable target = e instanceof InvocationTargetException ite ? ite.getTargetException() : e;
+        String message = target.getMessage();
+        String firstLine = message == null
+            ? null
+            : message.lines().filter(line -> !line.isBlank()).findFirst().orElse(null);
+        String text = target.getClass().getSimpleName() + ": "
+            + (firstLine != null ? firstLine : "(no message)");
+        return text.length() <= ERROR_TEXT_LIMIT ? text : text.substring(0, ERROR_TEXT_LIMIT) + "…";
+    }
+
+    /** 数据源显示名（反射 DasDataSource.getName；不可达返回 null——展示性字段，取不到不影响主链）。 */
+    private static String dataSourceName(Object dataSource) {
+        try {
+            Object raw = Class.forName(DAS_DATA_SOURCE).getMethod("getName").invoke(dataSource);
+            return raw instanceof String s ? s : null;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /** T-MAT-01 之前的执行本体（钩子包装前逐行原样；行为零变化）。 */
+    private static McpExplainFormatter.RawResult executeQueryInternal(
+        Project project,
+        Object dataSource,
+        String sql,
+        int maxRows,
+        int timeoutSeconds
+    ) throws Exception {
+        int rowBudget = McpDbExecutorKt.channelRowBudget(maxRows);
         Object manager = Class.forName(DCM).getMethod("getInstance").invoke(null);
         Object builder = Class.forName(DCM).getMethod("build", Project.class, Class.forName(CONNECTION_POINT))
             .invoke(manager, project, dataSource);
@@ -175,7 +310,7 @@ public final class McpDbExecutor {
                     } catch (InvocationTargetException e) {
                         throw e;
                     }
-                    McpExplainFormatter.RawResult raw = collect(resultSet, maxRows);
+                    McpExplainFormatter.RawResult raw = collect(resultSet, rowBudget);
                     // 执行成功才采集 notices；失败路径直接抛出（notices 无从产生=DBX「出错丢弃」口径）
                     List<String> notices = McpDbExecutorKt.drainWarnings(surfaces);
                     if (!notices.isEmpty()) {

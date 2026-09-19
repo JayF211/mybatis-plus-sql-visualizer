@@ -14,7 +14,7 @@ public enum ParamKind {
     /** 字符串/字符序列（String / CharSequence）。 */
     TEXT,
 
-    /** 数值（整型浮点族原语与包装类 + BigDecimal）。 */
+    /** 数值（整型浮点族原语与包装类 + {@code java.math} 的 BigDecimal / BigInteger）。 */
     NUMBER,
 
     /** 时间（{@code java.time.*} / {@code java.util.Date}）。 */

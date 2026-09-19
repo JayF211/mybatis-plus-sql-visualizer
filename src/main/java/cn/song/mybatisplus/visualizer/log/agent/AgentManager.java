@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.config.SettingsChangeListener;
 import cn.song.mybatisplus.visualizer.log.LogTimeCorrelator;
 import cn.song.mybatisplus.visualizer.log.SqlCaptureGate;
 import cn.song.mybatisplus.visualizer.log.SqlLogManager;
+import cn.song.mybatisplus.visualizer.util.FatalErrors;
 import com.intellij.execution.process.OSProcessUtil;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationManager;
@@ -187,9 +188,18 @@ public final class AgentManager implements Disposable {
     /** premain 专用 jar 落盘路径缓存（与 attach 的 {@link #cachedAgentJar} 分开，语义不同见 {@link #extractPremainAgentJar}）。 */
     private volatile File cachedPremainAgentJar;
 
+    /**
+     * T-PS5-04：巡检懒启标志——{@code monitor} 的 5s 定时任务由<b>首条会话建立</b>才挂上
+     * （{@link #ensureMonitorStarted}）。解耦前服务一实例化就排定时器：默认开智能推断的项目
+     * 「预览一次即驻留」一条守护线程 + 5s 空转，即便增强捕获从未使用。
+     */
+    private volatile boolean monitorStarted = false;
+
+    private final Object monitorLock = new Object();
+
     public AgentManager(Project project) {
         this.project = project;
-        monitor.scheduleWithFixedDelay(this::sweepOffline, 5, 5, TimeUnit.SECONDS);
+        // T-PS5-04：monitor 定时任务不再在此排定（见 ensureMonitorStarted）。
         // T-M56-08：设置变更驱动——开启（已确认）→ 惰性挂载由进程出现回调承接；
         // 关闭 → CONFIG 停采集 + 会话关闭 + 桥回落；脱敏开关 → CONFIG 下发
         project.getMessageBus().connect(this).subscribe(
@@ -204,6 +214,12 @@ public final class AgentManager implements Disposable {
                 }
                 lastKnownEnabled = state.getEnhancedCaptureEnabled();
                 if (!state.getEnhancedCaptureEnabled()) {
+                    // T-PS5-07：关闭下降沿复位 EP 短路标志——[SqlCaptureGate.epActive] 是「EP 在本会话
+                    // 实证产出过条目」的**会话级粘滞**标志（置位点 SqlConsoleBridgeFilterProvider），
+                    // 解耦前无任何复位点：关掉增强捕获再新建控制台时桥侧仍被粘滞标志短路 = 两条通道
+                    // 同时零产出（静默零捕获的复发形态）。与上方上升沿重置拒绝冷却对称；EP 链路失效的
+                    // 极端场景由短路计数 + debug 日志（epActiveShortCircuitCount）可观测兜底。
+                    SqlCaptureGate.epActive = false;
                     executor.execute(this::shutdownAll);
                 } else {
                     executor.execute(() -> pushDesensitize(state.getEnhancedCaptureDesensitize()));
@@ -218,8 +234,56 @@ public final class AgentManager implements Disposable {
     // ---------- 挂载入口 ----------
 
     /**
+     * T-PS5-04：巡检懒启 + 建立兜底清扫——首条会话建立时排定 5s 巡检，并<b>先兜底扫一次</b>
+     * （巡检未启动的窗口期内可能已积压死会话，不能等首个 5s 拍）。新会话刚建（心跳新鲜）
+     * 不会被本次清扫摘除。
+     *
+     * <p>internal 为同模块守护测试缝（{@link #sweepOffline} 同款：测试直连会话不经 attachToPid）。
+     */
+    public void ensureMonitorStarted() {
+        synchronized (monitorLock) {
+            if (!monitorStarted) {
+                monitorStarted = true;
+                monitor.scheduleWithFixedDelay(this::sweepOffline, 5, 5, TimeUnit.SECONDS);
+            }
+        }
+        sweepOffline(); // 兜底清扫（幂等；无死会话时零动作）
+    }
+
+    /** T-PS5-04 测试缝：巡检是否已懒启（生产链路无调用点）。 */
+    public boolean monitorStartedForTest() {
+        return monitorStarted;
+    }
+
+    /**
+     * T-PS5-04：把当前 agentUrl 回写 {@link AgentUrlRegistry}（推断层读该持有者，不再经
+     * {@code getInstance} 触发服务实例化）。值取 {@link #lastConnectionUrl}，语义与解耦前逐字一致；
+     * 无会话/全离线 → null（清条目，推断回落数据源 URL）。
+     *
+     * <p>internal 为同模块守护测试缝（测试直连会话驱动 URL 捕获回调）。
+     */
+    public void syncInferenceUrl() {
+        AgentUrlRegistry.set(project, lastConnectionUrl());
+    }
+
+    /**
+     * T-PS5-03/04：<b>会话生命周期点收口</b>——推断 URL 回写 + 数据源 URL 探测缓存失效。
+     *
+     * <p>探测缓存（{@link cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe}）失效双保险之一：
+     * 会话建立/断开是「方言推断依据可能整体换了一套」的事件点（agent URL 出现/消失），
+     * 顺带清掉数据源 URL 探测槽；另一重保险是 TTL 上界（数据源编辑后至多一个窗口滞后）。
+     */
+    public void onSessionLifecycleChanged() {
+        syncInferenceUrl();
+        cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.invalidate(project);
+    }
+
+    /**
      * T-DialectAutoInfer：最近一次 agent 捕获的连接 URL（活跃会话优先，按会话加入序取最后值；
      * 全部离线/无会话 → null——推断层回落数据源探测）。纯读、无锁（CopyOnWriteArrayList 快照遍历）。
+     *
+     * <p>T-PS5-04：本函数仍是唯一取数口径，但<b>推断层不再直调</b>——{@link #syncInferenceUrl} 在会话
+     * 生命周期点把结果写入 {@link AgentUrlRegistry}，推断层读持有者（零服务实例化）。
      */
     public String lastConnectionUrl() {
         for (int i = sessions.size() - 1; i >= 0; i--) {
@@ -340,6 +404,13 @@ public final class AgentManager implements Disposable {
             try {
                 outcome = consentProvider.get();
             } catch (Throwable t) {
+                // T-FatalPassthrough T-FP-02：JVM 级致命错误透传（见 util/FatalErrors.kt）——本文件
+                // 是长驻链路（attach / premain / 会话读线程 / CONFIG 下发），捕获面覆盖 Error：
+                // 普通异常（含 ClassNotFoundException 这类可选能力缺失）仍走既有降级，
+                // VirtualMachineError/LinkageError 不得被吞成一条 warn 后让流程带病继续。
+                // Java 形态：isFatal 蕴含 Error，显式收窄后 throw（裸 `throw t` 在 try 含受检异常时
+                // 因精确重抛分析要求方法声明该受检异常而不可编译；语义与原对象逐字一致，不包装）。
+                if (FatalErrors.isFatal(t)) throw (Error) t;
                 LOG.warn("requestConsentThenAttach: 确认框异常——按拒绝处理（进冷却）", t);
                 outcome = EnhancedCaptureConsent.REJECTED;
             }
@@ -422,6 +493,7 @@ public final class AgentManager implements Disposable {
                 Thread.sleep(ATTACH_SETTLE_DELAY_MS);
                 attachToPid(pid);
             } catch (Throwable t) {
+                if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
                 LOG.warn("onProcessAppeared: 惰性 attach 失败（非致命，桥继续捕获）", t);
             } finally {
                 pendingPids.remove(pid);
@@ -442,6 +514,7 @@ public final class AgentManager implements Disposable {
         try {
             session = createSession(pid);
         } catch (Throwable t) {
+            if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
             attachedPids.remove(pid);
             LOG.warn("attachToPid: pid=" + pid + " attach 失败——回落桥（零劣化）", t);
             return false;
@@ -461,6 +534,9 @@ public final class AgentManager implements Disposable {
             LOG.warn("attachToPid: 初始 CONFIG 下发失败（pid=" + pid + "）", t);
         }
         updateOnline();
+        // T-PS5-04：首条会话建立 → 巡检懒启（含兜底清扫）+ 推断 URL 回写持有者（含探测缓存失效）
+        ensureMonitorStarted();
+        onSessionLifecycleChanged();
         // T-SettingsTruth P2：attach 成功 → 状态行「已挂载 pid=x」
         everAttached.set(true);
         // T-ReachAudit T-RA-01：新会话挂上即清「心跳过期」标记——回落文案只描述最近一次摘除原因
@@ -485,7 +561,12 @@ public final class AgentManager implements Disposable {
         }
         // T-ReachAudit T-RA-01：会话与管理器共用同一时间源（心跳窗口判定跨「记 lastSeen」与
         // 「算过期」两侧，不同源则测试无法推进时间）
-        return new AgentSession(project, pid, socket, this::updateOnline, clockMs);
+        return new AgentSession(
+            project, pid, socket,
+            this::updateOnline,
+            clockMs,
+            // T-PS5-04：URL 捕获即回写推断持有者（会话建立时 URL 尚不可知，事件到达才拿到）
+            this::syncInferenceUrl);
     }
 
     /**
@@ -614,6 +695,7 @@ public final class AgentManager implements Disposable {
         try {
             server = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
         } catch (Throwable t) {
+            if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
             LOG.warn("openPremainChannel: 端口前置协商失败——本次不注入（回落 attach/桥）", t);
             return null;
         }
@@ -661,6 +743,7 @@ public final class AgentManager implements Disposable {
             channel.claimed = true;
             onPremainConnected(socket);
         } catch (Throwable t) {
+            if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传（accept 线程：透传即线程终止，平台记录现场）
             LOG.info("premain 通道 " + channel.port + " 未收到回连（" + t.getClass().getSimpleName() + ": "
                 + t.getMessage() + "）——该进程回落 attach/桥（零劣化）");
         } finally {
@@ -713,7 +796,12 @@ public final class AgentManager implements Disposable {
             // T-ReachAudit T-RA-01 合流补位：会话时间源须与管理器同源注入（createSession 同款）——
             // 缺省真实时钟时，假时钟驱动的心跳窗口判定两侧不同源（manager 算出的「已过期」被真实
             // 时间戳的 lastSeen 抵消），premain 通道建立的半死会话不会被巡检摘除，封口在此复活
-            AgentSession session = new AgentSession(project, pid, socket, this::updateOnline, clockMs);
+            AgentSession session = new AgentSession(
+                project, pid, socket,
+                this::updateOnline,
+                clockMs,
+                // T-PS5-04：premain 会话同 attach 链——URL 捕获回写推断持有者
+                this::syncInferenceUrl);
             sessions.add(session);
             if (pid > 0L) {
                 attachedPids.put(pid, clockMs.getAsLong());
@@ -727,9 +815,13 @@ public final class AgentManager implements Disposable {
             }
             everAttached.set(true);
             updateOnline();
+            // T-PS5-04：premain 会话建立同 attach 链——巡检懒启 + 推断 URL 回写
+            ensureMonitorStarted();
+            onSessionLifecycleChanged();
             publishStatusChanged();
             LOG.info("premain 会话建立：pid=" + pid + "（启动即捕获，attach 链已跳过）");
         } catch (Throwable t) {
+            if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
             LOG.warn("premain 回连处理失败——丢弃连接（回落桥）", t);
             try {
                 socket.close();
@@ -940,6 +1032,8 @@ public final class AgentManager implements Disposable {
                 attachedPids.remove(session.getPid());
             }
             updateOnline();
+            // T-PS5-04：会话摘除后推断 URL 同步（全摘完 → 清条目，推断回落数据源 URL）
+            onSessionLifecycleChanged();
             // T-SettingsTruth P2：掉线摘除 → 状态行「连接中断，已回落控制台捕获」
             publishStatusChanged();
         }
@@ -997,6 +1091,8 @@ public final class AgentManager implements Disposable {
         // 此处提前关是防 socket 挂到超时才回收）
         closePremainChannels();
         updateOnline();
+        // T-PS5-04：会话全清 → 推断 URL 清条目（方言推断回落数据源 URL）
+        onSessionLifecycleChanged();
         // T-SettingsTruth P2：回落链完成 → 状态行「连接中断，已回落控制台捕获」
         publishStatusChanged();
     }
@@ -1101,6 +1197,7 @@ public final class AgentManager implements Disposable {
                 processRepr = p != null ? p.getClass().getName() : "null";
                 procErr = null;
             } catch (Throwable t) {
+                if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
                 processRepr = "N/A";
                 procErr = t.toString();
             }
@@ -1108,6 +1205,12 @@ public final class AgentManager implements Disposable {
                 + ", process=" + processRepr + ", procErr=" + procErr + "）");
             return null;
         } catch (Throwable e) {
+            // T-FatalPassthrough T-FP-02b（独立复核同族抵消点）：本函数外层 runCatching 会接住上面捕获块的
+            // fatal 透传——不在此处放行等于透传无效（改前：fatal 落成 pid=null，调用方只 warn
+            // "resolvePid 失败——跳过挂载"）。非 fatal 仍返回 null（pid 解析失败语义逐字不变）；fatal 经
+            // doAttachAsync → onProcessAppeared → 监听器（RunConfigurationProcessListener:135）再透传，
+            // 交给平台记录现场。
+            if (FatalErrors.isFatal(e)) throw (Error) e;
             return null;
         }
     }
@@ -1124,6 +1227,8 @@ public final class AgentManager implements Disposable {
                 session.close();
             }
             sessions.clear();
+            // T-PS5-04：项目销毁 → 推断 URL 条目清除（不引入跨项目残留）
+            onSessionLifecycleChanged();
             // T-PS4-03：服务随 project 生命周期，去抖/幂等表一并清空（不引入跨项目残留）
             pendingPids.clear();
             attachedPids.clear();

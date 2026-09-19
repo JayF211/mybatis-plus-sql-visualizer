@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.ui.gutter;
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry;
 import cn.song.mybatisplus.visualizer.log.SqlLogManager;
+import cn.song.mybatisplus.visualizer.psi.PsiSnapshot;
 import cn.song.mybatisplus.visualizer.psi.WrapperAnchorDetector;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
@@ -195,34 +196,22 @@ public class SqlGutterLineMarkerProvider implements LineMarkerProvider {
                     });
         }
 
-        /** 反查该锚点最近的日志执行记录并弹二级列表（匹配在后台：PSI 读包 ReadAction）。 */
+        /** 反查该锚点最近的日志执行记录并弹二级列表（匹配在后台：PSI 读包 ReadAction + 快照校验）。 */
         private void showRecentEntriesPopup(Project project, PsiElement elt) {
+            // T-PCP-02：EDT 侧捕获锚点快照（文件 + textRange + 文档 modificationStamp）；
+            // 后台读取前由 validatedRecentAnchor 校验，失效即按「无记录」降级（不跳到错位置）
+            PsiSnapshot snapshot = PsiSnapshot.capture(elt);
             com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread(() -> {
-                String[] anchorHolder = new String[1];
-                int[] lineHolder = new int[1];
+                kotlin.Pair<String, Integer> anchor;
                 try {
-                    com.intellij.openapi.application.ReadAction.compute(() -> {
-                        if (elt.getContainingFile() == null || elt.getContainingFile().getVirtualFile() == null) {
-                            anchorHolder[0] = null;
-                            lineHolder[0] = 0;
-                            return null;
-                        }
-                        com.intellij.openapi.vfs.VirtualFile file = elt.getContainingFile().getVirtualFile();
-                        String rel = relativeToProject(project, file.getPath());
-                        com.intellij.openapi.editor.Document doc =
-                                com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(file);
-                        int line = doc != null
-                                ? doc.getLineNumber(elt.getTextRange().getStartOffset()) + 1 : 0;
-                        anchorHolder[0] = rel;
-                        lineHolder[0] = line;
-                        return null;
-                    });
+                    anchor = com.intellij.openapi.application.ReadAction.compute(
+                            () -> SqlGutterLineMarkerProviderKt.validatedRecentAnchor(
+                                    project.getBasePath(), snapshot));
                 } catch (Throwable t) {
-                    anchorHolder[0] = null;
-                    lineHolder[0] = 0;
+                    anchor = null;
                 }
-                String anchorPath = anchorHolder[0];
-                int anchorLine = lineHolder[0];
+                String anchorPath = anchor != null ? anchor.getFirst() : null;
+                int anchorLine = anchor != null ? anchor.getSecond() : 0;
                 SqlLogManager manager = project.getService(SqlLogManager.class);
                 java.util.List<LogSqlEntry> matched = cn.song.mybatisplus.visualizer.log.EntrySourceMatcher.match(
                         manager.getEntries().snapshot(), anchorPath, anchorLine);
@@ -273,18 +262,7 @@ public class SqlGutterLineMarkerProvider implements LineMarkerProvider {
             });
         }
 
-        /** 绝对路径 → 相对项目根路径（项目外文件返回 null）。 */
-        private static String relativeToProject(Project project, String absolutePath) {
-            String base = project.getBasePath();
-            if (base == null) return null;
-            String normAbs = absolutePath.replace('\\', '/');
-            String normBase = base.replace('\\', '/');
-            while (normBase.endsWith("/")) {
-                normBase = normBase.substring(0, normBase.length() - 1);
-            }
-            String prefix = normBase + "/";
-            return normAbs.startsWith(prefix) ? normAbs.substring(prefix.length()) : null;
-        }
+        // 绝对路径 → 项目根相对路径：T-PCP-02 起收口到 SqlGutterLineMarkerProviderKt.relativeToProjectPath（快照校验链共用）
     }
 
     /**

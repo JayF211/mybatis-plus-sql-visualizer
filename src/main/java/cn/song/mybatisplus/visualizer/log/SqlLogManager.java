@@ -60,6 +60,21 @@ public final class SqlLogManager implements Disposable {
         capturing = value;
     }
 
+    /**
+     * T-TestIsolation：捕获态三元（capturing / userArmed / 等待态）<b>原样复位</b>测试缝。
+     *
+     * <p>为什么需要专用缝：{@link #userArmed} 与 {@link #isWaitingForConsole} 只有 {@code private set}，
+     * 测试类经公开路径（startCapture/stopCapture）改不到初值；而 light 测试项目在<b>同一分片
+     * JVM 内跨测试类复用同一个 ProjectImpl</b>，{@code project.getService(SqlLogManager::class.java)}
+     * 拿到的是全片共享实例——任何测试类改捕获态而不复位都会串台到同片后续测试类
+     * （是否发作取决于分片时长权重算出的邻居，见 testutil/SqlLogManagerProjectState KDoc）。
+     */
+    public void restoreCaptureStateForTest(boolean capturing, boolean userArmed, boolean waitingForConsole) {
+        this.capturing = capturing;
+        this.userArmed = userArmed;
+        this.isWaitingForConsole = waitingForConsole;
+    }
+
     /** 用户主动开启 SQL 监听标志——点击「捕捉」后置 true，点击「停止」或 dispose 时清零。 */
     private volatile boolean userArmed;
 
@@ -88,16 +103,16 @@ public final class SqlLogManager implements Disposable {
     /** capturing 变化回调（面板注册 → 刷新工具栏按钮图标/文案）。 */
     private final CopyOnWriteArrayList<Runnable> capturingListeners = new CopyOnWriteArrayList<>();
 
-    /** M37.3：上次自动展开时间戳（防抖基准；测试缝——包内可重置）。 */
-    volatile long lastAutoShowAt = 0L;
+    /** M37.3：上次自动展开时间戳（防抖基准；测试缝——master 为 internal，跨包 testutil 须 public）。 */
+    public volatile long lastAutoShowAt = 0L;
 
     /** T-AutoShowSuppress：用户手动关闭日志工具窗后置位——本会话内不再自动展开。
      *  恢复途径：设置开关重新开启（显式表达诉求）或重启 IDE/重开项目（会话自然重置）。 */
-    volatile boolean autoShowSuppressedByUserClose = false;
+    public volatile boolean autoShowSuppressedByUserClose = false;
 
     /** T-AutoShowSuppress：日志窗可见性沿检测基准（只在 可见→不可见 沿认定手动关闭；
      *  初值 false——启动布局恢复等中间态不误判）。 */
-    volatile boolean logWindowWasVisible = false;
+    public volatile boolean logWindowWasVisible = false;
 
     /** T-AutoShowSuppress：设置开关上次取值——检测 false→true 重启用沿，清除会话抑制。 */
     volatile boolean lastSeenAutoOpenOnCapture = PluginSettings.getInstance().getState().getLogAutoOpenOnCapture();
@@ -420,8 +435,9 @@ public final class SqlLogManager implements Disposable {
         return bridge.attachedConsoles;
     }
 
-    /** 桥访问（真实环境测试缝：scanComponent 挂载桩控制台用，对齐 installBridgeForTest 惯例）。 */
-    SqlLogConsoleBridge getConsoleBridge() {
+    /** 桥访问（真实环境测试缝：scanComponent 挂载桩控制台用，对齐 installBridgeForTest 惯例；
+     *  master 为 internal，跨包 testutil 须 public）。 */
+    public SqlLogConsoleBridge getConsoleBridge() {
         return bridge;
     }
 

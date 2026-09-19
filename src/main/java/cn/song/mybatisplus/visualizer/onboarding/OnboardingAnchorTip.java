@@ -13,6 +13,7 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.startup.ProjectActivity;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.vfs.VfsUtil;
+import com.intellij.util.messages.MessageBusConnection;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -47,13 +48,16 @@ public class OnboardingAnchorTip implements ProjectActivity {
     /** Kotlin suspend execute 的 Java 侧等价形态（无实际挂起点，直接同步执行）。 */
     @Override
     public Object execute(@NotNull Project project, @NotNull Continuation<? super Unit> continuation) {
-        // 连接绑定 project（Disposable），项目关闭自动注销——SqlPreviewService 同款形态
-        project.getMessageBus().connect(project).subscribe(
+        // 连接绑定 project（Disposable），项目关闭自动注销——SqlPreviewService 同款形态。
+        // T-PS5-15：句柄留用——引导**弹过即注销**（一次性语义下监听器已无使命；此前连接残留至
+        // 项目关闭，此后每次文件打开仍付 shouldProbe/isProbeTarget 两次布尔判断）。
+        MessageBusConnection connection = project.getMessageBus().connect(project);
+        connection.subscribe(
                 FileEditorManagerListener.FILE_EDITOR_MANAGER,
                 new FileEditorManagerListener() {
                     @Override
                     public void fileOpened(@NotNull FileEditorManager source, @NotNull VirtualFile file) {
-                        onFileOpened(project, file);
+                        onFileOpened(project, file, connection);
                     }
                 });
         return Unit.INSTANCE;
@@ -73,15 +77,28 @@ public class OnboardingAnchorTip implements ProjectActivity {
     /**
      * 文件打开入口（EDT 回调）：守卫全走纯函数 {@link #shouldProbe} / {@link #isProbeTarget}，
      * 命中才投一个后台扫描（低频 + 廉价，热路径零涉足）。
+     *
+     * <p>Kotlin 默认参数 {@code connection: MessageBusConnection? = null} 的便捷重载
+     * （null = 无连接上下文，仅测试直调）。
      */
     public static void onFileOpened(Project project, VirtualFile file) {
+        onFileOpened(project, file, null);
+    }
+
+    /**
+     * 文件打开入口（EDT 回调）：守卫全走纯函数 {@link #shouldProbe} / {@link #isProbeTarget}，
+     * 命中才投一个后台扫描（低频 + 廉价，热路径零涉足）。
+     *
+     * @param connection 总线连接句柄（弹过后注销；null = 无连接上下文，仅测试直调）
+     */
+    public static void onFileOpened(Project project, VirtualFile file, MessageBusConnection connection) {
         PluginSettings.State settings = PluginSettings.getInstance().getState();
         if (!shouldProbe(settings.getOnboardingAnchorTipEnabled(), settings.getOnboardingAnchorTipShown())) return;
         if (!isProbeTarget(file.getName())) return;
         if (!PROBING.compareAndSet(false, true)) return;
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             try {
-                probeFile(project, file);
+                probeFile(project, file, connection);
             } finally {
                 PROBING.set(false);
             }
@@ -89,7 +106,7 @@ public class OnboardingAnchorTip implements ProjectActivity {
     }
 
     /** 后台扫描：读文本（ReadAction）→ 启发式命中 → 领取一次性展示权 → 弹通知。 */
-    private static void probeFile(Project project, VirtualFile file) {
+    private static void probeFile(Project project, VirtualFile file, MessageBusConnection connection) {
         String text;
         try {
             text = ReadAction.compute(() -> {
@@ -105,6 +122,9 @@ public class OnboardingAnchorTip implements ProjectActivity {
         if (!anchorHintHit(file.getName(), text)) return;
         if (project.isDisposed()) return;
         if (!tryClaimAndMark()) return;
+        // T-PS5-15：一次性展示权已领取（单飞点）→ 监听器完成使命，注销（幂等；项目关闭路径
+        // 由 connect(project) 的 disposable 绑定兜底，语义不变）
+        if (connection != null) connection.disconnect();
         if (ApplicationManager.getApplication().isUnitTestMode()) return; // headless：持久化已置位，通知跳过
         ApplicationManager.getApplication().invokeLater(() -> {
             if (project.isDisposed()) return;

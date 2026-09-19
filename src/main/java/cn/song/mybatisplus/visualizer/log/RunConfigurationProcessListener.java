@@ -5,6 +5,7 @@ import com.intellij.openapi.project.Project;
 import com.intellij.util.messages.MessageBusConnection;
 import com.intellij.util.messages.Topic;
 import cn.song.mybatisplus.visualizer.log.agent.AgentManager;
+import cn.song.mybatisplus.visualizer.util.FatalErrors;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
 
@@ -81,6 +82,12 @@ public final class RunConfigurationProcessListener {
                     PLATFORM_CLASS_LOADER);
             return clazz.isInstance(profile);
         } catch (Throwable t) {
+            // T-FatalPassthrough T-FP-02：JVM 级致命错误透传（见 util/FatalErrors.kt）——本文件全部
+            // 捕获点的捕获面都覆盖了 Error：ClassNotFoundException（可选能力缺失）仍走既有降级，
+            // NoClassDefFoundError/ExceptionInInitializerError（环境/构建损坏）不得降级成一条 warn。
+            // Java 形态：isFatal 蕴含 Error，显式收窄后 throw（裸 `throw t` 在 try 含受检异常时
+            // 因精确重抛分析要求方法声明该受检异常而不可编译；语义与原对象逐字一致，不包装）。
+            if (FatalErrors.isFatal(t)) throw (Error) t;
             LOG.warn("isModuleBasedProfile: 判定失败，按主进程处理（" + t.getMessage() + "）", t);
             return true;
         }
@@ -95,6 +102,7 @@ public final class RunConfigurationProcessListener {
         try {
             listenerClass = Class.forName("com.intellij.execution.ExecutionListener", true, PLATFORM_CLASS_LOADER);
         } catch (Throwable t) {
+            if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
             LOG.warn("RunConfigurationProcessListener: ExecutionListener 不可用——降级为 RCM 轮询兜底（project=" + project.getName() + "）", t);
             return false;
         }
@@ -104,6 +112,7 @@ public final class RunConfigurationProcessListener {
                     Class.forName("com.intellij.execution.ExecutionManager", true, PLATFORM_CLASS_LOADER);
             topic = executionManagerClass.getField("EXECUTION_TOPIC").get(null);
         } catch (Throwable t) {
+            if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
             LOG.warn("RunConfigurationProcessListener: EXECUTION_TOPIC 不可用——降级为 RCM 轮询兜底（project=" + project.getName() + "）", t);
             return false;
         }
@@ -118,6 +127,7 @@ public final class RunConfigurationProcessListener {
                     try {
                         manager.resetEntrySequence();
                     } catch (Throwable t) {
+                        if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
                         LOG.warn("processStarted: 行号清零回调失败（project=" + project.getName() + "）", t);
                     }
                 } else {
@@ -126,6 +136,7 @@ public final class RunConfigurationProcessListener {
                 try {
                     manager.onProjectProcessStarted();
                 } catch (Throwable t) {
+                    if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
                     LOG.warn("processStarted: 自动捕捉回调失败（project=" + project.getName() + "）", t);
                 }
 
@@ -139,6 +150,7 @@ public final class RunConfigurationProcessListener {
                     AgentManager.getInstance(project)
                             .onProcessAppeared(args != null && args.length > 2 ? args[2] : null, isMainLaunch);
                 } catch (Throwable t) {
+                    if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
                     LOG.warn("processStarted: 增强捕获回调失败（project=" + project.getName() + "）", t);
                 }
             }
@@ -154,6 +166,7 @@ public final class RunConfigurationProcessListener {
             LOG.info("RunConfigurationProcessListener: 已订阅 EXECUTION_TOPIC（project=" + project.getName() + "）");
             return true;
         } catch (Throwable t) {
+            if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
             LOG.warn("RunConfigurationProcessListener: messageBus 订阅失败——降级为 RCM 轮询兜底（project=" + project.getName() + "）", t);
             return false;
         }

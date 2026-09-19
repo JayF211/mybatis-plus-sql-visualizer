@@ -1533,12 +1533,10 @@ public class PluginSettingsPanel implements Disposable {
                 dialectInferredLabel.setText(MpSqlVisualizerBundle.message("settings.dialect.inferred.none"));
                 return;
             }
-            String agentUrl = null;
-            try {
-                agentUrl = AgentManager.getInstance(firstProject).lastConnectionUrl();
-            } catch (Throwable ignored) {
-                // runCatching().getOrNull() 等价：agent 服务不可用 → 回落数据源探测
-            }
+            // T-PS5-04：agentUrl 读轻量持有者（不再经 AgentManager.getInstance 实例化服务——
+            // 设置页仅显示推断状态，不该顺带把增强捕获的守护线程带起来）
+            String agentUrl = cn.song.mybatisplus.visualizer.log.agent.AgentUrlRegistry
+                .lastConnectionUrl(firstProject);
             String dataSourceUrl = null;
             try {
                 dataSourceUrl = cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.firstUrl(firstProject);

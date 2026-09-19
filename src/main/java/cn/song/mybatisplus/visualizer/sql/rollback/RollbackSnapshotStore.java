@@ -10,6 +10,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -99,15 +100,33 @@ public final class RollbackSnapshotStore {
 
     private static final Logger LOG = Logger.getInstance(RollbackSnapshotStore.class);
 
-    /** LRU（访问序）条目表。 */
+    /** 条目 LRU（容量 {@link #MAX_ENTRIES} 条；访问序）。 */
     private final LinkedHashMap<Long, SnapshotEntry> entries = new LinkedHashMap<>(32, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<Long, SnapshotEntry> eldest) {
-            return size() > MAX_ENTRIES;
+            if (size() <= MAX_ENTRIES) return false;
+            // T-PS5-10：LRU 裁 entries 时**同步裁指纹索引**——此前只裁 entries，sqlIndex 随长会话
+            // distinct DML 数单调增长（100 条容量语义只对 entries 生效，索引无上界）。
+            pruneSqlIndex(eldest.getKey());
+            return true;
         }
     };
 
+    /** SQL 指纹 → 执行序号索引（register 覆盖写；条目被 LRU 淘汰时同步摘除，见上）。 */
     private final Map<String, Long> sqlIndex = new HashMap<>();
+
+    /** T-PS5-10：摘掉指向 {@code executionId} 的指纹索引（至多一条；LRU 淘汰与惰性清理共用）。 */
+    private void pruneSqlIndex(long executionId) {
+        Iterator<Map.Entry<String, Long>> it = sqlIndex.entrySet().iterator();
+        while (it.hasNext()) {
+            if (it.next().getValue() == executionId) it.remove();
+        }
+    }
+
+    /** T-PS5-10 测试缝：指纹索引规模（断言随 LRU 有界；生产链路无调用点）。 */
+    public int sqlIndexSizeForTest() {
+        return sqlIndex.size();
+    }
 
     /** 执行序号发生器（单调递增）。 */
     private long nextExecutionId = 1L;
@@ -168,9 +187,13 @@ public final class RollbackSnapshotStore {
     /** 按预览/编辑器 SQL 文本查找最近登记的条目（规范化指纹匹配；未命中 null）。 */
     @Nullable
     public synchronized SnapshotEntry findBySql(@NotNull String sql) {
-        Long id = sqlIndex.get(fingerprintOf(sql));
+        String fingerprint = fingerprintOf(sql);
+        Long id = sqlIndex.get(fingerprint);
         if (id == null) return null;
-        return entries.get(id);
+        SnapshotEntry entry = entries.get(id);
+        // T-PS5-10：索引指向的条目已不在（LRU 淘汰/终态清理）→ 顺手摘掉不可达指纹（懒清理双保险）
+        if (entry == null) sqlIndex.remove(fingerprint);
+        return entry;
     }
 
     /**

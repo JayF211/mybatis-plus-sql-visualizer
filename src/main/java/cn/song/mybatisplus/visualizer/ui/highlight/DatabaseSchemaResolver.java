@@ -11,6 +11,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.BiFunction;
 
 /**
@@ -186,6 +187,63 @@ public final class DatabaseSchemaResolver {
         }
     }
 
+    /**
+     * T-PS5-13：负缓存容量上界（照 {@code Ognl.kt} CACHE_MAX / StackLocator 惯例）——超上限<b>整体清空</b>。
+     * 键含表名，长会话里 agent 幻觉表名可以无界累积（TTL 只做惰性过期、不做容量约束）；
+     * 清空代价 = 若干次重扫（fail safe 方向，与负缓存语义一致）。TTL 惰性过期语义不变。
+     */
+    public static final int NEGATIVE_CACHE_MAX = 512;
+
+    /** T-PS5-13：负缓存当前条目数（跨数据源求和；测试缝与容量判定共用）。 */
+    public static int negativeCacheSize() {
+        synchronized (negativeCache) {
+            int sum = 0;
+            for (Map<String, Long> perDs : negativeCache.values()) {
+                sum += perDs.size();
+            }
+            return sum;
+        }
+    }
+
+    // ----------
+    // T-PS5-06：单调用全扫限额（MCP schema_context 一次调用最多 20 表）。
+    // 此前每个 miss 表都对每个数据源重跑一遍 DasModel 全遍历；而 {@link #collectFromDataSource} 的
+    // 遍历是**完整**的（命中后不 break，仍走完所有元素；只有「查不了」才提前 bail）——因此同一
+    // 数据源在**同一次调用内**的第二张 miss 表，其遍历结论与第一张完全相同，重扫纯属白付
+    // （多数据源 × 20 表时一次调用最多 k 次全扫，且全程在 ReadAction 内挡写动作）。
+    // 账本按「数据源身份」记账（IdentityHashMap 语义）：同一数据源在一次调用内全扫至多一次；
+    // 已全扫过的数据源上的后续 miss 表直接按未找到处理，负缓存照记（结论与全扫等价，跨调用
+    // 负缓存语义不变）。**查不了（scanBailed）不记账**——模型未加载/反射链失败时下次必须重试。
+    // 作用域仅由 MCP 取数入口显式开启（{@link #withScanBudget}）；其它调用方零行为变化。
+    // ----------
+
+    /** 调用内账本（已完整全扫过的数据源身份集）。 */
+    public static final class ScanBudget {
+        public final Set<Object> scannedSources =
+                java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    }
+
+    private static final ThreadLocal<ScanBudget> scanBudget = new ThreadLocal<>();
+
+    /**
+     * T-PS5-06：在 {@code block} 内启用单调用全扫限额（MCP {@code schema_context} 一次调用包一层）。
+     * 嵌套调用保留外层账本（内层不重置）；退出恢复原作用域。
+     */
+    public static <T> T withScanBudget(java.util.function.Supplier<T> block) {
+        ScanBudget prev = scanBudget.get();
+        if (prev == null) scanBudget.set(new ScanBudget());
+        try {
+            return block.get();
+        } finally {
+            scanBudget.set(prev);
+        }
+    }
+
+    /** T-PS5-06 测试缝：当前是否处于限额作用域内。 */
+    public static boolean inScanBudgetForTest() {
+        return scanBudget.get() != null;
+    }
+
     /** 负命中是否在 TTL 内（过期条目惰性移除，不留定时器）。 */
     private static boolean isNegativeCached(Object ds, String cacheKey) {
         Long stamped;
@@ -202,6 +260,15 @@ public final class DatabaseSchemaResolver {
             if (perDs != null) perDs.remove(cacheKey);
         }
         return false;
+    }
+
+    /** T-PS5-06：记负缓存（时间戳，TTL 内同表同数据源查询不再全扫）。 */
+    private static void stampNegative(Object ds, String cacheKey) {
+        synchronized (negativeCache) {
+            // T-PS5-13：容量上界——溢出整体清空（本键随后照常写入；清空只丢命中率不丢正确性）
+            if (negativeCacheSize() >= NEGATIVE_CACHE_MAX) negativeCache.clear();
+            negativeCache.computeIfAbsent(ds, k -> new java.util.HashMap<>()).put(cacheKey, System.currentTimeMillis());
+        }
     }
 
     /**
@@ -287,6 +354,7 @@ public final class DatabaseSchemaResolver {
             }
         };
         String cacheKey = tableName.toLowerCase(java.util.Locale.ROOT);
+        ScanBudget budget = scanBudget.get();
         int bailed = 0;
         for (Object ds : sources) {
             // T-Perf-09：缓存命中直接返回（同一数据源同一表零遍历）
@@ -299,11 +367,19 @@ public final class DatabaseSchemaResolver {
             // T-MetaCheapSource：TTL 内负命中跳过该数据源全扫（introspection 完成后由 DDL
             // 失效/TTL 过期两条路放开，见 negativeCache 注释）
             if (isNegativeCached(ds, cacheKey)) continue;
+            // T-PS5-06：本次调用内该数据源已完整全扫过 → 不再重扫（结论等价；负缓存照记，
+            // 跨调用语义不变）
+            if (budget != null && budget.scannedSources.contains(ds)) {
+                stampNegative(ds, cacheKey);
+                continue;
+            }
             TableMeta found = scan.apply(ds, tableName);
             if (!found.columns().isEmpty() || found.comment() != null) {
                 synchronized (metaCache) {
                     metaCache.computeIfAbsent(ds, k -> new java.util.HashMap<>()).put(cacheKey, found);
                 }
+                // 命中即证明遍历完整（collectFromDataSource 命中后不 break）→ 记账
+                if (budget != null) budget.scannedSources.add(ds);
                 return found;
             }
             // T-DbSchemaCompletion：查不了的（模型未加载 / ObjectKind 取不到）**不写负缓存**——
@@ -313,10 +389,10 @@ public final class DatabaseSchemaResolver {
                 bailed++;
                 continue;
             }
+            // T-PS5-06：完整全扫且未命中 → 记账（本次调用内同数据源后续表不再重扫）
+            if (budget != null) budget.scannedSources.add(ds);
             // 该数据源确认没有此表：记负缓存（时间戳，TTL 内同表查询不再全扫）
-            synchronized (negativeCache) {
-                negativeCache.computeIfAbsent(ds, k -> new java.util.HashMap<>()).put(cacheKey, System.currentTimeMillis());
-            }
+            stampNegative(ds, cacheKey);
         }
         // 表在所有数据源都没拿到（通常=未连接/introspection 未完成/表不在当前库）
         if (bailed > 0) {

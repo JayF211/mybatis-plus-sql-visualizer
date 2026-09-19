@@ -100,16 +100,83 @@ public final class UnboundedWriteDetector {
     private static final Pattern LIKE_WILDCARD_REGEX = Pattern.compile("[%_]*%[%_]*");
 
     /**
+     * T-PS5-02：AST 单槽共享缓存——确认流（本探测器 {@link #detect}）与回滚链
+     * （{@code cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator.generate}）对<b>同一 SQL 文本</b>
+     * 各解析一次（一次大 DML 点击最坏 4 次解析、3 次在 EDT）；单槽命中即复用同一次解析产物，
+     * 最坏路径的 3 次降为 1 次，且<b>零调用点改动</b>（两条链都以「文本」为输入，槽位天然对上）。
+     *
+     * <p>命中判据与 T-PS5-01 同款三重快判 + 内容全等收口（引用相等 → 长度 → 哈希 → 全等）；
+     * 单槽持有上次解析文本引用，上界=一条 SQL 文本。
+     *
+     * <p><b>AST 只读纪律（硬约束）</b>：两处消费者（{@link #detect} 的 analyzeWhere、
+     * {@code RollbackSqlGenerator} 的渲染链）经 grep 核实均为纯遍历——无 {@code set…}/{@code with…} 写节点调用，
+     * 故共享同一 AST 实例不会互相污染；后续任何一方引入节点改写必须先脱离本槽（改为独立解析）。
+     */
+    private static final class AstSlot {
+        final String cleaned;
+        final List<Statement> statements;
+
+        AstSlot(String cleaned, List<Statement> statements) {
+            this.cleaned = cleaned;
+            this.statements = statements;
+        }
+    }
+
+    private static volatile AstSlot astSlot = null;
+
+    /**
+     * T-PS5-02 测试缝：AST 解析器（默认 JSqlParser）。生产链路勿改；测试注入替身以断言
+     * 「确认流 → 回滚链只解析一次」。
+     *
+     * <p>独立函数式接口（而非 {@code java.util.function.Function}）是因为
+     * {@code CCJSqlParserUtil.parseStatements} 抛受检的 {@code JSQLParserException}——
+     * 标准函数式接口的方法不允许抛出受检异常。</p>
+     */
+    @FunctionalInterface
+    public interface StatementParser {
+        List<Statement> parse(String sql) throws Exception;
+    }
+
+    public static volatile StatementParser parseStatementsForTest = CCJSqlParserUtil::parseStatements;
+
+    /** T-PS5-02 测试缝：清空单槽（用例隔离；生产链路无调用点）。 */
+    public static void clearAstSlotForTest() {
+        astSlot = null;
+    }
+
+    /**
+     * T-PS5-02：共享解析入口——命中单槽直接复用，未命中解析后入槽。<b>解析失败原样抛出</b>
+     * （fail 语义由调用方决定：{@link #detect} 返回 PARSE_FAILED，RollbackSqlGenerator 返回 UNABLE）。
+     */
+    public static List<Statement> parseStatementsShared(String cleaned) throws Exception {
+        AstSlot slot = astSlot;
+        if (slot != null) {
+            if (slot.cleaned == cleaned) return slot.statements;
+            if (slot.cleaned.length() == cleaned.length()
+                    && slot.cleaned.hashCode() == cleaned.hashCode()
+                    && slot.cleaned.equals(cleaned)) {
+                return slot.statements;
+            }
+        }
+        List<Statement> statements = parseStatementsForTest.parse(cleaned);
+        astSlot = new AstSlot(cleaned, statements);
+        return statements;
+    }
+
+    /**
      * 探测 SQL 文本（可含注释与多条语句）。UPDATE/DELETE 逐条判定；INSERT 不适用（忽略）；
      * 解析失败整体 fail closed 返回 {@link FindingKind#PARSE_FAILED}。
+     *
+     * <p>T-PS5-02：解析走 {@link #parseStatementsShared} 单槽——同文本紧随其后的回滚链
+     * （RollbackSqlGenerator.generate）复用本产物，不二次解析。
      */
     @org.jetbrains.annotations.NotNull
     public static WriteRisk detect(@org.jetbrains.annotations.NotNull String sql) {
         String cleaned = SqlCommentStripper.strip(sql);
         if (cleaned.isBlank()) return new WriteRisk(List.of());
-        Iterable<Statement> statements;
+        List<Statement> statements;
         try {
-            statements = CCJSqlParserUtil.parseStatements(cleaned);
+            statements = parseStatementsShared(cleaned);
         } catch (Exception e) {
             return new WriteRisk(List.of(new Finding(FindingKind.PARSE_FAILED,
                     e.getMessage() != null && e.getMessage().length() > DETAIL_LIMIT

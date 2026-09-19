@@ -69,6 +69,60 @@ public final class MetadataInvalidator {
     /** 失效动作登记表（label 供日志定位；动作异常只记日志不吞执行结果）。 */
     private static final Map<String, Runnable> invalidationActions = new LinkedHashMap<>();
 
+    /**
+     * T-PS5-01：批脚本廉价预筛阈值（分号计数近似语句数，超阈值才启用关键字否定排除）。
+     * 50 条以下的批脚本直接进 AST（预筛本身也是一遍全文扫描，短文本上得不偿失）。
+     * 测试缝（置 {@code Integer.MAX_VALUE} 即关预筛，用于「预筛路径与全解析判定等价」对照）。
+     */
+    public static volatile int batchPrefilterStatements = 50;
+
+    /**
+     * T-PS5-01：AST 解析单槽缓存（同文本连续两次判定只解析一次）。
+     *
+     * <p>场景：执行链<b>入口</b>（提交前预判）与<b>收尾</b>（成功/失败/超时三路兜底）对同一 SQL 文本
+     * 各调一次 {@link #invalidateAfterExecution}，即各解析一次；数百条批脚本单次解析在 EDT 上
+     * 几十~上百毫秒，两次叠加即用户可感的冻结窗口。
+     *
+     * <p>命中判据三重快判：引用相等（同一次 {@code document.text} 传入的常见形态）→ 长度 → 哈希，
+     * 三者全等后再做一次<b>内容全等</b>收口——计划原案只到哈希（32 位碰撞理论可致漏判收尾兜底），
+     * 这里补内容比较把误命中概率降为 0，代价是同长度异实例文本上一次字符串比较（远廉于解析）。
+     * 单槽持有上一次判定文本的引用，规模上界=一次执行的 SQL 文本（编辑器 document 本身已持有
+     * 同量级字符串），不随会话增长。
+     *
+     * <p>缓存只复用<b>解析与判定</b>，不复用失效动作——入口/收尾两次失效语义原样保留。
+     */
+    private static final class ParseSlot {
+        final String text;
+        final boolean result;
+
+        ParseSlot(String text, boolean result) {
+            this.text = text;
+            this.result = result;
+        }
+    }
+
+    private static volatile ParseSlot parseSlot = null;
+
+    /**
+     * T-PS5-01 测试缝：AST 解析器（默认 JSqlParser）。生产链路勿改；测试注入替身以断言
+     * 「同文本两次判定只解析一次」与「预筛排除路径不触达解析」。
+     *
+     * <p>独立函数式接口（而非 {@code java.util.function.Function}）是因为
+     * {@code CCJSqlParserUtil.parseStatements} 抛受检的 {@code JSQLParserException}——
+     * 标准函数式接口的方法不允许抛出受检异常。</p>
+     */
+    @FunctionalInterface
+    public interface StatementParser {
+        List<Statement> parse(String sql) throws Exception;
+    }
+
+    public static volatile StatementParser parseStatementsForTest = CCJSqlParserUtil::parseStatements;
+
+    /** T-PS5-01 测试缝：清空单槽缓存（用例间隔离；生产链路无调用点）。 */
+    public static void clearParseCacheForTest() {
+        parseSlot = null;
+    }
+
     static {
         // T-DC-01 盘点自持 schema 面（表/列注释与类型 metaCache）——登记失效
         register("DatabaseSchemaResolver.metaCache",
@@ -82,14 +136,37 @@ public final class MetadataInvalidator {
     /**
      * 判定 SQL 是否可能改变对象元数据（纯逻辑，表驱动测试覆盖）。
      * 多语句任一命中即 true；解析失败 fail closed true。
+     *
+     * <p>T-PS5-01：同文本判定走单槽缓存（{@code parseSlot}）；超 {@link #batchPrefilterStatements} 条
+     * （分号计数近似）的批脚本先做一次<b>否定式</b>廉价预筛——全文无任何 DDL/提交关键字
+     * （词边界扫描，复用 {@link #KEYWORD_FALLBACK_REGEX} 形态）即直接判 false，不进 AST。
+     * 预筛只做否定排除、不做肯定判定：关键字命中仍由 AST 权威判定（{@code SELECT 'DROP TABLE'}
+     * 这类字面量命中关键字必须不误失效，与既有「字符串内关键字不误伤」语义一致），
+     * 因此 fail-closed 方向不回退（解析失败照旧 true）。
      */
     public static boolean mayChangeMetadata(@org.jetbrains.annotations.NotNull String sql) {
         String cleaned = SqlCommentStripper.strip(sql);
         if (cleaned.isBlank()) return false;
-        Iterable<Statement> statements;
+        ParseSlot cached = parseSlot;
+        if (cached != null) {
+            if (cached.text == cleaned) return cached.result;
+            if (cached.text.length() == cleaned.length()
+                    && cached.text.hashCode() == cleaned.hashCode()
+                    && cached.text.equals(cleaned)) {
+                return cached.result;
+            }
+        }
+        // T-PS5-01 批脚本廉价预筛（否定式）：大文本无关键字 → 任何语句都不可能是 DDL/提交类型
+        // （AST 路的类型名由关键字派生），直接 false 省掉整次解析。
+        if (isLargeBatch(cleaned) && !KEYWORD_FALLBACK_REGEX.matcher(cleaned).find()) {
+            parseSlot = new ParseSlot(cleaned, false);
+            return false;
+        }
+        List<Statement> statements;
         try {
-            statements = CCJSqlParserUtil.parseStatements(cleaned);
+            statements = parseStatementsForTest.parse(cleaned);
         } catch (Exception ignored) {
+            parseSlot = new ParseSlot(cleaned, true);
             return true; // fail closed：宁多失效不多缓存（PL/SQL 块/方言形态解析不出即失效）
         }
         boolean mayChange = false;
@@ -105,7 +182,22 @@ public final class MetadataInvalidator {
                 break;
             }
         }
+        parseSlot = new ParseSlot(cleaned, mayChange);
         return mayChange;
+    }
+
+    /**
+     * T-PS5-01 批脚本规模近似判定：分号计数 + 1 超阈值即按大文本处理（不解析、只数分号）。
+     * 分号在字符串字面量内也会计数（高估），方向安全——高估只多走一次全文关键字扫描。
+     */
+    private static boolean isLargeBatch(String cleaned) {
+        // 文本短于阈值时不可能有阈值个分号（每分号至少一字符），直接排除省一遍扫描
+        if (cleaned.length() < batchPrefilterStatements) return false;
+        int semicolons = 0;
+        for (int i = 0; i < cleaned.length(); i++) {
+            if (cleaned.charAt(i) == ';' && ++semicolons >= batchPrefilterStatements) return true;
+        }
+        return false;
     }
 
     private static boolean startsWithAny(String typeName, List<String> prefixes) {

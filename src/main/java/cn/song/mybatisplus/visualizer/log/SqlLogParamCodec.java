@@ -41,6 +41,16 @@ public final class SqlLogParamCodec {
     private static final String ERROR_FIELD = "e";
     private static final String TAG_FIELD = "q";
     private static final String UPDATE_COUNT_FIELD = "u";
+    /**
+     * T-McpAuditTrail T-MAT-03：来源标记（{@link SqlSource} 常量名）。
+     *
+     * <p>为什么不复用头部 {@code source:} 段：该段语义已被 {@link SqlLogFileReader#parseSource} 占用为
+     * 「源码文件:行号」（回填 {@link LogSqlEntry#sourceFile()}/{@link LogSqlEntry#sourceLine()}），
+     * 改其语义会打断 {@code SqlLogHistoryRoundTripTest} 的头部逐字符断言；且头部是本插件与旧版
+     * 读端共享的格式面。pd 载荷天然满足两条：旧读端把整行当正文注释降级（正文无损）、
+     * 旧文件无此键 → 解码为 null（来源仍 UNKNOWN，与现状一致）。
+     */
+    private static final String SOURCE_FIELD = "s";
     // T-SourceJumpFunnel：候选 [file, line] 对数组 + 候选类名 + 栈快照（历史读回后跳转回退仍可用）
     private static final String CANDS_FIELD = "cd";
     private static final String CAND_CLASSES_FIELD = "cc";
@@ -70,11 +80,16 @@ public final class SqlLogParamCodec {
             /** T-SourceJumpFunnel：候选类名（栈序对齐）；旧 payload 为空。 */
             List<String> candidateClasses,
             /** T-SourceJumpFunnel：调用栈快照；旧 payload 为 null。 */
-            String stackDigest) {
+            String stackDigest,
+            /**
+             * T-McpAuditTrail T-MAT-03：来源（当前仅 {@link SqlSource#MCP} 落键）；旧 payload / 非 MCP 条目为 null。
+             * 读端把它回填进 {@link LogSqlEntry#source()}，不填则沿用默认 {@link SqlSource#UNKNOWN}。
+             */
+            SqlSource source) {
 
         /** 无扩展字段形态（Kotlin data class 默认参数等价）。 */
         public DecodedPayload(String rawSql, List<LogSqlParam> params) {
-            this(rawSql, params, null, null, null, null, List.of(), List.of(), null);
+            this(rawSql, params, null, null, null, null, List.of(), List.of(), null, null);
         }
     }
 
@@ -130,6 +145,11 @@ public final class SqlLogParamCodec {
         }
         if (entry.stackDigest() != null) {
             obj.addProperty(STACK_DIGEST_FIELD, entry.stackDigest());
+        }
+        // T-McpAuditTrail T-MAT-03：来源标记——仅 MCP 落键（本任务范围：其余来源的读回口径
+        // 维持 UNKNOWN 不变，不做未立项的行为扩张）。枚举名而非序号：新增常量不使旧文件失效。
+        if (entry.source() == SqlSource.MCP) {
+            obj.addProperty(SOURCE_FIELD, entry.source().name());
         }
         return Base64.getEncoder().encodeToString(GSON.toJson(obj).getBytes(StandardCharsets.UTF_8));
     }
@@ -201,7 +221,10 @@ public final class SqlLogParamCodec {
                     longField(json, UPDATE_COUNT_FIELD),
                     sourceCandidates,
                     candidateClasses,
-                    stringField(json, STACK_DIGEST_FIELD));
+                    stringField(json, STACK_DIGEST_FIELD),
+                    // T-McpAuditTrail T-MAT-03：来源键缺失/值非本版本枚举名 → null（旧文件与旧版写入端天然兼容，
+                    // 不认识的值只丢来源标记，绝不丢弃整条——与其余扩展键同款容错口径）
+                    sourceField(json, SOURCE_FIELD));
         } catch (Exception e) {
             return null;
         }
@@ -218,6 +241,20 @@ public final class SqlLogParamCodec {
         if (el == null || !el.isJsonPrimitive()) return null;
         String s = el.getAsString();
         return s.isBlank() ? null : s;
+    }
+
+    /**
+     * T-McpAuditTrail T-MAT-03：来源键读取——缺失/非原始值/非本版本枚举名按 null
+     * （master 的 {@code SqlSource.values().firstOrNull { it.name == name }} 等价）。
+     */
+    private static SqlSource sourceField(JsonObject json, String field) {
+        JsonElement el = json.get(field);
+        if (el == null || !el.isJsonPrimitive()) return null;
+        String name = el.getAsString();
+        for (SqlSource value : SqlSource.values()) {
+            if (value.name().equals(name)) return value;
+        }
+        return null;
     }
 
     /** M56 扩展数值键读取：缺失/非原始值/非数值按 null。 */

@@ -18,8 +18,12 @@ public final class McpExplainFormatter {
     /** 单例（Kotlin object 惯例形态；静态方法为主）。 */
     public static final McpExplainFormatter INSTANCE = new McpExplainFormatter();
 
-    /** 返回行数预算（EXPLAIN 计划行通常 &lt;100；超预算按截断处理）。 */
-    public static final int MAX_ROWS = 200;
+    /** 返回行数默认预算（EXPLAIN 计划行通常 &lt;100；超预算按截断处理）。 */
+    public static final int DEFAULT_MAX_ROWS = 200;
+
+    /** 返回行数硬上限（T-McpRowBudget / O-36）：调用方给的 maxRows 再大也钳到此值，
+     *  对齐 DBX {@code MAX_EXECUTE_QUERY_ROWS = 1000}（竞品第八轮报告 §8 #37）。 */
+    public static final int HARD_MAX_ROWS = 1000;
 
     /** 单元格字符预算。 */
     public static final int MAX_CELL_CHARS = 2000;
@@ -67,10 +71,28 @@ public final class McpExplainFormatter {
     }
 
     /**
-     * 计划文本：列头 + 行 + 截断提示（截断标记来自 {@link RawResult#truncated()}，
-     * 行数已由适配层按 {@link #MAX_ROWS} 采集裁剪）。
+     * maxRows 限幅（T-McpRowBudget / T-MRB-02）：null/非正 → 默认 200；超硬上限 → 1000；其余原样。
+     * 形态与语义照 {@link McpSchemaFormatter#clampMaxTables(Integer)}（越界<b>钳制不抛错</b>——工具面报错
+     * 会打断 agent 流程，钳制只是把预算收进合法区间）。
      */
-    public static String format(RawResult raw) {
+    public static int clampMaxRows(Integer requested) {
+        if (requested == null || requested <= 0) {
+            return DEFAULT_MAX_ROWS;
+        }
+        if (requested > HARD_MAX_ROWS) {
+            return HARD_MAX_ROWS;
+        }
+        return requested;
+    }
+
+    /**
+     * 计划文本：列头 + 行 + 截断提示（截断标记来自 {@link RawResult#truncated()}，行数已由适配层按
+     * 生效预算采集裁剪）。
+     *
+     * <p>{@code maxRows}=本次生效的行预算，只影响截断提示里的数字；默认 {@link #DEFAULT_MAX_ROWS}——
+     * 不传参时输出与 T-McpRowBudget 之前逐字节一致（防回归硬门禁，用例钉住该字面量）。</p>
+     */
+    public static String format(RawResult raw, int maxRows) {
         StringBuilder out = new StringBuilder();
         if (!raw.headers().isEmpty()) {
             out.append(String.join(" | ", raw.headers().stream().map(String::trim).toList())).append('\n');
@@ -86,10 +108,15 @@ public final class McpExplainFormatter {
             out.append(cells).append('\n');
         }
         if (raw.truncated()) {
-            out.append("\n[TRUNCATED] output limited to ").append(MAX_ROWS)
+            out.append("\n[TRUNCATED] output limited to ").append(maxRows)
                 .append(" rows; the actual plan may have more.");
         }
         return trimEnd(out.toString());
+    }
+
+    /** Kotlin 默认参数等价重载：maxRows 缺省 {@link #DEFAULT_MAX_ROWS}。 */
+    public static String format(RawResult raw) {
+        return format(raw, DEFAULT_MAX_ROWS);
     }
 
     private static String cell(String value) {

@@ -145,6 +145,12 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
             if (db != null) {
                 metaLine.append(db.getFirst(), db.getSecond());
             }
+            // T-McpAuditTrail T-MAT-05：MCP 徽标（与日志页同款落点与协议；非 MCP 返回 null 不显示）
+            kotlin.Pair<String, SimpleTextAttributes> mcp =
+                    SqlLogPanelKt.formatMcpFragment(entry, useSelectionFill);
+            if (mcp != null) {
+                metaLine.append(mcp.getFirst(), mcp.getSecond());
+            }
             metaLine.append("[" + source + "] ", HISTORY_META_GRAY);
             lineFragments = sqlLineFragmentsFor(entry);
         }

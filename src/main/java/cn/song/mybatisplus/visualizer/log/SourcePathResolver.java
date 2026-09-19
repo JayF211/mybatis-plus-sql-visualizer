@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log;
 
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.module.Module;
 import com.intellij.openapi.module.ModuleManager;
 import com.intellij.openapi.project.Project;
@@ -17,8 +18,14 @@ import org.jetbrains.annotations.Nullable;
  * {@code SqlLogPanel.findSourceFile} 语义——拦截器标记路径是包式相对<b>源码根</b>
  * {@code cn/song/a/S.java}，Maven/Gradle 标准布局下前两级均缺 {@code src/main/java} 段，
  * 缺本策略实时拦截器条目多模块工程全形态解析失败）。只查模块声明的根
- * （O(模块数) 次路径查找），不遍历文件树，无慢操作风险。调用方保证持有读权限
- * （EDT 或 ReadAction；模块模型读取在两者下均合法）。
+ * （O(模块数) 次路径查找），不遍历文件树，无慢操作风险。
+ *
+ * <p><b>线程约定（T-PsiCaptureProtocol T-PCP-03 起为硬断言）</b>：调用方保证持有读权限——EDT 直读，
+ * 或后台线程显式包 {@code ReadAction}（模块模型读取在两者下均合法）。原先只写在 KDoc 里「靠约定」，
+ * 现在入口处 {@code ApplicationManager.getApplication().assertReadAccessAllowed()} 硬断言：将来若被
+ * 后台裸调，违约暴露在<b>调用点</b>而不是后续平台模型读取处。同族 {@link EntryJumpResolver} /
+ * {@link CallerMethodRangeResolver} 的调用点由守卫规则 {@code edtReadContract}
+ * （{@code convention/BannedApiSourceScanTest}）把关；协议全文见 {@code docs/架构设计/PSI跨线程读取协议.md}。
  */
 public final class SourcePathResolver {
 
@@ -29,6 +36,8 @@ public final class SourcePathResolver {
 
     @Nullable
     public static VirtualFile resolveVirtualFile(@NotNull Project project, @NotNull String relativePath) {
+        // T-PCP-03：调用面协议断言（EDT 直读 / ReadAction 内读）——后台裸调即违约
+        ApplicationManager.getApplication().assertReadAccessAllowed();
         String rel = EntrySourceMatcher.normalize(relativePath);
         if (rel.isEmpty()) return null;
         LocalFileSystem fs = LocalFileSystem.getInstance();

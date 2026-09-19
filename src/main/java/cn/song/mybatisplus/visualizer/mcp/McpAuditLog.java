@@ -8,7 +8,10 @@ import kotlin.Pair;
  * T-McpToolset MCP 工具调用审计日志（计划 §三-5）。
  *
  * 每次调用记 idea.log（INFO）：时间、工具、入参摘要（截断）、结果状态、耗时——
- * 安全排障与「审计日志可查」验收项的载体。入参摘要不含完整 SQL/凭据（截断 + 只摘要键）。
+ * 安全排障与「审计日志可查」验收项的载体。入参摘要不含凭据与参数值：整体经 {@link #clip} 截断到
+ * {@link #SUMMARY_LIMIT} 字符（含 SQL 首段，见 {@link McpAuditLogKt#executionArgsSummary} 的脱敏口径）；
+ * 错误路径的组合串（摘要 + 错误文本）走 {@link McpAuditLogKt#errorArgsSummary} 的两段分预算，
+ * 同样收口到 {@link #SUMMARY_LIMIT}。
  */
 public final class McpAuditLog {
 
@@ -21,7 +24,7 @@ public final class McpAuditLog {
     private static final Logger LOG = Logger.getInstance("cn.song.mybatisplus.visualizer.mcp.McpAudit");
 
     /** 入参摘要最大长度。 */
-    private static final int SUMMARY_LIMIT = 120;
+    public static final int SUMMARY_LIMIT = 120;
 
     /** 记一次工具调用（INFO 级，idea.log 可 grep `[MCP-AUDIT]`）。 */
     public static void call(String tool, String argsSummary, String status, long elapsedMs) {
@@ -45,7 +48,11 @@ public final class McpAuditLog {
         return out.toString();
     }
 
-    private static String clip(String text) {
+    /**
+     * 摘要截断（T-McpAuditTrail T-MAT-04 起 internal：审计行的「不超 120 字符」由本函数保证，
+     * 需要可断言——计划 §五 走查 3 的截断口径）。
+     */
+    public static String clip(String text) {
         return text.length() <= SUMMARY_LIMIT ? text : text.substring(0, SUMMARY_LIMIT) + "…";
     }
 }

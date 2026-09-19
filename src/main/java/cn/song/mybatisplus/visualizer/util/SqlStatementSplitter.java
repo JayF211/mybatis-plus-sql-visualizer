@@ -29,6 +29,13 @@ import java.util.Set;
  *      <b>批首限定 IF</b>：语句首 `IF` 无方言歧义（MySQL `IF()` 是函数不出现在语句首位）；
  *      裸 `BEGIN` 起头<b>不</b>并入——`BEGIN; …; COMMIT` 是 MySQL 事务语法，既有「无配对
  *      END 按顶层切分原样」保守承诺维持（形态良好的 T-SQL BEGIN 块已由上方块感知整段保护）；</li>
+ *  <li><b>DELIMITER 指令感知</b>（T-DelimiterAware / O-39）：`DELIMITER &lt;token&gt;` 行首指令把
+ *      语句界符由 `;` 切换为 `&lt;token&gt;`（`$$`/`//` 等多字符形态按整串匹配），直到下一条
+ *      `DELIMITER` 指令或文本结束；指令行本身<b>不作为独立语句产出</b>（界符 token 一并丢弃），
+ *      界符生效期内的顶层 `;` 不再切分（过程体内部 `;` 原样保留）。识别限定（对齐 MySQL
+ *      客户端语义 + 保守不吞）：①仅行首指令形态（行内前导仅空白）；②仅待切段为空时（语句
+ *      边界）——语句中间的 `DELIMITER` 词照旧按普通文本处理；③字符串/注释内不识别；
+ *      ④无参数 `DELIMITER` 复位为 `;`。识别无方言条件——文本层面判定，仅出现指令才切换。</li>
  *  <li>顶层 `;` 为界：界符本身丢弃、段 trim、空段跳过；无分号尾段非空视为一条（容错）。</li>
  * </ul>
  *
@@ -43,6 +50,12 @@ public final class SqlStatementSplitter {
      * 限定 IF：语句首 IF 无方言歧义；裸 BEGIN 是 MySQL 事务形态不并入（见类注释）。
      */
     private static final Set<String> CONTROL_FLOW_BATCH_HEADS = Set.of("IF");
+
+    /** 默认语句界符（MySQL 客户端 {@code DELIMITER} 指令可切换；无参数指令复位为此值）。 */
+    private static final String DEFAULT_DELIMITER = ";";
+
+    /** {@code DELIMITER} 指令关键字（行首指令形态识别，大小写不敏感）。 */
+    private static final String DELIMITER_DIRECTIVE = "DELIMITER";
 
     /** 标识符字符（BEGIN/END 词边界判定）：字母/数字/下划线/$/#。 */
     private static boolean isIdentifierChar(char c) {
@@ -78,6 +91,12 @@ public final class SqlStatementSplitter {
         // BEGIN/END 启用前视：见到 BEGIN 先看后方有无配对 END（保守启用）
         boolean beginModeEnabled = false;
         StringBuilder word = new StringBuilder();
+        // 当前词的首字符下标与词起点处的缓冲长度（DELIMITER 指令的行首/语句边界判定用；
+        // word 非空时有效）
+        int wordStart = -1;
+        int bufferLenAtWordStart = 0;
+        // 当前生效的语句界符（T-DA-02：DELIMITER 指令切换；默认 `;`）
+        String delimiter = DEFAULT_DELIMITER;
         int i = 0;
 
         while (i < sql.length()) {
@@ -113,6 +132,27 @@ public final class SqlStatementSplitter {
                     inDouble = false;
                 }
                 i++;
+            } else if (!delimiter.equals(DEFAULT_DELIMITER) && sql.startsWith(delimiter, i)) {
+                // T-DA-02：自定义界符整串匹配——先于注释/引号/标识符分支（`$$` 的 `$` 是
+                // 标识符字符，须先命中；`//` 与块注释起始 `/*` 字符不同故与注释分支不冲突）
+                // flushWord
+                if (word.length() > 0) {
+                    String token = word.toString();
+                    word.setLength(0);
+                    if (beginModeEnabled) {
+                        String upper = token.toUpperCase(Locale.ROOT);
+                        if (upper.equals("BEGIN")) blockDepth++;
+                        else if (upper.equals("END") && blockDepth > 0) blockDepth--;
+                    }
+                }
+                if (parenDepth == 0 && blockDepth == 0) {
+                    String part = sb.toString().trim();
+                    if (!part.isEmpty()) parts.add(part);
+                    sb.setLength(0);
+                } else {
+                    sb.append(delimiter);
+                }
+                i += delimiter.length();
             } else if (c == '-' && next != null && next == '-') {
                 // flushWord
                 if (word.length() > 0) {
@@ -180,7 +220,7 @@ public final class SqlStatementSplitter {
                         else if (upper.equals("END") && blockDepth > 0) blockDepth--;
                     }
                 }
-                if (parenDepth == 0 && blockDepth == 0) {
+                if (delimiter.equals(DEFAULT_DELIMITER) && parenDepth == 0 && blockDepth == 0) {
                     String part = sb.toString().trim();
                     if (!part.isEmpty()) parts.add(part);
                     sb.setLength(0);
@@ -217,16 +257,33 @@ public final class SqlStatementSplitter {
                 sb.append(c);
                 i++;
             } else if (isIdentifierChar(c)) {
+                if (word.length() == 0) {
+                    wordStart = i;
+                    bufferLenAtWordStart = sb.length();
+                }
                 word.append(c);
                 sb.append(c);
                 i++;
             } else {
-                // 非标识符定界符：词终结（BEGIN 前视在此触发）
-                if (word.length() > 0 && word.toString().equalsIgnoreCase("BEGIN")
+                // 非标识符定界符：词终结（DELIMITER 指令 / BEGIN 前视在此触发）
+                if (word.length() > 0
+                        && word.toString().equalsIgnoreCase(DELIMITER_DIRECTIVE)
+                        && Character.isWhitespace(c)
+                        && isLineHead(sql, wordStart)
+                        && sb.substring(0, bufferLenAtWordStart).isBlank()) {
+                    // T-DA-02：行首 `DELIMITER <token>` 指令——切换界符并整行丢弃（不产出语句）
+                    word.setLength(0);
+                    sb.setLength(0);
+                    DelimiterDirective directive = readDelimiterDirective(sql, i);
+                    delimiter = directive.token();
+                    i = directive.lineEnd();
+                } else if (word.length() > 0 && word.toString().equalsIgnoreCase("BEGIN")
                         && !beginModeEnabled && hasMatchingEndAhead(sql, i)) {
                     beginModeEnabled = true;
                     blockDepth = 1;
                     word.setLength(0);
+                    sb.append(c);
+                    i++;
                 } else {
                     // flushWord
                     if (word.length() > 0) {
@@ -238,9 +295,9 @@ public final class SqlStatementSplitter {
                             else if (upper.equals("END") && blockDepth > 0) blockDepth--;
                         }
                     }
+                    sb.append(c);
+                    i++;
                 }
-                sb.append(c);
-                i++;
             }
         }
         // 尾部未终结词（无定界符收尾）：补一次 BEGIN 前视判定
@@ -308,6 +365,43 @@ public final class SqlStatementSplitter {
             }
         }
         return out;
+    }
+
+    /**
+     * 行首判定（T-DA-02）：{@code index} 之前到行首之间是否只有空白（无前导内容）。
+     * 对齐 MySQL 客户端语义——{@code DELIMITER} 只在行首起指令作用，行内出现按普通文本处理。
+     */
+    private static boolean isLineHead(@NotNull String sql, int index) {
+        int i = index - 1;
+        while (i >= 0) {
+            char c = sql.charAt(i);
+            if (c == '\n') return true;
+            if (!Character.isWhitespace(c)) return false;
+            i--;
+        }
+        return true;
+    }
+
+    /** {@code DELIMITER} 指令读取结果（界符 token + 指令行尾下标）。 */
+    private record DelimiterDirective(String token, int lineEnd) {
+    }
+
+    /**
+     * 读取 {@code DELIMITER} 指令的界符 token（T-DA-02）：取指令所在行去除首尾空白后的首个
+     * 空白分隔词（对齐 MySQL 客户端「行余内容即界符」语义，行尾多余内容忽略）；空 token
+     * 复位为默认界符 {@code ;}。
+     *
+     * @param from 指令关键字之后的第一个字符下标（调用点已确认此处为空白）
+     * @return 界符 token 与指令行尾下标——行尾下标指向 {@code \n} 或文本末尾（行本身整行丢弃）
+     */
+    private static DelimiterDirective readDelimiterDirective(@NotNull String sql, int from) {
+        int end = from;
+        while (end < sql.length() && sql.charAt(end) != '\n') end++;
+        String rest = sql.substring(from, end).trim();
+        int tokenEnd = 0;
+        while (tokenEnd < rest.length() && !Character.isWhitespace(rest.charAt(tokenEnd))) tokenEnd++;
+        String token = rest.substring(0, tokenEnd);
+        return new DelimiterDirective(token.isEmpty() ? DEFAULT_DELIMITER : token, end);
     }
 
     /** 段首有效关键字（跳过空白与 `--` 行注释、`斜杠星` 块注释后的首个标识符词，大写；无则 null）。 */

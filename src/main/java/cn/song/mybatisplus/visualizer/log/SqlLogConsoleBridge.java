@@ -448,15 +448,10 @@ public class SqlLogConsoleBridge {
         for (String filterIfaceName : FILTER_IFACE_CANDIDATES) {
             try {
                 Class<?> filterIface = Class.forName(filterIfaceName, true, platformClassLoader);
-                ParserConfig config = parserConfig.get();
-                // 三解析器：MyBatis + Hibernate + JdbcTemplate 并列运行，互不干扰（M47）
-                MyBatisLogParser myBatisParser = new MyBatisLogParser(
-                        new LogSqlRestorer(), config.sqlPrefix(), config.paramPrefix(), config.mixedPrefix(), config.maxParseLength());
-                HibernateLogParser hibernateParser = new HibernateLogParser(
-                        new LogSqlRestorer(), config.hibernateSqlPrefix(), config.hibernateParamPrefix(),
-                        config.mixedPrefix(), config.maxParseLength(), true);
-                JdbcTemplateLogParser jdbcParser = new JdbcTemplateLogParser(
-                        new LogSqlRestorer(), config.jdbcEnabled(), config.maxParseLength());
+                // T-PS5-09：此处原有一组「三解析器 + hibernateEnabled」首建即弃（下方 cfg0 组才是
+                // 真正进 BridgeLineContext 的那组，配置源同为 parserConfig()）——8 月既有死分配，
+                // 纯删码零语义变化（连带的第二次 parserConfig() 也一并省掉）。
+                // 每个 console 持有独立解析器 + 暂存源码位置（避免多控制台相互干扰，F-44-6）
                 ParserConfig cfg0 = parserConfig.get();
                 BridgeLineContext ctx = new BridgeLineContext(
                         new MyBatisLogParser(new LogSqlRestorer(), cfg0.sqlPrefix(), cfg0.paramPrefix(),
@@ -497,12 +492,8 @@ public class SqlLogConsoleBridge {
                             if (context == null) {
                                 return;
                             }
-                            // T-PS4-02：EP 生效短路——平台 filter 链中 EP 先于后挂的桥 filter 执行，
-                            // epActive 置位即代表本行已由 EP 通道解析过，桥侧跳过（关闭「先开捕捉
-                            // 后 Run」时序下已挂载桥 filter 的恒定 ×2 解析税）。armed-waiting 时序
-                            // 本就单路（epActive 置位前桥未挂载），双轨窗口收敛为「桥挂载前到达的
-                            // 首行之前」；条目仍靠缓冲去重兜底，捕捉结果与单路时序一致。
-                            if (SqlCaptureGate.epActive) return;
+                            // T-PS5-07：此处原有第二道 `if (SqlCaptureGate.epActive) return` ——不可达冗余
+                            // （同条件已在处理函数首行短路并计数/留痕），删除。
                             // T-PreviewFlash：重放守卫——rehighlight 全文档重跑 filter 时丢弃历史行（平台契约要求幂等）。
                             // 守卫依赖反射取到的编辑器文档（stamp/行0）；取不到（非真 ConsoleViewImpl，如测试桩）
                             // 则降级停用，直连现状语义——绝不能因守卫误丢正常流式行。

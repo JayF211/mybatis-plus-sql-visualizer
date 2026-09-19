@@ -14,6 +14,14 @@ import org.jetbrains.annotations.Nullable;
  * <p>T-FeedbackBatch（2026-09-14 用户定案「不能被轻易限流」）：平台错误列表可多选，用户常一次报一堆——
  * 服务端限流是 5 次/小时/IP，逐条提交必然 429。策略：多条合并成<b>一条</b>帖子（描述出清单、附件收全文，
  * 见 {@link #buildBatchTitle}/{@link #buildBatchDescription}/{@link #buildStackAttachment}），把 N 次请求压成 1 次。
+ *
+ * <p>T-ErrorReportRedact（2026-09-19，D1=B 定案「分级脱敏」）：本仓的隐私姿态与 zMyBatis 相反——
+ * 我们有「用户确认对话框」闸门，所以缺的不是脱敏能力，而是<b>闸门内的默认预填该给多少</b>。
+ * 定案：默认只预填「异常类名 + 指纹 + 栈帧摘要」（{@link #buildRedactedTitle}/{@link #buildRedactedDescription}），
+ * message 全文降为对话框里用户可勾选附加的区块（{@link Prefill#getMessage()}/{@link Prefill#getTitleWithMessage()}/
+ * {@link Prefill#getDescriptionWithMessage()}，勾选后与改前逐字节一致）；批量路径同口径
+ * （{@link #buildBatchTitle}/{@link #buildBatchDescription} 的 includeMessages）。
+ * 本文件仍是纯函数、平台无关——「勾选与否」由对话框决定，这里只负责两种形态的组装。
  */
 public final class ErrorReportComposer {
 
@@ -38,11 +46,30 @@ public final class ErrorReportComposer {
         private final String title;
         private final String description;
         private final String category;
+        /**
+         * T-ErrorReportRedact（D1=B 定案）：异常 message 全文——<b>默认不外传</b>，
+         * 仅作对话框「附带异常消息全文」勾选项的回填源（{@link #getTitleWithMessage()}/
+         * {@link #getDescriptionWithMessage()} 同源）。无 message 或全空白时为 null。
+         */
+        private final String message;
+        /** 勾选「附带异常消息全文」时的标题形态 = 改前（T-ErrorReportRedact 之前）的 {@link #buildTitle} 产物。 */
+        private final String titleWithMessage;
+        /** 勾选「附带异常消息全文」时的描述形态 = 改前的 {@link #buildDescription} 产物（与改前逐字节一致）。 */
+        private final String descriptionWithMessage;
 
         public Prefill(String title, String description, String category) {
+            this(title, description, category, null, title, description);
+        }
+
+        /** Kotlin data class 全参构造等价（新增三字段显式给出）。 */
+        public Prefill(String title, String description, String category, @Nullable String message,
+                       String titleWithMessage, String descriptionWithMessage) {
             this.title = title;
             this.description = description;
             this.category = category;
+            this.message = message;
+            this.titleWithMessage = titleWithMessage;
+            this.descriptionWithMessage = descriptionWithMessage;
         }
 
         public String getTitle() {
@@ -55,6 +82,19 @@ public final class ErrorReportComposer {
 
         public String getCategory() {
             return category;
+        }
+
+        @Nullable
+        public String getMessage() {
+            return message;
+        }
+
+        public String getTitleWithMessage() {
+            return titleWithMessage;
+        }
+
+        public String getDescriptionWithMessage() {
+            return descriptionWithMessage;
         }
 
         public Prefill copy(String title, String description, String category) {
@@ -72,39 +112,56 @@ public final class ErrorReportComposer {
             Prefill that = (Prefill) o;
             return Objects.equals(title, that.title)
                     && Objects.equals(description, that.description)
-                    && Objects.equals(category, that.category);
+                    && Objects.equals(category, that.category)
+                    && Objects.equals(message, that.message)
+                    && Objects.equals(titleWithMessage, that.titleWithMessage)
+                    && Objects.equals(descriptionWithMessage, that.descriptionWithMessage);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(title, description, category);
+            return Objects.hash(title, description, category, message, titleWithMessage, descriptionWithMessage);
         }
 
         @Override
         public String toString() {
-            return "Prefill(title=" + title + ", description=" + description + ", category=" + category + ")";
+            return "Prefill(title=" + title + ", description=" + description + ", category=" + category
+                    + ", message=" + message + ", titleWithMessage=" + titleWithMessage
+                    + ", descriptionWithMessage=" + descriptionWithMessage + ")";
         }
     }
 
-    /** 从异常信息组装预填（title = 异常类简单名: message 首行，截断到 200）。 */
+    /**
+     * 从异常信息组装预填（T-ErrorReportRedact D1=B 分级脱敏后的默认形态）：
+     * <b>标题 = 异常类简单名</b>、<b>描述 = 异常类全名 + 栈帧摘要（+ cause 链）</b>、分类照旧；
+     * message 全文不再进默认预填，随 {@link Prefill#getMessage()} 交给对话框做「勾选后才附带」。
+     * 勾选路径回填 {@link Prefill#getTitleWithMessage()}/{@link Prefill#getDescriptionWithMessage()}，
+     * 与改前（message 首行进标题、message 全文进描述）逐字节一致。
+     */
     public static Prefill prefill(@Nullable String throwableClassName, @Nullable String message,
                                   @Nullable String stackTraceText) {
+        String meaningfulMessage = meaningfulMessage(message);
         return new Prefill(
+                buildRedactedTitle(throwableClassName),
+                buildRedactedDescription(throwableClassName, stackTraceText, meaningfulMessage != null),
+                guessCategory(stackTraceText),
+                meaningfulMessage,
                 buildTitle(throwableClassName, message),
-                buildDescription(message, null, null),
-                guessCategory(stackTraceText));
+                buildDescription(message, null, null));
+    }
+
+    /** Kotlin {@code message?.trim().takeUnless { it.isNullOrBlank() }} 等价：去空白后为空（或原值 null）回落 null。 */
+    private static @Nullable String meaningfulMessage(@Nullable String message) {
+        if (message == null) {
+            return null;
+        }
+        String trimmed = message.trim();
+        return trimmed.isBlank() ? null : trimmed;
     }
 
     /** 标题规则：{@code 异常类简单名: message 首行}；超 200 截断、不足 5 补后缀兜底。 */
     public static String buildTitle(@Nullable String throwableClassName, @Nullable String message) {
-        String simpleName = "PluginError";
-        if (throwableClassName != null) {
-            int dot = throwableClassName.lastIndexOf('.');
-            String candidate = dot >= 0 ? throwableClassName.substring(dot + 1) : throwableClassName;
-            if (!candidate.isBlank()) {
-                simpleName = candidate;
-            }
-        }
+        String simpleName = simpleNameOf(throwableClassName);
         String firstLine = "";
         if (message != null) {
             for (String line : message.split("\\R")) {
@@ -115,11 +172,34 @@ public final class ErrorReportComposer {
             }
         }
         String raw = firstLine.isBlank() ? simpleName + ": (no message)" : simpleName + ": " + firstLine;
+        return finalizeTitle(raw);
+    }
+
+    /**
+     * 脱敏标题（T-ErrorReportRedact D1=B 默认形态）：只有异常类简单名，不含 message 任何片段。
+     * 截断/兜底规则与 {@link #buildTitle} 同一套（{@link #finalizeTitle}），满足服务端 5~200 约束。
+     */
+    public static String buildRedactedTitle(@Nullable String throwableClassName) {
+        return finalizeTitle(simpleNameOf(throwableClassName));
+    }
+
+    /** 服务端标题约束收口（{@link #buildTitle}/{@link #buildRedactedTitle} 唯一事实源）：超 200 截断、不足 5 补后缀。 */
+    private static String finalizeTitle(String raw) {
         String truncated = raw.length() > TITLE_MAX ? raw.substring(0, TITLE_MAX) : raw;
         if (truncated.length() < TITLE_MIN) {
             return truncated + " (SQL Visualizer)";
         }
         return truncated;
+    }
+
+    /** 异常类简单名（空/null 兜底 {@code PluginError}）。 */
+    private static String simpleNameOf(@Nullable String throwableClassName) {
+        if (throwableClassName == null) {
+            return "PluginError";
+        }
+        int dot = throwableClassName.lastIndexOf('.');
+        String candidate = dot >= 0 ? throwableClassName.substring(dot + 1) : throwableClassName;
+        return candidate.isBlank() ? "PluginError" : candidate;
     }
 
     /** 描述组装：message 全文 + 用户补充 + 指纹行；不足 10 字符补兜底句（服务端 400 拒绝线）。 */
@@ -143,6 +223,59 @@ public final class ErrorReportComposer {
         }
         return text;
     }
+
+    /**
+     * 脱敏描述（T-ErrorReportRedact D1=B 默认形态）：<b>异常类全名 + cause 链类名 + 栈帧摘要</b>，
+     * 不含 message 任何片段（帧与 cause 链都只取类名/位置，{@link ErrorFingerprint} 同源解析）。
+     * {@code messageOmitted} 为 true 时附一行说明，让管理员知道「消息全文是用户没勾选，不是漏填」——
+     * 这正是 D1=B 首报信息变少的唯一补偿手段（§六 风险表「诊断信息不足」）。
+     * 不足 10 字符补兜底句（服务端 400 拒绝线）。
+     */
+    public static String buildRedactedDescription(@Nullable String throwableClassName,
+                                                  @Nullable String stackTraceText, boolean messageOmitted) {
+        List<String> allFrames = ErrorFingerprint.businessFrameLines(stackTraceText);
+        List<String> frames = allFrames.size() > MAX_DESCRIPTION_FRAMES
+                ? allFrames.subList(0, MAX_DESCRIPTION_FRAMES)
+                : allFrames;
+        List<String> allCauses = ErrorFingerprint.causeChainClasses(stackTraceText);
+        List<String> causes = allCauses.size() > MAX_DESCRIPTION_CAUSES
+                ? allCauses.subList(0, MAX_DESCRIPTION_CAUSES)
+                : allCauses;
+        StringBuilder out = new StringBuilder();
+        out.append("异常: ")
+                .append(throwableClassName != null && !throwableClassName.isBlank()
+                        ? throwableClassName : "PluginError")
+                .append('\n');
+        if (!causes.isEmpty()) {
+            out.append("原因链: ").append(String.join(" -> ", causes)).append('\n');
+        }
+        if (!frames.isEmpty()) {
+            out.append("栈帧:").append('\n');
+            for (String frame : frames) {
+                out.append("  ").append(frame).append('\n');
+            }
+        }
+        if (messageOmitted) {
+            out.append("（异常消息全文默认不附带，报告人可在对话框内勾选附带）").append('\n');
+        }
+        String text = out.toString().trim();
+        if (text.length() < DESCRIPTION_MIN) {
+            return text + "\n(from IDE error report)";
+        }
+        return text;
+    }
+
+    /** Kotlin 默认参数等价重载：messageOmitted 缺省 false。 */
+    public static String buildRedactedDescription(@Nullable String throwableClassName,
+                                                  @Nullable String stackTraceText) {
+        return buildRedactedDescription(throwableClassName, stackTraceText, false);
+    }
+
+    /** 脱敏描述里展示的栈帧条数上限（指纹只要 5 帧；给人看的摘要留 10 帧便于定位调用链）。 */
+    public static final int MAX_DESCRIPTION_FRAMES = 10;
+
+    /** 脱敏描述里展示的 cause 链类名上限（与 {@link ErrorFingerprint} 指纹材料的 3 条同量级）。 */
+    public static final int MAX_DESCRIPTION_CAUSES = 3;
 
     /** 分类映射：堆栈/消息中的插件包名线索 → 需求池 category slug；兜底 other（特定规则先于 wrapper）。 */
     public static String guessCategory(@Nullable String stackTraceText) {
@@ -322,11 +455,15 @@ public final class ErrorReportComposer {
 
     /**
      * 合并帖标题（纯函数，≤200）：首条异常摘要 + {@code 等 N 条异常}，让管理员一眼看出是批次报告。
+     * {@code includeMessages} 默认 false = T-ErrorReportRedact D1=B 的脱敏形态（首条只出类名）；
+     * true 时逐字节等于改前形态（首条 {@code 类名: 消息首行}）。
      */
-    public static String buildBatchTitle(List<BatchEntry> entries) {
+    public static String buildBatchTitle(List<BatchEntry> entries, boolean includeMessages) {
         BatchEntry first = entries.isEmpty() ? null : entries.get(0);
-        String head = buildTitle(first != null ? first.getTitle() : null,
-                first != null ? first.getMessage() : null);
+        String head = includeMessages
+                ? buildTitle(first != null ? first.getTitle() : null,
+                        first != null ? first.getMessage() : null)
+                : buildRedactedTitle(first != null ? first.getTitle() : null);
         if (entries.size() <= 1) {
             return head;
         }
@@ -336,11 +473,21 @@ public final class ErrorReportComposer {
         return truncated.length() < TITLE_MIN ? truncated + suffix + " (SQL Visualizer)" : truncated + suffix;
     }
 
+    /** Kotlin 默认参数等价重载：includeMessages 缺省 false（脱敏形态）。 */
+    public static String buildBatchTitle(List<BatchEntry> entries) {
+        return buildBatchTitle(entries, false);
+    }
+
     /**
      * 合并帖描述（纯函数）：总条数说明 + 每条 {@code #N [异常类] 消息} 清单（超出 {@link #BATCH_MAX_ITEMS} 截断并注明），
      * 保证 ≥ {@link #DESCRIPTION_MIN}（服务端 400 拒绝线）。
+     *
+     * <p>{@code includeMessages} 默认 false = T-ErrorReportRedact D1=B 的脱敏形态：清单只出<b>异常类简单名</b>
+     * （逐条消息全文属于业务文本，默认不外传）；true 时逐字节等于改前形态。用户补充（{@code userNotes}）
+     * 与勾选无关——那是用户在对话框里主动写的，始终原样带上。</p>
      */
-    public static String buildBatchDescription(List<BatchEntry> entries, @Nullable String userNotes) {
+    public static String buildBatchDescription(List<BatchEntry> entries, @Nullable String userNotes,
+                                               boolean includeMessages) {
         int total = entries.size();
         int shownCount = Math.min(total, BATCH_MAX_ITEMS);
         StringBuilder out = new StringBuilder();
@@ -354,7 +501,7 @@ public final class ErrorReportComposer {
                 type = "PluginError";
             }
             String firstLine = "";
-            if (entry.getMessage() != null) {
+            if (includeMessages && entry.getMessage() != null) {
                 for (String line : entry.getMessage().split("\\R")) {
                     if (!line.isBlank()) {
                         firstLine = line.trim();
@@ -371,12 +518,20 @@ public final class ErrorReportComposer {
         if (total > shownCount) {
             out.append("（其余 ").append(total - shownCount).append(" 条见附件）\n");
         }
+        if (!includeMessages) {
+            out.append("（逐条异常消息默认不附带，报告人可在对话框内勾选附带）\n");
+        }
         String notes = userNotes != null ? userNotes.trim() : null;
         if (notes != null && !notes.isBlank()) {
             out.append('\n').append(notes).append('\n');
         }
         String text = out.toString().trim();
         return text.length() < DESCRIPTION_MIN ? text + "\n(from IDE error report)" : text;
+    }
+
+    /** Kotlin 默认参数等价重载：includeMessages 缺省 false（脱敏形态）。 */
+    public static String buildBatchDescription(List<BatchEntry> entries, @Nullable String userNotes) {
+        return buildBatchDescription(entries, userNotes, false);
     }
 
     /**

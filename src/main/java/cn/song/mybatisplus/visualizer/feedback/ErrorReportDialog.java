@@ -24,6 +24,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Consumer;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -32,6 +33,7 @@ import javax.swing.JComponent;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
+import kotlin.Pair;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -82,6 +84,17 @@ import org.jetbrains.annotations.Nullable;
  * 主预填那条，自相矛盾；头部条目的堆栈开关收敛到主表单「附带异常堆栈」单一事实源：
  * 分节里头部行复选框禁用仅镜像显示，收集提交条目时以主勾选态回写（此前两处开关各写各的，
  * 合并附件可能丢主堆栈）。
+ *
+ * <p>T-ErrorReportRedact（2026-09-19，D1=B 定案）——<b>预填分级</b>：闸门（用户确认）管「发不发」，
+ * 分级管「默认带什么」。错误形态的默认预填不再含 message：
+ * <ul>
+ *  <li>标题 = 异常类简单名、描述 = 异常类全名 + 栈帧摘要 + cause 链（{@link ErrorReportComposer#prefill}）；</li>
+ *  <li>message 全文降为「附带异常消息全文」勾选行（默认不勾，无 message 时整行隐藏），勾选后
+ *    标题/描述回填含 message 的旧形态——与改前<b>逐字节一致</b>（{@link #applyMessagePrefill}）；</li>
+ *  <li>完整堆栈附件同步改为<b>默认不勾</b>：附件首行就是 {@code 异常类: message}，默认勾选等于绕开脱敏；</li>
+ *  <li>批次条目清单里的逐条消息随同一开关去留（{@link #composeSubmission}）。</li>
+ * </ul>
+ * 用户手工改过的标题/描述不被勾选切换覆盖（只回填仍等于上次预填写入值的字段）。
  */
 public class ErrorReportDialog extends DialogWrapper {
 
@@ -109,6 +122,13 @@ public class ErrorReportDialog extends DialogWrapper {
 
     /** 对话框全部输入控件（T-FeedbackDlg 可测试性抽取，headless 测试直接构造）。 */
     public final ReportFormFields fields = new ReportFormFields();
+
+    /**
+     * 上一次由预填分级写入的标题/描述（T-ErrorReportRedact）：勾选切换只在字段内容仍等于
+     * 这两个值时才覆盖，用户手工改过的字段不动（免得勾一下抹掉刚写的内容）。
+     */
+    private String lastInjectedTitle = null;
+    private String lastInjectedDescription = null;
 
     /**
      * 本次会话附带的批次条目（错误形态由 {@link IdeErrorReportSubmitter} 按勾选的 events 注入；
@@ -157,6 +177,8 @@ public class ErrorReportDialog extends DialogWrapper {
         if (prefill != null) {
             fields.titleField.setText(prefill.getTitle());
             fields.descriptionArea.setText(prefill.getDescription());
+            lastInjectedTitle = prefill.getTitle();
+            lastInjectedDescription = prefill.getDescription();
             selectCategory(prefill.getCategory());
         }
         // 类型：错误形态默认 Bug、手动形态默认疑问咨询
@@ -181,11 +203,19 @@ public class ErrorReportDialog extends DialogWrapper {
             }
             fields.attachStackCheck.setVisible(stackText != null);
         }
-        // 勾选默认开仅限错误形态（T-FeedbackDlg 原语义）；手动形态默认关，用户自行决定
-        fields.attachStackCheck.setSelected(prefill != null && stackText != null);
+        // 勾选默认关（T-ErrorReportRedact D1=B 改了错误形态的默认）：完整堆栈首行就是
+        // `异常类: message`，默认勾选等于把 message 全文随附件送出去，与「默认不外传业务文本」
+        // 相悖；默认预填的诊断价值由描述里的栈帧摘要 + cause 链承担。手动形态原本就默认关。
+        fields.attachStackCheck.setSelected(false);
         fields.stackPreviewContainer.setVisible(fields.attachStackCheck.isSelected());
         // 监听在初始状态落定后注册：初始可见性直调，不触发窗口高度补偿
         fields.attachStackCheck.addItemListener(e -> toggleStackPreview(fields.attachStackCheck.isSelected()));
+
+        // T-ErrorReportRedact（D1=B）：异常消息全文默认不预填，改为「可勾选附加」——
+        // 有 message 才出勾选行（无消息不出死勾选框，同堆栈行语义）；默认不勾。
+        fields.attachMessageCheck.setVisible(prefill != null && prefill.getMessage() != null);
+        fields.attachMessageCheck.setSelected(false);
+        fields.attachMessageCheck.addItemListener(e -> applyMessagePrefill(fields.attachMessageCheck.isSelected()));
 
         fields.nameField.setText(ReportSubmitterStore.loadName());
         fields.emailField.setText(ReportSubmitterStore.loadEmail());
@@ -265,6 +295,37 @@ public class ErrorReportDialog extends DialogWrapper {
         }
         pane.invalidate();
         pane.validate();
+    }
+
+    /**
+     * 预填分级切换（T-ErrorReportRedact D1=B，纯逻辑 internal 供 headless 测试）：
+     * 勾选「附带异常消息全文」→ 标题/描述回填<b>含 message 的旧形态</b>（与改前逐字节一致，
+     * 兼容既有提交链路与官网需求池字段）；取消 → 回到脱敏形态（类名 + 栈帧摘要）。
+     *
+     * <p>只覆盖「内容仍等于上一次由预填写入的值」的字段：用户手工改过的字段一律不动，
+     * 免得勾一下把刚写的内容抹掉（改过的字段视为用户接管，预填分级不再管它）。</p>
+     */
+    public void applyMessagePrefill(boolean attach) {
+        if (prefill == null) {
+            return;
+        }
+        Pair<String, String> targets = messagePrefillTargets(
+                attach,
+                prefill,
+                fields.titleField.getText(),
+                fields.descriptionArea.getText(),
+                lastInjectedTitle,
+                lastInjectedDescription);
+        String title = targets.getFirst();
+        String description = targets.getSecond();
+        if (!title.equals(fields.titleField.getText())) {
+            fields.titleField.setText(title);
+            lastInjectedTitle = title;
+        }
+        if (!description.equals(fields.descriptionArea.getText())) {
+            fields.descriptionArea.setText(description);
+            lastInjectedDescription = description;
+        }
     }
 
     @Override
@@ -347,7 +408,8 @@ public class ErrorReportDialog extends DialogWrapper {
         if (prefill == null) {
             return List.of();
         }
-        return selectedBatchItemsFor(batchItems, fields.attachStackCheck.isSelected(), fields.batchList);
+        return selectedBatchItemsFor(batchItems, fields.attachStackCheck.isSelected(), fields.batchList,
+                fields.attachMessageCheck.isSelected());
     }
 
     /** 进入「提交中」：按钮禁用并改文案，状态行显示进度（T-FeedbackErr）。 */
@@ -511,6 +573,30 @@ public class ErrorReportDialog extends DialogWrapper {
     public static final String VALIDATION_TITLE_KEY = "error.report.dialog.validation.title";
     public static final String VALIDATION_DESCRIPTION_KEY = "error.report.dialog.validation.description";
 
+    // ---------- T-ErrorReportRedact：预填分级（纯函数，headless 可测） ----------
+
+    /**
+     * 预填分级切换的目标值（纯函数，T-ErrorReportRedact）：勾选「附带异常消息全文」→
+     * 标题/描述取含 message 的旧形态；取消 → 取脱敏形态。
+     *
+     * <p><b>只回填「内容仍等于上次预填写入值」的字段</b>——用户手工改过的字段原样返回（不覆盖），
+     * 免得勾一下抹掉刚写的内容；{@code lastInjectedTitle}/{@code lastInjectedDescription} 为 null
+     * （手动形态或从未预填）时同样不覆盖。</p>
+     */
+    public static Pair<String, String> messagePrefillTargets(
+            boolean attach,
+            ErrorReportComposer.Prefill prefill,
+            String currentTitle,
+            String currentDescription,
+            @Nullable String lastInjectedTitle,
+            @Nullable String lastInjectedDescription) {
+        String title = attach ? prefill.getTitleWithMessage() : prefill.getTitle();
+        String description = attach ? prefill.getDescriptionWithMessage() : prefill.getDescription();
+        return new Pair<>(
+                Objects.equals(currentTitle, lastInjectedTitle) ? title : currentTitle,
+                Objects.equals(currentDescription, lastInjectedDescription) ? description : currentDescription);
+    }
+
     /**
      * 提交前客户端校验（纯函数）：title 5~200 / description ≥10（需求池服务端契约，
      * 与 ErrorReportComposer 同源常量）。返回应提示的 i18n key；null = 通过。
@@ -545,6 +631,8 @@ public class ErrorReportDialog extends DialogWrapper {
         // T-FeedbackDlg3：默认首选高 140→90（用户真机反馈描述框默认过大）
         descriptionScroll.setPreferredSize(JBUI.size(620, 90));
         labelRow(panel, gbc, "error.report.dialog.description", descriptionScroll, true);
+        // 消息附带开关（T-ErrorReportRedact）：紧贴描述行——它改的正是标题/描述的预填内容
+        fullRow(panel, gbc, fields.attachMessageCheck, false);
         // 勾选行（T-MarketInternal：原右侧「从 IDE 错误池导入」按钮已摘除）
         fullRow(panel, gbc, fields.attachStackCheck, false);
         fullRow(panel, gbc, fields.stackPreviewContainer, true);
@@ -707,12 +795,18 @@ public class ErrorReportDialog extends DialogWrapper {
      */
     public static List<BatchSubmitter.BatchItem> selectedBatchItemsFor(List<BatchSubmitter.BatchItem> all,
                                                                        boolean headAttachStack,
-                                                                       Container batchList) {
+                                                                       Container batchList,
+                                                                       boolean includeMessages) {
         if (all.isEmpty()) {
             return List.of();
         }
         BatchSubmitter.BatchItem head = all.get(0);
         head.setAttachStack(headAttachStack);
+        // T-ErrorReportRedact：消息开关对全批条目统一生效（勾选态是对话框级的一个开关，
+        // 不做逐条细分），收集时回写到每个条目供补发路径复用
+        for (BatchSubmitter.BatchItem item : all) {
+            item.setIncludeMessage(includeMessages);
+        }
         if (batchList.getComponentCount() > 0 && batchList.getComponent(0) instanceof JCheckBox) {
             ((JCheckBox) batchList.getComponent(0)).setSelected(headAttachStack);
         }
@@ -728,14 +822,32 @@ public class ErrorReportDialog extends DialogWrapper {
         return selected;
     }
 
+    /** Kotlin 默认参数等价重载：includeMessages 缺省 false（脱敏形态）。 */
+    public static List<BatchSubmitter.BatchItem> selectedBatchItemsFor(List<BatchSubmitter.BatchItem> all,
+                                                                       boolean headAttachStack,
+                                                                       Container batchList) {
+        return selectedBatchItemsFor(all, headAttachStack, batchList, false);
+    }
+
     /**
      * 按勾选重写首发载荷（纯函数，T-FeedbackBatch）：≥2 条勾选时标题/描述改为批次形态
      * （「等 N 条异常」+ 条目清单），并把堆栈附件换成多节合并附件；1 条或 0 条时原样返回。
+     *
+     * <p>T-ErrorReportRedact：条目清单里的逐条消息按 {@link BatchSubmitter.BatchItem#getIncludeMessage()}
+     * 决定去留（收集时由「附带异常消息全文」开关统一回写）——默认脱敏形态清单只出异常类名，
+     * 开关打开时逐字节等于改前形态。混态（理论上不会出现）按保守侧处理：全不带才带。</p>
      */
     public static FeedbackApi.Submission composeSubmission(FeedbackApi.Submission submission,
                                                            List<BatchSubmitter.BatchItem> selected) {
         if (selected.size() < 2) {
             return submission;
+        }
+        boolean includeMessages = true;
+        for (BatchSubmitter.BatchItem item : selected) {
+            if (!item.getIncludeMessage()) {
+                includeMessages = false;
+                break;
+            }
         }
         List<ErrorReportComposer.BatchEntry> entries = new ArrayList<>();
         for (BatchSubmitter.BatchItem item : selected) {
@@ -744,8 +856,8 @@ public class ErrorReportDialog extends DialogWrapper {
         }
         FeedbackApi.PostRequest old = submission.getRequest();
         FeedbackApi.PostRequest request = old.copy(
-                ErrorReportComposer.buildBatchTitle(entries),
-                ErrorReportComposer.buildBatchDescription(entries, old.getDescription()),
+                ErrorReportComposer.buildBatchTitle(entries, includeMessages),
+                ErrorReportComposer.buildBatchDescription(entries, old.getDescription(), includeMessages),
                 old.getType(),
                 old.getCategory(),
                 old.getSubmitterName(),
@@ -782,6 +894,12 @@ public class ErrorReportDialog extends DialogWrapper {
         public final JBTextArea descriptionArea = new JBTextArea(4, 40);
 
         public final JCheckBox attachStackCheck = new JCheckBox();
+
+        /**
+         * 「附带异常消息全文」勾选行（T-ErrorReportRedact D1=B）：<b>默认不勾</b>——异常消息是业务文本
+         * （SQL、表名、路径），默认不外传；勾上后标题/描述回填含 message 的旧形态。无 message 时整行隐藏。
+         */
+        public final JCheckBox attachMessageCheck = new JCheckBox();
 
         /** 堆栈区：错误形态只读预览；手动形态可编辑（自主粘贴，T-FeedbackDlg3；T-MarketInternal 起无导入按钮）。 */
         public final JBTextArea stackPreview = new JBTextArea(10, 40);
@@ -841,6 +959,9 @@ public class ErrorReportDialog extends DialogWrapper {
 
             attachStackCheck.setText(MpSqlVisualizerBundle.message("error.report.dialog.attachStack"));
             attachStackCheck.setToolTipText(MpSqlVisualizerBundle.message("error.report.dialog.attachStack.tip"));
+
+            attachMessageCheck.setText(MpSqlVisualizerBundle.message("error.report.dialog.attachMessage"));
+            attachMessageCheck.setToolTipText(MpSqlVisualizerBundle.message("error.report.dialog.attachMessage.tip"));
 
             stackPreview.setEditable(false);
             stackPreview.setLineWrap(false);

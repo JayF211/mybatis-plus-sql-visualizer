@@ -511,6 +511,21 @@ public final class SqlLogPanelKt {
         return new kotlin.Pair<>("[" + db + "] ", new SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color));
     }
 
+    /**
+     * T-McpAuditTrail T-MAT-05：MCP 通道徽标——{@code source == MCP}（MCP 执行类工具跑过的语句）才显示，
+     * 其余来源返回 null 不显示（与目标库角标同规：未知即不占位，零噪音）。
+     *
+     * <p>落点与既有角标一致（时间/耗时/目标库之后、来源之前），协议同为
+     * {@code Pair<String, SimpleTextAttributes>?}——两页渲染器（{@link LogEntryListCellRenderer} 与历史页
+     * {@link HistoryCellRenderer}）共用本函数，避免「同条目两页显示不一致」。
+     * 读回侧来源由 {@link SqlSource#MCP} 的 pd 载荷回填（见 SqlLogParamCodec）。
+     */
+    public static kotlin.Pair<String, SimpleTextAttributes> formatMcpFragment(LogSqlEntry entry, boolean isSelected) {
+        if (entry.source() != SqlSource.MCP) return null;
+        Color color = isSelected ? new Color(0xFFFFFF) : new Color(0x7B1FA2);
+        return new kotlin.Pair<>("[MCP] ", new SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color));
+    }
+
     /** M56 T-M56-05：影响行数片段（DML 语义；null 未知不显示）。 */
     public static kotlin.Pair<String, SimpleTextAttributes> formatUpdateCountFragment(LogSqlEntry entry, boolean isSelected) {
         Long u = entry.updateCount();

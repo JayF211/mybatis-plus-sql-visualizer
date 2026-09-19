@@ -1,18 +1,12 @@
 package cn.song.mybatisplus.visualizer.xml;
 
-import java.io.StringReader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
-import javax.xml.XMLConstants;
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
-import org.xml.sax.EntityResolver;
-import org.xml.sax.InputSource;
 
 /**
  * maintainPage XML 解析器：解析 <pages> 根元素下的 <maintainPage> 语句清单。
@@ -74,10 +68,10 @@ public class PagesXmlParser {
                 .toList();
     }
 
-    /** 解析 XML 文本为 DOM（安全配置：禁 DTD/外部实体，复用 mapper 解析器同配置）。 */
+    /** 解析 XML 文本为 DOM（安全配置见 {@link SecureXml}：与 mapper 解析器同一实现，含膨胀预扫）。 */
     Document parseDocument(String fileText) {
         try {
-            return newDocumentBuilder().parse(new InputSource(new StringReader(fileText)));
+            return SecureXml.parse(fileText);
         } catch (Throwable t) {
             throw new PagesXmlParseException("XML 解析失败：" + t.getMessage());
         }
@@ -92,38 +86,5 @@ public class PagesXmlParser {
             }
         }
         return result;
-    }
-
-    private DocumentBuilder newDocumentBuilder() {
-        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-        try {
-            dbf.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-        } catch (Throwable ignored) {
-        }
-        try {
-            dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", false);
-        } catch (Throwable ignored) {
-        }
-        try {
-            dbf.setFeature("http://xml.org/sax/features/external-general-entities", false);
-        } catch (Throwable ignored) {
-        }
-        try {
-            dbf.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-        } catch (Throwable ignored) {
-        }
-        dbf.setXIncludeAware(false);
-        dbf.setExpandEntityReferences(true);
-        try {
-            dbf.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "all");
-        } catch (Throwable ignored) {
-        }
-        try {
-            DocumentBuilder db = dbf.newDocumentBuilder();
-            db.setEntityResolver((String publicId, String systemId) -> new InputSource(new StringReader("")));
-            return db;
-        } catch (Throwable t) {
-            throw new PagesXmlParseException("XML 解析失败：" + t.getMessage());
-        }
     }
 }

@@ -33,12 +33,16 @@ import java.util.Set;
  *  <li>**DTO/实体**（非 java.* 非枚举）：逐字段解析类型（含父类字段、嵌套 DTO 递归），
  *      键 = `p.字段名`，值 = 字段类型类别；</li>
  *  <li>**Map / 基本类型 / 其他简单类型**：键 = 参数名，值 = 类型类别（Map → OBJECT，数值 → NUMBER）；</li>
- *  <li>注解类不可解析（测试沙盒）时按短名兜底；无 @Param 用参数名。</li>
+ *  <li>注解类不可解析（测试沙盒）时按短名兜底；无 @Param 用参数名；</li>
+ *  <li>**多参数位置别名**（T-PC2-03）：全部参数都有显式 `@Param` 时补 `param1..paramN`
+ *      （MyBatis `ParamMap` 位置别名，全或无门槛见 {@link #resolveTypes}）。</li>
  * </ul>
  *
  * <p>类型映射规则（T-PT-01，见 {@link #kindOf}）：String/CharSequence→TEXT、数值族→NUMBER、
  * `{@code java.time.*}` 与 `{@code java.util.Date}`→TEMPORAL、List/Collection/Set 族与数组→COLLECTION、
  * DTO/Map→OBJECT；映射不到一律 UNKNOWN（行为=升级前，宁缺勿错）。
+ * T-PC2-01/02 补两处漏收：`{@code java.math.BigInteger}`→NUMBER（数值族漏收）、
+ * `{@code java.util.UUID}`→TEXT（带引号字符串形态比较，与 TEXT 引号语义一致）。
  *
  * <p>不可解析（LightPlatform 跨文件 resolve 不可用 / namespace 缺失 / 方法缺失）→ 空映射，
  * 面板对未命中参数兜底（T-M29.4 引号行为 + T-PT-02 无类型信息不提示）。
@@ -57,6 +61,13 @@ public final class XmlParamTypeResolver {
     /** 字符序列简单名（TEXT）。 */
     private static final Set<String> TEXT_SIMPLE_NAMES = Set.of("String", "CharSequence");
 
+    /**
+     * 文本档类型全限定名（T-PC2-02）：{@code java.util.UUID} 在 SQL 里以带引号字符串形态比较
+     * （{@code id = '550e8400-…'}），引号语义与 {@link ParamKind#TEXT} 一致——故归 TEXT，<b>不扩枚举</b>
+     * （新类别会给 {@code XmlPreviewModel} 等既有 {@code when} 分支带连带成本）。
+     */
+    private static final String UUID_FQN = "java.util.UUID";
+
     /** 集合简单名（COLLECTION）：JDK 集合族——List/Collection 之外含 Set/Queue 等同族形态。 */
     private static final Set<String> COLLECTION_SIMPLE_NAMES = Set.of(
             "List", "ArrayList", "LinkedList", "Collection", "Set", "HashSet", "LinkedHashSet",
@@ -70,7 +81,18 @@ public final class XmlParamTypeResolver {
     private XmlParamTypeResolver() {
     }
 
-    /** 解析语句参数类型类别映射。@param project 不可用（null）时返回空映射。 */
+    /**
+     * 解析语句参数类型类别映射。{@code project} 不可用（null）时返回空映射。
+     *
+     * <p>T-PC2-03（Z-17 全或无门槛）：<b>仅当全部参数都有显式 {@code @Param}（值非空白）时</b>才补
+     * {@code param1..paramN}（MyBatis {@code ParamMap} 的位置别名，类型跟随对应位置参数）。一旦存在未命名参数
+     * 即整体不推导——MyBatis 实际会用位置名，我方保守取「宁缺勿错」：宁可不给 {@code paramN} 类型
+     * （面板按 UNKNOWN 兜底，行为=升级前），也不给可能错位的类型。
+     * 规则来源标注：{@code mybatis-3.5.19-paramN-全或无}。
+     *
+     * <p>与注解路径的差异（登记，不擅改）：{@code AnnotationSqlPreviewService.paramTypes} 现状为
+     * 「多参数或含 @Param 就补 paramN」，比本门槛宽；两条路径语义分叉已在计划 §八 留痕。
+     */
     @NotNull
     public Map<String, ParamTypeInfo> resolveTypes(@Nullable Project project, @Nullable String namespace, @NotNull String statementId) {
         if (project == null || namespace == null || namespace.isEmpty()) return java.util.Collections.emptyMap();
@@ -81,7 +103,8 @@ public final class XmlParamTypeResolver {
         if (methods.length == 0) return java.util.Collections.emptyMap();
         PsiMethod method = methods[0];
         Map<String, ParamTypeInfo> result = new LinkedHashMap<>();
-        for (PsiParameter param : method.getParameterList().getParameters()) {
+        PsiParameter[] parameters = method.getParameterList().getParameters();
+        for (PsiParameter param : parameters) {
             String paramName = paramNameOf(param);
             if (paramName == null) continue;
             PsiType type = param.getType();
@@ -93,6 +116,21 @@ public final class XmlParamTypeResolver {
                 collectFieldTypes(paramName, psiClass, result);
             } else {
                 result.put(paramName, typeInfoOf(type, psiClass));
+            }
+        }
+        // T-PC2-03：全或无门槛（见 KDoc）——全部参数都有显式 @Param 才补位置别名
+        if (parameters.length > 0) {
+            boolean allExplicit = true;
+            for (PsiParameter param : parameters) {
+                if (explicitParamNameOf(param) == null) {
+                    allExplicit = false;
+                    break;
+                }
+            }
+            if (allExplicit) {
+                for (int index = 0; index < parameters.length; index++) {
+                    result.put("param" + (index + 1), typeInfoOf(parameters[index].getType()));
+                }
             }
         }
         return result;
@@ -157,7 +195,8 @@ public final class XmlParamTypeResolver {
      *
      * <p>泛型先剥壳（`java.util.List&lt;java.lang.String&gt;` → `java.util.List`）；
      * NUMBER 判定复用 {@link ParamQuote#decide}（升级前数值集单一来源，杜绝两份数值名单漂移）；
-     * 数组→COLLECTION，但 `byte[]`/`Byte[]` 按 BLOB 语义落 UNKNOWN（T-PT-01 收窄，见实施记录）。
+     * 数组→COLLECTION，但 `byte[]`/`Byte[]` 按 BLOB 语义落 UNKNOWN（T-PT-01 收窄，见实施记录）；
+     * `java.util.UUID` → TEXT（T-PC2-02，见 {@link #UUID_FQN}）。
      */
     @Nullable
     public ParamKind kindOfTypeText(@Nullable String typeText) {
@@ -166,6 +205,7 @@ public final class XmlParamTypeResolver {
         String bare = (lt >= 0 ? typeText.substring(0, lt) : typeText).trim();
         int dot = bare.lastIndexOf('.');
         String simple = dot >= 0 ? bare.substring(dot + 1) : bare;
+        if (bare.equals(UUID_FQN) || simple.equals("UUID")) return ParamKind.TEXT;
         if (bare.startsWith("java.time.") || TEMPORAL_SIMPLE_NAMES.contains(simple)) return ParamKind.TEMPORAL;
         if (Boolean.FALSE.equals(ParamQuote.decide(bare))) return ParamKind.NUMBER;
         if (TEXT_SIMPLE_NAMES.contains(simple)) return ParamKind.TEXT;
@@ -189,37 +229,46 @@ public final class XmlParamTypeResolver {
         return !qn.startsWith("java.") && !qn.startsWith("javax.") && !psiClass.isEnum();
     }
 
-    /** @Param 值（全限定名优先、短名兜底）；无注解/取不到 → 参数名。 */
+    /** @Param 注解（全限定名优先、短名兜底——注解类不可解析的沙盒环境）。 */
     @Nullable
-    private String paramNameOf(@NotNull PsiParameter param) {
+    private PsiAnnotation paramAnnotationOf(@NotNull PsiParameter param) {
         PsiAnnotation[] annotations = param.getModifierList() != null
                 ? param.getModifierList().getAnnotations() : new PsiAnnotation[0];
-        PsiAnnotation annotation = null;
         for (PsiAnnotation a : annotations) {
-            if (PARAM_ANNOTATION.equals(a.getQualifiedName())) {
-                annotation = a;
-                break;
+            if (PARAM_ANNOTATION.equals(a.getQualifiedName())) return a;
+        }
+        for (PsiAnnotation a : annotations) {
+            if (a.getNameReferenceElement() != null
+                    && "Param".equals(a.getNameReferenceElement().getReferenceName())) {
+                return a;
             }
         }
-        if (annotation == null) {
-            for (PsiAnnotation a : annotations) {
-                if (a.getNameReferenceElement() != null
-                        && "Param".equals(a.getNameReferenceElement().getReferenceName())) {
-                    annotation = a;
-                    break;
-                }
+        return null;
+    }
+
+    /**
+     * 显式 {@code @Param} 值（无注解 / 值取不到 / 值空白 → null）。
+     * T-PC2-03 的「全或无门槛」以此判定「显式命名」——值空白视为未命名（宁缺勿错，不推导 paramN）。
+     */
+    @Nullable
+    private String explicitParamNameOf(@NotNull PsiParameter param) {
+        PsiAnnotation annotation = paramAnnotationOf(param);
+        if (annotation == null) return null;
+        PsiAnnotationMemberValue memberValue = annotation.findAttributeValue("value");
+        if (memberValue instanceof PsiLiteralExpression) {
+            Object value = ((PsiLiteralExpression) memberValue).getValue();
+            if (value instanceof String) {
+                String s = (String) value;
+                return s.isBlank() ? null : s;
             }
         }
-        if (annotation != null) {
-            PsiAnnotationMemberValue memberValue = annotation.findAttributeValue("value");
-            if (memberValue instanceof PsiLiteralExpression) {
-                Object value = ((PsiLiteralExpression) memberValue).getValue();
-                if (value instanceof String) {
-                    String s = (String) value;
-                    if (!s.isBlank()) return s;
-                }
-            }
-        }
-        return param.getName();
+        return null;
+    }
+
+    /** @Param 值（全限定名优先、短名兜底——注解类不可解析的沙盒环境）；无注解/取不到 → 参数名。 */
+    @Nullable
+    private String paramNameOf(@NotNull PsiParameter param) {
+        String explicit = explicitParamNameOf(param);
+        return explicit != null ? explicit : param.getName();
     }
 }

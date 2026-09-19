@@ -443,6 +443,15 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
      */
     private volatile boolean dollarRawConfirmedInSession = false;
 
+    /**
+     * T-PC2-04（D1=B 定案）：本面板实例内已确认过含 UNKNOWN 参数执行（会话级记忆）。
+     *
+     * <p>语义与 {@link #dollarRawConfirmedInSession} 同款（同面板确认一次后不再重复弹；执行与 EXPLAIN
+     * 共用同一记忆，两条入口是同一道门）；记忆随面板实例存活，面板 dispose 即失效。
+     * volatile：执行入口可能在非 EDT 触发（弹窗按钮回调），读写可见性保守处理。
+     */
+    private volatile boolean unknownParamsConfirmedInSession = false;
+
     private final ParamHistoryCache paramHistoryCache = new ParamHistoryCache();
     private final Timer historyAlarm = new Timer(500, e -> flushHistoryToCache());
 
@@ -838,6 +847,9 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         if (sql == null) return;
         String kind = SqlTypeClassifier.getFirstKeyword(sql);
         if (kind == null) kind = "SQL";
+        // T-ST-03 核实：本路径是【回滚SQL】按钮的独立动作（工具栏 :687），**不在执行确认流内**——
+        // 此处 generate 是该次点击的唯一一次解析（确认流的解析点在 executeSql/executeAdhocSql 的
+        // ExecuteConfirmMessages.build 处），故无「确认阶段产物」可显式传入。
         RollbackSqlGenerator.RollbackResult result = RollbackSqlGenerator.generate(sql);
         RollbackSnapshotStore store = project != null ? project.getService(RollbackSnapshotStore.class) : null;
         RollbackSnapshotStore.SnapshotEntry entry = store != null ? store.findBySql(sql) : null;
@@ -939,6 +951,21 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
      * T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（内存 store，LogSqlEntry 不动字段）。
      * 回滚语句（rollbackOfEntry 非 null）也登记——parentExecutionId 指向被回滚的原执行，
      * 形成 dbx {@code rollback_of} 语义的留痕链；仅登记可解析到目标表的语句（解析失败登记无意义）。
+     *
+     * <p><b>T-PS5-02 / T-ST-03 解析复用前提（实测核实，勿默认撤销）</b>：下面 {@link RollbackSqlGenerator#generate}
+     * 走 {@code UnboundedWriteDetector.parseStatementsShared} 的 AST 单槽，与确认阶段
+     * （{@link #executeSql}/{@link #executeAdhocSql} 的 {@code ExecuteConfirmMessages.build} → {@code UnboundedWriteDetector.detect}）
+     * 共用同一次解析——命中判据是<b>同文本内容全等</b>，故此处<b>依赖两条前提</b>：
+     * ①确认阶段确实以同一文本走了一遍 {@code detect}（UPDATE/DELETE 必经 DML 二次确认，成立；
+     * {@code executeAdhocSql(dmlConfirmed = true)} 的回滚弹窗路径不走确认弹窗，退化为本链自解析一次）；
+     * ②{@link SqlCommentStripper#strip} 幂等——此处传入的是 {@code strip(sql)}，而 {@code detect} 内部键是 {@code strip(sql)}、
+     * {@code generate} 内部还会再剥一次（键成 {@code strip(strip(sql))}），幂等成立才落回同一槽。
+     * 两条前提任一失效的后果<b>只是多一次解析</b>（槽未命中即重解析），不影响回滚判定正确性；
+     * 前提由 {@code SqlPreviewPanelRollbackParseShapeTest} 逐条钉住（含「槽未命中必重解析」的探针自证）。
+     *
+     * <p>面板侧若需脱离该隐式前提，出口是 {@code RollbackSqlGenerator.generateFromParsedStatements(cleaned, statements, pk)}；
+     * 但确认阶段的 AST 不外传（{@code detect} 只回 findings），真正显式传递须改 {@code execute/} 包的两个共享 API，
+     * 收益仅是形式统一（T-PS5-02 的收益已由单槽全数拿到）——T-ST-03 判定「改动面大于收益」不实施。
      */
     private void registerRollbackSnapshotIfNeeded(String sql,
                                                   @Nullable RollbackSnapshotStore.SnapshotEntry rollbackOfEntry) {
@@ -952,6 +979,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             store.register(sql, rollbackOfEntry.targetTable(), null, List.of(), rollbackOfEntry.executionId());
             return;
         }
+        // T-PS5-02：传入已剥注释文本——键对齐靠 strip 幂等（详见本函数 KDoc 的两条前提）
         RollbackSqlGenerator.RollbackResult analyzed =
                 RollbackSqlGenerator.generate(SqlCommentStripper.strip(sql));
         String table = analyzed.targetTable();
@@ -1000,6 +1028,43 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return true;
     }
 
+    /**
+     * T-PC2-04（D1=B 定案）：含「签名类型未能识别」参数的语句执行确认闸门
+     * （{@link #executeSql}/{@link #explainSql} 共用，形态与 {@link #confirmDollarRawSegments} 同款）。
+     *
+     * <p>判定信号取自 {@link XmlPreviewModel#unknownParamSources}（{@code paramTypes} 有条目但类别 UNKNOWN：
+     * 枚举 / {@code boolean} / {@code byte[]} 等——类型读到了却映射不到类别，绑定层只能以字面 {@code ?} 提交）。
+     * <b>无类型信息不计入</b>（mapper 接口不可解析时键不在 {@code paramTypes}）——与 T-PT-02「无类型信息
+     * 不提示」同向，也避免「接口解析不到 → 每次执行都提示」的噪音面（口径见该函数 KDoc）。
+     *
+     * <p>预览链<b>保持放行</b>（D1=B：预览与执行风险面不同），只在执行/EXPLAIN 前提示一次；用户选 NO
+     * → 中止；选 YES → 记会话级记忆，本面板后续执行与 EXPLAIN 都不再重复弹（不阻断已确认流程）。
+     * 范围：只在 XML 预览链生效（Wrapper/JPA/日志链无 {@code xmlModel}，恒放行）。
+     *
+     * @return true = 放行（无 UNKNOWN 参数 / 已确认过 / 本次确认通过）
+     */
+    private boolean confirmUnknownParams(Project proj) {
+        PreviewResult cur = current;
+        // current?.unresolvedParams.orEmpty()
+        List<String> sources = (cur != null && cur.getUnresolvedParams() != null)
+                ? cur.getUnresolvedParams() : List.of();
+        // current?.xmlModel?.unknownParamSources(...).orEmpty()
+        List<String> unknown = List.of();
+        if (cur != null && cur.getXmlModel() != null) {
+            List<String> probed = cur.getXmlModel().unknownParamSources(sources);
+            if (probed != null) unknown = probed;
+        }
+        if (unknown.isEmpty() || unknownParamsConfirmedInSession) return true;
+        int confirm = Messages.showYesNoDialog(
+                proj,
+                MpSqlVisualizerBundle.message("execute.confirm.unknownParams.message", unknown.size()),
+                MpSqlVisualizerBundle.message("execute.confirm.dml"),
+                Messages.getWarningIcon());
+        if (confirm != Messages.YES) return false;
+        unknownParamsConfirmedInSession = true;
+        return true;
+    }
+
     /** 执行 SQL（M36）。 */
     public void executeSql() {
         Project proj = project;
@@ -1027,6 +1092,9 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         // T-InjectionGate T-IG-02：`${}` raw 拼接段确认门（DML 分类判定之后追加——预览产物里的
         // raw 段带的是模拟值，执行前须用户确认值真实性；NO 直接中止，不落快照不执行）
         if (!confirmDollarRawSegments(proj)) return;
+        // T-PC2-04（D1=B）：签名类型未识别参数确认门（D1=B 的「执行/EXPLAIN 前提示一次」——
+        // 预览链保持放行；排在 `${}` 门之后、快照登记/执行之前，NO 直接中止）
+        if (!confirmUnknownParams(proj)) return;
         // T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（回滚弹窗据此提供粘贴回填工作流）
         registerRollbackSnapshotIfNeeded(sql, null);
 
@@ -1208,6 +1276,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         // T-InjectionGate T-IG-03：EXPLAIN 本就真实执行——`${}` raw 段同门控（旁路不得绕开执行闸门）；
         // 方言不支持（上方已 return，未执行）不弹
         if (!confirmDollarRawSegments(proj)) return;
+        // T-PC2-04（D1=B）：EXPLAIN 同门控（旁路不得绕开执行闸门，与 T-IG-03 同款姿态）
+        if (!confirmUnknownParams(proj)) return;
         resultPanel.showLoading(null);
         SqlExecutor.execute(
                 proj, explainSqlText, null, true,

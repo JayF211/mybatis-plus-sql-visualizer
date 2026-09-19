@@ -19,6 +19,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.LongSupplier;
 
 /**
  * 跨命名空间 include 片段解析（T-IC-02，O-30 / zMyBatis Z-8）。
@@ -52,6 +53,11 @@ import java.util.Set;
  * </ul>
  *
  * <p>线程：内部索引查询与 PSI 只读均包在 {@link ReadAction} 内（EDT 与后台线程均可直调）；任何异常按空表降级，绝不抛出。</p>
+ *
+ * <p>T-PS5-05：片段表加<b>单槽缓存</b>（项目弱引用 + 已覆盖 targets + TTL 5s + 索引文件 isValid 校验），
+ * 同文件多次渲染（每次渲染都重跑本解析）不再重复全项目索引遍历；{@code scan.dottedRefIds} 为空时的
+ * 零成本短路（见 {@link #resolve} 第 2 步）原样保留。<b>禁引 PsiTreeChangeListener/EditorFactoryListener</b>
+ * ——红线族维持 0，失效只走 TTL 与 isValid 两条廉价路径。</p>
  */
 public final class XmlCrossNsFragmentResolver {
 
@@ -134,10 +140,14 @@ public final class XmlCrossNsFragmentResolver {
 
     /** 项目内 mapper XML 片段表（仅 namespace 命中 {@code targets} 者；PSI 预筛后按文本做 DOM 片段收集）。 */
     private List<XmlMapperFragments> mapperFragments(Project project, Set<String> targets) {
+        List<XmlMapperFragments> cached = cachedFragments(project, targets);
+        if (cached != null) return cached;
         var xmlFileType = FileTypeManager.getInstance().getStdFileType("XML");
         var parser = new XmlMapperParser();
-        List<XmlMapperFragments> result = new ArrayList<>();
-        for (var virtualFile : FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project))) {
+        List<com.intellij.openapi.vfs.VirtualFile> indexed =
+                new ArrayList<>(FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project)));
+        List<XmlMapperFragments> scanned = new ArrayList<>();
+        for (var virtualFile : indexed) {
             if (!virtualFile.getName().toLowerCase().endsWith(".xml")) continue;
             var file = PsiManager.getInstance(project).findFile(virtualFile);
             if (!(file instanceof XmlFile xmlFile)) continue;
@@ -148,9 +158,106 @@ public final class XmlCrossNsFragmentResolver {
             XmlMapperFragments mapped = parser.collectMapperFragments(xmlFile.getText());
             if (mapped == null) continue;
             if (mapped.namespace() == null || !targets.contains(mapped.namespace())) continue;
-            result.add(mapped);
+            scanned.add(mapped);
+        }
+        // T-PS5-05：入槽 = 本次 targets 的收集结果（**含 miss**：collected 覆盖请求集，
+        // 未出现在 byNamespace 即「该 namespace 项目内无片段」），DOM 收集仍只对目标 namespace
+        // 做——首跑成本与改动前一致，无「为填缓存而全量解析」的额外开销。
+        storeFragmentCache(project, targets, scanned, indexed);
+        return scanned;
+    }
+
+    // ------------------------------------------------------------------
+    // T-PS5-05：refid → 片段表单槽缓存
+    // ------------------------------------------------------------------
+
+    /**
+     * 缓存条目：项目弱引用 + 已尝试收集的 namespace 集（miss 也覆盖）+ {@code namespace → 片段表}
+     * + 参与扫描的索引文件（{@link com.intellij.openapi.vfs.VirtualFile#isValid()} 兜底删除/改名）+ 时间戳。
+     */
+    private static final class FragmentSlot {
+
+        final java.lang.ref.WeakReference<Project> project;
+        final Set<String> collected;
+        final Map<String, XmlMapperFragments> byNamespace;
+        final List<com.intellij.openapi.vfs.VirtualFile> files;
+        final long atMs;
+
+        FragmentSlot(
+                java.lang.ref.WeakReference<Project> project,
+                Set<String> collected,
+                Map<String, XmlMapperFragments> byNamespace,
+                List<com.intellij.openapi.vfs.VirtualFile> files,
+                long atMs) {
+            this.project = project;
+            this.collected = collected;
+            this.byNamespace = byNamespace;
+            this.files = files;
+            this.atMs = atMs;
+        }
+    }
+
+    /**
+     * T-PS5-05：缓存 TTL 上界（毫秒）——mapper 片段新增/改名后至多一个窗口内渲染按旧片段表
+     * （删除由 {@code VirtualFile.isValid} 即时兜底）。测试注入短窗驱动过期语义。
+     */
+    public volatile long fragmentCacheTtlMs = 5_000L;
+
+    /** T-PS5-05 测试缝：时间源（默认系统时钟）。 */
+    public LongSupplier clockMs = System::currentTimeMillis;
+
+    /** T-PS5-05 测试缝：索引全扫计数（断言命中路径零遍历）。 */
+    public final java.util.concurrent.atomic.AtomicInteger indexScanCount =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+
+    private volatile FragmentSlot fragmentSlot = null;
+
+    /** T-PS5-05 测试缝：清空片段缓存（用例隔离；生产链路无调用点）。 */
+    public void clearFragmentCacheForTest() {
+        fragmentSlot = null;
+    }
+
+    /**
+     * T-PS5-05：命中判定——项目身份一致、TTL 内、参与扫描的文件全部仍有效、且本次 {@code targets}
+     * 已被上次扫描覆盖（**miss 也算覆盖**：上次已尝试收集而 {@code byNamespace} 无该键 = 项目内无
+     * 对应片段，不必重扫）。任一条件不满足 → 返回 null 走全扫。
+     */
+    private List<XmlMapperFragments> cachedFragments(Project project, Set<String> targets) {
+        FragmentSlot slot = fragmentSlot;
+        if (slot == null) return null;
+        if (slot.project.get() != project) return null;
+        if (clockMs.getAsLong() - slot.atMs > fragmentCacheTtlMs) return null;
+        for (var f : slot.files) {
+            if (!f.isValid()) return null;
+        }
+        if (!slot.collected.containsAll(targets)) return null;
+        List<XmlMapperFragments> result = new ArrayList<>();
+        for (String target : targets) {
+            XmlMapperFragments hit = slot.byNamespace.get(target);
+            if (hit != null) result.add(hit);
         }
         return result;
+    }
+
+    /** 扫描结果入槽（{@code targets} 全量记为已覆盖；{@code scanned} 只含真正收集到片段的目标 namespace）。 */
+    private void storeFragmentCache(
+            Project project,
+            Set<String> targets,
+            List<XmlMapperFragments> scanned,
+            List<com.intellij.openapi.vfs.VirtualFile> indexed) {
+        indexScanCount.incrementAndGet();
+        // scanned.filter { !it.namespace.isNullOrEmpty() }.associateBy { it.namespace.orEmpty() }
+        Map<String, XmlMapperFragments> byNamespace = new LinkedHashMap<>();
+        for (XmlMapperFragments f : scanned) {
+            if (f.namespace() == null || f.namespace().isEmpty()) continue;
+            byNamespace.put(f.namespace(), f);
+        }
+        fragmentSlot = new FragmentSlot(
+                new java.lang.ref.WeakReference<>(project),
+                new LinkedHashSet<>(targets),
+                byNamespace,
+                indexed,
+                clockMs.getAsLong());
     }
 
     /** Kotlin {@code substringBeforeLast}：无分隔符时返回原串。 */

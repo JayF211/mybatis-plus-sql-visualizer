@@ -21,10 +21,24 @@ public final class McpDbExecutorKt {
     private McpDbExecutorKt() {
     }
 
-    /**
-     * warnings 采集面二元组：getAllWarnings 产出原始消息清单（可空），clearWarnings 清空驱动缓冲。
-     * Kotlin 侧为 {@code Pair<() -> List<*>?, () -> Unit>}，Java 侧以 record + 函数式接口同构表达。
-     */
+/**
+ * 通道层行预算兜底（T-McpRowBudget / T-MRB-04，O-36）：工具层已按
+ * {@link McpExplainFormatter#clampMaxRows(Integer)} 钳制一次，本通道再钳一次——
+ * {@link McpDbExecutor#executeQuery} 是「未来任何执行类工具共用」的通道（{@code McpSelectGuard}
+ * KDoc 同款宣示），新增执行工具若漏钳制也不会突破 {@link McpExplainFormatter#HARD_MAX_ROWS}
+ * （对齐 DBX「静态断言恒小于驱动上限」的护栏语义）。定案=<b>钳制不抛错</b>（越界静默收进合法区间，
+ * 与 clampMaxTables 既有语义一致）。
+ *
+ * <p>顶层函数（非 object 成员）：测试加载本文件门面类时不必触发 {@link McpDbExecutor} 的 Logger 初始化。</p>
+ */
+public static int channelRowBudget(int requested) {
+    return McpExplainFormatter.clampMaxRows(requested);
+}
+
+/**
+ * warnings 采集面二元组：getAllWarnings 产出原始消息清单（可空），clearWarnings 清空驱动缓冲。
+ * Kotlin 侧为 {@code Pair<() -> List<*>?, () -> Unit>}，Java 侧以 record + 函数式接口同构表达。
+ */
     public record WarningSurface(
         /** 取 warnings 原始清单（驱动反射接线；失败/为空可返回 null）。 */
         Supplier<List<?>> getAllWarnings,

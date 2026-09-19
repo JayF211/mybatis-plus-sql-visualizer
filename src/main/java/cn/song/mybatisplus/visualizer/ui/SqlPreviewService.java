@@ -716,9 +716,11 @@ public final class SqlPreviewService {
         if (table == null) return null;
         PartTree partTree = PartTreeParser.parse(methodInfo.getMethodName());
         SqlStatement statement = DerivedQueryConverter.INSTANCE.convert(partTree, table);
+        // T-PS5-03：入口求一次方言（分页分析/方法级增强/结果构建共用同一实例，不再各求一次）
+        Dialect dialect = currentDialect();
         // T-J10：Pageable/Page/Sort/Limit 参数全路径——Pageable/Page → LIMIT 占位（调用点形态静态求值）、
         // Sort → ORDER BY（Sort.by 字面量内联）、Limit（3.2） → 仅 LIMIT 无 OFFSET
-        JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(method, callArgs, currentDialect(), table);
+        JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(method, callArgs, dialect, table);
         if (pageSort != null) {
             SelectStatement select = (statement instanceof SelectStatement) ? (SelectStatement) statement : null;
             if (pageSort.getLimit() != null && select != null) {
@@ -762,8 +764,9 @@ public final class SqlPreviewService {
         String enhancedSql = applyJpaMethodEnhancements(
                 method, sql, table, false,
                 true,
-                pageSort != null && pageSort.getNotes() != null ? pageSort.getNotes() : List.of());
-        return buildJpaPreviewResult(statement, enhancedSql, table.getTableName(), paramNames, method, inClauseParams);
+                pageSort != null && pageSort.getNotes() != null ? pageSort.getNotes() : List.of(),
+                dialect);
+        return buildJpaPreviewResult(statement, enhancedSql, table.getTableName(), paramNames, method, inClauseParams, dialect);
     }
 
     /** {@link SelectStatement} 的 Kotlin {@code copy(limit = ...)} Java 等价（显式全参重建）。 */
@@ -807,6 +810,16 @@ public final class SqlPreviewService {
         return applyJpaMethodEnhancements(method, sql, table, nativeQuery, false, null);
     }
 
+    /** Kotlin 默认实参形态 {@code applyJpaMethodEnhancements(…, native = x, dialectOverride = d)} 的便捷重载。 */
+    private String applyJpaMethodEnhancements(
+            @Nullable PsiMethod method,
+            @NotNull String sql,
+            @Nullable TableInfo table,
+            boolean nativeQuery,
+            @Nullable Dialect dialectOverride) {
+        return applyJpaMethodEnhancements(method, sql, table, nativeQuery, false, null, dialectOverride);
+    }
+
     private String applyJpaMethodEnhancements(
             @Nullable PsiMethod method,
             @NotNull String sql,
@@ -814,9 +827,22 @@ public final class SqlPreviewService {
             boolean nativeQuery,
             boolean limitAppliedInModel,
             @Nullable List<String> pageNotes) {
+        return applyJpaMethodEnhancements(method, sql, table, nativeQuery, limitAppliedInModel, pageNotes, null);
+    }
+
+    private String applyJpaMethodEnhancements(
+            @Nullable PsiMethod method,
+            @NotNull String sql,
+            @Nullable TableInfo table,
+            boolean nativeQuery,
+            boolean limitAppliedInModel,
+            @Nullable List<String> pageNotes,
+            @Nullable Dialect dialectOverride) {
         try {
             if (method == null) return sql;
-            Dialect dialect = currentDialect();
+            // T-PS5-03：方言由调用入口求一次后透传（未传则本地求一次，语义不变）——单次预览的
+            // `DialectRegistry.effective` 调用数由「增强/分页/结果构建各一次」收敛为入口一次
+            Dialect dialect = dialectOverride != null ? dialectOverride : currentDialect();
             List<String> notes = new ArrayList<>();
             String enhanced = sql;
 
@@ -974,8 +1000,10 @@ public final class SqlPreviewService {
         List<String> paramNames = extractJpqlParamNames(method);
         PsiClass entityClass = info.getEntityClass();
         TableInfo table = (entityClass != null) ? new JpaEntityResolver().resolve(entityClass) : null;
+        // T-PS5-03：入口求一次方言（分页分析/方法级增强/结果构建共用）
+        Dialect dialect = currentDialect();
         // T-J10：分页/排序参数占位名（无参数时空列表，存量行为零变化）
-        JpaQueryEnhancer.PageSortEval pageSortEval = JpaQueryEnhancer.evaluatePageSort(method, null, currentDialect(), table);
+        JpaQueryEnhancer.PageSortEval pageSortEval = JpaQueryEnhancer.evaluatePageSort(method, null, dialect, table);
         List<String> extraParamNames = (pageSortEval != null && pageSortEval.getExtraParamNames() != null)
                 ? pageSortEval.getExtraParamNames() : List.of();
         List<String> allParamNames = new ArrayList<>(paramNames);
@@ -989,7 +1017,7 @@ public final class SqlPreviewService {
                     ? allParamNames.stream().map(n -> new ParamHint(true, null, inParams.contains(n))).toList()
                     : List.of();
             // T-J15：@EntityGraph 对原生查询运行时不生效 → 仅注释说明；LIMIT/@Lock/notes 照常
-            String enhancedSql = applyJpaMethodEnhancements(method, convertedSql, table, true);
+            String enhancedSql = applyJpaMethodEnhancements(method, convertedSql, table, true, dialect);
             String tableName;
             if (table != null) tableName = table.getTableName();
             else if (info.getEntityClass() != null) tableName = JpaEntityResolver.inferDecoratedTableName(info.getEntityClass().getName(), project);
@@ -1008,9 +1036,9 @@ public final class SqlPreviewService {
         // Wave1 第三参 project：激活 PSI 级 JOIN ON（@JoinColumn 真实化）与子查询实体映射
         JpqlConverter.Result result = JpqlConverter.INSTANCE.convert(jpql, table, project);
         // T-J10/J15/J22：方法级增强（LIMIT/ORDER BY/FOR UPDATE/EntityGraph JOIN/notes/count SQL）
-        String enhancedSql = applyJpaMethodEnhancements(method, result.getSql(), table, false);
+        String enhancedSql = applyJpaMethodEnhancements(method, result.getSql(), table, false, dialect);
         return buildJpaPreviewResult(result.getStatement(), enhancedSql, table != null ? table.getTableName() : "",
-                allParamNames, method, result.getInClauseParams());
+                allParamNames, method, result.getInClauseParams(), dialect);
     }
 
     /**
@@ -1081,8 +1109,10 @@ public final class SqlPreviewService {
         List<String> paramNames = (hostMethod != null)
                 ? Arrays.stream(hostMethod.getParameterList().getParameters()).map(PsiParameter::getName).toList()
                 : List.<String>of();
+        // T-PS5-03：入口求一次方言（分页分析/方法级增强/结果构建共用）
+        Dialect dialect = currentDialect();
         // T-J10：宿主方法分页参数 → LIMIT 子句（criteria 路径是语句模型，直接挂 limit）
-        JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(hostMethod, null, currentDialect(), null);
+        JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(hostMethod, null, dialect, null);
         if (pageSort != null) {
             SelectStatement select = (statement instanceof SelectStatement) ? (SelectStatement) statement : null;
             SelectStatement limited = select;
@@ -1102,12 +1132,13 @@ public final class SqlPreviewService {
         String enhancedSql = applyJpaMethodEnhancements(
                 hostMethod, sql, resolvedTable, false,
                 true,
-                pageSort != null && pageSort.getNotes() != null ? pageSort.getNotes() : List.of());
+                pageSort != null && pageSort.getNotes() != null ? pageSort.getNotes() : List.of(),
+                dialect);
         List<String> allParamNames = new ArrayList<>(paramNames);
         if (pageSort != null && pageSort.getExtraParamNames() != null) {
             allParamNames.addAll(pageSort.getExtraParamNames());
         }
-        return buildJpaPreviewResult(statement, enhancedSql, tableName, allParamNames, hostMethod);
+        return buildJpaPreviewResult(statement, enhancedSql, tableName, allParamNames, hostMethod, Set.of(), dialect);
     }
 
     /**
@@ -1136,17 +1167,19 @@ public final class SqlPreviewService {
                 TableInfo namedTable = entityClass != null ? new JpaEntityResolver().resolve(entityClass) : null;
                 JpqlConverter.Result namedResult = JpqlConverter.INSTANCE.convert(named.getQuery(), namedTable, project);
                 List<String> namedParams = extractParamNamesFromHql(named.getQuery());
+                // T-PS5-03：本分支入口求一次方言
+                Dialect dialect = currentDialect();
                 // T-J10/J15/J22：宿主方法级增强
-                String namedEnhancedSql = applyJpaMethodEnhancements(info.getMethod(), namedResult.getSql(), namedTable, false);
+                String namedEnhancedSql = applyJpaMethodEnhancements(info.getMethod(), namedResult.getSql(), namedTable, false, dialect);
                 JpaQueryEnhancer.PageSortEval namedPageSort =
-                        JpaQueryEnhancer.evaluatePageSort(info.getMethod(), null, currentDialect(), namedTable);
+                        JpaQueryEnhancer.evaluatePageSort(info.getMethod(), null, dialect, namedTable);
                 List<String> namedExtraParams = (namedPageSort != null && namedPageSort.getExtraParamNames() != null)
                         ? namedPageSort.getExtraParamNames() : List.of();
                 List<String> namedAllParams = new ArrayList<>(namedParams);
                 namedAllParams.addAll(namedExtraParams);
                 return buildJpaPreviewResult(namedResult.getStatement(), namedEnhancedSql,
                         namedTable != null ? namedTable.getTableName() : "", namedAllParams,
-                        info.getMethod(), namedResult.getInClauseParams());
+                        info.getMethod(), namedResult.getInClauseParams(), dialect);
             }
             // T-H3：Java @NamedQuery 未命中 → hbm 命名查询 fallback（hbm 纯 POJO 项目无注解可查）
             HbmXmlMapping.NamedQuery hbmNamed = null;
@@ -1176,16 +1209,18 @@ public final class SqlPreviewService {
         // 2. 若为空（链式调用场景），直接从 HQL 提取
         List<String> paramNames = extractHqlParamNames(info.getParameters());
         if (paramNames.isEmpty()) paramNames = extractParamNamesFromHql(info.getHql());
+        // T-PS5-03：本分支入口求一次方言
+        Dialect dialect = currentDialect();
         // T-J10/J15/J22：宿主方法级增强
-        String enhancedSql = applyJpaMethodEnhancements(info.getMethod(), result.getSql(), table, false);
-        JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(info.getMethod(), null, currentDialect(), table);
+        String enhancedSql = applyJpaMethodEnhancements(info.getMethod(), result.getSql(), table, false, dialect);
+        JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(info.getMethod(), null, dialect, table);
         List<String> extraParams = (pageSort != null && pageSort.getExtraParamNames() != null)
                 ? pageSort.getExtraParamNames() : List.of();
         List<String> allParamNames = new ArrayList<>(paramNames);
         allParamNames.addAll(extraParams);
         // 关键：使用 HqlConverter 转换后的 SQL 字符串（含 ? 占位符），而非从 statement 重新生成。
         return buildJpaPreviewResult(result.getStatement(), enhancedSql, table != null ? table.getTableName() : "",
-                allParamNames, info.getMethod(), result.getInClauseParams());
+                allParamNames, info.getMethod(), result.getInClauseParams(), dialect);
     }
 
     /**
@@ -1200,9 +1235,11 @@ public final class SqlPreviewService {
         // 解析实体表名（用于显示）
         String tableName = resolveHqlEntityTable(info.getEntityClass());
         if (tableName == null) tableName = (info.getEntityClassName() != null) ? info.getEntityClassName() : "";
+        // T-PS5-03：入口求一次方言（方法级增强与分页分析共用）
+        Dialect dialect = currentDialect();
         // T-J10/J15/J22：方法级增强（native 路径：EntityGraph 仅注释说明）
-        String enhancedSql = applyJpaMethodEnhancements(info.getMethod(), sql, null, true);
-        JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(info.getMethod(), null, currentDialect(), null);
+        String enhancedSql = applyJpaMethodEnhancements(info.getMethod(), sql, null, true, dialect);
+        JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(info.getMethod(), null, dialect, null);
         List<String> extraParams = (pageSort != null && pageSort.getExtraParamNames() != null)
                 ? pageSort.getExtraParamNames() : List.of();
         List<String> allParamNames = new ArrayList<>(paramNames);
@@ -1417,14 +1454,17 @@ public final class SqlPreviewService {
                 TableInfo table = resolveHqlTable(null, entityName, query.getQueryText());
                 // T-HqlInhCols：hbm 项目实体别名多由 XML <entity-name> 承载，注解读不到即 null，安全
                 HqlConverter.Result result = HqlConverter.INSTANCE.convert(query.getQueryText(), table, project);
-        String enhancedSql = applyJpaMethodEnhancements(hostMethod, result.getSql(), table, false);
+        // T-PS5-03：本分支入口求一次方言
+        Dialect dialect = currentDialect();
+        String enhancedSql = applyJpaMethodEnhancements(hostMethod, result.getSql(), table, false, dialect);
         return buildJpaPreviewResult(
                 result.getStatement(),
                 enhancedSql,
                 table != null ? table.getTableName() : "",
                 paramNames,
                 hostMethod,
-                result.getInClauseParams());
+                result.getInClauseParams(),
+                dialect);
     }
 
     /** T-H2：hbm 文件 gutter 点击入口——从 {@code <query>}/{@code <sql-query>} XmlTag 构造命名查询后预览。 */
@@ -1629,6 +1669,22 @@ public final class SqlPreviewService {
             @NotNull List<String> paramNames,
             @Nullable PsiMethod method,
             @NotNull Set<String> inClauseParams) {
+        return buildJpaPreviewResult(statement, convertedSql, tableName, paramNames, method, inClauseParams, null);
+    }
+
+    /**
+     * JPA 预览结果构建统一入口（带 IN 子句参数集合 + 方言透传）。
+     */
+    private PreviewResult buildJpaPreviewResult(
+            @NotNull SqlStatement statement,
+            @NotNull String convertedSql,
+            @NotNull String tableName,
+            @NotNull List<String> paramNames,
+            @Nullable PsiMethod method,
+            @NotNull Set<String> inClauseParams,
+            @Nullable Dialect dialectOverride) {
+        // T-PS5-03：方言由调用入口透传（未传则本地求一次）——见 applyJpaMethodEnhancements 同款说明
+        Dialect dialect = dialectOverride != null ? dialectOverride : currentDialect();
         List<ConditionView> views = collectConditionViews(statement);
         List<ParamHint> paramHints;
         if (!paramNames.isEmpty()) {
@@ -1654,7 +1710,7 @@ public final class SqlPreviewService {
                 columns,
                 Map.of(),
                 null,
-                views.isEmpty() ? null : new SqlPreviewModel(statement, currentDialect(), formatSql(), views),
+                views.isEmpty() ? null : new SqlPreviewModel(statement, dialect, formatSql(), views),
                 paramHints,
                 List.of(),
                 null,
@@ -2592,6 +2648,14 @@ public final class SqlPreviewService {
             try {
                 result = ReadAction.compute(() -> compute.invoke());
             } catch (Throwable e) {
+                // T-FatalPassthrough T-FP-02b（独立复核条件项，收口原豁免）：本处是**预览主链**
+                // （点击/快捷键 → PSI 转换 → 弹窗），不是「可选能力探测」——原豁免理由把主链写成
+                // 探测，属借豁免放走真该收口的站点。fatal（VME/LinkageError/ThreadDeath）透传给池
+                // 线程平台处理器（原状：任何失败都返回 null，用户只看到「未找到可转换的 Wrapper」
+                // 提示，真实异常零日志且归因错误——真机排障无入口）。
+                // 非 fatal 仍返回 null（既有降级语义逐字不变），但补一条 WARN 留排查锚点。
+                if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(e)) throw e;
+                LOG.warn("[M36] previewAsync compute FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage());
                 result = null;
             }
             final PreviewResult r = result;
@@ -2608,6 +2672,12 @@ public final class SqlPreviewService {
                     try {
                         cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(project, r.getSql());
                     } catch (Throwable t) {
+                        // T-FatalPassthrough T-FP-02b（独立复核阻断 2 同族）：本 runCatching 包住整条
+                        // 预热链——不放行 fatal 会让 DataSourceSelector 预热链的 6 处透传（缓存命中
+                        // 刷新 / 写盘 / pre-refresh 收敛 / refresh / syncVf / findPsi）全部作废。
+                        // 非 fatal 仍 warn 降级（fire-and-forget 语义不变）；fatal 透传到池线程
+                        // 平台处理器记录现场。
+                        if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw t;
                         LOG.warn("[M36] exec prewarm dispatch failed: " + t.getClass().getSimpleName() + ": " + t.getMessage());
                     }
                 });

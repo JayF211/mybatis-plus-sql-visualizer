@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.execute;
 
 import cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver;
+import cn.song.mybatisplus.visualizer.util.FatalErrors;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.lang.Language;
 import com.intellij.lang.LanguageExtension;
@@ -710,8 +711,14 @@ public final class DataSourceSelector {
         }
     }
 
-    /** M36.5.70：用 DBN ConsoleView 原生 print API 把文本写入 Output 控制台可视区。 */
-    private static void writeConsoleOutput(Object console, String text, boolean isError) {
+    /**
+     * M36.5.70：用 DBN ConsoleView 原生 print API 把文本写入 Output 控制台可视区。
+     *
+     * <p>T-FatalPassthrough T-FP-02b：{@code public} 供 {@code FatalPassthroughTest} 直测本函数的<b>外层
+     * runCatching 边界</b>（同 {@link #execFileContentMatches} / {@link #isExecDocOpenInEditor} 先例）
+     * ——私有则行为用例无处注入。</p>
+     */
+    public static void writeConsoleOutput(Object console, String text, boolean isError) {
         if (console == null || text.isBlank()) return;
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         try {
@@ -751,6 +758,13 @@ public final class DataSourceSelector {
                         LOG.info("[M36] writeConsoleOutput: appended to history doc len=" + d.getTextLength());
                         return;
                     } catch (Throwable e) {
+                        // T-FatalPassthrough T-FP-02：JVM 级致命错误透传（见 util/FatalErrors.kt）——
+                        // 本文件是执行链长驻路径，捕获面覆盖 Error：普通异常（含可选能力探测的
+                        // ClassNotFoundException）仍走既有降级，VirtualMachineError/LinkageError 不得
+                        // 被吞成一条日志后让执行链带病继续。
+                        // Java 形态：isFatal 蕴含 Error，显式收窄后 throw（裸 `throw e` 在 try 含受检异常时
+                        // 因精确重抛分析要求方法声明该受检异常而不可编译；语义与原对象逐字一致，不包装）。
+                        if (FatalErrors.isFatal(e)) throw (Error) e;
                         LOG.info("[M36] writeConsoleOutput doc-append FAILED: " + e.getMessage());
                     }
                 }
@@ -767,6 +781,7 @@ public final class DataSourceSelector {
                     String fieldName = isError ? "ERROR_OUTPUT" : "NORMAL_OUTPUT";
                     ct = contentClass.getField(fieldName).get(null);
                 } catch (Throwable e) {
+                    if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传
                     ct = Arrays.stream(contentClass.getFields()).findFirst().map(f -> {
                         try { return f.get(null); } catch (Throwable ignored) { return null; }
                     }).orElse(null);
@@ -786,8 +801,22 @@ public final class DataSourceSelector {
                 LOG.info("[M36] writeConsoleOutput: ConsoleViewContentType class not found");
             }
         } catch (Throwable e) {
+            // T-FatalPassthrough T-FP-02b（独立复核阻断 1 修正）：本函数的 runCatching 包住上面两处
+            // fatal 透传（doc-append 捕获块 / ConsoleViewContentType 字段回退捕获块）——在此把 fatal
+            // 吞成一行 INFO 等于透传无效（改前实测：fatal 被转成 "[M36] writeConsoleOutput FAILED: …"
+            // 后执行链带病继续，正是上面捕获块注释声称的反面）。反射链先解包 InvocationTargetException
+            // 再判（同本文件原生执行链 :2604-2607 形态；只判外层会漏判目标方法抛出的 fatal）。
+            // 非 fatal 路径行为逐字节不变：仍只记原 INFO 行，函数返回 void、调用方（EDT 排出的
+            // writeConsoleOutput + onError 回调）行为不变；fatal 则透传到平台 EDT 处理器记录现场。
+            Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
+            if (FatalErrors.isFatal(cause)) throw (Error) cause;
             LOG.info("[M36] writeConsoleOutput FAILED: " + e.getMessage());
         }
+    }
+
+    /** isError 缺省重载（Kotlin 默认参数 {@code isError = false} 的缺省形态）。 */
+    public static void writeConsoleOutput(Object console, String text) {
+        writeConsoleOutput(console, text, false);
     }
 
     /** M36.5.8/M36.5.9/M36.5.13：执行后结果区刷新——限时多次重取。 */
@@ -2356,6 +2385,9 @@ public final class DataSourceSelector {
                                                 } catch (Throwable t) {
                                                     Throwable cause = (t instanceof InvocationTargetException) ? ((InvocationTargetException) t).getTargetException() : t;
                                                     final Throwable fCause = cause;
+                                                    // T-FP-02：反射包装层（InvocationTargetException）是普通异常，
+                                                    // 直接判外层会漏判——须解包后再判 fatal 并透传（见 util/FatalErrors.kt）
+                                                    if (FatalErrors.isFatal(cause)) throw (Error) cause;
                                                     LOG.warn("[M36] native run chain FAILED: " + cause.getClass().getName() + ": " + cause.getMessage()
                                                             + "\n    " + stackTrace(cause), cause);
                                                     // M36.5.45：native 执行链失败必须通知 UI（此前仅 LOG.warn，用户看不到任何错误）
@@ -2376,6 +2408,7 @@ public final class DataSourceSelector {
                                                 }
                                             });
                                         } catch (Throwable t) {
+                                            if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
                                             LOG.warn("[M36] submitTransactionLater FAILED: " + t.getClass().getSimpleName() + ": " + t.getMessage(), t);
                                         }
                                     }, ModalityState.any());
@@ -3043,6 +3076,7 @@ public final class DataSourceSelector {
         try {
             ioFile = projectExecFile(project, sql);
         } catch (Throwable e) {
+            if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传
             // projectExecFile 尾段 FileUtil.writeToFile 可抛 IOException——原实现靠外层
             // runCatching 吞掉，拆除后这里必须自接，否则异常直冲 EDT
             return failTempFile("writeFile", e.getClass().getSimpleName() + ": " + e.getMessage());
@@ -3065,6 +3099,7 @@ public final class DataSourceSelector {
                 syncExecVfContentIfNeeded(project, vf0, sql);
             }
         } catch (Throwable e) {
+            if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传
             return failTempFile("preRefreshConverge", e.getClass().getSimpleName() + ": " + e.getMessage());
         }
         // T-ExecCopyFix F2b：refresh 段包 WriteIntentReadAction（详见方法 Javadoc）；
@@ -3076,6 +3111,7 @@ public final class DataSourceSelector {
                     (com.intellij.openapi.util.Computable<VirtualFile>) () ->
                             LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile));
         } catch (Throwable e) {
+            if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传
             return failTempFile("refreshVfs", e.getClass().getSimpleName() + ": " + e.getMessage());
         }
         if (vf == null) {
@@ -3086,6 +3122,7 @@ public final class DataSourceSelector {
         try {
             syncExecVfContentIfNeeded(project, vf, sql);
         } catch (Throwable e) {
+            if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传
             return failTempFile("syncVfContent", e.getClass().getSimpleName() + ": " + e.getMessage());
         }
         mapDialectBeforePsi(project, vf, LOG);
@@ -3093,6 +3130,7 @@ public final class DataSourceSelector {
         try {
             psi = ReadAction.compute(() -> PsiManager.getInstance(project).findFile(vf));
         } catch (Throwable e) {
+            if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传
             return failTempFile("findPsi", e.getClass().getSimpleName() + ": " + e.getMessage());
         }
         if (psi == null) {
@@ -3372,9 +3410,22 @@ public final class DataSourceSelector {
     private static final java.util.concurrent.atomic.AtomicReference<java.lang.ref.WeakReference<Document>> lastExecDocRef =
             new java.util.concurrent.atomic.AtomicReference<>(null);
 
-    /** F6 探针已安装项目集（连接随项目 disposable 自动断开，此处只防重复安装）。 */
+    /**
+     * F6 探针已安装项目集（连接随项目 disposable 自动断开，此处只防重复安装）。
+     *
+     * <p>T-PS5-08：改<b>弱键集</b>（{@code WeakHashMap} 键弱引用：项目唯一强引用消失即可回收）——此前强引用
+     * 集把项目对象钉到显式 {@code remove}（走 {@link #hookProjectClose} 的项目 Disposer，但该函数在
+     * {@code hookProjectsClose} 已登记时会提前 return、不再登记第二次项目级 Disposer，留下不可回收窗口）。
+     * 去重/判空语义不变（条目只用于「是否已安装」判定）。</p>
+     */
     private static final Set<Project> conflictProbeProjects =
-            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+            java.util.Collections.synchronizedSet(
+                    java.util.Collections.newSetFromMap(new java.util.WeakHashMap<Project, Boolean>()));
+
+    /** T-PS5-08 测试缝：探针项目集（弱引用可达性断言用；生产链路无调用点）。 */
+    public static Set<Project> conflictProbeProjectsForTest() {
+        return conflictProbeProjects;
+    }
 
     /**
      * F5：应用级 document 变更监听（惰性安装一次）——exec 文档每次变更（用户在控制台手改/
@@ -3658,6 +3709,9 @@ public final class DataSourceSelector {
             try {
                 projectExecFile(project, sql, true);
             } catch (Throwable e) {
+                // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：写盘链的 fatal 不得被本 runCatching
+                // 吞成一条 warn（否则 prewarm 链 4 处既有透传全部作废）。非 fatal 仍原样 warn 降级。
+                if (FatalErrors.isFatal(e)) throw (Error) e;
                 LOG.warn("[M36] exec prewarm refresh-content failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             }
             LOG.info("[M36] exec prewarm: cache hit, content refreshed only");
@@ -3722,6 +3776,9 @@ public final class DataSourceSelector {
         try {
             ioFile = projectExecFile(project, sql);
         } catch (Throwable e) {
+            // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：fatal 上浮（预热跑在 BGT，透传由平台
+            // 记录现场）；非 fatal 仍返回（writeFile 失败 → 跳过预热，语义逐字不变）。
+            if (FatalErrors.isFatal(e)) throw (Error) e;
             LOG.warn("[M36] exec prewarm writeFile failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             return;
         }
@@ -3737,6 +3794,7 @@ public final class DataSourceSelector {
                 syncExecVfContentIfNeeded(project, vf0, sql);
             }
         } catch (Throwable e) {
+            if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传
             LOG.warn("[M36] exec prewarm pre-refresh converge FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage());
         }
         VirtualFile vf;
@@ -3745,6 +3803,7 @@ public final class DataSourceSelector {
                     (com.intellij.openapi.util.Computable<VirtualFile>) () ->
                             LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile));
         } catch (Throwable e) {
+            if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传（prewarm 跑在 BGT，透传由平台记录现场）
             LOG.warn("[M36] exec prewarm refreshVfs failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             return;
         }
@@ -3756,6 +3815,7 @@ public final class DataSourceSelector {
         try {
             syncExecVfContentIfNeeded(project, vf, sql);
         } catch (Throwable e) {
+            if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传
             LOG.warn("[M36] exec prewarm syncVfContent failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             return;
         }
@@ -3768,6 +3828,7 @@ public final class DataSourceSelector {
         try {
             psi = ReadAction.compute(() -> PsiManager.getInstance(project).findFile(vf));
         } catch (Throwable e) {
+            if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传
             LOG.warn("[M36] exec prewarm findPsi failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             return;
         }

@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.mcp;
 
 import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver;
 import com.intellij.openapi.project.Project;
+import kotlin.Pair;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -79,28 +80,14 @@ public final class McpSchemaContextService {
             }
         }
 
-        List<McpSchemaFormatter.TableEntry> entries = new ArrayList<>();
-        List<String> missing = new ArrayList<>();
-        for (String name : tableNames.subList(0, Math.min(limit, tableNames.size()))) {
-            DatabaseSchemaResolver.TableMeta meta = DatabaseSchemaResolver.tableMeta(project, name);
-            if (meta.columns().isEmpty() && meta.comment() == null) {
-                missing.add(name);
-                continue;
-            }
-            List<McpSchemaFormatter.ColumnLine> columns = new ArrayList<>();
-            for (Map.Entry<String, DatabaseSchemaResolver.ColumnMeta> entry : meta.columns().entrySet()) {
-                String col = entry.getKey();
-                DatabaseSchemaResolver.ColumnMeta m = entry.getValue();
-                columns.add(new McpSchemaFormatter.ColumnLine(col, m.typeSpec(), m.comment(), m.notNull()));
-            }
-            entries.add(
-                new McpSchemaFormatter.TableEntry(
-                    name,
-                    meta.comment(),
-                    columns
-                )
-            );
-        }
+        Pair<List<McpSchemaFormatter.TableEntry>, List<String>> collected =
+            collectEntries(project, tableNames, limit);
+        return outcomeOf(collected.getFirst(), collected.getSecond(), limit, requested);
+    }
+
+    /** 组装结果（{@code entries} 为空时按「无元数据」结构化报错；否则走紧凑格式化）。 */
+    private static Outcome outcomeOf(List<McpSchemaFormatter.TableEntry> entries, List<String> missing,
+                                     int limit, int requested) {
         if (entries.isEmpty()) {
             return new Outcome(
                 null,
@@ -113,5 +100,46 @@ public final class McpSchemaContextService {
         }
         String text = McpSchemaFormatter.format(entries, limit, requested);
         return new Outcome(text);
+    }
+
+    /**
+     * T-PS5-06：取数主体——整段包在 {@link DatabaseSchemaResolver#withScanBudget} 作用域内。
+     *
+     * <p>一次调用最多 {@link McpSchemaFormatter#HARD_MAX_TABLES} 张表，此前每张 miss 表都对每个数据源重跑
+     * DasModel 全遍历（k 数据源 × 20 表 = 最坏 k×20 次全扫，且全程在 ReadAction 内挡写动作）。
+     * 限额后：同一数据源在一次调用内全扫至多一次，后续 miss 表直接按未找到披露（负缓存照记，
+     * 跨调用负缓存/正缓存语义不变，结果口径不变）。</p>
+     */
+    private static Pair<List<McpSchemaFormatter.TableEntry>, List<String>> collectEntries(
+        Project project,
+        List<String> tableNames,
+        int limit
+    ) {
+        List<McpSchemaFormatter.TableEntry> entries = new ArrayList<>();
+        List<String> missing = new ArrayList<>();
+        DatabaseSchemaResolver.withScanBudget(() -> {
+            for (String name : tableNames.subList(0, Math.min(limit, tableNames.size()))) {
+                DatabaseSchemaResolver.TableMeta meta = DatabaseSchemaResolver.tableMeta(project, name);
+                if (meta.columns().isEmpty() && meta.comment() == null) {
+                    missing.add(name);
+                } else {
+                    List<McpSchemaFormatter.ColumnLine> columns = new ArrayList<>();
+                    for (Map.Entry<String, DatabaseSchemaResolver.ColumnMeta> entry : meta.columns().entrySet()) {
+                        String col = entry.getKey();
+                        DatabaseSchemaResolver.ColumnMeta m = entry.getValue();
+                        columns.add(new McpSchemaFormatter.ColumnLine(col, m.typeSpec(), m.comment(), m.notNull()));
+                    }
+                    entries.add(
+                        new McpSchemaFormatter.TableEntry(
+                            name,
+                            meta.comment(),
+                            columns
+                        )
+                    );
+                }
+            }
+            return null;
+        });
+        return new Pair<>(entries, missing);
     }
 }

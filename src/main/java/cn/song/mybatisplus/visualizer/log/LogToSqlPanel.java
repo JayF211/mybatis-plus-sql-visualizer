@@ -55,6 +55,9 @@ public class LogToSqlPanel extends JPanel implements Disposable {
     /** T-BatchInMerge：「…等 N 条」后缀的展示预算预留（截值不截计数）。 */
     private static final int MERGE_MORE_RESERVE = 24;
 
+    /** T-PS5-11：合并参考分析的语句数上限（超限跳过逐语句 AST 预检，按计数披露）。 */
+    private static final int MERGE_ANALYZE_STATEMENT_LIMIT = 100;
+
     private final Project project;
     private final Editor inputEditor;
     private final Editor resultEditor;
@@ -655,6 +658,15 @@ public class LogToSqlPanel extends JPanel implements Disposable {
      * （先裁值再拼「…等 N 条」，N = 行数/字节超限 + 展示裁掉的值数之和——绝不无计数截断）。
      */
     public static String buildMergeAdText(java.util.List<String> statements) {
+        // T-PS5-11：语句数预检——超上限**跳过逐语句 AST 预检**（500 行上限最坏数百次 JSqlParser
+        // 解析，全部发生在浮层打开前的 EDT），改按计数披露：明说未做同构分析 + 执行仍逐条，
+        // 绝不静默丢（既有「异构不静默丢」口径的计数版）。上限内维持现状。
+        if (statements.size() > MERGE_ANALYZE_STATEMENT_LIMIT) {
+            return MpSqlVisualizerBundle.message(
+                    "logToSql.execute.mergeSkipped",
+                    statements.size(),
+                    MERGE_ANALYZE_STATEMENT_LIMIT);
+        }
         cn.song.mybatisplus.visualizer.util.BatchPredicateMerge.MergePreview preview =
                 cn.song.mybatisplus.visualizer.util.BatchPredicateMerge.mergePreview(statements);
         if (preview == null) return null;

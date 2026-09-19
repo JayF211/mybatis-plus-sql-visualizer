@@ -26,7 +26,8 @@ import com.intellij.openapi.project.ProjectManager;
  *  <li>mpsv_schema_context：maxTables 默认 8 / 硬上限 20、单元格 200 字符、tables 白名单 ≤50
  *    （常量在 McpSchemaFormatter：DEFAULT_MAX_TABLES / HARD_MAX_TABLES / MAX_CELL_CHARS /
  *    MAX_TABLE_NAMES）；</li>
- *  <li>mpsv_explain：行 ≤200、单元格 2000 字符（常量在 McpExplainFormatter：MAX_ROWS /
+ *  <li>mpsv_explain：行默认 ≤200 / 上限 1000（maxRows 可配，越界钳制不抛错；通道层另有兜底钳制）、
+ *    单元格 2000 字符（常量在 McpExplainFormatter：DEFAULT_MAX_ROWS / HARD_MAX_ROWS /
  *    MAX_CELL_CHARS）；notices 节无条数预算（驱动会话通道天然有界，个案个位数）；</li>
  *  <li>mpsv_perf_advice：建议 ≤30 条（MAX_FINDINGS，超限 SEVERITY 等级序先裁低级）+ 单条文案
  *    200 字符（MAX_ADVICE_CHARS，对齐 schema 200 口径）（常量在 PerfAdviceTool）；</li>
@@ -99,9 +100,18 @@ public abstract class McpToolsetSupport implements McpToolset {
      * 审计包裹：成功/预期错误统一记 idea.log。非预期异常不在此吞（平台记 Internal error）。
      * （原为挂起包装、tool/started 打包 AuditTicket 过挂起点以规避 K2 SpillingKt 引用；
      * Java 侧无挂起帧，直接同步计数即可，AuditTicket 形态保留。）
+     *
+     * <p>T-McpAuditTrail T-MAT-04：{@code argsSummary} 为真实入参摘要（经 {@link McpAuditLog#summarize}
+     * 产出，如 mpsv_explain 的 dataSource/dialect/SQL 首段，整体受 {@link McpAuditLog#SUMMARY_LIMIT} 截断）。
+     * 默认值 {@link #LEGACY_ARGS_SUMMARY} 是改造前的字面量：其余九个<b>纯静态</b>工具无执行面、参数面未立项，
+     * 保持审计行逐字节不变（计划 §验收 4，<b>仅 OK 路径</b>——错误路径的入参段格式十个工具统一变化）；
+     * 新增执行类工具应显式传摘要，勿再落 "ok"。</p>
+     *
+     * <p>错误路径（EXPECTED_ERROR）的组合串走 {@link McpAuditLogKt#errorArgsSummary} 的两段分预算：
+     * 错误文本优先，入参摘要让位——长 SQL 场景下错误原因不被摘要挤掉（T-MAT-04 回退修复）。</p>
      */
-    protected String audit(String tool, ToolBlock block) {
-        AuditTicket ticket = new AuditTicket(tool);
+    protected String audit(String tool, String argsSummary, ToolBlock block) {
+        AuditTicket ticket = new AuditTicket(tool, argsSummary);
         try {
             String result = block.get();
             ticket.ok();
@@ -111,6 +121,17 @@ public abstract class McpToolsetSupport implements McpToolset {
             throw sneakyThrow(e);
         }
     }
+
+    /** Kotlin 默认参数等价重载：argsSummary 缺省 {@link #LEGACY_ARGS_SUMMARY}（纯静态工具零改动）。 */
+    protected String audit(String tool, ToolBlock block) {
+        return audit(tool, LEGACY_ARGS_SUMMARY, block);
+    }
+
+    /**
+     * T-McpAuditTrail T-MAT-04：改造前的审计入参槽位字面量。保留为默认值——纯静态工具
+     * （无执行面、参数面未立项）的审计行因此逐字节不变；执行类工具显式传真实摘要。
+     */
+    private static final String LEGACY_ARGS_SUMMARY = "ok";
 
     /**
      * 受检异常透传（T-SyncK2JMaster309 移植缺口收口）：平台按类型捕获 {@link McpExpectedError}
@@ -126,18 +147,28 @@ public abstract class McpToolsetSupport implements McpToolset {
 
     private static final class AuditTicket {
         private final String tool;
+        private final String argsSummary;
         private final long started = System.currentTimeMillis();
 
-        private AuditTicket(String tool) {
+        private AuditTicket(String tool, String argsSummary) {
             this.tool = tool;
+            this.argsSummary = argsSummary;
         }
 
         private void ok() {
-            McpAuditLog.call(tool, "ok", "OK", System.currentTimeMillis() - started);
+            McpAuditLog.call(tool, argsSummary, "OK", System.currentTimeMillis() - started);
         }
 
+        /** 预期错误：入参摘要 + 错误文本同列（改造前该槽位只放错误文本；两者同列后错误文本
+         *  可能被摘要挤掉——T-MAT-04 回退修复改为 {@link McpAuditLogKt#errorArgsSummary} 的两段分预算，
+         *  错误文本优先）。 */
         private void expectedError(McpExpectedError e) {
-            McpAuditLog.call(tool, e.getMcpErrorText(), "EXPECTED_ERROR", System.currentTimeMillis() - started);
+            McpAuditLog.call(
+                tool,
+                McpAuditLogKt.errorArgsSummary(argsSummary, e.getMcpErrorText()),
+                "EXPECTED_ERROR",
+                System.currentTimeMillis() - started
+            );
         }
     }
 

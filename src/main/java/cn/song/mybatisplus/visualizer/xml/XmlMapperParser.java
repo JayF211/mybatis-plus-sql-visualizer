@@ -1,25 +1,19 @@
 package cn.song.mybatisplus.visualizer.xml;
 
-import java.io.StringReader;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
-import javax.xml.XMLConstants;
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
-import org.xml.sax.EntityResolver;
-import org.xml.sax.InputSource;
 
 /**
- * mapper 文件解析器（T-M24-01）：JDK DOM 解析（secure-processing，禁 DTD/外部实体），
- * 提取 <mapper> 下的 select/insert/update/delete 语句。
+ * mapper 文件解析器（T-M24-01）：JDK DOM 解析（安全配置唯一落点 {@link SecureXml}——官方 DTD 放行、
+ * 外部实体拦死、内联子集膨胀预扫），提取 <mapper> 下的 select/insert/update/delete 语句。
  *
  * <p>T-IC-02：入参 {@link CrossNamespaceFragments} 为跨命名空间片段表（由 psi 层
  * {@code cn.song.mybatisplus.visualizer.psi.XmlCrossNsFragmentResolver} 提供；无 project 的纯文本链传空表，
@@ -197,10 +191,13 @@ public class XmlMapperParser {
                 .replace("\n", "&#10;").replace("\r", "&#13;").replace("\t", "&#9;");
     }
 
-    /** 解析 XML 文本为 DOM（安全配置：禁 DTD/外部实体）。注解 <script> 等片段解析复用（T-M25-02）。 */
+    /**
+     * 解析 XML 文本为 DOM（安全配置见 {@link SecureXml}：T-XDH-01 配置收敛 + T-XDH-03 内联 DTD 膨胀预扫）。
+     * 注解 <script> 等片段解析复用（T-M25-02）。
+     */
     Document parseDocument(String fileText) {
         try {
-            return newDocumentBuilder().parse(new InputSource(new StringReader(fileText)));
+            return SecureXml.parse(fileText);
         } catch (Throwable t) {
             throw new XmlParseException("XML 解析失败：" + t.getMessage());
         }
@@ -224,39 +221,5 @@ public class XmlMapperParser {
             case "update" -> XmlStatementKind.UPDATE;
             default -> XmlStatementKind.DELETE;
         };
-    }
-
-    private DocumentBuilder newDocumentBuilder() {
-        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-        try {
-            dbf.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-        } catch (Throwable ignored) {
-        }
-        // 允许 DOCTYPE 声明（MyBatis mapper 常见官方 DTD 声明）；XXE 防护由三重组合承担
-        try {
-            dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", false);
-        } catch (Throwable ignored) {
-        }
-        try {
-            dbf.setFeature("http://xml.org/sax/features/external-general-entities", false);
-        } catch (Throwable ignored) {
-        }
-        try {
-            dbf.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-        } catch (Throwable ignored) {
-        }
-        dbf.setXIncludeAware(false);
-        dbf.setExpandEntityReferences(true);
-        try {
-            dbf.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "all");
-        } catch (Throwable ignored) {
-        }
-        try {
-            DocumentBuilder db = dbf.newDocumentBuilder();
-            db.setEntityResolver((String publicId, String systemId) -> new InputSource(new StringReader("")));
-            return db;
-        } catch (Throwable t) {
-            throw new XmlParseException("XML 解析失败：" + t.getMessage());
-        }
     }
 }

@@ -137,6 +137,12 @@ public class LogEntryListCellRenderer extends JPanel implements javax.swing.List
             if (db != null) {
                 metaLine.append(db.getFirst(), db.getSecond());
             }
+            // T-McpAuditTrail T-MAT-05：MCP 徽标（同落点：目标库后、来源前；非 MCP 返回 null 不显示）
+            kotlin.Pair<String, SimpleTextAttributes> mcp =
+                    SqlLogPanelKt.formatMcpFragment(entry, useSelectionFill);
+            if (mcp != null) {
+                metaLine.append(mcp.getFirst(), mcp.getSecond());
+            }
             kotlin.Pair<String, SimpleTextAttributes> src = SqlLogPanelKt.formatSourceFragment(entry, useSelectionFill);
             if (src != null) {
                 metaLine.append(src.getFirst(), src.getSecond());

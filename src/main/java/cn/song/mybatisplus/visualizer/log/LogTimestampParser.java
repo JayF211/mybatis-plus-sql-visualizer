@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.regex.Matcher;
@@ -93,12 +94,26 @@ public final class LogTimestampParser {
         return null;
     }
 
+    /**
+     * T-PS5-12：SimpleDateFormat 非线程安全 → ThreadLocal + 格式串键缓存
+     * （照 {@code SqlLogPanel.timestampFormatter} 惯例；此前每命中一行新建一个 SDF，是解析热路径的固定开销）。
+     * 复用实例输出与逐次新建逐字节一致（{@code parse} 每次完整重置内部 calendar）；
+     * 时区仍每次对齐（系统默认时区运行期可变，赋值 O(1)）。
+     */
+    private static final ThreadLocal<HashMap<String, SimpleDateFormat>> TIMESTAMP_FORMAT_CACHE =
+            ThreadLocal.withInitial(() -> new HashMap<String, SimpleDateFormat>());
+
     /** 用指定格式解析时间字符串。 */
     private static Long parseTimestamp(String text, String format) {
         try {
-            SimpleDateFormat sdf = new SimpleDateFormat(format, Locale.ENGLISH);
-            // 严格模式：拒绝月份 13 / 小时 25 等非法值（宽松模式会静默滚动成有效日期）
-            sdf.setLenient(false);
+            HashMap<String, SimpleDateFormat> cache = TIMESTAMP_FORMAT_CACHE.get();
+            SimpleDateFormat sdf = cache.get(format);
+            if (sdf == null) {
+                sdf = new SimpleDateFormat(format, Locale.ENGLISH);
+                // 严格模式：拒绝月份 13 / 小时 25 等非法值（宽松模式会静默滚动成有效日期）
+                sdf.setLenient(false);
+                cache.put(format, sdf);
+            }
             // 使用系统默认时区（与日志框架输出时区一致）
             sdf.setTimeZone(TimeZone.getDefault());
             Date parsed = sdf.parse(text);

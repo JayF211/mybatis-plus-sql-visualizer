@@ -192,6 +192,10 @@ public final class RollbackSqlGenerator {
     /**
      * 从 SQL 文本推导回滚语句。
      *
+     * <p>T-PS5-02：解析走 {@code cn.song.mybatisplus.visualizer.execute.UnboundedWriteDetector.parseStatementsShared}
+     * 单槽共享——确认流（{@code ExecuteConfirmMessages.build} → {@code UnboundedWriteDetector.detect}）刚解析过的
+     * 同文本在此直接复用 AST（一次大 DML 点击的解析次数由 4 降到 1），<b>AST 只读不改写</b>。</p>
+     *
      * @param sql               预览编辑器当前 SQL（可含注释；多条语句逐条推导）
      * @param primaryKeyColumns 主键列名（大小写不敏感匹配；null = 无主键信息，走整行谓词）
      */
@@ -203,17 +207,43 @@ public final class RollbackSqlGenerator {
         // 且是 verifyPlugin deprecated 计数来源）——直接按列表使用
         List<net.sf.jsqlparser.statement.Statement> statements;
         try {
-            statements = CCJSqlParserUtil.parseStatements(cleaned);
+            statements = cn.song.mybatisplus.visualizer.execute.UnboundedWriteDetector
+                    .parseStatementsShared(cleaned);
         } catch (Exception e) {
             String msg = e.getMessage();
             return RollbackResult.unable(new RollbackWarning("rollback.unable.parse",
                     List.of(firstKeywordOf(cleaned), msg != null ? msg.substring(0, Math.min(120, msg.length())) : "")));
         }
+        return generateFromParsedStatements(cleaned, statements, primaryKeyColumns);
+    }
+
+    /**
+     * T-PS5-02：携解析入参重载——调用方已持 AST（确认阶段产物）时不再解析。
+     * 供预览面板等调用链在<b>同一执行流内</b>显式传递解析产物；{@link #generate} 亦委派此实现。
+     * <b>AST 只读契约</b>：本函数只遍历不写节点（改写须先脱离共享槽）。
+     *
+     * @param cleaned           已剥注释的 SQL 文本（仅用于多语句判定，不再解析）
+     * @param statements        已解析语句列表
+     * @param primaryKeyColumns 主键列名（同 {@link #generate(String, List)}）
+     */
+    @NotNull
+    public static RollbackResult generateFromParsedStatements(
+            @NotNull String cleaned,
+            @NotNull List<net.sf.jsqlparser.statement.Statement> statements,
+            @Nullable List<String> primaryKeyColumns) {
         List<RollbackResult> perStatement = new ArrayList<>(statements.size());
         for (net.sf.jsqlparser.statement.Statement statement : statements) {
             perStatement.add(generateForStatement(statement, primaryKeyColumns));
         }
         return merge(perStatement, statements.size() > 1);
+    }
+
+    /** T-PS5-02：携解析入参重载（primaryKeyColumns 缺省，Kotlin 默认参数的便捷重载）。 */
+    @NotNull
+    public static RollbackResult generateFromParsedStatements(
+            @NotNull String cleaned,
+            @NotNull List<net.sf.jsqlparser.statement.Statement> statements) {
+        return generateFromParsedStatements(cleaned, statements, null);
     }
 
     private static RollbackResult generateForStatement(@NotNull net.sf.jsqlparser.statement.Statement statement,

@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.log.LogSqlEntry;
 import cn.song.mybatisplus.visualizer.log.LogSqlModelsKt;
 import cn.song.mybatisplus.visualizer.log.LogTimeCorrelator;
 import cn.song.mybatisplus.visualizer.log.SqlLogManager;
+import cn.song.mybatisplus.visualizer.util.FatalErrors;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 
@@ -44,6 +45,12 @@ public class AgentSession {
      */
     private final LongSupplier clockMs;
 
+    /**
+     * T-PS5-04：连接 URL 首次捕获/变化回调（默认空操作）——管理器据此把推断 URL 回写
+     * {@link AgentUrlRegistry}。只在 URL <b>变化</b>时触发（每个 SQL 事件都带 URL，逐事件回调无意义）。
+     */
+    private final Runnable onUrlCaptured;
+
     private volatile boolean alive = true;
 
     private volatile long lastSeen;
@@ -62,12 +69,20 @@ public class AgentSession {
         this(project, pid, socket, onStateChange, () -> System.currentTimeMillis());
     }
 
-    public AgentSession(Project project, long pid, Socket socket, Runnable onStateChange, LongSupplier clockMs) throws IOException {
+    /** 便捷构造器：onUrlCaptured 缺省空操作（Kotlin 默认参数）。 */
+    public AgentSession(Project project, long pid, Socket socket, Runnable onStateChange, LongSupplier clockMs)
+            throws IOException {
+        this(project, pid, socket, onStateChange, clockMs, () -> { });
+    }
+
+    public AgentSession(Project project, long pid, Socket socket, Runnable onStateChange, LongSupplier clockMs,
+                        Runnable onUrlCaptured) throws IOException {
         this.project = project;
         this.pid = pid;
         this.socket = socket;
         this.onStateChange = onStateChange;
         this.clockMs = clockMs;
+        this.onUrlCaptured = onUrlCaptured;
         this.output = new DataOutputStream(socket.getOutputStream());
         this.lastSeen = clockMs.getAsLong();
         socket.setSoTimeout(0);
@@ -118,6 +133,7 @@ public class AgentSession {
                 handleFrame(cmd, new String(body, StandardCharsets.UTF_8));
             }
         } catch (Throwable t) {
+            if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传（读线程：透传即线程终止，平台记录现场）
             LOG.warn("会话读循环退出（pid=" + pid + ", alive 前=" + alive + "）——掉线原因如下", t);
             alive = false;
             onStateChange.run();
@@ -134,9 +150,13 @@ public class AgentSession {
             }
             try {
                 // T-DialectAutoInfer：connect URL 会话内记忆（推断依据；null 容错——旧版 agent 无此键）
+                // T-PS5-04：URL 变化才回调（回写推断持有者；逐事件回调无意义）
                 String url = event.url();
                 if (url != null && !url.isBlank()) {
-                    lastConnectionUrl = url;
+                    if (!url.equals(lastConnectionUrl)) {
+                        lastConnectionUrl = url;
+                        onUrlCaptured.run();
+                    }
                 }
                 LogSqlEntry entry = AgentEventAdapter.toEntry(event);
                 // T-AgentDialectLoop / T-AgentLogTime：接管期间控制台嗅探暂存的「日志行原始时间」
@@ -146,6 +166,7 @@ public class AgentSession {
                 LogSqlEntry effective = stamped != null ? stamped : logTimeMiss(entry);
                 project.getService(SqlLogManager.class).getEntries().addEntry(effective);
             } catch (Throwable t) {
+                if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
                 LOG.warn("EVENT 入队失败（不斩断流）", t);
             }
         }
@@ -192,6 +213,7 @@ public class AgentSession {
                 output.flush();
             }
         } catch (Throwable t) {
+            if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传（原状：静默置 alive=false，致命错误会丢现场）
             alive = false;
             onStateChange.run();
         }
