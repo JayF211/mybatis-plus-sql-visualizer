@@ -27,8 +27,11 @@ import java.io.File
  * 记录、updateActionsAsync 备注等），不剥会误报。
  *
  * 末尾一条规则（T-StabilityTail T-ST-02d，2026-09-19）是**唯一扫 src/test 的源码结构规则**：
- * 测试类在 `setUp`/`@Before` 里改 `project.getService(…)` 返回的**项目服务级共享实例**却无复位调用 → 红
+ * 测试类在 `setUp`/`@Before` 里改**项目服务级共享实例**却无**对该承接对象的复位调用** → 红
  * （light 测试项目在同一分片 JVM 内跨类复用同一个 `ProjectImpl`，改动会串台到同片后续类）。
+ * 取服务形态认两种——平台直取 `project.getService(…)` 与仓内主流的诊断 wrapper
+ * `AlreadyDisposedDiagnostics.projectService(…)`（T-ST-02c 起 5 个已修泄漏类全走后者）；
+ * 复位判定绑定到承接该服务的标识符，**别的对象**的同名复位口不再豁免（T-ST-02d 独立复核阻断 1/2）。
  *
  * write-safe 上下文两条规则（T-WriteSafeCtx + T-TS-04 + T-FS-06）：「`ModalityState.any()` 排出的
  * 回调里做文档写」与「默认模态（`defaultModalityState()` 语义）排出的回调里做文档写」——豁免口径一致
@@ -1651,6 +1654,19 @@ class BannedApiSourceScanTest {
             .toList()
 
     /**
+     * 扫描面保鲜断言：路径解析失败（`src/test/kotlin` 改名 / `user.dir` 异常）时 [testSources] 返回**空列表**，
+     * 而规则对空列表恒 0 违规 → 主用例会**静默空绿**（T-ST-02d 独立复核条件项）。空面自证见 `TST02d自证_…`
+     * （空列表必须让本断言变红）。
+     */
+    private fun assertTestSourcesResolved(sources: List<Pair<String, String>>) {
+        assertTrue(
+            "扫描面为空——src/test/kotlin 下未解析到任何 .kt（路径改名 / user.dir 异常？），" +
+                "空扫描面会让本用例静默空绿：root=${repoRoot().resolve("src/test/kotlin")}",
+            sources.isNotEmpty(),
+        )
+    }
+
+    /**
      * 初始化入口站点：`setUp` / `@Before` 的**函数体**（含花括号）。
      *
      * [body] 与 [bodyStart] 取自 [maskNonCode] 后的文本（**保行**）：体在掩码文本中的起始下标 + 体内容，
@@ -1715,23 +1731,45 @@ class BannedApiSourceScanTest {
     }
 
     /**
-     * 服务对象绑定名：初始化入口里**直接承接** `project.getService(…)` 返回值的标识符
-     * （`manager = project.getService(SqlLogManager::class.java)` → `manager`）。
+     * 服务查找调用令牌：平台直取 `project.getService(`，以及仓内诊断 wrapper
+     * `AlreadyDisposedDiagnostics.projectService(`（T-ST-02c 起仓内测试的**主流**取服务形态——wrapper 的形参是
+     * `(project, serviceClass, trigger)`、返回 `T`，与 `getService` 同形承接）。
      *
-     * 只认「赋值号与 `getService(` 之间除接收者外没有别的调用」的形态——
-     * `snapshot = SqlLogManagerProjectState.capture(project.getService(…))` 承接的是**包装结果**
-     * （快照）而非服务本体，不登记；直取形态（`project.getService(…).field = x`）另由固定锚点覆盖。
+     * 为什么两个都要认（T-ST-02d 独立复核**阻断 1**）：本轮已修 5 个泄漏类里 `getService(` 命中数为 **0**
+     * （`SqlConsoleBridgeFilterProviderTest` / `EpBridgeSinglePathTest` / `AgentListenSyncTest` /
+     * `McpHistoryIngestTest` 全走 `projectService(...)`，`SectionConfigurableAutoCaptureLinkageTest` 的 1 处在
+     * KDoc 里）——只认 `getService(` 时规则对这些类**整类不可见**，把真泄漏类的 `restore` 行删掉仍绿
+     * （复核实证）。两个令牌不互相包含（`projectService` 里没有 `getService` 子串），故各自独立搜索。
+     */
+    private val serviceLookupTokens = listOf("getService(", "projectService(")
+
+    /**
+     * 服务对象绑定名：初始化入口里**直接承接**服务查找返回值的标识符，两种形态都认——
+     *  ① `manager = project.getService(SqlLogManager::class.java)` → `manager`；
+     *  ② `manager = AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "setUp.manager")`
+     *     → `manager`（wrapper 形态，仓内主流；wrapper 的 trigger 实参在掩码文本里已涂白）。
+     *
+     * 只认「赋值号与查找调用之间除接收者外没有别的调用」的形态——
+     * `snapshot = SqlLogManagerProjectState.capture(project.getService(…))` 承接的是**包装结果**（快照）
+     * 而非服务本体，不登记；换行形态的 wrapper（`state = SqlLogManagerProjectState.capture(` 换行后才是
+     * `projectService(…)`）承接行只有空白，正则天然不匹配——这也是**有意**的（承接的是快照）。
+     * 直取形态（`project.getService(…).field = x` / `projectService(…).field = x`）另由固定锚点覆盖。
+     *
+     * 边界（漏报方向）：多行赋值（`val x =` 换行后才是查找调用）不识别；`import` 对象成员后裸调
+     * `projectService(` 仍命中（子串匹配，与 import 无关）。
      */
     private fun serviceBoundNames(body: String): List<String> {
         val names = ArrayList<String>()
-        var idx = body.indexOf("getService(")
-        while (idx >= 0) {
-            val stmtStart = body.lastIndexOfAny(charArrayOf('\n', ';'), idx - 1) + 1
-            val head = body.substring(stmtStart, idx)
-            val m = Regex("""(?:^|[^A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]*)?=\s*([A-Za-z0-9_.\s]*)$""")
-                .find(head)
-            if (m != null && m.groupValues[2].trim().endsWith(".")) names.add(m.groupValues[1])
-            idx = body.indexOf("getService(", idx + 1)
+        for (token in serviceLookupTokens) {
+            var idx = body.indexOf(token)
+            while (idx >= 0) {
+                val stmtStart = body.lastIndexOfAny(charArrayOf('\n', ';'), idx - 1) + 1
+                val head = body.substring(stmtStart, idx)
+                val m = Regex("""(?:^|[^A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]*)?=\s*([A-Za-z0-9_.\s]*)$""")
+                    .find(head)
+                if (m != null && m.groupValues[2].trim().endsWith(".")) names.add(m.groupValues[1])
+                idx = body.indexOf(token, idx + 1)
+            }
         }
         return names.distinct()
     }
@@ -1774,29 +1812,75 @@ class BannedApiSourceScanTest {
     }
 
     /**
-     * 复位调用令牌（**复位侧**）：类内出现其一即视为该类的共享状态改动有复位。
+     * 服务**自带**复位口的方法名（**只在与承接名配对时才算复位**，见 [hasBoundServiceReset]）。
+     *
+     * 名单按「服务对象自身的复位入口」取：`clearForTest` / `resetForTest` / `clearAll` / `loadState`
+     * （仓内先例：`RollbackSnapshotStore.clearForTest`、`PluginSettings.loadState`）。名单是过报方向的
+     * 可调项——某服务的业务方法若与这些名字撞名且被当成复位口，会**漏报**该类的写，发现时收窄本名单。
+     */
+    private val projectStateResetMethodPattern = "clearForTest|clearAll|resetForTest|loadState"
+
+    /**
+     * 存复原 wrapper（本轮唯一的**全量**复位口）：`SqlLogManagerProjectState.restore(<承接名>, snapshot)`。
      *
      * 刻意**不含** `SqlLogManagerProjectState.capture(`——只有 capture 没有 restore 正是「存了快照忘了还原」
-     * 的半成品；也**不含** `entries.clear()`——修复前的 `SqlConsoleBridgeFilterProviderTest` tearDown 里
-     * 正有 `clear()`，而泄漏的是 `dedupeEnabled`：清条目不等于复位状态。
+     * 的半成品；也**不含** `SqlLogManager.restoreCaptureStateForTest(`——它只回滚
+     * `capturing` / `userArmed` / `waitingForConsole` 三个字段，而 [SqlLogManagerProjectState.capture] 的快照是
+     * **15 个字段**（buffer 的 `dedupeEnabled` / `paused` / `filterKeywords` / `maxEntries` / 条目内容 /
+     * 轮询态…全不在内），**3/15 的部分复位不足以豁免**对共享实例的写（T-ST-02d 独立复核条件项）。
+     * 排除的代价为零：仓内无测试类单独依赖它（唯一直调在 [SqlLogManagerProjectState] 的 restore 体内，
+     * 该文件无初始化入口故不在判定面）。只做部分复位而不走 wrapper 全量复位的类会红——补 wrapper
+     * 或加 `// project-state: <理由>` 标注。
+     * 也**不含** `entries.clear()`——修复前的 `SqlConsoleBridgeFilterProviderTest` tearDown 里正有
+     * `clear()`，而泄漏的是 `dedupeEnabled`：清条目不等于复位状态。
      */
-    private val projectStateResetTokens = listOf(
-        "SqlLogManagerProjectState.restore(",
-        ".restoreCaptureStateForTest(",
-        ".loadState(",
-        ".clearForTest(",
-        ".clearAll(",
-        ".resetForTest(",
-    )
+    private val projectStateRestoreWrapper = "SqlLogManagerProjectState.restore"
+
+    /**
+     * 复位证据判定（T-ST-02d 独立复核**阻断 2** 的修法）：**绑定到承接服务对象的那个标识符**，
+     * 而非文件级 `contains`。任一形态成立即视为该文件有复位：
+     *  ① `<承接名>.<复位口>(…)`——对该服务对象自身的复位调用（[projectStateResetMethodPattern]）；
+     *  ② `SqlLogManagerProjectState.restore(<承接名>, snapshot)`——存复原 wrapper，承接名作**首个实参**。
+     *
+     * 为什么必须绑定：旧口径是「文件里出现任一复位令牌即豁免」，于是 `PluginSettings.loadState(snapshot)` /
+     * `JoinFkRegistry.clearForTest()` / `PluginCacheManager.clearAll(project)` / `FirstCaptureGuide.resetForTest()`
+     * 这类**另一个对象**的复位会把真泄漏静默洗成绿（复核实测四个样本全绿）。绑定后这些调用不再豁免；
+     * 同时**不丢覆盖面**——服务自身确实有该复位口时仍认（如 `RollbackSnapshotStore.clearForTest`，
+     * 仓内真实形态），且规则对任意服务生效，不限于 `SqlLogManager`。
+     *
+     * 残留边界（漏报方向，如实登记）：按**名**匹配不按实例——同文件两个顶层类用同名标识符时，
+     * A 类的复位会豁免 B 类的写（实测：仓内含 >1 顶层声明的测试文件 6 个，但**每个文件里带初始化入口
+     * 的顶层类都只有 1 个**（0 个文件存在两个入口类），故当前无实际影响）；
+     * 承接名作为**实参**传给别的对象的复位口（`SomeRegistry.clearForTest(manager)`）也按「该对象参与复位」
+     * 收编为复位。两种形态都要求承接名在**初始化入口**里被登记过（见 [serviceBoundNames] 的边界）。
+     */
+    private fun hasBoundServiceReset(code: String, boundNames: Collection<String>): Boolean {
+        for (name in boundNames) {
+            val id = Regex.escape(name)
+            if (Regex("""(?<![A-Za-z0-9_.])$id\s*\.\s*(?:$projectStateResetMethodPattern)\s*\(""").containsMatchIn(code)) {
+                return true
+            }
+            if (Regex("""(?<![A-Za-z0-9_.])${Regex.escape(projectStateRestoreWrapper)}\s*\(\s*$id\s*[,)]""")
+                    .containsMatchIn(code)
+            ) {
+                return true
+            }
+        }
+        return false
+    }
 
     /**
      * 初始化入口里改**项目服务级**共享状态却无复位证据的违规点：`路径:行号 → 命中片段`。
      *
-     * **判据（T-ST-02d）**：某测试类的 `setUp`/`@Before` 体内出现对 `project.getService(…)` 返回对象的
-     * 写操作（成员赋值或变更类方法调用），而**类内**没有任何 [projectStateResetTokens] 复位调用 → 红。
+     * **判据（T-ST-02d）**：某测试类的 `setUp`/`@Before` 体内出现对服务查找
+     * （`project.getService(…)` 或 `AlreadyDisposedDiagnostics.projectService(…)`）返回对象的写操作
+     * （成员赋值或变更类方法调用），而**类内没有对该承接名的复位调用**（见 [hasBoundServiceReset]）→ 红。
      * 单独成函数以便合成样本自证（规则「看不见某形态」的空绿只能靠合成样本钉住，见 `TST02d自证_…`）。
      *
      * **豁免**：写入行上方连续注释块含 `// project-state: <理由>`（与 `write-safe:` / `psi-capture:` 同族逃生舱）。
+     *
+     * **覆盖面**：规则对**任意**服务生效（`getService(SqlPreviewService::class.java)` 同样在扫描面），
+     * 不只 `SqlLogManager`——本轮审计与报错文案以 SqlLogManager 为例，只因 5 个已修泄漏类都落在它上面。
      *
      * **为什么值得一条守卫**：light 测试项目在同一分片 JVM 内**跨测试类复用同一个 `ProjectImpl`**，
      * 故 `project.getService(SqlLogManager::class.java)` 是**全片共享**单例；本轮人工审计复位了 5 个泄漏类
@@ -1811,25 +1895,38 @@ class BannedApiSourceScanTest {
      *    会被误判——该形态仓内已有（`AgentListenSyncTest.testisListenActive_跟随监听状态` 的
      *    `finally { logManager.setCapturingForTest(before) }`），只是该类另有 capture/restore 才不红。
      *    故本轮不收编，见 `TST02d自证_…` 的边界样本。
-     *  - **漏报｜绑定形态**：多行赋值（`val x =` 换行后才是 `project.getService(…)`）不识别；
+     *  - **漏报｜绑定形态**：多行赋值（`val x =` 换行后才是 `getService(…)` / `projectService(…)`）不识别；
      *    helper 返回（`private fun store() = project.getService(…)`，`RollbackSnapshotStoreTest` /
-     *    `RollbackSqlPanelTest` 即此形态）不绑定——两者都靠类内已有的复位口兜住。
-     *  - **漏报｜复位口径是「类内有令牌」**：复位在某分支而泄漏在另一分支的混合形态不在覆盖内
-     *    （文件级判定，换取低误报）。
-     *  - **不判（非误报）**：自建实例（`SqlLogManager(project)` 不进容器）无 `getService` 承接 → 不绑定；
+     *    `RollbackSqlPanelTest` 即此形态）不绑定——两者都靠类内已有的复位口兜住。换行形态的 wrapper
+     *    （`state = SqlLogManagerProjectState.capture(` 换行后才是 `projectService(…)`）不绑定是**有意**的：
+     *    承接的是快照而非服务本体（该形态仓内 3 类，均为「存快照 + tearDown 里 wrapper 全量复位」）。
+     *  - **漏报｜复位判定按名匹配**：复位须落在承接名上（[hasBoundServiceReset]），但按**名**不按实例——
+     *    同文件两个顶层类用同名标识符时，A 类的复位会豁免 B 类的写（实测：仓内含 >1 顶层声明的测试文件
+     *    6 个，但每个文件里带初始化入口的顶层类都只有 1 个，故当前无实际影响）；承接名作为实参传给
+     *    别的对象的复位口（`SomeRegistry.clearForTest(manager)`）也算复位。复位在某分支而泄漏在另一分支的
+     *    混合形态同样不在覆盖内（类级判定，换取低误报）。
+     *  - **漏报｜部分复位不算证据**：`SqlLogManager.restoreCaptureStateForTest(…)` 只回滚 3/15 字段，
+     *    已在 [projectStateRestoreWrapper] 处排除——只做部分复位而不走 wrapper 全量复位的类会红。
+     *  - **不判（非误报）**：自建实例（`SqlLogManager(project)` 不进容器）无服务查找承接 → 不绑定；
      *    只读访问（`entries.snapshot()` / `entries.size()` / `manager.capturing`）不命中两种写形态。
      *  - **过报方向**：业务方法名与 [serviceMutatorNamePattern] 撞名且类内确无复位 → 红，此时加
-     *    `// project-state: <理由>` 标注（当前仓内 0 处，实测见 `TST02d自证_…` 的绿读数）。
+     *    `// project-state: <理由>` 标注。**精度证据只能来自合成样本**（`TST02d自证_…`）——
+     *    真实源码上的「0 处」是**空绿**，不构成精度证据，不得拿来论证低误报率。
      */
     private fun projectServiceStateOffenders(sources: List<Pair<String, String>>): List<String> {
         val offenders = ArrayList<String>()
         for ((path, raw) in sources) {
             val code = maskNonCode(raw)
             val writes = ArrayList<Pair<Int, String>>()
+            val boundNames = LinkedHashSet<String>()
             for (site in initEntrySites(code)) {
-                val anchors = serviceBoundNames(site.body)
-                    .map { """(?<![A-Za-z0-9_.])""" + Regex.escape(it) + """\s*\.\s*""" } +
-                    listOf("""(?<![A-Za-z0-9_])getService\s*\([^()]*\)\s*\.\s*""")
+                val names = serviceBoundNames(site.body)
+                boundNames += names
+                val anchors = names.map { """(?<![A-Za-z0-9_.])""" + Regex.escape(it) + """\s*\.\s*""" } +
+                    listOf(
+                        """(?<![A-Za-z0-9_])getService\s*\([^()]*\)\s*\.\s*""",
+                        """(?<![A-Za-z0-9_])projectService\s*\([^()]*\)\s*\.\s*""",
+                    )
                 for (anchor in anchors) {
                     for ((offset, hit) in serviceWriteHits(site.body, anchor)) {
                         writes.add((site.bodyStart + offset) to hit)
@@ -1837,7 +1934,7 @@ class BannedApiSourceScanTest {
                 }
             }
             if (writes.isEmpty()) continue
-            if (projectStateResetTokens.any { code.contains(it) }) continue
+            if (hasBoundServiceReset(code, boundNames)) continue
             for ((offset, hit) in writes) {
                 val line = lineOf(code, offset)
                 if (leadingCommentBlock(raw, line).contains("project-state:")) continue
@@ -1851,14 +1948,18 @@ class BannedApiSourceScanTest {
     fun `初始化入口改项目服务级状态须复位`() {
         // T-StabilityTail T-ST-02d：把「改共享服务状态须复位」这条人工审计结论固化为源码扫描守卫。
         // 判据与误报边界见 [projectServiceStateOffenders] 的 KDoc。
-        val offenders = projectServiceStateOffenders(testSources())
+        val sources = testSources()
+        // 路径解析失败 = 空扫描面 = 规则恒 0 违规的**空绿**（自证见 TST02d自证_… 的空面样本）
+        assertTestSourcesResolved(sources)
+        val offenders = projectServiceStateOffenders(sources)
         assertTrue(
-            "测试类在 setUp/@Before 里改了项目服务级共享状态（project.getService(…) 返回对象）却无复位调用，" +
+            "测试类在 setUp/@Before 里改了项目服务级共享状态（project.getService(…) 或 " +
+                "AlreadyDisposedDiagnostics.projectService(…) 返回对象）却无**对该服务对象的复位调用**，" +
                 "命中 ${offenders.size} 处：$offenders。light 测试项目在同一分片 JVM 内跨测试类复用同一个 " +
                 "ProjectImpl，这类改动会串台到同片后续测试类（发作与否取决于分片邻居，新增测试类即重排）。" +
                 "复位走 testutil.SqlLogManagerProjectState.capture（setUp）+ restore（tearDown）、" +
-                "或服务自带的 clearForTest/resetForTest/loadState 等复位口；确属幂等安全或非共享实例的写，" +
-                "在写入行上方加 `// project-state: <理由>` 标注",
+                "或服务自带的 clearForTest/resetForTest/loadState 等复位口（须调在承接该服务的标识符上）；" +
+                "确属幂等安全或非共享实例的写，在写入行上方加 `// project-state: <理由>` 标注",
             offenders.isEmpty(),
         )
     }
@@ -2055,6 +2156,179 @@ class BannedApiSourceScanTest {
                 "${projectServiceStateOffenders(captureOnly)}",
             1,
             projectServiceStateOffenders(captureOnly).size,
+        )
+
+        // ---- T-ST-02d 独立复核阻断 1：wrapper 取服务形态必须能绑定 ----
+        // 复核实证：只认 `getService(` 时，把真泄漏类的 `restore` 行整行删掉规则仍 offenders=0 绿
+        // （仓内 5 个已修泄漏类的 getService( 计数全为 0，全走 AlreadyDisposedDiagnostics.projectService）。
+        val wrapperBound = listOf(
+            "src/test/kotlin/x/WrapperBoundSampleTest.kt" to """
+                class WrapperBoundSampleTest : BasePlatformTestCase() {
+                    private lateinit var manager: SqlLogManager
+
+                    override fun setUp() {
+                        super.setUp()
+                        manager = AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "setUp.manager")
+                        manager.entries.dedupeEnabled = false
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "wrapper 承接（AlreadyDisposedDiagnostics.projectService）必须与 getService 同等绑定——" +
+                "否则删掉真泄漏类的 restore 行也不红（复核阻断 1 复核实证）：" +
+                "${projectServiceStateOffenders(wrapperBound)}",
+            1,
+            projectServiceStateOffenders(wrapperBound).size,
+        )
+        assertTrue(
+            "wrapper 形态的命中点须锚在**写入那一行**（不得落在 wrapper 承接行）：" +
+                "${projectServiceStateOffenders(wrapperBound)}",
+            projectServiceStateOffenders(wrapperBound)[0]
+                .endsWith("WrapperBoundSampleTest.kt:7 → manager.entries.dedupeEnabled ="),
+        )
+
+        // wrapper 承接 + wrapper 全量复位（承接名作首个实参）→ 绿
+        val wrapperRestored = listOf(
+            "src/test/kotlin/x/WrapperRestoredSampleTest.kt" to """
+                class WrapperRestoredSampleTest : BasePlatformTestCase() {
+                    private lateinit var manager: SqlLogManager
+                    private lateinit var state: SqlLogManagerProjectState.Snapshot
+
+                    override fun setUp() {
+                        super.setUp()
+                        manager = AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "setUp.manager")
+                        state = SqlLogManagerProjectState.capture(manager)
+                        manager.entries.dedupeEnabled = false
+                    }
+
+                    override fun tearDown() {
+                        SqlLogManagerProjectState.restore(manager, state)
+                        super.tearDown()
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "wrapper 承接 + SqlLogManagerProjectState.restore(<承接名>, …) 全量复位不得误报：" +
+                "${projectServiceStateOffenders(wrapperRestored)}",
+            0,
+            projectServiceStateOffenders(wrapperRestored).size,
+        )
+
+        // ---- T-ST-02d 独立复核阻断 2：**别的对象**的复位调用不得洗掉真泄漏 ----
+        // 复核实测（旧口径按文件级 contains 判定）：下面四个复位样本各自都能把真泄漏洗成绿。
+        val otherObjectResets = listOf(
+            "src/test/kotlin/x/OtherObjectResetSampleTest.kt" to """
+                class OtherObjectResetSampleTest : BasePlatformTestCase() {
+                    private lateinit var manager: SqlLogManager
+
+                    override fun setUp() {
+                        super.setUp()
+                        manager = AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "setUp.manager")
+                        manager.entries.dedupeEnabled = false
+                    }
+
+                    override fun tearDown() {
+                        PluginSettings.loadState(snapshot)
+                        JoinFkRegistry.clearForTest()
+                        PluginCacheManager.clearAll(project)
+                        FirstCaptureGuide.resetForTest()
+                        super.tearDown()
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "另一个对象的复位调用（PluginSettings.loadState / JoinFkRegistry.clearForTest / " +
+                "PluginCacheManager.clearAll / FirstCaptureGuide.resetForTest）不得豁免本类对共享服务的写" +
+                "（旧口径下这四个样本把真泄漏洗成绿——复核阻断 2 复核实证）：" +
+                "${projectServiceStateOffenders(otherObjectResets)}",
+            1,
+            projectServiceStateOffenders(otherObjectResets).size,
+        )
+
+        // 承接名自身的复位口仍算复位证据（绑定判定不得把覆盖面一起砍掉）——真实形态：
+        // RollbackSnapshotStoreTest 的 `project.getService(RollbackSnapshotStore::class.java)` + clearForTest()
+        val boundServiceReset = listOf(
+            "src/test/kotlin/x/BoundResetSampleTest.kt" to """
+                class BoundResetSampleTest : BasePlatformTestCase() {
+                    private lateinit var store: RollbackSnapshotStore
+
+                    override fun setUp() {
+                        super.setUp()
+                        store = project.getService(RollbackSnapshotStore::class.java)
+                        store.markRollbackExecuted(entry)
+                    }
+
+                    override fun tearDown() {
+                        store.clearForTest()
+                        super.tearDown()
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "承接名自身的复位口（store.clearForTest()）必须仍算复位证据（② 选型不得丢覆盖面）：" +
+                "${projectServiceStateOffenders(boundServiceReset)}",
+            0,
+            projectServiceStateOffenders(boundServiceReset).size,
+        )
+        // 防「复位口样本空绿」：同一份样本去掉复位行必须红——证明上面那个 0 是「写被识别 + 复位被认」，
+        // 而不是「写形态没命中」的空绿（该样本的写形态与前面几个样本不同，无法靠它们互证）。
+        val boundResetMissing = listOf(
+            boundServiceReset[0].first to boundServiceReset[0].second.replace("store.clearForTest()", ""),
+        )
+        assertEquals(
+            "同一份样本去掉 store.clearForTest() 必须红（否则上一条 0 是空绿）：" +
+                "${projectServiceStateOffenders(boundResetMissing)}",
+            1,
+            projectServiceStateOffenders(boundResetMissing).size,
+        )
+
+        // ---- T-ST-02d 独立复核条件项：部分复位（3/15 字段）不算复位证据 ----
+        // SqlLogManager.restoreCaptureStateForTest 只回滚 capturing/userArmed/waitingForConsole，
+        // 而 SqlLogManagerProjectState.capture 快照 15 个字段（buffer 字段全不在内）——故已从复位令牌排除。
+        val partialReset = listOf(
+            "src/test/kotlin/x/PartialResetSampleTest.kt" to """
+                class PartialResetSampleTest : BasePlatformTestCase() {
+                    private lateinit var manager: SqlLogManager
+
+                    override fun setUp() {
+                        super.setUp()
+                        manager = AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "setUp.manager")
+                        manager.entries.dedupeEnabled = false
+                    }
+
+                    override fun tearDown() {
+                        manager.restoreCaptureStateForTest(false, false, false)
+                        super.tearDown()
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "部分复位（restoreCaptureStateForTest 只回滚 3/15 字段）不足以豁免对 buffer 字段的写，必须红：" +
+                "${projectServiceStateOffenders(partialReset)}",
+            1,
+            projectServiceStateOffenders(partialReset).size,
+        )
+
+        // ---- 空扫描面自证：路径解析失败 = 空绿，主用例的非空断言必须能拦住 ----
+        assertEquals(
+            "空扫描面下规则恒 0 违规——这正是「路径解析失败 = 静默空绿」的机理",
+            0,
+            projectServiceStateOffenders(emptyList()).size,
+        )
+        var emptyScanRed = false
+        try {
+            assertTestSourcesResolved(emptyList())
+        } catch (e: AssertionError) {
+            emptyScanRed = true
+        }
+        assertTrue(
+            "扫描面为空时非空断言必须变红（否则 src/test/kotlin 路径解析失败会静默空绿）",
+            emptyScanRed,
         )
 
         // 工具函数自证：初始化入口提取覆盖 setUp / @Before 两种形态，行号与原文对齐（保行掩码）
