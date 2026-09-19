@@ -100,6 +100,7 @@ T-MAT-04 与 01/03/05 写集不相交（`mcp/McpToolsetSupport.kt` / `mcp/McpAud
 | T-MAT-04 | `7119619` | 顶层 `executionArgsSummary`（dataSource/dialect/sql 三段，空白回落 `auto`，换行压平）；`McpAuditLog.clip`/`SUMMARY_LIMIT` 改 internal 以便断言。**截断实测**：长 SQL 样例（三段全量 **562 字符**）经 `clip` 后 **121 字符**（= 120 + 省略号，McpAuditLogTest 钉住；计划 §五 走查 3 的「不超 120」由本函数保证）。其余九个纯静态工具保持字面量默认值 → 审计行逐字节不变（§验收 4）；预期错误路径由「只放错误文本」改为「入参摘要 + `error=<文本>`」（信息不减） |
 | T-MAT-05 | `7e7a3e3` | **日志页是否同步的核实结论：是**——日志页 `LogEntryListCellRenderer`（SqlLogPanel.kt）与历史页 `HistoryCellRenderer`（HistorySqlLogPanel.kt）渲染的是**同一模型** `LogSqlEntry`，故两页都接 `formatMcpFragment`（落点：目标库角标后、来源前，与既有角标同款协议）。历史页元信息行自建、不调 `formatSourceFragment`，故两处各自显式插一行，顺序与协议对齐避免两页不一致 |
 | T-MAT-06 | 本提交 | **门禁读数**：`testShards` **5196/0/0/6**（= 交付基线 5176 + 本任务新增 20 例精确吻合：codec +4、autosaver +2、McpAuditLogTest +6、McpHistoryIngestTest +4、两渲染器各 +2）、`testDatabase` **10/0/0/0**、agent **58/0/0**（首跑 1 例墙钟 flake，见 §九）。定向读数：SqlLogParamCodecTest 14/0/0/0、SqlLogAutoSaverTest 25/0/0/0、McpAuditLogTest 6/0/0/0、McpHistoryIngestTest 4/0/0/0、SqlLogPanelRendererUiTest 33/0/0/0、HistoryCellRendererTest 26/0/0/0。**先红后绿实录**：①用例 3（MCP 无参无占位符仍写 pd 行）在条件未加 `source == MCP` 时必红——该条是 T-MAT-03 配套必改的专属判据；②`summarize` 消费点守卫（源码级）在 ExplainTool 未接线时必红——纯行为断言测不出「没人调用」，故按 T-ConsentTruth 口径补源码级守卫。本轮两条断言均随实现一次落绿（未留红态提交） |
+| T-MAT-07（合流轮补记） | `cf7cbf5` + `ba077e2` | **并入 master 与读端补齐**。① **合并**：`git merge --no-ff t-r8-mcp-audit-trail`，冲突 2 处——`mcp/ExplainTool.kt` 与 `mcp/McpDbExecutor.kt`，均按语义取并集：ExplainTool 保留 T-McpRowBudget 的 `maxRows` 形参 + `clampMaxRows` 钳制 + `format(raw, target.maxRows)`，同时接本任务的 `audit(..., executionArgsSummary(...))` 与 `executeExplain(target, selectSql)` 原始语句透传；McpDbExecutor 的 `executeQuery` KDoc 两段并存（行预算兜底钳制 + `onExecuted` 出口钩子）。派发方预期的冲突点 `mcp/McpToolsetSupport.kt` 登记表 KDoc 实际由 git **自动合并**，已复核两处改动同时在位（「行默认 ≤200 / 上限 1000」与 mpsv_explain 审计入参说明）。② **读端回填**：`log/SqlLogFileReader.kt` `parseBlock` 两条头部分支各加一行 `source = decodedExt?.source ?: SqlSource.UNKNOWN`（新版分支落 `executionTimeMs` 之后，旧版 F-43 分支落 `timestamp` 之后；`SqlSource` 与本文件同包，无需 import）。③ **合并后新暴露的两处门禁红**（均非读端改动引起，见 §九 ⑦）：fatal 捕获守卫命中 `McpDbExecutor.executeQuery`、去重用例受同 JVM 前置类的项目服务级状态污染。④ **门禁读数**：`testShards` **5261/0/0/6**、`testDatabase` **10/0/0/0**（5 类 10 例）。定向读数：SqlLogHistoryRoundTripTest **12/0/0/0**（合流前 9 + 本轮 3）、HistoryCellRendererTest **27/0/0/0**（合流前 26 + 本轮 1）。**先红后绿实录**：读端补两行前三条新用例全红——`expected:<MCP> but was:<UNKNOWN>` ×2（新版分支 round-trip、旧版头部分支）、`读回条目来源应仍为 MCP: UNKNOWN` ×1（渲染链），补后两文件 **39/0/0/0** 全绿 |
 
 ## 九、实施小结：偏离、阻塞与未验证项
 
@@ -131,4 +132,15 @@ MCP 条目经 `buffer.addEntry` 落库 → 三条既有门控同样生效：用�
 **⑥ agent 门禁 flake（与本改动无依赖关系）**
 
 首跑 `:sql-visualizer-agent:test` 报 **58/1/0**，失败用例 = `StackCaptureConvergenceTest.缓存命中路径不再全栈建池_深栈计时防回潮`，报文为墙钟断言「命中应显著快于 miss（hit=436900ns, miss=1091000ns）」（本机同时有 4 路并行会话在跑 gradle，负载抖动）；单类复跑 **8/0/0/0** 转绿。agent 子项目（ASM 字节码增强 fat jar）与本次改动零依赖，判为负载下的时序抖动。
+
+**⑦ 合流轮收口（读端补齐 + 合并集成，`cf7cbf5` / `ba077e2`）**
+
+**① 阻塞项已闭合**：`log/SqlLogFileReader.kt` 两处各加一行（落点见 §八 T-MAT-07）。用 round-trip 用例先红后绿钉住三条口径：MCP 条目写盘 → 读回来源仍 `MCP`（新版头部分支）；旧版 F-43 头部分支下挂 pd 行同样回填（防「同一文件内徽标时有时无」——头部形态与 pd 行是否在场互相独立）；非 MCP 条目读回仍 `UNKNOWN`（钉住「不做未立项的读端口径扩张」）。徽标链的端到端半边（写盘 → 读端 → 渲染器出 `[MCP] `）落在 `HistoryCellRendererTest`（平台型用例）。至此 §验收 1「重启后徽标仍在」与 §验收 2「round-trip 不退化」在自动化门禁内成立。
+
+**合并后新暴露的两处红**（均非读端改动引起）：
+
+1. `BannedApiSourceScanTest.catch_Throwable块必须判fatal或登记豁免` 命中 `mcp/McpDbExecutor.kt`——本任务的 `catch (e: Throwable)` 块写于 T-FatalPassthrough 合入 master **之前**，分支自测时该守卫尚不存在，合流后才可见（分支读数 5196/0/0/6 不含这条判据）。按守卫口径补判定：先解包 `InvocationTargetException` 再判 `FatalErrors.isFatal`（与同文件 `errorTextOf` 同款解包），fatal 不投审计钩子直接透传——内存/链接已损坏时不再构造 `ExecutedOutcome` 与落历史；非 fatal 路径行为逐字节不变（仍投钩子后原样冒泡）。
+2. `McpHistoryIngestTest` 去重用例红（`expected:<2> but was:<3>`，分片并行时出现、单类跑绿）。根因是**测试隔离**而非产品行为：`SqlConsoleBridgeFilterProviderTest.setUp` 把**项目服务级** `SqlLogManager` 的 `dedupeEnabled` 置 false，其 tearDown 只清条目不复位开关；light 测试项目在同一 JVM 内跨测试类复用 → 同片（同 JVM）先后顺序不同即复现/不复现。已复现定案：`./gradlew test --tests SqlConsoleBridgeFilterProviderTest --tests McpHistoryIngestTest` 必红。修法取「用例自证前提」——本任务用例内显式 `dedupeEnabled = true`（与 `SqlLogCaptureRealtimeScenarioTest` 既有风格一致）。**未改** `SqlConsoleBridgeFilterProviderTest`（不在本轮写集）：该类的状态泄漏仍在，若后续再撞同类红，建议单独登记「项目服务级测试状态复位」小任务。
+
+**未验证 / 未宣称**：真机走查四项仍留人工（同 ⑤，本轮只验证自动化门禁与定向用例）；**分片组成由历史 XML 时长权重推导**（`mpv-testing.gradle.kts` 的时长均衡分区），并行跑时类间顺序不稳定——本轮实测同片顺序变化会让上述隔离缺陷时红时绿，故不宣称「分片顺序无关」，也不宣称 `testShards` 总数为稳定常量。`testShards` 本轮读数 5261 相对分支读数 5196 的差值中，可逐条核对的只有本轮新增 4 例（SqlLogHistoryRoundTripTest +3、HistoryCellRendererTest +1，两文件类级读数 12/27 可见）；其余来自 master 侧波 1 四路（MRB/FPT/PC2/XDH）合入的用例，本轮未跑「合流前 master」的隔离对照，未逐条溯源。本轮 `testShards` 首跑（读端回填后、两处集成红修复前）报 2 类红——即上述两处，与 §验收 面无关；修复后复跑 **5261/0/0/6**。
 
