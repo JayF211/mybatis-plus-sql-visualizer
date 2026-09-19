@@ -283,6 +283,23 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         }
     }
 
+    // ---------- T-McpAuditTrail T-MAT-05：历史页 MCP 徽标（与日志页同落点同协议） ----------
+
+    fun test二级条目_MCP来源_渲染徽标且与目标库角标共存() {
+        val e = sqlEntry("SELECT id FROM user WHERE id = 1", ms = 7L)
+            .copy(source = SqlSource.MCP, databaseName = "MySQL")
+        val meta = joinedText(renderSql(e).metaLine)
+        assertTrue("历史页元信息行应含 MCP 徽标: $meta", meta.contains("[MCP] "))
+        assertTrue("与目标库角标共存: $meta", meta.contains("[MySQL] "))
+        assertTrue("耗时同列展示: $meta", meta.contains("7ms"))
+    }
+
+    fun test二级条目_非MCP来源_不渲染徽标() {
+        val e = sqlEntry("SELECT 1", sourceFile = "UserMapper.java", sourceLine = 3, ms = 3L)
+        val meta = joinedText(renderSql(e).metaLine)
+        assertFalse("非 MCP 来源不应出现徽标: $meta", meta.contains("[MCP]"))
+    }
+
     // ---------- T-JdbcThreadBucket F3：历史页时间戳跟随设置（2026-09-15 移除硬编码 yyyy-MM-dd HH:mm:ss） ----------
 
     private val testTimestamp: Long = 1_700_000_000_000L

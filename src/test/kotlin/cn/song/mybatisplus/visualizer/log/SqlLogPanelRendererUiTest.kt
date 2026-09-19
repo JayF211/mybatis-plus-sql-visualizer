@@ -115,6 +115,35 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         assertFalse("无 databaseName 不应显示角标", meta.contains("[MySQL]"))
     }
 
+    fun testMCP徽标_来源MCP渲染到元信息行() {
+        // T-McpAuditTrail T-MAT-05：MCP 执行类工具落历史的条目带 [MCP] 徽标（目标库角标后、来源前）
+        val e = LogSqlEntry(
+            rawSql = "SELECT id FROM user WHERE id = 1",
+            restoredSql = "SELECT id FROM user WHERE id = 1",
+            params = emptyList(),
+            timestamp = 1_700_000_000_000L,
+            source = SqlSource.MCP,
+            databaseName = "MySQL",
+            executionTimeMs = 7L,
+        )
+        val meta = joinedText(render(e).metaLine)
+        assertTrue("元信息行应含 MCP 徽标: $meta", meta.contains("[MCP] "))
+        assertTrue("MCP 徽标与目标库角标共存: $meta", meta.contains("[MySQL] "))
+        assertTrue("耗时同列展示: $meta", meta.contains("7ms"))
+    }
+
+    fun testMCP徽标_非MCP来源不显示() {
+        val e = LogSqlEntry(
+            rawSql = "SELECT 1",
+            restoredSql = "SELECT 1",
+            params = emptyList(),
+            timestamp = 1_700_000_000_000L,
+            source = SqlSource.MYBATIS,
+        )
+        val meta = joinedText(render(e).metaLine)
+        assertFalse("非 MCP 来源不应显示 MCP 徽标: $meta", meta.contains("[MCP]"))
+    }
+
     fun test特殊字符SQL_原文保真() {
         // 片段通道无 HTML 解析面——< > & 原样绘制即安全（原通道需转义，此处断言不转义不破版）
         val r = render(entry("SELECT * FROM t WHERE a < 5 AND b > 3 AND c & d"))

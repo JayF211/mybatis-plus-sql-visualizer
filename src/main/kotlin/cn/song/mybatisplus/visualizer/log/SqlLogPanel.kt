@@ -1962,6 +1962,21 @@ internal fun formatDatabaseFragment(entry: LogSqlEntry, isSelected: Boolean): Pa
     return "[$db] " to SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
 }
 
+/**
+ * T-McpAuditTrail T-MAT-05：MCP 通道徽标——`source == MCP`（MCP 执行类工具跑过的语句）才显示，
+ * 其余来源返回 null 不显示（与目标库角标同规：未知即不占位，零噪音）。
+ *
+ * 落点与既有角标一致（时间/耗时/目标库之后、来源之前），协议同为
+ * `Pair<String, SimpleTextAttributes>?`——两页渲染器（[LogEntryListCellRenderer] 与历史页
+ * [HistoryCellRenderer]）共用本函数，避免「同条目两页显示不一致」。
+ * 读回侧来源由 [SqlSource.MCP] 的 pd 载荷回填（见 SqlLogParamCodec）。
+ */
+internal fun formatMcpFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
+    if (entry.source != SqlSource.MCP) return null
+    val color = if (isSelected) Color(0xFFFFFF) else Color(0x7B1FA2)
+    return "[MCP] " to SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
+}
+
 /** M56 T-M56-05：影响行数片段（DML 语义；null 未知不显示）。 */
 internal fun formatUpdateCountFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
     val u = entry.updateCount ?: return null
@@ -2088,6 +2103,8 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
             }
             // T-AgentDialectLoop：目标库角标（耗时后、来源前——与「这条 SQL 跑在哪」的阅读顺序一致）
             formatDatabaseFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
+            // T-McpAuditTrail T-MAT-05：MCP 徽标（同落点：目标库后、来源前；非 MCP 返回 null 不显示）
+            formatMcpFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
             formatSourceFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
             // 注：原「[⚡增强]」来源角标已按用户要求移除（增强为默认捕获通道，逐行标来源属噪音）
             formatUpdateCountFragment(entry, isSelected)?.let { (t, a) -> metaLine.append(t, a) }
