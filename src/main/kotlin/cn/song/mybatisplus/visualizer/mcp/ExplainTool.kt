@@ -33,9 +33,9 @@ class ExplainTool : McpToolsetSupport("mpsv_explain") {
         selectSql: String,
         dataSource: String = "",
         dialect: String = "",
-    ): String = audit("mpsv_explain") {
+    ): String = audit("mpsv_explain", executionArgsSummary(dataSource, dialect, selectSql)) {
         val target = resolveExplainTarget(requireProject(), selectSql, dataSource, dialect)
-        val raw = executeExplain(target)
+        val raw = executeExplain(target, selectSql)
         // notices 节尾附在方言行后（T-NoticeChannel / O-16）；空清单零追加——输出逐字节与
         // 现状一致（防回归硬门禁）。失败路径 notices 无从产生：executeExplain 直接 throwExpected，
         // RawResult 只在成功时存在，天然满足 DBX「出错语句的 notices 丢弃」口径。
@@ -109,8 +109,13 @@ class ExplainTool : McpToolsetSupport("mpsv_explain") {
         return ExplainTarget(project, ds, explainSql, dialectName)
     }
 
-    /** 4) headless 执行（同步、无 UI、密码未保存即失败）。挂起帧只持 target 单引用。 */
-    private suspend fun executeExplain(target: ExplainTarget): McpExplainFormatter.RawResult =
+    /** 4) headless 执行（同步、无 UI、密码未保存即失败）。挂起帧只持 target 单引用。
+     *
+     *  T-McpAuditTrail（T-MAT-01/02）：[selectSql] 为**原始**语句——执行链的成功/失败两条路径都会
+     *  经 [McpDbExecutor.executeQuery] 的 onExecuted 回调触发一次落历史，落的是本参数而非
+     *  [ExplainTarget.explainSql]（EXPLAIN 包装句首 token 为 EXPLAIN，落它会判 OTHER → 无类型染色）。
+     *  回调在 IO 线程同步执行，内部走既有入库链（面板刷新与写盘由 SqlLogManager 自管）。 */
+    private suspend fun executeExplain(target: ExplainTarget, selectSql: String): McpExplainFormatter.RawResult =
         withContext(Dispatchers.IO) {
             runCatching {
                 // T-ExecTimeoutGuard：设置项「执行超时」透传（0=不限；explain 单语句取每语句基础值）
@@ -118,6 +123,15 @@ class ExplainTool : McpToolsetSupport("mpsv_explain") {
                     target.project, target.ds, target.explainSql, McpExplainFormatter.MAX_ROWS,
                     timeoutSeconds = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
                         .state.executionTimeoutSeconds,
+                    onExecuted = { outcome ->
+                        recordMcpExecution(
+                            target.project,
+                            selectSql,
+                            outcome.dataSourceName,
+                            outcome.elapsedMs,
+                            outcome.errorText,
+                        )
+                    },
                 )
             }.getOrElse { e ->
                 // T-ErrorLocate T-EL-04：驱动错误消息携带位置信号（PG `Position: N` / `at line N`）时
