@@ -1,0 +1,93 @@
+package cn.song.mybatisplus.visualizer.mcp
+
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.File
+
+/**
+ * mcpserver 引用作用域守卫（T-McpToolset，verifyPlugin 三目标门禁的配套护栏）。
+ *
+ * 背景：`com.intellij.mcpserver.*` 来自平台可选插件（mcp-optional.xml 仅在 com.intellij.mcpServer
+ * 存在时加载，253+/262 内置；243 明确不支持）。verifyPlugin 对 243 目标按外部前缀豁免该包缺类
+ * （build.gradle.kts verifyPlugin.externalPrefixes，理由=optional 文件不加载则类永不可达）。
+ * 该豁免成立的前提是 **mcpserver 引用严格限定在 mcp 适配包内**——若未来任何非 mcp 代码
+ * （如面板/服务层）直接引用 mcpserver 类型，243 上就会真正走到缺类路径，豁免即从「诚实」
+ * 变成「掩盖」。本守卫把作用域钉死：
+ *  1. src/main/kotlin 中出现 `com.intellij.mcpserver` 的文件必须位于 `visualizer/mcp/` 包；
+ *  2. META-INF 下引用 mcpserver 的描述文件只允许 mcp-optional.xml（plugin.xml 主文件零引用，
+ *     主文件引用会让 243 在解析阶段就尝试加载适配类）。
+ * 扫描前剥离注释（BannedApiSourceScanTest 同款，注释里的历史记录不产生误报/漏报影响）。
+ */
+class McpScopeSourceScanTest {
+
+    private fun repoRoot(): File {
+        var dir = File(System.getProperty("user.dir")).absoluteFile
+        repeat(6) {
+            if (File(dir, "src/main/kotlin").isDirectory) return dir
+            dir = dir.parentFile ?: return@repeat
+        }
+        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
+    }
+
+    /** 剥离 block 注释与行注释（与 BannedApiSourceScanTest 同款）。 */
+    private fun stripComments(source: String): String =
+        source
+            .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
+            .lineSequence()
+            .joinToString("\n") { it.substringBefore("//") }
+
+    /**
+     * 剥离字符串字面量（T-McpToolset2 收口 fe11c97 合并回归）：设置页跳转经
+     * `Class.forName("com.intellij.mcpserver.settings.McpServerSettingsConfigurable")`
+     * 运行时反射定位平台 Configurable（McpConfigurable/PluginSettingsPanel，T-ShortcutSettings
+     * 设计如此）——字符串引用不是编译期类型引用（不会让 243 编译期解析缺类），未装环境
+     * 已走「不可用提示」兜底；守卫关心的是 import/类型位置的真引用，故字符串一律豁免。
+     */
+    private fun stripStrings(source: String): String =
+        source.replace(Regex("\"[^\"]*\""), "")
+
+    @Test
+    fun testMcpServerReferencesConfinedToMcpPackage() {
+        val offenders = repoRoot().resolve("src/main/kotlin").walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .filter { stripStrings(stripComments(it.readText())).contains("com.intellij.mcpserver") }
+            .filter { !(it.path.replace('\\', '/')).contains("/visualizer/mcp/") }
+            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') }
+            .toList()
+        assertTrue(
+            "src/main/kotlin 出现 mcp 包之外的 com.intellij.mcpserver 引用：$offenders。" +
+                "mcpserver 类型仅允许在 mcp/ 适配包内出现（243 目标经 externalPrefixes 豁免的前提" +
+                "=引用永不可达，出包即破坏该前提，见 McpScopeSourceScanTest KDoc）",
+            offenders.isEmpty(),
+        )
+    }
+
+    @Test
+    fun testMcpServerPluginXmlReferencesOnlyInOptionalFile() {
+        val offenders = repoRoot().resolve("src/main/resources/META-INF").walkTopDown()
+            .filter { it.isFile && it.extension == "xml" && it.name != "mcp-optional.xml" }
+            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') to stripXmlComments(it.readText()) }
+            .filter { (_, text) ->
+                // 禁两类：适配类名直接出现；小写包名 com.intellij.mcpserver（类包名，非插件 ID——
+                // 插件 ID 是 com.intellij.mcpServer 大写 S，optional <depends> 声明合法且必需）
+                text.contains("SqlVisualizerToolset") || text.contains("com.intellij.mcpserver")
+            }
+            .map { (path, _) -> path }
+            .toList()
+        assertTrue(
+            "META-INF 描述文件在 mcp-optional.xml 之外出现 mcpserver 类引用：$offenders。" +
+                "主 plugin.xml 引用 mcpserver 类型会让 243 在解析阶段尝试加载缺类（可选依赖必须" +
+                "整体留在 mcp-optional.xml，未装 MCP Server 的环境整文件不加载；<depends> 插件 ID " +
+                "声明 com.intellij.mcpServer 为合法机制不在此列）",
+            offenders.isEmpty(),
+        )
+    }
+
+    /** XML 注释剥离（`<!-- -->`）+ 行注释兜底——plugin.xml 的 depends 注释提到实现类名属文档性
+     *  记载，不构成解析期类引用；与 BannedApiSourceScanTest.stripComments 同理只可能漏报不误报。 */
+    private fun stripXmlComments(source: String): String =
+        source
+            .replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+            .lineSequence()
+            .joinToString("\n") { it.substringBefore("//") }
+}

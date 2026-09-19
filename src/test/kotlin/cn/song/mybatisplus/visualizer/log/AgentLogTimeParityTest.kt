@@ -41,17 +41,17 @@ class AgentLogTimeParityTest {
     private fun newCtx(): BridgeLineContext {
         val cfg = ParserConfig("Preparing:", "Parameters:", true, 20000)
         return BridgeLineContext(
-            MyBatisLogParser(LogSqlRestorer(), cfg.sqlPrefix(), cfg.paramPrefix(), cfg.mixedPrefix(), cfg.maxParseLength()),
-            HibernateLogParser(cfg.hibernateSqlPrefix(), cfg.hibernateParamPrefix(), cfg.mixedPrefix(), cfg.maxParseLength()),
-            JdbcTemplateLogParser(cfg.jdbcEnabled(), cfg.maxParseLength()),
+            MyBatisLogParser(cfg.sqlPrefix, cfg.paramPrefix, cfg.mixedPrefix, cfg.maxParseLength),
+            HibernateLogParser(cfg.hibernateSqlPrefix, cfg.hibernateParamPrefix, cfg.mixedPrefix, cfg.maxParseLength),
+            JdbcTemplateLogParser(cfg.jdbcEnabled, cfg.maxParseLength),
             { cfg },
-            cfg.hibernateEnabled(),
+            cfg.hibernateEnabled,
         )
     }
 
     /**
      * 一条端到端链路：喂控制台行（嗅探态）→ agent 事件过适配器 → [stampLogTime] 回填。
-     * 返回回填后的条目（[LogSqlEntry.logTimestamp()] 为 null 即未命中）。
+     * 返回回填后的条目（[LogSqlEntry.logTimestamp] 为 null 即未命中）。
      */
     private fun runChain(
         consoleLines: List<String>,
@@ -61,7 +61,7 @@ class AgentLogTimeParityTest {
         SqlCaptureGate.paused.set(true)
         LogTimeCorrelator.clear()
         val ctx = newCtx()
-        consoleLines.forEach { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null) {} }
+        consoleLines.forEach { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null, {}) }
         val event = AgentEvent(
             agentSql,
             agentCapturedAt,
@@ -74,18 +74,18 @@ class AgentLogTimeParityTest {
             null,
             agentParams,
             "main",
+            null,
         )
         val entry = AgentEventAdapter.toEntry(event)
         return LogSqlModelsKt.stampLogTime(entry) ?: entry
     }
-
     private fun assertHit(entry: LogSqlEntry, label: String) {
-        assertEquals("$label：应与日志行时间一致", logLineMillis, entry.logTimestamp())
+        assertEquals("$label：应与日志行时间一致", logLineMillis, entry.logTimestamp)
     }
 
     private fun assertMissKeepsCaptureTime(entry: LogSqlEntry, label: String) {
-        assertNull("$label：未命中时 logTimestamp 保持 null（显示回落捕获时间）", entry.logTimestamp())
-        assertEquals("$label：回落值是 agent 采集时刻（execute 开始）", agentCapturedAt, entry.timestamp())
+        assertNull("$label：未命中时 logTimestamp 保持 null（显示回落捕获时间）", entry.logTimestamp)
+        assertEquals("$label：回落值是 agent 采集时刻（execute 开始）", agentCapturedAt, entry.timestamp)
     }
 
     // ---------- 命中面：键不再依赖参数还原口径 ----------
@@ -183,7 +183,7 @@ class AgentLogTimeParityTest {
             listOf(Triple(1, "1", "Long")),
         )
         assertHit(entry, "参数个数不匹配")
-        assertEquals("少捕参数时 agent 侧保持原样不还原（防错位）", "SELECT * FROM t WHERE a = ? AND b = ?", entry.restoredSql())
+        assertEquals("少捕参数时 agent 侧保持原样不还原（防错位）", "SELECT * FROM t WHERE a = ? AND b = ?", entry.restoredSql)
     }
 
     // ---------- 同键多次执行：签名判别 + FIFO ----------
@@ -200,7 +200,7 @@ class AgentLogTimeParityTest {
             "$first [main] ==> Parameters: 1(Long)",
             "$second [main] ==>  Preparing: SELECT * FROM user WHERE id = ?",
             "$second [main] ==> Parameters: 2(Long)",
-        ).forEach { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null) {} }
+        ).forEach { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null, {}) }
 
         fun fire(id: String) = LogSqlModelsKt.stampLogTime(
             AgentEventAdapter.toEntry(
@@ -208,13 +208,13 @@ class AgentLogTimeParityTest {
                     "SELECT * FROM user WHERE id = ?", agentCapturedAt, 1L,
                     null, null, null, 0,
                     null, null,
-                    listOf(Triple(1, id, "Long")), "main",
+                    listOf(Triple(1, id, "Long")), "main", null,
                 ),
             ),
         ) ?: error("应命中")
 
-        assertEquals("参数 2 命中第二条日志行", sdf.parse(second).time, fire("2").logTimestamp())
-        assertEquals("参数 1 命中第一条日志行", sdf.parse(first).time, fire("1").logTimestamp())
+        assertEquals("参数 2 命中第二条日志行", sdf.parse(second).time, fire("2").logTimestamp)
+        assertEquals("参数 1 命中第一条日志行", sdf.parse(first).time, fire("1").logTimestamp)
     }
 
     @Test
@@ -229,13 +229,13 @@ class AgentLogTimeParityTest {
             "$first [main] ==> Parameters: 1(Long)",
             "$second [main] ==>  Preparing: SELECT * FROM user WHERE id = ?",
             "$second [main] ==> Parameters: 1(Long)",
-        ).forEach { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null) {} }
+        ).forEach { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null, {}) }
 
         val e1 = LogSqlModelsKt.stampLogTime(entryOf("SELECT * FROM user WHERE id = ?", "1"))
         val e2 = LogSqlModelsKt.stampLogTime(entryOf("SELECT * FROM user WHERE id = ?", "1"))
         assertNotNull(e1); assertNotNull(e2)
-        assertEquals("先到的事件配先到的日志行（旧实现同键覆盖会丢第一条）", sdf.parse(first).time, e1!!.logTimestamp())
-        assertEquals(sdf.parse(second).time, e2!!.logTimestamp())
+        assertEquals("先到的事件配先到的日志行（旧实现同键覆盖会丢第一条）", sdf.parse(first).time, e1!!.logTimestamp)
+        assertEquals(sdf.parse(second).time, e2!!.logTimestamp)
     }
 
     private fun entryOf(sql: String, param: String) = AgentEventAdapter.toEntry(
@@ -243,9 +243,25 @@ class AgentLogTimeParityTest {
             sql, agentCapturedAt, 1L,
             null, null, null, 0,
             null, null,
-            listOf(Triple(1, param, "Long")), "main",
+            listOf(Triple(1, param, "Long")), "main", null,
         ),
     )
+
+    @Test
+    fun `超长参数截断后_仍命中日志行时间`() {
+        // T-PS4-05：>256 字符参数两侧共用 logTimeParamSignature 截断——真实控制台链 put 与
+        // agent take 签名一致，仍精确配对（不退队首不落空）
+        val longValue = "x".repeat(LogSqlModelsKt.PARAM_SIGNATURE_MAX_CHARS + 100)
+        val entry = runChain(
+            listOf(
+                "$logLineTime [main] ==>  Preparing: SELECT * FROM t WHERE blob = ?",
+                "$logLineTime [main] ==> Parameters: $longValue(String)",
+            ),
+            "SELECT * FROM t WHERE blob = ?",
+            listOf(Triple(1, longValue, "String")),
+        )
+        assertHit(entry, "超长参数截断")
+    }
 
     // ---------- 未命中面：占位符版原文两侧不同的已知残余（回落语义受 L1 保护） ----------
 

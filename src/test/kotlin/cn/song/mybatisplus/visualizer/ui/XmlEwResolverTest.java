@@ -59,7 +59,10 @@ public class XmlEwResolverTest extends BasePlatformTestCase {
         for (Map.Entry<String, Map<String, String>> e : resolved.entrySet()) {
             ewBindings.put(e.getKey(), new MockObject(new LinkedHashMap<>(e.getValue())));
         }
-        XmlPreviewModel model = XmlPreviewModel.from(statement, parsed.errors(), Set.of(), Map.of(), ewBindings);
+        // Kotlin 具名实参 from(statement, errors, extraBindings = ewBindings) 的 Java 等价：
+        // extraParamProps=空、staticFieldValues=空、paramQuotes=空、paramTypes=空（余下按生产默认）
+        XmlPreviewModel model = XmlPreviewModel.from(
+                statement, parsed.errors(), Set.of(), Map.of(), ewBindings, Map.of());
         return XmlPreviewService.INSTANCE.toResult(model, warnings);
     }
 

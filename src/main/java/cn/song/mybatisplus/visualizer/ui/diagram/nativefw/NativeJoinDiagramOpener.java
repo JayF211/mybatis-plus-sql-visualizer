@@ -139,8 +139,13 @@ public final class NativeJoinDiagramOpener {
         FileEditorManager.getInstance(project).openFile(umlFile, true);
     }
 
-    /** 释放之前创建的原生编辑器时，定位内部 DiagramBuilder（通过反射读 UmlFileEditorImpl 持有）。 */
-    static DiagramBuilder builderOf(Object editor) {
+    /**
+     * 释放之前创建的原生编辑器时，定位内部 DiagramBuilder（通过反射读 UmlFileEditorImpl 持有）。
+     *
+     * 移植注记：master 侧为 {@code internal}（KOTLIN_TO_JAVA_RULES §0.1：internal → public），
+     * 跨包测试 HeavyNativeDatabaseDiagramJoinChainTest 需按公开形态调用。
+     */
+    public static DiagramBuilder builderOf(Object editor) {
         if (editor == null) return null;
         try {
             java.lang.reflect.Method method = editor.getClass().getMethod("getModelBuilder");

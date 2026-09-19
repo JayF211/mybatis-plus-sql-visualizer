@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertTrue
+import org.junit.Test
 import javax.swing.JComponent
 import javax.swing.JList
 
@@ -96,6 +97,28 @@ class SqlLogListFreezeGuardTest : BasePlatformTestCase() {
             }
         } finally {
             com.intellij.openapi.util.Disposer.dispose(panel)
+        }
+    }
+
+    fun testSpeedSearch匹配高亮锚点_主列表与历史二级渲染器() {
+        // T-UiNative f65d9ae：speed search 的匹配片段高亮是渲染器职责
+        //（SpeedSearchUtil.applySpeedSearchHighlighting 施加在自定义渲染的 meta 行与 SQL 行上；
+        // pitfall-speedsearch-highlight-renderer：setDynamicSearchMatchHighlighting 并不存在）。
+        // 面板新增渲染路径（列/模式）时若漏施高亮，搜索命中无标记且难察觉——以「两面板渲染器
+        // 文件各含 ≥2 处施加点」为结构锚点锁住（当前各 2 处：meta 行 + SQL 行）。
+        val anchors = mapOf(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt" to "SQL 日志主列表",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/HistorySqlLogPanel.kt" to "历史二级 SQL 列表",
+        )
+        for ((path, label) in anchors) {
+            val f = java.io.File(path)
+            assertTrue("找不到源文件 $path（工作目录=${java.io.File(".").absolutePath}）", f.isFile)
+            val count = Regex("SpeedSearchUtil\\.applySpeedSearchHighlighting").findAll(f.readText()).count()
+            assertTrue(
+                "$label 渲染器的 speed search 高亮施加点不足（$count < 2）——新增渲染路径须对 meta 行与 SQL 行" +
+                    "各施 SpeedSearchUtil.applySpeedSearchHighlighting，否则搜索命中无高亮（f65d9ae 教训）",
+                count >= 2,
+            )
         }
     }
 }

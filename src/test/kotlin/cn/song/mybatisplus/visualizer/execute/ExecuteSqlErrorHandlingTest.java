@@ -39,7 +39,9 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
                 null,
                 null,
                 msg -> errors.add(msg),
-                success -> callbackResult[0] = success
+                success -> callbackResult[0] = success,
+                // T-ErrorLocate：富错误通道（本用例只验证字符串通道，富通道不传）
+                null
         );
 
         assertTrue("onError should be called when plugin unavailable", !errors.isEmpty());
@@ -59,6 +61,7 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
                 null,
                 null,
                 null,
+                null,
                 null
         );
     }
@@ -75,7 +78,9 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
                 null,
                 null,
                 msg -> errors.add(msg),
-                success -> callbackResult[0] = success
+                success -> callbackResult[0] = success,
+                // T-ErrorLocate：富错误通道（本用例只验证字符串通道，富通道不传）
+                null
         );
 
         assertTrue("onError should be called when runners empty", !errors.isEmpty());
@@ -153,7 +158,7 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
     @Test
     public void testExecutePreparedNotReadyReturnsFalse() throws Exception {
         DataSourceSelector.clearPrepared();
-        boolean executed = DataSourceSelector.executePrepared(getProject(), null, null);
+        boolean executed = DataSourceSelector.executePrepared(getProject(), null, null, null);
         assertTrue("executePrepared should return false when console not prepared", !executed);
     }
 
@@ -165,6 +170,7 @@ public class ExecuteSqlErrorHandlingTest extends BasePlatformTestCase {
         boolean executed = DataSourceSelector.executePrepared(
                 getProject(),
                 c -> resultsReadyFired[0] = true,
+                null,
                 null
         );
         assertTrue("executePrepared should return false when console not prepared", !executed);

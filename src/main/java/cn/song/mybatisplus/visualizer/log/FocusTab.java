@@ -22,6 +22,11 @@ public sealed interface FocusTab {
     /** 页签展示名。 */
     String label();
 
+    /** Kotlin {@code abstract val label} 的 JVM 访问器等价入口（Kotlin 调用方按属性名读取）。 */
+    default String getLabel() {
+        return label();
+    }
+
     /** 调用方方法聚焦（行号区间含两端；sourceFile 已规约化——正斜杠、段对齐比较）。 */
     record Method(
         /** 规约化后的调用方源文件相对路径。 */

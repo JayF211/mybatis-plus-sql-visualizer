@@ -4,6 +4,8 @@ import cn.song.mybatisplus.visualizer.model.JoinType
 import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
 import com.intellij.openapi.project.Project
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Test
 
@@ -74,9 +76,12 @@ class DiagramSchemaEnricherTest {
 
     @Test
     fun dbTableCommentOverridesEntityComment() {
+        val base = sampleModel()
         val model = DiagramModel(
-            sampleModel().entities.map { EntityNode(it.alias, it.tableName, it.columns, it.isMain, it.joinType, "实体类注释(${it.tableName})") },
-            sampleModel().relationships,
+            base.entities.map {
+                EntityNode(it.alias, it.tableName, it.columns, it.isMain, it.joinType, "实体类注释(${it.tableName})")
+            },
+            base.relationships,
         )
         val enriched = DiagramSchemaEnricher.applyTableMeta(model) { tableName ->
             if (tableName == "car_device_info") {
@@ -91,9 +96,10 @@ class DiagramSchemaEnricherTest {
 
     @Test
     fun blankDbTableCommentFallsBackToEntityComment() {
+        val base = sampleModel()
         val model = DiagramModel(
-            sampleModel().entities.map { EntityNode(it.alias, it.tableName, it.columns, it.isMain, it.joinType, "实体类注释") },
-            sampleModel().relationships,
+            base.entities.map { EntityNode(it.alias, it.tableName, it.columns, it.isMain, it.joinType, "实体类注释") },
+            base.relationships,
         )
         // 数据库表存在但没写 COMMENT（comment=null），列元数据照常富化
         val enriched = DiagramSchemaEnricher.applyTableMeta(model) {
@@ -114,5 +120,85 @@ class DiagramSchemaEnricherTest {
         assertEquals("库表注释", enriched.entities[0].tableComment)
         assertEquals("INT", enriched.entities[0].columns[0].type)
         assertEquals("主键", enriched.entities[0].columns[0].comment)
+    }
+
+    // ---- T-DbSchemaCompletion 同批：实体列无注释时的 DB 回填（用户实测「JOIN 图缺字段注释」）----
+    // 场景：MPJ demo 的 UserDO 映射 user，字段一个注释都没写（无 javadoc/无注解），
+    // 而库里每个列都有 COMMENT——IDEA 原生「显示图」直接读库所以有注释，我们的 JOIN 图列注释
+    // 来自实体 + 本富化，实体侧为空时就只剩数据源这一路。ObjectKind 静默早退期间这路是死的，
+    // 于是 JOIN 图整片字段注释为空（类型串也停在实体推断的大写形态）。
+
+    @Test
+    fun dbCommentFillsEntityColumnsWithoutComment() {
+        val model = sampleModel()
+        val enriched = DiagramSchemaEnricher.applyTableMeta(model) { tableName ->
+            if (tableName == "car_device_info") {
+                DatabaseSchemaResolver.TableMeta(
+                    "设施信息表",
+                    mapOf(
+                        "id" to DatabaseSchemaResolver.ColumnMeta("主键", "int(11)"),
+                        "device_name" to DatabaseSchemaResolver.ColumnMeta("设施名称", "varchar(64)"),
+                    ),
+                )
+            } else {
+                DatabaseSchemaResolver.TableMeta(null, emptyMap())
+            }
+        }
+        val main = enriched.entities[0]
+        val deviceName = main.columns.first { it.name == "device_name" }
+        assertEquals("实体列没有注释时由 DB COMMENT 回填（JOIN 图字段行补上 /* 设施名称 */）", "设施名称", deviceName.comment)
+        assertEquals("类型同时升级为 DB 真实串", "varchar(64)", deviceName.type)
+        assertEquals("表头注释同样由 DB COMMENT 补上", "设施信息表", main.tableComment)
+    }
+
+    // ---- T-DgmFullCols：数据源独有列补进节点（实体过时/未映射列，观感对齐原生「显示图」）----
+
+    @Test
+    fun dbOnlyColumnsAppendedAfterEntityColumns() {
+        val model = sampleModel()
+        val enriched = DiagramSchemaEnricher.applyTableMeta(model) { tableName ->
+            if (tableName == "car_device_info") {
+                DatabaseSchemaResolver.TableMeta(
+                    null,
+                    linkedMapOf(
+                        // 实体已有（顺序按实体）→ 只覆盖注释/类型
+                        "id" to DatabaseSchemaResolver.ColumnMeta("主键", "int(11)"),
+                        // 实体未映射 → 追加在后，按库返回顺序
+                        "create_time" to DatabaseSchemaResolver.ColumnMeta("创建时间", "datetime"),
+                        "deleted" to DatabaseSchemaResolver.ColumnMeta(null, "tinyint(1)"),
+                    ),
+                )
+            } else {
+                DatabaseSchemaResolver.TableMeta(null, emptyMap())
+            }
+        }
+        val main = enriched.entities[0]
+        assertEquals(
+            "实体列在前、库独有列按库顺序追加",
+            listOf("id", "device_name", "create_time", "deleted"),
+            main.columns.map { it.name },
+        )
+        val deleted = main.columns.last()
+        assertEquals("库独有列带类型串", "tinyint(1)", deleted.type)
+        assertNull("库独有列无 COMMENT 时注释为空", deleted.comment)
+        assertEquals("库独有列没有键信息 → 不标主键（一期不做）", false, deleted.isPk)
+    }
+
+    @Test
+    fun columnCapKeepsEntityColumnsWhenDbExtrasExceedLimit() {
+        // 实体 49 列 + 库独有 2 列 = 51 > 50 → 放弃追加（宁少不撑爆画布）
+        val entityColumns = (1..49).map { ColumnEntry("c$it", "INT", it == 1) }
+        val model = DiagramModel(
+            listOf(EntityNode("t", "wide", entityColumns, true)),
+            emptyList(),
+        )
+        val dbColumns = linkedMapOf<String, DatabaseSchemaResolver.ColumnMeta>()
+        (1..49).forEach { dbColumns["c$it"] = DatabaseSchemaResolver.ColumnMeta(null, "int(11)") }
+        dbColumns["extra_a"] = DatabaseSchemaResolver.ColumnMeta(null, "int(11)")
+        dbColumns["extra_b"] = DatabaseSchemaResolver.ColumnMeta(null, "int(11)")
+
+        val enriched = DiagramSchemaEnricher.applyTableMeta(model) { DatabaseSchemaResolver.TableMeta(null, dbColumns) }
+        assertEquals("超上限时不追加，实体列原样", 49, enriched.entities[0].columns.size)
+        assertFalse("库独有列未混入", enriched.entities[0].columns.any { it.name.startsWith("extra_") })
     }
 }

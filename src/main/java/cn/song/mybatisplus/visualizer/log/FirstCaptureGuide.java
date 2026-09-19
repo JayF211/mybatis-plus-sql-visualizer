@@ -35,11 +35,18 @@ public final class FirstCaptureGuide {
 
     private static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
 
-    /** 会话级一次性记忆（volatile——入列回调可能来自控制台输出线程）。 */
-    private static volatile boolean alreadyGuided = false;
+    /** 会话级一次性记忆（volatile——入列回调可能来自控制台输出线程）。
+     *  字段名刻意避开 {@code alreadyGuided}：Kotlin 调用方按属性名读取时优先解析同名字段，
+     *  字段私有即报「不可访问」（master 是 {@code private set} 属性，外部只读，故走 getter）。 */
+    private static volatile boolean alreadyGuidedState = false;
 
     public static boolean isAlreadyGuided() {
-        return alreadyGuided;
+        return alreadyGuidedState;
+    }
+
+    /** Kotlin {@code var alreadyGuided}（{@code private set}）的 JVM 访问器等价入口。 */
+    public static boolean getAlreadyGuided() {
+        return alreadyGuidedState;
     }
 
     /** 每次成功入队回调（SqlLogManager 挂载；headless 下恒静默）。 */
@@ -47,8 +54,8 @@ public final class FirstCaptureGuide {
         boolean headless = ApplicationManager.getApplication() != null
             && ApplicationManager.getApplication().isUnitTestMode();
         // O(1) size 访问器——本回调在控制台流式灌入热路径上，禁用 snapshot() 全量拷贝
-        if (!shouldGuide(alreadyGuided, buffer.size(), headless)) return;
-        alreadyGuided = true;
+        if (!shouldGuide(alreadyGuidedState, buffer.size(), headless)) return;
+        alreadyGuidedState = true;
         if (project.isDisposed()) return;
         ApplicationManager.getApplication().invokeLater(() -> {
             if (project.isDisposed()) return;
@@ -87,6 +94,6 @@ public final class FirstCaptureGuide {
 
     /** 测试重置（会话记忆清零）。 */
     public static void resetForTest() {
-        alreadyGuided = false;
+        alreadyGuidedState = false;
     }
 }

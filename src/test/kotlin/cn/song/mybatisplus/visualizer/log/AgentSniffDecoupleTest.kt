@@ -2,7 +2,6 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import org.junit.Assert.assertEquals
 import java.text.SimpleDateFormat
 
 /**
@@ -44,18 +43,18 @@ class AgentSniffDecoupleTest : BasePlatformTestCase() {
     private fun feedPreparedPair() {
         val cfg = ParserConfig("Preparing:", "Parameters:", true, 20000)
         val ctx = BridgeLineContext(
-            MyBatisLogParser(LogSqlRestorer(), cfg.sqlPrefix(), cfg.paramPrefix(), cfg.mixedPrefix(), cfg.maxParseLength()),
-            HibernateLogParser(cfg.hibernateSqlPrefix(), cfg.hibernateParamPrefix(), cfg.mixedPrefix(), cfg.maxParseLength()),
-            JdbcTemplateLogParser(cfg.jdbcEnabled(), cfg.maxParseLength()),
+            MyBatisLogParser(cfg.sqlPrefix, cfg.paramPrefix, cfg.mixedPrefix, cfg.maxParseLength),
+            HibernateLogParser(cfg.hibernateSqlPrefix, cfg.hibernateParamPrefix, cfg.mixedPrefix, cfg.maxParseLength),
+            JdbcTemplateLogParser(cfg.jdbcEnabled, cfg.maxParseLength),
             { cfg },
-            cfg.hibernateEnabled(),
+            cfg.hibernateEnabled,
         )
         val ts = sdf.format(java.util.Date(System.currentTimeMillis() - 500))
         SqlCaptureGate.paused.set(true)
         listOf(
             "$ts [main] ==>  Preparing: SELECT * FROM user WHERE id = ?",
             "$ts [main] ==>  Parameters: 1(Long)",
-        ).forEach { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null) {} }
+        ).forEach { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null, {}) }
     }
 
     fun test时间显示关闭时嗅探仍采集() {

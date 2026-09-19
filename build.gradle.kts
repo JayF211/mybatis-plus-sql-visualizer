@@ -94,6 +94,13 @@ dependencies {
     testImplementation(libs.ojdbc11)
     // T-DialectLabMatrix：配方一致性守卫的 YAML 解析（仅测试 classpath）
     testImplementation(libs.snakeyaml)
+    // T-TailSweep2 T-FS-01：真 MyBatis 引擎语义对照测试集（真引擎 jar 仅进**测试 classpath**）。
+    // 来源：真引擎 jar 经 `testImplementation(libs.mp.core)`（com.baomidou:mybatis-plus-core:3.5.17）
+    // 传递带入 `org.mybatis:mybatis:3.5.19`，**无需显式声明**——实测
+    // `./gradlew dependencies --configuration testRuntimeClasspath` 可复核（该配置上无直接依赖项）。
+    // 红线边界：零 mybatis 依赖仅约束 `implementation`（生产依赖图不变，生产仍只有 jsqlparser）。
+    // 真引擎类一律经隔离 classloader 反射驱动，测试源码零 `org.apache.ibatis` import
+    // （见 xml/fidelity/RealEngineDriver.kt）；传递版本由对照集内的版本钉住断言防静默漂移。
 
     // P-立项-05：jackson 版本约束——testcontainers 传递的 jackson-annotations 2.10.3 缺失
     // JsonProperty.namespace()（2.11+ 才有），在测试 classpath 上遮蔽 IDEA 平台所用的新版

@@ -785,4 +785,113 @@ class JpaEntityResolverTest : BasePlatformTestCase() {
             )
         }
     }
+
+    // ------------------------------------------------------------------
+    // T-HqlInhCols：继承链健壮性（多级抽象父类 / 隔代 @Transient / @Entity(name) 别名）
+    // ------------------------------------------------------------------
+
+    fun testMultiLevelAbstractSuperclassChain() {
+        // Leaf → abstract Mid → abstract Base(@MappedSuperclass)：字段沿链全收，父类在前
+        withTableConfig() {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntityByName(
+                "LeafEntity",
+                """
+                @jakarta.persistence.MappedSuperclass
+                public abstract class BasePo {
+                    @jakarta.persistence.Id
+                    private Long id;
+
+                    @jakarta.persistence.Column(name = "create_time")
+                    private String createTime;
+                }
+
+                @jakarta.persistence.MappedSuperclass
+                public abstract class AuditablePo extends BasePo {
+                    @jakarta.persistence.Column(name = "audit_tag")
+                    private String auditTag;
+                }
+
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_leaf")
+                public class LeafEntity extends AuditablePo {
+                    @jakarta.persistence.Column(name = "leaf_name")
+                    private String leafName;
+                }
+                """.trimIndent(),
+            )
+            val table = JpaEntityResolver().resolve(clazz)
+            assertEquals(
+                listOf("id", "create_time", "audit_tag", "leaf_name"),
+                table.allColumnNames,
+            )
+            assertTrue("隔代 id 应为主键", table.columnByField("id")?.isId == true)
+        }
+    }
+
+    fun testAbstractSuperclassTransientExcludedAcrossGenerations() {
+        // 隔代 @Transient：祖父类 @Transient 字段在孙类同样排除
+        withTableConfig() {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntityByName(
+                "GrandEntity",
+                """
+                @jakarta.persistence.MappedSuperclass
+                public abstract class GrandPo {
+                    @jakarta.persistence.Id
+                    private Long id;
+
+                    @jakarta.persistence.Transient
+                    private String grandTemp;
+                }
+
+                @jakarta.persistence.MappedSuperclass
+                public abstract class MidPo extends GrandPo {
+                    @jakarta.persistence.Column(name = "mid_col")
+                    private String midCol;
+                }
+
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_grand")
+                public class GrandEntity extends MidPo {
+                    private String leafCol;
+                }
+                """.trimIndent(),
+            )
+            val table = JpaEntityResolver().resolve(clazz)
+            assertEquals(listOf("id", "mid_col", "leaf_col"), table.allColumnNames)
+            assertNull("隔代 @Transient 应排除", table.columnByField("grandTemp"))
+        }
+    }
+
+    fun testEntityNameAlias() {
+        // @Entity(name=...) 实体别名读取（T-HqlInhCols entityNameOf）
+        withTableConfig() {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntityByName(
+                "UserEntity",
+                """
+                @jakarta.persistence.Entity(name = "UserInfo")
+                @jakarta.persistence.Table(name = "t_user")
+                public class UserEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+                }
+                """.trimIndent(),
+            )
+            assertEquals("UserInfo", JpaMetadataReader.entityNameOf(clazz))
+            val noAlias = resolveEntityByName(
+                "PlainEntity",
+                """
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_plain")
+                public class PlainEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+                }
+                """.trimIndent(),
+            )
+            assertNull("未指定 name 时应为 null", JpaMetadataReader.entityNameOf(noAlias))
+        }
+    }
 }

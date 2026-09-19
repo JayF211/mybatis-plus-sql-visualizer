@@ -40,9 +40,12 @@ class SqlPreviewServiceConfigTest : BasePlatformTestCase() {
 
     fun testDialectConfigPaginationRendersByDialect() {
         // 配置方言 PostgreSQL → last("limit 5, 10") 渲染为 PG 语法（LIMIT 10 OFFSET 5）
+        // T-DialectAutoInfer：测试须走手动模式（dialectAuto 默认 true 会走推断链无视手动值）
         val settings = PluginSettings.getInstance()
         val old = settings.state.dialect
+        val oldAuto = settings.state.dialectAuto
         settings.state.dialect = "PostgreSQL"
+        settings.state.dialectAuto = false
         try {
             myFixture.configureByText(
                 "Demo.java",
@@ -66,6 +69,7 @@ class SqlPreviewServiceConfigTest : BasePlatformTestCase() {
             assertTrue("不应使用 MySQL 写法: ${result.sql}", !result.sql.contains("LIMIT 5, 10"))
         } finally {
             settings.state.dialect = old
+            settings.state.dialectAuto = oldAuto
         }
     }
 
@@ -333,7 +337,11 @@ class SqlPreviewServiceConfigTest : BasePlatformTestCase() {
         myFixture.configureByText("Entity.java", "public class E { private Long id; }")
         val entityFile = myFixture.file
         val wrapper = cn.song.mybatisplus.visualizer.psi.LocatedWrapper(
-            cn.song.mybatisplus.visualizer.model.WrapperChain(cn.song.mybatisplus.visualizer.model.WrapperType.LAMBDA_QUERY, "E", emptyList(), null, false, false, false, false, null),
+            cn.song.mybatisplus.visualizer.model.WrapperChain(
+                cn.song.mybatisplus.visualizer.model.WrapperType.LAMBDA_QUERY,
+                "E",
+                emptyList(),
+            ),
             null,
             entityFile,
         )
@@ -346,7 +354,11 @@ class SqlPreviewServiceConfigTest : BasePlatformTestCase() {
         assertFalse("实体文件变更后应失效", wrapper.entityFileValid())
         // 无实体文件（文本兜底）恒有效
         val noFile = cn.song.mybatisplus.visualizer.psi.LocatedWrapper(
-            cn.song.mybatisplus.visualizer.model.WrapperChain(cn.song.mybatisplus.visualizer.model.WrapperType.LAMBDA_QUERY, "E", emptyList(), null, false, false, false, false, null),
+            cn.song.mybatisplus.visualizer.model.WrapperChain(
+                cn.song.mybatisplus.visualizer.model.WrapperType.LAMBDA_QUERY,
+                "E",
+                emptyList(),
+            ),
             null,
         )
         assertTrue("无实体类（文本兜底）恒有效", noFile.entityFileValid())

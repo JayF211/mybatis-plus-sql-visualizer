@@ -3,16 +3,15 @@ package cn.song.mybatisplus.visualizer.feedback
 import com.intellij.openapi.diagnostic.IdeaLoggingEvent
 import com.intellij.openapi.diagnostic.SubmittedReportInfo
 import com.intellij.util.Consumer
-import java.util.concurrent.Delayed
-import java.util.concurrent.ScheduledExecutorService
-import java.util.concurrent.ScheduledFuture
-import java.util.concurrent.TimeUnit
-import java.util.function.Predicate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.Delayed
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 /**
  * T-ErrReport-04：errorHandler EP 提交器编排单测（seam 注入，无 EDT/平台依赖）。
@@ -82,19 +81,18 @@ class IdeErrorReportSubmitterTest {
         }
     }
 
-    /** k2j 互操作适配：clock 以 SAM 构造器显式转 LongSupplier（函数变量不自动 SAM 转换）。 */
     private fun submitterWith(scheduler: FakeScheduler = FakeScheduler(), clock: () -> Long = { 0L }): IdeErrorReportSubmitter =
         IdeErrorReportSubmitter().apply {
-            dedupeGate = Predicate { false }
+            dedupeGate = { false }
             this.scheduler = scheduler
-            this.clock = java.util.function.LongSupplier(clock)
+            this.clock = clock
         }
 
     @Test
     fun `无事件返回false且不弹框`() {
         val submitter = submitterWith()
         var flowCalled = false
-        submitter.openReportFlow = IdeErrorReportSubmitter.OpenReportFlow { _, _, _, _, _ -> flowCalled = true }
+        submitter.openReportFlow = { _, _, _, _, _ -> flowCalled = true }
         assertFalse(submitter.submit(emptyArray(), null, javax.swing.JPanel(), Consumer { }))
         assertFalse(flowCalled)
     }
@@ -103,8 +101,8 @@ class IdeErrorReportSubmitterTest {
     fun `指纹命中去重_直接DUPLICATE回调且不弹框`() {
         val submitter = submitterWith()
         var flowCalled = false
-        submitter.openReportFlow = IdeErrorReportSubmitter.OpenReportFlow { _, _, _, _, _ -> flowCalled = true }
-        submitter.dedupeGate = Predicate { true }
+        submitter.openReportFlow = { _, _, _, _, _ -> flowCalled = true }
+        submitter.dedupeGate = { true }
         var received: SubmittedReportInfo? = null
         val accepted = submitter.submit(arrayOf(event()), null, javax.swing.JPanel(), Consumer { received = it })
         assertTrue(accepted)
@@ -119,7 +117,7 @@ class IdeErrorReportSubmitterTest {
         var capturedStack: String? = null
         var capturedFingerprints: List<String>? = null
         var capturedBatch: List<BatchSubmitter.BatchItem>? = null
-        submitter.openReportFlow = IdeErrorReportSubmitter.OpenReportFlow { prefill, stackText, fingerprints, batch, _ ->
+        submitter.openReportFlow = { prefill, stackText, fingerprints, batch, _ ->
             capturedPrefill = prefill
             capturedStack = stackText
             capturedFingerprints = fingerprints
@@ -144,7 +142,7 @@ class IdeErrorReportSubmitterTest {
         var capturedBatch: List<BatchSubmitter.BatchItem>? = null
         var capturedPrefill: ErrorReportComposer.Prefill? = null
         var composite: Consumer<in SubmittedReportInfo>? = null
-        submitter.openReportFlow = IdeErrorReportSubmitter.OpenReportFlow { prefill, _, _, batch, consumers ->
+        submitter.openReportFlow = { prefill, _, _, batch, consumers ->
             flowCount++
             capturedPrefill = prefill
             capturedBatch = batch
@@ -180,7 +178,7 @@ class IdeErrorReportSubmitterTest {
     fun `同波内指纹命中条目被剔除_其余照常合并`() {
         val submitter = submitterWith()
         val dedupFingerprint = ErrorFingerprint.of(throwable.javaClass.name, throwable.stackTraceToString())
-        submitter.dedupeGate = Predicate { it == dedupFingerprint }
+        submitter.dedupeGate = { it == dedupFingerprint }
         val other = RuntimeException("other")
             .apply { stackTrace = arrayOf(StackTraceElement("cn.song.mybatisplus.visualizer.log.Baz", "qux", "Baz.kt", 3)) }
         var dupReceived: SubmittedReportInfo? = null
@@ -188,7 +186,7 @@ class IdeErrorReportSubmitterTest {
         var freshReceived: SubmittedReportInfo? = null
         submitter.submit(arrayOf(IdeaLoggingEvent("other", other)), null, javax.swing.JPanel(), Consumer { freshReceived = it })
         var capturedBatch: List<BatchSubmitter.BatchItem>? = null
-        submitter.openReportFlow = IdeErrorReportSubmitter.OpenReportFlow { _, _, _, batch, _ -> capturedBatch = batch }
+        submitter.openReportFlow = { _, _, _, batch, _ -> capturedBatch = batch }
         submitter.flush()
         assertEquals(1, capturedBatch?.size)
         assertEquals("other", capturedBatch?.single()?.message)
@@ -199,11 +197,11 @@ class IdeErrorReportSubmitterTest {
     @Test
     fun `多事件调用中部分去重_剔除后余量照常入队`() {
         val submitter = submitterWith()
-        submitter.dedupeGate = Predicate { it == ErrorFingerprint.of(throwable.javaClass.name, throwable.stackTraceToString()) }
+        submitter.dedupeGate = { fingerprint -> fingerprint == ErrorFingerprint.of(throwable.javaClass.name, throwable.stackTraceToString()) }
         val other = RuntimeException("other")
             .apply { stackTrace = arrayOf(StackTraceElement("cn.song.mybatisplus.visualizer.log.Baz", "qux", "Baz.kt", 3)) }
         var capturedBatch: List<BatchSubmitter.BatchItem>? = null
-        submitter.openReportFlow = IdeErrorReportSubmitter.OpenReportFlow { _, _, _, batch, _ -> capturedBatch = batch }
+        submitter.openReportFlow = { _, _, _, batch, _ -> capturedBatch = batch }
         submitter.submit(arrayOf(event(), IdeaLoggingEvent("other", other)), null, javax.swing.JPanel(), Consumer { })
         submitter.flush()
         assertEquals(1, capturedBatch?.size)
@@ -214,7 +212,7 @@ class IdeErrorReportSubmitterTest {
     fun `去抖自最后一次调用起算_每次入队重排`() {
         val scheduler = FakeScheduler()
         val submitter = submitterWith(scheduler)
-        submitter.openReportFlow = IdeErrorReportSubmitter.OpenReportFlow { _, _, _, _, _ -> }
+        submitter.openReportFlow = { _, _, _, _, _ -> }
         submitter.submit(arrayOf(event()), null, javax.swing.JPanel(), Consumer { })
         assertEquals(IdeErrorReportSubmitter.DEBOUNCE_MS, scheduler.lastDelayMs)
         submitter.submit(arrayOf(event()), null, javax.swing.JPanel(), Consumer { })
@@ -226,7 +224,7 @@ class IdeErrorReportSubmitterTest {
         val scheduler = FakeScheduler()
         var now = 0L
         val submitter = submitterWith(scheduler) { now }
-        submitter.openReportFlow = IdeErrorReportSubmitter.OpenReportFlow { _, _, _, _, _ -> }
+        submitter.openReportFlow = { _, _, _, _, _ -> }
         submitter.submit(arrayOf(event()), null, javax.swing.JPanel(), Consumer { })
         now = IdeErrorReportSubmitter.MAX_WAIT_MS + 1
         submitter.submit(arrayOf(event()), null, javax.swing.JPanel(), Consumer { })
@@ -234,10 +232,29 @@ class IdeErrorReportSubmitterTest {
     }
 
     @Test
+    fun `队列达上限_第65条起即时flush且零丢弃`() {
+        // T-PerfSweep3 #2：队列上界封死理论边界——第 65 条仍会被 flush（提前合并落框），不是丢弃
+        val scheduler = FakeScheduler()
+        val submitter = submitterWith(scheduler)
+        var flowCount = 0
+        var capturedBatch: List<BatchSubmitter.BatchItem>? = null
+        submitter.openReportFlow = { _, _, _, batch, _ -> flowCount++; capturedBatch = batch }
+        repeat(IdeErrorReportSubmitter.MAX_PENDING_CALLS) {
+            submitter.submit(arrayOf(event()), null, javax.swing.JPanel(), Consumer { })
+        }
+        assertEquals("64 条（上限内）仍走去抖窗口", IdeErrorReportSubmitter.DEBOUNCE_MS, scheduler.lastDelayMs)
+        submitter.submit(arrayOf(event()), null, javax.swing.JPanel(), Consumer { })
+        assertEquals("第 65 条达上限，排 0ms 即时落框", 0L, scheduler.lastDelayMs)
+        scheduler.runPendingTask()
+        assertEquals("上限触发的 flush 正常落框", 1, flowCount)
+        assertEquals("第 65 条零丢弃：65 条全数进同一批", IdeErrorReportSubmitter.MAX_PENDING_CALLS + 1, capturedBatch?.size)
+    }
+
+    @Test
     fun `空队列flush为无操作`() {
         val submitter = submitterWith()
         var flowCalled = false
-        submitter.openReportFlow = IdeErrorReportSubmitter.OpenReportFlow { _, _, _, _, _ -> flowCalled = true }
+        submitter.openReportFlow = { _, _, _, _, _ -> flowCalled = true }
         submitter.flush()
         assertFalse(flowCalled)
     }
@@ -276,7 +293,7 @@ class IdeErrorReportSubmitterTest {
     fun `报告按钮与隐私文案来自bundle非键名`() {
         val submitter = submitterWith()
         assertFalse(submitter.reportActionText.isNullOrBlank())
-        assertFalse((submitter.reportActionText ?: "").startsWith("error.report."))
-        assertFalse((submitter.privacyNoticeText ?: "").startsWith("error.report."))
+        assertFalse(submitter.reportActionText.startsWith("error.report."))
+        assertFalse(submitter.privacyNoticeText.startsWith("error.report."))
     }
 }

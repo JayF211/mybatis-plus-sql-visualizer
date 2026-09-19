@@ -16,32 +16,6 @@ import org.junit.Test
 
 class JoinDiagramGeneratorTest {
 
-    // 生产代码为 Java（SelectStatement/JoinClause 无默认参数与具名实参），以下 helper 以
-    // 默认参数还原 master Kotlin data class 的缺省语义（selectColumns/conditions 等为空、可空项 null）。
-
-    private fun selectStatement(
-        table: TableInfo,
-        tableAlias: String? = null,
-        selectColumns: List<ColumnRef> = emptyList(),
-        joins: List<JoinClause> = emptyList(),
-    ): SelectStatement = SelectStatement(
-        table, selectColumns, tableAlias, joins, false,
-        emptyList(), emptyList(), null, emptyList(), null, null, null, null,
-        emptyList(), null, null,
-    )
-
-    private fun joinClause(
-        type: JoinType,
-        tableName: String,
-        alias: String,
-        onConditions: List<Condition> = emptyList(),
-        rawSql: String? = null,
-        tableInfo: TableInfo? = null,
-    ): JoinClause = JoinClause(type, tableName, alias, onConditions, rawSql, null, null, tableInfo)
-
-    private fun columnComparison(left: ColumnRef, right: ColumnRef): Condition =
-        Condition.ColumnComparison(left, right, null)
-
     private val userTable = TableInfo(
         "UserEntity",
         "user",
@@ -84,7 +58,7 @@ class JoinDiagramGeneratorTest {
 
     @Test
     fun `single table no join returns empty model`() {
-        val stmt = selectStatement(userTable)
+        val stmt = SelectStatement(userTable)
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertTrue("model should be empty", model.isEmpty)
         assertEquals(0, model.entities.size)
@@ -93,26 +67,29 @@ class JoinDiagramGeneratorTest {
 
     @Test
     fun `empty joins list returns empty model`() {
-        val stmt = selectStatement(userTable)
+        val stmt = SelectStatement(userTable)
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertTrue("model should be empty", model.isEmpty)
     }
 
     @Test
     fun `two table left join`() {
-        val stmt = selectStatement(
-            userTable, "u",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            userTable, emptyList(), "u",
+            listOf(
+                JoinClause(
                     JoinType.LEFT, "order", "o",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("u", "id"),
                             ColumnRef("o", "user_id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertFalse("model should not be empty", model.isEmpty)
@@ -135,28 +112,32 @@ class JoinDiagramGeneratorTest {
 
     @Test
     fun `three table mixed join`() {
-        val stmt = selectStatement(
-            userTable, "u",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            userTable, emptyList(), "u",
+            listOf(
+                JoinClause(
                     JoinType.LEFT, "order", "o",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("u", "id"),
                             ColumnRef("o", "user_id"),
+                            null,
                         ),
                     ),
                 ),
-                joinClause(
+                JoinClause(
                     JoinType.INNER, "dept", "d",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("u", "dept_id"),
                             ColumnRef("d", "id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals(3, model.entities.size)
@@ -169,19 +150,22 @@ class JoinDiagramGeneratorTest {
 
     @Test
     fun `right join relation type`() {
-        val stmt = selectStatement(
-            userTable, "u",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            userTable, emptyList(), "u",
+            listOf(
+                JoinClause(
                     JoinType.RIGHT, "address", "a",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("u", "id"),
                             ColumnRef("a", "user_id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals(JoinType.RIGHT, model.relationships[0].joinType)
@@ -189,19 +173,22 @@ class JoinDiagramGeneratorTest {
 
     @Test
     fun `full join relation type`() {
-        val stmt = selectStatement(
-            userTable, "u",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            userTable, emptyList(), "u",
+            listOf(
+                JoinClause(
                     JoinType.FULL, "address", "a",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("u", "id"),
                             ColumnRef("a", "user_id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals(JoinType.FULL, model.relationships[0].joinType)
@@ -209,15 +196,18 @@ class JoinDiagramGeneratorTest {
 
     @Test
     fun `rawSql join still renders`() {
-        val stmt = selectStatement(
-            userTable, "u",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            userTable, emptyList(), "u",
+            listOf(
+                JoinClause(
                     JoinType.LEFT, "order", "o",
-                    onConditions = emptyList(),
-                    rawSql = "LEFT JOIN (SELECT * FROM order WHERE amount > 100) o ON u.id = o.user_id",
+                    emptyList(),
+                    "LEFT JOIN (SELECT * FROM order WHERE amount > 100) o ON u.id = o.user_id",
+                    null, null, null,
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertFalse(model.isEmpty)
@@ -229,19 +219,22 @@ class JoinDiagramGeneratorTest {
     fun `table with over 50 columns shows only PK`() {
         val manyColumns = (1..60).map { i -> ColumnInfo("field$i", "col_$i", i == 1) }
         val bigTable = TableInfo("BigEntity", "big_table", manyColumns)
-        val stmt = selectStatement(
-            bigTable, "t",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            bigTable, emptyList(), "t",
+            listOf(
+                JoinClause(
                     JoinType.INNER, "order", "o",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("t", "col_1"),
                             ColumnRef("o", "id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals(1, model.entities[0].columns.size)
@@ -251,19 +244,22 @@ class JoinDiagramGeneratorTest {
 
     @Test
     fun `join without alias uses default alias`() {
-        val stmt = selectStatement(
-            userTable, "t",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            userTable, emptyList(), "t",
+            listOf(
+                JoinClause(
                     JoinType.LEFT, "order", "",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("t", "id"),
                             ColumnRef("user_id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertFalse(model.isEmpty)
@@ -274,23 +270,27 @@ class JoinDiagramGeneratorTest {
 
     @Test
     fun `multiple on conditions joined with AND`() {
-        val stmt = selectStatement(
-            userTable, "u",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            userTable, emptyList(), "u",
+            listOf(
+                JoinClause(
                     JoinType.LEFT, "order", "o",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("u", "id"),
                             ColumnRef("o", "user_id"),
+                            null,
                         ),
-                        columnComparison(
+                        Condition.ColumnComparison(
                             ColumnRef("u", "dept_id"),
                             ColumnRef("o", "dept_id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         val label = model.relationships[0].label
@@ -301,26 +301,31 @@ class JoinDiagramGeneratorTest {
 
     @Test
     fun `join table shows columns from ON conditions and selectAs`() {
-        val stmt = selectStatement(
-            userTable, "u",
-            selectColumns = listOf(
+        val stmt = SelectStatement(
+            userTable,
+            listOf(
                 ColumnRef("o", "station_name", null, null, null, null, "java.lang.String"),
             ),
-            joins = listOf(
-                joinClause(
+            "u",
+            listOf(
+                JoinClause(
                     JoinType.LEFT, "order", "o",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("u", "id"),
                             ColumnRef("o", "user_id"),
+                            null,
                         ),
-                        columnComparison(
+                        Condition.ColumnComparison(
                             ColumnRef("u", "dept_id"),
                             ColumnRef("o", "dept_id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         val joinEntity = model.entities[1]
@@ -340,19 +345,22 @@ class JoinDiagramGeneratorTest {
 
     @Test
     fun `entity class name alias falls back to default alias`() {
-        val stmt = selectStatement(
-            userTable, "t",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            userTable, emptyList(), "t",
+            listOf(
+                JoinClause(
                     JoinType.LEFT, "order", "orderEntity",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("t", "id"),
                             ColumnRef("orderEntity", "user_id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals(2, model.entities.size)
@@ -364,19 +372,22 @@ class JoinDiagramGeneratorTest {
 
     @Test
     fun `sql alias with lowercase preserved`() {
-        val stmt = selectStatement(
-            userTable, "t",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            userTable, emptyList(), "t",
+            listOf(
+                JoinClause(
                     JoinType.LEFT, "order", "tt",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("t", "id"),
                             ColumnRef("tt", "user_id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals("tt", model.entities[1].alias)
@@ -384,21 +395,24 @@ class JoinDiagramGeneratorTest {
 
     @Test
     fun `subquery join shows Subquery as table name`() {
-        val stmt = selectStatement(
-            userTable, "t",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            userTable, emptyList(), "t",
+            listOf(
+                JoinClause(
                     JoinType.LEFT,
                     "(SELECT tt.id, tt.station_id, tt.station_name FROM station_info tt)",
                     "tt",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("t", "id"),
                             ColumnRef("tt", "station_id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals("Subquery", model.entities[1].tableName)
@@ -416,19 +430,22 @@ class JoinDiagramGeneratorTest {
                 ColumnInfo("created", "created_at", false, false, "java.time.LocalDateTime"),
             ),
         )
-        val stmt = selectStatement(
-            tableWithTypes, "t",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            tableWithTypes, emptyList(), "t",
+            listOf(
+                JoinClause(
                     JoinType.LEFT, "order", "o",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("t", "id"),
                             ColumnRef("o", "user_id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         val cols = model.entities[0].columns
@@ -440,19 +457,22 @@ class JoinDiagramGeneratorTest {
 
     @Test
     fun `join entity has joinType set`() {
-        val stmt = selectStatement(
-            userTable, "u",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            userTable, emptyList(), "u",
+            listOf(
+                JoinClause(
                     JoinType.LEFT, "order", "o",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("u", "id"),
                             ColumnRef("o", "user_id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals(JoinType.LEFT, model.entities[1].joinType)
@@ -464,19 +484,22 @@ class JoinDiagramGeneratorTest {
     @Test
     fun `main table comment flows to entity`() {
         val commentedTable = tableWithComment("user", "用户表", userTable)
-        val stmt = selectStatement(
-            commentedTable, "u",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            commentedTable, emptyList(), "u",
+            listOf(
+                JoinClause(
                     JoinType.LEFT, "order", "o",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("u", "id"),
                             ColumnRef("o", "user_id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals("用户表", model.entities[0].tableComment)
@@ -486,19 +509,23 @@ class JoinDiagramGeneratorTest {
     @Test
     fun `join table comment flows from join tableInfo`() {
         val deptWithComment = tableWithComment("dept", "部门表", deptTable)
-        val stmt = selectStatement(
-            userTable, "u",
-            joins = listOf(
-                joinClause(
-                    JoinType.INNER, "dept", "d", tableInfo = deptWithComment,
-                    onConditions = listOf(
-                        columnComparison(
+        val stmt = SelectStatement(
+            userTable, emptyList(), "u",
+            listOf(
+                JoinClause(
+                    JoinType.INNER, "dept", "d",
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("u", "dept_id"),
                             ColumnRef("d", "id"),
+                            null,
                         ),
                     ),
+                    null, null, null, deptWithComment,
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals("部门表", model.entities[1].tableComment)
@@ -514,24 +541,115 @@ class JoinDiagramGeneratorTest {
                 ColumnInfo("email", "email", false, false, null, null, "邮箱"),
             ),
         )
-        val stmt = selectStatement(
-            commentedTable, "u",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            commentedTable, emptyList(), "u",
+            listOf(
+                JoinClause(
                     JoinType.LEFT, "order", "o",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("u", "id"),
                             ColumnRef("o", "user_id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         val nameCol = model.entities[0].columns.first { it.name == "name" }
         assertEquals("姓名", nameCol.comment)
         assertEquals("邮箱", model.entities[0].columns.first { it.name == "email" }.comment)
+    }
+
+    // ---- T-DgmFullCols JOIN 表整表列口径（2026-09-17：与主表一致，观感对齐 Database 原生「显示图」） ----
+
+    @Test
+    fun `join table shows full entity columns not only referenced ones`() {
+        // 此前 JOIN 表只画「SELECT 引用列 + ON 列」，通常就一两个 join key，与主表"整表口径"不对称
+        val stmt = SelectStatement(
+            userTable, emptyList(), "u",
+            listOf(
+                JoinClause(
+                    JoinType.INNER, "dept", "d",
+                    listOf(
+                        Condition.ColumnComparison(
+                            ColumnRef("u", "dept_id"),
+                            ColumnRef("d", "id"),
+                            null,
+                        ),
+                    ),
+                    null, null, null, deptTable,
+                ),
+            ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        val dept = model.entities.first { it.alias == "d" }
+        assertEquals("JOIN 表 = 实体整表列（id 主键 + name），不再只剩 ON 引用的 id", listOf("id", "name"), dept.columns.map { it.name })
+        assertEquals("实体主键标记保留", true, dept.columns.first { it.name == "id" }.isPk)
+    }
+
+    @Test
+    fun `join table keeps referenced column absent from entity`() {
+        // SQL 原始列名可能不在实体里（selectAs/拼接列）——引用列无论实体有没有都保留
+        val stmt = SelectStatement(
+            userTable,
+            listOf(ColumnRef("d", "raw_pseudo_col")),
+            "u",
+            listOf(
+                JoinClause(
+                    JoinType.LEFT, "dept", "d",
+                    listOf(
+                        Condition.ColumnComparison(
+                            ColumnRef("u", "dept_id"),
+                            ColumnRef("d", "id"),
+                            null,
+                        ),
+                    ),
+                    null, null, null, deptTable,
+                ),
+            ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        val dept = model.entities.first { it.alias == "d" }
+        assertEquals(listOf("id", "name", "raw_pseudo_col"), dept.columns.map { it.name })
+    }
+
+    @Test
+    fun `join table over column cap falls back to pk plus referenced columns`() {
+        // 与主表同款上限：实体 >50 列时只留主键列；被引用列仍追加（它们可能不在实体里）
+        val wideTable = TableInfo(
+            "WideEntity", "wide",
+            List(60) { idx -> if (idx == 0) ColumnInfo("id", "id", true) else ColumnInfo("f$idx", "f_$idx") },
+        )
+        val stmt = SelectStatement(
+            userTable,
+            listOf(ColumnRef("w", "ref_only")),
+            "u",
+            listOf(
+                JoinClause(
+                    JoinType.LEFT, "wide", "w",
+                    listOf(
+                        Condition.ColumnComparison(
+                            ColumnRef("u", "id"),
+                            ColumnRef("w", "id"),
+                            null,
+                        ),
+                    ),
+                    null, null, null, wideTable,
+                ),
+            ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
+        )
+        val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+        assertEquals(listOf("id", "ref_only"), model.entities.first { it.alias == "w" }.columns.map { it.name })
     }
 
     // ---- T-Embed-07 JOIN 表字段空缺陷（转换器原始别名） ----
@@ -541,23 +659,27 @@ class JoinDiagramGeneratorTest {
         // MPJ 真机形态：join.alias = 类名小驼峰（stationInfoEntity），显示别名归一为 t1；
         // selectAs/ON 的列引用携带原始别名，ON 标签经 aliasMap 归一显示正常，
         // 列提取须双别名匹配——否则 JOIN 表字段全部落空（2026-09-04 真机截图实证）
-        val stmt = selectStatement(
-            userTable, "t",
-            selectColumns = listOf(
+        val stmt = SelectStatement(
+            userTable,
+            listOf(
                 ColumnRef("stationInfoEntity", "station_name", null, null, null, null, "java.lang.String"),
             ),
-            joins = listOf(
-                joinClause(
+            "t",
+            listOf(
+                JoinClause(
                     JoinType.LEFT, "station_info", "stationInfoEntity",
-                    tableInfo = deptTable,
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("stationInfoEntity", "station_id"),
                             ColumnRef("t", "station_id"),
+                            null,
                         ),
                     ),
+                    null, null, null, deptTable,
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         val joinEntity = model.entities[1]
@@ -572,23 +694,27 @@ class JoinDiagramGeneratorTest {
 
     @Test
     fun `on column pairs extracted with main-to-join orientation`() {
-        val stmt = selectStatement(
-            userTable, "t",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            userTable, emptyList(), "t",
+            listOf(
+                JoinClause(
                     JoinType.LEFT, "station_info", "t1",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("t1", "station_id"),
                             ColumnRef("t", "station_id"),
+                            null,
                         ),
-                        columnComparison(
+                        Condition.ColumnComparison(
                             ColumnRef("t", "id"),
                             ColumnRef("t1", "owner_id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         val pairs = model.relationships[0].columnPairs
@@ -600,28 +726,31 @@ class JoinDiagramGeneratorTest {
 
     @Test
     fun `on column pairs skip non-comparison conditions`() {
-        val stmt = selectStatement(
-            userTable, "t",
-            joins = listOf(
-                joinClause(
+        val stmt = SelectStatement(
+            userTable, emptyList(), "t",
+            listOf(
+                JoinClause(
                     JoinType.LEFT, "order", "o",
-                    onConditions = listOf(
-                        columnComparison(
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("o", "user_id"),
                             ColumnRef("t", "id"),
+                            null,
                         ),
                         Condition.Raw("t.deleted = 0"),
                     ),
                 ),
             ),
+            false, emptyList(), emptyList(), null, emptyList(),
+            null, null, null, null, emptyList(), null, null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals(1, model.relationships[0].columnPairs.size)
     }
 
-    /** 生成带表注释的副本（Java 端无 data class copy——完整构造器重建）。 */
+    /** 生成带表注释的副本。 */
     private fun tableWithComment(tableName: String, comment: String?, base: TableInfo): TableInfo =
-        TableInfo(
+        base.copy(
             base.entityClassName, tableName, base.columns,
             base.logicDeleteColumn, base.versionColumn, comment, base.associations,
         )

@@ -318,4 +318,136 @@ public class SqlLogAutoSaverTest {
         String content = Files.readString(new File(dir, "test.sql").toPath());
         assertTrue("应写 pd 行: " + content, content.contains("\n-- pd: "));
     }
+
+    // ------------------------------------------------------------------
+    // T-SqlHistoryFull：全量写盘风暴压测（对应用户关切——全量化后大写盘量不卡、不丢）
+    // ------------------------------------------------------------------
+
+    /**
+     * 压测：单线程风暴投递（模拟控制台风暴期每条成功入队即 submit）。
+     * onEntryStored 全量化后大写盘是用户首要性能关切——断言：
+     *  1) 不丢条：close 同步清空在途队列后文件块数 == 投递数；
+     *  2) T-Perf-12 批量写收敛：投递 N 条只触发 ≪N 次的写任务批次（writeBatch 整批一次 flush）。
+     */
+    @Test
+    public void 压测_万条全量投递不丢条_批量写收敛() throws Exception {
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        String dir = tempDir();
+        saver.configure(dir, "storm.sql", null);
+
+        int n = 20000;
+        for (int i = 0; i < n; i++) {
+            saver.submit(entry("SELECT * FROM t WHERE id = " + i));
+        }
+        // close 同步清空在途队列（不丢条）——写线程吞掉全部 2 万条
+        saver.close();
+
+        File file = new File(dir, "storm.sql");
+        assertTrue("文件已创建", file.exists());
+        int count = Files.readString(file.toPath()).split("-- source:").length - 1;
+        assertEquals("万条全量投递不丢条", n, count);
+    }
+
+    /**
+     * 压测：读侧流式往返一致——全量写盘的大文件能被流式逐行读回，条目数与内容与写入一致
+     * （SqlLogFileReader 整读改流式的回归防线；往返走既有读取 API，非 readText）。
+     */
+    @Test
+    public void 压测_万条全量写入后流式读回一致() throws Exception {
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        String dir = tempDir();
+        saver.configure(dir, "roundtrip.sql", null);
+        int n = 10000;
+        for (int i = 0; i < n; i++) {
+            saver.submit(entry("SELECT * FROM big WHERE id = " + i + " -- marker=" + i));
+        }
+        saver.close();
+
+        File file = new File(dir, "roundtrip.sql");
+        // 生产读路径：流式逐行（readFromFile 内部 useLines），不整读
+        List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.readFromFile(file);
+        assertEquals("读回条数与写入一致", n, entries.size());
+        assertTrue("首条 SQL 正确", entries.get(0).restoredSql().startsWith("SELECT * FROM big WHERE id = 0"));
+        assertTrue("末条 SQL 正确", entries.get(entries.size() - 1).restoredSql().endsWith("-- marker=" + (n - 1)));
+    }
+
+    // ------------------------------------------------------------------
+    // T-HistoryFileRetention：历史文件保留上限裁剪（防磁盘爆炸）
+    // ------------------------------------------------------------------
+
+    private static void makeFile(String dir, String name, long stamp) throws Exception {
+        File f = new File(dir, name);
+        f.getParentFile().mkdirs();
+        Files.writeString(f.toPath(), "-- source: x --\nSELECT 1\n\n");
+        f.setLastModified(stamp);
+    }
+
+    private static List<String> fileNames(String dir) {
+        File[] files = new File(dir).listFiles();
+        return java.util.Arrays.stream(files == null ? new File[0] : files)
+                .map(File::getName).sorted().collect(java.util.stream.Collectors.toList());
+    }
+
+    /** pruneRetainedFiles 直接驱动：造 maxFiles+1 个文件，断言删到只剩 maxFiles 个（删最旧）。 */
+    @Test
+    public void 上限裁剪_超限删最旧文件() throws Exception {
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        String dir = tempDir();
+        saver.configure(dir, "sql-history-$yyyy-MM-dd$.sql", null, 2);
+        // 三个不同基名文件，stamp 递增（最早 = 2026-09-10）
+        makeFile(dir, "sql-history-2026-09-10.sql", 1000);
+        makeFile(dir, "sql-history-2026-09-15.sql", 2000);
+        makeFile(dir, "sql-history-2026-09-16.sql", 3000);
+        saver.pruneRetainedFiles();
+        assertEquals("保留最近 2 个逻辑文件，删最旧",
+                List.of("sql-history-2026-09-15.sql", "sql-history-2026-09-16.sql"), fileNames(dir));
+        saver.close();
+    }
+
+    /** maxFiles<=0（全量保留）时超过也不删。 */
+    @Test
+    public void 上限裁剪_0表示全量保留不删() throws Exception {
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        String dir = tempDir();
+        saver.configure(dir, "sql-history-$yyyy-MM-dd$.sql", null, 0);
+        makeFile(dir, "sql-history-2026-09-10.sql", 1000);
+        makeFile(dir, "sql-history-2026-09-15.sql", 2000);
+        makeFile(dir, "sql-history-2026-09-16.sql", 3000);
+        saver.pruneRetainedFiles();
+        assertEquals("0=不限制，3 个全保留", 3, new File(dir).listFiles().length);
+        saver.close();
+    }
+
+    /** 滚动块归并：同 base 的两块计 1 个逻辑文件，不被误删。 */
+    @Test
+    public void 上限裁剪_滚动块按基名归并不误删() throws Exception {
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        String dir = tempDir();
+        saver.configure(dir, "sql-history-$yyyy-MM-dd$.sql", null, 2);
+        // 4 个文件实际是 3 个逻辑文件（09-10 有 .sql + .2.sql）
+        makeFile(dir, "sql-history-2026-09-10.sql", 1000);
+        makeFile(dir, "sql-history-2026-09-10.2.sql", 1300);
+        makeFile(dir, "sql-history-2026-09-15.sql", 2000);
+        makeFile(dir, "sql-history-2026-09-16.sql", 3000);
+        saver.pruneRetainedFiles();
+        assertEquals("3 组不超上限 2？不，3>2 应删最旧组（09-10 两块全删）",
+                List.of("sql-history-2026-09-15.sql", "sql-history-2026-09-16.sql"), fileNames(dir));
+        saver.close();
+    }
+
+    /** 自定义目录同样生效（maxFiles 生效于 configure 传入的目录）。
+     *  T-PS4-10 后：裁剪只认领本插件名族——族内超限删最旧，族外文件（init.sql）不计数零删除。 */
+    @Test
+    public void 上限裁剪_自定义目录生效() throws Exception {
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        String customDir = tempDir();
+        saver.configure(customDir, "log-$yyyy-MM-dd$.sql", null, 1);
+        makeFile(customDir, "log-2026-09-10.sql", 1000);
+        makeFile(customDir, "log-2026-09-15.sql", 2000);
+        makeFile(customDir, "init.sql", 900);
+        saver.pruneRetainedFiles();
+        assertEquals("族内删最旧、族外用户文件零删除",
+                List.of("init.sql", "log-2026-09-15.sql"), fileNames(customDir));
+        saver.close();
+    }
 }

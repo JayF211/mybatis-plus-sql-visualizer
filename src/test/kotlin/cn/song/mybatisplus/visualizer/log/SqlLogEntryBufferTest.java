@@ -158,6 +158,52 @@ public class SqlLogEntryBufferTest {
         assertEquals(List.of("SELECT 1"), evicted);
     }
 
+    // ---------- T-SqlHistoryFull：onEntryStored 全量写入回调 ----------
+
+    @Test
+    public void onEntryStored_每次成功入队触发() throws Exception {
+        SqlLogEntryBuffer buf = new SqlLogEntryBuffer(5);
+        List<String> stored = new ArrayList<>();
+        buf.setOnEntryStored((Consumer<LogSqlEntry>) e -> stored.add(e.restoredSql()));
+        buf.addEntry(entry("A"));
+        buf.addEntry(entry("B"));
+        buf.addEntry(entry("C"));
+        assertEquals(List.of("A", "B", "C"), stored);
+    }
+
+    @Test
+    public void onEntryStored_覆盖被淘汰条目全量且不含去重丢弃() throws Exception {
+        SqlLogEntryBuffer buf = new SqlLogEntryBuffer(2);
+        List<String> stored = new ArrayList<>();
+        buf.setOnEntryStored((Consumer<LogSqlEntry>) e -> stored.add(e.restoredSql()));
+        buf.addEntry(entry("A"));
+        buf.addEntry(entry("B"));
+        buf.addEntry(entry("A")); // 去重窗口内重复（A 仍在列表第一）→ 丢弃，不入 stored
+        buf.addEntry(entry("C")); // 淘汰 A，但 A 已入队成功 → 已在 stored
+        assertEquals("被淘汰条目也在全量历史中，去重丢弃不在", List.of("A", "B", "C"), stored);
+    }
+
+    @Test
+    public void onEntryStored_在暂停和过滤时不触发() throws Exception {
+        SqlLogEntryBuffer buf = new SqlLogEntryBuffer(5);
+        List<String> stored = new ArrayList<>();
+        buf.setOnEntryStored((Consumer<LogSqlEntry>) e -> stored.add(e.restoredSql()));
+        buf.setFilterKeywords(List.of("DROP"));
+        buf.setPaused(true);
+        buf.addEntry(entry("DROP TABLE x")); // 过滤命中去重判定前被拦 → 不入
+        buf.addEntry(entry("SELECT 1")); // 暂停态 → 不入
+        assertEquals("暂停/过滤条目不进全量历史", 0, stored.size());
+    }
+
+    @Test
+    public void onEntryStored_null_时无异常() throws Exception {
+        SqlLogEntryBuffer buf = new SqlLogEntryBuffer(1);
+        buf.setOnEntryStored(null);
+        buf.addEntry(entry("SELECT 1"));
+        buf.addEntry(entry("SELECT 2"));
+        assertEquals(1, buf.snapshot().size());
+    }
+
     @Test
     public void onEvicted_null_时无异常() throws Exception {
         SqlLogEntryBuffer buf = new SqlLogEntryBuffer(1);

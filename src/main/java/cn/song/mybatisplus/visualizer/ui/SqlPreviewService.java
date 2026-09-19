@@ -413,7 +413,9 @@ public final class SqlPreviewService {
                 statement = new DeleteStatement(
                         table, parsed.getConditions(), List.of(), null, List.of(), parsed.getLimit());
             } else {
-                SqlStatement converted = ConverterRegistry.INSTANCE.convert(chain, table);
+                // T-FS-04：显式传本服务绑定的 project——converter 内「关联/collection 子表实体类 PSI
+                // 不可解析」的类名兜底推断据此读项目级表配置（不再受「首个打开项目」影响）
+                SqlStatement converted = ConverterRegistry.INSTANCE.convert(chain, table, project);
                 if (converted == null) return null;
                 statement = converted;
             }
@@ -2110,7 +2112,7 @@ public final class SqlPreviewService {
      */
     @NotNull
     public Dialect currentDialect() {
-        return DialectRegistry.INSTANCE.effective(null, project);
+        return DialectRegistry.INSTANCE.effective(project);
     }
 
     /**
@@ -2128,7 +2130,8 @@ public final class SqlPreviewService {
      * 查询类解析统一入口：优先走 ConverterRegistry 注册的 converter（保留主表别名与 JOIN）。
      */
     private SelectStatement parseQueryLike(@NotNull WrapperChain chain, @NotNull TableInfo table) {
-        SqlStatement converted = ConverterRegistry.INSTANCE.convert(chain, table);
+        // T-FS-04：显式传本服务绑定的 project（语义同 else -> ConverterRegistry.convert 分支）
+        SqlStatement converted = ConverterRegistry.INSTANCE.convert(chain, table, project);
         if (converted instanceof SelectStatement) return (SelectStatement) converted;
         return new QueryWrapperParser(table).parse(chain);
     }

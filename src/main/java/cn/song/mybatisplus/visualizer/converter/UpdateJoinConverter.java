@@ -11,6 +11,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperArg;
 import cn.song.mybatisplus.visualizer.model.WrapperCall;
 import cn.song.mybatisplus.visualizer.model.WrapperChain;
 import cn.song.mybatisplus.visualizer.model.WrapperType;
+import com.intellij.openapi.project.Project;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -50,7 +51,7 @@ public final class UpdateJoinConverter implements WrapperConverter {
     }
 
     @Override
-    public SqlStatement convert(WrapperChain chain, TableInfo table) {
+    public SqlStatement convert(WrapperChain chain, TableInfo table, Project project) {
         String mainAlias = chain.getConstructorAlias();
         if (mainAlias == null) {
             WrapperCall setAlias = null;
@@ -77,7 +78,8 @@ public final class UpdateJoinConverter implements WrapperConverter {
         }
         List<cn.song.mybatisplus.visualizer.model.JoinClause> joins = new ArrayList<>();
         for (WrapperCall call : joinCalls) {
-            cn.song.mybatisplus.visualizer.model.JoinClause j = MpjJoinSupport.INSTANCE.parseJoin(call, mainAlias);
+            // T-FS-04：project 透传至类名兜底推断
+            cn.song.mybatisplus.visualizer.model.JoinClause j = MpjJoinSupport.INSTANCE.parseJoin(call, mainAlias, project);
             if (j != null) joins.add(j);
         }
 

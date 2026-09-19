@@ -523,8 +523,18 @@ public class SqlLogPanel extends JPanel implements Disposable {
         return focusTabBar.getComponentCount();
     }
 
+    /** Kotlin {@code val focusTabBarComponentCountForTest} 的 JVM 访问器等价入口（属性名读取用）。 */
+    public int getFocusTabBarComponentCountForTest() {
+        return focusTabBar.getComponentCount();
+    }
+
     /** 聚焦隐藏计数提示（测试断言显隐与文案）。 */
     JLabel focusHiddenLabelForTest() {
+        return focusHiddenLabel;
+    }
+
+    /** Kotlin {@code val focusHiddenLabelForTest} 的 JVM 访问器等价入口（属性名读取用）。 */
+    public JLabel getFocusHiddenLabelForTest() {
         return focusHiddenLabel;
     }
 

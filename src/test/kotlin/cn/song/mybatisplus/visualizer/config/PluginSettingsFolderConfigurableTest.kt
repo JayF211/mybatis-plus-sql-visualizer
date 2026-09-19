@@ -15,7 +15,7 @@ import javax.swing.ListModel
 
 /**
  * 设置页主页面（左侧树导航父节点）测试（F-44 续 · 补用例大波次）：此前 0 测试。
- * 覆盖：createComponent 列出全部 5 个子页面（搜索空）；搜索无匹配项时列表清空（rebuildList 过滤）。
+ * 覆盖：createComponent 列出全部 7 个子页面（搜索空）；搜索无匹配项时列表清空（rebuildList 过滤）。
  * 通过遍历取 JBList 与 SearchTextField，无需新增生产缝。
  * T-UN-20（T-UiNative）增补：行渲染器归一 SimpleColoredComponent 片段通道——组件类型断言
  * （JLabel-HTML/GridBag 通道不允许回潮）+ 双行语义断言（页名/描述行文本仍取 bundle 既有键）。
@@ -53,11 +53,11 @@ class PluginSettingsFolderConfigurableTest : BasePlatformTestCase() {
         return list to search
     }
 
-    fun testCreateComponent_空搜索列出全部5个子页面() {
+    fun testCreateComponent_空搜索列出全部7个子页面() {
         val cfg = PluginSettingsFolderConfigurable()
         val comp = cfg.createComponent()
         val list = all(comp).filterIsInstance<JBList<*>>().first()
-        assertEquals("默认应列出 5 个子页面", 5, (list.model as ListModel<*>).size)
+        assertEquals("默认应列出 7 个子页面（主五页+shortcuts/mcp，T-ShortcutSettings）", 7, (list.model as ListModel<*>).size)
     }
 
     fun test搜索过滤_无匹配项时列表清空() {
@@ -110,12 +110,18 @@ class PluginSettingsFolderConfigurableTest : BasePlatformTestCase() {
         search.text = fieldLabel
         UIUtil.dispatchAllInvocationEvents()
         assertTrue("搜索应命中设置项", list.model.size > 0)
-        val hits = (0 until list.model.size)
-            .map { renderedLines(list, list.model.getElementAt(it)) }
-            .filter { it.size == 2 && joinedText(it[0]) == fieldLabel }
-        assertTrue("应渲染出设置项行", hits.isNotEmpty())
-        assertEquals("设置项次行应为所属页面名", MpSqlVisualizerBundle.message("settings.section.preview"), joinedText(hits[0][1]))
-        val fieldIter = hits[0][0].iterator(); fieldIter.next()
+        // T-ProjectSettingsScope P3 增补：项目页同项文案入索引后，同一查询会命中**多条同名字段行**
+        // （全局方言 + 项目方言）。渲染器是共享实例（nameLine/descLine 复用），逐条渲染后再断言
+        // 会让所有行都指向最后渲染的那一份——故改为「先定位首个命中项的下标，再重渲染该项」，
+        // 断言面与原意一致（字段名行加粗、次行为所属页面名）。
+        val matchedIndex = (0 until list.model.size).firstOrNull { idx ->
+            val lines = renderedLines(list, list.model.getElementAt(idx))
+            lines.size == 2 && joinedText(lines[0]) == fieldLabel
+        }
+        assertTrue("应渲染出设置项行", matchedIndex != null)
+        val lines = renderedLines(list, list.model.getElementAt(matchedIndex!!))
+        assertEquals("设置项次行应为所属页面名", MpSqlVisualizerBundle.message("settings.section.preview"), joinedText(lines[1]))
+        val fieldIter = lines[0].iterator(); fieldIter.next()
         assertTrue("字段名片段应加粗", fieldIter.textAttributes.style and SimpleTextAttributes.STYLE_BOLD != 0)
     }
 }

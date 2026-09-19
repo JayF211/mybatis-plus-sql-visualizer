@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.converter;
 import cn.song.mybatisplus.visualizer.model.SqlStatement;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.model.WrapperChain;
+import com.intellij.openapi.project.Project;
 
 import java.util.List;
 
@@ -43,16 +44,22 @@ public final class ConverterRegistry {
     /**
      * 转换调用链。
      *
-     * @param chain 调用链
-     * @param table 表信息
+     * @param chain   调用链
+     * @param table   表信息
+     * @param project 调用方项目（T-FS-04，语义见 {@link WrapperConverter#convert}）；null = 未提供
      * @return 语句模型；无匹配转换器时返回 null
      */
-    public SqlStatement convert(WrapperChain chain, TableInfo table) {
+    public SqlStatement convert(WrapperChain chain, TableInfo table, Project project) {
         for (WrapperConverter c : converters) {
             if (c.getSupportedTypes().contains(chain.getWrapperType())) {
-                return c.convert(chain, table);
+                return c.convert(chain, table, project);
             }
         }
         return null;
+    }
+
+    /** Kotlin 默认参数等价重载：{@code convert(chain, table)}（project = null）。 */
+    public SqlStatement convert(WrapperChain chain, TableInfo table) {
+        return convert(chain, table, null);
     }
 }

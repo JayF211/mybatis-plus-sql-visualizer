@@ -13,6 +13,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperArg;
 import cn.song.mybatisplus.visualizer.model.WrapperCall;
 import cn.song.mybatisplus.visualizer.model.WrapperChain;
 import cn.song.mybatisplus.visualizer.model.WrapperType;
+import com.intellij.openapi.project.Project;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -73,7 +74,7 @@ public final class XbatisConverter implements WrapperConverter {
     }
 
     @Override
-    public SqlStatement convert(WrapperChain chain, TableInfo table) {
+    public SqlStatement convert(WrapperChain chain, TableInfo table, Project project) {
         List<WrapperCall> calls = normalize(chain.getCalls());
         // 1. UpdateChain：set 调用存在 → UPDATE（set 列赋值 + 其余条件 WHERE）
         boolean hasSetCall = false;

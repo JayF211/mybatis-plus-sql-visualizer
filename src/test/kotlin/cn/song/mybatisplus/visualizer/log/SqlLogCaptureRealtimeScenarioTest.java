@@ -48,6 +48,8 @@ public class SqlLogCaptureRealtimeScenarioTest {
                     e.sourceFile(),
                     e.sourceLine(),
                     e.sourceCandidates(),
+                    e.candidateClasses(),
+                    e.stackDigest(),
                     0L,
                     e.mapperStatement(),
                     e.errorText(),

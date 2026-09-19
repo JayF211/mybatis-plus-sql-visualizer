@@ -18,6 +18,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperType;
 import cn.song.mybatisplus.visualizer.psi.EntityResolver;
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect;
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator;
+import com.intellij.openapi.project.Project;
 
 import kotlin.Pair;
 
@@ -67,7 +68,7 @@ public final class MpjLambdaConverter implements WrapperConverter {
     }
 
     @Override
-    public SqlStatement convert(WrapperChain chain, TableInfo table) {
+    public SqlStatement convert(WrapperChain chain, TableInfo table, Project project) {
         // 主表别名：构造别名 > setAlias("x") 方法 > 默认 t
         String mainAlias = chain.getConstructorAlias();
         if (mainAlias == null) mainAlias = findSetAlias(chain);
@@ -156,11 +157,11 @@ public final class MpjLambdaConverter implements WrapperConverter {
                     if (java.util.Objects.equals(joinEntityClassName(call), cls)) { skip = true; break; }
                 }
                 if (skip) continue;
-                JoinClause join = parseJoin(call, mainAlias);
+                JoinClause join = parseJoin(call, mainAlias, project);
                 if (join == null) continue;
                 joins.add(join);
             } else if (SELECT_COLLECTION.equals(mn)) {
-                JoinClause j = parseCollection(call, joinCalls, mainAlias);
+                JoinClause j = parseCollection(call, joinCalls, mainAlias, project);
                 if (j != null) joins.add(j);
             }
         }
@@ -482,7 +483,7 @@ public final class MpjLambdaConverter implements WrapperConverter {
     }
 
     /** 解析 join → 联表子句（支持 6 种 ON 形态）。 */
-    private JoinClause parseJoin(WrapperCall call, String mainAlias) {
+    private JoinClause parseJoin(WrapperCall call, String mainAlias, Project project) {
         JoinType type;
         switch (call.getMethodName()) {
             case "leftJoin" -> type = JoinType.LEFT;
@@ -540,10 +541,9 @@ public final class MpjLambdaConverter implements WrapperConverter {
         }
         if (className.isEmpty()) return null;
 
-        // T-TS-07 留档：此处兜底未传 project（[WrapperCall] 模型不含 project，converter SPI
-        // 亦无项目入参）——多项目同开时表名修饰仍取「首个打开项目」；穿参需改 SPI 签名或给模型
-        // 加平台字段，另批处理（psi 侧兜底调用方已在本批显式传 project）
-        String tableName = tableInfo != null ? tableInfo.getTableName() : EntityResolver.inferDecoratedTableName(className);
+        // T-FS-04：类名兜底推断显式传调用方 project——多项目同开且项目级表配置不同时，
+        // 表名修饰不再受「首个打开项目」影响（project 由 SPI 入参透传，null 时行为不变）
+        String tableName = tableInfo != null ? tableInfo.getTableName() : EntityResolver.inferDecoratedTableName(className, project);
         String alias = lowerFirst(className);
         List<Condition> onConditions = new ArrayList<>();
         String logicDelete = tableInfo != null ? tableInfo.getLogicDeleteColumn() : null;
@@ -802,7 +802,7 @@ public final class MpjLambdaConverter implements WrapperConverter {
     }
 
     /** 解析 selectCollection → LEFT JOIN 子查询。 */
-    private JoinClause parseCollection(WrapperCall call, List<WrapperCall> joinCalls, String mainAlias) {
+    private JoinClause parseCollection(WrapperCall call, List<WrapperCall> joinCalls, String mainAlias, Project project) {
         boolean prefixForm = isPrefixForm(call);
         String childClass;
         String alias;
@@ -833,10 +833,10 @@ public final class MpjLambdaConverter implements WrapperConverter {
         TableInfo childInfo = collectionTableInfo(call);
         // T-1800（Bug1 修复）：优先从 EntityRefArg 取真实 @TableName，不再仅靠 snake_case 推断。
         // 例：AddressDO(@TableName("user_address")) → EntityRefArg 直接得 user_address，避免 address_d_o。
-        // T-TS-07 留档：兜底未传 project（同 parseJoin，见其注释）
-        String childTable = childInfo != null ? childInfo.getTableName() : EntityResolver.inferDecoratedTableName(childClass);
+        // T-FS-04：类名兜底推断显式传调用方 project（实体类 PSI 不可解析时按该项目读项目级表配置）
+        String childTable = childInfo != null ? childInfo.getTableName() : EntityResolver.inferDecoratedTableName(childClass, project);
 
-        String subSelect = renderCollectionSubSelect(call, childTable, alias, mapIndex);
+        String subSelect = renderCollectionSubSelect(call, childTable, alias, mapIndex, project);
 
         List<Condition> onConditions = new ArrayList<>();
         for (WrapperCall joinCall : joinCalls) {
@@ -849,7 +849,7 @@ public final class MpjLambdaConverter implements WrapperConverter {
                 match = v instanceof SqlValue.Literal lit && lit.getUnquoted().equals(childClass);
             }
             if (!match) continue;
-            JoinClause joinClause = parseJoin(joinCall, mainAlias);
+            JoinClause joinClause = parseJoin(joinCall, mainAlias, project);
             if (joinClause == null) continue;
             String joinAlias = joinClause.getAlias();
             for (Condition cond : joinClause.getOnConditions()) {
@@ -868,8 +868,12 @@ public final class MpjLambdaConverter implements WrapperConverter {
         return new JoinClause(JoinType.LEFT, "(" + subSelect + ")", alias, onConditions, null, null, null, null);
     }
 
-    /** 渲染 selectCollection 的子查询文本（递归支持嵌套 collection）。 */
-    private String renderCollectionSubSelect(WrapperCall call, String childTable, String alias, int mapIndex) {
+    /**
+     * 渲染 selectCollection 的子查询文本（递归支持嵌套 collection）。
+     *
+     * @param project 调用方项目（T-FS-04）：孙表类名兜底推断按该项目读项目级表配置；null = 未提供
+     */
+    private String renderCollectionSubSelect(WrapperCall call, String childTable, String alias, int mapIndex, Project project) {
         List<String> subColumns = new ArrayList<>();
         List<String> nestedJoins = new ArrayList<>();
         WrapperArg.NestedArg mapping = argAt(call.getArgs(), mapIndex) instanceof WrapperArg.NestedArg n ? n : null;
@@ -885,10 +889,10 @@ public final class MpjLambdaConverter implements WrapperConverter {
                         if (!(gv instanceof SqlValue.Literal lit)) continue;
                         String grandChild = lit.getUnquoted();
                         // T-M19.4：孙表推断走统一入口（策略 + 修饰链，全局语义）
-                        // T-TS-07 留档：兜底未传 project（同 parseJoin，见其注释）
-                        String grandTable = EntityResolver.inferDecoratedTableName(grandChild);
+                        // T-FS-04：类名兜底推断显式传调用方 project（同 parseJoin）
+                        String grandTable = EntityResolver.inferDecoratedTableName(grandChild, project);
                         String grandAlias = lowerFirst(grandChild);
-                        String grandSub = renderCollectionSubSelect(c, grandTable, grandAlias, 2);
+                        String grandSub = renderCollectionSubSelect(c, grandTable, grandAlias, 2, project);
                         nestedJoins.add("LEFT JOIN (" + grandSub + ") " + grandAlias
                                 + " ON " + grandAlias + "." + alias + "_id = " + alias + ".id");
                     }

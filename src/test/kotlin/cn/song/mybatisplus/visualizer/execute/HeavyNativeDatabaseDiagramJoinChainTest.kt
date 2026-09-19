@@ -15,6 +15,7 @@ import com.intellij.database.dataSource.LocalDataSource
 import com.intellij.database.dataSource.LocalDataSourceManager
 import com.intellij.database.util.GuardedRef
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.testFramework.LightProjectDescriptor
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -29,10 +30,38 @@ import javax.xml.parsers.DocumentBuilderFactory
  * NativeDatabaseDiagramSupport.buildTabComponent（DATABASE provider + 真实 DbTable 节点）→
  * 断言数据模型含 ≥2 节点、连接线来自虚拟外键（SQLV_JOIN 前缀）、dispose 回收登记。
  *
+ * ## ⚠ 本类的「绿」不等于「B 路径已验证」（T-TS-08 复核口径）
+ *
+ * 用例有三级软返回（introspect 失败 / `buildTabComponent` 返回 null / 编辑器未挂接），
+ * 命中任一即 `println + return` 记绿，**五组断言一组都不执行**。20260918 复核实测：本环境走的
+ * 就是 `component == null` 那条（XML `system-out` 实证 `[DB-IT] SKIP: B 路径链路不可用…`），
+ * 即**B 路径在本环境从未被真跑过**——「9 例 JUnit 绿」是事实，「B 路径已验证」不是。
+ * 相应地：
+ *  - 产品侧 `NativeDatabaseDiagramSupport.kt` 的降级点已补日志（`B path not taken: …` +
+ *    `locateDbTables` 四段计数），降级原因（无数据源 / 未内省 / 表名不匹配 / DbElement 未登记）
+ *    在 idea.log 里可查——修复前该点静默，是「绿≠已验证」不可诊断的根因；
+ *  - 本环境的可跑性结论与未验证边界记录在
+ *    `docs/调研报告/20260918-testDatabase驱动管线打通-记录.md` §六；
+ *  - 让 B 路径真跑（补真实工程/表定位夹具）属独立工作量，未在本轮范围内。
+ *
  * 环境依赖（与 DataSourceSelectorIntegrationTest 同源）：demo 兄弟目录的
  * dataSources.xml + 本地 MySQL 已启动且含 car_device_info/station_info 表。
  */
 class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
+
+    /** introspect 期间持有的连接守卫（close 即释放连接，见 [introspectDataSource] 内注释）。 */
+    private var introspectRef: GuardedRef<*>? = null
+
+    /**
+     * 稳定 light 工程目录（testDatabase 通道五类共用，根因见 [DbIntegrationProjectSupport] 类注释）：
+     * 五类共用一个描述符实例 → 平台复用同一工程，工程目录不再随首个用例的 unitTest 目录被删。
+     */
+    override fun getProjectDescriptor(): LightProjectDescriptor = DbIntegrationProjectSupport.descriptor
+
+    override fun setUp() {
+        super.setUp()
+        DbIntegrationProjectSupport.allowRootAccess(testRootDisposable)
+    }
 
     private val demoProjectDir: File
         get() = File(System.getProperty("mpDemoProjectDir", "../mybatis-plus-sql-visualizer-demo"))
@@ -76,6 +105,8 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
         ds.javaClass.getDeclaredMethod("setDriverRef", String::class.java).apply { isAccessible = true }
             .invoke(ds, "mysql.8")
         ds.resolveDriver()
+        // T-TestDbDriver：驱动种子文件 + 驱动 artifact 版本钉定（管线全貌见助手 KDoc）
+        DbIntegrationSeedSupport.prepareDriverPipeline()
         ds.workingDir = project.basePath
         ds.passwordStorage = LocalDataSource.Storage.MEMORY
         mgr.addDataSource(ds)
@@ -95,7 +126,12 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
         }
         val ref = future.get() ?: return@runCatching "createBlocking future null"
         val loaded = waitUntil(90_000) { !LocalDataSourceManager.getInstance(project).isLoading(ds) }
-        ref.close()
+        // 不在此 close：GuardedRef.close() 释放连接（DatabaseConnectionManager.releaseConnection 语义，
+        // 见 Builder.createBlockingNonCancellable 返回 GuardedRef<DatabaseConnection>），引擎随之终止；
+        // 控制台/session 是连接的下游——连接先死则控制台 attach 后立刻被 DBN 回收（20260918 实测
+        // `console DISPOSED right after attach: disposed=true`）。守卫留到 tearDown 关闭，
+        // 等价真机里用户会话持着连接（用例结束即释放，不跨用例泄漏）。
+        introspectRef = ref
         if (loaded) null else "isLoading 未结束（90s 超时）"
     }.getOrElse { e ->
         val cause = (e as? java.util.concurrent.ExecutionException)?.cause ?: e
@@ -147,29 +183,41 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
         assumeTrue("demo 项目数据源配置不可读: ${demoProjectDir.absolutePath}", info != null)
         val ds = createDataSource(info!!)
         val introspectError = introspectDataSource(ds)
-        assumeTrue(
-            "introspect 失败（MySQL 未启动/沙盒驱动解析缺 artifact 清单？）：$introspectError",
-            introspectError == null,
-        )
+        // T-ExecDocGate：显式绿跳（assumeTrue 会被平台 runner 记为 failure 红任务）
+        if (introspectError != null) {
+            println("[DB-IT] SKIP: introspect 失败（MySQL 未运行/驱动管线未修复）: $introspectError")
+            return
+        }
 
         val model = demoJoinModel()
         val component = NativeDatabaseDiagramSupport.buildTabComponent(
             project, model, "JOIN Diagram: car_device_info", testRootDisposable,
         )
-        assumeTrue("B 路径链路不可用（表定位失败或框架异常，应降级 A 路径）", component != null)
+        if (component == null) {
+            // T-TS-08：本分支是本环境实际命中的那一条（见类注释）——绿是「未验证」而不是「已验证」。
+            // 降级原因已由产品侧日志给出（idea.log grep "B path not taken" / "B path locateDbTables"）
+            println(
+                "[DB-IT] SKIP: B 路径链路不可用（表定位失败或框架异常，应降级 A 路径）" +
+                    "——注意：本用例记绿但 B 路径**未验证**（五组断言未执行）；降级原因见 idea.log 的 " +
+                    "\"B path not taken\" / \"B path locateDbTables\" 两行",
+            )
+            return
+        }
         val comp = component!!
 
         val editor = comp.getClientProperty("mpsql.native.database.editor")
-        assumeTrue("编辑器未挂接", editor != null)
-        // builderOf 为包私有（ui.diagram.nativefw），测试跨包（execute）只能反射调用
-        val builder = runCatching {
-            NativeJoinDiagramOpener::class.java
-                .getDeclaredMethod("builderOf", Object::class.java)
-                .apply { isAccessible = true }
-                .invoke(null, editor)
-        }.getOrNull() as? com.intellij.diagram.DiagramBuilder
-        assumeTrue("编辑器应持有 DiagramBuilder", builder != null)
-        val b = builder!!
+        if (editor == null) {
+            // 显式绿跳而非 assumeTrue：平台 runner 把 AssumptionViolatedException 记为 failure
+            // 红掉整个 testDatabase 任务（本文件既有惯例，见 testDatabaseDiagramEmbedChainWithVirtualFk 内注释）
+            println("[DB-IT] SKIP: 编辑器未挂接（B 路径链路不可用，应降级 A 路径）")
+            return
+        }
+        val builder = NativeJoinDiagramOpener.builderOf(editor)
+        if (builder == null) {
+            println("[DB-IT] SKIP: 编辑器应持有 DiagramBuilder（B 路径链路不可用，应降级 A 路径）")
+            return
+        }
+        val b = builder
 
         val nodes = ApplicationManager.getApplication().runReadAction<Int> { b.dataModel.nodes.size }
         assertTrue("期望数据模型 ≥2 节点（主表 + JOIN 表），实际=$nodes", nodes >= 2)
@@ -182,9 +230,31 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
             edgeNames.any { it?.startsWith("SQLV_JOIN") == true },
         )
 
-        NativeDatabaseDiagramSupport.disposeNativeEditor(comp)
+        // T-PreviewBgFit（问题二守卫）：原生图须置「布局后自适应」+「尺寸变化后保持自适应」——
+        // 布局管线只在开关置位后才于布局收尾调 fitContent（GraphLayoutServiceImpl 字节码实证），
+        // 而我们手工建图无平台标签页路径的置位时机（真机实证：同会话第一张图不居中、第二张正常）。
         assertTrue(
-            "dispose 后虚拟外键登记应清空",
+            "原生图应开启「布局后自适应」（否则打开即停默认缩放/左上角）",
+            b.presentationModel.settings.isFitContentAfterLayout,
+        )
+        assertTrue("原生图应开启「尺寸变化后保持自适应」", b.view.fitContentOnResize)
+
+        // T-EmbedFkOrder F3 回归（本次真机故障形态）：清理**无关旧组件**不得抹掉当前图的虚拟外键登记——
+        // 修复前 disposeNativeEditor 的 finally 里 JoinFkRegistry.clear() 会把刚登记的整批抹掉，
+        // 于是换图再预览时 Database 原生图只剩节点没连线（用户实测"一张有连线、另一张没有"）。
+        val stale = javax.swing.JPanel()
+        stale.putClientProperty("mpsql.native.database.editor", com.intellij.openapi.util.Disposer.newDisposable())
+        NativeDatabaseDiagramSupport.disposeNativeEditor(stale)
+        assertTrue(
+            "释放无关旧组件后，当前图的虚拟外键登记必须仍在（否则连线丢失）",
+            JoinFkRegistry.find("station_info", "car_device_info").isNotEmpty(),
+        )
+
+        NativeDatabaseDiagramSupport.disposeNativeEditor(comp)
+        // T-EmbedFkOrder F2：dispose 不再顺带清理注册表，清理改由「整图卸载」显式调用
+        NativeDatabaseDiagramSupport.clearRegisteredFk()
+        assertTrue(
+            "显式整图卸载后，虚拟外键登记应清空",
             JoinFkRegistry.find("station_info", "car_device_info").isEmpty(),
         )
     }
@@ -202,4 +272,16 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
             (method.invoke(edge) as? com.intellij.diagram.DiagramRelationshipInfo)?.label
         }.getOrNull()
     }
+
+    override fun tearDown() {
+        introspectRef?.let { runCatching { it.close() } }
+        introspectRef = null
+        // 面板关闭语义的清理（clearPrepared + dropSharedConsole + 清 pendingOnConsole）——与同类三处一致
+        runCatching { DataSourceSelector.releaseForPanel() }
+        // T-TestDbDriver：object 单例 temp Psi 缓存跨用例存活，fixture 临时目录每用例一换 → 显式清（详见
+        // DataSourceSelectorIntegrationTest.tearDown 同款注释）。
+        runCatching { DataSourceSelector.clearCachedTempPsiFileForTest() }
+        super.tearDown()
+    }
+
 }

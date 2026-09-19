@@ -52,7 +52,7 @@ public class SqlLogPanelLiveJumpWithSourceTest extends BasePlatformTestCase {
                                                    List<kotlin.Pair<String, Integer>> candidates) {
         return new LogSqlEntry(restoredSql, restoredSql, List.<LogSqlParam>of(), 1L, null,
                 LogSqlEntry.computeSummary(restoredSql), SqlSource.UNKNOWN, null, sourceFile, sourceLine,
-                candidates, 0L, null, null, null, null, null);
+                candidates, List.of(), null, 0L, null, null, null, null, null);
     }
 
     private File writeRealSource(String relativePath, String content) throws Exception {

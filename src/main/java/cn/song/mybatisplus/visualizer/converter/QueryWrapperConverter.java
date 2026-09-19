@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.model.SqlStatement;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.model.WrapperChain;
 import cn.song.mybatisplus.visualizer.model.WrapperType;
+import com.intellij.openapi.project.Project;
 
 import java.util.Set;
 
@@ -26,7 +27,7 @@ public final class QueryWrapperConverter implements WrapperConverter {
     }
 
     @Override
-    public SqlStatement convert(WrapperChain chain, TableInfo table) {
+    public SqlStatement convert(WrapperChain chain, TableInfo table, Project project) {
         return new QueryWrapperParser(table).parse(chain);
     }
 }

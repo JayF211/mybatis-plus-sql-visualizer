@@ -468,6 +468,9 @@ public class ProjectPluginSettingsConfigurable implements Configurable {
         // 无条件写回会把全局值（以及空/null 字段的全局兜底值）当成项目自定义值钉进 state：
         // 用户重开总开关后发现自定义值已被覆盖，或「跟随全局」被悄悄改成硬覆盖值。
         if (!showProject) {
+            // T-FS-08：关闭态同样回灌（与 P1「页面所见即运行时所用」同款——此时控件本就显示全局生效值，
+            // 回灌无变化），保证 apply 之后「控件显示值 ≡ 派生(state)」恒成立。
+            refreshControls(false);
             return;
         }
         // T-TS-FixG7：开启态<b>只写回「控件显示值 != state 推导值」的项</b>——判据与 isModified 的
@@ -526,6 +529,12 @@ public class ProjectPluginSettingsConfigurable implements Configurable {
         if (ignoredFieldsField != null && stringDiffers(ignoredFieldsField, st.getIgnoredFields(), global.getIgnoredFields())) {
             st.setIgnoredFields(ignoredFieldsField.getText().trim());
         }
+        // T-FS-08：写回后按同一批取值函数（shownBool/shownText/expectedDialectItem，经 refreshControls）
+        // 重新推导控件显示值——apply 之后「控件显示值 ≡ 派生(state)」恒成立，isModified 随之复位。
+        // 缺这一步时「开启态清空文本项 → 应用」留下错位：state 已按语义写回空串（= 跟随全局，运行时
+        // 有效值回落到全局值），控件却停在空串 → 逐项比对恒报已修改（应用按钮点不灭，重开设置页显示
+        // 又跳回全局值，用户无从判断自己那次清空到底生效没有）。
+        refreshControls(showProject);
     }
 
     @Override

@@ -9,12 +9,10 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
-import java.awt.datatransfer.Transferable
 import javax.swing.JButton
+import cn.song.mybatisplus.visualizer.testutil.FakeClipboardManager
+import cn.song.mybatisplus.visualizer.testutil.installFakeClipboard
 
 /**
  * P-05：[SqlPreviewPanel] 参数批量导入 / 历史召回集成测试。
@@ -24,18 +22,17 @@ import javax.swing.JButton
  */
 class SqlPreviewPanelImportTest : BasePlatformTestCase() {
 
-    // 测试前快照系统剪贴板，tearDown 恢复，避免剪贴板导入测试污染用户剪贴板
-    private var clipboardSnapshot: Transferable? = null
+    /** T-ClipboardIso：内存剪贴板（测试全程不碰系统剪贴板）。 */
+    private lateinit var clipboard: FakeClipboardManager
 
     override fun setUp() {
         super.setUp()
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = false }
-        clipboardSnapshot = Toolkit.getDefaultToolkit().systemClipboard.getContents(null)
+        clipboard = installFakeClipboard(testRootDisposable)
     }
 
     override fun tearDown() {
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true }
-        runCatching { Toolkit.getDefaultToolkit().systemClipboard.setContents(clipboardSnapshot, null) }
         super.tearDown()
     }
 
@@ -44,7 +41,28 @@ class SqlPreviewPanelImportTest : BasePlatformTestCase() {
         compact: String = "SELECT id FROM tbl",
         params: List<String> = emptyList(),
         tableName: String? = "tbl",
-    ) = PreviewResult(sql, compact, params, if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]", WrapperType.LAMBDA_QUERY, tableName, listOf("id", "name"))
+    ) = PreviewResult(
+        sql,
+        compact,
+        params,
+        if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]",
+        WrapperType.LAMBDA_QUERY,
+        tableName,
+        null,
+        listOf("id", "name"),
+        emptyMap(),
+        null,
+        null,
+        emptyList(),
+        emptyList(),
+        null,
+        null,
+        emptyMap(),
+        null,
+        null,
+        null,
+        null,
+    )
 
     // ------------------------------------------------------------------
     // 导入按钮存在性
@@ -237,14 +255,39 @@ class SqlPreviewPanelImportTest : BasePlatformTestCase() {
 
     fun testClearButtonClearsBatchValues() {
         // 清除按钮：填写列值 → 点击清除 → 输入框清空、勾选态保留
-        val model = BatchModel(BatchKind.INSERT, "biz_store_coupon", listOf(
+        val model = BatchModel(
+            BatchKind.INSERT,
+            "biz_store_coupon",
+            listOf(
                 BatchColumn("name", "entity.name", true, true),
                 BatchColumn("dic_status", "entity.dic_status", false, true),
-            ))
+            ),
+        )
         val active = model.toggleColumns.filter { it.checked }.map { it.columnName }.toSet()
         val panel = SqlPreviewPanel(project)
         panel.showResult(
-            PreviewResult(model.renderSql(active), model.renderSql(active), model.orderedSources(active), null, null, model.tableName, null, model.toggleColumns.map { it.columnName }, emptyMap(), null, null, emptyList(), emptyList(), model, null, emptyMap(), null, null, null, null),
+            PreviewResult(
+                model.renderSql(active),
+                model.renderSql(active),
+                model.orderedSources(active),
+                null,
+                null,
+                model.tableName,
+                null,
+                model.toggleColumns.map { it.columnName },
+                emptyMap(),
+                null,
+                null,
+                emptyList(),
+                emptyList(),
+                model,
+                null,
+                emptyMap(),
+                null,
+                null,
+                null,
+                null,
+            ),
         )
         // 清除按钮存在
         assertNotNull("批量清除按钮应存在", panel.batchClearButtonForTest())

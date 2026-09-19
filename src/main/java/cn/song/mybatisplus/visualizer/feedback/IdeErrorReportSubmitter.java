@@ -16,8 +16,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
-import java.util.function.LongSupplier;
-import java.util.function.Predicate;
+import kotlin.jvm.functions.Function0;
+import kotlin.jvm.functions.Function1;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -62,8 +62,10 @@ public class IdeErrorReportSubmitter extends ErrorReportSubmitter {
                   Consumer<? super SubmittedReportInfo> consumer);
     }
 
-    /** 去重判定 seam（测试注入；生产走 ErrorFingerprint 24h 窗口）。 */
-    public volatile Predicate<String> dedupeGate = ErrorFingerprint::seenRecently;
+    /** 去重判定 seam（测试注入；生产走 ErrorFingerprint 24h 窗口）。
+     *  类型用 Kotlin 函数接口：master 是 {@code internal var dedupeGate: (String) -> Boolean}，
+     *  Kotlin 调用方按属性赋值 lambda，Java 的 {@code Predicate} 在属性赋值位不做 SAM 转换。 */
+    public volatile Function1<String, Boolean> dedupeGate = ErrorFingerprint::seenRecently;
 
     /** 弹框+提交流程 seam（测试注入捕获；生产 {@link #openDialogAndSubmit}）。 */
     public volatile OpenReportFlow openReportFlow =
@@ -80,8 +82,10 @@ public class IdeErrorReportSubmitter extends ErrorReportSubmitter {
      */
     public volatile @Nullable ScheduledExecutorService scheduler = null;
 
-    /** 时钟 seam（3s 强制兜底的等待测量；测试注入固定时间）。 */
-    public volatile LongSupplier clock = System::currentTimeMillis;
+    /** 时钟 seam（3s 强制兜底的等待测量；测试注入固定时间）。
+     *  类型用 Kotlin 函数接口：master 是 {@code internal var clock: () -> Long}，Kotlin 调用方
+     *  按属性赋值 lambda，Java 的 {@code LongSupplier} 在属性赋值位不做 SAM 转换。 */
+    public volatile Function0<Long> clock = System::currentTimeMillis;
 
     /** 同一波待合并调用：新鲜事件 + 该次调用的平台 consumer（flush 后统一回调）。 */
     public static final class PendingCall {
@@ -112,7 +116,7 @@ public class IdeErrorReportSubmitter extends ErrorReportSubmitter {
     }
 
     @Override
-    public String getPrivacyNoticeText() {
+    public @NotNull String getPrivacyNoticeText() {
         return MpSqlVisualizerBundle.messageForIde("error.report.privacy");
     }
 
@@ -130,7 +134,7 @@ public class IdeErrorReportSubmitter extends ErrorReportSubmitter {
         for (IdeaLoggingEvent event : events) {
             String throwableClassName = event.getThrowable() != null
                     ? event.getThrowable().getClass().getName() : null;
-            if (!dedupeGate.test(ErrorFingerprint.of(throwableClassName, event.getThrowableText()))) {
+            if (!dedupeGate.invoke(ErrorFingerprint.of(throwableClassName, event.getThrowableText()))) {
                 fresh.add(event);
             }
         }
@@ -151,7 +155,7 @@ public class IdeErrorReportSubmitter extends ErrorReportSubmitter {
         }
         synchronized (flushLock) {
             if (pendingCalls.isEmpty()) {
-                firstPendingAt = clock.getAsLong();
+                firstPendingAt = clock.invoke();
             }
             pendingCalls.addLast(call);
             if (flushFuture != null) {
@@ -160,7 +164,7 @@ public class IdeErrorReportSubmitter extends ErrorReportSubmitter {
             // T-PerfSweep3 #2：队列达上限立即排 0ms flush——平台「报告全部」逐簇循环的理论次数无上界，
             // 队列不跟着无界；语义是「提前合并落框」而非丢弃（第 65 条起仍全部进 flush，只是不等窗口；
             // 64 条内维持去抖窗口语义不变）
-            if (pendingCalls.size() > MAX_PENDING_CALLS || clock.getAsLong() - firstPendingAt >= MAX_WAIT_MS) {
+            if (pendingCalls.size() > MAX_PENDING_CALLS || clock.invoke() - firstPendingAt >= MAX_WAIT_MS) {
                 delayMs = 0;
             }
             final long scheduledDelay = delayMs;

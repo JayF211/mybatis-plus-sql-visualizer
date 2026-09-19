@@ -186,4 +186,101 @@ class SettingsIOTest {
         assertEquals("默认 formatSql", true, restored.formatSql)
         assertEquals("默认 injectLogicDelete", true, restored.injectLogicDelete)
     }
+
+    // ------------------------------------------------------------------
+    // T-Fix-SettingsScope：导入按「JSON 出现的键才覆盖」合并
+    // ------------------------------------------------------------------
+
+    @Test
+    fun testImportMergesIntoBaseKeepingKeysAbsentFromJson() {
+        // 导出面是 State 的子集（21 键 vs 77 个 var 字段）。以现值为底合并时，文件未承载的
+        // 字段必须原样保留——否则参数历史/增强捕获授权记忆/反馈身份/日志自动保存目录等
+        // 用户数据会在一次「导入设置」后静默归零。
+        val base = PluginSettings.State().apply {
+            dialect = "Oracle"
+            tablePrefix = "keep_"
+            paramHistoryJson = """[{"sql":"select 1"}]"""
+            enhancedCaptureConfirmed = true
+            reportSubmitterName = "tester"
+            logAutoSavePath = "D:/logs"
+            historyMaxSize = 42
+            showGutterIcon = false
+            autoCheckUpdate = true
+            ignoredUpdateVersions = "1.2.3"
+        }
+        val json = """
+            {
+              "version": $currentVersion,
+              "dialect": "PostgreSQL",
+              "tablePrefix": "imported_"
+            }
+        """.trimIndent()
+
+        val merged = SettingsIO.importFromJson(json, base)
+
+        // JSON 出现的键 → 被文件值覆盖
+        assertEquals("dialect 应被文件值覆盖", "PostgreSQL", merged.dialect)
+        assertEquals("tablePrefix 应被文件值覆盖", "imported_", merged.tablePrefix)
+        // JSON 未出现的键 → 保留 base 现值
+        assertEquals("参数历史应保留", """[{"sql":"select 1"}]""", merged.paramHistoryJson)
+        assertEquals("增强捕获授权记忆应保留", true, merged.enhancedCaptureConfirmed)
+        assertEquals("反馈身份应保留", "tester", merged.reportSubmitterName)
+        assertEquals("日志自动保存目录应保留", "D:/logs", merged.logAutoSavePath)
+        assertEquals("历史上限应保留", 42, merged.historyMaxSize)
+        assertEquals("Gutter 图标开关应保留", false, merged.showGutterIcon)
+        assertEquals("更新检查开关应保留（SettingsIO 自称不含全局项）", true, merged.autoCheckUpdate)
+        assertEquals("忽略版本列表应保留", "1.2.3", merged.ignoredUpdateVersions)
+        // 合并不得就地改写 base（调用方传入的是活状态副本）
+        assertEquals("base 不应被就地改写", "Oracle", base.dialect)
+        assertEquals("base.tablePrefix 不应被就地改写", "keep_", base.tablePrefix)
+    }
+
+    @Test
+    fun testImportWithoutBaseStillYieldsFactoryDefaults() {
+        // 不带 base 的重载保持旧语义：未出现的键回落出厂默认（旧版配置文件兼容路径）
+        val json = """
+            {
+              "version": $currentVersion,
+              "dialect": "Oracle"
+            }
+        """.trimIndent()
+        val state = SettingsIO.importFromJson(json)
+        assertEquals("dialect 应恢复", "Oracle", state.dialect)
+        assertEquals("未出现的键回落出厂默认", "", state.paramHistoryJson)
+        assertEquals("未出现的键回落出厂默认", PluginSettings.DEFAULT_HISTORY_MAX_SIZE, state.historyMaxSize)
+    }
+
+    // ------------------------------------------------------------------
+    // T-TS-FixC：dialectAuto 键（T-DialectAutoInfer 新增）白名单无回归
+    // ------------------------------------------------------------------
+
+    /**
+     * `dialectAuto` 的导出/导入往返。本用例的存在意义是**白名单钉子**：该键此前在
+     * SettingsIOTest 零出现，一旦 [SettingsIO.exportToJson] 的导出面或 [SettingsIO.importFromJson]
+     * 的读取面漏掉它，「方言智能推断」开关就会在团队分发配置后静默丢失（导入端表现为回落 base 现值）。
+     */
+    @Test
+    fun testDialectAutoExportImportRoundTrip() {
+        // 导出恒写该键（true / false 两态都要在文件里可读）
+        val exportedFalse = SettingsIO.exportToJson(PluginSettings.State().apply { dialectAuto = false })
+        assertTrue("导出应含 dialectAuto 键", exportedFalse.contains("\"dialectAuto\": false"))
+        assertEquals("导入应恢复 false", false, SettingsIO.importFromJson(exportedFalse).dialectAuto)
+
+        val exportedTrue = SettingsIO.exportToJson(PluginSettings.State().apply { dialectAuto = true })
+        assertTrue("导出应含 dialectAuto 键", exportedTrue.contains("\"dialectAuto\": true"))
+        assertEquals("导入应恢复 true", true, SettingsIO.importFromJson(exportedTrue).dialectAuto)
+
+        // 键缺失 → 保留 base 现值（不得被静默重置为出厂默认 true）
+        val withoutKey = """
+            {
+              "version": $currentVersion,
+              "dialect": "MySQL"
+            }
+        """.trimIndent()
+        assertEquals(
+            "JSON 未含 dialectAuto 时应保留 base 现值 false",
+            false,
+            SettingsIO.importFromJson(withoutKey, PluginSettings.State().apply { dialectAuto = false }).dialectAuto,
+        )
+    }
 }

@@ -193,6 +193,38 @@ public class SqlCompletionContributorTest extends BasePlatformTestCase {
     }
 
     @Test
+    public void testColumnLookupElementRendersCommentAndDbType() throws Exception {
+        // T-DbSchemaCompletion：列候选 tailText = 注释 + DB 类型串（渲染验证）。
+        // 类型串是「这条来自数据源」的可视标记——此前库里独有的列根本不进候选，用户无从分辨来源。
+        LookupElementPresentation withBoth = new LookupElementPresentation();
+        SqlCompletionCandidatesKt.columnLookupElement(new ColumnCandidate("username", "姓名", "varchar(64)"))
+                .renderElement(withBoth);
+        assertEquals("  姓名  varchar(64)", withBoth.getTailText());
+
+        LookupElementPresentation typeOnly = new LookupElementPresentation();
+        SqlCompletionCandidatesKt.columnLookupElement(new ColumnCandidate("legacy_flag", null, "tinyint(1)"))
+                .renderElement(typeOnly);
+        assertEquals("库列无 COMMENT：只展示 DB 类型串", "  tinyint(1)", typeOnly.getTailText());
+
+        // 实体列（无 DB 类型）与无信息列：保持改动前形态
+        LookupElementPresentation commentOnly = new LookupElementPresentation();
+        SqlCompletionCandidatesKt.columnLookupElement(new ColumnCandidate("id", "主键", null))
+                .renderElement(commentOnly);
+        assertEquals("  主键", commentOnly.getTailText());
+
+        LookupElementPresentation bare = new LookupElementPresentation();
+        SqlCompletionCandidatesKt.columnLookupElement(new ColumnCandidate("password", null, null))
+                .renderElement(bare);
+        assertNull(bare.getTailText());
+
+        // 注释仍可作关键词检索（M16 语义保留）
+        assertTrue(
+                "注释应进入 lookup strings 供关键词检索",
+                SqlCompletionCandidatesKt.columnLookupElement(new ColumnCandidate("username", "姓名", "varchar(64)"))
+                        .getAllLookupStrings().contains("姓名"));
+    }
+
+    @Test
     public void testResolveContextLevel3DocumentMap() throws Exception {
         // M34 回归修复（registerContext 从未被调用，documentContexts 恒空 → level 3 死路径）：
         // 注册后 Editor/PSI userData 均丢失时，Document→Context 映射应兜底返回上下文。

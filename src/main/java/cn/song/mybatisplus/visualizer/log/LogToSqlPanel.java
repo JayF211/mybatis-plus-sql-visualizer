@@ -645,7 +645,7 @@ public class LogToSqlPanel extends JPanel implements Disposable {
      * （单实现三处历史切分合一）；新增括号深度与 BEGIN/END 块感知两项语义
      * （迁移前后既有样例输出逐段一致，守卫测试锁死）。
      */
-    static java.util.List<String> splitSqlStatements(String sql) {
+    public static java.util.List<String> splitSqlStatements(String sql) {
         return cn.song.mybatisplus.visualizer.util.SqlStatementSplitter.split(sql);
     }
 
@@ -654,7 +654,7 @@ public class LogToSqlPanel extends JPanel implements Disposable {
      * 异构语句在场时按「N/M 条」披露（不静默丢）；展示预算截值清单时<b>计数后缀恒可见</b>
      * （先裁值再拼「…等 N 条」，N = 行数/字节超限 + 展示裁掉的值数之和——绝不无计数截断）。
      */
-    static String buildMergeAdText(java.util.List<String> statements) {
+    public static String buildMergeAdText(java.util.List<String> statements) {
         cn.song.mybatisplus.visualizer.util.BatchPredicateMerge.MergePreview preview =
                 cn.song.mybatisplus.visualizer.util.BatchPredicateMerge.mergePreview(statements);
         if (preview == null) return null;

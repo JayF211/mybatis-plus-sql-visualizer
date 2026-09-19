@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.io.File
 
@@ -89,6 +90,31 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
 
             val yesterday = panel.fileListEntries.first { it.displayName == "sql-history-2026-08-30.sql" }
             assertEquals("昨天文件 2 条 SQL", 2, yesterday.sqlCount)
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    /*
+     * T-SqlHistoryFull：全量历史 → 单文件条目成百上千，二级列表分批填充（首屏 30 + 每 30 追加）。
+     * 断言分批后最终条目完整、顺序保持、且不产生幽灵/重复（gen 代际守卫）。
+     */
+    fun test二级大文件_分批填充最终完整且顺序保持() {
+        // 100 条（> 首屏 30），每条独立 SQL 避免去重干扰
+        val n = 100
+        val entries = (1..n).map { Triple("SELECT * FROM big_table WHERE id = $it", "BigMapper.java:$it", it.toLong()) }
+        writeHistoryFile("sql-history-2026-09-17.sql", f44FileContent(entries))
+
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+        try {
+            panel.openFileForTest(panel.fileListEntries.first())
+            // 反复 pump EDT，驱动 invokeLater 分块追加走完（与 SqlLogPanel 验证同法）
+            repeat(20) { com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents() }
+            assertEquals("分批后最终条目完整", n, panel.sqlListEntries.size)
+            assertEquals("首条顺序保持", "SELECT * FROM big_table WHERE id = 1", panel.sqlListEntries[0].restoredSql)
+            assertEquals("末条顺序保持", "SELECT * FROM big_table WHERE id = 100", panel.sqlListEntries[n - 1].restoredSql)
+            // 无重复（同一性——分批追加不得重复填同一实例）
+            assertEquals("无重复条目", n, panel.sqlListEntries.distinct().size)
         } finally {
             panel.dispose()
         }
@@ -273,8 +299,8 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             panel.openFileForTest(panel.fileListEntries.first())
             val entry = panel.sqlListEntries.single()
             // 模拟旧模式残留缓存（键=FORMATTED，与当前模式不同——渲染读取处按键比对自动失效）
-            entry.setCachedListLineFragments(listOf(emptyList()))
-            entry.setCachedListLineFragmentsMode(SqlListDisplayMode.FORMATTED)
+            entry.cachedListLineFragments = listOf(emptyList())
+            entry.cachedListLineFragmentsMode = SqlListDisplayMode.FORMATTED
 
             panel.onDisplayModeChanged() // 等价 SETTINGS_CHANGE_TOPIC 广播后的处理
 

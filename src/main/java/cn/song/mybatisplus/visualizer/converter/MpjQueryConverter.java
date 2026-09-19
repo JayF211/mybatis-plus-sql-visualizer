@@ -12,6 +12,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperArg;
 import cn.song.mybatisplus.visualizer.model.WrapperCall;
 import cn.song.mybatisplus.visualizer.model.WrapperChain;
 import cn.song.mybatisplus.visualizer.model.WrapperType;
+import com.intellij.openapi.project.Project;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -39,7 +40,7 @@ public final class MpjQueryConverter implements WrapperConverter {
     }
 
     @Override
-    public SqlStatement convert(WrapperChain chain, TableInfo table) {
+    public SqlStatement convert(WrapperChain chain, TableInfo table, Project project) {
         List<WrapperCall> selectCalls = new ArrayList<>();
         List<WrapperCall> joinCalls = new ArrayList<>();
         List<WrapperCall> ignoreCalls = new ArrayList<>();

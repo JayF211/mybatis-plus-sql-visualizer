@@ -56,6 +56,11 @@ public final class CallerMethodRangeResolver {
         public String label() {
             return className + "#" + methodName;
         }
+
+        /** Kotlin {@code val label} 的 JVM 访问器等价入口（Kotlin 调用方按属性名读取）。 */
+        public String getLabel() {
+            return label();
+        }
     }
 
     /**

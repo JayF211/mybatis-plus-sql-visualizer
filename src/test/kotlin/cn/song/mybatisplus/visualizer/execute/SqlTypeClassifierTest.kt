@@ -266,4 +266,151 @@ class SqlTypeClassifierTest {
         assertTrue("MySQL SELECT 应为查询",
             SqlTypeClassifier.isQuery("SELECT * FROM users LIMIT 5, 10"))
     }
+
+    // ======================== 只读二级证明（T-TxnReadOnlyProof N-21） ========================
+
+    // ---- 盲区 1：可写 CTE ----
+
+    @Test
+    fun testWritableCteDeleteIsNotQuery() {
+        assertFalse("可写 CTE（WITH 内 DELETE）应需确认——首关键字 WITH 曾免确认直通真执行 DELETE",
+            SqlTypeClassifier.isQuery("WITH del AS (DELETE FROM users WHERE id = 1) SELECT * FROM del"))
+    }
+
+    @Test
+    fun testWritableCteUpdateInTrailingStatementIsNotQuery() {
+        assertFalse("尾随主语句为 UPDATE 的 CTE 应需确认",
+            SqlTypeClassifier.isQuery("WITH cte AS (SELECT 1) UPDATE users SET name = 'x'"))
+    }
+
+    @Test
+    fun testWritableCteInsertKeywordIsNotQuery() {
+        assertFalse("CTE 体内 INSERT 关键字应需确认",
+            SqlTypeClassifier.isQuery("WITH ins AS (INSERT INTO t VALUES (1) RETURNING id) SELECT * FROM ins"))
+    }
+
+    @Test
+    fun testPlainCteRemainsQuery() {
+        assertTrue("普通 CTE 查询仍免确认",
+            SqlTypeClassifier.isQuery("WITH cte AS (SELECT id FROM users) SELECT * FROM cte"))
+    }
+
+    @Test
+    fun testCteColumnNamedDeletedAtRemainsQuery() {
+        // 字边界匹配：列名 deleted_at 是一个词，不误判为 DELETE
+        assertTrue("列名 deleted_at 的普通 CTE 查询仍免确认",
+            SqlTypeClassifier.isQuery("WITH recent AS (SELECT deleted_at FROM logs) SELECT * FROM recent"))
+    }
+
+    @Test
+    fun testCteKeywordInStringLiteralRemainsQuery() {
+        // 字符串字面量屏蔽：常量值 'delete from t' 不参与词法扫描
+        assertTrue("字符串字面量内写关键字不误判",
+            SqlTypeClassifier.isQuery("WITH c AS (SELECT 'delete from t' AS v) SELECT * FROM c"))
+    }
+
+    // ---- 盲区 2：EXPLAIN ANALYZE ----
+
+    @Test
+    fun testExplainAnalyzeDeleteIsNotQuery() {
+        assertFalse("EXPLAIN ANALYZE DELETE 应需确认——PG 语义 ANALYZE 真实执行被修饰语句",
+            SqlTypeClassifier.isQuery("EXPLAIN ANALYZE DELETE FROM users WHERE id = 1"))
+    }
+
+    @Test
+    fun testExplainAnalyzeUpdateIsNotQuery() {
+        assertFalse("EXPLAIN ANALYZE UPDATE 应需确认",
+            SqlTypeClassifier.isQuery("EXPLAIN ANALYZE UPDATE users SET name = 'x'"))
+    }
+
+    @Test
+    fun testExplainParenthesizedAnalyzeInsertIsNotQuery() {
+        assertFalse("EXPLAIN (ANALYZE, BUFFERS) INSERT 变体应需确认",
+            SqlTypeClassifier.isQuery("EXPLAIN (ANALYZE, BUFFERS) INSERT INTO t VALUES (1)"))
+    }
+
+    @Test
+    fun testPlainExplainRemainsQuery() {
+        assertTrue("普通 EXPLAIN SELECT 仍免确认",
+            SqlTypeClassifier.isQuery("EXPLAIN SELECT * FROM users"))
+    }
+
+    @Test
+    fun testExplainAnalyzeSelectRemainsQuery() {
+        // EXPLAIN ANALYZE SELECT 只读执行查询——豁免维持（SELECT 只读已由二级证明独立保证）
+        assertTrue("EXPLAIN ANALYZE SELECT 仍免确认",
+            SqlTypeClassifier.isQuery("EXPLAIN ANALYZE SELECT * FROM users"))
+    }
+
+    // ---- 盲区 3：SELECT INTO ----
+
+    @Test
+    fun testSelectIntoOutfileIsNotQuery() {
+        assertFalse("SELECT INTO OUTFILE 应需确认——MySQL 写服务端文件",
+            SqlTypeClassifier.isQuery("SELECT * FROM users INTO OUTFILE '/tmp/users.csv'"))
+    }
+
+    @Test
+    fun testSelectIntoDumpfileIsNotQuery() {
+        assertFalse("SELECT INTO DUMPFILE 应需确认",
+            SqlTypeClassifier.isQuery("SELECT * FROM users INTO DUMPFILE '/tmp/binary'"))
+    }
+
+    @Test
+    fun testSelectIntoNewTableIsNotQuery() {
+        assertFalse("PG SELECT INTO new_table 建表形态应需确认",
+            SqlTypeClassifier.isQuery("SELECT * INTO users_backup FROM users"))
+    }
+
+    @Test
+    fun testSelectIntoSessionVarRemainsQuery() {
+        assertTrue("SELECT INTO @v 会话变量维持豁免",
+            SqlTypeClassifier.isQuery("SELECT COUNT(*) INTO @total FROM users"))
+    }
+
+    @Test
+    fun testSelectTrailingIntoOutfileIsNotQuery() {
+        // MySQL 尾随形态：FROM … INTO OUTFILE
+        assertFalse("MySQL 尾随 INTO OUTFILE 形态应需确认",
+            SqlTypeClassifier.isQuery("SELECT * FROM users INTO OUTFILE '/tmp/x' FIELDS TERMINATED BY ','"))
+    }
+
+    // ---- 防回归：既有豁免路径逐字节不变 + 混合/UNKNOWN 既有语义 ----
+
+    @Test
+    fun testReadOnlyProofPlainSelectClassifyStaysQuery() {
+        assertEquals("普通 SELECT 分类仍为 QUERY（豁免收窄只在盲区生效）",
+            SqlType.QUERY, SqlTypeClassifier.classify("SELECT * FROM users WHERE status = 1"))
+    }
+
+    @Test
+    fun testWritableCteClassifiesUnknownNotDml() {
+        // 收窄落点：可写 CTE 改判 UNKNOWN（fail-closed 转确认），不冒充 DML
+        assertEquals("可写 CTE 改判 UNKNOWN",
+            SqlType.UNKNOWN, SqlTypeClassifier.classify("WITH d AS (DELETE FROM t) SELECT * FROM d"))
+    }
+
+    @Test
+    fun testMixedSelectAndWritableCteIsNotQuery() {
+        assertFalse("普通 SELECT + 可写 CTE 混合 → 任一非 QUERY 即需确认",
+            SqlTypeClassifier.isQuery("SELECT 1; WITH d AS (DELETE FROM t) SELECT * FROM d"))
+    }
+
+    @Test
+    fun testCommentKeywordNotMisjudged() {
+        // 注释内写关键字不参与判定（拆句去注释既有能力，引 T-SemicolonGuard 后能力）
+        assertTrue("注释内写关键字的普通 CTE 查询仍免确认",
+            SqlTypeClassifier.isQuery("/* update rows */ WITH c AS (SELECT 1) SELECT * FROM c"))
+    }
+
+    @Test
+    fun testTsqlControlFlowBatchFallsToUnknownNeedsConfirm() {
+        // T-TsqlBatchSplit T-TB-02：整批 T-SQL 控制流（IF/BEGIN 起头）分类落 UNKNOWN → 需确认
+        // （fail-closed 既有行为钉死——拆分器批首合并后控制流批以整批进确认流）
+        assertEquals("裸 IF…ELSE 批判 UNKNOWN",
+            SqlType.UNKNOWN,
+            SqlTypeClassifier.classify("IF @x = 1 UPDATE t SET a = 1; ELSE INSERT INTO t VALUES (1)"))
+        assertFalse("整批 T-SQL 控制流需确认",
+            SqlTypeClassifier.isQuery("IF EXISTS (SELECT 1 FROM t) BEGIN DELETE FROM t; END"))
+    }
 }

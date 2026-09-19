@@ -795,6 +795,8 @@ class SqlPreviewServiceJpaCrudTest : BasePlatformTestCase() {
         val settings = PluginSettings.getInstance()
         val snapshot = settings.getState().copy()
         try {
+            // T-DialectAutoInfer：走手动模式（默认推断会无视手动方言）
+            settings.state.dialectAuto = false
             settings.state.dialect = "Oracle"
             myFixture.configureByText(
                 "Demo.java",

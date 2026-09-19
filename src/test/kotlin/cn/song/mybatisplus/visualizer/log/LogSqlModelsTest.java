@@ -83,4 +83,17 @@ public class LogSqlModelsTest {
         assertEquals("SELECT 1", entry.withSequenceNumber(8L).restoredSql());
         assertEquals(7L, entry.sequenceNumber());
     }
+
+    // ---------- T-PS4-04：normalizeSqlWhitespace 空白折叠正则提常量（行为等价防回潮） ----------
+
+    @Test
+    public void 空白规范化_trim加连续空白折叠行为钉死() throws Exception {
+        // 常量为文件级 private，按行为等价钉住语义：trim + \s+ 折叠单空格；
+        // 回退「replace(Regex(...)) 现场编译」行为不变测试仍绿（性能项），模式被改坏必红。
+        assertEquals("a b", LogSqlModelsKt.normalizeSqlWhitespace("  a \t\n b  "));
+        assertEquals("a b c", LogSqlModelsKt.normalizeSqlWhitespace("a\tb\nc"));
+        assertEquals("SELECT * FROM t WHERE id = 1", LogSqlModelsKt.normalizeSqlWhitespace("SELECT * FROM t WHERE id = 1"));
+        // 大小写与分号不动（COUNT 前缀判定、达梦带引号标识符大小写依赖）
+        assertEquals("SELECT count(*) FROM T;", LogSqlModelsKt.normalizeSqlWhitespace("SELECT count(*) FROM T;"));
+    }
 }

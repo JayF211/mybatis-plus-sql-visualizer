@@ -119,6 +119,7 @@ public class XmlPreviewModelTest {
 
     @Test
     public void foreach默认展开两次_次数可调() throws Exception {
+        // T-GoldenDefense：collection="map.items" 形态锁定为金样矩阵 X5（XmlMapParamSpecMatrixTest）
         XmlPreviewModel m = model("""
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t WHERE id IN
@@ -166,6 +167,7 @@ public class XmlPreviewModelTest {
 
     @Test
     public void 条件开关切换分支() throws Exception {
+        // T-GoldenDefense：Map 参数条件（map.status != null）开关语义锁定为金样矩阵 X3（XmlMapParamSpecMatrixTest）
         XmlPreviewModel m = model("""
                 <mapper namespace="n">
                   <select id="s1">SELECT * FROM t
@@ -235,6 +237,7 @@ public class XmlPreviewModelTest {
     @Test
     public void quoteFor_Map参数前缀兜底() throws Exception {
         // Map 入参：键 = 参数名 p，任意 p.* 属性前缀命中（T-M29.4 兜底语义）
+        // T-GoldenDefense：@Param("map") 命名形态已锁定为金样矩阵 X2（XmlMapParamSpecMatrixTest）
         XmlPreviewModel m = XmlPreviewModel.from(
                 new XmlMapperParser().parse("""
                         <mapper namespace="n">
@@ -259,5 +262,83 @@ public class XmlPreviewModelTest {
                 Map.of("p", true, "p.dicCreditStatus", false));
         assertEquals(Boolean.FALSE, mixed.quoteFor("p.dicCreditStatus"));
         assertEquals(Boolean.TRUE, mixed.quoteFor("p.settlementStartDate"));
+    }
+
+    // ------------------------------------------------------------------
+    // T-ExprAstPrecheck T-EP-02：if test 求值失败不再静默
+    // ------------------------------------------------------------------
+
+    @Test
+    public void if求值失败记错误_默认展开行为不变() throws Exception {
+        XmlMapperModel parsed = new XmlMapperParser().parse("""
+                <mapper namespace="n">
+                  <select id="s1">SELECT * FROM t
+                    <if test="not valid @@ expression">WHERE a = 1</if>
+                  </select>
+                </mapper>
+                """.stripTrailing());
+        // 开关缺席（无 conditionOverrides）→ 走表达式求值兜底：解析失败仍默认展开 true，但必须记 errors
+        RenderedXmlSql rendered = new XmlSqlRenderer().render(parsed.statements().get(0).node(), Map.of());
+        assertEquals("SELECT * FROM t WHERE a = 1", compact(rendered.sql()));
+        assertTrue(
+                "求值失败的 test 应留下可见错误：" + rendered.errors(),
+                rendered.errors().stream()
+                        .anyMatch(e -> e.contains("条件表达式无法求值，已按 true 展开——可在预览面板用开关覆盖")));
+        // 表达式原文随错误一并带出（用户据此定位是哪条条件）
+        assertTrue(
+                "错误应含 test 原文：" + rendered.errors(),
+                rendered.errors().stream().anyMatch(e -> e.contains("not valid @@ expression")));
+    }
+
+    @Test
+    public void if求值成功的test不记错误() throws Exception {
+        XmlMapperModel parsed = new XmlMapperParser().parse("""
+                <mapper namespace="n">
+                  <select id="s1">SELECT * FROM t
+                    <if test="a != null">WHERE a = 1</if>
+                  </select>
+                </mapper>
+                """.stripTrailing());
+        RenderedXmlSql rendered = new XmlSqlRenderer().render(parsed.statements().get(0).node(), Map.of("a", "1"));
+        assertEquals("SELECT * FROM t WHERE a = 1", compact(rendered.sql()));
+        assertTrue("求值成功不应记错误：" + rendered.errors(), rendered.errors().isEmpty());
+    }
+
+    // ------------------------------------------------------------------
+    // T-ExprAstPrecheck T-EP-03：条件行支持面预检标注
+    // ------------------------------------------------------------------
+
+    @Test
+    public void 条件行支持面标注_三档与展开行为无关() throws Exception {
+        XmlPreviewModel m = model("""
+                <mapper namespace="n">
+                  <select id="s1">SELECT * FROM t
+                    <if test="a != null and a.size() > 0">AND a = 1</if>
+                    <if test="a ? b : c">AND b = 2</if>
+                    <if test="map.length() > 0">AND c = 3</if>
+                  </select>
+                </mapper>
+                """.stripTrailing());
+        Map<String, XmlConditionView> byId = m.getConditionViews().stream()
+                .collect(Collectors.toMap(XmlConditionView::id, v -> v));
+
+        XmlConditionView supported = byId.get("a != null and a.size() > 0");
+        assertEquals(ExprSupport.SUPPORTED, supported.support());
+        assertEquals(null, supported.supportReason());
+        assertEquals(null, supported.supportDetail());
+
+        XmlConditionView syntax = byId.get("a ? b : c");
+        assertEquals(ExprSupport.UNSUPPORTED_SYNTAX, syntax.support());
+        assertEquals(ExprReason.SYNTAX, syntax.supportReason());
+        assertTrue("解析失败应带解析器消息：" + syntax.supportDetail(),
+                syntax.supportDetail() != null && !syntax.supportDetail().isBlank());
+
+        XmlConditionView fallback = byId.get("map.length() > 0");
+        assertEquals(ExprSupport.EVAL_FALLBACK, fallback.support());
+        assertEquals(ExprReason.NARROW_CARRIER, fallback.supportReason());
+        assertEquals("length", fallback.supportDetail());
+
+        // 标注只是提示：默认渲染三个条件全部按启发式展开（行为零变化）
+        assertEquals("SELECT * FROM t AND a = 1 AND b = 2 AND c = 3", compact(m.renderSql().sql()));
     }
 }

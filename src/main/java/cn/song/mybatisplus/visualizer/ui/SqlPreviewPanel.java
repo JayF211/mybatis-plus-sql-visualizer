@@ -10,8 +10,8 @@ import cn.song.mybatisplus.visualizer.model.BatchModel;
 import cn.song.mybatisplus.visualizer.model.ConditionView;
 import cn.song.mybatisplus.visualizer.model.FillClause;
 import cn.song.mybatisplus.visualizer.model.LikePosition;
-import cn.song.mybatisplus.visualizer.xml.OgnlExpr.ExprReason;
-import cn.song.mybatisplus.visualizer.xml.OgnlExpr.ExprSupport;
+import cn.song.mybatisplus.visualizer.xml.ExprReason;
+import cn.song.mybatisplus.visualizer.xml.ExprSupport;
 import cn.song.mybatisplus.visualizer.xml.PagesColumn;
 import cn.song.mybatisplus.visualizer.xml.ParamKind;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
@@ -862,6 +862,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** {@link #executeAdhocSql(String, boolean, RollbackSnapshotStore.SnapshotEntry)} 的默认参形态。 */
     void executeAdhocSql(String sql) {
         executeAdhocSql(sql, false, null);
+    }
+
+    /** {@link #executeAdhocSql(String, boolean, RollbackSnapshotStore.SnapshotEntry)} 的默认参形态。 */
+    void executeAdhocSql(String sql, boolean dmlConfirmed) {
+        executeAdhocSql(sql, dmlConfirmed, null);
     }
 
     /**
@@ -3881,20 +3886,20 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     }
 
     // ------------------------------------------------------------------
-    // 测试访问（同模块测试使用）
+    // 测试访问（跨包测试使用；master 侧 internal → public，KOTLIN_TO_JAVA_RULES §0.1）
     // ------------------------------------------------------------------
 
-    Editor editorForTest() {
+    public Editor editorForTest() {
         return editor;
     }
 
     /** T-PreviewConsoleFmt 测试缝：模拟控制台文档已就绪（nativeDoc 指向该文档）。 */
-    void markNativeDocForTest(Document doc) {
+    public void markNativeDocForTest(Document doc) {
         nativeEditorDoc = doc;
     }
 
     /** T-PreviewConsoleFmt 测试缝：挂载后回填渲染的等价入口。 */
-    void renderSqlForTest() {
+    public void renderSqlForTest() {
         renderSql();
     }
 

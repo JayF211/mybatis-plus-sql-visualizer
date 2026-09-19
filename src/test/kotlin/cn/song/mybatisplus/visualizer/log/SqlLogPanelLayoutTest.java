@@ -55,9 +55,13 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
             assertNotNull("SQL类型按钮应存在", panel.getTypeFilterButtonForTest());
             assertNotNull("去重勾选框应存在", panel.getDedupeCheckBoxForTest());
             assertNotNull("搜索条应存在", panel.getSearchFieldForTest());
-            assertTrue("工具栏动作组应含 ≥4 个动作（清空/设置/搜索/帮助）",
-                    panel.toolbarGroup.getChildActionsOrStubs().length >= 4);
-            assertNotNull("捕捉开关动作应存在（标题栏挂载用）", panel.getCaptureToggleAction());
+            // T-CaptureBack：捕捉开关回归面板工具栏首位（曾迁标题栏致入口不可见），
+            // 工具栏组含 5 个动作；捕捉动作存在于组内且为捕捉态
+            assertTrue("工具栏动作组应含 ≥5 个动作（捕捉/清空/设置/搜索/帮助）",
+                    panel.toolbarGroup.getChildActionsOrStubs().length >= 5);
+            assertTrue("捕捉开关动作应在工具栏组内（回迁面板工具栏）",
+                    java.util.Arrays.asList(panel.toolbarGroup.getChildActionsOrStubs())
+                            .contains(panel.getCaptureToggleAction()));
 
             // 默认可见性：排序方式选择器恒可见（默认时间升序）；搜索条默认隐藏；慢查询标签隐藏
             assertEquals("排序方式选择器应恒可见", true, panel.getSortButtonForTest().isVisible());

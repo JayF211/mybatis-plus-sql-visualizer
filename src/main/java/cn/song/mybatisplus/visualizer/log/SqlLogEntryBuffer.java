@@ -140,6 +140,11 @@ public class SqlLogEntryBuffer {
         return dedupeEnabled;
     }
 
+    /** Kotlin {@code var dedupeEnabled} 的 JVM 访问器等价入口（Kotlin 调用方按属性名读取）。 */
+    public boolean getDedupeEnabled() {
+        return dedupeEnabled;
+    }
+
     public void setDedupeEnabled(boolean dedupeEnabled) {
         this.dedupeEnabled = dedupeEnabled;
     }

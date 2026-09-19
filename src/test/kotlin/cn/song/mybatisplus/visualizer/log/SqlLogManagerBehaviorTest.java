@@ -461,10 +461,8 @@ public class SqlLogManagerBehaviorTest extends BasePlatformTestCase {
     @Test
     public void testT16_AttachFilter_notCapturing_skipsAttach() throws Exception {
         SpyBridge bridge = new SpyBridge(true, () -> false);
-        // 通过反射调用私有 attachFilter 方法验证守卫
-        Method method = SqlLogConsoleBridge.class.getDeclaredMethod("attachFilter", Object.class);
-        method.setAccessible(true);
-        method.invoke(bridge, new Object());
+        // T-PS4-02：attachFilter 自 private 改 internal（测试缝）——同包测试直接调用，守卫断言语义不变
+        bridge.attachFilter(new Object());
         assertTrue("非捕捉态时 attachFilter 不应挂载", bridge.attachedConsoles.isEmpty());
     }
 

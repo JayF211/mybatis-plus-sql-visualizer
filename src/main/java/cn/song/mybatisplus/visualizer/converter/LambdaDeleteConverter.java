@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.model.SqlStatement;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.model.WrapperChain;
 import cn.song.mybatisplus.visualizer.model.WrapperType;
+import com.intellij.openapi.project.Project;
 
 import java.util.List;
 import java.util.Set;
@@ -27,7 +28,7 @@ public final class LambdaDeleteConverter implements WrapperConverter {
     }
 
     @Override
-    public SqlStatement convert(WrapperChain chain, TableInfo table) {
+    public SqlStatement convert(WrapperChain chain, TableInfo table, Project project) {
         List<Condition> conditions = new QueryWrapperParser(table).parse(chain).getConditions();
         // joins 是 Kotlin data class 的非空默认参数（= emptyList()）；Java 侧必须显式传空集合，不能传 null
         return new DeleteStatement(table, conditions, List.of(), null, List.of());

@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.psi
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
 import com.intellij.psi.PsiClass
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -248,6 +249,60 @@ class EntityResolverTableConfigTest : BasePlatformTestCase() {
                 """.trimIndent(),
             )
             assertEquals("t_device_info", EntityResolver().resolve(clazz).tableName)
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // T-TS-07：类名兜底推断的显式 project 取值口径
+    // ------------------------------------------------------------------
+
+    /**
+     * 项目级 + 全局表配置同时设定并断言，finally 各自还原快照（两个服务都跨用例共享）。
+     *
+     * 与 [withTableConfig] 的区别：本夹具专测**显式传入 project** 的取值口径——
+     * `inferDecoratedTableName(className, project)` 是 WrapperLocator / EntityClassFinder /
+     * CriteriaQueryConverter 全部兜底调用方的统一入口，显式 project 决定读哪一份项目级表配置。
+     */
+    private fun withProjectTableConfig(
+        useProjectSettings: Boolean,
+        projectPrefix: String,
+        globalPrefix: String = "",
+        block: () -> Unit,
+    ) {
+        val global = PluginSettings.getInstance()
+        val globalSnapshot = global.getState().copy()
+        val proj = ProjectPluginSettings.getInstance(project)
+        val projSnapshot = proj.getState().copy()
+        try {
+            // 推断策略固定 SNAKE（与 EntityResolver.inferDecoratedTableName 的全局默认一致），
+            // 消除跨用例状态对表名基底的干扰
+            global.state.tableNameInference = PluginSettings.INFERENCE_SNAKE
+            global.state.tablePrefix = globalPrefix
+            proj.state.useProjectSettings = useProjectSettings
+            proj.state.tablePrefix = projectPrefix
+            block()
+        } finally {
+            global.loadState(globalSnapshot)
+            proj.loadState(projSnapshot)
+        }
+    }
+
+    fun testInferDecoratedTableNameExplicitProjectHonorsProjectConfig() {
+        // T-TS-07：显式传入 project → 按**该项目**的项目级表配置修饰（不再受「首个打开项目」影响）
+        withProjectTableConfig(useProjectSettings = true, projectPrefix = "proj_") {
+            assertEquals(
+                "显式 project 应读该项目的项目级表配置（表前缀）",
+                "proj_bike_device_info",
+                EntityResolver.inferDecoratedTableName("BikeDeviceInfo", project),
+            )
+        }
+        // 项目级总开关关闭 → 回退全局（显式 project 亦然，语义与 effectiveXxx 内置回退一致）
+        withProjectTableConfig(useProjectSettings = false, projectPrefix = "proj_", globalPrefix = "g_") {
+            assertEquals(
+                "项目级未启用应回退全局前缀",
+                "g_bike_device_info",
+                EntityResolver.inferDecoratedTableName("BikeDeviceInfo", project),
+            )
         }
     }
 }

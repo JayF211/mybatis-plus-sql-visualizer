@@ -29,11 +29,11 @@ class SqlCaptureGateSniffTest {
     private fun newCtx(): BridgeLineContext {
         val cfg = ParserConfig("Preparing:", "Parameters:", true, 20000)
         return BridgeLineContext(
-            MyBatisLogParser(LogSqlRestorer(), cfg.sqlPrefix(), cfg.paramPrefix(), cfg.mixedPrefix(), cfg.maxParseLength()),
-            HibernateLogParser(cfg.hibernateSqlPrefix(), cfg.hibernateParamPrefix(), cfg.mixedPrefix(), cfg.maxParseLength()),
-            JdbcTemplateLogParser(cfg.jdbcEnabled(), cfg.maxParseLength()),
+            MyBatisLogParser(cfg.sqlPrefix, cfg.paramPrefix, cfg.mixedPrefix, cfg.maxParseLength),
+            HibernateLogParser(cfg.hibernateSqlPrefix, cfg.hibernateParamPrefix, cfg.mixedPrefix, cfg.maxParseLength),
+            JdbcTemplateLogParser(cfg.jdbcEnabled, cfg.maxParseLength),
             { cfg },
-            cfg.hibernateEnabled(),
+            cfg.hibernateEnabled,
         )
     }
 
@@ -50,7 +50,7 @@ class SqlCaptureGateSniffTest {
         val entries = listOf(
             "$ts [main] ==>  Preparing: SELECT * FROM user WHERE id = ?",
             "$ts [main] ==>  Parameters: 1(Long)",
-        ).flatMap { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null) {} }
+        ).flatMap { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null, {}) }
         assertTrue("接管期间控制台链不产出条目", entries.isEmpty())
         assertEquals(1, LogTimeCorrelator.size())
         val got = LogTimeCorrelator.take(keyOf("SELECT * FROM user WHERE id = ?"))!!
@@ -63,7 +63,7 @@ class SqlCaptureGateSniffTest {
         val entries = listOf(
             "==>  Preparing: SELECT * FROM user WHERE id = ?",
             "==>  Parameters: 1(Long)",
-        ).flatMap { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null) {} }
+        ).flatMap { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null, {}) }
         assertEquals("回落态控制台链照常捕获", 1, entries.size)
         assertEquals("正常捕获路径不写相关器", 0, LogTimeCorrelator.size())
     }
@@ -75,7 +75,7 @@ class SqlCaptureGateSniffTest {
         listOf(
             "==>  Preparing: SELECT * FROM t WHERE id = ?",
             "==>  Parameters: 9(Long)",
-        ).forEach { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null) {} }
+        ).forEach { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null, {}) }
         val ts = LogTimeCorrelator.take(keyOf("SELECT * FROM t WHERE id = ?"))
         assertTrue("未解析到时间戳时回落条目捕获时间（>0）", ts != null && ts > 0)
     }

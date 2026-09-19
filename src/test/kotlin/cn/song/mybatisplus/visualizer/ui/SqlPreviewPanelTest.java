@@ -10,6 +10,8 @@ import cn.song.mybatisplus.visualizer.model.ColumnRole;
 import cn.song.mybatisplus.visualizer.model.Condition;
 import cn.song.mybatisplus.visualizer.model.ConditionToggle;
 import cn.song.mybatisplus.visualizer.model.ConditionView;
+import cn.song.mybatisplus.visualizer.model.JoinClause;
+import cn.song.mybatisplus.visualizer.model.JoinType;
 import cn.song.mybatisplus.visualizer.model.LikePosition;
 import cn.song.mybatisplus.visualizer.model.OrderByItem;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
@@ -20,6 +22,8 @@ import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.model.WrapperType;
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect;
 import cn.song.mybatisplus.visualizer.sql.ParamHint;
+import cn.song.mybatisplus.visualizer.testutil.FakeClipboardManager;
+import cn.song.mybatisplus.visualizer.testutil.FakeClipboardKt;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext;
 import com.intellij.codeInsight.completion.CodeCompletionHandlerBase;
 import com.intellij.codeInsight.completion.CompletionType;
@@ -35,14 +39,13 @@ import com.intellij.openapi.editor.Editor;
 import com.intellij.psi.PsiFile;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.ui.OnePixelSplitter;
+import com.intellij.ui.components.JBLoadingPanel;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.ui.components.JBTextField;
 import com.intellij.util.ui.UIUtil;
 import java.awt.Component;
 import java.awt.Container;
-import java.awt.Toolkit;
-import java.awt.datatransfer.Transferable;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -51,12 +54,14 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import javax.swing.JCheckBox;
+import javax.swing.JTabbedPane;
 import javax.swing.SwingUtilities;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -66,8 +71,11 @@ import static org.junit.Assert.assertTrue;
  */
 public class SqlPreviewPanelTest extends BasePlatformTestCase {
 
-    // 测试前快照系统剪贴板，tearDown 恢复，避免 copySql/copyError 污染用户剪贴板
-    private Transferable clipboardSnapshot;
+    /**
+     * T-ClipboardIso：内存剪贴板（测试全程不碰系统剪贴板——原快照/还原写法在用户复制或
+     * 并行会话占用剪贴板时会在 setUp 抛 cannot open system clipboard，且还原失败会污染用户剪贴板）。
+     */
+    private FakeClipboardManager clipboard;
 
     // T-M27.4：渲染文本断言类测试关闭自动格式化（默认开启的格式化行为由
     // SqlFormatterTest + testRenderAutoFormatsSql 专项覆盖；此处模拟"关闭格式化"场景）
@@ -75,15 +83,12 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
     protected void setUp() throws Exception {
         super.setUp();
         PluginSettings.getInstance().getState().setFormatSql(false);
-        clipboardSnapshot = Toolkit.getDefaultToolkit().getSystemClipboard().getContents(null);
+        clipboard = FakeClipboardKt.installFakeClipboard(getTestRootDisposable());
     }
 
     @Override
     protected void tearDown() throws Exception {
         PluginSettings.getInstance().getState().setFormatSql(true);
-        if (clipboardSnapshot != null) {
-            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(clipboardSnapshot, null);
-        }
         super.tearDown();
     }
 
@@ -161,6 +166,278 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         assertNotNull(first);
         assertNotNull(second);
         assertEquals("SELECT 2 FROM t2", second.getDocument().getText());
+        panel.clear();
+    }
+
+    /**
+     * T-F8：含 JOIN 的预览结果（驱动 updateDiagramTab → 后台 schema 富化 → 回 EDT 渲染）。
+     *
+     * @param mainTable     主表元数据；T-TS-FixA 用它注入「列清单取 size 即抛」的替身，触发
+     *                      {@code JoinDiagramGenerator.buildDiagramModel} 的异常路径
+     * @param selectColumns 显式 SELECT 列（默认空 = `SELECT *` 语义）
+     */
+    private PreviewResult joinResult(TableInfo mainTable, List<ColumnRef> selectColumns) {
+        SelectStatement statement = new SelectStatement(
+                mainTable,
+                selectColumns,
+                "u",
+                List.of(new JoinClause(
+                        JoinType.LEFT,
+                        "user_address",
+                        "a",
+                        List.of(new Condition.ColumnComparison(
+                                new ColumnRef("u", "id", null, null),
+                                new ColumnRef("a", "user_id", null, null),
+                                null)))),
+                false,
+                List.of(),
+                List.of(),
+                null,
+                List.of(),
+                null,
+                null,
+                null,
+                null,
+                List.of(),
+                null,
+                List.of());
+        String sql = "SELECT u.id, u.name FROM car_device_info u "
+                + "LEFT JOIN user_address a ON u.id = a.user_id";
+        return new PreviewResult(
+                sql,
+                sql,
+                List.of(),
+                null,
+                WrapperType.LAMBDA_QUERY,
+                "car_device_info",
+                null,
+                List.of("id", "name"),
+                Map.of(),
+                null,
+                new SqlPreviewModel(statement, MySqlDialect.INSTANCE, false, List.of()),
+                List.of(),
+                List.of(),
+                null,
+                null,
+                Map.of(),
+                null,
+                null,
+                null,
+                null);
+    }
+
+    private PreviewResult joinResult() {
+        return joinResult(tableInfo(), List.of());
+    }
+
+    /**
+     * T-F8 接线守卫：JOIN 图加载态必须包住「进后台富化 → 回 EDT 渲染 → 收尾」整段。
+     *
+     * 审计项 F8 的形态是 `DiagramPanel.showLoading/hideLoading` 全仓零调用点——T-UN-14 接的
+     * JBLoadingPanel 转圈永远不会出现。本用例钉两件事：
+     *  ① 探针序列为「进入 → 退出」（修复前为空序列，即红）；
+     *  ② 退出时图**已换入**（停转圈若早于渲染，用户在唯一的耗时段里看不到任何反馈）。
+     *     「已换入」按两条渲染路径取或：原生图路径（Diagrams 插件在测试沙盒里已加载 →
+     *     {@link SqlPreviewPanel#hasNativeDiagramForTest}，与真机默认配置同路径）或自绘路径
+     *     （{@code DiagramPanel.hasModelForTest}）。
+     *
+     * 富化在 `executeOnPooledThread` 上、结果经 `invokeLater` 回 EDT，故需排空 EDT 队列收口；
+     * 有界等待避免测试环境异常时挂死。
+     */
+    public void testDiagramLoadingWrapsBackgroundEnrichment() throws Exception {
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        List<Boolean> events = new ArrayList<>();
+        boolean[] renderedWhenStopped = {false};
+        panel.diagramLoadingProbeForTest(loading -> {
+            events.add(loading);
+            if (!loading) {
+                renderedWhenStopped[0] = panel.hasNativeDiagramForTest()
+                        || panel.diagramPanelForTest().hasModelForTest();
+            }
+        });
+        panel.showResult(joinResult());
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (events.size() < 2 && System.currentTimeMillis() < deadline) {
+            UIUtil.dispatchAllInvocationEvents();
+            Thread.sleep(20);
+        }
+        assertEquals("加载态序列应为 进入 → 退出", List.of(true, false), events);
+        assertTrue(
+                "停转圈必须发生在图已换入之后（提前摘则富化窗口内零反馈；"
+                        + "native=" + panel.hasNativeDiagramForTest()
+                        + ", rendered=" + panel.diagramPanelForTest().hasModelForTest() + "）",
+                renderedWhenStopped[0]);
+        panel.clear();
+        assertFalse("整图卸载后不得卡转圈", panel.diagramPanelForTest().isLoadingForTest());
+    }
+
+    /**
+     * T-TS-05 第二层失效守卫（一）：JOIN 图标签页的内容**必须**是宿主加载面板。
+     *
+     * 为什么单独立项：`testDiagramLoadingWrapsBackgroundEnrichment` 断的「进/出序列 + 退出时图已换入」
+     * 在「把 addTab 目标改回 `diagramTabHost`」之后**仍然全绿**——探针挂在 DiagramPanel 的显式 API 上，
+     * 与转圈画在哪一层无关。而真机默认原生图路径下 `showJoinDiagram` 的 `diagramTabHost.removeAll()`
+     * 会把图面板摘出层级，加载面不在标签页内容里的那一刻，转圈就再也画不出来（F8 的原始形态）。
+     */
+    public void testDiagramTabContentIsHostLoadingPanel() throws Exception {
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        panel.showResult(joinResult());
+        JBLoadingPanel host = panel.diagramLoadingHostForTest();
+        JTabbedPane tabPane = panel.contentTabPaneForTest();
+        assertNotNull("JOIN 预览应切到标签页模式（否则没有加载面可挂）", tabPane);
+        List<Component> tabContents = new ArrayList<>();
+        for (int i = 0; i < tabPane.getTabCount(); i++) {
+            tabContents.add(tabPane.getComponentAt(i));
+        }
+        boolean containsHost = false;
+        for (Component c : tabContents) {
+            if (c == host) containsHost = true;
+        }
+        assertTrue(
+                "JOIN 图标签页内容必须是宿主加载面板（实际标签页内容=" + tabContents + "）；"
+                        + "改回 diagramTabHost 则原生图路径下转圈被 removeAll 摘出层级、永不出现",
+                containsHost);
+        assertTrue("加载窗口内宿主层应在转（宿主即真机默认路径下唯一可见的加载面）", host.isLoading());
+        panel.clear();
+    }
+
+    /**
+     * T-TS-05 第二层失效守卫（二）：图面板的出圈层**必须**是宿主加载面板。
+     *
+     * 与用例（一）互补：`isLoadingForTest` 读的是委托结果，删掉 `DiagramPanel.bindHostLoadingPanel`
+     * 注入后它照样自洽地反映面板内部 `contentLayer`——单看它为真断不出「转圈画在了哪一层」。
+     * 故这里按对象身份断「出圈层 === 宿主」，让注入被删这件事必红。
+     */
+    public void testDiagramPanelLoadingTargetIsHostLoadingPanel() throws Exception {
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        panel.showResult(joinResult());
+        JBLoadingPanel host = panel.diagramLoadingHostForTest();
+        assertSame(
+                "图面板出圈层必须是宿主加载面板（删掉 bindHostLoadingPanel 注入即回落到面板内部层——"
+                        + "原生图路径下该层被 removeAll 摘出层级，转圈不可见）",
+                host,
+                panel.diagramPanelForTest().loadingTargetForTest());
+        assertTrue(
+                "面板加载态 API 必须反映宿主层（isLoadingForTest 断的是委托结果，宿主侧同步为真）",
+                host.isLoading() && panel.diagramPanelForTest().isLoadingForTest());
+        panel.clear();
+    }
+
+    /**
+     * T-TS-05 异常兜底：建图抛异常时转圈必须被摘下。
+     *
+     * 原实现是「顺序执行 + 末尾摘转圈」：`JoinDiagramGenerator.buildDiagramModel` 与原生框架建图
+     * 都在 try 之外/无 finally 保护，一旦抛异常（原生图反射链、文件编辑器创建、自绘测量），
+     * 摘转圈那行直接被跳过——用户看到的是转圈永远留在宿主层；后台路径上异常还会让 pooled 线程
+     * 终止、`invokeLater` 永不投递，收尾方（`showJoinDiagram`）根本不会被调用。
+     * 修复 = `try { … } finally { hideLoading() }` + buildDiagramModel 移入 try + 调用方带日志兜底。
+     */
+    public void testDiagramRenderFailureClearsLoading() throws Exception {
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        panel.diagramRenderForTest = model -> {
+            throw new IllegalStateException("diagram boom");
+        };
+        panel.showResult(joinResult());
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (panel.diagramPanelForTest().isLoadingForTest() && System.currentTimeMillis() < deadline) {
+            // 修复前建图异常会从 EDT 拍逃逸到事件泵（转圈卡住的同一根因）；本用例要断的是转圈状态，
+            // 故吞掉逃逸异常继续排空队列——修复后（finally + 调用方带日志兜底）不会有异常逃逸。
+            try {
+                UIUtil.dispatchAllInvocationEvents();
+            } catch (Throwable ignored) {
+                // 见上
+            }
+            Thread.sleep(20);
+        }
+        assertFalse(
+                "建图抛异常后必须摘转圈（原实现异常逃逸会跳过摘转圈那行，转圈永留宿主层）",
+                panel.diagramPanelForTest().isLoadingForTest());
+        assertFalse("宿主层同样不得卡转圈", panel.diagramLoadingHostForTest().isLoading());
+        panel.clear();
+    }
+
+    /**
+     * T-TS-FixA：列清单替身——只有 `size` 抛异常，迭代/按索引取值全部委托真实列表。
+     *
+     * 为什么只让 `size` 抛：`JoinDiagramGenerator.buildDiagramModel` 的首个可能抛点是
+     * `pickColumns(tableInfo)` 的 `tableInfo.columns.size`；渲染链上唯一同样读 `size` 的是
+     * `SELECT *` 的全列展开（`SqlGenerator` 读 `table.allColumnNames`），故用例显式给出
+     * selectColumns 绕开它——其余列清单访问（按列名查字段类型等）走迭代/按名查找，不受影响。
+     */
+    private static List<ColumnInfo> sizeExplodingColumns(final List<ColumnInfo> delegate) {
+        return new java.util.AbstractList<ColumnInfo>() {
+            @Override
+            public int size() {
+                throw new IllegalStateException("diagram model boom");
+            }
+
+            @Override
+            public ColumnInfo get(int index) {
+                return delegate.get(index);
+            }
+
+            @Override
+            public java.util.Iterator<ColumnInfo> iterator() {
+                return delegate.iterator();
+            }
+        };
+    }
+
+    /** T-TS-FixA：主表替身构造（等价 Kotlin `tableInfo().copy(columns = …)`——tableInfo() 仅列清单可变）。 */
+    private static TableInfo tableInfoWithColumns(List<ColumnInfo> columns) {
+        return new TableInfo("DeviceInfoEntity", "car_device_info", columns, null, null, null, List.of());
+    }
+
+    /**
+     * T-TS-FixA：无 project 的**同步分支**上建图模型抛异常，转圈同样必须被摘下。
+     *
+     * 与 {@link #testDiagramRenderFailureClearsLoading} 互补——后者走后台富化分支、在 `showJoinDiagram`
+     * 内部注入；本用例走 `proj == null` 的同步分支，那里 `buildDiagramModel(stmt)` 是
+     * `showJoinDiagram` 的**实参**：实参一抛，方法根本没进入，其 `finally`（唯一收口点）不会执行。
+     * 原实现的 catch 只 warn 不摘圈，于是 `showLoading()` 打开的转圈永留宿主层（直到下一次预览
+     * 或整图卸载）——两条分支对同一异常的处理不对称，本用例钉住补齐后的行为。
+     *
+     * 触发走**输入**而非注入缝：给主表列清单塞一个「取 size 即抛」的替身。显式给 selectColumns 是
+     * 必需的——渲染拍的列展开（`SqlGenerator` 仅在 `selectColumns` 为空时读 `table.allColumnNames`）
+     * 与建图拍读的是**同一个** `size` 访问器，不显式给列清单异常会先落在 renderSql，红的原因就跑偏了。
+     */
+    public void testDiagramModelBuildFailureWithoutProjectClearsLoading() throws Exception {
+        SqlPreviewPanel panel = new SqlPreviewPanel(null);
+        panel.showResult(joinResult(
+                tableInfoWithColumns(sizeExplodingColumns(tableInfo().getColumns())),
+                List.of(new ColumnRef("u", "id", null, null))));
+        // 无 project → 同步分支：showResult 返回时该跑的都跑完了，无需排空 EDT 队列
+        assertFalse(
+                "无 project 同步分支：buildDiagramModel 抛在 showJoinDiagram 之前、finally 不会执行——"
+                        + "catch 不摘圈则转圈永留宿主层",
+                panel.diagramPanelForTest().isLoadingForTest());
+        assertFalse("宿主层同样不得卡转圈", panel.diagramLoadingHostForTest().isLoading());
+        panel.clear();
+    }
+
+    /**
+     * T-PreviewBgFit（问题一守卫）：左侧参数滚动区必须自带面板底色——该区整条链是透明的
+     * （paramTopAlign/viewport 非不透明），底色过去由祖先容器提供；T-UiNative P0a 把自绘分栏换成
+     * `OnePixelSplitter` 时丢了 `background = UIUtil.getPanelBackground()`，深色主题下参数行下方
+     * 直接透出分栏近黑背景（用户实测）。本用例钉死两点：滚动区不透明 + 其背景==平台面板背景；
+     * 同时分栏容器也须显式带面板背景（不再依赖子组件自绘）。
+     */
+    public void testParamsAreaCarriesPanelBackground() throws Exception {
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        panel.showResult(result());
+
+        JBScrollPane scroll = panel.paramScrollForTest();
+        assertTrue("参数滚动区应不透明（否则空区透出祖先容器底色）", scroll.isOpaque());
+        assertEquals(
+                "参数滚动区背景应为平台面板背景（主题命名色）",
+                UIUtil.getPanelBackground(),
+                scroll.getBackground());
+        OnePixelSplitter split = panel.splitPaneForTest();
+        assertNotNull("应能取到左右分栏容器", split);
+        assertEquals(
+                "分栏容器应恢复 T-UiNative P0a 丢失的面板背景",
+                UIUtil.getPanelBackground(),
+                split.getBackground());
         panel.clear();
     }
 
@@ -1434,6 +1711,36 @@ panel.showResult(result("SELECT id\nFROM tbl", "SELECT id FROM tbl", List.of(), 
                 "SELECT\n    id,\n    name\nFROM t\nWHERE id = 1",
                 doc);
         panel.clear();
+        panel.clear();
+    }
+
+    /**
+     * T-PreviewConsoleFmt：控制台文档（= exec 文件文档）持有预览原文（裸单行）时，
+     * 渲染链必须把**格式化文本**回填进该文档——真机日志实证：面板自建编辑器拿到 16 行格式化
+     * 文本（len=274），但控制台挂载读的是文件内容（预热写的预览原文，1 行 len=231），挂载后
+     * 无重渲染 → 用户看到裸单行 SQL。本用例钉死「渲染回填 nativeDoc」这一环（触发点见
+     * prepareDefaultConsole 的 onConsole 回填，真机由 embedConsole 后 invokeLater 执行）。
+     */
+    public void testRenderRepublishesFormattedTextIntoNativeConsoleDoc() throws Exception {
+        PluginSettings.getInstance().getState().setFormatSql(true);
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        panel.showResult(result(
+                "select  id ,name  from t  where id=1",
+                "select id,name from t where id=1"));
+        // 模拟控制台就绪且已嵌入本面板（showSql 的 nativeDoc 分支要求 consoleAttachedToMe）
+        panel.embedConsoleForTest(new javax.swing.JPanel());
+        assertTrue("前置：控制台应视为已挂到本面板", panel.consoleAttachedToMeForTest());
+        // 控制台文档持有「预览原文」裸单行（挂载时 DBN 读的正是文件内容）
+        com.intellij.openapi.editor.Document consoleDoc = com.intellij.openapi.editor.EditorFactory
+                .getInstance().createDocument("select  id ,name  from t  where id=1");
+        panel.markNativeDocForTest(consoleDoc);
+
+        panel.renderSqlForTest(); // = 挂载后的回填渲染
+
+        assertEquals(
+                "控制台文档应被回填为格式化文本（否则控制台显示裸单行）",
+                "SELECT\n    id,\n    name\nFROM t\nWHERE id = 1",
+                consoleDoc.getText());
         panel.clear();
     }
 

@@ -1,15 +1,13 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
-import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import java.awt.Toolkit
-import java.awt.datatransfer.DataFlavor
-import java.awt.datatransfer.Transferable
+import cn.song.mybatisplus.visualizer.testutil.FakeClipboardManager
+import cn.song.mybatisplus.visualizer.testutil.installFakeClipboard
 
 /**
  * T-ExecCopyFix：复制错误按钮点击反馈测试（Bug 1 回归）。
@@ -24,31 +22,22 @@ import java.awt.datatransfer.Transferable
  *  - SqlPreviewPanel：copyError() 无警示返回 false（无警示时点击不应闪对号——
  *    按钮本就不可见，守卫防止未来可见性逻辑变化时空闪）。
  *
- * 剪贴板为系统级共享资源，setUp 快照 tearDown 恢复（SqlPreviewPanelTest 同款）。
+ * T-ClipboardIso：剪贴板改为**内存假实现**（installFakeClipboard 替换平台服务）——原
+ * 「快照系统剪贴板 + tearDown 还原」写法在用户复制、并行会话占用剪贴板时会在 setUp 抛
+ * cannot open system clipboard，且还原失败会污染用户剪贴板。
  */
 class CopyFeedbackUiTest : BasePlatformTestCase() {
 
-    private var clipboardSnapshot: Transferable? = null
+    /** 内存剪贴板（测试全程不碰系统剪贴板）。 */
+    private lateinit var clipboard: FakeClipboardManager
 
     override fun setUp() {
         super.setUp()
-        clipboardSnapshot = Toolkit.getDefaultToolkit().systemClipboard.getContents(null)
+        clipboard = installFakeClipboard(testRootDisposable)
     }
 
-    override fun tearDown() {
-        runCatching { Toolkit.getDefaultToolkit().systemClipboard.setContents(clipboardSnapshot, null) }
-        super.tearDown()
-    }
-
-    /**
-     * 读剪贴板文本（T-UiNative P0）：复制收口走平台 CopyPasteManager，headless 测试环境下
-     * 其内容仅存平台句柄、不回写系统剪贴板（旧行为是直写 Toolkit 同步可见）——
-     * 断言改读 [CopyPasteManager.getContents]，与生产「非 headless 时写穿系统剪贴板」一致。
-     */
-    private fun clipboardText(): String? = runCatching {
-        CopyPasteManager.getInstance()
-            .getContents<String>(DataFlavor.stringFlavor)
-    }.getOrNull()
+    /** 读内存剪贴板文本（生产路径经 UiTextClipboard → CopyPasteManager → 本假实现落值）。 */
+    private fun clipboardText(): String? = clipboard.text()
 
     private fun waitForEdt() = UIUtil.dispatchAllInvocationEvents()
 
@@ -132,8 +121,8 @@ class CopyFeedbackUiTest : BasePlatformTestCase() {
      */
     fun testPreviewPanelCopyErrorReturnsFalseWithoutWarning() {
         val sentinel = "__copyfix_sentinel__"
-        // T-UiNative P0：哨兵植入与断言同走平台 CopyPasteManager（headless 下内容存平台句柄）
-        CopyPasteManager.getInstance().setContents(java.awt.datatransfer.StringSelection(sentinel))
+        // T-ClipboardIso：哨兵植入内存剪贴板（不再触碰系统剪贴板）
+        clipboard.seedText(sentinel)
         val panel = SqlPreviewPanel(project)
         panel.clear()
         assertTrue("无警示时 copyError 应返回 false（不触发反馈）", !panel.copyError())
@@ -146,7 +135,6 @@ class CopyFeedbackUiTest : BasePlatformTestCase() {
      */
     fun testPreviewPanelCopyErrorCopiesWarningAndReturnsTrue() {
         val panel = SqlPreviewPanel(project)
-        // 移植注：k2j 侧 PreviewResult 为 Java 构造器（禁命名实参）——20 参位置实参，其余取默认空值
         val result = cn.song.mybatisplus.visualizer.model.PreviewResult(
             "SELECT 1",
             "SELECT 1",
@@ -156,14 +144,14 @@ class CopyFeedbackUiTest : BasePlatformTestCase() {
             "tbl",
             "UPDATE without WHERE",
             emptyList(),
-            mapOf(),
+            emptyMap(),
             null,
             null,
             emptyList(),
             emptyList(),
             null,
             null,
-            mapOf(),
+            emptyMap(),
             null,
             null,
             null,

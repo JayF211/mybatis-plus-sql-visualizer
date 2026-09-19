@@ -12,7 +12,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import javax.swing.JButton
 
 /**
@@ -24,8 +23,6 @@ import javax.swing.JButton
  *
  * headless 约束：截断依赖布局宽度的部分经 applyMetaTruncationForTest 直调；
  * 「更多」弹层 show 依赖真实屏幕，仅断言菜单项与 step 委托，不真实弹层。
- *
- * k2j 适配：PreviewResult 为 Java 类，构造用 20 参位置实参。
  */
 class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
 
@@ -57,7 +54,7 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
         null,
     )
 
-    private fun newPanel(): SqlPreviewPanel = SqlPreviewPanel(project).also {
+    private fun newPanel() = SqlPreviewPanel(project).also {
         // T-PreviewFlash 语境下测试默认压缩关闭即可，与本测试无关，仅保持渲染确定性
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true }
         it.showResult(
@@ -73,6 +70,8 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
     private fun layoutAt(panel: SqlPreviewPanel, width: Int, height: Int = 420) {
         panel.setSize(width, height)
         panel.doLayout()
+        // T-PreviewUx-Pack #2：topRow 外包 northHost（诚实降级横幅宿主）——布局链多一层，手动逐层 doLayout
+        panel.topRowForTest().parent?.doLayout()
         panel.topRowForTest().doLayout()
         panel.applyMetaTruncationForTest()
         waitForEdt()
@@ -82,7 +81,6 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
     // F1：布局零重叠（核心回归断言）
     // ------------------------------------------------------------------
 
-    @Test
     fun test窄宽布局_元信息与工具栏零重叠() {
         val panel = newPanel()
         try {
@@ -99,7 +97,6 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun test最小宽布局_性能建议在场仍零重叠() {
         val panel = newPanel()
         try {
@@ -116,7 +113,6 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
     // F3：宽度预算截断（窄截断 / 宽还原 / tooltip 恒全文）
     // ------------------------------------------------------------------
 
-    @Test
     fun test窄宽截断生效_性能建议行被省略() {
         val panel = newPanel()
         try {
@@ -132,7 +128,6 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun test宽幅还原_全文无省略号() {
         val panel = newPanel()
         try {
@@ -147,12 +142,11 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun test截断后tooltip仍为全文() {
         val panel = newPanel()
         try {
             layoutAt(panel, 640)
-            val tooltip = metaLabelOf(panel).toolTipText ?: ""
+            val tooltip = panel.topRowForTest().let { metaLabelOf(panel).toolTipText ?: "" }
             assertTrue("tooltip 应含完整 perf 文案", tooltip.contains(fullPerfText()))
         } finally {
             panel.clear()
@@ -164,7 +158,6 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
     // F2：工具栏折叠（直显集合 / 复制错误不折叠 / 菜单项与 step 委托）
     // ------------------------------------------------------------------
 
-    @Test
     fun test直显按钮集合_高频保留低频折叠() {
         val panel = newPanel()
         try {
@@ -195,7 +188,6 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun test警示时复制错误按钮直显不折叠() {
         val panel = SqlPreviewPanel(project)
         try {
@@ -211,7 +203,6 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
         }
     }
 
-    @Test
     fun test更多菜单step_命中失败项安全返回FINAL_CHOICE() {
         val panel = newPanel()
         try {

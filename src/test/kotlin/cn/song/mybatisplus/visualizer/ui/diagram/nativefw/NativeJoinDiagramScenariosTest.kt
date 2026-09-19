@@ -29,32 +29,6 @@ import org.junit.Test
  */
 class NativeJoinDiagramScenariosTest {
 
-    // 生产代码为 Java（SelectStatement/JoinClause 无默认参数与具名实参），以下 helper 以
-    // 默认参数还原 master Kotlin data class 的缺省语义（selectColumns/conditions 等为空、可空项 null）。
-
-    private fun selectStatement(
-        table: TableInfo,
-        tableAlias: String? = null,
-        selectColumns: List<ColumnRef> = emptyList(),
-        joins: List<JoinClause> = emptyList(),
-    ): SelectStatement = SelectStatement(
-        table, selectColumns, tableAlias, joins, false,
-        emptyList(), emptyList(), null, emptyList(), null, null, null, null,
-        emptyList(), null, null,
-    )
-
-    private fun joinClause(
-        type: JoinType,
-        tableName: String,
-        alias: String,
-        onConditions: List<Condition> = emptyList(),
-        rawSql: String? = null,
-        tableInfo: TableInfo? = null,
-    ): JoinClause = JoinClause(type, tableName, alias, onConditions, rawSql, null, null, tableInfo)
-
-    private fun columnComparison(left: ColumnRef, right: ColumnRef): Condition =
-        Condition.ColumnComparison(left, right, null)
-
     private val userTable = TableInfo(
         "cn.song.mpjdemo.entity.UserDO",
         "user",
@@ -104,35 +78,56 @@ class NativeJoinDiagramScenariosTest {
     // ------------------------------------------------------------------
     // S01：3 表字符串 JOIN（queryWrapperString 写法，别名≠表名）
     // ------------------------------------------------------------------
-    private fun s01Statement() = selectStatement(
+    private fun s01Statement() = SelectStatement(
         userTable,
+        emptyList(),
         "t",
-        joins = listOf(
-            joinClause(
+        listOf(
+            JoinClause(
                 JoinType.LEFT,
                 "user_address",
                 "addr",
-                tableInfo = addressTable,
-                onConditions = listOf(
-                    columnComparison(
+                listOf(
+                    Condition.ColumnComparison(
                         ColumnRef("t", "id"),
                         ColumnRef("addr", "user_id"),
+                        null,
                     ),
                 ),
+                null,
+                null,
+                null,
+                addressTable,
             ),
-            joinClause(
+            JoinClause(
                 JoinType.RIGHT,
                 "area",
                 "a",
-                tableInfo = areaTable,
-                onConditions = listOf(
-                    columnComparison(
+                listOf(
+                    Condition.ColumnComparison(
                         ColumnRef("addr", "area_id"),
                         ColumnRef("a", "id"),
+                        null,
                     ),
                 ),
+                null,
+                null,
+                null,
+                areaTable,
             ),
         ),
+        false,
+        emptyList(),
+        emptyList(),
+        null,
+        emptyList(),
+        null,
+        null,
+        null,
+        null,
+        emptyList(),
+        null,
+        null,
     )
 
     @Test
@@ -196,54 +191,90 @@ class NativeJoinDiagramScenariosTest {
     // ------------------------------------------------------------------
     @Test
     fun s02_fourTableLongColumnNames_fullChain() {
-        val stmt = selectStatement(
+        val stmt = SelectStatement(
             userTable,
-            "t",
-            selectColumns = listOf(
+            listOf(
                 ColumnRef("addr", "contact_mobile_telephone_number"),
                 ColumnRef("addr", "delivery_shipping_full_address_description"),
                 ColumnRef("a", "provincial_administrative_region_division_code"),
                 ColumnRef("dev", "station_identification_uuid_reference"),
             ),
-            joins = listOf(
-                joinClause(
-                    JoinType.LEFT, "user_address", "addr",
-                    tableInfo = addressTable,
-                    onConditions = listOf(
-                        columnComparison(
+            "t",
+            listOf(
+                JoinClause(
+                    JoinType.LEFT,
+                    "user_address",
+                    "addr",
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("t", "id"),
                             ColumnRef("addr", "user_id"),
+                            null,
                         ),
                     ),
+                    null,
+                    null,
+                    null,
+                    addressTable,
                 ),
-                joinClause(
-                    JoinType.RIGHT, "area", "a",
-                    tableInfo = areaTable,
-                    onConditions = listOf(
-                        columnComparison(
+                JoinClause(
+                    JoinType.RIGHT,
+                    "area",
+                    "a",
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("addr", "area_id"),
                             ColumnRef("a", "id"),
+                            null,
                         ),
                     ),
+                    null,
+                    null,
+                    null,
+                    areaTable,
                 ),
-                joinClause(
-                    JoinType.LEFT, "car_device_info", "dev",
-                    tableInfo = deviceTable,
-                    onConditions = listOf(
-                        columnComparison(
+                JoinClause(
+                    JoinType.LEFT,
+                    "car_device_info",
+                    "dev",
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("dev", "user_id"),
                             ColumnRef("t", "id"),
+                            null,
                         ),
                     ),
+                    null,
+                    null,
+                    null,
+                    deviceTable,
                 ),
             ),
+            false,
+            emptyList(),
+            emptyList(),
+            null,
+            emptyList(),
+            null,
+            null,
+            null,
+            null,
+            emptyList(),
+            null,
+            null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals(4, model.entities.size)
-        // 真实契约：MAX_COLUMNS 裁剪仅作用于主表；JOIN 表列 = 被引用列（selectColumns + ON 条件），
-        // dev 表即使 60 列也只显示 select/ON 引用到的列（图保持精简的天然机制）
+        // T-DgmFullCols 契约（2026-09-17 变更，取代此前「MAX_COLUMNS 只作用于主表、JOIN 表列 = 仅被引用列」）：
+        // JOIN 表与主表同口径——实体整表列（>50 列时裁到主键列），被引用列（selectColumns + ON）
+        // 无论实体里有没有都保留（SQL 原始列名可能不在实体中）。dev 实体 60 列 → 只剩主键 id，
+        // 两个被引用列追加在后。
         val dev = model.entities.first { it.alias == "dev" }
-        assertEquals(listOf("station_identification_uuid_reference", "user_id"), dev.columns.map { it.name })
+        assertEquals(
+            "60 列实体裁到主键列 + 被引用列追加",
+            listOf("id", "station_identification_uuid_reference", "user_id"),
+            dev.columns.map { it.name },
+        )
 
         val id = JoinDiagramSnapshotRegistry.put(model, "JOIN Diagram: 4 tables")
         val graph = JoinDiagramGraph.build(JoinDiagramSnapshotRegistry.get(id), SqlJoinDiagramProvider())
@@ -262,25 +293,43 @@ class NativeJoinDiagramScenariosTest {
     // ------------------------------------------------------------------
     @Test
     fun s03_lambdaJoin_associationMapping() {
-        val stmt = selectStatement(
+        val stmt = SelectStatement(
             userTable,
-            "t",
-            selectColumns = listOf(
+            listOf(
                 ColumnRef("t", "id"),
                 ColumnRef("addr", "address", null, null, null, null, "String"),
             ),
-            joins = listOf(
-                joinClause(
-                    JoinType.LEFT, "user_address", "addr",
-                    tableInfo = addressTable,
-                    onConditions = listOf(
-                        columnComparison(
+            "t",
+            listOf(
+                JoinClause(
+                    JoinType.LEFT,
+                    "user_address",
+                    "addr",
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("addr", "user_id"),
                             ColumnRef("t", "id"),
+                            null,
                         ),
                     ),
+                    null,
+                    null,
+                    null,
+                    addressTable,
                 ),
             ),
+            false,
+            emptyList(),
+            emptyList(),
+            null,
+            emptyList(),
+            null,
+            null,
+            null,
+            null,
+            emptyList(),
+            null,
+            null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals(2, model.entities.size)
@@ -294,16 +343,20 @@ class NativeJoinDiagramScenariosTest {
 
     @Test
     fun s04_lambdaOnMultiCondition_labelJoinedByAnd() {
-        val stmt = selectStatement(
+        val stmt = SelectStatement(
             userTable,
+            emptyList(),
             "t",
-            joins = listOf(
-                joinClause(
-                    JoinType.LEFT, "user_address", "addr",
-                    onConditions = listOf(
-                        columnComparison(
+            listOf(
+                JoinClause(
+                    JoinType.LEFT,
+                    "user_address",
+                    "addr",
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("addr", "user_id"),
                             ColumnRef("t", "id"),
+                            null,
                         ),
                         Condition.Simple(
                             ColumnRef("addr", "status"),
@@ -314,6 +367,18 @@ class NativeJoinDiagramScenariosTest {
                     ),
                 ),
             ),
+            false,
+            emptyList(),
+            emptyList(),
+            null,
+            emptyList(),
+            null,
+            null,
+            null,
+            null,
+            emptyList(),
+            null,
+            null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         val label = model.relationships.single().label
@@ -333,16 +398,34 @@ class NativeJoinDiagramScenariosTest {
     // ------------------------------------------------------------------
     @Test
     fun s05_rawSqlJoin_labelMarked() {
-        val stmt = selectStatement(
+        val stmt = SelectStatement(
             userTable,
+            emptyList(),
             "t",
-            joins = listOf(
-                joinClause(
-                    JoinType.LEFT, "user_address", "addr",
-                    onConditions = emptyList(),
-                    rawSql = "user_address addr on t.id = addr.user_id and addr.status = 1",
+            listOf(
+                JoinClause(
+                    JoinType.LEFT,
+                    "user_address",
+                    "addr",
+                    emptyList(),
+                    "user_address addr on t.id = addr.user_id and addr.status = 1",
+                    null,
+                    null,
+                    null,
                 ),
             ),
+            false,
+            emptyList(),
+            emptyList(),
+            null,
+            emptyList(),
+            null,
+            null,
+            null,
+            null,
+            emptyList(),
+            null,
+            null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals("(rawSql)", model.relationships.single().label)
@@ -350,17 +433,30 @@ class NativeJoinDiagramScenariosTest {
 
     @Test
     fun s06_subqueryDisplayName() {
-        val stmt = selectStatement(
+        val stmt = SelectStatement(
             userTable,
+            emptyList(),
             "t",
-            joins = listOf(
-                joinClause(
+            listOf(
+                JoinClause(
                     JoinType.LEFT,
                     "(SELECT id, area_id FROM user_address WHERE status = 1) sub",
                     "sub",
-                    onConditions = emptyList(),
+                    emptyList(),
                 ),
             ),
+            false,
+            emptyList(),
+            emptyList(),
+            null,
+            emptyList(),
+            null,
+            null,
+            null,
+            null,
+            emptyList(),
+            null,
+            null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals("Subquery", model.entities[1].tableName)
@@ -398,7 +494,24 @@ class NativeJoinDiagramScenariosTest {
     @Test
     fun s09_noJoin_emptyModelBuildsEmptyGraph() {
         val model = JoinDiagramGenerator.buildDiagramModel(
-            selectStatement(userTable, "t"),
+            SelectStatement(
+                userTable,
+                emptyList(),
+                "t",
+                emptyList(),
+                false,
+                emptyList(),
+                emptyList(),
+                null,
+                emptyList(),
+                null,
+                null,
+                null,
+                null,
+                emptyList(),
+                null,
+                null,
+            ),
         )
         assertTrue(model.isEmpty)
         val id = JoinDiagramSnapshotRegistry.put(model, "empty")
@@ -413,29 +526,48 @@ class NativeJoinDiagramScenariosTest {
     // ------------------------------------------------------------------
     @Test
     fun s10_duplicateAliasUniquified() {
-        val stmt = selectStatement(
+        val stmt = SelectStatement(
             userTable,
+            emptyList(),
             "t",
-            joins = listOf(
-                joinClause(
-                    JoinType.LEFT, "user_address", "addr",
-                    onConditions = listOf(
-                        columnComparison(
+            listOf(
+                JoinClause(
+                    JoinType.LEFT,
+                    "user_address",
+                    "addr",
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("t", "id"),
                             ColumnRef("addr", "user_id"),
+                            null,
                         ),
                     ),
                 ),
-                joinClause(
-                    JoinType.LEFT, "user_address", "addr",
-                    onConditions = listOf(
-                        columnComparison(
+                JoinClause(
+                    JoinType.LEFT,
+                    "user_address",
+                    "addr",
+                    listOf(
+                        Condition.ColumnComparison(
                             ColumnRef("t", "id"),
                             ColumnRef("addr", "user_id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false,
+            emptyList(),
+            emptyList(),
+            null,
+            emptyList(),
+            null,
+            null,
+            null,
+            null,
+            emptyList(),
+            null,
+            null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         val aliases = model.entities.map { it.alias }
@@ -453,13 +585,26 @@ class NativeJoinDiagramScenariosTest {
     // ------------------------------------------------------------------
     @Test
     fun s11_defaultAliasFallback_edgesStarTopology() {
-        val stmt = selectStatement(
+        val stmt = SelectStatement(
             userTable,
+            emptyList(),
             "t",
-            joins = listOf(
-                joinClause(JoinType.LEFT, "user_address", "", tableInfo = addressTable, onConditions = emptyList()),
-                joinClause(JoinType.LEFT, "area", "", tableInfo = areaTable, onConditions = emptyList()),
+            listOf(
+                JoinClause(JoinType.LEFT, "user_address", "", emptyList(), null, null, null, addressTable),
+                JoinClause(JoinType.LEFT, "area", "", emptyList(), null, null, null, areaTable),
             ),
+            false,
+            emptyList(),
+            emptyList(),
+            null,
+            emptyList(),
+            null,
+            null,
+            null,
+            null,
+            emptyList(),
+            null,
+            null,
         )
         val model = JoinDiagramGenerator.buildDiagramModel(stmt)
         assertEquals(listOf("t", "t1", "t2"), model.entities.map { it.alias })

@@ -31,10 +31,9 @@ public final class PsiDialect {
      */
     public static Dialect currentDialect(Project project) {
         try {
-            // master 形态：DialectRegistry.effective(project = project)（具名单参）——
-            // 本树 DialectRegistry（同批并行 Wave 落地）为 effective(manualDialectName, project) 双参形态，
-            // 手动方言名传 null = 沿用 master 具名单参形态的「手动值自查」语义
-            return DialectRegistry.INSTANCE.effective(null, project);
+            // T-TS-FixC：模式与手动值均由 DialectRegistry.effective 内部按「项目级 > 全局」解析，
+            // 本层只负责把宿主 project 传下去（master 形态：DialectRegistry.effective(project = project)）
+            return DialectRegistry.INSTANCE.effective(project);
         } catch (Throwable ignored) {
             return DialectRegistry.INSTANCE.byName(null);
         }

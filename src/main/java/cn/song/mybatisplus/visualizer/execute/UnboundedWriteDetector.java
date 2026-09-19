@@ -86,6 +86,11 @@ public final class UnboundedWriteDetector {
             for (Finding f : findings) out.add(f.kind());
             return out;
         }
+
+        /** Kotlin `val dangerous` 的 JVM 访问器等价入口（Kotlin 调用方按属性名读取）。 */
+        public boolean getDangerous() {
+            return isDangerous();
+        }
     }
 
     /** detail 片段长度上限（日志/测试定位用，非用户文案）。 */

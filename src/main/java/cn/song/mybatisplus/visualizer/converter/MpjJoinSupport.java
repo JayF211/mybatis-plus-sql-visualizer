@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperArg;
 import cn.song.mybatisplus.visualizer.model.WrapperCall;
 import cn.song.mybatisplus.visualizer.model.WrapperChain;
 import cn.song.mybatisplus.visualizer.psi.EntityResolver;
+import com.intellij.openapi.project.Project;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -41,8 +42,15 @@ public final class MpjJoinSupport {
         return (i >= 0 && i < args.size()) ? args.get(i) : null;
     }
 
-    /** 解析 join 调用 → 联表子句（核心形态）。 */
-    public JoinClause parseJoin(WrapperCall call, String mainAlias) {
+    /**
+     * 解析 join 调用 → 联表子句（核心形态）。
+     *
+     * @param call      join 调用（psi 层已解析实参）
+     * @param mainAlias 主表别名（ON 右列归属）
+     * @param project   调用方项目（T-FS-04）：类名兜底推断（关联实体类 PSI 不可解析时）
+     *   按该项目读项目级表配置；null = 未提供（沿用「首个打开项目」既有语义）
+     */
+    public JoinClause parseJoin(WrapperCall call, String mainAlias, Project project) {
         JoinType type;
         switch (call.getMethodName()) {
             case "leftJoin" -> type = JoinType.LEFT;
@@ -95,10 +103,9 @@ public final class MpjJoinSupport {
         if (className.isEmpty()) return null;
 
         // T-M19.4：子表推断走统一入口（策略 + 修饰链，全局语义）
-        // T-TS-07 留档：此处兜底未传 project（[WrapperCall] 模型不含 project，converter SPI
-        // 亦无项目入参）——多项目同开时表名修饰仍取「首个打开项目」；穿参需改 SPI 签名或给模型
-        // 加平台字段，另批处理（psi 侧兜底调用方已在本批显式传 project）
-        String tableName = tableInfo != null ? tableInfo.getTableName() : EntityResolver.inferDecoratedTableName(className);
+        // T-FS-04：类名兜底推断显式传调用方 project——多项目同开且项目级表配置不同时，
+        // 表名修饰不再受「首个打开项目」影响（project 由 SPI 入参透传，null 时行为不变）
+        String tableName = tableInfo != null ? tableInfo.getTableName() : EntityResolver.inferDecoratedTableName(className, project);
         String alias = lowerFirst(className);
         List<Condition> onConditions = new ArrayList<>();
 

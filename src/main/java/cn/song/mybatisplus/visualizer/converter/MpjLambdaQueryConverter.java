@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperArg;
 import cn.song.mybatisplus.visualizer.model.WrapperCall;
 import cn.song.mybatisplus.visualizer.model.WrapperChain;
 import cn.song.mybatisplus.visualizer.model.WrapperType;
+import com.intellij.openapi.project.Project;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -33,7 +34,7 @@ public final class MpjLambdaQueryConverter implements WrapperConverter {
     }
 
     @Override
-    public SqlStatement convert(WrapperChain chain, TableInfo table) {
+    public SqlStatement convert(WrapperChain chain, TableInfo table, Project project) {
         List<WrapperCall> ignoreCalls = new ArrayList<>();
         for (WrapperCall call : chain.getCalls()) {
             if ("selectIgnore".equals(call.getMethodName())) ignoreCalls.add(call);

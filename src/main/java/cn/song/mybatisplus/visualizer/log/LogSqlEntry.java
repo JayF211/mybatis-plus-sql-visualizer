@@ -132,6 +132,11 @@ public record LogSqlEntry(
         return t;
     }
 
+    /** Kotlin {@code val statementType} 的 JVM 访问器等价入口（Kotlin 调用方按属性名读取）。 */
+    public StatementType getStatementType() {
+        return statementType();
+    }
+
     /**
      * T-ListMode：多行模式（KEYWORD_WRAP/FORMATTED）的行片段缓存：可变行高下每次布局状态更新会对全部条目
      * 逐条调渲染器取首选尺寸（T-LogListFreeze-04 的 O(N) 因子），缓存词法片段后测量只剩轻量
@@ -140,6 +145,11 @@ public record LogSqlEntry(
     public List<List<SqlTextFragment>> cachedListLineFragments() {
         LineFragmentCacheEntry e = LINE_FRAGMENT_CACHE.get(this);
         return e != null ? e.fragments() : null;
+    }
+
+    /** Kotlin {@code var cachedListLineFragments} 的 JVM 读取器等价入口（属性名读取用）。 */
+    public List<List<SqlTextFragment>> getCachedListLineFragments() {
+        return cachedListLineFragments();
     }
 
     public void setCachedListLineFragments(List<List<SqlTextFragment>> value) {
@@ -153,6 +163,11 @@ public record LogSqlEntry(
     public SqlListDisplayMode cachedListLineFragmentsMode() {
         LineFragmentCacheEntry e = LINE_FRAGMENT_CACHE.get(this);
         return e != null ? e.mode() : null;
+    }
+
+    /** Kotlin {@code var cachedListLineFragmentsMode} 的 JVM 读取器等价入口（属性名读取用）。 */
+    public SqlListDisplayMode getCachedListLineFragmentsMode() {
+        return cachedListLineFragmentsMode();
     }
 
     public void setCachedListLineFragmentsMode(SqlListDisplayMode value) {
@@ -172,6 +187,11 @@ public record LogSqlEntry(
      */
     public String dedupeKey() {
         return LogSqlModelsKt.sqlFingerprint(LogSqlModelsKt.normalizeSqlWhitespace(restoredSql));
+    }
+
+    /** Kotlin {@code val dedupeKey} 的 JVM 访问器等价入口（Kotlin 调用方按属性名读取）。 */
+    public String getDedupeKey() {
+        return dedupeKey();
     }
 
     /** 仅原始/还原 SQL + 参数（其余取默认）。 */

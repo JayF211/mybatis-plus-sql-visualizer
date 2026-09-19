@@ -113,6 +113,13 @@ public non-sealed class TrimSqlNode implements SqlNode {
             return delegate.getBindings();
         }
 
+        // T-FS-07：errors 必须转发——否则 where/trim/set 体内 `<if test="非法表达式">` 的求值失败被丢弃
+        // （与 Foreach 的 Prefixed/Filtered 同一缺陷形态，本次一并收口）
+        @Override
+        public List<String> getErrors() {
+            return delegate.getErrors();
+        }
+
         void applyAll() {
             String sql = sqlBuffer.toString().trim();
             String upper = sql.toUpperCase(Locale.ENGLISH);

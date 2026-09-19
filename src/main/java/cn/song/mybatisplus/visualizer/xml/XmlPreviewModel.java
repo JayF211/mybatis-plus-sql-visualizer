@@ -395,7 +395,7 @@ public class XmlPreviewModel {
         } else if (node instanceof IfSqlNode i) {
             // T-ExprAstPrecheck T-EP-03：构建条件行时对 test 表达式跑支持面预检（纯 AST 遍历，
             // 零 PSI）——标注只是提示，展开行为仍由面板开关与 T-EP-02 的错误记录管
-            OgnlExpr.ExprClassification classification = OgnlEvaluator.classifyDetail(i.getTest());
+            ExprClassification classification = OgnlEvaluator.classifyDetail(i.getTest());
             conditionViews.add(new XmlConditionView(i.getTest(), i.getTest(), defaultTruth(i.getTest()),
                     classification.support(), classification.reason(), classification.detail()));
             collect(i.getContents(), conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens);

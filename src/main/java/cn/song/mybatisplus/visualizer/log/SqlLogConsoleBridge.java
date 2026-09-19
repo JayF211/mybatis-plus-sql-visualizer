@@ -98,6 +98,11 @@ public class SqlLogConsoleBridge {
      *  同 line0 缓存的尽力而为口径）。 */
     private volatile boolean timePrefixSeeded = false;
 
+    /** Kotlin {@code var timePrefixCache} 的 JVM 访问器等价入口（Kotlin 调用方按属性名读取）。 */
+    public String getTimePrefixCache() {
+        return timePrefixCache;
+    }
+
     /** T-PS4-02：EP 逐行取 timePrefix 的统一入口——未播种时惰性读一次设置，此后返回缓存值
      *  （挂载/设置变更事件照常覆盖刷新）。 */
     public String currentTimePrefix() {

@@ -2,15 +2,17 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.intellij.ui.components.JBLabel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import java.awt.Toolkit
-import java.awt.datatransfer.Transferable
+import cn.song.mybatisplus.visualizer.testutil.FakeClipboardManager
+import cn.song.mybatisplus.visualizer.testutil.installFakeClipboard
 
 /**
  * SqlPreviewPanel XML 分支测试（T-M24-04）：
@@ -20,20 +22,19 @@ import java.awt.datatransfer.Transferable
  */
 class XmlPreviewPanelTest : BasePlatformTestCase() {
 
-    // 测试前快照系统剪贴板，tearDown 恢复，避免 copyError 污染用户剪贴板
-    private var clipboardSnapshot: Transferable? = null
+    /** T-ClipboardIso：内存剪贴板（测试全程不碰系统剪贴板，用户复制/并行会话互不干扰）。 */
+    private lateinit var clipboard: FakeClipboardManager
 
     // T-M27.4：渲染文本断言类测试关闭自动格式化（格式化行为由 SqlFormatterTest +
     // SqlPreviewPanelTest.testRenderAutoFormatsSql 专项覆盖；此处模拟"关闭格式化"场景）
     override fun setUp() {
         super.setUp()
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = false }
-        clipboardSnapshot = Toolkit.getDefaultToolkit().systemClipboard.getContents(null)
+        clipboard = installFakeClipboard(testRootDisposable)
     }
 
     override fun tearDown() {
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true }
-        runCatching { Toolkit.getDefaultToolkit().systemClipboard.setContents(clipboardSnapshot, null) }
         super.tearDown()
     }
 
@@ -54,11 +55,34 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         </mapper>
     """.trimIndent()
 
-    private fun xmlResult(): PreviewResult {
-        val parsed = XmlMapperParser().parse(mapper)
+    private fun xmlResult(): PreviewResult = xmlResultOf(mapper)
+
+    private fun xmlResultOf(source: String): PreviewResult {
+        val parsed = XmlMapperParser().parse(source)
         val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
         val rendered = model.renderSql()
-        return PreviewResult(rendered.sql, rendered.sql.replace(Regex("\\s+"), " ").trim(), rendered.mappings.map { it.property }, ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }), null, null, null, emptyList(), emptyMap(), null, null, emptyList(), emptyList(), null, model, emptyMap(), null, null, null, null)
+        return PreviewResult(
+            rendered.sql,
+            rendered.sql.replace(Regex("\\s+"), " ").trim(),
+            rendered.mappings.map { it.property },
+            ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
+            null,
+            null,
+            null,
+            emptyList(),
+            emptyMap(),
+            null,
+            null,
+            emptyList(),
+            emptyList(),
+            null,
+            model,
+            emptyMap(),
+            null,
+            null,
+            null,
+            null,
+        )
     }
 
     private fun compact(text: String): String = text.replace(Regex("\\s+"), " ").trim()
@@ -166,7 +190,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         // bind 求值结果仅在「参数」区显示（唯一入口：输入覆盖、清空恢复自动值）
         val panel = SqlPreviewPanel(project)
         panel.showResult(xmlResult())
-        // bind 名在参数区有输入行（求值结果回显：'%' + name + '%'，mock name="1" → "%1%"）
+        // bind 名在参数区有输入行（求值结果回显：'%' + name + '%'，mock name="1" → "%1%"）。
         // T-HibDualCapture：tooltip 现为 `#source = 值`，按前缀匹配定位 bind 行（值随回填动态变化）
         val bindRow = (0 until 20).mapNotNull { panel.paramFieldForTest(it) }
             .firstOrNull { it.toolTipText?.startsWith("#likeName") == true }
@@ -194,7 +218,28 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         """.trimIndent())
         val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
         val rendered = model.renderSql()
-        val result = PreviewResult(rendered.sql, rendered.sql, rendered.mappings.map { it.property }, ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }), null, null, null, emptyList(), emptyMap(), null, null, emptyList(), emptyList(), null, model, emptyMap(), null, null, null, null)
+        val result = PreviewResult(
+            rendered.sql,
+            rendered.sql,
+            rendered.mappings.map { it.property },
+            ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
+            null,
+            null,
+            null,
+            emptyList(),
+            emptyMap(),
+            null,
+            null,
+            emptyList(),
+            emptyList(),
+            null,
+            model,
+            emptyMap(),
+            null,
+            null,
+            null,
+            null,
+        )
         val panel = SqlPreviewPanel(project)
         panel.showResult(result)
         val keywordField = (0 until 20).mapNotNull { panel.paramFieldForTest(it) }
@@ -230,7 +275,28 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         """.trimIndent())
         val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
         val rendered = model.renderSql()
-        val result = PreviewResult(rendered.sql, rendered.sql, rendered.mappings.map { it.property }, ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }), null, null, null, emptyList(), emptyMap(), null, null, emptyList(), emptyList(), null, model, emptyMap(), null, null, null, null)
+        val result = PreviewResult(
+            rendered.sql,
+            rendered.sql,
+            rendered.mappings.map { it.property },
+            ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
+            null,
+            null,
+            null,
+            emptyList(),
+            emptyMap(),
+            null,
+            null,
+            emptyList(),
+            emptyList(),
+            null,
+            model,
+            emptyMap(),
+            null,
+            null,
+            null,
+            null,
+        )
         val panel = SqlPreviewPanel(project)
         panel.showResult(result)
         val fields = (0 until 20).mapNotNull { panel.paramFieldForTest(it) }
@@ -258,7 +324,28 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         """.trimIndent())
         val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
         val rendered = model.renderSql()
-        val result = PreviewResult(rendered.sql, rendered.sql.replace(Regex("\\s+"), " ").trim(), rendered.mappings.map { it.property }, ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }), null, null, null, emptyList(), emptyMap(), null, null, emptyList(), emptyList(), null, model, emptyMap(), null, null, null, null)
+        val result = PreviewResult(
+            rendered.sql,
+            rendered.sql.replace(Regex("\\s+"), " ").trim(),
+            rendered.mappings.map { it.property },
+            ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
+            null,
+            null,
+            null,
+            emptyList(),
+            emptyMap(),
+            null,
+            null,
+            emptyList(),
+            emptyList(),
+            null,
+            model,
+            emptyMap(),
+            null,
+            null,
+            null,
+            null,
+        )
         val panel = SqlPreviewPanel(project)
         panel.showResult(result)
         assertNotNull("编辑器应正常显示 SQL", panel.editorForTest())
@@ -278,7 +365,28 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         """.trimIndent())
         val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
         val rendered = model.renderSql()
-        val result = PreviewResult(rendered.sql, rendered.sql, emptyList(), null, null, null, null, emptyList(), emptyMap(), null, null, emptyList(), emptyList(), null, model, emptyMap(), null, null, null, null)
+        val result = PreviewResult(
+            rendered.sql,
+            rendered.sql,
+            emptyList(),
+            null,
+            null,
+            null,
+            null,
+            emptyList(),
+            emptyMap(),
+            null,
+            null,
+            emptyList(),
+            emptyList(),
+            null,
+            model,
+            emptyMap(),
+            null,
+            null,
+            null,
+            null,
+        )
         val panel = SqlPreviewPanel(project)
         panel.showResult(result)
         val button = panel.errorCopyButtonForTest()
@@ -299,4 +407,61 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
+    /**
+     * T-ExprAstPrecheck T-EP-03：条件行支持面标注——SUPPORTED 行不占位；
+     * 不支持语法/运行期降级各渲染一条淡色标注，理由进 tooltip。
+     */
+    fun testXmlConditionSupportAnnotation() {
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            xmlResultOf(
+                """
+                <mapper namespace="com.example.BizMapper">
+                  <select id="s1" resultType="map">SELECT * FROM t
+                    <if test="type != null">AND type = #{type}</if>
+                    <if test="a ? b : c">AND a = 1</if>
+                    <if test="map.length() &gt; 0">AND b = 2</if>
+                  </select>
+                </mapper>
+                """.trimIndent(),
+            ),
+        )
+
+        assertEquals("支持面内的条件行不应有标注", 0, conditionAnnotations(panel, 0).size)
+
+        val unsupported = conditionAnnotations(panel, 1)
+        assertEquals(1, unsupported.size)
+        assertEquals(
+            MpSqlVisualizerBundle.message("panel.xml.expr.unsupported"),
+            unsupported.single().text,
+        )
+        assertTrue(
+            "不支持语法行的 tooltip 应给理由：${unsupported.single().toolTipText}",
+            unsupported.single().toolTipText.contains("三元"),
+        )
+
+        val fallback = conditionAnnotations(panel, 2)
+        assertEquals(1, fallback.size)
+        assertEquals(
+            MpSqlVisualizerBundle.message("panel.xml.expr.fallback"),
+            fallback.single().text,
+        )
+        assertTrue(
+            "降级行的 tooltip 应点名方法：${fallback.single().toolTipText}",
+            fallback.single().toolTipText.contains("length"),
+        )
+
+        // 标注只是提示：三个条件仍按启发式默认全部展开
+        assertEquals(
+            "SELECT * FROM t AND type = ? AND a = 1 AND b = 2",
+            compact(panel.editorForTest()!!.document.text),
+        )
+        panel.clear()
+    }
+
+    /** 条件行内的标注标签（复选框所在行 panel 的 JBLabel 子组件）。 */
+    private fun conditionAnnotations(panel: SqlPreviewPanel, index: Int): List<JBLabel> {
+        val checkBox = panel.conditionCheckboxForTest(index) ?: return emptyList()
+        return (checkBox.parent?.components ?: emptyArray()).filterIsInstance<JBLabel>()
+    }
 }

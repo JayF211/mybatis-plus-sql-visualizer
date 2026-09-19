@@ -91,6 +91,8 @@ class SqlLogParamCodecTest {
             null,
             0,
             emptyList(),
+            emptyList(),
+            null,
             0L,
             "com.x.mapper.TMapper.updateA",
             "SQLException: Data too long",

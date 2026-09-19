@@ -14,33 +14,40 @@ import org.junit.Test
  */
 class DialectTest {
 
-    private val table = TableInfo("DeviceInfoEntity", "car_device_info", listOf(ColumnInfo("id", "id")))
+    private val table = TableInfo(
+        "DeviceInfoEntity",
+        "car_device_info",
+        listOf(ColumnInfo("id", "id")),
+    )
 
     @Test
     fun `mysql_分页`() {
-        assertEquals("LIMIT 10", MySqlDialect.INSTANCE.renderLimit(LimitClause(null, 10)))
-        assertEquals("LIMIT 5, 10", MySqlDialect.INSTANCE.renderLimit(LimitClause(5, 10)))
+        assertEquals("LIMIT 10", MySqlDialect.INSTANCE.renderLimit(LimitClause(null, 10L)))
+        assertEquals("LIMIT 5, 10", MySqlDialect.INSTANCE.renderLimit(LimitClause(5L, 10L)))
     }
 
     @Test
     fun `postgresql_分页`() {
-        assertEquals("LIMIT 10", PostgreSQLDialect.INSTANCE.renderLimit(LimitClause(null, 10)))
-        assertEquals("LIMIT 10 OFFSET 5", PostgreSQLDialect.INSTANCE.renderLimit(LimitClause(5, 10)))
+        assertEquals("LIMIT 10", PostgreSQLDialect.INSTANCE.renderLimit(LimitClause(null, 10L)))
+        assertEquals("LIMIT 10 OFFSET 5", PostgreSQLDialect.INSTANCE.renderLimit(LimitClause(5L, 10L)))
     }
 
     @Test
     fun `oracle_分页`() {
-        assertEquals("FETCH FIRST 10 ROWS ONLY", OracleDialect.INSTANCE.renderLimit(LimitClause(null, 10)))
+        assertEquals("FETCH FIRST 10 ROWS ONLY", OracleDialect.INSTANCE.renderLimit(LimitClause(null, 10L)))
         assertEquals(
             "OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY",
-            OracleDialect.INSTANCE.renderLimit(LimitClause(5, 10)),
+            OracleDialect.INSTANCE.renderLimit(LimitClause(5L, 10L)),
         )
     }
 
     @Test
     fun `分页占位符_运行时值渲染问号`() {
         // T-M29-03：service.page 的运行时 pageNum/pageSize → `?` 占位（各方言形态）
-        val placeholder = LimitClause(SqlValue.Placeholder("(pageNum - 1) * pageSize"), SqlValue.Placeholder("pageSize"))
+        val placeholder = LimitClause(
+            SqlValue.Placeholder("(pageNum - 1) * pageSize"),
+            SqlValue.Placeholder("pageSize"),
+        )
         assertEquals("LIMIT ?, ?", MySqlDialect.INSTANCE.renderLimit(placeholder))
         assertEquals("LIMIT ? OFFSET ?", PostgreSQLDialect.INSTANCE.renderLimit(placeholder))
         assertEquals("OFFSET ? ROWS FETCH NEXT ? ROWS ONLY", OracleDialect.INSTANCE.renderLimit(placeholder))
@@ -149,52 +156,52 @@ class DialectTest {
     fun `sqlserver_分页`() {
         assertEquals(
             "OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY",
-            SqlServerDialect.INSTANCE.renderLimit(LimitClause(null, 10)),
+            SqlServerDialect.INSTANCE.renderLimit(LimitClause(null, 10L)),
         )
         assertEquals(
             "OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY",
-            SqlServerDialect.INSTANCE.renderLimit(LimitClause(5, 10)),
+            SqlServerDialect.INSTANCE.renderLimit(LimitClause(5L, 10L)),
         )
     }
 
     /** H2 分页（T-M22-03）：无 offset 时仅 `LIMIT {count}`。 */
     @Test
     fun `h2_分页`() {
-        assertEquals("LIMIT 10", H2Dialect.INSTANCE.renderLimit(LimitClause(null, 10)))
-        assertEquals("LIMIT 10 OFFSET 5", H2Dialect.INSTANCE.renderLimit(LimitClause(5, 10)))
+        assertEquals("LIMIT 10", H2Dialect.INSTANCE.renderLimit(LimitClause(null, 10L)))
+        assertEquals("LIMIT 10 OFFSET 5", H2Dialect.INSTANCE.renderLimit(LimitClause(5L, 10L)))
     }
 
     /** SQLite 分页（T-M22-03）：同 H2 形态。 */
     @Test
     fun `sqlite_分页`() {
-        assertEquals("LIMIT 10", SqliteDialect.INSTANCE.renderLimit(LimitClause(null, 10)))
-        assertEquals("LIMIT 10 OFFSET 5", SqliteDialect.INSTANCE.renderLimit(LimitClause(5, 10)))
+        assertEquals("LIMIT 10", SqliteDialect.INSTANCE.renderLimit(LimitClause(null, 10L)))
+        assertEquals("LIMIT 10 OFFSET 5", SqliteDialect.INSTANCE.renderLimit(LimitClause(5L, 10L)))
     }
 
     /** MariaDB 分页（T-M22-03）：同 MySQL 形态。 */
     @Test
     fun `mariadb_分页`() {
-        assertEquals("LIMIT 10", MariaDbDialect.INSTANCE.renderLimit(LimitClause(null, 10)))
-        assertEquals("LIMIT 5, 10", MariaDbDialect.INSTANCE.renderLimit(LimitClause(5, 10)))
+        assertEquals("LIMIT 10", MariaDbDialect.INSTANCE.renderLimit(LimitClause(null, 10L)))
+        assertEquals("LIMIT 5, 10", MariaDbDialect.INSTANCE.renderLimit(LimitClause(5L, 10L)))
     }
 
     /** DM（达梦）分页（T-M22-03）：同 MySQL 形态。 */
     @Test
     fun `dm_分页`() {
-        assertEquals("LIMIT 10", DmDialect.INSTANCE.renderLimit(LimitClause(null, 10)))
-        assertEquals("LIMIT 5, 10", DmDialect.INSTANCE.renderLimit(LimitClause(5, 10)))
+        assertEquals("LIMIT 10", DmDialect.INSTANCE.renderLimit(LimitClause(null, 10L)))
+        assertEquals("LIMIT 5, 10", DmDialect.INSTANCE.renderLimit(LimitClause(5L, 10L)))
     }
 
     /** KingBase（人大金仓）分页（T-M22-03）：同 PostgreSQL 形态。 */
     @Test
     fun `kingbase_分页`() {
-        assertEquals("LIMIT 10", KingBaseDialect.INSTANCE.renderLimit(LimitClause(null, 10)))
-        assertEquals("LIMIT 10 OFFSET 5", KingBaseDialect.INSTANCE.renderLimit(LimitClause(5, 10)))
+        assertEquals("LIMIT 10", KingBaseDialect.INSTANCE.renderLimit(LimitClause(null, 10L)))
+        assertEquals("LIMIT 10 OFFSET 5", KingBaseDialect.INSTANCE.renderLimit(LimitClause(5L, 10L)))
     }
 
     @Test
     fun `生成器_方言分页联动`() {
-        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, emptyList(), emptyList(), null, emptyList(), LimitClause(5, 10), null, null, null, emptyList(), null, null)
+        val statement = SelectStatement(table, LimitClause(5L, 10L))
 
         val mysql = SqlGenerator.generate(statement, false, MySqlDialect.INSTANCE, null)
         assertEquals(
@@ -229,8 +236,24 @@ class DialectTest {
 
     @Test
     fun `默认方言为MySQL_旧调用兼容`() {
-        val statement = SelectStatement(table, emptyList(), null, emptyList(), false, emptyList(), emptyList(), null, emptyList(), LimitClause(null, 10), null, null, null, emptyList(), null, null)
+        val statement = SelectStatement(table, LimitClause(null, 10L))
         // 不带方言参数（默认 MySQL）
         assertEquals("10", SqlGenerator.generate(statement).substringAfter("LIMIT "))
+    }
+
+    /**
+     * T-TS-FixC：`DialectRegistry.effective` 的兜底分支直接用例（此前零直接引用）。
+     *
+     * 纯环境（无平台 Application）下 PluginSettings 服务不可用 → 按全局默认 auto=true 进推断链，
+     * 而 project=null 时探测链不可用 → 回退 `byName(null)`。psi 侧无参 `currentDialect()` 调用点
+     * 全靠这条兜底，不得抛异常。
+     *
+     * auto/manual 的「项目级 × 全局」矩阵需要真实 app 服务与项目级服务，落在
+     * ProjectPluginSettingsTest.testDialectRegistryEffectiveMatrix。
+     */
+    @Test
+    fun `effective_无平台设置上下文_兜底MySQL`() {
+        assertEquals(MySqlDialect.INSTANCE, DialectRegistry.INSTANCE.effective())
+        assertEquals(MySqlDialect.INSTANCE, DialectRegistry.INSTANCE.effective(null))
     }
 }
