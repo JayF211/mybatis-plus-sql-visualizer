@@ -300,6 +300,32 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         assertFalse("非 MCP 来源不应出现徽标: $meta", meta.contains("[MCP]"))
     }
 
+    fun test二级条目_落盘再读回_徽标仍在() {
+        // 「重启后徽标仍在」验收的端到端半边：写盘 → 历史读端解析 → 渲染器出徽标。
+        // 改前读端不回填来源（恒 UNKNOWN），本条红——徽标只在当次会话内存里存在。
+        val dir = java.nio.file.Files.createTempDirectory("mcp-badge-").toFile().apply { deleteOnExit() }
+        val saver = SqlLogAutoSaver()
+        saver.configure(dir.absolutePath, "sql-history-\$yyyy-MM-dd\$.sql", null)
+        saver.write(
+            LogSqlEntry(
+                rawSql = "SELECT id FROM user WHERE id = 1",
+                restoredSql = "SELECT id FROM user WHERE id = 1",
+                params = emptyList(),
+                timestamp = testTimestamp,
+                executionTimeMs = 7L,
+                databaseName = "MySQL",
+                source = SqlSource.MCP,
+            ),
+        )
+        saver.close()
+
+        val read = SqlLogFileReader.readFromFile(dir.listFiles { f -> f.extension == "sql" }!!.single()).single()
+        val meta = joinedText(renderSql(read).metaLine)
+        assertTrue("读回条目来源应仍为 MCP: ${read.source}", read.source == SqlSource.MCP)
+        assertTrue("读回后渲染仍出 MCP 徽标: $meta", meta.contains("[MCP] "))
+        assertTrue("目标库角标共存: $meta", meta.contains("[MySQL] "))
+    }
+
     // ---------- T-JdbcThreadBucket F3：历史页时间戳跟随设置（2026-09-15 移除硬编码 yyyy-MM-dd HH:mm:ss） ----------
 
     private val testTimestamp: Long = 1_700_000_000_000L

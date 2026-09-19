@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.mcp
 
+import cn.song.mybatisplus.visualizer.util.FatalErrors
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import java.sql.SQLWarning
@@ -171,6 +172,13 @@ object McpDbExecutor {
                 notifyExecuted(onExecuted, sql, System.currentTimeMillis() - started, null, dataSource)
             }
         } catch (e: Throwable) {
+            // T-FatalPassthrough（合流收口，T-FP-03 守卫要求）：JVM 级致命错误不投审计钩子——
+            // 钩子会构造 ExecutedOutcome（反射取数据源名 + 文本构造）并落历史，内存/链接已损坏时
+            // 继续这些副作用只会把现场搅乱；fatal 原样透传给平台/进程级通道。反射链须先解包：
+            // 目标方法抛出的 Error 被 Method.invoke 包进 InvocationTargetException（普通异常），
+            // 只判外层会漏判（与 errorTextOf 同款解包口径，见 util/FatalErrors.kt 用法说明）。
+            val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+            if (FatalErrors.isFatal(cause)) throw cause
             notifyExecuted(onExecuted, sql, System.currentTimeMillis() - started, e, dataSource)
             throw e
         }

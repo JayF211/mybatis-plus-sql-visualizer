@@ -72,6 +72,10 @@ class McpHistoryIngestTest : BasePlatformTestCase() {
         // 既有 buffer 语义（本任务不另开口子）：去重开启时窗口内同 SQL 折叠为一条；
         // 每次调用仍有 idea.log 的 [MCP-AUDIT] 行兜底留痕（见 recordMcpExecution KDoc）
         val manager = project.getService(SqlLogManager::class.java)
+        // 前提自证（合流收口实测）：去重开关是项目服务级状态，light 测试项目在同一 JVM 内跨类复用，
+        // 前置测试类（如 SqlConsoleBridgeFilterProviderTest 的 setUp）关掉它会让本用例假红——
+        // 本用例断言的就是「去重开启时」的语义，前提在此显式声明，不依赖环境残留。
+        manager.entries.dedupeEnabled = true
         recordMcpExecution(project, "SELECT 1 FROM dual", "demo", 1L, null)
         val afterFirst = manager.entries.size()
         recordMcpExecution(project, "SELECT 1 FROM dual", "demo", 1L, null)

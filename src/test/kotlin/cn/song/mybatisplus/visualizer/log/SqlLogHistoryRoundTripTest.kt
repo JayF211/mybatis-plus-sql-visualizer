@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
@@ -271,5 +272,80 @@ class SqlLogHistoryRoundTripTest {
             read.errorText,
         )
         assertNull(read.mapperStatement)
+    }
+
+    // ---------- T-McpAuditTrail T-MAT-03 读端回填：来源标记 round-trip ----------
+    // 立项背景：写入侧（pd 载荷落 `s` 键）与 pd 载荷层 round-trip 已由 T-McpAuditTrail 交付，
+    // 但读端 [SqlLogFileReader.parseBlock] 当时被并行任务占用未同步改动 → 重启后 MCP 条目的
+    // 来源退化为 [SqlSource.UNKNOWN]（历史页 MCP 徽标消失）。本组用例钉住读端回填。
+
+    /** MCP 条目写入侧的常态形态：无参数、无占位符、无 mapperStatement——pd 行完全靠 source==MCP 触发。 */
+    private fun mcpEntry(sql: String, timestamp: Long = 1724567890000L) = LogSqlEntry(
+        rawSql = sql,
+        restoredSql = sql,
+        params = emptyList(),
+        timestamp = timestamp,
+        executionTimeMs = 7L,
+        databaseName = "demo-mysql",
+        source = SqlSource.MCP,
+    )
+
+    @Test
+    fun `真实链路_MCP条目写读回环_来源标记不退化`() {
+        val dir = tempDir()
+        val saver = SqlLogAutoSaver()
+        saver.configure(dir.absolutePath, "sql-history-\$yyyy-MM-dd\$.sql", null)
+        saver.write(mcpEntry("SELECT id FROM user WHERE id = 1"))
+        saver.close()
+
+        val file = dir.listFiles { f -> f.extension == "sql" }!!.single()
+        // 写入侧前提（T-MAT-03）：无参数无占位符的 MCP SELECT 也必须落 pd 行，否则来源无处可存
+        assertTrue("MCP 条目必须写出 pd 载荷行", file.readText().contains("-- pd: "))
+
+        // 读端（重启后历史面板读文件）：来源必须仍是 MCP
+        val read = SqlLogFileReader.readFromFile(file).single()
+        assertEquals("读端回填来源标记（改前退化为 UNKNOWN → 徽标消失）", SqlSource.MCP, read.source)
+        assertEquals("SQL 文本不受来源键影响", "SELECT id FROM user WHERE id = 1", read.restoredSql)
+        assertEquals("目标库角标随载荷回环", "demo-mysql", read.databaseName)
+        assertNull("pd 载荷不侵占头部 source: 段语义（仍为源码位置）", read.sourceFile)
+    }
+
+    @Test
+    fun `真实链路_非MCP条目写读回环_来源保持UNKNOWN不扩张`() {
+        // T-MAT-03 的读端口径：只有 MCP 落 `s` 键，其余来源不因本次改动改变读回结果
+        val dir = tempDir()
+        val saver = SqlLogAutoSaver()
+        saver.configure(dir.absolutePath, "sql-history-\$yyyy-MM-dd\$.sql", null)
+        saver.write(
+            LogSqlEntry(
+                rawSql = "SELECT * FROM user WHERE id = ?",
+                restoredSql = "SELECT * FROM user WHERE id = 1",
+                params = listOf(LogSqlParam("1", "Long")),
+                timestamp = 1724567890000L,
+                sourceFile = "UserMapper.java",
+                sourceLine = 7,
+            ),
+        )
+        saver.close()
+
+        val read = SqlLogFileReader.readFromFile(dir.listFiles { f -> f.extension == "sql" }!![0]).single()
+        assertEquals("非 MCP 条目读回来源仍为 UNKNOWN", SqlSource.UNKNOWN, read.source)
+        assertEquals("其余字段不受影响", "UserMapper.java", read.sourceFile)
+    }
+
+    @Test
+    fun `真实链路_旧版F43头部下的pd载荷_来源回填MCP`() {
+        // 旧版头部分支（-- yyyy-MM-dd HH:mm:ss）同样要回填——升级过渡期的混合文件里，
+        // 头部形态与 pd 行是否在场互相独立，两条分支漏一条即出现「同一文件内徽标时有时无」
+        val dir = tempDir()
+        val pd = SqlLogParamCodec.encodeEntry(mcpEntry("SELECT 2"))
+        File(dir, "sql-history-2026-08-20.sql").writeText(
+            "-- 2026-08-20 10:00:00\n-- pd: $pd --\nSELECT 2;\n\n",
+        )
+
+        val read = SqlLogFileReader.readAll(dir.absolutePath).single()
+        assertEquals("旧版头部分支读端回填来源标记", SqlSource.MCP, read.source)
+        assertEquals("SELECT 2", read.restoredSql)
+        assertNull("旧版头部无源码位置", read.sourceFile)
     }
 }
