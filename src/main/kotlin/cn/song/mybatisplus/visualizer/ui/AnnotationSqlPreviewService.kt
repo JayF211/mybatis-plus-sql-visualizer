@@ -178,6 +178,11 @@ object AnnotationSqlPreviewService {
      *
      * T-PT-01：同步扩为「名字 + 类型类别」对——`param1..N` 按位置继承对应参数的类型类别，
      * 供参数面板按签名挂占位提示与 mock 值分派。
+     *
+     * T-PC2-03 差异登记（**有意不擅改**）：本门槛 = 「多参数或含 @Param 就补 paramN」，
+     * 比 XML 路径 [XmlParamTypeResolver.resolveTypes] 的「全或无（全部参数都有显式 @Param）」
+     * 宽一档——注解路径现状已随 `paramNames` 供补全上下文消费（`XmlSqlCompletionContextResolver`
+     * 按键序取参名），收紧会连带补全候选变化；两条路径语义分叉已记入 T-ParamContract2 计划 §八。
      */
     internal fun paramTypes(method: PsiMethod?): Map<String, ParamTypeInfo> {
         if (method == null) return emptyMap()
