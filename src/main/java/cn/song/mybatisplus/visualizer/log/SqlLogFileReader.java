@@ -251,7 +251,8 @@ public final class SqlLogFileReader {
             String rawSql = rawSqlOverride != null ? rawSqlOverride : sql;
             return new LogSqlEntry(rawSql, sql, params, timestamp,
                     logTime, LogSqlEntry.computeSummary(sql),
-                    decodedExt != null ? decodedExt.source() : SqlSource.UNKNOWN, executionTimeMs,
+                    decodedExt != null && decodedExt.source() != null ? decodedExt.source() : SqlSource.UNKNOWN,
+                    executionTimeMs,
                     src.getFirst(), src.getSecond(),
                     decodedExt != null ? decodedExt.sourceCandidates() : List.of(),
                     decodedExt != null ? decodedExt.candidateClasses() : List.of(),
@@ -274,7 +275,8 @@ public final class SqlLogFileReader {
             String rawSql = rawSqlOverride != null ? rawSqlOverride : sql;
             return new LogSqlEntry(rawSql, sql, params, timestamp,
                     null, LogSqlEntry.computeSummary(sql),
-                    decodedExt != null ? decodedExt.source() : SqlSource.UNKNOWN, null,
+                    decodedExt != null && decodedExt.source() != null ? decodedExt.source() : SqlSource.UNKNOWN,
+                    null,
                     null, 0,
                     decodedExt != null ? decodedExt.sourceCandidates() : List.of(),
                     decodedExt != null ? decodedExt.candidateClasses() : List.of(),

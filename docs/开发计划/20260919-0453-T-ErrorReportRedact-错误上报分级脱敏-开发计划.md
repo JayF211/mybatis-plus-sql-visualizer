@@ -71,6 +71,73 @@ D1 已定案（B）→ T-ERR-01 → T-ERR-02 → T-ERR-03 → 真机走查 §五
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
 | D1 | —（决策已定，无代码提交） | **已定案 2026-09-19（用户认可本会话推荐）：选 B**——默认预填只给类名+指纹+栈帧，message 全文改为用户可勾选附加；A/C 保留并标记弃用 |
-| T-ERR-01 | （实施后填） | |
-| T-ERR-02 | （实施后填） | 指纹区分度抽样结论 |
-| T-ERR-03 | （实施后填） | 云侧端到端验证结论（或未验口径） |
+| T-ERR-01 | `5ae7b90` | 预填分级落地（§8.1）；**偏离**：完整堆栈附件的默认勾选同步改为不勾（§8.4-1） |
+| T-ERR-02 | `5ae7b90` + `28dc531` | 指纹补强 + 真实形态抽样结论（§8.2） |
+| T-ERR-03 | `28dc531` | 用例与门禁读数（§8.3）；云侧端到端**未验证**（§8.5） |
+
+### 8.1 T-ERR-01 落地形态（`5ae7b90`）
+
+- `ErrorReportComposer`：新增 `buildRedactedTitle`（异常类简单名）与 `buildRedactedDescription`
+  （`异常: <全名>` + `原因链: <cause 链类名>` + `栈帧: <前 10 个业务帧含行号>` + 「消息全文默认不附带」说明行）；
+  `prefill` 默认走这两种脱敏形态，同时把 message 全文与含 message 的旧形态
+  （`Prefill.message`/`titleWithMessage`/`descriptionWithMessage`）交给对话框做勾选附加源。
+- `ErrorReportDialog`：新增「附带异常消息全文」勾选行（默认不勾，无 message 时整行隐藏）；
+  切换只回填「内容仍等于上次预填写入值」的字段（`messagePrefillTargets` 纯函数），
+  用户手工改过的字段不被覆盖。勾选后标题/描述与改前**逐字节一致**（`buildTitle`/`buildDescription` 原式未改）。
+- 批量路径同口径：`buildBatchTitle`/`buildBatchDescription` 加 `includeMessages`（默认 false）；
+  `BatchSubmitter.BatchItem.includeMessage` 由同一开关在收集时统一回写，>5 条的错峰补发帖子同样默认脱敏。
+- bundle：新增 `error.report.dialog.attachMessage(.tip)` 中英双键；`error.report.privacy` 与
+  `attachStack.tip` 按新默认改写（旧文案宣称「提交包含异常堆栈」，附件默认不勾后已不实）。
+- **D2（日志侧）按计划建议不动**：61 处 `LOG.warn(msg, e)` 只落本机 idea.log、不外传，
+  逐处改动风险高于脱敏收益；本任务未改 `DataSourceSelector.kt`/`ExecuteSqlSupport.kt`/`DatabaseConsoleLauncher.kt`
+  （三者在 §一 里只作现场取证，方案 §三 无日志侧条目）。
+
+### 8.2 T-ERR-02 抽样结论（`28dc531`）
+
+- 帧解析收口：`businessFrames`（指纹用，去位置）与 `businessFrameLines`（描述摘要用，带行号）
+  共用同一正则与平台前缀过滤，杜绝两处口径漂移。
+- 补强：cause 链类名（`Caused by:`/`Suppressed:` 行**只取类名**，行上消息一律丢弃）并入指纹材料，
+  最多 3 条。
+- 抽样（五形态，取自本仓真实日志点：DataSourceSelector:2624 提交事务、ExecuteSqlSupport:74 反射加载、
+  DatabaseConsoleLauncher:51 临时文件、XmlMapperPreparationEngine、BatchOperationConverter）结论：
+  **不同站点指纹互不相同、行号漂移不改指纹**；驱动包装形态（前 5 业务帧全是 `com.mysql.cj.*`）
+  此前帧序列完全相同，并入 cause 链后「有 cause / 无 cause、cause 类名不同」可分。
+- **残留塌缩（诚实登记）**：类名 + 前 5 帧 + cause 链三者全同而仅 message 不同时仍同指纹
+  （例：驱动直抛的「拒绝访问」与「库不存在」）。改前的指纹也不吃 message，故**不是** D1=B 引入的退化；
+  把 message 哈希并入会让指纹随消息里的参数漂移（同一个 bug 反复上报撞 5 次/小时限流），本轮**不改**，
+  按已知限制登记（24h 去重是内存态、重启即清；同站点首报已在需求池）。
+  用例 `残留塌缩_同站点同cause链而消息不同仍同指纹_已知限制` 钉住该语义，避免将来被当成 bug 反复「修」。
+
+### 8.3 T-ERR-03 门禁读数（`28dc531`）
+
+- 定向：`./gradlew test --tests "cn.song.mybatisplus.visualizer.feedback.*"` →
+  **122 例 / 0 失败 / 0 错误 / 0 跳过**（8 个测试类）。
+- 全量：`./gradlew test` → **5275 例 / 1 失败 / 0 错误 / 6 跳过**。唯一失败
+  `EntityClassFinderHeavyTest.testTableNameMismatchExcluded` 为**无关 flake**（平台 Git 插件
+  `DefaultDispatcher-worker … @Git update present check` 线程泄漏；隔离复跑该单类 BUILD SUCCESSFUL）；
+  6 跳过全是 `DialectDockerVerificationTest`（本机无 docker 实例，存量环境跳过）。
+- `testDatabase` **未跑**：本任务零改动触达 Database 链（`git diff f0d163e..HEAD` 仅 feedback 包 +
+  两个 properties），按项目门禁口径（触达 Database 链才双跑）不触发。
+- 用例覆盖验收口径：①默认预填与默认提交载荷不含 message 文本（含批量清单、补发帖子）；
+  ②勾选附加后标题/描述与改前逐字节一致（含批量描述逐字节钉死）。
+
+### 8.4 偏离计划之处
+
+1. §三「message 全文**与异常全文**降为对话框内用户可勾选附加的区块」——D1-B 行只写了 message，
+   本次**把完整堆栈附件的默认勾选也改为不勾**：附件首行就是 `异常类: message`，默认勾选等于绕开脱敏，
+   验收口径①在附件通道上不成立。勾选后附件内容与改前逐字节一致（`buildStackAttachment` 未改）。
+2. 改写了 4 处 bundle 文案（新增 attachMessage 双键 + 改写 privacy 与 attachStack.tip），
+   超出写集里列的源码文件，属新增 UI 文案的必要落点（缺键会原样显示键名）。
+3. §T-ERR-03 提到的「CHANGELOG + 变更记录 + 第八轮报告 Z-21 落地备注」按派活方口径**未改**
+   （`docs/变更记录.md` 与盘点文档明确不动，CHANGELOG 不在写集内），落地说明全部收在本文件。
+4. 指纹材料新增 cause 链类名（§T-ERR-02 授权「不足则调整帧数/过滤规则」）；帧数（5）与平台前缀表**未动**。
+
+### 8.5 未验证 / 环境受限
+
+- **云侧端到端（验收 2）未验证**：本机无 `sql-visualizer-admin` 源码，也无测试环境凭据，
+  按派活方口径不碰云环境。缺的是「提交一份默认（脱敏）形态与一份勾选形态到需求池，
+  核对两种形态的接收与展示」。本机只做到**契约侧静态核对**：标题走同一 `finalizeTitle`（5~200）、
+  描述走同一 10 字符兜底，且比改前更短更稳（≤10 帧 + 3 条 cause，量级 ~1KB，不会触及长度上限）。
+  服务端若硬依赖 message 非空，客户端侧无法预判——这正是必须端到端验的那一项，**不得以静态核对冒充实测**。
+- **真机走查（§五）未做**：Internal Errors 对话框里默认预填与勾选附加的实际呈现、
+  提交后需求池能否定位，仍留人工。
