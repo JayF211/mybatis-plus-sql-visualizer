@@ -65,7 +65,11 @@ abstract class McpToolsetSupport(private val toolName: String) : McpToolset {
      *  T-McpAuditTrail T-MAT-04：[argsSummary] 为真实入参摘要（经 [McpAuditLog.summarize] 产出，
      *  如 mpsv_explain 的 dataSource/dialect/SQL 首段，整体受 [McpAuditLog] 的 SUMMARY_LIMIT 截断）。
      *  默认值 [LEGACY_ARGS_SUMMARY] 是改造前的字面量：其余九个**纯静态**工具无执行面、参数面未立项，
-     *  保持审计行逐字节不变（计划 §验收 4）；新增执行类工具应显式传摘要，勿再落 "ok"。
+     *  保持审计行逐字节不变（计划 §验收 4，**仅 OK 路径**——错误路径的入参段格式十个工具统一变化）；
+     *  新增执行类工具应显式传摘要，勿再落 "ok"。
+     *
+     *  错误路径（EXPECTED_ERROR）的组合串走 [errorArgsSummary] 的两段分预算：错误文本优先，
+     *  入参摘要让位——长 SQL 场景下错误原因不被摘要挤掉（T-MAT-04 回退修复）。
      */
     protected suspend fun audit(
         tool: String,
@@ -87,11 +91,12 @@ abstract class McpToolsetSupport(private val toolName: String) : McpToolset {
         private val started = System.currentTimeMillis()
         fun ok() = McpAuditLog.call(tool, argsSummary, "OK", System.currentTimeMillis() - started)
 
-        /** 预期错误：入参摘要 + 错误文本同列（改造前该槽位只放错误文本，改造后两者都在，信息不减）。 */
+        /** 预期错误：入参摘要 + 错误文本同列（改造前该槽位只放错误文本；两者同列后错误文本
+         *  可能被摘要挤掉——T-MAT-04 回退修复改为 [errorArgsSummary] 的两段分预算，错误文本优先）。 */
         fun expectedError(e: McpExpectedError) =
             McpAuditLog.call(
                 tool,
-                "$argsSummary error=${e.mcpErrorText}",
+                errorArgsSummary(argsSummary, e.mcpErrorText),
                 "EXPECTED_ERROR",
                 System.currentTimeMillis() - started,
             )
