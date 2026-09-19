@@ -57,4 +57,10 @@ T-EI-01（落点核实）→ T-EI-02（识别器纯函数+测试）→ T-EI-03�
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+**2026-09-17 实施完毕（提交 f8ad545，dev 分支直接交付）**
+
+- **T-EI-01（落点定案）**：IDE 内嵌原生控制台结果行无程序化读取面——插件反射面仅页签选择/组件换入，网格数据由 DBN 托管，硬读需侵入平台内部网格模型——按计划兜底走 MCP explain 输出承载位（T-NoticeChannel notices 同款节形态）；IDE 面建议条挂账（备选 B 自渲染成本收益不成立）。
+- **T-EI-02**：`util/ExplainIndexAdvisor` 纯函数，MySQL 表格式（type=ALL 全表扫 rows≥10k / key=NULL 弱信号 / Using filesort / Using temporary）+ PG 文本树（Seq Scan 大表）两方言先行；行数阈值防小表噪音；列名形态不符不猜；不支持方言静默降级；单源约定=规则集在 util 一处，IDE 备选 B 与未来消费方同源取用。
+- **T-EI-03**：ExplainTool 输出尾附 index hints 节（空清单零追加逐字节一致硬门禁）；无命中零输出不噪音。perf_advice 同源接线（§三预留）随后续消费需求另启。
+- **测试**：ExplainIndexAdvisorTest 10 例表驱动（两方言正反例/阈值边界/降级/零差异）。CHANGELOG/变更记录随本轮文档批次同步；N-23 状态回填留主会话。
+- **真机走查留人工**（§五）：MySQL/PG 无索引大表各一条核对建议与展开依据。

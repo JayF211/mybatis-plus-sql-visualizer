@@ -62,7 +62,7 @@ flowchart LR
 |---|---|---|
 | 补充 `pluginIcon_dark.svg` | 目前只有亮色图标（`META-INF/pluginIcon.svg`）；dark 候选图在 `src/main/resources/icons/candidates/pluginIcon_dark.svg`，启用它或换正式图 | P1 |
 | 检查插件包内是否混入无关文件 | 官方：不要把库重打包进主 jar（Plugin Verifier 会误报）；本插件运行时零第三方依赖，风险低 | P2 |
-| 确认 jar 内 changeNotes | `patchPluginXml.changeNotes` 已显式配置（build.gradle.kts），Marketplace 页面的 What's new 取自上传 zip | ✅ |
+| 确认 jar 内 changeNotes | 内容源 `gradle/plugin-change-notes.html` 经 `patchPluginXml` 注入（T-BuildScriptSplit 起外置），Marketplace 页面的 What's new 取自上传 zip | ✅ |
 | README 补 Marketplace 安装说明 | 可选；README 已有功能/触发方式说明 | P3 |
 | 决定 Marketplace 页面截图 | 推荐 1200×760，展示预览弹窗/日志面板实际效果 | P1（上传表单需要） |
 
@@ -291,9 +291,10 @@ flowchart TD
     V --> B["buildPlugin + verifyPlugin"]
     B --> M["Marketplace：网页上传新 zip<br/>或 Gradle publishPlugin（需 token）"]
     B --> U["writeUpdateManifest 生成 update.json<br/>→ 人工补 changeNotes → 双推"]
+    M --> CH["审核状态确认：作者后台<br/>核对 Pending 版本号与内容<br/>（预期则等放行，误传则撤回）"]
     M --> R["Gitee Release 上传同名 zip<br/>（自更新下载地址）"]
     U --> R
-    M --> DONE["发布完成：两渠道版本一致"]
+    CH --> DONE["发布完成：两渠道版本一致"]
     R --> DONE
 ```
 
@@ -302,7 +303,8 @@ flowchart TD
 | 升版本 | 改 `gradle.properties`（`YYYY.M.D`） | Marketplace 不接受同版本重复上传 |
 | 构建验证 | `./gradlew releaseGate`（buildPlugin → verifyGate 三目标门禁 → testShards 全量） | 发布前必做；`-PverifyOnly=true` 可跳过重打包 |
 | Marketplace 上传 | 网页手动，或 `./gradlew publishPlugin -PintellijPlatformPublishingToken=…` | 后续版本可自动化 |
-| 自更新清单 | `./gradlew writeUpdateManifest` → 人工补 changeNotes | 生成 `update/update.json` |
+| 审核状态确认 | 登录作者后台（<https://plugins.jetbrains.com/author/me>）→ My Plugins → 版本列表 | 核对 Pending 更新的版本号与上传内容：预期内的新版本核对 changeNotes 后等审核放行；误传/过期/内容不明的包后台撤回（撤回不可逆，处置前对版本列表截图留档） |
+| 自更新清单 | `./gradlew writeUpdateManifest` → 人工补 changeNotes | 生成 `update/update.json`；changeNotes 末尾补一行 ≤60 字 Marketplace 评分引导（中性措辞，如「好用的话，欢迎到 Marketplace 页评分留言（搜 SQL Visualizer）」，无激励、无模板评语） |
 | Gitee Release | 网页创建 Release，附同名 zip | 自更新 downloadUrl 指向这里 |
 | 双推 | `scripts/push-all.sh` | 源码链接保持最新 |
 
@@ -355,7 +357,7 @@ flowchart TD
 □ 1. 测试全绿：./gradlew testShards
 □ 2. 兼容门禁：./gradlew verifyGate（三目标，离线；日常档 verifySmoke / -PverifyIdes=minimal）
 □ 3. 发行包：./gradlew buildPlugin，产物 zip 内容核对（无测试类/无关依赖）
-□ 4. 版本号已递增（YYYY.M.D），patchPluginXml.changeNotes 已更新
+□ 4. 版本号已递增（YYYY.M.D），gradle/plugin-change-notes.html 已更新（新 <h2> 块置顶）
 □ 5. GitHub 镜像仓库存在且已同步（git push github master）
 □ 6. Gitee Release 已建，zip 已附
 □ 7. update.json 已生成（writeUpdateManifest）+ changeNotes 人工补充 + 双推
@@ -363,6 +365,7 @@ flowchart TD
 □ 9. 沙盒 runIde 冒烟：zip 安装后功能正常
 □ 10.（可选）签名配置后：signPlugin + verifyPluginSignature
 □ 11. **上传新版后在 Marketplace 后台确认 listing 显示名已同步为 SQL Visualizer，页面 slug URL 不变**
+□ 12. **上传新版后在 Marketplace 后台确认审核状态（Pending 清零或结论留档）**
 ```
 
 ---

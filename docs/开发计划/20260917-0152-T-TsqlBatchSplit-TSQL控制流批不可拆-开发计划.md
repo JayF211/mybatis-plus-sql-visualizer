@@ -59,4 +59,10 @@ T-TB-01（批首识别）→ T-TB-02（消费方回归核验）→ T-TB-03（表
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+**已实施（2026-09-17，dev 分支随「2.2 五计划 + T-PerfSweep4 + 尾巴项」批次）**：
+
+- **T-TB-01（批首识别纯函数）**：`SqlStatementSplitter.splitInternal` 产出段后过 `mergeControlFlowBatches` 后处理——首段首有效关键字（`firstKeywordOf`：跳空白与行/块注释）命中 **IF** 时整批不拆：①后续以 ELSE 起头的顶层段（含 ELSE IF 链）逐级并入（裸 `IF …; ELSE …;` 形态此前拆出 ELSE 起头碎句）；②批内 BEGIN/END 配对失衡（`beginEndBalance` 字符串/注释感知计数 >0，截断批）继续吞后续段直到配对或批尾。**实施偏离（批首收窄）**：批首限定 IF 不含裸 BEGIN——既有测试「无配对END按顶层切分原样_保守」钉死的 `BEGIN; …; COMMIT` MySQL 事务形态与裸 BEGIN 语义冲突，语句首 IF 无方言歧义（MySQL `IF()` 是函数不出现在语句首位）故收窄；形态良好的 T-SQL BEGIN 块本就由块感知整段保护，不损失覆盖。
+- **T-TB-02（消费方回归核验）**：三消费方（LogToSqlPanel/SqlTypeClassifier/SqlToJavaConverter）零改动（合并收敛在 Splitter 内部，既有委托一致性测试复跑绿）；整批 T-SQL 分类落 UNKNOWN → 需确认 fail-closed 既有行为以 `SqlTypeClassifierTest.testTsqlControlFlowBatchFallsToUnknownNeedsConfirm` 钉死。
+- **T-TB-03（表驱动测试）**：`SqlStatementSplitterTest` 新增 8 例——双 BEGIN 形态整批、裸 IF…ELSE 跨顶层分号合并、ELSE IF 链、嵌套 BEGIN/END、批后独立语句不误并、配对失衡整段保留不抛异常、字符串/注释内关键字不误判（stripped 口径）、MySQL `IF()` 函数反例不误吞。
+- **T-TB-04**：CHANGELOG [Unreleased] Fixed、变更记录行、第六轮报告 §8 状态回填（随批次统一落）。
+- 门禁：SqlStatementSplitterTest（含既有 30+ 例）+ SqlTypeClassifierTest + LogToSqlPanelExecuteTest 定向全绿；全量随批次终门禁。SQL Server 真机走查按「环境受限未验证」口径留档。

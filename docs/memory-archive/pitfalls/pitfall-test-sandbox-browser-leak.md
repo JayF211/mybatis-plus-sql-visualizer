@@ -1,7 +1,7 @@
 ---
 name: pitfall-test-sandbox-browser-leak
 description: 测试沙盒里 BrowserUtil.browse 不隔离会弹真机默认浏览器；定时任务跑全量测试导致 Edge
-  周期性自动打开帮助页的归因实录与修复方案（待实施）
+  周期性自动打开帮助页的归因实录与修复方案（两轮均已实施）
 metadata:
   node_type: memory
   type: project
@@ -21,3 +21,19 @@ metadata:
 5. 排除项工作流：schtasks/Run 注册表/zTasker 逐项查过均不符（`MPSqlVisualizer-WeeklyVerify` 只跑 verify 脚本不开浏览器）。
 
 排查坑：Git Bash 下 `cp` Chrome History 得空 sqlite（无 urls 表），须 python shutil.copy 三件套到 Windows Temp 路径才有效。
+
+## 第二轮实录（T-BrowserLeak2，2026-09-18 实施）
+
+第一轮修复后用户真机 Edge 仍周期性弹**两个**页面： 与 。归因钉死：**SafeBrowserTest 自己**——它为验证「测试环境不弹浏览器」直调这两个真实 URL（SafeBrowserTest.kt:18-19），但 SafeBrowser 守卫写成「app != null && isUnitTestMode 才短路」，纯 JUnit 无平台 Application 环境（app==null）守卫反而**放行**，BrowserUtil 降级 Desktop.browse 直接 ShellExecute 弹真机 Edge。且该测试断言「不抛异常即没弹」不可观测——BrowserUtil 在无 Application 进程里不抛异常，每次跑都真开一次。
+
+**第二轮修复定案**：①守卫语义反转为 fail-safe 默认拦——，判定=，真机 IDE 宿主（Application 恒非 null 且非 unit mode）零变化；②测试断言换形——拆出  直接断言，移除真实 URL 直调；③守卫补位——BannedApiSourceScanTest 的 BrowserUtil.browse 禁扫扩展到 src/test + SafeBrowser fail-safe 形态锚点防回退。
+
+**方法论增补**：写「环境守卫」时语义方向必须是 fail-safe（默认拦、确认真机才放行）；「app != null && xxx 才拦」是白名单放行形态，任何新环境形态（无 Application 的 runner、mock 形态）都会静默漏网。测试验证守卫生效不能用「跑下去没弹」这种不可观测副作用做断言。
+
+## 第二轮实录（T-BrowserLeak2，2026-09-18 实施）
+
+第一轮修复后用户真机 Edge 仍周期性弹**两个**页面：`sql-visualizer.jvtools.cn/about/feedback` 与 `example.invalid/never-opened`。归因钉死：**SafeBrowserTest 自己**——它为验证「测试环境不弹浏览器」直调这两个真实 URL（SafeBrowserTest.kt:18-19），但 SafeBrowser 守卫写成「app != null && isUnitTestMode 才短路」，纯 JUnit 无平台 Application 环境（app==null）守卫反而**放行**，BrowserUtil 降级 Desktop.browse 直接 ShellExecute 弹真机 Edge。且该测试断言「不抛异常即没弹」不可观测——BrowserUtil 在无 Application 进程里不抛异常，每次跑都真开一次。
+
+**第二轮修复定案**：①守卫语义反转为 fail-safe 默认拦——`if (isTestEnvironment()) return`，判定=`app == null || app.isUnitTestMode`，真机 IDE 宿主（Application 恒非 null 且非 unit mode）零变化；②测试断言换形——拆出 `isTestEnvironment()` 直接断言，移除真实 URL 直调；③守卫补位——BannedApiSourceScanTest 的 BrowserUtil.browse 禁扫扩展到 src/test + SafeBrowser fail-safe 形态锚点防回退。
+
+**方法论增补**：写「环境守卫」时语义方向必须是 fail-safe（默认拦、确认真机才放行）；「app != null && xxx 才拦」是白名单放行形态，任何新环境形态（无 Application 的 runner、mock 形态）都会静默漏网。测试验证守卫生效不能用「跑下去没弹」这种不可观测副作用做断言。

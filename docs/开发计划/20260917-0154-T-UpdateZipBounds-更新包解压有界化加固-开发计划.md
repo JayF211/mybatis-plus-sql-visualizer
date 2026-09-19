@@ -58,4 +58,10 @@ T-UZ-01（现状核实）→ T-UZ-02（常量+截断+清理）→ T-UZ-03（表�
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+**已实施（2026-09-17，dev 分支随「2.2 五计划 + T-PerfSweep4 + 尾巴项」批次）**：
+
+- **T-UZ-01（现状核实）**：插件侧无全量解压——真解压由平台执行（动态装载 `installAndLoadDynamicPlugin` / 重启安装）；自有读面两处=PluginUpdateRunner.isValidZip（仅可打开判定）与 DynamicInstallSupport.validateArtifact（plugin.xml 读取，readBytes 无界 + 内层扫描已有 MAX_INNER_ENTRIES=2000）。**落点修正**：按计划预案把「解压处加固」落为「平台解压器之前的有界守卫」——异常包（zip bomb/谎报头）在进入平台解压前拦截。
+- **T-UZ-02**：新增 `update/UpdateZipGuard`——中央目录三重上限（MAX_ENTRIES=64 / 单条目 64MB / 累计 128MB；实测 beta.4 包 5 条目/7.3MB/最大 3.4MB ×10 余量，超限信息含实际值）+ 逐条目有界读取：读超「声明+1」与读取异常（size/CRC 不一致）**双路**判头谎报（谎报暴露形态因 JDK 实现而异——本机 JBR17 实测为读超声明命中，注释载明）+ 声明缺失（-1）按单条目上限截断读。接线 PluginUpdateRunner.downloadAndInstall（isValidZip 之后、install 之前，拒绝走既有 InstallResult.Failed 可读反馈不触安装）；validateArtifact 的 plugin.xml 读取同步有界（MAX_DESCRIPTOR_XML_BYTES=1MB，KB 级 ×100 余量）。失败路径无残留（临时文件既有 finally 清理）。
+- **T-UZ-03**：`UpdateZipGuardTest` 6 例——正常包（真实布局 lib/plugin.jar+README）通过 / 头谎报拦截（手工构造 zip 字节：CEN usize 声明 16B 实际 64KB deflate，raw deflate nowrap——默认 Deflater 是 zlib 包装流 zip 内非法，踩坑留档）/ 条目数 65 超限 / 单条目声明超限 / 三条目 45MB×3 累计超限（中央目录阶段拒，不读流）/ 编排层接线（守卫拒绝不触 install、失败信息含拒绝原因）。程序化构造全部形态，不依赖真实发版产物。
+- **T-UZ-04**：CHANGELOG [Unreleased] Changed、变更记录行、第六轮报告 §8 状态回填（随批次统一落）；脚本包导入不存在面已在立项时定案，防误立项备注维持。
+- 门禁：UpdateZipGuardTest + PluginUpdateRunnerTest（既有 12 例含守卫插入后全绿）+ DynamicInstallSupportTest 定向绿；真实内测包兼容断言=normalPackagePasses 布局同构 + 既有 happy path（单条目 fixture）过闸；全量随批次终门禁。真机走查（真实 Gitee 包过闸）留人工。

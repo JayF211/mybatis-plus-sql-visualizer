@@ -72,4 +72,14 @@ T-DL-01（镜像调研，定 A/B 路径）→ T-DL-02（配方+database-lab 资�
 
 ## 八、实施记录（实施后回填；含 T-DL-01 镜像可得性结论）
 
-（未实施）
+**2026-09-15 实施完毕（守卫测试 9/9 绿 + docker compose config 双文件校验通过）**
+
+- **T-DL-01 镜像可得性结论（2026-09-15 官网检索）：路径 A 半自动成立**——两库官方均以 **tar 包**分发镜像、均无 Docker Hub 官方 pull：
+  - DM8：eco.dameng.com/download/ 提供 Docker 镜像 tar（直链形态 download.dameng.com/eco/dm8/dm8_20250206_x86_rh6_rq_single.tar），实名注册；社区问答确认「找不到时联系达梦商务」；
+  - KingbaseES：kingbase.com.cn/download.html 提供 Docker 镜像 tar 精简包（kdb_x86_64_V009R001C002B0014.tar.gz 形态，按 CPU 架构选包）+ 官方 Docker 部署手册（help.kingbase.com.cn），企业版需 License（官网免费申请开发授权）；
+  - 社区第三方镜像（Docker Hub huzhihui/kingbase 等）有许可证与分发合规风险——调研记录但不依赖，配方只指向官方渠道（计划 §六 风险 4 约束遵守）。
+  - 「半自动」定名：tar 取得必须人工（实名/许可不可脚本化），load/up/验证全部脚本化——比计划的 A/B 二分更精确，两形态资产均交付。
+- **T-DL-02**：主配方五服务补 healthcheck（mysqladmin ping / pg_isready / mariadb healthcheck.sh / mssql-tools18 sqlcmd / gvenzl sqlplus SELECT 1，各用官方镜像自带工具）；`database-lab/` 新增 README.md（取得路径/端口/凭据/验证命令/状态台账）+ docker-compose.dialects-cn.example.yml（DM8 15236 / KingBase 15433，镜像名占位待 load 替换）+ load-dm8.ps1 / load-kingbase.ps1（docker load + 后续步骤提示，UTF-8 BOM）。
+- **T-DL-03**：`DockerComposeLabConsistencyTest` 9 例全绿——四硬约束（钉版本/端口避让 ≥10000 互不冲突/必填 env/healthcheck）+ README 端口引用一致 + CN 示例端口不与主配方冲突 + 漂移自证三例（latest 镜像/端口冲突/低段端口注入即抓，首跑即抓出本测试自己的期望串前缀笔误——守卫有效性顺带自证）。YAML 解析用 snakeyaml 2.2（新 testImplementation，gradle catalog 登记），非正则。`docker compose config` 主配方与 CN 示例双文件语法校验通过（本机 Docker 29.6.2）。
+- **T-DL-04**：README 给 DM（达梦）/KingBase（人大金仓）两条完整外部实例验证命令（方言名与 DialectRegistry 一致），并诚实标注 JDBC 驱动不在 Maven Central 的环境前置（No suitable driver 属环境缺失非用例失败）。
+- **方法论红线遵守**：本机未取得两库 tar/实例，真实容器验证维持「环境受限未验证」口径（README 状态台账单列），未拿任何受限读数冒充验证。

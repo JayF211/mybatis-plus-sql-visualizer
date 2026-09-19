@@ -60,4 +60,11 @@ T-SN-01（提取纯函数+表驱动）→ T-SN-02（还原组头）→ T-SN-03�
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+**2026-09-17 实施完毕（提交 6888ca3，dev 分支直接交付）**
+
+- **T-SN-01**：`util/SqlStatementNamer` 纯函数——前导注释区 `-- Name: x` 优先（大小写不敏感）→ 最近一条非空行注释回退 → 块注释/XML 注释剔除；分隔线形态（纯横线等号星号）不当名；行内尾注释不误取（只认前导区整行注释）；≤40 字符截断；无注释 null。
+- **T-SN-02**：LogToSqlPanel 组头升级 `-- SQL #N [名称]`（无注释逐字节维持现状——硬门禁，还原产物被执行链消费）。
+- **T-SN-03（接线四处 + 一定案）**：RenderLogsTool/RollbackPlanTool 的 `-- SQL #N` 与 MapperCheckTool 变体附名；CrudSqlTool 产 CRUD 模板无前导注释天然零差异，未接线（定案记录）；DBN 原生结果页签 displayName 只读不可命名，该面按计划定案不做。
+- **T-SN-04**：SqlStatementNamerTest 9 例表驱动（Name 优先/回退/块注释剔除/XML 剔除/分隔线/尾注释/截断/无注释）；CHANGELOG/变更记录随本轮文档批次同步；第五轮报告 O-19 状态回填（含 DBN 页签面定案说明）留主会话。
+- **踩坑留档**：Kotlin 块注释嵌套——KDoc 里的字面 `/*` 会吞掉后续成员声明（nameOf 未解析假象），正则形态描述禁写注释字面量。
+- **真机走查留人工**（§五）：带 `-- Name:` 前导注释的多语句 mapper 还原组头显示名称、MCP render_logs 语句头附名。

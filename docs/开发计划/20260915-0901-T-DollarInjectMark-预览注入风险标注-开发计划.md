@@ -63,4 +63,10 @@ T-DI-01（引擎计数+测试）→ T-DI-02（banner 接线）→ T-DI-03（i18n
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+**2026-09-15 实施完毕（xml/ui 定向套件全绿 + bundle parity 绿）**
+
+- **T-DI-01**：DynamicContext 新增 `dollarSubstitutions` 计数 + `countDollarSubstitution()` open 入口；TextSqlNode token handler 逐次调用；RenderedXmlSql 追加 `dollarSubstitutions: Int = 0` 字段（默认 0 既有消费者无感），XmlSqlRenderer 出栈透传。渲染文本逐字节零变化（测试锁定）。
+- **实施发现①（上下文转发洞）**：foreach/trim 的过滤上下文（ForeachSqlNode.Prefixed/Filtered、TrimSqlNode.FilteredDynamicContext）extends DynamicContext 各持独立字段——直接 `context.dollarSubstitutions++` 计数落在临时上下文丢失（foreach 内实测 v,v 渲染成功但计数 0）。修复=计数走 open 函数三处 override 转发 delegate，计数恒落根上下文。表驱动测试当场抓获。
+- **实施发现②（计划「字符串内 ${} 不计」与引擎语义不符，按引擎忠实实现）**：本引擎复刻 MyBatis TextSqlNode，无 SQL 字符串感知——字符串字面量内 `${}` 同样直替（MyBatis 同此）；转义 `\${` 使整段文本判静态（isDynamic=false）原样输出（反斜杠保留）、计数 0。两形态均以测试锁死。
+- **T-DI-02**：DegradationBanner 新增 Kind.DOLLAR_INJECT（优先级 DEGRADED > RENDER_WARNING > DOLLAR_INJECT 泛化实现）；仅该类别带 ✕ 关闭按钮（错误/降级类不可关）+ onDismiss 回调；SqlPreviewPanel 接线——updateMeta 在警示分支后收口（警示在场让位，清后回位），✕ 触发 companion 级 `dollarMarkDismissedSession`（本 IDE 会话跨面板实例不再弹，测试可复位）。LogToSqlPanel 转换区按计划默认不接（日志还原产物不含 ${} 语义）。
+- **T-DI-03**：i18n 双语 1 键×2（`panel.banner.dollarInject`，{0}=token 常量 {1}=计数——**首版用 MessageFormat 单引号转义输出字面量 ${} 被 bundle parity 占位符守卫当场拦下**（`'$''{''}'` 解析出空引号段），改 token 作参数传入双保险）。测试两件套：DollarSubstitutionCountTest 7 例（文本/if/foreach 逐次累计/转义/字符串内/纯井号/渲染零变化）+ DollarInjectBannerTest 6 例（组件优先级/✕ 回调/面板计数显示/纯井号不挂/警示让位/会话记忆）。**headless 沙盒预览降级链常驻（内存 PSI 层也亮 DEGRADED）致面板级 DOLLAR_INJECT 显隐不可严格断言**——面板用例对 DEGRADED 让位容错，行为由组件级+引擎级覆盖，真机走查留 §五。

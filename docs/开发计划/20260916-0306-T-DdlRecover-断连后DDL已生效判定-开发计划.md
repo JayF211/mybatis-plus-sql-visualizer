@@ -66,4 +66,10 @@
 
 ## 八、实施记录（实施后回填）
 
-（未实施）
+**2026-09-17 实施完毕（提交 0841dba，dev 分支直接交付）**
+
+- **T-DR-01**：`execute/ConnectionErrorClassifier.kt` 连接类异常三路判定——SQLState 08xxx 优先 / vendor 码表（MySQL 2002~2013 + Oracle 17002~3114）/ 消息签名兜底；排除表（deadlock/access denied/password 等不误判为连接类）。
+- **T-DR-02**：`DdlTargetExtractor` CREATE 目标表名提取（JSqlParser CreateTable 权威 + 残缺语句正则兜底，O-12 UnsupportedStatement 实证形态）+ SqlPreviewPanel 后台退避探测（500ms/1.5s/3s 等 DBN 重连窗口，DatabaseSchemaResolver.tableMeta 复用）。
+- **T-DR-03**：SqlResultPanel 呈现升级——命中→「连接已断开，但对象 t 已存在（探测于…）」橙色警示条（信息级无新弹窗、错误原文留 tooltip、不虚报本次所建）；未命中→tooltip 如实注记「已尝试生效性探测：未检出对象」；仅 ERROR 态生效防陈旧探测误刷。边界定案：探测未命中/失败一律维持原错误呈现，绝不把「没查到」包装成「没生效」。
+- **T-DR-04**：双语 3 键；分类器与提取纯函数表驱动 12 例全绿。CHANGELOG [Unreleased] Added、变更记录行随本轮文档批次同步；第五轮报告 O-15 状态回填留主会话。
+- **真机走查留人工**（§五）：CREATE 后断连（停库/断网）警示条出现与对象名正确、非 DDL 断连不误伤。
