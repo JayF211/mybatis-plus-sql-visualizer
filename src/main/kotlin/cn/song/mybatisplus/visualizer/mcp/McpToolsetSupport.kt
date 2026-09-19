@@ -23,7 +23,8 @@ import com.intellij.openapi.project.Project
  *  - mpsv_schema_context：maxTables 默认 8 / 硬上限 20、单元格 200 字符、tables 白名单 ≤50
  *    （常量在 McpSchemaFormatter：DEFAULT_MAX_TABLES / HARD_MAX_TABLES / MAX_CELL_CHARS /
  *    MAX_TABLE_NAMES）；
- *  - mpsv_explain：行 ≤200、单元格 2000 字符（常量在 McpExplainFormatter：MAX_ROWS /
+ *  - mpsv_explain：行默认 ≤200 / 上限 1000（maxRows 可配，越界钳制不抛错；通道层另有兜底钳制）、
+ *    单元格 2000 字符（常量在 McpExplainFormatter：DEFAULT_MAX_ROWS / HARD_MAX_ROWS /
  *    MAX_CELL_CHARS）；notices 节无条数预算（驱动会话通道天然有界，个案个位数）；
  *  - mpsv_perf_advice：建议 ≤30 条（MAX_FINDINGS，超限 SEVERITY 等级序先裁低级）+ 单条文案
  *    200 字符（MAX_ADVICE_CHARS，对齐 schema 200 口径）（常量在 PerfAdviceTool）；
