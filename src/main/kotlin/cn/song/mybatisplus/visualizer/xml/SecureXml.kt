@@ -392,6 +392,8 @@ internal object SecureXml {
 
     /** `<!DOCTYPE` 定位（注释 / 处理指令 / CDATA 之外的首个）——防「序言里的假 DOCTYPE 抢占定位」。 */
     private fun indexOfDoctype(fileText: String): Int? {
+        // 快路径：全文无 `<!DOCTYPE` 时不做状态扫描（片段解析与无 DOCTYPE 的 mapper 是多数）
+        if (!fileText.contains(DOCTYPE_PREFIX)) return null
         var index = 0
         while (index < fileText.length) {
             when {
