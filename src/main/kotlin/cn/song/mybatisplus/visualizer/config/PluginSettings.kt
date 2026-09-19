@@ -636,9 +636,11 @@ fun interface SettingsChangeListener {
 /**
  * MCP 工具名前缀迁移（T-McpToolNaming / T-MTN-02）。
  *
- * **为什么必须迁移**：[State.mcpDisabledTools] 存的是**工具名字符串**，而本任务把工具名前缀由
- * `mpsv_` 改为 `sqlv_`——不迁移则用户升级前禁用的工具在新名下**不再匹配、静默复活**
- * （[cn.song.mybatisplus.visualizer.mcp.McpToolGate.isEnabled] 按名字比对）。
+ * **为什么保留这段迁移（勿删）**：[State.mcpDisabledTools] 存的是**工具名字符串**。Gitee 侧
+ * 2026.9.18 发行版曾发布（见 `update/preview.update.json` 的 downloadUrl 与发行提交
+ * `ed43cc0`），下载过该产物的用户设置里可能存在旧前缀的工具名——不迁移则这些工具在新名下
+ * **不再匹配、静默复活**（[cn.song.mybatisplus.visualizer.mcp.McpToolGate.isEnabled] 按名字比对）。
+ * 本迁移为**幂等一次性映射**，保留成本极低；是否删除需先确认 Gitee 侧产物不可达。
  *
  * **语义**：旧前缀（大小写不敏感）→ 新前缀，**尾段原样保留**；不匹配的项（第三方工具名、
  * 空串、`mpsv`（无下划线）、`mpsvx_` 之类）**逐字节保留、顺序不变**。**幂等**——迁移结果再迁移

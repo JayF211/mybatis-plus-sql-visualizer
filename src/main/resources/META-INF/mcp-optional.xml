@@ -12,7 +12,7 @@
 
   T-McpToolNaming：toolset 类名统一加 `SqlVisualizer` 前缀——平台「暴露工具」页的分组名即
   类的 simpleName（ToolsetReflection_utilKt.asTools 字节码实证），前缀使十组在列表中组名
-  自带插件名且字典序相邻；工具名（@McpTool name / 门控设置键）同批由 mpsv_ 改为 sqlv_。
+  自带插件名且字典序相邻；工具名统一 `sqlv_` 前缀（@McpTool name 与门控设置键同源）。
 -->
 <idea-plugin>
     <!-- 平台 MCP Server 工具集 ×10（全部只读，isExperimental=false 稳定集；EP 名

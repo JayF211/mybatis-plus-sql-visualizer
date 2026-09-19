@@ -6,8 +6,8 @@
 
 ### Added
 
-- **MCP 执行工具行数预算可配（T-McpRowBudget）**：`mpsv_explain` 增可选 `maxRows`（默认 200 保持原行为，硬上限 1000，越界静默钳制不抛错）；工具层与通道层双层钳制，格式化层按**生效预算**报数
-- **MCP 执行链落历史与审计补全（T-McpAuditTrail）**：`mpsv_explain` 的执行结果落进既有 SQL 历史（带 `MCP` 来源标记与 `[MCP]` 徽标，重启后仍在）；审计行入参由恒 `ok` 改为真实入参摘要
+- **MCP 执行工具行数预算可配（T-McpRowBudget）**：`sqlv_explain` 增可选 `maxRows`（默认 200 保持原行为，硬上限 1000，越界静默钳制不抛错）；工具层与通道层双层钳制，格式化层按**生效预算**报数
+- **MCP 执行链落历史与审计补全（T-McpAuditTrail）**：`sqlv_explain` 的执行结果落进既有 SQL 历史（带 `MCP` 来源标记与 `[MCP]` 徽标，重启后仍在）；审计行入参由恒 `ok` 改为真实入参摘要
 - **错误上报分级脱敏（T-ErrorReportRedact）**：默认只预填异常类名 + 栈帧摘要 + cause 链 + 指纹，异常消息全文与完整堆栈降为**可勾选附加**（默认不勾；勾选后与改前逐字节一致）
 - **参数契约补缺（T-ParamContract2）**：`BigInteger` 归数值档、`UUID` 归文本档（带引号）；含 UNKNOWN 类型参数时在**执行/EXPLAIN 前提示一次**（预览放行不阻断）
 - **DELIMITER 感知（T-DelimiterAware）**：`SqlStatementSplitter` 支持 `DELIMITER $$` 等自定义界符——指令行整行丢弃、界符生效期内顶层 `;` 不切分（此前 `DELIMITER $$` 脚本被切成 4 段且残留 `$$`）
