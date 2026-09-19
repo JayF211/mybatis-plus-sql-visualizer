@@ -27,6 +27,12 @@ public class XmlPreviewModel {
     /** foreach 默认展开次数（IN 场景两元素可直观展示 separator）。 */
     public static final int DEFAULT_FOREACH_SIZE = 2;
 
+    /**
+     * T-PT-03：TEMPORAL 参数占位值——带引号的日期字面量（${} 直替进 SQL 后即为合法字面量；
+     * test 表达式里为非空字符串，判真与升级前的 "1" 一致）。
+     */
+    public static final String TEMPORAL_MOCK_VALUE = "'2026-01-01 00:00:00'";
+
     private final String statementId;
     private final XmlStatementKind kind;
     private final List<XmlConditionView> conditionViews;
@@ -39,6 +45,10 @@ public class XmlPreviewModel {
     private final Map<String, Object> staticFieldValues;
     private final Map<String, Object> extraBindings;
     private final Map<String, Boolean> paramQuotes;
+    /** T-InjectionGate T-IG-01：语句文本含未转义的 ${} 直替 token（解析期事实）。 */
+    private final boolean hasDollarRawSegments;
+    /** T-PT-01：参数类型类别映射（参数路径 → ParamTypeInfo）。 */
+    private final Map<String, ParamTypeInfo> paramTypes;
     private final SqlNode rootNode;
 
     private XmlPreviewModel(
@@ -54,6 +64,8 @@ public class XmlPreviewModel {
             Map<String, Object> staticFieldValues,
             Map<String, Object> extraBindings,
             Map<String, Boolean> paramQuotes,
+            boolean hasDollarRawSegments,
+            Map<String, ParamTypeInfo> paramTypes,
             SqlNode rootNode
     ) {
         this.statementId = statementId;
@@ -68,6 +80,8 @@ public class XmlPreviewModel {
         this.staticFieldValues = staticFieldValues;
         this.extraBindings = extraBindings;
         this.paramQuotes = paramQuotes;
+        this.hasDollarRawSegments = hasDollarRawSegments;
+        this.paramTypes = paramTypes;
         this.rootNode = rootNode;
     }
 
@@ -119,6 +133,24 @@ public class XmlPreviewModel {
         return paramQuotes;
     }
 
+    /**
+     * T-InjectionGate T-IG-01：语句文本含未转义的 ${} 直替 token（解析期事实，与替换成功与否无关——
+     * 成功替换为模拟值后产物文本里已无 ${} 痕迹，最终文本 regex 会漏掉全部成功场景）。
+     * 执行/EXPLAIN 前的 ${} 确认闸门据此判定「产物含 raw 原文拼接段」。默认 false，既有调用点零影响。
+     */
+    public boolean hasDollarRawSegments() {
+        return hasDollarRawSegments;
+    }
+
+    /**
+     * T-PT-01：参数类型类别映射（参数路径（{@code @Param} 值.字段 / 参数名）→ {@link ParamTypeInfo}）——
+     * 由 XmlParamTypeResolver 按 mapper 方法签名参数 Java 类型映射（psi 层只做映射，类别枚举在 xml 层）。
+     * 无类型信息不含键（面板按 UNKNOWN 兜底：无占位提示、mock 占位 "1"、引号兜底）。
+     */
+    public Map<String, ParamTypeInfo> getParamTypes() {
+        return paramTypes;
+    }
+
     public SqlNode getRootNode() {
         return rootNode;
     }
@@ -137,6 +169,29 @@ public class XmlPreviewModel {
             }
         }
         return null;
+    }
+
+    /**
+     * T-PT-01：参数路径 → 类型信息（精确匹配优先、前缀匹配兜底，命中规则与 {@link #quoteFor} 一致）。
+     * 未命中返回 null（调用方按 {@link ParamKind#UNKNOWN} 兜底）。
+     */
+    public ParamTypeInfo paramTypeFor(String source) {
+        ParamTypeInfo exact = paramTypes.get(source);
+        if (exact != null) {
+            return exact;
+        }
+        for (Map.Entry<String, ParamTypeInfo> e : paramTypes.entrySet()) {
+            if (source.startsWith(e.getKey() + ".")) {
+                return e.getValue();
+            }
+        }
+        return null;
+    }
+
+    /** T-PT-01：参数路径 → 类型类别（无类型信息 → {@link ParamKind#UNKNOWN}）。 */
+    public ParamKind kindFor(String source) {
+        ParamTypeInfo info = paramTypeFor(source);
+        return info != null ? info.kind() : ParamKind.UNKNOWN;
     }
 
     public XmlPreviewState defaultState() {
@@ -166,16 +221,18 @@ public class XmlPreviewModel {
 
     private Map<String, Object> mockBindings(XmlPreviewState state) {
         Map<String, Object> bindings = new HashMap<>();
-        // 变量/参数名占位双写：_parameter 对象属性 + bindings 顶层
+        // 变量/参数名占位双写：_parameter 对象属性 + bindings 顶层（对齐 MyBatis ContextMap →
+        // _parameter fallback：${param1} 与 _parameter.param1 均可取到占位值）
+        // T-PT-03：占位值按类型类别分派（有类型信息才分派，无类型信息维持 "1"——行为=升级前）
         Set<String> mockPropsKeys = new HashSet<>(variables);
         mockPropsKeys.addAll(paramProps);
         Map<String, Object> mockProps = new HashMap<>();
         for (String k : mockPropsKeys) {
-            mockProps.put(k, "1");
+            mockProps.put(k, mockValueOf(k));
         }
         bindings.put(DynamicContext.PARAMETER_OBJECT_KEY, new MockObject(mockProps));
         for (String k : mockProps.keySet()) {
-            bindings.put(k, "1");
+            bindings.put(k, mockValueOf(k));
         }
         bindings.put(DynamicContext.DATABASE_ID_KEY, null);
         for (XmlForEachView view : forEachViews) {
@@ -194,19 +251,42 @@ public class XmlPreviewModel {
         return bindings;
     }
 
+    /**
+     * T-PT-03：变量/参数占位值按类型类别分派——NUMBER→{@code 1}、TEMPORAL→{@link #TEMPORAL_MOCK_VALUE}、
+     * COLLECTION→{@link MockIterable}、OBJECT→{@link MockObject}；TEXT/UNKNOWN（无类型信息）→ {@code "1"}（升级前行为）。
+     */
+    private Object mockValueOf(String name) {
+        ParamKind kind = kindFor(name);
+        return switch (kind) {
+            case NUMBER -> 1;
+            case TEMPORAL -> TEMPORAL_MOCK_VALUE;
+            case COLLECTION -> new MockIterable(DEFAULT_FOREACH_SIZE);
+            case OBJECT -> new MockObject();
+            case TEXT, UNKNOWN -> "1";
+        };
+    }
+
     /** 启发式默认勾选态：含 == null → false（变量默认非 null），其余 true（保守展开）。 */
     public static boolean defaultTruth(String test) {
         return !test.contains("== null");
     }
 
-    /** 由解析出的语句构建预览模型（变量收集 + 条件/foreach/bind 视图）。 */
+    /**
+     * 由解析出的语句构建预览模型（变量收集 + 条件/foreach/bind 视图）。
+     * T-M25-02：注解场景额外注入方法参数名（@Param 值/实际名/param1..N，MyBatis 多参数 Map 键）。
+     * T-M25.2：staticFieldValues 为 @class@field → 值（PSI 层解析用户项目常量类）。
+     * T-M26-B：extraBindings 为 MP 占位 mock（ew → 片段对象）。
+     * T-PT-01：paramTypes 为参数类型类别映射；非空时 paramQuotes 由其派生
+     * （NUMBER→false、其余 true），升级前显式传入的布尔通道继续可用（既有单测形态）。
+     */
     public static XmlPreviewModel from(
             XmlStatement statement,
             List<String> errors,
             Set<String> extraParamProps,
             Map<String, Object> staticFieldValues,
             Map<String, Object> extraBindings,
-            Map<String, Boolean> paramQuotes
+            Map<String, Boolean> paramQuotes,
+            Map<String, ParamTypeInfo> paramTypes
     ) {
         List<XmlConditionView> conditionViews = new ArrayList<>();
         List<XmlForEachView> forEachViews = new ArrayList<>();
@@ -214,10 +294,22 @@ public class XmlPreviewModel {
         // Kotlin mutableSetOf() = LinkedHashSet（保序）：paramProps 顺序 = 动态标签收集序 + extraParamProps
         Set<String> variables = new LinkedHashSet<>();
         Set<String> paramProps = new LinkedHashSet<>();
-        collect(statement.node(), conditionViews, forEachViews, bindViews, variables, paramProps);
+        // T-InjectionGate T-IG-01：解析期 ${} token 收集（非空即「含 raw 原文拼接段」）
+        List<String> dollarTokens = new ArrayList<>();
+        collect(statement.node(), conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens);
         variables.remove(DynamicContext.PARAMETER_OBJECT_KEY);
         variables.remove(DynamicContext.DATABASE_ID_KEY);
         paramProps.addAll(extraParamProps);
+        // T-PT-01：布尔引号通道降级为派生视图——有类型类别时由类别派生（NUMBER→false 其余 true）
+        Map<String, Boolean> effectiveQuotes;
+        if (!paramTypes.isEmpty()) {
+            effectiveQuotes = new HashMap<>();
+            for (Map.Entry<String, ParamTypeInfo> e : paramTypes.entrySet()) {
+                effectiveQuotes.put(e.getKey(), e.getValue().kind().isQuoteRequired());
+            }
+        } else {
+            effectiveQuotes = paramQuotes;
+        }
         return new XmlPreviewModel(
                 statement.id(),
                 statement.kind(),
@@ -230,13 +322,15 @@ public class XmlPreviewModel {
                 paramProps,
                 staticFieldValues,
                 extraBindings,
-                paramQuotes,
+                effectiveQuotes,
+                !dollarTokens.isEmpty(),
+                paramTypes,
                 statement.node()
         );
     }
 
-    public static XmlPreviewModel from(XmlStatement statement, List<String> errors, Set<String> extraParamProps, Map<String, Object> staticFieldValues, Map<String, Object> extraBindings) {
-        return from(statement, errors, extraParamProps, staticFieldValues, extraBindings, Map.of());
+    public static XmlPreviewModel from(XmlStatement statement, List<String> errors, Set<String> extraParamProps, Map<String, Object> staticFieldValues, Map<String, Object> extraBindings, Map<String, Boolean> paramQuotes) {
+        return from(statement, errors, extraParamProps, staticFieldValues, extraBindings, paramQuotes, Map.of());
     }
 
     public static XmlPreviewModel from(
@@ -279,38 +373,44 @@ public class XmlPreviewModel {
             List<XmlForEachView> forEachViews,
             List<XmlBindView> bindViews,
             Set<String> variables,
-            Set<String> paramProps
+            Set<String> paramProps,
+            List<String> dollarTokens
     ) {
         if (node instanceof MixedSqlNode m) {
             for (SqlNode c : m.getChildren()) {
-                collect(c, conditionViews, forEachViews, bindViews, variables, paramProps);
+                collect(c, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens);
             }
         } else if (node instanceof StaticTextSqlNode) {
             // no-op
         } else if (node instanceof TextSqlNode t) {
-            List<String> dollarTokens = new ArrayList<>();
+            List<String> tokens = new ArrayList<>();
             TokenParser.parse(t.getText(), "${", "}", tok -> {
-                dollarTokens.add(tok);
+                tokens.add(tok);
                 return tok;
             });
-            for (String tok : dollarTokens) {
+            dollarTokens.addAll(tokens);
+            for (String tok : tokens) {
                 collectExpressionPaths(tok, variables, paramProps);
             }
         } else if (node instanceof IfSqlNode i) {
-            conditionViews.add(new XmlConditionView(i.getTest(), i.getTest(), defaultTruth(i.getTest())));
-            collect(i.getContents(), conditionViews, forEachViews, bindViews, variables, paramProps);
+            // T-ExprAstPrecheck T-EP-03：构建条件行时对 test 表达式跑支持面预检（纯 AST 遍历，
+            // 零 PSI）——标注只是提示，展开行为仍由面板开关与 T-EP-02 的错误记录管
+            OgnlExpr.ExprClassification classification = OgnlEvaluator.classifyDetail(i.getTest());
+            conditionViews.add(new XmlConditionView(i.getTest(), i.getTest(), defaultTruth(i.getTest()),
+                    classification.support(), classification.reason(), classification.detail()));
+            collect(i.getContents(), conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens);
         } else if (node instanceof ChooseSqlNode c) {
             for (SqlNode w : c.getWhenNodes()) {
-                collect(w, conditionViews, forEachViews, bindViews, variables, paramProps);
+                collect(w, conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens);
             }
             if (c.getDefaultNode() != null) {
-                collect(c.getDefaultNode(), conditionViews, forEachViews, bindViews, variables, paramProps);
+                collect(c.getDefaultNode(), conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens);
             }
         } else if (node instanceof TrimSqlNode tr) {
-            collect(tr.getContents(), conditionViews, forEachViews, bindViews, variables, paramProps);
+            collect(tr.getContents(), conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens);
         } else if (node instanceof ForeachSqlNode f) {
             forEachViews.add(new XmlForEachView(f.getCollectionExpression(), f.getItem()));
-            collect(f.getContents(), conditionViews, forEachViews, bindViews, variables, paramProps);
+            collect(f.getContents(), conditionViews, forEachViews, bindViews, variables, paramProps, dollarTokens);
         } else if (node instanceof VarDeclSqlNode v) {
             bindViews.add(new XmlBindView(v.getName(), v.getExpression()));
             collectExpressionPaths(v.getExpression(), variables, paramProps);

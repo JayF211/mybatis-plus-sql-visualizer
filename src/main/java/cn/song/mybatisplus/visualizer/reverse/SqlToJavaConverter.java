@@ -58,55 +58,11 @@ public final class SqlToJavaConverter {
     // T-BatchSql：批量 SQL → Java 转换
     // ------------------------------------------------------------------
 
-    /** 按顶层分号拆分多语句文本（不拆分字符串/注释内的分号）。 */
+    /** 按顶层分号拆分多语句文本（不拆分字符串/注释内的分号）。
+     * T-SemicolonGuard（O-13）：实现收敛委托至 util/SqlStatementSplitter（与
+     * LogToSqlPanel/SqlTypeClassifier 单实现合一）。 */
     public static List<String> splitStatements(String text) {
-        List<String> statements = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        boolean inSingleQuote = false;
-        boolean inDoubleQuote = false;
-        boolean lineComment = false;
-        boolean blockComment = false;
-        int i = 0;
-        while (i < text.length()) {
-            char c = text.charAt(i);
-            Character next = i + 1 < text.length() ? text.charAt(i + 1) : null;
-            if (!inSingleQuote && !inDoubleQuote && !blockComment && c == '-' && next != null && next == '-') {
-                lineComment = true;
-                current.append(c);
-                i++;
-            } else if (lineComment && c == '\n') {
-                lineComment = false;
-                current.append(c);
-                i++;
-            } else if (!inSingleQuote && !inDoubleQuote && !lineComment && c == '/' && next != null && next == '*') {
-                blockComment = true;
-                current.append(c);
-                i++;
-            } else if (blockComment && c == '*' && next != null && next == '/') {
-                blockComment = false;
-                current.append(c);
-                i++;
-            } else if (!inDoubleQuote && !lineComment && !blockComment && c == '\'') {
-                inSingleQuote = !inSingleQuote;
-                current.append(c);
-                i++;
-            } else if (!inSingleQuote && !lineComment && !blockComment && c == '"') {
-                inDoubleQuote = !inDoubleQuote;
-                current.append(c);
-                i++;
-            } else if (!inSingleQuote && !inDoubleQuote && !lineComment && !blockComment && c == ';') {
-                String stmt = current.toString().trim();
-                if (!stmt.isEmpty()) statements.add(stmt);
-                current.setLength(0);
-                i++;
-            } else {
-                current.append(c);
-                i++;
-            }
-        }
-        String tail = current.toString().trim();
-        if (!tail.isEmpty()) statements.add(tail);
-        return statements;
+        return cn.song.mybatisplus.visualizer.util.SqlStatementSplitter.split(text);
     }
 
     /** 批量解析（纯函数，EDT 安全；错误隔离）。 */

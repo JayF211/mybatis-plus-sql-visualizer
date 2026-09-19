@@ -629,9 +629,139 @@ public final class OgnlEvaluator {
         return null;
     }
 
-    private static final Set<String> KNOWN_METHODS = Set.of(
-            "size", "length", "isEmpty", "contains", "containsKey", "startsWith", "endsWith", "toString"
+    // ------------------------------------------------------------------
+    // 支持面分类（T-ExprAstPrecheck T-EP-01）
+    // ------------------------------------------------------------------
+
+    /** 表达式支持面分档（三档，见 {@link OgnlExpr.ExprSupport}）；供条件行声明性标注使用，纯 AST 遍历、零 PSI。 */
+    public static OgnlExpr.ExprSupport classify(String text) {
+        return classifyDetail(text).support();
+    }
+
+    /**
+     * 分类结论（含理由码与细节）。解析失败即 {@link OgnlExpr.ExprSupport#UNSUPPORTED_SYNTAX}；解析成功后按
+     * {@link #collectFallbacks} 遍历 AST 收集降级形态（首个命中即结论），无命中为 {@link OgnlExpr.ExprSupport#SUPPORTED}。
+     */
+    public static OgnlExpr.ExprClassification classifyDetail(String text) {
+        ParseResult parsed = parse(text);
+        if (parsed instanceof ParseResult.Err e) {
+            return new OgnlExpr.ExprClassification(OgnlExpr.ExprSupport.UNSUPPORTED_SYNTAX, OgnlExpr.ExprReason.SYNTAX, e.message());
+        }
+        ParseResult.Ok ok = (ParseResult.Ok) parsed;
+        java.util.List<OgnlExpr.ExprClassification> findings = new ArrayList<>();
+        collectFallbacks(ok.expr(), findings);
+        return findings.isEmpty() ? new OgnlExpr.ExprClassification(OgnlExpr.ExprSupport.SUPPORTED) : findings.get(0);
+    }
+
+    /** 降级形态遍历（结构照抄 {@link #collectStaticRefs}：Chain 先基础表达式、再逐步骤及其实参/下标）。 */
+    private static void collectFallbacks(OgnlExpr expr, java.util.List<OgnlExpr.ExprClassification> out) {
+        if (expr instanceof OgnlExpr.StaticFieldRef sfr) {
+            out.add(new OgnlExpr.ExprClassification(OgnlExpr.ExprSupport.EVAL_FALLBACK, OgnlExpr.ExprReason.STATIC_FIELD,
+                    "@" + sfr.className() + "@" + sfr.fieldName()));
+        } else if (expr instanceof OgnlExpr.Chain c) {
+            collectFallbacks(c.base(), out);
+            java.util.List<ChainStep> steps = c.steps();
+            for (int index = 0; index < steps.size(); index++) {
+                ChainStep step = steps.get(index);
+                if (step instanceof ChainStep.Property) {
+                    // no-op
+                } else if (step instanceof ChainStep.Method m) {
+                    // 接收者载体只在方法为链首步且基础表达式本身可判定时成立（如 `'x'.length()`）；
+                    // `a.b.length()` 的接收者是上一级的求值结果，类型未知
+                    OgnlExpr.ExprClassification fallback =
+                            methodFallback(index == 0 ? staticCarrier(c.base()) : null, m.name());
+                    if (fallback != null) {
+                        out.add(fallback);
+                    }
+                    for (OgnlExpr arg : m.args()) {
+                        collectFallbacks(arg, out);
+                    }
+                } else if (step instanceof ChainStep.Index idx) {
+                    collectFallbacks(idx.expr(), out);
+                }
+            }
+        } else if (expr instanceof OgnlExpr.Unary u) {
+            collectFallbacks(u.operand(), out);
+        } else if (expr instanceof OgnlExpr.Binary b) {
+            collectFallbacks(b.left(), out);
+            collectFallbacks(b.right(), out);
+        }
+        // 其余 AST 形态（RootRef / 字面量）在支持面内：无降级
+    }
+
+    /**
+     * 方法调用的降级判定（null = 落在支持面内）：
+     * <ul>
+     *  <li>白名单方法（{@link #METHOD_CARRIERS}）：接收者载体已知时要求该载体有实现；载体未知时要求方法对
+     *      全部容器载体（{@link #CARRIER_AGNOSTIC}）都有实现——否则实际类型一换就静默返回 null；</li>
+     *  <li>getter 形态（{@code getX()} / {@code isX()}）走属性访问语义，属支持面；</li>
+     *  <li>其余方法名不在白名单内 → 未知方法（求值静默返回 null）。</li>
+     * </ul>
+     */
+    private static OgnlExpr.ExprClassification methodFallback(ExprCarrier receiverCarrier, String name) {
+        Set<ExprCarrier> carriers = METHOD_CARRIERS.get(name);
+        if (carriers == null) {
+            return isGetterName(name)
+                    ? null
+                    : new OgnlExpr.ExprClassification(OgnlExpr.ExprSupport.EVAL_FALLBACK, OgnlExpr.ExprReason.UNKNOWN_METHOD, name);
+        }
+        boolean supported = receiverCarrier != null
+                ? carriers.contains(receiverCarrier)
+                : CARRIER_AGNOSTIC.stream().allMatch(carriers::contains);
+        return supported
+                ? null
+                : new OgnlExpr.ExprClassification(OgnlExpr.ExprSupport.EVAL_FALLBACK, OgnlExpr.ExprReason.NARROW_CARRIER, name);
+    }
+
+    /** 接收者的静态载体：仅 AST 自身可判定时返回非 null（变量引用 / 链式结果 / 算术结果类型未知）。 */
+    private static ExprCarrier staticCarrier(OgnlExpr expr) {
+        if (expr instanceof OgnlExpr.ListLiteral) {
+            return ExprCarrier.COLLECTION;
+        }
+        if (expr instanceof OgnlExpr.Literal lit) {
+            return lit.value() instanceof CharSequence ? ExprCarrier.CHAR_SEQUENCE : ExprCarrier.OTHER;
+        }
+        return null;
+    }
+
+    /**
+     * getter 形态判定（{@code getX()} / {@code isX()}，OGNL 属性访问语义）——直接复用 {@link #firstPropName} 的方法分支
+     * 判据，与 {@code method} 的 getter 推断、{@link #collectPaths} 的路径收集同源（三处不会漂移）。
+     */
+    private static boolean isGetterName(String name) {
+        return firstPropName(new ChainStep.Method(name, List.of())) != null;
+    }
+
+    /** 值载体（{@link #METHOD_CARRIERS} 与 {@link #staticCarrier} 用）：容器类载体 + 标量兜底。 */
+    private enum ExprCarrier { CHAR_SEQUENCE, COLLECTION, MAP, ARRAY, OTHER }
+
+    /**
+     * 方法白名单 → 该方法在求值器中实现了的载体（与 {@code method} 的 known 分支一一对应，同一事实的
+     * 声明式投影）。{@link #KNOWN_METHODS} 由此派生，两处清单不会漂移。
+     */
+    private static final Map<String, Set<ExprCarrier>> METHOD_CARRIERS = Map.of(
+            "size", Set.of(ExprCarrier.CHAR_SEQUENCE, ExprCarrier.COLLECTION, ExprCarrier.MAP, ExprCarrier.ARRAY),
+            "length", Set.of(ExprCarrier.CHAR_SEQUENCE),
+            "isEmpty", Set.of(ExprCarrier.CHAR_SEQUENCE, ExprCarrier.COLLECTION, ExprCarrier.MAP),
+            "contains", Set.of(ExprCarrier.CHAR_SEQUENCE, ExprCarrier.COLLECTION),
+            "containsKey", Set.of(ExprCarrier.MAP),
+            "startsWith", Set.of(ExprCarrier.CHAR_SEQUENCE),
+            "endsWith", Set.of(ExprCarrier.CHAR_SEQUENCE),
+            "toString", java.util.EnumSet.allOf(ExprCarrier.class)
     );
+
+    /**
+     * 接收者类型未知时要求方法对全部容器载体都有实现才算「载体无关」——载体集合取自
+     * {@link #METHOD_CARRIERS} 的并集（xml 层 bindings 可能取到的值：字符串 / 集合 / Map 等）。
+     */
+    private static final Set<ExprCarrier> CARRIER_AGNOSTIC = Set.of(
+            ExprCarrier.CHAR_SEQUENCE,
+            ExprCarrier.COLLECTION,
+            ExprCarrier.MAP
+    );
+
+    /** 方法白名单（T-ExprAstPrecheck T-EP-01：由 {@link #METHOD_CARRIERS} 派生，分类器与求值器共用同一清单）。 */
+    private static final Set<String> KNOWN_METHODS = METHOD_CARRIERS.keySet();
 
     private static Object index(Object current, Object key) {
         if (current instanceof List<?> list) {

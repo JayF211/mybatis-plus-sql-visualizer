@@ -38,7 +38,7 @@ public class XmlSqlRenderer {
             }
         }
         Map.Entry<String, List<ParameterMapping>> pm = parseParameterMappings(context.getSql(), context.getErrors());
-        return new RenderedXmlSql(pm.getKey(), pm.getValue(), context.getErrors(), bindValues);
+        return new RenderedXmlSql(pm.getKey(), pm.getValue(), context.getErrors(), bindValues, context.getDollarSubstitutions());
     }
 
     public RenderedXmlSql render(SqlNode node, Map<String, Object> bindings, Map<String, Boolean> conditionOverrides, Set<String> protectedNames, Map<String, Object> staticFieldValues) {

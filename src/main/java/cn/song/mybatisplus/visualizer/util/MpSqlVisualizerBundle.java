@@ -83,6 +83,28 @@ public final class MpSqlVisualizerBundle {
     }
 
     /**
+     * T-McpToolset2：agent 面英文文案——MCP 工具输出的警告/指引恒英文（agent 文案英文口径），
+     * 与插件语言设置无关。bundle base 文件即英文（_zh 才是中文覆盖），Locale.ROOT 直读 base，
+     * <b>零新键</b>（复用既有键的英文版本）；key 缺失兜底返回 key 本身（与 {@link #message} 同策略）。
+     * 消费方：mpsv_rollback_plan / mpsv_perf_advice 的 warnings 渲染。
+     */
+    @NotNull
+    public static String messageEn(@NotNull @PropertyKey(resourceBundle = BUNDLE_NAME) String key, Object... params) {
+        String pattern;
+        try {
+            pattern = ResourceBundle.getBundle(BUNDLE_NAME, Locale.ROOT, loader(), UTF8_CONTROL).getString(key);
+        } catch (Throwable e) {
+            pattern = key;
+        }
+        if (params == null || params.length == 0) return pattern;
+        try {
+            return MessageFormat.format(pattern, params);
+        } catch (Throwable e) {
+            return pattern;
+        }
+    }
+
+    /**
      * T-ReportL10n-02：嵌入平台 UI 的文案（如 errorHandler 的「报告到…」菜单项与隐私
      * 提示）恒按 <b>IDE 显示语言</b> 解析，不经插件语言设置。
      *

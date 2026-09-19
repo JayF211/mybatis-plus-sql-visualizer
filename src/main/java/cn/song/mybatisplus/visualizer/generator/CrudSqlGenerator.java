@@ -25,7 +25,12 @@ import org.jetbrains.annotations.Nullable;
  * </ul>
  *
  * <p>无主键降级定案（计划 §3.1）：WHERE 生成 {@code 1 = 0 /* 未识别到主键 *}{@code /}，不猜测首列；
- * 降级 UPDATE 不挂 batchModel（勾选重建会重放出无 WHERE 的破坏性 UPDATE）。
+ * 降级 UPDATE 不挂 batchModel（勾选重建会重放出无 WHERE 的破坏性 UPDATE）。</p>
+ *
+ * <p>双轨别名约定（T-DmlAliasGuard，O-27）：<b>别名只允许出现在查询源位（FROM/JOIN），DML
+ * 目标位（INSERT INTO / UPDATE / DELETE FROM 后紧跟的表名）禁别名</b>（INSERT 目标不收
+ * 别名，UPDATE/DELETE 目标别名是部分方言语法错——DBX 9bf52da 同款语义位约束）。本链
+ * 现状零别名；未来任何重构引入别名逻辑先撞 {@code DmlAliasGuardTest} 红灯。</p>
  */
 public final class CrudSqlGenerator {
 

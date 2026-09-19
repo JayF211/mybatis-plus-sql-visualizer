@@ -1,12 +1,14 @@
 package cn.song.mybatisplus.visualizer.psi;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings;
 import cn.song.mybatisplus.visualizer.model.AssociationInfo;
 import cn.song.mybatisplus.visualizer.model.ColumnInfo;
 import cn.song.mybatisplus.visualizer.model.ColumnRole;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.util.NamingStrategy;
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature;
+import com.intellij.openapi.project.Project;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
@@ -66,7 +68,7 @@ public class EntityResolver {
         PsiFile file = entityClass.getContainingFile();
         if (file == null) return resolveInternal(entityClass);
         String qName = entityClass.getQualifiedName() != null ? entityClass.getQualifiedName() : className;
-        String configSig = TableConfigSignature.projectSignature();
+        String configSig = TableConfigSignature.projectSignature(entityClass.getProject());
 
         // T-Perf-18：缓存键不持 PsiFile 强引用（VirtualFile.url 字符串标识——PsiFile 随键
         // 永久驻留是长会话内存泄漏源；URL 相同的 PSI 重建由 modificationStamp 维度失效）
@@ -93,9 +95,12 @@ public class EntityResolver {
         String className = entityClass.getName();
         if (className == null) return new TableInfo("", "", List.of());
         // T-M19.4（用户反馈：@TableName 应为最高优先级）：显式 @TableName 即最终表名——
-        // 豁免推断策略与修饰链（添加/移除表名前缀后缀仅作用于推断表名）
+        // 豁免推断策略与修饰链（添加/移除表名前缀后缀仅作用于推断表名；
+        // T-M16.2-03 的「全局语义」按用户反馈收窄为推断语义）
         String annotated = annotationValue(entityClass, TABLE_NAME);
-        String tableName = annotated != null ? annotated : decorateTableName(inferTableName(className));
+        String tableName = annotated != null
+                ? annotated
+                : decorateTableName(inferTableName(className, entityClass.getProject()), entityClass.getProject());
 
         // T-M16.2-02：递归父类收集字段（父类字段在前；@TableLogic/@TableId/@TableField 标注随字段本身生效）
         List<PsiField> fields = collectFieldsIncludingSuper(entityClass, new HashSet<>());
@@ -105,7 +110,7 @@ public class EntityResolver {
         // 组内保持声明顺序）——三处消费点（SELECT 全列/批量面板/补全）共用 columns 自动统一生效
         List<ColumnInfo> columns = new ArrayList<>();
         for (PsiField field : fields) {
-            ColumnInfo column = resolveColumn(field, ignoredFieldNames());
+            ColumnInfo column = resolveColumn(field, ignoredFieldNames(entityClass.getProject()));
             if (column != null) columns.add(column);
         }
         columns.sort(java.util.Comparator.comparing(ColumnInfo::getRole));
@@ -639,11 +644,17 @@ public class EntityResolver {
      * 设置服务不可用时兜底默认 SNAKE。
      */
     private static String inferTableName(String className) {
-        String strategy;
-        try {
-            strategy = PluginSettings.getInstance().getState().getTableNameInference();
-        } catch (Throwable e) {
-            strategy = PluginSettings.INFERENCE_SNAKE;
+        return inferTableName(className, null);
+    }
+
+    private static String inferTableName(String className, Project project) {
+        String strategy = effectiveTableSetting(ProjectPluginSettings::effectiveTableNameInference, project);
+        if (strategy == null) {
+            try {
+                strategy = PluginSettings.getInstance().getState().getTableNameInference();
+            } catch (Throwable e) {
+                strategy = PluginSettings.INFERENCE_SNAKE;
+            }
         }
         if (PluginSettings.INFERENCE_CAMEL.equals(strategy)) {
             if (className.isEmpty()) return className;
@@ -661,6 +672,10 @@ public class EntityResolver {
      * </ul>
      */
     private static String decorateTableName(String raw) {
+        return decorateTableName(raw, null);
+    }
+
+    private static String decorateTableName(String raw, Project project) {
         String removedPrefix = raw;
         for (String prefix : removeTablePrefixList()) {
             if (raw.startsWith(prefix)) {
@@ -675,16 +690,24 @@ public class EntityResolver {
                 break;
             }
         }
-        return tablePrefix() + removedSuffix + tableSuffix();
+        return tablePrefix(project) + removedSuffix + tableSuffix(project);
     }
 
     /**
      * T-M19.4（用户实测：表名配置在部分路径不生效）：实体类不可解析的<b>兜底推断</b>统一入口——
      * 按配置推断策略（SNAKE/CAMEL）+ 统一修饰链，与 {@link #resolve} 的推断路径语义一致。
      * WrapperLocator 文本兜底、MpjLambdaConverter 子表推断等全部走此函数（全局语义）。
+     *
+     * <p>Kotlin {@code @JvmOverloads}：project 为调用方已知的所属项目；调用方只有类名字符串时留空——
+     * 留空沿改动前的「首个打开项目」取值（见 {@link #effectiveTableSetting}），不引入新行为。</p>
      */
+    public static String inferDecoratedTableName(String className, Project project) {
+        return decorateTableName(inferTableName(className, project), project);
+    }
+
+    /** Kotlin 默认参数等价重载：{@code inferDecoratedTableName(className)}（project = null）。 */
     public static String inferDecoratedTableName(String className) {
-        return decorateTableName(inferTableName(className));
+        return inferDecoratedTableName(className, null);
     }
 
     /**
@@ -706,8 +729,43 @@ public class EntityResolver {
         return result;
     }
 
+    /**
+     * T-SettingsTruth P4 / T-Fix-SettingsScope：项目级表配置读取入口——{@code project} 对应项目
+     * 的 {@link ProjectPluginSettings} 启用时 effectiveXxx 覆盖全局；无项目上下文/服务不可用/
+     * 项目值为空时返回 null（调用方回退全局设置，与原全局读取行为一致）。
+     *
+     * <p>{@code project} 为 null 时沿用改动前的「首个打开项目」：多项目同开时该取值取决于 IDE
+     * 打开顺序（本次修复的歧义点），但<b>显式传入 project 的路径已不再受它影响</b>；
+     * 只有「仅有类名字符串、拿不到 PsiClass」的兜底调用方才会走到这里。</p>
+     *
+     * @param get     从项目级设置读取有效值
+     * @param project 目标项目；null = 未提供（兜底路径）
+     */
+    private static String effectiveTableSetting(java.util.function.Function<ProjectPluginSettings, String> get, Project project) {
+        // runCatching 包裹整体：纯单测（无 Application/ProjectManager 实例）与无打开项目时
+        // 一律降级 null → 调用方回退全局设置，与原全局读取行为一致
+        try {
+            Project target = project;
+            if (target == null) {
+                Project[] openProjects = com.intellij.openapi.project.ProjectManager.getInstance().getOpenProjects();
+                target = openProjects.length > 0 ? openProjects[0] : null;
+            }
+            if (target == null) {
+                return null;
+            }
+            String value = get.apply(ProjectPluginSettings.getInstance(target));
+            return value != null && !value.isBlank() ? value : null;
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
     /** T-M16.2-03 全局语义：添加表前缀（<b>单值</b>，用户反馈定稿）。 */
-    private static String tablePrefix() {
+    private static String tablePrefix(Project project) {
+        String effective = effectiveTableSetting(ProjectPluginSettings::effectiveTablePrefix, project);
+        if (effective != null) {
+            return effective;
+        }
         try {
             return PluginSettings.getInstance().getState().getTablePrefix();
         } catch (Throwable e) {
@@ -715,13 +773,27 @@ public class EntityResolver {
         }
     }
 
+    /** Kotlin 默认参数等价重载：{@code tablePrefix()}（project = null）。 */
+    private static String tablePrefix() {
+        return tablePrefix(null);
+    }
+
     /** T-M16.2-03 全局语义：添加表后缀（<b>单值</b>，用户反馈定稿）。 */
-    private static String tableSuffix() {
+    private static String tableSuffix(Project project) {
+        String effective = effectiveTableSetting(ProjectPluginSettings::effectiveTableSuffix, project);
+        if (effective != null) {
+            return effective;
+        }
         try {
             return PluginSettings.getInstance().getState().getTableSuffix();
         } catch (Throwable e) {
             return "";
         }
+    }
+
+    /** Kotlin 默认参数等价重载：{@code tableSuffix()}（project = null）。 */
+    private static String tableSuffix() {
+        return tableSuffix(null);
     }
 
     /** T-M19.4：移除表名前缀列表（`;` 分隔，最终表名首个匹配移除）。 */
@@ -735,8 +807,29 @@ public class EntityResolver {
     }
 
     /** T-M19.4：忽略字段名集合（`;` 分隔，按 Java 字段名匹配）。 */
+    private static Set<String> ignoredFieldNames(Project project) {
+        String effective = effectiveTableSetting(ProjectPluginSettings::effectiveIgnoredFields, project);
+        String raw;
+        if (effective != null) {
+            raw = effective;
+        } else {
+            try {
+                raw = PluginSettings.getInstance().getState().getIgnoredFields();
+            } catch (Throwable e) {
+                raw = "";
+            }
+        }
+        Set<String> result = new HashSet<>();
+        for (String part : raw.split(";")) {
+            String trimmed = part.trim();
+            if (!trimmed.isEmpty()) result.add(trimmed);
+        }
+        return result;
+    }
+
+    /** Kotlin 默认参数等价重载：{@code ignoredFieldNames()}（project = null）。 */
     private static Set<String> ignoredFieldNames() {
-        return new HashSet<>(listSetting(state -> state.getIgnoredFields()));
+        return ignoredFieldNames(null);
     }
 
     /** Kotlin companion 兼容层（{@code EntityResolver.Companion.clearCache()} 调用形态）。 */

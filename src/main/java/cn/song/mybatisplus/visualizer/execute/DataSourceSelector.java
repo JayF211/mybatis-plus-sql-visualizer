@@ -17,6 +17,7 @@ import com.intellij.openapi.application.TransactionGuard;
 import com.intellij.openapi.application.WriteAction;
 import com.intellij.openapi.application.WriteIntentReadAction;
 import com.intellij.openapi.command.WriteCommandAction;
+import com.intellij.openapi.components.Service;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
@@ -97,6 +98,13 @@ public final class DataSourceSelector {
 
     /** last-used 数据源记忆 key（prepareConsole 静默复用，PropertiesComponent per-project）。 */
     private static final String LAST_RUNNER_KEY = "mpsql.visualizer.last.runner";
+
+    /**
+     * T-SI-02：last-used 记忆的<b>身份键</b>（数据源 UUID，LocalDataSource.getUniqueId）。
+     * 旧键（显示名）继续读写，兼容一个版本后废弃（见 CHANGELOG [Unreleased]）；命中判定以
+     * UUID 为主、显示名为回退——显示名同名多条时旧实现静默取首条，属「猜」，已弃。
+     */
+    private static final String LAST_RUNNER_ID_KEY = "mpsql.visualizer.last.runner.id";
 
     /** 构建版本戳。 */
     private static final String BUILD_STAMP = "M36.8-exec-silent-noop";
@@ -223,20 +231,21 @@ public final class DataSourceSelector {
             @Nullable Consumer<Editor> onEditor,
             @Nullable Consumer<String> onError,
             @Nullable Consumer<Boolean> callback) {
-        chooseAndPrepare(project, sql, false, onConsole, onEditor, onError, callback);
+        chooseAndPrepare(project, sql, false, onConsole, onEditor, onError, callback, null);
     }
 
     /** M36.5：在已准备的控制台上执行。 */
     public static boolean executePrepared(
             @NotNull Project project,
             @Nullable Consumer<JComponent> onResultsReady,
-            @Nullable Consumer<String> onError) {
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
         Object console = preparedConsole;
         Editor editor = preparedEditor;
         Object scriptModel = preparedScriptModel;
         Object execOption = preparedExecOption;
         if (console == null || editor == null || scriptModel == null || execOption == null) return false;
-        executeOnConsole(project, console, editor, scriptModel, execOption, preparedUi, onResultsReady, onError);
+        executeOnConsole(project, console, editor, scriptModel, execOption, preparedUi, onResultsReady, onError, onErrorRich);
         return true;
     }
 
@@ -247,8 +256,9 @@ public final class DataSourceSelector {
             @Nullable Consumer<JComponent> onConsole,
             @Nullable Consumer<Editor> onEditor,
             @Nullable Consumer<String> onError,
-            @Nullable Consumer<Boolean> callback) {
-        chooseAndPrepare(project, sql, true, onConsole, onEditor, onError, callback);
+            @Nullable Consumer<Boolean> callback,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
+        chooseAndPrepare(project, sql, true, onConsole, onEditor, onError, callback, onErrorRich);
     }
 
     private static void chooseAndPrepare(
@@ -258,7 +268,8 @@ public final class DataSourceSelector {
             @Nullable Consumer<JComponent> onConsole,
             @Nullable Consumer<Editor> onEditor,
             @Nullable Consumer<String> onError,
-            @Nullable Consumer<Boolean> callback) {
+            @Nullable Consumer<Boolean> callback,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         if (!ExecuteSqlSupport.isAvailable()) {
             LOG.warn("[M36] database plugin NOT available, abort");
@@ -267,9 +278,19 @@ public final class DataSourceSelector {
             return;
         }
 
-        if (reuseSharedConsole(project, sql, executeAfterPrepare, onConsole, onEditor, onError, callback)) return;
+        // T-MysqlGStrip T-MG-02：提交链总口——SQL 文本进入 exec 文件/控制台文档之前剥离 MySQL CLI
+        // 的 `\G` 后缀（DBX #35）。此点数据源尚未选定（runner 弹窗在下方），方言不可得 → 按计划
+        // §三 定案默认剥离（`\G` 非任何方言合法语法，剥离无害）。剥后文本写入 exec 文件，
+        // 控制台编辑器所见即所执行；历史链在预览侧记录原文，不受此处影响（两态分离）。
+        String submitSql = stripGSuffixForSubmit(sql, null).submitText();
 
-        TempPsiFile temp = createTempPsiFile(project, sql);
+        // M36.5.5：共享控制台命中（last-used 数据源一致且控制台仍有效）→ 直接复用——
+        // 不同步 session/连接/临时文件/方言映射，规避"第二个会话连接永不发起"挂死（见字段注释）。
+        // 显式执行路径同样复用（结果落在已嵌入面板）；用户切换数据源走弹窗 → 新建并替换共享缓存。
+        if (reuseSharedConsole(project, submitSql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich)) return;
+
+        // 临时文件 + VF + PsiFile：Runner 上下文 + 控制台挂载点（VF 须保持引用）
+        TempPsiFile temp = createTempPsiFile(project, submitSql);
         if (temp == null) {
             // T-ExecCopyFix F2a：携带阶段原因（stage 标识/异常摘要），本地化文案——
             // 用户真机曾只见笼统英文 "Failed to create temporary SQL file"，无从归因
@@ -286,26 +307,41 @@ public final class DataSourceSelector {
         com.intellij.util.Consumer<Object> sessionConsumer = session -> {
             LOG.info("[M36] session created: " + (session != null ? session.getClass().getName() : "null")
                     + ", attaching console (execute=" + executeAfterPrepare + ", ds=" + chosenRunnerName[0] + ")");
-            prepareInConsole(project, session, vf, executeAfterPrepare, chosenRunnerName[0], onConsole, onEditor, onError);
+            prepareInConsole(project, session, vf, executeAfterPrepare, chosenRunnerName[0], onConsole, onEditor, onError, onErrorRich);
         };
 
-        List<Object> runners = getAttachDataSourceRunners(psiFile, sql, sessionConsumer);
+        List<Object> runners = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer);
         LOG.info("[M36] runners=" + runners.size());
 
+        // M36.5：last-used 数据源静默命中（仅 prepareConsole 路径；显式执行保持弹窗可选）
+        // T-SI-02：命中判定升级为「UUID 精确命中 → 名字唯一命中」，同名多条判歧义弃记忆走弹窗
+        //（旧实现 firstOrNull 静默取首条，选错数据源时用户无从察觉）。
         if (!executeAfterPrepare) {
-            String last = lastRunnerName(project);
-            if (last != null) {
-                Object matched = null;
-                for (Object r : runners) {
-                    if (getRunnerName(r).equals(last)) { matched = r; break; }
-                }
-                if (matched != null) {
-                    LOG.info("[M36] silent reuse last runner: " + last);
-                    chosenRunnerName[0] = last;
-                    runRunner(project, matched, true, onError);
-                    if (callback != null) callback.accept(true);
-                    return;
-                }
+            LastUsedMemory memory = lastUsedRunner(project);
+            LastUsedResolution resolution = resolveLastUsedRunnerIndex(memory,
+                    runners.stream().map(DataSourceSelector::getRunnerName).collect(java.util.stream.Collectors.toList()),
+                    id -> {
+                        try {
+                            Object ds = DataSourceSettings.getDataSourceById(project, id);
+                            return ds != null ? DataSourceSettings.getName(ds) : null;
+                        } catch (Throwable ignored) {
+                            return null;
+                        }
+                    });
+            Object matched = (resolution.index() != null && resolution.index() >= 0 && resolution.index() < runners.size())
+                    ? runners.get(resolution.index()) : null;
+            if (matched != null) {
+                String matchedName = getRunnerName(matched);
+                LOG.info("[M36] silent reuse last runner: " + matchedName + " (memory id=" + memory.dataSourceId() + ")");
+                chosenRunnerName[0] = matchedName;
+                runRunner(project, matched, true, onError);
+                if (callback != null) callback.accept(true);
+                return;
+            }
+            if (resolution.ambiguous()) {
+                LOG.info("[M36] last-used memory ambiguous (id=" + memory.dataSourceId() + ", name=" + memory.displayName()
+                        + ") - drop memory, show popup");
+                forgetLastRunner(project);
             }
         }
 
@@ -343,7 +379,8 @@ public final class DataSourceSelector {
             @Nullable Consumer<JComponent> onConsole,
             @Nullable Consumer<Editor> onEditor,
             @Nullable Consumer<String> onError,
-            @Nullable Consumer<Boolean> callback) {
+            @Nullable Consumer<Boolean> callback,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         Object console = sharedConsole;
         if (console == null) return false;
@@ -367,9 +404,16 @@ public final class DataSourceSelector {
         } catch (Throwable ignored) {
             valid = false;
         }
-        if (!valid) {
-            LOG.info("[M36] shared console invalid (ds=" + dsName + "), drop and rebuild");
+        // T-SI-01：复用身份 fail-closed——复用判定从「显示名相等 + isValid」升级为「显示名相等 +
+        // isValid + 三分量探测的 dsInFacade 分量」（复用 attach 路径既有探测，不重造）。复用是
+        // 低频路径，探测是内存级反查（DbPsiFacade.findDataSource），成本可接受。
+        // 身份被拒时弃共享会话并清 last-used 记忆——旧实现只丢会话不清记忆，下一轮仍会按显示名
+        // 静默命中（同名数据源场景直接钉错库），与 attach 路径同规：身份不可信即弃，不猜。
+        ConsoleValidity identity = probeConsoleValidity(console, project, LOG);
+        if (!valid || !reuseIdentityAccepted(identity)) {
+            LOG.warn("[M36] shared console identity rejected (ds=" + dsName + ", isValid=" + valid + ", " + identity + "), drop session");
             dropSharedConsole();
+            if (identity != null && Boolean.FALSE.equals(identity.dsInFacade)) forgetLastRunner(project);
             return false;
         }
         try {
@@ -385,23 +429,19 @@ public final class DataSourceSelector {
             if (consoleVf instanceof VirtualFile) {
                 VirtualFile cvf = (VirtualFile) consoleVf;
                 WriteAction.run(() -> {
-                    Document fileDoc = FileDocumentManager.getInstance().getDocument(cvf);
-                    if (fileDoc != null && !fileDoc.getText().equals(sql)) {
-                        fileDoc.setText(sql);
-                        PsiDocumentManager.getInstance(project).commitDocument(fileDoc);
-                    } else if (fileDoc != null) {
-                        PsiDocumentManager.getInstance(project).commitDocument(fileDoc);
-                    } else {
-                        try {
-                            cvf.setBinaryContent(sql.getBytes(StandardCharsets.UTF_8));
-                        } catch (Throwable ignored) {
-                            // ignore
-                        }
-                    }
+                    // T-ExecDocSync2 F1：同步收口为 writeVfTextViaDocument（T-EC-01 语义超集：
+                    // setText-if-differ + commit + saveDocument；fileDoc==null 走 setBinaryContent）。
+                    // 原实现只 commit 不落盘——console document 即 exec 文件 document（attachConsole
+                    // 挂载点同文件），滞留「已修改未保存」+ 窗口期任意外部改盘 + VFS refresh =
+                    // File Cache Conflict 弹窗（第四轮根因 G2，开发计划 §1.2）
+                    writeVfTextViaDocument(project, cvf, sql);
                 });
+                // T-ConsoleDbContext B：复用链同样对齐库上下文（控制台可能来自别的库记忆）
+                LOG.info("[M36] shared console db-context: " + ExecConsoleContext.alignToDataSourceDatabase(console));
                 final Object consoleForModel = console;
                 final VirtualFile vfForModel = cvf;
                 DumbService.getInstance(project).runWhenSmart(() ->
+                        // write-safe: 无 document 写（反射替换 DBN script model）
                         ApplicationManager.getApplication().invokeLater(() -> {
                             try {
                                 refreshConsoleModel(project, consoleForModel, vfForModel, LOG);
@@ -446,6 +486,7 @@ public final class DataSourceSelector {
         if (onEditor != null) onEditor.accept(editor);
         if (onConsole != null) onConsole.accept(full);
         if (!executeAfterPrepare) {
+            // write-safe: UI-only（纯 Swing/只读，无文档写）
             if (full instanceof JSplitPane) {
                 final JComponent fullX = full;
                 ApplicationManager.getApplication().invokeLater(() -> {
@@ -460,7 +501,7 @@ public final class DataSourceSelector {
         clearConsolePrompt(console, LOG);
         LOG.info("[M36] shared console reused (ds=" + dsName + ", execute=" + executeAfterPrepare + ", liveResult=" + (liveResult != null) + ")");
         if (executeAfterPrepare) {
-            executeOnConsole(project, console, editor, refreshedModel != null ? refreshedModel : scriptModel, execOption, sharedUi, null, onError);
+            executeOnConsole(project, console, editor, refreshedModel != null ? refreshedModel : scriptModel, execOption, sharedUi, null, onError, onErrorRich);
         }
         if (callback != null) callback.accept(true);
         return true;
@@ -605,8 +646,13 @@ public final class DataSourceSelector {
             int idx = lines.indexOf(errorLine);
             int end = Math.min(idx + 4, lines.size());
             String excerpt = String.join("\n", lines.subList(idx, end));
-            LOG.info("[M36] extracted console error: " + (excerpt.length() > 160 ? excerpt.substring(0, 160) : excerpt));
-            return excerpt;
+            // T-ConsoleDbContext A：附「当前库 / 数据源 / 数据源默认库」上下文——真实事故中 SQL 本身
+            // 没问题，是执行落在了错的库（mpj_demo 的 user 表没有 username → 1054），而裸 MySQL 报文
+            // 看不出这一层；带上上下文后一眼可归因
+            String ctxLine = ExecConsoleContext.describeContext(console);
+            String enriched = ctxLine != null ? excerpt + "\n" + ctxLine : excerpt;
+            LOG.info("[M36] extracted console error: " + (enriched.length() > 200 ? enriched.substring(0, 200) : enriched));
+            return enriched;
         } catch (Throwable ignored) {
             return null;
         }
@@ -689,6 +735,8 @@ public final class DataSourceSelector {
                         }
                         final Project fProj = proj;
                         WriteCommandAction.runWriteCommandAction(fProj, () -> d.insertString(d.getTextLength(), append + text));
+                        // 滚到末尾（新输出可见）
+                        // write-safe: 无 document 写（反射替换 DBN script model）
                         ApplicationManager.getApplication().invokeLater(() -> {
                             try {
                                 Editor ed = Arrays.stream(EditorFactory.getInstance().getEditors(d)).findFirst().orElse(null);
@@ -768,11 +816,14 @@ public final class DataSourceSelector {
                 timer.stop();
                 lastReportedError = err;
                 LOG.info("[M36] refresh console error detected (tick=" + ticks[0] + "): " + (err.length() > 120 ? err.substring(0, 120) : err));
+                // T-WSC-02：writeConsoleOutput 内部是文档写（runWriteCommandAction + insertString），
+                // 且上游是 Swing Timer 拍（Timer 活动同样非用户活动）——必须 write-safe 模态投递，
+                // any() 恒 write-unsafe（见 DocWriteContext KDoc）。
                 final String fErr = err;
                 ApplicationManager.getApplication().invokeLater(() -> {
                     writeConsoleOutput(shared != null ? shared : preparedConsole, "执行失败: " + fErr + "\n", true);
                     if (onError != null) onError.accept(fErr);
-                }, ModalityState.any());
+                }, ModalityState.nonModal());
                 return;
             }
             if (shared != null) clearConsolePrompt(shared, LOG);
@@ -875,7 +926,23 @@ public final class DataSourceSelector {
                                     if (proj == null) return;
                                     final Project fProj = proj;
                                     final String fSql = currentSql;
-                                    WriteCommandAction.runWriteCommandAction(fProj, () -> cd.setText(fSql));
+                                    WriteCommandAction.runWriteCommandAction(fProj, () -> {
+                                        cd.setText(fSql);
+                                        // T-ExecDocSync2 F3：同临界区落盘——console document 即 exec 文件
+                                        // document（attachConsole 挂载点），只 setText 不落盘滞留
+                                        // 「已修改未保存」窗口（第四轮根因 G4，开发计划 §1.2）。
+                                        // 落盘失败不回滚改写本身（显示优先），仅记录
+                                        try {
+                                            Object p = console.getClass().getMethod("getProject").invoke(console);
+                                            Project p2 = p instanceof Project ? (Project) p : null;
+                                            if (p2 != null) {
+                                                PsiDocumentManager.getInstance(p2).commitDocument(cd);
+                                                FileDocumentManager.getInstance().saveDocument(cd);
+                                            }
+                                        } catch (Throwable e2) {
+                                            LOG.warn("[M36] contentAdded post-rewrite save FAILED: " + e2.getMessage());
+                                        }
+                                    });
                                     try {
                                         Editor e2 = Arrays.stream(EditorFactory.getInstance().getEditors(cd)).findFirst().orElse(null);
                                         if (e2 != null) {
@@ -891,7 +958,10 @@ public final class DataSourceSelector {
                         } catch (Throwable e) {
                             LOG.warn("[M36] contentAdded rewrite FAILED: " + e.getMessage());
                         }
-                    }, ModalityState.any());
+                        // T-WSC-02：本回调写 console 文档（setText + commitDocument + saveDocument）且用的是
+                        // 快照文本、不幂等——必须「投递时即 write-safe」，不能用重投递自愈，故 any() 改
+                        // nonModal（any() 恒 write-unsafe，见 DocWriteContext KDoc）。
+                    }, ModalityState.nonModal());
                 }
             });
             LOG.info("[M36] results hook attached (contentAdded -> embed results)");
@@ -910,6 +980,7 @@ public final class DataSourceSelector {
         // T-Perf-13：诊断探针降 debug——非 debug 模式零开销（此前每次执行一次 DataManager 解析
         // + 数十条反射 + info 刷屏；需要诊断时开 debug 恢复全部输出）
         if (!LOG.isDebugEnabled()) return;
+        // write-safe: UI-only（纯 Swing/只读，无文档写）
         ApplicationManager.getApplication().invokeLater(() ->
                 ReadAction.compute(() -> {
                     try {
@@ -1111,6 +1182,22 @@ public final class DataSourceSelector {
         return String.valueOf(firstRange);
     }
 
+    /**
+     * T-TS-09：控制台编辑器不可得时的用户可读提示（{@link #prepareInConsole} 两条静默分支共用）。
+     *
+     * <p>复用既有键 {@code execute.failed}（"执行 SQL 失败：{0}"）＋技术性明细参数：明细是诊断串而非文案，
+     * 与 {@code execute.tempFile.failed} 传 {@link #lastTempFileFailure} 同款（新增专用键要动双语 bundle，
+     * 不在本任务写集内）。</p>
+     *
+     * @param path 触发的分支（sync = 非 EDT 同步轮询 / async = EDT 异步等待）——排障时据此定位，
+     *             两条分支的成因不同（同步：调用方在非 EDT；异步：EDT 首查未命中后后台轮询）
+     */
+    private static String consoleEditorUnavailableMessage(String path) {
+        return MpSqlVisualizerBundle.message(
+                "execute.failed",
+                "控制台编辑器不可得（" + path + "：400ms 内 getEditors(consoleDocument) 恒空，无一方为该文档建过编辑器）");
+    }
+
     /** 准备链续接（consumer 回调内调用）。 */
     private static void prepareInConsole(
             @NotNull Project project,
@@ -1120,7 +1207,8 @@ public final class DataSourceSelector {
             @Nullable String dataSourceName,
             @Nullable Consumer<JComponent> onConsole,
             @Nullable Consumer<Editor> onEditor,
-            @Nullable Consumer<String> onError) {
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         try {
             Class<?> providerClass = Class.forName(CONSOLE_PROVIDER_CLASS);
@@ -1185,11 +1273,24 @@ public final class DataSourceSelector {
                     }
                 }
                 LOG.info("[M36] editor=" + editor);
-                if (editor == null) return;
+                if (editor == null) {
+                    // T-TS-09：原为静默 `?: return`——非 EDT 调用方（本分支只在非 EDT 到达）在控制台
+                    // 文档无人建编辑器时永久拿不到任何回调，UI 停在「执行中」且 errors=[]（驱动管线打通
+                    // 前观测到的「120s 不就绪 + 错误为空」正是此处与下方异步分支两处静默共同造成）。
+                    // 只补通知，不改准备链语义（onEditor/onConsole 仍只在成功路径触发）。
+                    LOG.warn("[M36] console editor unavailable after 400ms wait (sync path), abort prepare");
+                    // write-safe: UI-only（纯 Swing/只读，无文档写）——onError 由面板直接刷状态栏，
+                    // 本分支在非 EDT 线程上，须归位 EDT（同下方异步分支语义）
+                    ApplicationManager.getApplication().invokeLater(() -> {
+                        if (onError != null) onError.accept(consoleEditorUnavailableMessage("sync"));
+                    }, ModalityState.any());
+                    return;
+                }
+                Editor ed = editor;
                 // M36.2：编辑器就绪回调（调用方注入插件补全上下文，与原生补全叠加）
-                if (onEditor != null) onEditor.accept(editor);
+                if (onEditor != null) onEditor.accept(ed);
                 prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName,
-                        onConsole, onError, console, document, editor);
+                        onConsole, onError, console, document, ed, onErrorRich);
             } else {
                 ApplicationManager.getApplication().executeOnPooledThread(() -> {
                     Editor editor = null;
@@ -1200,13 +1301,17 @@ public final class DataSourceSelector {
                         }
                     }
                     final Editor resolved = editor;
+                    // T-WSC-02：本块经 prepareAfterEditorResolved 写 console 文档（`:1354`
+                    // WriteAction.compute { writeVfTextViaDocument }）——文档写回调一律 write-safe
+                    // 模态，any() 恒 write-unsafe（见 DocWriteContext KDoc）。代价：模态弹窗存续期
+                    // 准备链延后到弹窗关闭，正是平台对「改模型」要求的语义。
                     ApplicationManager.getApplication().invokeLater(() -> {
                         LOG.info("[M36] editor=" + resolved + " (async wait)");
                         if (resolved != null) {
                             if (onEditor != null) onEditor.accept(resolved);
                             try {
                                 prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName,
-                                        onConsole, onError, console, document, resolved);
+                                        onConsole, onError, console, document, resolved, onErrorRich);
                             } catch (Throwable e) {
                                 LOG.warn("[M36] prepareInConsole(editor async wait) FAILED: "
                                         + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
@@ -1216,8 +1321,15 @@ public final class DataSourceSelector {
                                     onError.accept(cause.getMessage() != null ? cause.getMessage() : cause.toString());
                                 }
                             }
+                        } else {
+                            // T-TS-09：原为「无 else」——EDT 调用方（测试/面板准备链的常态）轮询 400ms
+                            // 仍取不到编辑器时，本函数就此静默结束：调用方既无 onError 也无 callback，
+                            // 面板停在「执行中」且 errors=[]，与上面的同步分支同款不可诊断（20260918
+                            // 基线 idea.log `[M36] editor=null (async wait)` 实证）。只补通知，不改语义。
+                            LOG.warn("[M36] console editor unavailable after 400ms wait (async path), abort prepare");
+                            if (onError != null) onError.accept(consoleEditorUnavailableMessage("async"));
                         }
-                    }, ModalityState.any());
+                    }, ModalityState.nonModal());
                 });
             }
         } catch (Throwable e) {
@@ -1253,7 +1365,8 @@ public final class DataSourceSelector {
             @Nullable Consumer<String> onError,
             Object console,
             Document document,
-            Editor editor) {
+            Editor editor,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         try {
             Class<?> consoleClass = Class.forName(CONSOLE_CLASS);
@@ -1302,23 +1415,21 @@ public final class DataSourceSelector {
                     VirtualFile cvf = (VirtualFile) consoleVf;
                     String consoleText = document != null ? document.getText() : "";
                     WriteAction.run(() -> {
-                        Document fileDoc = FileDocumentManager.getInstance().getDocument(cvf);
-                        if (fileDoc != null && !fileDoc.getText().equals(consoleText)) {
-                            fileDoc.setText(consoleText);
-                            PsiDocumentManager.getInstance(project).commitDocument(fileDoc);
-                        } else if (fileDoc != null) {
-                            PsiDocumentManager.getInstance(project).commitDocument(fileDoc);
-                        } else {
-                            try {
-                                cvf.setBinaryContent(consoleText.getBytes(StandardCharsets.UTF_8));
-                            } catch (Throwable ignored) {
-                                // ignore
-                            }
-                        }
+                        // T-ExecDocSync2 F2：同 F1 收口——commit 后补 saveDocument，console document
+                        // 不再滞留「已修改未保存」（第四轮根因 G3，开发计划 §1.2）
+                        writeVfTextViaDocument(project, cvf, consoleText);
                     });
+                    // T-ConsoleDbContext B：控制台就绪即把库上下文对齐到「数据源 URL 里的库」——
+                    // DBN 的文件→数据源映射与库记忆会把会话钉在别的库上（真机事故：exec 文件被映射
+                    // 到 mpj_demo@localhost，而 SQL 属于 jpa_demo → Unknown column 'u.username'）。
+                    // 用户定案：预览默认以数据源 URL 的库为准；用户之后在控制台手调库，记忆照常保留
+                    //（对齐只在「与数据源默认库不一致」时切一次，已一致即 no-op，不会覆盖用户后来的选择）。
+                    LOG.info("[M36] console db-context: " + ExecConsoleContext.alignToDataSourceDatabase(console));
                     final Object consoleForModel = console;
                     final VirtualFile vfForModel = cvf;
                     DumbService.getInstance(project).runWhenSmart(() ->
+                            // 延迟到 dialpct push 完全结束后（dumb 退出 + 一次 EDT 泵）再重建
+                            // write-safe: UI-only（纯 Swing/只读，无文档写）
                             ApplicationManager.getApplication().invokeLater(() -> {
                                 try {
                                     refreshConsoleModel(project, consoleForModel, vfForModel, LOG);
@@ -1467,11 +1578,14 @@ public final class DataSourceSelector {
             sharedTopBlock = topBlock;
             sharedFullComponent = fullComponent;
             sharedDataSourceName = dataSourceName;
-            if (dataSourceName != null) rememberRunnerName(project, dataSourceName);
+            // T-SI-02：控制台已建，数据源 UUID 从此可取（LocalDataSource.getUniqueId）——
+            // 记忆升级为「UUID + 显示名」双字段，下次预览按身份命中而非猜名字
+            if (dataSourceName != null) rememberRunner(project, dataSourceName, consoleDataSourceId(console));
 
             if (onConsole != null) onConsole.accept(component);
 
             if (!executeAfterPrepare) {
+                // write-safe: UI-only（纯 Swing/只读，无文档写）
                 if (component instanceof JSplitPane) {
                     final JComponent compX = component;
                     ApplicationManager.getApplication().invokeLater(() -> {
@@ -1483,7 +1597,7 @@ public final class DataSourceSelector {
             }
 
             if (executeAfterPrepare) {
-                executeOnConsole(project, console, editor, effectiveScriptModel, execOption, ui, null, onError);
+                executeOnConsole(project, console, editor, effectiveScriptModel, execOption, ui, null, onError, onErrorRich);
             }
         } catch (Throwable e) {
             LOG.warn("[M36] prepareInConsole FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
@@ -1528,6 +1642,16 @@ public final class DataSourceSelector {
         public String toString() {
             return "disposed=" + disposed + ", viewValid=" + viewValid + ", dsInFacade=" + dsInFacade + ", valid=" + valid();
         }
+    }
+
+    /**
+     * T-SI-01：共享会话复用身份判定（纯函数，默认 test 通道可覆盖）——在 {@code console.isValid()}
+     * 与编辑器未释放之外，把 {@link ConsoleValidity} 的 {@code dsInFacade} 分量作为<b>独立判据</b>接进复用
+     * 判定（复用 attach 路径既有探测，不重造）。{@code identity == null} 表示探测不可用（降级），
+     * 按现状放行——探测失败不得把正常复用打成重建（宁可用旧会话，也不每次预览重建连接）。
+     */
+    public static boolean reuseIdentityAccepted(@Nullable ConsoleValidity identity) {
+        return identity == null || identity.valid();
     }
 
     /** T-PreviewExecDs-03 F2：反射探测 console 三分量有效性（任一环节失败降级 null，绝不阻断）。 */
@@ -2049,8 +2173,39 @@ public final class DataSourceSelector {
             Object execOption,
             Object ui,
             @Nullable Consumer<JComponent> onResultsReady,
-            @Nullable Consumer<String> onError) {
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
+        // T-MysqlGStrip T-MG-02：提交链总口（已备控制台路径）——提交文本源是控制台编辑器文档，
+        // 执行前剥离 `\G` 后缀并把剥后文本**回写编辑器文档**（所见=所执行，避免显示/执行分叉）。
+        // 回写复用既有 T-ExecDocSync 写纪律（dispatchDocWriteOnEdt → writeVfTextViaDocument：
+        // setText→commit→saveDocument 同临界区，BGT 调用派 EDT），不新开写路径。
+        // 方言按控制台数据源 JDBC URL 判定：非 MySQL 系方言不剥；URL 不可得 → 默认剥离（计划 §三定案）。
+        VirtualFile consoleVfForG = null;
+        try {
+            Object g = console.getClass().getMethod("getVirtualFile").invoke(console);
+            consoleVfForG = g instanceof VirtualFile ? (VirtualFile) g : null;
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        MysqlClientGSuffix.Result gStrip = stripGSuffixForSubmit(editor.getDocument().getText(),
+                ExecConsoleContext.dataSourceUrl(console));
+        if (gStrip.stripped()) {
+            LOG.info("[T-MysqlGStrip] stripped \\G suffix before submit "
+                    + "(len " + gStrip.original().length() + "->" + gStrip.submitText().length()
+                    + ", vf=" + (consoleVfForG != null ? consoleVfForG.getName() : null) + ")");
+            if (consoleVfForG != null) dispatchDocWriteOnEdt(project, consoleVfForG, gStrip.submitText());
+        }
+        // T-DdlCacheInvalidate（O-12）：DDL/事务提交语句在提交前失效插件自持 schema 缓存
+        // （DBX object_cache 语义：失效须在结果返回前、失效失败只记日志不吞执行结果——
+        // Oracle 系 DDL 隐式提交，DDL 报错不代表没提交）。全执行链唯一提交收口点；
+        // SQL 文本取控制台编辑器文档（三调用路径共用同一文档，提交时刻即执行内容）。
+        String executedSql = gStrip.stripped() ? gStrip.submitText() : editor.getDocument().getText();
+        try {
+            MetadataInvalidator.invalidateAfterExecution(executedSql);
+        } catch (Throwable t) {
+            LOG.warn("[T-DdlCacheInvalidate] invalidate hook failed (execution continues)", t);
+        }
         lastReportedError = null;
         // T-ExecSilentNoop：新执行亦重置提示去重标记——同一次执行只报一次提示。
         executionHintReported = false;
@@ -2072,7 +2227,9 @@ public final class DataSourceSelector {
                     Object consoleVf = consoleClass.getMethod("getVirtualFile").invoke(console);
                     if (consoleVf instanceof VirtualFile) {
                         VirtualFile cvf = (VirtualFile) consoleVf;
-                        String consoleText = editor.getDocument().getText();
+                        // T-MysqlGStrip：剥离后的文本才是本次执行内容（回写失败时编辑器文档可能仍是
+                        // 原文，此处以剥后文本为准收敛 vf，保证提交内容恒定无 `\G`）
+                        String consoleText = gStrip.stripped() ? gStrip.submitText() : editor.getDocument().getText();
                         WriteAction.run(() -> {
                             // T-ExecDocSync T-EC-01：document 驱动写 + 同临界区落盘（saveDocument）——
                             // 执行前 console 手改未保存内容与磁盘收口，不留「已修改未保存」窗口
@@ -2170,6 +2327,7 @@ public final class DataSourceSelector {
                                 if (doRunMethodRef[0] == null) {
                                     LOG.warn("[M36] native doRunQueryInConsole method not found, fallback");
                                 } else {
+                                    // write-safe: UI-only（纯 Swing/只读，无文档写）
                                     ApplicationManager.getApplication().invokeLater(() -> {
                                         if (generation != executionGeneration) {
                                             LOG.warn("[M36] execution submit cancelled at EDT (generation " + generation + " != " + executionGeneration + ")");
@@ -2183,6 +2341,9 @@ public final class DataSourceSelector {
                                                     Object info = findScriptModel.invoke(null, vfPsiFinal, vfPsiFinal, editorFinal, execOptionFinal);
                                                     if (info == null) {
                                                         LOG.warn("[M36] native findScriptModel returned null (nothing to run?)");
+                                                        // M36.5.48：findScriptModel 空 = 无可执行语句——显示**真实原因**，
+                                                        // 而非笼统凭据超时提示（此前误用 execute.credential.hint，误导用户查密码/驱动）。
+                                                        // write-safe: UI-only（纯 Swing/只读，无文档写）
                                                         ApplicationManager.getApplication().invokeLater(() -> {
                                                             if (onError != null) onError.accept(MpSqlVisualizerBundle.message("execute.noStatement"));
                                                         }, ModalityState.any());
@@ -2191,13 +2352,26 @@ public final class DataSourceSelector {
                                                     LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole");
                                                     doRunMethodRef[0].invoke(null, console, info);
                                                     LOG.info("[M36] native query SUBMITTED (starting result watch)");
-                                                    afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false);
+                                                    afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false, executedSql);
                                                 } catch (Throwable t) {
                                                     Throwable cause = (t instanceof InvocationTargetException) ? ((InvocationTargetException) t).getTargetException() : t;
+                                                    final Throwable fCause = cause;
                                                     LOG.warn("[M36] native run chain FAILED: " + cause.getClass().getName() + ": " + cause.getMessage()
                                                             + "\n    " + stackTrace(cause), cause);
+                                                    // M36.5.45：native 执行链失败必须通知 UI（此前仅 LOG.warn，用户看不到任何错误）
+                                                    // T-ErrorLocate T-EL-02：富通道并行投递（SQLState/errorCode/驱动位置结构化），
+                                                    // 旧 onError(String) 消费方零改动
+                                                    // write-safe: UI-only（纯 Swing/只读，无文档写）
                                                     ApplicationManager.getApplication().invokeLater(() -> {
-                                                        if (onError != null) onError.accept(cause.getMessage() != null ? cause.getMessage() : cause.toString());
+                                                        try {
+                                                            if (onErrorRich != null) {
+                                                                onErrorRich.accept(ErrorPositionExtractor.buildInfo(fCause,
+                                                                        fCause.getMessage() != null ? fCause.getMessage() : fCause.toString()));
+                                                            }
+                                                        } catch (Throwable ex) {
+                                                            LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", ex);
+                                                        }
+                                                        if (onError != null) onError.accept(fCause.getMessage() != null ? fCause.getMessage() : fCause.toString());
                                                     }, ModalityState.any());
                                                 }
                                             });
@@ -2225,20 +2399,41 @@ public final class DataSourceSelector {
                         Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
                         String msg = cause.getMessage() != null ? cause.getMessage() : cause.toString();
                         final String fMsg = msg;
+                        final Throwable fCause = cause;
+                        // 打开期间默认 modality 的 invokeLater 冻结（沙盒 12:10:02→12:10:50 实证
+                        // 48s 挂起），换入/重试/提示全不跑 → "执行中"卡住。any() 使任务在模态
+                        // pump 中照常执行（纯 Swing 更新，安全）。
+                        // write-safe: UI-only（纯 Swing/只读，无文档写）
                         ApplicationManager.getApplication().invokeLater(() -> {
+                            try {
+                                if (onErrorRich != null) onErrorRich.accept(ErrorPositionExtractor.buildInfo(fCause, fMsg));
+                            } catch (Throwable ex) {
+                                LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", ex);
+                            }
                             if (onError != null) onError.accept(fMsg);
                         }, ModalityState.any());
                         return;
                     }
                     if (submittedRef[0]) {
-                        afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false);
+                        // 兜底路径（executeQueries 同步提交）：监听在此启动；原生路径由事务内
+                        // afterSubmitted 启动，此处不再重复（防双重监听互相顶掉结果）。
+                        afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false, executedSql);
                     }
                 });
             });
         } catch (Throwable e) {
             LOG.warn("[M36] executeOnConsole FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
             Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
-            if (onError != null) onError.accept(cause.getMessage() != null ? cause.getMessage() : cause.toString());
+            final Throwable fCause = cause;
+            try {
+                if (onErrorRich != null) {
+                    onErrorRich.accept(ErrorPositionExtractor.buildInfo(fCause,
+                            fCause.getMessage() != null ? fCause.getMessage() : fCause.toString()));
+                }
+            } catch (Throwable ex) {
+                LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", ex);
+            }
+            if (onError != null) onError.accept(fCause.getMessage() != null ? fCause.getMessage() : fCause.toString());
         }
     }
 
@@ -2259,8 +2454,10 @@ public final class DataSourceSelector {
             @Nullable Consumer<String> onError,
             Logger LOG,
             String dsName,
-            boolean demotedOverride) {
+            boolean demotedOverride,
+            @Nullable String sqlText) {
         swapGeneration++;
+        // write-safe: UI-only（纯 Swing/只读，无文档写）
         ApplicationManager.getApplication().invokeLater(() -> {
             List<Content> pre = resultContents(ui);
             Set<String> preExistingNames = pre.stream().map(Content::getDisplayName).collect(Collectors.toSet());
@@ -2320,7 +2517,7 @@ public final class DataSourceSelector {
             }
             if (ui != null) {
                 Set<String> names = preExistingNames;
-                startResultTabRetry(project, ui, onError, names, dsName, demotedOverride);
+                startResultTabRetry(project, ui, onError, names, swapGeneration, dsName, demotedOverride, sqlText);
             }
         }, ModalityState.any());
     }
@@ -2369,6 +2566,21 @@ public final class DataSourceSelector {
     /** M36.5.44：旧 Tab 复用接受的 tick 数。 */
     public static final int REUSE_ACCEPT_TICKS = 4;
 
+    /**
+     * T-DdlPostInvalidate（O-17）：执行收尾兜底失效——{@link MetadataInvalidator#invalidateAfterExecution}
+     * 内部先 mayChangeMetadata 预判（命中才动作）且动作幂等，入口+收尾双调全程失效次数有界（1+1）。
+     * <b>成功与失败/超时收尾都调</b>（DBX：失败的 DDL 可能已隐式提交——Oracle），把「过程内 DDL/
+     * 预判漏判/中途结构变化」三类窗口关死；动作异常只记日志不吞收尾结果。
+     */
+    private static void runPostExecutionInvalidate(@Nullable String sqlText, Logger LOG) {
+        if (sqlText == null) return;
+        try {
+            MetadataInvalidator.invalidateAfterExecution(sqlText);
+        } catch (Throwable t) {
+            LOG.warn("[T-DdlPostInvalidate] post-execution invalidation failed", t);
+        }
+    }
+
     /** 结果 Tab 激活重试。（T-ExecSilentNoop：dsName/demotedOverride 供 40 拍超时窗口提示三分流） */
     private static void startResultTabRetry(
             @NotNull Project project,
@@ -2377,7 +2589,8 @@ public final class DataSourceSelector {
             Set<String> preExistingNames,
             int generation,
             String dsName,
-            boolean demotedOverride) {
+            boolean demotedOverride,
+            @Nullable String sqlText) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         final javax.swing.Timer[] timerHolder = {null};
         final int[] attempts = {0};
@@ -2391,8 +2604,10 @@ public final class DataSourceSelector {
             String err = extractConsoleError(sharedConsole != null ? sharedConsole : preparedConsole, LOG);
             if (err != null && !err.equals(lastReportedError)) {
                 timerHolder[0].stop();
+                runPostExecutionInvalidate(sqlText, LOG);
                 lastReportedError = err;
                 LOG.info("[M36] early console error detected (attempts=" + attempts[0] + "): " + (err.length() > 120 ? err.substring(0, 120) : err));
+                // write-safe: UI-only（纯 Swing/只读，无文档写）
                 final String fErr = err;
                 ApplicationManager.getApplication().invokeLater(() -> {
                     if (onError != null) onError.accept(fErr);
@@ -2420,6 +2635,10 @@ public final class DataSourceSelector {
             }
             if (result != null) {
                 timerHolder[0].stop();
+                runPostExecutionInvalidate(sqlText, LOG);
+                // M36.5.48 勘误：此处**不**调用 extractConsoleError——结果 Tab 复用成功时
+                // console history 含正常 SQL 文本（如 "WHERE t.id = 1"），会被误判为错误并
+                // onError（日志实证 `extracted console error: WHERE t.id = 1`，误报 + 一闪而过）。
                 try {
                     Method select = ui.getClass().getMethod("selectAndFocus", Content.class, Boolean.TYPE, Boolean.TYPE);
                     select.invoke(ui, result, false, true);
@@ -2433,6 +2652,7 @@ public final class DataSourceSelector {
                 int limit = dumb ? 100 : 40;
                 if (attempts[0] >= limit) {
                     timerHolder[0].stop();
+                    runPostExecutionInvalidate(sqlText, LOG);
                     LOG.info("[M36] result tab not appeared after " + attempts[0] + " attempts (dumb=" + dumb + ")");
                     String realError = extractConsoleError(sharedConsole != null ? sharedConsole : preparedConsole, LOG);
                     // T-ExecSilentNoop：40 拍超时窗口与 8s 监控共用 executionHintReported 去重。
@@ -2447,11 +2667,13 @@ public final class DataSourceSelector {
                                         ? MpSqlVisualizerBundle.message("execute.notSubmitted.hint", dsName != null ? dsName : "")
                                         : MpSqlVisualizerBundle.message("execute.timeout.hint"));
                         LOG.info("[M36] result tab not appeared, no console error (dumb=" + dumb + ", demoted=" + demotedOverride + ") - hint via 40-tick window");
+                        // write-safe: UI-only（纯 Swing/只读，无文档写）
                         final String fHint = fallbackHint;
                         ApplicationManager.getApplication().invokeLater(() -> {
                             if (onError != null) onError.accept(fHint);
                         }, ModalityState.any());
                     } else if (realError != null) {
+                        // write-safe: UI-only（纯 Swing/只读，无文档写）
                         final String fErr = realError;
                         ApplicationManager.getApplication().invokeLater(() -> {
                             if (onError != null) onError.accept(fErr);
@@ -2473,24 +2695,129 @@ public final class DataSourceSelector {
             Set<String> preExistingNames,
             String dsName,
             boolean demotedOverride) {
-        startResultTabRetry(project, ui, onError, preExistingNames, swapGeneration, dsName, demotedOverride);
+        startResultTabRetry(project, ui, onError, preExistingNames, swapGeneration, dsName, demotedOverride, null);
     }
 
-    /** M36.5：读取 last-used 数据源名。 */
+    /** M36.5：读取 last-used 数据源名（prepareConsole 静默复用；异常兜底 null）。 */
     private static String lastRunnerName(Project project) {
-        try {
-            return com.intellij.ide.util.PropertiesComponent.getInstance(project).getValue(LAST_RUNNER_KEY);
-        } catch (Throwable ignored) {
-            return null;
-        }
+        return lastUsedRunner(project).displayName();
     }
 
     /** M36.5：记录 last-used 数据源名。 */
     private static void rememberRunnerName(Project project, String name) {
+        rememberRunner(project, name, null);
+    }
+
+    /**
+     * T-SI-02：last-used 记忆（UUID 身份 + 显示名，双字段）。
+     * {@code dataSourceId} 来自 LocalDataSource.getUniqueId（{@link DataSourceSettings} 既有反射封装）。
+     *
+     * @param dataSourceId 数据源 UUID（取不到为 null）
+     * @param displayName  显示名（取不到为 null）
+     */
+    public record LastUsedMemory(@Nullable String dataSourceId, @Nullable String displayName) {}
+
+    /**
+     * T-SI-02：记忆命中解析结果。{@code index} 命中 runner 下标；{@code ambiguous} 表示「记忆在、但同名
+     * 多条无法唯一对应」——调用方据此清记忆走弹窗（不猜首条）。
+     *
+     * @param index     命中的 runner 下标（未命中 null）
+     * @param ambiguous 同名多条歧义标记
+     */
+    public record LastUsedResolution(@Nullable Integer index, boolean ambiguous) {}
+
+    /**
+     * T-SI-02：last-used 记忆命中判定（纯函数，默认 test 通道可覆盖）。
+     *
+     * <p>命中顺序（UUID 优先，名字回退，皆不唯一即弃）：</p>
+     * <ol>
+     *  <li>UUID 精确命中——{@code dataSourceNameById} 取该 UUID 当前的数据源名（数据源被改名也认，
+     *      这是 UUID 相对显示名的增益），再按该名在 runner 列表里唯一匹配；</li>
+     *  <li>名字命中且唯一——旧键（显示名）兼容路径，升级用户无感；</li>
+     *  <li>其余（未命中 / 同名多条）→ 弃记忆，调用方走弹窗重新选择。</li>
+     * </ol>
+     *
+     * <p>{@code dataSourceNameById} 返回 null 表示该 UUID 的数据源已不存在——UUID 分量失效，退回名字判定。</p>
+     */
+    public static LastUsedResolution resolveLastUsedRunnerIndex(
+            @NotNull LastUsedMemory memory,
+            @NotNull List<String> runnerNames,
+            @NotNull java.util.function.Function<String, String> dataSourceNameById) {
+        String id = memory.dataSourceId() != null && !memory.dataSourceId().isBlank() ? memory.dataSourceId() : null;
+        if (id != null) {
+            String dsName = null;
+            try {
+                dsName = dataSourceNameById.apply(id);
+            } catch (Throwable ignored) {
+                // getOrNull 语义
+            }
+            if (dsName != null && !dsName.isBlank()) {
+                List<Integer> hits = new ArrayList<>();
+                for (int i = 0; i < runnerNames.size(); i++) {
+                    if (runnerNames.get(i).equals(dsName)) hits.add(i);
+                }
+                if (hits.size() == 1) return new LastUsedResolution(hits.get(0), false);
+                if (hits.size() > 1) return new LastUsedResolution(null, true);
+            }
+        }
+        String name = memory.displayName() != null && !memory.displayName().isBlank() ? memory.displayName() : null;
+        if (name != null) {
+            List<Integer> hits = new ArrayList<>();
+            for (int i = 0; i < runnerNames.size(); i++) {
+                if (runnerNames.get(i).equals(name)) hits.add(i);
+            }
+            if (hits.size() == 1) return new LastUsedResolution(hits.get(0), false);
+            if (hits.size() > 1) return new LastUsedResolution(null, true);
+        }
+        return new LastUsedResolution(null, false);
+    }
+
+    /** T-SI-02：读 last-used 记忆双字段（异常兜底全空）。 */
+    private static LastUsedMemory lastUsedRunner(Project project) {
         try {
-            com.intellij.ide.util.PropertiesComponent.getInstance(project).setValue(LAST_RUNNER_KEY, name);
+            com.intellij.ide.util.PropertiesComponent pc = com.intellij.ide.util.PropertiesComponent.getInstance(project);
+            return new LastUsedMemory(pc.getValue(LAST_RUNNER_ID_KEY), pc.getValue(LAST_RUNNER_KEY));
+        } catch (Throwable ignored) {
+            return new LastUsedMemory(null, null);
+        }
+    }
+
+    /**
+     * T-SI-02：写 last-used 记忆。{@code dataSourceId} 取不到（弹窗路径尚无控制台）时<b>清掉身份键</b>
+     * ——留着上一轮的 UUID 会指认另一个数据源（身份说谎比没有身份更糟）。
+     */
+    private static void rememberRunner(Project project, String name, @Nullable String dataSourceId) {
+        try {
+            com.intellij.ide.util.PropertiesComponent pc = com.intellij.ide.util.PropertiesComponent.getInstance(project);
+            pc.setValue(LAST_RUNNER_KEY, name);
+            if (dataSourceId == null || dataSourceId.isBlank()) pc.unsetValue(LAST_RUNNER_ID_KEY);
+            else pc.setValue(LAST_RUNNER_ID_KEY, dataSourceId);
         } catch (Throwable ignored) {
             // ignore
+        }
+    }
+
+    /** T-SI-02：清 last-used 记忆（两个键一起清，避免半截身份残留）。 */
+    private static void forgetLastRunner(Project project) {
+        try {
+            com.intellij.ide.util.PropertiesComponent pc = com.intellij.ide.util.PropertiesComponent.getInstance(project);
+            pc.unsetValue(LAST_RUNNER_KEY);
+            pc.unsetValue(LAST_RUNNER_ID_KEY);
+        } catch (Throwable ignored) {
+            // ignore
+        }
+    }
+
+    /** T-SI-02：从已建控制台取数据源 UUID（复用 {@link DataSourceSettings} 既有反射封装；取不到 null）。 */
+    @Nullable
+    private static String consoleDataSourceId(@Nullable Object console) {
+        try {
+            if (console == null) return null;
+            Object ds = console.getClass().getMethod("getDataSource").invoke(console);
+            if (ds == null) return null;
+            return DataSourceSettings.getUniqueId(ds);
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 
@@ -2569,10 +2896,8 @@ public final class DataSourceSelector {
                     cause.getMessage() != null ? cause.getMessage() : cause.toString());
             if (onError != null) onError.accept(failMsg);
             if (silent) {
-                try {
-                    com.intellij.ide.util.PropertiesComponent.getInstance(project).unsetValue(LAST_RUNNER_KEY);
-                } catch (Throwable ignored) {
-                }
+                // T-SI-02：两个键一起清（只清旧键会留下指认另一个数据源的 UUID 身份）
+                forgetLastRunner(project);
                 return;
             }
             // 驱动缺失/连接失败等：提示用户到数据源设置解决（原生 Download Driver 弹窗由 Database 插件触发）
@@ -2730,6 +3055,18 @@ public final class DataSourceSelector {
         // WorkspaceFileIndex.ensureIsUpToDate 的 SEVERE 断言移出每次预览的热路径。
         TempPsiFile cached = consumeCachedTempPsiFile(project);
         if (cached != null) return cached;
+        // T-ExecDocSync2 F4：refresh 前强制收敛——写点之后、refresh 之前若被用户键入/其他写方
+        // 插入（doc modified-unsaved + 磁盘≠文档），refresh 恰会命中 MemoryDiskConflictResolver
+        // 弹窗条件；findFileByIoFile（与 projectExecFile 内裸调同形态）命中即过一遍分叉探测 +
+        // EDT 派发 doc 写收敛，正常恒 no-op。详见 prewarmExecTempFileInner 同款注释。
+        try {
+            VirtualFile vf0 = LocalFileSystem.getInstance().findFileByIoFile(ioFile);
+            if (vf0 != null) {
+                syncExecVfContentIfNeeded(project, vf0, sql);
+            }
+        } catch (Throwable e) {
+            return failTempFile("preRefreshConverge", e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
         // T-ExecCopyFix F2b：refresh 段包 WriteIntentReadAction（详见方法 Javadoc）；
         // mapDialect 与 findFile 维持原线程原语义（setMapping 须 EDT；findFile 沿用
         // ReadAction.compute 既有包装，与 T-M36.6-03 前行为一致）。
@@ -2822,13 +3159,26 @@ public final class DataSourceSelector {
     private static final Object execFileWriteLock = new Object();
 
     /**
-     * T-EC-02：裸写兜底守卫——仅当该文件当前<b>无已加载 document</b>时才允许绕过 document
-     * 直接写盘。文件有已加载 document（编辑器持有/近期读写）时裸写盘 = 绕过 document 的
-     * 外部改写，叠加 document「已修改未保存」态即触发平台 MemoryDiskConflictResolver
-     * 「File Cache Conflict」模态弹窗（T-ExecDocSync 真机截图实证）。供表驱动测试。
+     * T-EC-02 的裸写守卫（canFallBackToRawWrite）已由 T-ExecDocSync3 整体退役——真机日志实证其
+     * 判据不可靠（EDT 忙时 getCachedDocument 恒 null，而排队中的写任务随后会建出 document），
+     * 现策略见 {@link #projectExecFile} 内注释：VFS 已有该文件即绝不裸写。
      */
-    public static boolean canFallBackToRawWrite(VirtualFile vf) {
-        return FileDocumentManager.getInstance().getCachedDocument(vf) == null;
+
+    /**
+     * T-MysqlGStrip T-MG-02：提交链总口的 {@code \G} 剥离决策（{@link #chooseAndPrepare} 新建控制台链与
+     * {@link #executeOnConsole} 已备控制台链共用同一入口）。
+     *
+     * @param sqlText       原始 SQL 文本
+     * @param dataSourceUrl 控制台数据源 JDBC URL（方言判定输入）；null = 方言不可得 →
+     *                      {@link MysqlClientGSuffix#stripForDialect} 按 MySQL 处理（默认剥离）
+     * @return 两态结果——{@link MysqlClientGSuffix.Result#submitText} 进 exec 文件/控制台文档，
+     *         {@link MysqlClientGSuffix.Result#original} 留给历史链（历史记原文、提交文本剥离）
+     *
+     * <p>public 供 headless 用例直测（沙盒默认 test 任务无 Database 插件，
+     * chooseAndPrepare/executeOnConsole 在默认 test 任务不可达——ExecTempFileFixTest 同款口径）。</p>
+     */
+    public static MysqlClientGSuffix.Result stripGSuffixForSubmit(String sqlText, @Nullable String dataSourceUrl) {
+        return MysqlClientGSuffix.stripForDialect(sqlText, MysqlClientGSuffix.dialectFromUrl(dataSourceUrl));
     }
 
     /**
@@ -2847,23 +3197,33 @@ public final class DataSourceSelector {
      * text 相同但 document 仍 modified（用户改后还原等）时同样 commit+save 收敛。</p>
      */
     public static void writeVfTextViaDocument(Project project, VirtualFile vf, String text) {
-        Document fileDoc = FileDocumentManager.getInstance().getDocument(vf);
-        if (fileDoc == null) {
-            try {
-                vf.setBinaryContent(text.getBytes(StandardCharsets.UTF_8));
-            } catch (Throwable ignored) {
-                // ignore
+        // T-PreviewFast P4：程序性写入整段开闸——文档变更事件同步派发给自动落盘监听，
+        // 闸门开着即跳过（内容由本函数自己落盘，无需 1.5s 后再写一遍）
+        ExecDocAutosaveGate.suppressDuring(() -> {
+            Document fileDoc = FileDocumentManager.getInstance().getDocument(vf);
+            if (fileDoc == null) {
+                try {
+                    vf.setBinaryContent(text.getBytes(StandardCharsets.UTF_8));
+                } catch (Throwable ignored) {
+                    // ignore
+                }
+            } else {
+                if (!fileDoc.getText().equals(text)) {
+                    fileDoc.setText(text);
+                }
+                // setText 的 write command 结束时自动 commit；显式 commitDocument 双保险
+                //（同步后同 tick 内 findFile 的 PSI 立即对齐，M36.5.20 语义保留）
+                PsiDocumentManager.getInstance(project).commitDocument(fileDoc);
+                // T-EC-01 核心：同临界区落盘——磁盘即时与内存一致，document 不滞留 modified 态
+                // T-PreviewFast P5：落盘前先判「已修改未保存」——内容本就一致时（连续预览同一
+                // SQL 的常见路径）跳过磁盘写，消除每次预览的无效落盘与随之而来的 VFS/索引噪音
+                FileDocumentManager fdm = FileDocumentManager.getInstance();
+                if (fdm.isDocumentUnsaved(fileDoc)) {
+                    fdm.saveDocument(fileDoc);
+                }
             }
-            return;
-        }
-        if (!fileDoc.getText().equals(text)) {
-            fileDoc.setText(text);
-        }
-        // setText 的 write command 结束时自动 commit；显式 commitDocument 双保险
-        //（同步后同 tick 内 findFile 的 PSI 立即对齐，M36.5.20 语义保留）
-        PsiDocumentManager.getInstance(project).commitDocument(fileDoc);
-        // T-EC-01 核心：同临界区落盘——磁盘即时与内存一致，document 不滞留 modified 态
-        FileDocumentManager.getInstance().saveDocument(fileDoc);
+            return null;
+        });
     }
 
     /** BGT 派 EDT document 写的有界等待预算（毫秒）——DialectPreMapping 同款取值；EDT 病态冻结时超时放行走守卫降级。 */
@@ -2874,29 +3234,68 @@ public final class DataSourceSelector {
      * invokeLater + 有界 latch 等待（DialectPreMapping.ensureMapped 同款：BGT 等 EDT，
      * EDT 永不反向阻塞，超时自愈不互锁）。失败注入缝 {@link #execWriteActionFailureInjection}
      * 在 {@link #docWriteOnce} 内统一生效（EDT/BGT 两形态等价）。
+     *
+     * <p>T-PreviewFast P2：{@code waitBudgetMs <= 0} 时走 <b>fire-and-forget</b>（派发后立即返回 true）——
+     * 预热是投机性写入，T-ExecDocSync3 取消裸写后超时已无副作用，没必要让 BGT 白等 2 秒。</p>
+     *
+     * <p>T-FixWriteSafe（T-WriteSafeCtx 留档补口）：两处投递原用 1 参 {@code invokeLater}，即隐式
+     * {@code ModalityState.defaultModalityState()}。平台源码实证（{@code openapi/application/modality.kt}：
+     * {@code defaultModalityImpl()} 依次取 {@code ProgressManager.currentProgressModality} → 线程/协程上下文
+     * modality → NON_MODAL）：BGT 常态取到 NON_MODAL（{@code TransactionGuardImpl:37} 构造期即登记为
+     * write-safe，与显式 {@code nonModal()} 等价），但<b>在模态进度/带 modality 上下文里会取到该模态</b>；
+     * 若该模态本身是「写不安全进入」的（{@code enteredModality:188-190} 存的是进入那一刻
+     * {@code myWritingAllowed} 的快照），排队的 runnable 就在该模态事件泵内以 write-unsafe 身份执行 →
+     * 改文档即 {@code Write-unsafe context!}。故两处投递的<b>写体</b>统一过 {@link DocWriteContext} 闸门：</p>
+     * <ul>
+     *  <li>fire-and-forget：整拍改以 nonModal 投递（{@code invokeLaterWriteSafe}）——本路径无有界等待，
+     *      模态存续期延后一拍正是「模态期间禁改文档」的正确语义，不会撞任何预算；</li>
+     *  <li>有界等待：<b>保留默认模态投递</b>（保证能在该模态事件泵内执行，常态与改前逐字一致），
+     *      只把写体过闸（{@code runWriteSafe}）：常态判为可写 → 就地写 + 同拍 countDown；仅当判为不安全
+     *      才转 nonModal 投递并<b>立即</b> countDown（ok=false）——不让调用方白等 2 秒预算。延后那一拍
+     *      重跑 {@link #docWriteOnce} 是幂等的（内容相同不 setText、已落盘不 saveDocument），且该超时/未完成
+     *      路径已由 T-ExecDocSync3 定为无害（不裸写、内容旧一拍由后续同步链收敛）。</li>
+     * </ul>
      */
     private static boolean dispatchDocWriteOnEdt(Project project, VirtualFile vf, String sql) {
+        return dispatchDocWriteOnEdt(project, vf, sql, EDT_EXEC_DOC_SYNC_WAIT_MS);
+    }
+
+    /** waitBudgetMs 显式重载（Kotlin 默认参数 {@code waitBudgetMs = EDT_EXEC_DOC_SYNC_WAIT_MS} 的显式形态）。 */
+    private static boolean dispatchDocWriteOnEdt(Project project, VirtualFile vf, String sql, long waitBudgetMs) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         com.intellij.openapi.application.Application app = ApplicationManager.getApplication();
         if (app.isDispatchThread()) return docWriteOnce(project, vf, sql);
+        if (waitBudgetMs <= 0L) {
+            // project 即 owner disposable：项目关闭后丢弃该拍（写目标就是项目内临时文件，重跑无意义）
+            DocWriteContext.invokeLaterWriteSafe(project, "exec prewarm doc write (fire-and-forget)", () -> {
+                try {
+                    docWriteOnce(project, vf, sql);
+                } catch (Throwable ignored) {
+                    // runCatching 语义
+                }
+            });
+            LOG.info("[M36] exec doc write dispatched fire-and-forget (T-PreviewFast P2)");
+            return true;
+        }
         java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
         final boolean[] ok = {false};
         app.invokeLater(() -> {
             try {
-                ok[0] = docWriteOnce(project, vf, sql);
+                DocWriteContext.runWriteSafe(project, "exec doc sync (bounded)", () ->
+                        ok[0] = docWriteOnce(project, vf, sql));
             } finally {
                 done.countDown();
             }
         });
         boolean signaled;
         try {
-            signaled = done.await(EDT_EXEC_DOC_SYNC_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+            signaled = done.await(waitBudgetMs, java.util.concurrent.TimeUnit.MILLISECONDS);
         } catch (InterruptedException t) {
             signaled = false;
             Thread.currentThread().interrupt();
         }
         if (!signaled) {
-            LOG.warn("[M36] exec doc write EDT dispatch timeout after " + EDT_EXEC_DOC_SYNC_WAIT_MS + "ms (EDT busy?)");
+            LOG.warn("[M36] exec doc write EDT dispatch timeout after " + waitBudgetMs + "ms (EDT busy?)");
         }
         return signaled && ok[0];
     }
@@ -2936,6 +3335,155 @@ public final class DataSourceSelector {
         return dispatchDocWriteOnEdt(project, vf, sql);
     }
 
+    // ------------------------------------------------------------------
+    // T-ExecDocSync2 F5/F6：执行文档防抖自动落盘 + 冲突探针（第四轮）
+    // ------------------------------------------------------------------
+
+    /**
+     * exec 文件 VFS 路径匹配（F5 自动落盘 / F6 探针共用过滤器；VFS 路径恒 '/' 分隔）。
+     * public 供表驱动测试。
+     */
+    public static boolean isExecVfPath(String path) {
+        return path.endsWith("/" + cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME + "/exec/mpsql-exec.sql");
+    }
+
+    /** 防抖窗（毫秒）——连击合并，窗内 modified-unsaved 暴露面上界。 */
+    private static final long EXEC_DOC_AUTOSAVE_DELAY_MS = 1500L;
+
+    /** F5 防抖调度器（daemon，不阻 IDE 退出；任务本身极轻——路径过滤后仅换句柄）。 */
+    private static final java.util.concurrent.ScheduledExecutorService execDocAutosaveExecutor =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "mpv-exec-doc-autosave");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /** F5 待执行的防抖任务（新变更到达即顶掉旧任务）。 */
+    private static final java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Future<?>> execDocAutosavePending =
+            new java.util.concurrent.atomic.AtomicReference<>(null);
+
+    /**
+     * T-PS4-11 快判缓存：上次命中 exec 路径的 document（<b>弱引用</b>——防强引用滞留已关闭文档，
+     * GC 后 get()==null 自然退回原链探测）。companion 监听是应用级的，IDE 全局每次文档变更
+     * 都会进 {@link #scheduleExecDocAutosave}；exec 文档连续变更（用户在控制台键入）是唯一需要跟进
+     * 落盘的形态，其余文档每次都白付 getFile + endsWith。identity 比对（==）而非 equals，
+     * document 换实例（文件关闭重开）即视为未命中。
+     */
+    private static final java.util.concurrent.atomic.AtomicReference<java.lang.ref.WeakReference<Document>> lastExecDocRef =
+            new java.util.concurrent.atomic.AtomicReference<>(null);
+
+    /** F6 探针已安装项目集（连接随项目 disposable 自动断开，此处只防重复安装）。 */
+    private static final Set<Project> conflictProbeProjects =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+
+    /**
+     * F5：应用级 document 变更监听（惰性安装一次）——exec 文档每次变更（用户在控制台手改/
+     * 插件 setText）后 1.5s 防抖自动落盘。动机：console 编辑器文档即 exec 文件 document
+     * （attachConsole 挂载点），用户手改滞留「已修改未保存」是第四轮冲突弹窗「内存中更改」
+     * 一半的唯一插件拦不到的源头；帧失活自动保存最快也要切帧才触发，防抖落盘把暴露面压到
+     * 防抖窗内。落盘方向恒 doc→disk（saveDocument），不回读不改写用户内容。
+     */
+    private static void installExecDocAutosaveListener() {
+        // T-PS4-11：改两参重载 addDocumentListener(listener, disposable)，挂 [ExecDocAutosaveHost]
+        // （应用级轻服务 = Disposable parent）——此前单参裸装、装后永不卸载，插件动态卸载
+        // （DynamicInstallSupport → 平台 unloadPlugin）后监听残活并钉住旧 classloader，正是
+        // 动态卸载屏障要杜绝的形态。挂靠定案依据见 [ExecDocAutosaveHost] KDoc。
+        ExecDocAutosaveHost.getInstance().ensureListenerInstalled(
+                new com.intellij.openapi.editor.event.DocumentListener() {
+                    @Override
+                    public void documentChanged(@NotNull com.intellij.openapi.editor.event.DocumentEvent e) {
+                        scheduleExecDocAutosave(e.getDocument());
+                    }
+                });
+    }
+
+    private static void scheduleExecDocAutosave(Document doc) {
+        // T-PreviewFast P4：程序性写入不排自动落盘——闸门开着说明本次变更来自插件写入
+        //（写入方自己已落盘），防抖落盘只为用户手改兜底。保持最先判（闸门语义先于快判，
+        // 程序性写入高频路径不因快判命中而漏抑制）
+        if (ExecDocAutosaveGate.isSuppressed()) return;
+        // T-PS4-11 快判：上次命中的 document 直接身份比对短路（免 getFile + endsWith）；
+        // 未命中走原链探测回退，确认命中后更新缓存。弱引用被 GC 后 get()==null 视为未命中。
+        java.lang.ref.WeakReference<Document> cachedRef = lastExecDocRef.get();
+        if (cachedRef == null || cachedRef.get() != doc) {
+            VirtualFile vf = null;
+            try {
+                vf = FileDocumentManager.getInstance().getFile(doc);
+            } catch (Throwable ignored) {
+                // getOrNull 语义
+            }
+            if (vf == null || !isExecVfPath(vf.getPath())) return;
+            lastExecDocRef.set(new java.lang.ref.WeakReference<>(doc));
+        }
+        java.util.concurrent.Future<?> prev = execDocAutosavePending.getAndSet(
+                execDocAutosaveExecutor.schedule(() -> flushExecDocAutosave(doc),
+                        EXEC_DOC_AUTOSAVE_DELAY_MS, java.util.concurrent.TimeUnit.MILLISECONDS));
+        if (prev != null) prev.cancel(false);
+    }
+
+    private static void flushExecDocAutosave(Document doc) {
+        ApplicationManager.getApplication().invokeLater(() -> {
+            try {
+                if (!autosaveExecDocNow(doc)) return;
+                Logger.getInstance(DataSourceSelector.class)
+                        .info("[M36] exec doc autosaved (debounced " + EXEC_DOC_AUTOSAVE_DELAY_MS + "ms, T-ExecDocSync2 F5)");
+            } catch (Throwable e) {
+                Logger.getInstance(DataSourceSelector.class)
+                        .warn("[M36] exec doc autosave FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * F5 原语：EDT 上守卫落盘——doc 无主文件/已失效/未修改即 no-op（false）；确需落盘包
+     * WriteAction saveDocument（T-EC-01 同款落盘语义）。public 供测试。
+     */
+    public static boolean autosaveExecDocNow(Document doc) throws java.io.IOException {
+        FileDocumentManager fdm = FileDocumentManager.getInstance();
+        VirtualFile vf = null;
+        try {
+            vf = fdm.getFile(doc);
+        } catch (Throwable ignored) {
+            // getOrNull 语义
+        }
+        if (vf == null || !vf.isValid()) return false;
+        // 262：Document.isModified 已从接口移除——「已修改未保存」唯一查询是 isDocumentUnsaved
+        if (!fdm.isDocumentUnsaved(doc)) return false;
+        WriteAction.run((com.intellij.util.ThrowableRunnable<java.io.IOException>) () -> fdm.saveDocument(doc));
+        return true;
+    }
+
+    /**
+     * F6：冲突探针——「文件缓冲区冲突」弹窗（MemoryDiskConflictResolver）响应的是平台对修改中
+     * document 发起的 reload，reload 前平台经 FileDocumentManagerListener.beforeFileContentReload
+     * 广播（与弹窗实现同 topic，监听先后不保证，故仅取证不拦截）。exec 文件命中即落 warn 指纹
+     * （doc/vf 长度与 stamp、unsaved 态）：F1-F5 全上后若真机仍复发，idea.log 直出现场数据，
+     * 替代人工复现排查。经项目 messageBus 连接（随项目 disposable 自动断开）。
+     */
+    private static void installExecConflictProbe(Project project) {
+        if (!conflictProbeProjects.add(project)) return;
+        project.getMessageBus().connect(project).subscribe(
+                com.intellij.openapi.fileEditor.FileDocumentManagerListener.TOPIC,
+                new com.intellij.openapi.fileEditor.FileDocumentManagerListener() {
+                    @Override
+                    public void beforeFileContentReload(@NotNull VirtualFile vf, @NotNull Document document) {
+                        if (!isExecVfPath(vf.getPath())) return;
+                        FileDocumentManager fdm = FileDocumentManager.getInstance();
+                        Boolean unsaved = null;
+                        try {
+                            unsaved = fdm.isDocumentUnsaved(document);
+                        } catch (Throwable ignored) {
+                            // getOrNull 语义
+                        }
+                        Logger.getInstance(DataSourceSelector.class)
+                                .warn("[T-ExecDocSync2][conflict-probe] reload-with-unsaved-doc: " + vf.getPath()
+                                        + ", docLen=" + document.getTextLength() + ", docStamp=" + document.getModificationStamp()
+                                        + ", vfLen=" + vf.getLength() + ", vfStamp=" + vf.getModificationStamp()
+                                        + ", unsaved=" + unsaved);
+                    }
+                });
+    }
+
     /**
      * M36.5.12：项目内执行文件路径——{@code <projectBase>/.idea/sql-visualizer/exec/mpsql-exec.sql}
      *（F-44-4：目录随插件更名，旧名 mybatis-plus-sql-visualizer 不再使用）。
@@ -2953,15 +3501,26 @@ public final class DataSourceSelector {
      *      262 平台文件 document 的 setText 包 CommandProcessor BGT 硬抛 EDT-only（javap+沙盒
      *      堆栈双实证）：旧实现 BGT 预热的 document 分支每次必炸、静默掉进裸写兜底 = 真机
      *      File Cache Conflict 链本体。BGT 预热自此不再降级；</li>
-     *  <li><b>③ 裸写兜底守卫</b>（T-EC-02，{@link #canFallBackToRawWrite}）——document 写失败（含注入缝）
+     *  <li><b>③ 裸写兜底守卫</b>（T-EC-02，{@code canFallBackToRawWrite}）——document 写失败（含注入缝）
      *      时只有无已加载 document 才允许裸写盘；有 document 一律抛 writeConflictGuard 拒写
      *     （宁内容旧一拍，执行前 console doc 同步链会重写并落盘，执行内容不受影响），
-     *      失败原因 Throwable 必达日志（原 getOrDefault(false) 吞掉）；</li>
+     *      失败原因 Throwable 必达日志（原 getOrDefault(false) 吞掉）；
+     *      → <b>T-ExecDocSync3 退役</b>（第四轮真机日志实证判据不可靠，见方法内注释）：改为
+     *      「VFS 已有该文件即绝不裸写」，冷启动 EDT 忙场景彻底无冲突面；</li>
      *  <li><b>④ 单写方锁</b>（T-EC-03，{@link #execFileWriteLock}）——串行化 BGT 预热与 EDT 冷路径。</li>
      * </ul>
      * <p>VFS 缺条目路径维持裸写 + 调用方 refresh + {@link #syncExecVfContentIfNeeded} 防御收口（T-EC-04）。</p>
+     * T-PreviewFast P1/P2：差量快路径（内容已一致即返回）+ 预热非阻塞派发（{@code nonBlocking=true}）。
+     * public 供测试。
+     *
+     * @param nonBlocking true = 预热等投机性调用：BGT 派发不等 EDT（fire-and-forget，P2）
      */
     public static File projectExecFile(Project project, String sql) throws java.io.IOException {
+        return projectExecFile(project, sql, false);
+    }
+
+    /** nonBlocking 显式重载（Kotlin 默认参数 {@code nonBlocking = false} 的显式形态）。 */
+    public static File projectExecFile(Project project, String sql, boolean nonBlocking) throws java.io.IOException {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         String base = project.getBasePath();
         if (base == null) {
@@ -2979,24 +3538,42 @@ public final class DataSourceSelector {
         synchronized (execFileWriteLock) {
             VirtualFile existing = LocalFileSystem.getInstance().findFileByIoFile(f);
             if (existing != null) {
+                // T-PreviewFast P1：**差量快路径**——派发前先判当前内容是否已等于目标 SQL。相同则
+                // 直接返回，不派发、不落盘、不等 EDT（连续预览同一 SQL 是常见形态：真机日志 14:17
+                // 五连预览每次都白付 2s 派发等待 + 一次无效落盘 + 一轮索引噪音）。
+                // 判据双源：document 文本（有已加载文档时，UI 所见为准）或 vf 内容（无文档时）。
+                if (execFileContentMatches(project, existing, sql)) {
+                    LOG.info("[M36] exec file content already matches — write SKIPPED (T-PreviewFast P1): " + f.getName());
+                    return f;
+                }
                 // T-EC-01/T-EC-03：document 写统一派 EDT（EDT 直调同步；BGT 派发 + 有界等待）。
                 // 262 实证 document setText BGT 硬抛（见 writeVfTextViaDocument Javadoc）——旧实现
                 // 的 BGT document 分支每次必炸、静默掉进裸写兜底，即真机冲突链本体。
-                boolean updated = dispatchDocWriteOnEdt(project, existing, sql);
+                // T-PreviewFast P2：预热调用（unblocking=true）走 fire-and-forget，不再等满 2 秒。
+                boolean updated = dispatchDocWriteOnEdt(
+                        project, existing, sql,
+                        nonBlocking ? 0L : EDT_EXEC_DOC_SYNC_WAIT_MS);
                 if (updated) {
                     LOG.info("[M36] exec file updated via document+save (disk synced in-critical-section): " + f.getName());
                     return f;
                 }
-                // T-EC-02：裸写兜底守卫——有已加载 document 时禁止绕过 document 裸写盘
-                //（裸写叠加「已修改未保存」态 = File Cache Conflict 弹窗 + invokeLater 链冻结）。
-                // 宁内容旧一拍：执行前 console doc 同步（executeOnConsole，T-EC-01 同款落盘）
-                // 会重写并落盘，执行内容不受影响。
-                if (!canFallBackToRawWrite(existing)) {
-                    throw new IllegalStateException(
-                            "exec file writeConflictGuard: raw write refused, document loaded (" + f.getName() + ")");
-                }
-                LOG.warn("[M36] exec file doc-write FAILED, fallback to raw write (no loaded document): " + f.getName());
+                // T-ExecDocSync3（第四轮真机复现的收口，20260917 真实 IDE 日志实证）：**VFS 已有
+                // 该文件时一律不裸写盘**。原 T-EC-02 兜底守卫查 getCachedDocument==null 就放行裸写，
+                // 实机证伪——EDT 忙（冷启动/索引，日志同刻可见 DumbService enter dumb mode）时
+                // dispatch 有界等待 2s 超时返回 false，此刻「排队的 EDT 写任务」尚未执行、document
+                // 也还没建，getCachedDocument 恒 null；随之而来的裸写先改盘（12,590），排队任务
+                // 随后 ExecutionException 建出 document（resolver 日志 oldFileStamp:0 = 文档建于文件
+                // 写入之前）并标脏，裸写引发的 VFS 变更落到这个刚建的文档上 →
+                // MemoryDiskConflictResolver「重载 mpsql-exec.sql？」弹窗（12,609），23ms 后文档写入
+                // 才自己落盘（12,613）。即**插件与自己的排队写赛跑**，而非外部改盘。
+                // 宁内容旧一拍：排队任务/later 的 console doc 同步链（attachConsole 后的
+                // prepareAfterEditorResolved、executeOnConsole 执行前 T-EC-01 同款同步）都会重写并
+                // 落盘，执行内容不受影响。附带收益：冷启动 EDT 忙时不再有裸写 → 该场景彻底无冲突面。
+                LOG.warn("[M36] exec doc-write not completed (EDT dispatch timeout/WriteAction failure); "
+                        + "raw write SKIPPED to avoid File Cache Conflict (T-ExecDocSync3): " + f.getName());
+                return f;
             }
+            // VFS 无该条目（首次创建）：不可能存在 document（无 vf 可挂），裸写安全
             com.intellij.openapi.util.io.FileUtil.writeToFile(f, sql);
             return f;
         }
@@ -3067,8 +3644,19 @@ public final class DataSourceSelector {
             // 缓存命中≠内容新鲜：连续预览 SQL 会变，而缓存命中路径不重写文件——只刷新文件
             // 内容（projectExecFile doc 驱动三方同步，vf/psi 身份不变），保证 attachConsole
             // 初始 document 与本条预览 SQL 一致；差量内容比较在 projectExecFile 内部短路。
+            //
+            // T-PreviewConsoleFmt F2 + T-PreviewFast P3：**该文件正被编辑器打开时跳过内容刷新**——
+            // 有人正看着这份内容时预热不得改写（预热写的是「预览原文」裸单行，会盖掉面板渲染进
+            // 控制台的格式化文本；真机 20260917 日志：showSql createEditor len=274/16 行 → prewarm
+            // 原文 → attach 显示 1 行）。判据为「文档已加载且挂了编辑器」——原 `console.getVirtualFile
+            // () === vf` 判据实机从未命中（SKIPPED 计数 0 / refreshed 10），已退役。
+            if (isExecDocOpenInEditor(cachedVf.vf)) {
+                LOG.info("[M36] exec prewarm: cache hit, exec doc open in editor — content refresh SKIPPED (T-PreviewFast P3)");
+                return;
+            }
+            // T-PreviewFast P2：非阻塞派发——预热是投机性写入，没必要让 BGT 等满 2 秒
             try {
-                projectExecFile(project, sql);
+                projectExecFile(project, sql, true);
             } catch (Throwable e) {
                 LOG.warn("[M36] exec prewarm refresh-content failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             }
@@ -3087,6 +3675,45 @@ public final class DataSourceSelector {
         }
     }
 
+    /**
+     * T-PreviewFast P1：exec 文件当前内容是否已等于目标 SQL——差量快路径判据（双源）。
+     *
+     * <p>有已加载 document 时以 <b>document 文本</b>为准（UI/控制台所见即权威，也是落盘会写入的内容）；
+     * 无 document 时读 <b>vf 内容</b>。两者比对失败（异常/不可读）一律返回 false（保守走正常写入路径）。
+     * public 供测试。</p>
+     */
+    public static boolean execFileContentMatches(Project project, VirtualFile vf, String sql) {
+        try {
+            Document doc = FileDocumentManager.getInstance().getCachedDocument(vf);
+            if (doc != null) {
+                return doc.getText().equals(sql);
+            }
+            String disk = new String(vf.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            return disk.equals(sql);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * T-PreviewFast P3：exec 文件是否<b>正被编辑器打开</b>（= 有人正在看这份内容）——预热据此决定
+     * 是否跳过内容刷新。
+     *
+     * <p>取代 T-PreviewConsoleFmt 的 {@code console.getVirtualFile() === vf} 判据：真机实测该等式从未成立
+     * （{@code content refresh SKIPPED} 计数 0 而 {@code content refreshed only} 10 次），预热因此每次仍改写
+     * 文件、与面板回填互相覆盖一轮。改判「该 vf 的文档已加载且挂了编辑器」——语义正是
+     * 「别改用户眼前的内容」，且不依赖 DBN 内部方法。public 供测试。</p>
+     */
+    public static boolean isExecDocOpenInEditor(VirtualFile vf) {
+        try {
+            Document doc = FileDocumentManager.getInstance().getCachedDocument(vf);
+            if (doc == null) return false;
+            return EditorFactory.getInstance().getEditors(doc).length > 0;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     /** {@link #prewarmExecTempFile} 的真实链（已持有 in-flight 标记；仅后台线程调用）。 */
     private static void prewarmExecTempFileInner(Project project, String sql, Logger LOG) {
         lastTempFileFailure = null;
@@ -3099,6 +3726,19 @@ public final class DataSourceSelector {
             return;
         }
         if (ioFile == null) return;
+        // T-ExecDocSync2 F4：refresh 前强制收敛——projectExecFile 的 doc 写在 EDT 落盘后、本
+        // refresh 之前，用户在控制台（document 即 exec 文件 document）键入可插入 modified-unsaved
+        // 态；此时 refresh 命中「doc 已修改 && 磁盘≠文档」即弹 File Cache Conflict（第四轮残余竞态，
+        // 开发计划 §1.3）。findFileByIoFile（与 projectExecFile 内裸调同形态，prewarm DONE 日志
+        // 实证 BGT 可调）命中即过一遍分叉探测 + EDT 派发收敛，正常恒 no-op。
+        try {
+            VirtualFile vf0 = LocalFileSystem.getInstance().findFileByIoFile(ioFile);
+            if (vf0 != null) {
+                syncExecVfContentIfNeeded(project, vf0, sql);
+            }
+        } catch (Throwable e) {
+            LOG.warn("[M36] exec prewarm pre-refresh converge FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
         VirtualFile vf;
         try {
             vf = WriteIntentReadAction.compute(
@@ -3160,12 +3800,27 @@ public final class DataSourceSelector {
         cachedTempPsiFile = new TempPsiFile(vf, psi);
         cachedTempPsiProjectName = project.getName();
         hookProjectClose(project, parentDisposable);
+        // T-ExecDocSync2 F5/F6 挂载点：exec 缓存槽建立即安装防抖自动落盘监听（应用级惰性一次）
+        // 与冲突探针（项目级一次）；非 exec 路径 vf 进不来本方法，路径过滤双保险。
+        // 安装段 runCatching 降级——探针 connect 在无 messageBus 的代理桩项目上 NPE
+        // （CachedTempPsiFileTest 全代理桩实证）；两件均为增强件，失败仅失去防抖落盘
+        // 与冲突取证，不得阻断缓存主链
+        if (isExecVfPath(vf.getPath())) {
+            try {
+                installExecDocAutosaveListener();
+                installExecConflictProbe(project);
+            } catch (Throwable e) {
+                Logger.getInstance(DataSourceSelector.class)
+                        .warn("[M36] exec doc autosave/probe install skipped: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            }
+        }
     }
 
     private static void hookProjectClose(Project project, com.intellij.openapi.Disposable parentDisposable) {
         if (!hookProjectsClose.add(project)) return;
         Disposer.register(parentDisposable, () -> {
             hookProjectsClose.remove(project);
+            conflictProbeProjects.remove(project);
             TempPsiFile cached = cachedTempPsiFile;
             if (cached != null && cached.psi.getProject() == project) {
                 cachedTempPsiFile = null;
@@ -3196,4 +3851,17 @@ public final class DataSourceSelector {
 
     /** T-ExecDocSync 测试缝：置 true 时 {@link #docWriteOnce} 注入失败（测 T-EC-02 守卫拒绝路径；EDT/BGT 两形态统一生效）。 */
     public static boolean execWriteActionFailureInjection = false;
+
+    /** T-PS4-11 测试缝：防抖任务是否在途（未完成）——监听生效/卸载的行为断言点。 */
+    public static boolean execDocAutosaveScheduledForTest() {
+        java.util.concurrent.Future<?> pending = execDocAutosavePending.get();
+        return pending != null && !pending.isDone();
+    }
+
+    /** T-PS4-11 测试缝：取消在途防抖任务并清快判缓存（测试隔离收尾，不触碰宿主挂载态）。 */
+    public static void resetExecDocAutosaveForTest() {
+        java.util.concurrent.Future<?> prev = execDocAutosavePending.getAndSet(null);
+        if (prev != null) prev.cancel(false);
+        lastExecDocRef.set(null);
+    }
 }

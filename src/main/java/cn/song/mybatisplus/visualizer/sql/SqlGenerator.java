@@ -327,6 +327,10 @@ public final class SqlGenerator {
      * {@code delete(Class...)/delete(String...)/deleteAll()} 的删除目标列表非空时渲染
      * {@code DELETE t, t1 FROM 表名 t}（主表别名拼在 FROM 后）+ joins + WHERE。
      * deleteTargets 为空（单表删除）走既有 {@code DELETE FROM 表名} 形态，回归不变。
+     *
+     * <p>O-8（缺陷 C）：{@code last("LIMIT n")} 尾段渲染于语句末尾（MP 语义 MySQL
+     * {@code DELETE ... LIMIT n}）——仅 {@link Dialect#getSupportsDeleteLimit} 为 true 的方言
+     * （MySQL 语法族）输出，PostgreSQL/Oracle 等不支持的方言静默省略（与分页子句方言策略一致）。
      */
     private static String generateDelete(
             DeleteStatement statement,
@@ -351,6 +355,10 @@ public final class SqlGenerator {
             sb.append(nl).append(renderJoin(join, compact, paramSink, hintSink, enabledConditionIds, dialect));
         }
         appendWhere(sb, statement.getConditions(), nl, compact, paramSink, hintSink, enabledConditionIds, statement.getTable(), dialect);
+        // O-8（缺陷 C）：limit 尾段仅在方言支持 DELETE LIMIT 时渲染（MySQL 语法族），其余静默省略
+        if (statement.getLimit() != null && dialect.getSupportsDeleteLimit()) {
+            sb.append(nl).append(dialect.renderLimit(statement.getLimit()));
+        }
         return sb.toString();
     }
 

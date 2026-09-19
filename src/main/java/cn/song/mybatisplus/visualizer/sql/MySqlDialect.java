@@ -25,6 +25,11 @@ public final class MySqlDialect implements Dialect {
     }
 
     @Override
+    public boolean getSupportsDeleteLimit() {
+        return true;
+    }
+
+    @Override
     public String quoteIdentifier(String identifier) {
         return "`" + identifier + "`";
     }

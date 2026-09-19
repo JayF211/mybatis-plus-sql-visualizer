@@ -11,12 +11,14 @@ import cn.song.mybatisplus.visualizer.model.SelectStatement;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.ui.diagram.ColumnEntry;
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModel;
+import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModelKt;
 import cn.song.mybatisplus.visualizer.ui.diagram.EntityNode;
 import cn.song.mybatisplus.visualizer.ui.diagram.RelationshipLine;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -28,17 +30,17 @@ import java.util.stream.Collectors;
  *
  * 将 {@link SelectStatement} 中的 JOIN 关系映射为 {@link DiagramModel}：
  *  - 主表 → 绿色实体（含列信息，PK 标 *）
- *  - JOIN 表 → 蓝色实体
+ *  - JOIN 表 → 蓝色实体（T-DgmFullCols：同为<b>实体整表列</b>口径，参与列补充在后）
  *  - JOIN 类型 → 关系线样式（LEFT/INNER/RIGHT/FULL）
  *  - ON 条件 → 关系线标签
- *  - 列数 > 50 时仅显示主键列（避免图过大）
+ *  - 列数 &gt; DIAGRAM_MAX_COLUMNS 时仅显示主键列（避免图过大；数据源独有列也受此上限约束）
  *
  * 无 JOIN 时返回空模型（调用方据此决定是否展示标签页）。
  */
 public final class JoinDiagramGenerator {
 
-    /** 列数上限：超过此值仅显示主键列。 */
-    private static final int MAX_COLUMNS = 50;
+    /** 列数上限：超过此值仅显示主键列（DIAGRAM_MAX_COLUMNS，与富化器追加口径共用）。 */
+    private static final int MAX_COLUMNS = DiagramModelKt.DIAGRAM_MAX_COLUMNS;
 
     private JoinDiagramGenerator() {}
 
@@ -320,15 +322,22 @@ public final class JoinDiagramGenerator {
 
     /**
      * 提取 JOIN 表的列信息，来源：
-     * 1. selectColumns 中引用该 JOIN 表的列（含 selectAs 映射的列）
+     * 0. <b>T-DgmFullCols：实体整表列</b>（与主表 {@link #pickColumns} 同口径：≤{@link #MAX_COLUMNS} 全画、
+     *    超限仅键列）——此前 JOIN 表只画「SELECT 引用列 + ON 列 + fill 列」，通常就一两个 join key，
+     *    与主表"整表口径"不对称，观感也和 IDEA Database 原生「显示图」差得远
+     * 1. selectColumns 中引用该 JOIN 表的列（含 selectAs 映射的列）——补充实体里没有的列
      * 2. ON 条件中引用该 JOIN 表的列
      * 3. FillClause 中该 JOIN 表的 selectColumns
      *
-     * 类型解析优先级：ColumnRef.type (selectAs) > tableInfo 字段推断 > null
+     * 类型解析优先级：ColumnRef.type (selectAs) &gt; tableInfo 字段推断 &gt; null
+     *
+     * 隐患修复（T-Embed-07 同源）：列引用的 tableAlias 是转换器原始别名（MPJ 类名小驼峰如
+     * `stationInfoEntity`），而 joinAlias 是 sanitize/去重后的显示别名（如 `t1`）——
+     * 二者取并集匹配，否则 JOIN 表列全部落空（ON 标签因走 aliasMap 映射而正常，更具迷惑性）。
      */
     private static List<ColumnEntry> extractJoinColumns(JoinClause join, String joinAlias, SelectStatement stmt) {
-        List<ColumnEntry> columns = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
+        // 有序去重表：键=列名，值=已合并的列（顺序即渲染顺序，实体列先入故排在前）
+        Map<String, ColumnEntry> byName = new LinkedHashMap<>();
         // T-Embed-07（真机缺陷修复）：列引用的 tableAlias 是转换器原始别名（MPJ 类名小驼峰如
         // `stationInfoEntity`），而 joinAlias 是 sanitize/去重后的显示别名（如 `t1`）——
         // 二者取并集匹配，否则 JOIN 表列全部落空（ON 标签因走 aliasMap 映射而正常，更具迷惑性）。
@@ -336,14 +345,33 @@ public final class JoinDiagramGenerator {
         if (joinAlias != null && !joinAlias.isBlank()) acceptedAliases.add(joinAlias);
         if (join.getAlias() != null && !join.getAlias().isBlank()) acceptedAliases.add(join.getAlias());
 
+        // 0. T-DgmFullCols：实体整表列（无实体信息时跳过——字符串 join / 类名兜底场景仍只画参与列，
+        //    数据源独有列由 DiagramSchemaEnricher 按表名追加）
+        TableInfo joinTableInfo = join.getTableInfo();
+        if (joinTableInfo != null && joinTableInfo.getColumns() != null) {
+            List<ColumnInfo> all = joinTableInfo.getColumns();
+            List<ColumnInfo> picked;
+            if (all.size() <= MAX_COLUMNS) {
+                picked = all;
+            } else {
+                picked = new ArrayList<>();
+                for (ColumnInfo c : all) {
+                    if (c.isId()) picked.add(c);
+                }
+            }
+            for (ColumnInfo col : picked) {
+                put(byName, col.getColumnName(), javaTypeToSqlType(col.getFieldType()), col.getComment(),
+                        col.isId(), false);
+            }
+        }
+
         // 1. From selectColumns (includes selectAs results, with type from ColumnRef.type)
         for (ColumnRef col : stmt.getSelectColumns()) {
-            if (acceptedAliases.contains(col.getTableAlias()) && !seen.contains(col.getColumnName())) {
-                seen.add(col.getColumnName());
+            if (acceptedAliases.contains(col.getTableAlias())) {
                 String sqlType = javaTypeToSqlType(col.getType());
-                if (sqlType == null) sqlType = sqlTypeFromTable(join, col.getColumnName());
-                columns.add(new ColumnEntry(col.getColumnName(), sqlType, false,
-                        commentFromTable(join, col.getColumnName())));
+                put(byName, col.getColumnName(),
+                        sqlType != null ? sqlType : sqlTypeFromTable(join, col.getColumnName()),
+                        commentFromTable(join, col.getColumnName()), false, sqlType != null);
             }
         }
 
@@ -351,18 +379,14 @@ public final class JoinDiagramGenerator {
         for (Condition cond : join.getOnConditions()) {
             if (cond instanceof Condition.ColumnComparison cc) {
                 ColumnRef right = cc.getRight();
-                if (acceptedAliases.contains(right.getTableAlias()) && !seen.contains(right.getColumnName())) {
-                    seen.add(right.getColumnName());
-                    columns.add(new ColumnEntry(right.getColumnName(),
-                            sqlTypeFromTable(join, right.getColumnName()), false,
-                            commentFromTable(join, right.getColumnName())));
+                if (acceptedAliases.contains(right.getTableAlias())) {
+                    put(byName, right.getColumnName(), sqlTypeFromTable(join, right.getColumnName()),
+                            commentFromTable(join, right.getColumnName()), false, false);
                 }
                 ColumnRef left = cc.getLeft();
-                if (acceptedAliases.contains(left.getTableAlias()) && !seen.contains(left.getColumnName())) {
-                    seen.add(left.getColumnName());
-                    columns.add(new ColumnEntry(left.getColumnName(),
-                            sqlTypeFromTable(join, left.getColumnName()), false,
-                            commentFromTable(join, left.getColumnName())));
+                if (acceptedAliases.contains(left.getTableAlias())) {
+                    put(byName, left.getColumnName(), sqlTypeFromTable(join, left.getColumnName()),
+                            commentFromTable(join, left.getColumnName()), false, false);
                 }
             }
         }
@@ -373,18 +397,44 @@ public final class JoinDiagramGenerator {
             for (FillClause fill : fills) {
                 if (joinAlias.equals(fill.getChildAlias())) {
                     for (ColumnRef col : fill.getSelectColumns()) {
-                        if (!seen.contains(col.getColumnName())) {
-                            seen.add(col.getColumnName());
-                            columns.add(new ColumnEntry(col.getColumnName(),
-                                    sqlTypeFromTable(join, col.getColumnName()), false,
-                                    commentFromTable(join, col.getColumnName())));
-                        }
+                        put(byName, col.getColumnName(), sqlTypeFromTable(join, col.getColumnName()),
+                                commentFromTable(join, col.getColumnName()), false, false);
                     }
                 }
             }
         }
 
-        return columns;
+        return new ArrayList<>(byName.values());
+    }
+
+    /**
+     * 写入/合并一列。同名冲突逐维度合并且不降级：
+     * <ul>
+     *  <li>type：T-DgmFullCols 保序后 overrideType 用于保住原优先级「ColumnRef.type (selectAs) &gt;
+     *      tableInfo 字段推断」——selectAs 的显式类型必须能覆盖实体推断值，否则实体的空类型会把
+     *      已知类型顶掉（回归实证：s03_lambdaJoin 的 VARCHAR 变 null）</li>
+     *  <li>comment：已有优先（都来自实体，取先到者）</li>
+     *  <li>isPk：任一为真即真（实体是唯一 PK 来源，引用侧恒 false）</li>
+     * </ul>
+     */
+    private static void put(Map<String, ColumnEntry> byName, String name, String type, String comment,
+                            boolean isPk, boolean overrideType) {
+        ColumnEntry current = byName.get(name);
+        if (current == null) {
+            byName.put(name, new ColumnEntry(name, type, isPk, comment));
+        } else {
+            byName.put(name, new ColumnEntry(
+                    name,
+                    overrideType ? (type != null ? type : current.type) : (current.type != null ? current.type : type),
+                    current.isPk || isPk,
+                    current.comment != null ? current.comment : comment));
+        }
+    }
+
+    /** {@link #put} 的默认形态（overrideType=false，实体/引用侧先入列）。 */
+    private static void put(Map<String, ColumnEntry> byName, String name, String type, String comment,
+                            boolean isPk) {
+        put(byName, name, type, comment, isPk, false);
     }
 
     /** 按列名从 JOIN 表的 tableInfo 推断 SQL 类型。 */

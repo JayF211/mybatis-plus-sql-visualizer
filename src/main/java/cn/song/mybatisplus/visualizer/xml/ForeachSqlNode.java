@@ -207,6 +207,11 @@ public final class ForeachSqlNode implements SqlNode {
         }
 
         @Override
+        public void countDollarSubstitution() {
+            delegate.countDollarSubstitution();
+        }
+
+        @Override
         public int getUniqueNumber() {
             return delegate.getUniqueNumber();
         }
@@ -273,6 +278,11 @@ public final class ForeachSqlNode implements SqlNode {
         @Override
         public void bind(String name, Object value) {
             delegate.bind(name, value);
+        }
+
+        @Override
+        public void countDollarSubstitution() {
+            delegate.countDollarSubstitution();
         }
 
         @Override

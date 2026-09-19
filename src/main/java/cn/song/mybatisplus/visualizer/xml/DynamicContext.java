@@ -39,6 +39,14 @@ public class DynamicContext {
     /** 渲染期错误提示（如 foreach collection 为 null 且 nullable=false、表达式解析失败）。 */
     private final List<String> errors = new ArrayList<>();
 
+    /**
+     * ${} 直替计数（T-DollarInjectMark）：TextSqlNode 每求值一个 ${} token 经
+     * {@link #countDollarSubstitution()} 自增——引擎忠实口径（MyBatis 对字符串字面量内的 ${}
+     * 同样直替，计数不排除）；转义 \${ 不经求值不计。渲染结束随
+     * RenderedXmlSql.dollarSubstitutions 出栈，预览横幅消费。
+     */
+    private int dollarSubstitutions = 0;
+
     private final StringBuilder sqlBuilder = new StringBuilder();
     private int uniqueNumber = 0;
 
@@ -66,6 +74,16 @@ public class DynamicContext {
     /** 渲染期错误列表。 */
     public List<String> getErrors() {
         return errors;
+    }
+
+    /** ${} 直替计数（T-DollarInjectMark，Kotlin {@code protected set}：外部只读，经计数入口自增）。 */
+    public int getDollarSubstitutions() {
+        return dollarSubstitutions;
+    }
+
+    /** 直替计数入口：子类过滤上下文（Foreach 的 Prefixed/Filtered）转发到 delegate，计数落根上下文。 */
+    public void countDollarSubstitution() {
+        dollarSubstitutions++;
     }
 
     /** 追加 SQL 段（段间单个空格；空段不产生分隔）。 */

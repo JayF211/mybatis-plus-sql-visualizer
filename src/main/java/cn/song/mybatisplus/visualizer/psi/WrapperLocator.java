@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperCall;
 import cn.song.mybatisplus.visualizer.model.WrapperChain;
 import cn.song.mybatisplus.visualizer.model.WrapperType;
 import cn.song.mybatisplus.visualizer.util.NamingStrategy;
+import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.TextRange;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiClassObjectAccessExpression;
@@ -364,15 +365,72 @@ public final class WrapperLocator {
      * <p>降级必须限定基类型（T-M15-01 回归）：{@code long total = service.lambdaQuery()...count()} 的 total
      * 类型不是 Wrapper 基类，若仅按 initializer 链首判断会被误判为 wrapper 变量（链被截断、table 为 null）。</p>
      *
+     * <p>O-8（缺陷 A）：{@code var} 声明（LightPlatform 下类型推断不可靠，常落 Object/未知类型）——
+     * initializer 链头为 wrapper 构造/工厂 <b>且链上无终结消费方法</b> 时接受为 wrapper 变量，
+     * 使 var 形态走变量路径（ReferencesSearch 消费检测天然生效：{@code service.remove(w)} 等不再整体丢失）。
+     * 终结点黑名单守卫（{@link #initializerIsWrapperChainWithoutTerminal}，单一来源 {@link #CHAIN_TERMINAL_METHOD_NAMES}）
+     * 保住 T-M15-01/T-M19.5 反向语义：{@code var d = service.lambdaQuery()...one()} 的结果变量仍被拒绝。</p>
+     *
      * <p>M19.5（T-M19.5-01a）起为 internal（Java public static）：供 {@link WrapperAnchorDetector} 复用
      * （结果变量赋值形态不应抑制服务链锚点，见 20260813-1536 开发计划）。判定为 O(1) 纯语法
      * （文本匹配 + initializer 链首回溯，无 resolve），符合 M10 性能红线。</p>
      */
     public static boolean isWrapperVariable(PsiVariable variable) {
         if (detectWrapperType(variable.getType()) != null) return true;
+        // var 声明的语法判定走 typeElement 文本（不依赖 getType() 推断成败，O(1) 纯文本）；
+        // var 仅限局部变量，字段/形参不可能命中
+        if (variable instanceof PsiLocalVariable) {
+            PsiElement typeElement = ((PsiLocalVariable) variable).getTypeElement();
+            if (typeElement != null && "var".equals(typeElement.getText())) {
+                return initializerIsWrapperChainWithoutTerminal(variable.getInitializer());
+            }
+        }
         String typeName = variable.getType() instanceof PsiClassType ? ((PsiClassType) variable.getType()).getClassName() : null;
         if (typeName == null || !WRAPPER_BASE_TYPE_NAMES.contains(typeName)) return false;
         return detectWrapperTypeFromInitializer(variable.getInitializer()) != null;
+    }
+
+    /**
+     * O-8（缺陷 A）：从 initializer 链头推断 Wrapper 类型（var 推断形态专用，仅 {@link #buildChain} 的
+     * var 分支调用，不改变非 var 声明的既有判定）。
+     * 与 {@link #detectWrapperTypeFromInitializer} 的差异：<b>工厂调用自身即链首</b>——
+     * {@code Wrappers.<Device>query().eq(...)} 沿 qualifier 回溯的终点是 Wrappers 引用（非调用/new），
+     * 原实现落 {@code else -> null} 恒不识别工厂链头；本实现取链上<b>最后一次调用</b>为链首候选
+     * （isWrapperFactoryCall 门控，与 {@link #findWrapperFactoryCall} 同一判定），new 构造链头同 {@link #detectWrapperTypeFromInitializer}。
+     */
+    private static WrapperType wrapperTypeFromInitializerChain(PsiElement init) {
+        if (init == null) return null;
+        PsiElement expr = init;
+        PsiMethodCallExpression lastCall = null;
+        while (expr instanceof PsiMethodCallExpression) {
+            lastCall = (PsiMethodCallExpression) expr;
+            expr = lastCall.getMethodExpression().getQualifierExpression();
+        }
+        if (expr instanceof PsiNewExpression) {
+            return detectWrapperType(((PsiNewExpression) expr).getType());
+        }
+        if (lastCall != null && isWrapperFactoryCall(lastCall)) {
+            return factoryWrapperType(lastCall);
+        }
+        return null;
+    }
+
+    /**
+     * initializer 是否为「无终结消费方法」的 wrapper 构造/工厂链（O-8 缺陷 A 接受门）：
+     * 链头经 {@link #wrapperTypeFromInitializerChain} 判为 wrapper，且链上任一调用都不在
+     * {@link #CHAIN_TERMINAL_METHOD_NAMES}（one/list/count/remove 等消费终结点）——
+     * 链含终结点即为消费结果赋值（{@code var d = service.lambdaQuery()...one()}），不是 wrapper 变量。
+     */
+    private static boolean initializerIsWrapperChainWithoutTerminal(PsiElement init) {
+        if (init == null) return false;
+        PsiElement expr = init;
+        while (expr instanceof PsiMethodCallExpression) {
+            PsiMethodCallExpression call = (PsiMethodCallExpression) expr;
+            String referenceName = call.getMethodExpression().getReferenceName();
+            if (referenceName != null && CHAIN_TERMINAL_METHOD_NAMES.contains(referenceName)) return false;
+            expr = call.getMethodExpression().getQualifierExpression();
+        }
+        return wrapperTypeFromInitializerChain(init) != null;
     }
 
     /** Wrapper 抽象基类型（基类型声明降级仅限这两类，见 {@link #isWrapperVariable}）。 */
@@ -460,7 +518,8 @@ public final class WrapperLocator {
         PsiClass resolvedEntity = info.entityClass != null ? info.entityClass : entityFromArg;
         String typeArgName = info.typeArgName != null ? info.typeArgName
             : (resolvedEntity != null ? resolvedEntity.getName() : null);
-        TableInfo table = resolveTableInfo(resolvedEntity, typeArgName);
+        // T-TS-07：兜底推断显式传本 new 表达式所属项目（多项目同开时不再受「首个打开项目」影响）
+        TableInfo table = resolveTableInfo(resolvedEntity, typeArgName, newExpr.getProject());
         String constructorAlias = extractConstructorAlias(newExpr);
 
         // 宿主 = 包含该 new 表达式的最外层表达式（如 list(new W().select(...).eq(...)) 的整个调用）
@@ -546,7 +605,8 @@ public final class WrapperLocator {
         if (wrapperType == null) return null;
         // 实体类优先取显式类型实参（`Wrappers.<MerchantEntity>lambdaQuery()`），失败时用类名按命名策略兜底；
         // 服务链（`service.lambdaQuery()`，无类型实参）回退到调用表达式返回类型（LambdaQueryChainWrapper<T>），
-        // 仍失败时从链内首个「首参方法引用」推断（T-M15-01）
+        // 仍失败时从链内首个「首参方法引用」推断（T-M15-01）；
+        // O-8（缺陷 B）第三通道：服务链 qualifier 变量的服务类型泛型实参（`DeviceService extends IService<Device>`）
         PsiType[] typeArguments = factoryCall.getTypeArguments();
         PsiClassType typeArg = typeArguments.length > 0 && typeArguments[0] instanceof PsiClassType
             ? (PsiClassType) typeArguments[0] : null;
@@ -569,14 +629,18 @@ public final class WrapperLocator {
                 if (entityClass == null) {
                     entityClass = entityClassFromFactoryArgs(factoryCall);
                 }
+                if (entityClass == null) {
+                    entityClass = entityClassFromServiceQualifier(factoryCall);
+                }
             }
         }
         String typeArgName = typeArg != null ? typeArg.getClassName() : null;
         // XB（M44）：xbatis 链实体解析——xbatis @Table 注解实体走 JpaEntityResolver
         // （@Table value / @TableField / @TableId / @Ignore 轨），MP 兼容注解实体走既有 MP EntityResolver
+        // T-TS-07：兜底推断显式传工厂调用所属项目（多项目同开时不再受「首个打开项目」影响）
         TableInfo table = wrapperType == WrapperType.XBATIS
-                ? resolveTableInfoForXbatis(entityClass, typeArgName)
-                : resolveTableInfo(entityClass, typeArgName);
+                ? resolveTableInfoForXbatis(entityClass, typeArgName, factoryCall.getProject())
+                : resolveTableInfo(entityClass, typeArgName, factoryCall.getProject());
         if (table == null) {
             table = inferEntityFromChain(factoryCall);
         }
@@ -657,7 +721,67 @@ public final class WrapperLocator {
             ? table.getEntityClassName() : (entityClass != null ? entityClass.getName() : null);
         WrapperChain chain = new WrapperChain(wrapperType, entityName, wrapperCalls, null,
             deleteConsumed, countConsumed, existsConsumed, updateEntityConsumed, pageLimit);
-        return new LocatedWrapper(chain, table, entityClass != null ? entityClass.getContainingFile() : null);
+
+        // O-8（缺陷 B）：字符串服务链实体解析失败标记（preview 侧显式降级，不再静默 null）——
+        // 仅服务链形态（接收者非静态工厂类：Wrappers/ChainWrappers/MPJ/Db 解析为 PsiClass 排除，
+        // this/无 qualifier 服务链同按服务链计），工厂形态维持既有 null 语义
+        PsiElement qualifierResolve = factoryCall.getMethodExpression().getQualifierExpression() instanceof PsiReferenceExpression
+            ? ((PsiReferenceExpression) factoryCall.getMethodExpression().getQualifierExpression()).resolve() : null;
+        String factoryRefName = factoryCall.getMethodExpression().getReferenceName();
+        boolean serviceChainEntityUnresolved = table == null
+            && factoryRefName != null && SERVICE_CHAIN_METHOD_NAMES.contains(factoryRefName)
+            && !(qualifierResolve instanceof PsiClass);
+
+        return new LocatedWrapper(chain, table, entityClass != null ? entityClass.getContainingFile() : null,
+            serviceChainEntityUnresolved);
+    }
+
+    /**
+     * O-8（缺陷 B）第三通道：服务链 qualifier 变量的服务类型泛型实参 → 实体 PsiClass。
+     * {@code service.query()} 的 service 引用 resolve 到变量 → 其类型（{@code DeviceService}）→
+     * 父接口/父类泛型实参（{@code IService<Device>}）→ 实体。真实 PSI 解析，LightPlatform 可测
+     * （fixture 内声明 {@code interface IService<T>} 与 {@code interface DeviceService extends IService<Device>} 桩即可）。
+     *
+     * <p>实体取<b>末位</b>泛型实参：MP 惯例实体在末位（{@code IService<T>} 单参、{@code ServiceImpl<M, T>} 双参，
+     * 首参可能是 Mapper）；类型自身已有泛型实参（{@code IService<Device> service} 形态）时优先。
+     * PsiTypeParameter 守卫（宁可不识别不出错表），全失败返回 null 交由降级/推断链兜底。</p>
+     */
+    private static PsiClass entityClassFromServiceQualifier(PsiMethodCallExpression factoryCall) {
+        PsiExpression qualifier = factoryCall.getMethodExpression().getQualifierExpression();
+        if (!(qualifier instanceof PsiReferenceExpression)) return null;
+        PsiElement resolved = ((PsiReferenceExpression) qualifier).resolve();
+        if (!(resolved instanceof PsiVariable)) return null;
+        PsiType serviceTypeRaw = ((PsiVariable) resolved).getType();
+        if (!(serviceTypeRaw instanceof PsiClassType)) return null;
+        PsiClassType serviceType = (PsiClassType) serviceTypeRaw;
+        PsiClass serviceClass = serviceType.resolve();
+        if (serviceClass == null) return null;
+        // ① 服务类型自身泛型实参（`IService<Device> service` 参数直以接口类型声明）
+        PsiClass selfEntity = lastEntityOf(serviceType);
+        if (selfEntity != null) return selfEntity;
+        // ② 父接口/父类泛型实参（`DeviceService extends IService<Device>`，接口 extends 与类 implements 皆扫）
+        List<PsiClassType> supers = new ArrayList<>();
+        if (serviceClass.getExtendsList() != null) {
+            for (PsiClassType t : serviceClass.getExtendsList().getReferencedTypes()) supers.add(t);
+        }
+        if (serviceClass.getImplementsList() != null) {
+            for (PsiClassType t : serviceClass.getImplementsList().getReferencedTypes()) supers.add(t);
+        }
+        for (PsiClassType superType : supers) {
+            PsiClass entity = lastEntityOf(superType);
+            if (entity != null) return entity;
+        }
+        return null;
+    }
+
+    /** Kotlin 局部函数 lastEntityOf：类型末位泛型实参 → 实体 PsiClass（PsiTypeParameter 守卫）。 */
+    private static PsiClass lastEntityOf(PsiClassType type) {
+        PsiType[] parameters = type.getParameters();
+        if (parameters.length == 0) return null;
+        PsiType last = parameters[parameters.length - 1];
+        if (!(last instanceof PsiClassType)) return null;
+        PsiClass resolved = ((PsiClassType) last).resolve();
+        return resolved instanceof com.intellij.psi.PsiTypeParameter ? null : resolved;
     }
 
     /**
@@ -722,6 +846,8 @@ public final class WrapperLocator {
         }
 
         // 文本兜底：类名推断表名（走统一推断策略 + 修饰链，T-M19.4 全局语义）+ getter 属性列（与既有命名策略兜底一致）
+        // T-TS-07：显式传宿主表达式所属项目——多项目同开且项目级表配置不同时，兜底推断不再
+        // 受「首个打开项目」影响（宿主是 PSI，project 必可得）
         LinkedHashSet<String> distinctProps = new LinkedHashSet<>();
         for (String[] ref : refs) distinctProps.add(ref[1]);
         List<ColumnInfo> columns = new ArrayList<>();
@@ -729,7 +855,7 @@ public final class WrapperLocator {
             columns.add(new ColumnInfo(prop, NamingStrategy.INSTANCE.toSnakeCase(prop),
                 false, false, null, null, null, null));
         }
-        return new TableInfo(className, EntityResolver.inferDecoratedTableName(className),
+        return new TableInfo(className, EntityResolver.inferDecoratedTableName(className, host.getProject()),
             columns, null, null, null, List.of());
     }
 
@@ -975,15 +1101,31 @@ public final class WrapperLocator {
      * </ul>
      */
     private static LocatedWrapper buildChain(PsiVariable variable, boolean resolveVariables) {
-        // 基类型声明降级：类型不是具体 Wrapper 时从初始化表达式链首推断（`Wrapper<X> w = new LambdaQueryWrapper<X>()...`）
+        // 基类型声明降级：类型不是具体 Wrapper 时从初始化表达式链首推断（`Wrapper<X> w = new LambdaQueryWrapper<X>()...`）；
+        // O-8（缺陷 A）：var 推断形态（typeElement 文本 "var"）工厂链头原实现不识别，补第三顺位
+        PsiElement varTypeElement = variable instanceof PsiLocalVariable
+            ? ((PsiLocalVariable) variable).getTypeElement() : null;
+        boolean isVarDeclaration = varTypeElement != null && "var".equals(varTypeElement.getText());
         WrapperType wrapperType = detectWrapperType(variable.getType());
         if (wrapperType == null) wrapperType = detectWrapperTypeFromInitializer(variable.getInitializer());
+        if (wrapperType == null && isVarDeclaration) wrapperType = wrapperTypeFromInitializerChain(variable.getInitializer());
         if (wrapperType == null) return null;
+        // O-8（缺陷 A）：var/推断形态声明类型不可识别 → 泛型实参解析不到实体，
+        // 从 initializer 链头补实体解析（`var w = Wrappers.<Device>query()` 显式类型实参 /
+        // `var w = new QueryWrapper<Device>()` 构造类型），与工厂路径实体解析同源
         EntityInfo info = entityInfoFromType(variable.getType());
+        PsiClass entityClass = info.entityClass;
+        String typeArgName = info.typeArgName;
+        if (entityClass == null && typeArgName == null && detectWrapperType(variable.getType()) == null) {
+            EntityInfo initInfo = entityInfoFromInitializerChain(variable.getInitializer());
+            entityClass = initInfo.entityClass;
+            typeArgName = initInfo.typeArgName;
+        }
         // XB（M44）：xbatis 变量声明形态实体解析与工厂形态同轨（xbatis @Table → JpaEntityResolver）
+        // T-TS-07：兜底推断显式传变量所属项目（多项目同开时不再受「首个打开项目」影响）
         TableInfo table = wrapperType == WrapperType.XBATIS
-                ? resolveTableInfoForXbatis(info.entityClass, info.typeArgName)
-                : resolveTableInfo(info.entityClass, info.typeArgName);
+                ? resolveTableInfoForXbatis(entityClass, typeArgName, variable.getProject())
+                : resolveTableInfo(entityClass, typeArgName, variable.getProject());
         String constructorAlias = extractConstructorAlias(variable.getInitializer());
 
         // (调用, 逻辑顺序锚点) 对；锚点=所属主链调用的 endOffset
@@ -1385,14 +1527,17 @@ public final class WrapperLocator {
      * XB（M44）：xbatis 链实体表解析。实体类标注 xbatis @Table → JpaEntityResolver
      * （@Table value / @TableField / @TableId / @Ignore 轨）；MP 兼容注解（@TableName）实体
      * → 既有 MP EntityResolver。实体类缺失时类型参数类名按命名策略兜底（与 resolveTableInfo 一致）。
+     *
+     * @param project 调用方 PSI 元素所属项目（T-TS-07）；null = 未提供，兜底推断沿用
+     *                「首个打开项目」的既有语义（纯单测/无 PSI 上下文）
      */
-    private static TableInfo resolveTableInfoForXbatis(PsiClass entityClass, String typeArgName) {
+    private static TableInfo resolveTableInfoForXbatis(PsiClass entityClass, String typeArgName, Project project) {
         // PsiTypeParameter 守卫：变量声明 `QueryChain<T>` 等未推断泛型场景下实体解析到类型形参，
         // 不可作实体（推断表名 "t"、列清单空——宁缺不可错）
         if (entityClass == null || entityClass instanceof com.intellij.psi.PsiTypeParameter) {
             String name = typeArgName;
             if (name == null || (entityClass != null && name.equals(entityClass.getName()))) return null;
-            return new TableInfo(name, cn.song.mybatisplus.visualizer.psi.EntityResolver.inferDecoratedTableName(name),
+            return new TableInfo(name, EntityResolver.inferDecoratedTableName(name, project),
                     List.of());
         }
         if (cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader.findFlex(entityClass,
@@ -1400,6 +1545,11 @@ public final class WrapperLocator {
             return new cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver().resolve(entityClass);
         }
         return new EntityResolver().resolve(entityClass);
+    }
+
+    /** Kotlin 默认参数等价重载：{@code resolveTableInfoForXbatis(entityClass, typeArgName)}（project = null）。 */
+    private static TableInfo resolveTableInfoForXbatis(PsiClass entityClass, String typeArgName) {
+        return resolveTableInfoForXbatis(entityClass, typeArgName, null);
     }
 
     // ------------------------------------------------------------------
@@ -1651,14 +1801,59 @@ public final class WrapperLocator {
     }
 
     /**
+     * O-8（缺陷 A）：从 initializer 链头解析 (实体类, 类型参数类名)——var/推断形态变量声明类型
+     * 无泛型实参可取。链头是 wrapper 构造（{@code new QueryWrapper<Device>()}）时取构造类型泛型；
+     * 链头是工厂调用（{@code Wrappers.<Device>query()}）时取显式类型实参——链首候选为链上<b>最后一次调用</b>
+     * （qualifier 回溯终点是引用，工厂调用自身即链首，同 {@link #wrapperTypeFromInitializerChain}），
+     * 解析顺位与 {@link #buildChainFromFactory} 同源（显式类型实参 → Class 字面量实参 → 调用返回类型）。
+     */
+    private static EntityInfo entityInfoFromInitializerChain(PsiElement init) {
+        if (init == null) return new EntityInfo(null, null);
+        PsiElement expr = init;
+        PsiMethodCallExpression lastCall = null;
+        while (expr instanceof PsiMethodCallExpression) {
+            lastCall = (PsiMethodCallExpression) expr;
+            expr = lastCall.getMethodExpression().getQualifierExpression();
+        }
+        if (expr instanceof PsiNewExpression) {
+            return entityInfoFromType(((PsiNewExpression) expr).getType());
+        }
+        if (lastCall != null) {
+            PsiType[] typeArguments = lastCall.getTypeArguments();
+            PsiClassType typeArg = typeArguments.length > 0 && typeArguments[0] instanceof PsiClassType
+                ? (PsiClassType) typeArguments[0] : null;
+            PsiClass resolvedTypeArg = typeArg != null ? typeArg.resolve() : null;
+            PsiClass entityClass;
+            if (resolvedTypeArg != null && !(resolvedTypeArg instanceof com.intellij.psi.PsiTypeParameter)) {
+                entityClass = resolvedTypeArg;
+            } else {
+                entityClass = entityClassFromFactoryArgs(lastCall);
+                if (entityClass == null) {
+                    entityClass = resolveEntityClass(lastCall.getType());
+                }
+            }
+            return new EntityInfo(entityClass, typeArg != null ? typeArg.getClassName() : null);
+        }
+        return new EntityInfo(null, null);
+    }
+
+    /**
      * 解析实体表信息；实体类不可解析时，用类型参数类名按命名策略推断表名
      * （列名由 getter → 命名策略兜底，见 {@link ArgResolver} 的 lambda 列解析）。
      * T-M19.4：兜底推断走统一入口（策略 + 修饰链，全局语义，与 {@link EntityResolver#resolve} 一致）。
+     *
+     * @param project 调用方 PSI 元素所属项目（T-TS-07）；null = 未提供，兜底推断沿用
+     *                「首个打开项目」的既有语义（纯单测/无 PSI 上下文）
      */
-    private static TableInfo resolveTableInfo(PsiClass entityClass, String typeArgName) {
+    private static TableInfo resolveTableInfo(PsiClass entityClass, String typeArgName, Project project) {
         if (entityClass != null) return new EntityResolver().resolve(entityClass);
         if (typeArgName == null) return null;
-        return new TableInfo(typeArgName, EntityResolver.inferDecoratedTableName(typeArgName),
+        return new TableInfo(typeArgName, EntityResolver.inferDecoratedTableName(typeArgName, project),
             List.of(), null, null, null, List.of());
+    }
+
+    /** Kotlin 默认参数等价重载：{@code resolveTableInfo(entityClass, typeArgName)}（project = null）。 */
+    private static TableInfo resolveTableInfo(PsiClass entityClass, String typeArgName) {
+        return resolveTableInfo(entityClass, typeArgName, null);
     }
 }

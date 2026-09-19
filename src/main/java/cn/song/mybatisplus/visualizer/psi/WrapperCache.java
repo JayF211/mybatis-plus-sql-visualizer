@@ -2,16 +2,17 @@ package cn.song.mybatisplus.visualizer.psi;
 
 import com.intellij.psi.PsiFile;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
 /**
  * Wrapper 解析缓存（F-20）：按 PsiFile + 锚点偏移 + modificationStamp 缓存解析结果。
  *
- * <p>目的：光标悬停/快捷键/图标点击高频触发时避免重复做 PSI 引用搜索（ReferencesSearch 较重）。
+ * <p>目的：光标悬停/快捷键/图标点击高频触发时避免重复做 PSI 引用搜索（ReferencesSearch 较重）。</p>
  *
- * <p>策略：
+ * <p>策略：</p>
  * <ul>
  *   <li>键为「PsiFile + 锚点元素起始偏移」——定位结果<b>依赖锚点</b>（同一文件可含多个 Wrapper，
  *       如查询 + 删除 + 修改，各自锚点定位到各自的调用链），只按文件缓存会让后续锚点
@@ -24,8 +25,20 @@ import java.util.function.Supplier;
  *       {@code cn.song.mybatisplus.visualizer.ui.SqlPreviewService#previewAsync}
  *       在后台线程 + EDT 并发调用）</li>
  * </ul>
+ *
+ * <p>T-PerfTail #1：容量上界与淘汰——原实现无容量上限（条目仅随用户显式「清除缓存」消失，极端
+ * 长会话 + 大量不同锚点场景条目无界增长），改为 LRU 缓存：{@code LinkedHashMap(accessOrder=true)} +
+ * {@code removeEldestEntry} 按<b>访问序</b>淘汰最旧条目，{@code Collections.synchronizedMap} 包装保持线程安全
+ * （accessOrder 下读也会改链表结构，包装器逐方法互斥保证）。三维修失效机制（文件
+ * modificationStamp + resolveVariables 开关 + 表配置签名）不动；{@link #clear} 行为不变（设置页
+ * 「清除缓存」入口不受影响）。</p>
  */
 public class WrapperCache {
+
+    /** T-PerfTail #1：默认容量上限（LRU 淘汰）。 */
+    public static final int DEFAULT_MAX_ENTRIES = 512;
+
+    private final int maxEntries;
 
     /**
      * 缓存键：文件 + 锚点偏移 + 配置维度（同文件不同锚点独立缓存；解析开关/表配置变化也独立缓存）。
@@ -83,8 +96,24 @@ public class WrapperCache {
         }
     }
 
-    /** 键 → 条目。 */
-    private final ConcurrentHashMap<CacheKey, Entry> cache = new ConcurrentHashMap<>();
+    /** 键 → 条目（LRU：按访问序淘汰最旧；逐方法互斥，线程安全）。 */
+    private final Map<CacheKey, Entry> cache = java.util.Collections.synchronizedMap(
+            new LinkedHashMap<>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<CacheKey, Entry> eldest) {
+                    return size() > maxEntries;
+                }
+            }
+    );
+
+    /** Kotlin 默认参数等价重载：{@code maxEntries} 缺省 {@link #DEFAULT_MAX_ENTRIES}。 */
+    public WrapperCache() {
+        this(DEFAULT_MAX_ENTRIES);
+    }
+
+    public WrapperCache(int maxEntries) {
+        this.maxEntries = maxEntries;
+    }
 
     /**
      * 获取或计算缓存。
@@ -116,6 +145,17 @@ public class WrapperCache {
         T value = compute.get();
         cache.put(key, new Entry(stamp, value));
         return value;
+    }
+
+    /**
+     * T-PerfTail #1：按文件 URL 清理该文件全部条目（编辑器关闭回调触发——长会话中关闭文件
+     * 即回收其全部锚点缓存，条目数随打开文件集有界）。fileUrl 为 null 的键（mock/light 文件）
+     * 无法按文件定位，靠 modificationStamp 维度自然失效。
+     */
+    public void evictFile(String fileUrl) {
+        synchronized (cache) {
+            cache.keySet().removeIf(key -> Objects.equals(key.fileUrl, fileUrl));
+        }
     }
 
     /** 清空缓存（文件关闭/项目关闭时调用）。 */

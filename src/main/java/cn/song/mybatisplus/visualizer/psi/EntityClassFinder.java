@@ -138,7 +138,11 @@ public class EntityClassFinder {
                 String className = clazz.getName();
                 if (className == null) continue;
                 String annotated = tableNameAnnotation(clazz);
-                String resolvedTable = annotated != null ? annotated : EntityResolver.inferDecoratedTableName(className);
+                // T-TS-07：显式传候选类所属项目（= 本 finder 的项目，scope 亦为 projectScope）——
+                // 反查表名的兜底推断不再受「首个打开项目」影响；clazz 是 PSI，project 必可得
+                String resolvedTable = annotated != null
+                        ? annotated
+                        : EntityResolver.inferDecoratedTableName(className, clazz.getProject());
                 if (resolvedTable.equalsIgnoreCase(tableName)) {
                     result.add(clazz);
                 }

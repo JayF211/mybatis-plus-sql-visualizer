@@ -118,6 +118,16 @@ public interface Dialect {
     }
 
     /**
+     * DELETE 语句是否支持 `LIMIT n` 尾段（O-8 缺陷 C）：MySQL 语法族支持
+     * （`DELETE FROM t WHERE ... LIMIT n`），PostgreSQL/Oracle/SQL Server 等不支持——
+     * DELETE 的 `last("LIMIT n")` 尾段仅在本方言为 true 时渲染，否则静默省略
+     * （与分页子句的方言渲染策略一致）。
+     */
+    default boolean getSupportsDeleteLimit() {
+        return false;
+    }
+
+    /**
      * T-ExplainDbl：判断语句是否已以 EXPLAIN 关键字开头——紧随字符须非字母/数字/下划线
      * （词边界），避免 {@code EXPLAINING_TABLE} 之类标识符误判。
      */

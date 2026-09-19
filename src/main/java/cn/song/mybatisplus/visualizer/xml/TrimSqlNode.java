@@ -84,6 +84,11 @@ public non-sealed class TrimSqlNode implements SqlNode {
         }
 
         @Override
+        public void countDollarSubstitution() {
+            delegate.countDollarSubstitution();
+        }
+
+        @Override
         public int getUniqueNumber() {
             return delegate.getUniqueNumber();
         }

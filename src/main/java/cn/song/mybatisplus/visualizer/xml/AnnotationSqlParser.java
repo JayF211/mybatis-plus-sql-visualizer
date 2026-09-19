@@ -23,12 +23,14 @@ public class AnnotationSqlParser {
      * @param kind      语句类型
      * @param paramNames 方法参数 mock 名（@Param 值优先 + 实际名 + param1..N）
      * @param staticFieldValues 静态字段值（T-M25.2）：@class@field → 值
+     * @param paramTypes T-PT-01：参数名 → 类型类别（占位提示 / mock 值分派；缺省为空 = 无类型信息）
      */
     public XmlPreviewModel parse(
             String sqlText,
             XmlStatementKind kind,
             List<String> paramNames,
-            Map<String, Object> staticFieldValues
+            Map<String, Object> staticFieldValues,
+            Map<String, ParamTypeInfo> paramTypes
     ) {
         SqlNode node;
         if (sqlText.startsWith("<script>")) {
@@ -37,12 +39,25 @@ public class AnnotationSqlParser {
             node = new MixedSqlNode(List.of(new TextSqlNode(sqlText)));
         }
         XmlStatement statement = new XmlStatement("annotation", kind, node, null);
-        return XmlPreviewModel.from(statement, List.of(), new LinkedHashSet<>(paramNames), staticFieldValues, Map.of(), Map.of());
+        return XmlPreviewModel.from(
+                statement, List.of(),
+                new LinkedHashSet<>(paramNames), staticFieldValues, Map.of(), Map.of(), paramTypes
+        );
     }
 
-    /** 注解 SQL 解析（staticFieldValues 默认空映射）。 */
+    /** 注解 SQL 解析（staticFieldValues / paramTypes 默认空映射）。 */
     public XmlPreviewModel parse(String sqlText, XmlStatementKind kind, List<String> paramNames) {
-        return parse(sqlText, kind, paramNames, Map.of());
+        return parse(sqlText, kind, paramNames, Map.of(), Map.of());
+    }
+
+    /** Kotlin 默认参数等价重载：{@code paramTypes} 缺省空映射。 */
+    public XmlPreviewModel parse(
+            String sqlText,
+            XmlStatementKind kind,
+            List<String> paramNames,
+            Map<String, Object> staticFieldValues
+    ) {
+        return parse(sqlText, kind, paramNames, staticFieldValues, Map.of());
     }
 
     private SqlNode parseScript(String scriptText) {

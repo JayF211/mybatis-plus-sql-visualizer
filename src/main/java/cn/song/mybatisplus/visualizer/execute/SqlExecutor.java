@@ -27,7 +27,7 @@ public final class SqlExecutor {
     /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
     private static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
 
-    /** 准备 + 执行合一（M36 原语义）：选数据源 → 建控制台 → 直接执行。 */
+    /** 准备 + 执行合一（M36 原语义）：选数据源 → 建控制台 → 直接执行（Kotlin 默认参 {@code onErrorRich = null} 形态）。 */
     public static void execute(
             @NotNull Project project,
             @NotNull String sql,
@@ -36,15 +36,29 @@ public final class SqlExecutor {
             @Nullable Consumer<JComponent> onConsole,
             @Nullable Consumer<Editor> onEditor,
             @Nullable Consumer<String> onError) {
-        Consumer<Boolean> callback = success -> {
-            if (!success) {
-                // Community 或失败时提示
-                if (!ExecuteSqlSupport.isAvailable()) {
-                    showInfo(project, MpSqlVisualizerBundle.message("execute.noDatabase"));
-                }
-            }
-        };
-        DataSourceSelector.selectAndExecute(project, sql, onConsole, onEditor, onError, callback);
+        execute(project, sql, dataSource, isQuery, onConsole, onEditor, onError, null);
+    }
+
+    /** 准备 + 执行合一（M36 原语义，T-ErrorLocate 富错误通道重载）：选数据源 → 建控制台 → 直接执行。 */
+    public static void execute(
+            @NotNull Project project,
+            @NotNull String sql,
+            @Nullable Object dataSource,
+            boolean isQuery,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
+        DataSourceSelector.selectAndExecute(project, sql, onConsole, onEditor, onError,
+                success -> {
+                    if (!Boolean.TRUE.equals(success)) {
+                        // Community 或失败时提示
+                        if (!ExecuteSqlSupport.isAvailable()) {
+                            showInfo(project, MpSqlVisualizerBundle.message("execute.noDatabase"));
+                        }
+                    }
+                },
+                onErrorRich);
     }
 
     /** M36.5：准备控制台（不执行）。Community 下静默失败（callback(false)）。 */
@@ -63,13 +77,22 @@ public final class SqlExecutor {
         DataSourceSelector.prepareConsole(project, sql, onConsole, onEditor, onError, callback);
     }
 
-    /** M36.5：在已准备的控制台上执行。 */
+    /** M36.5：在已准备的控制台上执行（Kotlin 默认参 {@code onErrorRich = null} 形态）。 */
     public static boolean executePrepared(
             @NotNull Project project,
             @Nullable Consumer<JComponent> onResultsReady,
             @Nullable Consumer<String> onError) {
+        return executePrepared(project, onResultsReady, onError, null);
+    }
+
+    /** M36.5：在已准备的控制台上执行（T-ErrorLocate 富错误通道重载）。 */
+    public static boolean executePrepared(
+            @NotNull Project project,
+            @Nullable Consumer<JComponent> onResultsReady,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
         if (!ExecuteSqlSupport.isAvailable()) return false;
-        return DataSourceSelector.executePrepared(project, onResultsReady, onError);
+        return DataSourceSelector.executePrepared(project, onResultsReady, onError, onErrorRich);
     }
 
     /** 控制台是否已就绪（prepareConsole 成功后 true）。 */

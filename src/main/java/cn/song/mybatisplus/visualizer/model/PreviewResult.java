@@ -32,6 +32,10 @@ import java.util.Objects;
  * @param fillClauses      fill 附加查询子句列表（MPJ 1.5.1+）；null 表示无 fill 调用
  * @param previousSql      会话级缓存的上一次预览 SQL（null = 首次预览，不显示差异）
  * @param pagesColumns     maintainPage 列元数据（F-45）
+ * @param stackDigest      调用栈快照「类#方法:行 ← …」（栈顶在左；T-SourceJumpFunnel P2-2）；
+ *                         null = 无（桥通道 / 旧条目），面板不显示栈节点
+ * @param hasDollarRawSegments 本次预览语句含 ${} 原文拼接段（T-InjectionGate T-IG-01，解析期 token 事实）；
+ *                         非 XML 链恒 false
  */
 public final class PreviewResult {
     private final String sql;
@@ -56,6 +60,17 @@ public final class PreviewResult {
     private final List<PagesColumn> pagesColumns;
     /** JDBC 命名参数（NamedParameterJdbcTemplate `:name`）：参数名 → 引号提示；空 map = 纯 `?` 顺序回填。 */
     private final Map<String, ParamHint> namedParamHints;
+    /**
+     * T-SourceJumpFunnel P2-2：调用栈快照「类#方法:行 ← …」（栈顶在左；agent 通道产出，
+     * 日志/历史条目双击预览透传）。null = 无（桥通道 / 旧条目），面板不显示栈节点。
+     */
+    private final String stackDigest;
+    /**
+     * T-InjectionGate T-IG-01：本次预览语句含 `${}` 原文拼接段（XML/注解预览链，解析期 `${` token 事实，
+     * 与替换是否成功无关——成功替换为模拟值后文本里已无 `${}` 痕迹）。面板执行/EXPLAIN 前据此弹确认闸门，
+     * 复制可执行 SQL 据此给产物加标记注释。非 XML 链（Wrapper/JPA/日志还原）无 `${}` 语义恒 false。
+     */
+    private final boolean hasDollarRawSegments;
 
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
@@ -65,7 +80,7 @@ public final class PreviewResult {
                          List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns) {
         this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
-                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, Map.of());
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, Map.of(), null, false);
     }
 
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
@@ -75,6 +90,19 @@ public final class PreviewResult {
                          XmlPreviewModel xmlModel, Map<String, String> initialParamValues, List<PerfWarning> perfWarnings,
                          List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
                          Map<String, ParamHint> namedParamHints) {
+        this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
+                columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, null, false);
+    }
+
+    public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
+                         WrapperType wrapperType, String tableName, String warning, List<String> columns,
+                         Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
+                         List<ParamHint> paramHints, List<TableInfo> candidateTables, BatchModel batchModel,
+                         XmlPreviewModel xmlModel, Map<String, String> initialParamValues, List<PerfWarning> perfWarnings,
+                         List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
+                         Map<String, ParamHint> namedParamHints, String stackDigest, boolean hasDollarRawSegments) {
         this.sql = sql;
         this.compactSql = compactSql;
         this.unresolvedParams = unresolvedParams;
@@ -96,6 +124,8 @@ public final class PreviewResult {
         this.previousSql = previousSql;
         this.pagesColumns = pagesColumns;
         this.namedParamHints = namedParamHints != null ? namedParamHints : Map.of();
+        this.stackDigest = stackDigest;
+        this.hasDollarRawSegments = hasDollarRawSegments;
     }
 
     public PreviewResult(String sql, String compactSql,
@@ -199,6 +229,14 @@ public final class PreviewResult {
         return namedParamHints;
     }
 
+    public String getStackDigest() {
+        return stackDigest;
+    }
+
+    public boolean isHasDollarRawSegments() {
+        return hasDollarRawSegments;
+    }
+
     public PreviewResult copy(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                               WrapperType wrapperType, String tableName, String warning, List<String> columns,
                               Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
@@ -208,7 +246,8 @@ public final class PreviewResult {
                               List<PagesColumn> pagesColumns) {
         return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
-                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints);
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints,
+                stackDigest, hasDollarRawSegments);
     }
 
     public PreviewResult copy(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
@@ -220,7 +259,8 @@ public final class PreviewResult {
                               List<PagesColumn> pagesColumns, Map<String, ParamHint> namedParamHints) {
         return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
-                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints);
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints,
+                stackDigest, hasDollarRawSegments);
     }
 
     @Override
@@ -252,14 +292,17 @@ public final class PreviewResult {
                 && Objects.equals(fillClauses, that.fillClauses)
                 && Objects.equals(previousSql, that.previousSql)
                 && Objects.equals(pagesColumns, that.pagesColumns)
-                && Objects.equals(namedParamHints, that.namedParamHints);
+                && Objects.equals(namedParamHints, that.namedParamHints)
+                && Objects.equals(stackDigest, that.stackDigest)
+                && hasDollarRawSegments == that.hasDollarRawSegments;
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
-                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints);
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints,
+                stackDigest, hasDollarRawSegments);
     }
 
     @Override
@@ -271,6 +314,7 @@ public final class PreviewResult {
                 + ", candidateTables=" + candidateTables + ", batchModel=" + batchModel + ", xmlModel=" + xmlModel
                 + ", initialParamValues=" + initialParamValues + ", perfWarnings=" + perfWarnings + ", fillClauses="
                 + fillClauses + ", previousSql=" + previousSql + ", pagesColumns=" + pagesColumns
-                + ", namedParamHints=" + namedParamHints + ")";
+                + ", namedParamHints=" + namedParamHints + ", stackDigest=" + stackDigest
+                + ", hasDollarRawSegments=" + hasDollarRawSegments + ")";
     }
 }
