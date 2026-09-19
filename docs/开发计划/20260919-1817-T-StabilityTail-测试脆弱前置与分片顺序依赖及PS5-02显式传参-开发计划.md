@@ -49,6 +49,7 @@
   语义不变（仍能抓「clearAll 创建了服务」），去掉顺序依赖：本来就存在时断言「没被换成新实例」，本来不存在时是 `null == null`（与原意图一致）。
 - **先红后绿（必做）**：临时让 `clearAll` 真的去 `getService`（或注入替身）→ 断言必须红，证明改后仍承重、不是把断言改弱。
 - **注意**：该文件属 `util/` 域、非本批任何任务的写集，改动前先确认无并行会话在改它。
+- **⚠️ 实施期更正（2026-09-19，实施方实测证伪本节机制归因）**：本节原写「light 测试项目同片共享 `ProjectImpl` → `:140` 红」**对本类不成立**——`PluginCacheManagerCoverageTest` 是 `HeavyPlatformTestCase`，实测**每个测试方法拿到的是不同的 Project 实例**（探针 `hash=1898437131` vs `hash=1227671987`，路径分别为 `unitTest_<方法名>_…/<方法名>_.ipr`）；两个「创建者嫌疑」类（`integration/PreviewEndToEndTest`、`psi/jpa/HbmNamedQueryResolverTest`）都是 `BasePlatformTestCase`（light），用的是**另一个** Project 实例。故**改前那个类序组合本来就是绿的**，`testShards` 分片位置对本类不可能产生影响。改动价值仍在：该断言确实在「断言环境」（受控替身实验：同用例内先 `project.getService(SqlPreviewService)` → 旧形态红、新形态绿），改后与顺序/邻居彻底无关，且将来本类若转 light 也不会中招。
 
 ### T-ST-02 分片顺序依赖的 `AlreadyDisposedException` 形态（P3，中）
 
@@ -70,6 +71,7 @@
 - **落点**（实测行号）：`ui/SqlPreviewPanel.kt` 的回滚注册链——`registerRollbackSnapshotIfNeeded` 定义在 `:833`、其中 `:848` 调 `RollbackSqlGenerator.generate(SqlCommentStripper.strip(sql))`、调用点在 `:785` 与 `:957`；确认流另有一处 `generate(sql)` 在 `:734`。
 - **做法**：把确认阶段已解析的产物**显式**传给回滚链（`:848` 改走 `generateFromParsedStatements`），消除对「同文本命中缓存槽」这一隐式前提的依赖；若 `:734` 处即确认阶段解析点，同样让它复用。
 - **键对齐（实施要点）**：`:848` 传入的是 `SqlCommentStripper.strip(sql)` 之后的文本，显式传递时必须保证「确认阶段产物」与「strip 后的文本」对应——否则会拿错 AST。
+- **⚠️ 实施期更正（2026-09-19）**：本节原写「确认流另有一处 `generate(sql)` 在 `:734`，若即确认阶段解析点则同样复用」——**实测 `:734` 不在确认流内**，它在 `showRollbackSql()` 里、是工具栏【回滚SQL】按钮的独立动作（其 `sql` 已在 `:732` 剥过注释）；确认流的真实解析点是 `executeSql:944` / `executeAdhocSql:778` → `ExecuteConfirmMessages.build(sql, keyword)` → `UnboundedWriteDetector.detect`。
 - **可选性说明**：**收益已由单槽全数拿到**，本项只是把「隐式经缓存槽复用」改成「显式沿调用流传递」，属形式统一，**没有额外性能收益**。做与不做都不影响 T-PS5-02 的读数；不做时应在计划/KDoc 保留「依赖同文本缓存命中」这条前提说明。
 - **验收（若做）**：解析计数探针证明「一次点击的解析次数不增加」；`generate` 结果与独立解析逐字节一致（既有用例口径）。
 
@@ -111,8 +113,13 @@
 
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
-| T-ST-01 | （实施后填） | 先红后绿读数须回填 |
-| T-ST-02a | （实施后填） | 复现结论（成功 / 不可复现）须回填 |
-| T-ST-02b/c | （实施后填） | 根因与修法，或观测手段与「不宣称根治」口径须回填 |
-| T-ST-02d | （实施后填） | 守卫规则描述与误报边界须回填 |
-| T-ST-03 | （实施后填） | 做 / 不做（可选件）与理由须回填 |
+| T-ST-01 | `2370844` | `assertNull`（环境前置）→ `assertSame`（同一性比对），语义不变而去掉顺序依赖；**计划机制归因被实测证伪并已更正**（见 §T-ST-01 更正块：本类是 `HeavyPlatformTestCase`、每方法独立 Project 实例，改前该类序组合本来就绿）。先红后绿＝把 `clearAll` 的 `getServiceIfCreated(...)?.clearCache()` 临时改为 `getService(...)` → 红（`expected same:<null> was not:<…SqlPreviewService@2eea55c3>`）→ 还原绿。同文件第二处同类形态（`testFastPathHitLeavesReverseLookupEmpty…` 断言反查缓存「此刻为空」）一并改为用例自建前置（`EntityClassFinder.clearReverseLookupCache`），断言文本与强度逐字不变；另判定 `cacheSize() > 0` 一族为**反向形态**（不会因邻居假红）不动 |
+| T-ST-02a | 见 02b/02c | **复现成功**（两条路径）：A＝受控前置 `ProjectManagerEx.forceCloseProject` 造 temporarily-disposed 窗口后首次取服务 → 与门禁**逐字同形**的链路（`AlreadyDisposedException` ← `MessageBusImpl.checkOwnerDisposed`，消息含 `containerState=disposed temporarily`）；B＝把门禁那轮的 `testShard1..3` XML 快照拷回当权重表、**同一份分片组成重跑** → 1896 例 7 失败（`SectionConfigurableAutoCaptureLinkageTest`×5 + 同族 1 + 另一族既有假失败 1） |
+| T-ST-02b | `45afdf7` | **根因在生产代码**：`config/SectionConfigurable.kt:50` 的 `apply()` 里 `project.getService(SqlLogManager::class.java)` 写在 `runCatching` **之外** → 项目处于 temporarily-disposed 窗口时首次创建服务，其构造期 `messageBus.connect` 抛 `AlreadyDisposedException`（**extends `CancellationException`**）→ 归一成 "Container is already disposed" → **穿出 `apply()`** 打断设置写回；放大效应＝异常对象被服务 holder 缓存重复抛出，一次触发整类 5 例失败。修法＝守卫挪进同一 `runCatching`（1 处，happy path 逐字节不变，异常路径改为记既有 warn 并跳过该项目）。读数＝同一份分片组成重跑 **5362/0/0/6**。**写集偏离**：计划只列 `testutil/`+测试类+诊断落点，实际改生产文件——**派活方裁定接受**（根因确在生产侧、改动 1 处、happy path 无变化） |
+| T-ST-02c | `1ecd706` | 观测手段 `testutil/AlreadyDisposedDiagnostics.kt`：仅在抛 `AlreadyDisposedException` 时把**片号**（`test-sandbox/shardN` 反推）/ **触发点**（调用点 `类#方法:行`）/ 服务名 / 线程 / `project.isDisposed` / 项目名补进消息并记一条 WARN，**以同类型重抛**、原链路挂 cause（控制流与失败归属不变）；5 个守卫类 11 处调用点改走它 |
+| T-ST-02d | `7aba2e2` | 新增守卫「初始化入口改项目服务级状态须复位」（+436 行，**仅新增**，既有规则与豁免计数一行未动）：`setUp`/`@Before` 函数体内对 `project.getService(…)` 返回对象有写操作（成员赋值 / 变更类方法调用）而类内无复位令牌（`restore`/`restoreCaptureStateForTest`/`loadState`/`clearForTest`/`clearAll`/`resetForTest`，**刻意不含 `capture(` 与 `entries.clear()`**）→ 红；豁免用 `// project-state: <理由>`。先红后绿＝把合成泄漏样本混进**真实扫描面**（命中清单里只有注入样本 → 当时仓内 0 处）。既有 22 例 + 新增 2 例全绿即豁免计数未漂移。**已知漏报（有意不收编）**：方法体内写、helper 返回服务——收编到「类内任意写」会误判 `finally { setCapturingForTest(before) }` 那种合法复位形态 |
+| T-ST-03 | `fe0d7fc` | **判定不实施显式传参**（计划标为可选件），三条硬依据：①确认阶段**不持有**可复用产物（`ExecuteConfirmMessages.build` 内部 `detect` 只回 findings、`build` 只回 `String`；真做须改 `execute/` 两个**共享 API**，而它们另有 `LogToSqlPanel.executeStatement` 与 MCP `CheckSqlTool`/`MapperCheckTool` 消费者）②**隐式前提去不掉**（`executeAdhocSql(dmlConfirmed = true)` 的回滚弹窗执行链不走确认弹窗、无确认阶段产物 → 入参只能可空、单槽兜底必须保留）③收益已全量拿到（实测）。改为写集内落地：`registerRollbackSnapshotIfNeeded` KDoc 补两条前提（确认阶段确以同一文本走过 `detect`；`SqlCommentStripper.strip` **幂等**，失效后果只多一次解析不影响回滚判定）+ `:734` 加注「本路径不在确认流内」+ 新增 `ui/SqlPreviewPanelRollbackParseShapeTest`（5 例，零 IDE fixture）钉住面板真实调用形状——**关键**：既有 `ConfirmRollbackParseShareTest` 走裸文本 `generate(sql)`，面板走 `generate(strip(sql))`，槽键命中**额外依赖 strip 幂等**，此前无用例覆盖（现用 7 种注释形态逐条钉住，含探针自证 `parseCount==2` 证明计数断言不空转）。读数 44/0/0/0 |
+
+**门禁（并轨后）**：`rm -rf build/classes build/kotlin` → `testShards` **5369/0/0/6**（5362 + T-ST-02d 2 + T-ST-03 5，精确吻合）+ `testDatabase` 10/0/0/0 + agent 58/0/0/0（BUILD SUCCESSFUL 9m08s）。
+
+**未验证 / 不宣称**：①T-ST-02 的「首次触发的精确落点逐案对账」——门禁那轮 5 例的完整 XML 已被后续绿跑覆盖，已证实的是**机制与触发点**（`SectionConfigurable.apply()` → `getService`），未证实门禁那轮每一例是否都由该路径触发（失败帧行号有差异：门禁版本在用例体 43/65，本轮实测在 `setUp:29`）；②「谁让项目停在 temporarily-disposed 窗口」这一上游未深挖（修法是让调用侧不被它打断，非消除该窗口）；③T-ST-03 的单槽**并发命中率未测**（确认弹窗虽模态但 EDT 继续泵事件，别的链以别的文本填槽即 miss → 该次点击解析 2 次；后果仅性能，miss 分支已被探针自证覆盖）；④`WrapperConverterProjectScopeTest` 的 EP 注册表转储属另一族既有假失败，本批未处理。
