@@ -9,7 +9,7 @@
 
   为什么需要这个 provider：上游 @agentclientprotocol/claude-agent-acp 的 dist/acp-agent.js 把
   stdio 分支条件写成 `!("type" in server)`，而 AI Assistant 序列化的 stdio server 必带
-  `"type": "stdio"` → server 被静默丢弃，ACP 会话里看不到插件注册的 mpsv_* 工具。
+  `"type": "stdio"` → server 被静默丢弃，ACP 会话里看不到插件注册的 sqlv_* 工具。
   改注册本 EP 让 IDE 以 SSE 下发私有 IJ MCP 会话，即走该 agent 实现正确的那条分支
   （根因两段代码与三条机会见 docs/开发计划/20260919-2130-T-AcpMcpTransport-…-开发计划.md §1.3/§1.5）。
 
