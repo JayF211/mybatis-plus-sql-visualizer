@@ -11,6 +11,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperArg
 import cn.song.mybatisplus.visualizer.model.WrapperCall
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
+import com.intellij.openapi.project.Project
 
 /**
  * xbatis（原 mybatis-mp）QueryChain / UpdateChain / DeleteChain 转换器（XB，M44 其他 ORM 第一批，矩阵 §6）。
@@ -46,7 +47,7 @@ object XbatisConverter : WrapperConverter {
     /** xbatis set 家族方法名（javap IUpdateSetMethod：`set(...)` 全重载）。 */
     private val SET_METHODS: Set<String> = setOf("set")
 
-    override fun convert(chain: WrapperChain, table: TableInfo): SqlStatement {
+    override fun convert(chain: WrapperChain, table: TableInfo, project: Project?): SqlStatement {
         val calls = normalize(chain.calls)
         // 1. UpdateChain：set 调用存在 → UPDATE（set 列赋值 + 其余条件 WHERE）
         if (calls.any { it.methodName in SET_METHODS }) {

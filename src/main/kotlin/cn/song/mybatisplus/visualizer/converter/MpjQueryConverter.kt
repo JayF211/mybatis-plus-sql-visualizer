@@ -12,6 +12,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperArg
 import cn.song.mybatisplus.visualizer.model.WrapperCall
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
+import com.intellij.openapi.project.Project
 
 /**
  * MPJQueryWrapper 转换器（F-12）：字符串字段版联表 SELECT。
@@ -31,7 +32,7 @@ object MpjQueryConverter : WrapperConverter {
 
     override val supportedTypes: Set<WrapperType> = setOf(WrapperType.MPJ_QUERY)
 
-    override fun convert(chain: WrapperChain, table: TableInfo): SqlStatement {
+    override fun convert(chain: WrapperChain, table: TableInfo, project: Project?): SqlStatement {
         val selectCalls = chain.calls.filter { it.methodName == "select" }
         val joinCalls = chain.calls.filter { it.methodName in JOIN_METHODS }
         // selectIgnore（T-M20-04）：MPJQueryWrapper 独有——selectAll 全列展开后剔除列（字符串形态）

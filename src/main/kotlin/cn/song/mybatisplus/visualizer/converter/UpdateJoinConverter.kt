@@ -11,6 +11,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperCall
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.psi.currentDialect
+import com.intellij.openapi.project.Project
 
 /**
  * UpdateJoinWrapper 转换器（T-M21-08，MPJ 官方联表更新，1.4.5+，原 P3-01 提前）：
@@ -43,7 +44,7 @@ object UpdateJoinConverter : WrapperConverter {
 
     override val supportedTypes: Set<WrapperType> = setOf(WrapperType.UPDATE_JOIN)
 
-    override fun convert(chain: WrapperChain, table: TableInfo): SqlStatement {
+    override fun convert(chain: WrapperChain, table: TableInfo, project: Project?): SqlStatement {
         // 主表别名：构造别名 > setAlias("x") 方法（官方 API）> 默认 t
         val mainAlias = chain.constructorAlias
             ?: chain.calls.firstOrNull { it.methodName == SET_ALIAS }
@@ -55,10 +56,10 @@ object UpdateJoinConverter : WrapperConverter {
             .filter { it.methodName in SET_METHODS }
             .flatMap { parseSet(it, table, mainAlias) }
 
-        // 联表子句（渲染于 FROM 之后、SET 之前）
+        // 联表子句（渲染于 FROM 之后、SET 之前）；T-FS-04：project 透传至类名兜底推断
         val joins = chain.calls
             .filter { it.methodName in MpjJoinSupport.JOIN_METHODS }
-            .mapNotNull { MpjJoinSupport.parseJoin(it, mainAlias) }
+            .mapNotNull { MpjJoinSupport.parseJoin(it, mainAlias, project) }
 
         // 条件部分：剔除 set/join/setAlias/last 后复用 Query 解析（columnPrefix=主别名注入；
         // 字符串列条件如 eq("t1.xxx", v) 原样透传，天然支持跨表条件）

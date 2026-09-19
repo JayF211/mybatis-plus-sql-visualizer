@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.model.SqlStatement
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
+import com.intellij.openapi.project.Project
 
 /**
  * 字符串版 UpdateWrapper 转换器（F-17，清单 U09）。
@@ -21,5 +22,6 @@ object UpdateWrapperConverter : WrapperConverter {
 
     override val supportedTypes: Set<WrapperType> = setOf(WrapperType.UPDATE)
 
-    override fun convert(chain: WrapperChain, table: TableInfo): SqlStatement = LambdaUpdateConverter.convert(chain, table)
+    override fun convert(chain: WrapperChain, table: TableInfo, project: Project?): SqlStatement =
+        LambdaUpdateConverter.convert(chain, table, project)
 }
