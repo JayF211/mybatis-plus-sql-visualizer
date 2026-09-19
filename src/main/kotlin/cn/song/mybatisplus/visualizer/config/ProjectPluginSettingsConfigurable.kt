@@ -52,6 +52,22 @@ import javax.swing.JLabel
  * （重置 → 改一项 → apply 即触发），全局值日后变更本项目不再跟随而 UI 数值不变。
  * 语义定案：**「重置后没碰过的项继续跟随全局，碰过的项才成为覆盖」**——「碰过」以
  * 「控件显示值是否仍等于 state 推导值」判定，与 [isModified] 同源，不引入额外的跟随标记/抑制标志。
+ *
+ * T-FS-08 语义定案：**开启态清空文本项 = 回到「跟随全局」**（不是「显式空值」）。依据两条：
+ *  ① UI 侧项目页**没有逐字段的「跟随全局」复选框**，单字段回到跟随全局的唯一表达方式就是清空该字段
+ *     （整页「重置为跟随全局」按钮只覆盖全部 9 项，表达不了单字段）；
+ *  ② state 侧文本项「空串 = 使用全局」是既有口径（[ProjectPluginSettings.State] 各文本字段 KDoc、
+ *     `effectiveXxx()` 的 `isNotBlank()` 回退、字段 tooltip），与 3 个布尔项的 `null = 跟随全局` 同构；
+ *     改成「显式空值」需 String→String? 并连带持久化格式与全部 effective 取值口径。
+ * 落地（三处同源）：显示侧一律由 [shownText] / [shownBool] / [expectedDialectItem] 从 state 推导；
+ * 写回侧文本项一律走 [stateTextOf]（trim，空串即跟随全局）；[apply] 写回后调用 [refreshControls]
+ * 重新推导控件显示值——即 apply 之后「控件显示值 ≡ 派生(state)」恒成立，[isModified] 随之复位。
+ * 缺最后这一步时，「清空文本框 → 应用」会把 state 写成空串（跟随全局）而控件停在空串，
+ * 与「state 推导值 = 全局值」错位 → isModified 恒报已修改（应用按钮点不灭、重开设置页显示又跳回全局值）。
+ *
+ * T-FS-09：设置搜索的「跳转并高亮」由 [PluginSettingsFolderConfigurable] 自绘（平台无对应入口，
+ * 见该文件 findComponent 的 KDoc）。本页走 DSL v2，行标签是普通 JLabel——`row(label)` 的产物
+ * 与全局页手摆的 JBLabel 不同型，曾致 6 行定位不到高亮目标（已在该文件的匹配分支中收编）。
  */
 class ProjectPluginSettingsConfigurable(private val project: Project) : Configurable {
 
@@ -233,10 +249,17 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         if (showProject) stateValue.ifBlank { globalValue } else globalValue
 
     /**
+     * 文本项「控件显示值 → state 值」的唯一写回函数（T-FS-08 三处同源里的写回侧）：
+     * trim 后写回；**空串即「跟随全局」**（与 [ProjectPluginSettings.State] 文本字段空语义、
+     * [shownText] 的 `ifBlank` 推导互逆）。[apply] 的 4 个文本项一律经此函数，不再各处自判 trim/空。
+     */
+    private fun stateTextOf(field: JBTextField): String = field.text.trim()
+
+    /**
      * T-ProjectSettingsScope P1：把「当前应显示的值 + 可编辑性」灌进控件。
      *
-     * createComponent（初值）/ [reset] / 总开关监听器三处共用同一份表达式，防规格所点
-     * 「四处联动只修一处」回潮。
+     * createComponent（初值）/ [reset] / 总开关监听器 / [apply]（T-FS-08：写回后重新推导）四处共用
+     * 同一份表达式，防规格所点「四处联动只修一处」回潮。
      *
      * @param showProject true=按项目自定义值呈现；false=一律呈现全局生效值（页面所见即运行时所用）
      */
@@ -360,65 +383,73 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         // T-ProjectSettingsScope P1：关闭态不写 9 项——此时控件显示的是**全局生效值**，
         // 无条件写回会把全局值（以及空/null 字段的全局兜底值）当成项目自定义值钉进 state：
         // 用户重开总开关后发现自定义值已被覆盖，或「跟随全局」被悄悄改成硬覆盖值。
-        if (!showProject) return
-        // T-TS-FixG7：开启态**只写回「控件显示值 != state 推导值」的项**——判据与 [isModified] 的
-        // 逐项比对同源（boolDiffers/stringDiffers/expectedDialectItem），即「用户确实动过这一项」。
-        //
-        // 原实现无条件写回全部 9 项，会把「空/null = 跟随全局」的项钉成**当时的全局快照**：
-        // 开启态点「重置为跟随全局」（9 项置空 → [refreshControls] 按 P1 回灌全局值）→ 用户再改
-        // 任意一项使 isModified()==true → apply 把 9 个控件的显示值（= 全局值）写进 state →
-        // 「跟随全局」被静默改成硬覆盖：全局值日后变更本项目不再跟随，而 UI 数值与重置瞬间逐字相同，
-        // 用户看不出差别。这与 P1 要消灭的是同一类缺陷（页面语义与运行时语义不一致），只是出口在 apply。
-        //
-        // 跳过「未编辑项」不会丢用户值：非空/非 null 的 state 值经 shownBool/shownText 推导后
-        // 恒等于控件显示值，故真正改过的项（含把字段清空以回到「跟随全局」）一律仍写回。
-        // 不采用「resetToGlobal 打跟随标记 + 编辑时逐项清标记」方案：该标记只覆盖 reset 一条路径
-        // （对话框取消/重开后标记随实例丢弃，且初始打开时 state 为空的项同样会被钉成全局快照），
-        // 还要额外维护监听器与灌值抑制标志——能在同一处用纯比对表达，就不再添一份需人工同步的状态
-        // （T-RA-04 判定：标志位类状态一旦无人可信即应删除，此处无必要引入）。
-        (dialectCombo?.selectedItem as? String)?.let { selected ->
-            if (selected != expectedDialectItem(st, global, showProject)) {
-                // T-DialectAutoInfer：哨兵项=项目级推断（true）；具体方言=手动（false + 值）。
-                // auto 分支不改 st.dialect——手动值作为记忆保留，切回手动时不必重选
-                if (selected == autoItem) {
-                    st.dialectAuto = true
-                } else {
-                    st.dialectAuto = false
-                    st.dialect = selected
+        if (showProject) {
+            // T-TS-FixG7：开启态**只写回「控件显示值 != state 推导值」的项**——判据与 [isModified] 的
+            // 逐项比对同源（boolDiffers/stringDiffers/expectedDialectItem），即「用户确实动过这一项」。
+            //
+            // 原实现无条件写回全部 9 项，会把「空/null = 跟随全局」的项钉成**当时的全局快照**：
+            // 开启态点「重置为跟随全局」（9 项置空 → [refreshControls] 按 P1 回灌全局值）→ 用户再改
+            // 任意一项使 isModified()==true → apply 把 9 个控件的显示值（= 全局值）写进 state →
+            // 「跟随全局」被静默改成硬覆盖：全局值日后变更本项目不再跟随，而 UI 数值与重置瞬间逐字相同，
+            // 用户看不出差别。这与 P1 要消灭的是同一类缺陷（页面语义与运行时语义不一致），只是出口在 apply。
+            //
+            // 跳过「未编辑项」不会丢用户值：非空/非 null 的 state 值经 shownBool/shownText 推导后
+            // 恒等于控件显示值，故真正改过的项（含把字段清空以回到「跟随全局」）一律仍写回。
+            // 不采用「resetToGlobal 打跟随标记 + 编辑时逐项清标记」方案：该标记只覆盖 reset 一条路径
+            // （对话框取消/重开后标记随实例丢弃，且初始打开时 state 为空的项同样会被钉成全局快照），
+            // 还要额外维护监听器与灌值抑制标志——能在同一处用纯比对表达，就不再添一份需人工同步的状态
+            // （T-RA-04 判定：标志位类状态一旦无人可信即应删除，此处无必要引入）。
+            (dialectCombo?.selectedItem as? String)?.let { selected ->
+                if (selected != expectedDialectItem(st, global, showProject)) {
+                    // T-DialectAutoInfer：哨兵项=项目级推断（true）；具体方言=手动（false + 值）。
+                    // auto 分支不改 st.dialect——手动值作为记忆保留，切回手动时不必重选
+                    if (selected == autoItem) {
+                        st.dialectAuto = true
+                    } else {
+                        st.dialectAuto = false
+                        st.dialect = selected
+                    }
                 }
             }
-        }
-        replaceParamsCheck?.let {
-            if (boolDiffers(it, st.replaceParams, global.replaceParams)) st.replaceParams = it.isSelected
-        }
-        formatSqlCheck?.let {
-            if (boolDiffers(it, st.formatSql, global.formatSql)) st.formatSql = it.isSelected
-        }
-        injectLogicDeleteCheck?.let {
-            if (boolDiffers(it, st.injectLogicDelete, global.injectLogicDelete)) {
-                st.injectLogicDelete = it.isSelected
+            replaceParamsCheck?.let {
+                if (boolDiffers(it, st.replaceParams, global.replaceParams)) st.replaceParams = it.isSelected
+            }
+            formatSqlCheck?.let {
+                if (boolDiffers(it, st.formatSql, global.formatSql)) st.formatSql = it.isSelected
+            }
+            injectLogicDeleteCheck?.let {
+                if (boolDiffers(it, st.injectLogicDelete, global.injectLogicDelete)) {
+                    st.injectLogicDelete = it.isSelected
+                }
+            }
+            logicDeleteValueField?.let {
+                if (stringDiffers(it, st.logicDeleteValue, global.logicDeleteValue)) {
+                    st.logicDeleteValue = stateTextOf(it)
+                }
+            }
+            tablePrefixField?.let {
+                if (stringDiffers(it, st.tablePrefix, global.tablePrefix)) st.tablePrefix = stateTextOf(it)
+            }
+            tableSuffixField?.let {
+                if (stringDiffers(it, st.tableSuffix, global.tableSuffix)) st.tableSuffix = stateTextOf(it)
+            }
+            inferenceCombo?.let { combo ->
+                val selected = (combo.selectedItem as? InferenceOption)?.value ?: ""
+                if (selected != st.tableNameInference.ifBlank { global.tableNameInference }) {
+                    st.tableNameInference = selected
+                }
+            }
+            ignoredFieldsField?.let {
+                if (stringDiffers(it, st.ignoredFields, global.ignoredFields)) st.ignoredFields = stateTextOf(it)
             }
         }
-        logicDeleteValueField?.let {
-            if (stringDiffers(it, st.logicDeleteValue, global.logicDeleteValue)) {
-                st.logicDeleteValue = it.text.trim()
-            }
-        }
-        tablePrefixField?.let {
-            if (stringDiffers(it, st.tablePrefix, global.tablePrefix)) st.tablePrefix = it.text.trim()
-        }
-        tableSuffixField?.let {
-            if (stringDiffers(it, st.tableSuffix, global.tableSuffix)) st.tableSuffix = it.text.trim()
-        }
-        inferenceCombo?.let { combo ->
-            val selected = (combo.selectedItem as? InferenceOption)?.value ?: ""
-            if (selected != st.tableNameInference.ifBlank { global.tableNameInference }) {
-                st.tableNameInference = selected
-            }
-        }
-        ignoredFieldsField?.let {
-            if (stringDiffers(it, st.ignoredFields, global.ignoredFields)) st.ignoredFields = it.text.trim()
-        }
+        // T-FS-08：写回后按同一批取值函数（shownBool/shownText/expectedDialectItem，经 [refreshControls]）
+        // 重新推导控件显示值——apply 之后「控件显示值 ≡ 派生(state)」恒成立，[isModified] 随之复位。
+        // 缺这一步时「开启态清空文本项 → 应用」留下错位：state 已按语义写回空串（= 跟随全局，运行时
+        // 有效值回落到全局值），控件却停在空串 → 逐项比对恒报已修改（应用按钮点不灭，重开设置页显示
+        // 又跳回全局值，用户无从判断自己那次清空到底生效没有）。
+        // 关闭态同样走这里（与 P1「页面所见即运行时所用」同款）：此时控件本就显示全局生效值，回灌无变化。
+        refreshControls(showProject)
     }
 
     override fun reset() {

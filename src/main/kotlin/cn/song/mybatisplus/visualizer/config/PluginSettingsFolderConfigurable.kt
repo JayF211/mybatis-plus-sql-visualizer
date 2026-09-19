@@ -212,7 +212,16 @@ class PluginSettingsFolderConfigurable : Configurable {
 
     /**
      * 递归查找匹配 hint 的控件。
-     * 优先匹配输入框/复选框（用户可直接操作），其次匹配标签。
+     *
+     * 类型判定按「输入框 tooltip → 按钮文本 → 标签文本」顺序（同一组件只可能命中一类）；
+     * 行内按组件树顺序深度优先，故「同一 hint 同时命中行标签与该行控件」时以先遍历到者为准
+     * （DSL v2 `row(label)` 行里标签在前）。
+     *
+     * T-FS-09：标签分支须匹配**普通 [javax.swing.JLabel]**——项目页走 DSL v2（`row(label)`
+     * 生成的就是普通 JLabel），全局页手摆的是 [JBLabel]（JLabel 子类）。原先只认 JBLabel，
+     * 项目页 6 行（方言下拉 / 推断策略下拉 / 4 个文本框）的行标签定位不到 → 双击搜索条目
+     * 「跳了但不亮」；改认 JLabel 后与全局页形态一致（两页都定位到行标签）。
+     *
      * @return 匹配的控件，未找到返回 null
      */
     private fun findComponent(container: Container, hint: String): Component? {
@@ -222,7 +231,7 @@ class PluginSettingsFolderConfigurable : Configurable {
                     comp.toolTipText?.contains(hint, ignoreCase = true) == true
                 comp is javax.swing.AbstractButton ->
                     comp.text.contains(hint, ignoreCase = true)
-                comp is JBLabel ->
+                comp is javax.swing.JLabel ->
                     comp.text.contains(hint, ignoreCase = true)
                 else -> false
             }
@@ -233,6 +242,15 @@ class PluginSettingsFolderConfigurable : Configurable {
         }
         return null
     }
+
+    /**
+     * T-FS-09 测试缝：暴露「按搜索项 hint 在页面组件树中定位高亮目标」的查找入口。
+     *
+     * 闪烁（[flashHighlight]）是视觉行为、headless 不可断言；但「目标控件能否被定位」是纯组件树
+     * 查找，可在 headless 下逐条断言（定位不到 = 用户看到「跳了但不亮」的隐性缺陷）。
+     */
+    internal fun findHighlightTargetForTest(container: Container, hint: String): Component? =
+        findComponent(container, hint)
 
     /**
      * 短暂高亮目标控件：黄底闪烁 + 橙色边框，持续约 1.5 秒。
