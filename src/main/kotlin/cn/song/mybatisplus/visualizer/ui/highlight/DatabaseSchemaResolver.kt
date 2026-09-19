@@ -152,6 +152,43 @@ object DatabaseSchemaResolver {
         synchronized(negativeCache) { negativeCache.clear() }
     }
 
+    // ----------
+    // T-PS5-06：单调用全扫限额（MCP schema_context 一次调用最多 20 表）。
+    // 此前每个 miss 表都对每个数据源重跑一遍 DasModel 全遍历；而 [collectFromDataSource] 的
+    // 遍历是**完整**的（命中后不 break，仍走完所有元素；只有「查不了」才提前 bail）——因此同一
+    // 数据源在**同一次调用内**的第二张 miss 表，其遍历结论与第一张完全相同，重扫纯属白付
+    // （多数据源 × 20 表时一次调用最多 k 次全扫，且全程在 ReadAction 内挡写动作）。
+    // 账本按「数据源身份」记账（IdentityHashMap 语义）：同一数据源在一次调用内全扫至多一次；
+    // 已全扫过的数据源上的后续 miss 表直接按未找到处理，负缓存照记（结论与全扫等价，跨调用
+    // 负缓存语义不变）。**查不了（scanBailed）不记账**——模型未加载/反射链失败时下次必须重试。
+    // 作用域仅由 MCP 取数入口显式开启（[withScanBudget]）；其它调用方零行为变化。
+    // ----------
+
+    /** 调用内账本（已完整全扫过的数据源身份集）。 */
+    internal class ScanBudget {
+        internal val scannedSources: MutableSet<Any> =
+            java.util.Collections.newSetFromMap(java.util.IdentityHashMap())
+    }
+
+    private val scanBudget = ThreadLocal<ScanBudget?>()
+
+    /**
+     * T-PS5-06：在 [block] 内启用单调用全扫限额（MCP `schema_context` 一次调用包一层）。
+     * 嵌套调用保留外层账本（内层不重置）；退出恢复原作用域。
+     */
+    internal fun <T> withScanBudget(block: () -> T): T {
+        val prev = scanBudget.get()
+        if (prev == null) scanBudget.set(ScanBudget())
+        try {
+            return block()
+        } finally {
+            scanBudget.set(prev)
+        }
+    }
+
+    /** T-PS5-06 测试缝：当前是否处于限额作用域内。 */
+    internal fun inScanBudgetForTest(): Boolean = scanBudget.get() != null
+
     /** 负命中是否在 TTL 内（过期条目惰性移除，不留定时器）。 */
     private fun isNegativeCached(ds: Any, cacheKey: String): Boolean {
         val stamped = synchronized(negativeCache) { negativeCache[ds]?.get(cacheKey) } ?: return false
@@ -160,6 +197,13 @@ object DatabaseSchemaResolver {
         if (System.currentTimeMillis() - stamped < negativeTtlMs) return true
         synchronized(negativeCache) { negativeCache[ds]?.remove(cacheKey) }
         return false
+    }
+
+    /** T-PS5-06：记负缓存（时间戳，TTL 内同表同数据源查询不再全扫）。 */
+    private fun stampNegative(ds: Any, cacheKey: String) {
+        synchronized(negativeCache) {
+            negativeCache.getOrPut(ds) { HashMap() }[cacheKey] = System.currentTimeMillis()
+        }
     }
 
     /**
@@ -219,6 +263,7 @@ object DatabaseSchemaResolver {
         val scan: (Any, String) -> TableMeta =
             scanProbe ?: { ds, name -> collectFromDataSource(ds, name, Class.forName(DAS_TABLE)) }
         val cacheKey = tableName.lowercase()
+        val budget = scanBudget.get()
         var bailed = 0
         for (ds in sources) {
             // T-Perf-09：缓存命中直接返回（同一数据源同一表零遍历）
@@ -227,11 +272,19 @@ object DatabaseSchemaResolver {
             // T-MetaCheapSource：TTL 内负命中跳过该数据源全扫（introspection 完成后由 DDL
             // 失效/TTL 过期两条路放开，见 negativeCache 注释）
             if (isNegativeCached(ds, cacheKey)) continue
+            // T-PS5-06：本次调用内该数据源已完整全扫过 → 不再重扫（结论等价；负缓存照记，
+            // 跨调用语义不变）
+            if (budget != null && budget.scannedSources.contains(ds)) {
+                stampNegative(ds, cacheKey)
+                continue
+            }
             val found = scan(ds, tableName)
             if (found.columns.isNotEmpty() || found.comment != null) {
                 synchronized(metaCache) {
                     metaCache.getOrPut(ds) { HashMap() }[cacheKey] = found
                 }
+                // 命中即证明遍历完整（collectFromDataSource 命中后不 break）→ 记账
+                budget?.scannedSources?.add(ds)
                 return found
             }
             // T-DbSchemaCompletion：查不了的（模型未加载 / ObjectKind 取不到）**不写负缓存**——
@@ -241,10 +294,10 @@ object DatabaseSchemaResolver {
                 bailed++
                 continue
             }
+            // T-PS5-06：完整全扫且未命中 → 记账（本次调用内同数据源后续表不再重扫）
+            budget?.scannedSources?.add(ds)
             // 该数据源确认没有此表：记负缓存（时间戳，TTL 内同表查询不再全扫）
-            synchronized(negativeCache) {
-                negativeCache.getOrPut(ds) { HashMap() }[cacheKey] = System.currentTimeMillis()
-            }
+            stampNegative(ds, cacheKey)
         }
         // 表在所有数据源都没拿到（通常=未连接/introspection 未完成/表不在当前库）
         if (bailed > 0) {

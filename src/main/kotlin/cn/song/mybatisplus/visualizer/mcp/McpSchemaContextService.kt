@@ -46,24 +46,17 @@ object McpSchemaContextService {
             }
         }
 
-        val entries = mutableListOf<McpSchemaFormatter.TableEntry>()
-        val missing = mutableListOf<String>()
-        for (name in tableNames.take(limit)) {
-            val meta = DatabaseSchemaResolver.tableMeta(project, name)
-            if (meta.columns.isEmpty() && meta.comment == null) {
-                missing.add(name)
-                continue
-            }
-            entries.add(
-                McpSchemaFormatter.TableEntry(
-                    name = name,
-                    comment = meta.comment,
-                    columns = meta.columns.map { (col, m) ->
-                        McpSchemaFormatter.ColumnLine(col, m.typeSpec, m.comment, m.notNull)
-                    },
-                ),
-            )
-        }
+        val (entries, missing) = collectEntries(project, tableNames, limit)
+        return outcomeOf(entries, missing, limit, requested)
+    }
+
+    /** 组装结果（[entries] 为空时按「无元数据」结构化报错；否则走紧凑格式化）。 */
+    private fun outcomeOf(
+        entries: List<McpSchemaFormatter.TableEntry>,
+        missing: List<String>,
+        limit: Int,
+        requested: Int,
+    ): Outcome {
         if (entries.isEmpty()) {
             return Outcome(
                 null,
@@ -76,5 +69,41 @@ object McpSchemaContextService {
         }
         val text = McpSchemaFormatter.format(entries, limit, requested)
         return Outcome(text)
+    }
+
+    /**
+     * T-PS5-06：取数主体——整段包在 [DatabaseSchemaResolver.withScanBudget] 作用域内。
+     *
+     * 一次调用最多 [McpSchemaFormatter.HARD_MAX_TABLES] 张表，此前每张 miss 表都对每个数据源重跑
+     * DasModel 全遍历（k 数据源 × 20 表 = 最坏 k×20 次全扫，且全程在 ReadAction 内挡写动作）。
+     * 限额后：同一数据源在一次调用内全扫至多一次，后续 miss 表直接按未找到披露（负缓存照记，
+     * 跨调用负缓存/正缓存语义不变，结果口径不变）。
+     */
+    private fun collectEntries(
+        project: Project,
+        tableNames: List<String>,
+        limit: Int,
+    ): Pair<MutableList<McpSchemaFormatter.TableEntry>, MutableList<String>> {
+        val entries = mutableListOf<McpSchemaFormatter.TableEntry>()
+        val missing = mutableListOf<String>()
+        DatabaseSchemaResolver.withScanBudget {
+            for (name in tableNames.take(limit)) {
+                val meta = DatabaseSchemaResolver.tableMeta(project, name)
+                if (meta.columns.isEmpty() && meta.comment == null) {
+                    missing.add(name)
+                } else {
+                    entries.add(
+                        McpSchemaFormatter.TableEntry(
+                            name = name,
+                            comment = meta.comment,
+                            columns = meta.columns.map { (col, m) ->
+                                McpSchemaFormatter.ColumnLine(col, m.typeSpec, m.comment, m.notNull)
+                            },
+                        ),
+                    )
+                }
+            }
+        }
+        return entries to missing
     }
 }
