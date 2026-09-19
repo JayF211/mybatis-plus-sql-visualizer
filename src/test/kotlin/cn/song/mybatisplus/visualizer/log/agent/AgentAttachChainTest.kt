@@ -89,7 +89,7 @@ class AgentAttachChainTest : BasePlatformTestCase() {
         val accepted = server.accept()
         try {
             // AgentSession internal 同包可构造（同 AgentListenSyncTest 惯例）
-            val session = AgentSession(project, 5555L, accepted) {}
+            val session = AgentSession(project, 5555L, accepted, noopStateChange())
             manager.sessions.add(session)
             manager.attachedPids[5555L] = 123L
             session.close() // 置 alive=false（死会话）
@@ -111,6 +111,12 @@ class AgentAttachChainTest : BasePlatformTestCase() {
         assertTrue("pendingPids 应一并清空（T-PS4-03）", manager.pendingPids.isEmpty())
         assertFalse(manager.online)
     }
+
+    /** 空状态回调工厂。
+     * JUnit3 合成方法坑：测试方法体内联零参 lambda 会生成 `<测试方法名>$lambda$0()` 私有静态方法，
+     * JUnit3 按「名字以 test 开头 + 零参」判定为测试方法，再因非 public 记一条失败（带参 lambda 的
+     * 合成方法参数数不为零故不触发）。抽出后合成名挂在工厂名下，不再以 test 开头。 */
+    private fun noopStateChange(): Runnable = Runnable { }
 
     /** 反射缝假 ProcessHandler：可控暴露 getNativePid（同既有测试惯例）。 */
     private class FakeProcessHandler(private val nativePid: Long?) {

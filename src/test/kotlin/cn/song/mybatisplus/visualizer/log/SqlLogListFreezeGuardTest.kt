@@ -106,9 +106,13 @@ class SqlLogListFreezeGuardTest : BasePlatformTestCase() {
         // pitfall-speedsearch-highlight-renderer：setDynamicSearchMatchHighlighting 并不存在）。
         // 面板新增渲染路径（列/模式）时若漏施高亮，搜索命中无标记且难察觉——以「两面板渲染器
         // 文件各含 ≥2 处施加点」为结构锚点锁住（当前各 2 处：meta 行 + SQL 行）。
+        // k2j 移植注：生产为 Java，两个渲染器在 master 里是同文件顶层类（SqlLogPanel.kt 内的
+        // LogEntryListCellRenderer / HistorySqlLogPanel.kt 内的 HistoryCellRenderer），Java 侧各自
+        // 独立成文件——锚点路径随之下沉到渲染器文件本体（语义不变：仍是「主列表渲染器」与
+        // 「历史二级列表渲染器」各 ≥2 处施加点）。
         val anchors = mapOf(
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt" to "SQL 日志主列表",
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/HistorySqlLogPanel.kt" to "历史二级 SQL 列表",
+            "src/main/java/cn/song/mybatisplus/visualizer/log/LogEntryListCellRenderer.java" to "SQL 日志主列表",
+            "src/main/java/cn/song/mybatisplus/visualizer/log/HistoryCellRenderer.java" to "历史二级 SQL 列表",
         )
         for ((path, label) in anchors) {
             val f = java.io.File(path)

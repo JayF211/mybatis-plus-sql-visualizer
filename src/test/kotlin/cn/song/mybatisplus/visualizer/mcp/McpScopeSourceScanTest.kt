@@ -13,7 +13,8 @@ import java.io.File
  * 该豁免成立的前提是 **mcpserver 引用严格限定在 mcp 适配包内**——若未来任何非 mcp 代码
  * （如面板/服务层）直接引用 mcpserver 类型，243 上就会真正走到缺类路径，豁免即从「诚实」
  * 变成「掩盖」。本守卫把作用域钉死：
- *  1. src/main/kotlin 中出现 `com.intellij.mcpserver` 的文件必须位于 `visualizer/mcp/` 包；
+ *  1. src/main/java 中出现 `com.intellij.mcpserver` 的文件必须位于 `visualizer/mcp/` 包
+ *     （T-SyncK2JMaster309：k2j 生产树是 Java，扫描根与扩展名随树适配）；
  *  2. META-INF 下引用 mcpserver 的描述文件只允许 mcp-optional.xml（plugin.xml 主文件零引用，
  *     主文件引用会让 243 在解析阶段就尝试加载适配类）。
  * 扫描前剥离注释（BannedApiSourceScanTest 同款，注释里的历史记录不产生误报/漏报影响）。
@@ -23,10 +24,10 @@ class McpScopeSourceScanTest {
     private fun repoRoot(): File {
         var dir = File(System.getProperty("user.dir")).absoluteFile
         repeat(6) {
-            if (File(dir, "src/main/kotlin").isDirectory) return dir
+            if (File(dir, "src/main/java").isDirectory) return dir
             dir = dir.parentFile ?: return@repeat
         }
-        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
+        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
     }
 
     /** 剥离 block 注释与行注释（与 BannedApiSourceScanTest 同款）。 */
@@ -48,14 +49,14 @@ class McpScopeSourceScanTest {
 
     @Test
     fun testMcpServerReferencesConfinedToMcpPackage() {
-        val offenders = repoRoot().resolve("src/main/kotlin").walkTopDown()
-            .filter { it.isFile && it.extension == "kt" }
+        val offenders = repoRoot().resolve("src/main/java").walkTopDown()
+            .filter { it.isFile && it.extension == "java" }
             .filter { stripStrings(stripComments(it.readText())).contains("com.intellij.mcpserver") }
             .filter { !(it.path.replace('\\', '/')).contains("/visualizer/mcp/") }
             .map { it.relativeTo(repoRoot()).path.replace('\\', '/') }
             .toList()
         assertTrue(
-            "src/main/kotlin 出现 mcp 包之外的 com.intellij.mcpserver 引用：$offenders。" +
+            "src/main/java 出现 mcp 包之外的 com.intellij.mcpserver 引用：$offenders。" +
                 "mcpserver 类型仅允许在 mcp/ 适配包内出现（243 目标经 externalPrefixes 豁免的前提" +
                 "=引用永不可达，出包即破坏该前提，见 McpScopeSourceScanTest KDoc）",
             offenders.isEmpty(),

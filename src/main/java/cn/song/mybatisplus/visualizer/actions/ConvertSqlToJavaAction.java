@@ -21,7 +21,6 @@ import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.SelectionModel;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.Pair;
 import com.intellij.psi.PsiClass;
 import org.jetbrains.annotations.NotNull;
@@ -48,6 +47,10 @@ import java.util.stream.Collectors;
  * 与 ConvertToSqlAction（Wrapper→SQL 正向）互补。
  */
 public final class ConvertSqlToJavaAction extends AnAction {
+
+    /** 通知分组 id（与预览/转换链路同组）。 */
+    private static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
+
 
     @Override
     public void actionPerformed(@NotNull AnActionEvent e) {
@@ -280,11 +283,19 @@ public final class ConvertSqlToJavaAction extends AnAction {
     }
 
     private void showNoSelection(@NotNull Project project) {
-        Messages.showInfoMessage(
-                project,
-                MpSqlVisualizerBundle.message("reverse.error.noSelection"),
-                MpSqlVisualizerBundle.message("plugin.name")
-        );
+        // T-UiNative T-UN-02：未选中文本提示改轻通知（原模态弹窗——纯告知无需打断）；
+        // update() 已拦可见性，本路径为竞态兜底。测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）。
+        if (ApplicationManager.getApplication().isUnitTestMode()) return;
+        try {
+            new com.intellij.notification.Notification(
+                    NOTIFICATION_GROUP_ID,
+                    MpSqlVisualizerBundle.message("plugin.name"),
+                    MpSqlVisualizerBundle.message("reverse.error.noSelection"),
+                    com.intellij.notification.NotificationType.INFORMATION
+            ).notify(project);
+        } catch (Throwable ignored) {
+            // runCatching 等价：通知链路失败不影响动作主链
+        }
     }
 
     // 仅访问编辑器选择区（UI 状态，非 PSI）→ EDT 更新线程安全且无慢操作风险

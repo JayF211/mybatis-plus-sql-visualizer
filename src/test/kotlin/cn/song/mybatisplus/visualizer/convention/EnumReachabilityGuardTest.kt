@@ -45,16 +45,23 @@ import java.io.File
  *
  * 本守卫是**门禁型**（误报会阻断构建，故判据取「零产出 + 类型活跃」这一确定子集）；四轴全仓报告
  * （含 when 模式消费清单、只写不读字段、Topic 配对）见 `dev-support/audit_reachability.py`。
+ *
+ * k2j 移植注（生产为 Java，扫描根 src/main/java + .java）：
+ *  - 枚举声明形态 `enum class X {` → `enum X {`（ENUM_DEF 相应改写；嵌套枚举 `public enum X { … }` 同形）；
+ *  - 活跃判据的声明位剔除：Kotlin `class X` → Java `enum X`（两者都要剔除，否则声明自身算一次引用）；
+ *  - **产出点补 Java 三目分支位 `?`**：Kotlin `if (…) A else B` 分支位由 `)`/`\belse` 覆盖，Java 的
+ *    三目 `cond ? X : Y` 的真分支只由 `?` 标记——不收编会把 `hasEntity ? W.LAMBDA : W.QUERY` 这类
+ *    真实产出点判成「死分支」（移植首跑实证：WrapperFormatKt / SqlAutoFoldPlanner 两处假违规）。
  */
 class EnumReachabilityGuardTest {
 
     private fun repoRoot(): File {
         var dir = File(System.getProperty("user.dir")).absoluteFile
         repeat(6) {
-            if (File(dir, "src/main/kotlin").isDirectory) return dir
+            if (File(dir, "src/main/java").isDirectory) return dir
             dir = dir.parentFile ?: return@repeat
         }
-        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
+        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
     }
 
     /** 剥离 // 行注释与 /* */ 块注释（KDoc 里的文档词与交叉引用不算代码引用）。 */
@@ -68,10 +75,10 @@ class EnumReachabilityGuardTest {
         }
     }
 
-    /** 全仓 src/main 源码（剥注释）。 */
+    /** 全仓 src/main 源码（剥注释）——k2j 生产树为 src/main/java（.java）。 */
     private fun mainSources(): List<Pair<String, String>> =
         repoRoot().resolve("src/main").walkTopDown()
-            .filter { it.isFile && it.extension == "kt" }
+            .filter { it.isFile && it.extension == "java" }
             .map { it.relativeTo(repoRoot()).path.replace('\\', '/') to stripComments(it.readText()) }
             .toList()
 
@@ -190,12 +197,14 @@ class EnumReachabilityGuardTest {
         }
         val before = code.substring(maxOf(0, i - 40), i).trimEnd()
         val after = code.substring(end, minOf(code.length, end + 40))
-        if (Regex("^\\s*->").containsMatchIn(after)) return false // when 模式
+        if (Regex("^\\s*->").containsMatchIn(after)) return false // when/switch 模式位
         if (tailMatches("(===|!==|==|!=|<=|>=)\\s*", before)) return false // 被比较
         if (tailMatches("when\\s*\\(\\s*", before)) return false // when 主语位
-        // 赋值 / return / when 结果位 / 实参（`(` `,`）/ if-else 分支值（前随 `)`）/
-        // 映射值（`to`）/ 块末表达式
-        if (tailMatches("(=|return|->|\\(|,|\\)|\\bto|\\bin|\\bby|\\belse|\\?:|\\+=|&&|\\|\\|)\\s*", before)) {
+        // 赋值 / return / 结果位（`->`）/ 实参（`(` `,`）/ if-else 分支值（前随 `)`）/
+        // 映射值（`to`）/ 块末表达式 / **Java 三目真分支（前随 `?`）**
+        // （Java 无 Kotlin `if/else` 表达式，分支值由三目承担：`hasEntity ? W.LAMBDA : W.QUERY`——
+        //  不收编 `?` 会把真分支的真实产出点判成消费，见类 KDoc 移植注）
+        if (tailMatches("(=|return|->|\\(|,|\\)|\\bto|\\bin|\\bby|\\belse|\\?:|\\+=|&&|\\|\\||\\?)\\s*", before)) {
             return true
         }
         if (Regex("^\\s*[});,]").containsMatchIn(after)) return true // 块末表达式
@@ -216,9 +225,10 @@ class EnumReachabilityGuardTest {
         }
         return enumDecls(normalized).flatMap { decl ->
             val occurrences = Regex("\\b" + Regex.escape(decl.name) + "\\b").findAll(code).toList()
-            // 活跃 = 排除「enum class X」声明位后，全仓仍有该类型名的代码引用
+            // 活跃 = 排除声明位后，全仓仍有该类型名的代码引用
+            // （声明位剔除：Kotlin `class X` → Java `enum X`，两者都须剔除）
             val live = occurrences.any { m ->
-                !tailMatches("\\bclass\\s+", code.substring(maxOf(0, m.range.first - 12), m.range.first))
+                !tailMatches("\\b(?:class|enum)\\s+", code.substring(maxOf(0, m.range.first - 12), m.range.first))
             }
             decl.constants.map { constant ->
                 var produced = 0
@@ -265,8 +275,9 @@ class EnumReachabilityGuardTest {
 
     @Test
     fun test_扫描器灵敏度自证_KDoc词与注释交叉引用不误报() {
+        // 合成样本为 Java 形态（k2j 生产树）：`enum X { … }` 声明、块注释文档词、三目真分支产出点
         val synthetic = """
-            enum class SyntheticKind {
+            enum SyntheticKind {
                 INSERT,
                 /**
                  * UPSERT：`INSERT ... ON CONFLICT (id) DO UPDATE SET` 与 `MERGE INTO t (c) KEY (id)`
@@ -275,27 +286,29 @@ class EnumReachabilityGuardTest {
                 UPSERT,
             }
 
-            /** 预留位（KDoc 交叉引用 [SyntheticReserved.SCHEMA] 不算代码消费）。 */
-            enum class SyntheticReserved { SCHEMA, ANNOTATION }
+            /** 预留位（注释交叉引用 [SyntheticReserved.SCHEMA] 不算代码消费）。 */
+            enum SyntheticReserved { SCHEMA, ANNOTATION }
 
-            enum class SyntheticCamel { UpToDate, Checking }
+            enum SyntheticCamel { UpToDate, Checking }
 
-            enum class SyntheticDefect { LIVE, DEAD }
+            enum SyntheticDefect { LIVE, DEAD }
 
-            enum class SyntheticProduced { P }
+            enum SyntheticProduced { P }
 
-            object SyntheticConsumer {
-                fun use(kind: SyntheticKind): Boolean = kind == SyntheticKind.INSERT
-                fun useCamel(state: SyntheticCamel): Boolean = state == SyntheticCamel.UpToDate
-                fun useDefect(d: SyntheticDefect): Boolean = d == SyntheticDefect.DEAD
-                fun useProduced(p: SyntheticProduced): Boolean = p == SyntheticProduced.P
-                fun produce(): SyntheticProduced = SyntheticProduced.P
+            final class SyntheticConsumer {
+                static boolean use(SyntheticKind kind) { return kind == SyntheticKind.INSERT; }
+                static boolean useCamel(SyntheticCamel state) { return state == SyntheticCamel.UpToDate; }
+                static boolean useDefect(SyntheticDefect d) { return d == SyntheticDefect.DEAD; }
+                static boolean useProduced(SyntheticProduced p) { return p == SyntheticProduced.P; }
+                static SyntheticProduced produce() { return SyntheticProduced.P; }
+                // 三目真分支位（Java 产出点形态，Kotlin if/else 表达式的等价物）
+                static SyntheticProduced pick(boolean flag) { return flag ? SyntheticProduced.P : null; }
             }
         """.trimIndent()
-        val sources = listOf("src/main/kotlin/Synthetic.kt" to synthetic)
+        val sources = listOf("src/main/java/Synthetic.java" to synthetic)
         val decls = enumDecls(sources).associateBy { it.name }
         assertEquals(
-            "KDoc 里的文档词（VALUES/CONFLICT/KEY）不得被当枚举常量：${decls["SyntheticKind"]?.constants}",
+            "注释里的文档词（VALUES/CONFLICT/KEY）不得被当枚举常量：${decls["SyntheticKind"]?.constants}",
             listOf("INSERT", "UPSERT"),
             decls["SyntheticKind"]?.constants,
         )
@@ -312,7 +325,7 @@ class EnumReachabilityGuardTest {
         val consumedOnly = rows["SyntheticKind.INSERT"]!!
         assertTrue("被比较且零产出的常量应判为违规：$consumedOnly", consumedOnly.produced == 0 && consumedOnly.consumed > 0)
         assertTrue(
-            "仅出现在 KDoc 交叉引用里的枚举不得算活跃（否则 CommentSource 预留位会误报）：" +
+            "仅出现在注释交叉引用里的枚举不得算活跃（否则 CommentSource 预留位会误报）：" +
                 "${rows["SyntheticReserved.SCHEMA"]}",
             rows["SyntheticReserved.SCHEMA"]!!.enumLive.not(),
         )
@@ -332,15 +345,18 @@ class EnumReachabilityGuardTest {
     }
 
     private companion object {
-        val ENUM_DEF = Regex("\\benum\\s+class\\s+(\\w+)")
+        /** Java 枚举声明（Kotlin `enum class X` 的等价形态：`enum X {` / `public enum X {`）。 */
+        val ENUM_DEF = Regex("\\benum\\s+(\\w+)")
         val IDENT = Regex("[A-Za-z_]\\w*")
 
         /**
          * 白名单（每条必须带理由）。
          *
-         * - `SubmitPhase.SUCCESS`：`ErrorReportDialog.submitStatusText` 的 when 分支返回 null，
+         * - `SubmitPhase.SUCCESS`：`ErrorReportDialog.submitStatusText` 的 switch 分支返回 null，
          *   其 KDoc 明示「成功即关窗，不需要写状态行」——提交成功走 `close(OK_EXIT_CODE)`，
          *   该态由设计决定永不产出（穷尽性映射保留位）。**不是**静默失效：分支行为与文档一致。
+         *   k2j 侧核实：`SubmitPhase` 为 `ErrorReportDialog` 的嵌套 `public enum`（ErrorReportDialog.java:613，
+         *   常量 SUBMITTING/SUCCESS/FAILED 与 master 一致），`SUCCESS` 仍零产出 → 条目成立。
          *   注意：这条豁免的代价是「该形态的死分支不再报警」——若将来有第二例，先判断能否改判据
          *   （如按「消费点是否为穷尽 when」细分），再考虑加白。
          */

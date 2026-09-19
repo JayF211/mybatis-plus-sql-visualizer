@@ -47,9 +47,16 @@ import java.util.regex.Pattern;
  * <p>降级契约：无数据源 / 任一表定位失败 / Database 或 Diagrams 插件缺席 / 框架异常
  * → {@link #buildTabComponent} 返回 null，调用方回落 A 路径（自实现 Provider）→ 自绘。
  *
- * <p>隔离边界：本文件 import com.intellij.database.* / com.intellij.uml.*，仅在
- * Ultimate（两插件齐备）被调用方触发加载；所有公开方法包 try/catch(Throwable)
- * （含 NoClassDefFoundError——Community 下类解析失败被吞掉，与 A 路径门面同语义）。
+ * <p>隔离边界：DB 插件耦合实现（{@code com.intellij.database.*} 类型引用）全部下沉嵌套类
+ * {@link DbCoupled}，本类常量池零 DB 引用——Community（无 database 插件，测试默认 classpath
+ * 即按此排除 database-plugin.jar）下本类可正常加载，{@link #disposeNativeEditor} /
+ * {@link #clearRegisteredFk} 这两个「面板清理」入口照常生效；DB 路径真正走到时才解析嵌套类，
+ * 失败由 {@link #buildTabComponent} 吞掉返回 null（回落 A 路径）。
+ *
+ * <p>T-SyncK2JMaster309（k2j 适配）：master 的 Kotlin object 无需此分层——JVM 对 Kotlin 字节码
+ * 在该调用点不需解析 DB 类型（-Xlog:class+load 对照实证：master 加载成功且零 DasObject 解析）；
+ * k2j 的 Java 字节码链接期验证即需解析签名中的 DB 类型，整类加载失败且异常抛在调用方帧
+ * （类内 try/catch 够不着）。分层后两树对外行为一致。
  */
 public final class NativeDatabaseDiagramSupport {
 
@@ -67,9 +74,65 @@ public final class NativeDatabaseDiagramSupport {
     /**
      * 为 JOIN 模型构建 Database 原生图嵌入组件。
      *
+     * <p>T-SyncK2JMaster309：实现下沉 {@link DbCoupled}——见类注释「Community 可加载性」。
+     * 本方法自身不引用任何 database-plugin 类型，故 Community（无该插件）下本类可正常加载；
+     * 桩类解析失败时在此吞掉并返回 null，调用方按契约回落 A 路径。
+     *
      * @return 原生组件；任一前置条件不满足或框架异常返回 null（调用方降级）
      */
     public static JComponent buildTabComponent(Project project, DiagramModel model, String title, Disposable parent) {
+        try {
+            return DbCoupled.build(project, model, title, parent);
+        } catch (Throwable t) {
+            LOG.warn("Native Database diagram (B path) unavailable, falling back to A path", t);
+            JoinFkRegistry.clear();
+            return null;
+        }
+    }
+
+
+    /**
+     * 释放嵌入的 Database 图编辑器（换图/清空调用）。
+     *
+     * <p>T-EmbedFkOrder F2：<b>不再在此清空 {@link JoinFkRegistry}</b>——dispose 只负责释放编辑器，
+     * 清空注册表会误伤「当前图」刚登记的虚拟外键（真机故障：{@code showJoinDiagram} 先建新图登记、
+     * 后清旧图，旧图 dispose 把新登记整批抹掉 → 只剩节点没连线）。清理职责改为显式语义点：
+     * 登记前 {@code registerJoinForeignKeys} 自带 clear（新图恰好只留自己的 FK）、无 JOIN 移除标签页与
+     * 面板 clear() 时调用 {@link #clearRegisteredFk}。
+     */
+    public static void disposeNativeEditor(JComponent component) {
+        try {
+            if (component != null) {
+                Object editor = component.getClientProperty(NATIVE_EDITOR_KEY);
+                if (editor instanceof Disposable) {
+                    Disposer.dispose((Disposable) editor);
+                }
+            }
+        } catch (Throwable ignored) {
+            // 释放失败不阻断降级链
+        }
+    }
+
+    /** 回收 JOIN 虚拟外键登记（打开失败 / 独立路径）。 */
+    public static void clearRegisteredFk() {
+        JoinFkRegistry.clear();
+    }
+    /**
+     * DB 插件耦合实现：{@code com.intellij.database.*} 类型引用集中于此嵌套类。
+     *
+     * <p>T-SyncK2JMaster309（k2j 适配）：master 的 Kotlin object 在 Community（无 database 插件，
+     * 测试默认 classpath 即按此排除 database-plugin.jar）下**能加载**——JVM 对 Kotlin 字节码
+     * 在本调用点不需解析 DB 类型（-Xlog:class+load 对照实证：master 加载成功且零 DasObject 解析）。
+     * k2j 是 Java 字节码，链接期验证即需解析签名中的 DB 类型，整个类加载失败（NoClassDefFoundError
+     * 抛在调用方帧，类内 try/catch 够不着）。故把 DB 耦合实现整体下沉本嵌套类：外层类常量池零 DB
+     * 引用 → Community 可加载，{@code clearRegisteredFk}/{@code disposeNativeEditor} 照常生效；
+     * DB 路径真正走到时才解析本嵌套类，失败即被 {@link #buildTabComponent} 吞掉回落 A 路径——
+     * 与类注释声明的隔离契约一致。
+     */
+    private static final class DbCoupled {
+
+        /** 原 {@link #buildTabComponent} 本体（含数据源定位、虚拟外键登记、原生编辑器构建）。 */
+        static JComponent build(Project project, DiagramModel model, String title, Disposable parent) {
         if (project == null || model.isEmpty()) {
             return null;
         }
@@ -134,34 +197,7 @@ public final class NativeDatabaseDiagramSupport {
             JoinFkRegistry.clear();
             return null;
         }
-    }
-
-    /**
-     * 释放嵌入的 Database 图编辑器（换图/清空调用）。
-     *
-     * <p>T-EmbedFkOrder F2：<b>不再在此清空 {@link JoinFkRegistry}</b>——dispose 只负责释放编辑器，
-     * 清空注册表会误伤「当前图」刚登记的虚拟外键（真机故障：{@code showJoinDiagram} 先建新图登记、
-     * 后清旧图，旧图 dispose 把新登记整批抹掉 → 只剩节点没连线）。清理职责改为显式语义点：
-     * 登记前 {@code registerJoinForeignKeys} 自带 clear（新图恰好只留自己的 FK）、无 JOIN 移除标签页与
-     * 面板 clear() 时调用 {@link #clearRegisteredFk}。
-     */
-    public static void disposeNativeEditor(JComponent component) {
-        try {
-            if (component != null) {
-                Object editor = component.getClientProperty(NATIVE_EDITOR_KEY);
-                if (editor instanceof Disposable) {
-                    Disposer.dispose((Disposable) editor);
-                }
-            }
-        } catch (Throwable ignored) {
-            // 释放失败不阻断降级链
         }
-    }
-
-    /** 回收 JOIN 虚拟外键登记（打开失败 / 独立路径）。 */
-    public static void clearRegisteredFk() {
-        JoinFkRegistry.clear();
-    }
 
     /**
      * 把模型里的 ON 等值列配对登记为虚拟外键。
@@ -433,5 +469,6 @@ public final class NativeDatabaseDiagramSupport {
         } catch (Throwable e) {
             LOG.warn("B path enable VIRTUAL_FOREIGN_KEYS failed (edges may be absent)", e);
         }
+    }
     }
 }

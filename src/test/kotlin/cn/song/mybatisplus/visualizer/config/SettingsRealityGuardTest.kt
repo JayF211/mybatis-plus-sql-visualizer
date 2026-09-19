@@ -47,6 +47,11 @@ import java.io.File
  * 不逐个推断接收者类型——lambda 参数 `it.effectiveTablePrefix()` 无法静态定型，故取双条件近似）。
  * 收紧后实测又查获一处真死面：`ProjectPluginSettings.effectiveDialectAuto()` 零真实调用
  * （SqlPreviewService 的同名私有 helper 直读 `state.dialectAuto` 绕开了它）→ 已改走项目级方法。
+ *
+ * k2j 移植注（生产为 Java）：扫描根 `src/main/java`（.java）；`var xxx` → `private <Type> xxx;`
+ * 字段声明；`fun apply(): Boolean` / `fun reset()` → `public boolean apply()` / `public void reset()`；
+ * `fun effectiveXxx(` → `public boolean effectiveXxx(`（调用形态 `ps.effectiveXxx(` 两侧一致；
+ * Java 无扩展函数定义形态，定义剔除逻辑退化为防御）。四条断言语义不变。
  */
 class SettingsRealityGuardTest {
 
@@ -57,10 +62,10 @@ class SettingsRealityGuardTest {
     private fun repoRoot(): File {
         var dir = File(System.getProperty("user.dir")).absoluteFile
         repeat(6) {
-            if (File(dir, "src/main/kotlin").isDirectory) return dir
+            if (File(dir, "src/main/java").isDirectory) return dir
             dir = dir.parentFile ?: return@repeat
         }
-        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
+        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
     }
 
     private fun mainFile(rel: String): File = repoRoot().resolve(rel)
@@ -102,26 +107,30 @@ class SettingsRealityGuardTest {
 
     @Test
     fun `State每个var字段在非config包存在消费`() {
-        val settingsSrc = mainFile("src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettings.kt").readText()
-        val stateStart = settingsSrc.indexOf("data class State(")
-        assertTrue("PluginSettings.kt 应声明 State", stateStart >= 0)
-        // State 主构造体结束于「\n    )」（后续 companion/方法均在 data class 之外）
-        val stateBody = settingsSrc.substring(stateStart, settingsSrc.indexOf("\n    )", stateStart))
-        val fields = Regex("""\n\s+var\s+(\w+)\s*[:=]""").findAll(stateBody).map { it.groupValues[1] }.toList()
-        assertTrue("State 应解析出 var 字段（正则失效？）", fields.size >= 60)
+        val settingsSrc = mainFile("src/main/java/cn/song/mybatisplus/visualizer/config/PluginSettings.java").readText()
+        val stateStart = settingsSrc.indexOf("class State {")
+        assertTrue("PluginSettings.java 应声明 State", stateStart >= 0)
+        // State 类体结束于「\n    }」（后续静态工厂/导入导出方法均在 State 之外）
+        val stateBody = settingsSrc.substring(stateStart, settingsSrc.indexOf("\n    }", stateStart))
+        // Java 字段形态（Kotlin `var name: T = init` 的等价物）：`private boolean dialectAuto = true;`
+        // / `private String dialect = DEFAULT_DIALECT;` / 无初值 `private JButton modeButton;`
+        val fields = Regex("""\n\s+(?:private|public|protected)\s+(?:static\s+)?(?:final\s+)?[\w.<>\[\],?\s]*?\s(\w+)\s*[;=]""")
+            .findAll(stateBody).map { it.groupValues[1] }.toList()
+        assertTrue("State 应解析出字段（正则失效？）", fields.size >= 60)
 
         // 注释剥离后再判消费：KDoc/注释里提一句字段名不算消费（T-Fix-SettingsScope 收紧）
         val code = nonConfigSources().map { (p, t) -> p to stripComments(t) }
         // 间接消费别名：字段本身不出现在非 config 包，但经 config 包同名/派生访问器转出后真实驱动行为
-        // （logListSqlDisplayMode → sqlListDisplayMode()，消费点 SqlLogPanel.kt / HistorySqlLogPanel.kt）。
+        // （logListSqlDisplayMode → sqlListDisplayMode()，消费点 SqlLogPanel.java / HistorySqlLogPanel.java）。
         // 显式登记而非泛化匹配——新增别名须留注释可审计。
         val alias = mapOf("logListSqlDisplayMode" to "sqlListDisplayMode")
         val dead = fields.filter { f ->
             val probe = alias[f] ?: f
             // 词边界判定：`tablePrefix` 不再被 `removeTablePrefix` 这类更长标识符兜住（子串口径后门）
             val identifier = Regex("""(?<![\w$])${Regex.escape(probe)}(?![\w$])""")
-            // Java 访问器形态：Kotlin `var xxx` 的 Java 消费方只能走 getXxx()
-            // （logStopOnToolWindowClose 的消费点在 src/main/java 的 ToolWindow 监听链）
+            // Java 访问器形态：Kotlin `var xxx` 的 Java 消费方只能走 getXxx()（本移植树布尔字段亦为
+            // getXxx 而非 isXxx，与 Kotlin 生成的访问器命名一致；logStopOnToolWindowClose 的消费点
+            // 在 ToolWindow 监听链）
             val javaAccessor = Regex(
                 """(?<![\w$])get${Regex.escape(probe.replaceFirstChar { it.uppercaseChar() })}(?![\w$])""",
             )
@@ -157,35 +166,40 @@ class SettingsRealityGuardTest {
 
     @Test
     fun `面板每个可编辑控件在apply与reset函数体中各出现`() {
-        val panelSrc = mainFile("src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt").readText()
+        val panelSrc = mainFile("src/main/java/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.java").readText()
         // 行尾归一：工作树检出受 core.autocrlf 影响为 CRLF，而 Java 正则 `.` 不匹配 `\r`、
         // 全匹配（matches）与 `l == "    }"` 会双双失配（20260918 合并到 master 后实证）。
         val lines = panelSrc.split('\n').map { it.trimEnd('\r') }
 
-        // 控件字段：private val xxx = ComboBox<...>( / JBCheckBox( / ColorPanel( / ...
+        // 控件字段（Java 形态）：`private final JBCheckBox replaceParamsCheck = new JBCheckBox(…);`
+        // / `private final JComboBox<CrudColorStyleOption> crudColorStyleCombo = new ComboBox<>();`
+        // 泛型在声明类型上（Kotlin 在初始化表达式上）——取声明类型的裸类名与 master 的控件类型集对齐。
         val widgetTypes = setOf("JBCheckBox", "JBTextField", "JBTextArea", "JComboBox", "ComboBox", "ColorPanel", "JBLabel", "JButton")
         val fields = lines.mapNotNull { l ->
-            val m = Regex("""\s*private val (\w+)\s*=\s*(?:([\w.]+)\??<|([\w.]+)\()""").find(l) ?: return@mapNotNull null
-            val base = ((m.groupValues[2].ifEmpty { m.groupValues[3] }).substringAfterLast('.')).substringBefore('<')
-            if (base in widgetTypes) m.groupValues[1] else null
+            val m = Regex("""\s*private\s+(?:final\s+)?(?:static\s+)?([\w.]+)(?:<[^>]*>)?\s+(\w+)\s*=""")
+                .find(l) ?: return@mapNotNull null
+            val base = m.groupValues[1].substringAfterLast('.')
+            if (base in widgetTypes) m.groupValues[2] else null
         }
         assertTrue("面板应解析出控件字段（正则失效？）", fields.size >= 60)
 
-        // 函数体切片：`fun apply(` / `fun reset(` 到下一个 4 空格缩进的顶层成员声明或收尾括号
+        // 函数体切片：`public boolean apply() {` / `public void reset() {` 到下一个 4 空格缩进的
+        // 顶层成员声明（Java 成员声明以修饰符/注解/KDoc 起行）或收尾括号
         // （边界行判定用 startsWith 前缀而非 containsMatchIn——后者会把 8 空格缩进的方法体内
         // `//` 注释行误判为 `/` 边界，把 apply 切成 3 行假切片，20260918 首跑实证）
         fun body(name: String): String {
-            val start = lines.indexOfFirst { it.matches(Regex(""" {4}fun $name\(.*""")) }
-            assertTrue("PluginSettingsPanel 应声明 fun $name(", start >= 0)
+            val start = lines.indexOfFirst { it.matches(Regex(""" {4}(?:public|private|protected) [\w<>\[\], ?]+ $name\(.*""")) }
+            assertTrue("PluginSettingsPanel 应声明 $name(", start >= 0)
             val end = lines.drop(start + 1).indexOfFirst { l ->
                 l == "    }" || (
                     l.startsWith("    ") && !l.startsWith("     ") && l.isNotBlank() && l.trimStart().let { t ->
-                        t.startsWith("fun ") || t.startsWith("private fun ") || t.startsWith("internal fun ") ||
-                            t.startsWith("/**") || t.startsWith("companion ") || t.startsWith("init")
+                        t.startsWith("public ") || t.startsWith("private ") || t.startsWith("protected ") ||
+                            t.startsWith("static ") || t.startsWith("class ") || t.startsWith("interface ") ||
+                            t.startsWith("enum ") || t.startsWith("record ") || t.startsWith("@") || t.startsWith("/**")
                     }
                     )
             }
-            assertTrue("fun $name( 的结束边界未找到", end >= 0)
+            assertTrue("$name( 的结束边界未找到", end >= 0)
             return lines.subList(start, start + 1 + end).joinToString("\n")
         }
 
@@ -195,8 +209,8 @@ class SettingsRealityGuardTest {
         val resetBody = stripCommentsKeepLines(body("reset"))
         // 间接绑定别名：combo 不直现于 apply()，经 selectedXxx() helper 读值（helper 内引用控件，
         // helper 被 apply 调用）——登记而非泛化匹配，新增别名须留注释可审计。
-        //  - crudColorStyleCombo → selectedCrudColorStyle()（apply :1343 / reset :1466 直现）
-        //  - logDisplayModeCombo → selectedListDisplayMode()（apply :1345 / reset :1469 直现）
+        //  - crudColorStyleCombo → selectedCrudColorStyle()（apply / reset 直现）
+        //  - logDisplayModeCombo → selectedListDisplayMode()（apply / reset 直现）
         val alias = mapOf(
             "crudColorStyleCombo" to listOf("selectedCrudColorStyle()", "crudColorStyleCombo"),
             "logDisplayModeCombo" to listOf("selectedListDisplayMode()", "logDisplayModeCombo"),
@@ -226,8 +240,11 @@ class SettingsRealityGuardTest {
 
     @Test
     fun `ProjectPluginSettings每个effective方法与总开关在非config包存在调用`() {
-        val projSrc = mainFile("src/main/kotlin/cn/song/mybatisplus/visualizer/config/ProjectPluginSettings.kt").readText()
-        val effective = Regex("""fun (effective\w+)\(""").findAll(projSrc).map { it.groupValues[1] }.toList()
+        val projSrc = mainFile("src/main/java/cn/song/mybatisplus/visualizer/config/ProjectPluginSettings.java").readText()
+        // Java 声明形态（Kotlin `fun effectiveXxx(` 的等价物）：`public boolean effectiveDialectAuto() {`
+        // ——要求行首修饰符，避免把 `return effectiveXxx(` 这类裸调用误当声明。
+        val effective = Regex("""(?m)^\s*(?:(?:public|protected|private|static|final|synchronized)\s+)+[\w.<>\[\],?]+\s+(effective\w+)\s*\(""")
+            .findAll(projSrc).map { it.groupValues[1] }.toList().distinct()
         assertTrue("ProjectPluginSettings 应声明 effective* 方法", effective.isNotEmpty())
         // 项目级总开关：`isEnabled()` 是全部 effective* 的唯一闸门，此前不在扫描面内
         // （关掉总开关即全项目级覆盖失效，漏接它与漏接任一 effective* 同责）
@@ -252,9 +269,12 @@ class SettingsRealityGuardTest {
             // 原口径据此对 4 个符号可构造假绿：删掉 helper 体内的
             // `projectSettings?.effectiveXxx()` 后裸调用仍在 → 照旧绿。
             val call = Regex("""\.\s*${Regex.escape(m)}\s*\(""")
-            // 扩展函数定义形态（`fun ProjectPluginSettings.effectiveXxx(`）自带接收者点号，
-            // 会被上式误判为调用，故仍剔除同名函数定义跨度（原口径的剔除逻辑保留）。
-            val definition = Regex("""fun\s+${Regex.escape(m)}\s*\(""")
+            // 定义形态剔除：Kotlin 扩展函数 `fun ProjectPluginSettings.effectiveXxx(` 自带接收者点号，
+            // 会被上式误判为调用，故剔除同名函数定义跨度。Java 无扩展函数定义形态（`public boolean
+            // effectiveXxx(` 不含点号），此剔除在 Java 侧退化为防御——保留判据结构不动。
+            val definition = Regex(
+                """(?m)^\s*(?:(?:public|protected|private|static|final|synchronized)\s+)+[\w.<>\[\],?]+\s+${Regex.escape(m)}\s*\(""",
+            )
             code.none { (_, t) ->
                 val defSpans = definition.findAll(t).map { it.range }.toList()
                 call.findAll(t).any { c -> defSpans.none { d -> c.range.first in d } }

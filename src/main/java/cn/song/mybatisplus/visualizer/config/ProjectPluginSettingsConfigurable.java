@@ -170,7 +170,12 @@ public class ProjectPluginSettingsConfigurable implements Configurable {
         panel.add(scopeLabel, gbc);
         gbc.gridwidth = 1;
 
-        addLabeledRow(panel, gbc, MpSqlVisualizerBundle.message("settings.dialect"), buildDialectCombo());
+        // 方言控件字段须在此落地（master 侧 DSL 为 `comboCell = comboBox(...)` + `dialectCombo =
+        // comboCell.component`）：本行原先直传 buildDialectCombo() 返回值而不赋值，dialectCombo
+        // 恒为 null → 下方 projectValueCells 收进一个 null 元素，refreshControls 的置灰循环 NPE，
+        // 方言项本身也永远灌不进值（master 侧列表元素皆为非空 Cell）。
+        dialectCombo = buildDialectCombo();
+        addLabeledRow(panel, gbc, MpSqlVisualizerBundle.message("settings.dialect"), dialectCombo);
         replaceParamsCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.replaceParams"));
         replaceParamsCheck.setToolTipText(fieldTip());
         addFullRow(panel, gbc, replaceParamsCheck);

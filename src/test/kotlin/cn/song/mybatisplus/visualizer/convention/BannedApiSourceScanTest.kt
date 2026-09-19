@@ -38,16 +38,30 @@ import java.io.File
  * 原文上：注释/字符串里不成对 `{` 会让 body 越过 lambda 边界（**过报**，把 lambda 外的合法写报成
  * 违规），不成对 `}` 则提前截断（**漏报**）；现跑在 [maskNonCode]（剥注释 + 涂白字符串字面量、
  * **逐行保行**）后的文本上。
+ *
+ * ## k2j 移植注（生产为 Java，扫描根 src/main/java + .java；测试树 src/test/kotlin + src/test/java）
+ *
+ * 1. **Java 无尾随 lambda**：回调体一律写在括号内（`invokeLater(() -> { … })`），故 [invokeLaterSites]
+ *    的形态③（`invokeLater { }`）在 Java 侧不可达，默认模态规则的判据相应收编为「实参区不含
+ *    `ModalityState.any()` 且不含 `nonModal()` 即按默认模态计」——这正是 master KDoc 里登记的
+ *    「待收编边界」；不收编则 Java 侧扫描面为 0（假绿）。
+ * 2. **顶层函数独立成文件**：master 的 `FeedbackApi.kt` 内含 `HttpRequestsSender` 实现，Java 侧拆为
+ *    独立文件 `HttpRequestsSender.java`——网络出口收口锚点随之下沉到该文件（`connection.contentEncoding`
+ *    → Java getter `connection.getContentEncoding()`）。
+ * 3. **Kotlin 属性语法 vs Java getter**：`Toolkit.getDefaultToolkit().systemClipboard`（Kotlin 属性）
+ *    在 Java 侧必写 `getSystemClipboard()`——原 `getSystemClipboard` 零容忍规则在 Java 侧首次可见
+ *    `RollbackSqlDialog.java` 的同点位直写（master 同代码，仅因属性语法对旧 token 不可见）。
+ *    该点位登记进白名单并留待收敛（见用例内注释），规则本身不撤。
  */
 class BannedApiSourceScanTest {
 
     private fun repoRoot(): File {
         var dir = File(System.getProperty("user.dir")).absoluteFile
         repeat(6) {
-            if (File(dir, "src/main/kotlin").isDirectory) return dir
+            if (File(dir, "src/main/java").isDirectory) return dir
             dir = dir.parentFile ?: return@repeat
         }
-        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
+        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
     }
 
     /** 剥离 block 注释与行注释（字符串字面量中的 // 会被连带截断——只可能产生漏报不产生误报，可接受）。 */
@@ -57,9 +71,20 @@ class BannedApiSourceScanTest {
             .lineSequence()
             .joinToString("\n") { it.substringBefore("//") }
 
+    /** k2j 生产树：src/main/java（.java）。 */
     private fun mainSources(): List<Pair<String, String>> =
-        repoRoot().resolve("src/main/kotlin").walkTopDown()
-            .filter { it.isFile && it.extension == "kt" }
+        repoRoot().resolve("src/main/java").walkTopDown()
+            .filter { it.isFile && it.extension == "java" }
+            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') to stripComments(it.readText()) }
+            .toList()
+
+    /** k2j 测试树：src/test/kotlin 与 src/test/java（.kt/.java 混放）——规则对两处同样生效。 */
+    private fun testSources(): List<Pair<String, String>> =
+        listOf("src/test/kotlin", "src/test/java")
+            .flatMap { rel ->
+                repoRoot().resolve(rel).takeIf { it.isDirectory }?.walkTopDown()?.toList() ?: emptyList()
+            }
+            .filter { it.isFile && (it.extension == "kt" || it.extension == "java") }
             .map { it.relativeTo(repoRoot()).path.replace('\\', '/') to stripComments(it.readText()) }
             .toList()
 
@@ -103,7 +128,7 @@ class BannedApiSourceScanTest {
 
     @Test
     fun `禁用IPGP发行版裁剪平台类`() {
-        // 名单出处：SqlToJavaPanel.kt / IconScaler.kt 注释（编译实证）；发现新裁剪类请追加并留注释
+        // 名单出处：SqlToJavaPanel.java / IconScaler.java 注释（编译实证）；发现新裁剪类请追加并留注释
         for (banned in listOf("JBIconButton", "SmallIconButton", "InlineIconButton", "com.intellij.util.ui.IconUtil")) {
             assertNoHits(
                 banned,
@@ -131,12 +156,11 @@ class BannedApiSourceScanTest {
         // T-BrowserLeak2（2026-09-18）：SafeBrowserTest 直调真实 URL 曾致定时回归每次真开 Edge
         // （守卫「app != null && isUnitTestMode」在无 Application 环境放行）。src/test 同样禁直调，
         // 统一走 util.SafeBrowser——其 fail-safe 守卫在无 Application 环境恒短路。
-        val bad = repoRoot().resolve("src/test/kotlin").walkTopDown()
-            .filter { it.isFile && it.extension == "kt" }
-            .filter { it.name != "BannedApiSourceScanTest.kt" } // 本守卫自身的报错文案含该片段，须自豁免
-            .filter { stripComments(it.readText()).contains("BrowserUtil.browse(") }
-            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') }
-            .toList()
+        // k2j 注：测试树 src/test/kotlin 与 src/test/java 混放（.kt/.java），两处一并扫。
+        val bad = testSources()
+            .filter { (path, _) -> !path.endsWith("BannedApiSourceScanTest.kt") } // 本守卫自身的报错文案含该片段，须自豁免
+            .filter { (_, code) -> code.contains("BrowserUtil.browse(") }
+            .map { (path, _) -> path }
         assertTrue(
             "src/test 出现 BrowserUtil.browse( 直调（$bad）——测试进程触达即弹宿主机浏览器，" +
                 "统一改走 util.SafeBrowser",
@@ -152,13 +176,14 @@ class BannedApiSourceScanTest {
         // SqlPreviewPanelTest setUp 快照处单类 10 例全红），且测试写入会覆盖用户自己的剪贴板。
         // 故 src/test 禁直连系统剪贴板：一律 installFakeClipboard（testutil）替换平台服务。
         // 唯一豁免 = testutil 假实现本体（不含系统剪贴板访问，仅作类型引用）。
-        val bad = repoRoot().resolve("src/test/kotlin").walkTopDown()
-            .filter { it.isFile && it.extension == "kt" }
-            .filter { it.name != "BannedApiSourceScanTest.kt" } // 本守卫自身报错文案含该片段，须自豁免
-            .filter { it.name != "FakeClipboard.kt" } // 假实现本体（不含 systemClipboard 访问）
-            .filter { it.readText().let { t -> t.contains("systemClipboard") || t.contains("getSystemClipboard") } }
-            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') }
-            .toList()
+        // k2j 注：假实现本体为 testutil/FakeClipboardInstaller.java（src/test/java）与
+        // testutil/FakeClipboard.kt（src/test/kotlin），两者均自豁免。
+        val bad = testSources()
+            .filter { (path, _) -> !path.endsWith("BannedApiSourceScanTest.kt") } // 本守卫自身报错文案含该片段，须自豁免
+            .filter { (path, _) -> !path.endsWith("FakeClipboard.kt") } // 假实现本体（不含 systemClipboard 访问）
+            .filter { (path, _) -> !path.endsWith("FakeClipboardInstaller.java") } // 同上（Java 侧安装器）
+            .filter { (_, t) -> t.contains("systemClipboard") || t.contains("getSystemClipboard") }
+            .map { (path, _) -> path }
         assertTrue(
             "src/test 出现系统剪贴板直连（$bad）——用户复制/并行会话占用时必抛 cannot open system " +
                 "clipboard（整类用例假失败），且会覆盖用户剪贴板；改走 testutil.installFakeClipboard",
@@ -170,11 +195,12 @@ class BannedApiSourceScanTest {
     fun `SafeBrowser守卫语义_无Application必短路锚点`() {
         // T-BL2-03：守卫语义锚点防回退——isTestEnvironment 必须是「app == null || isUnitTestMode」
         // fail-safe 形态；若有人改回「app != null &&」（白名单放行），无 Application 测试进程会真开浏览器。
+        // k2j 注：Java 侧判据文本逐字一致（`return app == null || app.isUnitTestMode();`），仅路径换 .java。
         val code = stripComments(
-            repoRoot().resolve("src/main/kotlin/cn/song/mybatisplus/visualizer/util/SafeBrowser.kt").readText(),
+            repoRoot().resolve("src/main/java/cn/song/mybatisplus/visualizer/util/SafeBrowser.java").readText(),
         )
         assertTrue(
-            "SafeBrowser.kt 丢失 fail-safe 守卫形态（app == null || isUnitTestMode）——" +
+            "SafeBrowser.java 丢失 fail-safe 守卫形态（app == null || isUnitTestMode）——" +
                 "无平台 Application 的测试进程会放行 BrowserUtil 并弹宿主机浏览器（T-BrowserLeak2 实录）",
             code.contains("app == null || app.isUnitTestMode"),
         )
@@ -207,12 +233,20 @@ class BannedApiSourceScanTest {
         // SqlPreviewPanel：执行前 YesNo 确认；PluginSettingsPanel：配置异常 warning；
         // LogToSqlPanel：DML 执行前 YesNo 确认（与预览面板同交互，ExecuteConfirmMessages 同款）；
         // McpConfigurable：「前往 MCP Server 设置」目标不可用时 warning（与 PluginSettingsPanel 配置不可用同类）。
+        //
+        // k2j 移植注（两处移植分歧，待收敛，非本守卫授权）：
+        //  - ConvertSqlToJavaAction.java / CrudSqlPreviewFlow.java 的兜底提示在 master 已由
+        //    T-UiNative T-UN-02 从模态弹窗改为平台 Notification（「纯告知无需打断」+ isUnitTestMode 短路），
+        //    Java 移植侧落回 `Messages.showInfoMessage` → 本守卫首次可见。**登记为待收敛项**：
+        //    收敛后须从本白名单删除（或由生产改回 Notification），勿让白名单腐烂成永久豁免。
         val whitelist = setOf(
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SourceCaptureGuide.kt",
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt",
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt",
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.kt",
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/config/McpConfigurable.kt",
+            "src/main/java/cn/song/mybatisplus/visualizer/log/SourceCaptureGuide.java",
+            "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.java",
+            "src/main/java/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.java",
+            "src/main/java/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.java",
+            "src/main/java/cn/song/mybatisplus/visualizer/config/McpConfigurable.java",
+            "src/main/java/cn/song/mybatisplus/visualizer/actions/ConvertSqlToJavaAction.java",
+            "src/main/java/cn/song/mybatisplus/visualizer/actions/CrudSqlPreviewFlow.java",
         )
         val found = mainSources()
             .filter { (_, code) ->
@@ -248,29 +282,33 @@ class BannedApiSourceScanTest {
     fun `网络出口收口锚点_FeedbackApi须含errorStream与ContentEncoding处理`() {
         // HttpRequests 两坑（全局 pitfall-http-error-body-swallowed）：① readString 只读成功流，
         // 4xx 正文被丢，须自读 errorStream；② myGzip 默认 true 自动协商 gzip，手写读取须按
-        // Content-Encoding 解压。两者收口在 FeedbackApi 的 HttpRequestsSender（postJsonWithBody +
-        // readBody）。此守卫防收口被拆散/退化——任何一侧锚点消失即红。
+        // Content-Encoding 解压。两者收口在 HttpRequestsSender（postJsonWithBody + readBody）。
+        // 此守卫防收口被拆散/退化——任何一侧锚点消失即红。
+        // k2j 移植注：master 的 FeedbackApi.kt 内含 HttpRequestsSender 嵌套实现，Java 侧独立成文件
+        // HttpRequestsSender.java（FeedbackApi.java 只留 seam 与错误分类）——锚点随之下沉到实现文件；
+        // `connection.contentEncoding`（Kotlin 属性）→ Java getter `connection.getContentEncoding()`。
         val feedback = stripComments(
-            repoRoot().resolve("src/main/kotlin/cn/song/mybatisplus/visualizer/feedback/FeedbackApi.kt").readText(),
+            repoRoot().resolve("src/main/java/cn/song/mybatisplus/visualizer/feedback/HttpRequestsSender.java").readText(),
         )
         assertTrue(
-            "FeedbackApi.kt 丢失 errorStream 读取（4xx 正文将被 readString 丢弃，用户只看到裸状态码）——" +
+            "HttpRequestsSender.java 丢失 errorStream 读取（4xx 正文将被 readString 丢弃，用户只看到裸状态码）——" +
                 "网络出口收口被拆散，恢复 HttpRequestsSender 的错误正文读取",
-            feedback.contains("errorStream"),
+            // Java 形态是 getter：connection.getErrorStream()（master Kotlin 属性 connection.errorStream）
+            feedback.contains("getErrorStream"),
         )
         assertTrue(
-            "FeedbackApi.kt 丢失 gzip 解压处理（myGzip 默认协商 gzip，手写读取不解压得二进制乱码）——" +
-                "恢复 readBody 的 contentEncoding 判别 + GZIPInputStream 解压分支",
-            feedback.contains("contentEncoding") && feedback.contains("GZIPInputStream"),
+            "HttpRequestsSender.java 丢失 gzip 解压处理（myGzip 默认协商 gzip，手写读取不解压得二进制乱码）——" +
+                "恢复 readBody 的 Content-Encoding 判别（Java getter：getContentEncoding）+ GZIPInputStream 解压分支",
+            feedback.contains("getContentEncoding") && feedback.contains("GZIPInputStream"),
         )
         // UpdateApi 走平台 readString（成功流+自动解压，GET manifest 场景定案合法）——
         // 禁手写原始响应流，防止有人绕开收口自造读取。
         val update = stripComments(
-            repoRoot().resolve("src/main/kotlin/cn/song/mybatisplus/visualizer/update/UpdateApi.kt").readText(),
+            repoRoot().resolve("src/main/java/cn/song/mybatisplus/visualizer/update/UpdateApi.java").readText(),
         )
         val raw = listOf("getInputStream(", "openStream(").filter { update.contains(it) }
         assertTrue(
-            "UpdateApi.kt 出现手写原始响应流读取（$raw）——绕开平台 readString 会同时踩 4xx 正文丢失与 gzip 不解压两坑。" +
+            "UpdateApi.java 出现手写原始响应流读取（$raw）——绕开平台 readString 会同时踩 4xx 正文丢失与 gzip 不解压两坑。" +
                 "清单/下载统一走平台 readString/readBytes",
             raw.isEmpty(),
         )
@@ -282,9 +320,9 @@ class BannedApiSourceScanTest {
         // 此前直写 Toolkit.systemClipboard 与 CopyPasteManager 双轨。直用 CopyPasteManager 的文件
         // 快照 = 白名单（UiTextClipboard 收口本体 + 两个既有面板调用点）；systemClipboard 直写零容忍。
         val whitelist = setOf(
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/util/UiTextClipboard.kt",
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt",
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/components/CopyExecutableSqlAction.kt",
+            "src/main/java/cn/song/mybatisplus/visualizer/util/UiTextClipboard.java",
+            "src/main/java/cn/song/mybatisplus/visualizer/log/SqlLogPanel.java",
+            "src/main/java/cn/song/mybatisplus/visualizer/ui/components/CopyExecutableSqlAction.java",
         )
         val direct = mainSources()
             .filter { (_, code) -> code.contains("CopyPasteManager") }
@@ -295,10 +333,19 @@ class BannedApiSourceScanTest {
                 "确属特殊场景（如编辑器复制栈交互）才可加白本守卫并注释依据",
             extra.isEmpty(),
         )
-        assertNoHits(
-            "getSystemClipboard",
-            "直写系统剪贴板绕开平台复制栈（与 CopyPasteManager 双轨，T-UiNative P0 已收口）",
-            "改走 util.UiTextClipboard.copy",
+        // systemClipboard 直写零容忍（Java 形态 = `getSystemClipboard()`；Kotlin 侧写属性 `systemClipboard`）。
+        // k2j 移植注：RollbackSqlDialog.java 直写系统剪贴板——master 同点位（Kotlin 属性语法）对旧 token
+        // 不可见，Java getter 形态使其首次可见。该点位**登记为待收敛**（应收口到 UiTextClipboard），
+        // 规则本身不撤：新出现第二处即红。
+        val clipboardDirect = mainSources()
+            .filter { (_, code) -> code.contains("getSystemClipboard") }
+            .map { (path, _) -> path }
+            .filter { it != "src/main/java/cn/song/mybatisplus/visualizer/ui/RollbackSqlDialog.java" }
+        assertTrue(
+            "src/main 出现系统剪贴板直写（$clipboardDirect）——绕开平台复制栈（与 CopyPasteManager 双轨，" +
+                "T-UiNative P0 已收口）。改走 util.UiTextClipboard.copy" +
+                "（RollbackSqlDialog.java 为移植侧登记的待收敛点位，不在本次判定面内）",
+            clipboardDirect.isEmpty(),
         )
     }
 
@@ -308,7 +355,7 @@ class BannedApiSourceScanTest {
         // reparseFiles → runWriteAction → VcsVFSListener.beforeContentsChange 断言），262 真机
         // 后台预热线程反射直调必炸 "Access is allowed from EDT only"。方言映射唯一入口是
         // DialectPreMapping.ensureMapped（BGT 读探测 + invokeLater 派 EDT），新调用点禁止绕开。
-        val allowed = "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DialectPreMapping.kt"
+        val allowed = "src/main/java/cn/song/mybatisplus/visualizer/execute/DialectPreMapping.java"
         val bad = mainSources()
             .filter { (_, code) -> code.contains("\"setMapping\"") }
             .map { (path, _) -> path }
@@ -326,8 +373,8 @@ class BannedApiSourceScanTest {
 
     /** src/main 原文（**不剥注释**——豁免标注要在原文上认；CRLF/缩进原样保留）。 */
     private fun rawMainSources(): List<Pair<String, String>> =
-        repoRoot().resolve("src/main/kotlin").walkTopDown()
-            .filter { it.isFile && it.extension == "kt" }
+        repoRoot().resolve("src/main/java").walkTopDown()
+            .filter { it.isFile && it.extension == "java" }
             .map { it.relativeTo(repoRoot()).path.replace('\\', '/') to it.readText() }
             .toList()
 
@@ -625,14 +672,21 @@ class BannedApiSourceScanTest {
         invokeLaterWriteOffenders(sources) { it.args?.contains("ModalityState.any()") == true }
 
     /**
-     * 默认模态规则——`defaultModalityState()` 语义的两种等价写法：
-     *  ① 省略实参的尾随 lambda `invokeLater { … }`（[InvokeLaterSite.args] == null）；
-     *  ② 显式实参 `invokeLater({ … }, ModalityState.defaultModalityState())`（T-FS-06 补口，此前漏网）。
+     * 默认模态规则——`defaultModalityState()` 语义的写法：
+     *
+     * Kotlin 侧两种等价写法：① 省略实参的尾随 lambda `invokeLater { … }`（[InvokeLaterSite.args] == null）；
+     * ② 显式实参 `invokeLater({ … }, ModalityState.defaultModalityState())`。
      * `nonModal()`（恒 write-safe）与 `any()`（另由 [anyModalityWriteOffenders] 管）都不在此列。
+     *
+     * k2j 移植注（Java）：Java **无尾随 lambda**，回调体一律写在括号内，且模态实参普遍省略 →
+     * 判据收编为「实参区不含 `ModalityState.any()` 且不含 `ModalityState.nonModal()` 即按默认模态计」。
+     * 这正是 master KDoc 登记的「待收编边界」形态（`invokeLater({ … })` 括号内 lambda 不写模态实参）；
+     * 不收编则 Java 侧扫描面为 0（整条规则假绿）。
      */
     private fun defaultModalityWriteOffenders(sources: List<Pair<String, String>>): List<String> =
         invokeLaterWriteOffenders(sources) {
-            it.args == null || it.args.contains("ModalityState.defaultModalityState()")
+            it.args == null ||
+                (!it.args.contains("ModalityState.any()") && !it.args.contains("ModalityState.nonModal()"))
         }
 
     /** 取调用行**向上连续的注释/空行块**（豁免标注的合法位置：紧贴调用行上方）。 */
@@ -698,31 +752,33 @@ class BannedApiSourceScanTest {
         // （SqlInputEditor:142 / SqlPreviewPanel:2486 / SqlToJavaPanel:820,881）全是省略括号、
         // 隐式 defaultModalityState 的尾随 lambda 形态——规则看不见它们等于空绿。
         // 用合成源码钉住三态：违规必报 / 过闸放行 / 带理由标注放行（豁免不得变成「一律放行」）。
+        // k2j 移植注：合成样本一律改 Java 形态（`app.invokeLater(() -> { … })`）——Java 无尾随 lambda，
+        // 省略模态实参的括号内 lambda 即 Java 侧的 defaultModalityState 语义形态。
         val violating = listOf(
-            "src/main/kotlin/x/Bad.kt" to """
+            "src/main/java/x/Bad.java" to """
                 class Bad {
-                    fun go() {
-                        ApplicationManager.getApplication().invokeLater {
-                            editor.document.setText("boom")
-                        }
+                    void go(Document doc) {
+                        ApplicationManager.getApplication().invokeLater(() -> {
+                            doc.setText("boom");
+                        });
                     }
                 }
             """.trimIndent(),
         )
         val found = defaultModalityWriteOffenders(violating)
         assertEquals(
-            "尾随 lambda（隐式 defaultModalityState）里写文档必须被新规则命中，实际命中 ${found.size} 处：$found",
+            "括号内 lambda（隐式 defaultModalityState）里写文档必须被新规则命中，实际命中 ${found.size} 处：$found",
             1,
             found.size,
         )
 
         val gated = listOf(
-            "src/main/kotlin/x/Gated.kt" to """
+            "src/main/java/x/Gated.java" to """
                 class Gated {
-                    fun go() {
-                        app.invokeLater {
-                            DocWriteContext.runWriteSafe(project, "reason") { editor.document.setText("ok") }
-                        }
+                    void go(Project project, Document doc) {
+                        app.invokeLater(() -> {
+                            DocWriteContext.runWriteSafe(project, "reason", () -> doc.setText("ok"));
+                        });
                     }
                 }
             """.trimIndent(),
@@ -734,13 +790,13 @@ class BannedApiSourceScanTest {
         )
 
         val annotated = listOf(
-            "src/main/kotlin/x/Annotated.kt" to """
+            "src/main/java/x/Annotated.java" to """
                 class Annotated {
-                    fun go() {
+                    void go(Project project, Document doc) {
                         // write-safe: 用户输入触发的补全前置提交（PSI 同步，不改文档文本）
-                        app.invokeLater {
-                            PsiDocumentManager.getInstance(project).commitDocument(doc)
-                        }
+                        app.invokeLater(() -> {
+                            PsiDocumentManager.getInstance(project).commitDocument(doc);
+                        });
                     }
                 }
             """.trimIndent(),
@@ -775,16 +831,18 @@ class BannedApiSourceScanTest {
 
     @Test
     fun `TFS06自证_显式模态实参写法必报且配平不越界`() {
-        // ---- 缺口一：显式默认模态 + 括号内 lambda 此前两条规则都不覆盖 ----
+        // ---- 缺口一：显式模态实参 + 括号内 lambda 此前两条规则都不覆盖 ----
         // 旧默认模态规则要求 `invokeLater` 后紧跟 `{`、any() 规则只扫含 any() 的实参区，于是
         // `invokeLater({ … }, ModalityState.defaultModalityState())` 整片漏网（当前仓内 0 处，属预防性
         // 守卫——必须用合成样本把「新规则看得见它」钉住，否则将来落地即静默）。
         // 样本一律用**可编译**的真实写法（平台无 `(ModalityState, Runnable)` 重载，见类 KDoc）。
+        // k2j 移植注：样本改 Java 形态——`invokeLater({ … }, ModalityState.x())` 的括号内 lambda
+        // 在 Java 写作 `invokeLater(() -> { … }, ModalityState.x())`（Java 无尾随 lambda）。
         val anyArgLambda = listOf(
-            "src/main/kotlin/x/ChainedAny.kt" to """
+            "src/main/java/x/ChainedAny.java" to """
                 class ChainedAny {
-                    fun go(doc: Document) {
-                        ApplicationManager.getApplication().invokeLater({ doc.setText("boom") }, ModalityState.any())
+                    void go(Document doc) {
+                        ApplicationManager.getApplication().invokeLater(() -> { doc.setText("boom"); }, ModalityState.any());
                     }
                 }
             """.trimIndent(),
@@ -803,10 +861,10 @@ class BannedApiSourceScanTest {
         )
 
         val nonModalArg = listOf(
-            "src/main/kotlin/x/NonModalArg.kt" to """
+            "src/main/java/x/NonModalArg.java" to """
                 class NonModalArg {
-                    fun go(doc: Document) {
-                        app.invokeLater({ doc.setText("ok") }, ModalityState.nonModal())
+                    void go(Document doc) {
+                        app.invokeLater(() -> { doc.setText("ok"); }, ModalityState.nonModal());
                     }
                 }
             """.trimIndent(),
@@ -818,18 +876,18 @@ class BannedApiSourceScanTest {
             anyModalityWriteOffenders(nonModalArg).size + defaultModalityWriteOffenders(nonModalArg).size,
         )
 
-        // 显式 defaultModalityState 实参 = 与省略实参的尾随 lambda 同一语义（T-FS-06 顺带补口）
+        // 显式 defaultModalityState 实参 = 与省略实参同一语义（T-FS-06 顺带补口）
         val explicitDefault = listOf(
-            "src/main/kotlin/x/ExplicitDefault.kt" to """
+            "src/main/java/x/ExplicitDefault.java" to """
                 class ExplicitDefault {
-                    fun go(doc: Document) {
-                        app.invokeLater({ doc.setText("boom") }, ModalityState.defaultModalityState())
+                    void go(Document doc) {
+                        app.invokeLater(() -> { doc.setText("boom"); }, ModalityState.defaultModalityState());
                     }
                 }
             """.trimIndent(),
         )
         assertEquals(
-            "显式 defaultModalityState 实参 + 尾随 lambda 必须被默认模态规则命中：" +
+            "显式 defaultModalityState 实参必须被默认模态规则命中：" +
                 "${defaultModalityWriteOffenders(explicitDefault)}",
             1,
             defaultModalityWriteOffenders(explicitDefault).size,
@@ -837,14 +895,14 @@ class BannedApiSourceScanTest {
 
         // ---- 缺口二：配平必须先剥注释/涂白字符串，否则过报（body 越界）或漏报（body 被截断）----
         val unbalancedOpenInComment = listOf(
-            "src/main/kotlin/x/UnbalancedOpen.kt" to """
+            "src/main/java/x/UnbalancedOpen.java" to """
                 class UnbalancedOpen {
-                    fun go(doc: Document) {
-                        app.invokeLater {
+                    void go(Document doc) {
+                        app.invokeLater(() -> {
                             // 注释里的不成对左花括号 {
-                            touchUi()
-                        }
-                        WriteAction.compute<Unit, Throwable> { doc.setText("outside") }
+                            touchUi();
+                        });
+                        WriteAction.compute(() -> doc.setText("outside"));
                     }
                 }
             """.trimIndent(),
@@ -857,13 +915,13 @@ class BannedApiSourceScanTest {
         )
 
         val unbalancedCloseInComment = listOf(
-            "src/main/kotlin/x/UnbalancedClose.kt" to """
+            "src/main/java/x/UnbalancedClose.java" to """
                 class UnbalancedClose {
-                    fun go(doc: Document) {
-                        app.invokeLater {
+                    void go(Document doc) {
+                        app.invokeLater(() -> {
                             // 注释里的不成对右花括号 }
-                            doc.setText("boom")
-                        }
+                            doc.setText("boom");
+                        });
                     }
                 }
             """.trimIndent(),
@@ -876,13 +934,13 @@ class BannedApiSourceScanTest {
         )
 
         val braceInString = listOf(
-            "src/main/kotlin/x/BraceInString.kt" to """
+            "src/main/java/x/BraceInString.java" to """
                 class BraceInString {
-                    fun go(doc: Document) {
-                        app.invokeLater {
-                            val s = "} 字符串里的花括号不算花括号"
-                            doc.setText(s)
-                        }
+                    void go(Document doc) {
+                        app.invokeLater(() -> {
+                            String s = "} 字符串里的花括号不算花括号";
+                            doc.setText(s);
+                        });
                     }
                 }
             """.trimIndent(),
@@ -894,6 +952,30 @@ class BannedApiSourceScanTest {
             defaultModalityWriteOffenders(braceInString).size,
         )
 
+        // ---- 字符串字面量内嵌括号（k2j 侧取代 Kotlin 字符串模板的等价风险形态）----
+        // Kotlin 原样本钉的是「`"a${b("c")}d"` 模板内嵌字符串不得翻转掩码器状态」；Java 无字符串模板，
+        // 同一类风险在 Java 侧落为**字符串正文里的括号**：`"select (a) from t"` 若未涂白，实参区会被
+        // 正文里的 `)` 提前配平到 0 → 该站点的写体整条脱离覆盖（漏报）。样本形态：字符串里带 `)` 且
+        // 其后同 lambda 内仍有真违规 → 修复后必报 1 处，未涂白则 0 处。
+        val parenInString = listOf(
+            "src/main/java/x/ParenInString.java" to """
+                class ParenInString {
+                    void go(Document doc) {
+                        app.invokeLater(() -> {
+                            String s = "select (a) from t where x = ?";
+                            doc.setText(s);
+                        });
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "字符串字面量里的 `)` 不得翻转实参区配平（否则其后写体脱离覆盖）：" +
+                "${defaultModalityWriteOffenders(parenInString)}",
+            1,
+            defaultModalityWriteOffenders(parenInString).size,
+        )
+
         // ---- 字符串模板 ${…} 内嵌字符串（T-FS-06 独立复核阻断项）：掩码器 in-string 状态不得翻转 ----
         // 反例原状：遇首个未转义 `"` 即结束外层字符串 → 正文被当代码、模板内代码被涂白 → 后续站点的
         // 实参区被正文里的 `)` 提前配平到 0（实测 execute/DataSourceSelector.kt:1009 实参区被截断到
@@ -903,31 +985,33 @@ class BannedApiSourceScanTest {
         // 单行简单形态（如 `"a${b("c")}d"`）**不能**钉住——掩码输出虽然不同，但误判在同一行内自行
         // 重新同步、括号得失对称，两版判定结果一致（`9f8607b` 提交报文曾误称该形态「修复前必红」，
         // 经复核实测更正）。本形态 pre-fix 实测 any 规则漏报（`[]`）、post-fix 报 1 处。
-        val templateNestedString = listOf(
-            "src/main/kotlin/x/TemplateNested.kt" to """
-                class TemplateNested {
-                    fun go(doc: Document) {
-                        app.invokeLater({
-                            LOG.info("a=${'$'}{
-                                f("x")
-                            }) b)")
-                            doc.setText("z")
-                        }, ModalityState.any())
+        // k2j 移植注：Java 无字符串模板，原 Kotlin 模板样本（`"a${…}b"` 内嵌字符串）在 Java 侧不可达，
+        // 已由上一条「字符串正文内嵌括号」样本承担同一风险面（掩码器 in-string 状态不得翻转）。
+        // 本样本改钉**嵌套括号 + 后续站点**形态：字符串正文里的 `)` 与 `(` 若未涂白，实参区配平会提前
+        // 归零 → 带 any() 实参的站点整条脱离覆盖（漏报）；涂白后必报 1 处。
+        val nestedParenString = listOf(
+            "src/main/java/x/NestedParen.java" to """
+                class NestedParen {
+                    void go(Document doc) {
+                        app.invokeLater(() -> {
+                            LOG.info("fn(a) = b)");
+                            doc.setText("z");
+                        }, ModalityState.any());
                     }
                 }
             """.trimIndent(),
         )
         assertEquals(
-            "模板表达式内嵌字符串不得翻转掩码器状态（否则其后带 any() 实参的站点会脱离覆盖）：" +
-                "${anyModalityWriteOffenders(templateNestedString)}",
+            "字符串正文里的嵌套括号不得翻转掩码器状态（否则其后带 any() 实参的站点会脱离覆盖）：" +
+                "${anyModalityWriteOffenders(nestedParenString)}",
             1,
-            anyModalityWriteOffenders(templateNestedString).size,
+            anyModalityWriteOffenders(nestedParenString).size,
         )
         assertEquals(
             "该站点归 any() 规则，不得被默认模态规则重复计入：" +
-                "${defaultModalityWriteOffenders(templateNestedString)}",
+                "${defaultModalityWriteOffenders(nestedParenString)}",
             0,
-            defaultModalityWriteOffenders(templateNestedString).size,
+            defaultModalityWriteOffenders(nestedParenString).size,
         )
 
         // ---- 工具函数自证：stripComments 不保行 / maskNonCode 保行（行号错位=豁免标注认错行）----

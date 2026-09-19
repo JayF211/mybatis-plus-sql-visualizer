@@ -47,7 +47,13 @@ public final class McpDbExecutorKt {
                         }
                         // 单条映射失败降级为丢弃该条（Kotlin runCatching.getOrNull 语义）
                         try {
-                            messages.add(w instanceof SQLWarning sqlWarning ? sqlWarning.getMessage() : w.toString());
+                            // master 侧 mapNotNull：SQLWarning.message 可空（Throwable.message 为 String?），
+                            // 映射结果为 null 即丢弃该条。原先无条件 add 会把 null 混进清单，
+                            // 下方 isBlank 判定随即 NPE（测试的 SQLWarning(null as String?) 即此路径）。
+                            String message = w instanceof SQLWarning sqlWarning ? sqlWarning.getMessage() : w.toString();
+                            if (message != null) {
+                                messages.add(message);
+                            }
                         } catch (Throwable ignored) {
                             // 映射失败不产出该条
                         }

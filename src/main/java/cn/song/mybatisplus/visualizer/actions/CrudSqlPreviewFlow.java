@@ -31,6 +31,9 @@ import javax.swing.ListCellRenderer;
  */
 public final class CrudSqlPreviewFlow {
 
+    /** 通知分组 id（与预览链路同组）。 */
+    private static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
+
     /** Kotlin object 单例等价。 */
     public static final CrudSqlPreviewFlow INSTANCE = new CrudSqlPreviewFlow();
 
@@ -112,12 +115,21 @@ public final class CrudSqlPreviewFlow {
                 .showInFocusCenter();
     }
 
-    /** 兜底提示（update 已拦截可见性，竞态/解析异常路径才会到达）。 */
+    /** 兜底提示（update 已拦截可见性，竞态/解析异常路径才会到达）。
+     * T-UiNative T-UN-02：改轻通知（原模态弹窗——纯告知无需打断）；测试模式跳过
+     * （对齐 CopyExecutableSqlAction.showToast 约定）。 */
     public static void showNoneFound(Project project) {
-        com.intellij.openapi.ui.Messages.showInfoMessage(
-                project,
-                MpSqlVisualizerBundle.message("crudSql.noneFound.message"),
-                MpSqlVisualizerBundle.message("crudSql.noneFound.title"));
+        if (ApplicationManager.getApplication().isUnitTestMode()) return;
+        try {
+            new com.intellij.notification.Notification(
+                    NOTIFICATION_GROUP_ID,
+                    MpSqlVisualizerBundle.message("crudSql.noneFound.title"),
+                    MpSqlVisualizerBundle.message("crudSql.noneFound.message"),
+                    com.intellij.notification.NotificationType.INFORMATION
+            ).notify(project);
+        } catch (Throwable ignored) {
+            // runCatching 等价：通知链路失败不影响动作主链
+        }
     }
 
     /** 候选摘要：{@code 表名 · 语句种类}（无主键降级追加标注）。纯函数可单测。 */

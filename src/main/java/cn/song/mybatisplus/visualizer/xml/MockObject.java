@@ -18,4 +18,16 @@ public record MockObject(Map<String, Object> properties) {
     public Object get(String name) {
         return properties.get(name);
     }
+
+    /**
+     * Kotlin data class 的 toString 形态（{@code MockObject(properties={...})}）。
+     *
+     * <p>record 默认 toString 是 {@code MockObject[properties={...}]}（方括号），与 master 的
+     * data class 生成形态不同；该字符串是**可见行为**（XmlParamKindTest 的 mock 值分派断言、
+     * OBJECT 占位在预览参数区的呈现），故按 master 形态覆写。
+     */
+    @Override
+    public String toString() {
+        return "MockObject(properties=" + properties + ")";
+    }
 }

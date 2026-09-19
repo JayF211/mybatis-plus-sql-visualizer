@@ -16,6 +16,11 @@ import org.junit.Test
  * JUnit3 `TestCase`，任何 runner 都不会发现它们（全仓 test-results XML 中零出现为证），
  * 属「守卫存在但从未运行」的假守卫；而其中「statusSummary 无会话应返回 null」这条断言恰好把
  * T-CaptureTruth 的缺陷（开着但未授权 → 状态行空白）钉成了「期望行为」。现补 `@Test` 使守卫真正生效。
+ *
+ * k2j 移植注（生产为 Java）：扫描根 `src/main/java/...*.java`；`internal fun statusSummary()`
+ * → `public String statusSummary()`；顶层纯函数 agentStatusText 与 data class AgentStatusSnapshot
+ * 在 Java 侧各自独立成文件（AgentManagerKt.java / AgentStatusSnapshot.java）——接线断言合并扫
+ * AgentManager.java + AgentManagerKt.java；`companion` 常量 → `public static final` 静态字段。
  */
 class SettingsTruthTest {
 
@@ -48,7 +53,8 @@ class SettingsTruthTest {
 
     // ---------- P2 / T-CaptureTruth T-CT-01/02：接线源码守卫（语义走 AgentStatusTextTest） ----------
 
-    private fun mainSrc(rel: String) = java.io.File("src/main/kotlin/$rel").readText()
+    /** k2j 生产树 = src/main/java（.java）；参数按「包内相对路径 + .java」给。 */
+    private fun mainSrc(rel: String) = java.io.File("src/main/java/$rel").readText()
 
     /** 剥 // 行注释与块注释——守卫扫的是代码事实，注释里写「不得如何」不该被判违规。 */
     private fun stripComments(src: String): String {
@@ -63,11 +69,19 @@ class SettingsTruthTest {
 
     @Test
     fun testP2_状态行接线与五态键源码守卫() {
-        val src = mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt")
+        // Kotlin 侧 statusSummary 与顶层纯函数 agentStatusText / 状态行快照同处 AgentManager.kt；
+        // Java 无顶层声明，两者落到 AgentManager.java + AgentManagerKt.java 两文件——接线判定合并扫。
+        val src = mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManager.java") +
+            mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManagerKt.java")
         // statusSummary 只取数，文案交纯函数（纯函数五态语义由 AgentStatusTextTest 运行期覆盖）
-        assertTrue("AgentManager 应声明 statusSummary", src.contains("internal fun statusSummary()"))
+        assertTrue("AgentManager 应声明 statusSummary", src.contains("public String statusSummary()"))
         assertTrue("statusSummary 应委托纯函数 agentStatusText", src.contains("agentStatusText("))
-        assertTrue("应有状态行输入快照 AgentStatusSnapshot", src.contains("internal data class AgentStatusSnapshot("))
+        // Java 侧 data class 落为独立顶层类型 AgentStatusSnapshot.java（Kotlin 顶层 data class 的等价形态）
+        assertTrue(
+            "应有状态行输入快照 AgentStatusSnapshot",
+            mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentStatusSnapshot.java")
+                .contains("public record AgentStatusSnapshot("),
+        )
         // 五态文案键齐备（不许再出现「无会话恒 null」的收敛）
         listOf(
             "settings.enhancedCapture.status.attached",
@@ -79,34 +93,39 @@ class SettingsTruthTest {
             assertTrue("agentStatusText 应引用状态行键 $key", src.contains("\"$key\""))
         }
         // T-CT-02：重新授权入口存在且清零冷却
-        assertTrue("应有 requestReauthorization 入口", src.contains("fun requestReauthorization()"))
-        // Topic 声明形态（仿 PluginSettings.SETTINGS_CHANGE_TOPIC）
-        assertTrue("AGENT_STATUS_TOPIC 应为 Topic.create", src.contains("AGENT_STATUS_TOPIC: Topic<AgentStatusListener> = Topic.create("))
+        assertTrue("应有 requestReauthorization 入口", src.contains("void requestReauthorization()"))
+        // Topic 声明形态（仿 PluginSettings.SETTINGS_CHANGE_TOPIC；Java 静态常量 = Kotlin companion 属性）
+        assertTrue(
+            "AGENT_STATUS_TOPIC 应为 static final Topic.create",
+            src.contains("static final Topic<AgentStatusListener> AGENT_STATUS_TOPIC = Topic.create("),
+        )
     }
 
     @Test
     fun testP2_状态变更广播点覆盖同意流三态() {
-        val src = mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt")
+        val src = mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManager.java")
         // 广播点：定义 1 + attach 成功 1 + sweepOffline 1 + shutdownAll 1 + 确认流三态 3 + 重新授权 1 = 8
         // T-M56Phase2-Premain（合流后 +1）：premain 回连建会话成功亦广播一次状态行（启动即捕获生效）
+        // （k2j 实测同为 9 处，Java 调用形态 `publishStatusChanged();` 与原正则逐字一致）
         val count = Regex("publishStatusChanged\\(\\)").findAll(src).count()
         assertTrue("publishStatusChanged 应有 9 处（定义 1 + 调用 8，实际 $count）", count == 9)
     }
 
     @Test
     fun testP2_面板接线与不得自注册Disposer() {
-        val panelSrc = stripComments(mainSrc("cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt"))
+        val panelSrc = stripComments(mainSrc("cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.java"))
         assertTrue("面板应订阅 AGENT_STATUS_TOPIC", panelSrc.contains("AgentManager.AGENT_STATUS_TOPIC"))
-        assertTrue("面板应有 disposeResources", panelSrc.contains("internal fun disposeResources()"))
+        assertTrue("面板应有 disposeResources", panelSrc.contains("public void disposeResources()"))
         assertTrue("面板 reset 应拉取状态行", panelSrc.contains("refreshEnhancedStatusLabel()"))
         // T-CaptureTruth T-CT-05：面板不得把自身注册进 Disposer 树——父节点未注册会落 ROOT_DISPOSABLE
-        // 子节点而 Configurable 链路无 dispose 面板的动作，IDE 退出即报 Memory leak（沙盒实测 6 例）
+        // 子节点而 Configurable 链路无 dispose 面板的动作，IDE 退出即报 Memory leak（沙盒实测 6 例）。
+        // k2j 形态：Kotlin `Disposer.register(this@PluginSettingsPanel, …)` → Java `Disposer.register(this, …)`。
         assertFalse(
-            "面板不得 Disposer.register(this@PluginSettingsPanel, …)（ROOT 子节点无释放路径 → 泄漏）",
-            panelSrc.contains("Disposer.register(this@PluginSettingsPanel"),
+            "面板不得 Disposer.register(this, …)（ROOT 子节点无释放路径 → 泄漏）",
+            panelSrc.contains("Disposer.register(this,"),
         )
         assertTrue("面板应有重新授权按钮接线", panelSrc.contains("requestReauthorization()"))
-        val secSrc = mainSrc("cn/song/mybatisplus/visualizer/config/SectionConfigurable.kt")
+        val secSrc = mainSrc("cn/song/mybatisplus/visualizer/config/SectionConfigurable.java")
         assertTrue("SectionConfigurable.disposeUIResources 应调 panel.disposeResources()",
             Regex("disposeUIResources[\\s\\S]{0,200}panel\\.disposeResources\\(\\)").containsMatchIn(secSrc))
         // P1 面板三处绑定已删
