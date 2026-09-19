@@ -32,6 +32,17 @@ internal fun drainWarnings(vararg surfaces: Pair<() -> List<*>?, () -> Unit>): L
     }.filter { it.isNotBlank() }
 
 /**
+ * 通道层行预算兜底（T-McpRowBudget / T-MRB-04，O-36）：工具层已按
+ * [McpExplainFormatter.clampMaxRows] 钳制一次，本通道再钳一次——[McpDbExecutor.executeQuery]
+ * 是「未来任何执行类工具共用」的通道（[McpSelectGuard] KDoc 同款宣示），新增执行工具若漏钳制
+ * 也不会突破 [McpExplainFormatter.HARD_MAX_ROWS]（对齐 DBX「静态断言恒小于驱动上限」的护栏语义）。
+ * 定案=**钳制不抛错**（越界静默收进合法区间，与 clampMaxTables 既有语义一致）。
+ *
+ * 顶层函数（非 object 成员）：测试加载本文件门面类时不必触发 [McpDbExecutor] 的 Logger 初始化。
+ */
+internal fun channelRowBudget(requested: Int): Int = McpExplainFormatter.clampMaxRows(requested)
+
+/**
  * T-McpToolset headless 执行通道（mpsv_explain 专用，反射隔离 DatabaseTools）。
  *
  * 为什么不复用 [cn.song.mybatisplus.visualizer.execute.SqlExecutor]：既有执行链是 UI 控制台
@@ -116,6 +127,9 @@ object McpDbExecutor {
      * 建议值，RemoteStatement 镜像 243/262 javap 同形）；超时形态异常（[cn.song.mybatisplus.
      * visualizer.execute.ExecutionTimeoutGuard.isTimeoutLike]）先 Statement.cancel() 收尾
      * 再冒泡，消息尾附 `timed out after Ns`（agent 可读，不引 JSON）。
+     *
+     * T-McpRowBudget（O-36）：[maxRows] 先过 [channelRowBudget] 兜底钳制再进采集——调用方
+     * （含未来新增的执行类工具）传什么都不会突破 [McpExplainFormatter.HARD_MAX_ROWS]。
      */
     fun executeQuery(
         project: Project,
@@ -124,6 +138,7 @@ object McpDbExecutor {
         maxRows: Int,
         timeoutSeconds: Int = 0,
     ): McpExplainFormatter.RawResult {
+        val rowBudget = channelRowBudget(maxRows)
         val manager = Class.forName(DCM).getMethod("getInstance").invoke(null)
         val builder = Class.forName(DCM).getMethod("build", Project::class.java, Class.forName(CONNECTION_POINT))
             .invoke(manager, project, dataSource)
@@ -150,7 +165,7 @@ object McpDbExecutor {
                 try {
                     val resultSet = Class.forName(REMOTE_STATEMENT).getMethod("executeQuery", String::class.java)
                         .invoke(statement, sql)
-                    val raw = collect(resultSet, maxRows)
+                    val raw = collect(resultSet, rowBudget)
                     // 执行成功才采集 notices；失败路径直接抛出（notices 无从产生=DBX「出错丢弃」口径）
                     val notices = drainWarnings(*surfaces)
                     if (notices.isNotEmpty()) LOG.info("McpDbExecutor: drained ${notices.size} driver notice(s)")
