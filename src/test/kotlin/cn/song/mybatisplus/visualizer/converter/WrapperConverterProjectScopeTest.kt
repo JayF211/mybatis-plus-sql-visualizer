@@ -255,6 +255,11 @@ class WrapperConverterProjectScopeTest : BasePlatformTestCase() {
 
     // ------------------------------------------------------------------
     // 3. 未传路径逐字节不变（对齐 T-TS-07 自证口径：默认参数 null = 原行为）
+    //
+    // 定位说明（T-FS-04 独立复核指出）：本用例是「未传路径**不回归**」的守卫，**不是**「project 参数
+    // 生效」的证据——它显式传的 `explicitFirstOpenProject` 恰是 null 回退本就会选中的同一个项目，
+    // 故若实现整体忽略该参数，本例照样绿。区分力由上面 1./2. 段的 pa_/pb_ 用例承担（双项目 +
+    // 两套项目级前缀 + `assertFalse(sqlA == sqlB)`）。引用本例论证「穿参生效」属误用。
     // ------------------------------------------------------------------
 
     fun testOmittedProjectPathByteIdenticalToBefore() {
