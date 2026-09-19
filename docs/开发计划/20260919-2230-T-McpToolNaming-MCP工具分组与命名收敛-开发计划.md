@@ -149,8 +149,8 @@ sqlv_mapper_check
 - **T-MTN-02 落地**：工具名统一 `sqlv_`，六处同源同步（`@McpTool(name=...)` / 方法名 / 构造器传入基类的门控名 / `audit(...)` 工具名 / `McpToolGate.TOOL_NAMES` / `McpConfigurable` 复选框文案派生键前缀）。
   **静态核验**：`grep '@McpTool(name = '` 取出的十个名字 == `McpToolGate.TOOL_NAMES` 十项，逐项一致（排序后完全相等）
 - **守卫同步**：`McpScopeSourceScanTest` 的「META-INF 不得引用适配类名」标记由单个门面类名扩为 `Regex("SqlVisualizer\\w*Tool\\b|SqlVisualizerToolset")`——旧标记只认 `SqlVisualizerToolset` 一字面量，改名后真引用会整片漏网（守卫只会漏报不会误报，不改则静默失守）
-- **设置迁移：不设**（计划 §三 实施要点 2 与 §四.3 已按此改写）。核验依据：MCP 工具未随任何发布产物交付——Gitee 21 个发行版无 `2026.9.18` 正式版（只有 beta.1~4）；`2026.9.14` / `2026.9.18-beta.1` / `2026.9.18-beta.4` 三个 tag 的树里 `mcp/` 文件数 0、`mcp-optional.xml` 不存在（发行 tag 从旁支切出，MCP 只在 master 主线）。故不存在 `mpsv_*` 旧名配置，迁移是死代码
-- **全仓改名**：以 `grep -rl "mpsv_"`（排除 `build/`、`.git/`）为清单逐文件改净，**含历次开发计划与 `docs/memory-archive/`**；改后复查零残留（唯一保留的旧名提及是 §三 选型对照表里被否决的 `mpsv_` 候选行，属决策依据）。顺带把 `database-lab/docker-compose.dialects-cn.example.yml` 的 `INSTANCE_NAME`（非 MCP 工具名，全仓唯一引用）一并对齐，以满足零残留
+- **设置迁移：不设**（计划 §三 实施要点 2 与 §四.3 已按此改写）。核验依据：MCP 工具未随任何发布产物交付——Gitee 21 个发行版无 `2026.9.18` 正式版（只有 beta.1~4）；`2026.9.14` / `2026.9.18-beta.1` / `2026.9.18-beta.4` 三个 tag 的树里 `mcp/` 文件数 0、`mcp-optional.xml` 不存在（发行 tag 从旁支切出，MCP 只在 master 主线）。故不存在旧前缀的工具名配置，迁移是死代码
+- **全仓改名**：以 `grep -rl`（旧前缀，排除 `build/`、`.git/`）为清单逐文件改净，**含历次开发计划与 `docs/memory-archive/`**；改后复查零残留（唯一保留的旧名提及是 §三 选型对照表里被否决的候选行，属决策依据）。顺带把 `database-lab/docker-compose.dialects-cn.example.yml` 的 `INSTANCE_NAME`（非 MCP 工具名，全仓唯一引用）一并对齐，以满足零残留
 - **文档同步**：README MCP 节、`docs/架构设计/` 两篇三处、CHANGELOG（`[Unreleased]` 段内的工具名）、`marketplace-custom-page.html`、双语 bundle 的 `settings.section.mcp.desc`、`mcpStub` 注解 KDoc；CHANGELOG 不写破坏性变更段（按「本来就叫 `sqlv_`」直述）
 - 提交：`c3a276d`（类名 + 工具名 + 迁移 + 测试引用，47 文件）、`b48cbc9`（去遗留叙事）、`22abdf1`（架构设计两篇）、末笔（删迁移 + 全仓改名 + 计划回填 + 变更记录）
 - 门禁：见 §九
@@ -160,7 +160,7 @@ sqlv_mapper_check
 ### 与计划的偏离
 
 1. 计划只要求改类名，实施把**源文件名**一并重命名（Kotlin 文件名与类名一致约定）；`McpToolGateTest` / `PluginXmlStructureGuardTest` / `McpRowBudgetTest` / `McpAuditLogTest` 等的类名引用与源码路径引用同步更新
-2. 计划未点名 `McpConfigurable.checkBoxText` 的 `removePrefix("mpsv_")`——该前缀不匹配会派生出空尾段（复选框文案取不到键），已同步为 `sqlv_`；bundle 十键尾段不变（`render_sql` → `rendersql`），`SettingsRealityGuardTest` 白名单无需改
+2. 计划未点名 `McpConfigurable.checkBoxText` 的 `removePrefix(旧前缀)`——该前缀不匹配会派生出空尾段（复选框文案取不到键），已同步为 `sqlv_`；bundle 十键尾段不变（`render_sql` → `rendersql`），`SettingsRealityGuardTest` 白名单无需改
 3. 计划未点名 `marketplace-custom-page.html` 与双语 bundle 的 `settings.section.mcp.desc`（工具名短清单），已同步
 4. `McpScopeSourceScanTest` 的适配类名标记加固（见 §八）——属守卫保真度修复，非计划内条目
 5. 设置迁移由「必做 + 单测」改为「不设」：一度按「旧前缀改名后旧禁用项静默复活」实现并落地（含 6 例单测，先红后绿 5 红 → 6/6 绿），后经发布产物核验确认 MCP 从未交付任何发布产物，迁移为死代码，遂连同单测一并移除
@@ -178,7 +178,9 @@ sqlv_mapper_check
 
 ### 门禁读数
 
-- 全量 `testShards`（`-Pkotlin.compiler.execution.strategy=in-process`，清 `build/classes` + `build/kotlin` 后跑）：**5378/0/0/6**（1826 + 1657 + 1895，6 跳过 = Docker），BUILD SUCCESSFUL 3m03s
-- 首跑 shard3 有 8 例失败（`SqlConsoleBridgeFilterProviderTest` ×2、`SqlLogListFreezeGuardTest` ×1、`AgentListenSyncTest` ×3、`AgentManagerPremainTest` ×1，形态为 `AlreadyDisposedException` / 断言），按既有三步证伪：① 四个类隔离复跑全绿 → ② 全量复跑 5378/0/0/6 绿，判定为既有的顺序/分片邻居依赖假失败（与本次改名无关：失败类均不在 MCP 面）
-- `verifyGate`（三目标 IU-243/253/262）：见提交信息与门禁日志
+- **定向测试**（改名受影响面：`mcp.*` 全包 + `config.*` 全包 + `convention.*` 三个守卫 + `generator.DmlAliasGuardTest` + `log.SqlConsoleBridgeFilterProviderTest` / `SqlLogListFreezeGuardTest` / `log.agent.*` + `ui.highlight.DatabaseSchemaResolverNegativeCacheTest`）：**62 套件 / 388 例 / 0 失败 / 0 错误 / 0 跳过**，BUILD SUCCESSFUL 4m48s。其中守卫类 `BannedApiSourceScanTest`、`McpScopeSourceScanTest`（标记加固后）、`PluginXmlStructureGuardTest`（十 toolset 类名清单）、`SettingsRealityGuardTest`（bundle 幽灵键）全绿
+- **全量 `testShards`**（权威读数，删迁移后的最终态；清 `build/classes` + `build/kotlin` 后跑）：**5372/0/0/6** —— shard1 1634/0/0/0、shard2 1727/0/0/6、shard3 2011/0/0/0（6 跳过 = Docker），BUILD SUCCESSFUL 3m31s。与删迁移前的 5378 相差 **-6**，精确等于移除的迁移单测数
+- 删迁移前那一轮首跑 shard3 曾出现 8 例失败（`SqlConsoleBridgeFilterProviderTest` ×2、`SqlLogListFreezeGuardTest` ×1、`AgentListenSyncTest` ×3、`AgentManagerPremainTest` ×1，形态为 `AlreadyDisposedException` / 断言），按既有三步证伪：① 四个类隔离复跑全绿 → ② 全量复跑 5378/0/0/6 绿 → ③ 删迁移后全量复跑 5372/0/0/6 绿，判定为既有的顺序/分片邻居依赖假失败（与本次改名无关：失败类均不在 MCP 面）
+- `verifyGate` / `verifyPlugin`（三目标 IU-243/253/262）：**按用户口径未纳入本轮**（构建校验只跑一次、由派活方在全部子智能体完成后统一跑），本轮未执行
+
 
