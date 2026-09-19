@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.mcp
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
 import cn.song.mybatisplus.visualizer.log.SqlSource
 import cn.song.mybatisplus.visualizer.log.StatementType
+import cn.song.mybatisplus.visualizer.testutil.AlreadyDisposedDiagnostics
 import cn.song.mybatisplus.visualizer.testutil.SqlLogManagerProjectState
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
@@ -30,11 +31,16 @@ class McpHistoryIngestTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
-        serviceState = SqlLogManagerProjectState.capture(project.getService(SqlLogManager::class.java))
+        serviceState = SqlLogManagerProjectState.capture(
+            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "setUp.capture")
+        )
     }
 
     override fun tearDown() {
-        SqlLogManagerProjectState.restore(project.getService(SqlLogManager::class.java), serviceState)
+        SqlLogManagerProjectState.restore(
+            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "tearDown.restore"),
+            serviceState,
+        )
         super.tearDown()
     }
 
@@ -69,7 +75,8 @@ class McpHistoryIngestTest : BasePlatformTestCase() {
     }
 
     fun test记录MCP执行_进既有历史入库路径() {
-        val manager = project.getService(SqlLogManager::class.java)
+        val manager =
+            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "test.进既有历史入库路径")
         val before = manager.entries.size()
         recordMcpExecution(project, "SELECT id FROM user", "demo-mysql", 8L, null)
 
@@ -86,7 +93,8 @@ class McpHistoryIngestTest : BasePlatformTestCase() {
     fun test记录MCP执行_同一条SQL连续两次_去重窗口内折叠() {
         // 既有 buffer 语义（本任务不另开口子）：去重开启时窗口内同 SQL 折叠为一条；
         // 每次调用仍有 idea.log 的 [MCP-AUDIT] 行兜底留痕（见 recordMcpExecution KDoc）
-        val manager = project.getService(SqlLogManager::class.java)
+        val manager =
+            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "test.去重窗口内折叠")
         // 前提自证（合流收口实测）：去重开关是项目服务级状态，light 测试项目在同一 JVM 内跨类复用，
         // 前置测试类（如 SqlConsoleBridgeFilterProviderTest 的 setUp）关掉它会让本用例假红——
         // 本用例断言的就是「去重开启时」的语义，前提在此显式声明，不依赖环境残留。

@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.config
 
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
+import cn.song.mybatisplus.visualizer.testutil.AlreadyDisposedDiagnostics
 import cn.song.mybatisplus.visualizer.testutil.SqlLogManagerProjectState
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -24,11 +25,16 @@ class SectionConfigurableAutoCaptureLinkageTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
-        serviceState = SqlLogManagerProjectState.capture(project.getService(SqlLogManager::class.java))
+        serviceState = SqlLogManagerProjectState.capture(
+            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "setUp.capture")
+        )
     }
 
     override fun tearDown() {
-        SqlLogManagerProjectState.restore(project.getService(SqlLogManager::class.java), serviceState)
+        SqlLogManagerProjectState.restore(
+            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "tearDown.restore"),
+            serviceState,
+        )
         super.tearDown()
     }
 

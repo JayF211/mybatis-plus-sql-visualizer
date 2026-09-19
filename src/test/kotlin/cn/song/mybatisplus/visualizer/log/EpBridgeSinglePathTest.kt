@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.testutil.AlreadyDisposedDiagnostics
 import cn.song.mybatisplus.visualizer.testutil.SqlLogManagerProjectState
 import com.intellij.execution.filters.Filter
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -34,7 +35,7 @@ class EpBridgeSinglePathTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
-        manager = project.getService(SqlLogManager::class.java)
+        manager = AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "setUp.manager")
         serviceState = SqlLogManagerProjectState.capture(manager)
         manager.entries.dedupeEnabled = false
         manager.entries.clear()

@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.testutil.AlreadyDisposedDiagnostics
 import cn.song.mybatisplus.visualizer.testutil.SqlLogManagerProjectState
 import com.intellij.execution.filters.Filter
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -25,7 +26,7 @@ class SqlConsoleBridgeFilterProviderTest : BasePlatformTestCase() {
     override fun setUp() {
         super.setUp()
         // EP provider 内部取注册服务——测试必须用同一实例（构造器实例不进容器）
-        manager = project.getService(SqlLogManager::class.java)
+        manager = AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "setUp.manager")
         serviceState = SqlLogManagerProjectState.capture(manager)
         manager.entries.dedupeEnabled = false
         SqlCaptureGate.epActive = false

@@ -47,10 +47,16 @@ abstract class SectionConfigurable(
         LOG.info("SectionConfigurable.apply: logAutoCaptureOnStart=${settings.state.logAutoCaptureOnStart}, suppressed=${settings.state.logAutoCaptureSuppressed}")
         if (!autoCaptureBefore && settings.state.logAutoCaptureOnStart) {
             ProjectManager.getInstance().openProjects.forEach { project ->
-                val manager = project.getService(SqlLogManager::class.java)
-                runCatching { manager.onAutoStartSettingEnabled() }.onFailure {
-                    LOG.warn("apply: 自动启动分流跳过（项目关闭/服务不可用）", it)
-                }
+                // T-ST-02：**取服务也在降级面内**——正在关闭 / 测试框架 temporarily-disposed 窗口内的
+                // 项目，`getService` 会抛 AlreadyDisposedException（项目服务构造期订阅
+                // `project.messageBus`，MessageBusImpl.checkOwnerDisposed 判 owner.isDisposed 为真，
+                // 容器服务创建链再归一成 "Container is already disposed"）。原先只包住
+                // onAutoStartSettingEnabled()，该异常会直接穿出 apply() 打断设置写回；
+                // warn 文案本已承诺「项目关闭/服务不可用」降级，此处把守卫挪到取服务之前即兑现。
+                runCatching { project.getService(SqlLogManager::class.java).onAutoStartSettingEnabled() }
+                    .onFailure {
+                        LOG.warn("apply: 自动启动分流跳过（项目关闭/服务不可用）", it)
+                    }
             }
         }
     }
