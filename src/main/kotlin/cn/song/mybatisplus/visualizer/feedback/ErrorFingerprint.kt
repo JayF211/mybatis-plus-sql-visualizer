@@ -30,7 +30,7 @@ object ErrorFingerprint {
         "com.intellij.", "java.", "javax.", "jdk.", "sun.", "kotlin.", "kotlinx.", "org.jetbrains.",
     )
 
-    /** `at com.foo.Bar.baz(...)` 行 → 组 1 = `com.foo.Bar.baz`、组 2 = 括号内位置原文；非栈帧行返回 null。 */
+    /** `at com.foo.Bar.baz(...)` 行 → 组 1 = `com.foo.Bar.baz`、组 2 = 左括号之后的剩余原文；非栈帧行返回 null。 */
     private val FRAME_LINE_REGEX = Regex("""^\s*at\s+([^\s(]+)\s*\((.*)$""")
 
     /** `Caused by: <类名>[: 消息]` / `Suppressed: <类名>[: 消息]` → 组 1 只取类名（消息不入指纹）。 */
@@ -97,7 +97,9 @@ object ErrorFingerprint {
      * 但给人看的摘要需要行号才能定位。与 [businessFrames] 共用同一套解析与过滤，杜绝两处口径漂移。
      */
     internal fun businessFrameLines(stackTraceText: String?): List<String> =
-        frameParts(stackTraceText).map { (frame, location) -> "$frame($location)" }
+        // 组 2 = 左括号之后**原样**的剩余文本（含右括号；老正则只要求左括号，容忍 `at a.B.c(` 残缺行），
+        // 拼回时只补左括号即可，多补一个右括号会把 `(...)` 拼成 `(...))`
+        frameParts(stackTraceText).map { (frame, rest) -> "$frame($rest" }
 
     /**
      * 从堆栈文本提取 cause 链类名（纯函数，internal 供测试）：`Caused by:`/`Suppressed:` 行只取类名，
