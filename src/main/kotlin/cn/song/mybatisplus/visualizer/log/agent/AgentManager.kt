@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.log.SqlLogManager
 import cn.song.mybatisplus.visualizer.log.logTimeKey
 import cn.song.mybatisplus.visualizer.log.logTimeParamSignature
 import cn.song.mybatisplus.visualizer.log.stampLogTime
+import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
@@ -291,6 +292,11 @@ class AgentManager(private val project: Project) : Disposable {
             val outcome = try {
                 consentProvider()
             } catch (t: Throwable) {
+                // T-FatalPassthrough T-FP-02：JVM 级致命错误透传（见 util/FatalErrors.kt）——本文件
+                // 是长驻链路（attach / premain / 会话读线程 / CONFIG 下发），捕获面覆盖 Error：
+                // 普通异常（含 ClassNotFoundException 这类可选能力缺失）仍走既有降级，
+                // VirtualMachineError/LinkageError 不得被吞成一条 warn 后让流程带病继续。
+                if (FatalErrors.isFatal(t)) throw t
                 LOG.warn("requestConsentThenAttach: 确认框异常——按拒绝处理（进冷却）", t)
                 EnhancedCaptureConsent.REJECTED
             }
@@ -371,6 +377,7 @@ class AgentManager(private val project: Project) : Disposable {
                 Thread.sleep(ATTACH_SETTLE_DELAY_MS)
                 attachToPid(pid)
             } catch (t: Throwable) {
+                if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
                 LOG.warn("onProcessAppeared: 惰性 attach 失败（非致命，桥继续捕获）", t)
             } finally {
                 pendingPids.remove(pid)
@@ -388,6 +395,7 @@ class AgentManager(private val project: Project) : Disposable {
         val session = try {
             createSession(pid)
         } catch (t: Throwable) {
+            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
             attachedPids.remove(pid)
             LOG.warn("attachToPid: pid=$pid attach 失败——回落桥（零劣化）", t)
             return false
@@ -540,6 +548,7 @@ class AgentManager(private val project: Project) : Disposable {
         val server = try {
             ServerSocket(0, 1, InetAddress.getLoopbackAddress())
         } catch (t: Throwable) {
+            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
             LOG.warn("openPremainChannel: 端口前置协商失败——本次不注入（回落 attach/桥）", t)
             return null
         }
@@ -574,6 +583,7 @@ class AgentManager(private val project: Project) : Disposable {
             channel.claimed = true
             onPremainConnected(socket)
         } catch (t: Throwable) {
+            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传（accept 线程：透传即线程终止，平台记录现场）
             LOG.info(
                 "premain 通道 ${channel.port} 未收到回连（${t.javaClass.simpleName}: ${t.message}）" +
                     "——该进程回落 attach/桥（零劣化）",
@@ -619,6 +629,7 @@ class AgentManager(private val project: Project) : Disposable {
             publishStatusChanged()
             LOG.info("premain 会话建立：pid=$pid（启动即捕获，attach 链已跳过）")
         } catch (t: Throwable) {
+            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
             LOG.warn("premain 回连处理失败——丢弃连接（回落桥）", t)
             runCatching { socket.close() }
         }
@@ -857,6 +868,7 @@ class AgentManager(private val project: Project) : Disposable {
                     val p = processHandler.javaClass.getMethod("getProcess").invoke(processHandler)
                     (p?.javaClass?.name ?: "null") to null
                 } catch (t: Throwable) {
+                    if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传（外层 runCatching 仍会接住——见 §八 登记）
                     "N/A" to t.toString()
                 }
                 LOG.warn("resolvePid: 三步回退全失败（handler=${processHandler.javaClass.name}, process=$processRepr, procErr=$procErr）")
@@ -1012,6 +1024,7 @@ internal class AgentSession(
                     handleFrame(cmd, String(body, Charsets.UTF_8))
                 }
             } catch (t: Throwable) {
+                if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传（读线程：透传即线程终止，平台记录现场）
                 LOG.warn("会话读循环退出（pid=$pid, alive 前=$alive）——掉线原因如下", t)
                 alive = false
                 onStateChange()
@@ -1036,6 +1049,7 @@ internal class AgentSession(
                     // 未命中回落捕获时间（= execute 开始时刻，与日志行只差毫秒级）并留痕 [logTimeMiss]。
                     project.getService(SqlLogManager::class.java).entries.addEntry(stampLogTime(entry) ?: logTimeMiss(entry))
                 } catch (t: Throwable) {
+                    if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
                     LOG.warn("EVENT 入队失败（不斩断流）", t)
                 }
             }
@@ -1076,6 +1090,7 @@ internal class AgentSession(
                 output.flush()
             }
         } catch (t: Throwable) {
+            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传（原状：静默置 alive=false，致命错误会丢现场）
             alive = false
             onStateChange()
         }
