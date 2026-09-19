@@ -131,6 +131,36 @@ T-PS5-02 的收益（一次大 DML 点击的最坏 4 次解析降到 1 次）已
 - T-ST-01 的探针读数（`hash=1898437131` vs `hash=1227671987`）、T-ST-02a 的 A 路径复现、T-ST-02b2 的先红 `139/1`、T-ST-02d 的合成样本注入——均**无产物留档**（探针已删、XML 已被后续绿跑覆盖），本文只能转述计划与提交报文。
 - 本批门禁的**当次跑**未由本文复跑（按任务约束不跑 gradle），5372 读数取自 `docs/变更记录.md` 与盘点文档的记载。
 
+
+### 4. T-ST-02d 守卫规则 —— **有条件通过（2 项阻断）→ 已修复**
+
+独立验证者（只读，用 Python 复刻规则逻辑跑真样本 + 全仓扫描）判定：规则**内部自洽、与自身规格一致、零副作用**，
+但「该守卫已覆盖已审计的泄漏形态」这一**价值结论不成立**——若验收口径是「守卫能防住本轮 5 个已修泄漏类的复发」，
+则为**不通过**。两条阻断：
+
+1. **规则对仓内主流取服务形态完全不可见**：那 5 个已修泄漏类的 `getService(` 计数全为 0
+   （`SectionConfigurableAutoCaptureLinkageTest` 的 1 处在 KDoc 里），它们统一走
+   `AlreadyDisposedDiagnostics.projectService(project, X::class.java, …)`（全仓 13 处）——而该 wrapper 的文档
+   正是要求测试类把 `project.getService(X::class.java)` 换成它；规则的名字绑定靠 `body.indexOf("getService(")`，
+   wrapper 形态一个都绑不上。**实证**：把 `SqlConsoleBridgeFilterProviderTest` 的 `restore` 行整行删掉
+   （原样复现修复前的泄漏）→ 规则仍 **offenders=0 绿**；仅改写成 `manager = project.getService(...)` 才红。
+2. **4 条通用复位令牌是纯漏报通道**：`.loadState(` / `.clearForTest(` / `.clearAll(` / `.resetForTest(` 在
+   `SqlLogManager` 上**不存在对应方法**，而复位判定是**文件级 `contains`、不与服务对象绑定** → 四个
+   「另一个对象的复位」样本（`PluginSettings.loadState` / `JoinFkRegistry.clearForTest` /
+   `PluginCacheManager.clearAll` / `FirstCaptureGuide.resetForTest`）把真泄漏**全部洗成绿**。
+
+**修复（`adbbc02`，1 文件 +315/−41）**：①名字绑定令牌扩为 `["getService(", "projectService("]`，
+wrapper 形态同样登记；②复位判定改「绑定承接名」（`hasBoundServiceReset`：`<承接名>.<复位口>(…)` 或
+`SqlLogManagerProjectState.restore(<承接名>, …)`），文件级 `contains` 整块移除。
+**验收用「能红」实证**：删 `restore` 行 → `命中 1 处：[…SqlConsoleBridgeFilterProviderTest.kt:31 → manager.entries.dedupeEnabled =]`；
+把复位换成另一对象的 `resetForTest()` → 仍报 1 处；反向不丢覆盖面（`RollbackSnapshotStore` + `store.clearForTest()` → 0，
+去掉复位行 → 1，证明该 0 非空绿）。既有 24 例与豁免计数零漂移。
+
+**验证者另纠正的两处口径**：①「仓内 0 处」是**空绿**（写命中本身为 0），**不构成精度证据**——精度证据只取合成样本
+（该表述已在 KDoc 改写）；②任务概述里「>1 顶层类的测试文件 2 个」不成立（实测 6 个），但**每个文件带初始化入口的
+顶层类都只有 1 个**，故文件级判定的残留当前无实际影响。另登记：`restoreCaptureStateForTest` 是 3/15 字段的
+**部分复位**，已从令牌排除；自证补了 `testSources()` 非空断言（否则路径解析失败会空屏绿）。
+
 ## 四、门禁复跑
 
 并轨后先 `rm -rf build/classes build/kotlin` 再跑。读数链条（**三个数字别混**）：
