@@ -315,6 +315,196 @@ class SecureXmlTest {
     }
 
     // ------------------------------------------------------------------
+    // T-XDH-07：不可见声明收口（独立复核抓到的预扫绕过，2026-09-19）
+    //
+    // 改前实测读数（JDK 17.0.19，探针 F:/tmp/xdh7/ProbeB.java 复刻改前预扫逻辑 + 生产解析配置）：
+    // 4 层 × 10 引用 × 4000 字符的载荷（未加诱饵时预扫正确拒绝 chars=65537）加上诱饵后预扫 PASS，
+    // JDK 实际展开 40,000,016 字符（164~384ms）；参数实体走私载荷展开 10,000,016 字符。
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `实体值里的子集结束符诱饵不放行`() {
+        // 改前 `<!ENTITY decoy "]>">` 置于子集首行：indexOf("]>") 切出的子集没有闭合引号 → 声明正则 0 命中
+        // → `declarations.isEmpty()` 早退 → 三道判据全废（实测预扫 PASS + 展开 40,000,016 字符）
+        val e = assertThrows(XmlParseException::class.java) {
+            XmlMapperParser().parse(laughsWithDecoy("""<!ENTITY decoy "]>">"""))
+        }
+        assertTrue("拒绝原因须点明膨胀判据，实际：${e.message}", e.message.orEmpty().contains("实体展开"))
+    }
+
+    @Test
+    fun `注释里的子集结束符诱饵不放行`() {
+        // 改前：注释里的 `]>` 同样提前截断子集（实测预扫 PASS + 展开 40,000,016 字符）
+        val e = assertThrows(XmlParseException::class.java) {
+            XmlMapperParser().parse(laughsWithDecoy("<!-- ]> -->"))
+        }
+        assertTrue("拒绝原因须点明膨胀判据，实际：${e.message}", e.message.orEmpty().contains("实体展开"))
+    }
+
+    @Test
+    fun `处理指令里的子集结束符诱饵不放行`() {
+        // 改前：子集内的处理指令 `<?pi ]> ?>` 合法（实测 JDK 接受，且其中的 `]>` 不结束子集），
+        // 但 indexOf("]>") 会在该处截断 → 预扫 PASS + 展开 40,000,016 字符
+        val e = assertThrows(XmlParseException::class.java) {
+            XmlMapperParser().parse(laughsWithDecoy("<?pi ]> ?>"))
+        }
+        assertTrue("拒绝原因须点明膨胀判据，实际：${e.message}", e.message.orEmpty().contains("实体展开"))
+    }
+
+    @Test
+    fun `序言里的假DOCTYPE不抢占定位`() {
+        // 改前：`fileText.indexOf("<!DOCTYPE")` 会认下注释/处理指令里的假 DOCTYPE（两者实测均被 JDK 接受），
+        // 其子集为空 → 早退 → 真 DOCTYPE 的实体全不受扫（实测预扫 PASS + 展开 40,000,016 字符）
+        listOf(
+            "<!-- <!DOCTYPE x [ ]> -->" to "注释",
+            "<?pi <!DOCTYPE x [ ]> ?>" to "处理指令",
+        ).forEach { (decoy, kind) ->
+            val e = assertThrows(XmlParseException::class.java) {
+                XmlMapperParser().parse(decoy + laughs(4, 10, 4000))
+            }
+            assertTrue(
+                "${kind}里的假 DOCTYPE 不得抢占定位，实际：${e.message}",
+                e.message.orEmpty().contains("实体展开"),
+            )
+        }
+    }
+
+    @Test
+    fun `子集结束符前有空白的载荷仍被扫描`() {
+        // 改前：`]` 与 `>` 之间的空白（实测 JDK 接受 `] >` 形式）让 indexOf("]>") 找不到子集 → 完全不扫
+        assertEquals(
+            "`] >` 形式的子集在上限内须照常解析",
+            1,
+            XmlMapperParser().parse(singleEntityXml(SecureXml.MAX_ENTITY_EXPANSION_CHARS.toInt()).replace("]>", "] >"))
+                .statements.size,
+        )
+        val e = assertThrows(XmlParseException::class.java) {
+            XmlMapperParser().parse(
+                singleEntityXml(SecureXml.MAX_ENTITY_EXPANSION_CHARS.toInt() + 1).replace("]>", "] >"),
+            )
+        }
+        assertTrue("拒绝原因须点明膨胀判据，实际：${e.message}", e.message.orEmpty().contains("实体展开"))
+    }
+
+    @Test
+    fun `参数实体携带的声明对三项判据同时可见`() {
+        // 改前：参数实体字面量里的声明对预扫不可见（`%hide;` 引用被当作 1 字符），声明数/深度/字符数判据同时失明
+        // ① 声明数：300 层链全在 PE 字面量里 → 改前可见声明数 1（PASS），真值 302
+        val countError = assertThrows(XmlParseException::class.java) {
+            XmlMapperParser().parse(peCarriedChain(depth = 300))
+        }
+        assertTrue(
+            "PE 携带的声明须计入声明数（302 = 1 个 PE 声明 + 301 个实体声明），实际：${countError.message}",
+            countError.message.orEmpty().contains("实体声明数 302"),
+        )
+
+        // ② 引用深度：20 层链全在 PE 字面量里（声明数 21 未触上限，只有深度判据能拦）
+        val depthError = assertThrows(XmlParseException::class.java) {
+            XmlMapperParser().parse(peCarriedChain(depth = 20))
+        }
+        assertTrue("PE 携带的引用链深度须参与判据，实际：${depthError.message}", depthError.message.orEmpty().contains("嵌套深度"))
+
+        // ③ 展开字符数：4 层 × 10 引用 × 1000 字符全在 PE 字面量里 → 改前预扫 PASS + 展开 10,000,016 字符
+        val charsError = assertThrows(XmlParseException::class.java) {
+            XmlMapperParser().parse(peCarriedChain(depth = 4, payloadLen = 1000, fanout = 10))
+        }
+        assertTrue("PE 携带的展开量须参与判据，实际：${charsError.message}", charsError.message.orEmpty().contains("实体展开"))
+    }
+
+    @Test
+    fun `非ASCII实体名同样参与膨胀判据`() {
+        // 改前：实体名正则要求 `[A-Za-z_]` 起头，`<!ENTITY é "…">` 与其引用 `&é;` 双双漏认
+        // （实测 100,000 字符的 é 实体被引用 10 次 → 展开 1,000,016 字符且预扫 PASS）
+        val name = "\u00e9"
+        val e = assertThrows(XmlParseException::class.java) {
+            XmlMapperParser().parse(
+                """<!DOCTYPE mapper [<!ENTITY $name "${"y".repeat(65_537)}">]>
+                   <mapper namespace="n"><select id="s1">SELECT '&$name;' FROM t</select></mapper>""".trimIndent(),
+            )
+        }
+        assertTrue("非 ASCII 实体名须参与膨胀判据，实际：${e.message}", e.message.orEmpty().contains("实体展开"))
+        // 上限内的非 ASCII 实体名不得误伤
+        val parsed = XmlMapperParser().parse(
+            """<!DOCTYPE mapper [<!ENTITY $name "ok">]>
+               <mapper namespace="n"><select id="s1">SELECT '&$name;' FROM t</select></mapper>""".trimIndent(),
+        )
+        assertEquals(
+            "SELECT 'ok' FROM t",
+            XmlPreviewModel.from(parsed.statements.single(), parsed.errors).renderSql().sql
+                .replace(Regex("\\s+"), " ").trim(),
+        )
+    }
+
+    @Test
+    fun `实体引用深度边界与声明顺序无关`() {
+        // 改前：递归护栏 `visiting.size >= 16` 让「头先声明」的 16 层链被误拒（实测 head-first 16 层 REJECT、
+        // leaf-first 16 层 PASS）——深度判据不该依赖声明顺序
+        listOf(false to "叶先声明", true to "头先声明").forEach { (headFirst, kind) ->
+            assertEquals(
+                "${kind}的 16 层引用链（恰在上限）须放行",
+                1,
+                XmlMapperParser().parse(chain(16, headFirst)).statements.size,
+            )
+            val e = assertThrows(XmlParseException::class.java) {
+                XmlMapperParser().parse(chain(17, headFirst))
+            }
+            assertTrue("${kind}的 17 层引用链须按深度拒绝，实际：${e.message}", e.message.orEmpty().contains("嵌套深度"))
+        }
+    }
+
+    @Test
+    fun `菱形复用实体不误判成环`() {
+        // 护栏：d3 → {d2, d1}、d2 → {d1, d0}，d1 有两条可达路径（DAG 复用，非环）——不得报「成环」
+        val parsed = XmlMapperParser().parse(
+            """
+            <!DOCTYPE mapper [
+            <!ENTITY d0 "x">
+            <!ENTITY d1 "&d0;&d0;">
+            <!ENTITY d2 "&d1;&d1;">
+            <!ENTITY d3 "&d2;&d1;">
+            ]>
+            <mapper namespace="n"><select id="s1">SELECT '&d3;' FROM t</select></mapper>
+            """.trimIndent(),
+        )
+        assertEquals(
+            "SELECT 'xxxxxx' FROM t",
+            XmlPreviewModel.from(parsed.statements.single(), parsed.errors).renderSql().sql
+                .replace(Regex("\\s+"), " ").trim(),
+        )
+    }
+
+    @Test
+    fun `官方DTD整段内联不被误伤`() {
+        // 真官方 DTD 文本（test classpath 上的 mybatis-3.5.19 资源，实测 7,819 字节 / ELEMENT 33 /
+        // ATTLIST 28 / ENTITY 0 / 无 `%` 引用 / 无 `]>`）整段内联：T-XDH-07 的可见化只对 `<!ENTITY` 与
+        // `%name;` 生效，官方 DTD 两者皆无——声明数 0 早退，子集切分与改前同区间。
+        // 首行的 XML 声明必须去掉（`<?xml` 不是合法 PI 目标，JDK 直接拒；内联 DTD 时本就不能带它）。
+        val dtd = requireNotNull(
+            javaClass.classLoader.getResourceAsStream("org/apache/ibatis/builder/xml/mybatis-3-mapper.dtd"),
+        ) { "mybatis-3-mapper.dtd 不在 test classpath（mybatis jar 传递依赖缺失？）" }
+            .bufferedReader().use { it.readText() }
+            .lineSequence()
+            .filterNot { it.trimStart().startsWith("<?xml") }
+            .joinToString("\n")
+        val parsed = XmlMapperParser().parse(
+            """
+            <!DOCTYPE mapper [
+            $dtd
+            <!ENTITY status "ACTIVE">
+            ]>
+            <mapper namespace="n">
+              <select id="s1">SELECT * FROM t WHERE status = '&status;'</select>
+            </mapper>
+            """.trimIndent(),
+        )
+        assertEquals(
+            "SELECT * FROM t WHERE status = 'ACTIVE'",
+            XmlPreviewModel.from(parsed.statements.single(), parsed.errors).renderSql().sql
+                .replace(Regex("\\s+"), " ").trim(),
+        )
+    }
+
+    // ------------------------------------------------------------------
     // 构造器与源码扫描工具
     // ------------------------------------------------------------------
 
@@ -349,12 +539,44 @@ class SecureXmlTest {
         append("]>\n<mapper namespace=\"n\"><select id=\"s1\">SELECT '&d0;' FROM t</select></mapper>")
     }
 
-    /** [depth] 层链式实体引用（c0 字面量，cN 引用 c(N-1)）。 */
-    private fun deepChain(depth: Int): String = buildString {
-        append("<!DOCTYPE mapper [\n<!ENTITY c0 \"base\">\n")
-        for (level in 1..depth) append("<!ENTITY c").append(level).append(" \"&c").append(level - 1).append(";\">\n")
+    /** [depth] 层链式实体引用（c0 字面量，cN 引用 c(N-1)）；[headFirst] 时链头先于叶子声明。 */
+    private fun deepChain(depth: Int): String = chain(depth, headFirst = false)
+
+    /** [depth] 层链式引用；[headFirst] = true 时先声明链头（声明顺序不得影响深度判据）。 */
+    private fun chain(depth: Int, headFirst: Boolean): String = buildString {
+        append("<!DOCTYPE mapper [\n")
+        if (headFirst) {
+            for (level in depth downTo 1) {
+                append("<!ENTITY c").append(level).append(" \"&c").append(level - 1).append(";\">\n")
+            }
+            append("<!ENTITY c0 \"base\">\n")
+        } else {
+            append("<!ENTITY c0 \"base\">\n")
+            for (level in 1..depth) {
+                append("<!ENTITY c").append(level).append(" \"&c").append(level - 1).append(";\">\n")
+            }
+        }
         append("]>\n<mapper namespace=\"n\"><select id=\"s1\">SELECT '&c").append(depth)
             .append(";' FROM t</select></mapper>")
+    }
+
+    /** 在 [laughs] 载荷的子集首行插入 [decoy]（切分诱饵）——复现「子集切分被诱饵提前截断」的绕过形态。 */
+    private fun laughsWithDecoy(decoy: String): String =
+        laughs(4, 10, 4000).replace("<!DOCTYPE mapper [\n", "<!DOCTYPE mapper [\n$decoy\n")
+
+    /**
+     * 参数实体携带的声明链：`<!ENTITY % hide "<!ENTITY b0 '…'>…">%hide;`——**全部声明都在 PE 字面量里**
+     * （改前对预扫不可见），供声明数 / 深度 / 字符数三项判据各自的可见性用例使用。
+     */
+    private fun peCarriedChain(depth: Int, payloadLen: Int = 1, fanout: Int = 1): String = buildString {
+        append("<!DOCTYPE mapper [\n<!ENTITY % hide \"<!ENTITY b0 '").append("B".repeat(payloadLen)).append("'>")
+        for (level in 1..depth) {
+            append("<!ENTITY b").append(level).append(" '")
+            repeat(fanout) { append("&b").append(level - 1).append(';') }
+            append("'>")
+        }
+        append("\">\n%hide;\n]>\n<mapper namespace=\"n\"><select id=\"s1\">SELECT '&b")
+            .append(depth).append(";' FROM t</select></mapper>")
     }
 
     private fun repoRoot(): File {
