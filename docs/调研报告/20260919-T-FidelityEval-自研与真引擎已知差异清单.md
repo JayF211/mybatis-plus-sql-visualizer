@@ -73,16 +73,26 @@
 - 可修：不建议（改为硬失败会破坏预览可用性）。
 - 成本量级：不适用（对齐方向成本约 0.5 人天，但不做）。
 
-### D4 / P16 `foreach` 体内 `if` 非法表达式（在册缺口）
+### D4 / P16 `foreach` 体内 `if` 非法表达式（**T-FS-07 已修，静默已消除**）
 
 - 场景：`<foreach collection="ids" item="id" open="(" separator="," close=")"><if test="id === 1">#{id}</if></foreach>`
 - 真引擎：抛 `BuilderException: Error evaluating expression 'id === 1'. Cause: ExpressionSyntaxException: Malformed OGNL expression: id === 1`
-- 自研：`sql=[SELECT * FROM t WHERE id IN ( ? , ? )] props=[__frch_id_0, __frch_id_1] errors=[]`——展开但**无任何错误提示**
-- 成因：`xml/PrefixedContext` / `FilteredContext` 各自持有 `DynamicContext.errors` 且未转发，`foreach` 体内的求值失败落进子上下文后丢弃。同一失败在顶层 `if`（D3）能记 errors，只有这一处静默。
-- 判定：**真缺陷**（唯一与真引擎硬失败相对、且用户不可见的一处）。
-- 可修：可修，已立项 **T-TailSweep2 T-FS-07**（`DynamicContext.errors` 转 open + 两个子上下文按既有 `bindings`/`staticFieldValues` 同款委托覆写）。
-- 成本量级：约 5 行 + 同一表达式同一原因的去重，**0.5 人天**（含用例）。
-- 联动：T-FS-07 落地后本清单该条与对照集的 `P16 errors 为空` 断言会同时变红 → 属预期，届时同步改。
+- 自研（**T-FS-07 落地后**）：`sql=[SELECT * FROM t WHERE id IN ( ? , ? )] props=[__frch_id_0, __frch_id_1]`，
+  `errors` **恰 1 行**（逐迭代去重后）且含表达式原文 `id === 1`——展开 + 可见提示。
+- 原状（T-FS-07 落地前，本清单初版记录）：`errors=[]`——展开但**无任何错误提示**。
+- 成因：`xml/ForeachSqlNode.kt` 的私有嵌套类 `PrefixedContext`（`:103`）/ `FilteredContext`（`:138`）
+  各自持有 `DynamicContext.errors` 且未转发；**同形态的还有 `xml/TrimSqlNode.kt:40` 的
+  `FilteredDynamicContext`**（`where`/`trim`/`set` 体内 `<if>`，一并修）。同一失败在顶层 `if`（D3）
+  能记 errors，只有嵌套层静默。
+- 判定：**原为真缺陷**（唯一与真引擎硬失败相对、且用户不可见的一处），**现已修**。
+- 修复：**T-TailSweep2 T-FS-07**（`e001b6f`）——`DynamicContext.errors` 转 `open val` + 三处子上下文按既有
+  `bindings`/`staticFieldValues` 同款委托覆写；去重落在写入侧（`DedupErrorList`，键=完整错误文案，
+  保首现顺序），逐迭代不再刷屏。
+- 与真引擎的**剩余差别**：只剩「硬失败（真引擎）vs 降级展开 + 可见提示（自研）」——即 D3 的同一取向
+  （见 §3 产品取向决策），不再是「静默」。
+- 联动（**已完成**）：T-FS-07 与对照集分属不同分支，并轨时同步改了对照集的 P16 断言（`errors 为空` →
+  「恰一行且含表达式原文」）；两处若不同步会同时变红。
+
 
 ### D5 / P20 DTO 属性在 `test` 中（专项判定见 §4）
 
@@ -111,9 +121,13 @@
 | D1 | P0 无 DOCTYPE | `BuilderException` | 正常渲染 | 我方宽容 | 否（不建议） | 0.5 人天（方向反） |
 | D2 | P14 `\|\|flag\|\|` | `ExpressionSyntaxException` | 剥壳渲染 `AND x = 1` | 我方超集 | 否 | — |
 | D3 | P15 顶层 `if` 非法表达式 | `BuilderException` | 展开 + errors | 我方降级（可见） | 否（不建议） | 0.5 人天（方向反） |
-| D4 | P16 `foreach` 体内 `if` 非法表达式 | `BuilderException` | 展开 + **无 errors** | 在册缺口 | **是**（T-FS-07） | 0.5 人天 |
+| D4 | P16 `foreach` 体内 `if` 非法表达式 | `BuilderException` | 展开 + **恰一行可见提示** | **已修**（原在册缺口） | 已修（T-FS-07） | 已落地 |
 | D5 | P20 DTO 属性在 `test` | 判真展开 | 判假不展开 | 求值器能力边界 | 是（暂缓） | 0.5~1 人天 |
 | D6 | P30 `${}` 求值为空 | 静默空串 | 同 SQL + 一条提示 | 提示面 | 否 | — |
+
+**修复进度**：D4 已在 T-TailSweep2 T-FS-07（`e001b6f`）落地（静默消除，剩余差别只剩「硬失败 vs 降级展开 +
+可见提示」这一取向，与 D3 同类）；D5 暂缓（建议随首个真实触达场景做，见 §4）。其余 4 条不建议修——
+修的方向是「对齐真引擎的硬失败」，等于主动降低可用性。
 
 ## 4. P20 专项判定
 

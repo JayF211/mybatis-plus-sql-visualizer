@@ -128,9 +128,12 @@ class RealEngineFidelityTest {
         assertEquals("P15 自研错误提示条数", 1, p15Mine.errors.size)
         assertTrue("P15 自研错误提示应说明按 true 展开：${p15Mine.errors}", p15Mine.errors[0].contains("条件表达式无法求值"))
 
-        // ---- P16 foreach 体内 if 非法表达式：真引擎硬抛 vs 自研展开且**不记 errors**（T-FS-07 在册缺口）----
-        // 这条 errors 为空是**已登记的静默**（PrefixedContext/FilteredContext 未转发 DynamicContext.errors，
-        // T-TailSweep2 T-FS-07 的尾款）；T-FS-07 落地后本断言会红 → 届时同步改差异清单。
+        // ---- P16 foreach 体内 if 非法表达式：真引擎硬抛 vs 自研展开 + **记一行可见提示** ----
+        // 合并注记（T-TailSweep2 并轨时同步改）：本断言原先钉的是「errors 为空」——那是 T-FS-07 落地**前**
+        // 的在册静默（PrefixedContext/FilteredContext 未转发 DynamicContext.errors）。T-FS-07（`e001b6f`）
+        // 已让三个子上下文转发 errors、并在写入侧判重，故此处改为钉「恰一行且含表达式原文」：既排除
+        // 「仍未转发」（=0 条），也排除「转发未去重」（=迭代次数条）。与真引擎的差别从此只剩
+        // 「硬失败 vs 降级展开 + 可见提示」，差异清单 D4 已同步改述。
         val p16 = known.getValue("P16")
         val p16Real = runCatching { driver.render(p16.mapper, NAMESPACE, STATEMENT_ID, p16.realParams) }
         assertEquals(
@@ -141,7 +144,11 @@ class RealEngineFidelityTest {
         val p16Mine = mine(p16)
         assertEquals("P16 自研展开产物", "SELECT * FROM t WHERE id IN ( ? , ? )", compact(p16Mine.sql))
         assertEquals("P16 自研参数队列", listOf("__frch_id_0", "__frch_id_1"), p16Mine.mappings.map { it.property })
-        assertEquals("P16 自研 errors 应为空（T-FS-07 在册静默缺口）", emptyList<String>(), p16Mine.errors)
+        assertEquals("P16 自研 errors 应恰一行（逐迭代去重后）", 1, p16Mine.errors.size)
+        assertTrue(
+            "P16 自研错误提示应含 test 表达式原文：${p16Mine.errors}",
+            p16Mine.errors[0].contains("id === 1"),
+        )
 
         // ---- P20 DTO 属性在 test 中：真引擎判真展开 vs 自研判假不展开（求值器无 POJO 属性访问）----
         val p20 = known.getValue("P20")
