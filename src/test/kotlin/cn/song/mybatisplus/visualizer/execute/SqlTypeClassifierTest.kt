@@ -413,4 +413,19 @@ class SqlTypeClassifierTest {
         assertFalse("整批 T-SQL 控制流需确认",
             SqlTypeClassifier.isQuery("IF EXISTS (SELECT 1 FROM t) BEGIN DELETE FROM t; END"))
     }
+
+    // ======================== DELIMITER 脚本分类（T-DA-03 / O-39 消费面②） ========================
+
+    @Test
+    fun testDelimiterProcedureScriptClassifiesDdlNotFragments() {
+        // T-DA-02 前：`DELIMITER $$` 自成一类（UNKNOWN）+ 过程体碎成多段；现过程体整段判 DDL
+        val script = "DELIMITER $$\nCREATE PROCEDURE p()\nBEGIN\n  SELECT 1;\n  SELECT 2;\nEND$$\n" +
+            "DELIMITER ;\nSELECT 3;"
+        val statements = SqlTypeClassifier.splitStatements(script)
+        assertEquals("指令行不产出、界符不残留——两条语句", 2, statements.size)
+        assertEquals("过程体整体判 DDL", SqlType.DDL, SqlTypeClassifier.classify(statements[0]))
+        assertEquals("复位后的普通语句照常分类", SqlType.QUERY, SqlTypeClassifier.classify(statements[1]))
+        assertEquals("首关键字不再是 DELIMITER", "CREATE", SqlTypeClassifier.getFirstKeyword(script))
+        assertFalse("含 DDL 的脚本整体需确认（不因指令行误判免确认）", SqlTypeClassifier.isQuery(script))
+    }
 }

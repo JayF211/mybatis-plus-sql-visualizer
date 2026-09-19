@@ -143,4 +143,141 @@ class DatabaseSchemaResolverNegativeCacheTest {
         assertEquals("正命中路径零负缓存副作用", 1, scanCount)
         assertSame(first, third)
     }
+
+    // ---------- T-PS5-06：单调用全扫限额 ----------
+
+    @Test
+    fun `单调用k表miss只全扫一次`() {
+        val ds = Any()
+        val names = (1..20).map { "ghost_$it" }
+        val results = DatabaseSchemaResolver.withScanBudget {
+            names.map { DatabaseSchemaResolver.resolveFromSources(it, listOf(ds), ::countingEmptyScan) }
+        }
+        assertEquals("同一数据源在一次调用内全扫至多一次（20 表 miss）", 1, scanCount)
+        assertTrue("未找到口径不变（无注释无列）", results.all { it.comment == null && it.columns.isEmpty() })
+    }
+
+    @Test
+    fun `多数据源每源各一次上限`() {
+        val ds1 = Any()
+        val ds2 = Any()
+        DatabaseSchemaResolver.withScanBudget {
+            DatabaseSchemaResolver.resolveFromSources("g1", listOf(ds1, ds2), ::countingEmptyScan)
+            DatabaseSchemaResolver.resolveFromSources("g2", listOf(ds1, ds2), ::countingEmptyScan)
+        }
+        assertEquals("两数据源 × 两表 = 每源一次（共 2 次，而非 4 次）", 2, scanCount)
+    }
+
+    @Test
+    fun `命中与miss混合调用结果正确`() {
+        val ds = Any()
+        val existing = TableMeta("用户表", linkedMapOf("id" to ColumnMeta("主键", "int(11)", true)))
+        val scan: (Any, String) -> TableMeta = { _, table ->
+            scanCount++
+            if (table == "users") existing else TableMeta(null, emptyMap())
+        }
+        val (hit, miss1, miss2) = DatabaseSchemaResolver.withScanBudget {
+            Triple(
+                DatabaseSchemaResolver.resolveFromSources("users", listOf(ds), scan),
+                DatabaseSchemaResolver.resolveFromSources("ghost_a", listOf(ds), scan),
+                DatabaseSchemaResolver.resolveFromSources("ghost_b", listOf(ds), scan),
+            )
+        }
+        assertEquals("命中表返回真实元数据", existing, hit)
+        assertTrue("miss 表按未找到披露", miss1.columns.isEmpty() && miss1.comment == null)
+        assertTrue("后续 miss 表同样按未找到披露", miss2.columns.isEmpty() && miss2.comment == null)
+        assertEquals("一次调用内同一数据源只全扫一次", 1, scanCount)
+    }
+
+    @Test
+    fun `命中与miss同调用内只全扫一次`() {
+        val ds = Any()
+        val existing = TableMeta("用户表", linkedMapOf("id" to ColumnMeta("主键", "int(11)", true)))
+        val scan: (Any, String) -> TableMeta = { _, table ->
+            scanCount++
+            if (table == "users") existing else TableMeta(null, emptyMap())
+        }
+        DatabaseSchemaResolver.withScanBudget {
+            assertEquals(existing, DatabaseSchemaResolver.resolveFromSources("users", listOf(ds), scan))
+            val miss = DatabaseSchemaResolver.resolveFromSources("ghost_a", listOf(ds), scan)
+            assertTrue("同调用内后续 miss 表按未找到披露", miss.columns.isEmpty() && miss.comment == null)
+        }
+        assertEquals("命中后同一数据源不再重扫（遍历已完整）", 1, scanCount)
+    }
+
+    @Test
+    fun `查不了不记账_下次调用仍重试`() {
+        val ds = Any()
+        val bailScan: (Any, String) -> TableMeta = { _, _ ->
+            scanCount++
+            TableMeta(null, emptyMap(), true)
+        }
+        DatabaseSchemaResolver.withScanBudget {
+            DatabaseSchemaResolver.resolveFromSources("t_bail", listOf(ds), bailScan)
+            // 查不了 → 不记账 → 同调用内下一张表仍重扫（数据源晚连接场景必须能自愈）
+            DatabaseSchemaResolver.resolveFromSources("t_other", listOf(ds), bailScan)
+        }
+        assertEquals("查不了不记账：同调用内逐表重扫", 2, scanCount)
+        DatabaseSchemaResolver.withScanBudget {
+            DatabaseSchemaResolver.resolveFromSources("t_bail", listOf(ds), bailScan)
+        }
+        assertEquals("跨调用仍重试", 3, scanCount)
+    }
+
+    @Test
+    fun `作用域外零行为变化`() {
+        val ds = Any()
+        assertEquals("作用域外默认无账本", false, DatabaseSchemaResolver.inScanBudgetForTest())
+        DatabaseSchemaResolver.resolveFromSources("g1", listOf(ds), ::countingEmptyScan)
+        DatabaseSchemaResolver.resolveFromSources("g2", listOf(ds), ::countingEmptyScan)
+        assertEquals("未开启限额时维持既有逐表全扫语义", 2, scanCount)
+        DatabaseSchemaResolver.withScanBudget { assertEquals(true, DatabaseSchemaResolver.inScanBudgetForTest()) }
+        assertEquals("退出作用域即恢复", false, DatabaseSchemaResolver.inScanBudgetForTest())
+        DatabaseSchemaResolver.resolveFromSources("g3", listOf(ds), ::countingEmptyScan)
+        assertEquals("作用域退出后仍逐表全扫", 3, scanCount)
+    }
+
+    @Test
+    fun `限额内负缓存跨调用语义不变`() {
+        val ds = Any()
+        DatabaseSchemaResolver.withScanBudget {
+            DatabaseSchemaResolver.resolveFromSources("g_x", listOf(ds), ::countingEmptyScan)
+            DatabaseSchemaResolver.resolveFromSources("g_y", listOf(ds), ::countingEmptyScan)
+        }
+        assertEquals(1, scanCount)
+        // 跨调用：负缓存仍生效（g_x/g_y 都已记负缓存）
+        DatabaseSchemaResolver.resolveFromSources("g_x", listOf(ds), ::countingEmptyScan)
+        DatabaseSchemaResolver.resolveFromSources("g_y", listOf(ds), ::countingEmptyScan)
+        assertEquals("限额跳过的表同样记了负缓存 → 跨调用不重扫", 1, scanCount)
+    }
+
+    // ---------- T-PS5-13：负缓存容量上界 ----------
+
+    @Test
+    fun `负缓存容量上界_溢出整体清空且结论不变`() {
+        val ds = Any()
+        val max = DatabaseSchemaResolver.NEGATIVE_CACHE_MAX
+        for (i in 0 until max) {
+            DatabaseSchemaResolver.resolveFromSources("cap_t$i", listOf(ds), ::countingEmptyScan)
+        }
+        assertEquals("未溢出时逐条累积", max, DatabaseSchemaResolver.negativeCacheSize())
+
+        // 再记一条 → 溢出整体清空 + 本键写入
+        DatabaseSchemaResolver.resolveFromSources("cap_overflow", listOf(ds), ::countingEmptyScan)
+        assertTrue(
+            "溢出整体清空（只余溢出后写入的条目，实测 ${DatabaseSchemaResolver.negativeCacheSize()}）",
+            DatabaseSchemaResolver.negativeCacheSize() <= 1,
+        )
+
+        // 结论不变：被清掉的旧表重扫（清空只丢命中率不丢正确性）
+        val before = scanCount
+        val old = DatabaseSchemaResolver.resolveFromSources("cap_t0", listOf(ds), ::countingEmptyScan)
+        assertEquals("清空后旧表重扫", before + 1, scanCount)
+        assertTrue("重扫结论仍是未找到", old.columns.isEmpty() && old.comment == null)
+
+        // 溢出后写入的表照常命中负缓存
+        val mid = scanCount
+        DatabaseSchemaResolver.resolveFromSources("cap_overflow", listOf(ds), ::countingEmptyScan)
+        assertEquals("溢出后写入的条目命中负缓存（TTL 语义不变）", mid, scanCount)
+    }
 }

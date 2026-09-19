@@ -320,6 +320,90 @@ public class SqlLogAutoSaverTest {
     }
 
     // ------------------------------------------------------------------
+    // T-McpAuditTrail T-MAT-03：MCP 来源标记的 pd 持久化（配套必改）
+    // ------------------------------------------------------------------
+
+    /** 无参数/无占位符/无扩展字段的最小 MCP 条目——explain 落历史的常态形态。 */
+    private static LogSqlEntry mcpEntry(SqlSource source) {
+        return new LogSqlEntry(
+                "SELECT id, name FROM user WHERE id = 1",
+                "SELECT id, name FROM user WHERE id = 1",
+                List.<LogSqlParam>of(),
+                1724567890000L,
+                null,
+                LogSqlEntry.computeSummary("SELECT id, name FROM user WHERE id = 1"),
+                source,
+                7L,
+                null,
+                0,
+                List.of(),
+                List.of(),
+                null,
+                0L,
+                null,
+                null,
+                null,
+                null,
+                null);
+    }
+
+    @Test
+    public void MCP来源无参数无占位符_仍写pd行() throws Exception {
+        // T-MAT-03 配套必改的专属用例：pd 写入条件若只判 params/占位符/扩展字段，
+        // 这条无参无占位符的 MCP SELECT 会丢掉来源标记——本任务的存在意义所在。
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        String dir = tempDir();
+        saver.configure(dir, "test.sql", null);
+        saver.write(mcpEntry(SqlSource.MCP));
+        // 对照：除来源外逐字段相同的非 MCP 条目
+        saver.write(mcpEntry(SqlSource.UNKNOWN));
+        saver.close();
+
+        String content = Files.readString(new File(dir, "test.sql").toPath());
+        java.util.List<String> blocks = java.util.Arrays.stream(content.split("-- source:")).skip(1)
+                .collect(java.util.stream.Collectors.toList());
+        assertEquals(2, blocks.size());
+        assertTrue("MCP 条目应写 pd 行: " + blocks, blocks.get(0).contains("\n-- pd: "));
+        assertFalse("非 MCP 同形态条目不写 pd 行: " + blocks.get(1), blocks.get(1).contains("-- pd: "));
+
+        // 头部段零新增：两条头部逐字符相等（T-MAT-03 硬约束 1——头部不得出现来源新段）
+        java.util.List<String> headers = content.lines().filter(l -> l.startsWith("-- source:"))
+                .collect(java.util.stream.Collectors.toList());
+        assertEquals("两条头部逐字符一致（MCP 不得新增头部段）", headers.get(0), headers.get(1));
+
+        // 载荷携带来源标记（读端回填被并行占用文件阻塞，见计划 §实施记录 T-MAT-03）
+        String payloadLine = blocks.get(0).lines().filter(l -> l.startsWith("-- pd: ")).findFirst().orElse(null);
+        assertNotNull("应写 pd 行", payloadLine);
+        String payload = payloadLine.substring("-- pd: ".length());
+        if (payload.endsWith(" --")) {
+            payload = payload.substring(0, payload.length() - 3);
+        }
+        SqlLogParamCodec.DecodedPayload decoded = SqlLogParamCodec.decode(payload);
+        assertEquals(SqlSource.MCP, decoded.source());
+        assertEquals("SELECT id, name FROM user WHERE id = 1", decoded.rawSql());
+    }
+
+    @Test
+    public void MCP条目pd行不破坏既有读回() throws Exception {
+        // pd 行是新增行，正文与既有字段读回不得受影响（旧版读端把它当注释行的同一形态）
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        String dir = tempDir();
+        saver.configure(dir, "test.sql", null);
+        saver.write(mcpEntry(SqlSource.MCP));
+        saver.close();
+
+        List<LogSqlEntry> entries = SqlLogFileReader.INSTANCE.readFromFile(new File(dir, "test.sql"));
+        assertEquals(1, entries.size());
+        assertEquals("SELECT id, name FROM user WHERE id = 1", entries.get(0).restoredSql());
+        assertEquals("SELECT id, name FROM user WHERE id = 1", entries.get(0).rawSql());
+        assertTrue("MCP 条目无参数", entries.get(0).params().isEmpty());
+        assertEquals(Long.valueOf(7L), entries.get(0).executionTimeMs());
+        assertEquals(1724567890000L, entries.get(0).timestamp());
+        assertEquals("countInFile 只数头部行，pd 行不参与计数", 1,
+                SqlLogFileReader.INSTANCE.countInFile(new File(dir, "test.sql")));
+    }
+
+    // ------------------------------------------------------------------
     // T-SqlHistoryFull：全量写盘风暴压测（对应用户关切——全量化后大写盘量不卡、不丢）
     // ------------------------------------------------------------------
 

@@ -18,9 +18,8 @@ import org.junit.Assert.assertTrue
  */
 class XmlCrossNsFragmentResolverTest : BasePlatformTestCase() {
 
-    private fun addMapper(path: String, content: String) {
+    private fun addMapper(path: String, content: String): com.intellij.psi.PsiFile =
         myFixture.addFileToProject(path, content)
-    }
 
     private fun preview(text: String, withProject: Boolean = true): PreviewResult =
         XmlPreviewService.INSTANCE.preview(text, "s1", if (withProject) project else null)
@@ -184,5 +183,85 @@ class XmlCrossNsFragmentResolverTest : BasePlatformTestCase() {
         )
         assertTrue(result.fragments.isEmpty())
         assertTrue(result.failures.isEmpty())
+    }
+
+    // ---------- T-PS5-05：片段表单槽缓存 ----------
+
+    private fun crossNsPreview(refid: String): PreviewResult = preview(
+        """
+        <mapper namespace="com.demo.OrderMapper">
+          <select id="s1">SELECT <include refid="$refid"/> FROM t</select>
+        </mapper>
+        """.trimIndent(),
+    )
+
+    fun testT_P5_05_二次渲染零索引遍历() {
+        addMapper("src/main/resources/mapper/BaseMapper.xml", baseMapper)
+        XmlCrossNsFragmentResolver.INSTANCE.clearFragmentCacheForTest()
+        val before = XmlCrossNsFragmentResolver.INSTANCE.indexScanCount.get()
+        val first = crossNsPreview("com.demo.BaseMapper.cols")
+        assertNull("首跑命中：${first.warning}", first.warning)
+        assertEquals("首跑全扫一次", 1, XmlCrossNsFragmentResolver.INSTANCE.indexScanCount.get() - before)
+        val second = crossNsPreview("com.demo.BaseMapper.cols")
+        assertEquals(
+            "二次渲染命中缓存 → 零索引遍历",
+            1,
+            XmlCrossNsFragmentResolver.INSTANCE.indexScanCount.get() - before,
+        )
+        assertEquals("缓存不改渲染结果", first.sql, second.sql)
+    }
+
+    fun testT_P5_05_未覆盖targets重扫() {
+        addMapper("src/main/resources/mapper/BaseMapper.xml", baseMapper)
+        XmlCrossNsFragmentResolver.INSTANCE.clearFragmentCacheForTest()
+        val before = XmlCrossNsFragmentResolver.INSTANCE.indexScanCount.get()
+        crossNsPreview("com.demo.BaseMapper.cols")
+        assertEquals(1, XmlCrossNsFragmentResolver.INSTANCE.indexScanCount.get() - before)
+        // 换一个未被上次扫描覆盖的 namespace → 必须重扫（不得给出陈旧 miss）
+        val other = crossNsPreview("com.demo.OtherMapper.cols")
+        assertTrue("未覆盖 namespace 仍给出准确失败原因", other.warning != null)
+        assertEquals("未覆盖 targets 触发重扫", 2, XmlCrossNsFragmentResolver.INSTANCE.indexScanCount.get() - before)
+    }
+
+    fun testT_P5_05_TTL过期后重扫且结果一致() {
+        addMapper("src/main/resources/mapper/BaseMapper.xml", baseMapper)
+        val realClock = XmlCrossNsFragmentResolver.INSTANCE.clockMs
+        var now = 1_000_000L
+        try {
+            XmlCrossNsFragmentResolver.INSTANCE.clearFragmentCacheForTest()
+            XmlCrossNsFragmentResolver.INSTANCE.clockMs = { now }
+            XmlCrossNsFragmentResolver.INSTANCE.fragmentCacheTtlMs = 5_000L
+            val before = XmlCrossNsFragmentResolver.INSTANCE.indexScanCount.get()
+            val a = crossNsPreview("com.demo.BaseMapper.cols")
+            now += 5_001L
+            val b = crossNsPreview("com.demo.BaseMapper.cols")
+            assertEquals(
+                "TTL 过期 → 重扫一次",
+                2,
+                XmlCrossNsFragmentResolver.INSTANCE.indexScanCount.get() - before,
+            )
+            assertEquals("重扫结果与首跑一致", a.sql, b.sql)
+            assertNull(b.warning)
+        } finally {
+            XmlCrossNsFragmentResolver.INSTANCE.clockMs = realClock
+            XmlCrossNsFragmentResolver.INSTANCE.fragmentCacheTtlMs = 5_000L
+            XmlCrossNsFragmentResolver.INSTANCE.clearFragmentCacheForTest()
+        }
+    }
+
+    fun testT_P5_05_文件删除后回退重扫() {
+        val psi = addMapper("src/main/resources/mapper/BaseMapper.xml", baseMapper)
+        XmlCrossNsFragmentResolver.INSTANCE.clearFragmentCacheForTest()
+        val first = crossNsPreview("com.demo.BaseMapper.cols")
+        assertNull("删除前命中：${first.warning}", first.warning)
+        com.intellij.openapi.application.WriteAction.compute<Unit, RuntimeException> {
+            psi.virtualFile.delete(this)
+        }
+        val after = crossNsPreview("com.demo.BaseMapper.cols")
+        assertTrue(
+            "缓存文件失效 → 重扫并按未找到降级（不得沿用失效文件的片段）",
+            after.warning != null && after.warning!!.contains("BaseMapper"),
+        )
+        XmlCrossNsFragmentResolver.INSTANCE.clearFragmentCacheForTest()
     }
 }

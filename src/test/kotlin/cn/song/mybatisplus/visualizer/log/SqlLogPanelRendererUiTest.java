@@ -129,6 +129,61 @@ public class SqlLogPanelRendererUiTest extends BasePlatformTestCase {
     }
 
     @Test
+    public void testMCP徽标_来源MCP渲染到元信息行() throws Exception {
+        // T-McpAuditTrail T-MAT-05：MCP 执行类工具落历史的条目带 [MCP] 徽标（目标库角标后、来源前）
+        LogSqlEntry e = new LogSqlEntry(
+                "SELECT id FROM user WHERE id = 1",
+                "SELECT id FROM user WHERE id = 1",
+                List.<LogSqlParam>of(),
+                1_700_000_000_000L,
+                null,
+                LogSqlEntry.computeSummary("SELECT id FROM user WHERE id = 1"),
+                SqlSource.MCP,
+                7L,
+                null,
+                0,
+                List.of(),
+                List.of(),
+                null,
+                0L,
+                null,
+                null,
+                null,
+                null,
+                "MySQL");
+        String meta = joinedText(render(e).metaLine);
+        assertTrue("元信息行应含 MCP 徽标: " + meta, meta.contains("[MCP] "));
+        assertTrue("MCP 徽标与目标库角标共存: " + meta, meta.contains("[MySQL] "));
+        assertTrue("耗时同列展示: " + meta, meta.contains("7ms"));
+    }
+
+    @Test
+    public void testMCP徽标_非MCP来源不显示() throws Exception {
+        LogSqlEntry e = new LogSqlEntry(
+                "SELECT 1",
+                "SELECT 1",
+                List.<LogSqlParam>of(),
+                1_700_000_000_000L,
+                null,
+                LogSqlEntry.computeSummary("SELECT 1"),
+                SqlSource.MYBATIS,
+                null,
+                null,
+                0,
+                List.of(),
+                List.of(),
+                null,
+                0L,
+                null,
+                null,
+                null,
+                null,
+                null);
+        String meta = joinedText(render(e).metaLine);
+        assertFalse("非 MCP 来源不应显示 MCP 徽标: " + meta, meta.contains("[MCP]"));
+    }
+
+    @Test
     public void test特殊字符SQL_原文保真() throws Exception {
         // 片段通道无 HTML 解析面——< > & 原样绘制即安全（原通道需转义，此处断言不转义不破版）
         LogEntryListCellRenderer r = render(entry("SELECT * FROM t WHERE a < 5 AND b > 3 AND c & d"));

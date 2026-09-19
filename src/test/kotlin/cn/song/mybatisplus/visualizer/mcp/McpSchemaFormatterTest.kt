@@ -99,11 +99,14 @@ class McpSchemaFormatterTest {
         val longCell = "x".repeat(McpExplainFormatter.MAX_CELL_CHARS + 100)
         val raw = McpExplainFormatter.RawResult(
             listOf("plan"),
-            List(McpExplainFormatter.MAX_ROWS) { listOf(longCell) },
+            List(McpExplainFormatter.DEFAULT_MAX_ROWS) { listOf(longCell) },
             true,
         )
         val text = McpExplainFormatter.format(raw)
-        assertTrue("应含截断提示: $text", text.contains("[TRUNCATED] output limited to ${McpExplainFormatter.MAX_ROWS} rows"))
+        assertTrue(
+            "应含截断提示: $text",
+            text.contains("[TRUNCATED] output limited to ${McpExplainFormatter.DEFAULT_MAX_ROWS} rows"),
+        )
         assertTrue(
             "单元格应裁剪到预算: $text",
             text.contains("x".repeat(McpExplainFormatter.MAX_CELL_CHARS) + "…"),

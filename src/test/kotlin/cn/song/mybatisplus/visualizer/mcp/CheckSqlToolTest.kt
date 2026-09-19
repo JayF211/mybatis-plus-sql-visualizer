@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.mcp
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -45,5 +46,17 @@ class CheckSqlToolTest {
     fun `空输入_预期错误`() {
         val error = runCatching { CheckSqlTool().checkSql("") }.exceptionOrNull()
         assertTrue(error is com.intellij.mcpserver.McpExpectedError)
+    }
+
+    @Test
+    fun `DELIMITER脚本_界符残留不当语句`() {
+        // T-DA-03 消费面③（O-39）：改前 `DELIMITER $$` 与 `SELECT 1$$` 各算一条（$$ 残留），
+        // 现过程体整段一条 + 复位后普通语句一条
+        val output = check(
+            "DELIMITER $$\nCREATE PROCEDURE p()\nBEGIN\n  SELECT 1;\nEND$$\nDELIMITER ;\nSELECT 2;",
+        )
+        assertTrue(output, output.contains("statements: 2"))
+        assertFalse("`$$` 残留不进核查输出", output.contains("$$"))
+        assertTrue(output, output.contains("DDL"))
     }
 }

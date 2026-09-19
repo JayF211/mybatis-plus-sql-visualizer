@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.xml
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -186,5 +187,90 @@ class PagesXmlParserTest {
         assertEquals("com.example.model.User", stmt.entityClass)
         assertTrue(stmt.sql.contains("from User u"))
         assertTrue(stmt.sql.contains("order by u.createdDate desc"))
+    }
+
+    // ------------------------------------------------------------------
+    // T-XmlDtdHardening T-XDH-05：PagesXmlParser 的 DOCTYPE / XXE 回归（改前零覆盖）
+    // 与 mapper 解析器共用 SecureXml（T-XDH-01 配置收敛）——此组用例是该共用事实的回归护栏。
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `DOCTYPE声明放行_外部DTD不联网`() {
+        // SYSTEM 指向不可达地址（127.0.0.1:1）仍能解析：EntityResolver 把 DTD 读取拦为空；
+        // 实测（JDK 17.0.19）摘掉 EntityResolver 即抛 ConnectException: Connection refused
+        val xml = """
+            <!DOCTYPE pages SYSTEM "http://127.0.0.1:1/pages.dtd">
+            <pages>
+                <maintainPage id="p1" title="P1" autoQuery="true" entityClass="com.A">
+                    <datasource><![CDATA[SELECT 1]]></datasource>
+                </maintainPage>
+            </pages>
+        """.trimIndent()
+        val model = PagesXmlParser().parse(xml)
+        assertEquals("SELECT 1", model.statements.single().sql)
+    }
+
+    @Test
+    fun `内部实体放行_D1_A`() {
+        // D1=A 定案：内联 DTD 子集维持放行（内部实体照常展开），pages 文件与 mapper 同语义。
+        // 注意实体引用只在**普通文本**节点展开（CDATA 是字面量——实测 `&tbl;` 在 CDATA 里原样保留）
+        val xml = """
+            <!DOCTYPE pages [<!ENTITY tbl "TF_APP">]>
+            <pages>
+                <maintainPage id="p1" title="P1" autoQuery="true" entityClass="com.A">
+                    <datasource>SELECT * FROM &tbl;</datasource>
+                </maintainPage>
+            </pages>
+        """.trimIndent()
+        val model = PagesXmlParser().parse(xml)
+        assertEquals("SELECT * FROM TF_APP", model.statements.single().sql)
+    }
+
+    @Test
+    fun `外部实体被清空_XXE防护`() {
+        // 外部实体引用解析为空（不注入外部文件内容）——实测 /etc/hosts 内容不出现
+        val xml = """
+            <!DOCTYPE pages [<!ENTITY xxe SYSTEM "file:///etc/hosts">]>
+            <pages>
+                <maintainPage id="p1" title="P1" autoQuery="true" entityClass="com.A">
+                    <datasource>SELECT '&xxe;' FROM t</datasource>
+                </maintainPage>
+            </pages>
+        """.trimIndent()
+        val model = PagesXmlParser().parse(xml)
+        assertEquals("SELECT '' FROM t", model.statements.single().sql)
+    }
+
+    @Test
+    fun `内联DTD指数膨胀被拒绝_与mapper同规`() {
+        // 4 层 × 10 引用 × 10 字符的 billion laughs（改前实测可解析）→ 预扫拒绝
+        val xml = buildString {
+            append("<!DOCTYPE pages [\n<!ENTITY e0 \"xxxxxxxxxx\">\n")
+            for (level in 1..4) {
+                append("<!ENTITY e").append(level).append(" \"")
+                repeat(10) { append("&e").append(level - 1).append(';') }
+                append("\">\n")
+            }
+            append("]>\n<pages><maintainPage id=\"p1\" title=\"P1\" autoQuery=\"true\" entityClass=\"com.A\">")
+            append("<datasource><![CDATA[SELECT '&e4;']]></datasource></maintainPage></pages>")
+        }
+        val e = assertThrows(PagesXmlParseException::class.java) {
+            PagesXmlParser().parse(xml)
+        }
+        assertTrue("拒绝原因须点明实体展开，实际：${e.message}", e.message.orEmpty().contains("实体展开"))
+    }
+
+    @Test
+    fun `实体声明数超限被拒绝_与mapper同规`() {
+        val xml = buildString {
+            append("<!DOCTYPE pages [\n")
+            repeat(100) { append("<!ENTITY d").append(it).append(" \"v").append(it).append("\">\n") }
+            append("]>\n<pages><maintainPage id=\"p1\" title=\"P1\" autoQuery=\"true\" entityClass=\"com.A\">")
+            append("<datasource><![CDATA[SELECT '&d0;']]></datasource></maintainPage></pages>")
+        }
+        val e = assertThrows(PagesXmlParseException::class.java) {
+            PagesXmlParser().parse(xml)
+        }
+        assertTrue("拒绝原因须点明实体声明，实际：${e.message}", e.message.orEmpty().contains("实体声明"))
     }
 }

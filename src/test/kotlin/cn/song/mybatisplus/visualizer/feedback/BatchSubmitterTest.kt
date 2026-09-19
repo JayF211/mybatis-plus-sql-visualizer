@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.feedback
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -14,11 +15,12 @@ import org.junit.Test
  */
 class BatchSubmitterTest {
 
-    private fun item(index: Int, attach: Boolean = true) = BatchSubmitter.BatchItem(
+    private fun item(index: Int, attach: Boolean = true, includeMessage: Boolean = false) = BatchSubmitter.BatchItem(
         "cn.song.mybatisplus.visualizer.Boom$index",
         "boom $index",
         "java.lang.RuntimeException: boom $index\n\tat cn.song.mybatisplus.visualizer.log.P$index.r(P$index.kt:1)",
         attach,
+        includeMessage,
     )
 
     private fun template() = FeedbackApi.Submission(
@@ -95,8 +97,9 @@ class BatchSubmitterTest {
         val items = (1..8).map { item(it) }
         val followUp = BatchSubmitter.followUpSubmissions(template(), items)
         assertEquals(7, followUp.size)
-        assertEquals("Boom2: boom 2", followUp.first().request.title)
-        assertEquals("Boom8: boom 8", followUp.last().request.title)
+        // T-ErrorReportRedact：补发帖子默认走脱敏形态（标题只出类名）
+        assertEquals("Boom2", followUp.first().request.title)
+        assertEquals("Boom8", followUp.last().request.title)
         // 载荷带环境信息与附件
         assertEquals("2026.9.14", followUp.first().request.pluginVersion)
         assertNotNull(followUp.first().stackAttachment)
@@ -114,11 +117,17 @@ class BatchSubmitterTest {
     }
 
     @Test
-    fun `补发描述取条目消息且满足服务端下限`() {
-        val followUp = BatchSubmitter.followUpSubmissions(template(), (1..6).map { item(it) })
-        val description = followUp.first().request.description
-        assertTrue(description.contains("boom 2"))
+    fun `补发描述默认脱敏_勾选消息后与改前一致`() {
+        val redacted = BatchSubmitter.followUpSubmissions(template(), (1..6).map { item(it) })
+        val description = redacted.first().request.description
+        assertFalse("默认不得带条目消息", description.contains("boom 2"))
+        assertTrue("默认出异常类名与栈帧摘要", description.contains("异常: cn.song.mybatisplus.visualizer.Boom2"))
+        assertTrue(description.contains("cn.song.mybatisplus.visualizer.log.P2.r(P2.kt:1)"))
         assertTrue(description.length >= ErrorReportComposer.DESCRIPTION_MIN)
+        // 勾选「附带异常消息全文」后 = 改前形态
+        val optIn = BatchSubmitter.followUpSubmissions(template(), (1..6).map { item(it, includeMessage = true) })
+        assertEquals("Boom2: boom 2", optIn.first().request.title)
+        assertTrue(optIn.first().request.description.contains("boom 2"))
     }
 
     // ---------- 队列常量 ----------

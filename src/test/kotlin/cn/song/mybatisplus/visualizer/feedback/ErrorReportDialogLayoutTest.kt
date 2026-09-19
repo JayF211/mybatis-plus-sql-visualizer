@@ -273,7 +273,7 @@ class ErrorReportDialogLayoutTest {
     fun `多条勾选_标题描述附件改为批次形态`() {
         val base = FeedbackApi.Submission(
             FeedbackApi.PostRequest(
-                "RuntimeException: boom 1", "boom 1", 2, "other",
+                "RuntimeException", "异常: java.lang.RuntimeException", 2, "other",
                 null, null, true,
                 FeedbackApi.SOURCE_IDE, null, null, emptyList(),
             ),
@@ -284,8 +284,16 @@ class ErrorReportDialogLayoutTest {
         }
         val composed = ErrorReportDialog.composeSubmission(base, items)
         assertTrue("TITLE=<${composed.request.title}>", composed.request.title.endsWith("（等 3 条异常）"))
-        assertTrue(composed.request.description.contains("#2 Boom2: boom 2"))
+        assertTrue(composed.request.description.contains("#2 Boom2"))
+        assertFalse(
+            "默认脱敏（T-ErrorReportRedact D1=B）：清单不得带逐条消息",
+            composed.request.description.contains("#2 Boom2:"),
+        )
         assertTrue(String(composed.stackAttachment!!.content, Charsets.UTF_8).contains("----- #3 -----"))
+        // 勾选「附带异常消息全文」后回到改前形态（逐条消息进清单）
+        items.forEach { it.includeMessage = true }
+        val optIn = ErrorReportDialog.composeSubmission(base, items)
+        assertTrue(optIn.request.description.contains("#2 Boom2: boom 2"))
     }
 
     @Test
@@ -366,5 +374,85 @@ class ErrorReportDialogLayoutTest {
             javax.swing.JPanel(),
         )
         assertEquals(0, selected.size)
+    }
+
+    // ---------- T-ErrorReportRedact：预填分级（默认脱敏 + 勾选回填旧形态） ----------
+
+    private val prefillStack = """
+        java.lang.RuntimeException: boom
+        	at cn.song.mybatisplus.visualizer.log.SqlLogPanel.refresh(SqlLogPanel.kt:120)
+        	at com.intellij.openapi.application.ApplicationImpl.run(ApplicationImpl.java:1)
+    """.trimIndent()
+
+    @Test
+    fun `勾选行默认都不勾_消息与完整堆栈默认不外传`() {
+        val fields = ErrorReportDialog.ReportFormFields()
+        assertFalse("异常消息全文默认不外传（D1=B）", fields.attachMessageCheck.isSelected)
+        // 完整堆栈首行就是 `异常类: message`，默认勾选等于绕开脱敏
+        assertFalse("完整堆栈附件默认不外传", fields.attachStackCheck.isSelected)
+        for (key in arrayOf(
+                "error.report.dialog.attachMessage",
+                "error.report.dialog.attachMessage.tip",
+                "error.report.privacy",
+            )
+        ) {
+            assertNotEquals("键 $key 缺 bundle 文案（会原样显示键名）", key, MpSqlVisualizerBundle.message(key))
+        }
+        assertNotEquals("勾选行文案须有 bundle 落地", "error.report.dialog.attachMessage", fields.attachMessageCheck.text)
+        assertFalse("勾选行 tooltip 不得原样显示键名", fields.attachMessageCheck.toolTipText.startsWith("error.report."))
+    }
+
+    @Test
+    fun `预填分级切换_勾选回填旧形态_取消回脱敏形态`() {
+        val prefill = ErrorReportComposer.prefill("java.lang.RuntimeException", "boom happened at runtime", prefillStack)
+        // 初始（未勾选）：字段内容 = 脱敏预填，切换回自身应保持脱敏
+        // k2j 互操作适配：Java 方法无具名实参，按位置传参
+        val off = ErrorReportDialog.messagePrefillTargets(
+            false,
+            prefill,
+            prefill.title,
+            prefill.description,
+            prefill.title,
+            prefill.description,
+        )
+        assertEquals(prefill.title to prefill.description, off)
+        assertEquals("RuntimeException", off.first)
+        assertFalse(off.second.contains("boom"))
+        // 勾选：回填含 message 的旧形态（与改前逐字节一致）
+        val on = ErrorReportDialog.messagePrefillTargets(
+            true,
+            prefill,
+            prefill.title,
+            prefill.description,
+            prefill.title,
+            prefill.description,
+        )
+        assertEquals("RuntimeException: boom happened at runtime", on.first)
+        assertEquals("boom happened at runtime", on.second)
+    }
+
+    @Test
+    fun `预填分级切换不覆盖用户手工改过的字段`() {
+        val prefill = ErrorReportComposer.prefill("java.lang.RuntimeException", "boom happened at runtime", prefillStack)
+        val edited = ErrorReportDialog.messagePrefillTargets(
+            true,
+            prefill,
+            "我改的标题",
+            prefill.description,
+            prefill.title,
+            prefill.description,
+        )
+        assertEquals("用户改过的标题原样保留", "我改的标题", edited.first)
+        assertEquals("未被改动的描述照常回填", "boom happened at runtime", edited.second)
+        // 从未预填过（lastInjected 为 null）也不覆盖
+        val manual = ErrorReportDialog.messagePrefillTargets(
+            true,
+            prefill,
+            "手写",
+            "手写描述内容足够十个字",
+            null,
+            null,
+        )
+        assertEquals("手写" to "手写描述内容足够十个字", manual)
     }
 }

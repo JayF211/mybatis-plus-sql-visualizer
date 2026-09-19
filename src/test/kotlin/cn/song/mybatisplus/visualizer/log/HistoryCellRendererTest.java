@@ -7,6 +7,7 @@ import com.intellij.ui.SimpleColoredComponent;
 import com.intellij.ui.SimpleTextAttributes;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import org.junit.Test;
@@ -362,6 +363,73 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
             s.setLogTimestampEnabled(savedTs);
             s.setLogTimestampSource(savedSrc);
         }
+    }
+
+    // ---------- T-McpAuditTrail T-MAT-05：历史页 MCP 徽标（与日志页同落点同协议） ----------
+
+    /** Kotlin `entry.copy(source = …, databaseName = …)` 的 Java 等价（record 无 copy）。 */
+    private static LogSqlEntry withSourceAndDatabase(LogSqlEntry e, SqlSource source, String databaseName) {
+        return new LogSqlEntry(
+                e.rawSql(), e.restoredSql(), e.params(), e.timestamp(), e.logTimestamp(),
+                e.summary(), source, e.executionTimeMs(), e.sourceFile(), e.sourceLine(),
+                e.sourceCandidates(), e.candidateClasses(), e.stackDigest(), e.sequenceNumber(),
+                e.mapperStatement(), e.errorText(), e.requestTag(), e.updateCount(), databaseName);
+    }
+
+    @Test
+    public void test二级条目_MCP来源_渲染徽标且与目标库角标共存() throws Exception {
+        LogSqlEntry e = withSourceAndDatabase(sqlEntry("SELECT id FROM user WHERE id = 1", null, 0, 7L),
+                SqlSource.MCP, "MySQL");
+        String meta = joinedText(renderSql(e).metaLine);
+        assertTrue("历史页元信息行应含 MCP 徽标: " + meta, meta.contains("[MCP] "));
+        assertTrue("与目标库角标共存: " + meta, meta.contains("[MySQL] "));
+        assertTrue("耗时同列展示: " + meta, meta.contains("7ms"));
+    }
+
+    @Test
+    public void test二级条目_非MCP来源_不渲染徽标() throws Exception {
+        LogSqlEntry e = sqlEntry("SELECT 1", "UserMapper.java", 3, 3L);
+        String meta = joinedText(renderSql(e).metaLine);
+        assertFalse("非 MCP 来源不应出现徽标: " + meta, meta.contains("[MCP]"));
+    }
+
+    @Test
+    public void test二级条目_落盘再读回_徽标仍在() throws Exception {
+        // 「重启后徽标仍在」验收的端到端半边：写盘 → 历史读端解析 → 渲染器出徽标。
+        // 改前读端不回填来源（恒 UNKNOWN），本条红——徽标只在当次会话内存里存在。
+        File dir = Files.createTempDirectory("mcp-badge-").toFile();
+        dir.deleteOnExit();
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        saver.configure(dir.getAbsolutePath(), "sql-history-$yyyy-MM-dd$.sql", null);
+        saver.write(new LogSqlEntry(
+                "SELECT id FROM user WHERE id = 1",
+                "SELECT id FROM user WHERE id = 1",
+                List.<LogSqlParam>of(),
+                TEST_TIMESTAMP,
+                null,
+                LogSqlEntry.computeSummary("SELECT id FROM user WHERE id = 1"),
+                SqlSource.MCP,
+                7L,
+                null,
+                0,
+                List.of(),
+                List.of(),
+                null,
+                0L,
+                null,
+                null,
+                null,
+                null,
+                "MySQL"));
+        saver.close();
+
+        File[] files = dir.listFiles(f -> f.getName().endsWith(".sql"));
+        assertNotNull("应写出历史文件", files);
+        LogSqlEntry read = SqlLogFileReader.INSTANCE.readFromFile(files[0]).get(0);
+        String meta = joinedText(renderSql(read).metaLine);
+        assertTrue("读回条目来源应仍为 MCP: " + read.source(), read.source() == SqlSource.MCP);
+        assertTrue("读回后渲染仍出 MCP 徽标: " + meta, meta.contains("[MCP] "));
+        assertTrue("目标库角标共存: " + meta, meta.contains("[MySQL] "));
     }
 
     // ---------- T-JdbcThreadBucket F3：历史页时间戳跟随设置（2026-09-15 移除硬编码 yyyy-MM-dd HH:mm:ss） ----------

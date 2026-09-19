@@ -126,13 +126,18 @@ class IdeErrorReportSubmitterTest {
         val accepted = submitter.submit(arrayOf(event()), null, javax.swing.JPanel(), Consumer { })
         assertTrue(accepted)
         submitter.flush()
-        assertEquals("RuntimeException: boom", capturedPrefill?.title)
+        // T-ErrorReportRedact（D1=B）：默认预填只有异常类简单名，message 不进标题/描述
+        assertEquals("RuntimeException", capturedPrefill?.title)
+        assertFalse("默认预填不得含 message 文本", capturedPrefill?.description?.contains("boom") ?: false)
+        assertEquals("boom", capturedPrefill?.message)
+        assertEquals("RuntimeException: boom", capturedPrefill?.titleWithMessage)
         assertTrue(capturedStack?.contains("Foo.bar") == true)
         val expected = ErrorFingerprint.of(throwable.javaClass.name, throwable.stackTraceToString())
         assertEquals(listOf(expected), capturedFingerprints)
         // T-FeedbackBatch：勾选的每条错误都作为批次条目传到对话框
         assertEquals(1, capturedBatch?.size)
         assertEquals("boom", capturedBatch?.first()?.message)
+        assertFalse("批次条目默认不带消息全文（D1=B）", capturedBatch?.first()?.includeMessage ?: true)
     }
 
     @Test
@@ -167,7 +172,7 @@ class IdeErrorReportSubmitterTest {
         submitter.flush()
         assertEquals("三次独立 submit 只落一次框", 1, flowCount)
         assertEquals("批次条目=全部事件（T-FeedbackBatch 全含契约）", 3, capturedBatch?.size)
-        assertEquals("主预填取首事件", "RuntimeException: boom 1", capturedPrefill?.title)
+        assertEquals("主预填取首事件（脱敏形态：只出类名）", "RuntimeException", capturedPrefill?.title)
         // 复合 consumer：本波每个平台簇收到同一结果信息（提交结束后全部标记已提交）
         composite!!.consume(submitter.reportInfo(FeedbackApi.SubmitResult.Success("FR-0042")))
         assertEquals(setOf(1, 2, 3), received.keys)

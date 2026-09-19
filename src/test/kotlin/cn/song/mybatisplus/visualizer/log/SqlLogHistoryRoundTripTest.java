@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.io.File;
@@ -296,5 +297,80 @@ public class SqlLogHistoryRoundTripTest {
                 "BadSqlGrammarException: Table 'no_such_table' doesn't exist",
                 read.errorText());
         assertNull(read.mapperStatement());
+    }
+
+    // ---------- T-McpAuditTrail T-MAT-03 读端回填：来源标记 round-trip ----------
+    // 立项背景：写入侧（pd 载荷落 `s` 键）与 pd 载荷层 round-trip 已由 T-McpAuditTrail 交付，
+    // 但读端 SqlLogFileReader.parseBlock 当时被并行任务占用未同步改动 → 重启后 MCP 条目的
+    // 来源退化为 SqlSource.UNKNOWN（历史页 MCP 徽标消失）。本组用例钉住读端回填。
+
+    /** MCP 条目写入侧的常态形态：无参数、无占位符、无 mapperStatement——pd 行完全靠 source==MCP 触发。 */
+    private static LogSqlEntry mcpEntry(String sql, long timestamp) {
+        return new LogSqlEntry(sql, sql, List.<LogSqlParam>of(), timestamp, null,
+                LogSqlEntry.computeSummary(sql), SqlSource.MCP, 7L, null, 0, List.of(), List.of(), null, 0L,
+                null, null, null, null, "demo-mysql");
+    }
+
+    private static LogSqlEntry mcpEntry(String sql) {
+        return mcpEntry(sql, 1724567890000L);
+    }
+
+    @Test
+    public void 真实链路_MCP条目写读回环_来源标记不退化() throws Exception {
+        File dir = tempDir();
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        saver.configure(dir.getAbsolutePath(), "sql-history-$yyyy-MM-dd$.sql", null);
+        saver.write(mcpEntry("SELECT id FROM user WHERE id = 1"));
+        saver.close();
+
+        File[] sqlFiles = Objects.requireNonNull(dir.listFiles((d, n) -> n.endsWith(".sql")));
+        assertEquals(1, sqlFiles.length);
+        File file = sqlFiles[0];
+        // 写入侧前提（T-MAT-03）：无参数无占位符的 MCP SELECT 也必须落 pd 行，否则来源无处可存
+        assertTrue("MCP 条目必须写出 pd 载荷行", Files.readString(file.toPath()).contains("-- pd: "));
+
+        // 读端（重启后历史面板读文件）：来源必须仍是 MCP
+        LogSqlEntry read = SqlLogFileReader.INSTANCE.readFromFile(file).get(0);
+        assertEquals("读端回填来源标记（改前退化为 UNKNOWN → 徽标消失）", SqlSource.MCP, read.source());
+        assertEquals("SQL 文本不受来源键影响", "SELECT id FROM user WHERE id = 1", read.restoredSql());
+        assertEquals("目标库角标随载荷回环", "demo-mysql", read.databaseName());
+        assertNull("pd 载荷不侵占头部 source: 段语义（仍为源码位置）", read.sourceFile());
+    }
+
+    @Test
+    public void 真实链路_非MCP条目写读回环_来源保持UNKNOWN不扩张() throws Exception {
+        // T-MAT-03 的读端口径：只有 MCP 落 `s` 键，其余来源不因本次改动改变读回结果
+        File dir = tempDir();
+        SqlLogAutoSaver saver = new SqlLogAutoSaver();
+        saver.configure(dir.getAbsolutePath(), "sql-history-$yyyy-MM-dd$.sql", null);
+        saver.write(new LogSqlEntry(
+                "SELECT * FROM user WHERE id = ?",
+                "SELECT * FROM user WHERE id = 1",
+                List.of(new LogSqlParam("1", "Long")),
+                1724567890000L,
+                "UserMapper.java",
+                7,
+                null));
+        saver.close();
+
+        File[] sqlFiles = Objects.requireNonNull(dir.listFiles((d, n) -> n.endsWith(".sql")));
+        LogSqlEntry read = SqlLogFileReader.INSTANCE.readFromFile(sqlFiles[0]).get(0);
+        assertEquals("非 MCP 条目读回来源仍为 UNKNOWN", SqlSource.UNKNOWN, read.source());
+        assertEquals("其余字段不受影响", "UserMapper.java", read.sourceFile());
+    }
+
+    @Test
+    public void 真实链路_旧版F43头部下的pd载荷_来源回填MCP() throws Exception {
+        // 旧版头部分支（-- yyyy-MM-dd HH:mm:ss）同样要回填——升级过渡期的混合文件里，
+        // 头部形态与 pd 行是否在场互相独立，两条分支漏一条即出现「同一文件内徽标时有时无」
+        File dir = tempDir();
+        String pd = SqlLogParamCodec.encodeEntry(mcpEntry("SELECT 2"));
+        Files.writeString(new File(dir, "sql-history-2026-08-20.sql").toPath(),
+                "-- 2026-08-20 10:00:00\n-- pd: " + pd + " --\nSELECT 2;\n\n");
+
+        LogSqlEntry read = SqlLogFileReader.INSTANCE.readAll(dir.getAbsolutePath()).get(0);
+        assertEquals("旧版头部分支读端回填来源标记", SqlSource.MCP, read.source());
+        assertEquals("SELECT 2", read.restoredSql());
+        assertNull("旧版头部无源码位置", read.sourceFile());
     }
 }

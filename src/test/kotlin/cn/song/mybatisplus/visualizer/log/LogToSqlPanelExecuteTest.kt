@@ -86,6 +86,21 @@ class LogToSqlPanelExecuteTest : BasePlatformTestCase() {
         assertTrue(parts[0], parts[0].contains("'a;b'"))
     }
 
+    fun test拆分_DELIMITER脚本整段一条不碎句() {
+        // T-DA-03 消费面①（O-39）：多语句勾选浮层的输入即本拆分结果——改前 `DELIMITER $$`
+        // 与 `SELECT 1$$` 各占一条候选（4 条），现过程体整段一条 + 复位后普通语句一条
+        val parts = LogToSqlPanel.splitSqlStatements(
+            "DELIMITER $$\nCREATE PROCEDURE p()\nBEGIN\n  SELECT 1;\n  SELECT 2;\nEND$$\n" +
+                "DELIMITER ;\nSELECT 3;",
+        )
+        assertEquals("浮层候选两条（不碎句）", 2, parts.size)
+        assertTrue("过程体整段保留", parts[0].startsWith("CREATE PROCEDURE p()"))
+        assertTrue("过程体内部 `;` 保留", parts[0].contains("SELECT 1;"))
+        assertFalse("`$$` 不残留", parts[0].contains("$$"))
+        assertFalse("指令行不成候选", parts[0].uppercase().startsWith("DELIMITER"))
+        assertEquals("SELECT 3", parts[1])
+    }
+
     fun test拆分_注释内分号不切分() {
         val parts = LogToSqlPanel.splitSqlStatements(
             "-- 备注; 含分号\nSELECT 1;\n/* 块注释; 含分号 */\nSELECT 2;",

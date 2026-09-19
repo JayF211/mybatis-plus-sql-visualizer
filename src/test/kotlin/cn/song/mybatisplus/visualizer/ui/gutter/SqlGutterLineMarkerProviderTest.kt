@@ -3,12 +3,14 @@ package cn.song.mybatisplus.visualizer.ui.gutter
 import com.intellij.codeInsight.daemon.LineMarkerProvider
 import com.intellij.openapi.util.IconLoader
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.psi.PsiSnapshot
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiKeyword
 import com.intellij.psi.PsiLocalVariable
 import com.intellij.psi.PsiNewExpression
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -21,6 +23,7 @@ import org.junit.Assert.assertTrue
  *  - 同行去重（new 关键字不重复出 marker）
  *  - 非 Wrapper 代码零 marker（负例零成本）
  *  - marker 携带静态 tooltip（性能红线：不计算 SQL）
+ *  - T-PCP-02：「最近执行记录」锚点走 EDT 捕获快照 + 后台校验（失效即降级不跳转）
  */
 class SqlGutterLineMarkerProviderTest : BasePlatformTestCase() {
 
@@ -28,6 +31,13 @@ class SqlGutterLineMarkerProviderTest : BasePlatformTestCase() {
 
     private fun configure(code: String) {
         myFixture.configureByText("Demo.java", code.trimIndent())
+    }
+
+    /** 文档整体重写（EDT 改文档标准形态：WriteCommandAction 内 setText）。 */
+    private fun rewriteDocument(text: String) {
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            myFixture.editor.document.setText(text)
+        }
     }
 
     private fun firstVariable(): PsiLocalVariable =
@@ -138,5 +148,60 @@ class SqlGutterLineMarkerProviderTest : BasePlatformTestCase() {
         } finally {
             settings.state.showGutterIcon = old
         }
+    }
+
+    /**
+     * T-PCP-02：「最近执行记录」锚点 = EDT 捕获快照（[PsiSnapshot.capture]）→ 后台 [validatedRecentAnchor] 校验解析。
+     *
+     * 断言三态：未变更 → 正常命中且行号正确（正常路径行为不变）；文档变更 → 判失效返回 null
+     * （调用方按「无最近记录」如实降级，不跳到错位置、不抛异常）；快照缺失 → 同样降级。
+     */
+    fun test最近记录锚点_正常命中_文档变更后判失效降级() {
+        configure(
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceEntity> w = new LambdaQueryWrapper<DeviceEntity>().eq(DeviceEntity::getId, 1L);
+                }
+
+                static class DeviceEntity { private Long id; }
+            }
+            """,
+        )
+        val snapshot = PsiSnapshot.capture(firstVariableId())
+        assertNotNull("EDT 捕获应产出快照（含虚拟文件 + 文档）", snapshot)
+        // 生产侧传 project.basePath；BasePlatformTestCase 的 basePath 为 null，故用例显式给项目根
+        val basePath = snapshot!!.filePath.substringBeforeLast('/')
+
+        val anchor = SqlGutterLineMarkerProviderKt.validatedRecentAnchor(basePath, snapshot)
+        assertNotNull("未变更时锚点应命中（正常路径行为逐字节不变）", anchor)
+        assertEquals("锚点应为项目根相对路径", "Demo.java", anchor!!.first)
+        assertEquals("锚点行号 = 元素所在行（1-based）", 5, anchor.second)
+
+        rewriteDocument(
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    int before = 1;
+                    LambdaQueryWrapper<DeviceEntity> w = new LambdaQueryWrapper<DeviceEntity>().eq(DeviceEntity::getId, 1L);
+                }
+
+                static class DeviceEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+
+        assertNull(
+            "文档变更后快照判失效 → 返回 null（不跳转、不渲染错值，调用方按「无记录」降级）",
+            SqlGutterLineMarkerProviderKt.validatedRecentAnchor(basePath, snapshot),
+        )
+        assertNull("快照缺失（元素无虚拟文件/文档）同样降级",
+            SqlGutterLineMarkerProviderKt.validatedRecentAnchor(basePath, null))
+        assertNull("项目根不可用（basePath null）时不得给出绝对路径锚点",
+            SqlGutterLineMarkerProviderKt.validatedRecentAnchor(null, snapshot))
     }
 }
