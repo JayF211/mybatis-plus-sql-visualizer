@@ -84,6 +84,9 @@ object McpDbExecutor {
     private const val REMOTE_RESULT_SET = "com.intellij.database.remote.jdbc.RemoteResultSet"
     private const val REMOTE_META = "com.intellij.database.remote.jdbc.RemoteResultSetMetaData"
 
+    /** T-McpAuditTrail T-MAT-01：失败文本上限（历史文件单条元数据行，不落整段堆栈）。 */
+    private const val ERROR_TEXT_LIMIT = 200
+
     /** database 插件是否在场（Ultimate/DataGrip）。 */
     fun isDatabaseAvailable(): Boolean = runCatching {
         Class.forName(MANAGER_CLASS)
@@ -119,6 +122,25 @@ object McpDbExecutor {
     }
 
     /**
+     * 一次执行的结果载体（T-McpAuditTrail / T-MAT-01）：只含 JDK 类型，不引平台/IDE 服务类型——
+     * 回调注入形态正是为了不把 [McpDbExecutor] 的 headless 边界与 [cn.song.mybatisplus.visualizer.log.SqlLogManager]
+     * 之类的项目级服务绑在一起（依赖留在工具层）。
+     *
+     * @param executedSql 实际交给驱动的语句文本（explain 通道=EXPLAIN 包装句）。**注意**：历史入库
+     *   必须用调用方自己持有的**原始** selectSql，不得落本字段（T-MAT-02：包装句首 token 为
+     *   `EXPLAIN`，[cn.song.mybatisplus.visualizer.log.LogStatementClassifier] 会判 `OTHER` → 无类型染色）。
+     * @param elapsedMs 本次执行耗时（含建连与取数，毫秒）
+     * @param errorText 失败时的「异常类名: 首行消息」（截断）；成功为 null
+     * @param dataSourceName 数据源显示名（反射 DasDataSource.getName；不可达/headless 为 null）
+     */
+    data class ExecutedOutcome(
+        val executedSql: String,
+        val elapsedMs: Long,
+        val errorText: String?,
+        val dataSourceName: String?,
+    )
+
+    /**
      * 在指定数据源上执行只读查询并采集行列文本（EXPLAIN 用）。
      * 密码未保存/不可达等建连失败以 SQLException 冒泡，适配层按
      * [McpToolErrors.DATASOURCE_UNREACHABLE] 包装为 agent 可读错误（零弹窗 fail closed）。
@@ -130,8 +152,74 @@ object McpDbExecutor {
      *
      * T-McpRowBudget（O-36）：[maxRows] 先过 [channelRowBudget] 兜底钳制再进采集——调用方
      * （含未来新增的执行类工具）传什么都不会突破 [McpExplainFormatter.HARD_MAX_ROWS]。
+     *
+     * T-McpAuditTrail（T-MAT-01）：[onExecuted] 为执行链唯一出口钩子——成功与失败**两条路径**
+     * 都回调一次（失败回调后异常原样冒泡）。钩子是旁路：自身抛异常只记日志，绝不连坐执行结果
+     * 或吞掉失败（审计不得成为门控）。null（默认）时零行为差异——既有调用点逐字节不变。
      */
     fun executeQuery(
+        project: Project,
+        dataSource: Any,
+        sql: String,
+        maxRows: Int,
+        timeoutSeconds: Int = 0,
+        onExecuted: ((ExecutedOutcome) -> Unit)? = null,
+    ): McpExplainFormatter.RawResult {
+        val started = System.currentTimeMillis()
+        return try {
+            executeQueryInternal(project, dataSource, sql, maxRows, timeoutSeconds).also {
+                notifyExecuted(onExecuted, sql, System.currentTimeMillis() - started, null, dataSource)
+            }
+        } catch (e: Throwable) {
+            notifyExecuted(onExecuted, sql, System.currentTimeMillis() - started, e, dataSource)
+            throw e
+        }
+    }
+
+    /**
+     * 钩子投递（T-MAT-01）：hook 为 null 时**立即返回**——耗时以外的任何采集（反射取数据源名、
+     * 异常文本构造）都不发生，未接线的调用点零开销。
+     */
+    private fun notifyExecuted(
+        hook: ((ExecutedOutcome) -> Unit)?,
+        sql: String,
+        elapsedMs: Long,
+        failure: Throwable?,
+        dataSource: Any,
+    ) {
+        if (hook == null) return
+        val outcome = ExecutedOutcome(
+            executedSql = sql,
+            elapsedMs = elapsedMs,
+            errorText = failure?.let { errorTextOf(it) },
+            dataSourceName = dataSourceName(dataSource),
+        )
+        runCatching { hook(outcome) }.onFailure {
+            LOG.warn("McpDbExecutor: onExecuted hook failed (execution result unaffected)", it)
+        }
+    }
+
+    /**
+     * 失败文本（T-MAT-01）：异常类名 + 首行消息，[ERROR_TEXT_LIMIT] 截断。
+     *
+     * 反射调用链里异常被包在 `InvocationTargetException` 中（其 message 恒 null），故先解包取
+     * 目标异常——否则历史里只剩一个类名，排障无信息。多行堆栈只取首行（历史文件单条正文，
+     * 不落整段堆栈）。
+     */
+    private fun errorTextOf(e: Throwable): String {
+        val target = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+        val firstLine = target.message?.lineSequence()?.firstOrNull { it.isNotBlank() }
+        val text = "${target.javaClass.simpleName}: ${firstLine ?: "(no message)"}"
+        return if (text.length <= ERROR_TEXT_LIMIT) text else text.take(ERROR_TEXT_LIMIT) + "…"
+    }
+
+    /** 数据源显示名（反射 DasDataSource.getName；不可达返回 null——展示性字段，取不到不影响主链）。 */
+    private fun dataSourceName(dataSource: Any): String? = runCatching {
+        Class.forName(DAS_DATA_SOURCE).getMethod("getName").invoke(dataSource) as? String
+    }.getOrNull()
+
+    /** T-MAT-01 之前的执行本体（钩子包装前逐行原样；行为零变化）。 */
+    private fun executeQueryInternal(
         project: Project,
         dataSource: Any,
         sql: String,

@@ -857,6 +857,8 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
             metaLine.append(durationText, durationAttrs)
             // T-AgentDialectLoop：目标库角标（与日志页同款落点：时间/耗时后、来源前）
             formatDatabaseFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
+            // T-McpAuditTrail T-MAT-05：MCP 徽标（与日志页同款落点与协议；非 MCP 返回 null 不显示）
+            formatMcpFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
             metaLine.append("[$source] ", HISTORY_META_GRAY)
             sqlLineFragmentsFor(entry)
         } else {
