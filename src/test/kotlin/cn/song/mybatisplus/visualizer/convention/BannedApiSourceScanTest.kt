@@ -404,6 +404,10 @@ class BannedApiSourceScanTest {
      * 不参与调用结构，涂白后配平与令牌判定都只看调用本体；`${` 开模板、模板内 `{`/`}` 计数配对、
      * 模板内 `"` 递归按字符串处理，故外层字符串的结束引号总能被正确找到。**严格保长、保行**
      * （换行原样输出），行号因此与原文一致。未闭合的普通字符串仍在行尾收手（不吞后续行）。
+     *
+     * 残留边界（复核实测登记，仅编译不过的代码可触发）：未闭合的 `"` **且**其中 `${` 也未闭合时，
+     * 模板深度 > 0 使换行不再终止字符串 → 会涂白到 EOF，其后站点被吞。正常 Kotlin 不出现此形态，
+     * 且不影响「未闭合 `"` 在行尾收手」这一既有行为。
      */
     private fun maskStringLiteral(source: String, start: Int, out: StringBuilder): Int {
         if (source.startsWith("\"\"\"", start)) {
@@ -894,13 +898,21 @@ class BannedApiSourceScanTest {
         // 反例原状：遇首个未转义 `"` 即结束外层字符串 → 正文被当代码、模板内代码被涂白 → 后续站点的
         // 实参区被正文里的 `)` 提前配平到 0（实测 execute/DataSourceSelector.kt:1009 实参区被截断到
         // 9414/13999 字符而不再含 ModalityState.any()、:2684 整条站点被丢弃）。
-        // 样本形态照抄该文件：模板内嵌字符串在前，带 any() 实参的站点在后。
+        //
+        // 样本形态（`9f8607b` 复核实测校准）：**模板必须跨行、且其后正文里带一个 `)`** 才能区分修复前后。
+        // 单行简单形态（如 `"a${b("c")}d"`）**不能**钉住——掩码输出虽然不同，但误判在同一行内自行
+        // 重新同步、括号得失对称，两版判定结果一致（`9f8607b` 提交报文曾误称该形态「修复前必红」，
+        // 经复核实测更正）。本形态 pre-fix 实测 any 规则漏报（`[]`）、post-fix 报 1 处。
         val templateNestedString = listOf(
             "src/main/kotlin/x/TemplateNested.kt" to """
                 class TemplateNested {
-                    fun go(doc: Document, api: Any?, probe: String) {
-                        LOG.info("api=${'$'}{api?.javaClass?.simpleName} probe=${'$'}{probe("x")} tail")
-                        app.invokeLater({ doc.setText("boom") }, ModalityState.any())
+                    fun go(doc: Document) {
+                        app.invokeLater({
+                            LOG.info("a=${'$'}{
+                                f("x")
+                            }) b)")
+                            doc.setText("z")
+                        }, ModalityState.any())
                     }
                 }
             """.trimIndent(),
