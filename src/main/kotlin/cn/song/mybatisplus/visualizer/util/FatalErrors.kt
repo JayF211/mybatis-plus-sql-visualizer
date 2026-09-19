@@ -31,6 +31,17 @@ package cn.song.mybatisplus.visualizer.util
  * 反射链须先解包：`Method.invoke` 把目标异常（含 `Error`）包进
  * `InvocationTargetException`（普通异常），直接判外层会漏判——见
  * `execute/DataSourceSelector.kt` 原生执行链的 `cause` 解包形态。
+ *
+ * **与错误通道的关系（四通道各司其职，不做统一封装）**：本仓错误呈现走四条通道——① 日志
+ * （`Logger.warn`/`error`，排查锚点）；② 平台通知（用户可见的轻提示）；③ 执行链回调
+ * （`onError` / `onErrorRich`，控制台错误面板的结构化位置）；④ `com.intellij.errorHandler` EP
+ * （`feedback/IdeErrorReportSubmitter`，进程级错误的平台上报）。四者职责不同，强行统一风险大于收益
+ * （第八轮报告锚点核实结论）。本类只补一层**判据**：fatal 跨捕获边界时透传，交给平台/进程级通道，
+ * 而不是被通道 ① 降级成一行日志。
+ *
+ * **防回潮**：`convention/BannedApiSourceScanTest` 的「catch (…: Throwable) 块必须判 fatal 或登记
+ * 豁免」规则扫 src/main 全部 `Throwable` 捕获块——新增捕获点要么调用本类，要么在守卫的豁免表里
+ * 登记文件 + 站点数 + 理由。
  */
 object FatalErrors {
 
