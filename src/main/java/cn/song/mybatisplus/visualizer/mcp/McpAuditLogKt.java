@@ -20,7 +20,7 @@ public final class McpAuditLogKt {
      *
      * <p>顶层函数（非 {@link McpAuditLog} 成员）：裸 JUnit 可直测，加载门面类不必初始化
      * {@link McpAuditLog} 的 Logger（{@code McpDbExecutor.drainWarnings} 同款先例）。
-     * <b>生产消费点在 ExplainTool.mpsv_explain</b>——改造前该工具的成功路径把字面量 {@code "ok"}
+     * <b>生产消费点在 SqlVisualizerExplainTool.sqlv_explain</b>——改造前该工具的成功路径把字面量 {@code "ok"}
      * 当入参传，审计行里没有任何真实入参（{@code McpAuditLog.summarize} 全仓零调用）。</p>
      *
      * <p>脱敏口径（对齐 T-RA 系列「不落异常 message」）：只记 SQL 文本摘要、不记任何参数值——MCP 工具
@@ -42,7 +42,7 @@ public final class McpAuditLogKt {
      * {@code McpToolsetSupport.AuditTicket.expectedError}。
      *
      * <p><b>为什么不是整串 {@link McpAuditLog#clip}</b>（T-MAT-04 回退修复，独立复核轮实测）：整串截断让
-     * 入参摘要先占满预算——{@code mpsv_explain} 的 SQL 段 &gt;80 字符时错误文本开始被截、≥113 字符时
+     * 入参摘要先占满预算——{@code sqlv_explain} 的 SQL 段 &gt;80 字符时错误文本开始被截、≥113 字符时
      * <b>整段消失</b>，而长 SQL 恰是最需要看错误原因的场景（改造前该槽位只放错误文本，错误文本独占
      * 120 字符）。故改<b>两段分预算</b>：错误文本优先占预算，入参摘要让位但保留
      * {@link #ERROR_PATH_ARGS_FLOOR} 保底（数据源标识与字段格式不消失），错误文本短时余量全部还给摘要，

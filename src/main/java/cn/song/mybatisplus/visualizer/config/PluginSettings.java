@@ -268,7 +268,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private boolean mcpToolsEnabled = true;
 
         /**
-         * 工具级禁用清单（T-MTS2-00）：工具名（mpsv_render_sql 等）→ 不出现在工具面。
+         * 工具级禁用清单（T-MTS2-00）：工具名（sqlv_render_sql 等）→ 不出现在工具面。
          * 清单外默认启用——新增工具向后兼容（用户不配置即全部可用）。
          */
         private List<String> mcpDisabledTools = new ArrayList<>();

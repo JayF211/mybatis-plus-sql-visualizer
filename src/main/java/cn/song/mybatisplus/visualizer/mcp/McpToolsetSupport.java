@@ -15,6 +15,13 @@ import com.intellij.openapi.project.ProjectManager;
  * `McpToolset.Companion.getEnabledToolsets`（262 mcpserver.jar 字节码实证）按 `isEnabled()`
  * 过滤整个 toolset；工具级开关即一工具一 toolset 类，各以自己的 toolName 过 {@link McpToolGate}。
  *
+ * <b>类名前缀 {@code SqlVisualizer} 是硬约定（T-McpToolNaming / T-MTN-01）</b>：平台「暴露工具」页按工具描述符的
+ * category 分组，category 的 {@code shortName} 直接取 <b>toolset 类的 simpleName</b>
+ * （{@code ToolsetReflection_utilKt.asTools} 字节码实证），{@code McpToolset} 接口本身没有名字属性——
+ * 分组名只能由类名决定。加统一前缀后本插件十组在列表里<b>组名自带插件名且字典序相邻</b>，
+ * 扫视即知同属一个插件。<b>新增工具类必须照此命名</b>（{@code SqlVisualizer<Xxx>Tool}），
+ * 否则该工具在「暴露工具」页会脱离本插件组群。
+ *
  * <b>253 兼容（T-McpToolset 定案继承）</b>：三钩子在基类<b>显式字面量覆写</b>——K2（jvm-default=
  * all-compatibility）只为「实现类未覆写的接口默认方法」生成 invokespecial 兼容桥，253 分支
  * 接口缺 isEnabled/alwaysIncluded 默认方法即桥悬空（verifyPlugin 实证）；基类提供具体覆写后
@@ -23,14 +30,14 @@ import com.intellij.openapi.project.ProjectManager;
  * <b>输出预算登记表（T-McpOutputBudget / O-20 守卫约定——新增工具或调整预算必须在此登记对齐，
  * MetadataInvalidator 缓存登记表同款防漏）</b>：
  * <ul>
- *  <li>mpsv_schema_context：maxTables 默认 8 / 硬上限 20、单元格 200 字符、tables 白名单 ≤50
+ *  <li>sqlv_schema_context：maxTables 默认 8 / 硬上限 20、单元格 200 字符、tables 白名单 ≤50
  *    （常量在 McpSchemaFormatter：DEFAULT_MAX_TABLES / HARD_MAX_TABLES / MAX_CELL_CHARS /
  *    MAX_TABLE_NAMES）；</li>
- *  <li>mpsv_explain：行默认 ≤200 / 上限 1000（maxRows 可配，越界钳制不抛错；通道层另有兜底钳制）、
+ *  <li>sqlv_explain：行默认 ≤200 / 上限 1000（maxRows 可配，越界钳制不抛错；通道层另有兜底钳制）、
  *    单元格 2000 字符（常量在 McpExplainFormatter：DEFAULT_MAX_ROWS / HARD_MAX_ROWS /
  *    MAX_CELL_CHARS）；notices 节无条数预算（驱动会话通道天然有界，个案个位数）；</li>
- *  <li>mpsv_perf_advice：建议 ≤30 条（MAX_FINDINGS，超限 SEVERITY 等级序先裁低级）+ 单条文案
- *    200 字符（MAX_ADVICE_CHARS，对齐 schema 200 口径）（常量在 PerfAdviceTool）；</li>
+ *  <li>sqlv_perf_advice：建议 ≤30 条（MAX_FINDINGS，超限 SEVERITY 等级序先裁低级）+ 单条文案
+ *    200 字符（MAX_ADVICE_CHARS，对齐 schema 200 口径）（常量在 SqlVisualizerPerfAdviceTool）；</li>
  *  <li>其余七工具：输出规模由输入决定天然有界（渲染=源码规模、logs=日志条数、crud/reverse/
  *    rollback=单实体单语句），不设额外预算。</li>
  * </ul>
@@ -102,7 +109,7 @@ public abstract class McpToolsetSupport implements McpToolset {
      * Java 侧无挂起帧，直接同步计数即可，AuditTicket 形态保留。）
      *
      * <p>T-McpAuditTrail T-MAT-04：{@code argsSummary} 为真实入参摘要（经 {@link McpAuditLog#summarize}
-     * 产出，如 mpsv_explain 的 dataSource/dialect/SQL 首段，整体受 {@link McpAuditLog#SUMMARY_LIMIT} 截断）。
+     * 产出，如 sqlv_explain 的 dataSource/dialect/SQL 首段，整体受 {@link McpAuditLog#SUMMARY_LIMIT} 截断）。
      * 默认值 {@link #LEGACY_ARGS_SUMMARY} 是改造前的字面量：其余九个<b>纯静态</b>工具无执行面、参数面未立项，
      * 保持审计行逐字节不变（计划 §验收 4，<b>仅 OK 路径</b>——错误路径的入参段格式十个工具统一变化）；
      * 新增执行类工具应显式传摘要，勿再落 "ok"。</p>

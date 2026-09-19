@@ -24,6 +24,7 @@
 - **方言 auto 判定收敛为唯一事实源**：项目级「智能推断」优先于全局（此前项目级开启而全局关闭时，项目级推断会被静默忽略，回退成全局手动方言）；顺带删除 `DialectRegistry.effective` 的死参 `manualDialectName`
 - Java 端口分支同步 master 9def321..ec584e2（三百四十八提交）：MCP 工具集、执行链安全护栏、premain 启动捕获、方言智能推断等全量入 Java 树
 - Java 端口分支同步 master ec584e2..2d40564（九十二提交 + 作业期间 master 前进 20 提交，锚点改钉 b029a78）：fatal 透传判据与 37 处透传、XML 内联 DTD 膨胀预扫、PSI 两段式捕获快照、MCP 行预算与审计落历史、错误上报分级脱敏、DELIMITER 感知、参数契约补缺、性能第八轮 15 项、稳定性尾款与测试隔离等全量入 Java 树
+- Java 端口分支同步 master 2d40564..b9aeeba（作业期间 master 两度前进共 31 提交，锚点改钉 b9aeeba）：MCP 工具名统一 `sqlv_` 前缀与 toolset 类名 `SqlVisualizer` 前缀（十个工具类改名，平台「暴露工具」页分组名取类 simpleName）、ACP 会话 MCP 工具下发修复（新增 `acp/AcpIdeaMcpTransportProviderImpl` 以 SSE 绕行上游 claude-agent-acp 对带 type 字段 stdio server 的静默丢弃 + `acp-transport-optional.xml` 可选依赖）全量入 Java 树
 
 ### Fixed
 

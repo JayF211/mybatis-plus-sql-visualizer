@@ -13,7 +13,7 @@ import org.junit.Assert.assertTrue
 /**
  * MCP 执行链落历史测试（T-McpAuditTrail T-MAT-01/02；计划 §验收 用例 ①②④⑥ 的无 DB 半边）。
  *
- * **覆盖边界**：`mpsv_explain` 的真实执行（打真数据源、驱动返回计划文本）本机不可自动化——
+ * **覆盖边界**：`sqlv_explain` 的真实执行（打真数据源、驱动返回计划文本）本机不可自动化——
  * 需 Database 插件 + 已保存密码的数据源。此处覆盖执行**之后**的落库链：条目构造契约
  * （[McpToolsetSupportKt.mcpHistoryEntry]）+ 入既有入库路径（[McpToolsetSupportKt.recordMcpExecution]
  * → [SqlLogManager] buffer）。

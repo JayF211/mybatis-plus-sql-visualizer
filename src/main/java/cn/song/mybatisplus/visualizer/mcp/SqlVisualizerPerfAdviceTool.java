@@ -1,4 +1,4 @@
-// T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/PerfAdviceTool.kt 移植
+// T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerPerfAdviceTool.kt 移植
 package cn.song.mybatisplus.visualizer.mcp;
 
 import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer;
@@ -13,15 +13,15 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * mpsv_perf_advice 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：SQL 性能建议。
+ * sqlv_perf_advice 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：SQL 性能建议。
  *
  * 复用 F-2 的 SqlPerfAnalyzer（20 条规则引擎，规则内缓存）；警告经
  * {@link MpSqlVisualizerBundle#messageEn}（bundle base 即英文，零新键）渲染为 agent 面英文，
  * 未识别键诚实输出键名。纯静态分析，不触数据库。
- * 逻辑分层同 {@link CheckSqlTool}：{@link #perfAdvice} 纯函数可测，挂起方法只做 audit 包装。
+ * 逻辑分层同 {@link SqlVisualizerCheckSqlTool}：{@link #perfAdvice} 纯函数可测，挂起方法只做 audit 包装。
  * 输出预算（T-McpOutputBudget / O-20）见 {@link #renderFindings} 与 McpToolsetSupport 类注释登记表。
  */
-public class PerfAdviceTool extends McpToolsetSupport {
+public class SqlVisualizerPerfAdviceTool extends McpToolsetSupport {
 
     /**
      * 建议条数预算（20 条规则多命中理论上可超）：超限按 SEVERITY 等级序先裁低级
@@ -33,22 +33,22 @@ public class PerfAdviceTool extends McpToolsetSupport {
     /**
      * 单条文案字符预算：对齐 McpSchemaFormatter.MAX_CELL_CHARS 的 200 字符口径（DBX
      * agent_tools.rs 短文案预算）。perf 文案本体是 bundle 英文短句（全库最长约 140 字符）
-     * 加标识符插值，200 不伤正常输出；ExplainTool 的 2000 是执行计划文本单元格口径，
+     * 加标识符插值，200 不伤正常输出；SqlVisualizerExplainTool 的 2000 是执行计划文本单元格口径，
      * 对建议文案无意义。
      */
     public static final int MAX_ADVICE_CHARS = 200;
 
-    public PerfAdviceTool() {
-        super("mpsv_perf_advice");
+    public SqlVisualizerPerfAdviceTool() {
+        super("sqlv_perf_advice");
     }
 
-    @McpTool(name = "mpsv_perf_advice", title = "Performance advice for a SQL statement")
+    @McpTool(name = "sqlv_perf_advice", title = "Performance advice for a SQL statement")
     @McpDescription(
         description = "Static performance review of a single SQL statement (no execution, no database access): "
             + "SELECT * usage, missing-index hints, unindexed LIKE leading-wildcard, large IN lists, "
             + "NULL-comparison pitfalls and more (20 rules, severity ERROR/WARN/INFO, with line numbers). "
-            + "Deterministic rule-engine analysis. Typical chain: mpsv_render_sql or mpsv_render_logs to "
-            + "produce the SQL, this tool to review it, mpsv_explain to get the real plan. "
+            + "Deterministic rule-engine analysis. Typical chain: sqlv_render_sql or sqlv_render_logs to "
+            + "produce the SQL, this tool to review it, sqlv_explain to get the real plan. "
             + "Read-only: analysis only, never executes SQL."
     )
     @McpToolHints(
@@ -56,8 +56,8 @@ public class PerfAdviceTool extends McpToolsetSupport {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE
     )
-    public String mpsv_perf_advice(String sql) {
-        return audit("mpsv_perf_advice", () -> perfAdvice(sql));
+    public String sqlv_perf_advice(String sql) {
+        return audit("sqlv_perf_advice", () -> perfAdvice(sql));
     }
 
     /** 纯函数核心（零 IDE 依赖）：规则分析 + 预算渲染。 */

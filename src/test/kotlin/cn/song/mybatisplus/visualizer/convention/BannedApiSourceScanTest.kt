@@ -392,7 +392,7 @@ class BannedApiSourceScanTest {
      * 用 HTML 实体 `&` + `#47;` 写收尾符、`psi/jpa/JpaEntityResolver.java:481` 在收尾符中间插了
      * 零宽空格），于是注释里只剩下不成对的斜杠星号。后果：`JpaJoinOnResolver.java` 多涂白 145 行
      * （其 4 处 `catch (Throwable ignored)` 脱离扫描面）、`JpaEntityResolver.java` 多涂白 327 行
-     * （含 1 处 `catch (Throwable e)`），全量站点数 595 → 590，而「0 offender」的绿灯看不出收窄。
+     * （含 1 处 `catch (Throwable e)`），全量站点数 597 → 592，而「0 offender」的绿灯看不出收窄。
      * 同一修复对既有 `invokeLater` 两族实测**零影响**（嵌套/非嵌套两种口径下 offender 均为 0）。
      *
      * 为什么不复用 [stripComments]：
@@ -1109,8 +1109,8 @@ class BannedApiSourceScanTest {
      * `FatalErrors.isFatal(`，或按『文件 + 站点数』登记豁免」。**该口径不能直接搬到 Java 树**：
      * Kotlin 里绝大多数错误处理走 `runCatching {}`（不产生 catch 块），master 的 Kotlin 树实测只有
      * 74 处 catch 站点，逐站点判定可行；而 Java 只能把每个 `runCatching` 落成 `try/catch (Throwable)`，
-     * k2j 实测 **595 处站点 / 119 文件**（`execute/DataSourceSelector.java` 单文件 142 处）——
-     * 逐站点要求判定会把 595 处全判红，而其中绝大多数（可选能力探测、后台候选收集、渲染回落、
+     * k2j 实测 **597 处站点 / 119 文件**（`execute/DataSourceSelector.java` 单文件 142 处）——
+     * 逐站点要求判定会把 597 处全判红，而其中绝大多数（可选能力探测、后台候选收集、渲染回落、
      * 面板兜底提示）的失败语义本就是降级，在 Java 侧没有对应的 Kotlin 形态可逐条对照登记。
      *
      * 故本族在 k2j 改为**两段式**（判据强度不降，只换落点）：
@@ -1145,11 +1145,15 @@ class BannedApiSourceScanTest {
      * 未判定 `catch (Throwable …)` 的**站点总量基线**（k2j 工作树实测）。
      *
      * 口径 = [throwableCatchSites] 跑在 [maskSource] 后的文本上（注释/字符串里的写法不算站点）。
-     * 实测推导：`grep -rn "catch (Throwable" src/main/java` 的**原始行数** 597，其中 2 行不是站点
+     * 实测推导：`grep -rn "catch (Throwable" src/main/java` 的**原始行数** 599，其中 2 行不是站点
      * （`log/SourceInterceptorTemplates.java` 的 Java 源码模板文本块内 1 处、
-     * `util/FatalErrors.java` 的 Javadoc 示例 1 处）→ 595。
+     * `util/FatalErrors.java` 的 Javadoc 示例 1 处）→ 597。
+     *
+     * 基线变迁：595（T-SyncK2JMaster92 首次登记）→ **597**（同轮吸收 master 9f4bbb9 的
+     * `SqlPreviewPanel` 预热链生命周期修复时新增 2 处 `catch (Throwable)`——master 侧是两处
+     * `runCatching`，Java 只能落成 try/catch；两处均只置标志/解除登记，不覆盖 fatal 面）。
      */
-    private val fatalCatchSiteTotalBaseline = 595
+    private val fatalCatchSiteTotalBaseline = 597
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线
@@ -1219,7 +1223,7 @@ class BannedApiSourceScanTest {
         assertEquals(
             "src/main/java 的 `catch (Throwable …)` 站点总数与基线不符：期望 $fatalCatchSiteTotalBaseline，" +
                 "实测 $total（当前 ${sources.size} 个 .java 文件）。" +
-                "k2j 的 Java 树把每个 Kotlin `runCatching` 落成 try/catch（实测 595 处），" +
+                "k2j 的 Java 树把每个 Kotlin `runCatching` 落成 try/catch（实测 597 处），" +
                 "故不做逐站点判定要求；但新增/删除捕获点必须重新登记基线（[fatalCatchSiteTotalBaseline]），" +
                 "或对新捕获点补 `FatalErrors.isFatal(` 判定并计入 [fatalPassthroughGuardedFiles]",
             fatalCatchSiteTotalBaseline,

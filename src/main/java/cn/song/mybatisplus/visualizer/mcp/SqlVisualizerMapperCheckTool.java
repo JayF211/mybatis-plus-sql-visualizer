@@ -1,4 +1,4 @@
-// T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/MapperCheckTool.kt 移植
+// T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerMapperCheckTool.kt 移植
 package cn.song.mybatisplus.visualizer.mcp;
 
 import cn.song.mybatisplus.visualizer.execute.UnboundedWriteDetector;
@@ -21,7 +21,7 @@ import com.intellij.openapi.vfs.VirtualFile;
 import java.nio.charset.StandardCharsets;
 
 /**
- * mpsv_mapper_check 工具（T-McpToolset2 / T-MTS2-03，R2）：mapper XML 静态契约核查。
+ * sqlv_mapper_check 工具（T-McpToolset2 / T-MTS2-03，R2）：mapper XML 静态契约核查。
  *
  * 两层产出（N-16 位差落点——CodeHelperPro validate_mybatis_mapper 校验静态文本，
  * 本工具校验的是<b>渲染后的真实 SQL</b>）：
@@ -29,18 +29,18 @@ import java.nio.charset.StandardCharsets;
  *  2. 渲染层（simulate=true）：空模拟参数渲染 → 渲染产物逐条过 UnboundedWriteDetector + SqlPerfAnalyzer。
  *
  * simulate 的空参数上下文（`&lt;if&gt;` 全关 → 空语句）是正常态不算 finding，输出注明语境。
- * 逻辑分层同 {@link CheckSqlTool}：{@link #mapperCheck} 纯函数可测，挂起方法只做文本定位 + audit 包装。
+ * 逻辑分层同 {@link SqlVisualizerCheckSqlTool}：{@link #mapperCheck} 纯函数可测，挂起方法只做文本定位 + audit 包装。
  *
  * 移植注记：xmlSnippet/filePath/simulate 的 Kotlin 默认值改为调用方必传（平台对 Java 方法无默认
  * 参数机制），内部空值/分支语义与原实现一致。
  */
-public class MapperCheckTool extends McpToolsetSupport {
+public class SqlVisualizerMapperCheckTool extends McpToolsetSupport {
 
-    public MapperCheckTool() {
-        super("mpsv_mapper_check");
+    public SqlVisualizerMapperCheckTool() {
+        super("sqlv_mapper_check");
     }
 
-    @McpTool(name = "mpsv_mapper_check", title = "Static contract check for a mapper XML")
+    @McpTool(name = "sqlv_mapper_check", title = "Static contract check for a mapper XML")
     @McpDescription(
         description = "Check a MyBatis mapper XML: parse errors, statement inventory "
             + "(id, kind, parameterType, #{} parameter counts, \\${} direct-substitution counts — the "
@@ -56,8 +56,8 @@ public class MapperCheckTool extends McpToolsetSupport {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE
     )
-    public String mpsv_mapper_check(String xmlSnippet, String filePath, boolean simulate) {
-        return audit("mpsv_mapper_check", () -> {
+    public String sqlv_mapper_check(String xmlSnippet, String filePath, boolean simulate) {
+        return audit("sqlv_mapper_check", () -> {
             String text;
             if (!xmlSnippet.isBlank()) {
                 text = xmlSnippet;
@@ -183,7 +183,7 @@ public class MapperCheckTool extends McpToolsetSupport {
         }
         if (simulate) {
             out.append("\n(simulation uses an empty-parameter context; pass real parameter forms via ");
-            out.append("mpsv_render_sql for production-shaped evidence)");
+            out.append("sqlv_render_sql for production-shaped evidence)");
         }
         return McpExplainFormatter.trimEnd(out.toString());
     }

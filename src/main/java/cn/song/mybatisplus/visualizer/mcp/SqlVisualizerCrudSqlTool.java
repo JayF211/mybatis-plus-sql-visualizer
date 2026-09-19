@@ -1,4 +1,4 @@
-// T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/CrudSqlTool.kt 移植
+// T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerCrudSqlTool.kt 移植
 package cn.song.mybatisplus.visualizer.mcp;
 
 import cn.song.mybatisplus.visualizer.actions.GenerateCrudSqlFromEntityAction;
@@ -24,13 +24,13 @@ import com.intellij.psi.search.GlobalSearchScope;
 import java.util.List;
 
 /**
- * mpsv_crud_sql 工具（T-McpToolset2 / T-MTS2-02，R2 PSI）：实体类 → CRUD 四件套 SQL。
+ * sqlv_crud_sql 工具（T-McpToolset2 / T-MTS2-02，R2 PSI）：实体类 → CRUD 四件套 SQL。
  *
  * 复用 IDE 右键生成链的纯逻辑段：`GenerateCrudSqlFromEntityAction.entitySpec`
  * （internal 同模块复用——EntityResolver 解析 + 引号提示 + 方言，单一真相源不复制）→
  * `CrudSqlGenerator.generate`（零 PSI 纯生成，无主键降级 `1 = 0` 占位与 IDE 口径一致）。
  * PSI 定位包 ReadAction（McpSourceLocator 同款线程模型）；<b>只生成不执行</b>。
- * 逻辑分层同 {@link CheckSqlTool}：{@link #resolveSpec}/{@link #crudOutput} 非 suspend 可测，
+ * 逻辑分层同 {@link SqlVisualizerCheckSqlTool}：{@link #resolveSpec}/{@link #crudOutput} 非 suspend 可测，
  * 挂起方法只做 audit 包装。
  *
  * 双轨别名约定（T-DmlAliasGuard，O-27）：产物 DML 目标位禁别名（约定全文见
@@ -40,13 +40,13 @@ import java.util.List;
  * suspend 去除后语义不变；filePath/className 的 Kotlin 默认空串改为调用方必传（平台对 Java 方法
  * 无默认参数机制），工具内部对空串的处理分支与原实现一致。
  */
-public class CrudSqlTool extends McpToolsetSupport {
+public class SqlVisualizerCrudSqlTool extends McpToolsetSupport {
 
-    public CrudSqlTool() {
-        super("mpsv_crud_sql");
+    public SqlVisualizerCrudSqlTool() {
+        super("sqlv_crud_sql");
     }
 
-    @McpTool(name = "mpsv_crud_sql", title = "Generate CRUD SQL from a MyBatis-Plus entity class")
+    @McpTool(name = "sqlv_crud_sql", title = "Generate CRUD SQL from a MyBatis-Plus entity class")
     @McpDescription(
         description = "Generate INSERT / UPDATE / SELECT / DELETE statements for a MyBatis-Plus entity class in the "
             + "current IntelliJ project (same chain as the IDE right-click action): primary keys, "
@@ -54,15 +54,15 @@ public class CrudSqlTool extends McpToolsetSupport {
             + "@TableLogic logic-delete variant; no-primary-key degrades to a '1 = 0' placeholder WHERE. "
             + "Pass 'filePath' (project-relative or absolute, .java/.kt entity file) or 'className' "
             + "(fully-qualified). Deterministic generation; read-only: produces SQL text only — "
-            + "never executes; pair with mpsv_check_sql before any real execution."
+            + "never executes; pair with sqlv_check_sql before any real execution."
     )
     @McpToolHints(
         readOnlyHint = McpToolHintValue.TRUE,
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE
     )
-    public String mpsv_crud_sql(String filePath, String className) {
-        return audit("mpsv_crud_sql", () -> {
+    public String sqlv_crud_sql(String filePath, String className) {
+        return audit("sqlv_crud_sql", () -> {
             Project project = requireProject();
             requireSmart(project);
             return crudOutput(resolveSpec(project, filePath, className));

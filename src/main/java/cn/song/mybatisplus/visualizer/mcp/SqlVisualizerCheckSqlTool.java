@@ -1,4 +1,4 @@
-// T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/CheckSqlTool.kt 移植
+// T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerCheckSqlTool.kt 移植
 package cn.song.mybatisplus.visualizer.mcp;
 
 import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier;
@@ -14,7 +14,7 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * mpsv_check_sql 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：SQL 静态写风险与类型核查。
+ * sqlv_check_sql 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：SQL 静态写风险与类型核查。
  *
  * 组合三件纯逻辑资产：SqlStatementSplitter（语句数）+ SqlTypeClassifier（QUERY/DML/DDL 分类）
  * + UnboundedWriteDetector（O-9 七规则无界写探测）。纯文本判定，<b>绝不执行</b>。
@@ -27,20 +27,20 @@ import java.util.List;
  * 移植注记：平台以 kotlin-reflect 识别工具方法并同步调用（见 McpToolsetSupport 类头移植注记），
  * suspend 去除后本工具方法语义不变（方法体本无真实挂起点）。
  */
-public class CheckSqlTool extends McpToolsetSupport {
+public class SqlVisualizerCheckSqlTool extends McpToolsetSupport {
 
-    public CheckSqlTool() {
-        super("mpsv_check_sql");
+    public SqlVisualizerCheckSqlTool() {
+        super("sqlv_check_sql");
     }
 
-    @McpTool(name = "mpsv_check_sql", title = "Static write-risk and type check for a SQL statement")
+    @McpTool(name = "sqlv_check_sql", title = "Static write-risk and type check for a SQL statement")
     @McpDescription(
         description = "Statically check SQL text (no execution, no database access): statement count, per-statement "
             + "type (QUERY/DML/DDL), and unbounded-write findings — missing WHERE (whole-table scope), "
             + "tautological conditions (e.g. 1=1), tautological OR branches, pure-wildcard LIKE ('%'), "
             + "constant-only WHERE, subqueries (informational), and unparseable statements (fail-closed). "
-            + "Deterministic static analysis via JSqlParser AST. Run this before mpsv_explain on write "
-            + "statements, or after mpsv_render_logs / mpsv_render_sql to assess what rendering produced. "
+            + "Deterministic static analysis via JSqlParser AST. Run this before sqlv_explain on write "
+            + "statements, or after sqlv_render_logs / sqlv_render_sql to assess what rendering produced. "
             + "Read-only: analysis only, never executes SQL."
     )
     @McpToolHints(
@@ -48,8 +48,8 @@ public class CheckSqlTool extends McpToolsetSupport {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE
     )
-    public String mpsv_check_sql(String sql) {
-        return audit("mpsv_check_sql", () -> checkSql(sql));
+    public String sqlv_check_sql(String sql) {
+        return audit("sqlv_check_sql", () -> checkSql(sql));
     }
 
     /** 纯函数核心（零 IDE 依赖）。 */

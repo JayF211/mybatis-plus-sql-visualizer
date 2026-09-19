@@ -129,7 +129,7 @@ class McpNoticeChannelTest {
                 ),
             ),
         )
-        // 工具拼接形态（ExplainTool：format + 方言行 + notices 节）：空 notices 零追加
+        // 工具拼接形态（SqlVisualizerExplainTool：format + 方言行 + notices 节）：空 notices 零追加
         val legacyOutput = McpExplainFormatter.format(raw) + "\n\ndialect: PostgreSQL"
         val currentOutput = legacyOutput + McpExplainFormatter.formatNotices(raw.notices())
         assertEquals(legacyOutput, currentOutput)

@@ -70,8 +70,11 @@ class McpScopeSourceScanTest {
             .map { it.relativeTo(repoRoot()).path.replace('\\', '/') to stripXmlComments(it.readText()) }
             .filter { (_, text) ->
                 // 禁两类：适配类名直接出现；小写包名 com.intellij.mcpserver（类包名，非插件 ID——
-                // 插件 ID 是 com.intellij.mcpServer 大写 S，optional <depends> 声明合法且必需）
-                text.contains("SqlVisualizerToolset") || text.contains("com.intellij.mcpserver")
+                // 插件 ID 是 com.intellij.mcpServer 大写 S，optional <depends> 声明合法且必需）。
+                // T-McpToolNaming：toolset 类名统一 `SqlVisualizer` 前缀（T-MTN-01），标记同步扩为
+                // 「SqlVisualizer + 以 Tool 结尾」形态，并保留一期门面类名（历史留档，防旧引用回流）——
+                // 旧标记只有 SqlVisualizerToolset 一字面量，改名后若只留旧标记，真引用会整片漏网。
+                mcpAdapterClassMarkers.containsMatchIn(text) || text.contains("com.intellij.mcpserver")
             }
             .map { (path, _) -> path }
             .toList()
@@ -83,6 +86,11 @@ class McpScopeSourceScanTest {
             offenders.isEmpty(),
         )
     }
+
+    /** 适配类名标记（T-McpToolNaming）：十 toolset 类统一 `SqlVisualizer<Xxx>Tool` 命名，
+     *  故「SqlVisualizer + 以 Tool 结尾」即覆盖全部当前与未来 toolset 类；一期门面类名
+     *  `SqlVisualizerToolset` 保留为附加标记（历史形态，防旧引用回流）。 */
+    private val mcpAdapterClassMarkers = Regex("SqlVisualizer\\w*Tool\\b|SqlVisualizerToolset")
 
     /** XML 注释剥离（`<!-- -->`）+ 行注释兜底——plugin.xml 的 depends 注释提到实现类名属文档性
      *  记载，不构成解析期类引用；与 BannedApiSourceScanTest.stripComments 同理只可能漏报不误报。 */

@@ -310,8 +310,8 @@ class SettingsRealityGuardTest {
         //  - settings.update.envNotSupported / settings.search.placeholder：P5 守卫首跑查获的存量幽灵键，
         //    已随 T-SettingsTruth 收尾删除双语两键（对齐 P3 filterBar 先例），不再豁免。
         //  - settings.mcp.tool.desc.<tail> 十键（T-McpToolset2，dev 侧）：McpConfigurable.kt:112
-        //    「"settings.mcp.tool.desc." + toolName.removePrefix("mpsv_").replace("_", "")」动态拼，
-        //    尾段由工具名派生（mpsv_render_sql → rendersql），静态扫描不可判定；十键保留白名单。
+        //    「"settings.mcp.tool.desc." + toolName.removePrefix("sqlv_").replace("_", "")」动态拼，
+        //    尾段由工具名派生（sqlv_render_sql → rendersql），静态扫描不可判定；十键保留白名单。
         val whitelist = setOf(
             "settings.update.checkFailed",
             "settings.update.installFailed",

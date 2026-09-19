@@ -1,4 +1,4 @@
-// T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/RenderLogsTool.kt 移植
+// T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerRenderLogsTool.kt 移植
 package cn.song.mybatisplus.visualizer.mcp;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
@@ -15,21 +15,21 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * mpsv_render_logs 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：MyBatis / Hibernate /
+ * sqlv_render_logs 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：MyBatis / Hibernate /
  * JdbcTemplate 日志文本 → 可执行 SQL。
  *
  * 复用 IDE「日志 → SQL」面板同款三解析器链（feed → closePending → takeEntries，
  * `LogToSqlPanel.computeConversion` 同构、纯计算不触 Swing）；条目直接消费
  * `LogSqlEntry.restoredSql`。前缀参数缺省读插件设置（与面板同源单点），工具参数可逐项覆盖
- * （null/空串 = 不覆盖，遵循设置）。逻辑分层同 {@link CheckSqlTool}：{@link #renderLogs} 纯函数可测。
+ * （null/空串 = 不覆盖，遵循设置）。逻辑分层同 {@link SqlVisualizerCheckSqlTool}：{@link #renderLogs} 纯函数可测。
  *
  * 移植注记：平台以 kotlin-reflect 识别工具方法并同步调用（见 McpToolsetSupport 类头移植注记）；
  * logText 必传，前缀覆盖参数的 Kotlin 默认值改为调用方必传空串语义等价（空串=不覆盖）。
  */
-public class RenderLogsTool extends McpToolsetSupport {
+public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
 
-    public RenderLogsTool() {
-        super("mpsv_render_logs");
+    public SqlVisualizerRenderLogsTool() {
+        super("sqlv_render_logs");
     }
 
     /** 前缀缺省装配载体（Kotlin data class → record + 缺省重载）。 */
@@ -55,7 +55,7 @@ public class RenderLogsTool extends McpToolsetSupport {
         }
     }
 
-    @McpTool(name = "mpsv_render_logs", title = "Restore MyBatis/Hibernate/JdbcTemplate logs into executable SQL")
+    @McpTool(name = "sqlv_render_logs", title = "Restore MyBatis/Hibernate/JdbcTemplate logs into executable SQL")
     @McpDescription(
         description = "Restore executable SQL from application log text (MyBatis 'Preparing:'/'Parameters:' pairs, "
             + "Hibernate 'Hibernate:' SQL with 'binding parameter' lines, or Spring JdbcTemplate debug lines). "
@@ -63,14 +63,14 @@ public class RenderLogsTool extends McpToolsetSupport {
             + "hibernateSqlPrefix/hibernateParamPrefix) and 'mixedPrefixMatching' are optional and default to "
             + "the plugin's log-capture settings. Each restored statement is prefixed with a '-- SQL #N' "
             + "comment line carrying its source format. Deterministic restoration, not validation — pair with "
-            + "mpsv_check_sql to assess write risk before executing. Read-only: never executes SQL."
+            + "sqlv_check_sql to assess write risk before executing. Read-only: never executes SQL."
     )
     @McpToolHints(
         readOnlyHint = McpToolHintValue.TRUE,
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE
     )
-    public String mpsv_render_logs(
+    public String sqlv_render_logs(
         String logText,
         String sqlPrefix,
         String paramPrefix,
@@ -78,7 +78,7 @@ public class RenderLogsTool extends McpToolsetSupport {
         String hibernateParamPrefix,
         Boolean mixedPrefixMatching
     ) {
-        return audit("mpsv_render_logs",
+        return audit("sqlv_render_logs",
             () -> renderLogs(logText, sqlPrefix, paramPrefix, hibernateSqlPrefix, hibernateParamPrefix,
                 mixedPrefixMatching));
     }

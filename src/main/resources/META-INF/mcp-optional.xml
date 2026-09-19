@@ -9,6 +9,10 @@
   T-MTS2-00：一工具一 toolset 类（平台 per-tool 门控只有 toolset 粒度 isEnabled；
   McpToolsetSupport 基类三钩子字面量覆写 → McpToolGate 读插件设置，插件设置页
   「MCP 工具」可总开关与逐工具启用/禁用）。
+
+  T-McpToolNaming：toolset 类名统一加 `SqlVisualizer` 前缀——平台「暴露工具」页的分组名即
+  类的 simpleName（ToolsetReflection_utilKt.asTools 字节码实证），前缀使十组在列表中组名
+  自带插件名且字典序相邻；工具名统一 `sqlv_` 前缀（@McpTool name 与门控设置键同源）。
 -->
 <idea-plugin>
     <!-- 平台 MCP Server 工具集 ×10（全部只读，isExperimental=false 稳定集；EP 名
@@ -16,15 +20,15 @@
          mcpStub 桩源集（运行时解析平台内置插件真类，桩产物不进插件 jar——详见 build.gradle.kts
          mcpStub 注释）。 -->
     <extensions defaultExtensionNs="com.intellij">
-        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.RenderSqlTool"/>
-        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.SchemaContextTool"/>
-        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.ExplainTool"/>
-        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.RenderLogsTool"/>
-        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.CheckSqlTool"/>
-        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.RollbackPlanTool"/>
-        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.PerfAdviceTool"/>
-        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.CrudSqlTool"/>
-        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.ReverseSqlTool"/>
-        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.MapperCheckTool"/>
+        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.SqlVisualizerRenderSqlTool"/>
+        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.SqlVisualizerSchemaContextTool"/>
+        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.SqlVisualizerExplainTool"/>
+        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.SqlVisualizerRenderLogsTool"/>
+        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.SqlVisualizerCheckSqlTool"/>
+        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.SqlVisualizerRollbackPlanTool"/>
+        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.SqlVisualizerPerfAdviceTool"/>
+        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.SqlVisualizerCrudSqlTool"/>
+        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.SqlVisualizerReverseSqlTool"/>
+        <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.SqlVisualizerMapperCheckTool"/>
     </extensions>
 </idea-plugin>

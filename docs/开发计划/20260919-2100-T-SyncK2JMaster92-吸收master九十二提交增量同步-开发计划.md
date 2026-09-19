@@ -1,8 +1,8 @@
 # T-SyncK2JMaster92 开发计划——master ec584e2..2d40564 增量同步
 
 > 立项日期：2026-09-19　分支：feature/kotlin-to-java（worktree `mybatis-plus-sql-visualizer-kotlin-to-java`）
-> 同步源：**本地 master `2d40564`**（`git rev-parse` 实测，锚点 `ec584e2` 为其祖先已 `merge-base --is-ancestor` 核实）
-> 同步范围：`git diff ec584e2..2d40564` —— **92 提交 / 126 文件（29 A + 97 M + 0 D）**
+> 同步源：**本地 master `b9aeeba`**（原计划钉 `2d40564`，作业期间 master 两度前进共 31 提交，按上轮惯例一并吸收并把锚点改钉 `b9aeeba`——见 §8「锚点变更说明」）
+> 同步范围：`git diff ec584e2..b9aeeba` —— **123 提交**；§2/§3 的量化矩阵保留原 92 提交口径（那是立项基线），实际落盘见 §8
 > 上轮收官：T-SyncK2JMaster309（4f1076b，全量 testShards 5183/0/0/6 绿 + testDatabase 10/0/0/0 + buildPlugin 出包 2026.9.18 + verifyGate 三目标 Compatible，锚点 ec584e2）
 > 用户指示：**同步功能、不合并分支**（方案 A 手工移植不变）；**先落本计划文件再实施**；全量测试 + 插件构建校验必须通过。
 
@@ -150,4 +150,69 @@ execute 2（`ConfirmRollbackParseShareTest` / `ConflictProbeProjectRetentionTest
 
 ## 8. 实施记录
 
-（实施后回填：提交链 SHA、门禁实测读数、偏离与发现。）
+**锚点变更说明（两次）**：原计划锚点钉 master `2d40564`（92 提交）。实施期间 master 两度前进：
+①20 提交至 `b029a78`（含 `9f4bbb9` 预热链池线程绑项目生命周期、`adbbc02` 守卫 T-ST-02d 两项阻断修复）；
+②再 11 提交至 `b9aeeba`（`T-McpToolNaming` MCP 工具改名 + `T-AcpMcpTransport` ACP 传输绕行）。
+按上轮 T-SyncK2JMaster309 的惯例（post-anchor 增量一并吸收、锚点改钉），两批增量全部吸收，**锚点改钉
+`b9aeeba`**，同步范围 `ec584e2..b9aeeba` 共 123 提交。§2/§3 的量化矩阵保留 92 提交口径（立项基线），
+实际落盘以本节为准。
+
+提交链：
+- `f7c9313` C1 立项计划
+- `d9f4d91` 生产移植（四新建翻译 + 49 增量 + bundle 5 新键）
+- `263d689` 测试移植（19 新建 + 30 增量 + 守卫五族 Java 化适配）
+- `3814236` 收口修复（预热链池线程绑项目生命周期 + 读端来源空值合并）
+- `b304599` 文档同步（18 件直取 + 三册 union）
+- 后续提交：第二批次增量（MCP 工具改名 + ACP 传输）+ 本节回填 + 锚点推进 + 沙盒还原
+
+门禁读数（收官实测）：
+- 全量 **testShards 5390/0/0/6 绿**（472 套件；基线 5183 → 5390）
+- **testDatabase 10/0/0/0 绿**
+- **buildPlugin 出包 2026.9.18**（6.6MB；含内嵌 `agent/mps-sql-agent.jar` + `plugin.xml` + `mcp-optional.xml`
+  + `acp-transport-optional.xml`；新类 `SecureXml`/`FatalErrors`/`PsiSnapshot`/`AgentUrlRegistry`/
+  `AcpIdeaMcpTransportProviderImpl`/十个 `SqlVisualizer*Tool` 均已入包）
+- **verifyGate 三目标 Compatible**：243 = 4 for-removal + 10 dep + 10 exp + 1 internal；
+  253 = 6 + 13 + 10 + 1；262 = 7 + 67 + 10 + 1。较上轮（243: 3+10、253: 5+13、262: 6+66）各 **+1
+  for-removal 与 262 的 +1 dep**——归因 = master 本轮新增的 `util/FatalErrors` 白名单引用 `ThreadDeath`
+  （JDK 标记待移除），**与 master 同源、非翻译漂移**；+1 internal 来自 `ProjectEx.getEarlyDisposable()`
+  （T-StabilityTail 预热取消门，master 同款调用）。
+
+实施偏离与发现（供下轮参考）：
+1. **Java 侧 fatal 透传形态必须收窄**：master 的 `if (FatalErrors.isFatal(t)) throw t` 在 try 块含受检异常时
+   javac 按精确重抛分析（JLS 11.2.2）要求方法声明该受检异常，而公开签名不能加 `throws`——统一改写为
+   `if (FatalErrors.isFatal(t)) throw (Error) t;`（白名单三类 `VirtualMachineError`/`LinkageError`/`ThreadDeath`
+   全是 `Error` 子类，收窄零风险、重抛原对象不包装）。守卫判定令牌是 `FatalErrors.isFatal(`，该形态照过。
+2. **fatal 守卫在 k2j 必须换口径（两段式）**：master 的规则是「全部 `catch (…: Throwable)` 必须判 fatal 或
+   按文件+站点数登记豁免」，其豁免表按 Kotlin 树实测（74 处）。k2j 的 Java 树把每个 Kotlin `runCatching`
+   落成 try/catch——实测 **597 处站点 / 119 文件**（`DataSourceSelector.java` 单文件 142 处），逐站点要求
+   判定会把 597 处全判红。故改：**(a) 落地集 6 文件判定数精确相等**（DataSourceSelector 16 / AgentManager 8 /
+   AgentSession 3 / RunConfigurationProcessListener 7 / McpDbExecutor 1 / SqlPreviewService 2）+ **(b) 未判定
+   站点总量基线 597**（漂移即红，强制重新登记）。守卫内写了移植注说明为何与 master 口径不同，防后人误判为削弱。
+3. **守卫掩码器在 Java 树上有一处真缺陷（本轮修复）**：`maskNonCode` 的嵌套注释配平在 Java 源码上遇到
+   「注释里出现不成对收尾符」会把该注释**之后的整个文件涂白**——仓内 2 文件命中（作者为在 KDoc 写出定界符而
+   故意拆开），多涂白 145/327 行、**5 处真实 catch 站点静默脱离扫描面**（595→590）。已改为按扩展名选掩码口径
+   （Java 用非嵌套配平），并补可区分样本钉住。
+4. **一处真实移植偏差（由测试暴露）**：`SqlLogFileReader` 两条头部分支把 master 的
+   `decodedExt?.source ?: SqlSource.UNKNOWN` 译成只判 `decodedExt != null`，漏了**内层 null 合并**——
+   非 MCP 条目的 pd 载荷无 `s` 键时 `source` 落 null（`SqlLogHistoryRoundTripTest` 用例抓出）。已修两处。
+5. **psiCapture 族在 k2j 的覆盖缺口最大（如实登记）**：主判定面只有 2 处池化站点且都在豁免表内；31/33 池化
+   站点的 PSI 读下沉到助手（`WrapperLocator`/`AnnotationSqlPreviewService` 等），是 master 已登记的漏报边界，
+   但在 k2j 侧这是主流形态。该族只有反向验证（改坏必红）能证明判据活着。
+6. **fatal 族的两段式是「总量守恒」不是「逐站点判定」**：基线不变的前提下，删掉一个已判定站点 + 新增一个
+   未判定站点仍会绿；缓解只有落地集 6 文件的精确计数（37 处判定）。其余约 560 处无逐站点保护——这是决策
+   明确接受的口径，如实登记。
+7. **`fatalUnwrapUnjudgedBaseline = 5` 是已知生产缺口**：反射链上目标方法抛出的 Error 被吞成 warn
+   （`DataSourceSelector` 5 处含 `InvocationTargetException` 的站点未判 `cause`）。登记基线 ≠ 已解决，
+   需另开生产收口任务。
+8. **MCP 工具改名涉及面比预期广**：10 个工具类 `git mv` + 全仓引用（`mcp-optional.xml` 10 个 FQCN、
+   `McpToolGate.TOOL_NAMES`、`@McpTool(name)`、`super("sqlv_…")`、bundle 文案、marketplace 页、19 个测试、
+   `PluginXmlStructureGuardTest` 的 toolset 清单）。改名后必须**全仓 grep 旧前缀确认零残留**——
+   `mpsv_` 在非工具名语境（multipart boundary/线程名/临时目录名/`urn:mpsv:` 测试串）仍有 7 处保留，与 master 一致。
+9. **ACP 传输绕行依赖 mcpStub 新增 3 个 ml-llm 桩**：桩源集默认 srcDir 已覆盖，新目录零构建改动即生效
+   （桩产物挂 `compileJava.classpath`，不进插件 jar）。`AcpTransportScopeSourceScanTest` 是 k2j 侧唯一需适配的
+   ACP 测试（扫描根 Kotlin→Java），并**额外加了「扫描集非空」自检**——直接针对「扫描根不对 → 命中 0 文件 →
+   断言恒真」的静默假绿（k2j 历史上有 McpScopeSourceScanTest 的先例）。
+10. **作业期间并行会话推进 master 且共享 gradle 缓存**：`verifyPlugin` 首次失败于
+    `platform-loader.jar` 缺失（243 平台 transform 正被并行会话重解压，竞态）；平台落缓存后 `verifyGate` 通过。
+    环境争用，非 k2j 缺陷。
+

@@ -45,29 +45,29 @@ class McpConfigurableGateTest : BasePlatformTestCase() {
         assertTrue("改动后应判 modified", configurable.isModified)
         configurable.apply()
         assertFalse(state.mcpToolsEnabled)
-        assertFalse("门控即时跟随设置", McpToolGate.isEnabled("mpsv_render_sql"))
+        assertFalse("门控即时跟随设置", McpToolGate.isEnabled("sqlv_render_sql"))
     }
 
     fun test工具级禁用apply写入禁用清单() {
         val configurable = newConfigurable()
         configurable.apply() // 基线
-        configurable.toolCheckBoxForTest("mpsv_explain")!!.isSelected = false
-        configurable.toolCheckBoxForTest("mpsv_mapper_check")!!.isSelected = false
+        configurable.toolCheckBoxForTest("sqlv_explain")!!.isSelected = false
+        configurable.toolCheckBoxForTest("sqlv_mapper_check")!!.isSelected = false
         assertTrue(configurable.isModified)
         configurable.apply()
-        assertEquals(listOf("mpsv_explain", "mpsv_mapper_check"), state.mcpDisabledTools)
-        assertFalse(McpToolGate.isEnabled("mpsv_explain"))
-        assertTrue(McpToolGate.isEnabled("mpsv_render_sql"))
+        assertEquals(listOf("sqlv_explain", "sqlv_mapper_check"), state.mcpDisabledTools)
+        assertFalse(McpToolGate.isEnabled("sqlv_explain"))
+        assertTrue(McpToolGate.isEnabled("sqlv_render_sql"))
     }
 
     fun testreset恢复设置态() {
         state.mcpToolsEnabled = false
-        state.mcpDisabledTools.add("mpsv_explain")
+        state.mcpDisabledTools.add("sqlv_explain")
         val configurable = newConfigurable()
         configurable.reset()
         configurable.apply()
         assertFalse(state.mcpToolsEnabled)
-        assertEquals(listOf("mpsv_explain"), state.mcpDisabledTools)
+        assertEquals(listOf("sqlv_explain"), state.mcpDisabledTools)
         assertFalse(configurable.isModified)
     }
 

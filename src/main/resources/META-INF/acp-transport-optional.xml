@@ -1,0 +1,35 @@
+<!--
+  T-AcpMcpTransport：ACP 会话 MCP 传输绕行的可选依赖描述文件（官方规范：<depends optional="true" config-file="...">）。
+
+  本文件仅在 com.intellij.ml.llm（JetBrains AI Assistant，含 ACP agent 宿主）存在时加载。
+  声明在本文件的扩展引用的类（cn.song.mybatisplus.visualizer.acp 下的 provider 实现及其引用的
+  com.intellij.ml.llm.agents.acp.* 类型）只会在该插件在场时被实例化/链接——未装环境整文件不加载，
+  插件其余功能零影响。与既有 mcp-optional.xml（com.intellij.mcpServer）、database-optional.xml
+  （com.intellij.database）同款隔离手法。
+
+  为什么需要这个 provider：上游 @agentclientprotocol/claude-agent-acp 的 dist/acp-agent.js 把
+  stdio 分支条件写成 `!("type" in server)`，而 AI Assistant 序列化的 stdio server 必带
+  `"type": "stdio"` → server 被静默丢弃，ACP 会话里看不到插件注册的 sqlv_* 工具。
+  改注册本 EP 让 IDE 以 SSE 下发私有 IJ MCP 会话，即走该 agent 实现正确的那条分支
+  （根因两段代码与三条机会见 docs/开发计划/20260919-2130-T-AcpMcpTransport-…-开发计划.md §1.3/§1.5）。
+
+  EP 形态（ml-llm 自身 plugin.xml 实证，行号见该文件）：
+    <extensionPoint qualifiedName="com.intellij.ml.llm.agents.acp.ideaMcpTransportProvider"
+                    interface="com.intellij.ml.llm.agents.acp.client.AcpIdeaMcpTransportProvider"
+                    dynamic="true"/>
+  注册形态刻意与 EP 属主 ml-llm 自己的注册（同文件 `<ml.llm.agents.acp.ideaMcpTransportProvider
+  implementation="…AcpCopilotIdeaMcpTransportProvider"/>`）逐字对齐：defaultExtensionNs="com.intellij"
+  + 点分本地名，EP 名拼接结果即上列 qualifiedName，零歧义（本项目 database-optional.xml 用的是
+  「ns=插件 id + 短名」变体，两种变体在此等价，取属主同款更不易误读）。
+
+  编译期类型来自 mcpStub 桩源集（运行时解析 AI Assistant 插件真类，桩产物不进插件 jar——
+  详见 build.gradle.kts 的 mcpStub 注释）；R1（接口标 @ApiStatus.Internal，跨版本可能变更）
+  的暴露面即本文件的 optional 隔离 + 既有 verifyPlugin/verifyGate 门禁。
+-->
+<idea-plugin>
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- 仅对 acp.registry.claude-acp 返回 SSE，其余返回 null（不表态，让位给后续注册者） -->
+        <ml.llm.agents.acp.ideaMcpTransportProvider
+            implementation="cn.song.mybatisplus.visualizer.acp.AcpIdeaMcpTransportProviderImpl"/>
+    </extensions>
+</idea-plugin>

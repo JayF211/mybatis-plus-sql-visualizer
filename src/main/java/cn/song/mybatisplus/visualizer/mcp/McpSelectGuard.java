@@ -13,7 +13,7 @@ import java.util.Locale;
 import java.util.regex.Pattern;
 
 /**
- * T-McpToolset 只读白名单守卫（mpsv_explain / 未来任何执行类工具共用）。
+ * T-McpToolset 只读白名单守卫（sqlv_explain / 未来任何执行类工具共用）。
  *
  * fail closed（计划 §三-2）：非 SELECT / 多语句 / 解析失败 / 锁读 / SELECT INTO 一律拒绝。
  * 双重判定（DBX「风险分类器 + 关键字扫描任一命中即算写」的只读子集）：

@@ -33,29 +33,29 @@ class McpToolGateTest : BasePlatformTestCase() {
     }
 
     fun test工具级禁用_仅该工具不可见() {
-        state.mcpDisabledTools.add("mpsv_explain")
-        assertFalse(McpToolGate.isEnabled("mpsv_explain"))
-        assertTrue(McpToolGate.isEnabled("mpsv_render_sql"))
-        assertTrue(McpToolGate.isEnabled("mpsv_mapper_check"))
+        state.mcpDisabledTools.add("sqlv_explain")
+        assertFalse(McpToolGate.isEnabled("sqlv_explain"))
+        assertTrue(McpToolGate.isEnabled("sqlv_render_sql"))
+        assertTrue(McpToolGate.isEnabled("sqlv_mapper_check"))
     }
 
     fun test禁用清单大小写不敏感() {
-        state.mcpDisabledTools.add("MPSC_RenderLogs".let { "mpsv_render_logs".uppercase() })
-        assertFalse(McpToolGate.isEnabled("mpsv_render_logs"))
+        state.mcpDisabledTools.add("MPSC_RenderLogs".let { "sqlv_render_logs".uppercase() })
+        assertFalse(McpToolGate.isEnabled("sqlv_render_logs"))
     }
 
     fun test十个工具类钩子跟门控且稳定集恒定() {
         val toolsets = mapOf(
-            "mpsv_render_sql" to RenderSqlTool(),
-            "mpsv_schema_context" to SchemaContextTool(),
-            "mpsv_explain" to ExplainTool(),
-            "mpsv_render_logs" to RenderLogsTool(),
-            "mpsv_check_sql" to CheckSqlTool(),
-            "mpsv_rollback_plan" to RollbackPlanTool(),
-            "mpsv_perf_advice" to PerfAdviceTool(),
-            "mpsv_crud_sql" to CrudSqlTool(),
-            "mpsv_reverse_sql" to ReverseSqlTool(),
-            "mpsv_mapper_check" to MapperCheckTool(),
+            "sqlv_render_sql" to SqlVisualizerRenderSqlTool(),
+            "sqlv_schema_context" to SqlVisualizerSchemaContextTool(),
+            "sqlv_explain" to SqlVisualizerExplainTool(),
+            "sqlv_render_logs" to SqlVisualizerRenderLogsTool(),
+            "sqlv_check_sql" to SqlVisualizerCheckSqlTool(),
+            "sqlv_rollback_plan" to SqlVisualizerRollbackPlanTool(),
+            "sqlv_perf_advice" to SqlVisualizerPerfAdviceTool(),
+            "sqlv_crud_sql" to SqlVisualizerCrudSqlTool(),
+            "sqlv_reverse_sql" to SqlVisualizerReverseSqlTool(),
+            "sqlv_mapper_check" to SqlVisualizerMapperCheckTool(),
         )
         assertEquals("toolset 类清单与 McpToolGate.TOOL_NAMES 对齐", McpToolGate.TOOL_NAMES, toolsets.keys.toList())
         toolsets.forEach { (name, toolset) ->

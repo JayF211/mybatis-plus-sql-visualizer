@@ -1,4 +1,4 @@
-// T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/RollbackPlanTool.kt 移植
+// T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerRollbackPlanTool.kt 移植
 package cn.song.mybatisplus.visualizer.mcp;
 
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator;
@@ -12,25 +12,25 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * mpsv_rollback_plan 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：为 INSERT / UPDATE / DELETE
+ * sqlv_rollback_plan 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：为 INSERT / UPDATE / DELETE
  * 生成回滚预案（评级 + 可执行回滚语句 + 警示 + 自查模板）。
  *
  * 复用 T-RollbackSql 的 RollbackSqlGenerator（零 PSI 零 IDE，诚实拒绝不可逆推类型——
  * UNABLE 时 statements 恒空给人工恢复指引）。<b>只产出预案，绝不执行</b>——执行回滚是用户
  * 在 IDE 预览面板的显式动作，agent 面不提供执行通道。
  * 警示文案经 {@link MpSqlVisualizerBundle#messageEn}（bundle base 即英文，零新键）。
- * 逻辑分层同 {@link CheckSqlTool}：{@link #rollbackPlan} 纯函数可测，挂起方法只做 audit 包装。
+ * 逻辑分层同 {@link SqlVisualizerCheckSqlTool}：{@link #rollbackPlan} 纯函数可测，挂起方法只做 audit 包装。
  *
  * 移植注记：primaryKeyColumns 的 Kotlin 默认空串改为调用方必传（平台对 Java 方法无默认参数
  * 机制），空串语义（无主键列）与原实现一致。
  */
-public class RollbackPlanTool extends McpToolsetSupport {
+public class SqlVisualizerRollbackPlanTool extends McpToolsetSupport {
 
-    public RollbackPlanTool() {
-        super("mpsv_rollback_plan");
+    public SqlVisualizerRollbackPlanTool() {
+        super("sqlv_rollback_plan");
     }
 
-    @McpTool(name = "mpsv_rollback_plan", title = "Generate a rollback plan for INSERT/UPDATE/DELETE")
+    @McpTool(name = "sqlv_rollback_plan", title = "Generate a rollback plan for INSERT/UPDATE/DELETE")
     @McpDescription(
         description = "Generate a rollback plan for INSERT / UPDATE / DELETE statements WITHOUT executing anything: "
             + "a completeness rating (COMPLETE = primary-key located, PARTIAL = executable with risk "
@@ -45,8 +45,8 @@ public class RollbackPlanTool extends McpToolsetSupport {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE
     )
-    public String mpsv_rollback_plan(String sql, String primaryKeyColumns) {
-        return audit("mpsv_rollback_plan", () -> rollbackPlan(sql, primaryKeyColumns));
+    public String sqlv_rollback_plan(String sql, String primaryKeyColumns) {
+        return audit("sqlv_rollback_plan", () -> rollbackPlan(sql, primaryKeyColumns));
     }
 
     /** 纯函数核心（零 IDE 依赖）。 */

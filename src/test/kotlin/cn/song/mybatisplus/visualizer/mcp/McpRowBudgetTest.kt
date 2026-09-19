@@ -156,11 +156,11 @@ class McpRowBudgetTest {
 
     @Test
     fun `接线守卫_工具层与通道层`() {
-        val tool = stripComments(mainSource("mcp/ExplainTool.java"))
+        val tool = stripComments(mainSource("mcp/SqlVisualizerExplainTool.java"))
         // k2j 适配：Java 工具方法无 Kotlin 默认参数（master 的 `maxRows: Int = DEFAULT_MAX_ROWS` 在
         // Java 侧无等价物），故断言签名含 maxRows 入参、默认口径由 @McpDescription 文本承载（下方断言）。
         assertTrue(
-            "mpsv_explain 签名应含 maxRows 入参",
+            "sqlv_explain 签名应含 maxRows 入参",
             tool.contains("int maxRows)") || tool.contains("Integer maxRows)"),
         )
         assertTrue("工具层应把钳制值喂给前置链", tool.contains("McpExplainFormatter.clampMaxRows(maxRows)"))
@@ -195,8 +195,8 @@ class McpRowBudgetTest {
     @Test
     fun `登记表_与常量一致`() {
         val registration = mainSource("mcp/McpToolsetSupport.java")
-        val start = registration.indexOf("mpsv_explain：")
-        assertTrue("登记表应含 mpsv_explain 条目", start >= 0)
+        val start = registration.indexOf("sqlv_explain：")
+        assertTrue("登记表应含 sqlv_explain 条目", start >= 0)
         // k2j 适配：Java javadoc 的条目分隔符是 ` *  <li>`（Kotlin 版为 ` *  - `）
         val end = registration.indexOf("\n *  <li>", start).let { if (it < 0) registration.length else it }
         val entry = registration.substring(start, end)

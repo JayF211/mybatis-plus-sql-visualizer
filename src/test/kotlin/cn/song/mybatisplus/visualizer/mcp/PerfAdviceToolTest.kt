@@ -9,13 +9,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * mpsv_perf_advice 工具测试（T-McpToolset2 / T-MTS2-01）：发现输出（英文渲染）、
+ * sqlv_perf_advice 工具测试（T-McpToolset2 / T-MTS2-01）：发现输出（英文渲染）、
  * 无发现输出、空输入拒绝；T-McpOutputBudget / O-20 输出预算（条数裁剪与计数后缀、
  * SEVERITY 优先保留、单条文案截断、少于上限零差异）。规则细节由 PerfRule 系列测试覆盖。
  */
 class PerfAdviceToolTest {
 
-    private fun advise(sql: String) = PerfAdviceTool().perfAdvice(sql)
+    private fun advise(sql: String) = SqlVisualizerPerfAdviceTool().perfAdvice(sql)
 
     /** 合成发现（messageKey 用真实键保文案可复现；line=-1 不带行号段）。 */
     private fun finding(ruleId: String, severity: PerfSeverity) =
@@ -40,7 +40,7 @@ class PerfAdviceToolTest {
 
     @Test
     fun `空输入_预期错误`() {
-        val error = runCatching { PerfAdviceTool().perfAdvice("") }.exceptionOrNull()
+        val error = runCatching { SqlVisualizerPerfAdviceTool().perfAdvice("") }.exceptionOrNull()
         assertTrue(error is com.intellij.mcpserver.McpExpectedError)
     }
 
@@ -51,7 +51,7 @@ class PerfAdviceToolTest {
     @Test
     fun `超限_条数裁剪且计数后缀恒可见`() {
         val warnings = (1..45).map { finding("rule_$it", PerfSeverity.INFO) }
-        val output = PerfAdviceTool().renderFindings(warnings)
+        val output = SqlVisualizerPerfAdviceTool().renderFindings(warnings)
         assertTrue("头部计总数: $output", output.startsWith("45 finding(s):"))
         assertEquals("只渲染 30 条", 30, output.split("\n- [").size - 1)
         assertTrue(
@@ -68,7 +68,7 @@ class PerfAdviceToolTest {
         val info = (1..40).map { finding("info_$it", PerfSeverity.INFO) }
         val errors = (1..5).map { finding("error_$it", PerfSeverity.ERROR) }
         // ERROR 全部放在清单尾部——排序后必须整体保留并前移
-        val output = PerfAdviceTool().renderFindings(info + errors)
+        val output = SqlVisualizerPerfAdviceTool().renderFindings(info + errors)
         assertEquals("5 条 ERROR 全保留", 5, output.split("[ERROR]").size - 1)
         assertTrue("ERROR 块在前: $output", output.indexOf("[ERROR]") < output.indexOf("[INFO]"))
         assertTrue("INFO 保留前 25 条", output.contains("info_25"))
@@ -82,11 +82,11 @@ class PerfAdviceToolTest {
     @Test
     fun `单条文案超预算_截断加省略号`() {
         // 未知键兜底返回键名 = 稳定的超长文案（messageEn 契约）
-        val longKey = "z".repeat(PerfAdviceTool.MAX_ADVICE_CHARS + 50)
-        val output = PerfAdviceTool().renderFindings(listOf(PerfWarning("r", PerfSeverity.WARN, longKey)))
+        val longKey = "z".repeat(SqlVisualizerPerfAdviceTool.MAX_ADVICE_CHARS + 50)
+        val output = SqlVisualizerPerfAdviceTool().renderFindings(listOf(PerfWarning("r", PerfSeverity.WARN, longKey)))
         assertTrue(
             "含截断形态: $output",
-            output.contains("z".repeat(PerfAdviceTool.MAX_ADVICE_CHARS) + "…"),
+            output.contains("z".repeat(SqlVisualizerPerfAdviceTool.MAX_ADVICE_CHARS) + "…"),
         )
         assertFalse("不含未截断全文", output.contains(longKey))
     }
@@ -103,7 +103,7 @@ class PerfAdviceToolTest {
             finding("rule_a", PerfSeverity.ERROR),
             finding("rule_c", PerfSeverity.WARN),
         )
-        val output = PerfAdviceTool().renderFindings(warnings)
+        val output = SqlVisualizerPerfAdviceTool().renderFindings(warnings)
         val message = MpSqlVisualizerBundle.messageEn("perf.no_where")
         val legacy = buildString {
             append("3 finding(s):\n")
@@ -116,12 +116,12 @@ class PerfAdviceToolTest {
 
     @Test
     fun `恰好三十条_不裁剪不排序无尾注`() {
-        val warnings = (1..PerfAdviceTool.MAX_FINDINGS).map { i ->
+        val warnings = (1..SqlVisualizerPerfAdviceTool.MAX_FINDINGS).map { i ->
             finding("r$i", if (i % 2 == 0) PerfSeverity.INFO else PerfSeverity.ERROR)
         }
-        val output = PerfAdviceTool().renderFindings(warnings)
+        val output = SqlVisualizerPerfAdviceTool().renderFindings(warnings)
         assertFalse("不裁剪: $output", output.contains("TRUNCATED"))
         assertTrue("保持输入顺序（ERROR/INFO 交错不被打散）", output.contains("- [ERROR] r1:") && output.contains("- [INFO] r2:"))
-        assertEquals("头部计总数", 0, output.indexOf("${PerfAdviceTool.MAX_FINDINGS} finding(s):"))
+        assertEquals("头部计总数", 0, output.indexOf("${SqlVisualizerPerfAdviceTool.MAX_FINDINGS} finding(s):"))
     }
 }

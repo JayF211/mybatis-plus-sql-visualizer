@@ -90,6 +90,16 @@
          插件其余功能零影响；编译期类型来自 mcpStub 桩源集（本机构建辅助，见 build.gradle.kts 注释） -->
     <depends optional="true" config-file="mcp-optional.xml">com.intellij.mcpServer</depends>
 
+    <!-- T-AcpMcpTransport ACP 会话 MCP 工具下发修复：com.intellij.ml.llm（JetBrains AI Assistant，
+         ACP agent 宿主，Marketplace 独立插件、非发行版捆绑）——acp-transport-optional.xml 注册
+         com.intellij.ml.llm.agents.acp.ideaMcpTransportProvider，让 Claude Agent 会话以 SSE 形式
+         拿到 IDE 私有 IJ MCP 会话，绕过上游 claude-agent-acp 对带 type 字段的 stdio server 的静默丢弃
+         （根因与三条机会见 20260919-2130-T-AcpMcpTransport 开发计划 §1.3/§1.5）。
+         未装该插件的环境整文件不加载，插件其余功能零影响；主文件不得直接引用 ml-llm 类型
+         （与 database/mcp 可选依赖同款铁律，见 AcpTransportScopeSourceScanTest 守卫）；
+         编译期类型来自 mcpStub 桩源集（见 build.gradle.kts 注释） -->
+    <depends optional="true" config-file="acp-transport-optional.xml">com.intellij.ml.llm</depends>
+
     <!-- com.intellij 扩展点注册（M3 展示层 + M5 配置系统） -->
     <extensions defaultExtensionNs="com.intellij">
         <!-- M56 T-M56-09：EP 双轨主通道——控制台行捕获（首行标志生效后桥轮询挂载停转） -->

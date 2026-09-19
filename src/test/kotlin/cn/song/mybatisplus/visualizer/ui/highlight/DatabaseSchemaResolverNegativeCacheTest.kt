@@ -19,7 +19,7 @@ import org.junit.Test
  * 有数据源场景的完整链路按既有惯例留 RunIde 沙盒真机走查（计划 §五）。
  *
  * T-MC-03 identity 定案（DBX 吸收清单 #26「identity 列 INSERT 包裹」）：**不适用**——
- * 本插件 crud_sql 仅从 MP 实体 PSI 生成语句模板（mpsv_crud_sql 入参仅 filePath/className，
+ * 本插件 crud_sql 仅从 MP 实体 PSI 生成语句模板（sqlv_crud_sql 入参仅 filePath/className，
  * 无查询结果/SELECT 入口），INSERT 模板不含数据行，identity 包裹场景不触达；
  * 报告回填由主会话收口。
  *

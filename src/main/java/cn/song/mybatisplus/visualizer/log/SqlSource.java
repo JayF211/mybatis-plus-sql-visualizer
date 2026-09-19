@@ -15,7 +15,7 @@ public enum SqlSource {
     /**
      * MCP 工具通道（T-McpAuditTrail / T-MAT-03）：MCP 执行类工具在真实数据源上跑过的只读语句。
      *
-     * <p>当前唯一产出点 = {@code mpsv_explain}（十个 MCP 工具里唯一有执行面的一个）——条目文本恒为
+     * <p>当前唯一产出点 = {@code sqlv_explain}（十个 MCP 工具里唯一有执行面的一个）——条目文本恒为
      * 调用方传入的<b>原始 selectSql</b>，绝不落 {@code EXPLAIN <select>} 包装句（T-MAT-02：包装句首 token
      * 为 {@code EXPLAIN}，会被 {@link LogStatementClassifier} 判 {@code OTHER} → 列表无类型染色）。
      * 因此本枚举值同时充当「该条来自 EXPLAIN 包装执行」的独立标记。

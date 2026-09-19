@@ -73,7 +73,7 @@ class McpDialectDetectorTest {
     }
 }
 
-/** mpsv_render_sql 入参形态校验（纯逻辑层）。 */
+/** sqlv_render_sql 入参形态校验（纯逻辑层）。 */
 class McpRenderInputTest {
 
     @Test

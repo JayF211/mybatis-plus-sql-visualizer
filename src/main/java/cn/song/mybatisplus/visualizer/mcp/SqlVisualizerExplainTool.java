@@ -1,4 +1,4 @@
-// T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/ExplainTool.kt 移植
+// T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerExplainTool.kt 移植
 package cn.song.mybatisplus.visualizer.mcp;
 
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry;
@@ -9,26 +9,26 @@ import com.intellij.mcpserver.annotations.McpToolHints;
 import com.intellij.openapi.project.Project;
 
 /**
- * mpsv_explain 工具（T-McpToolset2 / T-MTS2-00：一期方法体逐行迁入，按工具拆 toolset 类；
+ * sqlv_explain 工具（T-McpToolset2 / T-MTS2-00：一期方法体逐行迁入，按工具拆 toolset 类；
  * resolveExplainTarget/executeExplain/ExplainTarget 随本类走）。
  *
  * 移植注记：原 executeExplain 以 `withContext(Dispatchers.IO)` 把同步 JDBC 挪出协程线程；
  * Java 侧无挂起机制（见 McpToolsetSupport 类头移植注记），执行改在调用线程同步完成——
  * 调用方（平台工具调度协程线程）天然允许阻塞 IO，且原语句本身即同步执行，语义等价。
- * dataSource/dialect 的 Kotlin 默认空串改为调用方必传（同 CrudSqlTool 注记）。
+ * dataSource/dialect 的 Kotlin 默认空串改为调用方必传（同 SqlVisualizerCrudSqlTool 注记）。
  */
-public class ExplainTool extends McpToolsetSupport {
+public class SqlVisualizerExplainTool extends McpToolsetSupport {
 
-    public ExplainTool() {
-        super("mpsv_explain");
+    public SqlVisualizerExplainTool() {
+        super("sqlv_explain");
     }
 
-    @McpTool(name = "mpsv_explain", title = "Explain a SELECT against a configured data source")
+    @McpTool(name = "sqlv_explain", title = "Explain a SELECT against a configured data source")
     @McpDescription(
         description = "Run EXPLAIN for a single read-only SELECT statement against a real data source configured in the IDE "
             + "and return the plan text (MySQL/MariaDB/PostgreSQL/Oracle/SQL Server/H2/DM/KingBase dialect dispatch, "
             + "dialect auto-detected from the data source URL unless overridden). Deterministic plan rendering for "
-            + "a statement you already have — pair with mpsv_render_sql to produce it first. "
+            + "a statement you already have — pair with sqlv_render_sql to produce it first. "
             + "'maxRows' caps how many plan rows are returned (default 200, hard limit 1000; out-of-range "
             + "values are clamped, never rejected). "
             + "Strictly read-only: the statement must be a single plain SELECT (no locking reads, no INTO, no writes); "
@@ -39,8 +39,8 @@ public class ExplainTool extends McpToolsetSupport {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE
     )
-    public String mpsv_explain(String selectSql, String dataSource, String dialect, int maxRows) {
-        return audit("mpsv_explain", McpAuditLogKt.executionArgsSummary(dataSource, dialect, selectSql), () -> {
+    public String sqlv_explain(String selectSql, String dataSource, String dialect, int maxRows) {
+        return audit("sqlv_explain", McpAuditLogKt.executionArgsSummary(dataSource, dialect, selectSql), () -> {
             // 行预算钳制（T-McpRowBudget / T-MRB-03）：越界静默收进 [1..HARD_MAX_ROWS]，不抛错。
             // 生效值随 target 过挂起点（单引用，维持 ExplainTarget 的 K2 防溢出约定）；通道层另有一道兜底。
             ExplainTarget target = resolveExplainTarget(

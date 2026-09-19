@@ -113,7 +113,7 @@ public class McpConfigurable implements Configurable {
 
     /** 复选框文案：工具名 + 简述（双语，键按工具名尾段派生）。 */
     private static String checkBoxText(String toolName) {
-        String stem = toolName.startsWith("mpsv_") ? toolName.substring("mpsv_".length()) : toolName;
+        String stem = toolName.startsWith("sqlv_") ? toolName.substring("sqlv_".length()) : toolName;
         String descKey = "settings.mcp.tool.desc." + stem.replace("_", "");
         return toolName + " — " + MpSqlVisualizerBundle.message(descKey);
     }
