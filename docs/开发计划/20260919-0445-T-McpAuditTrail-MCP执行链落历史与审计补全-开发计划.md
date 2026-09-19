@@ -90,13 +90,45 @@ T-MAT-02（落原始 SQL 口径先行，决定下游）→ T-MAT-01（回调钩�
 
 T-MAT-04 与 01/03/05 写集不相交（`mcp/McpToolsetSupport.kt` / `mcp/McpAuditLog.kt` vs 其余），可并行；T-MAT-03 与 T-MAT-05 同触 `log/` 域但不同文件（`SqlLogParamCodec`/`SqlLogFileReader`/`SqlLogAutoSaver` vs `SqlLogPanel`/`HistorySqlLogPanel`）。
 
-## 八、实施记录（实施后回填）
+## 八、实施记录
 
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
-| T-MAT-01 | （实施后填） | 回调签名与 headless 可测性结论须回填 |
-| T-MAT-02 | （实施后填） | |
-| T-MAT-03 | （实施后填） | pd 短键命名与 `SqlLogAutoSaver` 条件改动须回填 |
-| T-MAT-04 | （实施后填） | `summarize` 接线后的截断实测须回填 |
-| T-MAT-05 | （实施后填） | 日志页是否同步的核实结论须回填 |
-| T-MAT-06 | （实施后填） | 门禁计数与先红后绿实录须回填 |
+| T-MAT-01 | `7119619` | 回调签名 `onExecuted: ((ExecutedOutcome) -> Unit)? = null`——可选参数而非全局钩子/接口：null 时零行为差异（执行本体原样搬进 private `executeQueryInternal`），成功与失败两条路径各回调一次，钩子自身异常 `runCatching` 只记日志（审计不得成为门控）。**headless 可测性结论**：`ExecutedOutcome` 只含 String/Long（不引平台类型），McpDbExecutor 仍零 IDE 服务依赖；落库接线做成**顶层函数** `recordMcpExecution`（与 `mcpHistoryEntry` 同在 McpToolsetSupport.kt 门面类）——平台测试可直调，不必加载抽象基类（其 mcpserver 接口来自可选插件，McpDbExecutor.drainWarnings 同款先例）。取服务用 `project.getService`（Kotlin 类无平台生成的 `getInstance` 静态，首版误用致编译失败，已订正） |
+| T-MAT-02 | `7119619` | 入 `rawSql`/`restoredSql` 的是 `selectSql.trim()`；EXPLAIN 包装句只经 `outcome.executedSql` 暴露且 ExplainTool **显式不消费**（KDoc 写明勿落）。「已 EXPLAIN 包装」的独立标记由 `SqlSource.MCP` 承担（该来源仅 explain 通道产出）。**未新增 dialect 字段**：新增构造参数会改 data class equals（T-LogRowNumber 的 sequenceNumber 教训），且读端回填被并行占用文件阻塞 → 零可观测收益，故不做 |
+| T-MAT-03 | `cecba97` | pd 短键 = **`s`**（值 = 枚举名而非序号：新增常量不使旧文件失效）；`DecodedPayload` 增 `source: SqlSource?`（缺键/未知枚举名 → null，只丢来源标记不丢整条）。`SqlLogAutoSaver` pd 条件追加 **`entry.source == SqlSource.MCP`**——刻意**不**放宽为 `!= UNKNOWN`（否则给既有 MYBATIS/AGENT 条目凭空加 pd 行，读端口径被动扩张）。**读端未接**（SqlLogFileReader 被并行任务占用）：见 §九 |
+| T-MAT-04 | `7119619` | 顶层 `executionArgsSummary`（dataSource/dialect/sql 三段，空白回落 `auto`，换行压平）；`McpAuditLog.clip`/`SUMMARY_LIMIT` 改 internal 以便断言。**截断实测**：长 SQL 样例（三段全量 **562 字符**）经 `clip` 后 **121 字符**（= 120 + 省略号，McpAuditLogTest 钉住；计划 §五 走查 3 的「不超 120」由本函数保证）。其余九个纯静态工具保持字面量默认值 → 审计行逐字节不变（§验收 4）；预期错误路径由「只放错误文本」改为「入参摘要 + `error=<文本>`」（信息不减） |
+| T-MAT-05 | `7e7a3e3` | **日志页是否同步的核实结论：是**——日志页 `LogEntryListCellRenderer`（SqlLogPanel.kt）与历史页 `HistoryCellRenderer`（HistorySqlLogPanel.kt）渲染的是**同一模型** `LogSqlEntry`，故两页都接 `formatMcpFragment`（落点：目标库角标后、来源前，与既有角标同款协议）。历史页元信息行自建、不调 `formatSourceFragment`，故两处各自显式插一行，顺序与协议对齐避免两页不一致 |
+| T-MAT-06 | 本提交 | **门禁读数**：`testShards` **5196/0/0/6**（= 交付基线 5176 + 本任务新增 20 例精确吻合：codec +4、autosaver +2、McpAuditLogTest +6、McpHistoryIngestTest +4、两渲染器各 +2）、`testDatabase` **10/0/0/0**、agent **58/0/0**（首跑 1 例墙钟 flake，见 §九）。定向读数：SqlLogParamCodecTest 14/0/0/0、SqlLogAutoSaverTest 25/0/0/0、McpAuditLogTest 6/0/0/0、McpHistoryIngestTest 4/0/0/0、SqlLogPanelRendererUiTest 33/0/0/0、HistoryCellRendererTest 26/0/0/0。**先红后绿实录**：①用例 3（MCP 无参无占位符仍写 pd 行）在条件未加 `source == MCP` 时必红——该条是 T-MAT-03 配套必改的专属判据；②`summarize` 消费点守卫（源码级）在 ExplainTool 未接线时必红——纯行为断言测不出「没人调用」，故按 T-ConsentTruth 口径补源码级守卫。本轮两条断言均随实现一次落绿（未留红态提交） |
+
+## 九、实施小结：偏离、阻塞与未验证项
+
+**① 阻塞项（须派活方协调，我未动该文件）**
+
+`log/SqlLogFileReader.kt` 被并行任务 T-FatalPassthrough 占用，按派发指令排除。需要改的是**两处各一行**：
+
+- `parseBlock` 新版头部构造 `LogSqlEntry(...)`（约 206-215 行区间）加 `source = decodedExt?.source ?: SqlSource.UNKNOWN`；
+- 同函数旧版头部分支（约 227-234 行区间）同样加一行。
+
+不改这一行的后果：`.sql` 读回后来源恒 `UNKNOWN` → **§验收 1 的「重启后徽标仍在」与 §验收 2 的「round-trip 不退化」无法成立**（写入侧与 pd 载荷侧已就绪，且有用例钉住载荷层 round-trip）。徽标之外，耗时、SQL 正文、成败与错误文本在重启后**都还在**，只有来源标记退化——即本任务的可见损失面仅限「MCP」二字角标。修掉这两行后无需再改任何写入侧代码。
+
+**② 写集偏离（已实施，须派活方确认）**
+
+`mcp/McpDbExecutor.kt` 与 `mcp/ExplainTool.kt` 不在派发写集清单内，但计划 T-MAT-01 明确要求「McpDbExecutor 暴露 `onExecuted` 钩子」+「ExplainTool 侧接线到既有入库路径」——不动这两个文件则本任务无任何交付物（落历史根本不会发生）。二者**不在并行占用排除名单内**，改动形态为：新增一个可选参数 + 一处具名实参 + 执行本体搬进 private 函数（对既有调用点行为零变化）。其余写集内文件（`SqlLogPanel`/`HistorySqlLogPanel`/`SqlLogParamCodec`/`LogSqlModels`/`SqlLogAutoSaver`/`McpToolsetSupport`/`McpAuditLog`）按计划改动；`LogStatementClassifier.kt`、`SqlListTypeColor.kt`、`execute/SqlTypeClassifier.kt`、`history/SqlHistoryEntry.kt` 四个写集文件**未改**——计划 T-MAT-02 选择「落原始 SQL」路线后，染色链无需任何改动（落包装句才需要，而那条路被 §一 硬约束 2 否决），故保持原样是有意为之而非遗漏。
+
+**③ 未做（越界或被禁）**
+
+CHANGELOG `[Unreleased]`、`docs/变更记录.md`、盘点文档、第八轮报告 §8 #38 落地备注——派发指令明确禁改后两者；其余共享文档为多路并行合并冲突热点且不在写集，统一留给派活方在并轨时登记。
+
+**④ 已知边界（设计取舍，非缺陷）**
+
+MCP 条目经 `buffer.addEntry` 落库 → 三条既有门控同样生效：用户点过「停止捕捉」（`paused=true`）期间不落历史、去重窗口内同 SQL 折叠、过滤关键字命中丢弃。三者都是「SQL 列表」的既有语义，本任务不另开口子；每次调用仍有 `[MCP-AUDIT]` 行兜底留痕（真机走查 3 可查）。若派活方认为 MCP 执行必须绕开 `paused`，需要另立任务（改 `SqlLogEntryBuffer` 不在本任务写集）。
+
+**⑤ 未验证（环境受限）**
+
+`mpsv_explain` 的**真实执行**（需 Database 插件 + 已保存密码的数据源 + 真库）本机不可自动化 → §五 真机走查四项全部留人工。本任务测试覆盖的是「执行之后」的落库链（条目构造 + 入既有入库路径）、载荷/徽标/审计面；`onExecuted` 回调在成功/失败两条真实路径上的触发只能由真机走查确认。
+
+**⑥ agent 门禁 flake（与本改动无依赖关系）**
+
+首跑 `:sql-visualizer-agent:test` 报 **58/1/0**，失败用例 = `StackCaptureConvergenceTest.缓存命中路径不再全栈建池_深栈计时防回潮`，报文为墙钟断言「命中应显著快于 miss（hit=436900ns, miss=1091000ns）」（本机同时有 4 路并行会话在跑 gradle，负载抖动）；单类复跑 **8/0/0/0** 转绿。agent 子项目（ASM 字节码增强 fat jar）与本次改动零依赖，判为负载下的时序抖动。
+
