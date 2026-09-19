@@ -4,6 +4,8 @@ import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel
 import cn.song.mybatisplus.visualizer.ui.XmlParamTypeResolver
 import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
 import cn.song.mybatisplus.visualizer.xml.ParamKind
+import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
+import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.util.Computable
 import com.intellij.openapi.vfs.VfsUtil
@@ -80,7 +82,8 @@ class HeavyXmlParamTypeResolverTest : HeavyPlatformTestCase() {
         assertEquals(true, quotes["p"])
     }
 
-    /** X8-1（T-GoldenDefense）：`@Param("map")` Map 参数 → 键 = 参数名（@Param 值）且值为引号。 */
+    /** X8-1（T-GoldenDefense）：`@Param("map")` Map 参数 → 键 = 参数名（@Param 值）且值为引号。
+     *  T-PC2-03 起单参数全显式亦补 `param1`（MyBatis `ParamMap` 位置别名）——金样随之收进 `param1`。 */
     fun testMapParamKeyEqualsParamNameWithQuote() {
         addSourceFile(
             "MapParamMapper.java",
@@ -94,7 +97,7 @@ class HeavyXmlParamTypeResolverTest : HeavyPlatformTestCase() {
             """.trimIndent(),
         )
         val quotes = XmlParamTypeResolver.resolveQuotes(project, "com.example.MapParamMapper", "queryByMap")
-        assertEquals("X8-1: Map 参数键 = 参数名且值为引号", mapOf("map" to true), quotes)
+        assertEquals("X8-1: Map 参数键 = 参数名且值为引号", mapOf("map" to true, "param1" to true), quotes)
     }
 
     /** X8-2（T-GoldenDefense）：同 FQN 双实体共存（多模块同名实体竞品翻车形态）——
@@ -116,7 +119,8 @@ class HeavyXmlParamTypeResolverTest : HeavyPlatformTestCase() {
         )
         val quotes = XmlParamTypeResolver.resolveQuotes(project, "com.example.DupFqnMapMapper", "queryByMap")
         assertEquals("X8-2: map 键存在且值为引号", true, quotes["map"])
-        assertEquals("X8-2: 同名实体不影响 Map 键（无字段混入）", mapOf("map" to true), quotes)
+        // T-PC2-03 起单参数全显式亦补 param1；断言锁「无实体字段混入」（Map 不展开实体）
+        assertEquals("X8-2: 同名实体不影响 Map 键（无字段混入）", mapOf("map" to true, "param1" to true), quotes)
     }
 
     fun testNestedDtoAndNoParamAndPrimitive() {
@@ -248,6 +252,114 @@ class HeavyXmlParamTypeResolverTest : HeavyPlatformTestCase() {
         assertEquals(true, quotes["p.tags"])
         assertEquals(true, quotes["p.status"])
         assertEquals(true, quotes["params"])
+    }
+
+    // ------------------------------------------------------------------
+    // T-PC2-01 / T-PC2-02：BigInteger 补入数值族、UUID 归文本（真实 PSI 解析链）
+    // ------------------------------------------------------------------
+
+    /** 补缺夹具：`java.math.BigInteger`（漏收）与 `java.util.UUID`（全仓无映射）两种来源（顶层参数 + DTO 字段）。 */
+    private val mathMapper = """
+        package com.example;
+
+        import java.math.BigInteger;
+        import java.util.UUID;
+
+        public class MathDTO {
+            private BigInteger serial;
+            private UUID traceId;
+        }
+
+        public interface MathMapper {
+            void byMath(@org.apache.ibatis.annotations.Param("p") MathDTO p,
+                        @org.apache.ibatis.annotations.Param("big") BigInteger big,
+                        @org.apache.ibatis.annotations.Param("uuid") UUID uuid);
+        }
+    """.trimIndent()
+
+    fun testBigIntegerAndUuidMappedBySignature() {
+        addSourceFile("MathMapper.java", mathMapper)
+        val types = XmlParamTypeResolver.resolveTypes(project, "com.example.MathMapper", "byMath")
+        assertEquals("BigInteger 顶层参数应落 NUMBER（漏收修复）", ParamKind.NUMBER, types["big"]?.kind)
+        assertEquals("UUID 顶层参数应落 TEXT", ParamKind.TEXT, types["uuid"]?.kind)
+        assertEquals("DTO 的 BigInteger 字段应落 NUMBER", ParamKind.NUMBER, types["p.serial"]?.kind)
+        assertEquals("DTO 的 UUID 字段应落 TEXT", ParamKind.TEXT, types["p.traceId"]?.kind)
+        // 引号语义：BigInteger 裸渲染（原 UNKNOWN 带引号 → 修正）、UUID 带引号
+        val quotes = XmlParamTypeResolver.resolveQuotes(project, "com.example.MathMapper", "byMath")
+        assertEquals("BigInteger 应裸渲染", false, quotes["big"])
+        assertEquals("UUID 应带引号", true, quotes["uuid"])
+        assertEquals(false, quotes["p.serial"])
+        assertEquals(true, quotes["p.traceId"])
+    }
+
+    // ------------------------------------------------------------------
+    // T-PC2-03：XML 路径 paramN 位置别名（Z-17 全或无门槛）
+    // ------------------------------------------------------------------
+
+    /** 门槛夹具：全显式 / 含未命名 / 全未命名 / 单参数全显式 四态。 */
+    private val aliasMapper = """
+        package com.example;
+
+        public interface AliasMapper {
+            void allNamed(@org.apache.ibatis.annotations.Param("a") long a,
+                          @org.apache.ibatis.annotations.Param("b") String b);
+            void mixed(@org.apache.ibatis.annotations.Param("a") long a, String b);
+            void unnamed(long a, String b);
+            void singleNamed(@org.apache.ibatis.annotations.Param("only") String only);
+        }
+    """.trimIndent()
+
+    fun testParamNAliasOnlyWhenAllParamsAnnotated() {
+        addSourceFile("AliasMapper.java", aliasMapper)
+        // 全显式 → 补 param1..N（类型跟随位置参数）
+        val all = XmlParamTypeResolver.resolveTypes(project, "com.example.AliasMapper", "allNamed")
+        assertEquals(ParamKind.NUMBER, all["param1"]?.kind)
+        assertEquals(ParamKind.TEXT, all["param2"]?.kind)
+        assertEquals("原语参数经别名继承非空标记", false, all["param1"]?.nullable)
+        assertEquals(true, all["param2"]?.nullable)
+        // 单参数全显式：MyBatis ParamMap 同样补 param1
+        val single = XmlParamTypeResolver.resolveTypes(project, "com.example.AliasMapper", "singleNamed")
+        assertEquals(ParamKind.TEXT, single["param1"]?.kind)
+        // 含未命名参数 → 整体不推导（宁缺勿错），命名键照常保留
+        val mixed = XmlParamTypeResolver.resolveTypes(project, "com.example.AliasMapper", "mixed")
+        assertNull("含未命名参数不推导 paramN", mixed["param1"])
+        assertNull(mixed["param2"])
+        assertTrue("命名键仍在", mixed.containsKey("a") && mixed.containsKey("b"))
+        // 全未命名 → 不推导
+        val unnamed = XmlParamTypeResolver.resolveTypes(project, "com.example.AliasMapper", "unnamed")
+        assertNull(unnamed["param1"])
+        assertNull(unnamed["param2"])
+        assertTrue(unnamed.containsKey("a") && unnamed.containsKey("b"))
+    }
+
+    /** T-PC2-03 别名与类型类别联动：`#{param1.字段}` 经前缀兜底落 OBJECT（DTO 参数的位置别名）。 */
+    fun testParamNAliasForDtoParamResolvesObject() {
+        addSourceFile("AliasDtoMapper.java", """
+            package com.example;
+
+            public class AliasDto {
+                private Integer id;
+            }
+
+            public interface AliasDtoMapper {
+                void byDto(@org.apache.ibatis.annotations.Param("p") AliasDto p,
+                           @org.apache.ibatis.annotations.Param("k") String k);
+            }
+        """.trimIndent())
+        val model = XmlPreviewModel.from(
+            XmlMapperParser().parse(
+                """
+                <mapper namespace="com.example.AliasDtoMapper">
+                  <select id="byDto">SELECT * FROM t WHERE id = #{param1.id} AND k = #{param2}</select>
+                </mapper>
+                """.trimIndent(),
+            ).statements.single(),
+            emptyList(),
+            paramTypes = XmlParamTypeResolver.resolveTypes(project, "com.example.AliasDtoMapper", "byDto"),
+        )
+        assertEquals(ParamKind.OBJECT, model.kindFor("param1"))
+        assertEquals("param1.字段 前缀兜底命中别名条目", ParamKind.OBJECT, model.kindFor("param1.id"))
+        assertEquals(ParamKind.TEXT, model.kindFor("param2"))
     }
 
     fun testEndToEndPanelBackfillByParamType() {

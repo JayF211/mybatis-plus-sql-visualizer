@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.xml.ParamKind
 import cn.song.mybatisplus.visualizer.xml.ParamTypeInfo
 import com.intellij.openapi.project.Project
 import com.intellij.psi.JavaPsiFacade
+import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassType
 import com.intellij.psi.PsiLiteralExpression
@@ -22,11 +23,15 @@ import com.intellij.psi.search.GlobalSearchScope
  *  - **DTO/实体**（非 java.* 非枚举）：逐字段解析类型（含父类字段、嵌套 DTO 递归），
  *    键 = `p.字段名`，值 = 字段类型类别；
  *  - **Map / 基本类型 / 其他简单类型**：键 = 参数名，值 = 类型类别（Map → OBJECT，数值 → NUMBER）；
- *  - 注解类不可解析（测试沙盒）时按短名兜底；无 @Param 用参数名。
+ *  - 注解类不可解析（测试沙盒）时按短名兜底；无 @Param 用参数名；
+ *  - **多参数位置别名**（T-PC2-03）：全部参数都有显式 `@Param` 时补 `param1..paramN`
+ *    （MyBatis `ParamMap` 位置别名，全或无门槛见 [resolveTypes]）。
  *
  * 类型映射规则（T-PT-01，见 [kindOf]）：String/CharSequence→TEXT、数值族→NUMBER、
  * `java.time.*` 与 `java.util.Date`→TEMPORAL、List/Collection/Set 族与数组→COLLECTION、
  * DTO/Map→OBJECT；映射不到一律 UNKNOWN（行为=升级前，宁缺勿错）。
+ * T-PC2-01/02 补两处漏收：`java.math.BigInteger`→NUMBER（数值族漏收）、
+ * `java.util.UUID`→TEXT（带引号字符串形态比较，与 TEXT 引号语义一致）。
  *
  * 不可解析（LightPlatform 跨文件 resolve 不可用 / namespace 缺失 / 方法缺失）→ 空映射，
  * 面板对未命中参数兜底（T-M29.4 引号行为 + T-PT-02 无类型信息不提示）。
@@ -44,6 +49,13 @@ object XmlParamTypeResolver {
     /** 字符序列简单名（TEXT）。 */
     private val TEXT_SIMPLE_NAMES = setOf("String", "CharSequence")
 
+    /**
+     * 文本档类型全限定名（T-PC2-02）：`java.util.UUID` 在 SQL 里以带引号字符串形态比较
+     * （`id = '550e8400-…'`），引号语义与 [ParamKind.TEXT] 一致——故归 TEXT，**不扩枚举**
+     * （新类别会给 `XmlPreviewModel` 等既有 `when` 分支带连带成本）。
+     */
+    private const val UUID_FQN = "java.util.UUID"
+
     /** 集合简单名（COLLECTION）：JDK 集合族——List/Collection 之外含 Set/Queue 等同族形态。 */
     private val COLLECTION_SIMPLE_NAMES = setOf(
         "List", "ArrayList", "LinkedList", "Collection", "Set", "HashSet", "LinkedHashSet",
@@ -56,14 +68,26 @@ object XmlParamTypeResolver {
         "ConcurrentHashMap", "Hashtable", "Properties",
     )
 
-    /** 解析语句参数类型类别映射。@param project 不可用（null）时返回空映射。 */
+    /**
+     * 解析语句参数类型类别映射。@param project 不可用（null）时返回空映射。
+     *
+     * T-PC2-03（Z-17 全或无门槛）：**仅当全部参数都有显式 `@Param`（值非空白）时**才补
+     * `param1..paramN`（MyBatis `ParamMap` 的位置别名，类型跟随对应位置参数）。一旦存在未命名参数
+     * 即整体不推导——MyBatis 实际会用位置名，我方保守取「宁缺勿错」：宁可不给 `paramN` 类型
+     * （面板按 UNKNOWN 兜底，行为=升级前），也不给可能错位的类型。
+     * 规则来源标注：`mybatis-3.5.19-paramN-全或无`。
+     *
+     * 与注解路径的差异（登记，不擅改）：[AnnotationSqlPreviewService.paramTypes] 现状为
+     * 「多参数或含 @Param 就补 paramN」，比本门槛宽；两条路径语义分叉已在计划 §八 留痕。
+     */
     fun resolveTypes(project: Project?, namespace: String?, statementId: String): Map<String, ParamTypeInfo> {
         if (project == null || namespace.isNullOrEmpty()) return emptyMap()
         val mapperClass = JavaPsiFacade.getInstance(project)
             .findClass(namespace, GlobalSearchScope.allScope(project)) ?: return emptyMap()
         val method = mapperClass.findMethodsByName(statementId, false).firstOrNull() ?: return emptyMap()
         val result = mutableMapOf<String, ParamTypeInfo>()
-        for (param in method.parameterList.parameters) {
+        val parameters = method.parameterList.parameters
+        for (param in parameters) {
             val paramName = paramNameOf(param) ?: continue
             val type = param.type
             val psiClass = (type as? PsiClassType)?.resolve()
@@ -74,6 +98,12 @@ object XmlParamTypeResolver {
                 }
                 isDtoLike(psiClass) -> collectFieldTypes(paramName, psiClass, result)
                 else -> result[paramName] = typeInfoOf(type, psiClass)
+            }
+        }
+        // T-PC2-03：全或无门槛（见 KDoc）——全部参数都有显式 @Param 才补位置别名
+        if (parameters.isNotEmpty() && parameters.all { explicitParamNameOf(it) != null }) {
+            parameters.forEachIndexed { index, param ->
+                result["param${index + 1}"] = typeInfoOf(param.type)
             }
         }
         return result
@@ -122,13 +152,15 @@ object XmlParamTypeResolver {
      *
      * 泛型先剥壳（`java.util.List<java.lang.String>` → `java.util.List`）；
      * NUMBER 判定复用 [ParamQuote.decide]（升级前数值集单一来源，杜绝两份数值名单漂移）；
-     * 数组→COLLECTION，但 `byte[]`/`Byte[]` 按 BLOB 语义落 UNKNOWN（T-PT-01 收窄，见实施记录）。
+     * 数组→COLLECTION，但 `byte[]`/`Byte[]` 按 BLOB 语义落 UNKNOWN（T-PT-01 收窄，见实施记录）；
+     * `java.util.UUID` → TEXT（T-PC2-02，见 [UUID_FQN]）。
      */
     internal fun kindOfTypeText(typeText: String?): ParamKind? {
         if (typeText.isNullOrBlank()) return null
         val bare = typeText.substringBefore('<').trim()
         val simple = bare.substringAfterLast('.')
         return when {
+            bare == UUID_FQN || simple == "UUID" -> ParamKind.TEXT
             bare.startsWith("java.time.") || simple in TEMPORAL_SIMPLE_NAMES -> ParamKind.TEMPORAL
             ParamQuote.decide(bare) == false -> ParamKind.NUMBER
             simple in TEXT_SIMPLE_NAMES -> ParamKind.TEXT
@@ -149,16 +181,24 @@ object XmlParamTypeResolver {
         return !qn.startsWith("java.") && !qn.startsWith("javax.") && !psiClass.isEnum
     }
 
-    /** @Param 值（全限定名优先、短名兜底——注解类不可解析的沙盒环境）；无注解/取不到 → 参数名。 */
-    private fun paramNameOf(param: PsiParameter): String? {
+    /** @Param 注解（全限定名优先、短名兜底——注解类不可解析的沙盒环境）。 */
+    private fun paramAnnotationOf(param: PsiParameter): PsiAnnotation? {
         val annotations = param.modifierList?.annotations.orEmpty()
-        val annotation = annotations.firstOrNull { it.qualifiedName == PARAM_ANNOTATION }
+        return annotations.firstOrNull { it.qualifiedName == PARAM_ANNOTATION }
             ?: annotations.firstOrNull { it.nameReferenceElement?.referenceName == "Param" }
-        if (annotation != null) {
-            val memberValue = annotation.findAttributeValue("value")
-            val value = (memberValue as? PsiLiteralExpression)?.value as? String
-            if (!value.isNullOrBlank()) return value
-        }
-        return param.name
     }
+
+    /**
+     * 显式 `@Param` 值（无注解 / 值取不到 / 值空白 → null）。
+     * T-PC2-03 的「全或无门槛」以此判定「显式命名」——值空白视为未命名（宁缺勿错，不推导 paramN）。
+     */
+    private fun explicitParamNameOf(param: PsiParameter): String? {
+        val annotation = paramAnnotationOf(param) ?: return null
+        val memberValue = annotation.findAttributeValue("value")
+        val value = (memberValue as? PsiLiteralExpression)?.value as? String
+        return value?.takeIf { it.isNotBlank() }
+    }
+
+    /** @Param 值（全限定名优先、短名兜底——注解类不可解析的沙盒环境）；无注解/取不到 → 参数名。 */
+    private fun paramNameOf(param: PsiParameter): String? = explicitParamNameOf(param) ?: param.name
 }
