@@ -10,17 +10,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * mpsv_explain 工具（T-McpToolset2 / T-MTS2-00：一期方法体逐行迁入，按工具拆 toolset 类；
+ * sqlv_explain 工具（T-McpToolset2 / T-MTS2-00：一期方法体逐行迁入，按工具拆 toolset 类；
  * resolveExplainTarget/executeExplain/ExplainTarget 随本类走）。
  */
-class ExplainTool : McpToolsetSupport("mpsv_explain") {
+class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
 
-    @McpTool(name = "mpsv_explain", title = "Explain a SELECT against a configured data source")
+    @McpTool(name = "sqlv_explain", title = "Explain a SELECT against a configured data source")
     @McpDescription(
         "Run EXPLAIN for a single read-only SELECT statement against a real data source configured in the IDE " +
             "and return the plan text (MySQL/MariaDB/PostgreSQL/Oracle/SQL Server/H2/DM/KingBase dialect dispatch, " +
             "dialect auto-detected from the data source URL unless overridden). Deterministic plan rendering for " +
-            "a statement you already have — pair with mpsv_render_sql to produce it first. " +
+            "a statement you already have — pair with sqlv_render_sql to produce it first. " +
             "'maxRows' caps how many plan rows are returned (default 200, hard limit 1000; out-of-range " +
             "values are clamped, never rejected). " +
             "Strictly read-only: the statement must be a single plain SELECT (no locking reads, no INTO, no writes); " +
@@ -31,12 +31,12 @@ class ExplainTool : McpToolsetSupport("mpsv_explain") {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE,
     )
-    suspend fun mpsv_explain(
+    suspend fun sqlv_explain(
         selectSql: String,
         dataSource: String = "",
         dialect: String = "",
         maxRows: Int = McpExplainFormatter.DEFAULT_MAX_ROWS,
-    ): String = audit("mpsv_explain", executionArgsSummary(dataSource, dialect, selectSql)) {
+    ): String = audit("sqlv_explain", executionArgsSummary(dataSource, dialect, selectSql)) {
         // 行预算钳制（T-McpRowBudget / T-MRB-03）：越界静默收进 [1..HARD_MAX_ROWS]，不抛错。
         // 生效值随 target 过挂起点（单引用，维持 ExplainTarget 的 K2 防溢出约定）；通道层另有一道兜底。
         val target = resolveExplainTarget(

@@ -114,7 +114,7 @@ class McpNoticeChannelTest {
         )
         // 默认构造（无 notices 字段形态）与显式空清单构造逐字节一致
         assertEquals(McpExplainFormatter.format(raw), McpExplainFormatter.format(raw.copy(notices = emptyList())))
-        // 工具拼接形态（ExplainTool：format + 方言行 + notices 节）：空 notices 零追加
+        // 工具拼接形态（SqlVisualizerExplainTool：format + 方言行 + notices 节）：空 notices 零追加
         val legacyOutput = McpExplainFormatter.format(raw) + "\n\ndialect: PostgreSQL"
         val currentOutput = legacyOutput + McpExplainFormatter.formatNotices(raw.notices)
         assertEquals(legacyOutput, currentOutput)

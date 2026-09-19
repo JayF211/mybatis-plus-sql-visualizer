@@ -28,7 +28,7 @@ import com.intellij.psi.xml.XmlFile
 import com.intellij.psi.xml.XmlTag
 
 /**
- * T-McpToolset mpsv_render_sql 定位与渲染适配层。
+ * T-McpToolset sqlv_render_sql 定位与渲染适配层。
  *
  * 复刻 [cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction] 光标分支的服务层等价物：
  * 「文件 + 行号」→ PSI 锚点 → 13 类触发面定位链（Wrapper 链 / MyBatis 注解 / mapper XML /

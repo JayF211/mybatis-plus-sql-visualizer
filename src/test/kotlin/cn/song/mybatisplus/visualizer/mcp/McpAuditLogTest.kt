@@ -21,10 +21,10 @@ import java.io.File
  */
 class McpAuditLogTest {
 
-    /** mpsv_explain 长 SQL（摘要 33 + SQL 段远超 120，改前错误文本被整段挤掉的场景）。 */
+    /** sqlv_explain 长 SQL（摘要 33 + SQL 段远超 120，改前错误文本被整段挤掉的场景）。 */
     private val LONG_SQL = "SELECT * FROM orders WHERE " + "a = 1 AND ".repeat(30)
 
-    /** ExplainTool 失败路径的真实错误文本形态（`[CODE] message`，92 字符）。 */
+    /** SqlVisualizerExplainTool 失败路径的真实错误文本形态（`[CODE] message`，92 字符）。 */
     private val EXPLAIN_ERROR =
         "[DATASOURCE_UNREACHABLE] EXPLAIN failed on 'MySQL' data source: Table 'orders' doesn't exist"
 
@@ -78,12 +78,12 @@ class McpAuditLogTest {
     // ------------------------------------------------------------------
     // T-McpAuditTrail T-MAT-04 回退修复：错误路径的入参段
     // 改前 `McpAuditLog.clip("<摘要> error=<文本>")` 让入参摘要先占满 120 字符预算——
-    // mpsv_explain 的 sqlLen >= 113 时错误文本整段消失（长 SQL 恰是最需要错误文本的场景）。
+    // sqlv_explain 的 sqlLen >= 113 时错误文本整段消失（长 SQL 恰是最需要错误文本的场景）。
     // 修法=两段分预算（错误文本优先，摘要让位，总长仍 120 封顶），见 errorArgsSummary。
     // ------------------------------------------------------------------
 
     @Test
-    fun `mpsv_explain长SQL的错误路径_错误文本完整且总长不超上限`() {
+    fun `sqlv_explain长SQL的错误路径_错误文本完整且总长不超上限`() {
         val summary = executionArgsSummary("demo", "MySQL", LONG_SQL)
         assertTrue("前置：SQL 摘要已超上限（改前即 error 段被挤掉的场景）", summary.length > McpAuditLog.SUMMARY_LIMIT)
         val payload = errorArgsSummary(summary, EXPLAIN_ERROR)
@@ -146,10 +146,10 @@ class McpAuditLogTest {
             "McpAuditLog.summarize 曾是全仓零调用死代码（T-MAT-04）——须保留至少一个生产消费点，实际: $summarizeConsumers",
             summarizeConsumers.isNotEmpty(),
         )
-        val explainTool = main.resolve("cn/song/mybatisplus/visualizer/mcp/ExplainTool.kt")
-        assertTrue("ExplainTool 文件应存在: $explainTool", explainTool.isFile)
+        val explainTool = main.resolve("cn/song/mybatisplus/visualizer/mcp/SqlVisualizerExplainTool.kt")
+        assertTrue("SqlVisualizerExplainTool 文件应存在: $explainTool", explainTool.isFile)
         assertTrue(
-            "mpsv_explain 的审计行须带真实入参摘要（改造前是字面量 \"ok\"）——ExplainTool 未接线",
+            "sqlv_explain 的审计行须带真实入参摘要（改造前是字面量 \"ok\"）——SqlVisualizerExplainTool 未接线",
             explainTool.readText().contains("executionArgsSummary("),
         )
     }

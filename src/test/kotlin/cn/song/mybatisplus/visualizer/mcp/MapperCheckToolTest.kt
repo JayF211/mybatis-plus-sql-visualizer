@@ -5,14 +5,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * mpsv_mapper_check 工具测试（T-McpToolset2 / T-MTS2-03）：契约层（语句清单/#{} 参数数/
+ * sqlv_mapper_check 工具测试（T-McpToolset2 / T-MTS2-03）：契约层（语句清单/#{} 参数数/
  * ${} 直替数）+ 渲染层 simulate（空参数语境下无 WHERE 的 UPDATE 判 DANGEROUS——
  * 「校验渲染产物」的位差落点）。XmlMapperParser/render 链细节由 xml 包测试覆盖。
  */
 class MapperCheckToolTest : com.intellij.testFramework.fixtures.BasePlatformTestCase() {
 
     private fun check(snippet: String, simulate: Boolean = false) =
-        MapperCheckTool().mapperCheck(snippet, simulate)
+        SqlVisualizerMapperCheckTool().mapperCheck(snippet, simulate)
 
     override fun tearDown() {
         // 应用级设置跨用例存活——恢复默认
@@ -55,7 +55,7 @@ class MapperCheckToolTest : com.intellij.testFramework.fixtures.BasePlatformTest
 
     @Test
     fun test空文本_预期错误() {
-        val error = runCatching { MapperCheckTool().mapperCheck("", false) }.exceptionOrNull()
+        val error = runCatching { SqlVisualizerMapperCheckTool().mapperCheck("", false) }.exceptionOrNull()
         assertTrue(error is com.intellij.mcpserver.McpExpectedError)
     }
 }

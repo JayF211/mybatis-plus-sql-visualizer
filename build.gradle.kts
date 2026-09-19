@@ -46,10 +46,14 @@ if (gifRecord) {
     }
 }
 
-// T-McpToolset：MCP Server 插件（com.intellij.mcpServer）编译期 API 桩源集。
-// 基线平台 243 不含 mcpServer 插件，而本机 262 内置 mcpserver.jar 类文件是 major 69（Java 25），
-// JDK 17 编译读不了（javac 17/21 报「错误的版本 69.0」，T-GifRecordSwitch 注释同源实证）——
-// 故用桩源码提供与真实 jar 完全一致的编译期签名（签名逐条 javap 自 262 jar，见桩文件头注释）。
+// T-McpToolset / T-AcpMcpTransport：平台可选插件编译期 API 桩源集。
+// 基线平台 243 不含 mcpServer 插件、也不含 AI Assistant（com.intellij.ml.llm），而本机 262 的
+// mcpserver.jar 与 ml-llm 模块 jar 类文件都是 major 69（Java 25），JDK 17 编译读不了
+// （javac 17/21/24 报「错误的版本 69.0」，T-GifRecordSwitch 注释同源实证）——故用桩源码提供与
+// 真实 jar 完全一致的编译期签名（签名逐条反编译自 262 jar，见各桩文件头注释）。
+// 源集名沿用 mcpStub 未改：testShards 的桩挂载在 buildSrc/mpv-testing.gradle.kts 内按此名引用
+// （T-McpToolset2 接线），改名会牵动 convention 插件；本任务只**扩内容**（新增
+// src/mcpStub/kotlin/com/intellij/ml/llm/... 三个桩类型）而不动接线，故零 buildSrc 改动。
 // 接线方式（防 task 依赖环）：
 //  - 主编译任务 compileKotlin.libraries 挂桩产物目录（task 依赖：compileKotlin → compileKotlinMcpStub）；
 //  - 桩源集编译类路径复用 main 的 compileClasspath（平台 jar/stdlib/JSqlParser 等，不含桩产物，

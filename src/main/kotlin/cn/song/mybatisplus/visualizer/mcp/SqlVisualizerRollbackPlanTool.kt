@@ -8,18 +8,18 @@ import com.intellij.mcpserver.annotations.McpToolHintValue
 import com.intellij.mcpserver.annotations.McpToolHints
 
 /**
- * mpsv_rollback_plan 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：为 INSERT / UPDATE / DELETE
+ * sqlv_rollback_plan 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：为 INSERT / UPDATE / DELETE
  * 生成回滚预案（评级 + 可执行回滚语句 + 警示 + 自查模板）。
  *
  * 复用 T-RollbackSql 的 RollbackSqlGenerator（零 PSI 零 IDE，诚实拒绝不可逆推类型——
  * UNABLE 时 statements 恒空给人工恢复指引）。**只产出预案，绝不执行**——执行回滚是用户
  * 在 IDE 预览面板的显式动作，agent 面不提供执行通道。
  * 警示文案经 [MpSqlVisualizerBundle.messageEn]（bundle base 即英文，零新键）。
- * 逻辑分层同 [CheckSqlTool]：[rollbackPlan] 纯函数可测，挂起方法只做 audit 包装。
+ * 逻辑分层同 [SqlVisualizerCheckSqlTool]：[rollbackPlan] 纯函数可测，挂起方法只做 audit 包装。
  */
-class RollbackPlanTool : McpToolsetSupport("mpsv_rollback_plan") {
+class SqlVisualizerRollbackPlanTool : McpToolsetSupport("sqlv_rollback_plan") {
 
-    @McpTool(name = "mpsv_rollback_plan", title = "Generate a rollback plan for INSERT/UPDATE/DELETE")
+    @McpTool(name = "sqlv_rollback_plan", title = "Generate a rollback plan for INSERT/UPDATE/DELETE")
     @McpDescription(
         "Generate a rollback plan for INSERT / UPDATE / DELETE statements WITHOUT executing anything: " +
             "a completeness rating (COMPLETE = primary-key located, PARTIAL = executable with risk " +
@@ -34,10 +34,10 @@ class RollbackPlanTool : McpToolsetSupport("mpsv_rollback_plan") {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE,
     )
-    suspend fun mpsv_rollback_plan(
+    suspend fun sqlv_rollback_plan(
         sql: String,
         primaryKeyColumns: String = "",
-    ): String = audit("mpsv_rollback_plan") { rollbackPlan(sql, primaryKeyColumns) }
+    ): String = audit("sqlv_rollback_plan") { rollbackPlan(sql, primaryKeyColumns) }
 
     /** 纯函数核心（零 IDE 依赖）。 */
     internal fun rollbackPlan(sql: String, primaryKeyColumns: String): String {

@@ -6,12 +6,12 @@ import com.intellij.mcpserver.annotations.McpToolHintValue
 import com.intellij.mcpserver.annotations.McpToolHints
 
 /**
- * mpsv_render_sql 工具（T-McpToolset2 / T-MTS2-00：一期 SqlVisualizerToolset 方法体逐行迁入，
+ * sqlv_render_sql 工具（T-McpToolset2 / T-MTS2-00：一期 SqlVisualizerToolset 方法体逐行迁入，
  * 按工具拆 toolset 类——平台 per-tool 门控只有 toolset 粒度 isEnabled）。
  */
-class RenderSqlTool : McpToolsetSupport("mpsv_render_sql") {
+class SqlVisualizerRenderSqlTool : McpToolsetSupport("sqlv_render_sql") {
 
-    @McpTool(name = "mpsv_render_sql", title = "Render source code into executable SQL")
+    @McpTool(name = "sqlv_render_sql", title = "Render source code into executable SQL")
     @McpDescription(
         "Render the exact executable SQL behind MyBatis-Plus Wrapper chains, mapper XML statements, " +
             "MyBatis annotation SQL (@Select etc.), JPA @Query/derived queries/CriteriaQuery, HQL and " +
@@ -19,7 +19,7 @@ class RenderSqlTool : McpToolsetSupport("mpsv_render_sql") {
             "Pass (filePath, line) of the source location (line is 1-based; omit for the first statement), " +
             "or pass xmlSnippet + sourceType='xml_mapper' for a mapper XML text. One statement per call: " +
             "when several candidates match the location, the first is rendered and the output notes it; " +
-            "for multi-statement log text use mpsv_render_logs. This is a deterministic " +
+            "for multi-statement log text use sqlv_render_logs. This is a deterministic " +
             "renderer: it returns the executable SQL itself, not a validation verdict. " +
             "Read-only: never executes SQL.",
     )
@@ -28,12 +28,12 @@ class RenderSqlTool : McpToolsetSupport("mpsv_render_sql") {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE,
     )
-    suspend fun mpsv_render_sql(
+    suspend fun sqlv_render_sql(
         filePath: String = "",
         line: Int = 0,
         xmlSnippet: String = "",
         sourceType: String = "",
-    ): String = audit("mpsv_render_sql") {
+    ): String = audit("sqlv_render_sql") {
         val project = requireProject()
         val (parsed, error) = McpRenderInput.parse(filePath, line.takeIf { it > 0 }, xmlSnippet, sourceType)
         if (parsed == null) throwExpected(error!!)

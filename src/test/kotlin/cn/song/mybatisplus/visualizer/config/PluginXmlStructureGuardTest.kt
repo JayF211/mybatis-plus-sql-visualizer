@@ -31,7 +31,7 @@ class PluginXmlStructureGuardTest {
 
     private val xmlNames = listOf(
         "plugin.xml", "kotlin-optional.xml", "database-optional.xml", "diagram-optional.xml",
-        "mcp-optional.xml",
+        "mcp-optional.xml", "acp-transport-optional.xml",
     )
 
     private fun strippedXmls(): List<Pair<String, String>> = xmlNames.map { name ->
@@ -205,9 +205,9 @@ class PluginXmlStructureGuardTest {
         // T-McpToolset2 / T-MTS2-00：一工具一 toolset 类（平台 per-tool 门控只有 toolset 粒度
         // isEnabled）——十工具逐类断言，新工具漏注册即红
         val expectedToolsets = listOf(
-            "RenderSqlTool", "SchemaContextTool", "ExplainTool",
-            "RenderLogsTool", "CheckSqlTool", "RollbackPlanTool", "PerfAdviceTool",
-            "CrudSqlTool", "ReverseSqlTool", "MapperCheckTool",
+            "SqlVisualizerRenderSqlTool", "SqlVisualizerSchemaContextTool", "SqlVisualizerExplainTool",
+            "SqlVisualizerRenderLogsTool", "SqlVisualizerCheckSqlTool", "SqlVisualizerRollbackPlanTool", "SqlVisualizerPerfAdviceTool",
+            "SqlVisualizerCrudSqlTool", "SqlVisualizerReverseSqlTool", "SqlVisualizerMapperCheckTool",
         )
         val missing = expectedToolsets.filter { !mcpXml.contains("cn.song.mybatisplus.visualizer.mcp.$it") }
         assertHolds(
@@ -224,6 +224,42 @@ class PluginXmlStructureGuardTest {
         assertHolds(
             "plugin.xml 主文件出现 mcpToolset/mcpServer EP 注册（须收敛进 mcp-optional.xml）",
             !pluginXml.contains("mcpToolset"),
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // T-AcpMcpTransport：AI Assistant（com.intellij.ml.llm）可选依赖结构守卫
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `acp可选依赖声明与传输provider注册成对存在`() {
+        // 可选依赖铁律：声明与注册必须成对——只声明不注册=provider 不上线（绕行失效且无任何提示），
+        // 只注册不声明=未装 AI Assistant 的环境解析该文件即失败（缺类/未知 EP）
+        val pluginXml = strippedXmls().first { it.first == "plugin.xml" }.second
+        val acpXml = strippedXmls().first { it.first == "acp-transport-optional.xml" }.second
+        assertHolds(
+            "plugin.xml 缺 com.intellij.ml.llm 可选依赖声明（ACP 传输绕行失效）",
+            pluginXml.contains(
+                """<depends optional="true" config-file="acp-transport-optional.xml">com.intellij.ml.llm</depends>""",
+            ),
+        )
+        assertHolds(
+            "acp-transport-optional.xml 缺 ideaMcpTransportProvider 注册（传输不生效）",
+            acpXml.contains("ml.llm.agents.acp.ideaMcpTransportProvider"),
+        )
+        assertHolds(
+            "acp-transport-optional.xml 缺 provider 实现类引用",
+            acpXml.contains("cn.song.mybatisplus.visualizer.acp.AcpIdeaMcpTransportProviderImpl"),
+        )
+    }
+
+    @Test
+    fun `主描述文件不得直接引用ml-llm类型`() {
+        // 与 mcpserver 同款铁律：主文件不得引用可选插件类型（插件 id 的 <depends> 声明不在此列）
+        val pluginXml = strippedXmls().first { it.first == "plugin.xml" }.second
+        assertHolds(
+            "plugin.xml 主文件出现 ml-llm 类包引用（须收敛进 acp-transport-optional.xml）",
+            !pluginXml.contains("com.intellij.ml.llm.agents.acp"),
         )
     }
 }
