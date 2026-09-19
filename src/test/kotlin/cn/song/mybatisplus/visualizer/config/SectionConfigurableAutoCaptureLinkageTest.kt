@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.config
 
+import cn.song.mybatisplus.visualizer.log.SqlLogManager
+import cn.song.mybatisplus.visualizer.testutil.SqlLogManagerProjectState
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertFalse
@@ -14,6 +16,21 @@ import javax.swing.JCheckBox
  *  - suppressed 标志的清零时机（仅关→开时清零，其他情况保持）
  */
 class SectionConfigurableAutoCaptureLinkageTest : BasePlatformTestCase() {
+
+    /** T-TestIsolation：本类经 `apply()` → `onAutoStartSettingEnabled()` → `startCapture()`
+     *  改的是**项目服务级**共享 SqlLogManager（light 项目片内跨类复用）——捕获态 / 暂停态 /
+     *  桥轮询都会被改动，存初值供 tearDown 复位。 */
+    private lateinit var serviceState: SqlLogManagerProjectState.Snapshot
+
+    override fun setUp() {
+        super.setUp()
+        serviceState = SqlLogManagerProjectState.capture(project.getService(SqlLogManager::class.java))
+    }
+
+    override fun tearDown() {
+        SqlLogManagerProjectState.restore(project.getService(SqlLogManager::class.java), serviceState)
+        super.tearDown()
+    }
 
     /** 承载 SQL 日志分区的真实子页（与用户勾选「项目启动时自动开始监听」同一路径）。 */
     private fun newConfigurable(): SectionConfigurable = SqlLogConfigurable()

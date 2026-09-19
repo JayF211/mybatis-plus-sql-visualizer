@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.mcp
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
 import cn.song.mybatisplus.visualizer.log.SqlSource
 import cn.song.mybatisplus.visualizer.log.StatementType
+import cn.song.mybatisplus.visualizer.testutil.SqlLogManagerProjectState
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -22,6 +23,20 @@ import org.junit.Assert.assertTrue
  *  - T-MAT-01：落库走既有 [SqlLogManager] 入库路径（面板可见 + 捕获序号分配）。
  */
 class McpHistoryIngestTest : BasePlatformTestCase() {
+
+    /** T-TestIsolation：本类经 [recordMcpExecution] 往**项目服务级**共享 buffer 入队条目
+     *  （light 项目片内跨类复用同一 SqlLogManager 实例）——存初值供 tearDown 清回。 */
+    private lateinit var serviceState: SqlLogManagerProjectState.Snapshot
+
+    override fun setUp() {
+        super.setUp()
+        serviceState = SqlLogManagerProjectState.capture(project.getService(SqlLogManager::class.java))
+    }
+
+    override fun tearDown() {
+        SqlLogManagerProjectState.restore(project.getService(SqlLogManager::class.java), serviceState)
+        super.tearDown()
+    }
 
     fun testMCP条目_落原始SQL不落EXPLAIN包装句() {
         val entry = mcpHistoryEntry(

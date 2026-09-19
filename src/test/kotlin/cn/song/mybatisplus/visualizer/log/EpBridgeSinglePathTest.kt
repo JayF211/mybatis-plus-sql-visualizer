@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.testutil.SqlLogManagerProjectState
 import com.intellij.execution.filters.Filter
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
@@ -28,9 +29,13 @@ class EpBridgeSinglePathTest : BasePlatformTestCase() {
 
     private lateinit var manager: SqlLogManager
 
+    /** T-TestIsolation：本类改的是**项目服务级**共享实例（light 项目片内跨类复用）——存初值供 tearDown 复位。 */
+    private lateinit var serviceState: SqlLogManagerProjectState.Snapshot
+
     override fun setUp() {
         super.setUp()
         manager = project.getService(SqlLogManager::class.java)
+        serviceState = SqlLogManagerProjectState.capture(manager)
         manager.entries.dedupeEnabled = false
         manager.entries.clear()
         SqlCaptureGate.epActive = false
@@ -41,6 +46,8 @@ class EpBridgeSinglePathTest : BasePlatformTestCase() {
         SqlCaptureGate.epActive = false
         manager.setCapturingForTest(false)
         manager.entries.clear()
+        // 原样复位项目服务级状态——否则同片后续测试类看到的是本类改造过的共享实例（T-TestIsolation）
+        SqlLogManagerProjectState.restore(manager, serviceState)
         super.tearDown()
     }
 

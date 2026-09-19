@@ -78,6 +78,21 @@ class SqlLogManager(private val project: Project) : Disposable {
         capturing = value
     }
 
+    /**
+     * T-TestIsolation：捕获态三元（capturing / userArmed / 等待态）**原样复位**测试缝。
+     *
+     * 为什么需要专用缝：[userArmed] 与 [isWaitingForConsole] 只有 `private set`，
+     * 测试类经公开路径（startCapture/stopCapture）改不到初值；而 light 测试项目在**同一分片
+     * JVM 内跨测试类复用同一个 ProjectImpl**，`project.getService(SqlLogManager::class.java)`
+     * 拿到的是全片共享实例——任何测试类改捕获态而不复位都会串台到同片后续测试类
+     * （是否发作取决于分片时长权重算出的邻居，见 testutil/SqlLogManagerProjectState KDoc）。
+     */
+    internal fun restoreCaptureStateForTest(capturing: Boolean, userArmed: Boolean, waitingForConsole: Boolean) {
+        this.capturing = capturing
+        this.userArmed = userArmed
+        this.isWaitingForConsole = waitingForConsole
+    }
+
     /** 用户主动开启 SQL 监听标志——点击「捕捉」后置 true，点击「停止」或 dispose 时清零。
      *  跨控制台生命周期持久：项目停止后回到 armed 态，下次启动时自动恢复捕捉。 */
     @Volatile
