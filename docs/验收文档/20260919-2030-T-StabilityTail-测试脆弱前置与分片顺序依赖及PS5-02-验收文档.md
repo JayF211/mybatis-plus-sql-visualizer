@@ -165,6 +165,10 @@ wrapper 形态同样登记；②复位判定改「绑定承接名」（`hasBound
 
 **T-ST-03 独立复核订正（2026-09-19）**：原理由③「改成显式传递只是把前提从同文本命中挪成同文本命中」**不成立**——存在**面板侧自取槽变体**（`parseStatementsShared(cleaned)` → `generateFromParsedStatements`）从同一个 `sql` 变量算槽键，能**整条换掉 strip 幂等前提**（由 `strip` 纯函数性保证），且两个 API 都是 `internal`、与 ui 包同 Gradle 模块、无需改签名。**但「不实施」这个决定仍成立**：工具栏 `showRollbackSql()`（`:737`）无前置 detect、生产仍按双剥文本出结果，幂等前提换不掉；且收益为零性能/零语义、属 P4 可选件。另订正理由②的**归因**：`dmlConfirmed = true` **现行生产无调用点**（`RollbackSqlDialog.executeRollback` 未传它，回滚弹窗同样走确认弹窗），仅测试覆盖，故「不走确认弹窗」是测试路径而非生产路径；并订正 KDoc「失效后果只是多一次解析」对前提②偏宽（前提②失效会使命中路径用单剥 AST、miss 路径解析双剥文本，输入文本不同）。
 
+### T-ST-01 复核结论
+
+**T-ST-01 独立复核（2026-09-19，有条件通过 0 阻断 2 条件）**：①「语义不变」须限定为 **`before == null` 时**——`before != null` 分支下该断言**恒真**（项目服务是项目级单例，`getService` 已创建时必返回同一实例），连「clearAll 调了 getService」也测不出，属零信息而非变弱；可接受性依据＝**本用例 `before` 恒为 null**（已独立核实：`plugin.xml` 的 4 个 `postStartupActivity` 均无 `SqlPreviewService` 引用，`src/main` 所有该服务调用点均为用户动作触发），故强分支即实际执行路径、原意图完整保留。②三组先红后绿读数**不可复核**（`build/` 内本类只有绿 XML、无红跑痕迹），原理自洽但不构成可复核实证。③同类脆弱前置仍有残留（不在本任务写集）：`heavy/EntityClassFinderHeavyTest.kt:369-371`（首次 find 后直接断言 `tables == 1`、未先 clear）与 `:400`（`1 to 2`），同形、当前因 Heavy 无假红风险但未解耦。④补充边界：反向形态（`> 0`）**可能假绿**——`EntityResolver.cacheSize()` 是全局静态、片内跨类共享，邻居条目亦可通过，属「弱而不脆」、不可作承重证据。
+
 ## 四、门禁复跑
 
 并轨后先 `rm -rf build/classes build/kotlin` 再跑。读数链条（**三个数字别混**）：
