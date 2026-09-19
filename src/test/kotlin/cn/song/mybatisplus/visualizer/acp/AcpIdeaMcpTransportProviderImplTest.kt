@@ -1,6 +1,6 @@
 package cn.song.mybatisplus.visualizer.acp
 
-import com.intellij.ml.llm.agents.acp.api.AcpAgentId
+import com.intellij.platform.acp.AcpAgentId
 import com.intellij.ml.llm.agents.acp.client.AcpIdeaMcpTransport
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull

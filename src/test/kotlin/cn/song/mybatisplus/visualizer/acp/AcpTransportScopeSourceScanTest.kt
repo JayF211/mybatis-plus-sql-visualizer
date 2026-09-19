@@ -102,7 +102,7 @@ class AcpTransportScopeSourceScanTest {
         // 接线守卫：provider 实现引用的三个 ml-llm 类型必须在桩源集内可解析（少一个即 main 编译失败，
         // 但失败信息指向实现类而非缺桩，此断言把定位成本压到零）
         val expected = listOf(
-            "src/mcpStub/kotlin/com/intellij/ml/llm/agents/acp/api/AcpAgentId.kt",
+            "src/mcpStub/kotlin/com/intellij/platform/acp/AcpAgentId.kt",
             "src/mcpStub/kotlin/com/intellij/ml/llm/agents/acp/client/AcpIdeaMcpTransport.kt",
             "src/mcpStub/kotlin/com/intellij/ml/llm/agents/acp/client/AcpIdeaMcpTransportProvider.kt",
         )

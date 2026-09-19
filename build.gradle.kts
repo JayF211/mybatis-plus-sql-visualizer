@@ -152,17 +152,18 @@ dependencies {
         // 内置插件（262 distro 163 个插件里无 ml-llm），而 M1-c 分镜要用它的 ACP 面板驱动 agent。
         // 必须声明式安装：prepareSandbox 每次重建沙盒 plugins/ 目录，手工拷贝进去的插件会被清掉（实测）。
         // 版本与沙盒平台精确对齐——插件约束为 since-build 262.9437.1 / until-build 262.9437.*。
-        // 【2026-09-19 起暂时禁用，见下】原意是把 AI Assistant 声明式装进录制沙盒（prepareSandbox
-        // 会重建沙盒 plugins/，手工拷贝会被清掉）。但该声明会把真 ml-llm 带进**编译类路径**，与
-        // T-AcpMcpTransport 的桩源集冲突：桩把 AcpAgentId 自造在 com.intellij.ml.llm.agents.acp.api，
-        // 而真接口用的是 com.intellij.platform.acp.AcpAgentId（实测位置：
-        // platform-acp-plugin/lib/modules/intellij.platform.acp.jar）→ 真接口胜出后
-        // AcpIdeaMcpTransportProviderImpl.getTransport 报 "overrides nothing"，compileKotlin 失败。
-        // 该类型错位同时意味着运行期该 impl 实现不了真接口、SSE 绕行会静默失效——已作为缺陷单独上报。
-        // 在桩的包名修正前，录制沙盒不含 AI Assistant；M1-c 改用终端路线（claude mcp list 已验证）。
-        // if (gifRecord) {
-        //     plugin("com.intellij.ml.llm", "262.9437.276")
-        // }
+        // T-GifRec-MCP（2026-09-19）：录制态把 AI Assistant 装进沙盒。AI Assistant 不是 distro
+        // 内置插件（262 distro 163 个插件里无 ml-llm），而 M1-c 分镜要用它的 ACP 面板驱动 agent。
+        // 必须声明式安装：prepareSandbox 每次重建沙盒 plugins/ 目录，手工拷贝进去的插件会被清掉（实测）。
+        // 版本与沙盒平台精确对齐——插件约束为 since-build 262.9437.1 / until-build 262.9437.*。
+        //
+        // 2026-09-20 复启说明：本声明会把真 ml-llm 带进编译类路径，曾与 T-AcpMcpTransport 的桩冲突
+        // （桩把 AcpAgentId 误置于 com.intellij.ml.llm.agents.acp.api，真接口用平台的
+        // com.intellij.platform.acp.AcpAgentId）→ override 失配。已修正桩的归属（迁至平台包），
+        // 冲突消除，本声明复启。
+        if (gifRecord) {
+            plugin("com.intellij.ml.llm", "262.9437.276")
+        }
     }
 }
 

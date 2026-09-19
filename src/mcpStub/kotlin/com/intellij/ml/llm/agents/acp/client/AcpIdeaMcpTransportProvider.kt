@@ -1,11 +1,11 @@
 package com.intellij.ml.llm.agents.acp.client
 
-import com.intellij.ml.llm.agents.acp.api.AcpAgentId
+import com.intellij.platform.acp.AcpAgentId
 
 /**
  * T-AcpMcpTransport 编译期桩：ACP 会话「私有 IJ MCP 会话传输方式」扩展点接口。
  *
- * 签名权威与打包禁令见同源集 [com.intellij.ml.llm.agents.acp.api.AcpAgentId] 头注释。实测形态：
+ * 签名权威与打包禁令见同源集 [com.intellij.platform.acp.AcpAgentId] 头注释。实测形态：
  *  - 真类为**接口**（ACC_PUBLIC|ACC_INTERFACE|ACC_ABSTRACT），标 `@ApiStatus.Internal`（R1 风险源），
  *    父接口为空，唯一抽象方法 `getTransport(AcpAgentId): AcpIdeaMcpTransport?`（返回可空：参数字面量
  *    带 `@NotNull`，方法返回带 `@Nullable`，常量池双注解实证）；另有 Companion 提供静态

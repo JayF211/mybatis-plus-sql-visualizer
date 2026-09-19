@@ -3,7 +3,7 @@ package com.intellij.ml.llm.agents.acp.client
 /**
  * T-AcpMcpTransport 编译期桩：IDE 私有 IJ MCP 会话下发给 ACP agent 时可选的传输方式。
  *
- * 签名权威与打包禁令见同源集 [com.intellij.ml.llm.agents.acp.api.AcpAgentId] 头注释。
+ * 签名权威与打包禁令见同源集 [com.intellij.platform.acp.AcpAgentId] 头注释。
  * 实测（`java.lang.classfile` 导出自 ml-llm 的 `intellij.ml.llm.agents.acp.jar`）：真类为
  * `Enum`（ACC_ENUM|ACC_FINAL|ACC_PUBLIC），常量恰两个 STDIO / SSE，无 Companion。
  *
