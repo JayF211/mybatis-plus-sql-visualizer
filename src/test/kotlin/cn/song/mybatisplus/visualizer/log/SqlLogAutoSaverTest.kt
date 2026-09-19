@@ -305,6 +305,68 @@ class SqlLogAutoSaverTest {
     }
 
     // ------------------------------------------------------------------
+    // T-McpAuditTrail T-MAT-03：MCP 来源标记的 pd 持久化（配套必改）
+    // ------------------------------------------------------------------
+
+    /** 无参数/无占位符/无扩展字段的最小 MCP 条目——explain 落历史的常态形态。 */
+    private fun mcpEntry(source: SqlSource) = LogSqlEntry(
+        rawSql = "SELECT id, name FROM user WHERE id = 1",
+        restoredSql = "SELECT id, name FROM user WHERE id = 1",
+        params = emptyList(),
+        timestamp = 1724567890000L,
+        source = source,
+        executionTimeMs = 7L,
+    )
+
+    @Test
+    fun `MCP 来源无参数无占位符_仍写 pd 行`() {
+        // T-MAT-03 配套必改的专属用例：pd 写入条件若只判 params/占位符/扩展字段，
+        // 这条无参无占位符的 MCP SELECT 会丢掉来源标记——本任务的存在意义所在。
+        val saver = SqlLogAutoSaver()
+        val dir = tempDir()
+        saver.configure(dir, "test.sql", null)
+        saver.write(mcpEntry(SqlSource.MCP))
+        // 对照：除来源外逐字段相同的非 MCP 条目
+        saver.write(mcpEntry(SqlSource.UNKNOWN))
+        saver.close()
+
+        val content = File(dir, "test.sql").readText()
+        val blocks = content.split("-- source:").drop(1)
+        assertEquals(2, blocks.size)
+        assertTrue("MCP 条目应写 pd 行: $blocks", blocks[0].contains("\n-- pd: "))
+        assertFalse("非 MCP 同形态条目不写 pd 行: ${blocks[1]}", blocks[1].contains("-- pd: "))
+
+        // 头部段零新增：两条头部逐字符相等（T-MAT-03 硬约束 1——头部不得出现来源新段）
+        val headers = content.lineSequence().filter { it.startsWith("-- source:") }.toList()
+        assertEquals("两条头部逐字符一致（MCP 不得新增头部段）", headers[0], headers[1])
+
+        // 载荷携带来源标记（读端回填被并行占用文件阻塞，见计划 §实施记录 T-MAT-03）
+        val payloadLine = blocks[0].lines().first { it.startsWith("-- pd: ") }
+        val decoded = SqlLogParamCodec.decode(payloadLine.removePrefix("-- pd: ").removeSuffix(" --"))!!
+        assertEquals(SqlSource.MCP, decoded.source)
+        assertEquals("SELECT id, name FROM user WHERE id = 1", decoded.rawSql)
+    }
+
+    @Test
+    fun `MCP 条目 pd 行不破坏既有读回`() {
+        // pd 行是新增行，正文与既有字段读回不得受影响（旧版读端把它当注释行的同一形态）
+        val saver = SqlLogAutoSaver()
+        val dir = tempDir()
+        saver.configure(dir, "test.sql", null)
+        saver.write(mcpEntry(SqlSource.MCP))
+        saver.close()
+
+        val entries = SqlLogFileReader.readFromFile(File(dir, "test.sql"))
+        assertEquals(1, entries.size)
+        assertEquals("SELECT id, name FROM user WHERE id = 1", entries[0].restoredSql)
+        assertEquals("SELECT id, name FROM user WHERE id = 1", entries[0].rawSql)
+        assertTrue("MCP 条目无参数", entries[0].params.isEmpty())
+        assertEquals(7L, entries[0].executionTimeMs)
+        assertEquals(1724567890000L, entries[0].timestamp)
+        assertEquals("countInFile 只数头部行，pd 行不参与计数", 1, SqlLogFileReader.countInFile(File(dir, "test.sql")))
+    }
+
+    // ------------------------------------------------------------------
     // T-SqlHistoryFull：全量写盘风暴压测（对应用户关切——全量化后大写盘量不卡、不丢）
     // ------------------------------------------------------------------
 

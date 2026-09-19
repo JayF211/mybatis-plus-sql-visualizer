@@ -32,6 +32,16 @@ object SqlLogParamCodec {
     private const val ERROR_FIELD = "e"
     private const val TAG_FIELD = "q"
     private const val UPDATE_COUNT_FIELD = "u"
+    /**
+     * T-McpAuditTrail T-MAT-03：来源标记（[SqlSource] 常量名）。
+     *
+     * 为什么不复用头部 `source:` 段：该段语义已被 [SqlLogFileReader.parseSource] 占用为
+     * 「源码文件:行号」（回填 [LogSqlEntry.sourceFile]/[LogSqlEntry.sourceLine]），
+     * 改其语义会打断 `SqlLogHistoryRoundTripTest` 的头部逐字符断言；且头部是本插件与旧版
+     * 读端共享的格式面。pd 载荷天然满足两条：旧读端把整行当正文注释降级（正文无损）、
+     * 旧文件无此键 → 解码为 null（来源仍 UNKNOWN，与现状一致）。
+     */
+    private const val SOURCE_FIELD = "s"
     // T-SourceJumpFunnel：候选 [file, line] 对数组 + 候选类名 + 栈快照（历史读回后跳转回退仍可用）
     private const val CANDS_FIELD = "cd"
     private const val CAND_CLASSES_FIELD = "cc"
@@ -53,6 +63,11 @@ object SqlLogParamCodec {
         val candidateClasses: List<String> = emptyList(),
         /** T-SourceJumpFunnel：调用栈快照；旧 payload 为 null。 */
         val stackDigest: String? = null,
+        /**
+         * T-McpAuditTrail T-MAT-03：来源（当前仅 [SqlSource.MCP] 落键）；旧 payload / 非 MCP 条目为 null。
+         * 读端把它回填进 [LogSqlEntry.source]，不填则沿用默认 [SqlSource.UNKNOWN]。
+         */
+        val source: SqlSource? = null,
     )
 
     /** 编码 rawSql + params 为 Base64 载荷（无 M56 扩展字段形态，等价 [encodeEntry] 全默认条目）。 */
@@ -107,6 +122,9 @@ object SqlLogParamCodec {
                 )
             }
             entry.stackDigest?.let { addProperty(STACK_DIGEST_FIELD, it) }
+            // T-McpAuditTrail T-MAT-03：来源标记——仅 MCP 落键（本任务范围：其余来源的读回口径
+            // 维持 UNKNOWN 不变，不做未立项的行为扩张）。枚举名而非序号：新增常量不使旧文件失效。
+            if (entry.source == SqlSource.MCP) addProperty(SOURCE_FIELD, entry.source.name)
         }
         return Base64.getEncoder().encodeToString(gson.toJson(obj).toByteArray(Charsets.UTF_8))
     }
@@ -155,6 +173,10 @@ object SqlLogParamCodec {
                 out
             },
             stackDigest = json.get(STACK_DIGEST_FIELD)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() },
+            // T-McpAuditTrail T-MAT-03：来源键缺失/值非本版本枚举名 → null（旧文件与旧版写入端天然兼容，
+            // 不认识的值只丢来源标记，绝不丢弃整条——与其余扩展键同款容错口径）
+            source = json.get(SOURCE_FIELD)?.takeIf { it.isJsonPrimitive }?.asString
+                ?.let { name -> SqlSource.values().firstOrNull { it.name == name } },
         )
     }.getOrNull()
 

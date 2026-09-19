@@ -127,4 +127,51 @@ class SqlLogParamCodecTest {
         assertEquals("SELECT 1", decoded.rawSql)
         assertNull(decoded.updateCount)
     }
+
+    // ---------- T-McpAuditTrail T-MAT-03：来源标记（pd 载荷 `s` 键） ----------
+
+    @Test
+    fun `MCP 来源 round-trip 保真`() {
+        // 无参数、无占位符、无扩展字段的最小 MCP 条目——explain 落历史的常态形态
+        val entry = LogSqlEntry(
+            rawSql = "SELECT id FROM user WHERE id = 1",
+            restoredSql = "SELECT id FROM user WHERE id = 1",
+            params = emptyList(),
+            source = SqlSource.MCP,
+        )
+        val decoded = SqlLogParamCodec.decode(SqlLogParamCodec.encodeEntry(entry))!!
+        assertEquals("MCP", decoded.source?.name)
+        assertEquals(SqlSource.MCP, decoded.source)
+    }
+
+    @Test
+    fun `非 MCP 来源不落来源键`() {
+        // 其余来源的读回口径不变（UNKNOWN）——不做未立项的行为扩张
+        val payload = SqlLogParamCodec.encodeEntry(
+            LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(), source = SqlSource.AGENT),
+        )
+        val json = String(java.util.Base64.getDecoder().decode(payload), Charsets.UTF_8)
+        assertTrue("非 MCP 不应落 s 键: $json", !json.contains("\"s\""))
+        assertNull(SqlLogParamCodec.decode(payload)!!.source)
+    }
+
+    @Test
+    fun `旧载荷无来源键_解码null不丢条目`() {
+        // 旧历史文件（无 s 键）可读：来源为 null → 读端沿用默认 UNKNOWN
+        val legacy = java.util.Base64.getEncoder()
+            .encodeToString("""{"r":"SELECT 1","p":[]}""".toByteArray(Charsets.UTF_8))
+        val decoded = SqlLogParamCodec.decode(legacy)!!
+        assertEquals("SELECT 1", decoded.rawSql)
+        assertNull(decoded.source)
+    }
+
+    @Test
+    fun `来源键值非本版本枚举名_降级null不丢条目`() {
+        // 未来版本新增枚举常量后回滚场景：不认识的名字只丢来源标记，不丢整条
+        val unknown = java.util.Base64.getEncoder()
+            .encodeToString("""{"r":"SELECT 1","p":[],"s":"SOME_FUTURE_SOURCE"}""".toByteArray(Charsets.UTF_8))
+        val decoded = SqlLogParamCodec.decode(unknown)!!
+        assertEquals("SELECT 1", decoded.rawSql)
+        assertNull(decoded.source)
+    }
 }
