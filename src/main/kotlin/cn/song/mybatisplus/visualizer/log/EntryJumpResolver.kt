@@ -13,6 +13,13 @@ import com.intellij.openapi.vfs.VirtualFile
  * 3. 主位置工程内解析成功 → Precise；
  * 4. 主位置不在工程内（典型=自研框架/第三方插件帧被误选）→ 候选栈序取首个可解析项；
  * 5. 全落空 → NotFound（携带主位置与候选明细，供提示与选帧）。
+ *
+ * **线程约定（T-PsiCaptureProtocol T-PCP-03）**：本族（含 [SourcePathResolver.resolveVirtualFile]）
+ * 读的是 `ModuleManager`/`LocalFileSystem` 平台模型，**不碰 PSI/Document**，故**不**适用 T-PCP-01 的
+ * 两段式快照——但要求调用方持有读权限：EDT 直读（现有两处调用点 `SqlLogPanel` 右键跳转、
+ * `HistorySqlLogPanel` 右键跳转均在 EDT）或后台显式包 `ReadAction`。该约定自 T-PCP-03 起由
+ * ① `SourcePathResolver` 入口硬断言、② 守卫规则 `edtReadContract`
+ * （`convention/BannedApiSourceScanTest`）双重把关。协议全文见 `docs/架构设计/PSI跨线程读取协议.md`。
  */
 object EntryJumpResolver {
 
