@@ -718,8 +718,11 @@ object DataSourceSelector {
      * ConsoleView.print(String, ConsoleViewContentType) 会经 DBN 原生输出链路写入并刷新显示，
      * 不依赖/不破坏结果区内部布局（结果网格照常）。反射调用避免对 ConsoleViewContentType 的
      * 编译期依赖（其所在模块可能随 IDE 版本变动）。
+     *
+     * T-FatalPassthrough T-FP-02b：`internal` 供 `FatalPassthroughTest` 直测本函数的**外层 runCatching
+     * 边界**（同 [execFileContentMatches] / [isExecDocOpenInEditor] 先例）——私有则行为用例无处注入。
      */
-    private fun writeConsoleOutput(console: Any?, text: String, isError: Boolean = false) {
+    internal fun writeConsoleOutput(console: Any?, text: String, isError: Boolean = false) {
         if (console == null || text.isBlank()) return
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
@@ -791,6 +794,15 @@ object DataSourceSelector {
                 LOG.info("[M36] writeConsoleOutput: ConsoleViewContentType class not found")
             }
         }.onFailure { e ->
+            // T-FatalPassthrough T-FP-02b（独立复核阻断 1 修正）：本函数的 runCatching 包住上面两处
+            // fatal 透传（doc-append 捕获块 / ConsoleViewContentType 字段回退捕获块）——在此把 fatal
+            // 吞成一行 INFO 等于透传无效（改前实测：fatal 被转成 "[M36] writeConsoleOutput FAILED: …"
+            // 后执行链带病继续，正是上面捕获块注释声称的反面）。反射链先解包 InvocationTargetException
+            // 再判（同本文件原生执行链 :2604-2607 形态；只判外层会漏判目标方法抛出的 fatal）。
+            // 非 fatal 路径行为逐字节不变：仍只记原 INFO 行，函数返回 Unit、调用方（EDT 排出的
+            // writeConsoleOutput + onError 回调）行为不变；fatal 则透传到平台 EDT 处理器记录现场。
+            val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+            if (FatalErrors.isFatal(cause)) throw cause
             LOG.info("[M36] writeConsoleOutput FAILED: ${e.message}")
         }
     }
@@ -3799,6 +3811,9 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             }
             // T-PreviewFast P2：非阻塞派发——预热是投机性写入，没必要让 BGT 等满 2 秒
             runCatching { projectExecFile(project, sql, nonBlocking = true) }.onFailure { e ->
+                // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：写盘链的 fatal 不得被本 runCatching
+                // 吞成一条 warn（否则 prewarm 链 4 处既有透传全部作废）。非 fatal 仍原样 warn 降级。
+                if (FatalErrors.isFatal(e)) throw e
                 LOG.warn("[M36] exec prewarm refresh-content failed: ${e.javaClass.simpleName}: ${e.message}")
             }
             LOG.info("[M36] exec prewarm: cache hit, content refreshed only")
@@ -3857,6 +3872,9 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         lastTempFileFailure = null
         // T-ExecCopyFix F2b：refresh 段 WriteIntentReadAction（BGT 上 WIRA 合法；与 EDT 冷路径同款包装）
         val ioFile = runCatching { projectExecFile(project, sql) }.getOrElse { e ->
+            // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：fatal 上浮（预热跑在 BGT，透传由平台
+            // 记录现场）；非 fatal 仍返回（writeFile 失败 → 跳过预热，语义逐字不变）。
+            if (FatalErrors.isFatal(e)) throw e
             LOG.warn("[M36] exec prewarm writeFile failed: ${e.javaClass.simpleName}: ${e.message}")
             return
         } ?: return

@@ -868,13 +868,21 @@ class AgentManager(private val project: Project) : Disposable {
                     val p = processHandler.javaClass.getMethod("getProcess").invoke(processHandler)
                     (p?.javaClass?.name ?: "null") to null
                 } catch (t: Throwable) {
-                    if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传（外层 runCatching 仍会接住——见 §八 登记）
+                    if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
                     "N/A" to t.toString()
                 }
                 LOG.warn("resolvePid: 三步回退全失败（handler=${processHandler.javaClass.name}, process=$processRepr, procErr=$procErr）")
                 null
             }
-    }.getOrNull()
+    }.getOrElse { e ->
+        // T-FatalPassthrough T-FP-02b（独立复核同族抵消点）：本函数外层 runCatching 会接住上面捕获块的
+        // fatal 透传——不在此处放行等于透传无效（改前：fatal 落成 pid=null，调用方只 warn
+        // "resolvePid 失败——跳过挂载"）。非 fatal 仍返回 null（pid 解析失败语义逐字不变）；fatal 经
+        // doAttachAsync → onProcessAppeared → 监听器（RunConfigurationProcessListener:135）再透传，
+        // 交给平台记录现场。
+        if (FatalErrors.isFatal(e)) throw e
+        null
+    }
 
     /** agent 失败显式上报（禁静默吞）：桥侧继续捕获，用户无感；日志 WARN 留排查锚点。 */
     private fun notifyAgentFailure(message: String) {

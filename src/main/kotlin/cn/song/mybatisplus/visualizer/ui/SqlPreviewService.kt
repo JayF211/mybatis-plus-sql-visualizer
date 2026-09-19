@@ -2098,6 +2098,14 @@ class SqlPreviewService(private val project: Project) {
                 val result = try {
                     ReadAction.compute<PreviewResult?, Throwable> { compute() }
                 } catch (e: Throwable) {
+                    // T-FatalPassthrough T-FP-02b（独立复核条件项，收口原豁免）：本处是**预览主链**
+                    // （点击/快捷键 → PSI 转换 → 弹窗），不是「可选能力探测」——原豁免理由把主链写成
+                    // 探测，属借豁免放走真该收口的站点。fatal（VME/LinkageError/ThreadDeath）透传给池
+                    // 线程平台处理器（原状：任何失败都返回 null，用户只看到「未找到可转换的 Wrapper」
+                    // 提示，真实异常零日志且归因错误——真机排障无入口）。
+                    // 非 fatal 仍返回 null（既有降级语义逐字不变），但补一条 WARN 留排查锚点。
+                    if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(e)) throw e
+                    LOG.warn("[M36] previewAsync compute FAILED: ${e.javaClass.simpleName}: ${e.message}")
                     null
                 }
                 // T-ExecSlowOps F2：确定性 SQL（无参数开关/批量/XML 模型）预览成功即后台预热
@@ -2113,6 +2121,12 @@ class SqlPreviewService(private val project: Project) {
                         runCatching {
                             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(project, result.sql)
                         }.onFailure {
+                            // T-FatalPassthrough T-FP-02b（独立复核阻断 2 同族）：本 runCatching 包住整条
+                            // 预热链——不放行 fatal 会让 DataSourceSelector 预热链的 6 处透传（缓存命中
+                            // 刷新 / 写盘 / pre-refresh 收敛 / refresh / syncVf / findPsi）全部作废。
+                            // 非 fatal 仍 warn 降级（fire-and-forget 语义不变）；fatal 透传到池线程
+                            // 平台处理器记录现场。
+                            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(it)) throw it
                             LOG.warn("[M36] exec prewarm dispatch failed: ${it.javaClass.simpleName}: ${it.message}")
                         }
                     }

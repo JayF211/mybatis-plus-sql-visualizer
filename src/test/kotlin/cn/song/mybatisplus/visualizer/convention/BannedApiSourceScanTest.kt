@@ -996,6 +996,10 @@ class BannedApiSourceScanTest {
         "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt",
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt",
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.kt",
+        // T-FP-02b（独立复核条件项）：原豁免理由「可选能力探测失败返回 null（预览主链降级）」把**预览
+        // 主链**写成能力探测——属借豁免放走真该收口的站点。已收口（判 fatal + 非 fatal 补 WARN 留痕），
+        // 故从豁免表移入本表。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt",
     )
 
     /**
@@ -1008,6 +1012,11 @@ class BannedApiSourceScanTest {
      *
      * 豁免口径：捕获面覆盖 fatal 但**失败语义就是降级**（可选能力探测 / 后台候选收集 /
      * 图形渲染回落 / fail-closed 安全闸门）——不是「懒得改」。
+     *
+     * T-FP-02b 补一条边界（独立复核条件项教训）：**主链降级不算「可选能力探测」**——
+     * `ui/SqlPreviewService.kt` 的预览转换失败返回 null 曾被写成「能力探测失败返回 null（预览主链
+     * 降级）」放行，实际是用户点击后的唯一主路径（失败只弹「未找到可转换的 Wrapper」提示、零日志），
+     * 已收口。登记理由须如实描述失败面属于哪一类，借「探测」名义放走主链会红在复核。
      */
     private val throwableCatchExemptions: Map<String, CatchExemption> = mapOf(
         // 12 处：平台可选能力探测 + 反射候选遍历（2026.2 ContentManagerListener 接口形态不匹配、
@@ -1038,9 +1047,6 @@ class BannedApiSourceScanTest {
         // 1 处：渲染失败回「无图」语义。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/diagram/DiagramPanel.kt" to
             CatchExemption(1, "渲染失败回「无图」语义（清画布 + currentModel，防每次缩放重复抛）"),
-        // 1 处：可选能力探测返回 null。
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt" to
-            CatchExemption(1, "可选能力探测失败返回 null（预览主链降级）"),
         // 1 处：补全异常不影响输入。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlInputEditor.kt" to
             CatchExemption(1, "补全弹窗异常不得影响输入（失败下次输入重试）"),
@@ -1073,7 +1079,8 @@ class BannedApiSourceScanTest {
      */
     /**
      * 未收口点的**行号清单**（T-FatalPassthrough 实施时实测；守卫不校验行号，仅作人工核对与
-     * 计划 §八 登记的出处）。共 44 处 / 18 文件：
+     * 计划 §八 登记的出处）。共 **43 处 / 17 文件**（T-FP-02b 起 `ui/SqlPreviewService.kt:2100`
+     * 已收口移入已落地表）：
      *
      * ```
      * log/SqlLogConsoleBridge.kt                                     12 处：151 167 208 410 561 570 595 642 656 664 678 695
@@ -1085,7 +1092,6 @@ class BannedApiSourceScanTest {
      * xml/Ognl.kt                                                     1 处：163
      * ui/highlight/DatabaseSchemaResolver.kt                          1 处：352
      * ui/diagram/DiagramPanel.kt                                      1 处：197
-     * ui/SqlPreviewService.kt                                         1 处：2100
      * ui/SqlInputEditor.kt                                            1 处：160
      * psource/JdbcTemplateSqlPreviewService.kt                        1 处：105
      * mcp/McpSelectGuard.kt                                           1 处：69
@@ -1096,10 +1102,21 @@ class BannedApiSourceScanTest {
      * actions/ConvertSqlToJavaAction.kt                               1 处：93
      * ```
      *
-     * 已落地（30 处 / 3 文件）：`execute/DataSourceSelector.kt` 13、`log/agent/AgentManager.kt` 10、
-     * `log/RunConfigurationProcessListener.kt` 7——合计 74 处（`grep -rn "catch (.*: Throwable)"` 口径）。
+     * 已落地（**31 处 / 4 文件**）：`execute/DataSourceSelector.kt` 13、`log/agent/AgentManager.kt` 10、
+     * `log/RunConfigurationProcessListener.kt` 7、`ui/SqlPreviewService.kt` 1（T-FP-02b 收口）——
+     * 合计 74 处（`grep -rn "catch (.*: Throwable)"` 口径）。
      * 另有 `log/SourceInterceptorTemplates.kt:99` 的 `catch (Throwable t)` 位于**注入 agent 的 Java
      * 源码模板字符串**里，不是 Kotlin 站点（[maskNonCode] 涂白，`TFP03自证_…` 已钉住该边界）。
+     *
+     * **同族抵消面（runCatching 接住已透传的 fatal）**：本守卫只扫 `catch (…: Throwable)` 块，看不见
+     * 「块内 `throw` 被同一函数的外层 `runCatching {}.onFailure/getOrElse` 接住」的抵消——T-FP-02b
+     * （独立复核阻断 1/2）已把**写集内**的抵消点逐个放行：`execute/DataSourceSelector.kt`
+     * `writeConsoleOutput` 外层（`:796`，包住 `:763`/`:779` 两处捕获块）、`prewarmExecTempFile`
+     * 缓存命中刷新（`:3813`）、`prewarmExecTempFileInner` 写盘（`:3874`）、`log/agent/AgentManager.kt`
+     * `resolvePid` 外层（`:877`），以及预热链唯一调用方 `ui/SqlPreviewService.kt` 的
+     * `runCatching { prewarmExecTempFile(...) }`（`:2121`）。写集外仍存在的同类抵消面（如
+     * `executeOnConsole` 的外层 `runCatching`，其内层抛点实际在 `executeOnPooledThread`/`invokeLater`
+     * lambda 内、运行时不经该 runCatching）见计划 §九。
      */
     private fun fatalPassthroughOffenders(sources: List<Pair<String, String>>): List<String> {
         val offenders = ArrayList<String>()
@@ -1118,7 +1135,7 @@ class BannedApiSourceScanTest {
         // ThreadDeath）被 catch (…: Throwable) 吞成一条 warn 后，崩溃现场只剩一行日志、流程带病
         // 继续（第八轮报告 §7.2 Z-21）。本规则要求每个 `catch (…: Throwable)` 块**要么**判 fatal
         // （形态 A：块内 `FatalErrors.isFatal(`，见 util/FatalErrors.kt），**要么**登记豁免理由。
-        // 未收口的 44 处（18 文件）豁免见 [throwableCatchExemptions]；已落地的 30 处（3 文件）见
+        // 未收口的 43 处（17 文件）豁免见 [throwableCatchExemptions]；已落地的 31 处（4 文件）见
         // [landedFatalPassthroughFiles]，其中任何一处退回无判定即红。
         val sources = rawMainSources()
         val offenders = fatalPassthroughOffenders(sources)
