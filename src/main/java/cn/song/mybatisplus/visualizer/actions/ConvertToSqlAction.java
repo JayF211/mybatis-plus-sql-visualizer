@@ -80,6 +80,18 @@ public final class ConvertToSqlAction extends AnAction {
         // F-46：当前代码位置（文件名:行号），来源列默认值（XML/Java 共用）
         String sourceLocation = file.getName() + ":" + (editor.getDocument().getLineNumber(editor.getCaretModel().getOffset()) + 1);
 
+        // T-ErrorLocate T-EL-03：登记可解析源锚点（文件+0 基行），执行失败时错误定位动作消费。
+        // 单槽按项目覆盖（预览弹窗每项目至多一个，同刻只有一个错误面板可定位）。
+        try {
+            com.intellij.openapi.vfs.VirtualFile vf = file.getVirtualFile();
+            if (vf != null) {
+                int line0 = editor.getDocument().getLineNumber(editor.getCaretModel().getOffset());
+                project.getService(SqlPreviewService.class).setLastPreviewSourceAnchor(
+                        new SqlPreviewService.SourceAnchor(vf, line0));
+            }
+        } catch (Throwable ignored) {
+        }
+
         // T-M24-04：XML mapper 文件 → 预览光标所在语句；F-45：<pages> XML 文件 → maintainPage 预览
         if (file instanceof XmlFile) {
             XmlFile xmlFile = (XmlFile) file;

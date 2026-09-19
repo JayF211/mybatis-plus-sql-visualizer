@@ -7,7 +7,15 @@ import org.jetbrains.annotations.Nullable;
 import java.util.List;
 import java.util.Objects;
 
-/** 实体节点（对应数据库表）。 */
+/**
+ * 实体节点（对应数据库表）。
+ *
+ * @param alias     表别名（已 sanitize，用于标识）
+ * @param tableName 表名（用于显示）
+ * @param columns   列列表（已裁剪 + 已富化：总数 &gt;{@link DiagramModelKt#DIAGRAM_MAX_COLUMNS} 时仅保留 PK）
+ * @param isMain    是否主表（控制颜色：true = 绿色，false = 蓝色）
+ * @param joinType  JOIN 类型（仅 JOIN 表有效，用于卡片标题标注）
+ */
 public final class EntityNode {
     @NotNull public final String alias;
     @NotNull public final String tableName;

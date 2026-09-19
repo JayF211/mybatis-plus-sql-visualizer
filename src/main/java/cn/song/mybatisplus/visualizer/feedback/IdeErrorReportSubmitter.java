@@ -142,7 +142,7 @@ public class IdeErrorReportSubmitter extends ErrorReportSubmitter {
         return true;
     }
 
-    /** 入队并重排去抖 flush（debounce：窗口自<b>最后一次</b>调用起算；超 {@link #MAX_WAIT_MS} 立即触发）。 */
+    /** 入队并重排去抖 flush（debounce：窗口自<b>最后一次</b>调用起算；超 {@link #MAX_WAIT_MS} 或队列达上限立即触发）。 */
     private void enqueue(PendingCall call) {
         long delayMs = DEBOUNCE_MS;
         ScheduledExecutorService scheduleExecutor = scheduler;
@@ -157,7 +157,10 @@ public class IdeErrorReportSubmitter extends ErrorReportSubmitter {
             if (flushFuture != null) {
                 flushFuture.cancel(false);
             }
-            if (clock.getAsLong() - firstPendingAt >= MAX_WAIT_MS) {
+            // T-PerfSweep3 #2：队列达上限立即排 0ms flush——平台「报告全部」逐簇循环的理论次数无上界，
+            // 队列不跟着无界；语义是「提前合并落框」而非丢弃（第 65 条起仍全部进 flush，只是不等窗口；
+            // 64 条内维持去抖窗口语义不变）
+            if (pendingCalls.size() > MAX_PENDING_CALLS || clock.getAsLong() - firstPendingAt >= MAX_WAIT_MS) {
                 delayMs = 0;
             }
             final long scheduledDelay = delayMs;
@@ -279,4 +282,10 @@ public class IdeErrorReportSubmitter extends ErrorReportSubmitter {
 
     /** 强制落框兜底：自首个待处理条目起超过此时长不再顺延（防逐簇间隔波动致弹窗无限推迟）。 */
     public static final long MAX_WAIT_MS = 3_000L;
+
+    /**
+     * T-PerfSweep3 #2：去抖队列长度上限。64 与平台「报告全部」的现实簇数量级（个位数）
+     * 之间留足裕量，正常使用永远触不到；触发即整波提前落框、零丢弃。
+     */
+    public static final int MAX_PENDING_CALLS = 64;
 }

@@ -39,7 +39,6 @@ public class SqlInputEditor implements Disposable {
 
     private final Project project;
     private PsiFile psiFile = null;
-    private DocumentListener autoPopupListener = null;
     private boolean autoPopupScheduled = false;
     /** 程序性写入（setSql）期间抑制自建 autopopup（T-M27.4）。 */
     private boolean suppress = false;
@@ -155,6 +154,12 @@ public class SqlInputEditor implements Disposable {
                 char prev = prevStr.charAt(0);
                 if (!Character.isLetterOrDigit(prev) && prev != '_') return;
                 autoPopupScheduled = true;
+                // write-safe: 本拍只由**用户输入活动**派生——documentChanged 在用户键入/粘贴的那次
+                // 活动内同步派发（本编辑器的唯一程序性写入 setSql 经 suppress 抑制，不调度补全），
+                // 无进度模态时平台取模态链（defaultModalityImpl：进度模态 → 上下文模态 → NON_MODAL）
+                // 落 NON_MODAL（恒 write-safe，见 DocWriteContext KDoc）；且 commitDocument 只把文档
+                // 变更同步进 PSI、不改文档文本。改投递为 nonModal 会把补全弹窗延后到模态关闭后，
+                // 用户输入期间的补全语义退化——故按平台语义显式声明豁免而非改投递。
                 ApplicationManager.getApplication().invokeLater(() -> {
                     autoPopupScheduled = false;
                     Editor ed2 = editor;
@@ -172,7 +177,6 @@ public class SqlInputEditor implements Disposable {
             }
         };
         created.getDocument().addDocumentListener(listener, this);
-        autoPopupListener = listener;
     }
 
     /** 释放编辑器（幂等）。 */
@@ -180,9 +184,12 @@ public class SqlInputEditor implements Disposable {
     public void dispose() {
         if (released) return;
         released = true;
-        // autoPopupListener 经 addDocumentListener(listener, this) 注册，
-        // Disposer 释放本对象时自动移除 listener——此处不能再手动 removeDocumentListener。
-        autoPopupListener = null;
+        // T-RA-04 判定：listener 经 addDocumentListener(listener, this) 以本对象为父 Disposable
+        // 注册，宿主 SqlToJavaPanel 已把它注册进 Disposer 树（SqlToJavaPanel.kt:180
+        // `Disposer.register(this, inputEditor)`），释放时由平台自动摘除 listener——
+        // 因此这里既不能也不必手动 removeDocumentListener（listener 已被自动移除后再摘会抛
+        // "Can't remove document listener"）。原先用于记账的 autoPopupListener 字段全仓零读取，
+        // 已随本次审计删除，注册方式与生命周期约束不变。
         EditorFactory.getInstance().releaseEditor(editor);
         psiFile = null;
     }

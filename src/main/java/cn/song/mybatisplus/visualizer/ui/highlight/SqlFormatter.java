@@ -321,6 +321,13 @@ public final class SqlFormatter {
             return format(sql);
         }
         if (first.getFirst() != SqlTokenTypes.KEYWORD || !first.getSecond().toUpperCase().equals("INSERT")) {
+            // T-PreviewUx-Pack #1：UPDATE → SET 各项行尾追加「列名 (new) = 表达式」标注（吸收 DBX
+            // UPDATE 预览 (new) 列口径：SET 表达式原样搬——按旧值求值即得新值，自引用 a = a + 1 亦正确）。
+            // 标注以行尾注释呈现（T-VPairAnno 同款范式），不破坏 SQL 可执行性；开关复用 annotatePairs
+            //（verticalPairAnnotation 设置，竖排标注族同一开关）。
+            if (first.getFirst() == SqlTokenTypes.KEYWORD && first.getSecond().toUpperCase().equals("UPDATE")) {
+                return annotateUpdateNewColumns(expandHorizontalGroups(format(sql)), tokens, annotatePairs);
+            }
             // T-VStack·扩面：非 INSERT = format 全展开 + 横向组展开后处理（IN 列表/ORDER BY/
             // GROUP BY/FROM 联表纵向化），与「格式化」按钮产出可区分
             return expandHorizontalGroups(format(sql));
@@ -470,6 +477,230 @@ public final class SqlFormatter {
             }
         }
         return Collections.emptyList();
+    }
+
+    // ------------------------------------------------------------------
+    // T-PreviewUx-Pack #1：UPDATE 预览 (new) 列（吸收 DBX dml_preview_sql 纯函数口径）
+    // ------------------------------------------------------------------
+
+    /** SET 赋值项：列名（token 原文紧贴拼合）+ 表达式（token 渲染，运算符空格/函数括号紧贴）。 */
+    public record UpdateSetAssignment(
+            /** 列名（token 原文紧贴拼合）。 */
+            String column,
+            /** 表达式（token 渲染，运算符空格/函数括号紧贴）。 */
+            String expression) {
+    }
+
+    /** SET 段终止关键字（顶层新主子句开始；沿用 NEW_LINE_KEYWORDS，剔除 SET 自身）。 */
+    private static final Set<String> SET_TERMINAL_KEYWORDS = buildSetTerminalKeywords();
+
+    private static Set<String> buildSetTerminalKeywords() {
+        java.util.LinkedHashSet<String> s = new java.util.LinkedHashSet<>(NEW_LINE_KEYWORDS);
+        s.remove("SET");
+        return Set.copyOf(s);
+    }
+
+    /**
+     * 解析 UPDATE 语句 SET 子句 → 列名/表达式分离（纯函数，无 PSI，headless 可测）。
+     *
+     * <p>口径（DBX dml_preview_sql.rs）：SET 表达式<b>原样搬</b>——按旧行值求值即得新值，
+     * 自引用（{@code a = a + 1}）原样即正确。顶层逗号切分各项，括号内逗号（函数参数/嵌套表达式）
+     * 不切分；每项以首个顶层 {@code =} 分离列名与表达式；无 {@code =}/表达式为空的项跳过（不标注）。
+     */
+    public static List<UpdateSetAssignment> parseUpdateSetAssignments(List<Pair<IElementType, String>> tokens) {
+        // 1) 定位 UPDATE 后首个顶层 SET（防表名恰为 set 的误匹配）
+        int depth = 0;
+        int setIdx = -1;
+        boolean seenUpdate = false;
+        int i = 0;
+        while (i < tokens.size()) {
+            IElementType type = tokens.get(i).getFirst();
+            String text = tokens.get(i).getSecond();
+            if (type == SqlTokenTypes.PAREN && text.equals("(")) {
+                depth++;
+            } else if (type == SqlTokenTypes.PAREN && text.equals(")")) {
+                depth--;
+            } else if (type == SqlTokenTypes.KEYWORD && depth == 0) {
+                String upper = text.toUpperCase();
+                if (upper.equals("UPDATE") && !seenUpdate) {
+                    seenUpdate = true;
+                } else if (upper.equals("SET") && seenUpdate) {
+                    setIdx = i;
+                    break;
+                }
+            }
+            i++;
+        }
+        if (setIdx < 0) return List.of();
+        // 2) SET 段收集各项：顶层逗号切分，终止于下一个顶层主子句关键字
+        List<List<Pair<IElementType, String>>> items = new ArrayList<>();
+        List<Pair<IElementType, String>> cur = new ArrayList<>();
+        depth = 0;
+        int j = setIdx + 1;
+        while (j < tokens.size()) {
+            IElementType type = tokens.get(j).getFirst();
+            String text = tokens.get(j).getSecond();
+            if (type == SqlTokenTypes.COMMENT) {
+                // 注释不参与切分（跳过）
+            } else if (type == SqlTokenTypes.PAREN && text.equals("(")) {
+                depth++;
+                cur.add(tokens.get(j));
+            } else if (type == SqlTokenTypes.PAREN && text.equals(")")) {
+                depth--;
+                cur.add(tokens.get(j));
+            } else if (type == SqlTokenTypes.OPERATOR && text.equals(",") && depth == 0) {
+                if (!cur.isEmpty()) items.add(cur);
+                cur = new ArrayList<>();
+            } else if (type == SqlTokenTypes.KEYWORD && depth == 0 && SET_TERMINAL_KEYWORDS.contains(text.toUpperCase())) {
+                return finishUpdateSetItems(items, cur);
+            } else {
+                cur.add(tokens.get(j));
+            }
+            j++;
+        }
+        return finishUpdateSetItems(items, cur);
+    }
+
+    /** 各项按首个顶层 {@code =} 分离列名/表达式（无 {@code =}/表达式空的项跳过）。 */
+    private static List<UpdateSetAssignment> finishUpdateSetItems(
+            List<List<Pair<IElementType, String>>> items,
+            List<Pair<IElementType, String>> tail) {
+        List<List<Pair<IElementType, String>>> all = new ArrayList<>(items);
+        if (!tail.isEmpty()) all.add(tail);
+        List<UpdateSetAssignment> out = new ArrayList<>();
+        for (List<Pair<IElementType, String>> item : all) {
+            int eqIdx = -1;
+            for (int k = 0; k < item.size(); k++) {
+                if (item.get(k).getFirst() == SqlTokenTypes.OPERATOR && item.get(k).getSecond().equals("=")) {
+                    eqIdx = k;
+                    break;
+                }
+            }
+            if (eqIdx <= 0) continue;
+            List<Pair<IElementType, String>> exprTokens = item.subList(eqIdx + 1, item.size());
+            if (exprTokens.isEmpty()) continue;
+            out.add(new UpdateSetAssignment(
+                    concatTokenText(item.subList(0, eqIdx)),
+                    renderTokenText(exprTokens)));
+        }
+        return out;
+    }
+
+    /** token 原文紧贴拼合（列名形态：{@code age} / {@code t.a} / {@code `order`}）。 */
+    private static String concatTokenText(List<Pair<IElementType, String>> tokens) {
+        StringBuilder sb = new StringBuilder();
+        for (Pair<IElementType, String> token : tokens) {
+            sb.append(token.getSecond());
+        }
+        return sb.toString();
+    }
+
+    /**
+     * token 渲染为表达式文本（与 INSERT 组元素渲染同款空格规则：运算符两侧空格、点号紧贴、
+     * 函数名后括号紧贴、逗号后空格）。
+     */
+    private static String renderTokenText(List<Pair<IElementType, String>> elem) {
+        StringBuilder s = new StringBuilder();
+        boolean space = false;
+        String prev = "";
+        for (Pair<IElementType, String> entry : elem) {
+            String text = entry.getSecond();
+            if (text.equals("(")) {
+                if (!FUNCTION_NAMES.contains(prev.toUpperCase()) && space && s.length() > 0) s.append(' ');
+                s.append('(');
+                space = false;
+            } else if (text.equals(")")) {
+                s.append(')');
+                space = true;
+            } else if (text.equals(".")) {
+                s.append('.');
+                space = false;
+            } else if (text.equals(",")) {
+                s.append(',');
+                space = true;
+            } else {
+                if (space && s.length() > 0) s.append(' ');
+                s.append(text);
+                space = true;
+            }
+            prev = text;
+        }
+        return s.toString();
+    }
+
+    /**
+     * UPDATE 竖排产物追加 (new) 列标注：SET 段内匹配到 {@link #parseUpdateSetAssignments} 项的行，
+     * 行尾追加 {@code -- 列名 (new) = 表达式}（T-VPairAnno 行尾标注同款范式，不破坏 SQL 可执行性）。
+     * 幂等：已有同名 {@code (new)} 标注（行尾注释或独立注释行，format 会把行尾注释拆为独立行）不重复追加。
+     */
+    private static String annotateUpdateNewColumns(String formatted, List<Pair<IElementType, String>> tokens,
+                                                   boolean annotate) {
+        if (!annotate) return formatted;
+        List<UpdateSetAssignment> assignments = parseUpdateSetAssignments(tokens);
+        if (assignments.isEmpty()) return formatted;
+        String[] lines = formatted.split("\n", -1);
+        // 第一遍：全量收集已有 (new) 标注列名——format 会把行尾注释拆为独立行（位于其 SET 项行
+        // 下方），逐行边收集边追加会漏掉下方注释导致重复标注
+        java.util.HashSet<String> annotatedCols = new java.util.HashSet<>();
+        for (String line : lines) {
+            String annotated = existingNewColumnAnnotation(line.trim());
+            if (annotated != null) annotatedCols.add(annotated);
+        }
+        // 第二遍：SET 段内匹配项追加行尾标注
+        StringBuilder out = new StringBuilder(formatted.length() + 64);
+        boolean inSetClause = false;
+        for (int idx = 0; idx < lines.length; idx++) {
+            String line = lines[idx];
+            String trimmed = line.trim();
+            List<Pair<IElementType, String>> lineTokens = lex(trimmed);
+            Pair<IElementType, String> firstTok = lineTokens.isEmpty() ? null : lineTokens.get(0);
+            if (firstTok != null && firstTok.getFirst() == SqlTokenTypes.KEYWORD) {
+                String upper = firstTok.getSecond().toUpperCase();
+                if (upper.equals("SET")) {
+                    inSetClause = true;
+                } else if (NEW_LINE_KEYWORDS.contains(upper)) {
+                    inSetClause = false;
+                }
+            }
+            String lineOut = line;
+            if (inSetClause && !trimmed.isEmpty() && !trimmed.startsWith("--")) {
+                int eqIdx = -1;
+                for (int k = 0; k < lineTokens.size(); k++) {
+                    if (lineTokens.get(k).getFirst() == SqlTokenTypes.OPERATOR
+                            && lineTokens.get(k).getSecond().equals("=")) {
+                        eqIdx = k;
+                        break;
+                    }
+                }
+                if (eqIdx > 0) {
+                    String col = concatTokenText(lineTokens.subList(0, eqIdx));
+                    UpdateSetAssignment assignment = null;
+                    for (UpdateSetAssignment a : assignments) {
+                        if (a.column().equals(col)) {
+                            assignment = a;
+                            break;
+                        }
+                    }
+                    if (assignment != null && !annotatedCols.contains(col)) {
+                        annotatedCols.add(col);
+                        lineOut = line.stripTrailing() + "  -- " + col + " (new) = " + assignment.expression();
+                    }
+                }
+            }
+            if (idx > 0) out.append('\n');
+            out.append(lineOut);
+        }
+        return out.toString();
+    }
+
+    /** 提取行内已有 {@code (new)} 标注的列名（{@code -- col (new) = ...}；无标注返回 null）。 */
+    private static String existingNewColumnAnnotation(String trimmed) {
+        int idx = trimmed.lastIndexOf("--");
+        if (idx < 0) return null;
+        String comment = trimmed.substring(idx + 2).trim();
+        int newIdx = comment.indexOf("(new)");
+        if (newIdx <= 0) return null;
+        return comment.substring(0, newIdx).trim();
     }
 
     /**

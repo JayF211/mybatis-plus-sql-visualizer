@@ -133,7 +133,7 @@ public final class HqlConverter {
     }
 
     /**
-     * 转换 HQL 字符串为 Result。
+     * 转换 HQL 字符串为 Result（project / entityAlias 取默认 null）。
      *
      * @param hql       HQL 查询字符串
      * @param tableInfo 实体表信息（列映射用）；可为 null，此时仅做参数替换
@@ -142,6 +142,23 @@ public final class HqlConverter {
      * @return Result（转换后 SQL + 语句模型）
      */
     public static Result convert(@NotNull String hql, @Nullable TableInfo tableInfo, @Nullable Project project) {
+        return convert(hql, tableInfo, project, null);
+    }
+
+    /**
+     * 转换 HQL 字符串为 Result（完整形态）。
+     *
+     * @param hql       HQL 查询字符串
+     * @param tableInfo 实体表信息（列映射用）；可为 null，此时仅做参数替换
+     * @param project   项目（J7 JOIN ON 注解级解析 / J13 子查询实体映射用）；
+     *                  null 时两处降级为关联元数据 / 跳过，行为与历史版本一致
+     * @param entityAlias @Entity(name=...) 实体别名（T-HqlInhCols）；HQL {@code FROM Alias}
+     *                  的 Alias 是实体名而非类名，传入后 mapEntityToTable 同样按别名替换表名。
+     *                  null 时行为与历史版本一致
+     * @return Result（转换后 SQL + 语句模型）
+     */
+    public static Result convert(@NotNull String hql, @Nullable TableInfo tableInfo, @Nullable Project project,
+                                 @Nullable String entityAlias) {
         TableInfo table = tableInfo != null ? tableInfo : createFallbackTable();
 
         // 0. 检测 IN 子句参数（在命名参数替换前检测）
@@ -167,7 +184,7 @@ public final class HqlConverter {
 
         // 7. 实体名 → 表名映射
         if (!table.getEntityClassName().isBlank()) {
-            sql = mapEntityToTable(sql, table);
+            sql = mapEntityToTable(sql, table, entityAlias);
             // 8. 关联字段路径映射：alias.field.id → 外键列名（须在属性映射之前）
             sql = mapAssociationPath(sql, table);
             // 9. 属性名 → 列名映射
@@ -206,6 +223,10 @@ public final class HqlConverter {
             // 头部结构异常（非法 HQL）→ 维持历史 SelectStatement 透传，不抛异常
         }
 
+        String statementComment = advancedConstructComment(sql);
+        if (statementComment == null) {
+            statementComment = inheritanceBoundaryComment(table);
+        }
         return new Result(
                 sql,
                 new SelectStatement(
@@ -221,7 +242,7 @@ public final class HqlConverter {
                         null,
                         null,
                         null,
-                        advancedConstructComment(sql),
+                        statementComment,
                         List.of(),
                         null,
                         null),
@@ -326,6 +347,23 @@ public final class HqlConverter {
         return null;
     }
 
+    /**
+     * T-HIC-04：@Inheritance(JOINED/TABLE_PER_CLASS) 边界标注——只注释不改行为。
+     * JOINED 把父类字段存于父表（SELECT 需跨表连接），TABLE_PER_CLASS 每子类独立表；
+     * 本插件列清单按「父类字段合并进子表」的单表口径渲染，与实际建表不符时
+     * 预览产物需自行改写。SINGLE_TABLE（默认）合并语义正确，不标注。
+     */
+    @Nullable
+    private static String inheritanceBoundaryComment(@NotNull TableInfo table) {
+        String strategy = table.getInheritanceStrategy();
+        if ("JOINED".equals(strategy) || "TABLE_PER_CLASS".equals(strategy)) {
+            return "/* @Inheritance(" + strategy + ")：父类字段实际存于"
+                    + ("JOINED".equals(strategy) ? "父表（JOIN 连接获取）" : "各子类独立表")
+                    + "，列清单按单表口径合并，执行前请按实际建表改写 */";
+        }
+        return null;
+    }
+
     // ------------------------------------------------------------------
     // MEMBER OF
     // ------------------------------------------------------------------
@@ -353,11 +391,34 @@ public final class HqlConverter {
     /**
      * 将 HQL 中的实体类名映射为数据库表名。
      * 仅在 TableInfo 有效时调用。
+     * T-HqlInhCols：{@code @Entity(name=...)} 实体别名同样命中替换（HQL {@code FROM Alias} 的
+     * Alias 是实体名而非类名，JPA 语义）；别名经 entityAlias 参数传入，
+     * resolve 链由 JpaMetadataReader.entityNameOf 读取。
      */
-    private static String mapEntityToTable(@NotNull String hql, @NotNull TableInfo table) {
+    private static String mapEntityToTable(@NotNull String hql, @NotNull TableInfo table, @Nullable String entityAlias) {
         if (table.getEntityClassName().isBlank()) return hql;
-        Pattern entityPattern = Pattern.compile("\\b" + Pattern.quote(table.getEntityClassName()) + "\\b");
-        return entityPattern.matcher(hql).replaceAll(Matcher.quoteReplacement(table.getTableName()));
+        String result = hql;
+        Pattern classNamePattern = entityPattern(table.getEntityClassName());
+        if (classNamePattern != null) {
+            result = classNamePattern.matcher(result).replaceAll(Matcher.quoteReplacement(table.getTableName()));
+        }
+        if (entityAlias != null && !entityAlias.isBlank() && !entityAlias.equals(table.getEntityClassName())) {
+            Pattern aliasPattern = entityPattern(entityAlias);
+            if (aliasPattern != null) {
+                result = aliasPattern.matcher(result).replaceAll(Matcher.quoteReplacement(table.getTableName()));
+            }
+        }
+        return result;
+    }
+
+    /** 实体标识符全词匹配 Pattern（词边界防子串误伤；构造失败容错返回 null）。 */
+    @Nullable
+    private static Pattern entityPattern(@NotNull String identifier) {
+        try {
+            return Pattern.compile("\\b" + Pattern.quote(identifier) + "\\b");
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     // ------------------------------------------------------------------

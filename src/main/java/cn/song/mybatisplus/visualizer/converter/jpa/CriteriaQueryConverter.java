@@ -30,6 +30,7 @@ import cn.song.mybatisplus.visualizer.psi.jpa.PredicateModel;
 import cn.song.mybatisplus.visualizer.psi.jpa.SelectColumn;
 import cn.song.mybatisplus.visualizer.psi.jpa.SubqueryModel;
 import cn.song.mybatisplus.visualizer.util.NamingStrategy;
+import com.intellij.openapi.project.Project;
 import com.intellij.psi.PsiClass;
 import java.util.ArrayList;
 import java.util.List;
@@ -92,7 +93,7 @@ public final class CriteriaQueryConverter {
     }
 
     /**
-     * 转换 CriteriaQueryModel 为 SqlStatement。
+     * 转换 CriteriaQueryModel 为 SqlStatement（project 取默认 null）。
      *
      * @param model         CriteriaQueryLocator 输出的中间模型
      * @param overrideTable 可选的表信息覆盖（测试/外部传入预解析表信息用）；
@@ -101,27 +102,47 @@ public final class CriteriaQueryConverter {
      *         无法解析实体时返回全 Raw 降级的 SELECT
      */
     public static SqlStatement convert(@NotNull CriteriaQueryModel model, @Nullable TableInfo overrideTable) {
-        TableInfo tableInfo = overrideTable != null ? overrideTable : resolveTableInfo(model);
+        return convert(model, overrideTable, null);
+    }
+
+    /**
+     * 转换 CriteriaQueryModel 为 SqlStatement（完整形态）。
+     *
+     * @param model         CriteriaQueryLocator 输出的中间模型
+     * @param overrideTable 可选的表信息覆盖（测试/外部传入预解析表信息用）；
+     *                      null 时按 model.entityClass 或 model.entityClassName 解析
+     * @param project 调用方项目（T-TS-07）：实体类不可解析时的<b>类名兜底推断</b>按该项目读取
+     *   项目级表配置；null = 未提供，兜底推断沿用「首个打开项目」的既有语义（纯单测/无项目上下文）。
+     *   JOIN/子查询的类名兜底（{@link #convertJoins} / {@link #renderSubQuery}）恒无 PsiClass，全靠本参数定型
+     * @return 按 model.operation 返回 Select / Update / Delete 语句模型；
+     *         无法解析实体时返回全 Raw 降级的 SELECT
+     */
+    public static SqlStatement convert(
+            @NotNull CriteriaQueryModel model,
+            @Nullable TableInfo overrideTable,
+            @Nullable Project project) {
+        TableInfo tableInfo = overrideTable != null ? overrideTable : resolveTableInfo(model, project);
         switch (model.getOperation()) {
             case UPDATE:
-                return convertUpdate(model, tableInfo);
+                return convertUpdate(model, tableInfo, project);
             case DELETE:
                 return new DeleteStatement(
                         tableInfo,
-                        convertPredicates(model.getPredicates(), tableInfo));
+                        convertPredicates(model.getPredicates(), tableInfo, project));
             case SELECT:
-                return convertSelect(model, tableInfo);
+                return convertSelect(model, tableInfo, project);
             default:
                 throw new IllegalArgumentException("未知的 CriteriaOperation: " + model.getOperation());
         }
     }
 
-    private static SelectStatement convertSelect(@NotNull CriteriaQueryModel model, @NotNull TableInfo tableInfo) {
-        List<Condition> conditions = convertPredicates(model.getPredicates(), tableInfo);
+    private static SelectStatement convertSelect(
+            @NotNull CriteriaQueryModel model, @NotNull TableInfo tableInfo, @Nullable Project project) {
+        List<Condition> conditions = convertPredicates(model.getPredicates(), tableInfo, project);
         List<ColumnRef> groupBy = convertGroupBy(model.getGroupBys(), tableInfo);
-        Condition having = convertHaving(model.getHavings(), tableInfo);
+        Condition having = convertHaving(model.getHavings(), tableInfo, project);
         List<OrderByItem> orderBy = convertOrderBy(model.getOrderBys(), tableInfo);
-        List<JoinClause> joins = convertJoins(model.getJoins(), tableInfo);
+        List<JoinClause> joins = convertJoins(model.getJoins(), tableInfo, project);
         List<ColumnRef> selectColumns = convertSelectColumns(model.getSelectColumns(), tableInfo);
 
         return new SelectStatement(
@@ -144,8 +165,9 @@ public final class CriteriaQueryConverter {
     }
 
     /** CriteriaUpdate → UpdateStatement（T-J6）：set 子句转 SetClause，where 谓词转 conditions。 */
-    private static UpdateStatement convertUpdate(@NotNull CriteriaQueryModel model, @NotNull TableInfo tableInfo) {
-        List<Condition> conditions = convertPredicates(model.getPredicates(), tableInfo);
+    private static UpdateStatement convertUpdate(
+            @NotNull CriteriaQueryModel model, @NotNull TableInfo tableInfo, @Nullable Project project) {
+        List<Condition> conditions = convertPredicates(model.getPredicates(), tableInfo, project);
         List<SetClause> sets = new ArrayList<>();
         for (CriteriaSetClause clause : model.getSetClauses()) {
             sets.add(new SetClause(
@@ -162,10 +184,11 @@ public final class CriteriaQueryConverter {
     /**
      * 解析实体表信息。
      *
-     * 优先通过 entityClass PsiClass 走 JpaEntityResolver 解析（@Table/@Column 注解）；
-     * 不可解析时按命名策略由类名推断表名。
+     * 优先通过 entityClass PsiClass 走 JpaEntityResolver 解析（@Table/@Column 注解，其内部
+     * 自带 {@code entityClass.project}）；不可解析时按命名策略由类名推断表名——此路须 project
+     * （T-TS-07：显式传入后不再受「首个打开项目」影响）。
      */
-    private static TableInfo resolveTableInfo(@NotNull CriteriaQueryModel model) {
+    private static TableInfo resolveTableInfo(@NotNull CriteriaQueryModel model, @Nullable Project project) {
         PsiClass entityClass = model.getEntityClass();
         if (entityClass != null) {
             return new JpaEntityResolver().resolve(entityClass);
@@ -175,7 +198,7 @@ public final class CriteriaQueryConverter {
                 : (model.getResultClassName() != null ? model.getResultClassName() : "UnknownEntity");
         return new TableInfo(
                 className,
-                JpaEntityResolver.inferDecoratedTableName(className),
+                JpaEntityResolver.inferDecoratedTableName(className, project),
                 List.of(),
                 null,
                 null,
@@ -183,15 +206,15 @@ public final class CriteriaQueryConverter {
                 List.of());
     }
 
-    /** 子查询实体表信息（仅类名可推断，列映射为空，按命名策略兜底）。 */
-    private static TableInfo resolveSubTableInfo(@NotNull SubqueryModel sub) {
+    /** 子查询实体表信息（仅类名可推断，列映射为空，按命名策略兜底；project 见 {@link #convert}）。 */
+    private static TableInfo resolveSubTableInfo(@NotNull SubqueryModel sub, @Nullable Project project) {
         String className = sub.getEntityClassName();
         if (className == null) {
             return new TableInfo("UnknownEntity", "unknown_entity", List.of(), null, null, null, List.of());
         }
         return new TableInfo(
                 className,
-                JpaEntityResolver.inferDecoratedTableName(className),
+                JpaEntityResolver.inferDecoratedTableName(className, project),
                 List.of(),
                 null,
                 null,
@@ -269,17 +292,21 @@ public final class CriteriaQueryConverter {
 
     /**
      * 转换谓词列表为 Condition 列表。
+     *
+     * <p>project 仅用于子查询的类名兜底表名推断（T-TS-07），一路透传到 {@link #renderSubQuery}。
      */
     private static List<Condition> convertPredicates(
             @NotNull List<PredicateModel> predicates,
-            @NotNull TableInfo tableInfo) {
-        return predicates.stream().map(p -> convertPredicate(p, tableInfo)).toList();
+            @NotNull TableInfo tableInfo,
+            @Nullable Project project) {
+        return predicates.stream().map(p -> convertPredicate(p, tableInfo, project)).toList();
     }
 
     /**
-     * 转换单个 PredicateModel 为 Condition。
+     * 转换单个 PredicateModel 为 Condition（project 见 {@link #convertPredicates}）。
      */
-    private static Condition convertPredicate(@NotNull PredicateModel predicate, @NotNull TableInfo tableInfo) {
+    private static Condition convertPredicate(
+            @NotNull PredicateModel predicate, @NotNull TableInfo tableInfo, @Nullable Project project) {
         if (predicate instanceof PredicateModel.Simple s) {
             ColumnRef column = resolveColumnRef(s.getFieldName(), tableInfo);
             return new Condition.Simple(column, s.getOp(), sqlValue(s.getValueExpression()), null);
@@ -325,7 +352,7 @@ public final class CriteriaQueryConverter {
         } else if (predicate instanceof PredicateModel.Group s) {
             Connector connector = s.getConnector() == GroupConnector.AND ? Connector.AND : Connector.OR;
             List<Condition> children = s.getChildren().stream()
-                    .map(p -> convertPredicate(p, tableInfo)).toList();
+                    .map(p -> convertPredicate(p, tableInfo, project)).toList();
             return new Condition.Group(connector, children, null, s.isNegated());
         } else if (predicate instanceof PredicateModel.ExpressionComparison s) {
             // 表达式比较（T-J17）：LOWER(x) = 'a' / ABS(x) > 1 / LOWER(x) IS NULL 等
@@ -346,14 +373,14 @@ public final class CriteriaQueryConverter {
                     null);
         } else if (predicate instanceof PredicateModel.Exists s) {
             // EXISTS 子查询（T-J17/J13）：有界渲染，降级注释
-            String subSql = renderSubQuery(s.getSubQuery());
+            String subSql = renderSubQuery(s.getSubQuery(), project);
             if (subSql != null) {
                 return new Condition.Raw((s.isNegated() ? "NOT " : "") + "EXISTS " + subSql);
             }
             return new Condition.Raw(degradedSubqueryComment(s.getSubQuery()));
         } else if (predicate instanceof PredicateModel.InSubQuery s) {
             // 列 IN 子查询（T-J17/J13）
-            String subSql = renderSubQuery(s.getSubQuery());
+            String subSql = renderSubQuery(s.getSubQuery(), project);
             if (subSql != null) {
                 String col = resolveColumnName(s.getFieldName(), tableInfo);
                 String op = s.isNegated() ? "NOT IN" : "IN";
@@ -427,9 +454,10 @@ public final class CriteriaQueryConverter {
     @Nullable
     private static Condition convertHaving(
             @NotNull List<PredicateModel> havings,
-            @NotNull TableInfo tableInfo) {
+            @NotNull TableInfo tableInfo,
+            @Nullable Project project) {
         if (havings.isEmpty()) return null;
-        List<Condition> conditions = havings.stream().map(p -> convertPredicate(p, tableInfo)).toList();
+        List<Condition> conditions = havings.stream().map(p -> convertPredicate(p, tableInfo, project)).toList();
         if (conditions.size() == 1) {
             return conditions.get(0);
         }
@@ -463,14 +491,18 @@ public final class CriteriaQueryConverter {
      *    列别名归属按 get 调用接收者变量判定（join 变量 → join 别名，root/未知 → 主表）
      *  - 无显式 ON → 既有外键推断：alias.id = root_fk_column
      *  - fetch 调用与 join 同形渲染（EAGER 抓取合并入主查询的静态近似）
+     *
+     * T-TS-07：join 表名只有类名字符串（{@code cn.song.mybatisplus.visualizer.psi.jpa.JoinModel}
+     * 不带 PsiClass），恒走类名兜底推断——project 是唯一取值口径来源（见 {@link #convert}）。
      */
     private static List<JoinClause> convertJoins(
             @NotNull List<JoinModel> joins,
-            @NotNull TableInfo tableInfo) {
+            @NotNull TableInfo tableInfo,
+            @Nullable Project project) {
         List<JoinClause> result = new ArrayList<>();
         for (JoinModel join : joins) {
             String entityClassName = join.getEntityClassName() != null ? join.getEntityClassName() : join.getFieldName();
-            String tableName = JpaEntityResolver.inferDecoratedTableName(entityClassName);
+            String tableName = JpaEntityResolver.inferDecoratedTableName(entityClassName, project);
             // 别名优先级：显式别名 > join 返回值变量名 > 关联属性名首字母小写
             String fieldName = join.getFieldName();
             String alias = join.getAlias() != null
@@ -483,7 +515,7 @@ public final class CriteriaQueryConverter {
             if (!join.getOnPredicates().isEmpty()) {
                 onConditions = new ArrayList<>();
                 for (PredicateModel on : join.getOnPredicates()) {
-                    onConditions.add(convertOnPredicate(on, tableInfo, join, alias));
+                    onConditions.add(convertOnPredicate(on, tableInfo, join, alias, project));
                 }
             } else {
                 // JOIN ON 条件推断
@@ -495,12 +527,13 @@ public final class CriteriaQueryConverter {
         return result;
     }
 
-    /** 显式 ON 谓词转换：ColumnEquals 按变量归属补表别名，其余谓词走通用转换。 */
+    /** 显式 ON 谓词转换：ColumnEquals 按变量归属补表别名，其余谓词走通用转换（project 见 {@link #convert}）。 */
     private static Condition convertOnPredicate(
             @NotNull PredicateModel predicate,
             @NotNull TableInfo tableInfo,
             @NotNull JoinModel join,
-            @NotNull String joinAlias) {
+            @NotNull String joinAlias,
+            @Nullable Project project) {
         if (predicate instanceof PredicateModel.ColumnEquals s) {
             return new Condition.ColumnComparison(
                     new ColumnRef(
@@ -511,7 +544,7 @@ public final class CriteriaQueryConverter {
                             resolveColumnName(s.getRightFieldName(), tableInfo)),
                     null);
         }
-        return convertPredicate(predicate, tableInfo);
+        return convertPredicate(predicate, tableInfo, project);
     }
 
     /** get 接收者变量 → 表别名：join 变量 → join 别名；root/未知 → 主表（无别名）。 */
@@ -565,11 +598,13 @@ public final class CriteriaQueryConverter {
      *
      * 有界：degradedReason 非空（correlate / 多层嵌套）或谓词无法全部静态渲染时返回 null，
      * 由调用方降级注释。占位符以 `?` 文本呈现（不参与面板参数收集，属已知边界）。
+     *
+     * <p>project 透传给子查询表名的类名兜底推断（T-TS-07，子查询模型无 PsiClass）。
      */
     @Nullable
-    private static String renderSubQuery(@NotNull SubqueryModel sub) {
+    private static String renderSubQuery(@NotNull SubqueryModel sub, @Nullable Project project) {
         if (sub.getDegradedReason() != null) return null;
-        TableInfo subTable = resolveSubTableInfo(sub);
+        TableInfo subTable = resolveSubTableInfo(sub, project);
         String selectColumn = sub.getSelectFieldName() != null
                 ? resolveColumnName(sub.getSelectFieldName(), subTable)
                 : "*";

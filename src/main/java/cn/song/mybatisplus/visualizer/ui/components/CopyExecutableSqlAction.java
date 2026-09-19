@@ -29,6 +29,14 @@ public final class CopyExecutableSqlAction {
     /** 通知分组 id（plugin.xml 注册）。 */
     private static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
 
+    /**
+     * T-InjectionGate T-IG-03：产物含 `${}` raw 段时的头部标记注释。
+     *
+     * <p>复制不是执行——这条链不弹确认（弹窗克制红线：模态确认只留给执行），改让风险随产物走：
+     * 产物粘到别处时读者能看到 raw 段带的是模拟值。SQL 注释行（`--`）不改产物可执行性。
+     */
+    public static final String DOLLAR_RAW_MARKER = "-- contains ${} raw segments (mock values)";
+
     private final Project project;
 
     public CopyExecutableSqlAction(@Nullable Project project) {
@@ -60,7 +68,11 @@ public final class CopyExecutableSqlAction {
             executableSql = ParameterReplacer.buildExecutableSql(sql, sources, paramValues, List.of());
         }
 
-        copyToClipboard(executableSql);
+        // T-InjectionGate T-IG-03：含 `${}` raw 段（解析期事实，见 PreviewResult.hasDollarRawSegments）
+        // 时产物头部加标记注释；无 raw 段产物逐字节不变
+        String product = panel.hasDollarRawSegments() ? DOLLAR_RAW_MARKER + "\n" + executableSql : executableSql;
+
+        copyToClipboard(product);
 
         int replacedCount = countReplaced(sql, executableSql);
         String message;

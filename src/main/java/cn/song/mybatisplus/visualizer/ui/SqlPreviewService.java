@@ -66,6 +66,7 @@ import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryInfo;
 import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryLocator;
 import cn.song.mybatisplus.visualizer.psi.jpa.HqlParameter;
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver;
+import cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader;
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlPreviewService;
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlLocator;
 import cn.song.mybatisplus.visualizer.psi.jpa.NamedQueryInfo;
@@ -92,7 +93,7 @@ import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.components.Service;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.project.ProjectManager;
+
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
@@ -150,6 +151,30 @@ public final class SqlPreviewService {
     /** 文件级解析缓存（F-20）：文件内容变更（modificationStamp）即失效。 */
     private final WrapperCache cache = new WrapperCache();
 
+    /**
+     * T-ErrorLocate T-EL-03：最近一次预览的源锚点（文件 + 0 基光标行），错误定位动作消费。
+     * 预览触发入口（ConvertToSqlAction）刷新；null = 本会话尚未有可解析锚点（定位按钮不出现）。
+     * 单槽即可：预览弹窗每项目至多一个（M36.5.47 单例化），同刻只有一个错误面板可定位。
+     */
+    @Nullable
+    public SourceAnchor lastPreviewSourceAnchor = null;
+
+    /** 预览源锚点（文件 + 0 基行）。 */
+    public record SourceAnchor(
+            /** 预览源文件。 */
+            @NotNull com.intellij.openapi.vfs.VirtualFile file,
+            /** 0 基光标行。 */
+            int line0) {
+    }
+
+    /**
+     * Kotlin {@code var lastPreviewSourceAnchor} 的 setter 形态——Java 调用方（ConvertToSqlAction）
+     * 按属性赋值语义调用本方法；字段本身保持 public 供 {@link SqlPreviewPanel} 直读（同一落点）。
+     */
+    public void setLastPreviewSourceAnchor(@Nullable SourceAnchor anchor) {
+        this.lastPreviewSourceAnchor = anchor;
+    }
+
     /** 当前项目（主要用于获取项目级设置）。 */
     private final Project project;
 
@@ -166,6 +191,19 @@ public final class SqlPreviewService {
     public SqlPreviewService(@NotNull Project project) {
         this.project = project;
         this.projectSettings = safeGet(() -> ProjectPluginSettings.getInstance(project));
+        // T-PerfTail #1：编辑器关闭即清理该文件的 WrapperCache 条目——长会话中条目数随打开
+        // 文件集有界（LRU 512 上限之外的主动回收）。连接绑定 project Disposable，项目关闭自动注销。
+        // FileEditorManagerListener 的 fileClosed 携带 VirtualFile，与 WrapperCache 键的
+        // VirtualFile.url 字符串维度（T-Perf-18）直接对齐。
+        project.getMessageBus().connect(project).subscribe(
+                com.intellij.openapi.fileEditor.FileEditorManagerListener.FILE_EDITOR_MANAGER,
+                new com.intellij.openapi.fileEditor.FileEditorManagerListener() {
+                    @Override
+                    public void fileClosed(@NotNull com.intellij.openapi.fileEditor.FileEditorManager source,
+                                           @NotNull com.intellij.openapi.vfs.VirtualFile file) {
+                        cache.evictFile(file.getUrl());
+                    }
+                });
     }
 
     /**
@@ -203,18 +241,6 @@ public final class SqlPreviewService {
     }
 
     /**
-     * O-5：获取有效的方言名称（项目级优先，回退全局）。
-     */
-    private String effectiveDialectName() {
-        String global = (settings != null && settings.getState() != null)
-                ? settings.getState().getDialect() : PluginSettings.DEFAULT_DIALECT;
-        if (projectSettings != null && projectSettings.isEnabled()) {
-            return projectSettings.effectiveDialect();
-        }
-        return global;
-    }
-
-    /**
      * O-5：是否格式化输出（项目级优先，回退全局）。
      */
     private boolean formatSql() {
@@ -223,6 +249,64 @@ public final class SqlPreviewService {
             return projectSettings.effectiveFormatSql();
         }
         return global;
+    }
+
+    // T-SettingsTruth P4：以下 7 项直读点全部改走项目级 effective——
+    // useProjectSettings 开启时项目级覆盖全局，关闭/null/空回退全局（回退语义在
+    // ProjectPluginSettings.effectiveXxx 内置，此处仅透传；effectiveString 由零调用转正）。
+
+    /** 有效参数替换开关（项目级优先，回退全局）。 */
+    private boolean effectiveReplaceParams() {
+        if (projectSettings != null && projectSettings.isEnabled()) return projectSettings.effectiveReplaceParams();
+        return (settings != null && settings.getState() != null) ? settings.getState().getReplaceParams() : true;
+    }
+
+    /** 有效逻辑删除注入开关（项目级优先，回退全局）。 */
+    private boolean effectiveInjectLogicDelete() {
+        if (projectSettings != null && projectSettings.isEnabled()) return projectSettings.effectiveInjectLogicDelete();
+        return (settings != null && settings.getState() != null) ? settings.getState().getInjectLogicDelete() : true;
+    }
+
+    /** 有效逻辑删除值（项目级优先，空回退全局）。 */
+    @NotNull
+    private String effectiveLogicDeleteValue() {
+        return effectiveString((settings != null && settings.getState() != null) ? settings.getState().getLogicDeleteValue() : "",
+                projectSettings != null ? projectSettings.effectiveLogicDeleteValue() : null);
+    }
+
+    /** 有效表前缀（项目级优先，空回退全局）。 */
+    @NotNull
+    private String effectiveTablePrefix() {
+        return effectiveString((settings != null && settings.getState() != null) ? settings.getState().getTablePrefix() : "",
+                projectSettings != null ? projectSettings.effectiveTablePrefix() : null);
+    }
+
+    /** 有效表后缀（项目级优先，空回退全局）。 */
+    @NotNull
+    private String effectiveTableSuffix() {
+        return effectiveString((settings != null && settings.getState() != null) ? settings.getState().getTableSuffix() : "",
+                projectSettings != null ? projectSettings.effectiveTableSuffix() : null);
+    }
+
+    /** 有效表名推断策略（项目级优先，空回退全局）。 */
+    @NotNull
+    private String effectiveTableNameInference() {
+        return effectiveString((settings != null && settings.getState() != null) ? settings.getState().getTableNameInference() : PluginSettings.INFERENCE_SNAKE,
+                projectSettings != null ? projectSettings.effectiveTableNameInference() : null);
+    }
+
+    /** 有效忽略字段名（项目级优先，空回退全局）。 */
+    @NotNull
+    private String effectiveIgnoredFields() {
+        return effectiveString((settings != null && settings.getState() != null) ? settings.getState().getIgnoredFields() : "",
+                projectSettings != null ? projectSettings.effectiveIgnoredFields() : null);
+    }
+
+    /** O-5：获取有效的字符串设置值（项目级优先，空值回退全局）。 */
+    @NotNull
+    private String effectiveString(@NotNull String global, @Nullable String project) {
+        return (projectSettings != null && projectSettings.isEnabled() && project != null && !project.isBlank())
+                ? project : global;
     }
 
     /**
@@ -255,8 +339,7 @@ public final class SqlPreviewService {
         // 缓存键含锚点偏移：同文件多个 Wrapper（查询/删除/修改）各自独立缓存，避免串结果
         // M14.6：缓存键含「替换 ? 占位符」开关，开关切换后不命中旧结果
         // T-M19.4（用户实测：表名配置修改后预览不生效）：缓存键含**表配置签名**——设置变更后不再命中旧结果
-        boolean resolveVariables = (settings != null && settings.getState() != null)
-                ? settings.getState().getReplaceParams() : true;
+        boolean resolveVariables = effectiveReplaceParams();
         LocatedWrapper located = cache.getOrCompute(
                 file, anchor.getTextRange().getStartOffset(), resolveVariables, tableConfigSignature(),
                 () -> WrapperLocator.locateWithTable(anchor, resolveVariables));
@@ -269,6 +352,26 @@ public final class SqlPreviewService {
         if (effectiveLocated != null) {
             TableInfo table = effectiveLocated.getTable();
             if (table == null) {
+                // O-8（缺陷 B）：字符串服务链实体解析失败（三通道与方法引用推断全失败）→
+                // 返回带显式警示的空结果（面板红字），不再静默 return null——
+                // 「返回 null = 非 wrapper 锚点」契约收窄保留：仅 located 带 entityResolutionFailed
+                // 标记（服务链形态）时降级，工厂/Kotlin/构造形态与其余锚点行为不变
+                if (effectiveLocated.entityResolutionFailed()) {
+                    LOG.info("preview: DEGRADE table=null, wrapperType="
+                            + (effectiveLocated.getChain() != null ? effectiveLocated.getChain().getWrapperType() : null)
+                            + ", anchor=" + anchor.getTextRange());
+                    return new PreviewResult(
+                            "",
+                            "",
+                            List.of(),
+                            null,
+                            effectiveLocated.getChain() != null ? effectiveLocated.getChain().getWrapperType() : null,
+                            null,
+                            "⚠ 字符串服务链无法推断实体表：Wrapper 链未携带实体类型"
+                                    + "（无 <实体> 类型实参，服务接口/调用返回类型也无实体泛型），SQL 无法生成",
+                            List.of(), Map.of(), null, null, List.of(), List.of(), null, null, Map.of(),
+                            List.of(), List.of(), null, null);
+                }
                 LOG.info("preview: RETURN_NULL table=null, wrapperType="
                         + (effectiveLocated.getChain() != null ? effectiveLocated.getChain().getWrapperType() : null)
                         + ", anchor=" + anchor.getTextRange());
@@ -304,8 +407,11 @@ public final class SqlPreviewService {
                     && (isQueryLike(chain.getWrapperType()) || chain.getWrapperType() == WrapperType.LAMBDA_UPDATE)
                     && !UPDATE_DELETE_JOIN_TYPES.contains(chain.getWrapperType())) {
                 // MP 惯用删除写法：删除条件用 LambdaQueryWrapper 构造，service.remove/delete 消费
+                SelectStatement parsed = new QueryWrapperParser(table).parse(chain);
+                // O-8（缺陷 C）：`last("LIMIT n")` 尾段透传 DELETE 渲染（此前落在 SelectStatement
+                // 独有字段被静默丢弃；跨方言渲染与否由 SqlGenerator 按 Dialect.supportsDeleteLimit 决定）
                 statement = new DeleteStatement(
-                        table, new QueryWrapperParser(table).parse(chain).getConditions(), List.of(), null, List.of());
+                        table, parsed.getConditions(), List.of(), null, List.of(), parsed.getLimit());
             } else {
                 SqlStatement converted = ConverterRegistry.INSTANCE.convert(chain, table);
                 if (converted == null) return null;
@@ -314,7 +420,7 @@ public final class SqlPreviewService {
 
             // T-M15-07：逻辑删除注入（@TableLogic 实体 + 配置开启）
             LogicDeleteState logicDelete = evaluateLogicDeleteState(chain.getCalls());
-            SqlStatement baseStatement = injectLogicDelete() ? injectLogicDeleteCondition(table, statement, logicDelete) : statement;
+            SqlStatement baseStatement = effectiveInjectLogicDelete() ? injectLogicDeleteCondition(table, statement, logicDelete) : statement;
             // T-M22-02：乐观锁注入（@Version 实体 UPDATE）
             SqlStatement finalStatement = injectOptimisticLockCondition(table, baseStatement);
             // T-TenantLine：多租户注入
@@ -468,8 +574,8 @@ public final class SqlPreviewService {
         BatchPreview batch = batchCall != null
                 ? BatchOperationConverter.convert(
                 batchCall,
-                injectLogicDelete(),
-                (settings != null && settings.getState() != null) ? settings.getState().getReplaceParams() : true,
+                effectiveInjectLogicDelete(),
+                effectiveReplaceParams(),
                 // D2：INSERT 租户列追加 = 主开关 AND 子开关（injectTenantOnInsert）；UPDATE 的 SET 租户注入
                 // 走主开关（见上方 enhanceUpdateSet 链），不受本参数影响
                 injectTenantLine() && ((settings != null && settings.getState() != null) ? settings.getState().getInjectTenantOnInsert() : true))
@@ -884,7 +990,7 @@ public final class SqlPreviewService {
             String enhancedSql = applyJpaMethodEnhancements(method, convertedSql, table, true);
             String tableName;
             if (table != null) tableName = table.getTableName();
-            else if (info.getEntityClass() != null) tableName = JpaEntityResolver.inferDecoratedTableName(info.getEntityClass().getName());
+            else if (info.getEntityClass() != null) tableName = JpaEntityResolver.inferDecoratedTableName(info.getEntityClass().getName(), project);
             else tableName = "";
             return new PreviewResult(
                     enhancedSql,
@@ -965,7 +1071,9 @@ public final class SqlPreviewService {
         CriteriaQueryModel model = CriteriaQueryLocator.INSTANCE.locate(anchor);
         if (model == null) return null;
         // 2. CriteriaQueryConverter.convert(model) → SelectStatement
-        SqlStatement statement = CriteriaQueryConverter.INSTANCE.convert(model);
+        // T-TS-07：显式传本服务所属项目——实体类/join/子查询的**类名兜底推断**按该项目读取
+        // 项目级表配置（原先传 null → 取「首个打开项目」，多项目同开时表名修饰错项目）
+        SqlStatement statement = CriteriaQueryConverter.INSTANCE.convert(model, null, project);
         PsiMethod hostMethod = PsiTreeUtil.getParentOfType(anchor, PsiMethod.class);
         // 3. 参数名：从包含 CriteriaQuery 的宿主方法参数列表提取
         List<String> paramNames = (hostMethod != null)
@@ -986,7 +1094,7 @@ public final class SqlPreviewService {
         TableInfo resolvedTable = (model.getEntityClass() != null)
                 ? new JpaEntityResolver().resolve(model.getEntityClass()) : null;
         String tableName = (model.getEntityClassName() != null)
-                ? JpaEntityResolver.inferDecoratedTableName(model.getEntityClassName()) : "";
+                ? JpaEntityResolver.inferDecoratedTableName(model.getEntityClassName(), project) : "";
         // T-J10/J15/J22：方法级增强（Sort ORDER BY/锁/hints/返回类型 notes；LIMIT 已在语句模型级挂载，
         // 分页/排序 notes 由上方分析透传）
         String enhancedSql = applyJpaMethodEnhancements(
@@ -1051,7 +1159,16 @@ public final class SqlPreviewService {
         }
         TableInfo table = resolveHqlTable(info.getEntityClass(), info.getEntityClassName(), info.getHql());
         // Wave1 第三参 project：激活 PSI 级 JOIN ON 与子查询实体映射
-        HqlConverter.Result result = HqlConverter.INSTANCE.convert(info.getHql(), table, project);
+        // T-HqlInhCols：@Entity(name=...) 实体别名透传，别名形态 HQL 实体名才能被表名替换
+        String hqlEntityAlias = null;
+        if (info.getEntityClass() != null) {
+            try {
+                hqlEntityAlias = JpaMetadataReader.entityNameOf(info.getEntityClass());
+            } catch (Throwable t) {
+                hqlEntityAlias = null;
+            }
+        }
+        HqlConverter.Result result = HqlConverter.INSTANCE.convert(info.getHql(), table, project, hqlEntityAlias);
         // 参数名提取：
         // 1. 追踪 setParameter 结果（位置参数用 valueExpr 即变量名，命名参数用 paramName）
         // 2. 若为空（链式调用场景），直接从 HQL 提取
@@ -1194,7 +1311,26 @@ public final class SqlPreviewService {
         }
         TableInfo table = resolveHqlTable(null, info.getEntityClassName(), info.getHql());
         // Wave1 第三参 project：激活 PSI 级 JOIN ON 与子查询实体映射
-        HqlConverter.Result result = HqlConverter.INSTANCE.convert(info.getHql(), table, project);
+        // T-HqlInhCols：别名反查命中时从解析出的 PsiClass 读实体别名透传（此链无 entityClass 入参）
+        PsiClass resolvedEntityClass = null;
+        if (table != null && table.getEntityClassName() != null && !table.getEntityClassName().isBlank()) {
+            try {
+                resolvedEntityClass = JavaPsiFacade.getInstance(project).findClass(
+                        info.getEntityClassName() != null ? info.getEntityClassName() : table.getEntityClassName(),
+                        GlobalSearchScope.allScope(project));
+            } catch (Throwable t) {
+                resolvedEntityClass = null;
+            }
+        }
+        String daoEntityAlias = null;
+        if (resolvedEntityClass != null) {
+            try {
+                daoEntityAlias = JpaMetadataReader.entityNameOf(resolvedEntityClass);
+            } catch (Throwable t) {
+                daoEntityAlias = null;
+            }
+        }
+        HqlConverter.Result result = HqlConverter.INSTANCE.convert(info.getHql(), table, project, daoEntityAlias);
         List<String> paramNames = extractHqlParamNames(info.getParameters());
         if (paramNames.isEmpty()) paramNames = extractParamNamesFromHql(info.getHql());
         return buildJpaPreviewResult(result.getStatement(), result.getSql(), table != null ? table.getTableName() : "",
@@ -1276,8 +1412,9 @@ public final class SqlPreviewService {
         String prefix = dot >= 0 ? namePrefix.substring(0, dot) : "";
         prefix = prefix.trim();
         String entityName = !prefix.isBlank() ? prefix : extractEntityNameFromHql(query.getQueryText());
-        TableInfo table = resolveHqlTable(null, entityName, query.getQueryText());
-        HqlConverter.Result result = HqlConverter.INSTANCE.convert(query.getQueryText(), table, project);
+                TableInfo table = resolveHqlTable(null, entityName, query.getQueryText());
+                // T-HqlInhCols：hbm 项目实体别名多由 XML <entity-name> 承载，注解读不到即 null，安全
+                HqlConverter.Result result = HqlConverter.INSTANCE.convert(query.getQueryText(), table, project);
         String enhancedSql = applyJpaMethodEnhancements(hostMethod, result.getSql(), table, false);
         return buildJpaPreviewResult(
                 result.getStatement(),
@@ -1643,8 +1780,10 @@ public final class SqlPreviewService {
             @NotNull TableInfo table,
             @NotNull SqlStatement statement,
             @NotNull LogicDeleteState state) {
-        String logicDeleteValue = PluginSettings.getInstance().getState().getLogicDeleteValue();
-        if (logicDeleteValue == null || logicDeleteValue.isBlank()) logicDeleteValue = "0";
+        // T-M31.18：逻辑删除值可配置（默认 0，用户可调整——对齐 MP logic-delete-value）
+        // T-SettingsTruth P4：项目级 logicDeleteValue 覆盖（空回退全局，再兜底 "0"）
+        String logicDeleteValue = effectiveLogicDeleteValue();
+        if (logicDeleteValue.isBlank()) logicDeleteValue = "0";
         if (statement instanceof SelectStatement) {
             SelectStatement sel = (SelectStatement) statement;
             List<Condition> conditions = new ArrayList<>(sel.getConditions());
@@ -1959,11 +2098,19 @@ public final class SqlPreviewService {
     }
 
     /**
-     * 当前方言（配置未加载时默认 MySQL）。
+     * O-5：当前方言（配置未加载时默认 MySQL）；T-DialectAutoInfer：auto 开启时智能推断。
+     *
+     * <p>T-TS-FixC：**方言模式（auto/manual）不在本层判定**，整段委托 {@link DialectRegistry#effective}，
+     * 本方法只负责把宿主 project 传下去。为什么不像其余 effective* 那样写
+     * 「项目值 ?: 全局值」两段式：方言的模式判定是**跨层**的——项目级 auto 与全局 auto 参与同一次
+     * 判定（项目级 true 必须压过全局 false），而项目级手动方言名又要压过全局手动值；拆成
+     * 「先在本层算 auto、再让下层算 manual」就会出现两个事实源，正是本次缺陷的成因
+     * （本层按项目级判 auto=true 进 effective，下层却按全局 false 返回全局手动值）。
+     * 收口后优先级语义见 {@code DialectRegistry.effective} 的 KDoc：模式与手动值均「项目级 &gt; 全局」。
      */
     @NotNull
     public Dialect currentDialect() {
-        return DialectRegistry.INSTANCE.byName(effectiveDialectName());
+        return DialectRegistry.INSTANCE.effective(null, project);
     }
 
     /**
@@ -2039,32 +2186,135 @@ public final class SqlPreviewService {
 
     /**
      * 解析 HQL 对应的实体表信息。
+     *
+     * <p>优先使用 entityClass（PsiClass 直接解析）；
+     * 否则按 entityClassName 查找 @Entity 类（含 {@code @Entity(name=...)} 实体别名反查）；
+     * 最后从 HQL 的 FROM 子句提取类名查找 / hbm 映射兜底。
+     *
+     * <p>T-HqlInhCols：列空结果不再直接短路——JpaEntityResolver 异常路径返回
+     * 非空 TableInfo 但列为空（如继承链解析失败/抽象父类映射异常），若在此短路
+     * 会跳过 hbm 兜底与别名反查，下游展开器必出「列信息未解析」降级注释；
+     * 判据改为「非 null 且列非空」，列空时继续走后续路径。
      */
     private TableInfo resolveHqlTable(@Nullable PsiClass entityClass, @Nullable String entityClassName, @NotNull String hql) {
         JpaEntityResolver resolver = new JpaEntityResolver();
-        Project project = (ProjectManager.getInstance().getOpenProjects().length > 0)
-                ? ProjectManager.getInstance().getOpenProjects()[0] : null;
-        if (project == null) return null;
+        // T-Fix-SettingsScope：下方 project 一律取本服务绑定的 project，勿用
+        // openProjects.firstOrNull()——多项目同开时后者取谁取决于 IDE 打开顺序，会在 B 项目里
+        // 按 A 项目的项目级表配置修饰表名，并使 GlobalSearchScope/JavaPsiFacade 落到错误的项目范围。
         String className = (entityClassName != null) ? entityClassName : extractEntityNameFromHql(hql);
+
+        // 路径 1：有 PsiClass 直接解析（JPA 注解）。列空不短路到「更弱的路径」——
+        // 夹具/局部类场景路径 2/3 反而找不到该类；列空仅在「有更好的候选」时被替换：
+        // 即后续路径找到的表列非空才覆盖，否则保留路径 1 结果（含表名与实体类名，
+        // 展开器照常给「列信息未解析」诊断，不丢 FROM 表名替换）。
+        TableInfo resolved = null;
         if (entityClass != null) {
             TableInfo table = resolver.resolve(entityClass);
-            if (table != null) return table;
+            if (table != null && !table.getColumns().isEmpty()) return table;
+            resolved = table;
         }
+
+        // 路径 2：按类名查找 @Entity 类（JPA 注解）；列空不短路
         if (className != null) {
             GlobalSearchScope scope = GlobalSearchScope.allScope(project);
             PsiClass psiClass = JavaPsiFacade.getInstance(project).findClass(className, scope);
             if (psiClass == null) psiClass = findClassByShortName(project, className, scope);
+            if (psiClass == null) psiClass = findClassByEntityName(project, className, scope);
             if (psiClass != null) {
                 TableInfo table = resolver.resolve(psiClass);
-                if (table != null) return table;
+                if (table != null && !table.getColumns().isEmpty()) return table;
+                if (resolved == null) resolved = table;
             }
         }
+
+        // 路径 3：Hibernate XML 映射文件（.hbm.xml）
         if (className != null) {
             HbmXmlMapping.ClassMapping hbmMapping = HbmXmlEntityResolver.resolve(className, project);
-            if (hbmMapping != null) return convertHbmMappingToTableInfo(hbmMapping);
+            if (hbmMapping != null) {
+                return convertHbmMappingToTableInfo(hbmMapping);
+            }
+        }
+
+        return resolved;
+    }
+
+    /**
+     * T-HqlInhCols：按 {@code @Entity(name=...)} 实体别名查找实体类。
+     *
+     * <p>HQL {@code FROM Alias} 的 Alias 可为实体名（JPA 语义）而非类名——
+     * 类名快路径（findClass/findClassByShortName）未命中时按注解值反查。
+     * 扫描结果（实体名 → 全限定名）缓存于 Project userData，以
+     * PsiModificationTracker.modificationCount 失效（照抄 EntityClassFinder 的
+     * {@code @TableName} 反查同款缓存惯例；未命中也入缓存防重复全量扫描）。
+     */
+    @Nullable
+    private PsiClass findClassByEntityName(@NotNull Project project, @NotNull String entityName, @NotNull GlobalSearchScope scope) {
+        if (entityName.isBlank()) return null;
+        long current = com.intellij.psi.util.PsiModificationTracker.getInstance(project).getModificationCount();
+        EntityNameLookupCache existing = project.getUserData(ENTITY_NAME_CACHE_KEY);
+        EntityNameLookupCache cache;
+        if (existing != null && existing.count() == current) {
+            cache = existing;
+        } else {
+            cache = new EntityNameLookupCache(current, new java.util.HashMap<>());
+            project.putUserData(ENTITY_NAME_CACHE_KEY, cache);
+        }
+
+        String key = entityName.toLowerCase();
+        String cached = cache.names().get(key);
+        if (cached != null) {
+            String shortName = substringAfterLast(cached, '.');
+            PsiClass[] classes = PsiShortNamesCache.getInstance(project).getClassesByName(shortName, scope);
+            for (PsiClass clazz : classes) {
+                if (cached.equals(clazz.getQualifiedName())) return clazz;
+            }
+            return null;
+        }
+        if (cached != null || (cached == null && cache.names().containsKey(key) && cache.names().get(key) == null)) return null;
+        // 已知未命中（空串哨兵值）快速返回
+        if (cache.names().containsKey(key)) return null;
+
+        // 慢路径：全量扫项目类短名，匹配 @Entity(name=...) 注解值（jakarta/javax/短名三轨）
+        String matchedQName = null;
+        PsiShortNamesCache namesCache = PsiShortNamesCache.getInstance(project);
+        outer:
+        for (String shortName : namesCache.getAllClassNames()) {
+            for (PsiClass clazz : namesCache.getClassesByName(shortName, scope)) {
+                if (clazz.isInterface() || clazz.isEnum() || clazz.isAnnotationType()) continue;
+                String alias = null;
+                try {
+                    alias = JpaMetadataReader.entityNameOf(clazz);
+                } catch (Throwable t) {
+                    alias = null;
+                }
+                if (alias == null) continue;
+                if (alias.equalsIgnoreCase(entityName)) {
+                    matchedQName = clazz.getQualifiedName();
+                    break outer;
+                }
+            }
+        }
+        cache.names().put(key, matchedQName != null ? matchedQName : "");
+        if (matchedQName == null) return null;
+        String shortName = substringAfterLast(matchedQName, '.');
+        PsiClass[] classes = namesCache.getClassesByName(shortName, scope);
+        for (PsiClass clazz : classes) {
+            if (matchedQName.equals(clazz.getQualifiedName())) return clazz;
         }
         return null;
     }
+
+    /** 实体别名反查缓存条目：modificationCount + 实体名→全限定名（空串=已知未命中）。 */
+    private record EntityNameLookupCache(
+            /** 取值时的 PsiModificationTracker.modificationCount。 */
+            long count,
+            /** 实体名（小写）→ 全限定名（空串 = 已知未命中）。 */
+            @NotNull java.util.Map<String, String> names) {
+    }
+
+    /** 实体别名反查缓存 userData 键（Kotlin 为实例属性，Java 提为静态——Key 天然可共享）。 */
+    private static final com.intellij.openapi.util.Key<EntityNameLookupCache> ENTITY_NAME_CACHE_KEY =
+            com.intellij.openapi.util.Key.create("mp-visualizer.entityNameLookupCache");
 
     /**
      * 从 HQL 的 FROM 子句提取实体类名。
@@ -2218,6 +2468,13 @@ public final class SqlPreviewService {
 
     private static final Logger LOG = Logger.getInstance(SqlPreviewService.class);
 
+    /**
+     * T-PreviewFast P7：最近一次预览请求的起始时刻（点击/快捷键入口记时）。三段耗时的锚点：
+     * 请求 → 弹窗（{@link #showResult} 记）→ 控制台可见（面板 embedConsole 记）。仅诊断用，
+     * 无锁 volatile 读写，取不到 0 即忽略。
+     */
+    public static volatile long lastPreviewRequestMs = 0L;
+
     /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
     private static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
 
@@ -2254,6 +2511,15 @@ public final class SqlPreviewService {
      * @param sourceLocation 当前代码位置（文件名:行号），来源列默认值；null 表示未知
      */
     public static void showResult(@NotNull Project project, @Nullable PreviewResult result, @Nullable String sourceLocation) {
+        // T-PreviewFast P7：请求→弹窗耗时（第二段锚点；后续控制台可见由面板记）
+        try {
+            long req = lastPreviewRequestMs;
+            if (req > 0 && result != null) {
+                LOG.info("[T-PreviewFast] request→dialog: " + (System.currentTimeMillis() - req) + "ms");
+            }
+        } catch (Throwable ignored) {
+            // 与原 runCatching 等价（诊断打点不阻断主流程）
+        }
         if (result == null) {
             // T-UiNative T-UN-02：未找到可转换 Wrapper 提示改轻通知（原模态弹窗——纯告知无需打断）；
             // 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）
@@ -2315,6 +2581,9 @@ public final class SqlPreviewService {
             @NotNull Project project,
             @NotNull Function0<? extends PreviewResult> compute,
             @NotNull Function1<? super PreviewResult, Unit> onResult) {
+        // T-PreviewFast P7：三段耗时埋点起点（点击/快捷键触发即记时）——真机排障时直接给出
+        // 「请求→弹窗」「弹窗→控制台可见」两段数字，取代靠多条阶段日志手工推时序
+        lastPreviewRequestMs = System.currentTimeMillis();
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             PreviewResult result;
             try {

@@ -36,6 +36,16 @@ public final class SqlCompletionContext {
     /** T-M27.4：联表候选表（@TableName 实体；表名补全全位置提示，主表去重）。 */
     @NotNull
     public final List<TableInfo> candidateTables;
+    /**
+     * T-DbSchemaCompletion：数据源 schema 列（列名 → 列元数据），让<b>库里存在而实体类没有的列</b>
+     * 也进补全候选，并以 DB 注释 / 类型串标注来源。
+     *
+     * <p>由面板在预览打开与控制台就绪（schema 预热完成）时经
+     * {@link DatabaseSchemaResolver#columnsCached} <b>只读缓存</b>填充——补全热路径不做数据源遍历
+     * （T-Perf-09 红线）。默认空 Map = 无数据源/未预热，候选回落到实体列，行为与改动前一致。
+     */
+    @NotNull
+    public final Map<String, DatabaseSchemaResolver.ColumnMeta> schemaColumns;
 
     public SqlCompletionContext(@Nullable String tableName,
                                 @NotNull List<String> columns,
@@ -64,12 +74,23 @@ public final class SqlCompletionContext {
                                 @NotNull Map<String, String> columnComments,
                                 @Nullable String tableComment,
                                 @NotNull List<TableInfo> candidateTables) {
+        this(tableName, columns, tableAlias, columnComments, tableComment, candidateTables, Collections.emptyMap());
+    }
+
+    public SqlCompletionContext(@Nullable String tableName,
+                                @NotNull List<String> columns,
+                                @Nullable String tableAlias,
+                                @NotNull Map<String, String> columnComments,
+                                @Nullable String tableComment,
+                                @NotNull List<TableInfo> candidateTables,
+                                @NotNull Map<String, DatabaseSchemaResolver.ColumnMeta> schemaColumns) {
         this.tableName = tableName;
         this.columns = columns;
         this.tableAlias = tableAlias;
         this.columnComments = columnComments;
         this.tableComment = tableComment;
         this.candidateTables = candidateTables;
+        this.schemaColumns = schemaColumns;
     }
 
     /** 当前预览涉及的实体表/列上下文键。 */

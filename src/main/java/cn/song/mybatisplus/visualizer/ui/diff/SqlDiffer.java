@@ -14,7 +14,7 @@ import java.util.stream.Collectors;
  *
  * <p>SQL 行级 diff 引擎（O-4 Phase B）。
  *
- * <p>对比两次预览的 SQL 文本，输出行级差异列表（新增 / 删除 / 变更 / 相同）。
+ * <p>对比两次预览的 SQL 文本，输出行级差异列表（新增 / 删除 / 相同）。
  * 算法：基于最长公共子序列（LCS）的动态规划，时间复杂度 O(M*N)，
  * 满足 SQL &lt; 1000 行 &lt; 100ms 性能红线。
  */
@@ -26,8 +26,17 @@ public final class SqlDiffer {
     private SqlDiffer() {
     }
 
-    /** 差异类型。 */
-    public enum DiffType { INSERT, DELETE, CHANGE, EQUAL }
+    /**
+     * 差异类型。
+     *
+     * <p>刻意不设 CHANGE（行被修改）：差异类型的唯一消费形态是按类型分派的渲染，而 O-4 的自研
+     * 高亮渲染器 DiffHighlighter 已按「行内边框无视觉效果」的产品决策整体移除，实际对比入口
+     * （SqlPreviewPanel.showSqlDiff）改走 IDEA 原生 Diff，行级 diff 由平台自行计算、不消费本类型，
+     * 本对象因此也无任何调用方。既无渲染分派，合并出来的 CHANGE 就无人可读，纯属不可达常量，
+     * 故「修改一行」保持 DELETE + INSERT 成对表达（相邻两行的 oldLineNumber/newLineNumber 已能还原改写关系）。
+     * 将来若重新接线行级渲染，应连同渲染一并补一次「相邻删增合并」后处理，而不是先加常量。
+     */
+    public enum DiffType { INSERT, DELETE, EQUAL }
 
     /** 单条差异记录。 */
     public static final class DiffEntry {

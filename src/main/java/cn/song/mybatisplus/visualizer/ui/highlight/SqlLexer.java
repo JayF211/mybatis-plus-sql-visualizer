@@ -20,7 +20,6 @@ import java.util.Set;
 public class SqlLexer extends LexerBase {
 
     private CharSequence myBuffer = "";
-    private int myStart = 0;
     private int myEnd = 0;
     private int myTokenStart = 0;
     private int myTokenEnd = 0;
@@ -32,7 +31,6 @@ public class SqlLexer extends LexerBase {
     @Override
     public void start(CharSequence buffer, int startOffset, int endOffset, int initialState) {
         myBuffer = buffer;
-        myStart = startOffset;
         myEnd = endOffset;
         myTokenStart = startOffset;
         myTokenEnd = startOffset;

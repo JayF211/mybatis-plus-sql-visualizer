@@ -13,15 +13,12 @@ import com.intellij.codeInsight.lookup.LookupElementBuilder;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
-import com.intellij.openapi.project.Project;
 import com.intellij.patterns.PlatformPatterns;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.util.ProcessingContext;
-import kotlin.Pair;
 
 import java.util.List;
-import java.util.Map;
 import java.util.WeakHashMap;
 
 /**
@@ -33,6 +30,9 @@ import java.util.WeakHashMap;
  *  - M16：列名/表名补全项**展示注释**（withTailText 灰色尾缀）且**支持注释关键词检索**
  *    （withLookupString——输入"设备名"可命中 {@code name} 列）；**位置感知**过滤
  *    （FROM/JOIN 后只提示表名、WHERE/ON/HAVING/GROUP BY/ORDER BY 后只提示列名）
+ *  - T-DbSchemaCompletion：列候选加入**数据源 schema 列**（库里存在而实体类没有的列），
+ *    同名列注释/类型取数据源，tailText 追加 DB 类型串（候选合并见
+ *    {@link SqlCompletionCandidatesKt#mergeColumnCandidates}）
  *
  * M16.2 修复（M16 回归）：
  *  - 上下文载体由**仅 PSI 文件 userData** 改为 **Editor userData 优先 + PSI 兜底**（{@link #resolveContext}）——
@@ -132,32 +132,14 @@ public class SqlCompletionContributor extends CompletionContributor {
                 }
                 // 列名：WHERE/ON/HAVING/GROUP BY/ORDER BY 后、SELECT 列位或子句无法判定
                 if (clause != SqlClause.TABLE) {
-                    List<Pair<String, String>> colComments = provider.columnsWithComments(ctx);
-                    // M35 方案 B：数据源 schema 注释优先（DB COMMENT 比实体注释权威）；
-                    // 按实体表名查数据源列注释，命中则覆盖同名列的实体注释。
-                    // T-Perf-09：补全改消费已缓存结果（columnCommentsCached）——autopopup
-                    // 下每标识符字符触发一次，直查 schema 会在 EDT 做数据源全量遍历；
-                    // 缓存未命中回落实体注释，缓存由 JOIN 富化后台预取填充。
-                    Project project = parameters.getEditor().getProject();
-                    Map<String, String> schemaComments;
-                    if (project != null && ctx.tableName != null) {
-                        schemaComments = DatabaseSchemaResolver.columnCommentsCached(project, ctx.tableName);
-                    } else {
-                        schemaComments = Map.of();
-                    }
-                    List<Pair<String, String>> merged;
-                    if (schemaComments.isEmpty()) {
-                        merged = colComments;
-                    } else {
-                        merged = colComments.stream()
-                                .map(p -> new Pair<>(p.getFirst(), schemaComments.getOrDefault(p.getFirst(), p.getSecond())))
-                                .toList();
-                    }
-                    for (Pair<String, String> p : merged) {
-                        String col = p.getFirst();
-                        String comment = p.getSecond();
-                        if (prefix.prefixMatches(col)) {
-                            result.addElement(withComment(LookupElementBuilder.create(col), comment));
+                    // T-DbSchemaCompletion：候选 = 实体列 ∪ 数据源 schema 列。此前数据源列只用于
+                    // 覆盖同名列注释，**库里存在而实体类没有的列补不出来**（用户实测缺口）。
+                    // 数据源列由预览预热写入 SqlCompletionContext（columnsCached 只读缓存），
+                    // 本处零遍历——autopopup 每敲一个标识符字符都走这里（T-Perf-09 红线）；
+                    // 同名列注释/类型取数据源（M35 优先级），tailText 追加 DB 类型串标注来源。
+                    for (ColumnCandidate candidate : SqlCompletionCandidatesKt.mergeColumnCandidates(ctx)) {
+                        if (prefix.prefixMatches(candidate.name())) {
+                            result.addElement(SqlCompletionCandidatesKt.columnLookupElement(candidate));
                         }
                     }
                 }

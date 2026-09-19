@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db;
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModel;
 import cn.song.mybatisplus.visualizer.ui.diagram.EntityNode;
 import cn.song.mybatisplus.visualizer.ui.diagram.RelationshipLine;
+import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramOpener;
 import com.intellij.database.DbModelRegistry;
 import com.intellij.database.model.DasTable;
 import com.intellij.database.model.RawDataSource;
@@ -84,6 +85,21 @@ public final class NativeDatabaseDiagramSupport {
             }
             Map<String, DbElement> located = ReadAction.compute(() -> locateDbTables(project, tableNames));
             if (located == null || located.size() < tableNames.size()) {
+                // T-TS-08：此处原为静默 `return null`，是「用例绿 ≠ B 路径已验证」不可诊断的根因——
+                // HeavyNativeDatabaseDiagramJoinChainTest 在 component==null 处软跳（五组断言全未
+                // 执行却计为绿），而日志里既没有降级痕迹也没有原因，无法区分「B 路径真跑过」与
+                // 「从未进入」。降级本身是设计内契约（见类注释），只补可诊断性，不改行为。
+                java.util.Set<String> foundKeys = (located != null) ? located.keySet() : java.util.Set.of();
+                List<String> missing = new ArrayList<>();
+                for (String n : tableNames) {
+                    if (!foundKeys.contains(n.trim().toLowerCase())) {
+                        missing.add(n);
+                    }
+                }
+                LOG.warn("Native Database diagram (B path) not taken: located=" + foundKeys
+                        + " wanted=" + tableNames + " missing=" + missing
+                        + " —— 缺表 = 该表未在已内省的数据源模型里定位到（数据源未内省 / 表名不匹配 / "
+                        + "DbModelRegistry 无对应 DbElement），按契约回落 A 路径");
                 return null;
             }
             LOG.info("Native Database diagram (B path) taking over: tables=" + located.keySet());
@@ -120,7 +136,15 @@ public final class NativeDatabaseDiagramSupport {
         }
     }
 
-    /** 释放嵌入的 Database 图编辑器（换图/清空调用），并回收虚拟外键登记。 */
+    /**
+     * 释放嵌入的 Database 图编辑器（换图/清空调用）。
+     *
+     * <p>T-EmbedFkOrder F2：<b>不再在此清空 {@link JoinFkRegistry}</b>——dispose 只负责释放编辑器，
+     * 清空注册表会误伤「当前图」刚登记的虚拟外键（真机故障：{@code showJoinDiagram} 先建新图登记、
+     * 后清旧图，旧图 dispose 把新登记整批抹掉 → 只剩节点没连线）。清理职责改为显式语义点：
+     * 登记前 {@code registerJoinForeignKeys} 自带 clear（新图恰好只留自己的 FK）、无 JOIN 移除标签页与
+     * 面板 clear() 时调用 {@link #clearRegisteredFk}。
+     */
     public static void disposeNativeEditor(JComponent component) {
         try {
             if (component != null) {
@@ -131,8 +155,6 @@ public final class NativeDatabaseDiagramSupport {
             }
         } catch (Throwable ignored) {
             // 释放失败不阻断降级链
-        } finally {
-            JoinFkRegistry.clear();
         }
     }
 
@@ -189,14 +211,30 @@ public final class NativeDatabaseDiagramSupport {
                 wanted.add(n.trim().toLowerCase());
             }
             Map<String, DbElement> found = new LinkedHashMap<>();
+            // T-TS-08：定位链的逐段计数——调用方只在「全部命中」时才走 B 路径，缺表时仅凭
+            // 命中集合无法判断卡在哪一段（无数据源 / 数据源未内省(model=null) / traverser 不可迭代 /
+            // 表名没匹配 / DbElement 没登记），故把每段读数一并留痕（纯日志，无控制流影响）。
+            int managers = 0;
+            int dataSources = 0;
+            int modelNull = 0;
+            int traverserMiss = 0;
+            int roots = 0;
+            int iterated = 0;
+            int dasTables = 0;
+            int nameHits = 0;
+            int registryMiss = 0;
+            Set<String> dsClasses = new java.util.LinkedHashSet<>();
             DbModelRegistry modelRegistry = project.getService(DbModelRegistry.class);
-            List<DataSourceManager<?>> managers = DataSourceManager.getManagers(project);
-            for (DataSourceManager<?> manager : managers) {
+            List<DataSourceManager<?>> managersList = DataSourceManager.getManagers(project);
+            for (DataSourceManager<?> manager : managersList) {
+                managers++;
                 if (found.size() == wanted.size()) {
                     break;
                 }
                 List<? extends RawDataSource> sources = manager.getDataSources();
                 for (RawDataSource ds : sources) {
+                    dataSources++;
+                    dsClasses.add(ds.getClass().getSimpleName());
                     if (found.size() == wanted.size()) {
                         break;
                     }
@@ -205,51 +243,81 @@ public final class NativeDatabaseDiagramSupport {
                     try {
                         model = ds.getModel();
                     } catch (Throwable t) {
+                        modelNull++;
                         continue;
                     }
                     if (model == null) {
+                        modelNull++;
                         continue;
                     }
-                    Object traverser;
+                    // model 非 null 却遍历不出表时，须区分「模型是空的（未同步内省结果）」与
+                    // 「模型有根但遍历器没吐出东西」——roots 读数正是这个分界（本地实测的关键证据）
                     try {
-                        traverser = ((com.intellij.database.model.DasModel) model).traverser();
+                        // = modelRoots.toList().size（物化迭代后取数；迭代抛异常 → -1）。
+                        // getModelRoots() 返回 JBIterable（Iterable 非 Collection），须手动迭代计数
+                        roots += countIterable(((com.intellij.database.model.DasModel) model).getModelRoots());
                     } catch (Throwable t) {
-                        continue;
+                        roots += -1;
                     }
                     // T-Perf-09：惰性迭代 + 命中即停（此前 toList() 全量物化再筛——数千表 schema
                     // 下即使全部命中也遍历完整棵模型）；model 为 null（未内省）已在上行跳过
-                    Iterable<?> elements;
+                    Iterable<?> elements = null;
                     try {
-                        elements = (Iterable<?>) traverser;
+                        Object traverser = ((com.intellij.database.model.DasModel) model).traverser();
+                        elements = (traverser instanceof Iterable<?>) ? (Iterable<?>) traverser : null;
                     } catch (Throwable t) {
+                        elements = null;
+                    }
+                    if (elements == null) {
+                        traverserMiss++;
                         continue;
                     }
                     for (Object element : elements) {
+                        iterated++;
                         if (found.size() == wanted.size()) {
                             break;
                         }
                         if (!(element instanceof DasTable)) {
                             continue;
                         }
+                        dasTables++;
                         DasTable table = (DasTable) element;
                         String name = table.getName() != null ? table.getName().toLowerCase() : null;
                         if (name == null) {
                             continue;
                         }
                         if (wanted.contains(name) && !found.containsKey(name)) {
+                            nameHits++;
                             DbElement dbElement = modelRegistry.findDbElement(table);
-                            if (dbElement != null) {
-                                found.put(name, dbElement);
+                            if (dbElement == null) {
+                                registryMiss++;
+                                continue;
                             }
+                            found.put(name, dbElement);
                         }
                     }
                 }
             }
+            LOG.info("B path locateDbTables: wanted=" + wanted + " found=" + found.keySet()
+                    + " managers=" + managers
+                    + " dataSources=" + dataSources + "(dsClasses=" + dsClasses + ")"
+                    + " modelNull=" + modelNull + " traverserMiss=" + traverserMiss
+                    + " roots=" + roots + " iterated=" + iterated + " dasTables=" + dasTables
+                    + " nameHits=" + nameHits + " registryMiss=" + registryMiss);
             return found;
         } catch (Throwable t) {
             LOG.warn("NativeDatabaseDiagramSupport.locateDbTables failed: " + t);
             return null;
         }
+    }
+
+    /** = Kotlin {@code Iterable.toList().size}（物化迭代计数；调用方对异常计 -1）。 */
+    private static int countIterable(Iterable<?> iterable) {
+        int n = 0;
+        for (Object ignored : iterable) {
+            n++;
+        }
+        return n;
     }
 
     /**
@@ -313,6 +381,10 @@ public final class NativeDatabaseDiagramSupport {
         } catch (Throwable t) {
             throw new IllegalStateException("Cannot instantiate UmlFileEditorImpl", t);
         }
+
+        // T-PreviewBgFit（问题二）：同 JOIN 路径——开关必须在**异步布局触发之前**置位，
+        // 布局管线收尾时才读得到它并自适应（见 NativeJoinDiagramOpener.enableAutoFit 注释）。
+        NativeJoinDiagramOpener.enableAutoFit(builder);
 
         builder.queryUpdate()
                 .withDataReload()

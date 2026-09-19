@@ -54,6 +54,11 @@ import javax.swing.JTextArea;
  *
  * <p>T-UiNative T-UN-14：加载态/空态接原生件——加载态由 {@link JBLoadingPanel} 盖平台转圈
  * （原 indeterminate JProgressBar 自摆页删除），「无 JOIN」占位与错误态保留原样。
+ *
+ * <p>T-RA-02：错误态接线——渲染（{@link DiagramRenderer} 测量/布局）抛异常时落 {@link #errorScroll} 错误页，
+ * 文案键 {@code diagram.render.failed}，由 {@link #renderGuarded} 统一兜底。此前该错误页只有声明没有接线
+ * （84d4407「直接 Graphics2D 渲染」重写时删掉了 showError 与 try/catch，字段与文案键一起悬空），
+ * 类 KDoc 宣称的错误态与实际不符——本次把实现补上，表述与实现对齐。
  */
 public class DiagramPanel extends JBPanel<DiagramPanel> implements Disposable {
 
@@ -66,9 +71,46 @@ public class DiagramPanel extends JBPanel<DiagramPanel> implements Disposable {
      * 的目标区（占位/画布/错误态都在其内容层换页），加载时 startLoading 盖平台转圈，
      * 原自摆 JBLabel + indeterminate JProgressBar 加载页删除；文案沿用既有 "diagram.render.loading" 键。
      * Disposable 挂面板自身（本类实现 Disposable，dispose 走既有 Disposer.dispose(this) 链）。
+     *
+     * <p>T-F8：本层只在「未注入宿主加载面」时出转圈（独立使用/单测）；预览面板场景转圈由
+     * {@link #hostLoadingPanel} 出，原因见该字段 KDoc。
      */
     private final JBLoadingPanel contentLayer;
+
+    /**
+     * T-F8：宿主加载面（预览面板注入）——本面板的转圈实际画在哪一层。
+     *
+     * <p>为什么必须由宿主出图：唯一真正的耗时段是 {@code SqlPreviewPanel.updateDiagramTab} 的<b>后台 schema
+     * 富化</b>，而原生图路径（默认设置 {@code joinDiagramNative = true}，Ultimate 真机默认）下
+     * {@code showJoinDiagram} 的 {@code diagramTabHost.removeAll()} 会把本面板摘出层级——自摆转圈根本不可见，
+     * 这正是审计项 F8「showLoading/hideLoading 全仓零调用点」之外的第二层失效。宿主层
+     * （预览面板把整个 JOIN 图标签页包进 JBLoadingPanel）对原生/自绘两条路径都可见。
+     *
+     * <p>为什么是「转交」而不是「两层同开」：同页两层 LoadingDecorator 各持一条独立动画时间线
+     * （每个实例一个 AnimatedIcon/Animator，转圈相位互不同步），会叠成双圈；且宿主层已完整覆盖
+     * 本面板区域（面板是其 CENTER 内容），面板侧再转一圈纯属重复。
+     */
+    @Nullable
+    private JBLoadingPanel hostLoadingPanel = null;
+
+    /** T-F8：注入宿主加载面（预览面板的标签页级 {@link JBLoadingPanel}）。 */
+    public void bindHostLoadingPanel(JBLoadingPanel panel) {
+        hostLoadingPanel = panel;
+    }
+
+    /** 当前出转圈的层：宿主注入优先，否则本面板 {@link #contentLayer}。 */
+    private JBLoadingPanel loadingTarget() {
+        return hostLoadingPanel != null ? hostLoadingPanel : contentLayer;
+    }
     private final JBLabel placeholderLabel;
+    /**
+     * T-RA-02：渲染失败页——{@link #contentLayer} 的第三个换页目标（另两个是 {@link #placeholderLabel} 与 {@link #scrollPane}）。
+     *
+     * <p>84d4407 把渲染改为直接 Graphics2D 后删掉了 {@code showError}，这两个字段与 bundle 键
+     * {@code diagram.render.failed} 一起悬空（全仓含测试零引用），类 KDoc 却仍宣称有错误态。
+     * 现由 {@link #showError} 接线：渲染失败时用户看到失败原因，而不是上一态/空画布。
+     * 用 JTextArea（非 JBLabel）是为了长异常摘要可换行、可选中复制。
+     */
     private final JTextArea errorTextArea;
     private final JBScrollPane errorScroll;
     private final DiagramCanvas diagramCanvas;
@@ -158,19 +200,86 @@ public class DiagramPanel extends JBPanel<DiagramPanel> implements Disposable {
         };
     }
 
+    /**
+     * 展示模型（空模型 → 「无 JOIN」占位）。
+     *
+     * <p>T-RA-02：测量先于换页——测量失败时错误页直接顶上，不留半成品画布（原顺序是先换页再测量，
+     * 测量一抛就只剩一个空画布）；失败判定与错误页切换都在 {@link #renderGuarded} 内。
+     */
     public void showDiagram(DiagramModel model) {
         if (model.isEmpty()) {
             showPlaceholder();
             return;
         }
         currentModel = model;
+        if (!renderGuarded(model, m -> diagramCanvas.setModel(m, zoom))) return;
         swapContent(scrollPane);
-        diagramCanvas.setModel(model, zoom);
         revalidate();
         repaint();
     }
 
+    /**
+     * T-RA-02：渲染动作的统一兜底。
+     *
+     * <p>为什么必须有：本面板的渲染 try/catch 在 84d4407「直接 Graphics2D 渲染」重写时被删掉，
+     * 只留下 {@link #errorTextArea}/{@link #errorScroll} 与文案键 {@code diagram.render.failed} 悬空；而调用链
+     * {@code SqlPreviewPanel.showJoinDiagram}（:1187）→ {@code updateDiagramTab}（:1118）→ {@code showResult}（:1059）
+     * → {@code SqlPreviewDialog.init}（:33）→ {@code SqlPreviewService.showResult}（:1977）<b>全程无 catch</b>——
+     * 渲染一抛，异常直接穿到 DialogWrapper 构造，弹窗起不来且用户看不到任何原因。
+     *
+     * <p>单独成函数（而非把 try/catch 内联进 {@link #showDiagram}）是为了让失败路径可测：结构合法的模型在
+     * {@link DiagramRenderer#measurePreferredSize} 里几乎不抛，公开 API 复现不出错误页。
+     *
+     * @param render 渲染动作（等价 Kotlin {@code (DiagramModel) -> Unit}）
+     * @return true = 渲染成功；false = 已落错误页（调用方不得再换页/重绘）
+     */
+    public boolean renderGuarded(DiagramModel model, java.util.function.Consumer<DiagramModel> render) {
+        try {
+            render.accept(model);
+            return true;
+        } catch (Throwable t) {
+            // 失败即回到「无图」语义：画布与 currentModel 一起清空，后续缩放/切页不再重试坏模型
+            //（否则每次缩放都在同一处再抛一次）。warn 留痕：真机只有这里能看到渲染失败现场。
+            com.intellij.openapi.diagnostic.Logger.getInstance(DiagramPanel.class)
+                    .warn("JOIN diagram render failed", t);
+            currentModel = null;
+            diagramCanvas.setModel(null, zoom);
+            showError(t.getClass().getSimpleName() + ": " + (t.getMessage() != null ? t.getMessage() : "unknown"));
+            return false;
+        }
+    }
+
+    /**
+     * T-RA-02：渲染失败的错误页（{@link #errorScroll} 接到内容层换页目标）。
+     *
+     * @param message 异常摘要——调用方拼 {@code 异常类名: message}（比裸 message 更利于定位）。
+     *                文案沿用既有键 {@code diagram.render.failed}（双语齐备、此前零引用），不新增键。
+     */
+    public void showError(String message) {
+        errorTextArea.setText(MpSqlVisualizerBundle.message("diagram.render.failed", message));
+        // 长摘要自动换行后默认停在末尾，从顶部看起更符合「读错误」的顺序
+        errorTextArea.setCaretPosition(0);
+        // T-F8：错误页顶上即「加载已结束」（渲染失败也是一种收尾），转圈必须同时摘下
+        stopLoadingInternal();
+        swapContent(errorScroll);
+        revalidate();
+        repaint();
+    }
+
+    /** T-RA-02：错误页是否当前页（测试断言用）。 */
+    public boolean isErrorPageForTest() {
+        return currentCenter == errorScroll;
+    }
+
+    /** T-RA-02：错误页文本（测试断言用）。 */
+    public String errorTextForTest() {
+        return errorTextArea.getText();
+    }
+
     public void clear() {
+        // T-F8：整图卸载必须复位加载态——加载期间（后台富化未回 EDT）用户切到无 JOIN 的 SQL
+        // 或面板被清空时，转圈若不复位会留在已卸载的空页上永不消失
+        stopLoadingInternal();
         currentModel = null;
         diagramCanvas.setModel(null, zoom);
         showPlaceholder();
@@ -184,6 +293,8 @@ public class DiagramPanel extends JBPanel<DiagramPanel> implements Disposable {
     }
 
     private void showPlaceholder() {
+        // T-F8：空态是「无图」而非「加载中」——空模型换页即收尾，转圈同时摘下
+        stopLoadingInternal();
         swapContent(placeholderLabel);
         revalidate();
         repaint();
@@ -202,47 +313,98 @@ public class DiagramPanel extends JBPanel<DiagramPanel> implements Disposable {
 
     /** T-UiNative T-UN-14：进入加载态——平台转圈 + 既有「加载中」文案键（原自摆进度条删除）。 */
     public void showLoading() {
-        contentLayer.setLoadingText(MpSqlVisualizerBundle.message("diagram.render.loading"));
-        contentLayer.startLoading();
+        JBLoadingPanel target = loadingTarget();
+        target.setLoadingText(MpSqlVisualizerBundle.message("diagram.render.loading"));
+        target.startLoading();
         revalidate();
         repaint();
+        if (loadingProbeForTest != null) {
+            loadingProbeForTest.accept(true);
+        }
     }
 
     /** T-UiNative T-UN-14：退出加载态（渲染/换页完成后调用）。 */
     public void hideLoading() {
-        contentLayer.stopLoading();
+        stopLoadingInternal();
+        if (loadingProbeForTest != null) {
+            loadingProbeForTest.accept(false);
+        }
+    }
+
+    /**
+     * T-F8：内部安全停止——不发探针（探针只报显式 API 调用，见 {@link #loadingProbeForTest}）。
+     *
+     * <p>供 {@link #clear}/{@link #showPlaceholder}/{@link #showError} 三条「加载态不再成立」的路径统一收口：
+     * 加载期间无 JOIN 卸载、模型为空、渲染失败时都必须摘转圈，否则转圈留在空页/错误页上永不消失
+     * （对齐 SqlResultPanel「仅 showLoading 打开、其余状态统一关闭」的既有约定）。
+     */
+    private void stopLoadingInternal() {
+        loadingTarget().stopLoading();
         revalidate();
         repaint();
     }
 
     /** T-UiNative T-UN-14：加载态（测试断言用）。 */
     public boolean isLoadingForTest() {
-        return contentLayer.isLoading();
+        return loadingTarget().isLoading();
+    }
+
+    /**
+     * T-TS-05：出转圈的层（测试断言用）。
+     *
+     * <p>与 {@link #isLoadingForTest} 的区别：后者读的是<b>委托结果</b>，宿主注入被删掉后仍能自洽地读回
+     * {@link #contentLayer}——单看它断不出「转圈画在了哪一层」。真机默认原生图路径下本面板会被
+     * {@code diagramTabHost.removeAll()} 摘出层级，{@link #contentLayer} 上的转圈根本不可见（F8 的原始形态），
+     * 故第二层失效只能靠「出圈层 === 宿主加载面板」这种结构断言钉住。
+     */
+    public JBLoadingPanel loadingTargetForTest() {
+        return loadingTarget();
+    }
+
+    /**
+     * T-F8：加载态接线探针（测试用）——{@link #showLoading}/{@link #hideLoading} 末尾回调。
+     *
+     * <p>只报这两次「显式 API 调用」，内部安全停止（{@link #clear}/{@link #showPlaceholder}/{@link #showError}
+     * 里的复位）不回调：接线用例要断的是「谁在什么时刻进了/出了加载态」，内部复位属状态自愈，由
+     * {@link #isLoadingForTest} 观测即可，混进同一序列会让「进入→渲染→退出」的顺序断言失真。
+     */
+    @Nullable
+    public volatile java.util.function.Consumer<Boolean> loadingProbeForTest = null;
+
+    /** T-F8：是否已渲染出图（测试用）——接线用例据此断言「停转圈发生在渲染之后」。 */
+    public boolean hasModelForTest() {
+        return currentModel != null;
     }
 
     public void zoomIn() {
         zoom = Math.min(zoom * 1.25, 5.0);
-        diagramCanvas.setModel(currentModel, zoom);
-        revalidate();
-        repaint();
+        applyZoomToCanvas();
     }
 
     public void zoomOut() {
         zoom = Math.max(zoom / 1.25, 0.2);
-        diagramCanvas.setModel(currentModel, zoom);
-        revalidate();
-        repaint();
+        applyZoomToCanvas();
     }
 
     public void zoomReset() {
         zoom = 1.0;
-        diagramCanvas.setModel(currentModel, zoom);
-        revalidate();
-        repaint();
+        applyZoomToCanvas();
     }
 
     public double zoomForTest() {
         return zoom;
+    }
+
+    /**
+     * T-RA-02：缩放重建画布尺寸走同一兜底（{@link #renderGuarded}）——缩放是工具栏动作回调，
+     * 里面抛异常只进平台日志，用户侧表现为「点缩放没反应」（同族静默失效）。
+     */
+    private void applyZoomToCanvas() {
+        DiagramModel model = currentModel;
+        if (model == null) return;
+        renderGuarded(model, m -> diagramCanvas.setModel(m, zoom));
+        revalidate();
+        repaint();
     }
 
     private void exportPng() {

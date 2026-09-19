@@ -33,6 +33,9 @@ import org.jetbrains.annotations.Nullable;
  */
 public final class NativeJoinDiagramOpener {
 
+    private static final com.intellij.openapi.diagnostic.Logger LOG =
+            com.intellij.openapi.diagnostic.Logger.getInstance(NativeJoinDiagramOpener.class);
+
     private NativeJoinDiagramOpener() {
     }
 
@@ -78,6 +81,13 @@ public final class NativeJoinDiagramOpener {
         DiagramBuilder builder = WriteAction.compute(() ->
                 DiagramBuilderFactory.getInstance().createBuilder(project, provider, element, umlFile));
 
+        // 3.5 T-PreviewBgFit（问题二·第二轮）：<b>必须在触发布局之前</b>置「布局后自适应」——
+        // 布局管线（GraphLayoutServiceImpl 字节码实证）在每次布局收尾时读
+        // GraphSettings.isFitContentAfterLayout()，为真则 GraphAnimationService.fitContent(view)。
+        // 步骤 5 的 queryUpdate 是 <b>runAsync</b>（异步）：若在它之后再置开关，本次布局可能已越过
+        // 该判定点 → 图停默认缩放/左上角（真机实证：同一会话里第一张图不居中、第二张正常，纯竞态）。
+        enableAutoFit(builder);
+
         // 4. 构造编辑器（UmlFileEditorImpl 为 internal，反射实例化；构造器签名 (DiagramBuilder, VirtualFile)）。
         FileEditor editor;
         try {
@@ -88,7 +98,7 @@ public final class NativeJoinDiagramOpener {
             throw new IllegalStateException("Cannot instantiate UmlFileEditorImpl", t);
         }
 
-        // 5. 触发画布填充（对应 ShowDiagramBase.afterDiagramIsShown）。
+        // 5. 触发画布填充（对应 ShowDiagramBase.afterDiagramIsShown）——异步，故开关必须先置位（步骤 3.5）。
         builder.queryUpdate()
                 .withDataReload()
                 .withRelayout()
@@ -96,6 +106,23 @@ public final class NativeJoinDiagramOpener {
                 .runAsync();
 
         return editor;
+    }
+
+    /**
+     * T-PreviewBgFit：置「布局后自适应」+「尺寸变化后保持自适应」——平台工具栏两个 toggle 的设置项，
+     * 布局管线与视口在各自时机消费。须在任何布局触发<b>之前</b>调用（见 buildEmbeddableEditor 步骤 3.5）。
+     */
+    public static void enableAutoFit(DiagramBuilder builder) {
+        try {
+            builder.getPresentationModel().getSettings().setFitContentAfterLayout(true);
+        } catch (Throwable t) {
+            LOG.warn("Enable fitContentAfterLayout failed", t);
+        }
+        try {
+            builder.getView().setFitContentOnResize(true);
+        } catch (Throwable t) {
+            LOG.warn("Enable fitContentOnResize failed", t);
+        }
     }
 
     /** 以 IDE 编辑器独立标签页打开（复用 UmlEditorProvider 的 FileEditorProvider 注册）。 */

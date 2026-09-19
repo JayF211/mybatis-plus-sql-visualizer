@@ -540,6 +540,9 @@ public final class MpjLambdaConverter implements WrapperConverter {
         }
         if (className.isEmpty()) return null;
 
+        // T-TS-07 留档：此处兜底未传 project（[WrapperCall] 模型不含 project，converter SPI
+        // 亦无项目入参）——多项目同开时表名修饰仍取「首个打开项目」；穿参需改 SPI 签名或给模型
+        // 加平台字段，另批处理（psi 侧兜底调用方已在本批显式传 project）
         String tableName = tableInfo != null ? tableInfo.getTableName() : EntityResolver.inferDecoratedTableName(className);
         String alias = lowerFirst(className);
         List<Condition> onConditions = new ArrayList<>();
@@ -828,6 +831,9 @@ public final class MpjLambdaConverter implements WrapperConverter {
             mapIndex = 2;
         }
         TableInfo childInfo = collectionTableInfo(call);
+        // T-1800（Bug1 修复）：优先从 EntityRefArg 取真实 @TableName，不再仅靠 snake_case 推断。
+        // 例：AddressDO(@TableName("user_address")) → EntityRefArg 直接得 user_address，避免 address_d_o。
+        // T-TS-07 留档：兜底未传 project（同 parseJoin，见其注释）
         String childTable = childInfo != null ? childInfo.getTableName() : EntityResolver.inferDecoratedTableName(childClass);
 
         String subSelect = renderCollectionSubSelect(call, childTable, alias, mapIndex);
@@ -878,6 +884,8 @@ public final class MpjLambdaConverter implements WrapperConverter {
                         SqlValue gv = WrapperConverterKt.asValue(argAt(c.getArgs(), 0));
                         if (!(gv instanceof SqlValue.Literal lit)) continue;
                         String grandChild = lit.getUnquoted();
+                        // T-M19.4：孙表推断走统一入口（策略 + 修饰链，全局语义）
+                        // T-TS-07 留档：兜底未传 project（同 parseJoin，见其注释）
                         String grandTable = EntityResolver.inferDecoratedTableName(grandChild);
                         String grandAlias = lowerFirst(grandChild);
                         String grandSub = renderCollectionSubSelect(c, grandTable, grandAlias, 2);

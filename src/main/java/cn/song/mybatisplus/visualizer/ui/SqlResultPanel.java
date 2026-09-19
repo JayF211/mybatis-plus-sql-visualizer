@@ -20,7 +20,9 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
 
     private enum State { EMPTY, LOADING, ERROR, SUCCESS }
 
-    private final JBLabel statusLabel = new JBLabel();
+    // T-RA-02：原 `statusLabel`（JBLabel）已删——自 M36 引入起就从未进过任何容器（无 add 调用），
+    // 面板全部状态（EMPTY/LOADING/ERROR/SUCCESS）都经下方 infoLabel 单行展示，不存在独立的
+    // 「状态行 + 信息行」分工；留着只会让后来者以为还有一条没接线的状态行。
     private final JBLabel infoLabel = new JBLabel();
 
     /**
@@ -33,6 +35,16 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
     private final JBLabel loadingIconLabel;
 
     private final JButton errorCopyButton;
+
+    /**
+     * T-ErrorLocate T-EL-03：错误定位按钮（同 errorCopyButton 款式，仅错误态出现——
+     * 渲染后 SQL 与 mapper 原文行不一一对应，v1 承诺语句起始行 + tooltip 如实说明，绝不虚标精确）。
+     */
+    private final JButton errorLocateButton;
+
+    /** T-ErrorLocate：定位动作（宿主面板注入——需要 project + 预览源锚点，面板自身不可知）。 */
+    private Runnable locateHandler = null;
+
     private String currentError = null;
     private State state = State.EMPTY;
 
@@ -60,6 +72,19 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
             }
         });
 
+        // T-ErrorLocate T-EL-03：错误定位按钮（同 errorCopyButton 款式，见字段注释）。
+        errorLocateButton = new JButton(MpSqlVisualizerBundle.message("execute.error.locate"));
+        errorLocateButton.setVisible(false);
+        errorLocateButton.setOpaque(false);
+        errorLocateButton.setContentAreaFilled(false);
+        errorLocateButton.setBorder(JBUI.Borders.empty(1, 6));
+        errorLocateButton.setFont(errorLocateButton.getFont().deriveFont(11f));
+        errorLocateButton.setForeground(JBColor.namedColor("Link.activeForeground", JBColor.GRAY));
+        errorLocateButton.setMargin(JBUI.insets(0, 6, 0, 6));
+        errorLocateButton.addActionListener(e -> {
+            if (locateHandler != null) locateHandler.run();
+        });
+
         setBorder(JBUI.Borders.empty());
         setOpaque(false);
         // T-UiNative T-UN-14：加载转圈放左侧（CENTER 是 infoLabel 文案，EAST 是错误复制按钮）
@@ -68,6 +93,7 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
         JBPanel<JBPanel<?>> east = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.RIGHT, 2, 0));
         east.setOpaque(false);
         east.setBorder(JBUI.Borders.empty());
+        east.add(errorLocateButton);
         east.add(errorCopyButton);
         add(east, BorderLayout.EAST);
         setVisible(false);
@@ -86,6 +112,7 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
         state = State.EMPTY;
         currentError = null;
         errorCopyButton.setVisible(false);
+        errorLocateButton.setVisible(false);
         setLoadingIconVisible(false);
         String dsInfo = dataSourceName != null && !dataSourceName.isEmpty()
                 ? " | " + MpSqlVisualizerBundle.message("execute.datasource.label", dataSourceName) : "";
@@ -103,6 +130,7 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
         state = State.LOADING;
         currentError = null;
         errorCopyButton.setVisible(false);
+        errorLocateButton.setVisible(false);
         setLoadingIconVisible(true);
         String dsInfo = dataSourceName != null && !dataSourceName.isEmpty()
                 ? " | " + MpSqlVisualizerBundle.message("execute.datasource.label", dataSourceName) : "";
@@ -120,6 +148,7 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
         state = State.SUCCESS;
         currentError = null;
         errorCopyButton.setVisible(false);
+        errorLocateButton.setVisible(false);
         setLoadingIconVisible(false);
         String dsInfo = dataSourceName != null && !dataSourceName.isEmpty()
                 ? " | " + MpSqlVisualizerBundle.message("execute.datasource.label", dataSourceName) : "";
@@ -134,6 +163,7 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
         state = State.SUCCESS;
         currentError = null;
         errorCopyButton.setVisible(false);
+        errorLocateButton.setVisible(false);
         setLoadingIconVisible(false);
         String dsInfo = dataSourceName != null && !dataSourceName.isEmpty()
                 ? " | " + MpSqlVisualizerBundle.message("execute.datasource.label", dataSourceName) : "";
@@ -155,7 +185,67 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
         errorCopyButton.setVisible(true);
         errorCopyButton.revalidate();
         errorCopyButton.repaint();
+        locateHandler = null;
+        errorLocateButton.setVisible(false);
         showContent();
+        revalidate();
+        repaint();
+    }
+
+    /**
+     * T-ErrorLocate T-EL-03：富错误呈现——在 {@link #showError} 基础上追加「定位到出错位置」动作。
+     *
+     * <p>显隐先例对齐 errorCopyButton（仅错误时出现，不做常驻）；{@code locate} 为宿主注入的跳转动作
+     * （预览面板持有 project 与预览源锚点，本面板不可知），null = 锚点不可解析、按钮不出现。
+     * v1 落点为语句起始行（诚实降级）：驱动报的字符位置指向**被执行 SQL 文本**，与 mapper 原文
+     * 行不一一对应（动态 SQL 拼接/参数注入），绝不虚标精确——tooltip 注明。
+     *
+     * @param info   执行链富错误信息（T-EL-02 富通道投递）
+     * @param locate 定位动作；null = 不显示定位按钮
+     */
+    public void showErrorRich(cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo info, Runnable locate) {
+        showError(info.message());
+        locateHandler = locate;
+        if (locate != null) {
+            errorLocateButton.setToolTipText(info.positionChar() != null
+                    ? MpSqlVisualizerBundle.message("execute.error.locate.tooltip.position", info.positionChar())
+                    : MpSqlVisualizerBundle.message("execute.error.locate.tooltip.start"));
+            errorLocateButton.setVisible(true);
+            errorLocateButton.revalidate();
+            errorLocateButton.repaint();
+        }
+    }
+
+    /**
+     * T-DdlRecover T-DR-03：「断开但已生效」警示条——错误态升级呈现（信息级、无新弹窗）。
+     * 警示不消除错误原文（tooltip 保留原文）；文案口径「对象已存在（可能为本次已生效）」——
+     * 探测命中仅呈现事实与时间戳，不声称「本次执行所建」（同名旧对象恰在场时不误导）。
+     * 仅 ERROR 态生效（防陈旧探测在用户重新执行后误刷）。
+     */
+    public void showDdlEffectiveWarning(String target, String probedAt) {
+        if (state != State.ERROR) return;
+        String esc = target.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        infoLabel.setText("<html>"
+                + MpSqlVisualizerBundle.message("execute.ddl.effective.warning", esc, probedAt)
+                + "</html>");
+        infoLabel.setForeground(JBColor.namedColor("WarningForeground", JBColor.ORANGE));
+        revalidate();
+        repaint();
+    }
+
+    /**
+     * T-DdlRecover T-DR-03：探测未命中的如实注记——错误呈现保持原样，仅 tooltip 追加一行
+     * 「已尝试生效性探测：未检出对象」（绝不把「没查到」包装成「没生效」）。仅 ERROR 态生效。
+     */
+    public void noteDdlProbeMissed() {
+        if (state != State.ERROR) return;
+        String miss = MpSqlVisualizerBundle.message("execute.ddl.probe.missed");
+        StringBuilder tooltip = new StringBuilder();
+        String existing = infoLabel.getToolTipText();
+        if (existing != null) tooltip.append(existing);
+        if (tooltip.length() > 0) tooltip.append("\n");
+        tooltip.append(miss);
+        infoLabel.setToolTipText(tooltip.toString());
         revalidate();
         repaint();
     }
@@ -164,6 +254,7 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
         state = State.EMPTY;
         currentError = null;
         errorCopyButton.setVisible(false);
+        errorLocateButton.setVisible(false);
         setLoadingIconVisible(false);
         infoLabel.setText("");
         setVisible(false);

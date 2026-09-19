@@ -1,10 +1,13 @@
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
+import cn.song.mybatisplus.visualizer.psi.XmlCrossNsFragmentResolver;
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext;
+import cn.song.mybatisplus.visualizer.xml.CrossNamespaceFragments;
 import cn.song.mybatisplus.visualizer.xml.MockObject;
 import cn.song.mybatisplus.visualizer.xml.ParameterMapping;
+import cn.song.mybatisplus.visualizer.xml.ParamTypeInfo;
 import cn.song.mybatisplus.visualizer.xml.RenderedXmlSql;
 import cn.song.mybatisplus.visualizer.xml.XmlEwExpander;
 import cn.song.mybatisplus.visualizer.ui.XmlEwResolver;
@@ -36,6 +39,15 @@ import java.util.regex.Pattern;
  *
  * 纯函数（fileText 输入，无 PSI 依赖），gutter / Action 负责取文件文本与定位语句 id；
  * 弹窗与面板完全复用 SqlPreviewService.showResult 链路。
+ *
+ * <ul>
+ * <li>参数对照表复用 {@link ParameterReplacer#buildParamTable}（`#{}` 属性名清单，顺序对应 `?`）；</li>
+ * <li>T-M25.2：传入 project 时解析 `@class@field` 静态常量引用（用户项目常量类字段初始值，
+ * 经 PSI 常量求值器取值）注入渲染——MyBatis mapper 常见 OGNL 常量写法。</li>
+ * <li>T-IC-02：传入 project 时另经 {@link XmlCrossNsFragmentResolver} 解析跨命名空间 include
+ * （`refid="otherNamespace.sqlId"`）并注入展开；无 project（纯文本链）传空表，
+ * 行为与改动前逐字节一致。</li>
+ * </ul>
  */
 public final class XmlPreviewService {
 
@@ -64,7 +76,9 @@ public final class XmlPreviewService {
         XmlPreviewModel model;
         List<String> staticWarnings;
         try {
-            XmlMapperModel parsed = new XmlMapperParser().parse(fileText);
+            // T-IC-02：跨命名空间 include 片段表（无 project → 空表，纯文本链行为不变）
+            CrossNamespaceFragments crossNamespace = XmlCrossNsFragmentResolver.INSTANCE.resolve(fileText, project);
+            XmlMapperModel parsed = new XmlMapperParser().parse(fileText, crossNamespace);
             XmlStatement statement = null;
             if (statementId != null) {
                 for (XmlStatement s : parsed.statements()) {
@@ -86,8 +100,10 @@ public final class XmlPreviewService {
             List<String> warnings = new ArrayList<>();
             Map<String, Object> staticValues = resolveStaticFields(fileText, project, warnings);
             Map<String, Object> ewBindings = resolveEwPlaceholders(fileText, parsed.namespace(), statement.id(), project, warnings);
-            Map<String, Boolean> paramQuotes = XmlParamTypeResolver.INSTANCE.resolveQuotes(project, parsed.namespace(), statement.id());
-            model = XmlPreviewModel.from(statement, parsed.errors(), Set.of(), staticValues, ewBindings, paramQuotes);
+            // T-M29.5 / T-PT-01：mapper 方法参数类型 → 类型类别映射（引号由类别派生；
+            // Map/解析失败不含键 → 面板兜底引号、无占位提示）
+            Map<String, ParamTypeInfo> paramTypes = XmlParamTypeResolver.INSTANCE.resolveTypes(project, parsed.namespace(), statement.id());
+            model = XmlPreviewModel.from(statement, parsed.errors(), Set.of(), staticValues, ewBindings, Map.of(), paramTypes);
             staticWarnings = warnings;
         } catch (XmlParseException e) {
             return emptyResult(e.getMessage() != null ? e.getMessage() : "XML 解析失败。");
@@ -202,7 +218,12 @@ public final class XmlPreviewService {
                 null,
                 null,
                 null,
-                null
+                null,
+                // T-InjectionGate T-IG-01：`${}` raw 拼接事实透传（解析期 token 收集，非最终文本 regex——
+                // 成功替换为模拟值后文本里已无 `${}` 痕迹）
+                Map.of(),
+                null,
+                model.hasDollarRawSegments()
         );
     }
 

@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.ui;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.xml.AnnotationSqlParser;
+import cn.song.mybatisplus.visualizer.xml.ParamTypeInfo;
 import cn.song.mybatisplus.visualizer.xml.XmlParseException;
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel;
 import cn.song.mybatisplus.visualizer.xml.XmlScriptException;
@@ -29,6 +30,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -150,7 +152,7 @@ public final class AnnotationSqlPreviewService {
         }
         String sql = String.join(" ", values).trim();
         PsiMethod method = PsiTreeUtil.getParentOfType(annotation, PsiMethod.class);
-        return buildResult(sql, shortName, paramNames(method), warnings, project);
+        return buildResult(sql, shortName, paramTypes(method), warnings, project);
     }
 
     // ------------------------------------------------------------------
@@ -195,7 +197,7 @@ public final class AnnotationSqlPreviewService {
         if (sql == null) {
             return nullResult(MpSqlVisualizerBundle.message("annotation.provider.notSupported"));
         }
-        return buildResult(sql, shortName, paramNames(mapperMethod), warnings, project);
+        return buildResult(sql, shortName, paramTypes(mapperMethod), warnings, project);
     }
 
     /** Provider type 解析：value/type 属性（PsiClassObjectAccessExpression）→ PsiClass。 */
@@ -262,14 +264,17 @@ public final class AnnotationSqlPreviewService {
     /**
      * 方法参数 mock 名（对齐 ParamNameResolver）：@Param 值优先，否则实际参数名；
      * 多参数或含 @Param 时补 {@code param1..N}（GENERIC_NAME_CACHE）。
+     *
+     * <p>T-PT-01：同步扩为「名字 + 类型类别」对——{@code param1..N} 按位置继承对应参数的类型类别，
+     * 供参数面板按签名挂占位提示与 mock 值分派。
      */
     @NotNull
-    public List<String> paramNames(@Nullable PsiMethod method) {
-        if (method == null) return Collections.emptyList();
+    public Map<String, ParamTypeInfo> paramTypes(@Nullable PsiMethod method) {
+        if (method == null) return Collections.emptyMap();
         PsiParameter[] parameters = method.getParameterList().getParameters();
-        if (parameters.length == 0) return Collections.emptyList();
+        if (parameters.length == 0) return Collections.emptyMap();
         boolean hasParamAnnotation = false;
-        List<String> names = new ArrayList<>();
+        List<kotlin.Pair<String, ParamTypeInfo>> named = new ArrayList<>();
         for (PsiParameter param : parameters) {
             PsiAnnotation paramAnno = null;
             for (PsiAnnotation a : param.getAnnotations()) {
@@ -280,6 +285,7 @@ public final class AnnotationSqlPreviewService {
                     break;
                 }
             }
+            String name;
             if (paramAnno != null) {
                 hasParamAnnotation = true;
                 PsiAnnotationMemberValue pv = paramAnno.findAttributeValue(null);
@@ -288,20 +294,29 @@ public final class AnnotationSqlPreviewService {
                     Object val = ((PsiLiteralExpression) pv).getValue();
                     v = val != null ? val.toString() : null;
                 }
-                names.add(v != null ? v : param.getName());
+                name = v != null ? v : param.getName();
             } else {
-                names.add(param.getName());
+                name = param.getName();
             }
+            named.add(new kotlin.Pair<>(name, XmlParamTypeResolver.INSTANCE.typeInfoOf(param.getType())));
+        }
+        Map<String, ParamTypeInfo> result = new LinkedHashMap<>();
+        for (kotlin.Pair<String, ParamTypeInfo> p : named) {
+            result.put(p.getFirst(), p.getSecond());
         }
         if (parameters.length > 1 || hasParamAnnotation) {
-            for (int i = 1; i <= parameters.length; i++) names.add("param" + i);
+            // param1..N 与位置参数同类别（MyBatis ParamMap 键名，类型跟随被命名参数）
+            for (int i = 0; i < named.size(); i++) {
+                result.put("param" + (i + 1), named.get(i).getSecond());
+            }
         }
-        return names;
+        return result;
     }
 
-    /** 模型 → 结果（解析异常兜底 warning；T-M25.2 静态常量引用经 project 解析注入）。 */
+    /** 模型 → 结果（解析异常兜底 warning；T-M25.2 静态常量引用经 project 解析注入）。
+     *  T-PT-01：paramTypes 为「参数名 → 类型类别」，名字作 mock 键、类别入预览模型（占位提示/mock 分派）。 */
     private PreviewResult buildResult(String sql, String shortName,
-                                      List<String> paramNames, List<String> warnings, @Nullable Project project) {
+                                      Map<String, ParamTypeInfo> paramTypes, List<String> warnings, @Nullable Project project) {
         XmlStatementKind kind;
         switch (shortName.replaceAll("Provider$", "")) {
             case "Select":
@@ -319,7 +334,8 @@ public final class AnnotationSqlPreviewService {
         }
         try {
             Map<String, Object> staticValues = XmlPreviewService.INSTANCE.resolveStaticFields(sql, project, warnings);
-            XmlPreviewModel model = new AnnotationSqlParser().parse(sql, kind, paramNames, staticValues);
+            XmlPreviewModel model = new AnnotationSqlParser().parse(
+                    sql, kind, new ArrayList<>(paramTypes.keySet()), staticValues, paramTypes);
             return XmlPreviewService.INSTANCE.toResult(model, warnings);
         } catch (XmlParseException e) {
             return nullResult(e.getMessage() != null ? e.getMessage() : "SQL 解析失败。");

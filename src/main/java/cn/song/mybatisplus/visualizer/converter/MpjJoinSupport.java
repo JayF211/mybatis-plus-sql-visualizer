@@ -94,6 +94,10 @@ public final class MpjJoinSupport {
         }
         if (className.isEmpty()) return null;
 
+        // T-M19.4：子表推断走统一入口（策略 + 修饰链，全局语义）
+        // T-TS-07 留档：此处兜底未传 project（[WrapperCall] 模型不含 project，converter SPI
+        // 亦无项目入参）——多项目同开时表名修饰仍取「首个打开项目」；穿参需改 SPI 签名或给模型
+        // 加平台字段，另批处理（psi 侧兜底调用方已在本批显式传 project）
         String tableName = tableInfo != null ? tableInfo.getTableName() : EntityResolver.inferDecoratedTableName(className);
         String alias = lowerFirst(className);
         List<Condition> onConditions = new ArrayList<>();

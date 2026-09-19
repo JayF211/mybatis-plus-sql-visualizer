@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.execute.DocWriteContext;
 import cn.song.mybatisplus.visualizer.execute.DataSourceSelector;
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor;
 import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier;
@@ -9,7 +10,10 @@ import cn.song.mybatisplus.visualizer.model.BatchModel;
 import cn.song.mybatisplus.visualizer.model.ConditionView;
 import cn.song.mybatisplus.visualizer.model.FillClause;
 import cn.song.mybatisplus.visualizer.model.LikePosition;
+import cn.song.mybatisplus.visualizer.xml.OgnlExpr.ExprReason;
+import cn.song.mybatisplus.visualizer.xml.OgnlExpr.ExprSupport;
 import cn.song.mybatisplus.visualizer.xml.PagesColumn;
+import cn.song.mybatisplus.visualizer.xml.ParamKind;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
 import cn.song.mybatisplus.visualizer.model.SelectStatement;
 import cn.song.mybatisplus.visualizer.model.SqlPreviewModel;
@@ -25,6 +29,8 @@ import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper;
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator;
 import cn.song.mybatisplus.visualizer.sql.perf.PerfSeverity;
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning;
+import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore;
+import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator;
 import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction;
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanel;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext;
@@ -90,6 +96,7 @@ import com.intellij.ui.OnePixelSplitter;
 import com.intellij.ui.TitledSeparator;
 import com.intellij.ui.awt.RelativePoint;
 import com.intellij.ui.components.JBLabel;
+import com.intellij.ui.components.JBLoadingPanel;
 import com.intellij.ui.components.JBPanel;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.ui.components.JBTextField;
@@ -178,6 +185,41 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     private static final Pattern NUMBER_REGEX = Pattern.compile("-?\\d+(\\.\\d+)?");
     private static final Pattern WHITESPACE_REGEX = Pattern.compile("\\s+");
 
+    /**
+     * T-PT-02：TEMPORAL 参数的可解析日期形态——`yyyy` / `yyyy-M-d` / 追加 ` HH:mm[:ss[.SSS]]`
+     * （`T` 分隔兼容 ISO 形态；只做提示，不阻塞渲染）。
+     */
+    private static final Pattern DATE_REGEX = Pattern.compile(
+            "\\d{4}(-\\d{1,2}(-\\d{1,2}([ T]\\d{1,2}:\\d{2}(:\\d{2}(\\.\\d{1,9})?)?)?)?)?");
+
+    /** T-PT-02：行尾校验警示标（淡色，深浅主题各一档）。 */
+    private static final String PARAM_WARN_MARK = "⚠";
+    private static final JBColor PARAM_WARN_FOREGROUND = new JBColor(0xB8860B, 0xD9A343);
+
+    /**
+     * T-PT-02：集合命名启发式的单数词排除表——以 `s` 结尾但语义为单数（状态/地址等），
+     * 不做数组提示（宁缺勿错：提示只是占位文案）。
+     */
+    private static final Set<String> COLLECTION_NAME_EXCEPTIONS = Set.of(
+            "status", "address", "class", "business", "progress", "process", "access", "alias",
+            "analysis", "radius", "series", "species", "news", "pass", "glass", "mass", "press",
+            "stress", "success", "express", "compass", "canvas", "atlas", "bias", "lens",
+            "physics", "politics");
+
+    /**
+     * T-DollarInjectMark：`${}` 直替提示的会话级关闭记忆（✕ 后本 IDE 会话所有预览面板
+     * 不再弹——常用 `${orderBy}` 场景的横幅疲劳缓解；面板关闭/切换文件不重置）。
+     */
+    private static boolean dollarMarkDismissedSession = false;
+
+    /** T-DollarInjectMark：横幅文案里的 `${}` token（技术记号非语言文案，双语言共用，作 {0} 参数传入）。 */
+    static final String DOLLAR_TOKEN = "${}";
+
+    /** 测试复位：清除 `${}` 提示的会话级关闭记忆。 */
+    static void resetDollarMarkForTest() {
+        dollarMarkDismissedSession = false;
+    }
+
     /** T-Perf-04：参数击键 renderSql 防抖窗口（毫秒）。 */
     private static final int RENDER_DEBOUNCE_MS = 150;
 
@@ -218,12 +260,21 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     private final JBScrollPane paramScroll = new JBScrollPane(paramTopAlign) {{
         setPreferredSize(new Dimension(240, 200));
-        setOpaque(false);
+        // T-PreviewBgFit（问题一）：本面板自身给出面板底色——左侧参数区整条链是透明的
+        //（paramTopAlign/viewport 均非不透明，M36.5 起用于与父容器融合），底色一直靠祖先容器提供；
+        // T-UiNative P0a 把自绘 ThemedSplitPane（当时显式设了 UIUtil.getPanelBackground()）换成平台
+        // OnePixelSplitter 时丢了那层背景，深色主题下参数行下方直接透出 splitter 的近黑背景。
+        // 恢复祖先背景之外再让本滚动区成不透明面板灰，今后再换容器也不会复发。
+        setOpaque(true);
+        setBackground(UIUtil.getPanelBackground());
         getViewport().setOpaque(false);
+        // M36.5：去 LAF 默认 viewport 描边（左侧白色内边框根因）
         setBorder(JBUI.Borders.empty());
     }};
 
     private final List<JBTextField> paramFields = new ArrayList<>();
+    // T-PT-02：普通参数行行尾校验警示标（与 paramFields 同序，仅 buildParamRow 产出）
+    private final List<JBLabel> paramWarnLabels = new ArrayList<>();
     private final List<JCheckBox> conditionCheckBoxes = new ArrayList<>();
     private Disposable autoPopupDisposable = null;
     private final List<JBTextField> conditionValueFields = new ArrayList<>();
@@ -238,13 +289,24 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     private Editor editor = null;
 
-    private com.intellij.openapi.editor.event.DocumentListener autoPopupListener = null;
+    /**
+     * T-M27.2：自建 autopopup 的调度防重入标志（平台 autopopup 对非文件编辑器不生效）。
+     * T-RA-02：监听器本体不再用字段记账——T-M52 起移除职责全在 {@code autoPopupDisposable}
+     * （{@code addDocumentListener(listener, disposable)}，dispose 即摘），原 {@code autoPopupListener}
+     * 字段自此只写不读，已删；细节见 {@link #bindAutoPopup}。
+     */
     private boolean autoPopupScheduled = false;
     private boolean suppressAutoPopup = false;
     private PsiFile psiFile = null;
 
     private volatile VirtualFile previewTempFile = null;
     private volatile Pair<VirtualFile, PsiFile> prewarmedTempFile = null;
+
+    /**
+     * T-PerfTail #2：预热产物异步载体（消除 EDT sleep-poll）——prewarmPreviewTempFile 每次
+     * 预热新建（clear 重预热随之更新），createEditor 热态同步消费、冷态注册回调回 EDT 装配。
+     */
+    private volatile PrewarmAwait<Pair<VirtualFile, PsiFile>> prewarmAwait = null;
     /** T-GifRerecord：预热失败标志——await 快速降级用，避免 EDT 空等 2s 后再走降级路径。 */
     private volatile boolean prewarmFailed = false;
     private volatile boolean previewDisposed = false;
@@ -259,6 +321,12 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     private final SqlResultPanel resultPanel = new SqlResultPanel() {{
         setVisible(false);
     }};
+
+    /**
+     * T-UxOnboard T-UX-02：预览编辑器空态引导（原生 placeholder，显隐由编辑器随空文档管理）。
+     * 常态下预览内容即编辑器全文、placeholder 不可见；用户清空文档后原生提示接管。
+     */
+    private final String previewEmptyHint = MpSqlVisualizerBundle.message("panel.preview.emptyHint");
 
     private JComponent embeddedConsole = null;
 
@@ -312,7 +380,29 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     // T-Dgm-04：标签页宿主——原生图框架组件（joinDiagramNative=true 且 Diagrams 插件可用）与
     // 自绘 DiagramPanel 共用此容器按需切换；切换时旧原生编辑器即时 dispose 防 FileEditor 泄漏
     private final javax.swing.JPanel diagramTabHost = new javax.swing.JPanel(new java.awt.BorderLayout());
+    /**
+     * T-F8：JOIN 图标签页的加载面——包住整个 {@link #diagramTabHost}，转圈盖在标签页内容之上。
+     *
+     * <p>为什么加载面必须在宿主层而不是图面板内部：唯一真正的耗时段是 {@link #updateDiagramTab} 的
+     * <b>后台 schema 富化</b>（冷缓存按 schema 规模线性），而原生图路径（默认设置
+     * {@code joinDiagramNative = true}，Ultimate 真机默认）下 {@link #showJoinDiagram} 的
+     * {@code diagramTabHost.removeAll()} 会把 {@link #diagramPanel} 摘出层级——面板内部自摆的转圈在默认配置下
+     * 根本不可见（审计项 F8：T-UN-14 接的转圈从未出现过，showLoading/hideLoading 全仓零调用点）。
+     * 宿主层对原生/自绘两条渲染路径都可见，是唯一能覆盖真机默认路径的加载面。
+     *
+     * <p>转圈层由平台 {@link JBLoadingPanel} 提供（独立 loadingLayer 盖在内容层之上，不替换内容，
+     * 2 参构造 startDelayMs=-1 使 startLoading/stopLoading 同步改可见性）。
+     * Disposable 挂本面板（JBLoadingPanel 的 2 参构造要求父 Disposable）。
+     */
+    private final JBLoadingPanel diagramLoadingHost = new JBLoadingPanel(new BorderLayout(), this);
     private javax.swing.JComponent currentNativeDiagram = null;
+    /**
+     * T-DbSchemaCompletion：待补刷富化的图（首次富化一点数据源信息都没拿到时记下）。
+     *
+     * <p>仅存"上一次富化空手而归"的那个 {@link PreviewResult}——数据源建连（原生控制台就绪）后据此补刷一次，
+     * 刷完置空；新预览替换 current 时旧值自然失配，无需额外清理。
+     */
+    private PreviewResult diagramEnrichRetryTarget = null;
     private JComponent columnInfoPanel = null;
     private JBPanel<JBPanel<?>> contentPane = null;
     private JTabbedPane contentTabPane = null;
@@ -325,6 +415,33 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     private List<ParameterMapping> xmlMappings = new ArrayList<>();
     private JButton errorCopyButton = null;
     private String currentWarning = null;
+
+    // T-PreviewUx-Pack #2：诚实降级横幅——渲染警示（RENDER_WARNING）与 T-PreviewExecDs
+    // 降级链层级提示（DEGRADED）统一收口；降级提示优先级高于渲染警示（见 DegradationBanner.Kind）
+    private final DegradationBanner degradationBanner = createDegradationBanner();
+
+    /** 组装横幅（T-DollarInjectMark ✕ 回调：关闭 → 会话级记忆 + 清除本类别）。 */
+    private static DegradationBanner createDegradationBanner() {
+        DegradationBanner banner = new DegradationBanner();
+        // T-DollarInjectMark：✕ 关闭 → 会话级记忆（本 IDE 会话不再弹；测试经 resetDollarMarkForTest 复位）
+        banner.onDismiss = () -> {
+            dollarMarkDismissedSession = true;
+            banner.clear(DegradationBanner.Kind.DOLLAR_INJECT);
+        };
+        return banner;
+    }
+
+    /** T-DollarInjectMark：最近一次 XML 渲染的 `${}` 直替计数（非 XML 路径恒 0）。 */
+    private int xmlDollarSubstitutions = 0;
+
+    /**
+     * T-InjectionGate T-IG-02：本面板实例内已确认过 `${}` raw 段执行（会话级记忆）。
+     *
+     * <p>同一面板确认一次后不再重复弹（常用 `${orderBy}` 场景的确认疲劳缓解）；记忆随面板实例
+     * 存活——面板 dispose 即失效（工具窗换预览内容不重置，与 T-DollarInjectMark 的 IDE 会话级
+     * 关闭记忆同向）。volatile：执行入口可能在非 EDT 触发（弹窗按钮回调），读写可见性保守处理。
+     */
+    private volatile boolean dollarRawConfirmedInSession = false;
 
     private final ParamHistoryCache paramHistoryCache = new ParamHistoryCache();
     private final Timer historyAlarm = new Timer(500, e -> flushHistoryToCache());
@@ -388,7 +505,13 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         toolbarPanel = toolbar();
         topRow.add(toolbarPanel, BorderLayout.EAST);
         topRow.setBorder(JBUI.Borders.empty(4, 8, 2, 8));
-        add(topRow, BorderLayout.NORTH);
+        // T-PreviewUx-Pack #2：诚实降级横幅（面板内嵌非模态提示，不算弹窗）——渲染警示 /
+        // T-PreviewExecDs 降级链层级提示统一收口（触发即显示、恢复即隐藏，不占高度）
+        JBPanel<JBPanel<?>> northHost = new JBPanel<JBPanel<?>>(new BorderLayout());
+        northHost.setOpaque(false);
+        northHost.add(topRow, BorderLayout.NORTH);
+        northHost.add(degradationBanner, BorderLayout.SOUTH);
+        add(northHost, BorderLayout.NORTH);
         // T-PreviewTopOverlap F3：宽度预算截断跟随尺寸变化（首显 + 拉伸/缩窄；宽度未变短路）
         topRow.addComponentListener(new ComponentAdapter() {
             @Override
@@ -406,6 +529,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         OnePixelSplitter split = new OnePixelSplitter(false, "mpvs.preview.splitter", 0.3f);
         split.setFirstComponent(paramScroll);
         split.setSecondComponent(editorHolder);
+        // T-PreviewBgFit（问题一）：恢复 T-UiNative P0a 换组件时丢掉的容器背景——
+        // 原 ThemedSplitPane 显式设过 `background = UIUtil.getPanelBackground()`，OnePixelSplitter
+        // 版本漏了它，左侧透明参数区于是透出分栏自身背景（深色主题近黑）。
+        // T-DarkTheme：命名色按主题解析，浅/深主题各自正确（主题切换由 LafManagerListener 触发重绘）。
+        split.setBackground(UIUtil.getPanelBackground());
 
         add(split, BorderLayout.CENTER);
         add(resultPanel, BorderLayout.SOUTH);
@@ -419,6 +547,10 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         // T-Dgm-04：标签页实际展示 diagramTabHost（内嵌原生组件或 diagramPanel）
         diagramTabHost.setOpaque(false);
         diagramTabHost.add(diagramPanel, java.awt.BorderLayout.CENTER);
+        // T-F8：加载面在宿主层（标签页内容 = 加载面板 → diagramTabHost），并把它交给图面板出图
+        //（面板自身的 contentLayer 在原生路径下不可见，见 diagramLoadingHost KDoc）
+        diagramLoadingHost.add(diagramTabHost, BorderLayout.CENTER);
+        diagramPanel.bindHostLoadingPanel(diagramLoadingHost);
 
         if (project != null) {
             prewarmPreviewTempFile();
@@ -428,8 +560,17 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** T-M36.6-03 / T-PreviewFlash：后台预热预览临时文件（占位空内容，createEditor 就绪后按实际 SQL 同步）。 */
     private void prewarmPreviewTempFile() {
         Logger LOG = Logger.getInstance(SqlPreviewPanel.class);
+        // T-PerfTail #2：预热线程产出 PrewarmAwait 完成态（成功 complete / 失败 fail）——
+        // 消费侧（createEditor）不再 EDT sleep-poll
+        PrewarmAwait<Pair<VirtualFile, PsiFile>> await =
+                new PrewarmAwait<>(PREWARM_WAIT_MS, runnable ->
+                        ApplicationManager.getApplication().invokeLater(runnable, ModalityState.any()));
+        prewarmAwait = await;
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
-            if (previewTempFile != null || previewDisposed) return;
+            if (previewTempFile != null || previewDisposed) {
+                await.fail(new IllegalStateException("prewarm skipped: disposed or already prepared"));
+                return;
+            }
             try {
                 // T-PreviewExecDs-01a：预览临时文件迁项目内 .idea/sql-visualizer/preview/
                 // ——系统 Temp 不在数据源关联范围，Database 插件不解析（M36.5.12 exec 同教训，
@@ -437,6 +578,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 java.io.File io = projectPreviewFile();
                 if (io == null) {
                     prewarmFailed = true;
+                    await.fail(new IllegalStateException("project preview file unavailable"));
                     LOG.warn("[M36] prewarm FAILED: project preview file unavailable (project/basePath null or mkdirs false)");
                     return;
                 }
@@ -453,12 +595,14 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 }
                 if (vf == null) {
                     prewarmFailed = true;
+                    await.fail(new IllegalStateException("VFS refresh null after " + (retries + 1) + " tries"));
                     LOG.warn("[M36] prewarm FAILED: VFS refresh null after " + (retries + 1) + " tries ("
                             + io.getPath() + ", exists=" + io.exists() + ")");
                     return;
                 }
                 if (previewDisposed) {
                     new java.io.File(vf.getPath()).delete();
+                    await.fail(new IllegalStateException("disposed during prewarm"));
                     return;
                 }
                 Project proj = project;
@@ -471,13 +615,16 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 PsiFile psi = ReadAction.compute(() -> PsiManager.getInstance(projFinal).findFile(vfFinal));
                 if (psi == null) {
                     prewarmFailed = true;
+                    await.fail(new IllegalStateException("PsiManager.findFile null for " + vf.getName()));
                     LOG.warn("[M36] prewarm FAILED: PsiManager.findFile null for " + vf.getName());
                     return;
                 }
                 previewTempFile = vf;
                 prewarmedTempFile = new Pair<>(vf, psi);
+                await.complete(new Pair<>(vf, psi));
             } catch (Throwable e) {
                 prewarmFailed = true;
+                await.fail(e);
                 LOG.warn("[M36] prewarm FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
             }
         });
@@ -561,28 +708,39 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     }
 
     /**
-     * T-PreviewFlash：EDT 上阻塞等待预热产物（有界，避免与预热线程竞态导致 createEditor 无文件可用）。
-     * 等待超时（理论上仅在预热线程失败/极端慢时）返回 null，由调用方走既有失败提示。
-     * T-GifRerecord：预热线程已判定失败时立即返回 null（快速降级），不再空等 2s 预算。
+     * T-PerfTail #2：预热产物消费决策（替代原 {@code awaitPrewarmedTempFile} 的 EDT sleep-poll）。
+     *
+     * <ul>
+     *  <li><b>热态（结果已出）</b>：同步取产物装配——主路径（成功）或快速降级（失败，原 prewarmFailed
+     *     快速返回语义），EDT 零等待；</li>
+     *  <li><b>冷态（预热线程未完成）</b>：{@code scheduleOnce} 注册完成回调，超时预算语义保留
+     *     （PrewarmAwait 内 completeOnTimeout，预算=PREWARM_WAIT_MS），回调统一回 EDT 装配——
+     *     EDT 零阻塞，超时/失败走降级链（T-PreviewExecDs 三级降级语义保留）；</li>
+     *  <li><b>单元测试模式</b>：无真实 EDT 泵，为保留既有测试「showResult 返回时编辑器即就绪」语义，
+     *     退回同步有界等待（awaitOrNullForTest，生产路径不走）。</li>
+     * </ul>
+     *
+     * @return 产物（热态主路径非 null）；null = 本调用不装配（回调挂起中）或快速降级。
+     *         消费装配由调用方按 {@code resolved} 标志区分。
      */
-    private Pair<VirtualFile, PsiFile> awaitPrewarmedTempFile() {
-        long waited = 0L;
-        while (true) {
-            Pair<VirtualFile, PsiFile> ready = prewarmedTempFile;
-            if (ready != null) {
-                prewarmedTempFile = null;
-                return ready;
-            }
-            if (prewarmFailed) return null;
-            if (waited >= PREWARM_WAIT_MS) return null;
-            try {
-                Thread.sleep(PREWARM_POLL_MS);
-                waited += PREWARM_POLL_MS;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return null;
-            }
+    @NotNull
+    private kotlin.Pair<Boolean, Pair<VirtualFile, PsiFile>> resolvePreviewEditorSource(@NotNull String sql) {
+        PrewarmAwait<Pair<VirtualFile, PsiFile>> await = prewarmAwait;
+        if (await == null) return new kotlin.Pair<>(Boolean.TRUE, null);
+        if (await.isDone()) return new kotlin.Pair<>(Boolean.TRUE, await.joinOrNull());
+        com.intellij.openapi.application.Application app = ApplicationManager.getApplication();
+        if (app != null && app.isUnitTestMode()) {
+            return new kotlin.Pair<>(Boolean.TRUE, await.awaitOrNullForTest());
         }
+        // 冷态：注册回调（幂等），本次渲染不装配（编辑器挂起至回调完成，≤ 超时预算）
+        await.scheduleOnce(
+                pair -> {
+                    if (!previewDisposed) assemblePreviewEditor(sql, pair);
+                },
+                () -> {
+                    if (!previewDisposed) assemblePreviewEditor(sql, null);
+                });
+        return new kotlin.Pair<>(Boolean.FALSE, null);
     }
 
     /** 顶部工具栏。 */
@@ -611,6 +769,10 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         // T-MergeFollowup-01：master T-PreviewTopOverlap 重构按钮行时把 dev 的 add 行删掉而注释残留，
         // explainSql() 全树零调用（合并语义丢失无冲突标记实锤）——补回，保持内联高频位（对齐 M37M38 文档 §2.3）。
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.explain"), this::explainSql));
+        // T-RollbackSql：回滚 SQL（预览窗口直达按钮——计划 F3 定案「分享之前」的原直达锚点
+        // 已随 T-PreviewTopOverlap F2 折叠进「更多」，按计划意图保持一键直达形态；
+        // T-MergeR2IntoMaster §3.2 定案：按钮行以 master 为基，回滚按钮插在执行计划之后、刷新之前）
+        bar.add(smallButton(MpSqlVisualizerBundle.message("panel.rollbackSql"), this::showRollbackSql));
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.refresh"), this::refreshView));
         // T-PreviewTopOverlap F2：「更多」折叠菜单入口（低频动作收纳）
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.more"), this::showMoreActionsPopup));
@@ -659,6 +821,180 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         };
     }
 
+    /**
+     * T-RollbackSql：回滚 SQL 视图入口（面板【回滚SQL】按钮）。
+     *
+     * <p>生成结果分层（计划 §2.2）：Complete/Partial 打开 {@link RollbackSqlDialog}；可解析的
+     * UPDATE/DELETE（Unable 但有快照工作流）同样进视图——人工恢复指引 + 粘贴快照生成回滚；
+     * 完全不可推导（解析失败/MERGE/DDL/SELECT）不弹视图，仅消息框说明原因与人工恢复路径。
+     */
+    void showRollbackSql() {
+        String rawSql = currentEditorSql();
+        String sql = null;
+        if (rawSql != null) {
+            String stripped = SqlCommentStripper.strip(rawSql);
+            if (!stripped.isBlank()) sql = stripped;
+        }
+        if (sql == null) return;
+        String kind = SqlTypeClassifier.getFirstKeyword(sql);
+        if (kind == null) kind = "SQL";
+        RollbackSqlGenerator.RollbackResult result = RollbackSqlGenerator.generate(sql);
+        RollbackSnapshotStore store = project != null ? project.getService(RollbackSnapshotStore.class) : null;
+        RollbackSnapshotStore.SnapshotEntry entry = store != null ? store.findBySql(sql) : null;
+        if (result.rating() == RollbackSqlGenerator.Rating.UNABLE && result.snapshotSelectSql() == null) {
+            Project proj = project;
+            if (proj == null) return;
+            List<String> reasonLines = new ArrayList<>();
+            for (RollbackSqlGenerator.RollbackWarning warning : result.warnings()) {
+                reasonLines.add(warning.messageArgs().isEmpty()
+                        ? MpSqlVisualizerBundle.message(warning.messageKey())
+                        : MpSqlVisualizerBundle.message(warning.messageKey(), warning.messageArgs().toArray()));
+            }
+            Messages.showInfoMessage(
+                    proj,
+                    String.join("\n", reasonLines),
+                    MpSqlVisualizerBundle.message("rollback.dialog.title"));
+            return;
+        }
+        new RollbackSqlDialog(project, this, result, kind, entry).show();
+    }
+
+    /** {@link #executeAdhocSql(String, boolean, RollbackSnapshotStore.SnapshotEntry)} 的默认参形态。 */
+    void executeAdhocSql(String sql) {
+        executeAdhocSql(sql, false, null);
+    }
+
+    /**
+     * T-RollbackSql F4：临时 SQL 执行（回滚弹窗专用）——复用 {@link #executeSql} 的既有管线
+     * （分类 → DML 二次确认 → isPrepared 快路径/全链），T-RefreshDbSteal F4 所有权卫队
+     * 对这条路径天然生效；执行完毕结果反馈走既有 {@link #resultPanel}。
+     *
+     * <p>刻意不走 {@code cn.song.mybatisplus.visualizer.execute.SqlExecutor.execute} 从弹窗直调全链：
+     * 全链建临时 .sql 并 attachConsole，可能把正嵌在预览面板里的共享控制台偷走。
+     *
+     * @param dmlConfirmed    DML 二次确认豁免（回滚弹窗「执行回滚」已过用户显式确认链）
+     * @param rollbackOfEntry 本次执行本身是回滚语句时指向被回滚的原快照条目（F6 留痕链）
+     */
+    void executeAdhocSql(String sql, boolean dmlConfirmed,
+                         @Nullable RollbackSnapshotStore.SnapshotEntry rollbackOfEntry) {
+        Project proj = project;
+        if (proj == null) return;
+        if (sql.isBlank()) return;
+        boolean isQuery = SqlTypeClassifier.isQuery(sql);
+        if (!isQuery && !dmlConfirmed) {
+            String keyword = SqlTypeClassifier.getFirstKeyword(sql);
+            if (keyword == null) keyword = "SQL";
+            int confirm = Messages.showYesNoDialog(
+                    proj,
+                    cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(sql, keyword),
+                    MpSqlVisualizerBundle.message("execute.confirm.dml"),
+                    Messages.getWarningIcon());
+            if (confirm != Messages.YES) return;
+        }
+        // P2-F5/F6：经执行按钮执行的 UPDATE/DELETE 执行前登记快照条目（回滚语句登记留痕链）
+        registerRollbackSnapshotIfNeeded(sql, rollbackOfEntry);
+
+        resultPanel.showLoading(null);
+        if (SqlExecutor.isPrepared()) {
+            if (!consoleAttachedToMe()) {
+                Logger.getInstance(SqlPreviewPanel.class)
+                        .warn("[TRollbackSql] executeAdhocSql: prepared console detached → recover before execute");
+                recoverConsole(sql);
+                if (SqlExecutor.isPrepared() && !consoleAttachedToMe()) {
+                    SqlExecutor.execute(
+                            proj, sql, null, isQuery,
+                            consoleComponent -> embedConsole(consoleComponent, true),
+                            consoleEditor -> onNativeEditorReady(consoleEditor),
+                            errorMsg -> resultPanel.showError(errorMsg),
+                            info -> showErrorRichWithLocate(info));
+                    return;
+                }
+            }
+            // 快路径同步执行 SQL 进控制台文档（executePrepared 执行的就是控制台文档；
+            // 回滚执行后下一次 renderSql 会按预览 SQL 同步回来）
+            if (nativeEditorDoc != null && !nativeEditorDoc.getText().equals(sql)) {
+                WriteCommandAction.runWriteCommandAction(proj, () -> nativeEditorDoc.setText(sql));
+            }
+            boolean executed = SqlExecutor.executePrepared(
+                    proj,
+                    fullConsole -> embedConsole(fullConsole),
+                    errorMsg -> resultPanel.showError(errorMsg),
+                    info -> showErrorRichWithLocate(info));
+            if (executed) return;
+        }
+        SqlExecutor.execute(
+                proj, sql, null, isQuery,
+                consoleComponent -> embedConsole(consoleComponent, true),
+                consoleEditor -> onNativeEditorReady(consoleEditor),
+                errorMsg -> resultPanel.showError(errorMsg),
+                info -> showErrorRichWithLocate(info));
+    }
+
+    /**
+     * T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（内存 store，LogSqlEntry 不动字段）。
+     * 回滚语句（rollbackOfEntry 非 null）也登记——parentExecutionId 指向被回滚的原执行，
+     * 形成 dbx {@code rollback_of} 语义的留痕链；仅登记可解析到目标表的语句（解析失败登记无意义）。
+     */
+    private void registerRollbackSnapshotIfNeeded(String sql,
+                                                  @Nullable RollbackSnapshotStore.SnapshotEntry rollbackOfEntry) {
+        Project proj = project;
+        if (proj == null) return;
+        String keyword = SqlTypeClassifier.getFirstKeyword(sql);
+        if (keyword == null) return;
+        if (!keyword.equals("UPDATE") && !keyword.equals("DELETE")) return;
+        RollbackSnapshotStore store = proj.getService(RollbackSnapshotStore.class);
+        if (rollbackOfEntry != null) {
+            store.register(sql, rollbackOfEntry.targetTable(), null, List.of(), rollbackOfEntry.executionId());
+            return;
+        }
+        RollbackSqlGenerator.RollbackResult analyzed =
+                RollbackSqlGenerator.generate(SqlCommentStripper.strip(sql));
+        String table = analyzed.targetTable();
+        if (table == null) return;
+        store.register(sql, table, analyzed.snapshotSelectSql(), analyzed.setColumns());
+    }
+
+    /** 当前编辑器 SQL 文本（原生编辑器文档优先，兜底自研编辑器；两处皆空 null）。 */
+    @Nullable
+    private String currentEditorSql() {
+        if (nativeEditorDoc != null) {
+            String t = nativeEditorDoc.getText();
+            if (t != null && !t.isBlank()) return t;
+        }
+        if (editor != null) {
+            String t = editor.getDocument().getText();
+            if (t != null && !t.isBlank()) return t;
+        }
+        return null;
+    }
+
+    /**
+     * T-InjectionGate T-IG-02：`${}` 原文拼接段的执行确认闸门（{@link #executeSql}/{@link #explainSql} 共用）。
+     *
+     * <p>判定信号取自 {@link PreviewResult} 的 hasDollarRawSegments（解析期 `${` token 收集的渲染期事实，
+     * 不是最终文本 regex——`${}` 成功替换为模拟值后文本里已无痕迹，regex 会漏掉全部成功场景）。
+     * 含 raw 段且本面板未确认过 → 弹确认框（复用 DML 二次确认同款 YesNo 形态与 warning 图标，
+     * 标题同 {@link MpSqlVisualizerBundle} 的 {@code execute.confirm.dml}，消息说明 raw 段当前填的是模拟值）；
+     * 用户选 NO → 中止；选 YES → 记会话级记忆，本面板后续执行不再重复弹。
+     *
+     * <p>范围：只在 XML/注解预览链生效（Wrapper/JPA/日志还原链无 `${}` 概念，该字段恒 false）。
+     *
+     * @return true = 放行（无 raw 段 / 已确认过 / 本次确认通过）
+     */
+    private boolean confirmDollarRawSegments(Project proj) {
+        PreviewResult cur = current;
+        if (cur == null || !cur.isHasDollarRawSegments()) return true;
+        if (dollarRawConfirmedInSession) return true;
+        int confirm = Messages.showYesNoDialog(
+                proj,
+                MpSqlVisualizerBundle.message("execute.confirm.dollarRaw.message", DOLLAR_TOKEN),
+                MpSqlVisualizerBundle.message("execute.confirm.dml"),
+                Messages.getWarningIcon());
+        if (confirm != Messages.YES) return false;
+        dollarRawConfirmedInSession = true;
+        return true;
+    }
+
     /** 执行 SQL（M36）。 */
     public void executeSql() {
         Project proj = project;
@@ -678,11 +1014,16 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             if (keyword == null) keyword = "SQL";
             int confirm = Messages.showYesNoDialog(
                     proj,
-                    MpSqlVisualizerBundle.message("execute.confirm.dml.message", keyword),
+                    cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(sql, keyword),
                     MpSqlVisualizerBundle.message("execute.confirm.dml"),
                     Messages.getWarningIcon());
             if (confirm != Messages.YES) return;
         }
+        // T-InjectionGate T-IG-02：`${}` raw 拼接段确认门（DML 分类判定之后追加——预览产物里的
+        // raw 段带的是模拟值，执行前须用户确认值真实性；NO 直接中止，不落快照不执行）
+        if (!confirmDollarRawSegments(proj)) return;
+        // T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（回滚弹窗据此提供粘贴回填工作流）
+        registerRollbackSnapshotIfNeeded(sql, null);
 
         resultPanel.showLoading(null);
         if (SqlExecutor.isPrepared()) {
@@ -702,7 +1043,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                             proj, sql, null, isQuery,
                             consoleComponent -> embedConsole(consoleComponent, true),
                             consoleEditor -> onNativeEditorReady(consoleEditor),
-                            errorMsg -> resultPanel.showError(errorMsg));
+                            errorMsg -> resultPanel.showError(errorMsg),
+                            info -> showErrorRichWithLocate(info));
                     return;
                 }
             }
@@ -712,14 +1054,16 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             boolean executed = SqlExecutor.executePrepared(
                     proj,
                     fullConsole -> embedConsole(fullConsole),
-                    errorMsg -> resultPanel.showError(errorMsg));
+                    errorMsg -> resultPanel.showError(errorMsg),
+                    info -> showErrorRichWithLocate(info));
             if (executed) return;
         }
         SqlExecutor.execute(
                 proj, sql, null, isQuery,
                 consoleComponent -> embedConsole(consoleComponent, true),
                 consoleEditor -> onNativeEditorReady(consoleEditor),
-                errorMsg -> resultPanel.showError(errorMsg));
+                errorMsg -> resultPanel.showError(errorMsg),
+                info -> showErrorRichWithLocate(info));
     }
 
     /** 取当前非空 SQL 文本（优先原生编辑器文档，兜底自研编辑器）。 */
@@ -734,6 +1078,89 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             if (t != null && !t.isBlank()) return t;
         }
         return null;
+    }
+
+    /**
+     * T-ErrorLocate T-EL-03：错误定位——跳转到预览源锚点（语句起始行）。
+     *
+     * <p>诚实降级定案：驱动报错位置（Position/at line）指向<b>被执行 SQL 文本</b>的字符/行，
+     * 与 mapper 原文行不一一对应（动态 SQL 拼接、参数注入后行号必然错位），v1 只承诺
+     * 「语句起始行」跳转 + 按钮 tooltip 如实说明，绝不虚标精确跳转。
+     * 锚点来自 {@link SqlPreviewService} 的 lastPreviewSourceAnchor（预览触发时登记）；
+     * 无锚点（gutter 面等未登记入口）定位按钮不出现。
+     */
+    private void locateErrorSource() {
+        Project proj = project;
+        if (proj == null) return;
+        SqlPreviewService.SourceAnchor anchor = null;
+        try {
+            anchor = proj.getService(SqlPreviewService.class).lastPreviewSourceAnchor;
+        } catch (Throwable t) {
+            return;
+        }
+        if (anchor == null) return;
+        try {
+            new com.intellij.openapi.fileEditor.OpenFileDescriptor(proj, anchor.file(), anchor.line0(), 0).navigate(true);
+        } catch (Throwable ignored) {
+            // 与原 runCatching 等价
+        }
+    }
+
+    /** T-ErrorLocate：执行调用点共用的富错误回调（错误呈现 + 可解析锚点时附定位动作）。 */
+    private void showErrorRichWithLocate(cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo info) {
+        resultPanel.showErrorRich(info, () -> locateErrorSource());
+        maybeProbeDdlEffective(info);
+    }
+
+    /**
+     * T-DdlRecover（O-15）T-DR-02：「失败不等于未生效」——执行 DDL 撞连接类断开时，数据库侧
+     * 可能已隐式提交。判定链：连接类异常（SQLState 08xxx / vendor 码 / 签名兜底）∧ 可能改元数据
+     * （MetadataInvalidator 既有预判复用）→ 提取 CREATE 目标表名 → 后台退避探测（500ms/1.5s/3s
+     * 三次，等 DBN 自动重连窗口）→ 命中呈现警示条、未命中 tooltip 如实注记。
+     * 探测/提取任一失败维持原错误呈现（诚实降级）；警示无新弹窗（弹窗克制红线）。
+     */
+    private void maybeProbeDdlEffective(cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo info) {
+        Project proj = project;
+        if (proj == null) return;
+        if (!cn.song.mybatisplus.visualizer.execute.ConnectionErrorClassifier.isConnectionError(info)) return;
+        String sql = currentEditorSql();
+        if (sql == null) return;
+        if (!cn.song.mybatisplus.visualizer.execute.MetadataInvalidator.mayChangeMetadata(sql)) return;
+        String target = cn.song.mybatisplus.visualizer.execute.DdlTargetExtractor.extractCreateTarget(sql);
+        if (target == null) return;
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            boolean hit = false;
+            for (long delayMs : new long[]{500L, 1500L, 3000L}) {
+                try {
+                    Thread.sleep(delayMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.TableMeta meta = null;
+                try {
+                    meta = cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.tableMeta(proj, target);
+                } catch (Throwable t) {
+                    meta = null;
+                }
+                if (meta == null) break;
+                if (meta.comment() != null || !meta.columns().isEmpty()) {
+                    hit = true;
+                    break;
+                }
+            }
+            String probedAt = java.time.LocalTime.now().withNano(0).toString();
+            // Kotlin 闭包可捕获可变局部变量（Ref 包装），Java lambda 要求实际最终变量——
+            // 固化探测结果后再进 EDT 回调，语义与 master 一致。
+            final boolean probed = hit;
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (probed) {
+                    resultPanel.showDdlEffectiveWarning(target, probedAt);
+                } else {
+                    resultPanel.noteDdlProbeMissed();
+                }
+            }, ModalityState.any());
+        });
     }
 
     /**
@@ -773,12 +1200,16 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         }
         Logger.getInstance(SqlPreviewPanel.class)
                 .info("[M37.2] explainSql: dialect=" + dialect.getName() + ", len=" + explainSqlText.length());
+        // T-InjectionGate T-IG-03：EXPLAIN 本就真实执行——`${}` raw 段同门控（旁路不得绕开执行闸门）；
+        // 方言不支持（上方已 return，未执行）不弹
+        if (!confirmDollarRawSegments(proj)) return;
         resultPanel.showLoading(null);
         SqlExecutor.execute(
                 proj, explainSqlText, null, true,
                 consoleComponent -> embedConsole(consoleComponent, true),
                 consoleEditor -> onNativeEditorReady(consoleEditor),
-                errorMsg -> resultPanel.showError(errorMsg));
+                errorMsg -> resultPanel.showError(errorMsg),
+                info -> showErrorRichWithLocate(info));
     }
 
     /** M36.5：原生控制台编辑器就绪统一处理。 */
@@ -787,6 +1218,17 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         consoleEditor.putUserData(SqlCompletionContext.KEY, ctx);
         SqlCompletionContributor.registerContext(consoleEditor.getDocument(), ctx);
         nativeEditorDoc = consoleEditor.getDocument();
+        // T-DbSchemaCompletion：控制台就绪 = 数据源已 attach/建连，此刻的 schema 预热最容易命中
+        //（预览打开常早于建连，那时 getModel() 还是 null）
+        if (current != null) prefetchSchemaForCompletion(current);
+        // T-DbSchemaCompletion：同一窗口下 JOIN 图也一样——首次富化空手（模型未加载）时补刷一次，
+        // 否则那张图会永远停在实体注释上（库里有 COMMENT，用户看到的是"JOIN 图没有字段注释"）。
+        // 只补一次：target 命中即置空；富化确实拿到数据时从不登记，不会无谓重建图。
+        PreviewResult retryTarget = current;
+        if (retryTarget != null && diagramEnrichRetryTarget == retryTarget) {
+            diagramEnrichRetryTarget = null;
+            updateDiagramTab(retryTarget);
+        }
         // T-AutoFold F5：登记控制台编辑器引用（折叠应用目标）；就绪即按当前文档内容应用一次
         //（prepareConsole 链可能已同步 SQL 进文档，早于下一次 showSql）
         nativeConsoleEditor = consoleEditor;
@@ -820,6 +1262,37 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 consoleComponent -> {
                     embedConsole(consoleComponent);
                     resultPanel.showEmpty();
+                    // T-PreviewFast P7：请求→控制台可见（第三段锚点，用户感知的「预览快不快」）
+                    try {
+                        long req = SqlPreviewService.lastPreviewRequestMs;
+                        if (req > 0) {
+                            Logger.getInstance(SqlPreviewPanel.class)
+                                    .info("[T-PreviewFast] request→console-visible: "
+                                            + (System.currentTimeMillis() - req) + "ms");
+                        }
+                    } catch (Throwable ignored) {
+                        // 与原 runCatching 等价（诊断打点不阻断主流程）
+                    }
+                    // T-PreviewConsoleFmt：控制台挂在这个 exec 文件上（其文档就是该文件文档），而文件
+                    // 内容由预览链预热写成**预览原文**（裸单行）——挂载后不重渲染，用户看到的就是裸
+                    // SQL（真机 20260917 日志：showSql createEditor len=274/16 行 → 预热原文 → attach
+                    // 后控制台显示 1 行）。嵌入完成即按当前渲染文本回填一次；必须排在此处而非
+                    // onNativeEditorReady —— showSql 的 nativeDoc 分支要求 consoleAttachedToMe()
+                    // （= embeddedConsole 已进 consoleHost），挂载回调那一刻尚未满足。
+                    // T-WSC-01：此处回调**会写文档**（renderSql → showSql → document.setText），故必须用
+                    // write-safe 模态——原 ModalityState.any() 恒 write-unsafe，真机报 Write-unsafe context
+                    // （见 DocWriteContext KDoc 与计划 20260917-1555 §一）。nonModal 的代价是模态弹窗存续期
+                    // 回填延后到弹窗关闭——这正是平台对「改文档」要求的语义。
+                    ApplicationManager.getApplication().invokeLater(() -> {
+                        if (Disposer.isDisposed(this)) return;
+                        try {
+                            renderSql();
+                        } catch (Throwable e) {
+                            Logger.getInstance(SqlPreviewPanel.class)
+                                    .warn("[M36] post-attach re-render FAILED: " + e.getClass().getSimpleName()
+                                            + ": " + e.getMessage());
+                        }
+                    }, ModalityState.nonModal());
                 },
                 consoleEditor -> onNativeEditorReady(consoleEditor),
                 null, null);
@@ -842,6 +1315,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             resultPanel.showIdle();
             if (!previewMode && consoleComponent instanceof JSplitPane) {
                 JSplitPane sp = (JSplitPane) consoleComponent;
+                // write-safe: UI-only（纯 Swing/只读，无文档写）
                 ApplicationManager.getApplication().invokeLater(() -> {
                     if (sp.getHeight() > 0) {
                         sp.setDividerLocation(0.6);
@@ -863,6 +1337,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         attachRehostListener(consoleComponent);
         if (consoleComponent instanceof JSplitPane) {
             JSplitPane sp = (JSplitPane) consoleComponent;
+            // write-safe: UI-only（纯 Swing/只读，无文档写）
             ApplicationManager.getApplication().invokeLater(() -> {
                 if (sp.getHeight() > 0) {
                     sp.setDividerLocation(previewMode ? 1.0 : 0.6);
@@ -943,6 +1418,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             lastRehostAt = now;
             Logger.getInstance(SqlPreviewPanel.class).info("[M36] console component released by DBN (id="
                     + System.identityHashCode(e.getComponent()) + ") → re-host (since=" + since + "ms)");
+            // ModalityState.any()：模态弹窗 pump 期间重挂照常执行（纯 Swing 操作安全，M36.5.13 教训）
+            // write-safe: UI-only（纯 Swing/只读，无文档写）
             ApplicationManager.getApplication().invokeLater(
                     () -> rehostConsoleForTest((JComponent) e.getComponent()), ModalityState.any());
         };
@@ -1055,6 +1532,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             xmlForEachCounts.putAll(xmlModel.defaultState().forEachCounts());
             xmlForEachNulls.clear();
             xmlErrors = new ArrayList<>();
+            xmlDollarSubstitutions = 0;
             XmlPreviewState initState = new XmlPreviewState(
                     new LinkedHashSet<>(enabledIds),
                     new LinkedHashMap<>(xmlForEachCounts),
@@ -1074,6 +1552,9 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         modeButton.setText(modeButtonText());
         rebuildLeftPanel(result);
         refreshCompletionContext();
+        // T-DbSchemaCompletion：后台预热本文档涉及表的数据源 schema，完成后再刷一次上下文
+        //（数据源列进补全候选；不依赖 JOIN 图，落 T-PreviewExecDs 遗留的 P1-5）
+        prefetchSchemaForCompletion(result);
         renderSql();
         updateMeta(result);
         updateDiagramTab(result);
@@ -1094,69 +1575,163 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             // T-Embed-02：数据源可用时把列类型/注释升级为 DB 真实值（int(11)/DB COMMENT），缺席静默回落
             SelectStatement stmt = (SelectStatement) pm.getStatement();
             Project proj = project;
+            // T-F8：加载态包住「后台富化 + 回 EDT 换页」整段（showJoinDiagram 本体与 locateDbTables
+            // 都在 EDT 同步跑，同一 EDT 事件内 startLoading 画不出来，故起止点必须跨事件）。
+            // 这里只「进」；「出」的主收口点是 showJoinDiagram 末尾（正常路径两条分支都过它）。
+            // T-TS-FixA：主收口点只在 showJoinDiagram **被进入**时生效——建模型抛在调用之前时
+            // 它不会执行，故两条分支各自的 catch 内还必须显式摘圈（异常路径的收口点）。
+            diagramPanel.showLoading();
             if (proj == null) {
-                showJoinDiagram(JoinDiagramGenerator.buildDiagramModel(stmt));
+                // T-TS-05：buildDiagramModel 移入 try——抛在 showJoinDiagram 调用**之前**时，
+                // showJoinDiagram 的 finally 根本没机会执行，转圈会留在宿主层。
+                try {
+                    showJoinDiagram(JoinDiagramGenerator.buildDiagramModel(stmt));
+                } catch (Throwable t) {
+                    // T-TS-FixA：本 catch 是这条分支的**唯一**收尾方——buildDiagramModel 是
+                    // showJoinDiagram 的**实参**，实参求值期抛出时方法根本没进入，其 finally
+                    // （唯一收口点）不会执行；此处不摘圈，上面 showLoading() 打开的转圈就永留宿主层，
+                    // 直到下一次预览或整图卸载（对照后台富化分支：那边同样在异常时显式摘圈，
+                    // 两条分支对同一异常的处理必须对称）。
+                    // 线程：updateDiagramTab 由 showResult 在 EDT 上同步调用，本 catch 亦在 EDT，
+                    // 直接摘即可——invokeLater 归位只服务于跨线程的后台富化分支。
+                    diagramPanel.hideLoading();
+                    Logger.getInstance(SqlPreviewPanel.class)
+                            .warn("[T-F8] join diagram build failed (no project), loading cleared here", t);
+                }
                 return;
             }
+            final PreviewResult resultFinal = result;
             ApplicationManager.getApplication().executeOnPooledThread(() -> {
+                // T-TS-05：建模型同样在 try 内——本拍一旦抛，pooled 线程终止、下面的 invokeLater
+                // 永不投递，转圈就永远留在宿主层（收尾方只剩 showJoinDiagram，而它不会被调用）。
+                DiagramModel base;
+                try {
+                    base = JoinDiagramGenerator.buildDiagramModel(stmt);
+                } catch (Throwable t) {
+                    Logger.getInstance(SqlPreviewPanel.class)
+                            .warn("[T-F8] join diagram model build failed (background)", t);
+                    // 回 EDT 摘转圈：作废判定同下面那拍——转圈属于「当前加载」，不能摘后一次预览的
+                    ApplicationManager.getApplication().invokeLater(() -> {
+                        if (current == resultFinal && (project == null || !project.isDisposed())) {
+                            diagramPanel.hideLoading();
+                        }
+                    });
+                    return;
+                }
                 DiagramModel enriched;
                 try {
-                    enriched = cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher.enrich(
-                            proj, JoinDiagramGenerator.buildDiagramModel(stmt));
+                    enriched = cn.song.mybatisplus.visualizer.ui.diagram.DiagramSchemaEnricher.enrich(proj, base);
                 } catch (Throwable t) {
                     Logger.getInstance(SqlPreviewPanel.class)
                             .warn("[T-Perf-09] diagram schema enrich failed, showing un-enriched model", t);
-                    enriched = JoinDiagramGenerator.buildDiagramModel(stmt);
+                    enriched = base;
                 }
+                // T-DbSchemaCompletion：本次富化是否一点数据源信息都没拿到（结构相等 = 没改动）。
+                // 命中就说明模型未加载（预览打开常早于数据源建连）——记下来供数据源就绪后的补刷。
+                boolean contributed = enriched != base;
                 DiagramModel enrichedModel = enriched;
                 ApplicationManager.getApplication().invokeLater(() -> {
-                    if (current != result || project == null || project.isDisposed()) return;
-                    showJoinDiagram(enrichedModel);
+                    // T-F8：作废分支**不得**摘转圈——迟到的作废回调若停加载态，会把后一次预览
+                    // 刚打开的转圈一起摘掉（转圈是「当前加载」的状态，不是本次回调的状态）。
+                    // 此时加载态的归属方是后一次预览：它要么自己收尾（showJoinDiagram 末尾），
+                    // 要么走无 JOIN 分支（unloadJoinDiagram → diagramPanel.clear() 复位）。
+                    if (current != resultFinal || project == null || project.isDisposed()) return;
+                    if (!contributed) diagramEnrichRetryTarget = resultFinal;
+                    // T-TS-05：建图异常不逃逸到平台事件泵——逃逸只会让平台记一条无上下文的错，
+                    // 而转圈已由 showJoinDiagram 的 finally 摘下；这里补一条带上下文的 warn 便于定位。
+                    try {
+                        showJoinDiagram(enrichedModel);
+                    } catch (Throwable t) {
+                        Logger.getInstance(SqlPreviewPanel.class)
+                                .warn("[T-F8] join diagram build failed (post-enrich), loading cleared by finally", t);
+                    }
                 });
             });
         } else {
+            // 无 JOIN：整图卸载（移除 diagram 标签页 + 释放原生图 + 回收虚拟外键登记）
             removeDiagramTab();
-            diagramPanel.clear();
-            clearNativeDiagram();
+            unloadJoinDiagram();
         }
     }
 
     /**
      * T-Dgm-04：按设置与 Diagrams 插件可用性渲染 JOIN 图。
      *
-     * 原生路径：快照登记 → UmlEditorProvider.createEditor → 组件嵌入 diagramTabHost
+     * <p>原生路径：快照登记 → UmlEditorProvider.createEditor → 组件嵌入 diagramTabHost
      * （缩放/布局/折叠/导出全框架托管）；Diagrams 插件缺席或框架异常（buildTabComponent 返回 null）
      * 自动降级自绘 DiagramPanel，与 Community 行为一致。
+     *
+     * <p>T-F8：本方法末尾是加载态的<b>主收口点</b>——两条调用分支（updateDiagramTab 的无 project
+     * 同步分支与后台富化回 EDT 分支）正常路径都经此，故「摘转圈」写在这里而不是各调用点：结构上
+     * 保证转圈一定晚于渲染被摘（原生图建图/自绘测量都在本方法内同步完成），调用方也不会漏收尾。
+     * T-TS-FixA：主收口点只覆盖「进得来」的情形——建模型抛在<b>调用之前</b>（实参求值期）时本方法
+     * 不会被进入，故两条分支的 catch 内各自还有一层异常收口（见 updateDiagramTab）。
+     *
+     * <p>T-TS-05：收尾改成 {@code try { … } finally}——原生框架建图（buildTabComponent 反射链/文件编辑器
+     * 创建）与自绘测量都可能抛，原先的「顺序执行 + 末尾摘转圈」在异常逃逸时直接跳过摘转圈那行，
+     * 用户看到的是转圈永远留在宿主层（且异常还会顺着 EDT 事件泵往上冒）。finally 保证「进过加载态
+     * 就一定出」，异常照旧向上抛给调用方的带日志兜底。
      */
     private void showJoinDiagram(DiagramModel model) {
-        boolean nativeEnabled = PluginSettings.getInstance().getState().getJoinDiagramNative();
-        JComponent nativeCmp = null;
-        if (nativeEnabled) {
-            // T-Embed-03 降级链：Database 原生图（真实 DbTable + 虚拟外键 JOIN 线）优先，
-            // 数据源缺席/表未定位/框架异常回落 A 路径自实现 Provider，再回落自绘渲染器
-            if (project != null) {
-                nativeCmp = cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport
-                        .buildTabComponent(project, model, MpSqlVisualizerBundle.message("diagram.tab.title"), this);
+        try {
+            // T-TS-05 测试缝：注入一个会抛的 render 复现建图异常路径（正常为 null）。
+            // 为什么需要缝：结构合法的模型在测试沙盒里几乎不抛（同 DiagramPanel.renderGuarded 的
+            // 单独成函数理由），异常兜底路径否则只能靠人工改线上代码才验得出来。
+            if (diagramRenderForTest != null) {
+                diagramRenderForTest.accept(model);
+                return;
             }
-            if (nativeCmp == null) {
-                nativeCmp = cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramSupport
-                        .buildTabComponent(project, model, MpSqlVisualizerBundle.message("diagram.tab.title"), this);
+            boolean nativeEnabled = PluginSettings.getInstance().getState().getJoinDiagramNative();
+            // T-EmbedFkOrder F1：**必须先清旧图、再建新图**——旧图 dispose 会清空 JOIN 虚拟外键注册表
+            //（JoinFkRegistry），顺序颠倒会把新图刚登记的 ON 条件整批抹掉：Database 原生图于是只剩节点
+            // 没有连线（真机实证：同一面板里"一张图有连线、另一张没有"；含子查询的走 wrapper 路径不读
+            // 注册表，故不受影响）。清理集中在此处（建图之前），登记之后不再有人清它。
+            clearNativeDiagram();
+            JComponent nativeCmp = null;
+            if (nativeEnabled) {
+                // T-Embed-03 降级链：Database 原生图（真实 DbTable + 虚拟外键 JOIN 线）优先，
+                // 数据源缺席/表未定位/框架异常回落 A 路径自实现 Provider，再回落自绘渲染器
+                if (project != null) {
+                    nativeCmp = cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport
+                            .buildTabComponent(project, model, MpSqlVisualizerBundle.message("diagram.tab.title"), this);
+                }
+                if (nativeCmp == null) {
+                    nativeCmp = cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramSupport
+                            .buildTabComponent(project, model, MpSqlVisualizerBundle.message("diagram.tab.title"), this);
+                }
             }
+            diagramTabHost.removeAll();
+            if (nativeCmp != null) {
+                currentNativeDiagram = nativeCmp;
+                diagramTabHost.add(nativeCmp, java.awt.BorderLayout.CENTER);
+            } else {
+                diagramTabHost.add(diagramPanel, java.awt.BorderLayout.CENTER);
+                diagramPanel.showDiagram(model);
+            }
+            diagramTabHost.revalidate();
+            diagramTabHost.repaint();
+        } finally {
+            // T-F8：图已换入 → 退出加载态（渲染失败时 showDiagram 内部已落错误页并复位，此处幂等）。
+            // T-TS-05：异常路径同样必须走到这里——否则转圈永留宿主层。
+            diagramPanel.hideLoading();
         }
-        clearNativeDiagram();
-        diagramTabHost.removeAll();
-        if (nativeCmp != null) {
-            currentNativeDiagram = nativeCmp;
-            diagramTabHost.add(nativeCmp, java.awt.BorderLayout.CENTER);
-        } else {
-            diagramTabHost.add(diagramPanel, java.awt.BorderLayout.CENTER);
-            diagramPanel.showDiagram(model);
-        }
-        diagramTabHost.revalidate();
-        diagramTabHost.repaint();
     }
 
-    /** 释放并移除当前原生图组件（内部 FileEditor 经 clientProperty 定位后 dispose）。 */
+    /**
+     * T-TS-05 异常兜底测试缝：非 null 时 showJoinDiagram 的换图动作改走它（注入会抛的 render）。
+     *
+     * <p>只在测试里赋值；生产恒 null（多一次空判，无语义影响）。
+     */
+    java.util.function.Consumer<DiagramModel> diagramRenderForTest = null;
+
+    /**
+     * 释放并移除当前原生图组件（内部 FileEditor 经 clientProperty 定位后 dispose）。
+     *
+     * <p>T-EmbedFkOrder F2：本方法<b>不</b>清理 JOIN 虚拟外键注册表——它可能在建新图之前被调用（此时
+     * 新图尚未登记，清了也无害），也可能在换图/卸载时被调用（此时若清会把刚登记的抹掉）。
+     * 注册表的清理职责在明确语义点（三点口径）：登记前自带 clear、{@link #unloadJoinDiagram}（无 JOIN/
+     * 面板清空）与面板 {@link #dispose}（T-PS4-14④）。
+     */
     private void clearNativeDiagram() {
         if (currentNativeDiagram != null) {
             // 两条原生路径的 clientProperty key 不同，各 dispose 一次（未命中为 no-op）
@@ -1169,6 +1744,13 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         currentNativeDiagram = null;
     }
 
+    /** T-EmbedFkOrder F2：整图卸载（无 JOIN/面板清空）——释放原生图并回收虚拟外键登记。 */
+    private void unloadJoinDiagram() {
+        clearNativeDiagram();
+        diagramPanel.clear();
+        cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport.clearRegisteredFk();
+    }
+
     private void ensureTabbedContent(boolean addDiagramTab) {
         if (contentTabPane != null) return;
         BorderLayout bl = (BorderLayout) getLayout();
@@ -1177,7 +1759,9 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         JTabbedPane pane = new JTabbedPane();
         pane.addTab(MpSqlVisualizerBundle.message("panel.tab.sql"), center);
         if (addDiagramTab) {
-            pane.addTab(MpSqlVisualizerBundle.message("diagram.tab.title"), diagramTabHost);
+            // T-F8：标签页内容是加载面板（内含 diagramTabHost）——转圈盖住整页，
+            // 原生/自绘两条路径共用同一个加载面
+            pane.addTab(MpSqlVisualizerBundle.message("diagram.tab.title"), diagramLoadingHost);
         }
         if (addDiagramTab) {
             pane.addChangeListener(e -> {
@@ -1273,6 +1857,69 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         if (editor != null) editor.putUserData(SqlCompletionContext.KEY, ctx);
         if (psiFile != null) psiFile.putUserData(SqlCompletionContext.KEY, ctx);
         if (editor != null) SqlCompletionContributor.registerContext(editor.getDocument(), ctx);
+        // T-DbSchemaCompletion：预览实际输入面是原生控制台（Ultimate），它的上下文只在
+        // onNativeEditorReady 挂过一次——不在此同步，schema 预热完成后控制台仍读旧上下文，
+        // 库里独有的列照旧补不出来（且控制台端编辑器 userData 优先级高于 document 兜底）。
+        Editor console = nativeConsoleEditor;
+        if (console != null) {
+            console.putUserData(SqlCompletionContext.KEY, ctx);
+            SqlCompletionContributor.registerContext(console.getDocument(), ctx);
+        }
+    }
+
+    /**
+     * T-DbSchemaCompletion：补全 schema 预热涉及的表——SQL 里出现的表（含 JOIN）+ 预览主表。
+     *
+     * <p>表名取自 TableExtractor（纯词法，无 PSI）；解析不到时只剩主表兜底。带别名/括号的误提取
+     * 最多导致一次未命中（现在不写负缓存，见 DatabaseSchemaResolver.resolveFromSources），无害。
+     */
+    @NotNull
+    private List<String> completionTables(@Nullable PreviewResult result) {
+        if (result == null) return List.of();
+        List<String> merged = new ArrayList<>();
+        merged.addAll(cn.song.mybatisplus.visualizer.sql.extract.TableExtractor.extract(result.getSql()));
+        if (result.getTableName() != null) merged.add(result.getTableName());
+        List<String> out = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (String t : merged) {
+            String trimmed = t.trim();
+            if (!trimmed.isEmpty() && seen.add(trimmed)) out.add(trimmed);
+        }
+        return out;
+    }
+
+    /**
+     * T-DbSchemaCompletion：后台预热「本文档涉及的表」的数据源 schema，完成后刷新补全上下文。
+     *
+     * <p>快照判据与 T-Perf-09 的 JOIN 富化同款（{@code current == result} 才应用）——新预览打开即作废迟到结果。
+     * 数据源未连接时 {@code getModel()} 为 null → 解析 0 张且不留负缓存，控制台就绪（数据源已连）时会经
+     * {@link #onNativeEditorReady} 再触发一次，覆盖「预览早于建连」的窗口（真机日志实证该窗口存在）。
+     *
+     * <p>补全热路径不做任何遍历：本方法只在后台把结果填进 DatabaseSchemaResolver 缓存，
+     * 之后 {@link #buildCompletionContext} 只读缓存（T-Perf-09 红线）。
+     */
+    private void prefetchSchemaForCompletion(PreviewResult result) {
+        Project proj = project;
+        if (proj == null) return;
+        List<String> tables = completionTables(result);
+        if (tables.isEmpty()) return;
+        final PreviewResult resultFinal = result;
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            int resolved;
+            try {
+                resolved = cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.prefetchTables(proj, tables);
+            } catch (Throwable t) {
+                resolved = 0;
+            }
+            Logger.getInstance(SqlPreviewPanel.class)
+                    .info("[T-DbSchemaCompletion] schema 预热: tables=" + tables.size() + ", resolved=" + resolved
+                            + ", list=" + tables);
+            if (resolved == 0) return;
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (current != resultFinal || project == null || project.isDisposed()) return;
+                refreshCompletionContext();
+            });
+        });
     }
 
     private SqlCompletionContext buildCompletionContext() {
@@ -1282,7 +1929,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 null,
                 current != null ? current.getColumnComments() : Collections.emptyMap(),
                 current != null ? current.getTableComment() : null,
-                current != null ? current.getCandidateTables() : Collections.emptyList());
+                current != null ? current.getCandidateTables() : Collections.emptyList(),
+                // T-DbSchemaCompletion：数据源 schema 列（库里存在而实体类没有的列也是候选）。
+                // 只读预热缓存（columnsCached 不触发遍历）；未预热/无数据源时空 Map = 改动前语义。
+                cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
+                        .columnsCached(project, completionTables(current)));
     }
 
     /**
@@ -1301,6 +1952,15 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     /** 按当前压缩/多行模式 + 动态条件启用集合 + 参数回填重渲染 SQL 编辑器。 */
     private void renderSql() {
+        // T-WSC-01：写安全自愈闸——renderSql 是面板全部文档写入的唯一上游（showSql 三条分支
+        // 都写文档：nativeDoc / 自建 editor / createEditor），而写入合法性取决于「这次 EDT 活动
+        // 是否 write-safe」（见 DocWriteContext KDoc）。非 write-safe（如 invokeLater(any) 排出的
+        // 活动、Timer 拍）时重投递到 nonModal 的下一拍；renderSql 幂等重算，不会写出过期文本
+        // ——这正是闸门放在 renderSql 而非 showSql(text) 的原因（后者收的是调用时刻的快照）。
+        if (!DocWriteContext.isWriteAllowedNow()) {
+            DocWriteContext.invokeLaterWriteSafe(this, "SqlPreviewPanel.renderSql", () -> renderSql());
+            return;
+        }
         PreviewResult result = current;
         if (result == null) return;
         SqlPreviewModel model = result.getPreviewModel();
@@ -1315,6 +1975,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             RenderedXmlSql rendered = xml.renderSql(state);
             xmlErrors = rendered.errors();
             xmlMappings = rendered.mappings();
+            xmlDollarSubstitutions = rendered.dollarSubstitutions();
             for (Map.Entry<String, String> e : rendered.bindValues().entrySet()) {
                 String name = e.getKey();
                 String value = e.getValue();
@@ -1412,20 +2073,39 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
      * FORMAT 强制格式化、KEYWORD_WRAP / VERTICAL 走对应变换（二者对非 INSERT 已内含 format，
      * 无需叠加）。
      */
+    /**
+     * T-PreviewFast P6：显示模式变换 <b>单槽缓存</b>——同一 (SQL, 模式, 压缩态, 格式化设置) 组合
+     * 只做一次 SqlFormatter 变换。命中场景：挂载后回填渲染与紧随其后的参数/勾选重渲染
+     * （内容未变时反复走格式化管线是纯浪费，大 SQL 上尤甚）。
+     */
+    private String formatCacheKey = null;
+    private String formatCacheValue = null;
+
     private String applyDisplayMode(String sql) {
         if (compactMode) return sql;
+        String key = displayMode + "|" + compactMode + "|" + formatSqlSetting() + "|" + sql;
+        if (formatCacheValue != null && key.equals(formatCacheKey)) return formatCacheValue;
+        String out;
         switch (displayMode) {
             case NORMAL:
-                return formatSqlSetting() ? SqlFormatter.INSTANCE.format(sql) : sql;
+                out = formatSqlSetting() ? SqlFormatter.INSTANCE.format(sql) : sql;
+                break;
             case FORMAT:
-                return SqlFormatter.INSTANCE.format(sql);
+                out = SqlFormatter.INSTANCE.format(sql);
+                break;
             case KEYWORD_WRAP:
-                return SqlFormatter.INSTANCE.formatClauseLine(sql);
+                out = SqlFormatter.INSTANCE.formatClauseLine(sql);
+                break;
             case VERTICAL:
-                return SqlFormatter.INSTANCE.formatVertical(sql, verticalPairAnnotationSetting());
+                out = SqlFormatter.INSTANCE.formatVertical(sql, verticalPairAnnotationSetting());
+                break;
             default:
-                return sql;
+                out = sql;
+                break;
         }
+        formatCacheKey = key;
+        formatCacheValue = out;
+        return out;
     }
 
     /**
@@ -1574,6 +2254,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         xmlForEachCounts.clear();
         xmlForEachNulls.clear();
         xmlErrors = new ArrayList<>();
+        xmlDollarSubstitutions = 0;
         currentWarning = null;
         if (errorCopyButton != null) errorCopyButton.setVisible(false);
         toggleSelectButton = null;
@@ -1589,9 +2270,9 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         metaLineText = "";
         metaPerfSegments = List.of();
         lastMetaBudget = -1;
+        // F-1：清除图集 + 恢复纯 SQL 视图（整图卸载含虚拟外键回收）
         removeDiagramTab();
-        diagramPanel.clear();
-        clearNativeDiagram();
+        unloadJoinDiagram();
         resultPanel.clear();
         detachConsole();
         nativeEditorDoc = null;
@@ -1631,7 +2312,35 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                         + ", attachedToMe=" + consoleAttachedToMe());
                 suppressAutoPopup = true;
                 try {
-                    WriteCommandAction.runWriteCommandAction(project, () -> nativeDoc.setText(text));
+                    // T-PreviewFast P4：程序性写入开闸——否则本次写入会触发执行文件的 1.5s 防抖
+                    // 自动落盘（内容刚由本写入落盘，再写一遍纯属自己与自己抢）
+                    final Document nativeDocFinal = nativeDoc;
+                    cn.song.mybatisplus.visualizer.execute.ExecDocAutosaveGate.suppressDuring(() -> {
+                        WriteCommandAction.runWriteCommandAction(project, () -> nativeDocFinal.setText(text));
+                        // T-PS4-12 定案①：同临界区落盘（照 DataSourceSelector.writeVfTextViaDocument
+                        // 手法，isDocumentUnsaved → saveDocument）——闸门前提「内容由本写入落盘」
+                        // 在此成真，formatted 文本不再滞留 modified-unsaved（第七轮审计发现本体）。
+                        //
+                        // 「磁盘存原文还是 formatted」核实结论（T-PreviewConsoleFmt F1/F2 +
+                        // T-PreviewFast P1/P3 定例）：挂载后磁盘跟随 document 是既定语义——
+                        //  1) ConsoleFmt F1 定例 = 控制台挂载后渲染链把 formatted 回填进控制台
+                        //     文档，文档内容（=控制台所见）即权威；
+                        //  2) T-PreviewFast P1 `execFileContentMatches` 定例 = 有已加载 document
+                        //     时以 document 文本为准（注释原文「也是落盘会写入的内容」）；
+                        //  3) 「磁盘存预览原文」仅是预热路径的写入，且只发生在文档未挂编辑器时
+                        //     （ConsoleFmt F2 + PreviewFast P3：文档打开时预热跳过内容刷新）；
+                        //  4) 落盘 formatted 不改变执行语义：执行链执行前同步的是控制台文档内容，
+                        //     用户手改兜底（F5）落盘的同样是 document 内容。
+                        // 故本写入落盘 formatted 与既有定例一致；孤儿文档（getFile null，测试缝
+                        // createDocument 形态）无盘可落，自然跳过。
+                        com.intellij.openapi.fileEditor.FileDocumentManager fdm =
+                                com.intellij.openapi.fileEditor.FileDocumentManager.getInstance();
+                        VirtualFile vf = fdm.getFile(nativeDocFinal);
+                        if (vf != null && fdm.isDocumentUnsaved(nativeDocFinal)) {
+                            fdm.saveDocument(nativeDocFinal);
+                        }
+                        return null;
+                    });
                 } finally {
                     suppressAutoPopup = false;
                 }
@@ -1693,63 +2402,75 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                         + ", embedded=" + System.identityHashCode(embeddedConsole),
                         new Throwable("createEditor path"));
         Project proj = project;
+        if (proj == null) {
+            assemblePreviewEditor(sql, null);
+            return;
+        }
+        // T-PerfTail #2：预热产物消费决策——热态同步装配（主路径/快速降级，EDT 零等待）、
+        // 冷态注册回调回 EDT 装配（超时预算语义保留，EDT 零阻塞）、单元测试模式同步有界等待
+        kotlin.Pair<Boolean, Pair<VirtualFile, PsiFile>> resolved = resolvePreviewEditorSource(sql);
+        if (!Boolean.TRUE.equals(resolved.getFirst())) return;   // 回调挂起中——装配延后至回调（超时/失败走降级链）
+        assemblePreviewEditor(sql, resolved.getSecond());
+    }
+
+    /**
+     * T-PerfTail #2：编辑器装配（原 createEditor 后半抽取，同步主路径与异步回调共用同一收口）。
+     *
+     * @param prewarmed 预热产物（项目内文件 + PSI）；null → 降级链（内存 PSI → 裸 document，
+     *                  T-PreviewExecDs 降级顺序与诚实降级横幅层级提示保留）。主路径对 {@code prewarmedTempFile}
+     *                  做<b>一次性消费</b>（同引用校验）——releaseEditor 后二次 createEditor 时产物已被消费，
+     *                  与原 await 一次性语义一致地走降级。
+     */
+    private void assemblePreviewEditor(String sql, @Nullable Pair<VirtualFile, PsiFile> prewarmed) {
+        Project proj = project;
         com.intellij.openapi.fileTypes.FileType sqlFileType = FileTypeManager.getInstance().getStdFileType("SQL");
-        Editor created;
+        Document doc = null;
         if (proj != null) {
-            // T-PreviewFlash：有界等待预热产物——createTempFile + refresh + findFile 全移到后台线程，
+            // T-PreviewFlash：createTempFile + refresh + findFile 全在后台线程，
             // EDT 不再触发 WorkspaceFileIndex.ensureIsUpToDate 的 SEVERE 断言（allowSlowOperations(GENERIC)
             // 压不住：SlowOperations.startSection 只在非 EDT 线程压栈，EDT 上该逃生舱是空壳，见开发计划 §3.1 反编译）。
-            // T-PreviewDocLock2 F3：临时文件支链从「必得」改「尽力」——awaitPrewarmedTempFile 超时/拿不到
-            // 产物、或 releaseEditor 后未经 clear() 二次 createEditor 时（prewarmedTempFile 一次性、已置 null），
-            // 原实现直接 throw IllegalStateException 表现为「预览打不开」。改为降级到纯内存文档编辑器
-            // （复用下面 project==null 分支的模板：createDocument(sql)），代价是降级态无 PSI → 无自建高亮/
-            // 补全（平台默认裸编辑），功能降级优于硬失败——主路径（project 非空且预热就绪）行为逐字节不变。
-            // （dev 侧 T-GifRerecord 同题降级版无 ReadAction 包裹，按超集原则整取 master 版。）
-            Document doc;
-            try {
-                Pair<VirtualFile, PsiFile> ready = awaitPrewarmedTempFile();
-                if (ready == null) throw new IllegalStateException("无法创建 SQL 预览临时文件");
-                VirtualFile vFile = ready.getFirst();
-                PsiFile psi = ready.getSecond();
-                previewTempFile = vFile;
-                psiFile = psi;
-                // T-PreviewDocLock：262 平台给「PSI 文件 → 文档」解析加了运行期读权限断言（243 只有
-                // @RequiresReadLock 注解，官方 243 sources jar 核实），故 EDT 鼠标事件里裸调即报内部错误：
-                // 单次调用固定 4 条 SEVERE「Plugin to blame: SQL Visualizer」——vf→Document 解析 2 条
-                //（FileDocumentManager.getDocument 顶部的 EditorLockFreeTyping.assertReadAccess +
-                // FileDocumentManagerBase.getDocument 首行的 softAssertReadAccess）与 Document/PSI
-                // 文本长度校验 2 条（PsiFileImpl.getTextLength → view provider content → getDocument）。
-                // 生产模式因 Logger.shouldRethrow 只认控制流异常而不抛（功能未断），但已是 SEVERE + FUS 上报，
-                // 且 UsefulTestCase 模式下直接抛 AssertionError。处置同 T-M42（同文件
-                // createPreviewFileForTest 包 PsiFileFactory.createFileFromText 的先例）：EDT 上同步执行
-                // ReadAction，语义不变。约束：lambda 内只能做纯内存模型读——EDT 进 ReadAction 会 check out
-                // write-intent lock，塞同步 VFS refresh 会复现 T-PreviewWiLock 的 write-safe 硬抛。
-                Document d = ReadAction.compute(() -> PsiDocumentManager.getInstance(proj).getDocument(psi));
-                if (d == null) throw new IllegalStateException("临时 SQL 文件无关联文档");
-                // T-M36.6-03：预热文件为占位空内容 → 首次装配按实际 SQL 填充并同步 PSI
-                //（同 EDT tick 内完成，编辑器尚未显示，无闪烁）；同步路径文件内容=SQL，幂等跳过
-                if (!d.getText().equals(sql)) {
-                    WriteCommandAction.runWriteCommandAction(proj, () -> {
-                        d.setText(sql);
-                        PsiDocumentManager.getInstance(proj).commitDocument(d);
-                    });
+            // T-PreviewDocLock2 F3：临时文件支链「尽力」——产物缺失（预热超时/失败/已消费）时
+            // 降级到内存 PSI → 裸文档（功能降级优于硬失败——主路径行为逐字节不变）。
+            if (prewarmed != null && prewarmed == prewarmedTempFile) {
+                prewarmedTempFile = null;
+                try {
+                    VirtualFile vFile = prewarmed.getFirst();
+                    PsiFile psi = prewarmed.getSecond();
+                    // T-PreviewUx-Pack #2：主路径成功（项目内文件 + PSI 就绪）——清除降级横幅
+                    degradationBanner.clear(DegradationBanner.Kind.DEGRADED);
+                    previewTempFile = vFile;
+                    psiFile = psi;
+                    // T-PreviewDocLock：262 平台给「PSI 文件 → 文档」解析加了运行期读权限断言（243 只有
+                    // @RequiresReadLock 注解，官方 243 sources jar 核实），故 EDT 鼠标事件里裸调即报内部错误：
+                    // 单次调用固定 4 条 SEVERE「Plugin to blame: SQL Visualizer」——vf→Document 解析 2 条
+                    //（FileDocumentManager.getDocument 顶部的 EditorLockFreeTyping.assertReadAccess +
+                    // FileDocumentManagerBase.getDocument 首行的 softAssertReadAccess）与 Document/PSI
+                    // 文本长度校验 2 条（PsiFileImpl.getTextLength → view provider content → getDocument）。
+                    // 生产模式因 Logger.shouldRethrow 只认控制流异常而不抛（功能未断），但已是 SEVERE + FUS 上报，
+                    // 且 UsefulTestCase 模式下直接抛 AssertionError。处置同 T-M42（同文件
+                    // createPreviewFileForTest 包 PsiFileFactory.createFileFromText 的先例）：EDT 上同步执行
+                    // ReadAction，语义不变。约束：lambda 内只能做纯内存模型读——EDT 进 ReadAction 会 check out
+                    // write-intent lock，塞同步 VFS refresh 会复现 T-PreviewWiLock 的 write-safe 硬抛。
+                    Document d = ReadAction.compute(() -> PsiDocumentManager.getInstance(proj).getDocument(psi));
+                    if (d == null) throw new IllegalStateException("临时 SQL 文件无关联文档");
+                    // T-M36.6-03：预热文件为占位空内容 → 首次装配按实际 SQL 填充并同步 PSI
+                    //（同 EDT tick 内完成，编辑器尚未显示，无闪烁）；同步路径文件内容=SQL，幂等跳过
+                    if (!d.getText().equals(sql)) {
+                        WriteCommandAction.runWriteCommandAction(proj, () -> {
+                            d.setText(sql);
+                            PsiDocumentManager.getInstance(proj).commitDocument(d);
+                        });
+                    }
+                    doc = d;
+                } catch (Throwable t) {
+                    doc = fallbackPreviewDocument(sql, t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName());
                 }
-                doc = d;
-            } catch (Throwable t) {
-                // T-PreviewExecDs-01d：降级链第二级 = 内存 PSI（PsiFileFactory.createFileFromText，
-                // 无 VFS 文件但保留补全上下文载体）——项目内文件预热失败时不再一步掉到裸 document；
-                // 第三级（原兜底）才是纯内存文档编辑器（无 PSI，补全/注释灭）。
-                Document inMemory = createInMemoryPreviewPsi(sql);
-                if (inMemory != null) {
-                    doc = inMemory;
-                } else {
-                    Logger.getInstance(SqlPreviewPanel.class)
-                            .warn("[M36] preview temp file unavailable, fall back to bare in-memory editor: "
-                                    + (t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName()));
-                    psiFile = null;
-                    doc = EditorFactory.getInstance().createDocument(sql);
-                }
+            } else {
+                doc = fallbackPreviewDocument(sql, "prewarmed product unavailable (timeout/failed/consumed)");
             }
+        }
+        Editor created;
+        if (proj != null && doc != null) {
             created = EditorFactory.getInstance().createEditor(doc, proj, sqlFileType, false);
         } else {
             created = EditorFactory.getInstance().createEditor(EditorFactory.getInstance().createDocument(sql));
@@ -1767,6 +2488,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         createdEx.getSettings().setFoldingOutlineShown(true);
         createdEx.getSettings().setIndentGuidesShown(false);
         createdEx.getSettings().setAdditionalPageAtBottom(false);
+        createdEx.setPlaceholder(previewEmptyHint); // T-UxOnboard T-UX-02：空态提示原生件（LogToSqlPanel T-UN-14 同款）
         editorHolder.removeAll();
         // T-M27.1：外层包装必须「实现 DataProvider 接口」（master 显式声明）——仅写 getData 方法
         // 不声明接口时 instanceof DataProvider 不成立，DataManager 沿父链找不到 EDITOR 数据
@@ -1780,6 +2502,32 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         bindAutoPopup(created);
         // T-AutoFold F4-a：createEditor 支链（含内存文档降级，同一函数收口）——新编辑器按初始内容应用
         cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(created, sql);
+    }
+
+    /**
+     * T-PreviewExecDs-01d / T-PerfTail #2：预览文档降级链（第二级 → 第三级）——
+     * 第二级 = 内存 PSI（PsiFileFactory.createFileFromText，无 VFS 文件但保留补全上下文载体）；
+     * 第三级（兜底）= 纯内存文档编辑器（无 PSI，补全/注释灭）。
+     * T-PreviewUx-Pack #2：降级链层级横幅——触发时明示当前层级与恢复指引（不破坏降级顺序）。
+     */
+    @NotNull
+    private Document fallbackPreviewDocument(String sql, String msg) {
+        // 第二级：内存 PSI（保留补全上下文载体）
+        Document memoryPsiDoc = createInMemoryPreviewPsi(sql);
+        if (memoryPsiDoc != null) {
+            degradationBanner.show(
+                    DegradationBanner.Kind.DEGRADED,
+                    MpSqlVisualizerBundle.message("panel.banner.degradedPsi"));
+            return memoryPsiDoc;
+        }
+        // 第三级：裸 document（内存 PSI 也失败）
+        Logger.getInstance(SqlPreviewPanel.class)
+                .warn("[M36] preview temp file unavailable, fall back to bare in-memory editor: " + msg);
+        psiFile = null;
+        degradationBanner.show(
+                DegradationBanner.Kind.DEGRADED,
+                MpSqlVisualizerBundle.message("panel.banner.degradedPlain"));
+        return EditorFactory.getInstance().createDocument(sql);
     }
 
     /**
@@ -1849,6 +2597,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 char prev = seq.charAt(0);
                 if (!Character.isLetterOrDigit(prev) && prev != '_') return;
                 autoPopupScheduled = true;
+                // write-safe: 同 SqlInputEditor.bindAutoPopup——本拍只由**用户输入活动**派生
+                // （程序性写入经 suppressAutoPopup 抑制，不调度补全），无进度模态时平台取模态链
+                // （defaultModalityImpl）落 NON_MODAL（恒 write-safe，见 DocWriteContext KDoc）；
+                // commitDocument 只做 PSI 同步、不改文档文本。改投递为 nonModal 会把补全弹窗延后到
+                // 模态关闭后，输入期补全退化。
                 ApplicationManager.getApplication().invokeLater(() -> {
                     autoPopupScheduled = false;
                     Editor ed2 = editor;
@@ -1866,10 +2619,14 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 });
             }
         };
+        // T-M52：双参数版（Disposable 管理监听生命周期，releaseEditor 时自动移除）。
+        // T-RA-02：移除职责只归 autoPopupDisposable——不要再用字段存 listener 做「记账」，
+        // 那会让「谁负责摘监听」出现两个说法（T-M52 前的手动 removeDocumentListener 已删，
+        // 二次移除会报 "Can't remove document listener"）。重新注册前先 dispose 旧 disposable，
+        // 防同一文档挂上两个 listener。
         if (autoPopupDisposable != null) Disposer.dispose(autoPopupDisposable);
         autoPopupDisposable = Disposer.newDisposable("SqlPreviewPanel.autoPopup");
         created.getDocument().addDocumentListener(listener, autoPopupDisposable);
-        autoPopupListener = listener;
     }
 
     /** 释放当前编辑器（幂等）。 */
@@ -1880,7 +2637,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 .info("[M36] releaseEditor: editor=" + System.identityHashCode(editor)
                         + ", nativeDoc=" + (nativeEditorDoc != null), new Throwable("releaseEditor path"));
         if (editor != null) {
-            autoPopupListener = null;
+            // T-M52：监听器由 Disposable 管理，dispose 即移除（无需手动 removeDocumentListener，
+            // 也不再有 listener 字段需要置 null——T-RA-02 删除）
             if (autoPopupDisposable != null) Disposer.dispose(autoPopupDisposable);
             autoPopupDisposable = null;
             EditorFactory.getInstance().releaseEditor(editor);
@@ -1899,6 +2657,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     private void rebuildLeftPanel(PreviewResult result) {
         paramPanel.removeAll();
         paramFields.clear();
+        paramWarnLabels.clear();
         conditionCheckBoxes.clear();
         conditionValueFields.clear();
         batchCheckBoxes.clear();
@@ -2272,8 +3031,54 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         conditionCheckBoxes.add(checkBox);
         JBPanel<JBPanel<?>> row = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.LEFT, 4, 2));
         row.add(checkBox);
+        // T-ExprAstPrecheck T-EP-03：表达式超出支持面时补淡色标注（提示，不改展开行为）
+        JBLabel anno = xmlConditionAnnotation(view);
+        if (anno != null) row.add(anno);
         row.setBorder(JBUI.Borders.empty(0, 8, 2, 8));
         return row;
+    }
+
+    /**
+     * T-ExprAstPrecheck T-EP-03：条件行的支持面标注（SUPPORTED 返回 null 不占位）。
+     * 用上下文提示色（淡）以与条件标签区分；理由进 tooltip，行内只留档位短句。
+     */
+    @Nullable
+    private JBLabel xmlConditionAnnotation(XmlConditionView view) {
+        String text;
+        if (view.support() == ExprSupport.SUPPORTED) return null;
+        switch (view.support()) {
+            case UNSUPPORTED_SYNTAX:
+                text = MpSqlVisualizerBundle.message("panel.xml.expr.unsupported");
+                break;
+            case EVAL_FALLBACK:
+                text = MpSqlVisualizerBundle.message("panel.xml.expr.fallback");
+                break;
+            default:
+                return null;
+        }
+        JBLabel label = new JBLabel(text);
+        label.setForeground(UIUtil.getContextHelpForeground());
+        label.setToolTipText(xmlConditionAnnotationTooltip(view));
+        return label;
+    }
+
+    /** 标注 tooltip：按理由码取文案，附细节（方法名 / 静态字段引用 / 解析错误消息）。 */
+    private String xmlConditionAnnotationTooltip(XmlConditionView view) {
+        String detail = view.supportDetail() != null ? view.supportDetail() : "";
+        ExprReason reason = view.supportReason();
+        if (reason == null) return view.label();
+        switch (reason) {
+            case SYNTAX:
+                return MpSqlVisualizerBundle.message("panel.xml.expr.reason.syntax", detail);
+            case UNKNOWN_METHOD:
+                return MpSqlVisualizerBundle.message("panel.xml.expr.reason.unknownMethod", detail);
+            case NARROW_CARRIER:
+                return MpSqlVisualizerBundle.message("panel.xml.expr.reason.narrowCarrier", detail);
+            case STATIC_FIELD:
+                return MpSqlVisualizerBundle.message("panel.xml.expr.reason.staticField", detail);
+            default:
+                return view.label();
+        }
     }
 
     private JBPanel<JBPanel<?>> buildXmlForEachRow(XmlForEachView view, int labelWidth) {
@@ -2343,35 +3148,115 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         renderSql();
     }
 
+    /** 普通参数行：`#&lt;source&gt;` 标签 + 值输入框（T-PT-02：按签名类型类别挂占位提示与行尾校验警示）。 */
     private JBPanel<JBPanel<?>> buildParamRow(String source, int labelWidth) {
+        ParamKind kind = paramKindOf(source);
+        // T-PT-02：行尾淡色警示标（校验是提示不是闸门——值照原样渲染，渲染链 renderValue 行为不动）
+        JBLabel warnLabel = new JBLabel("");
+        warnLabel.setForeground(PARAM_WARN_FOREGROUND);
+        warnLabel.setVisible(false);
         // T-HibDualCapture：8 列放不下 16 字符日期值（视口滚到尾部被当成「值截断」），下限放宽到 16 列
         JBTextField field = new JBTextField(16);
         field.setText(paramValues.getOrDefault(source, ""));
+        field.getEmptyText().setText(paramEmptyText(source, kind));
         // 长值超框宽时光标钉回首字符，视口停在头部；完整值以 tooltip 兜底
         if (!field.getText().isEmpty()) field.setCaretPosition(0);
         field.setToolTipText(paramTooltip(source, field.getText()));
+        updateParamWarning(warnLabel, kind, field.getText());
         field.getDocument().addDocumentListener(new DocumentListener() {
             @Override
             public void insertUpdate(DocumentEvent e) {
-                onParamFieldText(source, field);
+                onParamFieldText(source, field, warnLabel, kind);
             }
 
             @Override
             public void removeUpdate(DocumentEvent e) {
-                onParamFieldText(source, field);
+                onParamFieldText(source, field, warnLabel, kind);
             }
 
             @Override
             public void changedUpdate(DocumentEvent e) {
-                onParamFieldText(source, field);
+                onParamFieldText(source, field, warnLabel, kind);
             }
         });
         paramFields.add(field);
-        return new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.LEFT, 8, 6)) {{
-            add(paramLabel(source, labelWidth));
-            add(field);
-            setBorder(JBUI.Borders.empty(0, 8, 2, 8));
-        }};
+        paramWarnLabels.add(warnLabel);
+        // T-M19.4-01：FlowLayout 间距 (4,2) → (8,6)——参数名较长时视觉"贴太近"（用户实测）
+        JBPanel<JBPanel<?>> row = new JBPanel<JBPanel<?>>(new FlowLayout(FlowLayout.LEFT, 8, 6));
+        row.add(paramLabel(source, labelWidth));
+        row.add(field);
+        row.add(warnLabel);
+        row.setBorder(JBUI.Borders.empty(0, 8, 2, 8));
+        return row;
+    }
+
+    // ------------------------------------------------------------------
+    // T-PT-02：按签名类型类别的占位提示与校验（提示不是闸门——渲染链零改动）
+    // ------------------------------------------------------------------
+
+    /** 参数 source 的类型类别（无类型信息 → UNKNOWN，行为=升级前）。 */
+    private ParamKind paramKindOf(String source) {
+        XmlPreviewModel model = current != null ? current.getXmlModel() : null;
+        return model != null ? model.kindFor(source) : ParamKind.UNKNOWN;
+    }
+
+    /** 占位提示（emptyText）：有类型信息按类别；UNKNOWN 走参数命名启发式（zMyBatis 同款，仅提示）。 */
+    private String paramEmptyText(String source, ParamKind kind) {
+        switch (kind) {
+            case NUMBER:
+                return MpSqlVisualizerBundle.message("panel.param.emptyText.number");
+            case TEMPORAL:
+                return MpSqlVisualizerBundle.message("panel.param.emptyText.temporal");
+            case COLLECTION:
+                return MpSqlVisualizerBundle.message("panel.param.emptyText.collection");
+            case OBJECT:
+                return MpSqlVisualizerBundle.message("panel.param.emptyText.object");
+            case TEXT:
+                return "";
+            case UNKNOWN:
+            default:
+                return looksLikeCollectionName(source)
+                        ? MpSqlVisualizerBundle.message("panel.param.emptyText.collection")
+                        : "";
+        }
+    }
+
+    /**
+     * 集合命名启发式（T-PT-02，zMyBatis ParameterInputDialog 同款）：参数名以 {@code s} 结尾
+     * （排除 status/address 等单数词）或含 list/ids/array/collection → 按数组提示。
+     */
+    private boolean looksLikeCollectionName(String source) {
+        int dot = source.lastIndexOf('.');
+        String name = (dot >= 0 ? source.substring(dot + 1) : source).toLowerCase();
+        if (COLLECTION_NAME_EXCEPTIONS.contains(name)) return false;
+        if (name.contains("list") || name.contains("ids") || name.contains("array") || name.contains("collection")) {
+            return true;
+        }
+        return name.endsWith("s") && !name.endsWith("ss");
+    }
+
+    /** 行尾校验警示（NUMBER 非数字 / TEMPORAL 非可解析日期）：淡色标记 + tooltip 说明，不阻塞渲染。 */
+    private void updateParamWarning(JBLabel label, ParamKind kind, @Nullable String value) {
+        String message = paramWarningOf(kind, value);
+        label.setText(message == null ? "" : PARAM_WARN_MARK);
+        label.setToolTipText(message);
+        label.setVisible(message != null);
+    }
+
+    @Nullable
+    private String paramWarningOf(ParamKind kind, @Nullable String value) {
+        if (value == null || value.isBlank()) return null;
+        String trimmed = value.trim();
+        switch (kind) {
+            case NUMBER:
+                return NUMBER_REGEX.matcher(trimmed).matches()
+                        ? null : MpSqlVisualizerBundle.message("panel.param.warn.number");
+            case TEMPORAL:
+                return DATE_REGEX.matcher(trimmed).matches()
+                        ? null : MpSqlVisualizerBundle.message("panel.param.warn.temporal");
+            default:
+                return null;
+        }
     }
 
     private JBLabel paramLabel(String source, int columnWidth) {
@@ -2443,9 +3328,16 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /**
      * T-HibDualCapture：参数框文本变更（含导入回填等程序化 setText 触发的文档事件）——
      * tooltip 随值同步，其余走既有回填链路。
+     * T-PT-02：行尾校验警示随值同步（默认参数无警示标，调用方为 buildParamRow）。
      */
     private void onParamFieldText(String source, JBTextField field) {
+        onParamFieldText(source, field, null, ParamKind.UNKNOWN);
+    }
+
+    private void onParamFieldText(String source, JBTextField field,
+                                  @Nullable JBLabel warnLabel, ParamKind kind) {
         field.setToolTipText(paramTooltip(source, field.getText()));
+        if (warnLabel != null) updateParamWarning(warnLabel, kind, field.getText());
         onParamChanged(source, field.getText());
     }
 
@@ -2695,7 +3587,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             if (c == '?') {
                 String source = paramIndex < sources.size() ? sources.get(paramIndex) : null;
                 String v = source != null ? paramValues.get(source) : null;
-                sb.append(renderParamValue(v, paramIndex < safeHints.size() ? safeHints.get(paramIndex) : null));
+                sb.append(renderParamValue(v, paramIndex < safeHints.size() ? safeHints.get(paramIndex) : null, source));
                 paramIndex++;
             } else {
                 sb.append(c);
@@ -2706,11 +3598,20 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     }
 
     private String renderParamValue(String v, ParamHint hint) {
-        if (v == null || v.isBlank()) return "?";
+        return renderParamValue(v, hint, null);
+    }
+
+    private String renderParamValue(String v, ParamHint hint, @Nullable String source) {
+        // 未填写（paramValues 未播种的 source，非标准路径）保留 `?` 兜底提示
+        if (v == null) return "?";
+        // T-PT-04：空输入按设置策略出 NULL / ''（默认 NULL）——**仅对带签名类型信息的参数**生效；
+        // 无类型信息（UNKNOWN）保留 `?` 占位提示，行为与升级前一致（验收 3）
+        if (v.isBlank()) return hasSignatureTypeInfo(source) ? emptyParamLiteral() : "?";
         LikePosition like = hint != null ? hint.getLikePosition() : null;
         if (hint != null && hint.getInList()) {
             List<String> parts = Arrays.stream(v.split(",")).map(s -> s.trim()).filter(s -> !s.isEmpty()).collect(Collectors.toList());
-            if (parts.isEmpty()) return "?";
+            // 逗号分割后无有效值（如 `,` 形态）：按空输入档处理
+            if (parts.isEmpty()) return hasSignatureTypeInfo(source) ? emptyParamLiteral() : "?";
             StringBuilder sb = new StringBuilder();
             for (int k = 0; k < parts.size(); k++) {
                 if (k > 0) sb.append(", ");
@@ -2734,6 +3635,24 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             }
         }
         return renderSingleValue(v, hint);
+    }
+
+    /**
+     * T-PT-04：空参数填充字面量——按设置「空参数填充策略」出 {@code NULL}（默认）或 {@code ''}。
+     * 作用于 renderParamValue 的空值分支，且仅当参数带签名类型信息（hasSignatureTypeInfo）。
+     */
+    private String emptyParamLiteral() {
+        try {
+            return PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING.equals(PluginSettings.getInstance().getState().getEmptyParamFill())
+                    ? "''" : "NULL";
+        } catch (Throwable t) {
+            return "NULL";
+        }
+    }
+
+    /** T-PT-04：参数是否带签名类型信息（XML/注解 mapper 参数行）——决定空输入是否走填充策略。 */
+    private boolean hasSignatureTypeInfo(@Nullable String source) {
+        return source != null && paramKindOf(source) != ParamKind.UNKNOWN;
     }
 
     private String renderSingleValue(String raw, ParamHint hint) {
@@ -2770,16 +3689,45 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         }
         currentWarning = xmlWarning != null ? xmlWarning : result.getWarning();
         String warningLine = currentWarning != null ? "   ⚠ " + currentWarning : "";
+        // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示，悬停 tooltip 全文）
+        String stackDigest = result.getStackDigest();
+        String stackLine = "";
+        if (stackDigest != null) {
+            stackLine = "   " + MpSqlVisualizerBundle.message("panel.meta.stackDigest") + " "
+                    + (stackDigest.length() > 120 ? stackDigest.substring(0, 120) + "…" : stackDigest);
+        }
         // T-SqlPerf：性能建议文案单独一行（HTML 换行）。
         // T-PreviewTopOverlap F3：原文分段缓存，label 文本按宽度预算重拼（applyMetaTruncation）
         metaLineText = meta + warningLine;
         metaPerfSegments = buildPerfSegments(result);
-        metaLabel.setToolTipText(meta + warningLine
+        metaLabel.setToolTipText(meta + warningLine + stackLine
+                + (stackDigest != null
+                        ? "\n" + MpSqlVisualizerBundle.message("panel.meta.stackDigest") + " " + stackDigest
+                        : "")
                 + metaPerfSegments.stream().map(MetaPerfSegment::text).collect(java.util.stream.Collectors.joining("；")));
         metaLabel.setForeground(currentWarning != null
                 ? JBColor.namedColor("ErrorForeground", JBColor.RED)
                 : JBUI.CurrentTheme.Label.foreground());
         if (errorCopyButton != null) errorCopyButton.setVisible(currentWarning != null);
+        // T-PreviewUx-Pack #2：渲染警示横幅（三要素：哪段没还原=渲染产物，为什么=warning 原文，
+        // 能做什么=指引）；警示存在即显示，恢复即清除（降级链横幅 DEGRADED 不受本清除影响）
+        if (currentWarning != null) {
+            degradationBanner.show(
+                    DegradationBanner.Kind.RENDER_WARNING,
+                    MpSqlVisualizerBundle.message("panel.banner.renderFailed", currentWarning != null ? currentWarning : ""));
+        } else {
+            degradationBanner.clear(DegradationBanner.Kind.RENDER_WARNING);
+        }
+        // T-DollarInjectMark：`${}` 直替信息提示（最低优先——警示/降级挂起时让位，
+        // 清除后下次 updateMeta 回位；✕ 关闭后会话级记忆不再弹）。只加元数据不改渲染文本。
+        if (currentWarning == null && result.getXmlModel() != null && xmlDollarSubstitutions > 0
+                && !dollarMarkDismissedSession) {
+            degradationBanner.show(
+                    DegradationBanner.Kind.DOLLAR_INJECT,
+                    MpSqlVisualizerBundle.message("panel.banner.dollarInject", DOLLAR_TOKEN, xmlDollarSubstitutions));
+        } else {
+            degradationBanner.clear(DegradationBanner.Kind.DOLLAR_INJECT);
+        }
         // F3：复制错误按钮显隐改变工具栏理想宽，预算随显隐重算（lastMetaBudget 复位后应用）
         lastMetaBudget = -1;
         applyMetaTruncation();
@@ -2918,6 +3866,16 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         // T-Perf-16：释放 DataSourceSelector 单例滞留引用（弹窗关闭此前不走 clear 按钮路径——
         // prepared/shared/pendingOnConsole 强引用已关闭面板与原生控制台，堆转储滞留整棵面板树）
         SqlExecutor.releaseForPanel();
+        // T-PS4-14④：面板 dispose 是 JOIN 虚拟外键注册表的最后语义回收点（T-EmbedFkOrder
+        // 「显式语义点回收」三点口径：登记前 registerJoinForeignKeys 自带 clear + 无 JOIN 路径
+        // unloadJoinDiagram + 面板 dispose）——最后一张 JOIN 图建图的登记此前驻留到下次建图，
+        // 残留期 JoinVirtualFkProvider EP 会给用户自开的 Database 图补出旧连线。runCatching
+        // 照邻居清理件风格（释放失败不阻断 dispose 链）
+        try {
+            cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport.clearRegisteredFk();
+        } catch (Throwable ignored) {
+            // 释放失败不阻断 dispose 链
+        }
         // messageBus 连接经 connect(this) 绑定本 Disposable，Disposer.dispose 时自动取消订阅
         Disposer.dispose(this);
     }
@@ -2928,6 +3886,16 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     Editor editorForTest() {
         return editor;
+    }
+
+    /** T-PreviewConsoleFmt 测试缝：模拟控制台文档已就绪（nativeDoc 指向该文档）。 */
+    void markNativeDocForTest(Document doc) {
+        nativeEditorDoc = doc;
+    }
+
+    /** T-PreviewConsoleFmt 测试缝：挂载后回填渲染的等价入口。 */
+    void renderSqlForTest() {
+        renderSql();
     }
 
     /** T-AutoFold F5：登记的原生控制台编辑器引用（支链①接入断言用）。 */
@@ -2981,6 +3949,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return editorHolder;
     }
 
+    /** T-UxOnboard T-UX-02：预览编辑器空态提示文案（placeholder 接线断言用）。 */
+    String previewEmptyHintForTest() {
+        return previewEmptyHint;
+    }
+
     Integer lastConsoleEmbeddedIdForTest() {
         return lastConsoleEmbeddedId;
     }
@@ -2993,6 +3966,47 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** T-RefreshDbSteal F4：所有权判定（卫队断言用，见 RefreshDbStealTest）。 */
     boolean consoleAttachedToMeForTest() {
         return consoleAttachedToMe();
+    }
+
+    /** T-RollbackSql：执行状态面板（executeAdhocSql 结果反馈断言用）。 */
+    SqlResultPanel resultPanelForTest() {
+        return resultPanel;
+    }
+
+    /**
+     * T-F8：JOIN 图加载态接线探针（测试用）——转发到 DiagramPanel 的 loadingProbeForTest。
+     *
+     * <p>接线用例据此断「进入加载态 → 渲染 → 退出加载态」的时序（时序为何必须如此见
+     * updateDiagramTab 与 showJoinDiagram 的 KDoc）。
+     */
+    void diagramLoadingProbeForTest(java.util.function.Consumer<Boolean> probe) {
+        diagramPanel.loadingProbeForTest = probe;
+    }
+
+    /** T-F8：JOIN 图面板（「停转圈时图已渲染」的断言入口）。 */
+    DiagramPanel diagramPanelForTest() {
+        return diagramPanel;
+    }
+
+    /** T-F8：当前是否走原生图路径（「停转圈时图已换入」的另一分支——原生路径不经过 diagramPanel）。 */
+    boolean hasNativeDiagramForTest() {
+        return currentNativeDiagram != null;
+    }
+
+    /**
+     * T-TS-05：JOIN 图标签页的加载面（测试断言用）——标签页内容必须<b>是它</b>。
+     *
+     * <p>与 diagramPanelForTest 的 isLoadingForTest 互补：后者只断「加载态为真」，把标签页内容改回
+     * diagramTabHost（加载面不在层级里）也照样为真；真机默认原生图路径下 diagramPanel 被
+     * removeAll() 摘出层级，转圈根本画不出来。故需按对象身份断结构。
+     */
+    JBLoadingPanel diagramLoadingHostForTest() {
+        return diagramLoadingHost;
+    }
+
+    /** T-TS-05：内容区标签页容器（测试断言用；未切到标签页模式时为 null）。 */
+    JTabbedPane contentTabPaneForTest() {
+        return contentTabPane;
     }
 
     /** T-RefreshDbSteal F3：当前挂接的 rehost 监听是否仍在组件上（解绑断言用）。 */
@@ -3027,6 +4041,15 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return new LinkedHashMap<>(paramValues);
     }
 
+    /**
+     * T-InjectionGate T-IG-01：当前预览语句是否含 `${}` 原文拼接段（PreviewResult.hasDollarRawSegments
+     * 面板侧读口——复制可执行 SQL 的产物标记注释据此追加）。
+     */
+    public boolean hasDollarRawSegments() {
+        return current != null && current.isHasDollarRawSegments();
+    }
+
+    /** F-8：当前预览的表名（可 null）。 */
     public String currentTableName() {
         return current != null ? current.getTableName() : null;
     }
@@ -3093,6 +4116,17 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return index >= 0 && index < paramFields.size() ? paramFields.get(index).getCaretPosition() : -1;
     }
 
+    /** T-PT-02：第 index 个普通参数框的占位提示（emptyText，按类型类别）。 */
+    String paramEmptyTextForTest(int index) {
+        return index >= 0 && index < paramFields.size() ? paramFields.get(index).getEmptyText().getText() : null;
+    }
+
+    /** T-PT-02：第 index 个普通参数行的校验警示文案（无警示返回 null；不阻塞渲染）。 */
+    String paramWarningForTest(int index) {
+        JBLabel label = index >= 0 && index < paramWarnLabels.size() ? paramWarnLabels.get(index) : null;
+        return label != null && label.isVisible() ? label.getToolTipText() : null;
+    }
+
     JBLabel paramRowLabelForTest(int index) {
         List<JBPanel<?>> labeled = new ArrayList<>();
         for (Component c : paramPanel.getComponents()) {
@@ -3148,6 +4182,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return batchClearButton;
     }
 
+    /** T-PreviewBgFit 测试缝：左侧参数滚动区（背景/不透明断言用）。 */
+    JBScrollPane paramScrollForTest() {
+        return paramScroll;
+    }
+
     /** T-M26.1→T-UiNative：左右分栏（平台 OnePixelSplitter，原生分隔条主题融合 + 比例记忆）。 */
     OnePixelSplitter splitPaneForTest() {
         return findSplitPane(this);
@@ -3177,6 +4216,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     ParamHistoryCache paramHistoryCacheForTest() {
         return paramHistoryCache;
+    }
+
+    /** T-PreviewUx-Pack #2：诚实降级横幅（显隐/文案/类别断言用）。 */
+    DegradationBanner degradationBannerForTest() {
+        return degradationBanner;
     }
 
     Map<String, String> paramValuesForTest() {

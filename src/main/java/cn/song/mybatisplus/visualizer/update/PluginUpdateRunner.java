@@ -130,8 +130,15 @@ public final class PluginUpdateRunner {
             if (!isValidZip(temp)) {
                 return new InstallResult.Failed("download is not a valid plugin archive");
             } else {
-                LOG.info("downloadAndInstall: zip valid, calling install");
-                return install.apply(temp.toPath());
+                // T-UpdateZipBounds（O-29）：有界守卫——条目数/单条目/总量三重上限 + 头谎报
+                // 截断检测，异常包（zip bomb/谎报头）拦在平台解压器之前（快失败不触平台安装）
+                UpdateZipGuard.GuardResult guard = UpdateZipGuard.check(temp.toPath());
+                if (guard instanceof UpdateZipGuard.GuardResult.Reject reject) {
+                    return new InstallResult.Failed("update package rejected: " + reject.reason());
+                } else {
+                    LOG.info("downloadAndInstall: zip valid, calling install");
+                    return install.apply(temp.toPath());
+                }
             }
         } catch (Exception e) {
             LOG.warn("downloadAndInstall: failed — " + e.getMessage(), e);

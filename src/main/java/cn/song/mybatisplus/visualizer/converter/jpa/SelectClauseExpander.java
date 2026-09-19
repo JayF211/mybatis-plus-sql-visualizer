@@ -88,7 +88,7 @@ public final class SelectClauseExpander {
         if (!hasSelect) {
             // 无 SELECT 子句：补主表列清单；列元数据不可得时降级为 alias.*（与显式 SELECT 分支一致）
             String rootAlias = aliasColumns.keySet().iterator().next();
-            return selectKeyword + " " + renderColumns(rootAlias, aliasColumns.get(rootAlias)) + " "
+            return selectKeyword + " " + renderColumns(rootAlias, aliasColumns.get(rootAlias), table) + " "
                     + sql.substring(fromIdx);
         }
 
@@ -104,7 +104,7 @@ public final class SelectClauseExpander {
             String item = raw.trim();
             if (aliasColumns.containsKey(item)) {
                 changed = true;
-                rendered.add(renderColumns(item, aliasColumns.get(item)));
+                rendered.add(renderColumns(item, aliasColumns.get(item), table));
             } else {
                 rendered.add(item);
             }
@@ -118,9 +118,15 @@ public final class SelectClauseExpander {
     }
 
     /** 渲染单个别名的展开结果：`alias.col1, alias.col2` 或降级 `alias.*`。 */
-    private static String renderColumns(String alias, List<String> columns) {
+    private static String renderColumns(String alias, List<String> columns, TableInfo table) {
         if (columns == null || columns.isEmpty()) {
-            return alias + ".* /* 列信息未解析，降级为 " + alias + ".* */";
+            // T-HqlInhCols：降级注释分两档——实体不可解析（fallback 表）与实体可解析但列空
+            // （继承链/映射异常，指向检查父类映射），两档诊断方向不同
+            if (table.getEntityClassName().isBlank()) {
+                return alias + ".* /* 实体不可解析，降级为 " + alias + ".* */";
+            }
+            return alias + ".* /* 实体 " + table.getEntityClassName()
+                    + " 列信息未解析（检查继承链父类映射），降级为 " + alias + ".* */";
         }
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < columns.size(); i++) {

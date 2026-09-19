@@ -128,12 +128,15 @@ public final class DynamicInstallSupport {
      * 校验下载包：zip 可打开、能定位 plugin.xml、{@code <id>} 与 [UpdateSource.PLUGIN_ID] 一致、
      * {@code <version>} 非空。plugin.xml 查找顺序：zip 内直属 {@code META-INF/plugin.xml}（解包态布局）
      * → 内层 lib 目录下插件 jar 的 {@code META-INF/plugin.xml}（IPGP buildPlugin 布局）。
+     *
+     * <p>T-UpdateZipBounds：plugin.xml 读取有界（{@link #MAX_DESCRIPTOR_XML_BYTES}，实测 KB 级 ×100
+     * 余量）——谎报头的巨量条目不进字符串。
      */
     static ArtifactCheck validateArtifact(Path zip) {
         try (ZipFile zf = new ZipFile(zip.toFile())) {
             ZipEntry direct = zf.getEntry("META-INF/plugin.xml");
             if (direct != null) {
-                return checkDescriptorXml(new String(zf.getInputStream(direct).readAllBytes(), StandardCharsets.UTF_8));
+                return checkDescriptorXml(readDescriptorBounded(zf.getInputStream(direct)));
             }
             List<ZipEntry> collected = new ArrayList<>();
             var entries = zf.entries();
@@ -150,7 +153,7 @@ public final class DynamicInstallSupport {
                     int scanned = 0;
                     while (next != null && scanned < MAX_INNER_ENTRIES) {
                         if (next.getName().equalsIgnoreCase("META-INF/plugin.xml")) {
-                            return checkDescriptorXml(new String(inner.readAllBytes(), StandardCharsets.UTF_8));
+                            return checkDescriptorXml(readDescriptorBounded(inner));
                         }
                         next = inner.getNextEntry();
                         scanned++;
@@ -161,6 +164,27 @@ public final class DynamicInstallSupport {
         } catch (Throwable t) {
             return new ArtifactCheck.Invalid("artifact not readable: " + t.getMessage());
         }
+    }
+
+    /** plugin.xml 有界读取（超限判 Invalid——KB 级文件读出 MB 级即异常包）。 */
+    private static String readDescriptorBounded(java.io.InputStream stream) {
+        byte[] buf = new byte[64 * 1024];
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        long read = 0L;
+        try (java.io.InputStream it = stream) {
+            while (true) {
+                int n = it.read(buf);
+                if (n < 0) break;
+                read += n;
+                if (read > MAX_DESCRIPTOR_XML_BYTES) {
+                    throw new IllegalStateException("plugin.xml implausibly large (> " + MAX_DESCRIPTOR_XML_BYTES + " bytes)");
+                }
+                out.write(buf, 0, n);
+            }
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+        return new String(out.toByteArray(), StandardCharsets.UTF_8);
     }
 
     /** plugin.xml 文本 → id/version 校验（regex 提取，无 XML 依赖）。 */
@@ -192,6 +216,9 @@ public final class DynamicInstallSupport {
     }
 
     private static final int MAX_INNER_ENTRIES = 2000;
+
+    /** plugin.xml 读取上限（实测 KB 级，×100 余量；超限即异常包）。 */
+    public static final int MAX_DESCRIPTOR_XML_BYTES = 1024 * 1024;
 
     // ------------------------------------------------------------------
     // 平台反射门面（F0 实证的五入口；探测一次缓存，缺失整体降级）

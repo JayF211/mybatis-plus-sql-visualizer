@@ -60,6 +60,7 @@ public final class FeedbackReporting {
                         null);
             }
             FeedbackApi.SubmissionOutcome finalOutcome = outcome;
+            // write-safe: UI-only（纯 Swing/只读，无文档写）
             ApplicationManager.getApplication().invokeLater(() -> {
                 onProgress.accept(false);
                 onResult.accept(finalOutcome);

@@ -141,7 +141,8 @@ public final class XmlSqlCompletionContextResolver {
         return new SourceSqlContext(
                 mainTable != null ? buildMainContext(mainTable) : null,
                 buildCandidates(project, mainTable),
-                AnnotationSqlPreviewService.INSTANCE.paramNames(method)
+                // T-PT-01：paramTypes 键序 = 命名参数序 + param1..N（与旧 paramNames 列表逐项一致）
+                new ArrayList<>(AnnotationSqlPreviewService.INSTANCE.paramTypes(method).keySet())
         );
     }
 
