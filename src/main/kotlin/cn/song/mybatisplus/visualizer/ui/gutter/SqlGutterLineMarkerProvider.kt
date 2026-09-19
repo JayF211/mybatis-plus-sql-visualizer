@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.gutter
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.psi.PsiSnapshot
 import cn.song.mybatisplus.visualizer.psi.WrapperAnchorDetector
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -12,6 +13,7 @@ import com.intellij.openapi.actionSystem.ActionGroup
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.markup.GutterIconRenderer
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.IconLoader
@@ -158,16 +160,15 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
             }
         }
 
-        /** 反查该锚点最近的日志执行记录并弹二级列表（匹配在后台：PSI 读包 ReadAction）。 */
+        /** 反查该锚点最近的日志执行记录并弹二级列表（匹配在后台：PSI 读包 ReadAction + 快照校验）。 */
         private fun showRecentEntriesPopup(project: Project, elt: PsiElement) {
+            // T-PCP-02：EDT 侧捕获锚点快照（文件 + textRange + 文档 modificationStamp）；
+            // 后台读取前由 [validatedRecentAnchor] 校验，失效即按「无记录」降级（不跳到错位置）
+            val snapshot = PsiSnapshot.capture(elt)
             com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
                 val anchor = runCatching {
-                    com.intellij.openapi.application.ReadAction.compute<Pair<String?, Int>, Throwable> {
-                        val file = elt.containingFile?.virtualFile ?: return@compute null to 0
-                        val rel = relativeToProject(project, file.path)
-                        val doc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(file)
-                        val line = if (doc != null) doc.getLineNumber(elt.textRange.startOffset) + 1 else 0
-                        rel to line
+                    com.intellij.openapi.application.ReadAction.compute<Pair<String, Int>?, Throwable> {
+                        validatedRecentAnchor(project.basePath, snapshot)
                     }
                 }.getOrNull()
                 val manager = project.getService(cn.song.mybatisplus.visualizer.log.SqlLogManager::class.java)
@@ -222,13 +223,7 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
             }
         }
 
-        /** 绝对路径 → 相对项目根路径（项目外文件返回 null）。 */
-        private fun relativeToProject(project: Project, absolutePath: String): String? {
-            val base = project.basePath ?: return null
-            val normAbs = absolutePath.replace('\\', '/')
-            val normBase = base.replace('\\', '/').trimEnd('/')
-            return if (normAbs.startsWith("$normBase/")) normAbs.removePrefix("$normBase/") else null
-        }
+        // 绝对路径 → 项目根相对路径：T-PCP-02 起收口到文件级 [relativeToProjectPath]（快照校验链共用）
     }
 
     /**
@@ -256,3 +251,37 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
 // 保留供可能外部引用的防抖纯函数。
 internal fun shouldNavigate(lastTimeMs: Long, nowMs: Long, windowMs: Long = 200L): Boolean =
     nowMs - lastTimeMs >= windowMs
+
+/** gutter 侧诊断日志（快照失效按 debug 留痕——标记/记录缺失无害，不打扰用户）。 */
+private val GUTTER_LOG: Logger = Logger.getInstance(SqlGutterLineMarkerProvider::class.java)
+
+/** 绝对路径 → 相对项目根路径（项目外文件返回 null）。 */
+internal fun relativeToProjectPath(base: String?, absolutePath: String): String? {
+    if (base.isNullOrBlank()) return null
+    val normAbs = absolutePath.replace('\\', '/')
+    val normBase = base.replace('\\', '/').trimEnd('/')
+    return if (normAbs.startsWith("$normBase/")) normAbs.removePrefix("$normBase/") else null
+}
+
+/**
+ * T-PCP-02：锚点快照的**后台校验 + 行号解析**收口（须在读权限内调用，生产侧由 `ReadAction.compute` 包裹）。
+ *
+ * 捕获与读取之间的写操作会让元素失效——校验不过即返回 null，调用方按「无最近记录」如实降级
+ * （原实现直接读 `elt.textRange`，文档已被替换时会算出错行号或抛失效异常）。
+ *
+ * 单独成函数（而非内联进池化块）是为了让失效路径可被单测直接驱动：合成「捕获 → 改文档 → 解析」
+ * 三态无需真点 gutter 图标。守卫规则 `psiCapture`（convention/BannedApiSourceScanTest）要求
+ * 跨线程读 PSI 的池化块出现本收口（或 `PsiSnapshot` 判定）。
+ *
+ * @param projectBasePath 项目根绝对路径（生产侧传 `project.basePath`；显式入参便于 fixture 用例驱动）
+ */
+internal fun validatedRecentAnchor(projectBasePath: String?, snapshot: PsiSnapshot?): Pair<String, Int>? {
+    val snap = snapshot ?: return null
+    val validity = snap.validate()
+    if (validity is PsiSnapshot.Validity.Invalid) {
+        GUTTER_LOG.debug("[gutter] 锚点快照已失效（${validity.reason.description}），跳过最近执行记录反查：${snap.filePath}")
+        return null
+    }
+    val relative = relativeToProjectPath(projectBasePath, snap.filePath) ?: return null
+    return relative to snap.lineNumber()
+}

@@ -82,8 +82,42 @@ T-PCP-01（快照校验工具）→ T-PCP-02（甲类接入）→ T-PCP-03（乙
 
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
-| T-PCP-01 | （实施后填） | 工具落点与校验字段最终形态须回填 |
-| T-PCP-02 | （实施后填） | 两处 gutter 的失效降级形态须回填 |
-| T-PCP-03 | （实施后填） | 调用点守卫实现方式须回填 |
-| T-PCP-04 | （实施后填） | 守卫规则描述、误报边界、与 T-FS-06 的串行次序须回填 |
-| T-PCP-05 | （实施后填） | |
+| T-PCP-01 | `c4af37f` | 工具落点 **`psi/PsiSnapshot.kt`**（计划建议 `ui/psi/`；`psi/` 是既有 PSI 助手包，与 `WrapperAnchorDetector` 等同处）。校验字段最终形态 = `VirtualFile` + `Document` + `startOffset/endOffset` + `modificationStamp`，校验项三项（文件有效 / stamp 未变 / 区间在界）。**偏离**：计划原列「element 文本」字段并要「PSI text 与文档内容交叉验证」，实施时删除——PSI 树由**已提交**文档构建，未提交变更只体现在 `Document` 上，文本比对会把「用户刚敲完字、PSI 尚未 commit」误判为失效（标记/记录静默消失）；真实变更面已由 stamp 覆盖。校验内核 `validateCaptured` 为纯函数（表驱动可喂事实）。 |
+| T-PCP-02 | `b74c99e` | 两处降级形态：`SqlGutterLineMarkerProvider` 收口 `validatedRecentAnchor(basePath, snapshot)` → 失效返回 null → 调用方按「无最近记录」提示（与原「文件不存在 → null to 0」同路径）；`StringSqlMethodGutterLineMarkerProvider` 收口 `validatedMethodRows(method, snapshot)` → 失效返回空候选对 → 调用方按「未找到」提示。失效只留 `LOG.debug`。**偏离**：`previewMethodCandidates` 内捕获包了一层 `ReadAction`（EDT 下内联无开销）——该入口是公开 API 且被 `ConvertToSqlAction` 复用，包一层以保留「EDT/后台均可调用」的既有语义；`relativeToProject` 收口为文件级 `relativeToProjectPath(base, path)`（base 显式入参，因 `BasePlatformTestCase` 的 `project.basePath` 为 null，fixture 用例须自给项目根）。 |
+| T-PCP-03 | `2d659b4` | 实现方式 = **运行期硬断言 + 源码级调用点规则**双保险：`SourcePathResolver.resolveVirtualFile` 入口 `assertReadAccessAllowed()`（后台裸调即抛，违约暴露在调用点）；调用点规则 `edtReadContract` 与断言锚点规则随 T-PCP-04 同文件落地（见下行，同属 `convention/BannedApiSourceScanTest.kt` 一次提交 `494e835`）。调用形态未改（现网三处：两个面板 EDT + `CallerMethodRangeResolver` 自包 `ReadAction`）。 |
+| T-PCP-04 | `494e835` | 规则描述：池化块（`executeOnPooledThread` 实参区 + 尾随 lambda 体，跑在既有 `maskNonCode` 掩码文本上、复用 `matchingDelimiter`/`trailingLambdaBody`）内出现 PSI 读令牌（`containingFile`/`viewProvider.document`/`.textRange`/`.textLength`）而无校验令牌（`PsiSnapshot`/`validatedRecentAnchor(`/`validatedMethodRows(`）且无 `// psi-capture:` 标注、文件不在豁免表 → 红。**误报边界（两个方向都登记）**：漏报 = PSI 读挪进池化块调用的另一函数即脱离扫描面、只覆盖 `executeOnPooledThread` 这一在用原语（仓内唯一，42 处；`runAsync`/`supplyAsync`/`ReadAction.nonBlocking` 仓内 0 处）；过报 = 块内对**块内新解析**对象读 `textRange` 也会命中（仓内 0 例，遇时挪出块外或加标注）。**豁免表**（文件 + 站点数 + 理由，漂移即红）：`actions/ConvertToSqlAction.kt` 4 处——文件级捕获 + 块内重取 PSI（XmlTag 候选/行号），非元素级快照，且不在本任务锚点范围，本轮只登记不改造。**与 T-FS-06 串行次序**：T-FS-06（基架重构）与 fatal 规则（`T-FatalPassthrough`）已先于本任务落地，本规则在其后追加、只复用其掩码与配平工具，**未改动既有规则与豁免计数**（守卫类用例数 18 → 22，既有 18 例全绿）。 |
+| T-PCP-05 | `99d0b00` | 落点 `docs/架构设计/PSI跨线程读取协议.md`（新增文档）：三条形态各写适用条件与反例 + 乙类单列 + 守卫表 + Z-16 落地备注（含「锚点由 `StackLocator` 更正为两个 gutter provider」口径说明）。**偏离**：按派活方约束**未改** `docs/变更记录.md`、`CHANGELOG.md`、第八轮报告（同批多路已因误改主仓 `docs/变更记录.md` 返工），Z-16 落地备注落在协议文档与本计划 §八/§九。 |
+
+**分支偏离**：计划写「自 master 拉任务分支 t-psi-capture-protocol」，实际由派活方指定分支 `t-r8-psi-capture`（基点 master `f0d163e`），未推送。
+
+## 九、验收读数（实施后回填）
+
+验收逐条对账（命令统一加 `-Pkotlin.compiler.execution.strategy=in-process -Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=1024m"`）：
+
+| 验收项 | 读数 |
+|---|---|
+| ① T-PCP-01 表驱动三态 + 有效态 | `PsiSnapshotTest` 5/5 绿（表驱动 2 例：文件缺失/stamp 变化/区间越界三态 + 端点与空区间边界；真夹具 3 例） |
+| ② 甲类两处失效路径有用例 | `SqlGutterLineMarkerProviderTest` 7/7、`StringSqlMethodGutterLineMarkerProviderTest` 9/9 绿——各含「改文档 → 判失效降级」用例 |
+| ③ 正常路径行为不变 | 同上：锚点 `("Demo.java", 5)`、候选行文本 `queryForList（第 4 行）` + SQL 文本逐字断言；既有 marker 用例全绿 |
+| ④ 守卫先红后绿 + 豁免带理由 | **先红**（临时还原两处池化块体为改造前直读形态，保留收口助手定义以保证可编译）：`池化线程内读PSI须走两段式快照校验或登记豁免 FAILED … 命中 2 处：[ui/gutter/SqlGutterLineMarkerProvider.kt:168 → containingFile/.textRange, ui/gutter/StringSqlMethodGutterLineMarkerProvider.kt:142 → containingFile/viewProvider.document/.textRange]`（22 tests completed, 1 failed）；**后绿**（落地形态）：同一类 22/22 绿、0 失败。豁免表 1 文件 / 4 处带理由，站点数漂移即红 |
+| ⑤ 协议文档在册 | `docs/架构设计/PSI跨线程读取协议.md`（形态 A/B/C 各含适用条件 + 反例 + 边界） |
+| ⑥ 全量门禁 | 见下方「全量门禁」小节 |
+
+**全量门禁（实施后实测，读数回填）**：
+
+- `./gradlew testShards`：**5272 用例 / 0 失败 / 0 错误 / 6 跳过（459 类）**，BUILD SUCCESSFUL 4m18s。
+  （首跑 5272/3 失败：`SectionConfigurableAutoCaptureLinkageTest` 2 例 `AlreadyDisposedException`
+  + `SqlDifferTest.computeDiff_性能验证_1000行100ms内` 实测 229ms——两类单独重跑全绿，属并行分片
+  叠加同机多会话负载的环境抖动，与本次写集无关；次跑即绿。）
+- `./gradlew testDatabase`：**10 用例 / 0 失败 / 0 错误 / 0 跳过**（5 类），BUILD SUCCESSFUL 5m33s。
+- agent 子项目（`./gradlew :sql-visualizer-agent:test`）：**58 用例 / 0 失败 / 0 错误**，BUILD SUCCESSFUL。
+
+**未验证 / 环境受限**（如实登记）：
+
+- §五 真机走查两条（快速编辑 mapper 同时观察 gutter 标记、外部改文件后日志面板右键跳转）
+  **未执行**——需真机 IDE，留人工。
+- T-PCP-01 的「textRange 越界」态只有表驱动覆盖（真夹具无法在 stamp 不变的前提下改文档长度，
+  见 `PsiSnapshotTest` KDoc）；「元素区间漂移但 stamp 未变」这类平台异常形态本轮未构造出可复现实例。
+- 守卫规则 `psiCapture` 的漏报面未做穷举（只覆盖 `executeOnPooledThread` 池化块本体，
+  PSI 读挪进块内调用的另一函数即脱离扫描面）——边界已在规则 KDoc 与协议文档 §4 登记。
+

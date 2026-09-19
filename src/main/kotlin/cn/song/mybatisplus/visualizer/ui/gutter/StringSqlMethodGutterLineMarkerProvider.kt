@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui.gutter
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.psi.PreviewReceiverResolver
+import cn.song.mybatisplus.visualizer.psi.PsiSnapshot
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateMethodDetector
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlLocator
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlPreviewService
@@ -13,6 +14,7 @@ import com.intellij.codeInsight.daemon.LineMarkerInfo
 import com.intellij.codeInsight.daemon.LineMarkerProvider
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.markup.GutterIconRenderer
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.IconLoader
@@ -134,19 +136,14 @@ class StringSqlMethodGutterLineMarkerProvider : LineMarkerProvider {
          * @param sourceLocation 来源位置（`文件名:行号`，可空）
          */
         fun previewMethodCandidates(project: Project, method: PsiMethod, sourceLocation: String?) {
+            // T-PCP-02：捕获锚点方法快照（文件 + textRange + 文档 modificationStamp），后台读取前校验。
+            // 包 ReadAction 以保留本入口「EDT / 后台均可调用」的既有语义（EDT 下 compute 内联，无额外开销）。
+            val snapshot = ReadAction.compute<PsiSnapshot?, RuntimeException> { PsiSnapshot.capture(method) }
             ApplicationManager.getApplication().executeOnPooledThread {
                 // T-M23.8 模式：候选 + 显示文本一并后台 ReadAction 预计算（弹窗只渲染）
                 val payload = runCatching {
                     ReadAction.compute<Pair<List<JdbcTemplateSqlLocator.JdbcTemplateSqlCall>, List<SqlSelectionDialog.Row>>, Throwable> {
-                        val calls = JdbcTemplateSqlPreviewService.collectMethodCandidates(method)
-                        calls to calls.map { call ->
-                            val line = call.callExpression.containingFile.viewProvider.document
-                                ?.getLineNumber(call.callExpression.textRange.startOffset)?.plus(1) ?: 0
-                            SqlSelectionDialog.Row.of(
-                                "${call.methodName}（第 $line 行）",
-                                call.sqlString,
-                            )
-                        }
+                        validatedMethodRows(method, snapshot)
                     }
                 }.getOrDefault(emptyList<JdbcTemplateSqlLocator.JdbcTemplateSqlCall>() to emptyList())
                 val (calls, displayTexts) = payload
@@ -174,5 +171,39 @@ class StringSqlMethodGutterLineMarkerProvider : LineMarkerProvider {
                 SqlPreviewService.showResult(project, result, sourceLocation)
             }
         }
+    }
+}
+
+/** gutter 侧诊断日志（快照失效按 debug 留痕——标记/候选缺失无害，不打扰用户）。 */
+private val METHOD_GUTTER_LOG: Logger = Logger.getInstance(StringSqlMethodGutterLineMarkerProvider::class.java)
+
+/**
+ * T-PCP-02：方法锚点快照的**后台校验 + 候选/显示文本预计算**收口
+ * （须在读权限内调用，生产侧由 `ReadAction.compute` 包裹）。
+ *
+ * 捕获与读取之间的写操作会让方法元素失效——校验不过即返回空候选对，调用方按「未找到」如实降级
+ * （原实现直接读 `call.callExpression.containingFile.viewProvider.document` 算行号，方法区间失效时
+ * 会算出错行号或抛失效异常）。守卫规则 `psiCapture`（convention/BannedApiSourceScanTest）要求
+ * 跨线程读 PSI 的池化块出现本收口（或 `PsiSnapshot` 判定）。
+ */
+internal fun validatedMethodRows(
+    method: PsiMethod,
+    snapshot: PsiSnapshot?,
+): Pair<List<JdbcTemplateSqlLocator.JdbcTemplateSqlCall>, List<SqlSelectionDialog.Row>> {
+    val empty = emptyList<JdbcTemplateSqlLocator.JdbcTemplateSqlCall>() to emptyList<SqlSelectionDialog.Row>()
+    val snap = snapshot ?: return empty
+    val validity = snap.validate()
+    if (validity is PsiSnapshot.Validity.Invalid) {
+        METHOD_GUTTER_LOG.debug("[gutter] 方法锚点快照已失效（${validity.reason.description}），跳过候选收集：${snap.filePath}")
+        return empty
+    }
+    val calls = JdbcTemplateSqlPreviewService.collectMethodCandidates(method)
+    return calls to calls.map { call ->
+        val line = call.callExpression.containingFile.viewProvider.document
+            ?.getLineNumber(call.callExpression.textRange.startOffset)?.plus(1) ?: 0
+        SqlSelectionDialog.Row.of(
+            "${call.methodName}（第 $line 行）",
+            call.sqlString,
+        )
     }
 }
