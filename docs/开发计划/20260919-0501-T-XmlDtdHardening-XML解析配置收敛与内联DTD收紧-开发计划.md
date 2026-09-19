@@ -100,11 +100,12 @@ T-XDH-01（配置收敛）→ T-XDH-02（生效性断言）→ T-XDH-03（膨胀
 ## 九、实施记录（实施后回填）
 
 | 任务 | 提交 | 说明 / 偏离 |
-|------|------|------|
-| T-XDH-01 | （实施后填） | 共享工厂落点须回填 |
-| T-XDH-02 | （实施后填） | 三项 feature 在实施环境是否全部支持须回填 |
-| T-XDH-03 | （实施后填） | 上限取值与 billion laughs 用例实测须回填 |
+|------|------|-------------|
+| T-XDH-01 | 48c41a8 | 共享工厂落点：**新建 `xml/SecureXml.kt`**（object `SecureXml`，internal）；`XmlMapperParser`/`PagesXmlParser` 的私有 `newDocumentBuilder()` 双双删除，改调 `SecureXml.parse(fileText)`（预扫 + 安全解析器）。收敛判据落成源码扫描用例（src/main 含 feature URI/`ACCESS_EXTERNAL_DTD` 的文件数 == 1 且为 SecureXml.kt），改前 2 处命中 → 改后 1 处。 |
+| T-XDH-02 | 48c41a8 | 三项关键 feature（`FEATURE_SECURE_PROCESSING`/`external-general-entities`/`external-parameter-entities`）在实施环境（JDK 17.0.19 + 内置 Xerces）**全部支持**：`SecureXmlTest.关键feature在当前JDK确实生效` 断言降级告警为空 + 三项取值正确 + 可重复设置成功；降级可观测由 `SecureXml.applyFeature(factory, name, value, onUnsupported)` 承担（失败回调 feature 名 + 原因，默认出口平台日志、惰性解析、失败退化 stderr），`feature设置失败_降级有warn可观测` 用注入收集器断言「恰一条告警且含 feature 名」。无 skip 分支（本环境三项全支持，未触发计划 §七「若某环境不支持则显式 skip」的备用路径）。 |
+| T-XDH-03 | 48c41a8 | 采用**方案①（解析前静态预扫 DTD 内部子集）**——实测否掉了方案②：内部实体展开不经过 EntityResolver（resolver 只管外部实体/外部 DTD），故无法在 resolver 处计数。上限取值：声明数 ≤ **64**、引用嵌套深度 ≤ **16**、单实体展开估算 ≤ **65,536** 字符（`SecureXml.MAX_*` 常量）。取值依据：真实 mapper 内部实体是枚举/状态码级短值；官方 mybatis-3-mapper.dtd 的 `<!ENTITY` 声明数为 **0**（实测下载计数 ELEMENT 33 / ATTLIST 28 / ENTITY 0），「整段内联官方 DTD」这种真实写法不受影响。**实测读数**（JDK 17.0.19，探针 `build/tmpprobe/Probe2.java`，非提交物）：改前 4 层 × 10 引用 × 10 字符的 billion laughs **展开 100,016 字符且解析成功**（JDK `entityExpansionLimit=64000` 只数展开次数，本例 11,110 次，管不到）；40 层链式引用、100 个参数实体声明、1000 个声明同样解析成功；循环引用由 JDK 报「递归实体引用」。改后上述四类全部由预扫拒绝，billion laughs 拒绝耗时 < 5s（用例断言）。边界用例：单实体 65,536 字符放行 / 65,537 拒绝；声明数 64 放行 / 65 拒绝；3 层 × 10 引用（10,016 字符）放行。 |
 | D1 | —（决策已定，无代码提交） | **已定案 2026-09-19（用户认可本会话推荐）：选 A**——维持内联子集放行 + 加膨胀防护。理由：放行是有意设计且有测试钉住，真缺口是无上限展开；B/C 保留并标记弃用 |
-| T-XDH-04 | 不实施 | D1=A，本项不实施；B/C 留档规格见 §三 |
-| T-XDH-05 | （实施后填） | 用例数与防回退守卫形态须回填 |
-| T-XDH-06 | （实施后填） | |
+| T-XDH-04 | 不实施 | D1=A，本项不实施；B/C 留档规格见 §三。`XmlSqlRendererTest.kt:311-318`（内部实体定义可解析）**未改写**，实测仍绿（定向跑 XmlSqlRendererTest 23 例 0 失败） |
+| T-XDH-05 | 102c89f | 用例数：`SecureXmlTest` 17（收敛 1 + 膨胀判据 4 + D1=A 钉住 3 + T-XDH-02 生效性 3 + 边界/误伤 6）+ `PagesXmlParserTest` +5 + `AnnotationSqlParserTest` +2。防回退守卫形态：①源码扫描（配置唯一实现）；②feature 取值断言（三项 + `disallow-doctype-decl == false`）；③EntityResolver 行为面断言——`DOCTYPE SYSTEM "http://127.0.0.1:1/x.dtd"` 仍能解析（实测摘掉 resolver 即抛 `ConnectException: Connection refused`，故该断言是「resolver 真挂在 builder 上」的判据；`DocumentBuilder` 无 `getEntityResolver()` 读不回，只能走行为面）。**实测发现**：实体引用只在普通文本节点展开，CDATA 是字面量——pages 文件惯用 CDATA 承载 SQL，故 D1=A 对真实 pages 文件无影响（已写进用例注释）。 |
+| T-XDH-06 | 见下行说明 | CHANGELOG 未改（D1=A 无行为变更，按 §四 T-XDH-06 口径无需 Changed 段）；`docs/变更记录.md` 与盘点文档按派活方约束不动，变更口径由提交信息承载。 |
+| 偏离说明 | — | ①**未改 `mcp/MapperCheckTool.kt` 与 `ui/XmlPreviewService.kt`**（写集允许但非必需）：预扫异常由两处 `parseDocument` 包装为既有异常类型（`XmlParseException`/`PagesXmlParseException`），两条既有 catch 链天然接住（MCP 转 INVALID_ARGUMENT 可读错误、UI 转 warning 红字），无需改调用方；②`SecureXml.checkEntityExpansion` 的深度判据是「路径深度」而非严格图深度（记忆化命中会跳过路径检查），字符数上限不受影响——已加注释说明，对真实攻击（指数膨胀）判据充分。 |
