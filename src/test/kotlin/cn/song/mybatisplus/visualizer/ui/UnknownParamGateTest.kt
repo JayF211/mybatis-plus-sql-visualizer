@@ -132,6 +132,10 @@ class UnknownParamGateTest : BasePlatformTestCase() {
             dialogMessages[0],
         )
         assertTrue("文案应说明以 ? 占位提交：${dialogMessages[0]}", dialogMessages[0].contains("?"))
+        // feedback-bundle-param-placeholder 同族防线：MessageFormat 代入必须真的发生
+        //（键缺失/模板异常时 message() 兜底返回原文，`{0}` 会原样上屏，肉眼极难发现）
+        assertFalse("占位符应已代入个数（未代入会原样上屏 {0}）：${dialogMessages[0]}", dialogMessages[0].contains("{0}"))
+        assertTrue("代入值应为未识别参数个数 1：${dialogMessages[0]}", dialogMessages[0].contains("1"))
         assertEquals("选 NO 应中止（未进入执行：结果面板停留空态）", "EMPTY", panelState())
     }
 
