@@ -368,6 +368,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     @Volatile
     private var dollarRawConfirmedInSession = false
 
+    /**
+     * T-PC2-04（D1=B 定案）：本面板实例内已确认过含 UNKNOWN 参数执行（会话级记忆）。
+     *
+     * 语义与 [dollarRawConfirmedInSession] 同款（同面板确认一次后不再重复弹；执行与 EXPLAIN
+     * 共用同一记忆，两条入口是同一道门）；记忆随面板实例存活，面板 dispose 即失效。
+     * @Volatile：执行入口可能在非 EDT 触发（弹窗按钮回调），读写可见性保守处理。
+     */
+    @Volatile
+    private var unknownParamsConfirmedInSession = false
+
     // P-05：参数历史缓存 + debounce 写回
     private val paramHistoryCache = ParamHistoryCache()
     /** P-05：debounce 写回调度器（Swing Timer，500ms 延迟，restart 实现防抖）。 */
@@ -873,6 +883,37 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
+     * T-PC2-04（D1=B 定案）：含「签名类型未能识别」参数的语句执行确认闸门
+     * （[executeSql]/[explainSql] 共用，形态与 [confirmDollarRawSegments] 同款）。
+     *
+     * 判定信号取自 [XmlPreviewModel.unknownParamSources]（`paramTypes` 有条目但类别 UNKNOWN：
+     * 枚举 / `boolean` / `byte[]` 等——类型读到了却映射不到类别，绑定层只能以字面 `?` 提交）。
+     * **无类型信息不计入**（mapper 接口不可解析时键不在 `paramTypes`）——与 T-PT-02「无类型信息
+     * 不提示」同向，也避免「接口解析不到 → 每次执行都提示」的噪音面（口径见该函数 KDoc）。
+     *
+     * 预览链**保持放行**（D1=B：预览与执行风险面不同），只在执行/EXPLAIN 前提示一次；用户选 NO
+     * → 中止；选 YES → 记会话级记忆，本面板后续执行与 EXPLAIN 都不再重复弹（不阻断已确认流程）。
+     * 范围：只在 XML 预览链生效（Wrapper/JPA/日志链无 `xmlModel`，恒放行）。
+     *
+     * @return true = 放行（无 UNKNOWN 参数 / 已确认过 / 本次确认通过）
+     */
+    private fun confirmUnknownParams(proj: Project): Boolean {
+        val unknown = current?.xmlModel
+            ?.unknownParamSources(current?.unresolvedParams.orEmpty())
+            .orEmpty()
+        if (unknown.isEmpty() || unknownParamsConfirmedInSession) return true
+        val confirm = Messages.showYesNoDialog(
+            proj,
+            MpSqlVisualizerBundle.message("execute.confirm.unknownParams.message", unknown.size),
+            MpSqlVisualizerBundle.message("execute.confirm.dml"),
+            Messages.getWarningIcon(),
+        )
+        if (confirm != Messages.YES) return false
+        unknownParamsConfirmedInSession = true
+        return true
+    }
+
+    /**
      * 执行 SQL（M36）：
      *  1. SQL 类型分类 → 非查询语句二次确认
      *  2. 创建临时上下文文件 → 原生数据源弹窗 → 选中后自动执行
@@ -909,6 +950,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-InjectionGate T-IG-02：`${}` raw 拼接段确认门（DML 分类判定之后追加——预览产物里的
         // raw 段带的是模拟值，执行前须用户确认值真实性；NO 直接中止，不落快照不执行）
         if (!confirmDollarRawSegments(proj)) return
+        // T-PC2-04（D1=B）：签名类型未识别参数确认门（D1=B 的「执行/EXPLAIN 前提示一次」——
+        // 预览链保持放行；排在 `${}` 门之后、快照登记/执行之前，NO 直接中止）
+        if (!confirmUnknownParams(proj)) return
         // T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（回滚弹窗据此提供粘贴回填工作流）
         registerRollbackSnapshotIfNeeded(sql, null)
 
@@ -1062,6 +1106,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-InjectionGate T-IG-03：EXPLAIN 本就真实执行——`${}` raw 段同门控（旁路不得绕开执行闸门）；
         // 方言不支持（上方已 return，未执行）不弹
         if (!confirmDollarRawSegments(proj)) return
+        // T-PC2-04（D1=B）：EXPLAIN 同门控（旁路不得绕开执行闸门，与 T-IG-03 同款姿态）
+        if (!confirmUnknownParams(proj)) return
         resultPanel.showLoading()
         SqlExecutor.execute(
             proj, explainSql, null, true,

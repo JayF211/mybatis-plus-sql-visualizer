@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.testutil.SqlLogManagerProjectState
 import com.intellij.execution.filters.Filter
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
@@ -18,10 +19,14 @@ class SqlConsoleBridgeFilterProviderTest : BasePlatformTestCase() {
 
     private lateinit var manager: SqlLogManager
 
+    /** T-TestIsolation：本类改的是**项目服务级**共享实例（light 项目片内跨类复用）——存初值供 tearDown 复位。 */
+    private lateinit var serviceState: SqlLogManagerProjectState.Snapshot
+
     override fun setUp() {
         super.setUp()
         // EP provider 内部取注册服务——测试必须用同一实例（构造器实例不进容器）
         manager = project.getService(SqlLogManager::class.java)
+        serviceState = SqlLogManagerProjectState.capture(manager)
         manager.entries.dedupeEnabled = false
         SqlCaptureGate.epActive = false
     }
@@ -30,6 +35,9 @@ class SqlConsoleBridgeFilterProviderTest : BasePlatformTestCase() {
         SqlCaptureGate.epActive = false
         manager.setCapturingForTest(false)
         manager.entries.clear()
+        // 原样复位项目服务级状态（dedupeEnabled / paused / 过滤词 / 捕获态 / 桥轮询…）——
+        // 否则同片后续测试类看到的是本类改造过的共享实例（T-TestIsolation）
+        SqlLogManagerProjectState.restore(manager, serviceState)
         super.tearDown()
     }
 

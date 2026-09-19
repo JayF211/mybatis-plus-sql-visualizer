@@ -130,4 +130,30 @@ class LogTimestampParserTest {
         val ts = LogTimestampParser.parse(line)
         assertEquals(1705285845123L, ts)
     }
+
+    // ---------- T-PS5-12：SimpleDateFormat ThreadLocal 复用回归 ----------
+
+    @Test
+    fun `T_P5_12_重复解析结果一致_SDF复用不串味`() {
+        val line = "2024-01-15 10:30:45.123 [thread-1] INFO com.example.Service - log"
+        val first = LogTimestampParser.parse(line)
+        // 同一格式串复用同一实例（ThreadLocal 缓存）——重复解析结果必须逐次一致
+        repeat(5) { assertEquals("第 ${it + 2} 次解析结果一致", first, LogTimestampParser.parse(line)) }
+        // 交错格式串（缓存按格式串分槽，互不串味）
+        val isoLine = "2024-01-15T10:30:45.123+0800 [main] DEBUG com.example - log"
+        assertEquals(first, LogTimestampParser.parse(isoLine))
+        assertEquals("交错后回原格式仍一致", first, LogTimestampParser.parse(line))
+    }
+
+    @Test
+    fun `T_P5_12_严格模式不回退_非法值仍拒绝`() {
+        // 复用实例必须仍按严格模式解析（复用不得吞掉 isLenient=false 语义）
+        assertNull("月份 13 非法", LogTimestampParser.parse("2024-13-15 10:30:45.123 DEBUG - log"))
+        assertNull("小时 25 非法", LogTimestampParser.parse("2024-01-15 25:30:45.123 DEBUG - log"))
+        assertEquals(
+            "合法行仍正常解析",
+            1705285845123L,
+            LogTimestampParser.parse("2024-01-15 10:30:45.123 DEBUG - log"),
+        )
+    }
 }

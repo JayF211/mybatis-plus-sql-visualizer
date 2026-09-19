@@ -91,6 +91,9 @@ class AgentManager(private val project: Project) : Disposable {
         /** HELLO 首帧读取超时（agent 连上后立即发 HELLO，秒级足够；超时按「pid 未知」处理不丢会话）。 */
         private const val HELLO_READ_TIMEOUT_MS = 5_000
 
+        /** T-PS5-12：HELLO 首帧 pid 提取正则（冷路径，提常量免每次连接重编译）。 */
+        private val HELLO_PID_REGEX = Regex("\"pid\"\\s*:\\s*(\\d+)")
+
         fun getInstance(project: Project): AgentManager = project.getService(AgentManager::class.java)
 
         /** T-SettingsTruth P2：增强捕获状态变更 Topic（app 级；仿 PluginSettings.SETTINGS_CHANGE_TOPIC）。 */
@@ -168,8 +171,18 @@ class AgentManager(private val project: Project) : Disposable {
         Thread(r, "mps-agent-monitor").apply { isDaemon = true }
     }
 
+    /**
+     * T-PS5-04：巡检懒启标志——`monitor` 的 5s 定时任务由**首条会话建立**才挂上
+     * （[ensureMonitorStarted]）。解耦前服务一实例化就排定时器：默认开智能推断的项目
+     * 「预览一次即驻留」一条守护线程 + 5s 空转，即便增强捕获从未使用。
+     */
+    @Volatile
+    private var monitorStarted = false
+
+    private val monitorLock = Any()
+
     init {
-        monitor.scheduleWithFixedDelay({ sweepOffline() }, 5, 5, TimeUnit.SECONDS)
+        // T-PS5-04：monitor 定时任务不再在此排定（见 ensureMonitorStarted）。
         // T-M56-08：设置变更驱动——开启（已确认）→ 惰性挂载由进程出现回调承接；
         // 关闭 → CONFIG 停采集 + 会话关闭 + 桥回落；脱敏开关 → CONFIG 下发
         project.messageBus.connect(this).subscribe(
@@ -184,6 +197,12 @@ class AgentManager(private val project: Project) : Disposable {
                 }
                 lastKnownEnabled = state.enhancedCaptureEnabled
                 if (!state.enhancedCaptureEnabled) {
+                    // T-PS5-07：关闭下降沿复位 EP 短路标志——[SqlCaptureGate.epActive] 是「EP 在本会话
+                    // 实证产出过条目」的**会话级粘滞**标志（置位点 SqlConsoleBridgeFilterProvider），
+                    // 解耦前无任何复位点：关掉增强捕获再新建控制台时桥侧仍被粘滞标志短路 = 两条通道
+                    // 同时零产出（静默零捕获的复发形态）。与上方上升沿重置拒绝冷却对称；EP 链路失效的
+                    // 极端场景由短路计数 + debug 日志（epActiveShortCircuitCount）可观测兜底。
+                    SqlCaptureGate.epActive = false
                     executor.execute { shutdownAll() }
                 } else {
                     executor.execute { pushDesensitize(state.enhancedCaptureDesensitize) }
@@ -195,8 +214,54 @@ class AgentManager(private val project: Project) : Disposable {
     // ---------- 挂载入口 ----------
 
     /**
+     * T-PS5-04：巡检懒启 + 建立兜底清扫——首条会话建立时排定 5s 巡检，并**先兜底扫一次**
+     * （巡检未启动的窗口期内可能已积压死会话，不能等首个 5s 拍）。新会话刚建（心跳新鲜）
+     * 不会被本次清扫摘除。
+     *
+     * internal 为同模块守护测试缝（[sweepOffline] 同款：测试直连会话不经 attachToPid）。
+     */
+    internal fun ensureMonitorStarted() {
+        synchronized(monitorLock) {
+            if (!monitorStarted) {
+                monitorStarted = true
+                monitor.scheduleWithFixedDelay({ sweepOffline() }, 5, 5, TimeUnit.SECONDS)
+            }
+        }
+        sweepOffline() // 兜底清扫（幂等；无死会话时零动作）
+    }
+
+    /** T-PS5-04 测试缝：巡检是否已懒启（生产链路无调用点）。 */
+    internal fun monitorStartedForTest(): Boolean = monitorStarted
+
+    /**
+     * T-PS5-04：把当前 agentUrl 回写 [AgentUrlRegistry]（推断层读该持有者，不再经
+     * `getInstance` 触发服务实例化）。值取 [lastConnectionUrl]，语义与解耦前逐字一致；
+     * 无会话/全离线 → null（清条目，推断回落数据源 URL）。
+     *
+     * internal 为同模块守护测试缝（测试直连会话驱动 URL 捕获回调）。
+     */
+    internal fun syncInferenceUrl() {
+        AgentUrlRegistry.set(project, lastConnectionUrl())
+    }
+
+    /**
+     * T-PS5-03/04：**会话生命周期点收口**——推断 URL 回写 + 数据源 URL 探测缓存失效。
+     *
+     * 探测缓存（[cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe]）失效双保险之一：
+     * 会话建立/断开是「方言推断依据可能整体换了一套」的事件点（agent URL 出现/消失），
+     * 顺带清掉数据源 URL 探测槽；另一重保险是 TTL 上界（数据源编辑后至多一个窗口滞后）。
+     */
+    internal fun onSessionLifecycleChanged() {
+        syncInferenceUrl()
+        cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.invalidate(project)
+    }
+
+    /**
      * T-DialectAutoInfer：最近一次 agent 捕获的连接 URL（活跃会话优先，按会话加入序取最后值；
      * 全部离线/无会话 → null——推断层回落数据源探测）。纯读、无锁（CopyOnWriteArrayList 快照遍历）。
+     *
+     * T-PS5-04：本函数仍是唯一取数口径，但**推断层不再直调**——[syncInferenceUrl] 在会话
+     * 生命周期点把结果写入 [AgentUrlRegistry]，推断层读持有者（零服务实例化）。
      */
     fun lastConnectionUrl(): String? =
         sessions.lastOrNull { it.alive && it.lastConnectionUrl != null }?.lastConnectionUrl
@@ -412,6 +477,9 @@ class AgentManager(private val project: Project) : Disposable {
         runCatching { session.sendConfig(disabled = !active) }
             .onFailure { LOG.warn("attachToPid: 初始 CONFIG 下发失败（pid=$pid）", it) }
         updateOnline()
+        // T-PS5-04：首条会话建立 → 巡检懒启（含兜底清扫）+ 推断 URL 回写持有者（含探测缓存失效）
+        ensureMonitorStarted()
+        onSessionLifecycleChanged()
         // T-SettingsTruth P2：attach 成功 → 状态行「已挂载 pid=x」
         everAttached.set(true)
         // T-ReachAudit T-RA-01：新会话挂上即清「心跳过期」标记——回落文案只描述最近一次摘除原因
@@ -432,7 +500,13 @@ class AgentManager(private val project: Project) : Disposable {
         val socket = attachAndOffer(jar, pid) ?: return null
         // T-ReachAudit T-RA-01：会话与管理器共用同一时间源（心跳窗口判定跨「记 lastSeen」与
         // 「算过期」两侧，不同源则测试无法推进时间）
-        return AgentSession(project, pid, socket, onStateChange = { updateOnline() }, clockMs = clockMs)
+        return AgentSession(
+            project, pid, socket,
+            onStateChange = { updateOnline() },
+            clockMs = clockMs,
+            // T-PS5-04：URL 捕获即回写推断持有者（会话建立时 URL 尚不可知，事件到达才拿到）
+            onUrlCaptured = { syncInferenceUrl() },
+        )
     }
 
     /** agent jar 提取一次缓存（T-PS4-03）：解压 + deleteOnExit 登记只做一次；失败不缓存（下次 attach 重试）。 */
@@ -617,7 +691,13 @@ class AgentManager(private val project: Project) : Disposable {
             // T-ReachAudit T-RA-01 合流补位：会话时间源须与管理器同源注入（[createSession] 同款）——
             // 缺省真实时钟时，假时钟驱动的心跳窗口判定两侧不同源（manager 算出的「已过期」被真实
             // 时间戳的 lastSeen 抵消），premain 通道建立的半死会话不会被巡检摘除，封口在此复活
-            val session = AgentSession(project, pid, socket, onStateChange = { updateOnline() }, clockMs = clockMs)
+            val session = AgentSession(
+                project, pid, socket,
+                onStateChange = { updateOnline() },
+                clockMs = clockMs,
+                // T-PS5-04：premain 会话同 attach 链——URL 捕获回写推断持有者
+                onUrlCaptured = { syncInferenceUrl() },
+            )
             sessions.add(session)
             if (pid > 0L) attachedPids[pid] = clockMs()
             // B1 同款：新 agent 默认 disabled=false，须按当前监听状态立即校正
@@ -626,6 +706,9 @@ class AgentManager(private val project: Project) : Disposable {
                 .onFailure { LOG.warn("premain: 初始 CONFIG 下发失败（pid=$pid）", it) }
             everAttached.set(true)
             updateOnline()
+            // T-PS5-04：premain 会话建立同 attach 链——巡检懒启 + 推断 URL 回写
+            ensureMonitorStarted()
+            onSessionLifecycleChanged()
             publishStatusChanged()
             LOG.info("premain 会话建立：pid=$pid（启动即捕获，attach 链已跳过）")
         } catch (t: Throwable) {
@@ -650,7 +733,7 @@ class AgentManager(private val project: Project) : Disposable {
         val body = ByteArray(len)
         input.readFully(body)
         if (cmd != AgentProtocol.CMD_HELLO) return@runCatching 0L
-        Regex("\"pid\"\\s*:\\s*(\\d+)").find(String(body, Charsets.UTF_8))
+        HELLO_PID_REGEX.find(String(body, Charsets.UTF_8))
             ?.groupValues?.get(1)?.toLongOrNull() ?: 0L
     }.getOrElse {
         LOG.info("readHelloPid: HELLO 未取到（${it.javaClass.simpleName}: ${it.message}）——按 pid 未知继续")
@@ -770,6 +853,8 @@ class AgentManager(private val project: Project) : Disposable {
             // 无法重挂；[shutdownAll] 的全表清空语义保留不动。
             dead.forEach { attachedPids.remove(it.pid) }
             updateOnline()
+            // T-PS5-04：会话摘除后推断 URL 同步（全摘完 → 清条目，推断回落数据源 URL）
+            onSessionLifecycleChanged()
             // T-SettingsTruth P2：掉线摘除 → 状态行「连接中断，已回落控制台捕获」
             publishStatusChanged()
         }
@@ -812,6 +897,8 @@ class AgentManager(private val project: Project) : Disposable {
         // 此处提前关是防 socket 挂到超时才回收）
         closePremainChannels()
         updateOnline()
+        // T-PS5-04：会话全清 → 推断 URL 清条目（方言推断回落数据源 URL）
+        onSessionLifecycleChanged()
         // T-SettingsTruth P2：回落链完成 → 状态行「连接中断，已回落控制台捕获」
         publishStatusChanged()
     }
@@ -893,6 +980,8 @@ class AgentManager(private val project: Project) : Disposable {
         runCatching {
             sessions.forEach { it.close() }
             sessions.clear()
+            // T-PS5-04：项目销毁 → 推断 URL 条目清除（不引入跨项目残留）
+            onSessionLifecycleChanged()
             // T-PS4-03：服务随 project 生命周期，去抖/幂等表一并清空（不引入跨项目残留）
             pendingPids.clear()
             attachedPids.clear()
@@ -989,6 +1078,11 @@ internal class AgentSession(
      * 真实时间戳的 lastSeen 会让会话永远健康），真机也无差异。
      */
     private val clockMs: () -> Long = { System.currentTimeMillis() },
+    /**
+     * T-PS5-04：连接 URL 首次捕获/变化回调（默认空操作）——管理器据此把推断 URL 回写
+     * [AgentUrlRegistry]。只在 URL **变化**时触发（每个 SQL 事件都带 URL，逐事件回调无意义）。
+     */
+    private val onUrlCaptured: () -> Unit = {},
 ) {
 
     private val LOG = Logger.getInstance(AgentSession::class.java)
@@ -1050,7 +1144,13 @@ internal class AgentSession(
                 }
                 try {
                     // T-DialectAutoInfer：connect URL 会话内记忆（推断依据；null 容错——旧版 agent 无此键）
-                    event.url?.takeIf { it.isNotBlank() }?.let { lastConnectionUrl = it }
+                    // T-PS5-04：URL 变化才回调（回写推断持有者；逐事件回调无意义）
+                    event.url?.takeIf { it.isNotBlank() }?.let { url ->
+                        if (url != lastConnectionUrl) {
+                            lastConnectionUrl = url
+                            onUrlCaptured()
+                        }
+                    }
                     val entry = AgentEventAdapter.toEntry(event)
                     // T-AgentDialectLoop / T-AgentLogTime：接管期间控制台嗅探暂存的「日志行原始时间」
                     // 按 [logTimeKey]（占位符版 SQL 指纹）取回，参数值序列作次级判别（[stampLogTime]）。

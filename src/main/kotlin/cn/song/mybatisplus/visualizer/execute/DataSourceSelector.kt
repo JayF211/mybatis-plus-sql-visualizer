@@ -3534,9 +3534,21 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
     private val lastExecDocRef =
         java.util.concurrent.atomic.AtomicReference<java.lang.ref.WeakReference<com.intellij.openapi.editor.Document>?>(null)
 
-    /** F6 探针已安装项目集（连接随项目 disposable 自动断开，此处只防重复安装）。 */
-    private val conflictProbeProjects =
-        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<Project, Boolean>())
+    /**
+     * F6 探针已安装项目集（连接随项目 disposable 自动断开，此处只防重复安装）。
+     *
+     * T-PS5-08：改**弱键集**（`WeakHashMap` 键弱引用：项目唯一强引用消失即可回收）——此前强引用
+     * 集把项目对象钉到显式 `remove`（走 [hookProjectClose] 的项目 Disposer，但该函数在
+     * `hookProjectsClose` 已登记时会提前 return、不再登记第二次项目级 Disposer，留下不可回收窗口）。
+     * 去重/判空语义不变（条目只用于「是否已安装」判定）。
+     */
+    private val conflictProbeProjects: MutableSet<Project> =
+        java.util.Collections.synchronizedSet(
+            java.util.Collections.newSetFromMap(java.util.WeakHashMap<Project, Boolean>()),
+        )
+
+    /** T-PS5-08 测试缝：探针项目集（弱引用可达性断言用；生产链路无调用点）。 */
+    internal fun conflictProbeProjectsForTest(): MutableSet<Project> = conflictProbeProjects
 
     /**
      * F5：应用级 document 变更监听（惰性安装一次）——exec 文档每次变更（用户在控制台手改/

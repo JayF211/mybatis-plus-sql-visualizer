@@ -14,7 +14,6 @@ import net.sf.jsqlparser.expression.StringValue
 import net.sf.jsqlparser.expression.TimeValue
 import net.sf.jsqlparser.expression.TimestampValue
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList
-import net.sf.jsqlparser.parser.CCJSqlParserUtil
 import net.sf.jsqlparser.schema.Column
 import net.sf.jsqlparser.statement.delete.Delete
 import net.sf.jsqlparser.statement.insert.Insert
@@ -116,6 +115,10 @@ object RollbackSqlGenerator {
     /**
      * 从 SQL 文本推导回滚语句。
      *
+     * T-PS5-02：解析走 [cn.song.mybatisplus.visualizer.execute.UnboundedWriteDetector.parseStatementsShared]
+     * 单槽共享——确认流（`ExecuteConfirmMessages.build` → `UnboundedWriteDetector.detect`）刚解析过的
+     * 同文本在此直接复用 AST（一次大 DML 点击的解析次数由 4 降到 1），**AST 只读不改写**。
+     *
      * @param sql               预览编辑器当前 SQL（可含注释；多条语句逐条推导）
      * @param primaryKeyColumns 主键列名（大小写不敏感匹配；null = 无主键信息，走整行谓词）
      */
@@ -125,12 +128,29 @@ object RollbackSqlGenerator {
         // Statements 本身 extends ArrayList<Statement>（getStatements() 在 5.3 已标 deprecated
         // 且是 verifyPlugin deprecated 计数来源）——直接按列表使用
         val statements: List<net.sf.jsqlparser.statement.Statement> = try {
-            CCJSqlParserUtil.parseStatements(cleaned)
+            cn.song.mybatisplus.visualizer.execute.UnboundedWriteDetector.parseStatementsShared(cleaned)
         } catch (e: Exception) {
             return RollbackResult.unable(
                 RollbackWarning("rollback.unable.parse", listOf(firstKeywordOf(cleaned), e.message?.take(120) ?: "")),
             )
         }
+        return generateFromParsedStatements(cleaned, statements, primaryKeyColumns)
+    }
+
+    /**
+     * T-PS5-02：携解析入参重载——调用方已持 AST（确认阶段产物）时不再解析。
+     * 供预览面板等调用链在**同一执行流内**显式传递解析产物；[generate] 亦委派此实现。
+     * **AST 只读契约**：本函数只遍历不写节点（改写须先脱离共享槽）。
+     *
+     * @param cleaned           已剥注释的 SQL 文本（仅用于多语句判定，不再解析）
+     * @param statements        已解析语句列表
+     * @param primaryKeyColumns 主键列名（同 [generate]）
+     */
+    internal fun generateFromParsedStatements(
+        cleaned: String,
+        statements: List<net.sf.jsqlparser.statement.Statement>,
+        primaryKeyColumns: List<String>? = null,
+    ): RollbackResult {
         val perStatement = statements.map { generateForStatement(it, primaryKeyColumns) }
         return merge(perStatement, multi = statements.size > 1)
     }

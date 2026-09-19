@@ -173,11 +173,26 @@ class BatchPredicateMergeTest {
 
     @Test
     fun `文案_截断后缀与展示截断`() {
-        // 501 条 → 行数上限截 1 条 + 展示预算裁掉的值——计数合并进「…等 N 条」且后缀恒可见
-        val hint = LogToSqlPanel.buildMergeAdText(deletes(501))!!
+        // T-PS5-11：上限内（≤100）仍逐语句预检——90 条同构删除足以触发展示预算截断（160 字符）；
+        // 计数合并进「…等 N 条」且后缀恒可见（行数上限截断覆盖见 `五百零一条行数上限截断` 直测 mergePreview）
+        val hint = LogToSqlPanel.buildMergeAdText(deletes(90))!!
         assertTrue("截断计数后缀在文案中（…等 N 条）", hint.contains("…等 "))
         assertTrue("双保险文案在场（执行仍逐条）", hint.contains("执行仍逐条"))
         assertTrue("展示串不超预算量级", hint.length < 320)
+    }
+
+    @Test
+    fun `文案_超上限跳过逐语句预检按计数披露`() {
+        // T-PS5-11：>100 条 → 跳过逐语句 AST 预检（EDT 成本封顶），改按计数披露——
+        // 明说「未做同构检测」+「执行仍逐条」，绝不静默丢（既有披露口径的计数版）
+        val hint = LogToSqlPanel.buildMergeAdText(deletes(501))!!
+        assertEquals(message("logToSql.execute.mergeSkipped", 501, 100), hint)
+        assertTrue("明说未做同构检测", hint.contains("未做同构检测"))
+        assertTrue("执行仍逐条口径不回退", hint.contains("执行仍逐条"))
+        // 边界：恰在上限（100）仍走既有分析路径（产出合并参考 SQL，而非跳过披露）
+        val atLimit = LogToSqlPanel.buildMergeAdText(deletes(100))!!
+        assertTrue("恰在上限仍走分析路径", atLimit.contains("DELETE FROM t WHERE id IN ("))
+        assertTrue("上限内不出现跳过披露", !atLimit.contains("未做同构检测"))
     }
 
     @Test

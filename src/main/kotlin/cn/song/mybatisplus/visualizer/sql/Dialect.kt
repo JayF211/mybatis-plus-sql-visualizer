@@ -451,9 +451,12 @@ object DialectRegistry {
         val manualName = projectManualDialectName(project) ?: settings?.dialect
         val auto = projectDialectAuto(project) ?: settings?.dialectAuto ?: true
         if (!auto) return byName(manualName)
-        val agentUrl = runCatching {
-            cn.song.mybatisplus.visualizer.log.agent.AgentManager.getInstance(project ?: return byName(manualName))
-        }.getOrNull()?.lastConnectionUrl()
+        // T-PS5-04：agentUrl 读轻量持有者（不再经 AgentManager.getInstance 触发项目级服务实例化
+        // ——那是「预览一次即驻留 executor+monitor 双守护线程」的根因）；URL 由会话生命周期点回写，
+        // 推断优先级语义（agent URL > 数据源 URL > null 回退）逐字不变。
+        val agentUrl = cn.song.mybatisplus.visualizer.log.agent.AgentUrlRegistry.lastConnectionUrl(
+            project ?: return byName(manualName),
+        )
         val inferred = DialectInference.infer(agentUrl, DataSourceUrlProbe.firstUrl(project))
         return inferred.dialectName?.let { byName(it) } ?: MySqlDialect
     }

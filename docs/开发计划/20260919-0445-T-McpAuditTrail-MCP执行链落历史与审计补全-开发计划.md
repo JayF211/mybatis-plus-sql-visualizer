@@ -153,3 +153,31 @@ MCP 条目经 `buffer.addEntry` 落库 → 三条既有门控同样生效：用�
 
 **未改**：错误文本内嵌的换行（`ExplainTool` 失败路径的 `\nerrorPosition:` 段）仍原样落审计行——改造前即如此，不在本次回退面内。
 
+**⑨ 项目服务级测试状态复位（T-TestIsolation，接手 §九-⑦-2 登记的泄漏）**
+
+§九 ⑦-2 记的是「`SqlConsoleBridgeFilterProviderTest` 改项目服务级 `dedupeEnabled` 不复位」，处置取「受害者自证前提」（`McpHistoryIngestTest` 用例内显式置 `dedupeEnabled = true`），污染源本身留待另立小任务。本轮接手该小任务，实测下来这一族的**污染源不止一个**，且本批新增用例已经把潜伏泄漏暴露成门禁红。
+
+**机制（先说清楚为什么这类红总是「本类隔离跑绿、分片跑红」）**：light 测试项目在同一分片 JVM 内**跨测试类复用同一个 `ProjectImpl`**（`LightPlatformTestCase.ourProject` 片内只建一次，`doSetup` 每用例只 `setLightProjectName` 改名），因此 `project.getService(SqlLogManager::class.java)` 拿到的是**全片共享的单例**；`SqlLogManager` 在项目关闭时才 `dispose`，片内不会。任何测试类改它的可变状态而不复位，都会串台到同片后续测试类——是否发作取决于分片时长权重算出来的邻居（新增测试类即重排，见 memory「分片重平衡型顺序依赖假失败」）。
+
+**修前红（未改任何代码，`./gradlew testShard2`）**：该轮 shard2 = 149 类，1 例红 —— `log.SqlConsoleBridgeFilterProviderTest.test非捕捉态_零处理_不置位`，`junit.framework.AssertionFailedError` at `SqlConsoleBridgeFilterProviderTest.kt:43`（`assertEquals(0, manager.entries.snapshot().size)`）。该片执行序里三处相关类的落位是 `config.SectionConfigurableAutoCaptureLinkageTest`(idx 0) → `mcp.McpHistoryIngestTest`(idx 1) → … → `log.SqlConsoleBridgeFilterProviderTest`(idx 51)：片内唯一会往共享 buffer 入队条目的是 `McpHistoryIngestTest`（`recordMcpExecution` → `buffer.addEntry`，其自身用例断言 `before + 1 == entries.size` 即在共享实例上成立），而受害者首个执行的用例断言 buffer 恰为空。
+
+**顺序无关的因果钉住（临时探针，不入库）**：新增临时类 `model.ProjectServiceLeakProbeTest`（字典序落在 `mcp.*` 之后，故它看到的就是 log/mcp/config 邻居跑完后的共享实例），断言共享 buffer 无残留、`dedupeEnabled=true`、`paused=false`、`capturing=false`；把守卫 [restore] 临时短路后跑「四个污染类 + 探针」→ 红 `共享 buffer 应无残留条目 expected:<0> but was:<2>`（2 条正是 `McpHistoryIngestTest` 入队的两条）；守卫生效同组合 → 绿。探针与短路均已删除。
+
+**泄漏清单（全部为项目服务级 `SqlLogManager`，本轮全修）**
+
+| 类 | 泄漏字段 | 本轮处置 |
+|----|----------|----------|
+| `log/SqlConsoleBridgeFilterProviderTest` | `entries.dedupeEnabled=false`（tearDown 只 `clear()` 内容，不复位开关） | 加守卫（setUp capture / tearDown restore） |
+| `log/EpBridgeSinglePathTest` | 同上 | 加守卫 |
+| `mcp/McpHistoryIngestTest` | 经 `recordMcpExecution` 入队条目后不清（本轮红的直接来源） | 加守卫（新增 setUp/tearDown） |
+| `config/SectionConfigurableAutoCaptureLinkageTest` | 经 `apply()`→`onAutoStartSettingEnabled()`→`startCapture()` 在共享实例上置 `capturing`/等待态、解除 `paused`、并**启动控制台轮询** | 加守卫 |
+| `log/agent/AgentListenSyncTest` | 无（用例自存自复原 `capturing`），但无守卫 → 邻居留下的脏捕获态会被本类当作初值再传下去 | 加固（加守卫） |
+
+**修法**：① 新增 `testutil/SqlLogManagerProjectState.kt`——`capture(manager)` 存初值（buffer 的 `dedupeEnabled`/`paused`/`filterKeywords`/`maxEntries`/`dedupeWindowMs`/`errorBindWindowMs`/`onEntryStored`/`onEvicted` + 条目内容 + `capturing`/`userArmed`/等待态 + 自动展开三态 + 桥轮询态），`restore(manager, snapshot)` 原样复位；条目按**引用同一性**移除本类新增的那些（与 `removeEntry` 的同一性语义一致），捕获时未在轮询则把本类起的轮询/内容监听/已挂 filter 一并收回。② `SqlLogManager` 加 `internal fun restoreCaptureStateForTest(capturing, userArmed, waitingForConsole)` 测试缝——`userArmed`/`isWaitingForConsole` 只有 `private set`，经公开路径（`startCapture`/`stopCapture`）改不回初值；`stopCapture()` 不能当代用（它带 `PluginSettings.state.logAutoCaptureSuppressed = true` 的应用级副作用）。③ 五个类各自在 `setUp`（`super.setUp()` 后、任何改动前）`capture`、`tearDown`（`super.tearDown()` 前）`restore`；**未动任何用例语义与断言**。④ 复位边界已在 KDoc 写明：只回滚本类引入的差异——被本类 `clear()` 掉的既有条目无法复活，故各测试类仍应自清。
+
+**同族审计（grep 全部 `src/test` 后逐个判定，除上表外均非泄漏，本轮不改）**：`log/SqlLogPanel*Test`（9 类）与 `SqlLogManagerBehaviorTest`/`SqlLogManagerAutoShowTest`/`SqlLogConsoleBridgeRealEnvTest`/`SqlClickPreviewTest` 等一律 `SqlLogManager(project)` **自建实例**（不进容器）→ 改的是私有实例，无共享面；`converter/WrapperConverterProjectScopeTest`（ProjectPluginSettings + PluginSettings 双快照，tearDown `loadState`）、`config/ProjectPluginSettingsTest` 与 `sql/DialectProbeCacheTest`（finally `loadState`；后者另有静态缝 `DataSourceUrlProbe.probeForTest`/`probeCount` 在 setUp/tearDown 复位）、`sql/rollback/RollbackSnapshotStoreTest`、`ui/RollbackSqlPanelTest`、`ui/RollbackSqlDialogTest`（`clearForTest()`）均已自清；`integration/PreviewEndToEndTest`、`psi/jpa/HbmNamedQueryResolverTest` 只读 `SqlPreviewService` 不改状态。**只登记未修一项**：`util/PluginCacheManagerCoverageTest.testClearAllDoesNotInstantiatePreviewService` 的前置 `assertNull(getServiceIfCreated(SqlPreviewService::class.java))` 是**脆弱前置**而非污染源——`SqlPreviewService` 一旦被同片更早的类（`PreviewEndToEndTest`/`HbmNamedQueryResolverTest`）创建即红；本轮分片恰好把两者分到不同片（前者 shard3、本类 shard1）故未发作。建议改法（未做，避免动他人用例断言）：把前置换成「记录调用前实例，断言调用后仍是同一实例」，语义不变而去掉顺序依赖。
+
+**修后读数**：`./gradlew testShards` 一命令全绿 —— shard1 **1591/0/0/6**、shard2 **1702/0/0/0**、shard3 **2069/0/0/0**，合计 **5362/0/0/6**（`BUILD SUCCESSFUL in 6m53s`，三片墙钟 206.5s/190.9s/243.5s）；`./gradlew testDatabase` **10/0/0/0**（5 类）；`:sql-visualizer-agent:test` **58/0/0/0**。三步证伪本轮**未用到**（无残留失败）。
+
+**未验证 / 未宣称**：① 修后那轮的分片归属与修前红那轮**不同**（权重表随 XML 更新，shard2 由 149 类变 148 类，三处相关类被拆到 shard1/shard3），故**未在同一份分片组成上做红→绿对照**；红→绿的因果由上面那条顺序无关探针钉住，不宣称「同一分片组合下已复现转绿」。② 前一轮（本日 17:04 那次全量）另有 5 例 `AlreadyDisposedException: Container is already disposed`（`SectionConfigurableAutoCaptureLinkageTest` ×2、`AgentListenSyncTest` ×1、`McpHistoryIngestTest` ×2，均抛在 `project.getService(...)`）——属 memory 已登记的「分片重平衡型顺序依赖假失败」形态；本轮把该形态的**同族嫌疑面**（共享实例的捕获态与桥轮询泄漏，`SectionConfigurableAutoCaptureLinkageTest` 正是往共享实例上起轮询的那条路径）一并复位了，但**未单独复现**该形态（用同一批类名与顺序在 `test` 任务下复跑为绿），故只登记不宣称已根治。③ 分片组成由历史 XML 时长权重推导，类间顺序不稳定，本轮不宣称「分片顺序无关」。
+
