@@ -948,4 +948,349 @@ class BannedApiSourceScanTest {
             maskNonCode(multilineBlockComment).lines().size,
         )
     }
+
+    // ------------------------------------------------------------------
+    // fatal 透传（T-FatalPassthrough，2026-09-19）：catch (…: Throwable) 必须判定或登记豁免
+    // ------------------------------------------------------------------
+
+    /**
+     * `catch (…: Throwable)` 块：调用行号（1-based，与原文对齐）+ 块体（取自 [maskNonCode] 后的
+     * 文本——注释/字符串里的 `isFatal` 字样不算判定）。
+     */
+    private data class ThrowableCatchSite(val line: Int, val body: String)
+
+    /**
+     * 扫出全部 `catch (…: Throwable)` 块，含**嵌套**块（内层块体独立成站点：外层判了 fatal
+     * 不代表内层判了）。边界（均为漏报方向，不误报）：
+     *  - `catch (Throwable t)`（Java 写法，只出现在注入 agent 的 **Java 模板字符串**里，
+     *    `SourceInterceptorTemplates.kt:99`）——被 [maskNonCode] 涂白，不是 Kotlin 站点；
+     *  - 多 catch 共体（Kotlin 无 multi-catch 语法）不存在；`catch (e: Exception)` 不是本规则对象。
+     */
+    private fun throwableCatchSites(code: String): List<ThrowableCatchSite> {
+        val out = ArrayList<ThrowableCatchSite>()
+        for (m in Regex("""catch\s*\([^)]*:\s*Throwable\s*\)""").findAll(code)) {
+            val open = code.indexOf('{', m.range.last)
+            if (open < 0) continue
+            val close = matchingDelimiter(code, open, '{', '}')
+            out.add(
+                ThrowableCatchSite(
+                    line = code.take(m.range.first).count { it == '\n' } + 1,
+                    body = if (close >= 0) code.substring(open, close + 1) else code.substring(open),
+                ),
+            )
+        }
+        return out
+    }
+
+    /** 豁免记录：[sites] = 提交时该文件的站点数（漂移即红——新增/删除捕获点必须重新登记），[reason] 必填。 */
+    private data class CatchExemption(val sites: Int, val reason: String)
+
+    /** fatal 判定令牌（形态 A）：块体内出现即视为已判。 */
+    private val fatalCheckToken = "FatalErrors.isFatal("
+
+    /**
+     * 已落地 fatal 透传的文件（T-FP-02 子集）——**不得**出现在 [throwableCatchExemptions]，
+     * 且每处 `catch (…: Throwable)` 都必须带判定。
+     */
+    private val landedFatalPassthroughFiles = setOf(
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt",
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt",
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.kt",
+    )
+
+    /**
+     * 未收口 `catch (…: Throwable)` 的**豁免登记**（T-FatalPassthrough T-FP-03 / 计划 §八 清单）。
+     *
+     * 为什么是「文件 + 站点数」而不是「文件:行」：行号在**别的高频改动文件**（`log/`、`actions/`、
+     * `ui/`）里随任何编辑漂移，逐行白名单会让并行会话的合法改动把守卫打成红的（计划 §六 风险表
+     * 「守卫误报」）。站点数同样能钉住回潮——豁免文件里新增一个无判定的 `catch (…: Throwable)`
+     * 即红，须补判定或重新登记理由。行号清单见本段末（提交时实测，仅供人工核对）。
+     *
+     * 豁免口径：捕获面覆盖 fatal 但**失败语义就是降级**（可选能力探测 / 后台候选收集 /
+     * 图形渲染回落 / fail-closed 安全闸门）——不是「懒得改」。
+     */
+    private val throwableCatchExemptions: Map<String, CatchExemption> = mapOf(
+        // 12 处：平台可选能力探测 + 反射候选遍历（2026.2 ContentManagerListener 接口形态不匹配、
+        // filter 接口逐个试、方法/组件查找）——失败即回落轮询兜底 / 返回 null / 视为存活。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogConsoleBridge.kt" to
+            CatchExemption(12, "控制台桥的平台可选能力探测与反射候选遍历：失败即降级（轮询兜底/null/视为存活）"),
+        // 7 处：后台收集候选（链头/注解/XML tag）失败返回空列表 → EDT 提示「未找到候选」。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.kt" to
+            CatchExemption(7, "后台候选收集失败返回空列表，用户侧看到「未找到候选」提示（非长驻链路）"),
+        // 5 处：JOIN 图渲染/后台富化失败回落「无图 / 未富化模型」。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt" to
+            CatchExemption(5, "JOIN 图渲染/富化失败回落无图或未富化模型（已 warn 留痕 + 显式摘转圈）"),
+        // 3 处：原生 Database 插件图表可选能力探测。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/diagram/nativefw/db/NativeDatabaseDiagramSupport.kt" to
+            CatchExemption(3, "原生 Database 图表可选能力探测，失败回落自建 A 路径（零劣化）"),
+        // 3 处：原生 JOIN 图可选能力探测 + 关编辑器失败不阻断。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/diagram/nativefw/NativeJoinDiagramSupport.kt" to
+            CatchExemption(3, "原生 JOIN 图可选能力探测，失败回落内置渲染器（零劣化）"),
+        // 2 处：本地帮助 HTML 打开失败回落在线文档；版本号读取失败返回空串。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt" to
+            CatchExemption(2, "帮助 HTML 打开失败回落在线文档；版本号读取失败返回空串"),
+        // 1 处：OGNL 求值器对用户表达式收敛为 Err。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/xml/Ognl.kt" to
+            CatchExemption(1, "OGNL 求值器须把用户表达式的任何失败收敛为 Err（同 McpSelectGuard fail-closed 族）"),
+        // 1 处：DasModel 遍历失败 bail。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/highlight/DatabaseSchemaResolver.kt" to
+            CatchExemption(1, "平台 DasModel 形态差异探测：遍历失败 bail + warn（解析降级）"),
+        // 1 处：渲染失败回「无图」语义。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/diagram/DiagramPanel.kt" to
+            CatchExemption(1, "渲染失败回「无图」语义（清画布 + currentModel，防每次缩放重复抛）"),
+        // 1 处：可选能力探测返回 null。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt" to
+            CatchExemption(1, "可选能力探测失败返回 null（预览主链降级）"),
+        // 1 处：补全异常不影响输入。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlInputEditor.kt" to
+            CatchExemption(1, "补全弹窗异常不得影响输入（失败下次输入重试）"),
+        // 1 处：SQL 解析失败回落 trimEnd + 分号。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/psource/JdbcTemplateSqlPreviewService.kt" to
+            CatchExemption(1, "SQL 解析失败回落「trimEnd + 分号」纯文本形态"),
+        // 1 处：安全闸门 fail-closed——调用点注释即依据。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSelectGuard.kt" to
+            CatchExemption(1, "安全闸门 fail-closed：解析器对恶意构造输入可能抛 Error，必须接住并拒绝"),
+        // 1 处：后台候选收集失败返回空。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlToJavaPanel.kt" to
+            CatchExemption(1, "后台候选收集失败返回空（面板提示无候选）"),
+        // 1 处：反射探测返回 false。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogManager.kt" to
+            CatchExemption(1, "反射能力探测失败返回 false"),
+        // 1 处：后台候选收集失败返回空。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/GenerateCrudSqlFromEntityAction.kt" to
+            CatchExemption(1, "后台候选收集失败返回空列表（动作提示无候选）"),
+        // 1 处：同上。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/GenerateCrudSqlFromDbTableAction.kt" to
+            CatchExemption(1, "后台候选收集失败返回空列表（动作提示无候选）"),
+        // 1 处：同上。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertSqlToJavaAction.kt" to
+            CatchExemption(1, "后台候选收集失败返回空列表（动作提示无候选）"),
+    )
+
+    /**
+     * fatal 透传违规点：`路径:行号`（无判定且未豁免）。单独成函数以便合成样本自证
+     * （规则「看不见某形态」的空绿只能靠合成样本钉住，见 `TFP03自证_…`）。
+     */
+    /**
+     * 未收口点的**行号清单**（T-FatalPassthrough 实施时实测；守卫不校验行号，仅作人工核对与
+     * 计划 §八 登记的出处）。共 44 处 / 18 文件：
+     *
+     * ```
+     * log/SqlLogConsoleBridge.kt                                     12 处：151 167 208 410 561 570 595 642 656 664 678 695
+     * actions/ConvertToSqlAction.kt                                   7 处：119 339 383 431 485 554 593
+     * ui/SqlPreviewPanel.kt                                           5 处：1498 1517 1528 1547 2566
+     * ui/diagram/nativefw/db/NativeDatabaseDiagramSupport.kt          3 处：102 122 224
+     * ui/diagram/nativefw/NativeJoinDiagramSupport.kt                 3 处：52 115 126
+     * log/SqlLogPanel.kt                                              2 处：1139 1155
+     * xml/Ognl.kt                                                     1 处：163
+     * ui/highlight/DatabaseSchemaResolver.kt                          1 处：352
+     * ui/diagram/DiagramPanel.kt                                      1 处：197
+     * ui/SqlPreviewService.kt                                         1 处：2100
+     * ui/SqlInputEditor.kt                                            1 处：160
+     * psource/JdbcTemplateSqlPreviewService.kt                        1 处：105
+     * mcp/McpSelectGuard.kt                                           1 处：69
+     * log/SqlToJavaPanel.kt                                           1 处：818
+     * log/SqlLogManager.kt                                            1 处：275
+     * actions/GenerateCrudSqlFromEntityAction.kt                      1 处：61
+     * actions/GenerateCrudSqlFromDbTableAction.kt                     1 处：50
+     * actions/ConvertSqlToJavaAction.kt                               1 处：93
+     * ```
+     *
+     * 已落地（30 处 / 3 文件）：`execute/DataSourceSelector.kt` 13、`log/agent/AgentManager.kt` 10、
+     * `log/RunConfigurationProcessListener.kt` 7——合计 74 处（`grep -rn "catch (.*: Throwable)"` 口径）。
+     * 另有 `log/SourceInterceptorTemplates.kt:99` 的 `catch (Throwable t)` 位于**注入 agent 的 Java
+     * 源码模板字符串**里，不是 Kotlin 站点（[maskNonCode] 涂白，`TFP03自证_…` 已钉住该边界）。
+     */
+    private fun fatalPassthroughOffenders(sources: List<Pair<String, String>>): List<String> {
+        val offenders = ArrayList<String>()
+        for ((path, raw) in sources) {
+            if (throwableCatchExemptions.containsKey(path)) continue
+            for (site in throwableCatchSites(maskNonCode(raw))) {
+                if (!site.body.contains(fatalCheckToken)) offenders.add("$path:${site.line}")
+            }
+        }
+        return offenders
+    }
+
+    @Test
+    fun `catch_Throwable块必须判fatal或登记豁免`() {
+        // T-FatalPassthrough T-FP-03：JVM 级致命错误（VirtualMachineError / LinkageError /
+        // ThreadDeath）被 catch (…: Throwable) 吞成一条 warn 后，崩溃现场只剩一行日志、流程带病
+        // 继续（第八轮报告 §7.2 Z-21）。本规则要求每个 `catch (…: Throwable)` 块**要么**判 fatal
+        // （形态 A：块内 `FatalErrors.isFatal(`，见 util/FatalErrors.kt），**要么**登记豁免理由。
+        // 未收口的 44 处（18 文件）豁免见 [throwableCatchExemptions]；已落地的 30 处（3 文件）见
+        // [landedFatalPassthroughFiles]，其中任何一处退回无判定即红。
+        val sources = rawMainSources()
+        val offenders = fatalPassthroughOffenders(sources)
+        assertTrue(
+            "catch (…: Throwable) 块未判 fatal 且未登记豁免，命中 ${offenders.size} 处：$offenders。" +
+                "块内加 `if (FatalErrors.isFatal(t)) throw t`（反射链先解包 InvocationTargetException），" +
+                "确属「失败即降级」语义的在 [throwableCatchExemptions] 登记文件 + 站点数 + 理由",
+            offenders.isEmpty(),
+        )
+
+        // 已落地文件：不得被豁免掩盖，且确实有站点、有判定（防「加白名单把落地缺失藏掉」）
+        for (path in landedFatalPassthroughFiles) {
+            val code = sources.firstOrNull { it.first == path }?.second
+            assertTrue("已落地文件不在扫描面内（路径写错？）：$path", code != null)
+            assertTrue("已落地文件不得出现在豁免表中：$path", !throwableCatchExemptions.containsKey(path))
+            val sites = throwableCatchSites(maskNonCode(code!!))
+            assertTrue("已落地文件应含 catch (…: Throwable) 站点：$path", sites.isNotEmpty())
+            assertTrue(
+                "已落地文件的站点应全部带 fatal 判定：$path",
+                sites.all { it.body.contains(fatalCheckToken) },
+            )
+        }
+
+        // 反射解包锚点（原生执行链）：Method.invoke 把目标异常（含 Error）包进
+        // InvocationTargetException（普通异常），只判外层会漏判——须对解包后的 cause 判定。
+        val nativeRunChain = maskNonCode(
+            sources.first { it.first.endsWith("execute/DataSourceSelector.kt") }.second,
+        )
+        val unwrapSites = throwableCatchSites(nativeRunChain).filter { it.body.contains("InvocationTargetException") }
+        assertTrue("原生执行链的反射捕获块应存在（含 InvocationTargetException 解包）", unwrapSites.isNotEmpty())
+        assertTrue(
+            "反射捕获块须对解包后的 cause 判 fatal（`FatalErrors.isFatal(cause)`）——" +
+                "只判外层 InvocationTargetException 会漏判目标方法抛出的 fatal",
+            unwrapSites.all { it.body.contains("FatalErrors.isFatal(cause)") },
+        )
+
+        // 豁免表保鲜：路径必须在扫描面内、站点数与登记一致、理由非空
+        for ((path, exemption) in throwableCatchExemptions) {
+            val code = sources.firstOrNull { it.first == path }?.second
+            assertTrue("豁免表条目指向不存在的源文件（改名/删除后未同步）：$path", code != null)
+            val actual = throwableCatchSites(maskNonCode(code!!)).size
+            assertEquals(
+                "豁免文件的 catch (…: Throwable) 站点数与登记不符（新增/删除捕获点须补判定或重新登记理由）：$path",
+                exemption.sites,
+                actual,
+            )
+            assertTrue("豁免理由不得为空：$path", exemption.reason.isNotBlank())
+        }
+    }
+
+    @Test
+    fun `TFP03自证_无判定必红_有判定与豁免放行`() {
+        // 负向自证（规则「看不见某形态」= 空绿，只能靠合成样本钉住）：三态 + 边界。
+        val violating = listOf(
+            "src/main/kotlin/x/NoCheck.kt" to """
+                class NoCheck {
+                    fun go() {
+                        try {
+                            risky()
+                        } catch (t: Throwable) {
+                            LOG.warn("swallowed", t)
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "无判定的 catch (…: Throwable) 必须命中：${fatalPassthroughOffenders(violating)}",
+            1,
+            fatalPassthroughOffenders(violating).size,
+        )
+
+        val checked = listOf(
+            "src/main/kotlin/x/Checked.kt" to """
+                class Checked {
+                    fun go() {
+                        try {
+                            risky()
+                        } catch (t: Throwable) {
+                            if (FatalErrors.isFatal(t)) throw t
+                            LOG.warn("degraded", t)
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "已判 fatal 的站点不得误报：${fatalPassthroughOffenders(checked)}",
+            0,
+            fatalPassthroughOffenders(checked).size,
+        )
+
+        // 嵌套块：外层判了不代表内层判了（内层独立成站点）
+        val nestedInnerUnchecked = listOf(
+            "src/main/kotlin/x/Nested.kt" to """
+                class Nested {
+                    fun go() {
+                        try {
+                            risky()
+                        } catch (t: Throwable) {
+                            if (FatalErrors.isFatal(t)) throw t
+                            try {
+                                alsoRisky()
+                            } catch (e: Throwable) {
+                                LOG.warn("inner swallowed", e)
+                            }
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "嵌套 catch 的内层块须独立判定（外层判定不得替内层豁免）：${fatalPassthroughOffenders(nestedInnerUnchecked)}",
+            1,
+            fatalPassthroughOffenders(nestedInnerUnchecked).size,
+        )
+
+        // 注释里的判定字样不算判定（令牌只看代码）；注释里的花括号不得截断块体
+        val tokenOnlyInComment = listOf(
+            "src/main/kotlin/x/CommentOnly.kt" to """
+                class CommentOnly {
+                    fun go() {
+                        try {
+                            risky()
+                        } catch (t: Throwable) {
+                            // FatalErrors.isFatal(t) 只是注释，不算判定 } {
+                            LOG.warn("swallowed", t)
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "注释里的 isFatal 字样不算判定，且注释里的花括号不得截断块体：${fatalPassthroughOffenders(tokenOnlyInComment)}",
+            1,
+            fatalPassthroughOffenders(tokenOnlyInComment).size,
+        )
+
+        // `catch (…: Exception)` 不是本规则对象（捕获面不含 Error）
+        val exceptionOnly = listOf(
+            "src/main/kotlin/x/ExceptionOnly.kt" to """
+                class ExceptionOnly {
+                    fun go() {
+                        try {
+                            risky()
+                        } catch (e: Exception) {
+                            LOG.warn("degraded", e)
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "catch (…: Exception) 捕获面不含 Error，不属本规则：${fatalPassthroughOffenders(exceptionOnly)}",
+            0,
+            fatalPassthroughOffenders(exceptionOnly).size,
+        )
+
+        // Java 模板字符串里的 `catch (Throwable t)`（注入 agent 的源码模板）被涂白，不是 Kotlin 站点
+        val javaTemplateInString = listOf(
+            "src/main/kotlin/x/JavaTemplate.kt" to """
+                object JavaTemplate {
+                    val SOURCE = ""${'"'}
+                        try { run(); } catch (Throwable t) { log(t); }
+                    ""${'"'}
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "字符串里的 Java catch 写法不得被当站点：${fatalPassthroughOffenders(javaTemplateInString)}",
+            0,
+            fatalPassthroughOffenders(javaTemplateInString).size,
+        )
+    }
 }
