@@ -94,11 +94,98 @@ class ErrorReportComposerTest {
     // ---------- 预填 ----------
 
     @Test
-    fun `预填组合标题描述与分类`() {
-        val prefill = ErrorReportComposer.prefill("java.lang.RuntimeException", "boom", stack)
-        assertEquals("RuntimeException: boom", prefill.title)
-        assertTrue(prefill.description.contains("boom"))
+    fun `预填默认脱敏_标题只出类名_描述出类名与栈帧摘要`() {
+        val prefill = ErrorReportComposer.prefill("java.lang.RuntimeException", "boom happened at runtime", stack)
+        // T-ErrorReportRedact（D1=B）：默认预填 = 类名 + 指纹 + 栈帧，message 一律不进
+        assertEquals("RuntimeException", prefill.title)
+        assertFalse("默认描述不得含 message 文本", prefill.description.contains("boom"))
+        assertTrue(prefill.description.contains("异常: java.lang.RuntimeException"))
+        assertTrue(
+            "描述应带业务栈帧位置（含行号）",
+            prefill.description.contains("cn.song.mybatisplus.visualizer.log.SqlLogPanel.refresh(SqlLogPanel.kt:120)"),
+        )
+        assertFalse("平台帧不进栈帧摘要", prefill.description.contains("com.intellij.openapi.application.ApplicationImpl"))
         assertEquals("sql-log", prefill.category)
+        // message 全文与「勾选附加」的旧形态一并随 Prefill 交给对话框（不外传，只做回填源）
+        assertEquals("boom happened at runtime", prefill.message)
+        assertEquals("RuntimeException: boom happened at runtime", prefill.titleWithMessage)
+        assertEquals("boom happened at runtime", prefill.descriptionWithMessage)
+    }
+
+    @Test
+    fun `预填勾选附加形态与改前逐字节一致_默认形态不含消息`() {
+        val prefill = ErrorReportComposer.prefill("java.lang.RuntimeException", "boom happened at runtime\n第二行", stack)
+        // 组装式与 ErrorReportDialog.collectRequest 同款：buildDescription(null, 描述区文本, 指纹)
+        val optInDescription = ErrorReportComposer.buildDescription(null, prefill.descriptionWithMessage, "abcd1234")
+        assertEquals("RuntimeException: boom happened at runtime", prefill.titleWithMessage)
+        assertEquals("boom happened at runtime\n第二行\n\nfingerprint: abcd1234", optInDescription)
+        val defaultDescription = ErrorReportComposer.buildDescription(null, prefill.description, "abcd1234")
+        assertFalse("默认形态不得含 message 文本", defaultDescription.contains("boom"))
+        assertTrue(defaultDescription.endsWith("fingerprint: abcd1234"))
+        assertTrue(defaultDescription.contains("（异常消息全文默认不附带"))
+    }
+
+    @Test
+    fun `预填无消息时勾选行无回填源且描述不出说明行`() {
+        val prefill = ErrorReportComposer.prefill("java.lang.RuntimeException", null, stack)
+        assertEquals(null, prefill.message)
+        assertEquals("RuntimeException", prefill.title)
+        assertFalse("无消息就没有「未附带」说明", prefill.description.contains("默认不附带"))
+        // 无消息的旧形态标题为 `(no message)` 兜底（勾选行在对话框里按 message==null 隐藏）
+        assertEquals("RuntimeException: (no message)", prefill.titleWithMessage)
+    }
+
+    @Test
+    fun `过短消息的旧形态描述仍补兜底句_与改前一致`() {
+        // 服务端描述下限 10 字符：message 过短时旧形态（勾选附加）同样补兜底句——改前即如此，
+        // 勾选路径必须逐字节保留（不能因为「脱敏改造」把这条兜底丢了）
+        val prefill = ErrorReportComposer.prefill("java.lang.RuntimeException", "boom", stack)
+        assertEquals("boom\n(from IDE error report)", prefill.descriptionWithMessage)
+    }
+
+    // ---------- 脱敏标题/描述（T-ErrorReportRedact D1=B） ----------
+
+    @Test
+    fun `脱敏标题只有类名且守住服务端上下限`() {
+        assertEquals("RuntimeException", ErrorReportComposer.buildRedactedTitle("java.lang.RuntimeException"))
+        assertEquals("PluginError", ErrorReportComposer.buildRedactedTitle(null))
+        assertTrue("过短补兜底（服务端 5 字符下限）", ErrorReportComposer.buildRedactedTitle("a.B").length >= 5)
+        assertEquals(
+            "超长截断（服务端 200 上限）",
+            200,
+            ErrorReportComposer.buildRedactedTitle("a." + "X".repeat(500)).length,
+        )
+    }
+
+    @Test
+    fun `脱敏描述含cause链类名但不含任何消息文本`() {
+        val driverStack = """
+            java.sql.SQLException: Access denied for user 'root'@'localhost'
+            	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:129)
+            	at com.mysql.cj.jdbc.ConnectionImpl.createNewIO(ConnectionImpl.java:1)
+            	at cn.song.mybatisplus.visualizer.execute.DataSourceSelector.connect(DataSourceSelector.kt:2624)
+            	at com.intellij.openapi.application.ApplicationImpl.run(ApplicationImpl.java:1)
+            Caused by: com.mysql.cj.jdbc.exceptions.CommunicationsException: Communications link failure
+            """.trimIndent()
+        val description = ErrorReportComposer.buildRedactedDescription("java.sql.SQLException", driverStack, messageOmitted = true)
+        assertTrue(description.contains("异常: java.sql.SQLException"))
+        assertTrue(description.contains("原因链: com.mysql.cj.jdbc.exceptions.CommunicationsException"))
+        assertTrue(description.contains("cn.song.mybatisplus.visualizer.execute.DataSourceSelector.connect(DataSourceSelector.kt:2624)"))
+        // 帧与 cause 链都只取类名/位置——异常消息与 cause 消息一律不进描述
+        assertFalse("异常消息不得进描述", description.contains("Access denied"))
+        assertFalse("cause 行上的消息也不得进描述", description.contains("Communications link failure"))
+        assertTrue(description.contains("（异常消息全文默认不附带"))
+    }
+
+    @Test
+    fun `脱敏描述无堆栈时退化且满足服务端10字符下限`() {
+        val description = ErrorReportComposer.buildRedactedDescription("java.lang.Error", null)
+        assertEquals("异常: java.lang.Error", description)
+        assertTrue(description.length >= ErrorReportComposer.DESCRIPTION_MIN)
+        assertTrue(
+            "类名极短时兜底句守住服务端下限",
+            ErrorReportComposer.buildRedactedDescription("a", null).contains("from IDE error report"),
+        )
     }
 
     // ---------- 批量报告（T-FeedbackBatch：一次多勾也不撞 429） ----------
@@ -122,7 +209,10 @@ class ErrorReportComposerTest {
 
     @Test
     fun `合并标题含条数且不超服务端上限`() {
-        assertEquals("Boom1: boom 1（等 3 条异常）", ErrorReportComposer.buildBatchTitle(entries(3)))
+        // 默认脱敏形态：首条只出类名
+        assertEquals("Boom1（等 3 条异常）", ErrorReportComposer.buildBatchTitle(entries(3)))
+        // 勾选附加形态与改前逐字节一致
+        assertEquals("Boom1: boom 1（等 3 条异常）", ErrorReportComposer.buildBatchTitle(entries(3), includeMessages = true))
         // 超长首条也须 ≤200（服务端 400 拒绝线）
         val long = ErrorReportComposer.buildBatchTitle(
             listOf(ErrorReportComposer.BatchEntry("a.B", "x".repeat(500), null)) + entries(2),
@@ -132,12 +222,20 @@ class ErrorReportComposerTest {
     }
 
     @Test
-    fun `合并描述出条目清单并保留用户补充`() {
-        val description = ErrorReportComposer.buildBatchDescription(entries(3), "顺便说一句")
-        assertTrue(description.contains("共 3 条"))
-        assertTrue(description.contains("#1 Boom1: boom 1"))
-        assertTrue(description.contains("#3 Boom3: boom 3"))
-        assertTrue(description.contains("顺便说一句"))
+    fun `合并描述默认只出类名_勾选附加后与改前逐字节一致`() {
+        val redacted = ErrorReportComposer.buildBatchDescription(entries(3), "顺便说一句")
+        assertTrue(redacted.contains("共 3 条"))
+        assertTrue(redacted.contains("#1 Boom1"))
+        assertTrue(redacted.contains("#3 Boom3"))
+        assertFalse("默认不得带逐条消息文本", redacted.contains("#1 Boom1: boom 1"))
+        assertTrue(redacted.contains("（逐条异常消息默认不附带"))
+        assertTrue("用户主动写的补充始终带上", redacted.contains("顺便说一句"))
+        // 勾选附加 = 改前形态（逐字节钉住，含空行与顺序）
+        assertEquals(
+            "（来自 IDE 的错误批次报告，共 3 条）\n" +
+                "#1 Boom1: boom 1\n#2 Boom2: boom 2\n#3 Boom3: boom 3\n\n顺便说一句",
+            ErrorReportComposer.buildBatchDescription(entries(3), "顺便说一句", includeMessages = true),
+        )
     }
 
     @Test
