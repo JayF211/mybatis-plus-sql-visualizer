@@ -9,8 +9,12 @@ package cn.song.mybatisplus.visualizer.mcp
  */
 object McpExplainFormatter {
 
-    /** 返回行数预算（EXPLAIN 计划行通常 <100；超预算按截断处理）。 */
-    const val MAX_ROWS = 200
+    /** 返回行数默认预算（EXPLAIN 计划行通常 <100；超预算按截断处理）。 */
+    const val DEFAULT_MAX_ROWS = 200
+
+    /** 返回行数硬上限（T-McpRowBudget / O-36）：调用方给的 maxRows 再大也钳到此值，
+     *  对齐 DBX `MAX_EXECUTE_QUERY_ROWS = 1000`（竞品第八轮报告 §8 #37）。 */
+    const val HARD_MAX_ROWS = 1000
 
     /** 单元格字符预算。 */
     const val MAX_CELL_CHARS = 2000
@@ -42,10 +46,24 @@ object McpExplainFormatter {
         value.replace("\r\n", "\n").replace('\n', ' ').replace('\r', ' ').trim()
 
     /**
-     * 计划文本：列头 + 行 + 截断提示（截断标记来自 [McpExplainFormatter.RawResult.truncated]，
-     * 行数已由适配层按 [MAX_ROWS] 采集裁剪）。
+     * maxRows 限幅（T-McpRowBudget / T-MRB-02）：null/非正 → 默认 200；超硬上限 → 1000；其余原样。
+     * 形态与语义照 [McpSchemaFormatter.clampMaxTables]（越界**钳制不抛错**——工具面报错会打断
+     * agent 流程，钳制只是把预算收进合法区间）。
      */
-    fun format(raw: RawResult): String {
+    fun clampMaxRows(requested: Int?): Int = when {
+        requested == null || requested <= 0 -> DEFAULT_MAX_ROWS
+        requested > HARD_MAX_ROWS -> HARD_MAX_ROWS
+        else -> requested
+    }
+
+    /**
+     * 计划文本：列头 + 行 + 截断提示（截断标记来自 [RawResult.truncated]，行数已由适配层按
+     * 生效预算采集裁剪）。
+     *
+     * [maxRows]=本次生效的行预算，只影响截断提示里的数字；默认 [DEFAULT_MAX_ROWS]——不传参时
+     * 输出与 T-McpRowBudget 之前逐字节一致（防回归硬门禁，用例钉住该字面量）。
+     */
+    fun format(raw: RawResult, maxRows: Int = DEFAULT_MAX_ROWS): String {
         val out = StringBuilder()
         if (raw.headers.isNotEmpty()) {
             out.append(raw.headers.joinToString(" | ") { it.trim() }).append('\n')
@@ -54,7 +72,7 @@ object McpExplainFormatter {
             out.append(row.joinToString(" | ") { cell(it) }).append('\n')
         }
         if (raw.truncated) {
-            out.append("\n[TRUNCATED] output limited to $MAX_ROWS rows; the actual plan may have more.")
+            out.append("\n[TRUNCATED] output limited to $maxRows rows; the actual plan may have more.")
         }
         return out.toString().trimEnd()
     }

@@ -115,7 +115,7 @@ class ExplainTool : McpToolsetSupport("mpsv_explain") {
             runCatching {
                 // T-ExecTimeoutGuard：设置项「执行超时」透传（0=不限；explain 单语句取每语句基础值）
                 McpDbExecutor.executeQuery(
-                    target.project, target.ds, target.explainSql, McpExplainFormatter.MAX_ROWS,
+                    target.project, target.ds, target.explainSql, McpExplainFormatter.DEFAULT_MAX_ROWS,
                     timeoutSeconds = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
                         .state.executionTimeoutSeconds,
                 )
