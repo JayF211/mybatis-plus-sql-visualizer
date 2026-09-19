@@ -9,7 +9,7 @@ import com.intellij.mcpserver.annotations.McpToolHintValue
 import com.intellij.mcpserver.annotations.McpToolHints
 
 /**
- * mpsv_check_sql 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：SQL 静态写风险与类型核查。
+ * sqlv_check_sql 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：SQL 静态写风险与类型核查。
  *
  * 组合三件纯逻辑资产：SqlStatementSplitter（语句数）+ SqlTypeClassifier（QUERY/DML/DDL 分类）
  * + UnboundedWriteDetector（O-9 七规则无界写探测）。纯文本判定，**绝不执行**。
@@ -19,16 +19,16 @@ import com.intellij.mcpserver.annotations.McpToolHints
  * 在测试进程加载即 NoClassDefFoundError（一期语义=mcp-optional.xml 不加载则类永不可达，
  * ignored-problems 豁免留痕），故测试一律走纯函数层，挂起链只有真机/生产触达。
  */
-class CheckSqlTool : McpToolsetSupport("mpsv_check_sql") {
+class SqlVisualizerCheckSqlTool : McpToolsetSupport("sqlv_check_sql") {
 
-    @McpTool(name = "mpsv_check_sql", title = "Static write-risk and type check for a SQL statement")
+    @McpTool(name = "sqlv_check_sql", title = "Static write-risk and type check for a SQL statement")
     @McpDescription(
         "Statically check SQL text (no execution, no database access): statement count, per-statement " +
             "type (QUERY/DML/DDL), and unbounded-write findings — missing WHERE (whole-table scope), " +
             "tautological conditions (e.g. 1=1), tautological OR branches, pure-wildcard LIKE ('%'), " +
             "constant-only WHERE, subqueries (informational), and unparseable statements (fail-closed). " +
-            "Deterministic static analysis via JSqlParser AST. Run this before mpsv_explain on write " +
-            "statements, or after mpsv_render_logs / mpsv_render_sql to assess what rendering produced. " +
+            "Deterministic static analysis via JSqlParser AST. Run this before sqlv_explain on write " +
+            "statements, or after sqlv_render_logs / sqlv_render_sql to assess what rendering produced. " +
             "Read-only: analysis only, never executes SQL.",
     )
     @McpToolHints(
@@ -36,7 +36,7 @@ class CheckSqlTool : McpToolsetSupport("mpsv_check_sql") {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE,
     )
-    suspend fun mpsv_check_sql(sql: String): String = audit("mpsv_check_sql") { checkSql(sql) }
+    suspend fun sqlv_check_sql(sql: String): String = audit("sqlv_check_sql") { checkSql(sql) }
 
     /** 纯函数核心（零 IDE 依赖）。 */
     internal fun checkSql(sql: String): String {

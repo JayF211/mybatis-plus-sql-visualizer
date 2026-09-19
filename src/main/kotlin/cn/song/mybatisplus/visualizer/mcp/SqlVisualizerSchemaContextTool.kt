@@ -6,17 +6,17 @@ import com.intellij.mcpserver.annotations.McpToolHintValue
 import com.intellij.mcpserver.annotations.McpToolHints
 
 /**
- * mpsv_schema_context 工具（T-McpToolset2 / T-MTS2-00：一期方法体逐行迁入，按工具拆 toolset 类）。
+ * sqlv_schema_context 工具（T-McpToolset2 / T-MTS2-00：一期方法体逐行迁入，按工具拆 toolset 类）。
  */
-class SchemaContextTool : McpToolsetSupport("mpsv_schema_context") {
+class SqlVisualizerSchemaContextTool : McpToolsetSupport("sqlv_schema_context") {
 
-    @McpTool(name = "mpsv_schema_context", title = "Get compact table/column schema context")
+    @McpTool(name = "sqlv_schema_context", title = "Get compact table/column schema context")
     @McpDescription(
         "Return a compact table+column context (names, types, comments, NOT NULL marks) for the given " +
             "tables, resolved from the real data source configured in the IDE (credentials never leave the IDE). " +
             "Pass a comma-separated 'tables' whitelist (1-50 names) and optionally 'dataSource' display name " +
             "when several data sources exist. 'maxTables' caps how many tables are returned (default 8, hard limit 20). " +
-            "Deterministic live-schema lookup; pairs with mpsv_render_sql when you need column types " +
+            "Deterministic live-schema lookup; pairs with sqlv_render_sql when you need column types " +
             "before writing SQL. Read-only: metadata only, never executes SQL.",
     )
     @McpToolHints(
@@ -24,11 +24,11 @@ class SchemaContextTool : McpToolsetSupport("mpsv_schema_context") {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE,
     )
-    suspend fun mpsv_schema_context(
+    suspend fun sqlv_schema_context(
         tables: String,
         dataSource: String = "",
         maxTables: Int = McpSchemaFormatter.DEFAULT_MAX_TABLES,
-    ): String = audit("mpsv_schema_context") {
+    ): String = audit("sqlv_schema_context") {
         val project = requireProject()
         requireSmart(project)
         val names = tables.split(',', ';', '\n')

@@ -13,7 +13,7 @@ package com.intellij.mcpserver.annotations
 @Target(AnnotationTarget.FUNCTION, AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.RUNTIME)
 annotation class McpTool(
-    /** 工具名（默认方法名）。本项目显式传 `mpsv_` 前缀工具名。 */
+    /** 工具名（默认方法名）。本项目显式传 `sqlv_` 前缀工具名。 */
     val name: String = "",
     /** 工具标题（默认空串）。 */
     val title: String = "",

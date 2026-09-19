@@ -205,9 +205,9 @@ class PluginXmlStructureGuardTest {
         // T-McpToolset2 / T-MTS2-00：一工具一 toolset 类（平台 per-tool 门控只有 toolset 粒度
         // isEnabled）——十工具逐类断言，新工具漏注册即红
         val expectedToolsets = listOf(
-            "RenderSqlTool", "SchemaContextTool", "ExplainTool",
-            "RenderLogsTool", "CheckSqlTool", "RollbackPlanTool", "PerfAdviceTool",
-            "CrudSqlTool", "ReverseSqlTool", "MapperCheckTool",
+            "SqlVisualizerRenderSqlTool", "SqlVisualizerSchemaContextTool", "SqlVisualizerExplainTool",
+            "SqlVisualizerRenderLogsTool", "SqlVisualizerCheckSqlTool", "SqlVisualizerRollbackPlanTool", "SqlVisualizerPerfAdviceTool",
+            "SqlVisualizerCrudSqlTool", "SqlVisualizerReverseSqlTool", "SqlVisualizerMapperCheckTool",
         )
         val missing = expectedToolsets.filter { !mcpXml.contains("cn.song.mybatisplus.visualizer.mcp.$it") }
         assertHolds(

@@ -109,7 +109,7 @@ class McpConfigurable : Configurable {
 
     /** 复选框文案：工具名 + 简述（双语，键按工具名尾段派生）。 */
     private fun checkBoxText(toolName: String): String {
-        val descKey = "settings.mcp.tool.desc." + toolName.removePrefix("mpsv_").replace("_", "")
+        val descKey = "settings.mcp.tool.desc." + toolName.removePrefix("sqlv_").replace("_", "")
         return toolName + " — " + MpSqlVisualizerBundle.message(descKey)
     }
 
