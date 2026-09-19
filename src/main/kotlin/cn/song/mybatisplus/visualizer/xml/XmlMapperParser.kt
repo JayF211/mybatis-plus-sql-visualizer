@@ -2,11 +2,6 @@ package cn.song.mybatisplus.visualizer.xml
 
 import org.w3c.dom.Element
 import org.w3c.dom.Node
-import org.xml.sax.EntityResolver
-import org.xml.sax.InputSource
-import java.io.StringReader
-import javax.xml.XMLConstants
-import javax.xml.parsers.DocumentBuilderFactory
 
 /** 语句类型（mapper 文件中的 select/insert/update/delete 元素）。 */
 enum class XmlStatementKind { SELECT, INSERT, UPDATE, DELETE }
@@ -43,8 +38,8 @@ data class XmlIncludeScan(
 )
 
 /**
- * mapper 文件解析器（T-M24-01）：JDK DOM 解析（secure-processing，禁 DTD/外部实体），
- * 提取 `<mapper>` 下的 select/insert/update/delete 语句。
+ * mapper 文件解析器（T-M24-01）：JDK DOM 解析（安全配置唯一落点 [SecureXml]——官方 DTD 放行、
+ * 外部实体拦死、内联子集膨胀预扫），提取 `<mapper>` 下的 select/insert/update/delete 语句。
  *
  * - 先收集 `<sql id>` 片段供 include 展开（[XmlIncludeExpander]，同文件）；
  * - 语句解析前展开 include（就地修改 DOM）；
@@ -181,9 +176,12 @@ class XmlMapperParser {
         .replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;")
         .replace("\n", "&#10;").replace("\r", "&#13;").replace("\t", "&#9;")
 
-    /** 解析 XML 文本为 DOM（安全配置：禁 DTD/外部实体）。注解 `<script>` 等片段解析复用（T-M25-02）。 */
+    /**
+     * 解析 XML 文本为 DOM（安全配置见 [SecureXml]：T-XDH-01 配置收敛 + T-XDH-03 内联 DTD 膨胀预扫）。
+     * 注解 `<script>` 等片段解析复用（T-M25-02）。
+     */
     internal fun parseDocument(fileText: String): org.w3c.dom.Document =
-        runCatching { newDocumentBuilder().parse(InputSource(StringReader(fileText))) }
+        runCatching { SecureXml.parse(fileText) }
             .getOrElse { throw XmlParseException("XML 解析失败：${it.message}") }
 
     private fun childElements(element: Element): List<Element> {
@@ -200,27 +198,6 @@ class XmlMapperParser {
         "insert" -> XmlStatementKind.INSERT
         "update" -> XmlStatementKind.UPDATE
         else -> XmlStatementKind.DELETE
-    }
-
-    private fun newDocumentBuilder() = DocumentBuilderFactory.newInstance().apply {
-        setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)
-        // T-M25.1（用户实测）：**允许 DOCTYPE 声明**——MyBatis mapper 常见官方 DTD 声明
-        // （<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" ...>），此前禁 DOCTYPE
-        // 直接拒绝这类文件（「不允许使用 DOCTYPE」）。XXE 防护改由三重组合承担：
-        // ① 禁外部实体（external-general/parameter-entities=false）——外部实体引用（SYSTEM）
-        //    解析为空串（实测不抛异常、不注入外部文件内容）；
-        // ② 实体引用展开（isExpandEntityReferences=true）——**内部实体**（DOCTYPE 内部子集
-        //    定义的 `&name;`）正常展开（实测：外部实体不受影响仍为空）；
-        // ③ accessExternalDTD="all" 仅放行 DOCTYPE 的解析尝试，实际 DTD 读取被下方
-        //    EntityResolver 拦截为空（不联网，MyBatis 自身解析器同样用 EntityResolver 映射 DTD）。
-        runCatching { setFeature("http://apache.org/xml/features/disallow-doctype-decl", false) }
-        runCatching { setFeature("http://xml.org/sax/features/external-general-entities", false) }
-        runCatching { setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
-        isXIncludeAware = false
-        isExpandEntityReferences = true
-        setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "all")
-    }.newDocumentBuilder().apply {
-        setEntityResolver(EntityResolver { _, _ -> InputSource(StringReader("")) })
     }
 
     companion object {
