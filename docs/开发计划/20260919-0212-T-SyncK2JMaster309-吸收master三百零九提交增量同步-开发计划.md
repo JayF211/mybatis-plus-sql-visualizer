@@ -1,7 +1,7 @@
 # T-SyncK2JMaster309 开发计划——master 9def321..550b72e 增量同步
 
 > 立项日期：2026-09-19　分支：feature/kotlin-to-java（worktree `mybatis-plus-sql-visualizer-kotlin-to-java`）
-> 同步源：**本地 master 550b72e**（增量范围 `git diff 9def321..550b72e`，309 提交，503 文件：生产 157 件 +14343/-851、测试 165 件 +19020/-349、docs 140 件、构建/资源/杂项 41 件；master 侧零删除；master 侧 T-TailSweep Wave1/Wave2 已收官在 HEAD，登记表滞留条目均过期，锚点仍钉 550b72e 快照防并行合流漂移）
+> 同步源：**本地 master ec584e2**（原计划锚点 550b72e/309 提交，实施中途 master 又前进 39 提交且测试树已按其直取，故锚点改钉 ec584e2——总范围 `git diff 9def321..ec584e2`，**348 提交**；§3 量化矩阵保留原 550b72e 口径，实际落盘见 §8）
 > 上轮收官：T-SyncK2JMaster176（0d75687，全量 testShards 4286/0/0/6 绿 + buildPlugin 出包 2026.9.18-beta.3 + verifyGate 三目标 Compatible，锚点 9def321）
 > 用户指示：同步功能、**不合并分支**（方案A手工移植不变）；**先落本计划文件再实施**。
 
@@ -121,13 +121,63 @@ docs 下 140 件（开发计划 88、memory-archive 22、验收文档 9、调研
 
 ## 7. 验收标准
 
-1. 全量测试 0 失败（基线 4286 → 预期 ≈5117±，套件数与 master 同源核对；agent 子项目独立口径全绿）；
+1. 全量测试 0 失败（**实测 5183/0/0/6 绿**，基线 4286；另 testDatabase 10/0/0/0 绿）；
 2. buildPlugin 成功出包（**2026.9.18**，含内嵌 agent jar 含 premain 入口）；verifyPlugin 243/253/262 三目标 Compatible；
 3. k2j 自有行零丢失：CHANGELOG/MEMORY/变更记录/build.gradle.kts/buildSrc 两侧集合校验通过；
-4. .port-sync 锚点 = 550b72e（note 字段同步重写为本轮记录）；
+4. .port-sync 锚点 = **ec584e2**（note 字段同步重写为本轮记录）；
 5. plugin.xml 活引用全部可达（mcp/premain/方言推断注册）；bundle parity 守卫绿；反射入口（DataSourceUrlProbe）已登记 PlatformSignatureCrossVersionTest。
 
 ## 8. 实施记录
 
-提交链（滚动回填）：
-- （实施时回填）
+**锚点变更说明**：原计划锚点钉 master 550b72e（309 提交）。实施中途发现 master 又前进 39 提交至
+**ec584e2**（T-TailSweep2 真引擎语义对照集 G1 + T-FS-04~09 + T-TS-FixA/FixC），而测试树直取已含这
+39 提交的测试内容——为保持测试与生产语义一致，本轮把 post-anchor 生产增量一并补移，**锚点改钉
+ec584e2**（同步范围 348 提交）。§3 矩阵中 550b72e 的量化口径保留（那是原计划基线），实际落盘以本节为准。
+
+提交链：
+- `ac68640` C1 立项计划
+- `f3eab71` C2 构建链：buildSrc 约定插件整包引入（k2j 此前无 buildSrc）+ 根构建重写为 master 薄根形态
+  （1090→229 行）并回填 k2j 自有三块（test kotlin srcDir / -parameters / Lombok 注释）+ mcpStub 主语言
+  适配（桩产物挂 compileJava.classpath）+ gradle.properties 2026.9.18 + libs.versions.toml union（补
+  snakeyaml 保 lombok）+ sub-projects 12 件/database-lab 4 件/dev-support 5 件/.run/.gitignore 直取
+- `f54de33` C3 生产 Wave1 低层：21 新建翻译 + 21 增量（util/xml/psi/sql/execute/model/generator/reverse）
+- `9b925f6` C4 生产 Wave2：log 链 7 新 + premain 2 新 + mcp 22 新（含 McpConfigurable）+ mcpStub 4 直取
+  + log/agent 4 增量 + config 8 增量 + SqlLogToolWindowFactory.java 直改
+- `90d2edb` C5 生产 Wave3：ui/actions/onboarding/update 12 新 + ui/highlight/diagram/converter/feedback
+  30 增量 + plugin.xml/mcp-optional.xml/bundle/update 双 JSON/marketplace 资源 union
+- `c2c465b` C6 测试移植（前半）：152 件直取 + 11 件 .java 增量合并 + 3 Java 直取 + 1 资源 +
+  互操作机械适配（具名实参→位置实参、object→INSTANCE、顶层函数→XxxKt 门面等 2102 个编译错误收口）
+- `ae87309` C6 测试移植（收口）：181 运行期失败清账——NativeDatabaseDiagramSupport 分层（Community
+  可加载性，139 例同源）+ 9 件守卫类扫描根适配（16 例）+ 12 项生产移植偏差修正（方言控件漏赋值/
+  空安全分支丢失/两处模态弹窗改轻通知/MockObject toString/JUnit3 合成方法坑等）
+- `e360c1c` C7 文档同步：155 件直取 + 四册 union（k2j 台账行 15/15 byte-exact 回补）
+- （本提交）C8 收官：.port-sync 锚点推进 ec584e2 + note 重写 + 还原沙盒临时行 + 本节回填
+
+门禁读数（收官实测）：
+- 全量 **testShards 5183/0/0/6 绿**（3 分片 135.5s / 161.5s / 141.9s；基线 4286 → 5183）
+- **testDatabase 10/0/0/0 绿**（DataSourceSelectorIntegration 5 / DbDriverPipeline 2 / DbConsoleIntegration 1 /
+  ExecDocGateIntegration 1 / HeavyNativeDatabaseDiagramJoinChain 1）
+- **buildPlugin 出包 2026.9.18**（6.56MB，含内嵌 `agent/mps-sql-agent.jar` + mcp-optional.xml + plugin.xml）
+- **verifyGate 三目标 Compatible**：243 = 3 for-removal + 10 dep + 10 exp；253 = 5 for-removal + 13 dep + 10 exp；
+  262 = 6 for-removal + 66 dep + 10 exp。被标记的弃用 API（OSProcessUtil/updateActionsImmediately/
+  submitTransactionLater/createTextAttributesKey/Disposer.isDisposed）在 master 与 k2j 的用量**逐项相同**
+  （1/2/1/3/3 文件），无翻译引入的 API 漂移。
+
+实施偏离与发现（供下轮参考）：
+1. **锚点中途改钉**（见上）——master 前进 39 提交，测试树已含其内容；若只做 550b72e 会留测试-生产错位。
+2. **NativeDatabaseDiagramSupport 分层**：Java 字节码在 Community（无 database 插件）下类链接期即需解析
+   DB 类型，整类加载失败且异常抛在调用方帧（master 的 Kotlin 字节码在该点不需解析——`-Xlog:class+load`
+   对照实证 master 加载成功且零 DasObject 解析）。故把 DB 耦合实现下沉嵌套类 `DbCoupled`，外层类常量池零
+   DB 引用。**这是 k2j 独有的结构性适配**，master 无对应形态，下轮改该类时勿"修正"回单类。
+3. **方言控件漏赋值（既有移植偏差，本轮由测试暴露）**：`ProjectPluginSettingsConfigurable.dialectCombo`
+   从未赋值 → 方言覆盖功能实际是哑的（isModified 永不识别、apply 永不写回）；测试此前全死在 NPE 上，
+   等于该功能自移植起从未被验证过。同类"builder 返回值直传不赋值"模式全仓已 grep 确认仅此一处。
+4. **守卫类适配口径**（9 件）：扫描根 `src/main/kotlin`→`src/main/java`、`.kt`→`.java`；Kotlin 专有判据
+   改写为 Java 等价形态（`init {}`→实例初始化块+构造器体、companion 常量→`static final`、
+   `object` 单例→私有构造器工具类、`data class`→独立文件）；**其中 3 处按 Java 语义扩展了判据**
+   （无初值字段构造期被读、三目真分支计入枚举产出点、模态判据收编尾随 lambda 形态），已在各文件内注释。
+5. **McpScopeSourceScanTest 曾静默假绿**：master 版扫 `src/main/kotlin` 在 k2j 命中 0 文件、断言恒真——
+   已随守卫批次一并适配（该类不在原 8 件清单内，属本轮额外发现）。
+6. 测试幻影用例：零参 lambda 内联在测试方法体内生成 `<测试方法名>$lambda$0()` 私有静态方法，JUnit3
+   按「名字 test 开头 + 零参」判为测试方法并报非 public——用例数 5184→5183 即此（已抽 `noopStateChange`
+   工厂）。同文件带参 lambda 因参数数非零不触发。

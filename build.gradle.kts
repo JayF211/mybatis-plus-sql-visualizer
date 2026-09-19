@@ -174,10 +174,6 @@ intellijPlatform {
     // 的沙盒/索引互锁；常规态用默认沙盒。
     if (gifRecord) {
         sandboxContainer = layout.buildDirectory.dir("MPSV-GifFresh")
-    } else {
-        // T-SyncK2JMaster309 实施期临时隔离沙盒（并行登记表 T-TS-* 在册，勿互踩；
-        // 收官提交前还原为无条件默认沙盒——任务专属沙盒名禁随提交入库，T-ListParamCollect 先例）。
-        sandboxContainer = layout.buildDirectory.dir("test-sandbox-k2jsync309")
     }
     // 注：并行会话临时隔离请在本块内临时加自己的 sandboxContainer（用后还原并立即提交），
     // 勿让任务专属沙盒名随提交入库（T-ListParamCollect/T-HqlInhCols 两轮实证）。
