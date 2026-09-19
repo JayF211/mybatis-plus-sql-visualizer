@@ -838,15 +838,23 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * （[executeSql]/[executeAdhocSql] 的 `ExecuteConfirmMessages.build` → `UnboundedWriteDetector.detect`）
      * 共用同一次解析——命中判据是**同文本内容全等**，故此处**依赖两条前提**：
      * ①确认阶段确实以同一文本走了一遍 `detect`（UPDATE/DELETE 必经 DML 二次确认，成立；
-     * `executeAdhocSql(dmlConfirmed = true)` 的回滚弹窗路径不走确认弹窗，退化为本链自解析一次）；
+     * **豁免参数路径** `executeAdhocSql(dmlConfirmed = true)` 不走确认弹窗、退化为本链自解析一次——
+     * 但该参数**现行生产无调用点**（`RollbackSqlDialog.executeRollback` 未传它，回滚弹窗同样走确认弹窗），
+     * 仅由测试覆盖，故此退化目前只存在于测试路径）；
      * ②[SqlCommentStripper.strip] 幂等——此处传入的是 `strip(sql)`，而 `detect` 内部键是 `strip(sql)`、
      * `generate` 内部还会再剥一次（键成 `strip(strip(sql))`），幂等成立才落回同一槽。
-     * 两条前提任一失效的后果**只是多一次解析**（槽未命中即重解析），不影响回滚判定正确性；
-     * 前提由 `SqlPreviewPanelRollbackParseShapeTest` 逐条钉住（含「槽未命中必重解析」的探针自证）。
+     * 失效后果分档：**前提①失效只是多一次解析**（槽未命中即重解析同一文本，结果不变）；
+     * **前提②失效则不同**——命中路径用单剥文本的 AST、未命中路径解析双剥文本，两条路径输入文本不同、
+     * 结果可能随缓存命中状态而变（故由 `SqlPreviewPanelRollbackParseShapeTest` 的「独立 vs 共享逐字节一致」兜底）。
+     * 前提由该测试类逐条钉住（含「槽未命中必重解析」的探针自证）。
      *
      * 面板侧若需脱离该隐式前提，出口是 `RollbackSqlGenerator.generateFromParsedStatements(cleaned, statements, pk)`；
-     * 但确认阶段的 AST 不外传（`detect` 只回 findings），真正显式传递须改 `execute/` 包的两个共享 API，
-     * 收益仅是形式统一（T-PS5-02 的收益已由单槽全数拿到）——T-ST-03 判定「改动面大于收益」不实施。
+     * **T-ST-03 独立复核订正**：理由原写「真正显式传递须改 `execute/` 包的两个共享 API」——不是唯一路线：
+     * 面板侧**自取槽变体**（`parseStatementsShared(cleaned)` → `generateFromParsedStatements`）从同一个 `sql`
+     * 变量算槽键，能**整条换掉前提②**（由 `strip` 的纯函数性保证，与幂等无关），且两个 API 都是 `internal`、
+     * 与 ui 包同 Gradle 模块，无需改签名。**但结论仍是不实施**：工具栏路径 [showRollbackSql] 无前置 detect、
+     * 生产仍按双剥文本出结果，幂等前提**换不掉**；且收益为零性能/零语义（T-PS5-02 的收益已由单槽全数拿到），
+     * 属计划明标的 P4 可选件。
      */
     private fun registerRollbackSnapshotIfNeeded(
         sql: String,

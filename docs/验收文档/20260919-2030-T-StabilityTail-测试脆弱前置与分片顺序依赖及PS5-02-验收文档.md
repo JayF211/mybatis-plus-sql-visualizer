@@ -161,6 +161,10 @@ wrapper 形态同样登记；②复位判定改「绑定承接名」（`hasBound
 顶层类都只有 1 个**，故文件级判定的残留当前无实际影响。另登记：`restoreCaptureStateForTest` 是 3/15 字段的
 **部分复位**，已从令牌排除；自证补了 `testSources()` 非空断言（否则路径解析失败会空屏绿）。
 
+### T-ST-03 复核订正
+
+**T-ST-03 独立复核订正（2026-09-19）**：原理由③「改成显式传递只是把前提从同文本命中挪成同文本命中」**不成立**——存在**面板侧自取槽变体**（`parseStatementsShared(cleaned)` → `generateFromParsedStatements`）从同一个 `sql` 变量算槽键，能**整条换掉 strip 幂等前提**（由 `strip` 纯函数性保证），且两个 API 都是 `internal`、与 ui 包同 Gradle 模块、无需改签名。**但「不实施」这个决定仍成立**：工具栏 `showRollbackSql()`（`:737`）无前置 detect、生产仍按双剥文本出结果，幂等前提换不掉；且收益为零性能/零语义、属 P4 可选件。另订正理由②的**归因**：`dmlConfirmed = true` **现行生产无调用点**（`RollbackSqlDialog.executeRollback` 未传它，回滚弹窗同样走确认弹窗），仅测试覆盖，故「不走确认弹窗」是测试路径而非生产路径；并订正 KDoc「失效后果只是多一次解析」对前提②偏宽（前提②失效会使命中路径用单剥 AST、miss 路径解析双剥文本，输入文本不同）。
+
 ## 四、门禁复跑
 
 并轨后先 `rm -rf build/classes build/kotlin` 再跑。读数链条（**三个数字别混**）：
