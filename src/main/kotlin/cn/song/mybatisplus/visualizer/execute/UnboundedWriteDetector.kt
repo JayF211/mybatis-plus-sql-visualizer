@@ -37,6 +37,9 @@ import net.sf.jsqlparser.statement.update.Update
  * 消费者限定两处（KDoc 契约）：execute/LogToSqlPanel 确认流、sql/rollback/RollbackSqlGenerator
  * 弱谓词警示；MCP 侧（McpSelectGuard）维持 SELECT 白名单不动，不接入本探测器。
  *
+ * T-PS5-02：本对象同时承载**确认流/回滚链共享解析槽**（[parseStatementsShared]）——两条链对
+ * 同一 SQL 文本的解析由「各一次」收敛为「共一次」，AST 只读共享（纪律见字段 KDoc）。
+ *
  * 零 PSI / 零 IDE 依赖（仅 JSqlParser + SqlCommentStripper），普通 JUnit 可直接覆盖。
  */
 object UnboundedWriteDetector {
@@ -64,18 +67,69 @@ object UnboundedWriteDetector {
     /** detail 片段长度上限（日志/测试定位用，非用户文案）。 */
     private const val DETAIL_LIMIT = 60
 
+    /**
+     * T-PS5-02：AST 单槽共享缓存——确认流（本探测器 [detect]）与回滚链
+     * （[cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator.generate]）对**同一 SQL 文本**
+     * 各解析一次（一次大 DML 点击最坏 4 次解析、3 次在 EDT）；单槽命中即复用同一次解析产物，
+     * 最坏路径的 3 次降为 1 次，且**零调用点改动**（两条链都以「文本」为输入，槽位天然对上）。
+     *
+     * 命中判据与 T-PS5-01 同款三重快判 + 内容全等收口（引用相等 → 长度 → 哈希 → 全等）；
+     * 单槽持有上次解析文本引用，上界=一条 SQL 文本。
+     *
+     * **AST 只读纪律（硬约束）**：两处消费者（[detect] 的 [analyzeWhere]、`RollbackSqlGenerator`
+     * 的渲染链）经 grep 核实均为纯遍历——无 `set…`/`with…` 写节点调用，故共享同一 AST 实例不会
+     * 互相污染；后续任何一方引入节点改写必须先脱离本槽（改为独立解析）。
+     */
+    private class AstSlot(val cleaned: String, val statements: List<net.sf.jsqlparser.statement.Statement>)
+
+    @Volatile
+    private var astSlot: AstSlot? = null
+
+    /**
+     * T-PS5-02 测试缝：AST 解析器（默认 JSqlParser）。生产链路勿改；测试注入替身以断言
+     * 「确认流 → 回滚链只解析一次」。
+     */
+    internal var parseStatementsForTest: (String) -> List<net.sf.jsqlparser.statement.Statement> =
+        { CCJSqlParserUtil.parseStatements(it) }
+
+    /** T-PS5-02 测试缝：清空单槽（用例隔离；生产链路无调用点）。 */
+    internal fun clearAstSlotForTest() {
+        astSlot = null
+    }
+
+    /**
+     * T-PS5-02：共享解析入口——命中单槽直接复用，未命中解析后入槽。**解析失败原样抛出**
+     * （fail 语义由调用方决定：[detect] 返回 PARSE_FAILED，RollbackSqlGenerator 返回 UNABLE）。
+     */
+    internal fun parseStatementsShared(cleaned: String): List<net.sf.jsqlparser.statement.Statement> {
+        astSlot?.let { slot ->
+            if (slot.cleaned === cleaned) return slot.statements
+            if (slot.cleaned.length == cleaned.length && slot.cleaned.hashCode() == cleaned.hashCode() &&
+                slot.cleaned == cleaned
+            ) {
+                return slot.statements
+            }
+        }
+        val statements = parseStatementsForTest(cleaned)
+        astSlot = AstSlot(cleaned, statements)
+        return statements
+    }
+
     /** LIKE 纯通配：至少一个 `%`，且只含 `%`/`_`。 */
     private val LIKE_WILDCARD_REGEX = Regex("[%_]*%[%_]*")
 
     /**
      * 探测 SQL 文本（可含注释与多条语句）。UPDATE/DELETE 逐条判定；INSERT 不适用（忽略）；
      * 解析失败整体 fail closed 返回 [FindingKind.PARSE_FAILED]。
+     *
+     * T-PS5-02：解析走 [parseStatementsShared] 单槽——同文本紧随其后的回滚链
+     * （RollbackSqlGenerator.generate）复用本产物，不二次解析。
      */
     fun detect(sql: String): WriteRisk {
         val cleaned = SqlCommentStripper.strip(sql)
         if (cleaned.isBlank()) return WriteRisk(emptyList())
         val statements = try {
-            CCJSqlParserUtil.parseStatements(cleaned)
+            parseStatementsShared(cleaned)
         } catch (e: Exception) {
             return WriteRisk(listOf(Finding(FindingKind.PARSE_FAILED, e.message?.take(DETAIL_LIMIT) ?: "")))
         }

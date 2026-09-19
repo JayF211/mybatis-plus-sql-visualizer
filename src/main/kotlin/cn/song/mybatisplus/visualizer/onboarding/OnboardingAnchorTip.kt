@@ -10,6 +10,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VfsUtil
+import com.intellij.util.messages.MessageBusConnection
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -34,15 +35,18 @@ import java.util.concurrent.atomic.AtomicBoolean
 class OnboardingAnchorTip : ProjectActivity {
 
     override suspend fun execute(project: Project) {
-        // 连接绑定 project（Disposable），项目关闭自动注销——SqlPreviewService 同款形态
-        project.messageBus.connect(project).subscribe(
+        // 连接绑定 project（Disposable），项目关闭自动注销——SqlPreviewService 同款形态。
+        // T-PS5-15：句柄留用——引导**弹过即注销**（一次性语义下监听器已无使命；此前连接残留至
+        // 项目关闭，此后每次文件打开仍付 shouldProbe/isProbeTarget 两次布尔判断）。
+        val connection = project.messageBus.connect(project)
+        connection.subscribe(
             com.intellij.openapi.fileEditor.FileEditorManagerListener.FILE_EDITOR_MANAGER,
             object : com.intellij.openapi.fileEditor.FileEditorManagerListener {
                 override fun fileOpened(
                     source: com.intellij.openapi.fileEditor.FileEditorManager,
                     file: VirtualFile,
                 ) {
-                    onFileOpened(project, file)
+                    onFileOpened(project, file, connection)
                 }
             },
         )
@@ -63,15 +67,17 @@ class OnboardingAnchorTip : ProjectActivity {
         /**
          * 文件打开入口（EDT 回调）：守卫全走纯函数 [shouldProbe] / [isProbeTarget]，
          * 命中才投一个后台扫描（低频 + 廉价，热路径零涉足）。
+         *
+         * @param connection 总线连接句柄（弹过后注销；null = 无连接上下文，仅测试直调）
          */
-        internal fun onFileOpened(project: Project, file: VirtualFile) {
+        internal fun onFileOpened(project: Project, file: VirtualFile, connection: MessageBusConnection? = null) {
             val settings = PluginSettings.getInstance().state
             if (!shouldProbe(settings.onboardingAnchorTipEnabled, settings.onboardingAnchorTipShown)) return
             if (!isProbeTarget(file.name)) return
             if (!probing.compareAndSet(false, true)) return
             ApplicationManager.getApplication().executeOnPooledThread {
                 try {
-                    probeFile(project, file)
+                    probeFile(project, file, connection)
                 } finally {
                     probing.set(false)
                 }
@@ -79,7 +85,7 @@ class OnboardingAnchorTip : ProjectActivity {
         }
 
         /** 后台扫描：读文本（ReadAction）→ 启发式命中 → 领取一次性展示权 → 弹通知。 */
-        private fun probeFile(project: Project, file: VirtualFile) {
+        private fun probeFile(project: Project, file: VirtualFile, connection: MessageBusConnection?) {
             val text = runCatching {
                 @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
                 ReadAction.compute<String, Throwable> {
@@ -89,6 +95,9 @@ class OnboardingAnchorTip : ProjectActivity {
             if (!anchorHintHit(file.name, text)) return
             if (project.isDisposed) return
             if (!tryClaimAndMark()) return
+            // T-PS5-15：一次性展示权已领取（单飞点）→ 监听器完成使命，注销（幂等；项目关闭路径
+            // 由 connect(project) 的 disposable 绑定兜底，语义不变）
+            connection?.disconnect()
             if (ApplicationManager.getApplication().isUnitTestMode) return // headless：持久化已置位，通知跳过
             ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed) return@invokeLater

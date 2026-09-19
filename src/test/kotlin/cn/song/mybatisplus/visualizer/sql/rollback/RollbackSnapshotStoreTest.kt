@@ -92,4 +92,31 @@ class RollbackSnapshotStoreTest : BasePlatformTestCase() {
         store.clearForTest()
         assertFalse(store.markRollbackExecuted(entry))
     }
+
+    // ---------- T-PS5-10：sqlIndex 随 LRU 有界 ----------
+
+    fun testSqlIndex随Lru有界() {
+        val store = store()
+        // 长会话模拟：远超容量的 distinct DML——此前 sqlIndex 只增不减（无上界）
+        for (i in 0 until RollbackSnapshotStore.MAX_ENTRIES * 3) {
+            store.register("DELETE FROM t_$i WHERE id = 1", "t_$i", null)
+        }
+        assertEquals("条目 LRU 容量", RollbackSnapshotStore.MAX_ENTRIES, store.size())
+        assertEquals(
+            "指纹索引随 LRU 淘汰同步收缩（有界）",
+            RollbackSnapshotStore.MAX_ENTRIES,
+            store.sqlIndexSizeForTest(),
+        )
+        // 淘汰后取值 null 行为不变
+        assertNull(store.findBySql("DELETE FROM t_0 WHERE id = 1"))
+        assertNotNull(store.findBySql("DELETE FROM t_${RollbackSnapshotStore.MAX_ENTRIES * 3 - 1} WHERE id = 1"))
+    }
+
+    fun test重复执行同语句索引不膨胀() {
+        val store = store()
+        repeat(5) { store.register("UPDATE t SET a = $it WHERE id = 1", "t", null) }
+        repeat(5) { store.register("UPDATE t SET a = 9 WHERE id = 1", "t", null) }
+        assertEquals("同指纹覆盖写：索引条目 = distinct 指纹数", 6, store.sqlIndexSizeForTest())
+        assertEquals("条目数 = distinct 指纹数（旧条目按指纹移除）", 6, store.size())
+    }
 }

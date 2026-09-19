@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiManager
 import com.intellij.psi.search.FileTypeIndex
 import com.intellij.psi.search.GlobalSearchScope
@@ -40,6 +41,11 @@ import com.intellij.psi.xml.XmlFile
  *  - 目标文件未落盘（新建未保存）时不在索引内 → 该 refid 降级（预览不中断）。
  *
  * 线程：内部索引查询与 PSI 只读均包在 [ReadAction] 内（EDT 与后台线程均可直调）；任何异常按空表降级，绝不抛出。
+ *
+ * T-PS5-05：片段表加**单槽缓存**（项目弱引用 + 已覆盖 targets + TTL 5s + 索引文件 isValid 校验），
+ * 同文件多次渲染（每次渲染都重跑本解析）不再重复全项目索引遍历；`scan.dottedRefIds` 为空时的
+ * 零成本短路（见 [resolve] 第 2 步）原样保留。**禁引 PsiTreeChangeListener/EditorFactoryListener**
+ * ——红线族维持 0，失效只走 TTL 与 isValid 两条廉价路径。
  */
 object XmlCrossNsFragmentResolver {
 
@@ -95,10 +101,11 @@ object XmlCrossNsFragmentResolver {
 
     /** 项目内 mapper XML 片段表（仅 namespace 命中 [targets] 者；PSI 预筛后按文本做 DOM 片段收集）。 */
     private fun mapperFragments(project: Project, targets: Set<String>): List<XmlMapperFragments> {
+        cachedFragments(project, targets)?.let { return it }
         val xmlFileType = FileTypeManager.getInstance().getStdFileType("XML")
         val parser = XmlMapperParser()
-        return FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project))
-            .asSequence()
+        val indexed = FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project)).toList()
+        val scanned = indexed.asSequence()
             .filter { it.name.endsWith(".xml", ignoreCase = true) }
             .mapNotNull { virtualFile -> PsiManager.getInstance(project).findFile(virtualFile) as? XmlFile }
             .filter { it.rootTag?.name == "mapper" }
@@ -112,5 +119,80 @@ object XmlCrossNsFragmentResolver {
                 namespace != null && namespace in targets
             }
             .toList()
+        // T-PS5-05：入槽 = 本次 targets 的收集结果（**含 miss**：collected 覆盖请求集，
+        // 未出现在 byNamespace 即「该 namespace 项目内无片段」），DOM 收集仍只对目标 namespace
+        // 做——首跑成本与改动前一致，无「为填缓存而全量解析」的额外开销。
+        storeFragmentCache(project, targets, scanned, indexed)
+        return scanned
+    }
+
+    // ------------------------------------------------------------------
+    // T-PS5-05：refid → 片段表单槽缓存
+    // ------------------------------------------------------------------
+
+    /**
+     * 缓存条目：项目弱引用 + 已尝试收集的 namespace 集（miss 也覆盖）+ `namespace → 片段表`
+     * + 参与扫描的索引文件（[VirtualFile.isValid] 兜底删除/改名）+ 时间戳。
+     */
+    private class FragmentSlot(
+        val project: java.lang.ref.WeakReference<Project>,
+        val collected: Set<String>,
+        val byNamespace: Map<String, XmlMapperFragments>,
+        val files: List<VirtualFile>,
+        val atMs: Long,
+    )
+
+    /**
+     * T-PS5-05：缓存 TTL 上界（毫秒）——mapper 片段新增/改名后至多一个窗口内渲染按旧片段表
+     * （删除由 [VirtualFile.isValid] 即时兜底）。测试注入短窗驱动过期语义。
+     */
+    internal var fragmentCacheTtlMs: Long = 5_000L
+
+    /** T-PS5-05 测试缝：时间源（默认系统时钟）。 */
+    internal var clockMs: () -> Long = { System.currentTimeMillis() }
+
+    /** T-PS5-05 测试缝：索引全扫计数（断言命中路径零遍历）。 */
+    internal val indexScanCount = java.util.concurrent.atomic.AtomicInteger(0)
+
+    @Volatile
+    private var fragmentSlot: FragmentSlot? = null
+
+    /** T-PS5-05 测试缝：清空片段缓存（用例隔离；生产链路无调用点）。 */
+    internal fun clearFragmentCacheForTest() {
+        fragmentSlot = null
+    }
+
+    /**
+     * T-PS5-05：命中判定——项目身份一致、TTL 内、参与扫描的文件全部仍有效、且本次 [targets]
+     * 已被上次扫描覆盖（**miss 也算覆盖**：上次已尝试收集而 `byNamespace` 无该键 = 项目内无
+     * 对应片段，不必重扫）。任一条件不满足 → 返回 null 走全扫。
+     */
+    private fun cachedFragments(project: Project, targets: Set<String>): List<XmlMapperFragments>? {
+        val slot = fragmentSlot ?: return null
+        if (slot.project.get() !== project) return null
+        if (clockMs() - slot.atMs > fragmentCacheTtlMs) return null
+        if (slot.files.any { !it.isValid }) return null
+        if (!slot.collected.containsAll(targets)) return null
+        return targets.mapNotNull { slot.byNamespace[it] }
+    }
+
+    /** 扫描结果入槽（[targets] 全量记为已覆盖；[scanned] 只含真正收集到片段的目标 namespace）。 */
+    private fun storeFragmentCache(
+        project: Project,
+        targets: Set<String>,
+        scanned: List<XmlMapperFragments>,
+        indexed: List<VirtualFile>,
+    ) {
+        indexScanCount.incrementAndGet()
+        val byNamespace = scanned
+            .filter { !it.namespace.isNullOrEmpty() }
+            .associateBy { it.namespace.orEmpty() }
+        fragmentSlot = FragmentSlot(
+            java.lang.ref.WeakReference(project),
+            targets.toSet(),
+            byNamespace,
+            indexed,
+            clockMs(),
+        )
     }
 }
