@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.gutter
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.psi.PsiSnapshot
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlPreviewService
 import com.intellij.psi.PsiIdentifier
 import com.intellij.psi.PsiJavaFile
@@ -9,6 +10,7 @@ import com.intellij.psi.PsiWhiteSpace
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
@@ -173,5 +175,64 @@ class StringSqlMethodGutterLineMarkerProviderTest : BasePlatformTestCase() {
         )
         val calls = JdbcTemplateSqlPreviewService.collectMethodCandidates(methodByName(file, "query"))
         assertTrue("参数传递形态（无可聚合 initializer）不应入候选", calls.isEmpty())
+    }
+
+    // ------------------------------------------------------------------
+    // T-PCP-02：跨线程候选收集的两段式快照校验
+    // ------------------------------------------------------------------
+
+    /** 文档整体重写（EDT 改文档标准形态：WriteCommandAction 内 setText）。 */
+    private fun rewriteDocument(text: String) {
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+            myFixture.editor.document.setText(text)
+        }
+    }
+
+    /**
+     * T-PCP-02：[validatedMethodRows] = 快照校验 + 候选/行文本预计算（池化块内调用）。
+     *
+     * 断言三态：未变更 → 候选与行文本与改造前一致；文档变更 → 判失效降级为空候选对
+     * （调用方按「未找到」如实降级，不算出错行号、不抛异常）；快照缺失 → 同样降级。
+     */
+    fun test快照校验_正常返回候选与行文本_文档变更后降级空候选() {
+        val file = javaFile(
+            """
+            public class Demo {
+                public java.util.List query(long userId) {
+                    String sql = "SELECT * FROM t WHERE id = :id";
+                    return jdbcTemplate.queryForList(sql);
+                }
+            }
+            """.trimIndent(),
+        )
+        val method = methodByName(file, "query")
+        val snapshot = PsiSnapshot.capture(method)
+        assertNotNull("EDT 捕获应产出方法快照", snapshot)
+
+        val (calls, rows) = validatedMethodRows(method, snapshot)
+        assertEquals("正常路径候选数不变", 1, calls.size)
+        assertEquals("候选方法名不变", "queryForList", calls[0].methodName)
+        assertEquals("行文本格式不变（方法名 + 第 N 行）", "queryForList（第 4 行）", rows[0].summary)
+        assertEquals("候选 SQL 文本不变", "SELECT * FROM t WHERE id = :id", rows[0].detail)
+
+        rewriteDocument(
+            """
+            public class Demo {
+                public java.util.List query(long userId) {
+                    int before = 1;
+                    String sql = "SELECT * FROM t WHERE id = :id";
+                    return jdbcTemplate.queryForList(sql);
+                }
+            }
+            """.trimIndent(),
+        )
+
+        val (callsAfter, rowsAfter) = validatedMethodRows(method, snapshot)
+        assertTrue(
+            "文档变更后应降级为空候选对（不收集、不算行号）",
+            callsAfter.isEmpty() && rowsAfter.isEmpty(),
+        )
+        val (callsNoSnapshot, rowsNoSnapshot) = validatedMethodRows(method, null)
+        assertTrue("快照缺失同样降级为空候选对", callsNoSnapshot.isEmpty() && rowsNoSnapshot.isEmpty())
     }
 }
