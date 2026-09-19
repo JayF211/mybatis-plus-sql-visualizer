@@ -20,6 +20,13 @@ package cn.song.mybatisplus.visualizer.util
  *    **批首限定 IF**：语句首 `IF` 无方言歧义（MySQL `IF()` 是函数不出现在语句首位）；
  *    裸 `BEGIN` 起头**不**并入——`BEGIN; …; COMMIT` 是 MySQL 事务语法，既有「无配对
  *    END 按顶层切分原样」保守承诺维持（形态良好的 T-SQL BEGIN 块已由上方块感知整段保护）；
+ *  - **DELIMITER 指令感知**（T-DelimiterAware / O-39）：`DELIMITER <token>` 行首指令把
+ *    语句界符由 `;` 切换为 `<token>`（`$$`/`//` 等多字符形态按整串匹配），直到下一条
+ *    `DELIMITER` 指令或文本结束；指令行本身**不作为独立语句产出**（界符 token 一并丢弃），
+ *    界符生效期内的顶层 `;` 不再切分（过程体内部 `;` 原样保留）。识别限定（对齐 MySQL
+ *    客户端语义 + 保守不吞）：①仅行首指令形态（行内前导仅空白）；②仅待切段为空时（语句
+ *    边界）——语句中间的 `DELIMITER` 词照旧按普通文本处理；③字符串/注释内不识别；
+ *    ④无参数 `DELIMITER` 复位为 `;`。识别无方言条件——文本层面判定，仅出现指令才切换。
  *  - 顶层 `;` 为界：界符本身丢弃、段 trim、空段跳过；无分号尾段非空视为一条（容错）。
  *
  * 纯函数零依赖，普通 JUnit 可直接覆盖。
@@ -31,6 +38,12 @@ object SqlStatementSplitter {
      * 限定 IF：语句首 IF 无方言歧义；裸 BEGIN 是 MySQL 事务形态不并入（见类注释）。
      */
     private val CONTROL_FLOW_BATCH_HEADS = setOf("IF")
+
+    /** 默认语句界符（MySQL 客户端 `DELIMITER` 指令可切换；无参数指令复位为此值）。 */
+    private const val DEFAULT_DELIMITER = ";"
+
+    /** `DELIMITER` 指令关键字（行首指令形态识别，大小写不敏感）。 */
+    private const val DELIMITER_DIRECTIVE = "DELIMITER"
 
     /** 标识符字符（BEGIN/END 词边界判定）：字母/数字/下划线/$/#。 */
     private fun isIdentifierChar(c: Char): Boolean =
@@ -61,6 +74,12 @@ object SqlStatementSplitter {
         // BEGIN/END 启用前视：见到 BEGIN 先看后方有无配对 END（保守启用）
         var beginModeEnabled = false
         var word = StringBuilder()
+        // 当前词的首字符下标与词起点处的缓冲长度（DELIMITER 指令的行首/语句边界判定用；
+        // word 非空时有效）
+        var wordStart = -1
+        var bufferLenAtWordStart = 0
+        // 当前生效的语句界符（T-DA-02：DELIMITER 指令切换；默认 `;`）
+        var delimiter = DEFAULT_DELIMITER
         var i = 0
 
         fun flushWord() {
@@ -116,6 +135,19 @@ object SqlStatementSplitter {
                     }
                     i++
                 }
+                // T-DA-02：自定义界符整串匹配——先于注释/引号/标识符分支（`$$` 的 `$` 是
+                // 标识符字符，须先命中；`//` 与块注释起始 `/*` 字符不同故与注释分支不冲突）
+                delimiter != DEFAULT_DELIMITER && sql.startsWith(delimiter, i) -> {
+                    flushWord()
+                    if (parenDepth == 0 && blockDepth == 0) {
+                        val part = sb.toString().trim()
+                        if (part.isNotEmpty()) parts += part
+                        sb.setLength(0)
+                    } else {
+                        sb.append(delimiter)
+                    }
+                    i += delimiter.length
+                }
                 c == '-' && next == '-' -> {
                     flushWord()
                     if (keepComments) sb.append(c)
@@ -142,7 +174,7 @@ object SqlStatementSplitter {
                 }
                 c == ';' -> {
                     flushWord()
-                    if (parenDepth == 0 && blockDepth == 0) {
+                    if (delimiter == DEFAULT_DELIMITER && parenDepth == 0 && blockDepth == 0) {
                         val part = sb.toString().trim()
                         if (part.isNotEmpty()) parts += part
                         sb.setLength(0)
@@ -164,23 +196,40 @@ object SqlStatementSplitter {
                     i++
                 }
                 isIdentifierChar(c) -> {
+                    if (word.isEmpty()) {
+                        wordStart = i
+                        bufferLenAtWordStart = sb.length
+                    }
                     word.append(c)
                     sb.append(c)
                     i++
                 }
                 else -> {
-                    // 非标识符定界符：词终结（BEGIN 前视在此触发）
-                    if (word.isNotEmpty() && word.toString().equals("BEGIN", ignoreCase = true) &&
+                    // 非标识符定界符：词终结（DELIMITER 指令 / BEGIN 前视在此触发）
+                    if (word.isNotEmpty() &&
+                        word.toString().equals(DELIMITER_DIRECTIVE, ignoreCase = true) &&
+                        c.isWhitespace() && isLineHead(sql, wordStart) &&
+                        sb.substring(0, bufferLenAtWordStart).isBlank()
+                    ) {
+                        // T-DA-02：行首 `DELIMITER <token>` 指令——切换界符并整行丢弃（不产出语句）
+                        word.setLength(0)
+                        sb.setLength(0)
+                        val directive = readDelimiterDirective(sql, i)
+                        delimiter = directive.first
+                        i = directive.second
+                    } else if (word.isNotEmpty() && word.toString().equals("BEGIN", ignoreCase = true) &&
                         !beginModeEnabled && hasMatchingEndAhead(sql, i)
                     ) {
                         beginModeEnabled = true
                         blockDepth = 1
                         word.setLength(0)
+                        sb.append(c)
+                        i++
                     } else {
                         flushWord()
+                        sb.append(c)
+                        i++
                     }
-                    sb.append(c)
-                    i++
                 }
             }
         }
@@ -238,9 +287,38 @@ object SqlStatementSplitter {
         return out
     }
 
+    /**
+     * 行首判定（T-DA-02）：`index` 之前到行首之间是否只有空白（无前导内容）。
+     * 对齐 MySQL 客户端语义——`DELIMITER` 只在行首起指令作用，行内出现按普通文本处理。
+     */
+    private fun isLineHead(sql: String, index: Int): Boolean {
+        var i = index - 1
+        while (i >= 0) {
+            val c = sql[i]
+            if (c == '\n') return true
+            if (!c.isWhitespace()) return false
+            i--
+        }
+        return true
+    }
+
+    /**
+     * 读取 `DELIMITER` 指令的界符 token（T-DA-02）：取指令所在行去除首尾空白后的首个
+     * 空白分隔词（对齐 MySQL 客户端「行余内容即界符」语义，行尾多余内容忽略）；空 token
+     * 复位为默认界符 `;`。
+     *
+     * @param from 指令关键字之后的第一个字符下标（调用点已确认此处为空白）
+     * @return Pair(界符 token, 指令行尾下标)——行尾下标指向 `\n` 或文本末尾（行本身整行丢弃）
+     */
+    private fun readDelimiterDirective(sql: String, from: Int): Pair<String, Int> {
+        var end = from
+        while (end < sql.length && sql[end] != '\n') end++
+        val token = sql.substring(from, end).trim().takeWhile { !it.isWhitespace() }
+        return (token.ifEmpty { DEFAULT_DELIMITER }) to end
+    }
+
     /** 段首有效关键字（跳过空白与 `--`/`/* */` 注释后的首个标识符词，大写；无则 null）。 */
-    private fun firstKeywordOf(part: String): String? {
-        var i = 0
+    private fun firstKeywordOf(part: String): String? {        var i = 0
         while (i < part.length) {
             val c = part[i]
             val next = part.getOrNull(i + 1)
