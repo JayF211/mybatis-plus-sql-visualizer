@@ -169,6 +169,10 @@ wrapper 形态同样登记；②复位判定改「绑定承接名」（`hasBound
 
 **T-ST-01 独立复核（2026-09-19，有条件通过 0 阻断 2 条件）**：①「语义不变」须限定为 **`before == null` 时**——`before != null` 分支下该断言**恒真**（项目服务是项目级单例，`getService` 已创建时必返回同一实例），连「clearAll 调了 getService」也测不出，属零信息而非变弱；可接受性依据＝**本用例 `before` 恒为 null**（已独立核实：`plugin.xml` 的 4 个 `postStartupActivity` 均无 `SqlPreviewService` 引用，`src/main` 所有该服务调用点均为用户动作触发），故强分支即实际执行路径、原意图完整保留。②三组先红后绿读数**不可复核**（`build/` 内本类只有绿 XML、无红跑痕迹），原理自洽但不构成可复核实证。③同类脆弱前置仍有残留（不在本任务写集）：`heavy/EntityClassFinderHeavyTest.kt:369-371`（首次 find 后直接断言 `tables == 1`、未先 clear）与 `:400`（`1 to 2`），同形、当前因 Heavy 无假红风险但未解耦。④补充边界：反向形态（`> 0`）**可能假绿**——`EntityResolver.cacheSize()` 是全局静态、片内跨类共享，邻居条目亦可通过，属「弱而不脆」、不可作承重证据。
 
+### 窗口可达性判定与处置
+
+**窗口可达性判定（2026-09-19，只读调研，平台源码穷举 + 本仓沙盒日志）——结论：真机不可达，6 处守卫不做**：①全平台 `setTemporarilyDisposed(true)` **唯一调用点**在 `ProjectManagerImpl.kt:348`（`closeProject` 的 light 分支），门是 `isLight = isUnitTestMode && 路径含 light_temp`，且方法标 `@TestOnly` → **真机 `isUnitTestMode==false` ⇒ 窗口永不出现**（三平台版本 2024.3.7.1/262/2026.2.1 逐字同形）；heavy 分支（真机项目）**不置**该 flag，生产关闭路径全走 heavy；真机存在的是**终态销毁窗口**（`DISPOSE_IN_PROGRESS`），抛点不同且与 `Disposer.dispose(project)` 同一写动作 → 实例随即销毁、毒化随实例进垃圾、**无读者**（本仓日志实证仅一条 WARN 且被吞）。②**原「5 文件 / 6 调用点」清单有两处错**：`LogStartupCapture:26` **不需设防**（postStartupActivity 在 `openProject` 返回前跑完、flag 先关），且**漏了** `ui/gutter/SqlGutterLineMarkerProvider.kt:174`（全仓 8 处取服务点里唯一零保护）。③**不做 ①**（盲目加守卫）：窗口是测试夹具专属（给生产代码加守卫＝让生产为测试让路）、守卫**不治本**（只挡毒化传播，留下的是泄漏的池线程本身——同一泄漏还在产出 3971 条窗口记录与 `Project is already disposed` 断言噪音）、真机收益近零；且 **`runCatching` 单独包住无效**（仍会发起注定失败的创建并毒化 holder），要加只能是 `if (project.isDisposed) return` 放在 `getService` **之前**。④**改为定向治泄漏源**：日志把窗口期池线程钉到 `SqlPreviewPanel.prewarmPreviewTempFile`（`SqlPreviewPanel.kt:442-443`，来源 `SqlPreviewPanelImportTest` 两用例）——把该异步工作绑生命周期 + 测试方法返回前不残留，可一次性关掉窗口内最活跃的一类泄漏（含同链 `SqlPreviewService:1999`）。⑤改变判断的条件：真机日志出现「毒化后同一项目实例继续被使用」的读数；或平台把 light 分支 `removeFromOpened` 移出开窗写动作。
+
 ## 四、门禁复跑
 
 并轨后先 `rm -rf build/classes build/kotlin` 再跑。读数链条（**三个数字别混**）：
