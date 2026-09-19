@@ -21,6 +21,8 @@ class ExplainTool : McpToolsetSupport("mpsv_explain") {
             "and return the plan text (MySQL/MariaDB/PostgreSQL/Oracle/SQL Server/H2/DM/KingBase dialect dispatch, " +
             "dialect auto-detected from the data source URL unless overridden). Deterministic plan rendering for " +
             "a statement you already have — pair with mpsv_render_sql to produce it first. " +
+            "'maxRows' caps how many plan rows are returned (default 200, hard limit 1000; out-of-range " +
+            "values are clamped, never rejected). " +
             "Strictly read-only: the statement must be a single plain SELECT (no locking reads, no INTO, no writes); " +
             "rejections are fail-closed.",
     )
@@ -33,15 +35,20 @@ class ExplainTool : McpToolsetSupport("mpsv_explain") {
         selectSql: String,
         dataSource: String = "",
         dialect: String = "",
+        maxRows: Int = McpExplainFormatter.DEFAULT_MAX_ROWS,
     ): String = audit("mpsv_explain") {
-        val target = resolveExplainTarget(requireProject(), selectSql, dataSource, dialect)
+        // 行预算钳制（T-McpRowBudget / T-MRB-03）：越界静默收进 [1..HARD_MAX_ROWS]，不抛错。
+        // 生效值随 target 过挂起点（单引用，维持 ExplainTarget 的 K2 防溢出约定）；通道层另有一道兜底。
+        val target = resolveExplainTarget(
+            requireProject(), selectSql, dataSource, dialect, McpExplainFormatter.clampMaxRows(maxRows),
+        )
         val raw = executeExplain(target)
         // notices 节尾附在方言行后（T-NoticeChannel / O-16）；空清单零追加——输出逐字节与
         // 现状一致（防回归硬门禁）。失败路径 notices 无从产生：executeExplain 直接 throwExpected，
         // RawResult 只在成功时存在，天然满足 DBX「出错语句的 notices 丢弃」口径。
         // index hints 节（T-ExplainIndex / N-23）：索引缺失类模式建议（同款零追加硬门禁；
         // 落点定案=T-EI-01 核实 IDE 内嵌控制台无程序化行读取面，MCP 输出为承载位）。
-        McpExplainFormatter.format(raw) + "\n\ndialect: ${target.dialectName}" +
+        McpExplainFormatter.format(raw, target.maxRows) + "\n\ndialect: ${target.dialectName}" +
             McpExplainFormatter.formatNotices(raw.notices) +
             cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor.formatHints(
                 cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor.advise(
@@ -52,7 +59,13 @@ class ExplainTool : McpToolsetSupport("mpsv_explain") {
 
     /** explain 前置链（白名单→数据源定位→方言派发，步骤 1~3）。全链非挂起：不进协程状态机，
      *  从结构上杜绝 SpillingKt 引用；语义与分步内联版逐行一致（T-McpToolset 253/243 门禁修复）。 */
-    private fun resolveExplainTarget(project: Project, selectSql: String, dataSource: String, dialect: String): ExplainTarget {
+    private fun resolveExplainTarget(
+        project: Project,
+        selectSql: String,
+        dataSource: String,
+        dialect: String,
+        maxRows: Int,
+    ): ExplainTarget {
         // 1) 只读白名单（fail closed：非 SELECT / 多语句 / 锁读 / INTO / 解析失败全拒）
         val verdict = McpSelectGuard.checkSingleSelect(selectSql)
         if (!verdict.allowed) {
@@ -106,16 +119,17 @@ class ExplainTool : McpToolsetSupport("mpsv_explain") {
                     "dialect '$dialectName' has no EXPLAIN rendering in this plugin version.",
                 ),
             )
-        return ExplainTarget(project, ds, explainSql, dialectName)
+        return ExplainTarget(project, ds, explainSql, dialectName, maxRows)
     }
 
-    /** 4) headless 执行（同步、无 UI、密码未保存即失败）。挂起帧只持 target 单引用。 */
+    /** 4) headless 执行（同步、无 UI、密码未保存即失败）。挂起帧只持 target 单引用。
+     *  行预算取 [ExplainTarget.maxRows]（工具层已钳制，T-McpRowBudget / T-MRB-03）。 */
     private suspend fun executeExplain(target: ExplainTarget): McpExplainFormatter.RawResult =
         withContext(Dispatchers.IO) {
             runCatching {
                 // T-ExecTimeoutGuard：设置项「执行超时」透传（0=不限；explain 单语句取每语句基础值）
                 McpDbExecutor.executeQuery(
-                    target.project, target.ds, target.explainSql, McpExplainFormatter.DEFAULT_MAX_ROWS,
+                    target.project, target.ds, target.explainSql, target.maxRows,
                     timeoutSeconds = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
                         .state.executionTimeoutSeconds,
                 )
@@ -138,12 +152,14 @@ class ExplainTool : McpToolsetSupport("mpsv_explain") {
             }
         }
 
-    /** explain 解析产物载体：项目/数据源/方言信息打包单值过挂起点（挂起帧单槽位，杜绝
-     *  K2 nullOutSpilledVariable → SpillingKt 引用；该类 243 平台 stdlib 缺失，verifyPlugin 实证）。 */
+    /** explain 解析产物载体：项目/数据源/方言信息/生效行预算打包单值过挂起点（挂起帧单槽位，
+     *  杜绝 K2 nullOutSpilledVariable → SpillingKt 引用；该类 243 平台 stdlib 缺失，verifyPlugin 实证）。 */
     private class ExplainTarget(
         val project: Project,
         val ds: Any,
         val explainSql: String,
         val dialectName: String,
+        /** 已钳制的生效行预算（T-McpRowBudget：maxRows 参数经 clampMaxRows 后的值）。 */
+        val maxRows: Int,
     )
 }
