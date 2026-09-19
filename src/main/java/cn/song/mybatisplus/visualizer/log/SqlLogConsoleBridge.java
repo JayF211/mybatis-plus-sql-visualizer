@@ -51,10 +51,63 @@ public class SqlLogConsoleBridge {
     /** 每个已挂载控制台 → 解析器上下文（含暂存源码位置，F-44-6）。 */
     private final Map<Object, BridgeLineContext> consoleContexts =
             java.util.Collections.synchronizedMap(new IdentityHashMap<>());
+
+    /** T-PS4-02：epActive 短路触发行计数（防误伤可观测——计划 §六：debug 计数日志 + 测试计数探针。
+     *  若平台 filter 链时序反转致短路误伤丢行，本计数与对应 debug 日志即排查锚点）。 */
+    public final java.util.concurrent.atomic.AtomicLong epActiveShortCircuitCount =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * T-CaptureTruth T-CT-03：控制台观测行数（每行进入桥 filter 即 +1，短路行也计）。
+     * 面板零产出诊断用——「已扫描 N 行 / 产出 0 条」是区分「控制台压根没输出」与
+     * 「有输出但没匹配到 SQL 日志」的唯一信号（后者指向日志级别/前缀配置）。
+     */
+    public final java.util.concurrent.atomic.AtomicLong consoleLinesSeen =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * T-RA-03：重放丢弃行累计（跨全部已挂载控制台求和），SQL 日志面板链路诊断行取数入口。
+     *
+     * <p>为什么要在桥这层聚合：计数本体按 console 存在 {@link BridgeLineContext}（重放守卫每控制台独立
+     * 实例，{@code rehighlight} 重放面也各自独立），而面板只持有桥；逐 console 明细对「零产出排障」
+     * 无价值，用户要的是「一共被守卫丢了多少行」。
+     *
+     * <p>此前该计数只自增、生产侧零读取——守卫误丢行（把正常流式行判成重放）时面板依旧显示
+     * 「已扫描 N 行 / 产出 0 条」，用户无从区分「控制台没输出」与「输出被守卫吃掉了」。
+     */
+    public long getReplayDropCount() {
+        synchronized (consoleContexts) {
+            long sum = 0;
+            for (BridgeLineContext ctx : consoleContexts.values()) {
+                sum += ctx.replayDropCount.get();
+            }
+            return sum;
+        }
+    }
+
     /** descriptor → 已解析 console 缓存（T-LogPerf-03：命中且已挂载时跳过组件树遍历）。 */
     private final IdentityHashMap<Object, Object> descriptorConsoleCache = new IdentityHashMap<>();
-    /** 捕捉中逐行使用的 timePrefix 缓存（T-LogPerf-04：仅设置变更/挂载时刷新）。 */
+    /** 捕捉中逐行使用的 timePrefix 缓存（T-LogPerf-04：仅设置变更/挂载时刷新）。
+     *  T-PS4-02：EP 通道（SqlConsoleBridgeFilterProvider）逐行同项共用本缓存（单一事实源，
+     *  刷新点与桥完全一致：挂载 attachFilter + 设置变更 refreshConsoleContexts）——取代 EP 侧
+     *  每行现场读 PluginSettings。EP 首行可早于桥挂载到达（startCapture 先置 capturing 再
+     *  scanAll），挂载点刷新未发生时由 {@link #currentTimePrefix()} 惰性补种一次。 */
     private volatile String timePrefixCache = null;
+
+    /** T-PS4-02：补种标记（尽力而为可见性，无同步——最坏并发下多读一次设置，无正确性影响，
+     *  同 line0 缓存的尽力而为口径）。 */
+    private volatile boolean timePrefixSeeded = false;
+
+    /** T-PS4-02：EP 逐行取 timePrefix 的统一入口——未播种时惰性读一次设置，此后返回缓存值
+     *  （挂载/设置变更事件照常覆盖刷新）。 */
+    public String currentTimePrefix() {
+        if (!timePrefixSeeded) {
+            String raw = PluginSettings.getInstance().getState().getLogTimePrefix();
+            timePrefixCache = (raw != null && !raw.isBlank()) ? raw : null;
+            timePrefixSeeded = true;
+        }
+        return timePrefixCache;
+    }
 
     private final ContentManagerListener contentListener = new ContentManagerListener() {
         @Override
@@ -373,12 +426,11 @@ public class SqlLogConsoleBridge {
         ctx.hibernateEnabled = cfg.hibernateEnabled();
     }
 
-    private void attachFilter(Object console) {
-        // M56 T-M56-09：「EP 首行标志」生效 → EP 已覆盖全部控制台，轮询挂载跳过（防双路解析）
-        if (SqlCaptureGate.epActive) {
-            LOG.debug("attachFilter: EP 已生效，轮询挂载跳过 " + console.getClass().getName());
-            return;
-        }
+    /** T-PS4-02：internal 测试缝——两时序单路化测试直接对桩控制台挂载桥 filter（scanAll 需真实组件树）。 */
+    public void attachFilter(Object console) {
+        // T-CaptureTruth T-CT-04：**不再**因 epActive 跳过挂载。原挂载面守卫的收益只是省一次代理
+        // 分配，代价却是「EP 未覆盖该控制台时该控制台彻底无解析器」——封口改由 handler 逐行短路承担
+        // （epActive 置位后桥仍挂载但不再解析，CPU 收益与原先等价），挂载面则始终保底。
         // BUG FIX（停止后仍捕获）：非捕捉态时不挂载 Filter——守卫轮询/事件回调触发的 scanAll。
         if (!isCapturing.getAsBoolean()) {
             LOG.debug("attachFilter: 非捕捉态，跳过挂载 " + console.getClass().getName());
@@ -420,10 +472,32 @@ public class SqlLogConsoleBridge {
                         filterIface.getClassLoader(),
                         new Class<?>[]{filterIface},
                         new LogFilterProxyHandler((line, endOffset) -> {
+                            // T-CaptureTruth T-CT-03：控制台观测行计数（短路行也计——「桥看到过多少行」是
+                            // 面板零产出诊断的输入）
+                            consoleLinesSeen.incrementAndGet();
+                            // T-PS4-02 双路解析封口 / T-CaptureTruth T-CT-04 语义收窄：平台 filter 链中 EP
+                            // （consoleFilterProvider）先于后挂的桥 filter 执行，且 epActive 只在 EP **实证
+                            // 产出过条目**后才置位——置位即意味着「EP 在本会话确实在链上且确实能产出」，桥侧
+                            // 短路重复解析（条目由 EP 单路产出）。EP 不在链上/产不出条目时 epActive 恒 false，
+                            // 桥照常解析：这正是回落通道的保底（原口径「EP 被调用过就封口」会让未覆盖的控制台
+                            // 静默零捕获）。防误伤可观测：计数 + debug 日志（计数即测试探针/丢行排查锚点）。
+                            if (SqlCaptureGate.epActive) {
+                                long total = epActiveShortCircuitCount.incrementAndGet();
+                                if (LOG.isDebugEnabled()) {
+                                    LOG.debug("bridge filter: EP 已生效，短路桥侧重复解析（累计 " + total + " 行）");
+                                }
+                                return;
+                            }
                             BridgeLineContext context = consoleContexts.get(console);
                             if (context == null) {
                                 return;
                             }
+                            // T-PS4-02：EP 生效短路——平台 filter 链中 EP 先于后挂的桥 filter 执行，
+                            // epActive 置位即代表本行已由 EP 通道解析过，桥侧跳过（关闭「先开捕捉
+                            // 后 Run」时序下已挂载桥 filter 的恒定 ×2 解析税）。armed-waiting 时序
+                            // 本就单路（epActive 置位前桥未挂载），双轨窗口收敛为「桥挂载前到达的
+                            // 首行之前」；条目仍靠缓冲去重兜底，捕捉结果与单路时序一致。
+                            if (SqlCaptureGate.epActive) return;
                             // T-PreviewFlash：重放守卫——rehighlight 全文档重跑 filter 时丢弃历史行（平台契约要求幂等）。
                             // 守卫依赖反射取到的编辑器文档（stamp/行0）；取不到（非真 ConsoleViewImpl，如测试桩）
                             // 则降级停用，直连现状语义——绝不能因守卫误丢正常流式行。
@@ -437,13 +511,13 @@ public class SqlLogConsoleBridge {
                                         // 流式/纯重放路径不再付 O(文档大小) 的全文档拷贝
                                         context.line0Reader)
                                         == ConsoleReplayGuard.Decision.Replay) {
-                                    context.replayDropCount++;
+                                    context.replayDropCount.incrementAndGet();
                                 } else {
-                                    SqlLogConsoleBridgeKt.processConsoleLine(line, context, timePrefixCache, syncBufferConfig)
+                                    SqlLogConsoleBridgeKt.processConsoleLine(line, context, timePrefixCache, syncBufferConfig, this::bindConsoleError)
                                             .forEach(buffer::addEntry);
                                 }
                             } else {
-                                SqlLogConsoleBridgeKt.processConsoleLine(line, context, timePrefixCache, syncBufferConfig)
+                                SqlLogConsoleBridgeKt.processConsoleLine(line, context, timePrefixCache, syncBufferConfig, this::bindConsoleError)
                                         .forEach(buffer::addEntry);
                             }
                         }));
@@ -459,28 +533,49 @@ public class SqlLogConsoleBridge {
     }
 
     /**
+     * T-M55-02：控制台错误文本反向绑定缓冲最近条目——绑定失败（条目被去重丢弃后缺位/超窗淘汰/
+     * 缓冲为空）显式留 debug 痕，不阻塞主链（生产路径 bindErrorToRecent 的丢弃分支不可静默无痕）。
+     */
+    private void bindConsoleError(String errorText) {
+        SqlLogEntryBuffer.ErrorBindResult result = buffer.bindErrorToRecent(errorText);
+        if (result != SqlLogEntryBuffer.ErrorBindResult.BOUND) {
+            // errorText.lineSequence().firstOrNull()?.take(120) 等价：取首行前 120 字符
+            String firstLine = errorText;
+            int nl = firstLine.indexOf('\n');
+            if (nl >= 0) firstLine = firstLine.substring(0, nl);
+            if (firstLine.length() > 120) firstLine = firstLine.substring(0, 120);
+            LOG.debug("bindConsoleError: 错误块绑定丢弃（" + result + "）：" + firstLine);
+        }
+    }
+
+    /**
      * T-PreviewFlash：为重放守卫解析编辑器/文档反射句柄。全部 try/catch 包裹——
      * 任一环失败即守卫降级停用（editor null），行为等同现状语义，绝不阻塞 Filter 挂载。
      * {@code getEditor} 实现类缺失该方法时 docStamp/line0 读取器为 null，守卫 decide 恒 Process。
      * T-PerfSweep F1：反射 Method 在挂载时解析一次（此前逐行 getMethod）；行 0 文本按
-     * stamp 失效缓存——重放风暴中同 stamp 连续行只付一次 O(文档大小) 拷贝（缓存为
-     * 尽力而为：Filter 回调线程间可见性无同步，最坏退化为多算一次拷贝，无正确性影响）。
+     * stamp 失效缓存——重放风暴中同 stamp 连续行只付一次首行读取（缓存为
+     * 尽力而为：Filter 回调线程间可见性无同步，最坏退化为多算一次，无正确性影响）。
+     * T-PS4-06：行 0 读取改 {@code getCharsSequence} 首行区间读（[0, 首个行分隔)）——Document
+     * charsSequence 是免拷贝视图，行区间 toString 只拷贝首行；此前 {@code getText} 全文档拷贝
+     * （O(全史)）在 stamp 变化后的首个混合态行仍要付一次，调用面归零（doc 反射句柄中
+     * 不再解析 getText——桩文档缺失该方法时守卫照常工作）。
+     * T-PS4-06：internal 测试缝——line0 区间读测试直接对反射桩调用（经 attachFilter 须真实组件树）。
      */
-    private void attachReplayGuard(Object console, BridgeLineContext ctx) {
+    public void attachReplayGuard(Object console, BridgeLineContext ctx) {
         try {
             java.lang.reflect.Method getEditor = console.getClass().getMethod("getEditor");
             Object editor = getEditor.invoke(console);
             if (editor == null) {
                 return;
             }
-            ctx.replayGuardEditor = editor;
             java.lang.reflect.Method getDoc = editor.getClass().getMethod("getDocument");
             final Object doc = getDoc.invoke(editor);
             if (doc == null) {
                 return;
             }
             final java.lang.reflect.Method getStamp = doc.getClass().getMethod("getModificationStamp");
-            final java.lang.reflect.Method getText = doc.getClass().getMethod("getText");
+            // T-PS4-06：首行区间读的免拷贝视图入口（Document.getCharsSequence 为平台 Document 接口方法）
+            final java.lang.reflect.Method getCharsSequence = doc.getClass().getMethod("getCharsSequence");
             ctx.docStampReader = () -> {
                 try {
                     Object stamp = getStamp.invoke(doc);
@@ -496,10 +591,9 @@ public class SqlLogConsoleBridge {
                     Object stampObj = getStamp.invoke(doc);
                     long stamp = stampObj instanceof Number n ? n.longValue() : Long.MIN_VALUE;
                     if (stamp != cachedStamp[0]) {
-                        Object text = getText.invoke(doc);
-                        String s = (text instanceof String str) ? str : "";
-                        // 对齐 Kotlin lineSequence().firstOrNull()：空文档无首行返回 null；\r\n/\r/\n 任一换行
-                        cachedLine0[0] = s.isEmpty() ? null : s.split("\r\n|\r|\n", 2)[0];
+                        Object charsObj = getCharsSequence.invoke(doc);
+                        CharSequence chars = (charsObj instanceof CharSequence cs) ? cs : null;
+                        cachedLine0[0] = chars != null ? readFirstLineOf(chars) : null;
                         cachedStamp[0] = stamp;
                     }
                     return cachedLine0[0];
@@ -510,6 +604,35 @@ public class SqlLogConsoleBridge {
         } catch (Throwable t) {
             // 守卫降级：句柄不可得时 docStampReader 保持 null → decide 恒 Process（现状语义）
         }
+    }
+
+    /**
+     * T-PS4-06：charsSequence 首行区间读（[0, 首个行分隔)）——逐字复刻既有
+     * {@code getText().lineSequence().firstOrNull()} 语义防行为漂移：
+     * 行分隔按 lineSequence 口径认 {@code \n} 与 {@code \r}（{@code \r\n}/{@code \r} 同为分隔）；无行分隔取全文
+     * （单行文档场景）；空文档为 null。行 0 与守卫 lineText（平台 getLineEndOffset 侧，
+     * 不含分隔符）同源同口径，混合态文本比对不失配。
+     */
+    private static String readFirstLineOf(CharSequence chars) {
+        if (chars.length() == 0) return null;
+        int nl = indexOfChar(chars, '\n');
+        int cr = indexOfChar(chars, '\r');
+        int end;
+        if (nl < 0) {
+            end = cr;
+        } else if (cr < 0) {
+            end = nl;
+        } else {
+            end = Math.min(nl, cr);
+        }
+        return end < 0 ? chars.toString() : chars.subSequence(0, end).toString();
+    }
+
+    private static int indexOfChar(CharSequence chars, char target) {
+        for (int i = 0; i < chars.length(); i++) {
+            if (chars.charAt(i) == target) return i;
+        }
+        return -1;
     }
 
     /**

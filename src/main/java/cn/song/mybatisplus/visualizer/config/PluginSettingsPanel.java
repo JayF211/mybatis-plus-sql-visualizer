@@ -2,6 +2,11 @@ package cn.song.mybatisplus.visualizer.config;
 
 import cn.song.mybatisplus.visualizer.actions.ConvertSqlToJavaAction;
 import cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction;
+import cn.song.mybatisplus.visualizer.actions.ExplainSelectedTableAction;
+import cn.song.mybatisplus.visualizer.actions.CountSelectedTableAction;
+import cn.song.mybatisplus.visualizer.actions.SampleSelectedTableAction;
+import cn.song.mybatisplus.visualizer.log.agent.AgentManager;
+import cn.song.mybatisplus.visualizer.log.agent.AgentStatusListener;
 import cn.song.mybatisplus.visualizer.sql.Dialect;
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
@@ -17,6 +22,7 @@ import com.intellij.openapi.actionSystem.KeyboardShortcut;
 import com.intellij.openapi.actionSystem.Shortcut;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
+import com.intellij.openapi.Disposable;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.fileChooser.FileChooser;
 import com.intellij.openapi.fileChooser.FileChooserDescriptor;
@@ -38,7 +44,9 @@ import com.intellij.ui.TitledSeparator;
 import com.intellij.ui.components.JBCheckBox;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBRadioButton;
+import com.intellij.ui.components.JBTextArea;
 import com.intellij.ui.components.JBTextField;
+import com.intellij.util.messages.MessageBusConnection;
 import com.intellij.util.ui.JBUI;
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -69,10 +77,13 @@ import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JDialog;
+import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
+import javax.swing.border.CompoundBorder;
+import javax.swing.border.EmptyBorder;
 import javax.swing.event.DocumentListener;
 
 /**
@@ -94,7 +105,7 @@ import javax.swing.event.DocumentListener;
  * M16.2 增强：
  *  - 「表前缀」「表后缀」文本输入行（可添加/清除）——统一修饰预览 SQL 中的表名（全局语义）。
  */
-public class PluginSettingsPanel {
+public class PluginSettingsPanel implements Disposable {
 
     public static final String SECTION_PREVIEW = "preview";
     public static final String SECTION_TABLE_MAPPING = "tableMapping";
@@ -102,6 +113,8 @@ public class PluginSettingsPanel {
     public static final String SECTION_SQL_LOG = "sqlLog";
     public static final String SECTION_UI = "ui";
     public static final String SECTION_UPDATE_DIAGNOSTICS = "updateDiagnostics";
+    /** T-ShortcutSettings：插件快捷键统一管理节（5 个动作快捷键内嵌录制编辑）。 */
+    public static final String SECTION_SHORTCUTS = "shortcuts";
 
     public static final Set<String> SECTION_ALL = Set.of(
         SECTION_PREVIEW,
@@ -109,7 +122,8 @@ public class PluginSettingsPanel {
         SECTION_CODE_GEN,
         SECTION_SQL_LOG,
         SECTION_UI,
-        SECTION_UPDATE_DIAGNOSTICS);
+        SECTION_UPDATE_DIAGNOSTICS,
+        SECTION_SHORTCUTS);
 
     /** 自动保存文件名模板占位符（如 `$yyyy-MM-dd$`）。 */
     private static final Pattern PATTERN_PLACEHOLDER = Pattern.compile("\\$([^$]+)\\$");
@@ -355,6 +369,13 @@ public class PluginSettingsPanel {
 
     // ---------- T-CrudColor 颜色控件辅助 ----------
 
+    /** T-PT-04：当前选中的空参数填充策略（NULL 档为默认——空选/异常态一律落默认档）。 */
+    private String selectedEmptyParamFill() {
+        return emptyParamFillEmptyRadio.isSelected()
+            ? PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING
+            : PluginSettings.DEFAULT_EMPTY_PARAM_FILL;
+    }
+
     /** 当前下拉选中的样式值（空选兜默认——与渲染器 styleOf 的兜底保持一致）。 */
     private String selectedCrudColorStyle() {
         Object selected = crudColorStyleCombo.getSelectedItem();
@@ -393,9 +414,25 @@ public class PluginSettingsPanel {
     private final PluginSettings settings;
     private final Set<String> sections;
 
-    /** 方言下拉（选项来自方言注册表）。 */
+    /** 方言下拉（选项来自方言注册表；T-DialectAutoInfer 首项为「智能推断」）。 */
     private final JComboBox<String> dialectCombo = new JComboBox<>(
-        DialectRegistry.INSTANCE.getDialects().stream().map(Dialect::getName).toArray(String[]::new));
+        buildDialectComboItems());
+
+    /** T-DialectAutoInfer：「智能推断」哨兵项（显示文案随语言变化，写入 state 前须甄别）。 */
+    private final String autoDialectItem = MpSqlVisualizerBundle.message("settings.dialect.auto");
+
+    /** T-DialectAutoInfer：推断状态只读行（当前推断结果/依据，或手动指定值）。 */
+    private final JLabel dialectInferredLabel = new JLabel();
+
+    /** 方言下拉选项：首项「智能推断」哨兵 + 方言注册表名称。 */
+    private static String[] buildDialectComboItems() {
+        java.util.List<String> items = new java.util.ArrayList<>();
+        items.add(MpSqlVisualizerBundle.message("settings.dialect.auto"));
+        for (Dialect d : DialectRegistry.INSTANCE.getDialects()) {
+            items.add(d.getName());
+        }
+        return items.toArray(new String[0]);
+    }
 
     /** 参数替换开关。 */
     private final JBCheckBox replaceParamsCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.replaceParams"));
@@ -423,13 +460,145 @@ public class PluginSettingsPanel {
     /** 脱敏开关（默认开）：对疑似敏感形态打码，agent 采集层执行。 */
     private final JBCheckBox enhancedDesensitizeCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize"));
 
-    /** 增强捕获状态行：已挂载 pid=x / 已回落控制台捕获 / 连接中。 */
+    /** 增强捕获状态行：已挂载 pid=x / 未授权注入 / 已回落控制台捕获（T-CaptureTruth T-CT-01 五态）。 */
     private final JBLabel enhancedStatusLabel = new JBLabel(" ");
+
+    /**
+     * T-CaptureTruth T-CT-02：重新授权按钮——仅在「开关开着但未授权」时露出（拒绝冷却期的恢复入口）。
+     *
+     * 监听器在字段初始化时挂一次：本面板 {@link #rebuild()}（语言切换）会重跑 buildSections，若在 addRow
+     * 处挂监听会随重建叠加重复回调。
+     */
+    private final JButton enhancedReauthButton = new JButton(MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth"));
+
+    {
+        // Kotlin 属性初始化 apply{} 的等价形态（字段初始化期执行一次；rebuild 不重复挂监听）
+        enhancedReauthButton.setToolTipText(MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth.tip"));
+        enhancedReauthButton.setVisible(false);
+        enhancedReauthButton.addActionListener(e -> onReauthorizeClicked());
+    }
+
+    /** T-CaptureTruth T-CT-02：对首个「待授权」项目重走确认流（多项目取值歧义属既有边界）。 */
+    private void onReauthorizeClicked() {
+        for (Project p : ProjectManager.getInstance().getOpenProjects()) {
+            boolean needs = false;
+            try {
+                needs = !p.isDisposed() && AgentManager.getInstance(p).needsReauthorization();
+            } catch (Throwable ignored) {
+                // runCatching().getOrDefault(false) 等价：环境异常按「无需授权」处理
+            }
+            if (needs) {
+                try {
+                    AgentManager.getInstance(p).requestReauthorization();
+                } catch (Throwable ignored) {
+                    // runCatching 等价：恢复失败不阻断状态行刷新
+                }
+                break;
+            }
+        }
+        refreshEnhancedStatusLabel();
+    }
+
+    /** T-SettingsTruth P2：AgentManager 状态行 messageBus 连接（{@link #disposeResources()} 断开）。 */
+    private Disposable agentStatusConnection = null;
+
+    /**
+     * T-SettingsTruth P2 / T-CaptureTruth T-CT-01/02：聚合各打开项目的 AgentManager 状态写入增强捕获
+     * 状态行，并按「是否存在待授权项目」控制重新授权按钮可见性。
+     * 无任何活动叙事（各项目均 null）→ 显示空串；多项目以「；」连接。
+     */
+    public void refreshEnhancedStatusLabel() {
+        java.util.List<AgentManager> agents = new java.util.ArrayList<>();
+        for (Project p : ProjectManager.getInstance().getOpenProjects()) {
+            try {
+                if (!p.isDisposed()) {
+                    agents.add(AgentManager.getInstance(p));
+                }
+            } catch (Throwable ignored) {
+                // runCatching().getOrNull() 等价：服务不可用即跳过
+            }
+        }
+        StringBuilder text = new StringBuilder();
+        for (AgentManager a : agents) {
+            String summary;
+            try {
+                summary = a.statusSummary();
+            } catch (Throwable e) {
+                summary = null;
+            }
+            if (summary != null) {
+                if (text.length() > 0) {
+                    text.append('；');
+                }
+                text.append(summary);
+            }
+        }
+        enhancedStatusLabel.setText(text.length() == 0 ? " " : text.toString());
+        boolean anyNeedsReauth = false;
+        for (AgentManager a : agents) {
+            try {
+                if (a.needsReauthorization()) {
+                    anyNeedsReauth = true;
+                    break;
+                }
+            } catch (Throwable ignored) {
+                // runCatching().getOrDefault(false) 等价
+            }
+        }
+        enhancedReauthButton.setVisible(anyNeedsReauth);
+    }
+
+    /**
+     * T-SettingsTruth P2：面板资源清理（messageBus 连接断开）。
+     * 由 {@link SectionConfigurable} 的 disposeUIResources 调用；防 IDE 退出 ObjectTree leak 告警。
+     */
+    public void disposeResources() {
+        if (agentStatusConnection != null) {
+            try {
+                com.intellij.openapi.util.Disposer.dispose(agentStatusConnection);
+            } catch (Throwable ignored) {
+                // runCatching 等价：清理失败不再抛出
+            }
+        }
+        agentStatusConnection = null;
+    }
+
+    @Override
+    public void dispose() {
+        disposeResources();
+    }
+
+    /**
+     * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（一行一个前缀，如 {@code com.corp.engine.}）。
+     * Apply 后经 CONFIG 热下发 agent（即时生效，无需重启应用），IDE 侧候选解析同步过滤。
+     */
+    private final JBTextArea frameSkipPrefixesField = new JBTextArea(3, 24);
+
+    {
+        // T-SourceJumpFunnel：空态灰色占位提示（悬停 tooltip 之外的第一眼引导）
+        frameSkipPrefixesField.getEmptyText().setText(MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.placeholder"));
+        frameSkipPrefixesField.setLineWrap(true);
+        frameSkipPrefixesField.setWrapStyleWord(true);
+        // T-FramePrefixVisibility F1：GridBag 外层高度不足时行被压缩，fill=NONE 下多行文本框
+        // 会塌成一条细线（真机截图实证：标签可见、框不可见）——锁定首选高度兜底
+        java.awt.Dimension framePrefixPref = frameSkipPrefixesField.getPreferredSize();
+        framePrefixPref.height = Math.max(framePrefixPref.height, 60);
+        frameSkipPrefixesField.setPreferredSize(framePrefixPref);
+        // T-FramePrefixVisibility F1b：深色主题下 JBTextArea 默认背景与面板几乎同色，输入框
+        // 「看不出是个框」（真机截图二轮反馈）——按平台编辑器标准形态补边框+背景区分度
+        frameSkipPrefixesField.setBackground(com.intellij.util.ui.UIUtil.getTextFieldBackground());
+        frameSkipPrefixesField.setBorder(new CompoundBorder(
+            com.intellij.util.ui.UIUtil.getTextFieldBorder(),
+            new EmptyBorder(4, 6, 4, 6)));
+    }
 
     /** gutter 预览 SQL 图标开关（M10）。 */
     private final JBCheckBox gutterIconCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"));
     /** JOIN 图渲染方式（T-Dgm-04）：原生 Diagrams 框架 vs 经典自绘渲染器。 */
     private final JBCheckBox joinDiagramNativeCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.joinDiagramNative"));
+
+    /** 首用锚点引导通知开关（T-UxOnboard T-UX-01，默认开）：关闭后首用引导全程静默。 */
+    private final JBCheckBox onboardingAnchorTipCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.onboardingAnchorTip"));
 
     /** 逻辑删除注入开关（T-M15-07）：@TableLogic 实体查询/删除自动追加 `AND deleted = 0`。 */
     private final JBCheckBox injectLogicDeleteCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.injectLogicDelete"));
@@ -456,6 +625,9 @@ public class PluginSettingsPanel {
     /** JDBC 模板 SQL 字符串预览开关：queryForList/update 等方法的字符串 SQL 实参显示预览图标。 */
     private final JBCheckBox jdbcSqlPreviewCheck = new JBCheckBox();
 
+    /** T-ExecTimeoutGuard：执行超时（秒，0=不限）——JBIntSlider 过重，JBTextField + 数字容错。 */
+    private final JBTextField executionTimeoutField = new JBTextField(8);
+
     /** 表前缀输入框（T-M16.2-03）：统一加在所有表名前，全局语义（@TableName 显式表名同样生效）。 */
     private final JBTextField tablePrefixField = new JBTextField(12);
 
@@ -476,6 +648,11 @@ public class PluginSettingsPanel {
 
     /** 界面语言下拉（M14：默认简体中文；跟随系统 / English 可选）。 */
     private final JComboBox<LanguageOption> languageCombo = new JComboBox<>();
+
+    /** T-PT-04：空参数填充策略单选（NULL 字面量 / 空字符串）。 */
+    private final JBRadioButton emptyParamFillNullRadio = new JBRadioButton();
+    private final JBRadioButton emptyParamFillEmptyRadio = new JBRadioButton();
+    private final ButtonGroup emptyParamFillGroup = new ButtonGroup();
 
     /** 反向转换 Wrapper 形态下拉（T-M36.3：AUTO/QUERY/LAMBDA/MPJ_LAMBDA）。 */
     private final JComboBox<ReverseFormatOption> reverseFormatCombo = new JComboBox<>();
@@ -520,6 +697,8 @@ public class PluginSettingsPanel {
     private final JButton logAutoSaveBrowseButton = new JButton("...");
     private final JBTextField logAutoSavePatternField = new JBTextField(20);
     private final JBLabel logAutoSavePatternPreview = new JBLabel(" ");
+    /** T-HistoryFileRetention：历史文件保留上限（0 = 不限/全量）。 */
+    private final JBTextField logAutoSaveMaxFilesField = new JBTextField(12);
 
     // ---------- O-1 日志窗口差异化（执行耗时 / 慢查询） ----------
     private final JBTextField logTimePrefixField = new JBTextField(12);
@@ -557,6 +736,11 @@ public class PluginSettingsPanel {
     /** T-M41：SQL→Java 快捷键内嵌编辑（同款录制式，目标 action = ConvertSqlToJava）。 */
     private final ShortcutEditor reverseShortcutEditor = new ShortcutEditor(ConvertSqlToJavaAction.ACTION_ID);
 
+    /** T-ShortcutSettings：${table} 快捷模板三动作快捷键内嵌编辑（Explain / Count / Sample）。 */
+    private final ShortcutEditor explainShortcutEditor = new ShortcutEditor(ExplainSelectedTableAction.ACTION_ID);
+    private final ShortcutEditor countShortcutEditor = new ShortcutEditor(CountSelectedTableAction.ACTION_ID);
+    private final ShortcutEditor sampleShortcutEditor = new ShortcutEditor(SampleSelectedTableAction.ACTION_ID);
+
     /** 更新分区（M28：检查更新/下载安装/重启提示/启动自动检查开关）。 */
     private final UpdateSection updateSection;
 
@@ -584,6 +768,16 @@ public class PluginSettingsPanel {
         buildSections(rootPanel);
         reset();
         refreshCacheInfo();
+        // T-SettingsTruth P2：订阅 app 级增强捕获状态 Topic，AgentManager 状态迁移点刷新状态行。
+        // T-CaptureTruth T-CT-05：**不得** Disposer.register(this, connection)——
+        // 面板自身不在 Disposer 树里，register 会把它挂成 ROOT_DISPOSABLE 子节点，而 Configurable
+        // 链路只调 disposeResources() 不 dispose 面板，IDE 退出即报 Memory leak（沙盒实测 6 例，
+        // 栈指本行）。连接生命周期由 disposeResources() 显式承担。
+        MessageBusConnection connection = ApplicationManager.getApplication().getMessageBus().connect();
+        connection.subscribe(AgentManager.AGENT_STATUS_TOPIC, (AgentStatusListener) () ->
+            ApplicationManager.getApplication().invokeLater(this::refreshEnhancedStatusLabel));
+        agentStatusConnection = connection;
+        refreshEnhancedStatusLabel();
         // M19（用户实测：设置切语言确定后重开仍原样——平台 Settings 框架 OK 仅对「当前选中页」且
         // isModified()==true 的 configurable 调用 apply()，改完语言切到其他页再确定即被静默跳过；
         // M16.3 roaming 修复只覆盖磁盘持久化链路）：
@@ -618,8 +812,28 @@ public class PluginSettingsPanel {
         if (sections.contains(SECTION_PREVIEW)) {
             sectionGroup(panel, gbc, "settings.section.preview", (p, g) -> {
                 addRow(p, g, msg("settings.dialect"), dialectCombo);
+                addRow(p, g, "", dialectInferredLabel);
+                // T-DialectAutoInfer：切回哨兵项时刷新推断状态行（仅此一处需要联动；
+                // 非「只为置 modified 标志位」的监听器——T-RA-04 删除的是后者）
+                dialectCombo.addActionListener(e -> {
+                    if (Objects.equals(dialectCombo.getSelectedItem(), autoDialectItem)) {
+                        refreshInferredLabel();
+                    }
+                });
                 replaceParamsCheck.setText(msg("settings.replaceParams"));
                 addRow(p, g, "", replaceParamsCheck);
+                // T-PT-04：空参数填充策略（参数值为空时回填 NULL 字面量还是空字符串）
+                emptyParamFillNullRadio.setText(msg("settings.emptyParamFill.null"));
+                emptyParamFillNullRadio.setToolTipText(msg("settings.emptyParamFill.null.tip"));
+                emptyParamFillEmptyRadio.setText(msg("settings.emptyParamFill.empty"));
+                emptyParamFillEmptyRadio.setToolTipText(msg("settings.emptyParamFill.empty.tip"));
+                emptyParamFillGroup.add(emptyParamFillNullRadio);
+                emptyParamFillGroup.add(emptyParamFillEmptyRadio);
+                JPanel emptyParamFillPanel = new JPanel();
+                emptyParamFillPanel.setOpaque(false);
+                emptyParamFillPanel.add(emptyParamFillNullRadio);
+                emptyParamFillPanel.add(emptyParamFillEmptyRadio);
+                addRow(p, g, msg("settings.emptyParamFill"), emptyParamFillPanel);
                 formatCheck.setText(msg("settings.formatSql"));
                 addRow(p, g, "", formatCheck);
                 verticalPairAnnotationCheck.setText(msg("settings.verticalPairAnnotation"));
@@ -653,6 +867,8 @@ public class PluginSettingsPanel {
                 jdbcSqlPreviewCheck.setText(msg("settings.preview.jdbc"));
                 jdbcSqlPreviewCheck.setToolTipText(msg("settings.preview.jdbc.tip"));
                 addRow(p, g, "", jdbcSqlPreviewCheck);
+                executionTimeoutField.setToolTipText(msg("settings.preview.executionTimeout.tip"));
+                addRow(p, g, msg("settings.preview.executionTimeout"), executionTimeoutField);
             });
         }
 
@@ -794,6 +1010,7 @@ public class PluginSettingsPanel {
                     logAutoSavePathField.setEnabled(enabled);
                     logAutoSaveBrowseButton.setEnabled(enabled);
                     logAutoSavePatternField.setEnabled(enabled);
+                    logAutoSaveMaxFilesField.setEnabled(enabled); // T-HistoryFileRetention
                     updateAutoSavePreview();
                 });
                 addRow(p, g, "", logAutoSaveCheck);
@@ -839,6 +1056,10 @@ public class PluginSettingsPanel {
 
                 logAutoSavePatternPreview.setToolTipText(msg("settings.log.autoSave.pattern.preview.tip"));
                 addRow(p, g, "", logAutoSavePatternPreview);
+                // T-HistoryFileRetention：历史文件保留上限（防磁盘爆炸；0 = 全量保留）
+                logAutoSaveMaxFilesField.setToolTipText(msg("settings.log.autoSave.maxFiles.tip"));
+                logAutoSaveMaxFilesField.getEmptyText().setText(String.valueOf(PluginSettings.DEFAULT_LOG_AUTO_SAVE_MAX_FILES));
+                addRow(p, g, msg("settings.log.autoSave.maxFiles"), logAutoSaveMaxFilesField);
             });
 
             // F-44-7：SqlSourceInterceptor 自动注入（源码位置捕获）
@@ -864,11 +1085,23 @@ public class PluginSettingsPanel {
                             enhancedCaptureCheck.setSelected(false);
                         }
                     }
+                    // T-ConsentTruth T-CN-03：确认结果直接写全局 state，不经过 AgentManager 的
+                    // 状态广播——不在这里补一次刷新的话，五态状态行会停在旧文案（如仍显示
+                    // 「未授权注入——下次启动主配置时会询问」），直到下一次 attach/掉线才纠正。
+                    refreshEnhancedStatusLabel();
                 });
                 addRow(p2, g2, "", enhancedCaptureCheck);
                 enhancedDesensitizeCheck.setText(msg("settings.enhancedCapture.desensitize"));
                 addRow(p2, g2, "", enhancedDesensitizeCheck);
                 addRow(p2, g2, "", enhancedStatusLabel);
+                // T-CaptureTruth T-CT-02：重新授权入口（仅未授权态可见，文本随语言重建刷新）
+                enhancedReauthButton.setText(msg("settings.enhancedCapture.reauth"));
+                enhancedReauthButton.setToolTipText(msg("settings.enhancedCapture.reauth.tip"));
+                addRow(p2, g2, "", enhancedReauthButton);
+                // T-SourceJumpFunnel P1-3：帧过滤前缀（自研框架包名登记，热下发 agent）
+                frameSkipPrefixesField.setText(PluginSettings.getInstance().getState().getSourceFrameSkipPrefixes());
+                frameSkipPrefixesField.setToolTipText(msg("settings.sourceFrameSkipPrefixes.tip"));
+                addRow(p2, g2, msg("settings.sourceFrameSkipPrefixes"), frameSkipPrefixesField);
             });
         }
 
@@ -880,14 +1113,30 @@ public class PluginSettingsPanel {
                 joinDiagramNativeCheck.setText(msg("settings.joinDiagramNative"));
                 joinDiagramNativeCheck.setToolTipText(msg("settings.joinDiagramNative.tip"));
                 addRow(p, g, "", joinDiagramNativeCheck);
+                // T-UxOnboard T-UX-01：首用锚点引导通知开关（一次性语义见 OnboardingAnchorTip）
+                onboardingAnchorTipCheck.setText(msg("settings.onboardingAnchorTip"));
+                onboardingAnchorTipCheck.setToolTipText(msg("settings.onboardingAnchorTip.tip"));
+                addRow(p, g, "", onboardingAnchorTipCheck);
                 languageCombo.setModel(new DefaultComboBoxModel<>(languageOptions()));
                 LanguageOption lang = languageOptionByValue(settings.getState().getLanguage());
                 languageCombo.setSelectedItem(lang != null ? lang : languageOptions()[0]);
                 addRow(p, g, msg("settings.language"), languageCombo);
+            });
+        }
+
+        // 组 5.5：快捷键（T-ShortcutSettings：插件 5 个动作快捷键统一管理；独立节便于搜索定位）
+        if (sections.contains(SECTION_SHORTCUTS)) {
+            sectionGroup(panel, gbc, "settings.section.shortcuts", (p, g) -> {
                 shortcutEditor.updateTexts();
                 addRow(p, g, msg("settings.shortcut"), shortcutEditor);
                 reverseShortcutEditor.updateTexts();
                 addRow(p, g, msg("settings.shortcut.sqlToJava"), reverseShortcutEditor);
+                explainShortcutEditor.updateTexts();
+                addRow(p, g, msg("settings.shortcut.explain"), explainShortcutEditor);
+                countShortcutEditor.updateTexts();
+                addRow(p, g, msg("settings.shortcut.count"), countShortcutEditor);
+                sampleShortcutEditor.updateTexts();
+                addRow(p, g, msg("settings.shortcut.sample"), sampleShortcutEditor);
             });
         }
 
@@ -1233,6 +1482,83 @@ public class PluginSettingsPanel {
     }
 
     /**
+     * T-ShortcutSettings：打开平台 MCP Server 设置（定位到 SQL Visualizer 工具）。
+     * 平台 Configurable 类名 = com.intellij.mcpserver.settings.McpServerSettingsConfigurable
+     * （262 mcpserver.jar 常量池实证；注意包名 mcpserver 全小写）。
+     * MCP Server 插件未安装时（243 / 未启用）提示并返回。
+     */
+    private void openMcpServerSettings() {
+        Project project = null;
+        for (Project p : ProjectManager.getInstance().getOpenProjects()) {
+            project = p;
+            break;
+        }
+        if (project == null) {
+            return;
+        }
+        Class<? extends com.intellij.openapi.options.Configurable> configurableClass = null;
+        try {
+            configurableClass = Class.forName("com.intellij.mcpserver.settings.McpServerSettingsConfigurable")
+                .asSubclass(com.intellij.openapi.options.Configurable.class);
+        } catch (Throwable ignored) {
+            // runCatching().getOrNull() 等价：类缺失 = MCP Server 插件未安装
+        }
+        if (configurableClass == null) {
+            Messages.showWarningDialog(
+                project,
+                MpSqlVisualizerBundle.message("settings.mcp.unavailable"),
+                MpSqlVisualizerBundle.message("settings.mcp.title"));
+            return;
+        }
+        try {
+            com.intellij.openapi.options.ShowSettingsUtil.getInstance()
+                .showSettingsDialog(project, configurableClass);
+        } catch (Throwable ignored) {
+            // runCatching<Unit> 等价：打开失败不影响设置页
+        }
+    }
+
+    /**
+     * T-DialectAutoInfer：刷新推断状态行——推断模式显示当前推断结果（含依据 URL），
+     * 手动模式显示手动值。惰性调用（reset/选中哨兵项时），不做监听器常驻。
+     */
+    public void refreshInferredLabel() {
+        if (Objects.equals(dialectCombo.getSelectedItem(), autoDialectItem)) {
+            Project firstProject = null;
+            for (Project p : ProjectManager.getInstance().getOpenProjects()) {
+                firstProject = p;
+                break;
+            }
+            if (firstProject == null) {
+                dialectInferredLabel.setText(MpSqlVisualizerBundle.message("settings.dialect.inferred.none"));
+                return;
+            }
+            String agentUrl = null;
+            try {
+                agentUrl = AgentManager.getInstance(firstProject).lastConnectionUrl();
+            } catch (Throwable ignored) {
+                // runCatching().getOrNull() 等价：agent 服务不可用 → 回落数据源探测
+            }
+            String dataSourceUrl = null;
+            try {
+                dataSourceUrl = cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.firstUrl(firstProject);
+            } catch (Throwable ignored) {
+                // runCatching().getOrNull() 等价：数据源探测失败按无候选处理
+            }
+            cn.song.mybatisplus.visualizer.sql.DialectInference.Result inferred =
+                cn.song.mybatisplus.visualizer.sql.DialectInference.infer(agentUrl, dataSourceUrl);
+            String name = inferred.dialectName() != null
+                ? inferred.dialectName()
+                : MpSqlVisualizerBundle.message("settings.dialect.inferred.none");
+            dialectInferredLabel.setText(MpSqlVisualizerBundle.message("settings.dialect.inferred", name));
+        } else {
+            Object manualItem = dialectCombo.getSelectedItem();
+            dialectInferredLabel.setText(MpSqlVisualizerBundle.message(
+                "settings.dialect.manual", manualItem instanceof String s ? s : ""));
+        }
+    }
+
+    /**
      * M19：语言写穿入口（测试用）——选中语言值，触发与用户下拉选择**同一**写穿路径
      * （ActionListener → 立即写入配置 + 重建表单）。
      */
@@ -1248,6 +1574,15 @@ public class PluginSettingsPanel {
         ReverseFormatOption option = reverseFormatOptionByValue(value);
         if (option == null) return;
         reverseFormatCombo.setSelectedItem(option);
+    }
+
+    /** T-PT-04：空参数填充策略选择入口（测试用）——与用户点选同一路径（isModified/apply 检测）。 */
+    public void selectEmptyParamFill(String value) {
+        if (PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING.equals(value)) {
+            emptyParamFillEmptyRadio.setSelected(true);
+        } else {
+            emptyParamFillNullRadio.setSelected(true);
+        }
     }
 
     /** T-CrudColor：标记形态下拉选择入口（测试用）——与用户选择同一路径。 */
@@ -1303,6 +1638,11 @@ public class PluginSettingsPanel {
     /** T-TenantLine：多租户注入开关设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
     public void setInjectTenantLineCheck(boolean checked) {
         injectTenantLineCheck.setSelected(checked);
+    }
+
+    /** T-UxOnboard T-UX-01：首用锚点引导开关设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
+    public void setOnboardingAnchorTipCheck(boolean checked) {
+        onboardingAnchorTipCheck.setSelected(checked);
     }
 
     /** T-TenantLine：租户列名输入框设置入口（测试用）——与用户输入同一路径（isModified/apply 检测）。 */
@@ -1361,10 +1701,9 @@ public class PluginSettingsPanel {
             return;
         }
         SourceCaptureGuide.runInjection(project, result -> {
-            boolean success = SourceCaptureGuide.showInjectionResult(project, result);
-            if (!success) {
-                autoInjectInterceptorCheck.setSelected(false);
-            }
+            SourceCaptureGuide.showInjectionResult(project, result);
+            // T-SettingsTruth P1：纯动作开关——无论成败，终态复位未勾选（成功=动作完成即复位）
+            autoInjectInterceptorCheck.setSelected(false);
         });
     }
 
@@ -1393,14 +1732,19 @@ public class PluginSettingsPanel {
             || (sections.contains(SECTION_CODE_GEN) && isModifiedCodeGen(s))
             || (sections.contains(SECTION_SQL_LOG) && isModifiedSqlLog(s))
             || (sections.contains(SECTION_UI) && isModifiedUi(s))
+            || (sections.contains(SECTION_SHORTCUTS) && isModifiedShortcuts())
             || (sections.contains(SECTION_UPDATE_DIAGNOSTICS)
                 && updateSection.getAutoCheckCheck().isSelected() != s.getAutoCheckUpdate());
     }
 
     private boolean isModifiedPreview(PluginSettings.State s) {
-        return !Objects.equals(dialectCombo.getSelectedItem(), s.getDialect())
+        Object dialectItem = dialectCombo.getSelectedItem();
+        boolean dialectAutoSelected = Objects.equals(dialectItem, autoDialectItem);
+        return dialectAutoSelected != s.getDialectAuto()
+            || (!dialectAutoSelected && !Objects.equals(dialectItem, s.getDialect()))
             || replaceParamsCheck.isSelected() != s.getReplaceParams()
             || formatCheck.isSelected() != s.getFormatSql()
+            || !Objects.equals(selectedEmptyParamFill(), s.getEmptyParamFill())
             || verticalPairAnnotationCheck.isSelected() != s.getVerticalPairAnnotation()
             || autoFoldCheck.isSelected() != s.getAutoFoldEnabled()
             || !Objects.equals(parseIntOrNull(autoFoldThresholdField.getText().trim()), s.getAutoFoldFieldThreshold())
@@ -1413,7 +1757,8 @@ public class PluginSettingsPanel {
             || injectTenantOnInsertCheck.isSelected() != s.getInjectTenantOnInsert()
             || dataPermissionHintCheck.isSelected() != s.getDataPermissionHint()
             || !dataPermissionMockConditionField.getText().trim().equals(s.getDataPermissionMockCondition())
-            || jdbcSqlPreviewCheck.isSelected() != s.getJdbcSqlPreviewEnabled();
+            || jdbcSqlPreviewCheck.isSelected() != s.getJdbcSqlPreviewEnabled()
+            || !Objects.equals(parseIntOrNull(executionTimeoutField.getText().trim()), s.getExecutionTimeoutSeconds());
     }
 
     private boolean isModifiedTableMapping(PluginSettings.State s) {
@@ -1435,6 +1780,7 @@ public class PluginSettingsPanel {
     }
 
     private boolean isModifiedSqlLog(PluginSettings.State s) {
+        Integer logAutoSaveMaxFiles = parseIntOrNull(logAutoSaveMaxFilesField.getText().trim());
         return !logSqlPrefixField.getText().trim().equals(s.getLogSqlPrefix())
             || !logParamPrefixField.getText().trim().equals(s.getLogParamPrefix())
             || logMixedPrefixCheck.isSelected() != s.getLogMixedPrefix()
@@ -1455,6 +1801,7 @@ public class PluginSettingsPanel {
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
             || enhancedCaptureCheck.isSelected() != s.getEnhancedCaptureEnabled()
             || enhancedDesensitizeCheck.isSelected() != s.getEnhancedCaptureDesensitize()
+            || !frameSkipPrefixesField.getText().trim().equals(s.getSourceFrameSkipPrefixes().trim())
             || logHibernateEnabledCheck.isSelected() != s.getLogHibernateEnabled()
             || !logHibernateSqlPrefixField.getText().trim().equals(s.getLogHibernateSqlPrefix())
             || !logHibernateParamPrefixField.getText().trim().equals(s.getLogHibernateParamPrefix())
@@ -1462,7 +1809,10 @@ public class PluginSettingsPanel {
             || logAutoSaveCheck.isSelected() != s.getLogAutoSaveEnabled()
             || !logAutoSavePathField.getText().trim().equals(s.getLogAutoSavePath())
             || !logAutoSavePatternField.getText().trim().equals(s.getLogAutoSaveFileNamePattern())
-            || autoInjectInterceptorCheck.isSelected() != s.getAutoInjectSqlSourceInterceptor()
+            || !Objects.equals(logAutoSaveMaxFiles != null
+                    ? logAutoSaveMaxFiles
+                    : PluginSettings.DEFAULT_LOG_AUTO_SAVE_MAX_FILES,
+                s.getLogAutoSaveMaxFiles())
             // T-CrudColor：仅改样式或仅改某个颜色也必须能启用 Apply
             // （reverseWrapperFormat 漏挂 isModified 导致改动被平台静默丢弃的假开关事故，此处防同类回归）
             || !Objects.equals(selectedCrudColorStyle(), s.getCrudColorStyle())
@@ -1477,9 +1827,17 @@ public class PluginSettingsPanel {
         Object lang = languageCombo.getSelectedItem();
         return gutterIconCheck.isSelected() != s.getShowGutterIcon()
             || joinDiagramNativeCheck.isSelected() != s.getJoinDiagramNative()
-            || !Objects.equals(lang instanceof LanguageOption ? ((LanguageOption) lang).value : null, s.getLanguage())
-            || !Objects.equals(shortcutEditor.getShortcut(), currentShortcut(ConvertToSqlAction.ACTION_ID))
-            || !Objects.equals(reverseShortcutEditor.getShortcut(), currentShortcut(ConvertSqlToJavaAction.ACTION_ID));
+            || onboardingAnchorTipCheck.isSelected() != s.getOnboardingAnchorTipEnabled()
+            || !Objects.equals(lang instanceof LanguageOption ? ((LanguageOption) lang).value : null, s.getLanguage());
+    }
+
+    /** T-ShortcutSettings：5 个动作快捷键任一变更即为 modified。 */
+    private boolean isModifiedShortcuts() {
+        return !Objects.equals(shortcutEditor.getShortcut(), currentShortcut(ConvertToSqlAction.ACTION_ID))
+            || !Objects.equals(reverseShortcutEditor.getShortcut(), currentShortcut(ConvertSqlToJavaAction.ACTION_ID))
+            || !Objects.equals(explainShortcutEditor.getShortcut(), currentShortcut(ExplainSelectedTableAction.ACTION_ID))
+            || !Objects.equals(countShortcutEditor.getShortcut(), currentShortcut(CountSelectedTableAction.ACTION_ID))
+            || !Objects.equals(sampleShortcutEditor.getShortcut(), currentShortcut(SampleSelectedTableAction.ACTION_ID));
     }
 
     /**
@@ -1496,10 +1854,18 @@ public class PluginSettingsPanel {
             || !Objects.equals(lang instanceof LanguageOption ? ((LanguageOption) lang).value : null, s.getLanguage());
 
         if (sections.contains(SECTION_PREVIEW)) {
+            // T-DialectAutoInfer：哨兵项=推断模式；具体方言=手动模式（保留原值语义）
             Object dialect = dialectCombo.getSelectedItem();
-            s.setDialect(dialect instanceof String ? (String) dialect : PluginSettings.DEFAULT_DIALECT);
+            if (Objects.equals(dialect, autoDialectItem)) {
+                s.setDialectAuto(true);
+            } else {
+                s.setDialectAuto(false);
+                s.setDialect(dialect instanceof String dialectName ? dialectName : PluginSettings.DEFAULT_DIALECT);
+            }
             s.setReplaceParams(replaceParamsCheck.isSelected());
             s.setFormatSql(formatCheck.isSelected());
+            // T-PT-04：空参数填充策略（NULL 字面量 / 空字符串）
+            s.setEmptyParamFill(selectedEmptyParamFill());
             s.setVerticalPairAnnotation(verticalPairAnnotationCheck.isSelected());
             s.setAutoFoldEnabled(autoFoldCheck.isSelected());
             Integer autoFoldThreshold = parseIntOrNull(autoFoldThresholdField.getText().trim());
@@ -1516,6 +1882,10 @@ public class PluginSettingsPanel {
             s.setDataPermissionHint(dataPermissionHintCheck.isSelected());
             s.setDataPermissionMockCondition(dataPermissionMockConditionField.getText().trim());
             s.setJdbcSqlPreviewEnabled(jdbcSqlPreviewCheck.isSelected());
+            Integer executionTimeout = parseIntOrNull(executionTimeoutField.getText().trim());
+            s.setExecutionTimeoutSeconds(executionTimeout != null
+                ? executionTimeout
+                : PluginSettings.DEFAULT_EXECUTION_TIMEOUT_SECONDS);
         }
         if (sections.contains(SECTION_TABLE_MAPPING)) {
             s.setTablePrefix(tablePrefixField.getText().trim());
@@ -1560,6 +1930,18 @@ public class PluginSettingsPanel {
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             s.setEnhancedCaptureEnabled(enhancedCaptureCheck.isSelected());
             s.setEnhancedCaptureDesensitize(enhancedDesensitizeCheck.isSelected());
+            // T-SourceJumpFunnel P1-3：前缀规范化（逐行 trim、去空行）写回；下发走 SETTINGS_CHANGE_TOPIC
+            StringBuilder normalizedPrefixes = new StringBuilder();
+            for (String line : frameSkipPrefixesField.getText().lines().toList()) {
+                String trimmed = line.trim();
+                if (!trimmed.isEmpty()) {
+                    if (normalizedPrefixes.length() > 0) {
+                        normalizedPrefixes.append('\n');
+                    }
+                    normalizedPrefixes.append(trimmed);
+                }
+            }
+            s.setSourceFrameSkipPrefixes(normalizedPrefixes.toString());
             s.setLogHibernateEnabled(logHibernateEnabledCheck.isSelected());
             s.setLogHibernateSqlPrefix(logHibernateSqlPrefixField.getText().trim());
             s.setLogHibernateParamPrefix(logHibernateParamPrefixField.getText().trim());
@@ -1570,7 +1952,10 @@ public class PluginSettingsPanel {
             s.setLogAutoSaveFileNamePattern(pattern.isEmpty()
                 ? PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN
                 : pattern);
-            s.setAutoInjectSqlSourceInterceptor(autoInjectInterceptorCheck.isSelected());
+            Integer logAutoSaveMaxFiles = parseIntOrNull(logAutoSaveMaxFilesField.getText().trim());
+            s.setLogAutoSaveMaxFiles(logAutoSaveMaxFiles != null
+                ? logAutoSaveMaxFiles
+                : PluginSettings.DEFAULT_LOG_AUTO_SAVE_MAX_FILES); // T-HistoryFileRetention
             // T-CrudColor：CRUD 颜色标记（样式 + 四色）
             s.setCrudColorStyle(selectedCrudColorStyle());
             // T-DisplayModeToSettings：SQL 列表显示模式（apply 后经 SETTINGS_CHANGE_TOPIC 广播，两列表既有监听刷新）
@@ -1583,14 +1968,28 @@ public class PluginSettingsPanel {
         if (sections.contains(SECTION_UI)) {
             s.setShowGutterIcon(gutterIconCheck.isSelected());
             s.setJoinDiagramNative(joinDiagramNativeCheck.isSelected());
+            // T-UxOnboard T-UX-01：首用锚点引导开关写回（随 UI 分区，读写判定同归属）
+            s.setOnboardingAnchorTipEnabled(onboardingAnchorTipCheck.isSelected());
             s.setLanguage(lang instanceof LanguageOption
                 ? ((LanguageOption) lang).value
                 : PluginSettings.DEFAULT_LANGUAGE);
+        }
+        // T-ShortcutSettings：5 个动作快捷键写入 Keymap（仅在变更时 apply）
+        if (sections.contains(SECTION_SHORTCUTS)) {
             if (!Objects.equals(shortcutEditor.getShortcut(), currentShortcut(ConvertToSqlAction.ACTION_ID))) {
                 applyShortcut(shortcutEditor, ConvertToSqlAction.ACTION_ID);
             }
             if (!Objects.equals(reverseShortcutEditor.getShortcut(), currentShortcut(ConvertSqlToJavaAction.ACTION_ID))) {
                 applyShortcut(reverseShortcutEditor, ConvertSqlToJavaAction.ACTION_ID);
+            }
+            if (!Objects.equals(explainShortcutEditor.getShortcut(), currentShortcut(ExplainSelectedTableAction.ACTION_ID))) {
+                applyShortcut(explainShortcutEditor, ExplainSelectedTableAction.ACTION_ID);
+            }
+            if (!Objects.equals(countShortcutEditor.getShortcut(), currentShortcut(CountSelectedTableAction.ACTION_ID))) {
+                applyShortcut(countShortcutEditor, CountSelectedTableAction.ACTION_ID);
+            }
+            if (!Objects.equals(sampleShortcutEditor.getShortcut(), currentShortcut(SampleSelectedTableAction.ACTION_ID))) {
+                applyShortcut(sampleShortcutEditor, SampleSelectedTableAction.ACTION_ID);
             }
         }
         if (sections.contains(SECTION_UPDATE_DIAGNOSTICS)) {
@@ -1615,9 +2014,18 @@ public class PluginSettingsPanel {
     public void reset() {
         PluginSettings.State s = settings.getState();
         if (sections.contains(SECTION_PREVIEW)) {
-            dialectCombo.setSelectedItem(s.getDialect());
+            // T-DialectAutoInfer：auto→选中哨兵项；手动→选中方言名（不存在时回落首项哨兵）
+            dialectCombo.setSelectedItem(s.getDialectAuto() ? autoDialectItem : s.getDialect());
+            if (!Objects.equals(dialectCombo.getSelectedItem(), autoDialectItem)
+                    && !Objects.equals(dialectCombo.getSelectedItem(), s.getDialect())) {
+                dialectCombo.setSelectedItem(autoDialectItem);
+            }
+            refreshInferredLabel();
             replaceParamsCheck.setSelected(s.getReplaceParams());
             formatCheck.setSelected(s.getFormatSql());
+            // T-PT-04：空参数填充策略回填（非 EMPTY_STRING 一律按默认 NULL 档选中——旧配置/非法值容错）
+            emptyParamFillEmptyRadio.setSelected(PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING.equals(s.getEmptyParamFill()));
+            emptyParamFillNullRadio.setSelected(!PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING.equals(s.getEmptyParamFill()));
             verticalPairAnnotationCheck.setSelected(s.getVerticalPairAnnotation());
             autoFoldCheck.setSelected(s.getAutoFoldEnabled());
             autoFoldThresholdField.setText(String.valueOf(s.getAutoFoldFieldThreshold()));
@@ -1632,6 +2040,7 @@ public class PluginSettingsPanel {
             dataPermissionHintCheck.setSelected(s.getDataPermissionHint());
             dataPermissionMockConditionField.setText(s.getDataPermissionMockCondition());
             jdbcSqlPreviewCheck.setSelected(s.getJdbcSqlPreviewEnabled());
+            executionTimeoutField.setText(String.valueOf(s.getExecutionTimeoutSeconds()));
         }
         if (sections.contains(SECTION_TABLE_MAPPING)) {
             tablePrefixField.setText(s.getTablePrefix());
@@ -1650,10 +2059,17 @@ public class PluginSettingsPanel {
         if (sections.contains(SECTION_UI)) {
             gutterIconCheck.setSelected(s.getShowGutterIcon());
             joinDiagramNativeCheck.setSelected(s.getJoinDiagramNative());
+            onboardingAnchorTipCheck.setSelected(s.getOnboardingAnchorTipEnabled());
             LanguageOption lang = languageOptionByValue(s.getLanguage());
             languageCombo.setSelectedItem(lang != null ? lang : languageOptions()[0]);
+        }
+        // T-ShortcutSettings：5 个动作快捷键从 Keymap 回读当前值
+        if (sections.contains(SECTION_SHORTCUTS)) {
             shortcutEditor.setShortcut(currentShortcut(ConvertToSqlAction.ACTION_ID));
             reverseShortcutEditor.setShortcut(currentShortcut(ConvertSqlToJavaAction.ACTION_ID));
+            explainShortcutEditor.setShortcut(currentShortcut(ExplainSelectedTableAction.ACTION_ID));
+            countShortcutEditor.setShortcut(currentShortcut(CountSelectedTableAction.ACTION_ID));
+            sampleShortcutEditor.setShortcut(currentShortcut(SampleSelectedTableAction.ACTION_ID));
         }
         if (sections.contains(SECTION_UPDATE_DIAGNOSTICS)) {
             updateSection.resetState();
@@ -1683,6 +2099,7 @@ public class PluginSettingsPanel {
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             enhancedCaptureCheck.setSelected(s.getEnhancedCaptureEnabled());
             enhancedDesensitizeCheck.setSelected(s.getEnhancedCaptureDesensitize());
+            frameSkipPrefixesField.setText(s.getSourceFrameSkipPrefixes());
             logHibernateEnabledCheck.setSelected(s.getLogHibernateEnabled());
             logHibernateSqlPrefixField.setText(s.getLogHibernateSqlPrefix());
             logHibernateParamPrefixField.setText(s.getLogHibernateParamPrefix());
@@ -1690,10 +2107,12 @@ public class PluginSettingsPanel {
             logAutoSaveCheck.setSelected(s.getLogAutoSaveEnabled());
             logAutoSavePathField.setText(s.getLogAutoSavePath());
             logAutoSavePatternField.setText(s.getLogAutoSaveFileNamePattern());
+            logAutoSaveMaxFilesField.setText(String.valueOf(s.getLogAutoSaveMaxFiles())); // T-HistoryFileRetention
             boolean autoSaveEnabled = s.getLogAutoSaveEnabled();
             logAutoSavePathField.setEnabled(autoSaveEnabled);
             logAutoSaveBrowseButton.setEnabled(autoSaveEnabled);
             logAutoSavePatternField.setEnabled(autoSaveEnabled);
+            logAutoSaveMaxFilesField.setEnabled(autoSaveEnabled); // T-HistoryFileRetention
             updateAutoSavePreview();
             // T-CrudColor：CRUD 颜色标记控件回填
             CrudColorStyleOption crudStyle = crudColorStyleOptionByValue(s.getCrudColorStyle());
@@ -1705,7 +2124,11 @@ public class PluginSettingsPanel {
             crudColorInsertPanel.setSelectedColor(colorOf(s.getCrudColorInsert()));
             crudColorUpdatePanel.setSelectedColor(colorOf(s.getCrudColorUpdate()));
             crudColorDeletePanel.setSelectedColor(colorOf(s.getCrudColorDelete()));
-            autoInjectInterceptorCheck.setSelected(s.getAutoInjectSqlSourceInterceptor());
+            // T-SettingsTruth P1：autoInjectInterceptorCheck 为纯动作开关，不回填 state（不保存状态）
+        }
+        // T-SettingsTruth P2：页面打开/Reset 即见当前增强捕获状态
+        if (sections.contains(SECTION_SQL_LOG)) {
+            refreshEnhancedStatusLabel();
         }
     }
 

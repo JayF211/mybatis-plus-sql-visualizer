@@ -46,6 +46,16 @@ public final class ProjectPluginSettings implements PersistentStateComponent<Pro
         return getState().getUseProjectSettings();
     }
 
+    /**
+     * T-DialectAutoInfer：有效方言模式（项目级 dialectAuto 非 null 且已启用项目设置时优先，
+     * 否则回退全局 dialectAuto）。
+     */
+    public boolean effectiveDialectAuto() {
+        State s = getState();
+        if (s.getUseProjectSettings() && s.getDialectAuto() != null) return s.getDialectAuto();
+        return PluginSettings.getInstance().getState().getDialectAuto();
+    }
+
     /** 项目级方言（未启用或空则回退全局）。 */
     public String effectiveDialect() {
         State s = getState();
@@ -119,7 +129,15 @@ public final class ProjectPluginSettings implements PersistentStateComponent<Pro
     public static final class State {
 
         private boolean useProjectSettings = false;
+        /** 项目级数据库方言（空字符串表示使用全局；仅项目级 auto 关闭时生效）。 */
         private String dialect = "";
+
+        /**
+         * T-DialectAutoInfer：项目级方言模式（null=使用全局——与「空=不覆盖」语义同构）。
+         * true=项目强制智能推断；false=项目按 {@code dialect}（非空时）手动指定。
+         */
+        private Boolean dialectAuto = null;
+
         private Boolean replaceParams = null;
         private Boolean formatSql = null;
         private Boolean injectLogicDelete = null;
@@ -134,6 +152,10 @@ public final class ProjectPluginSettings implements PersistentStateComponent<Pro
 
         public String getDialect() { return dialect; }
         public void setDialect(String dialect) { this.dialect = dialect; }
+
+        /** 项目级方言模式（null=使用全局；true=强制智能推断；false=手动指定）。 */
+        public Boolean getDialectAuto() { return dialectAuto; }
+        public void setDialectAuto(Boolean dialectAuto) { this.dialectAuto = dialectAuto; }
 
         public Boolean getReplaceParams() { return replaceParams; }
         public void setReplaceParams(Boolean replaceParams) { this.replaceParams = replaceParams; }
@@ -165,6 +187,7 @@ public final class ProjectPluginSettings implements PersistentStateComponent<Pro
             State c = new State();
             c.useProjectSettings = useProjectSettings;
             c.dialect = dialect;
+            c.dialectAuto = dialectAuto;
             c.replaceParams = replaceParams;
             c.formatSql = formatSql;
             c.injectLogicDelete = injectLogicDelete;
@@ -183,6 +206,7 @@ public final class ProjectPluginSettings implements PersistentStateComponent<Pro
             State that = (State) o;
             return useProjectSettings == that.useProjectSettings
                     && Objects.equals(dialect, that.dialect)
+                    && Objects.equals(dialectAuto, that.dialectAuto)
                     && Objects.equals(replaceParams, that.replaceParams)
                     && Objects.equals(formatSql, that.formatSql)
                     && Objects.equals(injectLogicDelete, that.injectLogicDelete)
@@ -195,7 +219,7 @@ public final class ProjectPluginSettings implements PersistentStateComponent<Pro
 
         @Override
         public int hashCode() {
-            return Objects.hash(useProjectSettings, dialect, replaceParams, formatSql, injectLogicDelete,
+            return Objects.hash(useProjectSettings, dialect, dialectAuto, replaceParams, formatSql, injectLogicDelete,
                     logicDeleteValue, tablePrefix, tableSuffix, tableNameInference, ignoredFields);
         }
 

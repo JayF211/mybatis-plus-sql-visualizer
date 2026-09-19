@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
@@ -48,16 +49,26 @@ public class LogToSqlPanel extends JPanel implements Disposable {
     /** T-Perf-14：大日志后台转换阈值——行数（约 1000 行）。 */
     private static final int HEAVY_INPUT_LINES = 1_000;
 
+    /** T-BatchInMerge：合并参考行里的 SQL 展示截断（防浮层单行撑爆）。 */
+    private static final int MERGE_HINT_SQL_DISPLAY_LIMIT = 160;
+
+    /** T-BatchInMerge：「…等 N 条」后缀的展示预算预留（截值不截计数）。 */
+    private static final int MERGE_MORE_RESERVE = 24;
+
     private final Project project;
     private final Editor inputEditor;
     private final Editor resultEditor;
     private final JBLabel statusLabel;
 
+    // T-PreviewUx-Pack #2：诚实降级横幅（面板内嵌非模态提示，不算弹窗）——还原失败/参数缺失
+    // 不再仅靠单行状态红字，横幅承载三要素（哪段没还原/为什么/用户能做什么）
+    private final cn.song.mybatisplus.visualizer.ui.DegradationBanner degradationBanner =
+            new cn.song.mybatisplus.visualizer.ui.DegradationBanner();
+
     /**
      * T-UiNative T-UN-14：空态提示接编辑器原生 placeholder（两区锚定物均为 EditorFactory
      * 直建编辑器，实际类型 EditorEx——243 javap 核实有 {@code setPlaceholder(CharSequence)}），
-     * 显隐由编辑器随空文档/焦点原生管理；原自摆 inputHintLabel/resultHintLabel 删除，
-     * 文案键（"log.panel.hint.input" / "log.panel.hint.result"）沿用不变。
+     * 显隐由编辑器随空文档/焦点原生管理；文案键（"log.panel.hint.input" / "log.panel.hint.result"）沿用不变。
      */
     private final String inputPlaceholder = MpSqlVisualizerBundle.message("log.panel.hint.input");
     private final String resultPlaceholder = MpSqlVisualizerBundle.message("log.panel.hint.result");
@@ -93,7 +104,12 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         splitter.setSecondComponent(resultPanel);
         splitter.setShowDividerControls(false);
         add(splitter, BorderLayout.CENTER);
-        add(statusLabel, BorderLayout.SOUTH);
+        // T-PreviewUx-Pack #2：底部区 = 诚实降级横幅（上）+ 状态行（下）——横幅触发即显示、
+        // 恢复即隐藏（不占高度），状态行语义不变
+        JPanel southHost = new JPanel(new BorderLayout());
+        southHost.add(degradationBanner, BorderLayout.NORTH);
+        southHost.add(statusLabel, BorderLayout.SOUTH);
+        add(southHost, BorderLayout.SOUTH);
     }
 
     // ------------------------------------------------------------------
@@ -111,7 +127,10 @@ public class LogToSqlPanel extends JPanel implements Disposable {
     }
 
     private JPanel buildResultToolbar() {
-        DefaultActionGroup group = new DefaultActionGroup(new CopyAction(), new ToggleFormatAction(), new ClearResultAction());
+        DefaultActionGroup group = new DefaultActionGroup(new CopyAction(), new ToggleFormatAction(),
+                // T-PreviewUx-Pack #4：执行还原产物（送原生 Database 控制台链路；多条语句先勾选确认）
+                new ExecuteResultAction(),
+                new ClearResultAction());
         com.intellij.openapi.actionSystem.ActionToolbar toolbar = ActionManager.getInstance()
                 .createActionToolbar(TOOLBAR_ID_RESULT, group, true);
         toolbar.setTargetComponent(this);
@@ -192,6 +211,95 @@ public class LogToSqlPanel extends JPanel implements Disposable {
             cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(resultEditor, "");
             status(" ", false);
         }
+    }
+
+    /**
+     * T-PreviewUx-Pack #4：执行还原产物（吸收 DBX「多语句执行确认」口径）——
+     * 产物拆分后<b>单条直通</b>（不增加低价值打断）；多条先弹候选勾选浮层
+     * （T-CrudSql 原生形态：JBPopup 无按钮浮层，Enter/双击执行选中项、ESC 关闭、打字过滤），
+     * 选中项送既有执行链路（execute/DataSourceSelector + SqlExecutor——原生 Database 控制台，
+     * 凭证不出 IDE；Community 由 SqlExecutor 提示降级）。
+     */
+    private class ExecuteResultAction extends AnAction {
+        @Override
+        public void update(AnActionEvent e) {
+            e.getPresentation().setIcon(AllIcons.Actions.Execute);
+            e.getPresentation().setText(MpSqlVisualizerBundle.message("logToSql.panel.execute"));
+            e.getPresentation().setEnabled(!resultEditor.getDocument().getText().isBlank());
+        }
+
+        @Override
+        public void actionPerformed(AnActionEvent e) {
+            executeResult();
+        }
+    }
+
+    /** 执行入口：拆语句 → 单条直通 / 多条勾选浮层。 */
+    private void executeResult() {
+        String text = resultEditor.getDocument().getText();
+        if (text.isBlank()) return;
+        List<String> statements = splitSqlStatements(text);
+        if (statements.isEmpty()) {
+            status(MpSqlVisualizerBundle.message("logToSql.panel.noEntry"), true);
+            return;
+        }
+        if (statements.size() == 1) {
+            executeStatement(statements.get(0));
+            return;
+        }
+        // 多条：候选勾选浮层（CrudSqlPreviewFlow.showCandidates 同款范式——无按钮、
+        // Enter/双击确认、ESC 关闭、速度搜索过滤；条目 = 摘要行 + 完整语句详情行）
+        List<StatementCandidate> rows = new ArrayList<>();
+        for (int index = 0; index < statements.size(); index++) {
+            String sql = statements.get(index);
+            String keyword = cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier.getFirstKeyword(sql);
+            rows.add(new StatementCandidate(
+                    index + 1,
+                    keyword != null ? keyword : "SQL",
+                    sql));
+        }
+        // T-BatchInMerge（O-14）：同表等值批删的合并参考行——浮层原生单行提示位
+        // （adText），零新弹窗零新组件形态；执行文本与复制行为零改动
+        String mergeAdText = buildMergeAdText(statements);
+        com.intellij.openapi.ui.popup.IPopupChooserBuilder<StatementCandidate> builder =
+                com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
+                        .createPopupChooserBuilder(rows)
+                        .setTitle(MpSqlVisualizerBundle.message("logToSql.execute.pickTitle"))
+                        .setRenderer(new StatementCandidateRenderer())
+                        .setNamerForFiltering(StatementCandidate::summary)
+                        .setItemChosenCallback(selected -> {
+                            // 执行延后到选择浮层关闭之后（T-CrudSql 真机修复同款：不在选择 UI 的事件栈内
+                            // 同步开 modeless 链路，262 实测会被吞且零异常零日志）
+                            ApplicationManager.getApplication().invokeLater(() -> executeStatement(selected.sql()));
+                        });
+        if (mergeAdText != null) {
+            builder.setAdText(mergeAdText);
+        }
+        builder.createPopup().showInFocusCenter();
+    }
+
+    /** 执行单条语句：非查询先 DML 二次确认（与预览面板执行同交互），随后送原生控制台链路。
+     *  T-UnboundedWriteGuard：确认消息经 ExecuteConfirmMessages——命中无界写特征时同一对话框
+     *  列出发现（不新增弹窗形态/步骤），无发现时文案逐字节不变。
+     *  弹窗白名单依据（BannedApiSourceScanTest「模态弹窗只允许白名单内既有场景」）：非查询提交前
+     *  的 YesNo 确认属「用户必须做选择」场景，与 SqlPreviewPanel 执行确认同类。 */
+    private void executeStatement(String sql) {
+        boolean isQuery = cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier.isQuery(sql);
+        if (!isQuery) {
+            String keyword = cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier.getFirstKeyword(sql);
+            String keywordOrSql = keyword != null ? keyword : "SQL";
+            int confirm = com.intellij.openapi.ui.Messages.showYesNoDialog(
+                    project,
+                    cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(sql, keywordOrSql),
+                    MpSqlVisualizerBundle.message("execute.confirm.dml"),
+                    com.intellij.openapi.ui.Messages.getWarningIcon());
+            if (confirm != com.intellij.openapi.ui.Messages.YES) return;
+        }
+        status(MpSqlVisualizerBundle.message("logToSql.execute.submitted"), false);
+        cn.song.mybatisplus.visualizer.execute.SqlExecutor.execute(
+                project, sql, null, isQuery,
+                null, null,
+                errorMsg -> status(errorMsg, true));
     }
 
     // ------------------------------------------------------------------
@@ -287,9 +395,16 @@ public class LogToSqlPanel extends JPanel implements Disposable {
             LogSqlEntry entry = entries.get(index);
             String base = withTerminator(entry.restoredSql());
             String body = formatToggled ? SqlFormatter.INSTANCE.format(base) : base;
-            String piece = multi
-                    ? "-- " + MpSqlVisualizerBundle.message("logToSql.status.group", index + 1) + "\n" + body
-                    : body;
+            String piece;
+            if (multi) {
+                // T-StatementNaming（O-19）：语句前导注释 `-- Name: x`（或最近行注释）→ 组头附「 [名称]」；
+                // 无注释 nameOf=null 后缀空串——组头逐字节维持现状（硬门禁）
+                String named = cn.song.mybatisplus.visualizer.util.SqlStatementNamer.nameOf(entry.restoredSql());
+                piece = "-- " + MpSqlVisualizerBundle.message("logToSql.status.group", index + 1)
+                        + (named != null ? " [" + named + "]" : "") + "\n" + body;
+            } else {
+                piece = body;
+            }
             if (index > 0) {
                 out.append("\n\n");
             }
@@ -300,9 +415,13 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         return new ConversionOutput(out.toString(), entries.size(), (int) unresolved);
     }
 
-    /** 应用转换结果（EDT）：写结果区 + 状态行。 */
+    /** 应用转换结果（EDT）：写结果区 + 状态行 + 诚实降级横幅。 */
     private void applyConversion(ConversionOutput out) {
         if (out.text() == null) {
+            // T-PreviewUx-Pack #2：未识别到条目 → 横幅三要素（哪段没还原=整段日志，为什么=前缀不匹配，能做什么）
+            degradationBanner.show(
+                    cn.song.mybatisplus.visualizer.ui.DegradationBanner.Kind.RENDER_WARNING,
+                    MpSqlVisualizerBundle.message("logToSql.banner.noEntry"));
             status(MpSqlVisualizerBundle.message("logToSql.panel.noEntry"), true);
             return;
         }
@@ -310,6 +429,14 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         // T-AutoFold F4-c：转换产出后按当前设置重建结果区折叠（关闭态零操作）。
         // 随 dev 的计算/应用拆分从 computeConversion（后台线程）移到此处（EDT），写后即折。
         cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(resultEditor, out.text());
+        if (out.unresolved() > 0) {
+            // T-PreviewUx-Pack #2：还原不完整横幅（为什么=Parameters 缺失/残缺，能做什么=补全参数行）
+            degradationBanner.show(
+                    cn.song.mybatisplus.visualizer.ui.DegradationBanner.Kind.RENDER_WARNING,
+                    MpSqlVisualizerBundle.message("logToSql.banner.unresolved", out.unresolved()));
+        } else {
+            degradationBanner.clear(cn.song.mybatisplus.visualizer.ui.DegradationBanner.Kind.RENDER_WARNING);
+        }
         if (out.unresolved() > 0) {
             status(MpSqlVisualizerBundle.message("logToSql.status.unresolved", out.unresolved()), true);
         } else {
@@ -438,7 +565,125 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         return statusLabel.getText();
     }
 
+    /** T-PreviewUx-Pack #2：诚实降级横幅（显隐/文案断言用）。 */
+    cn.song.mybatisplus.visualizer.ui.DegradationBanner degradationBannerForTest() {
+        return degradationBanner;
+    }
+
+    // ------------------------------------------------------------------
+    // T-PreviewUx-Pack #4：多语句执行确认（候选模型 / 渲染器 / 语句拆分）
+    // ------------------------------------------------------------------
+
+    /** 候选项（纯数据，可单测）：序号 + 首关键字摘要 + 完整语句。 */
+    record StatementCandidate(int index, String keyword, String sql) {
+        /** 摘要行：{@code SQL #N · 关键字}（CrudSqlPreviewFlow.summary 同款 `·` 分隔风格）。 */
+        String summary() {
+            return MpSqlVisualizerBundle.message("logToSql.status.group", index) + " · " + keyword;
+        }
+    }
+
+    /**
+     * 候选行渲染器：主题色双行（加粗摘要 + 次要色详情），CrudSqlPreviewFlow.CandidateCellRenderer
+     * 同款范式；详情行禁 HTML 解析（语句可能以 {@code <} 开头），按 {@link SqlSelectionDialog#MAX_LINE_LENGTH} 截断。
+     */
+    private static class StatementCandidateRenderer extends JPanel implements javax.swing.ListCellRenderer<StatementCandidate> {
+        private final javax.swing.JLabel summaryLabel = new javax.swing.JLabel();
+        private final javax.swing.JLabel detailLabel = new javax.swing.JLabel();
+
+        StatementCandidateRenderer() {
+            setOpaque(true);
+            setBorder(JBUI.Borders.empty(6, 12));
+            summaryLabel.setFont(summaryLabel.getFont().deriveFont(java.awt.Font.BOLD));
+            detailLabel.putClientProperty("html.disable", true);
+            detailLabel.setForeground(com.intellij.util.ui.UIUtil.getContextHelpForeground());
+            add(summaryLabel, BorderLayout.NORTH);
+            add(detailLabel, BorderLayout.CENTER);
+        }
+
+        @Override
+        public java.awt.Component getListCellRendererComponent(
+                javax.swing.JList<? extends StatementCandidate> list,
+                StatementCandidate value,
+                int index,
+                boolean selected,
+                boolean focused) {
+            summaryLabel.setText(value.summary());
+            String sql = value.sql();
+            int nl = sql.indexOf('\n');
+            String firstLine = nl >= 0 ? sql.substring(0, nl) : sql;
+            if (firstLine.length() > SqlSelectionDialog.MAX_LINE_LENGTH) {
+                detailLabel.setText(firstLine.substring(0, SqlSelectionDialog.MAX_LINE_LENGTH) + "…");
+            } else {
+                detailLabel.setText(firstLine);
+            }
+            setBackground(selected
+                    ? com.intellij.util.ui.UIUtil.getListSelectionBackground(true)
+                    : com.intellij.util.ui.UIUtil.getListBackground());
+            summaryLabel.setForeground(com.intellij.util.ui.UIUtil.getListForeground());
+            detailLabel.setForeground(selected
+                    ? com.intellij.util.ui.UIUtil.getListForeground()
+                    : com.intellij.util.ui.UIUtil.getContextHelpForeground());
+            return this;
+        }
+    }
+
+    java.util.List<String> statementsForTest() {
+        return splitSqlStatements(resultEditor.getDocument().getText());
+    }
+
     void loadFromEntryForTest(LogSqlEntry entry) {
         loadFromEntry(entry);
+    }
+
+    /**
+     * T-PreviewUx-Pack #4：结果文本 → 语句列表（纯函数）——按顶层 {@code ;} 切分，
+     * 引号字符串内的 {@code ;} 不切分；{@code --} 行注释与块注释内的 {@code ;} 不切分（LogToSqlPanel 产物
+     * 组间自带 {@code -- SQL #N} 注释头，注释随所属语句一并保留——原生控制台接受注释）。
+     * 段间空白丢弃，空列表 = 无可执行语句。
+     *
+     * <p>T-SemicolonGuard（O-13）：实现收敛委托至 util/SqlStatementSplitter
+     * （单实现三处历史切分合一）；新增括号深度与 BEGIN/END 块感知两项语义
+     * （迁移前后既有样例输出逐段一致，守卫测试锁死）。
+     */
+    static java.util.List<String> splitSqlStatements(String sql) {
+        return cn.song.mybatisplus.visualizer.util.SqlStatementSplitter.split(sql);
+    }
+
+    /**
+     * T-BatchInMerge（O-14）：批量等值谓词合并参考文案（纯函数可测；null = 无合并集）。
+     * 异构语句在场时按「N/M 条」披露（不静默丢）；展示预算截值清单时<b>计数后缀恒可见</b>
+     * （先裁值再拼「…等 N 条」，N = 行数/字节超限 + 展示裁掉的值数之和——绝不无计数截断）。
+     */
+    static String buildMergeAdText(java.util.List<String> statements) {
+        cn.song.mybatisplus.visualizer.util.BatchPredicateMerge.MergePreview preview =
+                cn.song.mybatisplus.visualizer.util.BatchPredicateMerge.mergePreview(statements);
+        if (preview == null) return null;
+        String prefix = "DELETE FROM " + preview.table() + " WHERE " + preview.column() + " IN (";
+        // 展示预算：前缀 + 值清单 + 收括号 ≤ 上限；后缀占位先扣（保证计数可见）
+        int budget = MERGE_HINT_SQL_DISPLAY_LIMIT - prefix.length() - 1;
+        List<String> joined = new ArrayList<>();
+        int used = 0;
+        int dropped = 0;
+        List<String> values = preview.values();
+        for (int index = 0; index < values.size(); index++) {
+            String value = values.get(index);
+            int cost = value.length() + (index > 0 ? 2 : 0);
+            if (used > 0 && used + cost > budget - MERGE_MORE_RESERVE) {
+                dropped = values.size() - joined.size();
+                break;
+            }
+            used += cost;
+            joined.add(value);
+        }
+        int hidden = preview.hiddenValues() + dropped;
+        String moreText = hidden > 0 ? MpSqlVisualizerBundle.message("logToSql.execute.mergeMore", hidden) : "";
+        String inner = String.join(", ", joined) + (!moreText.isEmpty() ? ", " + moreText : "");
+        String displaySql = prefix + inner + ")";
+        if (preview.coveredCount() == preview.totalStatements()) {
+            return MpSqlVisualizerBundle.message("logToSql.execute.mergeHint", preview.coveredCount(), displaySql);
+        }
+        return MpSqlVisualizerBundle.message(
+                "logToSql.execute.mergeHintSubset",
+                preview.totalStatements(), preview.coveredCount(), displaySql);
     }
 }

@@ -31,6 +31,9 @@ public class SqlLogEntryBuffer {
     private static final int DEFAULT_MAX_ENTRIES = 200;
     private static final long DEFAULT_DEDUPE_WINDOW_MS = 60000L;
 
+    /** T-M55-02：错误反向绑定时间窗默认值（慢查询执行期异常打印仍落在窗口内）。 */
+    private static final long DEFAULT_ERROR_BIND_WINDOW_MS = 5 * 60_000L;
+
     /** T-PerfBatch：内容通知数量阈值——时间窗内累计 N 条才再通知（首条不受限，即时）。 */
     private static final int CONTENT_NOTIFY_BATCH = 20;
 
@@ -83,6 +86,13 @@ public class SqlLogEntryBuffer {
 
     /** 条目被淘汰时的回调（最早条目超出上限时被移除）；用于自动保存历史 SQL（F-43）。 */
     private Consumer<LogSqlEntry> onEvicted = null;
+
+    /**
+     * T-SqlHistoryFull：成功入队回调（非暂停/过滤/去重丢弃）——历史「全量」写入出口，带条目标。
+     * 与 {@link #onEntryAccepted} 的分工：onEntryAccepted 是「有新 SQL」即时语义（无参数）；
+     * 本回调把成功入队条目交给写盘方（自动保存），每条成功入队触发一次。
+     */
+    private Consumer<LogSqlEntry> onEntryStored = null;
 
     /**
      * T-PerfBatch：每次成功入队（非暂停/过滤/去重丢弃）即回调——「有新 SQL」语义（自动展开）
@@ -158,6 +168,14 @@ public class SqlLogEntryBuffer {
         this.onEvicted = onEvicted;
     }
 
+    public Consumer<LogSqlEntry> getOnEntryStored() {
+        return onEntryStored;
+    }
+
+    public void setOnEntryStored(Consumer<LogSqlEntry> onEntryStored) {
+        this.onEntryStored = onEntryStored;
+    }
+
     public Runnable getOnEntryAccepted() {
         return onEntryAccepted;
     }
@@ -213,12 +231,15 @@ public class SqlLogEntryBuffer {
         }
         boolean duplicate = false;
         List<LogSqlEntry> evictedEntries = new ArrayList<>();
+        LogSqlEntry[] storedEntry = {null};
         synchronized (entries) {
             if (dedupeEnabled && isDuplicate(entry)) {
                 duplicate = true;
             } else {
                 // T-LogRowNumber：入队时分配捕获序号（去重丢弃/暂停/过滤不占号，列表不跳号）
-                entries.addLast(addNumbered(entry));
+                LogSqlEntry added = addNumbered(entry);
+                storedEntry[0] = added;
+                entries.addLast(added);
                 while (entries.size() > maxEntries) {
                     evictedEntries.add(entries.removeFirst());
                     evictedSinceDrain.incrementAndGet(); // T-Perf-03：头部淘汰计数（面板增量刷新）
@@ -235,10 +256,15 @@ public class SqlLogEntryBuffer {
         }
         // T-Perf-12（自 dev 移植）：onEvicted 回调移出 synchronized(entries)——回调链（自动保存磁盘写）
         // 在锁内同步执行会阻塞 EDT snapshot() 抢同一把锁（控制台输出热路径互相卡）
+        // T-SqlHistoryFull：被淘汰条目先经 onEntryStored 写过（入队成功即写），此处 onEvicted 不再重复消费
         for (LogSqlEntry evicted : evictedEntries) {
             if (onEvicted != null) {
                 onEvicted.accept(evicted);
             }
+        }
+        // T-SqlHistoryFull：成功入队即写历史——「全量」出口（含随后被淘汰的条目，它们也先进了列表）
+        if (storedEntry[0] != null && onEntryStored != null) {
+            onEntryStored.accept(storedEntry[0]);
         }
         Runnable accepted = onEntryAccepted;
         if (accepted != null) {
@@ -325,6 +351,72 @@ public class SqlLogEntryBuffer {
         }
     }
 
+    // ---------- T-M55-02：执行报错反向绑定（原地更新最近条目） ----------
+
+    /** 错误反向绑定结果（丢弃原因显式化——桥层据此 LOG.debug，不阻塞主链）。 */
+    public enum ErrorBindResult {
+        /** 已绑定（含同文本幂等重绑）。 */
+        BOUND,
+        /** 缓冲为空（条目已被清空/尚未捕获）→ 错误丢弃。 */
+        DROPPED_EMPTY,
+        /** 最近条目超出绑定时间窗（{@link #getErrorBindWindowMs()}）→ 错误丢弃。 */
+        DROPPED_WINDOW_EXPIRED,
+        /** 错误文本为空 → 无事可绑。 */
+        DROPPED_BLANK,
+    }
+
+    /**
+     * 错误绑定时间窗（毫秒）：异常打印在 Preparing/Parameters 之后，仅反向绑定该窗口内
+     * 入列的最近条目——超窗视为「与缓冲内条目无关的错误」（启动期残留/应用级报错），显式丢弃。
+     */
+    private volatile long errorBindWindowMs = DEFAULT_ERROR_BIND_WINDOW_MS;
+
+    public long getErrorBindWindowMs() {
+        return errorBindWindowMs;
+    }
+
+    public void setErrorBindWindowMs(long value) {
+        this.errorBindWindowMs = value;
+    }
+
+    /**
+     * T-M55-02：错误文本反向绑定<b>时间窗内同控制台最近条目</b>（原地更新 errorText）。
+     *
+     * <ul>
+     * <li>原地更新 = 队尾条目 copy(errorText=...) 替换——{@link LogSqlEntry#dedupeKey()} 不含 errorText
+     * （SQL 指纹稳定），去重计数与 ⨉N 徽章语义不受影响；</li>
+     * <li>绑定成功走 {@link #notifyChanged()}（面板差分刷新；尾位替换在 VisibleDiff 下为全量重建，
+     * 由管理器置脏+幂等 flush 合并频率，错误块逐行多次绑定最终只刷一次 EDT）；</li>
+     * <li>条目可能已被去重丢弃/淘汰/清空——此处表现为「最近条目缺位或超窗」，显式返回丢弃原因，
+     * 绝不阻塞主链（错误块解析失败不影响 SQL 捕获）。</li>
+     * </ul>
+     */
+    public ErrorBindResult bindErrorToRecent(String errorText) {
+        if (errorText.isBlank()) return ErrorBindResult.DROPPED_BLANK;
+        boolean[] replaced = {false};
+        ErrorBindResult[] result = {null};
+        synchronized (entries) {
+            LogSqlEntry recent = entries.isEmpty() ? null : entries.getLast();
+            ErrorBindResult r;
+            if (recent == null) {
+                r = ErrorBindResult.DROPPED_EMPTY;
+            } else if (System.currentTimeMillis() - recent.timestamp() > errorBindWindowMs) {
+                r = ErrorBindResult.DROPPED_WINDOW_EXPIRED;
+            } else if (errorText.equals(recent.errorText())) {
+                // 幂等：同一错误块逐行追加会重复绑定，文本相同视为已绑（不替换不刷新）
+                r = ErrorBindResult.BOUND;
+            } else {
+                entries.removeLast();
+                entries.addLast(recent.withErrorText(errorText));
+                replaced[0] = true;
+                r = ErrorBindResult.BOUND;
+            }
+            result[0] = r;
+        }
+        if (replaced[0]) notifyChanged();
+        return result[0];
+    }
+
     private boolean isFiltered(String sql) {
         if (filterKeywords.isEmpty()) {
             return false;
@@ -357,6 +449,16 @@ public class SqlLogEntryBuffer {
     public List<LogSqlEntry> snapshot() {
         synchronized (entries) {
             return new ArrayList<>(entries);
+        }
+    }
+
+    /**
+     * 当前条目数（T-UxOnboard T-UX-03 增设）：入队热路径（onEntryAccepted 回调）需要 O(1) 判
+     * 「本条是否会话首条」——snapshot() 全量拷贝在流式灌入下是 O(n²) 累积成本，不得用于热路径。
+     */
+    public int size() {
+        synchronized (entries) {
+            return entries.size();
         }
     }
 

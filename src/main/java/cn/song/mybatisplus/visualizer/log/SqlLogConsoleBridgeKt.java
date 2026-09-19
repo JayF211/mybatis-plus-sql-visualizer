@@ -23,15 +23,28 @@ public final class SqlLogConsoleBridgeKt {
      *  1. 若为本插件源码标记（SqlSourceInterceptor 注入）→ 暂存，不喂解析器；
      *     T-IntrUpg-01：自位污染标记（旧模板 isSelf 常量分叉时拦截器上报自身帧）不暂存，
      *     条目落无位置链路（MissingSource 引导 → 立即注入触发升级）；
+     *  1.5) T-M55-02：SQL 执行报错行（{@link SqlErrorLineRecognizer} 词表命中）→ 旁路聚合错误块并经
+     *     onErrorText 实时反向绑定缓冲最近条目（不改控制台输出、不干扰解析器主链）；
      *  2. 喂行到三个解析器（配置快照已由设置变更事件同步——T-LogPerf-04），取出已配对 SQL 条目；
      *  3. 附加耗时解析结果 + 暂存源码位置，写入 LogSqlEntry。
      * 纯函数式、无 IDE 依赖，可在单元测试中直接驱动（SqlLogConsoleBridgeMarkerTest）。
      */
+    /** 无错误绑定回调形态（Kotlin onErrorText 默认参数 null 的 Java 重载等价）。 */
     public static List<LogSqlEntry> processConsoleLine(
             String line,
             BridgeLineContext ctx,
             String timePrefix,
             Runnable syncBufferConfig
+    ) {
+        return processConsoleLine(line, ctx, timePrefix, syncBufferConfig, null);
+    }
+
+    public static List<LogSqlEntry> processConsoleLine(
+            String line,
+            BridgeLineContext ctx,
+            String timePrefix,
+            Runnable syncBufferConfig,
+            java.util.function.Consumer<String> onErrorText
     ) {
         // M56 T-M56-02：增强接管闸门——agent 在线时桥不产出条目，回落即恢复。
         // T-AgentDialectLoop / T-AgentLogTime：接管期间无条件转入日志时间嗅探——把行喂给既有解析器
@@ -54,6 +67,28 @@ public final class SqlLogConsoleBridgeKt {
             }
             ctx.pendingSource = marker;
             return List.of();
+        }
+        // 1.5) T-M55-02：SQL 执行报错旁路识别——词表廉价前置判定（O(词表×行长)，无正则），
+        // 命中即聚合错误块并经 onErrorText 实时反向绑定缓冲最近条目（旁路记录，不改控制台输出、
+        // 不影响三解析器主链：错误行随后照常喂解析器，行为与无错误行逐字一致）。
+        // 续行判定先行：### /堆栈帧在块内视为续行（MyBatis ### 续行同时命中错误词表，不得重开块丢首行）。
+        if (ctx.pendingError != null && SqlErrorLineRecognizer.isContinuationLine(line)) {
+            StringBuilder sb = ctx.pendingError;
+            int newlineCount = 0;
+            for (int i = 0; i < sb.length(); i++) {
+                if (sb.charAt(i) == '\n') newlineCount++;
+            }
+            if (sb.length() < SqlErrorLineRecognizer.MAX_ERROR_TEXT_LENGTH
+                    && newlineCount < SqlErrorLineRecognizer.MAX_ERROR_STACK_LINES) {
+                sb.append('\n').append(line.trim());
+                if (onErrorText != null) onErrorText.accept(sb.toString());
+            }
+        } else if (SqlErrorLineRecognizer.isErrorLine(line)) {
+            ctx.pendingError = new StringBuilder(SqlErrorLineRecognizer.firstLineText(line));
+            if (onErrorText != null) onErrorText.accept(ctx.pendingError.toString());
+        } else if (!line.isBlank()) {
+            // 块外普通行（含空行放行，容忍堆栈间空行）结束当前错误块
+            ctx.pendingError = null;
         }
         // 2) 喂行到三个解析器（各自忽略不匹配的行；配置快照随设置变更事件刷新，逐行零同步成本）
         ctx.myBatisParser.feed(line);
@@ -99,6 +134,8 @@ public final class SqlLogConsoleBridgeKt {
                     sourceFile,
                     sourceLine,
                     e.sourceCandidates(),
+                    e.candidateClasses(),
+                    e.stackDigest(),
                     e.sequenceNumber(),
                     mapperStatement,
                     e.errorText(),

@@ -13,7 +13,10 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 
 /**
  * 单个 agent 会话：读线程循环解帧（EVENT → 适配 → buffer；HEARTBEAT 刷新在线窗口；
@@ -34,22 +37,39 @@ public class AgentSession {
     private final Socket socket;
     private final Runnable onStateChange;
 
+    /**
+     * T-ReachAudit T-RA-01：时间源（默认系统时钟）。与 {@code AgentManager.clockMs} 同源注入——心跳窗口判定
+     * 跨「会话记 lastSeen」与「管理器算过期」两侧，两侧时钟不同源则测试无法推进时间（假时钟一注入，
+     * 真实时间戳的 lastSeen 会让会话永远健康），真机也无差异。
+     */
+    private final LongSupplier clockMs;
+
     private volatile boolean alive = true;
 
-    private volatile long lastSeen = System.currentTimeMillis();
+    private volatile long lastSeen;
 
     private final DataOutputStream output;
     private final AtomicLong eventDropped = new AtomicLong();
 
+    /** T-DialectAutoInfer：最近一次事件携带的连接 URL（connect 时捕获，会话内记忆；null=旧版 agent/未捕获）。 */
+    private volatile String lastConnectionUrl = null;
+
     /** T-AgentLogTime：日志时间未命中计数（诊断——键不等 vs 时序赶不上，真机排障一眼分辨）。 */
     private final AtomicLong timeMiss = new AtomicLong();
 
+    /** 便捷构造器：clockMs 缺省系统时钟（Kotlin 默认参数）。 */
     public AgentSession(Project project, long pid, Socket socket, Runnable onStateChange) throws IOException {
+        this(project, pid, socket, onStateChange, () -> System.currentTimeMillis());
+    }
+
+    public AgentSession(Project project, long pid, Socket socket, Runnable onStateChange, LongSupplier clockMs) throws IOException {
         this.project = project;
         this.pid = pid;
         this.socket = socket;
         this.onStateChange = onStateChange;
+        this.clockMs = clockMs;
         this.output = new DataOutputStream(socket.getOutputStream());
+        this.lastSeen = clockMs.getAsLong();
         socket.setSoTimeout(0);
         Thread reader = new Thread(this::readLoop, "mps-agent-session-" + pid);
         reader.setDaemon(true);
@@ -68,6 +88,11 @@ public class AgentSession {
         return pid;
     }
 
+    /** T-DialectAutoInfer：最近一次事件携带的连接 URL（会话内记忆；null=旧版 agent/未捕获）。 */
+    public String getLastConnectionUrl() {
+        return lastConnectionUrl;
+    }
+
     private void readLoop() {
         try {
             DataInputStream input = new DataInputStream(socket.getInputStream());
@@ -84,7 +109,7 @@ public class AgentSession {
                 int cmd = input.readUnsignedByte();
                 byte[] body = new byte[len];
                 input.readFully(body);
-                lastSeen = System.currentTimeMillis();
+                lastSeen = clockMs.getAsLong();
                 handleFrame(cmd, new String(body, StandardCharsets.UTF_8));
             }
         } catch (Throwable t) {
@@ -103,6 +128,11 @@ public class AgentSession {
                 return;
             }
             try {
+                // T-DialectAutoInfer：connect URL 会话内记忆（推断依据；null 容错——旧版 agent 无此键）
+                String url = event.url();
+                if (url != null && !url.isBlank()) {
+                    lastConnectionUrl = url;
+                }
                 LogSqlEntry entry = AgentEventAdapter.toEntry(event);
                 // T-AgentDialectLoop / T-AgentLogTime：接管期间控制台嗅探暂存的「日志行原始时间」
                 // 按 logTimeKey（占位符版 SQL 指纹）取回，参数值序列作次级判别（stampLogTime）。
@@ -142,7 +172,14 @@ public class AgentSession {
 
     public void sendConfig(boolean disabled, boolean desensitize) {
         try {
-            byte[] body = AgentProtocol.configBody(disabled, desensitize).getBytes(StandardCharsets.UTF_8);
+            // T-SourceJumpFunnel P1-3：随 CONFIG 附带用户登记的帧过滤前缀（热下发；旧 agent 忽略该键）
+            List<String> prefixes = new ArrayList<>();
+            for (String line : PluginSettings.getInstance().getState().getSourceFrameSkipPrefixes().lines().toList()) {
+                if (!line.isBlank()) {
+                    prefixes.add(line);
+                }
+            }
+            byte[] body = AgentProtocol.configBody(disabled, desensitize, prefixes).getBytes(StandardCharsets.UTF_8);
             synchronized (output) {
                 output.writeInt(body.length);
                 output.write(AgentProtocol.CMD_CONFIG);

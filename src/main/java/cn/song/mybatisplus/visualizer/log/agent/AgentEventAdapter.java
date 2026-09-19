@@ -45,6 +45,9 @@ public final class AgentEventAdapter {
             event.sourceLine(),
             // T-AgentSourceJump：候选帧透传（IDE 侧跳转在主位置解析失败时按序回退）
             event.sourceCandidates(),
+            // T-SourceJumpFunnel：候选类名与栈快照透传（选帧弹层/NotFound 提示/详情面板往上追踪）
+            event.candidateClasses(),
+            event.stackDigest(),
             0L,
             // T-M56-06：方法聚焦键（agent 栈帧 {Class}#{method}）——与 mapper 语句 id 同入 mapperStatement
             // 字段语义扩展由 focusMethodKey 统一承载（agent JDBC 层无 mapper id，非冲突）
@@ -146,12 +149,19 @@ public final class AgentEventAdapter {
         return "'" + p.value().replace("'", "''") + "'";
     }
 
+    /** T-PS4-04：正则提常量（每参数两处现场编译 → 类级单例；T-PerfSweep F2 惯例）。 */
+    private static final java.util.regex.Pattern NUMERIC_TYPE_REGEX =
+        java.util.regex.Pattern.compile("(Int|Integer|Long|Short|Byte|Double|Float|BigDecimal|BigInteger|Numeric|Decimal)");
+
+    private static final java.util.regex.Pattern NUMERIC_LIKE_REGEX =
+        java.util.regex.Pattern.compile("-?\\d+(\\.\\d+)?");
+
     private static boolean isNumericType(String type) {
-        return type != null && type.matches("(Int|Integer|Long|Short|Byte|Double|Float|BigDecimal|BigInteger|Numeric|Decimal)");
+        return type != null && NUMERIC_TYPE_REGEX.matcher(type).matches();
     }
 
     private static boolean isNumericLike(String v) {
-        return v.matches("-?\\d+(\\.\\d+)?");
+        return NUMERIC_LIKE_REGEX.matcher(v).matches();
     }
 
     /** 摘要默认值（Kotlin data class 默认参数；与 LogSqlEntry 私有 computeSummary 同一口径）。 */

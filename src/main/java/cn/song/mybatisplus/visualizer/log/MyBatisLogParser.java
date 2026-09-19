@@ -292,7 +292,7 @@ public class MyBatisLogParser {
                 logTs,
                 LogSqlEntry.computeSummary(restored),
                 SqlSource.MYBATIS,
-                null, null, 0, List.of(), 0L,
+                null, null, 0, List.of(), List.of(), null, 0L,
                 null, null, null, null, null);
         entries.add(entry);
         bucket.pendingParams.clear();

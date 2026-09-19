@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import kotlin.Pair;
 
 /**
  * 历史文件参数载荷编解码（T-HistParam F1）：格式 v2 在头部注释行之下新增独立注释行
@@ -40,6 +41,10 @@ public final class SqlLogParamCodec {
     private static final String ERROR_FIELD = "e";
     private static final String TAG_FIELD = "q";
     private static final String UPDATE_COUNT_FIELD = "u";
+    // T-SourceJumpFunnel：候选 [file, line] 对数组 + 候选类名 + 栈快照（历史读回后跳转回退仍可用）
+    private static final String CANDS_FIELD = "cd";
+    private static final String CAND_CLASSES_FIELD = "cc";
+    private static final String STACK_DIGEST_FIELD = "sd";
 
     private static final Gson GSON = new Gson();
 
@@ -48,16 +53,28 @@ public final class SqlLogParamCodec {
      * 旧 payload 为 null。
      */
     public record DecodedPayload(
+            /** rawSql 原文。 */
             String rawSql,
+            /** 参数列表（[value, type] 对还原）。 */
             List<LogSqlParam> params,
+            /** mapper 语句 id（旧 payload 为 null）。 */
             String mapperStatement,
+            /** 执行报错（旧 payload 为 null）。 */
             String errorText,
+            /** 请求标签（旧 payload 为 null）。 */
             String requestTag,
-            Long updateCount) {
+            /** 影响行数（旧 payload 为 null）。 */
+            Long updateCount,
+            /** T-SourceJumpFunnel：候选 [file, line]（栈序）；旧 payload 为空。 */
+            List<Pair<String, Integer>> sourceCandidates,
+            /** T-SourceJumpFunnel：候选类名（栈序对齐）；旧 payload 为空。 */
+            List<String> candidateClasses,
+            /** T-SourceJumpFunnel：调用栈快照；旧 payload 为 null。 */
+            String stackDigest) {
 
-        /** 无 M56 扩展字段形态（Kotlin data class 默认参数等价）。 */
+        /** 无扩展字段形态（Kotlin data class 默认参数等价）。 */
         public DecodedPayload(String rawSql, List<LogSqlParam> params) {
-            this(rawSql, params, null, null, null, null);
+            this(rawSql, params, null, null, null, null, List.of(), List.of(), null);
         }
     }
 
@@ -93,6 +110,27 @@ public final class SqlLogParamCodec {
         if (entry.updateCount() != null) {
             obj.addProperty(UPDATE_COUNT_FIELD, entry.updateCount());
         }
+        // T-SourceJumpFunnel：候选/栈快照（非默认才落键，旧版本解码端忽略未知键）
+        if (!entry.sourceCandidates().isEmpty()) {
+            JsonArray cands = new JsonArray();
+            for (Pair<String, Integer> candidate : entry.sourceCandidates()) {
+                JsonArray pair = new JsonArray();
+                pair.add(candidate.getFirst());
+                pair.add(candidate.getSecond());
+                cands.add(pair);
+            }
+            obj.add(CANDS_FIELD, cands);
+        }
+        if (!entry.candidateClasses().isEmpty()) {
+            JsonArray classes = new JsonArray();
+            for (String cls : entry.candidateClasses()) {
+                classes.add(cls);
+            }
+            obj.add(CAND_CLASSES_FIELD, classes);
+        }
+        if (entry.stackDigest() != null) {
+            obj.addProperty(STACK_DIGEST_FIELD, entry.stackDigest());
+        }
         return Base64.getEncoder().encodeToString(GSON.toJson(obj).getBytes(StandardCharsets.UTF_8));
     }
 
@@ -127,16 +165,51 @@ public final class SqlLogParamCodec {
                     params.add(new LogSqlParam(value, type));
                 }
             }
+            // T-SourceJumpFunnel：候选 [file, line] 对数组（栈序）——形态异常的元素逐个跳过（forEach return 等价）
+            List<Pair<String, Integer>> sourceCandidates = new ArrayList<>();
+            JsonElement candsEl = json.get(CANDS_FIELD);
+            JsonArray candsArr = candsEl != null && candsEl.isJsonArray() ? candsEl.getAsJsonArray() : null;
+            if (candsArr != null) {
+                for (JsonElement el : candsArr) {
+                    if (!el.isJsonArray()) continue;
+                    JsonArray pair = el.getAsJsonArray();
+                    JsonElement fileEl = getOrNull(pair, 0);
+                    String file = fileEl != null && fileEl.isJsonPrimitive() ? fileEl.getAsString() : null;
+                    if (file == null) continue;
+                    JsonElement lineEl = getOrNull(pair, 1);
+                    int line = lineEl != null && lineEl.isJsonPrimitive() ? lineEl.getAsInt() : 0;
+                    sourceCandidates.add(new Pair<>(file, Math.max(line, 0)));
+                }
+            }
+            // T-SourceJumpFunnel：候选类名（栈序对齐）——非原始值逐个跳过
+            List<String> candidateClasses = new ArrayList<>();
+            JsonElement classesEl = json.get(CAND_CLASSES_FIELD);
+            JsonArray classesArr = classesEl != null && classesEl.isJsonArray() ? classesEl.getAsJsonArray() : null;
+            if (classesArr != null) {
+                for (JsonElement el : classesArr) {
+                    if (el != null && el.isJsonPrimitive()) {
+                        candidateClasses.add(el.getAsString());
+                    }
+                }
+            }
             return new DecodedPayload(
                     rawSql,
                     params,
                     stringField(json, MAPPER_FIELD),
                     stringField(json, ERROR_FIELD),
                     stringField(json, TAG_FIELD),
-                    longField(json, UPDATE_COUNT_FIELD));
+                    longField(json, UPDATE_COUNT_FIELD),
+                    sourceCandidates,
+                    candidateClasses,
+                    stringField(json, STACK_DIGEST_FIELD));
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /** Kotlin JsonArray.getOrNull 扩展等价：下标越界返回 null。 */
+    private static JsonElement getOrNull(JsonArray arr, int i) {
+        return arr.size() > i ? arr.get(i) : null;
     }
 
     /** M56 扩展字符串键读取：缺失/非原始值/空白按 null（master takeIf 链等价）。 */

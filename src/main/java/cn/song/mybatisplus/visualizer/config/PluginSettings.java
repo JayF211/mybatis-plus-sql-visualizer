@@ -68,16 +68,18 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
     }
 
     /**
-     * 从 JSON 字符串导入并覆盖当前全局配置（O-5：设置导入导出）；委托 SettingsIO.importFromJson。
+     * 从 JSON 字符串导入并覆盖当前全局配置（O-5：设置导入导出）；委托 {@link SettingsIO#importFromJson}。
+     *
+     * 以当前状态为底合并（T-Fix-SettingsScope）：文件只承载 {@link SettingsIO#exportToJson} 的
+     * 21 个可覆盖项，State 其余 56 个字段（参数历史 / 增强捕获授权记忆 / 反馈身份 /
+     * 日志自动保存目录 / 全局项等）不在文件里，必须保留现值而非回落出厂默认——
+     * 全局项（language 等）由此自然保留，无需再单独抄回。
      *
      * @throws SettingsIO.ImportException JSON 格式错误或版本不兼容
      */
     public static void fromJson(String json) throws SettingsIO.ImportException {
-        State imported = SettingsIO.importFromJson(json);
         PluginSettings instance = getInstance();
-        // 保留全局项（language 等），仅覆盖可覆盖项
-        imported.setLanguage(instance.getState().getLanguage());
-        instance.loadState(imported);
+        instance.loadState(SettingsIO.importFromJson(json, instance.getState().copy()));
     }
 
     /**
@@ -85,9 +87,26 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
      */
     public static final class State {
 
+        /**
+         * T-DialectAutoInfer：方言模式——true=智能推断（默认，跟随 agent 捕获连接 &gt; IDE 数据源，
+         * 未命中回退 MySQL）；false=按 {@code dialect} 手动指定。
+         * 旧配置无此字段 → XmlSerializer 缺省 true（语义变化：从不动方言设置的老用户自动进入
+         * 推断模式，CHANGELOG 已明示）。
+         */
+        private boolean dialectAuto = true;
+
+        /** 数据库方言（对应 DialectRegistry 的名称）；仅 {@code dialectAuto}=false 时生效（手动指定值）。 */
         private String dialect = DEFAULT_DIALECT;
         private boolean replaceParams = true;
         private boolean formatSql = true;
+
+        /**
+         * 空参数填充策略（T-PT-04）：参数值为空时的回填形态——{@link #EMPTY_PARAM_FILL_NULL}（默认，
+         * 渲染 {@code NULL}）或 {@link #EMPTY_PARAM_FILL_EMPTY_STRING}（渲染 {@code ''}）。
+         * 消费点 = SqlPreviewPanel.renderParamValue 的空值分支，且仅对<b>带 mapper 签名类型信息</b>的
+         * 参数行生效（无类型信息路径保留 {@code ?} 占位提示，行为与升级前一致）。
+         */
+        private String emptyParamFill = DEFAULT_EMPTY_PARAM_FILL;
         /**
          * 竖向排列 VALUES 行尾配对列名标注（T-VPairAnno）：true=显示（默认，T-VStack 以来行为不变），
          * false=仅竖排不追加标注注释（用户自带注释不受影响）。
@@ -158,6 +177,13 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private boolean logAutoSaveEnabled = false;
         private String logAutoSavePath = "";
         private String logAutoSaveFileNamePattern = DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN;
+
+        /**
+         * 历史 SQL 文件保留上限（T-HistoryFileRetention）：保存目录下历史文件（按文件名基名归并
+         * 滚动块）超过该数量时，在后台写批之后自动删除最旧文件，防止磁盘空间爆炸。
+         * 0 或负数 = 不限制（全量保留）。默认 {@link #DEFAULT_LOG_AUTO_SAVE_MAX_FILES}。
+         */
+        private int logAutoSaveMaxFiles = DEFAULT_LOG_AUTO_SAVE_MAX_FILES;
         private String logTimePrefix = DEFAULT_LOG_TIME_PREFIX;
         private long slowQueryThresholdMs = DEFAULT_SLOW_QUERY_THRESHOLD_MS;
         /**
@@ -202,13 +228,23 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
         /** 启用 JdbcTemplate / NamedParameterJdbcTemplate SQL 字符串预览（默认开）。 */
         private boolean jdbcSqlPreviewEnabled = true;
+
+        // ---------- T-ExecTimeoutGuard：执行超时护栏 ----------
+
+        /**
+         * 执行超时（秒，每语句基础值）：MCP explain 直连链 setQueryTimeout 驱动级建议值；
+         * 多语句脚本预算按语句数线性放大（封顶 ×8，见 ExecutionTimeoutGuard）。0=不限。默认 30。
+         */
+        private int executionTimeoutSeconds = DEFAULT_EXECUTION_TIMEOUT_SECONDS;
+
         private List<TableNameRule> dynamicTableNameRules = new ArrayList<>();
         private boolean dataPermissionHint = false;
         private String dataPermissionMockCondition = "";
         private int historyMaxSize = DEFAULT_HISTORY_MAX_SIZE;
+
         // ---------- F-44-7 SqlSourceInterceptor 自动注入 ----------
-        /** F-44-7：自动注入 SqlSourceInterceptor（源码位置捕获）。默认关。 */
-        private boolean autoInjectSqlSourceInterceptor = false;
+        // T-SettingsTruth P1：原 autoInjectSqlSourceInterceptor 字段已删除——该开关为纯动作
+        // （勾选立即注入一次），不保存状态，终态恒未勾选；旧 XML 残留属性由 XmlSerializer 自动忽略。
 
         // ---------- T-ErrReport 错误一键上报官网需求池 ----------
 
@@ -221,6 +257,21 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          * 需求池报告邮箱（选填，仅用于官方回复推送通知，不公开）。
          */
         private String reportSubmitterEmail = "";
+
+        // ---------- T-McpToolset2 MCP 工具门控 ----------
+
+        /**
+         * 插件 MCP 功能总开关（T-MTS2-00）：false = 全部工具在平台 MCP Server 不可见
+         * （McpToolsetSupport.isEnabled 恒 false——平台 getEnabledToolsets 每次
+         * getTools 重新求值，262 mcpserver.jar 字节码实证，切换即时生效无需重启）。
+         */
+        private boolean mcpToolsEnabled = true;
+
+        /**
+         * 工具级禁用清单（T-MTS2-00）：工具名（mpsv_render_sql 等）→ 不出现在工具面。
+         * 清单外默认启用——新增工具向后兼容（用户不配置即全部可用）。
+         */
+        private List<String> mcpDisabledTools = new ArrayList<>();
 
         // ---------- M56 增强捕获（agent 字节码通道；对用户不出现 agent 字样） ----------
 
@@ -241,10 +292,43 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private boolean enhancedCaptureConfirmed = false;
 
         /**
+         * T-PS4-01：注入确认「拒绝时刻」毫秒时间戳（持久化，随本 XML 跨 IDE 重启存活）；0 = 无拒绝记忆。
+         * 拒绝后进入 24h 冷却（窗口在 AgentManager.DEFAULT_REJECT_COOLDOWN_MS）：冷却期内不再重复弹
+         * 确认框（冷却只作用于弹窗频率、不改变同意门槛——保守口径，冷却过期后再弹一次）。
+         * 设置页「关闭 → 再开启」增强捕获时由 AgentManager 的 SETTINGS_CHANGE_TOPIC 监听清零重置，
+         * 保留用户改主意的入口；增强捕获总开关关闭时本值无意义（关闭增强 &gt; 冷却）。
+         */
+        private long enhancedCaptureRejectedAtMs = 0L;
+
+        /**
          * M56 T-M56-08：脱敏开关（**默认关**——2026-09-16 用户定案，默认采集真实参数值）。
          * true 时对疑似敏感形态打码；脱敏在 agent 采集层执行，数据不出应用 JVM 前已处理。
          */
         private boolean enhancedCaptureDesensitize = false;
+
+        // ---------- T-UxOnboard T-UX-01 首用锚点引导 ----------
+
+        /**
+         * 首用锚点引导通知开关（默认开）：项目内首次打开含可预览 SQL（Wrapper 链/XML mapper/
+         * 注解 SQL 任一）的文件时，经预览组弹一次「Alt+Shift+Q 预览」指路通知；关闭后全程静默。
+         */
+        private boolean onboardingAnchorTipEnabled = true;
+
+        /**
+         * 首用锚点引导通知已展示（一次性持久化记忆）：展示过一次即置 true，
+         * 重开项目/重启 IDE 不再出现——用户全生命期至多一条。
+         */
+        private boolean onboardingAnchorTipShown = false;
+
+        /**
+         * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（用户登记的自研框架包名，一行一个，
+         * 如 {@code com.corp.engine.}）。agent 侧栈帧判定并入（CONFIG 热下发），IDE 侧候选解析同步过滤。
+         * 空 = 未登记。
+         */
+        private String sourceFrameSkipPrefixes = "";
+
+        public boolean getDialectAuto() { return dialectAuto; }
+        public void setDialectAuto(boolean dialectAuto) { this.dialectAuto = dialectAuto; }
 
         public String getDialect() { return dialect; }
         public void setDialect(String dialect) { this.dialect = dialect; }
@@ -254,6 +338,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
         public boolean getFormatSql() { return formatSql; }
         public void setFormatSql(boolean formatSql) { this.formatSql = formatSql; }
+
+        public String getEmptyParamFill() { return emptyParamFill; }
+        public void setEmptyParamFill(String emptyParamFill) { this.emptyParamFill = emptyParamFill; }
 
         public boolean getVerticalPairAnnotation() { return verticalPairAnnotation; }
         public void setVerticalPairAnnotation(boolean verticalPairAnnotation) { this.verticalPairAnnotation = verticalPairAnnotation; }
@@ -377,6 +464,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public String getLogAutoSaveFileNamePattern() { return logAutoSaveFileNamePattern; }
         public void setLogAutoSaveFileNamePattern(String logAutoSaveFileNamePattern) { this.logAutoSaveFileNamePattern = logAutoSaveFileNamePattern; }
 
+        public int getLogAutoSaveMaxFiles() { return logAutoSaveMaxFiles; }
+        public void setLogAutoSaveMaxFiles(int logAutoSaveMaxFiles) { this.logAutoSaveMaxFiles = logAutoSaveMaxFiles; }
+
         public String getLogTimePrefix() { return logTimePrefix; }
         public void setLogTimePrefix(String logTimePrefix) { this.logTimePrefix = logTimePrefix; }
 
@@ -421,6 +511,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public boolean getJdbcSqlPreviewEnabled() { return jdbcSqlPreviewEnabled; }
         public void setJdbcSqlPreviewEnabled(boolean jdbcSqlPreviewEnabled) { this.jdbcSqlPreviewEnabled = jdbcSqlPreviewEnabled; }
 
+        public int getExecutionTimeoutSeconds() { return executionTimeoutSeconds; }
+        public void setExecutionTimeoutSeconds(int executionTimeoutSeconds) { this.executionTimeoutSeconds = executionTimeoutSeconds; }
+
         public List<TableNameRule> getDynamicTableNameRules() { return dynamicTableNameRules; }
         public void setDynamicTableNameRules(List<TableNameRule> dynamicTableNameRules) { this.dynamicTableNameRules = dynamicTableNameRules; }
 
@@ -433,14 +526,17 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public int getHistoryMaxSize() { return historyMaxSize; }
         public void setHistoryMaxSize(int historyMaxSize) { this.historyMaxSize = historyMaxSize; }
 
-        public boolean getAutoInjectSqlSourceInterceptor() { return autoInjectSqlSourceInterceptor; }
-        public void setAutoInjectSqlSourceInterceptor(boolean autoInjectSqlSourceInterceptor) { this.autoInjectSqlSourceInterceptor = autoInjectSqlSourceInterceptor; }
-
         public String getReportSubmitterName() { return reportSubmitterName; }
         public void setReportSubmitterName(String reportSubmitterName) { this.reportSubmitterName = reportSubmitterName; }
 
         public String getReportSubmitterEmail() { return reportSubmitterEmail; }
         public void setReportSubmitterEmail(String reportSubmitterEmail) { this.reportSubmitterEmail = reportSubmitterEmail; }
+
+        public boolean getMcpToolsEnabled() { return mcpToolsEnabled; }
+        public void setMcpToolsEnabled(boolean mcpToolsEnabled) { this.mcpToolsEnabled = mcpToolsEnabled; }
+
+        public List<String> getMcpDisabledTools() { return mcpDisabledTools; }
+        public void setMcpDisabledTools(List<String> mcpDisabledTools) { this.mcpDisabledTools = mcpDisabledTools; }
 
         public boolean getEnhancedCaptureEnabled() { return enhancedCaptureEnabled; }
         public void setEnhancedCaptureEnabled(boolean enhancedCaptureEnabled) { this.enhancedCaptureEnabled = enhancedCaptureEnabled; }
@@ -448,16 +544,30 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public boolean getEnhancedCaptureConfirmed() { return enhancedCaptureConfirmed; }
         public void setEnhancedCaptureConfirmed(boolean enhancedCaptureConfirmed) { this.enhancedCaptureConfirmed = enhancedCaptureConfirmed; }
 
+        public long getEnhancedCaptureRejectedAtMs() { return enhancedCaptureRejectedAtMs; }
+        public void setEnhancedCaptureRejectedAtMs(long enhancedCaptureRejectedAtMs) { this.enhancedCaptureRejectedAtMs = enhancedCaptureRejectedAtMs; }
+
         public boolean getEnhancedCaptureDesensitize() { return enhancedCaptureDesensitize; }
         public void setEnhancedCaptureDesensitize(boolean enhancedCaptureDesensitize) { this.enhancedCaptureDesensitize = enhancedCaptureDesensitize; }
+
+        public boolean getOnboardingAnchorTipEnabled() { return onboardingAnchorTipEnabled; }
+        public void setOnboardingAnchorTipEnabled(boolean onboardingAnchorTipEnabled) { this.onboardingAnchorTipEnabled = onboardingAnchorTipEnabled; }
+
+        public boolean getOnboardingAnchorTipShown() { return onboardingAnchorTipShown; }
+        public void setOnboardingAnchorTipShown(boolean onboardingAnchorTipShown) { this.onboardingAnchorTipShown = onboardingAnchorTipShown; }
+
+        public String getSourceFrameSkipPrefixes() { return sourceFrameSkipPrefixes; }
+        public void setSourceFrameSkipPrefixes(String sourceFrameSkipPrefixes) { this.sourceFrameSkipPrefixes = sourceFrameSkipPrefixes; }
 
         /** 浅拷贝（仅复制字段引用/值；供持久化 loadState 触发引用变化）。 */
         @NotNull
         public State copy() {
             State c = new State();
+            c.dialectAuto = dialectAuto;
             c.dialect = dialect;
             c.replaceParams = replaceParams;
             c.formatSql = formatSql;
+            c.emptyParamFill = emptyParamFill;
             c.verticalPairAnnotation = verticalPairAnnotation;
             c.autoFoldEnabled = autoFoldEnabled;
             c.autoFoldFieldThreshold = autoFoldFieldThreshold;
@@ -498,6 +608,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.logAutoSaveEnabled = logAutoSaveEnabled;
             c.logAutoSavePath = logAutoSavePath;
             c.logAutoSaveFileNamePattern = logAutoSaveFileNamePattern;
+            c.logAutoSaveMaxFiles = logAutoSaveMaxFiles;
             c.logTimePrefix = logTimePrefix;
             c.slowQueryThresholdMs = slowQueryThresholdMs;
             c.showDurationInLogList = showDurationInLogList;
@@ -512,16 +623,23 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.logHibernateSqlPrefix = logHibernateSqlPrefix;
             c.logHibernateParamPrefix = logHibernateParamPrefix;
             c.logJdbcEnabled = logJdbcEnabled;
+            c.jdbcSqlPreviewEnabled = jdbcSqlPreviewEnabled;
+            c.executionTimeoutSeconds = executionTimeoutSeconds;
             c.dynamicTableNameRules = dynamicTableNameRules;
             c.dataPermissionHint = dataPermissionHint;
             c.dataPermissionMockCondition = dataPermissionMockCondition;
             c.historyMaxSize = historyMaxSize;
-            c.autoInjectSqlSourceInterceptor = autoInjectSqlSourceInterceptor;
             c.reportSubmitterName = reportSubmitterName;
             c.reportSubmitterEmail = reportSubmitterEmail;
+            c.mcpToolsEnabled = mcpToolsEnabled;
+            c.mcpDisabledTools = mcpDisabledTools;
             c.enhancedCaptureEnabled = enhancedCaptureEnabled;
             c.enhancedCaptureConfirmed = enhancedCaptureConfirmed;
+            c.enhancedCaptureRejectedAtMs = enhancedCaptureRejectedAtMs;
             c.enhancedCaptureDesensitize = enhancedCaptureDesensitize;
+            c.onboardingAnchorTipEnabled = onboardingAnchorTipEnabled;
+            c.onboardingAnchorTipShown = onboardingAnchorTipShown;
+            c.sourceFrameSkipPrefixes = sourceFrameSkipPrefixes;
             return c;
         }
 
@@ -530,7 +648,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             if (this == o) return true;
             if (!(o instanceof State)) return false;
             State that = (State) o;
-            return replaceParams == that.replaceParams
+            return dialectAuto == that.dialectAuto
+                    && replaceParams == that.replaceParams
                     && formatSql == that.formatSql
                     && verticalPairAnnotation == that.verticalPairAnnotation
                     && autoFoldEnabled == that.autoFoldEnabled
@@ -545,25 +664,31 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && logStopOnToolWindowClose == that.logStopOnToolWindowClose
                     && logAutoOpenOnCapture == that.logAutoOpenOnCapture
                     && logTimestampEnabled == that.logTimestampEnabled
-                    && Objects.equals(logTimestampSource, that.logTimestampSource)
                     && logFormatSql == that.logFormatSql
                     && literalParamRecovery == that.literalParamRecovery
                     && logAutoSaveEnabled == that.logAutoSaveEnabled
                     && logHibernateEnabled == that.logHibernateEnabled
                     && logJdbcEnabled == that.logJdbcEnabled
+                    && jdbcSqlPreviewEnabled == that.jdbcSqlPreviewEnabled
+                    && executionTimeoutSeconds == that.executionTimeoutSeconds
                     && dataPermissionHint == that.dataPermissionHint
                     && logDedupeWindowMs == that.logDedupeWindowMs
                     && logMaxParseLength == that.logMaxParseLength
                     && logMaxCount == that.logMaxCount
                     && slowQueryThresholdMs == that.slowQueryThresholdMs
+                    && logAutoSaveMaxFiles == that.logAutoSaveMaxFiles
                     && showDurationInLogList == that.showDurationInLogList
                     && historyMaxSize == that.historyMaxSize
                     && autoFoldFieldThreshold == that.autoFoldFieldThreshold
-                    && autoInjectSqlSourceInterceptor == that.autoInjectSqlSourceInterceptor
+                    && mcpToolsEnabled == that.mcpToolsEnabled
+                    && onboardingAnchorTipEnabled == that.onboardingAnchorTipEnabled
+                    && onboardingAnchorTipShown == that.onboardingAnchorTipShown
                     && enhancedCaptureEnabled == that.enhancedCaptureEnabled
                     && enhancedCaptureConfirmed == that.enhancedCaptureConfirmed
+                    && enhancedCaptureRejectedAtMs == that.enhancedCaptureRejectedAtMs
                     && enhancedCaptureDesensitize == that.enhancedCaptureDesensitize
                     && Objects.equals(dialect, that.dialect)
+                    && Objects.equals(emptyParamFill, that.emptyParamFill)
                     && Objects.equals(language, that.language)
                     && Objects.equals(logicDeleteValue, that.logicDeleteValue)
                     && Objects.equals(tenantColumnName, that.tenantColumnName)
@@ -580,6 +705,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && Objects.equals(logSqlPrefix, that.logSqlPrefix)
                     && Objects.equals(logParamPrefix, that.logParamPrefix)
                     && Objects.equals(logTimestampFormat, that.logTimestampFormat)
+                    && Objects.equals(logTimestampSource, that.logTimestampSource)
                     && Objects.equals(logFilterKeywords, that.logFilterKeywords)
                     && Objects.equals(logAutoSavePath, that.logAutoSavePath)
                     && Objects.equals(logAutoSaveFileNamePattern, that.logAutoSaveFileNamePattern)
@@ -593,6 +719,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && Objects.equals(logListSqlDisplayMode, that.logListSqlDisplayMode)
                     && Objects.equals(reportSubmitterName, that.reportSubmitterName)
                     && Objects.equals(reportSubmitterEmail, that.reportSubmitterEmail)
+                    && Objects.equals(mcpDisabledTools, that.mcpDisabledTools)
+                    && Objects.equals(sourceFrameSkipPrefixes, that.sourceFrameSkipPrefixes)
                     && Objects.equals(logHibernateSqlPrefix, that.logHibernateSqlPrefix)
                     && Objects.equals(logHibernateParamPrefix, that.logHibernateParamPrefix)
                     && Objects.equals(dynamicTableNameRules, that.dynamicTableNameRules)
@@ -602,7 +730,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         @Override
         public int hashCode() {
             return Objects.hash(
-                    dialect, replaceParams, formatSql, verticalPairAnnotation, autoFoldEnabled, autoFoldFieldThreshold,
+                    dialectAuto, dialect, replaceParams, formatSql, emptyParamFill, verticalPairAnnotation, autoFoldEnabled, autoFoldFieldThreshold,
                     showGutterIcon, language, injectLogicDelete,
                     logicDeleteValue, injectTenantLine, tenantColumnName, tenantColumnDefault, injectTenantOnInsert,
                     tablePrefix, tableSuffix, tableNameInference, ignoredFields, removeTablePrefix, removeTableSuffix,
@@ -610,12 +738,14 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     logSqlPrefix, logParamPrefix, logMixedPrefix, logAutoCaptureOnStart, logAutoCaptureSuppressed,
                     logStopOnToolWindowClose, logAutoOpenOnCapture, logTimestampEnabled, logTimestampFormat, logTimestampSource,
                     logFormatSql, literalParamRecovery, logFilterKeywords, logDedupeWindowMs, logMaxParseLength, logMaxCount,
-                    logAutoSaveEnabled, logAutoSavePath, logAutoSaveFileNamePattern, logTimePrefix, slowQueryThresholdMs, showDurationInLogList,
+                    logAutoSaveEnabled, logAutoSavePath, logAutoSaveFileNamePattern, logAutoSaveMaxFiles, logTimePrefix, slowQueryThresholdMs, showDurationInLogList,
                     crudColorStyle, crudColorSelect, crudColorInsert, crudColorUpdate, crudColorDelete, logListSqlDisplayMode,
                     paramHistoryJson, logHibernateEnabled, logHibernateSqlPrefix, logHibernateParamPrefix, logJdbcEnabled,
+                    jdbcSqlPreviewEnabled, executionTimeoutSeconds,
                     dynamicTableNameRules, dataPermissionHint, dataPermissionMockCondition, historyMaxSize,
-                    autoInjectSqlSourceInterceptor, reportSubmitterName, reportSubmitterEmail,
-                    enhancedCaptureEnabled, enhancedCaptureConfirmed, enhancedCaptureDesensitize);
+                    reportSubmitterName, reportSubmitterEmail, mcpToolsEnabled, mcpDisabledTools,
+                    enhancedCaptureEnabled, enhancedCaptureConfirmed, enhancedCaptureRejectedAtMs, enhancedCaptureDesensitize,
+                    onboardingAnchorTipEnabled, onboardingAnchorTipShown, sourceFrameSkipPrefixes);
         }
 
         @Override
@@ -635,6 +765,17 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
     /** 默认界面语言（M14，用户要求默认中文）。 */
     public static final String DEFAULT_LANGUAGE = "zh";
+
+    // ---------- T-PT-04：空参数填充策略 ----------
+
+    /** 空参数填充策略：NULL 字面量（默认）。 */
+    public static final String EMPTY_PARAM_FILL_NULL = "NULL";
+
+    /** 空参数填充策略：空字符串字面量 {@code ''}。 */
+    public static final String EMPTY_PARAM_FILL_EMPTY_STRING = "EMPTY_STRING";
+
+    /** 空参数填充策略默认值（NULL 字面量，贴近 MyBatis 绑定 null 的真实效果）。 */
+    public static final String DEFAULT_EMPTY_PARAM_FILL = EMPTY_PARAM_FILL_NULL;
 
     /** 表名推断策略：驼峰转下划线（默认，对齐 MP，`BikeDeviceInfoEntity` → `bike_device_info`）。 */
     public static final String INFERENCE_SNAKE = "SNAKE";
@@ -671,6 +812,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
     /** 自动保存历史 SQL 默认文件名模板（F-43）。 */
     public static final String DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN = "sql-history-$yyyy-MM-dd$.sql";
 
+    /** 历史 SQL 文件保留上限默认值（T-HistoryFileRetention）：默认留最近 30 个文件（按日模板≈约一个月），防磁盘膨胀；0/负 = 全量保留。 */
+    public static final int DEFAULT_LOG_AUTO_SAVE_MAX_FILES = 30;
+
     // ---------- O-1 日志窗口差异化默认值 ----------
     public static final String DEFAULT_LOG_TIME_PREFIX = "Time:";
     public static final long DEFAULT_SLOW_QUERY_THRESHOLD_MS = 1000L;
@@ -688,6 +832,10 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
     /** 默认 SQL 历史记录上限（F-7，非收藏条目）。 */
     public static final int DEFAULT_HISTORY_MAX_SIZE = 200;
+
+    /** 默认执行超时（秒；0=不限）——单一定义点在 ExecutionTimeoutGuard，State 侧引用避免双份字面量。 */
+    public static final int DEFAULT_EXECUTION_TIMEOUT_SECONDS =
+        cn.song.mybatisplus.visualizer.execute.ExecutionTimeoutGuard.DEFAULT_TIMEOUT_SECONDS;
 
     // ---------- T-CrudColor：SQL 列表 CRUD 类型颜色标记默认值 ----------
     // 单一真源在 SqlListTypeColor（语义与其渲染同处一处），State 侧只引用，避免双份字面量漂移。

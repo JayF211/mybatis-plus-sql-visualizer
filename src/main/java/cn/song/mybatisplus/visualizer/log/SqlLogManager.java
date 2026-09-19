@@ -124,7 +124,12 @@ public final class SqlLogManager implements Disposable {
         // 首条捕获也触发，修 D2 老问题语义），目标从独立窗口改为主工具窗 show（不抢焦点）。
         // T-PerfBatch：自动展开挂 onEntryAccepted（每次成功入队即时回调，与列表内容节流解耦——
         // 既有语义「每条都判 maybeAutoShow、60s 防抖收敛」不变）。
-        buffer.setOnEntryAccepted(autoShowBufferListener);
+        // T-UxOnboard T-UX-03：首次捕获成功指路同挂本出口（会话级一次性、历史非空跳过、
+        // headless 静默）——零新增监听链，headless 下决策即短路。
+        buffer.setOnEntryAccepted(() -> {
+            autoShowBufferListener.run();
+            FirstCaptureGuide.onEntryAccepted(project, buffer);
+        });
         // T-LogPerf-04：设置变更事件驱动——取代逐行 configProvider/syncBufferConfig 同步
         // （捕捉中改前缀/去重/过滤仍即时生效）；连接绑定服务 Disposable，dispose 自动注销
         project.getMessageBus().connect(this).subscribe(
@@ -451,10 +456,16 @@ public final class SqlLogManager implements Disposable {
         buffer.setMaxEntries(state.getLogMaxCount());
         // F-43：自动保存历史 SQL（T-Perf-12：submit 异步批量写——回调只投递无锁队列，
         // 磁盘 IO 全部在专用写线程，控制台输出热路径不再同步 flush）
+        // T-SqlHistoryFull：写入来源从「仅淘汰写」改为「入队成功即写」——历史记录全量 SQL；
+        // onEvicted 置空防重复（成功入队已写过，被淘汰条目不再二次写盘）
         if (state.getLogAutoSaveEnabled()) {
-            autoSaver.configure(state.getLogAutoSavePath(), state.getLogAutoSaveFileNamePattern(), project.getBasePath());
-            buffer.setOnEvicted(autoSaver::submit);
+            // T-HistoryFileRetention：历史文件保留上限
+            autoSaver.configure(state.getLogAutoSavePath(), state.getLogAutoSaveFileNamePattern(),
+                    project.getBasePath(), state.getLogAutoSaveMaxFiles());
+            buffer.setOnEntryStored(autoSaver::submit);
+            buffer.setOnEvicted(null);
         } else {
+            buffer.setOnEntryStored(null);
             buffer.setOnEvicted(null);
         }
     }
@@ -557,6 +568,7 @@ public final class SqlLogManager implements Disposable {
         bridge.detach();
         buffer.removeListener(uiNotifyListener);
         buffer.setOnEntryAccepted(null);
+        buffer.setOnEntryStored(null);
         buffer.setOnDedupeCountsChanged(null);
         buffer.setOnContentNotifySuppressed(null);
         uiListeners.clear();

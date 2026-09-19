@@ -87,9 +87,10 @@ public final class SqlLogFileReader {
         if (!file.exists()) {
             return List.of();
         }
-        try {
-            String content = Files.readString(file.toPath(), StandardCharsets.UTF_8);
-            return parseContent(content);
+        // T-SqlHistoryFull：整读 file.readText() → 流式逐行（单文件滚动阈值 100MB，整读内存峰值可达文件体量；
+        // 逐行消费只在解析块内累积当前块，峰值≈单条 SQL）。解析结果与整读路径完全一致。
+        try (java.io.BufferedReader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
+            return parseContent(reader.lines());
         } catch (Exception e) {
             return List.of();
         }
@@ -138,9 +139,22 @@ public final class SqlLogFileReader {
      * 序号是读取层派生的展示属性，不持久化；搜索过滤只删不改造条目实例，序号天然稳定。
      */
     public List<LogSqlEntry> parseContent(String content) {
+        return parseContent(content.lines());
+    }
+
+    /**
+     * 解析文件内容为 LogSqlEntry 列表（T-SqlHistoryFull：流式逐行输入源）。
+     * 逐行扫描，遇到头部行则开始新块，兼容新旧两种头部混合。
+     *
+     * <p>T-LogHistoryRowNo：返回前按解析顺序注入文件内条目序号（sequenceNumber = 索引+1）——
+     * 历史行号语义 = 文件内顺序号（静态历史无「会话内捕获序号」概念，见开发计划 §1.2）。
+     * 序号是读取层派生的展示属性，不持久化；搜索过滤只删不改造条目实例，序号天然稳定。
+     */
+    public List<LogSqlEntry> parseContent(java.util.stream.Stream<String> lines) {
         List<LogSqlEntry> entries = new ArrayList<>();
         List<String> currentLines = new ArrayList<>();
-        for (String line : content.lines().toList()) {
+        for (java.util.Iterator<String> it = lines.iterator(); it.hasNext(); ) {
+            String line = it.next();
             String trimmed = line.stripLeading();
             if (trimmed.startsWith("--") && trimmed.contains("source:") && trimmed.contains("time:")) {
                 flushBlock(currentLines, entries);
@@ -234,7 +248,11 @@ public final class SqlLogFileReader {
             String rawSql = rawSqlOverride != null ? rawSqlOverride : sql;
             return new LogSqlEntry(rawSql, sql, params, timestamp,
                     logTime, LogSqlEntry.computeSummary(sql), SqlSource.UNKNOWN, executionTimeMs,
-                    src.getFirst(), src.getSecond(), List.of(), 0L,
+                    src.getFirst(), src.getSecond(),
+                    decodedExt != null ? decodedExt.sourceCandidates() : List.of(),
+                    decodedExt != null ? decodedExt.candidateClasses() : List.of(),
+                    decodedExt != null ? decodedExt.stackDigest() : null,
+                    0L,
                     decodedExt != null ? decodedExt.mapperStatement() : null,
                     decodedExt != null ? decodedExt.errorText() : null,
                     decodedExt != null ? decodedExt.requestTag() : null,
@@ -252,7 +270,11 @@ public final class SqlLogFileReader {
             String rawSql = rawSqlOverride != null ? rawSqlOverride : sql;
             return new LogSqlEntry(rawSql, sql, params, timestamp,
                     null, LogSqlEntry.computeSummary(sql), SqlSource.UNKNOWN, null,
-                    null, 0, List.of(), 0L,
+                    null, 0,
+                    decodedExt != null ? decodedExt.sourceCandidates() : List.of(),
+                    decodedExt != null ? decodedExt.candidateClasses() : List.of(),
+                    decodedExt != null ? decodedExt.stackDigest() : null,
+                    0L,
                     decodedExt != null ? decodedExt.mapperStatement() : null,
                     decodedExt != null ? decodedExt.errorText() : null,
                     decodedExt != null ? decodedExt.requestTag() : null,

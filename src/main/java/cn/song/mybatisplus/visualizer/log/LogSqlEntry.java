@@ -45,6 +45,17 @@ public record LogSqlEntry(
      */
     List<kotlin.Pair<String, Integer>> sourceCandidates,
     /**
+     * T-SourceJumpFunnel：候选帧类名（与 sourceCandidates 栈序对齐，旧 agent 事件可能缺类名列 → 空）。
+     * 展示性字段（选帧弹层/NotFound 提示），body 内属性不参与 equals/hashCode——但 sourceCandidates
+     * 在主构造里，本字段也在主构造，须评估 equals 影响：去重走 dedupeKey（惰性指纹），data class equals
+     * 变化不影响面板去重口径（T-CrudColor 同理定案）。
+     */
+    List<String> candidateClasses,
+    /**
+     * T-SourceJumpFunnel：调用栈快照「类#方法:行 ← …」（仅 agent 通道；详情面板人工往上追踪用）。
+     */
+    String stackDigest,
+    /**
      * T-LogRowNumber：会话内捕获序号（「SQL 日志」列表行号）。由 SqlLogEntryBuffer.addEntry
      * 成功入队时分配（单调递增；去重丢弃/暂停/过滤关键字命中的条目不占号），
      * 项目启动（processStarted）或手动清空列表时归零。0 表示无行号
@@ -166,21 +177,21 @@ public record LogSqlEntry(
     /** 仅原始/还原 SQL + 参数（其余取默认）。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params) {
         this(rawSql, restoredSql, params, System.currentTimeMillis(), null,
-            computeSummary(restoredSql), SqlSource.UNKNOWN, null, null, 0, List.of(), 0L,
+            computeSummary(restoredSql), SqlSource.UNKNOWN, null, null, 0, List.of(), List.of(), null, 0L,
             null, null, null, null, null);
     }
 
     /** 含显式时间戳。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params, long timestamp) {
         this(rawSql, restoredSql, params, timestamp, null,
-            computeSummary(restoredSql), SqlSource.UNKNOWN, null, null, 0, List.of(), 0L,
+            computeSummary(restoredSql), SqlSource.UNKNOWN, null, null, 0, List.of(), List.of(), null, 0L,
             null, null, null, null, null);
     }
 
     /** 含来源。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params, SqlSource source) {
         this(rawSql, restoredSql, params, System.currentTimeMillis(), null,
-            computeSummary(restoredSql), source, null, null, 0, List.of(), 0L,
+            computeSummary(restoredSql), source, null, null, 0, List.of(), List.of(), null, 0L,
             null, null, null, null, null);
     }
 
@@ -188,22 +199,29 @@ public record LogSqlEntry(
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params,
                        long timestamp, String sourceFile, int sourceLine, Long executionTimeMs) {
         this(rawSql, restoredSql, params, timestamp, null,
-            computeSummary(restoredSql), SqlSource.UNKNOWN, executionTimeMs, sourceFile, sourceLine, List.of(), 0L,
+            computeSummary(restoredSql), SqlSource.UNKNOWN, executionTimeMs, sourceFile, sourceLine, List.of(), List.of(), null, 0L,
             null, null, null, null, null);
     }
 
     /** T-LogRowNumber：以本条为原型返回带指定捕获序号的副本（Kotlin data class copy(sequenceNumber=…) 的 Java 等价）。 */
     public LogSqlEntry withSequenceNumber(long newSequenceNumber) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source,
-            executionTimeMs, sourceFile, sourceLine, sourceCandidates, newSequenceNumber,
+            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, newSequenceNumber,
             mapperStatement, errorText, requestTag, updateCount, databaseName);
     }
 
     /** T-AgentLogTime：以本条为原型返回带日志原始时间的副本（copy(logTimestamp=…) 的 Java 等价）。 */
     public LogSqlEntry withLogTimestamp(Long newLogTimestamp) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, newLogTimestamp, summary, source,
-            executionTimeMs, sourceFile, sourceLine, sourceCandidates, sequenceNumber,
+            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
             mapperStatement, errorText, requestTag, updateCount, databaseName);
+    }
+
+    /** T-M55-02：以本条为原型返回带执行报错的副本（copy(errorText=…) 的 Java 等价；缓冲错误反向绑定用）。 */
+    public LogSqlEntry withErrorText(String newErrorText) {
+        return new LogSqlEntry(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source,
+            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
+            mapperStatement, newErrorText, requestTag, updateCount, databaseName);
     }
 
     /** 智能截断摘要（包内可见：解析器/桥通道按 Kotlin data class 默认参数语义构造条目时复用同一口径）。 */

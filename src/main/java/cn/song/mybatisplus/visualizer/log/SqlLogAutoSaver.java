@@ -39,6 +39,17 @@ public class SqlLogAutoSaver {
     private final LongSupplier clock;
     /** 单文件滚动阈值（默认 100MB），测试注入小值用。 */
     private final long rollThresholdBytes;
+    /**
+     * T-PS4-10：两次历史文件裁剪的最小间隔（默认 60s）——风暴期每非空写批不再重复全目录
+     * listFiles+stat+排序。测试注入小值/可变时钟用。
+     */
+    private final long pruneMinIntervalMs;
+    /**
+     * T-PS4-13：configure 路径 close 时单次同步排水条数上限（默认 500）——调用线程常为 EDT，
+     * 风暴在途积压大时限批排水，超出部分留在队列由后续 submit 重建的写线程补写（不丢条）。
+     * 测试注入小值用；dispose 路径走无参 close 全量排水不受此限。
+     */
+    private final int configureDrainLimit;
 
     private BufferedWriter writer = null;
     private File currentFile = null;
@@ -46,6 +57,18 @@ public class SqlLogAutoSaver {
     private String fileNamePattern = "";
     private String currentResolvedName = "";
     private int currentIndex = 1;
+
+    /** T-HistoryFileRetention：历史文件保留上限（按基名归并的组数）。&lt;=0 = 全量保留。 */
+    private volatile int maxFiles = 0;
+
+    /**
+     * T-PS4-10：本插件历史文件名族匹配正则（由 fileNamePattern 推导，configure 时重建）。
+     * null = 无法安全认领（configure 未跑过 / 模板无字面段可锚定）——放弃裁剪，宁漏删不误删。
+     */
+    private volatile Pattern familyRegex = null;
+
+    /** T-PS4-10：上次实际执行裁剪扫描的时刻（节流基准；仅 pruneRetainedFiles 的监视器内读写）。-1 = 从未扫描。 */
+    private long lastPruneAtMs = -1L;
 
     // ---------- T-Perf-12：异步批量写（淘汰条目投递无锁队列 + 专用单线程执行器） ----------
 
@@ -60,15 +83,23 @@ public class SqlLogAutoSaver {
     /** 专用写线程（懒创建；close 后下次 submit 重建）。 */
     private volatile java.util.concurrent.ExecutorService executor = null;
 
-    /** 默认构造（系统时钟 + 100MB 滚动阈值）。 */
+    /** 默认构造（系统时钟 + 100MB 滚动阈值 + 默认裁剪间隔/排水上限）。 */
     public SqlLogAutoSaver() {
-        this(System::currentTimeMillis, 100L * 1024 * 1024);
+        this(System::currentTimeMillis, 100L * 1024 * 1024,
+                DEFAULT_PRUNE_MIN_INTERVAL_MS, DEFAULT_CONFIGURE_DRAIN_LIMIT);
     }
 
-    /** 完整构造（测试注入时钟与滚动阈值）。 */
+    /** 完整构造（测试注入时钟与滚动阈值；裁剪间隔/排水上限取默认）。 */
     public SqlLogAutoSaver(LongSupplier clock, long rollThresholdBytes) {
+        this(clock, rollThresholdBytes, DEFAULT_PRUNE_MIN_INTERVAL_MS, DEFAULT_CONFIGURE_DRAIN_LIMIT);
+    }
+
+    /** 全参构造（测试注入裁剪间隔/排水上限用）。 */
+    public SqlLogAutoSaver(LongSupplier clock, long rollThresholdBytes, long pruneMinIntervalMs, int configureDrainLimit) {
         this.clock = clock;
         this.rollThresholdBytes = rollThresholdBytes;
+        this.pruneMinIntervalMs = pruneMinIntervalMs;
+        this.configureDrainLimit = configureDrainLimit;
     }
 
     /**
@@ -97,8 +128,14 @@ public class SqlLogAutoSaver {
         return created;
     }
 
-    /** 写任务：整批一次 flush；写期间新到条目重新调度（不丢条）。 */
-    private void drainAndWrite() {
+    /**
+     * 写任务：整批一次 flush；写期间新到条目重新调度（不丢条）。
+     * T-SqlHistoryFull：synchronized 与 {@link #close(int)} 在同一监视器串行——此前无锁 drainAndWrite 与 close
+     * 并发时，后台已 poll 未写完的批次会在 close 关闭 writer 后被 writeEntry 的 currentFile==null 分支
+     * 跳过丢条（2 万条风暴压测丢 9 千，dispose 与风暴写并发的既有缺陷，T-SqlHistoryFull 全量化放大触发面）。
+     * writeBatch 本身 synchronized 重入，此处持锁串行即可保证「先写完全部再关闭」或「先清空写完全部」，两序都不丢。
+     */
+    private synchronized void drainAndWrite() {
         drainScheduled.set(false);
         List<LogSqlEntry> batch = new java.util.ArrayList<>();
         while (true) {
@@ -110,18 +147,150 @@ public class SqlLogAutoSaver {
         }
         if (!batch.isEmpty()) {
             writeBatch(batch);
+            // T-HistoryFileRetention：写批之后在同写线程裁剪超限历史文件（不阻塞捕获热路径；与写串行无竞态）
+            pruneRetainedFiles();
         }
     }
 
-    /** close 前同步清空在途队列（不丢条；close 持有同一监视器，写任务串行）。 */
-    private void drainPendingSync() {
+    /**
+     * T-HistoryFileRetention：历史文件保留上限裁剪——目录下<b>本插件名族</b>的逻辑历史文件（按基名归并滚动块）
+     * 超过上限时删最旧组。
+     * 仅在写批后台线程调用（synchronized 串行）；maxFiles&lt;=0 表示全量保留不删。
+     * T-PS4-10 安全门：归组前按 {@link #familyRegex}（由 fileNamePattern 推导的渲染名族，见 {@link #buildFamilyRegex}）
+     * 过滤——非本插件命名的 .sql（自定义保存目录下用户自有脚本，第七轮审计数据安全发现）不计数、永不删除。
+     * <b>定案口径：宁漏删不误删</b>——用户改模板后旧命名文件因固定段对不上而脱管、不再被裁剪（放任漏删）；
+     * 全通配模板无字面段可锚定则整体放弃裁剪。绝不为兜底删量放宽匹配去碰用户文件。
+     * 归并口径：{@code sql-history-2026-09-17.sql} 与 {@code sql-history-2026-09-17.2.sql} 是同一逻辑文件的滚动块，
+     * 按基名归并为 1 组计——否则单文件自行滚动多块会误删跨天文件。超限按组内文件时间戳最旧组整组删。
+     * T-PS4-10 节流：距上次裁剪扫描不足 {@link #pruneMinIntervalMs}（默认 60s）直接跳过——风暴期每非空写批
+     * 不再重复全目录 listFiles+stat+排序（写线程内一个时间戳判断；lastPruneAtMs 由本方法监视器内串行读写）。
+     */
+    public synchronized void pruneRetainedFiles() {
+        if (maxFiles <= 0) return;
+        Pattern family = familyRegex;
+        if (family == null) return;
+        long now = clock.getAsLong();
+        long last = lastPruneAtMs;
+        if (last >= 0 && now - last < pruneMinIntervalMs) return;
+        lastPruneAtMs = now;
+        File dir = new File(saveDir);
+        if (!dir.isDirectory()) return;
+        File[] files = dir.listFiles(f -> f.isFile() && "sql".equalsIgnoreCase(extensionOf(f)));
+        if (files == null || files.length == 0) return;
+        // T-PS4-10：先按本插件名族过滤再归组——非匹配 .sql 不计数、不参与删除候选
+        List<File> ours = new java.util.ArrayList<>();
+        for (File f : files) {
+            if (family.matcher(baseNameOf(f.getName())).matches()) {
+                ours.add(f);
+            }
+        }
+        if (ours.isEmpty()) return;
+        // 按基名（去滚动序号）归并：base -> 该逻辑文件的组成文件
+        Map<String, List<File>> groups = new java.util.LinkedHashMap<>();
+        for (File f : ours) {
+            groups.computeIfAbsent(baseNameOf(f.getName()), k -> new java.util.ArrayList<>()).add(f);
+        }
+        if (groups.size() <= maxFiles) return;
+        // 按「组内最新文件时间戳」作组年龄下限排序（取组内最年轻文件代表该组，跨天视为新组），最旧在前的组先删
+        List<Map.Entry<String, List<File>>> oldestFirst = new java.util.ArrayList<>(groups.entrySet());
+        oldestFirst.sort(java.util.Comparator.comparingLong(e -> {
+            long max = 0L;
+            for (File f : e.getValue()) {
+                max = Math.max(max, f.lastModified());
+            }
+            return max;
+        }));
+        int toDeleteCount = oldestFirst.size() - maxFiles;
+        for (int i = 0; i < toDeleteCount; i++) {
+            for (File f : oldestFirst.get(i).getValue()) {
+                try {
+                    f.delete();
+                } catch (Throwable t) {
+                    LOG.warn("T-HistoryFileRetention: 删除历史文件失败 " + f.getAbsolutePath(), t);
+                }
+            }
+        }
+    }
+
+    /** File 扩展名（最后一个点之后；无点/点在首字符为空串——Kotlin File.extension 口径）。 */
+    private static String extensionOf(File f) {
+        String name = f.getName();
+        int dot = name.lastIndexOf('.');
+        return dot <= 0 ? "" : name.substring(dot + 1);
+    }
+
+    /**
+     * T-PS4-10：由文件名模板推导「本插件历史文件名族」匹配正则——对滚动序号剥离后的基名
+     * （见 {@link #baseNameOf}）做整串匹配。模板尾部扩展名（.sql，大小写不敏感）先剥除，随后
+     * $日期占位符$ 段替换为通配 {@code .*}、其余字面段原样转义。定案采用「占位段通配 + 字面段锚定」
+     * 而非纯前缀 startsWith：无占位符的固定模板（如 {@code log.sql}）也能把滚动块 {@code log.2.sql}
+     * （基名同为 log）纳入名族，避免滚动块脱管泄漏。
+     * 安全约束（宁漏删不误删）：
+     * <ul>
+     * <li>整串锚定且必须含至少一个字面段——全通配模板（如 {@code $yyyy$.sql}）无法与任意用户 .sql
+     * 区分，返回 null 放弃裁剪；</li>
+     * <li>匹配区分大小写（本插件生成名大小写固定，更严匹配只会漏删不会误删）。</li>
+     * </ul>
+     */
+    private Pattern buildFamilyRegex(String pattern) {
+        String stem = pattern.replaceFirst("(?i)\\.sql$", "");
+        StringBuilder sb = new StringBuilder();
+        int idx = 0;
+        boolean hasLiteral = false;
+        Matcher m = PLACEHOLDER_REGEX.matcher(stem);
+        while (m.find()) {
+            if (m.start() > idx) {
+                sb.append(Pattern.quote(stem.substring(idx, m.start())));
+                hasLiteral = true;
+            }
+            sb.append(".*");
+            idx = m.end();
+        }
+        if (idx < stem.length()) {
+            sb.append(Pattern.quote(stem.substring(idx)));
+            hasLiteral = true;
+        }
+        if (!hasLiteral) return null;
+        return Pattern.compile(sb.toString());
+    }
+
+    /** 文件名取滚动序号前基名：{@code xxx.sql} → {@code xxx}；{@code xxx.2.sql} → {@code xxx}；{@code xxx.yyy.sql} 视作整体（无滚动序号不拆分）。 */
+    private static String baseNameOf(String fileName) {
+        int dot = fileName.lastIndexOf('.');
+        if (dot <= 0) return fileName;
+        // 去掉扩展名后若形如 `xxx.N`（N 为数字且前面还有扩展名前的点），剥掉滚动序号段
+        String stem = fileName.substring(0, dot);
+        int secondDot = stem.lastIndexOf('.');
+        if (secondDot > 0) {
+            String numPart = stem.substring(secondDot + 1);
+            boolean allDigits = !numPart.isEmpty();
+            for (int i = 0; i < numPart.length() && allDigits; i++) {
+                if (!Character.isDigit(numPart.charAt(i))) allDigits = false;
+            }
+            if (allDigits) {
+                return stem.substring(0, secondDot);
+            }
+        }
+        return stem;
+    }
+
+    /**
+     * close 前同步排水在途队列（close 持有同一监视器，与写任务串行；不丢条）。
+     * T-PS4-13：maxEntries 限单次同步排水批量（configure 路径默认 {@link #configureDrainLimit}，
+     * EDT 不承担整批磁盘写）——只 poll 到上限为止，<b>超出部分留在队列不清空</b>，
+     * 由后续 submit → ensureExecutor 重建的写线程经 drainAndWrite 补写；&lt;=0 表示本轮不排水。
+     */
+    private void drainPendingSync(int maxEntries) {
+        if (maxEntries <= 0) return;
+        int drained = 0;
         List<LogSqlEntry> batch = new java.util.ArrayList<>();
-        while (true) {
+        while (drained < maxEntries) {
             LogSqlEntry e = pendingEntries.poll();
             if (e == null) {
                 break;
             }
             batch.add(e);
+            drained++;
         }
         if (!batch.isEmpty()) {
             writeBatch(batch);
@@ -133,16 +302,36 @@ public class SqlLogAutoSaver {
         return rollThresholdBytes;
     }
 
+    /** T-PS4-10：两次历史文件裁剪的最小间隔（测试断言默认值用）。 */
+    public long getPruneMinIntervalMs() {
+        return pruneMinIntervalMs;
+    }
+
+    /** T-PS4-13：configure 路径 close 单次同步排水条数上限（测试断言默认值用）。 */
+    public int getConfigureDrainLimit() {
+        return configureDrainLimit;
+    }
+
     /**
      * 配置保存参数（设置变更时调用）。
      * @param customPath 用户自定义目录（空串 = 默认 .idea 路径）
      * @param pattern 文件名模板（空串 = 默认模板）
      * @param projectBasePath 项目基路径（默认路径计算用）
+     * @param maxFiles T-HistoryFileRetention：历史文件保留上限（基名归并组数，&lt;=0 = 全量保留）
      */
     public synchronized void configure(String customPath, String pattern, String projectBasePath) {
-        close();
+        configure(customPath, pattern, projectBasePath, 0);
+    }
+
+    public synchronized void configure(String customPath, String pattern, String projectBasePath, int maxFiles) {
+        // T-PS4-13：configure 链调用线程常为 EDT（设置变更）——限批同步排水防长批磁盘写阻塞
+        close(configureDrainLimit);
         saveDir = resolveDir(customPath, projectBasePath);
         fileNamePattern = pattern.isBlank() ? PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN : pattern;
+        this.maxFiles = maxFiles;
+        // T-PS4-10：按当前模板重建本插件名族匹配正则；节流基准复位（重配后首个写批即刻获得裁剪机会）
+        familyRegex = buildFamilyRegex(fileNamePattern);
+        lastPruneAtMs = -1L;
         currentResolvedName = "";
         currentIndex = 1;
     }
@@ -281,7 +470,8 @@ public class SqlLogAutoSaver {
             // pd 行（载荷扩展键，仅非默认落键）——否则 agent 通道结构化信息在历史文件丢失。
             if (!entry.params().isEmpty() || LogEntryPreviewRecognizerKt.countPlaceholders(entry.rawSql()) > 0
                     || entry.mapperStatement() != null || entry.errorText() != null
-                    || entry.requestTag() != null || entry.updateCount() != null) {
+                    || entry.requestTag() != null || entry.updateCount() != null
+                    || !entry.sourceCandidates().isEmpty() || entry.stackDigest() != null) {
                 w.write("-- pd: " + SqlLogParamCodec.encodeEntry(entry) + " --\n");
             }
             w.write(SqlLogPanelKt.withTerminator(entry.restoredSql()));
@@ -337,20 +527,33 @@ public class SqlLogAutoSaver {
         return currentFile;
     }
 
+    /** T-PS4-13 测试访问器：在途队列余量（限批排水后未落盘条目数）。 */
+    public int pendingCount() {
+        return pendingEntries.size();
+    }
+
     /**
      * 关闭文件句柄（manager dispose 或路径变更时调用）。
-     * T-Perf-12：先同步清空在途队列（不丢条），再停写线程、关句柄；
+     * T-Perf-12：先同步排水在途队列（不丢条），再停写线程、关句柄；
      * 后续 configure/submit 可重建执行器。
+     * T-PS4-13：maxDrainEntries 限单次同步排水批量——configure 路径传 {@link #configureDrainLimit}
+     * （EDT 限批），超出上限的条目<b>留在队列不清空</b>（旧实现此处 clear 会把余量丢掉），
+     * 后续 submit → ensureExecutor 重建写线程时由 drainAndWrite 一并补写；
+     * <b>dispose 路径（SqlLogManager.dispose → 无参 close）保持全量排水语义不变</b>（终态不丢条）。
      */
     public synchronized void close() {
-        drainPendingSync();
+        close(Integer.MAX_VALUE);
+    }
+
+    public synchronized void close(int maxDrainEntries) {
+        drainPendingSync(maxDrainEntries);
         java.util.concurrent.ExecutorService current = executor;
         if (current != null) {
             current.shutdownNow();
         }
         executor = null;
         drainScheduled.set(false);
-        pendingEntries.clear();
+        // T-PS4-13：不再 clear——限批排水后余量留在队列待补写；全量排水（dispose）后队列本已空
         closeWriter();
     }
 
@@ -383,4 +586,10 @@ public class SqlLogAutoSaver {
 
     /** 匹配 $变量$ 占位符。 */
     private static final Pattern PLACEHOLDER_REGEX = Pattern.compile("\\$([^$]+)\\$");
+
+    /** T-PS4-10：两次历史文件裁剪扫描的最小间隔——风暴期写批密集时避免重复全目录扫描。 */
+    public static final long DEFAULT_PRUNE_MIN_INTERVAL_MS = 60_000L;
+
+    /** T-PS4-13：configure 路径 close 单次同步排水条数上限（EDT 不承担超长批磁盘写）。 */
+    public static final int DEFAULT_CONFIGURE_DRAIN_LIMIT = 500;
 }

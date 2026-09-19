@@ -15,9 +15,15 @@ public final class SqlCaptureGate {
     public static final AtomicBoolean paused = new AtomicBoolean(false);
 
     /**
-     * M56 T-M56-09：「EP 首行标志」——consoleFilterProvider EP 的 Filter 首次处理控制台行时
-     * 置 true（会话内粘滞）。桥的轮询据此跳过 addMessageFilter 挂载（EP 已覆盖全部控制台，
-     * 双挂载会双路解析）；定时器本身保留（控制台摘除检测等职责）。
+     * M56 T-M56-09：「EP 首行标志」——consoleFilterProvider EP 的 Filter 处理控制台行时置 true
+     * （会话内粘滞）。桥据此短路自身的重复解析（条目由 EP 单路产出）。
+     *
+     * <p>T-CaptureTruth T-CT-04 <b>语义收窄</b>：置位条件由「EP 处理过任意一行」改为「EP 实证产出过条目」。
+     * 原口径下 EP 只要被平台调用一次就封死桥侧解析，而 EP 对某类控制台是否真在链上、是否真能产出
+     * 从未真机验证（provider KDoc 自述「真机门禁留人工」）——一旦 EP 覆盖不全，桥的回落通道已被
+     * 自己封死 = <b>静默零捕获</b>（与 T-CaptureTruth 立项现场同类症状）。收窄后：EP 必须先交出一条
+     * SQL 条目才获信任；EP 不在链上或对该控制台产不出条目时，桥照常解析（代价仅是「全程无 SQL 的
+     * 会话」多跑几道解析门，无条目可建，成本可忽略）。
      */
     public static volatile boolean epActive = false;
 }

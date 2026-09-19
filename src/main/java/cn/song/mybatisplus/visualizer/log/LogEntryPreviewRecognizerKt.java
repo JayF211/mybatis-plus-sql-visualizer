@@ -106,6 +106,7 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
 
     /**
      * 日志条目 → 预览结果（T-HistParam F3：SQL 日志 tab 与 SQL 历史 tab 的统一识别通道）。
+     * T-M55-02：识别结果统一并入执行报错警示（见 {@link #withExecutionError}）。
      *
      * 三级分流：
      * 1. 占位符匹配识别（toRecognizedPreview，`?` 数 == 参数数）→ 参数行预填日志值；
@@ -117,6 +118,34 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
      * formatSql=设置值（T-ListPreviewCopy：两页预览统一跟随「预览时格式化还原 SQL」，默认开）。
      */
     public static PreviewResult toPreviewResult(LogSqlEntry entry, boolean formatSql, boolean literalRecovery) {
+        return withExecutionError(toPreviewResultInternal(entry, formatSql, literalRecovery), entry.errorText());
+    }
+
+    /**
+     * T-M55-02：执行报错全文并入预览警示槽——列表行⛔片段之外，预览详情承载完整错误文本：
+     * meta 行红色警示（宽度预算截断展示）+ 横幅 + 「复制错误」按钮一键复制全文（copyError 复制
+     * currentWarning，即本拼接结果）。既有参数未还原警示保留（报错在前，换行分隔）。
+     */
+    private static PreviewResult withExecutionError(PreviewResult result, String errorText) {
+        if (errorText == null || errorText.isBlank()) return result;
+        String prefix = MpSqlVisualizerBundle.message("log.preview.executionError");
+        List<String> parts = new ArrayList<>();
+        parts.add(prefix + errorText);
+        if (result.getWarning() != null) {
+            parts.add(result.getWarning());
+        }
+        String joined = String.join("\n", parts);
+        return result.copy(
+                result.getSql(), result.getCompactSql(), result.getUnresolvedParams(), result.getParamTable(),
+                result.getWrapperType(), result.getTableName(), joined, result.getColumns(),
+                result.getColumnComments(), result.getTableComment(), result.getPreviewModel(),
+                result.getParamHints(), result.getCandidateTables(), result.getBatchModel(),
+                result.getXmlModel(), result.getInitialParamValues(),
+                result.getPerfWarnings(), result.getFillClauses(), result.getPreviousSql(),
+                result.getPagesColumns());
+    }
+
+    private static PreviewResult toPreviewResultInternal(LogSqlEntry entry, boolean formatSql, boolean literalRecovery) {
         RecognizedLogPreview recognized = toRecognizedPreview(entry);
         if (recognized.recognized()) {
             return new PreviewResult(
@@ -159,16 +188,32 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
                     : "log.preview.unresolvedNoBinding")
                 : "log.preview.unresolvedWarning")
             : null;
+        // master 具名参数新增 stackDigest = stackDigest；Java 按全参构造位置传入
+        // （T-SourceJumpFunnel：条目调用栈快照透传预览详情——meta 行栈节点展示）
         return new PreviewResult(
-            formatIfNeeded(base, formatSql),
-            entry.restoredSql(),
-            List.of(),
-            null,
-            null,
-            null,
+            formatIfNeeded(base, formatSql),   // sql
+            entry.restoredSql(),               // compactSql
+            List.of(),                         // unresolvedParams
+            null,                              // paramTable
+            null,                              // wrapperType
+            null,                              // tableName
             warning,
-            List.of(),
-            Map.of());
+            List.of(),                         // columns
+            Map.of(),                          // columnComments
+            null,                              // tableComment
+            null,                              // previewModel
+            List.of(),                         // paramHints
+            List.of(),                         // candidateTables
+            null,                              // batchModel
+            null,                              // xmlModel
+            Map.of(),                          // initialParamValues
+            null,                              // perfWarnings
+            null,                              // fillClauses
+            null,                              // previousSql
+            null,                              // pagesColumns
+            Map.of(),                          // namedParamHints
+            entry.stackDigest(),
+            false);
     }
 
     private static String formatIfNeeded(String sql, boolean formatSql) {

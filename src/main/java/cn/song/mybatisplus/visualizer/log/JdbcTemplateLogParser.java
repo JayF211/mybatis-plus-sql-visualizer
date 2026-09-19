@@ -279,7 +279,7 @@ public class JdbcTemplateLogParser {
                 logTs,
                 LogSqlEntry.computeSummary(restored),
                 SqlSource.JDBC,
-                null, null, 0, List.of(), 0L,
+                null, null, 0, List.of(), List.of(), null, 0L,
                 null, null, null, null, null);
         entries.add(entry);
         bucket.pendingParams.clear();
@@ -337,7 +337,7 @@ public class JdbcTemplateLogParser {
                 LogTimestampParser.parse(line),
                 LogSqlEntry.computeSummary(restoredSql),
                 SqlSource.JDBC,
-                null, null, 0, List.of(), 0L,
+                null, null, 0, List.of(), List.of(), null, 0L,
                 null, null, null, null, null);
     }
 

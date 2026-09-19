@@ -48,16 +48,17 @@ public class SqlLogToolWindowFactory implements ToolWindowFactory {
 
         SqlLogManager manager = project.getService(SqlLogManager.class);
         SqlLogPanel panel = new SqlLogPanel(project, manager);
-        // T-UiNative T-UN-11：捕捉开关挂工具窗标题栏（原面板内反射 hack 退役）。
-        // 工厂创建时 toolWindow 尚未激活也可安全调用（平台支持先设后显）。
-        toolWindow.setTitleActions(java.util.List.of(panel.getCaptureToggleAction()));
+        // T-CaptureBack：捕捉开关已回归面板工具栏（T-UN-11 曾挂标题栏，新 UI 下悬停才可见
+        // 致入口不可发现），不再用 setTitleActions 挂载，避免标题栏残留重复入口。
         // content 标题留空（标题栏由 stripe 标题唯一承担，避免重复显示）
         var content = toolWindow.getContentManager().getFactory().createContent(panel, "", false);
         content.setDisposer(panel);
         toolWindow.getContentManager().addContent(content);
 
         // 工具窗口关闭（content 移除）→ 设置开启时停止捕捉（兜底：部分平台把关闭实现为移除 content）
-        toolWindow.getContentManager().addContentManagerListener(new ContentManagerListener() {
+        // T-Perf-15：匿名 listener 挂 content disposer——content 销毁时自动移除（原实现永不移除，
+        // 工具窗口反复移出/恢复逐次累积监听器）
+        ContentManagerListener contentListener = new ContentManagerListener() {
             @Override
             public void contentRemoved(@NotNull ContentManagerEvent event) {
                 if (event.getContent() == content) {
@@ -67,6 +68,14 @@ public class SqlLogToolWindowFactory implements ToolWindowFactory {
                         LOG.info("ToolWindow 关闭（content 移除）：已停止捕捉（project=" + project.getName() + "）");
                     }
                 }
+            }
+        };
+        toolWindow.getContentManager().addContentManagerListener(contentListener);
+        com.intellij.openapi.util.Disposer.register(content.getDisposer(), () -> {
+            try {
+                toolWindow.getContentManager().removeContentManagerListener(contentListener);
+            } catch (Throwable ignored) {
+                // content manager 可能已在窗口关闭链中销毁（销毁顺序不定），忽略
             }
         });
 

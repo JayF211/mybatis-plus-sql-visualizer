@@ -3,6 +3,12 @@ package cn.song.mybatisplus.visualizer.log;
 /**
  * 慢查询计数器（有状态，工具窗口级别共享）。
  *
+ * <p>T-RA-04 判定：本类<b>不是</b>只写不读残留——slowCount 的唯一读取点在
+ * {@code log/SqlLogPanel.updateSlowQueryLabel()}（工具栏「慢查询: N」标签，bundle 键
+ * {@code log.toolbar.slowQueryCount}），产出点同文件 {@code refreshList} 路径（阈值同步 →
+ * reset → 逐条 report → 更新标签）。审计脚本当时按「声明文件内无读」判定，
+ * 跨文件读取未纳入，属误报；后续同类扫描须全仓（含测试）核读点再下结论。
+ *
  * @param thresholdMs 慢查询阈值
  */
 public class SlowQueryCounter {
@@ -10,7 +16,9 @@ public class SlowQueryCounter {
     /** 慢查询阈值（可变，设置页修改后同步）。 */
     private long thresholdMs;
 
-    /** 当前慢查询计数。 */
+    /**
+     * 当前慢查询计数（读点见类 KDoc：SqlLogPanel 工具栏标签；测试亦直接断言）。
+     */
     private int slowCount = 0;
 
     public SlowQueryCounter() {

@@ -32,10 +32,14 @@ public record AgentEvent(
     int sourceLine,
     /** T-AgentSourceJump：源码位置候选（栈序 [file, line]；旧版 agent 无此键 → 空列表，跳转回退主位置）。 */
     List<Pair<String, Integer>> sourceCandidates,
+    /** T-SourceJumpFunnel：候选帧类名（与 sourceCandidates 栈序对齐，可能少于候选数——旧 agent 无类名列）。 */
+    List<String> candidateClasses,
     /** 方法聚焦键 {@code {SimpleClass}#{method}}。 */
     String methodKey,
     /** 请求聚合标签。 */
     String requestTag,
+    /** T-SourceJumpFunnel P2-2：调用栈快照「类#方法:行 ← …」（栈顶在左；旧版 agent 无此键 → null）。 */
+    String stackDigest,
     /** 参数快照 [index, valueText|null, type|null]（agent 侧已过脱敏层）。 */
     List<Triple<Integer, String, String>> params,
     /** 执行线程名。 */
@@ -47,23 +51,23 @@ public record AgentEvent(
     /** T-AgentDialectLoop：copy(url=…) 的 Java 等价（测试/回填用）。 */
     public AgentEvent withUrl(String newUrl) {
         return new AgentEvent(sql, timestamp, durationNanos, updateCount, errorText, sourceFile, sourceLine,
-                sourceCandidates, methodKey, requestTag, params, threadName, newUrl);
+                sourceCandidates, candidateClasses, methodKey, requestTag, stackDigest, params, threadName, newUrl);
     }
 
-    /** 便捷构造器：sourceCandidates 缺省为空列表（Kotlin 默认参数）。 */
+    /** 便捷构造器：sourceCandidates/candidateClasses/stackDigest 缺省（Kotlin 默认参数）。 */
     public AgentEvent(String sql, long timestamp, long durationNanos, Long updateCount, String errorText,
                       String sourceFile, int sourceLine, String methodKey, String requestTag,
                       List<Triple<Integer, String, String>> params, String threadName, String url) {
         this(sql, timestamp, durationNanos, updateCount, errorText, sourceFile, sourceLine,
-            List.of(), methodKey, requestTag, params, threadName, url);
+            List.of(), List.of(), methodKey, requestTag, null, params, threadName, url);
     }
 
-    /** 便捷构造器：sourceCandidates/url 均缺省（Kotlin 默认参数）。 */
+    /** 便捷构造器：sourceCandidates/candidateClasses/stackDigest/url 均缺省（Kotlin 默认参数）。 */
     public AgentEvent(String sql, long timestamp, long durationNanos, Long updateCount, String errorText,
                       String sourceFile, int sourceLine, String methodKey, String requestTag,
                       List<Triple<Integer, String, String>> params, String threadName) {
         this(sql, timestamp, durationNanos, updateCount, errorText, sourceFile, sourceLine,
-            List.of(), methodKey, requestTag, params, threadName, null);
+            List.of(), List.of(), methodKey, requestTag, null, params, threadName, null);
     }
 
     /**
@@ -103,6 +107,8 @@ public record AgentEvent(
                     }
                 }
             }
+            // T-PS4-14①：同一 JSON 数组只解析一遍（原 parseCandidates + 两处 parseCandidateRows 共三遍）
+            List<CandidateRow> cands = parseCandidateRows(o.get("cands"));
             return new AgentEvent(
                 sql,
                 o.get("ts") != null ? o.get("ts").getAsLong() : System.currentTimeMillis(),
@@ -111,9 +117,12 @@ public record AgentEvent(
                 primitiveStringOrNull(o.get("err")),
                 primitiveStringOrNull(o.get("sf")),
                 o.get("sl") != null && o.get("sl").isJsonPrimitive() ? o.get("sl").getAsInt() : 0,
-                parseCandidates(o.get("cands")),
+                cands.stream().map(r -> new Pair<>(r.file(), r.line())).collect(java.util.stream.Collectors.toList()),
+                cands.stream().map(CandidateRow::className).filter(java.util.Objects::nonNull)
+                    .collect(java.util.stream.Collectors.toList()),
                 primitiveStringOrNull(o.get("mk")),
                 primitiveStringOrNull(o.get("rt")),
+                primitiveStringOrNull(o.get("sd")),
                 params,
                 primitiveStringOrNull(o.get("th")),
                 primitiveStringOrNull(o.get("url")));
@@ -122,13 +131,17 @@ public record AgentEvent(
         }
     }
 
-    /** {@code cands} 数组解析（[file, line] 对；畸形项跳过——协议演进容错）。 */
-    private static List<Pair<String, Integer>> parseCandidates(JsonElement el) {
+    /**
+     * T-SourceJumpFunnel：{@code cands} 数组解析（[file, line, className] 三列；畸形项跳过——协议演进容错）。
+     * T-PS4-14①：sourceCandidates/candidateClasses 共用本次解析派生，不再各调一遍。
+     * T-PS4-14②：第四列 method 协议历史遗留零消费方（candidateMethods 已删），不再解析。
+     */
+    private static List<CandidateRow> parseCandidateRows(JsonElement el) {
         if (el == null || !el.isJsonArray()) {
             return List.of();
         }
         JsonArray arr = el.getAsJsonArray();
-        List<Pair<String, Integer>> out = new ArrayList<>();
+        List<CandidateRow> out = new ArrayList<>();
         for (JsonElement item : arr) {
             if (!item.isJsonArray()) {
                 continue;
@@ -141,9 +154,21 @@ public record AgentEvent(
             }
             JsonElement lineEl = getOrNull(pair, 1);
             int line = lineEl != null && lineEl.isJsonPrimitive() ? lineEl.getAsInt() : 0;
-            out.add(new Pair<>(file, Math.max(line, 0)));
+            String cn = primitiveStringOrNull(getOrNull(pair, 2));
+            out.add(new CandidateRow(file, Math.max(line, 0), cn));
         }
         return out;
+    }
+
+    /** 候选行（T-SourceJumpFunnel）：file/line 必有，className 旧 agent 缺省（四列协议第四列已废弃）。 */
+    public record CandidateRow(
+        /** 候选文件（相对路径）。 */
+        String file,
+        /** 行号（0 未知，负数归零）。 */
+        int line,
+        /** 候选帧类名（旧 agent 缺省 → null）。 */
+        String className
+    ) {
     }
 
     private static JsonElement getOrNull(JsonArray arr, int i) {

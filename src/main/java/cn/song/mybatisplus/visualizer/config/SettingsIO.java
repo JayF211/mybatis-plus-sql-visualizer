@@ -12,6 +12,9 @@ import java.util.Map;
  * 手动 JSON 实现（无 kotlinx.serialization 依赖）——覆盖可覆盖项（方言/参数替换/表名映射/
  * 多租户/数据权限），不含全局项（界面语言/快捷键/更新通道）。
  *
+ * 导出面是 State 的子集，故导入按「JSON 出现的键才覆盖、未出现的键保留现值」合并
+ * （见 {@link #importFromJson} 的 base 形参）——否则文件未承载的字段会被静默重置。
+ *
  * 格式：扁平 JSON 对象（string/boolean/number/array）；版本号 CURRENT_VERSION 用于前向兼容。
  */
 public final class SettingsIO {
@@ -43,6 +46,7 @@ public final class SettingsIO {
         StringBuilder sb = new StringBuilder();
         sb.append("{\n");
         sb.append("  \"version\": ").append(CURRENT_VERSION).append(",\n");
+        sb.append("  \"dialectAuto\": ").append(state.getDialectAuto()).append(",\n");
         sb.append("  \"dialect\": ").append(jsonString(state.getDialect())).append(",\n");
         sb.append("  \"replaceParams\": ").append(state.getReplaceParams()).append(",\n");
         sb.append("  \"formatSql\": ").append(state.getFormatSql()).append(",\n");
@@ -73,13 +77,28 @@ public final class SettingsIO {
     // ------------------------------------------------------------------
 
     /**
-     * 从 JSON 字符串解析状态（缺失字段使用默认值，未知字段忽略）。
+     * 从 JSON 字符串解析状态。
+     *
+     * 合并语义（T-Fix-SettingsScope）：以 base 为底，仅覆盖 JSON 中<b>实际出现</b>的键；
+     * JSON 未出现的键保留 base 的现值，未知字段忽略。
+     *
+     * 为什么必须以现值为底：{@link #exportToJson} 只写 21 个可覆盖项，而 {@link PluginSettings.State}
+     * 有 77 个 var 字段。若以新建出厂默认态为底，一次导入会把参数历史（paramHistoryJson）、
+     * 增强捕获授权记忆、反馈身份、日志自动保存目录等<b>文件里根本没有的字段</b>静默重置为
+     * 出厂默认——用户侧表现为不可见的数据丢失（本文件 KDoc 自称「不含全局项」，却又把
+     * autoCheckUpdate/ignoredUpdateVersions 一并重置，自相矛盾）。
      *
      * @param json JSON 字符串
-     * @return 恢复后的 State（不含全局项如 language/shortcut，保持当前值）
+     * @param base 未出现在 JSON 中的键的取值来源（默认出厂默认态，供「只要文件值」的调用方使用）
+     * @return 恢复后的 State（不含全局项如 language/shortcut，保持 base 现值）
      * @throws ImportException JSON 格式错误或版本不兼容
      */
     public static PluginSettings.State importFromJson(String json) throws ImportException {
+        return importFromJson(json, new PluginSettings.State());
+    }
+
+    /** 全参形态（base 缺省出厂默认态，Kotlin 默认参数的显式入口）。 */
+    public static PluginSettings.State importFromJson(String json, PluginSettings.State base) throws ImportException {
         Map<String, Object> map = parseJson(json);
         Object verObj = map.get("version");
         if (!(verObj instanceof Number)) {
@@ -89,7 +108,12 @@ public final class SettingsIO {
         if (version > CURRENT_VERSION) {
             throw new ImportException("配置文件版本不匹配（文件版本 " + version + " > 当前支持版本 " + CURRENT_VERSION + "）");
         }
-        PluginSettings.State state = new PluginSettings.State();
+        // copy() 而非直接改写 base：调用方传入的多为活状态（instance.state.copy()），
+        // 就地改写会污染它
+        PluginSettings.State state = base.copy();
+        // 版本 <= CURRENT_VERSION：逐字段读取，缺失则保留 base 现值
+        Boolean dialectAuto = getBoolean(map, "dialectAuto");
+        if (dialectAuto != null) state.setDialectAuto(dialectAuto);
         String dialect = getString(map, "dialect");
         if (dialect != null) state.setDialect(dialect);
         Boolean replaceParams = getBoolean(map, "replaceParams");

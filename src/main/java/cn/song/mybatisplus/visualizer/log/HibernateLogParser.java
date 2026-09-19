@@ -357,7 +357,7 @@ public class HibernateLogParser {
                 logTs,
                 LogSqlEntry.computeSummary(restored),
                 SqlSource.HIBERNATE,
-                null, null, 0, List.of(), 0L,
+                null, null, 0, List.of(), List.of(), null, 0L,
                 null, null, null, null, null);
         bucket.pendingParams.clear();
 

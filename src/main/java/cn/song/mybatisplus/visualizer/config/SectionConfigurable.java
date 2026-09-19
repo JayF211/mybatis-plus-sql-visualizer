@@ -79,7 +79,10 @@ public abstract class SectionConfigurable implements Configurable {
 
     @Override
     public void disposeUIResources() {
-        // 清理面板资源
+        if (panel != null) {
+            // T-SettingsTruth P2：断开面板 messageBus 连接（增强捕获状态行订阅），防 IDE 退出 leak 告警
+            panel.disposeResources();
+        }
     }
 
     /** internal 测试访问器 */

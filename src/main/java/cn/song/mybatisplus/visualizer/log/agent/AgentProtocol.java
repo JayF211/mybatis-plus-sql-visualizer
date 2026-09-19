@@ -44,4 +44,36 @@ public final class AgentProtocol {
     public static String configBody(boolean disabled, boolean desensitize) {
         return "{\"disabled\":" + disabled + ",\"desensitize\":" + desensitize + "}";
     }
+
+    /**
+     * T-SourceJumpFunnel P1-3：CONFIG 帧扩展 body——追加用户登记的帧过滤前缀
+     * （{@code "skipPrefixes":["a.","b."]}；空列表省略键，旧 agent contains 解析天然忽略未知键）。
+     * 前缀文本 JSON 转义走最简 deny-list（反斜杠/引号/控制字符），与 {@link #configBody(boolean, boolean)} 的
+     * 固定布尔键序兼容（agent 侧 disabled/desensitize 判定不受追加键影响）。
+     */
+    public static String configBody(boolean disabled, boolean desensitize, java.util.List<String> skipPrefixes) {
+        java.util.List<String> clean = new java.util.ArrayList<>();
+        for (String p : skipPrefixes) {
+            String trimmed = p.trim();
+            if (!trimmed.isEmpty()) {
+                clean.add(trimmed);
+            }
+        }
+        if (clean.isEmpty()) {
+            return configBody(disabled, desensitize);
+        }
+        StringBuilder arr = new StringBuilder();
+        for (int i = 0; i < clean.size(); i++) {
+            if (i > 0) {
+                arr.append(',');
+            }
+            String p = clean.get(i);
+            arr.append('"')
+                .append(p.replace("\\", "\\\\").replace("\"", "\\\"")
+                    .replace("\b", "\\b").replace("\u000C", "\\f")
+                    .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t"))
+                .append('"');
+        }
+        return "{\"disabled\":" + disabled + ",\"desensitize\":" + desensitize + ",\"skipPrefixes\":[" + arr + "]}";
+    }
 }

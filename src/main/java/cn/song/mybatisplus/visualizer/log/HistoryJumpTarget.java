@@ -12,7 +12,7 @@ import java.util.Objects;
  * 抽取原因（F-44-5 全插件 UI 测试）：用户反馈「历史缺代码位置导致无法跳转」——
  * 跳转分支（可跳 / 缺位置 / 文件丢失）必须用确定性断言锁定，而非依赖弹窗副作用。
  */
-public sealed class HistoryJumpTarget permits HjtNavigate, HjtNoSource, HjtNotFound {
+public sealed class HistoryJumpTarget permits HjtNavigate, HjtNoSource, HjtNotFound, HjtMapperXml {
 
     HistoryJumpTarget() {
     }
@@ -100,5 +100,47 @@ final class HjtNotFound extends HistoryJumpTarget {
     @Override
     public String toString() {
         return "NotFound(sourceFile=" + sourceFile + ")";
+    }
+}
+
+/** T-M55-01：mapper XML 语句节点（mapperStatement 定位成功才有意义，失败回退 Java 不劣化）。 */
+final class HjtMapperXml extends HistoryJumpTarget {
+    /** mapper XML 虚拟文件。 */
+    @NotNull private final VirtualFile virtualFile;
+    /** 语句标签起始行（0-based）。 */
+    private final int line;
+
+    public HjtMapperXml(@NotNull VirtualFile virtualFile, int line) {
+        this.virtualFile = virtualFile;
+        this.line = line;
+    }
+
+    @NotNull public VirtualFile getVirtualFile() {
+        return virtualFile;
+    }
+
+    public int getLine() {
+        return line;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof HjtMapperXml x)) {
+            return false;
+        }
+        return line == x.line && Objects.equals(virtualFile, x.virtualFile);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(virtualFile, line);
+    }
+
+    @Override
+    public String toString() {
+        return "MapperXml(virtualFile=" + virtualFile + ", line=" + line + ")";
     }
 }

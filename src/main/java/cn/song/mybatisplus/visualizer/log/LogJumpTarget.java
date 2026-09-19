@@ -14,7 +14,7 @@ import java.util.Objects;
  * <p>原「按表名搜索 Wrapper」回退已整体移除：同表名 ≠ 同调用点，命中即误导。</p>
  */
 public sealed class LogJumpTarget
-        permits LjtPrecise, LjtNoSource, LjtNotFound, LjtMissingSource {
+        permits LjtPrecise, LjtNoSource, LjtNotFound, LjtMissingSource, LjtMapperXml {
 
     LogJumpTarget() {
     }
@@ -109,5 +109,47 @@ final class LjtMissingSource extends LogJumpTarget {
     public static final LjtMissingSource INSTANCE = new LjtMissingSource();
 
     private LjtMissingSource() {
+    }
+}
+
+/** T-M55-01：mapper XML 语句节点（mapperStatement 定位成功才有意义，失败回退 Java 不劣化）。 */
+final class LjtMapperXml extends LogJumpTarget {
+    /** mapper XML 虚拟文件。 */
+    @NotNull private final VirtualFile virtualFile;
+    /** 语句标签起始行（0-based）。 */
+    private final int line;
+
+    public LjtMapperXml(@NotNull VirtualFile virtualFile, int line) {
+        this.virtualFile = virtualFile;
+        this.line = line;
+    }
+
+    @NotNull public VirtualFile getVirtualFile() {
+        return virtualFile;
+    }
+
+    public int getLine() {
+        return line;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof LjtMapperXml x)) {
+            return false;
+        }
+        return line == x.line && Objects.equals(virtualFile, x.virtualFile);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(virtualFile, line);
+    }
+
+    @Override
+    public String toString() {
+        return "MapperXml(virtualFile=" + virtualFile + ", line=" + line + ")";
     }
 }

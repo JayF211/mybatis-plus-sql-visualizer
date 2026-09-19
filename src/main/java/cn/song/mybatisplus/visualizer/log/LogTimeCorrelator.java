@@ -36,7 +36,7 @@ public final class LogTimeCorrelator {
     private LogTimeCorrelator() {
     }
 
-    /** 键上限（512 键 × 单键 ≤ {@link #PER_KEY_CAPACITY} 条 ≈ 数万字节封顶）。 */
+    /** 键上限（512 键 × 单键 ≤ {@link #PER_KEY_CAPACITY} 条；T-PS4-05 起签名单值截断 256 字符，总量典型 MB 级封顶——旧「数万字节」口径按截断前签名失真，已随截断修正）。 */
     private static final int CAPACITY = 512;
 
     /** 单键队列上限（同一条 SQL 连续执行的待配对条数；防循环里同语句刷爆队列）。 */

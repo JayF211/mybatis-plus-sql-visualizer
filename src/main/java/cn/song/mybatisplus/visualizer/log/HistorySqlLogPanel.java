@@ -330,6 +330,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
     /** 设置变更入口（SETTINGS_CHANGE_TOPIC）：EDT + ModalityState.any() 后走 onDisplayModeChanged。 */
     private void onSettingsChanged() {
+        // write-safe: UI-only（纯 Swing/只读，无文档写）
         ApplicationManager.getApplication().invokeLater(
                 this::onDisplayModeChanged,
                 com.intellij.openapi.application.ModalityState.any());
@@ -511,12 +512,11 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
     /**
      * 二级：按 SQL 内容 / 行号 / 时间 / 源文件过滤（T-LogSearchRowTime 与日志页 filterBySearch
-     * 同款语义——行号 {@code #5}/{@code 5} 精确 equals、时间按显示片段 contains（所见即所搜，开关关闭不参与）；
+     * 同款语义：行号 {@code #5}/{@code 5} 精确 equals、时间按显示片段 contains（所见即所搜，开关关闭不参与）；
      * 源文件为历史页特有检索目标，保留独立分支。
      */
     private void applySqlSearch() {
         String q = searchField.getText().trim();
-        sqlListModel.clear();
         List<LogSqlEntry> filtered;
         if (q.isEmpty()) {
             filtered = currentEntries;
@@ -546,7 +546,47 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
                         && entry.sourceFile().toLowerCase(Locale.ENGLISH).contains(lowerQ);
             }).collect(Collectors.toList());
         }
-        filtered.forEach(sqlListModel::addElement);
+        fillSqlList(filtered);
+    }
+
+    /**
+     * T-SqlHistoryFull：列表分批填充（复用实时面板 applyFullRebuild 范式）——列表模型全量同步
+     * 填充在条目千百级时产生上千次模型变更事件 + 布局失效，是历史打开卡顿主源。
+     * 改为：ignoreRepaint 批量抑制布局 + 首屏 30 条立即写入 + 剩余每 30 条 invokeLater 追加；
+     * gen 代际守卫——新一轮 fillSqlList（重新加载/搜索/刷新）启动即终止旧分块链，杜绝幽灵/重复条目。
+     */
+    private void fillSqlList(List<LogSqlEntry> entries) {
+        final int gen = ++bgGeneration;
+        sqlList.setIgnoreRepaint(true);
+        sqlListModel.clear();
+        if (!entries.isEmpty()) {
+            for (LogSqlEntry e : entries.subList(0, Math.min(REFRESH_FIRST_BATCH_SIZE, entries.size()))) {
+                sqlListModel.addElement(e);
+            }
+        }
+        sqlList.setIgnoreRepaint(false);
+        sqlList.revalidate();
+        sqlList.repaint();
+
+        if (entries.size() > REFRESH_FIRST_BATCH_SIZE) {
+            java.util.Iterator<LogSqlEntry> iterator =
+                    entries.subList(REFRESH_FIRST_BATCH_SIZE, entries.size()).iterator();
+            Runnable[] appendNext = new Runnable[1];
+            appendNext[0] = () -> {
+                if (gen != bgGeneration || project.isDisposed()) return; // 新一轮已启动，旧链终止
+                List<LogSqlEntry> chunk = new ArrayList<>();
+                for (int i = 0; i < REFRESH_CHUNK_SIZE && iterator.hasNext(); i++) {
+                    chunk.add(iterator.next());
+                }
+                for (LogSqlEntry e : chunk) {
+                    sqlListModel.addElement(e);
+                }
+                if (iterator.hasNext()) {
+                    ApplicationManager.getApplication().invokeLater(appendNext[0]);
+                }
+            };
+            ApplicationManager.getApplication().invokeLater(appendNext[0]);
+        }
     }
 
     private static boolean containsIgnoreCase(String text, String lowerQ) {
@@ -601,6 +641,8 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         String timestampClip = SqlLogPanelKt.batchCopyTimestamps(selectedEntries);
         group.add(new CopyTimestampAction(selectedEntries, timestampClip));
         group.add(new JumpToSourceAction(entry));
+        // T-M55-01：拆「跳转到 XML」双目标（与日志页同套）
+        group.add(new JumpToMapperXmlAction(entry));
         com.intellij.openapi.actionSystem.ActionPopupMenu popup =
                 ActionManager.getInstance().createActionPopupMenu("mpvs.history.sql", group);
         // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
@@ -655,6 +697,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         }
     }
 
+    /** 跳转到 Java 调用方（T-M55-01：与「跳转到 XML」拆分为双目标，与日志页同套）。 */
     private class JumpToSourceAction extends AnAction {
         private final LogSqlEntry entry;
 
@@ -665,7 +708,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         @Override
         public void update(AnActionEvent e) {
             e.getPresentation().setIcon(AllIcons.Actions.EditSource);
-            e.getPresentation().setText(MpSqlVisualizerBundle.message("log.history.jumpToSource"));
+            e.getPresentation().setText(MpSqlVisualizerBundle.message("log.history.jumpToJava"));
         }
 
         @Override
@@ -675,18 +718,69 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     }
 
     /**
+     * T-M55-01：跳转到 mapper XML 语句节点。mapperStatement 非空且定位成功才显示
+     * （update 内解析一次并存引用）；定位失败不显示，「跳转到 Java」承担回退，不劣化。
+     */
+    private class JumpToMapperXmlAction extends AnAction {
+        private final LogSqlEntry entry;
+        private HjtMapperXml resolved;
+
+        JumpToMapperXmlAction(LogSqlEntry entry) {
+            this.entry = entry;
+        }
+
+        @Override
+        public void update(AnActionEvent e) {
+            e.getPresentation().setIcon(AllIcons.FileTypes.Xml);
+            e.getPresentation().setText(MpSqlVisualizerBundle.message("log.history.jumpToXml"));
+            resolved = resolveXmlJumpTarget(entry);
+            e.getPresentation().setEnabledAndVisible(resolved != null);
+        }
+
+        @Override
+        public void actionPerformed(AnActionEvent e) {
+            HjtMapperXml target = resolved != null ? resolved : resolveXmlJumpTarget(entry);
+            if (target == null) {
+                return;
+            }
+            new OpenFileDescriptor(project, target.getVirtualFile(), target.getLine(), 0).navigate(true);
+        }
+    }
+
+    /**
      * 解析跳转目标（与 {@link #jumpToSource(LogSqlEntry)} 共用；测试驱动直接断言分支，不触发弹窗）。
+     * T-SourceJumpFunnel P0-5：判定收敛到 {@link EntryJumpResolver}（与实时面板同一实现）——
+     * 主位置不在工程内（自研框架汇聚门面帧）时按候选栈序回退，本面板此前无此能力。
      */
     public HistoryJumpTarget resolveJumpTarget(LogSqlEntry entry) {
-        if (entry.sourceFile() == null) {
+        EntryJumpResolver.JumpTarget target = EntryJumpResolver.resolve(project, entry);
+        if (target instanceof EntryJumpResolver.JumpTarget.Precise precise) {
+            return new HjtNavigate(precise.virtualFile(), precise.line());
+        }
+        if (target == EntryJumpResolver.JumpTarget.NoSource.INSTANCE) {
             return HjtNoSource.INSTANCE;
         }
-        // M37.1：多源根容错——basePath 直拼失败后按模块 content root 匹配（SourcePathResolver）
-        VirtualFile virtualFile = SourcePathResolver.resolveVirtualFile(project, entry.sourceFile());
-        if (virtualFile != null) {
-            return new HjtNavigate(virtualFile, Math.max(0, entry.sourceLine() - 1));
+        if (target instanceof EntryJumpResolver.JumpTarget.NotFound notFound) {
+            return new HjtNotFound(notFound.sourceFile());
         }
-        return new HjtNotFound(entry.sourceFile());
+        // MissingSource：历史页无源码位置语义与 NoSource 同路（引导开启源码捕获）
+        return HjtNoSource.INSTANCE;
+    }
+
+    /**
+     * T-M55-01：XML 目标解析——与日志页 {@code SqlLogPanel.resolveEntryXmlJump} 同语义。
+     * mapperStatement 非空且 {@link MapperXmlLocator} 定位成功才返回；否则 null（回退 Java，不劣化）。
+     */
+    public HjtMapperXml resolveXmlJumpTarget(LogSqlEntry entry) {
+        String statementId = entry.mapperStatement();
+        if (statementId == null || statementId.isBlank()) {
+            return null;
+        }
+        MapperXmlLocator.Location location = MapperXmlLocator.locate(project, statementId);
+        if (location == null) {
+            return null;
+        }
+        return new HjtMapperXml(location.virtualFile(), location.line());
     }
 
     /**
@@ -723,6 +817,9 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
             }
         } else if (target instanceof HjtNavigate nv) {
             new OpenFileDescriptor(project, nv.getVirtualFile(), nv.getLine(), 0).navigate(true);
+        } else if (target instanceof HjtMapperXml mx) {
+            // resolveJumpTarget 不产出该分支（XML 目标走 resolveXmlJumpTarget/JumpToMapperXmlAction）；防御性导航
+            new OpenFileDescriptor(project, mx.getVirtualFile(), mx.getLine(), 0).navigate(true);
         }
     }
 
@@ -742,4 +839,10 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
     /** T-Perf-05：搜索输入防抖窗口（毫秒）。 */
     private static final int SEARCH_DEBOUNCE_MS = 200;
+
+    /** T-SqlHistoryFull：二级列表分批填充——首屏立即写入条数（与实时面板同值，快速首屏）。 */
+    private static final int REFRESH_FIRST_BATCH_SIZE = 30;
+
+    /** T-SqlHistoryFull：二级列表分批填充——每块 invokeLater 追加条数（防 EDT 长冻结）。 */
+    private static final int REFRESH_CHUNK_SIZE = 30;
 }

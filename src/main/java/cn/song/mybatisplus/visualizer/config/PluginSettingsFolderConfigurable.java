@@ -503,6 +503,9 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         new SubPageDesc("settings.section.preview", "settings.section.preview.desc", AllIcons.Nodes.Class, SqlPreviewConfigurable.class),
         new SubPageDesc("settings.section.tableMapping", "settings.section.tableMapping.desc", AllIcons.Nodes.DataTables, TableMappingConfigurable.class),
         new SubPageDesc("settings.section.sqlLog", "settings.section.sqlLog.desc", AllIcons.Nodes.Console, SqlLogConfigurable.class),
+        // T-ShortcutSettings：快捷键统一管理 + MCP 工具（跳转平台 MCP Server 设置 + 门控开关）
+        new SubPageDesc("settings.section.shortcuts", "settings.section.shortcuts.desc", AllIcons.Nodes.Plugin, ShortcutsConfigurable.class),
+        new SubPageDesc("settings.section.mcp", "settings.section.mcp.desc", AllIcons.Nodes.Plugin, McpConfigurable.class),
         new SubPageDesc("settings.section.about", "settings.section.about.desc", AllIcons.Nodes.Favorite, AboutConfigurable.class));
 
     /** 所有可搜索的设置项字段 */
@@ -526,6 +529,11 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         fields.add(new SearchableField(msg("settings.dataPermissionMockCondition"), msg("settings.dataPermissionMockCondition.tip"), "settings.section.preview", p));
         fields.add(new SearchableField(msg("settings.reverseWrapperFormat"), msg("settings.reverseWrapperFormat.tip"), "settings.section.preview", p));
         fields.add(new SearchableField(msg("settings.reverseManualEntitySelection"), msg("settings.reverseManualEntitySelection.tip"), "settings.section.preview", p));
+        fields.add(new SearchableField(msg("settings.verticalPairAnnotation"), "", "settings.section.preview", p));
+        fields.add(new SearchableField(msg("settings.autoFold.enabled"), msg("settings.autoFold.enabled.tip"), "settings.section.preview", p));
+        fields.add(new SearchableField(msg("settings.autoFold.threshold"), msg("settings.autoFold.threshold.tip"), "settings.section.preview", p));
+        fields.add(new SearchableField(msg("settings.literalParamRecovery"), "", "settings.section.preview", p));
+        fields.add(new SearchableField(msg("settings.preview.jdbc"), msg("settings.preview.jdbc.tip"), "settings.section.preview", p));
 
         // 表名映射
         Class<? extends Configurable> t = TableMappingConfigurable.class;
@@ -538,7 +546,6 @@ public class PluginSettingsFolderConfigurable implements Configurable {
 
         // SQL 日志
         Class<? extends Configurable> l = SqlLogConfigurable.class;
-        fields.add(new SearchableField(msg("settings.log.filterBar"), msg("settings.log.filterBar.tip"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.log.sqlPrefix"), msg("settings.log.sqlPrefix.tip"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.log.paramPrefix"), msg("settings.log.paramPrefix.tip"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.log.mixedPrefix"), msg("settings.log.mixedPrefix.tip"), "settings.section.sqlLog", l));
@@ -561,6 +568,13 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         fields.add(new SearchableField(msg("settings.log.autoSave"), msg("settings.log.autoSave.tip"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.log.autoSave.path"), msg("settings.log.autoSave.path.tip"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.log.autoSave.pattern"), msg("settings.log.autoSave.pattern.tip"), "settings.section.sqlLog", l));
+        fields.add(new SearchableField(msg("settings.log.autoSave.maxFiles"), msg("settings.log.autoSave.maxFiles.tip"), "settings.section.sqlLog", l));
+        fields.add(new SearchableField(msg("settings.log.timestampSource"), msg("settings.log.timestampSource.log.tip"), "settings.section.sqlLog", l));
+        fields.add(new SearchableField(msg("log.list.displayMode"), msg("log.list.displayMode.tip"), "settings.section.sqlLog", l));
+        fields.add(new SearchableField(msg("settings.log.crudColor.style"), msg("settings.log.crudColor.style.tip"), "settings.section.sqlLog", l));
+        fields.add(new SearchableField(msg("settings.enhancedCapture"), msg("settings.enhancedCapture.status"), "settings.section.sqlLog", l));
+        fields.add(new SearchableField(msg("settings.enhancedCapture.desensitize"), "", "settings.section.sqlLog", l));
+        fields.add(new SearchableField(msg("settings.sourceFrameSkipPrefixes"), msg("settings.sourceFrameSkipPrefixes.tip"), "settings.section.sqlLog", l));
 
         // 界面与操作
         Class<? extends Configurable> u = UiActionsConfigurable.class;
@@ -568,12 +582,32 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         fields.add(new SearchableField(msg("settings.language"), "", "settings.section.ui", u));
         fields.add(new SearchableField(msg("settings.shortcut"), msg("settings.shortcut.tip"), "settings.section.ui", u));
         fields.add(new SearchableField(msg("settings.shortcut.sqlToJava"), "", "settings.section.ui", u));
+        fields.add(new SearchableField(msg("settings.joinDiagramNative"), msg("settings.joinDiagramNative.tip"), "settings.section.ui", u));
 
         // 关于
         Class<? extends Configurable> a = AboutConfigurable.class;
         fields.add(new SearchableField(msg("settings.cache.label"), msg("settings.cache.tip"), "settings.section.about", a));
         fields.add(new SearchableField(msg("settings.update.versionInfo"), "", "settings.section.about", a));
         fields.add(new SearchableField(msg("settings.buildNumber"), msg("settings.buildNumber.tip"), "settings.section.about", a));
+
+        // T-ProjectSettingsScope P3：项目级设置页 10 项（总开关 + 9 项可覆盖字段）。
+        // 前置对照实验（ProjectPluginSettingsConfigurableTest 内探针）：项目上下文下
+        // `Settings.find(ProjectPluginSettingsConfigurable::class.java)` 命中
+        // （ConfigurableVisitor.findByType 走 Configurable.PROJECT_CONFIGURABLE，project=null 时为 null），
+        // 故本页条目可跳转，不是 T-SettingsTruth P3 清理过的「幽灵搜索项」形态。
+        // 文案键复用全局页同项（T-SettingsTruth 6.5 已把项目页标签收编为全局键），
+        // 仅 pageLabelKey 指向项目页 displayName——用户在同一批关键词下同时看到两个作用域。
+        Class<? extends Configurable> pj = ProjectPluginSettingsConfigurable.class;
+        fields.add(new SearchableField(msg("settings.project.useProjectSettings"), msg("settings.project.useProjectSettings.tip"), "configurable.settings.project.displayName", pj));
+        fields.add(new SearchableField(msg("settings.dialect"), "", "configurable.settings.project.displayName", pj));
+        fields.add(new SearchableField(msg("settings.replaceParams"), msg("settings.replaceParams"), "configurable.settings.project.displayName", pj));
+        fields.add(new SearchableField(msg("settings.formatSql"), msg("settings.formatSql"), "configurable.settings.project.displayName", pj));
+        fields.add(new SearchableField(msg("settings.injectLogicDelete"), msg("settings.injectLogicDelete"), "configurable.settings.project.displayName", pj));
+        fields.add(new SearchableField(msg("settings.logicDeleteValue"), msg("settings.logicDeleteValue.tip"), "configurable.settings.project.displayName", pj));
+        fields.add(new SearchableField(msg("settings.tablePrefix"), msg("settings.tablePrefix.tip"), "configurable.settings.project.displayName", pj));
+        fields.add(new SearchableField(msg("settings.tableSuffix"), msg("settings.tableSuffix.tip"), "configurable.settings.project.displayName", pj));
+        fields.add(new SearchableField(msg("settings.tableNameInference"), msg("settings.tableNameInference.tip"), "configurable.settings.project.displayName", pj));
+        fields.add(new SearchableField(msg("settings.ignoredFields"), msg("settings.ignoredFields.tip"), "configurable.settings.project.displayName", pj));
 
         return fields;
     }
