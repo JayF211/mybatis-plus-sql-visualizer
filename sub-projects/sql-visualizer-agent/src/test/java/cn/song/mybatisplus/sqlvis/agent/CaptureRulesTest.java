@@ -140,9 +140,45 @@ public class CaptureRulesTest {
         StackLocator.Frame f = StackLocator.locate();
         org.junit.Assert.assertNotNull(f);
         org.junit.Assert.assertNotNull(f.candidates);
-        org.junit.Assert.assertTrue("候选数应 ≤3", f.candidates.size() <= 3);
+        // T-SourceJumpFunnel：候选上限 3→8（汇聚门面场景深层业务帧须可见）
+        org.junit.Assert.assertTrue("候选数应 ≤8", f.candidates.size() <= 8);
         for (String[] c : f.candidates) {
             org.junit.Assert.assertNotEquals("候选不得与主位置重复", f.sourceFile, c[0]);
+        }
+    }
+
+    @Test
+    public void locate_候选增厚四列且上界八条_T_SourceJumpFunnel() {
+        StackLocator.Frame f = StackLocator.locate();
+        org.junit.Assert.assertNotNull(f);
+        org.junit.Assert.assertNotNull(f.candidates);
+        org.junit.Assert.assertTrue("候选数应 ≤8", f.candidates.size() <= 8);
+        for (String[] c : f.candidates) {
+            org.junit.Assert.assertEquals("候选应为 [file, line, className, method] 四列", 4, c.length);
+            org.junit.Assert.assertNotNull("类名列不得缺失", c[2]);
+        }
+        // 判定路径标记（L1=目录帧命中 / SAFETY=安全网），不在则打点改动回归
+        assertTrue("via 应为 L1/SAFETY 之一，实为 " + f.via,
+                "L1".equals(f.via) || "SAFETY".equals(f.via));
+    }
+
+    @Test
+    public void 动态前缀登记_热生效与清空_T_SourceJumpFunnel() {
+        // 自研框架前缀登记后，引擎帧即刻被识别为框架帧（P1-3 CONFIG 热下发语义）
+        StackLocator.setExtraSkipPrefixes(new String[]{"com.corp.engine."});
+        try {
+            assertTrue(StackLocator.isFrameworkFrame("com.corp.engine.DataUpdateTool"));
+            assertTrue(StackLocator.isFrameworkFrame("com.corp.engine.repo.Repository"));
+            assertFalse(StackLocator.isFrameworkFrame("com.corp.app.service.UserService"));
+            // 空组=清空
+            StackLocator.setExtraSkipPrefixes(new String[0]);
+            assertFalse(StackLocator.isFrameworkFrame("com.corp.engine.DataUpdateTool"));
+            // 畸形项过滤（null/空白）
+            StackLocator.setExtraSkipPrefixes(new String[]{"  ", null, "com.corp2."});
+            assertFalse(StackLocator.isFrameworkFrame("com.corp.engine.DataUpdateTool"));
+            assertTrue(StackLocator.isFrameworkFrame("com.corp2.x.Y"));
+        } finally {
+            StackLocator.setExtraSkipPrefixes(new String[0]);
         }
     }
 

@@ -18,8 +18,8 @@
 # master 分支不含 MCP 适配层（cn/song/mybatisplus/visualizer/mcp/ 与 mcp-optional.xml 在 dev，
 # 未合入 master），因此 master 侧无永不可达缺类需要豁免，本文件只保留机制与格式。
 #
-# 合入 dev 时须随行补回的两条（出处见 dev 分支同路径文件与提交 55739e4，作用域由
-# McpScopeSourceScanTest 守卫：mcpserver 引用只许出现在 mcp/ 包与 mcp-optional.xml，
-# 越包即回退豁免、必须立刻回查）：
-#   cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer:.*:Package 'com.intellij.mcpserver' is not found
-#   cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer:.*:references an unresolved class kotlin.coroutines.jvm.internal.SpillingKt
+
+# dev 分支含 MCP 适配层（cn/song/mybatisplus/visualizer/mcp/ 与 mcp-optional.xml 在 dev），
+# 上述两类 243 永不可达缺类在此为真实豁免需求，以下两条规则生效中：
+cn\.song\.mybatisplus\.visualizer\.mybatis-plus-sql-visualizer:.*:Package 'com\.intellij\.mcpserver' is not found
+cn\.song\.mybatisplus\.visualizer\.mybatis-plus-sql-visualizer:.*:references an unresolved class kotlin\.coroutines\.jvm\.internal\.SpillingKt

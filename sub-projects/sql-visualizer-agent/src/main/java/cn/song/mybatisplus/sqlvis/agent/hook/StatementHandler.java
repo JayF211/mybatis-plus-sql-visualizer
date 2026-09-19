@@ -4,6 +4,7 @@ import cn.song.mybatisplus.sqlvis.agent.AgentState;
 import cn.song.mybatisplus.sqlvis.agent.model.SqlEvent;
 import cn.song.mybatisplus.sqlvis.agent.transport.EventBus;
 import cn.song.mybatisplus.sqlvis.agent.util.MdcAccessor;
+import cn.song.mybatisplus.sqlvis.agent.util.StackDigest;
 import cn.song.mybatisplus.sqlvis.agent.util.StackLocator;
 
 import java.lang.reflect.InvocationHandler;
@@ -14,7 +15,8 @@ import java.lang.reflect.Method;
  * - setXxx 实参直取：显式签名枚举（§4.2 #4 主策略，禁用 startsWith("set") 宽泛匹配——
  *   DebugTools setFetchSize 误记坑）；值经脱敏层后入事件。
  * - execute 族：nanoTime 精确耗时、异常直捕（类名+消息，原样重抛）、影响行数直取；
- *   调用栈只在 execute 取一次（按调用方缓存，禁 per-execute 全栈解析热点）。
+ *   调用栈在 emitEvent 捕获一次、定位与摘要两用（T-PS4-09：locate 与 StackDigest 共享同一
+ *   快照，禁每条 SQL 两次 getStackTrace；定位按调用方缓存，禁 per-execute 全栈解析热点）。
  * - 请求聚合：MDC 反射兜底（T-M56-07，一期 filter hook 待二期）。
  * 采集红线：任何钩子内部异常不得外溢影响执行语义（异常路径只记录原始异常后原样重抛）。
  */
@@ -120,7 +122,12 @@ final class StatementHandler implements InvocationHandler {
         } catch (Throwable ignore) {
             // 保持 null，StackLocator 内部退上下文 loader
         }
-        final StackLocator.Frame frame = StackLocator.locate(hint);
+        // T-PS4-09 一次捕获两用：同一快照喂 locate（定位）与 StackDigest（摘要）——原实现两者
+        // 各自 getStackTrace，每条 SQL 两次全栈捕获（第七轮审计①）。摘要捕获点自 StackDigest.build
+        // 内部上移至本方法，头帧由 StackDigest#build 变为 emitEvent，16 帧截断下仅头部差一自身帧、
+        // 尾部多含一帧业务帧；过滤规则不变（仅跳 Thread#getStackTrace 自身帧）。
+        final StackTraceElement[] stack = Thread.currentThread().getStackTrace();
+        final StackLocator.Frame frame = StackLocator.locate(stack, hint);
         Long updateCount = EventBuilder.extractUpdateCount(op, result, raw);
         SqlEvent event = new SqlEvent();
         event.sql = sql;
@@ -133,6 +140,7 @@ final class StatementHandler implements InvocationHandler {
         event.sourceLine = frame == null ? 0 : frame.line;
         event.methodKey = frame == null ? null : frame.methodKey;
         event.sourceCandidates = frame == null ? null : frame.candidates;
+        event.stackDigest = StackDigest.build(stack);
         event.requestTag = MdcAccessor.requestTag();
         event.params = params.snapshot(sql, AgentState.isDesensitize());
         event.url = url; // connect 时 URL（面板据此展示目标库类型；测试/池代理下可能为 null）
