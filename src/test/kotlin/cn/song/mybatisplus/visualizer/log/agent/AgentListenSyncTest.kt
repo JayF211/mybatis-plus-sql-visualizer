@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
+import cn.song.mybatisplus.visualizer.testutil.AlreadyDisposedDiagnostics
 import cn.song.mybatisplus.visualizer.testutil.SqlLogManagerProjectState
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
@@ -27,16 +28,22 @@ class AgentListenSyncTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
-        serviceState = SqlLogManagerProjectState.capture(project.getService(SqlLogManager::class.java))
+        serviceState = SqlLogManagerProjectState.capture(
+            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "setUp.capture")
+        )
     }
 
     override fun tearDown() {
-        SqlLogManagerProjectState.restore(project.getService(SqlLogManager::class.java), serviceState)
+        SqlLogManagerProjectState.restore(
+            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "tearDown.restore"),
+            serviceState,
+        )
         super.tearDown()
     }
 
     fun testisListenActive_跟随监听状态() {
-        val logManager = project.getService(SqlLogManager::class.java)
+        val logManager =
+            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "test.isListenActive")
         val manager = AgentManager.getInstance(project)
         val before = logManager.capturing
         try {
