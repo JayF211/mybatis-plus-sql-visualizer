@@ -16,20 +16,20 @@ import com.intellij.psi.PsiManager
 import com.intellij.psi.search.GlobalSearchScope
 
 /**
- * mpsv_crud_sql 工具（T-McpToolset2 / T-MTS2-02，R2 PSI）：实体类 → CRUD 四件套 SQL。
+ * sqlv_crud_sql 工具（T-McpToolset2 / T-MTS2-02，R2 PSI）：实体类 → CRUD 四件套 SQL。
  *
  * 复用 IDE 右键生成链的纯逻辑段：`GenerateCrudSqlFromEntityAction.entitySpec`
  * （internal 同模块复用——EntityResolver 解析 + 引号提示 + 方言，单一真相源不复制）→
  * `CrudSqlGenerator.generate`（零 PSI 纯生成，无主键降级 `1 = 0` 占位与 IDE 口径一致）。
  * PSI 定位包 ReadAction（McpSourceLocator 同款线程模型）；**只生成不执行**。
- * 逻辑分层同 [CheckSqlTool]：[resolveSpec]/[crudOutput] 非 suspend 可测，挂起方法只做 audit 包装。
+ * 逻辑分层同 [SqlVisualizerCheckSqlTool]：[resolveSpec]/[crudOutput] 非 suspend 可测，挂起方法只做 audit 包装。
  *
  * 双轨别名约定（T-DmlAliasGuard，O-27）：产物 DML 目标位禁别名（约定全文见
  * CrudSqlGenerator 类头），守卫测试 `DmlAliasGuardTest` 覆盖本链出口。
  */
-class CrudSqlTool : McpToolsetSupport("mpsv_crud_sql") {
+class SqlVisualizerCrudSqlTool : McpToolsetSupport("sqlv_crud_sql") {
 
-    @McpTool(name = "mpsv_crud_sql", title = "Generate CRUD SQL from a MyBatis-Plus entity class")
+    @McpTool(name = "sqlv_crud_sql", title = "Generate CRUD SQL from a MyBatis-Plus entity class")
     @McpDescription(
         "Generate INSERT / UPDATE / SELECT / DELETE statements for a MyBatis-Plus entity class in the " +
             "current IntelliJ project (same chain as the IDE right-click action): primary keys, " +
@@ -37,17 +37,17 @@ class CrudSqlTool : McpToolsetSupport("mpsv_crud_sql") {
             "@TableLogic logic-delete variant; no-primary-key degrades to a '1 = 0' placeholder WHERE. " +
             "Pass 'filePath' (project-relative or absolute, .java/.kt entity file) or 'className' " +
             "(fully-qualified). Deterministic generation; read-only: produces SQL text only — " +
-            "never executes; pair with mpsv_check_sql before any real execution.",
+            "never executes; pair with sqlv_check_sql before any real execution.",
     )
     @McpToolHints(
         readOnlyHint = McpToolHintValue.TRUE,
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE,
     )
-    suspend fun mpsv_crud_sql(
+    suspend fun sqlv_crud_sql(
         filePath: String = "",
         className: String = "",
-    ): String = audit("mpsv_crud_sql") {
+    ): String = audit("sqlv_crud_sql") {
         val project = requireProject()
         requireSmart(project)
         crudOutput(resolveSpec(project, filePath, className))

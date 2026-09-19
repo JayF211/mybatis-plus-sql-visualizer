@@ -146,9 +146,9 @@ class McpRowBudgetTest {
 
     @Test
     fun `接线守卫_工具层与通道层`() {
-        val tool = stripComments(mainSource("mcp/ExplainTool.kt"))
+        val tool = stripComments(mainSource("mcp/SqlVisualizerExplainTool.kt"))
         assertTrue(
-            "mpsv_explain 签名应含 maxRows 可选参数（默认值取常量）",
+            "sqlv_explain 签名应含 maxRows 可选参数（默认值取常量）",
             tool.contains("maxRows: Int = McpExplainFormatter.DEFAULT_MAX_ROWS"),
         )
         assertTrue("工具层应把钳制值喂给前置链", tool.contains("McpExplainFormatter.clampMaxRows(maxRows)"))
@@ -180,8 +180,8 @@ class McpRowBudgetTest {
     @Test
     fun `登记表_与常量一致`() {
         val registration = mainSource("mcp/McpToolsetSupport.kt")
-        val start = registration.indexOf("mpsv_explain：")
-        assertTrue("登记表应含 mpsv_explain 条目", start >= 0)
+        val start = registration.indexOf("sqlv_explain：")
+        assertTrue("登记表应含 sqlv_explain 条目", start >= 0)
         val end = registration.indexOf("\n *  - ", start).let { if (it < 0) registration.length else it }
         val entry = registration.substring(start, end)
         assertTrue("登记行应引用常量名: $entry", entry.contains("DEFAULT_MAX_ROWS") && entry.contains("HARD_MAX_ROWS"))

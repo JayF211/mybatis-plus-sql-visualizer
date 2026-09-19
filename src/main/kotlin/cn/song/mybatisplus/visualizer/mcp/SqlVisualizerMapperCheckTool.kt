@@ -13,7 +13,7 @@ import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.vfs.LocalFileSystem
 
 /**
- * mpsv_mapper_check 工具（T-McpToolset2 / T-MTS2-03，R2）：mapper XML 静态契约核查。
+ * sqlv_mapper_check 工具（T-McpToolset2 / T-MTS2-03，R2）：mapper XML 静态契约核查。
  *
  * 两层产出（N-16 位差落点——CodeHelperPro validate_mybatis_mapper 校验静态文本，
  * 本工具校验的是**渲染后的真实 SQL**）：
@@ -21,11 +21,11 @@ import com.intellij.openapi.vfs.LocalFileSystem
  *  2. 渲染层（simulate=true）：空模拟参数渲染 → 渲染产物逐条过 UnboundedWriteDetector + SqlPerfAnalyzer。
  *
  * simulate 的空参数上下文（`<if>` 全关 → 空语句）是正常态不算 finding，输出注明语境。
- * 逻辑分层同 [CheckSqlTool]：[mapperCheck] 纯函数可测，挂起方法只做文本定位 + audit 包装。
+ * 逻辑分层同 [SqlVisualizerCheckSqlTool]：[mapperCheck] 纯函数可测，挂起方法只做文本定位 + audit 包装。
  */
-class MapperCheckTool : McpToolsetSupport("mpsv_mapper_check") {
+class SqlVisualizerMapperCheckTool : McpToolsetSupport("sqlv_mapper_check") {
 
-    @McpTool(name = "mpsv_mapper_check", title = "Static contract check for a mapper XML")
+    @McpTool(name = "sqlv_mapper_check", title = "Static contract check for a mapper XML")
     @McpDescription(
         "Check a MyBatis mapper XML: parse errors, statement inventory " +
             "(id, kind, parameterType, #{} parameter counts, \${} direct-substitution counts — the " +
@@ -41,11 +41,11 @@ class MapperCheckTool : McpToolsetSupport("mpsv_mapper_check") {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE,
     )
-    suspend fun mpsv_mapper_check(
+    suspend fun sqlv_mapper_check(
         xmlSnippet: String = "",
         filePath: String = "",
         simulate: Boolean = false,
-    ): String = audit("mpsv_mapper_check") {
+    ): String = audit("sqlv_mapper_check") {
         val text = when {
             xmlSnippet.isNotBlank() -> xmlSnippet
             filePath.isNotBlank() -> ReadAction.compute<String?, Throwable> {
@@ -132,7 +132,7 @@ class MapperCheckTool : McpToolsetSupport("mpsv_mapper_check") {
             }
             if (simulate) {
                 append("\n(simulation uses an empty-parameter context; pass real parameter forms via ")
-                append("mpsv_render_sql for production-shaped evidence)")
+                append("sqlv_render_sql for production-shaped evidence)")
             }
         }.trimEnd()
     }

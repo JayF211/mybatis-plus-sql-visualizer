@@ -5,7 +5,7 @@
 - 结论：**Codex（`codex-acp`）与终端路线（Claude Code CLI）均可用；Claude Agent（`claude-agent-acp`）因上游缺陷不可用**，绕行方案见《20260919-2130-T-AcpMcpTransport-ACP会话MCP工具下发修复-开发计划》
 - 实测环境：IDEA 2026.2.1（262）runIde 沙盒，插件 2026.9.18
 - 文档定位：本文件是**插件侧**的权威源（机制 + 步骤 + 排查方法论），文档站「MCP Server」页面的用户向内容由它提炼；站点侧的《JetBrains AI Assistant 搭配插件 MCP-说明文档》已并入本文
-- 工具名说明：下文统一用**定案后的 `sqlv_*`**（见《T-McpToolNaming》）；**当前发行版（2026.9.18）注册的仍是 `mpsv_*`**，改名随该任务发布
+- 工具名说明：下文统一用**定案后的 `sqlv_*`**（见《T-McpToolNaming》）；**当前发行版（2026.9.18）注册的仍是 `sqlv_*`**，改名随该任务发布
 
 ---
 
@@ -45,9 +45,13 @@
        url = "http://127.0.0.1:<MCP 端口>/stream"
      ```
      （端口从 IDE 的 `Settings → Tools | MCP Server` 页取，或看 `idea.log` 的 `[BuiltInMcpStartup] ... port=`）
-   - 或走 AI Assistant 的 MCP 传递（见 §三）；
-4. **开 MCP 传递**：`Settings → Tools | AI Assistant → Agents` 页底部把 **「Pass IntelliJ MCP server」设为 On**（对应 `acpAgents.xml` 的 `global_use_idea_mcp`）；
-5. **认证设为外部托管**：见 §三；
+   - 或走 AI Assistant 的 MCP 传递（下一步）；
+4. **开 MCP 传递**：`Settings → Tools | AI Assistant → Agents` 页底部把 **「Pass IntelliJ MCP server」设为 On**（对应 `acpAgents.xml` 的 `global_use_idea_mcp`，取值 OFF/ON/ON_DEMAND，**默认 ON_DEMAND**）；
+5. **认证设为外部托管**：ACP 的认证开关**不在 Agents 设置页上**，而在**聊天面板的「选择身份验证方式」弹窗**里——选「**使用智能体继续**」即等价于 `MANAGED_EXTERNALLY`（agent 自己管认证，读它自己的配置文件）。也可直接写 `options/acpAgents.xml`：
+   ```xml
+   <entry key="acp.registry.codex-acp" value="MANAGED_EXTERNALLY" />
+   ```
+   若该值是 `EXPLICIT_SELECTION`，面板会反复要求选认证方式；
 6. **验证**：AI 面板切到 Codex，发一句 `调用 sqlv_check_sql 检查 UPDATE sys_user SET nickname='x' WHERE id=1`。判据两条：
    - 会话记录里出现**原生 MCP 调用**形态：`{"type":"function_call","name":"sqlv_check_sql","namespace":"mcp__idea"}`，或 UI 上的 `mcp: idea/sqlv_check_sql`；
    - `idea.log` 出现 `[MCP-AUDIT] tool=sqlv_check_sql status=OK ...`。

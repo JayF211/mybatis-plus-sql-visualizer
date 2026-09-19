@@ -38,7 +38,7 @@ object McpAuditLog {
  * 执行类工具入参摘要（T-McpAuditTrail T-MAT-04）：工具名之外的 `dataSource` / `dialect` / SQL 首段。
  *
  * 顶层函数（非 [McpAuditLog] 成员）：裸 JUnit 可直测，加载门面类不必初始化 [McpAuditLog] 的 Logger
- * （McpDbExecutor.drainWarnings 同款先例）。**生产消费点在 ExplainTool.mpsv_explain**——改造前该工具
+ * （McpDbExecutor.drainWarnings 同款先例）。**生产消费点在 SqlVisualizerExplainTool.sqlv_explain**——改造前该工具
  * 的成功路径把字面量 `"ok"` 当入参传，审计行里没有任何真实入参（McpAuditLog.summarize 全仓零调用）。
  *
  * 脱敏口径（对齐 T-RA 系列「不落异常 message」）：只记 SQL 文本摘要、不记任何参数值——MCP 工具
@@ -57,7 +57,7 @@ internal fun executionArgsSummary(dataSource: String, dialect: String, sql: Stri
  * 整体仍受 [McpAuditLog.SUMMARY_LIMIT] 约束。生产消费点在 `McpToolsetSupport.AuditTicket.expectedError`。
  *
  * **为什么不是整串 [McpAuditLog.clip]**（T-MAT-04 回退修复，独立复核轮实测）：整串截断让入参摘要
- * 先占满预算——`mpsv_explain` 的 SQL 段 >80 字符时错误文本开始被截、≥113 字符时**整段消失**，
+ * 先占满预算——`sqlv_explain` 的 SQL 段 >80 字符时错误文本开始被截、≥113 字符时**整段消失**，
  * 而长 SQL 恰是最需要看错误原因的场景（改造前该槽位只放错误文本，错误文本独占 120 字符）。
  * 故改**两段分预算**：错误文本优先占预算，入参摘要让位但保留 [ERROR_PATH_ARGS_FLOOR] 保底
  * （数据源标识与字段格式不消失），错误文本短时余量全部还给摘要，两段各带省略号且总长仍 ≤ 120。

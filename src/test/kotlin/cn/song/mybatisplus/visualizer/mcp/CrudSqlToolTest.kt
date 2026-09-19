@@ -4,12 +4,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * mpsv_crud_sql 工具测试（T-McpToolset2 / T-MTS2-02）：className 定位实体 → 四件套生成；
+ * sqlv_crud_sql 工具测试（T-McpToolset2 / T-MTS2-02）：className 定位实体 → 四件套生成；
  * 非 MP 实体诚实拒绝；无入参拒绝。实体解析细节由 GenerateCrudSqlFromEntityActionTest 覆盖。
  */
 class CrudSqlToolTest : com.intellij.testFramework.fixtures.BasePlatformTestCase() {
 
-    private val tool = CrudSqlTool()
+    private val tool = SqlVisualizerCrudSqlTool()
 
     private fun crud(vararg args: Pair<String, String>): String {
         val map = args.toMap()

@@ -10,17 +10,17 @@ import com.intellij.mcpserver.annotations.McpToolHintValue
 import com.intellij.mcpserver.annotations.McpToolHints
 
 /**
- * mpsv_render_logs 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：MyBatis / Hibernate /
+ * sqlv_render_logs 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：MyBatis / Hibernate /
  * JdbcTemplate 日志文本 → 可执行 SQL。
  *
  * 复用 IDE「日志 → SQL」面板同款三解析器链（feed → closePending → takeEntries，
  * `LogToSqlPanel.computeConversion` 同构、纯计算不触 Swing）；条目直接消费
  * `LogSqlEntry.restoredSql`。前缀参数缺省读插件设置（与面板同源单点），工具参数可逐项覆盖
- * （null/空串 = 不覆盖，遵循设置）。逻辑分层同 [CheckSqlTool]：[renderLogs] 纯函数可测。
+ * （null/空串 = 不覆盖，遵循设置）。逻辑分层同 [SqlVisualizerCheckSqlTool]：[renderLogs] 纯函数可测。
  */
-class RenderLogsTool : McpToolsetSupport("mpsv_render_logs") {
+class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
 
-    @McpTool(name = "mpsv_render_logs", title = "Restore MyBatis/Hibernate/JdbcTemplate logs into executable SQL")
+    @McpTool(name = "sqlv_render_logs", title = "Restore MyBatis/Hibernate/JdbcTemplate logs into executable SQL")
     @McpDescription(
         "Restore executable SQL from application log text (MyBatis 'Preparing:'/'Parameters:' pairs, " +
             "Hibernate 'Hibernate:' SQL with 'binding parameter' lines, or Spring JdbcTemplate debug lines). " +
@@ -28,21 +28,21 @@ class RenderLogsTool : McpToolsetSupport("mpsv_render_logs") {
             "hibernateSqlPrefix/hibernateParamPrefix) and 'mixedPrefixMatching' are optional and default to " +
             "the plugin's log-capture settings. Each restored statement is prefixed with a '-- SQL #N' " +
             "comment line carrying its source format. Deterministic restoration, not validation — pair with " +
-            "mpsv_check_sql to assess write risk before executing. Read-only: never executes SQL.",
+            "sqlv_check_sql to assess write risk before executing. Read-only: never executes SQL.",
     )
     @McpToolHints(
         readOnlyHint = McpToolHintValue.TRUE,
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE,
     )
-    suspend fun mpsv_render_logs(
+    suspend fun sqlv_render_logs(
         logText: String,
         sqlPrefix: String = "",
         paramPrefix: String = "",
         hibernateSqlPrefix: String = "",
         hibernateParamPrefix: String = "",
         mixedPrefixMatching: Boolean? = null,
-    ): String = audit("mpsv_render_logs") {
+    ): String = audit("sqlv_render_logs") {
         renderLogs(
             logText, sqlPrefix, paramPrefix, hibernateSqlPrefix, hibernateParamPrefix, mixedPrefixMatching,
         )

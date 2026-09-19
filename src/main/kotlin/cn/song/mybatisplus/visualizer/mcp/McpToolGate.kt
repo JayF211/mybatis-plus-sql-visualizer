@@ -17,16 +17,16 @@ object McpToolGate {
 
     /** 全部注册工具名（mcp-optional.xml 的 10 个 toolset 一一对应；设置页 UI 与守卫测试共用单一清单）。 */
     val TOOL_NAMES: List<String> = listOf(
-        "mpsv_render_sql",
-        "mpsv_schema_context",
-        "mpsv_explain",
-        "mpsv_render_logs",
-        "mpsv_check_sql",
-        "mpsv_rollback_plan",
-        "mpsv_perf_advice",
-        "mpsv_crud_sql",
-        "mpsv_reverse_sql",
-        "mpsv_mapper_check",
+        "sqlv_render_sql",
+        "sqlv_schema_context",
+        "sqlv_explain",
+        "sqlv_render_logs",
+        "sqlv_check_sql",
+        "sqlv_rollback_plan",
+        "sqlv_perf_advice",
+        "sqlv_crud_sql",
+        "sqlv_reverse_sql",
+        "sqlv_mapper_check",
     )
 
     /** 工具是否对平台可见：总开关开 且 不在工具级禁用清单（大小写不敏感比对）。 */

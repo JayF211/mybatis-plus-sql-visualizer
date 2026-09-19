@@ -4,7 +4,7 @@ import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
 import com.intellij.openapi.project.Project
 
 /**
- * T-McpToolset mpsv_schema_context 取数适配层。
+ * T-McpToolset sqlv_schema_context 取数适配层。
  *
  * 复用 [DatabaseSchemaResolver] 既有通道（反射 DasModel 遍历 + 弱引用缓存 + 负命中不缓存），
  * 逐表取「表注释 + 列注释/类型/NOT NULL」。数据源别名仅用于存在性校验与错误提示（现有通道

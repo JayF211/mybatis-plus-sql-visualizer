@@ -44,7 +44,7 @@ internal fun drainWarnings(vararg surfaces: Pair<() -> List<*>?, () -> Unit>): L
 internal fun channelRowBudget(requested: Int): Int = McpExplainFormatter.clampMaxRows(requested)
 
 /**
- * T-McpToolset headless 执行通道（mpsv_explain 专用，反射隔离 DatabaseTools）。
+ * T-McpToolset headless 执行通道（sqlv_explain 专用，反射隔离 DatabaseTools）。
  *
  * 为什么不复用 [cn.song.mybatisplus.visualizer.execute.SqlExecutor]：既有执行链是 UI 控制台
  * 形态（弹数据源选择框 + 异步回调 + 结果进原生控制台），违反 MCP 零弹窗红线且拿不到文本结果。
