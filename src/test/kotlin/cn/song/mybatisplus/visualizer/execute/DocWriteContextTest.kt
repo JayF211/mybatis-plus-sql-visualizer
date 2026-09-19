@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.generator.CrudColumn
 import cn.song.mybatisplus.visualizer.generator.CrudKind
 import cn.song.mybatisplus.visualizer.generator.CrudSqlGenerator
 import cn.song.mybatisplus.visualizer.generator.CrudTableSpec
+import cn.song.mybatisplus.visualizer.log.SqlToJavaPanel
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -153,6 +154,76 @@ class DocWriteContextTest : BasePlatformTestCase() {
         } finally {
             DocWriteContext.writeAllowedProbe = null
             panel.clear()
+            panel.dispose()
+        }
+    }
+
+    // ============ 面板级：SQL→Java 结果区 setResultText 闸门（T-FS-05） ============
+    //
+    // 结果区写入口 SqlToJavaPanel.setResultText 已过 runWriteSafe，但此前只有源码扫描守卫
+    // （convention/BannedApiSourceScanTest 的闸门令牌豁免）兜底——守卫只能证明「调了这个 API」，
+    // 证明不了「写不安全时真的转投递」。本段补运行期断言，探针形态照抄上方 renderSql 两例与
+    // execute/ExecDocSyncTest 的 T-FixWriteSafe 段。
+    //
+    // 判据说明：单测环境 isWriteAllowedNow 因 isUnitTestMode 一律放行（见 DocWriteContext KDoc），
+    // 「非 EDT / 无写意图」无法在 fixture 里自然构造，故用 writeAllowedProbe 注入「当前不可写」
+    // ——与上方各例同一口径，覆盖的是闸门的分支行为而非真实判据本身。真实判据里已覆盖的只有
+    // testProbeOverridesBuiltinJudgement（探针优先级）与 testUnitTestModeAllowsWriteByDefault
+    // （单测短路）；DocWriteContext 的另两条判据分支（非 EDT、TransactionGuard.isWritingAllowed）
+    // **无单测覆盖**，按计划 §五 交真机门禁验证——勿把本例当作「真实判据已验证」的证据。
+    //
+    // 两例须配对使用：testResultTextWritesInlineWhenContextAllowed 单独看无判别力（直写实现同样通过），
+    // 判别力来自 testResultTextDefersInsteadOfWritingWhenContextUnsafe（摘掉 runWriteSafe 即红）。
+
+    private fun newReversePanel(): SqlToJavaPanel = SqlToJavaPanel(project)
+
+    /**
+     * 核心：非 write-safe 上下文下写结果区**不得**当场改文档，而要被闸门拦下投递一拍；
+     * 延后那一拍（nonModal，平台已套 runWithWritingAllowed）再落文本。
+     *
+     * 反证（实施时实测）：把 setResultText 的 runWriteSafe 临时换成直写 → 本用例必红
+     * （文档当场变成 AFTER，且 deferredCount 不动）。
+     */
+    @Test
+    fun testResultTextDefersInsteadOfWritingWhenContextUnsafe() {
+        val panel = newReversePanel()
+        try {
+            DocWriteContext.writeAllowedProbe = { true }
+            panel.setResultTextForTest("BEFORE")
+            assertEquals("前置：可写上下文应先把结果区写成 BEFORE", "BEFORE", panel.resultTextForTest())
+
+            val before = DocWriteContext.deferredCount.get()
+            DocWriteContext.writeAllowedProbe = { false }
+            panel.setResultTextForTest("AFTER")
+
+            assertEquals("非 write-safe 上下文不得当场改结果区文档", "BEFORE", panel.resultTextForTest())
+            assertEquals("结果区写应被闸门拦下并投递一拍", before + 1, DocWriteContext.deferredCount.get())
+
+            // 投递后的那一拍跑在 nonModal 上（平台为该模态打开写资格）→ 模拟「下一拍已可写」再泵队列
+            DocWriteContext.writeAllowedProbe = { true }
+            UIUtil.dispatchAllInvocationEvents()
+
+            assertEquals("延后一拍应把文本写进结果区（写体幂等，重跑无害）", "AFTER", panel.resultTextForTest())
+        } finally {
+            DocWriteContext.writeAllowedProbe = null
+            panel.dispose()
+        }
+    }
+
+    /** 可写上下文的常态写：就地写、零投递（闸门不得给正常路径加一拍延迟）。 */
+    @Test
+    fun testResultTextWritesInlineWhenContextAllowed() {
+        val panel = newReversePanel()
+        try {
+            DocWriteContext.writeAllowedProbe = { true }
+            val before = DocWriteContext.deferredCount.get()
+
+            panel.setResultTextForTest("INLINE")
+
+            assertEquals("可写上下文应就地写结果区", "INLINE", panel.resultTextForTest())
+            assertEquals("可写上下文结果区写不得投递", before, DocWriteContext.deferredCount.get())
+        } finally {
+            DocWriteContext.writeAllowedProbe = null
             panel.dispose()
         }
     }

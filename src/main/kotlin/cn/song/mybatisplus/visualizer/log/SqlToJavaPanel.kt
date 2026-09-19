@@ -1372,6 +1372,12 @@ class SqlToJavaPanel(
     /** 测试访问器：结果区文本。 */
     internal fun resultTextForTest(): String = resultEditor.document.text
 
+    /**
+     * T-FS-05 测试缝：直调结果区写入口 [setResultText]（private，无法从测试触达）。
+     * 只做转发，不改变生产语义——供「写不安全转投递 / 写安全就地写」两条行为断言使用。
+     */
+    internal fun setResultTextForTest(text: String) = setResultText(text)
+
     /** 测试访问器：将复制到剪贴板的文本（T-M45：剥离注释后的纯 Java 代码）。 */
     internal fun copyTextForTest(): String = copyText()
 
