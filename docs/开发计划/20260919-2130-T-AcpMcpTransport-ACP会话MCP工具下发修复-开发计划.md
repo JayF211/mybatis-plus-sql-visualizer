@@ -312,7 +312,7 @@ META-INF/acp-transport-optional.xml  + 既有四个 optional 文件 + plugin.xml
 | # | 未验证项 | 缺什么 |
 |---|---|---|
 | 1 | **R3：SSE 通道 agent 侧可达性**（本方案成败点）——已证「传输可被指定为 SSE」且 SSE server 自带 URL/token/projectPath 头，但未证 agent 进程能连通该端点 | runIde 沙盒 + AI Assistant 面板 + Claude Agent 认证 |
-| 2 | 验收 1：ACP 会话工具表出现十个 `mpsv_*` 且为原生 MCP 调用（非 Bash + curl） | 同上 |
+| 2 | 验收 1：ACP 会话工具表出现十个 `sqlv_*` 且为原生 MCP 调用（非 Bash + curl） | 同上 |
 | 3 | 验收 2：调用产生 `[MCP-AUDIT]` 行 | 同上 |
 | 4 | 验收 3：`idea.log` 出现 `Running private IJ MCP session for agent acp.registry.claude-acp over Sse` | 同上 |
 | 5 | ml-llm **在场**时 provider 真被 EP 注册并实例化（EP 加载、类链接成功） | 装 AI Assistant 的沙盒；headless 沙盒无 ml-llm，本任务的隔离用例只证了「缺席时无碍」这一半 |
