@@ -152,6 +152,16 @@ object DatabaseSchemaResolver {
         synchronized(negativeCache) { negativeCache.clear() }
     }
 
+    /**
+     * T-PS5-13：负缓存容量上界（照 `Ognl.kt` CACHE_MAX / StackLocator 惯例）——超上限**整体清空**。
+     * 键含表名，长会话里 agent 幻觉表名可以无界累积（TTL 只做惰性过期、不做容量约束）；
+     * 清空代价 = 若干次重扫（fail safe 方向，与负缓存语义一致）。TTL 惰性过期语义不变。
+     */
+    internal const val NEGATIVE_CACHE_MAX = 512
+
+    /** T-PS5-13：负缓存当前条目数（跨数据源求和；测试缝与容量判定共用）。 */
+    internal fun negativeCacheSize(): Int = synchronized(negativeCache) { negativeCache.values.sumOf { it.size } }
+
     // ----------
     // T-PS5-06：单调用全扫限额（MCP schema_context 一次调用最多 20 表）。
     // 此前每个 miss 表都对每个数据源重跑一遍 DasModel 全遍历；而 [collectFromDataSource] 的
@@ -202,6 +212,8 @@ object DatabaseSchemaResolver {
     /** T-PS5-06：记负缓存（时间戳，TTL 内同表同数据源查询不再全扫）。 */
     private fun stampNegative(ds: Any, cacheKey: String) {
         synchronized(negativeCache) {
+            // T-PS5-13：容量上界——溢出整体清空（本键随后照常写入；清空只丢命中率不丢正确性）
+            if (negativeCacheSize() >= NEGATIVE_CACHE_MAX) negativeCache.clear()
             negativeCache.getOrPut(ds) { HashMap() }[cacheKey] = System.currentTimeMillis()
         }
     }

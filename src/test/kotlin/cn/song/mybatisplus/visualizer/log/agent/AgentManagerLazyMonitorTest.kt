@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
+import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import java.io.DataOutputStream
 import java.net.InetAddress
@@ -32,7 +33,9 @@ class AgentManagerLazyMonitorTest : BasePlatformTestCase() {
     }
 
     override fun tearDown() {
-        freshManagers.forEach { runCatching { it.dispose() } }
+        // Disposer.dispose 走完整子树（直接 dispose() 不会关闭 messageBus 连接——连接是
+        // Disposer 子节点，残留订阅会在此后设置变更广播时对已停 executor 投任务）
+        freshManagers.forEach { runCatching { Disposer.dispose(it) } }
         freshManagers.clear()
         sockets.forEach { runCatching { it.close() } }
         sockets.clear()

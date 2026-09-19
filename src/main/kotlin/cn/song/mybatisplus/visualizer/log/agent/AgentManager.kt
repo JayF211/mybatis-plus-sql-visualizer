@@ -91,6 +91,9 @@ class AgentManager(private val project: Project) : Disposable {
         /** HELLO 首帧读取超时（agent 连上后立即发 HELLO，秒级足够；超时按「pid 未知」处理不丢会话）。 */
         private const val HELLO_READ_TIMEOUT_MS = 5_000
 
+        /** T-PS5-12：HELLO 首帧 pid 提取正则（冷路径，提常量免每次连接重编译）。 */
+        private val HELLO_PID_REGEX = Regex("\"pid\"\\s*:\\s*(\\d+)")
+
         fun getInstance(project: Project): AgentManager = project.getService(AgentManager::class.java)
 
         /** T-SettingsTruth P2：增强捕获状态变更 Topic（app 级；仿 PluginSettings.SETTINGS_CHANGE_TOPIC）。 */
@@ -194,6 +197,12 @@ class AgentManager(private val project: Project) : Disposable {
                 }
                 lastKnownEnabled = state.enhancedCaptureEnabled
                 if (!state.enhancedCaptureEnabled) {
+                    // T-PS5-07：关闭下降沿复位 EP 短路标志——[SqlCaptureGate.epActive] 是「EP 在本会话
+                    // 实证产出过条目」的**会话级粘滞**标志（置位点 SqlConsoleBridgeFilterProvider），
+                    // 解耦前无任何复位点：关掉增强捕获再新建控制台时桥侧仍被粘滞标志短路 = 两条通道
+                    // 同时零产出（静默零捕获的复发形态）。与上方上升沿重置拒绝冷却对称；EP 链路失效的
+                    // 极端场景由短路计数 + debug 日志（epActiveShortCircuitCount）可观测兜底。
+                    SqlCaptureGate.epActive = false
                     executor.execute { shutdownAll() }
                 } else {
                     executor.execute { pushDesensitize(state.enhancedCaptureDesensitize) }
@@ -724,7 +733,7 @@ class AgentManager(private val project: Project) : Disposable {
         val body = ByteArray(len)
         input.readFully(body)
         if (cmd != AgentProtocol.CMD_HELLO) return@runCatching 0L
-        Regex("\"pid\"\\s*:\\s*(\\d+)").find(String(body, Charsets.UTF_8))
+        HELLO_PID_REGEX.find(String(body, Charsets.UTF_8))
             ?.groupValues?.get(1)?.toLongOrNull() ?: 0L
     }.getOrElse {
         LOG.info("readHelloPid: HELLO 未取到（${it.javaClass.simpleName}: ${it.message}）——按 pid 未知继续")

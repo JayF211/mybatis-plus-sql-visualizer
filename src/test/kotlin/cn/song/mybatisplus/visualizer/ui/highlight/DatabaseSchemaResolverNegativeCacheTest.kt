@@ -250,4 +250,34 @@ class DatabaseSchemaResolverNegativeCacheTest {
         DatabaseSchemaResolver.resolveFromSources("g_y", listOf(ds), ::countingEmptyScan)
         assertEquals("限额跳过的表同样记了负缓存 → 跨调用不重扫", 1, scanCount)
     }
+
+    // ---------- T-PS5-13：负缓存容量上界 ----------
+
+    @Test
+    fun `负缓存容量上界_溢出整体清空且结论不变`() {
+        val ds = Any()
+        val max = DatabaseSchemaResolver.NEGATIVE_CACHE_MAX
+        for (i in 0 until max) {
+            DatabaseSchemaResolver.resolveFromSources("cap_t$i", listOf(ds), ::countingEmptyScan)
+        }
+        assertEquals("未溢出时逐条累积", max, DatabaseSchemaResolver.negativeCacheSize())
+
+        // 再记一条 → 溢出整体清空 + 本键写入
+        DatabaseSchemaResolver.resolveFromSources("cap_overflow", listOf(ds), ::countingEmptyScan)
+        assertTrue(
+            "溢出整体清空（只余溢出后写入的条目，实测 ${DatabaseSchemaResolver.negativeCacheSize()}）",
+            DatabaseSchemaResolver.negativeCacheSize() <= 1,
+        )
+
+        // 结论不变：被清掉的旧表重扫（清空只丢命中率不丢正确性）
+        val before = scanCount
+        val old = DatabaseSchemaResolver.resolveFromSources("cap_t0", listOf(ds), ::countingEmptyScan)
+        assertEquals("清空后旧表重扫", before + 1, scanCount)
+        assertTrue("重扫结论仍是未找到", old.columns.isEmpty() && old.comment == null)
+
+        // 溢出后写入的表照常命中负缓存
+        val mid = scanCount
+        DatabaseSchemaResolver.resolveFromSources("cap_overflow", listOf(ds), ::countingEmptyScan)
+        assertEquals("溢出后写入的条目命中负缓存（TTL 语义不变）", mid, scanCount)
+    }
 }
