@@ -105,7 +105,7 @@ D1 已定案（B）→ T-PC2-01（BigInteger，独立小件）→ T-PC2-02（UUI
 |---|---|
 | 落点 | `ui/SqlPreviewPanel.kt`：①字段区新增 `@Volatile private var unknownParamsConfirmedInSession`（紧邻 `dollarRawConfirmedInSession`，语义同款）；②`confirmDollarRawSegments` 之后新增 `confirmUnknownParams(proj)`；③`executeSql()` 的 `confirmDollarRawSegments` 之后（快照登记/执行之前）；④`explainSql()` 的 `confirmDollarRawSegments` 之后（`resultPanel.showLoading()` 之前） |
 | bundle | `execute.confirm.unknownParams.message`（en/zh 各一键，共两键）——文案与 §八 建议一致，仅按同组三条确认键的既有排版加了 `\n\n` 段间换行（`有 {0} 个参数未能识别类型，将以 ? 占位提交。\n\n确认继续执行？`） |
-| 测试 | 新增 `src/test/kotlin/.../ui/UnknownParamGateTest.kt`（6 例）：含 UNKNOWN 弹门且 NO 中止 / 确认后同面板不再弹 / NO 后再执行仍弹 / 无类型信息（接口不可解析）零影响 / EXPLAIN 同门控 / 执行与 EXPLAIN 共用一次性记忆 |
+| 测试 | 新增 `src/test/kotlin/.../ui/UnknownParamGateTest.kt`（6 例）：含 UNKNOWN 弹门且 NO 中止 / 确认后同面板不再弹 / NO 后再执行仍弹 / 无类型信息（接口不可解析）零影响 / EXPLAIN 同门控 / 执行与 EXPLAIN 共用一次性记忆。后续 `f14e064` 补一条 MessageFormat 代入断言（`{0}` 必须真的被代入——键缺失/模板异常时 `message()` 兜底返回原文会原样上屏，`BundleParityGuardTest` 只查占位符形态不查代入是否发生） |
 
 **与 §八 材料的漂移**：计划给的两个调用点位置与 `confirmDollarRawSegments` 锚点在当前 master 上**未漂移**（`confirmDollarRawSegments` 仍在 861-873、`executeSql` 调用点 911、`explainSql` 调用点 1064，材料可直接套用）；`SqlPreviewPanel.kt:3107-3117`（行尾校验只覆盖 NUMBER/TEMPORAL）亦仍准确。§一 的两处行号引用有轻微漂移：`XmlPreviewModel.kt:162`（mock 占位 `TEXT, UNKNOWN -> "1"`）实为 **:176**（T-PC2-04 自身新增 `unknownParamSources` 使其下移 14 行）、`SqlPreviewPanel.kt:3530`（`hasSignatureTypeInfo`）实为 **:3529**。
 
