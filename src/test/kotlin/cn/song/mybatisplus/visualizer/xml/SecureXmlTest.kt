@@ -474,6 +474,28 @@ class SecureXmlTest {
     }
 
     @Test
+    fun `子集内处理指令与注释里的文本不算声明`() {
+        // 与 JDK 同口径：`<?pi <!ENTITY evil "…"> ?>` 在子集里**不声明** evil（实测 JDK 报
+        // 「引用了实体 evil 但未声明它」），故预扫也不得把它当声明——否则一段 70,000 字符的 PI 文本
+        // 会把合法文件误判为「实体展开超限」（JDK 实测接受该文件）
+        val parsed = XmlMapperParser().parse(
+            """
+            <!DOCTYPE mapper [
+            <?pi <!ENTITY evil "${"y".repeat(70_000)}"> ?>
+            <!-- <!ENTITY evil "${"y".repeat(70_000)}"> -->
+            <!ENTITY ok "OK">
+            ]>
+            <mapper namespace="n"><select id="s1">SELECT '&ok;' FROM t</select></mapper>
+            """.trimIndent(),
+        )
+        assertEquals(
+            "SELECT 'OK' FROM t",
+            XmlPreviewModel.from(parsed.statements.single(), parsed.errors).renderSql().sql
+                .replace(Regex("\\s+"), " ").trim(),
+        )
+    }
+
+    @Test
     fun `官方DTD整段内联不被误伤`() {
         // 真官方 DTD 文本（test classpath 上的 mybatis-3.5.19 资源，实测 7,819 字节 / ELEMENT 33 /
         // ATTLIST 28 / ENTITY 0 / 无 `%` 引用 / 无 `]>`）整段内联：T-XDH-07 的可见化只对 `<!ENTITY` 与

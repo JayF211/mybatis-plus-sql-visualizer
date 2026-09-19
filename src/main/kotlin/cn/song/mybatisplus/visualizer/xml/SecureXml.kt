@@ -285,15 +285,15 @@ internal object SecureXml {
         return parameters
     }
 
-    /** 把 [parameters] 里的 `%name;` 引用替换为字面量（注释里的 `%name;` 是文本，不替换）。 */
+    /** 把 [parameters] 里的 `%name;` 引用替换为字面量（注释/处理指令里的 `%name;` 是文本，不替换）。 */
     private fun substituteParameterReferences(text: String, parameters: Map<String, String>): String {
         val out = StringBuilder(text.length)
         var index = 0
         while (index < text.length) {
-            if (text.startsWith(COMMENT_START, index)) {
-                val end = skipTo(text, COMMENT_END, index + COMMENT_START.length)
-                out.append(text, index, end)
-                index = end
+            val skipped = skipNonMarkup(text, index)
+            if (skipped > index) {
+                out.append(text, index, skipped)
+                index = skipped
                 continue
             }
             if (text[index] != '%') {
@@ -318,13 +318,19 @@ internal object SecureXml {
     private fun literalEntityDeclarations(subset: String): List<EntityDeclaration> =
         entityDeclarations(subset).filter { it.literal != null }
 
-    /** 扫描子集里的实体声明（注释跳过；引号感知取字面量；外部形式 literal 为 null）。 */
+    /**
+     * 扫描子集里的实体声明（注释与处理指令跳过；引号感知取字面量；外部形式 literal 为 null）。
+     *
+     * 注释与处理指令里的 `<!ENTITY …>` 文本**不是声明**（实测 JDK：`<?pi <!ENTITY evil "…"> ?>`
+     * 不声明 `evil`，正文 `&evil;` 报「引用了实体但未声明」），跳过才能与 JDK 同口径。
+     */
     private fun entityDeclarations(subset: String): List<EntityDeclaration> {
         val declarations = ArrayList<EntityDeclaration>()
         var index = 0
         while (index < subset.length) {
-            if (subset.startsWith(COMMENT_START, index)) {
-                index = skipTo(subset, COMMENT_END, index + COMMENT_START.length)
+            val skipped = skipNonMarkup(subset, index)
+            if (skipped > index) {
+                index = skipped
                 continue
             }
             if (subset.startsWith(ENTITY_DECL_PREFIX, index)) {
@@ -340,6 +346,13 @@ internal object SecureXml {
             index++
         }
         return declarations
+    }
+
+    /** [index] 处若是注释或处理指令，返回跳过后的位置；否则返回 [index] 本身。 */
+    private fun skipNonMarkup(text: String, index: Int): Int = when {
+        text.startsWith(COMMENT_START, index) -> skipTo(text, COMMENT_END, index + COMMENT_START.length)
+        text.startsWith(PI_START, index) -> skipTo(text, PI_END, index + PI_START.length)
+        else -> index
     }
 
     /** 解析 `<!ENTITY [%] name "值">`；名字取不到返回 null（畸形，交给 JDK 报错）。 */
