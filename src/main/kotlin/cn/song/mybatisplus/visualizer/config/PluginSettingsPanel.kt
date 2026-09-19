@@ -1356,13 +1356,13 @@ class PluginSettingsPanel @JvmOverloads constructor(
     internal fun refreshInferredLabel() {
         dialectInferredLabel.text = when (dialectCombo.selectedItem as? String) {
             autoDialectItem -> {
-                val agentUrl = runCatching {
-                    cn.song.mybatisplus.visualizer.log.agent.AgentManager.getInstance(
-                        ProjectManager.getInstance().openProjects.firstOrNull() ?: return run {
-                            dialectInferredLabel.text = MpSqlVisualizerBundle.message("settings.dialect.inferred.none")
-                        },
-                    ).lastConnectionUrl()
-                }.getOrNull()
+                // T-PS5-04：agentUrl 读轻量持有者（不再经 AgentManager.getInstance 实例化服务——
+                // 设置页仅显示推断状态，不该顺带把增强捕获的守护线程带起来）
+                val agentUrl = cn.song.mybatisplus.visualizer.log.agent.AgentUrlRegistry.lastConnectionUrl(
+                    ProjectManager.getInstance().openProjects.firstOrNull() ?: return run {
+                        dialectInferredLabel.text = MpSqlVisualizerBundle.message("settings.dialect.inferred.none")
+                    },
+                )
                 val dataSourceUrl = runCatching {
                     cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.firstUrl(
                         ProjectManager.getInstance().openProjects.firstOrNull(),
