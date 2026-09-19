@@ -213,9 +213,20 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-GifRerecord：预热失败标志——await 快速降级用，避免 EDT 空等 2s 后再走降级路径。 */
     @Volatile
     private var prewarmFailed = false
-    /** T-M36.6-03：面板释放标志——预热线程晚于 dispose 完成时丢弃产物并删除文件。 */
+    /** T-M36.6-03：面板释放标志——预热线程晚于 dispose 完成时丢弃产物并删除文件。
+     *  T-StabilityTail 起语义扩为「放弃预热」：面板 dispose 与**项目开始销毁**（见
+     *  [prewarmLifecycleGate]）都置它，预热线程在下一个检查点放弃（不再取服务）。 */
     @Volatile
     private var previewDisposed = false
+
+    /**
+     * T-StabilityTail（窗口内异步泄漏治理）：预热任务的「项目开始销毁」取消门。
+     *
+     * 注册进 `ProjectEx.getEarlyDisposable()` 的 Disposable 树（见 [bindPrewarmToProjectLifecycle]），
+     * 项目开始销毁时由平台回收并置 [previewDisposed]，使构造期/`clear()` 派发的池线程在窗口内
+     * 不再取服务。面板 dispose 时解除登记（不留指向本面板的项目树引用）；null = 未挂或已解除。
+     */
+    private var prewarmLifecycleGate: Disposable? = null
     /** T-PreviewExecDs-01c：已 setMapping 方言的预览 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。 */
     @Volatile
     private var previewDialectMappedVf: com.intellij.openapi.vfs.VirtualFile? = null
@@ -495,8 +506,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             ApplicationManager.getApplication().invokeLater(runnable, com.intellij.openapi.application.ModalityState.any())
         }
         prewarmAwait = await
+        // T-StabilityTail：把「项目开始销毁」接到取消门——池线程不得比项目活得更久
+        bindPrewarmToProjectLifecycle()
         ApplicationManager.getApplication().executeOnPooledThread {
-            if (previewTempFile != null || previewDisposed) {
+            if (previewTempFile != null || prewarmAbandoned()) {
                 await.fail(IllegalStateException("prewarm skipped: disposed or already prepared"))
                 return@executeOnPooledThread
             }
@@ -516,7 +529,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 val lfs = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
                 var vf = lfs.refreshAndFindFileByIoFile(io)
                 var retries = 0
-                while (vf == null && retries < 3 && !previewDisposed) {
+                while (vf == null && retries < 3 && !prewarmAbandoned()) {
                     Thread.sleep(100L * (retries + 1))
                     vf = lfs.refreshAndFindFileByIoFile(io)
                     retries++
@@ -527,18 +540,37 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     LOG.warn("[M36] prewarm FAILED: VFS refresh null after ${retries + 1} tries (${io.path}, exists=${io.exists()})")
                     return@executeOnPooledThread
                 }
-                if (previewDisposed) {
+                if (prewarmAbandoned()) {
                     java.io.File(vf.path).delete()
                     await.fail(IllegalStateException("disposed during prewarm"))
                     return@executeOnPooledThread
                 }
                 val proj = project ?: return@executeOnPooledThread
+                // T-StabilityTail：紧贴取服务再判一次——从上一处判定到这里之间项目可能已开始销毁
+                // （closeProject 的写动作与本线程并行）；窗口内首次创建服务失败会把该服务在该项目
+                // 实例上永久毒化（`LazyInstanceHolder` 缓存 CannotInitialize 后每次 getService 重抛，
+                // 见 config/SectionConfigurable.kt KDoc），故宁可少取一次服务。
+                if (prewarmAbandoned()) {
+                    await.fail(IllegalStateException("abandoned before service lookup"))
+                    return@executeOnPooledThread
+                }
                 // T-PreviewExecDs-01c：方言映射须在 findFile/PSI 创建前（映射决定 PSI 语言，
                 // 创建后再映射需 push 重建；exec 路径同款顺序）
                 mapPreviewDialectBeforePsi(proj, vf)
-                val psi = com.intellij.openapi.application.ReadAction.compute<PsiFile, Throwable> {
-                    com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
-                } ?: run {
+                // T-StabilityTail：判据放读动作**内部**才管用——平台读动作可被 closeProject 的写动作
+                // 阻塞，放行时窗口已开（`ProjectImpl.isDisposed()` 在窗口内为真）；在外面判会漏掉这条窄缝，
+                // 而漏掉的代价就是下面 `PsiManagerImpl.findFile → FileManagerImpl.dispatchPendingEvents`
+                // 把 "Project is already disposed" 记成 ERROR（测试夹具里升格为 TestLoggerAssertionError）。
+                val psi = com.intellij.openapi.application.ReadAction.compute<PsiFile?, Throwable> {
+                    if (prewarmAbandoned()) null else com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
+                }
+                if (psi == null) {
+                    // 放弃（项目/面板已销毁）与真失败分开记账：前者不置 prewarmFailed、不记 WARN——
+                    // 它是正常生命周期事件，不是预热故障
+                    if (prewarmAbandoned()) {
+                        await.fail(IllegalStateException("abandoned during findFile"))
+                        return@executeOnPooledThread
+                    }
                     prewarmFailed = true
                     await.fail(IllegalStateException("PsiManager.findFile null for ${vf.name}"))
                     LOG.warn("[M36] prewarm FAILED: PsiManager.findFile null for ${vf.name}")
@@ -554,6 +586,54 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             }
         }
     }
+
+    /**
+     * T-StabilityTail：把「项目开始销毁」接到预热取消门（[prewarmAbandoned] 的项目侧判据）。
+     *
+     * **为什么挂 `ProjectEx.getEarlyDisposable()`**——平台 KDoc 原文即此用途：
+     * 「a Disposable that will be disposed right after container started to be disposed … In unit test
+     *   mode light project is not disposed, but this disposable is disposed for each test. So, you don't
+     *   need to have another disposable and can use this one instead.」
+     * 两个触发点：①真机关闭项目——`ProjectManagerImpl.closeProject` 非 light 分支在写动作内先
+     * `disposeEarlyDisposable()` 再 `startDispose()`；②light 测试夹具的**每个测试方法 tearDown**——
+     * 同方法 light 分支把 `disposeEarlyDisposable()` 与 `setTemporarilyDisposed(true)` 放进同一写动作
+     * （`ProjectManagerImpl.kt:345-352`），后者正是「池线程在 temporarily-disposed 窗口内首次取服务 →
+     * 服务被永久毒化」的时点。
+     *
+     * **为什么不挂 `Disposer.register(project, …)`**：light 项目的**主** disposable 在片内跨测试方法
+     * 一直存活（`setTemporarilyDisposed(false)` 只重建 earlyDisposable），挂主树等于整轮不触发。
+     *
+     * **取消而非 join**：门一置，预热线程在其下一个检查点放弃——不再发起 `SqlDialectMappings` /
+     * `PsiManager` 取服务，于是不会把「窗口内首次创建服务失败」的异常喂给平台 holder。不等待的两个理由：
+     * 项目关闭路径上 join 会把在途预热的耗时加进用户可感的关闭时间；且平台对该 Disposable 的 dispose
+     * 有硬要求——「must be self-contained and isolated (getting services is forbidden)」，本实现只置标志。
+     *
+     * **降级**：`getEarlyDisposable()` 是 `@ApiStatus.Internal`，且项目已 dispose 时抛
+     * `AlreadyDisposedException`——用 [Disposer.tryRegister]（父已销毁即返回 false，不抛）并在外层
+     * runCatching 兜底；挂不上时静默返回，行为退回改动前，预热主链不受影响。
+     */
+    private fun bindPrewarmToProjectLifecycle() {
+        if (prewarmLifecycleGate != null) return // 已挂：clear() 重预热不重复登记
+        val proj = project ?: return
+        val gate = Disposable { previewDisposed = true }
+        val registered = runCatching {
+            val early = (proj as? com.intellij.openapi.project.ex.ProjectEx)?.earlyDisposable
+                ?: return@runCatching false
+            Disposer.tryRegister(early, gate)
+        }.getOrDefault(false)
+        if (registered) prewarmLifecycleGate = gate
+    }
+
+    /**
+     * T-StabilityTail：预热线程的「放弃」判据——面板已销毁 或 项目已开始销毁。
+     *
+     * 项目侧判据取 `Project.isDisposed`：平台口径为 `super.isDisposed() || isTemporarilyDisposed`
+     * （`ProjectImpl.isDisposed()`，243/262/2026.2 三版 javap 同形），temporarily-disposed 窗口内为真。
+     * 它在这里是**门判据的补充**而非「盲目守卫」：真正的修法是上面那道生命周期取消门（让池线程
+     * 不再比项目活得久），本判据只用来收掉「判定通过后、取服务前项目被并发关闭」的窄缝——那条缝
+     * 平台侧无锁可挡（读动作会被 closeProject 的写动作阻塞，放行时窗口已开）。
+     */
+    private fun prewarmAbandoned(): Boolean = previewDisposed || project?.isDisposed == true
 
     /**
      * T-PreviewExecDs-01a：项目内预览临时文件——`<project>/.idea/sql-visualizer/preview/mpsql-preview.sql`。
@@ -3806,6 +3886,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         nativeConsoleEditor = null
         // T-M36.6-03：面板销毁——晚到的预热线程产物作废（预热线程自查后删除临时文件）
         previewDisposed = true
+        // T-StabilityTail：解除预热取消门在项目 earlyDisposable 树上的登记——面板先于项目销毁时
+        // 不留指向本面板的引用（项目先销毁时该 gate 已被平台回收，Disposer 对已销毁件幂等）
+        prewarmLifecycleGate?.let { runCatching { Disposer.dispose(it) } }
+        prewarmLifecycleGate = null
         // T-Perf-04：防抖/历史 Timer 随面板停止（防晚到 flush 触碰已销毁面板状态）
         renderDebounceTimer.stop()
         pendingRender = null
