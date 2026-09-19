@@ -152,7 +152,17 @@ class McpRowBudgetTest {
             tool.contains("maxRows: Int = McpExplainFormatter.DEFAULT_MAX_ROWS"),
         )
         assertTrue("工具层应把钳制值喂给前置链", tool.contains("McpExplainFormatter.clampMaxRows(maxRows)"))
-        assertTrue("执行与格式化都应取生效预算（target.maxRows）", tool.contains("target.maxRows"))
+        // 独立复核条件订正：原断言 `tool.contains("target.maxRows")` 是**整文件子串检查**，而
+        // `target.maxRows` 在 executeQuery 调用处（下方 :132 一带）本就出现——若把格式化调用回退成
+        // `format(raw)`，该守卫仍绿（假绿）。改为匹配**格式化调用点**的精确串。
+        assertTrue(
+            "执行与格式化都应取生效预算：格式化调用点须显式传 target.maxRows",
+            tool.contains("McpExplainFormatter.format(raw, target.maxRows)"),
+        )
+        assertTrue(
+            "执行链调用点也应取生效预算",
+            tool.contains("target.maxRows"),
+        )
         assertTrue(
             "工具描述应说明默认/上限口径",
             tool.contains(
