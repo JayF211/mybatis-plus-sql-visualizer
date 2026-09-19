@@ -2,7 +2,7 @@
 
 - 日期：2026-09-19 21:30
 - 任务编号：T-AcpMcpTransport
-- 来源：文档站 MCP 演示录制过程中的阻塞排查——《20260919-1500-MCP演示动图与新版UI补录-开发计划》（文档站仓库）§M1-c 需要「AI Assistant 的 ACP 面板内由 agent 调用 `mpsv_*` 工具」，实测调不通，逐层排查后定位到传输方式
+- 来源：文档站 MCP 演示录制过程中的阻塞排查——《20260919-1500-MCP演示动图与新版UI补录-开发计划》（文档站仓库）§M1-c 需要「AI Assistant 的 ACP 面板内由 agent 调用 `sqlv_*` 工具」，实测调不通，逐层排查后定位到传输方式
 - 性质：**上游缺陷绕行 + 互操作修复**——不改工具语义、不改门控、不改 MCP 工具签名，只改 IDE 向 ACP agent 下发 MCP 服务器时所选的传输方式
 - 实施分支：建议自 master 拉 `t-acp-mcp-transport`；本轮排查在录制工作树 `mpsv-gif-rec`（分支 `t-gif-rec-mcp`）完成
 - 验证基线：master（实施时以当次实测为准）
@@ -15,9 +15,9 @@
 
 AI Assistant 的 ACP 会话（Claude Agent）里，agent 的工具表**没有任何 MCP 服务器**。agent 自述原文：
 
-> 「I don't have `mpsv_check_sql` in my tool list.」「`idea` is configured as an MCP server but isn't in my tool list.」
+> 「I don't have `sqlv_check_sql` in my tool list.」「`idea` is configured as an MCP server but isn't in my tool list.」
 
-会话记录实证（`~/.claude/projects/F--code-Java-Gitee-SongRenShuo-easy-code-demo/*.jsonl`）：agent 全程只用 `Bash` / `Grep` / `Write`，需要 `mpsv_*` 时**自己用 Bash + curl 手工做 MCP 握手**（先报 `Unable to determine the target project`，补 `projectPath` 后才成功）。
+会话记录实证（`~/.claude/projects/F--code-Java-Gitee-SongRenShuo-easy-code-demo/*.jsonl`）：agent 全程只用 `Bash` / `Grep` / `Write`，需要 `sqlv_*` 时**自己用 Bash + curl 手工做 MCP 握手**（先报 `Unable to determine the target project`，补 `projectPath` 后才成功）。
 
 ### 1.2 IDE 侧逐项排除（结论：IDE 侧无误）
 
@@ -60,12 +60,12 @@ var zMcpServer = union([
 zod 默认剥离未知字段 → 带 `type: "stdio"` 亦能解析。**实测通过**（2026-09-19 21:17，Codex CLI 走同一份 `~/.codex/config.toml`）：
 
 ```
-mcp: idea/mpsv_check_sql started
-mcp: idea/mpsv_check_sql (completed)
+mcp: idea/sqlv_check_sql started
+mcp: idea/sqlv_check_sql (completed)
 返回原文: [{"type":"text","text":"statements: 1\nstatement #1: DML\ndangerous: false\nfindings: none"}]
 ```
 
-同轮 IDE 日志落审计行 `[MCP-AUDIT] tool=mpsv_check_sql status=OK elapsedMs=5 args=ok`。**说明插件注册的十个工具在 Codex 侧可被正常发现与调用**——问题不在插件、不在 MCP Server 插件、不在工具注册。
+同轮 IDE 日志落审计行 `[MCP-AUDIT] tool=sqlv_check_sql status=OK elapsedMs=5 args=ok`。**说明插件注册的十个工具在 Codex 侧可被正常发现与调用**——问题不在插件、不在 MCP Server 插件、不在工具注册。
 
 ### 1.5 绕行的可行性与依据
 
@@ -96,7 +96,7 @@ public AcpIdeaMcpTransport getTransport(AcpAgentId agentId) {
 
 ## 二、目标与非目标
 
-**目标**：AI Assistant 的 ACP 会话（当前主要针对 `acp.registry.claude-acp`）里，agent 的工具表能出现插件注册的十个 `mpsv_*` 工具，且调用产生 `[MCP-AUDIT]` 审计行。
+**目标**：AI Assistant 的 ACP 会话（当前主要针对 `acp.registry.claude-acp`）里，agent 的工具表能出现插件注册的十个 `sqlv_*` 工具，且调用产生 `[MCP-AUDIT]` 审计行。
 
 **非目标**：不改 MCP 工具签名与语义（归各自既有任务）；不改门控（`McpToolGate` / `McpToolsetSupport.isEnabled` 原样）；不改 `McpAuditLog` 与审计格式；**不修上游**（`claude-agent-acp` 的判断缺陷由 JetBrains 侧修复，本任务只做绕行）；不改终端路线（`claude mcp list` 那条已验证可用，与 ACP 无关）。
 
@@ -112,11 +112,11 @@ public AcpIdeaMcpTransport getTransport(AcpAgentId agentId) {
 
 **T-AMT-03（编译期类型走桩源集）**：provider 需引用 `AcpAgentId` / `AcpIdeaMcpTransport` / `AcpIdeaMcpTransportProvider` 三个 ml-llm 内部类。沿用既有 **`mcpStub` 桩源集**手法（`build.gradle.kts` 中 `mcpStub` 为 `com.intellij.mcpserver` 提供编译期签名的同款做法）：新增/扩展桩源集提供这三个类型的签名，**桩产物不进插件 jar**，运行时由平台真类提供。
 
-**T-AMT-04（验证）**：沙盒内切到 Claude Agent，发一句触发 `mpsv_*` 调用的话，验收两条——会话记录里出现原生 MCP 调用（非 `Bash` + curl），`idea.log` 出现新的 `[MCP-AUDIT]` 行。同时回归：ml-llm 缺席环境（或不注册该 EP 时）插件行为不变。
+**T-AMT-04（验证）**：沙盒内切到 Claude Agent，发一句触发 `sqlv_*` 调用的话，验收两条——会话记录里出现原生 MCP 调用（非 `Bash` + curl），`idea.log` 出现新的 `[MCP-AUDIT]` 行。同时回归：ml-llm 缺席环境（或不注册该 EP 时）插件行为不变。
 
 ## 四、验收标准
 
-1. ACP 会话（Claude Agent）中 agent 工具表含十个 `mpsv_*`，且能直接调用（会话记录可见 `mcp__idea__mpsv_*` 形态的工具调用，而非 Bash + curl）；
+1. ACP 会话（Claude Agent）中 agent 工具表含十个 `sqlv_*`，且能直接调用（会话记录可见 `mcp__idea__sqlv_*` 形态的工具调用，而非 Bash + curl）；
 2. 调用产生 `[MCP-AUDIT]` 行，`status=OK`；
 3. 日志出现 `Running private IJ MCP session for agent acp.registry.claude-acp over Sse`（传输由 Stdio 变为 Sse）；
 4. ml-llm 不在场时不加载该配置文件，插件其余功能与既有测试全绿；
@@ -124,7 +124,7 @@ public AcpIdeaMcpTransport getTransport(AcpAgentId agentId) {
 
 ## 五、真机走查清单（留人工）
 
-- 沙盒（runIde 2026.2.1）内 AI Assistant 面板选 Claude Agent，认证为「由智能体管理」，发一句 `用 mpsv_check_sql 检查 UPDATE sys_user SET nickname='x' WHERE id=1`；
+- 沙盒（runIde 2026.2.1）内 AI Assistant 面板选 Claude Agent，认证为「由智能体管理」，发一句 `用 sqlv_check_sql 检查 UPDATE sys_user SET nickname='x' WHERE id=1`；
 - 核对会话记录与 `idea.log`；
 - 另需确认 SSE 通道在沙盒内的可达性（IDE 私有会话改走 SSE 后，agent 侧能否连上——这是本方案唯一未实证的环节）。
 

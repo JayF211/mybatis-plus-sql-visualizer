@@ -1,7 +1,7 @@
 # AI Assistant 的 ACP agent 接入插件 MCP 工具 — 经验总结
 
 - 日期：2026-09-19 22:10
-- 场景：让 JetBrains AI Assistant 的 ACP（Agent Client Protocol）agent 能调用本插件注册到 IDE 内置 MCP Server 的十个只读工具（`mpsv_*`）
+- 场景：让 JetBrains AI Assistant 的 ACP（Agent Client Protocol）agent 能调用本插件注册到 IDE 内置 MCP Server 的十个只读工具（`sqlv_*`）
 - 结论：**Codex（`codex-acp`）与终端路线（Claude Code CLI）均可用；Claude Agent（`claude-agent-acp`）因上游缺陷不可用**，绕行方案见《20260919-2130-T-AcpMcpTransport-ACP会话MCP工具下发修复-开发计划》
 - 实测环境：IDEA 2026.2.1（262）runIde 沙盒，插件 2026.9.18
 
@@ -50,9 +50,9 @@
    <entry key="acp.registry.codex-acp" value="MANAGED_EXTERNALLY" />
    ```
    若该值是 `EXPLICIT_SELECTION`，面板会反复要求选认证方式；
-6. **验证**：AI 面板切到 Codex，发一句 `调用 mpsv_check_sql 检查 UPDATE sys_user SET nickname='x' WHERE id=1`。判据两条：
-   - 会话记录里出现**原生 MCP 调用**形态：`{"type":"function_call","name":"mpsv_check_sql","namespace":"mcp__idea"}`，或 UI 上的 `mcp: idea/mpsv_check_sql`；
-   - `idea.log` 出现 `[MCP-AUDIT] tool=mpsv_check_sql status=OK ...`。
+6. **验证**：AI 面板切到 Codex，发一句 `调用 sqlv_check_sql 检查 UPDATE sys_user SET nickname='x' WHERE id=1`。判据两条：
+   - 会话记录里出现**原生 MCP 调用**形态：`{"type":"function_call","name":"sqlv_check_sql","namespace":"mcp__idea"}`，或 UI 上的 `mcp: idea/sqlv_check_sql`；
+   - `idea.log` 出现 `[MCP-AUDIT] tool=sqlv_check_sql status=OK ...`。
 
 ### 路线 B：终端 + Claude Code CLI（最简单，无需 AI Assistant）
 

@@ -485,7 +485,6 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
     override fun loadState(state: State) {
         this.state = state
-        state.mcpDisabledTools = migrateMcpDisabledTools(state.mcpDisabledTools)
     }
 
     /** 当前 SQL 列表显示模式（T-ListMode；旧配置残留非法值时回退默认关键字换行）。 */
@@ -632,37 +631,6 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 fun interface SettingsChangeListener {
     fun settingsChanged()
 }
-
-/**
- * MCP 工具名前缀迁移（T-McpToolNaming / T-MTN-02）。
- *
- * **为什么保留这段迁移（勿删）**：[State.mcpDisabledTools] 存的是**工具名字符串**。Gitee 侧
- * 2026.9.18 发行版曾发布（见 `update/preview.update.json` 的 downloadUrl 与发行提交
- * `ed43cc0`），下载过该产物的用户设置里可能存在旧前缀的工具名——不迁移则这些工具在新名下
- * **不再匹配、静默复活**（[cn.song.mybatisplus.visualizer.mcp.McpToolGate.isEnabled] 按名字比对）。
- * 本迁移为**幂等一次性映射**，保留成本极低；是否删除需先确认 Gitee 侧产物不可达。
- *
- * **语义**：旧前缀（大小写不敏感）→ 新前缀，**尾段原样保留**；不匹配的项（第三方工具名、
- * 空串、`mpsv`（无下划线）、`mpsvx_` 之类）**逐字节保留、顺序不变**。**幂等**——迁移结果再迁移
- * 逐元素不变，故可安全地在每次 [PluginSettings.loadState] 调用（XmlSerializer 加载 + 设置导入
- * 的 [PluginSettings.Companion.fromJson] 都经此），一次性生效、重复执行无副作用。
- *
- * 纯函数、零平台依赖（可被裸 JUnit 直调）；接线点在 [PluginSettings.loadState]。
- */
-internal fun migrateMcpDisabledTools(names: List<String>): MutableList<String> =
-    names.mapTo(mutableListOf()) { name ->
-        if (name.regionMatches(0, LEGACY_MCP_TOOL_PREFIX, 0, LEGACY_MCP_TOOL_PREFIX.length, ignoreCase = true)) {
-            MCP_TOOL_PREFIX + name.substring(LEGACY_MCP_TOOL_PREFIX.length)
-        } else {
-            name
-        }
-    }
-
-/** 当前 MCP 工具名前缀（T-McpToolNaming 定案 `sqlv_`；工具名清单单一真源 = McpToolGate.TOOL_NAMES）。 */
-internal const val MCP_TOOL_PREFIX = "sqlv_"
-
-/** 旧 MCP 工具名前缀（`mpsv_`）——仅 [migrateMcpDisabledTools] 使用，不得再用于新代码。 */
-internal const val LEGACY_MCP_TOOL_PREFIX = "mpsv_"
 
 /**
  * 动态表名映射规则（F-6 Phase B）：预览时按正则替换表名。
