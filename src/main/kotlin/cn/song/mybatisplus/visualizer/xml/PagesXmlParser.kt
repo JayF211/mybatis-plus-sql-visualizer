@@ -1,11 +1,6 @@
 package cn.song.mybatisplus.visualizer.xml
 
 import org.w3c.dom.Element
-import org.xml.sax.EntityResolver
-import org.xml.sax.InputSource
-import java.io.StringReader
-import javax.xml.XMLConstants
-import javax.xml.parsers.DocumentBuilderFactory
 
 /** maintainPage 语句（id + 元数据 + SQL + 列信息） */
 data class PagesStatement(
@@ -83,9 +78,9 @@ class PagesXmlParser {
                 )
             }
 
-    /** 解析 XML 文本为 DOM（安全配置：禁 DTD/外部实体，复用 mapper 解析器同配置）。 */
+    /** 解析 XML 文本为 DOM（安全配置见 [SecureXml]：与 mapper 解析器同一实现，含膨胀预扫）。 */
     internal fun parseDocument(fileText: String): org.w3c.dom.Document =
-        runCatching { newDocumentBuilder().parse(InputSource(StringReader(fileText))) }
+        runCatching { SecureXml.parse(fileText) }
             .getOrElse { throw PagesXmlParseException("XML 解析失败：${it.message}") }
 
     private fun childElements(element: Element): List<Element> {
@@ -95,17 +90,5 @@ class PagesXmlParser {
             (children.item(i) as? Element)?.let { result += it }
         }
         return result
-    }
-
-    private fun newDocumentBuilder() = DocumentBuilderFactory.newInstance().apply {
-        setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)
-        runCatching { setFeature("http://apache.org/xml/features/disallow-doctype-decl", false) }
-        runCatching { setFeature("http://xml.org/sax/features/external-general-entities", false) }
-        runCatching { setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
-        isXIncludeAware = false
-        isExpandEntityReferences = true
-        setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "all")
-    }.newDocumentBuilder().apply {
-        setEntityResolver(EntityResolver { _, _ -> InputSource(StringReader("")) })
     }
 }
