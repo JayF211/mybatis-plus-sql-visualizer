@@ -1310,4 +1310,324 @@ class BannedApiSourceScanTest {
             fatalPassthroughOffenders(javaTemplateInString).size,
         )
     }
+
+    // ------------------------------------------------------------------
+    // PSI 跨线程捕获（T-PsiCaptureProtocol T-PCP-04，2026-09-19）
+    // ------------------------------------------------------------------
+
+    /** 池化线程站点：`executeOnPooledThread` 的**括号实参区 + 尾随 lambda 体**（提取口径同 [invokeLaterSites]）。 */
+    private data class PooledThreadSite(val line: Int, val args: String?, val lambdaBody: String?) {
+        /** 扫描面 = 实参区 + 尾随 lambda 体（写体/读体可能在任一侧，只看一侧会漏）。 */
+        val body: String = (args ?: "") + (lambdaBody ?: "")
+    }
+
+    /** 扫出全部 `executeOnPooledThread` 调用站点；提取跑在 [maskNonCode] 后（配平须避开注释/字符串里的假括号）。 */
+    private fun pooledThreadSites(code: String): List<PooledThreadSite> {
+        val out = ArrayList<PooledThreadSite>()
+        var idx = code.indexOf("executeOnPooledThread")
+        while (idx >= 0) {
+            var i = idx + "executeOnPooledThread".length
+            while (i < code.length && code[i].isWhitespace()) i++
+            var args: String? = null
+            if (i < code.length && code[i] == '(') {
+                val close = matchingDelimiter(code, i, '(', ')')
+                if (close >= 0) {
+                    args = code.substring(i, close + 1)
+                    i = close + 1
+                }
+            }
+            out.add(
+                PooledThreadSite(
+                    line = code.take(idx).count { it == '\n' } + 1,
+                    args = args,
+                    lambdaBody = trailingLambdaBody(code, i),
+                ),
+            )
+            idx = code.indexOf("executeOnPooledThread", idx + 1)
+        }
+        return out
+    }
+
+    /**
+     * 跨线程 PSI 读令牌：池化块内出现其一，即认为该块在**后台读捕获来的 PSI 元素**
+     * （元素 → 所属文件 / 文档 / 区间）。
+     */
+    private val psiReadTokens = listOf("containingFile", "viewProvider.document", ".textRange", ".textLength")
+
+    /**
+     * 两段式校验令牌：池化块内出现其一即视为已走 T-PCP-01 快照校验。
+     *
+     *  - `PsiSnapshot`——T-PCP-01 工具本体（`PsiSnapshot.capture` / `PsiSnapshot.Validity.Valid` 判定）；
+     *  - `validatedRecentAnchor(` / `validatedMethodRows(`——两个 gutter 站点的**校验收口助手**
+     *    （`ui/gutter` 包内两个 provider 文件，内部先 `validate()` 再读；新增收口助手须登记进本清单，
+     *    或直接在池化块内用 `PsiSnapshot.Validity` 判定）。
+     */
+    private val psiValidationTokens = listOf("PsiSnapshot", "validatedRecentAnchor(", "validatedMethodRows(")
+
+    /** 豁免记录：[sites] = 提交时该文件的**命中站点数**（漂移即红），[reason] 必填。 */
+    private data class PsiCaptureExemption(val sites: Int, val reason: String)
+
+    /**
+     * 池化线程内读 PSI 的**豁免登记**（T-PCP-04 落地时实测，仅一处）。
+     *
+     * 口径：本规则只认「元素级捕获 + 后台读」这一形态（T-PCP-01 的适用面）。豁免条目是
+     * **文件级捕获 + 块内重取 PSI**——`PsiFile` 捕获后于块内 `findChildrenOfType` 重新取标签再读行号，
+     * 失效面由 `ReadAction` + 平台 reparse 语义承担，不在本轮锚点（计划 §一甲类只列两个 gutter provider）。
+     * 将来收编进 `PsiSnapshot` 时须删条目并重新登记站点数。
+     */
+    private val psiCaptureExemptions: Map<String, PsiCaptureExemption> = mapOf(
+        // 4 处：XML 选区候选 / 全文件语句候选（T-M29.6、T-Perf-14）——池化块内从捕获的 PsiFile 重取 XmlTag 再算行号。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.kt" to
+            PsiCaptureExemption(4, "文件级捕获 + 块内重取 PSI（XmlTag 候选/行号），非元素级快照；计划未含本文件"),
+    )
+
+    /**
+     * 池化线程内读 PSI 未走校验的违规点：`路径:行号 → 命中令牌`。
+     *
+     * 豁免三选一：① 池化块内出现 [psiValidationTokens]（已走两段式校验）；② 调用行上方连续注释块含
+     * `psi-capture: <理由>` 标注；③ 文件在 [psiCaptureExemptions] 内。
+     *
+     * **边界（如实登记，两个方向都有）**：
+     *  - **漏报**：PSI 读被挪进池化块**调用的另一个函数**（块内看不见 `containingFile`）即脱离扫描面——
+     *    本规则只看池化块本体，与既有的 `invokeLater` 两条规则同口径；`validate()` 自身也可能被
+     *    封装进别的助手（此时须把助手登记进 [psiValidationTokens]）。
+     *  - **过报**：块内对**块内新解析**的对象读 `textRange`（非捕获元素）也会命中——当前仓内 0 例，
+     *    遇到时应把该读挪出块外或加 `psi-capture:` 标注说明其非捕获元素。
+     *  - 覆盖的执行原语只有 `executeOnPooledThread`（仓内唯一在用的池化原语，42 处）；
+     *    `runAsync`/`supplyAsync`/`ReadAction.nonBlocking` 不在扫描面（仓内 0 处，见计划 §一「非问题」）。
+     */
+    private fun psiCaptureOffenders(
+        sources: List<Pair<String, String>>,
+        skipExemptions: Boolean = true,
+    ): List<String> {
+        val offenders = ArrayList<String>()
+        for ((path, raw) in sources) {
+            if (skipExemptions && psiCaptureExemptions.containsKey(path)) continue
+            for (site in pooledThreadSites(maskNonCode(raw))) {
+                val read = psiReadTokens.filter { site.body.contains(it) }
+                if (read.isEmpty()) continue
+                if (psiValidationTokens.any { site.body.contains(it) }) continue
+                if (leadingCommentBlock(raw, site.line).contains("psi-capture:")) continue
+                offenders.add("$path:${site.line} → ${read.joinToString("/")}")
+            }
+        }
+        return offenders
+    }
+
+    @Test
+    fun `池化线程内读PSI须走两段式快照校验或登记豁免`() {
+        // T-PsiCaptureProtocol T-PCP-04：EDT 捕获 PsiElement → `executeOnPooledThread` 内读该元素
+        // （containingFile / viewProvider.document / textRange）这条链，捕获与读取之间的写操作会让元素
+        // 失效——只包 ReadAction 只解决「读权限」，不解决「元素是否仍有效」。本规则要求这类读取
+        // 走 T-PCP-01 的 PsiSnapshot 校验（或 `psi-capture:` 标注 / 豁免登记）。
+        // 落地形态：两个 gutter provider 各抽一个校验收口助手（`validatedRecentAnchor` /
+        // `validatedMethodRows`，池化块只调它），`actions/ConvertToSqlAction.kt` 4 处登记豁免。
+        val sources = rawMainSources()
+        val offenders = psiCaptureOffenders(sources)
+        assertTrue(
+            "池化线程内读捕获的 PSI 却无快照校验，命中 ${offenders.size} 处：$offenders。" +
+                "改走 PsiSnapshot.capture（EDT 侧）+ validate()（后台侧），或对确属「文件级捕获 + 块内重取」" +
+                "的站点在 [psiCaptureExemptions] 登记文件 + 站点数 + 理由，或加 `// psi-capture: <理由>` 标注",
+            offenders.isEmpty(),
+        )
+
+        // 豁免表保鲜：路径在扫描面内、命中站点数与登记一致、理由非空
+        for ((path, exemption) in psiCaptureExemptions) {
+            val source = sources.firstOrNull { it.first == path }
+            assertTrue("豁免表条目指向不存在的源文件（改名/删除后未同步）：$path", source != null)
+            val actual = psiCaptureOffenders(listOf(source!!), skipExemptions = false).size
+            assertEquals(
+                "豁免文件的命中站点数与登记不符（新增/删除跨线程 PSI 读须补校验或重新登记理由）：$path",
+                exemption.sites,
+                actual,
+            )
+            assertTrue("豁免理由不得为空：$path", exemption.reason.isNotBlank())
+        }
+    }
+
+    @Test
+    fun `TPCP04自证_池化块读PSI无校验必红_三种放行形态`() {
+        // 负向自证（规则「看不见某形态」= 空绿，只能靠合成样本钉住）：违规必报 + 校验/标注/豁免三态放行。
+        val violating = listOf(
+            "src/main/kotlin/x/BgRead.kt" to """
+                class BgRead {
+                    fun go(elt: PsiElement) {
+                        app.executeOnPooledThread {
+                            ReadAction.compute<Int, Throwable> { elt.containingFile.textRange.startOffset }
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "池化块内读捕获元素的 PSI 属性必须命中：${psiCaptureOffenders(violating)}",
+            1,
+            psiCaptureOffenders(violating).size,
+        )
+
+        val validated = listOf(
+            "src/main/kotlin/x/Validated.kt" to """
+                class Validated {
+                    fun go(elt: PsiElement, project: Project, snapshot: PsiSnapshot?) {
+                        app.executeOnPooledThread {
+                            val anchor = ReadAction.compute<Pair<String, Int>?, Throwable> { validatedRecentAnchor(project.basePath, snapshot) }
+                            log(anchor.toString() + elt.containingFile.name)
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "已走校验收口助手的站点不得误报：${psiCaptureOffenders(validated)}",
+            0,
+            psiCaptureOffenders(validated).size,
+        )
+
+        val inlineSnapshotCheck = listOf(
+            "src/main/kotlin/x/InlineCheck.kt" to """
+                class InlineCheck {
+                    fun go(elt: PsiElement, snapshot: PsiSnapshot?) {
+                        app.executeOnPooledThread {
+                            val valid = snapshot != null && snapshot.validate() is PsiSnapshot.Validity.Valid
+                            if (valid) elt.containingFile.textRange.startOffset else 0
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "块内直接用 PsiSnapshot 判定的站点不得误报：${psiCaptureOffenders(inlineSnapshotCheck)}",
+            0,
+            psiCaptureOffenders(inlineSnapshotCheck).size,
+        )
+
+        val annotated = listOf(
+            "src/main/kotlin/x/Annotated.kt" to """
+                class Annotated {
+                    fun go(elt: PsiElement) {
+                        // psi-capture: 该元素在块内重新解析（非 EDT 捕获），失效面由平台 reparse 承担
+                        app.executeOnPooledThread {
+                            elt.containingFile.textRange.startOffset
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "带 `// psi-capture: <理由>` 标注的站点应豁免：${psiCaptureOffenders(annotated)}",
+            0,
+            psiCaptureOffenders(annotated).size,
+        )
+
+        // 豁免表生效（用真实豁免路径喂合成样本，证明表被真正查过而不是白名单空转）
+        val exemptedPath = "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.kt"
+        val exempted = listOf(
+            exemptedPath to """
+                class Exempted {
+                    fun go(tag: XmlTag) {
+                        app.executeOnPooledThread {
+                            tag.containingFile.viewProvider.document?.getLineNumber(tag.textRange.startOffset)
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "豁免路径的命中站点须被计数（否则豁免表空转、漂移检测失效）：" +
+                "${psiCaptureOffenders(exempted, skipExemptions = false)}",
+            1,
+            psiCaptureOffenders(exempted, skipExemptions = false).size,
+        )
+        assertEquals(
+            "豁免表内的路径不得报违规：${psiCaptureOffenders(exempted)}",
+            0,
+            psiCaptureOffenders(exempted).size,
+        )
+
+        // 池化块内不读 PSI（纯数据/纯 IO）不得命中
+        val noPsiRead = listOf(
+            "src/main/kotlin/x/NoPsi.kt" to """
+                class NoPsi {
+                    fun go(path: String) {
+                        app.executeOnPooledThread {
+                            val text = java.io.File(path).readText()
+                            log(text)
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "池化块内无 PSI 读不得命中：${psiCaptureOffenders(noPsiRead)}",
+            0,
+            psiCaptureOffenders(noPsiRead).size,
+        )
+
+        // 工具函数自证：池化站点提取覆盖「尾随 lambda」与「括号实参 + 尾随 lambda」两种写法
+        val sites = pooledThreadSites(maskNonCode(violating[0].second))
+        assertEquals("executeOnPooledThread 尾随 lambda 形态应被提取", 1, sites.size)
+        assertEquals("提取行号须与原文对齐（保行掩码）", 3, sites[0].line)
+    }
+
+    // ------------------------------------------------------------------
+    // 跳转族读权限约定（T-PsiCaptureProtocol T-PCP-03，2026-09-19）
+    // ------------------------------------------------------------------
+
+    /** 跳转族调用令牌：读平台模型（ModuleManager / LocalFileSystem），调用方须持读权限。 */
+    private val jumpFamilyCallTokens = listOf(
+        "SourcePathResolver.resolveVirtualFile(",
+        "EntryJumpResolver.resolve(",
+        "EntryJumpResolver.resolveCandidates(",
+    )
+
+    /**
+     * 跳转族调用点的**读权限白名单**（EDT 直读；新增调用点须显式包 `ReadAction`，否则守卫红）。
+     *
+     * 本族读 `ModuleManager`/`LocalFileSystem` 平台模型（**不碰 PSI/Document**），故不适用 T-PCP-01
+     * 的元素快照——要的是「调用方持读权限」这条约定：EDT 直读合法，后台调用必须自包 `ReadAction`
+     * （`log/CallerMethodRangeResolver.kt` 即后者先例，文件内含 `ReadAction` 故自动通过）。
+     */
+    private val jumpFamilyReadAllowedFiles = setOf(
+        // 族本体：内部转发，读权限由调用方保证（现网两个调用方均在 EDT）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/EntryJumpResolver.kt",
+        // EDT 右键跳转（平台菜单回调在 EDT）
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt",
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/HistorySqlLogPanel.kt",
+    )
+
+    /** 跳转族调用点缺读权限的违规文件（无 `ReadAction` 且不在白名单）。 */
+    private fun edtReadContractOffenders(sources: List<Pair<String, String>>): List<String> =
+        sources
+            .filter { (_, code) -> jumpFamilyCallTokens.any { code.contains(it) } }
+            .filter { (_, code) -> !code.contains("ReadAction") }
+            .map { (path, _) -> path }
+            .filter { it !in jumpFamilyReadAllowedFiles }
+
+    @Test
+    fun `跳转族调用点须持读权限_后台调用须包ReadAction`() {
+        // T-PCP-03：`EntryJumpResolver`/`SourcePathResolver` 一族的 KDoc 约定（「调用方保证持有读权限」）
+        // 原先无工具保障——一旦被后台线程裸调，读 ModuleManager 的违约只在真机偶发。本规则把约定固化为
+        // 「文件内出现 ReadAction（自包权限）或在 EDT 调用者白名单内」；配套运行期硬断言见下一段。
+        val offenders = edtReadContractOffenders(mainSources())
+        assertTrue(
+            "跳转族调用点缺读权限（文件内无 ReadAction 且不在 EDT 白名单），命中 ${offenders.size} 处：$offenders。" +
+                "后台调用须显式包 ReadAction，EDT 调用点加入 [jumpFamilyReadAllowedFiles] 并注明依据",
+            offenders.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `跳转族读权限运行期断言锚点`() {
+        // 运行期硬断言锚点（T-PCP-03）：`SourcePathResolver.resolveVirtualFile` 入口必须保留
+        // `assertReadAccessAllowed()`——源码级规则只管「调用点有没有 ReadAction 字样」，
+        // 断言把违约暴露在实际调用链上（后台裸调即抛，不静默读模型）。
+        val code = stripComments(
+            repoRoot().resolve("src/main/kotlin/cn/song/mybatisplus/visualizer/log/EntrySourceMatcher.kt").readText(),
+        )
+        assertTrue(
+            "SourcePathResolver.resolveVirtualFile 丢失 assertReadAccessAllowed() 入口断言——" +
+                "跳转族的读权限约定退回「只写在 KDoc 里」的靠约定状态（T-PCP-03）",
+            code.contains("assertReadAccessAllowed()"),
+        )
+    }
 }
