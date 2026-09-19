@@ -731,6 +731,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun showRollbackSql() {
         val sql = currentEditorSql()?.let { SqlCommentStripper.strip(it) }?.takeIf { it.isNotBlank() } ?: return
         val kind = SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
+        // T-ST-03 核实：本路径是【回滚SQL】按钮的独立动作（工具栏 :687），**不在执行确认流内**——
+        // 此处 generate 是该次点击的唯一一次解析（确认流的解析点在 executeSql/executeAdhocSql 的
+        // ExecuteConfirmMessages.build 处），故无「确认阶段产物」可显式传入。
         val result = cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator.generate(sql)
         val entry = project?.getService(cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore::class.java)
             ?.findBySql(sql)
@@ -829,6 +832,21 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（内存 store，LogSqlEntry 不动字段）。
      * 回滚语句（rollbackOfEntry 非 null）也登记——parentExecutionId 指向被回滚的原执行，
      * 形成 dbx `rollback_of` 语义的留痕链；仅登记可解析到目标表的语句（解析失败登记无意义）。
+     *
+     * **T-PS5-02 / T-ST-03 解析复用前提（实测核实，勿默认撤销）**：下面 [RollbackSqlGenerator.generate]
+     * 走 `UnboundedWriteDetector.parseStatementsShared` 的 AST 单槽，与确认阶段
+     * （[executeSql]/[executeAdhocSql] 的 `ExecuteConfirmMessages.build` → `UnboundedWriteDetector.detect`）
+     * 共用同一次解析——命中判据是**同文本内容全等**，故此处**依赖两条前提**：
+     * ①确认阶段确实以同一文本走了一遍 `detect`（UPDATE/DELETE 必经 DML 二次确认，成立；
+     * `executeAdhocSql(dmlConfirmed = true)` 的回滚弹窗路径不走确认弹窗，退化为本链自解析一次）；
+     * ②[SqlCommentStripper.strip] 幂等——此处传入的是 `strip(sql)`，而 `detect` 内部键是 `strip(sql)`、
+     * `generate` 内部还会再剥一次（键成 `strip(strip(sql))`），幂等成立才落回同一槽。
+     * 两条前提任一失效的后果**只是多一次解析**（槽未命中即重解析），不影响回滚判定正确性；
+     * 前提由 `SqlPreviewPanelRollbackParseShapeTest` 逐条钉住（含「槽未命中必重解析」的探针自证）。
+     *
+     * 面板侧若需脱离该隐式前提，出口是 `RollbackSqlGenerator.generateFromParsedStatements(cleaned, statements, pk)`；
+     * 但确认阶段的 AST 不外传（`detect` 只回 findings），真正显式传递须改 `execute/` 包的两个共享 API，
+     * 收益仅是形式统一（T-PS5-02 的收益已由单槽全数拿到）——T-ST-03 判定「改动面大于收益」不实施。
      */
     private fun registerRollbackSnapshotIfNeeded(
         sql: String,
@@ -845,6 +863,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             )
             return
         }
+        // T-PS5-02：传入已剥注释文本——键对齐靠 strip 幂等（详见本函数 KDoc 的两条前提）
         val analyzed = cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator.generate(SqlCommentStripper.strip(sql))
         val table = analyzed.targetTable ?: return
         store.register(sql, table, analyzed.snapshotSelectSql, analyzed.setColumns)
