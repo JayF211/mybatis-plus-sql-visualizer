@@ -23,11 +23,15 @@ import org.junit.Assert.assertTrue
  *
  * 覆盖边界：>120 截断、==120 不截断、121 恰好越界、<120 原样、null 无节点。
  *
- * 已知未接通项（本测试不掩盖、也不改变生产行为）：[buildStackDigestMetaText] 的 `inlineLine`
- * 目前只进 `metaLabel.toolTipText` 首行，而可见行文本 `metaLineText`（T-PreviewTopOverlap F3
- * 宽度预算截断的输入）只拼 `meta + warningLine`，未并入该摘要——即验收项前半句「meta 行显示
- * 调用栈」在**可见行**上尚未接通（真机走查第 1 步会看不到「调用栈: …」）。详见
- * [test现状_可见meta行未含调用栈摘要_仅tooltip有] 的说明。
+ * P5 修复（本测试同步更新）：[buildStackDigestMetaText] 的 `inlineLine` 已并入**可见行**
+ * `metaLineText`（此前只进 `metaLabel.toolTipText`）——验收项前半句「meta 行显示调用栈」在可见行
+ * 上接通，见 [test可见meta行含调用栈摘要_截断到120字符]。
+ *
+ * P5 复核修正（20260920，本测试再次同步）：摘要并入后**不得反过来挤掉主体**。首版把「主体 + 摘要」
+ * 当单段文本交给 F3 的中段省略（保留尾部 30%），而默认宽度预算仅够 15~25 字符、摘要上限 120 字符
+ * → 窄窗下主体（表名 / wrapper 类型）被整段挤掉，只剩「…」+ 栈底帧（信息量最低的一端）。
+ * 现按段组装（[metaLineWithinBudget]：主体优先、摘要吃剩余、剩余不足 [META_DIGEST_MIN_PX] 则整段
+ * 丢弃），纯函数规则见 `test组装_*` 五例，面板侧接线见 [test窄窗_主体完整保留_摘要截尾_tooltip恒全文]。
  */
 class SqlPreviewPanelStackDigestTest : BasePlatformTestCase() {
 
@@ -161,14 +165,13 @@ class SqlPreviewPanelStackDigestTest : BasePlatformTestCase() {
     }
 
     /**
-     * 现状锁定：可见 meta 行（`metaLabel.text`）**不含**调用栈摘要——摘要目前只进 tooltipText。
+     * P5 已接通：可见 meta 行（`metaLabel.text`）**含**调用栈摘要——`metaLineText` 已并入
+     * [buildStackDigestMetaText] 的 `inlineLine`（未布局分支取全文，无宽度预算截断）。
      *
-     * 这正是验收项前半句「meta 行显示调用栈」在真机走查第 1 步会落空的原因（第 2 步悬停可见完整链
-     * 已由 [test面板悬停tooltip_含完整调用链与截断摘要] 锁定）。本用例把「接线缺口」写成可执行断言，
-     * 使缺口一旦被修（把 `stackText.inlineLine` 并入 `metaLineText`）本用例立即转红，从而强制同步
-     * 更新本测试与验收文档——避免缺口被静默当成「已通过」。
+     * 本用例由原「现状锁定」用例改写而来（原文断言可见行**不含**摘要，缺口一修即转红，
+     * 此处即该转红的同步更新）：断言可见行含 120 字符截断摘要且不含完整链（全文归悬停 tooltip）。
      */
-    fun test现状_可见meta行未含调用栈摘要_仅tooltip有() {
+    fun test可见meta行含调用栈摘要_截断到120字符() {
         val panel = SqlPreviewPanel(project)
         try {
             val digest = chainOf(300)
@@ -179,15 +182,100 @@ class SqlPreviewPanelStackDigestTest : BasePlatformTestCase() {
             waitForEdt()
 
             val visible = panel.metaLabelForTest()
-            assertFalse(
-                "现状：可见 meta 行不含调用栈摘要（缺口未修）——若此处失败说明生产已接通，" +
-                    "请同步更新本测试与验收文档判定卡",
-                visible.contains(label()),
-            )
-            // 反证摘要本身已产出且进了 tooltip，缺口仅在「可见行未拼接」
-            assertTrue((panel.metaTooltipForTest() ?: "").contains(label()))
+            assertTrue("可见 meta 行应含调用栈文案节点", visible.contains(label()))
+            assertTrue("可见行应含 120 字符截断摘要（带截断标记）", visible.contains(digest.substring(0, 120) + "…"))
+            assertFalse("可见行不应含完整链（全文归悬停 tooltip）", visible.contains(digest))
+            // 反证摘要仍在 tooltip 内（悬停契约不因可见行接通而退化）
+            assertTrue((panel.metaTooltipForTest() ?: "").contains(digest))
         } finally {
             panel.clear()
         }
+    }
+
+    /**
+     * P5 + F3 宽度预算：窄窗下**主体优先**——可见行保留 meta 主体（表名 / wrapper 类型），
+     * 调用栈摘要按剩余宽度截尾；完整链仍恒在悬停 tooltip 内。
+     *
+     * 本用例由首版 `test窄窗_可见行中段省略_tooltip恒全文` 改写（原文断言「省略后保留摘要尾段」，
+     * 即把「主体被挤掉、只剩栈底帧」当预期行为锁定——复核 20260920 判定为优先级倒挂，转红即此处同步）。
+     *
+     * headless 无 componentResized，按 SqlPreviewTopRowLayoutTest 的既有做法手动逐层 doLayout
+     * 后直调 [SqlPreviewPanel.applyMetaTruncationForTest]。
+     */
+    fun test窄窗_主体完整保留_摘要截尾_tooltip恒全文() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            val digest = chainOf(300)
+            panel.showResult(makeResult(digest))
+            waitForEdt()
+            panel.setSize(640, 420)
+            panel.doLayout()
+            panel.topRowForTest().parent?.doLayout()
+            panel.topRowForTest().doLayout()
+            panel.applyMetaTruncationForTest()
+            waitForEdt()
+
+            val visible = panel.metaLabelForTest()
+            assertTrue("窄窗应触发截断", visible.contains("…"))
+            assertFalse("窄窗可见行不得含完整链", visible.contains(digest))
+            // 复核回归点：主体（表名）不得被摘要挤掉——首版实现此处会转红（可见行只剩「…」+ 栈底帧）
+            assertTrue("主体（表名）必须仍在可见行内: $visible", visible.contains("user"))
+            assertTrue("tooltip 恒全文（宽度预算不影响悬停）", (panel.metaTooltipForTest() ?: "").contains(digest))
+        } finally {
+            panel.clear()
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // P5 复核修正：meta 行宽度预算组装（纯函数，脱 FontMetrics）
+    // ------------------------------------------------------------------
+
+    /** 1 字符 = 1px 的度量替身：宽度断言可直接读成字符数。 */
+    private val widthOf: (String) -> Int = { it.length }
+
+    private fun headText() = "表: user 类型: LambdaQueryWrapper"
+
+    private fun digestText() = "   调用栈: " + chainOf(120)
+
+    fun test组装_放得下则整段原样返回() {
+        val head = headText()
+        val digest = digestText()
+        assertEquals(head + digest, metaLineWithinBudget(head + digest, head, digest, widthOf, 200))
+    }
+
+    fun test组装_无摘要时退回F3中段省略() {
+        val head = headText()
+        val out = metaLineWithinBudget(head, head, "", widthOf, 12)
+        assertEquals("无快照路径须与 F3 原行为逐字一致", ellipsizeMiddle(head, widthOf, 12), out)
+        assertTrue("应中段省略: $out", out.contains("…"))
+    }
+
+    fun test组装_主体自身超预算_主体中段省略() {
+        val head = headText()
+        val digest = digestText()
+        // 预算 12 < 主体宽：摘要无从谈起，退回主体自身的 F3 中段省略
+        assertEquals(ellipsizeMiddle(head, widthOf, 12), metaLineWithinBudget(head + digest, head, digest, widthOf, 12))
+    }
+
+    fun test组装_主体放得下_摘要截尾且主体不被挤掉() {
+        val head = headText()
+        val digest = digestText()
+        val budget = head.length + META_DIGEST_MIN_PX + 4
+        val out = metaLineWithinBudget(head + digest, head, digest, widthOf, budget)
+        assertTrue("主体必须完整保留（复核回归点）: $out", out.startsWith(head))
+        assertTrue("摘要应被截尾（带省略号）: $out", out.endsWith("…"))
+        assertFalse("摘要不得整段保留: $out", out.contains(digest))
+        assertTrue("总宽不得超预算: ${widthOf(out)} > $budget", widthOf(out) <= budget)
+    }
+
+    fun test组装_剩余宽度不足_整段丢弃摘要() {
+        val head = headText()
+        val digest = digestText()
+        val budget = head.length + META_DIGEST_MIN_PX - 1
+        assertEquals(
+            "剩余不足应整段丢摘要（不留孤零零的省略号）",
+            head,
+            metaLineWithinBudget(head + digest, head, digest, widthOf, budget),
+        )
     }
 }
