@@ -2606,9 +2606,44 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-PerfTail #2：预热产物消费决策——热态同步装配（主路径/快速降级，EDT 零等待）、
         // 冷态注册回调回 EDT 装配（超时预算语义保留，EDT 零阻塞）、单元测试模式同步有界等待
         val (resolved, prewarmed) = resolvePreviewEditorSource(sql)
-        if (!resolved) return   // 回调挂起中——装配延后至回调（超时/失败走降级链）
+        if (!resolved) {
+            // T-PrewarmBudget：装配延后至预热回调（冷态/预算内未就绪）——这期间编辑区本来是**纯空面板**
+            // （真机连拍实测：亮像素计数 0，冷启空窗 584~926ms 肉眼可见），故补一个轻量「准备中」占位；
+            // 回调走到 assemblePreviewEditor 时它会 removeAll 掉，无需另行清理。
+            showPreviewPreparingPlaceholder()
+            return
+        }
         assemblePreviewEditor(sql, prewarmed)
     }
+
+    /**
+     * T-PrewarmBudget：预热等待期的编辑区占位。
+     *
+     * 装配延后到预热回调时，编辑区原本是**纯空面板**——真机连拍实测亮像素计数 0，冷启动空窗
+     * 584~926ms 肉眼可见。这里放一个居中的轻量提示，回调装配时由 [assemblePreviewEditor] 的
+     * `editorHolder.removeAll()` 自然替换，无需另行清理。
+     *
+     * 用 `GridBagLayout` 居中而非直接 add：`editorHolder` 是 `GridLayout(1,1)`，直接加会把标签拉满
+     * 整格（文字贴左上角），与「准备中」应有的视觉不符。
+     */
+    private fun showPreviewPreparingPlaceholder() {
+        val box = JBPanel<JBPanel<*>>(java.awt.GridBagLayout())
+        box.add(
+            JBLabel(MpSqlVisualizerBundle.message("panel.preview.preparing")),
+            java.awt.GridBagConstraints().apply {
+                anchor = java.awt.GridBagConstraints.CENTER
+                weightx = 1.0
+                weighty = 1.0
+            },
+        )
+        editorHolder.removeAll()
+        editorHolder.add(box)
+        editorHolder.revalidate()
+        editorHolder.repaint()
+    }
+
+    /** T-PrewarmBudget：等待期占位（断言用）——显示路径的观测口（容器观测口复用既有的 [editorHolderForTest]）。 */
+    internal fun showPreparingPlaceholderForTest() = showPreviewPreparingPlaceholder()
 
     /**
      * T-PerfTail #2：编辑器装配（原 createEditor 后半抽取，同步主路径与异步回调共用同一收口）。
@@ -4356,12 +4391,27 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
         /** T-PreviewFlash：EDT 等待预热产物的轮询间隔与超时（毫秒）。 */
         const val PREWARM_POLL_MS = 20L
-        /** T-PreviewSlow F1：把「EDT 同步自旋等预热产物」的预算从 2000ms 砍到 60ms——
-         * 冷启动时预热线程（同步 VFS refresh + PSI findFile）常跑几百毫秒到数秒，EDT 干等
-         * 到 2000ms 会把延迟烧进 UI 线程（真机日志双击→createEditor 达 3.07s）。降到经验值
-         * 60ms：预热线程已就绪（面板再开/热态）立刻命中走 PSI 主路径，冷启动第一拍直接降级
-         * 纯内存编辑器不烧 EDT；预热完成后下次打开即自愈走回 PSI 高亮/补全路径。 */
-        const val PREWARM_WAIT_MS = 60L
+        /**
+         * T-PrewarmBudget（2026-09-20 据实测重定）：预热产物的等待预算——消费侧 [PrewarmAwait]
+         * `completeOnTimeout` 用它决定「等多久放弃、改走降级装配」。
+         *
+         * **取值 500ms 的依据（真机 16 次打开 / 3 会话，见
+         * `docs/验收文档/20260920-预热耗时采样与预算建议.md`）**：预热耗时（打点
+         * `[M36] prewarm done in Xms`）冷启动首开 233/239/360ms（n=3），同会话复开
+         * 116/133/184ms（n=13）——**旧值 60ms 一次都覆盖不到（16/16 全降级）**。500ms 覆盖观测到的
+         * 冷启最大 360ms（约 40% 余量）与全部复开（2.7 倍余量）。
+         *
+         * **旧值 60ms 的理由已失效**：其原注释称「EDT 干等到 2000ms 会把延迟烧进 UI 线程（真机日志
+         * 双击→createEditor 达 3.07s）」——那是**旧的同步 sleep 轮询实现**（`awaitPrewarmedTempFile`）；
+         * 自 T-PerfTail #2 改成异步后，冷态 `scheduleOnce` 注册回调即返回，**EDT 根本不等待**，
+         * 该预算只决定装配质量与等待时长，不再有「省 EDT 时间」的作用。
+         *
+         * **已知不覆盖**：重负载（CPU 72%~99%）下冷启曾观测到约 1s——那种情况仍会降级，且正确的解法
+         * 是让预热更快（`t-fix-n2` 的父目录映射已把每次打开都要付的 `setMapping`/push-all dumb 整条去掉，
+         * 本轮实测 `Push all [SqlDialectPusher]` 计数 0），而不是无限抬高预算。
+         * 抬高预算的代价是等待期变长，已由 [showPreviewPreparingPlaceholder] 的占位覆盖观感。
+         */
+        const val PREWARM_WAIT_MS = 500L
 
         /**
          * T-FixN2：预览临时文件名形态——`mpsql-preview-<pid>-<seq>.sql`（例 `mpsql-preview-12480-3.sql`）。
