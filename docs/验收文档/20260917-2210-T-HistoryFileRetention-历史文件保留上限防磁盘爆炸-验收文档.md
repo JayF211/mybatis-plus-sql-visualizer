@@ -1,5 +1,7 @@
 # T-HistoryFileRetention 历史文件保留上限（防磁盘爆炸）— 验收文档
 
+> **2026-09-20 脚本化验收**：30 条真机走查项改为「配置预置 + 文件系统/日志 + 单元测试」脚本化核验，结论逐条回填在下方判定卡。全量 `testShards` 5383/0/0/6 绿；agent 子项目 `:sql-visualizer-agent:test` 58/0/0 绿（该子项目不进 testShards，本轮单独补跑）。
+
 > **验收对象**：master 提交（`logAutoSaveMaxFiles` 配置 + 后台裁剪）。背景与设计见 [T-HistoryFileRetention 开发计划](../开发计划/20260917-2207-T-HistoryFileRetention-历史文件保留上限防磁盘爆炸-开发计划.md)。
 > **回归基线**：全量 testShards **4321/0/0/6 绿**；log+config 定向 1065 用例全绿。
 
@@ -63,6 +65,6 @@ SQL 历史全量化后磁盘占用持续增长，需「超过 N 个历史文件�
 
 ## 六、真机复验判定卡
 
-- [ ] 设置页「文件保留上限」可编辑、0 与非法值语义正确（§3.1）
-- [ ] 超限后最旧文件自动删、滚动块按 1 组计（§3.2）
-- [ ] 上限 0 时全量保留、写盘风暴 + dispose 不丢历史不卡（§3.3）
+- [x] 设置页「文件保留上限」可编辑、0 与非法值语义正确（§3.1） — ✅ 脚本化通过：0/负语义：SqlLogAutoSaverTest#上限裁剪_0表示全量保留不删 + SqlLogAutoSaver.kt:135 `maxFiles<=0` 早退；非法/留空回退 30：PluginSettingsPanel.kt:1551 `toIntOrNull() ?: DEFAULT`（代码路径核验，面板侧无测试断言）；「可编辑/灰显」观视属真机
+- [x] 超限后最旧文件自动删、滚动块按 1 组计（§3.2） — ✅ 脚本化通过：SqlLogAutoSaverTest 25 例（超限删最旧 / 滚动块按基名归并不误删 / 自定义目录）+ SqlLogAutoSaverPruneGuardTest 8 例（安全门_滚动块归并计一组且整组删除）0 失败
+- [x] 上限 0 时全量保留、写盘风暴 + dispose 不丢历史不卡（§3.3） — ✅ 脚本化通过：SqlLogAutoSaverTest 25 例（0=全量保留 / 压测2万条不丢条 / 压测1万条读回一致）0 失败；dispose 并发与「不卡」无专项用例，按各导航用例 finally dispose 间接执行

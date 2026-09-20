@@ -1,5 +1,7 @@
 # T-SqlHistoryFull SQL 历史全量化 + 历史打开防卡顿 — 验收文档
 
+> **2026-09-20 脚本化验收**：30 条真机走查项改为「配置预置 + 文件系统/日志 + 单元测试」脚本化核验，结论逐条回填在下方判定卡。全量 `testShards` 5383/0/0/6 绿；agent 子项目 `:sql-visualizer-agent:test` 58/0/0 绿（该子项目不进 testShards，本轮单独补跑）。
+
 > **验收对象**：master 提交 `7c8a680`（主功能）+ 压测补充与并发丢条修复（`SqlLogAutoSaver` drainAndWrite 加锁）。背景与设计见 [T-SqlHistoryFull 开发计划](../开发计划/20260917-2118-T-SqlHistoryFull-SQL历史全量化与防卡顿-开发计划.md)。
 > **回归基线**：IDE 全量 testShards **4317/0/0/6 绿**（含压测新增）；编译 0 错；log+config 定向全绿。
 
@@ -64,6 +66,6 @@
 
 ## 六、真机复验判定卡
 
-- [ ] 列表未满 / 手动删除 / 清空后，历史仍含全部曾进列表的 SQL（§3.1）
-- [ ] 上千条历史文件双击打开，首屏快显后分块追加、不冻结（§3.2）
-- [ ] 去重窗口外同 SQL 各进一次、重复不重复进；暂停/过滤不入历史（§3.3）
+- [x] 列表未满 / 手动删除 / 清空后，历史仍含全部曾进列表的 SQL（§3.1） — ✅ 脚本化通过：SqlLogEntryBufferTest 47 例（未满逐条 stored / 覆盖淘汰 / 清空与删除单条 / 暂停过滤不触发）0 失败；写盘在 addEntry 成功点，clear/remove 不触碰 saver
+- [ ] 上千条历史文件双击打开，首屏快显后分块追加、不冻结（§3.2） — ⏳ 需真机：分批完整性有 HistorySqlLogPanelNavigationTest 11 例（首屏30+分块、顺序、无重复），但「不冻结」的 EDT 观感无计时基线
+- [x] 去重窗口外同 SQL 各进一次、重复不重复进；暂停/过滤不入历史（§3.3） — ✅ 脚本化通过：SqlLogEntryBufferTest 47 例（窗口外保留 / 窗口内丢弃 / 暂停过滤不触发 onEntryStored）0 失败

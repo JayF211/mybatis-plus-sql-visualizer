@@ -1,5 +1,7 @@
 # T-SourceJumpFunnel 自研框架汇聚入口跳源码上溯适配 —— 验收文档
 
+> **2026-09-20 脚本化验收**：30 条真机走查项改为「配置预置 + 文件系统/日志 + 单元测试」脚本化核验，结论逐条回填在下方判定卡。全量 `testShards` 5383/0/0/6 绿；agent 子项目 `:sql-visualizer-agent:test` 58/0/0 绿（该子项目不进 testShards，本轮单独补跑）。
+
 > **验收对象**：分支 `t-sourcejumpfunnel` 交付（提交 `b117d8c` 主功能 + `870affc` 占位提示，基点 master `f723c0e`，未并入 master、未推送）。
 > **面向读者**：功能验收人（含用户本人真机走查）。背景与设计见 [T-SourceJumpFunnel 开发计划](../开发计划/20260917-1726-T-SourceJumpFunnel-自研框架汇聚入口跳源码上溯适配-开发计划.md)。
 > **回归基线**：agent 单测 49/0；IDE 全量 testShards **4319/0/0/6 绿**；编译 0 错；设置面板/bundle 对齐定向绿。
@@ -80,9 +82,9 @@
 
 勾选通过即判定闭环：
 
-- [ ] 设置页输入框空态有灰色占位文字（§3.1-1）
-- [ ] 填入公司引擎包名前缀 Apply 后，跳转落真实业务帧、无需重启（§3.1-5）
-- [ ] 历史页跳转与实时页同结果（§3.2-2，本任务最直接的改进观察点）
-- [ ] 预览 meta 行显示调用栈、悬停见完整链（§3.3）
-- [ ] `logLevel=info` 打点确认判定路径，与复验前对照（§3.4）
-- [ ] 清空前缀 / warn 档行为不劣化（§3.1-6 / §3.4-2）
+- [x] 设置页输入框空态有灰色占位文字（§3.1-1） — ✅ 脚本化通过：FrameSkipPrefixesFieldVisibilityTest 1 例（输入框在组件树且不塌缩）+ SettingsRealityGuardTest 4 例（bundle 键引用守卫）+ bundle:285 赋 emptyText，均 0 失败
+- [x] 填入公司引擎包名前缀 Apply 后，跳转落真实业务帧、无需重启（§3.1-5） — ✅ 脚本化通过：AgentProtocolSkipPrefixesTest 3 例（带前缀追加 skipPrefixes 键）+ EntryJumpResolverTest 6 例，均 0 失败；热生效见 CaptureRulesTest 15 例
+- [x] 历史页跳转与实时页同结果（§3.2-2，本任务最直接的改进观察点） — ✅ 脚本化通过：HistorySqlLogPanelJumpToSourceTest 6 + SqlLogPanelLiveJumpWithSourceTest 10 + EntryJumpResolverTest 6（两侧同调 EntryJumpResolver.resolve）0 失败
+- [ ] 预览 meta 行显示调用栈、悬停见完整链（§3.3） — ⏳ 需真机：截断展示与悬停全文为纯视觉判断（载荷往返有 EntryJumpResolverTest 覆盖）
+- [ ] `logLevel=info` 打点确认判定路径，与复验前对照（§3.4） — ⏳ 静态核验：StackLocator.diagnose 实现已在（primary/via/entry/pool + 前 8 帧），但 logLevel 由插件硬编码 warn 传入（AgentProtocol.kt:28），端到端须手改启动参数，无自动化路径
+- [x] 清空前缀 / warn 档行为不劣化（§3.1-6 / §3.4-2） — ✅ 脚本化通过：AgentProtocolSkipPrefixesTest#空前缀列表_退化为既有两键body 0 失败；agent 侧 CaptureRulesTest 15 例含热生效与清空
