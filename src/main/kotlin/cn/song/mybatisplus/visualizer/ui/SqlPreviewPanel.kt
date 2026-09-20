@@ -531,8 +531,25 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
         // T-PerfTail #2：预热线程产出 PrewarmAwait 完成态（成功 complete / 失败 fail）——
         // 消费侧（createEditor）不再 EDT sleep-poll
+        // T-FixN1（N1 写安全）：派发模态由 any() 改 defaultModalityState()（写安全模态）。回调体是
+        // resolvePreviewEditorSource 的 onReady/onFallback → assemblePreviewEditor，其内**写文档**
+        // （WriteCommandAction { d.setText(sql) } + commitDocument）——而 any() **恒 write-unsafe**：
+        // TransactionGuardImpl 的 myWriteSafeModalities 只预置 nonModal→true（构造期），
+        // wrapLaterInvocation 只对 isWriteSafeModality(state)==true 的 runnable 套 runWithWritingAllowed
+        // （any() 走 else 分支直接 run，myWritingAllowed 保持 false），于是 DocumentImpl.assertWriteAccess
+        // → assertWriteActionAllowed 在 myWritingAllowed=false 时 LOG.error「Write-unsafe context!」
+        // （真机必现：重开预览第 2 次即被平台 Suppressed 计数；243 平台 jar 反编译逐帧实证）。
+        // 代价：模态对话框挂起期间派发推迟到模态关闭——面板本就在模态框后面（用户看不见），观感代价
+        // 接近零。且冷态派发发生在预热池线程（无模态进度上下文），defaultModalityState() 常态落
+        // NON_MODAL（恒 write-safe），与 11e2671 选 any() 的唯一理由「派发不被模态挡住、EDT 零阻塞」
+        // 不冲突——该提交信息里没有「必须在模态对话框挂起期间完成装配」的场景。
+        // 边界：控制台挂载/回填链路（M36.5，本文件 onConsole 回调的 post-attach 重渲染等站点）的
+        // any()/nonModal() 是另一条链路，不在本改动范围。
         val await = PrewarmAwait<Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>>(PREWARM_WAIT_MS) { runnable ->
-            ApplicationManager.getApplication().invokeLater(runnable, com.intellij.openapi.application.ModalityState.any())
+            ApplicationManager.getApplication().invokeLater(
+                runnable,
+                com.intellij.openapi.application.ModalityState.defaultModalityState(),
+            )
         }
         prewarmAwait = await
         // T-StabilityTail：把「项目开始销毁」接到取消门——池线程不得比项目活得更久
