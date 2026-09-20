@@ -129,8 +129,26 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // T-PreviewTopOverlap F3：元信息原文缓存——metaLineText 第一行（meta+警示，纯文本）、
     // metaPerfSegments 第二行分段（可见文本+颜色）；tooltip 恒全文，label 文本按预算重拼
     private var metaLineText: String = ""
+
+    /**
+     * F3 分段缓存（P5 复核修正）：meta 行**主体**（meta + 警示行）——宽度预算下恒优先保留。
+     * 与 [metaLineDigest] 分段缓存的原因见 [metaLineWithinBudget]（摘要不得挤掉主体）。
+     */
+    private var metaLineHead: String = ""
+
+    /** F3 分段缓存（P5 复核修正）：meta 行尾部的调用栈内联摘要——预算不足时先截它。 */
+    private var metaLineDigest: String = ""
     private var metaPerfSegments: List<MetaPerfSegment> = emptyList()
     private var lastMetaBudget: Int = -1
+
+    /**
+     * T-SourceJumpFunnel P6 修复：meta 行 tooltip 的**基线文本**（[updateMeta] 每次预览重建）。
+     *
+     * 行内提示态（参数导入空剪贴板）需要临时改写可见行与 tooltip，但 tooltip 是「悬停见完整调用链」
+     * 的唯一载体（§3.3 后半句），不能被提示覆写丢掉——故提示态按「提示 + 换行 + 基线」拼接，
+     * 本字段是拼接的基线来源（也保证提示重复触发时幂等，不会叠加自身）。
+     */
+    private var metaTooltipBase: String = ""
 
     /** F3：perf 建议分段（可见文本 + HTML 颜色值），截断时按预算丢尾段。 */
     private data class MetaPerfSegment(val text: String, val color: String)
@@ -589,14 +607,31 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     return@executeOnPooledThread
                 }
                 previewTempFile = vf
-                prewarmedTempFile = vf to psi
-                await.complete(vf to psi)
+                publishPrewarmProduct(await, vf to psi)
             }.onFailure { e ->
                 prewarmFailed = true
                 await.fail(e)
                 LOG.warn("[M36] prewarm FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
             }
         }
+    }
+
+    /**
+     * T-PreviewDocLock2 F3 回归修复：预热产物**发布**——字段与 await 必须拿到**同一个 Pair 实例**。
+     *
+     * 消费侧 [assemblePreviewEditor] 以「引用相等 + 随即置 null」表达「产物尚未被消费」，
+     * 故发布侧不能把 `vf to psi` 写两遍（原实现 `prewarmedTempFile = vf to psi` 与
+     * `await.complete(vf to psi)` 各造一个实例 → `===` 恒假 → 主路径恒判「产物不可用」，
+     * 预览对话框每次打开都降级到内存 PSI 并挂降级横幅）。抽成本方法后「同一实例」由单次
+     * 构造保证，并由 SqlPreviewPanelPrewarmConsumeTest 以真实消费链（预热产物就绪 → showResult
+     * → 编辑器文档落在项目内临时文件上）锁死该不变式。
+     */
+    private fun publishPrewarmProduct(
+        await: PrewarmAwait<Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>>,
+        product: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>,
+    ) {
+        prewarmedTempFile = product
+        await.complete(product)
     }
 
     /**
@@ -1991,7 +2026,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * T-DbSchemaCompletion：补全 schema 预热涉及的表——SQL 里出现的表（含 JOIN）+ 预览主表。
      *
      * 表名取自 [TableExtractor]（纯词法，无 PSI）；解析不到时只剩主表兜底。带别名/括号的误提取
-     * 最多导致一次未命中（现在不写负缓存，见 [DatabaseSchemaResolver.resolveFromSources]），无害。
+     * 会按「确认没有此表」记入负缓存（TTL 30s，DDL/提交后随 MetadataInvalidator 一起失效），
+     * 代价只是 30s 内同表不再重扫、少几个补全候选，无害（「查不了」的情形不写负缓存，见
+     * [DatabaseSchemaResolver.resolveFromSources] 的 scanBailed 分支）。
      */
     private fun completionTables(result: PreviewResult?): List<String> {
         if (result == null) return emptyList()
@@ -2388,8 +2425,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         metaLabel.text = ""
         // T-PreviewTopOverlap F3：元信息原文缓存随清空复位（下次 updateMeta 重建）
         metaLineText = ""
+        metaLineHead = ""
+        metaLineDigest = ""
         metaPerfSegments = emptyList()
         lastMetaBudget = -1
+        // T-SourceJumpFunnel P6：tooltip 基线同步复位（行内提示态据此拼接，不复用上一份预览的残留）
+        metaTooltipBase = ""
+        metaLabel.toolTipText = null
         // F-1：清除图集 + 恢复纯 SQL 视图（整图卸载含虚拟外键回收）
         removeDiagramTab()
         unloadJoinDiagram()
@@ -2559,6 +2601,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // 压不住：SlowOperations.startSection 只在非 EDT 线程压栈，EDT 上该逃生舱是空壳，见开发计划 §3.1 反编译）。
             // T-PreviewDocLock2 F3：临时文件支链「尽力」——产物缺失（预热超时/失败/已消费）时
             // 降级到内存 PSI → 裸文档（功能降级优于硬失败——主路径行为逐字节不变）。
+            // T-PreviewDocLock2 F3：`===` 是「本次交付的产物就是字段里那份未被消费的产物」——
+            // 实例由 [publishPrewarmProduct] 单次构造保证（发布侧写两遍 `vf to psi` 会让本判定恒假）。
             if (prewarmed != null && prewarmedTempFile === prewarmed) {
                 prewarmedTempFile = null
                 runCatching {
@@ -3360,16 +3404,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         return texts.maxOf { metrics.stringWidth(it) }.coerceIn(80, maxWidth)
     }
 
-    /** T-M26.3：长文本中段省略——保留尾部（bind 字段名/参数名尾部有意义），超宽时显示 `头…尾`。 */
-    private fun ellipsize(text: String, metrics: FontMetrics, maxWidth: Int): String {
-        val mark = "\u2026"
-        if (metrics.stringWidth(text) <= maxWidth) return text
-        val tailLen = (text.length * 0.3).toInt().coerceAtLeast(4).coerceAtMost(text.length - 1)
-        val tail = text.takeLast(tailLen)
-        var head = text.length - tailLen
-        while (head > 0 && metrics.stringWidth(text.take(head) + mark + tail) > maxWidth) head--
-        return text.take(head) + mark + tail
-    }
+    /**
+     * T-M26.3：长文本中段省略——保留尾部（bind 字段名/参数名尾部有意义），超宽时显示 `头…尾`。
+     *
+     * 度量以 `(String) -> Int` 注入（[ellipsizeMiddle] 纯函数），使 meta 行的宽度预算组装
+     * （[metaLineWithinBudget]）可脱 FontMetrics 单测。
+     */
+    private fun ellipsize(text: String, metrics: FontMetrics, maxWidth: Int): String =
+        ellipsizeMiddle(text, { metrics.stringWidth(it) }, maxWidth)
 
     /**
      * T-M26.3：复选框标签截断上限——跟随视口宽度（文本 + 图标约 20px + 边距 36px 不超出视口，
@@ -3549,21 +3591,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * @param isEmptyClipboard 是否剪贴板无有效内容（true=空内容提示，false=匹配结果提示）
      */
     private fun showImportResult(matched: Int, unmatched: Int, unmatchedKeys: List<String>, isEmptyClipboard: Boolean) {
+        // T-Perf-20：空剪贴板提示是**纯行内状态更新**（不弹任何窗），与下面的通知分支性质不同，
+        // 故前置到测试模式闸门之前——闸门只为避开 Messages/TestDialog 拦截器，行内提示无此依赖，
+        // 前置后该提示态可被 headless 测试驱动（T-SourceJumpFunnel P6 的 tooltip 契约据此断言）。
+        if (isEmptyClipboard) {
+            showEmptyClipboardHint()
+            return
+        }
         // 测试环境跳过弹窗（Messages 在 test mode 下触发 TestDialog 拦截器抛异常）
         if (ApplicationManager.getApplication().isUnitTestMode) return
         val title = MpSqlVisualizerBundle.message("panel.param.import.result.title")
         val proj = project ?: return
         when {
-            isEmptyClipboard -> {
-                // T-Perf-20：空剪贴板属用户输入类提示——改面板内行内警示（元信息行红字），
-                // 不再弹模态错误框（toast 语义：下次 updateMeta 覆盖）
-                val hint = MpSqlVisualizerBundle.message("panel.param.import.result.empty")
-                currentWarning = hint
-                metaLabel.text = "⚠ $hint"
-                metaLabel.toolTipText = hint
-                metaLabel.foreground = JBColor.namedColor("ErrorForeground", JBColor.RED)
-                errorCopyButton?.isVisible = true
-            }
             unmatched == 0 -> {
                 // T-UiNative T-UN-02：导入结果改轻通知（原模态弹窗——纯告知无需打断）
                 runCatching {
@@ -3589,6 +3628,38 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 }
             }
         }
+    }
+
+    /**
+     * T-Perf-20：空剪贴板（未识别到有效参数）的**行内**提示——元信息行红字 + 错误复制按钮可见，
+     * 不弹模态框（toast 语义：下次 [updateMeta] 覆盖）。
+     *
+     * T-SourceJumpFunnel P6 修复：提示态 tooltip 由「覆写」改「拼接」——[updateMeta] 写入的
+     * [metaTooltipBase] 是「悬停见完整调用链」的唯一载体（meta 行可见文本受 F3 宽度预算截断），
+     * 旧写法 `metaLabel.toolTipText = hint` 使提示态悬停只剩提示本身、完整链丢失；而提示文案本就在
+     * 可见行上全文可见，覆写并未换来任何信息。拼接以提示为首行（与可见行一致），基线随其后；
+     * 基线取自缓存字段而非当前 tooltip，故重复触发幂等（不会把自身叠加进去）。
+     *
+     * P10 修复（2026-09-20 真机走查发现）：提示此前**只写** `metaLabel.text`，不进 [metaLineHead] /
+     * [metaLineText]。而 `errorCopyButton.isVisible = true` 会改变工具栏理想宽 → topRow 重排 →
+     * 紧接着的 [applyMetaTruncation]（预算变了故不短路）用旧的 `metaLineText` 把提示**当场覆盖**——
+     * 真机走查实测「提示态根本看不到」（红字与复制按钮都没出现），即本项此前只在单测里成立。
+     * 现把提示写进同一套分段缓存并复位 [lastMetaBudget]，可见行统一由 [applyMetaTruncation] 收口渲染
+     * （含宽度预算与 perf 段），提示因此参与布局且不再被覆盖；`toast 语义`不变——下次 [updateMeta]
+     * 重写分段缓存即覆盖。
+     */
+    private fun showEmptyClipboardHint() {
+        val hint = MpSqlVisualizerBundle.message("panel.param.import.result.empty")
+        currentWarning = hint
+        val hintLine = "⚠ $hint"
+        metaLineHead = hintLine
+        metaLineDigest = ""
+        metaLineText = hintLine
+        lastMetaBudget = -1
+        metaLabel.toolTipText = if (metaTooltipBase.isEmpty()) hint else "$hint\n$metaTooltipBase"
+        metaLabel.foreground = JBColor.namedColor("ErrorForeground", JBColor.RED)
+        errorCopyButton?.isVisible = true
+        applyMetaTruncation()
     }
 
     /** P-05：计算当前预览的缓存键（无表名返回 null，不缓存）。 */
@@ -3785,18 +3856,25 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         currentWarning = xmlWarning ?: result.warning
         val warningLine = currentWarning?.let { "   ⚠ $it" } ?: ""
-        // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示，悬停 tooltip 全文）
-        val stackLine = result.stackDigest?.let { sd ->
-            "   " + MpSqlVisualizerBundle.message("panel.meta.stackDigest") + " " +
-                (if (sd.length > 120) sd.substring(0, 120) + "…" else sd)
-        } ?: ""
+        // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示，悬停 tooltip 全文）。
+        // 文案组装抽为纯函数 [buildStackDigestMetaText]（同文件顶层，行为逐字不变）——§3.3 验收项
+        // 单测直断截断长度/截断标记/全文节点，无需真机目视。
+        val stackText = buildStackDigestMetaText(result.stackDigest)
         // T-SqlPerf：性能建议文案单独一行（HTML 换行）。
         // T-PreviewTopOverlap F3：原文分段缓存，label 文本按宽度预算重拼（applyMetaTruncation）
-        metaLineText = meta + warningLine
+        // T-SourceJumpFunnel P5 修复：调用栈摘要（stackText.inlineLine）并入**可见行**——此前只进
+        // tooltipText，验收项前半句「meta 行显示调用栈」在可见行上落空（真机走查第 1 步看不到）。
+        // 该行受 F3 宽度预算约束，故按**主体 / 摘要**两段缓存（见 metaLineHead / metaLineDigest）：
+        // 预算不足时先截摘要、主体仅在自身超预算时才中段省略（复核 20260920 修正——把摘要直接拼进
+        // 单段文本会让 F3 的中段省略在窄窗下连主体一起挤掉，只剩「…」+ 栈底帧，优先级倒挂）。
+        // 完整调用链仍恒在悬停 tooltip 内（tooltip 不受预算影响）。
+        metaLineHead = meta + warningLine
+        metaLineDigest = stackText.inlineLine
+        metaLineText = metaLineHead + metaLineDigest
         metaPerfSegments = buildPerfSegments(result)
-        metaLabel.toolTipText = meta + warningLine + stackLine +
-            (result.stackDigest?.let { "\n" + MpSqlVisualizerBundle.message("panel.meta.stackDigest") + " $it" } ?: "") +
+        metaTooltipBase = meta + warningLine + stackText.inlineLine + stackText.tooltipTail +
             metaPerfSegments.joinToString("；") { it.text }
+        metaLabel.toolTipText = metaTooltipBase
         metaLabel.foreground = if (currentWarning != null) {
             // T-DarkTheme：IDE 标准错误前景命名色（亮暗主题自适应；暗色下非亮红不刺眼）
             JBColor.namedColor("ErrorForeground", JBColor.RED)
@@ -3852,11 +3930,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (budget == lastMetaBudget) return
         lastMetaBudget = budget
         val metrics = metaLabel.getFontMetrics(metaLabel.font)
+        val widthOf = { s: String -> metrics.stringWidth(s) }
+        val line1 = metaLineWithinBudget(metaLineText, metaLineHead, metaLineDigest, widthOf, budget)
         metaLabel.text = if (metaPerfSegments.isEmpty()) {
-            if (metrics.stringWidth(metaLineText) <= budget) metaLineText
-            else ellipsize(metaLineText, metrics, budget)
+            line1
         } else {
-            val line1 = if (metrics.stringWidth(metaLineText) <= budget) metaLineText else ellipsize(metaLineText, metrics, budget)
             "<html>$line1<br>${perfLineHtml(budget, metrics)}</html>"
         }
     }
@@ -3998,6 +4076,24 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-AutoFold F5：登记的原生控制台编辑器引用（支链①接入断言用）。 */
     internal fun nativeConsoleEditorForTest(): Editor? = nativeConsoleEditor
     internal fun psiFileForTest(): PsiFile? = psiFile
+
+    /**
+     * T-PreviewDocLock2 F3 回归守护：预热载体（异步完成态）——测试据此有界等待预热出结果
+     * （headless 无 EDT 泵，预热跑在池线程），再驱动真实消费链断言分支走向。
+     */
+    internal fun prewarmAwaitForTest(): PrewarmAwait<Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>>? =
+        prewarmAwait
+
+    /**
+     * T-PreviewDocLock2 F3 回归守护：预热产物字段（[publishPrewarmProduct] 写入、消费即置 null）。
+     * 断言点：①预热完成后字段与 await 交付值**同实例**（发布侧不变式）；②消费后字段被清空（一次性语义）。
+     */
+    internal fun prewarmedTempFileForTest(): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? =
+        prewarmedTempFile
+
+    /** T-PreviewDocLock2 F3 回归守护：释放编辑器（**不**触发 [clear] 的重预热）——「产物已被消费」降级分支断言用。 */
+    internal fun releaseEditorForTest() = releaseEditor()
+
     internal fun currentForTest(): PreviewResult? = current
     internal fun compactForTest(): Boolean = compactMode
     /** T-PreviewDisplayMode：当前显示模式（参数变更后保持性断言用）。 */
@@ -4091,6 +4187,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun paramFieldForTest(index: Int): JBTextField? = paramFields.getOrNull(index)
     /** T-M24-04：元信息标签文本（警告断言用）。 */
     internal fun metaLabelForTest(): String = metaLabel.text
+
+    /**
+     * T-SourceJumpFunnel §3.3：元信息标签 tooltip（「悬停见完整链」断言用）。
+     *
+     * headless 下无法产生真实鼠标悬停，但 Swing 悬停展示的正是本属性文本，故断言它即锁定
+     * 悬停内容契约（真实悬停动作本身不在自动化范围）。
+     */
+    internal fun metaTooltipForTest(): String? = metaLabel.toolTipText
     /** T-M25.3：错误复制按钮（可见性断言用）。 */
     internal fun errorCopyButtonForTest(): JButton? = errorCopyButton
 
@@ -4244,4 +4348,112 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
          * 纯内存编辑器不烧 EDT；预热完成后下次打开即自愈走回 PSI 高亮/补全路径。 */
         const val PREWARM_WAIT_MS = 60L
     }
+}
+
+// ------------------------------------------------------------------
+// T-SourceJumpFunnel P2-2（§3.3 验收项单测抽取）：调用栈快照文案组装
+// ------------------------------------------------------------------
+
+/**
+ * 调用栈快照的两段文案产物（纯数据，无组件依赖）。
+ *
+ * @property inlineLine meta 提示行内联摘要（`   调用栈: <摘要>`，超长截断；无快照时为空串）
+ * @property tooltipTail 悬停 tooltip 追加的全文节点（`\n调用栈: <完整链>`；无快照时为空串）
+ */
+internal data class StackDigestMetaText(val inlineLine: String, val tooltipTail: String)
+
+/** 调用栈摘要字符上限：超过即截断到该长度并追加 [STACK_DIGEST_ELLIPSIS]。 */
+internal const val STACK_DIGEST_MAX_CHARS = 120
+
+/** 调用栈摘要截断标记。 */
+internal const val STACK_DIGEST_ELLIPSIS = "…"
+
+/**
+ * T-SourceJumpFunnel P2-2：把调用栈快照 [digest] 组装成「meta 行内联摘要（截断展示）」与
+ * 「tooltip 全文节点（完整链不截断）」两段文案；[digest] 为 null 时两段均为空串。
+ *
+ * 由 [SqlPreviewPanel.updateMeta] 调用（内联摘要进 tooltipText 首行，全文节点换行追加其后）。
+ * 抽出为顶层 internal 纯函数仅为让 §3.3 验收项（截断长度/截断标记/全文节点）可直接单测断言，
+ * 组装表达式与原内联实现逐字一致，不改任何展示行为。
+ */
+internal fun buildStackDigestMetaText(digest: String?): StackDigestMetaText {
+    if (digest == null) return StackDigestMetaText(inlineLine = "", tooltipTail = "")
+    val label = MpSqlVisualizerBundle.message("panel.meta.stackDigest")
+    val summary =
+        if (digest.length > STACK_DIGEST_MAX_CHARS) {
+            digest.substring(0, STACK_DIGEST_MAX_CHARS) + STACK_DIGEST_ELLIPSIS
+        } else {
+            digest
+        }
+    return StackDigestMetaText(
+        inlineLine = "   " + label + " " + summary,
+        tooltipTail = "\n" + label + " " + digest,
+    )
+}
+
+// ------------------------------------------------------------------
+// T-SourceJumpFunnel P5 复核修正：meta 行宽度预算组装（纯逻辑，脱 FontMetrics 可直测）
+// ------------------------------------------------------------------
+
+/**
+ * 调用栈摘要在 meta 行里至少要拿到的宽度（px）：约等于标签「   调用栈:」自身宽度 @13pt，
+ * 低于此值就整段不放摘要——宁可让主体独占预算，也不留一个看不出是什么的孤零零省略号。
+ */
+internal const val META_DIGEST_MIN_PX = 56
+
+/**
+ * T-M26.3 中段省略的纯函数形态（[SqlPreviewPanel.ellipsize] 逐字同源）：保留尾部 30%，
+ * 超宽时显示 `头…尾`。[widthOf] 是文本像素宽度度量——注入后本函数与
+ * [metaLineWithinBudget] 都能脱 FontMetrics 单测（测试用「1 字符 = 1px」替身即可）。
+ */
+internal fun ellipsizeMiddle(text: String, widthOf: (String) -> Int, maxWidth: Int): String {
+    val mark = "\u2026"
+    if (widthOf(text) <= maxWidth) return text
+    val tailLen = (text.length * 0.3).toInt().coerceAtLeast(4).coerceAtMost(text.length - 1)
+    val tail = text.takeLast(tailLen)
+    var head = text.length - tailLen
+    while (head > 0 && widthOf(text.take(head) + mark + tail) > maxWidth) head--
+    return text.take(head) + mark + tail
+}
+
+/**
+ * 尾部截断（保留头部）——用于调用栈摘要：摘要**栈顶在左**（[buildStackDigestMetaText] 的摘要自栈顶
+ * 起截），尾部是信息量最低的栈底帧，故超宽时截尾，而非 [ellipsizeMiddle] 的中段省略。
+ */
+internal fun clipTailToWidth(text: String, widthOf: (String) -> Int, maxWidth: Int): String {
+    if (widthOf(text) <= maxWidth) return text
+    val mark = "\u2026"
+    var end = text.length
+    while (end > 0 && widthOf(text.take(end) + mark) > maxWidth) end--
+    return if (end <= 0) "" else text.take(end) + mark
+}
+
+/**
+ * T-SourceJumpFunnel P5 复核修正：meta 行在宽度预算内的组装——**主体优先，摘要吃剩余宽度**。
+ *
+ * P5 把调用栈摘要并入可见行后，若仍把「主体 + 摘要」当**单段文本**交给 [ellipsizeMiddle]
+ * （保留尾部 30%），窄窗下主体会被整段挤掉、可见行只剩「…」+ 栈底帧——主体（表名 / wrapper 类型）
+ * 是这一行的主信息，栈底恰是调用链里信息量最低的一端，优先级倒挂。复核（20260920）实测默认宽度
+ * 预算仅够 15~25 字符，而摘要上限 120 字符，故必然触发。
+ *
+ * 组装规则：主体自身超预算 → 主体中段省略（F3 原行为）；主体放得下 → 摘要按剩余宽度截尾；
+ * 剩余不足 [META_DIGEST_MIN_PX] → 整段丢弃摘要。[digest] 为空（无调用栈快照）时逐字退回 F3
+ * 原行为，渲染不变。
+ *
+ * @param full   完整行（主体 + 摘要）——放得下即整段返回（与改前逐字节一致）
+ * @param head   主体（meta + 警示行）
+ * @param digest 调用栈内联摘要（`   调用栈: <摘要>`；无快照时为空串）
+ */
+internal fun metaLineWithinBudget(
+    full: String,
+    head: String,
+    digest: String,
+    widthOf: (String) -> Int,
+    budget: Int,
+): String {
+    if (widthOf(full) <= budget) return full
+    if (digest.isEmpty()) return ellipsizeMiddle(head, widthOf, budget)
+    val remain = budget - widthOf(head)
+    if (remain < META_DIGEST_MIN_PX) return ellipsizeMiddle(head, widthOf, budget)
+    return head + clipTailToWidth(digest, widthOf, remain)
 }

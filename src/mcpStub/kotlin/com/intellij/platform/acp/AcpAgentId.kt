@@ -1,7 +1,13 @@
-package com.intellij.ml.llm.agents.acp.api
+package com.intellij.platform.acp
 
 /**
- * T-AcpMcpTransport 编译期桩（stub）：AI Assistant 插件（com.intellij.ml.llm）的 ACP agent 标识类型。
+ * T-AcpMcpTransport 编译期桩（stub）：ACP agent 标识类型。
+ *
+ * **归属修正（2026-09-20）**：该类型的真类属**平台**（platform-acp-plugin 的
+ * `lib/modules/intellij.platform.acp.jar`），**不在 ml-llm 里**（全量查过，ml-llm 各 jar 无此类）；
+ * ml-llm 的 `AcpIdeaMcpTransportProvider.getTransport` 正是 `import com.intellij.platform.acp.AcpAgentId`。
+ * 原桩误置于 `com.intellij.ml.llm.agents.acp.api` → 与真接口签名不符，编译期 override 失配、
+ * 运行期该 impl 也无法实现真接口（EP 类链接失败，SSE 绕行静默失效）。故迁至平台包。
  *
  * **为什么存在桩**：与同源集内 mcpStub 的 McpToolset 同一问题——基线构建平台 IU 2024.3.7.1（243）
  * 不含 AI Assistant 插件，而本机 262 的 ml-llm 模块 jar 类文件是 major 69（Java 25），JDK 17 编译
