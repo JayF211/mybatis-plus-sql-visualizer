@@ -299,7 +299,8 @@ class SqlPreviewService(private val project: Project) {
                     // 独有字段被静默丢弃；跨方言渲染与否由 SqlGenerator 按 [Dialect.supportsDeleteLimit] 决定）
                     DeleteStatement(table, parsed.conditions, limit = parsed.limit)
                 }
-                else -> ConverterRegistry.convert(located.chain, table) ?: return null
+                // T-FS-04：显式传本服务绑定的 project（converter 内类名兜底推断的项目级表配置口径）
+                else -> ConverterRegistry.convert(located.chain, table, project) ?: return null
             }
             // T-M15-07：逻辑删除注入（@TableLogic 实体 + 配置开启）——查询/计数/exists/删除自动追加 `AND deleted = 0`
             // （对齐 MyBatis-Plus 全局 logic-delete-field 配置；UPDATE 不注入——更新可能修改 deleted 本身）
@@ -526,9 +527,11 @@ class SqlPreviewService(private val project: Project) {
         val table = JpaEntityResolver().resolve(entityClass) ?: return null
         val partTree = PartTreeParser.parse(methodInfo.methodName)
         var statement = DerivedQueryConverter.convert(partTree, table)
+        // T-PS5-03：入口求一次方言（分页分析/方法级增强/结果构建共用同一实例，不再各求一次）
+        val dialect = currentDialect()
         // T-J10：Pageable/Page/Sort/Limit 参数全路径——Pageable/Page → LIMIT 占位（调用点形态静态求值）、
         // Sort → ORDER BY（Sort.by 字面量内联）、Limit（3.2） → 仅 LIMIT 无 OFFSET
-        val pageSort = JpaQueryEnhancer.evaluatePageSort(method, callArgs, currentDialect(), table)
+        val pageSort = JpaQueryEnhancer.evaluatePageSort(method, callArgs, dialect, table)
         if (pageSort != null) {
             var select = statement as? SelectStatement
             pageSort.limit?.let { limit -> select = select?.copy(limit = limit) }
@@ -559,8 +562,9 @@ class SqlPreviewService(private val project: Project) {
             method, sql, table, native = false,
             limitAppliedInModel = true,
             pageNotes = pageSort?.notes ?: emptyList(),
+            dialectOverride = dialect,
         )
-        return buildJpaPreviewResult(statement, enhancedSql, table.tableName, paramNames, method, inClauseParams)
+        return buildJpaPreviewResult(statement, enhancedSql, table.tableName, paramNames, method, inClauseParams, dialectOverride = dialect)
     }
 
     /**
@@ -585,9 +589,12 @@ class SqlPreviewService(private val project: Project) {
         native: Boolean,
         limitAppliedInModel: Boolean = false,
         pageNotes: List<String>? = null,
+        dialectOverride: Dialect? = null,
     ): String = runCatching {
         if (method == null) return@runCatching sql
-        val dialect = currentDialect()
+        // T-PS5-03：方言由调用入口求一次后透传（未传则本地求一次，语义不变）——单次预览的
+        // `DialectRegistry.effective` 调用数由「增强/分页/结果构建各一次」收敛为入口一次
+        val dialect = dialectOverride ?: currentDialect()
         val notes = mutableListOf<String>()
         var enhanced = sql
 
@@ -704,8 +711,10 @@ class SqlPreviewService(private val project: Project) {
         } else {
             null
         }
+        // T-PS5-03：入口求一次方言（分页分析/方法级增强/结果构建共用）
+        val dialect = currentDialect()
         // T-J10：分页/排序参数占位名（无参数时空列表，存量行为零变化）
-        val extraParamNames = JpaQueryEnhancer.evaluatePageSort(method, null, currentDialect(), table)
+        val extraParamNames = JpaQueryEnhancer.evaluatePageSort(method, null, dialect, table)
             ?.extraParamNames ?: emptyList()
         val allParamNames = paramNames + extraParamNames
         // 原生 SQL：转换命名参数 :param → ? 后展示（保持可读性）
@@ -715,7 +724,7 @@ class SqlPreviewService(private val project: Project) {
             val inParams = JpqlConverter.findInClauseParams(jpql)
             val hints = if (inParams.isNotEmpty()) allParamNames.map { ParamHint(quote = true, inList = it in inParams) } else emptyList()
             // T-J15：@EntityGraph 对原生查询运行时不生效 → 仅注释说明；LIMIT/@Lock/notes 照常
-            val enhancedSql = applyJpaMethodEnhancements(method, convertedSql, table, native = true)
+            val enhancedSql = applyJpaMethodEnhancements(method, convertedSql, table, native = true, dialectOverride = dialect)
             return PreviewResult(
                 sql = enhancedSql,
                 // 无增强时保持旧字节级行为（convertedSql 原样），有增强时压缩多行空白
@@ -735,7 +744,7 @@ class SqlPreviewService(private val project: Project) {
         // Wave1 第三参 project：激活 PSI 级 JOIN ON（@JoinColumn 真实化）与子查询实体映射
         val result = JpqlConverter.convert(jpql, table, project)
         // T-J10/J15/J22：方法级增强（LIMIT/ORDER BY/FOR UPDATE/EntityGraph JOIN/notes/count SQL）
-        val enhancedSql = applyJpaMethodEnhancements(method, result.sql, table, native = false)
+        val enhancedSql = applyJpaMethodEnhancements(method, result.sql, table, native = false, dialectOverride = dialect)
         return buildJpaPreviewResult(
             statement = result.statement,
             convertedSql = enhancedSql,
@@ -743,6 +752,7 @@ class SqlPreviewService(private val project: Project) {
             paramNames = allParamNames,
             method = method,
             inClauseParams = result.inClauseParams,
+            dialectOverride = dialect,
         )
     }
 
@@ -800,8 +810,10 @@ class SqlPreviewService(private val project: Project) {
         val hostMethod = PsiTreeUtil.getParentOfType(anchor, PsiMethod::class.java)
         // 3. 参数名：从包含 CriteriaQuery 的宿主方法参数列表提取
         val paramNames = hostMethod?.parameterList?.parameters?.map { it.name } ?: emptyList()
+        // T-PS5-03：入口求一次方言（分页分析/方法级增强/结果构建共用）
+        val dialect = currentDialect()
         // T-J10：宿主方法分页参数 → LIMIT 子句（criteria 路径是语句模型，直接挂 limit）
-        val pageSort = JpaQueryEnhancer.evaluatePageSort(hostMethod, null, currentDialect(), null)
+        val pageSort = JpaQueryEnhancer.evaluatePageSort(hostMethod, null, dialect, null)
         if (pageSort != null) {
             val select = statement as? SelectStatement
             val limited = pageSort.limit?.let { limit -> select?.copy(limit = limit) } ?: select
@@ -817,9 +829,10 @@ class SqlPreviewService(private val project: Project) {
             hostMethod, sql, resolvedTable, native = false,
             limitAppliedInModel = true,
             pageNotes = pageSort?.notes ?: emptyList(),
+            dialectOverride = dialect,
         )
         val allParamNames = paramNames + (pageSort?.extraParamNames ?: emptyList())
-        return buildJpaPreviewResult(statement, enhancedSql, tableName, allParamNames, hostMethod)
+        return buildJpaPreviewResult(statement, enhancedSql, tableName, allParamNames, hostMethod, dialectOverride = dialect)
     }
 
     /**
@@ -844,9 +857,11 @@ class SqlPreviewService(private val project: Project) {
                 val table = entityClass?.let { JpaEntityResolver().resolve(it) }
                 val result = JpqlConverter.convert(named.query, table, project)
                 val paramNames = extractParamNamesFromHql(named.query)
+                // T-PS5-03：本分支入口求一次方言
+                val dialect = currentDialect()
                 // T-J10/J15/J22：宿主方法级增强
-                val enhancedSql = applyJpaMethodEnhancements(info.method, result.sql, table, native = false)
-                val extraParams = JpaQueryEnhancer.evaluatePageSort(info.method, null, currentDialect(), table)
+                val enhancedSql = applyJpaMethodEnhancements(info.method, result.sql, table, native = false, dialectOverride = dialect)
+                val extraParams = JpaQueryEnhancer.evaluatePageSort(info.method, null, dialect, table)
                     ?.extraParamNames ?: emptyList()
                 return buildJpaPreviewResult(
                     statement = result.statement,
@@ -855,6 +870,7 @@ class SqlPreviewService(private val project: Project) {
                     paramNames = paramNames + extraParams,
                     method = info.method,
                     inClauseParams = result.inClauseParams,
+                    dialectOverride = dialect,
                 )
             }
             // T-H3：Java @NamedQuery 未命中 → hbm 命名查询 fallback（hbm 纯 POJO 项目无注解可查）
@@ -877,9 +893,11 @@ class SqlPreviewService(private val project: Project) {
         val paramNames = info.parameters.map { if (it.isPositional) it.valueExpr else it.paramName }.ifEmpty {
             extractParamNamesFromHql(info.hql)
         }
+        // T-PS5-03：本分支入口求一次方言
+        val dialect = currentDialect()
         // T-J10/J15/J22：宿主方法级增强
-        val enhancedSql = applyJpaMethodEnhancements(info.method, result.sql, table, native = false)
-        val extraParams = JpaQueryEnhancer.evaluatePageSort(info.method, null, currentDialect(), table)
+        val enhancedSql = applyJpaMethodEnhancements(info.method, result.sql, table, native = false, dialectOverride = dialect)
+        val extraParams = JpaQueryEnhancer.evaluatePageSort(info.method, null, dialect, table)
             ?.extraParamNames ?: emptyList()
         // 关键：使用 HqlConverter 转换后的 SQL 字符串（含 ? 占位符），而非从 statement 重新生成。
         return buildJpaPreviewResult(
@@ -889,6 +907,7 @@ class SqlPreviewService(private val project: Project) {
             paramNames = paramNames + extraParams,
             method = info.method,
             inClauseParams = result.inClauseParams,
+            dialectOverride = dialect,
         )
     }
 
@@ -904,9 +923,11 @@ class SqlPreviewService(private val project: Project) {
         }
         // 解析实体表名（用于显示）
         val tableName = resolveHqlEntityTable(info.entityClass) ?: info.entityClassName ?: ""
+        // T-PS5-03：入口求一次方言（方法级增强与分页分析共用）
+        val dialect = currentDialect()
         // T-J10/J15/J22：方法级增强（native 路径：EntityGraph 仅注释说明）
-        val enhancedSql = applyJpaMethodEnhancements(info.method, sql, null, native = true)
-        val extraParams = JpaQueryEnhancer.evaluatePageSort(info.method, null, currentDialect(), null)
+        val enhancedSql = applyJpaMethodEnhancements(info.method, sql, null, native = true, dialectOverride = dialect)
+        val extraParams = JpaQueryEnhancer.evaluatePageSort(info.method, null, dialect, null)
             ?.extraParamNames ?: emptyList()
         val allParamNames = paramNames + extraParams
         return PreviewResult(
@@ -1069,7 +1090,9 @@ class SqlPreviewService(private val project: Project) {
                 val table = resolveHqlTable(null, entityName, query.queryText)
                 // T-HqlInhCols：hbm 项目实体别名多由 XML <entity-name> 承载，注解读不到即 null，安全
                 val result = HqlConverter.convert(query.queryText, table, project)
-                val enhancedSql = applyJpaMethodEnhancements(hostMethod, result.sql, table, native = false)
+                // T-PS5-03：本分支入口求一次方言
+                val dialect = currentDialect()
+                val enhancedSql = applyJpaMethodEnhancements(hostMethod, result.sql, table, native = false, dialectOverride = dialect)
                 buildJpaPreviewResult(
                     statement = result.statement,
                     convertedSql = enhancedSql,
@@ -1077,6 +1100,7 @@ class SqlPreviewService(private val project: Project) {
                     paramNames = paramNames,
                     method = hostMethod,
                     inClauseParams = result.inClauseParams,
+                    dialectOverride = dialect,
                 )
             }
         }
@@ -1202,7 +1226,10 @@ class SqlPreviewService(private val project: Project) {
         paramNames: List<String>,
         method: PsiMethod?,
         inClauseParams: Set<String> = emptySet(),
+        dialectOverride: Dialect? = null,
     ): PreviewResult {
+        // T-PS5-03：方言由调用入口透传（未传则本地求一次）——见 applyJpaMethodEnhancements 同款说明
+        val dialect = dialectOverride ?: currentDialect()
         val views = collectConditionViews(statement)
         // 参数回填提示：根据方法签名参数类型判定是否需要引号
         // - IN 子句参数：数值类型不加引号，字符串加引号
@@ -1226,7 +1253,7 @@ class SqlPreviewService(private val project: Project) {
             tableName = tableName,
             warning = buildJpaWarning(statement),
             columns = (statement.table as? TableInfo)?.allColumnNames ?: emptyList(),
-            previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, currentDialect(), formatSql(), views),
+            previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, dialect, formatSql(), views),
         )
     }
 
@@ -1724,9 +1751,12 @@ class SqlPreviewService(private val project: Project) {
      * MPJ 类型由此保留**主表别名与 JOIN**（`selectJoinCount`/`exists` 的联表过滤语义：
      * 单表 QueryWrapperParser 会静默丢弃 join 调用，INNER JOIN 的行数语义会丢失）；
      * 非 SelectStatement 结果（异常路径）回退单表解析。与 `else -> ConverterRegistry.convert` 分支同源。
+     *
+     * T-FS-04：显式传本服务绑定的 [project]——converter 内「关联/collection 子表实体类 PSI 不可解析」
+     * 的类名兜底推断据此读项目级表配置（不再受「首个打开项目」影响）。
      */
     private fun parseQueryLike(chain: cn.song.mybatisplus.visualizer.model.WrapperChain, table: TableInfo): SelectStatement =
-        (ConverterRegistry.convert(chain, table) as? SelectStatement) ?: QueryWrapperParser(table).parse(chain)
+        (ConverterRegistry.convert(chain, table, project) as? SelectStatement) ?: QueryWrapperParser(table).parse(chain)
 
     /**
      * 逻辑删除注入状态（T-M20-05）：MPJ 官方六方法按源码顺序求值的结果，驱动 [injectLogicDeleteCondition]。
@@ -2094,6 +2124,14 @@ class SqlPreviewService(private val project: Project) {
                 val result = try {
                     ReadAction.compute<PreviewResult?, Throwable> { compute() }
                 } catch (e: Throwable) {
+                    // T-FatalPassthrough T-FP-02b（独立复核条件项，收口原豁免）：本处是**预览主链**
+                    // （点击/快捷键 → PSI 转换 → 弹窗），不是「可选能力探测」——原豁免理由把主链写成
+                    // 探测，属借豁免放走真该收口的站点。fatal（VME/LinkageError/ThreadDeath）透传给池
+                    // 线程平台处理器（原状：任何失败都返回 null，用户只看到「未找到可转换的 Wrapper」
+                    // 提示，真实异常零日志且归因错误——真机排障无入口）。
+                    // 非 fatal 仍返回 null（既有降级语义逐字不变），但补一条 WARN 留排查锚点。
+                    if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(e)) throw e
+                    LOG.warn("[M36] previewAsync compute FAILED: ${e.javaClass.simpleName}: ${e.message}")
                     null
                 }
                 // T-ExecSlowOps F2：确定性 SQL（无参数开关/批量/XML 模型）预览成功即后台预热
@@ -2109,6 +2147,12 @@ class SqlPreviewService(private val project: Project) {
                         runCatching {
                             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(project, result.sql)
                         }.onFailure {
+                            // T-FatalPassthrough T-FP-02b（独立复核阻断 2 同族）：本 runCatching 包住整条
+                            // 预热链——不放行 fatal 会让 DataSourceSelector 预热链的 6 处透传（缓存命中
+                            // 刷新 / 写盘 / pre-refresh 收敛 / refresh / syncVf / findPsi）全部作废。
+                            // 非 fatal 仍 warn 降级（fire-and-forget 语义不变）；fatal 透传到池线程
+                            // 平台处理器记录现场。
+                            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(it)) throw it
                             LOG.warn("[M36] exec prewarm dispatch failed: ${it.javaClass.simpleName}: ${it.message}")
                         }
                     }

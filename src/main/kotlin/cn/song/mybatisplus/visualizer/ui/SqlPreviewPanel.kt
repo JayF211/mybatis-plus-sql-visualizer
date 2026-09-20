@@ -15,6 +15,8 @@ import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
+import cn.song.mybatisplus.visualizer.sql.PlaceholderCardinality
+import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog
 import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction
@@ -27,6 +29,7 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
+import cn.song.mybatisplus.visualizer.ui.inlay.PreviewInlayScope
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
@@ -126,8 +129,26 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // T-PreviewTopOverlap F3：元信息原文缓存——metaLineText 第一行（meta+警示，纯文本）、
     // metaPerfSegments 第二行分段（可见文本+颜色）；tooltip 恒全文，label 文本按预算重拼
     private var metaLineText: String = ""
+
+    /**
+     * F3 分段缓存（P5 复核修正）：meta 行**主体**（meta + 警示行）——宽度预算下恒优先保留。
+     * 与 [metaLineDigest] 分段缓存的原因见 [metaLineWithinBudget]（摘要不得挤掉主体）。
+     */
+    private var metaLineHead: String = ""
+
+    /** F3 分段缓存（P5 复核修正）：meta 行尾部的调用栈内联摘要——预算不足时先截它。 */
+    private var metaLineDigest: String = ""
     private var metaPerfSegments: List<MetaPerfSegment> = emptyList()
     private var lastMetaBudget: Int = -1
+
+    /**
+     * T-SourceJumpFunnel P6 修复：meta 行 tooltip 的**基线文本**（[updateMeta] 每次预览重建）。
+     *
+     * 行内提示态（参数导入空剪贴板）需要临时改写可见行与 tooltip，但 tooltip 是「悬停见完整调用链」
+     * 的唯一载体（§3.3 后半句），不能被提示覆写丢掉——故提示态按「提示 + 换行 + 基线」拼接，
+     * 本字段是拼接的基线来源（也保证提示重复触发时幂等，不会叠加自身）。
+     */
+    private var metaTooltipBase: String = ""
 
     /** F3：perf 建议分段（可见文本 + HTML 颜色值），截断时按预算丢尾段。 */
     private data class MetaPerfSegment(val text: String, val color: String)
@@ -200,6 +221,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** M34 回归修复：预览 PSI 的临时 VirtualFile（PsiDocumentManager 追踪需真实 VFS 文件），releaseEditor 时删除。 */
     @Volatile
     private var previewTempFile: com.intellij.openapi.vfs.VirtualFile? = null
+    /**
+     * T-FixN2：本面板**已创建**的预览临时文件登记表（[projectPreviewFile] 建文件即登记，
+     * [releaseEditor] 统一回收）。与 [previewTempFile] 的分工：后者是「当前在用/最近一次预热」
+     * 的那一个（唯一名字后仍可能被竞态里晚到的预热覆盖），本表是「本面板创建过的全部」——
+     * 覆盖「预热已发布但从未被装配消费」与「两次预热竞态中晚到的那一个」两类无主文件。
+     *
+     * 只登记本面板自己创建的文件（含跨会话同名残留的兜底复用分支），故 [releaseEditor] 的删除
+     * **不会**误删其它面板/其它 IDE 会话正在使用的预览文件（同项目多开进程各有自己的 pid 段）。
+     */
+    private val previewTempFilesCreated = java.util.concurrent.ConcurrentHashMap.newKeySet<java.io.File>()
     /** T-M36.6-03：后台预热产物（vf+PSI 就绪对），createEditor 优先消费——EDT 零慢操作。 */
     @Volatile
     private var prewarmedTempFile: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? = null
@@ -213,10 +244,22 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-GifRerecord：预热失败标志——await 快速降级用，避免 EDT 空等 2s 后再走降级路径。 */
     @Volatile
     private var prewarmFailed = false
-    /** T-M36.6-03：面板释放标志——预热线程晚于 dispose 完成时丢弃产物并删除文件。 */
+    /** T-M36.6-03：面板释放标志——预热线程晚于 dispose 完成时丢弃产物并删除文件。
+     *  T-StabilityTail 起语义扩为「放弃预热」：面板 dispose 与**项目开始销毁**（见
+     *  [prewarmLifecycleGate]）都置它，预热线程在下一个检查点放弃（不再取服务）。 */
     @Volatile
     private var previewDisposed = false
-    /** T-PreviewExecDs-01c：已 setMapping 方言的预览 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。 */
+
+    /**
+     * T-StabilityTail（窗口内异步泄漏治理）：预热任务的「项目开始销毁」取消门。
+     *
+     * 注册进 `ProjectEx.getEarlyDisposable()` 的 Disposable 树（见 [bindPrewarmToProjectLifecycle]），
+     * 项目开始销毁时由平台回收并置 [previewDisposed]，使构造期/`clear()` 派发的池线程在窗口内
+     * 不再取服务。面板 dispose 时解除登记（不留指向本面板的项目树引用）；null = 未挂或已解除。
+     */
+    private var prewarmLifecycleGate: Disposable? = null
+    /** T-PreviewExecDs-01c：已 setMapping 方言的预览 vf（同对象幂等短路，避免每次预览重设方言触发 push all dumb）。
+     *  T-FixN2 起该 vf 是**预览目录**（不再是单个文件）——见 [mapPreviewDialectBeforePsi]。 */
     @Volatile
     private var previewDialectMappedVf: com.intellij.openapi.vfs.VirtualFile? = null
     /** F-46：当前代码位置（文件名:行号），来源列默认值；null 表示未知（日志/历史等无锚点场景）。 */
@@ -345,6 +388,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private var errorCopyButton: JButton? = null
     private var currentWarning: String? = null
 
+    /**
+     * T-PSG-04（N-33）：最近一次参数回填的「`?` 位点数 vs 参数条数」对账标注——不等时非 null。
+     *
+     * 只在 [backfillParamsBySource] 里按串感知位点数与 sources 条数计算（每次回填都重算，不留
+     * 陈旧值）；执行前由 [warnOnPlaceholderMismatch] 读走并如实登记日志。**不阻断**任何流程
+     * （与我方既有 `${}` 闸门「确认/标注」档一致，不引入拒绝档）。
+     */
+    private var placeholderReconciliation: String? = null
+
     // T-PreviewUx-Pack #2：诚实降级横幅——渲染警示（RENDER_WARNING）与 T-PreviewExecDs
     // 降级链层级提示（DEGRADED）统一收口；降级提示优先级高于渲染警示（见 DegradationBanner.Kind）
     private val degradationBanner = DegradationBanner().apply {
@@ -367,6 +419,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      */
     @Volatile
     private var dollarRawConfirmedInSession = false
+
+    /**
+     * T-PC2-04（D1=B 定案）：本面板实例内已确认过含 UNKNOWN 参数执行（会话级记忆）。
+     *
+     * 语义与 [dollarRawConfirmedInSession] 同款（同面板确认一次后不再重复弹；执行与 EXPLAIN
+     * 共用同一记忆，两条入口是同一道门）；记忆随面板实例存活，面板 dispose 即失效。
+     * @Volatile：执行入口可能在非 EDT 触发（弹窗按钮回调），读写可见性保守处理。
+     */
+    @Volatile
+    private var unknownParamsConfirmedInSession = false
 
     // P-05：参数历史缓存 + debounce 写回
     private val paramHistoryCache = ParamHistoryCache()
@@ -481,12 +543,36 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
         // T-PerfTail #2：预热线程产出 PrewarmAwait 完成态（成功 complete / 失败 fail）——
         // 消费侧（createEditor）不再 EDT sleep-poll
+        // T-FixN1（N1 写安全）：派发模态由 any() 改 defaultModalityState()（写安全模态）。回调体是
+        // resolvePreviewEditorSource 的 onReady/onFallback → assemblePreviewEditor，其内**写文档**
+        // （WriteCommandAction { d.setText(sql) } + commitDocument）——而 any() **恒 write-unsafe**：
+        // TransactionGuardImpl 的 myWriteSafeModalities 只预置 nonModal→true（构造期），
+        // wrapLaterInvocation 只对 isWriteSafeModality(state)==true 的 runnable 套 runWithWritingAllowed
+        // （any() 走 else 分支直接 run，myWritingAllowed 保持 false），于是 DocumentImpl.assertWriteAccess
+        // → assertWriteActionAllowed 在 myWritingAllowed=false 时 LOG.error「Write-unsafe context!」
+        // （真机必现：重开预览第 2 次即被平台 Suppressed 计数；243 平台 jar 反编译逐帧实证）。
+        // 代价：模态对话框挂起期间派发推迟到模态关闭——面板本就在模态框后面（用户看不见），观感代价
+        // 接近零。且冷态派发发生在预热池线程（无模态进度上下文），defaultModalityState() 常态落
+        // NON_MODAL（恒 write-safe），与 11e2671 选 any() 的唯一理由「派发不被模态挡住、EDT 零阻塞」
+        // 不冲突——该提交信息里没有「必须在模态对话框挂起期间完成装配」的场景。
+        // 边界：控制台挂载/回填链路（M36.5，本文件 onConsole 回调的 post-attach 重渲染等站点）的
+        // any()/nonModal() 是另一条链路，不在本改动范围。
         val await = PrewarmAwait<Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>>(PREWARM_WAIT_MS) { runnable ->
-            ApplicationManager.getApplication().invokeLater(runnable, com.intellij.openapi.application.ModalityState.any())
+            ApplicationManager.getApplication().invokeLater(
+                runnable,
+                com.intellij.openapi.application.ModalityState.defaultModalityState(),
+            )
         }
         prewarmAwait = await
+        // T-StabilityTail：把「项目开始销毁」接到取消门——池线程不得比项目活得更久
+        bindPrewarmToProjectLifecycle()
         ApplicationManager.getApplication().executeOnPooledThread {
-            if (previewTempFile != null || previewDisposed) {
+            // T-PrewarmBudget（2026-09-20）：预热**自身耗时**打点起点——此前全链无完成打点，
+            // 真机实测报告只能靠「方言映射行出现」与「临时文件被删」两条间接判据夹逼出区间
+            // （最紧一次 ∈ (280ms, 1071ms]），无法定 `PREWARM_WAIT_MS` 预算。本打点即补这个洞：
+            // 预热完成/失败时各记一行带耗时，用于在空闲机取样本后定预算。
+            val prewarmStartedAt = System.nanoTime()
+            if (previewTempFile != null || prewarmAbandoned()) {
                 await.fail(IllegalStateException("prewarm skipped: disposed or already prepared"))
                 return@executeOnPooledThread
             }
@@ -497,7 +583,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 val io = projectPreviewFile() ?: run {
                     prewarmFailed = true
                     await.fail(IllegalStateException("project preview file unavailable"))
-                    LOG.warn("[M36] prewarm FAILED: project preview file unavailable (project/basePath null or mkdirs false)")
+                    LOG.warn("[M36] prewarm FAILED in ${prewarmElapsedMs(prewarmStartedAt)}ms: project preview file unavailable (project/basePath null or mkdirs false)")
                     return@executeOnPooledThread
                 }
                 // T-GifRerecord：VFS 忙时 refreshAndFindFileByIoFile 偶发查不到新文件（2026.2 沙盒
@@ -506,7 +592,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 val lfs = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
                 var vf = lfs.refreshAndFindFileByIoFile(io)
                 var retries = 0
-                while (vf == null && retries < 3 && !previewDisposed) {
+                while (vf == null && retries < 3 && !prewarmAbandoned()) {
                     Thread.sleep(100L * (retries + 1))
                     vf = lfs.refreshAndFindFileByIoFile(io)
                     retries++
@@ -514,42 +600,159 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 if (vf == null) {
                     prewarmFailed = true
                     await.fail(IllegalStateException("VFS refresh null after ${retries + 1} tries"))
-                    LOG.warn("[M36] prewarm FAILED: VFS refresh null after ${retries + 1} tries (${io.path}, exists=${io.exists()})")
+                    LOG.warn("[M36] prewarm FAILED in ${prewarmElapsedMs(prewarmStartedAt)}ms: VFS refresh null after ${retries + 1} tries (${io.path}, exists=${io.exists()})")
                     return@executeOnPooledThread
                 }
-                if (previewDisposed) {
+                if (prewarmAbandoned()) {
                     java.io.File(vf.path).delete()
                     await.fail(IllegalStateException("disposed during prewarm"))
                     return@executeOnPooledThread
                 }
                 val proj = project ?: return@executeOnPooledThread
+                // T-StabilityTail：紧贴取服务再判一次——从上一处判定到这里之间项目可能已开始销毁
+                // （closeProject 的写动作与本线程并行）；窗口内首次创建服务失败会把该服务在该项目
+                // 实例上永久毒化（`LazyInstanceHolder` 缓存 CannotInitialize 后每次 getService 重抛，
+                // 见 config/SectionConfigurable.kt KDoc），故宁可少取一次服务。
+                if (prewarmAbandoned()) {
+                    await.fail(IllegalStateException("abandoned before service lookup"))
+                    return@executeOnPooledThread
+                }
                 // T-PreviewExecDs-01c：方言映射须在 findFile/PSI 创建前（映射决定 PSI 语言，
                 // 创建后再映射需 push 重建；exec 路径同款顺序）
                 mapPreviewDialectBeforePsi(proj, vf)
-                val psi = com.intellij.openapi.application.ReadAction.compute<PsiFile, Throwable> {
-                    com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
-                } ?: run {
+                // T-StabilityTail：判据放读动作**内部**才管用——平台读动作可被 closeProject 的写动作
+                // 阻塞，放行时窗口已开（`ProjectImpl.isDisposed()` 在窗口内为真）；在外面判会漏掉这条窄缝，
+                // 而漏掉的代价就是下面 `PsiManagerImpl.findFile → FileManagerImpl.dispatchPendingEvents`
+                // 把 "Project is already disposed" 记成 ERROR（测试夹具里升格为 TestLoggerAssertionError）。
+                val psi = com.intellij.openapi.application.ReadAction.compute<PsiFile?, Throwable> {
+                    if (prewarmAbandoned()) null else com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
+                }
+                if (psi == null) {
+                    // 放弃（项目/面板已销毁）与真失败分开记账：前者不置 prewarmFailed、不记 WARN——
+                    // 它是正常生命周期事件，不是预热故障
+                    if (prewarmAbandoned()) {
+                        await.fail(IllegalStateException("abandoned during findFile"))
+                        return@executeOnPooledThread
+                    }
                     prewarmFailed = true
                     await.fail(IllegalStateException("PsiManager.findFile null for ${vf.name}"))
-                    LOG.warn("[M36] prewarm FAILED: PsiManager.findFile null for ${vf.name}")
+                    LOG.warn("[M36] prewarm FAILED in ${prewarmElapsedMs(prewarmStartedAt)}ms: PsiManager.findFile null for ${vf.name}")
                     return@executeOnPooledThread
                 }
                 previewTempFile = vf
-                prewarmedTempFile = vf to psi
-                await.complete(vf to psi)
+                publishPrewarmProduct(await, vf to psi, prewarmStartedAt)
             }.onFailure { e ->
                 prewarmFailed = true
                 await.fail(e)
-                LOG.warn("[M36] prewarm FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
+                LOG.warn(
+                    "[M36] prewarm FAILED in ${prewarmElapsedMs(prewarmStartedAt)}ms: " +
+                        "${e.javaClass.simpleName}: ${e.message}",
+                    e,
+                )
             }
         }
     }
 
     /**
-     * T-PreviewExecDs-01a：项目内预览临时文件——`<project>/.idea/sql-visualizer/preview/mpsql-preview.sql`。
+     * T-PreviewDocLock2 F3 回归修复：预热产物**发布**——字段与 await 必须拿到**同一个 Pair 实例**。
+     *
+     * 消费侧 [assemblePreviewEditor] 以「引用相等 + 随即置 null」表达「产物尚未被消费」，
+     * 故发布侧不能把 `vf to psi` 写两遍（原实现 `prewarmedTempFile = vf to psi` 与
+     * `await.complete(vf to psi)` 各造一个实例 → `===` 恒假 → 主路径恒判「产物不可用」，
+     * 预览对话框每次打开都降级到内存 PSI 并挂降级横幅）。抽成本方法后「同一实例」由单次
+     * 构造保证，并由 SqlPreviewPanelPrewarmConsumeTest 以真实消费链（预热产物就绪 → showResult
+     * → 编辑器文档落在项目内临时文件上）锁死该不变式。
+     */
+    private fun publishPrewarmProduct(
+        await: PrewarmAwait<Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>>,
+        product: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>,
+        startedAtNanos: Long,
+    ) {
+        // T-PrewarmBudget（2026-09-20）：预热**成功**耗时打点——消费侧预算 `PREWARM_WAIT_MS` 只有在
+        // 「预热耗时 < 预算」时才可能走主路径；此前无此打点，预算取值只能靠间接夹逼。判读口径：
+        // 本行耗时 > PREWARM_WAIT_MS ⇒ 该次打开必然落 onFallback 降级（可与紧随其后的
+        // `[M36] in-memory PSI preview document created` 对照）。
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .info(
+                "[M36] prewarm done in ${prewarmElapsedMs(startedAtNanos)}ms " +
+                    "(file=${product.first.name}, psi=${product.second.name})",
+            )
+        prewarmedTempFile = product
+        await.complete(product)
+    }
+
+    /** T-PrewarmBudget：预热打点用耗时（毫秒）；`nanoTime` 差值，不受系统时钟回拨影响。 */
+    private fun prewarmElapsedMs(startedAtNanos: Long): Long =
+        (System.nanoTime() - startedAtNanos) / 1_000_000L
+
+    /**
+     * T-StabilityTail：把「项目开始销毁」接到预热取消门（[prewarmAbandoned] 的项目侧判据）。
+     *
+     * **为什么挂 `ProjectEx.getEarlyDisposable()`**——平台 KDoc 原文即此用途：
+     * 「a Disposable that will be disposed right after container started to be disposed … In unit test
+     *   mode light project is not disposed, but this disposable is disposed for each test. So, you don't
+     *   need to have another disposable and can use this one instead.」
+     * 两个触发点：①真机关闭项目——`ProjectManagerImpl.closeProject` 非 light 分支在写动作内先
+     * `disposeEarlyDisposable()` 再 `startDispose()`；②light 测试夹具的**每个测试方法 tearDown**——
+     * 同方法 light 分支把 `disposeEarlyDisposable()` 与 `setTemporarilyDisposed(true)` 放进同一写动作
+     * （`ProjectManagerImpl.kt:345-352`），后者正是「池线程在 temporarily-disposed 窗口内首次取服务 →
+     * 服务被永久毒化」的时点。
+     *
+     * **为什么不挂 `Disposer.register(project, …)`**：light 项目的**主** disposable 在片内跨测试方法
+     * 一直存活（`setTemporarilyDisposed(false)` 只重建 earlyDisposable），挂主树等于整轮不触发。
+     *
+     * **取消而非 join**：门一置，预热线程在其下一个检查点放弃——不再发起 `SqlDialectMappings` /
+     * `PsiManager` 取服务，于是不会把「窗口内首次创建服务失败」的异常喂给平台 holder。不等待的两个理由：
+     * 项目关闭路径上 join 会把在途预热的耗时加进用户可感的关闭时间；且平台对该 Disposable 的 dispose
+     * 有硬要求——「must be self-contained and isolated (getting services is forbidden)」，本实现只置标志。
+     *
+     * **降级**：`getEarlyDisposable()` 是 `@ApiStatus.Internal`，且项目已 dispose 时抛
+     * `AlreadyDisposedException`——用 [Disposer.tryRegister]（父已销毁即返回 false，不抛）并在外层
+     * runCatching 兜底；挂不上时静默返回，行为退回改动前，预热主链不受影响。
+     */
+    private fun bindPrewarmToProjectLifecycle() {
+        if (prewarmLifecycleGate != null) return // 已挂：clear() 重预热不重复登记
+        val proj = project ?: return
+        val gate = Disposable { previewDisposed = true }
+        val registered = runCatching {
+            val early = (proj as? com.intellij.openapi.project.ex.ProjectEx)?.earlyDisposable
+                ?: return@runCatching false
+            Disposer.tryRegister(early, gate)
+        }.getOrDefault(false)
+        if (registered) prewarmLifecycleGate = gate
+    }
+
+    /**
+     * T-StabilityTail：预热线程的「放弃」判据——面板已销毁 或 项目已开始销毁。
+     *
+     * 项目侧判据取 `Project.isDisposed`：平台口径为 `super.isDisposed() || isTemporarilyDisposed`
+     * （`ProjectImpl.isDisposed()`，243/262/2026.2 三版 javap 同形），temporarily-disposed 窗口内为真。
+     * 它在这里是**门判据的补充**而非「盲目守卫」：真正的修法是上面那道生命周期取消门（让池线程
+     * 不再比项目活得久），本判据只用来收掉「判定通过后、取服务前项目被并发关闭」的窄缝——那条缝
+     * 平台侧无锁可挡（读动作会被 closeProject 的写动作阻塞，放行时窗口已开）。
+     */
+    private fun prewarmAbandoned(): Boolean = previewDisposed || project?.isDisposed == true
+
+    /**
+     * T-PreviewExecDs-01a：项目内预览临时文件——`<project>/.idea/sql-visualizer/preview/`。
      * 独立子目录（exec/ 互不污染，同 M36.5.13 语义）。文件在项目内容内，Database 插件才能解析
      * schema 补全/注释。VFS 安全写入三态（document 驱动 > setBinaryContent > FileUtil 兜底），
      * 杜绝 MemoryDiskConflictResolver 的 File Cache Conflict 弹窗（exec 路径 M36.5.13 同款）。
+     *
+     * T-FixN2：文件名由固定 `mpsql-preview.sql` 改为**每次预热唯一**（见 [nextPreviewTempFileName]）。
+     * 固定名的缺陷链（真机必现，第二轮复核 3 次询问/2 次弹窗）：预热重写同一路径，而上一轮装配
+     * 写进该文件 document 的真 SQL **从未落盘**（`assemblePreviewEditor` 只 `setText`，该文档不走
+     * `saveDocument`），于是磁盘恒为预热占位空内容 + 内存文档是「已修改未保存」；平台
+     * `MemoryDiskConflictResolver.beforeContentChange` 判据（243 sources 实证）正是
+     * 「VFileContentChangeEvent 且该路径有 cached document 且 isDocumentUnsaved 且
+     * documentStamp != oldFileStamp」——三条全中 → 弹模态「File Cache Conflict」抢焦点；
+     * 用户选「Load File System Changes」即 `reloadFromDisk(document)` 把内存里的真 SQL 换成磁盘
+     * 的占位空内容（表现为编辑区只剩占位文案，点【刷新】重新渲染才恢复）。
+     * 唯一文件名让每次预热都落在**没有任何 document 的全新路径**上 → 首次创建裸写安全
+     * （exec 路径 T-ExecDocSync3 同款判据：VFS 无该条目时不可能存在 document），冲突链从根上消失。
+     * existing 分支保留为兜底（跨会话残留的同名文件 / 同 pid 复用），仍是 VFS 安全写三态。
+     *
+     * 建文件即登记进 [previewTempFilesCreated]，由 [releaseEditor] 回收（本面板文件数不随预览次数增长）。
      */
     @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun projectPreviewFile(): java.io.File? {
@@ -560,7 +763,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}preview",
         )
         if (!dir.exists() && !dir.mkdirs()) return null
-        val f = java.io.File(dir, "mpsql-preview.sql")
+        // T-FixN2 × T-InsertColumnInlay O-44b 合并口径：文件名**唯一**（每次预热换名，见上）且**由
+        // inlay 作用域锚点同一份常量生成**——锚点靠文件名形态判定「是不是本面板预览编辑器」，
+        // 名字来源与形态判据同处 [PreviewInlayScope]，两处各自硬编码字面量会在改名时静默打穿锚点
+        // （inlay 不报错，只是永不出现）。
+        val f = java.io.File(dir, nextPreviewTempFileName())
         val existing = com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByIoFile(f)
         if (existing != null) {
             val ok = runCatching {
@@ -574,9 +781,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 }
                 true
             }.getOrDefault(false)
-            if (ok) return f
+            if (ok) {
+                previewTempFilesCreated.add(f)
+                return f
+            }
         }
         com.intellij.openapi.util.io.FileUtil.writeToFile(f, "")
+        previewTempFilesCreated.add(f)
         return f
     }
 
@@ -585,7 +796,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * PSI 创建时即按映射方言解析，Generic SQL 下 Database 补全不触发。映射匹配与 exec 一致：
      * SqlDialectMappings.getAvailableValues() 里 language.id == "MySQL" 的实例（MyBatis-Plus 预览
      * 场景即 MySQL；插件自定义 Dialect 与 Database 方言映射无现成对应，硬编码与 exec 对齐）。
-     * 同 vf 已映射过即幂等短路（避免每次预览点 setMapping 触发 SqlDialectPusher push all dumb）。
+     * 同对象已映射过即幂等短路（避免每次预览点 setMapping 触发 SqlDialectPusher push all dumb）。
      *
      * T-ExecSlowOps F1：反射段收编进 [DialectPreMapping]，本方法仅保留「面板级进程内幂等短路」语义 +
      * 成功回写 [previewDialectMappedVf]。真机实锤：本方法在 [prewarmPreviewTempFile] 后台线程内调用，
@@ -594,11 +805,21 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * RuntimeExceptionWithAttachments（SEVERE ×3）。DialectPreMapping.ensureMapped 两段式：
      * 稳态（workspace.xml 映射幸存/本进程已设）读探测直接跳过，仅项目首见经 invokeLater 派 EDT 执行
      * 映射并 CountDownLatch 有界等待——映射写归 EDT、慢操作归 BGT，两侧 SEVERE 同消。
+     *
+     * T-FixN2：映射对象由「文件」改为**父目录**（文件名每次预热唯一后，按文件映射会让每个新文件名
+     * 都判「未映射」→ 每轮预热白付一次 setMapping/push all dumb，且 workspace.xml 的
+     * SqlDialectMappings 状态按文件路径逐个累积、只增不减）。平台 `PerFileMappingsBase.getMappingInner
+     * → getMappingForHierarchy` 自下而上逐级查表（243 sources 实证：`for (cur = file; cur != null;
+     * cur = cur.getParent())`），故**目录映射被其下所有文件继承**，一次映射覆盖全部预览文件
+     * （含每次新名字）；[previewDialectMappedVf] 随之记「已映射的那个目录 vf」，
+     * 身份判定（幂等短路）比较的是目录——目录 vf 在 VFS 里按路径唯一且本面板不删目录，跨预热稳定。
+     * 目录 vf 取不到（极端）时退回按文件映射，语义同改动前。
      */
     private fun mapPreviewDialectBeforePsi(proj: Project, vf: com.intellij.openapi.vfs.VirtualFile) {
-        val inProcessMapped = previewDialectMappedVf?.isValid == true && previewDialectMappedVf === vf
-        if (cn.song.mybatisplus.visualizer.execute.DialectPreMapping.ensureMapped(proj, vf, inProcessMapped)) {
-            previewDialectMappedVf = vf
+        val target = previewDialectMappingTarget(vf)
+        val inProcessMapped = previewDialectMappedVf?.isValid == true && previewDialectMappedVf === target
+        if (cn.song.mybatisplus.visualizer.execute.DialectPreMapping.ensureMapped(proj, target, inProcessMapped)) {
+            previewDialectMappedVf = target
         }
     }
 
@@ -706,7 +927,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 selectedValue: String?,
                 finalChoice: Boolean,
             ): com.intellij.openapi.ui.popup.PopupStep<*>? {
-                actions.firstOrNull { it.first == selectedValue }?.let { it.second() }
+                // N4 修复（2026-09-21）：动作体**一律延后到弹层销毁之后**执行。
+                // 三项动作（导入参数 / 差异对比 / 分享）都会弹**模态对话框**，此前在 onChosen 内同步弹，
+                // 平台判为焦点风险并记 SEVERE——原文即修法：「Showing dialogs in PopupStep.onChosen can
+                // result in focus issues. Please put the dialog showing code into invokeLater…」
+                // （`#c.i.u.p.u.PopupImplUtil`，栈指向本方法 :891 → importParamsFromClipboard:3482）。
+                // **真机后果比日志噪音严重**：第一次点「确定」被弹层收走，用户感受是「点了没反应」。
+                // 本方法返回 FINAL_CHOICE 后弹层即销毁，故 invokeLater 的体在弹层已销毁时才跑。
+                val action = actions.firstOrNull { it.first == selectedValue }?.second
+                if (action != null) {
+                    ApplicationManager.getApplication().invokeLater { action() }
+                }
                 return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE
             }
         }
@@ -721,6 +952,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun showRollbackSql() {
         val sql = currentEditorSql()?.let { SqlCommentStripper.strip(it) }?.takeIf { it.isNotBlank() } ?: return
         val kind = SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
+        // T-ST-03 核实：本路径是【回滚SQL】按钮的独立动作（工具栏 :687），**不在执行确认流内**——
+        // 此处 generate 是该次点击的唯一一次解析（确认流的解析点在 executeSql/executeAdhocSql 的
+        // ExecuteConfirmMessages.build 处），故无「确认阶段产物」可显式传入。
         val result = cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator.generate(sql)
         val entry = project?.getService(cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore::class.java)
             ?.findBySql(sql)
@@ -819,6 +1053,29 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（内存 store，LogSqlEntry 不动字段）。
      * 回滚语句（rollbackOfEntry 非 null）也登记——parentExecutionId 指向被回滚的原执行，
      * 形成 dbx `rollback_of` 语义的留痕链；仅登记可解析到目标表的语句（解析失败登记无意义）。
+     *
+     * **T-PS5-02 / T-ST-03 解析复用前提（实测核实，勿默认撤销）**：下面 [RollbackSqlGenerator.generate]
+     * 走 `UnboundedWriteDetector.parseStatementsShared` 的 AST 单槽，与确认阶段
+     * （[executeSql]/[executeAdhocSql] 的 `ExecuteConfirmMessages.build` → `UnboundedWriteDetector.detect`）
+     * 共用同一次解析——命中判据是**同文本内容全等**，故此处**依赖两条前提**：
+     * ①确认阶段确实以同一文本走了一遍 `detect`（UPDATE/DELETE 必经 DML 二次确认，成立；
+     * **豁免参数路径** `executeAdhocSql(dmlConfirmed = true)` 不走确认弹窗、退化为本链自解析一次——
+     * 但该参数**现行生产无调用点**（`RollbackSqlDialog.executeRollback` 未传它，回滚弹窗同样走确认弹窗），
+     * 仅由测试覆盖，故此退化目前只存在于测试路径）；
+     * ②[SqlCommentStripper.strip] 幂等——此处传入的是 `strip(sql)`，而 `detect` 内部键是 `strip(sql)`、
+     * `generate` 内部还会再剥一次（键成 `strip(strip(sql))`），幂等成立才落回同一槽。
+     * 失效后果分档：**前提①失效只是多一次解析**（槽未命中即重解析同一文本，结果不变）；
+     * **前提②失效则不同**——命中路径用单剥文本的 AST、未命中路径解析双剥文本，两条路径输入文本不同、
+     * 结果可能随缓存命中状态而变（故由 `SqlPreviewPanelRollbackParseShapeTest` 的「独立 vs 共享逐字节一致」兜底）。
+     * 前提由该测试类逐条钉住（含「槽未命中必重解析」的探针自证）。
+     *
+     * 面板侧若需脱离该隐式前提，出口是 `RollbackSqlGenerator.generateFromParsedStatements(cleaned, statements, pk)`；
+     * **T-ST-03 独立复核订正**：理由原写「真正显式传递须改 `execute/` 包的两个共享 API」——不是唯一路线：
+     * 面板侧**自取槽变体**（`parseStatementsShared(cleaned)` → `generateFromParsedStatements`）从同一个 `sql`
+     * 变量算槽键，能**整条换掉前提②**（由 `strip` 的纯函数性保证，与幂等无关），且两个 API 都是 `internal`、
+     * 与 ui 包同 Gradle 模块，无需改签名。**但结论仍是不实施**：工具栏路径 [showRollbackSql] 无前置 detect、
+     * 生产仍按双剥文本出结果，幂等前提**换不掉**；且收益为零性能/零语义（T-PS5-02 的收益已由单槽全数拿到），
+     * 属计划明标的 P4 可选件。
      */
     private fun registerRollbackSnapshotIfNeeded(
         sql: String,
@@ -835,6 +1092,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             )
             return
         }
+        // T-PS5-02：传入已剥注释文本——键对齐靠 strip 幂等（详见本函数 KDoc 的两条前提）
         val analyzed = cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator.generate(SqlCommentStripper.strip(sql))
         val table = analyzed.targetTable ?: return
         store.register(sql, table, analyzed.snapshotSelectSql, analyzed.setColumns)
@@ -870,6 +1128,50 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (confirm != Messages.YES) return false
         dollarRawConfirmedInSession = true
         return true
+    }
+
+    /**
+     * T-PC2-04（D1=B 定案）：含「签名类型未能识别」参数的语句执行确认闸门
+     * （[executeSql]/[explainSql] 共用，形态与 [confirmDollarRawSegments] 同款）。
+     *
+     * 判定信号取自 [XmlPreviewModel.unknownParamSources]（`paramTypes` 有条目但类别 UNKNOWN：
+     * 枚举 / `boolean` / `byte[]` 等——类型读到了却映射不到类别，绑定层只能以字面 `?` 提交）。
+     * **无类型信息不计入**（mapper 接口不可解析时键不在 `paramTypes`）——与 T-PT-02「无类型信息
+     * 不提示」同向，也避免「接口解析不到 → 每次执行都提示」的噪音面（口径见该函数 KDoc）。
+     *
+     * 预览链**保持放行**（D1=B：预览与执行风险面不同），只在执行/EXPLAIN 前提示一次；用户选 NO
+     * → 中止；选 YES → 记会话级记忆，本面板后续执行与 EXPLAIN 都不再重复弹（不阻断已确认流程）。
+     * 范围：只在 XML 预览链生效（Wrapper/JPA/日志链无 `xmlModel`，恒放行）。
+     *
+     * @return true = 放行（无 UNKNOWN 参数 / 已确认过 / 本次确认通过）
+     */
+    private fun confirmUnknownParams(proj: Project): Boolean {
+        val unknown = current?.xmlModel
+            ?.unknownParamSources(current?.unresolvedParams.orEmpty())
+            .orEmpty()
+        if (unknown.isEmpty() || unknownParamsConfirmedInSession) return true
+        val confirm = Messages.showYesNoDialog(
+            proj,
+            MpSqlVisualizerBundle.message("execute.confirm.unknownParams.message", unknown.size),
+            MpSqlVisualizerBundle.message("execute.confirm.dml"),
+            Messages.getWarningIcon(),
+        )
+        if (confirm != Messages.YES) return false
+        unknownParamsConfirmedInSession = true
+        return true
+    }
+
+    /**
+     * T-PSG-04（N-33）：`?` 位点数与参数条数对账的**非阻断**标注。
+     *
+     * 结论由 [backfillParamsBySource] 在回填时算出（串感知位点数 vs 参数条数），此处排在两道
+     * 确认门之后、快照登记/执行之前读走并如实登记日志——不弹窗、不中止（我方既有档位是确认/标注，
+     * 不是拒绝）。产物侧的同款对账标注见 `CopyExecutableSqlAction` 的头部标记。
+     */
+    private fun warnOnPlaceholderMismatch() {
+        val mismatch = placeholderReconciliation ?: return
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .warn("[T-PSG-04] executeSql: $mismatch")
     }
 
     /**
@@ -909,6 +1211,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-InjectionGate T-IG-02：`${}` raw 拼接段确认门（DML 分类判定之后追加——预览产物里的
         // raw 段带的是模拟值，执行前须用户确认值真实性；NO 直接中止，不落快照不执行）
         if (!confirmDollarRawSegments(proj)) return
+        // T-PC2-04（D1=B）：签名类型未识别参数确认门（D1=B 的「执行/EXPLAIN 前提示一次」——
+        // 预览链保持放行；排在 `${}` 门之后、快照登记/执行之前，NO 直接中止）
+        if (!confirmUnknownParams(proj)) return
+        // T-PSG-04（N-33）：`?` 位点数与参数条数对账——与上面两道确认门同址，但**不阻断**
+        // （不等时只如实登记日志；产物侧的标注见 CopyExecutableSqlAction 头部标记形态）
+        warnOnPlaceholderMismatch()
         // T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（回滚弹窗据此提供粘贴回填工作流）
         registerRollbackSnapshotIfNeeded(sql, null)
 
@@ -1062,6 +1370,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-InjectionGate T-IG-03：EXPLAIN 本就真实执行——`${}` raw 段同门控（旁路不得绕开执行闸门）；
         // 方言不支持（上方已 return，未执行）不弹
         if (!confirmDollarRawSegments(proj)) return
+        // T-PC2-04（D1=B）：EXPLAIN 同门控（旁路不得绕开执行闸门，与 T-IG-03 同款姿态）
+        if (!confirmUnknownParams(proj)) return
+        // T-PSG-04（N-33）：对账非阻断标注与 executeSql 同址同款（EXPLAIN 也是执行旁路）
+        warnOnPlaceholderMismatch()
         resultPanel.showLoading()
         SqlExecutor.execute(
             proj, explainSql, null, true,
@@ -1772,6 +2084,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         editor?.putUserData(SqlCompletionContext.KEY, ctx)
         psiFile?.putUserData(SqlCompletionContext.KEY, ctx)
         editor?.document?.let { SqlCompletionContributor.registerContext(it, ctx) }
+        // T-InsertColumnInlay O-44b：预览语句类型载体随上下文一同刷新（同一收口，两处渲染路径都过这里）——
+        // INSERT 目标列 inlay 的语句类型闸门据此判定；非 XML 预览（xmlModel 为 null）写 null 即清除，
+        // 防复用编辑器上残留上一次预览的语句类型
+        attachPreviewStatementKind()
         // T-DbSchemaCompletion：预览实际输入面是原生控制台（Ultimate），它的上下文只在
         // onNativeEditorReady 挂过一次——不在此同步，schema 预热完成后控制台仍读旧上下文，
         // 库里独有的列照旧补不出来（且控制台端编辑器 userData 优先级高于 document 兜底）。
@@ -1782,10 +2098,29 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
+     * T-InsertColumnInlay O-44b：把当前预览的语句类型写到预览编辑器（Editor + PSI 文件双载体）。
+     *
+     * 这是 `xmlModel.kind` 的**首个读点**（此前零消费者）——INSERT 目标列 inlay 的语句类型闸门
+     * 由 provider 读该载体判定，`kind != INSERT` 即零提示。取 `xmlModel` 而非 `SqlTypeClassifier`：
+     * 语句类型是解析期事实（`XmlMapperParser.kindOf`），非 XML 预览链无此模型（写 null = 不提示，
+     * 见计划 §二 非目标与 provider KDoc 的边界登记）。
+     *
+     * 写 null 而非「不写」：预览编辑器在预览切换间被复用（`showSql` 的 existing 分支），
+     * 残留上一次预览的语句类型会让复用编辑器继续按旧类型产提示。
+     */
+    private fun attachPreviewStatementKind(target: Editor? = editor) {
+        val kind = current?.xmlModel?.kind
+        target?.let { PreviewInlayScope.attach(it, kind) }
+        psiFile?.let { PreviewInlayScope.attach(it, kind) }
+    }
+
+    /**
      * T-DbSchemaCompletion：补全 schema 预热涉及的表——SQL 里出现的表（含 JOIN）+ 预览主表。
      *
      * 表名取自 [TableExtractor]（纯词法，无 PSI）；解析不到时只剩主表兜底。带别名/括号的误提取
-     * 最多导致一次未命中（现在不写负缓存，见 [DatabaseSchemaResolver.resolveFromSources]），无害。
+     * 会按「确认没有此表」记入负缓存（TTL 30s，DDL/提交后随 MetadataInvalidator 一起失效），
+     * 代价只是 30s 内同表不再重扫、少几个补全候选，无害（「查不了」的情形不写负缓存，见
+     * [DatabaseSchemaResolver.resolveFromSources] 的 scanBailed 分支）。
      */
     private fun completionTables(result: PreviewResult?): List<String> {
         if (result == null) return emptyList()
@@ -2182,8 +2517,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         metaLabel.text = ""
         // T-PreviewTopOverlap F3：元信息原文缓存随清空复位（下次 updateMeta 重建）
         metaLineText = ""
+        metaLineHead = ""
+        metaLineDigest = ""
         metaPerfSegments = emptyList()
         lastMetaBudget = -1
+        // T-SourceJumpFunnel P6：tooltip 基线同步复位（行内提示态据此拼接，不复用上一份预览的残留）
+        metaTooltipBase = ""
+        metaLabel.toolTipText = null
         // F-1：清除图集 + 恢复纯 SQL 视图（整图卸载含虚拟外键回收）
         removeDiagramTab()
         unloadJoinDiagram()
@@ -2331,9 +2671,44 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-PerfTail #2：预热产物消费决策——热态同步装配（主路径/快速降级，EDT 零等待）、
         // 冷态注册回调回 EDT 装配（超时预算语义保留，EDT 零阻塞）、单元测试模式同步有界等待
         val (resolved, prewarmed) = resolvePreviewEditorSource(sql)
-        if (!resolved) return   // 回调挂起中——装配延后至回调（超时/失败走降级链）
+        if (!resolved) {
+            // T-PrewarmBudget：装配延后至预热回调（冷态/预算内未就绪）——这期间编辑区本来是**纯空面板**
+            // （真机连拍实测：亮像素计数 0，冷启空窗 584~926ms 肉眼可见），故补一个轻量「准备中」占位；
+            // 回调走到 assemblePreviewEditor 时它会 removeAll 掉，无需另行清理。
+            showPreviewPreparingPlaceholder()
+            return
+        }
         assemblePreviewEditor(sql, prewarmed)
     }
+
+    /**
+     * T-PrewarmBudget：预热等待期的编辑区占位。
+     *
+     * 装配延后到预热回调时，编辑区原本是**纯空面板**——真机连拍实测亮像素计数 0，冷启动空窗
+     * 584~926ms 肉眼可见。这里放一个居中的轻量提示，回调装配时由 [assemblePreviewEditor] 的
+     * `editorHolder.removeAll()` 自然替换，无需另行清理。
+     *
+     * 用 `GridBagLayout` 居中而非直接 add：`editorHolder` 是 `GridLayout(1,1)`，直接加会把标签拉满
+     * 整格（文字贴左上角），与「准备中」应有的视觉不符。
+     */
+    private fun showPreviewPreparingPlaceholder() {
+        val box = JBPanel<JBPanel<*>>(java.awt.GridBagLayout())
+        box.add(
+            JBLabel(MpSqlVisualizerBundle.message("panel.preview.preparing")),
+            java.awt.GridBagConstraints().apply {
+                anchor = java.awt.GridBagConstraints.CENTER
+                weightx = 1.0
+                weighty = 1.0
+            },
+        )
+        editorHolder.removeAll()
+        editorHolder.add(box)
+        editorHolder.revalidate()
+        editorHolder.repaint()
+    }
+
+    /** T-PrewarmBudget：等待期占位（断言用）——显示路径的观测口（容器观测口复用既有的 [editorHolderForTest]）。 */
+    internal fun showPreparingPlaceholderForTest() = showPreviewPreparingPlaceholder()
 
     /**
      * T-PerfTail #2：编辑器装配（原 createEditor 后半抽取，同步主路径与异步回调共用同一收口）。
@@ -2353,6 +2728,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // 压不住：SlowOperations.startSection 只在非 EDT 线程压栈，EDT 上该逃生舱是空壳，见开发计划 §3.1 反编译）。
             // T-PreviewDocLock2 F3：临时文件支链「尽力」——产物缺失（预热超时/失败/已消费）时
             // 降级到内存 PSI → 裸文档（功能降级优于硬失败——主路径行为逐字节不变）。
+            // T-PreviewDocLock2 F3：`===` 是「本次交付的产物就是字段里那份未被消费的产物」——
+            // 实例由 [publishPrewarmProduct] 单次构造保证（发布侧写两遍 `vf to psi` 会让本判定恒假）。
             if (prewarmed != null && prewarmedTempFile === prewarmed) {
                 prewarmedTempFile = null
                 runCatching {
@@ -2402,6 +2779,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val ctx = buildCompletionContext()
         created.putUserData(SqlCompletionContext.KEY, ctx)
         psiFile?.putUserData(SqlCompletionContext.KEY, ctx)
+        // T-InsertColumnInlay O-44b：新编辑器同样写语句类型载体（复用路径由 refreshCompletionContext
+        // 覆盖，新建路径在此覆盖——两条路径都必须写，漏一条即该路径上 inlay 静默不出现）。
+        // 显式传 created：此处 editor 字段仍指向上一个编辑器，默认取字段会写错对象
+        attachPreviewStatementKind(created)
         // M34 回归修复：三级回退的 Document→Context 映射须在此登记（首次创建时 editor 尚不存在，
         // refreshCompletionContext 的 editor?.document 为 null，只能在此写入）——否则 commitDocument
         // 重建 PSI 后补全落入空映射，实体表/列补全静默失效（documentContexts 恒空、level 3 死路径）。
@@ -2416,6 +2797,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             settings.isFoldingOutlineShown = true
             settings.isIndentGuidesShown = false
             settings.isAdditionalPageAtBottom = false
+            // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+            EditorWhitespaceSettings.applyTo(this)
             setPlaceholder(previewEmptyHint) // T-UxOnboard T-UX-02：空态提示原生件（LogToSqlPanel T-UN-14 同款）
         }
         editorHolder.removeAll()
@@ -2479,7 +2862,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             val fileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getStdFileType("SQL")
             val psi = com.intellij.openapi.application.ReadAction.compute<PsiFile, Throwable> {
                 com.intellij.psi.PsiFileFactory.getInstance(proj)
-                    .createFileFromText("mpsql-preview-memory.sql", fileType, sql)
+                    .createFileFromText(PreviewInlayScope.MEMORY_PREVIEW_FILE_NAME, fileType, sql)
             }
             psiFile = psi
             LOG.info("[M36] in-memory PSI preview document created (len=${sql.length})")
@@ -2597,6 +2980,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // M34 回归修复：临时 SQL 文件删除（java.io 删除免 write action；deleteOnExit 兜底）
         previewTempFile?.let { vFile -> java.io.File(vFile.path).delete() }
         previewTempFile = null
+        // T-FixN2：唯一文件名后本面板**创建过的全部**预览临时文件统一回收——除上面那个「当前在用」
+        // 的以外，还含「预热已发布但从未被装配消费」（面板关闭/clear 早于消费）与「两次预热竞态中
+        // 晚到的那一个」（clear 时旧预热仍在途、previewTempFile 被后来者覆盖）两类无主文件，
+        // 否则 preview/ 目录会随预览次数只增不减。清理策略三选一取「按面板生命周期删除」：
+        // 保留上限/文件池两条都要跨面板判断「谁在用」（同项目多开进程另有自己的文件），
+        // 误删在用的预览文件会立刻复现 File Cache Conflict；本表只装本面板自己建的文件，天然无误删面。
+        previewTempFilesCreated.forEach { f -> runCatching { f.delete() } }
+        previewTempFilesCreated.clear()
         // T-M36.6-03：预热产物作废（面板重用时由 clear() 重新预热；dispose 由 previewDisposed 兜底）
         prewarmedTempFile = null
     }
@@ -3148,16 +3539,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         return texts.maxOf { metrics.stringWidth(it) }.coerceIn(80, maxWidth)
     }
 
-    /** T-M26.3：长文本中段省略——保留尾部（bind 字段名/参数名尾部有意义），超宽时显示 `头…尾`。 */
-    private fun ellipsize(text: String, metrics: FontMetrics, maxWidth: Int): String {
-        val mark = "\u2026"
-        if (metrics.stringWidth(text) <= maxWidth) return text
-        val tailLen = (text.length * 0.3).toInt().coerceAtLeast(4).coerceAtMost(text.length - 1)
-        val tail = text.takeLast(tailLen)
-        var head = text.length - tailLen
-        while (head > 0 && metrics.stringWidth(text.take(head) + mark + tail) > maxWidth) head--
-        return text.take(head) + mark + tail
-    }
+    /**
+     * T-M26.3：长文本中段省略——保留尾部（bind 字段名/参数名尾部有意义），超宽时显示 `头…尾`。
+     *
+     * 度量以 `(String) -> Int` 注入（[ellipsizeMiddle] 纯函数），使 meta 行的宽度预算组装
+     * （[metaLineWithinBudget]）可脱 FontMetrics 单测。
+     */
+    private fun ellipsize(text: String, metrics: FontMetrics, maxWidth: Int): String =
+        ellipsizeMiddle(text, { metrics.stringWidth(it) }, maxWidth)
 
     /**
      * T-M26.3：复选框标签截断上限——跟随视口宽度（文本 + 图标约 20px + 边距 36px 不超出视口，
@@ -3337,21 +3726,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * @param isEmptyClipboard 是否剪贴板无有效内容（true=空内容提示，false=匹配结果提示）
      */
     private fun showImportResult(matched: Int, unmatched: Int, unmatchedKeys: List<String>, isEmptyClipboard: Boolean) {
+        // T-Perf-20：空剪贴板提示是**纯行内状态更新**（不弹任何窗），与下面的通知分支性质不同，
+        // 故前置到测试模式闸门之前——闸门只为避开 Messages/TestDialog 拦截器，行内提示无此依赖，
+        // 前置后该提示态可被 headless 测试驱动（T-SourceJumpFunnel P6 的 tooltip 契约据此断言）。
+        if (isEmptyClipboard) {
+            showEmptyClipboardHint()
+            return
+        }
         // 测试环境跳过弹窗（Messages 在 test mode 下触发 TestDialog 拦截器抛异常）
         if (ApplicationManager.getApplication().isUnitTestMode) return
         val title = MpSqlVisualizerBundle.message("panel.param.import.result.title")
         val proj = project ?: return
         when {
-            isEmptyClipboard -> {
-                // T-Perf-20：空剪贴板属用户输入类提示——改面板内行内警示（元信息行红字），
-                // 不再弹模态错误框（toast 语义：下次 updateMeta 覆盖）
-                val hint = MpSqlVisualizerBundle.message("panel.param.import.result.empty")
-                currentWarning = hint
-                metaLabel.text = "⚠ $hint"
-                metaLabel.toolTipText = hint
-                metaLabel.foreground = JBColor.namedColor("ErrorForeground", JBColor.RED)
-                errorCopyButton?.isVisible = true
-            }
             unmatched == 0 -> {
                 // T-UiNative T-UN-02：导入结果改轻通知（原模态弹窗——纯告知无需打断）
                 runCatching {
@@ -3377,6 +3763,38 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 }
             }
         }
+    }
+
+    /**
+     * T-Perf-20：空剪贴板（未识别到有效参数）的**行内**提示——元信息行红字 + 错误复制按钮可见，
+     * 不弹模态框（toast 语义：下次 [updateMeta] 覆盖）。
+     *
+     * T-SourceJumpFunnel P6 修复：提示态 tooltip 由「覆写」改「拼接」——[updateMeta] 写入的
+     * [metaTooltipBase] 是「悬停见完整调用链」的唯一载体（meta 行可见文本受 F3 宽度预算截断），
+     * 旧写法 `metaLabel.toolTipText = hint` 使提示态悬停只剩提示本身、完整链丢失；而提示文案本就在
+     * 可见行上全文可见，覆写并未换来任何信息。拼接以提示为首行（与可见行一致），基线随其后；
+     * 基线取自缓存字段而非当前 tooltip，故重复触发幂等（不会把自身叠加进去）。
+     *
+     * P10 修复（2026-09-20 真机走查发现）：提示此前**只写** `metaLabel.text`，不进 [metaLineHead] /
+     * [metaLineText]。而 `errorCopyButton.isVisible = true` 会改变工具栏理想宽 → topRow 重排 →
+     * 紧接着的 [applyMetaTruncation]（预算变了故不短路）用旧的 `metaLineText` 把提示**当场覆盖**——
+     * 真机走查实测「提示态根本看不到」（红字与复制按钮都没出现），即本项此前只在单测里成立。
+     * 现把提示写进同一套分段缓存并复位 [lastMetaBudget]，可见行统一由 [applyMetaTruncation] 收口渲染
+     * （含宽度预算与 perf 段），提示因此参与布局且不再被覆盖；`toast 语义`不变——下次 [updateMeta]
+     * 重写分段缓存即覆盖。
+     */
+    private fun showEmptyClipboardHint() {
+        val hint = MpSqlVisualizerBundle.message("panel.param.import.result.empty")
+        currentWarning = hint
+        val hintLine = "⚠ $hint"
+        metaLineHead = hintLine
+        metaLineDigest = ""
+        metaLineText = hintLine
+        lastMetaBudget = -1
+        metaLabel.toolTipText = if (metaTooltipBase.isEmpty()) hint else "$hint\n$metaTooltipBase"
+        metaLabel.foreground = JBColor.namedColor("ErrorForeground", JBColor.RED)
+        errorCopyButton?.isVisible = true
+        applyMetaTruncation()
     }
 
     /** P-05：计算当前预览的缓存键（无表名返回 null，不缓存）。 */
@@ -3469,23 +3887,34 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         return result
     }
 
+    /**
+     * T-PSG-03（N-33）：按 source 回填 `?` 占位符——位点判定走 [placeholderPositions]
+     * （string-aware），字符串字面量与 `--` / 块注释内的 `?` 不再被替换（改前朴素逐字符
+     * `c == '?'` 会错位：引号内 `?` 吃掉了本属真占位符的参数值）。
+     *
+     * 值渲染语义不变（[renderParamValue] / [renderSingleValue] 一行未动）；不含这类 `?` 的
+     * SQL 回填结果与改前逐字节一致。
+     *
+     * T-PSG-04：同一趟记下「位点数 vs 参数条数」对账结论（[placeholderReconciliation]），
+     * 执行前由 [warnOnPlaceholderMismatch] 如实标注——不阻断。
+     */
     private fun backfillParamsBySource(sql: String, sources: List<String>, hints: List<ParamHint> = emptyList()): String {
         if (sources.isEmpty()) return sql
+        val positions = placeholderPositions(sql)
+        placeholderReconciliation = PlaceholderCardinality.mismatchMarker(positions.size, sources.size)
+        if (positions.isEmpty()) return sql
         val sb = StringBuilder(sql.length + 32)
         var paramIndex = 0
-        var i = 0
-        while (i < sql.length) {
-            val c = sql[i]
-            if (c == '?') {
-                val source = sources.getOrNull(paramIndex)
-                val v = source?.let { paramValues[it] }
-                sb.append(renderParamValue(v, hints.getOrNull(paramIndex), source))
-                paramIndex++
-            } else {
-                sb.append(c)
-            }
-            i++
+        var prev = 0
+        for (pos in positions) {
+            sb.append(sql, prev, pos)
+            val source = sources.getOrNull(paramIndex)
+            val v = source?.let { paramValues[it] }
+            sb.append(renderParamValue(v, hints.getOrNull(paramIndex), source))
+            paramIndex++
+            prev = pos + 1
         }
+        sb.append(sql, prev, sql.length)
         return sb.toString()
     }
 
@@ -3562,18 +3991,25 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         currentWarning = xmlWarning ?: result.warning
         val warningLine = currentWarning?.let { "   ⚠ $it" } ?: ""
-        // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示，悬停 tooltip 全文）
-        val stackLine = result.stackDigest?.let { sd ->
-            "   " + MpSqlVisualizerBundle.message("panel.meta.stackDigest") + " " +
-                (if (sd.length > 120) sd.substring(0, 120) + "…" else sd)
-        } ?: ""
+        // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示，悬停 tooltip 全文）。
+        // 文案组装抽为纯函数 [buildStackDigestMetaText]（同文件顶层，行为逐字不变）——§3.3 验收项
+        // 单测直断截断长度/截断标记/全文节点，无需真机目视。
+        val stackText = buildStackDigestMetaText(result.stackDigest)
         // T-SqlPerf：性能建议文案单独一行（HTML 换行）。
         // T-PreviewTopOverlap F3：原文分段缓存，label 文本按宽度预算重拼（applyMetaTruncation）
-        metaLineText = meta + warningLine
+        // T-SourceJumpFunnel P5 修复：调用栈摘要（stackText.inlineLine）并入**可见行**——此前只进
+        // tooltipText，验收项前半句「meta 行显示调用栈」在可见行上落空（真机走查第 1 步看不到）。
+        // 该行受 F3 宽度预算约束，故按**主体 / 摘要**两段缓存（见 metaLineHead / metaLineDigest）：
+        // 预算不足时先截摘要、主体仅在自身超预算时才中段省略（复核 20260920 修正——把摘要直接拼进
+        // 单段文本会让 F3 的中段省略在窄窗下连主体一起挤掉，只剩「…」+ 栈底帧，优先级倒挂）。
+        // 完整调用链仍恒在悬停 tooltip 内（tooltip 不受预算影响）。
+        metaLineHead = meta + warningLine
+        metaLineDigest = stackText.inlineLine
+        metaLineText = metaLineHead + metaLineDigest
         metaPerfSegments = buildPerfSegments(result)
-        metaLabel.toolTipText = meta + warningLine + stackLine +
-            (result.stackDigest?.let { "\n" + MpSqlVisualizerBundle.message("panel.meta.stackDigest") + " $it" } ?: "") +
+        metaTooltipBase = meta + warningLine + stackText.inlineLine + stackText.tooltipTail +
             metaPerfSegments.joinToString("；") { it.text }
+        metaLabel.toolTipText = metaTooltipBase
         metaLabel.foreground = if (currentWarning != null) {
             // T-DarkTheme：IDE 标准错误前景命名色（亮暗主题自适应；暗色下非亮红不刺眼）
             JBColor.namedColor("ErrorForeground", JBColor.RED)
@@ -3629,11 +4065,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (budget == lastMetaBudget) return
         lastMetaBudget = budget
         val metrics = metaLabel.getFontMetrics(metaLabel.font)
+        val widthOf = { s: String -> metrics.stringWidth(s) }
+        val line1 = metaLineWithinBudget(metaLineText, metaLineHead, metaLineDigest, widthOf, budget)
         metaLabel.text = if (metaPerfSegments.isEmpty()) {
-            if (metrics.stringWidth(metaLineText) <= budget) metaLineText
-            else ellipsize(metaLineText, metrics, budget)
+            line1
         } else {
-            val line1 = if (metrics.stringWidth(metaLineText) <= budget) metaLineText else ellipsize(metaLineText, metrics, budget)
             "<html>$line1<br>${perfLineHtml(budget, metrics)}</html>"
         }
     }
@@ -3733,6 +4169,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         nativeConsoleEditor = null
         // T-M36.6-03：面板销毁——晚到的预热线程产物作废（预热线程自查后删除临时文件）
         previewDisposed = true
+        // T-StabilityTail：解除预热取消门在项目 earlyDisposable 树上的登记——面板先于项目销毁时
+        // 不留指向本面板的引用（项目先销毁时该 gate 已被平台回收，Disposer 对已销毁件幂等）
+        prewarmLifecycleGate?.let { runCatching { Disposer.dispose(it) } }
+        prewarmLifecycleGate = null
         // T-Perf-04：防抖/历史 Timer 随面板停止（防晚到 flush 触碰已销毁面板状态）
         renderDebounceTimer.stop()
         pendingRender = null
@@ -3758,6 +4198,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     internal fun editorForTest(): Editor? = editor
 
+    /** T-PSG-04 测试缝：最近一次回填的「位点数 vs 参数条数」对账标注（相等为 null）。 */
+    internal fun placeholderReconciliationForTest(): String? = placeholderReconciliation
+
     /** T-PreviewConsoleFmt 测试缝：模拟控制台文档已就绪（nativeDoc 指向该文档）。 */
     internal fun markNativeDocForTest(doc: com.intellij.openapi.editor.Document) {
         nativeEditorDoc = doc
@@ -3768,6 +4211,24 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-AutoFold F5：登记的原生控制台编辑器引用（支链①接入断言用）。 */
     internal fun nativeConsoleEditorForTest(): Editor? = nativeConsoleEditor
     internal fun psiFileForTest(): PsiFile? = psiFile
+
+    /**
+     * T-PreviewDocLock2 F3 回归守护：预热载体（异步完成态）——测试据此有界等待预热出结果
+     * （headless 无 EDT 泵，预热跑在池线程），再驱动真实消费链断言分支走向。
+     */
+    internal fun prewarmAwaitForTest(): PrewarmAwait<Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>>? =
+        prewarmAwait
+
+    /**
+     * T-PreviewDocLock2 F3 回归守护：预热产物字段（[publishPrewarmProduct] 写入、消费即置 null）。
+     * 断言点：①预热完成后字段与 await 交付值**同实例**（发布侧不变式）；②消费后字段被清空（一次性语义）。
+     */
+    internal fun prewarmedTempFileForTest(): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? =
+        prewarmedTempFile
+
+    /** T-PreviewDocLock2 F3 回归守护：释放编辑器（**不**触发 [clear] 的重预热）——「产物已被消费」降级分支断言用。 */
+    internal fun releaseEditorForTest() = releaseEditor()
+
     internal fun currentForTest(): PreviewResult? = current
     internal fun compactForTest(): Boolean = compactMode
     /** T-PreviewDisplayMode：当前显示模式（参数变更后保持性断言用）。 */
@@ -3861,6 +4322,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun paramFieldForTest(index: Int): JBTextField? = paramFields.getOrNull(index)
     /** T-M24-04：元信息标签文本（警告断言用）。 */
     internal fun metaLabelForTest(): String = metaLabel.text
+
+    /**
+     * T-SourceJumpFunnel §3.3：元信息标签 tooltip（「悬停见完整链」断言用）。
+     *
+     * headless 下无法产生真实鼠标悬停，但 Swing 悬停展示的正是本属性文本，故断言它即锁定
+     * 悬停内容契约（真实悬停动作本身不在自动化范围）。
+     */
+    internal fun metaTooltipForTest(): String? = metaLabel.toolTipText
     /** T-M25.3：错误复制按钮（可见性断言用）。 */
     internal fun errorCopyButtonForTest(): JButton? = errorCopyButton
 
@@ -3880,6 +4349,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** 「更多」折叠菜单 step（onChosen 委托断言用，无需真实弹层）。 */
     internal fun moreActionsStepForTest(): com.intellij.openapi.ui.popup.util.BaseListPopupStep<String> =
         moreActionsStep(moreActions())
+
+    /**
+     * N4：构造 step 的注入口——真实三项动作都会弹模态（单测禁弹），故用无副作用的替身项断言
+     * 「命中真实项时**不同步**执行动作」这条新契约。
+     */
+    internal fun moreActionsStepWithForTest(items: List<Pair<String, () -> Unit>>): com.intellij.openapi.ui.popup.util.BaseListPopupStep<String> =
+        moreActionsStep(items)
 
     /** F3：宽度预算截断手动触发（headless 无 componentResized，测试直调）。 */
     internal fun applyMetaTruncationForTest() = applyMetaTruncation()
@@ -4007,11 +4483,185 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
         /** T-PreviewFlash：EDT 等待预热产物的轮询间隔与超时（毫秒）。 */
         const val PREWARM_POLL_MS = 20L
-        /** T-PreviewSlow F1：把「EDT 同步自旋等预热产物」的预算从 2000ms 砍到 60ms——
-         * 冷启动时预热线程（同步 VFS refresh + PSI findFile）常跑几百毫秒到数秒，EDT 干等
-         * 到 2000ms 会把延迟烧进 UI 线程（真机日志双击→createEditor 达 3.07s）。降到经验值
-         * 60ms：预热线程已就绪（面板再开/热态）立刻命中走 PSI 主路径，冷启动第一拍直接降级
-         * 纯内存编辑器不烧 EDT；预热完成后下次打开即自愈走回 PSI 高亮/补全路径。 */
-        const val PREWARM_WAIT_MS = 60L
+        /**
+         * T-PrewarmBudget（2026-09-20 据实测重定）：预热产物的等待预算——消费侧 [PrewarmAwait]
+         * `completeOnTimeout` 用它决定「等多久放弃、改走降级装配」。
+         *
+         * **取值 500ms 的依据（真机 16 次打开 / 3 会话，见
+         * `docs/验收文档/20260920-预热耗时采样与预算建议.md`）**：预热耗时（打点
+         * `[M36] prewarm done in Xms`）冷启动首开 233/239/360ms（n=3），同会话复开
+         * 116/133/184ms（n=13）——**旧值 60ms 一次都覆盖不到（16/16 全降级）**。500ms 覆盖观测到的
+         * 冷启最大 360ms（约 40% 余量）与全部复开（2.7 倍余量）。
+         *
+         * **旧值 60ms 的理由已失效**：其原注释称「EDT 干等到 2000ms 会把延迟烧进 UI 线程（真机日志
+         * 双击→createEditor 达 3.07s）」——那是**旧的同步 sleep 轮询实现**（`awaitPrewarmedTempFile`）；
+         * 自 T-PerfTail #2 改成异步后，冷态 `scheduleOnce` 注册回调即返回，**EDT 根本不等待**，
+         * 该预算只决定装配质量与等待时长，不再有「省 EDT 时间」的作用。
+         *
+         * **已知不覆盖**：重负载（CPU 72%~99%）下冷启曾观测到约 1s——那种情况仍会降级，且正确的解法
+         * 是让预热更快（`t-fix-n2` 的父目录映射已把每次打开都要付的 `setMapping`/push-all dumb 整条去掉，
+         * 本轮实测 `Push all [SqlDialectPusher]` 计数 0），而不是无限抬高预算。
+         * 抬高预算的代价是等待期变长，已由 [showPreviewPreparingPlaceholder] 的占位覆盖观感。
+         */
+        const val PREWARM_WAIT_MS = 500L
+
+        /**
+         * T-FixN2 × T-InsertColumnInlay O-44b：生成下一次预热的唯一临时文件名。
+         *
+         * **形态（`mpsql-preview-<pid>-<seq>.sql`，例 `mpsql-preview-12480-3.sql`）的唯一来源是
+         * [PreviewInlayScope]**：名字由该对象按「形态常量 + 形态判据」同处一地给出，本面板只供运行期
+         * 变量（pid / 序号）。**为什么必须同源**：inlay 作用域锚点靠文件名判定「这个编辑器是不是本
+         * 面板预览编辑器」，而一级预览文件名每轮预热都不同（见下），故锚点按**形态**匹配——两侧各自
+         * 硬编码字面量会在改名时静默打穿锚点（锚点不报错，只是 inlay 永不出现）。
+         *
+         * **为什么每次预热必须换名**：固定名（原 `mpsql-preview.sql`）下预热重写同一路径，而该路径
+         * 的 document 里存着上一轮装配写入的真 SQL（未落盘）→ 平台 `MemoryDiskConflictResolver`
+         * 判定「内存与磁盘均变」→ 模态「File Cache Conflict」抢焦点；选「Load File System Changes」
+         * 还会把真 SQL 换成磁盘上的占位空内容。换名后每次预热落在全新路径（无任何 document），
+         * 冲突链从根上消失（详见 [projectPreviewFile]）。
+         *
+         * **为什么带 pid**：同项目可被多个 IDE 进程同时打开（各自一份本目录），进程内自增序号在
+         * 两个进程里会重号——重号会让「按面板生命周期删除」误删另一会话正在用的文件。
+         * pid 在**存活进程间唯一**，故存活会话之间不可能撞名；与已退出会话的同名残留相遇时
+         * 只会走 [projectPreviewFile] 的兜底复用分支（无 document → 仍无冲突）。
+         * 序号 + pid 都是可读、可定位的：目录里一眼看出「哪个 IDE 进程的第几次预览」。
+         */
+
+        /** T-FixN2：本 IDE 进程号（文件名的会话段；取不到退化为 `0`，仍是合法文件名）。 */
+        private val PREVIEW_TEMP_FILE_OWNER: String =
+            runCatching { ProcessHandle.current().pid().toString() }.getOrDefault("0")
+
+        /** T-FixN2：本 JVM 内预览序号（跨面板共享，保证同进程内每个预热文件名唯一）。 */
+        private val PREVIEW_TEMP_FILE_SEQ = java.util.concurrent.atomic.AtomicInteger(0)
+
+        /** T-FixN2：生成下一次预热的唯一临时文件名（形态与判据同源，见 [PreviewInlayScope]）。 */
+        internal fun nextPreviewTempFileName(): String = PreviewInlayScope.previewTempFileName(
+            PREVIEW_TEMP_FILE_OWNER,
+            PREVIEW_TEMP_FILE_SEQ.incrementAndGet(),
+        )
+
+        /**
+         * T-FixN2：预览文件的方言映射对象——**父目录**（取不到父目录时退回文件本身，语义同改动前）。
+         *
+         * 唯一文件名后按文件映射会让每个新名字都判「未映射」：每轮预热白付一次 setMapping
+         * （`SqlDialectPusher` push all dumb）+ workspace.xml 的 `SqlDialectMappings` 状态按文件路径
+         * 逐个累积。平台 `PerFileMappingsBase.getMappingInner → getMappingForHierarchy` 自下而上
+         * 逐级查表（`for (cur = file; cur != null; cur = cur.getParent())`），故目录映射被其下所有
+         * 文件继承（平台自身也按目录记账：`installDeleteUndo` 对 `file.isDirectory()` 显式收集其下
+         * 全部子条目），一次映射覆盖该目录下**全部**预览文件（含每轮的新名字）。
+         *
+         * 抽成 internal 纯函数仅为让「映射对象是目录、且目录 vf 实例跨文件名稳定」可直接单测断言
+         * （真机/单测环境无 Database 插件时 `SqlDialectMappings` 类不可加载，映射本身不可断言）。
+         */
+        internal fun previewDialectMappingTarget(vf: com.intellij.openapi.vfs.VirtualFile): com.intellij.openapi.vfs.VirtualFile =
+            vf.parent ?: vf
     }
+}
+
+// ------------------------------------------------------------------
+// T-SourceJumpFunnel P2-2（§3.3 验收项单测抽取）：调用栈快照文案组装
+// ------------------------------------------------------------------
+
+/**
+ * 调用栈快照的两段文案产物（纯数据，无组件依赖）。
+ *
+ * @property inlineLine meta 提示行内联摘要（`   调用栈: <摘要>`，超长截断；无快照时为空串）
+ * @property tooltipTail 悬停 tooltip 追加的全文节点（`\n调用栈: <完整链>`；无快照时为空串）
+ */
+internal data class StackDigestMetaText(val inlineLine: String, val tooltipTail: String)
+
+/** 调用栈摘要字符上限：超过即截断到该长度并追加 [STACK_DIGEST_ELLIPSIS]。 */
+internal const val STACK_DIGEST_MAX_CHARS = 120
+
+/** 调用栈摘要截断标记。 */
+internal const val STACK_DIGEST_ELLIPSIS = "…"
+
+/**
+ * T-SourceJumpFunnel P2-2：把调用栈快照 [digest] 组装成「meta 行内联摘要（截断展示）」与
+ * 「tooltip 全文节点（完整链不截断）」两段文案；[digest] 为 null 时两段均为空串。
+ *
+ * 由 [SqlPreviewPanel.updateMeta] 调用（内联摘要进 tooltipText 首行，全文节点换行追加其后）。
+ * 抽出为顶层 internal 纯函数仅为让 §3.3 验收项（截断长度/截断标记/全文节点）可直接单测断言，
+ * 组装表达式与原内联实现逐字一致，不改任何展示行为。
+ */
+internal fun buildStackDigestMetaText(digest: String?): StackDigestMetaText {
+    if (digest == null) return StackDigestMetaText(inlineLine = "", tooltipTail = "")
+    val label = MpSqlVisualizerBundle.message("panel.meta.stackDigest")
+    val summary =
+        if (digest.length > STACK_DIGEST_MAX_CHARS) {
+            digest.substring(0, STACK_DIGEST_MAX_CHARS) + STACK_DIGEST_ELLIPSIS
+        } else {
+            digest
+        }
+    return StackDigestMetaText(
+        inlineLine = "   " + label + " " + summary,
+        tooltipTail = "\n" + label + " " + digest,
+    )
+}
+
+// ------------------------------------------------------------------
+// T-SourceJumpFunnel P5 复核修正：meta 行宽度预算组装（纯逻辑，脱 FontMetrics 可直测）
+// ------------------------------------------------------------------
+
+/**
+ * 调用栈摘要在 meta 行里至少要拿到的宽度（px）：约等于标签「   调用栈:」自身宽度 @13pt，
+ * 低于此值就整段不放摘要——宁可让主体独占预算，也不留一个看不出是什么的孤零零省略号。
+ */
+internal const val META_DIGEST_MIN_PX = 56
+
+/**
+ * T-M26.3 中段省略的纯函数形态（[SqlPreviewPanel.ellipsize] 逐字同源）：保留尾部 30%，
+ * 超宽时显示 `头…尾`。[widthOf] 是文本像素宽度度量——注入后本函数与
+ * [metaLineWithinBudget] 都能脱 FontMetrics 单测（测试用「1 字符 = 1px」替身即可）。
+ */
+internal fun ellipsizeMiddle(text: String, widthOf: (String) -> Int, maxWidth: Int): String {
+    val mark = "\u2026"
+    if (widthOf(text) <= maxWidth) return text
+    val tailLen = (text.length * 0.3).toInt().coerceAtLeast(4).coerceAtMost(text.length - 1)
+    val tail = text.takeLast(tailLen)
+    var head = text.length - tailLen
+    while (head > 0 && widthOf(text.take(head) + mark + tail) > maxWidth) head--
+    return text.take(head) + mark + tail
+}
+
+/**
+ * 尾部截断（保留头部）——用于调用栈摘要：摘要**栈顶在左**（[buildStackDigestMetaText] 的摘要自栈顶
+ * 起截），尾部是信息量最低的栈底帧，故超宽时截尾，而非 [ellipsizeMiddle] 的中段省略。
+ */
+internal fun clipTailToWidth(text: String, widthOf: (String) -> Int, maxWidth: Int): String {
+    if (widthOf(text) <= maxWidth) return text
+    val mark = "\u2026"
+    var end = text.length
+    while (end > 0 && widthOf(text.take(end) + mark) > maxWidth) end--
+    return if (end <= 0) "" else text.take(end) + mark
+}
+
+/**
+ * T-SourceJumpFunnel P5 复核修正：meta 行在宽度预算内的组装——**主体优先，摘要吃剩余宽度**。
+ *
+ * P5 把调用栈摘要并入可见行后，若仍把「主体 + 摘要」当**单段文本**交给 [ellipsizeMiddle]
+ * （保留尾部 30%），窄窗下主体会被整段挤掉、可见行只剩「…」+ 栈底帧——主体（表名 / wrapper 类型）
+ * 是这一行的主信息，栈底恰是调用链里信息量最低的一端，优先级倒挂。复核（20260920）实测默认宽度
+ * 预算仅够 15~25 字符，而摘要上限 120 字符，故必然触发。
+ *
+ * 组装规则：主体自身超预算 → 主体中段省略（F3 原行为）；主体放得下 → 摘要按剩余宽度截尾；
+ * 剩余不足 [META_DIGEST_MIN_PX] → 整段丢弃摘要。[digest] 为空（无调用栈快照）时逐字退回 F3
+ * 原行为，渲染不变。
+ *
+ * @param full   完整行（主体 + 摘要）——放得下即整段返回（与改前逐字节一致）
+ * @param head   主体（meta + 警示行）
+ * @param digest 调用栈内联摘要（`   调用栈: <摘要>`；无快照时为空串）
+ */
+internal fun metaLineWithinBudget(
+    full: String,
+    head: String,
+    digest: String,
+    widthOf: (String) -> Int,
+    budget: Int,
+): String {
+    if (widthOf(full) <= budget) return full
+    if (digest.isEmpty()) return ellipsizeMiddle(head, widthOf, budget)
+    val remain = budget - widthOf(head)
+    if (remain < META_DIGEST_MIN_PX) return ellipsizeMiddle(head, widthOf, budget)
+    return head + clipTailToWidth(digest, widthOf, remain)
 }

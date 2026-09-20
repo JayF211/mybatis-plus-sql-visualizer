@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.execute
 
+import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
@@ -717,8 +718,11 @@ object DataSourceSelector {
      * ConsoleView.print(String, ConsoleViewContentType) 会经 DBN 原生输出链路写入并刷新显示，
      * 不依赖/不破坏结果区内部布局（结果网格照常）。反射调用避免对 ConsoleViewContentType 的
      * 编译期依赖（其所在模块可能随 IDE 版本变动）。
+     *
+     * T-FatalPassthrough T-FP-02b：`internal` 供 `FatalPassthroughTest` 直测本函数的**外层 runCatching
+     * 边界**（同 [execFileContentMatches] / [isExecDocOpenInEditor] 先例）——私有则行为用例无处注入。
      */
-    private fun writeConsoleOutput(console: Any?, text: String, isError: Boolean = false) {
+    internal fun writeConsoleOutput(console: Any?, text: String, isError: Boolean = false) {
         if (console == null || text.isBlank()) return
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
@@ -757,6 +761,11 @@ object DataSourceSelector {
                         LOG.info("[M36] writeConsoleOutput: appended to history doc len=${doc.textLength}")
                         return
                     } catch (e: Throwable) {
+                        // T-FatalPassthrough T-FP-02：JVM 级致命错误透传（见 util/FatalErrors.kt）——
+                        // 本文件是执行链长驻路径，捕获面覆盖 Error：普通异常（含可选能力探测的
+                        // ClassNotFoundException）仍走既有降级，VirtualMachineError/LinkageError 不得
+                        // 被吞成一条日志后让执行链带病继续。
+                        if (FatalErrors.isFatal(e)) throw e
                         LOG.info("[M36] writeConsoleOutput doc-append FAILED: ${e.message}")
                     }
                 }
@@ -768,6 +777,7 @@ object DataSourceSelector {
                     val fieldName = if (isError) "ERROR_OUTPUT" else "NORMAL_OUTPUT"
                     contentClass.getField(fieldName).get(null)
                 } catch (e: Throwable) {
+                    if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
                     contentClass.fields.firstOrNull()?.get(null)
                 }
                 val print = consoleView.javaClass.methods.firstOrNull { m ->
@@ -784,6 +794,15 @@ object DataSourceSelector {
                 LOG.info("[M36] writeConsoleOutput: ConsoleViewContentType class not found")
             }
         }.onFailure { e ->
+            // T-FatalPassthrough T-FP-02b（独立复核阻断 1 修正）：本函数的 runCatching 包住上面两处
+            // fatal 透传（doc-append 捕获块 / ConsoleViewContentType 字段回退捕获块）——在此把 fatal
+            // 吞成一行 INFO 等于透传无效（改前实测：fatal 被转成 "[M36] writeConsoleOutput FAILED: …"
+            // 后执行链带病继续，正是上面捕获块注释声称的反面）。反射链先解包 InvocationTargetException
+            // 再判（同本文件原生执行链 :2604-2607 形态；只判外层会漏判目标方法抛出的 fatal）。
+            // 非 fatal 路径行为逐字节不变：仍只记原 INFO 行，函数返回 Unit、调用方（EDT 排出的
+            // writeConsoleOutput + onError 回调）行为不变；fatal 则透传到平台 EDT 处理器记录现场。
+            val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+            if (FatalErrors.isFatal(cause)) throw cause
             LOG.info("[M36] writeConsoleOutput FAILED: ${e.message}")
         }
     }
@@ -2583,6 +2602,9 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                                                     afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false, sqlText = executedSql)
                                                     } catch (t: Throwable) {
                                                         val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
+                                                        // T-FP-02：反射包装层（InvocationTargetException）是普通异常，
+                                                        // 直接判外层会漏判——须解包后再判 fatal 并透传（见 util/FatalErrors.kt）
+                                                        if (FatalErrors.isFatal(cause)) throw cause
                                                         LOG.warn(
                                                             "[M36] native run chain FAILED: ${cause.javaClass.name}: ${cause.message}\n    " +
                                                                 cause.stackTrace.take(8).joinToString("\n    at ") { it.toString() },
@@ -2600,6 +2622,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                                                     }
                                                 }
                                         } catch (t: Throwable) {
+                                            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
                                             LOG.warn("[M36] submitTransactionLater FAILED: ${t.javaClass.simpleName}: ${t.message}", t)
                                         }
                                     }, com.intellij.openapi.application.ModalityState.any())
@@ -3218,6 +3241,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         val ioFile = try {
             projectExecFile(project, sql)
         } catch (e: Throwable) {
+            if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
             // projectExecFile 尾段 FileUtil.writeToFile 可抛 IOException——原实现靠外层
             // runCatching 吞掉，拆除后这里必须自接，否则异常直冲 EDT
             return fail("writeFile", "${e.javaClass.simpleName}: ${e.message}")
@@ -3235,6 +3259,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                 syncExecVfContentIfNeeded(project, vf0, sql)
             }
         } catch (e: Throwable) {
+            if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
             return fail("preRefreshConverge", "${e.javaClass.simpleName}: ${e.message}")
         }
         // T-ExecCopyFix F2b：refresh 段包 WriteIntentReadAction（详见方法 KDoc）；
@@ -3246,12 +3271,14 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                     LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
                 }
         } catch (e: Throwable) {
+            if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
             return fail("refreshVfs", "${e.javaClass.simpleName}: ${e.message}")
         } ?: return fail("refreshVfs", "VFS not visible after refresh (${ioFile.path}, exists=${ioFile.exists()})")
         // T-EC-04：VFS 缺条目裸写路径的防御收口——正常恒 no-op，异常残留在此收敛（含落盘）
         try {
             syncExecVfContentIfNeeded(project, vf, sql)
         } catch (e: Throwable) {
+            if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
             return fail("syncVfContent", "${e.javaClass.simpleName}: ${e.message}")
         }
         mapDialectBeforePsi(project, vf, LOG)
@@ -3260,6 +3287,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                 PsiManager.getInstance(project).findFile(vf)
             }
         } catch (e: Throwable) {
+            if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
             return fail("findPsi", "${e.javaClass.simpleName}: ${e.message}")
         } ?: return fail("findPsi", "PsiManager.findFile null (${vf.name})")
         // T-PerfSweep2-04：写点统一走 markCachedTempPsiFile（挂一次性项目关闭钩子）
@@ -3506,9 +3534,21 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
     private val lastExecDocRef =
         java.util.concurrent.atomic.AtomicReference<java.lang.ref.WeakReference<com.intellij.openapi.editor.Document>?>(null)
 
-    /** F6 探针已安装项目集（连接随项目 disposable 自动断开，此处只防重复安装）。 */
-    private val conflictProbeProjects =
-        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<Project, Boolean>())
+    /**
+     * F6 探针已安装项目集（连接随项目 disposable 自动断开，此处只防重复安装）。
+     *
+     * T-PS5-08：改**弱键集**（`WeakHashMap` 键弱引用：项目唯一强引用消失即可回收）——此前强引用
+     * 集把项目对象钉到显式 `remove`（走 [hookProjectClose] 的项目 Disposer，但该函数在
+     * `hookProjectsClose` 已登记时会提前 return、不再登记第二次项目级 Disposer，留下不可回收窗口）。
+     * 去重/判空语义不变（条目只用于「是否已安装」判定）。
+     */
+    private val conflictProbeProjects: MutableSet<Project> =
+        java.util.Collections.synchronizedSet(
+            java.util.Collections.newSetFromMap(java.util.WeakHashMap<Project, Boolean>()),
+        )
+
+    /** T-PS5-08 测试缝：探针项目集（弱引用可达性断言用；生产链路无调用点）。 */
+    internal fun conflictProbeProjectsForTest(): MutableSet<Project> = conflictProbeProjects
 
     /**
      * F5：应用级 document 变更监听（惰性安装一次）——exec 文档每次变更（用户在控制台手改/
@@ -3783,6 +3823,9 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             }
             // T-PreviewFast P2：非阻塞派发——预热是投机性写入，没必要让 BGT 等满 2 秒
             runCatching { projectExecFile(project, sql, nonBlocking = true) }.onFailure { e ->
+                // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：写盘链的 fatal 不得被本 runCatching
+                // 吞成一条 warn（否则 prewarm 链 4 处既有透传全部作废）。非 fatal 仍原样 warn 降级。
+                if (FatalErrors.isFatal(e)) throw e
                 LOG.warn("[M36] exec prewarm refresh-content failed: ${e.javaClass.simpleName}: ${e.message}")
             }
             LOG.info("[M36] exec prewarm: cache hit, content refreshed only")
@@ -3841,6 +3884,9 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         lastTempFileFailure = null
         // T-ExecCopyFix F2b：refresh 段 WriteIntentReadAction（BGT 上 WIRA 合法；与 EDT 冷路径同款包装）
         val ioFile = runCatching { projectExecFile(project, sql) }.getOrElse { e ->
+            // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：fatal 上浮（预热跑在 BGT，透传由平台
+            // 记录现场）；非 fatal 仍返回（writeFile 失败 → 跳过预热，语义逐字不变）。
+            if (FatalErrors.isFatal(e)) throw e
             LOG.warn("[M36] exec prewarm writeFile failed: ${e.javaClass.simpleName}: ${e.message}")
             return
         } ?: return
@@ -3854,6 +3900,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                 syncExecVfContentIfNeeded(project, vf0, sql)
             }
         } catch (e: Throwable) {
+            if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
             LOG.warn("[M36] exec prewarm pre-refresh converge FAILED: ${e.javaClass.simpleName}: ${e.message}")
         }
         val vf = try {
@@ -3862,6 +3909,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                     LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
                 }
         } catch (e: Throwable) {
+            if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传（prewarm 跑在 BGT，透传由平台记录现场）
             LOG.warn("[M36] exec prewarm refreshVfs failed: ${e.javaClass.simpleName}: ${e.message}")
             return
         } ?: run {
@@ -3872,6 +3920,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         try {
             syncExecVfContentIfNeeded(project, vf, sql)
         } catch (e: Throwable) {
+            if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
             LOG.warn("[M36] exec prewarm syncVfContent failed: ${e.javaClass.simpleName}: ${e.message}")
             return
         }
@@ -3885,6 +3934,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                 PsiManager.getInstance(project).findFile(vf)
             }
         } catch (e: Throwable) {
+            if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
             LOG.warn("[M36] exec prewarm findPsi failed: ${e.javaClass.simpleName}: ${e.message}")
             return
         } ?: run {

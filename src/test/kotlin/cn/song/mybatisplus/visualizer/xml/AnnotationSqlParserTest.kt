@@ -105,4 +105,39 @@ class AnnotationSqlParserTest {
             parser.parse("<script>SELECT * FROM t <include refid=\"cols\"/></script>", XmlStatementKind.SELECT, emptyList())
         }
     }
+
+    // ------------------------------------------------------------------
+    // T-XmlDtdHardening T-XDH-05：注解 <script> 路径与 XML mapper 同规（共用 parseDocument 入口）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `script内DTD指数膨胀被拒绝_与mapper同规`() {
+        // 注解链与 mapper 链共用 XmlMapperParser.parseDocument → 同一膨胀预扫。`<script>` 之后的
+        // DOCTYPE 位置本身非法（DOCTYPE 只能在序言），但预扫先于 DOM 解析，故拒绝口径是膨胀判据
+        // 而非「DOCTYPE 位置非法」——本用例钉住「共享入口」这一事实。
+        val script = buildString {
+            append("<script><!DOCTYPE script [\n<!ENTITY e0 \"xxxxxxxxxx\">\n")
+            for (level in 1..4) {
+                append("<!ENTITY e").append(level).append(" \"")
+                repeat(10) { append("&e").append(level - 1).append(';') }
+                append("\">\n")
+            }
+            append("]><select id=\"s1\">&e4;</select></script>")
+        }
+        val e = assertThrows(XmlParseException::class.java) {
+            parser.parse(script, XmlStatementKind.SELECT, emptyList())
+        }
+        assertTrue("拒绝原因须点明实体展开，实际：${e.message}", e.message.orEmpty().contains("实体展开"))
+    }
+
+    @Test
+    fun `script内无法夹带DTD声明_序言契约拒绝`() {
+        // 注解 SQL 文本恒以 `<script>` 开头（MyBatis XMLLanguageDriver 的包装形态），DOCTYPE 只能在
+        // 序言出现 → 注解路径无法夹带内联子集/实体定义；本用例钉住「夹带即拒绝」
+        val script =
+            "<script><!DOCTYPE script [<!ENTITY status \"ACTIVE\">]><select id=\"s1\">SELECT '&status;'</select></script>"
+        assertThrows(XmlParseException::class.java) {
+            parser.parse(script, XmlStatementKind.SELECT, emptyList())
+        }
+    }
 }

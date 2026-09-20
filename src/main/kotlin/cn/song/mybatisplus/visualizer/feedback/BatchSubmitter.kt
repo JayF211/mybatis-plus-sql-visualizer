@@ -16,12 +16,19 @@ package cn.song.mybatisplus.visualizer.feedback
  */
 object BatchSubmitter {
 
-    /** 对话框里的一条批量条目：内容 + 是否附带堆栈（勾选默认开，同单条形态）。 */
+    /**
+     * 对话框里的一条批量条目：内容 + 是否附带堆栈（勾选默认开，同单条形态）。
+     *
+     * T-ErrorReportRedact（D1=B）：[includeMessage] = 该条目的 message 全文是否随帖子外传。
+     * 默认 **false**（脱敏形态：标题/描述只出异常类名）——由对话框的「附带异常消息全文」
+     * 开关在收集时统一回写（与 [attachStack] 同款的逐条传输策略标记）。
+     */
     class BatchItem(
         val title: String,
         val message: String?,
         val stackTraceText: String?,
         var attachStack: Boolean = true,
+        var includeMessage: Boolean = false,
     )
 
     /**
@@ -82,14 +89,33 @@ object BatchSubmitter {
         return batchItems.drop(1).map { item -> submissionFor(submission, item) }
     }
 
-    /** 批量条目 → 独立帖子载荷（纯函数）：沿用首发的时间/版本上下文，标题描述各自组装。 */
+    /**
+     * 批量条目 → 独立帖子载荷（纯函数）：沿用首发的时间/版本上下文，标题描述各自组装。
+     *
+     * T-ErrorReportRedact（D1=B）：[BatchItem.includeMessage] 决定该条帖子走哪种形态——
+     * false（默认）走脱敏形态（标题只出类名、描述出类名 + 栈帧摘要 + cause 链），
+     * true 时逐字节等于改前形态（标题 `类名: 消息首行`、描述 message 全文）。
+     * 附件与消息开关无关（各自条目的 [BatchItem.attachStack] 独立决定）。
+     */
     internal fun submissionFor(
         template: FeedbackApi.Submission,
         item: BatchItem,
     ): FeedbackApi.Submission {
         val request = template.request.copy(
-            title = ErrorReportComposer.buildTitle(item.title, item.message),
-            description = ErrorReportComposer.buildDescription(item.message, userNotes = null, fingerprint = null),
+            title = if (item.includeMessage) {
+                ErrorReportComposer.buildTitle(item.title, item.message)
+            } else {
+                ErrorReportComposer.buildRedactedTitle(item.title)
+            },
+            description = if (item.includeMessage) {
+                ErrorReportComposer.buildDescription(item.message, userNotes = null, fingerprint = null)
+            } else {
+                ErrorReportComposer.buildRedactedDescription(
+                    item.title,
+                    item.stackTraceText,
+                    messageOmitted = !item.message.isNullOrBlank(),
+                )
+            },
             category = ErrorReportComposer.guessCategory(item.stackTraceText),
         )
         val stack = item.stackTraceText?.takeIf { it.isNotBlank() && item.attachStack }

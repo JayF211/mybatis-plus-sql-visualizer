@@ -1,10 +1,11 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.log.agent.AgentManager
+import cn.song.mybatisplus.visualizer.util.FatalErrors
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.util.messages.MessageBusConnection
 import java.lang.reflect.InvocationHandler
-import cn.song.mybatisplus.visualizer.log.agent.AgentManager
 import java.lang.reflect.Proxy
 
 /**
@@ -69,6 +70,10 @@ object RunConfigurationProcessListener {
             platformClassLoader,
         ).isInstance(profile)
     } catch (t: Throwable) {
+        // T-FatalPassthrough T-FP-02：JVM 级致命错误透传（见 util/FatalErrors.kt）——本文件全部
+        // 捕获点的捕获面都覆盖了 Error：ClassNotFoundException（可选能力缺失）仍走既有降级，
+        // NoClassDefFoundError/ExceptionInInitializerError（环境/构建损坏）不得降级成一条 warn。
+        if (FatalErrors.isFatal(t)) throw t
         LOG.warn("isModuleBasedProfile: 判定失败，按主进程处理（${t.message}）", t)
         true
     }
@@ -81,6 +86,7 @@ object RunConfigurationProcessListener {
         val listenerClass = try {
             Class.forName("com.intellij.execution.ExecutionListener", true, platformClassLoader)
         } catch (t: Throwable) {
+            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
             LOG.warn("RunConfigurationProcessListener: ExecutionListener 不可用——降级为 RCM 轮询兜底（project=${project.name}）", t)
             return false
         }
@@ -89,6 +95,7 @@ object RunConfigurationProcessListener {
                 Class.forName("com.intellij.execution.ExecutionManager", true, platformClassLoader)
             executionManagerClass.getField("EXECUTION_TOPIC").get(null)
         } catch (t: Throwable) {
+            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
             LOG.warn("RunConfigurationProcessListener: EXECUTION_TOPIC 不可用——降级为 RCM 轮询兜底（project=${project.name}）", t)
             return false
         }
@@ -103,6 +110,7 @@ object RunConfigurationProcessListener {
                     try {
                         manager.resetEntrySequence()
                     } catch (t: Throwable) {
+                        if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
                         LOG.warn("processStarted: 行号清零回调失败（project=${project.name}）", t)
                     }
                 } else {
@@ -111,6 +119,7 @@ object RunConfigurationProcessListener {
                 try {
                     manager.onProjectProcessStarted()
                 } catch (t: Throwable) {
+                    if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
                     LOG.warn("processStarted: 自动捕捉回调失败（project=${project.name}）", t)
                 }
 
@@ -123,6 +132,7 @@ object RunConfigurationProcessListener {
                 try {
                     project.getService(AgentManager::class.java).onProcessAppeared(args?.getOrNull(2), isMainLaunch)
                 } catch (t: Throwable) {
+                    if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
                     LOG.warn("processStarted: 增强捕获回调失败（project=${project.name}）", t)
                 }
             }
@@ -140,6 +150,7 @@ object RunConfigurationProcessListener {
             LOG.info("RunConfigurationProcessListener: 已订阅 EXECUTION_TOPIC（project=${project.name}）")
             true
         } catch (t: Throwable) {
+            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
             LOG.warn("RunConfigurationProcessListener: messageBus 订阅失败——降级为 RCM 轮询兜底（project=${project.name}）", t)
             false
         }

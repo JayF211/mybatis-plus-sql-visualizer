@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.mcp
 
+import cn.song.mybatisplus.visualizer.util.FatalErrors
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import java.sql.SQLWarning
@@ -32,7 +33,18 @@ internal fun drainWarnings(vararg surfaces: Pair<() -> List<*>?, () -> Unit>): L
     }.filter { it.isNotBlank() }
 
 /**
- * T-McpToolset headless 执行通道（mpsv_explain 专用，反射隔离 DatabaseTools）。
+ * 通道层行预算兜底（T-McpRowBudget / T-MRB-04，O-36）：工具层已按
+ * [McpExplainFormatter.clampMaxRows] 钳制一次，本通道再钳一次——[McpDbExecutor.executeQuery]
+ * 是「未来任何执行类工具共用」的通道（[McpSelectGuard] KDoc 同款宣示），新增执行工具若漏钳制
+ * 也不会突破 [McpExplainFormatter.HARD_MAX_ROWS]（对齐 DBX「静态断言恒小于驱动上限」的护栏语义）。
+ * 定案=**钳制不抛错**（越界静默收进合法区间，与 clampMaxTables 既有语义一致）。
+ *
+ * 顶层函数（非 object 成员）：测试加载本文件门面类时不必触发 [McpDbExecutor] 的 Logger 初始化。
+ */
+internal fun channelRowBudget(requested: Int): Int = McpExplainFormatter.clampMaxRows(requested)
+
+/**
+ * T-McpToolset headless 执行通道（sqlv_explain 专用，反射隔离 DatabaseTools）。
  *
  * 为什么不复用 [cn.song.mybatisplus.visualizer.execute.SqlExecutor]：既有执行链是 UI 控制台
  * 形态（弹数据源选择框 + 异步回调 + 结果进原生控制台），违反 MCP 零弹窗红线且拿不到文本结果。
@@ -73,6 +85,9 @@ object McpDbExecutor {
     private const val REMOTE_RESULT_SET = "com.intellij.database.remote.jdbc.RemoteResultSet"
     private const val REMOTE_META = "com.intellij.database.remote.jdbc.RemoteResultSetMetaData"
 
+    /** T-McpAuditTrail T-MAT-01：失败文本上限（历史文件单条元数据行，不落整段堆栈）。 */
+    private const val ERROR_TEXT_LIMIT = 200
+
     /** database 插件是否在场（Ultimate/DataGrip）。 */
     fun isDatabaseAvailable(): Boolean = runCatching {
         Class.forName(MANAGER_CLASS)
@@ -108,6 +123,25 @@ object McpDbExecutor {
     }
 
     /**
+     * 一次执行的结果载体（T-McpAuditTrail / T-MAT-01）：只含 JDK 类型，不引平台/IDE 服务类型——
+     * 回调注入形态正是为了不把 [McpDbExecutor] 的 headless 边界与 [cn.song.mybatisplus.visualizer.log.SqlLogManager]
+     * 之类的项目级服务绑在一起（依赖留在工具层）。
+     *
+     * @param executedSql 实际交给驱动的语句文本（explain 通道=EXPLAIN 包装句）。**注意**：历史入库
+     *   必须用调用方自己持有的**原始** selectSql，不得落本字段（T-MAT-02：包装句首 token 为
+     *   `EXPLAIN`，[cn.song.mybatisplus.visualizer.log.LogStatementClassifier] 会判 `OTHER` → 无类型染色）。
+     * @param elapsedMs 本次执行耗时（含建连与取数，毫秒）
+     * @param errorText 失败时的「异常类名: 首行消息」（截断）；成功为 null
+     * @param dataSourceName 数据源显示名（反射 DasDataSource.getName；不可达/headless 为 null）
+     */
+    data class ExecutedOutcome(
+        val executedSql: String,
+        val elapsedMs: Long,
+        val errorText: String?,
+        val dataSourceName: String?,
+    )
+
+    /**
      * 在指定数据源上执行只读查询并采集行列文本（EXPLAIN 用）。
      * 密码未保存/不可达等建连失败以 SQLException 冒泡，适配层按
      * [McpToolErrors.DATASOURCE_UNREACHABLE] 包装为 agent 可读错误（零弹窗 fail closed）。
@@ -116,6 +150,13 @@ object McpDbExecutor {
      * 建议值，RemoteStatement 镜像 243/262 javap 同形）；超时形态异常（[cn.song.mybatisplus.
      * visualizer.execute.ExecutionTimeoutGuard.isTimeoutLike]）先 Statement.cancel() 收尾
      * 再冒泡，消息尾附 `timed out after Ns`（agent 可读，不引 JSON）。
+     *
+     * T-McpRowBudget（O-36）：[maxRows] 先过 [channelRowBudget] 兜底钳制再进采集——调用方
+     * （含未来新增的执行类工具）传什么都不会突破 [McpExplainFormatter.HARD_MAX_ROWS]。
+     *
+     * T-McpAuditTrail（T-MAT-01）：[onExecuted] 为执行链唯一出口钩子——成功与失败**两条路径**
+     * 都回调一次（失败回调后异常原样冒泡）。钩子是旁路：自身抛异常只记日志，绝不连坐执行结果
+     * 或吞掉失败（审计不得成为门控）。null（默认）时零行为差异——既有调用点逐字节不变。
      */
     fun executeQuery(
         project: Project,
@@ -123,7 +164,77 @@ object McpDbExecutor {
         sql: String,
         maxRows: Int,
         timeoutSeconds: Int = 0,
+        onExecuted: ((ExecutedOutcome) -> Unit)? = null,
     ): McpExplainFormatter.RawResult {
+        val started = System.currentTimeMillis()
+        return try {
+            executeQueryInternal(project, dataSource, sql, maxRows, timeoutSeconds).also {
+                notifyExecuted(onExecuted, sql, System.currentTimeMillis() - started, null, dataSource)
+            }
+        } catch (e: Throwable) {
+            // T-FatalPassthrough（合流收口，T-FP-03 守卫要求）：JVM 级致命错误不投审计钩子——
+            // 钩子会构造 ExecutedOutcome（反射取数据源名 + 文本构造）并落历史，内存/链接已损坏时
+            // 继续这些副作用只会把现场搅乱；fatal 原样透传给平台/进程级通道。反射链须先解包：
+            // 目标方法抛出的 Error 被 Method.invoke 包进 InvocationTargetException（普通异常），
+            // 只判外层会漏判（与 errorTextOf 同款解包口径，见 util/FatalErrors.kt 用法说明）。
+            val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+            if (FatalErrors.isFatal(cause)) throw cause
+            notifyExecuted(onExecuted, sql, System.currentTimeMillis() - started, e, dataSource)
+            throw e
+        }
+    }
+
+    /**
+     * 钩子投递（T-MAT-01）：hook 为 null 时**立即返回**——耗时以外的任何采集（反射取数据源名、
+     * 异常文本构造）都不发生，未接线的调用点零开销。
+     */
+    private fun notifyExecuted(
+        hook: ((ExecutedOutcome) -> Unit)?,
+        sql: String,
+        elapsedMs: Long,
+        failure: Throwable?,
+        dataSource: Any,
+    ) {
+        if (hook == null) return
+        val outcome = ExecutedOutcome(
+            executedSql = sql,
+            elapsedMs = elapsedMs,
+            errorText = failure?.let { errorTextOf(it) },
+            dataSourceName = dataSourceName(dataSource),
+        )
+        runCatching { hook(outcome) }.onFailure {
+            LOG.warn("McpDbExecutor: onExecuted hook failed (execution result unaffected)", it)
+        }
+    }
+
+    /**
+     * 失败文本（T-MAT-01）：异常类名 + 首行消息，[ERROR_TEXT_LIMIT] 截断。
+     *
+     * 反射调用链里异常被包在 `InvocationTargetException` 中（其 message 恒 null），故先解包取
+     * 目标异常——否则历史里只剩一个类名，排障无信息。多行堆栈只取首行（历史文件单条正文，
+     * 不落整段堆栈）。
+     */
+    private fun errorTextOf(e: Throwable): String {
+        val target = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+        val firstLine = target.message?.lineSequence()?.firstOrNull { it.isNotBlank() }
+        val text = "${target.javaClass.simpleName}: ${firstLine ?: "(no message)"}"
+        return if (text.length <= ERROR_TEXT_LIMIT) text else text.take(ERROR_TEXT_LIMIT) + "…"
+    }
+
+    /** 数据源显示名（反射 DasDataSource.getName；不可达返回 null——展示性字段，取不到不影响主链）。 */
+    private fun dataSourceName(dataSource: Any): String? = runCatching {
+        Class.forName(DAS_DATA_SOURCE).getMethod("getName").invoke(dataSource) as? String
+    }.getOrNull()
+
+    /** T-MAT-01 之前的执行本体（钩子包装前逐行原样；行为零变化）。 */
+    private fun executeQueryInternal(
+        project: Project,
+        dataSource: Any,
+        sql: String,
+        maxRows: Int,
+        timeoutSeconds: Int = 0,
+    ): McpExplainFormatter.RawResult {
+        val rowBudget = channelRowBudget(maxRows)
         val manager = Class.forName(DCM).getMethod("getInstance").invoke(null)
         val builder = Class.forName(DCM).getMethod("build", Project::class.java, Class.forName(CONNECTION_POINT))
             .invoke(manager, project, dataSource)
@@ -150,7 +261,7 @@ object McpDbExecutor {
                 try {
                     val resultSet = Class.forName(REMOTE_STATEMENT).getMethod("executeQuery", String::class.java)
                         .invoke(statement, sql)
-                    val raw = collect(resultSet, maxRows)
+                    val raw = collect(resultSet, rowBudget)
                     // 执行成功才采集 notices；失败路径直接抛出（notices 无从产生=DBX「出错丢弃」口径）
                     val notices = drainWarnings(*surfaces)
                     if (notices.isNotEmpty()) LOG.info("McpDbExecutor: drained ${notices.size} driver notice(s)")

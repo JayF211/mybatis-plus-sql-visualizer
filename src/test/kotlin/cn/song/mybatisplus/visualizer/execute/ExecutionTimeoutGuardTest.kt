@@ -53,6 +53,17 @@ class ExecutionTimeoutGuardTest {
         assertEquals("负值钳 0", 0, ExecutionTimeoutGuard.perStatementTimeoutSeconds(-1))
     }
 
+    @Test
+    fun testDelimiterScriptStatementCountNotAmplified() {
+        // T-DA-03 消费面④（O-39）：语句数来自 SqlStatementSplitter 拆句计数——含 DELIMITER 的
+        // 存储过程脚本改前碎成 4 段（预算被放大到 4×基础值），现为 2 段（过程体整段 + 普通语句）
+        val script = "DELIMITER $$\nCREATE PROCEDURE p()\nBEGIN\n  SELECT 1;\n  SELECT 2;\nEND$$\n" +
+            "DELIMITER ;\nSELECT 3;"
+        val count = cn.song.mybatisplus.visualizer.util.SqlStatementSplitter.split(script).size
+        assertEquals("过程体一条 + 普通语句一条", 2, count)
+        assertEquals("预算=2×基础值（无碎句放大）", 60, ExecutionTimeoutGuard.timeoutBudgetSeconds(30, count))
+    }
+
     // ======================== 超时形态判定（三路 + 反射链解包） ========================
 
     @Test

@@ -57,12 +57,30 @@ class RollbackSnapshotStore(private val project: Project) {
         val status: Status = Status.REGISTERED,
     )
 
+    /** 条目 LRU（容量 [MAX_ENTRIES] 条；访问序）。 */
     private val entries = object : LinkedHashMap<Long, SnapshotEntry>(32, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, SnapshotEntry>): Boolean =
-            size > MAX_ENTRIES
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, SnapshotEntry>): Boolean {
+            if (size <= MAX_ENTRIES) return false
+            // T-PS5-10：LRU 裁 entries 时**同步裁指纹索引**——此前只裁 entries，[sqlIndex] 随长会话
+            // distinct DML 数单调增长（100 条容量语义只对 entries 生效，索引无上界）。
+            pruneSqlIndex(eldest.key)
+            return true
+        }
     }
 
+    /** SQL 指纹 → 执行序号索引（register 覆盖写；条目被 LRU 淘汰时同步摘除，见上）。 */
     private val sqlIndex = HashMap<String, Long>()
+
+    /** T-PS5-10：摘掉指向 [executionId] 的指纹索引（至多一条；LRU 淘汰与惰性清理共用）。 */
+    private fun pruneSqlIndex(executionId: Long) {
+        val it = sqlIndex.entries.iterator()
+        while (it.hasNext()) {
+            if (it.next().value == executionId) it.remove()
+        }
+    }
+
+    /** T-PS5-10 测试缝：指纹索引规模（断言随 LRU 有界；生产链路无调用点）。 */
+    internal fun sqlIndexSizeForTest(): Int = sqlIndex.size
 
     /** 执行序号发生器（单调递增）。 */
     private var nextExecutionId = 1L
@@ -108,8 +126,12 @@ class RollbackSnapshotStore(private val project: Project) {
     /** 按预览/编辑器 SQL 文本查找最近登记的条目（规范化指纹匹配；未命中 null）。 */
     @Synchronized
     fun findBySql(sql: String): SnapshotEntry? {
-        val id = sqlIndex[fingerprintOf(sql)] ?: return null
-        return entries[id]
+        val fingerprint = fingerprintOf(sql)
+        val id = sqlIndex[fingerprint] ?: return null
+        val entry = entries[id]
+        // T-PS5-10：索引指向的条目已不在（LRU 淘汰/终态清理）→ 顺手摘掉不可达指纹（懒清理双保险）
+        if (entry == null) sqlIndex.remove(fingerprint)
+        return entry
     }
 
     /**

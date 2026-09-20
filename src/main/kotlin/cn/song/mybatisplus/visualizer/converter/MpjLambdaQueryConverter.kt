@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.WrapperArg
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
+import com.intellij.openapi.project.Project
 
 /**
  * MPJLambdaQueryConverter（F-12/P17）：MPJLambdaQueryWrapper → SELECT。
@@ -22,7 +23,7 @@ object MpjLambdaQueryConverter : WrapperConverter {
 
     override val supportedTypes: Set<WrapperType> = setOf(WrapperType.MPJ_LAMBDA_QUERY)
 
-    override fun convert(chain: WrapperChain, table: TableInfo): SqlStatement {
+    override fun convert(chain: WrapperChain, table: TableInfo, project: Project?): SqlStatement {
         val ignoreCalls = chain.calls.filter { it.methodName == "selectIgnore" }
         // 无 selectIgnore：纯委托（既有行为）
         if (ignoreCalls.isEmpty()) return QueryWrapperParser(table).parse(chain)

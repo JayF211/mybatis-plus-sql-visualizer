@@ -460,6 +460,8 @@ class LogToSqlPanel(
             settings.isFoldingOutlineShown = false
             settings.isIndentGuidesShown = false
             settings.isAdditionalPageAtBottom = false
+            // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+            cn.song.mybatisplus.visualizer.ui.EditorWhitespaceSettings.applyTo(this)
             setPlaceholder(inputPlaceholder) // T-UiNative T-UN-14：空态提示原生件
         }
         return editor
@@ -484,6 +486,8 @@ class LogToSqlPanel(
             settings.isFoldingOutlineShown = true
             settings.isIndentGuidesShown = false
             settings.isAdditionalPageAtBottom = false
+            // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+            cn.song.mybatisplus.visualizer.ui.EditorWhitespaceSettings.applyTo(this)
             setPlaceholder(resultPlaceholder) // T-UiNative T-UN-14：空态提示原生件
         }
         return editor
@@ -602,6 +606,16 @@ class LogToSqlPanel(
          * （先裁值再拼「…等 N 条」，N = 行数/字节超限 + 展示裁掉的值数之和——绝不无计数截断）。
          */
         internal fun buildMergeAdText(statements: List<String>): String? {
+            // T-PS5-11：语句数预检——超上限**跳过逐语句 AST 预检**（500 行上限最坏数百次 JSqlParser
+            // 解析，全部发生在浮层打开前的 EDT），改按计数披露：明说未做同构分析 + 执行仍逐条，
+            // 绝不静默丢（既有「异构不静默丢」口径的计数版）。上限内维持现状。
+            if (statements.size > MERGE_ANALYZE_STATEMENT_LIMIT) {
+                return MpSqlVisualizerBundle.message(
+                    "logToSql.execute.mergeSkipped",
+                    statements.size,
+                    MERGE_ANALYZE_STATEMENT_LIMIT,
+                )
+            }
             val preview = cn.song.mybatisplus.visualizer.util.BatchPredicateMerge.mergePreview(statements) ?: return null
             val prefix = "DELETE FROM ${preview.table} WHERE ${preview.column} IN ("
             // 展示预算：前缀 + 值清单 + 收括号 ≤ 上限；后缀占位先扣（保证计数可见）
@@ -637,6 +651,9 @@ class LogToSqlPanel(
 
         /** T-BatchInMerge：「…等 N 条」后缀的展示预算预留（截值不截计数）。 */
         private const val MERGE_MORE_RESERVE = 24
+
+        /** T-PS5-11：合并参考分析的语句数上限（超限跳过逐语句 AST 预检，按计数披露）。 */
+        private const val MERGE_ANALYZE_STATEMENT_LIMIT = 100
 
         /** T-Perf-14：大日志后台转换阈值——字符数（约 1MB）。 */
         private const val HEAVY_INPUT_CHARS = 1_000_000

@@ -109,4 +109,59 @@ class MapperXmlLocatorTest : BasePlatformTestCase() {
             MapperXmlLocator.splitStatementId("com.demo.mapper.UserMapper.selectById"),
         )
     }
+
+    // ---------- T-PS5-05：文件列表缓存 ----------
+
+    fun testT_P5_05_命中路径零索引遍历() {
+        addMapperXml("src/main/resources/mapper/UserMapper.xml", mapperXml)
+        MapperXmlLocator.clearFileListCacheForTest()
+        val before = MapperXmlLocator.indexScanCount.get()
+        val first = MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
+        assertNotNull(first)
+        assertEquals("首跳全扫一次", 1, MapperXmlLocator.indexScanCount.get() - before)
+        repeat(3) { MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById") }
+        assertEquals("TTL 窗口内二次跳转零索引遍历", 1, MapperXmlLocator.indexScanCount.get() - before)
+        // 结果与首跳一致（缓存不改语义）
+        val again = MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
+        assertEquals(first!!.virtualFile.path, again!!.virtualFile.path)
+        assertEquals(first.line, again.line)
+    }
+
+    fun testT_P5_05_TTL过期后重扫且结果一致() {
+        addMapperXml("src/main/resources/mapper/UserMapper.xml", mapperXml)
+        val realClock = MapperXmlLocator.clockMs
+        var now = 1_000_000L
+        try {
+            MapperXmlLocator.clearFileListCacheForTest()
+            MapperXmlLocator.clockMs = { now }
+            MapperXmlLocator.fileListTtlMs = 5_000L
+            val before = MapperXmlLocator.indexScanCount.get()
+            val a = MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
+            now += 5_001L // 越 TTL
+            val b = MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById")
+            assertEquals("TTL 过期 → 重扫一次", 2, MapperXmlLocator.indexScanCount.get() - before)
+            assertEquals("重扫结果与首跳一致", a!!.line, b!!.line)
+            assertEquals(a.virtualFile.path, b.virtualFile.path)
+        } finally {
+            MapperXmlLocator.clockMs = realClock
+            MapperXmlLocator.fileListTtlMs = 5_000L
+            MapperXmlLocator.clearFileListCacheForTest()
+        }
+    }
+
+    fun testT_P5_05_缓存文件失效即重扫且不返回失效文件() {
+        val psi = myFixture.addFileToProject("src/main/resources/mapper/UserMapper.xml", mapperXml)
+        MapperXmlLocator.clearFileListCacheForTest()
+        assertNotNull("删除前命中", MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById"))
+        val before = MapperXmlLocator.indexScanCount.get()
+        com.intellij.openapi.application.WriteAction.compute<Unit, RuntimeException> {
+            psi.virtualFile.delete(this)
+        }
+        assertNull(
+            "缓存文件被删除 → isValid 校验失败 → 重扫后无命中（不得返回失效文件）",
+            MapperXmlLocator.locate(project, "com.demo.mapper.UserMapper.selectById"),
+        )
+        assertEquals("失效文件触发重扫一次", before + 1, MapperXmlLocator.indexScanCount.get())
+        MapperXmlLocator.clearFileListCacheForTest()
+    }
 }

@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.sql.rollback
 
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -308,6 +309,50 @@ class RollbackSqlGeneratorTest {
         )
         assertEquals(RollbackSqlGenerator.Rating.UNABLE, result.rating)
         assertTrue(result.warnings.any { it.messageKey == "rollback.snapshot.columnMismatch" })
+    }
+
+    // ======================== 告警文案渲染（P8/P11 回归） ========================
+
+    /** UI 层同款渲染（`RollbackSqlDialog:303-305` / `SqlPreviewPanel:860-861` 口径）。 */
+    private fun render(warning: RollbackSqlGenerator.RollbackWarning): String =
+        if (warning.messageArgs.isEmpty()) {
+            MpSqlVisualizerBundle.message(warning.messageKey)
+        } else {
+            MpSqlVisualizerBundle.message(warning.messageKey, *warning.messageArgs.toTypedArray())
+        }
+
+    @Test
+    fun `告警文案渲染_不留未回填占位符也不显裸键名`() {
+        // 只断言 messageKey 会从两类缺陷旁边走过去：①实参给少了（弹窗显示「上限 {1}」，P8）；
+        // ②键名在 bundle 里不存在（弹窗显示裸键名，P11）。此处走真实渲染路径核对——
+        // 静态核对另见 convention/BundlePlaceholderArityTest（覆盖全部 30 处告警站点）。
+        val rowLimit = RollbackSqlGenerator.generateFromSnapshotRows(
+            table = "t",
+            columns = listOf("a"),
+            rows = (1..250).map { listOf(it.toString()) },
+            mode = RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
+        )
+        val rowLimitWarning = rowLimit.warnings.first { it.messageKey == "rollback.warn.snapshotRowLimit" }
+        val rowLimitText = render(rowLimitWarning)
+        assertTrue("应回填实际行数: $rowLimitText", rowLimitText.contains("250"))
+        assertTrue(
+            "应回填上限数值: $rowLimitText",
+            rowLimitText.contains(RollbackSqlGenerator.SNAPSHOT_ROW_LIMIT.toString()),
+        )
+        assertFalse("不得残留未回填占位符: $rowLimitText", rowLimitText.contains("{"))
+
+        val mismatch = RollbackSqlGenerator.generateFromSnapshotRows(
+            table = "t",
+            columns = listOf("a"),
+            rows = listOf(listOf("1")),
+            mode = RollbackSqlGenerator.SnapshotMode.REVERT_UPDATE,
+            changedColumns = listOf("missing"),
+            newValuesByColumn = emptyMap(),
+        )
+        val mismatchWarning = mismatch.warnings.first { it.messageKey == "rollback.snapshot.columnMismatch" }
+        val mismatchText = render(mismatchWarning)
+        assertFalse("不得残留未回填占位符（键缺失时会渲染成裸键名）: $mismatchText", mismatchText.contains("{"))
+        assertTrue("应回填缺失列名: $mismatchText", mismatchText.contains("missing"))
     }
 
     @Test

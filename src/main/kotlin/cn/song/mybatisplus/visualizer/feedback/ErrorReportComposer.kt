@@ -9,6 +9,13 @@ package cn.song.mybatisplus.visualizer.feedback
  * T-FeedbackBatch（2026-09-14 用户定案「不能被轻易限流」）：平台错误列表可多选，用户常一次报一堆——
  * 服务端限流是 5 次/小时/IP，逐条提交必然 429。策略：多条合并成**一条**帖子（描述出清单、附件收全文，
  * 见 [buildBatchTitle]/[buildBatchDescription]/[buildStackAttachment]），把 N 次请求压成 1 次。
+ *
+ * T-ErrorReportRedact（2026-09-19，D1=B 定案「分级脱敏」）：本仓的隐私姿态与 zMyBatis 相反——
+ * 我们有「用户确认对话框」闸门，所以缺的不是脱敏能力，而是**闸门内的默认预填该给多少**。
+ * 定案：默认只预填「异常类名 + 指纹 + 栈帧摘要」（[buildRedactedTitle]/[buildRedactedDescription]），
+ * message 全文降为对话框里用户可勾选附加的区块（[Prefill.message]/[titleWithMessage]/[descriptionWithMessage]，
+ * 勾选后与改前逐字节一致）；批量路径同口径（[buildBatchTitle]/[buildBatchDescription] 的 includeMessages）。
+ * 本文件仍是纯函数、平台无关——「勾选与否」由对话框决定，这里只负责两种形态的组装。
  */
 object ErrorReportComposer {
 
@@ -26,23 +33,61 @@ object ErrorReportComposer {
         val title: String,
         val description: String,
         val category: String,
+        /**
+         * T-ErrorReportRedact（D1=B 定案）：异常 message 全文——**默认不外传**，
+         * 仅作对话框「附带异常消息全文」勾选项的回填源（[titleWithMessage]/[descriptionWithMessage] 同源）。
+         * 无 message 或全空白时为 null。
+         */
+        val message: String? = null,
+        /** 勾选「附带异常消息全文」时的标题形态 = 改前（T-ErrorReportRedact 之前）的 [buildTitle] 产物。 */
+        val titleWithMessage: String = title,
+        /** 勾选「附带异常消息全文」时的描述形态 = 改前的 [buildDescription] 产物（与改前逐字节一致）。 */
+        val descriptionWithMessage: String = description,
     )
 
-    /** 从异常信息组装预填（title = 异常类简单名: message 首行，截断到 200）。 */
-    fun prefill(throwableClassName: String?, message: String?, stackTraceText: String?): Prefill = Prefill(
-        title = buildTitle(throwableClassName, message),
-        description = buildDescription(message, userNotes = null, fingerprint = null),
-        category = guessCategory(stackTraceText),
-    )
+    /**
+     * 从异常信息组装预填（T-ErrorReportRedact D1=B 分级脱敏后的默认形态）：
+     * **标题 = 异常类简单名**、**描述 = 异常类全名 + 栈帧摘要（+ cause 链）**、分类照旧；
+     * message 全文不再进默认预填，随 [Prefill.message] 交给对话框做「勾选后才附带」。
+     * 勾选路径回填 [Prefill.titleWithMessage]/[Prefill.descriptionWithMessage]，
+     * 与改前（message 首行进标题、message 全文进描述）逐字节一致。
+     */
+    fun prefill(throwableClassName: String?, message: String?, stackTraceText: String?): Prefill {
+        val meaningfulMessage = message?.trim().takeUnless { it.isNullOrBlank() }
+        return Prefill(
+            title = buildRedactedTitle(throwableClassName),
+            description = buildRedactedDescription(throwableClassName, stackTraceText, messageOmitted = meaningfulMessage != null),
+            category = guessCategory(stackTraceText),
+            message = meaningfulMessage,
+            titleWithMessage = buildTitle(throwableClassName, message),
+            descriptionWithMessage = buildDescription(message, userNotes = null, fingerprint = null),
+        )
+    }
 
     /** 标题规则：`异常类简单名: message 首行`；超 200 截断、不足 5 补后缀兜底。 */
     fun buildTitle(throwableClassName: String?, message: String?): String {
-        val simpleName = throwableClassName?.substringAfterLast('.')?.takeIf { it.isNotBlank() } ?: "PluginError"
+        val simpleName = simpleNameOf(throwableClassName)
         val firstLine = message?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim() ?: ""
         val raw = if (firstLine.isBlank()) "$simpleName: (no message)" else "$simpleName: $firstLine"
+        return finalizeTitle(raw)
+    }
+
+    /**
+     * 脱敏标题（T-ErrorReportRedact D1=B 默认形态）：只有异常类简单名，不含 message 任何片段。
+     * 截断/兜底规则与 [buildTitle] 同一套（[finalizeTitle]），满足服务端 5~200 约束。
+     */
+    fun buildRedactedTitle(throwableClassName: String?): String =
+        finalizeTitle(simpleNameOf(throwableClassName))
+
+    /** 服务端标题约束收口（[buildTitle]/[buildRedactedTitle] 唯一事实源）：超 200 截断、不足 5 补后缀。 */
+    private fun finalizeTitle(raw: String): String {
         val truncated = if (raw.length > TITLE_MAX) raw.take(TITLE_MAX) else raw
         return if (truncated.length < TITLE_MIN) "$truncated (SQL Visualizer)" else truncated
     }
+
+    /** 异常类简单名（空/null 兜底 `PluginError`）。 */
+    private fun simpleNameOf(throwableClassName: String?): String =
+        throwableClassName?.substringAfterLast('.')?.takeIf { it.isNotBlank() } ?: "PluginError"
 
     /** 描述组装：message 全文 + 用户补充 + 指纹行；不足 10 字符补兜底句（服务端 400 拒绝线）。 */
     fun buildDescription(message: String?, userNotes: String?, fingerprint: String?): String {
@@ -56,6 +101,38 @@ object ErrorReportComposer {
         val text = parts.joinToString("\n\n").trim()
         return if (text.length < DESCRIPTION_MIN) "$text\n(from IDE error report)" else text
     }
+
+    /**
+     * 脱敏描述（T-ErrorReportRedact D1=B 默认形态）：**异常类全名 + cause 链类名 + 栈帧摘要**，
+     * 不含 message 任何片段（帧与 cause 链都只取类名/位置，[ErrorFingerprint] 同源解析）。
+     * [messageOmitted] 为 true 时附一行说明，让管理员知道「消息全文是用户没勾选，不是漏填」——
+     * 这正是 D1=B 首报信息变少的唯一补偿手段（§六 风险表「诊断信息不足」）。
+     * 不足 10 字符补兜底句（服务端 400 拒绝线）。
+     */
+    fun buildRedactedDescription(
+        throwableClassName: String?,
+        stackTraceText: String?,
+        messageOmitted: Boolean = false,
+    ): String {
+        val frames = ErrorFingerprint.businessFrameLines(stackTraceText).take(MAX_DESCRIPTION_FRAMES)
+        val causes = ErrorFingerprint.causeChainClasses(stackTraceText).take(MAX_DESCRIPTION_CAUSES)
+        val text = buildString {
+            appendLine("异常: ${throwableClassName?.takeIf { it.isNotBlank() } ?: "PluginError"}")
+            if (causes.isNotEmpty()) appendLine("原因链: ${causes.joinToString(" -> ")}")
+            if (frames.isNotEmpty()) {
+                appendLine("栈帧:")
+                frames.forEach { appendLine("  $it") }
+            }
+            if (messageOmitted) appendLine("（异常消息全文默认不附带，报告人可在对话框内勾选附带）")
+        }.trim()
+        return if (text.length < DESCRIPTION_MIN) "$text\n(from IDE error report)" else text
+    }
+
+    /** 脱敏描述里展示的栈帧条数上限（指纹只要 5 帧；给人看的摘要留 10 帧便于定位调用链）。 */
+    internal const val MAX_DESCRIPTION_FRAMES = 10
+
+    /** 脱敏描述里展示的 cause 链类名上限（与 [ErrorFingerprint] 指纹材料的 3 条同量级）。 */
+    internal const val MAX_DESCRIPTION_CAUSES = 3
 
     /** 分类映射：堆栈/消息中的插件包名线索 → 需求池 category slug；兜底 other（特定规则先于 wrapper）。 */
     fun guessCategory(stackTraceText: String?): String {
@@ -153,10 +230,16 @@ object ErrorReportComposer {
 
     /**
      * 合并帖标题（纯函数，≤200）：首条异常摘要 + `等 N 条异常`，让管理员一眼看出是批次报告。
+     * [includeMessages] 默认 false = T-ErrorReportRedact D1=B 的脱敏形态（首条只出类名）；
+     * true 时逐字节等于改前形态（首条 `类名: 消息首行`）。
      */
-    fun buildBatchTitle(entries: List<BatchEntry>): String {
+    fun buildBatchTitle(entries: List<BatchEntry>, includeMessages: Boolean = false): String {
         val first = entries.firstOrNull()
-        val head = buildTitle(first?.title, first?.message)
+        val head = if (includeMessages) {
+            buildTitle(first?.title, first?.message)
+        } else {
+            buildRedactedTitle(first?.title)
+        }
         if (entries.size <= 1) return head
         val suffix = "（等 ${entries.size} 条异常）"
         val room = TITLE_MAX - suffix.length
@@ -167,18 +250,31 @@ object ErrorReportComposer {
     /**
      * 合并帖描述（纯函数）：总条数说明 + 每条 `#N [异常类] 消息` 清单（超出 [BATCH_MAX_ITEMS] 截断并注明），
      * 保证 ≥ [DESCRIPTION_MIN]（服务端 400 拒绝线）。
+     *
+     * [includeMessages] 默认 false = T-ErrorReportRedact D1=B 的脱敏形态：清单只出**异常类简单名**
+     * （逐条消息全文属于业务文本，默认不外传）；true 时逐字节等于改前形态。用户补充（[userNotes]）
+     * 与勾选无关——那是用户在对话框里主动写的，始终原样带上。
      */
-    fun buildBatchDescription(entries: List<BatchEntry>, userNotes: String?): String {
+    fun buildBatchDescription(
+        entries: List<BatchEntry>,
+        userNotes: String?,
+        includeMessages: Boolean = false,
+    ): String {
         val total = entries.size
         val shown = entries.take(BATCH_MAX_ITEMS)
         val text = buildString {
             appendLine("（来自 IDE 的错误批次报告，共 $total 条）")
             shown.forEachIndexed { index, entry ->
                 val type = entry.title.substringAfterLast('.').ifBlank { "PluginError" }
-                val firstLine = entry.message?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+                val firstLine = if (includeMessages) {
+                    entry.message?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+                } else {
+                    ""
+                }
                 appendLine("#${index + 1} $type${if (firstLine.isBlank()) "" else ": $firstLine"}")
             }
             if (total > shown.size) appendLine("（其余 ${total - shown.size} 条见附件）")
+            if (!includeMessages) appendLine("（逐条异常消息默认不附带，报告人可在对话框内勾选附带）")
             userNotes?.trim()?.takeUnless { it.isBlank() }?.let { appendLine(); appendLine(it) }
         }.trim()
         return if (text.length < DESCRIPTION_MIN) "$text\n(from IDE error report)" else text

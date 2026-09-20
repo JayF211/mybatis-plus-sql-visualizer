@@ -61,6 +61,11 @@ open class TrimSqlNode(
         override val bindings: MutableMap<String, Any?>
             get() = delegate.bindings
 
+        // T-FS-07：errors 必须转发——否则 where/trim/set 体内 `<if test="非法表达式">` 的求值失败被丢弃
+        // （与 Foreach 的 Prefixed/Filtered 同一缺陷形态，本次一并收口）
+        override val errors: MutableList<String>
+            get() = delegate.errors
+
         fun applyAll() {
             var sql = sqlBuffer.toString().trim()
             val upper = sql.uppercase(Locale.ENGLISH)

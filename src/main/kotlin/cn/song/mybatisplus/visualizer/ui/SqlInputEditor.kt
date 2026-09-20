@@ -81,6 +81,8 @@ class SqlInputEditor(
             settings.isFoldingOutlineShown = true
             settings.isIndentGuidesShown = false
             settings.isAdditionalPageAtBottom = false
+            // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+            EditorWhitespaceSettings.applyTo(this)
         }
         // 补全上下文双载体（M16.2）：Editor userData 为主载体 + PSI 文件 userData 兜底
         val ctx = SqlCompletionContext(null, emptyList(), null, emptyMap(), null, emptyList())

@@ -271,6 +271,8 @@ class SqlStatementSplitterTest {
         "/* c; */ SELECT 1; SELECT 2;",
         "CALL p(1; 2);",
         "BEGIN\n  SELECT 1;\nEND;\nSELECT 2;",
+        // T-DA-02：DELIMITER 指令形态进一致性样例池（三委托方与单实现同口径）
+        "DELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1; END$$\nDELIMITER ;\nSELECT 2;",
     )
 
     // ======================== T-SQL 控制流批不可拆（T-TsqlBatchSplit / O-28） ========================
@@ -337,5 +339,125 @@ class SqlStatementSplitterTest {
             listOf("SELECT IF(a > 1, 'x', 'y') FROM t", "SELECT 2"),
             split("SELECT IF(a > 1, 'x', 'y') FROM t; SELECT 2;"),
         )
+    }
+
+    // ======================== MERGE 多行样例（O-42 / T-OQCS-04 守卫） ========================
+
+    /**
+     * Oracle 形态多行 MERGE 整段产出为**单条**语句。
+     *
+     * 定位为**守卫用例**（预期直接绿，非修 bug）：本切分器全文无 MERGE 特判
+     * （批首合并常量 `CONTROL_FLOW_BATCH_HEADS = setOf("IF")`，只有 TSQL 控制流批），
+     * MERGE 体内**无顶层 `;`** → 分号状态机天然整段产出。此用例把该结论钉死，
+     * 防止日后有人给 `WHEN MATCHED THEN UPDATE SET ...;` 之类的形态误加批首合并而切碎 MERGE。
+     */
+    @Test
+    fun `Oracle形态多行MERGE整段一条`() {
+        val merge = """
+            MERGE INTO "issue_new" t
+            USING (SELECT ? AS id, ? AS user_name FROM dual) s
+            ON (t."id" = s.id)
+            WHEN MATCHED THEN UPDATE SET t."user_name" = s.user_name
+            WHEN NOT MATCHED THEN INSERT ("id", "user_name") VALUES (s.id, s.user_name)
+        """.trimIndent() + ";"
+        assertEquals(listOf(merge.removeSuffix(";")), split(merge))
+    }
+
+    @Test
+    fun `MERGE后接独立语句不误并`() {
+        val script = "MERGE INTO t USING s ON (t.id = s.id)\nWHEN MATCHED THEN UPDATE SET t.a = s.a;\nSELECT 1;"
+        assertEquals(2, split(script).size)
+        assertTrue(split(script)[0].startsWith("MERGE INTO t"))
+    }
+
+    // ======================== DELIMITER 指令感知（T-DA-02 / O-39） ========================
+
+    /** 含 `DELIMITER $$` 的存储过程脚本（MySQL 客户端粘贴典型形态）。 */
+    private fun procedureScript(): String = """
+        DELIMITER $$
+        CREATE PROCEDURE p()
+        BEGIN
+          SELECT 1;
+          SELECT 2;
+        END$$
+        DELIMITER ;
+        SELECT 3;
+    """.trimIndent()
+
+    @Test
+    fun `DELIMITER_存储过程整段一条_指令行不产出_界符不残留`() {
+        val parts = split(procedureScript())
+        assertEquals("过程体一条 + 复位后的普通语句一条", 2, parts.size)
+        assertEquals(
+            "过程体保留内部 `;`、去掉首尾指令与 `$$`",
+            "CREATE PROCEDURE p()\nBEGIN\n  SELECT 1;\n  SELECT 2;\nEND",
+            parts[0],
+        )
+        assertEquals("SELECT 3", parts[1])
+        assertTrue("`$$` 不残留", parts.none { it.contains("$$") })
+        assertTrue("DELIMITER 指令行不产出", parts.none { it.trimStart().uppercase().startsWith("DELIMITER") })
+    }
+
+    @Test
+    fun `DELIMITER_自定义界符生效期内分号不切分`() {
+        // 过程体无 BEGIN/END 包裹（单语句体）：`;` 仍属语句内部，只有 `$$` 终结
+        val parts = split("DELIMITER $$\nCREATE PROCEDURE p() SELECT 1;\nSELECT 2;$$")
+        assertEquals("界符生效期内顶层 `;` 不切分", 1, parts.size)
+        assertEquals("CREATE PROCEDURE p() SELECT 1;\nSELECT 2;", parts[0])
+    }
+
+    @Test
+    fun `DELIMITER_复位后分号语义恢复`() {
+        val parts = split("DELIMITER $$\nSELECT 1$$\nDELIMITER ;\nSELECT 2;\nSELECT 3;")
+        assertEquals(listOf("SELECT 1", "SELECT 2", "SELECT 3"), parts)
+    }
+
+    @Test
+    fun `DELIMITER_斜杠界符形态_块注释不误判`() {
+        // `//` 界符与块注释起始 `/*` 不同字符——注释分支优先，注释随语句保留
+        val parts = split(
+            "DELIMITER //\nCREATE PROCEDURE p()\nBEGIN\n  /* 注释; */ SELECT 1;\nEND//\nSELECT 2;",
+        )
+        assertEquals(2, parts.size)
+        assertTrue(parts[0], parts[0].contains("/* 注释; */ SELECT 1;"))
+        assertTrue("`//` 不残留", parts.none { it.contains("//") })
+    }
+
+    @Test
+    fun `DELIMITER_空参数复位为分号`() {
+        // MySQL 客户端 `DELIMITER` 无参数 = 复位为 `;`（对齐客户端语义）
+        assertEquals(listOf("SELECT 1", "SELECT 2"), split("DELIMITER $$\nSELECT 1$$\nDELIMITER\nSELECT 2;"))
+    }
+
+    @Test
+    fun `DELIMITER_字符串与注释内不识别`() {
+        assertEquals(
+            listOf("SELECT 'DELIMITER $$' AS s", "SELECT 2"),
+            split("SELECT 'DELIMITER $$' AS s;\nSELECT 2;"),
+        )
+        assertEquals(
+            listOf("-- DELIMITER $$\nSELECT 1", "SELECT 2"),
+            split("-- DELIMITER $$\nSELECT 1;\nSELECT 2;"),
+        )
+    }
+
+    @Test
+    fun `DELIMITER_非行首或待切段非空时不识别`() {
+        // 行首限定：语句中间的 DELIMITER 词不当指令（无界符切换，分号照切）
+        assertEquals(
+            listOf("SELECT DELIMITER FROM t", "SELECT 2"),
+            split("SELECT DELIMITER FROM t;\nSELECT 2;"),
+        )
+        // 待切段非空（指令未在语句边界）→ 不识别，整段按普通文本处理（保守：不吞不拆）
+        val parts = split("SELECT 1\nDELIMITER $$")
+        assertEquals(1, parts.size)
+        assertTrue(parts[0], parts[0].contains("DELIMITER"))
+    }
+
+    @Test
+    fun `DELIMITER_splitStripped同口径`() {
+        val statements = stripped(procedureScript())
+        assertEquals(2, statements.size)
+        assertEquals("CREATE", SqlTypeClassifier.getFirstKeyword(statements[0]))
     }
 }

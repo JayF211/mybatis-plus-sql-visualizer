@@ -58,6 +58,10 @@ object ParameterReplacer {
      *  - [ParamHint.quote] = null → 数值启发式（纯数字原样，否则引号包裹）
      *  - 值中单引号转义为 `''`（防 SQL 注入，与面板回填一致）
      *
+     * T-PSG-02（N-33）：位点判定改用 [placeholderPositions]（string-aware）——字符串字面量与
+     * `--` / 块注释内的 `?` 不再被当作占位符替换（改前朴素逐字符 `c == '?'` 会错位）。不含
+     * 这类 `?` 的 SQL 替换结果与改前逐字节一致（替换语义与顺序不变）。
+     *
      * @param sql        含 `?` 的 SQL（`?` 顺序与 [sources] 一一对应）
      * @param sources    参数来源列表（与 SQL 中 `?` 按出现顺序对应）
      * @param paramValues 参数值映射（source → 用户输入值）
@@ -71,21 +75,20 @@ object ParameterReplacer {
         hints: List<ParamHint> = emptyList(),
     ): String {
         if (sources.isEmpty()) return sql
+        val positions = placeholderPositions(sql)
+        if (positions.isEmpty()) return sql
         val sb = StringBuilder(sql.length + 32)
         var paramIndex = 0
-        var i = 0
-        while (i < sql.length) {
-            val c = sql[i]
-            if (c == '?') {
-                val source = sources.getOrNull(paramIndex)
-                val value = source?.let { paramValues[it] }
-                sb.append(renderValue(value, hints.getOrNull(paramIndex)))
-                paramIndex++
-            } else {
-                sb.append(c)
-            }
-            i++
+        var prev = 0
+        for (pos in positions) {
+            sb.append(sql, prev, pos)
+            val source = sources.getOrNull(paramIndex)
+            val value = source?.let { paramValues[it] }
+            sb.append(renderValue(value, hints.getOrNull(paramIndex)))
+            paramIndex++
+            prev = pos + 1
         }
+        sb.append(sql, prev, sql.length)
         return sb.toString()
     }
 

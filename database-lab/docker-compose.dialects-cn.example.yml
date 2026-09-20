@@ -26,7 +26,7 @@ services:
     environment:
       PAGE_SIZE: "16"
       LD_LIBRARY_PATH: /opt/dmdbms/bin
-      INSTANCE_NAME: mpsv_lab
+      INSTANCE_NAME: sqlv_lab
 
   kingbase:
     # ← 替换为 docker load 后 docker images 显示的实际名称（形如 kingbase_v009r001c002b0014）

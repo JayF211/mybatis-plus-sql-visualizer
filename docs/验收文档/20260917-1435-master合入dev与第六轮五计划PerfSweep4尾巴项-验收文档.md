@@ -1,5 +1,7 @@
 # master 合入 dev 与第六轮五计划/T-PerfSweep4/尾巴项批次验收文档
 
+> **2026-09-20 防过期复核**：类名/工具名/入口路径已按当前 master 代码校正；全量 `testShards` 复跑 **5383/0/0/6 绿**。
+
 > **验收对象**：2026-09-17 dev 批次——master 合入 dev（merge `3552d4b`，冲突 5 文件全解决 + dev 独有 mcpStub/snakeyaml 四块回植）+ 基于合并后 dev 交付的 2.2 第六轮竞品应答五计划（T-TxnReadOnlyProof/T-ExecTimeoutGuard/T-DmlAliasGuard/T-TsqlBatchSplit/T-UpdateZipBounds）+ T-PerfSweep4 性能七项收敛 + 2.4 尾巴项收口，提交 `9399fee`…`bd863f0`（8 提交，图谱：9399fee flake 修复 → f3c0007 前两件 → afb3a8a → 69a6095 → e24f536 → 5fa6187 → 99370a9 文档 → bd863f0 基线）。
 > **面向读者**：功能验收人（含用户本人真机走查）。各任务实现细节与定向测试记录见对应开发计划 §实施记录（均已回填）；本文档只列验收步骤与预期，不重复实现细节。
 > **回归基线**：全量 **4817/0/0/6 绿**（412 测试类，`./gradlew testShards`，2026-09-17 批次末实测；跳过 6=Docker 环境门控）。
@@ -28,7 +30,7 @@
 |---|------|------|---------|
 | 1 | 可写 CTE / EXPLAIN ANALYZE / SELECT INTO 不再免确认 | 预览执行上述三类语句时弹确认（此前直通） | T-TxnReadOnlyProof |
 | 2 | 设置项「执行超时（秒，0=不限）」 | 设置页 → SQL 预览分组（JdbcTemplate 预览行之后） | T-ExecTimeoutGuard |
-| 3 | MCP explain 超时护栏（挂死查询不再无限等待） | MCP `mpsv_explain` 输出错误尾附 `timed out after Ns` | T-ExecTimeoutGuard |
+| 3 | MCP explain 超时护栏（挂死查询不再无限等待） | MCP `sqlv_explain` 输出错误尾附 `timed out after Ns` | T-ExecTimeoutGuard |
 | 4 | 增强捕获确认弹窗不再反复打扰：非主配置进程不弹、拒绝后 24h 冷却 | 首次 Run 项目（仅主配置启动触发一次） | T-PerfSweep4-01 |
 | 5 | 双路解析封口（捕捉开启 × 控制台已存时序每行不再 ×2 解析） | 无观感，行为/性能观察项 | T-PerfSweep4-02 |
 | 6 | 同 pid 3s 内重复 Run 不再重复排队 attach | 同一应用快速重启场景日志 | T-PerfSweep4-03 |
@@ -67,7 +69,7 @@
 
 | 步骤 | 操作 | 预期 |
 |------|------|------|
-| 1 | MCP `mpsv_explain` 跑一条 `SELECT SLEEP(60)`（直连链） | 约 30s 后返回错误，消息含 `timed out after 30s (cancel requested)`（agent 可读，不悬挂） |
+| 1 | MCP `sqlv_explain` 跑一条 `SELECT SLEEP(60)`（直连链） | 约 30s 后返回错误，消息含 `timed out after 30s (cancel requested)`（agent 可读，不悬挂） |
 | 2 | 设置页把「执行超时」改为 0 并 Apply | 再跑同查询：不超时（0=不限），跑完正常返回 |
 | 3 | 改回 30，跑正常查询 | 行为零变化（超时只在异常态触发） |
 | 4 | 预览面板/日志转 SQL 执行慢查询（共享控制台链） | 如实观察：该链 DBN 托管暂无语句级超时（v1 登记不覆盖，不得虚标已护栏）；行为与此前一致 |
@@ -111,8 +113,8 @@
 |------|------|------|
 | 1 | 预览执行普通 SELECT/UPDATE（确认流） | 既有确认/直通行为逐字节不变 |
 | 2 | 日志转 SQL 多语句产物逐条执行 | 拆分行为与此前一致（既有样例无回归） |
-| 3 | MCP 工具全量跑一遍（render_sql/explain/check_sql 等） | 既有输出形态不变（explain 仅在超时时新增文本行） |
-| 4 | crud_sql 产物肉眼过一遍 | 无 `AS` 别名（守卫面已锁，肉眼复核即可） |
+| 3 | MCP 工具全量跑一遍（sqlv_render_sql/sqlv_explain/sqlv_check_sql 等） | 既有输出形态不变（explain 仅在超时时新增文本行） |
+| 4 | sqlv_crud_sql 产物肉眼过一遍 | 无 `AS` 别名（守卫面已锁，肉眼复核即可） |
 | 5 | 开启捕捉后先 Run 后点捕捉（或反向） | 日志条目无重复、无缺失（双路封口后与单路时序对照） |
 
 ## 四、真机走查总清单（留人工，汇总各计划 §五）
@@ -129,7 +131,7 @@
 | 8 | 同一应用快速重复 Run：去抖生效（同 pid 不重复 attach 排队）、会话正常建立 | T-PerfSweep4 §五.3 |
 | 9 | SQL Server 数据源执行 IF…ELSE 批：确认以整批出现一次 | T-TsqlBatchSplit §五（环境受限时按「环境受限未验证」登记） |
 | 10 | Gitee 真实包下载→安装全链过新守卫 | T-UpdateZipBounds §五 |
-| 11 | crud_sql 产物随下次发版肉眼复核（无别名） | T-DmlAliasGuard §五 |
+| 11 | sqlv_crud_sql 产物随下次发版肉眼复核（无别名） | T-DmlAliasGuard §五 |
 | 12 | 信创驱动（DM 等）setQueryTimeout 生效性 | T-ExecTimeoutGuard §五（环境受限未验证口径） |
 | 13 | File Cache Conflict 复发排查走查（若再现，先搜 `[T-ExecDocSync2][conflict-probe]` 日志指纹——上批遗留项，与本批无关） | 20260917-0753 文档遗留 |
 

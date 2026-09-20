@@ -47,6 +47,12 @@ build/
 .codemoss/
 .ccgui/
 AGENTS
+
+# T-AcpMcpTransport（2026-09-19）：上面的 `AGENTS` 规则在 Windows 大小写不敏感下会命中
+# `src/mcpStub/**/agents/`（ml-llm ACP 桩目录），导致该目录新增文件被静默忽略（曾需 `git add -f` 才入库）。
+# 下面两行把该路径从忽略中排除；请勿删除。
+!src/mcpStub/**/agents/
+!src/mcpStub/**/agents/**
 .reasonix/
 reasonix.toml
 .workbuddy/

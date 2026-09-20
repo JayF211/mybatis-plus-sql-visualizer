@@ -163,7 +163,10 @@ object SqlLogFileReader {
         if (lines.isEmpty()) return null
         val header = lines.first()
         // T-HistParam F2：v2 头部下探测参数持久化行（`-- pd: <base64> --`），解码失败按普通
-        // 正文注释行降级（SQL 多一行注释无害）；解码成功则 rawSql 与 params 从载荷还原
+        // 正文注释行降级（SQL 多一行注释无害）；解码成功则 rawSql 与 params 从载荷还原。
+        // T-McpAuditTrail T-MAT-03 读端回填：载荷扩展键 `s`（来源）同源还原——写入侧已把
+        // [SqlSource.MCP] 落进 pd 载荷，读端不回填则重启后来源退化为 UNKNOWN（历史页徽标消失）。
+        // 两条头部分支（新版/旧版 F-43）都要回填：头部形态与 pd 行是否在场互相独立。
         val contentLines = lines.drop(1)
         var bodyLines = contentLines
         var rawSqlOverride: String? = null
@@ -204,6 +207,7 @@ object SqlLogFileReader {
                 sourceFile = sourceFile,
                 sourceLine = sourceLine,
                 executionTimeMs = executionTimeMs,
+                source = decodedExt?.source ?: SqlSource.UNKNOWN,
                 databaseName = mr.groupValues[5].takeIf { it.isNotBlank() },
                 mapperStatement = decodedExt?.mapperStatement,
                 errorText = decodedExt?.errorText,
@@ -224,6 +228,7 @@ object SqlLogFileReader {
                 restoredSql = sql,
                 params = params,
                 timestamp = timestamp,
+                source = decodedExt?.source ?: SqlSource.UNKNOWN,
                 mapperStatement = decodedExt?.mapperStatement,
                 errorText = decodedExt?.errorText,
                 requestTag = decodedExt?.requestTag,

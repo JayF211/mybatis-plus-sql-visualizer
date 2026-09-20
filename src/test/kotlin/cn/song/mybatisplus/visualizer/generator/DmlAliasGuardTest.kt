@@ -12,7 +12,7 @@ import org.junit.Test
  * DML 目标位禁别名防回归守卫（T-DmlAliasGuard，O-27）。
  *
  * 现状核实（计划 §二）：三条 SQL 生成链（CrudSqlGenerator / RollbackSqlGenerator /
- * ReverseSqlTool[产物为 Java 无 SQL 面]）零别名——DBX 9bf52da 修的「DML 目标位自动补
+ * SqlVisualizerReverseSqlTool[产物为 Java 无 SQL 面]）零别名——DBX 9bf52da 修的「DML 目标位自动补
  * AS 别名」坑本插件未踩。本守卫把「没踩过」锁成「不会再踩」：**别名只允许出现在查询
  * 源位（FROM/JOIN），DML 目标位（INSERT INTO / UPDATE / DELETE FROM 后紧跟的表名）
  * 禁别名**——未来生成链重构（加格式化/方言改写）一旦引入别名逻辑即红灯。

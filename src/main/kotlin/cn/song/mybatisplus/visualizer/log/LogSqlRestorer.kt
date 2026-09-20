@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.sql.ParamHint
+import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 
 /**
  * 日志参数还原器（T-M31-02）：把 `?` 占位符按 [LogSqlParam] 顺序替换为可执行 SQL 值。
@@ -88,41 +89,7 @@ internal fun LogSqlParam.toHint(): ParamHint = when {
     else -> ParamHint(quote = true)
 }
 
-/**
- * string-aware `?` 占位符定位（T-HibDualCapture）：单引号字符串字面量（`''` 转义）与
- * `--` 行注释、块注释内的 `?` 不算占位符——中文问句、PG `?|` 操作符不再被
- * 误计数/误回填。还原（[LogSqlRestorer.restore]）与预览识别计数共用同一口径，避免错位。
- * 双引号标识符内的 `?` 不在保护范围（标准 SQL 标识符不含 `?`，误伤面可忽略）。
- */
-internal fun placeholderPositions(sql: String): List<Int> {
-    val positions = mutableListOf<Int>()
-    var inString = false
-    var i = 0
-    while (i < sql.length) {
-        val c = sql[i]
-        if (inString) {
-            if (c == '\'') {
-                if (i + 1 < sql.length && sql[i + 1] == '\'') {
-                    i += 2
-                    continue
-                }
-                inString = false
-            }
-        } else {
-            when {
-                c == '\'' -> inString = true
-                c == '-' && i + 1 < sql.length && sql[i + 1] == '-' -> {
-                    while (i < sql.length && sql[i] != '\n') i++
-                }
-                c == '/' && i + 1 < sql.length && sql[i + 1] == '*' -> {
-                    i += 2
-                    while (i + 1 < sql.length && !(sql[i] == '*' && sql[i + 1] == '/')) i++
-                    i++
-                }
-                c == '?' -> positions += i
-            }
-        }
-        i++
-    }
-    return positions
-}
+// T-PSG-01：string-aware `?` 占位符定位实现已上提至
+// cn.song.mybatisplus.visualizer.sql.placeholderPositions（日志还原 / 复制可执行 SQL / 面板回填
+// 三条拼接链跨包共用同一份位点口径；`internal` 跨包不可达，故搬迁至 sql 包而非放宽可见性）。
+// 本包内的调用点经顶部 import 解析到新落点，行为逐字节不变；[countPlaceholders] 仍是本包薄封装。

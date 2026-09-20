@@ -1,5 +1,9 @@
 # T-SourceJumpFunnel 自研框架汇聚入口跳源码上溯适配 —— 验收文档
 
+> **2026-09-20 脚本化验收**：30 条真机走查项改为「配置预置 + 文件系统/日志 + 单元测试」脚本化核验，结论逐条回填在下方判定卡。全量 `testShards` 5383/0/0/6 绿；agent 子项目 `:sql-visualizer-agent:test` 58/0/0 绿（该子项目不进 testShards，本轮单独补跑）。
+>
+> **2026-09-20 补记（P5 修复后）**：判定卡最后一条（§3.3 meta 行显示调用栈）原本**未勾选**——脚本化核验查出可见行从未显示摘要。该缺口已按验收清单立项修复并当轮复验，**判定卡 30/30 全部勾选**；修复轮全量门禁 `testShards` **479 类 / 5449 例 / 0 失败 / 0 错误 / 6 跳过**、agent 子项目 **14 类 / 65 例 / 0 失败**。修复明细见 `20260920-待分析问题清单.md` P5 与「复核收口」。
+
 > **验收对象**：分支 `t-sourcejumpfunnel` 交付（提交 `b117d8c` 主功能 + `870affc` 占位提示，基点 master `f723c0e`，未并入 master、未推送）。
 > **面向读者**：功能验收人（含用户本人真机走查）。背景与设计见 [T-SourceJumpFunnel 开发计划](../开发计划/20260917-1726-T-SourceJumpFunnel-自研框架汇聚入口跳源码上溯适配-开发计划.md)。
 > **回归基线**：agent 单测 49/0；IDE 全量 testShards **4319/0/0/6 绿**；编译 0 错；设置面板/bundle 对齐定向绿。
@@ -80,9 +84,9 @@
 
 勾选通过即判定闭环：
 
-- [ ] 设置页输入框空态有灰色占位文字（§3.1-1）
-- [ ] 填入公司引擎包名前缀 Apply 后，跳转落真实业务帧、无需重启（§3.1-5）
-- [ ] 历史页跳转与实时页同结果（§3.2-2，本任务最直接的改进观察点）
-- [ ] 预览 meta 行显示调用栈、悬停见完整链（§3.3）
-- [ ] `logLevel=info` 打点确认判定路径，与复验前对照（§3.4）
-- [ ] 清空前缀 / warn 档行为不劣化（§3.1-6 / §3.4-2）
+- [x] 设置页输入框空态有灰色占位文字（§3.1-1） — ✅ 脚本化通过：FrameSkipPrefixesFieldVisibilityTest 1 例（输入框在组件树且不塌缩）+ SettingsRealityGuardTest 4 例（bundle 键引用守卫）+ bundle:285 赋 emptyText，均 0 失败
+- [x] 填入公司引擎包名前缀 Apply 后，跳转落真实业务帧、无需重启（§3.1-5） — ✅ 脚本化通过：AgentProtocolSkipPrefixesTest 3 例（带前缀追加 skipPrefixes 键）+ EntryJumpResolverTest 6 例，均 0 失败；热生效见 CaptureRulesTest 15 例
+- [x] 历史页跳转与实时页同结果（§3.2-2，本任务最直接的改进观察点） — ✅ 脚本化通过：HistorySqlLogPanelJumpToSourceTest 6 + SqlLogPanelLiveJumpWithSourceTest 10 + EntryJumpResolverTest 6（两侧同调 EntryJumpResolver.resolve）0 失败
+- [x] 预览 meta 行显示调用栈、悬停见完整链（§3.3） — ✅ **P5 已修（2026-09-20），前半句现已成立**：`updateMeta` 把 `stackText.inlineLine` 并入**可见行**（`metaLineText = metaLineHead + metaLineDigest` 两段缓存，见 `SqlPreviewPanel.metaLineWithinBudget`），摘要进可见行、完整链仍恒在 tooltip。测试由 8 例扩到 14 例并全绿：`test可见meta行含调用栈摘要_截断到120字符`（可见行含 120 字符截断摘要 + 省略号、不含完整链、tooltip 仍含全文）+ `test窄窗_主体完整保留_摘要截尾_tooltip恒全文` + 5 例宽度预算组装纯函数规则（主体优先 / 摘要吃剩余宽度 / 剩余不足 `META_DIGEST_MIN_PX` 则整段丢弃 / 无摘要逐字退回 F3 原行为）。原「现状锁定」断言（`test现状_可见meta行未含调用栈摘要_仅tooltip有`）已如预期随修复转红并同步改写。**首版实现曾把摘要直接拼进单段文本，导致窄窗下 F3 中段省略把主体（表名/wrapper 类型）整段挤掉、只剩栈底帧**——由独立复核发现并当轮修正，详见 `20260920-待分析问题清单.md` P5 与「复核收口」。
+- [x] `logLevel=info` 打点确认判定路径，与复验前对照（§3.4） — ✅ 脚本化通过（agent 侧补测）：新增 `StackLocatorDiagnoseTest` 7 例（info 档打点判定键齐全且主位置落业务帧 / 默认 warn 档同栈零打点 / 复验前对照：无前缀落汇聚门面 `primary=com/corp/engine/DataUpdateTool.java:88`，登记前缀后落业务帧且门面帧整帧消失 / 前八帧上限（池 12 帧只列 8 条，以 `StackLocator.java:298` 的 `Math.min(pool.size(), 8)` 为准）/ L1 命中目录帧 / 缓存命中路径静默 / 档位大小写不敏感），实跑 `:sql-visualizer-agent:test` **65/0/0** 绿。断言落在 diagnose 本体（接管 System.err 观测真实输出，生产代码零改动）。**遗留**：插件侧仍硬编码 `logLevel=warn`（`AgentProtocol.kt:28`），真机端到端仍需手改 `-javaagent` 参数。
+- [x] 清空前缀 / warn 档行为不劣化（§3.1-6 / §3.4-2） — ✅ 脚本化通过：AgentProtocolSkipPrefixesTest#空前缀列表_退化为既有两键body 0 失败；agent 侧 CaptureRulesTest 15 例含热生效与清空

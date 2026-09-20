@@ -29,7 +29,9 @@ import org.junit.Assert.assertTrue
  *  7. 属性补全：`<foreach <caret>` → collection/item；
  *  8. OGNL：`<if test="<caret>">` → 参数名 entity + 主实体字段名 id/name（fieldName）；
  *  9. 守卫：根标签非 mapper → 补全为空（直接调用贡献器隔离断言，无平台 XML 补全干扰）；
- * 10. 降级：无 namespace → 仅关键字（无表名/列名）。
+ * 10. 降级：无 namespace → 仅关键字（无表名/列名）；
+ * 14-15.（T-FCA-03）`collection` 属性补全含集合快捷名 `list`/`collection`/`array` 且排在既有候选之后；
+ *    `test` 属性不含这三个名字（两者共用同一 OGNL 分支，靠属性名收窄）。
  *
  * **触发方式（直接调用，不用 myFixture.complete()）**：贡献器经 plugin.xml 注册由主控统一完成
  * （本里程碑不修改 plugin.xml），且用例 9 需要"我们的补全器产出为空"的隔离断言——complete()
@@ -399,6 +401,53 @@ class XmlSqlCompletionContributorTest : BasePlatformTestCase() {
         )
         assertTrue("ON 右侧 d 别名应补 d.id：$strings", strings.contains("d.id"))
         assertFalse("ON 场景命中 d 前缀时只出 d 的列，u.id 不应出现：$strings", strings.contains("u.id"))
+    }
+
+    // ------------------------------------------------------------------
+    // 14-15. T-FCA-03：foreach collection 快捷别名（只对 collection 属性开放）
+    // ------------------------------------------------------------------
+
+    /**
+     * `collection` 属性值内补全 = 既有候选（参数名 + 主实体字段名，**顺序与内容不变**）
+     * 之后追加三个集合快捷名。逐项断言顺序，钉住「不挤压既有候选」。
+     */
+    fun test14CollectionAttributeAddsAliasCandidatesAfterExistingOnes() {
+        addDefaultMapperFile()
+        val strings = lookupStrings(
+            completeAt(
+                """
+                <mapper namespace="com.example.UserMapper">
+                  <select id="selectList">SELECT * FROM t_device_info WHERE 1=1 <foreach collection="<caret>"></foreach></select>
+                </mapper>
+                """,
+            ),
+        )
+        assertEquals(
+            "collection 候选 = 既有（参数名 → 字段名）在前 + 三个快捷名在后：$strings",
+            listOf("entity", "id", "name", "list", "collection", "array"),
+            strings,
+        )
+    }
+
+    /**
+     * 反向守卫：`test` 与 `collection` 共用同一个 OGNL 补全分支，快捷名**不得**灌进 `test`——
+     * 本用例是该收窄的判别器（把 `collectionAliases = attributeName == "collection"` 放宽为恒真即红）。
+     */
+    fun test15TestAttributeHasNoCollectionAliases() {
+        addDefaultMapperFile()
+        val strings = lookupStrings(
+            completeAt(
+                """
+                <mapper namespace="com.example.UserMapper">
+                  <select id="selectList">SELECT * FROM t_device_info WHERE 1=1 <if test="<caret>"></if></select>
+                </mapper>
+                """,
+            ),
+        )
+        assertEquals("test 候选仍只有参数名 + 字段名：$strings", listOf("entity", "id", "name"), strings)
+        assertFalse("test 不应出现 list：$strings", strings.contains("list"))
+        assertFalse("test 不应出现 collection：$strings", strings.contains("collection"))
+        assertFalse("test 不应出现 array：$strings", strings.contains("array"))
     }
 
     // ------------------------------------------------------------------

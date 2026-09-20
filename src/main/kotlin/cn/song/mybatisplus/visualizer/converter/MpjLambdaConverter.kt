@@ -16,6 +16,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.psi.EntityResolver
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
+import com.intellij.openapi.project.Project
 
 /**
  * MPJLambdaWrapper 转换器（F-11）：联表 SELECT（清单 P01~P20 的 MPJLambdaWrapper 形态）。
@@ -47,7 +48,7 @@ object MpjLambdaConverter : WrapperConverter {
 
     override val supportedTypes: Set<WrapperType> = setOf(WrapperType.MPJ_LAMBDA)
 
-    override fun convert(chain: WrapperChain, table: TableInfo): SqlStatement {
+    override fun convert(chain: WrapperChain, table: TableInfo, project: Project?): SqlStatement {
         // 主表别名：构造别名 > setAlias("x") 方法（官方 API，M15 增补）> 默认 t
         val mainAlias = chain.constructorAlias
             ?: chain.calls.firstOrNull { it.methodName == SET_ALIAS }
@@ -115,10 +116,10 @@ object MpjLambdaConverter : WrapperConverter {
                 in JOIN_METHODS -> {
                     // T-1800：先按类名比较去重（可靠），再 fallback 到表名比较（兼容旧逻辑）
                     if (collectionChildClasses.any { cls -> joinEntityClassName(call) == cls }) continue
-                    val join = parseJoin(call, mainAlias) ?: continue
+                    val join = parseJoin(call, mainAlias, project) ?: continue
                     joins += join
                 }
-                SELECT_COLLECTION -> parseCollection(call, joinCalls, mainAlias)?.let { joins += it }
+                SELECT_COLLECTION -> parseCollection(call, joinCalls, mainAlias, project)?.let { joins += it }
             }
         }
 
@@ -443,7 +444,7 @@ object MpjLambdaConverter : WrapperConverter {
      * T-M20-05：EntityRefArg 形态额外携带关联表逻辑删除列（@TableLogic，见 [JoinClause.logicDeleteColumn]），
      * 供 SqlPreviewService 注入副表 deleted 条件；类名兜底 / 字符串 join 无 TableInfo → null（不注入）。
      */
-    private fun parseJoin(call: WrapperCall, mainAlias: String): JoinClause? {
+    private fun parseJoin(call: WrapperCall, mainAlias: String, project: Project?): JoinClause? {
         val type = when (call.methodName) {
             "leftJoin" -> JoinType.LEFT
             "innerJoin" -> JoinType.INNER
@@ -487,10 +488,9 @@ object MpjLambdaConverter : WrapperConverter {
         if (className.isEmpty()) return null
 
         // T-M19.4：主表兜底推断走统一入口（策略 + 修饰链，全局语义）
-        // T-TS-07 留档：此处兜底未传 project（[WrapperCall] 模型不含 project，converter SPI
-        // 亦无项目入参）——多项目同开时表名修饰仍取「首个打开项目」；穿参需改 SPI 签名或给模型
-        // 加平台字段，另批处理（psi 侧兜底调用方已在本批显式传 project）
-        var tableName = tableInfo?.tableName ?: EntityResolver.inferDecoratedTableName(className)
+        // T-FS-04：类名兜底推断显式传调用方 project——多项目同开且项目级表配置不同时，
+        // 关联表名修饰不再受「首个打开项目」影响（null 时行为与改动前逐字节一致）
+        var tableName = tableInfo?.tableName ?: EntityResolver.inferDecoratedTableName(className, project)
         var alias = className.replaceFirstChar { it.lowercaseChar() }
         val onConditions = mutableListOf<Condition>()
         // T-M21-02：子表 MConsumer 子查询形态不携带逻辑删除列（与 selectCollection 子查询族一致——
@@ -846,7 +846,12 @@ object MpjLambdaConverter : WrapperConverter {
      * 子表类取第 2 参、别名用 prefix（子查询表别名）、列映射 map 位置顺延（索引 3）。
      * free 形态（首参 VO 方法引用、无子表类）已在 convert 从 collectionCalls 剔除，不产生子查询。
      */
-    private fun parseCollection(call: WrapperCall, joinCalls: List<WrapperCall>, mainAlias: String): JoinClause? {
+    private fun parseCollection(
+        call: WrapperCall,
+        joinCalls: List<WrapperCall>,
+        mainAlias: String,
+        project: Project?,
+    ): JoinClause? {
         // T-M21-03：prefix 形态判定——第 2 参为类参（EntityRefArg 或类名字面量）
         // T-1800：兼容 EntityRefArg 形态（isPrefixForm 内部处理）
         val prefixForm = isPrefixForm(call)
@@ -874,10 +879,11 @@ object MpjLambdaConverter : WrapperConverter {
         }
         // T-1800（Bug1 修复）：优先从 EntityRefArg 取真实 @TableName，不再仅靠 snake_case 推断。
         // 例：AddressDO(@TableName("user_address")) → EntityRefArg 直接得 user_address，避免 address_d_o。
-        // T-TS-07 留档：兜底未传 project（同 parseJoin，见其注释）
-        val childTable = collectionTableInfo(call)?.tableName ?: EntityResolver.inferDecoratedTableName(childClass)
+        // T-FS-04：类名兜底推断显式传调用方 project（实体类 PSI 不可解析时按该项目读项目级表配置）
+        val childTable = collectionTableInfo(call)?.tableName
+            ?: EntityResolver.inferDecoratedTableName(childClass, project)
 
-        val subSelect = renderCollectionSubSelect(call, childTable, alias, mapIndex)
+        val subSelect = renderCollectionSubSelect(call, childTable, alias, mapIndex, project)
 
         // ON 条件：复用同链中同子表 leftJoin 的 ON（T-M15-06 修复——四种 join 形态全覆盖）：
         // 三参（ColumnArg 对）/ 四参带别名 / on(col1, col2) / lambda ON，统一经 parseJoin 提取，
@@ -893,7 +899,7 @@ object MpjLambdaConverter : WrapperConverter {
                 }
             }
             .flatMap { joinCall ->
-                val joinClause = parseJoin(joinCall, mainAlias) ?: return@flatMap emptyList<Condition>()
+                val joinClause = parseJoin(joinCall, mainAlias, project) ?: return@flatMap emptyList<Condition>()
                 val joinAlias = joinClause.alias  // leftJoin 的默认别名（如 addressDO）
                 joinClause.onConditions.map { cond ->
                     (cond as? Condition.ColumnComparison)?.let { cc ->
@@ -916,8 +922,15 @@ object MpjLambdaConverter : WrapperConverter {
      * @param childTable  子表名
      * @param alias       子表别名
      * @param mapIndex    列映射 map 实参索引（T-M21-03 prefix 形态为 3，普通形态为 2；嵌套 collection 无 map）
+     * @param project     调用方项目（T-FS-04）：孙表类名兜底推断按该项目读项目级表配置；null = 未提供
      */
-    private fun renderCollectionSubSelect(call: WrapperCall, childTable: String, alias: String, mapIndex: Int = 2): String {
+    private fun renderCollectionSubSelect(
+        call: WrapperCall,
+        childTable: String,
+        alias: String,
+        mapIndex: Int = 2,
+        project: Project? = null,
+    ): String {
         val subColumns = mutableListOf<String>()
         val nestedJoins = mutableListOf<String>()
         val mapping = call.args.getOrNull(mapIndex) as? WrapperArg.NestedArg
@@ -929,10 +942,10 @@ object MpjLambdaConverter : WrapperConverter {
                 "collection" -> {
                     val grandChild = (c.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted ?: return@forEach
                     // T-M19.4：孙表推断走统一入口（策略 + 修饰链，全局语义）
-                    // T-TS-07 留档：兜底未传 project（同 parseJoin，见其注释）
-                    val grandTable = EntityResolver.inferDecoratedTableName(grandChild)
+                    // T-FS-04：类名兜底推断显式传调用方 project（同 parseJoin）
+                    val grandTable = EntityResolver.inferDecoratedTableName(grandChild, project)
                     val grandAlias = grandChild.replaceFirstChar { it.lowercaseChar() }
-                    val grandSub = renderCollectionSubSelect(c, grandTable, grandAlias)
+                    val grandSub = renderCollectionSubSelect(c, grandTable, grandAlias, project = project)
                     nestedJoins += "LEFT JOIN ($grandSub) $grandAlias ON $grandAlias.${alias}_id = $alias.id"
                 }
             }

@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
+import cn.song.mybatisplus.visualizer.testutil.AlreadyDisposedDiagnostics
+import cn.song.mybatisplus.visualizer.testutil.SqlLogManagerProjectState
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -20,8 +22,28 @@ import java.net.Socket
  */
 class AgentListenSyncTest : BasePlatformTestCase() {
 
+    /** T-TestIsolation：本类读写的是**项目服务级**共享 SqlLogManager（light 项目片内跨类复用）——
+     *  存初值供 tearDown 复位，兼防「邻居留下的脏捕获态」被本类当作初值再传下去。 */
+    private lateinit var serviceState: SqlLogManagerProjectState.Snapshot
+
+    override fun setUp() {
+        super.setUp()
+        serviceState = SqlLogManagerProjectState.capture(
+            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "setUp.capture")
+        )
+    }
+
+    override fun tearDown() {
+        SqlLogManagerProjectState.restore(
+            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "tearDown.restore"),
+            serviceState,
+        )
+        super.tearDown()
+    }
+
     fun testisListenActive_跟随监听状态() {
-        val logManager = project.getService(SqlLogManager::class.java)
+        val logManager =
+            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "test.isListenActive")
         val manager = AgentManager.getInstance(project)
         val before = logManager.capturing
         try {

@@ -11,7 +11,7 @@ import com.intellij.psi.PsiManager
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.HeavyPlatformTestCase
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 
 /**
@@ -50,6 +50,9 @@ class PluginCacheManagerCoverageTest : HeavyPlatformTestCase() {
      * 只看反查缓存 → 展示恒 0 B。
      */
     fun testFastPathHitLeavesReverseLookupEmptyWhileResolverAccumulates() {
+        // T-ST-01：前置由本用例自建（清空项目级反查缓存），不依赖「本用例开始时项目还没有反查
+        // 缓存条目」这一环境假设——否则同项目更早的用例/类若走过慢路径，断言会为无关原因变红。
+        EntityClassFinder.clearReverseLookupCache(project)
         addClassFile(
             "DeviceInfoEntity.java",
             """
@@ -135,10 +138,22 @@ class PluginCacheManagerCoverageTest : HeavyPlatformTestCase() {
         assertEquals("清除后 entryCount 应归零", 0, PluginCacheManager.entryCount(listOf(project)))
     }
 
-    /** 清除动作不得实例化项目服务（Wrapper 缓存经 getServiceIfCreated 访问，未创建跳过）。 */
+    /**
+     * 清除动作不得实例化项目服务（Wrapper 缓存经 getServiceIfCreated 访问，未创建跳过）。
+     *
+     * T-ST-01：断言形态为「调用前实例 == 调用后实例」而非「调用后应为 null」——后者断言的是
+     * **环境**（测试项目此刻还没创建过该服务）而非被测行为，任何先创建过该服务的代码路径
+     * （同用例前置、同项目更早的用例/类）都会让它红，而 clearAll 什么都没做错。前者语义不变
+     * （仍能抓「clearAll 创建了服务」：未创建时是 null == null，已创建时断言未被换成新实例），
+     * 但去掉了对环境状态的依赖。
+     */
     fun testClearAllDoesNotInstantiatePreviewService() {
-        assertNull("前置：测试项目不应已创建 SqlPreviewService", project.getServiceIfCreated(SqlPreviewService::class.java))
+        val before = project.getServiceIfCreated(SqlPreviewService::class.java)
         PluginCacheManager.clearAll(project)
-        assertNull("clearAll 不应触发 SqlPreviewService 实例化", project.getServiceIfCreated(SqlPreviewService::class.java))
+        assertSame(
+            "clearAll 不得触发 SqlPreviewService 实例化",
+            before,
+            project.getServiceIfCreated(SqlPreviewService::class.java),
+        )
     }
 }

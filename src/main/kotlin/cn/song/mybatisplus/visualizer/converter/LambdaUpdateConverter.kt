@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperCall
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.psi.currentDialect
+import com.intellij.openapi.project.Project
 
 /**
  * LambdaUpdateWrapper 转换器（F-09）：`UPDATE 表 SET col = ? ... WHERE ...`。
@@ -28,7 +29,7 @@ object LambdaUpdateConverter : WrapperConverter {
 
     override val supportedTypes: Set<WrapperType> = setOf(WrapperType.LAMBDA_UPDATE)
 
-    override fun convert(chain: WrapperChain, table: TableInfo): SqlStatement {
+    override fun convert(chain: WrapperChain, table: TableInfo, project: Project?): SqlStatement {
         val sets = chain.calls
             .filter { it.methodName in SET_METHODS }
             .mapNotNull { parseSet(it) }

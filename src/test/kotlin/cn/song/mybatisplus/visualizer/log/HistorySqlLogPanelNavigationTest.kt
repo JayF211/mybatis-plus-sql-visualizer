@@ -6,6 +6,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.io.File
+import javax.swing.event.ListDataEvent
+import javax.swing.event.ListDataListener
 
 /**
  * 历史面板两级导航真实场景测试（F-44-3）：
@@ -115,6 +117,129 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             assertEquals("末条顺序保持", "SELECT * FROM big_table WHERE id = 100", panel.sqlListEntries[n - 1].restoredSql)
             // 无重复（同一性——分批追加不得重复填同一实例）
             assertEquals("无重复条目", n, panel.sqlListEntries.distinct().size)
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    /*
+     * 验收项「上千条历史文件双击打开，首屏快显后分块追加、不冻结」（T-SqlHistoryFull §3.2）的自动化代理。
+     *
+     * 「不冻结」为什么用「首屏 30 + 分块」代理，而不断言耗时：
+     *  真机冻结的根因是**单次 EDT 占用时长**——一次性写满上千条会产生上千次模型变更事件 +
+     *  全量布局失效，EDT 被独占整个填充过程。耗时的绝对值随机器负载剧烈波动（CI/本机并行构建
+     *  下同一代码可差数倍），毫秒阈值断言必然 flaky；而「单次 EDT 占用有上界」是同一根因的
+     *  确定性表达，可无时钟断言：
+     *   ① 首屏只写 REFRESH_FIRST_BATCH_SIZE 条就返回（打开调用的同一 EDT 回合内即可绘制），
+     *      余下条目必须等后续 EDT 脉冲才进模型 —— 先出一屏，再继续追加，不是一次性填完；
+     *   ② 余下条目按模型变更分块到达，任何一轮增量 ≤ REFRESH_CHUNK_SIZE，且轮数恰为
+     *      「首屏 1 批 + 剩余条数/每批（向上取整）」—— 每次 EDT 占用被钉在「30 条」量级，
+     *      不出现长冻结；
+     *   ③ 分块期间条数单调不减、模型不被中途清空 —— 渲染器任意时刻都能画出已到的部分。
+     */
+    fun test二级大文件_首屏先出再分块追加_非一次性填满() {
+        val n = 1000
+        val entries = (1..n).map { Triple("SELECT * FROM huge_history WHERE id = $it", "HugeMapper.java:$it", it.toLong()) }
+        writeHistoryFile("sql-history-2026-09-17.sql", f44FileContent(entries))
+
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+        try {
+            // 记录每次模型变更后的条数 = 分批追加的「轮次轨迹」（模型变更事件即一次渲染失效，
+            // 与 EDT 上真正干了多少活一一对应；比「两次 pump 之间取数」更细，不受 pump 粒度影响）
+            val model = panel.sqlListForTest.model
+            val sizes = mutableListOf<Int>()
+            model.addListDataListener(object : ListDataListener {
+                override fun intervalAdded(e: ListDataEvent) { sizes.add(model.size) }
+                override fun intervalRemoved(e: ListDataEvent) { sizes.add(model.size) }
+                override fun contentsChanged(e: ListDataEvent) { sizes.add(model.size) }
+            })
+
+            panel.openFileForTest(panel.fileListEntries.first())
+
+            // ① 首屏先出：open 返回时（仍是打开调用的同一 EDT 回合，尚未 pump）模型只有首屏批，
+            //    而不是全部 1000 条 —— 即「先出一屏」已经可绘制，剩余条目还在队列里
+            assertEquals(
+                "首屏应只写 REFRESH_FIRST_BATCH_SIZE=$REFRESH_FIRST_BATCH_SIZE 条后立即返回（实际 ${panel.sqlListEntries.size}，" +
+                    "模型变更轨迹=$sizes）——等于总数 $n 即回退成一次性填满（EDT 长冻结）",
+                REFRESH_FIRST_BATCH_SIZE,
+                panel.sqlListEntries.size,
+            )
+            assertEquals(
+                "首屏必须是文件前 $REFRESH_FIRST_BATCH_SIZE 条且顺序保持（首屏内容立即可读）",
+                entries.take(REFRESH_FIRST_BATCH_SIZE).map { it.first },
+                panel.sqlListEntries.map { it.restoredSql },
+            )
+
+            // ② 分块追加：反复 pump EDT 直到追加链走完（轮数上限兜底，防死循环）
+            val perPump = mutableListOf(panel.sqlListEntries.size)
+            var rounds = 0
+            while (rounds++ < 200) {
+                val before = panel.sqlListEntries.size
+                com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+                val after = panel.sqlListEntries.size
+                perPump.add(after)
+                assertTrue("第 $rounds 轮 pump 后条数不得回退（$before → $after，轨迹=$perPump）", after >= before)
+                if (after == before) break
+            }
+            assertEquals("分块追加走完后应等于总条数（轨迹=$perPump）", n, panel.sqlListEntries.size)
+            assertEquals("末条顺序保持", "SELECT * FROM huge_history WHERE id = $n", panel.sqlListEntries[n - 1].restoredSql)
+            assertEquals("无重复条目（代际守卫防幽灵追加）", n, panel.sqlListEntries.distinct().size)
+
+            // ③ 每批规模有界 + 分块轮数（用常量，不用魔法数字）
+            val increments = sizes.zipWithNext { a, b -> b - a }
+            val maxIncrement = increments.maxOrNull() ?: 0
+            assertTrue(
+                "任何一轮模型变更的增量不得超过 REFRESH_CHUNK_SIZE=$REFRESH_CHUNK_SIZE" +
+                    "（实际最大 $maxIncrement，轨迹=$sizes）——超界即单次 EDT 占用失控",
+                maxIncrement <= REFRESH_CHUNK_SIZE,
+            )
+            val minRounds = (n - REFRESH_FIRST_BATCH_SIZE + REFRESH_CHUNK_SIZE - 1) / REFRESH_CHUNK_SIZE
+            assertTrue(
+                "剩余 ${n - REFRESH_FIRST_BATCH_SIZE} 条须分块到达：模型变更轮数 ${sizes.size} 不得少于 $minRounds" +
+                    "（一次填完即红，轨迹=$sizes）",
+                sizes.size >= minRounds,
+            )
+            assertEquals(
+                "每批规模恒为 REFRESH_CHUNK_SIZE=$REFRESH_CHUNK_SIZE（末批余数）：轮数应为首屏 1 + 追加 $minRounds" +
+                    "（轨迹=$sizes）——轮数变少即单批变大、单次 EDT 占用上升",
+                minRounds + 1,
+                sizes.size,
+            )
+            assertTrue("分块轨迹单调不减（轨迹=$sizes）", sizes.zipWithNext().all { (a, b) -> b >= a })
+            assertEquals("末次模型变更即全量（轨迹=$sizes）", n, sizes.last())
+            assertTrue("首屏之后模型不被中途清空——分块期间渲染器随时可读（轨迹=$sizes）", sizes.drop(1).all { it > 0 })
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    /*
+     * T-SqlHistoryFull 代际守卫（与首屏/分块同源）：分块追加进行中触发新一轮填充（此处=二级搜索），
+     * 在途旧链必须立即终止——否则旧文件的剩余条目会继续追加进新结果集（幽灵条目）。
+     * 本用例在**未 pump 的中间态**（首屏 30 条已入、970 条仍在队列）改搜索词，故与 pump 粒度无关。
+     */
+    fun test二级大文件_分块追加中途重载_旧链终止无幽灵条目() {
+        val n = 1000
+        val entries = (1..n).map { Triple("SELECT * FROM huge_history WHERE id = $it", "HugeMapper.java:$it", it.toLong()) }
+        writeHistoryFile("sql-history-2026-09-17.sql", f44FileContent(entries))
+
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+        try {
+            panel.openFileForTest(panel.fileListEntries.first())
+            assertEquals("中间态：首屏批已入、剩余仍在队列", REFRESH_FIRST_BATCH_SIZE, panel.sqlListEntries.size)
+
+            // 新一轮填充（搜索结果集 1 条）启动 → 旧链代际失效
+            panel.setSearchForTest("id = 1000")
+            assertEquals("新结果集应立即生效", 1, panel.sqlListEntries.size)
+
+            // pump 掉队列里旧链的后续批次：不得追加任何旧文件条目
+            repeat(5) { com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents() }
+            assertEquals("旧分块链须已终止，不得追加幽灵条目", 1, panel.sqlListEntries.size)
+            assertEquals(
+                "命中的应是 id = 1000 那条（而非旧链残留）",
+                "SELECT * FROM huge_history WHERE id = 1000",
+                panel.sqlListEntries.single().restoredSql,
+            )
         } finally {
             panel.dispose()
         }

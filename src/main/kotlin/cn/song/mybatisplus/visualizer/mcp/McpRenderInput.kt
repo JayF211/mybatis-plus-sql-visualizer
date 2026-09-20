@@ -1,7 +1,7 @@
 package cn.song.mybatisplus.visualizer.mcp
 
 /**
- * T-McpToolset mpsv_render_sql 入参校验与形态分发（纯逻辑层，无 IDE 类型）。
+ * T-McpToolset sqlv_render_sql 入参校验与形态分发（纯逻辑层，无 IDE 类型）。
  *
  * 计划 §二：入参「项目相对文件路径 + 行号」或「源码片段 + 触发面类型」。一期片段形态仅支持
  * mapper XML 文本（[cn.song.mybatisplus.visualizer.ui.XmlPreviewService] 为 text 形态入口；

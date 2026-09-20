@@ -99,7 +99,7 @@ object AnnotationSqlPreviewService {
         }
         val sql = values.joinToString(" ").trim()
         val method = PsiTreeUtil.getParentOfType(annotation, PsiMethod::class.java)
-        return buildResult(sql, shortName, paramTypes(method), warnings, project)
+        return buildResult(sql, shortName, previewParamTypes(method), warnings, project)
     }
 
     // ------------------------------------------------------------------
@@ -129,7 +129,7 @@ object AnnotationSqlPreviewService {
         if (sql == null) {
             return nullResult(MpSqlVisualizerBundle.message("annotation.provider.notSupported"))
         }
-        return buildResult(sql, shortName, paramTypes(mapperMethod), warnings, project)
+        return buildResult(sql, shortName, previewParamTypes(mapperMethod), warnings, project)
     }
 
     /** Provider type 解析：value/type 属性（PsiClassObjectAccessExpression）→ PsiClass。 */
@@ -178,6 +178,11 @@ object AnnotationSqlPreviewService {
      *
      * T-PT-01：同步扩为「名字 + 类型类别」对——`param1..N` 按位置继承对应参数的类型类别，
      * 供参数面板按签名挂占位提示与 mock 值分派。
+     *
+     * T-PC2-03 差异登记（**有意不擅改**）：本门槛 = 「多参数或含 @Param 就补 paramN」，
+     * 比 XML 路径 [XmlParamTypeResolver.resolveTypes] 的「全或无（全部参数都有显式 @Param）」
+     * 宽一档——注解路径现状已随 `paramNames` 供补全上下文消费（`XmlSqlCompletionContextResolver`
+     * 按键序取参名），收紧会连带补全候选变化；两条路径语义分叉已记入 T-ParamContract2 计划 §八。
      */
     internal fun paramTypes(method: PsiMethod?): Map<String, ParamTypeInfo> {
         if (method == null) return emptyMap()
@@ -201,6 +206,25 @@ object AnnotationSqlPreviewService {
             named.forEachIndexed { index, (_, info) -> result["param${index + 1}"] = info }
         }
         return result
+    }
+
+    /**
+     * T-FCA-02（N-32）：**预览绑定构造**用的参数类型映射 = [paramTypes]（命名参数 + `paramN`）
+     * + foreach 集合快捷别名（`list` / `collection` / `array`）。
+     *
+     * 别名门槛与键集由 [XmlParamTypeResolver.collectionAliasTypes] 单一实现（真引擎实测钉住，
+     * 见 `xml/fidelity/RealEngineFidelityTest` 的「别名键集钉」用例）——注解路径与 XML 路径共用同一
+     * 判定，避免两份门槛漂移。规则来源标注：`mybatis-3.5.19-param-name-resolver-wrap-to-map-if-collection`。
+     *
+     * **刻意不并入 [paramTypes]**：该函数的**键序**是补全候选来源（[XmlSqlCompletionContextResolver.resolveCommon]
+     * 取 `keys` 作 `SourceSqlContext.paramNames`，被 `test` 与 `collection` 两个属性共用），并入会把集合
+     * 别名灌进 `test` 候选（T-FCA-03 明确要求只影响 `collection`）。故别名走「预览绑定」这条渠道，
+     * 补全候选的别名由 `XmlSqlCompletionContributor` 按属性收窄注入，两处互不污染。
+     */
+    internal fun previewParamTypes(method: PsiMethod?): Map<String, ParamTypeInfo> {
+        val named = paramTypes(method)
+        val parameters = method?.parameterList?.parameters ?: return named
+        return named + XmlParamTypeResolver.collectionAliasTypes(parameters)
     }
 
     /** 模型 → 结果（解析异常兜底 warning；T-M25.2 静态常量引用经 project 解析注入）。

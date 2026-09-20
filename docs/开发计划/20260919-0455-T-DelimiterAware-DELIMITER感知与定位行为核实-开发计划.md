@@ -52,7 +52,7 @@
 
 1. 真机 MySQL 控制台粘贴含 `DELIMITER $$` 的存储过程 → 四种光标位置执行行为实录（T-DA-01）。
 2. 日志面板粘贴同一脚本 → 多语句勾选浮层显示正确（不碎句）。
-3. MCP `mpsv_check_sql` 对同一脚本 → 不报 `$$` 残留。
+3. MCP `sqlv_check_sql` 对同一脚本 → 不报 `$$` 残留。
 
 ## 六、风险
 
@@ -73,8 +73,122 @@ T-DA-01（真机核实，先做——可能结案）→ T-DA-02（拆分器感�
 
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
-| T-DA-01 | （实施后填） | 四种光标位置实录与判定结论（本项结论决定 T-DA-04 是否启动） |
-| T-DA-02 | （实施后填） | 状态机改动点与先红后绿实录 |
-| T-DA-03 | （实施后填） | 四消费面用例数 |
-| T-DA-04 | 不实施 | 已定案（2026-09-19，用户认可）：不做；留档备选 |
-| T-DA-05 | （实施后填） | |
+| T-DA-01 | 无提交（探针代码已删除，结论见 §8.2） | 判定＝**原生已覆盖（静态证据）＋光标行取值环境受限未验证**；两次探针实录见 §8.2 |
+| T-DA-02 | `26487b8` | `SqlStatementSplitter` 增「当前界符」维度 + 行首 `DELIMITER <token>` 指令识别；先红后绿见 §8.3 |
+| T-DA-03 | `3a3fa04` | 四消费面各 1 例（log/execute×2/mcp），共 +4 例；读数见 §8.4 |
+| T-DA-04 | 不实施 | 已定案（2026-09-19，用户认可）：不做；留档备选。T-DA-01 结论亦不构成启动理由（§8.2） |
+| T-DA-05 | 收窄（见 §8.6 偏离①） | 仅本计划 §八；`CHANGELOG.md`、`docs/变更记录.md`、第八轮报告 §8 #39 落地备注未动 |
+
+### 8.1 落地形态（T-DA-02）
+
+`util/SqlStatementSplitter.kt` 状态机新增三处，既有语义零改动：
+
+- **当前界符维度**：`var delimiter`（默认 `;`）。`DELIMITER` 指令切换后，顶层切分改用该 token 整串匹配
+  （`sql.startsWith(delimiter, i)`），`;` 分支仅在默认界符下生效（界符生效期内的顶层 `;` 原样进段）；
+- **指令识别**：词终结处（`else` 分支）判「`DELIMITER` 词 + 后续为空白 + 行首 + 词前缓冲全空白」四条同时成立
+  → 切界符、整行丢弃（`readDelimiterDirective` 取行内首个空白分隔词，空 token 复位 `;`）。行首判定
+  `isLineHead`、词起点缓冲长度 `bufferLenAtWordStart`（首版用 `sb.isBlank()` 判「待切段为空」误判——
+  词本身已在缓冲里，红测实录见 §8.3）；
+- **分支优先级**：自定义界符匹配置于注释/引号/标识符分支之前（`$$` 的 `$` 是标识符字符，须先命中；
+  `//` 与块注释起始 `/*` 字符不同故不冲突）；`END$$` 形态由「匹配分支先 `flushWord()` 再切」处理。
+
+消费面零改动：四处消费方（`LogToSqlPanel.splitSqlStatements` / `SqlTypeClassifier.splitStatements` /
+`CheckSqlTool` / `ExecutionTimeoutGuard` 的计数入参）经同一单实现自动获益，未改其代码。
+
+### 8.2 T-DA-01 判定与实录（先证伪）
+
+**判定：原生已覆盖 DELIMITER 指令语义（静态证据）；「光标停在 delimiter 行取哪条语句」这一取值行为
+环境受限未验证。对行动无影响——T-DA-04 已定案不做，故本项不阻塞任何后续工作。**
+
+静态证据（本机 jar 类文件方法表/常量池实读，非推演）：
+
+- 243 平台（测试/运行基准）`…/transformed/ideaIU-2024.3.7.1-win/plugins/DatabaseTools/lib/database-plugin.jar`：
+  `com.intellij.database.script.ScriptModelUtil` 有 public static
+  `getSelectedStatementsRange(DatabaseScriptingSessionClient, Editor, ExecOption) → TextRange`、
+  `getSelectionForConsole(Editor, ExecOption) → TextRange`、`adjustSelectionRange(ScriptModel, Document, TextRange, ExecOption) → TextRange`；
+  `com.intellij.database.console.JdbcConsoleProvider` 有 public static
+  `findScriptModel(PsiFile, PsiElement, Editor, ExecOption) → Info`、`getScriptModel(PsiFile) → ScriptModel`。
+  即：语句范围解析确在原生侧，我方只消费（与 §一 核实一致）。
+- 262 平台（本机 DataGrip `DB-262.10315.132`，`plugins/DatabaseTools/lib/modules/*.jar`）——DELIMITER 是一等公民：
+  `intellij.database.dialects.mysqlbase.jar` 的 `MysqlGeneratedParser` 含 `MYSQL_DELIMITER`、
+  `psi/MysqlDelimiterStatementImpl`（`getDelimiter`/`isDelimiter`）、`MysqlDialectBase` 含 `MYSQL_DELIMITER_TOKEN`
+  且实现 `SubstitutionDescriptorImpl$DelimiterAware`（`getDelimiter`/`getDelimiterAt`）；
+  `intellij.database.sql.core.impl.jar` 的 `SqlPreprocessingLexer` 含 `statementDelimiter`/`isDelimiterMatch`、
+  `PreprocessorMatchState` 含 `myStatementDelimiter`/`findDelimiterMatch`/`myDelimiterMatched`/
+  `onlySpacesAndDelimitersUpToEol`——原生在**词法预处理层**就跟踪「当前语句界符」并把指令行排除在语句外，
+  正是 DBX #9485 需要自己补 `mysqlDelimiterDirectiveCursorRange` 的那一层。
+- 我方侧（源码实读）：提交恒为整篇文档、无 `selectionModel`/`getSelectedText` 光标面（§一 表 1 已核实），
+  故 delimiter 行的定位语义我方既不可控、也无落点。
+
+行为实录（两次探针，均未入库；探针代码跑完即删，避免把夹具扰动留给共享通道）：
+
+1. **无控制台会话的独立探针**（临时 `.sql` + MySQL 方言映射 + `EditorFactory` 编辑器，反射调
+   `ScriptModelUtil.getSelectionForConsole(Editor, ExecOption)`）：API 可达，但四种光标位置全部返回
+   退化空范围 `(0,0)` / `(54,54)` / `(67,67)` / `(82,82)` → 该 API 的有效取值依赖**活控制台会话**
+   （与插件经 client 变体取值的形态一致），无会话时取不到语句范围。
+2. **活控制台会话探针**（testDatabase 沙盒内走完 prepareConsole：introspection 成功、runner=1、
+   控制台编辑器夹具就位，以控制台为 client 调
+   `getSelectedStatementsRange(DatabaseScriptingSessionClient, Editor, ExecOption)`）：四位置仍为退化范围
+   （`(0,0)` / `(54,54)` / `(13,13)` / `(82,82)`），同轮 e2e 用例报「数据库控制台被 IDE 回收（数据源模型
+   尚未就绪）」——headless 夹具持不住稳定的原生脚本模型，取值不可信，故不作为判定依据。
+
+**缺什么（环境受限的具体口径）**：可交互的 runIde 沙盒（Database 插件 + 真 MySQL 数据源 + 手工放置光标，
+即 §五 走查清单第 1 条）或一个能稳定持有控制台会话与脚本模型的自动化夹具。前者属真机走查、后者当前
+基建不具备（DB 集成类的控制台在 headless 下会被 DBN 回收，已在册现象）。
+
+### 8.3 T-DA-02 先红后绿实录
+
+- **红**（实现前，`./gradlew test --tests …SqlStatementSplitterTest`）：`49 tests completed, 6 failed`。
+  失败读数即缺陷实录：`DELIMITER $$` 脚本切出 **4 段**（期望 2），首段为 `DELIMITER $$`、第二段残留
+  `SELECT 1$$`；`DELIMITER //` 形态切出 1 段（`//` 被当普通字符吞进语句）；`DELIMITER` 空参数形态切出 4 段。
+  两条负向用例（字符串/注释内不识别、非行首不识别）改前即绿——它们锁的是「不误识别」边界。
+- **绿**（实现后）：`49 tests / 0 failures / 0 errors / 0 skipped`，新增 8 例：
+  过程体整段一条+指令行不产出+`$$` 不残留、自定义界符生效期内 `;` 不切分、`DELIMITER ;` 复位、
+  `//` 界符与块注释共存、空参数复位、字符串/注释内不识别、非行首/待切段非空不识别、`splitStripped` 同口径。
+- 既有四条语义回归门（分号/引号、注释保留、括号深度、`BEGIN…END` 配对、T-SQL `IF` 批首）全部沿用原用例，
+  未改期望；`DELIMITER` 形态另进「三委托方一致性样例池」，锁死三处委托方同口径。
+
+### 8.4 T-DA-03 消费面用例（4 例，各面 1 例）
+
+| 面 | 测试类 | 用例 | 断言要点 |
+|---|---|---|---|
+| ① 日志面板多语句勾选浮层 | `log/LogToSqlPanelExecuteTest` | `test拆分_DELIMITER脚本整段一条不碎句` | 候选 2 条、过程体整段、内部 `;` 保留、`$$` 不残留、指令行不成候选 |
+| ② 类型分类/确认流 | `execute/SqlTypeClassifierTest` | `testDelimiterProcedureScriptClassifiesDdlNotFragments` | 过程体判 DDL、复位后判 QUERY、`getFirstKeyword` 不再回 `DELIMITER`、整脚本需确认 |
+| ③ MCP 静态核查 | `mcp/CheckSqlToolTest` | `DELIMITER脚本_界符残留不当语句` | 输出 `statements: 2`、`$$` 不进输出、过程体判 DDL |
+| ④ 超时预算语句计数 | `execute/ExecutionTimeoutGuardTest` | `testDelimiterScriptStatementCountNotAmplified` | 计数 2 → 预算 60s（改前碎 4 段会放大到 120s） |
+
+定向读数：上述四类 `93 tests / 0 failures / 0 errors`（`ExecutionTimeoutGuardTest` 12、`SqlTypeClassifierTest` 66、
+`LogToSqlPanelExecuteTest` 9、`CheckSqlToolTest` 6）。
+
+### 8.5 门禁读数（最终代码状态，2026-09-19）
+
+- `./gradlew testShards`：**5292 tests / 0 failures / 0 errors / 6 skipped**（片 1873+1792+1627，耗时 194s/207s/188s）。
+  计划 §三 记的基线 `5153/0/0/6` 是立项时读数，其后 master 合入他轮任务用例，故本轮总数更高（非本任务引入的差异）。
+- `./gradlew testDatabase`：**10 tests / 0 failures / 0 errors**（5 类，与基线一致）。
+- `./gradlew :sql-visualizer-agent:test`：**58 tests / 0 failures / 0 errors**（13 类）。
+- 触达测试类读数（分片 XML）：`SqlStatementSplitterTest` 49、`SqlTypeClassifierTest` 66、
+  `ExecutionTimeoutGuardTest` 12、`LogToSqlPanelExecuteTest` 9、`CheckSqlToolTest` 6，全 0 失败。
+
+### 8.6 偏离计划之处
+
+1. **T-DA-05 收窄**：只回填本计划 §八。`CHANGELOG.md`、`docs/变更记录.md`、第八轮报告 §8 #39 落地备注
+   均未改——前者不在派活方写集内，后两者被明令禁改（同批三路已因误改主仓/共享文档返工）。请派活方决定
+   是否由收口方统一补这三处落地备注。
+2. **T-DA-01 的取证方式**：计划 §三 指定用现成 `[M36]` debug 探针在真机实录；实际改为「静态证据 + 两次
+   探针尝试」，原因见 §8.2（该探针只在 `LOG.isDebugEnabled` 下打日志、且要真机交互放光标，本机不具备）。
+   探针代码跑完即删、未入库（第一版曾把探针留在 `DataSourceSelectorIntegrationTest`/`DbConsoleIntegrationTest`，
+   实测会扰动同 JVM 内的既有 e2e 用例——控制台被回收——故整段还原，两文件回到 `1e51ce7` 原状）。
+3. **`split()` 与 `splitStripped()` 同口径丢弃指令行**：计划 §三 只要求「指令行不作为独立语句产出」，
+   实现上两者都把指令行整行丢弃（含界符 token），未采用「把指令行挂到下一条语句前」的备选形态——
+   后者会让 `SqlTypeClassifier` 首关键字回 `DELIMITER` 判 UNKNOWN，与验收 4② 冲突。
+
+### 8.7 未验证项与残留
+
+1. **T-DA-01 的光标行取值行为**：环境受限未验证（缺什么见 §8.2 末段）。不影响交付面（T-DA-04 已定案不做）。
+2. **控制台提交链的实际可执行性**：本任务只改自研拆分器，控制台链仍走原生、提交整篇文档。含 `DELIMITER $$`
+   的脚本在日志面板执行时，切分产物是「过程体一条（无 `DELIMITER` 指令、无尾界符）」——送进原生控制台后
+   原生是否按单条执行，未在真机验证（同属 runIde 走查面）。改前该场景是碎句，改后至少是单条完整语句；
+   这一层属 §五 走查清单第 2 条。
+3. **非 MySQL 方言的 `DELIMITER` 字样**：识别无方言条件（文本层判定，仅出现指令才切换）。风险已在计划 §六
+   登记，实现按「行首 + 语句边界」双限定收敛；未在真机对 PG/Oracle 脚本回归（既有用例池全绿）。
+

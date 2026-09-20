@@ -367,10 +367,14 @@ class SqlLogAutoSaver(
             // 在头部下写独立 Base64 注释行（正文保持可执行 restoredSql；读端 SqlLogFileReader 探测解码）。
             // M56 T-M56-00：扩展字段（mapperStatement/errorText/requestTag/updateCount）任一在场也写
             // pd 行（载荷扩展键，仅非默认落键）——否则 agent 通道结构化信息在历史文件丢失。
+            // T-McpAuditTrail T-MAT-03：**source == MCP 必须入条件**——一条无参数、无占位符、
+            // 无 mapperStatement 的 MCP SELECT（explain 的常态）若不带本条件就不会写出 pd 行，
+            // 来源标记随之丢失（历史读回退化为 UNKNOWN，MCP 徽标消失）——这正是本任务的存在意义。
             if (entry.params.isNotEmpty() || countPlaceholders(entry.rawSql) > 0 ||
                 entry.mapperStatement != null || entry.errorText != null ||
                 entry.requestTag != null || entry.updateCount != null ||
-                entry.sourceCandidates.isNotEmpty() || entry.stackDigest != null
+                entry.sourceCandidates.isNotEmpty() || entry.stackDigest != null ||
+                entry.source == SqlSource.MCP
             ) {
                 w.write("-- pd: ${SqlLogParamCodec.encodeEntry(entry)} --\n")
             }

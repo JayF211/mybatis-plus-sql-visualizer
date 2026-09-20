@@ -18,12 +18,16 @@ plugins {
 // 暗色基准 + record/ 脚本管线），但 262 下 test 源码编译不过——com.intellij.diagram.* 于 262 移入
 // Database 插件（测试 classpath 未含），且新版 Kotlin 把 String.toLowerCase() 升为硬错误，导致
 // 分支自身无法跑 ./gradlew test。故把录制所需四项配置整体收敛为本开关：
-//   默认            -> 243 常规开发态（平台 2024.3.7.1 / toolchain 17 / 无 jcef / 默认沙盒）
-//   -PgifRecord=true -> 262 录制态（平台 2026.2.1 / toolchain 24 / jcef / 独立沙盒 MPSV-GifFresh）
+//   -PgifRecord=true  -> 262 录制态（平台 2026.2.1 / toolchain 24 / jcef / 独立沙盒 MPSV-GifFresh）
+//   -PgifRecord=false -> 243 常规开发态（平台 2024.3.7.1 / toolchain 17 / 无 jcef / 默认沙盒）
 // 四项必须整体切换、不可拆：jcef 自 262 起才从平台核心拆为独立模块（243 distro 无此模块，
 // 单独声明会导致依赖解析失败）；jvmToolchain(24) 用于读 262 平台 v69 类文件（javac 17/21 报
 // 「错误的版本 69.0」）；独立沙盒避免与并行任务互锁。
-// 录制用法：./gradlew runIde -PgifRecord=true
+//
+// 【2026-09-20 合回 master 已还原】录制分支 t-gif-rec-mcp 曾把默认值翻为 true（便于直接
+// `./gradlew runIde` 起 2026 沙盒）；该分支自带说明要求「合回 master 前必须把默认值还原为
+// false，否则 262 录制态会静默成为默认构建基准」——本行即该还原（副作用同步消失：默认态下
+// `./gradlew test` 因 262 限制不可用的问题不再存在）。
 val gifRecord = providers.gradleProperty("gifRecord").orNull?.toBoolean() ?: false
 
 // 闸门：录制开关若与发布/打包任务同用，配置期直接失败——防止 262 录制态流入发行产物。
@@ -37,15 +41,19 @@ if (gifRecord) {
     if (invoked.isNotEmpty()) {
         throw GradleException(
             "gifRecord=true 是演示录制专用（构建基准 2026.2.1），禁止用于发布/打包任务 $invoked。" +
-                "请去掉 -PgifRecord=true 后重试。"
+                "本分支默认即录制态，请改用 -PgifRecord=false 重试。"
         )
     }
 }
 
-// T-McpToolset：MCP Server 插件（com.intellij.mcpServer）编译期 API 桩源集。
-// 基线平台 243 不含 mcpServer 插件，而本机 262 内置 mcpserver.jar 类文件是 major 69（Java 25），
-// JDK 17 编译读不了（javac 17/21 报「错误的版本 69.0」，T-GifRecordSwitch 注释同源实证）——
-// 故用桩源码提供与真实 jar 完全一致的编译期签名（签名逐条 javap 自 262 jar，见桩文件头注释）。
+// T-McpToolset / T-AcpMcpTransport：平台可选插件编译期 API 桩源集。
+// 基线平台 243 不含 mcpServer 插件、也不含 AI Assistant（com.intellij.ml.llm），而本机 262 的
+// mcpserver.jar 与 ml-llm 模块 jar 类文件都是 major 69（Java 25），JDK 17 编译读不了
+// （javac 17/21/24 报「错误的版本 69.0」，T-GifRecordSwitch 注释同源实证）——故用桩源码提供与
+// 真实 jar 完全一致的编译期签名（签名逐条反编译自 262 jar，见各桩文件头注释）。
+// 源集名沿用 mcpStub 未改：testShards 的桩挂载在 buildSrc/mpv-testing.gradle.kts 内按此名引用
+// （T-McpToolset2 接线），改名会牵动 convention 插件；本任务只**扩内容**（新增
+// src/mcpStub/kotlin/com/intellij/ml/llm/... 三个桩类型）而不动接线，故零 buildSrc 改动。
 // 接线方式（防 task 依赖环）：
 //  - 主编译任务 compileKotlin.libraries 挂桩产物目录（task 依赖：compileKotlin → compileKotlinMcpStub）；
 //  - 桩源集编译类路径复用 main 的 compileClasspath（平台 jar/stdlib/JSqlParser 等，不含桩产物，
@@ -85,6 +93,13 @@ dependencies {
     testImplementation(libs.ojdbc11)
     // T-DialectLabMatrix：配方一致性守卫的 YAML 解析（仅测试 classpath）
     testImplementation(libs.snakeyaml)
+    // T-TailSweep2 T-FS-01：真 MyBatis 引擎语义对照测试集（真引擎 jar 仅进**测试 classpath**）。
+    // 来源：真引擎 jar 经 `testImplementation(libs.mp.core)`（com.baomidou:mybatis-plus-core:3.5.17）
+    // 传递带入 `org.mybatis:mybatis:3.5.19`，**无需显式声明**——实测
+    // `./gradlew dependencies --configuration testRuntimeClasspath` 可复核（该配置上无直接依赖项）。
+    // 红线边界：零 mybatis 依赖仅约束 `implementation`（生产依赖图不变，生产仍只有 jsqlparser）。
+    // 真引擎类一律经隔离 classloader 反射驱动，测试源码零 `org.apache.ibatis` import
+    // （见 xml/fidelity/RealEngineDriver.kt）；传递版本由对照集内的版本钉住断言防静默漂移。
 
     // P-立项-05：jackson 版本约束——testcontainers 传递的 jackson-annotations 2.10.3 缺失
     // JsonProperty.namespace()（2.11+ 才有），在测试 classpath 上遮蔽 IDEA 平台所用的新版
@@ -132,6 +147,23 @@ dependencies {
         // T-Dgm-01：Diagrams 插件（类图/关系图底座，仅 Ultimate 捆绑）——JOIN 图原生渲染编译期类。
         // 与 database 同为运行期可选依赖（plugin.xml optional depends + diagram-optional.xml EP 注册）。
         bundledPlugin("com.intellij.diagram")
+
+        // T-GifRec-MCP（2026-09-19）：录制态把 AI Assistant 装进沙盒。AI Assistant 不是 distro
+        // 内置插件（262 distro 163 个插件里无 ml-llm），而 M1-c 分镜要用它的 ACP 面板驱动 agent。
+        // 必须声明式安装：prepareSandbox 每次重建沙盒 plugins/ 目录，手工拷贝进去的插件会被清掉（实测）。
+        // 版本与沙盒平台精确对齐——插件约束为 since-build 262.9437.1 / until-build 262.9437.*。
+        // T-GifRec-MCP（2026-09-19）：录制态把 AI Assistant 装进沙盒。AI Assistant 不是 distro
+        // 内置插件（262 distro 163 个插件里无 ml-llm），而 M1-c 分镜要用它的 ACP 面板驱动 agent。
+        // 必须声明式安装：prepareSandbox 每次重建沙盒 plugins/ 目录，手工拷贝进去的插件会被清掉（实测）。
+        // 版本与沙盒平台精确对齐——插件约束为 since-build 262.9437.1 / until-build 262.9437.*。
+        //
+        // 2026-09-20 复启说明：本声明会把真 ml-llm 带进编译类路径，曾与 T-AcpMcpTransport 的桩冲突
+        // （桩把 AcpAgentId 误置于 com.intellij.ml.llm.agents.acp.api，真接口用平台的
+        // com.intellij.platform.acp.AcpAgentId）→ override 失配。已修正桩的归属（迁至平台包），
+        // 冲突消除，本声明复启。
+        if (gifRecord) {
+            plugin("com.intellij.ml.llm", "262.9437.276")
+        }
     }
 }
 

@@ -3,17 +3,21 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
-> **全局备份**：`~/.zcode/cli/memories/global/`（102 个通用文件）
-> **项目记忆**：保留 23 个核心文件 + MEMORY.md 索引（第十二次精简后）
+> **全局备份**：`~/.zcode/cli/memories/global/`（104 个通用文件）
+> **项目记忆**：保留 32 个核心文件 + MEMORY.md 索引（第十四次精简后）
 
 ---
 
-## 已修复 Bug（164 个）
+## 已修复 Bug（168 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [t-synck2jmaster92-delivered.md](bug-fixes/t-synck2jmaster92-delivered.md) | T-SyncK2JMaster92 已交付（20260919，锚点 ec584e2→b9aeeba，123 提交同步，testShards 5390/0/0/6 + verifyGate 三目标绿；4 生产新建翻译 FatalErrors/SecureXml/PsiSnapshot/AgentUrlRegistry + ACP 传输 + 10 MCP 工具类改名 + BannedApi 1035→2734 五族守卫）；两处结构性决策（Java fatal 透传 `throw (Error) t` 的 JLS 11.2.2 必要性 / fatal 守卫两段式 597 基线与落地集精确计数）与三处移植陷阱（掩码器 Java 树涂白/elvis 误译/改名全仓 grep）已并入活跃记忆 project-kotlin-to-java-port-sync 与 pitfall-scan-guard-mask-and-sample-power 续用 |
+| [t-task-queue-skill.md](bug-fixes/t-task-queue-skill.md) | task-queue 任务队列 skill 定案交付（会话挂起守望进程、实施必须在会话内做；端到端实测通过并常态化运行）：含用户两度纠偏后的架构定案、废弃路线存档（CronCreate 底座平台 20 上限/zcode CLI headless 认证链）、闲时通道滥用请求三次拒绝边界（绕配额/计费类内容不分析不评估）、四个待选 skill 优化在册 pending-plans 续踪 |
+| [project-merge-dev2master-plan.md](bug-fixes/project-merge-dev2master-plan.md) | T-MergeDev2Master 合流方案与实战（20260918 定案「除 K2J 外全合」→ 同日执行完成双树归一）：真实冲突面算法=以合流基点取「两侧都改过的文件」（11 交叠仅 2 真冲突）；三条风险应验实录（PS4 双实现未成冲突源/近三批改动须并集活着过——AgentManager 三方差集实证/合并≠发行）；大合流先打退路 tag 最省事；自动合并抓不到跨两侧语义耦合（A 侧加参 B 侧加调用点会静默断裂）；dev worktree 运维定例已并入项目记忆 pending-plans 合流债节 |
+| [project-mcp-architecture-form.md](bug-fixes/project-mcp-architecture-form.md) | MCP 承载形态定案存档（20260917 评审，定案维持注册 IDEA 平台内置 MCP Server 而非插件独立 server）：核心判据=渲染三件套强依赖 IDE 进程内 PSI/数据源，独立 server 等于重造且丢差异化；十工具清单（4 需 IDE/6 纯逻辑）与设置页门控/[MCP-AUDIT] 审计配套面；「实际开发提效」三条件性评估口径（战略大、日常频率中偏低、纯手动用户零触达）；定案不再投入，等 agent 用户采纳实证，`sqlv_query_rows` 留决策位 |
 | [coolrequest-rabbitmq-tool.md](bug-fixes/coolrequest-rabbitmq-tool.md) | Cool Request RabbitMQ 小工具独立交付（跨项目，F:\code\Java\Github\SongRenShuo\cool-request-tool-rabbitmq）：走查四轮修复（错 vhost null 报错统一翻译/非法 Headers 拦截+NO_ROUTE 检测/Peek 按钮叠放/406 冲突四组合试探+Type AUTO 档+EditorTextField 无 project 构造）真机验证通过；公开仓已建+PR #1 提交 houxinlin/cool-request-tools 待作者合并；构建=IDEA jbr JDK25+字面通配 classpath（git bash 须 MSYS2_ARG_CONV_EXCL）；版本规则=tools-rep 1.0-SNAPSHOT 一版到底 |
 | [project-m56-agent-bytecode.md](bug-fixes/project-m56-agent-bytecode.md) | M56 agent 字节码增强一期（T-M56-00~09，随 v2026.9.18-beta.3 发行成默认通道）：connect 织入+动态代理包装主路径、ASM Tree API、sub-projects/sql-visualizer-agent 内嵌；挂载链路端到端（AgentLoadException(0) 良性/resolvePid 三步回退/Jsons 首成员逗号已修）；免注入文件通道（-javaagent）=二期在册续踪 project-pending-plans |
 | [project-kotlin-to-java-port-sync.md](bug-fixes/project-kotlin-to-java-port-sync.md) | K2J 移植与 T-SyncK2JMaster176 交付（锚点→9def321，176 提交同步含 M56 agent 全链，testShards 4286 绿+verifyGate 三目标 Compatible）：沉淀=is- 前缀访问器显式调用/split 语义差异/测试沙盒旧 jar 遮蔽等；O-24 增量同步决策续踪 project-pending-plans |
@@ -266,10 +270,11 @@
 | [project-m54-perf-redline-audit](bug-fixes/project-m54-perf-redline-audit.md) | M54 性能红线全面治理 24 任务交付（perf/redline-hardening 28 提交，2026-09-05，**已合 dev**）——禁卡死/禁拖慢/禁 ERROR 弹窗：LOG.error 与 ERROR 通知清零、3084 用例 0 失败；实施偏差 4 项备忘（T-Perf-23 正则 13/17、T-Perf-13 探针门控、T-Perf-18 URL 键、T-Perf-20 通知替代 HintManager）；真实防抖待 runIde 真机 |
 | [project-log-jump-no-wrapper-rootcause](bug-fixes/project-log-jump-no-wrapper-rootcause.md) | SQL 日志右键跳转「未找到表对应 Wrapper」根因（2026-09-02 分析，**已随 T-ServiceChainSearch/O-6 修复**）——事后搜索 Wrapper 本质不可靠（仅静态工厂不含 IService 链），正解=F-44-7 SqlSourceInterceptor 执行时注入源码位置，含方案 A 实施全程 12 个编译/运行陷阱 |
 
-## 已解决踩坑（69 个）
+## 已解决踩坑（70 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [pitfall-toolwindow-titleactions-hover-only.md](pitfalls/pitfall-toolwindow-titleactions-hover-only.md) | ToolWindow.setTitleActions 挂的动作新 UI 悬停/激活才渲染——主操作入口挂标题栏在用户视角「消失」（T-CaptureBack 实录：捕捉按钮「不见了」，截图实证存在但不渲染）；回迁面板内工具栏单一入口 + 删 setTitleActions；顺带教训=迁移动作引入硬编码中文漏接 bundle 键。平台通用部分已升全局同名文件 + AGENTS.md 摘要条 |
 | [pitfall-dbn-objectkind-not-java-enum.md](pitfalls/pitfall-dbn-objectkind-not-java-enum.md) | DBN `ObjectKind` 是 type-safe enum 手写类（非 java.lang.Enum），反射 enumConstants 恒 null → DatabaseSchemaResolver 每次调用静默早退、schema 链全程空转且日志谎报 "not found in N data sources"；修法=getField("COLUMN").get(null)（T-DbSchemaCompletion 已交付，另 `To many roots from database` 是平台噪音非根因） |
 | [pitfall-dbn-perfile-datasource-mapping.md](pitfalls/pitfall-dbn-perfile-datasource-mapping.md) | `.idea/data_source_mapping.xml` 把 exec 文件钉到数据源、控制台库上下文随之而定，与插件按数据源名选的 runner 错位 → 42S22/1054 Unknown column（跨库同名表陷阱）；已修 T-ConsoleDbContext（d51cc0a：预览默认以数据源 URL 库为准、手调记忆保留、错误行附当前库） |
 | [pitfall-console-doc-is-file-doc.md](pitfalls/pitfall-console-doc-is-file-doc.md) | attachConsole 挂在 exec 文件本体，写该文件≡改用户眼前控制台文本——File Cache Conflict 五轮与预览裸单行两类 bug 的共同底层；预热写原文+挂载后须回填渲染（回填点须在 embedConsole 之后）；写入成本直落眼前→差量快路径+程序性写入闸门（T-PreviewFast P1/P4） |
@@ -363,13 +368,15 @@
 
 **第十二次精简升级（2026-09-18，8 个）**：idea-262-platform-jar-verify（262 平台类查 intellij.platform.ide.jar 常量池，执行/VM 参数类在 util-8 与 plugins 全盘扫描）/ user-env-jdk8（本机 JDK8=D:/HuanJing/Java/jdk1.8.0_181 即 PATH 默认；H2 2.x 是 Java 11 字节码、JDK8 目标换 1.4.200）/ reference-zcode-subagent-storage（ZCode 子智能体四作用域路径+状态文件+frontmatter+A→B 迁移要点）/ pitfall-embedded-native-loses-auto-behavior（手工构造编辑器嵌面板丢平台默认行为，JOIN 图 fitContent 实例；布局竞态指纹=异步任务收尾消费的设置须在触发前置位）/ pitfall-filecontents-charset（Gradle fileContents().asText 按 JVM 默认字符集 GBK 解码，须 asBytes+UTF-8 显式）/ pitfall-log-first-not-code-reasoning（同一 bug 修三轮仍复发=都在按代码推演；真机日志同秒多行直接锁因果链）/ pitfall-parallel-merge-wipes-worktree（并行登记表只管 gradle 沙盒，合并会清工作区未提交改动，改完立即提交）/ pitfall-stale-session-git-snapshot（会话启动 git 快照只抓一次，判交付状态先重跑 git 实测）
 
+**第十四次精简升级（2026-09-20，2 个新文件 + 1 处内容合并）**：pitfall-python-requests-proxy-tls（python requests 走本地代理 127.0.0.1:7890 时 TLS 握手被掐 SSLEOFError，curl -x 同代理正常——抓取类任务直接用 curl -x；GitHub 匿名额度被共享出口 IP 耗尽时如实登记）/ pitfall-toolwindow-titleactions-hover-only（setTitleActions 新 UI 悬停才渲染，主操作入口放面板内工具栏；完整 T-CaptureBack 实例归档 pitfalls/，精简版升全局 + AGENTS.md 摘要条）/ pitfall-stale-session-git-snapshot 项目侧 20260919 副本的内容（盘点类结论几十分钟即过时 + Write 撞 "file modified since read" 先重读合并再写）合并进全局同名文件后删除副本。另：全局 feedback-junit3-kotlin-lambda-testname 已完整覆盖项目侧 pitfall-junit3-synthetic-lambda-method（project-test-conventions 亦有全记录），项目副本删除不归档
+
 ---
 
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 24（含 MEMORY.md） |
-| 全局记忆 global/ | 102 |
-| 归档 archive/ | 236（bug-fixes 164 + pitfalls 69 + methodology 1 + user-context 1 + README） |
-| **合计** | **362** |
+| 项目 memory（保留） | 33（含 MEMORY.md） |
+| 全局记忆 global/ | 104 |
+| 归档 archive/ | 241（bug-fixes 168 + pitfalls 70 + methodology 1 + user-context 1 + README） |
+| **合计** | **378** |

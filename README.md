@@ -13,7 +13,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **运行期（跑起来后，动态还原）**：控制台 SQL 日志自动捕获，`?` 占位符参数填充为可执行 SQL（MyBatis / Hibernate / JdbcTemplate 三族日志，并发多线程交错按线程分桶还原）；字节码增强捕获为默认通道，无需应用开启 SQL 日志，即得真实参数、执行耗时、影响行数与真实源码位置；日志条目与源码双向跳转，历史 SQL 全量落盘与两级导航。
 
-**验证（随时）**：预览结果内嵌原生数据库控制台一键执行，EXPLAIN 执行计划（7 种方言真机验证），SQL 性能规则引擎与静态标注对照，JOIN 关系图可视化。
+**验证（随时）**：预览结果内嵌原生数据库控制台一键执行，EXPLAIN 执行计划（7 种方言真机验证），SQL 性能规则引擎与静态标注对照，JOIN 关系图可视化；执行前有 `${}` 注入确认与无界写发现清单两道闸、执行超时护栏兜底，UPDATE / DELETE 预览可一键生成回滚 SQL。
 
 本插件原名为 MyBatis-Plus SQL Visualizer，现更名 SQL Visualizer——仍全面支持 MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate，插件 ID 与升级链路不变。
 
@@ -71,7 +71,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **XML 与注解 SQL 预览**
 
-- mapper XML 动态 SQL 完整预览：`if` / `choose` / `where` / `set` / `foreach` / `bind` / `sql`+`include` 等标签按 MyBatis 语义渲染，OGNL 表达式可在面板勾选
+- mapper XML 动态 SQL 完整预览：`if` / `choose` / `where` / `set` / `foreach` / `bind` / `sql`+`include` 等标签按 MyBatis 语义渲染，OGNL 表达式可在面板勾选；`refid="其它命名空间.片段id"` 跨文件 include 同样展开（property 静态替换与环检测一致，`${}` 动态 refid 也支持）；`if` test 求值失败或超出受限 OGNL 支持面的条件行给可见标注，不再静默默认展开
 - `@Select` / `@Update` / `@Delete` / `@Insert` 注解（含 `<script>` 与 Provider 注解）同样支持，注解行有 gutter 图标
 
 **JPA / Hibernate SQL 预览**
@@ -96,17 +96,18 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **SQL 日志工具窗口（主侧边栏，4 个 tab）**
 
-- 两种捕获通道，条目统一还原成可执行 SQL 列表：**增强捕获**（字节码增强，默认通道）在首次运行项目时弹一次注入确认，同意后 agent 挂载到应用 JVM、在 JDBC 接口层直接采集——无需应用开启 SQL 日志，真实参数（默认不脱敏，设置页可开启打码）、执行耗时、影响行数、报错信息、目标库角标（`[MySQL]`、`[DM（达梦）]` 等，按 JDBC URL 推断，覆盖全部 9 种方言及 openGauss / GBASE）开箱即得；**控制台捕获**自动识别 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式，并发多线程交错的日志按线程分桶还原，参数不错挂不丢失），JdbcTemplate 命名参数为集合值时按元素还原（`IN (:p)` + `[a]` → `IN ('a')`，方括号不落进 SQL）；停止监听时同步停掉应用内采集
-- 单击条目轻量预览（可编辑高亮编辑器，改个值直接复制；零占位符的字面量 SQL 与 IN 列表同样识别出可编辑参数行）、双击完整弹窗、右键复制 / 复制时间戳 / 跳转源码
+- 两种捕获通道，条目统一还原成可执行 SQL 列表：**增强捕获**（字节码增强，默认通道）在首次运行项目时弹一次注入确认，同意后插件把 `-javaagent` 写进运行配置 VM 参数，agent 在应用 JVM 的 `premain` 阶段即完成采集织入——启动期 SQL（框架初始化、数据源探活、Flyway/Liquibase 迁移）不再落在挂载完成之前，注入任一步失败自动回落 attach 热挂载；在 JDBC 接口层直接采集——无需应用开启 SQL 日志，真实参数（默认不脱敏，设置页可开启打码）、执行耗时、影响行数、报错信息、目标库角标（`[MySQL]`、`[DM（达梦）]` 等，方言智能推断：agent 连接 URL 优先、IDE 数据源配置次之、均未命中回退 MySQL，覆盖全部 9 种方言及 openGauss / GBASE）开箱即得；**控制台捕获**自动识别 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式，并发多线程交错的日志按线程分桶还原，参数不错挂不丢失），JdbcTemplate 命名参数为集合值时按元素还原（`IN (:p)` + `[a]` → `IN ('a')`，方括号不落进 SQL）；停止监听时同步停掉应用内采集
+- 单击条目轻量预览（可编辑高亮编辑器，改个值直接复制；零占位符的字面量 SQL 与 IN 列表同样识别出可编辑参数行）、双击完整弹窗、右键复制 / 复制时间戳 / 跳转源码；控制台的执行异常行（MyBatis `###` 错误块、Spring DAO、JDBC 异常）自动绑定到对应条目——列表行显示错误片段，详情含报错全文
 - 条目元信息：`#N` 会话内捕获序号、时间（时间来源可选「日志时间」——自动识别 Logback / Log4j2 / Spring Boot 默认、ISO 8601 等常见格式的原始时间戳，解析不到回退捕获时间；或「捕获时间」）、耗时（增强条目为毫秒级精确值，控制台通道解析 p6spy / MP TimeCount / 自定义前缀）、影响行数；超阈值红色标记并统计慢查询
 - 列表支持 SQL 类型筛选、Ctrl+F 搜索（SQL 内容 / 源文件 / `#行号` / 时间文本）、排序方式选择器（时间升 / 降序、耗时升 / 降序、行号）、重复条目去重（⨉N 徽章即时同步）、Ctrl/Shift 多选批量复制；条目按 SELECT / INSERT / UPDATE / DELETE 类型着色标记（左侧色条或整行淡背景，颜色与形态可自定义），单行 / 关键字换行 / 格式化三种显示模式在设置页「列表显示」切换、即时生效
+- 聚焦页签：条目右键「聚焦调用方方法」按源码行号区间静态近似只看该方法发出的 SQL；Web 请求内的 SQL 可「按请求聚焦」——聚焦页签可多开（上限 8）可关闭，与类型过滤、搜索正确叠加，范围外条目隐藏并显示计数
 - 「日志 → SQL」tab 可粘贴整段日志批量还原（多组语句自动分隔）；「历史」tab 浏览全量落盘的历史 SQL（两级导航：文件 → 条目；条目持久化参数与原始时间，新版可读全部旧文件），可再次预览与跳转源码；历史文件超出保留上限自动清理最旧（默认 30 个，可配全量保留）
-- 「跳转到源码」：增强捕获条目取自真实调用栈，直达执行 SQL 的代码行——自研框架统一入口的调用自动上溯跳过框架帧定位业务代码（框架前缀可在设置页配置，实时与历史面板共用同一解析）；控制台通道可注册内置 `InnerInterceptor` 示例（`docs/instrumentation/SqlSourceInterceptor.kt`）获得同等的精确定位，未配置时弹引导一键注入
+- 「跳转到源码」：增强捕获条目取自真实调用栈，直达执行 SQL 的代码行——自研框架统一入口的调用自动上溯跳过框架帧定位业务代码（框架前缀可在设置页配置，实时与历史面板共用同一解析）；控制台通道可注册内置 `InnerInterceptor` 示例（`docs/instrumentation/SqlSourceInterceptor.kt`）获得同等的精确定位，未配置时弹引导一键注入；携带 mapper 语句信息的条目可直跳 mapper XML，定位到语句节点起始行（XML 不存在或定位失败回退跳 Java）
 
 **MCP：给 AI agent 的确定性 SQL 工具**
 
-- 内置 MCP Server 注册十个只读工具（IDEA 2025.2+，未装 MCP Server 插件的环境零影响）：渲染三件套 `mpsv_render_sql`（源码定位直接渲染可执行 SQL，含真实参数）/ `mpsv_schema_context`（表列结构紧凑上下文）/ `mpsv_explain`（七方言执行计划），工作流四件套 `mpsv_render_logs`（MyBatis/Hibernate/JdbcTemplate 日志还原可执行 SQL）/ `mpsv_check_sql`（静态写风险与类型核查）/ `mpsv_rollback_plan`（回滚预案，不执行）/ `mpsv_perf_advice`（20 条规则性能建议），生成与核查三件套 `mpsv_crud_sql`（实体生成 CRUD）/ `mpsv_reverse_sql`（SQL 转 MyBatis-Plus 代码）/ `mpsv_mapper_check`（mapper 契约 + 渲染产物风险核查）——Claude Code / Cursor / AI Assistant 等 agent 可直接调用
-- 设置页「MCP 工具」子页可整体开关插件 MCP 功能、逐工具启用/禁用（平台工具面在下一次列表/调用即时生效）；与校验类工具的位差一句话：校验器给的是置信度评分，这里给的是确定性证据——静态校验器产不出的渲染产物实证
+- 内置 MCP Server 注册十个只读工具（IDEA 2025.2+，未装 MCP Server 插件的环境零影响）：渲染三件套 `sqlv_render_sql`（源码定位直接渲染可执行 SQL，含真实参数）/ `sqlv_schema_context`（表列结构紧凑上下文）/ `sqlv_explain`（七方言执行计划），工作流四件套 `sqlv_render_logs`（MyBatis/Hibernate/JdbcTemplate 日志还原可执行 SQL）/ `sqlv_check_sql`（静态写风险与类型核查）/ `sqlv_rollback_plan`（回滚预案，不执行）/ `sqlv_perf_advice`（20 条规则性能建议），生成与核查三件套 `sqlv_crud_sql`（实体生成 CRUD）/ `sqlv_reverse_sql`（SQL 转 MyBatis-Plus 代码）/ `sqlv_mapper_check`（mapper 契约 + 渲染产物风险核查）——Claude Code / Cursor / AI Assistant 等 agent 可直接调用
+- 设置页「MCP 工具」子页可整体开关插件 MCP 功能、逐工具启用/禁用（平台工具面在下一次列表/调用即时生效）；与校验类工具的位差一句话：校验器给的是置信度评分，这里给的是确定性证据——静态校验器产不出的渲染产物实证。能力全景与 agent 侧接入说明（Claude Code / Cursor / AI Assistant）见[官网 MCP 专页](https://sql-visualizer.jvtools.cn/features/mcp)
 
 **检查更新（Gitee 抢先体验通道）**
 
@@ -115,7 +116,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **其他**
 
-- SQL 执行（IntelliJ IDEA Ultimate + Database 插件）：预览面板内嵌原生 Database 控制台，选数据源后即可执行并查看真实结果表格与错误信息；Community 版优雅降级提示
+- SQL 执行（IntelliJ IDEA Ultimate + Database 插件）：预览面板内嵌原生 Database 控制台，选数据源后即可执行并查看真实结果表格与错误信息；Community 版优雅降级提示。执行 UPDATE / DELETE 前的确认框在命中无界写特征（无 WHERE 全表 / 恒真条件 / 纯通配 LIKE 等）时列出发现清单；mapper / 预览编辑器选中文本可套 `${table}` 快捷模板一键 EXPLAIN / COUNT / 抽样 10 行（Alt+Shift+E / C / T）
 - JOIN 关系图：联表查询在预览面板「关系图」tab 由 IDE 原生 Diagrams 框架渲染（Community 降级自绘渲染），打开默认自适应居中，支持 PNG / SVG 导出
 - 性能建议与复杂度：预览时按规则集给出 `SELECT *`、无索引列等性能提示与 SQL 复杂度评分
 - 对比与分享：当前 SQL 与上次预览并排 Diff（IDEA 原生 Diff）；一键复制可执行 SQL；分享为 Markdown / HTML 报告
@@ -204,18 +205,19 @@ ORDER BY t1.create_time DESC
 
 ### 配置
 
-`Settings → Tools → SQL Visualizer`，设置按分区组织：
+`Settings → Tools → SQL Visualizer`，设置按分区组织；另有项目级设置页 `SQL Visualizer（当前项目）`——增强捕获 / 方言 / 逻辑删除 / 表名映射等可按项目覆盖全局，未覆盖项回退全局值：
 
 **SQL 预览**
 
 | 配置项 | 默认值 | 作用 |
 |--------|--------|------|
-| 数据库方言 | MySQL | 分页 / upsert 子句按方言渲染（MySQL / PostgreSQL / Oracle / SQL Server / H2 / SQLite / MariaDB / DM / KingBase） |
+| 数据库方言 | 智能推断（跟随数据源） | 分页 / upsert 子句按方言渲染（MySQL / PostgreSQL / Oracle / SQL Server / H2 / SQLite / MariaDB / DM / KingBase）。默认「智能推断」：增强捕获连接的 JDBC URL 优先、IDE 数据源配置次之、均未命中回退 MySQL，状态行显示推断结果与依据；手动选定后按手动值生效、可随时切回（升级时从未动过该设置的老用户自动进入推断模式，手动值原样保留） |
 | 替换 ? 占位符 | 开 | 关闭后变量也渲染为 `?`，在左栏输入框手动填值；代码字面量恒内联 |
 | 格式化输出 | 开 | 多行缩进（关 = 单行） |
 | 逻辑删除注入 | 开 | 实体含 `@TableLogic` 时自动追加 `AND deleted = 值` |
 | 逻辑删除值 | 0 | 逻辑删除条件的值（对齐 MP `logic-delete-value`） |
 | 字段列表自动折叠 | 关 | SELECT / INSERT 列清单、VALUES 组、UPDATE SET 超过阈值时折叠为「... N columns」占位，点击即展开（阈值可配，默认 10） |
+| 执行超时 | 30 秒 | 执行 / EXPLAIN 单语句超时兜底（0 = 不限），超时先请求取消再报错——锁等待、笛卡尔积等挂死查询不再永久 loading |
 
 **表名映射**
 
@@ -272,7 +274,7 @@ ORDER BY t1.create_time DESC
 
 ### SQL 预览弹窗
 
-弹窗默认尺寸按屏幕比例自适应（宽 62% / 高 65%，下限 900×600），可手动拉伸并记忆尺寸；左侧动态条件复选框 + 参数输入，右侧 SQL 可编辑（多 tab：SQL / 联表关系图 / 列信息）。工具栏提供格式化、复制、复制可执行 SQL、对比（Diff）、分享、执行（Ultimate 原生控制台内嵌）等操作。
+弹窗默认尺寸按屏幕比例自适应（宽 62% / 高 65%，下限 900×600），可手动拉伸并记忆尺寸；左侧动态条件复选框 + 参数输入（参数按签名给类型占位提示——数字 / 日期 / 集合 / 对象，形态不符给淡色警示），右侧 SQL 可编辑（多 tab：SQL / 联表关系图 / 列信息）。工具栏提供格式化、复制、复制可执行 SQL、对比（Diff）、分享、执行计划、回滚（对当前 INSERT / UPDATE / DELETE 生成逆向 SQL：INSERT→按主键 DELETE、UPDATE→SET 还原原值、DELETE→按 WHERE 重插）、执行（Ultimate 原生控制台内嵌）等操作；含 `${}` 直替的预览显示注入提示横幅，执行 / EXPLAIN 前弹一次确认；UPDATE 预览 SET 各项带 `(new)` 行尾标注；执行报错时给出 SQLState / 驱动错误码与出错位置，可一键定位到出错语句。
 
 ## 安装常见问题
 
