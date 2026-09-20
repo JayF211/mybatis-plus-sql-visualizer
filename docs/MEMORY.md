@@ -21,6 +21,8 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 > - kill 白名单：kill java/idea 进程前查表——命令行含**自己登记的沙盒名**才允许 kill
 > - **沙盒本身也会冲突**：① `prepareTestSandbox` 目标文件互锁（「用户映射区域」错误——对方/残留测试 JVM 把沙盒内 jar 映射锁定，复制必失败）；② SDK 解压目录（`~/.gradle/caches/.../transforms/idea-2025.3.5-win`）两会话共享，沙盒 system 索引（`records.dat`）互锁会强制重取；③ 已隔离的沙盒也可能被**自己早前运行的残留测试 worker** 锁住——按白名单杀（命令行含自己沙盒名）或直接删沙盒目录再跑
 > - M28×M29 二次实证教训：登记会自锁 `check`（别把 check 链进自己命令）；共享 gradle daemon 会被对方 `--stop` 误杀（测试执行器莫名 FAILED）——权威全量回归建议 `git worktree` 独立目录 + `--no-daemon`（沙盒随 build 目录一并完全隔离）
+> - **`expected_end` 不是活性信号，判活要查进程**（2026-09-20 实证）：`T-GifRec-MCP` 登记 `expected_end=02:19`，到 15:50 仍在跑——`check` 只报「存在活跃任务」不报真死假死。要判某条登记是否已成残留，查进程命令行而非时钟：`powershell Get-CimInstance Win32_Process -Filter "Name='java.exe'"` 找 `idea-sandbox`/`-javaagent:…\build\MPSV-…`/对方 checkout 的 `gradlew`。
+> - **录制会话活跃时禁开新 runIde 沙盒**：新 IDE 窗口会抢前台，录制脚本的坐标点击与窗口 Z 序都会被打偏（录制管线本身要求「录制中系统空闲时优先」）——真机走查要么等对方注销，要么用独立沙盒且不抢焦点（难以保证，实际按前者）。
 > - 完整约定见本地记忆 `agent-parallel-test-isolation.md`（本机 `~/.zcode/cli/memories/projects/.../memory/`）
 
 ## 核心文档（docs/ 根目录）
