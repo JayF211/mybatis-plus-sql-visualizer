@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.xml.fidelity
 
+import cn.song.mybatisplus.visualizer.log.countPlaceholders
 import cn.song.mybatisplus.visualizer.xml.EvalResult
 import cn.song.mybatisplus.visualizer.xml.MockObject
 import cn.song.mybatisplus.visualizer.xml.OgnlEvaluator
@@ -294,6 +295,138 @@ class RealEngineFidelityTest {
         assertEquals("包装后真引擎 SQL", "SELECT * FROM t WHERE id IN ( ? , ? )", compact(wrapped.sql))
         assertEquals("包装后真引擎参数队列", listOf("__frch_id_0", "__frch_id_1"), wrapped.parameterProperties)
     }
+
+    /**
+     * T-REC-02 绑定基数三方对账（O-40 / Z-25）：一致面每条场景断言三个量全等——
+     * **真引擎 `parameterProperties.size` == 我方 `mappings.size` == 我方串感知 `?` 位点数**。
+     *
+     * 三条量的推导链互相独立：真引擎侧经隔离 loader 走 `BoundSql.getParameterMappings()`（与我方渲染器
+     * 无共享代码），我方两量一条来自渲染器累积的映射清单、一条来自渲染出的**文本**（`countPlaceholders`，
+     * 复用产品侧 `log/LogEntryPreviewRecognizer.kt:100` 的串感知口径，测试与主代码同模块可达，
+     * **未放宽任何产品代码可见性**）。故「`#{}` 只进 mappings 不进文本」或「`?` 进文本不进 mappings」
+     * 任一方向的漂移都会被抓到——这正是 O-34 原有断言面（SQL 文本相等 + 属性名序列相等）**没有独立钉住**的维度。
+     *
+     * ## 前提 1 实测结论（本任务第一步，先证伪再动手）
+     * 「真引擎参数条数恒等于 SQL 内 `?` 个数」**不成立**：两种**合法**形态下真引擎自身就不等
+     * （实测 mybatis 3.5.19，读数见下条边界用例）——`${}` 直替出的值自身含 `?`（`props=0` / `?`=1）、
+     * `#{}` 落在字符串字面量或 `--` 注释内（`props=2` / `?`=1）。故本对账**不是普适恒等式的断言**，
+     * 而是「一致面 28 条场景内三方相等」的场景域断言；两种非恒等形态由紧随其后的边界用例按登记形态钉住。
+     * 28 条一致面**全部**落在恒等域内（本用例实测，非推断）。
+     *
+     * ## T-REC-03：6 条已知差异为何不参与本对账
+     * P0 / P14 / P15 / P16 / P20 / P30 是保真差异场景，其中 P20 两侧基数**本就不同**（真引擎 1 条 /
+     * 自研 0 条，见「已知差异 6 条」用例），纳入「三方相等」等于要求它不成立。故它们按登记形态断言、
+     * 排除在基数对账之外；下方**场景集不相交断言**兜底——已知差异场景被误搬进一致面即红，
+     * 后人不会误以为漏做。口径同步见
+     * `docs/调研报告/20260919-T-FidelityEval-自研与真引擎已知差异清单.md` §9「基数对账」。
+     *
+     * 失败报文含**场景 id**（照既有场景 id 陈述式命名，如 `P1 if Integer 0 / Map param`），
+     * 且一次报出全部偏差，便于定位是哪条场景漂移。
+     */
+    @Test
+    fun `T-REC 基数对账：28 条一致面三方基数相等（真引擎条数 == 我方映射条数 == 串感知问号位点数）`() {
+        val scenarios = equivalentScenarios()
+        val known = knownDifferenceScenarios()
+
+        // T-REC-03 兜底：已知差异场景不得进入基数对账域（集合不相交，误搬即红）
+        val overlap = scenarios.map { it.id.substringBefore(' ') }.filter { it in known.keys }
+        assertTrue(
+            "已知差异场景不得进入基数对账（排除理由见本用例 KDoc）：$overlap",
+            overlap.isEmpty(),
+        )
+        assertEquals("一致面场景数（T-FCA 追加 P31~P33 后）", 28, scenarios.size)
+        assertEquals("已知差异场景数", 6, known.size)
+
+        val mismatches = mutableListOf<String>()
+        val readings = mutableListOf<String>()
+        for (scenario in scenarios) {
+            val real = runCatching { driver.render(scenario.mapper, NAMESPACE, STATEMENT_ID, scenario.realParams) }
+            if (real.isFailure) {
+                mismatches += "${scenario.id}: 真引擎意外抛错（一致面场景应两侧一致）——${real.exceptionOrNull()!!.message}"
+                continue
+            }
+            val realCount = real.getOrThrow().parameterProperties.size
+            val mine = mine(scenario)
+            val mineCount = mine.mappings.size
+            val placeholders = countPlaceholders(mine.sql)
+            readings += "${scenario.id}: real=$realCount mine=$mineCount q=$placeholders"
+            if (realCount != mineCount || mineCount != placeholders) {
+                mismatches += "${scenario.id}: 基数不等（真引擎=$realCount / 我方映射=$mineCount / 位点数=$placeholders）" +
+                    "\n    自研 sql=[${compact(mine.sql)}]" +
+                    "\n    自研 props=${mine.mappings.map { it.property }}"
+            }
+        }
+        assertTrue(
+            "基数对账出现 ${mismatches.size} 条偏差（真引擎条数 / 我方映射条数 / 串感知位点数三者不全等）：\n" +
+                mismatches.joinToString("\n"),
+            mismatches.isEmpty(),
+        )
+        println("[cardinality] 三方基数对账 ${scenarios.size} 条全部相等：\n" + readings.joinToString("\n"))
+    }
+
+    /**
+     * T-REC 前提 1 边界（真引擎侧）：`getParameterMappings()` 条数与串感知 `?` 位点数**不恒等**的两种合法形态。
+     *
+     * 实测（mybatis 3.5.19，隔离 loader 直连 `getBoundSql`）：
+     * - `${}` 直替出的值自身含 `?` → `props=0` / `?`=1（`?` 由文本注入，非 `#{}` 产生）；
+     * - `#{}` 落在字符串字面量或 `--` 注释内 → `props=2` / `?`=1（引擎的 `#{}` 识别**非串感知**，
+     *   产出的 `?` 落进字面量/注释里，串感知计数不认它）。
+     *
+     * 两形态下我方与真引擎**完全一致**（文本与参数条数都相同）——这是「串感知计数」与「引擎非串感知
+     * `#{}` 识别」两个口径的固有分歧，**不是保真差异，也不是待修缺陷**。此处按登记形态钉住：任一侧口径
+     * 变化即红，强制同步差异清单 §9；我方侧的同一读数由 `RealEngineCardinalityTest` 的边界钉用例守护
+     * （该类零真引擎依赖，无 jar 环境照常生效）。
+     */
+    @Test
+    fun `T-REC 前提 1 边界：真引擎参数条数与串感知问号位点数不恒等的两种合法形态`() {
+        // 形态 1：`${}` 直替出的值自身含 `?`
+        val dollarMapper = doc(
+            """<mapper namespace="n"><select id="s1" resultType="map">SELECT * FROM ${'$'}{cond}</select></mapper>""",
+        )
+        val dollarReal = driver.render(dollarMapper, NAMESPACE, STATEMENT_ID, mapOf("cond" to "t WHERE a = ?"))
+        assertEquals("B1 真引擎文本（直替原文照进产物）", "SELECT * FROM t WHERE a = ?", compact(dollarReal.sql))
+        assertEquals("B1 真引擎参数条数（直替注入的 `?` 不产生映射）", 0, dollarReal.parameterProperties.size)
+        assertEquals("B1 串感知位点数认这个 `?`", 1, countPlaceholders(dollarReal.sql))
+
+        // 形态 2：`#{}` 落在字符串字面量内 / `--` 注释内
+        val literalMapper = doc(
+            """<mapper namespace="n"><select id="s1" resultType="map">SELECT 'x#{a}' FROM t WHERE b = #{b}</select></mapper>""",
+        )
+        val literalReal = driver.render(literalMapper, NAMESPACE, STATEMENT_ID, mapOf("a" to 1, "b" to 2))
+        assertEquals("B2 真引擎文本（`?` 落进字面量）", "SELECT 'x?' FROM t WHERE b = ?", compact(literalReal.sql))
+        assertEquals("B2 真引擎参数条数", 2, literalReal.parameterProperties.size)
+        assertEquals("B2 串感知位点数只认字面量外的 `?`", 1, countPlaceholders(literalReal.sql))
+
+        val commentMapper = doc(
+            "<mapper namespace=\"n\"><select id=\"s1\" resultType=\"map\">SELECT a FROM t -- #{c}\nWHERE b = #{b}</select></mapper>",
+        )
+        val commentReal = driver.render(commentMapper, NAMESPACE, STATEMENT_ID, mapOf("b" to 2, "c" to 3))
+        assertEquals("B3 真引擎参数条数", 2, commentReal.parameterProperties.size)
+        assertEquals("B3 串感知位点数只认注释外的 `?`", 1, countPlaceholders(commentReal.sql))
+
+        // 两形态下我方与真引擎一致（非保真差异）——文本与参数条数两路对照
+        val boundaryCases = listOf(
+            BoundaryCase("B1", dollarMapper, mapOf<String, Any?>("cond" to "t WHERE a = ?")),
+            BoundaryCase("B2", literalMapper, mapOf<String, Any?>("a" to 1, "b" to 2)),
+            BoundaryCase("B3", commentMapper, mapOf<String, Any?>("b" to 2, "c" to 3)),
+        )
+        for (case in boundaryCases) {
+            val real = driver.render(case.mapper, NAMESPACE, STATEMENT_ID, case.params)
+            val mineSql = XmlSqlRenderer().render(
+                XmlMapperParser().parse(case.mapper).statements.first().node,
+                case.params + mapOf("_parameter" to case.params, "_databaseId" to null),
+            )
+            assertEquals("${case.id} 边界形态两侧文本应一致", compact(real.sql), compact(mineSql.sql))
+            assertEquals(
+                "${case.id} 边界形态两侧参数条数应一致（非保真差异）",
+                real.parameterProperties.size,
+                mineSql.mappings.size,
+            )
+        }
+    }
+
+    /** 前提 1 边界用例的输入（id + mapper + 真引擎实参）。 */
+    private class BoundaryCase(val id: String, val mapper: String, val params: Map<String, Any?>)
 
     // ------------------------------------------------------------------
     // 场景表（34 条 = 28 条一致面 + 6 条已知差异，读数基线见差异清单文档）
