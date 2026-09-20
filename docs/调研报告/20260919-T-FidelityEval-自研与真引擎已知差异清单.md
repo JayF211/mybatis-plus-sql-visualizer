@@ -5,6 +5,7 @@
 - 性质：**登记性文档**——只记录事实与判定，不改渲染主链、不立项
 - 对照集：`src/test/kotlin/cn/song/mybatisplus/visualizer/xml/fidelity/RealEngineFidelityTest.kt`
 - 驱动：`src/test/kotlin/cn/song/mybatisplus/visualizer/xml/fidelity/RealEngineDriver.kt`（T-FS-01）
+- 基数对账（T-RealEngineCardinality / O-40，2026-09-20 补）：`.../xml/fidelity/RealEngineCardinalityTest.kt`（零真引擎依赖）+ `RealEngineFidelityTest` 的 T-REC 两用例，口径与前提实测见 §9
 - 读数基线来源：T-FS-01 临时探针 `FidelityProbeTest` 的 31 条 P0~P30 实测（`./gradlew testFast`，tests=1/failures=0/errors=0，2026-09-19 06:41 本机）；探针按自身 KDoc「不入库」已删除，读数全文见本文 §7
 - 相关：`docs/调研报告/20260918-T-FidelityEval-高保真求值模式评估报告.md`（§1.2 缺陷账 15 条 / §3.2 spike q1~q7 / §8 定案）
 
@@ -271,3 +272,90 @@ BUILD SUCCESSFUL in 41s
 - mock 值语义面（引号策略 / 类型推断 / `?` 占位形态）——真引擎按真实 Java 类型绑定，两者对 mock 值的策略本就各自定义（评估报告 §1.3 q2 实录）
 - 面板回填链、MCP 出口链、性能面、条件开关交互模型（评估报告 §2.1 P5 的模型层冲突）
 - 真引擎在**用户项目 classpath** 上的可用性（本对照集用测试 classpath 上的 3.5.19；方案 A 的 P3 阶段问题，已 no-go）
+
+## 9. 基数对账（T-RealEngineCardinality / O-40，2026-09-20）
+
+来源：第九轮报告 §7.2 Z-25——把「引擎真实生成的 `?` 数量」与「PSI 侧契约的 Placeholder 证据计数」做全等对账。本节登记该对账的**断言口径、适用域与前提实测结论**，是 §1 断言面的补维度（原断言面是 SQL 文本相等 + 参数**属性名序列**相等，隐含条数相等，但没有独立钉住「条数 == 文本里 `?` 位点数」这条自洽关系）。
+
+### 9.1 对账的三个量
+
+| 量 | 取值点 | 推导链 |
+|---|---|---|
+| 真引擎参数条数 | `BoundSql.getParameterMappings().size`（`RealEngineDriver.kt:96-98`） | 隔离 classloader + 真引擎自身 `getBoundSql`，与我方渲染器无共享代码 |
+| 我方参数条数 | `RenderedXmlSql.mappings.size`（`xml/XmlSqlRenderer.kt:38-49`） | 渲染器累积的映射清单 |
+| 我方 SQL 内 `?` 位点数 | `countPlaceholders(sql)`（`log/LogEntryPreviewRecognizer.kt:100`，串感知） | 渲染出的**文本**（字面量与注释内的 `?` 不计） |
+
+**不含参数值**：参数值在我方模型层不存在（`xml/XmlPreviewModel.kt` 只暴露条件/foreach/bind 视图与参数名序列；值只在面板私有 map），真引擎侧驱动也只带出属性名列表，未开值通道。值级对账需新开驱动口，本节不做。
+
+落点：`xml/fidelity/RealEngineCardinalityTest.kt`（新增，4 用例，**零真引擎依赖**——三方对账需 jar，故把可在无 jar 环境守护的自洽关系与边界钉单独成类）+ `xml/fidelity/RealEngineFidelityTest.kt` 的 `T-REC 基数对账` 与 `T-REC 前提 1 边界` 两用例（挂 28 条一致面，需 jar）。
+
+### 9.2 前提实测：`getParameterMappings()` 条数与 `?` 个数**不恒等**
+
+计划 §六把这条列为待验证前提（仓内无此断言、未实测）。实测结论：**不成立**，存在两种**合法**形态（mybatis 3.5.19，两侧读数逐字节一致——即非保真差异，而是「串感知计数」与「引擎非串感知 `#{}` 识别」两个口径的固有分歧）：
+
+| 形态 | 真引擎 | 我方 | 成因 |
+|---|---|---|---|
+| `${}` 直替出的值自身含 `?` | `props=0` / `?`=1 / `sql=[SELECT * FROM t WHERE a = ?]` | 同 | `?` 由文本注入而非 `#{}` 产生 |
+| `#{}` 落在字符串字面量内 | `props=2` / `?`=1 / `sql=[SELECT 'x?' FROM t WHERE b = ?]` | 同 | 引擎的 `#{}` 识别非串感知，产出的 `?` 落进字面量 |
+| `#{}` 落在 `--` 行注释内 | `props=2` / `?`=1 | 同 | 同上（注释内 `?` 不被位点计数认） |
+
+故对账口径定案：**不是普适恒等式的断言**，而是「28 条一致面场景域内三方相等」的场景域断言；上述三形态按登记形态**正向钉住**（两侧各一处：真引擎侧在 `RealEngineFidelityTest`、我方侧在 `RealEngineCardinalityTest`），口径变化即红，防止后人把本条关系误当普适恒等式去「修」串感知计数或 `#{}` 识别。
+
+### 9.3 28 条一致面的对账结果
+
+`RealEngineFidelityTest` 的 `T-REC 基数对账` 用例逐条断言 `真引擎条数 == 我方 mappings 条数 == countPlaceholders(我方 sql)`，一次报出全部偏差且报文含场景 id。实测：**28 条全部相等**（含 foreach 展开 3/4 条、`bind`+`${}` 混用、`jdbcType` 属性 token、T-FCA 追加的 P31~P33 集合别名三条）。
+
+自洽关系的独立守护（`RealEngineCardinalityTest`）另覆盖三条渲染链的代表性场景，与真引擎无关，故在无 jar 环境照常生效：
+
+| 链 | 入口 | 场景（读数 = 参数条数） |
+|---|---|---|
+| XML mapper | `XmlMapperParser` → `XmlSqlRenderer.render` | X1 if 展开 1 / X1' if 关闭 0 / X2 foreach 3 / X3 bind+`${}`+`#{}` 混用 2 / X4 字面量与注释内 `?` 不计 2 |
+| 注解 SQL | `AnnotationSqlParser.parse` → `XmlPreviewModel.renderSql` | A1 纯文本 2 / A2 `<script>`（if+foreach）2 |
+| MP wrapper 占位 | `XmlPreviewModel.from(extraBindings = ew)` | W1 `${ew.customSqlSegment}` 片段 + 尾随 `#{}` 1 / W2 片段内带引号 `?` 1 |
+
+`countPlaceholders` 直接复用产品侧实现（`internal`，测试与主代码同模块可达），**未放宽任何产品代码可见性**，也未自造计数。
+
+### 9.4 6 条已知差异为何不参与基数对账
+
+P0 / P14 / P15 / P16 / P20 / P30 是保真差异场景（§2），其中 **P20 两侧基数本就不同**（真引擎 1 条 / 自研 0 条——自研整段不展开），把它纳入「三方相等」等于要求它不成立。故 6 条按登记形态断言、排除在基数对账之外；对账用例内有**场景集不相交断言**兜底：已知差异场景被误搬进一致面即红（不会静默漏做，也不会被误当基数偏差）。
+
+### 9.5 负向验证（判别力实证，先红后绿）
+
+按 §5 同款做法，各构造一条基数不等的形态跑对照，确认断言会红而不是「写错方向永远绿」：
+
+1. 一致面对账：把 P11 场景临时改成 `${}` 直替含 `?` 的形态（槽位不变，一致面仍 28 条）→ 红在正确场景，报文带 id 与三个读数：
+
+```
+T-REC 基数对账：28 条一致面三方基数相等… FAILED
+基数对账出现 1 条偏差（真引擎条数 / 我方映射条数 / 串感知位点数三者不全等）：
+P11 dollar direct: 基数不等（真引擎=1 / 我方映射=1 / 位点数=2）
+    自研 sql=[SELECT * FROM orders WHERE x = ? WHERE c = ?]
+    自研 props=[c]
+```
+
+   同一改动下 §1 的「一致面 28 条」用例**仍绿**（两侧文本与属性名序列都相同）——说明基数对账抓的是原断言面看不见的维度，不是重复断言。
+
+2. 自洽关系：往 XML 链临时加一条字面量内 `#{}` 的读数 → 红：
+
+```
+T-REC-01 基数自洽：XML mapper 链… FAILED
+基数自洽关系出现 1 条偏差（`?` 位点数 != 参数条数）：
+RED-PROBE 字面量内的 #{}: 位点数 1 != 参数条数 2
+    sql=[SELECT 'x?' FROM t WHERE b = ?]
+    props=[a, b]
+```
+
+两次改动均已还原，`git status` 无残留（探针在 `src/test` 内，`src/main` 零改动）。
+
+复跑方式：
+
+```
+./gradlew test --tests "cn.song.mybatisplus.visualizer.xml.fidelity.*" -Pkotlin.compiler.execution.strategy=in-process
+```
+
+读数：`RealEngineCardinalityTest` 4/0/0/0 + `RealEngineFidelityTest` 7/0/0/0（还原后）。
+
+### 9.6 与本文既有基线的口径差异
+
+§0 与 §7 的基线表是 T-FS-01 探针时代的 **31 条（一致 25 + 差异 6）**；T-FCA（N-32）随后追加了 P31~P33 三条 foreach 集合快捷别名场景，对照集当前为 **34 条（一致 28 + 差异 6）**。§7 表未含 P31~P33 行，以测试源码场景表为准；本节 9.3 的 28 条对账即按当前场景表跑出。
+
