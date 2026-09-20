@@ -18,7 +18,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal class PrewarmAwait<T : Any>(
     /** 超时预算毫秒（生产 = SqlPreviewPanel.PREWARM_WAIT_MS）。 */
     private val timeoutMs: Long,
-    /** 回调派发通道：生产 = EDT invokeLater(any modality)；测试 = 同步直调或记录。 */
+    /**
+     * 回调派发通道：生产 = EDT `invokeLater(写安全模态 defaultModalityState())`；测试 = 同步直调或记录。
+     *
+     * T-FixN1（N1）：生产模态由 `ModalityState.any()` 改 `defaultModalityState()`——回调体（装配）
+     * **会写文档**，而 `any()` 恒 write-unsafe（平台契约见 `execute/DocWriteContext` KDoc），
+     * 写文档必触发 `Write-unsafe context!`。代价是模态对话框挂起期间派发推迟到模态关闭。
+     */
     private val dispatcher: (Runnable) -> Unit,
 ) {
 

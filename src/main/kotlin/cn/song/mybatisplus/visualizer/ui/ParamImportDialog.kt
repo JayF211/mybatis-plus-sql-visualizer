@@ -188,11 +188,22 @@ class ParamImportDialog(
         }
     }
 
+    /**
+     * 确定：**空内容也回调**。
+     *
+     * P13（2026-09-20 真机走查）：此前末句是 `if (text.isNotBlank()) onConfirm(text)`，其自带注释
+     * 「避免空串走解析浪费」是纯性能微优化，代价却是「留空点确定」在界面上**零反馈**——回调被吞掉，
+     * 下游 `importParams(emptyMap())` 与 `showEmptyClipboardHint()` 永不执行，与 T-Perf-20
+     * 「空剪贴板给行内警示」的产品口径相互矛盾。故去掉该守卫：空串照常回调，由下游把「没识别到参数」
+     * 这件事说出来（行内红字 + 「复制错误信息」按钮），而不是让确定按钮点了像没点。
+     *
+     * 空串代价可忽略：[ParamImportParser.parse] 首行 `if (text.isBlank()) return emptyMap()` 即返回，
+     * 不存在「空串走完整解析」的开销，原注释担心的浪费并不成立。
+     */
     public override fun doOKAction() {
         val text = editor?.document?.text ?: ""
         super.doOKAction()
-        // 空输入不回调（isNotBlank 守卫，避免空串走解析浪费）
-        if (text.isNotBlank()) onConfirm(text)
+        onConfirm(text)
     }
 
     /** 释放编辑器（避免泄漏）。 */

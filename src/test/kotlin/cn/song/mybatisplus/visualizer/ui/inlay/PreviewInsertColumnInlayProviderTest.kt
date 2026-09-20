@@ -6,6 +6,8 @@ import com.intellij.codeInsight.hints.InlayDumpUtil
 import com.intellij.codeInsight.hints.InlayHintsSinkImpl
 import com.intellij.codeInsight.hints.NoSettings
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 
 /**
  * PreviewInsertColumnInlayProvider 作用域/闸门测试（T-InsertColumnInlay O-44b）。
@@ -20,12 +22,15 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
  * 即「提示确实落到编辑器上」，而非只断言内部数据。
  *
  * 覆盖矩阵（对应计划 §四 验收 1~4 与 §三 T-ICI-04 用例 ①②③④）：
- *  1. 主路径预览文件（`mpsql-preview.sql`）+ userData + INSERT → 出提示（端到端渲染）；
+ *  1. 主路径预览文件（一级名，形态 `mpsql-preview-<pid>-<seq>.sql`，见
+ *     [PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE]）+ userData + INSERT → 出提示（端到端渲染）；
  *  2. 二级内存 PSI 文件名（`mpsql-preview-memory.sql`）→ 同样出提示（锚点覆盖降级链第二级）；
  *  3. **用户文件**（普通名 / 测试缝名 `preview.sql`）→ 零提示（含「人为挂上 userData」的最强形态：
  *     文件名锚点单独即可拦下）；反向对照 = 同一条 SQL 换个文件名就从有提示变无提示；
  *  4. 预览文件名但**缺 userData** → 零提示（双锚点缺一不可）；
- *  5. `kind != INSERT`（SELECT/UPDATE/DELETE）与无语句类型载体（非 XML 预览链）→ 零提示。
+ *  5. `kind != INSERT`（SELECT/UPDATE/DELETE）与无语句类型载体（非 XML 预览链）→ 零提示；
+ *  6. **形态判据紧致性**（T-FixN2 合并新增）：一级形态判定不接受内存名 / 旧固定名 / 原生控制台
+ *     临时名 / 非数字段，且 `mpsql-exec.sql` 即便挂上载体也零提示（已知边界不得变成错误渲染）。
  */
 class PreviewInsertColumnInlayProviderTest : BasePlatformTestCase() {
 
@@ -63,7 +68,7 @@ class PreviewInsertColumnInlayProviderTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     fun test主路径预览文件INSERT出目标列提示() {
-        val dumped = renderHints(PreviewInlayScope.PREVIEW_FILE_NAME, insertSql, XmlStatementKind.INSERT)
+        val dumped = renderHints(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, insertSql, XmlStatementKind.INSERT)
         assertEquals(
             "预览文件上的 INSERT 应逐值表达式挂目标列名（inlay 文本 = 列名）",
             "INSERT INTO user (id, name) VALUES (/*<# id #>*/1, /*<# name #>*/'admin')",
@@ -83,7 +88,7 @@ class PreviewInsertColumnInlayProviderTest : BasePlatformTestCase() {
 
     fun test投影自带同名列别名时不重复提示() {
         val dumped = renderHints(
-            PreviewInlayScope.PREVIEW_FILE_NAME,
+            PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE,
             "INSERT INTO user (id, name) SELECT x AS id, y FROM s",
             XmlStatementKind.INSERT,
         )
@@ -124,7 +129,7 @@ class PreviewInsertColumnInlayProviderTest : BasePlatformTestCase() {
     }
 
     fun test反向对照_同一条SQL仅换文件名即从有提示变无提示() {
-        val preview = renderHints(PreviewInlayScope.PREVIEW_FILE_NAME, insertSql, XmlStatementKind.INSERT)
+        val preview = renderHints(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, insertSql, XmlStatementKind.INSERT)
         val userFile = renderHints("UserMapper.sql", insertSql, XmlStatementKind.INSERT)
         assertNotNull("对照组：预览文件名下应有提示", preview)
         assertNull("对照组：用户文件名下应零提示（差别只来自文件名锚点，与 SQL 无关）", userFile)
@@ -138,14 +143,14 @@ class PreviewInsertColumnInlayProviderTest : BasePlatformTestCase() {
     fun test预览文件名但缺userData时不产提示() {
         assertNull(
             "双锚点缺一不可：文件名命中但无语句类型载体（userData）→ 不产提示",
-            renderHints(PreviewInlayScope.PREVIEW_FILE_NAME, insertSql, XmlStatementKind.INSERT, attachKind = false),
+            renderHints(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, insertSql, XmlStatementKind.INSERT, attachKind = false),
         )
     }
 
     fun test预览文件名但载体值为null时不产提示() {
         assertNull(
             "非 XML 预览链写 null（xmlModel 为 null）→ 无语句类型语义 → 不产提示",
-            renderHints(PreviewInlayScope.PREVIEW_FILE_NAME, insertSql, null),
+            renderHints(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, insertSql, null),
         )
     }
 
@@ -157,13 +162,13 @@ class PreviewInsertColumnInlayProviderTest : BasePlatformTestCase() {
         for (kind in listOf(XmlStatementKind.SELECT, XmlStatementKind.UPDATE, XmlStatementKind.DELETE)) {
             assertNull(
                 "kind=$kind 不得产 INSERT 目标列提示（即便文本形态是 INSERT）",
-                renderHints(PreviewInlayScope.PREVIEW_FILE_NAME, insertSql, kind),
+                renderHints(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, insertSql, kind),
             )
         }
     }
 
     fun test语句类型为INSERT但文本非INSERT时零提示() {
-        val dumped = renderHints(PreviewInlayScope.PREVIEW_FILE_NAME, "SELECT id, name FROM user", XmlStatementKind.INSERT)
+        val dumped = renderHints(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, "SELECT id, name FROM user", XmlStatementKind.INSERT)
         assertEquals(
             "kind=INSERT 而文本无 INSERT 语句 → 提示条数为零（规划器零命中）",
             "SELECT id, name FROM user",
@@ -176,11 +181,11 @@ class PreviewInsertColumnInlayProviderTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     fun test产提示不改动文档文本() {
-        renderHints(PreviewInlayScope.PREVIEW_FILE_NAME, insertSql, XmlStatementKind.INSERT)
+        renderHints(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, insertSql, XmlStatementKind.INSERT)
         assertEquals("inlay 是显示层：投提示后文档文本逐字节不变", insertSql, myFixture.editor.document.text)
     }
 
-    fun test双锚点判定函数直接读数() {        myFixture.configureByText(PreviewInlayScope.PREVIEW_FILE_NAME, insertSql)
+    fun test双锚点判定函数直接读数() {        myFixture.configureByText(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, insertSql)
         val file = myFixture.file
         val editor = myFixture.editor
         assertNull("无载体 → null", PreviewInlayScope.previewStatementKind(file, editor))
@@ -192,5 +197,54 @@ class PreviewInsertColumnInlayProviderTest : BasePlatformTestCase() {
         PreviewInlayScope.attach(file, XmlStatementKind.UPDATE)
         assertEquals("文件载体兜底命中", XmlStatementKind.UPDATE, PreviewInlayScope.previewStatementKind(file, editor))
         assertNull("文件名为用户文件时判定直接为 null（不读载体）", PreviewInlayScope.previewStatementKind(null, editor))
+    }
+
+    // ------------------------------------------------------------------
+    // 形态判据紧致性（T-FixN2 合并：唯一命名后锚点改按形态匹配，判据不得放宽）
+    // ------------------------------------------------------------------
+
+    fun test一级形态判据_紧致匹配() {
+        assertTrue(
+            "一级形态样例应命中：${PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE}",
+            PreviewInlayScope.isPrimaryPreviewFileName(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE),
+        )
+        // 一级形态 = 前缀 + 数字 owner + '-' + 数字序号 + 扩展名，四段缺一不可
+        for (bad in listOf(
+            "mpsql-preview.sql",                        // 旧固定名（T-FixN2 前的形态），已不再产生
+            "mpsql-preview-12480.sql",                  // 缺序号段
+            "mpsql-preview-12480-1.sql.bak",            // 扩展名不是结尾
+            "mpsql-preview-abc-1.sql",                  // owner 段非数字
+            "mpsql-preview-12480-1.txt",                // 扩展名不符
+            "xmpsql-preview-12480-1.sql",               // 前缀前有额外字符（非前缀匹配）
+            "mpsql-exec.sql",                           // 原生控制台临时文件
+            "mpsql-exec-12480.sql",                     // 原生控制台系统临时文件形态
+            "preview.sql",                              // 测试缝名（最像用户文件）
+            "UserMapper.sql",                           // 用户文件
+        )) {
+            assertFalse("不得被判为一级预览名：$bad", PreviewInlayScope.isPrimaryPreviewFileName(bad))
+            assertFalse("不得被判为本插件预览名：$bad", PreviewInlayScope.isPreviewFileName(bad))
+        }
+        // 二级内存名：不是一级形态（`memory` 不是数字序号 → 不会被误判成一级），但它是预览文件，
+        // 「本插件预览名」判据必须仍命中（否则降级链第二级的 inlay 静默消失）。
+        assertFalse(
+            "二级内存名不得被判为一级形态",
+            PreviewInlayScope.isPrimaryPreviewFileName(PreviewInlayScope.MEMORY_PREVIEW_FILE_NAME),
+        )
+        assertTrue(
+            "二级内存名应命中「本插件预览名」",
+            PreviewInlayScope.isPreviewFileName(PreviewInlayScope.MEMORY_PREVIEW_FILE_NAME),
+        )
+    }
+
+    fun test原生控制台临时文件名不产提示() {
+        // mpsql-exec.sql（项目内执行文件）与 mpsql-exec-*.sql（系统临时执行文件）都是原生控制台路径，
+        // 其编辑器也会被挂上补全上下文载体；本插件 inlay 在该路径**有意不渲染**（已知边界），
+        // 放宽判据后不得变成「错误地渲染」——那比「不渲染」更糟。
+        for (name in listOf("mpsql-exec.sql", "mpsql-exec-12480.sql")) {
+            assertNull(
+                "$name 是原生控制台临时文件，不得出现本插件 inlay",
+                renderHints(name, insertSql, XmlStatementKind.INSERT, attachKind = true),
+            )
+        }
     }
 }

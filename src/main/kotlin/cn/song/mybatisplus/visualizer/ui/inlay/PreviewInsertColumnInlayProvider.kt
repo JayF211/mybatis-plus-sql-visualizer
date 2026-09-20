@@ -29,29 +29,92 @@ import javax.swing.JPanel
  * 「这个编辑器是不是本面板的预览编辑器」。
  *
  * **双锚点（两条都成立才算命中）**：
- *  1. **文件名** = 本插件预览文件的保留名（[PREVIEW_FILE_NAME] 一级 / [MEMORY_PREVIEW_FILE_NAME] 二级）；
+ *  1. **文件名** = 本插件预览文件名形态（一级按形态匹配 [isPrimaryPreviewFileName] /
+ *     二级 [MEMORY_PREVIEW_FILE_NAME] 精确匹配）；
  *  2. **userData** = [KEY] 语句类型载体（Editor 优先、PSI 文件兜底，同 M16.2 补全上下文双载体口径）。
  *
  * 单靠 userData 不够：它只证明「有人往这个编辑器写过本插件的键」，锚点二把「本插件预览文件」
  * 这个事实也钉上，两者同时成立才放行——用户自己的 `.sql` 文件即使被误挂了键（或文件恰好同名但
  * 非本面板产物）也不满足全部条件。反之单靠文件名也不够（同名用户文件会误命中），故取合取。
  *
- * **文件名取值口径（订正计划 §1.2 的实测缺陷）**：预览文件有**三个不同形态**，一级（项目内临时
- * VFS 文件，inlay 真正会渲染的那一级）是 `mpsql-preview.sql`——**不是** `mpsql-preview-*.sql`
- * （少一个连字符，`-*` 通配匹配不到），二级内存 PSI 才是 `mpsql-preview-memory.sql`。故保留名
- * 逐个列举而非通配，两个常量同时供面板建文件处引用（单一来源，杜绝锚点与真实文件名漂移）。
- * 测试缝文件名 `preview.sql`（`SqlPreviewPanel.createPreviewFileForTest`）**有意不列入**：
- * 它是最像用户文件的普通名，列入即把「用户自己的 `.sql` 文件」判据打穿。
+ * **文件名取值口径（T-FixN2 合并后订正）**：预览文件有**三个不同形态**——
+ *  1. **一级**（项目内临时 VFS 文件，inlay 真正会渲染的那一级）：`mpsql-preview-<pid>-<seq>.sql`，
+ *     名字**每次预热唯一**（T-FixN2 消除平台 File Cache Conflict 模态，见 `SqlPreviewPanel` 的
+ *     [previewTempFileName] 调用处），故锚点按**形态**匹配而不是固定名；
+ *  2. **二级**（内存 PSI，降级链第二级）：`mpsql-preview-memory.sql`，固定名（无 VFS 文件，
+ *     不受唯一命名影响），精确匹配——它**不**满足一级形态（`memory` 不是数字序号），
+ *     不会被误判成一级；
+ *  3. 测试缝文件名 `preview.sql`（`SqlPreviewPanel.createPreviewFileForTest`）**有意不列入**：
+ *     它是最像用户文件的普通名，列入即把「用户自己的 `.sql` 文件」判据打穿。
+ *
+ * **为什么不用宽松前缀判据**（如 `startsWith("mpsql-preview")`）：那会把无关名字一起放进来——
+ * `mpsql-preview-memory.sql` 会被当成一级名，用户自造的同前缀文件也满足文件名锚点，判据形同虚设。
+ * 形态判据必须紧致：前缀 + 数字 owner + 数字序号 + 扩展名，四段全中才算一级。原生控制台临时文件
+ * `mpsql-exec.sql`（`DataSourceSelector.projectExecFile`）**不**满足该形态（前缀不同）——它在锚点处
+ * 被拦下是**已知边界**（该路径 inlay 不渲染），不得因放宽判据而变成「错误地渲染」。
  */
 object PreviewInlayScope {
 
-    /** 一级预览文件（项目内临时 VFS 文件）名。 */
-    const val PREVIEW_FILE_NAME: String = "mpsql-preview.sql"
+    /**
+     * 一级预览文件名**前缀**（项目内临时 VFS 文件，inlay 真正会渲染的那一级）。
+     *
+     * 名字**不是固定值**：T-FixN2 起每次预热换唯一名（消除平台 File Cache Conflict 模态），
+     * 故此处给出的是**形态常量**——名字由 [previewTempFileName] 生成、由 [isPrimaryPreviewFileName]
+     * 判定，生成与判定**共用同一份常量**（`SqlPreviewPanel.nextPreviewTempFileName` 也引用它）。
+     * 这是「面板建文件处」与「锚点判据」之间唯一的事实源：两侧各自硬编码字面量会在改名时静默
+     * 打穿锚点——锚点不报错，只是 inlay 永不出现。
+     */
+    const val PREVIEW_FILE_NAME_PREFIX: String = "mpsql-preview-"
 
-    /** 二级预览文件（内存 PSI，降级链第二级）名。 */
+    /** 一级预览文件名**扩展名**（同 [PREVIEW_FILE_NAME_PREFIX] 的形态常量口径）。 */
+    const val PREVIEW_FILE_NAME_EXT: String = ".sql"
+
+    /** 二级预览文件（内存 PSI，降级链第二级）名——固定名，无 VFS 文件，不受唯一命名影响。 */
     const val MEMORY_PREVIEW_FILE_NAME: String = "mpsql-preview-memory.sql"
 
-    private val RESERVED_FILE_NAMES = setOf(PREVIEW_FILE_NAME, MEMORY_PREVIEW_FILE_NAME)
+    /**
+     * 一级预览文件名形态样例（`mpsql-preview-<owner>-<seq>.sql` 的一个合法实例）。
+     *
+     * 供文档与测试构造一个「形态合法」的一级名用（测试用 `configureByText` 造 fixture 文件时，
+     * 生产名由 `SqlPreviewPanel.nextPreviewTempFileName` 生成，两者形态一致）。**不是**生产使用的
+     * 固定名——生产名每轮预热都不同。
+     */
+    val PREVIEW_FILE_NAME_SAMPLE: String = previewTempFileName("12480", 1)
+
+    /**
+     * 一级预览文件名紧致形态判据：`<前缀><数字 owner>-<数字序号><扩展名>`（owner = pid）。
+     *
+     * 四段全中才算一级：[PREVIEW_FILE_NAME_PREFIX] + `\d+` + `-` + `\d+` + [PREVIEW_FILE_NAME_EXT]。
+     * 前缀与扩展名由共享常量 [java.util.regex.Pattern.quote] 转义后拼入，杜绝判据与生成漂移；
+     * owner 段**不**与当前 pid 比对——跨会话残留（同 pid 复用 / 已退出会话的残留文件）经
+     * `SqlPreviewPanel.projectPreviewFile` 的兜底分支仍会被本面板使用，按 pid 比对会让那一支
+     * 静默失去 inlay。
+     */
+    private val PRIMARY_PREVIEW_FILE_NAME_PATTERN: Regex = Regex(
+        "^" + java.util.regex.Pattern.quote(PREVIEW_FILE_NAME_PREFIX) +
+            "\\d+-\\d+" + java.util.regex.Pattern.quote(PREVIEW_FILE_NAME_EXT) + "$",
+    )
+
+    /**
+     * 按共享形态常量拼出一个预览临时文件名（形态的**唯一生成入口**）。
+     *
+     * @param owner 会话段（本 IDE 进程 pid，取不到时调用方给 `0`）
+     * @param seq   本 JVM 内预览序号（同一 owner 下唯一）
+     */
+    fun previewTempFileName(owner: String, seq: Int): String =
+        PREVIEW_FILE_NAME_PREFIX + owner + "-" + seq + PREVIEW_FILE_NAME_EXT
+
+    /** 是否为本插件**一级**预览文件名（项目内临时 VFS 文件，见 [PRIMARY_PREVIEW_FILE_NAME_PATTERN]）。 */
+    fun isPrimaryPreviewFileName(name: String): Boolean = PRIMARY_PREVIEW_FILE_NAME_PATTERN.matches(name)
+
+    /**
+     * 是否为本插件预览文件名（一级形态匹配 **或** 二级内存名精确匹配）。
+     *
+     * 注意是**紧致**判据：不是 `startsWith(前缀)`——内存级 `mpsql-preview-memory.sql`、原生控制台
+     * 临时文件 `mpsql-exec.sql`、测试缝名 `preview.sql` 都不满足一级形态。
+     */
+    fun isPreviewFileName(name: String): Boolean =
+        name == MEMORY_PREVIEW_FILE_NAME || isPrimaryPreviewFileName(name)
 
     /** 预览语句类型载体（值 = 当前预览的语句类型；null = 非本面板预览 / 无语句类型语义）。 */
     val KEY: Key<XmlStatementKind> = Key.create("MP_PREVIEW_STATEMENT_KIND")
@@ -69,7 +132,7 @@ object PreviewInlayScope {
      *               Editor 对象编辑期间稳定）
      */
     fun previewStatementKind(file: PsiFile?, editor: Editor?): XmlStatementKind? {
-        if (file == null || file.name !in RESERVED_FILE_NAMES) return null
+        if (file == null || !isPreviewFileName(file.name)) return null
         return editor?.getUserData(KEY) ?: file.getUserData(KEY)
     }
 }
