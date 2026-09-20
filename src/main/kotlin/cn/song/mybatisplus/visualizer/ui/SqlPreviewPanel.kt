@@ -29,6 +29,7 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
+import cn.song.mybatisplus.visualizer.ui.inlay.PreviewInlayScope
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
@@ -661,7 +662,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}preview",
         )
         if (!dir.exists() && !dir.mkdirs()) return null
-        val f = java.io.File(dir, "mpsql-preview.sql")
+        // T-InsertColumnInlay O-44b：文件名常量与 inlay 作用域锚点（PreviewInlayScope 保留名）同源——
+        // 锚点靠文件名判定「是不是本面板预览编辑器」，两处各自硬编码字面量会在改名时静默打穿锚点
+        val f = java.io.File(dir, PreviewInlayScope.PREVIEW_FILE_NAME)
         val existing = com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByIoFile(f)
         if (existing != null) {
             val ok = runCatching {
@@ -1954,6 +1957,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         editor?.putUserData(SqlCompletionContext.KEY, ctx)
         psiFile?.putUserData(SqlCompletionContext.KEY, ctx)
         editor?.document?.let { SqlCompletionContributor.registerContext(it, ctx) }
+        // T-InsertColumnInlay O-44b：预览语句类型载体随上下文一同刷新（同一收口，两处渲染路径都过这里）——
+        // INSERT 目标列 inlay 的语句类型闸门据此判定；非 XML 预览（xmlModel 为 null）写 null 即清除，
+        // 防复用编辑器上残留上一次预览的语句类型
+        attachPreviewStatementKind()
         // T-DbSchemaCompletion：预览实际输入面是原生控制台（Ultimate），它的上下文只在
         // onNativeEditorReady 挂过一次——不在此同步，schema 预热完成后控制台仍读旧上下文，
         // 库里独有的列照旧补不出来（且控制台端编辑器 userData 优先级高于 document 兜底）。
@@ -1961,6 +1968,23 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             console.putUserData(SqlCompletionContext.KEY, ctx)
             SqlCompletionContributor.registerContext(console.document, ctx)
         }
+    }
+
+    /**
+     * T-InsertColumnInlay O-44b：把当前预览的语句类型写到预览编辑器（Editor + PSI 文件双载体）。
+     *
+     * 这是 `xmlModel.kind` 的**首个读点**（此前零消费者）——INSERT 目标列 inlay 的语句类型闸门
+     * 由 provider 读该载体判定，`kind != INSERT` 即零提示。取 `xmlModel` 而非 `SqlTypeClassifier`：
+     * 语句类型是解析期事实（`XmlMapperParser.kindOf`），非 XML 预览链无此模型（写 null = 不提示，
+     * 见计划 §二 非目标与 provider KDoc 的边界登记）。
+     *
+     * 写 null 而非「不写」：预览编辑器在预览切换间被复用（`showSql` 的 existing 分支），
+     * 残留上一次预览的语句类型会让复用编辑器继续按旧类型产提示。
+     */
+    private fun attachPreviewStatementKind(target: Editor? = editor) {
+        val kind = current?.xmlModel?.kind
+        target?.let { PreviewInlayScope.attach(it, kind) }
+        psiFile?.let { PreviewInlayScope.attach(it, kind) }
     }
 
     /**
@@ -2584,6 +2608,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val ctx = buildCompletionContext()
         created.putUserData(SqlCompletionContext.KEY, ctx)
         psiFile?.putUserData(SqlCompletionContext.KEY, ctx)
+        // T-InsertColumnInlay O-44b：新编辑器同样写语句类型载体（复用路径由 refreshCompletionContext
+        // 覆盖，新建路径在此覆盖——两条路径都必须写，漏一条即该路径上 inlay 静默不出现）。
+        // 显式传 created：此处 editor 字段仍指向上一个编辑器，默认取字段会写错对象
+        attachPreviewStatementKind(created)
         // M34 回归修复：三级回退的 Document→Context 映射须在此登记（首次创建时 editor 尚不存在，
         // refreshCompletionContext 的 editor?.document 为 null，只能在此写入）——否则 commitDocument
         // 重建 PSI 后补全落入空映射，实体表/列补全静默失效（documentContexts 恒空、level 3 死路径）。
@@ -2663,7 +2691,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             val fileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getStdFileType("SQL")
             val psi = com.intellij.openapi.application.ReadAction.compute<PsiFile, Throwable> {
                 com.intellij.psi.PsiFileFactory.getInstance(proj)
-                    .createFileFromText("mpsql-preview-memory.sql", fileType, sql)
+                    .createFileFromText(PreviewInlayScope.MEMORY_PREVIEW_FILE_NAME, fileType, sql)
             }
             psiFile = psi
             LOG.info("[M36] in-memory PSI preview document created (len=${sql.length})")

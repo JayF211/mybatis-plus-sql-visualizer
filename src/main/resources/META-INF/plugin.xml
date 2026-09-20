@@ -245,6 +245,18 @@
         <codeInsight.lineMarkerProvider language="JAVA"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.StringSqlMethodGutterLineMarkerProvider"/>
 
+        <!-- T-InsertColumnInlay O-44b：预览面板 INSERT 语句的目标列 inlay 提示（VALUES 表达式 /
+             SELECT 投影挂列名，投影自带同名列别名时去重）。
+             EP 全名 com.intellij.codeInsight.inlayProvider（平台 LangExtensionPoints.xml 声明，
+             bean=InlayHintsProviderExtensionBean，language 与 implementationClass 均为 @RequiredElement）。
+             **注册是 language 级**——对 IDE 内所有 SQL 编辑器生效（含用户自己的 .sql 文件），
+             故 provider 内必须做「只认本面板预览编辑器」的双锚点判定（文件名 + userData），
+             见 PreviewInsertColumnInlayProvider KDoc 与开发计划 §六 风险表首行。
+             不注册 settingsKeyId：平台按「无匹配 bean → 默认开启」口径放行，用户可用平台
+             全局/语言级 inlay 开关关闭（本插件不新增设置页） -->
+        <codeInsight.inlayProvider language="SQL"
+                                   implementationClass="cn.song.mybatisplus.visualizer.ui.inlay.PreviewInsertColumnInlayProvider"/>
+
         <!-- M9→原生SQL：补全注册到 SQL 语言。实测全语言注册（无 language）在补全调度时不被
      CompletionContributor.forLanguage 返回（M34 补全失效根因之一），必须显式 language；
      SQL 文件（IDEA DatabaseTools：com.intellij.sql.SqlLanguage，id="SQL"）由

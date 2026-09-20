@@ -30,12 +30,22 @@
 
 预览编辑器有三级降级链：临时 PSI 文件 → 内存 PSI（`ui/SqlPreviewPanel.kt:2628 createInMemoryPreviewPsi`）→ 裸 Document（`:2601 fallbackPreviewDocument`）。**inlay provider 的 `getCollectorFor` 首参是 `PsiFile`**，故**第三级（裸 Document）无 PSI ⇒ 该级不渲染 inlay**（与 O-44a 的空白符开关不同，后者是渲染层、三级都在）。
 
-### 1.2 面板判定可用的锚点（实测）
+### 1.2 面板判定可用的锚点（实测；**文件名口径已订正**）
 
 | 锚点 | 证据 |
 |---|---|
 | 预览编辑器已挂 `SqlCompletionContext.KEY` userData | `ui/SqlPreviewPanel.kt:2556-2557` |
-| 预览文件固定命名 `mpsql-preview-*.sql` | `ui/SqlPreviewPanel.kt:2628-2636` |
+| 预览文件名 = **逐个列举的保留名**（不是 `mpsql-preview-*.sql` 通配） | 见下方三形态表 |
+
+**口径订正（原计划缺陷，实施时实测推翻）**：原表第二行写「固定命名 `mpsql-preview-*.sql`」——**实测有三个不同形态，主路径那个不匹配该通配**：
+
+| 层级 | 真实文件名 | 建文件处 | 匹配 `mpsql-preview-*.sql`？ |
+|---|---|---|---|
+| **一级：项目内临时 VFS 文件（inlay 真正会渲染的那一级）** | **`mpsql-preview.sql`** | `ui/SqlPreviewPanel.kt:664`（原计划引的 `:639/653` 是同一函数的注释/旧行号） | **不匹配**（少一个连字符） |
+| 二级：内存 PSI（降级链第二级） | `mpsql-preview-memory.sql` | `ui/SqlPreviewPanel.kt:2666` | 匹配 |
+| 测试缝（`createPreviewFileForTest`） | `preview.sql` | `ui/SqlPreviewPanel.kt:2696` | 不匹配 |
+
+后果：兜底锚点若按通配写，**主路径上失效**——双锚点退化成只靠 userData 的单锚点，表现为「真预览编辑器上 inlay 静默不出现」而非泄漏。**修正**：保留名逐个列举，且常量与面板建文件处**同源**（`PreviewInlayScope.PREVIEW_FILE_NAME` / `MEMORY_PREVIEW_FILE_NAME`，面板 `projectPreviewFile` / `createInMemoryPreviewPsi` 直接引用），杜绝锚点与真实文件名再次漂移；测试缝名 `preview.sql` **有意不列入**保留名（它是最像用户文件的普通名，列入即打穿「用户自己的 `.sql` 文件」硬判据）。
 
 ### 1.3 最贴近的既有范式（照抄对象）
 
@@ -80,7 +90,7 @@
 
 **T-ICI-01（EP 核实，**243 已完成，253/262 待收尾**）**：243 平台实测结论见 §1.4（EP 名、bean、`language` 属性、接口方法齐备）。**剩余**：253/262 两平台的 EP 可用性实测；`EditorEx` 上是否需要 `InlayModel` 显式启用；自定义 `SqlSyntaxHighlighter` 是否影响 language 判定。**判据**：能否可靠地把作用域限制在预览编辑器。
 
-**T-ICI-02（面板判定）**：provider 内用 §1.2 的两个锚点（`SqlCompletionContext.KEY` userData 优先，文件名 `mpsql-preview-*.sql` 兜底）判定「是本面板的预览编辑器」；非本面板直接返回空。**同时**：`xmlModel.kind != INSERT` 时返回空。
+**T-ICI-02（面板判定）**：provider 内用 §1.2 的两个锚点判定「是本面板的预览编辑器」；非本面板直接返回空。**同时**：语句类型不是 INSERT 时返回空。**实施定案**：锚点取**合取**（文件名 ∈ 保留名 **且** userData 载体存在），载体**另开专用 Key**（不复用 `SqlCompletionContext.KEY`）——两点理由：① `SqlCompletionContext.KEY` 不是「预览编辑器」专属（`refreshCompletionContext` 在 `:1959-1962` 给原生控制台编辑器也挂了同一个 Key，复用即把「是不是预览编辑器」的判定让给文件名单独承担）；② 载体要携带语句类型，`SqlCompletionContext` 无该字段。降级链第三级（裸 Document）无 PSI ⇒ provider 不被调用（验收 4 的机制面）。
 
 **T-ICI-03（列名来源）**：从预览模型取 INSERT 的目标列与值表达式——**落点须实施时定位**（`XmlStatementKind.INSERT` 的语句节点里列名列表与 VALUES/SELECT 投影的对应关系）。**照抄 DBX 的去重规则**：投影项已自带同名列别名（尾随 `AS` 或隐式别名，点名不算）时丢弃提示。
 
@@ -131,17 +141,31 @@ T-ICI-01（EP 核实——决定做/不做）→ [D1 定案]
 ## 八、实施记录（实施后回填）
 
 | 任务 | 提交 | 说明 / 偏离 |
-|------|------|------|
-| T-ICI-01 | 本次更新 | **243 平台已核实**：EP `com.intellij.codeInsight.inlayProvider`（bean `InlayHintsProviderExtensionBean`，带 `language` 属性，接口方法齐备）；253/262 与 InlayModel/highlighter 交互待收尾 |
-| D1 定案 | 本次更新 | **A（EP + 面板判定）**；必做防护=面板判定（userData + 文件名双锚点） |
-| T-ICI-02 | （实施后填） | 面板判定锚点的最终形态与可靠性须回填 |
-| T-ICI-03 | （实施后填） | 列名来源落点、静态不可判的边界清单须回填 |
-| T-ICI-04 | （实施后填） | `xmlModel.kind` 首读点落位与四条用例读数须回填 |
-| T-ICI-05 | （实施后填） | 文档落位与门禁读数须回填 |
+|------|------|-------------|
+| T-ICI-01 | 本次 | **243 平台逐行核实**（不只 javap）：EP `com.intellij.codeInsight.inlayProvider`；bean `InlayHintsProviderExtensionBean` 的 `language` 与 `implementationClass` **都是 `@RequiredElement`**；`InlayHintsSettings.hintsShouldBeShown` 三道闸（全局 / 语言 / 单 provider）默认全开，且 EP **不注册 `settingsKeyId` 时 `computeIsEnabledByDefault` 走「无匹配 bean → true」**分支 ⇒ 本 provider 默认生效、无需设置页。**253/262 仍未实测**（未验证面，见下） |
+| D1 定案 | 本次 | **A（EP + 面板判定）** 落地；必做防护 = 双锚点**合取**（文件名 ∈ 保留名 且 userData 载体存在），载体另开专用 Key（不复用 `SqlCompletionContext.KEY`，理由见 T-ICI-02） |
+| T-ICI-02 | 本次 | 锚点形态见 §1.2 订正表；保留名两个常量与面板建文件处**同源**（`PreviewInlayScope.PREVIEW_FILE_NAME` / `MEMORY_PREVIEW_FILE_NAME`，面板 `projectPreviewFile` / `createInMemoryPreviewPsi` 直接引用）；测试缝名 `preview.sql` 不列入保留名 |
+| T-ICI-03 | 本次 | 列名来源 = **预览文本自身**（`INSERT INTO t (列清单) VALUES/SELECT`），**不读 PSI 树**：本插件测试环境有意排除 database/sql 插件 jar（`buildSrc/src/main/kotlin/mpv-testing.gradle.kts:22-31`），SQL 语言与 SQL FileType 都不注册，PSI 结构不可依赖；且 XML INSERT 渲染后列名与值都在文本里 |
+| T-ICI-04 | 本次 | `xmlModel.kind` 首读点 = 面板 `attachPreviewStatementKind`（`current?.xmlModel?.kind`），双载体写入（Editor + PSI 文件）；两条渲染路径（新建 `assemblePreviewEditor` / 复用 `refreshCompletionContext`）都写（漏一条即该路径静默不出现） |
+| T-ICI-05 | 本次 | 文档落位：本文件 §1.2 订正 + §三 T-ICI-02 定案 + 本节；CHANGELOG 条目文本交收口阶段统一写入（本批并行约定不写 CHANGELOG / 变更记录 / 架构设计） |
 
-**待验证前提（实施者先证伪再动手）**：
+**实施口径（与计划原文的偏离与取舍）**：
 
-1. ~~inlay EP 的名字与属性未在仓内找到先例~~ → **243 平台已核实**（§1.4）：EP = `com.intellij.codeInsight.inlayProvider`，带 `language` 属性，接口 `InlayHintsProvider` 方法齐备。**仍待实测**：253/262 两平台可用性、`EditorEx` 上是否需要 `InlayModel` 显式启用、自定义 `SqlSyntaxHighlighter` 是否影响 language 判定。
-2. `EditorEx` 上 inlay 是否需要 `InlayModel` 显式启用、以及预览编辑器用的自定义 `SqlSyntaxHighlighter`（`ui/SqlPreviewPanel.kt:2564-2572`）是否影响 language 判定（预览文件由 `getStdFileType("SQL")` 建，语言**预期**为 SQL）——未实测。
-3. 「`SqlCompletionContext.KEY` userData 可作判定锚点」来自 `ui/SqlPreviewPanel.kt:2556-2557` 的静态证据——须确认该 userData 在编辑器生命周期内**始终存在**（若被清理则判定失效，须改用文件名兜底为主）。
-4. DBX 的「投影自带同名列别名时不提示」规则的**确切判据**（尾随 `AS` / 隐式别名 / 点名不算）来自 `insertValueHints.ts:286` 的转述，未逐行核对其解析实现——实施时须按我方 PSI 形态重新定义，不照抄。
+1. **多组 VALUES 元组逐组提示**（原文只写「每个 VALUES 表达式」）：`foreach` 生成的批量 INSERT 逐行标注，与 `SqlAutoFoldPlanner` 的「每组元组独立判定」口径一致；行内提示是只读显示层，重复列名不改语义。
+2. **别名去重的「点名不算」读法（原文歧义，两种读法都实现）**：原文「尾随 `AS` 或隐式别名，点名不算」可读作 (a) 裸列名不是别名（`SELECT a` 照常提示）；(b) 限定名末段不算别名（`SELECT t.a` 照常提示）。两条互不冲突、都已落地：隐式别名要求「前驱 token 与末尾标识符之间有空白**且**前驱是值结尾」，故单 token 投影无别名、`t.a` 的 `.` 也不构成隐式别名。各有用例钉住（`test点名不算别名_裸列名照常提示` / `test点名不算别名_限定名末段不当别名`）。
+3. **双锚点取合取，不是「优先 / 兜底」**：原文 §三 T-ICI-02 是「userData 优先，文件名兜底」（析取）。析取下「文件名命中」可单独放行，而 `mpsql-preview.sql` 这个名字用户完全可能自己造（`.idea/sql-visualizer/preview/` 之外的同名文件）；合取后两条同时成立才放行，用户文件被文件名锚点独立拦下（用例 `test用户文件即使被挂上语句类型载体也不产提示`）。
+4. **非 XML 预览链不提示**：语句类型源为 `xmlModel.kind`，非 XML 链（Wrapper 批量 INSERT / `@Insert` 注解 / JdbcTemplate）无该模型 ⇒ 写 null ⇒ 不提示。本轮**不扩大**到文本级语句识别（`SqlTypeClassifier` 是另一条口径，扩面须另开计划）。
+5. **不注册 `settingsKeyId`**（不新增设置页）：平台缺省即开启（见 T-ICI-01），用户可用平台 inlay 全局 / 语言级开关关闭。与 O-44a（空白符开关）不同——那条是面板渲染层、本插件自己的设置项；本条是 IDE 编辑器提示层，走平台既有开关。
+6. **无 inlay 时返回 null（不产 collector）**而非「产出空列表」：平台 `getCollectorWrapperFor` 对 null 直接不建 collector，零条目零开销。
+7. **collector 一次性闸门**：平台两处调用形态不同——真机 pass 按 Divider 分段元素逐个调用（返回 false 即移出调度），平台测试链 `collectTraversing`（`SyntaxTraverser.psiTraverser`）**忽略返回值**对每个 PSI 元素都调一次。无闸门会按元素数量重复投提示。
+
+**与 T-M32 计划的 inlay 注册口径冲突（登记）**：`docs/开发计划/20260815-2130-T-M32-Wrapper实时提示-开发计划.md`（状态：立项、暂缓实施）也注册 inlay，口径是 **`InlayParameterHintsProvider`（`com.intellij.codeInsight.parameterNameHints` EP，Java 语言，作用于用户自己的代码，2025.3+ API 待核）**；本任务是 **`InlayHintsProvider<NoSettings>`（`com.intellij.codeInsight.inlayProvider` EP，SQL 语言，只作用于本插件预览编辑器）**。取舍：**provider 形态统一到新 EP**——平台对该接口的 javadoc 明写「新代码优先用 declarative 形态、`InlayParameterHintsProvider` 是参数名提示专用机制」，且本轮实测 `inlayProvider` EP 在 243 可用（T-M32 那条「243 兼容待核实」的顾虑对本 EP 不成立）。**作用域口径不统一且不应统一**：T-M32 的目标就是用户 Java 代码（必须命中用户文件），本任务的目标是插件自建预览编辑器（必须不命中用户文件）——两条计划的作用域判据方向相反，各自在计划内写清即可；共享的只是 EP 形态与「作用域判定必须显式、不能靠 language 注册面」这条纪律。
+
+**待验证前提（实施后收口）**：
+
+1. ~~inlay EP 名字与属性无仓内先例~~ → **243 已逐行核实**（EP 名、bean、两个 `@RequiredElement`、接口方法齐备、默认开启机制）。**253/262 未实测**（未验证面）。
+2. `EditorEx` 是否需显式启用 `InlayModel`、自定义 `SqlSyntaxHighlighter` 是否影响 language 判定 → **headless 不可证**（测试环境不注册 SQL 语言/FileType，`.sql` 在测试里不是 SQL PSI），只能真机走查（§五）。**已收窄的部分**：provider 不读 PSI 结构、不读语言，判据只有「文件名 + userData + 文档文本」三样，故 highlighter 与 language 判定都不进入本 provider 的判据面；`InlayModel` 也无需显式启用——`InlayHintsPass.applyCollected` 直接对 `editor.inlayModel` 加条目（243 sources 实证），测试链已在真实 `InlayModel` 上取到提示文本。
+3. `SqlCompletionContext.KEY` userData 稳定性 → **不再作为锚点**：`refreshCompletionContext` 给原生控制台编辑器也挂了同一个 Key（`ui/SqlPreviewPanel.kt:1959-1962`），复用会把「是不是预览编辑器」让给文件名单独承担；自建专用 Key 挂 Editor + PSI 文件双载体（Editor 侧随编辑器对象稳定，`:2553-2554` 既有注释口径）。
+4. DBX 去重规则的确切判据 → 按我方词法形态重定义（`AS` 别名 + 隐式别名；`*` 投影不提示），**未逐行核对 DBX 实现**（其 CodeMirror 解析形态与我方词法不同）。
+5. **本轮新暴露的未验证面（真机走查须优先确认）**：inlay pass 由 daemon 驱动，`InlayHintsPass.doCollectInformation` 首行是 `HighlightingLevelManager.shouldHighlight(myFile)` 门；一级预览文件位于 `<项目>/.idea/sql-visualizer/preview/mpsql-preview.sql`——**该路径是否被判为可高亮，headless 无法证实**（测试环境文件索引形态与真机不同，且 `ProjectFileIndex` 读法本身是慢操作、EDT 上直调会撞平台断言）。若真机上主路径 inlay 不出现，**先查这道门而非锚点**（锚点已由用例钉死）。
+
