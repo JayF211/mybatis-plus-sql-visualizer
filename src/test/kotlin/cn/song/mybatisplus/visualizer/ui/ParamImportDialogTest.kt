@@ -214,4 +214,42 @@ class ParamImportDialogTest : BasePlatformTestCase() {
         assertEquals("弹窗宽度", 480, ParamImportDialog.DIALOG_WIDTH)
         assertEquals("弹窗高度", 200, ParamImportDialog.DIALOG_HEIGHT)
     }
+
+    // ------------------------------------------------------------------
+    // N3：文档监听随对话框 disposable 处置
+    // ------------------------------------------------------------------
+
+    /**
+     * N3 回归守护（2026-09-21）：文档监听必须**随对话框自己的 disposable 一并处置**。
+     *
+     * 缺陷形态：监听此前挂在 `this`（`DialogWrapper` 作为 `Disposable` 的**另一个**节点）上，而平台
+     * `close()` 处置的是 `myDisposable` → 那个节点从没进过 Disposer 树，于是以 `ROOT_DISPOSABLE`
+     * 子节点身份留到应用退出，被 ObjectTree 报 `Memory leak detected: 'ParamImportDialog@…' … wasn't
+     * disposed`（真机复现：开 3 次该对话框 → 退出时报 3 个实例泄漏，**实例数与打开次数严格相等**）。
+     *
+     * 判据用**外部文档 + 注入计数器**：直接观察对话框自己的占位标签没有判别力——`dispose()` 会把
+     * `editor` 置 null，占位标签断言会恒真。故把监听挂到一张测试文档上，处置 disposable 后改文档，
+     * 断言回调**不再触发**；并带一条处置前的正对照，证明该监听本来就会响（防「压根没挂上」的空绿）。
+     */
+    fun test文档监听随对话框disposable处置_处置后不再响应() {
+        val dialog = ParamImportDialog(project) {}
+        val scratch = com.intellij.openapi.editor.impl.DocumentImpl("")
+        var fired = 0
+        dialog.attachPlaceholderListener(scratch) { fired++ }
+
+        // 正对照：处置前文档变化必须触发监听（否则本用例会因为「没挂上」而假绿）
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) { scratch.setText("first") }
+        assertEquals("前提：处置前监听应响应文档变化", 1, fired)
+
+        // 模拟平台 close() 的处置路径：DialogWrapper.close() 走的就是 Disposer.dispose(getDisposable())
+        Disposer.dispose(dialog.disposable)
+
+        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) { scratch.setText("second") }
+        assertEquals(
+            "disposable 被处置后监听必须一并移除（N3 回归点）——若仍挂在 this 上，这里会变成 2",
+            1,
+            fired,
+        )
+        dialog.dispose()
+    }
 }

@@ -78,11 +78,14 @@ class ParamImportDialog(
         content.add(overlayPanel, BorderLayout.CENTER)
 
         // 监听文档变化，控制占位提示显隐
-        editor?.document?.addDocumentListener(object : DocumentListener {
-            override fun documentChanged(event: DocumentEvent) {
-                updatePlaceholderVisibility()
-            }
-        }, this)
+        // N3 修复（2026-09-21）：父 disposable 必须是 `disposable`（= DialogWrapper.getDisposable()），
+        // **不能传 `this`**。平台 close() 处置的是 `myDisposable`（其 dispose() 再回调对话框的
+        // dispose()），而 `this` 是 DialogWrapper 作为 Disposable 的**另一个**节点——它从没被登记进
+        // Disposer 树，于是以 ROOT_DISPOSABLE 子节点身份留到应用退出，被 ObjectTree 报泄漏：
+        // `'ParamImportDialog@…' was registered in Disposer as a child of 'ROOT_DISPOSABLE' but wasn't
+        // disposed`（真机复现：开 3 次该对话框 → 退出时报 3 个实例泄漏，实例数与打开次数严格相等）。
+        // 抽成 [attachPlaceholderListener] 是为了让「处置后监听不再响应」这条可被单测直接断言。
+        editor?.let { attachPlaceholderListener(it.document) }
         updatePlaceholderVisibility()
 
         // 格式化快捷键 Ctrl+Enter（焦点在编辑器内时触发）
@@ -119,6 +122,31 @@ class ParamImportDialog(
     /** 更新占位提示显隐（编辑器为空时显示，有内容时隐藏）。 */
     private fun updatePlaceholderVisibility() {
         placeholderLabel.isVisible = editor?.document?.text.isNullOrBlank()
+    }
+
+    /**
+     * N3：把「文档变化 → 刷新占位提示」的监听挂到**对话框自己的 disposable** 上。
+     *
+     * **父节点必须是 [disposable]**（= `DialogWrapper.getDisposable()`）：平台在 `close()` 时处置的
+     * 就是它（`myDisposable.dispose()` 再回调对话框的 `dispose()`）。若传 `this`（对话框作为
+     * `Disposable` 的另一个节点），该节点从没进过 Disposer 树 → 以 ROOT_DISPOSABLE 子节点身份留到
+     * 应用退出 → ObjectTree 报 `Memory leak detected: 'ParamImportDialog@…' … wasn't disposed`。
+     *
+     * internal 是为了让单测能用**外部文档**断言「disposable 被处置后，监听不再响应」——直接观察
+     * 对话框自身的占位标签做不到：`dispose()` 会把 `editor` 置 null，断言会恒真而失去判别力。
+     *
+     * @param onChanged 文档变化时的动作；默认即生产行为（刷新占位提示），单测注入计数器以判别
+     *   「处置后是否还在响应」（同理，注入点而非断言占位标签，是为了让断言有判别力）。
+     */
+    internal fun attachPlaceholderListener(
+        document: com.intellij.openapi.editor.Document,
+        onChanged: () -> Unit = ::updatePlaceholderVisibility,
+    ) {
+        document.addDocumentListener(object : DocumentListener {
+            override fun documentChanged(event: DocumentEvent) {
+                onChanged()
+            }
+        }, disposable)
     }
 
     /** 顶部工具栏：格式化 + 删除（图标按钮，参考 SqlToJavaPanel 风格）。 */
