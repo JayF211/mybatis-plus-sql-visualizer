@@ -182,3 +182,38 @@ T-ICI-01（EP 核实——决定做/不做）→ [D1 定案]
 4. DBX 去重规则的确切判据 → 按我方词法形态重定义（`AS` 别名 + 隐式别名；`*` 投影不提示），**未逐行核对 DBX 实现**（其 CodeMirror 解析形态与我方词法不同）。
 5. **本轮新暴露的未验证面（真机走查须优先确认）**：inlay pass 由 daemon 驱动，`InlayHintsPass.doCollectInformation` 首行是 `HighlightingLevelManager.shouldHighlight(myFile)` 门；一级预览文件位于 `<项目>/.idea/sql-visualizer/preview/mpsql-preview.sql`——**该路径是否被判为可高亮，headless 无法证实**（测试环境文件索引形态与真机不同，且 `ProjectFileIndex` 读法本身是慢操作、EDT 上直调会撞平台断言）。若真机上主路径 inlay 不出现，**先查这道门而非锚点**（锚点已由用例钉死）。
 
+**与 T-PreviewWhitespaceToggle（`20260920-1154-…`）的同文件串行（交叉登记）**：两件计划都改 `ui/SqlPreviewPanel.kt`（本件的语句类型载体接线 `:1986-1987` + 两条渲染路径 `assemblePreviewEditor` / `refreshCompletionContext`；T-PWT 的 9 处编辑器构造点收口 + 面板 5 处控件改动）。**落地顺序：T-PWT 先（`9b37f73` 主体 + `9fee344` 搜索索引），本件后（`100d03c` 主体 + `138b42d` 用例与守卫）**——两件的改动落在同一文件的编辑器构造/刷新链**同一批函数**上，故**同文件串行、不可并行**；后续读者若把两件当可并行任务分派，会在同一区域产生冲突（本轮即按「1154 先、1156 后」串行落地）。
+
+## 九、独立复核登记（复核员实测，2026-09-20）
+
+本节登记项**全部来自独立复核员的实测读数**，均**未**写入 §八（§八 由实施路回填，复核发生在同一批之后）。分四类：新增边界、未覆盖面、恒真断言、敏感性偏弱；末段列复核**确认通过**的面，供后续读者区分「已核实」与「仅自述」。
+
+### 9.1 新增登记：原生控制台路径不渲染（已知边界，真机可见）
+
+**现象**：Ultimate **已连数据源**时，`showSql` 走 `nativeDoc` 分支（`ui/SqlPreviewPanel.kt:2429` 起，`:2493` 提前 `return`），自建编辑器在同一链上被 release（`:1289-1292` 的 `releaseEditor()` + `editorHolder.removeAll()`）；而控制台绑定的是 **`mpsql-exec.sql`**（`execute/DataSourceSelector.kt:3242` `createTempPsiFile` → `:3700` `projectExecFile` 建该名文件，`:1246-1248` `attachConsole` 挂载点），该文件名**不在** provider 的保留名清单里（`ui/inlay/PreviewInsertColumnInlayProvider.kt` 的 `RESERVED_FILE_NAMES` 仅 `mpsql-preview.sql` / `mpsql-preview-memory.sql`）→ `previewStatementKind` 恒返回 null → **该路径上 inlay 静默不出现**（零异常、零日志）。
+
+**定性**：**不是泄漏，是缺失**——作用域闸门方向正确（宁可不显示也不污染用户文件），代价是「已连数据源的用户在原生控制台形态下看不到目标列提示」。这与 §八 待验证前提 5（`shouldHighlight` 门）是**两条独立的真机不渲染入口**，真机走查时须分别归因：主路径（未连数据源 / 自建编辑器）先查高亮门，已连数据源形态先查本条。
+
+**未修理由（本轮不扩大保留名）**：把 `mpsql-exec.sql` 列入保留名即对**所有**挂该临时文件的编辑器放行；该文件是「执行用临时文件」语义、非「预览」语义，两件事混进同一个锚点会把「只认本面板预览编辑器」这条判据打穿。修复须另开计划，前置是「原生控制台编辑器的身份如何稳定判定」——如实登记为已知边界，不当已覆盖。
+
+### 9.2 新增登记：两处未覆盖面
+
+1. **一级主路径缺端到端用例**：面板接线用例（`InsertColumnInlayPanelWiringTest`）实测走的是**降级链第二级**（内存 PSI）——探针读数 `name=mpsql-preview-memory.sql, vfName=null`。一级 `mpsql-preview.sql` **没有端到端用例**，只靠「常量同源」覆盖：`ui/SqlPreviewPanel.kt:667` 引 `PreviewInlayScope.PREVIEW_FILE_NAME`、`:2694` 引 `MEMORY_PREVIEW_FILE_NAME`，**仓内无第二份字面量**（复核员已确认）。provider 侧虽有以 `PREVIEW_FILE_NAME` 命名的 fixture 用例（`test主路径预览文件INSERT出目标列提示`），但那条**不经面板、不走真实文件创建链**，故「面板 → 一级预览文件 → provider」这条链在 headless 下无读数。
+2. **测试环境绕过平台 language 过滤**：测试环境不注册 SQL 语言（`buildSrc/src/main/kotlin/mpv-testing.gradle.kts:22-31` 排除 database jar），provider 用例**直调 `getCollectorFor`**，绕过平台 language 过滤——故 `language="SQL"` 的匹配链**在 headless 测不到**，只能靠字节码/源码核实。**复核员已核实成立**：平台 `SingleLanguageInlayProviderFactory.getProvidersInfoForLanguage` 按 `language.isKindOf(it.language)` 过滤（243 发行版 sources 实证），`SqlLanguage` id="SQL" 直继承 `Language` ⇒ `file.language` 为 SQL 时命中。这不是缺陷，是**用例覆盖不到的面**，登记以免后人把「provider 用例绿」误读为「language 注册面已验证」。
+
+### 9.3 新增登记：一处恒真断言（fixture 自校验）
+
+`PreviewInsertColumnInlayProviderTest:131-135` 的 `assertEquals("两个文件名跑的是同一条 SQL", insertSql, "INSERT INTO user (id, name) VALUES (1, 'admin')")` 断言的是「测试常量 == 字面量」，属 **fixture 自校验**（防 `insertSql` 被改而期望值没跟着改），**不是行为断言**。**不必删**（对夹具维护有价值），但须标出来——否则它会被计入 §八 的「provider 13 条」行为覆盖读数，虚增一条。
+
+### 9.4 敏感性偏弱项
+
+`InsertColumnInlayPlannerTest.test列清单非纯列名时不提示` 在**摘掉 4 处判据中的 2 处后未翻红**——列清单纯度判据有**三重覆盖**（嵌套括号 / 空元素 / 多 token 元素，任一条都能拦下该用例的输入）⇒ 该用例是**规格钉**（钉规格而非钉实现），**敏感性弱于**其余三类边界用例（用户文件 / 缺 userData / 非 INSERT——那三类在反向探针下都会变红）。登记为敏感性差异，不改用例。
+
+### 9.5 复核确认通过项（已核实侧）
+
+1. **作用域闸门 3 条入口条件**逐条成立（文件名 ∈ 保留名 / userData 载体存在 / 语句类型非 null 且为 INSERT）。
+2. **未找到用户文件绕过路径**：`PreviewInlayScope.KEY` **仅**由 `attach` 写入（全仓无第二处 `putUserData(KEY)`），生产侧**唯一**调用点是 `ui/SqlPreviewPanel.kt:1986-1987` 的 `attachPreviewStatementKind` ⇒ 「用户文件被误挂载体」在生产侧无路径。
+3. **5 次反向探针全部「变红而非静默」**——不存在「守卫失效但用例照旧绿」的形态。
+4. **正对照也抓得住静默不渲染**：把锚点改回计划原口径 `startsWith("mpsql-preview-")` 后，主路径正向用例**变红**（原口径的 `-*` 通配匹配不到 `mpsql-preview.sql`）——证明正向用例对「静默不出现」这一类症状有判别力，不只反例能红。
+5. **平台默认开启已独立核实**（243 发行版 sources 逐行）：`InlayHintsSettings.computeIsEnabledByDefault`（`:231-238`）对**无 `settingsKeyId`** 的 provider 走「无匹配 bean → `?: return true`」分支；`InlayHintsPass.doCollectInformation` 首门 `HighlightingLevelManager.getInstance(...).shouldHighlight(myFile)`（`:40`）在默认 FORCE_HIGHLIGHTING 下放行。故「不注册 `settingsKeyId` ⇒ 默认生效、无需设置页」这条 §八 口径成立（与 §八 待验证前提 5 的「一级预览路径是否可高亮」是两个不同问题，勿混）。
+
