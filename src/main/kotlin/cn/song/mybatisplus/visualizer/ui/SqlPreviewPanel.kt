@@ -3580,14 +3580,27 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 旧写法 `metaLabel.toolTipText = hint` 使提示态悬停只剩提示本身、完整链丢失；而提示文案本就在
      * 可见行上全文可见，覆写并未换来任何信息。拼接以提示为首行（与可见行一致），基线随其后；
      * 基线取自缓存字段而非当前 tooltip，故重复触发幂等（不会把自身叠加进去）。
+     *
+     * P10 修复（2026-09-20 真机走查发现）：提示此前**只写** `metaLabel.text`，不进 [metaLineHead] /
+     * [metaLineText]。而 `errorCopyButton.isVisible = true` 会改变工具栏理想宽 → topRow 重排 →
+     * 紧接着的 [applyMetaTruncation]（预算变了故不短路）用旧的 `metaLineText` 把提示**当场覆盖**——
+     * 真机走查实测「提示态根本看不到」（红字与复制按钮都没出现），即本项此前只在单测里成立。
+     * 现把提示写进同一套分段缓存并复位 [lastMetaBudget]，可见行统一由 [applyMetaTruncation] 收口渲染
+     * （含宽度预算与 perf 段），提示因此参与布局且不再被覆盖；`toast 语义`不变——下次 [updateMeta]
+     * 重写分段缓存即覆盖。
      */
     private fun showEmptyClipboardHint() {
         val hint = MpSqlVisualizerBundle.message("panel.param.import.result.empty")
         currentWarning = hint
-        metaLabel.text = "⚠ $hint"
+        val hintLine = "⚠ $hint"
+        metaLineHead = hintLine
+        metaLineDigest = ""
+        metaLineText = hintLine
+        lastMetaBudget = -1
         metaLabel.toolTipText = if (metaTooltipBase.isEmpty()) hint else "$hint\n$metaTooltipBase"
         metaLabel.foreground = JBColor.namedColor("ErrorForeground", JBColor.RED)
         errorCopyButton?.isVisible = true
+        applyMetaTruncation()
     }
 
     /** P-05：计算当前预览的缓存键（无表名返回 null，不缓存）。 */

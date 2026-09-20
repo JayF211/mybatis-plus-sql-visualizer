@@ -111,4 +111,40 @@ class SqlPreviewPanelMetaHintTooltipTest : BasePlatformTestCase() {
             panel.clear()
         }
     }
+
+    /**
+     * P10 回归守护（2026-09-20 真机走查发现）：提示态**必须扛得住宽度预算重算**。
+     *
+     * 缺陷形态：提示此前只写 `metaLabel.text`，不进 `metaLineHead`/`metaLineText`。真机上
+     * `errorCopyButton.isVisible = true` 会改变工具栏理想宽 → topRow 重排 → 紧接着的
+     * `applyMetaTruncation()`（预算变了故不短路）用旧 `metaLineText` 把提示当场覆盖——走查实测
+     * 「提示态根本看不到」（红字与复制按钮都没出现），即本项此前**只在单测里成立**。
+     *
+     * 本用例按同一路径驱动：提示挂起后主动触发一次 `applyMetaTruncation()`（headless 等价于
+     * 真机的重排收口），断言可见行仍是提示、且不含被覆盖回来的 meta 主体。
+     */
+    fun test提示态_宽度预算重算后不被meta覆盖() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            panel.showResult(makeResult(chain()))
+            waitForEdt()
+            panel.importParamsForTest(emptyMap())
+            waitForEdt()
+            assertEquals("前提：提示已挂到可见行", "⚠ ${hint()}", panel.metaLabelForTest())
+
+            // 真机路径的等价动作：布局变化后按新预算重拼可见行
+            panel.applyMetaTruncationForTest()
+            waitForEdt()
+
+            val visible = panel.metaLabelForTest()
+            assertTrue("重算后提示必须仍在可见行内（P10 回归点）: $visible", visible.contains(hint()))
+            assertFalse("不得被 meta 主体覆盖回来: $visible", visible.contains("LAMBDA_QUERY"))
+            assertTrue(
+                "tooltip 仍保留完整调用链",
+                (panel.metaTooltipForTest() ?: "").contains(chain()),
+            )
+        } finally {
+            panel.clear()
+        }
+    }
 }
