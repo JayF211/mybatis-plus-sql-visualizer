@@ -495,6 +495,8 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.shortcut"), b.message("settings.shortcut.tip"), "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.shortcut.sqlToJava"), "", "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.joinDiagramNative"), b.message("settings.joinDiagramNative.tip"), "settings.section.ui", u))
+            // T-PreviewWhitespaceToggle O-44a：空白符可视化开关（界面节，默认关=不设置该属性）
+            fields.add(SearchableField(b.message("settings.editorShowWhitespaces"), b.message("settings.editorShowWhitespaces.tip"), "settings.section.ui", u))
 
             // 关于
             val a = AboutConfigurable::class.java

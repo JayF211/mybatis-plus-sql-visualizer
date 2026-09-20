@@ -119,6 +119,26 @@ class PluginXmlStructureGuardTest {
     }
 
     @Test
+    fun `inlayProvider必须声明language与implementationClass`() {
+        // T-InsertColumnInlay O-44b：inlay EP 的 bean（InlayHintsProviderExtensionBean）把
+        // language 与 implementationClass 都标为 @RequiredElement（243 sources 逐行核实）——
+        // 缺任一属性即插件加载报错；实现类写错则 EP 的 language 级作用面全乱。
+        val xml = strippedXmls().first { it.first == "plugin.xml" }.second
+        val tags = tagsOf(xml, "codeInsight.inlayProvider")
+        assertHolds("inlayProvider 注册数应为 1，实际 ${tags.size}", tags.size == 1)
+        val tag = tags[0]
+        assertHolds("inlayProvider 缺 language 属性（@RequiredElement，缺失即加载报错）：$tag", tag.contains("language="))
+        assertHolds(
+            "inlayProvider 缺 implementationClass 属性（@RequiredElement）：$tag",
+            tag.contains("implementationClass="),
+        )
+        assertHolds(
+            "inlayProvider 实现类应为预览面板的 INSERT 目标列 provider：$tag",
+            tag.contains("PreviewInsertColumnInlayProvider"),
+        )
+    }
+
+    @Test
     fun `completion_contributor必须声明language属性`() {
         for ((name, xml) in strippedXmls()) {
             val bad = tagsOf(xml, "completion.contributor").filter { !it.contains("language=") }

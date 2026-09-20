@@ -15,6 +15,8 @@ import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
+import cn.song.mybatisplus.visualizer.sql.PlaceholderCardinality
+import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog
 import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction
@@ -27,6 +29,7 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
+import cn.song.mybatisplus.visualizer.ui.inlay.PreviewInlayScope
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
@@ -384,6 +387,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // T-M25.3：错误信息复制按钮（warning 存在时可见，一键复制完整错误文本）
     private var errorCopyButton: JButton? = null
     private var currentWarning: String? = null
+
+    /**
+     * T-PSG-04（N-33）：最近一次参数回填的「`?` 位点数 vs 参数条数」对账标注——不等时非 null。
+     *
+     * 只在 [backfillParamsBySource] 里按串感知位点数与 sources 条数计算（每次回填都重算，不留
+     * 陈旧值）；执行前由 [warnOnPlaceholderMismatch] 读走并如实登记日志。**不阻断**任何流程
+     * （与我方既有 `${}` 闸门「确认/标注」档一致，不引入拒绝档）。
+     */
+    private var placeholderReconciliation: String? = null
 
     // T-PreviewUx-Pack #2：诚实降级横幅——渲染警示（RENDER_WARNING）与 T-PreviewExecDs
     // 降级链层级提示（DEGRADED）统一收口；降级提示优先级高于渲染警示（见 DegradationBanner.Kind）
@@ -751,6 +763,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}preview",
         )
         if (!dir.exists() && !dir.mkdirs()) return null
+        // T-FixN2 × T-InsertColumnInlay O-44b 合并口径：文件名**唯一**（每次预热换名，见上）且**由
+        // inlay 作用域锚点同一份常量生成**——锚点靠文件名形态判定「是不是本面板预览编辑器」，
+        // 名字来源与形态判据同处 [PreviewInlayScope]，两处各自硬编码字面量会在改名时静默打穿锚点
+        // （inlay 不报错，只是永不出现）。
         val f = java.io.File(dir, nextPreviewTempFileName())
         val existing = com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByIoFile(f)
         if (existing != null) {
@@ -1146,6 +1162,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
+     * T-PSG-04（N-33）：`?` 位点数与参数条数对账的**非阻断**标注。
+     *
+     * 结论由 [backfillParamsBySource] 在回填时算出（串感知位点数 vs 参数条数），此处排在两道
+     * 确认门之后、快照登记/执行之前读走并如实登记日志——不弹窗、不中止（我方既有档位是确认/标注，
+     * 不是拒绝）。产物侧的同款对账标注见 `CopyExecutableSqlAction` 的头部标记。
+     */
+    private fun warnOnPlaceholderMismatch() {
+        val mismatch = placeholderReconciliation ?: return
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .warn("[T-PSG-04] executeSql: $mismatch")
+    }
+
+    /**
      * 执行 SQL（M36）：
      *  1. SQL 类型分类 → 非查询语句二次确认
      *  2. 创建临时上下文文件 → 原生数据源弹窗 → 选中后自动执行
@@ -1185,6 +1214,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-PC2-04（D1=B）：签名类型未识别参数确认门（D1=B 的「执行/EXPLAIN 前提示一次」——
         // 预览链保持放行；排在 `${}` 门之后、快照登记/执行之前，NO 直接中止）
         if (!confirmUnknownParams(proj)) return
+        // T-PSG-04（N-33）：`?` 位点数与参数条数对账——与上面两道确认门同址，但**不阻断**
+        // （不等时只如实登记日志；产物侧的标注见 CopyExecutableSqlAction 头部标记形态）
+        warnOnPlaceholderMismatch()
         // T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（回滚弹窗据此提供粘贴回填工作流）
         registerRollbackSnapshotIfNeeded(sql, null)
 
@@ -1340,6 +1372,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (!confirmDollarRawSegments(proj)) return
         // T-PC2-04（D1=B）：EXPLAIN 同门控（旁路不得绕开执行闸门，与 T-IG-03 同款姿态）
         if (!confirmUnknownParams(proj)) return
+        // T-PSG-04（N-33）：对账非阻断标注与 executeSql 同址同款（EXPLAIN 也是执行旁路）
+        warnOnPlaceholderMismatch()
         resultPanel.showLoading()
         SqlExecutor.execute(
             proj, explainSql, null, true,
@@ -2050,6 +2084,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         editor?.putUserData(SqlCompletionContext.KEY, ctx)
         psiFile?.putUserData(SqlCompletionContext.KEY, ctx)
         editor?.document?.let { SqlCompletionContributor.registerContext(it, ctx) }
+        // T-InsertColumnInlay O-44b：预览语句类型载体随上下文一同刷新（同一收口，两处渲染路径都过这里）——
+        // INSERT 目标列 inlay 的语句类型闸门据此判定；非 XML 预览（xmlModel 为 null）写 null 即清除，
+        // 防复用编辑器上残留上一次预览的语句类型
+        attachPreviewStatementKind()
         // T-DbSchemaCompletion：预览实际输入面是原生控制台（Ultimate），它的上下文只在
         // onNativeEditorReady 挂过一次——不在此同步，schema 预热完成后控制台仍读旧上下文，
         // 库里独有的列照旧补不出来（且控制台端编辑器 userData 优先级高于 document 兜底）。
@@ -2057,6 +2095,23 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             console.putUserData(SqlCompletionContext.KEY, ctx)
             SqlCompletionContributor.registerContext(console.document, ctx)
         }
+    }
+
+    /**
+     * T-InsertColumnInlay O-44b：把当前预览的语句类型写到预览编辑器（Editor + PSI 文件双载体）。
+     *
+     * 这是 `xmlModel.kind` 的**首个读点**（此前零消费者）——INSERT 目标列 inlay 的语句类型闸门
+     * 由 provider 读该载体判定，`kind != INSERT` 即零提示。取 `xmlModel` 而非 `SqlTypeClassifier`：
+     * 语句类型是解析期事实（`XmlMapperParser.kindOf`），非 XML 预览链无此模型（写 null = 不提示，
+     * 见计划 §二 非目标与 provider KDoc 的边界登记）。
+     *
+     * 写 null 而非「不写」：预览编辑器在预览切换间被复用（`showSql` 的 existing 分支），
+     * 残留上一次预览的语句类型会让复用编辑器继续按旧类型产提示。
+     */
+    private fun attachPreviewStatementKind(target: Editor? = editor) {
+        val kind = current?.xmlModel?.kind
+        target?.let { PreviewInlayScope.attach(it, kind) }
+        psiFile?.let { PreviewInlayScope.attach(it, kind) }
     }
 
     /**
@@ -2724,6 +2779,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val ctx = buildCompletionContext()
         created.putUserData(SqlCompletionContext.KEY, ctx)
         psiFile?.putUserData(SqlCompletionContext.KEY, ctx)
+        // T-InsertColumnInlay O-44b：新编辑器同样写语句类型载体（复用路径由 refreshCompletionContext
+        // 覆盖，新建路径在此覆盖——两条路径都必须写，漏一条即该路径上 inlay 静默不出现）。
+        // 显式传 created：此处 editor 字段仍指向上一个编辑器，默认取字段会写错对象
+        attachPreviewStatementKind(created)
         // M34 回归修复：三级回退的 Document→Context 映射须在此登记（首次创建时 editor 尚不存在，
         // refreshCompletionContext 的 editor?.document 为 null，只能在此写入）——否则 commitDocument
         // 重建 PSI 后补全落入空映射，实体表/列补全静默失效（documentContexts 恒空、level 3 死路径）。
@@ -2738,6 +2797,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             settings.isFoldingOutlineShown = true
             settings.isIndentGuidesShown = false
             settings.isAdditionalPageAtBottom = false
+            // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+            EditorWhitespaceSettings.applyTo(this)
             setPlaceholder(previewEmptyHint) // T-UxOnboard T-UX-02：空态提示原生件（LogToSqlPanel T-UN-14 同款）
         }
         editorHolder.removeAll()
@@ -2801,7 +2862,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             val fileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getStdFileType("SQL")
             val psi = com.intellij.openapi.application.ReadAction.compute<PsiFile, Throwable> {
                 com.intellij.psi.PsiFileFactory.getInstance(proj)
-                    .createFileFromText("mpsql-preview-memory.sql", fileType, sql)
+                    .createFileFromText(PreviewInlayScope.MEMORY_PREVIEW_FILE_NAME, fileType, sql)
             }
             psiFile = psi
             LOG.info("[M36] in-memory PSI preview document created (len=${sql.length})")
@@ -3826,23 +3887,34 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         return result
     }
 
+    /**
+     * T-PSG-03（N-33）：按 source 回填 `?` 占位符——位点判定走 [placeholderPositions]
+     * （string-aware），字符串字面量与 `--` / 块注释内的 `?` 不再被替换（改前朴素逐字符
+     * `c == '?'` 会错位：引号内 `?` 吃掉了本属真占位符的参数值）。
+     *
+     * 值渲染语义不变（[renderParamValue] / [renderSingleValue] 一行未动）；不含这类 `?` 的
+     * SQL 回填结果与改前逐字节一致。
+     *
+     * T-PSG-04：同一趟记下「位点数 vs 参数条数」对账结论（[placeholderReconciliation]），
+     * 执行前由 [warnOnPlaceholderMismatch] 如实标注——不阻断。
+     */
     private fun backfillParamsBySource(sql: String, sources: List<String>, hints: List<ParamHint> = emptyList()): String {
         if (sources.isEmpty()) return sql
+        val positions = placeholderPositions(sql)
+        placeholderReconciliation = PlaceholderCardinality.mismatchMarker(positions.size, sources.size)
+        if (positions.isEmpty()) return sql
         val sb = StringBuilder(sql.length + 32)
         var paramIndex = 0
-        var i = 0
-        while (i < sql.length) {
-            val c = sql[i]
-            if (c == '?') {
-                val source = sources.getOrNull(paramIndex)
-                val v = source?.let { paramValues[it] }
-                sb.append(renderParamValue(v, hints.getOrNull(paramIndex), source))
-                paramIndex++
-            } else {
-                sb.append(c)
-            }
-            i++
+        var prev = 0
+        for (pos in positions) {
+            sb.append(sql, prev, pos)
+            val source = sources.getOrNull(paramIndex)
+            val v = source?.let { paramValues[it] }
+            sb.append(renderParamValue(v, hints.getOrNull(paramIndex), source))
+            paramIndex++
+            prev = pos + 1
         }
+        sb.append(sql, prev, sql.length)
         return sb.toString()
     }
 
@@ -4125,6 +4197,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // ------------------------------------------------------------------
 
     internal fun editorForTest(): Editor? = editor
+
+    /** T-PSG-04 测试缝：最近一次回填的「位点数 vs 参数条数」对账标注（相等为 null）。 */
+    internal fun placeholderReconciliationForTest(): String? = placeholderReconciliation
 
     /** T-PreviewConsoleFmt 测试缝：模拟控制台文档已就绪（nativeDoc 指向该文档）。 */
     internal fun markNativeDocForTest(doc: com.intellij.openapi.editor.Document) {
@@ -4431,7 +4506,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         const val PREWARM_WAIT_MS = 500L
 
         /**
-         * T-FixN2：预览临时文件名形态——`mpsql-preview-<pid>-<seq>.sql`（例 `mpsql-preview-12480-3.sql`）。
+         * T-FixN2 × T-InsertColumnInlay O-44b：生成下一次预热的唯一临时文件名。
+         *
+         * **形态（`mpsql-preview-<pid>-<seq>.sql`，例 `mpsql-preview-12480-3.sql`）的唯一来源是
+         * [PreviewInlayScope]**：名字由该对象按「形态常量 + 形态判据」同处一地给出，本面板只供运行期
+         * 变量（pid / 序号）。**为什么必须同源**：inlay 作用域锚点靠文件名判定「这个编辑器是不是本
+         * 面板预览编辑器」，而一级预览文件名每轮预热都不同（见下），故锚点按**形态**匹配——两侧各自
+         * 硬编码字面量会在改名时静默打穿锚点（锚点不报错，只是 inlay 永不出现）。
          *
          * **为什么每次预热必须换名**：固定名（原 `mpsql-preview.sql`）下预热重写同一路径，而该路径
          * 的 document 里存着上一轮装配写入的真 SQL（未落盘）→ 平台 `MemoryDiskConflictResolver`
@@ -4445,8 +4526,6 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
          * 只会走 [projectPreviewFile] 的兜底复用分支（无 document → 仍无冲突）。
          * 序号 + pid 都是可读、可定位的：目录里一眼看出「哪个 IDE 进程的第几次预览」。
          */
-        private const val PREVIEW_TEMP_FILE_PREFIX = "mpsql-preview-"
-        private const val PREVIEW_TEMP_FILE_EXT = ".sql"
 
         /** T-FixN2：本 IDE 进程号（文件名的会话段；取不到退化为 `0`，仍是合法文件名）。 */
         private val PREVIEW_TEMP_FILE_OWNER: String =
@@ -4455,10 +4534,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         /** T-FixN2：本 JVM 内预览序号（跨面板共享，保证同进程内每个预热文件名唯一）。 */
         private val PREVIEW_TEMP_FILE_SEQ = java.util.concurrent.atomic.AtomicInteger(0)
 
-        /** T-FixN2：生成下一次预热的唯一临时文件名（见 [PREVIEW_TEMP_FILE_PREFIX] 的形态说明）。 */
-        internal fun nextPreviewTempFileName(): String =
-            PREVIEW_TEMP_FILE_PREFIX + PREVIEW_TEMP_FILE_OWNER + "-" +
-                PREVIEW_TEMP_FILE_SEQ.incrementAndGet() + PREVIEW_TEMP_FILE_EXT
+        /** T-FixN2：生成下一次预热的唯一临时文件名（形态与判据同源，见 [PreviewInlayScope]）。 */
+        internal fun nextPreviewTempFileName(): String = PreviewInlayScope.previewTempFileName(
+            PREVIEW_TEMP_FILE_OWNER,
+            PREVIEW_TEMP_FILE_SEQ.incrementAndGet(),
+        )
 
         /**
          * T-FixN2：预览文件的方言映射对象——**父目录**（取不到父目录时退回文件本身，语义同改动前）。

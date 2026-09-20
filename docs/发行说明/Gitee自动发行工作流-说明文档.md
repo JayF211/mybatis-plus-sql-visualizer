@@ -80,6 +80,27 @@ description / 市场页定位是纯能力陈列，不承担「最近更新」播
   `git tag {ver} && git push origin master && git push origin {ver}`。
   标签先推远端，Gitee API 建发行版时才能引用。
 
+### 已发布段准入约定
+
+已发布段（`## [{版本}] - {日期}` 块）只写该版本产物里真实存在的内容，判据是**产物**而不是提交：
+条目描述的能力必须能在该版本 tag 的树里找到落点。晚于 tag 落盘、只在 dev 上、或从未进过任何
+发行包的内容，一律留在 `[Unreleased]`，等真随某次发行交付后再随发行块转正。本节是「范围核算」
+节的镜像——那边管「tag 之前的提交是否都算本版」，本节管「已发布段的文字是否都算本版」。
+
+- **合并 dev 的 `[Unreleased]` 块进已发布段时，逐条核对产物**。dev/master 双向合并会把 dev 上
+  累积的未发行块折进已发布段：2026-09-18 事故即此形态——`f44cf0a` 把 dev 的 `[Unreleased]` 折入
+  `[2026.9.18]`，12 行 MCP 条目写进了一个产物里根本没有 MCP 的版本块（而该版本其实从未发布过，
+  三处都没有）。核对手段按条目的路径特征选，如 MCP 能力线：
+  `git ls-tree -r --name-only <tag> | grep -c "^src/main/kotlin/.*/mcp/"`（`mcp-optional.xml` 同理）；
+  条目没有路径特征时，用能力入口类名或 EP 名在 tag 树里 grep 一次，取不到就不许留在已发布段。
+- **发行前确认 tag 真的建了**。发行提交（版本号 + CHANGELOG + 八处同步）只是「准备发行」，
+  没有 `git tag` 就没有产物，Gitee 发行版与 Marketplace 也无从建起。历轮把发行提交 `ed43cc0`
+  读成「Gitee 已发 v2026.9.18」，断供两周无人发现。`git tag -l {版本号}` 与
+  `git ls-remote --tags origin` 两处都查得到，才算这个版本存在（总流程第 ⑤ 步不可跳）。
+- **已发布段的失实无法靠改文档消掉**：版本真发出去之后，段内文字会随 changeNotes 与 Gitee
+  发行版正文一起公开。发现失实只能在下一个发行块里如实说明，历史段不改写——历史段是发行记录，
+  不是待修文本。
+
 ## 三、Gitee API 发布（本次实证端点与参数）
 
 鉴权一律 `access_token` 参数（Personal Access Token，需 projects 权限）。

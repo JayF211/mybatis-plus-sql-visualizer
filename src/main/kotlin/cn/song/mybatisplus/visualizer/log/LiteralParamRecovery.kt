@@ -36,8 +36,8 @@ internal const val MAX_RECOVERED_PARAMS = 32
  *   MySQL `'don\'t'` 会错切出尾反斜杠片段）——面板空值输入渲染为 `?`，无法逐字符往返；
  * - 非纯数字 token 不识别（`1abc`/`0x1F`/`1E5` 后随词字符）；
  * - 超过 [MAX_RECOVERED_PARAMS] 个候选整体返回 null；
- * - 注释（`--` 行注释 / 块注释）与字符串内的引号不参与（扫描状态机与 [placeholderPositions]
- *   同形态），未闭合字符串到行尾丢弃。
+ * - 注释（`--` 行注释 / 块注释）与字符串内的引号不参与（扫描状态机与
+ *   [cn.song.mybatisplus.visualizer.sql.placeholderPositions] 同形态），未闭合字符串到行尾丢弃。
  */
 internal fun recoverLiteralParams(sql: String): LiteralParamRecovery? {
     if (sql.none { it == '\'' || it.isDigit() }) return null
@@ -199,8 +199,9 @@ internal fun recoverLiteralParams(sql: String): LiteralParamRecovery? {
         }
         append(sql, prev, sql.length)
     }
-    // 预览面板回填按 `?` 字符朴素替换（backfillParamsBySource）：改写后的 SQL 里若还残留
-    // 非参数 `?`（注释内等），回填会错位——直接放弃
+    // 改写后的 SQL 里若还残留非参数 `?`（注释内等），说明字面量改写与占位符口径不自洽——
+    // 直接放弃（保守保险；T-PSG 起面板回填已改串感知、不再因注释内 `?` 错位，但本闸门
+    // 守的是「改写结果自洽」这条输入侧不变式，维持不放宽）
     if (placeholderSql.count { it == '?' } != kept.size) return null
 
     val sources = (1..kept.size).map { "param$it" }

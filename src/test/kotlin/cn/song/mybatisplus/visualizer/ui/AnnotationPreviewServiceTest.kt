@@ -1,9 +1,12 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.xml.ParamKind
 import com.intellij.psi.PsiAnnotation
+import com.intellij.psi.PsiMethod
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -277,5 +280,58 @@ class AnnotationPreviewServiceTest : BasePlatformTestCase() {
             listOf("selectById"),
             result.map { methodNameOf(it) },
         )
+    }
+    // ------------------------------------------------------------------
+    // T-FCA-02（N-32）：foreach 集合快捷别名——走预览绑定渠道，不并入 paramTypes 键序
+    // ------------------------------------------------------------------
+
+    /** 单 List 参数无 @Param（真引擎会包装成 ParamMap 的形态）+ `<foreach collection='list'>`。 */
+    private val collectionAliasMapper = """
+        import org.apache.ibatis.annotations.Select;
+
+        public interface ListMapper {
+            @Select({"<script>", "SELECT * FROM t WHERE id IN", "<foreach collection='list' item='id' open='(' separator=',' close=')'>#{id}</foreach>", "</script>"})
+            java.util.List<Long> selectByIds(java.util.List<Long> ids);
+        }
+    """.trimIndent()
+
+    private fun methodOf(name: String): PsiMethod =
+        PsiTreeUtil.findChildrenOfType(myFixture.file, PsiMethod::class.java).first { it.name == name }
+
+    /**
+     * 别名只在 [AnnotationSqlPreviewService.previewParamTypes]（预览绑定渠道）里；
+     * [AnnotationSqlPreviewService.paramTypes] 的**键序**是补全候选来源（test 与 collection 共用），
+     * 不得含别名——本用例是那条边界的判别器。
+     */
+    fun testCollectionAliasOnlyInPreviewParamTypes() {
+        myFixture.configureByText("ListMapper.java", collectionAliasMapper)
+        val method = methodOf("selectByIds")
+        val named = AnnotationSqlPreviewService.paramTypes(method)
+        assertFalse("paramTypes（补全候选来源）不得含集合别名：$named", named.containsKey("list"))
+        assertFalse(named.containsKey("collection"))
+        val preview = AnnotationSqlPreviewService.previewParamTypes(method)
+        assertEquals(ParamKind.COLLECTION, preview["list"]?.kind)
+        assertEquals(ParamKind.COLLECTION, preview["collection"]?.kind)
+        assertFalse("List 参数不产 array 键", preview.containsKey("array"))
+        assertEquals("命名键照常保留", ParamKind.COLLECTION, preview["ids"]?.kind)
+    }
+
+    /**
+     * 闭环：注解 `<script>` 里 `collection="list"` 的 foreach 正常展开。
+     *
+     * 注意**展开断言不是别名键的判别器**：面板对 collection 表达式**原文全文注入** mock 迭代
+     * （`XmlPreviewModel.mockBindings` 的 `bindings[view.collectionExpr]`），`collection="list"` 在预览里
+     * 本来就能展开（T-FCA 计划 §一 口径修正 1）；别名键走另一条渠道（模型参数属性），判别器是同用例末的
+     * `paramProps` 断言——把调用点退回 `paramTypes` 即红。
+     */
+    fun testCollectionAliasExpandsForeachInAnnotationPreview() {
+        myFixture.configureByText("ListMapper.java", collectionAliasMapper)
+        val result = AnnotationSqlPreviewService.preview(annotationOf("selectByIds"), project)
+        assertNotNull(result)
+        assertEquals("SELECT * FROM t WHERE id IN ( ? , ? )", compact(result!!.sql))
+        assertEquals(listOf("__frch_id_0", "__frch_id_1"), result.unresolvedParams)
+        assertNull(result.warning)
+        val props = result.xmlModel!!.paramProps
+        assertTrue("别名键应进模型参数属性（_parameter 属性 + 顶层变量双写）：$props", props.containsAll(listOf("list", "collection")))
     }
 }
