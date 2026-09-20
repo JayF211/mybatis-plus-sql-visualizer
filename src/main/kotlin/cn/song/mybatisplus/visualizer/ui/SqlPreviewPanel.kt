@@ -567,6 +567,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-StabilityTail：把「项目开始销毁」接到取消门——池线程不得比项目活得更久
         bindPrewarmToProjectLifecycle()
         ApplicationManager.getApplication().executeOnPooledThread {
+            // T-PrewarmBudget（2026-09-20）：预热**自身耗时**打点起点——此前全链无完成打点，
+            // 真机实测报告只能靠「方言映射行出现」与「临时文件被删」两条间接判据夹逼出区间
+            // （最紧一次 ∈ (280ms, 1071ms]），无法定 `PREWARM_WAIT_MS` 预算。本打点即补这个洞：
+            // 预热完成/失败时各记一行带耗时，用于在空闲机取样本后定预算。
+            val prewarmStartedAt = System.nanoTime()
             if (previewTempFile != null || prewarmAbandoned()) {
                 await.fail(IllegalStateException("prewarm skipped: disposed or already prepared"))
                 return@executeOnPooledThread
@@ -578,7 +583,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 val io = projectPreviewFile() ?: run {
                     prewarmFailed = true
                     await.fail(IllegalStateException("project preview file unavailable"))
-                    LOG.warn("[M36] prewarm FAILED: project preview file unavailable (project/basePath null or mkdirs false)")
+                    LOG.warn("[M36] prewarm FAILED in ${prewarmElapsedMs(prewarmStartedAt)}ms: project preview file unavailable (project/basePath null or mkdirs false)")
                     return@executeOnPooledThread
                 }
                 // T-GifRerecord：VFS 忙时 refreshAndFindFileByIoFile 偶发查不到新文件（2026.2 沙盒
@@ -595,7 +600,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 if (vf == null) {
                     prewarmFailed = true
                     await.fail(IllegalStateException("VFS refresh null after ${retries + 1} tries"))
-                    LOG.warn("[M36] prewarm FAILED: VFS refresh null after ${retries + 1} tries (${io.path}, exists=${io.exists()})")
+                    LOG.warn("[M36] prewarm FAILED in ${prewarmElapsedMs(prewarmStartedAt)}ms: VFS refresh null after ${retries + 1} tries (${io.path}, exists=${io.exists()})")
                     return@executeOnPooledThread
                 }
                 if (prewarmAbandoned()) {
@@ -631,15 +636,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     }
                     prewarmFailed = true
                     await.fail(IllegalStateException("PsiManager.findFile null for ${vf.name}"))
-                    LOG.warn("[M36] prewarm FAILED: PsiManager.findFile null for ${vf.name}")
+                    LOG.warn("[M36] prewarm FAILED in ${prewarmElapsedMs(prewarmStartedAt)}ms: PsiManager.findFile null for ${vf.name}")
                     return@executeOnPooledThread
                 }
                 previewTempFile = vf
-                publishPrewarmProduct(await, vf to psi)
+                publishPrewarmProduct(await, vf to psi, prewarmStartedAt)
             }.onFailure { e ->
                 prewarmFailed = true
                 await.fail(e)
-                LOG.warn("[M36] prewarm FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
+                LOG.warn(
+                    "[M36] prewarm FAILED in ${prewarmElapsedMs(prewarmStartedAt)}ms: " +
+                        "${e.javaClass.simpleName}: ${e.message}",
+                    e,
+                )
             }
         }
     }
@@ -657,10 +666,24 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun publishPrewarmProduct(
         await: PrewarmAwait<Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>>,
         product: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>,
+        startedAtNanos: Long,
     ) {
+        // T-PrewarmBudget（2026-09-20）：预热**成功**耗时打点——消费侧预算 `PREWARM_WAIT_MS` 只有在
+        // 「预热耗时 < 预算」时才可能走主路径；此前无此打点，预算取值只能靠间接夹逼。判读口径：
+        // 本行耗时 > PREWARM_WAIT_MS ⇒ 该次打开必然落 onFallback 降级（可与紧随其后的
+        // `[M36] in-memory PSI preview document created` 对照）。
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .info(
+                "[M36] prewarm done in ${prewarmElapsedMs(startedAtNanos)}ms " +
+                    "(file=${product.first.name}, psi=${product.second.name})",
+            )
         prewarmedTempFile = product
         await.complete(product)
     }
+
+    /** T-PrewarmBudget：预热打点用耗时（毫秒）；`nanoTime` 差值，不受系统时钟回拨影响。 */
+    private fun prewarmElapsedMs(startedAtNanos: Long): Long =
+        (System.nanoTime() - startedAtNanos) / 1_000_000L
 
     /**
      * T-StabilityTail：把「项目开始销毁」接到预热取消门（[prewarmAbandoned] 的项目侧判据）。
