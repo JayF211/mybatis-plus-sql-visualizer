@@ -15,6 +15,8 @@ import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
+import cn.song.mybatisplus.visualizer.sql.PlaceholderCardinality
+import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog
 import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction
@@ -355,6 +357,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // T-M25.3：错误信息复制按钮（warning 存在时可见，一键复制完整错误文本）
     private var errorCopyButton: JButton? = null
     private var currentWarning: String? = null
+
+    /**
+     * T-PSG-04（N-33）：最近一次参数回填的「`?` 位点数 vs 参数条数」对账标注——不等时非 null。
+     *
+     * 只在 [backfillParamsBySource] 里按串感知位点数与 sources 条数计算（每次回填都重算，不留
+     * 陈旧值）；执行前由 [warnOnPlaceholderMismatch] 读走并如实登记日志。**不阻断**任何流程
+     * （与我方既有 `${}` 闸门「确认/标注」档一致，不引入拒绝档）。
+     */
+    private var placeholderReconciliation: String? = null
 
     // T-PreviewUx-Pack #2：诚实降级横幅——渲染警示（RENDER_WARNING）与 T-PreviewExecDs
     // 降级链层级提示（DEGRADED）统一收口；降级提示优先级高于渲染警示（见 DegradationBanner.Kind）
@@ -1021,6 +1032,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
+     * T-PSG-04（N-33）：`?` 位点数与参数条数对账的**非阻断**标注。
+     *
+     * 结论由 [backfillParamsBySource] 在回填时算出（串感知位点数 vs 参数条数），此处排在两道
+     * 确认门之后、快照登记/执行之前读走并如实登记日志——不弹窗、不中止（我方既有档位是确认/标注，
+     * 不是拒绝）。产物侧的同款对账标注见 `CopyExecutableSqlAction` 的头部标记。
+     */
+    private fun warnOnPlaceholderMismatch() {
+        val mismatch = placeholderReconciliation ?: return
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .warn("[T-PSG-04] executeSql: $mismatch")
+    }
+
+    /**
      * 执行 SQL（M36）：
      *  1. SQL 类型分类 → 非查询语句二次确认
      *  2. 创建临时上下文文件 → 原生数据源弹窗 → 选中后自动执行
@@ -1060,6 +1084,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-PC2-04（D1=B）：签名类型未识别参数确认门（D1=B 的「执行/EXPLAIN 前提示一次」——
         // 预览链保持放行；排在 `${}` 门之后、快照登记/执行之前，NO 直接中止）
         if (!confirmUnknownParams(proj)) return
+        // T-PSG-04（N-33）：`?` 位点数与参数条数对账——与上面两道确认门同址，但**不阻断**
+        // （不等时只如实登记日志；产物侧的标注见 CopyExecutableSqlAction 头部标记形态）
+        warnOnPlaceholderMismatch()
         // T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（回滚弹窗据此提供粘贴回填工作流）
         registerRollbackSnapshotIfNeeded(sql, null)
 
@@ -1215,6 +1242,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (!confirmDollarRawSegments(proj)) return
         // T-PC2-04（D1=B）：EXPLAIN 同门控（旁路不得绕开执行闸门，与 T-IG-03 同款姿态）
         if (!confirmUnknownParams(proj)) return
+        // T-PSG-04（N-33）：对账非阻断标注与 executeSql 同址同款（EXPLAIN 也是执行旁路）
+        warnOnPlaceholderMismatch()
         resultPanel.showLoading()
         SqlExecutor.execute(
             proj, explainSql, null, true,
@@ -3622,23 +3651,34 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         return result
     }
 
+    /**
+     * T-PSG-03（N-33）：按 source 回填 `?` 占位符——位点判定走 [placeholderPositions]
+     * （string-aware），字符串字面量与 `--` / 块注释内的 `?` 不再被替换（改前朴素逐字符
+     * `c == '?'` 会错位：引号内 `?` 吃掉了本属真占位符的参数值）。
+     *
+     * 值渲染语义不变（[renderParamValue] / [renderSingleValue] 一行未动）；不含这类 `?` 的
+     * SQL 回填结果与改前逐字节一致。
+     *
+     * T-PSG-04：同一趟记下「位点数 vs 参数条数」对账结论（[placeholderReconciliation]），
+     * 执行前由 [warnOnPlaceholderMismatch] 如实标注——不阻断。
+     */
     private fun backfillParamsBySource(sql: String, sources: List<String>, hints: List<ParamHint> = emptyList()): String {
         if (sources.isEmpty()) return sql
+        val positions = placeholderPositions(sql)
+        placeholderReconciliation = PlaceholderCardinality.mismatchMarker(positions.size, sources.size)
+        if (positions.isEmpty()) return sql
         val sb = StringBuilder(sql.length + 32)
         var paramIndex = 0
-        var i = 0
-        while (i < sql.length) {
-            val c = sql[i]
-            if (c == '?') {
-                val source = sources.getOrNull(paramIndex)
-                val v = source?.let { paramValues[it] }
-                sb.append(renderParamValue(v, hints.getOrNull(paramIndex), source))
-                paramIndex++
-            } else {
-                sb.append(c)
-            }
-            i++
+        var prev = 0
+        for (pos in positions) {
+            sb.append(sql, prev, pos)
+            val source = sources.getOrNull(paramIndex)
+            val v = source?.let { paramValues[it] }
+            sb.append(renderParamValue(v, hints.getOrNull(paramIndex), source))
+            paramIndex++
+            prev = pos + 1
         }
+        sb.append(sql, prev, sql.length)
         return sb.toString()
     }
 
@@ -3914,6 +3954,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // ------------------------------------------------------------------
 
     internal fun editorForTest(): Editor? = editor
+
+    /** T-PSG-04 测试缝：最近一次回填的「位点数 vs 参数条数」对账标注（相等为 null）。 */
+    internal fun placeholderReconciliationForTest(): String? = placeholderReconciliation
 
     /** T-PreviewConsoleFmt 测试缝：模拟控制台文档已就绪（nativeDoc 指向该文档）。 */
     internal fun markNativeDocForTest(doc: com.intellij.openapi.editor.Document) {

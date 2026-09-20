@@ -1,7 +1,9 @@
 package cn.song.mybatisplus.visualizer.ui.components
 
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
+import cn.song.mybatisplus.visualizer.sql.PlaceholderCardinality
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper
+import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
@@ -60,9 +62,23 @@ class CopyExecutableSqlAction(private val project: Project?) {
             )
         }
 
+        // T-PSG-04（N-33）：`?` 位点数与参数条数对账——产物必然残留无参数可填的裸 `?` 时在头部
+        // 如实标注（不阻断，形态与下方 `${}` raw 段标记同款：`--` 注释行，不改产物可执行性）。
+        // 只认「占位符多于参数」这一方向：本链拼的是面板**已回填**文本，位点少于参数是常态
+        // （见 PlaceholderCardinality.excessPlaceholderMarker 的 KDoc），严格等值会天天误报。
+        val mismatch = if (sources.isEmpty()) {
+            null
+        } else {
+            PlaceholderCardinality.excessPlaceholderMarker(placeholderPositions(sql).size, sources.size)
+        }
+
         // T-InjectionGate T-IG-03：含 `${}` raw 段（解析期事实，见 PreviewResult.hasDollarRawSegments）
-        // 时产物头部加标记注释；无 raw 段产物逐字节不变
-        val product = if (panel.hasDollarRawSegments()) "$DOLLAR_RAW_MARKER\n$executableSql" else executableSql
+        // 时产物头部加标记注释；无标记时产物逐字节不变
+        val markers = buildList {
+            if (panel.hasDollarRawSegments()) add(DOLLAR_RAW_MARKER)
+            mismatch?.let { add(it) }
+        }
+        val product = if (markers.isEmpty()) executableSql else markers.joinToString("\n") + "\n" + executableSql
 
         copyToClipboard(product)
 
