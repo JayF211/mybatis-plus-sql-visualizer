@@ -406,7 +406,13 @@ object RollbackSqlGenerator {
         }
         if (sb.isNotEmpty()) statements.add(flushInsertBatch(sb, table, columnList))
         val warnings = mutableListOf<RollbackWarning>()
-        if (rows.size >= SNAPSHOT_ROW_LIMIT) warnings += RollbackWarning("rollback.warn.snapshotRowLimit", listOf(rows.size.toString()))
+        // 文案含两个占位符（{0} 行数 / {1} 上限）——曾只传 {0}，弹窗会原样显示「上限 {1}」
+        if (rows.size >= SNAPSHOT_ROW_LIMIT) {
+            warnings += RollbackWarning(
+                "rollback.warn.snapshotRowLimit",
+                listOf(rows.size.toString(), SNAPSHOT_ROW_LIMIT.toString()),
+            )
+        }
         warnings += RollbackWarning("rollback.warn.snapshotCompleteness")
         return RollbackResult(Rating.PARTIAL, statements, warnings, null, targetTable = table)
     }
