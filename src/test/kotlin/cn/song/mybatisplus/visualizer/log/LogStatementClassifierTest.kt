@@ -110,8 +110,13 @@ class LogStatementClassifierTest {
 
     @Test
     fun `条目缓存属性_不参与equals`() {
-        val a = LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList())
+        // T-FlakyTs（2026-09-21）：**固定 timestamp**——`LogSqlEntry.timestamp` 默认取
+        // `System.currentTimeMillis()`（`LogSqlModels.kt:46`），而 timestamp 参与 equals；两次构造
+        // 跨过 1ms 边界就会假红（实测见过 1789926554606 vs …607）。本用例的本意只是断言
+        // `statementType` 是 body 内属性、不进 equals，不该顺带比时间戳（引入者 `641c815` T-CrudColor）。
+        val ts = 1_700_000_000_000L
+        val a = LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(), timestamp = ts)
         assertEquals("两个同内容条目应相等：statementType 是 body 内属性，不进 equals",
-            a, LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList()))
+            a, LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(), timestamp = ts))
     }
 }
