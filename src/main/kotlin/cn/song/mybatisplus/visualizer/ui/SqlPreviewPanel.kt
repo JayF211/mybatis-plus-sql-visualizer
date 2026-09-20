@@ -218,6 +218,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** M34 回归修复：预览 PSI 的临时 VirtualFile（PsiDocumentManager 追踪需真实 VFS 文件），releaseEditor 时删除。 */
     @Volatile
     private var previewTempFile: com.intellij.openapi.vfs.VirtualFile? = null
+    /**
+     * T-FixN2：本面板**已创建**的预览临时文件登记表（[projectPreviewFile] 建文件即登记，
+     * [releaseEditor] 统一回收）。与 [previewTempFile] 的分工：后者是「当前在用/最近一次预热」
+     * 的那一个（唯一名字后仍可能被竞态里晚到的预热覆盖），本表是「本面板创建过的全部」——
+     * 覆盖「预热已发布但从未被装配消费」与「两次预热竞态中晚到的那一个」两类无主文件。
+     *
+     * 只登记本面板自己创建的文件（含跨会话同名残留的兜底复用分支），故 [releaseEditor] 的删除
+     * **不会**误删其它面板/其它 IDE 会话正在使用的预览文件（同项目多开进程各有自己的 pid 段）。
+     */
+    private val previewTempFilesCreated = java.util.concurrent.ConcurrentHashMap.newKeySet<java.io.File>()
     /** T-M36.6-03：后台预热产物（vf+PSI 就绪对），createEditor 优先消费——EDT 零慢操作。 */
     @Volatile
     private var prewarmedTempFile: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? = null
@@ -245,7 +255,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 不再取服务。面板 dispose 时解除登记（不留指向本面板的项目树引用）；null = 未挂或已解除。
      */
     private var prewarmLifecycleGate: Disposable? = null
-    /** T-PreviewExecDs-01c：已 setMapping 方言的预览 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。 */
+    /** T-PreviewExecDs-01c：已 setMapping 方言的预览 vf（同对象幂等短路，避免每次预览重设方言触发 push all dumb）。
+     *  T-FixN2 起该 vf 是**预览目录**（不再是单个文件）——见 [mapPreviewDialectBeforePsi]。 */
     @Volatile
     private var previewDialectMappedVf: com.intellij.openapi.vfs.VirtualFile? = null
     /** F-46：当前代码位置（文件名:行号），来源列默认值；null 表示未知（日志/历史等无锚点场景）。 */
@@ -671,10 +682,25 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun prewarmAbandoned(): Boolean = previewDisposed || project?.isDisposed == true
 
     /**
-     * T-PreviewExecDs-01a：项目内预览临时文件——`<project>/.idea/sql-visualizer/preview/mpsql-preview.sql`。
+     * T-PreviewExecDs-01a：项目内预览临时文件——`<project>/.idea/sql-visualizer/preview/`。
      * 独立子目录（exec/ 互不污染，同 M36.5.13 语义）。文件在项目内容内，Database 插件才能解析
      * schema 补全/注释。VFS 安全写入三态（document 驱动 > setBinaryContent > FileUtil 兜底），
      * 杜绝 MemoryDiskConflictResolver 的 File Cache Conflict 弹窗（exec 路径 M36.5.13 同款）。
+     *
+     * T-FixN2：文件名由固定 `mpsql-preview.sql` 改为**每次预热唯一**（见 [nextPreviewTempFileName]）。
+     * 固定名的缺陷链（真机必现，第二轮复核 3 次询问/2 次弹窗）：预热重写同一路径，而上一轮装配
+     * 写进该文件 document 的真 SQL **从未落盘**（`assemblePreviewEditor` 只 `setText`，该文档不走
+     * `saveDocument`），于是磁盘恒为预热占位空内容 + 内存文档是「已修改未保存」；平台
+     * `MemoryDiskConflictResolver.beforeContentChange` 判据（243 sources 实证）正是
+     * 「VFileContentChangeEvent 且该路径有 cached document 且 isDocumentUnsaved 且
+     * documentStamp != oldFileStamp」——三条全中 → 弹模态「File Cache Conflict」抢焦点；
+     * 用户选「Load File System Changes」即 `reloadFromDisk(document)` 把内存里的真 SQL 换成磁盘
+     * 的占位空内容（表现为编辑区只剩占位文案，点【刷新】重新渲染才恢复）。
+     * 唯一文件名让每次预热都落在**没有任何 document 的全新路径**上 → 首次创建裸写安全
+     * （exec 路径 T-ExecDocSync3 同款判据：VFS 无该条目时不可能存在 document），冲突链从根上消失。
+     * existing 分支保留为兜底（跨会话残留的同名文件 / 同 pid 复用），仍是 VFS 安全写三态。
+     *
+     * 建文件即登记进 [previewTempFilesCreated]，由 [releaseEditor] 回收（本面板文件数不随预览次数增长）。
      */
     @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun projectPreviewFile(): java.io.File? {
@@ -685,7 +711,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}preview",
         )
         if (!dir.exists() && !dir.mkdirs()) return null
-        val f = java.io.File(dir, "mpsql-preview.sql")
+        val f = java.io.File(dir, nextPreviewTempFileName())
         val existing = com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByIoFile(f)
         if (existing != null) {
             val ok = runCatching {
@@ -699,9 +725,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 }
                 true
             }.getOrDefault(false)
-            if (ok) return f
+            if (ok) {
+                previewTempFilesCreated.add(f)
+                return f
+            }
         }
         com.intellij.openapi.util.io.FileUtil.writeToFile(f, "")
+        previewTempFilesCreated.add(f)
         return f
     }
 
@@ -710,7 +740,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * PSI 创建时即按映射方言解析，Generic SQL 下 Database 补全不触发。映射匹配与 exec 一致：
      * SqlDialectMappings.getAvailableValues() 里 language.id == "MySQL" 的实例（MyBatis-Plus 预览
      * 场景即 MySQL；插件自定义 Dialect 与 Database 方言映射无现成对应，硬编码与 exec 对齐）。
-     * 同 vf 已映射过即幂等短路（避免每次预览点 setMapping 触发 SqlDialectPusher push all dumb）。
+     * 同对象已映射过即幂等短路（避免每次预览点 setMapping 触发 SqlDialectPusher push all dumb）。
      *
      * T-ExecSlowOps F1：反射段收编进 [DialectPreMapping]，本方法仅保留「面板级进程内幂等短路」语义 +
      * 成功回写 [previewDialectMappedVf]。真机实锤：本方法在 [prewarmPreviewTempFile] 后台线程内调用，
@@ -719,11 +749,21 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * RuntimeExceptionWithAttachments（SEVERE ×3）。DialectPreMapping.ensureMapped 两段式：
      * 稳态（workspace.xml 映射幸存/本进程已设）读探测直接跳过，仅项目首见经 invokeLater 派 EDT 执行
      * 映射并 CountDownLatch 有界等待——映射写归 EDT、慢操作归 BGT，两侧 SEVERE 同消。
+     *
+     * T-FixN2：映射对象由「文件」改为**父目录**（文件名每次预热唯一后，按文件映射会让每个新文件名
+     * 都判「未映射」→ 每轮预热白付一次 setMapping/push all dumb，且 workspace.xml 的
+     * SqlDialectMappings 状态按文件路径逐个累积、只增不减）。平台 `PerFileMappingsBase.getMappingInner
+     * → getMappingForHierarchy` 自下而上逐级查表（243 sources 实证：`for (cur = file; cur != null;
+     * cur = cur.getParent())`），故**目录映射被其下所有文件继承**，一次映射覆盖全部预览文件
+     * （含每次新名字）；[previewDialectMappedVf] 随之记「已映射的那个目录 vf」，
+     * 身份判定（幂等短路）比较的是目录——目录 vf 在 VFS 里按路径唯一且本面板不删目录，跨预热稳定。
+     * 目录 vf 取不到（极端）时退回按文件映射，语义同改动前。
      */
     private fun mapPreviewDialectBeforePsi(proj: Project, vf: com.intellij.openapi.vfs.VirtualFile) {
-        val inProcessMapped = previewDialectMappedVf?.isValid == true && previewDialectMappedVf === vf
-        if (cn.song.mybatisplus.visualizer.execute.DialectPreMapping.ensureMapped(proj, vf, inProcessMapped)) {
-            previewDialectMappedVf = vf
+        val target = previewDialectMappingTarget(vf)
+        val inProcessMapped = previewDialectMappedVf?.isValid == true && previewDialectMappedVf === target
+        if (cn.song.mybatisplus.visualizer.execute.DialectPreMapping.ensureMapped(proj, target, inProcessMapped)) {
+            previewDialectMappedVf = target
         }
     }
 
@@ -2794,6 +2834,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // M34 回归修复：临时 SQL 文件删除（java.io 删除免 write action；deleteOnExit 兜底）
         previewTempFile?.let { vFile -> java.io.File(vFile.path).delete() }
         previewTempFile = null
+        // T-FixN2：唯一文件名后本面板**创建过的全部**预览临时文件统一回收——除上面那个「当前在用」
+        // 的以外，还含「预热已发布但从未被装配消费」（面板关闭/clear 早于消费）与「两次预热竞态中
+        // 晚到的那一个」（clear 时旧预热仍在途、previewTempFile 被后来者覆盖）两类无主文件，
+        // 否则 preview/ 目录会随预览次数只增不减。清理策略三选一取「按面板生命周期删除」：
+        // 保留上限/文件池两条都要跨面板判断「谁在用」（同项目多开进程另有自己的文件），
+        // 误删在用的预览文件会立刻复现 File Cache Conflict；本表只装本面板自己建的文件，天然无误删面。
+        previewTempFilesCreated.forEach { f -> runCatching { f.delete() } }
+        previewTempFilesCreated.clear()
         // T-M36.6-03：预热产物作废（面板重用时由 clear() 重新预热；dispose 由 previewDisposed 兜底）
         prewarmedTempFile = null
     }
@@ -4274,6 +4322,52 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
          * 60ms：预热线程已就绪（面板再开/热态）立刻命中走 PSI 主路径，冷启动第一拍直接降级
          * 纯内存编辑器不烧 EDT；预热完成后下次打开即自愈走回 PSI 高亮/补全路径。 */
         const val PREWARM_WAIT_MS = 60L
+
+        /**
+         * T-FixN2：预览临时文件名形态——`mpsql-preview-<pid>-<seq>.sql`（例 `mpsql-preview-12480-3.sql`）。
+         *
+         * **为什么每次预热必须换名**：固定名（原 `mpsql-preview.sql`）下预热重写同一路径，而该路径
+         * 的 document 里存着上一轮装配写入的真 SQL（未落盘）→ 平台 `MemoryDiskConflictResolver`
+         * 判定「内存与磁盘均变」→ 模态「File Cache Conflict」抢焦点；选「Load File System Changes」
+         * 还会把真 SQL 换成磁盘上的占位空内容。换名后每次预热落在全新路径（无任何 document），
+         * 冲突链从根上消失（详见 [projectPreviewFile]）。
+         *
+         * **为什么带 pid**：同项目可被多个 IDE 进程同时打开（各自一份本目录），进程内自增序号在
+         * 两个进程里会重号——重号会让「按面板生命周期删除」误删另一会话正在用的文件。
+         * pid 在**存活进程间唯一**，故存活会话之间不可能撞名；与已退出会话的同名残留相遇时
+         * 只会走 [projectPreviewFile] 的兜底复用分支（无 document → 仍无冲突）。
+         * 序号 + pid 都是可读、可定位的：目录里一眼看出「哪个 IDE 进程的第几次预览」。
+         */
+        private const val PREVIEW_TEMP_FILE_PREFIX = "mpsql-preview-"
+        private const val PREVIEW_TEMP_FILE_EXT = ".sql"
+
+        /** T-FixN2：本 IDE 进程号（文件名的会话段；取不到退化为 `0`，仍是合法文件名）。 */
+        private val PREVIEW_TEMP_FILE_OWNER: String =
+            runCatching { ProcessHandle.current().pid().toString() }.getOrDefault("0")
+
+        /** T-FixN2：本 JVM 内预览序号（跨面板共享，保证同进程内每个预热文件名唯一）。 */
+        private val PREVIEW_TEMP_FILE_SEQ = java.util.concurrent.atomic.AtomicInteger(0)
+
+        /** T-FixN2：生成下一次预热的唯一临时文件名（见 [PREVIEW_TEMP_FILE_PREFIX] 的形态说明）。 */
+        internal fun nextPreviewTempFileName(): String =
+            PREVIEW_TEMP_FILE_PREFIX + PREVIEW_TEMP_FILE_OWNER + "-" +
+                PREVIEW_TEMP_FILE_SEQ.incrementAndGet() + PREVIEW_TEMP_FILE_EXT
+
+        /**
+         * T-FixN2：预览文件的方言映射对象——**父目录**（取不到父目录时退回文件本身，语义同改动前）。
+         *
+         * 唯一文件名后按文件映射会让每个新名字都判「未映射」：每轮预热白付一次 setMapping
+         * （`SqlDialectPusher` push all dumb）+ workspace.xml 的 `SqlDialectMappings` 状态按文件路径
+         * 逐个累积。平台 `PerFileMappingsBase.getMappingInner → getMappingForHierarchy` 自下而上
+         * 逐级查表（`for (cur = file; cur != null; cur = cur.getParent())`），故目录映射被其下所有
+         * 文件继承（平台自身也按目录记账：`installDeleteUndo` 对 `file.isDirectory()` 显式收集其下
+         * 全部子条目），一次映射覆盖该目录下**全部**预览文件（含每轮的新名字）。
+         *
+         * 抽成 internal 纯函数仅为让「映射对象是目录、且目录 vf 实例跨文件名稳定」可直接单测断言
+         * （真机/单测环境无 Database 插件时 `SqlDialectMappings` 类不可加载，映射本身不可断言）。
+         */
+        internal fun previewDialectMappingTarget(vf: com.intellij.openapi.vfs.VirtualFile): com.intellij.openapi.vfs.VirtualFile =
+            vf.parent ?: vf
     }
 }
 
