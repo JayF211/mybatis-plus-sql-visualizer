@@ -1,5 +1,7 @@
 # T-StabilityTail 测试脆弱前置与分片顺序依赖及 PS5-02 显式传参 — 验收文档
 
+> **2026-09-20 防过期复核**：类名/工具名/入口路径已按当前 master 代码校正；全量 `testShards` 复跑 **5383/0/0/6 绿**。
+
 - 日期：2026-09-19
 - 任务编号：T-StabilityTail（T-ST-01 / T-ST-02 / T-ST-02d / T-ST-03）
 - 计划文档：`docs/开发计划/20260919-1817-T-StabilityTail-测试脆弱前置与分片顺序依赖及PS5-02显式传参-开发计划.md`
@@ -69,7 +71,7 @@
 
 T-PS5-02 的收益（一次大 DML 点击的最坏 4 次解析降到 1 次）已由 `execute/UnboundedWriteDetector.kt` 的 **AST 单槽**（`parseStatementsShared`）全数拿到，T-ST-03 只是把「隐式经缓存槽复用」改成「显式沿调用流传递」的形式统一，**无额外性能收益**。三条硬依据：
 
-1. **确认阶段不持有可复用产物**：`ExecuteConfirmMessages.build` 内部经 `detect` 解析后只回 findings（`WriteRisk`），AST 不外传；`build` 只回 `String`。真做须改 `execute/` 包**两个共享 API**，而它们另有 `LogToSqlPanel.executeStatement` 与 MCP `CheckSqlTool` / `MapperCheckTool` 两条链的消费者——超出本任务写集。
+1. **确认阶段不持有可复用产物**：`ExecuteConfirmMessages.build` 内部经 `detect` 解析后只回 findings（`WriteRisk`），AST 不外传；`build` 只回 `String`。真做须改 `execute/` 包**两个共享 API**，而它们另有 `LogToSqlPanel.executeStatement` 与 MCP `SqlVisualizerCheckSqlTool` / `SqlVisualizerMapperCheckTool` 两条链的消费者——超出本任务写集。
 2. **隐式前提去不掉**：`executeAdhocSql(dmlConfirmed = true)` 的回滚弹窗执行链**不走确认弹窗**，无确认阶段产物 → 入参只能可空、单槽兜底必须保留，即便改也只多一条并存路径。
 3. **收益已全量拿到**：面板内自取槽（`parseStatementsShared(cleaned)` → `generateFromParsedStatements`）读的是同一个槽，只把前提从「同文本命中」挪成「同文本命中」，零语义零性能变化。
 
@@ -230,7 +232,7 @@ wrapper 形态同样登记；②复位判定改「绑定承接名」（`hasBound
 
 - **决策=不做**，理由三条见 §一-4（改动面大于收益）。
 - **前提已留档**（`registerRollbackSnapshotIfNeeded` KDoc）：①确认阶段确以同一文本走过 `detect`；②`SqlCommentStripper.strip` **幂等**——这条依赖此前无人写出、也无用例覆盖，现由 `SqlPreviewPanelRollbackParseShapeTest` 的 7 种注释形态逐条钉住。两条前提任一失效的后果**只是多一次解析**，不影响回滚判定正确性。
-- **若日后要做**：出口是 `RollbackSqlGenerator.generateFromParsedStatements(cleaned, statements, pk)`；写集 = `execute/` 包两个共享 API（`ExecuteConfirmMessages.build` / `UnboundedWriteDetector.detect`）的签名，连带 `LogToSqlPanel.executeStatement` 与 MCP `CheckSqlTool` / `MapperCheckTool` 消费者。
+- **若日后要做**：出口是 `RollbackSqlGenerator.generateFromParsedStatements(cleaned, statements, pk)`；写集 = `execute/` 包两个共享 API（`ExecuteConfirmMessages.build` / `UnboundedWriteDetector.detect`）的签名，连带 `LogToSqlPanel.executeStatement` 与 MCP `SqlVisualizerCheckSqlTool` / `SqlVisualizerMapperCheckTool` 消费者。
 - **未测项**：单槽**并发命中率未测**——确认弹窗虽模态但 EDT 继续泵事件，别的链以别的文本填槽即 miss（该次点击解析 2 次）；后果仅性能，miss 分支已被探针自证覆盖。
 
 ### 2. T-ST-02 的收口缺口（登记，本批未做）
