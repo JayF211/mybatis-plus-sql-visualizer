@@ -95,16 +95,42 @@ T-FCA-04（先建真引擎对照场景，用它定键集——先红后绿）→
 
 ## 八、实施记录（实施后回填）
 
+分支 `t-round9`（基线 master `56c96d6`）。
+
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
-| T-FCA-04 | （实施后填） | 真引擎实测的确切键集须回填（可能推翻 T-FCA-01 的键集假设） |
-| T-FCA-01 | （实施后填） | 落点是否与 paramN 门槛同址、条件是否需调整须回填 |
-| T-FCA-02 | （实施后填） | 标注落位行号须回填 |
-| T-FCA-03 | （实施后填） | 候选排序与既有顺序保持情况须回填 |
-| T-FCA-05 | （实施后填） | 门禁读数须回填 |
+| T-FCA-04 | `81ddc08` | 一致面 25 → 28 条（P31 单 List 别名 `list`、P32 别名 `collection`、P33 单 `T[]` 别名 `array`）+ 新用例「别名键集钉」。**键集实测与计划转述一致**（见下）。**关键偏离**：驱动直连 `MappedStatement.getBoundSql`（绕过 `MapperMethod`），`ParamNameResolver` 的包装**不会自动发生**——真引擎侧必须由测试侧反射调引擎自身的 `wrapToMapIfCollection`（类位置按 3.5.19 `javap` 实测定为 `org.apache.ibatis.reflection.ParamNameResolver`，非旧版 `session` 包）。裸 List 参数下 `collection="list"` 实测抛 `java.lang.UnsupportedOperationException`（集合参数被 MetaObject 包成 `CollectionWrapper`，非 Map 参数无 `_parameter` fallback），该读数作为「别名键只由 ParamNameResolver 产生」的反向证据留在用例里。 |
+| T-FCA-01 | `ee8f508` | 落 `ui/XmlParamTypeResolver.collectionAliasTypes`，由 `resolveTypes` 末尾追加。**计划前提 2 证伪**：既有 `paramN` 门槛是「全部参数都有显式 `@Param`」（`:104`），与别名门槛「单参数 ∧ 无显式 `@Param`」**互补而非同址复用**，故独立成函数、不共用判定。额外收窄：`Iterable` 在既有 `COLLECTION_SIMPLE_NAMES` 里但**不是** `java.util.Collection`，真引擎不包装 → 显式排除（`NON_COLLECTION_SIMPLE_NAMES`）。 |
+| T-FCA-02 | `ee8f508` | 落 `ui/AnnotationSqlPreviewService.previewParamTypes`（`paramTypes` + 别名），两处预览调用点（`:102`/`:132`）改用。**偏离**：别名**刻意不并入 `paramTypes`** —— 该函数键序是补全候选来源（`XmlSqlCompletionContextResolver:122` 取 `keys` 作 `paramNames`，被 `test` 与 `collection` 共用），并入即污染 `test` 候选；别名改走「预览绑定」渠道，补全侧由 T-FCA-03 按属性收窄。规则标注（`mybatis-3.5.19-param-name-resolver-wrap-to-map-if-collection`）落两处 KDoc。 |
+| T-FCA-03 | `ee8f508` | `ui/highlight/XmlSqlCompletionContributor`：`addOgnlCompletions` 增 `collectionAliases` 形参，`collection` 属性为真、`test` 为假（**计划前提 3 成立且比担心更紧**：`:87` 的分派 `test`/`collection` 共用 `addOgnlCompletions`，故按属性名收窄）。快捷名**排在参数名与字段名之后**（用例逐项断言 `[entity, id, name, list, collection, array]`，既有顺序与内容不变）。三个名字无条件列出（本贡献器不做 PSI 签名解析，拿不到「单参数/集合形态」），确切键集由 `collectionAliasTypes` + 真引擎对照钉住。 |
+| T-FCA-05 | `ee8f508` | 用例：`HeavyXmlParamTypeResolverTest` +3（逐形态正向、门槛负向四类、预览联动）、`XmlSqlCompletionContributorTest` +2（候选与顺序、`test` 不污染）、`AnnotationPreviewServiceTest` +2（`previewParamTypes` 与 `paramTypes` 的边界判别、注解 `<script>` foreach 闭环）。定向读数见 §九。 |
+
+**真引擎实测键集（T-FCA-04 判据，`mybatis-3.5.19.jar` 隔离 loader 实调）**：`List` → `collection` + `list` + 实参名；`Collection` 非 `List`（Set/Queue 族）→ `collection` + 实参名（**无 `list`**）；`T[]` → `array` + 实参名（**无 `collection`**）；Map / POJO / 标量 → 原对象返回不包装；实参名缺席（`useActualParamName=false`）→ 仅 `collection` + `list`。**计划的键集假设全部成立**，未被推翻。
 
 **待验证前提（实施者先证伪再动手）**：
 
-1. **MyBatis 3.5.19 `wrapToMapIfCollection` 的确切键集**——`List` 是否同时生成 `collection` 与 `list` 两个键、`T[]` 是否只生成 `array`、`Collection`（非 List）是否只生成 `collection`。**本计划的键集来自竞品源码复刻的转述，未经我方真引擎实测**；T-FCA-04 先行就是为了证伪它。
-2. 「`paramN` 门槛同址可复用」的前提是「单参数无 `@Param`」这一条件在我方现有代码里已可判定（`ui/XmlParamTypeResolver.kt:104-108` 现有分支形态）——实施时须读该处全文确认，本计划只定位到行号区间。
-3. 「补全候选只影响 `collection` 属性」的前提是 `XmlSqlCompletionContributor.kt:141-144` 的作用域确实限定在该属性——实施时须确认上下文判定，否则会把快捷名灌进所有属性候选。
+1. **MyBatis 3.5.19 `wrapToMapIfCollection` 的确切键集**——`List` 是否同时生成 `collection` 与 `list` 两个键、`T[]` 是否只生成 `array`、`Collection`（非 List）是否只生成 `collection`。**本计划的键集来自竞品源码复刻的转述，未经我方真引擎实测**；T-FCA-04 先行就是为了证伪它。→ **成立**（实测见 §八键集，且与 `mybatis-3.5.19-sources.jar` 源码逐支一致）。
+2. 「`paramN` 门槛同址可复用」的前提是「单参数无 `@Param`」这一条件在我方现有代码里已可判定（`ui/XmlParamTypeResolver.kt:104-108` 现有分支形态）——实施时须读该处全文确认，本计划只定位到行号区间。→ **证伪**：`:104` 的条件是「全部参数都有显式 `@Param`」，与「单参数 ∧ 无 `@Param`」互补，不可复用（详见 §八 T-FCA-01 行）。
+3. 「补全候选只影响 `collection` 属性」的前提是 `XmlSqlCompletionContributor.kt:141-144` 的作用域确实限定在该属性——实施时须确认上下文判定，否则会把快捷名灌进所有属性候选。→ **成立但需显式收窄**：`:87` 是 `test` 与 `collection` 共用分支，直接在 `:141-144` 的 else 分支追加会同时灌进 `test`，已按属性名收窄并留反向用例。
+
+## 九、定向测试读数（实施后回填）
+
+| 读数 | 命令 / 范围 | 结果 |
+|------|------------|------|
+| T-FCA-04 先红 | `RealEngineFidelityTest`（键集钉首跑） | 红 1 条：`Map 参数不包装` 断言写错（`wrapToMapIfCollection` 对非集合**原样返回入参**，Map 入参返回值仍是 Map，不能用「是否 Map」判定）；改为引用同一判定后绿。裸 List 反向读数首跑也红（实际抛 `UnsupportedOperationException`，非推断的 `ReflectionException`），按实测改正后绿 |
+| T-FCA-04 后绿 | `RealEngineFidelityTest` | 5 用例 0 失败（一致面 28 条 + 已知差异 6 条 + 版本钉 + P20 归因 + 别名键集钉） |
+| 新增定向（正向） | `XmlSqlCompletionContributorTest` / `HeavyXmlParamTypeResolverTest` / `AnnotationPreviewServiceTest` / `RealEngineFidelityTest` | 15 / 15 / 14 / 5 用例，**0 失败 0 跳过**（共 49） |
+| 反向验证（三处修复分支同时摘除/放宽） | ① `resolveTypes` 去掉别名注入 ② 预览调用点退回 `paramTypes` ③ 补全收窄放宽为恒真 | 红 3 条，逐条对上：`testCollectionAliasKeysByParamShape`、`testCollectionAliasFeedsPreviewBindings`、`test15TestAttributeHasNoCollectionAliases`；注解侧判别器（`paramProps` 断言）单独复核亦红。还原后三文件 sha256 与改前一致、全绿 |
+| 既有相关类回归 | `ForeachSqlNodeTest` / `ForeachInnerIfErrorTest` / `XmlPreviewModelTest` / `XmlParamKindTest` / `XmlSqlCompletionContextResolverTest` / `HeavySqlCompletionContextResolverTest` / `UnknownParamGateTest` / `SqlPreviewPanelParamKindTest` / `AnnotationSqlCompletionContributorTest` / `XmlPreviewServiceTest` | 82 用例 0 失败 |
+| 全量 | `testShards` | **5412 / 0 / 0 / 6**（分片 1802 + 1964 + 1646，BUILD SUCCESSFUL，3m07s）。基线 5383/0/0/6 → 本路新增 8 例（Heavy +3、补全 +2、注解预览 +2、真引擎 +1）；余量为同工作树另一路（T-PlaceholderSpliceGate）的用例 |
+
+**注解侧「预览本来就能用」的实测确认**（计划 §一 口径修正 1 成立）：把预览调用点退回 `paramTypes` 后，注解 `<script>` 的 `collection="list"` foreach **照常展开**（面板对 collection 表达式原文全文注入 mock 迭代），别名键的真实增量是「`list`/`collection` 进模型参数属性与类型视图」——判别器因此改钉 `paramProps` 而非 SQL 文本。
+
+**未覆盖（如实登记）**：注解 `<script>` 内的 `collection` 属性补全**未加**快捷名——`AnnotationSqlCompletionContributor` 走的是 `SourceSqlSuggestionFactory.OGNL_ATTRIBUTE_PATTERN`（对 `<script>` 文本的单个正则，`test` 与 `collection` 不区分、拿不到属性名），要收窄须新增捕获组；计划 T-FCA-03 只点名 XML 贡献器，故未扩面。
+
+## 十、收口门禁（由 Astra 统一跑）
+
+`verifyGate` / `buildPlugin` / `verifyPlugin` 与 `testDatabase` 读数由收口阶段统一回填（本路按任务纪律不重复跑）。
+
+**文档计数漂移（未改，留收口处理）**：本路把一致面 25 条 → 28 条，以下三处 docs 的「31 场景 / 25 场景」计数已过期——`docs/架构设计/03-开发与测试指南.md:89`、`docs/架构设计/02-核心流程详解.md:267`、`docs/架构设计/01-项目架构总览.md:363`；`docs/调研报告/20260919-T-FidelityEval-自研与真引擎已知差异清单.md:38` 的「用例构成（4 个）」与 T-REC 计划里的「25 条一致面」表述同源受影响。
+

@@ -135,7 +135,7 @@ class XmlSqlCompletionContributor : CompletionContributor() {
      * 光标前有 `param.` 前缀（`[\w$]+\.\w*$`）→ 只补第二段字段名；否则参数名 + 字段名都补。
      *
      * T-FCA-03：@param collectionAliases 为真（`collection` 属性）时在既有候选**之后**追加 foreach
-     * 集合快捷名 [COLLECTION_ALIAS_NAMES]——排在参数名/字段名之后，既有序位与内容不变。
+     * 集合快捷名 [COLLECTION_ALIAS_NAMES]——排在参数名/字段名之后，既有顺序与内容不变。
      */
     private fun addOgnlCompletions(
         statementTag: XmlTag,
