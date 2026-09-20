@@ -3715,17 +3715,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         currentWarning = xmlWarning ?: result.warning
         val warningLine = currentWarning?.let { "   ⚠ $it" } ?: ""
-        // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示，悬停 tooltip 全文）
-        val stackLine = result.stackDigest?.let { sd ->
-            "   " + MpSqlVisualizerBundle.message("panel.meta.stackDigest") + " " +
-                (if (sd.length > 120) sd.substring(0, 120) + "…" else sd)
-        } ?: ""
+        // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示，悬停 tooltip 全文）。
+        // 文案组装抽为纯函数 [buildStackDigestMetaText]（同文件顶层，行为逐字不变）——§3.3 验收项
+        // 单测直断截断长度/截断标记/全文节点，无需真机目视。
+        val stackText = buildStackDigestMetaText(result.stackDigest)
         // T-SqlPerf：性能建议文案单独一行（HTML 换行）。
         // T-PreviewTopOverlap F3：原文分段缓存，label 文本按宽度预算重拼（applyMetaTruncation）
         metaLineText = meta + warningLine
         metaPerfSegments = buildPerfSegments(result)
-        metaLabel.toolTipText = meta + warningLine + stackLine +
-            (result.stackDigest?.let { "\n" + MpSqlVisualizerBundle.message("panel.meta.stackDigest") + " $it" } ?: "") +
+        metaLabel.toolTipText = meta + warningLine + stackText.inlineLine + stackText.tooltipTail +
             metaPerfSegments.joinToString("；") { it.text }
         metaLabel.foreground = if (currentWarning != null) {
             // T-DarkTheme：IDE 标准错误前景命名色（亮暗主题自适应；暗色下非亮红不刺眼）
@@ -4018,6 +4016,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun paramFieldForTest(index: Int): JBTextField? = paramFields.getOrNull(index)
     /** T-M24-04：元信息标签文本（警告断言用）。 */
     internal fun metaLabelForTest(): String = metaLabel.text
+
+    /**
+     * T-SourceJumpFunnel §3.3：元信息标签 tooltip（「悬停见完整链」断言用）。
+     *
+     * headless 下无法产生真实鼠标悬停，但 Swing 悬停展示的正是本属性文本，故断言它即锁定
+     * 悬停内容契约（真实悬停动作本身不在自动化范围）。
+     */
+    internal fun metaTooltipForTest(): String? = metaLabel.toolTipText
     /** T-M25.3：错误复制按钮（可见性断言用）。 */
     internal fun errorCopyButtonForTest(): JButton? = errorCopyButton
 
@@ -4171,4 +4177,45 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
          * 纯内存编辑器不烧 EDT；预热完成后下次打开即自愈走回 PSI 高亮/补全路径。 */
         const val PREWARM_WAIT_MS = 60L
     }
+}
+
+// ------------------------------------------------------------------
+// T-SourceJumpFunnel P2-2（§3.3 验收项单测抽取）：调用栈快照文案组装
+// ------------------------------------------------------------------
+
+/**
+ * 调用栈快照的两段文案产物（纯数据，无组件依赖）。
+ *
+ * @property inlineLine meta 提示行内联摘要（`   调用栈: <摘要>`，超长截断；无快照时为空串）
+ * @property tooltipTail 悬停 tooltip 追加的全文节点（`\n调用栈: <完整链>`；无快照时为空串）
+ */
+internal data class StackDigestMetaText(val inlineLine: String, val tooltipTail: String)
+
+/** 调用栈摘要字符上限：超过即截断到该长度并追加 [STACK_DIGEST_ELLIPSIS]。 */
+internal const val STACK_DIGEST_MAX_CHARS = 120
+
+/** 调用栈摘要截断标记。 */
+internal const val STACK_DIGEST_ELLIPSIS = "…"
+
+/**
+ * T-SourceJumpFunnel P2-2：把调用栈快照 [digest] 组装成「meta 行内联摘要（截断展示）」与
+ * 「tooltip 全文节点（完整链不截断）」两段文案；[digest] 为 null 时两段均为空串。
+ *
+ * 由 [SqlPreviewPanel.updateMeta] 调用（内联摘要进 tooltipText 首行，全文节点换行追加其后）。
+ * 抽出为顶层 internal 纯函数仅为让 §3.3 验收项（截断长度/截断标记/全文节点）可直接单测断言，
+ * 组装表达式与原内联实现逐字一致，不改任何展示行为。
+ */
+internal fun buildStackDigestMetaText(digest: String?): StackDigestMetaText {
+    if (digest == null) return StackDigestMetaText(inlineLine = "", tooltipTail = "")
+    val label = MpSqlVisualizerBundle.message("panel.meta.stackDigest")
+    val summary =
+        if (digest.length > STACK_DIGEST_MAX_CHARS) {
+            digest.substring(0, STACK_DIGEST_MAX_CHARS) + STACK_DIGEST_ELLIPSIS
+        } else {
+            digest
+        }
+    return StackDigestMetaText(
+        inlineLine = "   " + label + " " + summary,
+        tooltipTail = "\n" + label + " " + digest,
+    )
 }

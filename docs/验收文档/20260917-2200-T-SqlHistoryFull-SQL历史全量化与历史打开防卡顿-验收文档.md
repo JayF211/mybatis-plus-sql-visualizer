@@ -67,5 +67,5 @@
 ## 六、真机复验判定卡
 
 - [x] 列表未满 / 手动删除 / 清空后，历史仍含全部曾进列表的 SQL（§3.1） — ✅ 脚本化通过：SqlLogEntryBufferTest 47 例（未满逐条 stored / 覆盖淘汰 / 清空与删除单条 / 暂停过滤不触发）0 失败；写盘在 addEntry 成功点，clear/remove 不触碰 saver
-- [ ] 上千条历史文件双击打开，首屏快显后分块追加、不冻结（§3.2） — ⏳ 需真机：分批完整性有 HistorySqlLogPanelNavigationTest 11 例（首屏30+分块、顺序、无重复），但「不冻结」的 EDT 观感无计时基线
+- [x] 上千条历史文件双击打开，首屏快显后分块追加、不冻结（§3.2） — ✅ 脚本化通过（代理口径）：`HistorySqlLogPanelNavigationTest` 扩到 13 例（新增「首屏先出再分块追加_非一次性填满」与「分块追加中途重载_旧链终止无幽灵条目」），断言：① `openFileForTest` 返回时（同一 EDT 回合、尚未 pump）模型条数**恰为 `REFRESH_FIRST_BATCH_SIZE`(30)** 且内容为文件前 30 条——一次性填满 1000 条即红；② 用 `ListDataListener` 记录模型变更轨迹，单调不减、末次 == 1000、无重复；③ 相邻两轮增量 ≤ `REFRESH_CHUNK_SIZE`，批数 == `1 + ceil((1000-30)/30)` == 34（单批变大即红）。**不用毫秒阈值**（并行构建下必 flaky）——「不冻结」的可自动化代理就是「单次 EDT 占用有上界」，即首屏 30 + 每批 30。**遗留**：首帧真实渲染时刻与 EDT 墙钟占用 headless 无绘制循环，仍建议保留一次真机目视。
 - [x] 去重窗口外同 SQL 各进一次、重复不重复进；暂停/过滤不入历史（§3.3） — ✅ 脚本化通过：SqlLogEntryBufferTest 47 例（窗口外保留 / 窗口内丢弃 / 暂停过滤不触发 onEntryStored）0 失败
