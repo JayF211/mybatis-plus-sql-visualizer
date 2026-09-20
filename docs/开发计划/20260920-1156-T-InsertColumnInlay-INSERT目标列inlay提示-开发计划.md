@@ -146,7 +146,7 @@ T-ICI-01（EP 核实——决定做/不做）→ [D1 定案]
 | D1 定案 | 本次 | **A（EP + 面板判定）** 落地；必做防护 = 双锚点**合取**（文件名 ∈ 保留名 且 userData 载体存在），载体另开专用 Key（不复用 `SqlCompletionContext.KEY`，理由见 T-ICI-02） |
 | T-ICI-02 | 本次 | 锚点形态见 §1.2 订正表；保留名两个常量与面板建文件处**同源**（`PreviewInlayScope.PREVIEW_FILE_NAME` / `MEMORY_PREVIEW_FILE_NAME`，面板 `projectPreviewFile` / `createInMemoryPreviewPsi` 直接引用）；测试缝名 `preview.sql` 不列入保留名 |
 | T-ICI-03 | 本次 | 列名来源 = **预览文本自身**（`INSERT INTO t (列清单) VALUES/SELECT`），**不读 PSI 树**：本插件测试环境有意排除 database/sql 插件 jar（`buildSrc/src/main/kotlin/mpv-testing.gradle.kts:22-31`），SQL 语言与 SQL FileType 都不注册，PSI 结构不可依赖；且 XML INSERT 渲染后列名与值都在文本里 |
-| T-ICI-04 | 本次 | `xmlModel.kind` 首读点 = 面板 `attachPreviewStatementKind`（`current?.xmlModel?.kind`），双载体写入（Editor + PSI 文件）；两条渲染路径（新建 `assemblePreviewEditor` / 复用 `refreshCompletionContext`）都写（漏一条即该路径静默不出现） |
+| T-ICI-04 | 本次 | `xmlModel.kind` 首读点 = 面板 `attachPreviewStatementKind`（`current?.xmlModel?.kind`），双载体写入（Editor + PSI 文件）；两条渲染路径（新建 `assemblePreviewEditor` / 复用 `refreshCompletionContext`）都写（漏一条即该路径静默不出现）。用例读数：新增 **48 条**（planner 32 + provider 13 + 面板接线 3）全绿；反向验证两次见下 |
 | T-ICI-05 | 本次 | 文档落位：本文件 §1.2 订正 + §三 T-ICI-02 定案 + 本节；CHANGELOG 条目文本交收口阶段统一写入（本批并行约定不写 CHANGELOG / 变更记录 / 架构设计） |
 
 **实施口径（与计划原文的偏离与取舍）**：
@@ -160,6 +160,19 @@ T-ICI-01（EP 核实——决定做/不做）→ [D1 定案]
 7. **collector 一次性闸门**：平台两处调用形态不同——真机 pass 按 Divider 分段元素逐个调用（返回 false 即移出调度），平台测试链 `collectTraversing`（`SyntaxTraverser.psiTraverser`）**忽略返回值**对每个 PSI 元素都调一次。无闸门会按元素数量重复投提示。
 
 **与 T-M32 计划的 inlay 注册口径冲突（登记）**：`docs/开发计划/20260815-2130-T-M32-Wrapper实时提示-开发计划.md`（状态：立项、暂缓实施）也注册 inlay，口径是 **`InlayParameterHintsProvider`（`com.intellij.codeInsight.parameterNameHints` EP，Java 语言，作用于用户自己的代码，2025.3+ API 待核）**；本任务是 **`InlayHintsProvider<NoSettings>`（`com.intellij.codeInsight.inlayProvider` EP，SQL 语言，只作用于本插件预览编辑器）**。取舍：**provider 形态统一到新 EP**——平台对该接口的 javadoc 明写「新代码优先用 declarative 形态、`InlayParameterHintsProvider` 是参数名提示专用机制」，且本轮实测 `inlayProvider` EP 在 243 可用（T-M32 那条「243 兼容待核实」的顾虑对本 EP 不成立）。**作用域口径不统一且不应统一**：T-M32 的目标就是用户 Java 代码（必须命中用户文件），本任务的目标是插件自建预览编辑器（必须不命中用户文件）——两条计划的作用域判据方向相反，各自在计划内写清即可；共享的只是 EP 形态与「作用域判定必须显式、不能靠 language 注册面」这条纪律。
+
+**门禁读数（本批工作树 t-round9）**：
+
+| 读数 | 命令 / 面 | 结果 |
+|---|---|---|
+| 定向 | `./gradlew test --tests "…ui.inlay.*"` | **48/0/0/0**（planner 32 + provider 13 + 面板接线 3） |
+| 定向（既有面） | `SqlPreviewPanelTest` + `PluginXmlStructureGuardTest` | **72/0/0/0** + **15/0/0/0**（后者含本轮新增的 inlayProvider 注册形态守卫） |
+| 全量 | `./gradlew testShards` | **5485/0/0/6**（基线 5436/0/0/6 + 48 新用例 + 1 新守卫规则；skipped 6 与基线一致） |
+
+**反向验证（两次，守卫类改动必做）**：
+
+1. **作用域锚点 + 别名判据**：临时移除文件名锚点（`previewStatementKind` 只判 file 非空）与「限定名末段不算别名」判据（隐式别名去掉空白要求 + `.` 计入值结尾）→ 恰好 **5 条**对应用例变红（`test用户自己的SQL文件不产提示` / `test用户文件即使被挂上语句类型载体也不产提示` / `test测试缝文件名preview_sql不产提示` / `test反向对照_…` / `test点名不算别名_限定名末段不当别名`），其余 40 条照旧绿；还原后 **45/0/0/0**。
+2. **面板接线**：临时移除两处 `attachPreviewStatementKind` 调用 → 面板接线用例 **3/3 全红**（首次预览 / 非 INSERT / 复用编辑器三条全覆盖）；还原后 **3/0/0/0**。
 
 **待验证前提（实施后收口）**：
 
