@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
 import cn.song.mybatisplus.visualizer.xml.XmlSqlRenderer
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -16,11 +17,17 @@ import org.junit.Test
  *
  * 来源：T-FS-01 临时探针 `FidelityProbeTest` 的 31 条 P0~P30 实测读数（探针按自身 KDoc「不入库」
  * 处置——已删除，其读数转为本文件的断言与 `docs/调研报告/20260919-T-FidelityEval-自研与真引擎已知差异清单.md`）。
+ * T-FCA（N-32）在其后追加 P31~P33 三条集合快捷别名场景（见「场景表」尾部注记）。
  *
  * ## 协议（T-FS-02）
  * 同一批**真实值**分别喂两侧：真引擎吃 [Scenario.realParams]（Map / POJO / List / Integer 等真实对象），
  * 自研吃 [Scenario.bindings]（`_parameter` + 顶层变量 + `_databaseId`，对齐 `XmlPreviewModel.mockBindings`
  * 的键形态）。两侧产物直接对照，**绕开面板 mock 层**。
+ *
+ * **驱动直连 `MappedStatement.getBoundSql`（绕开 `MapperMethod`）**：故 `ParamNameResolver` 的
+ * 「单集合参数包装成 ParamMap」这一步在真引擎侧不会自动发生——凡依赖别名键（`collection` / `list` /
+ * `array`）的场景，真引擎侧必须显式经引擎自身代码补上（[wrapToMapIfCollection]），
+ * 键集由 [别名键集钉] 用例实测钉住（T-FCA-04）。
  *
  * ## 断言面（只覆盖标签语义）
  * ① SQL 文本（空白归一后逐字节相等）；② `#{}` 参数属性名序列（顺序即 `?` 出现顺序，foreach 内为
@@ -56,7 +63,7 @@ class RealEngineFidelityTest {
     private val driver = RealEngineDriver.create()
 
     @Test
-    fun `一致面 25 条：SQL 文本与参数队列逐字节相等`() {
+    fun `一致面 28 条：SQL 文本与参数队列逐字节相等`() {
         val mismatches = mutableListOf<String>()
         for (scenario in equivalentScenarios()) {
             val real = runCatching { driver.render(scenario.mapper, NAMESPACE, STATEMENT_ID, scenario.realParams) }
@@ -227,11 +234,72 @@ class RealEngineFidelityTest {
         println("[fidelity] 引擎 jar = ${driver.mybatisJarPath}（版本 $EXPECTED_ENGINE_VERSION，jar 名与包版本两路核验）")
     }
 
+    /**
+     * T-FCA-04 别名键集钉（N-32）：真引擎 `ParamNameResolver.wrapToMapIfCollection` 的**确切键集**。
+     *
+     * 为什么需要它：本驱动的真引擎侧直连 `MappedStatement.getBoundSql`（绕过 `MapperMethod`），
+     * `ParamNameResolver` 的集合包装**不会自动发生**——裸 `List` 参数下真引擎取 `list` 键会直接抛错
+     * （见下方反向读数），故凡依赖别名键的场景必须由测试侧调**引擎自身**的包装方法补齐。
+     * 键集口径不照抄竞品转述，以此处实测为准（与 `mybatis-3.5.19-sources.jar` 的
+     * `ParamNameResolver.wrapToMapIfCollection` 源码逐支一致）：
+     *  - `List`（含 List 族）→ `collection` + `list`；
+     *  - `Collection` 非 `List`（Set/Queue 族）→ 仅 `collection`（**无 `list`**）；
+     *  - `T[]` → 仅 `array`（**无 `collection`**）；
+     *  - 其余（Map / POJO / 标量）→ 原对象不包装（无别名键）；
+     *  - 实参名（`useActualParamName=true` 时）与别名键**并存**。
+     *
+     * 自研侧对应实现：`ui/XmlParamTypeResolver.collectionAliasTypes`（门槛与键集须与此处一致）。
+     */
+    @Test
+    fun `T-FCA 别名键集钉：真引擎 wrapToMapIfCollection 的逐形态键集`() {
+        assertEquals(
+            "List → collection + list + 实参名",
+            setOf("collection", "list", "ids"),
+            wrapKeys(listOf(1, 2), "ids"),
+        )
+        assertEquals(
+            "Set（Collection 非 List）→ 仅 collection，无 list",
+            setOf("collection", "ids"),
+            wrapKeys(linkedSetOf(1, 2), "ids"),
+        )
+        assertEquals(
+            "T[] → 仅 array，无 collection",
+            setOf("array", "ids"),
+            wrapKeys(arrayOf(1, 2), "ids"),
+        )
+        // 非集合参数：`wrapToMapIfCollection` 原样返回入参（引用同一，不新建 ParamMap）——
+        // 故不能用「返回值是否为 Map」判定（Map 入参本身就返回 Map），须按引用判定
+        val mapParam = linkedMapOf("a" to 1)
+        assertSame("Map 参数原样返回（不包装）", mapParam, wrapToMapIfCollection(mapParam, "ids"))
+        assertSame("标量参数原样返回（不包装）", "x", wrapToMapIfCollection("x", "ids"))
+        assertEquals(
+            "useActualParamName=false（实参名缺席）→ 仅 collection + list",
+            setOf("collection", "list"),
+            wrapKeys(listOf(1, 2), null),
+        )
+
+        // 反向读数（T-FCA-04「先红」侧证据，实测）：裸 List 参数（未经 ParamNameResolver 包装）下
+        // collection="list" 在真引擎里取不到 —— 别名键**只**由 ParamNameResolver 包装产生。
+        // 实测异常类 = java.lang.UnsupportedOperationException：集合参数在 DynamicContext 里被
+        // MetaObject 包成 CollectionWrapper（其 get 一律抛 UnsupportedOperationException，不支持属性访问），
+        // 非 Map 参数无 _parameter fallback（fallbackParameterObject=existsTypeHandler=ArrayList→false）。
+        val bare = runCatching { driver.render(listForeachMapper(), NAMESPACE, STATEMENT_ID, listOf(1, 2)) }
+        assertEquals(
+            "裸 List 参数下真引擎应抛 UnsupportedOperationException（CollectionWrapper 不支持属性访问）",
+            "java.lang.UnsupportedOperationException",
+            (bare.exceptionOrNull() as? RealEngineException)?.causeClassName,
+        )
+        // 包装后同一 mapper 正常渲染 —— 同一输入、同一 mapper，差别只在包装这一步
+        val wrapped = driver.render(listForeachMapper(), NAMESPACE, STATEMENT_ID, wrapToMapIfCollection(listOf(1, 2), "ids"))
+        assertEquals("包装后真引擎 SQL", "SELECT * FROM t WHERE id IN ( ? , ? )", compact(wrapped.sql))
+        assertEquals("包装后真引擎参数队列", listOf("__frch_id_0", "__frch_id_1"), wrapped.parameterProperties)
+    }
+
     // ------------------------------------------------------------------
-    // 场景表（31 条，读数基线见差异清单文档）
+    // 场景表（34 条 = 28 条一致面 + 6 条已知差异，读数基线见差异清单文档）
     // ------------------------------------------------------------------
 
-    /** 逐字节一致面（25 条）：P1~P13、P17~P19、P21~P29。 */
+    /** 逐字节一致面（28 条）：P1~P13、P17~P19、P21~P29、P31~P33（T-FCA 别名三条）。 */
     private fun equivalentScenarios(): List<Scenario> = listOf(
         Scenario(
             "P1 if Integer 0 / Map param",
@@ -362,6 +430,28 @@ class RealEngineFidelityTest {
             doc("""<mapper namespace="n"><select id="s1" resultType="map">SELECT * FROM t<if test="q.name != null"> AND n = #{q.name}</if></select></mapper>"""),
             mapOf("q" to linkedMapOf("name" to "z")), bindings("q" to linkedMapOf("name" to "z")),
         ),
+        // ---- T-FCA（N-32）新增：foreach 集合快捷别名（ParamNameResolver.wrapToMapIfCollection）----
+        // 真引擎侧吃**引擎自身**包装出的 ParamMap（[wrapToMapIfCollection]），自研侧 bindings 对齐同一键集；
+        // 键集口径见 [别名键集钉] 用例（先跑该用例拿读数，再据实断言，不照抄竞品转述）。
+        Scenario(
+            "P31 单 List 参数别名 collection=list",
+            doc("""<mapper namespace="n"><select id="s1" resultType="map">SELECT * FROM t WHERE id IN<foreach collection="list" item="id" open="(" separator="," close=")">#{id}</foreach></select></mapper>"""),
+            wrapToMapIfCollection(listOf(1, 2, 3), "ids"),
+            bindings("collection" to listOf(1, 2, 3), "list" to listOf(1, 2, 3), "ids" to listOf(1, 2, 3)),
+        ),
+        Scenario(
+            "P32 单 List 参数别名 collection=collection",
+            doc("""<mapper namespace="n"><select id="s1" resultType="map">SELECT * FROM t WHERE id IN<foreach collection="collection" item="id" open="(" separator="," close=")">#{id}</foreach></select></mapper>"""),
+            wrapToMapIfCollection(listOf(1, 2, 3), "ids"),
+            bindings("collection" to listOf(1, 2, 3), "list" to listOf(1, 2, 3), "ids" to listOf(1, 2, 3)),
+        ),
+        Scenario(
+            "P33 单 T[] 参数别名 collection=array",
+            doc("""<mapper namespace="n"><select id="s1" resultType="map">SELECT * FROM t WHERE id IN<foreach collection="array" item="id" open="(" separator="," close=")">#{id}</foreach></select></mapper>"""),
+            wrapToMapIfCollection(arrayOf(1, 2, 3), "ids"),
+            bindings("array" to arrayOf(1, 2, 3), "ids" to arrayOf(1, 2, 3)),
+        ),
+        // T-FCA 新增场景到此为止，后续 T-REC 场景请加在其后
     )
 
     /** 已知差异面（6 条）：P0 / P14 / P15 / P16 / P20 / P30。 */
@@ -410,6 +500,30 @@ class RealEngineFidelityTest {
             staticFieldValues = scenario.staticFieldValues,
         )
     }
+
+    /**
+     * T-FCA-04：调**真引擎自身**的 `ParamNameResolver.wrapToMapIfCollection`（隔离 loader 反射）。
+     *
+     * 类位置按 3.5.19 实测定为 `org.apache.ibatis.reflection.ParamNameResolver`（**不是**旧版的
+     * `org.apache.ibatis.session.ParamNameResolver`，`javap` 已核）；方法是 `public static`，
+     * 与 `getNamedParams` 的单参数支同款调用形态（实参名由调用方给，对应 `useActualParamName`）。
+     * 返回的 `ParamMap`（`MapperMethod$ParamMap`，`extends HashMap`）可直接喂 `getBoundSql`——
+     * 真引擎内部按 `java.util.Map` 判定，跨 loader 无碍。
+     */
+    private fun wrapToMapIfCollection(params: Any?, actualParamName: String?): Any? {
+        val resolver = driver.loadIsolated("org.apache.ibatis.reflection.ParamNameResolver")
+        val method = resolver.getMethod("wrapToMapIfCollection", Any::class.java, String::class.java)
+        return method.invoke(null, params, actualParamName)
+    }
+
+    /** 包装结果若是 Map → 其键集；否则 null（原对象未被包装）。 */
+    private fun wrapKeys(params: Any?, actualParamName: String?): Set<String>? =
+        (wrapToMapIfCollection(params, actualParamName) as? Map<*, *>)?.keys?.map { it.toString() }?.toSet()
+
+    /** T-FCA 键集钉与反向读数共用的 mapper：`collection="list"` 的 foreach。 */
+    private fun listForeachMapper(): String = doc(
+        """<mapper namespace="n"><select id="s1" resultType="map">SELECT * FROM t WHERE id IN<foreach collection="list" item="id" open="(" separator="," close=")">#{id}</foreach></select></mapper>""",
+    )
 
     private fun compact(sql: String): String = sql.replace(Regex("\\s+"), " ").trim()
 
