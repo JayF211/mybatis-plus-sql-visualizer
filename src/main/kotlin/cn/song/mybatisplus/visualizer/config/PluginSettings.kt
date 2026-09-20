@@ -89,6 +89,24 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var joinDiagramNative: Boolean = true,
 
+        /**
+         * 空白符可视化开关（T-PreviewWhitespaceToggle O-44a，**默认关**）：true 时插件自建的
+         * 全部编辑器（预览面板 SQL 区 / 日志转 SQL 输入与结果区 / 点击预览 / 回滚 SQL 弹窗 /
+         * SQL 输入编辑器 / 参数导入编辑器 / SQL→Java 结果区与 Java 预览弹窗）显示空白符
+         * （空格 ·、Tab →、行尾换行标记），便于排查动态拼接 SQL 里的多余空格/Tab。
+         *
+         * **默认关的语义是「不设置该属性」而非「设 false」**——插件自建编辑器本就不设置
+         * whitespace 属性、继承 IDE 全局设置，故关闭态**绝不调用** `setWhitespacesShown`，
+         * 用户「设置 → 编辑器 → 常规 → 外观 → 显示空白符」的全局偏好原样生效。
+         *
+         * 单向开关（本设计的真实边界，计划 §决策定案 D1 的「场景②」不可达）：开启 = 对这些
+         * 编辑器强制显示；关闭 = 继承全局。因此**无法**做到「全局开着时只让插件编辑器干净」——
+         * 关闭态的语义就是继承，想干净只能关掉全局开关。相对 IDE 全局开关的差异化点收敛为
+         * 「不改用户全局偏好即可只在插件编辑器里看空白符」（场景①）。
+         * 纯显示层：不改 SQL 文本，也不改任何渲染结果（逐字节不变）。
+         */
+        var editorShowWhitespaces: Boolean = false,
+
         /** 插件界面语言（M14）：默认 `zh`（简体中文）；`en`=English；`AUTO`=跟随 IDE。 */
         var language: String = DEFAULT_LANGUAGE,
 

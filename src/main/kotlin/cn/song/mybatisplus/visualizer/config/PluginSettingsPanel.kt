@@ -319,6 +319,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 首用锚点引导通知开关（T-UxOnboard T-UX-01，默认开）：关闭后首用引导全程静默。 */
     private val onboardingAnchorTipCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.onboardingAnchorTip"))
 
+    /** 空白符可视化开关（T-PreviewWhitespaceToggle O-44a，默认关=不设置该属性、继承 IDE 全局）。 */
+    private val editorShowWhitespacesCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.editorShowWhitespaces"))
+
     /** 逻辑删除注入开关（T-M15-07）：@TableLogic 实体查询/删除自动追加 `AND deleted = 0`。 */
     private val injectLogicDeleteCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.injectLogicDelete"))
     private val logicDeleteValueField = JBTextField(6)
@@ -909,6 +912,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     text = MpSqlVisualizerBundle.message("settings.onboardingAnchorTip")
                     toolTipText = MpSqlVisualizerBundle.message("settings.onboardingAnchorTip.tip")
                 })
+                // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+                addRow(p, g, "", editorShowWhitespacesCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.editorShowWhitespaces")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.editorShowWhitespaces.tip")
+                })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.language"), languageCombo.apply {
                     model = DefaultComboBoxModel(languageOptions())
                     selectedItem = languageOptions().firstOrNull { it.value == settings.state.language }
@@ -1266,6 +1274,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
         onboardingAnchorTipCheck.isSelected = checked
     }
 
+    /** T-PreviewWhitespaceToggle O-44a：空白符开关设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
+    internal fun setEditorShowWhitespacesCheck(checked: Boolean) {
+        editorShowWhitespacesCheck.isSelected = checked
+    }
+
     /** T-TenantLine：租户列名输入框设置入口（测试用）——与用户输入同一路径（isModified/apply 检测）。 */
     internal fun setTenantColumnName(value: String) {
         tenantColumnNameField.text = value
@@ -1453,6 +1466,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
         gutterIconCheck.isSelected != s.showGutterIcon
             || joinDiagramNativeCheck.isSelected != s.joinDiagramNative
             || onboardingAnchorTipCheck.isSelected != s.onboardingAnchorTipEnabled
+            // T-PreviewWhitespaceToggle O-44a：空白符开关（漏挂 isModified → 勾选后 Apply 不启用）
+            || editorShowWhitespacesCheck.isSelected != s.editorShowWhitespaces
             || (languageCombo.selectedItem as? LanguageOption)?.value != s.language
 
     /** T-ShortcutSettings：5 个动作快捷键任一变更即为 modified。 */
@@ -1564,6 +1579,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.joinDiagramNative = joinDiagramNativeCheck.isSelected
             // T-UxOnboard T-UX-01：首用锚点引导开关写回（随 UI 分区，读写判定同归属）
             s.onboardingAnchorTipEnabled = onboardingAnchorTipCheck.isSelected
+            // T-PreviewWhitespaceToggle O-44a：空白符开关写回（随 UI 分区）
+            s.editorShowWhitespaces = editorShowWhitespacesCheck.isSelected
             s.language = (languageCombo.selectedItem as? LanguageOption)?.value ?: PluginSettings.DEFAULT_LANGUAGE
         }
         // T-ShortcutSettings：5 个动作快捷键写入 Keymap（仅在变更时 apply）
@@ -1650,6 +1667,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             gutterIconCheck.isSelected = s.showGutterIcon
             joinDiagramNativeCheck.isSelected = s.joinDiagramNative
             onboardingAnchorTipCheck.isSelected = s.onboardingAnchorTipEnabled
+            // T-PreviewWhitespaceToggle O-44a：空白符开关回填
+            editorShowWhitespacesCheck.isSelected = s.editorShowWhitespaces
             languageCombo.selectedItem = languageOptions().firstOrNull { it.value == s.language } ?: languageOptions().first()
         }
         // T-ShortcutSettings：5 个动作快捷键从 Keymap 回读当前值

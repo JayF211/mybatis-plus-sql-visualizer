@@ -109,6 +109,8 @@ class ParamImportDialog(
             settings.isFoldingOutlineShown = false
             settings.isIndentGuidesShown = false
             settings.isAdditionalPageAtBottom = false
+            // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+            EditorWhitespaceSettings.applyTo(this)
         }
         editor = created
         return created.component

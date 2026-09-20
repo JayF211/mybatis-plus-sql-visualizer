@@ -2598,6 +2598,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             settings.isFoldingOutlineShown = true
             settings.isIndentGuidesShown = false
             settings.isAdditionalPageAtBottom = false
+            // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+            EditorWhitespaceSettings.applyTo(this)
             setPlaceholder(previewEmptyHint) // T-UxOnboard T-UX-02：空态提示原生件（LogToSqlPanel T-UN-14 同款）
         }
         editorHolder.removeAll()

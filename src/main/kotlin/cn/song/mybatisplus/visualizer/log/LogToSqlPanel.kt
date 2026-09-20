@@ -460,6 +460,8 @@ class LogToSqlPanel(
             settings.isFoldingOutlineShown = false
             settings.isIndentGuidesShown = false
             settings.isAdditionalPageAtBottom = false
+            // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+            cn.song.mybatisplus.visualizer.ui.EditorWhitespaceSettings.applyTo(this)
             setPlaceholder(inputPlaceholder) // T-UiNative T-UN-14：空态提示原生件
         }
         return editor
@@ -484,6 +486,8 @@ class LogToSqlPanel(
             settings.isFoldingOutlineShown = true
             settings.isIndentGuidesShown = false
             settings.isAdditionalPageAtBottom = false
+            // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+            cn.song.mybatisplus.visualizer.ui.EditorWhitespaceSettings.applyTo(this)
             setPlaceholder(resultPlaceholder) // T-UiNative T-UN-14：空态提示原生件
         }
         return editor

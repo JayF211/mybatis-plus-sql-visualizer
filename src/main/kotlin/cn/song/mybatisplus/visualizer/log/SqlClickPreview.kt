@@ -228,6 +228,8 @@ internal class SqlClickPreview(
                     setCaretRowShown(false)
                     setUseSoftWraps(true) // 长 SQL 软换行免横向滚动
                 }
+                // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+                cn.song.mybatisplus.visualizer.ui.EditorWhitespaceSettings.applyTo(this)
             }
             editor.component.preferredSize = Dimension(PREFERRED_WIDTH, PREFERRED_HEIGHT)
 
