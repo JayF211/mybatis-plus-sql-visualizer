@@ -39,7 +39,7 @@
 | 7 | `log/SqlToJavaPanel.kt:1341` | SQL→Java 结果区 | **计划漏** |
 | 8 | `ui/JavaCodePreviewDialog.kt:51`（createViewer） | Java 只读预览弹窗 | **计划漏** |
 
-计划 §八 待验证前提 3 猜「是否有第五处」——实测是**九处**（原表 4 处 + 补 5 处）。逐处证据 = `grep -rn "createEditor(\|createViewer(" src/main/kotlin` 全命中清单（11 个调用点 / 9 个编辑器实例，同一函数内 createEditor 双分支算 1 处）。
+计划 §八 待验证前提 3 猜「是否有第五处」——实测是**九处**（原表 4 处 + 补 5 处）。逐处证据 = `grep -rn "createEditor(\|createViewer(" src/main/kotlin` 全命中清单（**12 个调用点 / 9 个编辑器实例**，同一函数内 createEditor 双分支算 1 处）。**计数订正（独立复核实测）**：本行原写「11 个调用点 / 9 个编辑器实例」——「9 个编辑器实例」成立，调用点数少算 1：上表 8 行自列的调用点数为 2+2+1+2+2+1+1+1 = **12**（`SqlPreviewPanel` 2 / `LogToSqlPanel` 2 / `SqlClickPreview` 1 / `SqlInputEditor` 2 / `RollbackSqlDialog` 2 / `ParamImportDialog` 1 / `SqlToJavaPanel` 1 / `JavaCodePreviewDialog` 1）。
 
 **现状**：`grep -rn "whitespaces|setWhitespacesShown|WhitespacesShown|isWhitespacesShown" src` **结果为空**——仓内零空白符开关；九处构造点全部只设行号/折叠/缩进导轨/页底留白四项（`RollbackSqlDialog` 连这四项都没有）。
 
