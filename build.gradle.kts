@@ -24,11 +24,11 @@ plugins {
 // 单独声明会导致依赖解析失败）；jvmToolchain(24) 用于读 262 平台 v69 类文件（javac 17/21 报
 // 「错误的版本 69.0」）；独立沙盒避免与并行任务互锁。
 //
-// 【本分支 t-gif-rec-mcp 专用改动，2026-09-19】默认值由 false 翻为 true：MCP 演示录制要求能直接
-// `./gradlew runIde` 起 2026 沙盒（用户要自己跑沙盒，不该每次手敲 -PgifRecord=true）。常规态仍可
-// 显式 `-PgifRecord=false` 取得。**合回 master 前必须把默认值还原为 false**，否则 262 录制态会静默
-// 成为默认构建基准。副作用：本分支默认态下 `./gradlew test` 因上述 262 限制不可用。
-val gifRecord = providers.gradleProperty("gifRecord").orNull?.toBoolean() ?: true
+// 【2026-09-20 合回 master 已还原】录制分支 t-gif-rec-mcp 曾把默认值翻为 true（便于直接
+// `./gradlew runIde` 起 2026 沙盒）；该分支自带说明要求「合回 master 前必须把默认值还原为
+// false，否则 262 录制态会静默成为默认构建基准」——本行即该还原（副作用同步消失：默认态下
+// `./gradlew test` 因 262 限制不可用的问题不再存在）。
+val gifRecord = providers.gradleProperty("gifRecord").orNull?.toBoolean() ?: false
 
 // 闸门：录制开关若与发布/打包任务同用，配置期直接失败——防止 262 录制态流入发行产物。
 // 与既有 verifyIdes 同款写法（读 startParameter.taskNames），兼容 configuration-cache。
