@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.model
 
 import cn.song.mybatisplus.visualizer.sql.Dialect
+import cn.song.mybatisplus.visualizer.sql.IdentifierCaseSource
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 
@@ -74,7 +75,16 @@ data class BatchModel(
      * 纯对象（无 IDE 依赖），BatchModel 保持纯函数可独立单测。
      */
     val dialect: Dialect = MySqlDialect,
+    /**
+     * 名字大小写来源（O-42）：目录来源 [IdentifierCaseSource.CATALOG] 时按方言的按需引用覆写判定
+     * （Oracle 含小写字母即加引号）；缺省 [IdentifierCaseSource.ENTITY] = 既有 [Dialect.quoteIfKeyword]
+     * 行为逐字不变。本类既有构造点（实体转换链、批量转换链、面板测试）全部走默认值，不受影响。
+     */
+    val identifierCaseSource: IdentifierCaseSource = IdentifierCaseSource.ENTITY,
 ) {
+
+    /** 列名/表名的按需引用（按名字来源分流；未接线点即 [IdentifierCaseSource.ENTITY] 旧行为）。 */
+    private fun q(identifier: String): String = dialect.quoteIfNeeded(identifier, identifierCaseSource)
 
     /**
      * 渲染顺序的列（`?` 出现顺序 = 参数行顺序）：
@@ -103,23 +113,23 @@ data class BatchModel(
     fun renderSql(activeColumns: Set<String>): String = when (kind) {
         BatchKind.INSERT -> {
             // T-M23.4：列名/表名命中保留字 → 按方言包裹（用户示例 `table` 列）
-            val cols = toggleColumns.filter { it.columnName in activeColumns }.map { dialect.quoteIfKeyword(it.columnName) }
-            "INSERT INTO ${dialect.quoteIfKeyword(tableName)} (${cols.joinToString(", ")})\nVALUES (${cols.joinToString(", ") { "?" }})"
+            val cols = toggleColumns.filter { it.columnName in activeColumns }.map { q(it.columnName) }
+            "INSERT INTO ${q(tableName)} (${cols.joinToString(", ")})\nVALUES (${cols.joinToString(", ") { "?" }})"
         }
 
         BatchKind.UPDATE -> {
             val setSql = toggleColumns.filter { it.columnName in activeColumns }
-                .joinToString(", ") { "${dialect.quoteIfKeyword(it.columnName)} = ?" } +
-                (versionColumn?.let { ", ${dialect.quoteIfKeyword(it)} = $it + 1" } ?: "")
-            val whereSql = fixedColumns.joinToString(" AND ") { "${dialect.quoteIfKeyword(it.columnName)} = ?" }
-            "UPDATE ${dialect.quoteIfKeyword(tableName)}\nSET $setSql\nWHERE $whereSql"
+                .joinToString(", ") { "${q(it.columnName)} = ?" } +
+                (versionColumn?.let { ", ${q(it)} = $it + 1" } ?: "")
+            val whereSql = fixedColumns.joinToString(" AND ") { "${q(it.columnName)} = ?" }
+            "UPDATE ${q(tableName)}\nSET $setSql\nWHERE $whereSql"
         }
 
         BatchKind.UPSERT -> {
             val toggles = toggleColumns.filter { it.columnName in activeColumns }
             val conflict = conflictColumn?.takeIf { it in activeColumns }
-            val cols = toggles.map { dialect.quoteIfKeyword(it.columnName) }
-            val base = "INSERT INTO ${dialect.quoteIfKeyword(tableName)} (${cols.joinToString(", ")})\nVALUES (${cols.joinToString(", ") { "?" }})"
+            val cols = toggles.map { q(it.columnName) }
+            val base = "INSERT INTO ${q(tableName)} (${cols.joinToString(", ")})\nVALUES (${cols.joinToString(", ") { "?" }})"
             if (conflict == null) {
                 // 主键未勾选（新记录插入路径）→ 纯 INSERT，无冲突子句
                 base
@@ -127,6 +137,10 @@ data class BatchModel(
                 // P-立项-05：整语句形态优先（H2 原生 upsert 为 MERGE INTO..KEY..VALUES，
                 // 无法以「INSERT+后缀」表达）；null → 后缀形态；后缀亦 null（Oracle/SQL Server/DM
                 // 无原生简洁 upsert）→ 降级纯 INSERT
+                //
+                // O-42：这两个方言辅助内部仍走既有 quoteIfKeyword（未接线）。当前**无行为差异**——
+                // Oracle 的 upsert 两条路径都返回 null（不进入渲染），其余方言的 quoteIfNeeded
+                // 默认即委托 quoteIfKeyword。若日后为别的方言引入目录来源判定，此处须一并接线。
                 dialect.renderUpsertStatement(tableName, toggles.map { it.columnName }, conflict)
                     ?: dialect.renderUpsert(
                         conflict,

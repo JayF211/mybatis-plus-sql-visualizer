@@ -23,11 +23,11 @@
 | # | 报告口径 | 核实事实 | 影响 |
 |---|---------|---------|------|
 | 1 | 「`CrudSqlGenerator`/回滚链的 Oracle 分支照 DBX 收紧」 | **回滚链不存在该分支（口径修正）**：`sql/rollback/RollbackSqlGenerator.kt` **零引号逻辑**、直接裸插值（`:232` `DELETE FROM $table WHERE …`、`:402` `INSERT INTO $table ($columnList) VALUES `、`:437`、`:496` `UPDATE $table SET $setPart WHERE …`）。受影响的是 **CRUD 生成链 + 其余 `quoteIfKeyword` 消费面** | 任务描述范围改写：不含回滚链 |
-| 2 | 「按 DBX 规则收紧 Oracle 分支」 | **直接照搬会产生正确性回归（重大口径修正）**：DBX 的输入是**目录里的真实名字**，故「非全大写 → 必包」成立。我方 `CrudTableSpec` 有**两条来源、语义相反**：**目录来源**（`database/DbTableSpecAdapter.kt:44` `columnName = col.name`、`:52` `tableName = das.name`——数据库返回的真实大小写，DBX 规则**语义适用**）；**实体来源**（`actions/GenerateCrudSqlFromEntityAction.kt:129-143`，`:151`/`:502`/`:103`/`:109` 走 `NamingStrategy.toSnakeCase(...)`，即注解值或 camelCase→snake_case 的**小写派生名**）——这些名字**正是「不带引号创建」的名字**，Oracle 折叠成大写后命中，**恰恰是正确行为**；包成 `"biz_name"` 反而必然失败 | 落点**必须限定目录来源路径**；**不能无条件收紧** |
+| 2 | 「按 DBX 规则收紧 Oracle 分支」 | **直接照搬会产生正确性回归（重大口径修正）**：DBX 的输入是**目录里的真实名字**，故「非全大写 → 必包」成立。我方 `CrudTableSpec` 有**两条来源、语义相反**：**目录来源**（`database/DbTableSpecAdapter.kt:44` `columnName = col.name`、`:52` `tableName = das.name`——数据库返回的真实大小写，DBX 规则**语义适用**）；**实体来源**（**实测落点在 `psi/EntityResolver.kt`（587 行）的 ColumnInfo 产出侧 `:103`/`:109`/`:151`/`:502`，四处均为 `NamingStrategy.toSnakeCase(...)`**——原计划误记为 `actions/GenerateCrudSqlFromEntityAction.kt`，该文件仅 149 行、无 `:151`/`:502`、全文 0 处 `NamingStrategy`/`toSnakeCase`；action 侧正确的只有 `:129` 的 `toCrudSpec()`，经 `:122` 的 `EntityResolver().resolve(clazz)` 取到派生名——即注解值或 camelCase→snake_case 的**小写派生名**）——这些名字**正是「不带引号创建」的名字**，Oracle 折叠成大写后命中，**恰恰是正确行为**；包成 `"biz_name"` 反而必然失败 | 落点**必须限定目录来源路径**；**不能无条件收紧** |
 | 3 | 「达梦族 UPPER_FOLDING 是另一分支勿混」 | **我方无对应物可混**：`UPPER_FOLDING`/`upperFolding`/`foldToUpper` 全仓**零命中**（`uppercase`/`fold` 命中的全是 UI 自动折叠 `config/PluginSettings.kt:70-80` 等）。DM 与 Oracle 共用 `Dialect.kt:53` 同一条判定，差异仅在 `DM_RESERVED`（`sql/SqlKeywords.kt:208`）与包裹符号（`Dialect.kt:358`）。唯一相关认知在 `SqlKeywords.kt:203-204` 的**注释**（「裸用折叠大写后合法」），**未落成常量/分支** | 落地「折叠族」属**结构新增**，不是「收紧一个正则」 |
 | 4 | 「`DbTypeQuoteHint` 相关」 | **同名不同义**：`generator/DbTypeQuoteHint.kt:10` 是「**DB 类型名 → 参数值**是否加字符串引号」，与**标识符引用**无关；`sql/ParamQuote.kt:15` 同理 | 立项文本不得把它算作落点 |
 | 5 | 「顺带补 MERGE 多行样例单测（预期直接绿）」 | **成立**：`util/SqlStatementSplitter.kt` 全文**无 MERGE 特判**（批首合并常量只有 IF：`:40` `CONTROL_FLOW_BATCH_HEADS = setOf("IF")`，`:265-288` `mergeControlFlowBatches`）；Oracle 形态 MERGE 体内**无顶层 `;`** → 分号状态机天然整段产出；`SqlStatementSplitterTest.kt` 现有 **0 条 MERGE 用例** | 定位为**守卫用例**，不是修 bug |
-| 6 | 「H2 `MODE=Oracle` 可用于验证」 | **不可用**：`sql/verify/DialectH2VerificationTest.kt:81` 的 `MODE=Oracle` 是 H2 兼容模式，**折叠语义与真 Oracle 不等价** | 验证必须走真 Oracle（**环境已实测可用，见 §1.6**） |
+| 6 | 「H2 `MODE=Oracle` 可用于验证」 | **不可用**：`sql/verify/DialectVerifySupport.kt:81`（**行号订正**：原计划误记为 `DialectH2VerificationTest.kt:81`，该处是 `private fun sweep`，全文只在 `:22` 的表头提过 MODE=Oracle）的 `MODE=Oracle` 是 H2 兼容模式，**折叠语义与真 Oracle 不等价** | 验证必须走真 Oracle（**环境已实测可用，见 §1.6**） |
 
 ### 1.1 我方引号判定现状
 
@@ -63,7 +63,7 @@
 | 来源 | 构造点 | 名字语义 | DBX 规则是否适用 |
 |---|---|---|---|
 | **目录来源** | `database/DbTableSpecAdapter.kt:44`、`:52` | 数据库返回的**真实大小写** | **适用** |
-| **实体来源** | `actions/GenerateCrudSqlFromEntityAction.kt:129-143`（`:151`/`:502`/`:103`/`:109`） | **小写派生名** | **不适用，收紧即回归** |
+| **实体来源** | **`psi/EntityResolver.kt:103`/`:109`/`:151`/`:502`**（四处 `NamingStrategy.toSnakeCase`；经 `:122` `EntityResolver().resolve(clazz)` → action `:129` `toCrudSpec()` 适配进 `CrudTableSpec`）——**行号订正见 §一 #2 与 §九** | **小写派生名** | **不适用，收紧即回归** |
 
 `generator/CrudTableSpec.kt:41` 当前**无承载「名字大小写来源」的字段**。
 
@@ -74,7 +74,7 @@
 | `sql/DialectTest.kt:91-103`、`sql/SqlKeywordsTest.kt:37-52`/`:54-64`/`:66-80` | 否（`quoteIdentifier` 无条件包裹、保留字命中路径不变；`:54-64` 只断言 MySQL/PG 集合） |
 | `generator/CrudSqlGeneratorTest.kt` | **可能红**——若含「Oracle 小写标识符裸写」断言；**须逐条核对该断言属目录来源（则该断言本身错、要改）还是实体来源（则正确、不能改）** |
 | `sql/rollback/RollbackSqlGeneratorTest.kt` | 否（该文件零 `OracleDialect` 引用） |
-| `sql/verify/DialectDocGoldenTest.kt` / `DialectRenderDumpTest.kt:44-60` / `DialectVerifySupport.kt:238/293-294/326-327` / `DialectH2VerificationTest.kt:81` | 否（用无条件包裹函数 / 不判大小写） |
+| `sql/verify/DialectDocGoldenTest.kt` / `DialectRenderDumpTest.kt:44-60` / `DialectVerifySupport.kt:238/293-294/326-327` / `DialectVerifySupport.kt:81`（**行号订正**，原记为 `DialectH2VerificationTest.kt:81`） | 否（用无条件包裹函数 / 不判大小写） |
 
 引用 `OracleDialect` 的测试文件共 **9 个**：`config/ProjectPluginSettingsTest.kt`、`model/BatchModelTest.kt`、`sql/DialectExplainTest.kt`、`sql/DialectTest.kt`、`sql/SqlKeywordsTest.kt`、`sql/verify/DialectDockerVerificationTest.kt`、`sql/verify/DialectRenderDumpTest.kt`、`sql/verify/DialectVerifySupport.kt`、`ui/SqlPreviewServiceProjectSettingsTest.kt`。
 
@@ -121,7 +121,7 @@
 | B（不做） | 只落 MERGE 守卫用例与核实结论 | 备查（环境已可用，不再是退路） |
 | C（照搬 DBX 无条件收紧） | 把 Oracle 分支改成「非全大写必包」 | **❌ 弃用**（会破坏实体来源路径，§一 口径修正 2） |
 
-**T-OQCS-01（大小写来源标记）**：给 `generator/CrudTableSpec.kt`（`:41` 附近）增加「名字来源」承载（新增字段，或按调用点分派——见待验证前提 1）；`database/DbTableSpecAdapter.kt:44`/`:52` 标为**目录来源**，`actions/GenerateCrudSqlFromEntityAction.kt` 派生路径标为**实体来源**。
+**T-OQCS-01（大小写来源标记）**：给 `generator/CrudTableSpec.kt`（`:41` 附近）增加「名字来源」承载（新增字段，或按调用点分派——见待验证前提 1）；`database/DbTableSpecAdapter.kt:44`/`:52` 标为**目录来源**，**实体来源侧实测落点为 `psi/EntityResolver.kt:103`/`:109`/`:151`/`:502` 的 `NamingStrategy.toSnakeCase` 派生（见 §一 #2 行号订正），实际承载形态为「默认值 = 实体来源」**——实体路径零改动即天然落 ENTITY。
 
 **T-OQCS-02（引用判定分支）**：`sql/Dialect.kt` 的按需引用入口（`:52-53`）增加来源形参或新增重载 `quoteIfNeeded(identifier, caseSource)`：
 - **目录来源**：Oracle 族按「**含小写字母即加引号**」（判据 = 名字非全大写；同时保留保留字命中即包的既有行为）；
@@ -184,18 +184,49 @@
 |------|------|------|
 | D1 定案 | 本次更新 | A 窄口径；C 弃用 |
 | 环境实测 | 本次更新 | Free 23 可用；19c 服务名不通；§1.5 四组读数已留档 |
-| T-OQCS-01 | （实施后填） | 来源标记承载形态（新字段 vs 调用点分派）须回填 |
-| T-OQCS-02 | （实施后填） | 最终判据（「含小写即加引号」的实现形态）与保留字路径保持须回填 |
-| T-OQCS-03 | （实施后填） | 65 处的逐条来源核对表、未接线点清单须回填 |
-| T-OQCS-04 | （实施后填） | MERGE 守卫用例实测结果（预期直接绿）须回填 |
-| T-OQCS-05 | （实施后填） | 防回归用例、`CrudSqlGeneratorTest` 核对结果、门禁读数须回填 |
-| §五 端到端 | （实施后填） | 改前/改后在 `issue_new` 上的实测读数须回填（**这是本任务的决定性证据**） |
+| 行号订正 | 见本次提交 | §一 #2、§一 #6、§1.3、§1.4、T-OQCS-01 六处引用按实测改正（详见 §九） |
+| T-OQCS-01 | 见本次提交 | 承载形态定案：**新增字段 + 默认值 = 实体来源**。`CrudTableSpec.identifierCaseSource: IdentifierCaseSource = ENTITY`（新增第 6 个构造参数）、`BatchModel.identifierCaseSource`（同默认）。实体来源零改动即天然落 ENTITY——不是「按调用点分派」，而是「默认即实体、目录侧单点显式标记」 |
+| T-OQCS-02 | 见本次提交 | 定案为**新增方法** `Dialect.quoteIfNeeded(identifier, caseSource)`，接口默认实现委托 `quoteIfKeyword`（未接线点与其余 8 方言**逐字不变**）；**唯一覆写者 = `OracleDialect`**，判据 `caseSource == CATALOG && identifier.any { it.isLowerCase() }` → `quoteIdentifier`，否则落回 `quoteIfKeyword`（**保留字命中即包的既有行为完整保留**） |
+| T-OQCS-03 | 见本次提交 | 接线点**只有 1 处**（`DbTableSpecAdapter.toSpec` 标 CATALOG）；逐条核对表与未接线点清单见 §九 |
+| T-OQCS-04 | 见本次提交 | MERGE 守卫用例实测**直接绿**（`Oracle形态多行MERGE整段一条` + `MERGE后接独立语句不误并`），全文无 MERGE 特判的结论成立 |
+| T-OQCS-05 | 见本次提交 | `CrudSqlGeneratorTest` 10 → 17 用例（+7）：目录正向（含小写→加引号 / 全大写→裸写 / 保留字路径保持 / Oracle 是唯一产物变化方言）+ **实体来源防回归** + **其他 8 方言双来源逐字节一致**；`CrudSqlGeneratorTest` 既有 10 条**零改动**（无 Oracle 小写裸写断言——待验证前提 4 的核对结论） |
+| §五 端到端 | 见本次提交 | 改前/改后读数见 §十（**决定性证据**） |
+
+### 九、消费面逐点核对表（T-OQCS-03 回填）
+
+`quoteIfKeyword` 在 `src/main` 的真实调用点（排除 `Dialect.kt`/`SqlKeywords.kt` 的 KDoc 提及）：
+
+| 来源类别 | 落点 | 处置 |
+|---|---|---|
+| **目录来源** | `database/DbTableSpecAdapter.kt:52`（`tableName = das.name`、`columnName = col.name`） | **接线**：标 `IdentifierCaseSource.CATALOG`（唯一接线点） |
+| **实体来源** | `converter/jpa/JpaCrudOperationConverter.kt`（25 处，参数 `table: TableInfo` ← EntityResolver）、`psi/BatchOperationConverter.kt`（16 处，同）、`converter/jpa/JpaQueryEnhancer.kt:450-451`（`association.targetTable`/`joinColumn`/`referencedColumnName` ← JPA 注解值）、`actions/GenerateCrudSqlFromEntityAction.kt:129` `toCrudSpec()`、`mcp/SqlVisualizerCrudSqlTool.kt`、`model/BatchModel.kt`（默认值） | **不接线**（走默认 ENTITY，逐字不变） |
+| **第三类：原样文本/解析期** | `sql/SqlGenerator.kt:493` `renderTableName`（运行期 SQL 文本）、`model/ColumnRef.kt:33`（解析期拼接）、`converter/jpa/DerivedQueryConverter.kt:398`（仅注释） | **维持现状不动**（计划 §六 定案：宁可不改也不猜） |
+| **方言内部辅助** | `sql/Dialect.kt:205/212-213`（upsert 后缀）、`:343-344`（H2 MERGE 整语句） | **不接线**；`BatchModel` 已就地注释说明「当前无行为差异 + 日后扩展须一并接线」 |
+
+未接线点之所以安全：`quoteIfNeeded` 的接口默认实现**就是** `quoteIfKeyword`，且只有 `OracleDialect` 覆写；Oracle 的两条 upsert 路径均返回 null（不进入渲染）。
+
+### 十、真库端到端读数（决定性证据回填）
+
+连接 `Oracle Free 23 / FREEPDB1`（connection_id `311778f3-3f03-4e13-b561-74ca36873af1`），只读验证（未建/删任何对象）。
+
+| # | 读向 | 语句 | 改前（裸写） | 改后（目录来源引用） |
+|---|---|---|---|---|
+| 1 | 目录来源小写对象 | `SELECT COUNT(*) FROM dbx_test.issue_new` vs `dbx_test."issue_new"` | **ORA-00942** `"DBX_TEST"."ISSUE_NEW" does not exist` | **100 行** |
+| 2 | 目录来源生成 SQL 逐字执行 | 插件对 50 列（`id` + `field_01..field_49`）目录 spec 生成的 `SELECT_ALL` 全文 | 同 #1 裸写形态 → ORA-00942 | **成功返回真实行**（`FETCH FIRST 3 ROWS ONLY` 仅用于收窄输出） |
+| 3 | DML 标识符解析（`DBMS_SQL.PARSE` 只解析不执行，**零数据改动**） | `DELETE FROM issue_new WHERE id = :b1` vs `DELETE FROM "issue_new" WHERE "id" = :b1` | **ORA-00942** | **解析通过**；UPDATE / INSERT 同（三条一次调用全通过） |
+| 4 | **实体来源反向对照**（C 方案否决依据） | `SELECT COUNT(*) FROM user_tables`（裸写创建 → 字典存 `USER_TABLES`）vs `"user_tables"` | 裸写**成功**（3 行） | 加引号 **ORA-00942** `"DBX_TEST"."user_tables" does not exist` |
+
+**判据结论**：同一串小写字符在两种来源下正确形态**相反**（#1/#2/#3 vs #4），按来源分流是唯一正确解；C 方案（无条件收紧）会在 #4 形态上必然报错。
+
+**待验证前提 5 的实测结论（目录来源大小写忠实性）**：`SELECT table_name FROM all_tables WHERE owner='DBX_TEST'` 对以引号创建的表返回**小写 `issue_new`**（`LENGTH=9`，与输入逐字一致），列侧 `all_tab_columns.column_name` 同样返回小写 `field_01..field_49`——**字典未做大小写归一，前提成立**。`DbTableSpecAdapter` 的 `das.name`/`col.name` 是该值的直通（无归一代码），故 DAS 层忠实。
+
 
 **待验证前提（实施者先证伪再动手）**：
 
-1. 「名字来源可在 `CrudTableSpec` 承载」——本计划只确认 `generator/CrudTableSpec.kt:41` 附近**无**该字段，未读全文；新字段 vs 调用点分派的选择须实施时读该类与全部构造点后定。
-2. **日志转 SQL 路径（`sql/SqlGenerator.kt:493`）的名字来源未判定**——既非目录也非实体；**默认不动**。
+1. 「名字来源可在 `CrudTableSpec` 承载」——**已证实**：新增第 6 个构造参数 `identifierCaseSource: IdentifierCaseSource = ENTITY`；默认值取**实体来源**使全部既有构造点零改动，目录侧仅 `DbTableSpecAdapter` 一处显式标 CATALOG（比「按调用点分派」少 10 处改动面）。
+2. **日志转 SQL 路径（`sql/SqlGenerator.kt:493`）的名字来源未判定**——既非目录也非实体；**默认不动**（**已执行**：未接线，`SqlGeneratorTest` 21 条全绿）。
 3. ~~「无真 Oracle 环境」~~ → **已解决**：Free 23 连接实测可用（§1.6）。
-4. 「`CrudSqlGeneratorTest` 里哪些 Oracle 断言属目录来源」未逐条枚举——实施时逐条核对（防误改的关键步骤）。
-5. 「目录来源返回的名字是否忠实保留字典大小写」——`database/DbTableSpecAdapter.kt:44`/`:52` 取 `col.name`/`das.name`，**预期忠实**，但须用 §五-1 的真库实测证伪（若 DAS 层做了大小写归一，则本任务的判据基础要重新审）。
-6. 「Oracle Free 23 的折叠语义可代表 11g/19c」——同一语义跨版本稳定是常识，但严格说只在本连接上实测过；若日后发现版本差异须补测（XE 11g/18c/21c 连接在册）。
+4. 「`CrudSqlGeneratorTest` 里哪些 Oracle 断言属目录来源」——**已逐条核对，结论：一条都没有**。该文件改前 10 条用例中零处引用 `OracleDialect`（只有 `MySqlDialect` 与默认方言断言），故**零改动**，新增 7 条独立用例（§八 T-OQCS-05）。
+5. 「目录来源返回的名字是否忠实保留字典大小写」——**已真库实测证实成立**，读数见 §十 末段（`issue_new` 小写、长度 9，列名同样小写；字典未归一）。
+6. 「Oracle Free 23 的折叠语义可代表 11g/19c」——**仍未验证**：本任务所有真库读数只出自 Free 23 单连接，未在 11g/18c/19c/21c 上复测（在册连接未逐个试）。跨版本差异风险登记为未验证面。
+

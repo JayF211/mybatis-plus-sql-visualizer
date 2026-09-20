@@ -53,6 +53,25 @@ interface Dialect {
         if (identifier.lowercase() in reservedWords) quoteIdentifier(identifier) else identifier
 
     /**
+     * 标识符**按名字大小写来源**引用（O-42 / T-OracleQuoteCaseSource）。
+     *
+     * 与 [quoteIfKeyword] 的差别：本方法额外知道该名字**从哪来**——同一串字符在两种来源下
+     * 的「正确引用形态」可以相反。默认实现直接委托 [quoteIfKeyword]（**其余方言逐字节不变**），
+     * 只有对大小写敏感且会折叠的方言（Oracle）覆写。
+     *
+     * 覆写者须遵守的分流口径：
+     *  - [IdentifierCaseSource.CATALOG]：名字是**字典里的真实名字**（自省元数据返回，未归一）。
+     *    Oracle 裸标识符折叠为大写，故「含小写字母」的名字**必须加引号**才能命中；全大写才可裸写；
+     *  - [IdentifierCaseSource.ENTITY]：名字是**小写派生名**（`@TableName`/`@TableField` 注解值，
+     *    或 camelCase → snake_case 的 [cn.song.mybatisplus.visualizer.util.NamingStrategy.toSnakeCase] 产物）
+     *    ——这些正是「不带引号创建」的名字，折叠后恰好命中，**加引号反而必然失败**。
+     *    故实体来源走既有 [quoteIfKeyword] 逐字不变（这是 C 方案「无条件收紧」被否决的依据）。
+     *
+     * 未接线点（[IdentifierCaseSource.ENTITY] 默认）维持旧行为——新增重载 + 逐点接线，不改既有函数语义。
+     */
+    fun quoteIfNeeded(identifier: String, caseSource: IdentifierCaseSource): String = quoteIfKeyword(identifier)
+
+    /**
      * UPSERT 冲突子句（T-M43：设置里出现 = 承诺可用）。
      *
      * 返回 null → 本方言无「INSERT + 后缀」形态的原生 upsert 语法（Oracle/SQL Server/DM 的
@@ -121,6 +140,28 @@ interface Dialect {
      * （与分页子句的方言渲染策略一致）。
      */
     val supportsDeleteLimit: Boolean get() = false
+}
+
+/**
+ * 标识符名字的**大小写来源**（O-42 / T-OracleQuoteCaseSource）：[Dialect.quoteIfNeeded] 的分流依据。
+ *
+ * 引用判定需要它，是因为同一串字符在两种来源下的正确形态可能相反——Oracle 把裸标识符折叠为
+ * 大写，于是「字典里含小写字母的真实名字」必须加引号才命中，而「以裸写创建的小写派生名」
+ * 恰恰不能加引号。
+ *
+ * 判据落点（实测定位，非计划初稿所写）：目录来源的**唯一**入口是
+ * [cn.song.mybatisplus.visualizer.database.DbTableSpecAdapter.toSpec]（`das.name` / `col.name`
+ * 直取自省元数据）；实体来源经 [cn.song.mybatisplus.visualizer.psi.EntityResolver] 产出
+ * `ColumnInfo`（`:103`/`:109`/`:151`/`:502` 走 `NamingStrategy.toSnakeCase`），再由
+ * `GenerateCrudSqlFromEntityAction.entitySpec` 的 `toCrudSpec()`（`:129`）适配进
+ * [cn.song.mybatisplus.visualizer.generator.CrudTableSpec]——该路径**逐字不变**。
+ */
+enum class IdentifierCaseSource {
+    /** 目录来源：自省元数据（DbTable/DasTable）返回的**字典真实名字**，未做大小写归一。 */
+    CATALOG,
+
+    /** 实体来源：注解值或 camelCase → snake_case 的**小写派生名**（也是默认值，保持既有行为）。 */
+    ENTITY,
 }
 
 /**
@@ -235,6 +276,25 @@ object OracleDialect : Dialect {
     }
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    /**
+     * O-42：Oracle 裸标识符**折叠为大写**，故目录来源（字典真实名字）按「含小写字母即加引号」判定。
+     *
+     * 真库（Oracle Free 23 / FREEPDB1，DBX MCP）实测依据：
+     *  - `SELECT COUNT(*) FROM dbx_test.issue_new` → `ORA-00942: table or view "DBX_TEST"."ISSUE_NEW"
+     *    does not exist`（裸写折叠成大写，命不中以引号创建的小写表）；
+     *  - `SELECT COUNT(*) FROM dbx_test."issue_new"` → 成功（100 行）。
+     *
+     * 判据 `identifier.any { it.isLowerCase() }` 即计划口径「名字非全大写 → 必包」；
+     * 不满足时落回 [quoteIfKeyword]，**保留字命中即包的既有行为不变**（`number`/`level` 等仍包）。
+     * 实体来源（默认）不进入本分支——`NamingStrategy.toSnakeCase` 的小写派生名继续裸写。
+     */
+    override fun quoteIfNeeded(identifier: String, caseSource: IdentifierCaseSource): String =
+        if (caseSource == IdentifierCaseSource.CATALOG && identifier.any { it.isLowerCase() }) {
+            quoteIdentifier(identifier)
+        } else {
+            quoteIfKeyword(identifier)
+        }
 
     override val reservedWords: Set<String> = ORACLE_RESERVED
 }

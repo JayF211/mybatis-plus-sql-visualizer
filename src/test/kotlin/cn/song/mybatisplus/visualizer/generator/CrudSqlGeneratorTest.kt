@@ -1,6 +1,10 @@
 package cn.song.mybatisplus.visualizer.generator
 
+import cn.song.mybatisplus.visualizer.sql.Dialect
+import cn.song.mybatisplus.visualizer.sql.DialectRegistry
+import cn.song.mybatisplus.visualizer.sql.IdentifierCaseSource
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
+import cn.song.mybatisplus.visualizer.sql.OracleDialect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -226,5 +230,160 @@ class CrudSqlGeneratorTest {
     @Test
     fun defaultDialectIsMySql() {
         assertEquals(MySqlDialect, CrudTableSpec("t", listOf(CrudColumn("id"))).dialect)
+    }
+
+    // ------------------------------------------------------------------
+    // O-42 / T-OracleQuoteCaseSource：名字大小写来源分流
+    // ------------------------------------------------------------------
+
+    /** 目录来源：字典真实名字（`DbTableSpecAdapter.toSpec` 自省所得）。 */
+    private fun catalogSpec(tableName: String, vararg columns: String, dialect: Dialect) = CrudTableSpec(
+        tableName = tableName,
+        columns = columns.map { CrudColumn(it, isPrimaryKey = it == "id") },
+        dialect = dialect,
+        identifierCaseSource = IdentifierCaseSource.CATALOG,
+    )
+
+    /**
+     * 目录来源正向（Oracle）：字典含小写字母的名字**必须加引号**。
+     *
+     * 真库依据（Oracle Free 23 / FREEPDB1）：`SELECT COUNT(*) FROM dbx_test.issue_new`
+     * → `ORA-00942: table or view "DBX_TEST"."ISSUE_NEW" does not exist`（裸写折叠为大写，
+     * 命不中以引号创建的小写表）；`FROM dbx_test."issue_new"` → 成功 100 行。
+     */
+    @Test
+    fun oracleCatalogSourceQuotesNamesContainingLowercase() {
+        val spec = catalogSpec("issue_new", "id", "user_name", dialect = OracleDialect)
+        val stmts = CrudSqlGenerator.generate(spec).associateBy { it.kind }
+
+        assertEquals(
+            "SELECT \"id\", \"user_name\"\nFROM \"issue_new\"",
+            stmts.getValue(CrudKind.SELECT_ALL).result.sql,
+        )
+        assertEquals(
+            "SELECT \"id\", \"user_name\"\nFROM \"issue_new\"\nWHERE \"id\" = ?",
+            stmts.getValue(CrudKind.SELECT_BY_PK).result.sql,
+        )
+        // INSERT/UPDATE 走 BatchModel（唯一渲染源），来源标记须一并接线
+        assertEquals(
+            "INSERT INTO \"issue_new\" (\"id\", \"user_name\")\nVALUES (?, ?)",
+            stmts.getValue(CrudKind.INSERT).result.sql,
+        )
+        assertEquals(
+            "UPDATE \"issue_new\"\nSET \"user_name\" = ?\nWHERE \"id\" = ?",
+            stmts.getValue(CrudKind.UPDATE).result.sql,
+        )
+        assertEquals(
+            "DELETE FROM \"issue_new\"\nWHERE \"id\" = ?",
+            stmts.getValue(CrudKind.DELETE).result.sql,
+        )
+    }
+
+    /** 目录来源：全大写名字（裸写创建的对象）**裸写**，加引号反而会 miss。 */
+    @Test
+    fun oracleCatalogSourceLeavesAllUppercaseNamesBare() {
+        val spec = catalogSpec("ISSUE_NEW", "ID", "USER_NAME", dialect = OracleDialect)
+        val stmts = CrudSqlGenerator.generate(spec).associateBy { it.kind }
+
+        assertEquals(
+            "SELECT ID, USER_NAME\nFROM ISSUE_NEW",
+            stmts.getValue(CrudKind.SELECT_ALL).result.sql,
+        )
+        assertEquals(
+            "INSERT INTO ISSUE_NEW (ID, USER_NAME)\nVALUES (?, ?)",
+            stmts.getValue(CrudKind.INSERT).result.sql,
+        )
+    }
+
+    /**
+     * 目录来源 + 保留字路径保持：全大写保留字名（`LEVEL`/`NUMBER`）仍按既有保留字规则加引号
+     * ——大小写分支不吞掉 [Dialect.quoteIfKeyword] 的保留字命中行为。
+     */
+    @Test
+    fun oracleCatalogSourceKeepsReservedWordQuoting() {
+        val spec = catalogSpec("LEVEL", "id", "NUMBER", dialect = OracleDialect)
+        val select = CrudSqlGenerator.generate(spec).first { it.kind == CrudKind.SELECT_ALL }
+        assertEquals("SELECT \"id\", \"NUMBER\"\nFROM \"LEVEL\"", select.result.sql)
+    }
+
+    /**
+     * **防回归硬判据**（C 方案否决依据）：实体来源的小写派生名（`NamingStrategy.toSnakeCase`
+     * 产物，如 `@TableName("biz_order")` / camelCase 派生）在 Oracle 下**仍裸写**。
+     *
+     * 这些名字正是「不带引号创建」的名字，Oracle 折叠为大写后恰好命中；包成 `"biz_order"`
+     * 反而必然 ORA-00942。故实体来源路径必须逐字不变——默认值即 [IdentifierCaseSource.ENTITY]。
+     */
+    @Test
+    fun oracleEntitySourceKeepsDerivedNamesBare() {
+        val spec = CrudTableSpec(
+            tableName = "biz_order",
+            columns = listOf(
+                CrudColumn("id", isPrimaryKey = true),
+                CrudColumn("order_no"),
+            ),
+            dialect = OracleDialect,
+        )
+        assertEquals(IdentifierCaseSource.ENTITY, spec.identifierCaseSource)
+        val stmts = CrudSqlGenerator.generate(spec).associateBy { it.kind }
+
+        assertEquals("SELECT id, order_no\nFROM biz_order", stmts.getValue(CrudKind.SELECT_ALL).result.sql)
+        assertEquals(
+            "INSERT INTO biz_order (id, order_no)\nVALUES (?, ?)",
+            stmts.getValue(CrudKind.INSERT).result.sql,
+        )
+        assertEquals(
+            "UPDATE biz_order\nSET order_no = ?\nWHERE id = ?",
+            stmts.getValue(CrudKind.UPDATE).result.sql,
+        )
+        // 显式标注实体来源与默认值同结果（两条路径同一实现）
+        val explicit = CrudTableSpec(
+            tableName = "biz_order",
+            columns = spec.columns,
+            dialect = OracleDialect,
+            identifierCaseSource = IdentifierCaseSource.ENTITY,
+        )
+        assertEquals(
+            stmts.getValue(CrudKind.SELECT_ALL).result.sql,
+            CrudSqlGenerator.generate(explicit).first { it.kind == CrudKind.SELECT_ALL }.result.sql,
+        )
+    }
+
+    /**
+     * 其他 8 方言**逐字节不变**：目录来源与实体来源在同一 spec 上的全部产物逐字符相同
+     * ——[Dialect.quoteIfNeeded] 默认即委托 [Dialect.quoteIfKeyword]，只有 Oracle 覆写。
+     * 这是「不改变其他方言产物」的结构性守卫（比逐方言快照更严：同 spec 双来源直接对比）。
+     */
+    @Test
+    fun otherDialectsRenderByteIdenticalRegardlessOfCaseSource() {
+        val nonOracle = DialectRegistry.dialects.filter { it !== OracleDialect }
+        assertEquals(8, nonOracle.size)
+        nonOracle.forEach { dialect ->
+            val entity = CrudTableSpec(
+                tableName = "biz_order",
+                columns = listOf(CrudColumn("id", isPrimaryKey = true), CrudColumn("order_no")),
+                dialect = dialect,
+            )
+            val catalog = entity.copy(identifierCaseSource = IdentifierCaseSource.CATALOG)
+            assertEquals(
+                "方言 ${dialect.name} 的目录/实体来源产物应逐字节一致",
+                CrudSqlGenerator.generate(entity).map { it.kind to it.result.sql },
+                CrudSqlGenerator.generate(catalog).map { it.kind to it.result.sql },
+            )
+        }
+    }
+
+    /** Oracle 是唯一覆写者：同一 spec 仅来源标记不同 → 产物不同（证明分支真的生效，非空绿）。 */
+    @Test
+    fun oracleIsTheOnlyDialectWhereCaseSourceChangesOutput() {
+        val base = CrudTableSpec(
+            tableName = "issue_new",
+            columns = listOf(CrudColumn("id", isPrimaryKey = true)),
+            dialect = OracleDialect,
+        )
+        val entitySql = CrudSqlGenerator.generate(base).first { it.kind == CrudKind.SELECT_ALL }.result.sql
+        val catalogSql = CrudSqlGenerator.generate(base.copy(identifierCaseSource = IdentifierCaseSource.CATALOG))
+            .first { it.kind == CrudKind.SELECT_ALL }.result.sql
+        assertEquals("SELECT id\nFROM issue_new", entitySql)
+        assertEquals("SELECT \"id\"\nFROM \"issue_new\"", catalogSql)
     }
 }

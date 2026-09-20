@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.generator
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.Dialect
+import cn.song.mybatisplus.visualizer.sql.IdentifierCaseSource
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 
 /**
@@ -37,6 +38,9 @@ data class CrudColumn(
  * @param versionColumn     乐观锁版本列（实体侧 @Version，对齐 updateById 语义：SET 由
  *                          `version = version + 1` 取代、WHERE 末尾追加；DB 侧无此元数据恒 null）
  * @param dialect           方言（保留字引用包裹；读插件设置，缺省 MySQL）
+ * @param identifierCaseSource 名字大小写来源（O-42）：目录来源 [IdentifierCaseSource.CATALOG] 时
+ *                          Oracle 按「含小写字母即加引号」引用；缺省 [IdentifierCaseSource.ENTITY]
+ *                          （实体派生名裸写，既有行为逐字不变——未接线点也落此默认值）
  */
 data class CrudTableSpec(
     val tableName: String,
@@ -44,6 +48,7 @@ data class CrudTableSpec(
     val logicDeleteColumn: String? = null,
     val versionColumn: String? = null,
     val dialect: Dialect = MySqlDialect,
+    val identifierCaseSource: IdentifierCaseSource = IdentifierCaseSource.ENTITY,
 ) {
     /** 主键列（保持 [columns] 顺序；复合主键 AND 连接）。 */
     val primaryKeys: List<CrudColumn> get() = columns.filter { it.isPrimaryKey }
