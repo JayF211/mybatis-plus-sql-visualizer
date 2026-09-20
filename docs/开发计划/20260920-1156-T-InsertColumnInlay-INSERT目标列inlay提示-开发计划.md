@@ -9,7 +9,16 @@
 
 ---
 
-## 一、背景与依据（现状核实，含三处口径修正）
+## 决策定案（2026-09-20，用户认可本会话推荐）
+
+| 决策点 | 定案 | 一句话理由 |
+|---|---|---|
+| **D1** | **A——EP + 面板判定** | 本轮已把 EP 形态**核实清楚**（§1.4：`com.intellij.codeInsight.inlayProvider` 存在、带 `language` 属性、接口方法齐备），原「仓内零先例」的技术不确定性已消除；成本 2~3 文件，价值真实（多列动态 INSERT 的列-值错位是 MyBatis 常见坑） |
+| **必做防护** | provider 内**必须**做「只认本面板预览编辑器」判定（userData + 文件名双锚点） | EP 是 language 级，注册即对**用户自己的 `.sql` 文件**也生效——这是本任务唯一的真实风险 |
+
+---
+
+## 一、背景与依据（现状核实，含四处口径修正）
 
 | # | 报告口径 | 核实事实 | 影响 |
 |---|---------|---------|------|
@@ -36,6 +45,19 @@
 | 注册形态 | `plugin.xml:196-245`（`<codeInsight.lineMarkerProvider language="JAVA|XML" …/>`；`:206-212` 是 language 属性样例） | 同左 |
 | 编辑器级装饰先例（替代路径） | `ui/highlight/SqlAutoFolding.kt:36 fun applyTo(editor, text)`，在预览编辑器上调用 `ui/SqlPreviewPanel.kt:2592`（另 `:1253`/`:2422`/`:2439`） | 同左 |
 
+### 1.4 EP 形态核实（**本轮新增，原为待验证前提 1**）
+
+对 243 平台发行版（`ideaIU-2024.3.7.1-win/lib/app-client.jar`）实测：
+
+| 项 | 实测值 |
+|---|---|
+| 扩展点名 | **`com.intellij.codeInsight.inlayProvider`**（另有较新的 `com.intellij.codeInsight.declarativeInlayProvider`，以及 `codeInsight.inlayActionHandler`、`config.inlayGroupSettingProvider`、`config.inlaySettingsProvider`） |
+| bean | `com.intellij.codeInsight.hints.InlayHintsProviderExtensionBean`，`dynamic="true"`，`attribute="implementationClass"`，`implements="com.intellij.codeInsight.hints.InlayHintsProvider"` |
+| **`language` 属性** | **存在**（bean 含 `getLanguage`/`setLanguage`）→ `<codeInsight.inlayProvider language="SQL" implementation="…"/>` 形态成立 |
+| 接口方法 | `InlayHintsProvider` 含 `getCollectorFor`、`isLanguageSupported(Language)`、`createSettings`、`createConfigurable`、`getName`、`getKey`、`getPreviewText` |
+
+**口径修正 4**：原计划把「EP 名与属性」列为第一个待证伪前提（仓内零 inlay 注册先例）。现已坐实——**EP 存在、带 `language` 属性、接口方法齐备**。仍待实测的是 **253/262 三平台可用性**与**自定义 highlighter 是否影响 language 判定**（见 §八 待验证前提）。
+
 ## 二、目标与非目标
 
 **目标**（仅在 D1 选「做」时）：在预览面板的 INSERT 语句上，对每个 VALUES 表达式 / SELECT 投影挂**目标列名**提示，使「列-值错位」一眼可见；投影项已自带同名列别名时不重复提示。
@@ -52,11 +74,11 @@
 | **B（做，替代路径：编辑器自定义元素）** | 不走 language 级 EP，改用编辑器级装饰（参照 `SqlAutoFolding.kt:36` + `SqlPreviewPanel.kt:2592` 的先例） | 成本显著更高（须自管渲染与生命周期） | ★ |
 | **C（不做）** | 只登记「EP 名与副作用未核实」结论 | 0 | ★★ |
 
-**D1 建议**：选 **A**，但**先做 T-ICI-01（EP 核实）**——EP 名与属性在 243/253/262 三平台的形态未在仓内找到先例，若 EP 形态与预期不符（如属性名变化、需额外 settings 注册），须重新评估；若核实发现副作用不可控（无法可靠判定「只作用于本面板」），退 **C**。
+**D1 定案（2026-09-20）**：**选 A**。EP 形态已核实（§1.4），原「先核实再定」的步骤已完成大半——剩余的三平台可用性核实并入 T-ICI-01 的收尾。**若 253/262 实测发现 EP 形态不符或作用域无法可靠限制，仍按原预案退 C**（如实登记，不硬做）。
 
 ### 任务分解（D1=A 时）
 
-**T-ICI-01（EP 核实，先做）**：核实 `com.intellij.codeInsight.inlayProvider`（或实际 EP 名）的注册形态与属性、三平台可用性、是否需要 `createSettings`/`createConfigurable` 的最小实现。**判据**：能否可靠地把作用域限制在预览编辑器。
+**T-ICI-01（EP 核实，**243 已完成，253/262 待收尾**）**：243 平台实测结论见 §1.4（EP 名、bean、`language` 属性、接口方法齐备）。**剩余**：253/262 两平台的 EP 可用性实测；`EditorEx` 上是否需要 `InlayModel` 显式启用；自定义 `SqlSyntaxHighlighter` 是否影响 language 判定。**判据**：能否可靠地把作用域限制在预览编辑器。
 
 **T-ICI-02（面板判定）**：provider 内用 §1.2 的两个锚点（`SqlCompletionContext.KEY` userData 优先，文件名 `mpsql-preview-*.sql` 兜底）判定「是本面板的预览编辑器」；非本面板直接返回空。**同时**：`xmlModel.kind != INSERT` 时返回空。
 
@@ -110,8 +132,8 @@ T-ICI-01（EP 核实——决定做/不做）→ [D1 定案]
 
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
-| T-ICI-01 | （实施后填） | EP 名/属性/三平台可用性结论须回填 |
-| D1 定案 | （实施后填） | A/B/C 选择与理由须回填 |
+| T-ICI-01 | 本次更新 | **243 平台已核实**：EP `com.intellij.codeInsight.inlayProvider`（bean `InlayHintsProviderExtensionBean`，带 `language` 属性，接口方法齐备）；253/262 与 InlayModel/highlighter 交互待收尾 |
+| D1 定案 | 本次更新 | **A（EP + 面板判定）**；必做防护=面板判定（userData + 文件名双锚点） |
 | T-ICI-02 | （实施后填） | 面板判定锚点的最终形态与可靠性须回填 |
 | T-ICI-03 | （实施后填） | 列名来源落点、静态不可判的边界清单须回填 |
 | T-ICI-04 | （实施后填） | `xmlModel.kind` 首读点落位与四条用例读数须回填 |
@@ -119,7 +141,7 @@ T-ICI-01（EP 核实——决定做/不做）→ [D1 定案]
 
 **待验证前提（实施者先证伪再动手）**：
 
-1. **inlay EP 的名字与属性未在仓内找到先例**（`plugin.xml` 无 inlay 注册）——须对 243/253/262 发行版核实，这是本任务第一个待证伪点。
+1. ~~inlay EP 的名字与属性未在仓内找到先例~~ → **243 平台已核实**（§1.4）：EP = `com.intellij.codeInsight.inlayProvider`，带 `language` 属性，接口 `InlayHintsProvider` 方法齐备。**仍待实测**：253/262 两平台可用性、`EditorEx` 上是否需要 `InlayModel` 显式启用、自定义 `SqlSyntaxHighlighter` 是否影响 language 判定。
 2. `EditorEx` 上 inlay 是否需要 `InlayModel` 显式启用、以及预览编辑器用的自定义 `SqlSyntaxHighlighter`（`ui/SqlPreviewPanel.kt:2564-2572`）是否影响 language 判定（预览文件由 `getStdFileType("SQL")` 建，语言**预期**为 SQL）——未实测。
 3. 「`SqlCompletionContext.KEY` userData 可作判定锚点」来自 `ui/SqlPreviewPanel.kt:2556-2557` 的静态证据——须确认该 userData 在编辑器生命周期内**始终存在**（若被清理则判定失效，须改用文件名兜底为主）。
 4. DBX 的「投影自带同名列别名时不提示」规则的**确切判据**（尾随 `AS` / 隐式别名 / 点名不算）来自 `insertValueHints.ts:286` 的转述，未逐行核对其解析实现——实施时须按我方 PSI 形态重新定义，不照抄。
