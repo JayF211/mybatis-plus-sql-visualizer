@@ -911,7 +911,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 selectedValue: String?,
                 finalChoice: Boolean,
             ): com.intellij.openapi.ui.popup.PopupStep<*>? {
-                actions.firstOrNull { it.first == selectedValue }?.let { it.second() }
+                // N4 修复（2026-09-21）：动作体**一律延后到弹层销毁之后**执行。
+                // 三项动作（导入参数 / 差异对比 / 分享）都会弹**模态对话框**，此前在 onChosen 内同步弹，
+                // 平台判为焦点风险并记 SEVERE——原文即修法：「Showing dialogs in PopupStep.onChosen can
+                // result in focus issues. Please put the dialog showing code into invokeLater…」
+                // （`#c.i.u.p.u.PopupImplUtil`，栈指向本方法 :891 → importParamsFromClipboard:3482）。
+                // **真机后果比日志噪音严重**：第一次点「确定」被弹层收走，用户感受是「点了没反应」。
+                // 本方法返回 FINAL_CHOICE 后弹层即销毁，故 invokeLater 的体在弹层已销毁时才跑。
+                val action = actions.firstOrNull { it.first == selectedValue }?.second
+                if (action != null) {
+                    ApplicationManager.getApplication().invokeLater { action() }
+                }
                 return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE
             }
         }
@@ -4264,6 +4274,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** 「更多」折叠菜单 step（onChosen 委托断言用，无需真实弹层）。 */
     internal fun moreActionsStepForTest(): com.intellij.openapi.ui.popup.util.BaseListPopupStep<String> =
         moreActionsStep(moreActions())
+
+    /**
+     * N4：构造 step 的注入口——真实三项动作都会弹模态（单测禁弹），故用无副作用的替身项断言
+     * 「命中真实项时**不同步**执行动作」这条新契约。
+     */
+    internal fun moreActionsStepWithForTest(items: List<Pair<String, () -> Unit>>): com.intellij.openapi.ui.popup.util.BaseListPopupStep<String> =
+        moreActionsStep(items)
 
     /** F3：宽度预算截断手动触发（headless 无 componentResized，测试直调）。 */
     internal fun applyMetaTruncationForTest() = applyMetaTruncation()
