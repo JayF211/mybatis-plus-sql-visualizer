@@ -398,4 +398,98 @@ class HeavyXmlParamTypeResolverTest : HeavyPlatformTestCase() {
         assertFalse("Integer 字段不应带引号：$sql", sql.contains("t.dic_credit_status = '2'"))
         panel.clear()
     }
+
+    // ------------------------------------------------------------------
+    // T-FCA-01（N-32）：foreach 集合快捷别名（ParamNameResolver.wrapToMapIfCollection）
+    // ------------------------------------------------------------------
+
+    /**
+     * 别名门槛夹具（覆盖真引擎的逐形态分支 + 三类负向）：单 List / 单数组 / 单 Set /
+     * 单 Iterable（非 Collection）/ 单参数带 @Param / 多参数 / 非集合标量。
+     */
+    private val collectionAliasMapper = """
+        package com.example;
+
+        public interface CollectionAliasMapper {
+            void byList(java.util.List<Long> ids);
+            void byArray(Long[] ids);
+            void bySet(java.util.Set<Long> ids);
+            void byIterable(Iterable<Long> ids);
+            void byNamed(@org.apache.ibatis.annotations.Param("ids") java.util.List<Long> ids);
+            void byMulti(java.util.List<Long> ids, String keyword);
+            void byScalar(Long id);
+        }
+    """.trimIndent()
+
+    /**
+     * 正向：单集合参数且无 `@Param` → 别名键存在，键集按真引擎实测形态
+     * （`List` → `collection` + `list`；`T[]` → 仅 `array`；`Set` → 仅 `collection`）。
+     * 参数名键照常保留（别名是**追加**不是替换）。
+     */
+    fun testCollectionAliasKeysByParamShape() {
+        addSourceFile("CollectionAliasMapper.java", collectionAliasMapper)
+        val list = XmlParamTypeResolver.resolveTypes(project, "com.example.CollectionAliasMapper", "byList")
+        assertEquals("List 参数应双写 collection + list", ParamKind.COLLECTION, list["collection"]?.kind)
+        assertEquals(ParamKind.COLLECTION, list["list"]?.kind)
+        assertNull("List 参数不产 array 键", list["array"])
+        assertEquals("参数名键照常保留", ParamKind.COLLECTION, list["ids"]?.kind)
+
+        val array = XmlParamTypeResolver.resolveTypes(project, "com.example.CollectionAliasMapper", "byArray")
+        assertEquals("数组参数只产 array 键", ParamKind.COLLECTION, array["array"]?.kind)
+        assertNull("数组参数不产 collection 键", array["collection"])
+        assertNull("数组参数不产 list 键", array["list"])
+        assertEquals(ParamKind.COLLECTION, array["ids"]?.kind)
+
+        val set = XmlParamTypeResolver.resolveTypes(project, "com.example.CollectionAliasMapper", "bySet")
+        assertEquals("Set（Collection 非 List）只产 collection", ParamKind.COLLECTION, set["collection"]?.kind)
+        assertNull("Set 参数不产 list 键（真引擎 instanceof List 不成立）", set["list"])
+        assertNull(set["array"])
+    }
+
+    /**
+     * 负向（全或无门槛的反面）：多参数、单参数带显式 `@Param`、非集合标量、`Iterable`
+     * （集合语义但非 `java.util.Collection`，真引擎不包装）→ **均不产别名键**。
+     */
+    fun testCollectionAliasAbsentWhenGateFails() {
+        addSourceFile("CollectionAliasMapper.java", collectionAliasMapper)
+        val named = XmlParamTypeResolver.resolveTypes(project, "com.example.CollectionAliasMapper", "byNamed")
+        assertNull("带 @Param 不产 list 别名", named["list"])
+        assertNull(named["collection"])
+        assertNull(named["array"])
+        assertEquals("命名键仍在", ParamKind.COLLECTION, named["ids"]?.kind)
+
+        val multi = XmlParamTypeResolver.resolveTypes(project, "com.example.CollectionAliasMapper", "byMulti")
+        assertNull("多参数不产 list 别名", multi["list"])
+        assertNull(multi["collection"])
+        assertNull(multi["array"])
+        assertTrue("命名键仍在", multi.containsKey("ids") && multi.containsKey("keyword"))
+
+        val scalar = XmlParamTypeResolver.resolveTypes(project, "com.example.CollectionAliasMapper", "byScalar")
+        assertNull("非集合标量不产别名", scalar["collection"])
+        assertNull(scalar["list"])
+        assertNull(scalar["array"])
+
+        val iterable = XmlParamTypeResolver.resolveTypes(project, "com.example.CollectionAliasMapper", "byIterable")
+        assertNull("Iterable 非 java.util.Collection：真引擎不包装 → 不产别名", iterable["collection"])
+        assertNull(iterable["list"])
+    }
+
+    /** 别名与预览绑定构造联动：`collection="list"` 的 foreach 在预览里按别名键展开（引号档随类别）。 */
+    fun testCollectionAliasFeedsPreviewBindings() {
+        addSourceFile("CollectionAliasMapper.java", collectionAliasMapper)
+        val model = XmlPreviewModel.from(
+            XmlMapperParser().parse(
+                """
+                <mapper namespace="com.example.CollectionAliasMapper">
+                  <select id="byList">SELECT * FROM t WHERE id IN<foreach collection="list" item="id" open="(" separator="," close=")">#{id}</foreach></select>
+                </mapper>
+                """.trimIndent(),
+            ).statements.single(),
+            emptyList(),
+            paramTypes = XmlParamTypeResolver.resolveTypes(project, "com.example.CollectionAliasMapper", "byList"),
+        )
+        assertEquals("别名键进 paramTypes（预览类型视图可命中）", ParamKind.COLLECTION, model.kindFor("list"))
+        assertEquals("别名键引号档随类别（COLLECTION → 引号）", true, model.quoteFor("list"))
+        assertEquals("foreach 视图照常收集", "list", model.forEachViews.single().collectionExpr)
+    }
 }

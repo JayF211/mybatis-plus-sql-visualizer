@@ -25,7 +25,10 @@ import com.intellij.psi.search.GlobalSearchScope
  *  - **Map / 基本类型 / 其他简单类型**：键 = 参数名，值 = 类型类别（Map → OBJECT，数值 → NUMBER）；
  *  - 注解类不可解析（测试沙盒）时按短名兜底；无 @Param 用参数名；
  *  - **多参数位置别名**（T-PC2-03）：全部参数都有显式 `@Param` 时补 `param1..paramN`
- *    （MyBatis `ParamMap` 位置别名，全或无门槛见 [resolveTypes]）。
+ *    （MyBatis `ParamMap` 位置别名，全或无门槛见 [resolveTypes]）；
+ *  - **集合快捷别名**（T-FCA-01）：单参数且无显式 `@Param` 时按参数集合形态补
+ *    `list` / `collection` / `array`（MyBatis `ParamNameResolver.wrapToMapIfCollection`，
+ *    键集与门槛见 [collectionAliasTypes]）。
  *
  * 类型映射规则（T-PT-01，见 [kindOf]）：String/CharSequence→TEXT、数值族→NUMBER、
  * `java.time.*` 与 `java.util.Date`→TEMPORAL、List/Collection/Set 族与数组→COLLECTION、
@@ -69,6 +72,20 @@ object XmlParamTypeResolver {
     )
 
     /**
+     * `List` 族简单名（T-FCA-01）：MyBatis `object instanceof List` 成立 → 别名 `collection` + `list` 双写。
+     * 只列 [COLLECTION_SIMPLE_NAMES] 中确为 `java.util.List` 子类型的成员（`Set`/`Queue` 族不在内）。
+     */
+    private val LIST_SIMPLE_NAMES = setOf(
+        "List", "ArrayList", "LinkedList", "Vector", "Stack",
+    )
+
+    /**
+     * 集合族中**非 `java.util.Collection`** 的简单名（T-FCA-01）：`Iterable` 虽是集合语义，
+     * 但 `wrapToMapIfCollection` 的 `instanceof Collection` 判定不成立 → 真引擎不包装、无别名键。
+     */
+    private val NON_COLLECTION_SIMPLE_NAMES = setOf("Iterable")
+
+    /**
      * 解析语句参数类型类别映射。@param project 不可用（null）时返回空映射。
      *
      * T-PC2-03（Z-17 全或无门槛）：**仅当全部参数都有显式 `@Param`（值非空白）时**才补
@@ -106,7 +123,43 @@ object XmlParamTypeResolver {
                 result["param${index + 1}"] = typeInfoOf(param.type)
             }
         }
+        // T-FCA-01：foreach 集合快捷别名（MyBatis ParamNameResolver.wrapToMapIfCollection）
+        result += collectionAliasTypes(parameters)
         return result
+    }
+
+    /**
+     * T-FCA-01（N-32）：foreach 集合快捷别名 —— `collection="list" / "collection" / "array"` 的类型条目。
+     *
+     * MyBatis 3.5.19 `ParamNameResolver.getNamedParams` 在「**无 @Param 注解 ∧ 恰一个非特殊参数**」时
+     * 把参数对象交给 `wrapToMapIfCollection(value, 实参名)` 包成 `ParamMap`，此后语句里可用别名键取到该集合。
+     * 键集**经真引擎实测钉住**（`xml/fidelity/RealEngineFidelityTest` 的「别名键集钉」用例，非竞品转述）：
+     *  - `List`（含 ArrayList/LinkedList/Vector/Stack 等 List 族）→ `collection` + `list` 双写；
+     *  - `Collection` 非 `List`（Set/Queue/Deque 族）→ 仅 `collection`；
+     *  - `T[]`（非 `byte[]`，后者按 BLOB 落 UNKNOWN）→ 仅 `array`；
+     *  - 其余（Map / DTO / 标量 / `Iterable` 等非 Collection）→ 不包装，无别名键。
+     * 规则来源标注：`mybatis-3.5.19-param-name-resolver-wrap-to-map-if-collection`。
+     *
+     * **门槛与 [resolveTypes] 的 `paramN` 门槛互补而非复用**：那条是「全部参数都有显式 `@Param`」
+     * （多参数 `ParamMap` 位置别名），本条是「单参数 ∧ 无显式 `@Param`」——MyBatis 侧同样是互斥两支
+     * （`hasParamAnnotation` 为真即走多参数支，不再包装集合）。
+     *
+     * 类型读不到类别（非 COLLECTION）时不产出别名（宁缺勿错：`Iterable` 不是 `java.util.Collection`，
+     * 真引擎不包装，故显式排除）。
+     */
+    internal fun collectionAliasTypes(parameters: Array<PsiParameter>): Map<String, ParamTypeInfo> {
+        if (parameters.size != 1) return emptyMap()
+        val param = parameters.single()
+        if (explicitParamNameOf(param) != null) return emptyMap()
+        val info = typeInfoOf(param.type)
+        if (info.kind != ParamKind.COLLECTION) return emptyMap()
+        val simple = param.type.canonicalText.substringBefore('<').trim().substringAfterLast('.')
+        if (simple in NON_COLLECTION_SIMPLE_NAMES) return emptyMap()
+        return when {
+            simple.endsWith("[]") -> mapOf("array" to info)
+            simple in LIST_SIMPLE_NAMES -> mapOf("collection" to info, "list" to info)
+            else -> mapOf("collection" to info)
+        }
     }
 
     /**

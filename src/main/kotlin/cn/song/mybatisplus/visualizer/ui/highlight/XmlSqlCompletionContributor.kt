@@ -31,6 +31,8 @@ import com.intellij.util.ProcessingContext
  *  c. **OGNL 值内补全（T-M27-04）**：position 在 XmlAttributeValue 内且属性名是 test/collection
  *     → 补方法参数名（[SourceSqlContext.paramNames]）+ 主实体 Java 字段名（fieldName——
  *     OGNL 用 Java 字段名而非 DB 列名）；`param.` 前缀（光标前 `[\w$]+\.\w*$`）时只补第二段字段名；
+ *     **T-FCA-03**：`collection` 属性额外追加 foreach 集合快捷名 `list`/`collection`/`array`
+ *     （排在参数名/字段名之后；`test` 属性不追加——两个属性共用本分支，故按属性名收窄）；
  *  d. **SQL 补全**：其余文本位置 → 语句标签 textRange 内文本 → [stripXmlTags]（等长，偏移 1:1）
  *     → [XmlSqlCompletionContextResolver.resolveXml]（异常降级空上下文，只补关键字）
  *     → [SourceSqlCompleter.sqlCompletions] → prefixMatches 过滤 + addElement。
@@ -85,7 +87,14 @@ class XmlSqlCompletionContributor : CompletionContributor() {
                     if (attributeValue != null) {
                         val attributeName = (attributeValue.parent as? XmlAttribute)?.name
                         if (attributeName == "test" || attributeName == "collection") {
-                            addOgnlCompletions(statementTag, beforeCaret, result)
+                            // T-FCA-03：本分支被 test 与 collection 共用，集合快捷别名**只对 collection 开放**
+                            // （test 里补 list/collection/array 会污染既有候选面）
+                            addOgnlCompletions(
+                                statementTag,
+                                beforeCaret,
+                                result,
+                                collectionAliases = attributeName == "collection",
+                            )
                         }
                         // 其他属性值（refid/name 等）无合理候选：不产出（不落入 SQL）
                         return
@@ -124,11 +133,15 @@ class XmlSqlCompletionContributor : CompletionContributor() {
     /**
      * OGNL 值内补全（T-M27-04）：方法参数名 + 主实体 Java 字段名（fieldName）。
      * 光标前有 `param.` 前缀（`[\w$]+\.\w*$`）→ 只补第二段字段名；否则参数名 + 字段名都补。
+     *
+     * T-FCA-03：@param collectionAliases 为真（`collection` 属性）时在既有候选**之后**追加 foreach
+     * 集合快捷名 [COLLECTION_ALIAS_NAMES]——排在参数名/字段名之后，既有序位与内容不变。
      */
     private fun addOgnlCompletions(
         statementTag: XmlTag,
         beforeCaret: String,
         result: CompletionResultSet,
+        collectionAliases: Boolean,
     ) {
         val context = resolveContext(statementTag)
         val prefix = result.prefixMatcher
@@ -144,6 +157,11 @@ class XmlSqlCompletionContributor : CompletionContributor() {
             }
             fieldNames.forEach { name ->
                 if (prefix.prefixMatches(name)) result.addElement(SourceSqlSuggestionFactory.param(name))
+            }
+            if (collectionAliases) {
+                COLLECTION_ALIAS_NAMES.forEach { name ->
+                    if (prefix.prefixMatches(name)) result.addElement(SourceSqlSuggestionFactory.param(name))
+                }
             }
         }
     }
@@ -195,6 +213,19 @@ class XmlSqlCompletionContributor : CompletionContributor() {
     private val DYNAMIC_TAGS = listOf(
         "if", "foreach", "where", "set", "trim", "choose", "when", "otherwise", "bind", "sql", "include",
     )
+
+    /**
+     * foreach `collection` 属性专属快捷名（T-FCA-03）：MyBatis 把「单集合参数且无 `@Param`」包装成
+     * `ParamMap` 后的别名键（`ParamNameResolver.wrapToMapIfCollection`）——`list` / `collection` 来自
+     * `List` 与 `Collection` 参数，`array` 来自数组参数。规则来源标注：
+     * `mybatis-3.5.19-param-name-resolver-wrap-to-map-if-collection`。
+     *
+     * 三个名字**无条件列出**（本贡献器不做 PSI 签名解析：拿不到「是否单参数、是否集合、哪种集合」），
+     * 用户按自己的参数形态挑用；每个形态的**确切**键集与门槛由
+     * `ui/XmlParamTypeResolver.collectionAliasTypes` 与真引擎对照用例（`RealEngineFidelityTest`
+     * 的「别名键集钉」）钉住。只对 `collection` 属性开放（`test` 属性不列）。
+     */
+    private val COLLECTION_ALIAS_NAMES = listOf("list", "collection", "array")
 
     // T-M27.5：标签名/属性/模式正则提取至 SourceSqlSuggestionFactory（XML 与注解 <script> 共用）
 
