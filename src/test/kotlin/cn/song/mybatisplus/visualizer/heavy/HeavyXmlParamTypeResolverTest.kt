@@ -401,11 +401,18 @@ class HeavyXmlParamTypeResolverTest : HeavyPlatformTestCase() {
 
     // ------------------------------------------------------------------
     // T-FCA-01（N-32）：foreach 集合快捷别名（ParamNameResolver.wrapToMapIfCollection）
+    //
+    // 验收 1（「真引擎对照下三种快捷名渲染逐字节相等」）的**承重判据在本节**：三条用例钉我方注入
+    // （`XmlParamTypeResolver.collectionAliasTypes` 经 `resolveTypes` → paramTypes），摘掉注入即红
+    // （反向验证两次读数见实施记录）。`xml/fidelity/RealEngineFidelityTest` 的 P31~P33 只钉
+    // **真引擎键集 + 自研 foreach 语义**（自研侧手工喂别名键、绕开面板 mock 层），对我方注入不构成判据
+    // ——那边的注记同源。
     // ------------------------------------------------------------------
 
     /**
      * 别名门槛夹具（覆盖真引擎的逐形态分支 + 三类负向）：单 List / 单数组 / 单 Set /
-     * 单 Iterable（非 Collection）/ 单参数带 @Param / 多参数 / 非集合标量。
+     * 单 Iterable（非 Collection）/ 单参数带 @Param / 多参数 / 非集合标量 /
+     * 泛型数组两种（`List<Long>[]`、`Map<String,Object>[]`，见 [testCollectionAliasForGenericArrayKeysArrayOnly]）。
      */
     private val collectionAliasMapper = """
         package com.example;
@@ -418,6 +425,9 @@ class HeavyXmlParamTypeResolverTest : HeavyPlatformTestCase() {
             void byNamed(@org.apache.ibatis.annotations.Param("ids") java.util.List<Long> ids);
             void byMulti(java.util.List<Long> ids, String keyword);
             void byScalar(Long id);
+            void byGenericListArray(java.util.List<Long>[] ids);
+            void byGenericSetArray(java.util.Set<Long>[] ids);
+            void byGenericMapArray(java.util.Map<String, Object>[] ids);
         }
     """.trimIndent()
 
@@ -425,6 +435,9 @@ class HeavyXmlParamTypeResolverTest : HeavyPlatformTestCase() {
      * 正向：单集合参数且无 `@Param` → 别名键存在，键集按真引擎实测形态
      * （`List` → `collection` + `list`；`T[]` → 仅 `array`；`Set` → 仅 `collection`）。
      * 参数名键照常保留（别名是**追加**不是替换）。
+     *
+     * **承重**：本用例（与 [testCollectionAliasAbsentWhenGateFails]）是「我方别名注入」的直接判据——
+     * 摘掉 `resolveTypes` 里的注入即红；`RealEngineFidelityTest` 的 P31~P33 对本注入不可见（见节头注记）。
      */
     fun testCollectionAliasKeysByParamShape() {
         addSourceFile("CollectionAliasMapper.java", collectionAliasMapper)
@@ -474,7 +487,53 @@ class HeavyXmlParamTypeResolverTest : HeavyPlatformTestCase() {
         assertNull(iterable["list"])
     }
 
-    /** 别名与预览绑定构造联动：`collection="list"` 的 foreach 在预览里按别名键展开（引号档随类别）。 */
+    /**
+     * 泛型数组键集（T-FCA-01 修正）：数组形态判定**必须先于泛型剥壳**。
+     *
+     * 实测缺陷（独立复核员读数 `expected:<[array, ids]> but was:<[collection, ids, list]>`）：
+     * 旧实现先 `substringBefore('<')` 再判 `endsWith("[]")`，`java.util.List<java.lang.Long>[]`
+     * 被截成 `List` → 误判为 List 族并产出 `list` 键；`Set<Long>[]` 同源（得 `collection`）。
+     * 而数组在真引擎里**只有 `array` 键**（`RealEngineFidelityTest` 的「别名键集钉」用例 `T[]` 支：
+     * `instanceof Collection` 对数组不成立，走 `getClass().isArray()` 支）。
+     *
+     * 断言用**整键集**（而非单键存在性）：误产出的 `list`/`collection` 键只有整集比对才看得见。
+     * `Map<String,Object>[]` 是同一根因在类别层的显形（旧顺序剥壳后按 `Map` 落 OBJECT，
+     * 连别名门槛都进不去）——数组类别与元素类型无关。
+     */
+    fun testCollectionAliasForGenericArrayKeysArrayOnly() {
+        addSourceFile("CollectionAliasMapper.java", collectionAliasMapper)
+        fun keysOf(method: String): Set<String> =
+            XmlParamTypeResolver.resolveTypes(project, "com.example.CollectionAliasMapper", method).keys
+        // 对照：普通数组本就正确（修正泛型数组后不得回退）
+        assertEquals("普通数组 T[] → 仅 array + 参数名键", setOf("array", "ids"), keysOf("byArray"))
+        assertEquals(
+            "泛型数组 List<Long>[] → 仅 array（不得出现 list/collection）",
+            setOf("array", "ids"),
+            keysOf("byGenericListArray"),
+        )
+        assertEquals(
+            "泛型数组 Set<Long>[] → 仅 array",
+            setOf("array", "ids"),
+            keysOf("byGenericSetArray"),
+        )
+        assertEquals(
+            "泛型数组 Map<String,Object>[] → 仅 array（数组类别不随元素类型变）",
+            setOf("array", "ids"),
+            keysOf("byGenericMapArray"),
+        )
+        assertEquals(
+            "数组类别恒为 COLLECTION（元素是 Map 也不例外）",
+            ParamKind.COLLECTION,
+            XmlParamTypeResolver.resolveTypes(project, "com.example.CollectionAliasMapper", "byGenericMapArray")["ids"]?.kind,
+        )
+    }
+
+    /**
+     * 别名与预览绑定构造联动：`collection="list"` 的 foreach 在预览里按别名键展开（引号档随类别）。
+     *
+     * **承重**：注入的**唯一可观测面**（面板类型视图 `kindFor`/`quoteFor`）在此钉住——渲染成功本身
+     * 不是判据（`mockBindings` 直接按 `collectionExpr` 建键，无注入也渲染得出来，实测）。
+     */
     fun testCollectionAliasFeedsPreviewBindings() {
         addSourceFile("CollectionAliasMapper.java", collectionAliasMapper)
         val model = XmlPreviewModel.from(

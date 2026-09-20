@@ -134,18 +134,27 @@ object XmlParamTypeResolver {
      * MyBatis 3.5.19 `ParamNameResolver.getNamedParams` 在「**无 @Param 注解 ∧ 恰一个非特殊参数**」时
      * 把参数对象交给 `wrapToMapIfCollection(value, 实参名)` 包成 `ParamMap`，此后语句里可用别名键取到该集合。
      * 键集**经真引擎实测钉住**（`xml/fidelity/RealEngineFidelityTest` 的「别名键集钉」用例，非竞品转述）：
+     *  - `T[]`（**任意元素类型，含泛型数组 `List<Long>[]`**；`byte[]` 除外，见下方近似登记）→ 仅 `array`；
      *  - `List`（含 ArrayList/LinkedList/Vector/Stack 等 List 族）→ `collection` + `list` 双写；
      *  - `Collection` 非 `List`（Set/Queue/Deque 族）→ 仅 `collection`；
-     *  - `T[]`（非 `byte[]`，后者按 BLOB 落 UNKNOWN）→ 仅 `array`；
      *  - 其余（Map / DTO / 标量 / `Iterable` 等非 Collection）→ 不包装，无别名键。
      * 规则来源标注：`mybatis-3.5.19-param-name-resolver-wrap-to-map-if-collection`。
+     *
+     * **分支顺序是判据的一部分（T-FCA-01 修正）**：数组形态**先判**、集合族后判。先剥泛型
+     * （`substringBefore('<')`）会把 `java.util.List<java.lang.Long>[]` 截成 `java.util.List`，
+     * 据此判族会误产 `list` 键——而数组在真引擎里**没有** `list`/`collection` 键（`instanceof Collection`
+     * 对数组不成立，走 `getClass().isArray()` 支）。本方法因此与 [kindOfTypeText] 同口径：数组先判。
      *
      * **门槛与 [resolveTypes] 的 `paramN` 门槛互补而非复用**：那条是「全部参数都有显式 `@Param`」
      * （多参数 `ParamMap` 位置别名），本条是「单参数 ∧ 无显式 `@Param`」——MyBatis 侧同样是互斥两支
      * （`hasParamAnnotation` 为真即走多参数支，不再包装集合）。
      *
      * 类型读不到类别（非 COLLECTION）时不产出别名（宁缺勿错：`Iterable` 不是 `java.util.Collection`，
-     * 真引擎不包装，故显式排除）。
+     * 真引擎不包装，故显式排除）。**两处已知近似（登记，无测试覆盖，本次不扩面；键集为 Heavy 沙盒实测）**：
+     * ① `byte[]`/`Byte[]` 按 BLOB 落 [ParamKind.UNKNOWN] → 实测键集仅 `[bytes]`，无 `array` 键
+     * （真引擎会包装成 `array`）；② 用户自定义 `implements/extends List` 的类经 PSI 落 OBJECT
+     * （[isDtoLike]，走 DTO 字段展开分支）→ 实测键集为空（真引擎会给 `collection` + `list`）。
+     * 两形态均按「宁缺勿错」保守处置：少给键 = 面板按 UNKNOWN 兜底，多给键 = 可能错位的类型。
      */
     internal fun collectionAliasTypes(parameters: Array<PsiParameter>): Map<String, ParamTypeInfo> {
         if (parameters.size != 1) return emptyMap()
@@ -153,13 +162,13 @@ object XmlParamTypeResolver {
         if (explicitParamNameOf(param) != null) return emptyMap()
         val info = typeInfoOf(param.type)
         if (info.kind != ParamKind.COLLECTION) return emptyMap()
-        val simple = param.type.canonicalText.substringBefore('<').trim().substringAfterLast('.')
+        // 数组先判（含泛型数组）——顺序不可颠倒，理由见 KDoc「分支顺序是判据的一部分」
+        val canonical = param.type.canonicalText.trim()
+        if (canonical.endsWith("[]")) return mapOf("array" to info)
+        val simple = canonical.substringBefore('<').trim().substringAfterLast('.')
         if (simple in NON_COLLECTION_SIMPLE_NAMES) return emptyMap()
-        return when {
-            simple.endsWith("[]") -> mapOf("array" to info)
-            simple in LIST_SIMPLE_NAMES -> mapOf("collection" to info, "list" to info)
-            else -> mapOf("collection" to info)
-        }
+        return if (simple in LIST_SIMPLE_NAMES) mapOf("collection" to info, "list" to info)
+        else mapOf("collection" to info)
     }
 
     /**
@@ -203,14 +212,20 @@ object XmlParamTypeResolver {
     /**
      * 类型文本 → 类别（命中返回类别，未命中返回 null 交由调用方判 DTO 兜底）。
      *
-     * 泛型先剥壳（`java.util.List<java.lang.String>` → `java.util.List`）；
+     * **数组先于泛型剥壳（T-FCA-01 修正）**：`java.util.List<java.lang.Long>[]` 剥壳后得 `List`，
+     * 按外层类型判定会漏掉「它是数组」这一事实——`Map<K,V>[]` 更会落 OBJECT（数组类别与元素类型无关）。
+     * 数组一律 COLLECTION，但 `byte[]`/`Byte[]` 按 BLOB 语义落 UNKNOWN（T-PT-01 收窄，见实施记录）；
+     * 非数组文本再剥泛型（`java.util.List<java.lang.String>` → `java.util.List`）；
      * NUMBER 判定复用 [ParamQuote.decide]（升级前数值集单一来源，杜绝两份数值名单漂移）；
-     * 数组→COLLECTION，但 `byte[]`/`Byte[]` 按 BLOB 语义落 UNKNOWN（T-PT-01 收窄，见实施记录）；
      * `java.util.UUID` → TEXT（T-PC2-02，见 [UUID_FQN]）。
      */
     internal fun kindOfTypeText(typeText: String?): ParamKind? {
         if (typeText.isNullOrBlank()) return null
-        val bare = typeText.substringBefore('<').trim()
+        val full = typeText.trim()
+        if (full.endsWith("[]")) {
+            return if (isByteArray(full.substringAfterLast('.'))) ParamKind.UNKNOWN else ParamKind.COLLECTION
+        }
+        val bare = full.substringBefore('<').trim()
         val simple = bare.substringAfterLast('.')
         return when {
             bare == UUID_FQN || simple == "UUID" -> ParamKind.TEXT
@@ -219,7 +234,6 @@ object XmlParamTypeResolver {
             simple in TEXT_SIMPLE_NAMES -> ParamKind.TEXT
             simple in COLLECTION_SIMPLE_NAMES -> ParamKind.COLLECTION
             simple in OBJECT_SIMPLE_NAMES -> ParamKind.OBJECT
-            simple.endsWith("[]") -> if (isByteArray(simple)) ParamKind.UNKNOWN else ParamKind.COLLECTION
             else -> null
         }
     }

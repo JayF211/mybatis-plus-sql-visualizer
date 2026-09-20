@@ -33,7 +33,8 @@ import org.junit.Test
  * ## 断言面（只覆盖标签语义）
  * ① SQL 文本（空白归一后逐字节相等）；② `#{}` 参数属性名序列（顺序即 `?` 出现顺序，foreach 内为
  * `__frch_<名>_<n>` 形态）；③（辅助）自研侧 `errors` 是否为空——一致面要求为空，差异面按登记形态断言。
- * **不覆盖**：mock 值语义（引号 / 类型 / 占位形态）、面板回填链、`${ew.customSqlSegment}`、性能面。
+ * **不覆盖**：mock 值语义（引号 / 类型 / 占位形态）、面板回填链、`${ew.customSqlSegment}`、性能面、
+ * **我方集合快捷别名的注入**（P31~P33 的判别力边界与承重判据位置见场景表处注记）。
  *
  * ## 空白归一（唯一的非逐字节环节）
  * 真引擎保留 mapper 原文空白（换行/缩进原样进 SQL），自研渲染器按 `DynamicContext.appendSql` 的
@@ -249,7 +250,9 @@ class RealEngineFidelityTest {
      *  - 其余（Map / POJO / 标量）→ 原对象不包装（无别名键）；
      *  - 实参名（`useActualParamName=true` 时）与别名键**并存**。
      *
-     * 自研侧对应实现：`ui/XmlParamTypeResolver.collectionAliasTypes`（门槛与键集须与此处一致）。
+     * 自研侧对应实现：`ui/XmlParamTypeResolver.collectionAliasTypes`（门槛与键集须与此处一致）——
+     * **本用例只钉真引擎侧键集**；我方注入的承重判据在 `heavy/HeavyXmlParamTypeResolverTest`
+     * （见场景表 P31~P33 处注记）。
      */
     @Test
     fun `T-FCA 别名键集钉：真引擎 wrapToMapIfCollection 的逐形态键集`() {
@@ -566,6 +569,17 @@ class RealEngineFidelityTest {
         // ---- T-FCA（N-32）新增：foreach 集合快捷别名（ParamNameResolver.wrapToMapIfCollection）----
         // 真引擎侧吃**引擎自身**包装出的 ParamMap（[wrapToMapIfCollection]），自研侧 bindings 对齐同一键集；
         // 键集口径见 [别名键集钉] 用例（先跑该用例拿读数，再据实断言，不照抄竞品转述）。
+        //
+        // **判别力边界（T-FCA-04 复核补记，防「空绿」误读）**：P31~P33 自研侧 bindings 是**手工喂的**
+        // 别名键（`bindings("collection" to …, "list" to …)`），钉的是「真引擎键集 + 自研 foreach 语义」，
+        // **不覆盖我方 `XmlParamTypeResolver.collectionAliasTypes` 的别名注入**——摘掉注入后本三条仍绿
+        // （实测）。结构原因：本类自研侧直连 `XmlSqlRenderer`（按类 KDoc「绕开面板 mock 层」），
+        // 而面板侧 `XmlPreviewModel.mockBindings` 对 foreach 是**直接按 `collectionExpr` 建键**
+        // （实测：paramTypes 为空时 `collection="list"` 仍渲染出 `IN ( ? , ? )`），故「渲染成功/逐字节相等」
+        // 不构成注入的判据；注入的唯一可观测面是类型视图（`kindFor`/`quoteFor`）。
+        // 我方注入的承重判据在 `heavy/HeavyXmlParamTypeResolverTest`：
+        //  - `testCollectionAliasKeysByParamShape` / `testCollectionAliasAbsentWhenGateFails`（键集与门槛）；
+        //  - `testCollectionAliasFeedsPreviewBindings`（注入进 paramTypes → 面板类型视图 kindFor/quoteFor）。
         Scenario(
             "P31 单 List 参数别名 collection=list",
             doc("""<mapper namespace="n"><select id="s1" resultType="map">SELECT * FROM t WHERE id IN<foreach collection="list" item="id" open="(" separator="," close=")">#{id}</foreach></select></mapper>"""),
