@@ -272,6 +272,15 @@ agent 侧设计上是无限重连的（`SenderLoop` 断线按 1s→5s 退避重�
    逐行日志是 `LOG.isDebugEnabled` 级别而该日志为 INFO。**这条读数的来源是用户截图，不是日志**，
    立项文档里不要把它当日志证据引用。
 
+### 实施 T-06 时顺带发现的同族未修缺陷（W6 代理带回，本次不改）
+
+- **`util/MdcAccessor.java` 用 `Class.forName("org.slf4j.MDC")` 经 agent 自身加载器解析宿主类**：
+  fat jar / devtools 形态下 slf4j 在子加载器里 → 解析不到 → 请求标签（traceId 聚合）恒为 null。
+  与 T-06 同源（都是「拿 agent 侧加载器去够宿主侧类」），但属「请求聚合」特性、不在本次缺陷面内，
+  且本次改动没有让它变差（改前就如此）。若要一并修，取法可直接复用 T-06 的候选加载器校验链。
+- **Hikari 与驱动分处不同加载器的组合未实测**：T-06 的验证里 Hikari 与驱动同在系统 classpath，
+  `HikariProxyConnection` 接口集跨加载器的那种形态只是靠候选链兜底的理论推断，未实测。
+
 ## 实施记录
 
 | 项 | 内容 |
