@@ -43,7 +43,7 @@
 
 | 通道 | 结果 |
 |---|---|
-| `releaseGate`（= `buildPlugin → verifyGate` 三目标兼容门禁 `→ testShards` 全量） | 见 §六 末行（最终一次在末笔提交上执行） |
+| `releaseGate`（= `buildPlugin → verifyGate` 三目标兼容门禁 `→ testShards` 全量） | **BUILD SUCCESSFUL**（5m55s，末笔提交 `314e835` 上执行）；三目标 verdict 全 **Compatible**；`testShards` **491 类 / 5604 用例 / 6 跳过 / 0 失败 / 0 错误** |
 | `buildPlugin` | **SUCCESS** |
 | `verifyGate`（243 / 253 / 262 三目标） | 三条 verdict 全为 **Compatible** |
 | `testShards`（合并树） | **491 类 / 5604 用例 / 6 跳过 / 0 失败 / 0 错误** |
