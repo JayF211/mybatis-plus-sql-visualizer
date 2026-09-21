@@ -101,7 +101,7 @@ class PluginSettingsFolderConfigurable : Configurable {
 
         if (q.isEmpty()) {
             for (page in SUB_PAGES) {
-                listModel.addElement(SearchItem.PageItem(page.labelKey, page.descKey, page.icon, page.configurableClass))
+                listModel.addElement(SearchItem.PageItem(page.labelKey, page.descKey, page.icon, page.ref))
             }
             return
         }
@@ -112,7 +112,7 @@ class PluginSettingsFolderConfigurable : Configurable {
                 || MpSqlVisualizerBundle.message(it.descKey).lowercase().contains(q)
         }
         for (page in matchedPages) {
-            listModel.addElement(SearchItem.PageItem(page.labelKey, page.descKey, page.icon, page.configurableClass))
+            listModel.addElement(SearchItem.PageItem(page.labelKey, page.descKey, page.icon, page.ref))
         }
 
         // 2) 匹配的设置项内容
@@ -124,7 +124,7 @@ class PluginSettingsFolderConfigurable : Configurable {
                     fieldLabel = field.searchLabel,
                     fieldTooltip = field.searchTooltip,
                     pageLabelKey = field.pageLabelKey,
-                    configurableClass = field.configurableClass,
+                    ref = field.ref,
                 ))
             }
         }
@@ -135,7 +135,7 @@ class PluginSettingsFolderConfigurable : Configurable {
             is SearchItem.PageItem -> null
             is SearchItem.FieldItem -> item.fieldLabel
         }
-        navigateToPage(item.configurableClass, focusHint)
+        navigateToPage(item.ref, focusHint)
     }
 
     /**
@@ -143,22 +143,41 @@ class PluginSettingsFolderConfigurable : Configurable {
      *
      * 从宿主 SettingsEditor 取得当前 Settings（同一设置对话框），用 settings.select 切换树选择；
      * 切换完成后聚焦目标控件并闪烁高亮，让用户感知目标位置。取不到 Settings 时才回退打开设置对话框。
+     *
+     * **对话框内定位必须按 EP id 查（[resolveTarget]），不得按类查**——平台
+     * `Settings.find(Class)` = `ConfigurableVisitor.findByType`，对树里每个 `ConfigurableWrapper`
+     * 调 `ConfigurableWrapper.cast`；而 `cast` 里那条「EP 声明类型与目标不相容就不创建」的短路，
+     * 取的是 `ConfigurableEP.getConfigurableType()`，`ClassProducer` 未覆写 `ObjectProducer.getType()`
+     * （2024.3 `ConfigurableEP.java:392` 返回 null）→ 短路是死代码 → **整棵树（含其它插件页面）
+     * 全被实例化**。Kotlin 插件 `KotlinScriptingSettingsConfigurable` 构造器里做文件名索引访问
+     * （`KotlinScriptingSettingsConfigurable.java:46` → `FilenameIndex.getVirtualFilesByName`），
+     * 于是在 EDT 上触发 `Slow operations are prohibited on EDT`（真机 2024.3.7.1 两份栈实证）。
+     * 按 id 查时 `ConfigurableWrapper.getId()` 对声明了 id 的 EP 直接返回 `myEp.id`（不实例化），
+     * 只有目标页会被创建。
      */
-    private fun navigateToPage(configurableClass: Class<out Configurable>, focusHint: String? = null) {
+    private fun navigateToPage(ref: SubPageRef, focusHint: String? = null) {
         val settings = currentSettings() ?: run {
-            // 未在已打开的设置对话框内，回退为打开设置对话框
+            // 未在已打开的设置对话框内，回退为打开设置对话框（平台只有按类定位的公开重载）
             val project = ProjectManager.getInstance().openProjects.firstOrNull() ?: return
-            ShowSettingsUtil.getInstance().showSettingsDialog(project, configurableClass)
+            ShowSettingsUtil.getInstance().showSettingsDialog(project, ref.cls)
             return
         }
 
-        val target = settings.find(configurableClass) ?: return
+        val target = resolveTarget(settings, ref.id) ?: return
         val callback = settings.select(target)
         if (focusHint != null) {
             // 切换完成后异步聚焦目标控件，确保页面已显示、控件已创建
             callback.doWhenDone { focusTarget(target, focusHint) }
         }
     }
+
+    /**
+     * 在设置树中定位目标页（测试缝 + 反回归哨兵：签名里没有 Class，退回按类查编译不过）。
+     *
+     * 为什么不能按类查，见 [navigateToPage] 的 KDoc。
+     */
+    internal fun resolveTarget(settings: Settings, configurableId: String): Configurable? =
+        settings.find(configurableId)
 
     /**
      * 获取当前已打开设置对话框的 [Settings] 实例。
@@ -288,22 +307,30 @@ class PluginSettingsFolderConfigurable : Configurable {
     override fun apply() {}
     override fun reset() {}
 
+    /**
+     * 跳转目标：EP id（`plugin.xml` 声明）+ 目标类。
+     *
+     * 对话框内按 [id] 查（理由见 [navigateToPage]），[cls] 只服务兜底分支
+     * ——未在设置对话框内、需新开对话框时，平台没有按 id 的公开重载可用。
+     */
+    private data class SubPageRef(val id: String, val cls: Class<out Configurable>)
+
     /** 搜索结果项 */
     private sealed class SearchItem {
-        abstract val configurableClass: Class<out Configurable>
+        abstract val ref: SubPageRef
 
         data class PageItem(
             val labelKey: String,
             val descKey: String,
             val icon: Icon,
-            override val configurableClass: Class<out Configurable>,
+            override val ref: SubPageRef,
         ) : SearchItem()
 
         data class FieldItem(
             val fieldLabel: String,
             val fieldTooltip: String,
             val pageLabelKey: String,
-            override val configurableClass: Class<out Configurable>,
+            override val ref: SubPageRef,
         ) : SearchItem()
     }
 
@@ -312,7 +339,7 @@ class PluginSettingsFolderConfigurable : Configurable {
         val labelKey: String,
         val descKey: String,
         val icon: Icon,
-        val configurableClass: Class<out Configurable>,
+        val ref: SubPageRef,
     )
 
     /** 可搜索的设置项字段 */
@@ -320,7 +347,7 @@ class PluginSettingsFolderConfigurable : Configurable {
         val searchLabel: String,
         val searchTooltip: String,
         val pageLabelKey: String,
-        val configurableClass: Class<out Configurable>,
+        val ref: SubPageRef,
     )
 
     /**
@@ -408,15 +435,51 @@ class PluginSettingsFolderConfigurable : Configurable {
     }
 
     companion object {
+        // 设置页 EP id —— 与 src/main/resources/META-INF/plugin.xml 的 id 属性一一对应。
+        // 导航按 id 查（见 navigateToPage），id 写错会静默跳不动，由
+        // PluginSettingsFolderConfigurableTest 的「id 与类指向同一页」守卫兜住。
+        private const val ID_UI = "cn.song.mybatisplus.visualizer.settings.ui"
+        private const val ID_PREVIEW = "cn.song.mybatisplus.visualizer.settings.preview"
+        private const val ID_TABLE_MAPPING = "cn.song.mybatisplus.visualizer.settings.tableMapping"
+        private const val ID_SQL_LOG = "cn.song.mybatisplus.visualizer.settings.sqlLog"
+        private const val ID_SHORTCUTS = "cn.song.mybatisplus.visualizer.settings.shortcuts"
+        private const val ID_MCP = "cn.song.mybatisplus.visualizer.settings.mcp"
+        private const val ID_ABOUT = "cn.song.mybatisplus.visualizer.settings.about"
+        private const val ID_PROJECT = "cn.song.mybatisplus.visualizer.settings.project"
+
+        private val PAGE_UI = SubPageDesc(
+            "settings.section.ui", "settings.section.ui.desc", AllIcons.Nodes.Plugin,
+            SubPageRef(ID_UI, UiActionsConfigurable::class.java),
+        )
+        private val PAGE_PREVIEW = SubPageDesc(
+            "settings.section.preview", "settings.section.preview.desc", AllIcons.Nodes.Class,
+            SubPageRef(ID_PREVIEW, SqlPreviewConfigurable::class.java),
+        )
+        private val PAGE_TABLE_MAPPING = SubPageDesc(
+            "settings.section.tableMapping", "settings.section.tableMapping.desc", AllIcons.Nodes.DataTables,
+            SubPageRef(ID_TABLE_MAPPING, TableMappingConfigurable::class.java),
+        )
+        private val PAGE_SQL_LOG = SubPageDesc(
+            "settings.section.sqlLog", "settings.section.sqlLog.desc", AllIcons.Nodes.Console,
+            SubPageRef(ID_SQL_LOG, SqlLogConfigurable::class.java),
+        )
+        // T-ShortcutSettings：快捷键统一管理 + MCP 工具（跳转平台 MCP Server 设置 + 门控开关）
+        private val PAGE_SHORTCUTS = SubPageDesc(
+            "settings.section.shortcuts", "settings.section.shortcuts.desc", AllIcons.Nodes.Plugin,
+            SubPageRef(ID_SHORTCUTS, ShortcutsConfigurable::class.java),
+        )
+        private val PAGE_MCP = SubPageDesc(
+            "settings.section.mcp", "settings.section.mcp.desc", AllIcons.Nodes.Plugin,
+            SubPageRef(ID_MCP, McpConfigurable::class.java),
+        )
+        private val PAGE_ABOUT = SubPageDesc(
+            "settings.section.about", "settings.section.about.desc", AllIcons.Nodes.Favorite,
+            SubPageRef(ID_ABOUT, AboutConfigurable::class.java),
+        )
+
+        /** 落地页列表（顺序即呈现顺序）。 */
         private val SUB_PAGES = listOf(
-            SubPageDesc("settings.section.ui", "settings.section.ui.desc", AllIcons.Nodes.Plugin, UiActionsConfigurable::class.java),
-            SubPageDesc("settings.section.preview", "settings.section.preview.desc", AllIcons.Nodes.Class, SqlPreviewConfigurable::class.java),
-            SubPageDesc("settings.section.tableMapping", "settings.section.tableMapping.desc", AllIcons.Nodes.DataTables, TableMappingConfigurable::class.java),
-            SubPageDesc("settings.section.sqlLog", "settings.section.sqlLog.desc", AllIcons.Nodes.Console, SqlLogConfigurable::class.java),
-            // T-ShortcutSettings：快捷键统一管理 + MCP 工具（跳转平台 MCP Server 设置 + 门控开关）
-            SubPageDesc("settings.section.shortcuts", "settings.section.shortcuts.desc", AllIcons.Nodes.Plugin, ShortcutsConfigurable::class.java),
-            SubPageDesc("settings.section.mcp", "settings.section.mcp.desc", AllIcons.Nodes.Plugin, McpConfigurable::class.java),
-            SubPageDesc("settings.section.about", "settings.section.about.desc", AllIcons.Nodes.Favorite, AboutConfigurable::class.java),
+            PAGE_UI, PAGE_PREVIEW, PAGE_TABLE_MAPPING, PAGE_SQL_LOG, PAGE_SHORTCUTS, PAGE_MCP, PAGE_ABOUT,
         )
 
         /** 所有可搜索的设置项字段 */
@@ -427,7 +490,7 @@ class PluginSettingsFolderConfigurable : Configurable {
             val b = MpSqlVisualizerBundle
 
             // SQL 预览
-            val p = SqlPreviewConfigurable::class.java
+            val p = PAGE_PREVIEW.ref
             fields.add(SearchableField(b.message("settings.dialect"), "", "settings.section.preview", p))
             fields.add(SearchableField(b.message("settings.replaceParams"), b.message("settings.replaceParams"), "settings.section.preview", p))
             fields.add(SearchableField(b.message("settings.formatSql"), b.message("settings.formatSql"), "settings.section.preview", p))
@@ -448,7 +511,7 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.preview.jdbc"), b.message("settings.preview.jdbc.tip"), "settings.section.preview", p))
 
             // 表名映射
-            val t = TableMappingConfigurable::class.java
+            val t = PAGE_TABLE_MAPPING.ref
             fields.add(SearchableField(b.message("settings.tablePrefix"), b.message("settings.tablePrefix.tip"), "settings.section.tableMapping", t))
             fields.add(SearchableField(b.message("settings.tableSuffix"), b.message("settings.tableSuffix.tip"), "settings.section.tableMapping", t))
             fields.add(SearchableField(b.message("settings.removeTablePrefix"), b.message("settings.removeTablePrefix.tip"), "settings.section.tableMapping", t))
@@ -457,7 +520,7 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.tableNameInference"), b.message("settings.tableNameInference.tip"), "settings.section.tableMapping", t))
 
             // SQL 日志
-            val l = SqlLogConfigurable::class.java
+            val l = PAGE_SQL_LOG.ref
             fields.add(SearchableField(b.message("settings.log.sqlPrefix"), b.message("settings.log.sqlPrefix.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.paramPrefix"), b.message("settings.log.paramPrefix.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.log.mixedPrefix"), b.message("settings.log.mixedPrefix.tip"), "settings.section.sqlLog", l))
@@ -489,7 +552,7 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.sourceFrameSkipPrefixes"), b.message("settings.sourceFrameSkipPrefixes.tip"), "settings.section.sqlLog", l))
 
             // 界面与操作
-            val u = UiActionsConfigurable::class.java
+            val u = PAGE_UI.ref
             fields.add(SearchableField(b.message("settings.showGutterIcon"), "", "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.language"), "", "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.shortcut"), b.message("settings.shortcut.tip"), "settings.section.ui", u))
@@ -499,19 +562,18 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.editorShowWhitespaces"), b.message("settings.editorShowWhitespaces.tip"), "settings.section.ui", u))
 
             // 关于
-            val a = AboutConfigurable::class.java
+            val a = PAGE_ABOUT.ref
             fields.add(SearchableField(b.message("settings.cache.label"), b.message("settings.cache.tip"), "settings.section.about", a))
             fields.add(SearchableField(b.message("settings.update.versionInfo"), "", "settings.section.about", a))
             fields.add(SearchableField(b.message("settings.buildNumber"), b.message("settings.buildNumber.tip"), "settings.section.about", a))
 
             // T-ProjectSettingsScope P3：项目级设置页 10 项（总开关 + 9 项可覆盖字段）。
-            // 前置对照实验（ProjectPluginSettingsConfigurableTest 内探针）：项目上下文下
-            // `Settings.find(ProjectPluginSettingsConfigurable::class.java)` 命中
+            // 前置对照实验（ProjectPluginSettingsConfigurableTest 内探针）：项目上下文下该页在设置树里
             // （ConfigurableVisitor.findByType 走 Configurable.PROJECT_CONFIGURABLE，project=null 时为 null），
             // 故本页条目可跳转，不是 T-SettingsTruth P3 清理过的「幽灵搜索项」形态。
             // 文案键复用全局页同项（T-SettingsTruth 6.5 已把项目页标签收编为全局键），
             // 仅 pageLabelKey 指向项目页 displayName——用户在同一批关键词下同时看到两个作用域。
-            val pj = ProjectPluginSettingsConfigurable::class.java
+            val pj = SubPageRef(ID_PROJECT, ProjectPluginSettingsConfigurable::class.java)
             fields.add(SearchableField(b.message("settings.project.useProjectSettings"), b.message("settings.project.useProjectSettings.tip"), "configurable.settings.project.displayName", pj))
             fields.add(SearchableField(b.message("settings.dialect"), "", "configurable.settings.project.displayName", pj))
             fields.add(SearchableField(b.message("settings.replaceParams"), b.message("settings.replaceParams"), "configurable.settings.project.displayName", pj))
@@ -525,5 +587,15 @@ class PluginSettingsFolderConfigurable : Configurable {
 
             return fields
         }
+
+        /**
+         * 测试缝：登记的全部跳转目标（EP id → 目标类）。
+         *
+         * 供「id 与类指向同一设置页」守卫逐个断言——导航按 id 查，id 写错会静默跳到别处或跳不动，
+         * 纯 UI 断言看不出来（本仓「幽灵搜索项」的同类风险）。
+         */
+        internal fun registeredTargetsForTest(): List<Pair<String, Class<out Configurable>>> =
+            (SUB_PAGES.map { it.ref.id to it.ref.cls } + ALL_SEARCHABLE_FIELDS.map { it.ref.id to it.ref.cls })
+                .distinct()
     }
 }
