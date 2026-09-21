@@ -188,8 +188,11 @@ class AgentManager(private val project: Project) : Disposable {
      * T-AgentHeartbeat T-05：最近一次摘除是否属「连接刚建立、首条心跳尚未到达」
      * （过期会话里存在从未收到过 HELLO 之外存活帧者）。
      *
-     * 与 [heartbeatDropDetected] **互斥**：本条只说明连接还在早期，不构成「应用侧无响应」的证据
-     * ——现场正是这一类被误叙成「应用侧心跳中断（进程可能已卡死）」，而应用 JVM 又活了 7 分半。
+     * 与 [heartbeatDropDetected] **可同时置位**（不是互斥——独立复核订正）：多会话同轮过期、
+     * 其中一条曾收到存活帧、另一条没有时，两个标志都为真。叙事上以「停摆」优先（[agentStatusText]
+     * 先判 [heartbeatDropDetected]），故结果仍正确；但**不要**据本条去排除停摆。语义上本条只说明
+     * 连接还在早期，不构成「应用侧无响应」的证据——现场正是这一类被误叙成
+     * 「应用侧心跳中断（进程可能已卡死）」，而应用 JVM 又活了 7 分半。
      */
     private val firstHeartbeatPending = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -836,6 +839,11 @@ class AgentManager(private val project: Project) : Disposable {
             runCatching { session.sendConfig(disabled = !active) }
                 .onFailure { LOG.warn("premain: 初始 CONFIG 下发失败（pid=$pid）", it) }
             everAttached.set(true)
+            // T-AgentHeartbeat T-05（独立复核补位）：与 attachToPid 对称——新会话挂上即清两类回落标记。
+            // 此前只写 attachedPids 不清标记，premain 重连后状态行可能残留上一轮摘除的叙事；
+            // 当前无可见后果（agentStatusText 先判 livePids），但任何人重排分支就会露出来。
+            heartbeatDropDetected.set(false)
+            firstHeartbeatPending.set(false)
             updateOnline()
             // T-PS5-04：premain 会话建立同 attach 链——巡检懒启 + 推断 URL 回写
             ensureMonitorStarted()
@@ -954,7 +962,8 @@ class AgentManager(private val project: Project) : Disposable {
             livePids = sessions.filter { isSessionHealthy(it) }.map { it.pid },
             everAttached = everAttached.get(),
             heartbeatExpired = heartbeatDropDetected.get(),
-            // T-AgentHeartbeat T-05：与 heartbeatExpired 互斥的另一类过期原因（连接早期，首条心跳未到）
+            // T-AgentHeartbeat T-05：另一类过期原因（连接早期，首条心跳未到）。
+            // 与 heartbeatExpired 可同时为真（多会话同轮过期），叙事以 heartbeatExpired 优先。
             firstHeartbeatPending = firstHeartbeatPending.get(),
             // 秒数取当前在线窗口值（测试注入短窗时文案跟着变，不硬编码 30）
             heartbeatWindowSeconds = heartbeatWindowMs / 1000,
@@ -1180,7 +1189,8 @@ internal data class AgentStatusSnapshot(
     val heartbeatExpired: Boolean = false,
     /**
      * T-AgentHeartbeat T-05：最近一次摘除是否属「连接刚建立、首条心跳尚未到达」
-     * （过期会话从未收到过 HELLO 之外的存活帧）。与 [heartbeatExpired] 互斥——后者才是应用侧停摆。
+     * （过期会话从未收到过 HELLO 之外的存活帧）。与 [heartbeatExpired] **可同时置位**（不是互斥，
+     * 独立复核订正）：多会话同轮过期时可两者都为真，此时叙事以 [heartbeatExpired] 优先。
      */
     val firstHeartbeatPending: Boolean = false,
     /** T-AgentHeartbeat T-05：在线窗口秒数（文案带出的可核实读数；默认取协议常量，测试可注入短窗）。 */

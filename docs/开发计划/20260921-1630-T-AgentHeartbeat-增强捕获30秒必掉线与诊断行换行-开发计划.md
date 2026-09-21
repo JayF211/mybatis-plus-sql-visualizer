@@ -289,6 +289,48 @@ agent 侧设计上是无限重连的（`SenderLoop` 断线按 1s→5s 退避重�
 - **Hikari 与驱动分处不同加载器的组合未实测**：T-06 的验证里 Hikari 与驱动同在系统 classpath，
   `HikariProxyConnection` 接口集跨加载器的那种形态只是靠候选链兜底的理论推断，未实测。
 
+### 跨车道独立复核（W7，只读）另找到的问题
+
+五条车道各自验过自己，但**没人检查过它们互相之间怎么作用**。合流后另派了一条只读复核专门做这件事，
+总判是「**不存在会让人不敢交付的问题**」（没有出现「两条通道同时零产出」「状态行说假话」「宿主语义被钩子破坏」这类形态），
+但带回四条真缺陷与九条「看起来验过、其实没验」。处置如下：
+
+**本次已修（复核后直接改）**
+
+1. **KDoc 谎报「互斥」**：`firstHeartbeatPending` 与 `heartbeatDropDetected` 由两个独立 `any` 计算，
+   多会话同轮过期时可**同时为真**，而三处 KDoc/注释都写「互斥」——与实现及作者自己的用例
+   （`AgentStatusTextTest` 里就在测「同时置位时以停摆为准」）矛盾。已改口为「可同时置位，叙事以停摆优先」。
+2. **`onPremainConnected` 漏清回落标记**（与 `attachToPid` 不对称）：`attachToPid` 建会话时清两位，
+   premain 通道建会话时只写 `attachedPids` 不清标记 → 重连后状态行可能残留上一轮摘除的叙事。
+   当前无可见后果（`agentStatusText` 先判 `livePids`），但任何人重排分支就会露出来。已补对称的两行。
+
+**本次登记不修（需真机确认或属独立面）**
+
+3. **`contentRemoved` 未做「主控制台」过滤（低-中）**：`scanAll` 用「上轮有主控制台、本轮无」的边沿判据，
+   而 `ContentManagerListener.contentRemoved` 无条件调 `onConsoleRemoved()`——跑着应用时关掉一个
+   HTTP 响应页签也会走这条路。**这是 T-03 之前就有的形态**，但 T-03 把 `onRunEnded()` 挂到了
+   `onConsoleRemoved` 上，于是后果从「误停捕捉」扩大到「顺手关掉本轮 premain 通道、该次运行剩余时间失去重连路径」。
+   不修的理由：触发路径未真机确认（HTTP 响应页签是否真走这条 listener 未实测），而它改的是核心桥文件的语义；
+   且 T-01 修好后会话本就不易掉线，重连只是安全网。**建议单独立项**：让 listener 路径复用 `scanAll` 的边沿判据。
+4. **`closePremainChannels` 的 `clear()` 竞态（极窄窗口）**：快照关闭 + 尾随 `clear()`，若 `openPremainChannel`
+   在两者之间插入新通道会被无关闭地摘出表 → 该通道只能靠自身 120s 超时自收，`MAX_PREMAIN_CHANNELS` 计数失真。
+   **T-03 之前就有**（旧版同款），T-03 只是新增了 `onRunEnded` 这个高频调用者、把暴露面放大。窗口微秒级，不列为交付阻塞。
+
+**九条「看起来验过、其实没验」的清单（按建议处理成本排序）**
+
+5. **T-06 新增的失败路径零覆盖**（讽刺点：该车道 commit 正是批评这种形态）：`grep dropToRaw|fallbackCount` 在 agent 测试目录**零命中**。
+   T-06 的卖点是「失败不再静默（计数 + 一次性 WARN + 返回原语句）」，而这条路径既无夹具也无断言。建议补「跨 loader 不可见接口集」用例。
+6. **`AgentManagerPremainTest` 的 10 处关键断言走 `awaitTrue`**（5s 轮询）→ 失败读数是**超时红而非断言红**；
+   T-03 自报的 4 条反向红里有一条正是这种。建议改两段式（先 `awaitTrue` 建前置，再断言终态）。
+7. **心跳窗口在三处测试里硬编码 `30_000L`/`30L`**，未引用 `AgentProtocol.ONLINE_WINDOW_MS`：跨侧不变量测试能红，但这批行为测试不会跟着窗口改动而动。
+8. **`EmptyTextRenderTest` 只有 2 条断言真正承重**（`!text.contains("\n")` 与 Fragment 数 = 3）；另 2 条在修复前形态下也是绿的。
+   澄清：W4 自报「4 例中 2 例转红」是**准确的**，复核者按计划文档措辞误读成「4 例红」，此处一并订正。
+9. **`SettingsTruthTest` 与 `AgentProtocolSyncTest` 多处是源码文本 `contains` 扫描**（如 `!code.contains("idleMs")`）：
+   换一种累加写法（`elapsed += 200`）即可通过，判别力有限——是「防漂移」不是「防回归」。
+10. **`HeartbeatRhythmTest` 依赖 `EventBus.start` 的 JVM 单例与系统属性注入**：今天 agent 测试目录无第二个调用点故稳定；
+    将来若有人加一个先跑的用例，间隔注入会静默失效、本用例转**假红**。且整类只能有 1 例。
+11. **`AgentHeartbeatWindowTest` 用反射置 `everAttached`**：「attach 成功 → everAttached → 状态行」这条接线在生产侧无运行期测试，只有文本扫描兜底。
+
 ## 实施记录
 
 | 项 | 内容 |
@@ -300,7 +342,7 @@ agent 侧设计上是无限重连的（`SenderLoop` 断线按 1s→5s 退避重�
 | T-01/T-02 定向读数与反向验证 | **定向读数**：`./gradlew :sql-visualizer-agent:test`（先 `rm -rf sub-projects/sql-visualizer-agent/build` 防陈旧 UP-TO-DATE）**66 通过 / 0 失败 / 0 错误**（含 `HeartbeatRhythmTest` 1/1，3.475s）；主项目 `./gradlew test --tests cn.song.mybatisplus.visualizer.log.agent.AgentProtocolSyncTest` **4 通过 / 0 失败**（0.161s）。**反向验证＝断言红（非超时红）**：把 `SenderLoop` 心跳判定退回旧形态（固定 1s 读超时 + 取消 HELLO 后补发 + `idleMs += 200` 累加、阈值取注入间隔；仅保留间隔注入钩子以便把刻度压到 300ms）→ `HeartbeatRhythmTest` 转红，报错原文 `java.lang.AssertionError: HELLO 后首条心跳应在 450ms 内，实测 2410ms（「假定每轮 200ms」累加计时形态实测 2410ms；生产默认间隔下实测 +60633ms）`（`HeartbeatRhythmTest.java:73`；1 test / 1 failed / 0 errors，2.541s）。逐字还原后转绿：`git hash-object` 与 `HEAD:...SenderLoop.java` 同为 `0a1944b7`、`git diff HEAD` 为空、`grep RED PROBE` 零残留；还原后单跑 **1/1 通过**（3.102s，非 UP-TO-DATE 实跑），agent 子项目全量复跑 **66 通过 / 0 失败**。 |
 | T-01/T-02 测试健壮化（`f1f251d`） | 反向验证期间发现的可诊断性问题，判据/阈值/断言结构未动：①单帧读超时由 `INTERVAL_MS * 4`（1200ms）改为固定常量 `FRAME_WAIT_MS = 3000`——读超时只作「帧彻底不来」的兜底，节奏判定一律走帧到达时刻的实测差值，放宽不削弱断言；而 1200ms 在本机五树并行 gradle 下离调度抖动太近。**收益实证**：反向验证时首条心跳实测 2410ms 落在 3000ms 内，拿到的是断言红（贴出实测值），而不是 1200ms 下的 `SocketTimeoutException` 超时红——失败读数从「帧没来」升级为「帧来了、晚了 5 倍」。②首帧读加 `SocketTimeoutException` 显式失败消息（贴等待上限、期望上限与累加形态预期读数）。③首帧间隔断言的失败消息补实测锚点：原先凭估算写的「1446ms」改为实测 2410ms（与另一处 `INTERVAL_MS * 8 = 2400ms` 的估算一致）。 |
 | T-01/T-02 未验前提 | 真机口径（计划 §六 1~4：`runIde` 沙盒挂 `easy-code-demo`、静等 2 分钟、`增强捕获在线态切换: true -> false` 应为 0 条）**未验**——本树按分工只跑定向单测，`runIde` 真机验收与全量测试 / `verifyGate` / `verifyPlugin` 由 Astra 合流后统一跑一次。另：「首条心跳 ≤1.5 倍间隔、3s 窗口 ≥6 条」是在间隔压到 300ms 的刻度上取得的读数，生产 10s 刻度下未直接实测（墙钟差判定与刻度无关，但缺 10s 刻度的直接读数）。 |
-| T-05（状态行文案真实性） | `dcdc5e7`。①`AgentSession.livenessFrameSeen`（`@Volatile`，读线程写/巡检线程读）：是否收到过 **HELLO 之外的存活帧**（HEARTBEAT/EVENT）——读循环对所有帧都刷 `lastSeen`，故「刚连上」与「曾有心跳后停摆」在 `lastSeen` 上同形，此前无从区分；HELLO 只证明 socket 建立、不证明应用侧越过启动期，不计入。②`sweepOffline` 按该位分两类（互斥）：曾收到存活帧 → `heartbeatDropDetected`（语义不变）；从未收到 → 新增 `firstHeartbeatPending`。③`AgentStatusSnapshot` 加 `firstHeartbeatPending`（默认 false）与 `heartbeatWindowSeconds`（默认 `ONLINE_WINDOW_MS/1000`，带默认值故既有调用点不动），`agentStatusText` 过期态由两分支扩为三分支。④文案：`heartbeatLost` 去掉「进程可能已卡死」因果断言 → zh「已 {0} 秒未收到应用侧心跳，已回落控制台捕获」/en「No application heartbeat for {0} seconds, fell back to console capture」（旧 zh「应用侧心跳中断（进程可能已卡死），已回落控制台捕获」）；新增 `firstHeartbeatPending` zh「连接已建立，尚未收到应用侧心跳（等待首条心跳）」/en「Connection established, no application heartbeat received yet (waiting for the first heartbeat)」，中英键集合全等（`BundleParityGuardTest` 绿）。⑤测试 `AgentStatusTextTest` +5、`AgentHeartbeatWindowTest` +3（含「仅收到 HELLO 仍算首条心跳未到」——用 `lastSeen` 推进证明 HELLO 真被读线程处理，防「帧没被读」的空绿），既有「心跳中断」断言按新文案更新（未削弱为「非空」）。**反向验证**：把该支临时去掉（`heartbeatDropDetected.set(dead.any { it.alive })` + 过期态两分支）→ 5 个新增用例 +「五态互不重复」共 6 红，报错原文即现场错误叙事「pending=已 30 秒未收到应用侧心跳，已回落控制台捕获 lost=…」（两态收敛成同一句）；`git checkout --` 逐字还原后转绿。定向测试 112 绿（`log/agent` 全包 + 两个 bundle 守卫 + `SettingsTruthTest`）。 |
+| T-05（状态行文案真实性） | `dcdc5e7`。①`AgentSession.livenessFrameSeen`（`@Volatile`，读线程写/巡检线程读）：是否收到过 **HELLO 之外的存活帧**（HEARTBEAT/EVENT）——读循环对所有帧都刷 `lastSeen`，故「刚连上」与「曾有心跳后停摆」在 `lastSeen` 上同形，此前无从区分；HELLO 只证明 socket 建立、不证明应用侧越过启动期，不计入。②`sweepOffline` 按该位分两类（**可同时置位，非互斥**——独立复核订正；叙事以停摆优先）：曾收到存活帧 → `heartbeatDropDetected`（语义不变）；从未收到 → 新增 `firstHeartbeatPending`。③`AgentStatusSnapshot` 加 `firstHeartbeatPending`（默认 false）与 `heartbeatWindowSeconds`（默认 `ONLINE_WINDOW_MS/1000`，带默认值故既有调用点不动），`agentStatusText` 过期态由两分支扩为三分支。④文案：`heartbeatLost` 去掉「进程可能已卡死」因果断言 → zh「已 {0} 秒未收到应用侧心跳，已回落控制台捕获」/en「No application heartbeat for {0} seconds, fell back to console capture」（旧 zh「应用侧心跳中断（进程可能已卡死），已回落控制台捕获」）；新增 `firstHeartbeatPending` zh「连接已建立，尚未收到应用侧心跳（等待首条心跳）」/en「Connection established, no application heartbeat received yet (waiting for the first heartbeat)」，中英键集合全等（`BundleParityGuardTest` 绿）。⑤测试 `AgentStatusTextTest` +5、`AgentHeartbeatWindowTest` +3（含「仅收到 HELLO 仍算首条心跳未到」——用 `lastSeen` 推进证明 HELLO 真被读线程处理，防「帧没被读」的空绿），既有「心跳中断」断言按新文案更新（未削弱为「非空」）。**反向验证**：把该支临时去掉（`heartbeatDropDetected.set(dead.any { it.alive })` + 过期态两分支）→ 5 个新增用例 +「五态互不重复」共 6 红，报错原文即现场错误叙事「pending=已 30 秒未收到应用侧心跳，已回落控制台捕获 lost=…」（两态收敛成同一句）；`git checkout --` 逐字还原后转绿。定向测试 112 绿（`log/agent` 全包 + 两个 bundle 守卫 + `SettingsTruthTest`）。 |
 | T-03 premain 通道重连（W2，commit d8bf6c9） | 代码：`acceptPremain` 改**循环 accept**（`MAX_PREMAIN_RECONNECTS=32` 上限防抖动热循环），每次回连仍交既有 `onPremainConnected`（同 pid 有活动会话丢弃重复连接的判据未动）。通道生命周期从「accept 一次即关」改为**绑定到本次运行**：`PREMAIN_ACCEPT_TIMEOUT_MS` 语义收窄为「等首次回连」（accept 的 soTimeout），认领后转 30s 空转拍复核；**运行结束信号接在 `SqlLogManager.onConsoleRemoved` → `AgentManager.onRunEnded`**（`RunConfigurationProcessListener` 类注释指定的项目停止语义承载点；放在 capturing 守卫之前 + `getServiceIfCreated`，不为关通道实例化服务）。`processTerminated` 未采纳——它对 JUnit/HTTP 等非主配置进程也会触发，误关通道会让正在跑的应用丢掉重连路径。另设两重不依赖钩子的兜底：pid 消亡判定（`ProcessHandle`，pid 取 agent 自报 HELLO = 目标 JVM 自身 pid）与 12h TTL；`prunePremainChannels` 判据同步改写（不再把服役中的已认领通道当 stale）。泄漏收口：`PremainChannel` 实现 `Disposable` 并注册进项目 disposable 树，`closePremainChannel` 单一出口同时释放 socket / accept 线程 / disposer 条目，`onRunEnded`、`shutdownAll`、`dispose` 三路共用。 |
 | T-03 测试与反向验证 | `AgentManagerPremainTest` 14 例全绿（新增 4 例：摘除后同 pid 回连自动恢复在线、多轮回连通道与会话规模有界、运行结束关闭本轮通道且连续 7 次运行不累积、回连达上限通道退休；既有「回连后通道被摘除」断言按新语义改为「认领后留表等重连」——旧断言正是根因形态）。反向验证：临时把重连上限压到 1（还原旧单次 accept 语义）→ 4 例转红（3 例 `java.net.ConnectException: Connection refused: connect`，1 例「等待超时：通道未认领」）；逐字还原（`git diff` 为空、探针零残留）→ 14 例转绿。真机连续多次运行的通道回收未验（见下行）。 |
 | T-03 未验前提 | 真机上「应用停止 → 主控制台移除」这条钩子在增强捕获**未处于 capturing 态**时不会触发（桥未挂载即无移除检测），此时通道靠 pid 消亡判定与 12h TTL 兜底回收；`ProcessHandle` 对 IDE 子进程的存活判定在真机未实测（查询失败按存活处理，退化形态 = 回到 T-03 之前的「无重连」而非误关正在服役的通道）。 |
