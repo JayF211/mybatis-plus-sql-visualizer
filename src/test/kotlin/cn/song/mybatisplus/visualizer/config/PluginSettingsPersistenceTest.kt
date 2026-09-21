@@ -152,7 +152,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // T-AutoFold：SQL 预览字段较多时自动折叠开关 +1
             // M56 T-M56-08：增强捕获开关 + 脱敏开关 +2
             // T-UxOnboard T-UX-01：首用锚点引导通知开关 +1（界面节）
-            assertEquals("复选框总数应为 28", 28, texts.size)
+            // T-PreviewWhitespaceToggle O-44a：空白符可视化开关 +1（界面节，默认关＝不设置该属性）
+            assertEquals("复选框总数应为 29", 29, texts.size)
         } finally {
             settings.state.language = old
         }

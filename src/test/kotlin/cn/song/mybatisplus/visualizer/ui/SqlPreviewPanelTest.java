@@ -568,6 +568,64 @@ public class SqlPreviewPanelTest extends BasePlatformTestCase {
         panel.clear();
     }
 
+    // T-PSG（N-33）：面板回填串感知——引号/注释内的 `?` 不是占位符，不参与回填
+    public void testParamBackfillIgnoresQuestionMarkInStringLiteral() throws Exception {
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        String sql = "SELECT id FROM tbl WHERE note = 'a?b' AND phone = ?";
+        panel.showResult(result(sql, sql, List.of("phone")));
+        panel.paramFieldForTest(0).setText("abc");
+        assertEquals(
+                "引号内 `?` 应保持原样、真占位符按 phone 回填",
+                "SELECT id FROM tbl WHERE note = 'a?b' AND phone = 'abc'",
+                panel.editorForTest().getDocument().getText());
+        panel.clear();
+    }
+
+    public void testParamBackfillIgnoresQuestionMarkInComments() throws Exception {
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        String sql = "SELECT id FROM tbl /* 占?位 */ WHERE phone = ?";
+        panel.showResult(result(sql, sql, List.of("phone")));
+        panel.paramFieldForTest(0).setText("abc");
+        assertEquals(
+                "块注释内 `?` 应保持原样",
+                "SELECT id FROM tbl /* 占?位 */ WHERE phone = 'abc'",
+                panel.editorForTest().getDocument().getText());
+        panel.clear();
+    }
+
+    public void testParamBackfillNormalPathByteIdentical() throws Exception {
+        // T-PSG 验收 1：不含引号/注释内 `?` 的正常 SQL，回填结果与改前逐字节一致（硬编码钉住）
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        String sql = "SELECT id FROM tbl WHERE note = 'hello' AND phone = ? AND age > ?";
+        panel.showResult(result(sql, sql, List.of("phone", "age")));
+        panel.paramFieldForTest(0).setText("abc");
+        panel.paramFieldForTest(1).setText("1");
+        assertEquals(
+                "SELECT id FROM tbl WHERE note = 'hello' AND phone = 'abc' AND age > 1",
+                panel.editorForTest().getDocument().getText());
+        panel.clear();
+    }
+
+    // T-PSG-04：面板回填链的基数对账——位点数与参数条数不等时如实记录（不阻断）
+    public void testPlaceholderReconciliationMismatchRecorded() throws Exception {
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        String sql = "SELECT id FROM tbl WHERE a = ? AND b = ?";
+        panel.showResult(result(sql, sql, List.of("a")));
+        assertEquals(
+                "位点数(2) != 参数条数(1) → 应如实记录对账标注",
+                "-- placeholder/param count mismatch (2 placeholders vs 1 params)",
+                panel.placeholderReconciliationForTest());
+        panel.clear();
+    }
+
+    public void testPlaceholderReconciliationEqualNoMarker() throws Exception {
+        SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
+        String sql = "SELECT id FROM tbl WHERE phone = ?";
+        panel.showResult(result(sql, sql, List.of("phone")));
+        assertNull("位点数与参数条数相等 → 无标注", panel.placeholderReconciliationForTest());
+        panel.clear();
+    }
+
     // ------------------------------------------------------------------
     // T-M42：日志双击预览参数识别——initialParamValues 预填
     // ------------------------------------------------------------------

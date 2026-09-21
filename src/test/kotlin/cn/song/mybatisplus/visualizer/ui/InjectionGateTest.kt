@@ -307,4 +307,55 @@ class InjectionGateTest : BasePlatformTestCase() {
         val text = clipboardText()
         assertFalse("无 raw 段产物逐字节不变：$text", text!!.contains(CopyExecutableSqlAction.DOLLAR_RAW_MARKER))
     }
+
+    // ------------------------------------------------------------------
+    // T-PSG-04（N-33）：复制链占位符/参数条数对账——不等时产物头部如实标注（不阻断）
+    // ------------------------------------------------------------------
+
+    /** Wrapper 形态结果：指定 SQL 与参数来源（占位符条数与参数条数可不等）。 */
+    private fun paramResult(sql: String, params: List<String>) = PreviewResult(
+        sql,
+        sql,
+        params,
+        null,
+        null,
+        "t_biz",
+        emptyList(),
+    )
+
+    fun test复制产物_占位符多于参数_头部如实标注() {
+        val p = newPanel()
+        p.showResult(paramResult("SELECT * FROM t_biz WHERE a = ? AND b = ?", listOf("a")))
+
+        CopyExecutableSqlAction(project).execute(p)
+
+        val text = clipboardText()
+        assertTrue(
+            "占位符多于参数 → 产物头应如实标注（不阻断复制）：$text",
+            text!!.startsWith("-- placeholder/param count mismatch (2 placeholders vs 1 params)\n"),
+        )
+    }
+
+    fun test复制产物_位点数与参数条数相等_无标注() {
+        val p = newPanel()
+        p.showResult(paramResult("SELECT * FROM t_biz WHERE a = ?", listOf("a")))
+
+        CopyExecutableSqlAction(project).execute(p)
+
+        val text = clipboardText()
+        assertFalse("相等时产物逐字节不变：$text", text!!.contains("placeholder/param count mismatch"))
+    }
+
+    fun test复制产物_位点少于参数_不标注_已回填常态() {
+        // 面板已回填文本：已填参数的位置不再是 `?`，sources 仍是完整参数表——此向不等是常态，
+        // 不应在产物里天天误报（T-PSG-04 有意的不对称口径）
+        val p = newPanel()
+        p.showResult(paramResult("SELECT * FROM t_biz WHERE a = ? AND b = ?", listOf("a", "b")))
+        p.paramFieldForTest(0)!!.text = "1"
+
+        CopyExecutableSqlAction(project).execute(p)
+
+        val text = clipboardText()
+        assertFalse("已回填常态不应标注：$text", text!!.contains("placeholder/param count mismatch"))
+    }
 }

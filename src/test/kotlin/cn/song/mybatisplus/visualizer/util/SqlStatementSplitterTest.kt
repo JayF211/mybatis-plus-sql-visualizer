@@ -341,6 +341,35 @@ class SqlStatementSplitterTest {
         )
     }
 
+    // ======================== MERGE 多行样例（O-42 / T-OQCS-04 守卫） ========================
+
+    /**
+     * Oracle 形态多行 MERGE 整段产出为**单条**语句。
+     *
+     * 定位为**守卫用例**（预期直接绿，非修 bug）：本切分器全文无 MERGE 特判
+     * （批首合并常量 `CONTROL_FLOW_BATCH_HEADS = setOf("IF")`，只有 TSQL 控制流批），
+     * MERGE 体内**无顶层 `;`** → 分号状态机天然整段产出。此用例把该结论钉死，
+     * 防止日后有人给 `WHEN MATCHED THEN UPDATE SET ...;` 之类的形态误加批首合并而切碎 MERGE。
+     */
+    @Test
+    fun `Oracle形态多行MERGE整段一条`() {
+        val merge = """
+            MERGE INTO "issue_new" t
+            USING (SELECT ? AS id, ? AS user_name FROM dual) s
+            ON (t."id" = s.id)
+            WHEN MATCHED THEN UPDATE SET t."user_name" = s.user_name
+            WHEN NOT MATCHED THEN INSERT ("id", "user_name") VALUES (s.id, s.user_name)
+        """.trimIndent() + ";"
+        assertEquals(listOf(merge.removeSuffix(";")), split(merge))
+    }
+
+    @Test
+    fun `MERGE后接独立语句不误并`() {
+        val script = "MERGE INTO t USING s ON (t.id = s.id)\nWHEN MATCHED THEN UPDATE SET t.a = s.a;\nSELECT 1;"
+        assertEquals(2, split(script).size)
+        assertTrue(split(script)[0].startsWith("MERGE INTO t"))
+    }
+
     // ======================== DELIMITER 指令感知（T-DA-02 / O-39） ========================
 
     /** 含 `DELIMITER $$` 的存储过程脚本（MySQL 客户端粘贴典型形态）。 */

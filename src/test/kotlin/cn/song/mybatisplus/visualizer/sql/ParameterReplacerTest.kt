@@ -142,6 +142,64 @@ class ParameterReplacerTest {
         assertEquals("SELECT id FROM tbl WHERE id = 1", result)
     }
 
+    // ------------------------------------------------------------------
+    // T-PSG（N-33）：串感知替换 + 基数对账
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `buildExecutableSql_引号字面量内问号_不替换`() {
+        // 参数来源按**真占位符**计（字面量内 `?` 不是参数）：sources 只有 id
+        val sql = "SELECT * FROM t WHERE note = 'a?b' AND id = ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql,
+            listOf("id"),
+            mapOf("id" to "7"),
+            listOf(ParamHint(false)),
+        )
+        // 引号内的 `?` 是字面量，不是占位符：不应被 id 的值替换（改前朴素替换会错位）
+        assertEquals("SELECT * FROM t WHERE note = 'a?b' AND id = 7", result)
+    }
+
+    @Test
+    fun `buildExecutableSql_行注释内问号_不替换`() {
+        val sql = "SELECT id FROM t -- 备注?\nWHERE id = ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql,
+            listOf("id"),
+            mapOf("id" to "7"),
+            listOf(ParamHint(false)),
+        )
+        assertEquals("SELECT id FROM t -- 备注?\nWHERE id = 7", result)
+    }
+
+    @Test
+    fun `buildExecutableSql_块注释内问号_不替换`() {
+        val sql = "SELECT id FROM t /* 占?位 */ WHERE id = ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql,
+            listOf("id"),
+            mapOf("id" to "7"),
+            listOf(ParamHint(false)),
+        )
+        assertEquals("SELECT id FROM t /* 占?位 */ WHERE id = 7", result)
+    }
+
+    @Test
+    fun `buildExecutableSql_正常多占位符_逐字节一致`() {
+        // T-PSG 验收 1：不含引号/注释内 `?` 的 SQL，替换结果与改前逐字节相同（硬编码钉住）
+        val sql = "SELECT id FROM t WHERE note = 'hello world' AND id = ? AND age > ? AND name LIKE ?"
+        val result = ParameterReplacer.buildExecutableSql(
+            sql,
+            listOf("id", "age", "name"),
+            mapOf("id" to "1", "age" to "18", "name" to "Alice"),
+            listOf(ParamHint(false), ParamHint(false), ParamHint(true)),
+        )
+        assertEquals(
+            "SELECT id FROM t WHERE note = 'hello world' AND id = 1 AND age > 18 AND name LIKE 'Alice'",
+            result,
+        )
+    }
+
     @Test
     fun `单行模式_子句空格连接`() {
         val statement = SelectStatement(table, emptyList(), null, emptyList(), false, listOf(

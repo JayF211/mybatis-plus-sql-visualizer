@@ -217,6 +217,34 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
         }
     }
 
+    /**
+     * N4 回归守护（2026-09-21）：命中真实项时**不得在 onChosen 内同步执行动作**。
+     *
+     * 缺陷形态：`moreActionsStep.onChosen` 此前同步调用动作体，而三项动作都会弹模态对话框 →
+     * 弹层尚未销毁就把对话框塞进去，平台记 SEVERE「Showing dialogs in PopupStep.onChosen can
+     * result in focus issues…」（原文即修法：put the dialog showing code into invokeLater），
+     * **真机后果是第一次点「确定」被弹层收走**（用户感受「点了没反应」）。
+     *
+     * 单测禁弹模态，故用无副作用替身项只断言「未同步触发」——延后体在不抽干 EDT 队列的前提下
+     * 不会执行；抽干队列会真弹对话框，故本用例**刻意不抽队列**。
+     *
+     * K2J 互操作：`moreActionsStepWithForTest` 是 Java 方法、形参为 `List<kotlin.Pair<String, Runnable>>`——
+     * `Pair` 第二元是 Java 函数式接口，Kotlin lambda **字面量**在嵌套泛型推断里不做隐式 SAM 转换，
+     * 故显式写 `Runnable { … }`（与 master 的 `{ invoked = true }` 语义逐字等价）。
+     */
+    fun test更多菜单step_命中真实项不同步触发动作() {
+        val panel = newPanel()
+        try {
+            var invoked = false
+            val step = panel.moreActionsStepWithForTest(listOf("only-item" to Runnable { invoked = true }))
+            assertEquals("单选语义不变", PopupStep.FINAL_CHOICE, step.onChosen("only-item", true))
+            assertFalse("动作不得在 onChosen 内同步执行（N4 回归点）", invoked)
+        } finally {
+            panel.clear()
+            panel.dispose()
+        }
+    }
+
     // ------------------------------------------------------------------
     // helpers
     // ------------------------------------------------------------------
