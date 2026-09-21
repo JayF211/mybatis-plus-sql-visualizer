@@ -38,6 +38,11 @@ class EmptyTextRenderTest {
     fun test三个语义行写成三个Fragment而非整段交给Swing() {
         val status = bareStatusText()
         applyEmptyTextLines(status, "甲行\n乙行\n丙行", 4000, stubMeasure)
+        assertTrue(
+            "StatusText 自己的文本不得含裸 \\n（含则等于整段交给 Swing，换行会被无声吞掉）：" +
+                status.text.replace("\n", "\\n"),
+            !status.text.contains('\n'),
+        )
         assertEquals(
             "\\n 必须由渲染层折成 3 个 Fragment；退回 1 说明又把换行交给了 Swing（它不认）",
             3,

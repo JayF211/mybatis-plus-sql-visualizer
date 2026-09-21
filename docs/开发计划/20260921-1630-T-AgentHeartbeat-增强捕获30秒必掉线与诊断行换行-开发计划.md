@@ -223,3 +223,12 @@ agent 侧设计上是无限重连的（`SenderLoop` 断线按 1s→5s 退避重�
 | 代码 | 待实施 |
 | 测试 | 待实施 |
 | 真机 | 待实施 |
+
+### T-04（空态诊断文案换行）实施记录
+
+| 项 | 内容 |
+|----|------|
+| 代码 | `CaptureDiagnostics.kt` 新增纯函数 `wrapEmptyTextLines(text, widthPx, measure)`（像素宽度贪心折行，中文按字符、英文优先空白处断，宽度 clamp 到 200px）；`SqlLogPanel.kt` 新增顶层 `applyEmptyTextLines(status, text, widthPx, measure)`（`clear()` + 逐视觉行 `appendLine`）与面板内 `applyEmptyText` / `renderEmptyText` / `emptyTextWidthPx`；两处渲染点（`syncDiagnostics`、`buildListPane`）改走 `applyEmptyText`，宽度取 `list.width` 扣内边距、首帧兜底 400px、挂 `ComponentListener` 在 resize 时重排。`captureDiagnosticsText` 语义行切三行（捕捉中+增强 / 控制台+计数 / 提示）。commit `37a7e9a` |
+| 测试 | 定向绿：`CaptureDiagnosticsTest` 17 例（+6 折行用例）、新增 `EmptyTextRenderTest` 4 例（用真实 `StatusText`，不 mock），全 0 失败。反向验证：把渲染点改回 `status.setText(纯文本)`（修复前形态）→ `EmptyTextRenderTest` 4 例红；逐字还原 → 绿 |
+| 真机 | **未做**——窄窗截断/换行观感只能在 `./gradlew runIde` 沙盒截图确认，本次未跑，P4 仍**待验** |
+| 前提推翻 | 计划 §四 P4 写的「`JBList` 空态文本（`JBLabel`）渲染 HTML」**实测不成立**：`JBList.getEmptyText()` 返回 `com.intellij.util.ui.StatusText`（2024.3.7.1 与 2026.2.1 两个发行版 `javap` 双向确认），内容落在 `SimpleColoredComponent` 上——不解析 HTML、不把 `\n` 当换行、超宽只裁不折。故本任务**未走 HTML 路线**（照原计划会把 `<html><body …>` 字面量画到面板上），改走「自算折行 + `StatusText.appendLine` 逐视觉行写入」；宽度声明（`body style='width:Npx'`）随之作废，改为按 `list.width` 折行 |
