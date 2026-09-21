@@ -143,16 +143,24 @@ agent 侧设计上是无限重连的（`SenderLoop` 断线按 1s→5s 退避重�
 - 收尾验证：连跑两次运行 + 手工 kill 会话（或在测试里直接 `session.close()`）后确认能自动恢复，
   且 `premainChannels` 不随运行次数增长（`MAX_PREMAIN_CHANNELS = 4` 的上限不应被撞到）。
 
-### T-04（P0，用户第二个诉求）诊断行与空态文案改 HTML 换行
+### T-04（P0，用户第二个诉求）诊断行与空态文案换行
+
+> **⚠️ 本节前提已被实施时实测推翻（2026-09-21）**：下面写的 HTML 路线在本平台**不可行**——
+> `JBList.getEmptyText()` 返回的是 `com.intellij.util.ui.StatusText`，不是 `JLabel`；`StatusText` 及其底层
+> `SimpleColoredComponent` 在绘制路径上完全不处理 `\n`、也不解析 HTML。照本节原样实现会把
+> `<html><body style='width:Npx'>…` **字面量画到面板上**，比修复前更糟。实际落地见文末
+> §实施记录「T-04（空态诊断文案换行）」——改走「自算折行 + `StatusText.appendLine` 逐视觉行写入」。
+> 本节文字保留原样，作为「计划前提被实测推翻」的记录。
 
 - 渲染层（`SqlLogPanel.syncDiagnostics`，`SqlLogPanel.kt:1240` 与 `buildListPane`，`:1255`）把纯文本改成 HTML：
   `<html><body style='width:Npx'>…<br>…</body></html>`——仓内已有同款先例
   （`EnhancedCaptureConfirmDialog.kt:92` 用 `JBLabel` + `<html><body style='width:480px'>` 做自动换行）；
+  （**该先例在 `JBLabel` 上成立，但面板空态根本不是 `JBLabel`——先例的适用面没有核实，这是本节出错的直接原因**）
 - 换行点按语义给：增强通道 / 控制台通道各占一行，丢弃与短路计数并到控制台那行，
-  最后的「下一步提示」单独一行（这是用户真正要读的）；
+  最后的「下一步提示」单独一行（这是用户真正要读的）；**（此条照做，未变）**
 - **不改** `captureDiagnosticsText` 的取数契约与单测（它仍返回带 `\n` 的纯文本，由渲染层转 HTML），
-  这样既有 5 例诊断用例零改动；`log.panel.empty` 的 `\n` 一并走同一转换；
-- 宽度取值需在沙盒里按工具窗实际宽度确认（见 §四 P4）。
+  这样既有 5 例诊断用例零改动；`log.panel.empty` 的 `\n` 一并走同一转换；**（此条照做，只是渲染层手段换了）**
+- 宽度取值需在沙盒里按工具窗实际宽度确认（见 §四 P4）。**（仍待验）**
 
 ### T-05（P1，文案真实性）状态行不再断言它不知道的原因
 
@@ -192,7 +200,7 @@ agent 侧设计上是无限重连的（`SenderLoop` 断线按 1s→5s 退避重�
 | P1 | 修复后首条心跳 ≤ 1 倍间隔内到达（探针复测） | 探针重跑，断言 HELLO→HEARTBEAT 间隔 | **待验**（修复前读数 60.6s，已实测） |
 | P2 | 应用启动期（Spring Boot 正在初始化、类加载密集）sender 线程仍按节奏发心跳 | 沙盒实跑，读 `idea.log` 的在线态切换时间戳；应用启动期无法用纯 JVM 探针覆盖 | **待验** |
 | P3 | 保持 premain 端口常开不产生端口/线程/会话泄漏 | 连续两次运行后检查 `premainChannels` 规模与线程名 `mps-agent-premain-*` 残留；`shutdownAll` 后端口应释放 | **待验** |
-| P4 | `JBList` 空态文本（`JBLabel`）渲染 HTML 且 `body width` 生效、窄工具窗不截断 | 沙盒截图（空态 + 有诊断两态，工具窗拉到最窄再截一次） | **待验**（Swing 标准行为 + 仓内先例，但窄窗表现未验） |
+| P4 | ~~`JBList` 空态文本（`JBLabel`）渲染 HTML 且 `body width` 生效~~ → **前提已推翻**：`JBList.getEmptyText()` 返回 `com.intellij.util.ui.StatusText`（2024.3.7.1 与 2026.2.1 两个发行版 `javap` 双向确认），不解析 HTML、不把 `\n` 当换行、超宽只裁不折 | 实施时实测（`javap` 双向 + 反编译确认无 HTML 处理）；观感仍需沙盒截图（空态 + 有诊断两态，工具窗拉到最窄再截一次） | **前提推翻**——已改走「自算折行 + `StatusText.appendLine` 逐视觉行写入」；**窄窗观感仍待验**（未跑 runIde） |
 | P5 | 修复前「应用侧心跳中断」文案只在真停摆时出现 | 修复后连跑，确认不再有误报；必要时用测试注入短窗口驱动 | **待验** |
 | P6 | 增强通道在本 demo 上确实能捕到 SQL（立项时**没有**任何 SQL 事件样本，因为会话从未活到用户查询） | 修复后沙盒实跑：应用启动 → 打 `http://localhost:8088/user/getAll` → 面板应出现条目 | **已证实（独立核实代理实测）**：用生产 agent jar + 真实驱动 `mysql-connector-java-8.0.28` + HikariCP 4.0.3 + 真库跑了三种形态，全部捕到 SQL 事件（premain+系统加载器 / agentmain+retransform / Hikari 连接池包装）。**IDE Run 这个形态下能捕到**——但见 T-06，换成 fat jar/devtools 启动仍会零产出 |
 
@@ -285,9 +293,9 @@ agent 侧设计上是无限重连的（`SenderLoop` 断线按 1s→5s 退避重�
 
 | 项 | 内容 |
 |----|------|
-| 代码 | 待实施 |
-| 测试 | 待实施 |
-| 真机 | 待实施 |
+| 合流 | 五条车道（`t-agent-heartbeat` / `t-agent-status` / `t-agent-reconnect` / `t-agent-proxycl` / `t-agent-diagwrap`）已全部并入 master；`AgentManager.kt` 由 git **自动合并成功**（T-03 与 T-05 两侧改动并存，各 11 处命中），计划文档 `实施记录` 表每次冲突均按**取并集**裁决 |
+| 统一门禁 | **待跑**——`./gradlew releaseGate`（`buildPlugin → verifyGate` 三目标兼容门禁 `→ testShards` 全量测试）在全部车道合流后只跑一次 |
+| 真机验收 | **待人工**——`docs/测试沙盒验证清单.md` 的「增强捕获心跳与重连」九条：2 分钟不掉线、状态行两态措辞、掉线自恢复、连跑通道不堆积、IDE 退出无内存泄漏、诊断行三行不截断 |
 | T-01/T-02 心跳节奏与跨侧窗口（W1b，commit `dc3e1c2`） | 代码：`SenderLoop` 心跳判定由「假定每轮 200ms」累加计时（`idleMs += 200`；每轮真实≈1.2s＝入站读超时 1s＋睡眠 200ms → 静默 10s 实际要 50 轮≈60s）改为以 `lastOutboundMs`（最近一次出站帧时刻）的**墙钟差**判定，且**每轮都判**（判定移出 `burst == 0` 分支——事件突发期间也按节奏发）；HELLO 写帧后立即补发一条 HEARTBEAT（首轮迭代被读超时拖住时 IDE 侧 `lastSeen` 也从头新鲜）；间隔可经系统属性 `sqlvis.agent.heartbeatMs` 注入（缺省/非法/非正数回落 `DEFAULT_HEARTBEAT_MS = 10_000L`，生产行为不变）；入站读超时改为 `间隔/3` 钳在 [50,1000] ms（默认 10000/3 被 1000ms 上限钳住，与修复前逐值一致）；空转睡眠取 `min(POLL_IDLE_MS, 距下次心跳剩余)`，不跨过下一次心跳时刻。单发送线程、退避重连（1s→5s）、帧格式与 `CMD_*` 常量均未动。`AgentProtocol.kt`：新增 `HEARTBEAT_INTERVAL_MS = 10_000L`，`ONLINE_WINDOW_MS` 改由它推导（`= 3 倍`，值仍 30s），不变量与理由写进 KDoc。测试：`AgentProtocolSyncTest` 删掉空绿断言 `assertTrue(loop.contains("10_000L"))`（只证明字面量存在，对「有效节奏是否 ≤ 在线窗口」完全不可见——agent 侧改成 60s 或窗口改成 10s 它照样绿），换成源码扫描的**跨侧不变量** `ONLINE_WINDOW_MS >= 3 * agentIntervalMs` 与心跳计时形态守卫（禁 `idleMs`、须 `lastOutboundMs`、HELLO 后须紧跟 HEARTBEAT 写帧、间隔可注入）；新增 `HeartbeatRhythmTest` 节奏实测（真起 `EventBus` + 探针 ServerSocket，间隔压到 300ms）。 |
 | T-01/T-02 定向读数与反向验证 | **定向读数**：`./gradlew :sql-visualizer-agent:test`（先 `rm -rf sub-projects/sql-visualizer-agent/build` 防陈旧 UP-TO-DATE）**66 通过 / 0 失败 / 0 错误**（含 `HeartbeatRhythmTest` 1/1，3.475s）；主项目 `./gradlew test --tests cn.song.mybatisplus.visualizer.log.agent.AgentProtocolSyncTest` **4 通过 / 0 失败**（0.161s）。**反向验证＝断言红（非超时红）**：把 `SenderLoop` 心跳判定退回旧形态（固定 1s 读超时 + 取消 HELLO 后补发 + `idleMs += 200` 累加、阈值取注入间隔；仅保留间隔注入钩子以便把刻度压到 300ms）→ `HeartbeatRhythmTest` 转红，报错原文 `java.lang.AssertionError: HELLO 后首条心跳应在 450ms 内，实测 2410ms（「假定每轮 200ms」累加计时形态实测 2410ms；生产默认间隔下实测 +60633ms）`（`HeartbeatRhythmTest.java:73`；1 test / 1 failed / 0 errors，2.541s）。逐字还原后转绿：`git hash-object` 与 `HEAD:...SenderLoop.java` 同为 `0a1944b7`、`git diff HEAD` 为空、`grep RED PROBE` 零残留；还原后单跑 **1/1 通过**（3.102s，非 UP-TO-DATE 实跑），agent 子项目全量复跑 **66 通过 / 0 失败**。 |
 | T-01/T-02 测试健壮化（`f1f251d`） | 反向验证期间发现的可诊断性问题，判据/阈值/断言结构未动：①单帧读超时由 `INTERVAL_MS * 4`（1200ms）改为固定常量 `FRAME_WAIT_MS = 3000`——读超时只作「帧彻底不来」的兜底，节奏判定一律走帧到达时刻的实测差值，放宽不削弱断言；而 1200ms 在本机五树并行 gradle 下离调度抖动太近。**收益实证**：反向验证时首条心跳实测 2410ms 落在 3000ms 内，拿到的是断言红（贴出实测值），而不是 1200ms 下的 `SocketTimeoutException` 超时红——失败读数从「帧没来」升级为「帧来了、晚了 5 倍」。②首帧读加 `SocketTimeoutException` 显式失败消息（贴等待上限、期望上限与累加形态预期读数）。③首帧间隔断言的失败消息补实测锚点：原先凭估算写的「1446ms」改为实测 2410ms（与另一处 `INTERVAL_MS * 8 = 2400ms` 的估算一致）。 |
