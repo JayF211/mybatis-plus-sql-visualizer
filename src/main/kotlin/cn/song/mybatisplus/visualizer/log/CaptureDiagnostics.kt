@@ -53,11 +53,77 @@ internal fun captureDiagnosticsText(d: CaptureDiagnostics): String? {
         if (d.replayDropped > 0L) add(MpSqlVisualizerBundle.message("log.diag.replayDropped", d.replayDropped))
         if (d.epShortCircuited > 0L) add(MpSqlVisualizerBundle.message("log.diag.epShortCircuit", d.epShortCircuited))
     }
-    val channels = (listOf(head, enhanced, console) + dropped).joinToString("｜")
+    // T-AgentDiagWrap T-04：语义行按「读的人下一步要干什么」切——
+    // 第一行「在捕捉吗 + 增强通道通不通」，第二行「控制台通道通不通 + 行被谁吃了」，
+    // 第三行「所以下一步该做什么」。三者混成一行时，被面板右边界裁掉的总是第三行（可执行的那句）。
+    val channels = listOf(head, enhanced).joinToString(SEP)
+    val consoleLine = (listOf(console) + dropped).joinToString(SEP)
     val hintKey = when {
         d.waitingForConsole -> "log.diag.hint.waiting"
         d.linesSeen <= 0L -> "log.diag.hint.noOutput"
         else -> "log.diag.hint.noSql"
     }
-    return "$channels\n${MpSqlVisualizerBundle.message(hintKey)}"
+    return "$channels\n$consoleLine\n${MpSqlVisualizerBundle.message(hintKey)}"
+}
+
+/** 通道片段分隔符（同一语义行内的并列项）。 */
+private const val SEP = "｜"
+
+// ---------- T-AgentDiagWrap T-04：空态文案「文本 → 显示」 ----------
+
+/** 折行宽度下限：窗口尚未布局（首帧 / 隐藏卡）时算出的可用宽度可能是 0 或负值，clamp 到这里。 */
+internal const val EMPTY_TEXT_MIN_WIDTH_PX = 200
+
+/** 列表尚未布局时的兜底宽度（不 clamp 到下限，而是给一个像样的初始排版宽度）。 */
+internal const val EMPTY_TEXT_FALLBACK_WIDTH_PX = 400
+
+/** 折行时左右各留的余量：空态文案居中，贴边会让人以为还有下文。 */
+internal const val EMPTY_TEXT_EDGE_PADDING_PX = 12
+
+/**
+ * 空态文案折行（纯函数，零平台依赖）：把「语义行（`\n` 分隔）」按像素宽度软折成「视觉行」列表。
+ *
+ * 为什么折行必须在写入前自己算：面板空态用的是 `JBList` 的 `StatusText`（内部是
+ * `SimpleColoredComponent`），它**既不解析 HTML、也不把 `\n` 当换行**——
+ * `\n` 被当普通字符画成零宽，两段文字被无声拼接成一行，超宽只裁不折
+ * （本次现场读数里被裁掉的恰是「控制台有输出但未见 MyBatis SQL 日志……请确认 mapper 包日志级别为 debug」
+ * 这句唯一可执行的提示）。平台侧唯一的多行手段是 `StatusText.appendLine`（每行一个 Fragment，
+ * `paintColumnInBounds` 逐 Fragment 单独绘制），但它同样不折行——所以折行只能自己算，
+ * 再把视觉行逐条 `appendLine`。
+ *
+ * @param widthPx 可用像素宽度；小于 [EMPTY_TEXT_MIN_WIDTH_PX] 时按该下限排版（防 0 宽死循环/整段压平）
+ * @param measure 单串像素宽度测量（渲染层传 `FontMetrics::stringWidth`；测试传可预测桩，保持纯函数）
+ */
+internal fun wrapEmptyTextLines(text: String, widthPx: Int, measure: (String) -> Int): List<String> {
+    val width = if (widthPx < EMPTY_TEXT_MIN_WIDTH_PX) EMPTY_TEXT_MIN_WIDTH_PX else widthPx
+    return text.split('\n').flatMap { wrapSingleLine(it, width, measure) }
+}
+
+/** 单条语义行的贪心折行：优先在空白处断（英文 bundle），无空白则按字符断（中文）。 */
+private fun wrapSingleLine(line: String, widthPx: Int, measure: (String) -> Int): List<String> {
+    if (line.isEmpty()) return listOf(line)
+    val out = ArrayList<String>()
+    var start = 0
+    while (start < line.length) {
+        var width = 0
+        var i = start
+        var lastSpace = -1
+        while (i < line.length) {
+            val cw = measure(line[i].toString())
+            // i > start：首个字符即便自身超宽也必须吃掉，否则死循环
+            if (width + cw > widthPx && i > start) break
+            if (line[i] == ' ') lastSpace = i
+            width += cw
+            i++
+        }
+        if (i >= line.length) {
+            out.add(line.substring(start).trimEnd())
+            break
+        }
+        val cut = if (lastSpace > start) lastSpace else i
+        out.add(line.substring(start, cut).trimEnd())
+        start = cut
+        while (start < line.length && line[start] == ' ') start++
+    }
+    return if (out.isEmpty()) listOf(line) else out
 }
