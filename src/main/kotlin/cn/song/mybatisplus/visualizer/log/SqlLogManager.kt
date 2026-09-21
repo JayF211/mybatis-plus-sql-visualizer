@@ -433,6 +433,11 @@ class SqlLogManager(private val project: Project) : Disposable {
 
     /** 控制台被移除（项目停止 / 用户关闭 tab）时回调。 */
     fun onConsoleRemoved() {
+        // T-AgentReconnect T-03：本次运行结束 → 关闭该轮 premain 通道（通道生命周期 = 绑定到本次运行，
+        // 不再 accept 一次即关，否则会话被摘除后 agent 无限重连撞在已关端口上 = 该次运行终局）。
+        // 放在下方 capturing 守卫**之前**：通道归属「运行」而非「捕捉态」，捕捉态不该决定通道回收；
+        // 用 getServiceIfCreated 取服务——本回调不得为「关通道」而实例化从未用过的 AgentManager。
+        project.getServiceIfCreated(AgentManager::class.java)?.onRunEnded()
         if (!capturing || isWaitingForConsole) {
             LOG.debug("onConsoleRemoved: 非捕捉态或仍在等待（capturing=$capturing, waiting=$isWaitingForConsole），跳过")
             return

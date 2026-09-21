@@ -15,6 +15,7 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.Disposer
 import com.intellij.util.messages.Topic
 import com.sun.tools.attach.VirtualMachine
 import java.io.DataInputStream
@@ -73,10 +74,34 @@ class AgentManager(private val project: Project) : Disposable {
         // ---------- T-M56Phase2-Premain 常量 ----------
 
         /**
-         * premain 通道等待 agent 回连的时长：agent 侧 `SenderLoop` 连接失败按 1s→5s 退避**无限重连**
+         * premain 通道等待 agent **首次**回连的时长：agent 侧 `SenderLoop` 连接失败按 1s→5s 退避**无限重连**
          * （SenderLoop.java:87），故本窗口只决定「IDE 等多久后放弃这个端口」，不是连接窗口。
+         *
+         * T-AgentReconnect T-03 语义拆分：此前本常量同时充当「通道总寿命」（accept 一次即关通道），
+         * 于是会话一旦被摘除就再也回不来；现在它只管**首次**回连，认领后通道转入等重连阶段
+         * （见 [PREMAIN_IDLE_TICK_MS] / [PREMAIN_CHANNEL_TTL_MS] / [onRunEnded]）。
          */
         internal const val PREMAIN_ACCEPT_TIMEOUT_MS = 120_000L
+
+        /**
+         * premain 通道**认领之后**的空转唤醒间隔（T-AgentReconnect T-03）：通道已等到首次回连，
+         * accept 循环转为「等重连」，用短超时周期性复核运行结束信号与兜底 TTL，
+         * 而不是无限阻塞在 accept 上（关闭 socket 虽也能唤醒 accept，但 TTL 需要自己的复核拍）。
+         */
+        private const val PREMAIN_IDLE_TICK_MS = 30_000L
+
+        /**
+         * premain 通道兜底 TTL（T-AgentReconnect T-03）：通道绑定到**本次运行**，正常由运行结束信号
+         * （[onRunEnded]）关闭；本 TTL 只在信号漏掉的极端情况（钩子未触发且 pid 未知）兜底回收，
+         * 防监听 socket 与 accept 线程长挂、防通道规模随运行次数增长撞 [MAX_PREMAIN_CHANNELS]。
+         */
+        internal const val PREMAIN_CHANNEL_TTL_MS = 12L * 60 * 60 * 1000
+
+        /**
+         * premain 通道回连次数上限（T-AgentReconnect T-03）：agent 断线无限重连，异常抖动
+         * （对端反复建连即断）会把 accept 循环变成热循环，故设上限；超限关通道并留 WARN。
+         */
+        internal const val MAX_PREMAIN_RECONNECTS = 32
 
         /**
          * premain 通道在场时跳过 attach 的窗口（T-M56P2-04）：远小于 [PREMAIN_ACCEPT_TIMEOUT_MS]——
@@ -611,6 +636,9 @@ class AgentManager(private val project: Project) : Disposable {
      * 差别只在**端口生命周期前移到进程启动之前**——agent 侧 `EventBus.start(port)` 起
      * `SenderLoop` 后按 1s→5s 退避无限重连，端口先开不丢连接。
      *
+     * T-AgentReconnect T-03：端口生命周期进一步延长为**绑定到本次运行**——accept 线程循环接受
+     * 回连（会话被摘除后 agent 可重连同一端口），运行结束由 [onRunEnded] 关闭。
+     *
      * 返回 null 的两条路径（绑定失败 / 挂起通道超上限）都只记日志：调用方回落 attach/桥。
      */
     internal fun openPremainChannel(): Int? {
@@ -628,9 +656,25 @@ class AgentManager(private val project: Project) : Disposable {
         }
         val channel = PremainChannel(server.localPort, server, clockMs())
         premainChannels.add(channel)
-        Thread({ acceptPremain(channel) }, "mps-agent-premain-${channel.port}").apply { isDaemon = true }.start()
+        registerChannelDisposable(channel)
+        val acceptThread = Thread({ acceptPremain(channel) }, "mps-agent-premain-${channel.port}")
+            .apply { isDaemon = true }
+        channel.acceptThread = acceptThread
+        acceptThread.start()
         LOG.info("openPremainChannel: 端口 ${channel.port} 已前置协商（挂起 ${premainChannels.size} 个）")
         return channel.port
+    }
+
+    /**
+     * T-AgentReconnect T-03 泄漏收口：通道（监听 socket + accept 线程引用）注册进**项目 disposable 树**，
+     * 项目 dispose 时由平台关闭（Disposer 树是既有踩坑：组件不注册会在 IDE 退出时被 ObjectTree 报
+     * "Memory leak detected"）。注册失败非致命——[closePremainChannels]（运行结束/关开关/dispose）仍是收口路径。
+     */
+    private fun registerChannelDisposable(channel: PremainChannel) {
+        runCatching { Disposer.register(project, channel) }
+            .onFailure {
+                LOG.warn("premain 通道 ${channel.port} 注册项目 disposable 树失败（非致命——仍由 closePremainChannels 收口）", it)
+            }
     }
 
     /** premain 通道是否在场（[doAttachAsync] 跳过判据）：未认领且准备时刻在跳过窗内。 */
@@ -639,54 +683,130 @@ class AgentManager(private val project: Project) : Disposable {
         return premainChannels.any { !it.claimed && now - it.preparedAtMs <= PREMAIN_SKIP_ATTACH_WINDOW_MS }
     }
 
-    /** 清理过期/已认领通道（关 socket 幂等——accept 线程 finally 也会关一次）。 */
+    /**
+     * 清理已失效通道（T-AgentReconnect T-03 判据更新）：此前「已认领」也算 stale（旧语义 =
+     * accept 一次即摘除），现在认领只代表**开始服役**（等重连），不得 prune。现行判据三条：
+     * 已关闭 / [isChannelExpired]（pid 消亡或超兜底 TTL）/ 首次回连未到且已过 [PREMAIN_ACCEPT_TIMEOUT_MS]。
+     */
     private fun prunePremainChannels() {
-        val now = clockMs()
-        premainChannels.removeAll { channel ->
-            val stale = channel.claimed || now - channel.preparedAtMs > PREMAIN_ACCEPT_TIMEOUT_MS
-            if (stale) runCatching { channel.server.close() }
-            stale
-        }
+        val stale = premainChannels.filter { isStaleChannel(it) }
+        stale.forEach { closePremainChannel(it) }
     }
 
-    /** premain accept 线程体：等到回连（或超时）后交 [onPremainConnected]，无论如何都摘除通道。 */
+    private fun isStaleChannel(channel: PremainChannel): Boolean =
+        channel.closed ||
+            isChannelExpired(channel) ||
+            (!channel.claimed && clockMs() - channel.preparedAtMs > PREMAIN_ACCEPT_TIMEOUT_MS)
+
+    /**
+     * 通道是否该回收（T-AgentReconnect T-03）：目标进程已消亡（运行结束的旁证，pid 取自 agent 自报
+     * HELLO，即目标 JVM 自身 pid）或已超兜底 TTL。两条都是**不依赖运行结束钩子**的兜底——
+     * 钩子漏掉时通道规模也不会随运行次数增长（[MAX_PREMAIN_CHANNELS] 不被撞到）。
+     */
+    private fun isChannelExpired(channel: PremainChannel): Boolean {
+        val pid = channel.pid
+        if (pid > 0L && !isProcessAlive(pid)) {
+            LOG.info("premain 通道 ${channel.port}：目标进程 pid=$pid 已消亡——回收通道（本次运行已结束）")
+            return true
+        }
+        val since = if (channel.claimedAtMs > 0L) channel.claimedAtMs else channel.preparedAtMs
+        if (clockMs() - since > PREMAIN_CHANNEL_TTL_MS) {
+            LOG.warn("premain 通道 ${channel.port} 已达兜底 TTL ${PREMAIN_CHANNEL_TTL_MS}ms（运行结束信号未到）——回收通道")
+            return true
+        }
+        return false
+    }
+
+    /**
+     * 目标进程是否仍存活（T-AgentReconnect T-03 运行结束的旁证）。pid 未知或查询异常一律按存活处理
+     * （宁多留一拍通道，不误关正在服役的通道——误关会让该次运行永久失去重连路径）。
+     */
+    private fun isProcessAlive(pid: Long): Boolean = runCatching {
+        java.lang.ProcessHandle.of(pid).map { it.isAlive }.orElse(false)
+    }.getOrDefault(true)
+
+    /**
+     * premain accept 线程体（T-AgentReconnect T-03：由「accept 一次即关通道」改为**循环 accept**）。
+     *
+     * 会话被摘除（心跳窗口过期/连接断开）不再等于本次运行的终局——agent 侧 `SenderLoop` 无限重连
+     * 同一端口（SenderLoop.java:29-91），只要监听 socket 还在，下一次回连就能重新建会话。
+     * 循环只有三条退出路径：首次回连迟迟不到（[PREMAIN_ACCEPT_TIMEOUT_MS]，该进程回落 attach/桥）、
+     * 运行结束（[onRunEnded] / pid 消亡 / 兜底 TTL）、回连次数达 [MAX_PREMAIN_RECONNECTS]（防热循环）。
+     *
+     * 退出时一律走 [closePremainChannel]：关 socket + 从通道表摘除 + 释放 disposable 条目。
+     */
     private fun acceptPremain(channel: PremainChannel) {
         try {
             channel.server.soTimeout = PREMAIN_ACCEPT_TIMEOUT_MS.toInt()
-            val socket = channel.server.accept()
-            channel.claimed = true
-            onPremainConnected(socket)
+            while (!channel.closed) {
+                val socket = try {
+                    channel.server.accept()
+                } catch (e: SocketTimeoutException) {
+                    if (!channel.claimed) {
+                        LOG.info(
+                            "premain 通道 ${channel.port} 未在 ${PREMAIN_ACCEPT_TIMEOUT_MS}ms 内收到首次回连" +
+                                "——该进程回落 attach/桥（零劣化）",
+                        )
+                        return
+                    }
+                    // 已认领：本拍无重连到达，复核运行结束信号后继续等（不再无限阻塞在 accept 上）
+                    if (isChannelExpired(channel)) return
+                    continue
+                }
+                val firstConnect = !channel.claimed
+                channel.claimed = true
+                if (firstConnect) {
+                    channel.claimedAtMs = clockMs()
+                    // 首次回连到达 → 转入「等重连」阶段：短超时周期性复核（[PREMAIN_IDLE_TICK_MS]）
+                    channel.server.soTimeout = PREMAIN_IDLE_TICK_MS.toInt()
+                }
+                val round = ++channel.acceptCount
+                val pid = onPremainConnected(socket)
+                if (pid > 0L) channel.pid = pid
+                if (round >= MAX_PREMAIN_RECONNECTS) {
+                    LOG.warn(
+                        "premain 通道 ${channel.port} 回连次数达上限 $MAX_PREMAIN_RECONNECTS" +
+                            "——关闭通道（防异常抖动热循环；该次运行后续回连需重新 Run 注入）",
+                    )
+                    return
+                }
+            }
         } catch (t: Throwable) {
             if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传（accept 线程：透传即线程终止，平台记录现场）
-            LOG.info(
-                "premain 通道 ${channel.port} 未收到回连（${t.javaClass.simpleName}: ${t.message}）" +
-                    "——该进程回落 attach/桥（零劣化）",
-            )
+            if (!channel.closed) {
+                LOG.info(
+                    "premain 通道 ${channel.port} accept 循环退出（${t.javaClass.simpleName}: ${t.message}）" +
+                        "——该进程回落 attach/桥（零劣化）",
+                )
+            }
         } finally {
-            runCatching { channel.server.close() }
-            premainChannels.remove(channel)
+            closePremainChannel(channel)
         }
     }
 
     /**
-     * premain 回连处理（T-M56P2-04 幂等）：读 HELLO 取 pid → 建会话 → 写幂等表。
+     * premain 回连处理（T-M56P2-04 幂等）：读 HELLO 取 pid → 建会话 → 写幂等表。返回本次回连自报的
+     * pid（0=HELLO 未取到/连接被丢弃），供 accept 循环登记到通道上做进程存活判定。
      *
      * 去重判据是「同 pid 是否有**活动会话**」而非查 [attachedPids]：premain 是更强通道（启动期
      * 就能织入，无 3s 静默等待），先到者优先，写表时覆盖——否则 attach 先占表会让 premain 连接
      * 被误丢，反而丢掉唯一一条可用连接。
+     *
+     * T-AgentReconnect T-03：该判据对**重连**天然放行——旧会话已被 [sweepOffline] 摘除（alive=false），
+     * 故重连不再被判据挡下，语义与「同 pid 已有活动会话时丢弃重复连接」并存不变。
      */
-    private fun onPremainConnected(socket: Socket) {
+    private fun onPremainConnected(socket: Socket): Long {
         try {
             if (!isEnhancedActive()) {
                 LOG.info("premain 回连到达但增强捕获已关闭/未确认——丢弃连接")
                 runCatching { socket.close() }
-                return
+                return 0L
             }
             val pid = readHelloPid(socket)
             if (pid > 0L && sessions.any { it.alive && it.pid == pid }) {
                 LOG.info("premain 回连 pid=$pid 已有活动会话——丢弃重复连接（幂等）")
                 runCatching { socket.close() }
-                return
+                return pid
             }
             // T-ReachAudit T-RA-01 合流补位：会话时间源须与管理器同源注入（[createSession] 同款）——
             // 缺省真实时钟时，假时钟驱动的心跳窗口判定两侧不同源（manager 算出的「已过期」被真实
@@ -711,10 +831,12 @@ class AgentManager(private val project: Project) : Disposable {
             onSessionLifecycleChanged()
             publishStatusChanged()
             LOG.info("premain 会话建立：pid=$pid（启动即捕获，attach 链已跳过）")
+            return pid
         } catch (t: Throwable) {
             if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
             LOG.warn("premain 回连处理失败——丢弃连接（回落桥）", t)
             runCatching { socket.close() }
+            return 0L
         }
     }
 
@@ -872,10 +994,43 @@ class AgentManager(private val project: Project) : Disposable {
     internal fun isEnhancedConfirmed(): Boolean =
         PluginSettings.getInstance().state.enhancedCaptureConfirmed
 
-    /** 关闭全部待回连通道（shutdownAll/dispose 共用）。accept 线程会因 socket 关闭而退出。 */
+    /**
+     * 关闭并摘除单个通道（T-AgentReconnect T-03 单一收口出口）：关监听 socket（阻塞中的 accept
+     * 立即抛 SocketException 退出）→ 打断 accept 线程 → 从通道表摘除 → 释放项目 disposable 树条目。
+     * 幂等（[PremainChannel.closeChannel] 与 [Disposer.dispose] 都幂等）。
+     */
+    private fun closePremainChannel(channel: PremainChannel) {
+        channel.closeChannel()
+        channel.acceptThread?.interrupt()
+        premainChannels.remove(channel)
+        runCatching { Disposer.dispose(channel) }
+    }
+
+    /**
+     * 关闭全部待回连/服役中的通道（运行结束 [onRunEnded] / 关开关 [shutdownAll] / 项目 dispose 共用）。
+     * 快照遍历——[closePremainChannel] 会改通道表。
+     */
     private fun closePremainChannels() {
-        premainChannels.forEach { runCatching { it.server.close() } }
+        premainChannels.toList().forEach { closePremainChannel(it) }
         premainChannels.clear()
+    }
+
+    /**
+     * 本次运行结束（T-AgentReconnect T-03）：关闭该轮 premain 通道。
+     *
+     * 通道生命周期语义 = **绑定到本次运行**（启动前协商端口 → 进程存活期间持续等回连 → 运行结束关闭），
+     * 不再「accept 一次即关」。信号落在项目停止语义的既有承载点 [SqlLogManager.onConsoleRemoved]
+     * （见 [RunConfigurationProcessListener] 类注释：`processTerminated` 不处理、停止语义归 onConsoleRemoved）；
+     * 关开关走 [shutdownAll]、项目关闭走 [dispose]，三条路径都经 [closePremainChannels] 收口。
+     *
+     * 兜底另有两重（钩子漏掉时不至于让通道随运行次数累积撞 [MAX_PREMAIN_CHANNELS]）：pid 消亡判定
+     * 与 [PREMAIN_CHANNEL_TTL_MS]（见 [isChannelExpired]）。
+     */
+    internal fun onRunEnded() {
+        if (premainChannels.isEmpty()) return
+        val closed = premainChannels.size
+        closePremainChannels()
+        LOG.info("onRunEnded: 本次运行结束——关闭 $closed 个 premain 通道（该轮不再等重连）")
     }
 
     /**
@@ -1054,13 +1209,54 @@ internal fun agentStatusText(s: AgentStatusSnapshot): String? {
  * T-M56Phase2-Premain：一条待回连的 premain 通道——启动前协商出的 loopback 端口 + 其监听 socket。
  * [claimed] 由 accept 线程在收到回连时置位（[AgentManager.hasPendingPremainChannel] 与 prune 的判据）。
  */
+/**
+ * premain 通道（T-AgentReconnect T-03：生命周期 = 绑定到本次运行）。
+ *
+ * 一个通道 = 一个前置协商的监听端口 + 一个循环 accept 的守护线程，服务**一次运行**内 agent 的
+ * 首次回连与后续全部重连。实现 [Disposable] 并注册进项目 disposable 树——socket 与 accept 线程
+ * 都在 [dispose] 里收口（Disposer 树是既有踩坑：不注册会在 IDE 退出时被 ObjectTree 报泄漏）。
+ */
 internal class PremainChannel(
     val port: Int,
     val server: ServerSocket,
     val preparedAtMs: Long,
-) {
+) : Disposable {
+
+    /** 是否已等到**首次**回连（[AgentManager.hasPendingPremainChannel] 的跳过判据读它）。 */
     @Volatile
     var claimed: Boolean = false
+
+    /** 首次回连到达时刻（0=尚未回连）；兜底 TTL 自此计时（T-AgentReconnect T-03）。 */
+    @Volatile
+    var claimedAtMs: Long = 0L
+
+    /** 已接受的回连次数（首次 + 重连；上限 [AgentManager.MAX_PREMAIN_RECONNECTS]）。 */
+    @Volatile
+    var acceptCount: Int = 0
+
+    /** 首次回连自报的 pid（0=HELLO 未取到）；进程存活判定依据（运行结束的旁证）。 */
+    @Volatile
+    var pid: Long = 0L
+
+    /** accept 线程引用（dispose 时打断——线程与 socket 同随 disposable 树释放）。 */
+    @Volatile
+    var acceptThread: Thread? = null
+
+    /** 通道是否已关闭（accept 循环退出判据）。 */
+    @Volatile
+    var closed: Boolean = false
+
+    /** 关闭通道（幂等）：置位 + 关监听 socket——阻塞中的 accept 立即抛 SocketException 退出。 */
+    fun closeChannel() {
+        closed = true
+        runCatching { server.close() }
+    }
+
+    /** 项目 dispose 路径：关 socket + 打断 accept 线程。 */
+    override fun dispose() {
+        closeChannel()
+        acceptThread?.interrupt()
+    }
 }
 
 /**
