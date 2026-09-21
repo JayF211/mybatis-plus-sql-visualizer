@@ -1,7 +1,7 @@
 // T-AcpMcpTransport 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/acp/AcpIdeaMcpTransportProviderImpl.kt 移植
 package cn.song.mybatisplus.visualizer.acp;
 
-import com.intellij.ml.llm.agents.acp.api.AcpAgentId;
+import com.intellij.platform.acp.AcpAgentId;
 import com.intellij.ml.llm.agents.acp.client.AcpIdeaMcpTransport;
 import com.intellij.ml.llm.agents.acp.client.AcpIdeaMcpTransportProvider;
 import org.jetbrains.annotations.NotNull;

@@ -20,12 +20,16 @@ plugins {
 // 暗色基准 + record/ 脚本管线），但 262 下 test 源码编译不过——com.intellij.diagram.* 于 262 移入
 // Database 插件（测试 classpath 未含），且新版 Kotlin 把 String.toLowerCase() 升为硬错误，导致
 // 分支自身无法跑 ./gradlew test。故把录制所需四项配置整体收敛为本开关：
-//   默认            -> 243 常规开发态（平台 2024.3.7.1 / toolchain 17 / 无 jcef / 默认沙盒）
-//   -PgifRecord=true -> 262 录制态（平台 2026.2.1 / toolchain 24 / jcef / 独立沙盒 MPSV-GifFresh）
+//   -PgifRecord=true  -> 262 录制态（平台 2026.2.1 / toolchain 24 / jcef / 独立沙盒 MPSV-GifFresh）
+//   -PgifRecord=false -> 243 常规开发态（平台 2024.3.7.1 / toolchain 17 / 无 jcef / 默认沙盒）
 // 四项必须整体切换、不可拆：jcef 自 262 起才从平台核心拆为独立模块（243 distro 无此模块，
 // 单独声明会导致依赖解析失败）；jvmToolchain(24) 用于读 262 平台 v69 类文件（javac 17/21 报
 // 「错误的版本 69.0」）；独立沙盒避免与并行任务互锁。
-// 录制用法：./gradlew runIde -PgifRecord=true
+//
+// 【2026-09-20 合回 master 已还原】录制分支 t-gif-rec-mcp 曾把默认值翻为 true（便于直接
+// `./gradlew runIde` 起 2026 沙盒）；该分支自带说明要求「合回 master 前必须把默认值还原为
+// false，否则 262 录制态会静默成为默认构建基准」——本行即该还原（副作用同步消失：默认态下
+// `./gradlew test` 因 262 限制不可用的问题不再存在）。
 val gifRecord = providers.gradleProperty("gifRecord").orNull?.toBoolean() ?: false
 
 // 闸门：录制开关若与发布/打包任务同用，配置期直接失败——防止 262 录制态流入发行产物。
@@ -39,7 +43,7 @@ if (gifRecord) {
     if (invoked.isNotEmpty()) {
         throw GradleException(
             "gifRecord=true 是演示录制专用（构建基准 2026.2.1），禁止用于发布/打包任务 $invoked。" +
-                "请去掉 -PgifRecord=true 后重试。"
+                "本分支默认即录制态，请改用 -PgifRecord=false 重试。"
         )
     }
 }
@@ -148,6 +152,19 @@ dependencies {
         // T-Dgm-01：Diagrams 插件（类图/关系图底座，仅 Ultimate 捆绑）——JOIN 图原生渲染编译期类。
         // 与 database 同为运行期可选依赖（plugin.xml optional depends + diagram-optional.xml EP 注册）。
         bundledPlugin("com.intellij.diagram")
+
+        // T-GifRec-MCP（2026-09-19）：录制态把 AI Assistant 装进沙盒。AI Assistant 不是 distro
+        // 内置插件（262 distro 163 个插件里无 ml-llm），而 M1-c 分镜要用它的 ACP 面板驱动 agent。
+        // 必须声明式安装：prepareSandbox 每次重建沙盒 plugins/ 目录，手工拷贝进去的插件会被清掉（实测）。
+        // 版本与沙盒平台精确对齐——插件约束为 since-build 262.9437.1 / until-build 262.9437.*。
+        //
+        // 2026-09-20 复启说明：本声明会把真 ml-llm 带进编译类路径，曾与 T-AcpMcpTransport 的桩冲突
+        // （桩把 AcpAgentId 误置于 com.intellij.ml.llm.agents.acp.api，真接口用平台的
+        // com.intellij.platform.acp.AcpAgentId）→ override 失配。已修正桩的归属（迁至平台包），
+        // 冲突消除，本声明复启。
+        if (gifRecord) {
+            plugin("com.intellij.ml.llm", "262.9437.276")
+        }
     }
 }
 
@@ -177,6 +194,7 @@ intellijPlatform {
     }
     // 注：并行会话临时隔离请在本块内临时加自己的 sandboxContainer（用后还原并立即提交），
     // 勿让任务专属沙盒名随提交入库（T-ListParamCollect/T-HqlInhCols 两轮实证）。
+    sandboxContainer = layout.buildDirectory.dir("MPSV-K2J115") // TEMP-SANDBOX 收尾还原
 }
 
 kotlin {

@@ -1,3 +1,4 @@
+// T-SyncK2JMaster115 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/XmlParamTypeResolver.kt 移植（T-FCA-01 集合快捷别名 + kindOfTypeText 数组判定前移）
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.sql.ParamQuote;
@@ -35,7 +36,10 @@ import java.util.Set;
  *  <li>**Map / 基本类型 / 其他简单类型**：键 = 参数名，值 = 类型类别（Map → OBJECT，数值 → NUMBER）；</li>
  *  <li>注解类不可解析（测试沙盒）时按短名兜底；无 @Param 用参数名；</li>
  *  <li>**多参数位置别名**（T-PC2-03）：全部参数都有显式 `@Param` 时补 `param1..paramN`
- *      （MyBatis `ParamMap` 位置别名，全或无门槛见 {@link #resolveTypes}）。</li>
+ *      （MyBatis `ParamMap` 位置别名，全或无门槛见 {@link #resolveTypes}）；</li>
+ *  <li>**集合快捷别名**（T-FCA-01）：单参数且无显式 `@Param` 时按参数集合形态补
+ *      `list` / `collection` / `array`（MyBatis `ParamNameResolver.wrapToMapIfCollection`，
+ *      键集与门槛见 {@link #collectionAliasTypes}）。</li>
  * </ul>
  *
  * <p>类型映射规则（T-PT-01，见 {@link #kindOf}）：String/CharSequence→TEXT、数值族→NUMBER、
@@ -77,6 +81,19 @@ public final class XmlParamTypeResolver {
     private static final Set<String> OBJECT_SIMPLE_NAMES = Set.of(
             "Map", "HashMap", "LinkedHashMap", "TreeMap", "SortedMap", "NavigableMap",
             "ConcurrentHashMap", "Hashtable", "Properties");
+
+    /**
+     * `List` 族简单名（T-FCA-01）：MyBatis `object instanceof List` 成立 → 别名 `collection` + `list` 双写。
+     * 只列 {@link #COLLECTION_SIMPLE_NAMES} 中确为 `java.util.List` 子类型的成员（`Set`/`Queue` 族不在内）。
+     */
+    private static final Set<String> LIST_SIMPLE_NAMES = Set.of(
+            "List", "ArrayList", "LinkedList", "Vector", "Stack");
+
+    /**
+     * 集合族中**非 `java.util.Collection`** 的简单名（T-FCA-01）：`Iterable` 虽是集合语义，
+     * 但 `wrapToMapIfCollection` 的 `instanceof Collection` 判定不成立 → 真引擎不包装、无别名键。
+     */
+    private static final Set<String> NON_COLLECTION_SIMPLE_NAMES = Set.of("Iterable");
 
     private XmlParamTypeResolver() {
     }
@@ -133,7 +150,70 @@ public final class XmlParamTypeResolver {
                 }
             }
         }
+        // T-FCA-01：foreach 集合快捷别名（MyBatis ParamNameResolver.wrapToMapIfCollection）
+        result.putAll(collectionAliasTypes(parameters));
         return result;
+    }
+
+    /**
+     * T-FCA-01（N-32）：foreach 集合快捷别名 —— `collection="list" / "collection" / "array"` 的类型条目。
+     *
+     * <p>MyBatis 3.5.19 `ParamNameResolver.getNamedParams` 在「<b>无 @Param 注解 ∧ 恰一个非特殊参数</b>」时
+     * 把参数对象交给 `wrapToMapIfCollection(value, 实参名)` 包成 `ParamMap`，此后语句里可用别名键取到该集合。
+     * 键集<b>经真引擎实测钉住</b>（`xml/fidelity/RealEngineFidelityTest` 的「别名键集钉」用例，非竞品转述）：
+     * <ul>
+     *  <li>`T[]`（<b>任意元素类型，含泛型数组 `List&lt;Long&gt;[]`</b>；`byte[]` 除外，见下方近似登记）→ 仅 `array`；</li>
+     *  <li>`List`（含 ArrayList/LinkedList/Vector/Stack 等 List 族）→ `collection` + `list` 双写；</li>
+     *  <li>`Collection` 非 `List`（Set/Queue/Deque 族）→ 仅 `collection`；</li>
+     *  <li>其余（Map / DTO / 标量 / `Iterable` 等非 Collection）→ 不包装，无别名键。</li>
+     * </ul>
+     * 规则来源标注：`mybatis-3.5.19-param-name-resolver-wrap-to-map-if-collection`。
+     *
+     * <p><b>分支顺序是判据的一部分（T-FCA-01 修正）</b>：数组形态<b>先判</b>、集合族后判。先剥泛型
+     * （`substringBefore('&lt;')`）会把 `java.util.List&lt;java.lang.Long&gt;[]` 截成 `java.util.List`，
+     * 据此判族会误产 `list` 键——而数组在真引擎里<b>没有</b> `list`/`collection` 键（`instanceof Collection`
+     * 对数组不成立，走 `getClass().isArray()` 支）。本方法因此与 {@link #kindOfTypeText} 同口径：数组先判。
+     *
+     * <p><b>门槛与 {@link #resolveTypes} 的 `paramN` 门槛互补而非复用</b>：那条是「全部参数都有显式 `@Param`」
+     * （多参数 `ParamMap` 位置别名），本条是「单参数 ∧ 无显式 `@Param`」——MyBatis 侧同样是互斥两支
+     * （`hasParamAnnotation` 为真即走多参数支，不再包装集合）。
+     *
+     * <p>类型读不到类别（非 COLLECTION）时不产出别名（宁缺勿错：`Iterable` 不是 `java.util.Collection`，
+     * 真引擎不包装，故显式排除）。<b>两处已知近似（登记，无测试覆盖，本次不扩面；键集为 Heavy 沙盒实测）</b>：
+     * ① `byte[]`/`Byte[]` 按 BLOB 落 {@link ParamKind#UNKNOWN} → 实测键集仅 `[bytes]`，无 `array` 键
+     * （真引擎会包装成 `array`）；② 用户自定义 `implements/extends List` 的类经 PSI 落 OBJECT
+     * （{@link #isDtoLike}，走 DTO 字段展开分支）→ 实测键集为空（真引擎会给 `collection` + `list`）。
+     * 两形态均按「宁缺勿错」保守处置：少给键 = 面板按 UNKNOWN 兜底，多给键 = 可能错位的类型。
+     *
+     * <p>移植注记：master 侧为 `internal fun`（Java 侧落 `public`，k2j 惯例）。
+     */
+    @NotNull
+    public Map<String, ParamTypeInfo> collectionAliasTypes(@NotNull PsiParameter[] parameters) {
+        if (parameters.length != 1) return java.util.Collections.emptyMap();
+        PsiParameter param = parameters[0];
+        if (explicitParamNameOf(param) != null) return java.util.Collections.emptyMap();
+        ParamTypeInfo info = typeInfoOf(param.getType());
+        if (info.kind() != ParamKind.COLLECTION) return java.util.Collections.emptyMap();
+        // 数组先判（含泛型数组）——顺序不可颠倒，理由见 KDoc「分支顺序是判据的一部分」
+        String canonical = param.getType().getCanonicalText().trim();
+        if (canonical.endsWith("[]")) {
+            Map<String, ParamTypeInfo> arrayOnly = new LinkedHashMap<>();
+            arrayOnly.put("array", info);
+            return arrayOnly;
+        }
+        int lt = canonical.indexOf('<');
+        String beforeGenerics = (lt >= 0 ? canonical.substring(0, lt) : canonical).trim();
+        int dot = beforeGenerics.lastIndexOf('.');
+        String simple = dot >= 0 ? beforeGenerics.substring(dot + 1) : beforeGenerics;
+        if (NON_COLLECTION_SIMPLE_NAMES.contains(simple)) return java.util.Collections.emptyMap();
+        Map<String, ParamTypeInfo> aliases = new LinkedHashMap<>();
+        if (LIST_SIMPLE_NAMES.contains(simple)) {
+            aliases.put("collection", info);
+            aliases.put("list", info);
+        } else {
+            aliases.put("collection", info);
+        }
+        return aliases;
     }
 
     /**
@@ -193,16 +273,24 @@ public final class XmlParamTypeResolver {
     /**
      * 类型文本 → 类别（命中返回类别，未命中返回 null 交由调用方判 DTO 兜底）。
      *
-     * <p>泛型先剥壳（`java.util.List&lt;java.lang.String&gt;` → `java.util.List`）；
+     * <p><b>数组先于泛型剥壳（T-FCA-01 修正）</b>：`java.util.List&lt;java.lang.Long&gt;[]` 剥壳后得 `List`，
+     * 按外层类型判定会漏掉「它是数组」这一事实——`Map&lt;K,V&gt;[]` 更会落 OBJECT（数组类别与元素类型无关）。
+     * 数组一律 COLLECTION，但 `byte[]`/`Byte[]` 按 BLOB 语义落 UNKNOWN（T-PT-01 收窄，见实施记录）；
+     * 非数组文本再剥泛型（`java.util.List&lt;java.lang.String&gt;` → `java.util.List`）；
      * NUMBER 判定复用 {@link ParamQuote#decide}（升级前数值集单一来源，杜绝两份数值名单漂移）；
-     * 数组→COLLECTION，但 `byte[]`/`Byte[]` 按 BLOB 语义落 UNKNOWN（T-PT-01 收窄，见实施记录）；
      * `java.util.UUID` → TEXT（T-PC2-02，见 {@link #UUID_FQN}）。
      */
     @Nullable
     public ParamKind kindOfTypeText(@Nullable String typeText) {
         if (typeText == null || typeText.isBlank()) return null;
-        int lt = typeText.indexOf('<');
-        String bare = (lt >= 0 ? typeText.substring(0, lt) : typeText).trim();
+        String full = typeText.trim();
+        if (full.endsWith("[]")) {
+            int lastDot = full.lastIndexOf('.');
+            String afterLastDot = lastDot >= 0 ? full.substring(lastDot + 1) : full;
+            return isByteArray(afterLastDot) ? ParamKind.UNKNOWN : ParamKind.COLLECTION;
+        }
+        int lt = full.indexOf('<');
+        String bare = (lt >= 0 ? full.substring(0, lt) : full).trim();
         int dot = bare.lastIndexOf('.');
         String simple = dot >= 0 ? bare.substring(dot + 1) : bare;
         if (bare.equals(UUID_FQN) || simple.equals("UUID")) return ParamKind.TEXT;
@@ -211,9 +299,6 @@ public final class XmlParamTypeResolver {
         if (TEXT_SIMPLE_NAMES.contains(simple)) return ParamKind.TEXT;
         if (COLLECTION_SIMPLE_NAMES.contains(simple)) return ParamKind.COLLECTION;
         if (OBJECT_SIMPLE_NAMES.contains(simple)) return ParamKind.OBJECT;
-        if (simple.endsWith("[]")) {
-            return isByteArray(simple) ? ParamKind.UNKNOWN : ParamKind.COLLECTION;
-        }
         return null;
     }
 

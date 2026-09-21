@@ -1,4 +1,5 @@
 // T-SyncK2JMaster309 自 master sql/rollback/RollbackSqlGenerator.kt 移植
+// T-SyncK2JMaster115 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/sql/rollback/RollbackSqlGenerator.kt 移植（P8：快照上限警示补传 {1} 上限实参；同提交的 P11 补键在 resources 侧，本文件未动）
 package cn.song.mybatisplus.visualizer.sql.rollback;
 
 import cn.song.mybatisplus.visualizer.execute.UnboundedWriteDetector;
@@ -623,8 +624,11 @@ public final class RollbackSqlGenerator {
         }
         if (!sb.isEmpty()) statements.add(flushInsertBatch(sb, table, columnList));
         List<RollbackWarning> warnings = new ArrayList<>();
+        // 文案含两个占位符（{0} 行数 / {1} 上限）——曾只传 {0}，弹窗会原样显示「上限 {1}」
         if (rows.size() >= SNAPSHOT_ROW_LIMIT) {
-            warnings.add(new RollbackWarning("rollback.warn.snapshotRowLimit", List.of(String.valueOf(rows.size()))));
+            warnings.add(new RollbackWarning(
+                    "rollback.warn.snapshotRowLimit",
+                    List.of(String.valueOf(rows.size()), String.valueOf(SNAPSHOT_ROW_LIMIT))));
         }
         warnings.add(new RollbackWarning("rollback.warn.snapshotCompleteness"));
         return new RollbackResult(Rating.PARTIAL, statements, warnings, null, table);

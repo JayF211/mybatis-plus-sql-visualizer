@@ -1,4 +1,5 @@
 // T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/PrewarmAwait.kt 移植
+// T-SyncK2JMaster115 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/PrewarmAwait.kt 移植（T-FixN1 派发通道 KDoc：模态改 defaultModalityState 的理由）
 package cn.song.mybatisplus.visualizer.ui;
 
 import org.jetbrains.annotations.Nullable;
@@ -26,7 +27,13 @@ public class PrewarmAwait<T> {
     /** 超时预算毫秒（生产 = SqlPreviewPanel.PREWARM_WAIT_MS）。 */
     private final long timeoutMs;
 
-    /** 回调派发通道：生产 = EDT invokeLater(any modality)；测试 = 同步直调或记录。 */
+    /**
+     * 回调派发通道：生产 = EDT `invokeLater(写安全模态 defaultModalityState())`；测试 = 同步直调或记录。
+     *
+     * <p>T-FixN1（N1）：生产模态由 `ModalityState.any()` 改 `defaultModalityState()`——回调体（装配）
+     * <b>会写文档</b>，而 `any()` 恒 write-unsafe（平台契约见 `execute/DocWriteContext` KDoc），
+     * 写文档必触发 `Write-unsafe context!`。代价是模态对话框挂起期间派发推迟到模态关闭。
+     */
     private final Consumer<Runnable> dispatcher;
 
     private final CompletableFuture<T> future = new CompletableFuture<>();

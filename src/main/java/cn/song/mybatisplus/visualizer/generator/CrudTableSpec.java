@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.generator;
 
 import cn.song.mybatisplus.visualizer.sql.Dialect;
+import cn.song.mybatisplus.visualizer.sql.IdentifierCaseSource;
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect;
 import java.util.ArrayList;
 import java.util.List;
@@ -17,6 +18,9 @@ import org.jetbrains.annotations.Nullable;
  * @param versionColumn     乐观锁版本列（实体侧 @Version，对齐 updateById 语义：SET 由
  *                          {@code version = version + 1} 取代、WHERE 末尾追加；DB 侧无此元数据恒 null）
  * @param dialect           方言（保留字引用包裹；读插件设置，缺省 MySQL）
+ * @param identifierCaseSource 名字大小写来源（O-42）：目录来源 {@link IdentifierCaseSource#CATALOG} 时
+ *                          Oracle 按「含小写字母即加引号」引用；缺省 {@link IdentifierCaseSource#ENTITY}
+ *                          （实体派生名裸写，既有行为逐字不变——未接线点也落此默认值）
  */
 public final class CrudTableSpec {
     private final String tableName;
@@ -24,14 +28,22 @@ public final class CrudTableSpec {
     private final String logicDeleteColumn;
     private final String versionColumn;
     private final Dialect dialect;
+    private final IdentifierCaseSource identifierCaseSource;
 
     public CrudTableSpec(String tableName, List<CrudColumn> columns, @Nullable String logicDeleteColumn,
-                         @Nullable String versionColumn, Dialect dialect) {
+                         @Nullable String versionColumn, Dialect dialect,
+                         IdentifierCaseSource identifierCaseSource) {
         this.tableName = tableName;
         this.columns = columns;
         this.logicDeleteColumn = logicDeleteColumn;
         this.versionColumn = versionColumn;
         this.dialect = dialect;
+        this.identifierCaseSource = identifierCaseSource;
+    }
+
+    public CrudTableSpec(String tableName, List<CrudColumn> columns, @Nullable String logicDeleteColumn,
+                         @Nullable String versionColumn, Dialect dialect) {
+        this(tableName, columns, logicDeleteColumn, versionColumn, dialect, IdentifierCaseSource.ENTITY);
     }
 
     public CrudTableSpec(String tableName, List<CrudColumn> columns, @Nullable String logicDeleteColumn,
@@ -69,6 +81,10 @@ public final class CrudTableSpec {
         return dialect;
     }
 
+    public IdentifierCaseSource getIdentifierCaseSource() {
+        return identifierCaseSource;
+    }
+
     /** 主键列（保持 {@link #getColumns()} 顺序；复合主键 AND 连接）。 */
     public List<CrudColumn> getPrimaryKeys() {
         List<CrudColumn> result = new ArrayList<>();
@@ -92,7 +108,7 @@ public final class CrudTableSpec {
 
     public CrudTableSpec copy(String tableName, List<CrudColumn> columns, @Nullable String logicDeleteColumn,
                               @Nullable String versionColumn, Dialect dialect) {
-        return new CrudTableSpec(tableName, columns, logicDeleteColumn, versionColumn, dialect);
+        return new CrudTableSpec(tableName, columns, logicDeleteColumn, versionColumn, dialect, identifierCaseSource);
     }
 
     @Override
@@ -108,17 +124,19 @@ public final class CrudTableSpec {
                 && Objects.equals(columns, that.columns)
                 && Objects.equals(logicDeleteColumn, that.logicDeleteColumn)
                 && Objects.equals(versionColumn, that.versionColumn)
-                && Objects.equals(dialect, that.dialect);
+                && Objects.equals(dialect, that.dialect)
+                && identifierCaseSource == that.identifierCaseSource;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableName, columns, logicDeleteColumn, versionColumn, dialect);
+        return Objects.hash(tableName, columns, logicDeleteColumn, versionColumn, dialect, identifierCaseSource);
     }
 
     @Override
     public String toString() {
         return "CrudTableSpec(tableName=" + tableName + ", columns=" + columns + ", logicDeleteColumn="
-                + logicDeleteColumn + ", versionColumn=" + versionColumn + ", dialect=" + dialect + ")";
+                + logicDeleteColumn + ", versionColumn=" + versionColumn + ", dialect=" + dialect
+                + ", identifierCaseSource=" + identifierCaseSource + ")";
     }
 }

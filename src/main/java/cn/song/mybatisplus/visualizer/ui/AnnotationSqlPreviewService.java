@@ -1,3 +1,4 @@
+// T-SyncK2JMaster115 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/AnnotationSqlPreviewService.kt 移植（T-FCA-02 预览绑定构造并入集合快捷别名）
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
@@ -152,7 +153,7 @@ public final class AnnotationSqlPreviewService {
         }
         String sql = String.join(" ", values).trim();
         PsiMethod method = PsiTreeUtil.getParentOfType(annotation, PsiMethod.class);
-        return buildResult(sql, shortName, paramTypes(method), warnings, project);
+        return buildResult(sql, shortName, previewParamTypes(method), warnings, project);
     }
 
     // ------------------------------------------------------------------
@@ -197,7 +198,7 @@ public final class AnnotationSqlPreviewService {
         if (sql == null) {
             return nullResult(MpSqlVisualizerBundle.message("annotation.provider.notSupported"));
         }
-        return buildResult(sql, shortName, paramTypes(mapperMethod), warnings, project);
+        return buildResult(sql, shortName, previewParamTypes(mapperMethod), warnings, project);
     }
 
     /** Provider type 解析：value/type 属性（PsiClassObjectAccessExpression）→ PsiClass。 */
@@ -316,6 +317,31 @@ public final class AnnotationSqlPreviewService {
             }
         }
         return result;
+    }
+
+    /**
+     * T-FCA-02（N-32）：<b>预览绑定构造</b>用的参数类型映射 = {@link #paramTypes}（命名参数 + `paramN`）
+     * + foreach 集合快捷别名（`list` / `collection` / `array`）。
+     *
+     * <p>别名门槛与键集由 {@link XmlParamTypeResolver#collectionAliasTypes} 单一实现（真引擎实测钉住，
+     * 见 `xml/fidelity/RealEngineFidelityTest` 的「别名键集钉」用例）——注解路径与 XML 路径共用同一
+     * 判定，避免两份门槛漂移。规则来源标注：`mybatis-3.5.19-param-name-resolver-wrap-to-map-if-collection`。
+     *
+     * <p><b>刻意不并入 {@link #paramTypes}</b>：该函数的<b>键序</b>是补全候选来源（{@code XmlSqlCompletionContextResolver.resolveCommon}
+     * 取 `keys` 作 `SourceSqlContext.paramNames`，被 `test` 与 `collection` 两个属性共用），并入会把集合
+     * 别名灌进 `test` 候选（T-FCA-03 明确要求只影响 `collection`）。故别名走「预览绑定」这条渠道，
+     * 补全候选的别名由 `XmlSqlCompletionContributor` 按属性收窄注入，两处互不污染。
+     *
+     * <p>移植注记：master 侧为 `internal fun`（Java 侧落 `public`，k2j 惯例）。
+     */
+    @NotNull
+    public Map<String, ParamTypeInfo> previewParamTypes(@Nullable PsiMethod method) {
+        Map<String, ParamTypeInfo> named = paramTypes(method);
+        PsiParameter[] parameters = method != null ? method.getParameterList().getParameters() : null;
+        if (parameters == null) return named;
+        Map<String, ParamTypeInfo> merged = new LinkedHashMap<>(named);
+        merged.putAll(XmlParamTypeResolver.INSTANCE.collectionAliasTypes(parameters));
+        return merged;
     }
 
     /** 模型 → 结果（解析异常兜底 warning；T-M25.2 静态常量引用经 project 解析注入）。

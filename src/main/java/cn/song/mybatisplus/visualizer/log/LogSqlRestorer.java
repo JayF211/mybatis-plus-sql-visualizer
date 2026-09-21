@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
+import cn.song.mybatisplus.visualizer.sql.PlaceholderPositionsKt;
+
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -22,7 +24,7 @@ public class LogSqlRestorer {
         if (params.isEmpty() || sql.isEmpty()) {
             return sql;
         }
-        List<Integer> positions = LogSqlRestorerKt.placeholderPositions(sql);
+        List<Integer> positions = PlaceholderPositionsKt.placeholderPositions(sql);
         if (positions.isEmpty()) {
             return sql;
         }

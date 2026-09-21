@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.model;
 
 import cn.song.mybatisplus.visualizer.sql.Dialect;
+import cn.song.mybatisplus.visualizer.sql.IdentifierCaseSource;
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect;
 import cn.song.mybatisplus.visualizer.sql.ParamHint;
 import java.util.ArrayList;
@@ -26,9 +27,16 @@ public final class BatchModel {
     private final String versionColumn;
     private final String conflictColumn;
     private final Dialect dialect;
+    /**
+     * 名字大小写来源（O-42）：目录来源 {@link IdentifierCaseSource#CATALOG} 时按方言的按需引用覆写判定
+     * （Oracle 含小写字母即加引号）；缺省 {@link IdentifierCaseSource#ENTITY} = 既有 {@link Dialect#quoteIfKeyword}
+     * 行为逐字不变。本类既有构造点（实体转换链、批量转换链、面板测试）全部走默认值，不受影响。
+     */
+    private final IdentifierCaseSource identifierCaseSource;
 
     public BatchModel(BatchKind kind, String tableName, List<BatchColumn> toggleColumns,
-                      List<BatchColumn> fixedColumns, String versionColumn, String conflictColumn, Dialect dialect) {
+                      List<BatchColumn> fixedColumns, String versionColumn, String conflictColumn, Dialect dialect,
+                      IdentifierCaseSource identifierCaseSource) {
         this.kind = kind;
         this.tableName = tableName;
         this.toggleColumns = toggleColumns;
@@ -36,6 +44,13 @@ public final class BatchModel {
         this.versionColumn = versionColumn;
         this.conflictColumn = conflictColumn;
         this.dialect = dialect;
+        this.identifierCaseSource = identifierCaseSource;
+    }
+
+    public BatchModel(BatchKind kind, String tableName, List<BatchColumn> toggleColumns,
+                      List<BatchColumn> fixedColumns, String versionColumn, String conflictColumn, Dialect dialect) {
+        this(kind, tableName, toggleColumns, fixedColumns, versionColumn, conflictColumn, dialect,
+                IdentifierCaseSource.ENTITY);
     }
 
     public BatchModel(BatchKind kind, String tableName, List<BatchColumn> toggleColumns,
@@ -83,6 +98,15 @@ public final class BatchModel {
 
     public Dialect getDialect() {
         return dialect;
+    }
+
+    public IdentifierCaseSource getIdentifierCaseSource() {
+        return identifierCaseSource;
+    }
+
+    /** 列名/表名的按需引用（按名字来源分流；未接线点即 {@link IdentifierCaseSource#ENTITY} 旧行为）。 */
+    private String q(String identifier) {
+        return dialect.quoteIfNeeded(identifier, identifierCaseSource);
     }
 
     /**
@@ -139,12 +163,12 @@ public final class BatchModel {
             List<String> cols = new ArrayList<>();
             for (BatchColumn c : toggleColumns) {
                 if (activeColumns.contains(c.getColumnName())) {
-                    cols.add(dialect.quoteIfKeyword(c.getColumnName()));
+                    cols.add(q(c.getColumnName()));
                 }
             }
             String colList = String.join(", ", cols);
             String marks = String.join(", ", Collections.nCopies(cols.size(), "?"));
-            return "INSERT INTO " + dialect.quoteIfKeyword(tableName) + " (" + colList + ")\nVALUES (" + marks + ")";
+            return "INSERT INTO " + q(tableName) + " (" + colList + ")\nVALUES (" + marks + ")";
         } else if (kind == BatchKind.UPDATE) {
             StringBuilder setSql = new StringBuilder();
             boolean first = true;
@@ -153,7 +177,7 @@ public final class BatchModel {
                     if (!first) {
                         setSql.append(", ");
                     }
-                    setSql.append(dialect.quoteIfKeyword(c.getColumnName())).append(" = ?");
+                    setSql.append(q(c.getColumnName())).append(" = ?");
                     first = false;
                 }
             }
@@ -161,15 +185,15 @@ public final class BatchModel {
                 if (!first) {
                     setSql.append(", ");
                 }
-                setSql.append(dialect.quoteIfKeyword(versionColumn)).append(" = ").append(versionColumn).append(" + 1");
+                setSql.append(q(versionColumn)).append(" = ").append(versionColumn).append(" + 1");
                 first = false;
             }
             List<String> whereParts = new ArrayList<>();
             for (BatchColumn c : fixedColumns) {
-                whereParts.add(dialect.quoteIfKeyword(c.getColumnName()) + " = ?");
+                whereParts.add(q(c.getColumnName()) + " = ?");
             }
             String whereSql = String.join(" AND ", whereParts);
-            return "UPDATE " + dialect.quoteIfKeyword(tableName) + "\nSET " + setSql + "\nWHERE " + whereSql;
+            return "UPDATE " + q(tableName) + "\nSET " + setSql + "\nWHERE " + whereSql;
         } else {
             List<BatchColumn> toggles = new ArrayList<>();
             for (BatchColumn c : toggleColumns) {
@@ -180,17 +204,25 @@ public final class BatchModel {
             String conflict = (conflictColumn != null && activeColumns.contains(conflictColumn)) ? conflictColumn : null;
             List<String> cols = new ArrayList<>();
             for (BatchColumn c : toggles) {
-                cols.add(dialect.quoteIfKeyword(c.getColumnName()));
+                cols.add(q(c.getColumnName()));
             }
-            String base = "INSERT INTO " + dialect.quoteIfKeyword(tableName) + " (" + String.join(", ", cols)
+            String base = "INSERT INTO " + q(tableName) + " (" + String.join(", ", cols)
                     + ")\nVALUES (" + String.join(", ", Collections.nCopies(cols.size(), "?")) + ")";
             if (conflict == null) {
+                // 主键未勾选（新记录插入路径）→ 纯 INSERT，无冲突子句
                 return base;
             }
             List<String> toggleNames = new ArrayList<>();
             for (BatchColumn c : toggles) {
                 toggleNames.add(c.getColumnName());
             }
+            // P-立项-05：整语句形态优先（H2 原生 upsert 为 MERGE INTO..KEY..VALUES，
+            // 无法以「INSERT+后缀」表达）；null → 后缀形态；后缀亦 null（Oracle/SQL Server/DM
+            // 无原生简洁 upsert）→ 降级纯 INSERT
+            //
+            // O-42：这两个方言辅助内部仍走既有 quoteIfKeyword（未接线）。当前**无行为差异**——
+            // Oracle 的 upsert 两条路径都返回 null（不进入渲染），其余方言的 quoteIfNeeded
+            // 默认即委托 quoteIfKeyword。若日后为别的方言引入目录来源判定，此处须一并接线。
             String upsertStmt = dialect.renderUpsertStatement(tableName, toggleNames, conflict);
             if (upsertStmt != null) {
                 return upsertStmt;
@@ -211,11 +243,13 @@ public final class BatchModel {
 
     public BatchModel copy(BatchKind kind, String tableName, List<BatchColumn> toggleColumns,
                            List<BatchColumn> fixedColumns, String versionColumn, String conflictColumn, Dialect dialect) {
-        return new BatchModel(kind, tableName, toggleColumns, fixedColumns, versionColumn, conflictColumn, dialect);
+        return new BatchModel(kind, tableName, toggleColumns, fixedColumns, versionColumn, conflictColumn, dialect,
+                identifierCaseSource);
     }
 
     public BatchModel copy(Dialect dialect) {
-        return new BatchModel(kind, tableName, toggleColumns, fixedColumns, versionColumn, conflictColumn, dialect);
+        return new BatchModel(kind, tableName, toggleColumns, fixedColumns, versionColumn, conflictColumn, dialect,
+                identifierCaseSource);
     }
 
     @Override
@@ -233,18 +267,21 @@ public final class BatchModel {
                 && Objects.equals(fixedColumns, that.fixedColumns)
                 && Objects.equals(versionColumn, that.versionColumn)
                 && Objects.equals(conflictColumn, that.conflictColumn)
-                && Objects.equals(dialect, that.dialect);
+                && Objects.equals(dialect, that.dialect)
+                && identifierCaseSource == that.identifierCaseSource;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(kind, tableName, toggleColumns, fixedColumns, versionColumn, conflictColumn, dialect);
+        return Objects.hash(kind, tableName, toggleColumns, fixedColumns, versionColumn, conflictColumn, dialect,
+                identifierCaseSource);
     }
 
     @Override
     public String toString() {
         return "BatchModel(kind=" + kind + ", tableName=" + tableName + ", toggleColumns=" + toggleColumns
                 + ", fixedColumns=" + fixedColumns + ", versionColumn=" + versionColumn
-                + ", conflictColumn=" + conflictColumn + ", dialect=" + dialect + ")";
+                + ", conflictColumn=" + conflictColumn + ", dialect=" + dialect
+                + ", identifierCaseSource=" + identifierCaseSource + ")";
     }
 }

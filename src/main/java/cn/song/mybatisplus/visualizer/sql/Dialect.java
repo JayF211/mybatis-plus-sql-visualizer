@@ -54,6 +54,30 @@ public interface Dialect {
     }
 
     /**
+     * 标识符<b>按名字大小写来源</b>引用（O-42 / T-OracleQuoteCaseSource）。
+     *
+     * <p>与 {@link #quoteIfKeyword} 的差别：本方法额外知道该名字<b>从哪来</b>——同一串字符在两种来源下
+     * 的「正确引用形态」可以相反。默认实现直接委托 {@link #quoteIfKeyword}（<b>其余方言逐字节不变</b>），
+     * 只有对大小写敏感且会折叠的方言（Oracle）覆写。</p>
+     *
+     * <p>覆写者须遵守的分流口径：</p>
+     * <ul>
+     *   <li>{@link IdentifierCaseSource#CATALOG}：名字是<b>字典里的真实名字</b>（自省元数据返回，未归一）。
+     *       Oracle 裸标识符折叠为大写，故「含小写字母」的名字<b>必须加引号</b>才能命中；全大写才可裸写；</li>
+     *   <li>{@link IdentifierCaseSource#ENTITY}：名字是<b>小写派生名</b>（{@code @TableName}/{@code @TableField}
+     *       注解值，或 camelCase → snake_case 的 {@code NamingStrategy.toSnakeCase} 产物）——这些正是
+     *       「不带引号创建」的名字，折叠后恰好命中，<b>加引号反而必然失败</b>。故实体来源走既有
+     *       {@link #quoteIfKeyword} 逐字不变（这是 C 方案「无条件收紧」被否决的依据）。</li>
+     * </ul>
+     *
+     * <p>未接线点（{@link IdentifierCaseSource#ENTITY} 默认）维持旧行为——新增重载 + 逐点接线，
+     * 不改既有函数语义。</p>
+     */
+    default String quoteIfNeeded(String identifier, IdentifierCaseSource caseSource) {
+        return quoteIfKeyword(identifier);
+    }
+
+    /**
      * UPSERT 冲突子句（T-M43）。返回 null → 本方言无原生 upsert，渲染降级纯 INSERT。
      *
      * @param conflictKey   冲突键列名（原始值）

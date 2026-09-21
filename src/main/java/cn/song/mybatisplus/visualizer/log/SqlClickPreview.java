@@ -238,6 +238,8 @@ public class SqlClickPreview {
             editorEx.getSettings().setAdditionalPageAtBottom(false);
             editorEx.getSettings().setCaretRowShown(false);
             editorEx.getSettings().setUseSoftWraps(true); // 长 SQL 软换行免横向滚动
+            // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+            cn.song.mybatisplus.visualizer.ui.EditorWhitespaceSettings.applyTo(editorEx);
         }
         editor.getComponent().setPreferredSize(new Dimension(PREFERRED_WIDTH, PREFERRED_HEIGHT));
 

@@ -494,6 +494,8 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         ex.getSettings().setFoldingOutlineShown(false);
         ex.getSettings().setIndentGuidesShown(false);
         ex.getSettings().setAdditionalPageAtBottom(false);
+        // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+        cn.song.mybatisplus.visualizer.ui.EditorWhitespaceSettings.applyTo(ex);
         ex.setPlaceholder(inputPlaceholder); // T-UiNative T-UN-14：空态提示原生件
         return editor;
     }
@@ -515,6 +517,8 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         ex.getSettings().setFoldingOutlineShown(true);
         ex.getSettings().setIndentGuidesShown(false);
         ex.getSettings().setAdditionalPageAtBottom(false);
+        // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+        cn.song.mybatisplus.visualizer.ui.EditorWhitespaceSettings.applyTo(ex);
         ex.setPlaceholder(resultPlaceholder); // T-UiNative T-UN-14：空态提示原生件
         return editor;
     }

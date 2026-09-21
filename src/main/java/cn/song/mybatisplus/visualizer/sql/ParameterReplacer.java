@@ -77,6 +77,10 @@ public final class ParameterReplacer {
      *  <li>值中单引号转义为 {@code ''}（防 SQL 注入，与面板回填一致）</li>
      * </ul>
      *
+     * <p>T-PSG-02（N-33）：位点判定改用 {@link PlaceholderPositionsKt#placeholderPositions}（string-aware）——
+     * 字符串字面量与 {@code --} / 块注释内的 {@code ?} 不再被当作占位符替换（改前朴素逐字符 {@code c == '?'} 会错位）。
+     * 不含这类 {@code ?} 的 SQL 替换结果与改前逐字节一致（替换语义与顺序不变）。
+     *
      * @param sql         含 {@code ?} 的 SQL（{@code ?} 顺序与 {@code sources} 一一对应）
      * @param sources     参数来源列表（与 SQL 中 {@code ?} 按出现顺序对应）
      * @param paramValues 参数值映射（source → 用户输入值）
@@ -89,21 +93,20 @@ public final class ParameterReplacer {
             Map<String, String> paramValues,
             List<ParamHint> hints) {
         if (sources.isEmpty()) return sql;
+        List<Integer> positions = PlaceholderPositionsKt.placeholderPositions(sql);
+        if (positions.isEmpty()) return sql;
         StringBuilder sb = new StringBuilder(sql.length() + 32);
         int paramIndex = 0;
-        int i = 0;
-        while (i < sql.length()) {
-            char c = sql.charAt(i);
-            if (c == '?') {
-                String source = paramIndex < sources.size() ? sources.get(paramIndex) : null;
-                String value = source != null ? paramValues.get(source) : null;
-                sb.append(renderValue(value, paramIndex < hints.size() ? hints.get(paramIndex) : null));
-                paramIndex++;
-            } else {
-                sb.append(c);
-            }
-            i++;
+        int prev = 0;
+        for (int pos : positions) {
+            sb.append(sql, prev, pos);
+            String source = paramIndex < sources.size() ? sources.get(paramIndex) : null;
+            String value = source != null ? paramValues.get(source) : null;
+            sb.append(renderValue(value, paramIndex < hints.size() ? hints.get(paramIndex) : null));
+            paramIndex++;
+            prev = pos + 1;
         }
+        sb.append(sql, prev, sql.length());
         return sb.toString();
     }
 

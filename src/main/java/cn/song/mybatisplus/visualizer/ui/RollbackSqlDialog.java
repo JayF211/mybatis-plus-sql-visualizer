@@ -1,4 +1,5 @@
 // T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/RollbackSqlDialog.kt 移植
+// T-SyncK2JMaster115 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/RollbackSqlDialog.kt 移植（O-44a 空白符可视化接线）
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore;
@@ -180,6 +181,9 @@ public class RollbackSqlDialog extends DialogWrapper {
         } else {
             created = EditorFactory.getInstance().createViewer(doc);
         }
+        // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）。
+        // 本编辑器此前零外观设置（只读回滚 SQL），故是唯一不落在 EditorEx.apply 块内的接线点。
+        EditorWhitespaceSettings.applyTo(created);
         editor = created;
         // 编辑器随弹窗 disposable 树级联释放（Disposer 树铁律）
         Disposer.register(getDisposable(), this::releaseEditor);

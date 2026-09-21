@@ -600,6 +600,9 @@ public class PluginSettingsPanel implements Disposable {
     /** 首用锚点引导通知开关（T-UxOnboard T-UX-01，默认开）：关闭后首用引导全程静默。 */
     private final JBCheckBox onboardingAnchorTipCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.onboardingAnchorTip"));
 
+    /** 空白符可视化开关（T-PreviewWhitespaceToggle O-44a，默认关=不设置该属性、继承 IDE 全局）。 */
+    private final JBCheckBox editorShowWhitespacesCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.editorShowWhitespaces"));
+
     /** 逻辑删除注入开关（T-M15-07）：@TableLogic 实体查询/删除自动追加 `AND deleted = 0`。 */
     private final JBCheckBox injectLogicDeleteCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.injectLogicDelete"));
     private final JBTextField logicDeleteValueField = new JBTextField(6);
@@ -1117,6 +1120,10 @@ public class PluginSettingsPanel implements Disposable {
                 onboardingAnchorTipCheck.setText(msg("settings.onboardingAnchorTip"));
                 onboardingAnchorTipCheck.setToolTipText(msg("settings.onboardingAnchorTip.tip"));
                 addRow(p, g, "", onboardingAnchorTipCheck);
+                // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+                editorShowWhitespacesCheck.setText(msg("settings.editorShowWhitespaces"));
+                editorShowWhitespacesCheck.setToolTipText(msg("settings.editorShowWhitespaces.tip"));
+                addRow(p, g, "", editorShowWhitespacesCheck);
                 languageCombo.setModel(new DefaultComboBoxModel<>(languageOptions()));
                 LanguageOption lang = languageOptionByValue(settings.getState().getLanguage());
                 languageCombo.setSelectedItem(lang != null ? lang : languageOptions()[0]);
@@ -1643,6 +1650,11 @@ public class PluginSettingsPanel implements Disposable {
         onboardingAnchorTipCheck.setSelected(checked);
     }
 
+    /** T-PreviewWhitespaceToggle O-44a：空白符开关设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
+    public void setEditorShowWhitespacesCheck(boolean checked) {
+        editorShowWhitespacesCheck.setSelected(checked);
+    }
+
     /** T-TenantLine：租户列名输入框设置入口（测试用）——与用户输入同一路径（isModified/apply 检测）。 */
     public void setTenantColumnName(String value) {
         tenantColumnNameField.setText(value);
@@ -1825,6 +1837,8 @@ public class PluginSettingsPanel implements Disposable {
         Object lang = languageCombo.getSelectedItem();
         return gutterIconCheck.isSelected() != s.getShowGutterIcon()
             || joinDiagramNativeCheck.isSelected() != s.getJoinDiagramNative()
+            // T-PreviewWhitespaceToggle O-44a：空白符开关（漏挂 isModified → 勾选后 Apply 不启用）
+            || editorShowWhitespacesCheck.isSelected() != s.getEditorShowWhitespaces()
             || onboardingAnchorTipCheck.isSelected() != s.getOnboardingAnchorTipEnabled()
             || !Objects.equals(lang instanceof LanguageOption ? ((LanguageOption) lang).value : null, s.getLanguage());
     }
@@ -1968,6 +1982,8 @@ public class PluginSettingsPanel implements Disposable {
             s.setJoinDiagramNative(joinDiagramNativeCheck.isSelected());
             // T-UxOnboard T-UX-01：首用锚点引导开关写回（随 UI 分区，读写判定同归属）
             s.setOnboardingAnchorTipEnabled(onboardingAnchorTipCheck.isSelected());
+            // T-PreviewWhitespaceToggle O-44a：空白符开关写回（随 UI 分区）
+            s.setEditorShowWhitespaces(editorShowWhitespacesCheck.isSelected());
             s.setLanguage(lang instanceof LanguageOption
                 ? ((LanguageOption) lang).value
                 : PluginSettings.DEFAULT_LANGUAGE);
@@ -2058,6 +2074,8 @@ public class PluginSettingsPanel implements Disposable {
             gutterIconCheck.setSelected(s.getShowGutterIcon());
             joinDiagramNativeCheck.setSelected(s.getJoinDiagramNative());
             onboardingAnchorTipCheck.setSelected(s.getOnboardingAnchorTipEnabled());
+            // T-PreviewWhitespaceToggle O-44a：空白符开关回填
+            editorShowWhitespacesCheck.setSelected(s.getEditorShowWhitespaces());
             LanguageOption lang = languageOptionByValue(s.getLanguage());
             languageCombo.setSelectedItem(lang != null ? lang : languageOptions()[0]);
         }

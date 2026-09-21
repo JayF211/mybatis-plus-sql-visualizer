@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
 import cn.song.mybatisplus.visualizer.sql.ParamHint;
+import cn.song.mybatisplus.visualizer.sql.PlaceholderPositionsKt;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 
@@ -97,11 +98,14 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
     private static final java.util.regex.Pattern NAMED_PARAM_REF = java.util.regex.Pattern.compile(":(\\w+)");
 
     /**
-     * T-HibDualCapture：string-aware `?` 占位符计数——口径与 {@link LogSqlRestorerKt#placeholderPositions}
+     * T-HibDualCapture：string-aware `?` 占位符计数——口径与 {@link PlaceholderPositionsKt#placeholderPositions(String)}
      * （还原回填）完全一致，字符串字面量与注释内的 {@code ?} 不计数，识别数量与回填位置不再错位。
+     *
+     * <p>T-PSG-01：位点实现已上提至 {@code sql} 包，本函数保留在 {@code log} 包作为薄封装（本包多个消费方与
+     * 测试按本名可达，搬迁会破坏这些符号依赖）。</p>
      */
     public static long countPlaceholders(String sql) {
-        return LogSqlRestorerKt.placeholderPositions(sql).size();
+        return PlaceholderPositionsKt.placeholderPositions(sql).size();
     }
 
     /**

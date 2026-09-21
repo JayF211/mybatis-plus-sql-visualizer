@@ -1,6 +1,9 @@
+// T-SyncK2JMaster115 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/components/CopyExecutableSqlAction.kt 移植（T-PSG-04 头部标记改标记列表 + `?`/参数条数对账）
 package cn.song.mybatisplus.visualizer.ui.components;
 
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer;
+import cn.song.mybatisplus.visualizer.sql.PlaceholderCardinality;
+import cn.song.mybatisplus.visualizer.sql.PlaceholderPositionsKt;
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
@@ -12,6 +15,7 @@ import com.intellij.openapi.project.Project;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -68,9 +72,25 @@ public final class CopyExecutableSqlAction {
             executableSql = ParameterReplacer.buildExecutableSql(sql, sources, paramValues, List.of());
         }
 
+        // T-PSG-04（N-33）：`?` 位点数与参数条数对账——产物必然残留无参数可填的裸 `?` 时在头部
+        // 如实标注（不阻断，形态与下方 `${}` raw 段标记同款：`--` 注释行，不改产物可执行性）。
+        // 只认「占位符多于参数」这一方向：本链拼的是面板**已回填**文本，位点少于参数是常态
+        // （见 PlaceholderCardinality.excessPlaceholderMarker 的 KDoc），严格等值会天天误报。
+        String mismatch = sources.isEmpty()
+                ? null
+                : PlaceholderCardinality.excessPlaceholderMarker(
+                        PlaceholderPositionsKt.placeholderPositions(sql).size(), sources.size());
+
         // T-InjectionGate T-IG-03：含 `${}` raw 段（解析期事实，见 PreviewResult.hasDollarRawSegments）
-        // 时产物头部加标记注释；无 raw 段产物逐字节不变
-        String product = panel.hasDollarRawSegments() ? DOLLAR_RAW_MARKER + "\n" + executableSql : executableSql;
+        // 时产物头部加标记注释；无标记时产物逐字节不变
+        List<String> markers = new ArrayList<>();
+        if (panel.hasDollarRawSegments()) {
+            markers.add(DOLLAR_RAW_MARKER);
+        }
+        if (mismatch != null) {
+            markers.add(mismatch);
+        }
+        String product = markers.isEmpty() ? executableSql : String.join("\n", markers) + "\n" + executableSql;
 
         copyToClipboard(product);
 

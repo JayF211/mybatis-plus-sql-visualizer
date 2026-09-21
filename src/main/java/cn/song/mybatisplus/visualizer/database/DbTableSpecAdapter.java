@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.generator.CrudColumn;
 import cn.song.mybatisplus.visualizer.generator.CrudTableSpec;
 import cn.song.mybatisplus.visualizer.generator.DbTypeQuoteHint;
 import cn.song.mybatisplus.visualizer.psi.PsiDialect;
+import cn.song.mybatisplus.visualizer.sql.IdentifierCaseSource;
 import com.intellij.database.model.DasColumn;
 import com.intellij.database.model.DasObject;
 import com.intellij.database.model.DasTable;
@@ -73,6 +74,11 @@ public final class DbTableSpecAdapter {
                 columns,
                 null,
                 null,
-                PsiDialect.currentDialect());
+                PsiDialect.currentDialect(),
+                // O-42：本类是目录来源的**唯一**入口——`das.name` / `col.name` 直取自省元数据，
+                // 即字典里的真实大小写（真库实测：`all_tables.table_name` 对带引号创建的表返回
+                // 小写 `issue_new`，未归一）。标记后 Oracle 按「含小写字母即加引号」引用，
+                // 消除裸写折叠为大写导致的 ORA-00942。
+                IdentifierCaseSource.CATALOG);
     }
 }

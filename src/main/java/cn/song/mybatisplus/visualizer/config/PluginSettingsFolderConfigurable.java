@@ -605,6 +605,8 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         fields.add(new SearchableField(msg("settings.shortcut"), msg("settings.shortcut.tip"), "settings.section.ui", u));
         fields.add(new SearchableField(msg("settings.shortcut.sqlToJava"), "", "settings.section.ui", u));
         fields.add(new SearchableField(msg("settings.joinDiagramNative"), msg("settings.joinDiagramNative.tip"), "settings.section.ui", u));
+        // T-PreviewWhitespaceToggle O-44a：空白符可视化开关（界面节，默认关=不设置该属性）
+        fields.add(new SearchableField(msg("settings.editorShowWhitespaces"), msg("settings.editorShowWhitespaces.tip"), "settings.section.ui", u));
 
         // 关于
         Class<? extends Configurable> a = AboutConfigurable.class;

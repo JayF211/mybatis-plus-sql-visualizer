@@ -1,3 +1,4 @@
+// T-SyncK2JMaster115 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/highlight/XmlSqlCompletionContributor.kt 移植（T-FCA-03 collection 属性追加集合快捷别名）
 package cn.song.mybatisplus.visualizer.ui.highlight;
 
 import cn.song.mybatisplus.visualizer.model.ColumnInfo;
@@ -31,7 +32,9 @@ import java.util.List;
  * （{@link SqlTextAnalysis#stripXmlTags} 等长剥离 + {@link SourceSqlCompleter}），零 PSI 语义分析：
  *  a. 动态标签补全（T-M27-04）
  *  b. 属性补全
- *  c. OGNL 值内补全（T-M27-04）
+ *  c. OGNL 值内补全（T-M27-04）——**T-FCA-03**：`collection` 属性额外追加 foreach 集合快捷名
+ *     `list`/`collection`/`array`（排在参数名/字段名之后；`test` 属性不追加——两个属性共用本分支，
+ *     故按属性名收窄）
  *  d. SQL 补全
  *
  * 守卫（性能红线，O(1) 语法判定，零 resolve）：position 祖先链上的**最近语句标签**
@@ -76,7 +79,14 @@ public class XmlSqlCompletionContributor extends CompletionContributor {
                 if (attributeValue != null) {
                     String attributeName = attributeValue.getParent() instanceof XmlAttribute ? ((XmlAttribute) attributeValue.getParent()).getName() : null;
                     if (attributeName != null && (attributeName.equals("test") || attributeName.equals("collection"))) {
-                        addOgnlCompletions(statementTag, beforeCaret, result);
+                        // T-FCA-03：本分支被 test 与 collection 共用，集合快捷别名**只对 collection 开放**
+                        // （test 里补 list/collection/array 会污染既有候选面）
+                        addOgnlCompletions(
+                                statementTag,
+                                beforeCaret,
+                                result,
+                                attributeName.equals("collection")
+                        );
                     }
                     return;
                 }
@@ -116,8 +126,15 @@ public class XmlSqlCompletionContributor extends CompletionContributor {
     /**
      * OGNL 值内补全（T-M27-04）：方法参数名 + 主实体 Java 字段名（fieldName）。
      * 光标前有 {@code param.} 前缀 → 只补第二段字段名；否则参数名 + 字段名都补。
+     *
+     * <p>T-FCA-03：{@code collectionAliases} 为真（`collection` 属性）时在既有候选<b>之后</b>追加 foreach
+     * 集合快捷名 {@link #COLLECTION_ALIAS_NAMES}——排在参数名/字段名之后，既有顺序与内容不变。
+     *
+     * <p>移植注记：master 侧为具名实参 {@code collectionAliases = attributeName == "collection"} 调用，
+     * Java 侧落位置实参（k2j 惯例）。
      */
-    private void addOgnlCompletions(XmlTag statementTag, String beforeCaret, CompletionResultSet result) {
+    private void addOgnlCompletions(XmlTag statementTag, String beforeCaret, CompletionResultSet result,
+                                    boolean collectionAliases) {
         SourceSqlContext context = resolveContext(statementTag);
         PrefixMatcher prefix = result.getPrefixMatcher();
         List<String> fieldNames = mainEntityFieldNames(context);
@@ -137,6 +154,13 @@ public class XmlSqlCompletionContributor extends CompletionContributor {
             for (String name : fieldNames) {
                 if (prefix.prefixMatches(name)) {
                     result.addElement(SourceSqlSuggestionFactory.param(name));
+                }
+            }
+            if (collectionAliases) {
+                for (String name : COLLECTION_ALIAS_NAMES) {
+                    if (prefix.prefixMatches(name)) {
+                        result.addElement(SourceSqlSuggestionFactory.param(name));
+                    }
                 }
             }
         }
@@ -201,6 +225,19 @@ public class XmlSqlCompletionContributor extends CompletionContributor {
     private static final List<String> DYNAMIC_TAGS = List.copyOf(Arrays.asList(
             "if", "foreach", "where", "set", "trim", "choose", "when", "otherwise", "bind", "sql", "include"
     ));
+
+    /**
+     * foreach `collection` 属性专属快捷名（T-FCA-03）：MyBatis 把「单集合参数且无 `@Param`」包装成
+     * `ParamMap` 后的别名键（`ParamNameResolver.wrapToMapIfCollection`）——`list` / `collection` 来自
+     * `List` 与 `Collection` 参数，`array` 来自数组参数。规则来源标注：
+     * `mybatis-3.5.19-param-name-resolver-wrap-to-map-if-collection`。
+     *
+     * <p>三个名字<b>无条件列出</b>（本贡献器不做 PSI 签名解析：拿不到「是否单参数、是否集合、哪种集合」），
+     * 用户按自己的参数形态挑用；每个形态的<b>确切</b>键集与门槛由
+     * `ui/XmlParamTypeResolver.collectionAliasTypes` 与真引擎对照用例（`RealEngineFidelityTest`
+     * 的「别名键集钉」）钉住。只对 `collection` 属性开放（`test` 属性不列）。
+     */
+    private static final List<String> COLLECTION_ALIAS_NAMES = List.of("list", "collection", "array");
 
     /** resolve 失败降级上下文（只补关键字/动态标签，不阻塞补全）。 */
     private static final SourceSqlContext EMPTY_SOURCE_SQL_CONTEXT = new SourceSqlContext(null, List.of(), List.of());

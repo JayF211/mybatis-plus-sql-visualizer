@@ -1,3 +1,4 @@
+// T-SyncK2JMaster115 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlInputEditor.kt 移植（O-44a 空白符可视化接线）
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext;
@@ -91,6 +92,8 @@ public class SqlInputEditor implements Disposable {
         createdEx.getSettings().setFoldingOutlineShown(true);
         createdEx.getSettings().setIndentGuidesShown(false);
         createdEx.getSettings().setAdditionalPageAtBottom(false);
+        // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+        EditorWhitespaceSettings.applyTo(createdEx);
 
         // 补全上下文双载体（M16.2）：Editor userData 为主载体 + PSI 文件 userData 兜底
         SqlCompletionContext ctx = new SqlCompletionContext(null, java.util.Collections.emptyList(), null,

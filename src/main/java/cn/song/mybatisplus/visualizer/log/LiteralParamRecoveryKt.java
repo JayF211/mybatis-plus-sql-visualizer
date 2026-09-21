@@ -40,7 +40,8 @@ public final class LiteralParamRecoveryKt {
      * <li>非纯数字 token 不识别（{@code 1abc}/{@code 0x1F}/{@code 1E5} 后随词字符）；</li>
      * <li>超过 MAX_RECOVERED_PARAMS 个候选整体返回 null；</li>
      * <li>注释（{@code --} 行注释 / 块注释）与字符串内的引号不参与（扫描状态机与
-     * placeholderPositions 同形态），未闭合字符串到行尾丢弃。</li>
+     * {@link cn.song.mybatisplus.visualizer.sql.PlaceholderPositionsKt#placeholderPositions(String)} 同形态），
+     * 未闭合字符串到行尾丢弃。</li>
      * </ul>
      */
     public static LiteralParamRecovery recoverLiteralParams(String sql) {
@@ -198,8 +199,9 @@ public final class LiteralParamRecoveryKt {
         }
         sb.append(sql, prev, sql.length());
         String placeholderSql = sb.toString();
-        // 预览面板回填按 `?` 字符朴素替换（backfillParamsBySource）：改写后的 SQL 里若还残留
-        // 非参数 `?`（注释内等），回填会错位——直接放弃
+        // 改写后的 SQL 里若还残留非参数 `?`（注释内等），说明字面量改写与占位符口径不自洽——
+        // 直接放弃（保守保险；T-PSG 起面板回填已改串感知、不再因注释内 `?` 错位，但本闸门
+        // 守的是「改写结果自洽」这条输入侧不变式，维持不放宽）
         int qCount = 0;
         for (int k = 0; k < placeholderSql.length(); k++) {
             if (placeholderSql.charAt(k) == '?') qCount++;

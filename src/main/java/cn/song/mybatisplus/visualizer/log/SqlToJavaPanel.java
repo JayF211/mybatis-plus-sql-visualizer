@@ -1572,6 +1572,8 @@ String code1 = generateCodeOrReport(result, candidates.get(0), format, subEntiti
         editorEx.getSettings().setFoldingOutlineShown(true);
         editorEx.getSettings().setIndentGuidesShown(false);
         editorEx.getSettings().setAdditionalPageAtBottom(false);
+        // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+        cn.song.mybatisplus.visualizer.ui.EditorWhitespaceSettings.applyTo(editorEx);
         // 可编辑（用户需求：改实体类名/参数后复制）；不回写 SQL（单向编辑边界）
         return editor;
     }

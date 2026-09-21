@@ -1,3 +1,4 @@
+// T-SyncK2JMaster115 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/JavaCodePreviewDialog.kt 移植（O-44a 空白符可视化接线）
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.reverse.JavaCommentStripper;
@@ -65,6 +66,8 @@ public class JavaCodePreviewDialog extends DialogWrapper {
         editorEx.getSettings().setFoldingOutlineShown(true);
         editorEx.getSettings().setIndentGuidesShown(false);
         editorEx.getSettings().setAdditionalPageAtBottom(false);
+        // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
+        EditorWhitespaceSettings.applyTo(editorEx);
         editorEx.getCaretModel().moveToOffset(0);
         return editor;
     }

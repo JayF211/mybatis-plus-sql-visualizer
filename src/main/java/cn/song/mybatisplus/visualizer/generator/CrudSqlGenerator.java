@@ -98,7 +98,8 @@ public final class CrudSqlGenerator {
                 List.of(),
                 null,
                 null,
-                spec.getDialect());
+                spec.getDialect(),
+                spec.getIdentifierCaseSource());
         return new CrudStatement(CrudKind.INSERT, batchResult(spec, model));
     }
 
@@ -138,7 +139,8 @@ public final class CrudSqlGenerator {
                 fixedColumns,
                 version,
                 null,
-                spec.getDialect());
+                spec.getDialect(),
+                spec.getIdentifierCaseSource());
         return new CrudStatement(CrudKind.UPDATE, batchResult(spec, model));
     }
 
@@ -171,7 +173,7 @@ public final class CrudSqlGenerator {
     // ------------------------------------------------------------------
 
     private static String quoted(CrudTableSpec spec, String identifier) {
-        return spec.getDialect().quoteIfKeyword(identifier);
+        return spec.getDialect().quoteIfNeeded(identifier, spec.getIdentifierCaseSource());
     }
 
     private static String columnList(CrudTableSpec spec) {

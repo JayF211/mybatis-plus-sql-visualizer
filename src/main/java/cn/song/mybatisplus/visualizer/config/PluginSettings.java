@@ -134,6 +134,26 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          * Community / Diagrams 插件缺席时无论此值均自动降级自绘。
          */
         private boolean joinDiagramNative = true;
+
+        /**
+         * 空白符可视化开关（T-PreviewWhitespaceToggle O-44a，<b>默认关</b>）：true 时插件自建的
+         * 全部编辑器（预览面板 SQL 区 / 日志转 SQL 输入与结果区 / 点击预览 / 回滚 SQL 弹窗 /
+         * SQL 输入编辑器 / 参数导入编辑器 / SQL→Java 结果区与 Java 预览弹窗）显示空白符
+         * （空格 ·、Tab →、行尾换行标记），便于排查动态拼接 SQL 里的多余空格/Tab。
+         *
+         * <p><b>默认关的语义是「不设置该属性」而非「设 false」</b>——插件自建编辑器本就不设置
+         * whitespace 属性、继承 IDE 全局设置，故关闭态<b>绝不调用</b> {@code setWhitespacesShown}，
+         * 用户「设置 → 编辑器 → 常规 → 外观 → 显示空白符」的全局偏好原样生效。</p>
+         *
+         * <p>单向开关（本设计的真实边界，计划 §决策定案 D1 的「场景②」不可达）：开启 = 对这些
+         * 编辑器强制显示；关闭 = 继承全局。因此<b>无法</b>做到「全局开着时只让插件编辑器干净」——
+         * 关闭态的语义就是继承，想干净只能关掉全局开关。相对 IDE 全局开关的差异化点收敛为
+         * 「不改用户全局偏好即可只在插件编辑器里看空白符」（场景①）。</p>
+         *
+         * <p>纯显示层：不改 SQL 文本，也不改任何渲染结果（逐字节不变）。</p>
+         */
+        private boolean editorShowWhitespaces = false;
+
         private String language = DEFAULT_LANGUAGE;
         private boolean injectLogicDelete = true;
         private String logicDeleteValue = DEFAULT_LOGIC_DELETE_VALUE;
@@ -356,6 +376,10 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public boolean getJoinDiagramNative() { return joinDiagramNative; }
         public void setJoinDiagramNative(boolean joinDiagramNative) { this.joinDiagramNative = joinDiagramNative; }
 
+        /** 空白符可视化开关（T-PreviewWhitespaceToggle O-44a，默认关＝不设置该属性、继承 IDE 全局）。 */
+        public boolean getEditorShowWhitespaces() { return editorShowWhitespaces; }
+        public void setEditorShowWhitespaces(boolean editorShowWhitespaces) { this.editorShowWhitespaces = editorShowWhitespaces; }
+
         public String getLanguage() { return language; }
         public void setLanguage(String language) { this.language = language; }
 
@@ -572,6 +596,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.autoFoldEnabled = autoFoldEnabled;
             c.autoFoldFieldThreshold = autoFoldFieldThreshold;
             c.showGutterIcon = showGutterIcon;
+            c.editorShowWhitespaces = editorShowWhitespaces;
             c.language = language;
             c.injectLogicDelete = injectLogicDelete;
             c.logicDeleteValue = logicDeleteValue;
@@ -654,6 +679,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && verticalPairAnnotation == that.verticalPairAnnotation
                     && autoFoldEnabled == that.autoFoldEnabled
                     && showGutterIcon == that.showGutterIcon
+                    && editorShowWhitespaces == that.editorShowWhitespaces
                     && injectLogicDelete == that.injectLogicDelete
                     && injectTenantLine == that.injectTenantLine
                     && injectTenantOnInsert == that.injectTenantOnInsert
@@ -731,7 +757,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public int hashCode() {
             return Objects.hash(
                     dialectAuto, dialect, replaceParams, formatSql, emptyParamFill, verticalPairAnnotation, autoFoldEnabled, autoFoldFieldThreshold,
-                    showGutterIcon, language, injectLogicDelete,
+                    showGutterIcon, editorShowWhitespaces, language, injectLogicDelete,
                     logicDeleteValue, injectTenantLine, tenantColumnName, tenantColumnDefault, injectTenantOnInsert,
                     tablePrefix, tableSuffix, tableNameInference, ignoredFields, removeTablePrefix, removeTableSuffix,
                     autoCheckUpdate, ignoredUpdateVersions, reverseWrapperFormat, reverseManualEntitySelection,
