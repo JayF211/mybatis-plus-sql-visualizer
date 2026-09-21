@@ -44,6 +44,8 @@
 | 通道 | 结果 |
 |---|---|
 | `releaseGate`（= `buildPlugin → verifyGate` 三目标兼容门禁 `→ testShards` 全量） | **BUILD SUCCESSFUL**（5m55s，末笔提交 `314e835` 上执行）；三目标 verdict 全 **Compatible**；`testShards` **491 类 / 5604 用例 / 6 跳过 / 0 失败 / 0 错误** |
+| 合流后复验（master `d4c0963` = 本批 + 另一会话的 `t-template-keydrop` 四笔） | `buildPlugin` + `verifyGate` 三目标仍全 **Compatible**；`testShards` **490 类 / 5601 用例 / 6 跳过 / 0 失败 / 0 错误**。本批全部改动经 `git show HEAD:<file>` 逐处确认仍在 HEAD（`lastOutboundMs` / `HEARTBEAT_INTERVAL_MS` / `appendLine` 均在位），`4e05100` 仍是 master 祖先——**合流未丢内容** |
+| 合流后首跑的一次假失败（已三步证伪） | `McpHistoryIngestTest` 4 例红（`AlreadyDisposedException: [T-ST-02] AlreadyDisposed@shard1 … service=SqlLogManager`）。证伪：①隔离复跑 4/4 绿；②**`testShard1` 单独重跑全绿**；③随后 `testShards` 一次全绿。判为**分片顺序共享状态泄漏**（仓内既有 T-StabilityTail 在册项），由本轮测试类增删（本批新增 `EmptyTextRenderTest` 等 + 另一会话删 1 增 2 个测试类）引起的**分片重排**触发，非功能回归 |
 | `buildPlugin` | **SUCCESS** |
 | `verifyGate`（243 / 253 / 262 三目标） | 三条 verdict 全为 **Compatible** |
 | `testShards`（合并树） | **491 类 / 5604 用例 / 6 跳过 / 0 失败 / 0 错误** |
