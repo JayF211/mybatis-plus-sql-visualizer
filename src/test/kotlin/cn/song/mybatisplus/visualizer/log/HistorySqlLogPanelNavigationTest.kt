@@ -33,8 +33,17 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
         oldDir.deleteRecursively()
     }
 
+    /**
+     * T-SyncK2JMaster115：tearDown 也清理历史目录——原先只在 setUp 清，本类跑完会把残留文件留给
+     * 同分片后续的类（实测：本类 08:40:57 跑完后 `HistorySqlLogPanelJumpToSourceTest` 08:41:32
+     * 读到 2 个历史文件而其断言要求恰好 1 个）。清理后本类对邻居零残留。
+     */
     override fun tearDown() {
-        super.tearDown()
+        try {
+            cleanHistoryDir()
+        } finally {
+            super.tearDown()
+        }
     }
 
     private fun cleanHistoryDir() {

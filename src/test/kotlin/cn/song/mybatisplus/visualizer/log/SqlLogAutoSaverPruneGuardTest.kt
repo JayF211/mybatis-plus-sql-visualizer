@@ -183,8 +183,8 @@ class SqlLogAutoSaverPruneGuardTest {
         saver.submit(entryOf("SELECT 1"))
         awaitBlockContaining(File(dir), "SELECT 1")
         // writeBatch 先落盘、随后同任务（同监视器串行）裁剪：首裁删最旧名族组
-        Thread.sleep(200)
-        assertFalse("写批后裁剪应删名族最旧组", File(dir, "sql-history-2026-09-10.sql").exists())
+        // （轮询等待裁剪落地——原固定 sleep(200) 满载时假失败，见 awaitCondition KDoc）
+        awaitCondition("写批后裁剪应删名族最旧组") { !File(dir, "sql-history-2026-09-10.sql").exists() }
         // 窗口内第二批写批：裁剪被节流跳过
         makeFile(dir, "sql-history-2026-09-10.sql", 1000)
         saver.submit(entryOf("SELECT 2"))
@@ -192,6 +192,20 @@ class SqlLogAutoSaverPruneGuardTest {
         Thread.sleep(200)
         assertTrue("节流窗口内写批不应再触发裁剪", File(dir, "sql-history-2026-09-10.sql").exists())
         saver.close()
+    }
+
+    /**
+     * 轮询等待条件成立（T-SyncK2JMaster115：原「固定 Thread.sleep(200) + 断言」在机器满载时会
+     * 假失败——写线程在「落盘」与「同任务随后裁剪」之间被长时间调度开，200ms 不足即红；
+     * 改为「等到出现为止」，上限 5s，断言语义不变而与时序无关）。
+     */
+    private fun awaitCondition(message: String, timeoutMs: Long = 5_000, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (condition()) return
+            Thread.sleep(20)
+        }
+        throw AssertionError(message)
     }
 
     /** 轮询等待目录内任一 .sql 出现含指定内容的条目块（异步写线程完成信号）。 */

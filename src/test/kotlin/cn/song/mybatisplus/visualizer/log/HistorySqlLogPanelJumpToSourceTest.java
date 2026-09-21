@@ -27,6 +27,47 @@ import java.util.List;
  */
 public class HistorySqlLogPanelJumpToSourceTest extends BasePlatformTestCase {
 
+    /**
+     * T-SyncK2JMaster115：本类含「断言历史目录此刻恰好 1 个文件」型用例（master 同形），属
+     * <b>「环境此刻为空」脆弱前置</b>——同分片先跑的类若在项目历史目录留下残留（如
+     * {@code HistorySqlLogPanelNavigationTest} 在 setUp 清理、tearDown 不清理），断言就随分片
+     * 顺序变红（本轮实测：NavigationTest 08:40:57 跑完后 JumpToSourceTest 08:41:32 读到 2 个文件）。
+     * 故本类在 setUp 自清理，保证自包含、与执行顺序无关（与同目录 NavigationTest 的既定做法一致）。
+     */
+    @Override
+    protected void setUp() throws Exception {
+        super.setUp();
+        cleanHistoryDir();
+        // 清理旧目录残留（F-44-4 前的目录名，与 NavigationTest 同源）
+        deleteRecursively(new File(getProject().getBasePath() + File.separator + ".idea"
+            + File.separator + "mybatis-plus-sql-visualizer" + File.separator + "sql-history"));
+    }
+
+    /** 项目内历史目录（F-44-4 新目录名）。 */
+    private File historyDir() {
+        return new File(getProject().getBasePath() + File.separator + ".idea"
+            + File.separator + SqlLogAutoSaver.DATA_DIR_NAME + File.separator + "sql-history");
+    }
+
+    private void cleanHistoryDir() {
+        File[] files = historyDir().listFiles();
+        if (files != null) {
+            for (File f : files) {
+                f.delete();
+            }
+        }
+    }
+
+    private static void deleteRecursively(File f) {
+        File[] children = f.listFiles();
+        if (children != null) {
+            for (File c : children) {
+                deleteRecursively(c);
+            }
+        }
+        f.delete();
+    }
+
     private static LogSqlEntry makeEntry(String rawSql, String sourceFile, int sourceLine) {
         return new LogSqlEntry(
             rawSql,
