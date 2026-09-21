@@ -39,28 +39,32 @@ public enum McpArgKind {
      *
      * <p>{@code JsonNull} 是 {@code JsonPrimitive} 子类，**必须先判**；{@link #OTHER} 只由非 JSON
      * 解码器兜底产出，故此处不产出。</p>
+     *
+     * <p>移植注记：返回处一律写**限定形态** {@code McpArgKind.X} 而非裸常量名——与 master 的 Kotlin
+     * 形态一致，且本仓 {@code EnumReachabilityGuardTest} 只按 {@code EnumName.CONST} 限定形态统计
+     * 产出点（裸名无法静态归属，会被判成「零产出」假违规）。</p>
      */
     public static McpArgKind of(JsonElement element) {
         if (element instanceof JsonObject) {
-            return OBJECT;
+            return McpArgKind.OBJECT;
         }
         if (element instanceof JsonArray) {
-            return ARRAY;
+            return McpArgKind.ARRAY;
         }
         if (element instanceof JsonNull) {
-            return NULL;
+            return McpArgKind.NULL;
         }
         if (element instanceof JsonPrimitive) {
             JsonPrimitive primitive = (JsonPrimitive) element;
             if (primitive.isString()) {
-                return STRING;
+                return McpArgKind.STRING;
             }
             String content = primitive.getContent();
             if ("true".equals(content) || "false".equals(content)) {
-                return BOOLEAN;
+                return McpArgKind.BOOLEAN;
             }
-            return NUMBER;
+            return McpArgKind.NUMBER;
         }
-        return OTHER;
+        return McpArgKind.OTHER;
     }
 }

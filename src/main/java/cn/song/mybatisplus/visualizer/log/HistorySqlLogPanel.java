@@ -560,9 +560,10 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         sqlList.setIgnoreRepaint(true);
         sqlListModel.clear();
         if (!entries.isEmpty()) {
-            for (LogSqlEntry e : entries.subList(0, Math.min(REFRESH_FIRST_BATCH_SIZE, entries.size()))) {
-                sqlListModel.addElement(e);
-            }
+            // 批量写入（master `sqlListModel.addAll(entries.take(N))`）——**必须整批一次 addAll**：
+            // 逐条 addElement 会为每行各发一次模型变更事件 + 布局失效，正是 T-LogListFreeze 要消除的
+            // 历史打开卡顿主源（T-SyncK2JMaster115 由 HistorySqlLogPanelNavigationTest 的分块轮数断言抓出）。
+            sqlListModel.addAll(entries.subList(0, Math.min(REFRESH_FIRST_BATCH_SIZE, entries.size())));
         }
         sqlList.setIgnoreRepaint(false);
         sqlList.revalidate();
@@ -578,9 +579,8 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
                 for (int i = 0; i < REFRESH_CHUNK_SIZE && iterator.hasNext(); i++) {
                     chunk.add(iterator.next());
                 }
-                for (LogSqlEntry e : chunk) {
-                    sqlListModel.addElement(e);
-                }
+                // 整批一次写入（同首屏批的理由：每批一次模型变更 = 每批一次 EDT 脉冲）
+                sqlListModel.addAll(chunk);
                 if (iterator.hasNext()) {
                     ApplicationManager.getApplication().invokeLater(appendNext[0]);
                 }

@@ -1151,9 +1151,22 @@ class BannedApiSourceScanTest {
      *
      * 基线变迁：595（T-SyncK2JMaster92 首次登记）→ **597**（同轮吸收 master 9f4bbb9 的
      * `SqlPreviewPanel` 预热链生命周期修复时新增 2 处 `catch (Throwable)`——master 侧是两处
-     * `runCatching`，Java 只能落成 try/catch；两处均只置标志/解除登记，不覆盖 fatal 面）。
+     * `runCatching`，Java 只能落成 try/catch；两处均只置标志/解除登记，不覆盖 fatal 面）
+     * → **615**（T-SyncK2JMaster115，master b9aeeba..8f51b9e 增量）。
+     *
+     * **+18 的来源（本轮逐文件对账）**：master 侧全部是 `runCatching {}.onFailure{}/getOrElse{}`
+     * 形态（Kotlin 的 `runCatching` 不产生 catch 块，故 master 的 Kotlin 树守卫看不见），Java 侧只能
+     * 落成 try/catch(Throwable)，遂计入本基线。三处改动文件原始计数 +17：
+     * `mcp/McpSchemaContextService.java` +9（P4 重写：按数据源建索引的反射遍历/取库名/取表元数据的
+     * 逐段降级）、`ui/highlight/DatabaseSchemaResolver.java` +6（P4 同源的祖先链反射遍历降级）、
+     * `ui/SqlPreviewPanel.java` +2（N2 临时文件属主读取与回收 delete 的降级）；
+     * 另有三个**新建件**各 +1（`mcp/McpStringArg.java` / `mcp/McpIntArg.java` 的
+     * `runCatching { decoder.decodeString() }.getOrElse { OTHER }` 宽松解码、
+     * `ui/EditorWhitespaceSettings.java` 的 `runCatching { 取设置 }.getOrDefault(false)`）。
+     * 以上均**只做降级、不覆盖 fatal 面**（无一处吞掉 `VirtualMachineError`/`LinkageError`/
+     * `ThreadDeath` 后继续运行），与 master 同源；故按守卫既定流程重新登记基线，而非逐站点补判定。
      */
-    private val fatalCatchSiteTotalBaseline = 597
+    private val fatalCatchSiteTotalBaseline = 615
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线
