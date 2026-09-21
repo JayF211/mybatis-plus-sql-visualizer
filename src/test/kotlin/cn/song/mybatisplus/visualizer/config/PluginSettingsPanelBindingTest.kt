@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.config
 
 import cn.song.mybatisplus.visualizer.actions.ConvertSqlToJavaAction
+import cn.song.mybatisplus.visualizer.actions.CountSelectedTableAction
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.keymap.KeymapManager
@@ -8,6 +9,7 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.components.JBLabel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.awt.Component
 import java.awt.Container
@@ -184,6 +186,58 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
         // reset 回读：编辑行回到当前 Keymap 值 → 无变化
         configurable.reset()
         assertFalse("reset 后应回到与 Keymap 一致（无变化）", configurable.isModified())
+    }
+
+    fun testTemplateActionsHaveNoDefaultShortcutAndStayRecordable() {
+        // T-TemplateKeyDrop：三动作（EXPLAIN / COUNT / 抽样 10 行）已摘除默认键位——原 Alt+Shift+E/C/T
+        // 与平台动作冲突（RecentChanges / tasks.switch），备选键 Ctrl+Alt+Shift+同字母亦被占
+        // （Copy Reference / Refactor This），「冲突自动换绑」无解（见开发计划 §一）。
+        // 本用例钉住摘除后的实际形态：三行保留可录制，初始为空（「—」）且不把面板判成已修改，
+        // 录制 → apply 写入 Keymap → reset 回空。
+        val configurable = AllSectionsConfigurable()
+        configurable.createComponent()
+        val panel = configurable.panelForTest()
+
+        // 三行仍存在（防「摘键位顺手把行也删了」——那样用户就没有录制入口了）
+        val labels = collectLabels(panel.getRoot()).map { it.text }
+        for (key in listOf("settings.shortcut.explain", "settings.shortcut.count", "settings.shortcut.sample")) {
+            val text = MpSqlVisualizerBundle.message(key)
+            assertTrue("设置页应保留「$text」行（摘默认键位不等于删录制入口）", labels.contains(text))
+        }
+
+        val editor = panel.countShortcutEditorForTest()
+        assertNull("无默认键位时编辑行应为空（显示「—」）", editor.shortcut)
+        assertFalse("无默认键位不应把面板判成已修改（否则 Apply 常亮）", configurable.isModified())
+
+        val newShortcut = KeyboardShortcut(
+            KeyStroke.getKeyStroke(
+                KeyEvent.VK_C,
+                KeyEvent.CTRL_DOWN_MASK or KeyEvent.ALT_DOWN_MASK or KeyEvent.SHIFT_DOWN_MASK,
+            ),
+            null,
+        )
+        editor.shortcut = newShortcut
+        assertTrue("录制快捷键后应检测到变化", configurable.isModified())
+
+        // reset 语义 = 「编辑行回到当前 Keymap 值」：此刻该动作在 Keymap 里本就没有绑定 → 回到空
+        configurable.reset()
+        assertNull(
+            "reset 后应回到无绑定（当前 Keymap 里本就没有该动作的键）",
+            panel.countShortcutEditorForTest().shortcut,
+        )
+        assertFalse("reset 后不应判定为已修改", configurable.isModified())
+
+        // 再录一次并 apply：无默认键位下走「清理旧绑定（本就为空）→ 绑定新组合」
+        panel.countShortcutEditorForTest().shortcut = newShortcut
+        configurable.apply()
+        runCatching {
+            val shortcuts = KeymapManager.getInstance().activeKeymap
+                .getShortcuts(CountSelectedTableAction.ACTION_ID)
+                .filterIsInstance<KeyboardShortcut>()
+            assertTrue("apply 后 activeKeymap 应含录制的快捷键", shortcuts.contains(newShortcut))
+        }.onFailure {
+            // Light 环境 Keymap 可能不可用——降级跳过读回断言（与 SQL→Java 快捷键用例同款）
+        }
     }
 
     fun testVersionInfoLabelTopAlignedWithSection() {

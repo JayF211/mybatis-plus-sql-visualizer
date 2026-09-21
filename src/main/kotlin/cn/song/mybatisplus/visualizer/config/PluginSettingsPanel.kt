@@ -1245,6 +1245,18 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** T-M41 测试访问器：SQL→Java 快捷键编辑行（断言行存在 / 修改检测 / apply 写入 Keymap）。 */
     internal fun reverseShortcutEditorForTest(): ShortcutEditor = reverseShortcutEditor
 
+    /**
+     * T-TemplateKeyDrop 测试访问器：${table} 快捷模板三动作的快捷键编辑行。
+     *
+     * 三动作已摘除默认键位（原 Alt+Shift+E/C/T 与平台动作冲突、备选键亦被占），
+     * 用例据此钉住「无默认键位」下录制入口仍可用（初始「—」→ 录制 → apply → reset）。
+     */
+    internal fun explainShortcutEditorForTest(): ShortcutEditor = explainShortcutEditor
+
+    internal fun countShortcutEditorForTest(): ShortcutEditor = countShortcutEditor
+
+    internal fun sampleShortcutEditorForTest(): ShortcutEditor = sampleShortcutEditor
+
     /** T-xx：启动自动监听复选框设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
     internal fun setLogAutoCaptureCheck(checked: Boolean) {
         logAutoCaptureCheck.isSelected = checked

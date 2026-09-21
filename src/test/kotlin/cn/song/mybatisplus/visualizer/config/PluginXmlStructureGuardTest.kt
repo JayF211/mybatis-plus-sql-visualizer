@@ -282,4 +282,55 @@ class PluginXmlStructureGuardTest {
             !pluginXml.contains("com.intellij.ml.llm.agents.acp"),
         )
     }
+
+    // ------------------------------------------------------------------
+    // T-TemplateKeyDrop：快捷模板三动作默认键位摘除守卫
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `快捷模板三动作不得带默认键位`() {
+        // T-TemplateKeyDrop 定案：三动作不设默认键位。原注册 Alt+Shift+E/C/T 与平台动作冲突
+        // （Alt+Shift+C=RecentChanges、Alt+Shift+T=tasks.switch），而备选键 Ctrl+Alt+Shift+同字母
+        // 同样被占（Copy Reference / Refactor This）——「冲突自动换绑」无解，且换绑只加不摘、
+        // 即便成功也解决不了冲突（实测与键位表见开发计划 §一）。重新加回键位即红。
+        val xml = strippedXmls().first { it.first == "plugin.xml" }.second
+        val actionIds = listOf(
+            "cn.song.mybatisplus.visualizer.ExplainSelectedTable",
+            "cn.song.mybatisplus.visualizer.CountSelectedTable",
+            "cn.song.mybatisplus.visualizer.SampleSelectedTable",
+        )
+        for (id in actionIds) {
+            assertHolds(
+                "$id 重新带上了默认键位（与平台 RecentChanges / tasks.switch 冲突，备选键亦被占）",
+                !actionBlockHasKeyboardShortcut(xml, id),
+            )
+            assertHolds(
+                "plugin.xml 缺三动作注册之一（$id）——守卫失去意义，先修注册",
+                actionBlockExists(xml, id),
+            )
+        }
+        assertHolds(
+            "plugin.xml 仍注册 SqlTemplateShortcutConflictCheck（该类已随默认键位一并删除）",
+            !xml.contains("SqlTemplateShortcutConflictCheck"),
+        )
+    }
+
+    /**
+     * 取 action 块的「是否含子元素」判据（而非裸正则匹配整段）：
+     *
+     * classpath 上的 plugin.xml 是**构建期重写过的**版本（注入 change-notes + 属性压成一行），
+     * 其中无子元素的 action 被写成**自闭合** `<action … />`。若用 `<action …>(.*?)</action>`
+     * 取块，自闭合动作的「块」会一路吞到**下一个** `</action>`，于是把后一个动作的键位算到
+     * 前一个头上（2026-09-21 变异实验实测：把键位加回 Count，报错点名 Explain）。
+     * 故先判自闭合（自闭合=无子元素，必然无键位），非自闭合才取到首个 `</action>`。
+     */
+    private fun actionBlockHasKeyboardShortcut(xml: String, actionId: String): Boolean {
+        val tag = Regex("""<action\b[^>]*\bid\s*=\s*"$actionId"[^>]*?(/)?>""").find(xml) ?: return false
+        if (tag.groupValues[1] == "/") return false
+        return xml.substring(tag.range.last + 1).substringBefore("</action>").contains("<keyboard-shortcut")
+    }
+
+    /** 三动作注册存在性（自闭合与非自闭合都算存在）。 */
+    private fun actionBlockExists(xml: String, actionId: String): Boolean =
+        Regex("""<action\b[^>]*\bid\s*=\s*"$actionId"[^>]*?>""").containsMatchIn(xml)
 }
