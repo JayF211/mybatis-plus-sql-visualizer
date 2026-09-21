@@ -101,7 +101,7 @@ object NativeDatabaseDiagramSupport {
             }
         } catch (t: Throwable) {
             LOG.warn("Native Database diagram (B path) unavailable, falling back to A path", t)
-            JoinFkRegistry.clear()
+            clearJoinFkState()
             null
         }
     }
@@ -125,18 +125,45 @@ object NativeDatabaseDiagramSupport {
     }
 
     /** 回收 JOIN 虚拟外键登记（打开失败 / 独立路径）。 */
-    fun clearRegisteredFk() = JoinFkRegistry.clear()
+    fun clearRegisteredFk() = clearJoinFkState()
+
+    /**
+     * 成对回收 JOIN 虚拟外键的两份会话状态（[JoinFkRegistry] 语义 + [JoinFkRefTables] 实例）。
+     *
+     * 两份状态必须同生同灭：只清语义会让 provider 拿着陈旧的表实例给新图登记外键，只清实例则留下
+     * 「登记有、实例缺」的静默丢边。此方法被 plain `test` 分片（无 database jar）经
+     * `SqlPreviewPanel.unloadJoinDiagram` 间接触达，故实例侧清理包 runCatching——类解析失败时
+     * 实例表必然也没被填充过，无泄漏风险（与本类「所有公开方法容忍 NoClassDefFoundError」同语义）。
+     */
+    private fun clearJoinFkState() {
+        JoinFkRegistry.clear()
+        runCatching { JoinFkRefTables.clear() }
+    }
 
     /**
      * 把模型里的 ON 等值列配对登记为虚拟外键。
      * 方向：JOIN 表 = FK child（columns），主表 = ref（refColumns）——与 MPJ 外键语义一致。
+     *
+     * N6：同时把定位到的表实例登记进 [JoinFkRefTables]——平台两参建边回调只给表名，
+     * 没有实例就还原不出 `getRefTable()`，边会被 `nodeMap.get(asDbElement(...))` 静默丢掉。
      */
     private fun registerJoinForeignKeys(model: DiagramModel, located: Map<String, DbElement>) {
-        JoinFkRegistry.clear()
+        clearJoinFkState()
+        for ((name, element) in located) {
+            // DbTable 同时实现 DbElement 与 DasTable；定位链取到的正是它，
+            // 且它就是 dataModel.addElement 收到的那个实例（calculateEdges 的 nodeMap 键）
+            (element as? DasTable)?.let { JoinFkRefTables.put(name, it) }
+        }
         for (rel in model.relationships) {
             val mainTable = model.entities.firstOrNull { it.alias == rel.fromAlias }?.tableName ?: continue
             val joinTable = model.entities.firstOrNull { it.alias == rel.toAlias }?.tableName ?: continue
-            if (located[mainTable] == null || located[joinTable] == null) continue
+            // locateDbTables 以**小写表名**为键，此处必须同口径归一——否则表名含大写时命中失败，
+            // 整条 JOIN 被静默跳过（登记为空 → 无边，且日志只显示 entries=0）
+            if (located[mainTable.trim().lowercase()] == null ||
+                located[joinTable.trim().lowercase()] == null
+            ) {
+                continue
+            }
             for ((mainColumn, joinColumn) in rel.columnPairs) {
                 JoinFkRegistry.put(joinTable, mainTable, joinColumn, mainColumn)
             }
@@ -220,11 +247,47 @@ object NativeDatabaseDiagramSupport {
                     "dataSources=$dataSources(dsClasses=$dsClasses) modelNull=$modelNull traverserMiss=$traverserMiss " +
                     "roots=$roots iterated=$iterated dasTables=$dasTables nameHits=$nameHits registryMiss=$registryMiss",
             )
+            lastCounts = LocateCounts(
+                managers = managers, dataSources = dataSources, modelNull = modelNull,
+                traverserMiss = traverserMiss, roots = roots, iterated = iterated,
+                dasTables = dasTables, nameHits = nameHits, registryMiss = registryMiss,
+            )
             found
         } catch (t: Throwable) {
             LOG.warn("NativeDatabaseDiagramSupport.locateDbTables failed: ${t}")
+            lastCounts = null
             null
         }
+    }
+
+    /**
+     * [locateDbTables] 最近一次的逐段计数（B 路径降级原因的**可断言**出口）。
+     *
+     * T-TS-08 只把这些读数写进日志，于是「B 路径从未真跑过」在测试里既不可见也不可失败
+     * （`HeavyNativeDatabaseDiagramJoinChainTest` 的软返回分支一记绿就没人再看日志）。
+     * 取出来之后，调用方可以区分两种降级：「数据源里根本没定位到表」（环境受限，可跳过）
+     * 与「表定位到了却没接管」（`nameHits > 0`，属新故障，必须判失败）。
+     */
+    @Volatile
+    private var lastCounts: LocateCounts? = null
+
+    /** 见 [lastCounts] 注释。 */
+    fun lastLocateCounts(): LocateCounts? = lastCounts
+
+    /** [locateDbTables] 逐段计数快照。 */
+    data class LocateCounts(
+        val managers: Int,
+        val dataSources: Int,
+        val modelNull: Int,
+        val traverserMiss: Int,
+        val roots: Int,
+        val iterated: Int,
+        val dasTables: Int,
+        val nameHits: Int,
+        val registryMiss: Int,
+    ) {
+        /** 是否已在数据源模型里定位到目标表（区别「环境受限」与「定位成功却未接管」的分界）。 */
+        val locatedAny: Boolean get() = nameHits > 0
     }
 
     /**
