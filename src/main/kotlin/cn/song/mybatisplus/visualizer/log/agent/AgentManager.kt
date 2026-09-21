@@ -159,6 +159,15 @@ class AgentManager(private val project: Project) : Disposable {
     /** T-ReachAudit T-RA-01：最近一次摘除是否因心跳过期（区分「连接断开」与「应用侧无响应」两类回落）。 */
     private val heartbeatDropDetected = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /**
+     * T-AgentHeartbeat T-05：最近一次摘除是否属「连接刚建立、首条心跳尚未到达」
+     * （过期会话里存在从未收到过 HELLO 之外存活帧者）。
+     *
+     * 与 [heartbeatDropDetected] **互斥**：本条只说明连接还在早期，不构成「应用侧无响应」的证据
+     * ——现场正是这一类被误叙成「应用侧心跳中断（进程可能已卡死）」，而应用 JVM 又活了 7 分半。
+     */
+    private val firstHeartbeatPending = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /** 「关闭 → 再开启增强捕获」边沿检测（SETTINGS_CHANGE 监听重置拒绝冷却用）。 */
     private var lastKnownEnabled = PluginSettings.getInstance().state.enhancedCaptureEnabled
 
@@ -484,6 +493,8 @@ class AgentManager(private val project: Project) : Disposable {
         everAttached.set(true)
         // T-ReachAudit T-RA-01：新会话挂上即清「心跳过期」标记——回落文案只描述最近一次摘除原因
         heartbeatDropDetected.set(false)
+        // T-AgentHeartbeat T-05：同一口径清「首条心跳未到」标记
+        firstHeartbeatPending.set(false)
         publishStatusChanged()
         return true
     }
@@ -808,7 +819,7 @@ class AgentManager(private val project: Project) : Disposable {
 
     /**
      * T-SettingsTruth P2 / T-CaptureTruth T-CT-01：状态行文案（设置页增强捕获状态行展示）。
-     * 本函数只取数，文案由纯函数 [agentStatusText] 产出（五态全分支可单测）。
+     * 本函数只取数，文案由纯函数 [agentStatusText] 产出（全分支可单测）。
      * 只读内存集合（CopyOnWriteArrayList/ConcurrentHashMap），任意线程安全。
      */
     internal fun statusSummary(): String? = agentStatusText(
@@ -821,6 +832,10 @@ class AgentManager(private val project: Project) : Disposable {
             livePids = sessions.filter { isSessionHealthy(it) }.map { it.pid },
             everAttached = everAttached.get(),
             heartbeatExpired = heartbeatDropDetected.get(),
+            // T-AgentHeartbeat T-05：与 heartbeatExpired 互斥的另一类过期原因（连接早期，首条心跳未到）
+            firstHeartbeatPending = firstHeartbeatPending.get(),
+            // 秒数取当前在线窗口值（测试注入短窗时文案跟着变，不硬编码 30）
+            heartbeatWindowSeconds = heartbeatWindowMs / 1000,
         ),
     )
 
@@ -845,8 +860,13 @@ class AgentManager(private val project: Project) : Disposable {
     internal fun sweepOffline() {
         val dead = sessions.filter { !isSessionHealthy(it) }
         if (dead.isNotEmpty()) {
-            // 仍 alive 却过期 = 心跳停摆（应用侧卡死/织入异常），与 socket 断开区分开供状态行叙述
-            heartbeatDropDetected.set(dead.any { it.alive })
+            // 仍 alive 却过期（socket 在、帧停）= 两类，T-AgentHeartbeat T-05 起分开记：
+            //  ①曾收到过存活帧（HEARTBEAT/EVENT）→ 应用侧曾活着且越过启动期，现在是真停摆；
+            //  ②从未收到过存活帧（只有 HELLO 或干脆没帧）→ 只是首条心跳还没到，属连接早期，不是停摆。
+            // 合并记成①就是现场那条「应用侧心跳中断（进程可能已卡死）」的错误叙事。
+            val expiredAlive = dead.filter { it.alive }
+            heartbeatDropDetected.set(expiredAlive.any { it.livenessFrameSeen })
+            firstHeartbeatPending.set(expiredAlive.any { !it.livenessFrameSeen })
             dead.forEach { it.close() }
             sessions.removeAll(dead.toSet())
             // T-PS4-03：死会话顺带清幂等表——pid 对应进程已消亡，残留会让该 pid 复用/重启后
@@ -1003,22 +1023,31 @@ internal data class AgentStatusSnapshot(
     val everAttached: Boolean,
     /** T-ReachAudit T-RA-01：最近一次摘除是否因心跳过期（应用侧无响应，而非连接断开）。 */
     val heartbeatExpired: Boolean = false,
+    /**
+     * T-AgentHeartbeat T-05：最近一次摘除是否属「连接刚建立、首条心跳尚未到达」
+     * （过期会话从未收到过 HELLO 之外的存活帧）。与 [heartbeatExpired] 互斥——后者才是应用侧停摆。
+     */
+    val firstHeartbeatPending: Boolean = false,
+    /** T-AgentHeartbeat T-05：在线窗口秒数（文案带出的可核实读数；默认取协议常量，测试可注入短窗）。 */
+    val heartbeatWindowSeconds: Long = AgentProtocol.ONLINE_WINDOW_MS / 1000,
 )
 
 /**
- * T-CaptureTruth T-CT-01：增强捕获状态行文案（纯函数，五态全分支可单测）。
+ * T-CaptureTruth T-CT-01：增强捕获状态行文案（纯函数，全分支可单测）。
  *
  * 立项动因：原实现只有「有活会话 / 曾挂载 / 其余 null」三态——**「开关开着但从未授权」落进 null
  * 分支**，设置页状态行渲染成空白而复选框仍显示勾选，用户读作「开着且没事」，实际一条都捕不到
  * （T-CaptureTruth 根因之三；旧守卫断言「无会话应返回 null」把该行为钉死，本次一并改）。
  *
- * 五态：
+ * 各态：
  *  1. 关闭（!enabled）→ null（复选框未勾选，无需叙事）；
  *  2. 有活会话 →「已挂载 pid=…」；
  *  3. 未授权 + 冷却中 → 含剩余小时与「重新授权」指引（冷却原本静默，用户无从得知被拒过）；
  *  4. 未授权 + 无冷却 → 下次启动主配置时会询问；
- *  5. 已授权：曾挂载过 → 回落文案（T-RA-01 起区分「连接断开」与「心跳过期/应用无响应」两因）；
- *    从未挂载 → 等待应用进程启动后挂载。
+ *  5. 已授权 + 曾挂载 + 心跳过期 → 带窗口秒数的可核实表述（T-AgentHeartbeat T-05 去因果断言）；
+ *  6. 已授权 + 曾挂载 + 首条心跳未到 → 中性等待叙述（T-AgentHeartbeat T-05 新增）；
+ *  7. 已授权 + 曾挂载 + 其余 → 连接中断回落；
+ *  8. 已授权 + 从未挂载 → 等待应用进程启动后挂载。
  */
 internal fun agentStatusText(s: AgentStatusSnapshot): String? {
     if (!s.enabled) return null
@@ -1037,11 +1066,19 @@ internal fun agentStatusText(s: AgentStatusSnapshot): String? {
         return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.unauthorizedPending")
     }
     if (s.everAttached) {
-        // T-ReachAudit T-RA-01：心跳过期 = 应用侧停摆（socket 未断），与真断连的处置不同——
-        // 前者用户该去看应用进程，后者只是连接掉了，故分开叙述
+        // T-ReachAudit T-RA-01：心跳过期 = socket 未断而帧停，与真断连分开叙述。
+        // T-AgentHeartbeat T-05：过期再分两因，且只报**可核实的事实**（已 N 秒未收到心跳）——
+        // 旧文案「进程可能已卡死」是代码无从得知的因果断言（现场应用 JVM 又活了 7 分半）。
+        if (s.heartbeatExpired) {
+            return MpSqlVisualizerBundle.message(
+                "settings.enhancedCapture.status.heartbeatLost",
+                s.heartbeatWindowSeconds,
+            )
+        }
         return MpSqlVisualizerBundle.message(
-            if (s.heartbeatExpired) {
-                "settings.enhancedCapture.status.heartbeatLost"
+            if (s.firstHeartbeatPending) {
+                // 连接刚建立、首条心跳尚未到达：中性等待叙述，不得说成「心跳中断/停摆」
+                "settings.enhancedCapture.status.firstHeartbeatPending"
             } else {
                 "settings.enhancedCapture.status.fellBack"
             },
@@ -1106,6 +1143,20 @@ internal class AgentSession(
     /** T-AgentLogTime：日志时间未命中计数（诊断——键不等 vs 时序赶不上，真机排障一眼分辨）。 */
     private val timeMiss = AtomicLong()
 
+    /**
+     * T-AgentHeartbeat T-05：是否收到过 **HELLO 之外的存活帧**（HEARTBEAT 或 EVENT）。
+     *
+     * 语义只服务**状态行叙事**，不参与协议判定：读循环对**所有**帧都刷新 [lastSeen]，
+     * 于是「连接刚建立、首条心跳还没到」与「曾有心跳、之后停摆」在 [lastSeen] 上完全同形，
+     * 摘除时区分不出来——而两者对用户的处置完全不同（前者等一等，后者去看应用侧）。
+     * HELLO 是连接首帧、只证明 socket 建起来了，不证明应用侧越过启动期，故不计入存活帧。
+     *
+     * 读线程写、巡检线程（[AgentManager.sweepOffline]）读，故 @Volatile。
+     */
+    @Volatile
+    var livenessFrameSeen: Boolean = false
+        private set
+
     init {
         socket.soTimeout = 0
         Thread({
@@ -1137,6 +1188,8 @@ internal class AgentSession(
     private fun handleFrame(cmd: Int, body: String) {
         when (cmd) {
             AgentProtocol.CMD_EVENT -> {
+                // T-AgentHeartbeat T-05：EVENT 与 HEARTBEAT 同证「应用侧活着且已越过启动期」
+                livenessFrameSeen = true
                 val event = AgentEvent.parse(body)
                 if (event == null) {
                     LOG.warn("EVENT 帧解析失败丢弃（pid=$pid, dropped=${eventDropped.incrementAndGet()}, bodyLen=${body.length}, head=${body.take(120)}）")
@@ -1161,7 +1214,9 @@ internal class AgentSession(
                     LOG.warn("EVENT 入队失败（不斩断流）", t)
                 }
             }
-            // HEARTBEAT/HELLO：lastSeen 已刷新；未知命令忽略（协议向前兼容）
+            // T-AgentHeartbeat T-05：HEARTBEAT 是存活帧（EVENT 分支已在上面置位）
+            AgentProtocol.CMD_HEARTBEAT -> livenessFrameSeen = true
+            // HELLO/未知命令：lastSeen 已刷新；HELLO 只是连接首帧、不算存活帧；未知命令忽略（协议向前兼容）
             else -> Unit
         }
     }
