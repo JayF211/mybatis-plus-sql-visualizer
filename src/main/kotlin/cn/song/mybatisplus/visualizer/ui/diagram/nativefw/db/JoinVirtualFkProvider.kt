@@ -17,7 +17,7 @@ import com.intellij.util.containers.JBIterable
  * `ModelRelationManager.getForeignKeys` 聚合本 Provider，把 SQL JOIN 的 ON 等值条件
  * 以**原生虚拟外键**画成连线（边样式/标签/图例全原生）。
  *
- * 数据来自 [JoinFkRegistry]（进程内存，换图即清，不写持久化配置）。
+ * 数据来自 [JoinFkRegistry]（ON 条件语义，纯 JVM）与 [JoinFkRefTables]（已定位的引用表实例）。
  *
  * 隔离边界：本文件 import com.intellij.database.*，仅当 database-optional.xml 被加载
  * （DatabaseTools 存在）时平台才会实例化；Community 下不会触碰。
@@ -32,14 +32,32 @@ class JoinVirtualFkProvider : ModelRelationManager.ModelRelationProvider {
         table: DasTable,
         refTable: DasTable?,
     ): JBIterable<DasForeignKey> {
-        if (refTable == null) return JBIterable.empty()
-        val entries = JoinFkRegistry.find(table.name, refTable.name)
-        // T-Embed-10.5 探针：EP 是否被原生建边触达 + registry 命中数（连线缺失排障）
+        // N6：**不要**在此对 refTable == null 早退。该入参为 null 表示平台的「两参重载」调用
+        // （ModelRelationManager.getForeignKeys(Project, DasTable) 恒定传 null），契约是
+        // 「不做引用表过滤、返回该表全部外键」——而 DbDiagramDataModel.calculateEdges 建边走的正是这条链。
+        // 分支语义收在 JoinFkRegistry.selectForCall（纯函数，test 任务可断言），此处只做实例翻译。
+        val entries = JoinFkRegistry.selectForCall(table.name, refTable?.name)
+        val fks = entries.mapNotNull { entry ->
+            // 三参回调自带实例（用它，它就是调用方给的那个对象）；两参回调只能回查登记时定位到的实例。
+            val ref = refTable ?: JoinFkRefTables.get(entry.refTable)
+            if (ref == null) {
+                LOG.warn(
+                    "JoinVirtualFk: ref table '${entry.refTable}' 未定位到实例，跳过该边" +
+                        "（child=${entry.childTable}）——登记有而实例缺 = JoinFkRefTables 未成对填充或被提前清理",
+                )
+                null
+            } else {
+                JoinVirtualFk(table, ref, entry)
+            }
+        }
+        // T-Embed-10.5 / N6 探针：EP 是否被建边链触达 + 登记数 + 实际成边数。
+        // `(all refs)` = 两参重载（建边链），有具体表名 = 三参（getExportedKeys 的成对回问）。
+        // 三者必须同现：此前日志打在 null 守卫之后，建边路径一次不留痕，日志里只有成对回问的
+        // hits=1，看起来一片健康而画布没有线——排障时先看这一行是否出现。
         LOG.info(
-            "JoinVirtualFkProvider: ${table.name} -> ${refTable.name}, hits=${entries.size}",
+            "JoinVirtualFkProvider: ${table.name} -> ${refTable?.name ?: "(all refs)"}, " +
+                "entries=${entries.size}, edges=${fks.size}",
         )
-        if (entries.isEmpty()) return JBIterable.empty()
-        val fks = entries.map { JoinVirtualFk(table, refTable, it) }
         return JBIterable.of(*fks.toTypedArray())
     }
 
