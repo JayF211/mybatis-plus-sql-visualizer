@@ -117,13 +117,16 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
         writeFrame(socket, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
 
         awaitTrue("premain 会话未建立") { manager.sessions.isNotEmpty() }
-        // sessions 先入表、updateOnline/publishStatusChanged 随后，故在线态与通道摘除各自等一次
+        // sessions 先入表、updateOnline/publishStatusChanged 随后，故在线态各自等一次
         awaitTrue("回连后在线态未置位") { manager.online }
-        awaitTrue("通道未摘除") { manager.premainChannels.isEmpty() }
+        // T-AgentReconnect T-03：通道不再「accept 一次即摘除」——认领后转入等重连（绑定到本次运行），
+        // 由运行结束信号/pid 消亡/TTL 回收。旧断言（通道被摘除）即 30 秒摘除后无法恢复的根因形态。
+        awaitTrue("通道未认领（应留在表内等重连）") { manager.premainChannels.size == 1 && manager.premainChannels[0].claimed }
         assertEquals(pid, manager.sessions[0].pid)
         assertTrue("回连后 pid 应写入幂等表（attach 链据此跳过）", manager.attachedPids.containsKey(pid))
         assertEquals("已挂载 pid=$pid", manager.statusSummary())
         assertFalse("通道认领后不再压制 attach", manager.hasPendingPremainChannel())
+        socket.close()
     }
 
     fun test同pid二次回连被丢弃_会话不叠加() {
@@ -142,6 +145,113 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
         assertEquals("重复回连应被服务端关闭", -1, DataInputStream(s2.getInputStream()).read())
         assertEquals("同 pid 只允许一条会话", 1, manager.sessions.size)
         assertEquals(1, manager.attachedPids.size)
+    }
+
+    // ---------- T-AgentReconnect T-03：会话摘除后的重连（通道绑定到本次运行） ----------
+
+    /**
+     * 现场根因回归：会话被摘除（心跳窗口过期 → 巡检摘除 + 幂等表摘条目）后，agent 侧 `SenderLoop`
+     * 无限重连同一端口——旧实现 accept 一次即关通道，重连撞在已关端口上（connection refused），
+     * 该次运行永久失去增强通道。本用例断言重连能重建会话并恢复在线态。
+     */
+    fun test会话被摘除后同pid回连_自动恢复在线() {
+        enableAndConfirm()
+        val port = portOf(manager.preparePremainVmOption()!!)
+        val pid = 636_001L
+        val first = Socket("127.0.0.1", port)
+        writeFrame(first, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+        awaitTrue("首条 premain 会话未建立") { manager.sessions.size == 1 }
+        awaitTrue("首条会话未置在线态") { manager.online }
+
+        // 模拟「被摘除」：会话关闭 + 巡检摘除（心跳窗口过期的现场形态，同 pid 幂等表条目一并清掉）
+        manager.sessions[0].close()
+        manager.sweepOffline()
+        assertTrue("摘除后不应残留会话", manager.sessions.isEmpty())
+        assertFalse("摘除后应回落离线", manager.online)
+
+        // 同一 pid 再次回连（agent 侧 SenderLoop 无限重连同一端口，断线退避 1s→5s）
+        val second = Socket("127.0.0.1", port)
+        writeFrame(second, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+        awaitTrue("摘除后重连未重建会话（通道是否 accept 一次即关？）") { manager.sessions.size == 1 }
+        awaitTrue("重连后在线态未恢复") { manager.online }
+        assertEquals("重连应复用同一 pid", pid, manager.sessions[0].pid)
+        assertTrue("重连后幂等表应重新登记", manager.attachedPids.containsKey(pid))
+        assertEquals("已挂载 pid=$pid", manager.statusSummary())
+        second.close()
+        first.close()
+    }
+
+    /** 反复摘除/重连多轮：同一通道持续服役，通道表与会话表规模都不随轮次增长。 */
+    fun test重复多轮回连_通道与会话规模有界() {
+        enableAndConfirm()
+        val port = portOf(manager.preparePremainVmOption()!!)
+        val pid = 636_002L
+        repeat(10) { i ->
+            val socket = Socket("127.0.0.1", port)
+            writeFrame(socket, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+            awaitTrue("第 ${i + 1} 轮回连未建立会话") { manager.sessions.size == 1 }
+            manager.sessions[0].close()
+            manager.sweepOffline()
+            assertTrue("第 ${i + 1} 轮后会话未清空", manager.sessions.isEmpty())
+            assertEquals(
+                "第 ${i + 1} 轮后 premain 通道数应恒为 1（同一通道服务全部重连）",
+                1, manager.premainChannels.size,
+            )
+            socket.close()
+        }
+        assertTrue(
+            "通道数不得随重连轮次增长（MAX_PREMAIN_CHANNELS=${AgentManager.MAX_PREMAIN_CHANNELS} 不被撞到）",
+            manager.premainChannels.size < AgentManager.MAX_PREMAIN_CHANNELS,
+        )
+    }
+
+    /**
+     * 运行结束信号（生产链路：`SqlLogManager.onConsoleRemoved` → [AgentManager.onRunEnded]）关闭该轮通道，
+     * 连续多次运行不累积通道——否则第 `MAX_PREMAIN_CHANNELS` 次运行起 premain 注入会被上限拒绝。
+     */
+    fun test运行结束关闭本轮通道_连续多次运行不累积() {
+        enableAndConfirm()
+        val runs = AgentManager.MAX_PREMAIN_CHANNELS + 3
+        repeat(runs) { i ->
+            val option = manager.preparePremainVmOption()
+            assertNotNull("第 ${i + 1} 次运行应仍能协商端口（通道未随运行次数累积）", option)
+            val port = portOf(option!!)
+            val channel = manager.premainChannels[0]
+            val socket = Socket("127.0.0.1", port)
+            writeFrame(socket, AgentProtocol.CMD_HELLO, """{"pid":${636_100L + i}}""")
+            awaitTrue("第 ${i + 1} 次运行的 premain 会话未建立") { manager.sessions.size == 1 }
+
+            manager.onRunEnded()
+            awaitTrue("第 ${i + 1} 次运行结束后通道未回收") { manager.premainChannels.isEmpty() }
+            assertTrue("运行结束信号应关闭通道（该轮不再等重连）", channel.closed)
+
+            manager.sessions.toList().forEach { it.close() }
+            manager.sweepOffline()
+            assertTrue("第 ${i + 1} 次运行结束后会话未清空", manager.sessions.isEmpty())
+            socket.close()
+        }
+    }
+
+    /** 回连次数达上限后通道退休（防异常抖动下的 accept 热循环）。 */
+    fun test回连次数达上限_通道退休() {
+        enableAndConfirm()
+        val port = portOf(manager.preparePremainVmOption()!!)
+        val pid = 636_003L
+        repeat(AgentManager.MAX_PREMAIN_RECONNECTS) { i ->
+            Socket("127.0.0.1", port).use { socket ->
+                writeFrame(socket, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+                awaitTrue("第 ${i + 1} 轮回连未建立会话") { manager.sessions.size == 1 }
+                manager.sessions[0].close()
+                manager.sweepOffline()
+            }
+        }
+        awaitTrue("回连次数达上限后通道未回收") { manager.premainChannels.isEmpty() }
+        // 通道已关：端口不再接受连接（agent 侧后续回连 connection refused，需重新 Run 注入）
+        try {
+            Socket("127.0.0.1", port).use { fail("通道退休后不应再接受连接") }
+        } catch (expected: java.io.IOException) {
+            // 预期路径：ConnectException（connection refused）
+        }
     }
 
     // ---------- attach 跳过与窗口失效 ----------
