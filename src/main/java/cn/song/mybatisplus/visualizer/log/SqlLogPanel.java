@@ -4,6 +4,8 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.config.SettingsChangeListener;
 import cn.song.mybatisplus.visualizer.config.SqlLogConfigurable;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService;
+// T-UiCoord F2：下拉按钮文本截尾省略复用 meta 行的同款纯函数（避免第二份省略实现）
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelKt;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors;
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
@@ -34,6 +36,7 @@ import com.intellij.ui.awt.RelativePoint;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.ui.components.JBTabbedPane;
 import com.intellij.ui.jcef.JBCefApp;
+import com.intellij.util.ui.JBUI;
 import org.jetbrains.annotations.NotNull;
 
 import javax.swing.Box;
@@ -58,6 +61,7 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.GridBagLayout;
 import java.awt.Point;
@@ -111,14 +115,22 @@ public class SqlLogPanel extends JPanel implements Disposable {
     private int historyTabIndex = -1;
 
     private final JCheckBox dedupeCheckBox;
-    private final JLabel typeFilterLabel = new JLabel(MpSqlVisualizerBundle.message("log.filter.type.label"));
+
+    /**
+     * SQL类型多选按钮（点击弹可勾选弹窗；文案只显示选中状态：全部 / 无 / 「查询, 更新」组合）。
+     *
+     * T-UiCoord F2（2026-09-21 用户定案「工具栏不要两行」）：原「SQL类型：」标签控件退役，
+     * 标签键转作 tooltip 前缀（tooltip = `SQL类型：` + 当前状态**全文**）；按钮显示文本按
+     * {@link #DROPDOWN_TEXT_BUDGET_PX} 截尾省略——文本定宽封顶是多选后行宽不漂移、单行恒成立的前提。
+     */
     private final JButton typeFilterButton;
-    private final JLabel sortLabel = new JLabel(MpSqlVisualizerBundle.message("log.sort.label"));
 
     /**
      * 排序方式按钮（T-LogSortModes）：点击弹单选菜单，文案显示当前方式；与「SQL类型」按钮同款式
      * （原生 LaF 扁平按钮 + 右侧下箭头），默认时间升序。取代原「耗时排序」双态切换按钮——
      * 排序恒有确定方式，不再依赖「是否检测到耗时」决定显隐。
+     *
+     * T-UiCoord F2：原「排序：」标签控件同样退役（标签键转 tooltip 前缀），文本同样截尾封顶。
      */
     private final JButton sortButton;
 
@@ -186,6 +198,22 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
     /** T-Perf-24（自 dev 移植）：搜索输入防抖窗口（毫秒）。 */
     private static final int SEARCH_DEBOUNCE_MS = 200;
+
+    /**
+     * T-UiCoord F2：两个下拉按钮（SQL类型 / 排序）显示文本的像素上限（@100% 缩放，用 JBUI.scale 取用）。
+     *
+     * 定宽封顶是「工具栏恒为单行」的前提之一：`SQL类型` 多选后文案会到「查询, 更新, 删除, 插入」，
+     * 不封顶时行宽随选择漂移（旧流式行正是这么折到第二行的）。封顶后按钮宽度只由预算决定，
+     * 超限截尾省略、tooltip 恒全文（见 {@link #clipToDropdownBudget}）。
+     *
+     * **取值依据（2026-09-21 headless 实测，非估算）**：每个下拉按钮的固定开销 = 图标 16 + LaF 内边距 38
+     * ≈ 54px（与文本无关），勾选固定 102px。用户侧边栏 460px、图标组真机量测约 133px 下：
+     * 默认态（「全部」）控制组 ≈300 → 合计 433（余 27px）；多选态封顶后控制组 ≈333 → 合计 466。
+     * 预算取 64（不是初版计划的 78）：78 时多选态控制组 346，超 `460 − 图标组保守下限 120 = 340`
+     * 的预算锁。多选态余下约 6px 的超出量（相对图标组量测中值）由平台图标溢出兜底，
+     * 属登记边界而非缺陷——见计划 §七 待验证前提 2。
+     */
+    private static final int DROPDOWN_TEXT_BUDGET_PX = 64;
     /** T-CaptureTruth T-CT-03：零产出诊断刷新间隔（与桥轮询同频 2s）。 */
     private static final int DIAGNOSTICS_TICK_MS = 2000;
 
@@ -197,7 +225,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
     /** 工具栏慢查询计数标签（动态更新）。 */
     private JLabel slowQueryLabel = null;
 
-    // ---------- UI 组件（工具栏行：清空/设置/帮助 + 去重勾选 + SQL类型 + 排序方式） ----------
+    // ---------- UI 组件（工具栏单行：动作图标组靠左 + 列表控制组靠右） ----------
 
     /** 工具栏引用（capturing 变化时经平台更新机制刷新动作 presentation，T-UN-11）。 */
     private ActionToolbar _toolbarRef = null;
@@ -216,6 +244,18 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
     /** 聚焦隐藏计数提示（聚焦视图下不匹配任何页签的条目数；无页签时隐藏）。 */
     private final JLabel focusHiddenLabel = new JLabel();
+
+    // ---------- T-UiCoord F2：工具栏单行宿主字段（同样须在 init 之前——init 里 buildToolbar 会赋值；
+    // 声明晚于 init 会让赋值被随后的 `= null` 初始化器覆盖回 null） ----------
+
+    /** 工具栏单行宿主（`buildToolbar()` 产物）。 */
+    private JPanel toolbarRow = null;
+
+    /** 工具栏右侧控制组（EAST 宿主内那层 FlowLayout 面板）。 */
+    private JPanel toolbarControls = null;
+
+    /** 工具栏动作图标组组件（CENTER）——结构断言用（曾因还原反向验证探针时误删 CENTER 挂载而漏）。 */
+    private JComponent toolbarComponent = null;
 
     /**
      * 诊断刷新定时器（仅「捕捉中且零条目」时运行）。
@@ -407,14 +447,12 @@ public class SqlLogPanel extends JPanel implements Disposable {
         typeFilterButton.setFocusable(false);
         typeFilterButton.setIcon(AllIcons.General.ArrowDown);
         typeFilterButton.setHorizontalTextPosition(SwingConstants.LEFT); // 图标在文字右侧（下拉按钮惯例）
-        typeFilterButton.setToolTipText(MpSqlVisualizerBundle.message("log.filter.type"));
         typeFilterButton.addActionListener(e -> showTypeFilterPopup());
 
         this.sortButton = new JButton();
         sortButton.setFocusable(false);
         sortButton.setIcon(AllIcons.General.ArrowDown);
         sortButton.setHorizontalTextPosition(SwingConstants.LEFT); // 图标在文字右侧（下拉按钮惯例，同 SQL类型）
-        sortButton.setToolTipText(MpSqlVisualizerBundle.message("log.sort.label"));
         sortButton.addActionListener(e -> showSortPopup());
 
         this.logToSqlPanel = new LogToSqlPanel(project);
@@ -634,42 +672,41 @@ public class SqlLogPanel extends JPanel implements Disposable {
         _toolbarRef = toolbar; // 保存引用供 capturing 监听刷新
 
         updateTypeFilterButton();
-        // 左右分区：左侧 动作图标 + SQL类型单元 + 排序方式 + 慢查询计数；
-        // 右侧「移除重复的sql」勾选（用户要求移到右侧，与 SQL类型 垂直居中平行、样式统一）
-        JPanel row = new JPanel(new BorderLayout());
-
-        // 左侧流式区：WrapLayout——窄侧边栏放不下时折行且高度随之增长（原生 FlowLayout
-        // preferredLayoutSize 只按单行算，折行后第二行会被裁掉——「SQL类型筛选项消失」根因）
-        JPanel left = new JPanel(new WrapLayout());
-        left.add(toolbar.getComponent());
-        // 标签 + 按钮打包成一体：折行时「SQL类型：」与状态按钮同进退，不拆散两行
-        JPanel typeFilterUnit = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        typeFilterUnit.setOpaque(false);
-        typeFilterUnit.add(typeFilterLabel);
-        typeFilterUnit.add(typeFilterButton);
-        left.add(typeFilterUnit);
-        // 排序方式单元：与 SQL类型单元同构（标签 + 控件打包，折行时同进退）
         updateSortButtonText();
-        JPanel sortUnit = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        sortUnit.setOpaque(false);
-        sortUnit.add(sortLabel);
-        sortUnit.add(sortButton);
-        left.add(sortUnit);
-        // T-DisplayModeToSettings：显示模式入口迁设置页「列表显示」（工具栏按钮移除）
-        // O-1：工具栏慢查询计数标签
+        // T-UiCoord F2（2026-09-21 用户定案「不要两行」）：工具栏**恒为单行**——
+        // 左侧动作图标组（CENTER，拿剩余宽度；窄了交给平台图标溢出）+ 右侧列表控制组
+        // （EAST：慢查询徽章 / SQL类型 / 排序 / 去重勾选，勾选仍在最右）。
+        // BorderLayout 结构上不存在折行可能，故任意宽度下都只有一行；原 WrapLayout 流式行退役
+        // ——它按「谁最后谁折」处理放不下，2026-09-16 加排序单元、09-18 加第 5 枚图标后，
+        // 460px 侧边栏下「排序」单元孤行到第二行（右留 300px 空档、两行左缘差 10px）。
+        JPanel row = new JPanel(new BorderLayout());
+        row.add(toolbar.getComponent(), BorderLayout.CENTER);
+        toolbarComponent = toolbar.getComponent();
+
+        // O-1：慢查询计数徽章。T-UiCoord F2：由「慢查询: N」全文改短徽章（复用存量键
+        // log.panel.slowQueryBadge）让出一行余量，全文进 tooltip（见 updateSlowQueryLabel）。
         slowQueryLabel = new JLabel();
         // T-UN-13（T-UiNative）：写死红 → namedColor（亮值不变，主题可覆写）
         slowQueryLabel.setForeground(MpvsUiColors.SLOW_RED);
         slowQueryLabel.setFont(slowQueryLabel.getFont().deriveFont(Font.BOLD));
         slowQueryLabel.setVisible(false); // 默认隐藏，有慢查询时显示
-        left.add(slowQueryLabel);
-        row.add(left, BorderLayout.CENTER);
-
-        // 右侧：去重勾选（Flow 面板带边距，BorderLayout 垂直居中 → 与左侧图标/标签同轴平行）
-        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 4));
+        // 控制组：Flow(RIGHT) 单行右对齐；外包 Y 轴 BoxLayout + 上下 glue 使整组垂直居中
+        // （FlowLayout 自身按顶部摆放，直接挂 EAST 会与图标组差几像素不共轴）
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        controls.setOpaque(false);
+        controls.add(slowQueryLabel);
+        controls.add(typeFilterButton);
+        controls.add(sortButton);
+        controls.add(dedupeCheckBox);
+        toolbarControls = controls;
+        JPanel right = new JPanel();
+        right.setLayout(new BoxLayout(right, BoxLayout.Y_AXIS));
         right.setOpaque(false);
-        right.add(dedupeCheckBox);
+        right.add(Box.createVerticalGlue());
+        right.add(controls);
+        right.add(Box.createVerticalGlue());
         row.add(right, BorderLayout.EAST);
+        toolbarRow = row;
         return row;
     }
 
@@ -761,12 +798,18 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
     // ---------- SQL类型多选弹窗 ----------
 
-    /** 更新 SQL类型按钮文案：标签独立展示，按钮只显示状态（全部 / 无 / 类型组合）。 */
+    /**
+     * 更新 SQL类型按钮文案（全部 / 无 / 类型组合）。
+     *
+     * T-UiCoord F2：标签控件退役后语义由 tooltip 承载——显示文本按预算截尾省略（多选组合可能很长），
+     * tooltip 恒为「SQL类型：」+ 完整状态。
+     */
     private void updateTypeFilterButton() {
+        String state;
         if (activeFilter.containsAll(SqlLogPanelKt.FILTERABLE_TYPES)) {
-            typeFilterButton.setText(MpSqlVisualizerBundle.message("log.filter.all"));
+            state = MpSqlVisualizerBundle.message("log.filter.all");
         } else if (activeFilter.isEmpty()) {
-            typeFilterButton.setText(MpSqlVisualizerBundle.message("log.filter.type.none"));
+            state = MpSqlVisualizerBundle.message("log.filter.type.none");
         } else {
             StringBuilder sb = new StringBuilder();
             boolean first = true;
@@ -777,8 +820,20 @@ public class SqlLogPanel extends JPanel implements Disposable {
                     first = false;
                 }
             }
-            typeFilterButton.setText(sb.toString());
+            state = sb.toString();
         }
+        typeFilterButton.setText(clipToDropdownBudget(state, typeFilterButton));
+        typeFilterButton.setToolTipText(MpSqlVisualizerBundle.message("log.filter.type.label") + state);
+    }
+
+    /**
+     * T-UiCoord F2：下拉按钮显示文本按预算截尾省略（复用 meta 行的 {@link SqlPreviewPanelKt#clipTailToWidth} 纯函数）。
+     * 预算用 JBUI 缩放表达——文本宽度随缩放变化，写死像素会在高 DPI 下失效。
+     * tooltip 恒全文，省略只发生在按钮显示层。
+     */
+    private String clipToDropdownBudget(String text, JComponent target) {
+        FontMetrics metrics = target.getFontMetrics(target.getFont());
+        return SqlPreviewPanelKt.clipTailToWidth(text, metrics::stringWidth, JBUI.scale(DROPDOWN_TEXT_BUDGET_PX));
     }
 
     // ---------- 工具栏动作 ----------
@@ -1297,16 +1352,24 @@ public class SqlLogPanel extends JPanel implements Disposable {
         updateSortButtonText();
     }
 
-    /** 排序按钮文案 = 当前方式标签。 */
+    /**
+     * 排序按钮文案 = 当前方式标签。
+     *
+     * T-UiCoord F2：与 SQL类型按钮同构——显示文本截尾封顶，tooltip 恒为「排序：」+ 完整方式。
+     */
     private void updateSortButtonText() {
-        String text = null;
+        String label = null;
         for (SqlLogPanelKt.SortOption option : SqlLogPanelKt.sortOptions()) {
             if (option.mode() == sortMode) {
-                text = option.label();
+                label = option.label();
                 break;
             }
         }
-        sortButton.setText(text != null ? text : MpSqlVisualizerBundle.message("log.sort.time.asc"));
+        if (label == null) {
+            label = MpSqlVisualizerBundle.message("log.sort.time.asc");
+        }
+        sortButton.setText(clipToDropdownBudget(label, sortButton));
+        sortButton.setToolTipText(MpSqlVisualizerBundle.message("log.sort.label") + label);
     }
 
     /** 按当前排序模式排序条目。 */
@@ -1452,12 +1515,15 @@ public class SqlLogPanel extends JPanel implements Disposable {
         }
     }
 
-    /** 更新工具栏慢查询计数标签（O-1 Phase C）。 */
+    /** 更新工具栏慢查询计数徽章（O-1 Phase C）。 */
     private void updateSlowQueryLabel() {
         int count = slowQueryCounter.getSlowCount();
         if (slowQueryLabel != null) {
             if (count > 0) {
-                slowQueryLabel.setText(MpSqlVisualizerBundle.message("log.toolbar.slowQueryCount", Integer.toString(count)));
+                // T-UiCoord F2：全文「慢查询: N」（约 65px）在一行定构下吃掉余量 → 改短徽章
+                // 「慢 N」（复用存量键 log.panel.slowQueryBadge），全文进 tooltip 不丢信息
+                slowQueryLabel.setText(MpSqlVisualizerBundle.message("log.panel.slowQueryBadge") + " " + count);
+                slowQueryLabel.setToolTipText(MpSqlVisualizerBundle.message("log.toolbar.slowQueryCount", Integer.toString(count)));
                 slowQueryLabel.setVisible(true);
             } else {
                 slowQueryLabel.setVisible(false);
@@ -1820,9 +1886,47 @@ public class SqlLogPanel extends JPanel implements Disposable {
         return buildTypeFilterContent();
     }
 
-    /** SQL类型标签（测试断言存在性与文案）。 */
-    public JLabel getTypeFilterLabelForTest() {
-        return typeFilterLabel;
+    /**
+     * T-UiCoord F2：工具栏单行宿主（布局契约断言用——单行 / 不越界 / 控件共轴）。
+     * 返回的是生产实例（{@code buildToolbar()} 的产物），不是测试另搭的仿制品。
+     */
+    JPanel toolbarRowForTest() {
+        return toolbarRow;
+    }
+
+    /** Kotlin {@code val toolbarRowForTest} 的 JVM 访问器等价入口（属性名读取用）。 */
+    public JPanel getToolbarRowForTest() {
+        return toolbarRow;
+    }
+
+    /** T-UiCoord F2：工具栏右侧控制组（类型 / 排序 / 去重勾选 / 慢查询徽章）——单行契约的主断言面。 */
+    JPanel toolbarControlsForTest() {
+        return toolbarControls;
+    }
+
+    /** Kotlin {@code val toolbarControlsForTest} 的 JVM 访问器等价入口（属性名读取用）。 */
+    public JPanel getToolbarControlsForTest() {
+        return toolbarControls;
+    }
+
+    /** T-UiCoord F2：工具栏动作图标组组件（结构断言：它必须挂在行宿主 CENTER）。 */
+    JComponent toolbarComponentForTest() {
+        return toolbarComponent;
+    }
+
+    /** Kotlin {@code val toolbarComponentForTest} 的 JVM 访问器等价入口（属性名读取用）。 */
+    public JComponent getToolbarComponentForTest() {
+        return toolbarComponent;
+    }
+
+    /** T-UiCoord F2：下拉按钮显示文本的像素预算（测试按同一预算算期望的省略文本）。 */
+    int dropdownTextBudgetForTest() {
+        return JBUI.scale(DROPDOWN_TEXT_BUDGET_PX);
+    }
+
+    /** Kotlin {@code val dropdownTextBudgetForTest} 的 JVM 访问器等价入口（属性名读取用）。 */
+    public int getDropdownTextBudgetForTest() {
+        return JBUI.scale(DROPDOWN_TEXT_BUDGET_PX);
     }
 
     /** 应用类型过滤组合（测试驱动：设置选中集 + 刷新按钮文案与列表）。 */

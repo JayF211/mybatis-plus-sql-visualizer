@@ -1057,7 +1057,12 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         return new kotlin.Pair<>(Boolean.FALSE, null);
     }
 
-    /** 顶部工具栏。 */
+    /**
+     * 顶部工具栏：复制错误（有警示时可见，永不折叠——错误反馈链路一环）/ 压缩多行切换 / 格式化 /
+     * 关键字换行 / 竖向排列 / 执行计划 / 刷新 / 更多（T-PreviewTopOverlap F2：导入参数/差异对比/分享
+     * 三个低频动作折叠进「更多」JBPopup 菜单；执行 SQL / 复制 SQL 在弹窗底部按钮区，M17.4。
+     * T-UiCoord F1：回滚 SQL 亦折叠进「更多」，直显按钮 8 → 7 枚）。
+     */
     private JBPanel<JBPanel<?>> toolbar() {
         JBPanel<JBPanel<?>> bar = new JBPanel<JBPanel<?>>() {{
             setLayout(new BoxLayout(this, BoxLayout.X_AXIS));
@@ -1083,19 +1088,25 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         // T-MergeFollowup-01：master T-PreviewTopOverlap 重构按钮行时把 dev 的 add 行删掉而注释残留，
         // explainSql() 全树零调用（合并语义丢失无冲突标记实锤）——补回，保持内联高频位（对齐 M37M38 文档 §2.3）。
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.explain"), this::explainSql));
-        // T-RollbackSql：回滚 SQL（预览窗口直达按钮——计划 F3 定案「分享之前」的原直达锚点
-        // 已随 T-PreviewTopOverlap F2 折叠进「更多」，按计划意图保持一键直达形态；
-        // T-MergeR2IntoMaster §3.2 定案：按钮行以 master 为基，回滚按钮插在执行计划之后、刷新之前）
-        bar.add(smallButton(MpSqlVisualizerBundle.message("panel.rollbackSql"), this::showRollbackSql));
+        // T-UiCoord F1（2026-09-21 用户要求）：回滚 SQL 折叠进「更多」——低频动作（只对
+        // INSERT/UPDATE/DELETE 有意义）不再与格式化/刷新同列直显。**推翻** T-RollbackSql F3 与
+        // T-MergeR2IntoMaster §3.2 的「一键直达 / 执行计划之后刷新之前」定案，改判依据见
+        // docs/开发计划/20260921-1338-T-UiCoord-…-开发计划.md §三 F1；动作体 showRollbackSql() 一字未改。
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.refresh"), this::refreshView));
         // T-PreviewTopOverlap F2：「更多」折叠菜单入口（低频动作收纳）
         bar.add(smallButton(MpSqlVisualizerBundle.message("panel.more"), this::showMoreActionsPopup));
         return bar;
     }
 
-    /** F2：「更多」折叠菜单的三项低频动作（文案键沿用原工具栏按钮，执行体一字不差）。 */
+    /**
+     * 「更多」折叠菜单的四项低频动作（文案键沿用原工具栏按钮，执行体一字不差）。
+     *
+     * T-UiCoord F1：回滚 SQL 置于**首位**——四项里它最常用，而折叠会降低可发现性，
+     * 首项是成本最低的补偿（对齐「菜单按使用频率排序」）。
+     */
     private List<kotlin.Pair<String, Runnable>> moreActions() {
         List<kotlin.Pair<String, Runnable>> actions = new ArrayList<>();
+        actions.add(new kotlin.Pair<>(MpSqlVisualizerBundle.message("panel.rollbackSql"), (Runnable) this::showRollbackSql));
         actions.add(new kotlin.Pair<>(MpSqlVisualizerBundle.message("panel.param.import"), (Runnable) this::importParamsFromClipboard));
         actions.add(new kotlin.Pair<>(MpSqlVisualizerBundle.message("panel.compare"), (Runnable) this::showSqlDiff));
         actions.add(new kotlin.Pair<>(MpSqlVisualizerBundle.message("panel.share"), (Runnable) this::showShareDialog));

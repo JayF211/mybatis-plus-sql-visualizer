@@ -2,6 +2,12 @@ package cn.song.mybatisplus.visualizer.config
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
+import cn.song.mybatisplus.visualizer.testutil.FakeSettings
+import com.intellij.openapi.options.Configurable
+import com.intellij.openapi.options.ConfigurableGroup
+import com.intellij.openapi.options.ex.ConfigurableExtensionPointUtil
+import com.intellij.openapi.options.ex.ConfigurableVisitor
+import com.intellij.openapi.options.ex.ConfigurableWrapper
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.SearchTextField
 import com.intellij.ui.SimpleColoredComponent
@@ -9,6 +15,8 @@ import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBList
 import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import javax.swing.ListCellRenderer
 import javax.swing.ListModel
@@ -123,5 +131,128 @@ class PluginSettingsFolderConfigurableTest : BasePlatformTestCase() {
         assertEquals("设置项次行应为所属页面名", MpSqlVisualizerBundle.message("settings.section.preview"), joinedText(lines[1]))
         val fieldIter = lines[0].iterator(); fieldIter.next()
         assertTrue("字段名片段应加粗", fieldIter.textAttributes.style and SimpleTextAttributes.STYLE_BOLD != 0)
+    }
+
+    // ---------- N5：对话框内导航按 EP id 查（按类查会全树实例化 → EDT 慢操作） ----------
+
+    private fun settingsGroups(): List<ConfigurableGroup> =
+        listOf(ConfigurableExtensionPointUtil.getConfigurableGroup(project, true))
+
+    /** 树里全部 wrapper（只读 EP 元数据，不触发 configurable 实例化）。 */
+    private fun allWrappers(groups: List<ConfigurableGroup>): List<ConfigurableWrapper> {
+        val out = mutableListOf<ConfigurableWrapper>()
+        fun walk(list: Array<Configurable>) {
+            for (c in list) {
+                if (c is ConfigurableWrapper) out.add(c)
+                if (c is Configurable.Composite) walk(c.configurables)
+            }
+        }
+        groups.forEach { walk(it.configurables) }
+        return out
+    }
+
+    private fun wrapperWithId(groups: List<ConfigurableGroup>, id: String): ConfigurableWrapper? =
+        allWrappers(groups).firstOrNull { it.extensionPoint.id == id }
+
+    /** 登记目标类 → EP id（经生产侧测试缝，避免用例里再抄一份 id 字面量）。 */
+    private fun idOf(cls: Class<out Configurable>): String =
+        PluginSettingsFolderConfigurable.registeredTargetsForTest().first { it.second == cls }.first
+
+    /**
+     * N5 判别性用例：对话框内按 id 定位**不得**顺带实例化兄弟页。
+     *
+     * 探针用 `ConfigurableWrapper.getRawConfigurable()`——它只回读缓存实例、不触发创建，
+     * 所以「null = 没被实例化」是可信读数（正对照见 [test按类查会实例化全树_正对照]）。
+     */
+    fun test导航按id查_不实例化无关设置页() {
+        val cfg = PluginSettingsFolderConfigurable()
+        val groups = settingsGroups()
+        val sqlLogId = idOf(SqlLogConfigurable::class.java)
+        val uiId = idOf(UiActionsConfigurable::class.java)
+
+        val target = cfg.resolveTarget(FakeSettings(groups), sqlLogId)
+        assertNotNull("按 id 应命中目标页", target)
+
+        val targetWrapper = wrapperWithId(groups, sqlLogId)
+        assertNotNull("设置树里应有目标页 wrapper", targetWrapper)
+        assertNotNull("命中后目标页应被实例化（否则等于没跳）", targetWrapper!!.rawConfigurable)
+
+        val sibling = wrapperWithId(groups, uiId)
+        assertNotNull("设置树里应有兄弟页 wrapper", sibling)
+        assertNull(
+            "按 id 查不得实例化无关设置页——按类查（ConfigurableVisitor.findByType）会实例化全树",
+            sibling!!.rawConfigurable,
+        )
+
+        // 真机报告的触发点：Kotlin 插件的 scripting 设置页构造器里做文件名索引访问
+        // （KotlinScriptingSettingsConfigurable.java:46 → FilenameIndex），修复前被按类查顺带实例化
+        // → EDT 慢操作断言。它声明了 EP id（preferences.language.Kotlin.scripting），故按 id 查不再碰它。
+        val kotlinScripting = allWrappers(groups).firstOrNull {
+            epClassName(it).contains("KotlinScriptingSettingsConfigurable")
+        }
+        assertNotNull("夹具树里应含 Kotlin scripting 设置页（真机触发点；缺则本断言无判别力）", kotlinScripting)
+        assertNull(
+            "按 id 查不得实例化 Kotlin scripting 设置页（真机 EDT 慢操作触发点）",
+            kotlinScripting!!.rawConfigurable,
+        )
+    }
+
+    /**
+     * N5 正对照：证明上面的探针**看得见实例化**（否则「兄弟页没被实例化」是空绿）。
+     *
+     * 按类查是修复前的形态：`ConfigurableWrapper.cast` 里那条「类型不相容就不创建」的短路，
+     * 因 `ConfigurableEP.ClassProducer` 未覆写 `ObjectProducer.getType()`（恒 null）而成死代码。
+     */
+    fun test按类查会实例化全树_正对照() {
+        val groups = settingsGroups()
+        ConfigurableVisitor.findByType(UiActionsConfigurable::class.java, groups)
+        val wrapper = wrapperWithId(groups, idOf(UiActionsConfigurable::class.java))
+        assertNotNull("设置树里应有该页 wrapper", wrapper)
+        assertNotNull("正对照：按类查应实例化该页（探针有效）", wrapper!!.rawConfigurable)
+    }
+
+    /**
+     * N5 一致性守卫：每个登记目标的 id 必须与类指向**同一个** EP。
+     *
+     * 导航改成按 id 查之后，id 写错（或与 `plugin.xml` 漂移）会静默跳到别处/跳不动——纯 UI 断言
+     * 看不出来（本仓「幽灵搜索项」的同类风险）。比对走 EP 元数据，不实例化。
+     */
+    fun test登记目标id与类指向同一设置页() {
+        val wrappers = allWrappers(settingsGroups())
+        val targets = PluginSettingsFolderConfigurable.registeredTargetsForTest()
+        assertEquals("登记目标数（7 个子页 + 项目页）", 8, targets.size)
+        for ((id, cls) in targets) {
+            val wrapper = wrappers.firstOrNull { it.extensionPoint.id == id }
+            assertNotNull("设置树里找不到该 id 的 EP：$id（id 与 plugin.xml 漂移？）", wrapper)
+            val declared = wrapper!!.extensionPoint.instanceClass ?: wrapper.extensionPoint.implementationClass
+            assertEquals("id 指向的 EP 类与登记类不一致：$id", cls.name, declared)
+        }
+    }
+
+    /**
+     * N5 待验证前提 P1 探针：按 id 查时 `ConfigurableWrapper.getId()` 对**未声明 id** 的 wrapper
+     * 会退化成 `cast(SearchableConfigurable.class, this)` → 仍然实例化。故「按 id 查是否真的不碰
+     * 无关页」取决于树里有没有无 id 的 EP——本探针把这个事实打出来。
+     *
+     * 夹具树 ≠ 真机全树（真机结论以计划 §六 验收为准），此处只作读数留痕。
+     */
+    fun test探针_设置树内无id的EP清单() {
+        val wrappers = allWrappers(settingsGroups())
+        assertTrue("设置树不应为空", wrappers.isNotEmpty())
+        val withoutId = wrappers.filter { it.extensionPoint.id == null }
+        println(
+            "N5-PROBE 设置树 wrapper=${wrappers.size}，无 id 的=${withoutId.size}；" +
+                "前 10 个：" + withoutId.take(10).joinToString { epClassName(it) },
+        )
+        val kotlinScripting = wrappers.firstOrNull { epClassName(it).contains("KotlinScriptingSettingsConfigurable") }
+        println(
+            "N5-PROBE KotlinScriptingSettingsConfigurable 在夹具树里=${kotlinScripting != null}，" +
+                "EP id=${kotlinScripting?.extensionPoint?.id}",
+        )
+    }
+
+    private fun epClassName(wrapper: ConfigurableWrapper): String {
+        val ep = wrapper.extensionPoint
+        return ep.instanceClass ?: ep.implementationClass ?: ep.providerClass ?: "?"
     }
 }
