@@ -53,6 +53,8 @@ import java.awt.GridBagLayout
 import java.awt.GridLayout
 import java.awt.Insets
 import java.awt.Point
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
@@ -126,6 +128,29 @@ internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : JBList<LogSqlE
 
     /** 速度搜索与 Ctrl+C 复制共用的条目文本。 */
     internal fun textFor(element: LogSqlEntry): String = withTerminator(element.restoredSql)
+}
+
+/**
+ * 空态文案写入（T-AgentDiagWrap T-04，独立成顶层函数以便单测）。
+ *
+ * 为什么不能 `status.text = plain`：`JBList.emptyText` 是 `com.intellij.util.ui.StatusText`
+ * （**不是** JLabel），内容落在 `SimpleColoredComponent` 上——它不解析 HTML，
+ * 也不把 `\n` 当换行（`\n` 被当普通字符画成零宽，两段文字被无声拼接；超宽只裁不折）。
+ * 平台侧唯一的多行手段是 [com.intellij.util.ui.StatusText.appendLine]：每行一个 Fragment，
+ * `paintColumnInBounds` 逐 Fragment 单独绘制（**仍不折行**，所以宽度折行由
+ * [wrapEmptyTextLines] 先算好）。
+ *
+ * @param widthPx 列表当前可用像素宽度
+ * @param measure 单串像素宽度测量
+ */
+internal fun applyEmptyTextLines(
+    status: com.intellij.util.ui.StatusText,
+    text: String,
+    widthPx: Int,
+    measure: (String) -> Int,
+) {
+    status.clear()
+    wrapEmptyTextLines(text, widthPx, measure).forEach { status.appendLine(it) }
 }
 
 /**
@@ -1200,6 +1225,33 @@ class SqlLogPanel(
         }
     }
 
+    // ---------- T-AgentDiagWrap T-04：空态文案的「文本 → 显示」 ----------
+
+    /**
+     * 最近一次写入空态的纯文本（`\n` 分隔语义行）。宽度变化时按新宽度重排同一份文本，
+     * 所以必须留住它——否则 resize 只能重排「上一次的视觉行」，再窄一档就还原不了。
+     */
+    private var lastEmptyText: String? = null
+
+    /** 写入空态文案（纯文本入口，渲染层在此做折行）。 */
+    private fun applyEmptyText(plain: String) {
+        lastEmptyText = plain
+        renderEmptyText()
+    }
+
+    /** 按当前列表可用宽度重排并逐视觉行写入（EDT）。 */
+    private fun renderEmptyText() {
+        val plain = lastEmptyText ?: return
+        applyEmptyTextLines(list.emptyText, plain, emptyTextWidthPx()) { s -> list.getFontMetrics(list.font).stringWidth(s) }
+    }
+
+    /** 空态文案可用宽度：列表宽度扣掉自身内边距与左右余量；尚未布局（首帧 / 隐藏卡）时给兜底值。 */
+    private fun emptyTextWidthPx(): Int {
+        val insets = list.insets
+        val w = list.width - insets.left - insets.right - EMPTY_TEXT_EDGE_PADDING_PX * 2
+        return if (w <= 0) EMPTY_TEXT_FALLBACK_WIDTH_PX else w
+    }
+
     // ---------- T-CaptureTruth T-CT-03：零产出诊断 ----------
 
     /**
@@ -1237,7 +1289,7 @@ class SqlLogPanel(
         } else {
             null
         }
-        list.emptyText.text = text ?: MpSqlVisualizerBundle.message("log.panel.empty")
+        applyEmptyText(text ?: MpSqlVisualizerBundle.message("log.panel.empty"))
         if (active) {
             if (diagnosticsTimer == null) {
                 diagnosticsTimer = javax.swing.Timer(DIAGNOSTICS_TICK_MS) { syncDiagnostics() }
@@ -1252,7 +1304,14 @@ class SqlLogPanel(
     // ---------- 条目列表 ----------
 
     private fun buildListPane(): JBScrollPane {
-        list.emptyText.text = MpSqlVisualizerBundle.message("log.panel.empty")
+        applyEmptyText(MpSqlVisualizerBundle.message("log.panel.empty"))
+        // T-AgentDiagWrap T-04：列表宽度变化即重排空态文案——否则用户拉窄/拉宽工具窗后，
+        // 文案还按旧宽度折行（窄窗下会重新长出被裁掉的尾巴，等于修复只在首帧生效）。
+        list.addComponentListener(object : ComponentAdapter() {
+            override fun componentResized(e: ComponentEvent) {
+                renderEmptyText()
+            }
+        })
         list.cellRenderer = LogEntryListCellRenderer().also { entryCellRenderer = it }
         applyListCellHeight()
         // T-UiNative T-UN-05（本次修复）：主日志列表构造即可见，速度搜索在此挂载（不移进

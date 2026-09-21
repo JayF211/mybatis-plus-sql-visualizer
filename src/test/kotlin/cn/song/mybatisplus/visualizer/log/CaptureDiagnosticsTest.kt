@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -14,6 +15,11 @@ import org.junit.Test
  * T-RA-03 追加守卫：重放丢弃 / EP 短路两个计数（`SqlLogConsoleBridge` 侧原本只自增、无人读）必须在
  * 诊断行可见且数值正确，同时零值不得出现——否则「有行但被守卫/EP 吃掉」与「控制台没输出」
  * 在面板上仍是同一种沉默，正是本次审计要封的口。
+ *
+ * T-AgentDiagWrap T-04 追加守卫：面板空态是 `StatusText`（不是 JLabel），**不认 HTML、不把 `\n`
+ * 当换行**——`\n` 被无声吞掉、超宽只裁不折，现场被裁掉的恰是那句可执行提示。折行由纯函数
+ * [wrapEmptyTextLines] 在写入前算好，本组用例锁住：语义三行、视觉行不含裸换行符、
+ * 每行不超宽度上限、折行不丢字、零宽/极窄宽度按下限兜底。
  */
 class CaptureDiagnosticsTest {
 
@@ -112,5 +118,74 @@ class CaptureDiagnosticsTest {
         val text = captureDiagnosticsText(diag(lines = 30L, dropped = 1L, shortCircuited = 1L))!!
         assertTrue("提示档位应由行数决定，不被计数改写：$text", text.contains("未见 MyBatis SQL 日志"))
         assertTrue("不得出现无输出档提示：$text", !text.contains("控制台暂无输出"))
+    }
+
+    // ---------- T-AgentDiagWrap T-04：空态文案折行（Swing 不认 \n，折行须自己算） ----------
+
+    /** 可预测的宽度桩：每字符 10px（不依赖字体度量，保持纯函数可测）。 */
+    private val stubMeasure: (String) -> Int = { it.length * 10 }
+
+    @Test
+    fun test诊断文案按语义分成三行() {
+        val text = captureDiagnosticsText(diag(consoles = 5, lines = 88L, enhanced = "已挂载 pid=1", dropped = 8L))!!
+        val lines = wrapEmptyTextLines(text, 4000, stubMeasure)
+        assertEquals("语义行应为三行（捕捉中+增强 / 控制台+计数 / 可执行提示）：$lines", 3, lines.size)
+        assertTrue("首行应含捕捉中与增强通道：${lines[0]}", lines[0].contains("捕捉中") && lines[0].contains("已挂载 pid=1"))
+        assertTrue("次行应含控制台通道与丢弃计数：${lines[1]}", lines[1].contains("控制台") && lines[1].contains("重放守卫已丢弃 8 行"))
+        assertTrue("末行应是那句可执行提示：${lines[2]}", lines[2].contains("未见 MyBatis SQL 日志"))
+    }
+
+    @Test
+    fun test视觉行不含裸换行符() {
+        val text = captureDiagnosticsText(diag(consoles = 1, lines = 4200L, dropped = 3L))!!
+        val lines = wrapEmptyTextLines(text, 200, stubMeasure)
+        assertTrue("视觉行不得含裸 \\n（StatusText 不认换行，会被无声拼接成一行）：$lines", lines.none { it.contains('\n') })
+        assertTrue("视觉行不得含裸 \\r：$lines", lines.none { it.contains('\r') })
+    }
+
+    @Test
+    fun test超宽行折行且每行不超宽度上限() {
+        val text = captureDiagnosticsText(diag(consoles = 1, lines = 4200L))!!
+        val lines = wrapEmptyTextLines(text, 200, stubMeasure)
+        assertTrue("超宽应折成多行（现场正是这一档被右边界裁掉提示）：$lines", lines.size > 3)
+        assertTrue("每视觉行不得超过宽度上限：$lines", lines.all { stubMeasure(it) <= 200 })
+    }
+
+    @Test
+    fun test折行只搬位置不改内容() {
+        val text = captureDiagnosticsText(diag(consoles = 1, lines = 4200L, dropped = 2L))!!
+        val lines = wrapEmptyTextLines(text, 200, stubMeasure)
+        assertEquals(
+            "折行不得丢字（空白断行处允许丢空格）",
+            text.filterNot { it == '\n' || it == ' ' },
+            lines.joinToString("").filterNot { it == ' ' },
+        )
+    }
+
+    @Test
+    fun test零宽与极窄宽度按下限排版且不产空行() {
+        val text = captureDiagnosticsText(diag(consoles = 1, lines = 5L))!!
+        val zero = wrapEmptyTextLines(text, 0, stubMeasure)
+        assertTrue("宽度 0 应按下限排版（语义行仍是 3 行）：$zero", zero.size >= 3)
+        assertTrue("宽度 0 不得产出空行：$zero", zero.none { it.isBlank() })
+        val tiny = wrapEmptyTextLines(text, 1, stubMeasure)
+        assertEquals(
+            "极窄宽度须 clamp 到下限（否则每行一个字符，排版碎成竖排）",
+            wrapEmptyTextLines(text, EMPTY_TEXT_MIN_WIDTH_PX, stubMeasure),
+            tiny,
+        )
+        assertEquals(
+            "极窄宽度折行同样不得丢字",
+            text.filterNot { it == '\n' || it == ' ' },
+            tiny.joinToString("").filterNot { it == ' ' },
+        )
+    }
+
+    @Test
+    fun test英文按空白断行不切碎单词() {
+        val source = "alpha beta gamma delta"
+        val lines = wrapEmptyTextLines(source, 110, stubMeasure)
+        assertTrue("应在空白处断行且不留首尾空格：$lines", lines.all { it == it.trim() })
+        assertTrue("不得把单词切成两半：$lines", lines.flatMap { it.split(" ") }.all { it in source.split(" ") })
     }
 }
