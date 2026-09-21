@@ -26,13 +26,20 @@ class RollbackSqlPanelTest : BasePlatformTestCase() {
         super.tearDown()
     }
 
-    // ======================== F3：工具栏按钮 ========================
+    // ======================== F3：入口位置（T-UiCoord F1 起在「更多」菜单内） ========================
 
-    fun testToolbarHasRollbackButton() {
+    /**
+     * T-UiCoord F1（2026-09-21 用户要求）：【回滚 SQL】不再直显于按钮行，折叠进「更多」菜单**首位**。
+     *
+     * 本用例由改造前的「按钮存在性」反转而来（原 `testToolbarHasRollbackButton`）——防的是改造被
+     * 静默回退：按钮重新直显、或菜单项丢失，两种回退都会让本用例变红。
+     */
+    fun testRollbackButtonFoldedIntoMoreMenu() {
         val panel = newPanel()
+        val rollbackText = MpSqlVisualizerBundle.message("panel.rollbackSql")
         val buttons = panel.toolbarForTest().components.filterIsInstance<JButton>()
-        val rollback = buttons.firstOrNull { it.text == MpSqlVisualizerBundle.message("panel.rollbackSql") }
-        assertNotNull("工具栏应有【回滚 SQL】直达按钮", rollback)
+        assertNull("按钮行不应再直显【回滚 SQL】", buttons.firstOrNull { it.text == rollbackText })
+        assertEquals("「更多」菜单首项应为【回滚 SQL】", rollbackText, panel.moreActionsForTest().firstOrNull())
         panel.dispose()
     }
 
