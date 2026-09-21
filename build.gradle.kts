@@ -194,7 +194,6 @@ intellijPlatform {
     }
     // 注：并行会话临时隔离请在本块内临时加自己的 sandboxContainer（用后还原并立即提交），
     // 勿让任务专属沙盒名随提交入库（T-ListParamCollect/T-HqlInhCols 两轮实证）。
-    sandboxContainer = layout.buildDirectory.dir("MPSV-K2J115") // TEMP-SANDBOX 收尾还原
 }
 
 kotlin {
