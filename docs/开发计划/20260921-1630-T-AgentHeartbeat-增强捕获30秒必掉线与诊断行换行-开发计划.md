@@ -28,7 +28,9 @@
   | 3 | 13:41:49,544 | 13:42:23,103 | 33.6s |
   | 4 | 15:56:19,066 | 15:56:49,071 | 30.0s |
 
-  （>30s 的三轮是巡检 `scheduleWithFixedDelay(5s)` 的量化误差，不是第二个成因。）
+  （>30s 的三轮是巡检 `scheduleWithFixedDelay(5s)` 的量化误差，不是第二个成因。独立核实代理另找到**第 5 个**
+  窗口：`16:07:19,271 → 16:07:59,285` = 40.0s，属另一个项目且由 DatabaseTools 的远程 JDBC 驱动进程触发——
+  它超出相位模型能解释的上界，成因未定位，见 §七 独立核实条目 3。）
 - **用户侧后果（第 4 轮实测）**：应用 JVM 存活 15:56:19 → 16:03:53（**7 分 34 秒**，以 16:03:53 的
   `scanAll: 主控制台已移除` 为终点），而增强会话在 15:56:49 就已摘除且**再未重建**——
   用户在这 7 分半里打的每一次请求（15:56:47 / 15:56:52 / 15:56:54 / 15:56:55 …）都落在「两条通道都死」的窗口里。
@@ -161,6 +163,28 @@ agent 侧设计上是无限重连的（`SenderLoop` 断线按 1s→5s 退避重�
 - 补一态区分「刚连上、首条心跳未到」与「曾有心跳、之后停摆」——前者是连接早期，
   后者才是应用侧无响应，二者对用户的处置建议不同（等一等 / 去看应用进程）。
 
+### T-06（P1，独立核实追加立项）子类加载器下代理定义失败 → 静默零捕获
+
+**来源**：本轮独立核实代理（只读）在验 P6 时实测挖出，与原计划的心跳问题**无关**，是另一条通向「零产出」的路。
+
+- **现象**：当 JDBC 驱动由「系统类加载器之下的子加载器」加载时——`java -jar` 的 Spring Boot fat jar
+  （`LaunchedURLClassLoader`）、`spring-boot-devtools`（`RestartClassLoader`）、任何嵌套加载器容器——
+  SQL 织入**整体失效且零诊断**：连接仍是原始 `com.mysql.cj.jdbc.ConnectionImpl`，事件数 0，插件侧一条日志都没有。
+- **机制**（探针单独钉死）：`ProxySupport.java` 用 `ProxySupport.class.getClassLoader()`（agent 侧加载器）去
+  `Proxy.newProxyInstance` 定义代理类，而真实 `ConnectionImpl` 的接口集含 `com.mysql.cj.jdbc.JdbcConnection` /
+  `com.mysql.cj.MysqlConnection` / `com.mysql.cj.TransactionEventHandler` / `Session$SessionEventListener`，
+  这些属于**驱动加载器**（子加载器）→ JDK 代理生成器拒绝：
+  `IllegalArgumentException: interface com.mysql.cj.jdbc.JdbcConnection is not visible from class loader`。
+  异常被 `SqlHookCallbacks` 的 `catch (Throwable ignore)` 静默吞掉并返回原连接，既不记日志也不计丢弃数。
+- **测试为什么全绿**：`FakeDriver` 的 `connect` 返回的代理只实现 `java.sql.Connection` 一个接口——那是 bootstrap
+  接口，任何加载器都可见，所以 `ConnectWeaveEndToEndTest` / `ConnectWeaverTest` **从未执行过那条失败分支**。
+  夹具与真实驱动的唯一实质差距，恰好落在唯一的失败点上。
+- **修法**：① 代理定义改用能看见全部接口的加载器（连接对象自身的加载器 / 接口的加载器，取哪个需论证并审全部
+  `newProxyInstance` 调用点）；② 失败改为可观测（限频 WARN 或计数，避免日志洪水）；③ 夹具补一个驱动自定义接口
+  使失败分支被真实覆盖，并新增「驱动在子 URLClassLoader 里」的用例；④ 三种既有形态（premain+系统加载器 /
+  agentmain+retransform / Hikari 连接池包装）不得回退。
+- **边界**：这条不改变当前 IDE Run 形态的行为（已实测能捕到），修的是 fat jar / devtools 等启动形态。
+
 ## 四、待验证前提
 
 | # | 前提 | 验证方式 | 状态 |
@@ -170,10 +194,11 @@ agent 侧设计上是无限重连的（`SenderLoop` 断线按 1s→5s 退避重�
 | P3 | 保持 premain 端口常开不产生端口/线程/会话泄漏 | 连续两次运行后检查 `premainChannels` 规模与线程名 `mps-agent-premain-*` 残留；`shutdownAll` 后端口应释放 | **待验** |
 | P4 | `JBList` 空态文本（`JBLabel`）渲染 HTML 且 `body width` 生效、窄工具窗不截断 | 沙盒截图（空态 + 有诊断两态，工具窗拉到最窄再截一次） | **待验**（Swing 标准行为 + 仓内先例，但窄窗表现未验） |
 | P5 | 修复前「应用侧心跳中断」文案只在真停摆时出现 | 修复后连跑，确认不再有误报；必要时用测试注入短窗口驱动 | **待验** |
-| P6 | 增强通道在本 demo 上确实能捕到 SQL（本轮**没有**任何 SQL 事件样本，因为会话从未活到用户查询） | 修复后沙盒实跑：应用启动 → 打 `http://localhost:8088/user/getAll` → 面板应出现条目 | **未验**——本轮无法证伪也无法证实，属修复后的必做验收项 |
+| P6 | 增强通道在本 demo 上确实能捕到 SQL（立项时**没有**任何 SQL 事件样本，因为会话从未活到用户查询） | 修复后沙盒实跑：应用启动 → 打 `http://localhost:8088/user/getAll` → 面板应出现条目 | **已证实（独立核实代理实测）**：用生产 agent jar + 真实驱动 `mysql-connector-java-8.0.28` + HikariCP 4.0.3 + 真库跑了三种形态，全部捕到 SQL 事件（premain+系统加载器 / agentmain+retransform / Hikari 连接池包装）。**IDE Run 这个形态下能捕到**——但见 T-06，换成 fat jar/devtools 启动仍会零产出 |
 
-> P6 是本次最需要盯的一条：本轮所有读数都只能证明「通道死得早」，**证不了「通道活着时能捕到 SQL」**。
-> 若修复后仍零产出，下一步要查的是 JDBC 织入在 MySQL Connector/J 8.x 上的命中情况，而不是心跳。
+> P6 原是本计划最大的不确定项（立项时所有读数只能证明「通道死得早」，证不了「通道活着时能捕到 SQL」）。
+> 独立核实代理用真实驱动实测后已证实**能捕到**，且顺手挖出 T-06 这条同类的静默零捕获路径——那是另一个成因，
+> 与心跳无关，本次一并立项修掉。
 
 ## 五、测试
 
@@ -215,6 +240,37 @@ agent 侧设计上是无限重连的（`SenderLoop` 断线按 1s→5s 退避重�
   线程本身起不来（极端场景），IDE 侧仍会在 30 秒后摘除——这条不再做额外兜底，因为摘除后的恢复由 T-03 承接。
 - **`a628a3b` 之前的会话永不摘除**这一行为不回退：心跳窗口本身是对的（半死会话封口控制台桥是更糟的形态），
   本次修的是两侧节奏不匹配，不是取消窗口。
+
+### 独立核实代理在同一份沙盒日志里另找到的问题（本次只登记，不实施）
+
+核实代理被要求「不要只复述结论，自己扫一遍同一份日志」，除确认上述根因外还带回了五条。按处置分两类：
+
+**值得单独立项（真问题，本次不做）**
+
+1. **`detachAllFilters: FAILED to remove filter` ×17，根因已定**：IU-243 的
+   `com.intellij.execution.impl.ConsoleViewImpl` **根本没有 `removeMessageFilter` 方法**（javap `app-client.jar`
+   只有 `addMessageFilter` 与 `clearMessageFilters`），`SqlLogConsoleBridge.kt` 的 `FILTER_IFACE_CANDIDATES`
+   两个候选都没有它 → 反射移除**永远不可能成功**，WARN 文案「filter will remain active!」属实但被夸大。
+   缓解是既有的：`detachAllFilters` 同时 `consoleContexts.remove(console)`，而 filter 体第一道守卫是
+   `consoleContexts[console] ?: return` → 残留 filter 实为惰性。**净影响：每轮捕获周期泄漏一个 filter 对象 +
+   一条误导 WARN**，低危。
+2. **`onConsoleRemoved` 的 armed 语义自相矛盾（3 次，两种落点）**：`13:26:32` 落到
+   `停止捕捉（autoStart=false, armed=false）`，而 `13:44:30` / `16:03:53` 落到 `回到 armed 态`。
+   同一个事件在「手动开启」路径下把 armed 也清成 false，之后项目重跑不会自动恢复捕获。与桥停摆耦合，低危。
+3. **agent 被挂到 IDE 自己的 JDBC 驱动进程上（中危）**：日志里第 5 个在线窗口（`16:07:19,271 → 16:07:59,285`，
+   属另一个项目 `mybatis-plus-sql-visualizer-demo`）是 **DatabaseTools 的远程 JDBC 驱动进程**触发的——
+   紧邻 `RemoteProcessSupport - WARNING: A Java agent has been loaded dynamically (…mps-sql-agent…jar)`，
+   随后 `16:07:23 onProcessAppeared: 目标 pid=52172`。用户只是打开了 Database 工具窗，插件就把 agent 挂到了
+   IDE 自身的驱动 JVM 上，并在状态行显示「在线」。挂载目标会被非目标进程污染，且这一轮的窗口时长 40.0s
+   **超出 5s 巡检相位模型能解释的上界**，成因未定位。
+
+**判为噪音（不建议立项，可选打磨）**
+
+4. **HTTP Client 进程刷 WARN**：`resolvePid: 三步回退全失败（handler=HttpClientRequestProcessHandler…getProcess()）`
+   ×6。HTTP Client 不是 Java 应用进程，跳过挂载是正确行为，只是每次运行都刷一条 WARN，可降 DEBUG。
+5. **「重放守卫已丢弃 8 行」不在 `idea.log` 里**：全日志 grep 零命中——它是 UI 诊断量（`CaptureDiagnostics.kt`），
+   逐行日志是 `LOG.isDebugEnabled` 级别而该日志为 INFO。**这条读数的来源是用户截图，不是日志**，
+   立项文档里不要把它当日志证据引用。
 
 ## 实施记录
 
