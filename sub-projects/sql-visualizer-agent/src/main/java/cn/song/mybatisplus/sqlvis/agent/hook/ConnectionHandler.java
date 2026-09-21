@@ -31,16 +31,32 @@ public final class ConnectionHandler implements InvocationHandler {
             if (args != null && args.length >= 1 && args.length <= 4 && args[0] instanceof String) {
                 if ("prepareStatement".equals(name) || "prepareCall".equals(name)) {
                     final Object stmt = method.invoke(raw, args);
-                    return stmt == null ? null : ProxySupport.wrapStatement(stmt, (String) args[0], url);
+                    return wrapStatementSafely(stmt, (String) args[0], url);
                 }
             }
             if (args == null && "createStatement".equals(name)) {
                 final Object stmt = method.invoke(raw, args);
-                return stmt == null ? null : ProxySupport.wrapStatement(stmt, null, url);
+                return wrapStatementSafely(stmt, null, url);
             }
             return method.invoke(raw, args);
         } catch (java.lang.reflect.InvocationTargetException e) {
             throw e.getCause() != null ? e.getCause() : e;
+        }
+    }
+
+    /**
+     * Statement 包装收口（T-AgentProxyCL）：代理定义失败（loader 看不见语句接口）时**返回原语句**
+     * 而不是把异常抛给宿主——旧实现在这里裸调 wrapStatement，失败会从宿主的 prepareStatement
+     * 调用点冒出去（采集红线：钩子绝不影响宿主语义）。失败走 dropToRaw 记数 + 一次性告警。
+     */
+    private Object wrapStatementSafely(Object stmt, String sql, String url) {
+        if (stmt == null) {
+            return null;
+        }
+        try {
+            return ProxySupport.wrapStatement(stmt, sql, url);
+        } catch (Throwable t) {
+            return SqlHookCallbacks.dropToRaw("wrapStatement 抛异常", t, stmt);
         }
     }
 }
