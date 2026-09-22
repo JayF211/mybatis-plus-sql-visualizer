@@ -452,11 +452,30 @@ object DatabaseSchemaResolver {
      * T-DbSchemaCompletion：查不了（`scanBailed`）与"确认没有"分道——前者不写负缓存、不短路
      * 后续数据源、下次调用重试；聚合结果仅在**所有**数据源都查不了时才标 `scanBailed`。
      */
+    /**
+     * 剥掉标识符的**成对**引用符：`[user]` / `"user"` / `` `user` `` → `user`；无包裹符原样返回。
+     * 只剥首尾成对的一层，不动表名内部出现的引号/方括号（那些在真实对象名里是合法字符）。
+     */
+    private fun unquoteIdentifier(raw: String): String {
+        val t = raw.trim()
+        if (t.length < 2) return t
+        val head = t.first()
+        val tail = t.last()
+        val paired = (head == '[' && tail == ']') || (head == '"' && tail == '"') || (head == '`' && tail == '`')
+        return if (paired) t.substring(1, t.length - 1) else t
+    }
+
     internal fun resolveFromSources(
         tableName: String,
         sources: List<Any>,
         scanProbe: ((Any, String) -> TableMeta)? = null,
     ): TableMeta {
+        // 真机走查（2026-09-23）实测：SQL 文本里的表名可能**带引用符**（SQL Server `[user]`、PG `"user"`、
+        // MySQL `` `user` ``），而 DAS 里存的是裸名——原样带进去必然解析不到（沙盒日志：
+        // `scan: table=[user] … table=[user] 无法解析`）。后果不止补全：回滚链靠它取自增列，
+        // 取不到 ⇒ 回填 INSERT 不带 `SET IDENTITY_INSERT` 包装 ⇒ 真机仍报 544。
+        // 故入口先剥引用符（只剥「成对的包裹符」，表名内部的引号/方括号不受影响）。
+        val name = unquoteIdentifier(tableName)
         val scan: (Any, String) -> TableMeta =
             scanProbe ?: { ds, name -> collectFromDataSource(ds, name) }
         val budget = scanBudget.get()
@@ -464,7 +483,7 @@ object DatabaseSchemaResolver {
         for (ds in sources) {
             // P7：缓存键带库名维度（同一数据源可同时看见多个库/模式，同名表结论按库不同；
             // 库名取不到时键退回纯表名，与修复前逐字一致）
-            val cacheKey = cacheKeyOf(databaseNameOf(ds), tableName)
+            val cacheKey = cacheKeyOf(databaseNameOf(ds), name)
             // T-Perf-09：缓存命中直接返回（同一数据源同一表零遍历）
             val cached = synchronized(metaCache) { metaCache[ds]?.get(cacheKey) }
             if (cached != null) return cached
@@ -477,7 +496,7 @@ object DatabaseSchemaResolver {
                 stampNegative(ds, cacheKey)
                 continue
             }
-            val found = scan(ds, tableName)
+            val found = scan(ds, name)
             if (found.columns.isNotEmpty() || found.comment != null) {
                 synchronized(metaCache) {
                     metaCache.getOrPut(ds) { HashMap() }[cacheKey] = found
@@ -501,11 +520,11 @@ object DatabaseSchemaResolver {
         // 表在所有数据源都没拿到（通常=未连接/introspection 未完成/表不在当前库）
         if (bailed > 0) {
             LOG.info(
-                "DatabaseSchemaResolver: table=$tableName 无法解析——$bailed/${sources.size} 个数据源" +
+                "DatabaseSchemaResolver: table=$name 无法解析——$bailed/${sources.size} 个数据源" +
                     "查不了（模型未加载/ObjectKind 取不到，原因见上方 scan 行），未记负缓存、下次调用重试",
             )
         } else {
-            LOG.info("DatabaseSchemaResolver: table=$tableName not found in ${sources.size} data sources")
+            LOG.info("DatabaseSchemaResolver: table=$name not found in ${sources.size} data sources")
         }
         return TableMeta(null, emptyMap(), scanBailed = bailed > 0 && bailed == sources.size)
     }
