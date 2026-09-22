@@ -1,0 +1,50 @@
+[23ms] LISTENING 127.0.0.1:53996（等待 agent 回连；agent 在 premain 阶段即连接）
+[31ms] 
+[31ms] >>> [3] mark 0 握手
+[32ms] ======== 0 握手 ========
+[32ms] 
+[32ms] >>> [4] wait-hello 90000
+[14788ms] ACCEPT 来自 /127.0.0.1:64368（agent 回连）
+[15014ms] HELLO pid=34504 body={"pid":34504}（+ 15014ms 起连）
+[15015ms] HEARTBEAT #1 body={}
+[15016ms]   PASS HELLO 到达 pid=34504 (+15014ms)
+[15016ms] 
+[15016ms] >>> [5] wait-http http://localhost:8082/mpj/device/one/1 120000
+[19383ms]   等待应用就绪（第 1 次）：java.net.SocketTimeoutException: connect timed out
+[22398ms]   等待应用就绪（第 2 次）：java.net.SocketTimeoutException: connect timed out
+[25402ms]   等待应用就绪（第 3 次）：java.net.SocketTimeoutException: connect timed out
+[25918ms] HEARTBEAT #2 body={}
+[28432ms]   等待应用就绪（第 4 次）：java.net.SocketTimeoutException: connect timed out
+[31440ms]   等待应用就绪（第 5 次）：java.net.SocketTimeoutException: connect timed out
+[34456ms]   等待应用就绪（第 6 次）：java.net.SocketTimeoutException: connect timed out
+[36616ms] HEARTBEAT #3 body={}
+[37681ms]   PASS 应用就绪：GET http://localhost:8082/mpj/device/one/1 -> HTTP 200（第 7 次探测）
+[37682ms] 
+[37683ms] >>> [6] config {"disabled":false,"desensitize":true}
+[37683ms] SEND cmd=3 body={"disabled":false,"desensitize":true}
+[37683ms]   PASS 已下发 CONFIG
+[37683ms] 
+[37683ms] >>> [7] expect-ack "disabled":false
+[37838ms] CONFIG_ACK #1 body={"disabled":false,"desensitize":true,"skipPrefixes":0}
+[37838ms]   PASS CONFIG_ACK 到达且含 ""disabled":false"：{"disabled":false,"desensitize":true,"skipPrefixes":0}
+[37839ms] 
+[37839ms] >>> [8] mark 保持连接（外部请求循环 + jstack 采样 45s）
+[37839ms] ======== 保持连接（外部请求循环 + jstack 采样 45s） ========
+[37839ms] 
+[37839ms] >>> [9] sleep 45000
+[48771ms] HEARTBEAT #4 body={}
+[59567ms] HEARTBEAT #5 body={}
+[70334ms] HEARTBEAT #6 body={}
+[81012ms] HEARTBEAT #7 body={}
+[82882ms] 
+[82882ms] >>> [10] summary
+[82882ms] 
+[82882ms] ──────── SUMMARY ────────
+[82882ms] HELLO=pid=34504 @15014ms HEARTBEAT=7 EVENT(累计)=0 CONFIG_ACK=1 UNKNOWN_CMD=0
+[82882ms] 断言 PASS=4 FAIL=0
+[82882ms] RESULT: ALL-PASS
+[82882ms] ─────────────────────────
+[82882ms] 
+[82882ms] >>> [11] quit
+PROBE-EXIT rc=0
+[82883ms] 连接断开/读帧结束: java.net.SocketException: Socket Closed

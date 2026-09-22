@@ -1,0 +1,11 @@
+# P-1 栈成分取证：只做握手 + 开启采集，然后长时间保持连接（不触发停采看门狗），
+# 期间由外部请求循环 + jstack 采样抓取「JDBC execute 时刻的完整调用栈」。
+mark 0 握手
+wait-hello 90000
+wait-http http://localhost:8082/mpj/device/one/1 120000
+config {"disabled":false,"desensitize":true}
+expect-ack "disabled":false
+mark 保持连接（外部请求循环 + jstack 采样 45s）
+sleep 45000
+summary
+quit

@@ -199,12 +199,19 @@ tasks {
 
     // T-ReleasePerf-02（P0-2）：发版链路一命令编排——按正确时序串行执行：
     //   buildPlugin（出含 changeNotes 的最终产物）→ verifyGate（对该产物做三目标兼容门禁）
-    //   → testShards（对同一提交跑全量测试）。任一环失败即停（Gradle 依赖失败语义），
-    //   消除「门禁与测试并发抢 CPU + 门禁结论对被测代码时序空挂」两个问题。
-    // 用法：./gradlew releaseGate [-PverifyIdes=...] [-PverifyOnly=true]
+    //   → testShards（对同一提交跑全量测试）→ e2eFakeIde（真机级探针）。任一环失败即停
+    //   （Gradle 依赖失败语义），消除「门禁与测试并发抢 CPU + 门禁结论对被测代码时序空挂」两个问题。
+    //
+    // T-AgentResiduals R7（2026-09-22）：releaseGate 追加真机级探针（dev-support/e2e-fake-ide）。
+    //   它需要真环境（本机 MySQL + demo 工程 + ~/.m2 离线依赖），故**只挂发布前置**、不进 testShards
+    //   （日常门禁不因此变慢）；前置缺失时硬失败并给指引，不做静默跳过。
+    //   串行顺序：放在最后——它启动真实应用并占用端口，跑在前面会与测试/门禁抢资源。
+    // 用法：./gradlew releaseGate [-PverifyIdes=...] [-PverifyOnly=true] [-Pe2eDemoDir=...]
     register("releaseGate") {
         group = "verification"
-        description = "发版链路一命令：buildPlugin → verifyGate（三目标兼容门禁）→ testShards（全量测试）"
-        dependsOn("buildPlugin", "verifyGate", "testShards")
+        description =
+            "发版链路一命令：buildPlugin → verifyGate（三目标兼容门禁）→ testShards（全量测试）" +
+                " → e2eFakeIde（真机级端到端探针，需本机 MySQL + demo 工程）"
+        dependsOn("buildPlugin", "verifyGate", "testShards", "e2eFakeIde")
     }
 }
