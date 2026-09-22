@@ -161,9 +161,11 @@ bundle 键成对无幽灵键；`psi → ui.highlight` 无守卫拦阻且 KDoc �
 
 | 门禁 | 读数 | 判定 |
 |---|---|---|
-| `testShards`（三片） | **1904 / 2045 / 1743 = 5692 例 / 0 失败 / 0 错误 / 6 跳过**，`BUILD SUCCESSFUL in 5m 6s`（@Embedded 展平批次后复跑；前一轮 1834/2166/1690 = 5690 为展平前读数） | ✅ 通过 |
+| `testShards`（三片） | **1813 / 2002 / 1937 = 5752 例 / 0 失败 / 0 错误 / 6 跳过**（**合并 master `5156931` 后的合并态复跑**；@Embedded 展平批次单独跑时 1904/2045/1743 = 5692 例） | ✅ 通过 |
 | `verifyGate`（三目标） | IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63 **全 Compatible**（待移除 API 4/5/6 处、废弃 API 9/12/66 处） | ✅ 通过 |
 | `testDatabase` | 10 例 / 8 过 / **2 红＝在册环境失败**（`DbDriverPipelineTest#testDriverArtifactResolvesToJarsOnClasspath` 报文「实际版本集: [8.2.0, 8.1.0, …]」、`#testSeedFilesLandWhereDbLooksForThem` 沙盒路径未播种，与 N6 计划记录逐字一致） | ✅ 与本批零交集 |
+
+**合并态复跑（2026-09-22，合并 master `5156931` 后）**：`testShards` 三片 1813 / 2002 / 1937 = **5752 例 / 0 失败 / 0 错误 / 6 跳过**；`verifyGate` 三目标全 **Compatible**；`testDatabase` 10 例 2 红＝在册环境失败（同上）。该次 `BUILD FAILED` **仅由 `testDatabase` 的那两条在册环境失败引起**（`buildPlugin` / `verifyGate` / 三个 `testShard` 全部成功），非代码问题。
 
 **首跑撞在册 flake（如实登记）**：首跑 `testShards` 三片 2754 / 17 / 2919，`testShard3` **13 例全红**，
 全部为 `XmlSqlCompletionContributorTest` 的 `AlreadyDisposedException`。异常栈落在**第三方与平台代码**：
