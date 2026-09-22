@@ -284,9 +284,15 @@ final class SenderLoop implements Runnable {
                     // 连上即被关：**不复位**退避（下一轮等待翻倍），并累计快速断开计数
                     fastDrops++;
                     if (fastDrops >= maxFastDrops) {
-                        System.err.println("[SqlVisAgent] SenderLoop: 端口 " + serverPort
-                                + " 连续 " + fastDrops + " 次「连上即被关」——放弃该端口重试"
-                                + "（该端口上的监听者已不是本插件，继续写帧只会空转或投错对端）");
+                        // 复核 minor㉚：放弃是**单向且不可逆**的，而通道此刻已死、IDE 侧拿不到任何信号，
+                        // 故把「已放弃」变成可观测事实——① 稳定签名行（支持排障按 PORT_ABANDONED 直接 grep
+                        // 宿主应用日志）；② AgentState 记账（本进程内可读，不必靠「面板没条目」反推）。
+                        AgentState.markPortAbandoned(serverPort);
+                        System.err.println("[SqlVisAgent] SenderLoop: PORT_ABANDONED port=" + serverPort
+                                + " fastDrops=" + fastDrops
+                                + " —— 连续「连上即被关」达上限，放弃该端口重试"
+                                + "（该端口上的监听者已不是本插件，继续写帧只会空转或投错对端；"
+                                + "IDE 侧监听端口是临时端口，放弃后本会话不会再上报）");
                         return;
                     }
                 } else if (connected) {
