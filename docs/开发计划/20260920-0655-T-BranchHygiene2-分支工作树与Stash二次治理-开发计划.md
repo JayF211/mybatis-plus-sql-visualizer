@@ -72,12 +72,64 @@
 
 依赖关系：3 独立于其余全部；4 与 5/6 可并行但共用主工作树，串行执行避免 index 争用。
 
-## 七、实施记录（实施后回填）
+## 七、实施记录（2026-09-22 回填，T-Round10-08）
 
-| # | 对象 | 结果 | 提交/SHA | 偏离计划之处 |
-|---|------|------|----------|--------------|
-| | | | | |
+> **§二 现状核实快照点 `b00ab87`（2026-09-20 06:15）整体作废**——实施时 HEAD 已是 `t-round10` `3f7853b`（第十轮批次第 3 波提交），§二的 8 个 worktree / 5 个待删分支 / 3 条新分支全部过时。以下全部为 **2026-09-22 本会话实测**，命令与读数逐条可复核。
+>
+> **本任务性质**：用户未逐条授权破坏性 git 操作（批次需求「可逆性红线」段），故**只执行只读登记**——`git branch -a` / `git worktree list` / `git stash list` 三类清单 + stash 逐条 show 留档。**零 drop、零删除、零 push、零重置**。
+
+### 7.1 三类清单实测（2026-09-22）
+
+| # | 对象 | 结果（实测值） | 提交/SHA | 偏离计划之处 |
+|---|------|----------------|----------|--------------|
+| 1 | 只读登记 · 分支 | 本地 **5** 条：`dev` `feature/kotlin-to-java` `master` `t-prewarm-late-recover` `t-round10`；远端 **3** 条：`origin/dev` `origin/feature/kotlin-to-java` `origin/master` | 未提交（只读） | §二 记「3 条新分支」、任务说明记 4 条——实测 **5** 条（多出 `t-prewarm-late-recover`，并行会话在途分支） |
+| 2 | 只读登记 · worktree | **5** 个：主仓 `[t-round10]` / `mpsv-agent-config-locate` `[master]` / `mpsv-prewarm-late-recover` `[t-prewarm-late-recover]` / `mybatis-plus-sql-visualizer-dev` `[dev]` / `-kotlin-to-java` `[feature/kotlin-to-java]` | 未提交（只读） | §二 记 8 个、任务说明记 3 个——实测 **5** 个 |
+| 3 | 只读登记 · stash | **5** 条仍在（`stash@{0}`~`@{4}`），逐条 show 留档见 7.2 | 未提交（只读） | 与 §二/任务说明的「5 条」一致 |
+| 4 | 推送债 | `origin/master..master` = **4**（`origin/master` = `8118a7b`，本地 `master` = `e8ee771`）；`origin/dev..dev` = **0**（两侧均 `d3ef121`）；`origin/feature/kotlin-to-java` = `1c3dce0` = 本地同名分支 | 未推送任何东西 | 任务说明记 0/0、盘点 :3/:17/:103 记「master 9」——实测 **4/0**。master 的 4 条来自并行会话 `mpsv-agent-config-locate` 工作树（`[origin/master: ahead 4]`），**非本任务所为**；本任务 push 次数 = 0 |
+| 5 | 对象 4（dev 三篇架构文档重放） | **已完成**：`dev..master` = 0，三篇已在 master（`grep -c 智能推断 docs/架构设计/01-*.md` = 5，非零） | 未提交（只读确认） | §三 对象 4 的①cherry-pick 无需执行——随前序合流带入，本任务**只读确认零改动** |
+| 6 | 对象 1/2/3/5/6 目标分支与 worktree | **全部已不存在**：`t-perfsweep4` / `t-settings-truth` / `feature/dialect-auto-infer` / `t-gif-rec-mcp` / `t-testdb-driver` 在 `git branch -a` 与 `git ls-remote origin` 中均零命中 | 未提交（本任务零操作） | §三 处置表 1/2/3/5/6 整体作废——已由其他会话完成，本任务**零删除** |
+| 7 | n6-join-fk-nullref | 分支与工作树均**不存在**（`git branch -a --list '*n6*'` 空、`git worktree list` 无该树）；头提交 `03f6d25` 已是 master 祖先（`git merge-base --is-ancestor` 退出码 0） | 未提交（本任务零清理） | §一 记「已删除分支」、盘点 :73 记「分支与工作树未删」——实测**已不存在、非本任务所为**。登记为「0 次清理」而非幽灵待办 |
+| 8 | 对象 5 的 `t-gif-rec-mcp` 头提交 | `0ec5ef9` 已是 master 祖先（`git merge-base --is-ancestor` 退出码 0）→ 其分支删除未丢历史 | 未提交（只读） | 计划 §三 对象 5①「push 留底」已无对象 |
+| 9 | 本任务实际落点分支 | HEAD = `t-round10` = `3f7853b`（`git rev-parse --abbrev-ref HEAD`）；`t-round10` 内容与 `dev`/`master` 均已分叉（master 已被并行会话推进到 `e8ee771`） | 本任务文档改动提交在 `t-round10` | 核验报告记「HEAD=master d3ef121」**已过时**；批次需求「当前分支 t-round10」属实。登记以免后续会话按错误分支核对 |
+| 10 | 共享文档回填（本任务兼任唯一写者） | `CHANGELOG.md` `[Unreleased]` + `docs/变更记录.md` + `docs/MEMORY.md` + 两份调研报告回填，条目与提交号见 §八 | 本任务提交 | 见 7.4 与 §八 |
+
+### 7.2 stash 逐条留档（`git stash show --stat` / `-u --stat` / `-p` 实测，2026-09-22）
+
+| stash | 自述 | 内容读数 | 父提交 | 处置 |
+|---|---|---|---|---|
+| `stash@{0}` | `On master: sandbox-execcopyfix line (other session in-flight)` | 1 file changed, **2 insertions(+)**, 0 deletions（`build.gradle.kts`） | `32c3a62` / `707e76a` / `9fc9e9a` | **不 drop**（两条理由叠加：自述即「other session in-flight」，批次红线明禁「删除任何被并行会话占用的资源」；且 `build.gradle.kts` +2 行不在 master，按计划「show 出 master 不存在的独占改动即保留」判据亦保留） |
+| `stash@{1}` | `On master: wip: Kotlin->Java 转换波(actions/converter/execute/reverse/share) — 已迁移至 feature/kotlin-to-java 工作树，此处仅作备份` | 27 files changed, **3 insertions(+), 9810 deletions(-)**；加 `-u` 为 65 files changed, 10060 insertions(+), 9810 deletions(-)。被删的 `.kt` 含 `reverse/SqlToJavaConverter.kt` -347、`reverse/SqlTokenizer.kt` -116、`reverse/WrapperFormat.kt` -50、`share/SqlShareManager.kt` -130，**master 侧这些 .kt 仍在** → 形态不一致 | `37502e2` / `2521d33` / `a01f5d4` / `a8d6ff7` | **不 drop**（计划 §三 对象 7「宁留勿删」判据：show 出 master 不存在的独占改动） |
+| `stash@{2}` | `On master: diagram-refactor-wip: diagram renderer restructuring` | 10 files changed, **289 insertions(+), 600 deletions(-)**；含 `CHANGELOG.md` 17 行、`build.gradle.kts` 38 行、`ui/diagram/DiagramPanel.kt` 206 行，并**删除** `DiagramRenderTask.kt`/`SvgRasterizer.kt` 及其测试（master 侧仍在） | `92e35d6` / `44459e9` / `73eb293` | **不 drop**（同上判据：删除面在 master 侧仍存在，属独占形态） |
+| `stash@{3}` | `On master: T-M31 并行会话 log 包中间态（LogSqlRestorer 未创建，阻塞编译）` | **`git stash show --stat` 输出为空**（该 stash 只含未跟踪文件，内容在其第三父 `9d8b3ee`）；须用 `git stash show -u --stat` = 2 files changed, **144 insertions(+)**（`log/LogSqlModels.kt` +35、`log/MyBatisLogParser.kt` +109）。**blob 比对**：两文件 master 侧均存在但 **blob 不同**（stash `f6220e6`/`a2ee4ae` vs master `4ba3d85`/`ad13d01`）→ 有独占形态 | `1c4e2a4` / `ad537dc` / `f9137cc` / `9d8b3ee` | **不 drop**（独占改动；且按 `--stat` 字面判据会误判为空——本行即该坑的留档） |
+| `stash@{4}` | `On T-M30-idea243-compat: T-M31~T-M35 并行会话文档（docs/MEMORY.md + 开发计划）` | 1 file changed, **1 insertion(+)**（`docs/MEMORY.md` 索引行「20260815-1900-日志SQL还原与Wrapper实时提示及P2深化-开发计划.md」）。该索引行 **master 侧已存在**（`grep -c` = 1），故无独占内容；stash 挂在**已不存在的分支** `T-M30-idea243-compat` 上（悬空引用） | `4e42129` / `fac8496` / `e28f056` | **不 drop**（内容无独占，按判据本属可 drop 项；但 drop 是本任务唯一不可逆动作——`drop` 后 `refs/stash` reflog 条目消失、只能靠 `git fsck --unreachable` 捞回，故本波**只留档不 drop**，留给用户授权后的一轮） |
+
+**终态：`git stash list` 仍为 5 条，drop 次数 = 0。** 5 条 show 摘要已全部留档于上表（含 `-p` 已逐条核读）。
+
+### 7.3 禁止项登记（逐条零执行，附现状实测值）
+
+| 禁止项 | 执行次数 | 现状实测值 |
+|---|---|---|
+| 删除任何远端分支（`origin/*`） | **0** | `git ls-remote origin` 的 `refs/heads/*` = `dev`/`feature/kotlin-to-java`/`master` 三条，与实施前一致 |
+| 任何 push | **0** | `origin/master` = `8118a7b`、`origin/dev` = `d3ef121`、`origin/feature/kotlin-to-java` = `1c3dce0`——与本地对应分支的关系未因本任务改变（master 的 ahead 4 系并行会话产生） |
+| 删除或移动其他会话占用的 worktree | **0** | `git worktree list` 仍 5 个，`mpsv-agent-config-locate` / `mpsv-prewarm-late-recover` / `-dev` / `-kotlin-to-java` 四处原样未动 |
+| 强制重置任何分支 | **0** | 未执行任何 `reset --hard` / `checkout -f` / `branch -f` |
+| 删除被并行会话占用的资源 | **0** | `stash@{0}`（自述 other session in-flight）保留；工作树里并行会话在途的 2 个已跟踪文档改动（`docs/开发计划/20260916-1730-待完成开发计划全景盘点.md`、`docs/验收文档/20260920-待分析问题清单.md`）与 3 个未跟踪项（`.zcodeignore`、两份 20260922 计划文档）一律未动 |
+| n6-join-fk-nullref 相关清理 | **0** | 对象已不存在（见 7.1 #7），**非本任务所为**；头提交 `03f6d25` 已是 master 祖先，无历史丢失 |
+| dev 三篇架构文档的任何改动 | **0** | 只读确认 `dev..master` = 0、三篇在 master（见 7.1 #5），未做任何 cherry-pick / 改写 |
+
+**证据方法说明（订正任务说明给的 `git reflog` 口径）**：裸 `git reflog` 是 HEAD 的 reflog，push 不动 HEAD，且被删分支的 reflog 文件已不存在（`.git/logs/refs/heads/` 只剩 dev / feature / master / t-round10），故它证不了「0 次 push」。本任务改用**远端权威源前后对照**：`git ls-remote origin`（上表读数）——远端 ref 值可逐条比对。
+
+### 7.4 共享文档回填（本批次唯一写者）
+
+本批次 8 个代码任务的计划文档均要求「CHANGELOG `[Unreleased]` + 变更记录行 + 报告落地备注」，这些文件被多方共同要求同步；集中到本任务统一写入，条目与真实提交号见 §八。**实际落点与任务说明的差异**（逐条实测）：
+
+- CHANGELOG / `docs/变更记录.md`：8 份计划中 **7 份**点名（`20260921-2306-T-PerfSweep6` 对两者均 **0 命中**，其条目由本任务据该计划 §八 逐项落地表 + 提交 `3f7853b` 补写）。
+- `docs/MEMORY.md`：9 份计划文档对它的命中数**均为 0**（实测 `grep -c`），「台账同步」由本任务按该文件自身的「开发计划（时间倒序）」索引约定执行。
+- 第十轮报告 §8：#50/#51 → T-Round10-02；#52 → T-Round10-01；#54 → T-Round10-03；#55 → T-Round10-05；#61 → T-Round10-06；另 §7.2 Z-30 → T-Round10-04。
+- 性能第九轮报告 §5：18 项发现点全表逐项标注（T-PerfSweep6 计划 §八 8.1/8.5 落地表为准），发现 17 定案不改留痕。
+- **写集外未落点（如实登记，本任务未越界写）**：T-Round10-09 计划 `20260920-1148-T-MlLlmSignatureGuard-…md:83` 与 `:131` 要求「第九轮报告 §9.4 O-41 落地备注」与「ACP 验收文档 §七-7 标注」——`docs/调研报告/20260920-0128-竞品横向对比与功能建议-第九轮调研报告.md` 与 `docs/验收文档/20260919-2340-ACP传输绕行与泄漏源修复及MCP工具命名收敛-验收文档.md` **两份文件均不在本任务写集**，故未写；该两项落地备注目前处于**无归属**状态，须由主调度补派（详见 §八 偏离登记）。
 
 ## 八、变更记录
 
 - 2026-09-20 06:55 立项（第二轮全景审计报告 §8 O-45 承接；现状核实 §二 全部为 git 实测，快照点 b00ab87）。
+- 2026-09-22 实施（T-Round10-08，分支 `t-round10`）：**只做可逆部分**——三类清单只读登记（分支 5 / worktree 5 / stash 5）+ stash 逐条 show 留档，**零 drop、零删除、零 push、零重置**（禁止项逐条登记见 7.3）。§二 快照点 `b00ab87` 整体作废，§三 处置表对象 1/2/3/5/6 目标分支全部已不存在（其他会话完成）、对象 4 已完成、对象 7 只留档不 drop。兼任本批次共享文档唯一写者：CHANGELOG `[Unreleased]` 8 条 + `docs/变更记录.md` 9 行 + MEMORY 索引与台账 + 第十轮报告 §8（#50/#51/#52/#54/#55/#61 六项）与 §7.2 Z-30 + 性能第九轮报告 §5 全 18 项。**已知偏离**：任务说明与验收给的清单计数（分支 4 / worktree 3）已被实测推翻（5 / 5）；写集外两处落地备注（第九轮报告 §9.4、ACP 验收 §七-7）无归属，须补派。
