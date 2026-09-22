@@ -227,8 +227,27 @@ public class SqlLogEntryBuffer {
      * 在锁外无锁遍历 ArrayDeque，与 EDT 清空/删除（clear/removeEntry）并发修改会触发
      * ConcurrentModificationException，经 LogFilterProxyHandler（无 catch）上浮为 IDE 红色报错弹窗。
      */
+    /** 普通入队：受「SQL 日志捕获」开关门控（{@code paused} 期间丢弃）。 */
     public boolean addEntry(LogSqlEntry entry) {
-        if (paused) {
+        return addEntryInternal(entry, true);
+    }
+
+    /**
+     * 审计入队：<b>不受「SQL 日志捕获」开关约束</b>（D1 定案，2026-09-22 用户）。
+     *
+     * <p>MCP 执行类工具（当前唯一产出点 {@code sqlv_explain}）在真实数据源上跑过的语句属<b>审计留痕</b>，
+     * 其可用性只由 MCP 工具自身的开关决定（设置页「启用 SQL Visualizer MCP 工具」＋工具级禁用清单，
+     * 见 {@code McpToolGate}）——与「SQL 日志」页签的捕获按钮无关。故开关关着（含用户显式停止后的
+     * {@code paused=true}）时审计条目<b>照样落列表</b>。
+     *
+     * <p>其余门与 {@link #addEntry(LogSqlEntry)} 完全一致：关键字过滤 / 去重窗口 / 上限淘汰——它们是列表展示偏好，不是开关。
+     */
+    public boolean addAuditEntry(LogSqlEntry entry) {
+        return addEntryInternal(entry, false);
+    }
+
+    private boolean addEntryInternal(LogSqlEntry entry, boolean respectPaused) {
+        if (respectPaused && paused) {
             return false;
         }
         if (isFiltered(entry.restoredSql())) {

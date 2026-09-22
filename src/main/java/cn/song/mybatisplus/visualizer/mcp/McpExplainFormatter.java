@@ -132,4 +132,28 @@ public final class McpExplainFormatter {
         }
         return value.substring(0, end);
     }
+
+    /**
+     * T-Round10FU（独立复核 ⑨）：{@code sqlv_explain} 失败消息里的 {@code errorPosition} 文本行。
+     *
+     * <p>驱动错误文本携带位置信号（PG {@code Position: N} / MySQL {@code at line N} / Oracle 两种形态）时附一行
+     * {@code errorPosition: char N}（字符位置）或 {@code errorPosition: line N}（行号），供外部 agent 定位再自修复；
+     * <b>无信号（或 marker 不唯一而放弃归属）返回空串</b>——空串拼接即零追加，维持诚实降级。</p>
+     *
+     * <p>抽出为纯函数的理由（⑨ 的症结）：这段文案原先内联在 {@code SqlVisualizerExplainTool.executeExplain}
+     * 的 {@code getOrElse} 里，而该分支要真实数据源 + 项目上下文才可达，于是全仓<b>没有任何用例断言过这段文案形态</b>
+     * （{@code McpToolGateTest} 只实例化工具类）——验收里那句「mcp 相关既有用例全绿」因此是空绿。
+     * 本函数落在纯逻辑层（同 {@link #formatNotices}：不 import 任何 mcpServer/com.intellij 类型），
+     * 文案形态由 {@code McpErrorPositionTextTest} 逐字钉住；<b>接线</b>（工具确实走本函数）另由该用例的
+     * 源码扫描断言钉住——只钉文案不钉接线的话，把内联文案改回来就又回到空绿。</p>
+     *
+     * @param position {@link cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor#extractPosition(String, Integer)}
+     *                 的返回值：1-based 值 / 是否字符位置（false=行号）/ 来源标签；null = 无位置信号
+     */
+    public static String formatErrorPosition(kotlin.Triple<Integer, Boolean, String> position) {
+        if (position == null) {
+            return "";
+        }
+        return "\nerrorPosition: " + (position.getSecond() ? "char" : "line") + " " + position.getFirst();
+    }
 }

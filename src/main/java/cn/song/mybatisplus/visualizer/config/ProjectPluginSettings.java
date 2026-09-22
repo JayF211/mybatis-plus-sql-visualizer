@@ -125,6 +125,17 @@ public final class ProjectPluginSettings implements PersistentStateComponent<Pro
         return PluginSettings.getInstance().getState().getIgnoredFields();
     }
 
+    /** 项目级列名数据源校正开关（O-58；未启用或 null 则回退全局）。 */
+    public boolean effectiveColumnCalibration() {
+        State s = getState();
+        if (s.getUseProjectSettings()) {
+            return s.getColumnCalibration() != null
+                ? s.getColumnCalibration()
+                : PluginSettings.getInstance().getState().getColumnCalibrationEnabled();
+        }
+        return PluginSettings.getInstance().getState().getColumnCalibrationEnabled();
+    }
+
     /** 项目级可持久化状态。 */
     public static final class State {
 
@@ -146,6 +157,9 @@ public final class ProjectPluginSettings implements PersistentStateComponent<Pro
         private String tableSuffix = "";
         private String tableNameInference = "";
         private String ignoredFields = "";
+
+        /** 项目级列名数据源校正开关（O-58；null 表示使用全局）。 */
+        private Boolean columnCalibration = null;
 
         public boolean getUseProjectSettings() { return useProjectSettings; }
         public void setUseProjectSettings(boolean useProjectSettings) { this.useProjectSettings = useProjectSettings; }
@@ -181,6 +195,10 @@ public final class ProjectPluginSettings implements PersistentStateComponent<Pro
         public String getIgnoredFields() { return ignoredFields; }
         public void setIgnoredFields(String ignoredFields) { this.ignoredFields = ignoredFields; }
 
+        /** 项目级列名数据源校正开关（null=使用全局）。 */
+        public Boolean getColumnCalibration() { return columnCalibration; }
+        public void setColumnCalibration(Boolean columnCalibration) { this.columnCalibration = columnCalibration; }
+
         /** 浅拷贝。 */
         @NotNull
     public State copy() {
@@ -196,6 +214,7 @@ public final class ProjectPluginSettings implements PersistentStateComponent<Pro
             c.tableSuffix = tableSuffix;
             c.tableNameInference = tableNameInference;
             c.ignoredFields = ignoredFields;
+            c.columnCalibration = columnCalibration;
             return c;
         }
 
@@ -214,13 +233,14 @@ public final class ProjectPluginSettings implements PersistentStateComponent<Pro
                     && Objects.equals(tablePrefix, that.tablePrefix)
                     && Objects.equals(tableSuffix, that.tableSuffix)
                     && Objects.equals(tableNameInference, that.tableNameInference)
-                    && Objects.equals(ignoredFields, that.ignoredFields);
+                    && Objects.equals(ignoredFields, that.ignoredFields)
+                    && Objects.equals(columnCalibration, that.columnCalibration);
         }
 
         @Override
         public int hashCode() {
             return Objects.hash(useProjectSettings, dialect, dialectAuto, replaceParams, formatSql, injectLogicDelete,
-                    logicDeleteValue, tablePrefix, tableSuffix, tableNameInference, ignoredFields);
+                    logicDeleteValue, tablePrefix, tableSuffix, tableNameInference, ignoredFields, columnCalibration);
         }
 
         @Override

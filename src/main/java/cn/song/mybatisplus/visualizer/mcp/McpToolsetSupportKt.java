@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.mcp;
 
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry;
 import cn.song.mybatisplus.visualizer.log.SqlLogManager;
+import cn.song.mybatisplus.visualizer.log.SqlLogManagerLookupKt;
 import cn.song.mybatisplus.visualizer.log.SqlSource;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
@@ -83,16 +84,22 @@ public final class McpToolsetSupportKt {
      * <p>失败只记 idea.log 不冒泡：审计是旁路，绝不影响工具结果（{@link McpDbExecutor} 侧的回调投递同样
      * runCatching，两道都不许把审计故障升级为工具故障）。</p>
      *
-     * <p><b>已知边界</b>：{@code addEntry} 尊重 buffer 的既有门控——用户点过「停止捕捉」后
-     * {@code paused=true} 期间不落条目、去重窗口内同 SQL 折叠、过滤关键字命中的丢弃。三者都是
-     * 「SQL 列表」的既有语义，本任务不另开口子（每次调用仍有 idea.log 的 {@code [MCP-AUDIT]} 行兜底留痕）。</p>
+     * <p><b>门控（D1 定案，2026-09-22 用户）</b>：审计条目<b>不受「SQL 日志捕获」开关约束</b>——走
+     * {@link cn.song.mybatisplus.visualizer.log.SqlLogEntryBuffer#addAuditEntry}（跳过 {@code paused} 门），
+     * 即开关关着（含用户显式停止后的 {@code paused=true}）时照样落列表；MCP 工具的可用性只由设置页
+     * 「启用 SQL Visualizer MCP 工具」＋工具级禁用清单决定（{@code McpToolGate}）。
+     * 其余门与普通条目一致：去重窗口内同 SQL 折叠、过滤关键字命中的丢弃（两者是列表展示偏好，不是开关）。</p>
      */
     public static void recordMcpExecution(Project project, String selectSql, String dataSourceName,
                                           long elapsedMs, String errorText) {
         try {
-            project.getService(SqlLogManager.class).getEntries().addEntry(
-                mcpHistoryEntry(selectSql, dataSourceName, elapsedMs, errorText)
-            );
+            // T-ST-02b2：读路径经 sqlLogManagerIfCreated（永不发起创建；审计是旁路，取不到即跳过）
+            SqlLogManager manager = SqlLogManagerLookupKt.sqlLogManagerIfCreated(project);
+            if (manager != null) {
+                manager.getEntries().addAuditEntry(
+                    mcpHistoryEntry(selectSql, dataSourceName, elapsedMs, errorText)
+                );
+            }
         } catch (Throwable e) {
             LOG.warn("T-McpAuditTrail: MCP 执行落历史失败（工具结果不受影响）", e);
         }

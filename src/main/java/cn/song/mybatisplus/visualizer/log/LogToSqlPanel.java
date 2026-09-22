@@ -393,9 +393,17 @@ public class LogToSqlPanel extends JPanel implements Disposable {
             return new ConversionOutput(null, 0, 0);
         }
         boolean multi = entries.size() > 1;
+        // T-PerfSweep6 T-PS6-08（性能报告发现 16）：未还原计数并入既有单遍遍历（master 侧为并入既有单遍 mapIndexed）。
+        // 此前是第二次 `entries.count { countPlaceholders(it.restoredSql) > 0 }`——同一批条目再遍历
+        // 一遍列表、再进一遍 lambda（字符串扫描次数不变，省的是第二次列表遍历与闭包开销）。
+        // T-HibDualCapture：string-aware 计数，字符串/注释里的 `?` 不再误计。
+        int unresolved = 0;
         StringBuilder out = new StringBuilder();
         for (int index = 0; index < entries.size(); index++) {
             LogSqlEntry entry = entries.get(index);
+            if (LogEntryPreviewRecognizerKt.countPlaceholders(entry.restoredSql()) > 0) {
+                unresolved++;
+            }
             String base = withTerminator(entry.restoredSql());
             String body = formatToggled ? SqlFormatter.INSTANCE.format(base) : base;
             String piece;
@@ -413,9 +421,7 @@ public class LogToSqlPanel extends JPanel implements Disposable {
             }
             out.append(piece);
         }
-        // T-HibDualCapture：string-aware 计数，字符串/注释里的 `?` 不再误计
-        long unresolved = entries.stream().filter(e -> LogEntryPreviewRecognizerKt.countPlaceholders(e.restoredSql()) > 0).count();
-        return new ConversionOutput(out.toString(), entries.size(), (int) unresolved);
+        return new ConversionOutput(out.toString(), entries.size(), unresolved);
     }
 
     /** 应用转换结果（EDT）：写结果区 + 状态行 + 诚实降级横幅。 */

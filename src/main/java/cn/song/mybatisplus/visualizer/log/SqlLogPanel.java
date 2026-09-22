@@ -65,6 +65,8 @@ import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.GridBagLayout;
 import java.awt.Point;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
@@ -1051,6 +1053,37 @@ public class SqlLogPanel extends JPanel implements Disposable {
         }
     }
 
+    // ---------- T-AgentDiagWrap T-04：空态文案的「文本 → 显示」 ----------
+
+    /**
+     * 最近一次写入空态的纯文本（{@code \n} 分隔语义行）。宽度变化时按新宽度重排同一份文本，
+     * 所以必须留住它——否则 resize 只能重排「上一次的视觉行」，再窄一档就还原不了。
+     */
+    private String lastEmptyText = null;
+
+    /** 写入空态文案（纯文本入口，渲染层在此做折行）。 */
+    private void applyEmptyText(String plain) {
+        lastEmptyText = plain;
+        renderEmptyText();
+    }
+
+    /** 按当前列表可用宽度重排并逐视觉行写入（EDT）。 */
+    private void renderEmptyText() {
+        String plain = lastEmptyText;
+        if (plain == null) {
+            return;
+        }
+        SqlLogPanelKt.applyEmptyTextLines(list.getEmptyText(), plain, emptyTextWidthPx(),
+                s -> list.getFontMetrics(list.getFont()).stringWidth(s));
+    }
+
+    /** 空态文案可用宽度：列表宽度扣掉自身内边距与左右余量；尚未布局（首帧 / 隐藏卡）时给兜底值。 */
+    private int emptyTextWidthPx() {
+        java.awt.Insets insets = list.getInsets();
+        int w = list.getWidth() - insets.left - insets.right - CaptureDiagnostics.EMPTY_TEXT_EDGE_PADDING_PX * 2;
+        return w <= 0 ? CaptureDiagnostics.EMPTY_TEXT_FALLBACK_WIDTH_PX : w;
+    }
+
     // ---------- T-CaptureTruth T-CT-03：零产出诊断 ----------
 
     /**
@@ -1081,7 +1114,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
         } else {
             text = null;
         }
-        list.getEmptyText().setText(text != null ? text : MpSqlVisualizerBundle.message("log.panel.empty"));
+        applyEmptyText(text != null ? text : MpSqlVisualizerBundle.message("log.panel.empty"));
         if (active) {
             if (diagnosticsTimer == null) {
                 diagnosticsTimer = new javax.swing.Timer(DIAGNOSTICS_TICK_MS, e -> syncDiagnostics());
@@ -1099,7 +1132,15 @@ public class SqlLogPanel extends JPanel implements Disposable {
     // ---------- 条目列表 ----------
 
     private JBScrollPane buildListPane() {
-        list.getEmptyText().setText(MpSqlVisualizerBundle.message("log.panel.empty"));
+        applyEmptyText(MpSqlVisualizerBundle.message("log.panel.empty"));
+        // T-AgentDiagWrap T-04：列表宽度变化即重排空态文案——否则用户拉窄/拉宽工具窗后，
+        // 文案还按旧宽度折行（窄窗下会重新长出被裁掉的尾巴，等于修复只在首帧生效）。
+        list.addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent e) {
+                renderEmptyText();
+            }
+        });
         LogEntryListCellRenderer renderer = new LogEntryListCellRenderer();
         entryCellRenderer = renderer;
         list.setCellRenderer(renderer);

@@ -31,7 +31,12 @@ public class SqlConsoleBridgeFilterProvider implements ConsoleFilterProvider {
 
     @Override
     public Filter[] getDefaultFilters(Project project) {
-        SqlLogManager manager = project.getService(SqlLogManager.class);
+        // T-ST-02b2：读路径经 sqlLogManagerIfCreated（永不发起创建 → 不会毒化服务容器）；
+        // 服务未创建＝本插件从未启用捕获＝无过滤需求，等价于「非捕捉态零处理」
+        SqlLogManager manager = SqlLogManagerLookupKt.sqlLogManagerIfCreated(project);
+        if (manager == null) {
+            return new Filter[0];
+        }
         return new Filter[]{new EpLineFilter(project, manager)};
     }
 

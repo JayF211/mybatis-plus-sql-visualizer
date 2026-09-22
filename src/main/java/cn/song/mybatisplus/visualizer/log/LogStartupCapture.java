@@ -39,7 +39,11 @@ public class LogStartupCapture implements ProjectActivity {
         if (!shouldStartCapture(state.getLogAutoCaptureSuppressed(), state.getLogAutoCaptureOnStart(), true)) {
             return;
         }
-        SqlLogManager manager = project.getService(SqlLogManager.class);
+        // T-ST-02b2：取服务前先判 isDisposed（runCatching 挡不住服务容器永久中毒，见 sqlLogManagerOrNull KDoc）
+        SqlLogManager manager = SqlLogManagerLookupKt.sqlLogManagerOrNull(project);
+        if (manager == null) {
+            return;
+        }
         if (manager.isProcessListenerActive()) {
             // 20260907-2045 第四轮：进程级监听已接管——被动模式，项目打开不预 armed，
             // Run 项目时 onProjectProcessStarted 驱动捕捉（含 suppressed 清除，恢复链自洽）

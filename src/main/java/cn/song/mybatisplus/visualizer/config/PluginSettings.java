@@ -71,7 +71,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
      * 从 JSON 字符串导入并覆盖当前全局配置（O-5：设置导入导出）；委托 {@link SettingsIO#importFromJson}。
      *
      * 以当前状态为底合并（T-Fix-SettingsScope）：文件只承载 {@link SettingsIO#exportToJson} 的
-     * 21 个可覆盖项，State 其余 56 个字段（参数历史 / 增强捕获授权记忆 / 反馈身份 /
+     * 23 个可覆盖项，State 其余 58 个字段（参数历史 / 增强捕获授权记忆 / 反馈身份 /
      * 日志自动保存目录 / 全局项等）不在文件里，必须保留现值而非回落出厂默认——
      * 全局项（language 等）由此自然保留，无需再单独抄回。
      *
@@ -167,6 +167,20 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private String ignoredFields = "";
         private String removeTablePrefix = "";
         private String removeTableSuffix = "";
+
+        /**
+         * 列名按数据源校正（O-58，<b>默认开</b>）：实体字段名与库真实列名不一致时（{@code orderID} →
+         * {@code order_i_d} 而库里是 {@code order_id}），用数据源的真实列集合纠正预览 SQL 里的列名。
+         *
+         * <p>只在归一化（小写 + 去 {@code _}/{@code -}）后能<b>唯一</b>确定是哪一列时改写，命中 0 列或 ≥2 列保持原样
+         * （语义无关的改名不猜）。数据源不可用（社区版 / 未配置 / 未连接）、表看不见、查不了时
+         * 行为与关闭本项<b>逐字段一致</b>。
+         *
+         * <p>默认开的依据：只在能唯一确定真值时改变结果，且改变方向是纠错；代价是「预览产物会随
+         * 数据源可用性变化」，故校正发生时预览侧会给出一次可发现的信号。
+         */
+        private boolean columnCalibrationEnabled = true;
+
         private boolean autoCheckUpdate = false;
         private String ignoredUpdateVersions = "";
         private String reverseWrapperFormat = REVERSE_AUTO;
@@ -419,6 +433,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public String getRemoveTableSuffix() { return removeTableSuffix; }
         public void setRemoveTableSuffix(String removeTableSuffix) { this.removeTableSuffix = removeTableSuffix; }
 
+        public boolean getColumnCalibrationEnabled() { return columnCalibrationEnabled; }
+        public void setColumnCalibrationEnabled(boolean columnCalibrationEnabled) { this.columnCalibrationEnabled = columnCalibrationEnabled; }
+
         public boolean getAutoCheckUpdate() { return autoCheckUpdate; }
         public void setAutoCheckUpdate(boolean autoCheckUpdate) { this.autoCheckUpdate = autoCheckUpdate; }
 
@@ -610,6 +627,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.ignoredFields = ignoredFields;
             c.removeTablePrefix = removeTablePrefix;
             c.removeTableSuffix = removeTableSuffix;
+            c.columnCalibrationEnabled = columnCalibrationEnabled;
             c.autoCheckUpdate = autoCheckUpdate;
             c.ignoredUpdateVersions = ignoredUpdateVersions;
             c.reverseWrapperFormat = reverseWrapperFormat;
@@ -725,6 +743,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && Objects.equals(ignoredFields, that.ignoredFields)
                     && Objects.equals(removeTablePrefix, that.removeTablePrefix)
                     && Objects.equals(removeTableSuffix, that.removeTableSuffix)
+                    && columnCalibrationEnabled == that.columnCalibrationEnabled
                     && Objects.equals(ignoredUpdateVersions, that.ignoredUpdateVersions)
                     && Objects.equals(reverseWrapperFormat, that.reverseWrapperFormat)
                     && Objects.equals(reverseManualEntitySelection, that.reverseManualEntitySelection)
@@ -760,6 +779,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     showGutterIcon, editorShowWhitespaces, language, injectLogicDelete,
                     logicDeleteValue, injectTenantLine, tenantColumnName, tenantColumnDefault, injectTenantOnInsert,
                     tablePrefix, tableSuffix, tableNameInference, ignoredFields, removeTablePrefix, removeTableSuffix,
+                    columnCalibrationEnabled,
                     autoCheckUpdate, ignoredUpdateVersions, reverseWrapperFormat, reverseManualEntitySelection,
                     logSqlPrefix, logParamPrefix, logMixedPrefix, logAutoCaptureOnStart, logAutoCaptureSuppressed,
                     logStopOnToolWindowClose, logAutoOpenOnCapture, logTimestampEnabled, logTimestampFormat, logTimestampSource,

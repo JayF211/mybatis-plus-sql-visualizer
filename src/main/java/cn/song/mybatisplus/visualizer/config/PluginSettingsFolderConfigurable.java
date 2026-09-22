@@ -632,6 +632,7 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         fields.add(new SearchableField(msg("settings.removeTableSuffix"), msg("settings.removeTableSuffix.tip"), "settings.section.tableMapping", t));
         fields.add(new SearchableField(msg("settings.ignoredFields"), msg("settings.ignoredFields.tip"), "settings.section.tableMapping", t));
         fields.add(new SearchableField(msg("settings.tableNameInference"), msg("settings.tableNameInference.tip"), "settings.section.tableMapping", t));
+        fields.add(new SearchableField(msg("settings.columnCalibration"), msg("settings.columnCalibration.tip"), "settings.section.tableMapping", t));
 
         // SQL 日志
         SubPageRef l = PAGE_SQL_LOG.ref;
@@ -681,7 +682,8 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         fields.add(new SearchableField(msg("settings.update.versionInfo"), "", "settings.section.about", a));
         fields.add(new SearchableField(msg("settings.buildNumber"), msg("settings.buildNumber.tip"), "settings.section.about", a));
 
-        // T-ProjectSettingsScope P3：项目级设置页 10 项（总开关 + 9 项可覆盖字段）。
+        // T-ProjectSettingsScope P3：项目级设置页 11 项（总开关 + 10 项可覆盖字段；O-58 起新增
+        // 列名数据源校正，索引条目与页面控件同批扩一项）。
         // 前置对照实验（ProjectPluginSettingsConfigurableTest 内探针）：项目上下文下该页在设置树里
         // （ConfigurableVisitor.findByType 走 Configurable.PROJECT_CONFIGURABLE，project=null 时为 null），
         // 故本页条目可跳转，不是 T-SettingsTruth P3 清理过的「幽灵搜索项」形态。
@@ -698,6 +700,7 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         fields.add(new SearchableField(msg("settings.tableSuffix"), msg("settings.tableSuffix.tip"), "configurable.settings.project.displayName", pj));
         fields.add(new SearchableField(msg("settings.tableNameInference"), msg("settings.tableNameInference.tip"), "configurable.settings.project.displayName", pj));
         fields.add(new SearchableField(msg("settings.ignoredFields"), msg("settings.ignoredFields.tip"), "configurable.settings.project.displayName", pj));
+        fields.add(new SearchableField(msg("settings.columnCalibration"), msg("settings.columnCalibration.tip"), "configurable.settings.project.displayName", pj));
 
         return fields;
     }

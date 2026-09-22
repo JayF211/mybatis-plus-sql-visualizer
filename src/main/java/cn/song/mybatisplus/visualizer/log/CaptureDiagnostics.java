@@ -71,10 +71,85 @@ public record CaptureDiagnostics(
         }
         List<String> parts = new ArrayList<>(List.of(head, enhanced, console));
         parts.addAll(dropped);
-        String channels = String.join("｜", parts);
+        // T-AgentDiagWrap T-04：语义行按「读的人下一步要干什么」切——
+        // 第一行「在捕捉吗 + 增强通道通不通」，第二行「控制台通道通不通 + 行被谁吃了」，
+        // 第三行「所以下一步该做什么」。三者混成一行时，被面板右边界裁掉的总是第三行（可执行的那句）。
+        String channels = String.join(SEP, head, enhanced);
+        List<String> consoleParts = new ArrayList<>(dropped.size() + 1);
+        consoleParts.add(console);
+        consoleParts.addAll(dropped);
+        String consoleLine = String.join(SEP, consoleParts);
         String hintKey = d.waitingForConsole
             ? "log.diag.hint.waiting"
             : (d.linesSeen <= 0L ? "log.diag.hint.noOutput" : "log.diag.hint.noSql");
-        return channels + "\n" + MpSqlVisualizerBundle.message(hintKey);
+        return channels + "\n" + consoleLine + "\n" + MpSqlVisualizerBundle.message(hintKey);
+    }
+
+    /** 通道片段分隔符（同一语义行内的并列项）。 */
+    private static final String SEP = "｜";
+
+    // ---------- T-AgentDiagWrap T-04：空态文案「文本 → 显示」 ----------
+
+    /** 折行宽度下限：窗口尚未布局（首帧 / 隐藏卡）时算出的可用宽度可能是 0 或负值，clamp 到这里。 */
+    public static final int EMPTY_TEXT_MIN_WIDTH_PX = 200;
+
+    /** 列表尚未布局时的兜底宽度（不 clamp 到下限，而是给一个像样的初始排版宽度）。 */
+    public static final int EMPTY_TEXT_FALLBACK_WIDTH_PX = 400;
+
+    /** 折行时左右各留的余量：空态文案居中，贴边会让人以为还有下文。 */
+    public static final int EMPTY_TEXT_EDGE_PADDING_PX = 12;
+
+    /**
+     * 空态文案折行（纯函数，零平台依赖）：把「语义行（{@code \n} 分隔）」按像素宽度软折成「视觉行」列表。
+     *
+     * <p>为什么折行必须在写入前自己算：面板空态用的是 {@code JBList} 的 {@code StatusText}（内部是
+     * {@code SimpleColoredComponent}），它<b>既不解析 HTML、也不把 {@code \n} 当换行</b>——
+     * {@code \n} 被当普通字符画成零宽，两段文字被无声拼接成一行，超宽只裁不折
+     * （本次现场读数里被裁掉的恰是「控制台有输出但未见 MyBatis SQL 日志……请确认 mapper 包日志级别为 debug」
+     * 这句唯一可执行的提示）。平台侧唯一的多行手段是 {@code StatusText.appendLine}（每行一个 Fragment，
+     * {@code paintColumnInBounds} 逐 Fragment 单独绘制），但它同样不折行——所以折行只能自己算，
+     * 再把视觉行逐条 {@code appendLine}。
+     *
+     * @param widthPx 可用像素宽度；小于 {@link #EMPTY_TEXT_MIN_WIDTH_PX} 时按该下限排版（防 0 宽死循环/整段压平）
+     * @param measure 单串像素宽度测量（渲染层传 {@code FontMetrics::stringWidth}；测试传可预测桩，保持纯函数）
+     */
+    public static List<String> wrapEmptyTextLines(String text, int widthPx,
+            kotlin.jvm.functions.Function1<String, Integer> measure) {
+        int width = widthPx < EMPTY_TEXT_MIN_WIDTH_PX ? EMPTY_TEXT_MIN_WIDTH_PX : widthPx;
+        List<String> out = new ArrayList<>();
+        for (String line : text.split("\n", -1)) {
+            out.addAll(wrapSingleLine(line, width, measure));
+        }
+        return out;
+    }
+
+    /** 单条语义行的贪心折行：优先在空白处断（英文 bundle），无空白则按字符断（中文）。 */
+    private static List<String> wrapSingleLine(String line, int widthPx,
+            kotlin.jvm.functions.Function1<String, Integer> measure) {
+        if (line.isEmpty()) return List.of(line);
+        List<String> out = new ArrayList<>();
+        int start = 0;
+        while (start < line.length()) {
+            int width = 0;
+            int i = start;
+            int lastSpace = -1;
+            while (i < line.length()) {
+                int cw = measure.invoke(String.valueOf(line.charAt(i)));
+                // i > start：首个字符即便自身超宽也必须吃掉，否则死循环
+                if (width + cw > widthPx && i > start) break;
+                if (line.charAt(i) == ' ') lastSpace = i;
+                width += cw;
+                i++;
+            }
+            if (i >= line.length()) {
+                out.add(line.substring(start).stripTrailing());
+                break;
+            }
+            int cut = lastSpace > start ? lastSpace : i;
+            out.add(line.substring(start, cut).stripTrailing());
+            start = cut;
+            while (start < line.length() && line.charAt(start) == ' ') start++;
+        }
+        return out.isEmpty() ? List.of(line) : out;
     }
 }

@@ -14,6 +14,7 @@ import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.components.Service;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.util.Disposer;
 import com.intellij.util.messages.Topic;
 import com.sun.tools.attach.AgentInitializationException;
 import com.sun.tools.attach.AttachNotSupportedException;
@@ -77,10 +78,34 @@ public final class AgentManager implements Disposable {
     // ---------- T-M56Phase2-Premain 常量 ----------
 
     /**
-     * premain 通道等待 agent 回连的时长：agent 侧 {@code SenderLoop} 连接失败按 1s→5s 退避<b>无限重连</b>
+     * premain 通道等待 agent <b>首次</b>回连的时长：agent 侧 {@code SenderLoop} 连接失败按 1s→5s 退避<b>无限重连</b>
      * （SenderLoop.java:87），故本窗口只决定「IDE 等多久后放弃这个端口」，不是连接窗口。
+     *
+     * <p>T-AgentReconnect T-03 语义拆分：此前本常量同时充当「通道总寿命」（accept 一次即关通道），
+     * 于是会话一旦被摘除就再也回不来；现在它只管<b>首次</b>回连，认领后通道转入等重连阶段
+     * （见 {@link #PREMAIN_IDLE_TICK_MS} / {@link #PREMAIN_CHANNEL_TTL_MS} / {@link #onRunEnded}）。
      */
     public static final long PREMAIN_ACCEPT_TIMEOUT_MS = 120_000L;
+
+    /**
+     * premain 通道<b>认领之后</b>的空转唤醒间隔（T-AgentReconnect T-03）：通道已等到首次回连，
+     * accept 循环转为「等重连」，用短超时周期性复核运行结束信号与兜底 TTL，
+     * 而不是无限阻塞在 accept 上（关闭 socket 虽也能唤醒 accept，但 TTL 需要自己的复核拍）。
+     */
+    private static final long PREMAIN_IDLE_TICK_MS = 30_000L;
+
+    /**
+     * premain 通道兜底 TTL（T-AgentReconnect T-03）：通道绑定到<b>本次运行</b>，正常由运行结束信号
+     * （{@link #onRunEnded}）关闭；本 TTL 只在信号漏掉的极端情况（钩子未触发且 pid 未知）兜底回收，
+     * 防监听 socket 与 accept 线程长挂、防通道规模随运行次数增长撞 {@link #MAX_PREMAIN_CHANNELS}。
+     */
+    public static final long PREMAIN_CHANNEL_TTL_MS = 12L * 60 * 60 * 1000;
+
+    /**
+     * premain 通道回连次数上限（T-AgentReconnect T-03）：agent 断线无限重连，异常抖动
+     * （对端反复建连即断）会把 accept 循环变成热循环，故设上限；超限关通道并留 WARN。
+     */
+    public static final int MAX_PREMAIN_RECONNECTS = 32;
 
     /**
      * premain 通道在场时跳过 attach 的窗口（T-M56P2-04）：远小于 {@link #PREMAIN_ACCEPT_TIMEOUT_MS}——
@@ -94,6 +119,22 @@ public final class AgentManager implements Disposable {
 
     /** HELLO 首帧读取超时（agent 连上后立即发 HELLO，秒级足够；超时按「pid 未知」处理不丢会话）。 */
     private static final int HELLO_READ_TIMEOUT_MS = 5_000;
+
+    /**
+     * T-AgentConfigChannel T-02：CONFIG 回执等待窗——{@code AgentSession.sendConfig} 后本窗口内未收到
+     * {@link AgentProtocol#CMD_CONFIG_ACK} 即 WARN「CONFIG 未获确认——应用侧可能未生效」。
+     *
+     * <p>取值 5s 的理由：回执是「同一连接上、应用侧应用开关后立刻回一帧」，正常在毫秒级；
+     * 窗口只需容一次读循环轮转 + 调度抖动。窗口过长会把「控制通道已失效」这条最要紧的告警
+     * 推后到用户已经看到不该出现的条目之后。<b>不作为掉线判据</b>（掉线由心跳窗口判定）。
+     */
+    public static final long CONFIG_ACK_TIMEOUT_MS = 5_000L;
+
+    /**
+     * T-AgentConfigChannel T-03：入队闸门告警步长——首次丢弃即 WARN，其后每本步长条记一次。
+     * 关闭状态下投递的事件会持续成批到达（应用侧在跑、控制通道失效），逐条 WARN 会刷满 idea.log。
+     */
+    public static final long INTAKE_DROP_WARN_STEP = 50L;
 
     /** T-SettingsTruth P2：增强捕获状态变更 Topic（app 级；仿 PluginSettings.SETTINGS_CHANGE_TOPIC）。 */
     public static final Topic<AgentStatusListener> AGENT_STATUS_TOPIC = Topic.create(
@@ -163,6 +204,18 @@ public final class AgentManager implements Disposable {
     /** T-ReachAudit T-RA-01：最近一次摘除是否因心跳过期（区分「连接断开」与「应用侧无响应」两类回落）。 */
     private final AtomicBoolean heartbeatDropDetected = new AtomicBoolean(false);
 
+    /**
+     * T-AgentHeartbeat T-05：最近一次摘除是否属「连接刚建立、首条心跳尚未到达」
+     * （过期会话里存在从未收到过 HELLO 之外存活帧者）。
+     *
+     * <p>与 {@link #heartbeatDropDetected} <b>可同时置位</b>（不是互斥——独立复核订正）：多会话同轮过期、
+     * 其中一条曾收到存活帧、另一条没有时，两个标志都为真。叙事上以「停摆」优先（{@code agentStatusText}
+     * 先判 {@link #heartbeatDropDetected}），故结果仍正确；但<b>不要</b>据本条去排除停摆。语义上本条只说明
+     * 连接还在早期，不构成「应用侧无响应」的证据——现场正是这一类被误叙成
+     * 「应用侧心跳中断（进程可能已卡死）」，而应用 JVM 又活了 7 分半。
+     */
+    private final AtomicBoolean firstHeartbeatPending = new AtomicBoolean(false);
+
     /** 「关闭 → 再开启增强捕获」边沿检测（SETTINGS_CHANGE 监听重置拒绝冷却用）。 */
     private boolean lastKnownEnabled = PluginSettings.getInstance().getState().getEnhancedCaptureEnabled();
 
@@ -194,6 +247,14 @@ public final class AgentManager implements Disposable {
      * 「预览一次即驻留」一条守护线程 + 5s 空转，即便增强捕获从未使用。
      */
     private volatile boolean monitorStarted = false;
+
+    /**
+     * T-PerfSweep6 T-PS6-08：当前排定的 5s 巡检任务句柄（懒启时写入，{@link #stopMonitor} 取消并置空）。
+     *
+     * <p>必须持有它才能真取消——{@code ScheduledFuture.cancel} 是唯一能停掉已排定周期任务的途径，
+     * 只翻 {@link #monitorStarted} 标志会留下一个仍在跑的旧任务（见 {@link #stopMonitor} 注释）。
+     */
+    private volatile java.util.concurrent.ScheduledFuture<?> monitorTask = null;
 
     private final Object monitorLock = new Object();
 
@@ -244,10 +305,54 @@ public final class AgentManager implements Disposable {
         synchronized (monitorLock) {
             if (!monitorStarted) {
                 monitorStarted = true;
-                monitor.scheduleWithFixedDelay(this::sweepOffline, 5, 5, TimeUnit.SECONDS);
+                monitorTask = monitor.scheduleWithFixedDelay(this::sweepOffline, 5, 5, TimeUnit.SECONDS);
             }
         }
         sweepOffline(); // 兜底清扫（幂等；无死会话时零动作）
+        fallbackSweepCount++;
+    }
+
+    /**
+     * T-PerfSweep6 T-PS6-06③ 测试缝：兜底清扫的执行次数（{@link #ensureMonitorStarted} 末尾那次<b>同步</b>
+     * {@link #sweepOffline} 每执行一次 +1）。
+     *
+     * <p>守护测试（{@code AgentManagerPremainTest.test半死会话语境下同pid重连放行}）据此<b>确定性地</b>等待
+     * 「首条会话的处理线程已越过兜底清扫」。不这样等会漏红：处理线程在 {@code sessions.add} 之后才调
+     * {@link #ensureMonitorStarted}，若测试在它尚未清扫时就推进假时钟，那条刚建好的「半死会话」会被这次
+     * 兜底清扫直接摘除 → 第二次连接的去重分支根本不发生 → 用例在<b>旧判据（{@code alive}）下也恒绿</b>。
+     * 独立复核实测：把判据退回 {@code alive} 后连跑 3 次得 fail / fail / <b>pass</b>（绿色那跑的日志里同 pid
+     * 出现两次「premain 会话建立」且没有「丢弃重复连接」行）。
+     *
+     * <p>{@code volatile}：自增发生在连接处理线程，读取发生在测试线程（跨线程可见性）。
+     */
+    private volatile int fallbackSweepCount = 0;
+
+    /** {@link #fallbackSweepCount} 的读取入口（Kotlin 属性访问器等价；写入仅限 {@link #ensureMonitorStarted}）。 */
+    public int getFallbackSweepCount() {
+        return fallbackSweepCount;
+    }
+
+    /**
+     * T-PerfSweep6 T-PS6-08（性能报告发现 8）：巡检复位——取消 5s 定时任务并清懒启标志。
+     *
+     * <p><b>为什么必须持 {@link #monitorTask} 而不是只翻标志</b>：{@code scheduleWithFixedDelay} 的返回值此前被丢弃，
+     * 只把 {@code monitorStarted} 置回 false 并不能取消已排定的任务——下一次 {@link #ensureMonitorStarted} 会在
+     * 同一个单线程执行器上再排一个，5s 巡检变双份（且每轮开关一次多一份）。故必须存下
+     * {@code ScheduledFuture} 并 {@link java.util.concurrent.ScheduledFuture#cancel}。
+     *
+     * <p><b>执行器本体不关</b>：{@code cancel(false)} 只取消这一个周期性任务，{@code mps-agent-monitor} 线程随即回到
+     * 空闲等待（守护线程、零 CPU），下次开启照常复用；{@code monitor.shutdownNow()} 只在项目 dispose
+     * （服务生命周期终点）调用——提前关会让后续 enable 时 {@link #ensureMonitorStarted} 抛
+     * {@code RejectedExecutionException}，等于把「开关关一次」变成「本会话巡检永久失效」。
+     */
+    private void stopMonitor() {
+        synchronized (monitorLock) {
+            if (monitorTask != null) {
+                monitorTask.cancel(false);
+            }
+            monitorTask = null;
+            monitorStarted = false;
+        }
     }
 
     /** T-PS5-04 测试缝：巡检是否已懒启（生产链路无调用点）。 */
@@ -526,7 +631,8 @@ public final class AgentManager implements Disposable {
         }
         sessions.add(session);
         // B1：新 agent 默认 disabled=false（静态字段初始值），须按当前监听状态立即校正——
-        // 否则「监听关闭状态启动项目」场景新 agent 又开始白采集
+        // 否则「监听关闭状态启动项目」场景新 agent 又开始白采集。
+        // T-AgentConfigChannel T-06：本行只保证「已下发」，生效以 CMD_CONFIG_ACK 为准（见 pushCaptureActive KDoc）
         boolean active = isListenActive();
         try {
             session.sendConfig(!active);
@@ -541,8 +647,27 @@ public final class AgentManager implements Disposable {
         everAttached.set(true);
         // T-ReachAudit T-RA-01：新会话挂上即清「心跳过期」标记——回落文案只描述最近一次摘除原因
         heartbeatDropDetected.set(false);
+        // T-AgentHeartbeat T-05：同一口径清「首条心跳未到」标记
+        firstHeartbeatPending.set(false);
         publishStatusChanged();
         return true;
+    }
+
+    /**
+     * T-AgentConfigChannel T-02：CONFIG 回执超时巡检的排定入口（构造会话时注入）。
+     *
+     * <p>复用既有 {@link #monitor}（那条 5s 在线态巡检所在线程池），<b>不新开常驻线程</b>——回执窗口是
+     * 一次性延时任务，monitor 本就随会话懒启（{@link #ensureMonitorStarted}）。项目销毁后 monitor 已
+     * shutdownNow，排定抛 RejectedExecutionException：会话随之关闭、无回执可等，按既有
+     * 「非致命只记一行」口径处理，不升级成错误。
+     */
+    private void scheduleConfigAckCheck(long delayMs, Runnable task) {
+        try {
+            monitor.schedule(task, delayMs, TimeUnit.MILLISECONDS);
+        } catch (Throwable t) {
+            LOG.info("CONFIG 回执超时巡检未排定（monitor 已停：" + t.getClass().getSimpleName()
+                + "）——会话即将随项目销毁");
+        }
     }
 
     /**
@@ -566,7 +691,11 @@ public final class AgentManager implements Disposable {
             this::updateOnline,
             clockMs,
             // T-PS5-04：URL 捕获即回写推断持有者（会话建立时 URL 尚不可知，事件到达才拿到）
-            this::syncInferenceUrl);
+            this::syncInferenceUrl,
+            // T-AgentConfigChannel T-02：CONFIG 回执超时巡检排定（复用 monitor）
+            this::scheduleConfigAckCheck,
+            // 追加 P-5：回执到达 → 重算桥闸门（在线态不变时也要刷，故不走「仅变化才广播」的路径）
+            this::onCaptureConfirmationChanged);
     }
 
     /**
@@ -683,7 +812,10 @@ public final class AgentManager implements Disposable {
      * 差别只在<b>端口生命周期前移到进程启动之前</b>——agent 侧 {@code EventBus.start(port)} 起
      * {@code SenderLoop} 后按 1s→5s 退避无限重连，端口先开不丢连接。
      *
-     * 返回 null 的两条路径（绑定失败 / 挂起通道超上限）都只记日志：调用方回落 attach/桥。
+     * <p>T-AgentReconnect T-03：端口生命周期进一步延长为<b>绑定到本次运行</b>——accept 线程循环接受
+     * 回连（会话被摘除后 agent 可重连同一端口），运行结束由 {@link #onRunEnded} 关闭。
+     *
+     * <p>返回 null 的两条路径（绑定失败 / 挂起通道超上限）都只记日志：调用方回落 attach/桥。
      */
     public Integer openPremainChannel() {
         prunePremainChannels();
@@ -701,11 +833,26 @@ public final class AgentManager implements Disposable {
         }
         PremainChannel channel = new PremainChannel(server.getLocalPort(), server, clockMs.getAsLong());
         premainChannels.add(channel);
+        registerChannelDisposable(channel);
         Thread acceptThread = new Thread(() -> acceptPremain(channel), "mps-agent-premain-" + channel.port);
         acceptThread.setDaemon(true);
+        channel.acceptThread = acceptThread;
         acceptThread.start();
         LOG.info("openPremainChannel: 端口 " + channel.port + " 已前置协商（挂起 " + premainChannels.size() + " 个）");
         return channel.port;
+    }
+
+    /**
+     * T-AgentReconnect T-03 泄漏收口：通道（监听 socket + accept 线程引用）注册进<b>项目 disposable 树</b>，
+     * 项目 dispose 时由平台关闭（Disposer 树是既有踩坑：组件不注册会在 IDE 退出时被 ObjectTree 报
+     * "Memory leak detected"）。注册失败非致命——{@link #closePremainChannels}（运行结束/关开关/dispose）仍是收口路径。
+     */
+    private void registerChannelDisposable(PremainChannel channel) {
+        try {
+            Disposer.register(project, channel);
+        } catch (Throwable t) {
+            LOG.warn("premain 通道 " + channel.port + " 注册项目 disposable 树失败（非致命——仍由 closePremainChannels 收口）", t);
+        }
     }
 
     /** premain 通道是否在场（{@link #doAttachAsync} 跳过判据）：未认领且准备时刻在跳过窗内。 */
@@ -719,51 +866,131 @@ public final class AgentManager implements Disposable {
         return false;
     }
 
-    /** 清理过期/已认领通道（关 socket 幂等——accept 线程 finally 也会关一次）。 */
+    /**
+     * 清理已失效通道（T-AgentReconnect T-03 判据更新）：此前「已认领」也算 stale（旧语义 =
+     * accept 一次即摘除），现在认领只代表<b>开始服役</b>（等重连），不得 prune。现行判据三条：
+     * 已关闭 / {@link #isChannelExpired}（pid 消亡或超兜底 TTL）/ 首次回连未到且已过 {@link #PREMAIN_ACCEPT_TIMEOUT_MS}。
+     */
     private void prunePremainChannels() {
-        long now = clockMs.getAsLong();
-        premainChannels.removeIf(channel -> {
-            boolean stale = channel.claimed || now - channel.preparedAtMs > PREMAIN_ACCEPT_TIMEOUT_MS;
-            if (stale) {
-                try {
-                    channel.server.close();
-                } catch (Throwable ignored) {
-                    // 对齐 Kotlin runCatching：已关/关失败都按清理完成处理
-                }
+        java.util.List<PremainChannel> stale = new java.util.ArrayList<>();
+        for (PremainChannel channel : premainChannels) {
+            if (isStaleChannel(channel)) {
+                stale.add(channel);
             }
-            return stale;
-        });
+        }
+        for (PremainChannel channel : stale) {
+            closePremainChannel(channel);
+        }
     }
 
-    /** premain accept 线程体：等到回连（或超时）后交 {@link #onPremainConnected}，无论如何都摘除通道。 */
-    private void acceptPremain(PremainChannel channel) {
+    private boolean isStaleChannel(PremainChannel channel) {
+        return channel.closed
+            || isChannelExpired(channel)
+            || (!channel.claimed && clockMs.getAsLong() - channel.preparedAtMs > PREMAIN_ACCEPT_TIMEOUT_MS);
+    }
+
+    /**
+     * 通道是否该回收（T-AgentReconnect T-03）：目标进程已消亡（运行结束的旁证，pid 取自 agent 自报
+     * HELLO，即目标 JVM 自身 pid）或已超兜底 TTL。两条都是<b>不依赖运行结束钩子</b>的兜底——
+     * 钩子漏掉时通道规模也不会随运行次数增长（{@link #MAX_PREMAIN_CHANNELS} 不被撞到）。
+     */
+    private boolean isChannelExpired(PremainChannel channel) {
+        long pid = channel.pid;
+        if (pid > 0L && !isProcessAlive(pid)) {
+            LOG.info("premain 通道 " + channel.port + "：目标进程 pid=" + pid + " 已消亡——回收通道（本次运行已结束）");
+            return true;
+        }
+        long since = channel.claimedAtMs > 0L ? channel.claimedAtMs : channel.preparedAtMs;
+        if (clockMs.getAsLong() - since > PREMAIN_CHANNEL_TTL_MS) {
+            LOG.warn("premain 通道 " + channel.port + " 已达兜底 TTL " + PREMAIN_CHANNEL_TTL_MS + "ms（运行结束信号未到）——回收通道");
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 目标进程是否仍存活（T-AgentReconnect T-03 运行结束的旁证）。pid 未知或查询异常一律按存活处理
+     * （宁多留一拍通道，不误关正在服役的通道——误关会让该次运行永久失去重连路径）。
+     */
+    private boolean isProcessAlive(long pid) {
         try {
-            channel.server.setSoTimeout((int) PREMAIN_ACCEPT_TIMEOUT_MS);
-            Socket socket = channel.server.accept();
-            channel.claimed = true;
-            onPremainConnected(socket);
-        } catch (Throwable t) {
-            if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传（accept 线程：透传即线程终止，平台记录现场）
-            LOG.info("premain 通道 " + channel.port + " 未收到回连（" + t.getClass().getSimpleName() + ": "
-                + t.getMessage() + "）——该进程回落 attach/桥（零劣化）");
-        } finally {
-            try {
-                channel.server.close();
-            } catch (Throwable ignored) {
-                // 对齐 Kotlin runCatching：关闭失败不影响摘除
-            }
-            premainChannels.remove(channel);
+            return java.lang.ProcessHandle.of(pid).map(java.lang.ProcessHandle::isAlive).orElse(false);
+        } catch (Throwable ignored) {
+            // 对齐 Kotlin runCatching.getOrDefault(true)：查询异常按存活处理
+            return true;
         }
     }
 
     /**
-     * premain 回连处理（T-M56P2-04 幂等）：读 HELLO 取 pid → 建会话 → 写幂等表。
+     * premain accept 线程体（T-AgentReconnect T-03：由「accept 一次即关通道」改为<b>循环 accept</b>）。
      *
-     * 去重判据是「同 pid 是否有<b>活动会话</b>」而非查 {@link #attachedPids}：premain 是更强通道（启动期
+     * <p>会话被摘除（心跳窗口过期/连接断开）不再等于本次运行的终局——agent 侧 {@code SenderLoop} 无限重连
+     * 同一端口（SenderLoop.java:29-91），只要监听 socket 还在，下一次回连就能重新建会话。
+     * 循环只有三条退出路径：首次回连迟迟不到（{@link #PREMAIN_ACCEPT_TIMEOUT_MS}，该进程回落 attach/桥）、
+     * 运行结束（{@link #onRunEnded} / pid 消亡 / 兜底 TTL）、回连次数达 {@link #MAX_PREMAIN_RECONNECTS}（防热循环）。
+     *
+     * <p>退出时一律走 {@link #closePremainChannel}：关 socket + 从通道表摘除 + 释放 disposable 条目。
+     */
+    private void acceptPremain(PremainChannel channel) {
+        try {
+            channel.server.setSoTimeout((int) PREMAIN_ACCEPT_TIMEOUT_MS);
+            while (!channel.closed) {
+                Socket socket;
+                try {
+                    socket = channel.server.accept();
+                } catch (SocketTimeoutException e) {
+                    if (!channel.claimed) {
+                        LOG.info("premain 通道 " + channel.port + " 未在 " + PREMAIN_ACCEPT_TIMEOUT_MS
+                            + "ms 内收到首次回连——该进程回落 attach/桥（零劣化）");
+                        return;
+                    }
+                    // 已认领：本拍无重连到达，复核运行结束信号后继续等（不再无限阻塞在 accept 上）
+                    if (isChannelExpired(channel)) {
+                        return;
+                    }
+                    continue;
+                }
+                boolean firstConnect = !channel.claimed;
+                channel.claimed = true;
+                if (firstConnect) {
+                    channel.claimedAtMs = clockMs.getAsLong();
+                    // 首次回连到达 → 转入「等重连」阶段：短超时周期性复核（PREMAIN_IDLE_TICK_MS）
+                    channel.server.setSoTimeout((int) PREMAIN_IDLE_TICK_MS);
+                }
+                int round = ++channel.acceptCount;
+                long pid = onPremainConnected(socket);
+                if (pid > 0L) {
+                    channel.pid = pid;
+                }
+                if (round >= MAX_PREMAIN_RECONNECTS) {
+                    LOG.warn("premain 通道 " + channel.port + " 回连次数达上限 " + MAX_PREMAIN_RECONNECTS
+                        + "——关闭通道（防异常抖动热循环；该次运行后续回连需重新 Run 注入）");
+                    return;
+                }
+            }
+        } catch (Throwable t) {
+            if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传（accept 线程：透传即线程终止，平台记录现场）
+            if (!channel.closed) {
+                LOG.info("premain 通道 " + channel.port + " accept 循环退出（" + t.getClass().getSimpleName() + ": "
+                    + t.getMessage() + "）——该进程回落 attach/桥（零劣化）");
+            }
+        } finally {
+            closePremainChannel(channel);
+        }
+    }
+
+    /**
+     * premain 回连处理（T-M56P2-04 幂等）：读 HELLO 取 pid → 建会话 → 写幂等表。返回本次回连自报的
+     * pid（0=HELLO 未取到/连接被丢弃），供 accept 循环登记到通道上做进程存活判定。
+     *
+     * <p>去重判据是「同 pid 是否有<b>活动会话</b>」而非查 {@link #attachedPids}：premain 是更强通道（启动期
      * 就能织入，无 3s 静默等待），先到者优先，写表时覆盖——否则 attach 先占表会让 premain 连接
      * 被误丢，反而丢掉唯一一条可用连接。
+     *
+     * <p>T-AgentReconnect T-03：该判据对<b>重连</b>天然放行——旧会话已被 {@link #sweepOffline} 摘除（alive=false），
+     * 故重连不再被判据挡下，语义与「同 pid 已有活动会话时丢弃重复连接」并存不变。
      */
-    private void onPremainConnected(Socket socket) {
+    private long onPremainConnected(Socket socket) {
         try {
             if (!isEnhancedActive()) {
                 LOG.info("premain 回连到达但增强捕获已关闭/未确认——丢弃连接");
@@ -772,13 +999,19 @@ public final class AgentManager implements Disposable {
                 } catch (Throwable ignored) {
                     // 对齐 Kotlin runCatching
                 }
-                return;
+                return 0L;
             }
             long pid = readHelloPid(socket);
+            // T-PerfSweep6 T-PS6-06：去重判据由 `alive` 收紧为 isSessionHealthy（socket 未断**且**
+            // 心跳窗口内有过帧）。`alive` 只表示 socket 未断——半死会话（应用侧停摆、连接还在）会
+            // 把同 pid 的**真重连**挡下一次，而挡下的这一次恰恰是「应用重启/卡死恢复」场景里最需要的
+            // 那一次；半死会话随后仍会被 sweepOffline 摘除，等于白挡。
+            // 不会误放行「刚建会话的立即重复连接」：新会话 lastSeen 在建会话时初始化为当前时刻
+            //（见 AgentSession 构造），窗口内必判健康。
             boolean duplicate = false;
             if (pid > 0L) {
                 for (AgentSession session : sessions) {
-                    if (session.isAlive() && session.getPid() == pid) {
+                    if (isSessionHealthy(session) && session.getPid() == pid) {
                         duplicate = true;
                         break;
                     }
@@ -791,7 +1024,7 @@ public final class AgentManager implements Disposable {
                 } catch (Throwable ignored) {
                     // 对齐 Kotlin runCatching
                 }
-                return;
+                return pid;
             }
             // T-ReachAudit T-RA-01 合流补位：会话时间源须与管理器同源注入（createSession 同款）——
             // 缺省真实时钟时，假时钟驱动的心跳窗口判定两侧不同源（manager 算出的「已过期」被真实
@@ -801,12 +1034,17 @@ public final class AgentManager implements Disposable {
                 this::updateOnline,
                 clockMs,
                 // T-PS5-04：premain 会话同 attach 链——URL 捕获回写推断持有者
-                this::syncInferenceUrl);
+                this::syncInferenceUrl,
+                // T-AgentConfigChannel T-02：premain 会话同 attach 链——CONFIG 回执超时巡检排定
+                this::scheduleConfigAckCheck,
+                // 追加 P-5：premain 会话同 attach 链——回执驱动桥闸门
+                this::onCaptureConfirmationChanged);
             sessions.add(session);
             if (pid > 0L) {
                 attachedPids.put(pid, clockMs.getAsLong());
             }
             // B1 同款：新 agent 默认 disabled=false，须按当前监听状态立即校正
+            // （T-06：只保证「已下发」，生效以 CMD_CONFIG_ACK 为准）
             boolean active = isListenActive();
             try {
                 session.sendConfig(!active);
@@ -814,12 +1052,18 @@ public final class AgentManager implements Disposable {
                 LOG.warn("premain: 初始 CONFIG 下发失败（pid=" + pid + "）", t);
             }
             everAttached.set(true);
+            // T-AgentHeartbeat T-05（独立复核补位）：与 attachToPid 对称——新会话挂上即清两类回落标记。
+            // 此前只写 attachedPids 不清标记，premain 重连后状态行可能残留上一轮摘除的叙事；
+            // 当前无可见后果（agentStatusText 先判 livePids），但任何人重排分支就会露出来。
+            heartbeatDropDetected.set(false);
+            firstHeartbeatPending.set(false);
             updateOnline();
             // T-PS5-04：premain 会话建立同 attach 链——巡检懒启 + 推断 URL 回写
             ensureMonitorStarted();
             onSessionLifecycleChanged();
             publishStatusChanged();
             LOG.info("premain 会话建立：pid=" + pid + "（启动即捕获，attach 链已跳过）");
+            return pid;
         } catch (Throwable t) {
             if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
             LOG.warn("premain 回连处理失败——丢弃连接（回落桥）", t);
@@ -828,6 +1072,7 @@ public final class AgentManager implements Disposable {
             } catch (Throwable ignored) {
                 // 对齐 Kotlin runCatching
             }
+            return 0L;
         }
     }
 
@@ -959,7 +1204,15 @@ public final class AgentManager implements Disposable {
             LOG.info("增强捕获在线态切换: " + wasOnline + " -> " + online);
         }
         // 接管/回落切换：桥暂停挂载 ↔ 恢复（§4.3；桥链路本身零改动）
-        SqlCaptureGate.paused.set(online);
+        //
+        // 追加 P-5（计划 §五 P-5）：判据由「在线」收窄为「在线 **且** 应用侧已确认在采集」。
+        // 原判据把「agent socket 活着」当成「agent 是产出方」——修复应用侧解析（T-01）后出现新常态
+        // 「agent 在线但已停采」（停采开关关着，或应用侧看门狗收不到 CONFIG 而自停）：此时桥被封着、
+        // agent 又静默 = **两条通道同时零产出，而用户以为捕获是开的**（把「误采集」换成「零捕获」，
+        // 且零产出没有任何可见信号）。收窄后：确认在采集才让桥让位（不引入双通道重复产出——
+        // T-M56-02 闸门的本意保留），未确认/确认停采则桥照常解析兜底。
+        // 「捕获关」时桥本就不产条目（Filter 的 isCapturing 守卫不挂载），故本处不必再判 capturing。
+        SqlCaptureGate.paused.set(online && captureConfirmedActive());
         // T-AgentDialectLoop：回落/关闭时清空日志时间相关器，防跨运行陈旧匹配
         if (!online) {
             LogTimeCorrelator.clear();
@@ -967,8 +1220,44 @@ public final class AgentManager implements Disposable {
     }
 
     /**
+     * 追加 P-5（计划 §五 P-5）：应用侧采集<b>已确认在跑</b>——存在存活会话且其最近一次 CONFIG 回执为
+     * {@code disabled=false}（见 {@code AgentSession.getConfigAckDisabled}）。
+     *
+     * <p>派生自会话表（不另设布尔字段），故复位点天然齐全、无需逐处维护：会话被摘除/关闭 → 不再在表内；
+     * {@link #shutdownAll} / 项目 {@link #dispose} → 表清空；每次 CONFIG 下发 → 该会话确认态被清回「待确认」。
+     * 语义上「确认」是<b>值</b>（disabled true/false）而非单纯「收到过回执」：应用侧确认停采（disabled=true）
+     * 与从未确认（null）在闸门上一视同仁——都不封桥。
+     *
+     * <p><b>已知边界（T-AgentResiduals R4-③，事实登记，行为不变）——旧 agent 混合版本下桥永久放行</b>：
+     * 不含回执能力的旧版 agent 永远不回 {@code CMD_CONFIG_ACK} → {@code configAckDisabled} 恒 {@code null} →
+     * 本判据恒 {@code false} → {@code SqlCaptureGate.paused} 恒 {@code false} → 控制台桥<b>永久不封</b>。
+     * 于是「应用侧增强通道 + IDE 侧控制台桥」<b>两条通道同时产出</b>同一条 SQL。
+     * 该形态<b>不修</b>（改判据就得回到「按 socket 在线封桥」那条已证有害的老路，见
+     * {@code updateOnline} 的 P-5 论证），靠<b>列表去重窗口</b>折叠（{@code entries.dedupeWindowMs}，同指纹条目
+     * 在窗口内合并）——用户可见结果正确，代价是窗口内多一次解析。混合版本期间若发现重复条目，
+     * 先确认两侧 agent jar 版本是否一致，再看去重窗口设置。
+     */
+    public boolean captureConfirmedActive() {
+        for (AgentSession session : sessions) {
+            if (session.isAlive() && Boolean.FALSE.equals(session.getConfigAckDisabled())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 追加 P-5：CONFIG 回执驱动 / 待确认下发的桥闸门刷新入口。
+     * 生产链路由会话回执回调（{@code AgentSession} 构造时注入）与 {@link #pushCaptureActive} 调用；
+     * public 为同模块测试缝（测试直连会话不经 attach 链）。
+     */
+    public void onCaptureConfirmationChanged() {
+        updateOnline();
+    }
+
+    /**
      * T-SettingsTruth P2 / T-CaptureTruth T-CT-01：状态行文案（设置页增强捕获状态行展示）。
-     * 本函数只取数，文案由纯函数 {@link AgentManagerKt#agentStatusText} 产出（五态全分支可单测）。
+     * 本函数只取数，文案由纯函数 {@link AgentManagerKt#agentStatusText} 产出（全分支可单测）。
      * 只读内存集合（CopyOnWriteArrayList/ConcurrentHashMap），任意线程安全。
      */
     public String statusSummary() {
@@ -986,7 +1275,12 @@ public final class AgentManager implements Disposable {
             remainingRejectCooldownMs(),
             livePids,
             everAttached.get(),
-            heartbeatDropDetected.get()));
+            heartbeatDropDetected.get(),
+            // T-AgentHeartbeat T-05：另一类过期原因（连接早期，首条心跳未到）。
+            // 与 heartbeatExpired 可同时为真（多会话同轮过期），叙事以 heartbeatExpired 优先。
+            firstHeartbeatPending.get(),
+            // 秒数取当前在线窗口值（测试注入短窗时文案跟着变，不硬编码 30）
+            heartbeatWindowMs / 1000));
     }
 
     /** T-SettingsTruth P2：状态迁移点广播（attach 成功 / sweepOffline 摘除 / shutdownAll）。 */
@@ -1013,15 +1307,23 @@ public final class AgentManager implements Disposable {
             }
         }
         if (!dead.isEmpty()) {
-            // 仍 alive 却过期 = 心跳停摆（应用侧卡死/织入异常），与 socket 断开区分开供状态行叙述
-            boolean anyAlive = false;
+            // 仍 alive 却过期（socket 在、帧停）= 两类，T-AgentHeartbeat T-05 起分开记：
+            //  ①曾收到过存活帧（HEARTBEAT/EVENT）→ 应用侧曾活着且越过启动期，现在是真停摆；
+            //  ②从未收到过存活帧（只有 HELLO 或干脆没帧）→ 只是首条心跳还没到，属连接早期，不是停摆。
+            // 合并记成①就是现场那条「应用侧心跳中断（进程可能已卡死）」的错误叙事。
+            boolean heartbeatStopped = false;
+            boolean firstHeartbeatStillPending = false;
             for (AgentSession session : dead) {
                 if (session.isAlive()) {
-                    anyAlive = true;
-                    break;
+                    if (session.getLivenessFrameSeen()) {
+                        heartbeatStopped = true;
+                    } else {
+                        firstHeartbeatStillPending = true;
+                    }
                 }
             }
-            heartbeatDropDetected.set(anyAlive);
+            heartbeatDropDetected.set(heartbeatStopped);
+            firstHeartbeatPending.set(firstHeartbeatStillPending);
             for (AgentSession session : dead) {
                 session.close();
             }
@@ -1054,16 +1356,53 @@ public final class AgentManager implements Disposable {
         return PluginSettings.getInstance().getState().getEnhancedCaptureConfirmed();
     }
 
-    /** 关闭全部待回连通道（shutdownAll/dispose 共用）。accept 线程会因 socket 关闭而退出。 */
+    /**
+     * 关闭并摘除单个通道（T-AgentReconnect T-03 单一收口出口）：关监听 socket（阻塞中的 accept
+     * 立即抛 SocketException 退出）→ 打断 accept 线程 → 从通道表摘除 → 释放项目 disposable 树条目。
+     * 幂等（{@code PremainChannel.closeChannel} 与 {@code Disposer.dispose} 都幂等）。
+     */
+    private void closePremainChannel(PremainChannel channel) {
+        channel.closeChannel();
+        if (channel.acceptThread != null) {
+            channel.acceptThread.interrupt();
+        }
+        premainChannels.remove(channel);
+        try {
+            Disposer.dispose(channel);
+        } catch (Throwable ignored) {
+            // 对齐 Kotlin runCatching：未注册/已释放都不影响收口
+        }
+    }
+
+    /**
+     * 关闭全部待回连/服役中的通道（运行结束 {@link #onRunEnded} / 关开关 {@link #shutdownAll} / 项目 dispose 共用）。
+     * 快照遍历——{@link #closePremainChannel} 会改通道表。
+     */
     private void closePremainChannels() {
-        for (PremainChannel channel : premainChannels) {
-            try {
-                channel.server.close();
-            } catch (Throwable ignored) {
-                // 对齐 Kotlin runCatching：关闭失败不影响清空
-            }
+        for (PremainChannel channel : new java.util.ArrayList<>(premainChannels)) {
+            closePremainChannel(channel);
         }
         premainChannels.clear();
+    }
+
+    /**
+     * 本次运行结束（T-AgentReconnect T-03）：关闭该轮 premain 通道。
+     *
+     * <p>通道生命周期语义 = <b>绑定到本次运行</b>（启动前协商端口 → 进程存活期间持续等回连 → 运行结束关闭），
+     * 不再「accept 一次即关」。信号落在项目停止语义的既有承载点 {@code SqlLogManager.onConsoleRemoved}
+     * （见 {@code RunConfigurationProcessListener} 类注释：{@code processTerminated} 不处理、停止语义归 onConsoleRemoved）；
+     * 关开关走 {@link #shutdownAll}、项目关闭走 {@link #dispose}，三条路径都经 {@link #closePremainChannels} 收口。
+     *
+     * <p>兜底另有两重（钩子漏掉时不至于让通道随运行次数累积撞 {@link #MAX_PREMAIN_CHANNELS}）：pid 消亡判定
+     * 与 {@link #PREMAIN_CHANNEL_TTL_MS}（见 {@link #isChannelExpired}）。
+     */
+    public void onRunEnded() {
+        if (premainChannels.isEmpty()) {
+            return;
+        }
+        int closed = premainChannels.size();
+        closePremainChannels();
+        LOG.info("onRunEnded: 本次运行结束——关闭 " + closed + " 个 premain 通道（该轮不再等重连）");
     }
 
     /**
@@ -1090,6 +1429,9 @@ public final class AgentManager implements Disposable {
         // T-M56Phase2-Premain：待回连通道一并关掉（关后即便 agent 回连也会被 isEnhancedActive 挡下，
         // 此处提前关是防 socket 挂到超时才回收）
         closePremainChannels();
+        // T-PerfSweep6 T-PS6-08（发现 8）：巡检一并复位——关开关后 5s 空转线程不再驻留到项目 dispose
+        // （取消任务而非关执行器，见 stopMonitor 注释；再开启时 ensureMonitorStarted 照常重排）
+        stopMonitor();
         updateOnline();
         // T-PS5-04：会话全清 → 推断 URL 清条目（方言推断回落数据源 URL）
         onSessionLifecycleChanged();
@@ -1109,28 +1451,36 @@ public final class AgentManager implements Disposable {
     // SETTINGS_CHANGE_TOPIC 监听（本类 init）→ executor → pushDesensitize/sendConfig（sendConfig 读设置现拼 skipPrefixes）。
 
     /**
-     * 监听开关联动（T-AgentListenSync）：停止监听 → agent 停采（真停，非 IDE 侧丢弃）；
-     * 开启监听 → 恢复采集。由 SqlLogManager.startCapture/stopCapture 调用。
-     * agent 侧 CONFIG 即时生效（volatile 标志），织入点常驻，恢复后下一条 SQL 完整采集。
+     * 监听开关联动（T-AgentListenSync）：停止监听 → 向各会话<b>下发</b>停采指令；开启监听 → 下发恢复采集。
+     * 由 SqlLogManager.startCapture/stopCapture 调用。
+     *
+     * <p><b>文案订正（T-AgentConfigChannel T-06）</b>：此前 KDoc 写「真停，非 IDE 侧丢弃」「agent 侧 CONFIG
+     * 即时生效（volatile 标志）」，把「指令写出」说成了「应用侧已停采」。事实是——本轮现场（开关
+     * 未开却被捕获）里应用侧<b>从未收到过指令</b>（入站帧解析与出站格式错位，CONFIG 被静默丢弃），
+     * 而 IDE 侧日志照样写「已下发 disabled=true（sessions=N）」，排障时据此误判成「已停采」。
+     * 故本方法只保证<b>指令已写出到 socket</b>；是否生效以 {@link AgentProtocol#CMD_CONFIG_ACK} 为准
+     * （收到即 INFO 记一行含 pid 与三值，窗口内未收到即 WARN「CONFIG 未获确认」）。
      */
     public void pushCaptureActive(boolean active) {
         if (!isEnhancedActive()) {
             return;
         }
         boolean desensitize = PluginSettings.getInstance().getState().getEnhancedCaptureDesensitize();
+        // 追加 P-5：每次下发（本方法 + pushDesensitize）在 AgentSession.sendConfig 内已把该会话确认态
+        // 清回「待确认」并触发桥闸门重算（见那里的 KDoc）——「下发成功但应用侧没生效」不会让桥一直封着。
         for (AgentSession session : sessions) {
             session.sendConfig(!active, desensitize);
         }
-        LOG.info("pushCaptureActive: active=" + active + " → disabled=" + !active + "（sessions=" + sessions.size() + "）");
+        LOG.info("pushCaptureActive: active=" + active + " → 已下发 CONFIG disabled=" + !active
+            + "（sessions=" + sessions.size()
+            + "；生效与否待 CMD_CONFIG_ACK，超时 " + CONFIG_ACK_TIMEOUT_MS + "ms 内无回执将 WARN）");
     }
 
     /** 当前 SQL 监听是否开启（SqlLogManager.capturing；服务缺失/异常按 false——宁停采勿白采）。 */
     public boolean isListenActive() {
-        try {
-            return project.getService(SqlLogManager.class).isCapturing();
-        } catch (Throwable e) {
-            return false;
-        }
+        // T-ST-02b2：读路径经 sqlLogManagerIfCreated（永不发起创建 → 不会毒化服务容器；未创建＝未在采）
+        SqlLogManager manager = cn.song.mybatisplus.visualizer.log.SqlLogManagerLookupKt.sqlLogManagerIfCreated(project);
+        return manager != null && manager.isCapturing();
     }
 
     // ---------- pid 解析（复用桥反射骨架；getNativePid 能力探测缺失回退 getProcess().pid()） ----------

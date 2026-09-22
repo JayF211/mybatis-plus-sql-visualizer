@@ -102,13 +102,15 @@ public abstract class SectionConfigurable implements Configurable {
      */
     public void linkageAutoStartForProjects(List<Project> projects) {
         for (Project project : projects) {
-            if (project.isDisposed()) {
+            // T-ST-02b2：取服务前先判 isDisposed（经 sqlLogManagerOrNull 统一收口，见其 KDoc 的毒化论证）
+            SqlLogManager manager = cn.song.mybatisplus.visualizer.log.SqlLogManagerLookupKt.sqlLogManagerOrNull(project);
+            if (manager == null) {
                 // 沿用既有 warn 文案（未取服务，无异常可挂）
                 LOG.warn("apply: 自动启动分流跳过（项目关闭/服务不可用）");
                 continue;
             }
             try {
-                project.getService(SqlLogManager.class).onAutoStartSettingEnabled();
+                manager.onAutoStartSettingEnabled();
             } catch (Throwable e) {
                 LOG.warn("apply: 自动启动分流跳过（项目关闭/服务不可用）", e);
             }

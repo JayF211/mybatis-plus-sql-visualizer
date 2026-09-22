@@ -18,11 +18,35 @@ public record AgentStatusSnapshot(
     /** 是否发生过成功挂载。 */
     boolean everAttached,
     /** T-ReachAudit T-RA-01：最近一次摘除是否因心跳过期（应用侧无响应，而非连接断开）。 */
-    boolean heartbeatExpired
+    boolean heartbeatExpired,
+    /**
+     * T-AgentHeartbeat T-05：最近一次摘除是否属「连接刚建立、首条心跳尚未到达」
+     * （过期会话从未收到过 HELLO 之外的存活帧）。与 {@link #heartbeatExpired} <b>可同时置位</b>（不是互斥，
+     * 独立复核订正）：多会话同轮过期时可两者都为真，此时叙事以 {@link #heartbeatExpired} 优先。
+     */
+    boolean firstHeartbeatPending,
+    /** T-AgentHeartbeat T-05：在线窗口秒数（文案带出的可核实读数；默认取协议常量，测试可注入短窗）。 */
+    long heartbeatWindowSeconds
 ) {
     /** 便捷构造器：heartbeatExpired 缺省 false（Kotlin 默认参数）。 */
     public AgentStatusSnapshot(boolean enabled, boolean confirmed, long rejectCooldownRemainingMs,
                                List<Long> livePids, boolean everAttached) {
-        this(enabled, confirmed, rejectCooldownRemainingMs, livePids, everAttached, false);
+        this(enabled, confirmed, rejectCooldownRemainingMs, livePids, everAttached,
+            false, false, AgentProtocol.ONLINE_WINDOW_MS / 1000);
+    }
+
+    /** 便捷构造器：firstHeartbeatPending / heartbeatWindowSeconds 缺省（Kotlin 默认参数）。 */
+    public AgentStatusSnapshot(boolean enabled, boolean confirmed, long rejectCooldownRemainingMs,
+                               List<Long> livePids, boolean everAttached, boolean heartbeatExpired) {
+        this(enabled, confirmed, rejectCooldownRemainingMs, livePids, everAttached,
+            heartbeatExpired, false, AgentProtocol.ONLINE_WINDOW_MS / 1000);
+    }
+
+    /** 便捷构造器：heartbeatWindowSeconds 缺省（Kotlin 默认参数）。 */
+    public AgentStatusSnapshot(boolean enabled, boolean confirmed, long rejectCooldownRemainingMs,
+                               List<Long> livePids, boolean everAttached, boolean heartbeatExpired,
+                               boolean firstHeartbeatPending) {
+        this(enabled, confirmed, rejectCooldownRemainingMs, livePids, everAttached,
+            heartbeatExpired, firstHeartbeatPending, AgentProtocol.ONLINE_WINDOW_MS / 1000);
     }
 }

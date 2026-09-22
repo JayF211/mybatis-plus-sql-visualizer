@@ -86,4 +86,39 @@ public class AcpIdeaMcpTransportProviderImpl implements AcpIdeaMcpTransportProvi
     public AcpIdeaMcpTransport getTransport(@NotNull AcpAgentId agentId) {
         return CLAUDE_ACP_ID.equals(agentId.getFullId()) ? AcpIdeaMcpTransport.SSE : null;
     }
+
+    /**
+     * <b>跨形态第二重载（2026-09-22，复核 major⑯）</b>：上游把 {@code AcpAgentId} 的包在两条发行线之间搬过——
+     * 262.9437.276 的 provider 形参是 {@code com.intellij.platform.acp.AcpAgentId}（= 上面那个 override 的形态），
+     * 262.10968.97 的 provider 形参是 {@code com.intellij.ml.llm.agents.acp.api.AcpAgentId}（master 侧 import 别名
+     * {@code ApiAcpAgentId}）。<b>同一 FQCN 的接口、方法名相同而形参包不同</b>，JVM 按擦除后的描述符匹配
+     * override ⇒ 只声明一个形态时，另一线上的本类<b>没有实现该接口的抽象方法</b>，EP 调用即
+     * {@code AbstractMethodError}（绕行整条失效，而字节码级护栏当时判绿——正是复核指出的「护栏看不见当前就存在的
+     * 失配」）。故两个形态<b>都</b>声明，各线各自匹配。
+     *
+     * <p><b>为什么不是「一个方法 + 反射」</b>：接口方法无法反射实现——必须由某个类按<b>精确描述符</b>声明它。</p>
+     *
+     * <p><b>安全前提（两条实测证据，不是推断）</b>：</p>
+     * <ol>
+     *   <li>JVM 层：带「另一形态形参类型缺席」的额外重载不影响 {@code Class.forName} / 实例化 / {@code instanceof}
+     *     接口判定 / 调用<b>匹配</b>的那个方法；只有显式方法反射（{@code getDeclaredMethods()}）会因缺席类型抛
+     *     {@code NoClassDefFoundError}（OpenJDK 25 实测：加载 ✓、实例化 ✓、{@code isAssignableFrom} ✓、
+     *     调匹配方法 ✓、{@code getDeclaredMethods} ✗）。</li>
+     *   <li>平台层：EP 装载机制<b>不做方法反射</b>——对 idea-2026.2.1 / 2026.2.3 两发行版的
+     *     {@code com.intellij.openapi.extensions} 包下共 69 个类做常量池扫描，{@code getDeclaredMethods} /
+     *     {@code getMethods} / {@code getDeclaredMethod} <b>零命中</b>（故上述第 1 条的失败面在本路径上不可达）。</li>
+     * </ol>
+     * <p>仍属<b>未验点</b>：真机上两线各自「EP 真被注册 / 不抛 AbstractMethodError / SSE 通道可达」只能真机走查
+     * （登记见计划 §五）。</p>
+     *
+     * <p>移植注记：Java 无 import 别名，master 的 {@code ApiAcpAgentId} 形参以全限定名落参；
+     * 本重载不是任何形态接口的 {@code @Override}（各线只匹配其一），{@code @SuppressWarnings("unused")}
+     * 对应 master 的 {@code @Suppress("unused")}（该方法仅被 JVM 描述符匹配触达，源码级无调用点）。</p>
+     */
+    @SuppressWarnings("unused")
+    @Nullable
+    public AcpIdeaMcpTransport getTransport(
+        @NotNull com.intellij.ml.llm.agents.acp.api.AcpAgentId agentId) {
+        return CLAUDE_ACP_ID.equals(agentId.getFullId()) ? AcpIdeaMcpTransport.SSE : null;
+    }
 }

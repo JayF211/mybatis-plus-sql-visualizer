@@ -253,14 +253,29 @@ public final class McpSchemaContextService {
         return collectEntries(sources, tableNames, limit, null);
     }
 
-    /** 单数据源扫描（一次遍历 → 表名索引）；{@code diagnostics} 非空时记一行实况供错误文案自解释。 */
+    /**
+     * 单数据源扫描（一次遍历 → 表名索引）；{@code diagnostics} 非空时记一行实况供错误文案自解释。
+     *
+     * <p>T-PerfSweep6 T-PS6-02：命中跨调用索引时<b>零遍历</b>（不再调 {@link #readModelTables}，也不再逐列反射）。</p>
+     */
     private static Map<String, McpSchemaFormatter.TableEntry> scanSource(Object ds, List<String> diagnostics) {
+        String target = targetDatabase(ds);
+        Map<String, McpSchemaFormatter.TableEntry> cached = cachedIndex(ds, target);
+        if (cached != null) {
+            String line = "ds=" + dsName(ds) + " targetDb=" + (target != null ? target : "-")
+                + " 命中跨调用索引（T-PS6-02） indexed=" + cached.size();
+            LOG.info("McpSchemaContextService scan: " + line);
+            if (diagnostics != null) {
+                diagnostics.add(line);
+            }
+            return cached;
+        }
         List<ModelTable> candidates = (modelTablesForTest != null) ? modelTablesForTest.apply(ds) : null;
         if (candidates == null) {
             candidates = readModelTables(ds);
         }
-        String target = targetDatabase(ds);
         Map<String, McpSchemaFormatter.TableEntry> index = indexModelTables(candidates, target);
+        storeIndex(ds, target, index);
         String line = "ds=" + dsName(ds) + " targetDb=" + (target != null ? target : "-")
             + " modelTables=" + candidates.size() + " indexed=" + index.size();
         LOG.info("McpSchemaContextService scan: " + line);
@@ -268,6 +283,103 @@ public final class McpSchemaContextService {
             diagnostics.add(line);
         }
         return index;
+    }
+
+    // ----------
+    // T-PerfSweep6 T-PS6-02：调用内索引 → **跨调用持有**（性能报告发现 2）。
+    //
+    // 背景：`sqlv_schema_context` 每次调用都重建全量索引——遍历目标数据源整个 DasModel，
+    // 且为**所有**表所有列逐列走反射链（每列 4 invoke + 3 runCatching），最终只输出 ≤limit 张表。
+    // 而同一数据源的模型在两次调用之间通常完全没变（只有 DDL 才变）。
+    //
+    // 缓存纪律三条，缺一即脏读或泄漏：
+    //  ① **弱键**：键 = 数据源对象身份（DBN 数据源无稳定 equals，沿用既有 IdentityHashMap 口径），
+    //     值挂 WeakHashMap——数据源删除后条目随弱键回收（照 `DatabaseSchemaResolver.metaCache` 纪律）。
+    //     注意与既有「调用内索引」（`collectEntries` 里的 IdentityHashMap）是**两回事**：那个只在
+    //     单次调用内存活、随调用丢弃；本缓存跨调用存活，故必须弱键 + 失效面。
+    //  ② **失效双保险**：接 `MetadataInvalidator` 登记表（DDL/事务提交后 O(1) 清空）+ TTL 上界
+    //     （INDEX_TTL_MS = 30s，与 `DatabaseSchemaResolver` 负缓存同量级）。任一条单独都不够：
+    //     只靠 TTL 会让 DDL 建表后 30s 内查不到新表，只靠失效面则「外部改库」（别人建表）无感知。
+    //  ③ **测试缝**：本对象是进程级单例，缓存是静态状态、同 JVM 多测试类共享
+    //     （默认 maxParallelForks=1、非 testDatabase 无 forkEvery）——用例必须能清，
+    //     否则读数随用例顺序漂移（形态对照 `MetadataInvalidator.clearParseCacheForTest`）。
+    //
+    // **库名维度一并校验**：索引内容依赖 targetDatabase（同名表跨 schema 只收目标库那张），
+    // 故缓存条目记下建索引时的目标库名，取值时重新求值并比对——不一致即视为未命中重扫
+    // （URL 换库 / 重连场景不脏读）。重求值只是一次 `getConnectionConfig().getUrl()` 反射，
+    // 相对 DasModel 全遍历可忽略。
+    // ----------
+
+    /** 跨调用索引 TTL 上界（毫秒）。 */
+    public static final long INDEX_TTL_MS = 30_000L;
+
+    /** 测试专用 TTL 旋钮（生产恒等于 {@link #INDEX_TTL_MS}；调短/归零验证过期语义）。 */
+    public static volatile long indexTtlMs = INDEX_TTL_MS;
+
+    /** 跨调用索引容量上界（超上限整体清空——fail safe 方向，与负缓存同口径）。 */
+    private static final int INDEX_CACHE_MAX = 64;
+
+    /** 跨调用索引条目（建索引时的目标库名 + 建立时刻 + 索引本体）。 */
+    private record CachedIndex(
+        String targetDb,
+        long builtAtMs,
+        Map<String, McpSchemaFormatter.TableEntry> index
+    ) {
+    }
+
+    private static final Map<Object, CachedIndex> indexCache =
+        java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    static {
+        // T-PS6-02 失效面②：DDL/事务提交后清空跨调用索引。**自登记**（而非在 MetadataInvalidator.init
+        // 里加行）——缓存是本对象私有状态，登记点与缓存同处一地，改动面收敛在本文件。
+        cn.song.mybatisplus.visualizer.execute.MetadataInvalidator.register(
+            "McpSchemaContextService.indexCache", McpSchemaContextService::clearIndexCache);
+    }
+
+    /** 跨调用索引清空（DDL 失效链与测试缝共用；引用置空语义，幂等无害）。 */
+    public static void clearIndexCache() {
+        synchronized (indexCache) {
+            indexCache.clear();
+        }
+    }
+
+    /** T-PS6-02 测试缝：当前缓存的数据源条目数。 */
+    public static int indexCacheSize() {
+        synchronized (indexCache) {
+            return indexCache.size();
+        }
+    }
+
+    /** 取缓存索引；库名维度不符或已过 TTL 一律视为未命中（过期条目惰性移除）。 */
+    private static Map<String, McpSchemaFormatter.TableEntry> cachedIndex(Object ds, String targetDb) {
+        CachedIndex entry;
+        synchronized (indexCache) {
+            entry = indexCache.get(ds);
+        }
+        if (entry == null) {
+            return null;
+        }
+        if (!java.util.Objects.equals(entry.targetDb(), targetDb)) {
+            return null;
+        }
+        // 严格小于：TTL=0 语义 = 立即过期（同毫秒内也不新鲜），与 isNegativeCached 同边界口径
+        if (System.currentTimeMillis() - entry.builtAtMs() < indexTtlMs) {
+            return entry.index();
+        }
+        synchronized (indexCache) {
+            indexCache.remove(ds);
+        }
+        return null;
+    }
+
+    private static void storeIndex(Object ds, String targetDb, Map<String, McpSchemaFormatter.TableEntry> index) {
+        synchronized (indexCache) {
+            if (indexCache.size() >= INDEX_CACHE_MAX) {
+                indexCache.clear();
+            }
+            indexCache.put(ds, new CachedIndex(targetDb, System.currentTimeMillis(), index));
+        }
     }
 
     /**

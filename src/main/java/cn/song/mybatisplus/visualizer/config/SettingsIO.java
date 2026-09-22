@@ -63,6 +63,7 @@ public final class SettingsIO {
         sb.append("  \"tableSuffix\": ").append(jsonString(state.getTableSuffix())).append(",\n");
         sb.append("  \"tableNameInference\": ").append(jsonString(state.getTableNameInference())).append(",\n");
         sb.append("  \"ignoredFields\": ").append(jsonString(state.getIgnoredFields())).append(",\n");
+        sb.append("  \"columnCalibrationEnabled\": ").append(state.getColumnCalibrationEnabled()).append(",\n");
         sb.append("  \"removeTablePrefix\": ").append(jsonString(state.getRemoveTablePrefix())).append(",\n");
         sb.append("  \"removeTableSuffix\": ").append(jsonString(state.getRemoveTableSuffix())).append(",\n");
         sb.append("  \"dataPermissionHint\": ").append(state.getDataPermissionHint()).append(",\n");
@@ -82,8 +83,8 @@ public final class SettingsIO {
      * 合并语义（T-Fix-SettingsScope）：以 base 为底，仅覆盖 JSON 中<b>实际出现</b>的键；
      * JSON 未出现的键保留 base 的现值，未知字段忽略。
      *
-     * 为什么必须以现值为底：{@link #exportToJson} 只写 21 个可覆盖项，而 {@link PluginSettings.State}
-     * 有 77 个 var 字段。若以新建出厂默认态为底，一次导入会把参数历史（paramHistoryJson）、
+     * 为什么必须以现值为底：{@link #exportToJson} 只写 23 个可覆盖项，而 {@link PluginSettings.State}
+     * 有 81 个 var 字段（O-58 起含 columnCalibrationEnabled）。若以新建出厂默认态为底，一次导入会把参数历史（paramHistoryJson）、
      * 增强捕获授权记忆、反馈身份、日志自动保存目录等<b>文件里根本没有的字段</b>静默重置为
      * 出厂默认——用户侧表现为不可见的数据丢失（本文件 KDoc 自称「不含全局项」，却又把
      * autoCheckUpdate/ignoredUpdateVersions 一并重置，自相矛盾）。
@@ -146,6 +147,8 @@ public final class SettingsIO {
         if (tableNameInference != null) state.setTableNameInference(tableNameInference);
         String ignoredFields = getString(map, "ignoredFields");
         if (ignoredFields != null) state.setIgnoredFields(ignoredFields);
+        Boolean columnCalibrationEnabled = getBoolean(map, "columnCalibrationEnabled");
+        if (columnCalibrationEnabled != null) state.setColumnCalibrationEnabled(columnCalibrationEnabled);
         String removeTablePrefix = getString(map, "removeTablePrefix");
         if (removeTablePrefix != null) state.setRemoveTablePrefix(removeTablePrefix);
         String removeTableSuffix = getString(map, "removeTableSuffix");

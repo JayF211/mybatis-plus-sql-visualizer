@@ -34,6 +34,27 @@ public final class SqlLogPanelKt {
     }
 
     /**
+     * 空态文案写入（T-AgentDiagWrap T-04，独立成顶层函数以便单测）。
+     *
+     * <p>为什么不能 {@code status.text = plain}：{@code JBList.emptyText} 是 {@code com.intellij.util.ui.StatusText}
+     * （<b>不是</b> JLabel），内容落在 {@code SimpleColoredComponent} 上——它不解析 HTML，
+     * 也不把 {@code \n} 当换行（{@code \n} 被当普通字符画成零宽，两段文字被无声拼接；超宽只裁不折）。
+     * 平台侧唯一的多行手段是 {@link com.intellij.util.ui.StatusText#appendLine(String)}：每行一个 Fragment，
+     * {@code paintColumnInBounds} 逐 Fragment 单独绘制（<b>仍不折行</b>，所以宽度折行由
+     * {@link CaptureDiagnostics#wrapEmptyTextLines} 先算好）。
+     *
+     * @param widthPx 列表当前可用像素宽度
+     * @param measure 单串像素宽度测量
+     */
+    public static void applyEmptyTextLines(com.intellij.util.ui.StatusText status, String text, int widthPx,
+            kotlin.jvm.functions.Function1<String, Integer> measure) {
+        status.clear();
+        for (String line : CaptureDiagnostics.wrapEmptyTextLines(text, widthPx, measure)) {
+            status.appendLine(line);
+        }
+    }
+
+    /**
      * 右键菜单选中收敛（T-ListPreviewCopy）：命中行已在多选集合内 → 保留原多选（复制项=批量复制）；
      * 否则收敛为命中行（右键=切换操作目标，与改造前无条件收敛单行等价）。纯函数可独立单测，
      * 日志 tab 与历史 tab 右键菜单共用。

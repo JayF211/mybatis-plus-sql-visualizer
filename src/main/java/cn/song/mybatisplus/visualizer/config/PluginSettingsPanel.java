@@ -649,6 +649,9 @@ public class PluginSettingsPanel implements Disposable {
     /** 移除表名后缀输入框（T-M19.4）：`;` 分隔，最终表名以哪个结尾就移除哪个（首个匹配）。 */
     private final JBTextField removeTableSuffixField = new JBTextField(12);
 
+    /** 列名数据源校正开关（O-58）：实体字段名与库真实列名不一致时用数据源真值纠正列名。 */
+    private final JBCheckBox columnCalibrationCheck = new JBCheckBox();
+
     /** 界面语言下拉（M14：默认简体中文；跟随系统 / English 可选）。 */
     private final JComboBox<LanguageOption> languageCombo = new JComboBox<>();
 
@@ -896,6 +899,9 @@ public class PluginSettingsPanel implements Disposable {
                 InferenceOption inferred = inferenceOptionByValue(settings.getState().getTableNameInference());
                 inferenceCombo.setSelectedItem(inferred != null ? inferred : inferenceOptions()[0]);
                 addRow(p, g, msg("settings.tableNameInference"), inferenceCombo);
+                columnCalibrationCheck.setText(msg("settings.columnCalibration"));
+                columnCalibrationCheck.setToolTipText(msg("settings.columnCalibration.tip"));
+                addRow(p, g, "", columnCalibrationCheck);
             });
         }
 
@@ -1630,6 +1636,24 @@ public class PluginSettingsPanel implements Disposable {
         return reverseShortcutEditor;
     }
 
+    /**
+     * T-TemplateKeyDrop 测试访问器：${table} 快捷模板三动作的快捷键编辑行。
+     *
+     * <p>三动作已摘除默认键位（原 Alt+Shift+E/C/T 与平台动作冲突、备选键亦被占），
+     * 用例据此钉住「无默认键位」下录制入口仍可用（初始「—」→ 录制 → apply → reset）。
+     */
+    public ShortcutEditor explainShortcutEditorForTest() {
+        return explainShortcutEditor;
+    }
+
+    public ShortcutEditor countShortcutEditorForTest() {
+        return countShortcutEditor;
+    }
+
+    public ShortcutEditor sampleShortcutEditorForTest() {
+        return sampleShortcutEditor;
+    }
+
     /** T-xx：启动自动监听复选框设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
     public void setLogAutoCaptureCheck(boolean checked) {
         logAutoCaptureCheck.setSelected(checked);
@@ -1779,7 +1803,8 @@ public class PluginSettingsPanel implements Disposable {
                                s.getTableNameInference())
             || !ignoredFieldsField.getText().trim().equals(s.getIgnoredFields())
             || !removeTablePrefixField.getText().trim().equals(s.getRemoveTablePrefix())
-            || !removeTableSuffixField.getText().trim().equals(s.getRemoveTableSuffix());
+            || !removeTableSuffixField.getText().trim().equals(s.getRemoveTableSuffix())
+            || columnCalibrationCheck.isSelected() != s.getColumnCalibrationEnabled();
     }
 
     private boolean isModifiedCodeGen(PluginSettings.State s) {
@@ -1909,6 +1934,7 @@ public class PluginSettingsPanel implements Disposable {
             s.setIgnoredFields(ignoredFieldsField.getText().trim());
             s.setRemoveTablePrefix(removeTablePrefixField.getText().trim());
             s.setRemoveTableSuffix(removeTableSuffixField.getText().trim());
+            s.setColumnCalibrationEnabled(columnCalibrationCheck.isSelected());
         }
         if (sections.contains(SECTION_CODE_GEN)) {
             Object reverse = reverseFormatCombo.getSelectedItem();
@@ -2064,6 +2090,7 @@ public class PluginSettingsPanel implements Disposable {
             ignoredFieldsField.setText(s.getIgnoredFields());
             removeTablePrefixField.setText(s.getRemoveTablePrefix());
             removeTableSuffixField.setText(s.getRemoveTableSuffix());
+            columnCalibrationCheck.setSelected(s.getColumnCalibrationEnabled());
         }
         if (sections.contains(SECTION_CODE_GEN)) {
             ReverseFormatOption reverse = reverseFormatOptionByValue(s.getReverseWrapperFormat());
