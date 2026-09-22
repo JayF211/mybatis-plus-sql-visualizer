@@ -102,13 +102,48 @@ class SqlSourceInterceptor(
         return null
     }
 
-    /** 框架 / 基础设施帧一律跳过（与插件 CallerSourceLocator 的跳过规则对齐）。 */
+    /**
+     * 框架 / 基础设施帧一律跳过（与本插件 `CallerSourceLocator.isFrameworkFrame` 的规则保持同步——
+     * 插件侧新增前缀时本示例副本也须同步，`LocatorSkipPrefixSyncTest` 以源码扫描锁定两者差异集合）。
+     * T-AgentResiduals R1（2026-09-22）起插件侧按 agent 侧 `StackLocator` 逐项补齐，本示例同步补齐。
+     * 唯一刻意差异：插件自身包前缀（`cn.song.mybatisplus.visualizer.`）在本示例里由
+     * 上面 `cn == javaClass.name` 的自身帧跳过替代——本文件是拷贝到用户工程里的独立示例。
+     * 若你的工程把业务代码放在 `com.alibaba.` / `org.apache.` / `com.google.` 等宽包下，
+     * 请删掉对应那几行——它们是为数据层插件/基础设施帧准备的（漏收即跳进框架里）。
+     */
     private fun isFrameworkFrame(cn: String): Boolean =
         cn.startsWith("java.") || cn.startsWith("javax.") || cn.startsWith("jdk.") ||
-            cn.startsWith("sun.") || cn.startsWith("com.intellij.") || cn.startsWith("org.jetbrains.") ||
-            cn.startsWith("com.baomidou.") || cn.startsWith("org.apache.ibatis.") ||
-            cn.startsWith("org.hibernate.") || cn.startsWith("com.zaxxer.") ||
-            cn.startsWith("org.springframework.") || cn.startsWith("com.sun.proxy.") || cn.startsWith("\$Proxy")
+            cn.startsWith("sun.") || cn.startsWith("com.sun.") || cn.startsWith("jdk.internal.") ||
+            cn.startsWith("com.intellij.") || cn.startsWith("org.jetbrains.") ||
+            // 插件自身模块（agent 侧是 cn.song.mybatisplus.sqlvis.）
+            cn.startsWith("cn.song.mybatisplus.sqlvis.") ||
+            // 驱动家族
+            cn.startsWith("com.mysql.") || cn.startsWith("org.mariadb.") || cn.startsWith("org.postgresql.") ||
+            cn.startsWith("org.h2.") || cn.startsWith("org.hsqldb.") || cn.startsWith("org.sqlite.") ||
+            cn.startsWith("com.microsoft.sqlserver.") || cn.startsWith("oracle.jdbc.") ||
+            cn.startsWith("dm.jdbc.") || cn.startsWith("com.gbasedbt.") || cn.startsWith("com.kingbase8.") ||
+            // 连接池 / ORM / Spring 数据层
+            cn.startsWith("com.zaxxer.") || cn.startsWith("com.alibaba.druid.") ||
+            cn.startsWith("com.mchange.") || cn.startsWith("org.apache.commons.dbcp2.") ||
+            cn.startsWith("org.apache.tomcat.") || cn.startsWith("org.apache.ibatis.") ||
+            cn.startsWith("com.baomidou.") || cn.startsWith("org.hibernate.") ||
+            cn.startsWith("org.springframework.") || cn.startsWith("org.aspectj.") ||
+            cn.startsWith("net.sf.cglib.") || cn.startsWith("org.objectweb.asm.") ||
+            cn.startsWith("com.sun.proxy.") || cn.startsWith("org.jboss.") ||
+            // 数据层插件 / 基础设施家族补齐（漏收即被误选为用户帧——PageHelper 实证）
+            cn.startsWith("com.github.pagehelper.") || cn.startsWith("org.mybatis.") ||
+            cn.startsWith("net.sf.jsqlparser.") || cn.startsWith("com.alibaba.") ||
+            cn.startsWith("org.apache.") || cn.startsWith("com.google.") ||
+            cn.startsWith("com.fasterxml.") || cn.startsWith("io.netty.") ||
+            cn.startsWith("io.lettuce.") || cn.startsWith("redis.clients.") ||
+            cn.startsWith("io.micrometer.") || cn.startsWith("io.seata.") ||
+            cn.startsWith("org.slf4j.") || cn.startsWith("ch.qos.") ||
+            cn.startsWith("org.ehcache.") || cn.startsWith("net.sf.ehcache.") ||
+            cn.startsWith("com.github.benmanes.") || cn.startsWith("org.quartz.") ||
+            cn.startsWith("com.netflix.") || cn.startsWith("org.elasticsearch.") ||
+            cn.startsWith("com.mongodb.") ||
+            cn.startsWith("com.github.yulichang.") ||
+            cn.startsWith("\$Proxy")
 
     private fun String.substringBeforeLast(delimiter: Char): String {
         val idx = lastIndexOf(delimiter)

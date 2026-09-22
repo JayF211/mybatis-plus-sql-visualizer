@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.config
 
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
+import cn.song.mybatisplus.visualizer.log.sqlLogManagerOrNull
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.options.Configurable
@@ -86,12 +87,14 @@ abstract class SectionConfigurable(
      */
     internal fun linkageAutoStartForProjects(projects: List<Project>) {
         projects.forEach { project ->
-            if (project.isDisposed) {
+            // T-ST-02b2：取服务前先判 isDisposed（经 sqlLogManagerOrNull 统一收口，见其 KDoc 的毒化论证）
+            val manager = sqlLogManagerOrNull(project)
+            if (manager == null) {
                 // 沿用既有 warn 文案（未取服务，无异常可挂）
                 LOG.warn("apply: 自动启动分流跳过（项目关闭/服务不可用）")
                 return@forEach
             }
-            runCatching { project.getService(SqlLogManager::class.java).onAutoStartSettingEnabled() }
+            runCatching { manager.onAutoStartSettingEnabled() }
                 .onFailure {
                     LOG.warn("apply: 自动启动分流跳过（项目关闭/服务不可用）", it)
                 }

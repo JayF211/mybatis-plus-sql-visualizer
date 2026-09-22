@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.log.LogStatementClassifier
 import cn.song.mybatisplus.visualizer.log.SqlListTypeColor
 import cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
+import cn.song.mybatisplus.visualizer.log.sqlLogManagerIfCreated
 import cn.song.mybatisplus.visualizer.log.SqlSource
 import cn.song.mybatisplus.visualizer.log.StatementType
 import cn.song.mybatisplus.visualizer.log.formatDatabaseFragment
@@ -195,9 +196,11 @@ internal fun mcpHistoryEntry(
  * 失败只记 idea.log 不冒泡：审计是旁路，绝不影响工具结果（McpDbExecutor 侧的回调投递同样 runCatching，
  * 两道都不许把审计故障升级为工具故障）。
  *
- * **已知边界**：`addEntry` 尊重 buffer 的既有门控——用户点过「停止捕捉」后 `paused=true` 期间
- * 不落条目、去重窗口内同 SQL 折叠、过滤关键字命中的丢弃。三者都是「SQL 列表」的既有语义，
- * 本任务不另开口子（每次调用仍有 idea.log 的 `[MCP-AUDIT]` 行兜底留痕）。
+ * **门控（D1 定案，2026-09-22 用户）**：审计条目**不受「SQL 日志捕获」开关约束**——走
+ * [cn.song.mybatisplus.visualizer.log.SqlLogEntryBuffer.addAuditEntry]（跳过 `paused` 门），
+ * 即开关关着（含用户显式停止后的 `paused=true`）时照样落列表；MCP 工具的可用性只由设置页
+ * 「启用 SQL Visualizer MCP 工具」＋工具级禁用清单决定（`McpToolGate`）。
+ * 其余门与普通条目一致：去重窗口内同 SQL 折叠、过滤关键字命中的丢弃（两者是列表展示偏好，不是开关）。
  */
 internal fun recordMcpExecution(
     project: Project,
@@ -207,7 +210,8 @@ internal fun recordMcpExecution(
     errorText: String?,
 ) {
     runCatching {
-        project.getService(SqlLogManager::class.java).entries.addEntry(
+        // T-ST-02b2：读路径经 sqlLogManagerIfCreated（永不发起创建；审计是旁路，取不到即跳过）
+        sqlLogManagerIfCreated(project)?.entries?.addAuditEntry(
             mcpHistoryEntry(selectSql, dataSourceName, elapsedMs, errorText),
         )
     }.onFailure { e ->

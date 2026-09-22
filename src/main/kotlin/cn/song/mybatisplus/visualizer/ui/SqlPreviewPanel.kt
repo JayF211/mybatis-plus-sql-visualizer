@@ -251,6 +251,42 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** T-GifRerecord：预热失败标志——await 快速降级用，避免 EDT 空等 2s 后再走降级路径。 */
     @Volatile
     private var prewarmFailed = false
+
+    /**
+     * T-PrewarmLateRecover F1/F2：预热轮次令牌——每次发起预热（构造期 / [clear] 重预热 / 横幅重试）
+     * 自增，预热线程发布产物时比对。不等即「本轮已被后来的一轮取代」：产物不入字段（否则旧轮的
+     * 迟到产物会覆盖新轮刚交付的那份），文件仍由 [releaseEditor] 按登记表回收。
+     */
+    @Volatile
+    private var prewarmRound = 0
+
+    /**
+     * T-PrewarmLateRecover F1：当前编辑器文档是**降级产物**时的身份标记（主路径装配成功置 null）。
+     * 迟到产物换装前用它确认「此刻显示的确实是那份降级文档」——不比对身份就可能把用户已经
+     * 在用的主路径文档误换掉。
+     */
+    private var degradedPreviewDocument: com.intellij.openapi.editor.Document? = null
+
+    /**
+     * T-PrewarmLateRecover F1：插件最后一次写进编辑器文档的 SQL 文本——换装判据里的「用户没动过」。
+     * 三条写入支链（原生控制台 / 既有编辑器 / 新建编辑器）都要更新，漏一条即把插件的重渲染
+     * 误判成用户编辑（换装被永久挡掉）。
+     */
+    private var lastRenderedSql: String? = null
+
+    /**
+     * T-PrewarmLateRecover F1：预热相关回调的 EDT 派发通道（写安全模态）。
+     *
+     * 与 [prewarmPreviewTempFile] 里 PrewarmAwait 的 dispatcher 是同一份实现：迟到产物换装也要
+     * 写文档（`WriteCommandAction { d.setText }`），故必须同款 `defaultModalityState()`——
+     * `any()` 恒 write-unsafe（T-FixN1 的 KDoc 有平台侧逐帧依据）。
+     */
+    private val prewarmDispatcher: (Runnable) -> Unit = { runnable ->
+        ApplicationManager.getApplication().invokeLater(
+            runnable,
+            com.intellij.openapi.application.ModalityState.defaultModalityState(),
+        )
+    }
     /** T-M36.6-03：面板释放标志——预热线程晚于 dispose 完成时丢弃产物并删除文件。
      *  T-StabilityTail 起语义扩为「放弃预热」：面板 dispose 与**项目开始销毁**（见
      *  [prewarmLifecycleGate]）都置它，预热线程在下一个检查点放弃（不再取服务）。 */
@@ -564,12 +600,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // 不冲突——该提交信息里没有「必须在模态对话框挂起期间完成装配」的场景。
         // 边界：控制台挂载/回填链路（M36.5，本文件 onConsole 回调的 post-attach 重渲染等站点）的
         // any()/nonModal() 是另一条链路，不在本改动范围。
-        val await = PrewarmAwait<Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>>(PREWARM_WAIT_MS) { runnable ->
-            ApplicationManager.getApplication().invokeLater(
-                runnable,
-                com.intellij.openapi.application.ModalityState.defaultModalityState(),
-            )
-        }
+        // T-PrewarmLateRecover F1：轮次令牌与迟到产物接收方都必须在预热线程可能发布**之前**就位
+        // （令牌晚了会让旧轮产物盖掉新轮；接收方晚了会漏掉「超时已放弃、产物随后到达」这一态）。
+        val round = ++prewarmRound
+        val await = PrewarmAwait<Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>>(
+            PREWARM_WAIT_MS,
+            prewarmDispatcher,
+        )
+        await.onLateProduct { product -> prewarmDispatcher { tryUpgradeToLateProduct(product) } }
         prewarmAwait = await
         // T-StabilityTail：把「项目开始销毁」接到取消门——池线程不得比项目活得更久
         bindPrewarmToProjectLifecycle()
@@ -647,7 +685,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     return@executeOnPooledThread
                 }
                 previewTempFile = vf
-                publishPrewarmProduct(await, vf to psi, prewarmStartedAt)
+                publishPrewarmProduct(await, vf to psi, prewarmStartedAt, round)
             }.onFailure { e ->
                 prewarmFailed = true
                 await.fail(e)
@@ -674,6 +712,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         await: PrewarmAwait<Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>>,
         product: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>,
         startedAtNanos: Long,
+        round: Int,
     ) {
         // T-PrewarmBudget（2026-09-20）：预热**成功**耗时打点——消费侧预算 `PREWARM_WAIT_MS` 只有在
         // 「预热耗时 < 预算」时才可能走主路径；此前无此打点，预算取值只能靠间接夹逼。判读口径：
@@ -684,8 +723,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 "[M36] prewarm done in ${prewarmElapsedMs(startedAtNanos)}ms " +
                     "(file=${product.first.name}, psi=${product.second.name})",
             )
+        // T-PrewarmLateRecover F1：旧轮产物不入字段（见 [prewarmRound]）——文件仍由 [releaseEditor]
+        // 按登记表回收，不会漏删。
+        if (round != prewarmRound) {
+            com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                .info("[M36] prewarm product dropped: stale round=$round (current=$prewarmRound)")
+            return
+        }
         prewarmedTempFile = product
-        await.complete(product)
+        // T-PrewarmLateRecover F1：`complete` 返回 false = 消费侧已放弃（超时以 null 完成 / 失败），
+        // 此时产物走迟到通道换装——这正是「首开预热 3016ms、预算 500ms」那类场景的恢复出口。
+        if (!await.complete(product)) {
+            prewarmDispatcher { tryUpgradeToLateProduct(product) }
+        }
     }
 
     /** T-PrewarmBudget：预热打点用耗时（毫秒）；`nanoTime` 差值，不受系统时钟回拨影响。 */
@@ -1300,44 +1350,41 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /**
      * T-ErrorLocate T-ELU-01：执行调用点共用的富错误回调——**先解析锚点、再决定按钮显隐**。
      *
-     * 原实现在投递时恒传非 null 动作、把锚点解析推迟到**点击时**（[resolveLocateAction] 的
-     * `?: return` 静默返回）——按钮可见而点击无反应。现改为投递时解析：解析不出（无 project /
-     * 无锚点）传 null，[SqlResultPanel.showErrorRich] 据此不显示按钮，对齐同仓对照组
-     * `log/SqlLogPanel.kt:1779-1782` 的「先解析、后显隐」（`isEnabledAndVisible = resolved != null`）
-     * 与 `log/EntryJumpResolver.kt:26-30` 的四态口径。
-     *
-     * 点击动作捕获**投递时**解析出的锚点：与 `SqlPreviewService.lastPreviewSourceAnchor` 的单槽
-     * 语义一致（预览弹窗每项目单例，见 `SqlPreviewService.kt:2084-2098`），不存在「投递到点击
-     * 之间槽被覆盖」的场景。
+     * 诚实降级定案：驱动报错位置（Position/at line）指向**被执行 SQL 文本**的字符/行，
+     * 与 mapper 原文行不一一对应（动态 SQL 拼接、参数注入后行号必然错位），v1 只承诺
+     * 「语句起始行」跳转 + 按钮 tooltip 如实说明，绝不虚标精确跳转。
+     * 锚点来自 [SqlPreviewService.lastPreviewSourceAnchor]（预览触发时登记）。
      */
-    private fun showErrorRichWithLocate(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo) {
-        resultPanel.showErrorRich(info, resolveLocateAction())
-        maybeProbeDdlEffective(info)
-    }
-
-    /**
-     * T-ErrorLocate T-ELU-01：定位动作——**先解析、后显隐**；解析不出锚点返回 null（按钮不出现）。
-     *
-     * 诚实降级定案（T-EL-03 口径不变）：驱动报错位置指向**被执行 SQL 文本**，与 mapper 原文行
-     * 不一一对应（动态 SQL 拼接、参数注入后行号必然错位），v1 只承诺「语句起始行」跳转 +
-     * 按钮 tooltip 如实说明，绝不虚标精确跳转。锚点来自
-     * [SqlPreviewService.lastPreviewSourceAnchor]（预览触发时登记）；无锚点（gutter 面等未登记入口）
-     * 返回 null ⇒ 定位按钮不出现。
-     */
-    private fun resolveLocateAction(): (() -> Unit)? {
-        val proj = project ?: return null
-        val anchor = runCatching { proj.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor }
-            .getOrNull() ?: return null
-        return {
-            runCatching {
-                com.intellij.openapi.fileEditor.OpenFileDescriptor(proj, anchor.file, anchor.line0, 0).navigate(true)
-            }
+    private fun locateErrorSource(proj: com.intellij.openapi.project.Project, anchor: SqlPreviewService.SourceAnchor) {
+        runCatching {
+            com.intellij.openapi.fileEditor.OpenFileDescriptor(proj, anchor.file, anchor.line0, 0).navigate(true)
         }
     }
 
-    /** T-ELU-05：错误定位按钮显隐判据的测试缝——驱动富错误投递链（见 [showErrorRichWithLocate]）。 */
-    internal fun showErrorRichWithLocateForTest(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo) =
-        showErrorRichWithLocate(info)
+    /**
+     * T-ErrorLocateUsability T-ELU-01（O-49）：**先解析锚点，再决定是否给按钮**。
+     *
+     * 缺陷（KDoc 与实现不符）：[SqlResultPanel.showErrorRich] 按 `locate != null` 决定按钮显隐，
+     * 而唯一调用方此前**恒传非 null lambda**（锚点解析发生在点击时，`project ?: return` /
+     * `anchor ?: return` 静默返回）→ **按钮可见，点了什么都不发生**。现把解析提到显隐之前：
+     * 锚点解析不出（无项目上下文 / 本会话尚未登记锚点 / 源文件已失效）→ 传 null，按钮不出现。
+     *
+     * 对齐同仓已做对的先例 [cn.song.mybatisplus.visualizer.log.SqlLogPanel]（先解析、后显隐）。
+     * 顺带把「文件已失效」也算作不可解析——跳不动的按钮不给，比给了点不动诚实。
+     */
+    private fun errorLocateAction(): (() -> Unit)? {
+        val proj = project ?: return null
+        val anchor = runCatching { proj.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor }
+            .getOrNull() ?: return null
+        if (!anchor.file.isValid) return null
+        return { locateErrorSource(proj, anchor) }
+    }
+
+    /** T-ErrorLocate：执行调用点共用的富错误回调（错误呈现 + **锚点可解析时**才附定位动作）。 */
+    private fun showErrorRichWithLocate(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo) {
+        resultPanel.showErrorRich(info, errorLocateAction())
+        maybeProbeDdlEffective(info)
+    }
 
     /**
      * T-DdlRecover（O-15）T-DR-02：「失败不等于未生效」——执行 DDL 撞连接类断开时，数据库侧
@@ -1381,41 +1428,38 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 结果展示与普通执行一致（内嵌控制台结果 Tab）；静态性能规则标注保留在顶部 meta 区，同屏对照。
      * EXPLAIN 归免确认类（[SqlTypeClassifier]），无 DML 二次确认；方言不支持（null）→ 提示降级。
      *
-     * T-ExplainChainHardening T-ECH-01（D1=A 严格判定）：包装前另过 [ExplainGate] 首关键字门
-     * （门在 [cn.song.mybatisplus.visualizer.sql.Dialect.renderExplainStatementIdempotent] 的幂等
-     * 短路之后）——非查询形态（DML/DDL/`SELECTED`/多语句脚本）**不包装、不执行**，给明确提示。
-     * null 的两种成因按文案分派：可 EXPLAIN 却拿不到语句 = 方言不支持；否则 = 首词不是查询
-     * （套用「方言暂不支持」会把非查询说成方言问题，属不诚实降级）。
+     * T-ExplainChainHardening T-ECH-01（O-48，D1=A 严格判定）：包装前先判**被包语句**的首关键字
+     * 是否落在 [ExplainGate] 白名单——此前对编辑器里的任意文本加前缀（`DELETE FROM t`、
+     * `CREATE TABLE …`、标识符 `SELECTED` 一律被包成 EXPLAIN 送进库），现改为明确提示、不执行。
+     * 判据只看「未包装」的文本：已以 EXPLAIN 开头的文本是本插件上一次的包装产物（T-ExplainDbl
+     * 幂等场景），不适用白名单，否则二次点击会被误拒。
      */
     internal fun explainSql() {
         val proj = project ?: return
         val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
             ?: editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
         val dialect = current?.previewModel?.dialect ?: MySqlDialect
-        // T-ExplainDbl：幂等包装——首次执行后 EXPLAIN 语句已在控制台文档中，再点一次
-        // 不在已包装文本上二次加前缀（重复前缀 → MySQL 1064）
-        val explainSql = dialect.renderExplainStatementIdempotent(sql)
-        if (explainSql == null) {
-            // T-UiNative T-UN-02：方言不支持提示改轻通知（原模态弹窗——纯告知无需打断）
-            if (!ApplicationManager.getApplication().isUnitTestMode) {
-                runCatching {
-                    val explainable = ExplainGate.isExplainableSource(sql)
-                    Notification(
-                        NOTIFICATION_GROUP_ID,
-                        MpSqlVisualizerBundle.message("panel.explain"),
-                        if (explainable) {
-                            MpSqlVisualizerBundle.message("panel.explain.unsupported", dialect.name)
-                        } else {
-                            MpSqlVisualizerBundle.message(
-                                "panel.explain.notQuery",
-                                ExplainGate.firstKeyword(sql) ?: "",
-                            )
-                        },
-                        NotificationType.INFORMATION,
-                    ).notify(proj)
-                }
+        // T-ECH-01：提交判定（幂等 → 首关键字白名单 → 方言支持面），两类拒绝理由分别提示
+        val explainSql = when (val plan = ExplainGate.planExplainSubmit(dialect, sql)) {
+            is ExplainGate.SubmitPlan.NotExplainable -> {
+                notifyExplainNotExplainable(proj, plan.firstKeyword)
+                return
             }
-            return
+            is ExplainGate.SubmitPlan.DialectUnsupported -> {
+                // T-UiNative T-UN-02：方言不支持提示改轻通知（原模态弹窗——纯告知无需打断）
+                if (!ApplicationManager.getApplication().isUnitTestMode) {
+                    runCatching {
+                        Notification(
+                            NOTIFICATION_GROUP_ID,
+                            MpSqlVisualizerBundle.message("panel.explain"),
+                            MpSqlVisualizerBundle.message("panel.explain.unsupported", plan.dialectName),
+                            NotificationType.INFORMATION,
+                        ).notify(proj)
+                    }
+                }
+                return
+            }
+            is ExplainGate.SubmitPlan.Submit -> plan.statement
         }
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
             .info("[M37.2] explainSql: dialect=${dialect.name}, len=${explainSql.length}")
@@ -1436,6 +1480,26 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             },
             onErrorRich = { info -> showErrorRichWithLocate(info) },
         )
+    }
+
+    /**
+     * T-ExplainChainHardening T-ECH-01（O-48）：被包语句不可 EXPLAIN 时的轻通知（同
+     * [panel.explain.unsupported] 形态——纯告知无需打断，不新增弹窗）。文案给出**判定依据**
+     * （实际首关键字）而不只是结论，用户据此能自己改语句。
+     */
+    private fun notifyExplainNotExplainable(proj: com.intellij.openapi.project.Project, keyword: String?) {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("panel.explain"),
+                MpSqlVisualizerBundle.message(
+                    "panel.explain.notExplainable",
+                    keyword ?: MpSqlVisualizerBundle.message("panel.explain.notExplainable.unknown"),
+                ),
+                NotificationType.INFORMATION,
+            ).notify(proj)
+        }
     }
 
     /**
@@ -2655,6 +2719,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     suppressAutoPopup = false
                 }
             }
+            // T-PrewarmLateRecover F1：记录插件最后一次写入的文本——迟到产物换装据此判「用户没动过」
+            lastRenderedSql = text
             // T-AutoFold F4-a：nativeDoc 支链的程序性折叠（关闭态 applyTo 内部即清除短路）
             nativeConsoleEditor?.let { foldTarget ->
                 if (!foldTarget.isDisposed) {
@@ -2674,6 +2740,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     suppressAutoPopup = false
                 }
             }
+            // T-PrewarmLateRecover F1：记录插件最后一次写入的文本（同上）
+            lastRenderedSql = text
             // T-AutoFold F4-a：自建编辑器支链
             cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(existing, text)
             return
@@ -2685,6 +2753,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             fLogger.warn("[M36] createEditor fallback while prepared console detached → recoverConsole")
             recoverConsole(text)
         }
+        // T-PrewarmLateRecover F1：新建支链同样记录（装配后文档文本即 text）
+        lastRenderedSql = text
         createEditor(text)
     }
 
@@ -2787,7 +2857,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 runCatching {
                     val (vFile, psi) = prewarmed
                     // T-PreviewUx-Pack #2：主路径成功（项目内文件 + PSI 就绪）——清除降级横幅
+                    // T-PrewarmLateRecover F2：动作一并摘除（横幅已清，留着会被后续 RENDER_WARNING 继承）
+                    degradationBanner.onRetry = null
                     degradationBanner.clear(DegradationBanner.Kind.DEGRADED)
+                    // T-PrewarmLateRecover F1：主路径装配 → 当前文档不再属于降级态
+                    degradedPreviewDocument = null
                     previewTempFile = vFile
                     psiFile = psi
                     // T-PreviewDocLock：262 平台给「PSI 文件 → 文档」解析加了运行期读权限断言（243 只有
@@ -2879,25 +2953,113 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 第二级 = 内存 PSI（PsiFileFactory.createFileFromText，无 VFS 文件但保留补全上下文载体）；
      * 第三级（兜底）= 纯内存文档编辑器（无 PSI，补全/注释灭）。
      * T-PreviewUx-Pack #2：降级链层级横幅——触发时明示当前层级与恢复指引（不破坏降级顺序）。
+     * T-PrewarmLateRecover F1：产出的文档登记为 [degradedPreviewDocument]（迟到产物换装的身份判据）；
+     * F2：横幅挂上「重试」动作。
      */
     private fun fallbackPreviewDocument(sql: String, msg: String): com.intellij.openapi.editor.Document {
         // 第二级：内存 PSI（保留补全上下文载体）
         createInMemoryPreviewPsi(sql)?.let { memoryPsiDoc ->
-            degradationBanner.show(
-                DegradationBanner.Kind.DEGRADED,
-                MpSqlVisualizerBundle.message("panel.banner.degradedPsi"),
-            )
+            showDegradedBanner("panel.banner.degradedPsi")
+            degradedPreviewDocument = memoryPsiDoc
             return memoryPsiDoc
         }
         // 第三级：裸 document（内存 PSI 也失败）
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
             .warn("[M36] preview temp file unavailable, fall back to bare in-memory editor: $msg")
         psiFile = null
+        showDegradedBanner("panel.banner.degradedPlain")
+        return EditorFactory.getInstance().createDocument(sql).also { degradedPreviewDocument = it }
+    }
+
+    /**
+     * T-PrewarmLateRecover F2：挂降级横幅并接上「重试」动作。
+     *
+     * 动作覆盖的是 F1 够不到的那一类——预热**硬失败**（VFS refresh 失败 / findFile null /
+     * 项目内目录建不出来）：没有产物可等，只能由用户点一次重新臂预热。
+     */
+    private fun showDegradedBanner(messageKey: String) {
+        degradationBanner.onRetry = { retryPrewarm() }
         degradationBanner.show(
             DegradationBanner.Kind.DEGRADED,
-            MpSqlVisualizerBundle.message("panel.banner.degradedPlain"),
+            MpSqlVisualizerBundle.message(messageKey),
         )
-        return EditorFactory.getInstance().createDocument(sql)
+    }
+
+    /**
+     * T-PrewarmLateRecover F1：迟到产物换装——把已经装配好的降级编辑器换成项目内文件背书的编辑器。
+     *
+     * 这是「首开预热超过预算 → 降级挂横幅 → 产物随后到达」的恢复出口（实测形态：预算 500ms、
+     * 冷启首开预热 3016ms）。**调用方负责线程归位**（[prewarmDispatcher] 回 EDT，写安全模态）。
+     *
+     * 换装判据（全部满足才动，任一条不满足就静默保持现状——产物留在 [prewarmedTempFile] 里，
+     * 留给后续 [createEditor] 消费）：
+     *  - 面板与项目未销毁；
+     *  - 已有编辑器，且当前文档就是降级装配的那一份（[degradedPreviewDocument] 身份相等）；
+     *  - 文档文本与插件最后一次写入一致（[lastRenderedSql]）——用户动过就不换，避免抢走编辑现场。
+     *    该条**只在自动换装时**生效：用户显式点「重试」时按 [userRequested] 跳过，改把当前文档文本
+     *    作为新装配的 SQL（内容不丢）——否则用户编辑过之后重试就成了按不出反应的假动作。
+     *
+     * 换装走主路径装配（[assemblePreviewEditor]），因此横幅由它统一清除；光标与焦点尽量复位
+     * （文本逐字相同，逻辑位置可直接搬）。
+     */
+    internal fun tryUpgradeToLateProduct(
+        product: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>,
+        userRequested: Boolean = false,
+    ) {
+        if (previewDisposed || project?.isDisposed == true) return
+        val current = editor ?: return
+        val degradedDoc = degradedPreviewDocument ?: return
+        if (current.document !== degradedDoc) return
+        val text = current.document.text
+        if (!userRequested && text != lastRenderedSql) {
+            // 用户已经在编辑（或另有渲染尚未落定）：不抢编辑现场，产物留给下一次装配
+            com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                .info("[M36] late prewarm product kept: document edited since last render (len=${text.length})")
+            return
+        }
+        val caret = runCatching { current.caretModel.logicalPosition }.getOrNull()
+        val hadFocus = runCatching { current.contentComponent?.isFocusOwner == true }.getOrDefault(false)
+        disposeCurrentEditorOnly()
+        // 与 [assemblePreviewEditor] 的「引用相等 + 随即置 null」消费判定对齐：本次要消费的就是这一份
+        prewarmedTempFile = product
+        assemblePreviewEditor(text, product)
+        if (caret != null) runCatching { editor?.caretModel?.moveToLogicalPosition(caret) }
+        if (hadFocus) runCatching { editor?.contentComponent?.requestFocusInWindow() }
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .info("[M36] late prewarm product consumed: editor upgraded to ${product.first.name}")
+    }
+
+    /**
+     * T-PrewarmLateRecover F2：横幅「重试」——重新臂一轮预热，产物到达后原地换装并清横幅。
+     *
+     * 两条出口都接上：预算内就绪走 [PrewarmAwait.scheduleOnce] 的 onReady；超预算到达走
+     * [PrewarmAwait.onLateProduct]（预热线程发布时发现消费侧已放弃）——所以重试**不会**因为
+     * 「预热又慢了一次」而白点。失败（硬失败）时什么都不做：横幅与动作保留，用户可再点。
+     *
+     * 重臂本身受 [prewarmRound] 保护：新轮自增令牌，旧轮迟到产物不再入字段（P9 记录的
+     * 「两次预热竞争 previewTempFile」即由该令牌挡住）。
+     */
+    internal fun retryPrewarm() {
+        if (previewDisposed || project == null) return
+        // 上一轮若已有产物躺着（迟到但没人消费），直接换装，不必再预热一轮
+        prewarmedTempFile?.let { pending ->
+            tryUpgradeToLateProduct(pending, userRequested = true)
+            if (degradedPreviewDocument == null) return
+        }
+        // 降级态下「当前在用文件」这个指针没有意义（降级文档不在项目文件上），而 [prewarmPreviewTempFile]
+        // 的入口守卫见它非空即判「已备好」直接 fail——主路径设了指针之后才失败的那条窄路（如
+        // `PsiDocumentManager.getDocument` 返回 null）会让重试变成空动作。这里只丢指针、不删文件：
+        // 文件仍在 [previewTempFilesCreated] 登记表里，[releaseEditor] 统一回收。
+        previewTempFile = null
+        prewarmFailed = false
+        prewarmPreviewTempFile()
+        prewarmAwait?.scheduleOnce(
+            onReady = { product ->
+                if (!previewDisposed) tryUpgradeToLateProduct(product, userRequested = true)
+            },
+            // 超时/失败：保持现状（横幅与动作仍在）——迟到通道会在产物真正到达时收尾
+            onFallback = {},
+        )
     }
 
     /**
@@ -3014,12 +3176,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         created.document.addDocumentListener(listener, autoPopupDisposable!!)
     }
 
-    /** 释放当前编辑器（幂等）。 */
-    private fun releaseEditor() {
-        // T-RefreshDbSteal：createEditor 兜底断言的对称端点——谁释放了自建编辑器决定了
-        // 下一次 showSql 走哪个分支，旧实现零日志
-        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
-            .info("[M36] releaseEditor: editor=${System.identityHashCode(editor)}, nativeDoc=${nativeEditorDoc != null}", Throwable("releaseEditor path"))
+    /**
+     * T-PrewarmLateRecover F1：只释放当前编辑器（含 autopopup 监听），不动临时文件与预热产物。
+     *
+     * 从 [releaseEditor] 抽出——迟到产物换装要在**保留**临时文件与产物的前提下换掉编辑器，
+     * 两条路径共用同一段释放逻辑，避免「谁负责 releaseEditor」出现两个说法（Editor 泄漏会被
+     * 平台报 "Memory leak detected"）。
+     */
+    private fun disposeCurrentEditorOnly() {
         editor?.let {
             // T-M52：监听器由 Disposable 管理，dispose 即移除（无需手动 removeDocumentListener，
             // 也不再有 listener 字段需要置 null——T-RA-02 删除）
@@ -3028,6 +3192,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             EditorFactory.getInstance().releaseEditor(it)
             editor = null
         }
+        // T-PrewarmLateRecover F1：编辑器没了，降级文档身份随之失效
+        degradedPreviewDocument = null
+    }
+
+    /** 释放当前编辑器（幂等）。 */
+    private fun releaseEditor() {
+        // T-RefreshDbSteal：createEditor 兜底断言的对称端点——谁释放了自建编辑器决定了
+        // 下一次 showSql 走哪个分支，旧实现零日志
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .info("[M36] releaseEditor: editor=${System.identityHashCode(editor)}, nativeDoc=${nativeEditorDoc != null}", Throwable("releaseEditor path"))
+        disposeCurrentEditorOnly()
         psiFile = null
         // M34 回归修复：临时 SQL 文件删除（java.io 删除免 write action；deleteOnExit 兜底）
         previewTempFile?.let { vFile -> java.io.File(vFile.path).delete() }
@@ -4337,6 +4512,32 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 与「非本插件命名零删除」两条判据。
      */
     internal fun sweepStalePreviewFilesForTest(dir: java.io.File) = sweepStalePreviewFiles(dir)
+    /** T-PrewarmLateRecover F1：当前是否处于「降级文档」态（换装判据里的身份字段）。 */
+    internal fun degradedDocumentForTest(): com.intellij.openapi.editor.Document? = degradedPreviewDocument
+
+    /**
+     * T-ErrorLocateUsability T-ELU-01（O-49）：错误定位动作的**显隐判据**缝——
+     * 锚点可解析 → 非 null（按钮出现）；不可解析 → null（按钮不出现）。
+     * 这是本任务修复点的直接可断言面（改前恒非 null）。
+     */
+    internal fun errorLocateActionForTest(): (() -> Unit)? = errorLocateAction()
+
+    /** T-ELU-01：富错误回调缝（端到端断言「锚点不可解析 → 定位按钮不出现」）。 */
+    internal fun showErrorRichWithLocateForTest(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo) =
+        showErrorRichWithLocate(info)
+
+    /** T-PrewarmLateRecover F1：插件最后一次写入编辑器文档的文本（换装判据里的「用户没动过」）。 */
+    internal fun lastRenderedSqlForTest(): String? = lastRenderedSql
+
+    /**
+     * T-PrewarmLateRecover F1：驱动迟到产物通道——与「预热线程发布时发现消费侧已放弃
+     * （`PrewarmAwait.complete` 返回 false）」走同一条代码路径（[tryUpgradeToLateProduct]）。
+     */
+    internal fun onLatePrewarmProductForTest(product: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>) =
+        tryUpgradeToLateProduct(product)
+
+    /** T-PrewarmLateRecover F2：横幅「重试」动作入口（等价于点击横幅上的动作）。 */
+    internal fun retryPrewarmForTest() = retryPrewarm()
 
     internal fun currentForTest(): PreviewResult? = current
     internal fun compactForTest(): Boolean = compactMode

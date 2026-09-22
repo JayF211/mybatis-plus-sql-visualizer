@@ -1,8 +1,7 @@
 package cn.song.mybatisplus.visualizer.util
 
-import cn.song.mybatisplus.visualizer.sql.ExplainSupportTable
-import com.google.gson.JsonElement
-import com.google.gson.JsonParser
+import cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat
+import cn.song.mybatisplus.visualizer.sql.ExplainSupport
 
 /**
  * EXPLAIN 计划「索引缺失」建议识别器（T-ExplainIndex T-EI-02，全景审计 N-23）。
@@ -16,21 +15,18 @@ import com.google.gson.JsonParser
  * 该输出（T-NoticeChannel notices 同款承载位）。IDE 面建议条挂账（硬做=备选 B 自渲染，成本
  * 收益不成立）。
  *
- * 分派口径（T-ExplainChainHardening T-ECH-02/T-ECH-03）：**按输出格式分派，不按方言名猜**——
- * 格式取自 [ExplainSupportTable.formatOf]（EXPLAIN 支持面的单一事实源）。此前按方言名 contains
- * 分流，而 PG/KingBase 渲染的是 `FORMAT JSON`、返回单列 JSON 文本，文本树正则
- * `Seq Scan on (\w+)` 在其上**永不命中** → PG 索引建议永不触发（O-48 真缺陷，PG 18.3 实测形态见
- * [adviseJson]）。
- *
- * 规则集（两形态先行，计划口径）：
- *  - [ExplainSupportTable.OutputFormat.TABLE]：MySQL 家族表格式（type=ALL 全表扫 / key=NULL 且
- *    rows 超阈 / Extra 含 Using filesort/temporary）；
- *  - [ExplainSupportTable.OutputFormat.JSON]：PG 家族 JSON（`"Node Type":"Seq Scan"` +
- *    `"Relation Name"` + `"Plan Rows"`），**容错解析**——JSON 解析不出计划节点时回落文本树；
- *  - [ExplainSupportTable.OutputFormat.TEXT]：PG 文本树（大表 Seq Scan）/ H2 / DM / SQLite 文本行。
- *
+ * 两方言先行（计划口径）：MySQL 表格式（type=ALL 全表扫 / key=NULL 且 rows 超阈 /
+ * Extra 含 Using filesort/temporary）、PG/KingBase JSON（大表 Seq Scan）。
  * 单源约定：规则集在本 object，任何未来 plan-text 消费方（IDE 面备选 B、perf 工具扩展）
  * 都从这里取，不复制第二套（与 perf_advice 的静态 SQL 规则集是两个互补面，不互斥）。
+ *
+ * T-ExplainChainHardening T-ECH-02/T-ECH-03（O-48）修正：分派依据由**方言名**改为
+ * [cn.song.mybatisplus.visualizer.sql.ExplainSupport] 表里的**输出格式**——
+ * 此前 PG 分支按 `Seq Scan on (\w+)` 文本树正则解析，而 PG 方言渲染的是
+ * `EXPLAIN (FORMAT JSON, VERBOSE)`（返回单列 JSON 文本），两种形态根本不匹配，
+ * **PG 索引建议实际永不触发**（真缺陷，真 PG 16.14 实测：返回列名 `QUERY PLAN`，值形如
+ * `[{"Plan":{"Node Type":"Seq Scan",…,"Relation Name":"bench_items",…,"Plan Rows":10000,…}}]`）。
+ * 现按格式分派：JSON → [adviseJsonPlan]，TABLE → [adviseMysql]，TEXT → [advisePlanText]。
  */
 object ExplainIndexAdvisor {
 
@@ -43,19 +39,24 @@ object ExplainIndexAdvisor {
     /**
      * 从 EXPLAIN 结果识别索引缺失类模式。
      *
-     * @param dialect   方言显示名（[cn.song.mybatisplus.visualizer.sql.Dialect.name]；按
-     *                  [ExplainSupportTable] 查输出格式，未接入方言静默降级）
-     * @param headers   结果列名（表格式形态；JSON/文本树形态通常单列）
+     * @param dialect   方言显示名（与 [cn.song.mybatisplus.visualizer.sql.Dialect.name] 同源；
+     *                  分派读 [cn.song.mybatisplus.visualizer.sql.ExplainSupport.formatFor]，
+     *                  大小写不敏感；未知/不支持方言 → 空清单）
+     * @param headers   结果列名（表格式形态；文本/JSON 形态通常单列）
      * @param rows      结果行（每行与 headers 对齐；truncated 之前的部分）
      */
     fun advise(dialect: String, headers: List<String>, rows: List<List<String>>): List<Hint> {
         val out = mutableListOf<Hint>()
-        when (ExplainSupportTable.formatOf(dialect)) {
-            ExplainSupportTable.OutputFormat.TABLE -> adviseMysql(headers, rows, out)
-            // JSON 形态优先按 JSON 解析；解析不出计划节点（老驱动/文本树回落形态）再走文本树
-            ExplainSupportTable.OutputFormat.JSON -> if (!adviseJson(rows, out)) advisePlanText(rows, out)
-            ExplainSupportTable.OutputFormat.TEXT -> advisePlanText(rows, out)
-            null -> Unit // 不支持方言静默降级（含 Oracle/SQL Server/信创系）——空清单与无命中同形
+        when (ExplainSupport.formatFor(dialect)) {
+            // MySQL 家族：表格式（id/select_type/table/type/key/rows/Extra…）
+            ExplainOutputFormat.TABLE -> adviseMysql(headers, rows, out)
+            // PG/KingBase：单列 JSON 文本（FORMAT JSON）
+            ExplainOutputFormat.JSON -> adviseJsonPlan(rows, out)
+            // 文本计划树（DM8 #NSET2 / H2 PLAN FOR / SQLite QUERY PLAN）——规则只覆盖 PG 文本树形态，
+            // 其余方言的文本形态不含该模式，天然零命中（不噪音）；将来新增文本规则在此扩展
+            ExplainOutputFormat.TEXT -> advisePlanText(rows, out)
+            // 不支持方言/未知方言静默降级——空清单与无命中同形
+            else -> Unit
         }
         return out
     }
@@ -110,67 +111,6 @@ object ExplainIndexAdvisor {
         }
     }
 
-    /**
-     * PG 家族 JSON 形态（T-ECH-03）：`EXPLAIN (FORMAT JSON …)` 返回**单列 JSON 文本**，
-     * 顺序扫描节点形如 `{"Node Type":"Seq Scan","Relation Name":"pg_class","Plan Rows":184,…}`。
-     *
-     * 解析走 Gson（`log/SqlLogParamCodec`、`log/agent/AgentEvent` 同款既有依赖）而非字符串匹配：
-     * 实测同一批两台服务器返回两种空白形态——PG 18.3 **紧凑无空格**（`"Node Type":"Seq Scan"`）、
-     * KingbaseES V8 **多行美化带空格**——任何按空白敏感的匹配会在其中一侧失效。
-     *
-     * 行数阈值取 `"Plan Rows"`（JSON 里没有文本树的 `rows=`）：**取不到行数即不出建议**——
-     * 沿用文本树分支的 `rowsN == null → 出建议` 会让任意大小的 Seq Scan 都提示，把「阈值降噪」
-     * 这一既有契约废掉。
-     *
-     * @return true=单元格确认为计划 JSON（已按 JSON 语义处理完，调用方不再回落文本树）；
-     *         false=没有任何单元格是 JSON 形态（回落文本树解析）
-     */
-    private fun adviseJson(rows: List<List<String>>, out: MutableList<Hint>): Boolean {
-        var recognized = false
-        for (row in rows) {
-            for (cell in row) {
-                val text = cell.trim()
-                // 先做廉价前缀过滤：非 `[`/`{` 开头的不可能是计划 JSON（文本树形态在此短路）
-                if (!text.startsWith("[") && !text.startsWith("{")) continue
-                val root = runCatching { JsonParser.parseString(text) }.getOrNull() ?: continue
-                if (!root.isJsonArray && !root.isJsonObject) continue
-                recognized = true
-                collectJsonPlanNodes(root, out)
-            }
-        }
-        return recognized
-    }
-
-    /** 递归遍历计划 JSON：命中 `"Node Type":"Seq Scan"` 且 `"Plan Rows"` 超阈即出建议。 */
-    private fun collectJsonPlanNodes(element: JsonElement, out: MutableList<Hint>) {
-        when {
-            element.isJsonArray -> element.asJsonArray.forEach { collectJsonPlanNodes(it, out) }
-            element.isJsonObject -> {
-                val obj = element.asJsonObject
-                val nodeType = obj.get("Node Type")?.takeIf { it.isJsonPrimitive }?.asString
-                if (nodeType.equals("Seq Scan", ignoreCase = true)) {
-                    val relation = obj.get("Relation Name")?.takeIf { it.isJsonPrimitive }?.asString ?: "?"
-                    val planRows = obj.get("Plan Rows")?.let { runCatching { it.asLong }.getOrNull() }
-                    if (planRows != null && planRows >= ROWS_THRESHOLD) {
-                        out += Hint(
-                            rule = "SEQ_SCAN",
-                            target = relation,
-                            advice = "Sequential scan over ~$planRows rows" +
-                                " — consider adding an index on the filter columns",
-                        )
-                    }
-                }
-                obj.entrySet().forEach { (_, value) -> collectJsonPlanNodes(value, out) }
-            }
-        }
-    }
-
-    /**
-     * 文本树/文本行形态：PG 文本树（`Seq Scan on big_table  (cost=… rows=…)`）为
-     * [ExplainSupportTable.OutputFormat.TEXT] 方言（H2/DM/SQLite）与 JSON 分支的**回落路径**
-     * （老驱动/文本树形态返回）共用；不匹配的方言输出（H2 `EXPLAIN PLAN FOR` 计划文本、
-     * DM `#NSET2`、SQLite `SCAN t`）天然无命中 → 空清单。
-     */
     private fun advisePlanText(rows: List<List<String>>, out: MutableList<Hint>) {
         for (row in rows) {
             for (cell in row) {
@@ -190,6 +130,102 @@ object ExplainIndexAdvisor {
         }
     }
 
+    // ---------- PG/KingBase FORMAT JSON（T-ECH-03） ----------
+
+    /** JSON 键名（PG 计划 JSON 的固定键；实测形态见类 KDoc）。 */
+    private const val KEY_NODE_TYPE = "Node Type"
+    private const val KEY_RELATION = "Relation Name"
+    private const val KEY_ALIAS = "Alias"
+    private const val KEY_PLAN_ROWS = "Plan Rows"
+    private const val KEY_ACTUAL_ROWS = "Actual Rows"
+
+    /**
+     * JSON 计划解析（T-ECH-03，真缺陷修复点）：PG/KingBase 的 `FORMAT JSON` 返回**单列 JSON 文本**，
+     * 顶层是数组 `[{ "Plan": {…} }]`，节点键为 `"Node Type"` / `"Relation Name"` / `"Plan Rows"`，
+     * 子节点在 `"Plans"` 数组里。
+     *
+     * 容错三段（计划 §六「先试 JSON，失败回落」）：
+     *  1. 整段 JSON 解析成功 → 按对象树遍历（正确处理嵌套与转义）；
+     *  2. 解析失败（**实测最常见的成因**是 [cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.MAX_CELL_CHARS]
+     *     的 2000 字符单元格预算把长计划截断）→ 按「节点分片」正则扫描：截断只影响尾部，
+     *     前面的节点对象仍完整，故仍能取到顶层节点；
+     *  3. 前两段**零命中**时回落文本树规则 [advisePlanText]（PG 文本树形态仍可识别；
+     *     真 JSON 计划零命中时该回落天然无命中，不产生噪音）。
+     * JSON 两段共用 [emitSeqScanHint]——阈值与文案只有一份。
+     */
+    private fun adviseJsonPlan(rows: List<List<String>>, out: MutableList<Hint>) {
+        for (row in rows) {
+            for (cell in row) {
+                val text = cell.trim()
+                if (text.isEmpty()) continue
+                val before = out.size
+                val parsed = runCatching { com.google.gson.JsonParser.parseString(text) }.getOrNull()
+                if (parsed != null && (parsed.isJsonArray || parsed.isJsonObject)) {
+                    walkJsonPlan(parsed, out)
+                } else {
+                    scanJsonNodes(text, out)
+                }
+                if (out.size == before) advisePlanText(listOf(listOf(cell)), out)
+            }
+        }
+    }
+
+    /** 对象树遍历：每个带 `"Node Type"` 的对象判一次，再递归其所有值（含 `"Plans"` 子计划）。 */
+    private fun walkJsonPlan(el: com.google.gson.JsonElement?, out: MutableList<Hint>) {
+        when {
+            el == null || el.isJsonNull -> Unit
+            el.isJsonArray -> el.asJsonArray.forEach { walkJsonPlan(it, out) }
+            el.isJsonObject -> {
+                val obj = el.asJsonObject
+                val relation = stringOf(obj, KEY_RELATION) ?: stringOf(obj, KEY_ALIAS)
+                val planRows = longOf(obj, KEY_PLAN_ROWS) ?: longOf(obj, KEY_ACTUAL_ROWS)
+                emitSeqScanHint(stringOf(obj, KEY_NODE_TYPE), relation, planRows, out)
+                obj.entrySet().forEach { walkJsonPlan(it.value, out) }
+            }
+            else -> Unit
+        }
+    }
+
+    private fun stringOf(obj: com.google.gson.JsonObject, key: String): String? =
+        obj.get(key)?.takeIf { it.isJsonPrimitive }?.let { runCatching { it.asString }.getOrNull() }
+
+    /** 数值容忍：PG 出数字字面量，某些驱动/版本可能把数字包成字符串。 */
+    private fun longOf(obj: com.google.gson.JsonObject, key: String): Long? =
+        obj.get(key)?.takeIf { it.isJsonPrimitive }?.let {
+            runCatching { it.asLong }.getOrNull() ?: runCatching { it.asString.trim().toLongOrNull() }.getOrNull()
+        }
+
+    /** 节点分片扫描（JSON 被截断时的回落路径）：每段 = 一个 `"Node Type"` 到下一个之前。 */
+    private fun scanJsonNodes(text: String, out: MutableList<Hint>) {
+        val starts = JSON_NODE_TYPE.findAll(text).toList()
+        for ((i, m) in starts.withIndex()) {
+            val segmentEnd = starts.getOrNull(i + 1)?.range?.first ?: text.length
+            val segment = text.substring(m.range.last + 1, segmentEnd)
+            emitSeqScanHint(
+                m.groupValues[1],
+                JSON_RELATION.find(segment)?.groupValues?.get(1),
+                JSON_PLAN_ROWS.find(segment)?.groupValues?.get(1)?.toLongOrNull(),
+                out,
+            )
+        }
+    }
+
+    /**
+     * 单节点判据（JSON 两段路径共用）：`Seq Scan` 且（行数未知或 ≥ 阈值）→ 一条建议。
+     * 关系名缺失（PG 对无表节点不输出 `"Relation Name"`）时目标记 `?`，不虚报表名。
+     */
+    private fun emitSeqScanHint(nodeType: String?, relation: String?, planRows: Long?, out: MutableList<Hint>) {
+        if (!nodeType.equals("Seq Scan", ignoreCase = true)) return
+        if (planRows != null && planRows < ROWS_THRESHOLD) return
+        out += Hint(
+            rule = "SEQ_SCAN",
+            target = relation?.takeIf { it.isNotBlank() } ?: "?",
+            advice = "Sequential scan" +
+                (planRows?.let { " over ~$it rows" } ?: "") +
+                " — consider adding an index on the filter columns",
+        )
+    }
+
     /** 建议节渲染（MCP explain 输出承载位；空清单返回空串——输出零差异硬门禁）。 */
     fun formatHints(hints: List<Hint>): String {
         if (hints.isEmpty()) return ""
@@ -198,4 +234,12 @@ object ExplainIndexAdvisor {
             hints.forEach { append("\n- [").append(it.rule).append("] ").append(it.target).append(": ").append(it.advice) }
         }
     }
+
+    /** 节点分片扫描用：JSON 键形态（`"Node Type":"Seq Scan"`）。 */
+    private val JSON_NODE_TYPE = Regex(""""Node Type"\s*:\s*"([^"]*)"""")
+    /** 关系名/别名（PG 对无表节点不出 `Relation Name`，退 `Alias`）。 */
+    private val JSON_RELATION = Regex(""""(?:Relation Name|Alias)"\s*:\s*"([^"]*)"""")
+
+    /** 估算行数（`Actual Rows` 仅 EXPLAIN ANALYZE 出现——本插件不产 analyze，容忍读取不改变口径）。 */
+    private val JSON_PLAN_ROWS = Regex(""""(?:Plan Rows|Actual Rows)"\s*:\s*(\d+)""")
 }

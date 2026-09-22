@@ -168,20 +168,15 @@ interface Dialect {
     ): String? = null
 
     /**
-     * EXPLAIN 执行计划语句（M37.2 / P-立项-06 N-1）：把任意查询包装为本方言的 EXPLAIN 形态。
+     * EXPLAIN 执行计划语句（M37.2 / P-立项-06 N-1）：把查询包装为本方言的 EXPLAIN 形态。
      *
-     * 返回 null → 本方言不支持（调用方按钮降级提示）。**支持面与输出格式的单一事实源是
-     * [ExplainSupportTable]**（T-ExplainChainHardening T-ECH-02）：已接入的 7 个方言覆写本方法时
-     * 读表渲染，未覆写者（Oracle / SQL Server）继承默认 null。支持矩阵真机实证（DBX 通道 2026-09-02）：
-     *  - MySQL 5.7/8.4、MariaDB：`EXPLAIN <sql>`（T-ExplainFirstNative 对齐 IDEA 原生
-     *    MysqlBaseRawPlanData 表格形态——原生 Explain Plan 对 MySQL 家族跑的即裸 EXPLAIN
-     *    表格行，按 id 嵌套建树；M37.2 曾用 `EXPLAIN FORMAT=JSON`，属自创形态且全树无
-     *    渲染器消费，真机网格只能呈现一坨 JSON 文本）；
-     *  - PostgreSQL：`EXPLAIN (FORMAT JSON, VERBOSE)`（PG 16 实测；PG 18.3 复验为单列 JSON 文本）；
-     *  - KingBase：`EXPLAIN (FORMAT JSON)`（KingbaseES V8 实测，PG 兼容完整）；
-     *  - DM：`EXPLAIN <sql>`（DM8 实测，返回 #NSET2 计划文本）；
-     *  - H2：`EXPLAIN PLAN FOR`；SQLite：`EXPLAIN QUERY PLAN`（引擎级单测覆盖）；
-     *  - Oracle（需两步链查 PLAN_TABLE）与 SQL Server（需会话级 SET SHOWPLAN_XML）不接入。
+     * **单一事实源已迁移到 [ExplainSupport] 表**（T-ExplainChainHardening T-ECH-02 / O-48）：
+     * 本方法默认实现读表，各方言**不再逐处覆写**——此前「没覆写」同时承担「不支持」与「忘了写」
+     * 两种含义，且新增方言时无从判定该不该有 EXPLAIN。支持面、输出格式与真机实证出处见
+     * [ExplainSupport.entries]；渲染产物逐字节不变（模板占位符替换即旧覆写的字符串拼接，
+     * `DialectExplainTest` 逐方言断言表与实现一致）。
+     *
+     * 返回 null → 本方言不支持（调用方按钮降级提示）。
      *
      * 被包语句的合法性由 [ExplainGate] 判定（T-ECH-01，两链同调；本方法自身不做首关键字判定——
      * 直接调用者如 MCP 链在调用点接门）。
@@ -189,7 +184,7 @@ interface Dialect {
      * @param sql 不含结尾分号的查询语句
      * @return 可直接提交执行的 EXPLAIN 语句，null = 不支持
      */
-    fun renderExplainStatement(sql: String): String? = null
+    fun renderExplainStatement(sql: String): String? = ExplainSupport.render(name, sql)
 
     /**
      * T-ExplainDbl：幂等 EXPLAIN 包装——文本已以 EXPLAIN 关键字开头（词边界、忽略大小写）时
@@ -199,28 +194,25 @@ interface Dialect {
      * 再点一次在已包装文本上二次加前缀 → `EXPLAIN FORMAT=JSON EXPLAIN FORMAT=JSON SELECT ...`
      * → MySQL 1064 语法错误。
      *
-     * T-ExplainChainHardening T-ECH-01：**幂等短路之后**另接一道 [ExplainGate] 门——被包语句首关键字
-     * 不在白名单（DML/DDL/`SELECTED`/`SELECT_foo` 之类，或多语句脚本中任一条非查询）时返回 null，
-     * 由调用方按「非查询形态」提示且不执行（D1=A 严格判定）。门排在短路之后是硬约束：已包装文本
-     * 首词是 EXPLAIN（不在白名单），若门在前，T-ExplainDbl 的防双前缀价值会被自己的门打掉。
+     * 被包语句的首关键字边界判定（T-ECH-01）**不在此处**：本方法返回 null 的语义是「方言不支持」，
+     * 与「语句不可 EXPLAIN」需要不同的用户提示，故由调用方（`SqlPreviewPanel.explainSql` /
+     * `SqlVisualizerExplainTool`）先经 [ExplainGate.isExplainableSource] 判定后再调用本方法。
+     * **T-ECH-01 订正（独立复核旁路）**：已包装文本（幂等分支）此前**无条件**原样返回，于是
+     * `EXPLAIN SELECT 1; DROP TABLE t` 这类「已包装 + 追加语句」的文本绕过调用方的门被整段交回
+     * 执行链（IDE 链只有 confirmDollarRawSegments/confirmUnknownParams 两闸，没有 executeSql 的
+     * DML 确认闸）——第二条 DDL 会真实执行，正是 D1=A 要堵的形态；且首条包装成功后控制台文档恰是
+     * EXPLAIN 文本，用户追加一句即可命中。故已包装文本只在**单条语句**时原样返回（T-ExplainDbl
+     * 防双前缀的既有价值保留），多条一律拒（fail closed）。
+     * 注：不复用 [ExplainGate.isExplainableSource] 判已包装文本——它认的是被包语句首词，而
+     * PG/KingBase/H2/SQLite 的已包装文本首词是包装选项（`(FORMAT JSON, VERBOSE)` 等），直接判会
+     * 把合法已包装文本误拒，打掉幂等短路本身。
      */
     fun renderExplainStatementIdempotent(sql: String): String? {
         val trimmed = sql.trim().trimEnd(';').trim()
-        if (startsWithExplainKeyword(trimmed)) {
-            // **T-ECH-01 订正（独立复核旁路）**：幂等短路此前无条件原样返回已包装文本，于是
-            // `EXPLAIN SELECT 1; DROP TABLE t` 这类「已包装 + 追加语句」的文本**绕过** [ExplainGate]
-            // 被整段交回执行链（IDE 链只有 confirmDollarRawSegments/confirmUnknownParams 两闸，
-            // 没有 executeSql 的 DML 确认闸）——第二条 DDL 会真实执行，正是 D1=A 要堵的形态；
-            // 且首条包装成功后控制台文档恰是 EXPLAIN 文本，用户追加一句即可命中。
-            // 处置：已包装文本只在**单条语句**时原样返回（T-ExplainDbl 防双前缀的既有价值保留），
-            // 多条一律拒（fail closed，由调用方按「非查询形态」提示且不执行）。
-            // 注：不复用 [ExplainGate.isExplainableSource] 判已包装文本——它认的是被包语句首词，
-            // 而 PG/KingBase/H2/SQLite 的已包装文本首词是包装选项（`(FORMAT JSON, VERBOSE)` 等），
-            // 直接判会把合法已包装文本误拒，打掉幂等短路本身。
+        if (ExplainGate.startsWithExplainKeyword(trimmed)) {
             if (SqlStatementSplitter.splitStripped(trimmed).size > 1) return null
             return trimmed
         }
-        if (!ExplainGate.isExplainableSource(trimmed)) return null
         return renderExplainStatement(trimmed)
     }
 
@@ -297,13 +289,9 @@ private fun Dialect.quoteCatalogName(identifier: String): String = when (identif
 }
 
 /**
- * T-ExplainDbl：判断语句是否已以 EXPLAIN 关键字开头——紧随字符须非字母/数字/下划线
- * （词边界），避免 `EXPLAINING_TABLE` 之类标识符误判。
+ * T-ExplainDbl：判断语句是否已以 EXPLAIN 关键字开头——实现已迁至 [ExplainGate.startsWithExplainKeyword]
+ * （T-ECH-01 把两处词法边界判定收口一处），此处不再保留第二份实现。
  */
-private fun startsWithExplainKeyword(sql: String): Boolean {
-    if (!sql.startsWith("EXPLAIN", ignoreCase = true)) return false
-    return sql.length == 7 || (!sql[7].isLetterOrDigit() && sql[7] != '_')
-}
 
 /**
  * 共享渲染辅助：MySQL 形态 `LIMIT [offset,] count`（无 offset 时 `LIMIT count`）。
@@ -383,9 +371,6 @@ object MySqlDialect : Dialect {
         updateColumns: List<String>,
         caseSource: IdentifierCaseSource,
     ): String = renderMySqlStyleUpsert(updateColumns, caseSource)
-
-    // T-ECH-02：支持面/输出格式读 [ExplainSupportTable]（单一事实源），逐字节产物由 DialectExplainTest 冻结断言
-    override fun renderExplainStatement(sql: String): String? = ExplainSupportTable.render(name, sql)
 }
 
 /**
@@ -420,8 +405,6 @@ object PostgreSQLDialect : Dialect {
         updateColumns: List<String>,
         caseSource: IdentifierCaseSource,
     ): String = renderPgStyleUpsert(conflictKey, updateColumns, caseSource)
-
-    override fun renderExplainStatement(sql: String): String? = ExplainSupportTable.render(name, sql)
 }
 
 /**
@@ -529,8 +512,6 @@ object H2Dialect : Dialect {
         return "MERGE INTO ${quoteIfNeeded(tableName, caseSource)} ($cols) KEY (${quoteIfNeeded(conflictKey, caseSource)}) " +
             "VALUES (${columns.joinToString(", ") { "?" }})"
     }
-
-    override fun renderExplainStatement(sql: String): String? = ExplainSupportTable.render(name, sql)
 }
 
 /**
@@ -552,8 +533,6 @@ object SqliteDialect : Dialect {
         updateColumns: List<String>,
         caseSource: IdentifierCaseSource,
     ): String = renderPgStyleUpsert(conflictKey, updateColumns, caseSource)
-
-    override fun renderExplainStatement(sql: String): String? = ExplainSupportTable.render(name, sql)
 }
 
 /**
@@ -582,8 +561,6 @@ object MariaDbDialect : Dialect {
         updateColumns: List<String>,
         caseSource: IdentifierCaseSource,
     ): String = renderMySqlStyleUpsert(updateColumns, caseSource)
-
-    override fun renderExplainStatement(sql: String): String? = ExplainSupportTable.render(name, sql)
 }
 
 /**
@@ -609,8 +586,6 @@ object DmDialect : Dialect {
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
 
     override val reservedWords: Set<String> = DM_RESERVED
-
-    override fun renderExplainStatement(sql: String): String? = "EXPLAIN $sql"
 }
 
 /**
@@ -649,75 +624,6 @@ object KingBaseDialect : Dialect {
         updateColumns: List<String>,
         caseSource: IdentifierCaseSource,
     ): String = renderPgStyleUpsert(conflictKey, updateColumns, caseSource)
-
-    override fun renderExplainStatement(sql: String): String? = ExplainSupportTable.render(name, sql)
-}
-
-/**
- * T-ExplainChainHardening T-ECH-02：EXPLAIN **支持面与输出格式**的显式单一事实源（O-48）。
- *
- * 此前「哪些方言支持 EXPLAIN」只体现为 [Dialect.renderExplainStatement] 的覆写（默认 null 降级），
- * 「输出是什么格式」硬编码在各方言字面量里——下游（索引建议器）只能按**方言名**猜格式，
- * 于是 PG 家族实际产出 `FORMAT JSON` 单列文本、建议器却按文本树正则解析（真缺陷，见
- * [cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor]）。本表把两者收敛为数据：
- *  - [ExplainSupport.template]：EXPLAIN 语句**前缀**（渲染 = `template + sql`，含尾随空格）；
- *  - [ExplainSupport.format]：计划输出的**形态**（[OutputFormat]）——消费方按格式分派解析器，
- *    不再按方言名猜。
- *
- * 登记口径：只登记**本插件真正接入**的方言（7 个）——[Dialect.renderExplainStatement] 未覆写的
- * Oracle / SQL Server（各有独立前置：Oracle 两步链查 PLAN_TABLE、SQL Server 会话级
- * `SET SHOWPLAN_XML`）**不入表**，[formatOf] 返回 null → 消费方静默降级（与「方言不支持」同形）。
- * 「表里 template」与「逐方言渲染结果」由 `DialectExplainTest` 的守卫断言钉住：模板字面量在
- * **测试侧冻结成期望值**再比对（表与实现同源比较是同义反复，测不出抄错模板）。
- *
- * 格式取值依据（与 [Dialect.renderExplainStatement] 的支持矩阵同源的真机/引擎实证）：
- *  - MySQL / MariaDB：`EXPLAIN <sql>` 返回**结果集**（id/select_type/table/type/key/rows/Extra 列）→ [OutputFormat.TABLE]；
- *  - PostgreSQL / KingBase：`EXPLAIN (FORMAT JSON …)` 返回**单列 JSON 文本**（PG 18.3 实测紧凑单行、
- *    KingbaseES V8 实测多行美化——**空白形态不敏感**，解析走 JSON 而非字符串匹配）→ [OutputFormat.JSON]；
- *  - H2（`EXPLAIN PLAN FOR`）、DM（`EXPLAIN`，返回 `#NSET2` 计划文本）、SQLite（`EXPLAIN QUERY PLAN`
- *    逐行 `SCAN t` 文本）：**文本树/文本行**→ [OutputFormat.TEXT]。
- *
- * 计划正文里列的 `XML` 形态（SQL Server `SET SHOWPLAN_XML` 的输出）**不设枚举成员**：本插件无任何
- * 产出点，`EnumReachabilityGuardTest` 判据（「零产出 且 类型活跃」即违规）会直接判红——接入
- * SQL Server 时再加成员并同步该守卫。
- */
-object ExplainSupportTable {
-
-    /** EXPLAIN 计划输出形态（消费方按此分派解析器，而非按方言名）。 */
-    enum class OutputFormat {
-        /** 单列 JSON 文本（PG 家族 `FORMAT JSON`）。 */
-        JSON,
-
-        /** 文本树/文本行（H2 / DM / SQLite）。 */
-        TEXT,
-
-        /** 结果集表格（MySQL 家族）。 */
-        TABLE,
-    }
-
-    /** 单方言登记项：[template] 语句前缀（含尾随空格），[format] 计划输出形态。 */
-    data class ExplainSupport(val template: String, val format: OutputFormat)
-
-    /** 方言显示名（[Dialect.name]）→ 登记项。键即 [DialectRegistry.dialects] 中已接入 EXPLAIN 的方言名。 */
-    val byDialectName: Map<String, ExplainSupport> = mapOf(
-        MySqlDialect.name to ExplainSupport("EXPLAIN ", OutputFormat.TABLE),
-        PostgreSQLDialect.name to ExplainSupport("EXPLAIN (FORMAT JSON, VERBOSE) ", OutputFormat.JSON),
-        H2Dialect.name to ExplainSupport("EXPLAIN PLAN FOR ", OutputFormat.TEXT),
-        SqliteDialect.name to ExplainSupport("EXPLAIN QUERY PLAN ", OutputFormat.TEXT),
-        MariaDbDialect.name to ExplainSupport("EXPLAIN ", OutputFormat.TABLE),
-        DmDialect.name to ExplainSupport("EXPLAIN ", OutputFormat.TEXT),
-        KingBaseDialect.name to ExplainSupport("EXPLAIN (FORMAT JSON) ", OutputFormat.JSON),
-    )
-
-    /** 本方言计划输出形态；未接入（Oracle / SQL Server / 未知名）返回 null。 */
-    fun formatOf(dialectName: String): OutputFormat? = byDialectName[dialectName]?.format
-
-    /**
-     * 渲染 EXPLAIN 语句（[Dialect.renderExplainStatement] 的读表实现）。
-     *
-     * @return `template + sql`；未接入方言返回 null（与「方言不支持」同形）
-     */
-    fun render(dialectName: String, sql: String): String? = byDialectName[dialectName]?.template?.plus(sql)
 }
 
 /**

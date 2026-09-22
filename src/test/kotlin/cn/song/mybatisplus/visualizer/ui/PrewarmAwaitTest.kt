@@ -112,4 +112,39 @@ class PrewarmAwaitTest {
         assertFalse(await.isDone())
         assertNull(await.joinOrNull())
     }
+
+    // ------------------------------------------------------------------
+    // T-PrewarmLateRecover F1：迟到产物通道
+    // ------------------------------------------------------------------
+
+    /**
+     * 超时放弃后产物到达 → 走迟到通道（而非被丢弃）。时序与生产一致：先 [PrewarmAwait.scheduleOnce]
+     * 让预算到期（onFallback 已表达「放弃」），预热线程随后才 [PrewarmAwait.complete]。
+     * 这正是「首开预热 3016ms、预算 500ms」那一类的恢复入口。
+     */
+    @Test
+    fun test超时后产物到达_走迟到通道() {
+        val rec = Recorder()
+        val await = PrewarmAwait<String>(30, rec)
+        var fallback = false
+        assertTrue(await.scheduleOnce(onReady = { }, onFallback = { fallback = true }))
+        Thread.sleep(150)
+        assertTrue("超时应先走 onFallback", fallback)
+
+        var late: String? = null
+        await.onLateProduct { late = it }
+        assertFalse("消费侧已放弃 → complete 应返回 false", await.complete("late"))
+        assertEquals("迟到产物应交给登记方（而非静默丢弃）", "late", late)
+        assertEquals("一次性语义不变：不得二次派发 scheduleOnce 回调", listOf("dispatch"), rec.events)
+    }
+
+    /** 预算内交付不得触发迟到通道——否则同一产物会被换装两次。 */
+    @Test
+    fun test预算内交付_不触发迟到通道() {
+        val await = PrewarmAwait<String>(60_000, Recorder())
+        var late: String? = null
+        await.onLateProduct { late = it }
+        assertTrue("预算内完成应交付给消费侧", await.complete("product"))
+        assertNull("正常交付不得走迟到通道", late)
+    }
 }

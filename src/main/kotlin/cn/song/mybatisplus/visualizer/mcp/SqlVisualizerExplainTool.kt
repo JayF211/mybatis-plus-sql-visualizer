@@ -1,7 +1,6 @@
 package cn.song.mybatisplus.visualizer.mcp
 
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
-import cn.song.mybatisplus.visualizer.sql.ExplainGate
 import com.intellij.mcpserver.annotations.McpDescription
 import com.intellij.mcpserver.annotations.McpTool
 import com.intellij.mcpserver.annotations.McpToolHintValue
@@ -72,6 +71,21 @@ class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
         if (!verdict.allowed) {
             throwExpected(McpToolErrors.code(verdict.errorCode ?: McpToolErrors.SQL_BLOCKED, verdict.reason ?: "rejected."))
         }
+        // 1b) EXPLAIN 首关键字边界（T-ECH-01：与 IDE 链同一判定）。
+        // 这是**守卫之后的第二道**，对结构白名单接受的输入**不可能触发**——白名单只放行
+        // Select 家族（含 `Values`/`TableStatement`，JSqlParser 5.3 里两者都是 Select 子类），
+        // 而 Select 家族的首关键字必落在白名单内。包含性由 `ExplainGateTest` 的语料用例钉住
+        // （计划 §八 待验证前提 2 由此证伪：结构白名单对 `VALUES(1)`/`TABLE users` **不过严**，
+        // 两链白名单完全对齐）。保留本判定是为了两链共用一处口径，将来白名单若被放宽，
+        // 这道仍在。
+        if (!cn.song.mybatisplus.visualizer.sql.ExplainGate.isExplainableSource(selectSql)) {
+            throwExpected(
+                McpToolErrors.code(
+                    McpToolErrors.SQL_BLOCKED,
+                    "the statement is not an explainable query (first keyword must be SELECT, VALUES, TABLE or WITH).",
+                ),
+            )
+        }
 
         // 2) 数据源定位（零弹窗：不给/给不出唯一别名即报错并列可选名，绝不弹选择框）
         if (!McpDbExecutor.isDatabaseAvailable()) {
@@ -113,21 +127,7 @@ class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
                 ?.let { Class.forName("com.intellij.database.model.RawConnectionConfig").getMethod("getUrl").invoke(it) as? String }
         }.getOrNull()
         val dialectName = McpDialectDetector.resolve(dialect, url)
-        val normalized = selectSql.trim().removeSuffix(";")
-        // T-ExplainChainHardening T-ECH-01：被包语句首关键字门——与 IDE 面板链
-        // （SqlPreviewPanel.explainSql → Dialect.renderExplainStatementIdempotent）**同链调用**，
-        // 两链行为不得分叉。MCP 侧 McpSelectGuard 的结构白名单已 fail-closed 拒非 SELECT，
-        // 本门是第二道（结构判定与词法判定各自独立，任一处收紧都不至于让另一链静默放宽）。
-        if (!ExplainGate.isExplainableSource(normalized)) {
-            throwExpected(
-                McpToolErrors.code(
-                    McpToolErrors.SQL_BLOCKED,
-                    "selectSql is not EXPLAIN-able: first keyword " +
-                        "'${ExplainGate.firstKeyword(normalized) ?: "?"}' is not one of SELECT/VALUES/TABLE/WITH.",
-                ),
-            )
-        }
-        val explainSql = DialectRegistry.byName(dialectName).renderExplainStatement(normalized)
+        val explainSql = DialectRegistry.byName(dialectName).renderExplainStatement(selectSql.trim().removeSuffix(";"))
             ?: throwExpected(
                 McpToolErrors.code(
                     McpToolErrors.DIALECT_UNSUPPORTED,
@@ -163,18 +163,14 @@ class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
                     },
                 )
             }.getOrElse { e ->
-                // T-ErrorLocate T-EL-04：驱动错误消息携带位置信号（PG `Position: N` / `at line N` /
-                // Oracle PL/SQL `line N, column M`）时附 errorPosition 文本行——agent 可定位再自修复；
-                // 匹配不到/多 marker 即不加（诚实降级，ErrorPositionExtractor 的 marker 单一性门控与
-                // 「基建语句不带位置」同源）。
-                // T-ELU-03：钳制上界取**真正提交的** `target.explainSql`（包装后语句）长度，不是原始
-                // `selectSql`——驱动器报的位置坐标属于被执行语句，用原始语句长度会与坐标系不一致。
-                // T-ELU-04：位置指向**执行态文本**（EXPLAIN 包装后的语句），非 mapper 原文行，
-                // 故追加一行来源说明；`errorPosition: char/line N` 既有形态逐字节不变（agent 侧零破坏）。
+                // T-ErrorLocate T-EL-04：驱动错误消息携带位置信号（PG `Position: N` / `at line N`）时
+                // 附 errorPosition 文本行——agent 可定位再自修复；匹配不到/多 marker 即不加（诚实降级，
+                // ErrorPositionExtractor 的 marker 单一性门控与「基建语句不带位置」同源）。
                 val causeMsg = e.message ?: e.javaClass.simpleName
+                // T-ErrorLocateUsability T-ELU-03（O-49）：接上**被提交文本**长度（EXPLAIN 包装句——
+                // 驱动报的位置指向它，不是原始 selectSql），使越界钳制从「仅单测生效」变为生产生效。
                 val pos = cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor.extractPosition(
-                    causeMsg,
-                    target.explainSql.length,
+                    causeMsg, target.explainSql.length,
                 )
                 throwExpected(
                     McpToolErrors.code(
@@ -182,8 +178,7 @@ class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
                         "EXPLAIN failed on '${target.dialectName}' data source: ${firstLine(causeMsg)}" +
                             if (pos != null) {
                                 val kind = if (pos.second) "char" else "line"
-                                "\nerrorPosition: $kind ${pos.first}" +
-                                    "\nerrorPositionSource: offset into the executed EXPLAIN statement text, not the mapper source line"
+                                "\nerrorPosition: $kind ${pos.first}"
                             } else "",
                     ),
                 )

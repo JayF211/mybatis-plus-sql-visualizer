@@ -77,77 +77,86 @@ class ExplainIndexAdvisorTest {
         assertTrue(ExplainIndexAdvisor.advise("PostgreSQL", listOf("QUERY PLAN"), rows).isEmpty())
     }
 
-    // ---------- PG JSON 形态（T-ECH-03：PG/KingBase 渲染的是 FORMAT JSON，非文本树） ----------
+    // ---------- PG JSON（T-ExplainChainHardening T-ECH-03：真缺陷修复） ----------
 
     /**
-     * 实测形态（真 PG 18.3，DBX 只读实跑 `EXPLAIN (FORMAT JSON, VERBOSE) SELECT * FROM
-     * information_schema.tables`）：**单列**（列名 `QUERY PLAN`）**紧凑无空格** JSON 文本，
-     * 顺序扫描节点的键为 `"Node Type":"Seq Scan"` + `"Relation Name"` + `"Plan Rows"`——
-     * 文本树正则 `Seq Scan on (\w+)` 在该形态上永不命中（本任务 P1 真缺陷）。
-     * 与解析无关的 `Output` 数组已略（字段形态与键名保持实测原样）。
+     * 真库实测形态钉住（PG 16.14，DBX 通道 2026-09-22）：
+     * `EXPLAIN (FORMAT JSON, VERBOSE) SELECT * FROM bench_items` 返回**单列**（列名 `QUERY PLAN`）
+     * 的 JSON 文本，关系名键为 `"Relation Name"`、行数键为 `"Plan Rows"`。
+     *
+     * 改前此形态必红：旧 PG 分支按 `Seq Scan on (\w+)` 文本树正则解析，JSON 里没有该文本形态
+     * → PG 索引建议**永不触发**（真缺陷）。
      */
-    private val pgJsonSmallScan = listOf(
-        listOf(
-            """[{"Plan":{"Node Type":"Hash Join","Join Type":"Left","Startup Cost":58.02,""" +
-                """"Total Cost":108.00,"Plan Rows":123,"Plan Width":608,"Plans":[""" +
-                """{"Node Type":"Hash Join","Parent Relationship":"Outer","Join Type":"Inner",""" +
-                """"Startup Cost":2.00,"Total Cost":42.60,"Plan Rows":123,"Plan Width":141,"Plans":[""" +
-                """{"Node Type":"Seq Scan","Parent Relationship":"Outer","Relation Name":"pg_class",""" +
-                """"Schema":"pg_catalog","Alias":"c","Startup Cost":0.00,"Total Cost":40.08,""" +
-                """"Plan Rows":184,"Plan Width":77}]}]}}]""",
-        ),
-    )
+    private val pgJsonSeqScan = """[{"Plan":{"Node Type":"Seq Scan","Parallel Aware":false,""" +
+        """"Async Capable":false,"Relation Name":"bench_items","Schema":"public",""" +
+        """"Alias":"bench_items","Startup Cost":0.00,"Total Cost":256.00,"Plan Rows":10000,""" +
+        """"Plan Width":87,"Output":["id","numeric_value","timestamp_value","text_value"]}}]"""
 
-    /** 同上形态，仅把顺序扫描节点的 `"Plan Rows"` 提到阈值之上（可触发判定）。 */
-    private val pgJsonBigScan = listOf(
-        listOf(
-            """[{"Plan":{"Node Type":"Hash Join","Plan Rows":123,"Plans":[""" +
-                """{"Node Type":"Seq Scan","Relation Name":"pg_class","Schema":"pg_catalog",""" +
-                """"Plan Rows":300000,"Plan Width":77}]}}]""",
-        ),
-    )
+    /** 真库实测形态钉住：`SELECT 1` 的 JSON（节点无关系名，`Node Type` = `Result`）。 */
+    private val pgJsonResult = """[{"Plan":{"Node Type":"Result","Parallel Aware":false,""" +
+        """"Async Capable":false,"Startup Cost":0.00,"Total Cost":0.01,"Plan Rows":1,"Plan Width":4,""" +
+        """"Output":["1"]}}]"""
 
     @Test
-    fun testPG_JSON形态_顺序扫描超阈提示() {
-        val hints = ExplainIndexAdvisor.advise("PostgreSQL", listOf("QUERY PLAN"), pgJsonBigScan)
+    fun testPG_JSON形态_SeqScan超阈提示() {
+        val rows = listOf(listOf(pgJsonSeqScan))
+        val hints = ExplainIndexAdvisor.advise("PostgreSQL", listOf("QUERY PLAN"), rows)
         assertEquals(1, hints.size)
         assertEquals("SEQ_SCAN", hints[0].rule)
-        assertEquals("pg_class", hints[0].target)
-        assertTrue(hints[0].advice.contains("300000"))
+        assertEquals("bench_items", hints[0].target)
+        assertTrue("建议文案应含实测行数", hints[0].advice.contains("10000"))
     }
 
     @Test
-    fun testPG_JSON形态_真实小表顺序扫描不提示() {
-        // 实测真库形态（Plan Rows=184 < 阈值）：解析认得形态但按阈值降噪，不出建议
-        assertTrue(ExplainIndexAdvisor.advise("PostgreSQL", listOf("QUERY PLAN"), pgJsonSmallScan).isEmpty())
-    }
-
-    @Test
-    fun testPG_JSON形态_空白不敏感_金仓多行美化同判() {
-        // KingbaseES V8 实测返回多行美化 JSON（冒号后带空格）——按空白敏感的字符串匹配会在该侧失效
-        val pretty = listOf(
-            listOf(
-                "[\n" +
-                    "  {\n" +
-                    "    \"Plan\": {\n" +
-                    "      \"Node Type\": \"Seq Scan\",\n" +
-                    "      \"Relation Name\": \"ceshi\",\n" +
-                    "      \"Plan Rows\": 42000\n" +
-                    "    }\n" +
-                    "  }\n" +
-                    "]",
-            ),
+    fun testPG_JSON形态_小表SeqScan不提示() {
+        val small = pgJsonSeqScan.replace(""""Plan Rows":10000""", """"Plan Rows":5""")
+        assertTrue(
+            ExplainIndexAdvisor.advise("PostgreSQL", listOf("QUERY PLAN"), listOf(listOf(small))).isEmpty(),
         )
-        val hints = ExplainIndexAdvisor.advise("KingBase（人大金仓）", listOf("QUERY PLAN"), pretty)
-        assertEquals(1, hints.size)
-        assertEquals("SEQ_SCAN", hints[0].rule)
-        assertEquals("ceshi", hints[0].target)
     }
 
     @Test
-    fun testPG_JSON形态_无顺序扫描节点不提示() {
-        val json = listOf(listOf("""[{"Plan":{"Node Type":"Result","Plan Rows":1}}]"""))
-        assertTrue(ExplainIndexAdvisor.advise("PostgreSQL", listOf("QUERY PLAN"), json).isEmpty())
+    fun testPG_JSON形态_非SeqScan节点不提示() {
+        assertTrue(
+            ExplainIndexAdvisor.advise("PostgreSQL", listOf("QUERY PLAN"), listOf(listOf(pgJsonResult))).isEmpty(),
+        )
+    }
+
+    @Test
+    fun testPG_JSON形态_嵌套子计划可识别() {
+        // PG 把子计划放 "Plans" 数组；顶层 Hash Join + 子节点 Seq Scan
+        val nested = """[{"Plan":{"Node Type":"Hash Join","Plan Rows":10,"Plans":[""" +
+            """{"Node Type":"Seq Scan","Relation Name":"child_tbl","Plan Rows":500000,""" +
+            """"Plans":[]}]}}]"""
+        val hints = ExplainIndexAdvisor.advise("PostgreSQL", listOf("QUERY PLAN"), listOf(listOf(nested)))
+        assertEquals(1, hints.size)
+        assertEquals("child_tbl", hints[0].target)
+    }
+
+    @Test
+    fun testPG_JSON被截断_分片扫描仍能识别顶层节点() {
+        // 实测约束：McpExplainFormatter.MAX_CELL_CHARS=2000 会把长计划 JSON 截断（尾部丢 "…"）。
+        // 截断只影响尾部，顶层节点对象仍完整 → 分片扫描路径必须仍产出建议（否则大计划永不提示）
+        val truncated = pgJsonSeqScan.take(150) + "…"
+        val hints = ExplainIndexAdvisor.advise("PostgreSQL", listOf("QUERY PLAN"), listOf(listOf(truncated)))
+        assertEquals(1, hints.size)
+        assertEquals("bench_items", hints[0].target)
+    }
+
+    @Test
+    fun testKingBase_JSON形态同PG() {
+        val hints = ExplainIndexAdvisor.advise("KingBase（人大金仓）", listOf("QUERY PLAN"), listOf(listOf(pgJsonSeqScan)))
+        assertEquals(1, hints.size)
+        assertEquals("bench_items", hints[0].target)
+    }
+
+    @Test
+    fun testPG文本树形态_仍支持_容错回落() {
+        // JSON 档的容错回落：非 JSON 的文本计划（如驱动把计划渲染成文本树）仍走文本树规则
+        val rows = listOf(listOf("Seq Scan on big_table  (cost=0.00..35000.00 rows=300000 width=64)"))
+        val hints = ExplainIndexAdvisor.advise("PostgreSQL", listOf("QUERY PLAN"), rows)
+        assertEquals(1, hints.size)
+        assertEquals("big_table", hints[0].target)
     }
 
     // ---------- 降级与零差异 ----------
@@ -155,8 +164,23 @@ class ExplainIndexAdvisorTest {
     @Test
     fun test不支持方言静默降级() {
         val rows = listOf(listOf("1", "SIMPLE", "t", "ALL", "NULL", "999999", ""))
-        assertTrue(ExplainIndexAdvisor.advise("DM", mysqlHeaders, rows).isEmpty())
+        // DM（达梦）在册且接入（TEXT 档），但表格式行不含文本树模式 → 零命中（不噪音、不猜）
+        assertTrue(ExplainIndexAdvisor.advise("DM（达梦）", mysqlHeaders, rows).isEmpty())
+        // Oracle 在册但**有意不接入**（两步链另议）→ 静默降级
         assertTrue(ExplainIndexAdvisor.advise("Oracle", mysqlHeaders, rows).isEmpty())
+        assertTrue("未知方言静默降级", ExplainIndexAdvisor.advise("no-such-dialect", mysqlHeaders, rows).isEmpty())
+    }
+
+    /** 分派改读格式后，MySQL 家族仍走表格式、PG 家族仍走 JSON——方言名大小写不敏感。 */
+    @Test
+    fun test方言名大小写不敏感() {
+        val rows = listOf(listOf("1", "SIMPLE", "orders", "ALL", "NULL", "500000", ""))
+        assertEquals(1, ExplainIndexAdvisor.advise("mysql", mysqlHeaders, rows).size)
+        assertEquals(1, ExplainIndexAdvisor.advise("MySQL", mysqlHeaders, rows).size)
+        assertEquals(
+            1,
+            ExplainIndexAdvisor.advise("postgresql", listOf("QUERY PLAN"), listOf(listOf(pgJsonSeqScan))).size,
+        )
     }
 
     @Test

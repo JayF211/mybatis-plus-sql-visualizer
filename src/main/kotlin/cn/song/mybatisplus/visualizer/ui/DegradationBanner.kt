@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
@@ -21,6 +22,10 @@ import java.awt.BorderLayout
  *  DEGRADED（降级链，最高）> RENDER_WARNING（渲染警示）> DOLLAR_INJECT（`${}` 直替
  *  信息提示，T-DollarInjectMark——措辞中性的注入面提示，**可关闭**：仅该类别带 ✕ 按钮，
  *  点击回调 [onDismiss] 由调用方做会话级记忆）。
+ *
+ * T-PrewarmLateRecover F2：DEGRADED 可挂一个**动作**（[onRetry]，文案 `panel.banner.retry`）——
+ * 预热硬失败时没有产物可等，只能由用户点一次重新臂预热。动作标签照抄同文件 ✕ 按钮的形态
+ * （JBLabel + HAND_CURSOR + MouseAdapter），不新造控件类型；两者共用 EAST 位（横排容器）。
  */
 class DegradationBanner : JBPanel<DegradationBanner>(BorderLayout()) {
 
@@ -36,6 +41,12 @@ class DegradationBanner : JBPanel<DegradationBanner>(BorderLayout()) {
 
     /** T-DollarInjectMark：DOLLAR_INJECT 的 ✕ 关闭回调（调用方负责会话级记忆与 clear）。 */
     var onDismiss: (() -> Unit)? = null
+
+    /**
+     * T-PrewarmLateRecover F2：DEGRADED 的「重试」回调（null = 不显示动作）。
+     * 调用方在挂降级横幅时接上（[SqlPreviewPanel.showDegradedBanner]），主路径装配成功时摘除。
+     */
+    var onRetry: (() -> Unit)? = null
 
     private val label = JBLabel().apply {
         foreground = JBColor.namedColor("ErrorForeground", JBColor.RED)
@@ -61,10 +72,33 @@ class DegradationBanner : JBPanel<DegradationBanner>(BorderLayout()) {
     /** 当前挂起的消息类别（null = 无提示）。 */
     private var currentKind: Kind? = null
 
+    /**
+     * T-PrewarmLateRecover F2：「重试」动作标签（形态同 [dismissButton]——HAND_CURSOR + 点击回调）。
+     * 文案在 [show] 时按当前语言解析（语言设置可在运行期切换，构造期定死会跟着一起旧）。
+     */
+    private val retryLabel = JBLabel().apply {
+        cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+        border = JBUI.Borders.empty(4, 8, 4, 8)
+        foreground = JBColor.namedColor("Link.activeForeground", JBColor.BLUE)
+        addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                onRetry?.invoke()
+            }
+        })
+        isVisible = false
+    }
+
+    /** EAST 位横排容器：动作标签 + ✕ 关闭按钮共用（BorderLayout 的 EAST 只能放一个组件）。 */
+    private val actions = JBPanel<JBPanel<*>>(java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 0, 0)).apply {
+        isOpaque = false
+        add(retryLabel)
+        add(dismissButton)
+    }
+
     init {
         isOpaque = false
         add(label, BorderLayout.CENTER)
-        add(dismissButton, BorderLayout.EAST)
+        add(actions, BorderLayout.EAST)
         isVisible = false
     }
 
@@ -78,6 +112,11 @@ class DegradationBanner : JBPanel<DegradationBanner>(BorderLayout()) {
         label.text = message
         dismissButton.isVisible = kind == Kind.DOLLAR_INJECT
         dismissButton.toolTipText = message
+        // T-PrewarmLateRecover F2：动作只在「有回调的降级提示」上出现
+        val retryVisible = kind == Kind.DEGRADED && onRetry != null
+        retryLabel.isVisible = retryVisible
+        if (retryVisible) retryLabel.text = MpSqlVisualizerBundle.message("panel.banner.retry")
+        actions.isVisible = retryVisible || dismissButton.isVisible
         isVisible = true
     }
 
@@ -89,6 +128,8 @@ class DegradationBanner : JBPanel<DegradationBanner>(BorderLayout()) {
         currentKind = null
         label.text = ""
         dismissButton.isVisible = false
+        retryLabel.isVisible = false
+        actions.isVisible = false
         isVisible = false
     }
 
@@ -104,5 +145,16 @@ class DegradationBanner : JBPanel<DegradationBanner>(BorderLayout()) {
     /** 测试触发器：模拟点击 ✕。 */
     internal fun clickDismissForTest() {
         if (dismissButton.isVisible) onDismiss?.invoke()
+    }
+
+    /** T-PrewarmLateRecover F2：测试访问器——「重试」动作可见性（仅挂了回调的 DEGRADED）。 */
+    internal fun retryVisibleForTest(): Boolean = retryLabel.isVisible
+
+    /** T-PrewarmLateRecover F2：测试访问器——动作文案（i18n 键解析结果）。 */
+    internal fun retryTextForTest(): String = retryLabel.text
+
+    /** T-PrewarmLateRecover F2：测试触发器——模拟点击动作（不可见时不触发，同 [clickDismissForTest]）。 */
+    internal fun clickRetryForTest() {
+        if (retryLabel.isVisible) onRetry?.invoke()
     }
 }

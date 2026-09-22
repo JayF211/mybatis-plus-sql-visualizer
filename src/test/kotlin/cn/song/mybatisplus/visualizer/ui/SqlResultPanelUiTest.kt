@@ -20,11 +20,6 @@ import javax.swing.JButton
  *   - showError：HTML 转义（防 < > & 破坏布局）、tooltip 存完整错误、errorCopyButton 显隐；
  *   - showIdle 保留 ERROR（防"一闪而过"）但清 LOADING/SUCCESS；
  *   - 自动可见性：有内容显示、空态隐藏（不占高度）。
- *
- * T-ELU-05（T-Round10-03）追加——错误定位按钮的**可用性判定**（先解析、后显隐）：
- *   - 无锚点 ⇒ 按钮不出现（**先红用例**：改前富错误投递链恒传非 null 动作，按钮恒可见）；
- *   - 锚点可解析 ⇒ 按钮出现；
- *   - 旧通道（onError）不得在富通道之后再投一次（`showError` 会抹掉定位态）。
  */
 class SqlResultPanelUiTest : BasePlatformTestCase() {
 
@@ -39,10 +34,6 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
     /** 错误复制按钮：JButton 且 text == bundle panel.copyError。 */
     private fun copyButton(panel: SqlResultPanel): JButton? =
         allComponents(panel).filterIsInstance<JButton>().firstOrNull { it.text == MpSqlVisualizerBundle.message("panel.copyError") }
-
-    /** T-ELU-05：错误定位按钮：JButton 且 text == bundle execute.error.locate。 */
-    private fun locateButton(panel: SqlResultPanel): JButton? =
-        allComponents(panel).filterIsInstance<JButton>().firstOrNull { it.text == MpSqlVisualizerBundle.message("execute.error.locate") }
 
     /** 信息标签：唯一非空 JBLabel（CENTER infoLabel）。 */
     private fun infoLabel(panel: SqlResultPanel): JBLabel? =
@@ -155,81 +146,88 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
-    // T-ELU-05（T-Round10-03）：错误定位按钮显隐判据
+    // T-ErrorLocateUsability T-ELU-01（O-49）：定位按钮可用性判定
     // ------------------------------------------------------------------
 
-    private fun errorInfo(msg: String) =
-        cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo(message = msg)
+    /** 定位按钮：JButton 且 text == bundle execute.error.locate。 */
+    private fun locateButton(panel: SqlResultPanel): JButton? =
+        allComponents(panel).filterIsInstance<JButton>()
+            .firstOrNull { it.text == MpSqlVisualizerBundle.message("execute.error.locate") }
+
+    private fun info(positionChar: Int? = null) =
+        cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo(
+            message = "boom",
+            positionChar = positionChar,
+        )
 
     /**
-     * **本任务的先红用例**（改前必红）：无锚点 ⇒ 定位按钮不出现。
-     *
-     * 判据必须走 [SqlPreviewPanel] 的富错误投递链（[SqlPreviewPanel.showErrorRichWithLocateForTest]）——
-     * 直接调 [SqlResultPanel.showErrorRich] 传 null 在改前改后都绿（`SqlResultPanel.kt:252` 本就按
-     * null 判定），证不了「投递点是否先解析」。改前该链恒传非 null 动作 ⇒ 按钮可见 ⇒ 本用例红。
+     * 本任务的核心判据（面板侧契约）：`locate == null` → 按钮**不出现**。
+     * 宿主（`SqlPreviewPanel`）负责在锚点不可解析时传 null——改前它恒传非 null lambda，
+     * 于是按钮可见但点了什么都不发生。
      */
-    fun test错误定位按钮_无锚点时不可见() {
-        val preview = SqlPreviewPanel(project)
+    fun testShowErrorRich_不可定位时不显示定位按钮() {
+        val panel = SqlResultPanel()
         try {
-            // 本会话未登记过锚点（SqlPreviewService.lastPreviewSourceAnchor 默认 null）
-            preview.showErrorRichWithLocateForTest(errorInfo("boom: syntax error near 'FORM'"))
+            panel.showErrorRich(info(), null)
             waitForEdt()
-            val btn = locateButton(preview.resultPanelForTest())
-            assertNotNull("定位按钮应存在于结果面板", btn)
-            assertFalse("锚点不可解析 ⇒ 定位按钮不出现（不得可见而点击无反应）", btn!!.isVisible)
+            assertEquals("仍应进入 ERROR 态", "ERROR", panel.stateForTest())
+            val btn = locateButton(panel)
+            assertNotNull("定位按钮组件应存在（仅隐藏）", btn)
+            assertFalse("locate=null 时定位按钮不得可见", btn!!.isVisible)
+            assertTrue("错误复制按钮不受影响", copyButton(panel)!!.isVisible)
         } finally {
-            preview.clear()
-            preview.dispose()
+            panel.clear()
         }
     }
 
-    /** 锚点可解析 ⇒ 定位按钮出现（对照半边；与上例共同构成「先解析后显隐」的双向判据）。 */
-    fun test错误定位按钮_锚点可解析时可见() {
-        val preview = SqlPreviewPanel(project)
+    fun testShowErrorRich_可定位时显示按钮且tooltip如实标注两态() {
+        val panel = SqlResultPanel()
         try {
-            val vf = myFixture.addFileToProject("AnchorHost.java", "class AnchorHost {}").virtualFile
-            project.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor =
-                SqlPreviewService.SourceAnchor(vf, 2)
-            preview.showErrorRichWithLocateForTest(errorInfo("boom: syntax error near 'FORM'"))
+            panel.showErrorRich(info(positionChar = 24), { })
             waitForEdt()
-            val btn = locateButton(preview.resultPanelForTest())
-            assertNotNull("定位按钮应存在于结果面板", btn)
-            assertTrue("锚点可解析 ⇒ 定位按钮出现", btn!!.isVisible)
-        } finally {
-            project.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor = null
-            preview.clear()
-            preview.dispose()
-        }
-    }
-
-    /**
-     * T-ELU-01 抹除链回归：富通道投递后旧通道（`onError`）**不得**再投一次——`showError` 会清掉
-     * 定位动作与按钮可见性（`SqlResultPanel.kt:231-232`），两条都投则按钮恒不可见。
-     * 本用例钉住 `DataSourceSelector.deliverError` 的互斥契约（生产投递点共用同一函数）。
-     */
-    fun test错误定位按钮_旧通道不得抹掉富通道的定位态() {
-        val preview = SqlPreviewPanel(project)
-        try {
-            val vf = myFixture.addFileToProject("AnchorHost2.java", "class AnchorHost2 {}").virtualFile
-            project.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor =
-                SqlPreviewService.SourceAnchor(vf, 0)
-            val panel = preview.resultPanelForTest()
-            var richSeen = false
-            var plainSeen = false
-            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.deliverError(
-                onErrorRich = { info -> richSeen = true; panel.showErrorRich(info) { } },
-                onError = { plainSeen = true; panel.showError(it) },
-                cause = null,
-                message = "boom",
+            val btn = locateButton(panel)!!
+            assertTrue("locate 非 null 时定位按钮应可见", btn.isVisible)
+            val tip = btn.toolTipText
+            // 用 bundle 自身文案比对（与既有用例同款，不依赖 locale）——钉住「用的是带位置的 key」
+            assertEquals(
+                "tooltip 应为带驱动位置的文案",
+                MpSqlVisualizerBundle.message("execute.error.locate.tooltip.position", 24),
+                tip,
             )
-            waitForEdt()
-            assertTrue("富通道应被投递", richSeen)
-            assertFalse("富通道在场时旧通道不得再投（否则抹掉定位按钮）", plainSeen)
-            assertTrue("富通道置的定位按钮应保持可见", locateButton(panel)!!.isVisible)
+            assertTrue("tooltip 应含驱动报的位置", tip.contains("24"))
+            // 测试环境 bundle 兜底中文（MpSqlVisualizerBundle KDoc：settings 未注册 → 中文）
+            assertTrue("tooltip 应如实标注位置指向被执行的 SQL", tip.contains("被执行的 SQL"))
+            assertTrue("tooltip 不得宣称能定位到 mapper 原文行", tip.contains("不一一对应"))
         } finally {
-            project.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor = null
-            preview.clear()
-            preview.dispose()
+            panel.clear()
+        }
+    }
+
+    /** 无位置信号时用「语句起始行」口径的 tooltip（同样如实标注两态）。 */
+    fun testShowErrorRich_无位置信号用起始行口径() {
+        val panel = SqlResultPanel()
+        try {
+            panel.showErrorRich(info(), { })
+            waitForEdt()
+            val tip = locateButton(panel)!!.toolTipText
+            assertTrue("tooltip 应标注两态", tip.contains("被执行的 SQL"))
+        } finally {
+            panel.clear()
+        }
+    }
+
+    /** 富错误后再走普通 showError（无定位）→ 定位按钮必须收起（不残留可点却无动作的按钮）。 */
+    fun testShowErrorRich_转普通错误后按钮收起() {
+        val panel = SqlResultPanel()
+        try {
+            panel.showErrorRich(info(), { })
+            waitForEdt()
+            assertTrue(locateButton(panel)!!.isVisible)
+            panel.showError("boom again")
+            waitForEdt()
+            assertFalse("普通错误路径应隐藏定位按钮", locateButton(panel)!!.isVisible)
+        } finally {
+            panel.clear()
         }
     }
 }

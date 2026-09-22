@@ -10,11 +10,6 @@ import org.junit.Test
  * 覆盖：PG `Position: N`（pgjdbc 拼 message 形态）/ MySQL `at line N` / `Line: N` 形态、
  * marker 单一性门控（多信号放弃归属）、越界钳制、无信号（连接类错误）降级 null、
  * SQLException 链 SQLState/errorCode 提取（cause 链 + nextException 链）。
- *
- * T-ELU-02/03/04（2026-09-22）追加：Oracle PL/SQL `ORA-06550: line N, column M:` 中英两种
- * locale 形态（真库原文钉住）、Oracle 纯 SQL 错误无位置不虚报、跨行号放弃归属；
- * `DataSourceSelector.deliverError` 投递收口（富/旧通道互斥、越界钳到提交文本长度、
- * 富通道异常回退旧通道）——与生产同函数，非另写一份断言。
  */
 class ErrorPositionExtractorTest {
 
@@ -77,96 +72,77 @@ class ErrorPositionExtractorTest {
         assertNull(ErrorPositionExtractor.extractPosition("Position: 3", sqlMaxLength = 0))
     }
 
-    // ---------- extractPosition：Oracle PL/SQL 形态（T-ELU-02，真库取证） ----------
+    // ---------- T-ErrorLocateUsability T-ELU-02（O-49）：Oracle 位置形态 ----------
 
     /**
-     * 真库原文（Oracle Free 23 / FREEPDB1 @114.66.55.245:20095，**只读**，ojdbc11 23.3.0.23.09
-     * 直连）：`BEGIN nonexistent_proc_xyz(); END;`。同一次取证换 `-Duser.language=en` 得英文形态，
-     * 默认（中文 locale）得 [ORACLE_PLSQL_ZH]。两条形态都来自真库，非臆造。
+     * 真库实测原文钉住（Oracle Free 23 / FREEPDB1，DBX 通道 2026-09-22，只读）。
+     *
+     * 实测三例证明 N 是**出错记号起点减一**（0-based 偏移），本提取器契约是 1-based
+     * → 归属值 = N+1：`SELECT * FROM t` 里表名在 1-based 第 15 位 → N=14 → 15。
      */
-    private val ORACLE_PLSQL_EN =
-        "ORA-06550: line 1, column 7:\n" +
-            "PLS-00201: identifier 'NONEXISTENT_PROC_XYZ' must be declared\n" +
-            "ORA-06550: line 1, column 7:\n" +
-            "PL/SQL: Statement ignored"
-
-    /** 真库原文（中文 locale）：`BEGIN UPDATE dbx_test.issue_new SET no_col_zzz = 1; END;`。 */
-    private val ORACLE_PLSQL_ZH =
-        "ORA-06550: 第 2 行, 第 19 列: \nPL/SQL: ORA-00942: 表或视图  不存在\n" +
-            "ORA-06550: 第 2 行, 第 3 列: \nPL/SQL: SQL Statement ignored"
-
     @Test
-    fun testOraclePLSQL位置形态_英文locale() {
-        val pos = ErrorPositionExtractor.extractPosition(ORACLE_PLSQL_EN)!!
-        assertEquals(1, pos.first)
-        // 行号不是字符位置（column 是行内列号，不塞进 positionChar——坐标系诚实）
-        assertEquals(false, pos.second)
-        assertEquals("oracle-plsql", pos.third)
+    fun testOracle位置提取_真库原文() {
+        val msg = "ORA-00942: table or view \"DBX_TEST\".\"NO_SUCH_TABLE_XYZ\" does not exist\n" +
+            " error occur at position: 23"
+        val pos = ErrorPositionExtractor.extractPosition(msg)!!
+        assertEquals("N=23 是 0-based 记号偏移 → 归属 1-based 24", 24, pos.first)
+        assertEquals(true, pos.second)
+        assertEquals("oracle-position", pos.third)
     }
 
     @Test
-    fun testOraclePLSQL位置形态_中文locale() {
-        val pos = ErrorPositionExtractor.extractPosition(ORACLE_PLSQL_ZH)!!
-        assertEquals(2, pos.first)
-        assertEquals(false, pos.second)
-        assertEquals("oracle-plsql", pos.third)
+    fun testOracle位置提取_记号在语句首位() {
+        // 实测：`FROM dbx_test.issue_new` → `ORA-00900: invalid SQL statement` + position: 0
+        val msg = "ORA-00900: invalid SQL statement\n error occur at position: 0"
+        val pos = ErrorPositionExtractor.extractPosition(msg)!!
+        assertEquals("N=0 → 1-based 第 1 位", 1, pos.first)
+        assertEquals("oracle-position", pos.third)
     }
 
+    /**
+     * **标签与取值都不再落到 PG 分支**（改前缺陷留证）：Oracle 形态里含 `position: N`，
+     * 而 PG 的 `\bPosition:` 会顺带命中它——改前 Oracle 位置被标成 `pg-position` 且按
+     * 1-based 直接报出（恒差一位）。本用例把「遮蔽 Oracle 段」这条修复分支钉住。
+     */
     @Test
-    fun testOracle纯SQL错误无位置_不虚报() {
-        // 同库同驱动实测：ORA-00942 / ORA-03049 全文不含任何位置标记 ⇒ 提取不出即无位置（诚实降级）
-        assertNull(
-            ErrorPositionExtractor.extractPosition(
-                "ORA-00942: table or view \"DBX_TEST\".\"NO_SUCH_TABLE_XYZ\" does not exist",
-            ),
-        )
-        assertNull(
-            ErrorPositionExtractor.extractPosition(
-                "ORA-03049: SQL keyword 'X' is not syntactically valid following 'SELECT * FROM dual WHER '",
-            ),
-        )
+    fun testOracle形态不被PG分支误吞() {
+        val msg = "ORA-00936: missing expression\n error occur at position: 7"
+        val pos = ErrorPositionExtractor.extractPosition(msg)!!
+        assertEquals("oracle-position", pos.third)
+        assertEquals("N=7 → 8（不是 7）", 8, pos.first)
     }
 
+    /** 既有三种 marker 行为不变（Oracle 形态不在场时逐字不变）。 */
     @Test
-    fun testOracle跨行号放弃归属() {
-        // 同一消息里两个不同行号（多块/多语句）——宁缺毋滥，不归属
-        assertNull(
-            ErrorPositionExtractor.extractPosition(
-                "ORA-06550: line 1, column 7:\nPLS-00201: x\nORA-06550: line 4, column 3:\nPL/SQL: y",
-            ),
-        )
+    fun testOracle形态不在场时既有marker不变() {
+        val pg = ErrorPositionExtractor.extractPosition("ERROR: x\n  Position: 42")!!
+        assertEquals(42, pg.first)
+        assertEquals("pg-position", pg.third)
+        val multi = ErrorPositionExtractor.extractPosition("Position: 5 ... at line 2")
+        assertNull("多 marker 仍放弃归属", multi)
     }
 
-    // ---------- T-ELU-03/04：投递收口与钳制接线（与生产同函数，非另写一份） ----------
-
+    /** Oracle 位置同样受越界钳制（与其它 marker 同口径）。 */
     @Test
-    fun test投递收口_越界钳到提交文本长度并记录上界() {
-        var got: ExecutionErrorInfo? = null
-        DataSourceSelector.deliverError(
-            onErrorRich = { got = it },
-            onError = { error("富通道在场时不得再投旧通道（会抹掉定位按钮）") },
-            cause = java.sql.SQLException("boom", "42000", 1),
-            message = "syntax error\n  Position: 5000",
-            sqlMaxLength = 120,
-        )
-        val info = got!!
-        assertEquals("越界位置应钳到提交文本长度", 120, info.positionChar)
-        // T-ELU-04：投递点传入的上界如实带出（tooltip/MCP 据此标注坐标系）
-        assertEquals(120, info.executedSqlLength)
+    fun testOracle位置越界钳制() {
+        val msg = "ORA-00942: nope\n error occur at position: 900"
+        assertEquals(50, ErrorPositionExtractor.extractPosition(msg, sqlMaxLength = 50)!!.first)
     }
 
-    @Test
-    fun test投递收口_无富通道时回退旧通道() {
-        var plain: String? = null
-        DataSourceSelector.deliverError(null, { plain = it }, null, "boom")
-        assertEquals("boom", plain)
-    }
+    // ---------- T-ELU-03（O-49）：被执行文本长度接线（钳制生产生效的前提） ----------
 
+    /**
+     * `executedSqlLength` 是「调用方确实传了被执行文本长度」的结构化证据——非 null 即接线到位。
+     * 改前四处投递点全都不传，钳制只在单测生效（本字段恒 null）。
+     */
     @Test
-    fun test投递收口_富通道抛异常时回退旧通道不吞错误() {
-        var plain: String? = null
-        DataSourceSelector.deliverError({ throw IllegalStateException("rich failed") }, { plain = it }, null, "boom")
-        assertEquals("富通道失败必须回退旧通道，不让错误呈现被吞", "boom", plain)
+    fun test被执行文本长度随富信息结构化落字段() {
+        val withLen = ErrorPositionExtractor.buildInfo(null, "x\n  Position: 9999", sqlMaxLength = 120)
+        assertEquals(120, withLen.executedSqlLength)
+        assertEquals("位置被钳到被执行文本长度", 120, withLen.positionChar)
+        val without = ErrorPositionExtractor.buildInfo(null, "x\n  Position: 9999")
+        assertNull("不传长度 → 字段为 null（不钳制）", without.executedSqlLength)
+        assertEquals(9999, without.positionChar)
     }
 
     // ---------- buildInfo：SQLException 链提取 ----------
@@ -210,6 +186,20 @@ class ErrorPositionExtractorTest {
         assertEquals(18, info.positionChar)
         assertNull(info.lineInSql)
         assertEquals("pg-position", info.positionSource)
+    }
+
+    @Test
+    fun test富信息Oracle位置字段() {
+        val se = java.sql.SQLException(
+            "ORA-00942: table or view \"DBX_TEST\".\"NO_SUCH_TABLE_XYZ\" does not exist\n error occur at position: 23",
+            "42000",
+            942,
+        )
+        val info = ErrorPositionExtractor.buildInfo(se, se.message ?: "", sqlMaxLength = 500)
+        assertEquals(24, info.positionChar)
+        assertNull(info.lineInSql)
+        assertEquals("oracle-position", info.positionSource)
+        assertEquals(500, info.executedSqlLength)
     }
 
     @Test

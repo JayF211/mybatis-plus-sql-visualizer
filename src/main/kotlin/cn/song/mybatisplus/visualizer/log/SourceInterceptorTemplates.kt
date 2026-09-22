@@ -142,14 +142,59 @@ public class SqlSourceInterceptor implements InnerInterceptor {
         return true;
     }
 
-    /** 框架 / 基础设施帧一律跳过（不视为调用点）。 */
+    /**
+     * 框架 / 基础设施帧一律跳过（不视为调用点）。
+     *
+     * <b>T-AgentResiduals R1b（2026-09-22）：本份是**生效副本**，与 agent 侧 {@code StackLocator}
+     * 的 {@code FRAME_SKIP_PREFIXES} 同集</b>。此前它只收 JDK / 平台 / 本插件 / MyBatis 系 15 项，
+     * 而 agent 侧另收驱动族 / 连接池 / AOP / 数据层插件族四十余项 —— 于是**同一执行两侧可能给出
+     * 不同位置**：agent 通道的事件带正确位置，而本模板产出的 {@code SQLVIS-SOURCE} 标记行会指到
+     * 框架帧（用户点跳转即落进第三方库）。R1 当时只同步了 IDE 侧参考副本与文档示例，
+     * 本份（真正在用户应用里跑的那份）漏了 —— 故补此表，并把守卫扩到全部副本。
+     *
+     * 为什么收宽前缀（{@code com.alibaba.} / {@code org.apache.} / {@code com.google.} 等）：
+     * 数据层插件帧一旦漏收就被误选为「调用点」（PageHelper 实证）。若你的业务代码恰好落在这些
+     * 宽包下，请删掉对应那几行 —— 本模板是拷进你工程的源码，随你改。
+     *
+     * <b>迁移前提（存量工程必读）</b>：本模板**只在注入那一刻**写进你的工程。已经注入过的工程，
+     * 若文件是当前形态（含 {@code getClass().getName()}），插件**幂等跳过、不会自动更新**——
+     * 即本次补齐只对**新注入**的拦截器与**旧形态副本的内容升级**生效。要让存量工程也拿到新表：
+     * 删除注入的 {@code SqlSourceInterceptor.java} 后重新执行注入，或照上面几行手工补前缀。
+     */
     private boolean isFrameworkFrame(String cn) {
         return cn.startsWith("java.") || cn.startsWith("javax.") || cn.startsWith("jdk.") ||
-                cn.startsWith("sun.") || cn.startsWith("com.intellij.") || cn.startsWith("org.jetbrains.") ||
-                cn.startsWith("cn.song.mybatisplus.visualizer.") || cn.startsWith("com.baomidou.") ||
-                cn.startsWith("org.apache.ibatis.") || cn.startsWith("org.hibernate.") ||
-                cn.startsWith("com.zaxxer.") || cn.startsWith("org.springframework.") ||
-                cn.startsWith("com.sun.proxy.") || cn.startsWith("${'$'}Proxy");
+                cn.startsWith("sun.") || cn.startsWith("com.sun.") || cn.startsWith("jdk.internal.") ||
+                cn.startsWith("com.intellij.") || cn.startsWith("org.jetbrains.") ||
+                // 本插件自身 + agent 自身（agent 帧同样在应用 JVM 的栈上）
+                cn.startsWith("cn.song.mybatisplus.visualizer.") || cn.startsWith("cn.song.mybatisplus.sqlvis.") ||
+                // 驱动家族
+                cn.startsWith("com.mysql.") || cn.startsWith("org.mariadb.") || cn.startsWith("org.postgresql.") ||
+                cn.startsWith("org.h2.") || cn.startsWith("org.hsqldb.") || cn.startsWith("org.sqlite.") ||
+                cn.startsWith("com.microsoft.sqlserver.") || cn.startsWith("oracle.jdbc.") ||
+                cn.startsWith("dm.jdbc.") || cn.startsWith("com.gbasedbt.") || cn.startsWith("com.kingbase8.") ||
+                // 连接池 / ORM / Spring 数据层
+                cn.startsWith("com.zaxxer.") || cn.startsWith("com.alibaba.druid.") ||
+                cn.startsWith("com.mchange.") || cn.startsWith("org.apache.commons.dbcp2.") ||
+                cn.startsWith("org.apache.tomcat.") || cn.startsWith("org.apache.ibatis.") ||
+                cn.startsWith("com.baomidou.") || cn.startsWith("org.hibernate.") ||
+                cn.startsWith("org.springframework.") || cn.startsWith("org.aspectj.") ||
+                cn.startsWith("net.sf.cglib.") || cn.startsWith("org.objectweb.asm.") ||
+                cn.startsWith("com.sun.proxy.") || cn.startsWith("org.jboss.") ||
+                // 数据层插件 / 基础设施家族补齐（漏收即被误选为用户帧——PageHelper 实证）
+                cn.startsWith("com.github.pagehelper.") || cn.startsWith("org.mybatis.") ||
+                cn.startsWith("net.sf.jsqlparser.") || cn.startsWith("com.alibaba.") ||
+                cn.startsWith("org.apache.") || cn.startsWith("com.google.") ||
+                cn.startsWith("com.fasterxml.") || cn.startsWith("io.netty.") ||
+                cn.startsWith("io.lettuce.") || cn.startsWith("redis.clients.") ||
+                cn.startsWith("io.micrometer.") || cn.startsWith("io.seata.") ||
+                cn.startsWith("org.slf4j.") || cn.startsWith("ch.qos.") ||
+                cn.startsWith("org.ehcache.") || cn.startsWith("net.sf.ehcache.") ||
+                cn.startsWith("com.github.benmanes.") || cn.startsWith("org.quartz.") ||
+                cn.startsWith("com.netflix.") || cn.startsWith("org.elasticsearch.") ||
+                cn.startsWith("com.mongodb.") ||
+                // MPJ（mybatis-plus-join）全族
+                cn.startsWith("com.github.yulichang.") ||
+                cn.startsWith("${'$'}Proxy");
     }
 }
 """.trimIndent()

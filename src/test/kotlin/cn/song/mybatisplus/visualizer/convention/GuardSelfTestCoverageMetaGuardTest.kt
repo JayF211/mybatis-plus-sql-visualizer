@@ -519,6 +519,16 @@ class GuardSelfTestCoverageMetaGuardTest {
                         "站点提取器，被 projectServiceStateOffenders(:1916) 在 :1931 调用；自证经转发覆盖",
                     ),
                     DecisionFn("projectServiceStateOffenders", FnKind.VIOLATIONS),
+                    // ---- 2026-09-22 合并 master 后补登记（master 侧 O-56 批次扩 BannedApiSourceScanTest 时新增） ----
+                    DecisionFn("anyModalityInUpdatePackageOffenders", FnKind.VIOLATIONS),
+                    DecisionFn(
+                        "entrySites",
+                        FnKind.SITES,
+                        "站点提取器，被 initEntrySites(:1790)/teardownEntrySites(:1798) 转发调用；" +
+                            "自证经转发覆盖（无直接合成样本用例）",
+                    ),
+                    DecisionFn("teardownEntrySites", FnKind.SITES),
+                    DecisionFn("teardownServiceLookupOffenders", FnKind.VIOLATIONS),
                 ),
                 "本仓判定内核最集中的守卫类；五个自证用例 :703/:784/:1197/:1456/:1968 + 空扫描面自证 :2317",
             ),
@@ -641,6 +651,17 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "update/UpdateZipGuardTest.kt",
                 emptyList(),
                 "断言直接内联在 @Test；withTempZip/manualZip/concatManualZips 为夹具",
+            ),
+            // ---- 2026-09-22 合并 master 后补登记（master 侧 O-48/O-49 批次新增的守卫类） ----
+            GuardEntry(
+                "convention/SqlLogManagerLookupGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test；repoRoot/stripComments/mainSources 为夹具（T-AgentResiduals R2 配套守卫）",
+            ),
+            GuardEntry(
+                "execute/ErrorPositionWiringGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test；repoRoot/readArguments/lineOf 为夹具（T-ELU-03 接线守卫）",
             ),
             // ---- 本元守卫自身 ----
             GuardEntry(

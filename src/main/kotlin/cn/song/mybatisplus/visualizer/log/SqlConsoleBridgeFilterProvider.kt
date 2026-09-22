@@ -24,7 +24,9 @@ import com.intellij.openapi.project.Project
 class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFilterProvider {
 
     override fun getDefaultFilters(project: Project): Array<Filter> {
-        val manager = project.getService(SqlLogManager::class.java)
+        // T-ST-02b2：读路径经 sqlLogManagerIfCreated（永不发起创建 → 不会毒化服务容器）；
+        // 服务未创建＝本插件从未启用捕获＝无过滤需求，等价于「非捕捉态零处理」
+        val manager = sqlLogManagerIfCreated(project) ?: return emptyArray()
         return arrayOf(EpLineFilter(project, manager))
     }
 
