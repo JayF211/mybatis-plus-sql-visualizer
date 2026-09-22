@@ -29,6 +29,16 @@ public final class AgentState {
      */
     private static final AtomicLong CONFIG_APPLIED = new AtomicLong();
 
+    /**
+     * 已放弃的端口数与其最后取值（T-Round10 复核 minor㉚，性能报告 T-PS6-05）：连续「连上即被关」达上限后
+     * SenderLoop 会**永久放弃**该端口（IDE 侧监听端口是 `ServerSocket(0)` 取的临时端口，同端口不会再出现
+     * 本插件监听者，故放弃在功能上是对的）。但放弃是单向的，且通道此刻已死、IDE 侧拿不到任何信号——
+     * 唯一可观测面就是本进程：故在此记账，排障时读它即可回答「agent 是不是已经放弃上报了、放弃的是哪个端口」，
+     * 不必靠「面板没条目」反推。
+     */
+    private static final AtomicLong PORT_ABANDONED = new AtomicLong();
+    private static volatile int lastAbandonedPort = -1;
+
     public static boolean isDisabled() {
         return disabled;
     }
@@ -62,6 +72,28 @@ public final class AgentState {
 
     public static String getLogLevel() {
         return logLevel;
+    }
+
+    /** SenderLoop 放弃某端口时调用（复核 minor㉚）：计数 + 记下最后放弃的端口，供排障与测试观测。 */
+    public static void markPortAbandoned(int port) {
+        lastAbandonedPort = port;
+        PORT_ABANDONED.incrementAndGet();
+    }
+
+    /** 已放弃的端口数（0 = 从未放弃过上报通道）。 */
+    public static long abandonedPortCount() {
+        return PORT_ABANDONED.get();
+    }
+
+    /** 最后放弃的端口；从未放弃时为 -1。 */
+    public static int lastAbandonedPort() {
+        return lastAbandonedPort;
+    }
+
+    /** 仅测试用：复位放弃记账，避免同 JVM 内多用例互相污染（与 inScanBudgetForTest 同款测试缝）。 */
+    public static void resetPortAbandonedForTest() {
+        lastAbandonedPort = -1;
+        PORT_ABANDONED.set(0L);
     }
 
     public static void setLogLevel(String value) {

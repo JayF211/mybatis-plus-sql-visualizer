@@ -53,21 +53,33 @@ public class MlLlmAcpSignatureChecker {
     private static final List<String> EXPECTED_TRANSPORT_CONSTANTS = Arrays.asList("STDIO", "SSE");
 
     public static void main(String[] args) throws Exception {
-        if (args.length < 2) {
-            System.out.println("usage: MlLlmAcpSignatureChecker <artifactRoot> <expectedAcpAgentIdPackage> [companionRoot ...]");
+        // --impl=<我方 provider 实现类 class 文件>：可选。给了就多核一条「我方 impl 真的实现了该制品的接口」
+        // （断言 ⑥，复核 major⑯）。位置参数与它可任意交错，故先摘出来再解析位置参数。
+        String implPath = null;
+        List<String> positional = new ArrayList<String>();
+        for (String a : args) {
+            if (a.startsWith("--impl=")) {
+                implPath = a.substring("--impl=".length());
+            } else {
+                positional.add(a);
+            }
+        }
+        if (positional.size() < 2) {
+            System.out.println("usage: MlLlmAcpSignatureChecker <artifactRoot> <expectedAcpAgentIdPackage>"
+                + " [--impl=<implClassFile>] [companionRoot ...]");
             System.out.println("RESULT MISSING 1");
             System.exit(3);
             return;
         }
-        File root = new File(args[0]);
-        String expectedPackage = args[1];
+        File root = new File(positional.get(0));
+        String expectedPackage = positional.get(1);
         System.out.println("ARTIFACT " + root.getAbsolutePath());
         System.out.println("EXPECTED_AGENT_ID_PACKAGE " + expectedPackage);
 
         Map<String, File> primary = index(root);
         Map<String, File> companions = new LinkedHashMap<String, File>();
-        for (int i = 2; i < args.length; i++) {
-            for (Map.Entry<String, File> e : index(new File(args[i])).entrySet()) {
+        for (int i = 2; i < positional.size(); i++) {
+            for (Map.Entry<String, File> e : index(new File(positional.get(i))).entrySet()) {
                 if (!companions.containsKey(e.getKey())) {
                     companions.put(e.getKey(), e.getValue());
                 }
@@ -115,6 +127,7 @@ public class MlLlmAcpSignatureChecker {
             missing++;
         }
         Member getTransport = provider.method("getTransport");
+        String providerDescriptor = null;
         if (getTransport == null) {
             System.out.println("MISS " + PROVIDER_INTERNAL + ".getTransport 不存在");
             missing++;
@@ -122,6 +135,7 @@ public class MlLlmAcpSignatureChecker {
             String expectedDescriptor =
                 "(L" + expectedPackage.replace('.', '/') + "/AcpAgentId;)L" + TRANSPORT_INTERNAL + ";";
             String declared = declaredAgentIdPackage(getTransport.descriptor);
+            providerDescriptor = getTransport.descriptor;
             System.out.println("PROVIDER_DECLARED_GET_TRANSPORT " + getTransport.descriptor);
             System.out.println("PROVIDER_DECLARED_AGENT_ID_PACKAGE " + declared);
             if (!expectedDescriptor.equals(getTransport.descriptor)) {
@@ -140,6 +154,53 @@ public class MlLlmAcpSignatureChecker {
             System.out.println("MISS " + PROVIDER_INTERNAL + " 类上无 " + API_STATUS_INTERNAL
                 + "（RuntimeInvisibleAnnotations=" + provider.invisibleAnnotations + "）");
             missing++;
+        }
+
+        // ---- 断言 ⑥（加固，复核 major⑯）：**我方 impl 是否真的实现了该制品的接口**。
+        // 背景：`AcpAgentId` 的包在 ml-llm 两条发行线之间搬过（262.9437.276 = com.intellij.platform.acp，
+        // 262.10968.97 = com.intellij.ml.llm.agents.acp.api），而 JVM 按**擦除后的描述符**匹配 override。
+        // 只声明一个形态时，另一线上我方类**没有实现该接口的抽象方法** → EP 调用抛 AbstractMethodError、
+        // SSE 绕行整条失效——而此前本检查器只核「制品自己的 provider 长什么样」，按「制品→期望包名」分组
+        // 各自成立即绿，**看不见这个失配**（正是复核点名的假绿）。故补一条：impl 必须声明与 provider 抽象
+        // 方法**逐字节相同**描述符的 getTransport。
+        if (implPath == null) {
+            System.out.println("NOTE 未提供 --impl=<class 文件>，跳过「我方 impl 是否实现该制品接口」的核验"
+                + "（调用方应传，否则本条失配仍不可见）");
+        } else {
+            File impl = new File(implPath);
+            if (!impl.isFile()) {
+                System.out.println("MISS --impl 指向的 class 文件不存在：" + impl.getAbsolutePath()
+                    + "（fail-closed：拿不到 impl 就不能声称「接口已实现」）");
+                missing++;
+            } else {
+                ClassFile implClass = readFile(impl);
+                List<Member> implGetTransport = implClass.methodsNamed("getTransport");
+                StringBuilder ds = new StringBuilder();
+                for (Member m : implGetTransport) {
+                    ds.append(ds.length() == 0 ? "" : ", ").append(m.name).append(m.descriptor);
+                }
+                System.out.println("IMPL_GET_TRANSPORT [" + ds + "]");
+                if (providerDescriptor == null) {
+                    System.out.println("NOTE provider 描述符不可得（见上文 MISS），本条无法判定");
+                } else if (!implClass.isInterface()) {
+                    boolean matched = false;
+                    for (Member m : implGetTransport) {
+                        if (providerDescriptor.equals(m.descriptor)) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (matched) {
+                        System.out.println("IMPL_MATCHES_PROVIDER " + providerDescriptor);
+                    } else {
+                        System.out.println("MISS 我方 impl 未声明与 provider 抽象方法同描述符的 getTransport：期望 "
+                            + providerDescriptor + "，实际 [" + ds + "]"
+                            + "——该制品上本类**没有实现该接口**（EP 调用即 AbstractMethodError、SSE 绕行失效）。"
+                            + "修法：按跨形态策略把该形态的重载也声明出来（见 AcpIdeaMcpTransportProviderImpl）");
+                        missing++;
+                    }
+                }
+            }
         }
 
         // ---- 断言 ②：AcpIdeaMcpTransport 为 Enum 且枚举常量恰 [STDIO, SSE]
@@ -346,6 +407,11 @@ public class MlLlmAcpSignatureChecker {
                 }
             }
         }
+    }
+
+    /** 直接解析一个独立 `.class` 文件（`--impl` 用；jar 走 [read]）。 */
+    private static ClassFile readFile(File classFile) throws IOException {
+        return ClassFile.parse(java.nio.file.Files.readAllBytes(classFile.toPath()));
     }
 
     private static ClassFile read(File jar, String entry) throws IOException {

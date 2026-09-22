@@ -154,10 +154,11 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
         allComponents(panel).filterIsInstance<JButton>()
             .firstOrNull { it.text == MpSqlVisualizerBundle.message("execute.error.locate") }
 
-    private fun info(positionChar: Int? = null) =
+    private fun info(positionChar: Int? = null, lineInSql: Int? = null) =
         cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo(
             message = "boom",
             positionChar = positionChar,
+            lineInSql = lineInSql,
         )
 
     /**
@@ -211,6 +212,32 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
             waitForEdt()
             val tip = locateButton(panel)!!.toolTipText
             assertTrue("tooltip 应标注两态", tip.contains("被执行的 SQL"))
+        } finally {
+            panel.clear()
+        }
+    }
+
+    /**
+     * T-Round10FU（独立复核 ㉕）：**只有行号、没有字符位置**的驱动报错（MySQL 语法错误 `at line N`）
+     * 用带行号的文案。改前 tooltip 只判 `positionChar`，这类报错落到「语句起始行」兜底文案——
+     * 驱动明明报了行号却被丢弃（`ExecutionErrorInfo.lineInSql` 因此在 src/main 无任何消费方）。
+     */
+    fun testShowErrorRich_只带行号时tooltip用行号文案() {
+        val panel = SqlResultPanel()
+        try {
+            panel.showErrorRich(info(lineInSql = 3), { })
+            waitForEdt()
+            val btn = locateButton(panel)!!
+            assertTrue("locate 非 null 时定位按钮应可见", btn.isVisible)
+            val tip = btn.toolTipText
+            assertEquals(
+                "tooltip 应为带驱动行号的文案",
+                MpSqlVisualizerBundle.message("execute.error.locate.tooltip.line", 3),
+                tip,
+            )
+            assertTrue("tooltip 应含驱动报的行号", tip.contains("3"))
+            assertTrue("tooltip 应如实标注位置指向被执行的 SQL", tip.contains("被执行的 SQL"))
+            assertTrue("tooltip 不得宣称能定位到 mapper 原文行", tip.contains("不一一对应"))
         } finally {
             panel.clear()
         }

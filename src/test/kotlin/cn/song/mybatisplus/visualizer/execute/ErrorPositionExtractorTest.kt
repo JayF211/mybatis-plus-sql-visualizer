@@ -129,6 +129,77 @@ class ErrorPositionExtractorTest {
         assertEquals(50, ErrorPositionExtractor.extractPosition(msg, sqlMaxLength = 50)!!.first)
     }
 
+    // ---------- T-Round10FU（独立复核 ㉕）：Oracle 驱动自身的 `, Position : N` 形态 ----------
+
+    /**
+     * **形态来源（jar 字节码实证，非臆造）**：`oracle.jdbc.OracleDatabaseException.toString()`
+     * 的拼接模板——ojdbc11 `23.3.0.23.09` 的 `oracle/jdbc/OracleDatabaseException.class`
+     * 常量池 `#60` = `Error : , Position : , SQL =  , Original SQL = , Error Message = `。
+     * 下面这串即该模板的产出形态（冒号前有空格，故 PG 的 `\bPosition:` 与既有 Oracle marker
+     * 都不命中）。**改前读数**（最小探针逐字复制本类四条正则、喂入同一文本）：marker 数 **0**、
+     * `extractPosition` 返回 **null**——即该形态此前不被任何 marker 覆盖。
+     */
+    @Test
+    fun testOracle驱动toString形态_冒号前有空格() {
+        val msg = "Error : 942, Position : 23, SQL = SELECT * FROM dbx_test.no_such_table_xyz, " +
+            "Original SQL = SELECT * FROM dbx_test.no_such_table_xyz, " +
+            "Error Message = ORA-00942: table or view \"DBX_TEST\".\"NO_SUCH_TABLE_XYZ\" does not exist"
+        val pos = ErrorPositionExtractor.extractPosition(msg)!!
+        assertEquals("与 error occur at position 同源服务端字段 → 同样 0-based → N+1", 24, pos.first)
+        assertEquals(true, pos.second)
+        assertEquals("oracle-position", pos.third)
+    }
+
+    /**
+     * 两种 Oracle 形态并存（链上包装/拼接出同时含 `toString` 与 `error occur at position` 的消息）：
+     * 同源字段同读数 → `distinctBy(source to value)` 归并为一个信号，**不**误判成多信号而丢位置。
+     * （这正是新 marker 复用 `oracle-position` 标签的原因。）
+     */
+    @Test
+    fun testOracle两种形态并存时同一读数归并() {
+        val msg = "Error : 942, Position : 23, Error Message = ORA-00942: nope\n" +
+            " error occur at position: 23"
+        val pos = ErrorPositionExtractor.extractPosition(msg)!!
+        assertEquals(24, pos.first)
+        assertEquals("oracle-position", pos.third)
+    }
+
+    /** 两形态读数不一致（不该发生，但必须保守）→ 单一性门控放弃归属，不挑一个报出去。 */
+    @Test
+    fun testOracle两形态读数不一致时放弃归属() {
+        val msg = "Error : 942, Position : 5, Error Message = ORA-00936: nope\n" +
+            " error occur at position: 9"
+        assertNull(ErrorPositionExtractor.extractPosition(msg))
+    }
+
+    /**
+     * 驱动把「无位置」编码为 `errorPosition < 0`（`T4CTTIoer11` 偏移 404 的 `iflt` 守卫即此语义），
+     * 故 `Position : -1` 这类文本**不得**被正则在负号后截出数字虚报位置。
+     */
+    @Test
+    fun testOracle驱动负位置不虚报() {
+        assertNull(
+            ErrorPositionExtractor.extractPosition(
+                "Error : 942, Position : -1, Error Message = ORA-00942: table or view does not exist",
+            ),
+        )
+    }
+
+    /**
+     * 只带行号、不带字符位置的驱动报错（MySQL 语法错误）→ `lineInSql` 填充、`positionChar` 为 null。
+     * 这是 UI 三态 tooltip 第二态的数据侧（T-Round10FU：改前 `lineInSql` 在 src/main 零消费方）。
+     */
+    @Test
+    fun test只带行号的报错填lineInSql() {
+        val info = ErrorPositionExtractor.buildInfo(
+            null,
+            "You have an error in your SQL syntax; check the manual... near 'FORM t' at line 3",
+        )
+        assertNull("行号形态不填字符位置", info.positionChar)
+        assertEquals(3, info.lineInSql)
+        assertEquals("mysql-at-line", info.positionSource)
+    }
+
     // ---------- T-ELU-03（O-49）：被执行文本长度接线（钳制生产生效的前提） ----------
 
     /**

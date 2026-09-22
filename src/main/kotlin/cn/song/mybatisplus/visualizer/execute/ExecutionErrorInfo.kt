@@ -15,7 +15,14 @@ data class ExecutionErrorInfo(
     val errorCode: Int? = null,
     /** 驱动报错字符位置（1-based，指被执行 SQL 文本；null = 消息未携带或多个 marker 放弃归属）。 */
     val positionChar: Int? = null,
-    /** 驱动报错行号（1-based，指被执行 SQL 文本；语义同上）。 */
+    /**
+     * 驱动报错行号（1-based，指被执行 SQL 文本；语义同上）。
+     *
+     * T-Round10FU（独立复核 ㉕）：消费方是 [cn.song.mybatisplus.visualizer.ui.SqlResultPanel.showErrorRich]
+     * 的三态 tooltip（`positionChar` 缺、本字段在时用带行号的文案）——改前本字段在 `src/main`
+     * **零消费方**（只填不读），MySQL 语法错误这类「只有行号没有字符位置」的报错因此落到
+     * 「语句起始行」兜底文案，驱动报的行号被丢弃。
+     */
     val lineInSql: Int? = null,
     /** 位置信号来源标签（"pg-position" / "line" / "mysql-at-line" / "oracle-position"），留证与测试断言用。 */
     val positionSource: String? = null,
@@ -80,6 +87,32 @@ object ErrorPositionExtractor {
      */
     private val ORACLE_POSITION = Regex("""(?i)\berror occur at position:\s*(\d+)""")
 
+    /**
+     * T-Round10FU（独立复核 ㉕）：Oracle **JDBC 驱动自身**的位置形态——`, Position : N`
+     * （**冒号前有空格**，故上面两条 Oracle/PG 正则都不命中：实测该文本改前 marker 数为 **0**）。
+     *
+     * **形态来源（jar 字节码实证，非臆造）**：`oracle.jdbc.OracleDatabaseException.toString()`
+     * 的字符串拼接模板——ojdbc11 `23.3.0.23.09` 的 `oracle/jdbc/OracleDatabaseException.class`
+     * 常量池 `#60` = `Error : , Position : , SQL =  , Original SQL = , Error Message = `，
+     * 故产出形如
+     * `Error : 942, Position : 23, SQL = SELECT … , Original SQL = … , Error Message = ORA-00942: …`。
+     * 取值来自驱动内部同一处服务端位置字段（`T4CTTIoer11` 的 `errorPosition:S`，
+     * 构造点 `T4CTTIoer11.class` 偏移 416 调 `OracleDatabaseException.<init>(IILjava/lang/String;…)`；
+     * 该字段 `< 0` 时驱动自身即判为「无位置」——本正则的 `\d+` 天然不接受负号，同口径）。
+     *
+     * **取值语义**：与 [ORACLE_POSITION] 同源字段，故同样按 **0-based → N+1** 归一化（口径见上）。
+     * 标签刻意与 [ORACLE_POSITION] 同为 `"oracle-position"`：两者是同一服务端字段的两种客户端渲染，
+     * 一条消息里若两种形态并存，`extractPosition` 的 `distinctBy(source to value)` 会把**同一读数**
+     * 归并成一个信号（不误判成多信号而丢位置）；读数不一致时仍按单一性门控放弃归属。
+     *
+     * **未决（如实登记）**：该形态在驱动里是 `SQLException` 的 **cause**（`T4CTTIoer11` 走
+     * `SQLException.initCause(OracleDatabaseException)`），即 `getMessage()` 不含位置、位置只在
+     * `toString()` 里；我方链投递的是 `cause.message ?: cause.toString()`（`DataSourceSelector` 三处
+     * catch），故**在我方链上是否真会走到该文本未实测**——与 [ORACLE_POSITION] 属同类未决项。
+     * 保留为兜底规则：改前实测该形态 marker 数 0，本规则**零误命中面**（不产生把无位置变成有位置的虚报）。
+     */
+    private val ORACLE_DRIVER_POSITION = Regex("""(?i),\s*position\s*:\s*(\d+)""")
+
     /** 单个位置信号：种类标签 + 1-based 值。 */
     private data class Marker(val source: String, val value: Int, val isCharPosition: Boolean)
 
@@ -109,6 +142,11 @@ object ErrorPositionExtractor {
     private fun collectMarkers(message: String): List<Marker> {
         val out = mutableListOf<Marker>()
         ORACLE_POSITION.findAll(message).forEach {
+            out += Marker("oracle-position", it.groupValues[1].toInt() + 1, isCharPosition = true)
+        }
+        // T-Round10FU（独立复核 ㉕）：驱动 toString 形态（`, Position : N`）。不需遮蔽——
+        // PG 的 `\bPosition:` 的 `\s*` 在冒号**之后**，结构上匹配不到 `Position :`（实测 0 命中）。
+        ORACLE_DRIVER_POSITION.findAll(message).forEach {
             out += Marker("oracle-position", it.groupValues[1].toInt() + 1, isCharPosition = true)
         }
         val rest = maskOraclePositions(message)

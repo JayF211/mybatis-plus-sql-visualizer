@@ -61,7 +61,7 @@ interface Dialect {
      *
      * 与 [quoteIfKeyword] 的差别：本方法额外知道该名字**从哪来**——同一串字符在两种来源下的
      * 「正确引用形态」可以相反。默认实现按 [identifierFolding] 分流：NONE 族逐字节等价于
-     * [quoteIfKeyword]（故 MySQL / MariaDB / H2 / SQLite / SQL Server / DM 产物不变），
+     * [quoteIfKeyword]（故 MySQL / MariaDB / SQLite / SQL Server / DM 产物不变），
      * UPPER / LOWER 两族只在目录来源下加判定。
      *
      * 分流口径（条件**显式含** [IdentifierCaseSource.CATALOG]）：
@@ -95,8 +95,8 @@ interface Dialect {
      * 不敏感（`sys.sysobjects` / `sys."sysobjects"` / `sys."SYSOBJECTS"` 三形态均 1029 行）→ NONE，
      * 与 DBX 把 `{dameng, db2}` 归 `UPPER_FOLDING` 的口径分歧按我方实测处理（计划 §八 待验证前提 1）。
      *
-     * H2 2.3.232 引擎实测裸写折为大写（与 Oracle 同族），本轮**有意维持 NONE 不扩面**（缺口登记为后续）；
-     * SQLite / SQL Server 未实测（SQL Server 大小写取决于 collation）。
+     * H2 2.3.232 引擎实测裸写折为大写（与 Oracle 同族）→ **UPPER**（[H2Dialect] 覆写）；
+     * SQLite / SQL Server 未实测（SQL Server 大小写取决于 collation），维持 NONE。
      */
     val identifierFolding: IdentifierFolding get() = IdentifierFolding.NONE
 
@@ -254,15 +254,18 @@ enum class IdentifierCaseSource {
  * 二者相乘才决定引用形态：同一串字典名在 UPPER 族要「含小写即包」，在 LOWER 族要「含大写即包」，
  * 在 NONE 族则不判。
  *
- * 归属依据（真机实测，2026-09-22，DBX MCP 只读通道）：
- *  - [UPPER] Oracle：`SELECT COUNT(*) FROM dual` → 1（裸写折为大写命中）、`FROM "dual"` → `ORA-00942`；
+ * 归属依据（真机/引擎实测，2026-09-22）：
+ *  - [UPPER] Oracle（DBX MCP 只读通道）：`SELECT COUNT(*) FROM dual` → 1（裸写折为大写命中）、
+ *    `FROM "dual"` → `ORA-00942`；H2 2.3.232（引擎级对照实验，见
+ *    `DialectH2VerificationTest.标识符折叠方向_H2引擎实测对照`）：引号创建的 `"fold_lower"` 裸写
+ *    访问失败（引擎折为 `FOLD_LOWER`）、引号创建的 `"FOLD_UPPER"` 裸写命中 → 折为大写；
  *  - [LOWER] PostgreSQL / KingBase：`SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES` → 366 / 492 行
  *    （裸写折为小写命中小写字典名）、`FROM information_schema."TABLES"` → `relation ... does not exist`
  *    （引号保留原样 → 大写名不存在）；
- *  - [NONE] MySQL / MariaDB / H2 / SQLite / SQL Server / DM：DM8 实测三形态同命中（大小写不敏感）。
+ *  - [NONE] MySQL / MariaDB / SQLite / SQL Server / DM：DM8 实测三形态同命中（大小写不敏感）。
  */
 enum class IdentifierFolding {
-    /** 裸标识符折叠为**大写**（Oracle）：字典名含小写字母时必须加引号。 */
+    /** 裸标识符折叠为**大写**（Oracle / H2）：字典名含小写字母时必须加引号。 */
     UPPER,
 
     /** 裸标识符折叠为**小写**（PostgreSQL / KingBase）：字典名含大写字母时必须加引号。 */
@@ -474,10 +477,29 @@ object SqlServerDialect : Dialect {
         tableName: String,
         sql: String,
         caseSource: IdentifierCaseSource,
-    ): String {
-        val ref = quoteIfNeeded(tableName, caseSource)
-        return "SET IDENTITY_INSERT $ref ON;\n$sql\nSET IDENTITY_INSERT $ref OFF;"
-    }
+    ): String = identityInsertWrapper(tableName, sql, caseSource)
+}
+
+/**
+ * identity 包装的**共用形态**（SQL Server 与 DM8 逐字符相同）：`SET IDENTITY_INSERT <表> ON;` +
+ * INSERT + `SET IDENTITY_INSERT <表> OFF;`。
+ *
+ * 抽成一处而非两处复写：两库语法位与关键字逐字相同（DM8 的报错文案本身就点名 `SET IDENTITY_INSERT`），
+ * 复写会让「改一处忘一处」的形态差异无人发现。
+ *
+ * **真机证据（2026-09-23，DM8）**：DM8 对「显式给自增列赋值」的拒绝与 SQL Server 同形——
+ * `dm.jdbc.driver.DMException: 仅当指定列列表，且SET IDENTITY_INSERT为ON时，才能对自增列赋值`
+ * （vendorCode -2723）；加本包装后同一语句实测**成功**（`SET … ON` → INSERT 影响 1 行 → `SET … OFF`），
+ * 且「不指定自增列」的 INSERT 无需包装即可成功（对照）。SQL Server 侧仍无真机实例（形态取自 DBX 同款
+ * 实现与 T-SQL 文法），故本函数的**共用形态在 DM8 上已真机验证、SQL Server 上仍未验**。
+ */
+private fun Dialect.identityInsertWrapper(
+    tableName: String,
+    sql: String,
+    caseSource: IdentifierCaseSource,
+): String {
+    val ref = quoteIfNeeded(tableName, caseSource)
+    return "SET IDENTITY_INSERT $ref ON;\n$sql\nSET IDENTITY_INSERT $ref OFF;"
 }
 
 /**
@@ -499,6 +521,18 @@ object H2Dialect : Dialect {
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    /**
+     * O-51：H2 裸标识符**折叠为大写**（与 Oracle 同族）→ UPPER 族，目录来源的字典名
+     * 「含小写字母即加引号」。
+     *
+     * 引擎级对照实验依据（H2 2.3.232 REGULAR，`DialectH2VerificationTest.标识符折叠方向_H2引擎实测对照`
+     * 逐次复现）：引号创建的 `"fold_lower"` **裸写**访问失败（引擎折为 `FOLD_LOWER` 去找，
+     * `Table "FOLD_LOWER" not found`）、引号创建的 `"FOLD_UPPER"` 裸写命中 → 折为大写。
+     * 此前归 NONE（按「其余方言」继承默认）与实测相反，本轮按实测订正——NONE 下带引号创建的小写
+     * 字典名会被裸写 → 折叠为大写 → 对象不存在。
+     */
+    override val identifierFolding: IdentifierFolding = IdentifierFolding.UPPER
 
     override val reservedWords: Set<String> = H2_RESERVED
 
@@ -584,6 +618,26 @@ object DmDialect : Dialect {
     override val supportsDeleteLimit: Boolean = true
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    /**
+     * **DM8 需要 identity 包装（2026-09-23 真机实测新增，原默认「不包装」是缺陷）**。
+     *
+     * 该默认值此前是**无证据的保守选择**（O-52 计划 §五-3 明写「DBX 有 DM 实现，但我方无 DM identity
+     * 真机证据 → 默认不给 DM 造包装，不照抄；若 §五-3 证伪为需要，另立增量」）。本轮按该条真机复核，
+     * 结论是**证伪为需要**：DM8 对显式给自增列赋值的拒绝与 SQL Server 同形——
+     * `dm.jdbc.driver.DMException: 仅当指定列列表，且SET IDENTITY_INSERT为ON时，才能对自增列赋值`
+     * （vendorCode -2723，库 `DBX_TEST` 表 `T_AUTOINC_7658`，自增列 `ID`）。
+     * 故 DM 与 SQL Server 一样走 [identityInsertWrapper]（两库语法逐字相同，实测通过）。
+     *
+     * **真机读数**：同一 INSERT 不加包装 → 报上述异常；加 `SET IDENTITY_INSERT … ON/OFF` 成对包装 →
+     * `SET ON` 无影响行、INSERT **影响 1 行**、`SET OFF` 无影响行（探针行随后按 ID 删除并复验为 0 行，
+     * 未留残留）；对照：**不指定**自增列的 INSERT 无需包装即成功（即包装只在自增列被勾回时需要）。
+     */
+    override fun renderInsertWrapper(
+        tableName: String,
+        sql: String,
+        caseSource: IdentifierCaseSource,
+    ): String = identityInsertWrapper(tableName, sql, caseSource)
 
     override val reservedWords: Set<String> = DM_RESERVED
 }

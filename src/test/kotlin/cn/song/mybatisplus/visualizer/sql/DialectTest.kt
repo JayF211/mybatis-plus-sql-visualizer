@@ -103,17 +103,19 @@ class DialectTest {
     }
 
     /**
-     * 标识符折叠方向族（O-51 / T-IdentifierFoldingFamily）：9 方言逐库声明——Oracle = UPPER、
-     * PostgreSQL / KingBase = LOWER、其余 6 方言 = NONE。
+     * 标识符折叠方向族（O-51 / T-IdentifierFoldingFamily）：9 方言逐库声明——Oracle / H2 = UPPER、
+     * PostgreSQL / KingBase = LOWER、其余 5 方言 = NONE。
      *
-     * 归属依据（真机实测，2026-09-22，DBX MCP 只读通道）：
+     * 归属依据（真机/引擎实测，2026-09-22）：
      *  - Oracle：`FROM dual` → 1（裸写折为大写命中）、`FROM "dual"` → `ORA-00942`；
      *  - PostgreSQL：`FROM INFORMATION_SCHEMA.TABLES` → 366 行（折为小写命中）、`FROM information_schema."TABLES"`
      *    → `relation "information_schema.TABLES" does not exist`；
      *  - KingBase：同向（裸写 492 行、引号大写 `kb: relation ... does not exist`）；
+     *  - H2 2.3.232：引擎级对照实验（`DialectH2VerificationTest.标识符折叠方向_H2引擎实测对照`
+     *    逐次复现）——引号创建的 `"fold_lower"` 裸写访问失败、引号创建的 `"FOLD_UPPER"` 裸写命中
+     *    → 折为大写（与 Oracle 同族）。**此前归 NONE 与实测相反**，本轮按实测订正（该条经实测
+     *    推翻原结论：`DialectTest.kt:125` 那条 `assertEquals(NONE, H2Dialect...)` 已解冻）；
      *  - DM8：三形态（`sys.sysobjects` / `sys."sysobjects"` / `sys."SYSOBJECTS"`）均 1029 行 → 大小写不敏感 → NONE。
-     *
-     * H2 2.3.232 引擎实测裸写折为大写（与 Oracle 同族），本轮有意维持 NONE 不扩面（缺口登记为后续）。
      */
     @Test
     fun `标识符折叠方向族`() {
@@ -122,13 +124,13 @@ class DialectTest {
         assertEquals(IdentifierFolding.LOWER, KingBaseDialect.identifierFolding)
         assertEquals(IdentifierFolding.NONE, MySqlDialect.identifierFolding)
         assertEquals(IdentifierFolding.NONE, SqlServerDialect.identifierFolding)
-        assertEquals(IdentifierFolding.NONE, H2Dialect.identifierFolding)
+        assertEquals(IdentifierFolding.UPPER, H2Dialect.identifierFolding)
         assertEquals(IdentifierFolding.NONE, SqliteDialect.identifierFolding)
         assertEquals(IdentifierFolding.NONE, MariaDbDialect.identifierFolding)
         assertEquals(IdentifierFolding.NONE, DmDialect.identifierFolding)
         // 逐库点名族成员（注册表顺序），新增方言漏声明或归错族时先红
         assertEquals(
-            listOf("Oracle"),
+            listOf("Oracle", "H2"),
             DialectRegistry.dialects.filter { it.identifierFolding == IdentifierFolding.UPPER }.map { it.name },
         )
         assertEquals(
@@ -168,7 +170,8 @@ class DialectTest {
      * UPSERT 后缀的列名引用与 INSERT 基座同一判定（O-51 接线）：目录来源含大写时后缀列名同样加引号
      * ——否则产出「基座加引号、后缀裸写」的半包形态（裸写被折叠为小写 → 列不存在）。
      *
-     * NONE 族（MySQL / SQLite / H2）两来源产物逐字节一致（无行为变化）。
+     * NONE 族（MySQL / SQLite）两来源产物逐字节一致（无行为变化）；H2 自本轮起为 UPPER 族
+     * （引擎实测折为大写），目录来源含小写的名字**加引号**。
      */
     @Test
     fun `upsert列名按目录来源同一判定`() {
@@ -184,9 +187,14 @@ class DialectTest {
             "ON CONFLICT (Id) DO UPDATE SET Name = EXCLUDED.Name",
             SqliteDialect.renderUpsert("Id", listOf("Name"), IdentifierCaseSource.CATALOG),
         )
+        // H2 = UPPER 族：目录来源含小写 → 加引号（与 Oracle 同判定）
+        assertEquals(
+            "MERGE INTO \"Issue_New\" (\"Id\", \"Name\") KEY (\"Id\") VALUES (?, ?)",
+            H2Dialect.renderUpsertStatement("Issue_New", listOf("Id", "Name"), "Id", IdentifierCaseSource.CATALOG),
+        )
         assertEquals(
             "MERGE INTO Issue_New (Id, Name) KEY (Id) VALUES (?, ?)",
-            H2Dialect.renderUpsertStatement("Issue_New", listOf("Id", "Name"), "Id", IdentifierCaseSource.CATALOG),
+            H2Dialect.renderUpsertStatement("Issue_New", listOf("Id", "Name"), "Id", IdentifierCaseSource.ENTITY),
         )
     }
 

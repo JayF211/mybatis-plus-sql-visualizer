@@ -1,11 +1,15 @@
 package cn.song.mybatisplus.sqlvis.agent.transport;
 
+import cn.song.mybatisplus.sqlvis.agent.AgentState;
 import org.junit.Test;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
@@ -113,7 +117,11 @@ public class SenderLoopBackoffTest {
 
     @Test
     public void 连上即被关_退避增长且达上限后放弃该端口() throws Exception {
+        AgentState.resetPortAbandonedForTest();
+        final PrintStream originalErr = System.err;
+        final ByteArrayOutputStream captured = new ByteArrayOutputStream();
         try (ClosingServer server = new ClosingServer(0L)) {
+            System.setErr(new PrintStream(captured, true, "UTF-8"));
             final Thread loop = new Thread(
                     new SenderLoop(server.port(), INITIAL_MS, MAX_MS, RESET_AFTER_MS, MAX_FAST_DROPS),
                     "senderloop-backoff");
@@ -138,7 +146,22 @@ public class SenderLoopBackoffTest {
                             "退回「连上即复位」形态时两段相等，本断言即先红后绿判据",
                     gap2 * 2L >= gap1 * 3L);
 
+            // 复核 minor㉚：放弃必须是**可观测**的（此前只有一行散文式 stderr，无稳定签名、无记账，
+            // 且通道已死 → 排障只能靠「面板没条目」反推）。两处断言：稳定签名行恰好一条 + 本进程记账。
+            System.err.flush();
+            final String errText = captured.toString("UTF-8");
+            final long signatureHits = Arrays.stream(errText.split("\\R"))
+                    .filter(line -> line.contains("PORT_ABANDONED port=" + server.port()))
+                    .count();
+            assertEquals("放弃该端口时必须打印恰好一条稳定签名行（支持按 PORT_ABANDONED grep 宿主日志），"
+                    + "实际命中 " + signatureHits + " 条；stderr=\n" + errText, 1L, signatureHits);
+            assertEquals("放弃必须记入 AgentState（计数），否则「agent 是否已放弃上报」在进程内不可读",
+                    1L, AgentState.abandonedPortCount());
+            assertEquals("记账必须带上被放弃的端口号", server.port(), AgentState.lastAbandonedPort());
+
             loop.interrupt();
+        } finally {
+            System.setErr(originalErr);
         }
     }
 

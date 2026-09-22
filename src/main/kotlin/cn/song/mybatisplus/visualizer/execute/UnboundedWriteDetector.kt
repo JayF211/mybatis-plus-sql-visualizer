@@ -90,7 +90,7 @@ object UnboundedWriteDetector {
      * 「确认流 → 回滚链只解析一次」。
      */
     internal var parseStatementsForTest: (String) -> List<net.sf.jsqlparser.statement.Statement> =
-        { CCJSqlParserUtil.parseStatements(it) }
+        { sql -> SqlAstParser.parseStatements(sql) }
 
     /** T-PS5-02 测试缝：清空单槽（用例隔离；生产链路无调用点）。 */
     internal fun clearAstSlotForTest() {

@@ -20,7 +20,9 @@ import java.io.File
  *     `(L<AcpAgentId 包>/AcpAgentId;)Lcom/intellij/ml/llm/agents/acp/client/AcpIdeaMcpTransport;`、
  *     类上带 `@ApiStatus.Internal`（**读 `RuntimeInvisibleAnnotations` 属性位**，不是反射）；
  *  4. `AcpAgentId.REGISTRY_PREFIX` 常量仍为 `"acp.registry."`（对上
- *     `AcpIdeaMcpTransportProviderImpl.CLAUDE_ACP_ID` 的拼接依据）。
+ *     `AcpIdeaMcpTransportProviderImpl.CLAUDE_ACP_ID` 的拼接依据）；
+ *  5. 制品树内某份 `plugin.xml` 仍声明该 EP（类字节不变而 EP 声明被删时护栏须红）；
+ *  6. **我方 impl 声明了该制品 provider 抽象方法的同描述符 getTransport**（见下）。
  *
  * **版本面 = 发现式，不是列举 243/253/262**：243/253 平台**没有** AI Assistant
  * （[AcpTransportIsolationTest] 已断言 ml-llm 在 243 沙盒缺席），故口径写「本机全部存在的 ml-llm 制品」：
@@ -43,11 +45,16 @@ import java.io.File
  * **不用桩类代替真制品**：桩刻意与真类偏离（不 `sealed`）且由本项目提供，断言桩永远绿——那是假绿的
  * 经典形态，故断言目标一律是外部制品目录。
  *
- * **已登记但不归本护栏判定的漂移**（勿当成漏报）：装机制品 262.10968.97 的 EP 接口形参包是
- * `com.intellij.ml.llm.agents.acp.api`，而 [AcpIdeaMcpTransportProviderImpl] 实现的是
- * `com.intellij.platform.acp` 包——本护栏按「制品→期望包名」登记表如实分组（两处各自成立即绿），
- * **不**对装机制品断言「包名 == 我方 impl 的包」，故该漂移不会让本护栏转红。其运行时后果
- * （EP 类链接是否真的失配）只能真机走查，未验点登记在计划 §五-5/§八。
+ * **断言 ⑥（复核 major⑯，2026-09-22 补）：我方 impl 是否真的实现了该制品的接口**。此前本护栏只核
+ * 「制品自己的 provider 长什么样」：装机制品 262.10968.97 的 provider 形参包是
+ * `com.intellij.ml.llm.agents.acp.api`，而 [AcpIdeaMcpTransportProviderImpl] 当时只声明了
+ * `com.intellij.platform.acp` 形态——按「制品→期望包名」分组**两处各自成立即绿**，于是「我方类在该
+ * 制品上根本没有实现该接口（EP 调用即 AbstractMethodError、SSE 绕行失效）」这个失配**看不见**。
+ * 现由 `--impl=<impl class 文件>` 把 impl 交进检查器，逐制品核「impl 是否声明了与 provider 抽象方法
+ * **逐字节相同**描述符的 getTransport」；两形态由 impl 的双重载覆盖（上游把 AcpAgentId 的包在两条发行线
+ * 之间搬过：262.9437.276 = 平台包，262.10968.97 = api 包，JVM 按擦除后描述符匹配 override）。
+ * **仍属未验点**：真机上两线各自「EP 真被注册 / 不抛 AbstractMethodError / SSE 通道可达」只能真机走查
+ * （登记在计划 §五/§八）。
  */
 class AcpSignatureCrossVersionTest {
 
@@ -176,6 +183,194 @@ class AcpSignatureCrossVersionTest {
     private fun segmentOf(text: String): String? =
         Regex("\\.(\\d+)\\.").find(text)?.groupValues?.get(1)
 
+    /**
+     * **运行时**核验（复核 major⑯ 的运行时半边）：在受控 classpath 下加载**真制品**的接口与枚举，
+     * 再加载我方实现类，用真制品自己的 `AcpAgentId.Companion.parse(…)` 造实例并**真调一次**接口方法。
+     *
+     * 为什么静态断言（⑥）之外还要这一条：静态只证明「描述符对得上」，证明不了
+     * 「在该制品的类型面下能加载/实例化/通过接口判定」与「调用不抛 `AbstractMethodError`」——
+     * 后者正是复核⑯ 指认的失效形态。反向验证读数：摘掉 api 形态重载 → 装机线探针报
+     * `java.lang.AbstractMethodError: null`（`RESULT MISSING 2`），即本用例对该缺陷有判别力。
+     *
+     * 无制品时与签名用例同款 `assumeTrue` 跳过；制品在场而运行时依赖（平台 lib / Kotlin 运行时）装配不齐
+     * 则**判红**（fail-closed：不得静默当成「已核」）。
+     */
+    @Test
+    fun mlLlmAcpTransportRuntimeHoldsOnAllLocalArtifacts() {
+        val artifacts = discoverArtifacts()
+        assumeTrue(
+            "本机未发现任何 ml-llm（AI Assistant）制品——运行时探针无从执行",
+            artifacts.isNotEmpty(),
+        )
+
+        val failures = mutableListOf<String>()
+        for (artifact in artifacts) {
+            val result = runRuntimeProbe(artifact)
+            println("[ACP 运行时探针] ${artifact.label} exit=${result.exitCode}")
+            println(result.output.trimEnd())
+            if (result.exitCode != 0) {
+                failures += "${artifact.label} (${artifact.root.path}):\n${result.output}"
+            }
+        }
+        assertEquals(failures.joinToString("\n\n"), 0, failures.size)
+    }
+
+    private fun runRuntimeProbe(artifact: Artifact): CheckerResult {
+        val probeResource = AcpTransportRuntimeProbe::class.java.classLoader
+            .getResource("AcpTransportRuntimeProbe.class")!!.toURI()
+        val probeHome = File(probeResource).parentFile.absolutePath
+
+        val implDir = implClassesDir()
+            ?: return CheckerResult(1, "MISS 找不到我方 impl 的产物目录（无法核运行时半边）")
+        val acpJar = File(artifact.root, "lib/modules/intellij.ml.llm.agents.acp.jar")
+        if (!acpJar.isFile) {
+            return CheckerResult(1, "MISS 制品内未找到 $acpJar（运行时探针需要真接口/真枚举）")
+        }
+        val platformAcpJar = artifact.companions
+            .map { File(it, "intellij.platform.acp.jar") }
+            .firstOrNull { it.isFile }
+            ?: return CheckerResult(1, "MISS 未找到 platform-acp 制品（platform.acp.AcpAgentId 的来源）")
+        val platformLib = platformLibDir(artifact)
+            ?: return CheckerResult(1, "MISS 未找到该发行线的平台 lib 目录（真制品初始化需要平台类）")
+        // 真制品是 class file 69（Java 25），测试 JVM（21）加载不了 —— 用**该发行线自带的 JBR**跑探针：
+        // 既满足版本要求，又与真机 IDE 的运行时一致（找不到 JBR 才回落测试 JVM，届时会明确报版本错）
+        val java = distroJava(platformLib)
+            ?: sequenceOf(
+                File(System.getProperty("java.home"), "bin/java.exe"),
+                File(System.getProperty("java.home"), "bin/java"),
+            ).firstOrNull { it.isFile }?.absolutePath ?: "java"
+        val kotlinJars = kotlinRuntimeJars()
+        if (kotlinJars.isEmpty()) {
+            return CheckerResult(
+                1,
+                "MISS 找不到 Kotlin 运行时 jar（真制品是 Kotlin 2.x）——诊断：user.home=" +
+                    System.getProperty("user.home") + "；codeSource 命中=" + codeSourceJarCount() +
+                    "；cache 命中=" + cachedJarDiagnostics(),
+            )
+        }
+
+        val command = mutableListOf(
+            java, "-cp", probeHome, "AcpTransportRuntimeProbe",
+            implDir.absolutePath, artifact.expectedPackage, acpJar.absolutePath, platformAcpJar.absolutePath,
+            platformLib.absolutePath,
+        )
+        kotlinJars.forEach { command += it.absolutePath }
+        val proc = ProcessBuilder(command).redirectErrorStream(true).start()
+        val output = proc.inputStream.bufferedReader().readText()
+        val exit = proc.waitFor()
+        return CheckerResult(exit, output)
+    }
+
+    /** 我方 impl 的产物根目录（`build/classes/kotlin/main` 一类）。 */
+    private fun implClassesDir(): File? {
+        val relative = "cn/song/mybatisplus/visualizer/acp/AcpIdeaMcpTransportProviderImpl.class"
+        return listOf(
+            File("build/classes/kotlin/main"),
+            File("build/classes/kotlin/jvm/main"),
+        ).firstOrNull { File(it, relative).isFile }
+    }
+
+    /**
+     * 该制品所属发行线的平台 `lib` 目录（与制品同 build 段优先）。真制品的 `AcpRegistryAgentId`
+     * 静态初始化要 `com.intellij.openapi.extensions.ExtensionPointName` 等平台类，故须把发行版 lib 全量挂上
+     * ——逐个挑 jar 会陷入「缺一个类补一个 jar」的循环。
+     */
+    private fun platformLibDir(artifact: Artifact): File? {
+        val segment = segmentOf(artifact.root.parentFile?.name.orEmpty())
+        val candidates = mutableListOf<File>()
+        for (transforms in gradleTransforms()) {
+            transforms.listFiles { f -> f.isDirectory }?.forEach { hashDir ->
+                File(hashDir, "transformed").listFiles { f -> f.isDirectory }?.forEach { distro ->
+                    val lib = File(distro, "lib")
+                    if (distro.name.startsWith("idea") && File(lib, "util.jar").isFile) {
+                        candidates += lib
+                    }
+                }
+            }
+        }
+        if (candidates.isEmpty()) return null
+        return candidates.sortedWith(
+            compareBy({ if (segment != null && segmentOf(it.parentFile.name) == segment) 0 else 1 }, { it.path }),
+        ).first()
+    }
+
+    /** 该发行线自带的 JBR（`<distro>/jbr/bin/java`）——真机 IDE 用的就是它。 */
+    private fun distroJava(platformLib: File): String? {
+        val bin = File(platformLib.parentFile, "jbr/bin")
+        return sequenceOf(File(bin, "java.exe"), File(bin, "java"))
+            .firstOrNull { it.isFile }?.absolutePath
+    }
+
+    private val kotlinProbeClasses = listOf(
+        "kotlin.Unit",
+        "kotlinx.serialization.KSerializer",
+        "kotlinx.serialization.json.Json",
+        "kotlinx.coroutines.CoroutineScope",
+    )
+
+    /** 诊断：codeSource 路径命中的 jar 数（探针失败时写进报文，避免「找不到」这种无信息量的失败）。 */
+    private fun codeSourceJarCount(): Int = kotlinProbeClasses.count { name ->
+        runCatching {
+            val c = Class.forName(name, false, AcpSignatureCrossVersionTest::class.java.classLoader)
+            File(c.protectionDomain.codeSource.location.toURI()).isFile
+        }.getOrDefault(false)
+    }
+
+    /** 诊断：cache 路径逐项命中情况。 */
+    private fun cachedJarDiagnostics(): String = listOf(
+        "org.jetbrains.kotlin/kotlin-stdlib" to newestCachedJar("org.jetbrains.kotlin", "kotlin-stdlib"),
+        "kotlinx/kotlinx-serialization-core-jvm" to
+            newestCachedJar("org.jetbrains.kotlinx", "kotlinx-serialization-core-jvm"),
+        "kotlinx/kotlinx-serialization-json-jvm" to
+            newestCachedJar("org.jetbrains.kotlinx", "kotlinx-serialization-json-jvm"),
+        "kotlinx/kotlinx-coroutines-core-jvm" to
+            newestCachedJar("org.jetbrains.kotlinx", "kotlinx-coroutines-core-jvm"),
+    ).joinToString("; ") { (k, v) -> "$k=" + (v?.name ?: "none") }
+
+    /**
+     * Kotlin 运行时 jar（stdlib + serialization + coroutines）。
+     *
+     * 真制品是 Kotlin 2.x，缺 stdlib/serialization 会在其静态初始化期抛 `NoClassDefFoundError`。
+     * 先按**类自身的 codeSource** 取（最准），取不齐则回落 **gradle 模块缓存**（本机实测有效；
+     * 两条路都不依赖 `java.class.path`——Gradle 测试 JVM 的该属性在部分布局下并不逐条列出依赖）。
+     */
+    private fun kotlinRuntimeJars(): List<File> {
+        val fromCodeSource = kotlinProbeClasses.mapNotNull { name ->
+            runCatching {
+                val c = Class.forName(name, false, AcpSignatureCrossVersionTest::class.java.classLoader)
+                File(c.protectionDomain.codeSource.location.toURI())
+            }.getOrNull()
+        }.filter { it.isFile }
+        if (fromCodeSource.isNotEmpty()) {
+            return fromCodeSource.distinctBy { it.name.substringBeforeLast('-') }
+        }
+        return listOf(
+            newestCachedJar("org.jetbrains.kotlin", "kotlin-stdlib"),
+            newestCachedJar("org.jetbrains.kotlinx", "kotlinx-serialization-core-jvm"),
+            newestCachedJar("org.jetbrains.kotlinx", "kotlinx-serialization-json-jvm"),
+            newestCachedJar("org.jetbrains.kotlinx", "kotlinx-coroutines-core-jvm"),
+        ).filterNotNull()
+    }
+
+    /**
+     * gradle 模块缓存里 artifact 名**恰为** prefix 的最高版本 jar。
+     *
+     * 目录形如 `<group>/<artifact>/<version>/<sha1>/<artifact>-<version>.jar`（jar 在哈希子目录里，
+     * 故必须递归找；只扫一层会一个都找不到）。artifact 名要求**精确相等**，否则
+     * `kotlin-stdlib-jdk8` 这类派生 artifact 会盖过 `kotlin-stdlib`（按名降序时 `j` > `2`）。
+     */
+    private fun newestCachedJar(group: String, prefix: String): File? {
+        val base = File(System.getProperty("user.home"), ".gradle/caches/modules-2/files-2.1/$group")
+        val artifactDir = File(base, prefix)
+        if (!artifactDir.isDirectory) return null
+        return artifactDir.walkTopDown()
+            .maxDepth(3)
+            .filter { it.isFile && it.name.endsWith(".jar") && !it.name.contains("sources") }
+            .filter { it.name.startsWith("$prefix-") }
+            .sortedByDescending { it.name }
+            .firstOrNull()
+    }
+
     private fun runChecker(artifact: Artifact): CheckerResult {
         // 检查器只读 class 文件字节（零平台依赖、零 classpath 装配），故用测试 JVM 自带的 java 即可——
         // 不必像 McpDbSignatureCrossVersionTest 那样借发行版 JBR（ml-llm 制品目录里没有 jbr）
@@ -191,10 +386,33 @@ class AcpSignatureCrossVersionTest {
             java, "-cp", checkerHome, "MlLlmAcpSignatureChecker",
             artifact.root.absolutePath, artifact.expectedPackage,
         )
+        // 断言 ⑥（复核 major⑯）：把**我方 impl 的 class 文件**交给检查器，核「impl 是否真的声明了该制品
+        // provider 的抽象方法」。不给就是「只核制品、不核我方」——那正是本轮被点名的假绿，故必须给。
+        implClassFile()?.let { command += "--impl=" + it.absolutePath }
         artifact.companions.forEach { command += it.absolutePath }
         val proc = ProcessBuilder(command).redirectErrorStream(true).start()
         val output = proc.inputStream.bufferedReader().readText()
         val exit = proc.waitFor()
         return CheckerResult(exit, output)
+    }
+
+    /**
+     * 我方 provider 实现的 class 文件（断言 ⑥ 的被核对象）。按「主源集产物目录」定位；找不到返回 null，
+     * 由调用方在报告里显式标注（不得静默当成「已核」）。
+     */
+    private fun implClassFile(): File? {
+        val relative = "cn/song/mybatisplus/visualizer/acp/AcpIdeaMcpTransportProviderImpl.class"
+        val candidates = listOf(
+            File("build/classes/kotlin/main", relative),
+            File("build/classes/kotlin/jvm/main", relative),
+        )
+        candidates.firstOrNull { it.isFile }?.let { return it }
+        // 兜底：从已加载的类取 codeSource（测试运行时主源集产物在类路径上）
+        return runCatching {
+            val clazz = Class.forName("cn.song.mybatisplus.visualizer.acp.AcpIdeaMcpTransportProviderImpl")
+            val location = File(clazz.protectionDomain.codeSource.location.toURI())
+            val f = if (location.isDirectory) File(location, relative) else location
+            f.takeIf { it.isFile }
+        }.getOrNull()
     }
 }

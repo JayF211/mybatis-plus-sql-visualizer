@@ -84,7 +84,7 @@ DBX MCP 在册连接含 **MySQL 5.7/8.4、MariaDB、PostgreSQL 多版、Oracle �
 |---|---|---|---|
 | 1 | 确认可用的 SQL Server 连接 | 有 → 走 2；无 → 该条**登记为环境受限未验证** | 须先查 DBX MCP 连接清单 |
 | 2 | SQL Server：对含 identity 列的表回放 INSERT（带包装） | 执行成功（改前 544） | 需可建临时表或用既有表 |
-| 3 | 达梦 DM8（`bb136253-…`）：显式插入自增列 | 确认 DM 是否需要包装（DBX 有 DM 实现，我方无证据） | 只读限制同上 |
+| 3 | 达梦 DM8（`bb136253-…`）：显式插入自增列 | 确认 DM 是否需要包装（DBX 有 DM 实现，我方无证据） | **2026-09-23 已实测：证伪为「需要」**——不加包装报 `dm.jdbc.driver.DMException: 仅当指定列列表，且SET IDENTITY_INSERT为ON时，才能对自增列赋值`（vendorCode -2723，库 DBX_TEST 表 T_AUTOINC_7658 自增列 ID）；加 `SET IDENTITY_INSERT … ON/OFF` 成对包装后同一 INSERT 影响 1 行成功；对照「不指定自增列」无需包装即成功。**已按计划「另立增量」落地**（DmDialect 覆写 renderInsertWrapper + 解冻三处把「DM 不包装」钉成契约的断言，反向验证 3 例红） |
 | 4 | MySQL / PG：显式插入自增列 | 不需要包装（现状正确，作为对照） | 只读 |
 
 ## 六、风险
@@ -120,6 +120,6 @@ DBX MCP 在册连接含 **MySQL 5.7/8.4、MariaDB、PostgreSQL 多版、Oracle �
 **待验证前提（实施者先证伪再动手）**：
 
 1. **DBX MCP 是否有可用的 SQL Server 实例**——本轮在册连接清单里**未见** sqlserver 类型（有 MySQL/MariaDB/PG/Oracle/DM/KingBase/Xugu/GBase/OceanBase/Doris/StarRocks/CockroachDB 等）。若确无，验收 5 登记为环境受限未验证（**不得**用单测读数替代）。
-2. **达梦是否真的需要包装**——DBX `0c6fc610` 有 DM 实现，但我方无 DM identity 真机证据；本计划**默认不为 DM 造包装**，须 §五-3 证伪后再决定。
+2. ~~**达梦是否真的需要包装**~~ → **2026-09-23 已证伪为「需要」（§五-3 实测），并已落地增量**：DM8 与 SQL Server 同形（错误文案本身就点名 `SET IDENTITY_INSERT`），故 `DmDialect` 覆写 `renderInsertWrapper`（与 SQL Server 共用 `identityInsertWrapper` 形态）；三处把「DM 不包装」钉成契约的断言同步解冻。反向验证：摘掉覆写 → 3 例红。
 3. **`SET IDENTITY_INSERT` 与多语句整段提交是否同会话同批生效**（`RollbackSqlDialog.kt:217`）——未验；若不同批，包装会失效（须改提交形态，届时另议）。
 4. 回滚链的行值来自**粘贴 TSV**（`RollbackSqlDialog.kt:245-265`），故 identity 列的**值**是否可信取决于用户粘贴的内容——本任务只负责「包装使显式插入合法」，不校验值的正确性（如实登记该边界）。

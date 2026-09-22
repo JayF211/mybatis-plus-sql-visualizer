@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.acp
 import com.intellij.platform.acp.AcpAgentId
 import com.intellij.ml.llm.agents.acp.client.AcpIdeaMcpTransport
 import com.intellij.ml.llm.agents.acp.client.AcpIdeaMcpTransportProvider
+import com.intellij.ml.llm.agents.acp.api.AcpAgentId as ApiAcpAgentId
 
 /**
  * T-AcpMcpTransport：让 ACP 会话（Claude Agent）以 **SSE** 形式拿到 IDE 私有 IJ MCP 会话，
@@ -50,6 +51,30 @@ import com.intellij.ml.llm.agents.acp.client.AcpIdeaMcpTransportProvider
 class AcpIdeaMcpTransportProviderImpl : AcpIdeaMcpTransportProvider {
 
     override fun getTransport(agentId: AcpAgentId): AcpIdeaMcpTransport? =
+        if (agentId.fullId == CLAUDE_ACP_ID) AcpIdeaMcpTransport.SSE else null
+
+    /**
+     * **跨形态第二重载（2026-09-22，复核 major⑯）**：上游把 `AcpAgentId` 的包在两条发行线之间搬过——
+     * 262.9437.276 的 provider 形参是 `com.intellij.platform.acp.AcpAgentId`（= 上面那个 override 的形态），
+     * 262.10968.97 的 provider 形参是本包类型。**同一 FQCN 的接口、方法名相同而形参包不同**，JVM 按擦除后
+     * 的描述符匹配 override ⇒ 只声明一个形态时，另一线上的本类**没有实现该接口的抽象方法**，EP 调用即
+     * `AbstractMethodError`（绕行整条失效，而字节码级护栏当时判绿——正是复核指出的「护栏看不见当前就存在的
+     * 失配」）。故两个形态**都**声明，各线各自匹配。
+     *
+     * **为什么不是「一个方法 + 反射」**：接口方法无法反射实现——必须由某个类按**精确描述符**声明它。
+     *
+     * **安全前提（两条实测证据，不是推断）**：
+     *  1. JVM 层：带「另一形态形参类型缺席」的额外重载不影响 `Class.forName` / 实例化 / `instanceof` 接口判定 /
+     *     调用**匹配**的那个方法；只有显式方法反射（`getDeclaredMethods()`）会因缺席类型抛 `NoClassDefFoundError`
+     *     （OpenJDK 25 实测：加载 ✓、实例化 ✓、`isAssignableFrom` ✓、调匹配方法 ✓、`getDeclaredMethods` ✗）。
+     *  2. 平台层：EP 装载机制**不做方法反射**——对 idea-2026.2.1 / 2026.2.3 两发行版的
+     *     `com.intellij.openapi.extensions` 包下共 69 个类做常量池扫描，`getDeclaredMethods` / `getMethods` /
+     *     `getDeclaredMethod` **零命中**（故上述第 1 条的失败面在本路径上不可达）。
+     *  仍属**未验点**：真机上两线各自「EP 真被注册 / 不抛 AbstractMethodError / SSE 通道可达」只能真机走查
+     *  （登记见计划 §五）。
+     */
+    @Suppress("unused")
+    fun getTransport(agentId: ApiAcpAgentId): AcpIdeaMcpTransport? =
         if (agentId.fullId == CLAUDE_ACP_ID) AcpIdeaMcpTransport.SSE else null
 
     companion object {

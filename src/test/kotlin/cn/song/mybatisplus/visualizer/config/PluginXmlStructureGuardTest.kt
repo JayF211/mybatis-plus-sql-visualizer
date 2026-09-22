@@ -315,6 +315,53 @@ class PluginXmlStructureGuardTest {
         )
     }
 
+    // ------------------------------------------------------------------
+    // 守卫自检（独立复核㉗：本类此前以空 decisionFns 登记，判定函数与同性质助手
+    // tagsOf/assertHolds 完全不进登记面——与 BannedApiSourceScanTest 逐条登记站点提取器
+    // 的口径不一致。现逐条登记，并由下面两个自证用例提供语料）
+    // ------------------------------------------------------------------
+
+    /**
+     * 扫描自检：资源夹具健全 + 剥注释无残留 + 站点提取器非空——三条断言都落在**真实资源**上，
+     * 资源名漂移 / 剥注释失效 / 提取器退化成空面时本用例红，本类其余用例不会因扫描面为空而空绿。
+     */
+    @Test
+    fun `扫描自检_资源夹具健全且剥注释无残留`() {
+        val xmls = strippedXmls()
+        assertHolds("六份 xml 资源必须全部加载到，实际 ${xmls.size} 份", xmls.size == xmlNames.size)
+        xmls.forEach { (name, xml) ->
+            assertHolds("$name 剥注释后不得残留注释开标记（否则注释里的历史注册段会被当注册形态断言）", !xml.contains("<!--"))
+            assertHolds("$name 剥注释后正文不得为空", xml.isNotBlank())
+        }
+        val actions = tagsOf(xmls.first { it.first == "plugin.xml" }.second, "action")
+        assertTrue("plugin.xml 的 action 标签提取数应非零（空面会让全部标签形态断言空转），实际 ${actions.size}", actions.isNotEmpty())
+        assertTrue("提取器须返回标签本身而非整段：${actions.first()}", actions.all { it.startsWith("<action") })
+    }
+
+    /**
+     * 合成 XML 自证：两个判定函数三态各归其位——带键位必报 / **自闭合动作不得被算成带键位** /
+     * 未注册 id 不得被判存在。第二条即本类 KDoc（见 `actionBlockHasKeyboardShortcut` 注释）记载的
+     * 2026-09-21 变异实验形态（用 `<action …>(.*?)</action>` 取块会把后一个动作的键位算到前一个头上），
+     * 此处把它从「注释里的历史教训」变成合成样本自证。
+     */
+    @Test
+    fun `自证_合成XML带键位必报_自闭合动作不得误判`() {
+        val withShortcut = """<action id="A" class="X"><keyboard-shortcut first-keystroke="alt shift E"/></action>"""
+        assertTrue("带 keyboard-shortcut 的动作必须被判为带键位", actionBlockHasKeyboardShortcut(withShortcut, "A"))
+        assertTrue("已注册动作必须被判存在", actionBlockExists(withShortcut, "A"))
+
+        val selfClosing = """<action id="B" class="Y"/><action id="C" class="Z"><keyboard-shortcut first-keystroke="alt shift T"/></action>"""
+        assertTrue(
+            "自闭合动作不得被判为带键位（否则后一个动作的键位会串到它头上）",
+            !actionBlockHasKeyboardShortcut(selfClosing, "B"),
+        )
+        assertTrue("自闭合动作本身仍是「已注册」", actionBlockExists(selfClosing, "B"))
+        assertTrue("其后动作的键位仍须认出（自闭合短路不得吃掉后续块）", actionBlockHasKeyboardShortcut(selfClosing, "C"))
+
+        assertTrue("未注册的动作 id 不得被判存在", !actionBlockExists(withShortcut, "NOPE"))
+        assertTrue("未注册的动作 id 不得被判带键位", !actionBlockHasKeyboardShortcut(withShortcut, "NOPE"))
+    }
+
     /**
      * 取 action 块的「是否含子元素」判据（而非裸正则匹配整段）：
      *

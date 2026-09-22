@@ -39,6 +39,36 @@ class RollbackSqlGeneratorTest {
         assertEquals("DELETE FROM t WHERE a = 3 AND b IS NULL;", result.statements[2])
     }
 
+    /**
+     * SQL Server 方括号引用必须能解析（2026-09-23 真机走查发现的缺陷）。
+     *
+     * 真机读数（runIde 沙盒 + 真 SQL Server 容器）：预览面板把 `DELETE FROM [user] WHERE id = 1` 执行成功后，
+     * 点「更多 → 回滚 SQL」直接弹 `无法解析 DELETE: net.sf.jsqlparser.parser.ParseException:
+     * Encountered unexpected token: "[" "[" at line 2, column 6.` —— 根因是两条解析链都调
+     * `CCJSqlParserUtil.parseStatements(sql)`（不带 feature），而 `[...]` **正是本插件为 SQL Server 产出的引用形态**
+     * （`Dialect.quoteIfNeeded` 走 `[...]`），于是「回滚 SQL」对 SQL Server 产物整体不可用。
+     * 修法＝统一走 `SqlAstParser`（只开 `allowSquareBracketQuotation`）。
+     * 判别力：把 `SqlAstParser` 的 feature 关掉 → 本用例必红（报文回到 `rollback.unable.parse`）。
+     */
+    @Test
+    fun `方括号引用的SQLServer语句可推导回滚`() {
+        // 正向：带方括号的 INSERT 必须能推导出 DELETE（文本可推导的那条路）
+        val ins = generate("INSERT INTO [user] (id, username) VALUES (1, 'alice')")
+        assertFalse(
+            "方括号引用不得落到解析失败：${ins.warnings.map { it.messageKey }}",
+            ins.warnings.any { it.messageKey == "rollback.unable.parse" },
+        )
+        assertEquals(1, ins.statements.size)
+        assertTrue("应生成 DELETE 形态回滚：${ins.statements}", ins.statements.single().startsWith("DELETE FROM"))
+
+        // 反向（同一根因）：带方括号的 DELETE 也不得报解析失败（它本就因缺快照而 UNABLE，但理由不能是「解析不了」）
+        val del = generate("DELETE FROM [user] WHERE id = 1")
+        assertFalse(
+            "方括号引用的 DELETE 不得报解析失败：${del.warnings.map { it.messageKey }}",
+            del.warnings.any { it.messageKey == "rollback.unable.parse" },
+        )
+    }
+
     @Test
     fun `NULL值渲染为IS NULL谓词`() {
         val result = generate("INSERT INTO t (a, b) VALUES (NULL, 'x')")
@@ -238,6 +268,51 @@ class RollbackSqlGeneratorTest {
         )
         assertEquals(listOf("INSERT INTO user (id, name) VALUES (1, 'Tom'), (2, NULL);"), result.statements)
         assertTrue(result.warnings.any { it.messageKey == "rollback.warn.snapshotCompleteness" })
+    }
+
+    /**
+     * 方言需要包装、而自增列**未知**时必须给出显式告警（2026-09-23 真机走查发现的形态）。
+     *
+     * 真机读数：DAS 没给出自增列（该沙盒内省起不来）⇒ `wrapIdentity=false` ⇒ 回填 INSERT 无
+     * `SET IDENTITY_INSERT` ⇒ 在真 SQL Server 上执行仍报 544，而**弹窗里只有「无法自动回滚」那类文案、
+     * 没有任何一条提示这是「没取到自增列」造成的**。本用例钉住：这种组合必须带 `rollback.warn.identityUnknown`，
+     * 且**已知**自增列时不得误报（正对照）。
+     * 判别力：删掉生成器里的 `identityUnknown` 告警分支 → 本用例必红。
+     */
+    @Test
+    fun `方言需要包装而自增列未知时必须显式告警`() {
+        val unknown = RollbackSqlGenerator.generateFromSnapshotRows(
+            table = "[user]",
+            columns = listOf("id", "username"),
+            rows = listOf(listOf("1", "alice")),
+            mode = RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
+            dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect,
+            identityColumns = emptyList(),
+        )
+        assertTrue(
+            "方言需要包装但自增列未知时必须告警（否则用户只看到 544、不知道是没内省）：" +
+                unknown.warnings.map { it.messageKey },
+            unknown.warnings.any { it.messageKey == "rollback.warn.identityUnknown" },
+        )
+        assertFalse(
+            "未知即不包装的契约不变（不得凭空造包装）",
+            unknown.statements.single().startsWith("SET IDENTITY_INSERT"),
+        )
+
+        // 正对照：已知自增列 → 出包装、且不得再报该告警
+        val known = RollbackSqlGenerator.generateFromSnapshotRows(
+            table = "[user]",
+            columns = listOf("id", "username"),
+            rows = listOf(listOf("1", "alice")),
+            mode = RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
+            dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect,
+            identityColumns = listOf("id"),
+        )
+        assertTrue("已知自增列必须成对包装", known.statements.single().startsWith("SET IDENTITY_INSERT"))
+        assertFalse(
+            "已知自增列时不得误报告警",
+            known.warnings.any { it.messageKey == "rollback.warn.identityUnknown" },
+        )
     }
 
     @Test
@@ -479,14 +554,37 @@ class RollbackSqlGeneratorTest {
     }
 
     /**
-     * 向后兼容（验收 3）：旧快照（无 identity 字段）+ 无方言 → 不包装且不报错，
-     * 产物与改前逐字节相同。
+     * 未知语义不包装（O-52 D1=A 的 fail-safe）：方言与 identity 列**双双未知**（生成器入参全默认）→
+     * 不包装、不报错，产物与改前逐字节相同。
+     *
+     * **原名 `快照回填_旧快照无identity字段不包装`，其「旧快照」没有指称物**：`RollbackSnapshotStore`
+     * 是 project 级**内存**服务、不持久化（类 KDoc 明写「会话生命周期即生命周期」），故不存在跨会话
+     * 反序列化旧格式条目的形态；`SnapshotEntry` 那两个字段的默认值只服务「调用方未传参」这一**可达**
+     * 形态（该 data class 的 KDoc 已自述此点）。T-Round10 独立复核㉙ 点名该用例「空转」即此——
+     * 断言本身判别力尚可，但用例名与 KDoc 承诺的兼容场景在仓内无法发生，读绿灯会误以为跨会话兼容已被验。
+     *
+     * **本用例自带正对照（防自身空转）**：同批数据补上 SQL Server 方言与 identity 列即必须包装——
+     * 生成器若退化为「永不包装」，下面第二条断言必红，故本用例的「不包装」不是恒真断言。
      */
     @Test
-    fun `快照回填_旧快照无identity字段不包装`() {
+    fun `快照回填_方言与identity双未知时不包装`() {
         assertEquals(
+            "入参全默认（方言未知 + identity 未知）→ 不包装，产物与改前逐字节相同",
             listOf("INSERT INTO rt_del (id, name) VALUES (1, 'Tom');"),
             backfill(),
+        )
+        assertEquals(
+            "正对照：同批数据带上 SQL Server 方言与 identity 列必须包装——" +
+                "否则上面那条「不包装」断言恒真（空转）",
+            listOf(
+                "SET IDENTITY_INSERT rt_del ON;\n" +
+                    "INSERT INTO rt_del (id, name) VALUES (1, 'Tom');\n" +
+                    "SET IDENTITY_INSERT rt_del OFF;",
+            ),
+            backfill(
+                dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect,
+                identityColumns = listOf("id"),
+            ),
         )
     }
 
@@ -500,16 +598,15 @@ class RollbackSqlGeneratorTest {
         val sqlServer = cn.song.mybatisplus.visualizer.sql.SqlServerDialect
         // ① 方言在但 identity 未知（空清单）
         assertEquals(expected, backfill(dialect = sqlServer, identityColumns = emptyList()))
-        // ② identity 在但方言未知（旧登记点未传 dialect）
+        // ② identity 在但方言未知（调用方未传 dialect 的条目形态；O-59 T-IIR-01 起两个生产登记点均已传）
         assertEquals(expected, backfill(dialect = null, identityColumns = listOf("id")))
         // ③ identity 声明了但不在本次快照列清单内（该表的自增列不是被回填的列）
         assertEquals(expected, backfill(dialect = sqlServer, identityColumns = listOf("other_id")))
-        // ④ 其余方言一律不包装
+        // ④ 其余方言一律不包装（DM8 于 2026-09-23 真机实证需要包装，已移出本清单 → 见下方 ⑤）
         listOf(
             cn.song.mybatisplus.visualizer.sql.MySqlDialect,
             cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect,
             cn.song.mybatisplus.visualizer.sql.OracleDialect,
-            cn.song.mybatisplus.visualizer.sql.DmDialect,
             cn.song.mybatisplus.visualizer.sql.KingBaseDialect,
             cn.song.mybatisplus.visualizer.sql.H2Dialect,
             cn.song.mybatisplus.visualizer.sql.SqliteDialect,
@@ -521,6 +618,17 @@ class RollbackSqlGeneratorTest {
                 backfill(dialect = dialect, identityColumns = listOf("id")),
             )
         }
+        // ⑤ DM8 与 SQL Server 同为包装方言（真机实测：不加包装 DM 报「仅当指定列列表，且 SET IDENTITY_INSERT
+        // 为ON时，才能对自增列赋值」；加包装后同一语句成功）——回滚链同样必须包装，否则回填 INSERT 在 DM 上必失败
+        val dmWrapped = backfill(
+            dialect = cn.song.mybatisplus.visualizer.sql.DmDialect,
+            identityColumns = listOf("id"),
+        )
+        assertTrue(
+            "DM8 回填含自增列的 INSERT 必须成对包装：$dmWrapped",
+            dmWrapped.single().startsWith("SET IDENTITY_INSERT") &&
+                dmWrapped.single().endsWith("SET IDENTITY_INSERT rt_del OFF;"),
+        )
     }
 
     /**

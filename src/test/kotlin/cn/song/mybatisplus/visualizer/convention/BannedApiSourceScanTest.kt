@@ -1728,6 +1728,56 @@ class BannedApiSourceScanTest {
     }
 
     @Test
+    fun `TEDTRC自证_跳转族调用点无ReadAction必红_白名单与自包权限放行`() {
+        // 独立复核㉗：`edtReadContractOffenders` 此前**只有主用例直接引用、无合成样本**（被元守卫登记为
+        // 「受机器保护的豁免」——缺口因此不可见）。此处关闭该缺口：三态各归其位。
+        val violating = listOf(
+            "src/main/kotlin/cn/x/BadJump.kt" to """
+                class BadJump {
+                    fun go() {
+                        SourcePathResolver.resolveVirtualFile(project, module)
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "文件内无 ReadAction 的跳转族调用点必须被命中：${edtReadContractOffenders(violating)}",
+            listOf("src/main/kotlin/cn/x/BadJump.kt"),
+            edtReadContractOffenders(violating),
+        )
+
+        val wrapped = listOf(
+            "src/main/kotlin/cn/x/WrappedJump.kt" to """
+                class WrappedJump {
+                    fun go() {
+                        ReadAction.compute<Unit, Throwable> {
+                            EntryJumpResolver.resolve(project, element)
+                        }
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertTrue(
+            "自包 ReadAction 的调用点应放行：${edtReadContractOffenders(wrapped)}",
+            edtReadContractOffenders(wrapped).isEmpty(),
+        )
+
+        val whitelisted = listOf(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt" to """
+                class SqlLogPanel {
+                    fun go() {
+                        EntryJumpResolver.resolveCandidates(project, element)
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertTrue(
+            "EDT 白名单文件应放行（白名单不得失效，否则主用例会因过报而红）：${edtReadContractOffenders(whitelisted)}",
+            edtReadContractOffenders(whitelisted).isEmpty(),
+        )
+    }
+
+    @Test
     fun `跳转族读权限运行期断言锚点`() {
         // 运行期硬断言锚点（T-PCP-03）：`SourcePathResolver.resolveVirtualFile` 入口必须保留
         // `assertReadAccessAllowed()`——源码级规则只管「调用点有没有 ReadAction 字样」，

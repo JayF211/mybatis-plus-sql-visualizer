@@ -134,9 +134,14 @@ data class BatchModel(
         }
 
         BatchKind.UPDATE -> {
+            // 版本列 `= <col> + 1` 的**两侧同一判定**（独立复核 ㉘ 的同型「半包」残留）：此前右侧是
+            // 裸写字面量、左侧走 [q]——名字一旦需要引用就产出「左侧加引号、右侧裸写」，右侧裸写在
+            // UPPER 族被折叠为大写 → 列不存在（与 UPSERT 后缀同款，见 `DialectTest.upsert列名按
+            // 目录来源同一判定`）。当前生产路径不可达（versionColumn 只在实体侧产出，目录侧
+            // `DbTableSpecAdapter` 恒 null），但判定分叉本身即缺陷形态，按既有口径一并对齐。
             val setSql = toggleColumns.filter { it.columnName in activeColumns }
                 .joinToString(", ") { "${q(it.columnName)} = ?" } +
-                (versionColumn?.let { ", ${q(it)} = $it + 1" } ?: "")
+                (versionColumn?.let { ", ${q(it)} = ${q(it)} + 1" } ?: "")
             val whereSql = fixedColumns.joinToString(" AND ") { "${q(it.columnName)} = ?" }
             "UPDATE ${q(tableName)}\nSET $setSql\nWHERE $whereSql"
         }
