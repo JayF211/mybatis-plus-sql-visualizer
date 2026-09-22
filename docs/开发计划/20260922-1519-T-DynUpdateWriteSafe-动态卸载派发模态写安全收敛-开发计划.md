@@ -200,6 +200,12 @@ internal fun chooseDispatchModality(captured: ModalityState?): ModalityState
 - 代码提交 `b7ac235`（本计划 + `DynamicInstallSupport.kt` + 新测试类 + 守卫规则，4 文件 +476/−4）；
   文档同步提交（计划实施记录 / 变更记录 / CHANGELOG）。
 - 两度并 master 均零冲突（期间 master 被并行会话推进两次）：`7bb7eab`（T-ExplainChainHardening + T-ErrorLocateUsability）→ `3ef8236`，`0abc1bb`（T-AgentResiduals）→ 见提交历史。
+- 三度并 master（期间 master 被并行会话推进三次）：`7bb7eab`（T-ExplainChainHardening + T-ErrorLocateUsability）→ `3ef8236`；
+  `0abc1bb`（T-AgentResiduals）→ `bd549ec`；`c482859`（explain 死常量修复，即本项门禁里那条 master 既有红）→ `f54584b`
+  （唯一冲突 `docs/变更记录.md` 台账行，按「保留双方全部行、本批置顶」解）。
+- **合入 master `6e2a34d`**（`--no-ff`，6 文件 +539/−5）；合并后定向复验 7 类 96 例 0 失败（含此前 master 侧红的
+  `EnumReachabilityGuardTest` 3 例转绿）。收口：工作树 `mpsv-dynws` 删除、分支 `t-dynws-writesafe` 删除、
+  并行登记注销。
 - §四 T-01~T-04 全量落地；T-04 的规则形态在实施中被修正（见 §四）。
 
 ### 二、读数
