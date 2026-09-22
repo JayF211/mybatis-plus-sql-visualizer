@@ -102,13 +102,19 @@ class SqlSourceInterceptor(
         return null
     }
 
-    /** 框架 / 基础设施帧一律跳过（与插件 CallerSourceLocator 的跳过规则对齐）。 */
+    /**
+     * 框架 / 基础设施帧一律跳过（与本插件 `CallerSourceLocator.isFrameworkFrame` 的规则保持同步——
+     * 插件侧新增前缀时本示例副本也须同步，`LocatorSkipPrefixSyncTest` 以源码扫描锁定两者差异集合）。
+     * 唯一刻意差异：插件自身包前缀（`cn.song.mybatisplus.visualizer.`）在本示例里由
+     * 上面 `cn == javaClass.name` 的自身帧跳过替代——本文件是拷贝到用户工程里的独立示例。
+     */
     private fun isFrameworkFrame(cn: String): Boolean =
         cn.startsWith("java.") || cn.startsWith("javax.") || cn.startsWith("jdk.") ||
             cn.startsWith("sun.") || cn.startsWith("com.intellij.") || cn.startsWith("org.jetbrains.") ||
             cn.startsWith("com.baomidou.") || cn.startsWith("org.apache.ibatis.") ||
             cn.startsWith("org.hibernate.") || cn.startsWith("com.zaxxer.") ||
-            cn.startsWith("org.springframework.") || cn.startsWith("com.sun.proxy.") || cn.startsWith("\$Proxy")
+            cn.startsWith("org.springframework.") || cn.startsWith("com.github.yulichang.") ||
+            cn.startsWith("com.sun.proxy.") || cn.startsWith("\$Proxy")
 
     private fun String.substringBeforeLast(delimiter: Char): String {
         val idx = lastIndexOf(delimiter)
