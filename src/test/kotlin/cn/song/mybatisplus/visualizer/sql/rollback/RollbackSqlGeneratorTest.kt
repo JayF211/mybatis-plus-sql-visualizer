@@ -270,6 +270,51 @@ class RollbackSqlGeneratorTest {
         assertTrue(result.warnings.any { it.messageKey == "rollback.warn.snapshotCompleteness" })
     }
 
+    /**
+     * 方言需要包装、而自增列**未知**时必须给出显式告警（2026-09-23 真机走查发现的形态）。
+     *
+     * 真机读数：DAS 没给出自增列（该沙盒内省起不来）⇒ `wrapIdentity=false` ⇒ 回填 INSERT 无
+     * `SET IDENTITY_INSERT` ⇒ 在真 SQL Server 上执行仍报 544，而**弹窗里只有「无法自动回滚」那类文案、
+     * 没有任何一条提示这是「没取到自增列」造成的**。本用例钉住：这种组合必须带 `rollback.warn.identityUnknown`，
+     * 且**已知**自增列时不得误报（正对照）。
+     * 判别力：删掉生成器里的 `identityUnknown` 告警分支 → 本用例必红。
+     */
+    @Test
+    fun `方言需要包装而自增列未知时必须显式告警`() {
+        val unknown = RollbackSqlGenerator.generateFromSnapshotRows(
+            table = "[user]",
+            columns = listOf("id", "username"),
+            rows = listOf(listOf("1", "alice")),
+            mode = RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
+            dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect,
+            identityColumns = emptyList(),
+        )
+        assertTrue(
+            "方言需要包装但自增列未知时必须告警（否则用户只看到 544、不知道是没内省）：" +
+                unknown.warnings.map { it.messageKey },
+            unknown.warnings.any { it.messageKey == "rollback.warn.identityUnknown" },
+        )
+        assertFalse(
+            "未知即不包装的契约不变（不得凭空造包装）",
+            unknown.statements.single().startsWith("SET IDENTITY_INSERT"),
+        )
+
+        // 正对照：已知自增列 → 出包装、且不得再报该告警
+        val known = RollbackSqlGenerator.generateFromSnapshotRows(
+            table = "[user]",
+            columns = listOf("id", "username"),
+            rows = listOf(listOf("1", "alice")),
+            mode = RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
+            dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect,
+            identityColumns = listOf("id"),
+        )
+        assertTrue("已知自增列必须成对包装", known.statements.single().startsWith("SET IDENTITY_INSERT"))
+        assertFalse(
+            "已知自增列时不得误报告警",
+            known.warnings.any { it.messageKey == "rollback.warn.identityUnknown" },
+        )
+    }
+
     @Test
     fun `快照回填INSERT_单引号转义与NULL`() {
         val result = RollbackSqlGenerator.generateFromSnapshotRows(

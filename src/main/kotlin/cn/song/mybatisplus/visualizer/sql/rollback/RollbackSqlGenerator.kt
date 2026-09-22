@@ -414,6 +414,13 @@ object RollbackSqlGenerator {
         val wrapper: ((String) -> String)? = dialect?.takeIf { wrapIdentity }?.let { d ->
             { insertSql -> d.renderInsertWrapper(table, insertSql) ?: insertSql }
         }
+        // 方言能力探测：探针 SQL 只为问「本方言有没有包装形态」（默认 null，SQL Server/DM 有）。
+        val dialectNeedsWrapper =
+            dialect?.renderInsertWrapper(table, "INSERT INTO $table ($columnList) VALUES (…);") != null
+        // 「未知即不包装」是 O-52 D1=A 的既定契约，但**不能静默**：方言明明需要包装、而本次又没取到自增列时，
+        // 产物就是一个执行必失败（SQL Server/DM 报 544 一类）的 INSERT。真机走查（2026-09-23）正是在这条路上翻车：
+        // DAS 没给出自增列 → 无包装 → 用户只看到 544、且不知道是「没内省」导致的。故补一条显式告警。
+        val identityUnknown = !wrapIdentity && dialectNeedsWrapper && identityColumns.isEmpty()
         val statements = ArrayList<String>(rows.size)
         val sb = StringBuilder()
         var batchRows = 0
@@ -431,6 +438,9 @@ object RollbackSqlGenerator {
         }
         if (sb.isNotEmpty()) statements.add(flushInsertBatch(sb, table, columnList, wrapper))
         val warnings = mutableListOf<RollbackWarning>()
+        if (identityUnknown) {
+            warnings += RollbackWarning("rollback.warn.identityUnknown", listOf(dialect?.name ?: ""))
+        }
         // 文案含两个占位符（{0} 行数 / {1} 上限）——曾只传 {0}，弹窗会原样显示「上限 {1}」
         if (rows.size >= SNAPSHOT_ROW_LIMIT) {
             warnings += RollbackWarning(
