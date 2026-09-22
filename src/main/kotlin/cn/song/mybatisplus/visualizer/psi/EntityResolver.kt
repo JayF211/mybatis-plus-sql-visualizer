@@ -42,6 +42,8 @@ import java.util.concurrent.ConcurrentHashMap
  *    （用户反馈定稿，不再 `;` 分隔）
  *  - T-EntityCache：解析结果按「PsiFile + classQualifiedName + configSignature」三维缓存，
  *    文件修改戳（modificationStamp）+ 配置签名双维度失效，避免大项目重复 PSI 遍历
+ *  - O-58：返回边界接 [ColumnNameCalibrator]——数据源可用时用真实列集合纠正猜测出的列名
+ *    （`orderID` → `order_i_d` 而库里是 `order_id`），不可用/查不了/开关关闭时逐字段原样返回
  */
 class EntityResolver {
 
@@ -53,26 +55,33 @@ class EntityResolver {
      *  - 文件修改（modificationStamp 变化）→ 缓存自然失效
      *  - 配置签名变化（tablePrefix/tableSuffix/tableNameInference 等设置变更）→ 缓存失效
      *
+     * O-58（列名数据源校正）：缓存**继续只存未校正的 PSI 产物**，校正在返回前作为一步廉价后处理
+     * （[ColumnNameCalibrator.calibrate]，对 DB 列集合做几次 map 查找，无遍历）执行。这样 DDL 变更的
+     * 失效面只有数据源 schema 缓存一处（已登记 MetadataInvalidator），不必给实体缓存键扩 DB 签名。
+     * 代价是校正生效时返回的是新对象而非缓存里那一个——已核实全仓无消费方依赖 TableInfo 实例同一性。
+     *
      * @param entityClass 实体 PsiClass（如 DeviceInfoEntity）
      * @return 表信息；类名缺失等异常情况返回带推断表名、空列的表信息（保证不抛异常）
      */
     fun resolve(entityClass: PsiClass): TableInfo {
         val className = entityClass.name ?: return TableInfo("", "", emptyList())
-        val file = entityClass.containingFile ?: return resolveInternal(entityClass)
+        val project = entityClass.project
+        val file = entityClass.containingFile
+            ?: return ColumnNameCalibrator.calibrate(project, resolveInternal(entityClass))
         val qName = entityClass.qualifiedName ?: className
-        val configSig = TableConfigSignature.projectSignature(entityClass.project)
+        val configSig = TableConfigSignature.projectSignature(project)
 
         // T-Perf-18：缓存键不持 PsiFile 强引用（VirtualFile.url 字符串标识——PsiFile 随键
         // 永久驻留是长会话内存泄漏源；URL 相同的 PSI 重建由 modificationStamp 维度失效）
         val key = EntityCacheKey(file.virtualFile?.url, System.identityHashCode(file), qName, configSig)
         val stamp = file.modificationStamp
         cache[key]?.let { entry ->
-            if (entry.stamp == stamp) return entry.value
+            if (entry.stamp == stamp) return ColumnNameCalibrator.calibrate(project, entry.value)
         }
 
         val value = resolveInternal(entityClass)
         cache[key] = Entry(stamp, value)
-        return value
+        return ColumnNameCalibrator.calibrate(project, value)
     }
 
     /**
@@ -184,6 +193,9 @@ class EntityResolver {
      * 注释来源优先级（M16，schema 预留）：
      * SCHEMA（数据源 schema 列/表注释，方案 B 接入后自动覆盖一切代码内注释）最高，
      * 当前实现 schema 返回 null——实际生效顺序 = 注解 > javadoc > 行注释。
+     *
+     * O-58 兑现的是「方案 B」的**列名**半边（[ColumnNameCalibrator] 在 [resolve] 返回边界用数据源
+     * 真值纠正列名）；**注释**半边（本枚举的 SCHEMA 源）仍未接入，故此处保持 null 占位。
      */
     enum class CommentSource { SCHEMA, ANNOTATION, JAVADOC, LINE_COMMENT }
 

@@ -129,6 +129,13 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
         try {
             settings.state.language = "zh"
             val panel = PluginSettingsPanel(settings)
+            // O-58：新复选框的文案刷新正反两面各断一次（先 zh 后 en，防「断言方向写反」的假守卫）
+            val zhTexts = mutableListOf<String>()
+            collectCheckBoxTexts(panel.getRoot(), zhTexts)
+            assertTrue(
+                "zh 下 O-58 列名数据源校正开关应为中文文案: $zhTexts",
+                zhTexts.any { it.contains("按数据源校正列名") },
+            )
             // 模拟用户选择 English（写穿）→ 重建表单（invokeLater 在测试环境不保证执行，直接调用）
             panel.selectLanguage("en")
             panel.rebuild()
@@ -137,6 +144,10 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             val hasCjk = { s: String -> s.any { it.code in 0x4E00..0x9FFF } }
             assertTrue("rebuild 后复选框不应残留中文: $texts", texts.none(hasCjk))
             assertTrue("rebuild 后复选框应含英文文案: $texts", texts.any { it.contains("Replace") } && texts.any { it.contains("Format") })
+            assertTrue(
+                "rebuild 后 O-58 列名数据源校正开关应刷新为英文文案: $texts",
+                texts.any { it.contains("Calibrate column names") },
+            )
             // M28：更新分区新增「启动时自动检查更新」开关（默认开）——复选框总数 4 → 5；
             // T-M31.14 SQL 日志组 +5；手动选择实体类开关 +1（T-M38+）；关闭工具窗口停止监听 +1；
             // T-TenantLine：多租户注入开关 +1；Hibernate 日志捕获开关 +1
@@ -153,7 +164,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // M56 T-M56-08：增强捕获开关 + 脱敏开关 +2
             // T-UxOnboard T-UX-01：首用锚点引导通知开关 +1（界面节）
             // T-PreviewWhitespaceToggle O-44a：空白符可视化开关 +1（界面节，默认关＝不设置该属性）
-            assertEquals("复选框总数应为 29", 29, texts.size)
+            // O-58：列名数据源校正开关 +1（表名映射节）
+            assertEquals("复选框总数应为 30", 30, texts.size)
         } finally {
             settings.state.language = old
         }
@@ -174,6 +186,25 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
         if (component is javax.swing.JCheckBox) out += component.text
         if (component is java.awt.Container) {
             component.components.forEach { collectCheckBoxTexts(it, out) }
+        }
+    }
+
+    /**
+     * O-58：新开关必须经持久化往返保持——本轮只补了「文案刷新」与「计数」，没补「改了值 → 落盘 →
+     * 重载 → 值保持」，而 getState/loadState 往返才是持久化契约本体（文案刷新与它无关）。
+     */
+    fun testStateRoundTripKeepsColumnCalibration() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.columnCalibrationEnabled = false
+            val saved = settings.getState().copy()          // 模拟落盘快照
+            settings.loadState(PluginSettings.State())        // 清成出厂默认（true）
+            assertTrue("清空后应为出厂默认 true", settings.state.columnCalibrationEnabled)
+            settings.loadState(saved)                         // 模拟重启重载
+            assertFalse("往返后 columnCalibrationEnabled 应保持 false", settings.state.columnCalibrationEnabled)
+        } finally {
+            settings.loadState(snapshot)
         }
     }
 

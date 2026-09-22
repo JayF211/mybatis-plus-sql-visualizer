@@ -177,6 +177,19 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var removeTableSuffix: String = "",
 
         /**
+         * 列名按数据源校正（O-58，**默认开**）：实体字段名与库真实列名不一致时（`orderID` →
+         * `order_i_d` 而库里是 `order_id`），用数据源的真实列集合纠正预览 SQL 里的列名。
+         *
+         * 只在归一化（小写 + 去 `_`/`-`）后能**唯一**确定是哪一列时改写，命中 0 列或 ≥2 列保持原样
+         * （语义无关的改名不猜）。数据源不可用（社区版 / 未配置 / 未连接）、表看不见、查不了时
+         * 行为与关闭本项**逐字段一致**。
+         *
+         * 默认开的依据：只在能唯一确定真值时改变结果，且改变方向是纠错；代价是「预览产物会随
+         * 数据源可用性变化」，故校正发生时预览侧会给出一次可发现的信号。
+         */
+        var columnCalibrationEnabled: Boolean = true,
+
+        /**
          * 抢先体验：启用 Gitee 更新通道（M28 改造）：勾选时 IDE 启动静默检查 Gitee 通道
          * （[update.StartupUpdateCheck]，含 `-beta.N` 内测版与正式版提前推送），
          * 仅在发现可用更新时通知；不勾选则完全跳过启动检查（设置页手动检查不受影响）。
@@ -632,7 +645,7 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 从 JSON 字符串导入并覆盖当前全局配置（O-5：设置导入导出）；委托 [SettingsIO.importFromJson]。
          *
          * 以当前状态为底合并（T-Fix-SettingsScope）：文件只承载 [SettingsIO.exportToJson] 的
-         * 21 个可覆盖项，State 其余 56 个字段（参数历史 / 增强捕获授权记忆 / 反馈身份 /
+         * 23 个可覆盖项，State 其余 58 个字段（参数历史 / 增强捕获授权记忆 / 反馈身份 /
          * 日志自动保存目录 / 全局项等）不在文件里，必须保留现值而非回落出厂默认——
          * 全局项（language 等）由此自然保留，无需再单独抄回。
          *

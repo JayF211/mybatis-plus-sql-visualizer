@@ -21,9 +21,16 @@ import javax.swing.JLabel
  * SQL Visualizer（Current Project）。
  *
  * 展示「使用项目设置」总开关 + 十项可覆盖字段（State 十字段一一对应）：
- * 方言 / 参数替换 / 格式化 / 逻辑删除注入 / 逻辑删除值 / 表前缀 / 表后缀 / 推断策略 / 忽略字段。
+ * 方言 / 参数替换 / 格式化 / 逻辑删除注入 / 逻辑删除值 / 表前缀 / 表后缀 / 推断策略 / 忽略字段 /
+ * 列名数据源校正。
  * 开关类字段 tri-state 语义：null = 使用全局（控件初始灌全局值，apply 时写实际勾选态）；
  * 字符串字段空 = 使用全局（tooltip 说明，[settings.project.field.tip]）。
+ *
+ * O-58：列名数据源校正（`columnCalibration`）与 `replaceParams` / `formatSql` / `injectLogicDelete`
+ * 语义完全同类（都是 `Boolean?`，null=跟随全局），故控件形态、显示与回写链路**逐条照抄
+ * `replaceParamsCheck`**（`checkBox` + [shownBool] 灌值 + [boolDiffers] 比对/写回），不自创形态。
+ * 已知取舍：`null`（跟随全局）与 `false`（显式禁用）在复选框上不可区分——这对既有三个布尔覆盖
+ * 同样成立，是本页的既有整体设计（null 的复位由「重置为跟随全局」承担），不给单个新项开特例。
  *
  * T-UiNative T-UN-15（试点）：GridBag 手摆布局迁 Kotlin UI DSL v2（`panel { }`）。
  * apply/isModified/reset 手写逻辑保留（面板存取仍走 [ProjectPluginSettings] 单例）。
@@ -39,23 +46,23 @@ import javax.swing.JLabel
  * 显示项按全局模式推导，见 [expectedDialectItem]）。哨兵项不复活 T-RA-04 删除的 modified
  * 标志位：apply 只按控件显示值甄别两种语义写 state，isModified 仍走纯逐项比对。
  *
- * T-ProjectSettingsScope P1（2026-09-18）：总开关关闭时 9 项**置灰并显示全局生效值**——
+ * T-ProjectSettingsScope P1（2026-09-18）：总开关关闭时 10 项**置灰并显示全局生效值**——
  * 原实现无条件灌「state 残值」而运行时按全局取值，页面所见与运行时所用不一致（用户看不出真实生效值）。
- * 四处必须联动（缺一处即回到原缺陷）：[refreshControls]（灌值 + 可用性）、[apply]（关闭态不写 9 项，
+ * 四处必须联动（缺一处即回到原缺陷）：[refreshControls]（灌值 + 可用性）、[apply]（关闭态不写 10 项，
  * 否则把显示的全局值当成项目自定义值钉进 state）、[isModified]（关闭态只比总开关，否则显示全局值
  * vs state 残值恒报已修改）。
  *
- * T-ProjectSettingsScope P2：「重置为跟随全局」按钮清除 9 项残值（总开关不动，见 [resetToGlobal]）。
+ * T-ProjectSettingsScope P2：「重置为跟随全局」按钮清除 10 项残值（总开关不动，见 [resetToGlobal]）。
  *
  * T-TS-FixG7（P1 同类缺陷的第二处出口，独立复核抓出）：开启态 [apply] **只写回「控件显示值 !=
- * state 推导值」的项**。原实现无条件写回 9 项，会把「空/null = 跟随全局」的项钉成当时的全局快照
+ * state 推导值」的项**。原实现无条件写回 10 项，会把「空/null = 跟随全局」的项钉成当时的全局快照
  * （重置 → 改一项 → apply 即触发），全局值日后变更本项目不再跟随而 UI 数值不变。
  * 语义定案：**「重置后没碰过的项继续跟随全局，碰过的项才成为覆盖」**——「碰过」以
  * 「控件显示值是否仍等于 state 推导值」判定，与 [isModified] 同源，不引入额外的跟随标记/抑制标志。
  *
  * T-FS-08 语义定案：**开启态清空文本项 = 回到「跟随全局」**（不是「显式空值」）。依据两条：
  *  ① UI 侧项目页**没有逐字段的「跟随全局」复选框**，单字段回到跟随全局的唯一表达方式就是清空该字段
- *     （整页「重置为跟随全局」按钮只覆盖全部 9 项，表达不了单字段）；
+ *     （整页「重置为跟随全局」按钮只覆盖全部 10 项，表达不了单字段）；
  *  ② state 侧文本项「空串 = 使用全局」是既有口径（[ProjectPluginSettings.State] 各文本字段 KDoc、
  *     `effectiveXxx()` 的 `isNotBlank()` 回退、字段 tooltip），与 3 个布尔项的 `null = 跟随全局` 同构；
  *     改成「显式空值」需 String→String? 并连带持久化格式与全部 effective 取值口径。
@@ -84,8 +91,11 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
     private var inferenceCombo: ComboBox<InferenceOption>? = null
     private var ignoredFieldsField: JBTextField? = null
 
+    /** O-58：列名数据源校正开关（null = 跟随全局，与 [replaceParamsCheck] 同范式）。 */
+    private var columnCalibrationCheck: JBCheckBox? = null
+
     /**
-     * T-ProjectSettingsScope P1：9 项可覆盖字段的 Cell——总开关关闭时统一置灰。
+     * T-ProjectSettingsScope P1：10 项可覆盖字段的 Cell——总开关关闭时统一置灰。
      * 只用于「可用性」联动（值刷新走上面各控件字段，dispose 后为空安全）；dispose 时清空避免持有组件。
      */
     private val projectValueCells = mutableListOf<Cell<JComponent>>()
@@ -121,7 +131,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         // （灌值分支只此一处，防「四处联动」漏改）。
         // T-RA-04：原先每个控件都挂 addActionListener { modified = true } 只为置标志位，
         // 标志位删除后这些监听器一并移除（isModified 逐项比对控件显示值，无需变更通知）。
-        // T-ProjectSettingsScope P1：总开关的监听器有真实职责（关闭态刷新 9 项可用性与显示值），
+        // T-ProjectSettingsScope P1：总开关的监听器有真实职责（关闭态刷新 10 项可用性与显示值），
         // 与 T-RA-04 删除的「只为置假标志位」监听器不同，重新引入不违该定案。
         // T-DialectAutoInfer：auto 哨兵项=「智能推断」；项目级 dialectAuto null=跟随全局，
         // 显示项由 [expectedDialectItem] 按有效模式推导（与 reset/isModified 同源）。
@@ -136,6 +146,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         lateinit var tableSuffixCell: Cell<JBTextField>
         lateinit var inferenceCell: Cell<ComboBox<InferenceOption>>
         lateinit var ignoredFieldsCell: Cell<JBTextField>
+        lateinit var columnCalibrationCell: Cell<JBCheckBox>
         lateinit var resetCell: Cell<JButton>
         projectValueCells.clear()
         val panel = panel {
@@ -201,9 +212,16 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                     }
             }
             row {
+                // O-58：形态与 tooltip 口径照抄 replaceParams / formatSql / injectLogicDelete
+                columnCalibrationCell = checkBox(MpSqlVisualizerBundle.message("settings.columnCalibration"))
+                    .applyToComponent {
+                        toolTipText = fieldTip()
+                    }
+            }
+            row {
                 // T-ProjectSettingsScope P2：形态照抄 PluginSettingsPanel 的「恢复默认颜色」
                 // （JButton + bundle 文案 + tooltip + addActionListener，无双确认弹窗），
-                // 置于所重置的 9 行之后。始终可用：关闭态正是残值在 UI 上唯一不可见的时刻。
+                // 置于所重置的 10 行之后。始终可用：关闭态正是残值在 UI 上唯一不可见的时刻。
                 resetCell = button(MpSqlVisualizerBundle.message("settings.project.reset")) { resetToGlobal() }
                     .applyToComponent {
                         toolTipText = MpSqlVisualizerBundle.message("settings.project.reset.tip")
@@ -221,6 +239,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         tableSuffixField = tableSuffixCell.component
         inferenceCombo = inferenceCell.component
         ignoredFieldsField = ignoredFieldsCell.component
+        columnCalibrationCheck = columnCalibrationCell.component
         projectValueCells += listOf(
             comboCell,
             replaceParamsCell,
@@ -231,6 +250,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
             tableSuffixCell,
             inferenceCell,
             ignoredFieldsCell,
+            columnCalibrationCell,
         )
         refreshControls(st.useProjectSettings)
         return panel
@@ -280,15 +300,17 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         inferenceCombo?.selectedItem = inferenceOptions().firstOrNull { it.value == inferenceShown }
             ?: inferenceOptions().first()
         ignoredFieldsField?.text = shownText(st.ignoredFields, global.ignoredFields, showProject)
-        // 关闭态置灰：这 9 行显示的是全局生效值，编辑它们没有落点（apply 不写回，见 [apply]）
+        // O-58：null 视为全局值（与 [shownBool] 的既有三态口径同源）
+        columnCalibrationCheck?.isSelected = shownBool(st.columnCalibration, global.columnCalibrationEnabled, showProject)
+        // 关闭态置灰：这 10 行显示的是全局生效值，编辑它们没有落点（apply 不写回，见 [apply]）
         projectValueCells.forEach { it.enabled(showProject) }
     }
 
     /**
-     * T-ProjectSettingsScope P2：「重置为跟随全局」——9 项归零/null（[ProjectPluginSettings.State.dialectAuto]
+     * T-ProjectSettingsScope P2：「重置为跟随全局」——10 项归零/null（[ProjectPluginSettings.State.dialectAuto]
      * 一并归 null），**总开关保持不动**（按钮语义是「清除本项目自定义值」，不是「停用项目设置」）。
      *
-     * 直接改 state 而非只改控件显示值：关闭态 [apply] 不写这 9 项，只改控件则残值永远清不掉；
+     * 直接改 state 而非只改控件显示值：关闭态 [apply] 不写这 10 项，只改控件则残值永远清不掉；
      * 开启态把「显示的全局值」写进 state 又会变成硬覆盖值，与「跟随全局」语义相反。
      *
      * T-TS-FixG7：重置后控件按 P1 回灌全局值，但 [apply] 只写回「被用户动过」的项，
@@ -306,6 +328,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         st.tableSuffix = ""
         st.tableNameInference = ""
         st.ignoredFields = ""
+        st.columnCalibration = null
         refreshControls(showProjectNow())
     }
 
@@ -352,7 +375,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         // createComponent/reset 初始灌值即会误报「已修改」；故本方法一律逐项比对
         // （控件显示值 vs state+全局兜底语义），不依赖任何标志位（T-RA-04 已删除原标志位）。
         if (showProject != st.useProjectSettings) return true
-        // T-ProjectSettingsScope P1：关闭态 9 项显示的是全局生效值、apply 也不写这 9 项，
+        // T-ProjectSettingsScope P1：关闭态 10 项显示的是全局生效值、apply 也不写这 10 项，
         // 故不参与比对——若仍比对，「控件显示全局值 vs state 残值」恒报已修改
         // （误报形态同 T-SettingsTruth 6.3：页面一打开就是「已修改」）。
         if (!showProject) return false
@@ -372,6 +395,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
             ?: st.tableNameInference.ifBlank { global.tableNameInference }
         if (inferenceShown != st.tableNameInference.ifBlank { global.tableNameInference }) return true
         if (stringDiffers(ignoredFieldsField, st.ignoredFields, global.ignoredFields)) return true
+        if (boolDiffers(columnCalibrationCheck, st.columnCalibration, global.columnCalibrationEnabled)) return true
         return false
     }
 
@@ -380,16 +404,16 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         val global = globalState
         val showProject = showProjectNow()
         st.useProjectSettings = showProject
-        // T-ProjectSettingsScope P1：关闭态不写 9 项——此时控件显示的是**全局生效值**，
+        // T-ProjectSettingsScope P1：关闭态不写 10 项——此时控件显示的是**全局生效值**，
         // 无条件写回会把全局值（以及空/null 字段的全局兜底值）当成项目自定义值钉进 state：
         // 用户重开总开关后发现自定义值已被覆盖，或「跟随全局」被悄悄改成硬覆盖值。
         if (showProject) {
             // T-TS-FixG7：开启态**只写回「控件显示值 != state 推导值」的项**——判据与 [isModified] 的
             // 逐项比对同源（boolDiffers/stringDiffers/expectedDialectItem），即「用户确实动过这一项」。
             //
-            // 原实现无条件写回全部 9 项，会把「空/null = 跟随全局」的项钉成**当时的全局快照**：
-            // 开启态点「重置为跟随全局」（9 项置空 → [refreshControls] 按 P1 回灌全局值）→ 用户再改
-            // 任意一项使 isModified()==true → apply 把 9 个控件的显示值（= 全局值）写进 state →
+            // 原实现无条件写回全部 10 项，会把「空/null = 跟随全局」的项钉成**当时的全局快照**：
+            // 开启态点「重置为跟随全局」（10 项置空 → [refreshControls] 按 P1 回灌全局值）→ 用户再改
+            // 任意一项使 isModified()==true → apply 把 10 个控件的显示值（= 全局值）写进 state →
             // 「跟随全局」被静默改成硬覆盖：全局值日后变更本项目不再跟随，而 UI 数值与重置瞬间逐字相同，
             // 用户看不出差别。这与 P1 要消灭的是同一类缺陷（页面语义与运行时语义不一致），只是出口在 apply。
             //
@@ -442,6 +466,11 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
             ignoredFieldsField?.let {
                 if (stringDiffers(it, st.ignoredFields, global.ignoredFields)) st.ignoredFields = stateTextOf(it)
             }
+            columnCalibrationCheck?.let {
+                if (boolDiffers(it, st.columnCalibration, global.columnCalibrationEnabled)) {
+                    st.columnCalibration = it.isSelected
+                }
+            }
         }
         // T-FS-08：写回后按同一批取值函数（shownBool/shownText/expectedDialectItem，经 [refreshControls]）
         // 重新推导控件显示值——apply 之后「控件显示值 ≡ 派生(state)」恒成立，[isModified] 随之复位。
@@ -469,6 +498,7 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         tableSuffixField = null
         inferenceCombo = null
         ignoredFieldsField = null
+        columnCalibrationCheck = null
         projectValueCells.clear()
     }
 }

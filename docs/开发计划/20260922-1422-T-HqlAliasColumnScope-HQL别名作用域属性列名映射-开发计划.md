@@ -291,4 +291,106 @@ List<String> itemCodes = commonDao.findByQuery(hql,
 
 ## 实施记录
 
-（未实施）
+### 交付方式
+
+sam 调度：单实施代理五轮迭代（初版 + 复核后四轮），主调度逐轮审 diff、两轮独立只读复核（写验分离），
+全量门禁由主调度串行跑。分支 `t-hql-colmap`，工作树 `mpsv-hql-colmap`，基 master `ddb694a`。
+
+### 任务落地（对照 §四）
+
+| 任务 | 落地形态 |
+|---|---|
+| T-01 | 新增 `converter/jpa/JpaAliasTableResolver.kt`（`JpaAliasScope` + `JpaAliasTableResolver` + `JpaAliasPropertyMapper`）。扫描时点=**JOIN 改写之后、实体名→表名替换之前**（前者保证改写新造的副表别名可见，后者保证 FROM/JOIN 后的实体标识符还在、PSI 短名检索能命中）。根实体直接绑传入的 `table`（免二次 PSI），其余实体按短名检索后 `JpaEntityResolver().resolve`，同实体名 memo 一次。解析失败静默跳过、不猜列名 |
+| T-02 | 替换核心 `JpaAliasPropertyMapper.mapProperties`：按限定符分派到 `scope.byAlias[限定符] ?: rootTable`，**未解析别名回落根实体列清单**（= 改前行为，故对既有产物是严格收窄 + 新增）。`HqlConverter` 与 `JpqlConverter` 共用这一份实现 |
+| T-03 | 覆盖 `FROM T t` / `FROM T AS t` / `JOIN T t` / `JOIN T AS t` / 无别名 / 自连接（同实体两别名各自绑定，`putIfAbsent` 先到先得）；替换产物是列名，不再命中规则，幂等 |
+| T-04 | **未纳入**（SELECT 副表别名展开）：按计划「不确定就不做」登记为边界，未实测 |
+| T-05 | 新增 `HqlAliasColumnMappingTest`（**17 例**）；`HqlConverterTest.customDao_joinWithNamedParam` 补 `loc.zone_id` 断言（该夹具本就有此形态却只断言 `IN (?)`，改前必红） |
+| T-06 | ON 未映射限定符尾注（最小形态）：只对「在 FROM/JOIN 中**根本没出现过**」的限定符报警，「出现过但实体解析不出」保持沉默（属已知降级，报警会淹没真实信号）；只对 SELECT/FROM 语句追加 |
+| （第五轮追加） | 属性映射**跳过单引号字面量**：`PROPERTY_OR_LITERAL` 单遍交替（字面量分支在前、无捕获组），命中字面量即原样返回。紧邻形态旧正则本来就会改字面量（既有缺陷类），但 T-02 的空白容忍把这个面扩大了，故一并收掉 |
+
+### 计划自身被证伪 / 需更正之处
+
+| # | 计划原文 | 实测结论 |
+|---|---|---|
+| 1 | §五 P-1「用户 HQL 形态未知，实施第一步必须先复现」 | **已被用户补充材料证实**：形态＝显式实体 JOIN + 用户手写 ON，`WmsPickTicketDetail` 上是普通字段 `pickTicketId`/`itemId`。P-1 不再是待验证前提，见 §十一.1 |
+| 2 | §十一.3「不产生『原本会被替换、现在不替换』的回归面」 | **被独立复核证伪**：限定符与点号之间有空白时（`u .code`，合法 HQL）旧实现映射、新实现不映射。第四轮**改行为**（正则容忍并原样保留点号周围空白）使该声明重新成立，而不是改声明 |
+| 3 | §四 T-06「附一次性注释」 | 实测落到 UPDATE 上会让 `JpaUpdateParser` 的 WHERE 降级为 Raw（条件树渲染退化），收窄为只对 SELECT/FROM 追加 |
+| 4 | §十一.2「收紧后必须仍命中 `pickTicket.updateInfo.createdTime` 这一形态」 | 成立且已由**整串黄金比对**钉死（见下） |
+| 5 | 复核阶段的一个**主调度假设**也被证伪 | 主调度要求「把字面量分支放到属性分支之后 → 用例也应红」，实测**绿**：Java 正则左端优先，`find()` 取起始位置最靠前的匹配，而引号起点永远在引号内标识符之前。承重的是**交替本身**（去掉字面量分支那条变异确实红），不是分支顺序。实施代理未为迎合该要求伪造读数，如实登记 |
+
+### 写集偏离裁定（均在计划 §九 清单外，逐条裁定）
+
+| 偏离 | 裁定 |
+|---|---|
+| `JpaFromEntityMapper.mapSubqueryEntities` 加 `knownTableNames` 默认参数 | **接受**：复用别名扫描已解析出的「实体名→表名」，免二次 PSI 检索；默认空表使既有调用点零改动 |
+| `JpqlConverter` 加 internal 作用域重载、旧 2 参重载保留 | **接受**：两条链行为一致的要求需要同一份替换核心；旧重载回落 `JpaAliasScope.EMPTY` = 历史行为 |
+| `HqlConverter.convertWithEntityResolver`（internal） | **接受**：供无 Project 的单测注入实体解析（LightPlatform 环境无索引）；生产入口仍是 `convert(..., project)` 形态，且由 `testHql链路_生产入口project形态` 覆盖 |
+| `JpqlConverter` 旧 `mappedColumnNames` 去重守卫**移除** | **接受（属纠错非回归）**：复核用探针证实旧守卫**既漏映射**（`statusText→status` 时 `u.statusText` 根本不替换）**又没挡住链式双重映射**（`a→b`、`b→c` 时 `x.a` 被错改成 `x.c`）；新实现单遍、按原文命中、不链式。复核结论已写入 KDoc 留痕 |
+| `JpaFromEntityMapper` 的 `project == null` 守卫由早退改为「无已知表名才早退」 | **接受**：复核逐层追认对既有调用方**逐字等价**（生产 `project == null` 走的注入形态唯一键是根实体名，而该扫描器明确过滤 `it != table.entityClassName`）。KDoc 已写明「该守卫只在注入形态下才会真正放开」 |
+
+### 读数
+
+- **定向（还原态最终）**：`BUILD SUCCESSFUL`，12 类 / **167 例 / 0 失败 / 0 错误 / 0 跳过**
+  （`HqlAliasColumnMappingTest` 17、`HqlConverterTest` 17、`HqlConverterAssociationTest` 8、
+  `HqlConverterComprehensiveTest` 23、`HqlConverterJoinFetchTest` 4、`HqlConverterNewDtoTest` 2、
+  `HqlConverterParamTest` 4、`HqlConverterSelectExpandTest` 27、`JpaJoinOnResolverTest` 14、
+  `JpaSubqueryAdvancedHqlTest` 15、`JpqlConverterEndToEndTest` 5、`JpqlConverterTest` 31）
+- **反向验证（五处，读数原文均已贴入各轮回报）**：
+  1. 回退 T-01（别名分派失效）→ 10 例中 4 例红，含用户 HQL 同形用例与跨别名用例；
+  2. 回退 T-02（正则回无别名形态）→ 同样 4 例红；
+  3. 去掉点号空白容忍 → `test点号两侧空白_仍映射且空白原样保留` 红（产物 `z .createdTime` 未映射）；
+  4. 去掉 `ON_CLAUSE` 的 `(?i)` → `testON区域边界_小写where与join截断` 红（ON 区域越过小写 `where`，
+     把 `where bad.thing = 1` 里的 `bad` 当 ON 限定符点名）；
+  5. 注释掉语句类型闸门 → `test尾注不落在UPDATE与DELETE语句` 红（尾注落到 UPDATE 上）；
+  6. 去掉字面量分支 → 字面量保护两例红（`'% x .create_time %'` 复现复核报的缺陷形态）。
+- **用户报障复现（整串黄金比对，首跑即相等）**：
+  ```
+  select distinct item.code from wms_pick_ticket pickTicket
+  join wms_pick_ticket_detail detail on detail.pick_ticket_id = pickTicket.id
+  join wms_item item on item.id = detail.item_id
+  where pickTicket.warehouse_id = ? and pickTicket.status = 'EN'
+    and pickTicket.updateInfo.created_time >= ? and pickTicket.updateInfo.created_time < ?
+  order by item.code
+  ```
+  `detail.pickTicketId`/`detail.itemId` → `detail.pick_ticket_id`/`detail.item_id`（本任务主症）；
+  `pickTicket.updateInfo.created_time` **外层 `updateInfo.` 保留、逐字不变**（@Embedded 展平是另一项，用户已挂起）。
+  该期望串是**首跑之前写死**的纯字面量（测试文件 md5 首跑前后未变 `3bbb6dd9…`），首跑即整串相等——非「改成实际值就绿」。
+- **探针**：`grep -rn "RED PROBE" --include=*.kt src/` = 0 命中（全仓）。
+- **全量门禁**：见 §十二。
+
+### 已登记边界（本轮明确不改）
+
+1. **关联路径 JOIN 的副表别名仍走未映射兜底**（`join 根别名.关联属性 副表别名`）：扫描时点 JOIN 后跟的是根别名而非实体名；即便在 `JpaJoinRewriter` 改写后扫描，看到的只是改写产物里的表名，按短名检索不到实体类。故 `where d.createdTime = ...` 这类关联路径副表属性仍不映射——**与改前逐字一致，无回归**。要覆盖需按表名反查实体（`EntityClassFinder` 一类 API），本轮按「不扩改动面」未做。
+2. **逗号分隔 FROM 列表**（`from A a, B b`，HQL 已废弃形态）不识别别名，同样走兜底。
+3. `HqlConverter.mapAssociationPath`（`:376-378`）的三段式正则仍是**紧邻式**，`rti . ruleTable . id` 带空白不映射（改前也不映射、非回归）；与属性映射的空白口径不一致，登记为边界，未顺手统一。
+4. `testON区域边界…` 的第一段（`'a.b%'` 那条）对 `(?i)` 修复**不敏感**（字面量保护已消除 `a.b`），真正钉住 `(?i)` 的是第二段（`:187-192`，由变异读数证实）；第三段只测已知限定符过滤。测试整体有判别力，但内部混有非判别断言。
+5. `\s*` 可跨 `--` 行注释：`where z.id = 1 -- detail\n  .createdTime` 会把限定符取成注释里的末词，再按未知限定符回落根表。合法 HQL 上未构造出产物出错的现实反例，登记为 `\s*` 唯一的真实粗糙面。
+6. 尾注闸门在前导注释 `/* c */ select`、CTE `with x as (...) select`、前导 `(` 形态下**丢提示**（只丢提示不丢替换），与既有 head 判据口径一致，属刻意保守。
+7. `\s*` 使副表别名绑定在二次转换时丢失（实体名已换成表名、PSI 查不到），退化为只看根表——**这恰是幂等成立的原因**；若某根表字段名与某副表列名撞名则可能破坏幂等（未构造出实际反例）。
+8. 尾注文案与下游解析器存在隐式耦合：注释文本内不得出现 `FROM`/`JOIN` 后紧跟空白+标识符（`SelectClauseExpander.joinPattern` 与 `JpaFromEntityMapper.ENTITY_REFERENCE` 都是纯文本正则、不识别注释）。现文案 `FROM/JOIN，` 满足，已写进 KDoc 锁死。
+
+### 未做 / 未验证
+
+- **T-04（SELECT 副表别名展开）未做**，登记边界（见上第 1 条相关）。
+- **真机走查未做**（需 runIde 沙盒 + 用户工程或 demo），留人工。
+- **@Embedded 展平（§六 D2）未做**：用户 2026-09-22 明确挂起，等其补充材料后再定；本轮以「该形态产物逐字不变」的整串断言保证不误伤。
+
+### §十二 全量门禁
+
+**读数（2026-09-22）**：
+
+| 门禁 | 读数 | 判定 |
+|---|---|---|
+| `testShards` 三片 | **5690 例 / 0 失败 / 0 错误 / 6 跳过**（1834 / 2166 / 1690，`BUILD SUCCESSFUL in 3m 41s`） | ✅ |
+| `verifyGate` 三目标 | IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63 **全 Compatible**（待移除 API 4/5/6 处、废弃 API 9/12/66 处） | ✅ |
+| `testDatabase` | 10 例 8 过 **2 红＝在册环境失败** | ✅ 与改动零交集 |
+
+**首跑撞在册 flake（如实登记）**：首跑 `testShards` 三片 2754 / 17 / 2919，`testShard3` **13 例全红**，全部为
+`XmlSqlCompletionContributorTest` 的 `AlreadyDisposedException`。异常栈落在**第三方与平台代码**：测试在 caret 处触发补全，
+注入语言机制向上探测时调到 **Spring 插件**的 `SpringContextSchemaInjector`，它对一个**容器已销毁**的项目做
+`DomManager.getDomManager` → `getService`（我方代码一行未进栈）。判定依据三条：① 隔离跑该测试类**全绿**；
+② 栈内无我方任何类；③ 分片分布严重不均＝新测试类改变权重（在册机制：「权重=历史 XML 同类取 mtime 最新，串行与分片互相喂养」）。
+重跑（权重已被首跑刷新）三片分布回到 1834/2166/1690、**0 失败**，与在册「非确定——同代码可绿可红」一致。
+
+**过程教训**：首跑把输出管给 `tail`，管道退出码取的是 `tail` 的 0，**构建失败被伪装成成功**（本仓已记过的坑）。已改为直接落文件读 `BUILD`/`EXIT` 行。
+

@@ -1,5 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui.highlight
 
+import cn.song.mybatisplus.visualizer.model.ColumnInfo
+import cn.song.mybatisplus.visualizer.model.TableInfo
+import cn.song.mybatisplus.visualizer.psi.ColumnNameCalibrator
 import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.ColumnMeta
 import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.DasAccessors
 import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.ModelTraversal
@@ -26,6 +29,12 @@ import org.junit.Test
  *
  * P7b：模型非 null 但遍历 0 张表（内省未完成）此前被当「确认没有此表」记负缓存——DDL 生效探测
  * 的 500/1500/3000ms 三次退避重试会被首次那一记负缓存全挡掉，误报「DDL 未生效」。
+ *
+ * O-58（2026-09-21）：同一套替身还用于验「列元数据过滤不得污染列名集合」——[TableMeta.columns] 只收录
+ * 「有注释 ∨ 有类型串 ∨ notNull 为 true」的列，而 [TableMeta.allColumnNames] 无条件收录全部列名；
+ * 列名校正的唯一性判定必须落在后者上（前者缺列会让歧义凭空消失 → 选错列）。经
+ * [DatabaseSchemaResolver.columnNameSources] + [DatabaseSchemaResolver.mergeCachedColumnNames]
+ * 走真实的缓存读法（`columnNamesCached` 只差 project 非空与 database 插件可用两道闸，单测环境给不出）。
  *
  * 单测环境无 database 插件（`Class.forName` 全链不可用，见 [DatabaseSchemaResolverObjectKindTest]），
  * 故经 [DatabaseSchemaResolver.traversalForTest] 注入遍历替身 + [DatabaseSchemaResolver
@@ -320,5 +329,129 @@ class DatabaseSchemaResolverSchemaScopeTest {
         stubTraversal(tableIn("mpj_demo", "user", listOf("id")))
         val meta: TableMeta = DatabaseSchemaResolver.resolveFromSources("user", listOf(Any()))
         assertEquals(ColumnMeta("注释_id", "int(11)", true), meta.columns["id"])
+    }
+
+    // ---------- O-58：全列名集合（未过滤）与新入口 ----------
+
+    /**
+     * 列元数据按列名区分：只有 [metadataColumn] 带注释 + 类型串（进 [TableMeta.columns]），
+     * 其余列三样皆无（无注释、无类型串、notNull 不为 true）→ 被既有过滤剔除，只留在全列名集合里。
+     */
+    private fun o58Accessors(metadataColumn: String): DasAccessors = DasAccessors(
+        isTable = { it is FakeTable },
+        isColumn = { it is FakeColumn },
+        name = {
+            when (it) {
+                is FakeTable -> it.tableName
+                is FakeColumn -> it.columnName
+                is FakeNs -> it.nsName
+                else -> null
+            }
+        },
+        comment = { col -> (col as? FakeColumn)?.columnName?.takeIf { it == metadataColumn }?.let { "注释" } },
+        children = { (it as? FakeTable)?.columns?.map { c -> FakeColumn(c, null) } },
+        parent = {
+            when (it) {
+                is FakeTable -> it.up
+                is FakeNs -> it.up
+                else -> null
+            }
+        },
+        typeSpec = { col -> if ((col as? FakeColumn)?.columnName == metadataColumn) "varchar(64)" else null },
+        notNull = { false },
+    )
+
+    /** 注入 O-58 替身：`t_user` 含 [columns]，仅 [metadataColumn] 带元数据。 */
+    private fun stubO58Table(columns: List<String>, metadataColumn: String) {
+        stubDatabase("mpj_demo")
+        DatabaseSchemaResolver.traversalForTest = {
+            ModelTraversal(listOf(tableIn("mpj_demo", "t_user", columns)), o58Accessors(metadataColumn))
+        }
+    }
+
+    @Test
+    fun `O58_新入口未预热返回空_预热后返回该表全列含被过滤列`() {
+        stubO58Table(listOf("user_name", "username"), metadataColumn = "username")
+        val ds = Any()
+        val lookups = DatabaseSchemaResolver.columnNameSources(listOf(ds))
+
+        assertTrue(
+            "未预热（缓存无该表条目）→ 空 Map，调用方回落",
+            DatabaseSchemaResolver.mergeCachedColumnNames(listOf("t_user"), lookups).isEmpty(),
+        )
+
+        DatabaseSchemaResolver.resolveFromSources("t_user", listOf(ds)) // 预热（写缓存）
+
+        assertEquals(
+            "预热后 → 该表全列名（含被 columns 过滤掉的 user_name）",
+            setOf("user_name", "username"),
+            DatabaseSchemaResolver.mergeCachedColumnNames(listOf("t_user"), lookups)["t_user"],
+        )
+    }
+
+    @Test
+    fun `O58_被过滤的列仍进全列名但不进列元数据`() {
+        stubO58Table(listOf("user_name", "username"), metadataColumn = "username")
+        val meta = DatabaseSchemaResolver.resolveFromSources("t_user", listOf(Any()))
+
+        assertEquals("带元数据的列进 columns", setOf("username"), meta.columns.keys)
+        assertEquals(
+            "无注释无类型串且 notNull 不为 true 的列也进全列名（本次修复的判据）",
+            setOf("user_name", "username"),
+            meta.allColumnNames,
+        )
+    }
+
+    /**
+     * O-58 的存在理由（本用例即反向验证的判据）：列名校正的第 2/3 步在候选集上判**唯一**，
+     * 候选集缺列会让歧义凭空消失 → 采纳剩下的那一列（可能是错的那一列）。
+     *
+     * 两段各覆盖一种形态，每段都带「过滤子集会给错答案」的对照断言——把错答案钉进测试，
+     * 使「退回只含元数据子集的 columns」这一改动必然变红：
+     *  ① 用户报障形态：字段 `userName` → 猜测 `user_name`（猜测值本身是真实列，但无元数据）；
+     *  ② 真歧义形态：字段 `orderID` → 猜测 `order_i_d`（不是真实列），库里 `order_id` / `orderid` 同形。
+     */
+    @Test
+    fun `O58_被过滤的列仍参与歧义判定_不得据此选错列`() {
+        // ① 猜测值本身被过滤：全列名里精确命中 → 保持原样；过滤子集里唯一命中 → 错改成 username
+        stubO58Table(listOf("user_name", "username"), metadataColumn = "username")
+        val ds = Any()
+        val meta = DatabaseSchemaResolver.resolveFromSources("t_user", listOf(ds))
+        val real = DatabaseSchemaResolver.mergeCachedColumnNames(
+            listOf("t_user"),
+            DatabaseSchemaResolver.columnNameSources(listOf(ds)),
+        )["t_user"]
+        // 断言顺序有意如此：先断行为（校正结论），再断输入形态——反向验证变异数据形态时，
+        // 红灯落在「不得选错」这条行为断言上，而不是先被输入形态断言挡下。
+        val userTable = TableInfo("UserEntity", "t_user", listOf(ColumnInfo("userName", "user_name")))
+        assertEquals(
+            "被过滤的列本身是真实列 → 精确命中 → 保持原样",
+            "user_name",
+            ColumnNameCalibrator.calibrate(userTable, real).columns[0].columnName,
+        )
+        assertEquals("校正器读到的是完整列集合", setOf("user_name", "username"), real)
+        assertEquals(
+            "对照：过滤子集下该列缺席，唯一性失真 → 错改成 username",
+            "username",
+            ColumnNameCalibrator.calibrate(userTable, meta.columns.keys).columns[0].columnName,
+        )
+
+        // ② 真歧义：两列归一化同形（order_id / orderid），猜测值不在真列里 → 歧义 → 保持原样
+        stubO58Table(listOf("order_id", "orderid"), metadataColumn = "orderid")
+        val meta2 = DatabaseSchemaResolver.resolveFromSources("t_user", listOf(Any()))
+
+        val orderTable = TableInfo("OrderEntity", "t_order", listOf(ColumnInfo("orderID", "order_i_d")))
+        assertEquals(
+            "两列归一化同形 → 歧义 → 必须保持原样（宁缺不错）",
+            "order_i_d",
+            ColumnNameCalibrator.calibrate(orderTable, meta2.allColumnNames).columns[0].columnName,
+        )
+        assertEquals("被过滤的列（order_id）仍在全列名里", setOf("order_id", "orderid"), meta2.allColumnNames)
+        assertEquals("只有 orderid 带元数据", setOf("orderid"), meta2.columns.keys)
+        assertEquals(
+            "对照：过滤子集下歧义消失 → 错选成 orderid",
+            "orderid",
+            ColumnNameCalibrator.calibrate(orderTable, meta2.columns.keys).columns[0].columnName,
+        )
     }
 }

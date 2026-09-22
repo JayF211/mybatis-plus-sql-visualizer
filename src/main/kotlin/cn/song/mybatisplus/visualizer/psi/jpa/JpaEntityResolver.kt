@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.model.AssociationInfo
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.ColumnRole
 import cn.song.mybatisplus.visualizer.model.TableInfo
+import cn.song.mybatisplus.visualizer.psi.ColumnNameCalibrator
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature
 import com.intellij.openapi.project.Project
@@ -42,6 +43,8 @@ import java.util.concurrent.ConcurrentHashMap
  *  - 注解识别：jakarta / javax 双包名全限定名 + 短名兜底（三轨，见 [JpaMetadataReader]）
  *  - 解析结果按「PsiFile + classQualifiedName + configSignature」三维缓存，
  *    文件修改戳（modificationStamp）+ 配置签名双维度失效
+ *  - O-58：返回边界接 [cn.song.mybatisplus.visualizer.psi.ColumnNameCalibrator]——数据源可用时用真实
+ *    列集合纠正猜测出的列名，不可用/查不了/开关关闭时逐字段原样返回
  */
 class JpaEntityResolver {
 
@@ -53,25 +56,31 @@ class JpaEntityResolver {
      *  - 文件修改（modificationStamp 变化）→ 缓存自然失效
      *  - 配置签名变化（tableNameInference 等设置变更）→ 缓存失效
      *
+     * O-58（列名数据源校正）：缓存**继续只存未校正的 PSI 产物**，校正在返回前作为一步廉价后处理
+     * （[ColumnNameCalibrator.calibrate]）执行——DDL 变更的失效面因此只有数据源 schema 缓存一处
+     * （已登记 MetadataInvalidator），不必给实体缓存键扩 DB 签名。
+     *
      * @param entityClass JPA 实体 PsiClass
      * @return 表信息；类名缺失等异常情况返回带推断表名、空列的表信息（保证不抛异常）
      */
     fun resolve(entityClass: PsiClass): TableInfo {
         val className = entityClass.name ?: return TableInfo("", "", emptyList())
-        val file = entityClass.containingFile ?: return resolveInternal(entityClass)
+        val project = entityClass.project
+        val file = entityClass.containingFile
+            ?: return ColumnNameCalibrator.calibrate(project, resolveInternal(entityClass))
         val qName = entityClass.qualifiedName ?: className
-        val configSig = TableConfigSignature.projectSignature(entityClass.project)
+        val configSig = TableConfigSignature.projectSignature(project)
 
         // T-Perf-18：缓存键不持 PsiFile 强引用（VirtualFile.url 字符串标识）
         val key = JpaCacheKey(file.virtualFile?.url, System.identityHashCode(file), qName, configSig)
         val stamp = file.modificationStamp
         cache[key]?.let { entry ->
-            if (entry.stamp == stamp) return entry.value
+            if (entry.stamp == stamp) return ColumnNameCalibrator.calibrate(project, entry.value)
         }
 
         val value = resolveInternal(entityClass)
         cache[key] = JpaEntry(stamp, value)
-        return value
+        return ColumnNameCalibrator.calibrate(project, value)
     }
 
     /**

@@ -323,4 +323,117 @@ null, // SCHEMA 预留：方案 B 接入后注入
 
 ## 实施记录
 
-（未实施）
+### 交付方式
+
+sam 调度：单实施代理四轮迭代（初版 + 复核后三轮，其中第三轮由主调度在自审时发现健全性洞后追加），
+主调度逐轮审 diff 与基础文件改动、一轮独立只读复核（写验分离），全量门禁由主调度串行跑。
+分支 `t-hql-colmap`，工作树 `mpsv-hql-colmap`，基 master `ddb694a`。
+
+### 任务落地（对照 §四，含 D1~D5 实际取值）
+
+| 任务 | 落地形态 |
+|---|---|
+| T-01 | 新增 `psi/ColumnNameCalibrator.kt`。应用点＝`EntityResolver.resolve` 与 `JpaEntityResolver.resolve` 的**返回边界**（下游全链路受益）。**D1 取值＝校正结果不入缓存**：`EntityResolver` 既有缓存继续只存未校正 PSI 产物，校正在 `resolve` 返回前作为廉价后处理执行（**缓存命中分支同样执行**），故 DDL 失效面只需 `DatabaseSchemaResolver.invalidateAll`（已登记 `MetadataInvalidator`），未新增登记项 |
+| T-02 | 匹配算法：① 精确命中保留 → ② 真实列集合中**唯一**一列与 `columnName` 归一化同形 → 采用 → ③ 同上但以 `fieldName` 归一化同形 → 采用 → ④ 0 候选或歧义 → 原样。归一化＝小写 + 去 `_`/`-`。**只改 `columnName`**，其余 12 个 `ColumnInfo` 字段与 `columns` 顺序逐项不变。**D2 取值＝显式注解给出的列名参与同一算法**（精确命中必然保留，只在注解与库不一致时生效） |
+| T-03 | 生产入口**只调** `columnNamesCached`（零遍历缓存读），未命中投递一次后台预热（`executeOnPooledThread`）后原样返回，不阻塞不等待不轮询。源码扫描守卫把允许集合钉成**等号**（`{columnNamesCached, prefetchTables}`），并有一条词边界断言扫整份剥注释源码防 `tableMeta` 以任何写法混入 |
+| T-04 | 真实列名按库实际大小写回写；校正层**不负责加引号**（引号仍由既有 `Dialect` 链处理） |
+| T-05 | `realColumns == null` / 空集合 / 开关关闭 → 返回**入参实例本身**（`assertEquals` 全字段 + `assertSame` 双断言） |
+| T-06 | 全局 `columnCalibrationEnabled`（**D3 取值＝默认开启**）+ 项目级 `columnCalibration: Boolean? = null`（null=跟随全局）；项目页控件**照抄既有同类字段的 `JCheckBox` 形态**（`replaceParams`/`formatSql`/`injectLogicDelete`）。新设置项已进设置搜索索引。**校正可见信号未做**（见「未做」） |
+| T-07 | **D4 取值＝T-07 纳入、T-08 不纳入**。`JpaMetadataReader` 在字段侧无 `@Column`/`@TableField` 时回退读同名 getter（`getXxx`/`isXxx`，无参方法）上的 `@Column(name)`；范围收窄为只做 `@Column` 的 name 回退。MP 侧**不加**对应能力（见下「口径切分」） |
+| T-09（原判可选，本轮**补做**） | 见「计划自身被证伪」第 1 条 |
+| （第三轮追加） | **健全性修复**：校正用的真值集合原取自 `columnsCached`，而它是**带元数据子集**（`collectFromDataSource` 的收录条件是 `comment 非空 ∥ typeSpec 非空 ∥ notNull==true`）。在不完整候选集上做唯一性判定会**选错列**，故给 `TableMeta` 加 `allColumnNames`（无条件收集、`columns` 内容逐字节不变）+ 新增同构零遍历入口 `columnNamesCached` |
+| （第四轮追加） | ① 外键列校正；② 算法收窄；③ `renames` 歧义永久拉黑；④ 预热限流；⑤ `SettingsIO` 导出/导入；⑥ 口径切分；⑦ 测试名实与覆盖缺口。逐条见下 |
+
+### 计划自身被证伪 / 需更正之处
+
+| # | 计划原文 | 实测结论 |
+|---|---|---|
+| 1 | §四 T-09「`AssociationInfo.joinColumn` 校正属**可选件**，做与不做都不影响四层验收」 | **判断被推翻**。独立复核证明：无 `@JoinColumn` 时外键列名是 `{fieldName}_id` **猜**出来的，而 JOIN ON 直接消费它 → 「列清单已校正、ON 仍是猜测列名」→ JOIN 预览照样报 unknown column，**与用户报障「预览 sql 直接是错误的」同一类用户可见症状**，正落在第二个需求范围内。第四轮**补做**（只校 `name`，**不碰 `referencedColumnName`**——那指向目标表的列，本表真值集合对它没有仲裁权） |
+| 2 | §四 T-03「表数设上限，沿用 MCP 侧 `maxTables = 20` 的量级」 | **不成立**。该上限只是 map 容量上界，溢出时 `clear()` 把**所有时间戳一起抹掉**，等于重置全部冷却、恰好抵消自己的限流。第四轮改为**淘汰最旧一条**（按插入序而非时间戳最小值——同毫秒会让「最旧」退化成随机淘汰）+ 新增**全局在途上限**（`MAX_IN_FLIGHT_PREFETCH = 4`，超限本次不投递、窗口后自然重试） |
+| 3 | §四 T-02「两步都要求『唯一』才动手，故安全性质不受影响」 | **表述失实**：第 2 步已看出歧义时仍会用更弱的 `fieldName` 键走第 3 步强行选中一列。复核给了具体反例（real = `{home_city, homecity, city}`、`fieldName=city`、`columnName=home-city` → 改写成 `city` 错列）。第四轮收窄为「**无候选**才降级到 `fieldName` 键，**歧义即停**」 |
+| 4 | §四 T-01「只改 `columnName`」 | 需补一条：`logicDeleteColumn`/`versionColumn`/`compositeIdColumns` 持的是**同一个列名**，不回写会让同一 `TableInfo` 内同列出现两个名字（`@TableLogic` 注入的 `AND deleted = 0` 会与列清单不一致）。已回写；且 `renames` 的歧义移除**不粘性**（同一旧名映射 V1→V2→V1 时会留下 V1），第四轮改为**永久拉黑** |
+| 5 | §五 P-5「必须有性能前后读数」 | **未取得**：本环境无真实大 schema 工程可测。热路径零遍历由**结构性守卫**（允许集合等号 + `tableMeta` 词边界断言）与定向读数间接证明，**但无耗时/遍历次数前后读数**，如实登记为未验证 |
+| 6 | §五 P-1「需先核实用户实体是否存在显式注解」 | **未核实**（不阻塞编码，见 §十一.1）；仍待真机验收阶段确认，它决定 T-07 的实际收益面 |
+| 7 | §七 D2「建议也校正显式注解给出的列名」 | 落地后与「精确命中必然保留」等价——只在注解与库不一致时才产生行为，**无独立开关**，D2 实际不产生可分辨差异（登记） |
+
+### 写集偏离裁定
+
+| 偏离 | 裁定 |
+|---|---|
+| `config/` 实际 **5** 个文件（计划 §九 写 4） | **接受**：多出的 `PluginSettingsFolderConfigurable.kt` 是「新设置项进设置搜索索引」所必需（`ProjectPluginSettingsConfigurableTest` 的 P3 路由用例要求新键在索引里） |
+| `ui/highlight/DatabaseSchemaResolver.kt` + 其测试 | **接受（主调度第三轮明确扩入）**：健全性修复必须落在真值来源处 |
+| `config/SettingsIO.kt` + `SettingsIOTest` | **接受（第四轮⑤）**：同类项目级字段都在导出/导入清单内，新项漏掉会让配置导出丢设置 |
+| `psi/jpa/JpaMetadataReader.kt` getter 回退 | **接受（T-07）**：字段侧读不到 `@Column` 时静默回落盲猜，属既有缺口 |
+
+### 口径切分（交付说明必读）
+
+**「无数据源时行为与改造前完全一致」这句话只对校正层成立，不能笼统套在本任务整体上**：
+
+- **数据源校正层**（`ColumnNameCalibrator`）：受开关与数据源可用性双重约束；无数据源 / 表看不见 / 查不了 /
+  开关关闭 → 返回入参实例本身，逐字段等价。
+- **getter 侧 JPA 注解读取（T-07）**：**独立离线纠错**——读的是源码里本就写着的 `@Column`，不查数据源、
+  不受本开关约束，故**无数据源时实体列名也可能与改造前不同（方向是更准）**。用户「没有可用数据源要自动降级」
+  的要求针对的是校正层，不是这条离线读取。已写进 `ColumnNameCalibrator` 与 `JpaMetadataReader` 的 KDoc。
+- **MP 侧无 getter 回退是刻意的**：`mybatis-plus-annotation-3.5.17` 的 `TableField` 经 `javap` 实证
+  `@Target({FIELD, ANNOTATION_TYPE})`（`TableName` 为 `{TYPE, ANNOTATION_TYPE}`，`TableId` 只有 `FIELD`）
+  ——`METHOD` 不在合法目标里，MP 按字段建映射，「`@TableField` 写 getter」既编译不过、MP 也不读。
+  给 MP 侧加回退等于实现 MP 自己都没有的语义。
+
+### 读数
+
+- **定向（还原态最终）**：`BUILD SUCCESSFUL`，27 类 / **245 例 / 0 失败 / 0 错误 / 0 跳过**
+  （含 `ColumnNameCalibratorTest` 23、`DatabaseSchemaResolver` 五类全绿——`TableMeta` 加字段的影响面、
+  `SettingsIOTest` 11、`PluginSettingsPersistenceTest` 15、`ProjectPluginSettingsConfigurableTest` 18 等）
+- **降级等价核心不变量（读数点名）**：`精确命中的列名原样保留` 含
+  `assertSame("无改动时应返回入参实例本身", input, output)` → PASS；本轮新增的
+  `外键列精确命中时原样保留` 同类 `assertSame` 亦 PASS。
+- **反向验证（三处，读数原文均已贴入回报）**：
+  1. **R3a**（让 `allColumnNames` 退化成过滤子集）→ 三条红，关键那条正是**选错列**：
+     `被过滤的列本身是真实列 → 精确命中 → 保持原样 expected:<user_name> but was:<username>`；
+  2. **R3b**（校正器入口改回 `columnsCached`）→ 源码守卫红：
+     `[columnsCached, prefetchTables] expected:<[columnNamesCached, prefetchTables]>`；
+  3. **R4-a/b/c**（摘外键列回写 / 恢复「歧义后继续步 3」/ 去掉歧义拉黑）→ 三条红，断言消息分别为
+     `expected:<order_id> but was:<order_id_id>`、`expected:<home-city> but was:<city>`、
+     `expected:<x> but was:<alpha>`；同批对照组（精确命中保持、无候选时按 fieldName 命中、唯一映射照常回写）保持绿。
+- **探针**：`grep "RED PROBE"` 写集内 0 命中。
+- **全量门禁**：见 §十二。
+
+### 已登记边界
+
+1. **R3b 行为层不可观测**：校正器生产分支要求 `project != null` 且 `isDatabaseAvailable()`，而测试沙盒**刻意排除** database 插件（为稳定模拟社区版降级），故「改校正器入口」这一变异只能由源码守卫观测。**未**为此外加测试缝（沙盒排除是有意的稳定化设计，动它风险大于收益）；行为层判据由 R3a 承担。
+2. **守卫只钉本文件直接引用**：经其他文件的遍历 helper 间接取数可绕过；未扩扫描面。
+3. `isDatabaseAvailable` / `dataSources` 每次调用跑反射、无 memo——与既有 `columnsCached` 同量级，未改。
+4. `primaryKeyJoinColumns` 的校正当前**无消费点**（只被搬运），校正它只保持对象自洽、无用户可见收益。
+5. `discriminatorColumn` **不动**：判别列位于继承层次的根表，根实体下是本表列、子类实体下属根表，插件无法从注解判断当前类是否根 → 拿本表真值集合去改它属于「拿错表的列名去改」。同理 `secondaryTables[].pkJoinColumns`（副表列）、`collectionAssociations` / `joinTable` 的列（中间表/目标表）一律不动。
+6. 预热去重键**不含 project**：预热是幂等取数，多项目同名表最多互相抑制一个冷却窗口、不会漏预热；加上 project 会让键空间随打开项目数线性膨胀、把 20 条容量摊薄。
+7. 新开关在全局页的行标签为空串，搜索项跳到「节」而非控件本身。
+
+### 未做 / 未验证
+
+- **T-06 校正可见信号未做**：`/* 列名已按数据源校正：… */` 需把校正记录带出校正器，承载它的
+  `model/TableInfo.kt` 与渲染它的 `ui/SqlPreviewPanel.kt` **都不在本轮写集内**（后者另有会话在用），
+  且该条是主调度在计划里自加的、不在用户原始需求内 → 登记为未做。
+- **T-08（缩写感知 snake 化）未做**（D4 取值）：与 MP 官方策略不一致会引入「插件猜的与 MP 跑的不一样」的新错。
+- **性能前后读数未取得**（§五 P-5），见上「计划自身被证伪」第 5 条。
+- **真机验收未做**：runIde 沙盒 + 真实数据源 + 用户工程（含 P-1 显式注解核实、P-9 既有「精确键合并」两处校正后是否出现重复/冲突）。
+- **D1~D5 按计划建议的默认值先实施，待用户复核**（D1 校正结果不入缓存 / D2 注解列名参与 / D3 默认开启 / D4 T-07 纳入、T-08 不纳入 / D5 一次性覆盖全部实体链路）。
+
+### §十二 全量门禁
+
+**读数（2026-09-22）**：
+
+| 门禁 | 读数 | 判定 |
+|---|---|---|
+| `testShards` 三片 | **5690 例 / 0 失败 / 0 错误 / 6 跳过**（1834 / 2166 / 1690，`BUILD SUCCESSFUL in 3m 41s`） | ✅ |
+| `verifyGate` 三目标 | IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63 **全 Compatible**（待移除 API 4/5/6 处、废弃 API 9/12/66 处） | ✅ |
+| `testDatabase` | 10 例 8 过 **2 红＝在册环境失败** | ✅ 与改动零交集 |
+
+**首跑撞在册 flake（如实登记）**：首跑 `testShards` 三片 2754 / 17 / 2919，`testShard3` **13 例全红**，全部为
+`XmlSqlCompletionContributorTest` 的 `AlreadyDisposedException`。异常栈落在**第三方与平台代码**：测试在 caret 处触发补全，
+注入语言机制向上探测时调到 **Spring 插件**的 `SpringContextSchemaInjector`，它对一个**容器已销毁**的项目做
+`DomManager.getDomManager` → `getService`（我方代码一行未进栈）。判定依据三条：① 隔离跑该测试类**全绿**；
+② 栈内无我方任何类；③ 分片分布严重不均＝新测试类改变权重（在册机制：「权重=历史 XML 同类取 mtime 最新，串行与分片互相喂养」）。
+重跑（权重已被首跑刷新）三片分布回到 1834/2166/1690、**0 失败**，与在册「非确定——同代码可绿可红」一致。
+
+**过程教训**：首跑把输出管给 `tail`，管道退出码取的是 `tail` 的 0，**构建失败被伪装成成功**（本仓已记过的坑）。已改为直接落文件读 `BUILD`/`EXIT` 行。
+
