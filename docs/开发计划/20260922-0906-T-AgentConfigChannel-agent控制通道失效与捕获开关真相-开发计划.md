@@ -503,3 +503,29 @@ CHANGELOG `[Unreleased]` 与 `docs/变更记录.md` 三处同步（**已落**，
 - **性质**：**测试基建/生产守卫的既有潜伏缺口，非本轮产品代码缺陷**（隔离全绿 + 机制与改动无关）；
   根治方向＝按 T-StabilityTail 登记补齐「窗口内未受守卫的 `getService` 调用点」（该任务已登记 5 处），
   并给测试工具 `SqlLogManagerProjectState.capture/restore` 加 `project.isDisposed` 守卫（避免工具自身在窗口内发起创建）。
+
+### 十一、shard3 flake 根治（T-ST-02b2 生产侧收口，2026-09-22 收口后追加）
+
+**修法**：新增 `log/SqlLogManagerLookup.kt#sqlLogManagerOrNull(project)`——**在发起 `getService` 之前**先判
+`project.isDisposed`，返回 null 表示「项目关闭中 / 测试 temporarily-disposed 窗口」；**8 处取用点全部改走它**
+（`LogStartupCapture` / `SqlConsoleBridgeFilterProvider` / `AgentManager`×3 / `McpToolsetSupport` /
+`SqlPreviewService` / `SectionConfigurable`），各处 null 语义按「跳过本次动作」收口：审计旁路跳过、
+EP 不挂过滤器、事件丢弃不斩断流、耗时补全退化为未命中、自动启动分流沿用既有 warn 文案。
+**关键点：不能只靠 `runCatching`**——它只吞掉这一次的结果、仍发起了那次注定失败的创建
+（T-ST-02b2 定论，见 `SectionConfigurable` 的字节码级论证）。
+
+**守卫（唯一可确定性验证的手段，因为该 flake 本身非确定）**：新增 `convention/SqlLogManagerLookupGuardTest`：
+① `src/main` 下任何直接取用必须在唯一白名单文件内；② 自检——白名单文件必须**真的**含 `isDisposed` 判定
+（防被「优化」掏空后守卫空绿）。与姊妹守卫 `BannedApiSourceScanTest` 的分工：那条管「测试类改了共享状态不复位」
+（状态泄漏），本条管「取用点在 disposed 窗口发起创建」（容器中毒）——两条机制不同、现场同源，不可互相替代。
+
+**反向验证（两臂，均临时改动后还原、无 RED PROBE 残留）**：① 把 `LogStartupCapture` 改回直接取用 →
+守卫红并点名该文件；② 掏空白名单文件里的 `isDisposed` 判定 → 自检用例红。还原后守卫绿。
+
+**读数**：定向（守卫 + 8 处改动各自用例 + 姊妹守卫）BUILD SUCCESSFUL（2m2s）；全量 `testShards` 与
+`verifyGate` 重跑读数见提交信息。
+
+**另记（并行会话的独立证实，勿当重复劳动）**：另一会话就同一报障独立排障，用「假 IDE + 真 `SenderLoop`、
+两臂仅字节序不同」的受控实验独立证实本计划的根因——`[len][cmd]`（IDE 实际写序）下三键全不生效、
+`[cmd][len]`（当时的读序）下三键全生效（其证据作为本文档 §十 保留）。它另指出两条同族盲守卫
+（`AgentListenSyncTest` 只验 IDE 写形态、`HeartbeatRhythmTest` 只验 agent 出站帧，都未走 agent 入站读）。
