@@ -292,7 +292,25 @@ class AgentManager(private val project: Project) : Disposable {
             }
         }
         sweepOffline() // 兜底清扫（幂等；无死会话时零动作）
+        fallbackSweepCount++
     }
+
+    /**
+     * T-PerfSweep6 T-PS6-06③ 测试缝：兜底清扫的执行次数（[ensureMonitorStarted] 末尾那次**同步**
+     * [sweepOffline] 每执行一次 +1）。
+     *
+     * 守护测试（`AgentManagerPremainTest.test半死会话语境下同pid重连放行`）据此**确定性地**等待
+     * 「首条会话的处理线程已越过兜底清扫」。不这样等会漏红：处理线程在 `sessions.add` 之后才调
+     * [ensureMonitorStarted]，若测试在它尚未清扫时就推进假时钟，那条刚建好的「半死会话」会被这次
+     * 兜底清扫直接摘除 → 第二次连接的去重分支根本不发生 → 用例在**旧判据（`alive`）下也恒绿**。
+     * 独立复核实测：把判据退回 `alive` 后连跑 3 次得 fail / fail / **pass**（绿色那跑的日志里同 pid
+     * 出现两次「premain 会话建立」且没有「丢弃重复连接」行）。
+     *
+     * `@Volatile`：自增发生在连接处理线程，读取发生在测试线程（跨线程可见性）。
+     */
+    @Volatile
+    internal var fallbackSweepCount: Int = 0
+        private set
 
     /**
      * T-PerfSweep6 T-PS6-08（性能报告发现 8）：巡检复位——取消 5s 定时任务并清懒启标志。

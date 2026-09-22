@@ -275,9 +275,17 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
         manager.clockMs = { now }
         manager.heartbeatWindowMs = 30_000L
 
+        val sweepsBefore = manager.fallbackSweepCount
         val first = Socket("127.0.0.1", port)
         writeFrame(first, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
-        awaitTrue("首条 premain 会话未建立") { manager.sessions.size == 1 }
+        // **必须等处理线程越过兜底清扫**（T-PS6-06③ 复核订正）：处理线程在 `sessions.add` 之后才调
+        // `ensureMonitorStarted`，其末尾有一次**同步** `sweepOffline()`。若只等 `sessions.size == 1`
+        // 就推进假时钟，这条刚建好的会话会被那次兜底清扫摘除 → 第二次连接的去重分支根本不发生 →
+        // 用例在旧判据（`alive`）下也恒绿（复核实测：退回 `alive` 连跑 3 次得 fail/fail/pass）。
+        // 等 `fallbackSweepCount` 增长即证明那次清扫已执行完（它在 `sessions.add` 之后，故不早于会话入表）。
+        awaitTrue("首条 premain 会话未建立或处理线程尚未越过兜底清扫") {
+            manager.sessions.size == 1 && manager.fallbackSweepCount > sweepsBefore
+        }
         assertEquals("首条会话 pid", pid, manager.sessions[0].pid)
 
         // 推进时钟越窗：会话进入「alive 但心跳过期」——本用例**不**调 sweepOffline（保持半死在表内）
