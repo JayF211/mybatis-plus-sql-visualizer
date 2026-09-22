@@ -30,3 +30,25 @@ internal fun sqlLogManagerOrNull(project: Project): SqlLogManager? {
     if (project.isDisposed) return null
     return runCatching { project.getService(SqlLogManager::class.java) }.getOrNull()
 }
+
+/**
+ * **只读**取用：仅返回**已经创建**的 [SqlLogManager]，**绝不发起创建**——读路径一律用这个。
+ *
+ * ## 为什么读路径必须用它（T-ST-02b2 第二层，2026-09-22 实证）
+ *
+ * 上方的 `isDisposed` 判定**不足以**挡住测试框架的 temporarily-disposed 窗口：窗口内
+ * `project.isDisposed` 为 **false**（本仓诊断行实测组合就是 `project.isDisposed=false :: Container is
+ * already disposed`），而 `getService` 仍会因 `messageBus` owner 已 disposed 而失败 → 平台缓存
+ * `CannotInitialize` → **该服务在本 JVM 内永久毒化**。既然「判状态」判不准，就在**结构上不发起创建**：
+ * `getServiceIfCreated` 只读已建实例、不触碰初始化路径，故**无论项目处于何种窗口都不会毒化**。
+ *
+ * 语义：返回 null ＝ 该服务尚未创建。对读路径而言这天然等价于「功能未启用 / 无监听 / 无条目」——
+ * 因为服务是本插件自己按需创建的，未创建即意味着相关功能从未被使用过。
+ *
+ * 需要**写**共享状态（如设置联动触发自动捕捉、启动期自动捕捉）的调用点仍用 [sqlLogManagerOrNull]，
+ * 它们必须真的创建服务；那些点位的 disposed 守卫保留（真实 IDE 关闭路径 `isDisposed` 为真，可挡住）。
+ */
+internal fun sqlLogManagerIfCreated(project: Project): SqlLogManager? {
+    if (project.isDisposed) return null
+    return runCatching { project.getServiceIfCreated(SqlLogManager::class.java) }.getOrNull()
+}

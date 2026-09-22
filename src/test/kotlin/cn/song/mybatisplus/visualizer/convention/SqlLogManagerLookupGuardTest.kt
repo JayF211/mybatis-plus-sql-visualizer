@@ -97,10 +97,19 @@ class SqlLogManagerLookupGuardTest {
         assertTrue("白名单文件应存在：$whitelist", f.isFile)
         val code = stripComments(f.readText())
         assertTrue(
-            "sqlLogManagerOrNull 必须在发起 getService 之前判 project.isDisposed——" +
+            "统一入口必须在发起 getService 之前判 project.isDisposed——" +
                 "该判定一旦被删，本守卫会变成空绿（毒化机制原样复活）",
             Regex("""isDisposed""").containsMatchIn(code) &&
                 Regex("""getService\(SqlLogManager::class\.java\)""").containsMatchIn(code),
+        )
+        // T-ST-02b2 第二层：读路径必须走「永不创建」的 getServiceIfCreated —— isDisposed 判据对测试框架
+        // 的 temporarily-disposed 窗口不可达（窗口内 isDisposed=false 而 getService 仍失败并永久毒化），
+        // 只有结构上不发起创建才真正消除该机制。缺这一支即说明读路径被改回创建式取用。
+        assertTrue(
+            "读路径入口 sqlLogManagerIfCreated 必须存在且基于 getServiceIfCreated（不发起创建）——" +
+                "缺它则 disposed 窗口内的读路径仍会毒化服务容器",
+            Regex("""fun sqlLogManagerIfCreated""").containsMatchIn(code) &&
+                Regex("""getServiceIfCreated\(SqlLogManager::class\.java\)""").containsMatchIn(code),
         )
     }
 }
