@@ -167,7 +167,11 @@ class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
                 // 附 errorPosition 文本行——agent 可定位再自修复；匹配不到/多 marker 即不加（诚实降级，
                 // ErrorPositionExtractor 的 marker 单一性门控与「基建语句不带位置」同源）。
                 val causeMsg = e.message ?: e.javaClass.simpleName
-                val pos = cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor.extractPosition(causeMsg)
+                // T-ErrorLocateUsability T-ELU-03（O-49）：接上**被提交文本**长度（EXPLAIN 包装句——
+                // 驱动报的位置指向它，不是原始 selectSql），使越界钳制从「仅单测生效」变为生产生效。
+                val pos = cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor.extractPosition(
+                    causeMsg, target.explainSql.length,
+                )
                 throwExpected(
                     McpToolErrors.code(
                         McpToolErrors.DATASOURCE_UNREACHABLE,

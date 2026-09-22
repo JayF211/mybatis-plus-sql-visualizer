@@ -1341,21 +1341,36 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 诚实降级定案：驱动报错位置（Position/at line）指向**被执行 SQL 文本**的字符/行，
      * 与 mapper 原文行不一一对应（动态 SQL 拼接、参数注入后行号必然错位），v1 只承诺
      * 「语句起始行」跳转 + 按钮 tooltip 如实说明，绝不虚标精确跳转。
-     * 锚点来自 [SqlPreviewService.lastPreviewSourceAnchor]（预览触发时登记）；
-     * 无锚点（gutter 面等未登记入口）定位按钮不出现。
+     * 锚点来自 [SqlPreviewService.lastPreviewSourceAnchor]（预览触发时登记）。
      */
-    private fun locateErrorSource() {
-        val proj = project ?: return
-        val anchor = runCatching { proj.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor }
-            .getOrNull() ?: return
+    private fun locateErrorSource(proj: com.intellij.openapi.project.Project, anchor: SqlPreviewService.SourceAnchor) {
         runCatching {
             com.intellij.openapi.fileEditor.OpenFileDescriptor(proj, anchor.file, anchor.line0, 0).navigate(true)
         }
     }
 
-    /** T-ErrorLocate：执行调用点共用的富错误回调（错误呈现 + 可解析锚点时附定位动作）。 */
+    /**
+     * T-ErrorLocateUsability T-ELU-01（O-49）：**先解析锚点，再决定是否给按钮**。
+     *
+     * 缺陷（KDoc 与实现不符）：[SqlResultPanel.showErrorRich] 按 `locate != null` 决定按钮显隐，
+     * 而唯一调用方此前**恒传非 null lambda**（锚点解析发生在点击时，`project ?: return` /
+     * `anchor ?: return` 静默返回）→ **按钮可见，点了什么都不发生**。现把解析提到显隐之前：
+     * 锚点解析不出（无项目上下文 / 本会话尚未登记锚点 / 源文件已失效）→ 传 null，按钮不出现。
+     *
+     * 对齐同仓已做对的先例 [cn.song.mybatisplus.visualizer.log.SqlLogPanel]（先解析、后显隐）。
+     * 顺带把「文件已失效」也算作不可解析——跳不动的按钮不给，比给了点不动诚实。
+     */
+    private fun errorLocateAction(): (() -> Unit)? {
+        val proj = project ?: return null
+        val anchor = runCatching { proj.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor }
+            .getOrNull() ?: return null
+        if (!anchor.file.isValid) return null
+        return { locateErrorSource(proj, anchor) }
+    }
+
+    /** T-ErrorLocate：执行调用点共用的富错误回调（错误呈现 + **锚点可解析时**才附定位动作）。 */
     private fun showErrorRichWithLocate(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo) {
-        resultPanel.showErrorRich(info) { locateErrorSource() }
+        resultPanel.showErrorRich(info, errorLocateAction())
         maybeProbeDdlEffective(info)
     }
 
@@ -4431,6 +4446,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** T-PrewarmLateRecover F1：当前是否处于「降级文档」态（换装判据里的身份字段）。 */
     internal fun degradedDocumentForTest(): com.intellij.openapi.editor.Document? = degradedPreviewDocument
+
+    /**
+     * T-ErrorLocateUsability T-ELU-01（O-49）：错误定位动作的**显隐判据**缝——
+     * 锚点可解析 → 非 null（按钮出现）；不可解析 → null（按钮不出现）。
+     * 这是本任务修复点的直接可断言面（改前恒非 null）。
+     */
+    internal fun errorLocateActionForTest(): (() -> Unit)? = errorLocateAction()
+
+    /** T-ELU-01：富错误回调缝（端到端断言「锚点不可解析 → 定位按钮不出现」）。 */
+    internal fun showErrorRichWithLocateForTest(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo) =
+        showErrorRichWithLocate(info)
 
     /** T-PrewarmLateRecover F1：插件最后一次写入编辑器文档的文本（换装判据里的「用户没动过」）。 */
     internal fun lastRenderedSqlForTest(): String? = lastRenderedSql
