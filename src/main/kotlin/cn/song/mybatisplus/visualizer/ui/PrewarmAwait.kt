@@ -32,9 +32,25 @@ internal class PrewarmAwait<T : Any>(
 
     private val scheduled = AtomicBoolean()
 
-    /** 预热线程成功 → 完成。 */
-    fun complete(value: T) {
-        future.complete(value)
+    /**
+     * T-PrewarmLateRecover F1：迟到产物接收方——消费侧已放弃（超时以 null 完成 / 失败完成）之后
+     * 产物才到达时，由 [complete] 同步回调（**在预热线程上**，线程归位由登记方负责）。
+     * 与 [scheduleOnce] 的 onFallback 互补：onFallback 负责「先装配成降级态」，本通道负责
+     * 「产物随后到了再换装」。
+     */
+    @Volatile
+    private var lateProductListener: ((T) -> Unit)? = null
+
+    /**
+     * 预热线程成功 → 完成。
+     *
+     * @return true = 本次交付给了消费侧（[scheduleOnce] 的 onReady 或热态 [joinOrNull]）；
+     *   false = 消费侧已放弃，产物转入 [onLateProduct] 通道（无人登记则丢弃，语义同改动前）。
+     */
+    fun complete(value: T): Boolean {
+        val delivered = future.complete(value)
+        if (!delivered) lateProductListener?.invoke(value)
+        return delivered
     }
 
     /** 预热线程判定失败 → 快速降级（原 prewarmFailed 标志同语义）。 */
@@ -67,9 +83,24 @@ internal class PrewarmAwait<T : Any>(
     }
 
     /**
+     * T-PrewarmLateRecover F1：登记迟到产物接收方（覆盖式——面板每发起一轮预热登记一次）。
+     * 登记须在预热线程可能调用 [complete] 之前完成（[SqlPreviewPanel.prewarmPreviewTempFile]
+     * 在构造 await 之后立刻登记，早于任何超时可达时刻）。
+     */
+    fun onLateProduct(listener: (T) -> Unit) {
+        lateProductListener = listener
+    }
+
+    /**
      * 同步有界等待（headless 测试模式专用后门——单元测试无真实 EDT 泵，需保留
      * 「showResult 返回时编辑器即就绪」的既有测试语义；生产路径不走此方法）。
      * 超时或失败返回 null。
      */
-    fun awaitOrNullForTest(): T? = runCatching { future.get(timeoutMs, TimeUnit.MILLISECONDS) }.getOrNull()
+    fun awaitOrNullForTest(): T? {
+        // T-PrewarmLateRecover F1：测试后门同样武装超时预算——否则「超时降级后产物迟到」这一态
+        // 在 headless 下不可达（`get` 超时不会完成 future，迟到产物会被判成「首次交付」），
+        // 同一份代码在测试与生产上就分叉在这条通道上。语义与生产 scheduleOnce 一致。
+        future.completeOnTimeout(null, timeoutMs, TimeUnit.MILLISECONDS)
+        return runCatching { future.get(timeoutMs, TimeUnit.MILLISECONDS) }.getOrNull()
+    }
 }
