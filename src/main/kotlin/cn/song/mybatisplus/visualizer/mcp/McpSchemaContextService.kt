@@ -181,15 +181,103 @@ object McpSchemaContextService {
         return entries to missing
     }
 
-    /** 单数据源扫描（一次遍历 → 表名索引）；[diagnostics] 非空时记一行实况供错误文案自解释。 */
+    /**
+     * 单数据源扫描（一次遍历 → 表名索引）；[diagnostics] 非空时记一行实况供错误文案自解释。
+     *
+     * T-PerfSweep6 T-PS6-02：命中跨调用索引时**零遍历**（不再调 [readModelTables]，也不再逐列反射）。
+     */
     private fun scanSource(ds: Any, diagnostics: MutableList<String>?): Map<String, McpSchemaFormatter.TableEntry> {
-        val candidates = modelTablesForTest?.invoke(ds) ?: readModelTables(ds)
         val target = targetDatabase(ds)
+        cachedIndex(ds, target)?.let { cached ->
+            val line = "ds=${dsName(ds)} targetDb=${target ?: "-"} 命中跨调用索引（T-PS6-02）" +
+                " indexed=${cached.size}"
+            LOG.info("McpSchemaContextService scan: $line")
+            diagnostics?.add(line)
+            return cached
+        }
+        val candidates = modelTablesForTest?.invoke(ds) ?: readModelTables(ds)
         val index = indexModelTables(candidates, target)
+        storeIndex(ds, target, index)
         val line = "ds=${dsName(ds)} targetDb=${target ?: "-"} modelTables=${candidates.size} indexed=${index.size}"
         LOG.info("McpSchemaContextService scan: $line")
         diagnostics?.add(line)
         return index
+    }
+
+    // ----------
+    // T-PerfSweep6 T-PS6-02：调用内索引 → **跨调用持有**（性能报告发现 2）。
+    //
+    // 背景：`sqlv_schema_context` 每次调用都重建全量索引——遍历目标数据源整个 DasModel，
+    // 且为**所有**表所有列逐列走反射链（每列 4 invoke + 3 runCatching），最终只输出 ≤limit 张表。
+    // 而同一数据源的模型在两次调用之间通常完全没变（只有 DDL 才变）。
+    //
+    // 缓存纪律三条，缺一即脏读或泄漏：
+    //  ① **弱键**：键 = 数据源对象身份（DBN 数据源无稳定 equals，沿用既有 IdentityHashMap 口径），
+    //     值挂 WeakHashMap——数据源删除后条目随弱键回收（照 `DatabaseSchemaResolver.metaCache` 纪律）。
+    //     注意与既有「调用内索引」（`collectEntries` 里的 IdentityHashMap）是**两回事**：那个只在
+    //     单次调用内存活、随调用丢弃；本缓存跨调用存活，故必须弱键 + 失效面。
+    //  ② **失效双保险**：接 `MetadataInvalidator` 登记表（DDL/事务提交后 O(1) 清空）+ TTL 上界
+    //     （[INDEX_TTL_MS] = 30s，与 `DatabaseSchemaResolver` 负缓存同量级）。任一条单独都不够：
+    //     只靠 TTL 会让 DDL 建表后 30s 内查不到新表，只靠失效面则「外部改库」（别人建表）无感知。
+    //  ③ **测试缝**：本对象是进程级单例，缓存是静态状态、同 JVM 多测试类共享
+    //     （默认 maxParallelForks=1、非 testDatabase 无 forkEvery）——用例必须能清，
+    //     否则读数随用例顺序漂移（形态对照 `MetadataInvalidator.clearParseCacheForTest`）。
+    //
+    // **库名维度一并校验**：索引内容依赖 [targetDatabase]（同名表跨 schema 只收目标库那张），
+    // 故缓存条目记下建索引时的目标库名，取值时重新求值并比对——不一致即视为未命中重扫
+    // （URL 换库 / 重连场景不脏读）。重求值只是一次 `getConnectionConfig().getUrl()` 反射，
+    // 相对 DasModel 全遍历可忽略。
+    // ----------
+
+    /** 跨调用索引 TTL 上界（毫秒）。 */
+    internal const val INDEX_TTL_MS = 30_000L
+
+    /** 测试专用 TTL 旋钮（生产恒等于 [INDEX_TTL_MS]；调短/归零验证过期语义）。 */
+    @Volatile internal var indexTtlMs: Long = INDEX_TTL_MS
+
+    /** 跨调用索引容量上界（超上限整体清空——fail safe 方向，与负缓存同口径）。 */
+    private const val INDEX_CACHE_MAX = 64
+
+    private class CachedIndex(
+        val targetDb: String?,
+        val builtAtMs: Long,
+        val index: Map<String, McpSchemaFormatter.TableEntry>,
+    )
+
+    private val indexCache =
+        java.util.Collections.synchronizedMap(java.util.WeakHashMap<Any, CachedIndex>())
+
+    init {
+        // T-PS6-02 失效面②：DDL/事务提交后清空跨调用索引。**自登记**（而非在 MetadataInvalidator.init
+        // 里加行）——缓存是本对象私有状态，登记点与缓存同处一地，改动面收敛在本文件。
+        cn.song.mybatisplus.visualizer.execute.MetadataInvalidator.register("McpSchemaContextService.indexCache") {
+            clearIndexCache()
+        }
+    }
+
+    /** 跨调用索引清空（DDL 失效链与测试缝共用；引用置空语义，幂等无害）。 */
+    internal fun clearIndexCache() {
+        synchronized(indexCache) { indexCache.clear() }
+    }
+
+    /** T-PS6-02 测试缝：当前缓存的数据源条目数。 */
+    internal fun indexCacheSize(): Int = synchronized(indexCache) { indexCache.size }
+
+    /** 取缓存索引；库名维度不符或已过 TTL 一律视为未命中（过期条目惰性移除）。 */
+    private fun cachedIndex(ds: Any, targetDb: String?): Map<String, McpSchemaFormatter.TableEntry>? {
+        val entry = synchronized(indexCache) { indexCache[ds] } ?: return null
+        if (entry.targetDb != targetDb) return null
+        // 严格小于：TTL=0 语义 = 立即过期（同毫秒内也不新鲜），与 isNegativeCached 同边界口径
+        if (System.currentTimeMillis() - entry.builtAtMs < indexTtlMs) return entry.index
+        synchronized(indexCache) { indexCache.remove(ds) }
+        return null
+    }
+
+    private fun storeIndex(ds: Any, targetDb: String?, index: Map<String, McpSchemaFormatter.TableEntry>) {
+        synchronized(indexCache) {
+            if (indexCache.size >= INDEX_CACHE_MAX) indexCache.clear()
+            indexCache[ds] = CachedIndex(targetDb, System.currentTimeMillis(), index)
+        }
     }
 
     /**

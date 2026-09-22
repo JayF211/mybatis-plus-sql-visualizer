@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.sql.rollback
 
+import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper
 import net.sf.jsqlparser.expression.DateValue
 import net.sf.jsqlparser.expression.DoubleValue
@@ -364,6 +365,9 @@ object RollbackSqlGenerator {
      * @param primaryKeyColumns 主键列（REVERT_INSERT 谓词定位 / REVERT_UPDATE 的 WHERE 定位；null 走整行镜像）
      * @param changedColumns    REVERT_UPDATE 必传：原 UPDATE 的 SET 列清单
      * @param newValuesByColumn REVERT_UPDATE 必传：SET 列 → 写入后的新值（SQL 字面量，如 `'abc'`/`3`/`NULL`）
+     * @param dialect           O-52：回滚侧 identity 包装的方言（null = 未知 → 不包装，默认）
+     * @param identityColumns   O-52：目标表的自增列名（空 = 未知 → 不包装，默认）——只在
+     *                          [SnapshotMode.BACKFILL_INSERT] 生效（该模式才生成 INSERT）
      */
     fun generateFromSnapshotRows(
         table: String,
@@ -373,12 +377,14 @@ object RollbackSqlGenerator {
         primaryKeyColumns: List<String>? = null,
         changedColumns: List<String> = emptyList(),
         newValuesByColumn: Map<String, String> = emptyMap(),
+        dialect: Dialect? = null,
+        identityColumns: List<String> = emptyList(),
     ): RollbackResult {
         if (table.isBlank() || columns.isEmpty() || rows.isEmpty()) {
             return RollbackResult.unable(RollbackWarning("rollback.snapshot.emptyInput"))
         }
         return when (mode) {
-            SnapshotMode.BACKFILL_INSERT -> backfillInsert(table, columns, rows)
+            SnapshotMode.BACKFILL_INSERT -> backfillInsert(table, columns, rows, dialect, identityColumns)
             SnapshotMode.REVERT_INSERT -> revertInsertFromSnapshot(table, columns, rows, primaryKeyColumns)
             SnapshotMode.REVERT_UPDATE -> revertUpdateFromSnapshot(
                 table, columns, rows, primaryKeyColumns, changedColumns, newValuesByColumn,
@@ -386,9 +392,28 @@ object RollbackSqlGenerator {
         }
     }
 
-    /** DELETE 反向：INSERT 全列回填（多行 VALUES 合批 500 行/256KB；行数达快照上限按截断降级）。 */
-    private fun backfillInsert(table: String, columns: List<String>, rows: List<List<String?>>): RollbackResult {
+    /**
+     * DELETE 反向：INSERT 全列回填（多行 VALUES 合批 500 行/256KB；行数达快照上限按截断降级）。
+     *
+     * O-52：快照列清单含自增列且方言有包装形态（[Dialect.renderInsertWrapper] 非 null）时，**每条**
+     * INSERT 各自成对包装——`SET IDENTITY_INSERT` 是会话级开关且同一时刻每会话只能有一个表为 ON，
+     * 合批出的多条 INSERT 不能只在整段首尾各包一次。identity 未知（空清单/方言为 null）→ 不包装，
+     * 产物与改前逐字节相同。
+     */
+    private fun backfillInsert(
+        table: String,
+        columns: List<String>,
+        rows: List<List<String?>>,
+        dialect: Dialect?,
+        identityColumns: List<String>,
+    ): RollbackResult {
         val columnList = columns.joinToString(", ")
+        // 大小写不敏感匹配（与 REVERT_INSERT 的主键判定同口径）：粘贴 TSV 的列名来自网格，
+        // 大小写形态由驱动/表定义决定，不能按字面相等判
+        val wrapIdentity = identityColumns.any { id -> columns.any { it.equals(id, ignoreCase = true) } }
+        val wrapper: ((String) -> String)? = dialect?.takeIf { wrapIdentity }?.let { d ->
+            { insertSql -> d.renderInsertWrapper(table, insertSql) ?: insertSql }
+        }
         val statements = ArrayList<String>(rows.size)
         val sb = StringBuilder()
         var batchRows = 0
@@ -396,7 +421,7 @@ object RollbackSqlGenerator {
             val values = row.map { renderCell(it) }.joinToString(", ")
             val rowText = "($values)"
             if (batchRows == MAX_STATEMENTS || (sb.isNotEmpty() && sb.length + rowText.length > MAX_TOTAL_CHARS)) {
-                statements.add(flushInsertBatch(sb, table, columnList))
+                statements.add(flushInsertBatch(sb, table, columnList, wrapper))
                 batchRows = 0
             }
             if (sb.isEmpty()) sb.append("INSERT INTO $table ($columnList) VALUES ")
@@ -404,7 +429,7 @@ object RollbackSqlGenerator {
             sb.append(rowText)
             batchRows++
         }
-        if (sb.isNotEmpty()) statements.add(flushInsertBatch(sb, table, columnList))
+        if (sb.isNotEmpty()) statements.add(flushInsertBatch(sb, table, columnList, wrapper))
         val warnings = mutableListOf<RollbackWarning>()
         // 文案含两个占位符（{0} 行数 / {1} 上限）——曾只传 {0}，弹窗会原样显示「上限 {1}」
         if (rows.size >= SNAPSHOT_ROW_LIMIT) {
@@ -417,10 +442,15 @@ object RollbackSqlGenerator {
         return RollbackResult(Rating.PARTIAL, statements, warnings, null, targetTable = table)
     }
 
-    private fun flushInsertBatch(sb: StringBuilder, table: String, columnList: String): String {
+    private fun flushInsertBatch(
+        sb: StringBuilder,
+        table: String,
+        columnList: String,
+        wrapper: ((String) -> String)?,
+    ): String {
         val text = sb.append(";").toString()
         sb.setLength(0)
-        return text
+        return wrapper?.invoke(text) ?: text
     }
 
     /** INSERT 反向（快照行版本）：DELETE 谓词定位同 P1（pk 传入且在快照列内 → pk 谓词 Complete）。 */

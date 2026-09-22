@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.sql.rollback
 
+import cn.song.mybatisplus.visualizer.sql.SqlServerDialect
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -178,5 +179,33 @@ class RollbackRoundTripTest {
         assertEquals(RollbackSqlGenerator.Rating.COMPLETE, rollback.rating)
         rollback.statements.forEach { assertEquals(1, execute(it)) }
         assertEquals(0, queryCount("rt_ins"))
+    }
+
+    // ======================== O-52：identity 包装不改 INSERT 本体 ========================
+
+    /**
+     * O-52：包装只在 INSERT 前后加 `SET IDENTITY_INSERT` 开关，**不动 INSERT 文本**。
+     *
+     * 本环境无 SQL Server（H2 不认 `SET IDENTITY_INSERT`），故剥掉开关行后把 INSERT 本体真跑一遍
+     * 作为取证——包装后的可执行语义由「本体未变 + 本体可执行」两段合成。真机端到端登记为环境受限未验证。
+     */
+    @Test
+    fun `快照回填_identity包装内的INSERT本体仍可执行`() {
+        conn.createStatement().use { it.execute("CREATE TABLE rt_idw (id INT PRIMARY KEY, name VARCHAR(64))") }
+        val parsed = RollbackSqlGenerator.parseSnapshotTsv("id\tname\n1\tTom\n")!!
+        val rollback = RollbackSqlGenerator.generateFromSnapshotRows(
+            "rt_idw", parsed.first, parsed.second,
+            mode = RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
+            dialect = SqlServerDialect,
+            identityColumns = listOf("id"),
+        )
+        val wrapped = rollback.statements.single()
+        assertTrue("应成对包装: $wrapped", wrapped.startsWith("SET IDENTITY_INSERT rt_idw ON;\n"))
+        assertTrue("应成对包装: $wrapped", wrapped.endsWith("\nSET IDENTITY_INSERT rt_idw OFF;"))
+
+        val body = wrapped.lines().filterNot { it.startsWith("SET IDENTITY_INSERT") }.joinToString("\n")
+        assertEquals("INSERT INTO rt_idw (id, name) VALUES (1, 'Tom');", body)
+        assertEquals(1, execute(body))
+        assertEquals(1, queryCount("rt_idw"))
     }
 }

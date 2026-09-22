@@ -11,6 +11,7 @@ import com.intellij.codeInsight.hints.InlayPresentationFactory
 import com.intellij.codeInsight.hints.NoSettings
 import com.intellij.codeInsight.hints.SettingsKey
 import com.intellij.codeInsight.hints.presentation.PresentationFactory
+import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.util.Key
@@ -192,26 +193,107 @@ class PreviewInsertColumnInlayProvider : InlayHintsProvider<NoSettings>, DumbAwa
  *    **忽略返回值**、对每个 PSI 元素都调用一次——无闸门会按元素数量重复投提示。
  *
  * 故首次调用即投完全部提示并置位（提示位点取自编辑器当前文档全文，与传入元素无关）。
+ *
+ * **闸门必须是原子的**（T-PerfSweep6 T-PS6-01，本轮唯一带正确性的发现）：平台真机 pass 不是单线程
+ * 遍历——`InlayHintsPass.doCollectInformation` 把分片元素交给
+ * `JobLauncher.invokeConcurrentlyUnderProgress(…, Processor { element -> … })` **并发**跑，
+ * 闭包内共享同一份 `enabledCollectors`（243 装机版源码实证：`InlayHintsPass.kt` 的
+ * `val skippedCollectors = ConcurrentCollectionFactory.createConcurrentSet<Int>()` +
+ * 对 `enabledCollectors.indices.minus(skippedCollectors)` 的并发回调）。`skippedCollectors`
+ * 只在 `collectHints` **返回之后**才置位，故「判定 + 置位」两步之间是一个真实的竞态窗口：
+ * 普通 `var` 下两个分片线程可同时通过判定、各投一遍提示 → 同一 offset 上出现两份 presentation。
+ * 改 `AtomicBoolean.compareAndSet(false, true)` 后只有一个线程能进入收集体。
+ *
+ * **CAS 失败路径直接 `return false`，不做「结果就绪后共享」**：平台只把返回值当「后续还要不要回调
+ * 本 collector」用（`CollectorWithSettings.collectHints` 仅转发 `collector.collect` 的返回值，
+ * `InlayHintsPass` 见 false 即记入 `skippedCollectors`）——胜者必定完成收集并投递，失败者返回 false
+ * 只是让平台更快把它移出调度。若失败路径返回 true，平台会对**每个**分片元素继续回调它，是更差的形态。
  */
 private class InsertColumnInlayCollector(
     private val factory: InlayPresentationFactory,
 ) : InlayHintsCollector {
 
-    private var collected = false
+    private val collected = java.util.concurrent.atomic.AtomicBoolean(false)
 
     override fun collect(element: PsiElement, editor: Editor, sink: InlayHintsSink): Boolean {
-        if (collected) return false
-        collected = true
-        val text = editor.document.text
-        for (hint in InsertColumnInlayPlanner.plan(text)) {
+        if (!collected.compareAndSet(false, true)) return false
+        val document = editor.document
+        // 越界防御用 textLength（O(1)），不读全文——缓存命中时连 text 都不取（见 [InsertColumnInlayPlanCache]）
+        val textLength = document.textLength
+        for (hint in InsertColumnInlayPlanCache.planFor(document)) {
             // 防御：位点由本次同一份文本算出，理论上必在范围内；越界时平台 addInlineElement 会硬断言
             //（显示层功能不得因断言升级成异常），故越界条目直接跳过。
-            if (hint.offset < 0 || hint.offset > text.length) continue
+            if (hint.offset < 0 || hint.offset > textLength) continue
             // relatesToPrecedingText=false：提示归属其后的值表达式（同参数名提示口径）；
             // placeAtTheEndOfLine=false：不占行尾锚点（行内提示，允许光标落在其后继续编辑）
             sink.addInlineElement(hint.offset, false, factory.text(hint.columnName), false)
         }
         return false
+    }
+}
+
+/**
+ * 规划结果单槽缓存（T-PerfSweep6 T-PS6-01）。
+ *
+ * **为什么必须落在进程级而不是 collector 内**：平台**每个 highlighting pass 都新建 collector**——
+ * `InlayHintsPassFactoryInternal.createHighlightingPass` 里 `val hintSink = InlayHintsSinkImpl(editor)`
+ * 与 `getProviders(file, editor).mapNotNull { it.getCollectorWrapperFor(file, editor, language, hintSink) }`
+ * 都是逐 pass 执行（243 装机版源码实证），collector 内缓存跨不过 pass；而一次性闸门已保证
+ * 每 collector 只规划一次，故「collector 内缓存」是零收益的死代码。缓存落在进程级单例上，
+ * 才真正省掉「同一文档连续多轮 pass 之间文本未变」的重规划。
+ *
+ * **键 =（文档身份, `modificationStamp`）**：stamp 是**全局** 24 位计数器
+ * （`LocalTimeCounter.MOD_COUNTER_MASK = 0x00ff_ffff`，`DocumentImpl` 取全局 AtomicInteger），
+ * 跨文档理论上可碰撞——只按 stamp 建键会把别的文档的提示搬到本文档上，故文档身份必须一起比。
+ *
+ * **弱键**：缓存不得钉住文档/编辑器（照 [DatabaseSchemaResolver] 的 `synchronizedMap(WeakHashMap)`
+ * 弱键纪律）；单槽形态下旧文档随下一次 miss 被替换，`WeakReference` 只是防「最后一次命中的文档
+ * 被本对象长期钉住」。
+ *
+ * **线程安全**：平台分片并发下 `planFor` 可被多线程同时调用；命中判定与写入都收在锁内，
+ * 未命中时的重规划在锁外做（重复算一遍只是白付一次，不会产出错结果）。
+ */
+internal object InsertColumnInlayPlanCache {
+
+    private val lock = Any()
+    private var lastDocument: java.lang.ref.WeakReference<Document>? = null
+    private var lastStamp: Long = Long.MIN_VALUE
+    private var lastHints: List<InsertColumnInlayPlanner.Hint> = emptyList()
+
+    /**
+     * 取文档当前文本的规划结果：`(文档身份, stamp)` 与上次一致直接复用，否则重规划并刷新单槽。
+     *
+     * 命中时**不读 `document.text`**——这是本缓存除「省重规划」外的第二项收益（未变文档上连文本
+     * 引用都不取）。
+     */
+    fun planFor(document: Document): List<InsertColumnInlayPlanner.Hint> {
+        val stamp = document.modificationStamp
+        synchronized(lock) {
+            if (lastStamp == stamp && lastDocument?.get() === document) return lastHints
+        }
+        val hints = InsertColumnInlayPlanner.plan(document.text)
+        synchronized(lock) {
+            lastDocument = java.lang.ref.WeakReference(document)
+            lastStamp = stamp
+            lastHints = hints
+        }
+        return hints
+    }
+
+    /**
+     * T-PerfSweep6 T-PS6-01 测试缝：清空单槽。
+     *
+     * 本对象是**进程级静态状态**，同 JVM 内多个测试类共享（默认 `maxParallelForks=1`、
+     * 非 testDatabase 无 forkEvery）——用例必须在开始处清槽，否则前一个用例留下的
+     * `(文档, stamp)` 会让后一个用例的首次规划直接命中缓存（读数随用例顺序漂移）。
+     * 形态对照 `MetadataInvalidator.clearParseCacheForTest`。
+     */
+    internal fun clearForTest() {
+        synchronized(lock) {
+            lastDocument = null
+            lastStamp = Long.MIN_VALUE
+            lastHints = emptyList()
+        }
     }
 }
 

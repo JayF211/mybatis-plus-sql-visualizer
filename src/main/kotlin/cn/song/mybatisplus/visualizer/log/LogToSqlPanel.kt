@@ -366,7 +366,13 @@ class LogToSqlPanel(
         val entries = myBatisParser.takeEntries() + hibernateParser.takeEntries() + jdbcParser.takeEntries()
         if (entries.isEmpty()) return ConversionOutput(null, 0, 0)
         val multi = entries.size > 1
+        // T-PerfSweep6 T-PS6-08（性能报告发现 16）：未还原计数**并入既有单遍 mapIndexed**。
+        // 此前是第二次 `entries.count { countPlaceholders(it.restoredSql) > 0 }`——同一批条目再遍历
+        // 一遍列表、再进一遍 lambda（字符串扫描次数不变，省的是第二次列表遍历与闭包开销）。
+        // T-HibDualCapture：string-aware 计数，字符串/注释里的 `?` 不再误计。
+        var unresolved = 0
         val out = entries.mapIndexed { index, entry ->
+            if (countPlaceholders(entry.restoredSql) > 0) unresolved++
             val base = withTerminator(entry.restoredSql)
             val body = if (formatToggled) SqlFormatter.format(base) else base
             if (multi) {
@@ -377,8 +383,6 @@ class LogToSqlPanel(
                     (if (named != null) " [$named]" else "") + "\n$body"
             } else body
         }.joinToString("\n\n")
-        // T-HibDualCapture：string-aware 计数，字符串/注释里的 `?` 不再误计
-        val unresolved = entries.count { countPlaceholders(it.restoredSql) > 0 }
         return ConversionOutput(out, entries.size, unresolved)
     }
 

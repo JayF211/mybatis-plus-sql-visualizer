@@ -247,6 +247,23 @@ object DatabaseSchemaResolver {
     internal fun negativeCacheSize(): Int = synchronized(negativeCache) { negativeCache.values.sumOf { it.size } }
 
     // ----------
+    // T-PerfSweep6 T-PS6-08（性能报告发现 11）：**本轮未实施，留档**。
+    //
+    // 计划要求「给 [bailAfterTraversal] 的『查不了』加短 TTL 标记（而非完全不缓存）」，理由是
+    // 该环境下每次调用都重跑一遍 DasModel 全遍历。**按字面实施会与 P7b 的既有护栏直接冲突**：
+    // 「查不了不写负缓存 → 下次调用仍重扫」是 P7b 刻意的语义，被 4 处既有断言钉住——
+    //   - `DatabaseSchemaResolverBailTest.kt:55`（scans 期望 2）
+    //   - `DatabaseSchemaResolverNegativeCacheTest.kt:209`（`查不了不记账_下次调用仍重试`，scans 期望 3）
+    //   - `DatabaseSchemaResolverSchemaScopeTest.kt:105/118`（calls 期望 2，两处）
+    // 任何「跨调用去重窗口」（哪怕 200ms）都会让这些读数变成 1，即把护栏改软；而它们的判别力
+    // 正是「数据源晚连接/内省完成后自愈」这条正确性语义。
+    //
+    // 取舍：**低**级性能收益 < 正确性护栏强度，故本轮不实施（不削弱既有断言）。若日后要做，
+    // 须与那 4 处断言的作者一起把契约改写成「窗口内不重扫 + 过期后重扫」两条（TTL 必须
+    // < DDL 生效探测首拍 500ms，见 [bailAfterTraversal] 的 KDoc）。
+    // ----------
+
+    // ----------
     // T-PS5-06：单调用全扫限额（MCP schema_context 一次调用最多 20 表）。
     // 此前每个 miss 表都对每个数据源重跑一遍 DasModel 全遍历；而 [collectFromDataSource] 的
     // 遍历是**完整**的（命中后不 break，仍走完所有元素；只有「查不了」才提前 bail）——因此同一
@@ -256,8 +273,12 @@ object DatabaseSchemaResolver {
     // 已全扫过的数据源上的后续 miss 表直接按未找到处理，负缓存照记（结论与全扫等价，跨调用
     // 负缓存语义不变）。**查不了（scanBailed）不记账**——模型未加载/反射链失败时下次必须重试。
     // 作用域仅由 [withScanBudget] 显式开启；**当前无生产调用方**（原唯一入口
-    // McpSchemaContextService 的 schema_context 已改自建索引，见其 P4 注释），仅测试使用；
-    // 其它调用方零行为变化。
+    // McpSchemaContextService 的 schema_context 已改自建索引，见其 P4 注释）。
+    // T-PerfSweep6 T-PS6-08（性能报告发现 12）：定性由「死代码」订正为「**仅测试消费**」——
+    // 实测消费方 = `src/test/kotlin/.../ui/highlight/DatabaseSchemaResolverNegativeCacheTest.kt`
+    // 六处（含专供测试的 [inScanBudgetForTest]），故**不删**：删掉要连带改那个不在本任务写集的
+    // 测试文件，且账本语义本身是 P7b「查不了 vs 确认没有」的回归护栏。
+    // 新接生产调用方前先确认是否真需要（跨调用面已有负缓存 + [McpSchemaContextService] 自建索引）。
     // ----------
 
     /** 调用内账本（已完整全扫过的数据源身份集）。 */

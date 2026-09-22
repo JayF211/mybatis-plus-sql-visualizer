@@ -5,6 +5,7 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import cn.song.mybatisplus.visualizer.log.normalizeSqlWhitespace
 import cn.song.mybatisplus.visualizer.log.sqlFingerprint
+import cn.song.mybatisplus.visualizer.sql.Dialect
 
 /**
  * 回滚快照登记簿（T-RollbackSql P2-F5/F6）：project 级内存轻服务。
@@ -45,6 +46,14 @@ class RollbackSnapshotStore(private val project: Project) {
      * @param snapshotSelectSql 快照查询模板 `SELECT * FROM t [WHERE …]`
      * @param setColumns        UPDATE 的 SET 列清单（DELETE 恒空）
      * @param status            状态（见 [Status]）
+     * @param dialect           登记时的方言（O-52 回滚侧 identity 包装用；**null = 未知 → 不包装**）
+     * @param identityColumns   目标表的自增列名（O-52；**空 = 未知 → 不包装**）
+     *
+     * O-52（D1=A 定案）：回滚链的行值来自粘贴 TSV、`backfillInsert` 生成 INSERT，显式插入自增列
+     * 在 SQL Server 上必然报 544——identity 知识只有**登记时**持有，故随快照一起留存。
+     * 两个字段均带默认值：旧条目（本会话改前登记的）与未传参的调用方**逐字节不变地**落到
+     * 「未知」，包装不触发（与既有「未知语义不臆造」口径一致）；[RollbackSnapshotStore] 是内存态、
+     * 不持久化（见类 KDoc），不存在跨会话反序列化旧格式的问题，默认值只服务「调用方未传」这一形态。
      */
     data class SnapshotEntry(
         val executionId: Long,
@@ -55,6 +64,8 @@ class RollbackSnapshotStore(private val project: Project) {
         val snapshotSelectSql: String?,
         val setColumns: List<String> = emptyList(),
         val status: Status = Status.REGISTERED,
+        val dialect: Dialect? = null,
+        val identityColumns: List<String> = emptyList(),
     )
 
     /** 条目 LRU（容量 [MAX_ENTRIES] 条；访问序）。 */
@@ -91,6 +102,8 @@ class RollbackSnapshotStore(private val project: Project) {
      *
      * @param parentExecutionId 本次执行本身是回滚语句时，指向被回滚的原执行序号
      *                          （dbx `rollback_of` 指针语义；[NO_EXECUTION_ID] = 普通 DML）
+     * @param dialect           登记时的方言（O-52；null = 未知 → 回滚侧不包装）
+     * @param identityColumns   目标表的自增列名（O-52；空 = 未知 → 回滚侧不包装）
      * @return 登记的条目（含分配的 executionId，LOG 埋点用）
      */
     @Synchronized
@@ -100,6 +113,8 @@ class RollbackSnapshotStore(private val project: Project) {
         snapshotSelectSql: String?,
         setColumns: List<String> = emptyList(),
         parentExecutionId: Long = NO_EXECUTION_ID,
+        dialect: Dialect? = null,
+        identityColumns: List<String> = emptyList(),
     ): SnapshotEntry {
         val fingerprint = fingerprintOf(sql)
         val previous = sqlIndex[fingerprint]
@@ -110,6 +125,8 @@ class RollbackSnapshotStore(private val project: Project) {
             targetTable = targetTable,
             snapshotSelectSql = snapshotSelectSql,
             setColumns = setColumns,
+            dialect = dialect,
+            identityColumns = identityColumns,
         )
         if (previous != null) {
             entries.remove(previous)
@@ -118,7 +135,8 @@ class RollbackSnapshotStore(private val project: Project) {
         sqlIndex[fingerprint] = entry.executionId
         LOG.info(
             "[TRollbackSql] snapshot registered: executionId=${entry.executionId}, parent=$parentExecutionId, " +
-                "table=${entry.targetTable}, sqlLen=${sql.length}, setColumns=${entry.setColumns}",
+                "table=${entry.targetTable}, sqlLen=${sql.length}, setColumns=${entry.setColumns}, " +
+                "dialect=${entry.dialect?.name}, identityColumns=${entry.identityColumns}",
         )
         return entry
     }

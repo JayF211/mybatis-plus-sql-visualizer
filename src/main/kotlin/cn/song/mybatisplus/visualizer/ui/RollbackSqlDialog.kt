@@ -36,7 +36,9 @@ import javax.swing.JComponent
  *  - Unable（可解析的 UPDATE/DELETE）：红色横幅 + 人工恢复指引 + **快照工作流**——
  *    快照查询模板一键执行（结果落面板控制台网格，用户亲手取得 before-image）+
  *    粘贴结果生成完整回滚（dbx「有 before-image 才回滚」的半自动落地，P2-F5 降级方案；
- *    262 连接协议不可程序化快照的定夺见 [RollbackSnapshotStore] KDoc）；
+ *    262 连接协议不可程序化快照的定夺见 [RollbackSnapshotStore] KDoc）——粘贴生成的回填 INSERT
+ *    在快照条目持有 identity 信息（O-52：[RollbackSnapshotStore.SnapshotEntry.dialect] /
+ *    `identityColumns`）时按方言包装，否则不包装；
  *  - Unable（完全不可解析/MERGE/DDL）：不进本视图，面板入口直接消息框（计划 §2.2）。
  *
  * 「执行回滚」不走 [cn.song.mybatisplus.visualizer.execute.SqlExecutor.execute] 全链弹数据源
@@ -262,6 +264,10 @@ class RollbackSqlDialog(
             primaryKeyColumns = pk,
             changedColumns = currentResult.setColumns,
             newValuesByColumn = currentResult.setValues,
+            // O-52（D1=A）：identity 知识随快照条目留存，此处取回传给生成器——条目未持有
+            // （旧条目/未传参的登记点）时保持 null/空 → 不包装，与改前逐字节相同
+            dialect = snapshotEntry?.dialect,
+            identityColumns = snapshotEntry?.identityColumns ?: emptyList(),
         )
         if (generated.rating == RollbackSqlGenerator.Rating.UNABLE) {
             warningLabel.text = warningsHtml(generated)

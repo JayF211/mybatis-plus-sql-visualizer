@@ -243,6 +243,14 @@ tasks.withType<Jar>().configureEach {
 tasks.named<Task>("verifyGate") { mustRunAfter("buildPlugin") }
 tasks.named<Task>("testShards") { mustRunAfter("verifyGate") }
 
+// T-PerfSweep6 T-PS6-09（性能报告发现 14b）：`:sql-visualizer-agent:test` 挂进收口清单。
+// agent 子项目是**独立构建/测试通道**，默认门禁 testShards 此前不覆盖它——心跳节奏、退避语义、
+// attach 端到端这些 agent 侧用例只有手动点名才跑。接线点在 root body（本块），**不是**下方
+// `embedAgentJar` 那一段（那是 agent fat jar 内嵌块，与门禁无关）。
+// 代价：每次 testShards 会连带构建 agent fat jar 并起子 JVM（attach 集成测试），收口时间变长；
+// 清理口径见计划 §六——清 build 时须连 `sub-projects/sql-visualizer-agent/build` 一起清。
+tasks.named<Task>("testShards") { dependsOn(":sql-visualizer-agent:test") }
+
 // ---------- M56 T-M56-01：agent fat jar 内嵌主插件资源（resources/agent/mps-sql-agent.jar） ----------
 // 运行时 AgentManager 解压落盘 + deleteOnExit 后经 attach loadAgent 挂载；
 // 落盘失败显式上报（禁静默吞）。跨项目任务经路径引用，配置缓存兼容。

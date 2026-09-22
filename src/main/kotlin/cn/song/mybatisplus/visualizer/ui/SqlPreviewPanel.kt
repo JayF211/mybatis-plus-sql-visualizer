@@ -232,6 +232,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * **不会**误删其它面板/其它 IDE 会话正在使用的预览文件（同项目多开进程各有自己的 pid 段）。
      */
     private val previewTempFilesCreated = java.util.concurrent.ConcurrentHashMap.newKeySet<java.io.File>()
+
+    /**
+     * T-PerfSweep6 T-PS6-04：目录级兜底清扫的「本面板已扫过」闸门（首次解析预热目录时扫一次）。
+     * 原子置位：`projectPreviewFile` 可能被预热线程与 EDT 同时触达。
+     */
+    private val previewDirSwept = java.util.concurrent.atomic.AtomicBoolean(false)
     /** T-M36.6-03：后台预热产物（vf+PSI 就绪对），createEditor 优先消费——EDT 零慢操作。 */
     @Volatile
     private var prewarmedTempFile: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? = null
@@ -764,6 +770,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             ".idea${java.io.File.separator}${cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME}${java.io.File.separator}preview",
         )
         if (!dir.exists() && !dir.mkdirs()) return null
+        // T-PerfSweep6 T-PS6-04（发现 4）：本面板首次解析预热目录时做一次目录级兜底清扫
+        // （年龄 > 7 天 / 条数 > 200），只认本插件自有命名——见 [sweepStalePreviewFiles]。
+        // 每次面板生命周期只扫一次（清扫是兜底，不必每次预览都付一遍 listFiles）。
+        if (previewDirSwept.compareAndSet(false, true)) {
+            sweepStalePreviewFiles(dir)
+        }
         // T-FixN2 × T-InsertColumnInlay O-44b 合并口径：文件名**唯一**（每次预热换名，见上）且**由
         // inlay 作用域锚点同一份常量生成**——锚点靠文件名形态判定「是不是本面板预览编辑器」，
         // 名字来源与形态判据同处 [PreviewInlayScope]，两处各自硬编码字面量会在改名时静默打穿锚点
@@ -3026,10 +3038,55 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // 否则 preview/ 目录会随预览次数只增不减。清理策略三选一取「按面板生命周期删除」：
         // 保留上限/文件池两条都要跨面板判断「谁在用」（同项目多开进程另有自己的文件），
         // 误删在用的预览文件会立刻复现 File Cache Conflict；本表只装本面板自己建的文件，天然无误删面。
-        previewTempFilesCreated.forEach { f -> runCatching { f.delete() } }
-        previewTempFilesCreated.clear()
+        // T-PerfSweep6 T-PS6-04③：抽成 [recoverPreviewTempFiles]，与 [dispose] 共用同一份回收逻辑
+        recoverPreviewTempFiles()
         // T-M36.6-03：预热产物作废（面板重用时由 clear() 重新预热；dispose 由 previewDisposed 兜底）
         prewarmedTempFile = null
+    }
+
+    /**
+     * T-PerfSweep6 T-PS6-04③：回收本面板创建过的全部预览临时文件（幂等）。
+     *
+     * 抽成独立方法是为了让 [releaseEditor] 与 [dispose] 共用同一份回收逻辑——此前只有
+     * `removeNotify` → [releaseEditor] 一条链会走到，而三种宿主（弹窗 / 工具窗 / 嵌入控制台）下
+     * `dispose` 与 `removeNotify` 的先后未穷尽，dispose 先到即漏删。
+     */
+    private fun recoverPreviewTempFiles() {
+        previewTempFilesCreated.forEach { f -> runCatching { f.delete() } }
+        previewTempFilesCreated.clear()
+    }
+
+    /**
+     * T-PerfSweep6 T-PS6-04（性能报告发现 4）：预览目录级兜底清扫（**每个面板启动时一次**）。
+     *
+     * **为什么需要**：唯一命名（T-FixN2）把「覆盖写同一路径」变成「每次新建一个文件」，异常路径
+     * （kill / 崩溃 / 未走 `removeNotify` / 未走 `dispose`）留下的文件不再被任何后续预览复用，
+     * `preview/` 只增不减。三条兜底按性价比取二（计划 §三 T-PS6-04）：
+     *  ① **年龄**：mtime 早于 [STALE_PREVIEW_MAX_AGE_MS]（7 天）的残留直接删；
+     *  ② **条数**：本插件命名的文件超过 [PREVIEW_DIR_MAX_FILES]（200）时按 mtime 从最旧删到上限。
+     *  （第三条「dispose 补同款回收」落在 [recoverPreviewTempFiles]，见其调用点。）
+     *
+     * **宁漏删不误删**：只删**本插件自有命名**的文件——判据直接复用建名处的
+     * [PreviewInlayScope.isPrimaryPreviewFileName]（与生成端同一份形态常量，杜绝判据漂移）；
+     * 用户自己放进该目录的任何文件、二级内存名（`mpsql-preview-memory.sql`）、原生控制台临时文件
+     * （`mpsql-exec*.sql`）都不匹配即不触碰（照 `SqlLogAutoSaver.pruneRetainedFiles` 的
+     * familyRegex「先按名过滤再删」先例）。目录不存在/不可读时静默返回——清扫是兜底，
+     * 不得影响预览主链。
+     */
+    private fun sweepStalePreviewFiles(dir: java.io.File) {
+        val files = runCatching {
+            dir.listFiles { f -> f.isFile && PreviewInlayScope.isPrimaryPreviewFileName(f.name) }
+        }.getOrNull() ?: return
+        if (files.isEmpty()) return
+        val now = System.currentTimeMillis()
+        files.filter { now - it.lastModified() > STALE_PREVIEW_MAX_AGE_MS }
+            .forEach { runCatching { it.delete() } }
+        val rest = files.filter { it.exists() }
+        if (rest.size > PREVIEW_DIR_MAX_FILES) {
+            rest.sortedBy { it.lastModified() }
+                .take(rest.size - PREVIEW_DIR_MAX_FILES)
+                .forEach { runCatching { it.delete() } }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -4209,6 +4266,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         nativeConsoleEditor = null
         // T-M36.6-03：面板销毁——晚到的预热线程产物作废（预热线程自查后删除临时文件）
         previewDisposed = true
+        // T-PerfSweep6 T-PS6-04③（性能报告发现 4）：面板 dispose 补一次同款临时文件回收。
+        // 此前回收实际只由 removeNotify → releaseEditor 触发，而三种宿主（弹窗 / 工具窗 / 嵌入控制台）
+        // 下 dispose 与 removeNotify 的先后未穷尽——dispose 先到时残留文件无人回收。本方法幂等，
+        // 两条路径都走到也无副作用（集合已清空即零动作）。
+        recoverPreviewTempFiles()
         // T-StabilityTail：解除预热取消门在项目 earlyDisposable 树上的登记——面板先于项目销毁时
         // 不留指向本面板的引用（项目先销毁时该 gate 已被平台回收，Disposer 对已销毁件幂等）
         prewarmLifecycleGate?.let { runCatching { Disposer.dispose(it) } }
@@ -4268,6 +4330,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** T-PreviewDocLock2 F3 回归守护：释放编辑器（**不**触发 [clear] 的重预热）——「产物已被消费」降级分支断言用。 */
     internal fun releaseEditorForTest() = releaseEditor()
+
+    /**
+     * T-PerfSweep6 T-PS6-04 测试缝：对给定目录执行一次目录级兜底清扫（生产入口在
+     * [projectPreviewFile] 首次解析预热目录时）。测试用临时目录即可直测「按年龄/条数回收」
+     * 与「非本插件命名零删除」两条判据。
+     */
+    internal fun sweepStalePreviewFilesForTest(dir: java.io.File) = sweepStalePreviewFiles(dir)
 
     internal fun currentForTest(): PreviewResult? = current
     internal fun compactForTest(): Boolean = compactMode
@@ -4544,6 +4613,22 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
          * 抬高预算的代价是等待期变长，已由 [showPreviewPreparingPlaceholder] 的占位覆盖观感。
          */
         const val PREWARM_WAIT_MS = 500L
+
+        /**
+         * T-PerfSweep6 T-PS6-04（性能报告发现 4）：预热目录残留清扫的**年龄**上限（7 天）。
+         *
+         * 取值口径：残留来自 kill / 崩溃 / 未走 removeNotify 的会话，跨会话（IDE 重启）后本插件
+         * 不会再复用它们；7 天足以覆盖「用户当周内重开项目仍可能被兜底复用」的窗口
+         * （`projectPreviewFile` 的 existing 分支），又不会让残留无限驻留。
+         */
+        internal const val STALE_PREVIEW_MAX_AGE_MS: Long = 7L * 24 * 60 * 60 * 1000
+
+        /**
+         * T-PerfSweep6 T-PS6-04：预热目录内本插件命名的文件**条数**上限（超出按 mtime 删最旧）。
+         *
+         * 200 = 常规使用下永远撞不到（一次预览最多留 1~2 个文件），只兜「异常路径反复泄漏」的底。
+         */
+        internal const val PREVIEW_DIR_MAX_FILES = 200
 
         /**
          * T-FixN2 × T-InsertColumnInlay O-44b：生成下一次预热的唯一临时文件名。

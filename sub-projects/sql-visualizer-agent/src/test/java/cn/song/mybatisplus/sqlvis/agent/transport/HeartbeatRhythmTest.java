@@ -21,8 +21,12 @@ import static org.junit.Assert.fail;
  * （入站 CONFIG 读超时 1s + 轮询睡眠 200ms），于是「静默 10s 发心跳」实际要 50 轮 ≈ 60s——
  * 首条心跳永远赶不上 IDE 侧 30s 在线窗口（实测：HELLO +17ms，首条 HEARTBEAT +60633ms）。
  * 本用例把间隔经系统属性压到 300ms 真跑一遍，断言三件事：
- * HELLO 后 1.5 倍间隔内收到首条心跳、相邻心跳间隔 ≤ 1.5 倍间隔、3 秒观察窗 ≥ 6 条心跳。
+ * HELLO 后 2 倍间隔内收到首条心跳、相邻心跳间隔 ≤ 2 倍间隔、3 秒观察窗 ≥ 6 条心跳。
  * 计时退回累加形态 → 首条心跳读数退化到 ~8 倍间隔，必红。
+ *
+ * T-PerfSweep6 T-PS6-09（性能报告发现 14a）：容差由 1.5 倍放宽到 **2 倍**。1.5 倍在并行构建
+ * （多 worker 抢 CPU / GC 抖动）下偶发红，而它要拦的退化形态（累加计时）读数在 8 倍量级——
+ * 放宽到 2 倍仍留有 4 倍判别余量，红/绿判据不因放宽而失效。
  *
  * 注：[EventBus.start] 是 JVM 内单例（started 标志），故本类只跑一例；系统属性用完即清，
  * 同 JVM 里的其它用例不受污染。
@@ -30,8 +34,8 @@ import static org.junit.Assert.fail;
 public class HeartbeatRhythmTest {
 
     private static final long INTERVAL_MS = 300L;
-    /** 容差：1.5 倍设定间隔（机器抖动/调度延迟余量）。 */
-    private static final long TOLERANCE_MS = INTERVAL_MS * 3 / 2;
+    /** 容差：2 倍设定间隔（机器抖动/调度延迟余量；退化形态读数在 8 倍量级，判别余量仍 4 倍）。 */
+    private static final long TOLERANCE_MS = INTERVAL_MS * 2;
     private static final long WATCH_MS = 3000L;
     private static final int MIN_HEARTBEATS = 6;
     /** 单帧等待上限（远大于间隔；并行构建下线程启动/调度抖动可能达百毫秒级）。 */

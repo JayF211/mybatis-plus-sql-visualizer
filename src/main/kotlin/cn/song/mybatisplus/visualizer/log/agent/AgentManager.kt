@@ -216,6 +216,15 @@ class AgentManager(private val project: Project) : Disposable {
     @Volatile
     private var monitorStarted = false
 
+    /**
+     * T-PerfSweep6 T-PS6-08：当前排定的 5s 巡检任务句柄（懒启时写入，[stopMonitor] 取消并置空）。
+     *
+     * 必须持有它才能真取消——`ScheduledFuture.cancel` 是唯一能停掉已排定周期任务的途径，
+     * 只翻 [monitorStarted] 标志会留下一个仍在跑的旧任务（见 [stopMonitor] 注释）。
+     */
+    @Volatile
+    private var monitorTask: java.util.concurrent.ScheduledFuture<*>? = null
+
     private val monitorLock = Any()
 
     init {
@@ -261,10 +270,31 @@ class AgentManager(private val project: Project) : Disposable {
         synchronized(monitorLock) {
             if (!monitorStarted) {
                 monitorStarted = true
-                monitor.scheduleWithFixedDelay({ sweepOffline() }, 5, 5, TimeUnit.SECONDS)
+                monitorTask = monitor.scheduleWithFixedDelay({ sweepOffline() }, 5, 5, TimeUnit.SECONDS)
             }
         }
         sweepOffline() // 兜底清扫（幂等；无死会话时零动作）
+    }
+
+    /**
+     * T-PerfSweep6 T-PS6-08（性能报告发现 8）：巡检复位——取消 5s 定时任务并清懒启标志。
+     *
+     * **为什么必须持 [monitorTask] 而不是只翻标志**：`scheduleWithFixedDelay` 的返回值此前被丢弃，
+     * 只把 `monitorStarted` 置回 false 并不能取消已排定的任务——下一次 [ensureMonitorStarted] 会在
+     * 同一个单线程执行器上再排一个，5s 巡检变双份（且每轮开关一次多一份）。故必须存下
+     * `ScheduledFuture` 并 [ScheduledFuture.cancel]。
+     *
+     * **执行器本体不关**：`cancel(false)` 只取消这一个周期性任务，`mps-agent-monitor` 线程随即回到
+     * 空闲等待（守护线程、零 CPU），下次开启照常复用；`monitor.shutdownNow()` 只在项目 dispose
+     * （服务生命周期终点）调用——提前关会让后续 enable 时 [ensureMonitorStarted] 抛
+     * `RejectedExecutionException`，等于把「开关关一次」变成「本会话巡检永久失效」。
+     */
+    private fun stopMonitor() {
+        synchronized(monitorLock) {
+            monitorTask?.cancel(false)
+            monitorTask = null
+            monitorStarted = false
+        }
     }
 
     /** T-PS5-04 测试缝：巡检是否已懒启（生产链路无调用点）。 */
@@ -817,7 +847,13 @@ class AgentManager(private val project: Project) : Disposable {
                 return 0L
             }
             val pid = readHelloPid(socket)
-            if (pid > 0L && sessions.any { it.alive && it.pid == pid }) {
+            // T-PerfSweep6 T-PS6-06：去重判据由 `alive` 收紧为 [isSessionHealthy]（socket 未断**且**
+            // 心跳窗口内有过帧）。`alive` 只表示 socket 未断——半死会话（应用侧停摆、连接还在）会
+            // 把同 pid 的**真重连**挡下一次，而挡下的这一次恰恰是「应用重启/卡死恢复」场景里最需要的
+            // 那一次；半死会话随后仍会被 [sweepOffline] 摘除，等于白挡。
+            // 不会误放行「刚建会话的立即重复连接」：新会话 lastSeen 在建会话时初始化为当前时刻
+            //（见 AgentSession 构造），窗口内必判健康。
+            if (pid > 0L && sessions.any { isSessionHealthy(it) && it.pid == pid }) {
                 LOG.info("premain 回连 pid=$pid 已有活动会话——丢弃重复连接（幂等）")
                 runCatching { socket.close() }
                 return pid
@@ -1080,6 +1116,9 @@ class AgentManager(private val project: Project) : Disposable {
         // T-M56Phase2-Premain：待回连通道一并关掉（关后即便 agent 回连也会被 isEnhancedActive 挡下，
         // 此处提前关是防 socket 挂到超时才回收）
         closePremainChannels()
+        // T-PerfSweep6 T-PS6-08（发现 8）：巡检一并复位——关开关后 5s 空转线程不再驻留到项目 dispose
+        // （取消任务而非关执行器，见 stopMonitor 注释；再开启时 ensureMonitorStarted 照常重排）
+        stopMonitor()
         updateOnline()
         // T-PS5-04：会话全清 → 推断 URL 清条目（方言推断回落数据源 URL）
         onSessionLifecycleChanged()

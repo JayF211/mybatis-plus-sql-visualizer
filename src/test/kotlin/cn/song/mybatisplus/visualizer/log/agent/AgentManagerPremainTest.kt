@@ -256,6 +256,57 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
 
     // ---------- attach 跳过与窗口失效 ----------
 
+    /**
+     * T-PerfSweep6 T-PS6-06：去重判据须为 [AgentManager] 的 `isSessionHealthy`（socket 未断**且**
+     * 心跳窗口内有过帧），而非只判 socket 未断的 `alive`。
+     *
+     * 缺陷面：半死会话（应用侧停摆、连接还在）会把同 pid 的**真重连**挡下一次，而挡下的这一次
+     * 恰恰是「应用重启/卡死恢复」场景里最需要的那一次；半死会话随后仍会被巡检摘除，等于白挡。
+     *
+     * 判据形态：去重若命中，服务端会**主动关闭**本次连接（客户端读到 EOF）。故读到的首字节为 -1
+     * 即「被当成重复连接丢弃」；非 -1（服务端写了 CONFIG 帧）或读超时（连接仍在服务端手里）都表示放行。
+     */
+    fun test半死会话语境下同pid重连放行() {
+        enableAndConfirm()
+        val port = portOf(manager.preparePremainVmOption()!!)
+        val pid = 717_001L
+        // 可控时钟：把会话建好后再推过心跳窗口，制造「alive 但心跳过期」的半死会话
+        var now = 2_000_000L
+        manager.clockMs = { now }
+        manager.heartbeatWindowMs = 30_000L
+
+        val first = Socket("127.0.0.1", port)
+        writeFrame(first, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+        awaitTrue("首条 premain 会话未建立") { manager.sessions.size == 1 }
+        assertEquals("首条会话 pid", pid, manager.sessions[0].pid)
+
+        // 推进时钟越窗：会话进入「alive 但心跳过期」——本用例**不**调 sweepOffline（保持半死在表内）
+        now += 60_000L
+        assertTrue("前置：会话 socket 未断（半死形态）", manager.sessions[0].alive)
+        assertTrue(
+            "前置：半死会话仍须在表内——被巡检摘除则本次去重判定根本不发生，用例失去判别力",
+            manager.sessions.any { it.pid == pid },
+        )
+
+        val second = Socket("127.0.0.1", port)
+        second.soTimeout = 1_500
+        writeFrame(second, AgentProtocol.CMD_HELLO, """{"pid":$pid}""")
+        val firstByte = try {
+            DataInputStream(second.getInputStream()).read()
+        } catch (e: java.net.SocketTimeoutException) {
+            0 // 服务端既未写帧也未关连接 = 连接被正常接收
+        }
+        assertTrue(
+            "半死会话语境下同 pid 重连必须放行——首字节 $firstByte 为 -1 表示服务端按重复连接关闭了它" +
+                "（去重判据仍是 alive 而非 isSessionHealthy）",
+            firstByte != -1,
+        )
+        // 巡检懒启的兜底清扫可能已把半死会话摘掉，故只断言「有该 pid 的会话在场」
+        awaitTrue("重连后应有该 pid 的活动会话") { manager.sessions.any { it.pid == pid } }
+        first.close()
+        second.close()
+    }
+
     fun testpremain通道在场_attach不排队() {
         enableAndConfirm()
         manager.preparePremainVmOption()

@@ -21,6 +21,9 @@ import java.net.Socket;
  * 于是「静默 10s 发心跳」实际要 50 轮 ≈ 60s——首条心跳永远赶不上 IDE 侧 30s 在线窗口，
  * 增强捕获会话建立后 30 秒必被摘除（实测：HELLO +17ms，首条 HEARTBEAT +60633ms）。
  * 现以 [lastOutboundMs]（最近一次出站帧的时刻）为准，每轮比较墙钟。
+ *
+ * T-PerfSweep6 T-PS6-05：退避复位点由「连上即复位」后移到「连接存活超过 [BACKOFF_RESET_AFTER_MS]
+ * 才复位」，并对连续「连上即被关」计满 [MAX_FAST_DROPS] 次后放弃该端口（性能报告发现 5 / 发现 9）。
  */
 final class SenderLoop implements Runnable {
 
@@ -43,10 +46,57 @@ final class SenderLoop implements Runnable {
     /** 入站读超时下限（防注入极小间隔时退化为忙轮询）。 */
     private static final int CONFIG_READ_TIMEOUT_MIN_MS = 50;
 
+    /** 初始退避（毫秒；与修复前逐值一致）。 */
+    private static final long BACKOFF_INITIAL_MS = 1_000L;
+
+    /** 退避上限（毫秒；与修复前逐值一致）。 */
+    private static final long BACKOFF_MAX_MS = 5_000L;
+
+    /**
+     * 退避复位阈值（毫秒，T-PerfSweep6 T-PS6-05）。
+     *
+     * **复位点后移**：此前 `backoffMs = 1000` 打在「socket 连上」处——只要 TCP 握手成功就算成功，
+     * 于是「连上即被关」（attach 端口 accept 后即释放，或端口被无关进程复用）这种**必然失败**的
+     * 连接每轮都把退避打回 1s，agent 以固定短节奏对着一个不存在的对端写帧（性能报告发现 9）。
+     * 现在改为：连接**存活**超过本阈值才算「一次正常掉线」，才复位退避与快速断开计数。
+     * 取值 2s 远小于任何真实会话寿命（IDE 侧在线窗口 30s），故正常路径的复位时机体感不变
+     * （正常连接掉线时阈值必已满足，退避照旧回到 1s）。
+     */
+    private static final long BACKOFF_RESET_AFTER_MS = 2_000L;
+
+    /**
+     * 连续「连上即被关」次数上限（T-PerfSweep6 T-PS6-05 / 性能报告发现 9）。
+     *
+     * 达到即**放弃该端口**并退出重连循环：连续这么多次「握手成功、随即断开」已不是「IDE 侧还没起来」
+     * 而是「这个端口上坐的不是本插件的监听者」（端口复用）——继续按 1s→5s 退避写帧，轻则空转，
+     * 重则向无关进程投递帧。仅统计**已建连后快速断开**者；`Connection refused` 一类不算（那是
+     * 「IDE 侧端口尚未就绪」的正常早期形态，须继续重试）。
+     *
+     * 放弃重试是安全的：通道一旦关闭（运行结束 / 上限 / 端口被复用），同端口不会再出现本插件的
+     * 监听者，重试本就无意义（新一次 Run 会前置协商**新**端口并重新注入 agent）。
+     */
+    private static final int MAX_FAST_DROPS = 10;
+
     private final int serverPort;
+    private final long backoffInitialMs;
+    private final long backoffMaxMs;
+    private final long backoffResetAfterMs;
+    private final int maxFastDrops;
 
     SenderLoop(int serverPort) {
+        this(serverPort, BACKOFF_INITIAL_MS, BACKOFF_MAX_MS, BACKOFF_RESET_AFTER_MS, MAX_FAST_DROPS);
+    }
+
+    /**
+     * 退避参数注入构造器（同包测试缝）：生产路径一律走单参构造器 + 上列常量。
+     * 退避节奏是秒级，靠系统属性压时间会给生产侧多出一个可配置面，故改为构造器注入。
+     */
+    SenderLoop(int serverPort, long backoffInitialMs, long backoffMaxMs, long backoffResetAfterMs, int maxFastDrops) {
         this.serverPort = serverPort;
+        this.backoffInitialMs = backoffInitialMs;
+        this.backoffMaxMs = backoffMaxMs;
+        this.backoffResetAfterMs = backoffResetAfterMs;
+        this.maxFastDrops = maxFastDrops;
     }
 
     /** 心跳间隔：系统属性 [HEARTBEAT_MS_PROP] 优先，解析失败/非正数回落 [DEFAULT_HEARTBEAT_MS]。 */
@@ -83,15 +133,20 @@ final class SenderLoop implements Runnable {
 
     @Override
     public void run() {
-        long backoffMs = 1000;
+        long backoffMs = backoffInitialMs;
+        int fastDrops = 0;
         while (true) {
             Socket socket = null;
+            boolean connected = false;
+            final long attemptStartMs = System.currentTimeMillis();
             try {
                 socket = new Socket("127.0.0.1", serverPort);
+                connected = true;
                 final long heartbeatIntervalMs = resolveHeartbeatIntervalMs();
                 socket.setSoTimeout(configReadTimeoutMs(heartbeatIntervalMs));
                 socket.setTcpNoDelay(true);
-                backoffMs = 1000; // 连接成功：退避复位
+                // T-PerfSweep6 T-PS6-05：此处**不再**复位退避——「连上」不等于「连对」，
+                // 复位点后移到 catch 块的「存活超过 [backoffResetAfterMs]」分支。
 
                 final DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                 final DataInputStream in = new DataInputStream(socket.getInputStream());
@@ -142,12 +197,30 @@ final class SenderLoop implements Runnable {
                 }
             } catch (Throwable t) {
                 closeQuietly(socket);
+                // T-PerfSweep6 T-PS6-05：退避复位点后移 + 「连上即被关」连续计数。
+                // 判据只看「是否建连成功」与「存活时长」，与异常类型无关（断开形态多样：
+                // EOFException / SocketException / 读超时后写失败…，逐类型分支必漏）。
+                final long aliveMs = System.currentTimeMillis() - attemptStartMs;
+                if (connected && aliveMs < backoffResetAfterMs) {
+                    // 连上即被关：**不复位**退避（下一轮等待翻倍），并累计快速断开计数
+                    fastDrops++;
+                    if (fastDrops >= maxFastDrops) {
+                        System.err.println("[SqlVisAgent] SenderLoop: 端口 " + serverPort
+                                + " 连续 " + fastDrops + " 次「连上即被关」——放弃该端口重试"
+                                + "（该端口上的监听者已不是本插件，继续写帧只会空转或投错对端）");
+                        return;
+                    }
+                } else if (connected) {
+                    // 连接存活过阈值 = 一次正常掉线：退避与快速断开计数一并复位
+                    backoffMs = backoffInitialMs;
+                    fastDrops = 0;
+                }
                 try {
                     Thread.sleep(backoffMs);
                 } catch (InterruptedException ie) {
                     return;
                 }
-                backoffMs = Math.min(backoffMs * 2, 5000);
+                backoffMs = Math.min(backoffMs * 2, backoffMaxMs);
             } finally {
                 closeQuietly(socket);
             }

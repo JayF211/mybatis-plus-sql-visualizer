@@ -149,6 +149,9 @@ object NativeDatabaseDiagramSupport {
      */
     private fun registerJoinForeignKeys(model: DiagramModel, located: Map<String, DbElement>) {
         clearJoinFkState()
+        // T-PerfSweep6 T-PS6-07：本次建图的日志探针复位——建图首行 `getForeignKeys` 回调打 INFO、
+        // 其余 DEBUG，故每次建图都要把「首行」还给本次（纯 JVM 对象，无 database jar 也能加载）
+        JoinVirtualFkProbe.reset()
         for ((name, element) in located) {
             // DbTable 同时实现 DbElement 与 DasTable；定位链取到的正是它，
             // 且它就是 dataModel.addElement 收到的那个实例（calculateEdges 的 nodeMap 键）

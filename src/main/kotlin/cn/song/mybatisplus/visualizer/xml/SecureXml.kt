@@ -48,6 +48,20 @@ class XmlEntityExpansionException(message: String) : RuntimeException(message)
  *
  * D1=A 定案（2026-09-19）：内联 DTD 子集**维持放行**（内部实体照旧可用），只加上述上限；
  * 收紧为拒绝的 B/C 方案已弃用（留档于开发计划 §三）。
+ *
+ * **T-PerfSweep6 T-PS6-03（性能报告发现 3②）：工厂/构建器按线程复用**。此前每次 [parse] 都
+ * `DocumentBuilderFactory.newInstance()`（实测 125µs/次 ≈ 单次解析的 8%），而安全配置是**常量**、
+ * 工厂本身无可变状态——「无状态 object」的形态在此处让每个调用方白付一次 JAXP 工厂装配。
+ * 现按线程缓存（[factoryCache] / [builderCache]）：`DocumentBuilderFactory` 与 `DocumentBuilder`
+ * **都不是线程安全的**，故用 `ThreadLocal` 而非共享单例。
+ *
+ * 缓存**只对默认回调路径生效**：传自定义 `onUnsupportedFeature` 的调用（测试收集器）一律现建现用，
+ * 否则「不支持 feature 的告警」只会在每线程首次构造时上报一次，观测面被缓存吃掉。
+ *
+ * 预扫（[checkEntityExpansion]）**不受本缓存影响**：它是文本级静态扫描，每次 [parse] 都照跑，
+ * 语义不削弱。
+ *
+ * 内存面（计划 §六 登记）：工厂/构建器是轻量对象，随平台池线程存活；线程数有界 ⇒ 量级可忽略。
  */
 internal object SecureXml {
 
@@ -80,23 +94,69 @@ internal object SecureXml {
     /** 单实体展开估算字符数上限（真实内部实体是枚举/状态码级短值，64K 留足余量）。 */
     const val MAX_ENTITY_EXPANSION_CHARS = 65_536L
 
+    // ---------------------------------------------------------------- 工厂/构建器缓存（T-PS6-03②）
+
+    /**
+     * 默认回调单例（缓存路径的判据）。
+     *
+     * 必须是**单例**：`::warnUnsupportedFeature` 每次求值都新建一个函数对象，直接拿默认参数表达式
+     * 做 `===` 比较永远不成立（缓存形同虚设）。
+     */
+    private val DEFAULT_ON_UNSUPPORTED: (String) -> Unit = ::warnUnsupportedFeature
+
+    /** 按线程复用的安全配置工厂（`DocumentBuilderFactory` 非线程安全，不能共享单例）。 */
+    private val factoryCache = ThreadLocal<DocumentBuilderFactory?>()
+
+    /** 按线程复用的构建器（`DocumentBuilder` 同样非线程安全；工厂缓存的下游）。 */
+    private val builderCache = ThreadLocal<DocumentBuilder?>()
+
     // ---------------------------------------------------------------- 解析入口
 
     /** 解析 XML 文本：先过膨胀预扫（[checkEntityExpansion]），再走安全配置解析器。 */
-    fun parse(fileText: String, onUnsupportedFeature: (String) -> Unit = ::warnUnsupportedFeature): Document {
+    fun parse(fileText: String, onUnsupportedFeature: (String) -> Unit = DEFAULT_ON_UNSUPPORTED): Document {
+        // 预扫**不受**工厂/构建器缓存影响：文本级静态扫描，每次解析照跑（T-PS6-03 的硬约束）
         checkEntityExpansion(fileText)
         return newDocumentBuilder(onUnsupportedFeature).parse(InputSource(StringReader(fileText)))
     }
 
     /** 安全配置的 [DocumentBuilder]（外部 DTD 读取拦为空 → 不联网）。 */
-    fun newDocumentBuilder(onUnsupportedFeature: (String) -> Unit = ::warnUnsupportedFeature): DocumentBuilder =
-        newDocumentBuilderFactory(onUnsupportedFeature).newDocumentBuilder().apply {
+    fun newDocumentBuilder(onUnsupportedFeature: (String) -> Unit = DEFAULT_ON_UNSUPPORTED): DocumentBuilder {
+        if (onUnsupportedFeature === DEFAULT_ON_UNSUPPORTED) {
+            val cached = builderCache.get()
+            if (cached != null) return cached
+            val created = newDocumentBuilderFactory(DEFAULT_ON_UNSUPPORTED).newDocumentBuilder().apply {
+                setEntityResolver(entityResolver())
+            }
+            builderCache.set(created)
+            return created
+        }
+        return newDocumentBuilderFactory(onUnsupportedFeature).newDocumentBuilder().apply {
             setEntityResolver(entityResolver())
         }
+    }
 
-    /** 安全配置的 [DocumentBuilderFactory]（配置唯一落点；[onUnsupportedFeature] 供测试注入收集器）。 */
+    /**
+     * 安全配置的 [DocumentBuilderFactory]（配置唯一落点；[onUnsupportedFeature] 供测试注入收集器）。
+     *
+     * T-PS6-03②：走默认回调（[DEFAULT_ON_UNSUPPORTED]）时按线程复用——安全配置是常量、工厂无状态，
+     * 而 `newInstance()` 每次约 125µs。传自定义回调的调用**不复用**：缓存会把「feature 不被支持」
+     * 的告警压到每线程一次，测试收集器（`SecureXmlTest`）与排障都依赖每次都上报。
+     */
     fun newDocumentBuilderFactory(
-        onUnsupportedFeature: (String) -> Unit = ::warnUnsupportedFeature,
+        onUnsupportedFeature: (String) -> Unit = DEFAULT_ON_UNSUPPORTED,
+    ): DocumentBuilderFactory {
+        if (onUnsupportedFeature === DEFAULT_ON_UNSUPPORTED) {
+            val cached = factoryCache.get()
+            if (cached != null) return cached
+            val created = buildDocumentBuilderFactory(DEFAULT_ON_UNSUPPORTED)
+            factoryCache.set(created)
+            return created
+        }
+        return buildDocumentBuilderFactory(onUnsupportedFeature)
+    }
+
+    private fun buildDocumentBuilderFactory(
+        onUnsupportedFeature: (String) -> Unit,
     ): DocumentBuilderFactory = DocumentBuilderFactory.newInstance().apply {
         applyFeature(this, XMLConstants.FEATURE_SECURE_PROCESSING, true, onUnsupportedFeature)
         applyFeature(this, DOCTYPE_DECL_FEATURE, false, onUnsupportedFeature)

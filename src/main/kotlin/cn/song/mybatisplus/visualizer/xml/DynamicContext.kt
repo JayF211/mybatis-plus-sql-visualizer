@@ -88,49 +88,65 @@ open class DynamicContext(
 }
 
 /**
- * 判重错误表（T-FS-07）：LinkedHashSet 语义的 [MutableList]——保首现顺序、同文案只留一行。
+ * 判重错误表（T-FS-07）：保首现顺序、同文案只留一行的 [MutableList]。
  *
  * 只用于 [DynamicContext.errors]（MyBatis 无此概念，属预览引擎专用扩展）；保留 MutableList 形态
  * 使既有写入点（`context.errors += msg`）与既有测试无需改动。`add(index, element)` 忽略索引——
  * 判重集合无插入位置语义，仓内既有写入只有 `+=` / `add(msg)` 两种形态。
  *
- * **只支持「追加 + 按值删」语义，不支持位置型写入**（T-FS-07 独立复核注记）：`add(index, element)`
- * 忽略索引、`set(index, element)` 把新值挪到末尾（且新值已存在时会缩容）。当前仓内对 `.errors`
- * 无任何位置型调用点（`listIterator().set/add`、`sort`、`subList` 写入、`addAll(index, …)` 全仓零处），
- * 故无实际后果；日后若有人用位置型操作，行为会静默偏离 List 契约（`modCount` 也不自增，CME 保护失效）
- * ——需要位置语义时应改用普通 `mutableListOf`，而不是改本类。
+ * **T-PerfSweep6 T-PS6-08（性能报告发现 10）：列表 + 判重集合双结构**。此前用 `LinkedHashSet` 单结构
+ * 冒充 [MutableList]，`get(index)` 走 `elementAt(index)` = 逐节点前进的 **O(n)**；而 `AbstractMutableList`
+ * 的 `equals`/`hashCode`/`subList`/`indexOf` 与 Kotlin 的 `listIterator()` 默认实现都按 index 遍历
+ * ——一次 `errors == other` 比较就是 O(n²)。现改为 [items]（ArrayList，承担顺序与随机访问）+
+ * [seen]（HashSet，承担 O(1) 判重），两个结构在所有写点同步维护。
+ *
+ * **仍不支持位置型写入语义**（T-FS-07 复核注记沿用）：`add(index, element)` 忽略索引、
+ * `set(index, element)` 把新值挪到末尾（且新值已存在时会缩容）。当前仓内对 `.errors` 无任何位置型
+ * 调用点，故无实际后果；需要位置语义时应改用普通 `mutableListOf`，而不是改本类。
+ * `modCount` 沿用既有形态（不自增）：本类不是并发容器，仓内也无「边遍历边写」的调用点。
  */
 private class DedupErrorList : AbstractMutableList<String>() {
 
-    private val seen = LinkedHashSet<String>()
+    /** 首现顺序 + 随机访问（[get] O(1)）。 */
+    private val items = ArrayList<String>()
 
-    override val size: Int get() = seen.size
+    /** 判重集合（与 [items] 严格同集，所有写点成对维护）。 */
+    private val seen = HashSet<String>()
 
-    override fun get(index: Int): String = seen.elementAt(index)
+    override val size: Int get() = items.size
+
+    override fun get(index: Int): String = items[index]
 
     override fun add(index: Int, element: String) {
-        seen.add(element)
+        if (seen.add(element)) items.add(element)
     }
 
-    override fun removeAt(index: Int): String = get(index).also { seen.remove(it) }
+    override fun removeAt(index: Int): String = items.removeAt(index).also { seen.remove(it) }
 
     /** 判重集合无「按位替换」语义：旧值移除、新值追加到末尾（仓内无调用点，仅为满足 MutableList 契约）。 */
     override fun set(index: Int, element: String): String {
         val previous = get(index)
         if (previous != element) {
-            seen.remove(previous)
-            seen.add(element)
+            removeAt(index) // 旧值出表（两结构同步）
+            if (seen.add(element)) items.add(element)
         }
         return previous
     }
 
-    override fun add(element: String): Boolean = seen.add(element)
+    override fun add(element: String): Boolean {
+        if (!seen.add(element)) return false
+        items.add(element)
+        return true
+    }
 
-    override fun clear() = seen.clear()
+    override fun clear() {
+        items.clear()
+        seen.clear()
+    }
 
     override fun contains(element: String): Boolean = seen.contains(element)
 
-    override fun indexOf(element: String): Int = seen.indexOf(element)
+    override fun indexOf(element: String): Int = items.indexOf(element)
 
-    override fun iterator(): MutableIterator<String> = seen.iterator()
+    override fun iterator(): MutableIterator<String> = items.iterator()
 }

@@ -51,10 +51,32 @@ object InsertColumnInlayPlanner {
      */
     private val NON_VALUE_ENDER_KEYWORDS = setOf("DISTINCT", "ALL", "UNIQUE", "TOP", "AS")
 
-    private class Tok(val type: IElementType, val start: Int, val end: Int)
+    private class Tok(val type: IElementType, val start: Int, val end: Int) {
+        /**
+         * 惰性缓存的大写形态（T-PerfSweep6 T-PS6-01）。
+         *
+         * 同一 token 在一次规划里可能被**多次**取大写：语句起始关键字判定、`SELECT` 终止关键字判定、
+         * 别名前驱判定、列名/别名比较都走 [wordUpper]。原先每次比较都是
+         * `substring + uppercase` 两次分配（`text()` 一次、`uppercase()` 一次）；缓存后每个 token
+         * 至多分配一次，重复比较零分配。
+         *
+         * 注：Kotlin 无参 `uppercase()` 即 `Locale.ROOT` 语义（本仓既已如此），此处不额外传 locale。
+         */
+        var upper: String? = null
+    }
+
+    /**
+     * T-PerfSweep6 T-PS6-01 测试缝：[plan] 的**实际执行**次数（缓存命中不计入）。
+     *
+     * 生产链路零读取——它存在的唯一理由是让「stamp 未变不重算」这条缓存契约可被直接观测
+     * （[InsertColumnInlayPlanCache] 命中时根本不会走到本函数）。
+     */
+    internal var planInvocationCount: Int = 0
+        private set
 
     /** 规划提示位点；按扫描顺序天然升序。 */
     fun plan(sql: String): List<Hint> {
+        planInvocationCount++
         if (sql.isEmpty()) return emptyList()
         val toks = tokenize(sql)
         if (toks.isEmpty()) return emptyList()
@@ -320,7 +342,14 @@ object InsertColumnInlayPlanner {
 
     private fun text(sql: String, t: Tok): String = sql.substring(t.start, t.end)
 
-    private fun wordUpper(sql: String, t: Tok): String = text(sql, t).uppercase()
+    /** token 的大写形态（T-PS6-01：按 [Tok.upper] 记忆，重复比较零分配）。 */
+    private fun wordUpper(sql: String, t: Tok): String {
+        val cached = t.upper
+        if (cached != null) return cached
+        val upper = sql.substring(t.start, t.end).uppercase()
+        t.upper = upper
+        return upper
+    }
 
     private fun isWord(sql: String, t: Tok, word: String): Boolean = wordUpper(sql, t) == word
 

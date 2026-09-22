@@ -429,4 +429,132 @@ class RollbackSqlGeneratorTest {
         val prefixLike = generate("DELETE FROM t WHERE name LIKE 'abc%'")
         assertFalse(prefixLike.warnings.any { it.messageKey == "rollback.warn.likeWildcard" })
     }
+
+    // ======================== O-52：回滚侧 identity 包装 ========================
+
+    /** 回填 INSERT 的基准产物（无包装形态，改前改后同一读数）。 */
+    private fun backfill(
+        columns: List<String> = listOf("id", "name"),
+        rows: List<List<String?>> = listOf(listOf("1", "Tom")),
+        dialect: cn.song.mybatisplus.visualizer.sql.Dialect? = null,
+        identityColumns: List<String> = emptyList(),
+    ) = RollbackSqlGenerator.generateFromSnapshotRows(
+        table = "rt_del",
+        columns = columns,
+        rows = rows,
+        mode = RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
+        dialect = dialect,
+        identityColumns = identityColumns,
+    ).statements
+
+    /**
+     * SQL Server + 快照含 identity 列 → 回填 INSERT 成对包装（验收 2 的回滚侧）。
+     *
+     * 包装里的表名与 INSERT 里的表名同形（`rt_del` 非保留字，两侧都裸写）——回滚链全程按解析出的
+     * 文本渲染标识符（不引用），包装沿用同一形态即不会出现「一处加引号一处裸写」。
+     */
+    @Test
+    fun `快照回填_identity列经SQLServer包装`() {
+        assertEquals(
+            listOf(
+                "SET IDENTITY_INSERT rt_del ON;\n" +
+                    "INSERT INTO rt_del (id, name) VALUES (1, 'Tom');\n" +
+                    "SET IDENTITY_INSERT rt_del OFF;",
+            ),
+            backfill(
+                dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect,
+                identityColumns = listOf("id"),
+            ),
+        )
+    }
+
+    /** 列名匹配大小写不敏感（与 REVERT_INSERT 主键判定同口径）：TSV 表头形态由驱动决定。 */
+    @Test
+    fun `快照回填_identity列大小写不敏感匹配`() {
+        val statements = backfill(
+            dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect,
+            identityColumns = listOf("ID"),
+        )
+        assertTrue(statements.single().startsWith("SET IDENTITY_INSERT rt_del ON;"))
+    }
+
+    /**
+     * 向后兼容（验收 3）：旧快照（无 identity 字段）+ 无方言 → 不包装且不报错，
+     * 产物与改前逐字节相同。
+     */
+    @Test
+    fun `快照回填_旧快照无identity字段不包装`() {
+        assertEquals(
+            listOf("INSERT INTO rt_del (id, name) VALUES (1, 'Tom');"),
+            backfill(),
+        )
+    }
+
+    /**
+     * 逐字节不变（验收 1/4 的回滚侧）：identity 未知、方言未知、非包装方言三种形态都不得包装。
+     * 逐库点名非 SQL Server 方言（不按「renderInsertWrapper 是否为 null」自证）。
+     */
+    @Test
+    fun `快照回填_非包装方言与identity未知时逐字节不变`() {
+        val expected = listOf("INSERT INTO rt_del (id, name) VALUES (1, 'Tom');")
+        val sqlServer = cn.song.mybatisplus.visualizer.sql.SqlServerDialect
+        // ① 方言在但 identity 未知（空清单）
+        assertEquals(expected, backfill(dialect = sqlServer, identityColumns = emptyList()))
+        // ② identity 在但方言未知（旧登记点未传 dialect）
+        assertEquals(expected, backfill(dialect = null, identityColumns = listOf("id")))
+        // ③ identity 声明了但不在本次快照列清单内（该表的自增列不是被回填的列）
+        assertEquals(expected, backfill(dialect = sqlServer, identityColumns = listOf("other_id")))
+        // ④ 其余方言一律不包装
+        listOf(
+            cn.song.mybatisplus.visualizer.sql.MySqlDialect,
+            cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect,
+            cn.song.mybatisplus.visualizer.sql.OracleDialect,
+            cn.song.mybatisplus.visualizer.sql.DmDialect,
+            cn.song.mybatisplus.visualizer.sql.KingBaseDialect,
+            cn.song.mybatisplus.visualizer.sql.H2Dialect,
+            cn.song.mybatisplus.visualizer.sql.SqliteDialect,
+            cn.song.mybatisplus.visualizer.sql.MariaDbDialect,
+        ).forEach { dialect ->
+            assertEquals(
+                "方言 ${dialect.name} 不应包装",
+                expected,
+                backfill(dialect = dialect, identityColumns = listOf("id")),
+            )
+        }
+    }
+
+    /**
+     * 合批多条 INSERT **逐条**包装：`SET IDENTITY_INSERT` 是会话级开关且同一时刻每会话只能有一个
+     * 表为 ON，只在整段首尾各包一次会让第二条 INSERT 报 544。
+     */
+    @Test
+    fun `快照回填_多批INSERT逐条包装`() {
+        val statements = backfill(
+            columns = listOf("id", "b"),
+            rows = (1..510).map { listOf(it.toString(), "v") },
+            dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect,
+            identityColumns = listOf("id"),
+        )
+        assertEquals(2, statements.size)
+        statements.forEach { stmt ->
+            assertTrue("每条 INSERT 都应有前置开关: $stmt", stmt.startsWith("SET IDENTITY_INSERT rt_del ON;\nINSERT INTO rt_del (id, b) VALUES "))
+            assertTrue("每条 INSERT 都应有后置开关: $stmt", stmt.endsWith(";\nSET IDENTITY_INSERT rt_del OFF;"))
+        }
+    }
+
+    /** 只有 BACKFILL_INSERT 生成 INSERT——REVERT_INSERT/REVERT_UPDATE 传 identity 也不得改变产物。 */
+    @Test
+    fun `快照回填_非INSERT模式不受identity影响`() {
+        val sqlServer = cn.song.mybatisplus.visualizer.sql.SqlServerDialect
+        val reverted = RollbackSqlGenerator.generateFromSnapshotRows(
+            table = "rt_del",
+            columns = listOf("id", "name"),
+            rows = listOf(listOf("1", "Tom")),
+            mode = RollbackSqlGenerator.SnapshotMode.REVERT_INSERT,
+            primaryKeyColumns = listOf("id"),
+            dialect = sqlServer,
+            identityColumns = listOf("id"),
+        )
+        assertEquals(listOf("DELETE FROM rt_del WHERE id = 1;"), reverted.statements)
+    }
 }

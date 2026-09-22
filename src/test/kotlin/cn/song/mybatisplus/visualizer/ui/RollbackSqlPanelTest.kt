@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.sql.SqlServerDialect
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore
+import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
@@ -129,6 +131,52 @@ class RollbackSqlPanelTest : BasePlatformTestCase() {
         val panel = newPanel()
         panel.executeAdhocSql("   ")
         assertEquals(0, store().size())
+        panel.dispose()
+    }
+
+    // ======================== O-52：identity 包装链（条目 → 弹窗 → 生成器） ========================
+
+    /**
+     * O-52（T-IdentityInsertWrap）：快照条目持有的 identity 信息经弹窗传给生成器 → 回填 INSERT
+     * 成对包装。本用例钉「条目取用 + 粘贴生成」两段接线（弹窗组装细节见 RollbackSqlDialogTest；
+     * 此处只补 identity 段，写集约束下本类是该包内唯一可改的测试文件）。
+     */
+    fun testPasteBackfillWrapsIdentityInsertWhenEntryCarriesIdentity() {
+        val panel = newPanel()
+        val entry = store().register(
+            "DELETE FROM rt_del WHERE id = 1", "rt_del", "SELECT * FROM rt_del WHERE id = 1;",
+            dialect = SqlServerDialect, identityColumns = listOf("id"),
+        )
+        val dialog = RollbackSqlDialog(
+            project, panel, RollbackSqlGenerator.generate("DELETE FROM rt_del WHERE id = 1"), "DELETE", entry,
+        )
+        try {
+            dialog.pasteAreaForTest().text = "id\tname\n1\tTom"
+            dialog.generateFromPaste()
+            assertEquals(
+                "SET IDENTITY_INSERT rt_del ON;\n" +
+                    "INSERT INTO rt_del (id, name) VALUES (1, 'Tom');\n" +
+                    "SET IDENTITY_INSERT rt_del OFF;",
+                dialog.sqlTextForTest(),
+            )
+        } finally {
+            dialog.doDispose()
+            panel.dispose()
+        }
+    }
+
+    /**
+     * O-52 **现状登记（已知缺口，不是期望行为）**：生产登记点
+     * [SqlPreviewPanel.executeAdhocSql] → `registerRollbackSnapshotIfNeeded` 目前不传
+     * dialect/identityColumns（该文件不在本任务写集内，且预览链只持有 SQL 文本、无表结构来源），
+     * 故回滚侧包装在生产链上暂不触发。接线后本断言须一并更新。
+     */
+    fun testExecuteAdhocSqlRegistrationCarriesNoIdentityInfoYet() {
+        val panel = newPanel()
+        panel.executeAdhocSql("DELETE FROM log WHERE created < '2020-01-01'", dmlConfirmed = true)
+        val entry = store().findBySql("DELETE FROM log WHERE created < '2020-01-01'")!!
+        assertNull("现状：生产登记点未传方言 → 不包装", entry.dialect)
+        assertTrue("现状：生产登记点未传 identity 列 → 不包装", entry.identityColumns.isEmpty())
         panel.dispose()
     }
 }

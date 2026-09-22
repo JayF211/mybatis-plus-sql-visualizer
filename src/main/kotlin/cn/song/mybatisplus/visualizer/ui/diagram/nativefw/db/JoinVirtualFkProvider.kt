@@ -54,10 +54,19 @@ class JoinVirtualFkProvider : ModelRelationManager.ModelRelationProvider {
         // `(all refs)` = 两参重载（建边链），有具体表名 = 三参（getExportedKeys 的成对回问）。
         // 三者必须同现：此前日志打在 null 守卫之后，建边路径一次不留痕，日志里只有成对回问的
         // hits=1，看起来一片健康而画布没有线——排障时先看这一行是否出现。
-        LOG.info(
-            "JoinVirtualFkProvider: ${table.name} -> ${refTable?.name ?: "(all refs)"}, " +
-                "entries=${entries.size}, edges=${fks.size}",
-        )
+        //
+        // T-PerfSweep6 T-PS6-07（性能报告发现 7）：N6 后本回调**每表**一行 INFO，建图时刷出
+        // O(表数) 行 idea.log。现改为「**本次建图首行** INFO + 其余 DEBUG」：首行出现即证明 EP
+        // 被建边链触达，诊断价值（「有没有线」的二分判据）完整保留，量级降到每图一行。
+        // 复位信号来自每次建图——[NativeDatabaseDiagramSupport.registerJoinForeignKeys] 调
+        // [JoinVirtualFkProbe.reset]。
+        val line = "JoinVirtualFkProvider: ${table.name} -> ${refTable?.name ?: "(all refs)"}, " +
+            "entries=${entries.size}, edges=${fks.size}"
+        if (JoinVirtualFkProbe.claimFirstLine()) {
+            LOG.info(line)
+        } else {
+            LOG.debug(line)
+        }
         return JBIterable.of(*fks.toTypedArray())
     }
 
@@ -67,6 +76,36 @@ class JoinVirtualFkProvider : ModelRelationManager.ModelRelationProvider {
         private val LOG = com.intellij.openapi.diagnostic.Logger
             .getInstance(JoinVirtualFkProvider::class.java)
     }
+}
+
+/**
+ * T-PerfSweep6 T-PS6-07：建边日志探针的「本次建图首行」闸门（**纯 JVM，零平台类型引用**）。
+ *
+ * **为什么单独成顶层对象**：[JoinVirtualFkProvider] 实现 database 插件的
+ * `ModelRelationManager.ModelRelationProvider`，**无 database jar 的 plain `test` 分片加载不了它**；
+ * 而本闸门的语义（每次建图恰一行 INFO）恰恰是可以在无平台环境下断言的那部分。Kotlin 顶层对象
+ * 编译成独立类文件，测试只加载本对象即可，不触碰 provider 的平台接口。
+ *
+ * **语义**：每次建图前 [reset] 复位 → 该次建图第一条 `getForeignKeys` 回调 [claimFirstLine] 返回 true
+ * （调用方打 INFO），其余一律 false（打 DEBUG）。
+ *
+ * **为什么保留首行 INFO**：`(all refs)` 形态出现一次即证明 EP 被建边链触达——这是「画布没有线」
+ * 类问题的二分判据（EP 没被触达 vs 被触达但边被静默丢掉），比逐表 INFO 的边际信息量高得多。
+ */
+internal object JoinVirtualFkProbe {
+
+    private val firstLogged = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** 本次建图的首行是否由本调用取得；true = 调用方打 INFO，false = 打 DEBUG。 */
+    fun claimFirstLine(): Boolean = firstLogged.compareAndSet(false, true)
+
+    /** 每次建图前复位（[NativeDatabaseDiagramSupport.registerJoinForeignKeys] 调用）。 */
+    fun reset() {
+        firstLogged.set(false)
+    }
+
+    /** 测试缝：首行是否已被占用。 */
+    internal fun firstLineClaimedForTest(): Boolean = firstLogged.get()
 }
 
 /**

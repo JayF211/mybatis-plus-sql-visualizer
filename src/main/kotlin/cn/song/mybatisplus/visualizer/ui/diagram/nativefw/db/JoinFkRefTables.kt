@@ -22,6 +22,19 @@ import java.util.concurrent.ConcurrentHashMap
  * `JoinFkRegistryTest` 的清理里——本仓的 `test` 分片没有 database jar。
  *
  * 生命周期与注册表一致：`registerJoinForeignKeys` 登记前成对清空，`clearRegisteredFk` 成对回收。
+ *
+ * **「登记数 == 清理数」的守卫口径（T-PerfSweep6 T-PS6-08 / 性能报告发现 18）**：本对象不设自动
+ * 计数守卫（`clear()` 返回 void），清理面靠「显式语义点回收」穷尽，共三处：
+ *  1. 建图前 `NativeDatabaseDiagramSupport.registerJoinForeignKeys` 的 `clearJoinFkState`——
+ *     新图恰好只留自己的 FK；
+ *  2. 面板卸载 JOIN 图 `SqlPreviewPanel.unloadJoinDiagram` → `NativeDatabaseDiagramSupport.clearRegisteredFk`；
+ *  3. 面板 `SqlPreviewPanel.dispose` → `NativeDatabaseDiagramSupport.clearRegisteredFk`。
+ *
+ * 残留后果不是「登记有、实例缺」（那条会走 provider 的 WARN 并跳过该边），而是**跨图残留**：
+ * 新图的三参回问拿到旧图的 `DasTable` 实例，边被挂到别的图的对象上（静默画错线）。
+ * 本轮盘点结论：常规宿主下不存在「建图后既不卸载也不 dispose」的路径（图要么随面板 dispose 收口，
+ * 要么在下一次建图前被 `clearJoinFkState` 清空）。**日后新增第四种宿主形态时须回来登记**，
+ * 并确认它有回收点——否则该形态的残留无兜底。
  */
 object JoinFkRefTables {
 

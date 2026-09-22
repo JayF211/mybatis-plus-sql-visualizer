@@ -58,6 +58,11 @@ class McpSchemaContextScopeTest {
     fun tearDown() {
         McpSchemaContextService.modelTablesForTest = null
         McpSchemaContextService.dataSourceUrlForTest = null
+        // T-PerfSweep6 T-PS6-02：跨调用索引缓存是进程级静态状态，而本类各用例用**字符串** "ds"
+        // 当数据源键（生产键是 DBN 数据源对象）——字符串 equals 会让不同用例命中同一条缓存，
+        // 探针计数随用例顺序漂移（`取数_同一数据源一次调用只遍历一次模型` 曾读成 0 次）。
+        // 与本类已有的替身清理同处收口。
+        McpSchemaContextService.clearIndexCache()
     }
 
     private fun inject(model: List<McpSchemaContextService.ModelTable>, url: String? = mpDemoUrl) {
