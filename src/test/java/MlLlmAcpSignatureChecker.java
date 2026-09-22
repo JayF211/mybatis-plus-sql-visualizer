@@ -91,6 +91,29 @@ public class MlLlmAcpSignatureChecker {
             System.out.println("MISS " + PROVIDER_INTERNAL + " 不再是接口（access=0x" + Integer.toHexString(provider.access) + "）");
             missing++;
         }
+        // 加固（复核 major㉝-2）：`method(name)` 只返回**首个**同名成员，而本断言的文案是
+        // 「唯一抽象方法 getTransport(…)」。同名重载/bridge 且声明顺序靠前时，断言会读到另一个成员而漏判。
+        // 现补两项：① 名为 getTransport 的成员必须唯一；② 抽象方法集合必须恰为 {getTransport}。
+        List<Member> sameName = provider.methodsNamed("getTransport");
+        if (sameName.size() != 1) {
+            StringBuilder ds = new StringBuilder();
+            for (Member m : sameName) {
+                ds.append(ds.length() == 0 ? "" : ", ").append(m.name).append(m.descriptor);
+            }
+            System.out.println("MISS " + PROVIDER_INTERNAL + " 名为 getTransport 的成员有 " + sameName.size()
+                + " 个（" + ds + "）——本检查器只取首个，重载/bridge 会让断言落空，须人工复核");
+            missing++;
+        }
+        List<Member> abstracts = provider.abstractMethods();
+        if (abstracts.size() != 1 || !"getTransport".equals(abstracts.get(0).name)) {
+            StringBuilder ds = new StringBuilder();
+            for (Member m : abstracts) {
+                ds.append(ds.length() == 0 ? "" : ", ").append(m.name).append(m.descriptor);
+            }
+            System.out.println("MISS " + PROVIDER_INTERNAL + " 抽象方法集合不再是「唯一 getTransport」：实际 ["
+                + ds + "]（上游新增抽象方法会让 provider 契约与绕行前提一并变化）");
+            missing++;
+        }
         Member getTransport = provider.method("getTransport");
         if (getTransport == null) {
             System.out.println("MISS " + PROVIDER_INTERNAL + ".getTransport 不存在");
@@ -120,19 +143,28 @@ public class MlLlmAcpSignatureChecker {
         }
 
         // ---- 断言 ②：AcpIdeaMcpTransport 为 Enum 且枚举常量恰 [STDIO, SSE]
-        ClassFile transport = read(primary.get(TRANSPORT_ENTRY), TRANSPORT_ENTRY);
-        List<String> constants = transport.enumConstants();
-        System.out.println("TRANSPORT access=0x" + Integer.toHexString(transport.access)
-            + " super=" + transport.superName + " enumConstants=" + constants);
-        if (!transport.isEnum()) {
-            System.out.println("MISS " + TRANSPORT_INTERNAL + " 不再是 Enum（access=0x"
-                + Integer.toHexString(transport.access) + ", super=" + transport.superName + "）");
+        // 加固（复核 major㉝-1）：此前这里直接 `read(primary.get(TRANSPORT_ENTRY), …)`——制品
+        // 「有 provider 但缺 transport」时 `primary.get` 返回 null，`new ZipFile(null)` 抛
+        // NullPointerException，验收①要求的「记 MISSING 并如实登记」诊断路径整条丢失（只剩栈）。
+        // 现与 PROVIDER_ENTRY 同款先判存在，缺失即记 MISS。
+        if (!primary.containsKey(TRANSPORT_ENTRY)) {
+            System.out.println("MISS 制品未携带 " + TRANSPORT_ENTRY + "（provider 在而 transport 不在 = 制品不完整）");
             missing++;
-        }
-        if (!constants.equals(EXPECTED_TRANSPORT_CONSTANTS)) {
-            System.out.println("MISS " + TRANSPORT_INTERNAL + " 枚举常量漂移：期望 " + EXPECTED_TRANSPORT_CONSTANTS
-                + "，实际 " + constants + "（常量增减即绕行前提变化）");
-            missing++;
+        } else {
+            ClassFile transport = read(primary.get(TRANSPORT_ENTRY), TRANSPORT_ENTRY);
+            List<String> constants = transport.enumConstants();
+            System.out.println("TRANSPORT access=0x" + Integer.toHexString(transport.access)
+                + " super=" + transport.superName + " enumConstants=" + constants);
+            if (!transport.isEnum()) {
+                System.out.println("MISS " + TRANSPORT_INTERNAL + " 不再是 Enum（access=0x"
+                    + Integer.toHexString(transport.access) + ", super=" + transport.superName + "）");
+                missing++;
+            }
+            if (!constants.equals(EXPECTED_TRANSPORT_CONSTANTS)) {
+                System.out.println("MISS " + TRANSPORT_INTERNAL + " 枚举常量漂移：期望 " + EXPECTED_TRANSPORT_CONSTANTS
+                    + "，实际 " + constants + "（常量增减即绕行前提变化）");
+                missing++;
+            }
         }
 
         // ---- 断言 ①/④：AcpAgentId 为接口、含抽象 getRawId()/getFullId()、REGISTRY_PREFIX 仍为 "acp.registry."
@@ -165,6 +197,31 @@ public class MlLlmAcpSignatureChecker {
                 missing++;
             } else {
                 System.out.println("AGENT_ID_REGISTRY_PREFIX \"" + prefix.constantValue + "\"");
+            }
+        }
+
+        // ---- 断言 ⑤（加固，复核 major㉝-3）：EP 声明面。provider 类字节可以逐字节不变，而上游若
+        // 删/改 ml-llm 自身 plugin.xml 里的 EP 声明，绕行就已不再被接线——只读 class 的检查器会**继续绿**。
+        // 故补一条：制品树内找到的 plugin.xml 里必须出现 provider 的 FQCN。
+        List<String> pluginXmls = collectPluginXmls(root);
+        String providerFqcn = PROVIDER_INTERNAL.replace('/', '.');
+        if (pluginXmls.isEmpty()) {
+            System.out.println("NOTE 制品树内未找到任何 plugin.xml —— EP 面无法核验"
+                + "（布局差异，非失败；class 面断言照常生效）");
+        } else {
+            boolean declared = false;
+            for (String xml : pluginXmls) {
+                if (xml.contains(providerFqcn)) {
+                    declared = true;
+                    break;
+                }
+            }
+            if (declared) {
+                System.out.println("EP_DECLARED " + providerFqcn + "（命中 " + pluginXmls.size() + " 份 plugin.xml）");
+            } else {
+                System.out.println("MISS " + providerFqcn + " 未出现在任何 plugin.xml 的 EP 声明中"
+                    + "（扫过 " + pluginXmls.size() + " 份）——类字节可能未变，但绕行已不再被接线");
+                missing++;
             }
         }
 
@@ -235,7 +292,66 @@ public class MlLlmAcpSignatureChecker {
         }
     }
 
+    /** 收集制品树内的 plugin.xml 文本（jar 内 `META-INF/plugin.xml` + 树内独立 plugin.xml）。 */
+    private static List<String> collectPluginXmls(File root) {
+        List<String> out = new ArrayList<String>();
+        collectPluginXmls(root, out);
+        return out;
+    }
+
+    private static void collectPluginXmls(File dir, List<String> out) {
+        File[] files = dir.listFiles();
+        if (files == null) {
+            return;
+        }
+        for (File f : files) {
+            if (f.isDirectory()) {
+                collectPluginXmls(f, out);
+            } else if ("plugin.xml".equals(f.getName())) {
+                try {
+                    byte[] bytes = java.nio.file.Files.readAllBytes(f.toPath());
+                    out.add(new String(bytes, StandardCharsets.UTF_8));
+                } catch (IOException ignored) {
+                    // 读不到即当未找到（与 indexJar 同款容错）
+                }
+            } else if (f.getName().endsWith(".jar")) {
+                ZipFile zip = null;
+                try {
+                    zip = new ZipFile(f);
+                    ZipEntry e = zip.getEntry("META-INF/plugin.xml");
+                    if (e != null) {
+                        InputStream in = zip.getInputStream(e);
+                        try {
+                            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                            byte[] buf = new byte[8192];
+                            int n;
+                            while ((n = in.read(buf)) > 0) {
+                                bos.write(buf, 0, n);
+                            }
+                            out.add(new String(bos.toByteArray(), StandardCharsets.UTF_8));
+                        } finally {
+                            in.close();
+                        }
+                    }
+                } catch (IOException ignored) {
+                    // 非标准 jar 跳过
+                } finally {
+                    if (zip != null) {
+                        try {
+                            zip.close();
+                        } catch (IOException ignored) {
+                            // 关闭失败不影响结论
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private static ClassFile read(File jar, String entry) throws IOException {
+        if (jar == null) {
+            throw new IOException("no jar indexed for entry: " + entry + "（调用方应先判 containsKey）");
+        }
         ZipFile zip = new ZipFile(jar);
         try {
             ZipEntry e = zip.getEntry(entry);
@@ -327,6 +443,28 @@ public class MlLlmAcpSignatureChecker {
                 }
             }
             return null;
+        }
+
+        /** 全部同名成员（加固②：`method(name)` 只给首个，重载/bridge 下断言会落空）。 */
+        List<Member> methodsNamed(String name) {
+            List<Member> out = new ArrayList<Member>();
+            for (Member m : methods) {
+                if (m.name.equals(name)) {
+                    out.add(m);
+                }
+            }
+            return out;
+        }
+
+        /** 抽象且非静态的**声明**方法集（加固②：「唯一抽象方法」文案的判据）。 */
+        List<Member> abstractMethods() {
+            List<Member> out = new ArrayList<Member>();
+            for (Member m : methods) {
+                if ((m.access & 0x0400) != 0 && (m.access & 0x0008) == 0) {
+                    out.add(m);
+                }
+            }
+            return out;
         }
 
         Member field(String name) {
