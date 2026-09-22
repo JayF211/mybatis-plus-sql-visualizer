@@ -198,7 +198,8 @@ internal fun chooseDispatchModality(captured: ModalityState?): ModalityState
 
 - 工作树 `F:/code/Java/Gitee/SongRenShuo/mpsv-dynws`，分支 `t-dynws-writesafe`，基点 `master` `ddb694a`。
 - 代码提交 `b7ac235`（本计划 + `DynamicInstallSupport.kt` + 新测试类 + 守卫规则，4 文件 +476/−4）；
-  并入 master 前进后的 `7bb7eab` 零冲突（`3ef8236`）。
+  文档同步提交（计划实施记录 / 变更记录 / CHANGELOG）。
+- 两度并 master 均零冲突（期间 master 被并行会话推进两次）：`7bb7eab`（T-ExplainChainHardening + T-ErrorLocateUsability）→ `3ef8236`，`0abc1bb`（T-AgentResiduals）→ 见提交历史。
 - §四 T-01~T-04 全量落地；T-04 的规则形态在实施中被修正（见 §四）。
 
 ### 二、读数
@@ -206,7 +207,8 @@ internal fun chooseDispatchModality(captured: ModalityState?): ModalityState
 | 项 | 读数 | 说明 |
 |----|------|------|
 | 定向（新测试类 + 守卫类） | 32 例 / 0 失败 | 守卫类由 24 例增至 26 例（本项 +2） |
-| 全量 `testShards`（并入 master 后，清 `build/classes`+`build/kotlin` 重跑） | **498 类 / 5695 例 / 1 失败 / 0 错误 / 6 跳过** | 含本项新增 1 类 8 例；唯一失败为 **master 既有**（见 §五） |
+| 全量 `testShards`（并入 master 后，清 `build/classes`+`build/kotlin` 重跑） | **498 类 / 5695 例 / 1 失败 / 0 错误 / 6 跳过** | `7bb7eab` 并轨点读数；含本项新增 1 类 8 例 |
+| 全量 `testShards`（再并 `0abc1bb` 后的最终树，即待并入 master 的那棵树） | **499 类 / 5705 例 / 1 失败 / 0 错误 / 6 跳过** | 两段链读数（另一段来自 T-AgentResiduals 自身门禁）；唯一失败仍为 **master 既有**（见 §五） |
 
 ### 三、反向验证（两臂；均临时改动 → 必红 → 逐字节还原，`sha256` 还原前后一致）
 
@@ -242,6 +244,15 @@ internal fun chooseDispatchModality(captured: ModalityState?): ModalityState
   仅占位」），零产出点故被枚举可达性守卫判死常量。本项 diff 未触及该文件
   （`git diff 7bb7eab..t-dynws-writesafe` 仅 4 文件），系并入 master 时带进来的既有红；该任务有在途复核
   会话，本项**登记不修**。
+- **环境噪音（已如实登记，非代码问题）**：①首轮门禁 5 例 `ConnectionErrorClassifierTest` `NoSuchMethodError`
+  经清 `build/classes` + `build/kotlin` 重跑证伪为增量陈旧类；②本会话一次被超时中断的 gradle 运行遗留了 3 个分片
+  测试 JVM，锁住本工作树 `build/test-sandbox/*` 的沙盒 jar 致后续 `prepareSandbox_testShardN` 失败——只 kill
+  命令行含本工作树名的进程（`mpsv-dynws`）后恢复；③共享 transform 缓存两次被并行会话的清理动作打坏
+  （`Unable to delete directory …transforms/…` / `Cannot resolve 'product-info.json'`），等待自愈后重跑即恢复
+  （未删共享缓存、未 kill 他人进程）。
+- **既有债登记（本轮不改）**：`BannedApiSourceScanTest` 的站点提取器 `invokeLaterSites` 只认 `invokeLater(`，
+  `invokeAndWait` 站点对两条既有写安全规则从未生效（本项事故点正是 `invokeAndWait` 形态）。修它属
+  T-WriteSafeCtx 规则族的面，本项以「按包 + 令牌」规则绕过该缺口，缺口本身留待该族收口。
 - **首轮门禁另有 5 例失败已证伪**：`ConnectionErrorClassifierTest` 5 例 `NoSuchMethodError`（并入 master
   后测试类解析旧构造签名），清 `build/classes` + `build/kotlin` 重跑即全绿——属回归假失败清单既有形态
   （多分支合并后的增量陈旧类）。
