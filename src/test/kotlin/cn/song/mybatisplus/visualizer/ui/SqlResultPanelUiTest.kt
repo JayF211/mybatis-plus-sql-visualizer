@@ -257,4 +257,84 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
             panel.clear()
         }
     }
+
+    /**
+     * T-ELU-01 收口契约（2026-09-23 真机走查补）：`DataSourceSelector.deliverError` 必须**互斥**投递
+     * ——富通道成功时**不得**再投旧 `onError`。
+     *
+     * 背景：本仓曾把 O-49 的收口实现在合并里丢掉（`914724c` 采信 master 侧），端态退回
+     * 「定位按钮永不出现」——真机实证：一条锚点可解析的失败语句只出红字 +「复制错误信息」，无定位按钮。
+     * 上一条用例 `testShowErrorRich_转普通错误后按钮收起` 正是**为什么**必须互斥：`showError` 会抹掉按钮。
+     *
+     * **反向验证**：把 `deliverError` 改回「先投富通道、再无条仵投旧通道」→ 本用例必红
+     * （`plainCalls` 变 1 且按钮不可见）。
+     */
+    fun testDeliverError_富通道成功时不再投旧通道_定位按钮得以保留() {
+        val panel = SqlResultPanel()
+        try {
+            val richCalls = java.util.concurrent.atomic.AtomicInteger(0)
+            val plainCalls = java.util.concurrent.atomic.AtomicInteger(0)
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.deliverError(
+                onErrorRich = { info ->
+                    richCalls.incrementAndGet()
+                    panel.showErrorRich(info, { })
+                },
+                onError = { msg ->
+                    plainCalls.incrementAndGet()
+                    panel.showError(msg)
+                },
+                cause = null,
+                message = "boom: Invalid object name 'no_such_table_xyz'.",
+                sqlMaxLength = 128,
+            )
+            waitForEdt()
+            assertEquals("富通道应被投递一次", 1, richCalls.get())
+            assertEquals("旧通道不得再被投递（互斥）", 0, plainCalls.get())
+            assertTrue("定位按钮应可见（未被旧通道抹除）", locateButton(panel)!!.isVisible)
+        } finally {
+            panel.clear()
+        }
+    }
+
+    /** 无富通道消费方时回退旧通道；富通道抛异常时同样回退——不让「结构化」这一增强吞掉错误呈现。 */
+    fun testDeliverError_无富通道或富通道抛异常时回退旧通道() {
+        val panel1 = SqlResultPanel()
+        try {
+            val plain = java.util.concurrent.atomic.AtomicInteger(0)
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.deliverError(
+                onErrorRich = null,
+                onError = { m ->
+                    plain.incrementAndGet()
+                    panel1.showError(m)
+                },
+                cause = null,
+                message = "boom",
+                sqlMaxLength = null,
+            )
+            waitForEdt()
+            assertEquals("无富通道时必须回退旧通道", 1, plain.get())
+            assertEquals("仍应进入 ERROR 态", "ERROR", panel1.stateForTest())
+        } finally {
+            panel1.clear()
+        }
+        val panel2 = SqlResultPanel()
+        try {
+            val plain = java.util.concurrent.atomic.AtomicInteger(0)
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.deliverError(
+                onErrorRich = { throw IllegalStateException("rich boom") },
+                onError = { m ->
+                    plain.incrementAndGet()
+                    panel2.showError(m)
+                },
+                cause = null,
+                message = "boom2",
+                sqlMaxLength = null,
+            )
+            waitForEdt()
+            assertEquals("富通道抛异常时必须回退旧通道", 1, plain.get())
+            assertEquals("仍应进入 ERROR 态", "ERROR", panel2.stateForTest())
+        } finally {
+            panel2.clear()
+        }
+    }
 }

@@ -860,6 +860,12 @@ class GuardSelfTestCoverageMetaGuardTest {
                 emptyList(),
                 "断言直接内联在 @Test；repoRoot/readArguments/lineOf 为夹具（T-ELU-03 接线守卫）",
             ),
+            GuardEntry(
+                "database/CatalogCrudDialectWiringGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test；repoRoot/isInsideComment/readArguments/lineOf 为夹具" +
+                    "（2026-09-23 真机走查配套：目录来源 CRUD 必须按表所属项目解析方言）",
+            ),
             // ---- 本元守卫自身 ----
             GuardEntry(
                 "convention/GuardSelfTestCoverageMetaGuardTest.kt",

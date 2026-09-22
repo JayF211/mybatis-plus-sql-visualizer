@@ -35,11 +35,22 @@ class ErrorPositionWiringGuardTest {
 
     private val callSite = Regex("""ErrorPositionExtractor\.(buildInfo|extractPosition)\s*\(""")
 
+    /**
+     * T-ELU-01 收口（`deliverError`）的调用点。
+     *
+     * 2026-09-23 真机走查恢复了被合并丢掉的 `deliverError` 后，生产链的**六个**错误投递点
+     * （提交链三处 + 控制台历史三处）全部改走它，`buildInfo` 的直接调用在生产代码里只剩
+     * `deliverError` 内部一处——扫描面若仍只认「提取调用」，这条守卫就退化成「只看一处」。
+     * 故把投递调用一并纳入：**每个投递点都必须把被执行文本长度带进 `deliverError`**。
+     */
+    private val deliveryCallSite = Regex("""(?<![\w.])deliverError\s*\(""")
+
     @Test
     fun `生产链位置提取调用都传了被执行文本长度`() {
         val root = repoRoot()
         val offenders = mutableListOf<String>()
         var checked = 0
+        var deliveries = 0
         File(root, "src/main/kotlin").walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
             .forEach { file ->
@@ -47,18 +58,46 @@ class ErrorPositionWiringGuardTest {
                 if (rel in exemptFiles) return@forEach
                 val text = file.readText()
                 for (m in callSite.findAll(text)) {
+                    // 注释里的**提及**不是调用点（判定内联而非独立 Boolean 函数：后者会被
+                    // GuardSelfTestCoverageMetaGuardTest 要求逐条登记）
+                    val cs1 = text.lastIndexOf('\n', m.range.first - 1).let { if (it < 0) 0 else it + 1 }
+                    val pre1 = text.substring(cs1, m.range.first)
+                    if (pre1.contains("//") || pre1.trimStart().startsWith("*") || pre1.trimStart().startsWith("/*")) continue
                     val args = readArguments(text, m.range.last + 1) ?: run {
                         offenders += "$rel:${lineOf(text, m.range.first)} 调用实参无法配对（形态变更，请更新守卫）"
                         continue
                     }
                     checked++
-                    if (!args.contains(".length")) {
+                    // 允许两种形态：① 直接给长度表达式（`.length`）；② `deliverError` 内部的**转发**——
+                    // 它把收到的 `sqlMaxLength` 原样交给 `buildInfo`，实际取值由投递点保证，而投递点
+                    // 由下面的 deliveryCallSite 扫描（≥6 处、必须含 `.length`）逐个钉住。
+                    if (!args.contains(".length") && !args.contains("sqlMaxLength")) {
                         offenders += "$rel:${lineOf(text, m.range.first)} ${m.groupValues[1]} 未传被执行文本长度" +
                             "（实参：${args.trim().replace('\n', ' ').take(120)}）"
                     }
                 }
+                for (m in deliveryCallSite.findAll(text)) {
+                    val cs2 = text.lastIndexOf('\n', m.range.first - 1).let { if (it < 0) 0 else it + 1 }
+                    val pre2 = text.substring(cs2, m.range.first)
+                    if (pre2.contains("//") || pre2.trimStart().startsWith("*") || pre2.trimStart().startsWith("/*")) continue
+                    // 定义处 `internal fun deliverError(` 不是调用点
+                    if (text.substring(0, m.range.first).trimEnd().endsWith("fun")) continue
+                    val args = readArguments(text, m.range.last + 1) ?: run {
+                        offenders += "$rel:${lineOf(text, m.range.first)} deliverError 实参无法配对（形态变更，请更新守卫）"
+                        continue
+                    }
+                    deliveries++
+                    if (!args.contains(".length")) {
+                        offenders += "$rel:${lineOf(text, m.range.first)} deliverError 未传被执行文本长度" +
+                            "（实参：${args.trim().replace('\n', ' ').take(120)}）"
+                    }
+                }
             }
-        assertTrue("守卫未扫到任何调用点——扫描规则已失效（空绿）：$checked", checked >= 4)
+        assertTrue("守卫未扫到任何位置提取调用点——扫描规则已失效（空绿）：$checked", checked >= 1)
+        assertTrue(
+            "守卫未扫到任何错误投递收口调用点——扫描规则已失效（空绿）：$deliveries（期望 ≥6：提交链三处 + 控制台历史三处）",
+            deliveries >= 6,
+        )
         assertTrue(
             "生产链位置提取必须传被执行文本长度（越界钳制的生效前提），违规点：\n" +
                 offenders.joinToString("\n"),
