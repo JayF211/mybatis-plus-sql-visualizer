@@ -43,4 +43,14 @@ public record ExecutionErrorInfo(
     public ExecutionErrorInfo(@org.jetbrains.annotations.NotNull String message) {
         this(message, null, null, null, null, null, null);
     }
+
+    /** 六参缺省形态（{@code executedSqlLength} 缺省，Kotlin 默认参数的等价重载）。 */
+    public ExecutionErrorInfo(@org.jetbrains.annotations.NotNull String message,
+        @org.jetbrains.annotations.Nullable String sqlState,
+        @org.jetbrains.annotations.Nullable Integer errorCode,
+        @org.jetbrains.annotations.Nullable Integer positionChar,
+        @org.jetbrains.annotations.Nullable Integer lineInSql,
+        @org.jetbrains.annotations.Nullable String positionSource) {
+        this(message, sqlState, errorCode, positionChar, lineInSql, positionSource, null);
+    }
 }

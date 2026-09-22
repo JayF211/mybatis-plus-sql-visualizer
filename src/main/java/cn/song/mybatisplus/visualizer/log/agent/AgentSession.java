@@ -90,12 +90,18 @@ public class AgentSession {
     public final AtomicLong intakeDropped = new AtomicLong();
 
     /** T-AgentConfigChannel T-03：入队闸门判据（可注入测试缝；默认读 SqlLogManager.capturing）。 */
-    private BooleanSupplier listenActiveProvider = () -> {
+    private BooleanSupplier listenActiveProvider = this::defaultListenActive;
+
+    /**
+     * {@link #listenActiveProvider} 的默认判据。经方法引用挂接：字段初始化器里直接写 lambda 会
+     * 在构造期捕获尚未赋值的 {@code project}（javac「可能尚未初始化」），方法体执行时它已就绪。
+     */
+    private boolean defaultListenActive() {
         // 服务未创建/项目已销毁按 false —— 宁丢弃勿谎报（与 AgentManager.isListenActive 同口径）；
         // T-ST-02b2：读路径经 sqlLogManagerIfCreated（永不发起创建 → 不会毒化服务容器）
         SqlLogManager manager = cn.song.mybatisplus.visualizer.log.SqlLogManagerLookupKt.sqlLogManagerIfCreated(project);
         return manager != null && manager.isCapturing();
-    };
+    }
 
     /** {@link #listenActiveProvider} 读取入口（Kotlin var 属性访问器等价）。 */
     public BooleanSupplier getListenActiveProvider() {

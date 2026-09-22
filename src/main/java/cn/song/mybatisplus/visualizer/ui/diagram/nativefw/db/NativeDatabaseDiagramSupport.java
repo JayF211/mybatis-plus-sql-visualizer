@@ -215,8 +215,9 @@ public final class NativeDatabaseDiagramSupport {
             return registryMiss;
         }
 
-        /** 是否已在数据源模型里定位到目标表（区别「环境受限」与「定位成功却未接管」的分界）。 */
-        public boolean isLocatedAny() {
+        /** 是否已在数据源模型里定位到目标表（区别「环境受限」与「定位成功却未接管」的分界）。
+         *  对齐 master data class 组件名 {@code locatedAny}（record 式无前缀访问器，Kotlin 属性语法可读）。 */
+        public boolean locatedAny() {
             return nameHits > 0;
         }
     }

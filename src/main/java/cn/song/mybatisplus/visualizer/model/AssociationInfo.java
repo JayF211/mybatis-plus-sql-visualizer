@@ -54,6 +54,13 @@ public final class AssociationInfo {
                 true, null, false, false);
     }
 
+    /** 七参缺省形态（{@code hasForeignKey=true} 等 Kotlin 默认参数的等价重载）。 */
+    public AssociationInfo(String fieldName, String joinColumn, String targetTable, String targetAlias,
+                           String referencedColumnName, List<JoinColumnRef> joinColumns, String mappedBy) {
+        this(fieldName, joinColumn, targetTable, targetAlias, referencedColumnName, joinColumns, mappedBy,
+                true, null, false, false);
+    }
+
     public AssociationInfo(String fieldName, String joinColumn, String targetTable, String targetAlias,
                            String referencedColumnName, List<JoinColumnRef> joinColumns, String mappedBy,
                            boolean hasForeignKey) {
