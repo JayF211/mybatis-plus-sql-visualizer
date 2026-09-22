@@ -20,7 +20,9 @@ import java.io.File
  *     `(L<AcpAgentId 包>/AcpAgentId;)Lcom/intellij/ml/llm/agents/acp/client/AcpIdeaMcpTransport;`、
  *     类上带 `@ApiStatus.Internal`（**读 `RuntimeInvisibleAnnotations` 属性位**，不是反射）；
  *  4. `AcpAgentId.REGISTRY_PREFIX` 常量仍为 `"acp.registry."`（对上
- *     `AcpIdeaMcpTransportProviderImpl.CLAUDE_ACP_ID` 的拼接依据）。
+ *     `AcpIdeaMcpTransportProviderImpl.CLAUDE_ACP_ID` 的拼接依据）；
+ *  5. 制品树内某份 `plugin.xml` 仍声明该 EP（类字节不变而 EP 声明被删时护栏须红）；
+ *  6. **我方 impl 声明了该制品 provider 抽象方法的同描述符 getTransport**（见下）。
  *
  * **版本面 = 发现式，不是列举 243/253/262**：243/253 平台**没有** AI Assistant
  * （[AcpTransportIsolationTest] 已断言 ml-llm 在 243 沙盒缺席），故口径写「本机全部存在的 ml-llm 制品」：
@@ -43,11 +45,16 @@ import java.io.File
  * **不用桩类代替真制品**：桩刻意与真类偏离（不 `sealed`）且由本项目提供，断言桩永远绿——那是假绿的
  * 经典形态，故断言目标一律是外部制品目录。
  *
- * **已登记但不归本护栏判定的漂移**（勿当成漏报）：装机制品 262.10968.97 的 EP 接口形参包是
- * `com.intellij.ml.llm.agents.acp.api`，而 [AcpIdeaMcpTransportProviderImpl] 实现的是
- * `com.intellij.platform.acp` 包——本护栏按「制品→期望包名」登记表如实分组（两处各自成立即绿），
- * **不**对装机制品断言「包名 == 我方 impl 的包」，故该漂移不会让本护栏转红。其运行时后果
- * （EP 类链接是否真的失配）只能真机走查，未验点登记在计划 §五-5/§八。
+ * **断言 ⑥（复核 major⑯，2026-09-22 补）：我方 impl 是否真的实现了该制品的接口**。此前本护栏只核
+ * 「制品自己的 provider 长什么样」：装机制品 262.10968.97 的 provider 形参包是
+ * `com.intellij.ml.llm.agents.acp.api`，而 [AcpIdeaMcpTransportProviderImpl] 当时只声明了
+ * `com.intellij.platform.acp` 形态——按「制品→期望包名」分组**两处各自成立即绿**，于是「我方类在该
+ * 制品上根本没有实现该接口（EP 调用即 AbstractMethodError、SSE 绕行失效）」这个失配**看不见**。
+ * 现由 `--impl=<impl class 文件>` 把 impl 交进检查器，逐制品核「impl 是否声明了与 provider 抽象方法
+ * **逐字节相同**描述符的 getTransport」；两形态由 impl 的双重载覆盖（上游把 AcpAgentId 的包在两条发行线
+ * 之间搬过：262.9437.276 = 平台包，262.10968.97 = api 包，JVM 按擦除后描述符匹配 override）。
+ * **仍属未验点**：真机上两线各自「EP 真被注册 / 不抛 AbstractMethodError / SSE 通道可达」只能真机走查
+ * （登记在计划 §五/§八）。
  */
 class AcpSignatureCrossVersionTest {
 
@@ -191,10 +198,33 @@ class AcpSignatureCrossVersionTest {
             java, "-cp", checkerHome, "MlLlmAcpSignatureChecker",
             artifact.root.absolutePath, artifact.expectedPackage,
         )
+        // 断言 ⑥（复核 major⑯）：把**我方 impl 的 class 文件**交给检查器，核「impl 是否真的声明了该制品
+        // provider 的抽象方法」。不给就是「只核制品、不核我方」——那正是本轮被点名的假绿，故必须给。
+        implClassFile()?.let { command += "--impl=" + it.absolutePath }
         artifact.companions.forEach { command += it.absolutePath }
         val proc = ProcessBuilder(command).redirectErrorStream(true).start()
         val output = proc.inputStream.bufferedReader().readText()
         val exit = proc.waitFor()
         return CheckerResult(exit, output)
+    }
+
+    /**
+     * 我方 provider 实现的 class 文件（断言 ⑥ 的被核对象）。按「主源集产物目录」定位；找不到返回 null，
+     * 由调用方在报告里显式标注（不得静默当成「已核」）。
+     */
+    private fun implClassFile(): File? {
+        val relative = "cn/song/mybatisplus/visualizer/acp/AcpIdeaMcpTransportProviderImpl.class"
+        val candidates = listOf(
+            File("build/classes/kotlin/main", relative),
+            File("build/classes/kotlin/jvm/main", relative),
+        )
+        candidates.firstOrNull { it.isFile }?.let { return it }
+        // 兜底：从已加载的类取 codeSource（测试运行时主源集产物在类路径上）
+        return runCatching {
+            val clazz = Class.forName("cn.song.mybatisplus.visualizer.acp.AcpIdeaMcpTransportProviderImpl")
+            val location = File(clazz.protectionDomain.codeSource.location.toURI())
+            val f = if (location.isDirectory) File(location, relative) else location
+            f.takeIf { it.isFile }
+        }.getOrNull()
     }
 }
