@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.sqlvis.agent.hook;
 
+import cn.song.mybatisplus.sqlvis.agent.AgentState;
+
 import java.sql.Connection;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -30,9 +32,10 @@ public final class SqlHookCallbacks {
      * 连接级跳过会让「停采期间建立的连接**永远不被包装**」——连接池（Hikari 等）复用同一批连接，
      * 于是用户「先跑应用、再点开始捕获」时一条都捕不到，停采→恢复同样失效（真机现场：
      * `disabled=false` 的 CONFIG 与 ACK 均已生效，业务窗口内事件数仍为 0）。设计红线本就是
-     * 「禁用 = volatile 短路、**不卸载**」：钩子在位、逐调用零成本直返，正是
-     * {@link ConnectionHandler#invoke} 与 {@code StatementHandler.invoke} 里的 {@code isDisabled()} 短路；
-     * 连接级跳过是与该语义不一致的额外优化，已移除。
+     * 「禁用 = volatile 短路、**不卸载**」：钩子在位、逐调用零成本直返。
+     * T-AgentResiduals R5 起该红线**只落在执行点**——{@code ConnectionHandler.invoke} 顶层的
+     * {@code disabled} 短路（会让「停采期间 prepare、恢复后执行」的语句永久哑掉）已删除，
+     * 连接/语句包装一律在位，唯一闸门是 {@link StatementHandler#invoke} 的逐调用短路。
      *
      * <p>包装失败的兜底不变：{@link #dropToRaw}（自吞 + 计数 + 一次性告警），宿主应用行为不受影响。
      */
@@ -62,7 +65,9 @@ public final class SqlHookCallbacks {
      */
     static Object dropToRaw(String where, Throwable t, Object fallback) {
         final long count = DROP_FALLBACK.incrementAndGet();
-        if (WARNED_ONCE.compareAndSet(false, true)) {
+        // T-AgentResiduals R5：停采期间只计数、不打印、不占一次性名额——注意短路顺序，
+        // 停采时 CAS 不执行，名额保持未消耗（理由见上方 KDoc）。
+        if (!AgentState.isDisabled() && WARNED_ONCE.compareAndSet(false, true)) {
             System.err.println("[T-AgentProxyCL] hook 包装失败，降级为直通（本次采集失效，仅此一条告警，"
                     + "累计次数见 fallbackCount）: " + where + " -> "
                     + (t == null ? "null" : t.getClass().getName() + ": " + t.getMessage())
