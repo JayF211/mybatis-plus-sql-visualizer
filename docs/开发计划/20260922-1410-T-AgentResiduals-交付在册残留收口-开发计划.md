@@ -100,8 +100,18 @@
 
 ### 五、未做 / 留真机
 
-- **R1b 的真机效果**（标记行是否还指框架帧）需 runIde 沙盒或真机；本项只保证「数据同集 + 守卫承重」。
-- **R6**（`testDatabase` 2 例）未做——依赖本机 Database 插件/驱动环境。
+- **R1b 的真机效果**：**已在真栈上验证（2026-09-22 收口补充）**——把仓内既有的**真机 jstack 采样**（`dev-support/e2e-fake-ide/evidence/p1-stack-evidence.txt`，JDK 8 + MyBatis-Plus-Join 真实应用、`/mpj/device/rightAlias` 调用链）的帧序列喂给三份跳过表，取「首个非跳过且行号有效的帧」：
+
+  | 跳过表 | 选中帧 | 落点 |
+  |---|---|---|
+  | 旧模板表（13 项，R1b 前） | `com.github.yulichang.interceptor.MPJInterceptor.intercept` | `com/github/yulichang/interceptor/MPJInterceptor.java:85` —— **框架帧**（用户点跳转即落进第三方库） |
+  | 新模板表（58 项，R1b 后） | `cn.song.mpjdemo.service.impl.DeviceInfoServiceImpl.joinRightAlias` | `cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java:42` —— **真实用户调用点**（与面板侧 agent 通道给出的 `:42` 一致） |
+  | agent 侧 `StackLocator`（56 项） | 同上用户帧 | `:42`（与注入模板同结论，佐证「两侧同集」） |
+
+  注入拦截器位于 MPJ 外层 / 内层两种位置分别试算，结论相同。三份表前缀集已逐项核对：`agent ⊆ 插件侧 = 注入模板`，插件侧仅多两条（自身包 `cn.song.mybatisplus.visualizer.` 与 `$Proxy`——agent 侧把 `$Proxy` 写成 `contains` 判定，语义等价），与守卫 `LocatorSkipPrefixSyncTest` 登记的差异集合一致。
+
+  **仍未做**：真实 IDE 里的**观察**（标记行文本随注入物产出）——需先按迁移前提**重注入**（删 `SqlSourceInterceptor.java` 后重新注入，或手工补前缀），存量副本幂等不升级；这一步是用户侧 GUI 动作（含注入同意弹窗），未代跑。
+- **R6**（`testDatabase` 2 例）——**本工作树已绿**（驱动清单与种子链播种成功，见 §六）；其他环境若缺 Database 插件/驱动仍会红，口径保留。
 - 宽前缀（`com.alibaba.` / `org.apache.` / `com.google.`）可能跳过用户落在这些包下的业务类——与 agent 侧同取舍，模板注释已提示可自行删行。
 
 ### 六、门禁（master 工作树，合并态）
