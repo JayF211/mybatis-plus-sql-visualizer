@@ -21,7 +21,7 @@ class SqlConsoleBridgeFilterProviderTest : BasePlatformTestCase() {
     private lateinit var manager: SqlLogManager
 
     /** T-TestIsolation：本类改的是**项目服务级**共享实例（light 项目片内跨类复用）——存初值供 tearDown 复位。 */
-    private lateinit var serviceState: SqlLogManagerProjectState.Snapshot
+    private var serviceState: SqlLogManagerProjectState.Snapshot? = null
 
     override fun setUp() {
         super.setUp()
@@ -38,7 +38,7 @@ class SqlConsoleBridgeFilterProviderTest : BasePlatformTestCase() {
         manager.entries.clear()
         // 原样复位项目服务级状态（dedupeEnabled / paused / 过滤词 / 捕获态 / 桥轮询…）——
         // 否则同片后续测试类看到的是本类改造过的共享实例（T-TestIsolation）
-        SqlLogManagerProjectState.restore(manager, serviceState)
+        SqlLogManagerProjectState.restore(serviceState)
         super.tearDown()
     }
 

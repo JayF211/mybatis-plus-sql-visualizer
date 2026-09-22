@@ -1,6 +1,7 @@
 import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.jvm.tasks.Jar
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
+import java.time.Duration
 
 plugins {
     id("org.jetbrains.kotlin.jvm")
@@ -259,3 +260,39 @@ sourceSets.named("main") {
 tasks.named("processResources") {
     dependsOn(embedAgentJar)
 }
+
+// ---------- T-AgentResiduals R7：真机级探针纳发布前置（不挂 testShards） ----------
+// dev-support/e2e-fake-ide（假 IDE + `-javaagent` 注入真 Spring Boot/MPJ 应用）此前只有手动运行
+// 一条路——本轮 T-08（连接级跳过致恢复采集失效）正是靠它抓到的，却不在任何可脚本化验收里。
+// 这里包成 gradle 任务，挂到 releaseGate（发布前置一命令）而非 testShards：
+//   * 它需要真环境（本机 MySQL 3306 + demo 工程 + ~/.m2 离线依赖），不适合进日常门禁；
+//   * 它是**真机级**验收（真应用 + 真驱动 + 真控制通道），价值恰在「单元测试到不了的地方」，
+//     故作为发版前的可脚本化验收，而不是又一次单元测试。
+// 前置缺失时**硬失败并给可执行指引**——不做静默跳过（跳过会让「没验」伪装成「验过」）。
+// 环境覆盖：`-Pe2eDemoDir=` / `-Pe2eMvn=`（透传给脚本的 DEMO_DIR / MVN）。
+val e2eFakeIde = tasks.register<Exec>("e2eFakeIde") {
+    group = "verification"
+    description = "真机级端到端探针（假 IDE + -javaagent 注入真 Spring Boot/MPJ 应用）：发布前置验收。" +
+        "前置＝本机 MySQL 127.0.0.1:3306(root/root, 库 mpj_demo) + demo 工程 + ~/.m2 离线依赖；" +
+        "可用 -Pe2eDemoDir= / -Pe2eMvn= 覆盖脚本默认路径"
+    dependsOn(":sql-visualizer-agent:agentFatJar")
+    val e2eDir = layout.projectDirectory.dir("dev-support/e2e-fake-ide")
+    workingDir = e2eDir.asFile
+    // Git Bash 优先（Windows 上脚本依赖 cygpath/msys 语义）；找不到再退回 PATH 里的 bash
+    val gitBash = file("C:/Program Files/Git/bin/bash.exe")
+    commandLine(if (gitBash.isFile) gitBash.absolutePath else "bash", "run-e2e.sh")
+    // 脚本自带 300s 探针超时 + 应用启动/收口等待；给足余量（首跑含 demo classpath 生成）
+    timeout.set(Duration.ofMinutes(20))
+    // 环境覆盖透传（配置期取值，兼容配置缓存）
+    providers.gradleProperty("e2eDemoDir").orNull?.let { environment("DEMO_DIR", it) }
+    providers.gradleProperty("e2eMvn").orNull?.let { environment("MVN", it) }
+    // JDK：Gradle daemon 的 PATH 不含交互式 shell 里的本机 JDK8（脚本首跑实测 `javac: command not found`），
+    // 故显式把 JDK 交给脚本（脚本会把 $JAVA_HOME/bin 前置进 PATH）。默认取本机 JDK8，不存在则不设
+    // （留给调用方 PATH / -Pe2eJavaHome=），脚本侧另有「缺 javac 即硬失败」的检查。
+    val e2eJavaHome = providers.gradleProperty("e2eJavaHome").orNull
+        ?: file("D:/HuanJing/Java/jdk1.8.0_181").takeIf { it.isDirectory }?.absolutePath
+    e2eJavaHome?.let { environment("JAVA_HOME", it) }
+}
+// R7 时序：真机级探针放在发版链路最后——它启动真实应用并占用端口，跑在前面会与测试/门禁抢资源。
+// （与文件顶部的 verifyGate→testShards 同款做法：依赖只保证「都执行」，mustRunAfter 才定序。）
+tasks.named("e2eFakeIde") { mustRunAfter("testShards") }

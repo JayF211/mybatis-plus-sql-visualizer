@@ -44,6 +44,9 @@ final class StatementHandler implements InvocationHandler {
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
         final String name = method.getName();
+        // T-AgentResiduals R5：本短路是**唯一**的停采闸门（连接/语句包装一律在位，不再有连接级短路）。
+        // 位置有讲究：排在参数捕获（第 1 步）与批处理累积（第 2 步）之前，故停采期间既不产出事件、
+        // 也不累积参数与批 SQL——恢复采集后不会把停采期间的参数错配到恢复后的语句上。
         if (AgentState.isDisabled()) {
             return doInvoke(method, args);
         }
