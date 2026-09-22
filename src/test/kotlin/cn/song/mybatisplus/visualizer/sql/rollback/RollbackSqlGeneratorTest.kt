@@ -39,6 +39,36 @@ class RollbackSqlGeneratorTest {
         assertEquals("DELETE FROM t WHERE a = 3 AND b IS NULL;", result.statements[2])
     }
 
+    /**
+     * SQL Server 方括号引用必须能解析（2026-09-23 真机走查发现的缺陷）。
+     *
+     * 真机读数（runIde 沙盒 + 真 SQL Server 容器）：预览面板把 `DELETE FROM [user] WHERE id = 1` 执行成功后，
+     * 点「更多 → 回滚 SQL」直接弹 `无法解析 DELETE: net.sf.jsqlparser.parser.ParseException:
+     * Encountered unexpected token: "[" "[" at line 2, column 6.` —— 根因是两条解析链都调
+     * `CCJSqlParserUtil.parseStatements(sql)`（不带 feature），而 `[...]` **正是本插件为 SQL Server 产出的引用形态**
+     * （`Dialect.quoteIfNeeded` 走 `[...]`），于是「回滚 SQL」对 SQL Server 产物整体不可用。
+     * 修法＝统一走 `SqlAstParser`（只开 `allowSquareBracketQuotation`）。
+     * 判别力：把 `SqlAstParser` 的 feature 关掉 → 本用例必红（报文回到 `rollback.unable.parse`）。
+     */
+    @Test
+    fun `方括号引用的SQLServer语句可推导回滚`() {
+        // 正向：带方括号的 INSERT 必须能推导出 DELETE（文本可推导的那条路）
+        val ins = generate("INSERT INTO [user] (id, username) VALUES (1, 'alice')")
+        assertFalse(
+            "方括号引用不得落到解析失败：${ins.warnings.map { it.messageKey }}",
+            ins.warnings.any { it.messageKey == "rollback.unable.parse" },
+        )
+        assertEquals(1, ins.statements.size)
+        assertTrue("应生成 DELETE 形态回滚：${ins.statements}", ins.statements.single().startsWith("DELETE FROM"))
+
+        // 反向（同一根因）：带方括号的 DELETE 也不得报解析失败（它本就因缺快照而 UNABLE，但理由不能是「解析不了」）
+        val del = generate("DELETE FROM [user] WHERE id = 1")
+        assertFalse(
+            "方括号引用的 DELETE 不得报解析失败：${del.warnings.map { it.messageKey }}",
+            del.warnings.any { it.messageKey == "rollback.unable.parse" },
+        )
+    }
+
     @Test
     fun `NULL值渲染为IS NULL谓词`() {
         val result = generate("INSERT INTO t (a, b) VALUES (NULL, 'x')")

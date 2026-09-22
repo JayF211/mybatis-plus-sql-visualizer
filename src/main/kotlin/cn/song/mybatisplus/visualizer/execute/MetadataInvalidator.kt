@@ -82,7 +82,7 @@ object MetadataInvalidator {
      * 「同文本两次判定只解析一次」与「预筛排除路径不触达解析」。
      */
     internal var parseStatementsForTest: (String) -> List<net.sf.jsqlparser.statement.Statement> =
-        { CCJSqlParserUtil.parseStatements(it) }
+        { sql -> SqlAstParser.parseStatements(sql) }
 
     /** T-PS5-01 测试缝：清空单槽缓存（用例间隔离；生产链路无调用点）。 */
     internal fun clearParseCacheForTest() {
