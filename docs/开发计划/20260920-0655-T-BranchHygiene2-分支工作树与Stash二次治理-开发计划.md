@@ -78,7 +78,7 @@
 >
 > **本任务性质**：用户未逐条授权破坏性 git 操作（批次需求「可逆性红线」段），故**只执行只读登记**——`git branch -a` / `git worktree list` / `git stash list` 三类清单 + stash 逐条 show 留档。**零 drop、零删除、零 push、零重置**。
 
-### 7.1 三类清单实测（2026-09-22）
+### 7.1 （**本节所有计数均为实施时点读数，`HEAD=3f7853b`；独立复核 ㉛ 实测复核时已漂移为分支 7 / worktree 7 —— 引用前请重跑 git 实测**）三类清单实测（2026-09-22）
 
 | # | 对象 | 结果（实测值） | 提交/SHA | 偏离计划之处 |
 |---|------|----------------|----------|--------------|
@@ -95,11 +95,11 @@
 
 ### 7.2 stash 逐条留档（`git stash show --stat` / `-u --stat` / `-p` 实测，2026-09-22）
 
-| stash | 自述 | 内容读数 | 父提交 | 处置 |
+| stash | 自述 | 内容读数 | SHA（**stash 自身 / base / 未跟踪父**——独立复核 ㉛ 订正：原列名「父提交」把 stash 提交自身当首项列出，照列取值会得到相反读数） | 处置 |
 |---|---|---|---|---|
 | `stash@{0}` | `On master: sandbox-execcopyfix line (other session in-flight)` | 1 file changed, **2 insertions(+)**, 0 deletions（`build.gradle.kts`） | `32c3a62` / `707e76a` / `9fc9e9a` | **不 drop**（两条理由叠加：自述即「other session in-flight」，批次红线明禁「删除任何被并行会话占用的资源」；且 `build.gradle.kts` +2 行不在 master，按计划「show 出 master 不存在的独占改动即保留」判据亦保留） |
 | `stash@{1}` | `On master: wip: Kotlin->Java 转换波(actions/converter/execute/reverse/share) — 已迁移至 feature/kotlin-to-java 工作树，此处仅作备份` | 27 files changed, **3 insertions(+), 9810 deletions(-)**；加 `-u` 为 65 files changed, 10060 insertions(+), 9810 deletions(-)。被删的 `.kt` 含 `reverse/SqlToJavaConverter.kt` -347、`reverse/SqlTokenizer.kt` -116、`reverse/WrapperFormat.kt` -50、`share/SqlShareManager.kt` -130，**master 侧这些 .kt 仍在** → 形态不一致 | `37502e2` / `2521d33` / `a01f5d4` / `a8d6ff7` | **不 drop**（计划 §三 对象 7「宁留勿删」判据：show 出 master 不存在的独占改动） |
-| `stash@{2}` | `On master: diagram-refactor-wip: diagram renderer restructuring` | 10 files changed, **289 insertions(+), 600 deletions(-)**；含 `CHANGELOG.md` 17 行、`build.gradle.kts` 38 行、`ui/diagram/DiagramPanel.kt` 206 行，并**删除** `DiagramRenderTask.kt`/`SvgRasterizer.kt` 及其测试（master 侧仍在） | `92e35d6` / `44459e9` / `73eb293` | **不 drop**（同上判据：删除面在 master 侧仍存在，属独占形态） |
+| `stash@{2}` | `On master: diagram-refactor-wip: diagram renderer restructuring` | 10 files changed, **289 insertions(+), 600 deletions(-)**；含 `CHANGELOG.md` 17 行、`build.gradle.kts` 38 行、`ui/diagram/DiagramPanel.kt` 206 行，并**删除** `DiagramRenderTask.kt`/`SvgRasterizer.kt` 及其测试（**独立复核 ㉛ 订正：原写「master 侧仍在」经实测证伪**——`git cat-file -e master:<这三个路径>` 全部报 `does not exist`，删除发生在 `c58fc2b`（2026-08-26「JOIN图渲染 — PlantUML + Batik 替换为自绘Swing引擎」），且在实施时点的 HEAD 上就已不存在） | `92e35d6` / `44459e9` / `73eb293` | **不 drop**（**订正后的判据**：该 stash 的 `JoinDiagramGenerator.kt`/`DiagramPanel.kt`/`build.gradle.kts`/`CHANGELOG.md` 等 blob 与 master 侧**均不同**，确有 master 不存在的独占内容——理由成立，但原文引的「删除面 master 侧仍在」不成立） |
 | `stash@{3}` | `On master: T-M31 并行会话 log 包中间态（LogSqlRestorer 未创建，阻塞编译）` | **`git stash show --stat` 输出为空**（该 stash 只含未跟踪文件，内容在其第三父 `9d8b3ee`）；须用 `git stash show -u --stat` = 2 files changed, **144 insertions(+)**（`log/LogSqlModels.kt` +35、`log/MyBatisLogParser.kt` +109）。**blob 比对**：两文件 master 侧均存在但 **blob 不同**（stash `f6220e6`/`a2ee4ae` vs master `4ba3d85`/`ad13d01`）→ 有独占形态 | `1c4e2a4` / `ad537dc` / `f9137cc` / `9d8b3ee` | **不 drop**（独占改动；且按 `--stat` 字面判据会误判为空——本行即该坑的留档） |
 | `stash@{4}` | `On T-M30-idea243-compat: T-M31~T-M35 并行会话文档（docs/MEMORY.md + 开发计划）` | 1 file changed, **1 insertion(+)**（`docs/MEMORY.md` 索引行「20260815-1900-日志SQL还原与Wrapper实时提示及P2深化-开发计划.md」）。该索引行 **master 侧已存在**（`grep -c` = 1），故无独占内容；stash 挂在**已不存在的分支** `T-M30-idea243-compat` 上（悬空引用） | `4e42129` / `fac8496` / `e28f056` | **不 drop**（内容无独占，按判据本属可 drop 项；但 drop 是本任务唯一不可逆动作——`drop` 后 `refs/stash` reflog 条目消失、只能靠 `git fsck --unreachable` 捞回，故本波**只留档不 drop**，留给用户授权后的一轮） |
 
@@ -121,7 +121,7 @@
 
 ### 7.4 共享文档回填（本批次唯一写者）
 
-本批次 8 个代码任务的计划文档均要求「CHANGELOG `[Unreleased]` + 变更记录行 + 报告落地备注」，这些文件被多方共同要求同步；集中到本任务统一写入，条目与真实提交号见 §八。**实际落点与任务说明的差异**（逐条实测）：
+本批次 8 个代码任务的计划文档中 **7 份**要求「CHANGELOG `[Unreleased]` + 变更记录行 + 报告落地备注」（**独立复核 ㉜ 订正：原文写「8 份均要求」，与本段下文「8 份中 7 份点名」自相矛盾**；`20260921-2306-T-PerfSweep6` 对两者均 0 命中，其条目由本任务据该计划 §八 逐项落地表 + 提交 `3f7853b` 补写）；这些文件被多方共同要求同步；集中到本任务统一写入，条目与真实提交号见 §八。**实际落点与任务说明的差异**（逐条实测）：
 
 - CHANGELOG / `docs/变更记录.md`：8 份计划中 **7 份**点名（`20260921-2306-T-PerfSweep6` 对两者均 **0 命中**，其条目由本任务据该计划 §八 逐项落地表 + 提交 `3f7853b` 补写）。
 - `docs/MEMORY.md`：9 份计划文档对它的命中数**均为 0**（实测 `grep -c`），「台账同步」由本任务按该文件自身的「开发计划（时间倒序）」索引约定执行。
