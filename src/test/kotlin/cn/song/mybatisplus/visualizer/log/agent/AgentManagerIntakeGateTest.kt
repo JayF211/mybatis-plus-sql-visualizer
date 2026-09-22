@@ -320,8 +320,11 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
         manager.sessions.add(session)
 
         writeFrame(7602L, AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(false, true, 0))
-        awaitTrue("回执应被读线程处理") { session.configAckDisabled == false }
+        // 等**被断言的那个观测量**（闸门），不等中间态：确认值写入与回调刷新闸门是读线程上的两步，
+        // 等中间态会与读线程赛跑（首跑曾因此假红一次）
+        awaitTrue("确认在采集后桥应让位（回执经回调刷新闸门）") { SqlCaptureGate.paused.get() }
 
+        assertEquals("回执生效值已写入会话", false, session.configAckDisabled)
         assertTrue("确认在采集 → 桥让位（不引入双通道重复产出，T-M56-02 闸门本意）", SqlCaptureGate.paused.get())
         assertTrue(manager.captureConfirmedActive())
     }
@@ -334,6 +337,7 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
         writeFrame(7603L, AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(true, true, 0))
         awaitTrue("回执应被读线程处理") { session.configAckDisabled == true }
 
+        assertFalse("确认停采不得算「应用侧在采集」", manager.captureConfirmedActive())
         assertFalse("应用侧确认已停采 → 桥恢复解析兜底（P-5 要防的零捕获）", SqlCaptureGate.paused.get())
     }
 
