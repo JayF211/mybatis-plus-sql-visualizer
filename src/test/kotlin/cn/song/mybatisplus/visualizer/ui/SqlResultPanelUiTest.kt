@@ -144,4 +144,90 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
             panel.clear()
         }
     }
+
+    // ------------------------------------------------------------------
+    // T-ErrorLocateUsability T-ELU-01（O-49）：定位按钮可用性判定
+    // ------------------------------------------------------------------
+
+    /** 定位按钮：JButton 且 text == bundle execute.error.locate。 */
+    private fun locateButton(panel: SqlResultPanel): JButton? =
+        allComponents(panel).filterIsInstance<JButton>()
+            .firstOrNull { it.text == MpSqlVisualizerBundle.message("execute.error.locate") }
+
+    private fun info(positionChar: Int? = null) =
+        cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo(
+            message = "boom",
+            positionChar = positionChar,
+        )
+
+    /**
+     * 本任务的核心判据（面板侧契约）：`locate == null` → 按钮**不出现**。
+     * 宿主（`SqlPreviewPanel`）负责在锚点不可解析时传 null——改前它恒传非 null lambda，
+     * 于是按钮可见但点了什么都不发生。
+     */
+    fun testShowErrorRich_不可定位时不显示定位按钮() {
+        val panel = SqlResultPanel()
+        try {
+            panel.showErrorRich(info(), null)
+            waitForEdt()
+            assertEquals("仍应进入 ERROR 态", "ERROR", panel.stateForTest())
+            val btn = locateButton(panel)
+            assertNotNull("定位按钮组件应存在（仅隐藏）", btn)
+            assertFalse("locate=null 时定位按钮不得可见", btn!!.isVisible)
+            assertTrue("错误复制按钮不受影响", copyButton(panel)!!.isVisible)
+        } finally {
+            panel.clear()
+        }
+    }
+
+    fun testShowErrorRich_可定位时显示按钮且tooltip如实标注两态() {
+        val panel = SqlResultPanel()
+        try {
+            panel.showErrorRich(info(positionChar = 24), { })
+            waitForEdt()
+            val btn = locateButton(panel)!!
+            assertTrue("locate 非 null 时定位按钮应可见", btn.isVisible)
+            val tip = btn.toolTipText
+            // 用 bundle 自身文案比对（与既有用例同款，不依赖 locale）——钉住「用的是带位置的 key」
+            assertEquals(
+                "tooltip 应为带驱动位置的文案",
+                MpSqlVisualizerBundle.message("execute.error.locate.tooltip.position", 24),
+                tip,
+            )
+            assertTrue("tooltip 应含驱动报的位置", tip.contains("24"))
+            // 测试环境 bundle 兜底中文（MpSqlVisualizerBundle KDoc：settings 未注册 → 中文）
+            assertTrue("tooltip 应如实标注位置指向被执行的 SQL", tip.contains("被执行的 SQL"))
+            assertTrue("tooltip 不得宣称能定位到 mapper 原文行", tip.contains("不一一对应"))
+        } finally {
+            panel.clear()
+        }
+    }
+
+    /** 无位置信号时用「语句起始行」口径的 tooltip（同样如实标注两态）。 */
+    fun testShowErrorRich_无位置信号用起始行口径() {
+        val panel = SqlResultPanel()
+        try {
+            panel.showErrorRich(info(), { })
+            waitForEdt()
+            val tip = locateButton(panel)!!.toolTipText
+            assertTrue("tooltip 应标注两态", tip.contains("被执行的 SQL"))
+        } finally {
+            panel.clear()
+        }
+    }
+
+    /** 富错误后再走普通 showError（无定位）→ 定位按钮必须收起（不残留可点却无动作的按钮）。 */
+    fun testShowErrorRich_转普通错误后按钮收起() {
+        val panel = SqlResultPanel()
+        try {
+            panel.showErrorRich(info(), { })
+            waitForEdt()
+            assertTrue(locateButton(panel)!!.isVisible)
+            panel.showError("boom again")
+            waitForEdt()
+            assertFalse("普通错误路径应隐藏定位按钮", locateButton(panel)!!.isVisible)
+        } finally {
+            panel.clear()
+        }
+    }
 }

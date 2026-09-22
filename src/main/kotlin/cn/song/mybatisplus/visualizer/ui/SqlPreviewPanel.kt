@@ -11,6 +11,7 @@ import cn.song.mybatisplus.visualizer.model.FillClause
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SelectStatement
+import cn.song.mybatisplus.visualizer.sql.ExplainGate
 import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
@@ -1340,21 +1341,36 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 诚实降级定案：驱动报错位置（Position/at line）指向**被执行 SQL 文本**的字符/行，
      * 与 mapper 原文行不一一对应（动态 SQL 拼接、参数注入后行号必然错位），v1 只承诺
      * 「语句起始行」跳转 + 按钮 tooltip 如实说明，绝不虚标精确跳转。
-     * 锚点来自 [SqlPreviewService.lastPreviewSourceAnchor]（预览触发时登记）；
-     * 无锚点（gutter 面等未登记入口）定位按钮不出现。
+     * 锚点来自 [SqlPreviewService.lastPreviewSourceAnchor]（预览触发时登记）。
      */
-    private fun locateErrorSource() {
-        val proj = project ?: return
-        val anchor = runCatching { proj.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor }
-            .getOrNull() ?: return
+    private fun locateErrorSource(proj: com.intellij.openapi.project.Project, anchor: SqlPreviewService.SourceAnchor) {
         runCatching {
             com.intellij.openapi.fileEditor.OpenFileDescriptor(proj, anchor.file, anchor.line0, 0).navigate(true)
         }
     }
 
-    /** T-ErrorLocate：执行调用点共用的富错误回调（错误呈现 + 可解析锚点时附定位动作）。 */
+    /**
+     * T-ErrorLocateUsability T-ELU-01（O-49）：**先解析锚点，再决定是否给按钮**。
+     *
+     * 缺陷（KDoc 与实现不符）：[SqlResultPanel.showErrorRich] 按 `locate != null` 决定按钮显隐，
+     * 而唯一调用方此前**恒传非 null lambda**（锚点解析发生在点击时，`project ?: return` /
+     * `anchor ?: return` 静默返回）→ **按钮可见，点了什么都不发生**。现把解析提到显隐之前：
+     * 锚点解析不出（无项目上下文 / 本会话尚未登记锚点 / 源文件已失效）→ 传 null，按钮不出现。
+     *
+     * 对齐同仓已做对的先例 [cn.song.mybatisplus.visualizer.log.SqlLogPanel]（先解析、后显隐）。
+     * 顺带把「文件已失效」也算作不可解析——跳不动的按钮不给，比给了点不动诚实。
+     */
+    private fun errorLocateAction(): (() -> Unit)? {
+        val proj = project ?: return null
+        val anchor = runCatching { proj.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor }
+            .getOrNull() ?: return null
+        if (!anchor.file.isValid) return null
+        return { locateErrorSource(proj, anchor) }
+    }
+
+    /** T-ErrorLocate：执行调用点共用的富错误回调（错误呈现 + **锚点可解析时**才附定位动作）。 */
     private fun showErrorRichWithLocate(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo) {
-        resultPanel.showErrorRich(info) { locateErrorSource() }
+        resultPanel.showErrorRich(info, errorLocateAction())
         maybeProbeDdlEffective(info)
     }
 
@@ -1399,28 +1415,39 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * M37.2：真实 EXPLAIN——按当前方言把预览 SQL 包装为 EXPLAIN 语句，走执行链提交原生控制台。
      * 结果展示与普通执行一致（内嵌控制台结果 Tab）；静态性能规则标注保留在顶部 meta 区，同屏对照。
      * EXPLAIN 归免确认类（[SqlTypeClassifier]），无 DML 二次确认；方言不支持（null）→ 提示降级。
+     *
+     * T-ExplainChainHardening T-ECH-01（O-48，D1=A 严格判定）：包装前先判**被包语句**的首关键字
+     * 是否落在 [ExplainGate] 白名单——此前对编辑器里的任意文本加前缀（`DELETE FROM t`、
+     * `CREATE TABLE …`、标识符 `SELECTED` 一律被包成 EXPLAIN 送进库），现改为明确提示、不执行。
+     * 判据只看「未包装」的文本：已以 EXPLAIN 开头的文本是本插件上一次的包装产物（T-ExplainDbl
+     * 幂等场景），不适用白名单，否则二次点击会被误拒。
      */
     internal fun explainSql() {
         val proj = project ?: return
         val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
             ?: editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
         val dialect = current?.previewModel?.dialect ?: MySqlDialect
-        // T-ExplainDbl：幂等包装——首次执行后 EXPLAIN 语句已在控制台文档中，再点一次
-        // 不在已包装文本上二次加前缀（重复前缀 → MySQL 1064）
-        val explainSql = dialect.renderExplainStatementIdempotent(sql)
-        if (explainSql == null) {
-            // T-UiNative T-UN-02：方言不支持提示改轻通知（原模态弹窗——纯告知无需打断）
-            if (!ApplicationManager.getApplication().isUnitTestMode) {
-                runCatching {
-                    Notification(
-                        NOTIFICATION_GROUP_ID,
-                        MpSqlVisualizerBundle.message("panel.explain"),
-                        MpSqlVisualizerBundle.message("panel.explain.unsupported", dialect.name),
-                        NotificationType.INFORMATION,
-                    ).notify(proj)
-                }
+        // T-ECH-01：提交判定（幂等 → 首关键字白名单 → 方言支持面），两类拒绝理由分别提示
+        val explainSql = when (val plan = ExplainGate.planExplainSubmit(dialect, sql)) {
+            is ExplainGate.SubmitPlan.NotExplainable -> {
+                notifyExplainNotExplainable(proj, plan.firstKeyword)
+                return
             }
-            return
+            is ExplainGate.SubmitPlan.DialectUnsupported -> {
+                // T-UiNative T-UN-02：方言不支持提示改轻通知（原模态弹窗——纯告知无需打断）
+                if (!ApplicationManager.getApplication().isUnitTestMode) {
+                    runCatching {
+                        Notification(
+                            NOTIFICATION_GROUP_ID,
+                            MpSqlVisualizerBundle.message("panel.explain"),
+                            MpSqlVisualizerBundle.message("panel.explain.unsupported", plan.dialectName),
+                            NotificationType.INFORMATION,
+                        ).notify(proj)
+                    }
+                }
+                return
+            }
+            is ExplainGate.SubmitPlan.Submit -> plan.statement
         }
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
             .info("[M37.2] explainSql: dialect=${dialect.name}, len=${explainSql.length}")
@@ -1441,6 +1468,26 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             },
             onErrorRich = { info -> showErrorRichWithLocate(info) },
         )
+    }
+
+    /**
+     * T-ExplainChainHardening T-ECH-01（O-48）：被包语句不可 EXPLAIN 时的轻通知（同
+     * [panel.explain.unsupported] 形态——纯告知无需打断，不新增弹窗）。文案给出**判定依据**
+     * （实际首关键字）而不只是结论，用户据此能自己改语句。
+     */
+    private fun notifyExplainNotExplainable(proj: com.intellij.openapi.project.Project, keyword: String?) {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("panel.explain"),
+                MpSqlVisualizerBundle.message(
+                    "panel.explain.notExplainable",
+                    keyword ?: MpSqlVisualizerBundle.message("panel.explain.notExplainable.unknown"),
+                ),
+                NotificationType.INFORMATION,
+            ).notify(proj)
+        }
     }
 
     /**
@@ -4399,6 +4446,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** T-PrewarmLateRecover F1：当前是否处于「降级文档」态（换装判据里的身份字段）。 */
     internal fun degradedDocumentForTest(): com.intellij.openapi.editor.Document? = degradedPreviewDocument
+
+    /**
+     * T-ErrorLocateUsability T-ELU-01（O-49）：错误定位动作的**显隐判据**缝——
+     * 锚点可解析 → 非 null（按钮出现）；不可解析 → null（按钮不出现）。
+     * 这是本任务修复点的直接可断言面（改前恒非 null）。
+     */
+    internal fun errorLocateActionForTest(): (() -> Unit)? = errorLocateAction()
+
+    /** T-ELU-01：富错误回调缝（端到端断言「锚点不可解析 → 定位按钮不出现」）。 */
+    internal fun showErrorRichWithLocateForTest(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo) =
+        showErrorRichWithLocate(info)
 
     /** T-PrewarmLateRecover F1：插件最后一次写入编辑器文档的文本（换装判据里的「用户没动过」）。 */
     internal fun lastRenderedSqlForTest(): String? = lastRenderedSql
