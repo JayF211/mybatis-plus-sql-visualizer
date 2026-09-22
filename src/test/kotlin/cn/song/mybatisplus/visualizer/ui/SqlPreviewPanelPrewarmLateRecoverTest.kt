@@ -27,12 +27,14 @@ import org.junit.Assert.assertTrue
  *    即「消费侧已放弃」，预热线程据此走迟到通道）、[test用户已编辑_迟到产物不换装且不丢内容]（守卫反向）、
  *    [test面板销毁后_迟到产物不换装不抛]；
  *  - **F2 横幅重试**：[test降级横幅重试动作_点击后重新预热并换装]（动作可见性 + 文案 + 点击后重臂、
- *    就绪换装、清横幅）。
+ *    就绪换装、清横幅）、[test重试动作_用户已编辑时也换装且内容不丢]（显式重试不受「未编辑」守卫限制，
+ *    当前文本原样搬进新文档）。
  *
- * **降级态如何确定性构造**：本环境里「真实首开超时」要靠负载（不可复现），故走
- * [degradePanel]——先正常装配消费掉产物，再 `releaseEditor()` 后二次装配：产物已被消费
- * （`prewarmedTempFile === prewarmed` 判假）→ 降级链 + 横幅。这条路线与 P9 记录的同面板二次装配
- * 同源，是 headless 下唯一**与分片顺序无关**的降级入口（不依赖「本 JVM 首个面板」这类脆弱前置）。
+ * **降级态如何确定性构造**：本环境里「真实首开超时」要靠负载（不可复现），故走 [degradePanel]——
+ * 先等本面板预热出结果，再正常装配消费掉产物，然后 `releaseEditor()` 后二次装配：产物已被消费
+ * （`prewarmedTempFile === prewarmed` 判假）→ 降级链 + 横幅。这条路线与 P9 记录的同面板二次装配同源，
+ * 是 headless 下唯一**与分片顺序无关**的降级入口（不依赖「本 JVM 首个面板」这类脆弱前置）；
+ * 「先等预热出结果」这步不可省——否则首装配即降级，而产物迟到到达会被 F1 自动换装，降级态当场消失。
  */
 class SqlPreviewPanelPrewarmLateRecoverTest : BasePlatformTestCase() {
 
@@ -50,21 +52,29 @@ class SqlPreviewPanelPrewarmLateRecoverTest : BasePlatformTestCase() {
      * 有界等待预热出结果（成功或失败），等待期间持续抽干 EDT 队列——方言预映射把 `setMapping`
      * 经 `invokeLater` 派给 EDT 并有界等待，纯 sleep 会把那 2s 预算烧掉（同
      * [SqlPreviewPanelPrewarmConsumeTest.awaitPrewarmProduct] 的实测教训）。
+     *
+     * **失败时重臂一次**（allowRearm）：重负载下 VFS refresh / `PsiManager.findFile` 会偶发失败
+     * （本机 7 个 gradle daemon 并行时实测），此时按生产路径 [SqlPreviewPanel.retryPrewarm] 重新
+     * 臂一轮再等——它同时验证了重试链本身可用。两次都拿不到产物才判环境异常（不静默跳过，
+     * 否则缺陷回归时本用例会假绿）。
      */
     private fun awaitPrewarmProduct(
         panel: SqlPreviewPanel,
-        budgetMs: Long = 60_000,
+        allowRearm: Boolean = true,
     ): Pair<com.intellij.openapi.vfs.VirtualFile, com.intellij.psi.PsiFile>? {
-        val await = panel.prewarmAwaitForTest()
+        var await = panel.prewarmAwaitForTest()
         assertNotNull("面板构造期应已发起预热", await)
-        val deadline = System.currentTimeMillis() + budgetMs
+        val deadline = System.currentTimeMillis() + 60_000
         while (System.currentTimeMillis() < deadline && !await!!.isDone()) {
             UIUtil.dispatchAllInvocationEvents()
             Thread.sleep(10)
         }
         UIUtil.dispatchAllInvocationEvents()
         assertTrue("预热应在预算内出结果（成功或失败）", await!!.isDone())
-        return await.joinOrNull()
+        val product = await.joinOrNull()
+        if (product != null || !allowRearm) return product
+        panel.retryPrewarmForTest()
+        return awaitPrewarmProduct(panel, allowRearm = false)
     }
 
     private fun editorDocumentFile(panel: SqlPreviewPanel): com.intellij.openapi.vfs.VirtualFile? {
@@ -72,8 +82,36 @@ class SqlPreviewPanelPrewarmLateRecoverTest : BasePlatformTestCase() {
         return FileDocumentManager.getInstance().getFile(doc)
     }
 
-    /** 把面板推进确定性降级态（见类 KDoc），并断言前置成立。 */
+    /**
+     * 有界等待「换装完成」（编辑器文档落到项目内文件上），期间持续抽干 EDT 队列。
+     *
+     * 为什么不能只抽一次：换装两条出口的时机不同——预热在预算内就绪时走 `scheduleOnce` 的 onReady，
+     * 超预算时走迟到通道（预热线程发布时发现消费侧已放弃 → `invokeLater` 回 EDT）。机器有负载时
+     * 后者是常态，单次抽队列会在产物还没到达时就断言失败（本用例首版即踩：重试轮预热 500ms 未就绪）。
+     */
+    private fun awaitUpgrade(
+        panel: SqlPreviewPanel,
+        budgetMs: Long = 30_000,
+    ): com.intellij.openapi.vfs.VirtualFile? {
+        val deadline = System.currentTimeMillis() + budgetMs
+        while (System.currentTimeMillis() < deadline) {
+            UIUtil.dispatchAllInvocationEvents()
+            editorDocumentFile(panel)?.let { return it }
+            Thread.sleep(10)
+        }
+        return editorDocumentFile(panel)
+    }
+
+    /**
+     * 把面板推进**稳定**降级态（见类 KDoc），并断言前置成立。
+     *
+     * 必须先 `awaitPrewarmProduct(panel)` 等本面板自己的预热出结果——否则（JVM 首个面板预热超预算时）
+     * 首装配就走降级，而预热产物随后**迟到到达会被本次新功能自动换装**，前置当场失效（首版即踩：
+     * 断言「降级文档不应挂在项目内临时文件上」时面板已经自己恢复成主路径）。等预热出结果后：
+     * 首装配消费产物 → 释放编辑器 → 二次装配必判「产物已消费」→ 降级，且**没有在途产物**会来换装。
+     */
     private fun degradePanel(panel: SqlPreviewPanel) {
+        awaitPrewarmProduct(panel)
         panel.showResult(result())
         UIUtil.dispatchAllInvocationEvents()
         panel.releaseEditorForTest()
@@ -115,7 +153,7 @@ class SqlPreviewPanelPrewarmLateRecoverTest : BasePlatformTestCase() {
             )
             UIUtil.dispatchAllInvocationEvents()
 
-            val file = editorDocumentFile(panel)
+            val file = awaitUpgrade(panel)
             assertNotNull("迟到产物到达应换装成「项目内文件背书」的编辑器（主路径），实际仍为降级文档", file)
             assertTrue("换装后的文档应挂在项目预览目录内，实际：${file!!.path}", file.path.contains("sql-visualizer"))
             assertNull("换装后降级文档身份应清空", panel.degradedDocumentForTest())
@@ -207,15 +245,44 @@ class SqlPreviewPanelPrewarmLateRecoverTest : BasePlatformTestCase() {
                 UIUtil.dispatchAllInvocationEvents()
                 Thread.sleep(10)
             }
-            UIUtil.dispatchAllInvocationEvents()
             assertTrue("重试轮预热应在预算内出结果", await!!.isDone())
 
-            val file = editorDocumentFile(panel)
+            // 两条出口都要认：预算内就绪走 onReady、超预算走迟到通道——统一用有界轮询等换装落定
+            val file = awaitUpgrade(panel)
             assertNotNull("重试就绪后应换装成「项目内文件背书」的编辑器", file)
             assertNotEquals(
                 "换装后应清除 DEGRADED 横幅",
                 DegradationBanner.Kind.DEGRADED,
                 banner.kindForTest(),
+            )
+        } finally {
+            panel.clear()
+        }
+    }
+
+    /**
+     * 用户显式点「重试」时不得被「文本未变」守卫挡住（否则编辑过预览之后重试就是按不出反应的假动作）。
+     * 口径同计划 §七 前提 5：把**当前文档文本**作为新装配的 SQL，用户内容不丢。
+     */
+    fun test重试动作_用户已编辑时也换装且内容不丢() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            degradePanel(panel)
+            val doc = panel.editorForTest()!!.document
+            WriteCommandAction.runWriteCommandAction(project) { doc.setText("SELECT 2 /* user edit */") }
+
+            panel.degradationBannerForTest().clickRetryForTest()
+            val file = awaitUpgrade(panel)
+            assertNotNull("用户显式点重试 → 应换装（不再被「文本未变」守卫挡住）", file)
+            assertEquals(
+                "用户文本应原样搬进新文档（内容不丢）",
+                "SELECT 2 /* user edit */",
+                panel.editorForTest()!!.document.text,
+            )
+            assertNotEquals(
+                "换装后应清除 DEGRADED 横幅",
+                DegradationBanner.Kind.DEGRADED,
+                panel.degradationBannerForTest().kindForTest(),
             )
         } finally {
             panel.clear()

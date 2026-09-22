@@ -2937,17 +2937,22 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      *  - 面板与项目未销毁；
      *  - 已有编辑器，且当前文档就是降级装配的那一份（[degradedPreviewDocument] 身份相等）；
      *  - 文档文本与插件最后一次写入一致（[lastRenderedSql]）——用户动过就不换，避免抢走编辑现场。
+     *    该条**只在自动换装时**生效：用户显式点「重试」时按 [userRequested] 跳过，改把当前文档文本
+     *    作为新装配的 SQL（内容不丢）——否则用户编辑过之后重试就成了按不出反应的假动作。
      *
      * 换装走主路径装配（[assemblePreviewEditor]），因此横幅由它统一清除；光标与焦点尽量复位
      * （文本逐字相同，逻辑位置可直接搬）。
      */
-    internal fun tryUpgradeToLateProduct(product: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>) {
+    internal fun tryUpgradeToLateProduct(
+        product: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>,
+        userRequested: Boolean = false,
+    ) {
         if (previewDisposed || project?.isDisposed == true) return
         val current = editor ?: return
         val degradedDoc = degradedPreviewDocument ?: return
         if (current.document !== degradedDoc) return
         val text = current.document.text
-        if (text != lastRenderedSql) {
+        if (!userRequested && text != lastRenderedSql) {
             // 用户已经在编辑（或另有渲染尚未落定）：不抢编辑现场，产物留给下一次装配
             com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
                 .info("[M36] late prewarm product kept: document edited since last render (len=${text.length})")
@@ -2979,13 +2984,20 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (previewDisposed || project == null) return
         // 上一轮若已有产物躺着（迟到但没人消费），直接换装，不必再预热一轮
         prewarmedTempFile?.let { pending ->
-            tryUpgradeToLateProduct(pending)
+            tryUpgradeToLateProduct(pending, userRequested = true)
             if (degradedPreviewDocument == null) return
         }
+        // 降级态下「当前在用文件」这个指针没有意义（降级文档不在项目文件上），而 [prewarmPreviewTempFile]
+        // 的入口守卫见它非空即判「已备好」直接 fail——主路径设了指针之后才失败的那条窄路（如
+        // `PsiDocumentManager.getDocument` 返回 null）会让重试变成空动作。这里只丢指针、不删文件：
+        // 文件仍在 [previewTempFilesCreated] 登记表里，[releaseEditor] 统一回收。
+        previewTempFile = null
         prewarmFailed = false
         prewarmPreviewTempFile()
         prewarmAwait?.scheduleOnce(
-            onReady = { product -> if (!previewDisposed) tryUpgradeToLateProduct(product) },
+            onReady = { product ->
+                if (!previewDisposed) tryUpgradeToLateProduct(product, userRequested = true)
+            },
             // 超时/失败：保持现状（横幅与动作仍在）——迟到通道会在产物真正到达时收尾
             onFallback = {},
         )
