@@ -151,9 +151,9 @@ T-IIR-01 与 T-IIR-02 同写 `ui/SqlPreviewPanel.kt` → **串行**；T-IIR-03 �
 
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------------|
-| 前提 1 实测（DELETE 路径有无表结构） | （实施后填） | |
-| T-IIR-01 登记点接线 dialect | （实施后填） | |
-| T-IIR-02 自增列来源 | （实施后填） | A 自省 / B 复用模型 的最终选择与依据 |
+| 前提 1 实测（DELETE 路径有无表结构） | 不适用（未改码） | **结论：DELETE 路径不持有表结构 → T-IIR-02 必须走 A（自省）**。依据（代码判定，未做运行时实测）：两个登记点 `ui/SqlPreviewPanel.kt:1079` / `:1291` 在登记时只持有 SQL 文本与 `SnapshotEntry`；`model/PreviewResult.kt:25/48` 的 KDoc 明写 `batchModel` 仅 INSERT/UPDATE/UPSERT 非空（DELETE 走 plainResult）。**同时实测了 T-IIR-02 的可复用面**：`ui/highlight/DatabaseSchemaResolver` 已有 `columnMeta(project, tableName)` / `columnsCached(project, tableNames)`（符合计划「复用不新造」），但 `ColumnMeta(comment, typeSpec, notNull)`（`:415`）**没有自增标记**，T-IIR-02 需扩该字段（取自 `DasColumn.getColumnAttrs` 的 `AUTO_GENERATED`，见 `DbTableSpecAdapter.kt:48`）；且 `tryCompute` 在**无数据源时直接返回空**（`:421-427`）——本环境正是如此，故该路径在本机不可端到端验证 |
+| T-IIR-01 登记点接线 dialect | `cd5e574` | **已落地**。方言来源取 `SqlPreviewService.currentDialect()`（= `DialectRegistry.effective(project)`，与预览/执行链同源、含 T-DialectAutoInfer 的数据源推断，不新造解析）；两处 `store.register(...)` 均补 `dialect = dialect`。旧断言 `testExecuteAdhocSqlRegistrationCarriesNoIdentityInfoYet` **已反转**为 `testExecuteAdhocSqlRegistrationCarriesDialectAfterO59TIIR01`（断言 `entry.dialect != null` 且与 `DialectRegistry.effective` 同名；`identityColumns` 仍按现状登记为空，属 T-IIR-02）。**读数**：接线在位 `RollbackSqlPanelTest` 11 例 0 失败；**反向验证**摘掉两处实参 → 恰为该用例 1 例红、其余 10 例绿；还原后回滚族 + BatchModel 合计 **91 例 0 失败**。**重要限定**：本步单独**无用户可见效果**——`identityColumns` 仍为空 → `wrapIdentity` 仍假 → wrapper 仍 null，即 T-IIR-01 是**管线**而非修复，用户可感的 544 要等 T-IIR-02 落地 |
+| T-IIR-02 自增列来源 | （实施后填） | 已定走 A（自省）：须扩 `DatabaseSchemaResolver.ColumnMeta` 加自增标记；`resolveFromSources` 无数据源时返回空 → 本机不可端到端验证，需真机库 |
 | T-IIR-03 消费侧核对 | （实施后填） | |
 | T-IIR-04 测试与文档 | （实施后填） | 含先红后绿与反向验证两次读数 |
 | §五 真机走查 | （实施后填） | 环境受限则如实登记 |

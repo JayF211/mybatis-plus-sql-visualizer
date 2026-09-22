@@ -166,17 +166,31 @@ class RollbackSqlPanelTest : BasePlatformTestCase() {
     }
 
     /**
-     * O-52 **现状登记（已知缺口，不是期望行为）**：生产登记点
-     * [SqlPreviewPanel.executeAdhocSql] → `registerRollbackSnapshotIfNeeded` 目前不传
-     * dialect/identityColumns（该文件不在本任务写集内，且预览链只持有 SQL 文本、无表结构来源），
-     * 故回滚侧包装在生产链上暂不触发。接线后本断言须一并更新。
+     * O-59 T-IIR-01（**由 O-52 的「现状登记」断言反转而来**）：生产登记点必须把当前生效方言
+     * 随快照登记。
+     *
+     * 原断言 `testExecuteAdhocSqlRegistrationCarriesNoIdentityInfoYet` 把已知缺口写成了契约
+     * （`assertNull(entry.dialect)`）——而正是这个缺口让回滚侧 identity 包装在**生产链上永不触发**
+     * （T-Round10 独立复核 blocker②，用户可感：SQL Server 上 DELETE 后粘贴快照生成回填 INSERT
+     * 仍报 544）。T-IIR-01 接线后本用例反转：方言必须到位。
+     *
+     * 只钉 T-IIR-01 这一半：`identityColumns` 的到位属 T-IIR-02（需表结构来源，见 O-59 计划 §1.3
+     * 前提 1 的实测结论），故本用例仍按现状登记其为空。
      */
-    fun testExecuteAdhocSqlRegistrationCarriesNoIdentityInfoYet() {
+    fun testExecuteAdhocSqlRegistrationCarriesDialectAfterO59TIIR01() {
         val panel = newPanel()
         panel.executeAdhocSql("DELETE FROM log WHERE created < '2020-01-01'", dmlConfirmed = true)
         val entry = store().findBySql("DELETE FROM log WHERE created < '2020-01-01'")!!
-        assertNull("现状：生产登记点未传方言 → 不包装", entry.dialect)
-        assertTrue("现状：生产登记点未传 identity 列 → 不包装", entry.identityColumns.isEmpty())
+        assertNotNull(
+            "生产登记点必须把当前生效方言随快照登记（否则回滚侧 identity 包装永不触发）",
+            entry.dialect,
+        )
+        assertEquals(
+            "方言应与 DialectRegistry.effective 同源（本用例为 light 工程默认值）",
+            project.getService(SqlPreviewService::class.java).currentDialect().name,
+            entry.dialect!!.name,
+        )
+        assertTrue("T-IIR-02 未落地前 identity 列仍为空（表结构来源未接）", entry.identityColumns.isEmpty())
         panel.dispose()
     }
 }

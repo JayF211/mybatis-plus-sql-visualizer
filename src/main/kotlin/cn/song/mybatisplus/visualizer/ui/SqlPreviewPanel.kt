@@ -1155,17 +1155,25 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val keyword = SqlTypeClassifier.getFirstKeyword(sql) ?: return
         if (keyword != "UPDATE" && keyword != "DELETE") return
         val store = proj.getService(cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore::class.java)
+        // O-59 T-IIR-01：把**当前生效方言**随快照登记进去——取的是 [SqlPreviewService.currentDialect]
+        // （= `DialectRegistry.effective(project)`，与预览/执行链同源，含 T-DialectAutoInfer 的数据源
+        // 推断，不新造解析）。此前两处登记点都不传该参数 → `SnapshotEntry.dialect` 恒 null →
+        // `RollbackSqlGenerator.backfillInsert` 的 `wrapIdentity` 恒假 → 回滚侧 identity 包装在
+        // **生产链上永不触发**（T-Round10 独立复核 blocker②：用户在 SQL Server 上 DELETE 后粘贴快照
+        // 生成回填 INSERT 仍报 544）。取不到时保持 null（= 未知不包装，O-52 D1=A 契约不变）。
+        val dialect = proj.getService(SqlPreviewService::class.java).currentDialect()
         if (rollbackOfEntry != null) {
             store.register(
                 sql, rollbackOfEntry.targetTable, null,
                 parentExecutionId = rollbackOfEntry.executionId,
+                dialect = dialect,
             )
             return
         }
         // T-PS5-02：传入已剥注释文本——键对齐靠 strip 幂等（详见本函数 KDoc 的两条前提）
         val analyzed = cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator.generate(SqlCommentStripper.strip(sql))
         val table = analyzed.targetTable ?: return
-        store.register(sql, table, analyzed.snapshotSelectSql, analyzed.setColumns)
+        store.register(sql, table, analyzed.snapshotSelectSql, analyzed.setColumns, dialect = dialect)
     }
 
     /** 当前编辑器 SQL 文本（原生编辑器文档优先，兜底自研编辑器；两处皆空 null）。 */
