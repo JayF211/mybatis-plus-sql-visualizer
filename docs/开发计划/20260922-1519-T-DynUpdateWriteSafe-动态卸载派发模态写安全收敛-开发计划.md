@@ -194,4 +194,54 @@ internal fun chooseDispatchModality(captured: ModalityState?): ModalityState
 
 ## 实施记录
 
-（实施完成后回填：车道与提交 / 读数 / 反向验证 / 写集偏离 / 未取证项）
+### 一、车道与提交（2026-09-22）
+
+- 工作树 `F:/code/Java/Gitee/SongRenShuo/mpsv-dynws`，分支 `t-dynws-writesafe`，基点 `master` `ddb694a`。
+- 代码提交 `b7ac235`（本计划 + `DynamicInstallSupport.kt` + 新测试类 + 守卫规则，4 文件 +476/−4）；
+  并入 master 前进后的 `7bb7eab` 零冲突（`3ef8236`）。
+- §四 T-01~T-04 全量落地；T-04 的规则形态在实施中被修正（见 §四）。
+
+### 二、读数
+
+| 项 | 读数 | 说明 |
+|----|------|------|
+| 定向（新测试类 + 守卫类） | 32 例 / 0 失败 | 守卫类由 24 例增至 26 例（本项 +2） |
+| 全量 `testShards`（并入 master 后，清 `build/classes`+`build/kotlin` 重跑） | **498 类 / 5695 例 / 1 失败 / 0 错误 / 6 跳过** | 含本项新增 1 类 8 例；唯一失败为 **master 既有**（见 §五） |
+
+### 三、反向验证（两臂；均临时改动 → 必红 → 逐字节还原，`sha256` 还原前后一致）
+
+| 臂 | 变异 | 实测 |
+|----|------|------|
+| M1 | 派发点改回改动前形态 `val modality = ModalityState.any()` | 32 例 **2 失败**：`update包派发平台卸载装载禁用any模态`、`testUnloadDispatchNeverUsesAnyModality` |
+| M2 | `dispatchModalityForUnload()` 直接 `return ModalityState.any()` | 32 例 **3 失败**：上两例 + `testResolvedDispatchModalityIsWriteSafe` |
+
+两臂合起来覆盖「派发点被改回」与「决策函数被绕过」两种真实回退形态；守卫侧三态自证（违规必报 /
+带标注放行 / 他包不误伤）随规则同批落地。
+
+### 四、实施中对计划的两处修正
+
+1. **T-04 规则形态（计划口径被实施证伪）**：原计划写「按包 + 派发模态（站点实参区）封口」，实施后发现该
+   形态只覆盖 `invokeAndWait({…}, ModalityState.any())` 一种写法——把模态赋给变量再传、或决策函数直接
+   返回 `any()`，规则都看不见。改为**按包 + 令牌**（update 包内任何形态的 `ModalityState.any()` 都报，
+   豁免沿用 `// write-safe:` 标注），与写法无关。顺带实测发现既有提取器 `invokeLaterSites` 只认
+   `invokeLater(`——`invokeAndWait` 站点对两条既有写安全规则从未生效；本轮**登记不改**（属
+   T-WriteSafeCtx 规则族的面），故最终实现不依赖该提取器。
+2. **派发模态来源（计划前提被实施收窄）**：`ModalityState.current()` 是 `@RequiresEdt`，
+   `Application.getCurrentModalityState()` 是 `@Deprecated @ApiStatus.Internal`，
+   `defaultModalityState()` 在后台线程可能返回 `nonModal`（模态弹窗存续期被推迟 → 设置页点安装体验
+   退化）。故「EDT 只读跳板取当前模态实例」是同时满足「立即执行」与「写安全」的唯一形态，方案成立。
+
+### 五、未取证项与残留
+
+- **真机端到端未验（环境受限，如实登记）**：动态安装链在开发态被
+  `PlatformPluginInstaller.devGuardOrFailure()` 主动拒绝，且自更新需更新源上存在比当前安装版本更新的
+  发行包——两项均不具备。§五 前提 1/2 的真机证据只能由派发日志行
+  `dynamic update: dispatch modality=… writeSafe=…` 产出，本轮无法产出。
+- **master 既有红（非本项引入）**：`EnumReachabilityGuardTest` 1 例失败，指向 `sql/ExplainSupport.kt:19`
+  的 `ExplainOutputFormat.XML`——T-ExplainChainHardening 有意留的占位枚举值（KDoc 自述「本插件未接入，
+  仅占位」），零产出点故被枚举可达性守卫判死常量。本项 diff 未触及该文件
+  （`git diff 7bb7eab..t-dynws-writesafe` 仅 4 文件），系并入 master 时带进来的既有红；该任务有在途复核
+  会话，本项**登记不修**。
+- **首轮门禁另有 5 例失败已证伪**：`ConnectionErrorClassifierTest` 5 例 `NoSuchMethodError`（并入 master
+  后测试类解析旧构造签名），清 `build/classes` + `build/kotlin` 重跑即全绿——属回归假失败清单既有形态
+  （多分支合并后的增量陈旧类）。
