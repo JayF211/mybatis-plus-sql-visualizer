@@ -5,6 +5,7 @@ import cn.song.mybatisplus.sqlvis.agent.AgentState;
 import java.security.CodeSource;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -28,28 +29,38 @@ import java.util.concurrent.ConcurrentHashMap;
  * 同一个汇聚帧。对策：
  * <ol>
  *   <li><b>候选增厚</b>：{@link Frame#candidates} 每条含 [file, line, className, method] 四列（列尾追加，旧 IDE 只读前两列兼容）；</li>
- *   <li><b>缓存防合流</b>：整帧缓存仅 L1 目录帧命中时写（安全网/上顶路径的<b>整帧结果</b>不缓存——汇聚场景下
- *       「第一个调用者」的候选列会服务此后一切业务语句，一次错=处处错）；T-PS4-09 起安全网另缓存
- *       「判定」（主位置身份+校验，候选列与行号每执行重建，不复蹈整帧合流缺陷），见 locate 内注释；</li>
+ *   <li><b>只缓存判定、不缓存结果帧</b>：{@link #DECISIONS} 存的是「主位置身份」（via + class#method），
+ *       行号与候选列每次执行按<b>当前栈</b>重建——整帧入缓存会冻结行号（T-AgentSourceLocateStale 根因：
+ *       入口键落在全应用共享的库帧上时，首个查询的行号被钉死并服务此后一切业务语句），禁；</li>
  *   <li><b>上顶收敛</b>：主位置优先取首个「带调试信息」的候选，无调试信息的 null-file 帧不再顶上（M4 修复）；</li>
  *   <li><b>诊断打点</b>：{@code logLevel=info} 时输出判定路径（primaryKey / 来源路径 L1|SAFETY / pool 帧），真机定谳用；
- *       仅全量判定路径（缓存双 miss）输出，缓存命中路径静默。</li>
+ *       仅全量判定路径（缓存 miss）输出，缓存命中路径静默；入口键非业务帧时另有一条
+ *       <b>与档位无关的一次性</b>摘要（{@link #reportEntryKeyMismatch}，产线固定 warn 下 info 档不可达）。</li>
  * </ol>
  *
- * <p>T-PS4-09 两段式扫描与缓存（热点红线 §4.2 #5）：
+ * <p>T-PS4-09 扫描与判定缓存（热点红线 §4.2 #5）：
  * <ol>
- *   <li><b>缓存查询前移</b>：key = 首个非框架帧 class#method，前缀扫描到即查 {@link #CACHE}——
- *       命中路径到此为止，不再全栈建 pool（原实现在 pool 构建之后才查缓存，命中白付全栈成本）；</li>
- *   <li><b>安全网判定缓存</b>：fat jar（全 JAR 来源）恒走安全网，原实现每执行全量重扫 pool 并逐帧
- *       {@code Class.forName} 解析来源；现按 key 缓存「判定」跳过逐帧来源解析（策略 A，详见写入点注释）。</li>
+ *   <li><b>缓存查询前移</b>：key = 首个非框架帧 class#method，前缀扫描到即查 {@link #DECISIONS}；</li>
+ *   <li><b>判定缓存（L1 与安全网合并为一条）</b>：命中须经「身份在场」校验（主位置 class#method 仍在本次
+ *       pool 中）→ 用<b>当前 pool</b> 的行号/候选列构造结果帧；校验失败落回全量路径并刷新判定。
+ *       被省掉的是逐帧 {@code Class.forName} 来源解析——pool 构建（一次栈数组遍历、无反射）仍要付，
+ *       因为行号与候选列都取自它（T-AgentSourceLocateStale T-01；原实现在此路径返回冻结整帧）。</li>
  * </ol>
  *
- * <p>框架帧过滤规则与 IDE 侧 CallerSourceLocator 对齐（agent 侧独立副本——agent 不引 IDE 类）；
+ * <p><b>跳过规则与 IDE 侧 {@code CallerSourceLocator} 的关系（事实描述，勿再假设必然同值）</b>：
+ * 两侧是<b>各自独立的两份实现</b>（agent 不引 IDE 类），前缀集合<b>不相等</b>——agent 侧另收驱动族 /
+ * 连接池 / 数据层插件族（含 {@code com.github.yulichang.} 等 20 余项），IDE 侧只收 JDK/平台/插件/
+ * MyBatis 系。两侧还<b>在不同时机取栈</b>（IDE 侧拦截器在 SQL 生成期，agent 在 JDBC 执行期），
+ * 因此同一次执行的两处位置<b>可以不同</b>；跨侧漂移由
+ * {@code LocatorSkipPrefixSyncTest}（IDE 侧）以源码扫描 + 差异登记锁定。
  * 动态前缀（用户登记的自研框架包名）经 CONFIG 下发，见 {@link #setExtraSkipPrefixes(String[])}。
  */
 public final class StackLocator {
 
-    /** 框架/基础设施帧前缀（与 CallerSourceLocator 跳过规则对齐 + 驱动/池/ORM/插件家族）。 */
+    /**
+     * 框架/基础设施帧前缀（agent 侧独立副本，与 IDE 侧 {@code CallerSourceLocator} 跳过规则
+     * <b>不相等</b>——本表另收驱动/池/数据层插件族；跨侧差异由 IDE 侧 {@code LocatorSkipPrefixSyncTest} 登记锁定）。
+     */
     private static final String[] FRAME_SKIP_PREFIXES = {
             "java.", "javax.", "jdk.", "sun.", "com.sun.", "jdk.internal.",
             "com.intellij.", "org.jetbrains.",
@@ -71,6 +82,13 @@ public final class StackLocator {
             "io.netty.", "io.lettuce.", "redis.clients.", "io.micrometer.", "io.seata.",
             "org.slf4j.", "ch.qos.", "org.ehcache.", "net.sf.ehcache.", "com.github.benmanes.",
             "org.quartz.", "com.netflix.", "org.elasticsearch.", "com.mongodb.",
+            // T-AgentSourceLocateStale T-02：MPJ（mybatis-plus-join）全族。依据：1.5.8 starter 自动配置
+            // 注册 com.github.yulichang.interceptor.MPJInterceptor（MyBatis 插件链一环，类声明 implements
+            // org.apache.ibatis.plugin.Interceptor）——它每次查询都在栈上、且对全应用所有查询是<b>同一帧</b>，
+            // 未收则 entryKey 恒为该共享帧（用户报障形态：同一应用里所有条目的源码位置被首个查询钉死）；
+            // 同族先例：com.github.pagehelper./com.github.benmanes. 已收。Maven groupId com.github.* 只是
+            // 坐标不是类前缀，本表按<b>类包名</b>匹配，故只收真实包名前缀。
+            "com.github.yulichang.",
             // 注：刻意不收通用工具库（如 cn.hutool.）——工具类可能被用户业务代码直接调用，误收即跳错
     };
 
@@ -80,17 +98,30 @@ public final class StackLocator {
     /** 候选帧上限（IDE 侧解析回退用；过深无意义且加长事件体）。T-SourceJumpFunnel：3→8——汇聚门面下深层业务帧须可见。 */
     private static final int MAX_CANDIDATES = 8;
 
-    /** 调用方整帧缓存：key = 首个非框架帧 class#method。有界（512，溢出整体清空——既有粗粒度策略）。 */
-    private static final ConcurrentHashMap<String, Frame> CACHE = new ConcurrentHashMap<String, Frame>();
+    /** 判定缓存上限（溢出整体清空——既有粗粒度策略）。 */
     private static final int CACHE_MAX = 512;
 
     /**
-     * T-PS4-09 安全网「判定」缓存（策略 A）：key → [via, 主位置 className, 主位置 method]。
-     * 只存判定不存结果帧——整帧入缓存会冻结行号与候选列（P0-3 缺陷形态，禁）；
-     * 命中须经「身份在场」校验（见 locate），有界同 {@link #CACHE_MAX}。
-     * 包内可见 = 同包测试断言/清场通道，产线勿外用。
+     * 定位「判定」缓存（T-AgentSourceLocateStale T-01 起 L1 与安全网<b>合并为一条</b>）：
+     * key = 首个非框架帧 class#method → [via, 主位置 className, 主位置 method]。
+     *
+     * <p>只存判定不存结果帧——整帧入缓存会冻结行号与候选列（P0-3 缺陷形态，禁）；命中须经
+     * 「身份在场」校验（见 {@link #locate(StackTraceElement[], ClassLoader)}），通过才用<b>当前 pool</b>
+     * 的行号/候选列构造结果帧。有界同 {@link #CACHE_MAX}。
+     *
+     * <p>包内可见 = 同包测试断言/清场通道，产线勿外用。
      */
-    static final ConcurrentHashMap<String, String[]> SAFETY_DECISIONS = new ConcurrentHashMap<String, String[]>();
+    static final ConcurrentHashMap<String, String[]> DECISIONS = new ConcurrentHashMap<String, String[]>();
+
+    /**
+     * T-AgentSourceLocateStale T-05：入口键非业务帧的<b>一次性</b>摘要去重集合（键 = entryKey）。
+     * 产线 premain 注入固定 {@code logLevel=warn}，{@code diagnose()} 的 info 档在真机不可达——
+     * 真机排障拿不到 entryKey 时只能靠行为反推，故这条摘要与档位无关、按 entryKey 只打一次。
+     * 包内可见 = 同包测试清场通道。
+     */
+    static final Set<String> ENTRY_MISMATCH_REPORTED = ConcurrentHashMap.newKeySet();
+
+    private static final int ENTRY_MISMATCH_REPORTED_MAX = 128;
 
     public static final class Frame {
         public final String sourceFile;
@@ -147,15 +178,12 @@ public final class StackLocator {
         if (entryKey == null) {
             return null;   // 全栈皆框架帧（原「pool 为空」语义）
         }
-        // 缓存查询前移（T-PS4-09）：命中路径到此为止，不再全栈建 pool。
-        // 命中返回缓存整帧（行号/候选列冻结为首次入缓存时的值）——既有 L1 整帧缓存语义，行为等价保留。
-        final Frame cached = CACHE.get(entryKey);
-        if (cached != null) {
-            return cached;
-        }
 
-        // ── 阶段二（miss 才付）：非框架帧 pool（栈序）：[file, line, className, method]。
+        // ── 阶段二：非框架帧 pool（栈序）：[file, line, className, method]。
         // 首帧（firstNonFramework 处）必入池，pool 恒非空。
+        // T-AgentSourceLocateStale T-01：判定命中路径同样需要本 pool——行号与候选列一律按当前栈现算，
+        // 故不再有「命中即免建池」。池构建只是一次栈数组遍历（无反射、无类加载），被省掉的仍是
+        // 逐帧 Class.forName 来源解析（T-PS4-09 的性能意图不变）。
         final List<String[]> pool = new ArrayList<String[]>(8);
         for (int i = firstNonFramework; i < stack.length; i++) {
             final StackTraceElement f = stack[i];
@@ -168,63 +196,85 @@ public final class StackLocator {
             pool.add(new String[]{file, String.valueOf(line), cn, f.getMethodName()});
         }
 
-        String primaryFile = null;
-        int primaryLine = 0;
-        String primaryKey = null;
-        String via = "SAFETY";
-
-        // 安全网判定缓存（T-PS4-09 策略 A）命中：须通过「身份在场」校验——缓存的主位置身份仍出现在
-        // 本执行 pool 中才复用（即 via 一致性的廉价形态：身份在场 = 当前栈形与判定时同构），跳过
-        // 逐帧 Class.forName 来源解析。校验失败（引擎内部路径变化、无调试信息链路漂移）落回全量路径
-        // 并在写入点刷新判定。
-        final String[] decision = SAFETY_DECISIONS.get(entryKey);
+        // ── 阶段三：判定缓存命中 + 「身份在场」校验（T-AgentSourceLocateStale T-01）。
+        // 缓存的是「判定」（via + 主位置身份 class#method），不是结果帧：命中后必须在本执行 pool 里
+        // 按身份找到同一帧，才用它的当前行号与当前候选列构造结果帧。于是：
+        // ① 键是否精确不再决定正确性（入口键落在共享库帧上也不再冻结行号）；
+        // ② 同一方法内多个调用点、文件编辑后行号漂移，全部自愈；
+        // ③ 共享键被别的调用点改写判定（如 MPJ 拦截器帧先后承载两个业务方法）时身份不在场 →
+        //    落回全量路径重算，正是本缺陷现场（42 vs 63）被根治的路径。
+        final String[] decision = DECISIONS.get(entryKey);
         if (decision != null) {
-            for (String[] c : pool) {
-                if (decision[1].equals(c[2]) && decision[2].equals(c[3])) {
-                    primaryFile = c[0];
-                    primaryLine = Integer.parseInt(c[1]);
-                    primaryKey = c[2] + "#" + c[3];
-                    via = decision[0];
-                    break;
-                }
+            final int at = indexOfIdentity(pool, decision[1], decision[2]);
+            if (at >= 0 && pool.get(at)[0] != null) {
+                final Frame hit = buildFrame(pool, at, decision[0]);
+                reportEntryKeyMismatch(entryKey, hit);
+                return hit;
             }
         }
 
+        // ── 阶段四：全量判定（缓存 miss 或身份不在场才付）。
+        int primaryAt = -1;
+        String via = "SAFETY";
+
         // L1 来源过滤：优先取「非 JAR 来源」帧（开发态用户业务类在目录）
-        if (primaryFile == null) {
-            for (String[] c : pool) {
-                if (Boolean.FALSE.equals(loadedFromJar(c[2], loader))) {
-                    primaryFile = c[0];
-                    primaryLine = Integer.parseInt(c[1]);
-                    primaryKey = c[2] + "#" + c[3];
-                    via = "L1";
-                    break;
-                }
+        for (int i = 0; i < pool.size(); i++) {
+            if (Boolean.FALSE.equals(loadedFromJar(pool.get(i)[2], loader))) {
+                primaryAt = i;
+                via = "L1";
+                break;
             }
         }
         // P0-4 上顶收敛：L1 无命中 → 优先取首个「带调试信息」的非框架帧（安全网不劣化、
         // 且无调试信息的帧不可作为定位——旧逻辑会拿 null-file 帧再从候选上顶，可达汇聚门面）
-        if (primaryFile == null) {
-            for (String[] c : pool) {
-                if (c[0] != null) {
-                    primaryFile = c[0];
-                    primaryLine = Integer.parseInt(c[1]);
-                    primaryKey = c[2] + "#" + c[3];
+        if (primaryAt < 0) {
+            for (int i = 0; i < pool.size(); i++) {
+                if (pool.get(i)[0] != null) {
+                    primaryAt = i;
                     break;
                 }
             }
         }
         // 全无调试信息 → 原样取首个非框架帧（file 为 null，本次不产出位置）
-        if (primaryFile == null) {
-            final String[] first = pool.get(0);
-            primaryFile = first[0];
-            primaryLine = Integer.parseInt(first[1]);
-            primaryKey = first[2] + "#" + first[3];
+        if (primaryAt < 0) {
+            primaryAt = 0;
         }
 
+        final Frame frame = buildFrame(pool, primaryAt, via);
+        if (frame == null) {
+            // 全链无调试信息：本次不产出位置、不缓存（下次重试）
+            return null;
+        }
+        final String[] primary = pool.get(primaryAt);
+        writeCaches(entryKey, primary[2] + "#" + primary[3], via);
+        diagnose(entryKey, frame, pool, loader);
+        reportEntryKeyMismatch(entryKey, frame);
+        return frame;
+    }
+
+    /** pool 中按身份（FQCN + 方法名）定位：命中返回下标，未命中 -1。 */
+    private static int indexOfIdentity(List<String[]> pool, String className, String method) {
+        for (int i = 0; i < pool.size(); i++) {
+            final String[] c = pool.get(i);
+            if (className.equals(c[2]) && method.equals(c[3])) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * 由<b>当前 pool</b> 的第 {@code primaryAt} 条构造结果帧（T-AgentSourceLocateStale T-01：行号与
+     * 候选列每执行重建，禁整帧缓存）。主位置无调试信息（file 为 null）时返回 null = 本次不产出位置。
+     */
+    private static Frame buildFrame(List<String[]> pool, int primaryAt, String via) {
+        final String[] primary = pool.get(primaryAt);
+        if (primary[0] == null) {
+            return null;
+        }
         final List<String[]> candidates = new ArrayList<String[]>(MAX_CANDIDATES);
         for (String[] c : pool) {
-            if (c[0] == null || c[0].equals(primaryFile)) {
+            if (c[0] == null || c[0].equals(primary[0])) {
                 continue;
             }
             // T-SourceJumpFunnel P0-2：候选增厚为 [file, line, className, method] 四列
@@ -233,60 +283,73 @@ public final class StackLocator {
                 break;
             }
         }
-
-        if (primaryFile == null) {
-            // 全链无调试信息：本次不产出位置、不缓存（下次重试）
-            return null;
-        }
-
-        final Frame frame = new Frame(primaryFile, Math.max(primaryLine, 0),
-                simpleMethodKey(primaryKey), candidates, via);
-        writeCaches(entryKey, frame, via, primaryKey);
-        diagnose(entryKey, frame, pool, loader);
-        return frame;
+        return new Frame(primary[0], Math.max(Integer.parseInt(primary[1]), 0),
+                simpleMethodKey(primary[2] + "#" + primary[3]), candidates, via);
     }
 
     /**
-     * 缓存写入（T-SourceJumpFunnel P0-3 定案 + T-PS4-09 策略 A），仅全量判定路径到达：
+     * 缓存写入（T-SourceJumpFunnel P0-3 定案 + T-PS4-09 策略 A + T-AgentSourceLocateStale T-01），
+     * 仅全量判定路径到达。
      *
      * <p><b>P0-3 缓存防合流（定案依据，禁回退）</b>：整帧结果缓存会冻结「候选列 + 行号」。自研框架
-     * 汇聚门面（不经 MyBatis）下所有业务调用共享同一汇聚帧 → 同一 key——若把安全网/上顶的整帧结果
-     * 入缓存，「第一个调用者」的引擎帧与候选列会服务此后一切业务语句（一次错=处处错）。故整帧缓存
-     * 仅 L1 目录帧命中才写（主流开发态路径），与 T-PS4-09 前一致。
+     * 汇聚门面（不经 MyBatis）下所有业务调用共享同一汇聚帧 → 同一 key——若把结果帧入缓存，
+     * 「第一个调用者」的引擎帧、行号与候选列会服务此后一切业务语句（一次错=处处错）。
+     * 故本类<b>任何路径都不缓存结果帧</b>：只写判定（via + 主位置身份），行号/候选列按当前栈现算。
      *
-     * <p><b>T-PS4-09 策略 A（安全网判定缓存）为何不复蹈 P0-3</b>：缓存的是「判定」（via + 主位置身份
-     * class#method），不是结果帧——候选列与行号每执行从当前栈重建，各调用方自身的业务帧信息永不冻结，
-     * 合流缺陷赖以发生的「整帧服务后续一切调用」不成立。且命中须校验主位置身份仍在本执行 pool 中
-     * （不在即全量重算并刷新判定），引擎内部路径变化可自愈。被冻结的身份本身对共享 key 的调用方是
-     * 确定性相同的（安全网取首个带调试信息帧，共享汇聚帧在各调用方栈中同形，重算也得到同一身份），
-     * 冻结它不产生调用方间分歧。原实现安全网每执行全量重扫的所谓「上界=调用方种类数」并不成立——
-     * fat jar 下每条 SQL 都在重扫（per-execute 全栈解析），正是本策略消除的成本。
+     * <p><b>T-AgentSourceLocateStale T-01（L1 与安全网合并为一条判定缓存）</b>：原实现 L1 路径
+     * {@code putIfAbsent} 缓存整帧并「先到者永久服务该 key」——当入口键是全应用共享的库帧
+     * （如 MyBatis 插件链上的 {@code MPJInterceptor#intercept}，前缀表未收时即被选为入口键）时，
+     * 首个查询的行号被钉死并服务此后一切业务语句，这正是用户报障「位置串用」的根因。
+     * 判定缓存 + 身份在场校验使「键是否精确」不再决定正确性。
      *
-     * <p>已知残面（如实记录）：混合部署下同 key 先被全 JAR 调用链写成 SAFETY 判定、后被含目录帧的
-     * 调用链命中时，判定在场会掩盖一次 L1 机会（主位置落到 JAR 帧）——候选列仍含该目录帧兜底，
-     * 可恢复；且共享 key 的合流面在既有 L1 整帧缓存下本就存在（先到的 L1 结果同样服务后续调用者），
-     * 非本策略新增。
+     * <p><b>为何判定缓存不复蹈 P0-3</b>：缓存的是「判定」而非结果帧——候选列与行号每执行从当前栈重建，
+     * 各调用方自身的业务帧信息永不冻结；命中须校验主位置身份仍在本执行 pool 中（不在即全量重算并刷新
+     * 判定），调用链变化可自愈。被冻结的身份本身对共享 key 的调用方是确定性相同的（安全网取首个带调试
+     * 信息帧，共享汇聚帧在各调用方栈中同形，重算也得到同一身份）。原实现安全网每执行全量重扫的所谓
+     * 「上界=调用方种类数」并不成立——fat jar 下每条 SQL 都在重扫（per-execute 全栈解析），正是本策略
+     * 消除的成本。
+     *
+     * <p><b>已知残面（如实记录）</b>：混合部署下同 key 先被全 JAR 调用链写成 SAFETY 判定、后被含目录帧的
+     * 调用链命中时，判定在场会掩盖一次 L1 机会（主位置落到 JAR 帧）——候选列仍含该目录帧兜底，可恢复。
      */
-    private static void writeCaches(String entryKey, Frame frame, String via, String primaryKey) {
-        if ("L1".equals(via)) {
-            if (CACHE.size() >= CACHE_MAX) {
-                CACHE.clear();
-            }
-            CACHE.putIfAbsent(entryKey, frame);
-            // 同 key 的 SAFETY 判定已被 L1 证伪，清除（判定缓存与整帧缓存互斥合流）
-            SAFETY_DECISIONS.remove(entryKey);
-        } else {
-            if (SAFETY_DECISIONS.size() >= CACHE_MAX) {
-                SAFETY_DECISIONS.clear();
-            }
-            // 拆开存 className/method，命中校验按两段比较，免逐帧拼串
-            final int hash = primaryKey.indexOf('#');
-            SAFETY_DECISIONS.put(entryKey,
-                    new String[]{via, primaryKey.substring(0, hash), primaryKey.substring(hash + 1)});
+    private static void writeCaches(String entryKey, String primaryKey, String via) {
+        if (DECISIONS.size() >= CACHE_MAX) {
+            DECISIONS.clear();
         }
+        // 拆开存 className/method，命中校验按两段比较，免逐帧拼串
+        final int hash = primaryKey.indexOf('#');
+        DECISIONS.put(entryKey,
+                new String[]{via, primaryKey.substring(0, hash), primaryKey.substring(hash + 1)});
     }
 
-    /** T-SourceJumpFunnel P0-1 诊断打点：logLevel=info 时输出判定路径（真机定谳 M2/M3/M4 用），默认档零输出。 */
+    /**
+     * T-AgentSourceLocateStale T-05：入口键身份 ≠ 主位置身份时打<b>一条</b>摘要（按 entryKey 去重，
+     * 上限 {@link #ENTRY_MISMATCH_REPORTED_MAX}，溢出整体清空——诊断面粗粒度有界即可）。
+     *
+     * <p>与 {@code logLevel} <b>无关</b>：产线 premain 注入固定 {@code logLevel=warn}，{@link #diagnose}
+     * 的 info 档在真机不可达，本轮排障即因拿不到 entryKey 只能靠行为反推。只在身份不一致（入口键落在
+     * 共享库帧）时输出，正常业务帧入口零输出，故不构成常态噪音。
+     */
+    private static void reportEntryKeyMismatch(String entryKey, Frame frame) {
+        if (frame == null || frame.methodKey.equals(simpleMethodKey(entryKey))) {
+            return;
+        }
+        if (ENTRY_MISMATCH_REPORTED.size() >= ENTRY_MISMATCH_REPORTED_MAX) {
+            ENTRY_MISMATCH_REPORTED.clear();
+        }
+        if (!ENTRY_MISMATCH_REPORTED.add(entryKey)) {
+            return;
+        }
+        System.err.println("[T-AgentSourceLocateStale] 入口键非业务帧（一次性摘要，entry=" + entryKey
+                + " primary=" + frame.sourceFile + ":" + frame.line + " (" + frame.methodKey + ")"
+                + " via=" + frame.via + "）——行号按当前栈现算；本摘要与 logLevel 无关");
+    }
+
+    /**
+     * T-SourceJumpFunnel P0-1 诊断打点：logLevel=info 时输出判定路径（真机定谳 M2/M3/M4 用），默认档零输出。
+     * 仅全量判定路径调用（缓存命中路径静默，每条 SQL 零噪音）；产线固定 {@code logLevel=warn} 下本打点
+     * 不可达——真机取 entryKey 走 {@link #reportEntryKeyMismatch}（与档位无关的一次性摘要，T-05）。
+     */
     private static void diagnose(String entryKey, Frame frame, List<String[]> pool, ClassLoader loader) {
         if (!"info".equalsIgnoreCase(AgentState.getLogLevel())) {
             return;
@@ -373,10 +436,10 @@ public final class StackLocator {
         }
     }
 
-    /** 仅供同包测试清场（两缓存为全局静态，跨用例隔离用）；产线勿调。 */
+    /** 仅供同包测试清场（判定缓存/一次性摘要去重集合为全局静态，跨用例隔离用）；产线勿调。 */
     static void clearLocatorCachesForTest() {
-        CACHE.clear();
-        SAFETY_DECISIONS.clear();
+        DECISIONS.clear();
+        ENTRY_MISMATCH_REPORTED.clear();
     }
 
     private static ClassLoader resolveLoader(ClassLoader hint) {
