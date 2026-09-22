@@ -24,6 +24,25 @@ winpath() {
   if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
 }
 
+# T-AgentResiduals R7：从 gradle 任务（e2eFakeIde / releaseGate）调用时，子进程环境里**没有**交互式
+# shell 的 JDK（Gradle daemon 的 PATH 不含本机 JDK8 bin）——故 JAVA_HOME 非空时把它的 bin 前置进 PATH
+# （cygpath -u 转 MSYS 形式，Windows 形式的 JAVA_HOME 直接拼进 PATH 在 MSYS 下不可靠）。
+# 手动运行且 PATH 里已有 java/javac 时此段无副作用。
+if [ -n "${JAVA_HOME:-}" ] && [ -d "$JAVA_HOME/bin" ]; then
+  if command -v cygpath >/dev/null 2>&1; then
+    PATH="$(cygpath -u "$JAVA_HOME")/bin:$PATH"
+  else
+    PATH="$JAVA_HOME/bin:$PATH"
+  fi
+  export PATH
+fi
+if ! command -v javac >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
+  echo "缺少 javac/java（探针与 demo 都需要 JDK，探针按 Java 8 编译）。"
+  echo "  指定 JDK：JAVA_HOME=<jdk 路径> bash dev-support/e2e-fake-ide/run-e2e.sh"
+  echo "           或 ./gradlew e2eFakeIde -Pe2eJavaHome=<jdk 路径>"
+  exit 3
+fi
+
 AGENT_JAR="${AGENT_JAR:-$REPO_ROOT/sub-projects/sql-visualizer-agent/build/dist/mps-sql-agent.jar}"
 DEMO_DIR="${DEMO_DIR:-F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-demo/mybatis-plus-join-demo}"
 MVN="${MVN:-/d/HuanJing/Maven/maven-mvnd-1.0.3/mvn/bin/mvn}"
@@ -58,6 +77,15 @@ fi
 echo "      agent jar: $(ls -la "$AGENT_JAR" | awk '{print $5" bytes  "$6" "$7" "$8}')"
 
 # ── 3) 应用 classpath / 编译 ──────────────────────────────────
+# T-AgentResiduals R7：本脚本已挂 gradle 任务 e2eFakeIde / releaseGate——前置缺失一律**硬失败 + 给指引**，
+# 不静默跳过（跳过＝把「没验」伪装成「验过」）。
+if [ ! -d "$DEMO_DIR" ]; then
+  echo "缺少 demo 工程（真机级探针的被测应用）：$DEMO_DIR"
+  echo "  指定路径：DEMO_DIR=<路径> bash dev-support/e2e-fake-ide/run-e2e.sh"
+  echo "            或 ./gradlew e2eFakeIde -Pe2eDemoDir=<路径>"
+  echo "  环境准备见：dev-support/e2e-fake-ide/README.md"
+  exit 3
+fi
 CP_FILE="$DEMO_DIR/target/e2e-cp.txt"
 if [ ! -f "$CP_FILE" ]; then
   echo "[2/6] 生成 demo classpath（$CP_FILE）"
