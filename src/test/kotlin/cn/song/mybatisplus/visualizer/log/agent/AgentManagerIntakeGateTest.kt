@@ -278,6 +278,111 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
         assertEquals("同一次下发只告警一次", 1L, session.configAckTimeoutCount.get())
     }
 
+    // ---------- ② T-AgentResiduals R4：字面值断言 + 超时文案分态 ----------
+
+    /**
+     * R4-②：两条常量的**字面值**断言（复核 F7）。
+     *
+     * 原测试只有「排定窗 == `AgentManager.CONFIG_ACK_TIMEOUT_MS`」这种**常量对常量**的等式——
+     * 把常量改成 50ms 或 500s 它照样绿，等于没有守卫。
+     *
+     * **为什么用反射读编译产物、而不是直接引用常量**（`assertEquals(5_000L, AgentManager.CONFIG_ACK_TIMEOUT_MS)`）：
+     * `const val` 会被 Kotlin 编译期**内联**进引用点——增量编译下测试类未随常量改动重编译时，
+     * 引用读到的是**编译那一刻**的旧值。R4 反向验证把两个方向都实测了：常量改 25L 而未重编译测试类 →
+     * 断言仍绿（**假绿**）；改回 50L 而未重编译 → 断言报 `expected:<50> but was:<25>`（**假红**）。
+     * 反射读的是主源集编译产物里的静态常量字段（javap 实证：`public static final long
+     * INTAKE_DROP_WARN_STEP`），两个方向都不受内联影响。
+     */
+    fun test常量字面值_回执等待窗与入队丢弃告警步长() {
+        assertEquals(
+            "CONFIG 回执等待窗应为 5s 字面值（取值依据见常量 KDoc：回执是同一连接上毫秒级的一帧，" +
+                "窗口只需容一次读循环轮转 + 调度抖动；改值须同步 KDoc 理由与本断言）",
+            5_000L,
+            constValue("CONFIG_ACK_TIMEOUT_MS"),
+        )
+        assertEquals(
+            "入队丢弃告警步长应为 50 条字面值（取值依据见常量 KDoc：首条 + 每步长条各记一次，" +
+                "逐条 WARN 会刷满 idea.log；改值须同步 KDoc 理由与本断言）",
+            50L,
+            constValue("INTAKE_DROP_WARN_STEP"),
+        )
+    }
+
+    /** 反射读 `AgentManager` 伴生常量的**编译产物**值（绕过 `const val` 内联；见用例 KDoc）。 */
+    private fun constValue(name: String): Long = AgentManager::class.java.getField(name).getLong(null)
+
+    /**
+     * R4-①：回执超时文案按**会话健康**分三态（复核 F3）。
+     *
+     * 纯函数面先钉死三态互斥与判据词（合成输入可直接喂，无需真 socket）；
+     * 下面 [test超时文案_应用侧仍在跑] / [test超时文案_应用侧静默] 再用真 socket 端到端证明
+     * 「巡检体把实况传对了」——两半都必要：只测纯函数会漏掉传参改坏，只测端到端则拿不到
+     * 「连接已断」态（该态正常路径被 `clearPendingConfigAck` 提前挡掉，只有竞态窗口可达）。
+     */
+    fun test超时文案三态互斥且各含判据词() {
+        val disconnected = configAckTimeoutMessage(
+            pid = 1L, disabled = true, aliveNow = false, frameAfterSend = false, sinceLastFrameMs = 9_999L,
+        )
+        assertTrue("连接已断态必须叙述「控制通道已断开」：$disconnected", "控制通道已断开" in disconnected)
+        assertFalse(
+            "连接已断时不得叙述成「应用侧可能未生效」（连接都不在，与应用侧应用与否无关）：$disconnected",
+            "应用侧可能未生效" in disconnected,
+        )
+
+        val appAlive = configAckTimeoutMessage(
+            pid = 2L, disabled = false, aliveNow = true, frameAfterSend = true, sinceLastFrameMs = 120L,
+        )
+        assertTrue("应用侧在跑态必须叙述「应用侧仍在跑」：$appAlive", "应用侧仍在跑" in appAlive)
+        assertTrue("应用侧在跑态应给出最近入站帧距巡检的毫秒数：$appAlive", "120ms" in appAlive)
+        assertTrue("应用侧在跑态应点明旧版 agent 无回执这条成因：$appAlive", "旧版 agent" in appAlive)
+        assertFalse("应用侧在跑时不得叙述成「应用侧可能未生效」：$appAlive", "应用侧可能未生效" in appAlive)
+
+        val silent = configAckTimeoutMessage(
+            pid = 3L, disabled = true, aliveNow = true, frameAfterSend = false, sinceLastFrameMs = 5_000L,
+        )
+        assertTrue("应用侧静默态才用「应用侧可能未生效」：$silent", "应用侧可能未生效" in silent)
+        assertFalse("静默态不得叙述成连接已断：$silent", "控制通道已断开" in silent)
+        assertFalse("静默态不得叙述成应用侧仍在跑：$silent", "应用侧仍在跑" in silent)
+    }
+
+    /** R4-① 端到端（臂 1）：下发后**仍收到入站帧** → 文案落在「应用侧仍在跑」。 */
+    fun test超时文案_应用侧仍在跑() {
+        val scheduled = mutableListOf<Pair<Long, () -> Unit>>()
+        val session = newSession(7511L, scheduleAckCheck = { d, t -> scheduled += d to t })
+
+        session.sendConfig(disabled = true, desensitize = false)
+        // 下发之后再写一帧（HEARTBEAT）：应用侧「活着」的直接证据，且不清挂起（只有 ACK 才清）
+        writeFrame(7511L, AgentProtocol.CMD_HEARTBEAT, "{}")
+        awaitTrue("HEARTBEAT 应被读线程处理") { session.livenessFrameSeen }
+
+        scheduled.single().second() // 到点驱动巡检
+        assertEquals("仍计一次回执超时", 1L, session.configAckTimeoutCount.get())
+        val message = session.lastConfigAckTimeoutMessage
+        assertNotNull("巡检体应留下文案（测试缝）", message)
+        assertTrue(
+            "下发后仍有入站帧时，文案必须是「应用侧仍在跑」而非「应用侧可能未生效」：$message",
+            "应用侧仍在跑" in message!! && "应用侧可能未生效" !in message,
+        )
+    }
+
+    /** R4-① 端到端（臂 2）：下发后**一条入站帧都没有** → 文案落在「应用侧可能未生效」。 */
+    fun test超时文案_应用侧静默() {
+        val scheduled = mutableListOf<Pair<Long, () -> Unit>>()
+        val session = newSession(7512L, scheduleAckCheck = { d, t -> scheduled += d to t })
+
+        session.sendConfig(disabled = true, desensitize = false)
+        scheduled.single().second() // 不写任何帧：应用侧静默
+        assertEquals(1L, session.configAckTimeoutCount.get())
+        val message = session.lastConfigAckTimeoutMessage
+        assertNotNull("巡检体应留下文案（测试缝）", message)
+        assertTrue(
+            "下发后无任何入站帧时，文案应为「应用侧可能未生效」：$message",
+            "应用侧可能未生效" in message!!,
+        )
+        assertFalse("静默态不得叙述成连接已断：$message", "控制通道已断开" in message)
+        assertFalse("静默态不得叙述成应用侧仍在跑：$message", "应用侧仍在跑" in message)
+    }
+
     fun test畸形回执_按未确认处理() {
         val session = newSession(7503L)
         val before = AgentProtocol.configAckParseFailures.get()
@@ -355,3 +460,4 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
         assertFalse("会话摘除后桥不得保持封着", SqlCaptureGate.paused.get())
     }
 }
+
