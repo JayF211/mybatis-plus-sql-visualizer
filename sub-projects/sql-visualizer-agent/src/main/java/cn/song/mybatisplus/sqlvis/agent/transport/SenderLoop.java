@@ -7,6 +7,8 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.Socket;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 发送线程主循环（§4.3）：loopback TCP 长度前缀帧（4 字节 len + 1 字节 cmd + JSON body）。
@@ -41,6 +43,12 @@ final class SenderLoop implements Runnable {
 
     /** 入站帧 body 长度上限（1MB）：超限即视为流错位/协议漂移，抛异常走重连而非阻塞读。 */
     static final int MAX_FRAME_LEN = 1 << 20;
+
+    /** 未知入站命令累计数（T-01：错位解析成 cmd=0 正是这种形态，须可观测；计数不封顶）。 */
+    private static final AtomicLong UNKNOWN_INBOUND = new AtomicLong();
+
+    /** 未知命令告警一次性标志（防流错位/未来新命令刷屏宿主日志；计数照常累加）。 */
+    private static final AtomicBoolean UNKNOWN_WARNED = new AtomicBoolean();
 
     /** CONFIG 看门狗窗口注入点（毫秒；缺省/非法/非正数回落 [DEFAULT_CONFIG_WATCHDOG_MS]）。 */
     static final String CONFIG_WATCHDOG_MS_PROP = "sqlvis.agent.configWatchdogMs";
@@ -151,6 +159,11 @@ final class SenderLoop implements Runnable {
                     //    （IO 异常外抛走重连；编码异常跳过不断连接）
                     //    T-01b：停采态短路——即便队列里还有残留（下降沿清空与并发入队之间的竞态窗口），
                     //    也不在停采期间往外投递（否则面板会在「已停采」后冒条目）
+                    //
+                    //    已知边界（有意保持现状，勿顺手「修」）：尽出排在读帧之前，故**停采帧到达的那一轮**
+                    //    仍可能先写出 ≤64 条存量事件。这些事件发生在用户点停之前，语义上合法；且 IDE 侧
+                    //    入队闸门（T-03，capturing=false 丢弃）会兜住，用户可见结果正确。反过来把读帧提到
+                    //    尽出之前，会让每次事件投递都多等一个读超时（默认 1s），得不偿失。
                     int burst = 0;
                     if (!AgentState.isDisabled()) {
                         while (burst < 64 && EventBus.pollEvent(slot, 0)) {
@@ -227,9 +240,16 @@ final class SenderLoop implements Runnable {
      */
     String handleInbound(int cmd, String payload) {
         if (cmd != EventBus.CMD_CONFIG) {
-            // T-01：未知命令不再静默 return——本轮缺陷正是「命令被错位解析成 0 后无声丢弃」
-            System.err.println("[T-AgentConfigChannel] 忽略未知入站命令 cmd=" + cmd
-                    + "（期望 CMD_CONFIG=" + EventBus.CMD_CONFIG + "）");
+            // T-01：未知命令不再静默 return——本轮缺陷正是「命令被错位解析成 0 后无声丢弃」。
+            // 告警只出一条（照 SqlHookCallbacks 的 WARNED_ONCE 范式）：流错位或未来新增命令
+            // 会逐帧命中这里，逐帧打印等于刷屏宿主应用日志（比故障本身更糟）；计数不封顶，
+            // 读 unknownInboundCount 即可判「偶发一条还是持续」。
+            UNKNOWN_INBOUND.incrementAndGet();
+            if (UNKNOWN_WARNED.compareAndSet(false, true)) {
+                System.err.println("[T-AgentConfigChannel] 忽略未知入站命令 cmd=" + cmd
+                        + "（期望 CMD_CONFIG=" + EventBus.CMD_CONFIG + "；仅此一条告警，"
+                        + "累计次数见 unknownInboundCount）");
+            }
             return null;
         }
         if (payload == null) {
@@ -254,6 +274,19 @@ final class SenderLoop implements Runnable {
         AgentState.markConfigApplied();
         // T-02：CONFIG 应用成功回执（取值取**应用后**的生效态，含本次生效的前缀条数）
         return configAckBody();
+    }
+
+    /** 未知入站命令累计数（T-01 排障观测；告警只出一条，计数逐条累加）。 */
+    static long unknownInboundCount() {
+        return UNKNOWN_INBOUND.get();
+    }
+
+    /**
+     * 重置一次性告警标志（仅测试用）：一次性告警是**进程级**状态，用例若不能重置起点，
+     * 「只出一条」就无法断言（前序用例一旦触发过，本用例窗口内恒为 0 条）。
+     */
+    static void resetUnknownCmdWarnOnceForTest() {
+        UNKNOWN_WARNED.set(false);
     }
 
     /**
@@ -328,12 +361,31 @@ final class SenderLoop implements Runnable {
      * 的调用点先读 1 字节当命令再读 4 字节当长度，IDE 下发的 CONFIG 因此被解析成 cmd=0 丢弃、
      * 并按错位长度阻塞读超时后静默吞掉（真机实测 len=9475，body 实为 37 字节）。
      *
-     * <p>长度非法（≤0 或 > [MAX_FRAME_LEN]）视为流错位/协议漂移：WARN 记录长度与首字节后
-     * **抛 IOException**，由外层循环走重连——不再以「读超时=无入站数据」的形态把故障吞掉。
+     * <p>帧头逐字节读（与 {@code DataInputStream.readInt} 同为最多 4 次 read，不多一次系统调用），
+     * 换来的鉴别力是「完全无数据」与「帧读到一半」必须分开处理：前者是空闲轮询（读超时上抛，
+     * 调用方按无入站数据处理），后者说明流已错位——**必须抛非超时 IOException 走重连**，
+     * 否则每一帧都会按错位长度继续解析下去（旧实现在这里把两者混为一谈，正是静默吞的入口）。
+     *
+     * <p>长度非法（≤0 或 > [MAX_FRAME_LEN]）与半截帧都 WARN 记长度与首字节后抛 IOException。
      */
     static InboundFrame readInboundFrame(DataInputStream in) throws IOException {
-        final int len = in.readInt();
-        final int firstByte = (len >>> 24) & 0xFF;
+        int len = 0;
+        int firstByte = -1;
+        for (int i = 0; i < 4; i++) {
+            final int b;
+            try {
+                b = in.readUnsignedByte();
+            } catch (java.net.SocketTimeoutException idle) {
+                if (i == 0) {
+                    throw idle; // 一个字节都没到：空闲轮询，调用方按「无入站数据」处理
+                }
+                throw partialFrame("帧头不完整（读到 " + i + "/4 字节后超时）", len, firstByte, idle);
+            }
+            if (i == 0) {
+                firstByte = b;
+            }
+            len = (len << 8) | b;
+        }
         if (len <= 0 || len > MAX_FRAME_LEN) {
             System.err.println("[T-AgentConfigChannel] 入站帧长度非法，会话将重连（不再按读超时静默吞）: len="
                     + len + " (0x" + Integer.toHexString(len) + "), 首字节=0x"
@@ -341,10 +393,31 @@ final class SenderLoop implements Runnable {
             throw new IOException("bad inbound frame len " + len + " (first byte 0x"
                     + Integer.toHexString(firstByte) + ")");
         }
-        final int cmd = in.readUnsignedByte();
+        final int cmd;
+        try {
+            cmd = in.readUnsignedByte();
+        } catch (java.net.SocketTimeoutException truncated) {
+            throw partialFrame("命令字节未到（帧头声称 body " + len + " 字节）", len, firstByte, truncated);
+        }
         final byte[] body = new byte[len];
-        in.readFully(body);
+        try {
+            in.readFully(body);
+        } catch (java.io.IOException truncated) {
+            throw partialFrame("body 未读完（帧头声称 " + len + " 字节）", len, firstByte, truncated);
+        }
         return new InboundFrame(cmd, new String(body, java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    /**
+     * 半截帧统一出口：WARN（含长度与首字节）+ 包装成**非超时** IOException。
+     * 包装是语义要求而非形式：SocketTimeoutException 在外层被当作「无入站数据」吞掉，
+     * 半截帧若原样上抛就等于回到旧实现在读超时里静默吞掉故障的老路。
+     */
+    private static IOException partialFrame(String what, int len, int firstByte, IOException cause) {
+        System.err.println("[T-AgentConfigChannel] 入站帧不完整，会话将重连（不再按读超时静默吞）: " + what
+                + ", len=" + len + " (0x" + Integer.toHexString(len) + "), 首字节=0x"
+                + Integer.toHexString(firstByte) + ", 原因=" + cause);
+        return new IOException("partial inbound frame: " + what, cause);
     }
 
     static void writeFrame(DataOutputStream out, int cmd, String payload) throws IOException {
