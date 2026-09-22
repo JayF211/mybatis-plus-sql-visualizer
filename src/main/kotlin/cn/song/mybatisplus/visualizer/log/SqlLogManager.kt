@@ -68,7 +68,16 @@ class SqlLogManager(private val project: Project) : Disposable {
         LOG.info("resetEntrySequence: 项目启动——捕获序号归零（列表行号重新从 #1 计数，project=${project.name}）")
     }
 
-    /** 捕捉状态（默认关——用户点击「开始捕捉」后才挂载监听，对齐 MybatisCodeHelper-Pro 手动监听）。 */
+    /**
+     * 捕捉状态（默认关——用户点击「开始捕捉」后才挂载监听，对齐 MybatisCodeHelper-Pro 手动监听）。
+     *
+     * **不变量（T-AgentConfigChannel T-04）**：`capturing == false` ⇒ `buffer.paused == true`。
+     * 三条关闭路径都必须同时满足：手动 [stopCapture]、项目停止的自动分支（[onConsoleRemoved]
+     * 的 else 支）、项目关闭（[dispose]）。此前后两条只置 `capturing=false`、不置 `paused`——
+     * 于是出现「按钮 ▶（未捕获）但缓冲区仍收条目」这唯一一种自相矛盾的状态：控制台 Filter 已被
+     * 摘掉不产条目，而 agent 通道（当时无入队闸门）照旧投递，面板照旧显示。
+     * 反向（`paused == true` 而 `capturing == true`）不存在——[startCapture] 进入捕捉态前先清 paused。
+     */
     @Volatile
     var capturing: Boolean = false
         private set
@@ -245,7 +254,9 @@ class SqlLogManager(private val project: Project) : Disposable {
         if (manual) PluginSettings.getInstance().state.logAutoCaptureSuppressed = false
         // 解除缓冲暂停（stop 时设置 paused=true 阻止任何入队）
         buffer.paused = false
-        // T-AgentListenSync：联动 agent 恢复采集（后续两分支 capturing 均置 true，统一在此下发）
+        // T-AgentListenSync：联动 agent 恢复采集（后续两分支 capturing 均置 true，统一在此下发）。
+        // T-AgentConfigChannel T-06：这里只是**下发**恢复采集指令——应用侧是否真恢复以 CMD_CONFIG_ACK
+        // 为准（修复前应用侧从未收到过 CONFIG，「应用侧零开销」这类说法与事实相反）。
         AgentManager.getInstance(project).pushCaptureActive(true)
         if (!hasMainConsole()) {
             // 项目尚未运行（无主运行控制台）：立即进入 armed 态（capturing=true）+ 挂载桥监听——
@@ -311,8 +322,10 @@ class SqlLogManager(private val project: Project) : Disposable {
         isWaitingForConsole = false
         // 安全网：暂停缓冲区——即使 Filter 未被成功移除，也无法向缓冲区添加条目
         buffer.paused = true
-        // T-AgentListenSync：联动 agent 真停采（CONFIG disabled=true，应用侧零开销；
-        // 否则 agent 持续采集发送、IDE 侧 addEntry 被 paused 白白丢弃）
+        // T-AgentListenSync：联动 agent **下发**停采（CONFIG disabled=true）。
+        // T-AgentConfigChannel T-06 文案订正：此前写「应用侧零开销」「真停采」——修复前应用侧根本
+        // 收不到这条指令（入站帧解析错位），"应用侧零开销" 与事实相反；现在只保证指令已下发，
+        // 生效以 CMD_CONFIG_ACK 为准（未获确认会在 AgentSession 侧 WARN）。
         AgentManager.getInstance(project).pushCaptureActive(false)
         // 自动启动开启时，用户显式停止→置持久化抑制标志（重启后 LogStartupCapture 检查此标志跳过）
         if (PluginSettings.getInstance().state.logAutoCaptureOnStart) {
@@ -446,6 +459,7 @@ class SqlLogManager(private val project: Project) : Disposable {
         if (userArmed && !autoStart) {
             // 手动开启 + 未启用自动启动：回到 armed 态（capturing=true, isWaitingForConsole=true）
             // 项目再次启动时 onConsoleAppeared 自动恢复捕捉
+            // （armed 态 capturing 仍为 true，故 buffer.paused 保持 false——不变量只约束 capturing=false）
             LOG.info("onConsoleRemoved: 控制台被移除，回到 armed 态（手动开启，等待项目重新运行）")
             isWaitingForConsole = true
             bridge.detachAllFilters()
@@ -453,6 +467,13 @@ class SqlLogManager(private val project: Project) : Disposable {
             // 自动开启（或手动+自动同时开启）：项目停止则完全停止
             LOG.info("onConsoleRemoved: 控制台被移除，停止捕捉（autoStart=$autoStart, armed=$userArmed）")
             capturing = false
+            // T-AgentConfigChannel T-04 状态机对齐：此前这里只置 capturing=false——不下发停采、不置
+            // buffer.paused，制造出「按钮 ▶ 但缓冲区仍收条目」这唯一自相矛盾的状态（见 capturing KDoc
+            // 的不变量）。两条都补上：paused 走 stopCapture 同款安全网（即便有残留 Filter 也入不了队），
+            // 停采指令走窄入口（getServiceIfCreated——本回调不得为「停采」而实例化从未用过的 AgentManager；
+            // 服务未创建即无会话，无需下发）。
+            buffer.paused = true
+            project.getServiceIfCreated(AgentManager::class.java)?.pushCaptureActive(false)
             bridge.detachAllFilters()
         }
         refreshToolbar()
@@ -551,6 +572,18 @@ class SqlLogManager(private val project: Project) : Disposable {
         isWaitingForConsole = false
         capturing = false
         buffer.paused = true
+        // T-AgentConfigChannel T-04 状态机对齐：capturing=false 必须伴随一次停采下发（不变量见 capturing KDoc）。
+        // 本场景服务可能正在销毁（AgentManager 与 SqlLogManager 同属项目级，dispose 顺序无保证）：
+        //  - 服务尚在 → pushCaptureActive 真下发 CONFIG disabled=true（应用侧随之停采）；
+        //  - 服务已被销毁 / project 已 disposed → isEnhancedActive 判假成 no-op，会话由 AgentManager.dispose
+        //    关闭 socket 回收（应用侧见连接断开；是否随之停采取决于对端断连处理，属应用侧 T-07 看门狗范围）。
+        // 故这里只记一行事实，不假装「一定停采成功」；同样用 getServiceIfCreated，不为停采实例化服务。
+        val agent = project.getServiceIfCreated(AgentManager::class.java)
+        if (agent != null) {
+            agent.pushCaptureActive(false)
+        } else {
+            LOG.info("dispose: AgentManager 未创建——无会话可下发停采（capturing=false + buffer.paused=true 已对齐状态机）")
+        }
         bridge.detach()
         buffer.removeListener(uiNotifyListener)
         buffer.onEntryAccepted = null
