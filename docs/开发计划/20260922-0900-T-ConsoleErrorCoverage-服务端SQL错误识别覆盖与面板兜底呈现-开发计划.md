@@ -158,13 +158,25 @@ T-CEC-01（取证日志）→ 真机复现取文本 → T-CEC-02（判据，先�
 
 ## 九、实施记录（实施后回填）
 
+**实施方式**：独立工作树 `mybatis-plus-sql-visualizer-cec` + 分支 `t-console-error-coverage`（基 `origin/master` `d3ef121`），并行隔离沙盒 `MPSV-ConsoleErr`（临时行跑完已还原、未入库）。
+
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
-| T-CEC-01 | （实施后填） | 诊断日志形态、真机取到的原文（含是否有时间戳前缀）须回填 |
-| T-CEC-02 | （实施后填） | 最终判据集合、先红后绿两次读数须回填 |
-| T-CEC-03 | （实施后填） | 兜底文案与差集判据须回填 |
-| T-CEC-04 | （实施后填） | 用例数变化、反向验证读数须回填 |
-| T-CEC-05 | （实施后填） | 文档同步清单与门禁读数须回填 |
+| T-CEC-01 | `45e3f49` | `logUnrecognizedConsoleTail`：未命中判据时记新增文本尾部（6 行 / 600 字符双上限，每次执行至多一条——`lastUnrecognizedTail` 去重 + 执行起点复位）。**真机原文未取到**：本环境无法驱动真机执行失败 SQL（见下「未做」），故日志形态按用户贴出的 Output 报文设计（容忍 `[时间戳]` 前缀），不依赖它 |
+| T-CEC-02 | `45e3f49` | 判据 = `SQLSTATE_PREFIX`（`[5位][数字]`）+ `ORACLE_CODE`（`ORA-\d{5}`）+ 短语族（原 14 条 **逐字不动** + MySQL 语法错原文 1 条 + 厂商固定报文 5 条）；`isSqlLine` 的防误报改走同一判据；新增自写回显排除（`EXEC_FAILURE_ECHO_PREFIX` 常量与 `writeConsoleOutput` 共用，不再两处字面量）；摘录 4→8 行、逐行剥 `[时间戳]` 与（DBN 实读的）提示符。**偏离**：计划里写的「达梦/金仓中文报错形态」**未加**——按计划自身的纪律（先取真机文本再定，禁止臆造），本环境取不到真机文本，故不加；`ORA-` 走正则而非短语（`ORA-00933` 之类的 5 位码更精确） |
+| T-CEC-03 | `45e3f49` | `extractConsoleResidue`：新增文本去掉「本次 SQL 回显」（剥时间戳/提示符后是 SQL 子串，长度 ≥4）+ DBN 状态行（connected / completed in / executing / fetching / cancelled）后，取尾部 6 行 / 600 字符；40 拍到期分支改为「真错误 → 原文；无判据命中但有残余 → 残余（前缀 `execute.error.unknownShape`）；两者皆无 → 既有 timeout/credential/indexing 提示」。`executionHintReported` 去重语义保持不变（残余路径同样置位） |
+| T-CEC-04 | `45e3f49` | `ConsoleErrorExtractTest` 6 → **13 例**（真机样例回归 / 跨方言结构性判据 5 样例 / 三条反例：带方括号的正常 SQL 回显、插件自写 `执行失败:` 回显、历史误报样例 `WHERE t.id = 1` / 三条残余用例含「提示符读不到」退化路径）。**反向验证两读数**：临时摘除结构性判据 + 新增短语族（`RED PROBE`）→ **13 例 2 失败**，失败点名恰为 `testUserRealMachineMysqlSyntaxErrorDetected` 与 `testStructuralJudgementCoversDialects`，其余 11 例（含全部反例）仍绿；逐字还原（sha256 复核 `291fd712…` 一致）→ **13 例 0 失败** |
+| T-CEC-05 | （文档提交） | CHANGELOG `[Unreleased]` §Fixed 首条 + `docs/变更记录.md` 新行 + 待分析问题清单 P15 落结论 + 本计划 §九/§十 |
+
+**验证读数**：定向三类 `ConsoleErrorExtractTest` **14/0**（6 原有 + 8 新增）+ `ExecuteSqlErrorHandlingTest` 16/0 + `ResultTabSelectionTest` 16/0。
+
+**门禁（`testShards` + `testDatabase`，收口轮）**：三片 **5617 例 / 0 失败 / 0 错误 / 6 跳过**（shard1 1845、shard2 1887、shard3 1885；`BUILD FAILED` 仅由 `testDatabase` 的两条环境失败触发）。`testDatabase` 10 例 8 过 2 红——两条均为**在册环境失败**：`DbDriverPipelineTest#testDriverArtifactResolvesToJarsOnClasspath`（报文「artifact 清单应能解析 MySQL ConnectorJ@9.7.0（实际版本集: [8.2.0, 8.1.0, …]）」）与 `#testSeedFilesLandWhereDbLooksForThem`，与 `docs/开发计划/20260921-1637-N6-JOIN图原生路径连线缺失-开发计划.md:307-311` 记录的**同两条、逐字同报文**，该处已做基线对照实验（还原全部改动 → 同样 2 例失败、同样断言文本）判为环境/夹具前置。本轮另证两点：① 失败面（驱动制品版本索引 + 种子落点）与本改动零交集，testDatabase 内其余 8 例（DBN 集成类）全过；② 种子/沙盒路径由 `mpv-testing.gradle.kts:224/245/293` 显式指定为 `build/test-sandbox/...`，与临时 `sandboxContainer` 行无关。
+
+**收口轮之前的两次环境性中断（如实登记，非代码问题）**：① 我停掉首个门禁进程时撞上 Gradle 正在清理共享 transform 缓存 → 243 distro transform 产物被删空（`lib/*.jar` 归零），`compileJava` 报 `com.intellij.*` 不存在；② 随后又逢并行会话重建该缓存，`IDE by path … is invalid: Build number is not found` 与 `Timeout waiting to lock Artifact transforms cache`（并行会话 7 路在跑）。两次都按既有纪律**等待重试**（不删共享缓存、不 kill 他人进程），缓存重建后恢复；期间仅清理了**自己**的残留进程（被 kill 的 gradle wrapper，命令行含本工作树路径）。第 3 轮门禁另有 11 例红（`SectionConfigurableAutoCaptureLinkageTest` ×8 全类红在 `super.setUp()`、`AgentManagerPremainTest#test回连次数达上限_通道退休` ×1、`DbDriverPipelineTest` ×2），第 4 轮（本读数）前 9 例全部消失——属在册的「分片顺序依赖/共享 SqlLogManager 项目服务状态/`awaitTrue` 超时红」假失败族（`docs/开发计划/20260919-0445`、`20260919-1817`、`20260921-1630` 均有登记与三步证伪先例）。
+
+**未做（如实登记，留人工）**：§六-2/3/4 的**真机走查**未执行——需要 runIde 沙盒 + 一个可连的 MySQL 数据源并手动点「执行 SQL」，本会话无法完成（自动化侧已由 13 例判据矩阵 + 反向验证覆盖）。§十 的前提 1/2/3 因此**仍未证伪**（其中前提 2 的答案已由代码侧消解：判据只容忍、不依赖时间戳前缀；前提 1 的兜底路径已由 T-CEC-01 的取证日志承接——真机复现时先看 `[T-CEC] console tail` 一行即可定性）。
+
+**顺带观察（既有行为，非本次引入）**：用户日志里 `use mpj_demo` → `completed in 7 ms` 这类「无结果 Tab 的语句」会走满 40 拍窗口并落回 `execute.timeout.hint`（把成功执行的工具语句说成超时）。本次改动不动这条路径（残余会被「回显 + 状态行」全部剔除 → 仍落既有提示），登记为独立议题，未立项。
 
 ## 十、待验证前提（实施者先证伪再动手）
 
