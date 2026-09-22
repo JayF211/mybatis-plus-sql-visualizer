@@ -44,7 +44,6 @@ object JpqlConverter {
     private val JPQL_POSITIONAL_PARAM_TO_Q = Regex("\\?\\d+")
     private val JPQL_IN_SPACE_Q = Regex("(?i)\\bIN\\s+\\?")
     private val JPQL_MEMBER_OF_PATTERN = Regex("(.+)\\s+MEMBER OF\\s+(.+)", RegexOption.IGNORE_CASE)
-    private val JPQL_STRING_LITERAL_EMPTY = Regex("'[^']*'")
 
 
     /**
@@ -104,14 +103,20 @@ object JpqlConverter {
         // 5. 处理 MEMBER OF（降级为注释提示）
         sql = handleMemberOf(sql)
 
+        // 5.5 别名作用域解析（O-57）：须在实体名→表名替换之前扫描（那时实体名还在 SQL 里），
+        // 又须在第 4 步 JOIN 改写之后（改写新增的副表别名只有那时才存在）。
+        // 与 [HqlConverter] 同款编排，两条链行为一致
+        val scope = JpaAliasTableResolver.resolveAliases(sql, table, project)
+
         // 6. 实体名 → 表名映射
         sql = mapEntityToTable(sql, table)
 
-        // 6.5 子查询 FROM/JOIN 中其他实体名 → 表名（J13；需 Project，无则跳过）
-        sql = JpaFromEntityMapper.mapSubqueryEntities(sql, table, project)
+        // 6.5 子查询 FROM/JOIN 中其他实体名 → 表名（J13；需 Project，无则跳过）。
+        // 别名作用域已解析出实体→表名，透传给扫描器复用，免二次 PSI 检索
+        sql = JpaFromEntityMapper.mapSubqueryEntities(sql, table, project, scope.entityTableNames)
 
-        // 7. 属性名 → 列名映射
-        sql = mapPropertyToColumn(sql, table)
+        // 7. 属性名 → 列名映射（按别名作用域分派，副表别名同样映射）
+        sql = mapPropertyToColumn(sql, table, scope)
 
         // 7.5 SELECT 子句展开（T-BareFromSelect）：与 HqlConverter 共用展开器，
         // 补齐隐式查询（`from Entity` 无 SELECT）的列清单与 `SELECT u` 裸别名展开，
@@ -298,24 +303,25 @@ object JpqlConverter {
      *  - 从 TableInfo.columns 获取属性名 → 列名映射
      *  - 对 `alias.property` 形式的引用，将 property 替换为 columnName
      *  - SELECT 多别名展开：处理 `SELECT a.prop, b.prop` 多实体别名场景
+     *
+     * 本重载不携带别名作用域（回落「只看根实体列清单」的历史行为）；
+     * 转换管道内一律走 [mapPropertyToColumn] 的作用域重载。
+     *
+     * O-57 去掉了旧实现里的 `mappedColumnNames` 守卫（逐列「已映射列名不再处理」）：
+     * 独立复核用探针证实它**两头不讨好**——既漏映射（列 `statusText→status` 时
+     * `u.statusText` 不替换），又没挡住链式双重映射（`a→b, b→c` 时 `x.a` 变成 `x.c`）；
+     * 新实现单遍扫描、按属性名查列、不做链式替换，该守卫已无存在理由，不要恢复。
      */
-    fun mapPropertyToColumn(jpql: String, table: TableInfo): String {
-        var result = jpql
-        val mappedColumnNames = mutableSetOf<String>()
-        for (column in table.columns) {
-            if (column.fieldName == column.columnName) {
-                mappedColumnNames.add(column.columnName)
-                continue
-            }
-            if (column.columnName in mappedColumnNames) continue
+    fun mapPropertyToColumn(jpql: String, table: TableInfo): String =
+        mapPropertyToColumn(jpql, table, JpaAliasScope.EMPTY)
 
-            val propertyPattern = Regex("\\.\\b${Regex.escape(column.fieldName)}\\b")
-            result = propertyPattern.replace(result, ".${column.columnName}")
-            mappedColumnNames.add(column.columnName)
-        }
-
-        result = expandSelectAliases(result, table)
-        return result
+    /**
+     * 作用域重载（O-57）：替换核心见 [JpaAliasPropertyMapper]（与 [HqlConverter] 共用同一份实现），
+     * 副表别名的属性按该实体列清单映射。
+     */
+    internal fun mapPropertyToColumn(jpql: String, table: TableInfo, scope: JpaAliasScope): String {
+        val mapped = JpaAliasPropertyMapper.mapProperties(jpql, table, scope)
+        return expandSelectAliases(mapped, table)
     }
 
     /**
@@ -357,9 +363,12 @@ object JpqlConverter {
 
     /**
      * 检测 JPQL 中的子查询（增强版 P1-3）。
+     *
+     * 字面量口径复用 [JpaAliasPropertyMapper.STRING_LITERAL]（本仓唯一一份单引号字面量正则），
+     * 避免各处各写一份 `'[^']*'` 后语义漂移。
      */
     private fun detectSubquery(jpql: String): Boolean {
-        val cleaned = jpql.replace(JPQL_STRING_LITERAL_EMPTY, "''")
+        val cleaned = jpql.replace(JpaAliasPropertyMapper.STRING_LITERAL, "''")
         val subqueryPattern = Regex("\\(\\s*SELECT\\b", RegexOption.IGNORE_CASE)
         return subqueryPattern.containsMatchIn(cleaned)
     }

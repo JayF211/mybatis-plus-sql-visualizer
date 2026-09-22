@@ -14,7 +14,7 @@ import javax.swing.JTextField
 
 /**
  * 项目级设置页测试（F-44 续 + T-SettingsTruth P4 面板扩容）：
- *  - createComponent 构建「使用项目设置」开关 + 十项可覆盖字段（State 十字段一一对应）
+ *  - createComponent 构建「使用项目设置」开关 + 十一项可覆盖字段（State 十一段一一对应）
  *  - 构造后 isModified=false；各控件改动后 isModified 逐项比对为真（T-RA-04 起无标志位）
  *  - apply 写回 ProjectPluginSettings 且 isModified 复位；reset 回灌 state 值
  *  - 空值语义：state null/空字段时控件灌全局值；字符串字段 apply 时 trim
@@ -50,13 +50,19 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         if (check.isSelected != selected) check.doClick()
     }
 
-    fun testCreateComponent_含使用项目设置开关与十项可覆盖字段() {
+    fun testCreateComponent_含使用项目设置开关与十一项可覆盖字段() {
         val cfg = newConfig()
         val comp = cfg.createComponent()
         assertNotNull(comp)
         val checks = all(comp).filterIsInstance<JCheckBox>()
-        // 开关 + 参数替换 + 格式化 + 逻辑删除注入 = 4 个 checkbox
-        assertEquals("应有 4 个 checkbox（开关 + 3 个覆盖项）", 4, checks.size)
+        // 开关 + 参数替换 + 格式化 + 逻辑删除注入 + 列名数据源校正（O-58）= 5 个 checkbox
+        assertEquals("应有 5 个 checkbox（开关 + 4 个覆盖项）", 5, checks.size)
+        // O-58：新覆盖项排在既有 4 个之后（下标 4），文案复用全局页同一 bundle 键
+        assertEquals(
+            "新覆盖项文案须复用全局页同一 bundle 键",
+            MpSqlVisualizerBundle.message("settings.columnCalibration"),
+            checks[4].text,
+        )
         val combos = all(comp).filterIsInstance<JComboBox<*>>()
         // 方言下拉 + 推断策略下拉
         assertEquals("应有 2 个下拉（方言 + 推断策略）", 2, combos.size)
@@ -114,7 +120,8 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         cfg.disposeUIResources()
     }
 
-    fun testApply_十项字段全部写回() {
+    fun testApply_十一项字段全部写回() {
+        val global = PluginSettings.getInstance().state
         val cfg = newConfig()
         val comp = cfg.createComponent()
         val checks = all(comp).filterIsInstance<JCheckBox>()
@@ -122,6 +129,8 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         val replaceParams = checks[1]
         val formatSql = checks[2]
         val injectLogicDelete = checks[3]
+        // O-58：新覆盖项（下标 4 = 既有 4 个之后），勾到与全局相反的值以便断言写回
+        val columnCalibration = checks[4]
         val combos = all(comp).filterIsInstance<JComboBox<*>>()
         val texts = all(comp).filterIsInstance<JTextField>().filter { it !is com.intellij.ui.components.JBCheckBox }
 
@@ -129,6 +138,7 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         clicks(replaceParams, false)
         clicks(formatSql, false)
         clicks(injectLogicDelete, false)
+        clicks(columnCalibration, !global.columnCalibrationEnabled) // O-58：勾到与全局相反
         combos[0].selectedItem = "PostgreSQL"
         texts[0].text = "1" // 逻辑删除值
         texts[1].text = "t_" // 表前缀
@@ -153,6 +163,39 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         assertEquals("_log", st.tableSuffix)
         assertEquals(PluginSettings.INFERENCE_CAMEL, st.tableNameInference)
         assertEquals("temp ; created", st.ignoredFields)
+        // O-58：新覆盖项按控件态写回（与全局相反 → 必须落进 state，不能被「与全局同值不写」门控吞掉）
+        assertEquals(!global.columnCalibrationEnabled, st.columnCalibration)
+        cfg.disposeUIResources()
+    }
+
+    /**
+     * O-58 行为覆盖（不是计数对齐）：新增覆盖项「列名数据源校正」的显示与写回链路，
+     * 与既有三个布尔覆盖（replaceParams / formatSql / injectLogicDelete）同范式。
+     *
+     * 两个方向各断言一次：① state 为 null（跟随全局）且与全局同值 → apply **不得**把 null 钉成
+     * 硬覆盖值（T-TS-FixG7 的「跟随全局不被静默改写」语义）；② 勾到与全局相反 → isModified 翻转、
+     * apply 必须真的写回（否则新设置项是个改不动的摆设）。
+     */
+    fun testO58列名校正开关_显示与写回链路() {
+        val global = PluginSettings.getInstance().state
+        val st = ProjectPluginSettings.getInstance(myFixture.project).state
+        global.columnCalibrationEnabled = false
+        st.useProjectSettings = true
+        st.columnCalibration = null
+
+        val cfg = newConfig()
+        val comp = cfg.createComponent()
+        val check = checksOf(comp)[4]
+        assertFalse("state 为 null 时应显示全局值 false", check.isSelected)
+        assertFalse("与全局同值（null 跟随全局）时不得报已修改", cfg.isModified())
+        cfg.apply()
+        assertNull("未勾选且与全局同值 → apply 不得把 null 钉成硬覆盖值", st.columnCalibration)
+
+        check.doClick()
+        assertTrue("勾到与全局相反后应报已修改", cfg.isModified())
+        cfg.apply()
+        assertEquals("apply 应写入项目级覆盖值 true", true, st.columnCalibration)
+        assertFalse("apply 后应复位（控件显示值 ≡ 派生 state）", cfg.isModified())
         cfg.disposeUIResources()
     }
 
@@ -204,9 +247,11 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         global.tableSuffix = "_g"
         global.tableNameInference = PluginSettings.INFERENCE_CAMEL
         global.ignoredFields = "gIgnore"
+        global.columnCalibrationEnabled = true // O-58
 
         val st = ProjectPluginSettings.getInstance(myFixture.project).state
         st.useProjectSettings = false
+        st.columnCalibration = false // O-58：与全局相反，供分态呈现断言
         st.dialectAuto = false
         st.dialect = "PostgreSQL"
         st.replaceParams = true
@@ -238,6 +283,7 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         assertEquals("关闭态 replaceParams 应显示全局值", false, checks[1].isSelected)
         assertEquals("关闭态 formatSql 应显示全局值", true, checks[2].isSelected)
         assertEquals("关闭态 injectLogicDelete 应显示全局值", false, checks[3].isSelected)
+        assertEquals("关闭态列名校正应显示全局值", true, checks[4].isSelected) // O-58
         assertEquals("关闭态 logicDeleteValue 应显示全局值", "g1", texts[0].text)
         assertEquals("关闭态 tablePrefix 应显示全局值", "g_", texts[1].text)
         assertEquals("关闭态 tableSuffix 应显示全局值", "_g", texts[2].text)
@@ -252,6 +298,7 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         assertFalse("关闭态 replaceParams 应置灰", checks[1].isEnabled)
         assertFalse("关闭态 formatSql 应置灰", checks[2].isEnabled)
         assertFalse("关闭态 injectLogicDelete 应置灰", checks[3].isEnabled)
+        assertFalse("关闭态列名校正应置灰", checks[4].isEnabled) // O-58
         assertFalse("关闭态 logicDeleteValue 应置灰", texts[0].isEnabled)
         assertFalse("关闭态 tablePrefix 应置灰", texts[1].isEnabled)
         assertFalse("关闭态 tableSuffix 应置灰", texts[2].isEnabled)
@@ -278,6 +325,7 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         assertEquals("apply 不得覆盖表后缀残值", "_p", st.tableSuffix)
         assertEquals("apply 不得覆盖推断策略残值", PluginSettings.INFERENCE_SNAKE, st.tableNameInference)
         assertEquals("apply 不得覆盖忽略字段残值", "pIgnore", st.ignoredFields)
+        assertEquals("apply 不得覆盖列名校正残值", false, st.columnCalibration) // O-58
         assertFalse("总开关自身仍按控件态写回", st.useProjectSettings)
         cfg.disposeUIResources()
 
@@ -330,6 +378,7 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         assertEquals("勾选后应显示项目自定义值", "p_", texts[1].text)
         assertEquals("勾选后方言应显示项目自定义值", "PostgreSQL", combos[0].selectedItem)
         assertEquals("勾选后 replaceParams 应显示项目自定义值", true, checksOf(comp)[1].isSelected)
+        assertEquals("勾选后列名校正应显示项目自定义值", false, checksOf(comp)[4].isSelected) // O-58
 
         check.doClick() // 取消勾选：回到置灰 + 全局值
         assertFalse("取消勾选后应置灰", texts[1].isEnabled)
@@ -377,6 +426,7 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         assertEquals("tableSuffix 应归空", "", st.tableSuffix)
         assertEquals("tableNameInference 应归空", "", st.tableNameInference)
         assertEquals("ignoredFields 应归空", "", st.ignoredFields)
+        assertNull("columnCalibration 应归 null（跟随全局）", st.columnCalibration) // O-58
         assertTrue("总开关不得被重置按钮改动", st.useProjectSettings)
 
         // 控件随之刷新：开启态下 9 项全空 = 跟随全局，故显示全局值
@@ -444,6 +494,7 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
         assertEquals("tablePrefix 应仍为空（跟随全局）", "", st.tablePrefix)
         assertEquals("tableSuffix 应仍为空（跟随全局）", "", st.tableSuffix)
         assertEquals("tableNameInference 应仍为空（跟随全局）", "", st.tableNameInference)
+        assertNull("columnCalibration 应仍为 null（跟随全局，不得被钉成全局快照）", st.columnCalibration) // O-58
         assertEquals("用户改过的那一项应写回", "edited", st.ignoredFields)
         cfg.disposeUIResources()
     }
@@ -552,11 +603,11 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
             .filterIsInstance<com.intellij.ui.SimpleColoredComponent>()
 
     /**
-     * P3 登记守卫：10 项（总开关 + 9 项可覆盖字段）逐个可被搜索命中，且命中行的「所属页面」
+     * P3 登记守卫：11 项（总开关 + 10 项可覆盖字段，O-58 起新增列名数据源校正）逐个可被搜索命中，且命中行的「所属页面」
      * 指向项目页 displayName——即条目确实路由到 [ProjectPluginSettingsConfigurable]。
      * 遍历方式照抄 PluginSettingsFolderConfigurableTest（该文件归另一并行子任务所有，本地复制最小 helper）。
      */
-    fun testP3搜索索引_十个项目页条目可命中且路由项目页() {
+    fun testP3搜索索引_十一个项目页条目可命中且路由项目页() {
         val cfg = PluginSettingsFolderConfigurable()
         val comp = cfg.createComponent()
         val list = all(comp).filterIsInstance<com.intellij.ui.components.JBList<*>>().first()
@@ -573,6 +624,7 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
             "settings.tableSuffix",
             "settings.tableNameInference",
             "settings.ignoredFields",
+            "settings.columnCalibration", // O-58：新增覆盖项必须同时进页面与搜索索引
         )
         for (key in projectKeys) {
             val label = MpSqlVisualizerBundle.message(key)
@@ -696,7 +748,7 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     /**
-     * T-FS-09 守卫：项目页 10 项搜索条目在其页面上**均能定位到高亮目标**。
+     * T-FS-09 守卫：项目页 11 项搜索条目在其页面上**均能定位到高亮目标**（O-58 起新增列名数据源校正）。
      *
      * 缺陷形态（修复前）：[PluginSettingsFolderConfigurable] 的 `findComponent` 只认
      * `JBLabel`，而项目页走 DSL v2（`row(label)` 生成的是普通 `JLabel`）→ 6 行
@@ -706,7 +758,7 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
      * 边界（如实登记）：闪烁本身是视觉行为，headless 只能断言「目标可定位」这半边；
      * 真机走查见交付汇报的「环境受限未验证」清单。
      */
-    fun testTFS09_十项搜索条目在项目页均可定位到高亮目标() {
+    fun testTFS09_十一项搜索条目在项目页均可定位到高亮目标() {
         val page = ProjectPluginSettingsConfigurable(myFixture.project).createComponent()
         val folder = PluginSettingsFolderConfigurable()
         val projectKeys = listOf(
@@ -720,6 +772,7 @@ class ProjectPluginSettingsConfigurableTest : BasePlatformTestCase() {
             "settings.tableSuffix",
             "settings.tableNameInference",
             "settings.ignoredFields",
+            "settings.columnCalibration", // O-58：新增覆盖项也必须能定位到高亮目标（名实相符）
         )
         val missed = projectKeys.filter {
             folder.findHighlightTargetForTest(page, MpSqlVisualizerBundle.message(it)) == null

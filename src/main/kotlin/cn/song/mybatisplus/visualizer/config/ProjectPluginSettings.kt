@@ -68,6 +68,9 @@ class ProjectPluginSettings : PersistentStateComponent<ProjectPluginSettings.Sta
 
         /** 项目级忽略字段名（空字符串表示使用全局）。 */
         var ignoredFields: String = "",
+
+        /** 项目级列名数据源校正开关（O-58；null 表示使用全局）。 */
+        var columnCalibration: Boolean? = null,
     )
 
     private var state = State()
@@ -137,6 +140,14 @@ class ProjectPluginSettings : PersistentStateComponent<ProjectPluginSettings.Sta
     fun effectiveIgnoredFields(): String =
         if (state.useProjectSettings && state.ignoredFields.isNotBlank()) state.ignoredFields
         else PluginSettings.getInstance().state.ignoredFields
+
+    /** 项目级列名数据源校正开关（O-58；未启用或 null 则回退全局）。 */
+    fun effectiveColumnCalibration(): Boolean =
+        if (state.useProjectSettings) {
+            state.columnCalibration ?: PluginSettings.getInstance().state.columnCalibrationEnabled
+        } else {
+            PluginSettings.getInstance().state.columnCalibrationEnabled
+        }
 
     companion object {
         /**

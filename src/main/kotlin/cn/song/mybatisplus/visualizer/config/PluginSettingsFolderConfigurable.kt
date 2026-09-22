@@ -518,6 +518,7 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.removeTableSuffix"), b.message("settings.removeTableSuffix.tip"), "settings.section.tableMapping", t))
             fields.add(SearchableField(b.message("settings.ignoredFields"), b.message("settings.ignoredFields.tip"), "settings.section.tableMapping", t))
             fields.add(SearchableField(b.message("settings.tableNameInference"), b.message("settings.tableNameInference.tip"), "settings.section.tableMapping", t))
+            fields.add(SearchableField(b.message("settings.columnCalibration"), b.message("settings.columnCalibration.tip"), "settings.section.tableMapping", t))
 
             // SQL 日志
             val l = PAGE_SQL_LOG.ref
@@ -567,7 +568,8 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.update.versionInfo"), "", "settings.section.about", a))
             fields.add(SearchableField(b.message("settings.buildNumber"), b.message("settings.buildNumber.tip"), "settings.section.about", a))
 
-            // T-ProjectSettingsScope P3：项目级设置页 10 项（总开关 + 9 项可覆盖字段）。
+            // T-ProjectSettingsScope P3：项目级设置页 11 项（总开关 + 10 项可覆盖字段；O-58 起新增
+            // 列名数据源校正，索引条目与页面控件同批扩一项）。
             // 前置对照实验（ProjectPluginSettingsConfigurableTest 内探针）：项目上下文下该页在设置树里
             // （ConfigurableVisitor.findByType 走 Configurable.PROJECT_CONFIGURABLE，project=null 时为 null），
             // 故本页条目可跳转，不是 T-SettingsTruth P3 清理过的「幽灵搜索项」形态。
@@ -584,6 +586,7 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.tableSuffix"), b.message("settings.tableSuffix.tip"), "configurable.settings.project.displayName", pj))
             fields.add(SearchableField(b.message("settings.tableNameInference"), b.message("settings.tableNameInference.tip"), "configurable.settings.project.displayName", pj))
             fields.add(SearchableField(b.message("settings.ignoredFields"), b.message("settings.ignoredFields.tip"), "configurable.settings.project.displayName", pj))
+            fields.add(SearchableField(b.message("settings.columnCalibration"), b.message("settings.columnCalibration.tip"), "configurable.settings.project.displayName", pj))
 
             return fields
         }

@@ -47,6 +47,7 @@ object SettingsIO {
         appendLine("  \"tableSuffix\": ${jsonString(state.tableSuffix)},")
         appendLine("  \"tableNameInference\": ${jsonString(state.tableNameInference)},")
         appendLine("  \"ignoredFields\": ${jsonString(state.ignoredFields)},")
+        appendLine("  \"columnCalibrationEnabled\": ${state.columnCalibrationEnabled},")
         appendLine("  \"removeTablePrefix\": ${jsonString(state.removeTablePrefix)},")
         appendLine("  \"removeTableSuffix\": ${jsonString(state.removeTableSuffix)},")
         appendLine("  \"dataPermissionHint\": ${state.dataPermissionHint},")
@@ -65,9 +66,9 @@ object SettingsIO {
      * 合并语义（T-Fix-SettingsScope）：以 [base] 为底，仅覆盖 JSON 中**实际出现**的键；
      * JSON 未出现的键保留 [base] 的现值，未知字段忽略。
      *
-     * 为什么必须以现值为底：[exportToJson] 只写 21 个可覆盖项，而 [PluginSettings.State]
-     * 有 77 个 var 字段。若以新建出厂默认态为底，一次导入会把参数历史（paramHistoryJson）、
-     * 增强捕获授权记忆、反馈身份、日志自动保存目录等**文件里根本没有的字段**静默重置为
+     * 为什么必须以现值为底：[exportToJson] 只写 23 个可覆盖项，而 [PluginSettings.State]
+     * 有 81 个 var 字段（O-58 起含 columnCalibrationEnabled）。若以新建出厂默认态为底，一次导入会把
+     * 参数历史（paramHistoryJson）、增强捕获授权记忆、反馈身份、日志自动保存目录等**文件里根本没有的字段**静默重置为
      * 出厂默认——用户侧表现为不可见的数据丢失（本文件 KDoc 自称「不含全局项」，却又把
      * autoCheckUpdate/ignoredUpdateVersions 一并重置，自相矛盾）。
      *
@@ -104,6 +105,7 @@ object SettingsIO {
         map.getString("tableSuffix")?.let { state.tableSuffix = it }
         map.getString("tableNameInference")?.let { state.tableNameInference = it }
         map.getString("ignoredFields")?.let { state.ignoredFields = it }
+        map.getBoolean("columnCalibrationEnabled")?.let { state.columnCalibrationEnabled = it }
         map.getString("removeTablePrefix")?.let { state.removeTablePrefix = it }
         map.getString("removeTableSuffix")?.let { state.removeTableSuffix = it }
         map.getBoolean("dataPermissionHint")?.let { state.dataPermissionHint = it }

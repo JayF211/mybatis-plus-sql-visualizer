@@ -165,4 +165,13 @@ data class ColumnInfo(
     val generatedValueStrategy: String? = null,
     val embedded: Boolean = false,
     val converted: Boolean = false,
+    /**
+     * 展平本列的**嵌入对象字段名**（`@Embedded` 展平时写入，非嵌入列为 null）。
+     *
+     * 存在的理由：嵌入对象没有自己的表，其字段直接落在宿主表的列上，所以 HQL 路径
+     * `别名.嵌入对象字段.内层字段` 必须映射为 `别名.内层列名`（去掉嵌入段）——保留嵌入段会产出
+     * 无效 SQL（SQL 语义下 `别名.嵌入对象` 被当成「库.表」）。路径映射据此判断该不该丢中间段，
+     * 而不是靠「中间段不是本表字段就丢掉」这种猜测（后者会误删别的合法中间段）。
+     */
+    val embeddedParent: String? = null,
 )

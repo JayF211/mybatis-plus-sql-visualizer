@@ -110,6 +110,58 @@ object DatabaseSchemaResolver {
     }
 
     /**
+     * O-58：多表的**全列名**集合（**只读缓存，不触发遍历**）。
+     *
+     * 与 [columnsCached] 同源同口径——同一 [metaCache]、同 P7 库名维度、同「首个持有者」语义，
+     * 差别只在返回维度：[columnsCached] 给「列名 → 列元数据」（因此天然只含带元数据的子集，见
+     * [TableMeta.allColumnNames] 的说明），这里给「表名 → 该表全部列名」。单开入口而不是复用
+     * [columnsCached]，既让两处语义各自明确，也让 [columnsCached] 的既有消费方（补全候选）
+     * 零改动。未预热 / 数据源未连 / 社区版一律返回空 Map，调用方回落。
+     */
+    fun columnNamesCached(project: Project?, tableNames: Collection<String>): Map<String, Set<String>> {
+        if (project == null || tableNames.isEmpty()) return emptyMap()
+        if (!isDatabaseAvailable()) return emptyMap()
+        val dataSources = dataSources(project) ?: return emptyMap()
+        synchronized(metaCache) {
+            return mergeCachedColumnNames(tableNames, columnNameSources(dataSources))
+        }
+    }
+
+    /**
+     * P7：按数据源顺序给出「表名 → 该源缓存里的全列名」查询器（该源未持有该表返回 null）。
+     * 与 [columnsCached] 内部的查询器同构；抽成 internal 是为了让 [mergeCachedColumnNames]
+     * 的合并语义能在无 database 插件的单测环境里直测（同 [mergeCachedColumns] 的既有做法）。
+     */
+    internal fun columnNameSources(dataSources: List<Any>): List<(String) -> Set<String>?> =
+        dataSources.map { ds ->
+            val db = databaseNameOf(ds)
+            val lookup: (String) -> Set<String>? = { name ->
+                metaCache[ds]?.get(cacheKeyOf(db, name))?.allColumnNames
+            }
+            lookup
+        }
+
+    /**
+     * P7：「首个持有者」合并（口径与 [mergeCachedColumns] 逐条一致）——每个表名只认首个持有它的
+     * 数据源，避免跨库同名表互相污染；不同表名之间各取各的。
+     */
+    internal fun mergeCachedColumnNames(
+        tableNames: Collection<String>,
+        sources: List<(String) -> Set<String>?>,
+    ): Map<String, Set<String>> {
+        val out = linkedMapOf<String, Set<String>>()
+        for (name in tableNames) {
+            if (name.isBlank()) continue
+            for (lookup in sources) {
+                val names = lookup(name) ?: continue
+                out[name] = names
+                break
+            }
+        }
+        return out
+    }
+
+    /**
      * T-DbSchemaCompletion：预热若干表的 schema 缓存（供 [columnsCached] 零遍历读取）。
      *
      * **调用方负责线程**（BGT 执行；内部 [tableMeta] 自带 ReadAction）；Community、无数据源、
@@ -350,6 +402,13 @@ object DatabaseSchemaResolver {
         val comment: String?,
         val columns: Map<String, ColumnMeta>,
         val scanBailed: Boolean = false,
+        /**
+         * O-58：该表的**全部**列名——含 [columns] 因「无注释 ∧ 无类型串 ∧ notNull 不为 true」而
+         * 未收录元数据的列。列名集合是独立维度：列名校正要在它上面做**唯一性**判定，而唯一性判定
+         * 在不完整子集上会失真（同形两列里少了一列 → 歧义消失 → 选错列）。默认空集，既有构造点
+         * （测试替身 / bail 早退）语义逐字不变。
+         */
+        val allColumnNames: Set<String> = emptySet(),
     )
 
     /** 数据源侧列元数据（均为 null 时表示该维度缺失，调用方逐维度回落）。 */
@@ -637,6 +696,8 @@ object DatabaseSchemaResolver {
     private fun collectFromDataSource(ds: Any, tableName: String): TableMeta {
         var tableComment: String? = null
         val out = linkedMapOf<String, ColumnMeta>()
+        // O-58：列名**无条件**收录（下面的元数据过滤只作用于 out，不影响本集合）
+        val allNames = linkedSetOf<String>()
         // T-Embed-10.5 探针：B 路径 locateDbTables 直调同模型命中而本链 not found——
         // 分辨 elements 空遍历 / DasTable 筛不出 / 名称不匹配三种情形
         var scannedTables = 0
@@ -678,6 +739,7 @@ object DatabaseSchemaResolver {
                     if (col == null || !acc.isColumn(col)) continue
                     val cName = acc.name(col) ?: continue
                     if (cName.isBlank()) continue
+                    allNames.add(cName)
                     val comment = acc.comment(col)
                     val typeSpec = acc.typeSpec(col)
                     val notNull = acc.notNull(col)
@@ -701,8 +763,8 @@ object DatabaseSchemaResolver {
         LOG.info(
             "DatabaseSchemaResolver scan: table=$tableName, ds=${dsName(ds)}, bail=${bail ?: "-"}, " +
                 "tablesScanned=$scannedTables, hit=$hit, foundColumns=${out.size}, " +
-                "tableComment=${tableComment != null}",
+                "totalColumns=${allNames.size}, tableComment=${tableComment != null}",
         )
-        return TableMeta(tableComment, out, scanBailed = bail != null)
+        return TableMeta(tableComment, out, scanBailed = bail != null, allColumnNames = allNames)
     }
 }

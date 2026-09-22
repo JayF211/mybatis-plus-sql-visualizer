@@ -32,6 +32,7 @@ class SettingsIOTest {
             tableSuffix = "_log",
             ignoredFields = "remark;transientField",
             tableNameInference = PluginSettings.INFERENCE_CAMEL,
+            columnCalibrationEnabled = false, // O-58：与出厂默认（true）相反，缺导出会露馅
         )
         val json = SettingsIO.exportToJson(state)
         assertTrue("JSON 应含 version", json.contains("\"version\": $currentVersion"))
@@ -47,6 +48,8 @@ class SettingsIOTest {
         assertTrue("JSON 应含 tableSuffix", json.contains("\"tableSuffix\": \"_log\""))
         assertTrue("JSON 应含 ignoredFields", json.contains("\"ignoredFields\": \"remark;transientField\""))
         assertTrue("JSON 应含 tableNameInference", json.contains("\"tableNameInference\": \"CAMEL\""))
+        // O-58：列名数据源校正开关必须在导出面内（同类可覆盖项都在；漏了会让「导出→导入」丢配置）
+        assertTrue("JSON 应含 columnCalibrationEnabled", json.contains("\"columnCalibrationEnabled\": false"))
     }
 
     @Test
@@ -161,6 +164,7 @@ class SettingsIOTest {
             tableSuffix = "_bak",
             ignoredFields = "temp",
             tableNameInference = PluginSettings.INFERENCE_CAMEL,
+            columnCalibrationEnabled = false, // O-58：非默认值，往返丢字段必红
         )
         val json = SettingsIO.exportToJson(original)
         val restored = SettingsIO.importFromJson(json)
@@ -173,6 +177,11 @@ class SettingsIOTest {
         assertEquals("往返后 tableSuffix 一致", original.tableSuffix, restored.tableSuffix)
         assertEquals("往返后 ignoredFields 一致", original.ignoredFields, restored.ignoredFields)
         assertEquals("往返后 tableNameInference 一致", original.tableNameInference, restored.tableNameInference)
+        assertEquals(
+            "往返后 columnCalibrationEnabled 一致（O-58 新开关不得在导出/导入链路里丢失）",
+            original.columnCalibrationEnabled,
+            restored.columnCalibrationEnabled,
+        )
     }
 
     @Test
@@ -193,7 +202,7 @@ class SettingsIOTest {
 
     @Test
     fun testImportMergesIntoBaseKeepingKeysAbsentFromJson() {
-        // 导出面是 State 的子集（21 键 vs 77 个 var 字段）。以现值为底合并时，文件未承载的
+        // 导出面是 State 的子集（23 键 vs 81 个 var 字段）。以现值为底合并时，文件未承载的
         // 字段必须原样保留——否则参数历史/增强捕获授权记忆/反馈身份/日志自动保存目录等
         // 用户数据会在一次「导入设置」后静默归零。
         val base = PluginSettings.State(

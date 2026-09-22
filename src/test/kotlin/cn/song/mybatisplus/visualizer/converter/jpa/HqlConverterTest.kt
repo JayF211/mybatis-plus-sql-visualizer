@@ -182,6 +182,23 @@ class HqlConverterTest {
         val result = HqlConverter.convert(hql, wmsZoneTable)
         assertEquals("wms_zone", result.statement.table.tableName)
         assertTrue("SQL 应含 IN (?)", result.sql.contains("in (?)"))
+
+        // O-57：副表别名的属性必须映射为列名（改前原样透传 loc.zoneId，执行报 Unknown column）。
+        // 本类为纯 JUnit4（无 Project/索引），经实体解析函数注入形态验证；
+        // 生产入口的 project 形态见 HqlAliasColumnMappingTest。
+        val wmsLocationTable = TableInfo(
+            entityClassName = "WmsLocation",
+            tableName = "wms_location",
+            columns = listOf(
+                ColumnInfo("id", "id", isId = true),
+                ColumnInfo("zoneId", "zone_id"),
+            ),
+        )
+        val mapped = HqlConverter.convertWithEntityResolver(hql, wmsZoneTable) { name ->
+            if (name == "WmsLocation") wmsLocationTable else null
+        }
+        assertTrue("副表别名属性应映射为列名: ${mapped.sql}", mapped.sql.contains("loc.zone_id"))
+        assertTrue("根实体属性映射不回归: ${mapped.sql}", mapped.sql.contains("z.be_auto_zone"))
     }
 
     @Test

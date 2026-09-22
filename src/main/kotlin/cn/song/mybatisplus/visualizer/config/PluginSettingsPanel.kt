@@ -368,6 +368,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 移除表名后缀输入框（T-M19.4）：`;` 分隔，最终表名以哪个结尾就移除哪个（首个匹配）。 */
     private val removeTableSuffixField = JBTextField(12)
 
+    /** 列名数据源校正开关（O-58）：实体字段名与库真实列名不一致时用数据源真值纠正列名。 */
+    private val columnCalibrationCheck = JBCheckBox()
+
     /** 界面语言下拉（M14：默认简体中文；跟随系统 / English 可选）。 */
     private val languageCombo = JComboBox<LanguageOption>()
 
@@ -669,6 +672,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     toolTipText = MpSqlVisualizerBundle.message("settings.tableNameInference.tip")
                     selectedItem = inferenceOptions().firstOrNull { it.value == settings.state.tableNameInference }
                         ?: inferenceOptions().first()
+                })
+                addRow(p, g, "", columnCalibrationCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.columnCalibration")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.columnCalibration.tip")
                 })
             }
         }
@@ -1430,6 +1437,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || ignoredFieldsField.text.trim() != s.ignoredFields
             || removeTablePrefixField.text.trim() != s.removeTablePrefix
             || removeTableSuffixField.text.trim() != s.removeTableSuffix
+            || columnCalibrationCheck.isSelected != s.columnCalibrationEnabled
 
     private fun isModifiedCodeGen(s: PluginSettings.State): Boolean =
         (reverseFormatCombo.selectedItem as? ReverseFormatOption)?.value != s.reverseWrapperFormat
@@ -1537,6 +1545,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.ignoredFields = ignoredFieldsField.text.trim()
             s.removeTablePrefix = removeTablePrefixField.text.trim()
             s.removeTableSuffix = removeTableSuffixField.text.trim()
+            s.columnCalibrationEnabled = columnCalibrationCheck.isSelected
         }
         if (SECTION_CODE_GEN in sections) {
             s.reverseWrapperFormat = (reverseFormatCombo.selectedItem as? ReverseFormatOption)?.value ?: PluginSettings.REVERSE_AUTO
@@ -1669,6 +1678,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             ignoredFieldsField.text = s.ignoredFields
             removeTablePrefixField.text = s.removeTablePrefix
             removeTableSuffixField.text = s.removeTableSuffix
+            columnCalibrationCheck.isSelected = s.columnCalibrationEnabled
         }
         if (SECTION_CODE_GEN in sections) {
             reverseFormatCombo.selectedItem = reverseFormatOptions().firstOrNull { it.value == s.reverseWrapperFormat }
