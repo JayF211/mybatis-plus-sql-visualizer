@@ -17,7 +17,7 @@
 | R2 | **shard3 flake 的最后一个来源：测试侧 `@After` 取服务** | `testutil/SqlLogManagerProjectState` 的调用方在 `@After` 里经 `logManager()`（`AlreadyDisposedDiagnostics.projectService`）取服务做复原，而 `@After` 正是 temporarily-disposed 窗口高发时段；服务容器一次创建失败即永久毒化（T-ST-02b2 已证） | 让快照**持有 manager 引用**、`@After` 只 `restore(snapshot)` 不再取服务；**同步改姊妹守卫** `convention/BannedApiSourceScanTest`（它认的是双参 `restore(承接名, snapshot)` 形态）；涉及 5~7 个使用该工具的测试类 | ~1 小时 + 门禁 |
 | R3 | **`HeartbeatRhythmTest` 容差 1.5× 偏紧** | `sub-projects/sql-visualizer-agent/src/test/java/.../transport/HeartbeatRhythmTest.java` 的 `TOLERANCE`；本机门禁实测命中一次（472ms > 450ms，同代码复跑 5645 例全绿）——属 `T-PerfSweep6` 发现 14 的登记处置 | 容差放宽到 **2×**（并注明依据：并行构建下调度抖动可达百毫秒级） | 几分钟 |
 | R4 | **IDE 侧复核的 3 条低风险** | ① `AgentManager` 的 ACK 超时 WARN 不判会话健康——socket 半死时把「连接已断」误叙成「应用侧未生效」（复核 F3）；② `INTAKE_DROP_WARN_STEP` / `CONFIG_ACK_TIMEOUT_MS` 无字面值断言（F7）；③ 旧 agent（无 ACK）混合版本下桥永久放行 → 双通道共存（F2） | ① 超时 WARN 补判会话健康并分文案；② 补两条字面值断言；③ 仅在 KDoc/CHANGELOG 记边界（不改行为，靠去重折叠） | ~40 分钟 |
-| R5 | **T-08 的语句级边界** | `sub-projects/.../hook/ConnectionHandler.java` 的逐调用 `isDisabled()` 短路在 `prepareStatement` 处即直通 → 停采期间 prepare 的语句在恢复后仍不包装（MyBatis 默认 `SimpleExecutor` 每条查询现 prepare，**实际不可达**；仅 `ReuseExecutor` 一类会命中） | 二选一（**待定案 D1**）：A 保持现状 + KDoc 记边界；B 改为「只在执行级短路」（`StatementHandler`），让停采期间 prepare 的语句也被包装 | ~30 分钟 |
+| R5 | **T-08 的语句级边界** | `sub-projects/.../hook/ConnectionHandler.java` 的逐调用 `isDisabled()` 短路在 `prepareStatement` 处即直通 → 停采期间 prepare 的语句在恢复后仍不包装（MyBatis 默认 `SimpleExecutor` 每条查询现 prepare，**实际不可达**；仅 `ReuseExecutor` 一类会命中） | **已定案选 B**（见 §五 D1）：① 删 `ConnectionHandler.invoke` 顶层的 `isDisabled()` 短路（三分支包装逻辑与其它方法直通不变）；② `StatementHandler.invoke` 的逐调用短路**保留为唯一闸门**（停采期间照样零产出、参数不累积）；③ `SqlHookCallbacks.dropToRaw` 一次性告警改为**停采态只计数不打印、不占名额**；④ KDoc 写明「禁用＝volatile 短路」这条红线现落在**执行点**，连接/语句包装一律在位；⑤ 新增确定性用例（停采态 prepare → 下发 `disabled=false` → 执行同一语句 → 产出事件；对照臂：停采期间执行不产出）+ 反向验证（加回顶层短路必红） | ~30 分钟 + 门禁 |
 | R6 | **`testDatabase` 2 例在册环境失败** | `execute/DbDriverPipelineTest` 的 `testDriverArtifactResolvesToJarsOnClasspath`（本地驱动版本集不含 ConnectorJ 9.7.0）与 `testSeedFilesLandWhereDbLooksForThem`（新工作树沙盒路径未播种） | 先判定是否纯环境性（干净环境复现），再决定「修判据」或「登记为环境前置」；**依赖本机 Database 插件/驱动环境** | 依赖环境 |
 | R7 | **真机级探针未纳门禁** | `dev-support/e2e-fake-ide`（假 IDE + `-javaagent` 注入真实 Spring Boot/MPJ 应用，本轮靠它抓到 T-08）现为手动运行 | 包一个 gradle 任务（如 `e2eFakeIde`）挂到收口清单，作为**发布前置**的可脚本化验收（不挂默认 `testShards`，避免拖慢门禁） | ~1 小时 |
 
@@ -53,8 +53,10 @@
 
 ## 五、待用户定案
 
-- **D1（本计划）**：R5 选 A（保持现状 + 记边界）还是 B（改为执行级短路，让停采期间 prepare 的语句也包装）？
-  倾向 A——默认 `SimpleExecutor` 下不可达，改造要动 agent 包装层且需新用例兜住；B 的价值只在 `ReuseExecutor` 一类。
+- **D1：已定案（2026-09-22 用户）——选 B（改为「只在执行级短路」）。**
+  理由（长远视角）：① 消除的是一类**静默失败**（停采期间 prepare 的语句恢复后永不产出，不报错不提示——与刚交付的 T-08 同族，而 T-08 只有真机探针才抓到）；② 规则从「连接级/语句级/执行级三层各看一次开关」收敛为**一条**「开关只在执行点判定」；③ 与 T-08 的修法同构（连接级一律包装、只在调用处短路），避免后来人问「为什么连接一律包、语句却看状态」——那正是下一个缺陷的温床；④ 可被确定性用例钉住，而 A 的缺口只能写进 KDoc，文档里的边界最后都会变成报障。
+  代价与压法：停采态每个 `prepareStatement` 多一次代理分配（小对象，且只在已授权增强捕获的进程内）→ 在性能复查里登记一次；「关闭态会不会被代理搞坏」不是新增面（捕获开着时本来就把代理交给应用）→ 仅在 KDoc 写明。**另修** `dropToRaw` 的一次性告警名额被停采态失败消耗的问题（停采态只计数不打印、不占名额）。
+  实施：见 R5 行的具体做法与用例。
 
 ## 六、验收判据
 
