@@ -1258,7 +1258,9 @@ class BannedApiSourceScanTest {
      * 基线变迁：595（T-SyncK2JMaster92 首次登记）→ **597**（同轮吸收 master 9f4bbb9 的
      * `SqlPreviewPanel` 预热链生命周期修复时新增 2 处 `catch (Throwable)`——master 侧是两处
      * `runCatching`，Java 只能落成 try/catch；两处均只置标志/解除登记，不覆盖 fatal 面）
-     * → **615**（T-SyncK2JMaster115，master b9aeeba..8f51b9e 增量）。
+     * → **615**（T-SyncK2JMaster115，master b9aeeba..8f51b9e 增量）
+     * → **636**（k2j 树 2026-09-23 T-SyncK2JMaster184 重登记，597→615→636：心跳/execute/config
+     * 等批次移植新增 21 处 `catch (Throwable)`，与 master 侧同源的降级形态，均不覆盖 fatal 面）。
      *
      * **+18 的来源（本轮逐文件对账）**：master 侧全部是 `runCatching {}.onFailure{}/getOrElse{}`
      * 形态（Kotlin 的 `runCatching` 不产生 catch 块，故 master 的 Kotlin 树守卫看不见），Java 侧只能
@@ -1272,7 +1274,7 @@ class BannedApiSourceScanTest {
      * 以上均**只做降级、不覆盖 fatal 面**（无一处吞掉 `VirtualMachineError`/`LinkageError`/
      * `ThreadDeath` 后继续运行），与 master 同源；故按守卫既定流程重新登记基线，而非逐站点补判定。
      */
-    private val fatalCatchSiteTotalBaseline = 615
+    private val fatalCatchSiteTotalBaseline = 636
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线

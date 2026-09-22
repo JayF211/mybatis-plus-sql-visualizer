@@ -372,8 +372,8 @@ public final class DynamicInstallSupport {
         Application app = ApplicationManager.getApplication();
         if (app == null) return ModalityState.nonModal();
         AtomicReference<ModalityState> captured = new AtomicReference<>();
-        // write-safe: UI-only（只读当前模态，无文档/模型写；any() 保证模态弹窗存续期跳板照常执行）
         try {
+            // write-safe: UI-only（只读当前模态，无文档/模型写；any() 保证模态弹窗存续期跳板照常执行）
             app.invokeAndWait(() -> captured.set(ModalityState.current()), ModalityState.any());
         } catch (Throwable ignored) {
             // runCatching 等价：取不到当前模态，交给 chooseDispatchModality 的 nonModal 退化

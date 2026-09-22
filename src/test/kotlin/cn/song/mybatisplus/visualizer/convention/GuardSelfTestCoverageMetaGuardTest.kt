@@ -669,11 +669,12 @@ class GuardSelfTestCoverageMetaGuardTest {
                         "assertNoHits",
                         FnKind.HELPER,
                         "断言助手（返回 Unit，不返回违规点集合），命名偶然命中 *Hits 兜底形状；" +
-                            "其行为由下列主用例的断言直接覆盖（via 即这三个调用点）",
+                            "其行为由下列主用例的断言直接覆盖（via 即这两个调用点）。k2j 树注（2026-09-23）：原第三条 " +
+                            "via `剪贴板写入只允许收口与白名单直用` 已删——该用例在 k2j 移植后改走白名单过滤断言，" +
+                            "不再调用本函数，转发边不存在",
                         via = listOf(
                             "禁用ActionToolbar旧式刷新API与反射强改按钮hack",
                             "禁用IPGP发行版裁剪平台类",
-                            "剪贴板写入只允许收口与白名单直用",
                         ),
                     ),
                     DecisionFn(
@@ -690,12 +691,10 @@ class GuardSelfTestCoverageMetaGuardTest {
                     ),
                     DecisionFn("anyModalityWriteOffenders", FnKind.VIOLATIONS),
                     DecisionFn("defaultModalityWriteOffenders", FnKind.VIOLATIONS),
-                    DecisionFn(
-                        "throwableCatchSites",
-                        FnKind.SITES,
-                        "站点提取器（catch (…: Throwable) 站点），被 fatalPassthroughOffenders 调用；自证经该转发边到达",
-                        via = listOf("fatalPassthroughOffenders"),
-                    ),
+                    // 原「经 fatalPassthroughOffenders 转发」的豁免已删（2026-09-23）：`TFP03自证_…`
+                    // 用例已在断言里**直接引用**本函数（嵌套块注释口径对照断言），自证不再依赖转发边——
+                    // 按判据 3 豁免随语料补齐而删除。
+                    DecisionFn("throwableCatchSites", FnKind.SITES),
                     DecisionFn("fatalPassthroughOffenders", FnKind.VIOLATIONS),
                     DecisionFn("pooledThreadSites", FnKind.SITES),
                     DecisionFn("psiCaptureOffenders", FnKind.VIOLATIONS),
@@ -726,17 +725,10 @@ class GuardSelfTestCoverageMetaGuardTest {
             ),
             GuardEntry(
                 "convention/DialogWrapperInitOrderGuardTest.kt",
-                listOf(
-                    DecisionFn("scan", FnKind.VIOLATIONS),
-                    // 独立复核㉗ 判据 7 补登记：Boolean 形态谓词此前完全不在登记面内
-                    DecisionFn(
-                        "writesAt",
-                        FnKind.HELPER,
-                        "纯赋值形态谓词（`name = expr`，排除 `==`/`+=`），是判定内核 scan 的输入谓词；自证经该转发边到达",
-                        via = listOf("scan"),
-                    ),
-                ),
-                "判定函数名不命中命名形状（叫 scan，:178）——正是「登记表为主识别面」的实证；自证 :363",
+                listOf(DecisionFn("scan", FnKind.VIOLATIONS)),
+                "判定函数名不命中命名形状（叫 scan，:178）——正是「登记表为主识别面」的实证；自证 :363。" +
+                    "k2j 树注（2026-09-23）：master 侧的 `writesAt` 形态谓词在本类 k2j 移植时未单独成函数，" +
+                    "`name = expr` 赋值判定正则内联进 initializerOf/scan 函数体——以 k2j 源码为准，登记条目删除",
             ),
             GuardEntry(
                 "convention/EnumReachabilityGuardTest.kt",
@@ -853,8 +845,19 @@ class GuardSelfTestCoverageMetaGuardTest {
             ),
             GuardEntry(
                 "log/agent/AgentUrlDecoupleGuardTest.kt",
-                emptyList(),
-                "断言直接内联在 @Test；source(:38) 为夹具",
+                listOf(
+                    // 判据 7 补登记（2026-09-23）：类级 Boolean 返回函数必须逐条登记。
+                    // 定性为 HELPER：只是「容忍换行/空白的成员访问」匹配谓词（k2j Java 形态适配件），
+                    // 不返回违规点/站点集合，本类断言仍直接内联在 @Test——非判定内核。
+                    DecisionFn(
+                        "containsMemberAccess",
+                        FnKind.HELPER,
+                        "成员访问匹配谓词（容忍换行/空白的正则，k2j Java 形态适配件），只是断言助手、" +
+                            "非判定内核（本类断言直接内联在 @Test）；via 即调用它的用例",
+                        via = listOf("推断读点不再引用AgentManager"),
+                    ),
+                ),
+                "断言直接内联在 @Test；source(:38) 为夹具，containsMemberAccess(:51) 为匹配助手（经上面 via 用例调用）",
             ),
             GuardEntry(
                 "mcp/McpScopeSourceScanTest.kt",
