@@ -1,3 +1,4 @@
+// T-SyncK2JMaster184 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt 移植（T-ST-02b2：历史耗时补全读路径改 sqlLogManagerIfCreated）
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
@@ -23,6 +24,7 @@ import cn.song.mybatisplus.visualizer.history.SqlHistoryEntry;
 import cn.song.mybatisplus.visualizer.history.SqlHistoryManager;
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry;
 import cn.song.mybatisplus.visualizer.log.SqlLogManager;
+import cn.song.mybatisplus.visualizer.log.SqlLogManagerLookupKt;
 import cn.song.mybatisplus.visualizer.model.AssociationInfo;
 import cn.song.mybatisplus.visualizer.model.ColumnInfo;
 import cn.song.mybatisplus.visualizer.model.ColumnRef;
@@ -2450,8 +2452,9 @@ public final class SqlPreviewService {
             }
             String tableName = (result.getTableName() != null) ? result.getTableName() : "";
             // 尝试从最近日志条目补全耗时（SQL 指纹匹配）
+            // T-ST-02b2：读路径经 sqlLogManagerIfCreated（永不发起创建）；取不到即不做耗时补全（等同未命中）
             Long executionTimeMs = null;
-            SqlLogManager logManager = anchor.getProject().getService(SqlLogManager.class);
+            SqlLogManager logManager = SqlLogManagerLookupKt.sqlLogManagerIfCreated(anchor.getProject());
             if (logManager != null) {
                 executionTimeMs = logManager.getEntries().snapshot().stream()
                         .filter(e -> Objects.equals(e.restoredSql(), result.getSql()))

@@ -1,6 +1,8 @@
 // T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/DegradationBanner.kt 移植
+// T-SyncK2JMaster184 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/DegradationBanner.kt 移植（T-PrewarmLateRecover F2：DEGRADED 可挂「重试」动作）
 package cn.song.mybatisplus.visualizer.ui;
 
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBPanel;
@@ -26,6 +28,10 @@ import java.awt.BorderLayout;
  *  信息提示，T-DollarInjectMark——措辞中性的注入面提示，**可关闭**：仅该类别带 ✕ 按钮，
  *  点击回调 {@link #onDismiss} 由调用方做会话级记忆）。
  * </pre>
+ *
+ * T-PrewarmLateRecover F2：DEGRADED 可挂一个<b>动作</b>（{@link #onRetry}，文案 {@code panel.banner.retry}）——
+ * 预热硬失败时没有产物可等，只能由用户点一次重新臂预热。动作标签照抄同文件 ✕ 按钮的形态
+ * （JBLabel + HAND_CURSOR + MouseAdapter），不新造控件类型；两者共用 EAST 位（横排容器）。
  */
 public class DegradationBanner extends JBPanel<DegradationBanner> {
 
@@ -49,10 +55,26 @@ public class DegradationBanner extends JBPanel<DegradationBanner> {
     @Nullable
     public Runnable onDismiss = null;
 
+    /**
+     * T-PrewarmLateRecover F2：DEGRADED 的「重试」回调（null = 不显示动作）。
+     * 调用方在挂降级横幅时接上（SqlPreviewPanel.showDegradedBanner），主路径装配成功时摘除。
+     */
+    @Nullable
+    public Runnable onRetry = null;
+
     private final JBLabel label;
 
     /** 仅 DOLLAR_INJECT 可见的信息级关闭按钮（错误/降级类保持常驻不可关）。 */
     private final JBLabel dismissButton;
+
+    /**
+     * T-PrewarmLateRecover F2：「重试」动作标签（形态同 {@link #dismissButton}——HAND_CURSOR + 点击回调）。
+     * 文案在 {@link #show} 时按当前语言解析（语言设置可在运行期切换，构造期定死会跟着一起旧）。
+     */
+    private final JBLabel retryLabel;
+
+    /** EAST 位横排容器：动作标签 + ✕ 关闭按钮共用（BorderLayout 的 EAST 只能放一个组件）。 */
+    private final JBPanel<JBPanel<?>> actions;
 
     /** 当前挂起的消息类别（null = 无提示）。 */
     @Nullable
@@ -80,9 +102,26 @@ public class DegradationBanner extends JBPanel<DegradationBanner> {
         });
         dismissButton.setVisible(false);
 
+        retryLabel = new JBLabel();
+        retryLabel.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+        retryLabel.setBorder(JBUI.Borders.empty(4, 8, 4, 8));
+        retryLabel.setForeground(JBColor.namedColor("Link.activeForeground", JBColor.BLUE));
+        retryLabel.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (onRetry != null) onRetry.run();
+            }
+        });
+        retryLabel.setVisible(false);
+
+        actions = new JBPanel<>(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 0, 0));
+        actions.setOpaque(false);
+        actions.add(retryLabel);
+        actions.add(dismissButton);
+
         setOpaque(false);
         add(label, BorderLayout.CENTER);
-        add(dismissButton, BorderLayout.EAST);
+        add(actions, BorderLayout.EAST);
         setVisible(false);
     }
 
@@ -96,6 +135,11 @@ public class DegradationBanner extends JBPanel<DegradationBanner> {
         label.setText(message);
         dismissButton.setVisible(kind == Kind.DOLLAR_INJECT);
         dismissButton.setToolTipText(message);
+        // T-PrewarmLateRecover F2：动作只在「有回调的降级提示」上出现
+        boolean retryVisible = kind == Kind.DEGRADED && onRetry != null;
+        retryLabel.setVisible(retryVisible);
+        if (retryVisible) retryLabel.setText(MpSqlVisualizerBundle.message("panel.banner.retry"));
+        actions.setVisible(retryVisible || dismissButton.isVisible());
         setVisible(true);
     }
 
@@ -107,6 +151,8 @@ public class DegradationBanner extends JBPanel<DegradationBanner> {
         currentKind = null;
         label.setText("");
         dismissButton.setVisible(false);
+        retryLabel.setVisible(false);
+        actions.setVisible(false);
         setVisible(false);
     }
 
@@ -129,5 +175,20 @@ public class DegradationBanner extends JBPanel<DegradationBanner> {
     /** 测试触发器：模拟点击 ✕。 */
     public void clickDismissForTest() {
         if (dismissButton.isVisible() && onDismiss != null) onDismiss.run();
+    }
+
+    /** T-PrewarmLateRecover F2：测试访问器——「重试」动作可见性（仅挂了回调的 DEGRADED）。 */
+    public boolean retryVisibleForTest() {
+        return retryLabel.isVisible();
+    }
+
+    /** T-PrewarmLateRecover F2：测试访问器——动作文案（i18n 键解析结果）。 */
+    public String retryTextForTest() {
+        return retryLabel.getText();
+    }
+
+    /** T-PrewarmLateRecover F2：测试触发器——模拟点击动作（不可见时不触发，同 {@link #clickDismissForTest}）。 */
+    public void clickRetryForTest() {
+        if (retryLabel.isVisible() && onRetry != null) onRetry.run();
     }
 }

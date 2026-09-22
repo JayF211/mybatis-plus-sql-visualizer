@@ -84,6 +84,19 @@ public final class InsertColumnInlayPlanner {
         final int start;
         final int end;
 
+        /**
+         * 惰性缓存的大写形态（T-PerfSweep6 T-PS6-01）。
+         *
+         * <p>同一 token 在一次规划里可能被<strong>多次</strong>取大写：语句起始关键字判定、
+         * {@code SELECT} 终止关键字判定、别名前驱判定、列名/别名比较都走 {@code wordUpper}。
+         * 原先每次比较都是 {@code substring + uppercase} 两次分配（{@code text()} 一次、
+         * {@code uppercase()} 一次）；缓存后每个 token 至多分配一次，重复比较零分配。
+         *
+         * <p>注：Kotlin 无参 {@code uppercase()} 即 {@code Locale.ROOT} 语义（本仓既已如此），
+         * Java 侧沿用既有的 {@code toUpperCase(Locale.ROOT)} 显式形态，语义一致。
+         */
+        String upper;
+
         Tok(IElementType type, int start, int end) {
             this.type = type;
             this.start = start;
@@ -91,8 +104,18 @@ public final class InsertColumnInlayPlanner {
         }
     }
 
+    /**
+     * T-PerfSweep6 T-PS6-01 测试缝：{@link #plan(String)} 的<strong>实际执行</strong>次数（缓存命中不计入）。
+     *
+     * <p>生产链路零读取——它存在的唯一理由是让「stamp 未变不重算」这条缓存契约可被直接观测
+     * （{@link InsertColumnInlayPlanCache} 命中时根本不会走到本函数）。
+     * Kotlin 侧 {@code private set} 语义在 Java 无直接等价，按仓内测试缝惯例落包级可写字段。
+     */
+    static int planInvocationCount = 0;
+
     /** 规划提示位点；按扫描顺序天然升序。 */
     public static List<Hint> plan(String sql) {
+        planInvocationCount++;
         if (sql.isEmpty()) return List.of();
         List<Tok> toks = tokenize(sql);
         if (toks.isEmpty()) return List.of();
@@ -368,9 +391,14 @@ public final class InsertColumnInlayPlanner {
         return sql.substring(t.start, t.end);
     }
 
+    /** token 的大写形态（T-PS6-01：按 {@code Tok.upper} 记忆，重复比较零分配）。 */
     private static String wordUpper(String sql, Tok t) {
+        String cached = t.upper;
+        if (cached != null) return cached;
         // Kotlin `uppercase()` 为区域无关（JVM 侧按 Locale.ROOT 口径），故显式给 Locale.ROOT
-        return text(sql, t).toUpperCase(Locale.ROOT);
+        String upper = text(sql, t).toUpperCase(Locale.ROOT);
+        t.upper = upper;
+        return upper;
     }
 
     private static boolean isWord(String sql, Tok t, String word) {

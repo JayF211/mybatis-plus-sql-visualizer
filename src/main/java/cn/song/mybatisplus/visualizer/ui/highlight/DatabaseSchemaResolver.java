@@ -14,6 +14,7 @@ import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -55,6 +56,12 @@ public final class DatabaseSchemaResolver {
     /** DasTable / DasColumn / DasObject 的二进制名（ObjectKind 判类型用）。 */
     private static final String DAS_TABLE = "com.intellij.database.model.DasTable";
     private static final String DAS_COLUMN = "com.intellij.database.model.DasColumn";
+
+    /**
+     * O-59 T-IIR-02：{@code DasColumn.Attribute} 里的自增/生成标记名。
+     * javap 实证该枚举常量存在（{@code DasColumn$Attribute.AUTO_GENERATED}），故按枚举 {@code toString()} 比对。
+     */
+    private static final String AUTO_GENERATED_ATTR = "AUTO_GENERATED";
     private static final String DAS_OBJECT = "com.intellij.database.model.DasObject";
     private static final String OBJECT_KIND = "com.intellij.database.model.ObjectKind";
 
@@ -134,6 +141,64 @@ public final class DatabaseSchemaResolver {
                 for (Map.Entry<String, ColumnMeta> e : columns.entrySet()) {
                     out.putIfAbsent(e.getKey(), e.getValue());
                 }
+                break;
+            }
+        }
+        return out;
+    }
+
+    /**
+     * O-58：多表的<b>全列名</b>集合（<b>只读缓存，不触发遍历</b>）。
+     *
+     * <p>与 {@link #columnsCached} 同源同口径——同一 {@code metaCache}、同 P7 库名维度、同「首个持有者」
+     * 语义，差别只在返回维度：{@link #columnsCached} 给「列名 → 列元数据」（因此天然只含带元数据的子集，
+     * 见 {@link TableMeta#allColumnNames} 的说明），这里给「表名 → 该表全部列名」。单开入口而不是复用
+     * {@link #columnsCached}，既让两处语义各自明确，也让 {@link #columnsCached} 的既有消费方（补全候选）
+     * 零改动。未预热 / 数据源未连 / 社区版一律返回空 Map，调用方回落。
+     */
+    public static Map<String, Set<String>> columnNamesCached(Project project, Collection<String> tableNames) {
+        if (project == null || tableNames.isEmpty()) return Map.of();
+        if (!isDatabaseAvailable()) return Map.of();
+        List<Object> dataSources = dataSources(project);
+        if (dataSources == null) return Map.of();
+        synchronized (metaCache) {
+            return mergeCachedColumnNames(tableNames, columnNameSources(dataSources));
+        }
+    }
+
+    /**
+     * P7：按数据源顺序给出「表名 → 该源缓存里的全列名」查询器（该源未持有该表返回 null）。
+     * 与 {@link #columnsCached} 内部的查询器同构；抽出来是为了让 {@link #mergeCachedColumnNames}
+     * 的合并语义能在无 database 插件的单测环境里直测（同 {@link #mergeCachedColumns} 的既有做法）。
+     */
+    public static List<Function<String, Set<String>>> columnNameSources(List<Object> dataSources) {
+        List<Function<String, Set<String>>> out = new ArrayList<>();
+        for (Object ds : dataSources) {
+            String db = databaseNameOf(ds);
+            out.add(name -> {
+                Map<String, TableMeta> perDs = metaCache.get(ds);
+                if (perDs == null) return null;
+                TableMeta meta = perDs.get(cacheKeyOf(db, name));
+                return (meta != null) ? meta.allColumnNames() : null;
+            });
+        }
+        return out;
+    }
+
+    /**
+     * P7：「首个持有者」合并（口径与 {@link #mergeCachedColumns} 逐条一致）——每个表名只认首个持有它的
+     * 数据源，避免跨库同名表互相污染；不同表名之间各取各的。
+     */
+    public static Map<String, Set<String>> mergeCachedColumnNames(
+            Collection<String> tableNames,
+            List<Function<String, Set<String>>> sources) {
+        Map<String, Set<String>> out = new LinkedHashMap<>();
+        for (String name : tableNames) {
+            if (name.isBlank()) continue;
+            for (Function<String, Set<String>> lookup : sources) {
+                Set<String> names = lookup.apply(name);
+                if (names == null) continue;
+                out.put(name, names);
                 break;
             }
         }
@@ -311,6 +376,23 @@ public final class DatabaseSchemaResolver {
     }
 
     // ----------
+    // T-PerfSweep6 T-PS6-08（性能报告发现 11）：**本轮未实施，留档**。
+    //
+    // 计划要求「给 bailAfterTraversal 的『查不了』加短 TTL 标记（而非完全不缓存）」，理由是
+    // 该环境下每次调用都重跑一遍 DasModel 全遍历。**按字面实施会与 P7b 的既有护栏直接冲突**：
+    // 「查不了不写负缓存 → 下次调用仍重扫」是 P7b 刻意的语义，被 4 处既有断言钉住——
+    //   - `DatabaseSchemaResolverBailTest.kt:55`（scans 期望 2）
+    //   - `DatabaseSchemaResolverNegativeCacheTest.kt:209`（`查不了不记账_下次调用仍重试`，scans 期望 3）
+    //   - `DatabaseSchemaResolverSchemaScopeTest.kt:105/118`（calls 期望 2，两处）
+    // 任何「跨调用去重窗口」（哪怕 200ms）都会让这些读数变成 1，即把护栏改软；而它们的判别力
+    // 正是「数据源晚连接/内省完成后自愈」这条正确性语义。
+    //
+    // 取舍：**低**级性能收益 < 正确性护栏强度，故本轮不实施（不削弱既有断言）。若日后要做，
+    // 须与那 4 处断言的作者一起把契约改写成「窗口内不重扫 + 过期后重扫」两条（TTL 必须
+    // < DDL 生效探测首拍 500ms，见 bailAfterTraversal 的 KDoc）。
+    // ----------
+
+    // ----------
     // T-PS5-06：单调用全扫限额（MCP schema_context 一次调用最多 20 表）。
     // 此前每个 miss 表都对每个数据源重跑一遍 DasModel 全遍历；而 {@link #collectFromDataSource} 的
     // 遍历是**完整**的（命中后不 break，仍走完所有元素；只有「查不了」才提前 bail）——因此同一
@@ -320,8 +402,12 @@ public final class DatabaseSchemaResolver {
     // 已全扫过的数据源上的后续 miss 表直接按未找到处理，负缓存照记（结论与全扫等价，跨调用
     // 负缓存语义不变）。**查不了（scanBailed）不记账**——模型未加载/反射链失败时下次必须重试。
     // 作用域仅由 {@link #withScanBudget} 显式开启；**当前无生产调用方**（原唯一入口
-    // McpSchemaContextService 的 schema_context 已改自建索引，见其 P4 注释），仅测试使用；
-    // 其它调用方零行为变化。
+    // McpSchemaContextService 的 schema_context 已改自建索引，见其 P4 注释）。
+    // T-PerfSweep6 T-PS6-08（性能报告发现 12）：定性由「死代码」订正为「**仅测试消费**」——
+    // 实测消费方 = `src/test/kotlin/.../ui/highlight/DatabaseSchemaResolverNegativeCacheTest.kt`
+    // 六处（含专供测试的 {@link #inScanBudgetForTest}），故**不删**：删掉要连带改那个不在本任务写集的
+    // 测试文件，且账本语义本身是 P7b「查不了 vs 确认没有」的回归护栏。
+    // 新接生产调用方前先确认是否真需要（跨调用面已有负缓存 + McpSchemaContextService 自建索引）。
     // ----------
 
     /** 调用内账本（已完整全扫过的数据源身份集）。 */
@@ -404,9 +490,19 @@ public final class DatabaseSchemaResolver {
      * @param scanBailed T-DbSchemaCompletion：本次<b>没能查</b>（数据源模型未加载 / ObjectKind 取不到 /
      *   反射链异常），区别于「查了、确认没有此表」。调用方据此决定是否记负缓存——把"查不了"当
      *   "不存在"会让数据源晚连接时 30s 内的补全与富化全被负缓存挡掉（T-MetaCheapSource 语义缺口）
+     * @param allColumnNames O-58：该表的<b>全部</b>列名——含 {@code columns} 因「无注释 ∧ 无类型串 ∧
+     *   notNull 不为 true」而未收录元数据的列。列名集合是独立维度：列名校正要在它上面做<b>唯一性</b>判定，
+     *   而唯一性判定在不完整子集上会失真（同形两列里少了一列 → 歧义消失 → 选错列）。默认空集，
+     *   既有构造点（测试替身 / bail 早退）语义逐字不变。
      */
-    public record TableMeta(String comment, Map<String, ColumnMeta> columns, boolean scanBailed) {
+    public record TableMeta(String comment, Map<String, ColumnMeta> columns, boolean scanBailed,
+                            Set<String> allColumnNames) {
         public static final TableMeta EMPTY = new TableMeta(null, Map.of(), false);
+
+        /** 旧形态：scanBailed 给出，allColumnNames 缺省空集。 */
+        public TableMeta(String comment, Map<String, ColumnMeta> columns, boolean scanBailed) {
+            this(comment, columns, scanBailed, Set.of());
+        }
 
         /** 旧形态：scanBailed 缺省 false。 */
         public TableMeta(String comment, Map<String, ColumnMeta> columns) {
@@ -420,8 +516,16 @@ public final class DatabaseSchemaResolver {
      * @param comment  DB COMMENT（null/空白 = 数据库没写）
      * @param typeSpec DB 真实类型串（`getDataType().getSpecification()`；null = 无类型信息）
      * @param notNull  T-TestAssertReal：非空标记（`DasTypedObject.isNotNull()`；null = 反射失败/取不到）
+     * @param autoGenerated O-59 T-IIR-02：该列是否数据库自增/生成
+     *   （`DasColumn.Attribute.AUTO_GENERATED`）。null = 未取到（非 false——「取不到」与「明确不是」
+     *   在回滚侧 identity 包装里同形降级，但保留 null 便于诊断区分）。
      */
-    public record ColumnMeta(String comment, String typeSpec, Boolean notNull) {
+    public record ColumnMeta(String comment, String typeSpec, Boolean notNull, Boolean autoGenerated) {
+        /** 旧形态：notNull 给出，autoGenerated 缺省 null。 */
+        public ColumnMeta(String comment, String typeSpec, Boolean notNull) {
+            this(comment, typeSpec, notNull, null);
+        }
+
         /** 旧形态：notNull 缺省 null。 */
         public ColumnMeta(String comment, String typeSpec) {
             this(comment, typeSpec, null);
@@ -625,6 +729,9 @@ public final class DatabaseSchemaResolver {
      * 表/列读取访问器（生产实现包的是 `Method.invoke`，反射链口径见 {@link #reflectTraversal}）。
      *
      * @param parent 表/命名空间的父节点（P7 祖先链用；取不到返回 null → 不限定库）
+     * @param autoGenerated O-59 T-IIR-02：{@code DasTable.getColumnAttrs(DasColumn)} 是否含
+     *   {@code AUTO_GENERATED}。取<b>表 + 列</b>两个实参——javap 实证该方法声明在 <b>DasTable</b> 上
+     *   （{@code public abstract java.util.Set<DasColumn$Attribute> getColumnAttrs(DasColumn)}）。
      */
     public static final class DasAccessors {
         public final Function<Object, Boolean> isTable;
@@ -635,6 +742,7 @@ public final class DatabaseSchemaResolver {
         public final Function<Object, Object> parent;
         public final Function<Object, String> typeSpec;
         public final Function<Object, Boolean> notNull;
+        public final BiFunction<Object, Object, Boolean> autoGenerated;
 
         public DasAccessors(
                 Function<Object, Boolean> isTable,
@@ -644,7 +752,8 @@ public final class DatabaseSchemaResolver {
                 Function<Object, Iterable<?>> children,
                 Function<Object, Object> parent,
                 Function<Object, String> typeSpec,
-                Function<Object, Boolean> notNull) {
+                Function<Object, Boolean> notNull,
+                BiFunction<Object, Object, Boolean> autoGenerated) {
             this.isTable = isTable;
             this.isColumn = isColumn;
             this.name = name;
@@ -653,6 +762,21 @@ public final class DatabaseSchemaResolver {
             this.parent = parent;
             this.typeSpec = typeSpec;
             this.notNull = notNull;
+            this.autoGenerated = autoGenerated;
+        }
+
+        /** Kotlin 默认参数等价重载：autoGenerated 缺省 {@code { _, _ -> null }}。 */
+        public DasAccessors(
+                Function<Object, Boolean> isTable,
+                Function<Object, Boolean> isColumn,
+                Function<Object, String> name,
+                Function<Object, String> comment,
+                Function<Object, Iterable<?>> children,
+                Function<Object, Object> parent,
+                Function<Object, String> typeSpec,
+                Function<Object, Boolean> notNull) {
+            this(isTable, isColumn, name, comment, children, parent, typeSpec, notNull,
+                    (table, col) -> null);
         }
 
         /** Kotlin 默认参数等价重载：parent 缺省 {@code { null }}。 */
@@ -802,7 +926,17 @@ public final class DatabaseSchemaResolver {
         // DasColumn extends DasTypedObject）——Method 一律从声明接口获取（T-Embed-10 跨
         // classloader 教训，禁止 obj.javaClass.getMethod）；反射失败为 null，不进非空清单
         Method isNotNullM = dasTypedObjectClass.getMethod("isNotNull");
+        // O-59 T-IIR-02：DasTable.getColumnAttrs(DasColumn) → Set<DasColumn.Attribute>
+        // （javap 实证声明于 DasTable：`public abstract java.util.Set<DasColumn$Attribute> getColumnAttrs(DasColumn)`；
+        // 枚举常量名 `AUTO_GENERATED`）。同 T-Embed-10 教训，Method 从**声明类**取，不用 obj.javaClass。
+        Method getColumnAttrsM = null;
+        try {
+            getColumnAttrsM = dasTableClass.getMethod("getColumnAttrs", dasColumnClass);
+        } catch (Throwable ignored) {
+            // runCatching{...}.getOrNull() 等价：反射失败为 null → autoGenerated 访问器恒 null
+        }
         final Method parentM = getDasParentM;
+        final Method columnAttrsM = getColumnAttrsM;
         return new TraversalOutcome(new ModelTraversal(
                 elements,
                 new DasAccessors(
@@ -861,6 +995,29 @@ public final class DatabaseSchemaResolver {
                             } catch (Throwable e) {
                                 return null;
                             }
+                        },
+                        (table, col) -> {
+                            try {
+                                // master：getColumnAttrsM?.invoke(table, col)?.let { attrs ->
+                                //   (attrs as? Iterable<*>)?.any { a -> a?.toString() == AUTO_GENERATED_ATTR } == true }
+                                // attrs 为 null → 返回 null；非 Iterable → `null == true` → FALSE（非 null）
+                                Object attrs = (columnAttrsM != null) ? columnAttrsM.invoke(table, col) : null;
+                                if (attrs == null) {
+                                    return null;
+                                }
+                                boolean matched = false;
+                                if (attrs instanceof Iterable<?>) {
+                                    for (Object a : (Iterable<?>) attrs) {
+                                        if (a != null && AUTO_GENERATED_ATTR.equals(a.toString())) {
+                                            matched = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                return matched;
+                            } catch (Throwable e) {
+                                return null;
+                            }
                         })),
                 null);
     }
@@ -883,6 +1040,8 @@ public final class DatabaseSchemaResolver {
     private static TableMeta collectFromDataSource(Object ds, String tableName) {
         String tableComment = null;
         Map<String, ColumnMeta> out = new LinkedHashMap<>();
+        // O-58：列名**无条件**收录（下面的元数据过滤只作用于 out，不影响本集合）
+        Set<String> allNames = new LinkedHashSet<>();
         // T-Embed-10.5 探针：B 路径 locateDbTables 直调同模型命中而本链 not found——
         // 分辨 elements 空遍历 / DasTable 筛不出 / 名称不匹配三种情形
         int scannedTables = 0;
@@ -946,16 +1105,21 @@ public final class DatabaseSchemaResolver {
                     if (cName == null || cName.isBlank()) {
                         continue;
                     }
+                    allNames.add(cName);
                     String comment = acc.comment.apply(col);
                     String typeSpec = acc.typeSpec.apply(col);
                     Boolean notNull = acc.notNull.apply(col);
-                    // 收录条件放宽：clean DDL（无注释无类型串）的 NOT NULL 列此前会被过滤掉
+                    Boolean autoGenerated = acc.autoGenerated.apply(element, col);
+                    // 收录条件放宽：clean DDL（无注释无类型串）的 NOT NULL 列此前会被过滤掉；
+                    // O-59 T-IIR-02 再放宽一项——**自增列即使三项皆空也必须收录**，否则回滚侧
+                    // identity 包装拿不到列名（正是 blocker② 的形态：列在表里、但没进这份稀疏表）。
                     if ((comment != null && !comment.isBlank()) || (typeSpec != null && !typeSpec.isBlank())
-                            || Boolean.TRUE.equals(notNull)) {
+                            || Boolean.TRUE.equals(notNull) || Boolean.TRUE.equals(autoGenerated)) {
                         out.put(cName, new ColumnMeta(
                                 (comment != null && !comment.isBlank()) ? comment : null,
                                 (typeSpec != null && !typeSpec.isBlank()) ? typeSpec : null,
-                                notNull));
+                                notNull,
+                                autoGenerated));
                     }
                 }
             }
@@ -972,8 +1136,9 @@ public final class DatabaseSchemaResolver {
                 + ", tablesScanned=" + scannedTables
                 + ", hit=" + hit
                 + ", foundColumns=" + out.size()
+                + ", totalColumns=" + allNames.size()
                 + ", tableComment=" + (tableComment != null));
-        return new TableMeta(tableComment, out, bail != null);
+        return new TableMeta(tableComment, out, bail != null, allNames);
     }
 
     /**

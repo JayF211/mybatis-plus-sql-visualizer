@@ -1,3 +1,4 @@
+// T-SyncK2JMaster184 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlResultPanel.kt 移植（T-Round10FU：定位按钮 tooltip 三态文案）
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
@@ -200,16 +201,42 @@ public class SqlResultPanel extends JBPanel<SqlResultPanel> {
      * v1 落点为语句起始行（诚实降级）：驱动报的字符位置指向**被执行 SQL 文本**，与 mapper 原文
      * 行不一一对应（动态 SQL 拼接/参数注入），绝不虚标精确——tooltip 注明。
      *
-     * @param info   执行链富错误信息（T-EL-02 富通道投递）
+     * <p><b>T-ELU-01 契约（调用方必读）</b>：{@code locate} 必须在<b>投递时</b>解析完毕——解析不出就传 null。
+     * 宿主侧 {@code SqlPreviewPanel.showErrorRichWithLocate} 已改为「先解析、后显隐」；若调用方传入一个
+     * 内部会静默 return 的动作，按钮就会可见而点击无反应（本任务修掉的正是这个形态）。</p>
+     *
+     * <p><b>T-ELU-01 的抹除链</b>：本类的 {@link #showError} 会清 {@code locateHandler} 与按钮可见性，
+     * 故富通道投递后<b>不得</b>再投一次旧通道（{@code onError(String)}）——{@code DataSourceSelector.deliverError}
+     * 已把两条通道改为互斥，否则富信息刚置的定位态会被同一次执行的旧通道立刻抹掉。</p>
+     *
+     * <p><b>T-Round10FU 三态 tooltip（独立复核 ㉕）</b>：{@code positionChar} → 带驱动字符位置的文案；
+     * 否则 {@code lineInSql} → 带驱动行号的文案（MySQL 语法错误 {@code at line N} / {@code Line: N} 走这条）；
+     * 两者皆无 → 「语句起始行」兜底文案。三条都如实标注位置指向<b>被执行的 SQL 文本</b>。</p>
+     *
+     * @param info   执行链富错误信息（T-EL-02 富通道投递；{@code ExecutionErrorInfo.executedSqlLength}
+     *               为投递点传入的提交文本长度，供 tooltip 标注「位置指向执行态 SQL」，不做换算）
      * @param locate 定位动作；null = 不显示定位按钮
      */
     public void showErrorRich(cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo info, Runnable locate) {
         showError(info.message());
         locateHandler = locate;
         if (locate != null) {
-            errorLocateButton.setToolTipText(info.positionChar() != null
-                    ? MpSqlVisualizerBundle.message("execute.error.locate.tooltip.position", info.positionChar())
-                    : MpSqlVisualizerBundle.message("execute.error.locate.tooltip.start"));
+            // T-Round10FU（独立复核 ㉕）：三态文案——字符位置 / 行号 / 两者皆无。
+            // 改前只判 positionChar，故**只带行号的驱动报错**（MySQL 语法错误 `at line N`、
+            // `Line: N`）落到「语句起始行」兜底文案：驱动其实报了行号，面板却当作没报
+            // （`ExecutionErrorInfo.lineInSql` 因此在 src/main 无任何消费方）。
+            Integer positionChar = info.positionChar();
+            Integer lineInSql = info.lineInSql();
+            if (positionChar != null) {
+                errorLocateButton.setToolTipText(
+                        MpSqlVisualizerBundle.message("execute.error.locate.tooltip.position", positionChar));
+            } else if (lineInSql != null) {
+                errorLocateButton.setToolTipText(
+                        MpSqlVisualizerBundle.message("execute.error.locate.tooltip.line", lineInSql));
+            } else {
+                errorLocateButton.setToolTipText(
+                        MpSqlVisualizerBundle.message("execute.error.locate.tooltip.start"));
+            }
             errorLocateButton.setVisible(true);
             errorLocateButton.revalidate();
             errorLocateButton.repaint();

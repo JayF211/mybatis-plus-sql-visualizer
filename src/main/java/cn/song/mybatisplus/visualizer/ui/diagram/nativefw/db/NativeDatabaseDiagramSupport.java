@@ -85,7 +85,7 @@ public final class NativeDatabaseDiagramSupport {
             return DbCoupled.build(project, model, title, parent);
         } catch (Throwable t) {
             LOG.warn("Native Database diagram (B path) unavailable, falling back to A path", t);
-            JoinFkRegistry.clear();
+            clearJoinFkState();
             return null;
         }
     }
@@ -115,8 +115,112 @@ public final class NativeDatabaseDiagramSupport {
 
     /** 回收 JOIN 虚拟外键登记（打开失败 / 独立路径）。 */
     public static void clearRegisteredFk() {
-        JoinFkRegistry.clear();
+        clearJoinFkState();
     }
+
+    /**
+     * 成对回收 JOIN 虚拟外键的两份会话状态（{@link JoinFkRegistry} 语义 + {@link JoinFkRefTables} 实例）。
+     *
+     * <p>两份状态必须同生同灭：只清语义会让 provider 拿着陈旧的表实例给新图登记外键，只清实例则留下
+     * 「登记有、实例缺」的静默丢边。此方法被 plain {@code test} 分片（无 database jar）经
+     * {@code SqlPreviewPanel.unloadJoinDiagram} 间接触达，故实例侧清理包 runCatching——类解析失败时
+     * 实例表必然也没被填充过，无泄漏风险（与本类「所有公开方法容忍 NoClassDefFoundError」同语义）。
+     */
+    private static void clearJoinFkState() {
+        JoinFkRegistry.clear();
+        try {
+            JoinFkRefTables.clear();
+        } catch (Throwable ignored) {
+            // runCatching{...} 等价：JoinFkRefTables 带 DasTable 平台类型签名，无 database jar 时
+            // 类解析失败 → 实例表必然也没被填充过，无泄漏风险
+        }
+    }
+
+    /**
+     * {@code locateDbTables} 最近一次的逐段计数（B 路径降级原因的<b>可断言</b>出口）。
+     *
+     * <p>T-TS-08 只把这些读数写进日志，于是「B 路径从未真跑过」在测试里既不可见也不可失败
+     * （{@code HeavyNativeDatabaseDiagramJoinChainTest} 的软返回分支一记绿就没人再看日志）。
+     * 取出来之后，调用方可以区分两种降级：「数据源里根本没定位到表」（环境受限，可跳过）
+     * 与「表定位到了却没接管」（{@code nameHits > 0}，属新故障，必须判失败）。
+     *
+     * <p>T-SyncK2JMaster184（k2j 适配）：字段在门面类、写点在本类嵌套 {@link DbCoupled#locateDbTables}
+     * ——master 为同一 object 内赋值，语义不变。
+     */
+    private static volatile LocateCounts lastCounts;
+
+    /** 见 {@link #lastCounts} 注释。 */
+    public static LocateCounts lastLocateCounts() {
+        return lastCounts;
+    }
+
+    /** {@code locateDbTables} 逐段计数快照。 */
+    public static final class LocateCounts {
+        private final int managers;
+        private final int dataSources;
+        private final int modelNull;
+        private final int traverserMiss;
+        private final int roots;
+        private final int iterated;
+        private final int dasTables;
+        private final int nameHits;
+        private final int registryMiss;
+
+        public LocateCounts(int managers, int dataSources, int modelNull, int traverserMiss,
+                            int roots, int iterated, int dasTables, int nameHits, int registryMiss) {
+            this.managers = managers;
+            this.dataSources = dataSources;
+            this.modelNull = modelNull;
+            this.traverserMiss = traverserMiss;
+            this.roots = roots;
+            this.iterated = iterated;
+            this.dasTables = dasTables;
+            this.nameHits = nameHits;
+            this.registryMiss = registryMiss;
+        }
+
+        public int getManagers() {
+            return managers;
+        }
+
+        public int getDataSources() {
+            return dataSources;
+        }
+
+        public int getModelNull() {
+            return modelNull;
+        }
+
+        public int getTraverserMiss() {
+            return traverserMiss;
+        }
+
+        public int getRoots() {
+            return roots;
+        }
+
+        public int getIterated() {
+            return iterated;
+        }
+
+        public int getDasTables() {
+            return dasTables;
+        }
+
+        public int getNameHits() {
+            return nameHits;
+        }
+
+        public int getRegistryMiss() {
+            return registryMiss;
+        }
+
+        /** 是否已在数据源模型里定位到目标表（区别「环境受限」与「定位成功却未接管」的分界）。 */
+        public boolean isLocatedAny() {
+            return nameHits > 0;
+        }
+    }
+
     /**
      * DB 插件耦合实现：{@code com.intellij.database.*} 类型引用集中于此嵌套类。
      *
@@ -194,7 +298,7 @@ public final class NativeDatabaseDiagramSupport {
             return panel;
         } catch (Throwable t) {
             LOG.warn("Native Database diagram (B path) unavailable, falling back to A path", t);
-            JoinFkRegistry.clear();
+            clearJoinFkState();
             return null;
         }
         }
@@ -202,16 +306,35 @@ public final class NativeDatabaseDiagramSupport {
     /**
      * 把模型里的 ON 等值列配对登记为虚拟外键。
      * 方向：JOIN 表 = FK child（columns），主表 = ref（refColumns）——与 MPJ 外键语义一致。
+     *
+     * <p>N6：同时把定位到的表实例登记进 {@link JoinFkRefTables}——平台两参建边回调只给表名，
+     * 没有实例就还原不出 {@code getRefTable()}，边会被 {@code nodeMap.get(asDbElement(...))} 静默丢掉。
      */
     private static void registerJoinForeignKeys(DiagramModel model, Map<String, DbElement> located) {
-        JoinFkRegistry.clear();
+        clearJoinFkState();
+        // T-PerfSweep6 T-PS6-07：本次建图的日志探针复位——建图首行 `getForeignKeys` 回调打 INFO、
+        // 其余 DEBUG，故每次建图都要把「首行」还给本次（纯 JVM 对象，无 database jar 也能加载）
+        JoinVirtualFkProbe.reset();
+        for (Map.Entry<String, DbElement> entry : located.entrySet()) {
+            // DbTable 同时实现 DbElement 与 DasTable；定位链取到的正是它，
+            // 且它就是 dataModel.addElement 收到的那个实例（calculateEdges 的 nodeMap 键）
+            if (entry.getValue() instanceof DasTable) {
+                JoinFkRefTables.put(entry.getKey(), (DasTable) entry.getValue());
+            }
+        }
         for (RelationshipLine rel : model.getRelationships()) {
             String mainTable = tableNameByAlias(model, rel.getFromAlias());
             if (mainTable == null) {
                 continue;
             }
             String joinTable = tableNameByAlias(model, rel.getToAlias());
-            if (joinTable == null || !located.containsKey(mainTable) || !located.containsKey(joinTable)) {
+            if (joinTable == null) {
+                continue;
+            }
+            // locateDbTables 以**小写表名**为键，此处必须同口径归一——否则表名含大写时命中失败，
+            // 整条 JOIN 被静默跳过（登记为空 → 无边，且日志只显示 entries=0）
+            if (!located.containsKey(mainTable.trim().toLowerCase())
+                    || !located.containsKey(joinTable.trim().toLowerCase())) {
                 continue;
             }
             for (kotlin.Pair<String, String> pair : rel.getColumnPairs()) {
@@ -340,9 +463,14 @@ public final class NativeDatabaseDiagramSupport {
                     + " modelNull=" + modelNull + " traverserMiss=" + traverserMiss
                     + " roots=" + roots + " iterated=" + iterated + " dasTables=" + dasTables
                     + " nameHits=" + nameHits + " registryMiss=" + registryMiss);
+            lastCounts = new LocateCounts(
+                    managers, dataSources, modelNull,
+                    traverserMiss, roots, iterated,
+                    dasTables, nameHits, registryMiss);
             return found;
         } catch (Throwable t) {
             LOG.warn("NativeDatabaseDiagramSupport.locateDbTables failed: " + t);
+            lastCounts = null;
             return null;
         }
     }

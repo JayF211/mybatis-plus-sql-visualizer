@@ -1,7 +1,9 @@
 package cn.song.mybatisplus.visualizer.update;
 
+import com.intellij.openapi.application.Application;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
+import com.intellij.openapi.application.TransactionGuard;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.extensions.PluginId;
 import com.intellij.openapi.util.BuildNumber;
@@ -11,12 +13,15 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
 import javax.swing.JComponent;
+import kotlin.Unit;
+import kotlin.jvm.functions.Function2;
 
 /**
  * 动态安装门面（T-DynUpdate）：下载包先尝试平台动态热替换——卸载旧版 → 解压新版 → 动态装载，
@@ -41,6 +46,12 @@ import javax.swing.JComponent;
  *
  * <p>自更新的特殊处境：[install] 的调用栈运行在将被卸载的旧 classloader 上——卸载/装载回调内只触达
  * 平台 API 与纯函数，返回后由调用方（UI 层）经平台通知报告结果，不再触达自身服务。
+ *
+ * <p>派发模态（T-DynUpdateWriteSafe，2026-09-22）：卸载/装载一律以 {@link #dispatchModalityForUnload}
+ * 解析出的写安全模态派发，禁用 {@code ModalityState.any()}——平台卸载会压入
+ * {@code Unloading of <plugin>} ad-hoc 模态，其写安全资格取「派发时刻」快照，{@code any()} 下恒 false，
+ * 卸载窗口内平台自身的模型改动会记 {@code Write-unsafe context!}（真机日志实锤）。
+ * 根因链见 {@link #dispatchModalityForUnload} KDoc。
  */
 public final class DynamicInstallSupport {
 
@@ -287,11 +298,22 @@ public final class DynamicInstallSupport {
         /**
          * EDT 串行：卸载旧版 → 解压并动态装载新版。返回 (旧版是否卸载成功, 新版是否装载成功)。
          * 卸载失败则不尝试装载（插件保持运行原版）；卸载成功而装载失败由调用方回退脚本路径修复。
+         *
+         * <p>T-DynUpdateWriteSafe：派发模态走
+         * {@link DynamicInstallSupport#dispatchModalityForUnload}（写安全），不再用 {@code any()}
+         * ——平台卸载会在该模态下压入 {@code Unloading of <plugin>} 实体，窗口内平台自身的
+         * commit/落盘/dispose 都按这个模态的写安全资格判定（根因与源码链见
+         * {@link DynamicInstallSupport#dispatchModalityForUnload} KDoc）。
          */
         UnloadInstallResult unloadAndInstallOnEdt(Object currentDescriptor, Path zip, Object newDescriptor) {
             boolean[] unloaded = {false};
             boolean[] installed = {false};
-            ApplicationManager.getApplication().invokeAndWait(() -> {
+            ModalityState modality = DynamicInstallSupport.dispatchModalityForUnload();
+            LOG.info(
+                "dynamic update: dispatch modality=" + modality
+                    + " writeSafe=" + DynamicInstallSupport.isWriteSafeDispatch(modality)
+                    + " (T-DynUpdateWriteSafe)");
+            DynamicInstallSupport.edtDispatcher.invoke(modality, () -> {
                 try {
                     Object[] args = unloadPluginOptions != null
                         ? new Object[]{currentDescriptor, unloadPluginOptions}
@@ -311,7 +333,7 @@ public final class DynamicInstallSupport {
                     }
                     LOG.info("dynamic update: new version installed=" + installed[0]);
                 }
-            }, ModalityState.any());
+            });
             return new UnloadInstallResult(unloaded[0], installed[0]);
         }
 
@@ -323,6 +345,70 @@ public final class DynamicInstallSupport {
             return method.invoke(receiver, args);
         }
     }
+
+    // ------------------------------------------------------------------
+    // 卸载/装载的派发模态（T-DynUpdateWriteSafe）
+    // ------------------------------------------------------------------
+
+    /**
+     * 卸载/装载派发模态：在 EDT 上读<strong>当前模态实例</strong>并交给 {@link #chooseDispatchModality} 决策。
+     *
+     * <p>为什么不能再用 {@code ModalityState.any()}（T-DynUpdateWriteSafe 根因，262 源码实证）：
+     * 写模型/落盘/PSI commit 的合法性由「这次 EDT 活动是否 write-safe」决定，判定读的是
+     * {@code TransactionGuardImpl.myWriteSafeModalities[模态实例]}，该表在<strong>模态进入时快照</strong>
+     * {@code myWritingAllowed}（{@code LaterInvocator.enterModal:204-207} → {@code enteredModality:199-201}）。
+     * 平台卸载会压入一个 ad-hoc 模态（{@code DynamicPluginsLegacyImpl:509} 的
+     * {@code inModalContext(sentinel("Unloading of <plugin>"))}），其资格就是<strong>派发时刻</strong>的快照；
+     * {@code any()} 排出的是 posted runnable，一律走 {@code performActivity(false, …)}
+     * （{@code IdeEventQueue:1106-1122} 只把输入/Item/Focus 事件算用户活动），{@code wrapLaterInvocation}
+     * 对非写安全模态也不套 {@code runWithWritingAllowed}（{@code TransactionGuardImpl:203-220}）→ 快照恒 false
+     * → 卸载窗口内平台自身的 commit/落盘/dispose 全部记 {@code Write-unsafe context!}（真机日志模态串
+     * {@code [设置对话框, Unloading of SQL Visualizer]} 即此形态）。
+     *
+     * <p>{@code ModalityState.current()} 是 {@code @RequiresEdt}，而本函数从后台任务线程调用，
+     * 故先用一次只读跳板把它取回 EDT（回调体只读模态，无任何模型改动）。
+     */
+    static ModalityState dispatchModalityForUnload() {
+        Application app = ApplicationManager.getApplication();
+        if (app == null) return ModalityState.nonModal();
+        AtomicReference<ModalityState> captured = new AtomicReference<>();
+        // write-safe: UI-only（只读当前模态，无文档/模型写；any() 保证模态弹窗存续期跳板照常执行）
+        try {
+            app.invokeAndWait(() -> captured.set(ModalityState.current()), ModalityState.any());
+        } catch (Throwable ignored) {
+            // runCatching 等价：取不到当前模态，交给 chooseDispatchModality 的 nonModal 退化
+        }
+        return chooseDispatchModality(captured.get());
+    }
+
+    /**
+     * 派发模态决策（纯函数，单测直覆盖）：写安全 → 原样用；取不到或非写安全 → {@code nonModal}。
+     *
+     * <p>取「当前模态实例」而非别的形态的理由：{@code ModalityStateEx.accepts} 的 trivial 分支
+     * （{@code requested == this}）保证它<strong>立即执行</strong>，不会被模态弹窗推迟——设置页点安装时
+     * 正是这个场景。非写安全时退 {@code nonModal} 而不是硬上：{@code nonModal} 恒 write-safe，
+     * 是平台文档（{@code TransactionGuard} 类注释「When in doubt, use ModalityState#nonModal()」）
+     * 与仓内 {@code DocWriteContext} 的既有口径（延迟到弹窗关闭是正确语义，非退化）。
+     */
+    static ModalityState chooseDispatchModality(ModalityState captured) {
+        return captured != null && isWriteSafeDispatch(captured) ? captured : ModalityState.nonModal();
+    }
+
+    /** 模态写安全判定（平台谓词直读，供 {@link #chooseDispatchModality} 与派发日志取证；异常即 false）。 */
+    static boolean isWriteSafeDispatch(ModalityState modality) {
+        try {
+            return TransactionGuard.getInstance().isWriteSafeModality(modality);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 测试缝：EDT 派发器（默认平台 {@code invokeAndWait}；测试注入以观察实际派发模态）。 */
+    static Function2<ModalityState, Runnable, Unit> edtDispatcher =
+        (modality, body) -> {
+            ApplicationManager.getApplication().invokeAndWait(body, modality);
+            return Unit.INSTANCE;
+        };
 
     /** 五入口反射探测与缓存（Kotlin internal object → 同包静态工具形态）。 */
     static final class PlatformApis {

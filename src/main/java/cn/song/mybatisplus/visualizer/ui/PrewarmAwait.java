@@ -1,5 +1,6 @@
 // T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/PrewarmAwait.kt 移植
 // T-SyncK2JMaster115 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/PrewarmAwait.kt 移植（T-FixN1 派发通道 KDoc：模态改 defaultModalityState 的理由）
+// T-SyncK2JMaster184 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/PrewarmAwait.kt 移植（T-PrewarmLateRecover F1：complete 返回交付结果 + 迟到产物通道）
 package cn.song.mybatisplus.visualizer.ui;
 
 import org.jetbrains.annotations.Nullable;
@@ -40,14 +41,32 @@ public class PrewarmAwait<T> {
 
     private final AtomicBoolean scheduled = new AtomicBoolean();
 
+    /**
+     * T-PrewarmLateRecover F1：迟到产物接收方——消费侧已放弃（超时以 null 完成 / 失败完成）之后
+     * 产物才到达时，由 {@link #complete} 同步回调（<b>在预热线程上</b>，线程归位由登记方负责）。
+     * 与 {@link #scheduleOnce} 的 onFallback 互补：onFallback 负责「先装配成降级态」，本通道负责
+     * 「产物随后到了再换装」。
+     */
+    private volatile Consumer<T> lateProductListener = null;
+
     public PrewarmAwait(long timeoutMs, Consumer<Runnable> dispatcher) {
         this.timeoutMs = timeoutMs;
         this.dispatcher = dispatcher;
     }
 
-    /** 预热线程成功 → 完成。 */
-    public void complete(T value) {
-        future.complete(value);
+    /**
+     * 预热线程成功 → 完成。
+     *
+     * @return true = 本次交付给了消费侧（{@link #scheduleOnce} 的 onReady 或热态 {@link #joinOrNull}）；
+     *   false = 消费侧已放弃，产物转入 {@link #onLateProduct} 通道（无人登记则丢弃，语义同改动前）。
+     */
+    public boolean complete(T value) {
+        boolean delivered = future.complete(value);
+        if (!delivered) {
+            Consumer<T> listener = lateProductListener;
+            if (listener != null) listener.accept(value);
+        }
+        return delivered;
     }
 
     /** 预热线程判定失败 → 快速降级（原 prewarmFailed 标志同语义）。 */
@@ -90,12 +109,25 @@ public class PrewarmAwait<T> {
     }
 
     /**
+     * T-PrewarmLateRecover F1：登记迟到产物接收方（覆盖式——面板每发起一轮预热登记一次）。
+     * 登记须在预热线程可能调用 {@link #complete} 之前完成（SqlPreviewPanel.prewarmPreviewTempFile
+     * 在构造 await 之后立刻登记，早于任何超时可达时刻）。
+     */
+    public void onLateProduct(Consumer<T> listener) {
+        this.lateProductListener = listener;
+    }
+
+    /**
      * 同步有界等待（headless 测试模式专用后门——单元测试无真实 EDT 泵，需保留
      * 「showResult 返回时编辑器即就绪」的既有测试语义；生产路径不走此方法）。
      * 超时或失败返回 null。
      */
     @Nullable
     public T awaitOrNullForTest() {
+        // T-PrewarmLateRecover F1：测试后门同样武装超时预算——否则「超时降级后产物迟到」这一态
+        // 在 headless 下不可达（`get` 超时不会完成 future，迟到产物会被判成「首次交付」），
+        // 同一份代码在测试与生产上就分叉在这条通道上。语义与生产 scheduleOnce 一致。
+        future.completeOnTimeout(null, timeoutMs, TimeUnit.MILLISECONDS);
         try {
             return future.get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (Throwable t) {

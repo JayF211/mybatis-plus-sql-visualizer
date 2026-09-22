@@ -23,7 +23,7 @@ import java.util.Set;
  * `ModelRelationManager.getForeignKeys` 聚合本 Provider，把 SQL JOIN 的 ON 等值条件
  * 以<b>原生虚拟外键</b>画成连线（边样式/标签/图例全原生）。
  *
- * <p>数据来自 {@link JoinFkRegistry}（进程内存，换图即清，不写持久化配置）。
+ * <p>数据来自 {@link JoinFkRegistry}（ON 条件语义，纯 JVM）与 {@link JoinFkRefTables}（已定位的引用表实例）。
  *
  * <p>隔离边界：本文件 import com.intellij.database.*，仅当 database-optional.xml 被加载
  * （DatabaseTools 存在）时平台才会实例化；Community 下不会触碰。
@@ -42,21 +42,78 @@ public class JoinVirtualFkProvider implements ModelRelationManager.ModelRelation
     // 签名按接口字节码可空性（refTable 无 @NotNull）
     @Override
     public JBIterable<DasForeignKey> getForeignKeys(Project project, DasTable table, DasTable refTable) {
-        if (refTable == null) {
-            return JBIterable.empty();
-        }
-        List<JoinFkRegistry.Entry> entries = JoinFkRegistry.find(table.getName(), refTable.getName());
-        // T-Embed-10.5 探针：EP 是否被原生建边触达 + registry 命中数（连线缺失排障）
-        LOG.info("JoinVirtualFkProvider: " + table.getName() + " -> " + refTable.getName()
-                + ", hits=" + entries.size());
-        if (entries.isEmpty()) {
-            return JBIterable.empty();
-        }
+        // N6：**不要**在此对 refTable == null 早退。该入参为 null 表示平台的「两参重载」调用
+        // （ModelRelationManager.getForeignKeys(Project, DasTable) 恒定传 null），契约是
+        // 「不做引用表过滤、返回该表全部外键」——而 DbDiagramDataModel.calculateEdges 建边走的正是这条链。
+        // 分支语义收在 JoinFkRegistry.selectForCall（纯函数，test 任务可断言），此处只做实例翻译。
+        List<JoinFkRegistry.Entry> entries = JoinFkRegistry.selectForCall(
+                table.getName(), (refTable != null) ? refTable.getName() : null);
         List<DasForeignKey> fks = new ArrayList<>();
         for (JoinFkRegistry.Entry entry : entries) {
-            fks.add(new JoinVirtualFk(table, refTable, entry));
+            // 三参回调自带实例（用它，它就是调用方给的那个对象）；两参回调只能回查登记时定位到的实例。
+            DasTable ref = (refTable != null) ? refTable : JoinFkRefTables.get(entry.getRefTable());
+            if (ref == null) {
+                LOG.warn("JoinVirtualFk: ref table '" + entry.getRefTable() + "' 未定位到实例，跳过该边"
+                        + "（child=" + entry.getChildTable()
+                        + "）——登记有而实例缺 = JoinFkRefTables 未成对填充或被提前清理");
+            } else {
+                fks.add(new JoinVirtualFk(table, ref, entry));
+            }
+        }
+        // T-Embed-10.5 / N6 探针：EP 是否被建边链触达 + 登记数 + 实际成边数。
+        // `(all refs)` = 两参重载（建边链），有具体表名 = 三参（getExportedKeys 的成对回问）。
+        // 三者必须同现：此前日志打在 null 守卫之后，建边路径一次不留痕，日志里只有成对回问的
+        // hits=1，看起来一片健康而画布没有线——排障时先看这一行是否出现。
+        //
+        // T-PerfSweep6 T-PS6-07（性能报告发现 7）：N6 后本回调**每表**一行 INFO，建图时刷出
+        // O(表数) 行 idea.log。现改为「**本次建图首行** INFO + 其余 DEBUG」：首行出现即证明 EP
+        // 被建边链触达，诊断价值（「有没有线」的二分判据）完整保留，量级降到每图一行。
+        // 复位信号来自每次建图——NativeDatabaseDiagramSupport.registerJoinForeignKeys 调
+        // JoinVirtualFkProbe.reset。
+        String line = "JoinVirtualFkProvider: " + table.getName() + " -> "
+                + ((refTable != null) ? refTable.getName() : "(all refs)")
+                + ", entries=" + entries.size() + ", edges=" + fks.size();
+        if (JoinVirtualFkProbe.claimFirstLine()) {
+            LOG.info(line);
+        } else {
+            LOG.debug(line);
         }
         return JBIterable.of(fks.toArray(new DasForeignKey[0]));
+    }
+}
+
+/**
+ * T-PerfSweep6 T-PS6-07：建边日志探针的「本次建图首行」闸门（**纯 JVM，零平台类型引用**）。
+ *
+ * <p><b>为什么单独成顶层对象</b>：{@link JoinVirtualFkProvider} 实现 database 插件的
+ * {@code ModelRelationManager.ModelRelationProvider}，<b>无 database jar 的 plain {@code test}
+ * 分片加载不了它</b>；而本闸门的语义（每次建图恰一行 INFO）恰恰是可以在无平台环境下断言的那部分。
+ * 顶层类型编译成独立类文件，测试只加载本类即可，不触碰 provider 的平台接口。
+ *
+ * <p><b>语义</b>：每次建图前 {@link #reset} 复位 → 该次建图第一条 {@code getForeignKeys} 回调
+ * {@link #claimFirstLine} 返回 true（调用方打 INFO），其余一律 false（打 DEBUG）。
+ *
+ * <p><b>为什么保留首行 INFO</b>：{@code (all refs)} 形态出现一次即证明 EP 被建边链触达——这是
+ * 「画布没有线」类问题的二分判据（EP 没被触达 vs 被触达但边被静默丢掉），比逐表 INFO 的边际信息量高得多。
+ */
+class JoinVirtualFkProbe {
+
+    private static final java.util.concurrent.atomic.AtomicBoolean FIRST_LOGGED =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /** 本次建图的首行是否由本调用取得；true = 调用方打 INFO，false = 打 DEBUG。 */
+    public static boolean claimFirstLine() {
+        return FIRST_LOGGED.compareAndSet(false, true);
+    }
+
+    /** 每次建图前复位（NativeDatabaseDiagramSupport.registerJoinForeignKeys 调用）。 */
+    public static void reset() {
+        FIRST_LOGGED.set(false);
+    }
+
+    /** 测试缝：首行是否已被占用。 */
+    public static boolean firstLineClaimedForTest() {
+        return FIRST_LOGGED.get();
     }
 }
 
