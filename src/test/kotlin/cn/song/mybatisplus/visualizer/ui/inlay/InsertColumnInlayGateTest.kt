@@ -258,17 +258,27 @@ class InsertColumnInlayGateTest : BasePlatformTestCase() {
     fun test全部投递位点落在文档范围内() {
         // 越界条目会被静默跳过（平台 addInlineElement 越界即硬断言，显示层功能不得升级成异常）。
         // 本例覆盖含截断/未闭合形态的语料，断言投递位点一律在 [0, textLength]。
-        for (sql in listOf(
+        //
+        // **判别力补齐（独立复核 minor）**：原先只断言「每个位点都落在范围内」——若规划器退化为
+        // 「任何输入都零提示」（正是本防御要兜的场景），offsets 为空、循环体不执行、用例照样绿。
+        // 故对**已知良好**的首条语料额外断言「投递非空」，把「退化即红」补上。
+        for ((i, sql) in listOf(
             insertSql,
             "INSERT INTO user (id, name) VALUES (1, 'admin'), (2, 'root')",
             "INSERT INTO user (id, name) SELECT x, y FROM s",
             "INSERT INTO user (id, name) VALUES (1, 'admin'", // 未闭合 → 规划器放弃，零提示
             "INSERT INTO user (id, name) SELECT",
-        )) {
+        ).withIndex()) {
             InsertColumnInlayPlanCache.clearForTest()
             val (file, editor) = configurePreview(sql)
             val offsets = collectOnce(file, editor)
             val length = editor.document.textLength
+            if (i == 0) {
+                assertTrue(
+                    "已知良好的 INSERT 必须产出至少一条插入列提示（零提示＝规划器已退化，本用例必须变红）",
+                    offsets.isNotEmpty(),
+                )
+            }
             for (offset in offsets) {
                 assertTrue(
                     "投递位点 $offset 必须落在 [0, $length] 内（sql=$sql）",
