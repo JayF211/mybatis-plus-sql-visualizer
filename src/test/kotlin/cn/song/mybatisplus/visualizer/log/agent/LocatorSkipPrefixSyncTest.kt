@@ -7,25 +7,37 @@ import org.junit.Test
 import java.io.File
 
 /**
- * T-AgentSourceLocateStale T-03：两侧「框架帧跳过前缀」的跨侧同步守卫（保守选项 —— 保持两份实现 +
- * 差异登记，不抽共享常量；计划 §八 D3 未定案，故不动结构，只把口径钉死）。
+ * 两侧「框架帧跳过前缀」的跨侧同步守卫（保守选项 —— 保持多份实现 + 差异登记，不抽共享常量；
+ * 计划 §八 D3 未定案，故不动结构，只把口径钉死）。
  *
  * 背景：agent 侧 `StackLocator` 的 KDoc 曾自称「框架帧过滤规则与 IDE 侧 `CallerSourceLocator` 对齐」，
  * 实测**失实** —— agent 侧另收驱动族 / 连接池 / 数据层插件族二十余项，IDE 侧只收 JDK / 平台 / 本插件 /
- * MyBatis 系。两侧是**独立两份实现**（agent 禁依赖 IDE 类），且**在不同时机取栈**（IDE 侧拦截器在
+ * MyBatis 系。两侧是**独立实现**（agent 禁依赖 IDE 类），且**在不同时机取栈**（IDE 侧拦截器在
  * SQL 生成期、agent 在 JDBC 执行期），故同一次执行的两处位置**可以不同** —— 两侧 KDoc 已改为事实描述。
  *
  * **T-AgentResiduals R1（2026-09-22）**：IDE 侧按 agent 侧 `FRAME_SKIP_PREFIXES` **逐项补齐**（原 15 项 →
  * 与 agent 侧同集），消除「同一执行两侧给出不同位置（标记行指到框架帧）」这条残留；两侧仍各自独立
- * （IDE 侧绝不引 agent 代码——它是 agent 缺席时的降级主路径），故本守卫继续以**源码文本扫描 + 差异登记**
- * 锁定：`AGENT_ONLY` 现为**空集**（差异只剩各自的自身包，见 `IDE_ONLY`）。空集不等于守卫失效——
- * 任一侧新增/删除前缀而未同步另一侧，`agent - ide` / `ide - agent` 立即非空即转红；提取有效性另有
- * 量级与锚点自检（防空绿）。
+ * （IDE 侧绝不引 agent 代码），故本守卫继续以**源码文本扫描 + 差异登记**锁定：`AGENT_ONLY` 现为**空集**
+ * （差异只剩各自的自身包，见 `IDE_ONLY`）。空集不等于守卫失效——任一侧新增/删除前缀而未同步另一侧，
+ * `agent - ide` / `ide - agent` 立即非空即转红；提取有效性另有量级与锚点自检（防空绿）。
  *
- * 本测试以源码文本扫描锁住差异（形态照 [AgentProtocolSyncTest] 的跨侧扫描）：
- *  1. 两侧共同前缀集合须互为子集且含锚点（防「两边都提取为空」的空绿）；
- *  2. 差异集合须与下方登记的清单**完全一致** —— 任一侧新增/删除前缀而未同步登记即转红；
- *  3. `docs/instrumentation/SqlSourceInterceptor.kt`（发给用户的示例副本）的跳过规则须与插件侧同步。
+ * ## 本仓「跳过规则」副本清单（共 4 份，改任一份都要同步其余——这是防「同步了不生效的那份」的关键）
+ *
+ * | # | 副本 | 消费者（谁在什么时机用它取栈） |
+ * |---|---|---|
+ * | 1 | agent `sub-projects/.../util/StackLocator.java#FRAME_SKIP_PREFIXES` | **生效**：agent 在应用 JVM 的 JDBC 执行期取栈，产事件的 `sf`/`sl` 列（增强捕获通道） |
+ * | 2 | IDE `src/main/kotlin/.../log/CallerSourceLocator.kt#isFrameworkFrame` | **src/main 内无调用点**（T-AgentResiduals 新发现，仅被本守卫与其单测引用；疑死代码/设计遗留，本轮只登记不处理） |
+ * | 3 | **注入模板** `src/main/kotlin/.../log/SourceInterceptorTemplates.kt` 的 Java `isFrameworkFrame` | **生效**：由 `SqlSourceInterceptorAutoInjector` 注入用户工程，在应用 JVM 里打印 `SQLVIS-SOURCE` 标记行（IDE 侧解析它得到源码位置） |
+ * | 4 | 文档示例 `docs/instrumentation/SqlSourceInterceptor.kt#isFrameworkFrame` | 发给用户手工拷贝的示例副本（不自动注入） |
+ *
+ * **R1 的教训（R1b 的立项依据）**：R1 只同步了 2 与 4，**漏了真正生效的 3** —— 于是「同一执行两侧
+ * 位置不同」的原始症状在注入模板这条链上仍然存在，而守卫全绿（它当时只覆盖 1/2/4）。现本守卫覆盖
+ * **全部 4 份**：任一副本增删前缀而未同步即红。
+ *
+ * 本测试的判据：
+ *  1. 各副本的共同前缀集合须互为子集且含锚点（防「两边都提取为空」的空绿）；
+ *  2. 差异集合须与下方登记的清单**完全一致** —— 任一副本新增/删除前缀而未同步登记即转红；
+ *  3. 注入模板（3）与插件侧（2）**同集**（无刻意差异）；文档示例（4）相对插件侧只缺自身包。
  */
 class LocatorSkipPrefixSyncTest {
 
@@ -52,6 +64,22 @@ class LocatorSkipPrefixSyncTest {
         readSource("src/main/kotlin/cn/song/mybatisplus/visualizer/log/CallerSourceLocator.kt")
 
     private fun templateSource(): String = readSource("docs/instrumentation/SqlSourceInterceptor.kt")
+
+    /**
+     * 注入模板源码（`SourceInterceptorTemplates.kt`）——**真正在用户应用里生效的那份**。
+     *
+     * 它是 Kotlin 文件里的一段 **Java 源码原始字符串**（`generateInterceptorClass` 的 `"""…"""`），
+     * 故取法用 Java 方法体（[javaMethodBody]）而非 Kotlin `fun`；`$Proxy` 在该原始串里写作
+     * `${'$'}Proxy`（Kotlin 原始串的美元转义），由 [injectedTemplatePrefixes] 还原。
+     */
+    private fun injectedTemplateSource(): String =
+        readSource("src/main/kotlin/cn/song/mybatisplus/visualizer/log/SourceInterceptorTemplates.kt")
+
+    /** 注入模板的跳过前缀集合（Java 方法体字面量 + `${'$'}` → `$` 还原）。 */
+    private fun injectedTemplatePrefixes(): Set<String> =
+        startsWithLiterals(javaMethodBody(injectedTemplateSource(), "isFrameworkFrame"))
+            .map { it.replace("\${'\$'}", "$") }
+            .toSet()
 
     // ---------- 断言 ----------
 
@@ -86,6 +114,69 @@ class LocatorSkipPrefixSyncTest {
             ide - template,
         )
         assertTrue("模板应含 MPJ 前缀（T-02）", "com.github.yulichang." in template)
+    }
+
+    /**
+     * **生效副本**（注入模板，副本 3）与插件侧（副本 2）**同集**——T-AgentResiduals R1b。
+     *
+     * 这是 R1 漏掉的那一份：R1 同步了「参考副本」（IDE `CallerSourceLocator`，`src/main` 内无调用点）
+     * 与文档示例，而真正注入到用户工程、在应用 JVM 里打印 `SQLVIS-SOURCE` 标记行的是本份。
+     * 漏同步的后果是**原始症状仍在**（标记行指到框架帧 → 用户点跳转落进第三方库），而守卫全绿
+     * ——「同步了不生效的那份」正是本条要防的形态。
+     *
+     * 与文档示例（副本 4）的区别：本份**保留** `cn.song.mybatisplus.visualizer.`（注入物落在用户工程
+     * 的包下，但插件自身包前缀留着无害且与插件侧同集），故这里要求**精确相等**而不是「缺自身包」。
+     */
+    @Test
+    fun 注入模板跳过规则与插件侧同集() {
+        val ide = startsWithLiterals(functionBody(ideSource(), "isFrameworkFrame"))
+        val injected = injectedTemplatePrefixes()
+
+        // 提取有效性自检（防空绿）：Java 原始串里的方法体若提取失败会得到空集/极小集
+        assertTrue(
+            "注入模板提取到的前缀过少（疑似提取失效——它是 Kotlin 文件里的 Java 原始串，取法见 injectedTemplatePrefixes）：" +
+                "${injected.size} 项 $injected",
+            injected.size >= 55,
+        )
+        assertTrue(
+            "注入模板应还原出 \$Proxy（原始串里写作 \${'\$'}Proxy，还原失败即说明提取口径不对）：$injected",
+            "\$Proxy" in injected,
+        )
+        assertEquals("注入模板出现插件侧没有的前缀（注入物已跑偏）", emptySet<String>(), injected - ide)
+        assertEquals(
+            "插件侧新增前缀未同步到注入模板——用户应用里打印的标记行会指到框架帧（R1b 立项症状）",
+            emptySet<String>(),
+            ide - injected,
+        )
+        // R1b 补齐锚点：驱动族 / 连接池 / AOP / 数据层插件族 + agent 自身包，逐族点名（防「两侧同时回退」的假绿）
+        for (p in listOf(
+            "com.mysql.", "org.mariadb.", "org.postgresql.", "org.h2.", "org.hsqldb.", "org.sqlite.",
+            "com.microsoft.sqlserver.", "oracle.jdbc.", "dm.jdbc.", "com.gbasedbt.", "com.kingbase8.",
+            "com.alibaba.druid.", "com.mchange.", "org.apache.commons.dbcp2.", "org.apache.tomcat.",
+            "net.sf.cglib.", "org.aspectj.", "org.objectweb.asm.", "org.jboss.",
+            "com.github.pagehelper.", "org.mybatis.", "net.sf.jsqlparser.",
+            "com.alibaba.", "org.apache.", "com.google.", "com.fasterxml.",
+            "io.netty.", "io.lettuce.", "redis.clients.", "io.micrometer.", "io.seata.",
+            "org.slf4j.", "ch.qos.", "org.ehcache.", "net.sf.ehcache.", "com.github.benmanes.",
+            "org.quartz.", "com.netflix.", "org.elasticsearch.", "com.mongodb.",
+            "com.sun.", "jdk.internal.", "com.sun.proxy.", "\$Proxy",
+            "cn.song.mybatisplus.sqlvis.", "cn.song.mybatisplus.visualizer.",
+        )) {
+            assertTrue("注入模板应含 $p（R1b 补齐项）", p in injected)
+        }
+    }
+
+    /**
+     * 副本清单自检（防「下一份副本又没进守卫」）：本仓 4 份跳过规则副本，除 IDE 侧（`src/main` 无调用点，
+     * 只登记不处理）外，其余 3 份都必须在扫描面内且提取非空。任何一份**改名/搬家/删方法**都会在这里红，
+     * 而不是静默从守卫里消失（本轮 R1 漏同步的根因就是「生效副本不在扫描面」）。
+     */
+    @Test
+    fun 四份副本都在扫描面内且提取非空() {
+        assertTrue("副本 1（agent StackLocator）应提取到前缀", agentSkipPrefixes(agentSource()).size >= 55)
+        assertTrue("副本 2（IDE CallerSourceLocator）应提取到前缀", startsWithLiterals(functionBody(ideSource(), "isFrameworkFrame")).size >= 55)
+        assertTrue("副本 3（注入模板 SourceInterceptorTemplates）应提取到前缀", injectedTemplatePrefixes().size >= 55)
+        assertTrue("副本 4（文档示例）应提取到前缀", startsWithLiterals(functionBody(templateSource(), "isFrameworkFrame")).size >= 10)
     }
 
     @Test
