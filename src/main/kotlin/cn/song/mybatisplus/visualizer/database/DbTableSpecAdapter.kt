@@ -55,8 +55,10 @@ object DbTableSpecAdapter {
             dialect = currentDialect(),
             // O-42：本类是目录来源的**唯一**入口——`das.name` / `col.name` 直取自省元数据，
             // 即字典里的真实大小写（真库实测：`all_tables.table_name` 对带引号创建的表返回
-            // 小写 `issue_new`，未归一）。标记后 Oracle 按「含小写字母即加引号」引用，
-            // 消除裸写折叠为大写导致的 ORA-00942。
+            // 小写 `issue_new`，未归一）。标记后按方言折叠方向族引用（O-51）：
+            // UPPER 族（Oracle）「含小写字母即加引号」消除裸写折叠为大写导致的 ORA-00942；
+            // LOWER 族（PG / KingBase）「含大写字母即加引号」消除裸写折叠为小写导致的
+            // `relation ... does not exist`。
             identifierCaseSource = IdentifierCaseSource.CATALOG,
         )
     }

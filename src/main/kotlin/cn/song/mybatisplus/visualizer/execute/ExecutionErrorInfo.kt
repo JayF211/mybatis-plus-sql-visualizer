@@ -6,8 +6,9 @@ package cn.song.mybatisplus.visualizer.execute
  * 结构化信息，消费方（SqlResultPanel 错误定位动作 / MCP 工具）按需取用。
  *
  * DBX sql_error_position.rs 对齐：把驱动错误位置结构化是排错体验的最大单点提升；
- * [positionChar]/[lineInSql] 提取自错误消息文本（PG `Position: N`、MySQL `at line N`），
- * 不动协议层。marker 单一性门控与「基建语句不带位置」防误指细节见 [ErrorPositionExtractor]。
+ * [positionChar]/[lineInSql] 提取自错误消息文本（PG `Position: N`、MySQL `at line N`、
+ * Oracle PL/SQL `line N, column M`），不动协议层。marker 单一性门控与「基建语句不带位置」
+ * 防误指细节见 [ErrorPositionExtractor]。
  */
 data class ExecutionErrorInfo(
     val message: String,
@@ -17,8 +18,17 @@ data class ExecutionErrorInfo(
     val positionChar: Int? = null,
     /** 驱动报错行号（1-based，指被执行 SQL 文本；语义同上）。 */
     val lineInSql: Int? = null,
-    /** 位置信号来源标签（"pg-position" / "line" / "mysql-at-line"），留证与测试断言用。 */
+    /** 位置信号来源标签（"pg-position" / "line" / "mysql-at-line" / "oracle-plsql"），留证与测试断言用。 */
     val positionSource: String? = null,
+    /**
+     * T-ELU-04：投递点传入的**提交/被执行文本长度**（越界钳制上界；调用方未传则 null）。
+     *
+     * 存这个值的唯一目的是**如实标注坐标系**：位置字段的参照系是**执行态文本**
+     * （控制台提交文本 / EXPLAIN 包装后语句），不是 mapper 原文行——动态 SQL 拼接与参数注入后
+     * 行号必然错位，本类**不做也不承诺任何换算**（诚实降级）。消费方（tooltip / MCP 文案）
+     * 据此说明「位置指向被执行 SQL」，不宣称能定位到源码行。
+     */
+    val executedSqlLength: Int? = null,
 )
 
 /**
@@ -31,6 +41,10 @@ data class ExecutionErrorInfo(
  *    提取不出即无位置（诚实降级），绝不猜测。
  *
  * 越界钳制：调用方传入被执行 SQL 长度时，位置钳到 [1, sqlMaxLength]；钳后越界（<=0）返回 null。
+ * **T-ELU-03 接线现状**：上界由投递点传入——`DataSourceSelector` 四处（提交链三处 + 控制台
+ * 历史错误上报）传控制台**提交文本**长度，MCP `explain` 传**包装后 EXPLAIN 语句**长度
+ * （`SqlVisualizerExplainTool`）。驱动器报的位置是**语句内**坐标，而上界是整篇提交文本长度，
+ * 故生产中该钳制实际不具约束力（只是把死参数接活、不再只对单测生效）——口径见计划 §八。
  */
 object ErrorPositionExtractor {
 
@@ -42,6 +56,28 @@ object ErrorPositionExtractor {
 
     /** 行号形态：`Line: N`（部分驱动/方言的详细错误附行号冒号形态）。 */
     private val LINE_COLON = Regex("""(?i)\bline:\s*(\d+)""")
+
+    /**
+     * T-ELU-02：Oracle PL/SQL 报错的位置形态（英文）——`ORA-06550: line 1, column 7:`。
+     *
+     * 真库取证（Oracle Free 23 / FREEPDB1 @114.66.55.245:20095，**只读**，用本仓声明版本
+     * ojdbc11 23.3.0.23.09 直连、不经 DBX agent）：
+     * ```
+     * BEGIN nonexistent_proc_xyz(); END;
+     * → ORA-06550: line 1, column 7:
+     *   PLS-00201: identifier 'NONEXISTENT_PROC_XYZ' must be declared
+     * ```
+     * 报错语言随**客户端 JVM locale**（`-Duser.language=en` 出英文，默认出中文
+     * 「第 1 行, 第 7 列」）——两条形态都取自同一次真库取证，故都收（见 [ORACLE_PLSQL_LINE_ZH]）。
+     *
+     * 反向取证：同库同驱动的**纯 SQL** 错误不带任何位置——`ORA-00942: table or view
+     * "DBX_TEST"."NO_SUCH_TABLE_XYZ" does not exist`、`ORA-03049: SQL keyword 'X' …`
+     * 全文无 `Position`/`line`/`at line` 字样，故**不为其造 marker**（提取不出即无位置，诚实降级）。
+     */
+    private val ORACLE_PLSQL_LINE = Regex("""(?i)\bORA-06550:\s*line\s+(\d+)""")
+
+    /** T-ELU-02：同上形态的中文 locale 变体（`ORA-06550: 第 1 行, 第 7 列:`），同一次真库取证所得。 */
+    private val ORACLE_PLSQL_LINE_ZH = Regex("""ORA-06550:\s*第\s*(\d+)\s*行""")
 
     /** 单个位置信号：种类标签 + 1-based 值。 */
     private data class Marker(val source: String, val value: Int, val isCharPosition: Boolean)
@@ -74,6 +110,11 @@ object ErrorPositionExtractor {
         PG_POSITION.findAll(message).forEach { out += Marker("pg-position", it.groupValues[1].toInt(), isCharPosition = true) }
         AT_LINE.findAll(message).forEach { out += Marker("mysql-at-line", it.groupValues[1].toInt(), isCharPosition = false) }
         LINE_COLON.findAll(message).forEach { out += Marker("line", it.groupValues[1].toInt(), isCharPosition = false) }
+        // T-ELU-02：Oracle PL/SQL `ORA-06550: line N, column M:`（英文 / 中文 locale 两种文本形态，
+        // 同源同义故共用 "oracle-plsql" 标签）。只取行——column 是行内列号，不是执行态文本的绝对
+        // 字符偏移，塞进 positionChar 会虚标坐标系。
+        ORACLE_PLSQL_LINE.findAll(message).forEach { out += Marker("oracle-plsql", it.groupValues[1].toInt(), isCharPosition = false) }
+        ORACLE_PLSQL_LINE_ZH.findAll(message).forEach { out += Marker("oracle-plsql", it.groupValues[1].toInt(), isCharPosition = false) }
         return out
     }
 
@@ -112,6 +153,8 @@ object ErrorPositionExtractor {
             positionChar = pos?.takeIf { it.second }?.first,
             lineInSql = pos?.takeIf { !it.second }?.first,
             positionSource = pos?.third,
+            // T-ELU-04：把投递点传入的上界如实带出（tooltip/MCP 据此标注坐标系，不做换算）
+            executedSqlLength = sqlMaxLength,
         )
     }
 }

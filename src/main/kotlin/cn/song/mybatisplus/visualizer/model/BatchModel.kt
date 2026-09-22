@@ -76,9 +76,10 @@ data class BatchModel(
      */
     val dialect: Dialect = MySqlDialect,
     /**
-     * 名字大小写来源（O-42）：目录来源 [IdentifierCaseSource.CATALOG] 时按方言的按需引用覆写判定
-     * （Oracle 含小写字母即加引号）；缺省 [IdentifierCaseSource.ENTITY] = 既有 [Dialect.quoteIfKeyword]
-     * 行为逐字不变。本类既有构造点（实体转换链、批量转换链、面板测试）全部走默认值，不受影响。
+     * 名字大小写来源（O-42；O-51 起按方言折叠方向族分流）：目录来源 [IdentifierCaseSource.CATALOG] 时按
+     * [Dialect.identifierFolding] 判定（UPPER 族含小写即加引号 / LOWER 族含大写即加引号 / NONE 族不判）；
+     * 缺省 [IdentifierCaseSource.ENTITY] = 既有 [Dialect.quoteIfKeyword] 行为逐字不变。
+     * 本类既有构造点（实体转换链、批量转换链、面板测试）全部走默认值，不受影响。
      */
     val identifierCaseSource: IdentifierCaseSource = IdentifierCaseSource.ENTITY,
 ) {
@@ -138,13 +139,14 @@ data class BatchModel(
                 // 无法以「INSERT+后缀」表达）；null → 后缀形态；后缀亦 null（Oracle/SQL Server/DM
                 // 无原生简洁 upsert）→ 降级纯 INSERT
                 //
-                // O-42：这两个方言辅助内部仍走既有 quoteIfKeyword（未接线）。当前**无行为差异**——
-                // Oracle 的 upsert 两条路径都返回 null（不进入渲染），其余方言的 quoteIfNeeded
-                // 默认即委托 quoteIfKeyword。若日后为别的方言引入目录来源判定，此处须一并接线。
-                dialect.renderUpsertStatement(tableName, toggles.map { it.columnName }, conflict)
+                // O-51：两个方言辅助已接线 [identifierCaseSource]——此前它们内部固定走 quoteIfKeyword，
+                // 一旦有方言引入目录来源判定就会产出「基座加引号、后缀裸写」的半包形态（PG 族含大写
+                // 目录名下后缀裸写被折叠为小写 → 列不存在）。接线后基座与后缀同一判定。
+                dialect.renderUpsertStatement(tableName, toggles.map { it.columnName }, conflict, identifierCaseSource)
                     ?: dialect.renderUpsert(
                         conflict,
                         toggles.filter { it.columnName != conflict }.map { it.columnName },
+                        identifierCaseSource,
                     )?.let { suffix -> "$base\n$suffix" }
                     ?: base
             }

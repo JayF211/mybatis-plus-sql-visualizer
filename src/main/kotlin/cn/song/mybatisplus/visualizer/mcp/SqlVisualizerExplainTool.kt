@@ -163,18 +163,27 @@ class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
                     },
                 )
             }.getOrElse { e ->
-                // T-ErrorLocate T-EL-04：驱动错误消息携带位置信号（PG `Position: N` / `at line N`）时
-                // 附 errorPosition 文本行——agent 可定位再自修复；匹配不到/多 marker 即不加（诚实降级，
-                // ErrorPositionExtractor 的 marker 单一性门控与「基建语句不带位置」同源）。
+                // T-ErrorLocate T-EL-04：驱动错误消息携带位置信号（PG `Position: N` / `at line N` /
+                // Oracle PL/SQL `line N, column M`）时附 errorPosition 文本行——agent 可定位再自修复；
+                // 匹配不到/多 marker 即不加（诚实降级，ErrorPositionExtractor 的 marker 单一性门控与
+                // 「基建语句不带位置」同源）。
+                // T-ELU-03：钳制上界取**真正提交的** `target.explainSql`（包装后语句）长度，不是原始
+                // `selectSql`——驱动器报的位置坐标属于被执行语句，用原始语句长度会与坐标系不一致。
+                // T-ELU-04：位置指向**执行态文本**（EXPLAIN 包装后的语句），非 mapper 原文行，
+                // 故追加一行来源说明；`errorPosition: char/line N` 既有形态逐字节不变（agent 侧零破坏）。
                 val causeMsg = e.message ?: e.javaClass.simpleName
-                val pos = cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor.extractPosition(causeMsg)
+                val pos = cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor.extractPosition(
+                    causeMsg,
+                    target.explainSql.length,
+                )
                 throwExpected(
                     McpToolErrors.code(
                         McpToolErrors.DATASOURCE_UNREACHABLE,
                         "EXPLAIN failed on '${target.dialectName}' data source: ${firstLine(causeMsg)}" +
                             if (pos != null) {
                                 val kind = if (pos.second) "char" else "line"
-                                "\nerrorPosition: $kind ${pos.first}"
+                                "\nerrorPosition: $kind ${pos.first}" +
+                                    "\nerrorPositionSource: offset into the executed EXPLAIN statement text, not the mapper source line"
                             } else "",
                     ),
                 )

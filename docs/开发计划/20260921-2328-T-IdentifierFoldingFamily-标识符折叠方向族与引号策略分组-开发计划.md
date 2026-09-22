@@ -117,15 +117,24 @@
 
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
-| 基线读数 | 本次更新 | Oracle（第九轮）/ PG（本轮）/ DM（本轮）三组已实测留档 |
-| T-IFF-01 | （实施后填） | 族枚举命名与各方言归属须回填 |
-| T-IFF-02 | （实施后填） | 分流条件与「Oracle 唯一覆写者」消除情况须回填 |
-| T-IFF-04 | （实施后填） | 新用例、`:377` 改名、门禁读数须回填 |
-| §五 端到端 | （实施后填） | PG 侧改前/改后实测读数须回填（**决定性证据**） |
+| 基线读数 | 本次更新 | 四组真机读数已复现留档（DBX MCP 只读，2026-09-22）：**Oracle** `FROM dual` → 1、`FROM "dual"` → `ORA-00942`（UPPER）；**PG**（`ce028080` / cyzc_db）`FROM INFORMATION_SCHEMA.TABLES` → 366、`FROM information_schema."tables"` → 366、`FROM information_schema."TABLES"` → `relation "information_schema.TABLES" does not exist`（LOWER）；**KingBase**（`da5e4c3e` / dbx_test）裸写 → 492、`"TABLES"` → `kb: relation ... does not exist`（LOWER，本轮实测）；**DM8**（`bb136253`）三形态 `sys.sysobjects` / `sys."sysobjects"` / `sys."SYSOBJECTS"` 均 1029（NONE）。 |
+| T-IFF-01 | 本次更新 | `sql/Dialect.kt` 新增 `enum class IdentifierFolding { UPPER, LOWER, NONE }` + `Dialect.identifierFolding`（接口默认 `get() = NONE`）。归属：Oracle=UPPER、PostgreSQL=LOWER、KingBase=LOWER、其余 6 方言（MySQL/SQL Server/H2/SQLite/MariaDB/DM）继承默认 NONE。**均为属性赋值式产出点**（`override val identifierFolding = IdentifierFolding.X`），满足 `EnumReachabilityGuardTest` 判据（`:251` 要的是 produced>0，不是消费分支）——已实跑该守卫类通过。 |
+| T-IFF-02 | 本次更新 | 分流提升为基类实现：`Dialect.quoteIfNeeded` 默认体 = `if (caseSource == CATALOG) quoteCatalogName(identifier) else quoteIfKeyword(identifier)`，新增文件私有扩展 `private fun Dialect.quoteCatalogName`（UPPER 含小写即包 / LOWER 含大写即包 / NONE 落 `quoteIfKeyword`）。**OracleDialect 的 `quoteIfNeeded` 覆写已删除**（`grep` 全仓唯一覆写者形态消除），改为 `override val identifierFolding = UPPER`。分流条件显式含 `caseSource == CATALOG` → ENTITY 路径三族逐字不变。 |
+| T-IFF-04 | 本次更新 | `CrudSqlGeneratorTest`：新增 `pgFamilyCatalogSourceQuotesNamesContainingUppercase`（PG+KingBase，含大写 `Issue_New`/`User_Name` 加引号、全小写 `id` 仍裸写）、`pgFamilyCatalogSourceLeavesAllLowercaseNamesBare`、`pgFamilyEntitySourceKeepsDerivedNamesBare`（含大写派生名探针 `BizOrder`/`OrderNo`）；`:377` 由 `oracleIsTheOnlyDialectWhereCaseSourceChangesOutput` 改名为 `bothFoldingFamiliesChangeOutputByCaseSource`（两族并列，改名非删除）；`:357` 由「其余 8 方言」改写为 `nonFoldingDialectsRenderByteIdenticalRegardlessOfCaseSource`（NONE 族 6 方言逐库点名 + 夹具改用含大写的 `Biz_Order`，比原小写夹具更严）。`DialectTest` 新增 `标识符折叠方向族`（9 方言 + 逐库点名 UPPER/LOWER 成员）、`目录来源按折叠族引用`、`upsert列名按目录来源同一判定`。门禁读数：`gradlew.bat testFast --tests "*CrudSqlGeneratorTest*"` → BUILD SUCCESSFUL（20 例）；`--tests "*DialectTest*"` → BUILD SUCCESSFUL（20 例）；改前必红两次读数见下。 |
+| §五 端到端 | 本次更新 | **按原文不可执行（环境受限，未验证）**：全部 8 个 PG 系在册连接上都不存在任何含大写字母的表/视图/物化视图/列/模式/库名/类型（本轮实跑 `pg_class.relname ~ '[A-Z]'`、`pg_attribute.attname`、`pg_namespace.nspname`、`pg_database.datname`、`pg_type.typname` 全 0 行；含 PG 18.3/16.14/14.23、openGauss 5.0.0、KingBase 三库、Baidu PG 两库），而 PG 只对「带引号创建」的对象保留大写 —— 要造出该对象必须 `CREATE TABLE`，直接违反 §五「只读验证、禁止建删对象」。**替代证据**：① 新用例改前必红（两次读数：改前 `org.junit.ComparisonFailure at CrudSqlGeneratorTest.kt:372`、`:530`，2 例红；把基类分流临时改回 `quoteIfKeyword` 反向验证 → 6 例红，还原后全绿）；② 上表四组真机读数已证「裸写大写折叠为小写 → 查不到、引号保留原样」这一前提，规则正确性由前提 + 单测闭环。**待任务发起方定夺**：是否放宽纪律在专用 scratch schema 建一次性对象以补齐真机执行证据。 |
+
+**本次实施的新增偏离（与计划正文不同处）**：
+
+1. **计划漏改 UPSERT 路径，本任务一并接线**：`Dialect.renderUpsert` / `renderUpsertStatement` 增加 `caseSource: IdentifierCaseSource = IdentifierCaseSource.ENTITY` 尾参（默认值语义保持，既有调用点逐字节不变），PG 系后缀辅助改走 `quoteIfNeeded`。若不接线，PG 族会产出「基座加引号、后缀裸写」的半包形态（`ON CONFLICT (Id) ...` 里的裸写 `Id` 被折叠为小写 → 列不存在）——`model/BatchModel.kt:141-143` 的原注释明文点名了这一条件（「若日后为别的方言引入目录来源判定，此处须一并接线」），本任务正是该条件。
+2. **H2 归 NONE 与实测相反（有意维持，登记为后续）**：H2 2.3.232 实测裸写 `Issue_New` 被折成 `ISSUE_NEW`、带引号创建的 `"lower_tbl"` 无法裸写访问（与 Oracle 同族），但本轮**不扩面**（改 H2 会让 H2 现有产物变化，超出本任务写集与验收面）。已在 `Dialect.identifierFolding` KDoc 与 `DialectTest` 注明「有意维持 NONE」，缺口登记为后续。
+3. **KingBase 已由「推断」升级为「实测」**：待验证前提 2 的「未实测」作废，见上表基线读数。
+4. **DM 口径分歧保留按我方实测**：三形态均 1029 行 → NONE；DBX 的 `UPPER_FOLDING={dameng,db2}` 不照抄（待验证前提 1 维持）。
+5. **文档落点**：CHANGELOG / `docs/变更记录.md` / 第十轮报告 #55 落地备注按任务描述第 6 条由 T-Round10-08 统一写，本任务只回填本计划文档 §八（计划 §三 T-IFF-04 与任务描述口径不一致，取任务描述）。
+6. **两处 KDoc 失真已同步**：`Dialect` 接口头「五件套」→「六件套（含折叠方向族）」；`CrudTableSpec` / `BatchModel` / `DbTableSpecAdapter` 三处把语义绑死在 Oracle 的 KDoc/注释改为按族表述。
 
 **待验证前提（实施者先证伪再动手）**：
 
 1. **DM 的口径分歧未解**：我方实测 DM8 大小写不敏感（三形态均命中），而 DBX 把 `{dameng, db2}` 归入 `UPPER_FOLDING`。可能因 DM8 的 `CASE_SENSITIVE` 初始化参数不同实例而异。**本计划按我方实测取 NONE**；若后续遇到 case-sensitive 的 DM8 实例证据，须重新评估（届时 DM 移入 UPPER 族）。
-2. **KingBase 的折叠方向未实测**——按 PG 兼容推断为 LOWER，**须用 DBX MCP 的 KingBase 连接（`da5e4c3e-…`）证伪**。
+2. ~~**KingBase 的折叠方向未实测**~~ → **已实测证实为 LOWER**（见上表基线读数：裸写 492 行、引号大写 `kb: relation ... does not exist`），前提作废。
 3. 「PG 族含大写即包」的判据形态——本计划按「含任一大写字母即包」表述，**确切判据**（是否排除保留字、是否用 `any { it.isUpperCase() }`）须与 O-42 的 `any { it.isLowerCase() }` 形态对称实现，并在用例中钉住。
-4. H2 / SQLite / SQLServer 的折叠语义未实测（本计划归 NONE）——SQLServer 大小写取决于排序规则（collation），可能因实例而异；实施时确认是否需单独族或维持 NONE。
+4. ~~H2 / SQLite / SQLServer 的折叠语义未实测（本计划归 NONE）~~ → **H2 已实测证伪**（2.3.232 折为大写，与 Oracle 同族），本轮**有意维持 NONE 不扩面**（缺口登记为后续，见偏离 2）；SQLite / SQLServer 仍未实测（SQL Server 大小写取决于 collation），维持 NONE。

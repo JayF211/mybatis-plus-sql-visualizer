@@ -1286,28 +1286,46 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * T-ErrorLocate T-EL-03：错误定位——跳转到预览源锚点（语句起始行）。
+     * T-ErrorLocate T-ELU-01：执行调用点共用的富错误回调——**先解析锚点、再决定按钮显隐**。
      *
-     * 诚实降级定案：驱动报错位置（Position/at line）指向**被执行 SQL 文本**的字符/行，
-     * 与 mapper 原文行不一一对应（动态 SQL 拼接、参数注入后行号必然错位），v1 只承诺
-     * 「语句起始行」跳转 + 按钮 tooltip 如实说明，绝不虚标精确跳转。
-     * 锚点来自 [SqlPreviewService.lastPreviewSourceAnchor]（预览触发时登记）；
-     * 无锚点（gutter 面等未登记入口）定位按钮不出现。
+     * 原实现在投递时恒传非 null 动作、把锚点解析推迟到**点击时**（[resolveLocateAction] 的
+     * `?: return` 静默返回）——按钮可见而点击无反应。现改为投递时解析：解析不出（无 project /
+     * 无锚点）传 null，[SqlResultPanel.showErrorRich] 据此不显示按钮，对齐同仓对照组
+     * `log/SqlLogPanel.kt:1779-1782` 的「先解析、后显隐」（`isEnabledAndVisible = resolved != null`）
+     * 与 `log/EntryJumpResolver.kt:26-30` 的四态口径。
+     *
+     * 点击动作捕获**投递时**解析出的锚点：与 `SqlPreviewService.lastPreviewSourceAnchor` 的单槽
+     * 语义一致（预览弹窗每项目单例，见 `SqlPreviewService.kt:2084-2098`），不存在「投递到点击
+     * 之间槽被覆盖」的场景。
      */
-    private fun locateErrorSource() {
-        val proj = project ?: return
+    private fun showErrorRichWithLocate(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo) {
+        resultPanel.showErrorRich(info, resolveLocateAction())
+        maybeProbeDdlEffective(info)
+    }
+
+    /**
+     * T-ErrorLocate T-ELU-01：定位动作——**先解析、后显隐**；解析不出锚点返回 null（按钮不出现）。
+     *
+     * 诚实降级定案（T-EL-03 口径不变）：驱动报错位置指向**被执行 SQL 文本**，与 mapper 原文行
+     * 不一一对应（动态 SQL 拼接、参数注入后行号必然错位），v1 只承诺「语句起始行」跳转 +
+     * 按钮 tooltip 如实说明，绝不虚标精确跳转。锚点来自
+     * [SqlPreviewService.lastPreviewSourceAnchor]（预览触发时登记）；无锚点（gutter 面等未登记入口）
+     * 返回 null ⇒ 定位按钮不出现。
+     */
+    private fun resolveLocateAction(): (() -> Unit)? {
+        val proj = project ?: return null
         val anchor = runCatching { proj.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor }
-            .getOrNull() ?: return
-        runCatching {
-            com.intellij.openapi.fileEditor.OpenFileDescriptor(proj, anchor.file, anchor.line0, 0).navigate(true)
+            .getOrNull() ?: return null
+        return {
+            runCatching {
+                com.intellij.openapi.fileEditor.OpenFileDescriptor(proj, anchor.file, anchor.line0, 0).navigate(true)
+            }
         }
     }
 
-    /** T-ErrorLocate：执行调用点共用的富错误回调（错误呈现 + 可解析锚点时附定位动作）。 */
-    private fun showErrorRichWithLocate(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo) {
-        resultPanel.showErrorRich(info) { locateErrorSource() }
-        maybeProbeDdlEffective(info)
-    }
+    /** T-ELU-05：错误定位按钮显隐判据的测试缝——驱动富错误投递链（见 [showErrorRichWithLocate]）。 */
+    internal fun showErrorRichWithLocateForTest(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo) =
+        showErrorRichWithLocate(info)
 
     /**
      * T-DdlRecover（O-15）T-DR-02：「失败不等于未生效」——执行 DDL 撞连接类断开时，数据库侧

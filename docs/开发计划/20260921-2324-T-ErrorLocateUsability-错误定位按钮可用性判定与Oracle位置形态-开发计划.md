@@ -92,19 +92,24 @@ T-ELU-01（先解析后显隐，最小改动、独立可并行）→ §五-1（�
   → T-ELU-05（测试与文档）→ §五 真机走查 → 收口
 ```
 
-## 八、实施记录（实施后回填）
+## 八、实施记录（2026-09-22 回填，T-Round10-03）
+
+**先读这一节再看 §一~§七**：本轮实施发现计划 §一 的「真缺陷」判定与四处落点有偏差，已按实际代码更正（详见各行「偏离」）。
 
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
-| T-ELU-01 | （实施后填） | 改动行与「UI 侧零改动」的实证须回填 |
-| T-ELU-02 | （实施后填） | Oracle 真实报错文本原文与最终 marker 须回填；两次读数须回填 |
-| T-ELU-03 | （实施后填） | 四处接线点与钳制生效实证须回填 |
-| T-ELU-04 | （实施后填） | 字段/标注形态与 MCP 文案影响须回填 |
-| T-ELU-05 | （实施后填） | UI 用例基建形态、门禁读数须回填 |
+| T-ELU-01 | 本任务不提交（主线程统一收口） | **落点由 `ui/SqlPreviewPanel.kt:1306-1307` 扩到三处**：① `showErrorRichWithLocate` 改为 `showErrorRich(info, resolveLocateAction())`——投递时解析锚点、解析不出传 null（对齐 `log/SqlLogPanel.kt:1779-1782`），原 `locateErrorSource()` 的「点击时解析 + 静默 return」形态删除，点击动作捕获投递时解析出的锚点；② **计划漏判的抹除链**：`execute/DataSourceSelector.kt` 三处投递点在 `onErrorRich` 之后**无条件**再投旧 `onError`（原 `:2620`/`:2659`/`:2675`），而 `SqlPreviewPanel` 的 `onError` 恒为 `resultPanel.showError` → `ui/SqlResultPanel.kt:231-232` 会清掉 `locateHandler` + 按钮可见性 ⇒ **端态恒为「按钮不可见」**。新增 `DataSourceSelector.deliverError` 收口（富通道优先、两者互斥、富通道抛异常回退旧通道），三处提交链 + 控制台历史错误三处（`refreshResultsComponent`/`startResultTabRetry` 早检/40 拍窗口）全部改走它；③ **计划诊断的「按钮可见但点了没反应」在生产中不成立**（实读 `:2620`/`:2659`/`:2675` 与 `:231-232` 证伪），真正形态是「按钮从不出现」；而语句级 SQL 错误走 console history 旧通道（原只投 `onError`）⇒ 本任务把这三处也接进富通道，否则定位按钮对「正常 SQL 执行失败」永不出现。UI 侧仅改 `SqlResultPanel` 的 KDoc（记录契约与抹除链），代码零改动。 |
+| T-ELU-02 | 同上 | **Oracle 位置形态用插件自己的驱动栈取证，结论与计划前提不同**：`ojdbc11 23.3.0.23.09`（本仓 `build.gradle.kts:93` 声明版本）直连 `114.66.55.245:20095/FREEPDB1`（只读，`dbx_test`）取到的**纯 SQL 错误不带任何位置**——`SELECT * FROM dbx_test.no_such_table_xyz` → `ORA-00942: table or view "DBX_TEST"."NO_SUCH_TABLE_XYZ" does not exist`（无 `Position`/`line`/`at line`）；`ORA-03049` 同。**可解析位置只出现在 PL/SQL 块**：`BEGIN nonexistent_proc_xyz(); END;` → `ORA-06550: line 1, column 7:` + `PLS-00201: …`；报错语言随客户端 JVM locale（`-Duser.language=en` 出英文、默认出中文 `ORA-06550: 第 1 行, 第 7 列:`），两种形态都取自同一次真库取证。据此新增两条 marker（`ORACLE_PLSQL_LINE` 英文 / `ORACLE_PLSQL_LINE_ZH` 中文，同源同义共用 `oracle-plsql` 标签），**只取行**（`column` 是行内列号，不是执行态文本的绝对字符偏移，塞进 `positionChar` 会虚标坐标系）。**偏离 1**：计划 §五-1 让经 DBX MCP 取文本——MCP 返回的是 `ORA-00942 …` + 换行 ` error occur at position: 23`，但该行**不来自 Oracle 驱动**（全 jar 扫描 ojdbc11 无 `error occur at position` 字符串；DBX 侧 Oracle agent 是原生 exe `~/.dbx/agents/drivers/oracle/agent.exe`），故只作旁证、不作真值。**偏离 2**：计划称「无 Oracle 形态」被证伪一半——` error occur at position: N` 会被既有 `PG_POSITION` 正则命中（`(?i)\bPosition:`），但该文本不流经插件链，**不为其造 marker**（避免凭 DBX agent 文本臆造）。**偏离 3**：「marker 用例改前必红」成立——临时注释掉两条 marker 收集后 `ErrorPositionExtractorTest` 18 例中恰 2 例红（`testOraclePLSQL位置形态_英文locale` / `_中文locale`），其余 16 例绿。 |
+| T-ELU-03 | 同上 | 四处投递点接上提交文本长度：`DataSourceSelector` 提交链三处传 `executedSql.length`（`:2398` 声明，整篇控制台提交文本）、控制台历史错误三处传 `sqlText?.length`、MCP `SqlVisualizerExplainTool` 传 **`target.explainSql.length`**（真正提交的包装后语句，非原始 `selectSql`——坐标系必须一致）。**偏离（如实登记，非缺陷）**：驱动器报的位置是**语句内**坐标，而上界是整篇提交文本长度 ⇒ `value ≤ max` 恒成立，钳制在生产中**不具约束力**（只是把死参数接活、不再只对单测生效）。计划 §一 口径修正 3 的「变为生产生效」应读作「接线生效」而非「钳制实际咬合」。 |
+| T-ELU-04 | 同上 | `ExecutionErrorInfo` 增 `executedSqlLength: Int?`（`buildInfo` 把传入上界如实带出，**不引入换算**）；MCP 侧 `errorPosition: char/line N` 行**逐字节不变**，另起一行追加 `errorPositionSource: offset into the executed EXPLAIN statement text, not the mapper source line`。**偏离**：计划要求「tooltip 如实标注位置指向执行态 SQL」——tooltip 文案来自 bundle 键 `execute.error.locate.tooltip.start/position`（`src/main/resources/messages/MpSqlVisualizerBundle.properties:251-252` 与 `MpSqlVisualizerBundle_zh.properties:233-234`），**这两个文件不在本任务写集内**（且并行波次另有任务可能占用），故本轮**未改**；现有英文/中文文案已含「char position to source-line mapping is unreliable」，与「位置指向执行态 SQL」字面等价度不足，**登记为未完成**，需另起小任务改 bundle（中英同改，保持 key 集合与 `{0}` 占位符个数不变以过 `BundleParityGuardTest`/`BundlePlaceholderArityTest`）。 |
+| T-ELU-05 | 同上 | 用例挂既有类，未新建基建：`ui/SqlResultPanelUiTest.kt` +3 例（`test错误定位按钮_无锚点时不可见` **先红用例**、`_锚点可解析时可见`、`_旧通道不得抹掉富通道的定位态`），`execute/ErrorPositionExtractorTest.kt` +7 例（Oracle 中英形态、Oracle 纯 SQL 无位置不虚报、跨行号放弃归属、`deliverError` 越界钳制+上界带出、无富通道回退、富通道异常回退）。**偏离 1**：计划称该类「4 个 JUnit3 用例」实为 **6 个**（`SqlResultPanelUiTest.kt:42/58/78/94/110/132`），且 §六「无 UI 测试基建」应删（类早已存在、夹具可复用）。**偏离 2**：验收① 的命令 `testFast --tests "*SqlResultPanelUiTest*"` **匹配 0 例**（该类 import `com.intellij.*`，不进 testFast 快桶，见 `buildSrc/src/main/kotlin/mpv-testing.gradle.kts:99-110`），实际用 `test --tests …`。**偏离 3**：判据必须走 `SqlPreviewPanel.showErrorRichWithLocateForTest`（新增 internal 缝）——直接调 `SqlResultPanel.showErrorRich(info, null)` 改前改后都绿（`:252` 本就按 null 判定），证不了「投递点是否先解析」。**偏离 4**：计划 §三/§四 把 CHANGELOG/变更记录/第十轮报告 #54 备注算作 T-ELU-05 交付，与任务说明「由 T-Round10-08 统一写」冲突——按后者执行，本轮只回填本 §八。 |
+| 门禁读数 | — | 定向：`./gradlew.bat test --tests "*SqlResultPanelUiTest*" --tests "*ErrorPositionExtractorTest*" --tests "*EntryJumpResolverTest*" --tests "*SqlLogPanelXmlJumpTest*" --tests "*SqlLogPanelLiveJumpWithSourceTest*" --tests "*HistorySqlLogPanelJumpToSourceTest*"` → **53 例 0 失败**（18+9+6+4+10+6）；`--tests "cn.song.mybatisplus.visualizer.mcp.*"` → **21 类 133 例 0 失败**；`--tests "…execute.*" --tests "…ui.*"` → **139 类 1500 例 0 失败**。先红两次读数：UI 无锚点例（还原改前「恒传非 null」形态）**9 例 1 失败**、Oracle marker 例（注释掉 marker 收集）**18 例 2 失败**，两次探针均已还原（还原轮以全仓临时标记正则复核，0 命中；本行写作时该正则仅命中 `sql/Dialect.kt:80`，属 T-Round10-05 的在途标记，其后亦已还原）。**未跑**：`testShards` 全量（主流程统一跑）、`verifyGate`、runIde 真机走查（§五-3/§五-4，本任务未跑，**登记为未验证**）。 |
+| 环境备注 | — | 本仓当前有 4 个并行任务活跃，共享 `build/` 被并发编译互相清空（实测 `compileTestKotlin` 大面积 `Unresolved reference`）——本任务在仓库外 init script 里把 `layout.buildDirectory` 指向 `build-MPSV-ErrorLocate` 后读数才稳定（该隔离目录实际落在 `buildSrc/build-MPSV-ErrorLocate`，**未被 gitignore 覆盖**——`git check-ignore` 无命中；还原轮已删除，现 `git status` 不再列出）；另发现 `mcpStub` 源集产物会被后续 Kotlin 编译清空（既有接线靠「产物恰好在场」，无任务依赖），临时用稳定副本喂 test 编译/运行时 classpath 规避。**该 init script 位于 `%TEMP%`，不在仓库内**。 |
 
-**待验证前提（实施者先证伪再动手）**：
+**待验证前提（实施后更新）**：
 
-1. **Oracle 报错文本是否含可解析位置**——本轮**未取**（只确认了连接可用）。这是 T-ELU-02 的第一步：若 Oracle 不提供任何可解析位置，则该子任务退为「明确不支持 + 如实登记」，只做 T-ELU-01/03/04。
-2. MySQL `at line N` 的语义是「SQL 文本第 N 行」还是「语句序号」——现有实现按**行号**处理（`ExecutionErrorInfo.kt:75` `isCharPosition = false`），**未核对**；实施时用真库证伪。
-3. 锚点单槽（`SqlPreviewService.kt:106`）在多预览窗口场景是否被覆盖（当前 KDoc 声称「每项目至多一个预览弹窗」）——若证伪，则 T-ELU-01 的「先解析」需考虑槽被覆盖的情形。
-4. `SqlResultPanel` 的 UI 用例基建成本——若搭不起来，验收 1 退为「解析层断言 + 真机走查」两段（如实登记，不宣称已自动化）。
+1. **Oracle 报错文本是否含可解析位置**——**已证伪「纯 SQL 错误带位置」、证实「PL/SQL 块带 `line N, column M`」**（真库 + 本仓声明驱动版本直连取证，原文见 T-ELU-02 行）。计划 §五-1 指定的 DBX MCP 取证路径给出的 ` error occur at position: N` 经证不来自 Oracle 驱动，已改判为旁证。
+2. MySQL `at line N` 语义——未复核（T-ELU-02 已用 Oracle 真库完成同类取证，MySQL 侧沿用既有实现与既有 11 例，未新增真库读数）。
+3. 锚点单槽在多预览窗口下是否被覆盖——`SqlPreviewService.kt:2084-2098` 单例化（关旧开新）已核实，槽不被覆盖，T-ELU-01 的「投递时解析」无需考虑覆盖场景。
+4. `SqlResultPanel` 的 UI 用例基建成本——已证伪「需搭基建」（类已存在），成本为 0。
+

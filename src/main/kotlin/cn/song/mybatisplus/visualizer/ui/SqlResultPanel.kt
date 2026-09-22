@@ -243,7 +243,16 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
      * v1 落点为语句起始行（诚实降级）：驱动报的字符位置指向**被执行 SQL 文本**，与 mapper 原文
      * 行不一一对应（动态 SQL 拼接/参数注入），绝不虚标精确——tooltip 注明。
      *
-     * @param info   执行链富错误信息（T-EL-02 富通道投递）
+     * **T-ELU-01 契约（调用方必读）**：[locate] 必须在**投递时**解析完毕——解析不出就传 null。
+     * 宿主侧 `SqlPreviewPanel.showErrorRichWithLocate` 已改为「先解析、后显隐」；若调用方传入一个
+     * 内部会静默 `return` 的动作，按钮就会可见而点击无反应（本任务修掉的正是这个形态）。
+     *
+     * **T-ELU-01 的抹除链**：本类的 [showError] 会清 `locateHandler` 与按钮可见性（`:231-232`），
+     * 故富通道投递后**不得**再投一次旧通道（`onError(String)`）——`DataSourceSelector.deliverError`
+     * 已把两条通道改为互斥，否则富信息刚置的定位态会被同一次执行的旧通道立刻抹掉。
+     *
+     * @param info   执行链富错误信息（T-EL-02 富通道投递；[ExecutionErrorInfo.executedSqlLength]
+     *               为投递点传入的提交文本长度，供 tooltip 标注「位置指向执行态 SQL」，不做换算）
      * @param locate 定位动作；null = 不显示定位按钮
      */
     fun showErrorRich(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo, locate: (() -> Unit)?) {

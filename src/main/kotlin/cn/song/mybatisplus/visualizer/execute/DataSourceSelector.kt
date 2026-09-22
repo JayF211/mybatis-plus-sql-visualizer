@@ -820,7 +820,7 @@ object DataSourceSelector {
      *  - Timer **每拍清提示符**——DatabaseLogView 在执行/数据渲染时重设 prompt（用户实测
      *    prepare/reuse/入口清理后仍重现），4.8s 窗口内持续压制。
      */
-    private fun refreshResultsComponent(ui: Any, LOG: com.intellij.openapi.diagnostic.Logger, forceSwapIn: Boolean = false, generation: Int = swapGeneration, onError: ((String) -> Unit)? = null) {
+    private fun refreshResultsComponent(ui: Any, LOG: com.intellij.openapi.diagnostic.Logger, forceSwapIn: Boolean = false, generation: Int = swapGeneration, onError: ((String) -> Unit)? = null, onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null, sqlTextLength: Int? = null) {
         val callback = pendingOnConsole ?: return
         val top = sharedTopBlock ?: preparedTopBlock ?: return
         val shared = sharedConsole
@@ -854,7 +854,8 @@ object DataSourceSelector {
                         // any() 恒 write-unsafe（见 DocWriteContext KDoc）。
                         ApplicationManager.getApplication().invokeLater({
                             writeConsoleOutput(shared ?: preparedConsole, "执行失败: $err\n", isError = true)
-                            onError?.invoke(err)
+                            // T-ELU-01/03：同 [startResultTabRetry] 的语句级错误路径——走富通道收口
+                            deliverError(onErrorRich, onError, null, err, sqlTextLength)
                         }, com.intellij.openapi.application.ModalityState.nonModal())
                         return
                     }
@@ -2356,6 +2357,45 @@ object DataSourceSelector {
     }
 
     /**
+     * T-ErrorLocate T-ELU-01/03：错误投递**统一收口**——富通道优先，富通道缺席才回退旧
+     * `onError(String)`；两者**互斥**，不再先后各投一次。
+     *
+     * **为什么必须互斥**（本任务实测的真相，与计划 §一.1 的「按钮可见但点了没反应」不同）：
+     * 消费方 `SqlPreviewPanel` 的 `onError` 恒为 `resultPanel.showError(errorMsg)`，而
+     * `showError` 会清掉定位动作与定位按钮（`ui/SqlResultPanel.kt:231-232`
+     * `locateHandler = null` + `errorLocateButton.isVisible = false`）。原实现先投富通道
+     * （`showErrorRich` 置按钮可见）、紧接着无条件投旧通道——**同一 EDT 任务内**后者立刻把
+     * 前者抹掉，端态恒为「按钮不可见」，T-ELU-01 的「先解析后显隐」因此形同 no-op。
+     * 两者呈现的文本同源（富通道 `showErrorRich` 内部就是 `showError(info.message)`），
+     * 故富通道成功时不再投旧通道，展示行为等价而定位态得以保留。
+     *
+     * 富通道自身抛异常（`runCatching`）时**回退旧通道**——不让「结构化」这一增强把错误呈现吞掉。
+     *
+     * @param cause        解包后的异常（取 SQLState/errorCode；控制台历史文本错误传 null）
+     * @param message      错误文本（位置 marker 从它提取）
+     * @param sqlMaxLength 提交/被执行文本长度（T-ELU-03 越界钳制上界）；null = 不钳制
+     */
+    internal fun deliverError(
+        onErrorRich: ((ExecutionErrorInfo) -> Unit)?,
+        onError: ((String) -> Unit)?,
+        cause: Throwable?,
+        message: String,
+        sqlMaxLength: Int? = null,
+    ) {
+        val rich = onErrorRich
+        if (rich != null) {
+            runCatching { rich(ErrorPositionExtractor.buildInfo(cause, message, sqlMaxLength)) }
+                .onFailure {
+                    com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+                        .warn("[T-ErrorLocate] onErrorRich invoke failed → fallback to onError", it)
+                    onError?.invoke(message)
+                }
+        } else {
+            onError?.invoke(message)
+        }
+    }
+
+    /**
      * M36.5：在指定控制台上执行 SQL（后台线程 + ReadAction + 5s 超时 + 结果 Tab 激活重试）。
      * 由 [executePrepared]（已备控制台）与准备全链（executeAfterPrepare=true）共用。
      *
@@ -2599,7 +2639,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                                                     doRunMethod.invoke(null, console, info)
                                                     // 真实提交完成——此刻才启动结果监听
                                                     LOG.info("[M36] native query SUBMITTED (starting result watch)")
-                                                    afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false, sqlText = executedSql)
+                                                    afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false, sqlText = executedSql, onErrorRich = onErrorRich)
                                                     } catch (t: Throwable) {
                                                         val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
                                                         // T-FP-02：反射包装层（InvocationTargetException）是普通异常，
@@ -2611,13 +2651,16 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                                                             cause,
                                                         )
                                                         // M36.5.45：native 执行链失败必须通知 UI（此前仅 LOG.warn，用户看不到任何错误）
-                                                        // T-ErrorLocate T-EL-02：富通道并行投递（SQLState/errorCode/驱动位置结构化），
-                                                        // 旧 onError(String) 消费方零改动
+                                                        // T-ErrorLocate T-EL-02：富通道投递（SQLState/errorCode/驱动位置结构化）
+                                                        // T-ELU-01/03：改经 [deliverError] 收口（富通道优先、**不再**同时投旧通道——
+                                                        // 旧通道会抹掉定位按钮），并接上提交文本长度作越界钳制上界
                                                         // write-safe: UI-only（纯 Swing/只读，无文档写）
                                                         ApplicationManager.getApplication().invokeLater({
-                                                            runCatching { onErrorRich?.invoke(ErrorPositionExtractor.buildInfo(cause, cause.message ?: cause.toString())) }
-                                                                .onFailure { LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", it) }
-                                                            onError?.invoke(cause.message ?: cause.toString())
+                                                            deliverError(
+                                                                onErrorRich, onError, cause,
+                                                                cause.message ?: cause.toString(),
+                                                                executedSql.length,
+                                                            )
                                                         }, com.intellij.openapi.application.ModalityState.any())
                                                     }
                                                 }
@@ -2654,25 +2697,24 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                         // pump 中照常执行（纯 Swing 更新，安全）。
                         // write-safe: UI-only（纯 Swing/只读，无文档写）
                         ApplicationManager.getApplication().invokeLater({
-                            runCatching { onErrorRich?.invoke(ErrorPositionExtractor.buildInfo(cause, msg)) }
-                                .onFailure { LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", it) }
-                            onError?.invoke(msg)
+                            deliverError(onErrorRich, onError, cause, msg, executedSql.length)
                         }, com.intellij.openapi.application.ModalityState.any())
                         return@executeOnPooledThread
                     }
                     // 兜底路径（executeQueries 同步提交）：监听在此启动；原生路径由事务内
                     // afterSubmitted 启动，此处不再重复（防双重监听互相顶掉结果）。
                     if (submitted) {
-                        afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false, sqlText = executedSql)
+                        afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false, sqlText = executedSql, onErrorRich = onErrorRich)
                     }
                 }
             }
         }.onFailure { e ->
             LOG.warn("[M36] executeOnConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
             val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
-            runCatching { onErrorRich?.invoke(ErrorPositionExtractor.buildInfo(cause, cause.message ?: cause.toString())) }
-                .onFailure { LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", it) }
-            onError?.invoke(cause.message ?: cause.toString())
+            // T-ELU-01/03：经 [deliverError] 收口（富通道优先 + 提交文本长度钳制上界）。
+            // 本对回调在 executeOnPooledThread 的后台线程上（非 EDT）——[deliverError] 只做纯计算
+            // 与回调转发，不含 Swing 操作，故不改变既有线程契约。
+            deliverError(onErrorRich, onError, cause, cause.message ?: cause.toString(), executedSql.length)
         }
     }
 
@@ -2700,6 +2742,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         dsName: String? = null,
         demotedOverride: Boolean = false,
         sqlText: String? = null,
+        onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     ) {
         // M36.5.44：真实提交时刻递增换入代际——作废上一个执行遗留的 refresh Timer（防滞后一轮）。
         swapGeneration++
@@ -2774,7 +2817,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             }
             // ④ 结果 Tab 监听（只认新 Tab 名）
             if (ui != null) {
-                startResultTabRetry(project, ui, onError, preExistingNames, dsName = dsName, demotedOverride = demotedOverride, sqlText = sqlText)
+                startResultTabRetry(project, ui, onError, preExistingNames, dsName = dsName, demotedOverride = demotedOverride, sqlText = sqlText, onErrorRich = onErrorRich)
             }
         }, com.intellij.openapi.application.ModalityState.any())
     }
@@ -2866,6 +2909,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         dsName: String? = null,
         demotedOverride: Boolean = false,
         sqlText: String? = null,
+        onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val selectRetry = object : java.awt.event.ActionListener {
@@ -2892,8 +2936,12 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                         lastReportedError = err
                         LOG.info("[M36] early console error detected (attempts=$attempts): ${err.take(120)}")
                         // write-safe: UI-only（纯 Swing/只读，无文档写）
+                        // T-ELU-01/03：DBN 写进 console history 的**语句级**错误也走富通道——
+                        // 这是「正常 SQL 执行失败」的主路径（提交链不抛异常，错误只落在 history），
+                        // 原实现只投旧 onError ⇒ 定位按钮永不出现。cause 传 null（文本里已有
+                        // 位置 marker，SQLState/errorCode 由驱动器在 history 文本中给出）。
                         ApplicationManager.getApplication().invokeLater({
-                            onError?.invoke(err)
+                            deliverError(onErrorRich, onError, null, err, sqlText?.length)
                         }, com.intellij.openapi.application.ModalityState.any())
                         return
                     }
@@ -2933,7 +2981,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                     //（用户实测：新 SQL 执行后一直加载中、重开面板才见新结果）——重取组件换入。
                     // M36.5.13：forceSwapIn=true——结果 Tab 出现即有新结果，强制换入一次
                     //（组件实例可能恒定，"实例变化才换入"导致新结果不显示）
-                    refreshResultsComponent(ui, LOG, forceSwapIn = true, generation = generation, onError = onError)
+                    refreshResultsComponent(ui, LOG, forceSwapIn = true, generation = generation, onError = onError, onErrorRich = onErrorRich, sqlTextLength = sqlText?.length)
                 } else {
                     // M36.5.52：每拍错误早检——DBN 查询失败（Unknown column/syntax error 等）
                     // 会立即写入 console history，无需等 40 拍（16s）超时；发现真实错误立即上报
@@ -2973,7 +3021,8 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                         } else if (realError != null) {
                             // write-safe: UI-only（纯 Swing/只读，无文档写）
                             ApplicationManager.getApplication().invokeLater({
-                                onError?.invoke(realError)
+                                // T-ELU-01/03：语句级错误同 [startResultTabRetry] 早检路径，走富通道收口
+                                deliverError(onErrorRich, onError, null, realError, sqlText?.length)
                             }, com.intellij.openapi.application.ModalityState.any())
                         }
                     }

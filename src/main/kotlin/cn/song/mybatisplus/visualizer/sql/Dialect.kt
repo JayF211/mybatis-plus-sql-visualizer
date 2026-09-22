@@ -13,7 +13,8 @@ import cn.song.mybatisplus.visualizer.model.SqlValue
  *  - upsert 冲突子句：[renderUpsert]（T-M43 方言差异点第 4 项；null → 无「INSERT+后缀」原生
  *    upsert，渲染降级纯 INSERT）与 [renderUpsertStatement]（P-立项-05：整语句形态，如 H2 MERGE..KEY）
  *
- * 新增方言：实现本接口并注册进 [DialectRegistry]（五件套：分页形态、引用符号、保留字集合、upsert 形态、测试）。
+ * 新增方言：实现本接口并注册进 [DialectRegistry]（六件套：分页形态、引用符号、保留字集合、
+ * 折叠方向族 [identifierFolding]、upsert 形态、测试）。
  * 验证基线（P-立项-05）：各方言输出形态经 H2 兼容模式 / SQLite 真实引擎 / 官方文档验证，
  * 详见 docs/开发计划/20260828-2000-P-立项-05-方言输出真实验证-报告.md。
  */
@@ -53,23 +54,49 @@ interface Dialect {
         if (identifier.lowercase() in reservedWords) quoteIdentifier(identifier) else identifier
 
     /**
-     * 标识符**按名字大小写来源**引用（O-42 / T-OracleQuoteCaseSource）。
+     * 标识符**按名字大小写来源**引用（O-42 / T-OracleQuoteCaseSource；O-51 / T-IdentifierFoldingFamily
+     * 把「单方言特判」升级为按 [identifierFolding] 折叠方向族分流）。
      *
-     * 与 [quoteIfKeyword] 的差别：本方法额外知道该名字**从哪来**——同一串字符在两种来源下
-     * 的「正确引用形态」可以相反。默认实现直接委托 [quoteIfKeyword]（**其余方言逐字节不变**），
-     * 只有对大小写敏感且会折叠的方言（Oracle）覆写。
+     * 与 [quoteIfKeyword] 的差别：本方法额外知道该名字**从哪来**——同一串字符在两种来源下的
+     * 「正确引用形态」可以相反。默认实现按 [identifierFolding] 分流：NONE 族逐字节等价于
+     * [quoteIfKeyword]（故 MySQL / MariaDB / H2 / SQLite / SQL Server / DM 产物不变），
+     * UPPER / LOWER 两族只在目录来源下加判定。
      *
-     * 覆写者须遵守的分流口径：
-     *  - [IdentifierCaseSource.CATALOG]：名字是**字典里的真实名字**（自省元数据返回，未归一）。
+     * 分流口径（条件**显式含** [IdentifierCaseSource.CATALOG]）：
+     *  - CATALOG + [IdentifierFolding.UPPER]：名字是**字典里的真实名字**（自省元数据返回，未归一）。
      *    Oracle 裸标识符折叠为大写，故「含小写字母」的名字**必须加引号**才能命中；全大写才可裸写；
+     *  - CATALOG + [IdentifierFolding.LOWER]：裸标识符折叠为小写，故「含大写字母」的名字**必须加引号**
+     *    （以引号创建的大写名裸写后被折叠为小写 → 查不到，方向与 UPPER 族相反）；
+     *  - CATALOG + [IdentifierFolding.NONE]：不折叠（或大小写不敏感匹配）→ 按名判定无意义，落 [quoteIfKeyword]；
      *  - [IdentifierCaseSource.ENTITY]：名字是**小写派生名**（`@TableName`/`@TableField` 注解值，
      *    或 camelCase → snake_case 的 [cn.song.mybatisplus.visualizer.util.NamingStrategy.toSnakeCase] 产物）
      *    ——这些正是「不带引号创建」的名字，折叠后恰好命中，**加引号反而必然失败**。
-     *    故实体来源走既有 [quoteIfKeyword] 逐字不变（这是 C 方案「无条件收紧」被否决的依据）。
+     *    故实体来源**不论族**都走既有 [quoteIfKeyword] 逐字不变（这是 C 方案「无条件收紧」被否决的依据；
+     *    族判定只允许写在 CATALOG 分支里——写进默认路径会连带污染 ENTITY）。
      *
      * 未接线点（[IdentifierCaseSource.ENTITY] 默认）维持旧行为——新增重载 + 逐点接线，不改既有函数语义。
      */
-    fun quoteIfNeeded(identifier: String, caseSource: IdentifierCaseSource): String = quoteIfKeyword(identifier)
+    fun quoteIfNeeded(identifier: String, caseSource: IdentifierCaseSource): String =
+        if (caseSource == IdentifierCaseSource.CATALOG) quoteCatalogName(identifier) else quoteIfKeyword(identifier)
+
+    /**
+     * 标识符**折叠方向族**（O-51 / T-IdentifierFoldingFamily）：本方言把裸标识符折叠到哪个方向。
+     *
+     * [quoteIfNeeded] 的目录来源分支按本属性分流——同一串字典名在不同族下的正确引用形态相反
+     * （判据落点见 [quoteIfNeeded] 的 KDoc）：
+     *  - [IdentifierFolding.UPPER]（Oracle 真库实测：`FROM dual` 命中 `DUAL`、`FROM "dual"` → ORA-00942）；
+     *  - [IdentifierFolding.LOWER]（PG / KingBase 真机实测：`FROM INFORMATION_SCHEMA.TABLES` 折为小写命中、
+     *    `FROM information_schema."TABLES"` → relation does not exist）；
+     *  - [IdentifierFolding.NONE]（不折叠或大小写不敏感匹配 → 按名判定无意义）。
+     *
+     * 默认 [IdentifierFolding.NONE]（保持既有行为）。维度是**折叠方向**而非数据库品牌——DM8 实测大小写
+     * 不敏感（`sys.sysobjects` / `sys."sysobjects"` / `sys."SYSOBJECTS"` 三形态均 1029 行）→ NONE，
+     * 与 DBX 把 `{dameng, db2}` 归 `UPPER_FOLDING` 的口径分歧按我方实测处理（计划 §八 待验证前提 1）。
+     *
+     * H2 2.3.232 引擎实测裸写折为大写（与 Oracle 同族），本轮**有意维持 NONE 不扩面**（缺口登记为后续）；
+     * SQLite / SQL Server 未实测（SQL Server 大小写取决于 collation）。
+     */
+    val identifierFolding: IdentifierFolding get() = IdentifierFolding.NONE
 
     /**
      * UPSERT 冲突子句（T-M43：设置里出现 = 承诺可用）。
@@ -83,8 +110,15 @@ interface Dialect {
      *
      * @param conflictKey    冲突键列名（原始值，实现内按需引用；MySQL 形态无冲突键列表，仍须传入用于勾选判定）
      * @param updateColumns  冲突后更新列名（原始值，不含冲突键；实现内按需引用）
+     * @param caseSource     列名的大小写来源（O-51）：目录来源时按 [identifierFolding] 族引用，与 INSERT 基座
+     *                       （[cn.song.mybatisplus.visualizer.model.BatchModel.renderSql]）同一判定——否则会产出
+     *                       「基座加引号、后缀裸写」的半包形态（PG 族含大写目录名下后者被折叠为小写 → 列不存在）
      */
-    fun renderUpsert(conflictKey: String, updateColumns: List<String>): String? = null
+    fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource = IdentifierCaseSource.ENTITY,
+    ): String? = null
 
     /**
      * UPSERT **整语句**形态（P-立项-05）：方言原生 upsert 非「INSERT + 后缀」结构时使用——
@@ -97,8 +131,14 @@ interface Dialect {
      * @param tableName   表名（原始值，实现内按需引用）
      * @param columns     全部列名（原始值，含冲突键，与 VALUES 的 `?` 顺序一致；实现内按需引用）
      * @param conflictKey 冲突键列名（原始值；必在 [columns] 内）
+     * @param caseSource  列名的大小写来源（O-51）：语义同 [renderUpsert] 的同名参数
      */
-    fun renderUpsertStatement(tableName: String, columns: List<String>, conflictKey: String): String? = null
+    fun renderUpsertStatement(
+        tableName: String,
+        columns: List<String>,
+        conflictKey: String,
+        caseSource: IdentifierCaseSource = IdentifierCaseSource.ENTITY,
+    ): String? = null
 
     /**
      * EXPLAIN 执行计划语句（M37.2 / P-立项-06 N-1）：把任意查询包装为本方言的 EXPLAIN 形态。
@@ -176,6 +216,47 @@ enum class IdentifierCaseSource {
 }
 
 /**
+ * 标识符**折叠方向族**（O-51 / T-IdentifierFoldingFamily）：[Dialect.quoteIfNeeded] 的目录来源分流依据。
+ *
+ * 与 [IdentifierCaseSource] 正交——后者说「名字从哪来」，本枚举说「本方言把裸标识符折到哪个方向」；
+ * 二者相乘才决定引用形态：同一串字典名在 UPPER 族要「含小写即包」，在 LOWER 族要「含大写即包」，
+ * 在 NONE 族则不判。
+ *
+ * 归属依据（真机实测，2026-09-22，DBX MCP 只读通道）：
+ *  - [UPPER] Oracle：`SELECT COUNT(*) FROM dual` → 1（裸写折为大写命中）、`FROM "dual"` → `ORA-00942`；
+ *  - [LOWER] PostgreSQL / KingBase：`SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES` → 366 / 492 行
+ *    （裸写折为小写命中小写字典名）、`FROM information_schema."TABLES"` → `relation ... does not exist`
+ *    （引号保留原样 → 大写名不存在）；
+ *  - [NONE] MySQL / MariaDB / H2 / SQLite / SQL Server / DM：DM8 实测三形态同命中（大小写不敏感）。
+ */
+enum class IdentifierFolding {
+    /** 裸标识符折叠为**大写**（Oracle）：字典名含小写字母时必须加引号。 */
+    UPPER,
+
+    /** 裸标识符折叠为**小写**（PostgreSQL / KingBase）：字典名含大写字母时必须加引号。 */
+    LOWER,
+
+    /** 不折叠（或大小写不敏感匹配）：目录名按名判定无意义，逐字走 [Dialect.quoteIfKeyword]。 */
+    NONE,
+}
+
+/**
+ * 目录来源名字的按族引用（O-51）：[Dialect.identifierFolding] 决定「哪种大小写形态必须加引号」。
+ *
+ * 不满足折叠命中条件时落回 [Dialect.quoteIfKeyword]——**保留字命中即包的既有行为不变**
+ * （Oracle 的 `NUMBER` / `LEVEL`、PG 的 `table` 等仍包）。
+ */
+private fun Dialect.quoteCatalogName(identifier: String): String = when (identifierFolding) {
+    IdentifierFolding.UPPER ->
+        if (identifier.any { it.isLowerCase() }) quoteIdentifier(identifier) else quoteIfKeyword(identifier)
+
+    IdentifierFolding.LOWER ->
+        if (identifier.any { it.isUpperCase() }) quoteIdentifier(identifier) else quoteIfKeyword(identifier)
+
+    IdentifierFolding.NONE -> quoteIfKeyword(identifier)
+}
+
+/**
  * T-ExplainDbl：判断语句是否已以 EXPLAIN 关键字开头——紧随字符须非字母/数字/下划线
  * （词边界），避免 `EXPLAINING_TABLE` 之类标识符误判。
  */
@@ -211,17 +292,33 @@ private fun renderLimitValue(value: SqlValue): String = when (value) {
 /**
  * 共享 upsert 辅助：MySQL 形态 `ON DUPLICATE KEY UPDATE col = VALUES(col), ...`。
  * 供 MySQL / MariaDB 复用（VALUES() 对 5.7~8.0+/MariaDB 全版本可用）。
+ *
+ * O-51：列名引用走 [Dialect.quoteIfNeeded]（而非裸 [Dialect.quoteIfKeyword]），与 INSERT 基座同一判定；
+ * MySQL / MariaDB 为 NONE 族，实体/目录来源产物逐字节不变。
  */
-private fun Dialect.renderMySqlStyleUpsert(updateColumns: List<String>): String =
-    "ON DUPLICATE KEY UPDATE " + updateColumns.joinToString(", ") { "${quoteIfKeyword(it)} = VALUES(${quoteIfKeyword(it)})" }
+private fun Dialect.renderMySqlStyleUpsert(
+    updateColumns: List<String>,
+    caseSource: IdentifierCaseSource,
+): String = "ON DUPLICATE KEY UPDATE " +
+    updateColumns.joinToString(", ") { "${quoteIfNeeded(it, caseSource)} = VALUES(${quoteIfNeeded(it, caseSource)})" }
 
 /**
  * 共享 upsert 辅助：PostgreSQL 形态 `ON CONFLICT (pk) DO UPDATE SET col = EXCLUDED.col, ...`。
  * 供 PostgreSQL / H2 / SQLite / KingBase 复用。
+ *
+ * O-51：列名引用走 [Dialect.quoteIfNeeded]——PG 族（LOWER）目录来源含大写时必须加引号，否则会产出
+ * 「基座加引号、后缀裸写」的半包形态：`INSERT INTO "Issue_New" ("Id") ... ON CONFLICT (Id) DO UPDATE
+ * SET Id = EXCLUDED.Id` 里的裸写 `Id` 被折叠为小写 → 列不存在。SQLite 为 NONE 族，产物逐字节不变。
  */
-private fun Dialect.renderPgStyleUpsert(conflictKey: String, updateColumns: List<String>): String =
-    "ON CONFLICT (${quoteIfKeyword(conflictKey)}) DO UPDATE SET " +
-        updateColumns.joinToString(", ") { "${quoteIfKeyword(it)} = EXCLUDED.${quoteIfKeyword(it)}" }
+private fun Dialect.renderPgStyleUpsert(
+    conflictKey: String,
+    updateColumns: List<String>,
+    caseSource: IdentifierCaseSource,
+): String =
+    "ON CONFLICT (${quoteIfNeeded(conflictKey, caseSource)}) DO UPDATE SET " +
+        updateColumns.joinToString(", ") {
+            "${quoteIfNeeded(it, caseSource)} = EXCLUDED.${quoteIfNeeded(it, caseSource)}"
+        }
 
 /**
  * MySQL 方言：`LIMIT [offset,] count`。
@@ -241,8 +338,11 @@ object MySqlDialect : Dialect {
 
     override val reservedWords: Set<String> = MYSQL_RESERVED
 
-    override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
-        renderMySqlStyleUpsert(updateColumns)
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderMySqlStyleUpsert(updateColumns, caseSource)
 
     // T-ECH-02：支持面/输出格式读 [ExplainSupportTable]（单一事实源），逐字节产物由 DialectExplainTest 冻结断言
     override fun renderExplainStatement(sql: String): String? = ExplainSupportTable.render(name, sql)
@@ -263,10 +363,23 @@ object PostgreSQLDialect : Dialect {
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
 
+    /**
+     * O-51：PG 裸标识符**折叠为小写**，故目录来源（字典真实名字）按「含大写字母即加引号」判定
+     * ——以引号创建的大写名裸写后被折叠为小写 → 查不到。
+     *
+     * 真机依据（DBX MCP 只读实测，2026-09-22）：`SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES`
+     * → 366 行（裸写折为小写，命中小写字典名）；`FROM information_schema."tables"` → 366 行；
+     * `FROM information_schema."TABLES"` → `relation "information_schema.TABLES" does not exist`。
+     */
+    override val identifierFolding: IdentifierFolding = IdentifierFolding.LOWER
+
     override val reservedWords: Set<String> = PG_RESERVED
 
-    override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
-        renderPgStyleUpsert(conflictKey, updateColumns)
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderPgStyleUpsert(conflictKey, updateColumns, caseSource)
 
     override fun renderExplainStatement(sql: String): String? = ExplainSupportTable.render(name, sql)
 }
@@ -290,23 +403,16 @@ object OracleDialect : Dialect {
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
 
     /**
-     * O-42：Oracle 裸标识符**折叠为大写**，故目录来源（字典真实名字）按「含小写字母即加引号」判定。
+     * O-42 的「含小写字母即加引号」规则自 O-51 起由基类按族实现（[Dialect.quoteIfNeeded]），
+     * 本类**不再覆写**该方法——只声明族归属，判据落在 `IdentifierFolding.UPPER` 分支。
      *
-     * 真库（Oracle Free 23 / FREEPDB1，DBX MCP）实测依据：
+     * 真库依据（Oracle Free 23 / FREEPDB1，DBX MCP 实测）：
      *  - `SELECT COUNT(*) FROM dbx_test.issue_new` → `ORA-00942: table or view "DBX_TEST"."ISSUE_NEW"
      *    does not exist`（裸写折叠成大写，命不中以引号创建的小写表）；
-     *  - `SELECT COUNT(*) FROM dbx_test."issue_new"` → 成功（100 行）。
-     *
-     * 判据 `identifier.any { it.isLowerCase() }` 即计划口径「名字非全大写 → 必包」；
-     * 不满足时落回 [quoteIfKeyword]，**保留字命中即包的既有行为不变**（`number`/`level` 等仍包）。
-     * 实体来源（默认）不进入本分支——`NamingStrategy.toSnakeCase` 的小写派生名继续裸写。
+     *  - `SELECT COUNT(*) FROM dbx_test."issue_new"` → 成功（100 行）；
+     *  - `SELECT COUNT(*) FROM dual` → 1，`FROM "dual"` → `ORA-00942`（裸写折叠为 DUAL）。
      */
-    override fun quoteIfNeeded(identifier: String, caseSource: IdentifierCaseSource): String =
-        if (caseSource == IdentifierCaseSource.CATALOG && identifier.any { it.isLowerCase() }) {
-            quoteIdentifier(identifier)
-        } else {
-            quoteIfKeyword(identifier)
-        }
+    override val identifierFolding: IdentifierFolding = IdentifierFolding.UPPER
 
     override val reservedWords: Set<String> = ORACLE_RESERVED
 }
@@ -351,9 +457,14 @@ object H2Dialect : Dialect {
 
     override val reservedWords: Set<String> = H2_RESERVED
 
-    override fun renderUpsertStatement(tableName: String, columns: List<String>, conflictKey: String): String? {
-        val cols = columns.joinToString(", ") { quoteIfKeyword(it) }
-        return "MERGE INTO ${quoteIfKeyword(tableName)} ($cols) KEY (${quoteIfKeyword(conflictKey)}) " +
+    override fun renderUpsertStatement(
+        tableName: String,
+        columns: List<String>,
+        conflictKey: String,
+        caseSource: IdentifierCaseSource,
+    ): String? {
+        val cols = columns.joinToString(", ") { quoteIfNeeded(it, caseSource) }
+        return "MERGE INTO ${quoteIfNeeded(tableName, caseSource)} ($cols) KEY (${quoteIfNeeded(conflictKey, caseSource)}) " +
             "VALUES (${columns.joinToString(", ") { "?" }})"
     }
 
@@ -374,8 +485,11 @@ object SqliteDialect : Dialect {
 
     override val reservedWords: Set<String> = SQLITE_RESERVED
 
-    override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
-        renderPgStyleUpsert(conflictKey, updateColumns)
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderPgStyleUpsert(conflictKey, updateColumns, caseSource)
 
     override fun renderExplainStatement(sql: String): String? = ExplainSupportTable.render(name, sql)
 }
@@ -401,8 +515,11 @@ object MariaDbDialect : Dialect {
 
     override val reservedWords: Set<String> = MARIA_RESERVED
 
-    override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
-        renderMySqlStyleUpsert(updateColumns)
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderMySqlStyleUpsert(updateColumns, caseSource)
 
     override fun renderExplainStatement(sql: String): String? = ExplainSupportTable.render(name, sql)
 }
@@ -453,10 +570,23 @@ object KingBaseDialect : Dialect {
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
 
+    /**
+     * O-51：金仓与 PG 同折叠方向（裸标识符折叠为小写）→ LOWER 族。
+     *
+     * 真机依据（KingbaseES V8，DBX MCP 只读实测，2026-09-22）：`SELECT COUNT(*) FROM
+     * INFORMATION_SCHEMA.TABLES` → 492 行（裸写折为小写命中）；`FROM information_schema."TABLES"`
+     * → `kb: relation "information_schema.TABLES" does not exist`。此前为「按 PG 兼容推断」，
+     * 本轮实测证实（计划 §八 待验证前提 2 已可升级为已证实）。
+     */
+    override val identifierFolding: IdentifierFolding = IdentifierFolding.LOWER
+
     override val reservedWords: Set<String> = KINGBASE_RESERVED
 
-    override fun renderUpsert(conflictKey: String, updateColumns: List<String>): String =
-        renderPgStyleUpsert(conflictKey, updateColumns)
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderPgStyleUpsert(conflictKey, updateColumns, caseSource)
 
     override fun renderExplainStatement(sql: String): String? = ExplainSupportTable.render(name, sql)
 }
