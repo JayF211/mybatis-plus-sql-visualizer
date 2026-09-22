@@ -111,8 +111,23 @@ class SqlLogEntryBuffer(
      * T-Perf-06（自 dev 移植）：去重判定与入队合并进同一 `synchronized(entries)` 临界区——此前 [isDuplicate]
      * 在锁外无锁遍历 ArrayDeque，与 EDT 清空/删除（clear/removeEntry）并发修改会触发
      * ConcurrentModificationException，经 LogFilterProxyHandler（无 catch）上浮为 IDE 红色报错弹窗。 */
-    fun addEntry(entry: LogSqlEntry): Boolean {
-        if (paused) return false
+    /** 普通入队：受「SQL 日志捕获」开关门控（`paused` 期间丢弃）。 */
+    fun addEntry(entry: LogSqlEntry): Boolean = addEntryInternal(entry, respectPaused = true)
+
+    /**
+     * 审计入队：**不受「SQL 日志捕获」开关约束**（D1 定案，2026-09-22 用户）。
+     *
+     * MCP 执行类工具（当前唯一产出点 `sqlv_explain`）在真实数据源上跑过的语句属**审计留痕**，
+     * 其可用性只由 MCP 工具自身的开关决定（设置页「启用 SQL Visualizer MCP 工具」＋工具级禁用清单，
+     * 见 `McpToolGate`）——与「SQL 日志」页签的捕获按钮无关。故开关关着（含用户显式停止后的
+     * `paused=true`）时审计条目**照样落列表**。
+     *
+     * 其余门与 [addEntry] 完全一致：关键字过滤 / 去重窗口 / 上限淘汰——它们是列表展示偏好，不是开关。
+     */
+    fun addAuditEntry(entry: LogSqlEntry): Boolean = addEntryInternal(entry, respectPaused = false)
+
+    private fun addEntryInternal(entry: LogSqlEntry, respectPaused: Boolean): Boolean {
+        if (respectPaused && paused) return false
         if (isFiltered(entry.restoredSql)) return false
         var duplicate = false
         val evictedEntries = mutableListOf<LogSqlEntry>()
