@@ -148,5 +148,32 @@ private class DedupErrorList : AbstractMutableList<String>() {
 
     override fun indexOf(element: String): Int = items.indexOf(element)
 
-    override fun iterator(): MutableIterator<String> = items.iterator()
+    /**
+     * 迭代器（T-Round10 独立复核 ㉚ 订正）：**不再直接返回 `items.iterator()`**。
+     *
+     * 那个 ArrayList 迭代器的 `remove()` 只从 [items] 移除、**不动 [seen]**，于是删掉的元素
+     * `contains(x)` 恒真、`add(x)` 永远返回 false——**再也写不回来**；Java 侧 `removeIf` /
+     * `retainAll` 的默认实现同样走 `iterator().remove()`，同源受害。旧实现是单结构
+     * （`LinkedHashSet`）时该形态自洽，双结构改造（T-PS6-08）后才成失同步路径。
+     * 现改为游标式迭代器，`remove()` 走本类 [removeAt]（两结构成对维护）。
+     */
+    override fun iterator(): MutableIterator<String> = object : MutableIterator<String> {
+        private var cursor = 0
+        private var lastReturned = -1
+
+        override fun hasNext(): Boolean = cursor < items.size
+
+        override fun next(): String {
+            if (cursor >= items.size) throw NoSuchElementException()
+            lastReturned = cursor
+            return items[cursor++]
+        }
+
+        override fun remove() {
+            if (lastReturned < 0) throw IllegalStateException("next() 之前不可 remove()")
+            removeAt(lastReturned) // 走本类实现 → items 与 seen 同步
+            cursor = lastReturned
+            lastReturned = -1
+        }
+    }
 }

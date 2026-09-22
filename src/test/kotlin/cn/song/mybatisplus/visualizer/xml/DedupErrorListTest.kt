@@ -22,6 +22,39 @@ class DedupErrorListTest {
 
     private fun context(): DynamicContext = DynamicContext(emptyMap())
 
+    /**
+     * 迭代器删除必须同步判重集合（T-Round10 独立复核 ㉚ 订正）。
+     *
+     * 缺陷：`iterator()` 曾直接返回 `items.iterator()`——那个 ArrayList 迭代器的 `remove()` 只从
+     * `items` 移除、**不动 `seen`**，于是 `contains(x)` 恒真且 `add(x)` 永远返回 false（x 再也写不回来）。
+     * Java 侧 `removeIf` / `retainAll` 的默认实现同样走 `iterator().remove()`，故下面两条一并钉住。
+     */
+    @Test
+    fun `迭代器删除后判重集合同步`() {
+        val errors = context().errors
+        errors += "A"
+        errors += "B"
+        errors += "C"
+        val it = errors.iterator()
+        assertEquals("A", it.next())
+        it.remove()
+        assertFalse("删掉的元素不得仍在判重集合里（否则再也写不回来）", errors.contains("A"))
+        assertTrue("删掉的元素必须可重新加入", errors.add("A"))
+        assertEquals(listOf("B", "C", "A"), errors.toList())
+    }
+
+    /** `retainAll`（Java 默认实现走 `iterator().remove()`）后判重集合同样必须同步。 */
+    @Test
+    fun `retainAll后判重集合同步`() {
+        val errors = context().errors
+        errors += "A"
+        errors += "B"
+        errors += "C"
+        errors.retainAll(listOf("C", "B"))
+        assertFalse("retainAll 移除的元素不得仍在判重集合里", errors.contains("A"))
+        assertTrue("被 retainAll 移除的元素必须可重新加入", errors.add("A"))
+    }
+
     @Test
     fun `判重保首现顺序且重复只留一行`() {
         val errors = context().errors
