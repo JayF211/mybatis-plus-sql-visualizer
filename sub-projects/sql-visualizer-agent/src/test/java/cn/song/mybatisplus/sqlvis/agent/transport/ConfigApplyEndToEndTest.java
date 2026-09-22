@@ -239,6 +239,60 @@ public class ConfigApplyEndToEndTest {
         assertEquals("重复停采不应重复计数", afterFirst, EventBus.clearedCount());
     }
 
+    /**
+     * T-AgentConfigChannel T-08（2026-09-22 真机实证，假 IDE 探针现场）：**停采期间建立的连接也必须被包装**。
+     *
+     * <p>真机现场（`dev-support/e2e-fake-ide`）：`disabled=true` 的 CONFIG 与 ACK 均已生效，但随后
+     * 建立的连接（连接池在应用就绪后创建）在恢复采集后**一条事件都不产出**——根因是 `onConnection`
+     * 在**连接级**判 `disabled` 直接返回原连接，而连接池会复用同一批连接，于是
+     * 「先跑应用、再点开始捕获」与「停采 → 恢复」两条主路径都永久捕不到。
+     *
+     * <p>修复＝连接级一律包装（`disabled` 只做**逐调用**短路，与「禁用 = volatile 短路、不卸载」的设计红线一致）。
+     * 本用例钉住三件事：① 停采态建立的连接仍被包装；② 停采态执行照旧且**不产出事件**（证明包装没把「停采静音」弄丢）；
+     * ③ 恢复采集后**同一连接**上执行立刻产出事件（无需新建连接）。
+     *
+     * <p>已知边界（如实登记，本用例一并钉住）：**停采期间 prepare 的语句仍不包装**——`ConnectionHandler` 的
+     * 逐调用短路在 `prepareStatement` 处即直通。MyBatis 默认 `SimpleExecutor` 每条查询现 prepare、执行后关闭，
+     * 故实际不可达；仅当使用 `ReuseExecutor` 一类复用语句的执行器时才会命中，届时该语句在恢复后仍哑。
+     */
+    @Test
+    public void 停采期间建立的连接仍被包装_恢复后同一连接即可产出事件() throws Exception {
+        startLoop(WATCHDOG_MS_CONFIG_CASE);
+        final DataInputStream in = new DataInputStream(socket.getInputStream());
+        final DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+        assertEquals("会话建立应先握手 HELLO", EventBus.CMD_HELLO, awaitFrame(in, 3000L).cmd);
+        assertEquals("连接建立即补发心跳", EventBus.CMD_HEARTBEAT, awaitFrame(in, 3000L).cmd);
+
+        // A) 先停采（模拟「开着捕获关跑应用」）
+        SenderLoop.writeFrame(out, EventBus.CMD_CONFIG,
+                "{\"disabled\":true,\"desensitize\":false,\"skipPrefixes\":[]}");
+        assertNotNull("CONFIG 应获 ACK", awaitFrame(in, EventBus.CMD_CONFIG_ACK, 3000L));
+        assertTrue("应用侧应处于停采态", AgentState.isDisabled());
+
+        // B) 停采态建立连接：必须仍被包装（连接级跳过＝恢复采集失效的根因，此处必红）
+        final Connection raw = new FakeDriver().connect("jdbc:fake://cfg-e2e-late", new Properties());
+        assertNotNull("夹具前提：FakeDriver 应返回连接", raw);
+        final Connection conn = (Connection) SqlHookCallbacks.onConnection(raw, "jdbc:fake://cfg-e2e-late");
+        assertTrue("停采态建立的连接仍须被 agent 包装（连接级跳过会让恢复采集永久失效）",
+                Proxy.getInvocationHandler(conn) instanceof ConnectionHandler);
+
+        // C) 停采态：执行照旧、窗口内无事件（证明「一律包装」没有破坏停采静音）
+        final PreparedStatement offStmt = conn.prepareStatement("INSERT INTO t VALUES (2)");
+        assertEquals("停采只停采集，不得影响执行语义", 1, offStmt.executeUpdate());
+        assertNoEventFrame(in, 1200L);
+
+        // D) 恢复采集 → 同一连接上**新 prepare** 的语句立刻产出事件（无需新建连接）
+        SenderLoop.writeFrame(out, EventBus.CMD_CONFIG,
+                "{\"disabled\":false,\"desensitize\":false,\"skipPrefixes\":[]}");
+        assertNotNull("恢复采集的 ACK 应到达", awaitFrame(in, EventBus.CMD_CONFIG_ACK, 3000L));
+        assertFalse(AgentState.isDisabled());
+        final PreparedStatement onStmt = conn.prepareStatement("INSERT INTO t VALUES (3)");
+        assertEquals(1, onStmt.executeUpdate());
+        final Frame ev = awaitFrame(in, EventBus.CMD_EVENT, 3000L);
+        assertNotNull("恢复采集后同一连接上应立刻产出事件（连接级跳过的缺陷形态在此必红）", ev);
+        assertTrue("事件帧应携带该语句：" + ev.payload, ev.payload.contains("INSERT INTO t VALUES (3)"));
+    }
+
     // ---------- 辅助 ----------
 
     private void startLoop(long watchdogMs) throws Exception {
