@@ -17,8 +17,17 @@ data class ExecutionErrorInfo(
     val positionChar: Int? = null,
     /** 驱动报错行号（1-based，指被执行 SQL 文本；语义同上）。 */
     val lineInSql: Int? = null,
-    /** 位置信号来源标签（"pg-position" / "line" / "mysql-at-line"），留证与测试断言用。 */
+    /** 位置信号来源标签（"pg-position" / "line" / "mysql-at-line" / "oracle-position"），留证与测试断言用。 */
     val positionSource: String? = null,
+    /**
+     * T-ErrorLocateUsability T-ELU-04（O-49）：被执行 SQL 的长度（调用方传入时的钳制上界）。
+     *
+     * **两态结构化**：驱动报错位置指向的是**被执行 SQL 文本**（动态 SQL 拼接、参数注入后行号必然
+     * 错位），与 mapper 原文行不一一对应——v1 只承诺「语句起始行」跳转，不引入位置换算。
+     * 本字段把「这个位置属于哪一态」变成数据：非 null 即证明调用方确实把被执行文本长度传了进来
+     * （越界钳制的生效前提），消费方（tooltip / MCP 文案）据此如实说明，测试也据此断言接线。
+     */
+    val executedSqlLength: Int? = null,
 )
 
 /**
@@ -34,7 +43,12 @@ data class ExecutionErrorInfo(
  */
 object ErrorPositionExtractor {
 
-    /** 位置信号形态：PG pgjdbc 把 server 错误的 Position 拼进 message（`…  Position: 42`）。 */
+    /**
+     * 位置信号形态：PG pgjdbc 把 server 错误的 Position 拼进 message（`…  Position: 42`）。
+     *
+     * 正则保持逐字不变（`\bPosition:` 会顺带命中 Oracle 形态里的 `position: N`，见
+     * [ORACLE_POSITION] 的遮蔽说明——这里**不动正则**是为了任何不含 Oracle 形态的消息行为零变化）。
+     */
     private val PG_POSITION = Regex("""(?i)\bPosition:\s*(\d+)""")
 
     /** 行号形态：MySQL 语法错误（`… near '…' at line 1`）与 PG 旧形态（`At line N`）。 */
@@ -42,6 +56,27 @@ object ErrorPositionExtractor {
 
     /** 行号形态：`Line: N`（部分驱动/方言的详细错误附行号冒号形态）。 */
     private val LINE_COLON = Regex("""(?i)\bline:\s*(\d+)""")
+
+    /**
+     * T-ELU-02：Oracle 位置形态——`error occur at position: N`（真库实测原文，见下）。
+     *
+     * **真库实测**（Oracle Free 23 / FREEPDB1，DBX 通道 2026-09-22，只读）：
+     *  - `SELECT * FROM dbx_test.no_such_table_xyz` → `ORA-00942: table or view
+     *    "DBX_TEST"."NO_SUCH_TABLE_XYZ" does not exist\n error occur at position: 23`
+     *  - `SELECT FROM` → `ORA-00936: missing expression\n error occur at position: 7`
+     *  - `FROM dbx_test.issue_new` → `ORA-00900: invalid SQL statement\n error occur at position: 0`
+     *
+     * **取值语义（实测三例一致）**：N 是**出错记号起点减一**（`FROM …` 的记号在 0 位 → N=0；
+     * `SELECT FROM` 的 `FROM` 在 1-based 第 8 位 → N=7；表名在 1-based 第 15 位 → N=14），
+     * 即 0-based 偏移。本提取器的契约是 **1-based 字符位置**（与 PG `Position:` 同口径），
+     * 故 **N+1** 后归属——不做换算就报出去会让用户看到的位置恒差一位。
+     *
+     * **为何要先遮蔽**（[maskOraclePositions]）：`PG_POSITION` 的 `\bPosition:` 会顺带命中
+     * 本形态里的 `position: N`（实测：当前实现正是如此，Oracle 位置一直被提取但**标签错标成
+     * pg-position 且按 1-based 直接报出**）。两个 marker 并存会让单一性门控判成「多信号」而
+     * **放弃归属**——这正是「补了 Oracle marker 反而丢位置」的陷阱，故 Oracle 段先从文本里抹掉。
+     */
+    private val ORACLE_POSITION = Regex("""(?i)\berror occur at position:\s*(\d+)""")
 
     /** 单个位置信号：种类标签 + 1-based 值。 */
     private data class Marker(val source: String, val value: Int, val isCharPosition: Boolean)
@@ -71,10 +106,29 @@ object ErrorPositionExtractor {
 
     private fun collectMarkers(message: String): List<Marker> {
         val out = mutableListOf<Marker>()
-        PG_POSITION.findAll(message).forEach { out += Marker("pg-position", it.groupValues[1].toInt(), isCharPosition = true) }
-        AT_LINE.findAll(message).forEach { out += Marker("mysql-at-line", it.groupValues[1].toInt(), isCharPosition = false) }
-        LINE_COLON.findAll(message).forEach { out += Marker("line", it.groupValues[1].toInt(), isCharPosition = false) }
+        ORACLE_POSITION.findAll(message).forEach {
+            out += Marker("oracle-position", it.groupValues[1].toInt() + 1, isCharPosition = true)
+        }
+        val rest = maskOraclePositions(message)
+        PG_POSITION.findAll(rest).forEach { out += Marker("pg-position", it.groupValues[1].toInt(), isCharPosition = true) }
+        AT_LINE.findAll(rest).forEach { out += Marker("mysql-at-line", it.groupValues[1].toInt(), isCharPosition = false) }
+        LINE_COLON.findAll(rest).forEach { out += Marker("line", it.groupValues[1].toInt(), isCharPosition = false) }
         return out
+    }
+
+    /** 把 Oracle 位置段替换为等长空格（保持其余 marker 的偏移与文本内容不变）。 */
+    private fun maskOraclePositions(message: String): String {
+        val matches = ORACLE_POSITION.findAll(message).toList()
+        if (matches.isEmpty()) return message
+        return buildString(message.length) {
+            var last = 0
+            for (m in matches) {
+                append(message, last, m.range.first)
+                append(" ".repeat(m.value.length))
+                last = m.range.last + 1
+            }
+            append(message, last, message.length)
+        }
     }
 
     /**
@@ -112,6 +166,7 @@ object ErrorPositionExtractor {
             positionChar = pos?.takeIf { it.second }?.first,
             lineInSql = pos?.takeIf { !it.second }?.first,
             positionSource = pos?.third,
+            executedSqlLength = sqlMaxLength,
         )
     }
 }

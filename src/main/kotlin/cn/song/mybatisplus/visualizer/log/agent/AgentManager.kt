@@ -1006,6 +1006,15 @@ class AgentManager(private val project: Project) : Disposable {
      * [shutdownAll] / 项目 [dispose] → 表清空；每次 CONFIG 下发 → 该会话确认态被清回「待确认」。
      * 语义上「确认」是**值**（disabled true/false）而非单纯「收到过回执」：应用侧确认停采（disabled=true）
      * 与从未确认（null）在闸门上一视同仁——都不封桥。
+     *
+     * **已知边界（T-AgentResiduals R4-③，事实登记，行为不变）——旧 agent 混合版本下桥永久放行**：
+     * 不含回执能力的旧版 agent 永远不回 `CMD_CONFIG_ACK` → `configAckDisabled` 恒 `null` →
+     * 本判据恒 `false` → [SqlCaptureGate.paused] 恒 `false` → 控制台桥**永久不封**。
+     * 于是「应用侧增强通道 + IDE 侧控制台桥」**两条通道同时产出**同一条 SQL。
+     * 该形态**不修**（改判据就得回到「按 socket 在线封桥」那条已证有害的老路，见
+     * [updateOnline] 的 P-5 论证），靠**列表去重窗口**折叠（`entries.dedupeWindowMs`，同指纹条目
+     * 在窗口内合并）——用户可见结果正确，代价是窗口内多一次解析。混合版本期间若发现重复条目，
+     * 先确认两侧 agent jar 版本是否一致，再看去重窗口设置。
      */
     internal fun captureConfirmedActive(): Boolean = sessions.any { it.alive && it.configAckDisabled == false }
 
@@ -1335,6 +1344,46 @@ internal fun agentStatusText(s: AgentStatusSnapshot): String? {
 }
 
 /**
+ * T-AgentResiduals R4-①：CONFIG 回执超时的**三态文案**（纯函数，全分支可单测）。
+ *
+ * 复核 F3 的现场：原实现只有一句「CONFIG 未获确认——应用侧可能未生效」，把三种成因（连接已断 /
+ * 应用侧在跑但不回执 / 应用侧静默）混成一种叙述。**半死 socket 被判成「应用侧未生效」是错叙事**——
+ * 连接都不在了，「应用侧应用与否」根本无从谈起，用户会去查应用侧配置而真正的处置是重连。
+ *
+ * 三态判据（调用方在巡检到点那一刻取实况）：
+ *  - [aliveNow] = `false` → **控制通道已断开**（socket 断 / 读循环退出）；
+ *  - [frameAfterSend] = `true`（下发之后仍收到入站帧）→ **应用侧仍在跑**，典型是旧版 agent 无回执
+ *    能力或入站帧解析错位；
+ *  - 两者皆非 → **应用侧静默**，这才是「可能未生效」真正对应的形态。
+ *
+ * 三种文案**互斥且各含判据词**（`控制通道已断开` / `应用侧仍在跑` / `应用侧可能未生效`），
+ * 供 `AgentManagerIntakeGateTest` 按态断言——文案分叉是本项交付的主体，不能只测「有告警」。
+ */
+internal fun configAckTimeoutMessage(
+    pid: Long,
+    disabled: Boolean,
+    aliveNow: Boolean,
+    frameAfterSend: Boolean,
+    sinceLastFrameMs: Long,
+): String = when {
+    !aliveNow ->
+        "CONFIG 未获确认，且**控制通道已断开**（pid=$pid, 下发 disabled=$disabled 后 " +
+            "${AgentManager.CONFIG_ACK_TIMEOUT_MS}ms 内未收到 CMD_CONFIG_ACK，且会话 socket 已断/" +
+            "读循环已退出）——连接已断时「应用侧是否曾生效」无从确认，请以应用侧日志与实际采集" +
+            "行为为准（面板条目真实性以本机应用侧为准）"
+    frameAfterSend ->
+        "CONFIG 未获确认，但**应用侧仍在跑**（pid=$pid, 下发 disabled=$disabled 后 " +
+            "${AgentManager.CONFIG_ACK_TIMEOUT_MS}ms 内未收到 CMD_CONFIG_ACK；期间仍收到存活帧，" +
+            "最近一条距巡检 ${sinceLastFrameMs}ms）——应用侧活着却不回执，典型是**旧版 agent " +
+            "不支持回执**或入站帧解析错位；若条目仍在产出，属混合版本下的正常双通道（列表去重" +
+            "窗口内折叠），不必按「开关未生效」处理"
+    else ->
+        "CONFIG 未获确认——应用侧可能未生效（pid=$pid, 下发 disabled=$disabled 后 " +
+            "${AgentManager.CONFIG_ACK_TIMEOUT_MS}ms 内未收到 CMD_CONFIG_ACK，且期间无任何入站帧）；" +
+            "控制通道可能失效（入站帧解析错位 / 旧版 agent 不支持回执）——面板条目真实性以本机应用侧为准"
+}
+
+/**
  * T-M56Phase2-Premain：一条待回连的 premain 通道——启动前协商出的 loopback 端口 + 其监听 socket。
  * [claimed] 由 accept 线程在收到回连时置位（[AgentManager.hasPendingPremainChannel] 与 prune 的判据）。
  */
@@ -1464,10 +1513,25 @@ internal class AgentSession(
     internal val configAckTimeoutCount = AtomicLong()
 
     /** 挂起中的 CONFIG 回执（seq 区分「同一次下发的等待」，见 [onConfigAckTimeout]）。 */
-    private class PendingConfigAck(val seq: Long, val disabled: Boolean)
+    private class PendingConfigAck(
+        val seq: Long,
+        val disabled: Boolean,
+        val sentAtMs: Long,
+        /** 下发那一刻的 [inboundFrameCount]——超时文案据此判「下发之后是否还收到过入站帧」。 */
+        val framesAtSend: Long,
+    )
 
     private val pendingConfigAck = java.util.concurrent.atomic.AtomicReference<PendingConfigAck?>(null)
     private val configAckSeq = AtomicLong()
+
+    /**
+     * 入站帧计数（单调递增，含 HELLO 之外的**一切**帧）。
+     *
+     * 为什么不用 `lastSeen` 判「下发后是否还有入站」：`lastSeen` 在会话构造时就取了当前时刻，
+     * 紧接其后的 CONFIG 下发会得到 `lastSeen == sentAtMs`，时钟粒度下**分不清**「刚建连、什么都没来」
+     * 与「刚来过一帧」——正是超时文案要区分的那两种形态。计数器没有这个问题（严格比较大小）。
+     */
+    private val inboundFrameCount = AtomicLong()
 
     /**
      * T-AgentConfigChannel T-02：记录一次 CONFIG 下发并排定回执超时巡检。
@@ -1475,10 +1539,13 @@ internal class AgentSession(
      * 只在下发**成功写出**后调用（写失败走既有降级，无回执可等）。同会话可连续下发（脱敏开关、
      * 监听开关），故用 seq 标记本次挂起：巡检到点时若挂起已被更新（更新的下发）或已被清（回执到达、
      * 会话关闭）则静默退出——**不会**为一次已被取代的下发误报「未获确认」。
+     *
+     * 同时记下发时刻（T-AgentResiduals R4-①）：超时文案要区分「连接已断」「应用侧在跑但没回执」
+     * 「应用侧静默」三态，判据是「下发之后是否还收到过入站帧」。
      */
     private fun markConfigSent(disabled: Boolean) {
         val seq = configAckSeq.incrementAndGet()
-        pendingConfigAck.set(PendingConfigAck(seq, disabled))
+        pendingConfigAck.set(PendingConfigAck(seq, disabled, clockMs(), inboundFrameCount.get()))
         scheduleConfigAckCheck(AgentManager.CONFIG_ACK_TIMEOUT_MS) { onConfigAckTimeout(seq) }
     }
 
@@ -1486,19 +1553,34 @@ internal class AgentSession(
      * T-AgentConfigChannel T-02：回执超时巡检体（internal 供测试同步驱动，生产由 monitor 排定）。
      *
      * 到点时仍挂着**同一次**下发 → 计一次并 WARN：这是本轮缺陷从「只能靠行为反推」变成
-     * 一行日志的直接判据（应用侧未生效 / 旧版 agent 无回执能力 / 控制通道再次漂移，三者同形，
-     * 都要求用户去看应用侧而不是继续相信面板）。
+     * 一行日志的直接判据。
+     *
+     * **T-AgentResiduals R4-①：文案分会话健康（复核 F3）**。原实现只有一句「应用侧可能未生效」，
+     * 而三种成因对用户的处置完全不同、原句把它们混成一种：
+     *  ① **连接已断**（`alive == false`：socket 断 / 读循环已退出）——此时 CONFIG 是否曾生效
+     *     **无从确认**，说「应用侧未生效」是**错叙事**（连接都不在了，与应用侧应用与否无关）；
+     *     正常路径下掉线会清挂起（见 [clearPendingConfigAck]），本分支覆盖的是
+     *     「清挂起与巡检并发」的竞态窗口，以及半死 socket（TCP 未察觉、读循环尚未退出）；
+     *  ② **应用侧在跑却没回执**（下发后仍收到存活帧）——应用侧确实活着，典型是**旧版 agent
+     *     不支持回执**或入站帧解析错位；此时若条目仍在产出，属**混合版本下的正常双通道**（见
+     *     [configAckDisabled] 的边界说明），不该让用户以为「开关没生效」；
+     *  ③ **应用侧静默**（下发后一条入站帧都没有）——这才是原句真正要说的形态。
+     *
+     * 三态**共用同一个计数器**（[configAckTimeoutCount]：它记的是「回执超时」这一事实，与成因无关），
+     * 只有文案分叉；测试按文案分态断言（见 `AgentManagerIntakeGateTest`）。
      */
     internal fun onConfigAckTimeout(seq: Long) {
         val pending = pendingConfigAck.get() ?: return
         if (pending.seq != seq) return // 已被更新的下发取代或已收到回执
         if (!pendingConfigAck.compareAndSet(pending, null)) return
         configAckTimeoutCount.incrementAndGet()
-        LOG.warn(
-            "CONFIG 未获确认——应用侧可能未生效（pid=$pid, 下发 disabled=${pending.disabled} 后 " +
-                "${AgentManager.CONFIG_ACK_TIMEOUT_MS}ms 内未收到 CMD_CONFIG_ACK）；" +
-                "控制通道可能失效（入站帧解析错位 / 旧版 agent 不支持回执）——面板条目真实性以本机应用侧为准",
-        )
+        // 健康判据一律取「到点那一刻」的实况：alive 为 volatile、帧计数单调递增
+        val aliveNow = alive
+        val frameAfterSend = inboundFrameCount.get() > pending.framesAtSend
+        val sinceLastFrameMs = (clockMs() - lastSeen).coerceAtLeast(0L)
+        val message = configAckTimeoutMessage(pid, pending.disabled, aliveNow, frameAfterSend, sinceLastFrameMs)
+        lastConfigAckTimeoutMessage = message // 测试缝：文案分态靠它断言（日志本身在单测里读不到）
+        LOG.warn(message)
     }
 
     /** T-AgentConfigChannel T-02：清挂起（收到回执 / 会话关闭 / 掉线——挂起状态按会话，不得跨会话残留）。 */
@@ -1510,6 +1592,19 @@ internal class AgentSession(
     internal fun hasPendingConfigAck(): Boolean = pendingConfigAck.get() != null
 
     /**
+     * T-AgentResiduals R4-① 测试缝：最近一次回执超时文案（`null` = 尚未发生过超时）。
+     *
+     * 为什么留这条缝：三态文案的分叉是本次交付的**主体**，而日志在单测里读不到（平台 Logger 无
+     * 内存捕获面）——若只测纯函数 [configAckTimeoutMessage]，就漏了「巡检体是否把实况传对了」
+     * 这一半（恰好是本轮最容易被改坏的一半：alive/帧计数快照）。故巡检体把成品文案记在这里，
+     * 由 `AgentManagerIntakeGateTest` 端到端断言（真 socket 写帧 → 驱动巡检 → 读文案）。
+     * 生产链路零读取，仅一个 volatile 写。
+     */
+    @Volatile
+    internal var lastConfigAckTimeoutMessage: String? = null
+        private set
+
+    /**
      * 追加 P-5：应用侧**已确认**的采集开关值（`null` = 未确认/待确认）。
      *
      * 与「已下发」严格区分：本字段只由 [AgentProtocol.CMD_CONFIG_ACK] 写入，每次 [sendConfig]
@@ -1518,6 +1613,10 @@ internal class AgentSession(
      *
      * 清空而非保留旧值：控制通道再出问题时，闸门必须回到「不确定就不封桥」这一侧——
      * 宁可短暂双通道产出（列表去重窗口内折叠），也不接受「封着桥 + 应用侧静默 = 零捕获且无信号」。
+     *
+     * **已知边界（T-AgentResiduals R4-③，事实登记，行为不变）**：不含回执能力的**旧版 agent**
+     * 恒不回 ACK → 本字段恒 `null` → 桥永久放行 → 双通道共存（同 [captureConfirmedActive] 的边界段）。
+     * 用户可见结果由列表去重窗口保证正确；该形态不修，理由同上（改判据=回到有害的「按在线封桥」）。
      */
     @Volatile
     internal var configAckDisabled: Boolean? = null
@@ -1562,6 +1661,7 @@ internal class AgentSession(
                     val body = ByteArray(len)
                     input.readFully(body)
                     lastSeen = clockMs()
+                    inboundFrameCount.incrementAndGet() // R4-①：超时文案判「下发后是否还有入站」的依据
                     handleFrame(cmd, String(body, Charsets.UTF_8))
                 }
             } catch (t: Throwable) {

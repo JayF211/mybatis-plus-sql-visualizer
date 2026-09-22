@@ -26,6 +26,14 @@ import cn.song.mybatisplus.visualizer.log.SqlLogManager
  * **用法**：`setUp` 里（`super.setUp()` 之后、任何改动之前）[capture]；`tearDown` 里
  * （`super.tearDown()` 之前）[restore]。已被本类显式复位过的字段再走一次 [restore] 是幂等的。
  *
+ * **T-AgentResiduals R2（2026-09-22）——快照持有服务引用，tearDown 不再取服务**：
+ * 旧形态是 `capture(projectService(project, …))` + `restore(projectService(project, …), state)`
+ * ——tearDown 里**再取一次服务**。而 `@After`/`tearDown` 正是「项目 temporarily-disposed」窗口的
+ * **高发时段**，一旦此刻才发起服务创建，平台 `LazyInstanceHolder` 会把 `CannotInitialize` 缓存下来、
+ * **该服务在该 ProjectImpl 上永久重抛**（T-ST-02b2 已证），同片后续所有取用点成片变红。
+ * 现快照**自持 manager 引用**，[restore] 只吃快照（单参），tearDown 路径**结构上不再触碰服务容器**；
+ * 且复原的正是被本类改过的那个实例（即便容器此后被重建，复原目标依旧正确）。
+ *
  * **复位边界**：只回滚「本类引入的差异」——
  *  - 条目按**引用同一性**移除本类新增的那些（buffer 入库实例即持有实例，与 `removeEntry` 同一性
  *    语义一致）；被本类 `clear()` 掉的既有条目无法复活，故各测试类仍应自清；
@@ -33,8 +41,13 @@ import cn.song.mybatisplus.visualizer.log.SqlLogManager
  */
 object SqlLogManagerProjectState {
 
-    /** 一次快照：buffer 可变状态 + 条目内容 + 管理器捕获态 / 自动展开态 + 桥轮询态。 */
+    /**
+     * 一次快照：**所属服务实例** + buffer 可变状态 + 条目内容 + 管理器捕获态 / 自动展开态 + 桥轮询态。
+     *
+     * [manager] 是 R2 的核心：快照自持服务引用，复原时不再经 `project.getService(…)` 取服务。
+     */
     class Snapshot internal constructor(
+        internal val manager: SqlLogManager,
         internal val entries: List<LogSqlEntry>,
         internal val dedupeEnabled: Boolean,
         internal val paused: Boolean,
@@ -53,10 +66,17 @@ object SqlLogManagerProjectState {
         internal val pollingActive: Boolean,
     )
 
-    /** 存初值（在测试类改动任何共享状态之前调用）。 */
-    fun capture(manager: SqlLogManager): Snapshot {
+    /**
+     * 存初值（在测试类改动任何共享状态之前调用）。
+     *
+     * [manager] 为 `null` 时返回 `null`（**整个存复原退化为 no-op**，不抛异常）——服务未创建 /
+     * 只拿到读路径的「取不到就 null」（如 `sqlLogManagerIfCreated`）时，调用方无需自行分支。
+     */
+    fun capture(manager: SqlLogManager?): Snapshot? {
+        if (manager == null) return null
         val buffer = manager.entries
         return Snapshot(
+            manager = manager,
             entries = buffer.snapshot(),
             dedupeEnabled = buffer.dedupeEnabled,
             paused = buffer.paused,
@@ -76,8 +96,14 @@ object SqlLogManagerProjectState {
         )
     }
 
-    /** 原样复位（在 `super.tearDown()` 之前调用）。 */
-    fun restore(manager: SqlLogManager, snapshot: Snapshot) {
+    /**
+     * 原样复位（在 `super.tearDown()` 之前调用）。快照为 `null`（未捕获 / 服务未创建）时**静默跳过**。
+     *
+     * 只吃快照、不吃服务——复原目标取自 `snapshot.manager`，`tearDown` 不发起任何服务查找（R2）。
+     */
+    fun restore(snapshot: Snapshot?) {
+        val snapshot = snapshot ?: return
+        val manager = snapshot.manager
         val buffer = manager.entries
         // 条目：先按引用同一性移除本类新增的，再复位其余可变字段
         val kept = snapshot.entries.mapTo(HashSet()) { System.identityHashCode(it) }
