@@ -639,6 +639,34 @@ class BannedApiSourceScanTest {
         invokeLaterWriteOffenders(sources) { it.args?.contains("ModalityState.any()") == true }
 
     /**
+     * `update` 包「派发平台卸载/装载禁用 any 模态」规则的命中判定（T-DynUpdateWriteSafe）。
+     *
+     * 与 [anyModalityWriteOffenders] 的分工：那条按**写令牌**拦「回调体里写文档」，本规则**不看写令牌**
+     * ——写发生在被调用的平台卸载内部（`DynamicPlugins.unloadPlugin` → `inModalContext(sentinel
+     * "Unloading of <plugin>")` → 平台自身 commit/落盘/dispose），词法上永远看不见（2026-09-22 真机
+     * 日志实证：模态串 `[设置对话框, Unloading of SQL Visualizer]`）。故按「包 + 令牌」封口：该包是
+     * 仓内唯一向平台动态卸载/装载交棒的地方，**任何形态**的 `ModalityState.any()` 都不该出现
+     * （直接实参、赋给变量再传、决策函数返回——三种形态都实测过）。
+     *
+     * 判定跑在 [maskNonCode] 后的文本上（注释与字符串字面量里的字样不算命中，逐行保行故行号可直接报）；
+     * 豁免沿用「该行向上连续注释块含 `write-safe:`」口径（本项 T-01 的只读跳板即此形态：只读当前模态，
+     * 无模型改动）。
+     */
+    private fun anyModalityInUpdatePackageOffenders(sources: List<Pair<String, String>>): List<String> {
+        val offenders = ArrayList<String>()
+        for ((path, raw) in sources) {
+            if (!path.contains("/update/")) continue
+            maskNonCode(raw).lines().forEachIndexed { index, line ->
+                if (!line.contains("ModalityState.any()")) return@forEachIndexed
+                if (leadingCommentBlock(raw, index + 1).contains("write-safe:")) return@forEachIndexed
+                offenders.add("$path:${index + 1}")
+            }
+        }
+        return offenders
+    }
+
+
+    /**
      * 默认模态规则——`defaultModalityState()` 语义的两种等价写法：
      *  ① 省略实参的尾随 lambda `invokeLater { … }`（[InvokeLaterSite.args] == null）；
      *  ② 显式实参 `invokeLater({ … }, ModalityState.defaultModalityState())`（T-FS-06 补口，此前漏网）。
@@ -707,8 +735,77 @@ class BannedApiSourceScanTest {
     }
 
     @Test
-    fun `尾随lambda写文档守卫自证_合成样本必红`() {
-        // T-TS-04：新规则的**负向自证**。旧提取器只认 `invokeLater(`，而线上四处真实站点
+    fun `update包派发平台卸载装载禁用any模态`() {
+        // T-DynUpdateWriteSafe（2026-09-22 真机：`Write-unsafe context!` current modality=
+        // {[设置对话框, APPLICATION_MODAL], [Unloading of SQL Visualizer]}）。平台契约（262 源码实证）：
+        // 模态的写安全资格是「进入那一刻 myWritingAllowed 的快照」，表以模态实例为键
+        // （LaterInvocator.enterModal:204-207 → TransactionGuardImpl.enteredModality:199-201）；
+        // 平台卸载会压入 ad-hoc 模态（DynamicPluginsLegacyImpl:509），any() 排出的是 posted runnable
+        // （IdeEventQueue:1106-1122 只把输入/Item/Focus 事件算用户活动）→ 快照恒 false → 卸载窗口内
+        // 平台自身的 commit/落盘/dispose 全部记 SEVERE。
+        // 本规则不看写令牌（写发生在平台卸载内部，词法上永远看不见），故按「包 + 令牌」封口：
+        // update 包任何形态的 any() 都不该出现（直接实参 / 变量中转 / 决策函数返回，三种形态实测都命中）。
+        val offenders = anyModalityInUpdatePackageOffenders(rawMainSources())
+        assertTrue(
+            "update 包出现 ModalityState.any()（命中 ${offenders.size} 处：$offenders）。" +
+                "平台动态卸载会在该模态下压入 Unloading of <plugin>，其写安全资格取派发时刻快照，" +
+                "any() 下恒 false（卸载窗口内平台自身模型改动全部记 Write-unsafe context!）。" +
+                "派发一律走 DynamicInstallSupport.dispatchModalityForUnload()；" +
+                "确属只读跳板请在该行上方加 `// write-safe: <理由>` 标注",
+            offenders.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `update包any模态守卫自证_合成样本必红`() {
+        // T-DynUpdateWriteSafe：新规则的负向自证（对齐 T-TS-04 惯例）——违规必报 / 带标注放行 /
+        // 他包不误伤，三态缺一即「规则看不见真实形态」的空绿。
+        val violating = listOf(
+            "src/main/kotlin/cn/x/update/Bad.kt" to """
+                class Bad {
+                    fun go() {
+                        ApplicationManager.getApplication().invokeAndWait({ unloadPlugin() }, ModalityState.any())
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "update 包内 any() 派发（含 invokeAndWait 形态）必须被命中，实际" +
+                " ${anyModalityInUpdatePackageOffenders(violating)}",
+            1,
+            anyModalityInUpdatePackageOffenders(violating).size,
+        )
+
+        val annotated = listOf(
+            "src/main/kotlin/cn/x/update/Ok.kt" to """
+                class Ok {
+                    fun go() {
+                        // write-safe: UI-only（只读跳板，无模型写）
+                        ApplicationManager.getApplication().invokeAndWait({ readModality() }, ModalityState.any())
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "带 write-safe 标注的只读站点应放行（豁免不得变成一律放行）",
+            0,
+            anyModalityInUpdatePackageOffenders(annotated).size,
+        )
+
+        val otherPackage = listOf(
+            "src/main/kotlin/cn/x/ui/Else.kt" to """
+                class Else {
+                    fun go() {
+                        ApplicationManager.getApplication().invokeLater({ refreshUi() }, ModalityState.any())
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals("规则只封 update 包，他包同形态不误伤", 0, anyModalityInUpdatePackageOffenders(otherPackage).size)
+    }
+
+    @Test
+    fun `尾随lambda写文档守卫自证_合成样本必红`() {        // T-TS-04：新规则的**负向自证**。旧提取器只认 `invokeLater(`，而线上四处真实站点
         // （SqlInputEditor:142 / SqlPreviewPanel:2486 / SqlToJavaPanel:820,881）全是省略括号、
         // 隐式 defaultModalityState 的尾随 lambda 形态——规则看不见它们等于空绿。
         // 用合成源码钉住三态：违规必报 / 过闸放行 / 带理由标注放行（豁免不得变成「一律放行」）。
