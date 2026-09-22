@@ -1,0 +1,9 @@
+# 探针编译产物
+build/
+
+# 控制台副本（内容与 evidence/probe.log 相同，仅编码受 Windows 代码页影响）
+evidence/probe.console.log
+
+# 体量大的原始采样（证据已抽取进 evidence/p1-stack-evidence.txt）
+evidence/jstack-samples.txt
+evidence/stack-app.log
