@@ -55,7 +55,7 @@ object ExplainIndexAdvisor {
             // 文本计划树（DM8 #NSET2 / H2 PLAN FOR / SQLite QUERY PLAN）——规则只覆盖 PG 文本树形态，
             // 其余方言的文本形态不含该模式，天然零命中（不噪音）；将来新增文本规则在此扩展
             ExplainOutputFormat.TEXT -> advisePlanText(rows, out)
-            // 不支持方言/未知方言/未接入格式（XML 占位）静默降级——空清单与无命中同形
+            // 不支持方言/未知方言静默降级——空清单与无命中同形
             else -> Unit
         }
         return out
