@@ -544,7 +544,7 @@ CHANGELOG `[Unreleased]` 与 `docs/变更记录.md` 三处同步（**已落**，
 第二层后——定向（守卫 + 受影响 6 处用例 + 姊妹守卫）**BUILD SUCCESSFUL（41s）**、
 `testShard3` **单独连续两轮 BUILD SUCCESSFUL**（2m47s / 3m3s）、
 **完整 `testShards` 三片全绿**（shard1 166 套件 / shard2 160 / shard3 169，失败文件 0，**5644 用例**，3m36s）；
-`verifyGate` 三目标（IU-243 / IU-253 / IU-262）仍全 Compatible。
+`verifyGate` 三目标（IU-243 / IU-253 / IU-262）仍全 Compatible（`BUILD SUCCESSFUL in 2m32s`，第二层后重跑）。
 
 **已知局限（如实登记）**：该 flake 非确定（同一代码重跑可绿可红），故**绿读数不能证明已治好**；
 可给的最强证据是「结构上已无创建路径可被窗口命中」+ 多轮重复读数 + 守卫锁定。

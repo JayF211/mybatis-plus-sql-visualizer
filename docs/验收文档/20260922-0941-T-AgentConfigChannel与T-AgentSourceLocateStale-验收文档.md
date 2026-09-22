@@ -28,12 +28,13 @@
 | **跨车道契约核验** | 同上（A+B+C 合入后） | **两条跨车道断言如期由红转绿**（`CMD_CONFIG_ACK` 两侧同值、入站读序）；派活时即写明「仍红＝应用侧修复被回退」 |
 | 合并态 agent 子项目全量 | `:sql-visualizer-agent:test` | **18 套件 / 82 用例 / 0 失败 / 0 错误 / 0 跳过**（含真子 JVM 的 `AttachGateTest`） |
 | 主编译 | `compileTestKotlin` | `BUILD SUCCESSFUL in 11m 36s`（含平台依赖与多车道并发拖慢） |
-| 全量 | `testShards`（基线 491 类 / ~5600 用例） | 待收口 |
-| 平台门禁 | `verifyGate`（三目标 Compatible） | 待收口 |
+| 全量 | `testShards`（基线 491 类 / ~5600 用例） | **全绿**：shard1 166 套件 / shard2 160 / shard3 169，**失败文件 0**（`BUILD SUCCESSFUL in 3m36s`）；另 shard3 单独连续两轮绿（`2m47s` / `3m3s`） |
+| 平台门禁 | `verifyGate`（三目标 Compatible） | **三目标全 Compatible**（IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63，`BUILD SUCCESSFUL in 2m32s`，T-ST-02b2 第二层后重跑） |
 | 独立复核 | 应用侧（另一上下文、只读） | 4 项规格逐条落地、无阻塞性缺陷；「4 例转红」核账独立吻合；抓出 8 处（4 处回交整改、1 处并入 IDE 侧、3 处登记边界） |
 | 独立复核 | IDE 侧（另一上下文、只读） | 有条件通过：规格基本逐条落地、跨侧 ACK 字面契约逐字符一致；15 例闸门测试中 11 例有鉴别力；抓出 1 处用户可见文案缺口（裁定无需改）+ 2 中 + 6 低（处置见计划 §实施记录 §七） |
 | **真机级端到端**（假 IDE 探针 + `-javaagent` 注入真实 Spring Boot/MPJ 应用，不经 GUI） | `dev-support/e2e-fake-ide/run-e2e.sh` | **停采生效 ✓**（`disabled=true` 的 ACK 到达 + 3000ms 窗口 0 事件）；**恢复采集 ✗→已修**（`disabled=false` 的 ACK 到达但三轮 0 事件 → 定位为 T-08 连接级跳过包装，已修并加回归用例）；**P-1 取证成立**（jstack 实测 `MPJInterceptor.intercept` 在调用栈上）；证据见 `dev-support/e2e-fake-ide/evidence/` |
-| 门禁（重跑后） | `testShards` / `verifyGate` / `testDatabase` | 见 §2 末行（首跑 17 例 `NoSuchMethodError: AgentSession.<init>` 系陈旧编译产物 flake，清 `build/classes`+`build/kotlin` 后重跑） |
+| 门禁（首跑噪音） | — | 首跑 17 例 `NoSuchMethodError: AgentSession.<init>` 系**陈旧增量编译产物** flake（多分支合并后测试类解析旧构造签名），清 `build/classes`+`build/kotlin` 后即绿 |
+| **门禁（shard3 跨类服务毒化 → 已根治）** | T-ST-02b2 两层修法（`6df02ef` / `81196e5`） | 首跑 20 例、第一层后 26 例失败 → 定因「`isDisposed` 判据对 light 测试的 temporarily-disposed 窗口不可达」→ 第二层把读路径改走 `getServiceIfCreated`（**结构上不发起创建**）→ **shard3 连续三轮绿 + 全量 testShards 三片全绿**。该 flake 非确定，绿读数不构成证明；结构性论据 + 多轮读数 + 扫描守卫为准（见计划 §十一） |
 
 ## 3. 真机/沙盒走查（需人工执行，沙盒 runIde + demo `dm` profile）
 
