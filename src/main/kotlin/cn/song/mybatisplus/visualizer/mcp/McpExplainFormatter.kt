@@ -81,4 +81,24 @@ object McpExplainFormatter {
         val flat = value.replace("\r\n", "\n").trim()
         return if (flat.length > MAX_CELL_CHARS) flat.take(MAX_CELL_CHARS) + "…" else flat
     }
+
+    /**
+     * T-Round10FU（独立复核 ⑨）：`sqlv_explain` 失败消息里的 `errorPosition` 文本行。
+     *
+     * 驱动错误文本携带位置信号（PG `Position: N` / MySQL `at line N` / Oracle 两种形态）时附一行
+     * `errorPosition: char N`（字符位置）或 `errorPosition: line N`（行号），供外部 agent 定位再自修复；
+     * **无信号（或 marker 不唯一而放弃归属）返回空串**——空串拼接即零追加，维持诚实降级。
+     *
+     * 抽出为纯函数的理由（⑨ 的症结）：这段文案原先内联在 [SqlVisualizerExplainTool.executeExplain]
+     * 的 `getOrElse` 里，而该分支要真实数据源 + 项目上下文才可达，于是全仓**没有任何用例断言过这段文案形态**
+     * （`McpToolGateTest` 只实例化工具类）——验收里那句「mcp 相关既有用例全绿」因此是空绿。
+     * 本函数落在纯逻辑层（同 [formatNotices]：不 import 任何 mcpServer/com.intellij 类型），
+     * 文案形态由 `McpErrorPositionTextTest` 逐字钉住；**接线**（工具确实走本函数）另由该用例的
+     * 源码扫描断言钉住——只钉文案不钉接线的话，把内联文案改回来就又回到空绿。
+     *
+     * @param position [cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor.extractPosition]
+     *                 的返回值：1-based 值 / 是否字符位置（false=行号）/ 来源标签；null = 无位置信号
+     */
+    fun formatErrorPosition(position: Triple<Int, Boolean, String>?): String =
+        if (position == null) "" else "\nerrorPosition: ${if (position.second) "char" else "line"} ${position.first}"
 }

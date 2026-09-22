@@ -176,10 +176,10 @@ class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
                     McpToolErrors.code(
                         McpToolErrors.DATASOURCE_UNREACHABLE,
                         "EXPLAIN failed on '${target.dialectName}' data source: ${firstLine(causeMsg)}" +
-                            if (pos != null) {
-                                val kind = if (pos.second) "char" else "line"
-                                "\nerrorPosition: $kind ${pos.first}"
-                            } else "",
+                            // T-Round10FU（独立复核 ⑨）：文案形态抽到纯逻辑层
+                            // （McpExplainFormatter.formatErrorPosition），由 McpErrorPositionTextTest
+                            // 逐字断言——本行此前内联，故该文案形态全仓无用例、验收「mcp 用例全绿」是空绿。
+                            McpExplainFormatter.formatErrorPosition(pos),
                     ),
                 )
             }
