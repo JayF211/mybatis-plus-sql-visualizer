@@ -102,16 +102,24 @@
 ## 八、实施记录（实施后回填）
 
 | 任务 | 提交 | 说明 / 偏离 |
-|------|------|------|
-| D1 定案 | （实施后填） | A/B/C 选择与理由须回填 |
-| T-ECH-01 | （实施后填） | 判定落点（新文件 vs 并入 Dialect）与白名单最终形态须回填 |
-| T-ECH-02 | （实施后填） | 表结构、格式枚举取值、逐字节不变实证须回填 |
-| T-ECH-03 | （实施后填） | PG JSON 解析形态与两次读数须回填 |
-| T-ECH-04 | （实施后填） | 用例读数、守卫断言、门禁读数须回填 |
+|------|------|------------|
+| D1 定案 | 见下 | **A（严格判定）** 落地。理由同计划：错包 EXPLAIN 把 DML/DDL 送进库（语法错误与解析副作用由库侧承担），且提示比静默错包诚实。实现为轻通知（同 `panel.explain.unsupported` 形态，不新增弹窗），文案带实际判到的首词 |
+| T-ECH-01 | 见下 | 新文件 `sql/ExplainGate.kt`（不并入 `Dialect`：边界判定是独立关注点，且 `Dialect` 已 500+ 行）。白名单 `select`/`values`/`table`/`with`，取「连续词字符段」即首个词 → `SELECTED`/`SELECT_foo` 天然整段不在白名单（**未复用** `SqlTypeClassifier.extractKeyword` 的 `takeWhile`）。两处词法边界（被包语句首词、EXPLAIN 关键字自身）收口同一 object，`Dialect.startsWithExplainKeyword` 的私有实现删除。**判定入口是 `ExplainGate.planExplainSubmit(dialect, sql)`**（三态：Submit / NotExplainable / DialectUnsupported）——两类拒绝理由必须可区分，否则用户会拿到错的解释；IDE 链唯一决策点，MCP 链只用 `isExplainableSource` 做守卫后断言。**用例落点偏离**：计划写「`DialectExplainTest.kt` 新增边界用例五组」，实际独立成 `sql/ExplainGateTest.kt`（判定属于门控而非方言渲染，混在一起会让「渲染逐字节不变」与「边界判定」两类回归信号互相掩盖）；五组验收全部覆盖 |
+| T-ECH-02 | 见下 | 新文件 `sql/ExplainSupport.kt`：`ExplainOutputFormat{TABLE,TEXT,JSON,XML}` + `Entry(dialectName, template, outputFormat, evidence)` 表（9 方言全量，Oracle/SQL Server 显式 `template=null`）；模板占位符 `{sql}` 为**字面量**替换（SQL 里的 `$`/`\`/`{sql}` 不受影响，有用例钉住）。`Dialect.renderExplainStatement` 默认实现改读表，**7 处覆写全删**；查找按方言显示名、大小写不敏感。逐字节不变实证：既有 7 方言字面量断言全绿 + 新增「表 vs 实现一致」「表覆盖注册表全量」「格式取值与模板自洽」三组守卫（`DialectExplainTest` 19 例全绿） |
+| T-ECH-03 | 见下 | **先红后绿两次读数**：新增真库实测形态用例（PG 16.14 实测 JSON，见 §八 前提 1 复验）后，临时摘掉 JSON 修复分支 → `ExplainIndexAdvisorTest` 18 例中 **5 例红**（`testPG_JSON形态_SeqScan超阈提示`/`testPG_JSON形态_嵌套子计划可识别`/`testPG_JSON被截断_分片扫描仍能识别顶层节点`/`testKingBase_JSON形态同PG`/`test方言名大小写不敏感` 的 PG 半）；还原修复 → 18 例全绿。解析形态：Gson 对象树取 `"Node Type"`/`"Relation Name"`(退 `"Alias"`)/`"Plan Rows"`(退 `"Actual Rows"`)，容错三段（严格 JSON → 截断时的节点分片正则 → 文本树回落）。分派改读 `ExplainSupport.formatFor` 而非方言名 |
+| T-ECH-04 | 见下 | 用例：`ExplainGateTest` 14 例、`DialectExplainTest` 19 例、`ExplainIndexAdvisorTest` 18 例，**共 51 例 0 失败**；analyze 双守卫防回退：`SqlTypeClassifierTest` 66 例 + `McpSelectGuardTest` 16 例全绿（未弱化）。MCP 链回归：`McpRowBudgetTest` 7 例 + `McpNoticeChannelTest` 8 例全绿。文档：CHANGELOG `[Unreleased]` Changed（IDE 行为变更明示）+ Fixed 两条；变更记录行；第十轮报告 §8 #50/#51 落地备注。**门禁**：按主调度统一跑 `testShards`/`verifyGate`，本任务只跑定向用例 |
 
-**待验证前提（实施者先证伪再动手）**：
+**待验证前提（实施者先证伪再动手）——实测结论**：
 
-1. ~~PG `FORMAT JSON` 返回形态未知~~ → **已实测**：单列 JSON 文本（`QUERY CODE` 列名 `QUERY PLAN`，值 `[{"Plan":{"Node Type":"Result",…}}]`）。**仍待确认**：真实表顺序扫描时 `"Node Type"` 的确切取值（`Seq Scan`）与关系名键（`"Relation Name"`）——实施第一步用 §五-2 复验。
-2. 「MCP 侧无需改动」的前提是 `McpSelectGuard.checkSingleSelect` 的结构白名单已足够严（`mcp/McpSelectGuard.kt:67-101` + `:157-167` `\b` 粗扫）——实施时须确认它对 `VALUES(1)`/`TABLE users` 这类**非 SELECT 但可 EXPLAIN** 的语句是否过严（若过严，T-ECH-01 的白名单须与它对齐，否则两链行为分叉）。
-3. Oracle / SQL Server 是否同批接入——本计划默认不接（各有独立前置：Oracle 两步链、SQL Server 会话级 `SET SHOWPLAN_XML`）；若用户要求，另立计划。
-4. KingBase 是否与 PG 同格式（现共用 `FORMAT JSON` 字面量）——须确认（KingBase 兼容 PG 但版本差异可能影响 JSON 结构）。
+1. ~~PG `FORMAT JSON` 返回形态未知~~ → **已实测（本轮复验，PG 16.14 / `114.66.55.245:20033`，只读）**：单列（列名 `QUERY PLAN`）JSON 文本。真实表顺序扫描的键值也**已钉死**：`EXPLAIN (FORMAT JSON, VERBOSE) SELECT * FROM bench_items` → `"Node Type":"Seq Scan"` + `"Relation Name":"bench_items"` + `"Plan Rows":10000`（`bench_items` 实测 10000 行）；嵌套子计划在 `"Plans"` 数组。`SELECT 1` 的形态为 `"Node Type":"Result"`（无 `Relation Name`）。
+2. ~~MCP 侧结构白名单是否对 `VALUES(1)`/`TABLE users` 过严~~ → **前提证伪（实测）**：JSqlParser 5.3 里 `Values` 与 `TableStatement` **都是 `Select` 的子类**（`javap` 实证），`McpSelectGuard.checkSingleSelect` 本来就放行这两条——两链白名单**完全对齐，无分叉面需要登记**。原计划预设的「若过严须对齐白名单」不成立；MCP 侧的 `isExplainableSource` 因此对白名单接受的输入不可能触发（保留为守卫后断言 + 包含性用例钉住，防将来白名单被放宽）。
+3. Oracle / SQL Server 仍不接入（非目标，未动）。
+4. KingBase 与 PG 同格式 → **已实测**（KingbaseES V8 连接执行 `EXPLAIN (FORMAT JSON)`；本次核实时该连接下 `dbx_test.bench_items` 不存在，**未取到 JSON 正文**，故格式仍按既有真机实证登记为 JSON，未新增未经验证的形态断言）。
+
+**未覆盖 / 风险（如实登记）**：
+
+- **真机 IDE 走查（§五-4：对 DML 点「执行计划」给出提示、不执行）本轮未做**（禁止 runIde）。已做的是判定层用例（`提交判定_DML与DDL与标识符一律拒绝且带实际首词`）+ 反向验证（摘掉门控分支 → 2 例红）；通知实际弹出形态待主调度真机确认。
+- **MCP 侧真机（§五-5）未做**（需真数据源 + MCP 通道）。改动仅在守卫后追加一个不可达断言，风险面为「无」。
+- **长计划的 JSON 会被 2000 字符单元格预算截断**（`McpExplainFormatter.MAX_CELL_CHARS`）：顶层节点在 JSON 开头，故通常仍在预算内（截断用例已覆盖）；但**深嵌套大计划的子节点建议会丢**——属既有限额口径，本任务未改限额。
+- `ExplainIndexAdvisor` 的 TEXT 档现覆盖 DM/H2/SQLite（此前按方言名只认 PG 文本树）：这三者的文本形态不含 `Seq Scan on` 模式，实测为零命中（有用例），但若将来其计划文本出现同形串会误报——按「新增文本规则在此扩展」留注释。
+

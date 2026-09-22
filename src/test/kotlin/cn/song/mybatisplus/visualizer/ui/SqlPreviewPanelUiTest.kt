@@ -3,11 +3,14 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.WrapperType
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.awt.Component
 import java.awt.Container
@@ -92,6 +95,77 @@ class SqlPreviewPanelUiTest : BasePlatformTestCase() {
             val zero = targets.filter { it.preferredSize.width <= 0 || it.preferredSize.height <= 0 }
             assertEquals("非空标签与按钮应有正首选尺寸（无渲染塌缩）: ${zero.map { it::class.simpleName }}", 0, zero.size)
         } finally {
+            panel.clear()
+            panel.dispose()
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // T-ErrorLocateUsability T-ELU-01（O-49）：错误定位按钮「先解析后显隐」
+    // ------------------------------------------------------------------
+
+    private fun locateButton(panel: SqlPreviewPanel): JButton? =
+        allComponents(panel.resultPanelForTest()).filterIsInstance<JButton>()
+            .firstOrNull { it.text == MpSqlVisualizerBundle.message("execute.error.locate") }
+
+    private fun errorInfo() = cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo(message = "boom")
+
+    /**
+     * **本任务的核心判据（改前必红）**：本会话尚未登记预览源锚点 → 定位动作返回 null
+     * → 面板里的定位按钮**不出现**。改前 `showErrorRichWithLocate` 恒传非 null lambda，
+     * 按钮可见但点击静默 return（`project ?: return` / `anchor ?: return`）。
+     */
+    fun test错误定位_无锚点时不给按钮() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            project.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor = null
+            waitForEdt()
+            assertNull("锚点缺失时定位动作应为 null", panel.errorLocateActionForTest())
+            panel.showErrorRichWithLocateForTest(errorInfo())
+            waitForEdt()
+            val btn = locateButton(panel)
+            assertNotNull("定位按钮组件应存在（仅隐藏）", btn)
+            assertFalse("锚点不可解析时定位按钮不得可见", btn!!.isVisible)
+        } finally {
+            panel.clear()
+            panel.dispose()
+        }
+    }
+
+    /** 锚点可解析（预览入口已登记）→ 定位动作非 null 且按钮可见（回归确认，改前改后皆绿）。 */
+    fun test错误定位_有锚点时给按钮() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            val vf = myFixture.configureByText("Anchor.java", "class Anchor {}").virtualFile
+            project.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor =
+                SqlPreviewService.SourceAnchor(vf, 0)
+            waitForEdt()
+            assertNotNull("锚点可解析时定位动作应非 null", panel.errorLocateActionForTest())
+            panel.showErrorRichWithLocateForTest(errorInfo())
+            waitForEdt()
+            assertTrue("锚点可解析时定位按钮应可见", locateButton(panel)!!.isVisible)
+        } finally {
+            project.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor = null
+            panel.clear()
+            panel.dispose()
+        }
+    }
+
+    /** 源文件已失效（跳不动）同样不给按钮——「跳不动的按钮不给」比「给了点不动」诚实。 */
+    fun test错误定位_源文件失效时不给按钮() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            val vf = myFixture.addFileToProject("Gone.java", "class Gone {}").virtualFile
+            project.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor =
+                SqlPreviewService.SourceAnchor(vf, 0)
+            assertNotNull("删除前锚点可解析", panel.errorLocateActionForTest())
+            // 删除须在写动作内（VirtualFile.delete 在 262 平台要求写权限）
+            @Suppress("DEPRECATION")
+            com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> { vf.delete(this) }
+            waitForEdt()
+            assertNull("源文件失效时定位动作应为 null", panel.errorLocateActionForTest())
+        } finally {
+            project.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor = null
             panel.clear()
             panel.dispose()
         }

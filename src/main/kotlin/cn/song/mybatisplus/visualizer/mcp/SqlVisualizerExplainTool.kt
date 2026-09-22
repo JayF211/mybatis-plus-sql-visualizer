@@ -71,6 +71,21 @@ class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
         if (!verdict.allowed) {
             throwExpected(McpToolErrors.code(verdict.errorCode ?: McpToolErrors.SQL_BLOCKED, verdict.reason ?: "rejected."))
         }
+        // 1b) EXPLAIN 首关键字边界（T-ECH-01：与 IDE 链同一判定）。
+        // 这是**守卫之后的第二道**，对结构白名单接受的输入**不可能触发**——白名单只放行
+        // Select 家族（含 `Values`/`TableStatement`，JSqlParser 5.3 里两者都是 Select 子类），
+        // 而 Select 家族的首关键字必落在白名单内。包含性由 `ExplainGateTest` 的语料用例钉住
+        // （计划 §八 待验证前提 2 由此证伪：结构白名单对 `VALUES(1)`/`TABLE users` **不过严**，
+        // 两链白名单完全对齐）。保留本判定是为了两链共用一处口径，将来白名单若被放宽，
+        // 这道仍在。
+        if (!cn.song.mybatisplus.visualizer.sql.ExplainGate.isExplainableSource(selectSql)) {
+            throwExpected(
+                McpToolErrors.code(
+                    McpToolErrors.SQL_BLOCKED,
+                    "the statement is not an explainable query (first keyword must be SELECT, VALUES, TABLE or WITH).",
+                ),
+            )
+        }
 
         // 2) 数据源定位（零弹窗：不给/给不出唯一别名即报错并列可选名，绝不弹选择框）
         if (!McpDbExecutor.isDatabaseAvailable()) {
@@ -152,7 +167,11 @@ class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
                 // 附 errorPosition 文本行——agent 可定位再自修复；匹配不到/多 marker 即不加（诚实降级，
                 // ErrorPositionExtractor 的 marker 单一性门控与「基建语句不带位置」同源）。
                 val causeMsg = e.message ?: e.javaClass.simpleName
-                val pos = cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor.extractPosition(causeMsg)
+                // T-ErrorLocateUsability T-ELU-03（O-49）：接上**被提交文本**长度（EXPLAIN 包装句——
+                // 驱动报的位置指向它，不是原始 selectSql），使越界钳制从「仅单测生效」变为生产生效。
+                val pos = cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor.extractPosition(
+                    causeMsg, target.explainSql.length,
+                )
                 throwExpected(
                     McpToolErrors.code(
                         McpToolErrors.DATASOURCE_UNREACHABLE,

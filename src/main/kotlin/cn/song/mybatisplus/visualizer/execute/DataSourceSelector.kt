@@ -2816,9 +2816,11 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                                                         // M36.5.45：native 执行链失败必须通知 UI（此前仅 LOG.warn，用户看不到任何错误）
                                                         // T-ErrorLocate T-EL-02：富通道并行投递（SQLState/errorCode/驱动位置结构化），
                                                         // 旧 onError(String) 消费方零改动
+                                                        // T-ErrorLocateUsability T-ELU-03（O-49）：接上被执行文本长度——
+                                                        // 越界钳制此前只在单测生效（调用方全都不传 sqlMaxLength）
                                                         // write-safe: UI-only（纯 Swing/只读，无文档写）
                                                         ApplicationManager.getApplication().invokeLater({
-                                                            runCatching { onErrorRich?.invoke(ErrorPositionExtractor.buildInfo(cause, cause.message ?: cause.toString())) }
+                                                            runCatching { onErrorRich?.invoke(ErrorPositionExtractor.buildInfo(cause, cause.message ?: cause.toString(), executedSql.length)) }
                                                                 .onFailure { LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", it) }
                                                             onError?.invoke(cause.message ?: cause.toString())
                                                         }, com.intellij.openapi.application.ModalityState.any())
@@ -2857,7 +2859,8 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                         // pump 中照常执行（纯 Swing 更新，安全）。
                         // write-safe: UI-only（纯 Swing/只读，无文档写）
                         ApplicationManager.getApplication().invokeLater({
-                            runCatching { onErrorRich?.invoke(ErrorPositionExtractor.buildInfo(cause, msg)) }
+                            // T-ELU-03：接上被执行文本长度（越界钳制生效前提）
+                            runCatching { onErrorRich?.invoke(ErrorPositionExtractor.buildInfo(cause, msg, executedSql.length)) }
                                 .onFailure { LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", it) }
                             onError?.invoke(msg)
                         }, com.intellij.openapi.application.ModalityState.any())
@@ -2873,7 +2876,8 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         }.onFailure { e ->
             LOG.warn("[M36] executeOnConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
             val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
-            runCatching { onErrorRich?.invoke(ErrorPositionExtractor.buildInfo(cause, cause.message ?: cause.toString())) }
+            // T-ELU-03：接上被执行文本长度（越界钳制生效前提）
+            runCatching { onErrorRich?.invoke(ErrorPositionExtractor.buildInfo(cause, cause.message ?: cause.toString(), executedSql.length)) }
                 .onFailure { LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", it) }
             onError?.invoke(cause.message ?: cause.toString())
         }
