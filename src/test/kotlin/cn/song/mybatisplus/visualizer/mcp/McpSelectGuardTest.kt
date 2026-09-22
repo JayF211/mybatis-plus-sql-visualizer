@@ -157,4 +157,46 @@ class McpSelectGuardTest {
         assertAllowed("SELECT * FROM t WHERE remark LIKE '%update%'")
         assertAllowed("SELECT * FROM t WHERE name = 'drop table x'")
     }
+
+    // ------------------------------------------------------------------
+    // T-ExplainChainHardening T-ECH-04：analyze 双守卫防回退 + 与 IDE 链白名单对齐
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `拒绝_analyze 与 EXPLAIN ANALYZE 不弱化`() {
+        // 守卫一（结构判定）：JSqlParser 5.3 把 EXPLAIN ANALYZE 解析为 ExplainStatement（非 Select）
+        // → READ_ONLY 拒（实测读数见计划 §八）
+        assertDenied(
+            "EXPLAIN ANALYZE SELECT * FROM t",
+            McpToolErrors.READ_ONLY,
+            "EXPLAIN ANALYZE 应拒（analyze 会真实执行被修饰语句）",
+        )
+        // 守卫二（词面粗扫）：analyze 在 FORBIDDEN_WORDS，出现在查询正文同样拒（fail closed）
+        assertDenied(
+            "SELECT 1 FROM t WHERE analyze = 1",
+            McpToolErrors.READ_ONLY,
+            "analyze 词面命中即拒",
+        )
+        // 括号选项变体解析失败 → SQL_BLOCKED（同样拒；fail closed 两条路径任一都不放行）
+        assertDenied(
+            "EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM t",
+            McpToolErrors.SQL_BLOCKED,
+            "EXPLAIN (ANALYZE, …) 变体应拒",
+        )
+    }
+
+    @Test
+    fun `放行_可 EXPLAIN 的非 SELECT 形态（与 IDE 链白名单对齐）`() {
+        // T-ECH-01 白名单含 VALUES/TABLE——本守卫结构判定不得比它更严，否则两链行为分叉
+        // （计划 §八 待验证前提 2：实测 Values/TableStatement 均为 Select 子类 → 不过严）
+        assertAllowed("VALUES (1)")
+        assertAllowed("TABLE users")
+    }
+
+    @Test
+    fun `拒绝_首词前缀形态标识符（与 T-ECH-01 门同向）`() {
+        // 词法门（ExplainGate）与结构守卫（本类）对同一形态同向拒绝，两链不分叉
+        assertDenied("SELECTED x FROM t", McpToolErrors.SQL_BLOCKED, "SELECTED 应拒")
+        assertDenied("SELECT_foo FROM t", McpToolErrors.SQL_BLOCKED, "SELECT_foo 应拒")
+    }
 }

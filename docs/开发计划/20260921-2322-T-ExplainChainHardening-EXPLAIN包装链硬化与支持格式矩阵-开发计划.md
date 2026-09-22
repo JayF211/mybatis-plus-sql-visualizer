@@ -101,17 +101,29 @@
 
 ## 八、实施记录（实施后回填）
 
+> 本表只回填实施事实与偏离；CHANGELOG / docs/变更记录.md / 第十轮报告 #50/#51 落地备注按任务说明由 T-Round10-08 统一写。
+> 当次基线：分支 `t-round10`（HEAD 与 master `d3ef121` 同提交；计划 §一 写的 `03f6d25` 已落后 8 个提交，作废）。
+> 定向门禁命令：`gradlew.bat testFast --tests "*DialectExplainTest*" --tests "*ExplainIndexAdvisorTest*" --tests "*McpSelectGuardTest*" --tests "*EnumReachabilityGuardTest*"`。
+
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
-| D1 定案 | （实施后填） | A/B/C 选择与理由须回填 |
-| T-ECH-01 | （实施后填） | 判定落点（新文件 vs 并入 Dialect）与白名单最终形态须回填 |
-| T-ECH-02 | （实施后填） | 表结构、格式枚举取值、逐字节不变实证须回填 |
-| T-ECH-03 | （实施后填） | PG JSON 解析形态与两次读数须回填 |
-| T-ECH-04 | （实施后填） | 用例读数、守卫断言、门禁读数须回填 |
+| D1 定案 | （未提交，工作树） | **取 A（严格判定）**：被包语句首关键字不在白名单 → 不包装、不执行，轻通知提示（新增键 `panel.explain.notQuery`，与 `panel.explain.unsupported` 分派：可 EXPLAIN 却拿不到语句=方言不支持，否则=首词不是查询）。门排在 `renderExplainStatementIdempotent` 的**幂等短路之后**（否则已包装文本被自己的门拒掉，T-ExplainDbl 价值归零）。**偏离（超 A 的字面口径）**：A 只判首关键字堵不住多语句脚本，实现为「整段文本按顶层分号切分后**每条**都要过白名单」——`SELECT 1; DROP TABLE t` 拒（即把计划 §八 待验证前提 5 的修法并入）。 |
+| T-ECH-01 | （未提交，工作树） | **落点定案：新建 `src/main/kotlin/cn/song/mybatisplus/visualizer/sql/ExplainGate.kt`**（不并入 `Dialect.kt` 的理由：`startsWithExplainKeyword` 是 private 顶层函数无法复用；且 Dialect.kt 另有 2328/2330 两个兄弟任务占用）。判据=显式词边界 `startsWithWord`（命中词后紧随字符非字母/数字/`_`），白名单 `SELECT`/`VALUES`/`TABLE`/`WITH`；取词前跳过前导空白、`--`/`/* */` 注释与左括号；**不复用** `SqlTypeClassifier.extractKeyword`。**两链接线**：`Dialect.renderExplainStatementIdempotent`（IDE 面板链）与 `SqlVisualizerExplainTool.resolveExplainTarget`（MCP 链，拒码 `SQL_BLOCKED`）。用例：`DialectExplainTest` 23 例全绿（14 例基线中重写 1 例——`幂等-词边界不误判标识符` 由「`EXPLAINING_TABLE` → 加前缀」改为**拒**，这是 D1=A 的必然结果，见下方 blocker 3 的处置；新增 9 例）。**实测口径**：注释形态放行但注释**原样保留**在产物里（`EXPLAIN -- note\nSELECT 1`，合法 SQL）——取词只跳过注释用于判定，不改写用户文本。 |
+| T-ECH-02 | （未提交，工作树） | 新增 `sql/Dialect.kt` 的 `ExplainSupportTable`（`data class ExplainSupport(template, format)` + `enum class OutputFormat`），7 处覆写改为读表（`= ExplainSupportTable.render(name, sql)`），**渲染逐字节不变**（既有 7 方言形态断言全绿）。**格式枚举只取 JSON/TEXT/TABLE，不含计划列的 XML**：本插件无 XML 产出点（SQL Server 的 `SET SHOWPLAN_XML` 是非目标），`EnumReachabilityGuardTest:247-263`「常量零产出 + 枚举类型活跃」会直接判红——实测该守卫 3 例全绿（含新枚举）。格式取值：MySQL/MariaDB=TABLE、PG/KingBase=JSON、H2/DM/SQLite=TEXT（DM 的 `#NSET2`、SQLite 的 `SCAN t` 是文本行而非 MySQL 表格式，故既有 `test不支持方言静默降级` 仍绿）。守卫断言：7 条模板字面量在**测试侧冻结**成期望值再比对（表与实现同源比较是同义反复），另断言表键集 == 实际可渲染方言集。 |
+| T-ECH-03 | （未提交，工作树） | `ExplainIndexAdvisor` 改**按格式分派**（`ExplainSupportTable.formatOf`，不再按方言名 contains）；JSON 分支用 Gson 递归取 `"Node Type"`/`"Relation Name"`/`"Plan Rows"`，**解析不出计划节点回落文本树**（`if (!adviseJson(rows, out)) advisePlanText(rows, out)`）。**先红后绿两次读数（用例名 + 断言值）**：① 修复前/临时移除 JSON 分支 → `testPG_JSON形态_顺序扫描超阈提示` `expected:<1> but was:<0>`、`testPG_JSON形态_空白不敏感_金仓多行美化同判` `expected:<1> but was:<0>`（O-48 缺陷复现：PG JSON 上 0 条建议）；② 修复后 → `ExplainIndexAdvisorTest tests=14 failures=0`（含上述两例）。行数阈值取 `"Plan Rows"` 且**取不到即不出建议**（沿用文本树 `rowsN == null → 出建议` 会让任意大小 Seq Scan 都提示）。真库只读复验：PG `ce028080-e7fb-40ea-8155-4842f6ecc611` 上 `EXPLAIN (FORMAT JSON, VERBOSE) SELECT * FROM information_schema.tables` → **紧凑 JSON**，嵌套 `"Node Type":"Seq Scan"` + `"Relation Name":"pg_class"` + `"Plan Rows":184`（< 阈值，按设计不出建议）；KingbaseES V8 `da5e4c3e-599b-4e51-a492-1d33058f6add` 同语句 → **多行美化 JSON（冒号后带空格）** `"Plan Rows":366` → 解析必须**空白不敏感**（Gson 而非字符串匹配）。 |
+| T-ECH-04 | （未提交，工作树） | 用例增量：`DialectExplainTest` +9（边界五组：拒 7 样本 / 放行 6 样本 / 前导注释空白左括号 / 多语句任一非查询即拒 / 已包装文本不受门影响，另加门直测、表模板冻结、表格式取值、表覆盖面）＝**23 例**；`ExplainIndexAdvisorTest` +4（PG JSON 超阈 / 真实小表形态不提示 / 金仓多行美化 / 无 Seq Scan 节点）＝**14 例**；`McpSelectGuardTest` +3（analyze 双守卫防回退：`EXPLAIN ANALYZE`→`MCP_READ_ONLY`、`analyze` 词面→`MCP_READ_ONLY`、`EXPLAIN (ANALYZE, BUFFERS)` 变体→`SQL_BLOCKED`；`VALUES(1)`/`TABLE users` 放行=与 T-ECH-01 白名单对齐；`SELECTED`/`SELECT_foo`→`SQL_BLOCKED`）＝**19 例**。**定向读数**：`DialectExplainTest tests=23 failures=0`、`ExplainIndexAdvisorTest tests=14 failures=0`、`McpSelectGuardTest tests=19 failures=0`、`EnumReachabilityGuardTest tests=3 failures=0`，`BUILD SUCCESSFUL`。**反向验证**：篡改表模板（H2 `EXPLAIN PLAN FOR ` → `EXPLAIN PLAN `）+ 移除 JSON 分支 → 4 红（`H2 形态`、`T-ECH-02 表模板与冻结期望逐字节一致`「模板漂移：H2」、两条 PG JSON 用例），还原后复跑全绿。**未跑**：全量 testShards / testDatabase / verifyGate（由主流程统一跑）；`SqlTypeClassifier` 与 `McpSelectGuard` 生产代码**未改**（写集内「宁多勿少」项，双守卫语义保持不动，§五-5 由既有用例覆盖）。 |
 
-**待验证前提（实施者先证伪再动手）**：
+**偏离与未验证面登记（实施时新增，供验收与后续任务取用）**
 
-1. ~~PG `FORMAT JSON` 返回形态未知~~ → **已实测**：单列 JSON 文本（`QUERY CODE` 列名 `QUERY PLAN`，值 `[{"Plan":{"Node Type":"Result",…}}]`）。**仍待确认**：真实表顺序扫描时 `"Node Type"` 的确切取值（`Seq Scan`）与关系名键（`"Relation Name"`）——实施第一步用 §五-2 复验。
-2. 「MCP 侧无需改动」的前提是 `McpSelectGuard.checkSingleSelect` 的结构白名单已足够严（`mcp/McpSelectGuard.kt:67-101` + `:157-167` `\b` 粗扫）——实施时须确认它对 `VALUES(1)`/`TABLE users` 这类**非 SELECT 但可 EXPLAIN** 的语句是否过严（若过严，T-ECH-01 的白名单须与它对齐，否则两链行为分叉）。
-3. Oracle / SQL Server 是否同批接入——本计划默认不接（各有独立前置：Oracle 两步链、SQL Server 会话级 `SET SHOWPLAN_XML`）；若用户要求，另立计划。
-4. KingBase 是否与 PG 同格式（现共用 `FORMAT JSON` 字面量）——须确认（KingBase 兼容 PG 但版本差异可能影响 JSON 结构）。
+1. **写集外改动 2 个文件（已显式声明）**：`src/main/resources/messages/MpSqlVisualizerBundle.properties` 与 `MpSqlVisualizerBundle_zh.properties` 各加一键 `panel.explain.notQuery`——D1=A 需要一条与「方言不支持」区分开的用户可见提示，而写集未含 bundle（核验结论 blocker 4 已指出）；两文件键集合同步添加。
+2. **真机面未验证**：D1=A 的 runIde 沙盒走查（对一条 DML 点「执行计划」→ 明确提示且不执行）**未跑**，登记为未验证；headless 侧由 `DialectExplainTest` 的 7 条拒绝样本 + `SqlPreviewPanel.explainSql` 的 null 分派文案覆盖到逻辑层。
+3. **第三个 EXPLAIN 包装点未动**：`actions/SelectedTableSqlTemplateActions.kt:67-70`（右键「EXPLAIN 执行计划」）硬编码 `"EXPLAIN SELECT * FROM $selected"`，既不读 Dialect 也不读 T-ECH-02 的支持/格式表——**本任务不动它（不在写集）**，登记为已知不一致（PG 上该动作产出文本格式，而面板产出 JSON 格式）；是否收编到读表路径由后续任务定夺。
+4. **文档口径**：本计划 §1.2 的「`DialectExplainTest` 13 例（幂等 4 例）」实测为 14 例、幂等 5 例（`:72/:80/:86/:93/:102`）；§1.1 的「→ 索引建议 `:53-54`」按就近指代读会落到 `McpExplainFormatter.kt` 的 `clampMaxRows`，真实调用点是 `SqlVisualizerExplainTool.kt:53-57`。两处按任务说明只在 §八 记录，未改正文。
+5. **白名单的「放行后能否执行」未逐方言验证**：`VALUES(1)`/`TABLE users` 的放行口径取自 DBX 且 PG 侧实测可执行；MySQL/DM 上 `EXPLAIN VALUES(1)` / `EXPLAIN TABLE t` 的可执行性**未验证**（本任务只测「门的放行/拒绝」）。
+
+**待验证前提（实施后状态）**：
+
+1. ~~PG `FORMAT JSON` 返回形态未知~~ → **已实测（本次复验）**：单列 JSON 文本（列名 `QUERY PLAN`），真实表顺序扫描节点为 `"Node Type":"Seq Scan"` + `"Relation Name":"pg_class"` + `"Plan Rows":184`（PG 18.3，紧凑无空格）；KingbaseES V8 同语句为**多行美化** JSON。→ 建议器按 Gson 解析（空白不敏感），文本树解析保留为回落路径。
+2. ~~`McpSelectGuard` 结构白名单是否对 `VALUES(1)`/`TABLE users` 过严~~ → **已实测不过严**：用已编译类实跑 `McpSelectGuard.checkSingleSelect` → `VALUES (1)` / `TABLE users` 均 `allowed=true`（`Values`/`TableStatement` 都是 `Select` 子类），`SELECTED x FROM t` / `SELECT_foo FROM t` → `SQL_BLOCKED`，`UPDATE …` → `MCP_READ_ONLY`。两链白名单口径一致，不分叉。
+3. Oracle / SQL Server 仍不接入（各自独立前置：Oracle 两步链 `PLAN_TABLE`、SQL Server 会话级 `SET SHOWPLAN_XML`）——本轮未动，维持非目标。
+4. ~~KingBase 是否与 PG 同格式~~ → **已实测**：同为 `FORMAT JSON`、键名同形（`"Node Type"`/`"Relation Name"`/`"Plan Rows"`），但**空白形态不同**（金仓多行美化）→ 任何按空白敏感的匹配会在一侧失效，解析须走 JSON 解析器。

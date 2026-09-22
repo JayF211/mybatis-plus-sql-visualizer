@@ -20,6 +20,15 @@ package cn.song.mybatisplus.visualizer.util
  *    **批首限定 IF**：语句首 `IF` 无方言歧义（MySQL `IF()` 是函数不出现在语句首位）；
  *    裸 `BEGIN` 起头**不**并入——`BEGIN; …; COMMIT` 是 MySQL 事务语法，既有「无配对
  *    END 按顶层切分原样」保守承诺维持（形态良好的 T-SQL BEGIN 块已由上方块感知整段保护）；
+ *  - **Oracle PL/SQL 匿名块感知**（T-SqlSplitterPlsql / O-47，T-SSP-01）：语句首 `DECLARE` 且
+ *    后方存在配对 `END` 时进入**声明段**——段内顶层 `;` 是声明分隔符而非语句界符（前向声明
+ *    `PROCEDURE p IS;`、局部例程体 `PROCEDURE p IS BEGIN … END;` 与块主体同属一条语句）。
+ *    声明段边界（`DECLARE` 之后或声明段顶层 `;` 之后）的 `BEGIN` 即主体起始，此后按常规块
+ *    计数，主体 `END` 使深度归零、后续顶层 `;` 恢复切分。吞并边界＝**深度归零处**而非「末个
+ *    END」——后者会把紧随的第二个匿名块并进来（`DECLARE … END; BEGIN … END;` 实测 2 条）。
+ *  - **CASE 层隔离**（T-SSP-02）：`CASE … END` / `CASE … END CASE` 自成一层，其 `END` 不递减
+ *    块深度（否则块内 `CASE` 的 `END` 被当块尾 → 块被切碎）。`END CASE` 是双词终结形态，
+ *    尾随 `CASE` 词不再开新层——否则层数被补回、块尾 `END` 反被 CASE 层吞掉（吞并过度）。
  *  - **DELIMITER 指令感知**（T-DelimiterAware / O-39）：`DELIMITER <token>` 行首指令把
  *    语句界符由 `;` 切换为 `<token>`（`$$`/`//` 等多字符形态按整串匹配），直到下一条
  *    `DELIMITER` 指令或文本结束；指令行本身**不作为独立语句产出**（界符 token 一并丢弃），
@@ -73,6 +82,14 @@ object SqlStatementSplitter {
         var blockDepth = 0
         // BEGIN/END 启用前视：见到 BEGIN 先看后方有无配对 END（保守启用）
         var beginModeEnabled = false
+        // T-SSP-01：语句首 DECLARE 且后方存在配对 END → 处于声明段（段内顶层 `;` 不切分）
+        var declareSection = false
+        // 声明段边界（`DECLARE` 之后或声明段顶层 `;` 之后）——紧随的 BEGIN 即块主体起始
+        var bodyBeginExpected = false
+        // T-SSP-02：CASE 层计数（CASE…END / CASE…END CASE 不参与块配对）
+        var caseDepth = 0
+        // `END CASE` 双词终结形态：END 前视到 CASE 词后置位，供紧随的 CASE 词消费
+        var caseEndTailPending = false
         var word = StringBuilder()
         // 当前词的首字符下标与词起点处的缓冲长度（DELIMITER 指令的行首/语句边界判定用；
         // word 非空时有效）
@@ -88,8 +105,15 @@ object SqlStatementSplitter {
                 word.setLength(0)
                 if (beginModeEnabled) {
                     when (token.uppercase()) {
+                        // `END CASE` 的尾词：已由 END 分支按 CASE 终结符消费，不再开新层
+                        "CASE" -> if (caseEndTailPending) caseEndTailPending = false else caseDepth++
                         "BEGIN" -> blockDepth++
-                        "END" -> if (blockDepth > 0) blockDepth--
+                        "END" -> {
+                            if (nextWordIs(sql, i, "CASE")) caseEndTailPending = true
+                            if (caseDepth > 0) caseDepth--       // CASE 收尾（裸 END / END CASE）
+                            else if (blockDepth > 0) blockDepth-- // 块尾
+                        }
+                        else -> bodyBeginExpected = false
                     }
                 }
             }
@@ -143,6 +167,11 @@ object SqlStatementSplitter {
                         val part = sb.toString().trim()
                         if (part.isNotEmpty()) parts += part
                         sb.setLength(0)
+                        // 语句边界：块/CASE/声明段状态随段重置（防跨语句状态残留）
+                        declareSection = false
+                        bodyBeginExpected = false
+                        caseDepth = 0
+                        caseEndTailPending = false
                     } else {
                         sb.append(delimiter)
                     }
@@ -174,11 +203,16 @@ object SqlStatementSplitter {
                 }
                 c == ';' -> {
                     flushWord()
-                    if (delimiter == DEFAULT_DELIMITER && parenDepth == 0 && blockDepth == 0) {
+                    if (delimiter == DEFAULT_DELIMITER && parenDepth == 0 && blockDepth == 0 && !declareSection) {
                         val part = sb.toString().trim()
                         if (part.isNotEmpty()) parts += part
                         sb.setLength(0)
+                        // 语句边界：CASE 层状态随段重置（防截断 CASE 的层数泄漏到后续语句）
+                        caseDepth = 0
+                        caseEndTailPending = false
                     } else {
+                        // T-SSP-01：声明段顶层 `;` 是声明分隔符（不切分），且构成声明段边界
+                        if (declareSection && parenDepth == 0 && blockDepth == 0) bodyBeginExpected = true
                         sb.append(c)
                     }
                     i++
@@ -217,6 +251,29 @@ object SqlStatementSplitter {
                         val directive = readDelimiterDirective(sql, i)
                         delimiter = directive.first
                         i = directive.second
+                    } else if (word.isNotEmpty() && !declareSection && blockDepth == 0 &&
+                        word.toString().equals("DECLARE", ignoreCase = true) &&
+                        isStatementHead(sb, bufferLenAtWordStart, word.toString()) &&
+                        hasMatchingEndAhead(sql, i)
+                    ) {
+                        // T-SSP-01：语句首 DECLARE + 后方配对 END → 声明段（段内顶层 `;` 不切分）。
+                        // 同时启用块计数（声明段内局部例程体 BEGIN/END 照常成对计数）
+                        declareSection = true
+                        bodyBeginExpected = true
+                        beginModeEnabled = true
+                        word.setLength(0)
+                        sb.append(c)
+                        i++
+                    } else if (declareSection && bodyBeginExpected && word.isNotEmpty() &&
+                        word.toString().equals("BEGIN", ignoreCase = true)
+                    ) {
+                        // T-SSP-01：声明段边界上的 BEGIN 即块主体起始——退出声明段（此后顶层 `;`
+                        // 恢复切分；主体 END 使深度归零，故吞并边界＝深度归零处）
+                        declareSection = false
+                        bodyBeginExpected = false
+                        flushWord()
+                        sb.append(c)
+                        i++
                     } else if (word.isNotEmpty() && word.toString().equals("BEGIN", ignoreCase = true) &&
                         !beginModeEnabled && hasMatchingEndAhead(sql, i)
                     ) {
@@ -346,9 +403,16 @@ object SqlStatementSplitter {
         return null
     }
 
-    /** 段内顶层 BEGIN/END 配对计数（字符串/注释感知；>0 = 未闭合的截断批）。 */
+    /**
+     * 段内顶层 BEGIN/END 配对计数（字符串/注释感知；>0 = 未闭合的截断批）。
+     *
+     * T-SSP-02：与主循环同口径隔离 `CASE … END` / `END CASE`（CASE 的 `END` 不充当块尾配对），
+     * 否则批内一个 CASE 表达式会让截断批被误判为已闭合（后续段不再并入，破坏「宁整勿碎」）。
+     */
     private fun beginEndBalance(part: String): Int {
         var depth = 0
+        var caseDepth = 0
+        var caseEndTailPending = false
         var inSingle = false
         var inDouble = false
         var inLine = false
@@ -358,8 +422,12 @@ object SqlStatementSplitter {
         fun flush() {
             if (word.isNotEmpty()) {
                 when (word.toString().uppercase()) {
+                    "CASE" -> if (caseEndTailPending) caseEndTailPending = false else caseDepth++
                     "BEGIN" -> depth++
-                    "END" -> if (depth > 0) depth--
+                    "END" -> {
+                        if (nextWordIs(part, i, "CASE")) caseEndTailPending = true
+                        if (caseDepth > 0) caseDepth-- else if (depth > 0) depth--
+                    }
                 }
                 word.setLength(0)
             }
@@ -389,6 +457,47 @@ object SqlStatementSplitter {
         }
         flush()
         return depth
+    }
+
+    /**
+     * 语句首判定（T-SSP-01）：当前缓冲（含本词）的首个有效关键字是否即本词——
+     * 前导仅空白与注释才算语句首（跳过规则同 [firstKeywordOf]）。
+     */
+    private fun isStatementHead(buffer: StringBuilder, bufferLenAtWordStart: Int, token: String): Boolean =
+        firstKeywordOf(buffer.substring(0, bufferLenAtWordStart) + token) == token.uppercase()
+
+    /**
+     * 前视扫描（T-SSP-02）：`from` 之后跳过空白与注释的首个标识符词是否即 [word]
+     * （大小写不敏感）。用于识别 `END CASE` 双词终结形态——尾随 `CASE` 词不得再开新层，
+     * 否则 CASE 层数被补回、块尾 `END` 反被吞掉（过度吞并）。
+     */
+    private fun nextWordIs(sql: String, from: Int, word: String): Boolean {
+        var i = from
+        while (i < sql.length) {
+            val c = sql[i]
+            val next = sql.getOrNull(i + 1)
+            when {
+                c.isWhitespace() -> i++
+                c == '-' && next == '-' -> {
+                    while (i < sql.length && sql[i] != '\n') i++
+                }
+                c == '/' && next == '*' -> {
+                    i += 2
+                    while (i < sql.length && !(sql[i] == '*' && sql.getOrNull(i + 1) == '/')) i++
+                    i += 2
+                }
+                isIdentifierChar(c) -> {
+                    val sb = StringBuilder()
+                    while (i < sql.length && isIdentifierChar(sql[i])) {
+                        sb.append(sql[i])
+                        i++
+                    }
+                    return sb.toString().equals(word, ignoreCase = true)
+                }
+                else -> return false
+            }
+        }
+        return false
     }
 
     /**

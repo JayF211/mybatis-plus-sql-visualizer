@@ -40,6 +40,8 @@
 
 **推演结果：一条合法匿名块被切成 3 段**（每段都会被 `LogToSqlPanel` 逐条提交）。
 
+> **实施期更正（2026-09-22，实测）**：该推演偏大——实测为 **2 段**。原因是 `beginModeEnabled` 永不复位只挡「前视武装」，而 `flushWord()`（`:89-95`）在 armed 后对 BEGIN/END **无条件**计数，故局部例程 `END;` 之后外层 `BEGIN` 仍把 blockDepth 抬回 1，外层块不碎；碎的是 DECLARE 声明段本身（`DECLARE … PROCEDURE p IS BEGIN NULL; END` 被切出去）。缺陷成立，受损形态是 2 段而非 3 段。
+
 另两个形态：**`CASE … END CASE`** 的 `END` 被当块尾递减 → 块内 `CASE` 同样切碎；**前向声明 `PROCEDURE p IS;`**（无 `BEGIN`）直接触发 `;` 切分，无任何拦截。
 
 ### 1.3 消费方全清单（碎句影响面）
@@ -113,14 +115,29 @@ T-SSP-01（DECLARE 段吞并）→ T-SSP-02（CASE 计数隔离）→ 用例先�
   → [按覆盖度决定是否 T-SSP-03 栈式升级] → §五 验证 → 收口
 ```
 
-## 八、实施记录（实施后回填）
+## 八、实施记录（2026-09-22 回填）
 
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
-| T-SSP-01 | （实施后填） | 吞并边界的实现形态与复用点须回填 |
-| T-SSP-02 | （实施后填） | CASE 隔离的落点与既有 BEGIN/END 用例影响须回填 |
-| T-SSP-03 | （实施后填） | 是否升级为栈式、依据须回填 |
-| T-SSP-04 | （实施后填） | 五组用例先红后绿两次读数、门禁读数须回填 |
+| T-SSP-01 | （本任务未提交，待主流程统一提交；分支 t-round10） | **实现形态**：新增两态 `declareSection`（声明段）+ `bodyBeginExpected`（声明段边界）。语句首 `DECLARE`（`isStatementHead` 判定，跳过前导空白与注释）且 `hasMatchingEndAhead` 为真 → 进入声明段，段内顶层 `;` 不切分；声明段边界（`DECLARE` 之后或段内顶层 `;` 之后）的 `BEGIN` 即块主体起始，退出声明段后按常规块计数，主体 `END` 使 blockDepth 归零、后续顶层 `;` 恢复切分。**复用点**：`hasMatchingEndAhead`（既有前视模式）、`firstKeywordOf`（语句首判定复用其跳过注释规则）。**吞并边界＝深度归零处，不用「末个 END」**：实测 `DECLARE … END; BEGIN … END;` 为 2 条，取末个 END 会并成 1 条；用例 `PLSQL_声明段后接BEGIN块不误并` 钉住。**改前实测**（先红读数）：含局部例程 2 段、前向声明 2 段、`DECLARE…END; SELECT 1;` 3 段。**偏离**：计划 §1.2 推演「切成 3 段」实测为 **2 段**——机制更正见下「前提 1」。 |
+| T-SSP-02 | 同上 | **落点**：`flushWord()`（主循环）与 `beginEndBalance()`（T-SQL IF 批配对，服务 `mergeControlFlowBatches`）同口径改造——`CASE` 自增 `caseDepth`，`END` 时 `caseDepth>0` 则递减 CASE 层而不动 blockDepth；语句边界（顶层 `;` 切分点、自定义界符切分点）重置 caseDepth，防截断 CASE 的层数泄漏到后续语句。**`END CASE` 必须显式识别双词终结形态**（新增词级前视 `nextWordIs`）：END 前视到 CASE 词则整体按 CASE 终结符消费、尾随 CASE 不再开新层。**反向验证**：临时移除该特判 → `PLSQL_CASE块后独立语句不误并` 由 2 段变 **1 段**（块尾 END 被 CASE 层吞掉，后续 `SELECT 1;` 一并吞入），比改前更糟，违反「宁碎不吞错」；已还原（工作树无残留）。**既有 BEGIN/END 用例影响：零**（6 例全绿）。 |
+| T-SSP-03 | 同上 | **结论：不升级为栈式**。依据：T-SSP-01+02 落地后新增 13 例全绿（含局部例程、前向声明、CASE 裸 END 与 END CASE 两种收尾、多匿名块串接、吞并边界、自定义界符下的匿名块），`declareSection + bodyBeginExpected + caseDepth` 三态已覆盖「声明段—主体」与「CASE 层」两个维度，无用例逼出 Object/Declaration/RoutineHeader 归属需求；栈式实现（对齐 DBX `OraclePlSqlScope`）留作后续，避免为不存在的语法面过度设计。 |
+| T-SSP-04 | 同上 | **先红后绿两次读数**（`gradlew.bat testFast --tests "*SqlStatementSplitterTest*"`）：改前 **61 例 8 失败**——`PLSQL_匿名块含局部例程整段一条` 2 段、`PLSQL_前向声明不切碎` 2 段、`PLSQL_匿名块后独立语句不误并` 3 段、`PLSQL_声明段后接BEGIN块不误并` 3 段、`PLSQL_块内CASE表达式不误判块尾` 3 段、`PLSQL_块内CASE语句END_CASE不误判块尾` 3 段、`PLSQL_CASE块后独立语句不误并` 4 段、`TSQL_批内CASE不误判配对失衡` 2 段；实施后 **64 例 0 失败**。**多匿名块串接的期望段数以改前实测钉住＝2 条**（非先红组，见下「偏离 2」）。**加宽读数**：同命令加 `--tests "*SqlTypeClassifierTest*" --tests "*ExecutionTimeoutGuardTest*"`（另两个 testFast 桶内的切分器消费方）139 例 0 失败。**testShards 未跑**——跑时点有 7 个活跃并行任务，按并行红线禁止默认沙盒全量（且派单明确「全量由主流程统一跑」），故验收 ④ 登记为未验证。**文档偏离**：本任务只回填本节，CHANGELOG / 变更记录 / 第十轮报告 §8 #52 交 T-Round10-08。 |
+
+### 8.1 待验证前提的实测结论
+
+1. **多个匿名块串接的吞并边界**——实测改前即 **2 段**（= 计划推演值），该用例不是先红组。计划 §1.2 对「一条合法匿名块被切成 3 段」的推演**证伪**：实测 2 段。机制更正——`beginModeEnabled` 永不复位只挡「前视武装」，而 `flushWord()` 在 armed 后对 BEGIN/END **无条件**计数，故局部例程 `END;` 之后外层 `BEGIN` 仍能把 blockDepth 抬回 1，外层块不碎，碎的是 DECLARE 声明段本身。
+2. 「我方用户确实会用到 Oracle 匿名块」——**未验证**（无真机/用户侧证据）；§五-1 的 DBX MCP 真机走查未做（本任务为纯函数改动，真机 Oracle 走查登记为未验证）。
+3. **JDBC 直连是否接受 `/` 终结符**——未做 `/` 支持（计划默认不做），未验证。
+4. **`CASE` 两种收尾可否统一处理**——**证伪**：不能靠单一计数器统一处理，必须显式识别 `END CASE` 双词形态（反向验证读数见 T-SSP-02 行）；不需要按方言分流，词法前视即可。
+
+### 8.2 与派单/计划的偏离
+
+1. **验收 ① 的「五组用例改前必红」不成立**：多匿名块串接组改前即绿（2 段＝期望），回归组按定义不红；先红组为 DECLARE 段（含局部例程）、前向声明、块内 CASE（裸 END 与 `END CASE` 各一例）、吞并边界，共 8 例。
+2. **验收 3/4 落点不在写集**：`LogToSqlPanelExecuteTest.kt`（平台桶）与 `SqlTypeClassifierTest.kt` 的既有断言不在本任务写集内，按派单降级为「执行链与分类行为如实登记，不新增断言」——切分行为面已由 `SqlStatementSplitterTest` 覆盖，且 `consistencySamples()` 已加入匿名块样例，三委托方（LogToSqlPanel / SqlTypeClassifier / SqlToJavaConverter）与单实现同口径由既有委托一致用例守护。
+3. **文档清单**：计划 §三 T-SSP-04 的「CHANGELOG `[Unreleased]` + 变更记录行 + 第十轮报告 §8 #52 备注」按派单删除，仅回填本节。
+4. **分支口径**：计划写「自 master 拉任务分支 t-sql-splitter-plsql」，实际按派单在当前 `t-round10`（HEAD `d3ef121`）上实施，未新建任务分支。
+5. **环境**：读数期间共享 `build/` 与 `~/.gradle` 转换缓存被 7 个并行任务并发写入（testFast 多次 `java.io.EOFException` / `Unable to delete ... transforms` / 转换锁超时），最终读数以临时 init script 把构建目录重定向到仓库外取得（脚本位于系统临时目录，不入仓库、不改工作树）。
 
 **待验证前提（实施者先证伪再动手）**：
 

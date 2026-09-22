@@ -273,6 +273,8 @@ class SqlStatementSplitterTest {
         "BEGIN\n  SELECT 1;\nEND;\nSELECT 2;",
         // T-DA-02：DELIMITER 指令形态进一致性样例池（三委托方与单实现同口径）
         "DELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1; END$$\nDELIMITER ;\nSELECT 2;",
+        // T-SSP-01：Oracle 匿名块形态进池（三委托方执行链/分类链与单实现同口径）
+        "DECLARE\n  PROCEDURE p IS\n  BEGIN\n    NULL;\n  END;\nBEGIN\n  p;\nEND;",
     )
 
     // ======================== T-SQL 控制流批不可拆（T-TsqlBatchSplit / O-28） ========================
@@ -370,6 +372,115 @@ class SqlStatementSplitterTest {
         assertTrue(split(script)[0].startsWith("MERGE INTO t"))
     }
 
+    // ======================== Oracle PL/SQL 匿名块（T-SqlSplitterPlsql / O-47） ========================
+
+    /**
+     * DECLARE 声明段吞并（T-SSP-01）：局部例程体、前向声明与块主体同属**一条**语句。
+     *
+     * 改前缺陷形态（实测 2 段）：`beginModeEnabled` 只挡「前视武装」，而 `flushWord()` 在
+     * armed 后对 BEGIN/END 无条件计数——局部例程的 `END;` 把 blockDepth 归 0，紧随的 `;`
+     * 即切段（外层块因 armed 后无条件计数仍是完整一段，故碎成 2 段而非 3 段）。
+     */
+    @Test
+    fun `PLSQL_匿名块含局部例程整段一条`() {
+        val sql = "DECLARE\n  PROCEDURE p IS\n  BEGIN\n    NULL;\n  END;\nBEGIN\n  p;\nEND;"
+        val parts = split(sql)
+        assertEquals("声明段与块主体同属一条语句", 1, parts.size)
+        assertEquals(
+            "块内 `;` 原样保留、语句界符丢弃",
+            "DECLARE\n  PROCEDURE p IS\n  BEGIN\n    NULL;\n  END;\nBEGIN\n  p;\nEND",
+            parts[0],
+        )
+    }
+
+    /** 前向声明 `PROCEDURE p IS;`（无 BEGIN 体）——声明段内顶层 `;` 不切分（T-SSP-01）。 */
+    @Test
+    fun `PLSQL_前向声明不切碎`() {
+        val sql = "DECLARE\n  PROCEDURE p IS;\nBEGIN\n  p;\nEND;"
+        assertEquals("前向声明的 `;` 是声明分隔符而非语句界符", 1, split(sql).size)
+    }
+
+    /** 声明段吞并边界＝深度归零处（主体 `END`），不是「末个 END」——后接独立语句不得误并。 */
+    @Test
+    fun `PLSQL_匿名块后独立语句不误并`() {
+        val parts = split("DECLARE\n  x NUMBER;\nBEGIN\n  NULL;\nEND;\nSELECT 1;")
+        assertEquals(listOf("DECLARE\n  x NUMBER;\nBEGIN\n  NULL;\nEND", "SELECT 1"), parts)
+    }
+
+    /** 匿名块后紧接第二个匿名块（DECLARE 起头 + 裸 BEGIN 起头）——两条，不得并成一条。 */
+    @Test
+    fun `PLSQL_声明段后接BEGIN块不误并`() {
+        val parts = split("DECLARE\n  x NUMBER;\nBEGIN\n  NULL;\nEND;\nBEGIN\n  SELECT 2;\nEND;")
+        assertEquals("两个匿名块各自成条", 2, parts.size)
+        assertTrue("第二块保留自身 BEGIN", parts[1].startsWith("BEGIN"))
+    }
+
+    /** 裸 BEGIN 块在前、DECLARE 匿名块在后——块感知已武装仍须认领声明段（两条）。 */
+    @Test
+    fun `PLSQL_BEGIN块后接声明段块不误并`() {
+        val parts = split("BEGIN\n  NULL;\nEND;\nDECLARE\n  x NUMBER;\nBEGIN\n  NULL;\nEND;")
+        assertEquals("两条各自成条", 2, parts.size)
+        assertTrue("第二条保留 DECLARE 起头", parts[1].startsWith("DECLARE"))
+    }
+
+    /** 多个匿名块串接（裸 BEGIN 起头）——两条；守卫用例（改前即绿，钉死「不误并不误碎」）。 */
+    @Test
+    fun `PLSQL_多个匿名块串接不误并不误碎`() {
+        val parts = split("BEGIN SELECT 1; END;\nBEGIN SELECT 2; END;")
+        assertEquals("两个匿名块两条", 2, parts.size)
+        assertEquals("BEGIN SELECT 1; END", parts[0])
+        assertEquals("BEGIN SELECT 2; END", parts[1])
+    }
+
+    /** 无配对 `END` 的 `DECLARE`（MySQL 声明语句形态）——不武装声明段，按顶层切分原样（保守）。 */
+    @Test
+    fun `PLSQL_无配对END的DECLARE按顶层切分原样_保守`() {
+        assertEquals(listOf("DECLARE\n  x NUMBER", "SELECT 1"), split("DECLARE\n  x NUMBER;\nSELECT 1;"))
+    }
+
+    /**
+     * 块内 `CASE … END`（裸 END 收尾，T-SQL / PL/SQL CASE 表达式）——CASE 层隔离（T-SSP-02）。
+     *
+     * 改前缺陷：CASE 的 `END` 被当块尾递减 → 块内首个 CASE 后的 `;` 即切段（实测 3 段）。
+     */
+    @Test
+    fun `PLSQL_块内CASE表达式不误判块尾`() {
+        val sql = "BEGIN\n  SELECT CASE WHEN a THEN 1 ELSE 2 END;\n  SELECT 2;\nEND;"
+        assertEquals("CASE 的 END 不递减块深度", 1, split(sql).size)
+    }
+
+    /**
+     * 块内 `CASE … END CASE`（PL/SQL CASE 语句双词收尾）——尾随 `CASE` 词不得再开新层。
+     *
+     * 改前缺陷：`END` 递减块深度 → 3 段；且若只做「CASE 自增 / END 自减」的朴素计数，
+     * `END CASE` 的尾随 CASE 会把层数补回，块尾 END 被吞 → 反噬成 1 段并把后续语句并进来
+     * （故须显式识别双词终结形态）。
+     */
+    @Test
+    fun `PLSQL_块内CASE语句END_CASE不误判块尾`() {
+        val sql = "BEGIN\n  CASE WHEN x THEN y;\n  ELSE z;\n  END CASE;\n  NULL;\nEND;"
+        assertEquals("END CASE 整体作为 CASE 终结符消费", 1, split(sql).size)
+    }
+
+    /** `END CASE` 块后接独立语句——CASE 层隔离不得反噬成吞并（保守原则：宁碎不吞错）。 */
+    @Test
+    fun `PLSQL_CASE块后独立语句不误并`() {
+        val parts = split("BEGIN\n  CASE WHEN x THEN y; ELSE z; END CASE;\n  NULL;\nEND;\nSELECT 1;")
+        assertEquals("块一条 + 独立语句一条", 2, parts.size)
+        assertEquals("SELECT 1", parts[1])
+    }
+
+    /**
+     * T-SQL 批内 `CASE … END` 不参与 `beginEndBalance` 配对（T-SSP-02 同步改造）：
+     * 截断批（BEGIN 无配对 END）继续吞后续段，维持「宁整勿碎」。
+     */
+    @Test
+    fun `TSQL_批内CASE不误判配对失衡`() {
+        val parts = split("IF @x = 1 BEGIN SELECT CASE WHEN a THEN 1 ELSE 2 END; DELETE FROM t2")
+        assertEquals("CASE 的 END 不得充当批内块尾配对", 1, parts.size)
+        assertTrue(parts[0].contains("DELETE FROM t2"))
+    }
+
     // ======================== DELIMITER 指令感知（T-DA-02 / O-39） ========================
 
     /** 含 `DELIMITER $$` 的存储过程脚本（MySQL 客户端粘贴典型形态）。 */
@@ -452,6 +563,25 @@ class SqlStatementSplitterTest {
         val parts = split("SELECT 1\nDELIMITER $$")
         assertEquals(1, parts.size)
         assertTrue(parts[0], parts[0].contains("DELIMITER"))
+    }
+
+    @Test
+    fun `DELIMITER_过程体内DECLARE不误开声明段`() {
+        // T-SSP-01 反向边界：过程体 BEGIN 内的 DECLARE（MySQL 局部变量声明）在 blockDepth>0，
+        // 不触发声明段吞并——过程体仍一条
+        val parts = split(
+            "DELIMITER $$\nCREATE PROCEDURE p()\nBEGIN\n  DECLARE x INT;\n  SELECT 1;\nEND$$\nDELIMITER ;\nSELECT 2;",
+        )
+        assertEquals("过程体一条 + 复位后普通语句一条", 2, parts.size)
+        assertTrue(parts[0], parts[0].contains("DECLARE x INT;"))
+    }
+
+    @Test
+    fun `DELIMITER_自定义界符下的匿名块整段一条`() {
+        // T-SSP-01：声明段在自定义界符生效期同样成立（`$$` 才是语句终结符，段内 `;` 不切分）
+        val parts = split("DELIMITER $$\nDECLARE\n  x NUMBER;\nBEGIN\n  NULL;\nEND$$\nDELIMITER ;\nSELECT 1;")
+        assertEquals("匿名块一条 + 复位后普通语句一条", 2, parts.size)
+        assertTrue(parts[0], parts[0].startsWith("DECLARE"))
     }
 
     @Test

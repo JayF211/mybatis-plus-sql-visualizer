@@ -11,6 +11,7 @@ import cn.song.mybatisplus.visualizer.model.FillClause
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SelectStatement
+import cn.song.mybatisplus.visualizer.sql.ExplainGate
 import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
@@ -1349,6 +1350,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * M37.2：真实 EXPLAIN——按当前方言把预览 SQL 包装为 EXPLAIN 语句，走执行链提交原生控制台。
      * 结果展示与普通执行一致（内嵌控制台结果 Tab）；静态性能规则标注保留在顶部 meta 区，同屏对照。
      * EXPLAIN 归免确认类（[SqlTypeClassifier]），无 DML 二次确认；方言不支持（null）→ 提示降级。
+     *
+     * T-ExplainChainHardening T-ECH-01（D1=A 严格判定）：包装前另过 [ExplainGate] 首关键字门
+     * （门在 [cn.song.mybatisplus.visualizer.sql.Dialect.renderExplainStatementIdempotent] 的幂等
+     * 短路之后）——非查询形态（DML/DDL/`SELECTED`/多语句脚本）**不包装、不执行**，给明确提示。
+     * null 的两种成因按文案分派：可 EXPLAIN 却拿不到语句 = 方言不支持；否则 = 首词不是查询
+     * （套用「方言暂不支持」会把非查询说成方言问题，属不诚实降级）。
      */
     internal fun explainSql() {
         val proj = project ?: return
@@ -1362,10 +1369,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // T-UiNative T-UN-02：方言不支持提示改轻通知（原模态弹窗——纯告知无需打断）
             if (!ApplicationManager.getApplication().isUnitTestMode) {
                 runCatching {
+                    val explainable = ExplainGate.isExplainableSource(sql)
                     Notification(
                         NOTIFICATION_GROUP_ID,
                         MpSqlVisualizerBundle.message("panel.explain"),
-                        MpSqlVisualizerBundle.message("panel.explain.unsupported", dialect.name),
+                        if (explainable) {
+                            MpSqlVisualizerBundle.message("panel.explain.unsupported", dialect.name)
+                        } else {
+                            MpSqlVisualizerBundle.message(
+                                "panel.explain.notQuery",
+                                ExplainGate.firstKeyword(sql) ?: "",
+                            )
+                        },
                         NotificationType.INFORMATION,
                     ).notify(proj)
                 }

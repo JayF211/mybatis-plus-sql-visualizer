@@ -77,6 +77,79 @@ class ExplainIndexAdvisorTest {
         assertTrue(ExplainIndexAdvisor.advise("PostgreSQL", listOf("QUERY PLAN"), rows).isEmpty())
     }
 
+    // ---------- PG JSON 形态（T-ECH-03：PG/KingBase 渲染的是 FORMAT JSON，非文本树） ----------
+
+    /**
+     * 实测形态（真 PG 18.3，DBX 只读实跑 `EXPLAIN (FORMAT JSON, VERBOSE) SELECT * FROM
+     * information_schema.tables`）：**单列**（列名 `QUERY PLAN`）**紧凑无空格** JSON 文本，
+     * 顺序扫描节点的键为 `"Node Type":"Seq Scan"` + `"Relation Name"` + `"Plan Rows"`——
+     * 文本树正则 `Seq Scan on (\w+)` 在该形态上永不命中（本任务 P1 真缺陷）。
+     * 与解析无关的 `Output` 数组已略（字段形态与键名保持实测原样）。
+     */
+    private val pgJsonSmallScan = listOf(
+        listOf(
+            """[{"Plan":{"Node Type":"Hash Join","Join Type":"Left","Startup Cost":58.02,""" +
+                """"Total Cost":108.00,"Plan Rows":123,"Plan Width":608,"Plans":[""" +
+                """{"Node Type":"Hash Join","Parent Relationship":"Outer","Join Type":"Inner",""" +
+                """"Startup Cost":2.00,"Total Cost":42.60,"Plan Rows":123,"Plan Width":141,"Plans":[""" +
+                """{"Node Type":"Seq Scan","Parent Relationship":"Outer","Relation Name":"pg_class",""" +
+                """"Schema":"pg_catalog","Alias":"c","Startup Cost":0.00,"Total Cost":40.08,""" +
+                """"Plan Rows":184,"Plan Width":77}]}]}}]""",
+        ),
+    )
+
+    /** 同上形态，仅把顺序扫描节点的 `"Plan Rows"` 提到阈值之上（可触发判定）。 */
+    private val pgJsonBigScan = listOf(
+        listOf(
+            """[{"Plan":{"Node Type":"Hash Join","Plan Rows":123,"Plans":[""" +
+                """{"Node Type":"Seq Scan","Relation Name":"pg_class","Schema":"pg_catalog",""" +
+                """"Plan Rows":300000,"Plan Width":77}]}}]""",
+        ),
+    )
+
+    @Test
+    fun testPG_JSON形态_顺序扫描超阈提示() {
+        val hints = ExplainIndexAdvisor.advise("PostgreSQL", listOf("QUERY PLAN"), pgJsonBigScan)
+        assertEquals(1, hints.size)
+        assertEquals("SEQ_SCAN", hints[0].rule)
+        assertEquals("pg_class", hints[0].target)
+        assertTrue(hints[0].advice.contains("300000"))
+    }
+
+    @Test
+    fun testPG_JSON形态_真实小表顺序扫描不提示() {
+        // 实测真库形态（Plan Rows=184 < 阈值）：解析认得形态但按阈值降噪，不出建议
+        assertTrue(ExplainIndexAdvisor.advise("PostgreSQL", listOf("QUERY PLAN"), pgJsonSmallScan).isEmpty())
+    }
+
+    @Test
+    fun testPG_JSON形态_空白不敏感_金仓多行美化同判() {
+        // KingbaseES V8 实测返回多行美化 JSON（冒号后带空格）——按空白敏感的字符串匹配会在该侧失效
+        val pretty = listOf(
+            listOf(
+                "[\n" +
+                    "  {\n" +
+                    "    \"Plan\": {\n" +
+                    "      \"Node Type\": \"Seq Scan\",\n" +
+                    "      \"Relation Name\": \"ceshi\",\n" +
+                    "      \"Plan Rows\": 42000\n" +
+                    "    }\n" +
+                    "  }\n" +
+                    "]",
+            ),
+        )
+        val hints = ExplainIndexAdvisor.advise("KingBase（人大金仓）", listOf("QUERY PLAN"), pretty)
+        assertEquals(1, hints.size)
+        assertEquals("SEQ_SCAN", hints[0].rule)
+        assertEquals("ceshi", hints[0].target)
+    }
+
+    @Test
+    fun testPG_JSON形态_无顺序扫描节点不提示() {
+        val json = listOf(listOf("""[{"Plan":{"Node Type":"Result","Plan Rows":1}}]"""))
+        assertTrue(ExplainIndexAdvisor.advise("PostgreSQL", listOf("QUERY PLAN"), json).isEmpty())
+    }
+
     // ---------- 降级与零差异 ----------
 
     @Test

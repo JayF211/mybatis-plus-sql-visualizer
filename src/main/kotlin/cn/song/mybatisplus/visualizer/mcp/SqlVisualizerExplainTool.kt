@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.mcp
 
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
+import cn.song.mybatisplus.visualizer.sql.ExplainGate
 import com.intellij.mcpserver.annotations.McpDescription
 import com.intellij.mcpserver.annotations.McpTool
 import com.intellij.mcpserver.annotations.McpToolHintValue
@@ -112,7 +113,21 @@ class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
                 ?.let { Class.forName("com.intellij.database.model.RawConnectionConfig").getMethod("getUrl").invoke(it) as? String }
         }.getOrNull()
         val dialectName = McpDialectDetector.resolve(dialect, url)
-        val explainSql = DialectRegistry.byName(dialectName).renderExplainStatement(selectSql.trim().removeSuffix(";"))
+        val normalized = selectSql.trim().removeSuffix(";")
+        // T-ExplainChainHardening T-ECH-01：被包语句首关键字门——与 IDE 面板链
+        // （SqlPreviewPanel.explainSql → Dialect.renderExplainStatementIdempotent）**同链调用**，
+        // 两链行为不得分叉。MCP 侧 McpSelectGuard 的结构白名单已 fail-closed 拒非 SELECT，
+        // 本门是第二道（结构判定与词法判定各自独立，任一处收紧都不至于让另一链静默放宽）。
+        if (!ExplainGate.isExplainableSource(normalized)) {
+            throwExpected(
+                McpToolErrors.code(
+                    McpToolErrors.SQL_BLOCKED,
+                    "selectSql is not EXPLAIN-able: first keyword " +
+                        "'${ExplainGate.firstKeyword(normalized) ?: "?"}' is not one of SELECT/VALUES/TABLE/WITH.",
+                ),
+            )
+        }
+        val explainSql = DialectRegistry.byName(dialectName).renderExplainStatement(normalized)
             ?: throwExpected(
                 McpToolErrors.code(
                     McpToolErrors.DIALECT_UNSUPPORTED,
