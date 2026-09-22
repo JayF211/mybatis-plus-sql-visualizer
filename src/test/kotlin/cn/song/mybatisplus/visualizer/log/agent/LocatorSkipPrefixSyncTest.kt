@@ -12,8 +12,15 @@ import java.io.File
  *
  * 背景：agent 侧 `StackLocator` 的 KDoc 曾自称「框架帧过滤规则与 IDE 侧 `CallerSourceLocator` 对齐」，
  * 实测**失实** —— agent 侧另收驱动族 / 连接池 / 数据层插件族二十余项，IDE 侧只收 JDK / 平台 / 本插件 /
- * MyBatis 系。两侧还是**独立两份实现**（agent 禁依赖 IDE 类），且**在不同时机取栈**（IDE 侧拦截器在
+ * MyBatis 系。两侧是**独立两份实现**（agent 禁依赖 IDE 类），且**在不同时机取栈**（IDE 侧拦截器在
  * SQL 生成期、agent 在 JDBC 执行期），故同一次执行的两处位置**可以不同** —— 两侧 KDoc 已改为事实描述。
+ *
+ * **T-AgentResiduals R1（2026-09-22）**：IDE 侧按 agent 侧 `FRAME_SKIP_PREFIXES` **逐项补齐**（原 15 项 →
+ * 与 agent 侧同集），消除「同一执行两侧给出不同位置（标记行指到框架帧）」这条残留；两侧仍各自独立
+ * （IDE 侧绝不引 agent 代码——它是 agent 缺席时的降级主路径），故本守卫继续以**源码文本扫描 + 差异登记**
+ * 锁定：`AGENT_ONLY` 现为**空集**（差异只剩各自的自身包，见 `IDE_ONLY`）。空集不等于守卫失效——
+ * 任一侧新增/删除前缀而未同步另一侧，`agent - ide` / `ide - agent` 立即非空即转红；提取有效性另有
+ * 量级与锚点自检（防空绿）。
  *
  * 本测试以源码文本扫描锁住差异（形态照 [AgentProtocolSyncTest] 的跨侧扫描）：
  *  1. 两侧共同前缀集合须互为子集且含锚点（防「两边都提取为空」的空绿）；
@@ -90,6 +97,45 @@ class LocatorSkipPrefixSyncTest {
         assertTrue("同族先例 com.github.benmanes. 不得丢失", "com.github.benmanes." in agent)
     }
 
+    /**
+     * T-AgentResiduals R1 补齐锚点：驱动族 / 连接池 / AOP / 数据层插件族**两侧都要在**。
+     *
+     * 为什么单独一条（而不是只靠 `AGENT_ONLY` 空集）：`AGENT_ONLY` 是 `agent - ide` 的期望值，
+     * 它只证明「两侧一致」，证明不了「一致在**哪一套**上」——有人把两侧**同时**删空（或 IDE 侧整段
+     * 退回 15 项而 agent 侧也同步回退）时差集同样为空。本用例按 R1 的实际交付面逐族点名，
+     * 把这些前缀钉在两侧：删任一侧即红。
+     */
+    @Test
+    fun R1补齐锚点_驱动族连接池AOP与数据层插件族两侧都在() {
+        val agent = agentSkipPrefixes(agentSource())
+        val ide = startsWithLiterals(functionBody(ideSource(), "isFrameworkFrame"))
+        val expected = listOf(
+            // 驱动家族
+            "com.mysql.", "org.mariadb.", "org.postgresql.", "org.h2.", "org.hsqldb.",
+            "org.sqlite.", "com.microsoft.sqlserver.", "oracle.jdbc.", "dm.jdbc.",
+            "com.gbasedbt.", "com.kingbase8.",
+            // 连接池
+            "com.alibaba.druid.", "com.mchange.", "org.apache.commons.dbcp2.", "org.apache.tomcat.",
+            // AOP / 字节码
+            "net.sf.cglib.", "org.aspectj.", "org.objectweb.asm.", "org.jboss.",
+            // 数据层插件 / 基础设施补齐
+            "com.github.pagehelper.", "org.mybatis.", "net.sf.jsqlparser.",
+            "com.alibaba.", "org.apache.", "com.google.", "com.fasterxml.",
+            "io.netty.", "io.lettuce.", "redis.clients.", "io.micrometer.", "io.seata.",
+            "org.slf4j.", "ch.qos.", "org.ehcache.", "net.sf.ehcache.", "com.github.benmanes.",
+            "org.quartz.", "com.netflix.", "org.elasticsearch.", "com.mongodb.",
+            // JDK 内部 / 代理
+            "com.sun.", "jdk.internal.", "com.sun.proxy.", "\$Proxy",
+        )
+        for (p in expected) {
+            assertTrue("R1 补齐项 $p 应同时存在于 agent 侧（实为 ${agent.size} 项）", p in agent)
+            assertTrue("R1 补齐项 $p 应同时存在于 IDE 侧（实为 ${ide.size} 项）", p in ide)
+        }
+        // 同集口径的量化锚点：R1 后两侧共同前缀应达 57 项量级（IDE 侧 = 共同集 + 自身包 1 项）
+        assertEquals("R1 后 IDE 侧应只比 agent 侧多自身包一项", 1, ide.size - agent.intersect(ide).size)
+        assertTrue("R1 后共同前缀应达 55 项以上（实测两侧同集），实为 ${agent.intersect(ide).size}", agent.intersect(ide).size >= 55)
+    }
+
     // ---------- 源码提取 ----------
 
     /** 取 Kotlin 函数声明（到下一个函数声明为止）的源码片段。 */
@@ -141,34 +187,28 @@ class LocatorSkipPrefixSyncTest {
         private val CONTAINS_LITERAL = Regex("contains\\(\"((?:[^\"\\\\]|\\\\.)*)\"\\)")
 
         /**
-         * IDE 侧独有前缀（登记清单，勿凭印象增删）。仅一项 = 本插件自身包前缀；
-         * agent 侧对应项是它自己的包前缀 `cn.song.mybatisplus.sqlvis.`（字符串不同故各记一条，
-         * 语义等价 = 各自跳过自身模块帧）。
+         * IDE 侧独有前缀（登记清单，勿凭印象增删）。**只有一项** = 本插件自身包前缀；
+         * agent 侧对应项是它自己的包前缀 `cn.song.mybatisplus.sqlvis.` —— 后者 T-AgentResiduals R1
+         * 起已**两侧都有**（IDE 侧运行在应用 JVM 里时 agent 帧同样在栈上），故不再计入任一独有清单。
          */
         private val IDE_ONLY = setOf("cn.song.mybatisplus.visualizer.")
 
         /**
-         * agent 侧独有前缀（登记清单）：驱动族 / 连接池 / 数据层插件族 —— 这些帧在 agent 的取栈点
-         * （JDBC 执行期，含 MyBatis 插件链与自研汇聚门面）上真实出现，而 IDE 侧取栈点（SQL 生成期）
-         * 不经它们。**新增/删除任一项都必须同步本清单**，否则本守卫转红（差异必须被登记，不能静默漂移）。
+         * agent 侧独有前缀（登记清单）：**R1 起为空集** —— IDE 侧已按 agent 侧逐项补齐，两侧同集
+         * （唯一差异是各自的自身包，见 [IDE_ONLY]）。
+         *
+         * **空集不代表守卫失效**：本清单是 `agent - ide` 的**期望值**，agent 侧新增前缀而 IDE 侧未同步
+         * 时该差集立即非空、与空集不等即转红；另有共同集合量级 + 锚点自检防空绿。
+         * 若将来确实需要某一侧独有（如某族帧只在一侧取栈点出现），在此登记并写明依据——
+         * 差异必须被登记，不能静默漂移。
          */
-        private val AGENT_ONLY = setOf(
-            "com.sun.", "jdk.internal.", "cn.song.mybatisplus.sqlvis.",
-            "com.mysql.", "org.mariadb.", "org.postgresql.", "org.h2.", "org.hsqldb.",
-            "org.sqlite.", "com.microsoft.sqlserver.", "oracle.jdbc.", "dm.jdbc.",
-            "com.gbasedbt.", "com.kingbase8.",
-            "com.alibaba.druid.", "com.mchange.", "org.apache.commons.dbcp2.", "org.apache.tomcat.",
-            "org.aspectj.", "net.sf.cglib.", "org.objectweb.asm.", "org.jboss.",
-            "com.github.pagehelper.", "org.mybatis.", "net.sf.jsqlparser.",
-            "com.alibaba.", "org.apache.", "com.google.", "com.fasterxml.",
-            "io.netty.", "io.lettuce.", "redis.clients.", "io.micrometer.", "io.seata.",
-            "org.slf4j.", "ch.qos.", "org.ehcache.", "net.sf.ehcache.", "com.github.benmanes.",
-            "org.quartz.", "com.netflix.", "org.elasticsearch.", "com.mongodb.",
-        )
+        private val AGENT_ONLY = emptySet<String>()
 
         /**
          * 示例模板相对插件侧**刻意缺失**的前缀：本插件自身包 —— 模板拷进用户工程后包名不同，
          * 它用 `cn == javaClass.name` 的自身帧跳过替代（见模板内注释）。
+         * 注意 agent 自身包（`cn.song.mybatisplus.sqlvis.`）**不在**此列：模板运行在应用 JVM 里，
+         * agent 帧同样在栈上，故模板与插件侧一样收它。
          */
         private val TEMPLATE_ABSENT_FROM_PLUGIN_SIDE = setOf("cn.song.mybatisplus.visualizer.")
     }
