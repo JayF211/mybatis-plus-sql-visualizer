@@ -84,6 +84,10 @@ handleInbound(cmd, readPayload(in, cmd));       // readPayload 内部才是 in.r
 | 「新会话按当前监听态校正」 | `AgentManager.kt:511-515`（attach 链）、`:837-840`（premain 回连） | 同样只保证「发出」；本次现场正是这条路径在 08:26:39 发过 CONFIG 而应用侧未生效 |
 | 「帧格式守卫」 | `src/test/.../agent/AgentProtocolSyncTest.kt:59-68` | 只断言**出站**写形态（`writeInt(body.length)` / `out.writeByte(cmd)`）与「源码里出现过 handleInbound」，**对入站读顺序完全不可见**——典型空绿。应用侧唯一相关测试 `SourceJumpFunnelTest` 只调 `extractSkipPrefixes(payload)`，绕开了整层拆帧 |
 
+> **2026-09-22 追加**：该表还该再补两行——`AgentListenSyncTest`（IDE 侧）与 `HeartbeatRhythmTest`（agent 侧）
+> 都起了**真 socket**、读了**真帧**，读序也都正确，但一个只验 IDE 自己的写形态、一个只验 agent 的**出站**帧，
+> **都没走 agent 的入站读路径**。这两条最容易被误当成「双端往返已覆盖」，是本缺陷长期绿灯的另一半解释。详见 §十.3。
+
 ### 4. 为什么现在才暴露
 
 - 2026-09-18 `T-AgentListenSync`（`a5e27de`）才把「监听开关 → 应用侧采集」这条联动接上；**它只做了 IDE 侧下发**，
@@ -185,7 +189,7 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 | # | 前提 | 现状与验证方式 |
 |---|---|---|
 | P-1 | 应用侧 `disabled` 在 08:26:39 之后确实仍为 false（即 CONFIG 从未生效） | **行为已证**（08:31:00 仍投递事件），但应用侧无直接日志。T-02 落地后可直接读到；实施时先用一个临时探针（应用侧 CONFIG 解析失败计数）复现一次 |
-| P-2 | 该错位是本轮现象的唯一原因，而非另有第二条投递路径 | 帧模拟 + 全天无 startCapture + `databaseName` 唯一生产者三项互证；实施前用 T-05 的环回用例在当前 master 上跑一次（应红）钉住 |
+| P-2 | 该错位是本轮现象的唯一原因，而非另有第二条投递路径 | **已证（2026-09-22 受控实验，见 §十.2）**：真 `SenderLoop` 两臂对照，IDE 实际写序下 `skipPrefixes`/`disabled`/`desensitize` 三键全不生效，正确写序下三键全生效——唯一变量为字节序，不存在第二条投递路径。原「实施前用 T-05 环回用例跑一次（应红）」的要求已由该实验满足 |
 | P-3 | 应用侧队列补投（T-01b）在当前现场是否也发生过 | 未观测到（现场条目与请求时刻一一对应）。按「先证伪再动手」处理：T-05 的用例里加一条队列补投断言 |
 | P-4 | 修复后 `desensitize` 方向的用户语义（默认关＝采集真实值） | 代码可判（`PluginSettings.kt:473-476`），但**从未真机验证过打码/不打码的实际效果**——验收需真机看一条含敏感形态参数的 SQL |
 | P-5 | `SqlCaptureGate.paused`（agent 在线时桥让位）在 agent 停采后是否会把控制台通道还回来 | 代码可判（`:945` 按在线态置位），但「agent 在线但已停采」这一新常态下桥是否产出，需在 T-01 修复后真机确认（否则会从「误采集」变成「零捕获」） |
@@ -237,6 +241,77 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 | `src/test/kotlin/.../log/agent/AgentProtocolSyncTest.kt` | T-05 补入站断言 + 空绿说明 |
 | `sub-projects/sql-visualizer-agent/src/test/java/...`（新增 2 个测试类） | T-05 |
 | `CHANGELOG.md` / `docs/变更记录.md` | 收口时按三处同步纪律补 `[Unreleased]` |
+
+## 十、补充证据与实施约束（2026-09-22 独立复核会话追加）
+
+> 追加来源：另一会话就「用户按设置登记帧过滤前缀后跳转仍落 `com.corp.engine.DmlRepository#query`」独立排障，
+> 结论与本源同一根因（§二.1）。以下全为**实测读数**，非推演；用于钉死 §五 P-2 并给实施者两条约束。
+
+### 10.1 第二条独立复现入口（症状面更广：不止「关不掉」，还有「开了不生效」）
+
+| 报障入口 | 用户可感症状 | 复现载体 |
+|---|---|---|
+| 本源（§一） | 开关关着仍在捕获 | 沙盒 demo（`dm` profile）+ `generated-requests.http` |
+| 本轮追加 | **设置页登记帧过滤前缀后，跳转仍落框架方法**（配置完全不起作用） | demo 仓库 `mybatis-plus-sql-visualizer-demo/selfdev-framework-demo`（8086，27 端点，带 `verify-endpoints.sh` 冒烟） |
+
+同根因、不同可感面：本源是「控制指令**关不掉**采集」，本轮是「控制指令**改不了**判定」。
+**修复后应同时消解**——这也是「整条控制通道不通」而非「只有 `disabled` 一处分支」的旁证。
+
+### 10.2 受控实验：真 `SenderLoop` 两臂对照（钉死 §五 P-2）
+
+**方法**：单独编译 agent 的 `transport`/`util`/`model`（剔除唯一依赖 ASM 的 `ConnectWeaver` 链；Windows 下 javac 须带
+`-encoding UTF-8`），起一个假 IDE `ServerSocket` 接上**真实 `SenderLoop` 实例**，两臂发出**完全相同的 CONFIG body**，
+唯一变量是字节序：
+
+| 臂 | 发出布局 | `StackLocator.getExtraSkipPrefixes()` | `AgentState.isDisabled()` / `isDesensitize()` |
+|---|---|---|---|
+| A | `[len:4][cmd:1][body]`（＝IDE 实际写帧） | `length = 0`（**未生效**） | `false` / `true`（**仍是静态初值，未生效**） |
+| B | `[cmd:1][len:4][body]`（＝`SenderLoop` 当前读序） | `length = 2` → `[com.corp.engine., com.corp.meta.]`（生效） | `true` / `false`（生效） |
+
+结论：**P-2 成立且已证**；且 **`disabled` / `desensitize` / `skipPrefixes` 三键一起失效**，与 §二.3「一帧误读、整通道不通」一致。
+
+**补充细节（防过度设计）**：错位是**确定性重复**，不是累积性流损坏——每一帧 CONFIG 都以同样方式被误读
+（`readFully` 先消费掉当轮可用字节，再以读超时收场），流并未越错越乱。**因此不要为「重新同步流」写逻辑**，
+把读序改对即可；T-01 中「畸形长度抛异常并走重连」是防新形态，不是用来补救当前错位。
+
+### 10.3 防线表补两行：两个「看着像真覆盖、实际同样不可见」的守卫
+
+| 防线 | 代码位置 | 为何没拦住 |
+|---|---|---|
+| 「真 socket 往返测试」 | `src/test/kotlin/.../log/agent/AgentListenSyncTest.kt:65-90` `testsendConfig_disabled帧体正确编码` | 确实起了 `ServerSocket`、确实读了真帧，但读序用的是**正确**的 `readInt()` → `readUnsignedByte()`，只验证 **IDE 自己的写形态**；从未把该帧喂给 agent 的入站读路径 |
+| 「agent 侧真 socket 读帧测试」 | `sub-projects/.../src/test/java/.../transport/HeartbeatRhythmTest.java:124-130` `readFrame` | 同样用**正确**读序，验的是 agent **出站**帧的节奏；入站路径零覆盖 |
+
+→ 对 T-05 的强化：守卫必须落在**真 `SenderLoop` 入站**上。最便宜的形态就是**往返**——用 `SenderLoop.writeFrame`
+（它写的是正确的 `[len][cmd]`）写帧、由真入站读，当前必红；这比手搓字节数组更抗「写序也跟着错」的二次漂移。
+
+### 10.4 对 T-01 的两条实施约束
+
+1. **线上格式唯一权威 = `writeFrame`**：读序向它对齐（`[len][cmd][body]`），不要再引入第三种顺序；
+   两侧常量与顺序由 `AgentProtocolSyncTest` 加**入站**断言兜住（T-05 已列）。
+2. **`readPayload(in, cmd)` 的 `cmd` 形参当前未被使用**——这是「设计意图曾是 `[cmd][len]`」的残留痕迹，
+   也是本次误读的诱因。修的时候顺手把签名改为 `readPayload(in, len)`（或直接内联），**消除这个误导性形参**，
+   否则后来人会再次据此判错方向。
+
+### 10.5 修复前无任何绕过手段（结论性）
+
+- `AgentArgs` 无 `skipPrefixes` 或前缀类键（实测 grep），`port`/`logLevel` 之外无旁路；
+- 全仓 `StackLocator.setExtraSkipPrefixes` 的**生产**调用点只有 `SenderLoop.handleInbound` 一处。
+
+→ **CONFIG 不通 = 这三个设置项 100% 不可用**：设置页重填、Apply、重启应用、重启 IDE 全部无效。
+排障时不必再让用户试这些（本轮已逐一排除）。
+
+### 10.6 第二条验收路径（不依赖 dm profile / 沙盒，可脚本化）
+
+除 §六 的沙盒真机验收外，可用 demo 仓库 `selfdev-framework-demo` 做一条与业务无关的最小回归：
+
+| 步骤 | 操作 | 预期（修复后） |
+|---|---|---|
+| 1 | 起 `selfdev-framework-demo`（8086），**不登记**任何前缀，打 `/selfdev/style/static-call` | 条目位置落 `com.corp.engine.DmlRepository#query`（框架方法＝缺陷现象） |
+| 2 | 设置页登记 `com.corp.engine.` + `com.corp.meta.` 后 Apply（**不重启应用**） | 同一请求改落业务帧 `SourceCaptureStyleServiceImpl#staticCall` |
+| 3 | 分页端点 `/selfdev/query/paged` 重复 2 | 落 `SourceCaptureQueryServiceImpl#paged`（该路径执行链最深层在 `com.corp.meta`，须两个前缀都登记） |
+
+该路径的价值：**第 2 步「不重启应用」正是 T-01 的判别条件**——修复前怎么 Apply 都不变（§10.5），修复后一次 Apply 即生效；
+且它覆盖 `skipPrefixes` 键的端到端，与 §六 的 `disabled` 侧互补。
 
 ## 实施记录
 
