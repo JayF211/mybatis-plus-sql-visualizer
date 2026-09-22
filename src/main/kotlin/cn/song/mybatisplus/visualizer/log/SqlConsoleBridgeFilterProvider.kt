@@ -24,7 +24,9 @@ import com.intellij.openapi.project.Project
 class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFilterProvider {
 
     override fun getDefaultFilters(project: Project): Array<Filter> {
-        val manager = project.getService(SqlLogManager::class.java)
+        // T-ST-02b2：项目关闭中/测试 temporarily-disposed 窗口内不得发起服务创建（否则永久毒化该服务）；
+        // 取不到 manager 即不挂过滤器（本 EP 的全部行为都依赖 manager，等价于「非捕捉态零处理」）
+        val manager = sqlLogManagerOrNull(project) ?: return emptyArray()
         return arrayOf(EpLineFilter(project, manager))
     }
 

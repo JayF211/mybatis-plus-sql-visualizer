@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.converter.ConverterRegistry
 import cn.song.mybatisplus.visualizer.history.SqlHistoryEntry
 import cn.song.mybatisplus.visualizer.history.SqlHistoryManager
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
+import cn.song.mybatisplus.visualizer.log.sqlLogManagerOrNull
 import cn.song.mybatisplus.visualizer.sql.interceptor.DataPermissionPlaceholder
 import cn.song.mybatisplus.visualizer.sql.interceptor.DynamicTableNameProcessor
 import cn.song.mybatisplus.visualizer.sql.interceptor.TenantLineEnhancer
@@ -1996,8 +1997,9 @@ class SqlPreviewService(private val project: Project) {
                 } ?: 0
             }
             // 尝试从最近日志条目补全耗时（SQL 指纹匹配）
-            val logManager = anchor.project.getService(SqlLogManager::class.java)
-            val executionTimeMs = logManager.entries.snapshot()
+            // T-ST-02b2：取服务前先判 isDisposed；取不到即不做耗时补全（语义等同「最近条目里没匹配」）
+            val executionTimeMs = sqlLogManagerOrNull(anchor.project)?.entries?.snapshot()
+                .orEmpty()
                 .firstOrNull { it.restoredSql == result.sql }
                 ?.executionTimeMs
             manager.add(

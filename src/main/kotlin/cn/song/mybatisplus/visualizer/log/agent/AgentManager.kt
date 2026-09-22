@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry
 import cn.song.mybatisplus.visualizer.log.LogTimeCorrelator
 import cn.song.mybatisplus.visualizer.log.SqlCaptureGate
+import cn.song.mybatisplus.visualizer.log.sqlLogManagerOrNull
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
 import cn.song.mybatisplus.visualizer.log.logTimeKey
 import cn.song.mybatisplus.visualizer.log.logTimeParamSignature
@@ -1189,9 +1190,9 @@ class AgentManager(private val project: Project) : Disposable {
     }
 
     /** 当前 SQL 监听是否开启（SqlLogManager.capturing；服务缺失/异常按 false——宁停采勿白采）。 */
-    internal fun isListenActive(): Boolean = runCatching {
-        project.getService(SqlLogManager::class.java).capturing
-    }.getOrDefault(false)
+    internal fun isListenActive(): Boolean =
+        // T-ST-02b2：经 sqlLogManagerOrNull 取用（取服务前先判 isDisposed，避免毒化服务容器）
+        sqlLogManagerOrNull(project)?.capturing ?: false
 
     // ---------- pid 解析（复用桥反射骨架；getNativePid 能力探测缺失回退 getProcess().pid()） ----------
 
@@ -1447,8 +1448,9 @@ internal class AgentSession(
 
     /** T-AgentConfigChannel T-03：入队闸门判据（可注入测试缝；默认读 [SqlLogManager.capturing]）。 */
     internal var listenActiveProvider: () -> Boolean = {
-        // 服务缺失/项目已销毁按 false —— 宁丢弃勿谎报（与 AgentManager.isListenActive 同口径）
-        runCatching { project.getService(SqlLogManager::class.java).capturing }.getOrDefault(false)
+        // 服务缺失/项目已销毁按 false —— 宁丢弃勿谎报（与 AgentManager.isListenActive 同口径）；
+        // T-ST-02b2：经 sqlLogManagerOrNull 取用（取服务前先判 isDisposed，避免毒化服务容器）
+        sqlLogManagerOrNull(project)?.capturing ?: false
     }
 
     /**
@@ -1613,7 +1615,9 @@ internal class AgentSession(
                     // T-AgentDialectLoop / T-AgentLogTime：接管期间控制台嗅探暂存的「日志行原始时间」
                     // 按 [logTimeKey]（占位符版 SQL 指纹）取回，参数值序列作次级判别（[stampLogTime]）。
                     // 未命中回落捕获时间（= execute 开始时刻，与日志行只差毫秒级）并留痕 [logTimeMiss]。
-                    project.getService(SqlLogManager::class.java).entries.addEntry(stampLogTime(entry) ?: logTimeMiss(entry))
+                    // T-ST-02b2：取服务前先判 isDisposed（避免毒化服务容器）；取不到即丢弃该事件，不斩断流
+                    val logManager = sqlLogManagerOrNull(project) ?: return
+                    logManager.entries.addEntry(stampLogTime(entry) ?: logTimeMiss(entry))
                 } catch (t: Throwable) {
                     if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
                     LOG.warn("EVENT 入队失败（不斩断流）", t)

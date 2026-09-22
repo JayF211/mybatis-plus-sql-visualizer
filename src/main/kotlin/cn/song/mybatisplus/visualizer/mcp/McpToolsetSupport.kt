@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.log.LogStatementClassifier
 import cn.song.mybatisplus.visualizer.log.SqlListTypeColor
 import cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
+import cn.song.mybatisplus.visualizer.log.sqlLogManagerOrNull
 import cn.song.mybatisplus.visualizer.log.SqlSource
 import cn.song.mybatisplus.visualizer.log.StatementType
 import cn.song.mybatisplus.visualizer.log.formatDatabaseFragment
@@ -207,7 +208,8 @@ internal fun recordMcpExecution(
     errorText: String?,
 ) {
     runCatching {
-        project.getService(SqlLogManager::class.java).entries.addEntry(
+        // T-ST-02b2：取服务前先判 isDisposed（审计是旁路，取不到即跳过，工具结果不受影响）
+        sqlLogManagerOrNull(project)?.entries?.addEntry(
             mcpHistoryEntry(selectSql, dataSourceName, elapsedMs, errorText),
         )
     }.onFailure { e ->
