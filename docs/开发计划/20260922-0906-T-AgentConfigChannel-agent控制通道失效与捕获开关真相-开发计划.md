@@ -398,3 +398,33 @@ CHANGELOG `[Unreleased]` 与 `docs/变更记录.md` 三处同步（**已落**，
 `java.lang.NoSuchMethodError: AgentSession.<init>(…)`——即本仓已登记的**陈旧增量编译产物** flake
 （多分支合并后测试类仍解析旧构造函数签名；车道 B 给 `AgentSession` 加了参数）。
 按定例 `rm -rf build/classes build/kotlin` 后重跑即绿，**非代码缺陷**。
+
+### 九、门禁实况（2026-09-22 收口）
+
+| 项 | 读数 |
+|---|---|
+| `verifyGate` | **BUILD SUCCESSFUL**，三目标（IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63）**全 Compatible** |
+| agent 子项目全量 | **83 例 / 0 失败 / 0 错误**（含新增 T-08 回归用例） |
+| 主编译（`compileTestKotlin`） | BUILD SUCCESSFUL |
+| `testShards` shard1 / shard2 | 通过 |
+| `testShards` **shard3** | **20 例失败**——见下「跨类服务毒化」 |
+| `testDatabase` | 10 例 / **2 例失败**＝`DbDriverPipelineTest` 的 `testDriverArtifactResolvesToJarsOnClasspath`（本地驱动版本集不含 ConnectorJ 9.7.0）与 `testSeedFilesLandWhereDbLooksForThem`（新工作树测试沙盒路径未播种）——**在册环境性失败**，与本轮改动无关 |
+| 隔离验证 | shard3 三个受害类单独跑（含两两组合）**全绿** |
+
+**shard3 跨类服务毒化（本轮 testShards 未达 0 失败的唯一原因）**：
+
+- **形状**：`com.intellij.serviceContainer.AlreadyDisposedException: [T-ST-02] AlreadyDisposed@shard3
+  service=SqlLogManager … project.isDisposed=false :: Container is already disposed`——**项目未 disposed，但服务容器已 disposed**；
+  受害类恰是**所有使用共享 `SqlLogManager` 的类**（`AgentManagerIntakeGateTest` 15 / `McpHistoryIngestTest` 4 / `AgentManagerPremainTest` 1），
+  而中间不碰该服务的类（`EpActiveResetTest` / `FatalPassthroughTest` / `LocatorSkipPrefixSyncTest` / `CrudSqlToolTest` …）**全绿**。
+- **机制**（本仓已实证，见 `SqlLogManagerProjectState` KDoc 与 T-StabilityTail）：light 测试项目片内跨类复用同一 `ProjectImpl`；
+  一旦有调用点在「测试方法之间的 temporarily-disposed 窗口」里发起 `SqlLogManager` 的**失败创建**，
+  平台 `LazyInstanceHolder` 会缓存该失败并**在此后每次取用时永久重抛**——于是同片后续所有使用者成片变红。
+- **触发源**：本轮新增测试类改变了分片时长权重 → shard3 邻居重排 → 潜伏缺口发作（本仓登记形态：「新增用例即触发」）。
+- **排查已排除的两条假设（如实记录，避免后来人重走）**：① 紧邻受害者之前的 `AgentHeartbeatWindowTest`（两两同 JVM 跑绿）；
+  ② 前缀子集（6 个「文件内含 SqlLogManager 且无复原工具」的类 + `AgentHeartbeatWindowTest` + 受害类）同 JVM 跑绿
+  → 真凶不在「文件字面含 SqlLogManager」的类里，很可能经**生产代码间接取服务**（如控制台 EP 链路 `SqlConsoleBridgeFilterProvider`），
+  该形态无法用文件级 grep 定位。证据 XML 已留存（`F:/code/Java/Gitee/SongRenShuo/shard3-fail-evidence/`）。
+- **性质**：**测试基建/生产守卫的既有潜伏缺口，非本轮产品代码缺陷**（隔离全绿 + 机制与改动无关）；
+  根治方向＝按 T-StabilityTail 登记补齐「窗口内未受守卫的 `getService` 调用点」（该任务已登记 5 处），
+  并给测试工具 `SqlLogManagerProjectState.capture/restore` 加 `project.isDisposed` 守卫（避免工具自身在窗口内发起创建）。
