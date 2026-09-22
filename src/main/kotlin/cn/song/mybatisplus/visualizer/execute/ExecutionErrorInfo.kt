@@ -39,7 +39,9 @@ data class ExecutionErrorInfo(
  *  - **基建语句不带位置**（postgres.rs:1501）：连接串错误等非 SQL 错误天然不含位置标记，
  *    提取不出即无位置（诚实降级），绝不猜测。
  *
- * 越界钳制：调用方传入被执行 SQL 长度时，位置钳到 [1, sqlMaxLength]；钳后越界（<=0）返回 null。
+ * 越界钳制：调用方传入长度上界时，位置钳到 [1, sqlMaxLength]；钳后越界（<=0）返回 null。
+ *
+ * **口径订正（T-Round10 独立复核 major⑧，2026-09-22 实测）**：IDE 链三处投递点传的是**整篇控制台提交文本**的长度（`DataSourceSelector` 的 `executedSql.length`），而驱动报的位置是**语句内**位置 → 上界恒 ≥ 位置，故该钳制在 IDE 链上**实际不咬合**（是兜底护栏，不是有效约束）。要让它真正咬合需传「被执行语句文本」的长度，而三处 catch 点只持有整篇文本、拿不到语句边界（`SqlStatementSplitter` 能切分但无法判定哪一条是失败的那条），故本处**如实登记为粗上界**、不改行为。MCP 链传的是被提交的 EXPLAIN 包装句长度，那一处上界是准的。
  */
 object ErrorPositionExtractor {
 
@@ -84,7 +86,7 @@ object ErrorPositionExtractor {
     /**
      * 从错误消息提取位置；无信号 / 多 marker / 越界返回 null（调用方按无位置降级，不猜测）。
      *
-     * @param sqlMaxLength 被执行 SQL 的长度（用于越界钳制）；null = 不钳制
+     * @param sqlMaxLength 长度上界（用于越界钳制）；null = 不钳制。IDE 链传整篇控制台文本长度（粗上界，见类 KDoc 的口径订正）
      */
     fun extractPosition(
         message: String,
