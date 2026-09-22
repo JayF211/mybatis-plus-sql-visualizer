@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.sql.SqlServerDialect
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore
+import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
@@ -129,6 +131,68 @@ class RollbackSqlPanelTest : BasePlatformTestCase() {
         val panel = newPanel()
         panel.executeAdhocSql("   ")
         assertEquals(0, store().size())
+        panel.dispose()
+    }
+
+    // ======================== O-52：identity 包装链（条目 → 弹窗 → 生成器） ========================
+
+    /**
+     * O-52（T-IdentityInsertWrap）：快照条目持有的 identity 信息经弹窗传给生成器 → 回填 INSERT
+     * 成对包装。本用例钉「条目取用 + 粘贴生成」两段接线（弹窗组装细节见 RollbackSqlDialogTest；
+     * 此处只补 identity 段，写集约束下本类是该包内唯一可改的测试文件）。
+     */
+    fun testPasteBackfillWrapsIdentityInsertWhenEntryCarriesIdentity() {
+        val panel = newPanel()
+        // k2j 适配：register 为 Java 重载链，具名实参改位置实参（7 参全量形态）
+        val entry = store().register(
+            "DELETE FROM rt_del WHERE id = 1", "rt_del", "SELECT * FROM rt_del WHERE id = 1;",
+            emptyList(), RollbackSnapshotStore.NO_EXECUTION_ID,
+            SqlServerDialect.INSTANCE, listOf("id"),
+        )
+        val dialog = RollbackSqlDialog(
+            project, panel, RollbackSqlGenerator.generate("DELETE FROM rt_del WHERE id = 1"), "DELETE", entry,
+        )
+        try {
+            dialog.pasteAreaForTest().text = "id\tname\n1\tTom"
+            dialog.generateFromPaste()
+            assertEquals(
+                "SET IDENTITY_INSERT rt_del ON;\n" +
+                    "INSERT INTO rt_del (id, name) VALUES (1, 'Tom');\n" +
+                    "SET IDENTITY_INSERT rt_del OFF;",
+                dialog.sqlTextForTest(),
+            )
+        } finally {
+            dialog.doDispose()
+            panel.dispose()
+        }
+    }
+
+    /**
+     * O-59 T-IIR-01（**由 O-52 的「现状登记」断言反转而来**）：生产登记点必须把当前生效方言
+     * 随快照登记。
+     *
+     * 原断言 `testExecuteAdhocSqlRegistrationCarriesNoIdentityInfoYet` 把已知缺口写成了契约
+     * （`assertNull(entry.dialect)`）——而正是这个缺口让回滚侧 identity 包装在**生产链上永不触发**
+     * （T-Round10 独立复核 blocker②，用户可感：SQL Server 上 DELETE 后粘贴快照生成回填 INSERT
+     * 仍报 544）。T-IIR-01 接线后本用例反转：方言必须到位。
+     *
+     * 只钉 T-IIR-01 这一半：`identityColumns` 的到位属 T-IIR-02（需表结构来源，见 O-59 计划 §1.3
+     * 前提 1 的实测结论），故本用例仍按现状登记其为空。
+     */
+    fun testExecuteAdhocSqlRegistrationCarriesDialectAfterO59TIIR01() {
+        val panel = newPanel()
+        panel.executeAdhocSql("DELETE FROM log WHERE created < '2020-01-01'", true)
+        val entry = store().findBySql("DELETE FROM log WHERE created < '2020-01-01'")!!
+        assertNotNull(
+            "生产登记点必须把当前生效方言随快照登记（否则回滚侧 identity 包装永不触发）",
+            entry.dialect,
+        )
+        assertEquals(
+            "方言应与 DialectRegistry.effective 同源（本用例为 light 工程默认值）",
+            project.getService(SqlPreviewService::class.java).currentDialect().name,
+            entry.dialect!!.name,
+        )
+        assertTrue("T-IIR-02 未落地前 identity 列仍为空（表结构来源未接）", entry.identityColumns.isEmpty())
         panel.dispose()
     }
 }

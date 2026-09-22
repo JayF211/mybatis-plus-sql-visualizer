@@ -273,6 +273,8 @@ class SqlStatementSplitterTest {
         "BEGIN\n  SELECT 1;\nEND;\nSELECT 2;",
         // T-DA-02：DELIMITER 指令形态进一致性样例池（三委托方与单实现同口径）
         "DELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1; END$$\nDELIMITER ;\nSELECT 2;",
+        // T-SSP-01：Oracle 匿名块形态进池（三委托方执行链/分类链与单实现同口径）
+        "DECLARE\n  PROCEDURE p IS\n  BEGIN\n    NULL;\n  END;\nBEGIN\n  p;\nEND;",
     )
 
     // ======================== T-SQL 控制流批不可拆（T-TsqlBatchSplit / O-28） ========================
@@ -370,6 +372,172 @@ class SqlStatementSplitterTest {
         assertTrue(split(script)[0].startsWith("MERGE INTO t"))
     }
 
+    // ======================== Oracle PL/SQL 匿名块（T-SqlSplitterPlsql / O-47） ========================
+
+    /**
+     * DECLARE 声明段吞并（T-SSP-01）：局部例程体、前向声明与块主体同属**一条**语句。
+     *
+     * 改前缺陷形态（实测 2 段）：`beginModeEnabled` 只挡「前视武装」，而 `flushWord()` 在
+     * armed 后对 BEGIN/END 无条件计数——局部例程的 `END;` 把 blockDepth 归 0，紧随的 `;`
+     * 即切段（外层块因 armed 后无条件计数仍是完整一段，故碎成 2 段而非 3 段）。
+     */
+    @Test
+    fun `PLSQL_匿名块含局部例程整段一条`() {
+        val sql = "DECLARE\n  PROCEDURE p IS\n  BEGIN\n    NULL;\n  END;\nBEGIN\n  p;\nEND;"
+        val parts = split(sql)
+        assertEquals("声明段与块主体同属一条语句", 1, parts.size)
+        assertEquals(
+            "块内 `;` 原样保留、语句界符丢弃",
+            "DECLARE\n  PROCEDURE p IS\n  BEGIN\n    NULL;\n  END;\nBEGIN\n  p;\nEND",
+            parts[0],
+        )
+    }
+
+    /** 前向声明 `PROCEDURE p IS;`（无 BEGIN 体）——声明段内顶层 `;` 不切分（T-SSP-01）。 */
+    @Test
+    fun `PLSQL_前向声明不切碎`() {
+        val sql = "DECLARE\n  PROCEDURE p IS;\nBEGIN\n  p;\nEND;"
+        assertEquals("前向声明的 `;` 是声明分隔符而非语句界符", 1, split(sql).size)
+    }
+
+    /** 声明段吞并边界＝深度归零处（主体 `END`），不是「末个 END」——后接独立语句不得误并。 */
+    @Test
+    fun `PLSQL_匿名块后独立语句不误并`() {
+        val parts = split("DECLARE\n  x NUMBER;\nBEGIN\n  NULL;\nEND;\nSELECT 1;")
+        assertEquals(listOf("DECLARE\n  x NUMBER;\nBEGIN\n  NULL;\nEND", "SELECT 1"), parts)
+    }
+
+    /** 匿名块后紧接第二个匿名块（DECLARE 起头 + 裸 BEGIN 起头）——两条，不得并成一条。 */
+    @Test
+    fun `PLSQL_声明段后接BEGIN块不误并`() {
+        val parts = split("DECLARE\n  x NUMBER;\nBEGIN\n  NULL;\nEND;\nBEGIN\n  SELECT 2;\nEND;")
+        assertEquals("两个匿名块各自成条", 2, parts.size)
+        assertTrue("第二块保留自身 BEGIN", parts[1].startsWith("BEGIN"))
+    }
+
+    /** 裸 BEGIN 块在前、DECLARE 匿名块在后——块感知已武装仍须认领声明段（两条）。 */
+    @Test
+    fun `PLSQL_BEGIN块后接声明段块不误并`() {
+        val parts = split("BEGIN\n  NULL;\nEND;\nDECLARE\n  x NUMBER;\nBEGIN\n  NULL;\nEND;")
+        assertEquals("两条各自成条", 2, parts.size)
+        assertTrue("第二条保留 DECLARE 起头", parts[1].startsWith("DECLARE"))
+    }
+
+    /** 多个匿名块串接（裸 BEGIN 起头）——两条；守卫用例（改前即绿，钉死「不误并不误碎」）。 */
+    @Test
+    fun `PLSQL_多个匿名块串接不误并不误碎`() {
+        val parts = split("BEGIN SELECT 1; END;\nBEGIN SELECT 2; END;")
+        assertEquals("两个匿名块两条", 2, parts.size)
+        assertEquals("BEGIN SELECT 1; END", parts[0])
+        assertEquals("BEGIN SELECT 2; END", parts[1])
+    }
+
+    /** 无配对 `END` 的 `DECLARE`（MySQL 声明语句形态）——不武装声明段，按顶层切分原样（保守）。 */
+    @Test
+    fun `PLSQL_无配对END的DECLARE按顶层切分原样_保守`() {
+        assertEquals(listOf("DECLARE\n  x NUMBER", "SELECT 1"), split("DECLARE\n  x NUMBER;\nSELECT 1;"))
+    }
+
+    /**
+     * 声明段武装须以「后方确有块主体 BEGIN」为前提（T-SSP-01 订正，独立复核回归）。
+     *
+     * 改前缺陷：武装只要求「语句首 DECLARE + 后方存在 END 词」。T-SQL `DECLARE @x INT;` 与
+     * PG `DECLARE c CURSOR FOR SELECT … CASE … END …` 都是**合法顶层语句**且后方本就有 END 词
+     * （CASE 的 END），于是被误当 PL/SQL 声明段武装 → 顶层 `;` 直到文本尾都不再切分，
+     * 后续语句被整体吞并（实测 3 段 → 1 段）。修法：武装前再要求后方存在 BEGIN 词。
+     */
+    @Test
+    fun `TSQL_DECLARE语句不误开声明段`() {
+        val parts = split("DECLARE @a INT;\nSELECT 1;\nSELECT CASE WHEN 1=1 THEN 1 ELSE 0 END FROM t;")
+        assertEquals("T-SQL DECLARE 后方无 BEGIN，不得武装为声明段", 3, parts.size)
+        assertEquals("SELECT 1", parts[1])
+    }
+
+    /** 单条 T-SQL `DECLARE` + 后接一条含 CASE 的查询：不得并成一条。 */
+    @Test
+    fun `TSQL_DECLARE后接CASE查询不误并`() {
+        val parts = split("DECLARE @x INT;\nSELECT CASE WHEN 1=1 THEN 1 ELSE 0 END AS y;")
+        assertEquals(2, parts.size)
+        assertEquals("SELECT CASE WHEN 1=1 THEN 1 ELSE 0 END AS y", parts[1])
+    }
+
+    /** PG `DECLARE … CURSOR FOR …` 是合法顶层语法，同样不得武装（后方只有 CASE 的 END）。 */
+    @Test
+    fun `PG_DECLARE_CURSOR不误开声明段`() {
+        val parts = split("DECLARE c CURSOR FOR SELECT CASE WHEN a THEN 1 ELSE 2 END FROM t;\nFETCH ALL IN c;")
+        assertEquals(2, parts.size)
+        assertEquals("FETCH ALL IN c", parts[1])
+    }
+
+    /** 正对照：Oracle 匿名块声明段之后确有块主体 BEGIN，仍须整段一条（防「修回归修过头」）。 */
+    @Test
+    fun `PLSQL_声明段有BEGIN主体仍整段一条_正对照`() {
+        val parts = split("DECLARE\n  v NUMBER;\nBEGIN\n  v := 1;\n  SELECT CASE WHEN v=1 THEN 1 ELSE 0 END INTO v FROM dual;\nEND;")
+        assertEquals("声明段 + BEGIN 主体 + 块内 CASE 仍为一条", 1, parts.size)
+    }
+
+    /**
+     * 块内 `CASE … END`（裸 END 收尾，T-SQL / PL/SQL CASE 表达式）——CASE 层隔离（T-SSP-02）。
+     *
+     * 改前缺陷：CASE 的 `END` 被当块尾递减 → 块内首个 CASE 后的 `;` 即切段（实测 3 段）。
+     */
+    @Test
+    fun `PLSQL_块内CASE表达式不误判块尾`() {
+        val sql = "BEGIN\n  SELECT CASE WHEN a THEN 1 ELSE 2 END;\n  SELECT 2;\nEND;"
+        assertEquals("CASE 的 END 不递减块深度", 1, split(sql).size)
+    }
+
+    /**
+     * 含 `IF` / `LOOP` 的 PL/SQL 块整段一条（T-SSP-01 订正，独立复核 major③）。
+     *
+     * 改前缺陷：`END IF` / `END LOOP` 仍**无条件递减块深度**（只有 CASE 层做了隔离）→ 含 IF/LOOP 的
+     * 匿名块与具名过程依旧被切碎，而碎句仍会被逐条提交执行——正是本任务要消除的危害。
+     * 复核实测（改前）：`BEGIN IF 1=1 THEN NULL; END IF; END;` 基线 2 段 → 本订正前仍 2 段。
+     *
+     * 与 CASE 层的差别：CASE 有**裸 END** 收尾形态故须 caseDepth 计数；IF/LOOP/WHILE/REPEAT
+     * 只有双词终结形态，跳过递减即可（它们也不自增层计数，无需配对状态）。
+     */
+    @Test
+    fun `PLSQL_块内IF_END_IF不误判块尾`() {
+        assertEquals(1, split("BEGIN\n  IF 1=1 THEN\n    NULL;\n  END IF;\nEND;").size)
+    }
+
+    @Test
+    fun `PLSQL_块内LOOP_END_LOOP不误判块尾`() {
+        assertEquals(1, split("BEGIN\n  IF 1=1 THEN NULL; END IF;\n  LOOP NULL; END LOOP;\nEND;").size)
+    }
+
+    /** 具名过程体含 IF：`CREATE OR REPLACE PROCEDURE p IS BEGIN … END IF; END;` 整段一条。 */
+    @Test
+    fun `PLSQL_具名过程含IF不误碎`() {
+        assertEquals(1, split("CREATE OR REPLACE PROCEDURE p IS BEGIN IF 1=1 THEN NULL; END IF; END;").size)
+    }
+
+    /** 声明段 + 块主体含 IF：整段一条（复核改前读数 3 段）。 */
+    @Test
+    fun `PLSQL_声明段含IF整段一条`() {
+        assertEquals(1, split("DECLARE v NUMBER; BEGIN IF v=1 THEN NULL; END IF; END;").size)
+    }
+
+    /** 正对照：`END IF` 块后接独立语句仍须切开（层隔离不得反噬成吞并）。 */
+    @Test
+    fun `PLSQL_IF块后独立语句不误并`() {
+        val parts = split("BEGIN\n  IF 1=1 THEN NULL; END IF;\nEND;\nSELECT 1;")
+        assertEquals("IF 块一条 + 独立语句一条", 2, parts.size)
+        assertEquals("SELECT 1", parts[1])
+    }
+
+    /**
+     * T-SQL 批内 `CASE … END` 不参与 `beginEndBalance` 配对（T-SSP-02 同步改造）：
+     * 截断批（BEGIN 无配对 END）继续吞后续段，维持「宁整勿碎」。
+     */
+    @Test
+    fun `TSQL_批内CASE不误判配对失衡`() {
+        val parts = split("IF @x = 1 BEGIN SELECT CASE WHEN a THEN 1 ELSE 2 END; DELETE FROM t2")
+        assertEquals("CASE 的 END 不得充当批内块尾配对", 1, parts.size)
+        assertTrue(parts[0].contains("DELETE FROM t2"))
+    }
+
     // ======================== DELIMITER 指令感知（T-DA-02 / O-39） ========================
 
     /** 含 `DELIMITER $$` 的存储过程脚本（MySQL 客户端粘贴典型形态）。 */
@@ -452,6 +620,25 @@ class SqlStatementSplitterTest {
         val parts = split("SELECT 1\nDELIMITER $$")
         assertEquals(1, parts.size)
         assertTrue(parts[0], parts[0].contains("DELIMITER"))
+    }
+
+    @Test
+    fun `DELIMITER_过程体内DECLARE不误开声明段`() {
+        // T-SSP-01 反向边界：过程体 BEGIN 内的 DECLARE（MySQL 局部变量声明）在 blockDepth>0，
+        // 不触发声明段吞并——过程体仍一条
+        val parts = split(
+            "DELIMITER $$\nCREATE PROCEDURE p()\nBEGIN\n  DECLARE x INT;\n  SELECT 1;\nEND$$\nDELIMITER ;\nSELECT 2;",
+        )
+        assertEquals("过程体一条 + 复位后普通语句一条", 2, parts.size)
+        assertTrue(parts[0], parts[0].contains("DECLARE x INT;"))
+    }
+
+    @Test
+    fun `DELIMITER_自定义界符下的匿名块整段一条`() {
+        // T-SSP-01：声明段在自定义界符生效期同样成立（`$$` 才是语句终结符，段内 `;` 不切分）
+        val parts = split("DELIMITER $$\nDECLARE\n  x NUMBER;\nBEGIN\n  NULL;\nEND$$\nDELIMITER ;\nSELECT 1;")
+        assertEquals("匿名块一条 + 复位后普通语句一条", 2, parts.size)
+        assertTrue(parts[0], parts[0].startsWith("DECLARE"))
     }
 
     @Test

@@ -173,4 +173,126 @@ public class SqlResultPanelUiTest extends BasePlatformTestCase {
             panel.clear();
         }
     }
+
+    // ------------------------------------------------------------------
+    // T-ErrorLocateUsability T-ELU-01（O-49）：定位按钮可用性判定
+    // （master 侧为 SqlResultPanelUiTest.kt 增量；本文件是 k2j 的 Java 对应件，按 Java 翻译落。
+    //   master 六例已随资源束补移植全部落齐。）
+    // ------------------------------------------------------------------
+
+    /** 定位按钮：JButton 且 text == bundle execute.error.locate。 */
+    private static JButton locateButton(SqlResultPanel panel) {
+        for (Component c : allComponents(panel)) {
+            if (c instanceof JButton) {
+                JButton b = (JButton) c;
+                if (MpSqlVisualizerBundle.message("execute.error.locate").equals(b.getText())) {
+                    return b;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** k2j 适配：ExecutionErrorInfo 为 record（7 组件，含 executedSqlLength），Java 无具名实参/默认参数，走全参构造。 */
+    private static cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo info(Integer positionChar, Integer lineInSql) {
+        return new cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo(
+                "boom", null, null, positionChar, lineInSql, null, null);
+    }
+
+    /**
+     * 本任务的核心判据（面板侧契约）：`locate == null` → 按钮**不出现**。
+     * 宿主（`SqlPreviewPanel`）负责在锚点不可解析时传 null——改前它恒传非 null lambda，
+     * 于是按钮可见但点了什么都不发生。
+     */
+    public void testShowErrorRich_不可定位时不显示定位按钮() throws Exception {
+        SqlResultPanel panel = new SqlResultPanel();
+        try {
+            panel.showErrorRich(info(null, null), null);
+            waitForEdt();
+            assertEquals("仍应进入 ERROR 态", "ERROR", panel.stateForTest());
+            JButton btn = locateButton(panel);
+            assertNotNull("定位按钮组件应存在（仅隐藏）", btn);
+            assertFalse("locate=null 时定位按钮不得可见", btn.isVisible());
+            assertTrue("错误复制按钮不受影响", copyButton(panel).isVisible());
+        } finally {
+            panel.clear();
+        }
+    }
+
+    public void testShowErrorRich_可定位时显示按钮且tooltip如实标注两态() throws Exception {
+        SqlResultPanel panel = new SqlResultPanel();
+        try {
+            panel.showErrorRich(info(24, null), () -> { });
+            waitForEdt();
+            JButton btn = locateButton(panel);
+            assertNotNull(btn);
+            assertTrue("locate 非 null 时定位按钮应可见", btn.isVisible());
+            String tip = btn.getToolTipText();
+            // 用 bundle 自身文案比对（与既有用例同款，不依赖 locale）——钉住「用的是带位置的 key」
+            assertEquals(
+                "tooltip 应为带驱动位置的文案",
+                MpSqlVisualizerBundle.message("execute.error.locate.tooltip.position", 24),
+                tip);
+            assertTrue("tooltip 应含驱动报的位置", tip.contains("24"));
+            // 测试环境 bundle 兜底中文（MpSqlVisualizerBundle KDoc：settings 未注册 → 中文）
+            assertTrue("tooltip 应如实标注位置指向被执行的 SQL", tip.contains("被执行的 SQL"));
+            assertTrue("tooltip 不得宣称能定位到 mapper 原文行", tip.contains("不一一对应"));
+        } finally {
+            panel.clear();
+        }
+    }
+
+    /** 无位置信号时用「语句起始行」口径的 tooltip（同样如实标注两态）。 */
+    public void testShowErrorRich_无位置信号用起始行口径() throws Exception {
+        SqlResultPanel panel = new SqlResultPanel();
+        try {
+            panel.showErrorRich(info(null, null), () -> { });
+            waitForEdt();
+            String tip = locateButton(panel).getToolTipText();
+            assertTrue("tooltip 应标注两态", tip.contains("被执行的 SQL"));
+        } finally {
+            panel.clear();
+        }
+    }
+
+    /**
+     * T-Round10FU（独立复核 ㉕）：**只有行号、没有字符位置**的驱动报错（MySQL 语法错误 `at line N`）
+     * 用带行号的文案。改前 tooltip 只判 `positionChar`，这类报错落到「语句起始行」兜底文案——
+     * 驱动明明报了行号却被丢弃（`ExecutionErrorInfo.lineInSql` 因此在 src/main 无任何消费方）。
+     */
+    public void testShowErrorRich_只带行号时tooltip用行号文案() throws Exception {
+        SqlResultPanel panel = new SqlResultPanel();
+        try {
+            panel.showErrorRich(info(null, 3), () -> { });
+            waitForEdt();
+            JButton btn = locateButton(panel);
+            assertNotNull(btn);
+            assertTrue("locate 非 null 时定位按钮应可见", btn.isVisible());
+            String tip = btn.getToolTipText();
+            assertEquals(
+                "tooltip 应为带驱动行号的文案",
+                MpSqlVisualizerBundle.message("execute.error.locate.tooltip.line", 3),
+                tip);
+            assertTrue("tooltip 应含驱动报的行号", tip.contains("3"));
+            assertTrue("tooltip 应如实标注位置指向被执行的 SQL", tip.contains("被执行的 SQL"));
+            assertTrue("tooltip 不得宣称能定位到 mapper 原文行", tip.contains("不一一对应"));
+        } finally {
+            panel.clear();
+        }
+    }
+
+    /** 富错误后再走普通 showError（无定位）→ 定位按钮必须收起（不残留可点却无动作的按钮）。 */
+    public void testShowErrorRich_转普通错误后按钮收起() throws Exception {
+        SqlResultPanel panel = new SqlResultPanel();
+        try {
+            panel.showErrorRich(info(null, null), () -> { });
+            waitForEdt();
+            assertTrue(locateButton(panel).isVisible());
+            panel.showError("boom again");
+            waitForEdt();
+            assertFalse("普通错误路径应隐藏定位按钮", locateButton(panel).isVisible());
+        } finally {
+            panel.clear();
+        }
+    }
 }

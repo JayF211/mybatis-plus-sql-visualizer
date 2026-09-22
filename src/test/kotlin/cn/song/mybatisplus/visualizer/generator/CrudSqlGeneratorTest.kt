@@ -2,9 +2,15 @@ package cn.song.mybatisplus.visualizer.generator
 
 import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
+import cn.song.mybatisplus.visualizer.sql.DmDialect
+import cn.song.mybatisplus.visualizer.sql.H2Dialect
 import cn.song.mybatisplus.visualizer.sql.IdentifierCaseSource
+import cn.song.mybatisplus.visualizer.sql.IdentifierFolding
+import cn.song.mybatisplus.visualizer.sql.KingBaseDialect
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.OracleDialect
+import cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect
+import cn.song.mybatisplus.visualizer.sql.SqlServerDialect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -354,19 +360,142 @@ class CrudSqlGeneratorTest {
         )
     }
 
+    // ------------------------------------------------------------------
+    // O-51 / T-IdentifierFoldingFamily：折叠方向族（PG/KingBase = LOWER 族）
+    // ------------------------------------------------------------------
+
     /**
-     * 其他 8 方言**逐字节不变**：目录来源与实体来源在同一 spec 上的全部产物逐字符相同
-     * ——[Dialect.quoteIfNeeded] 默认即委托 [Dialect.quoteIfKeyword]，只有 Oracle 覆写。
-     * 这是「不改变其他方言产物」的结构性守卫（比逐方言快照更严：同 spec 双来源直接对比）。
+     * 目录来源正向（LOWER 族）：字典含**大写字母**的名字**必须加引号**。
+     *
+     * 真机依据（DBX MCP 只读实测，2026-09-22）：裸写大写被折叠为小写 → 命中小写字典名
+     * （`SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES` 在 PG 返回 366 行、KingbaseES V8 返回
+     * 492 行）；引号保留原样 → 引号大写名不存在（PG 报 `relation "information_schema.TABLES"
+     * does not exist`，KingBase 报 `kb: relation "information_schema.TABLES" does not exist`）。
+     * 即「以引号创建的大写目录名」若裸写会被折叠为小写 → 查不到，方向与 Oracle（UPPER 族）相反。
      */
     @Test
-    fun otherDialectsRenderByteIdenticalRegardlessOfCaseSource() {
-        val nonOracle = DialectRegistry.INSTANCE.dialects.filter { it !== OracleDialect.INSTANCE }
-        assertEquals(8, nonOracle.size)
-        nonOracle.forEach { dialect ->
-            val entity = CrudTableSpec(
+    fun pgFamilyCatalogSourceQuotesNamesContainingUppercase() {
+        listOf(PostgreSQLDialect.INSTANCE, KingBaseDialect.INSTANCE).forEach { dialect ->
+            val spec = catalogSpec("Issue_New", "id", "User_Name", dialect = dialect)
+            val stmts = CrudSqlGenerator.generate(spec).associateBy { it.kind }
+
+            // 注意 `id` 保持裸写：全小写字典名在 LOWER 族**不触发**（裸写折为小写恰好命中），
+            // 只有含大写的 `Issue_New` / `User_Name` 加引号——这正是「按族判定」而非「无条件收紧」。
+            assertEquals(
+                "方言 ${dialect.name}：目录来源含大写 → SELECT 全表加引号",
+                "SELECT id, \"User_Name\"\nFROM \"Issue_New\"",
+                stmts.getValue(CrudKind.SELECT_ALL).result.sql,
+            )
+            assertEquals(
+                "SELECT id, \"User_Name\"\nFROM \"Issue_New\"\nWHERE id = ?",
+                stmts.getValue(CrudKind.SELECT_BY_PK).result.sql,
+            )
+            // INSERT/UPDATE 走 BatchModel（唯一渲染源），来源标记须一并接线
+            assertEquals(
+                "INSERT INTO \"Issue_New\" (id, \"User_Name\")\nVALUES (?, ?)",
+                stmts.getValue(CrudKind.INSERT).result.sql,
+            )
+            assertEquals(
+                "UPDATE \"Issue_New\"\nSET \"User_Name\" = ?\nWHERE id = ?",
+                stmts.getValue(CrudKind.UPDATE).result.sql,
+            )
+            assertEquals(
+                "DELETE FROM \"Issue_New\"\nWHERE id = ?",
+                stmts.getValue(CrudKind.DELETE).result.sql,
+            )
+        }
+    }
+
+    /** 目录来源：全小写名字（裸写创建的对象）**裸写**——LOWER 族不含大写即不触发（与改前一致）。 */
+    @Test
+    fun pgFamilyCatalogSourceLeavesAllLowercaseNamesBare() {
+        listOf(PostgreSQLDialect.INSTANCE, KingBaseDialect.INSTANCE).forEach { dialect ->
+            val spec = catalogSpec("issue_new", "id", "user_name", dialect = dialect)
+            val stmts = CrudSqlGenerator.generate(spec).associateBy { it.kind }
+            assertEquals(
+                "方言 ${dialect.name}：全小写目录名应裸写",
+                "SELECT id, user_name\nFROM issue_new",
+                stmts.getValue(CrudKind.SELECT_ALL).result.sql,
+            )
+            assertEquals(
+                "INSERT INTO issue_new (id, user_name)\nVALUES (?, ?)",
+                stmts.getValue(CrudKind.INSERT).result.sql,
+            )
+        }
+    }
+
+    /**
+     * **防回归硬判据（O-51 的第二族）**：实体来源的派生名在 PG 族下**仍裸写**——族判定只作用于
+     * [IdentifierCaseSource.CATALOG] 分支，不得漏进默认路径（漏进即把 `@TableName("BizOrder")`
+     * 这类注解值包成 `"BizOrder"`，而它正是「不带引号创建」的名字，加引号必然查不到）。
+     *
+     * 探针两个名字：`biz_order` / `order_no`（`NamingStrategy.toSnakeCase` 的规范产物）与
+     * `BizOrder` / `OrderNo`（含大写，专门把「族判定漏进 ENTITY」的回归照出来）。
+     */
+    @Test
+    fun pgFamilyEntitySourceKeepsDerivedNamesBare() {
+        listOf(PostgreSQLDialect.INSTANCE, KingBaseDialect.INSTANCE).forEach { dialect ->
+            val probe = CrudTableSpec(
+                "BizOrder",
+                listOf(CrudColumn("id", null, true), CrudColumn("OrderNo")),
+                null,
+                null,
+                dialect,
+            )
+            assertEquals(IdentifierCaseSource.ENTITY, probe.identifierCaseSource)
+            val stmts = CrudSqlGenerator.generate(probe).associateBy { it.kind }
+            assertEquals(
+                "方言 ${dialect.name}：实体来源含大写派生名也须裸写（族判定不得漏进 ENTITY 分支）",
+                "SELECT id, OrderNo\nFROM BizOrder",
+                stmts.getValue(CrudKind.SELECT_ALL).result.sql,
+            )
+            assertEquals(
+                "INSERT INTO BizOrder (id, OrderNo)\nVALUES (?, ?)",
+                stmts.getValue(CrudKind.INSERT).result.sql,
+            )
+            assertEquals(
+                "UPDATE BizOrder\nSET OrderNo = ?\nWHERE id = ?",
+                stmts.getValue(CrudKind.UPDATE).result.sql,
+            )
+            // 规范派生名（全小写，`@TableName("biz_order")` 的真实形态）同样裸写
+            val canonical = CrudTableSpec(
                 "biz_order",
                 listOf(CrudColumn("id", null, true), CrudColumn("order_no")),
+                null,
+                null,
+                dialect,
+            )
+            assertEquals(
+                "SELECT id, order_no\nFROM biz_order",
+                CrudSqlGenerator.generate(canonical).first { it.kind == CrudKind.SELECT_ALL }.result.sql,
+            )
+        }
+    }
+
+    /**
+     * 不折叠族（[Dialect.getIdentifierFolding] = NONE）**逐字节不变**：目录来源与实体来源在同一 spec
+     * 上的全部产物逐字符相同。
+     *
+     * O-51 后本判据的适用面收窄为 NONE 族 5 方言——UPPER/LOWER 两族的目录来源分支必然产生差异
+     * （见上一用例）。夹具特意用**含大写**的名字（`Biz_Order`），使「族判定漏进默认路径」这类
+     * 回归无法藏在小写夹具后面。这是「不改变其余方言产物」的结构性守卫（比逐方言快照更严：
+     * 同 spec 双来源直接对比）。
+     *
+     * H2 自本轮起为 UPPER 族（`DialectH2VerificationTest.标识符折叠方向_H2引擎实测对照` 引擎实测
+     * 折为大写），故已从本清单移出——H2 的目录来源含小写名会加引号，与实体来源不再逐字节一致。
+     */
+    @Test
+    fun nonFoldingDialectsRenderByteIdenticalRegardlessOfCaseSource() {
+        val nonFolding = DialectRegistry.INSTANCE.dialects.filter { it.identifierFolding == IdentifierFolding.NONE }
+        // 逐库点名（不按属性自证）：族声明写错时本断言先红，避免「过滤条件与被测属性同源」的空绿
+        assertEquals(
+            listOf("MySQL", "SQL Server", "SQLite", "MariaDB", "DM（达梦）"),
+            nonFolding.map { it.name },
+        )
+        nonFolding.forEach { dialect ->
+            val entity = CrudTableSpec(
+                "Biz_Order",
+                listOf(CrudColumn("id", null, true), CrudColumn("Order_No")),
                 null,
                 null,
                 dialect,
@@ -389,28 +518,249 @@ class CrudSqlGeneratorTest {
         }
     }
 
-    /** Oracle 是唯一覆写者：同一 spec 仅来源标记不同 → 产物不同（证明分支真的生效，非空绿）。 */
+    /**
+     * 折叠族两族都真的生效：同一 spec 仅来源标记不同 → 产物不同（证明分支真的生效，非空绿）。
+     *
+     * O-51 起 Oracle（UPPER 族）**不再是唯一**——PG/KingBase（LOWER 族）同形，故本用例由
+     * `oracleIsTheOnlyDialectWhereCaseSourceChangesOutput` 改名（不是删除），并补 LOWER 族一列。
+     * LOWER 族的实体列用同一串含大写名字，只为对齐双来源对比——真实实体派生名为小写，
+     * 其正确形态由 `pgFamilyEntitySourceKeepsDerivedNamesBare` 钉住。
+     */
     @Test
-    fun oracleIsTheOnlyDialectWhereCaseSourceChangesOutput() {
-        val base = CrudTableSpec(
+    fun bothFoldingFamiliesChangeOutputByCaseSource() {
+        // UPPER 族：字典名含小写 → 加引号
+        assertCaseSourceChangesOutput(
             "issue_new",
+            OracleDialect.INSTANCE,
+            entitySql = "SELECT id\nFROM issue_new",
+            catalogSql = "SELECT \"id\"\nFROM \"issue_new\"",
+        )
+        // LOWER 族：字典名含大写 → 加引号（`id` 全小写故仍裸写，差异体现在表名）
+        assertCaseSourceChangesOutput(
+            "Issue_New",
+            PostgreSQLDialect.INSTANCE,
+            entitySql = "SELECT id\nFROM Issue_New",
+            catalogSql = "SELECT id\nFROM \"Issue_New\"",
+        )
+    }
+
+    /**
+     * H2 = **UPPER 族**（本轮按引擎实测订正：`DialectH2VerificationTest.标识符折叠方向_H2引擎实测对照`
+     * 实测裸写折为大写）——目录来源含小写的字典名加引号、全大写名裸写，与 Oracle 同判定。
+     */
+    @Test
+    fun h2CatalogSourceFollowsUpperFamily() {
+        assertCaseSourceChangesOutput(
+            "issue_new",
+            H2Dialect.INSTANCE,
+            entitySql = "SELECT id\nFROM issue_new",
+            catalogSql = "SELECT \"id\"\nFROM \"issue_new\"",
+        )
+        // 全大写字典名（裸写创建的对象）裸写——UPPER 族不含小写即不触发
+        assertEquals(
+            "SELECT ID\nFROM ISSUE_NEW",
+            CrudSqlGenerator.generate(catalogSpec("ISSUE_NEW", "ID", dialect = H2Dialect.INSTANCE))
+                .first { it.kind == CrudKind.SELECT_ALL }.result.sql,
+        )
+    }
+
+    /** 同 spec 双来源产物对比（[bothFoldingFamiliesChangeOutputByCaseSource] 的公共断言体）。 */
+    private fun assertCaseSourceChangesOutput(
+        tableName: String,
+        dialect: Dialect,
+        entitySql: String,
+        catalogSql: String,
+    ) {
+        val base = CrudTableSpec(
+            tableName,
             listOf(CrudColumn("id", null, true)),
             null,
             null,
-            OracleDialect.INSTANCE,
+            dialect,
         )
-        val entitySql = CrudSqlGenerator.generate(base).first { it.kind == CrudKind.SELECT_ALL }.result.sql
-        val catalogSql = CrudSqlGenerator.generate(
-            CrudTableSpec(
-                base.tableName,
-                base.columns,
-                null,
-                null,
-                OracleDialect.INSTANCE,
-                IdentifierCaseSource.CATALOG,
+        assertEquals(
+            "方言 ${dialect.name} 的实体来源产物",
+            entitySql,
+            CrudSqlGenerator.generate(base).first { it.kind == CrudKind.SELECT_ALL }.result.sql,
+        )
+        // Java 侧 copy 不接收来源标记，按 k2j 既定适配显式重建 CATALOG 侧
+        assertEquals(
+            "方言 ${dialect.name} 的目录来源产物",
+            catalogSql,
+            CrudSqlGenerator.generate(
+                CrudTableSpec(base.tableName, base.columns, null, null, dialect, IdentifierCaseSource.CATALOG),
+            ).first { it.kind == CrudKind.SELECT_ALL }.result.sql,
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // O-52 / T-IdentityInsertWrap：identity 包装
+    // ------------------------------------------------------------------
+
+    /** 自增列 `id` + 业务列 `order_no`；[autoGenerated] 控制列上是否带自增标记。 */
+    private fun identitySpec(dialect: Dialect, autoGenerated: Boolean, tableName: String = "biz_order") =
+        CrudTableSpec(
+            tableName,
+            listOf(
+                CrudColumn("id", null, true, autoGenerated, false),
+                CrudColumn("order_no", null, false, false, true),
             ),
-        ).first { it.kind == CrudKind.SELECT_ALL }.result.sql
-        assertEquals("SELECT id\nFROM issue_new", entitySql)
-        assertEquals("SELECT \"id\"\nFROM \"issue_new\"", catalogSql)
+            null,
+            null,
+            dialect,
+        )
+
+    /**
+     * 只有 SQL Server 有包装形态（其余方言默认 null）——逐库点名而非按属性自证：钩子被误加到
+     * 别的方言上时本断言先红。DM 是计划 §二非目标的显式落点（无真机证据不照抄 DBX 的 DM 实现）。
+     */
+    @Test
+    fun onlyEvidenceBackedDialectsDeclareInsertWrapper() {
+        // 包装方言集合是**真机证据驱动的白名单**：SQL Server 取自 DBX 同款实现与 T-SQL 文法（本环境无实例，
+        // 仍属未验）；DM 由 2026-09-23 真机实测加入（DM8 对显式给自增列赋值报「仅当指定列列表，且
+        // SET IDENTITY_INSERT为ON时…」，加包装后同一语句成功）。**新增方言进此集合必须附真机读数**。
+        assertEquals(
+            listOf("SQL Server", "DM（达梦）"),
+            DialectRegistry.INSTANCE.dialects.filter { it.renderInsertWrapper("t", "s") != null }.map { it.name },
+        )
+        assertTrue(
+            "DM8 已真机实证需要包装（与 SQL Server 同形态）",
+            DmDialect.INSTANCE.renderInsertWrapper("t", "s") != null,
+        )
+        assertNull("MySQL 无该语法位，必须保持 null（未验证方言不得造包装）", MySqlDialect.INSTANCE.renderInsertWrapper("t", "s"))
+    }
+
+    /**
+     * 默认路径**逐字节不变**（验收 1 的硬不变式）：自增列默认不勾 → INSERT 无包装；即便把自增列
+     * 勾回来，非包装方言的产物也与「列上没有自增标记」时逐字节相同。
+     *
+     * 判据是「同 spec 双标记 + 同活跃集直接对比」——比逐方言快照更严：任何把包装判定写进默认路径
+     * 的回归（例如无条件走 [Dialect.renderInsertWrapper]）都会让两侧出现差异。
+     * 注意两侧的**默认勾选态不同**（有标记的一侧自增列默认不勾，这正是既有行为），故对比必须在
+     * 同一活跃集下做；默认态另按字面钉死。
+     */
+    @Test
+    fun identityMarkDoesNotChangeInsertForNonWrappingDialects() {
+        val active = setOf("id", "order_no")
+        // 包装方言（SQL Server / DM8，均为真机或文法证据驱动）不在本不变式范围内：勾回自增列**必须**产生包装，
+        // 由 dmWrapsIdentityInsertWhenAutoColumnChecked / sqlServerWrapsIdentityInsertWhenAutoColumnChecked 钉住。
+        DialectRegistry.INSTANCE.dialects.filter { it.renderInsertWrapper("t", "s") == null }.forEach { dialect ->
+            val marked = CrudSqlGenerator.generate(identitySpec(dialect, true))
+                .first { it.kind == CrudKind.INSERT }.result
+            val plain = CrudSqlGenerator.generate(identitySpec(dialect, false))
+                .first { it.kind == CrudKind.INSERT }.result
+
+            assertEquals(
+                "方言 ${dialect.name}：默认态（自增列不勾）应逐字节不变",
+                "INSERT INTO biz_order (order_no)\nVALUES (?)",
+                marked.sql,
+            )
+            assertEquals(
+                "方言 ${dialect.name}：勾回自增列后仍不得包装",
+                plain.batchModel!!.renderSql(active),
+                marked.batchModel!!.renderSql(active),
+            )
+        }
+    }
+
+    /**
+     * SQL Server + 勾回自增列 → 含 `SET IDENTITY_INSERT … ON/OFF` 包装（验收 2）。
+     *
+     * 包装内的表名与 INSERT 里的引用形态**共用** [Dialect.quoteIfNeeded]（同一 caseSource），
+     * 故两者逐字符一致；本例夹具表名 `biz_order` 非保留字，裸写形态下断言的是「包装里的名字
+     * 就是 INSERT 里的名字」。
+     */
+    @Test
+    fun sqlServerWrapsIdentityInsertWhenAutoColumnChecked() {
+        val insert = CrudSqlGenerator.generate(identitySpec(SqlServerDialect.INSTANCE, true))
+            .first { it.kind == CrudKind.INSERT }.result
+        val model = insert.batchModel!!
+
+        // 默认态（自增列不勾）无包装——默认路径逐字节不变
+        assertEquals("INSERT INTO biz_order (order_no)\nVALUES (?)", insert.sql)
+
+        val tableRef = SqlServerDialect.INSTANCE.quoteIfNeeded("biz_order", IdentifierCaseSource.ENTITY)
+        assertEquals(
+            "SET IDENTITY_INSERT $tableRef ON;\n" +
+                "INSERT INTO biz_order (id, order_no)\nVALUES (?, ?)\n" +
+                "SET IDENTITY_INSERT $tableRef OFF;",
+            model.renderSql(setOf("id", "order_no")),
+        )
+    }
+
+    /**
+     * 包装里的表名与 INSERT 里的引用形态一致（验收 2 的括号断言）：表名 `order` 是 SQL Server
+     * 保留字 → 两处都必须是 `[order]`（包装的目标位与 INSERT 的目标位是两处独立语法位，
+     * 一处裸写一处加引号会指向不同对象）。列名 `id`/`name` 非保留字 → 两处都裸写，
+     * 顺带钉住「包装不改变列清单的引用形态」。
+     */
+    @Test
+    fun sqlServerWrapperSharesTableQuotingWithInsert() {
+        val spec = CrudTableSpec(
+            "order",
+            listOf(
+                CrudColumn("id", null, true, true, null),
+                CrudColumn("name"),
+            ),
+            null,
+            null,
+            SqlServerDialect.INSTANCE,
+        )
+        val model = CrudSqlGenerator.generate(spec).first { it.kind == CrudKind.INSERT }.result.batchModel!!
+        assertEquals(
+            "SET IDENTITY_INSERT [order] ON;\n" +
+                "INSERT INTO [order] (id, name)\nVALUES (?, ?)\n" +
+                "SET IDENTITY_INSERT [order] OFF;",
+            model.renderSql(setOf("id", "name")),
+        )
+    }
+
+    /** 目录来源（自省元数据）同样接线：SQL Server 为 NONE 族，包装表名与 INSERT 表名仍逐字一致。 */
+    @Test
+    fun sqlServerWrapperUsesCatalogCaseSourceToo() {
+        // Java 侧 copy 不接收来源标记，按 k2j 既定适配显式重建 CATALOG 侧
+        val base = identitySpec(SqlServerDialect.INSTANCE, true)
+        val spec = CrudTableSpec(
+            base.tableName,
+            base.columns,
+            null,
+            null,
+            base.dialect,
+            IdentifierCaseSource.CATALOG,
+        )
+        val model = CrudSqlGenerator.generate(spec).first { it.kind == CrudKind.INSERT }.result.batchModel!!
+        assertEquals(
+            "SET IDENTITY_INSERT biz_order ON;\n" +
+                "INSERT INTO biz_order (id, order_no)\nVALUES (?, ?)\n" +
+                "SET IDENTITY_INSERT biz_order OFF;",
+            model.renderSql(setOf("id", "order_no")),
+        )
+    }
+
+    /**
+     * DM8 + 勾回自增列 → 同样必须成对包装（**2026-09-23 真机实测驱动**）。
+     *
+     * 此前 `DmDialect` 无覆写 ⇒ 默认不包装，而 DM8 对显式给自增列赋值会拒绝：
+     * `dm.jdbc.driver.DMException: 仅当指定列列表，且SET IDENTITY_INSERT为ON时，才能对自增列赋值`
+     * （库 `DBX_TEST` / 表 `T_AUTOINC_7658` / 自增列 `ID`，实测）。本用例是该缺陷的判别判据：
+     * 摘掉 `DmDialect.renderInsertWrapper` → 本用例必红（默认态无包装），其余方言用例不受影响。
+     * DM 的标识符引用是双引号（`quoteIdentifier`），故包装表名与 INSERT 表名共用同一引用形态。
+     */
+    @Test
+    fun dmWrapsIdentityInsertWhenAutoColumnChecked() {
+        val insert = CrudSqlGenerator.generate(identitySpec(DmDialect.INSTANCE, true))
+            .first { it.kind == CrudKind.INSERT }.result
+        val model = insert.batchModel!!
+
+        // 默认态（自增列不勾）无包装——默认路径逐字节不变
+        assertEquals("INSERT INTO biz_order (order_no)\nVALUES (?)", insert.sql)
+
+        val tableRef = DmDialect.INSTANCE.quoteIfNeeded("biz_order", IdentifierCaseSource.ENTITY)
+        assertEquals(
+            "SET IDENTITY_INSERT $tableRef ON;\n" +
+                "INSERT INTO biz_order (id, order_no)\nVALUES (?, ?)\n" +
+                "SET IDENTITY_INSERT $tableRef OFF;",
+            model.renderSql(setOf("id", "order_no")),
+        )
     }
 }

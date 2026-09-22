@@ -26,6 +26,13 @@ import java.io.File
  * 扫描前剥离 // 与 block 注释：历史事故现场常以注释形态留在代码里（JBIconButton 用法
  * 记录、updateActionsAsync 备注等），不剥会误报。
  *
+ * **T-AgentResiduals R2（2026-09-22）形态变更**：`SqlLogManagerProjectState` 改为「快照持有服务引用、
+ * `restore(snapshot)` 单参」——旧双参 `restore(承接名, snapshot)` 已不存在（tearDown 里再取一次服务
+ * 正是 `temporarily-disposed` 窗口发起失败创建、永久毒化服务容器的高发形态）。本守卫的复位判据同步
+ * 由「承接名作首个实参」改为「**快照名**由 `SqlLogManagerProjectState.capture(<共享服务表达式>)` 绑定，
+ * 且该快照名被 `restore(…)` 消费」——绑定前移到 capture 点，鉴别力不降：`restore(<未绑定名>)` 仍红
+ * （自证样本 `TST02d自证_…` 已按新形态重写并补该负例）。
+ *
  * write-safe 上下文两条规则（T-WriteSafeCtx + T-TS-04 + T-FS-06）：「`ModalityState.any()` 排出的
  * 回调里做文档写」与「默认模态（`defaultModalityState()` 语义）排出的回调里做文档写」——豁免口径一致
  * （调用行上方 `// write-safe: <理由>` 标注，或写体已过 `DocWriteContext` 闸门）。
@@ -695,6 +702,34 @@ class BannedApiSourceScanTest {
         invokeLaterWriteOffenders(sources) { it.args?.contains("ModalityState.any()") == true }
 
     /**
+     * `update` 包「派发平台卸载/装载禁用 any 模态」规则的命中判定（T-DynUpdateWriteSafe）。
+     *
+     * 与 [anyModalityWriteOffenders] 的分工：那条按**写令牌**拦「回调体里写文档」，本规则**不看写令牌**
+     * ——写发生在被调用的平台卸载内部（`DynamicPlugins.unloadPlugin` → `inModalContext(sentinel
+     * "Unloading of <plugin>")` → 平台自身 commit/落盘/dispose），词法上永远看不见（2026-09-22 真机
+     * 日志实证：模态串 `[设置对话框, Unloading of SQL Visualizer]`）。故按「包 + 令牌」封口：该包是
+     * 仓内唯一向平台动态卸载/装载交棒的地方，**任何形态**的 `ModalityState.any()` 都不该出现
+     * （直接实参、赋给变量再传、决策函数返回——三种形态都实测过）。
+     *
+     * 判定跑在掩码（[maskSource]，k2j 按 .kt/.java 扩展名选 block 注释口径）后的文本上
+     * （注释与字符串字面量里的字样不算命中，逐行保行故行号可直接报）；
+     * 豁免沿用「该行向上连续注释块含 `write-safe:`」口径（本项 T-01 的只读跳板即此形态：只读当前模态，
+     * 无模型改动）。
+     */
+    private fun anyModalityInUpdatePackageOffenders(sources: List<Pair<String, String>>): List<String> {
+        val offenders = ArrayList<String>()
+        for ((path, raw) in sources) {
+            if (!path.contains("/update/")) continue
+            maskSource(path, raw).lines().forEachIndexed { index, line ->
+                if (!line.contains("ModalityState.any()")) return@forEachIndexed
+                if (leadingCommentBlock(raw, index + 1).contains("write-safe:")) return@forEachIndexed
+                offenders.add("$path:${index + 1}")
+            }
+        }
+        return offenders
+    }
+
+    /**
      * 默认模态规则——`defaultModalityState()` 语义的写法：
      *
      * Kotlin 侧两种等价写法：① 省略实参的尾随 lambda `invokeLater { … }`（[InvokeLaterSite.args] == null）；
@@ -767,6 +802,77 @@ class BannedApiSourceScanTest {
                 "改 ModalityState.nonModal()、或经 DocWriteContext 投递、或对纯 UI 站点加 `// write-safe: <理由>` 标注",
             offenders.isEmpty(),
         )
+    }
+
+    @Test
+    fun `update包派发平台卸载装载禁用any模态`() {
+        // T-DynUpdateWriteSafe（2026-09-22 真机：`Write-unsafe context!` current modality=
+        // {[设置对话框, APPLICATION_MODAL], [Unloading of SQL Visualizer]}）。平台契约（262 源码实证）：
+        // 模态的写安全资格是「进入那一刻 myWritingAllowed 的快照」，表以模态实例为键
+        // （LaterInvocator.enterModal:204-207 → TransactionGuardImpl.enteredModality:199-201）；
+        // 平台卸载会压入 ad-hoc 模态（DynamicPluginsLegacyImpl:509），any() 排出的是 posted runnable
+        // （IdeEventQueue:1106-1122 只把输入/Item/Focus 事件算用户活动）→ 快照恒 false → 卸载窗口内
+        // 平台自身的 commit/落盘/dispose 全部记 SEVERE。
+        // 本规则不看写令牌（写发生在平台卸载内部，词法上永远看不见），故按「包 + 令牌」封口：
+        // update 包任何形态的 any() 都不该出现（直接实参 / 变量中转 / 决策函数返回，三种形态实测都命中）。
+        val offenders = anyModalityInUpdatePackageOffenders(rawMainSources())
+        assertTrue(
+            "update 包出现 ModalityState.any()（命中 ${offenders.size} 处：$offenders）。" +
+                "平台动态卸载会在该模态下压入 Unloading of <plugin>，其写安全资格取派发时刻快照，" +
+                "any() 下恒 false（卸载窗口内平台自身模型改动全部记 Write-unsafe context!）。" +
+                "派发一律走 DynamicInstallSupport.dispatchModalityForUnload()；" +
+                "确属只读跳板请在该行上方加 `// write-safe: <理由>` 标注",
+            offenders.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `update包any模态守卫自证_合成样本必红`() {
+        // T-DynUpdateWriteSafe：新规则的负向自证（对齐 T-TS-04 惯例）——违规必报 / 带标注放行 /
+        // 他包不误伤，三态缺一即「规则看不见真实形态」的空绿。
+        // k2j 移植注：合成样本一律 Java 形态（.java 路径 + 括号内 lambda，Java 无尾随 lambda）。
+        val violating = listOf(
+            "src/main/java/cn/x/update/Bad.java" to """
+                class Bad {
+                    void go() {
+                        ApplicationManager.getApplication().invokeAndWait(() -> unloadPlugin(), ModalityState.any());
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "update 包内 any() 派发（含 invokeAndWait 形态）必须被命中，实际" +
+                " ${anyModalityInUpdatePackageOffenders(violating)}",
+            1,
+            anyModalityInUpdatePackageOffenders(violating).size,
+        )
+
+        val annotated = listOf(
+            "src/main/java/cn/x/update/Ok.java" to """
+                class Ok {
+                    void go() {
+                        // write-safe: UI-only（只读跳板，无模型写）
+                        ApplicationManager.getApplication().invokeAndWait(() -> readModality(), ModalityState.any());
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "带 write-safe 标注的只读站点应放行（豁免不得变成一律放行）",
+            0,
+            anyModalityInUpdatePackageOffenders(annotated).size,
+        )
+
+        val otherPackage = listOf(
+            "src/main/java/cn/x/ui/Else.java" to """
+                class Else {
+                    void go() {
+                        ApplicationManager.getApplication().invokeLater(() -> refreshUi(), ModalityState.any());
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals("规则只封 update 包，他包同形态不误伤", 0, anyModalityInUpdatePackageOffenders(otherPackage).size)
     }
 
     @Test
@@ -1853,6 +1959,56 @@ class BannedApiSourceScanTest {
     }
 
     @Test
+    fun `TEDTRC自证_跳转族调用点无ReadAction必红_白名单与自包权限放行`() {
+        // 独立复核㉗：`edtReadContractOffenders` 此前**只有主用例直接引用、无合成样本**（被元守卫登记为
+        // 「受机器保护的豁免」——缺口因此不可见）。此处关闭该缺口：三态各归其位。
+        // k2j 移植注：合成样本一律 Java 形态（.java 路径）；白名单样本对齐 k2j 白名单文件
+        // log/SqlLogPanel.java（master 为 SqlLogPanel.kt）。
+        val violating = listOf(
+            "src/main/java/cn/x/BadJump.java" to """
+                class BadJump {
+                    void go(Project project, Module module) {
+                        SourcePathResolver.resolveVirtualFile(project, module);
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "文件内无 ReadAction 的跳转族调用点必须被命中：${edtReadContractOffenders(violating)}",
+            listOf("src/main/java/cn/x/BadJump.java"),
+            edtReadContractOffenders(violating),
+        )
+
+        val wrapped = listOf(
+            "src/main/java/cn/x/WrappedJump.java" to """
+                class WrappedJump {
+                    void go(Project project, PsiElement element) {
+                        ReadAction.compute(() -> EntryJumpResolver.resolve(project, element));
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertTrue(
+            "自包 ReadAction 的调用点应放行：${edtReadContractOffenders(wrapped)}",
+            edtReadContractOffenders(wrapped).isEmpty(),
+        )
+
+        val whitelisted = listOf(
+            "src/main/java/cn/song/mybatisplus/visualizer/log/SqlLogPanel.java" to """
+                class SqlLogPanel {
+                    void go(Project project, PsiElement element) {
+                        EntryJumpResolver.resolveCandidates(project, element);
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertTrue(
+            "EDT 白名单文件应放行（白名单不得失效，否则主用例会因过报而红）：${edtReadContractOffenders(whitelisted)}",
+            edtReadContractOffenders(whitelisted).isEmpty(),
+        )
+    }
+
+    @Test
     fun `跳转族读权限运行期断言锚点`() {
         // 运行期硬断言锚点（T-PCP-03）：`SourcePathResolver.resolveVirtualFile` 入口必须保留
         // `assertReadAccessAllowed()`——源码级规则只管「调用点有没有 ReadAction 字样」，
@@ -1917,14 +2073,26 @@ class BannedApiSourceScanTest {
      */
     private data class InitEntrySite(val name: String, val line: Int, val body: String, val bodyStart: Int)
 
+    /** 初始化入口站点：`setUp` / `@Before` / `@BeforeEach`（T-ST-02 族判据用）。 */
+    private fun initEntrySites(code: String): List<InitEntrySite> =
+        entrySites(code, "setUp", "Before|BeforeEach")
+
     /**
-     * 扫出初始化入口站点，**Kotlin 与 Java 两种声明形态都认**（k2j 测试树混放）：
-     *  ① `override fun setUp()`（Kotlin，平台测试基类形态，仓内主流）；
-     *  ② `protected void setUp() throws Exception`（Java，`super.setUp()` 调用点因缺少返回类型声明
+     * 收尾入口站点：`tearDown` / `@After` / `@AfterEach`（T-AgentResiduals R2 的
+     * 「收尾窗口不得取服务」规则用）。提取口径与 [initEntrySites] 同源（同一份 [entrySites]），
+     * Kotlin 与 Java 双声明形态同样都认，只换函数名与注解词。
+     */
+    private fun teardownEntrySites(code: String): List<InitEntrySite> =
+        entrySites(code, "tearDown", "After|AfterEach")
+
+    /**
+     * 扫出入口站点（函数名 [funName] / 注解词 [annotationWords] 参数化），**Kotlin 与 Java 两种声明形态都认**
+     * （k2j 测试树混放）：
+     *  ① `override fun <名>()`（Kotlin，平台测试基类形态，仓内主流）；
+     *  ② `protected void <名>() throws Exception`（Java，`super.<名>()` 调用点因缺少返回类型声明
      *     不会被误认）；
-     *  ③ `@Before` / `@BeforeEach` / `@org.junit.Before`（含全限定）标注的入口——Kotlin 取
-     *     `fun <名>(`，Java 取 `<名>(` 的**方法名紧邻 `(`** 形态（不是「注解后第一个标识符」，
-     *     否则 `@Before public void init()` 会把名字取成 `public`）。
+     *  ③ `@<注解>`（含全限定）标注的入口——Kotlin 取 `fun <名>(`，Java 取 `<名>(` 的**方法名紧邻 `(`**
+     *     形态（不是「注解后第一个标识符」，否则 `@Before public void init()` 会把名字取成 `public`）。
      *
      * 定位 `(参数)` 与 `{体}` 都跑在 [maskSource] 后的文本上（注释/字符串里的括号不参与配平，
      * 与 [invokeLaterSites] / [pooledThreadSites] 同口径）。
@@ -1932,7 +2100,7 @@ class BannedApiSourceScanTest {
      * 已知边界（漏报方向）：注解与方法之间夹了带括号的注解（`@Before @SuppressWarnings("x") void init()`）
      * 会把名字取成 `SuppressWarnings`——体仍取对（`functionBody` 落在同一个花括号上），只影响入口名。
      */
-    private fun initEntrySites(code: String): List<InitEntrySite> {
+    private fun entrySites(code: String, funName: String, annotationWords: String): List<InitEntrySite> {
         val out = ArrayList<InitEntrySite>()
         val seenBodyStarts = HashSet<Int>()
         fun add(name: String, body: IntRange) {
@@ -1941,16 +2109,16 @@ class BannedApiSourceScanTest {
                 InitEntrySite(name, lineOf(code, body.first), code.substring(body.first, body.last + 1), body.first),
             )
         }
-        // ① Kotlin setUp
-        for (m in Regex("""(?<![A-Za-z0-9_])fun\s+setUp\s*\(""").findAll(code)) {
-            functionBody(code, m.range.last)?.let { add("setUp", it) }
+        // ① Kotlin <funName>
+        for (m in Regex("""(?<![A-Za-z0-9_])fun\s+$funName\s*\(""").findAll(code)) {
+            functionBody(code, m.range.last)?.let { add(funName, it) }
         }
-        // ② Java setUp（返回类型声明形态；`super.setUp()` 无 `void` 前缀故不误认）
-        for (m in Regex("""(?<![A-Za-z0-9_])void\s+setUp\s*\(""").findAll(code)) {
-            functionBody(code, m.range.last)?.let { add("setUp", it) }
+        // ② Java <funName>（返回类型声明形态；`super.<funName>()` 无 `void` 前缀故不误认）
+        for (m in Regex("""(?<![A-Za-z0-9_])void\s+$funName\s*\(""").findAll(code)) {
+            functionBody(code, m.range.last)?.let { add(funName, it) }
         }
         // ③ 注解入口（Kotlin `fun <名>(` / Java `<名>(`，取更靠前的那个）
-        val annotationPattern = Regex("""@(?:[A-Za-z_][A-Za-z0-9_]*\.)*(?:Before|BeforeEach)\b""")
+        val annotationPattern = Regex("""@(?:[A-Za-z_][A-Za-z0-9_]*\.)*(?:$annotationWords)\b""")
         val kotlinFunPattern = Regex("""(?<![A-Za-z0-9_])fun\s+([A-Za-z_][A-Za-z0-9_]*)""")
         val javaMethodPattern = Regex("""(?<![A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*)\s*\(""")
         for (m in annotationPattern.findAll(code)) {
@@ -2098,39 +2266,98 @@ class BannedApiSourceScanTest {
     private val projectStateResetMethodPattern = "clearForTest|clearAll|resetForTest|loadState"
 
     /**
-     * 存复原 wrapper（本轮唯一的**全量**复位口）：`SqlLogManagerProjectState.restore(<承接名>, snapshot)`。
+     * 存复原 wrapper（本轮唯一的**全量**复位口）：`SqlLogManagerProjectState.restore(<快照名>)`。
+     *
+     * **T-AgentResiduals R2 起为单参形态**：`restore(snapshot)`——快照自持服务引用，`tearDown` 不再
+     * `project.getService(…)`（那正是 `temporarily-disposed` 窗口发起失败创建、把服务永久毒化、
+     * 同片后续取用点成片变红的高发形态，T-ST-02b2 已证）。旧的 `restore(<承接名>, snapshot)` 双参形态
+     * **已随 API 删除**，本判据不再认它（认一个已不存在的形态等于给自己留一条永不触发的绿灯）。
      *
      * 刻意**不含** `SqlLogManagerProjectState.capture(`——只有 capture 没有 restore 正是「存了快照忘了还原」
-     * 的半成品；也**不含** `SqlLogManager.restoreCaptureStateForTest(`——它只回滚
-     * `capturing` / `userArmed` / `waitingForConsole` 三个字段，而 `SqlLogManagerProjectState.capture` 的快照是
-     * **15 个字段**（buffer 的 `dedupeEnabled` / `paused` / `filterKeywords` / `maxEntries` / 条目内容 /
-     * 轮询态…全不在内），**3/15 的部分复位不足以豁免**对共享实例的写（T-ST-02d 独立复核条件项）。
-     * 也**不含** `entries.clear()`——清条目不等于复位状态。
+     * 的半成品（capture 只登记快照名，见 [snapshotBindings]；豁免仍必须由 restore 触发）；
+     * 也**不含** `SqlLogManager.restoreCaptureStateForTest(`——它只回滚
+     * `capturing` / `userArmed` / `waitingForConsole` 三个字段，而 [SqlLogManagerProjectState.capture] 的快照是
+     * **16 个字段**（buffer 的 `dedupeEnabled` / `paused` / `filterKeywords` / `maxEntries` / 条目内容 /
+     * 轮询态…全不在内），**3/16 的部分复位不足以豁免**对共享实例的写（T-ST-02d 独立复核条件项）。
+     * 排除的代价为零：仓内无测试类单独依赖它（唯一直调在 [SqlLogManagerProjectState] 的 restore 体内，
+     * 该文件无初始化入口故不在判定面）。只做部分复位而不走 wrapper 全量复位的类会红——补 wrapper
+     * 或加 `// project-state: <理由>` 标注。
      */
     private val projectStateRestoreWrapper = "SqlLogManagerProjectState.restore"
 
+    /** 存快照入口（只用于**绑定快照名**，本身不算复位证据——见 [projectStateRestoreWrapper]）。 */
+    private val projectStateCaptureCall = "SqlLogManagerProjectState.capture"
+
     /**
-     * 复位证据判定（T-ST-02d 独立复核**阻断 2** 的修法）：**绑定到承接服务对象的那个标识符**，
-     * 而非文件级 `contains`。任一形态成立即视为该文件有复位：
+     * 初始化入口里的「快照名 → capture 实参文本」绑定（R2 单参 restore 的判据依据）。
+     *
+     * 形态：`<快照名> = SqlLogManagerProjectState.capture(<实参>)`（`val` / `private val` / `var` 均可，
+     * 实参可跨行）。实参文本用 [matchingDelimiter] 配平取全，供调用方判定「这个快照是从**共享服务**
+     * 捕获的」（实参含承接名或服务查找调用），而不是从别的对象 / 自建实例捕获的。
+     *
+     * 边界（漏报方向）：赋值目标与 capture 调用之间夹别的东西（如 `a = b = capture(…)`）不识别；
+     * 快照名与承接名同名（`manager = capture(manager)`）时两者都登记，判定仍正确。
+     */
+    private fun snapshotBindings(body: String): List<Pair<String, String>> {
+        val out = ArrayList<Pair<String, String>>()
+        var idx = body.indexOf(projectStateCaptureCall)
+        while (idx >= 0) {
+            val open = idx + projectStateCaptureCall.length
+            val close = if (open < body.length && body[open] == '(') matchingDelimiter(body, open, '(', ')') else -1
+            if (close >= 0) {
+                val stmtStart = body.lastIndexOfAny(charArrayOf('\n', ';'), idx - 1) + 1
+                val head = body.substring(stmtStart, idx)
+                // 赋值目标紧贴 capture 调用（`val state = ` / `serviceState = ` 两种写法都认）
+                val m = Regex("""(?:^|[^A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]*)?=\s*$""").find(head)
+                if (m != null) out.add(m.groupValues[1] to body.substring(open, close + 1))
+            }
+            idx = body.indexOf(projectStateCaptureCall, idx + 1)
+        }
+        return out
+    }
+
+    /**
+     * 复位证据判定（T-ST-02d 独立复核**阻断 2** 的修法 + T-AgentResiduals R2 形态变更）：
+     * **绑定到承接服务对象的那个标识符**（或其快照），而非文件级 `contains`。任一形态成立即视为有复位：
      *  ① `<承接名>.<复位口>(…)`——对该服务对象自身的复位调用（[projectStateResetMethodPattern]）；
-     *  ② `SqlLogManagerProjectState.restore(<承接名>, snapshot)`——存复原 wrapper，承接名作**首个实参**。
+     *  ② `SqlLogManagerProjectState.restore(<快照名>)`——R2 单参存复原 wrapper，其中
+     *     `<快照名>` 须在初始化入口里由 `SqlLogManagerProjectState.capture(<共享服务表达式>)` 绑定
+     *     （[snapshotBindings]；实参含承接名或服务查找调用才算「共享服务」）。
      *
      * 为什么必须绑定：旧口径是「文件里出现任一复位令牌即豁免」，于是 `PluginSettings.loadState(snapshot)` /
      * `JoinFkRegistry.clearForTest()` / `PluginCacheManager.clearAll(project)` / `FirstCaptureGuide.resetForTest()`
      * 这类**另一个对象**的复位会把真泄漏静默洗成绿（复核实测四个样本全绿）。绑定后这些调用不再豁免；
      * 同时**不丢覆盖面**——服务自身确实有该复位口时仍认（如 `RollbackSnapshotStore.clearForTest`）。
      *
-     * 残留边界（漏报方向，如实登记）：按**名**匹配不按实例；承接名作为**实参**传给别的对象的复位口
-     * （`SomeRegistry.clearForTest(manager)`）也按「该对象参与复位」收编为复位。
+     * R2 把绑定从 restore 点**前移到 capture 点**（restore 不再带承接名）：`restore(<未绑定名>)` /
+     * `restore(<从别处捕获的快照名>)` 都不算证据——自证样本 `TST02d自证_…` 两条负例钉住这一点。
+     *
+     * 残留边界（漏报方向，如实登记）：按**名**匹配不按实例——同文件两个顶层类用同名标识符时，
+     * A 类的复位会豁免 B 类的写（实测：仓内含 >1 顶层声明的测试文件 6 个，但**每个文件里带初始化入口
+     * 的顶层类都只有 1 个**（0 个文件存在两个入口类），故当前无实际影响）；
+     * 承接名作为**实参**传给别的对象的复位口（`SomeRegistry.clearForTest(manager)`）也按「该对象参与复位」
+     * 收编为复位。两种形态都要求承接名在**初始化入口**里被登记过（见 [serviceBoundNames] 的边界）。
      */
-    private fun hasBoundServiceReset(code: String, boundNames: Collection<String>): Boolean {
+    private fun hasBoundServiceReset(
+        code: String,
+        boundNames: Collection<String>,
+        snapshots: List<Pair<String, String>>,
+    ): Boolean {
         for (name in boundNames) {
             val id = Regex.escape(name)
             if (Regex("""(?<![A-Za-z0-9_.])$id\s*\.\s*(?:$projectStateResetMethodPattern)\s*\(""").containsMatchIn(code)) {
                 return true
             }
-            if (Regex("""(?<![A-Za-z0-9_.])${Regex.escape(projectStateRestoreWrapper)}\s*\(\s*$id\s*[,)]""")
-                    .containsMatchIn(code)
+        }
+        for ((snapshotName, captureArg) in snapshots) {
+            // 快照必须是从**共享服务**捕获的：实参里出现承接名，或直接是服务查找调用
+            val fromSharedService = boundNames.any { captureArg.contains(it) } ||
+                serviceLookupTokens.any { captureArg.contains(it) }
+            if (!fromSharedService) continue
+            if (Regex(
+                    """(?<![A-Za-z0-9_.])${Regex.escape(projectStateRestoreWrapper)}\s*\(\s*""" +
+                        """${Regex.escape(snapshotName)}\s*[,)]""",
+                ).containsMatchIn(code)
             ) {
                 return true
             }
@@ -2161,9 +2388,10 @@ class BannedApiSourceScanTest {
      *    会被误判（该形态仓内已有：`AgentListenSyncTest` 的 `finally` 分支），故本轮不收编。
      *  - **漏报｜绑定形态**：多行赋值、helper 返回（`private fun store() = project.getService(…)`）不绑定；
      *    换行形态的 wrapper（`state = SqlLogManagerProjectState.capture(` 换行后才是 `projectService(…)`）
-     *    不绑定是**有意**的（承接的是快照而非服务本体）。
+     *    不登记为**服务承接名**是有意的（承接的是快照而非服务本体），该形态由 [snapshotBindings] 收编：
+     *    capture 实参含服务查找调用即视为「快照来自共享服务」，`restore(<该快照名>)` 算复位。
      *  - **漏报｜复位判定按名匹配**：复位须落在承接名上，但按**名**不按实例。
-     *  - **漏报｜部分复位不算证据**：`SqlLogManager.restoreCaptureStateForTest(…)` 只回滚 3/15 字段，
+     *  - **漏报｜部分复位不算证据**：`SqlLogManager.restoreCaptureStateForTest(…)` 只回滚 3/16 字段，
      *    已在 [projectStateRestoreWrapper] 处排除。
      *  - **不判（非误报）**：自建实例（`new SqlLogManager(project)` 不进容器）无服务查找承接 → 不绑定；
      *    只读访问（`entries.snapshot()` / `entries.size()` / `manager.isCapturing()`）不命中两种写形态。
@@ -2177,9 +2405,11 @@ class BannedApiSourceScanTest {
             val code = maskSource(path, raw)
             val writes = ArrayList<Pair<Int, String>>()
             val boundNames = LinkedHashSet<String>()
+            val snapshots = ArrayList<Pair<String, String>>()
             for (site in initEntrySites(code)) {
                 val names = serviceBoundNames(site.body)
                 boundNames += names
+                snapshots += snapshotBindings(site.body)
                 val anchors = names.map { """(?<![A-Za-z0-9_.])""" + Regex.escape(it) + """\s*\.\s*""" } +
                     listOf(
                         """(?<![A-Za-z0-9_])getService\s*\([^()]*\)\s*\.\s*""",
@@ -2192,7 +2422,7 @@ class BannedApiSourceScanTest {
                 }
             }
             if (writes.isEmpty()) continue
-            if (hasBoundServiceReset(code, boundNames)) continue
+            if (hasBoundServiceReset(code, boundNames, snapshots)) continue
             for ((offset, hit) in writes) {
                 val line = lineOf(code, offset)
                 if (leadingCommentBlock(raw, line).contains("project-state:")) continue
@@ -2251,6 +2481,196 @@ class BannedApiSourceScanTest {
                 "确属幂等安全或非共享实例的写，在写入行上方加 `// project-state: <理由>` 标注",
             offenders.isEmpty(),
         )
+    }
+
+    /**
+     * 收尾入口（`tearDown` / `@After` / `@AfterEach`）里**不得发起项目服务查找**：
+     * `路径:行号 → 命中片段`。
+     *
+     * **为什么单列一条（T-AgentResiduals R2，2026-09-22）**：`@After` / `tearDown` 正是「项目
+     * temporarily-disposed」窗口的**高发时段**；此刻才首次创建某个订阅 `project.messageBus` 的服务，
+     * 平台 `LazyInstanceHolder` 会把 `CannotInitialize` 缓存下来、**该服务在该 ProjectImpl 上永久重抛**
+     * （T-ST-02b2 已证：一次失败创建 → 同片后续所有取用点成片变红，`testShards` shard3 flake 的
+     * 最后一个来源正是 `SqlLogManagerProjectState.restore` 的**旧双参形态**在 tearDown 里再取一次服务）。
+     *
+     * 修法固定为「**收尾窗口不触碰服务容器**」：需要在 tearDown 里复原的共享服务，在 setUp 里连**引用**
+     * 一起存进快照（`SqlLogManagerProjectState.capture` 现自持 manager 引用、`restore(snapshot)` 单参），
+     * 于是 tearDown 全程零 `getService`。
+     *
+     * **豁免**：查找行上方连续注释块含 `// project-state: <理由>`（与上一条规则同族逃生舱；
+     * 例如确需在收尾里探测另一个服务的状态，且该服务在本类 setUp 中已创建——请在标注里写明）。
+     *
+     * 单独成函数以便合成样本自证（规则「看不见某形态」= 空绿，只能靠合成样本钉住，
+     * 见 `R2自证_收尾窗口取服务必红`）。
+     */
+    private fun teardownServiceLookupOffenders(sources: List<Pair<String, String>>): List<String> {
+        val offenders = ArrayList<String>()
+        for ((path, raw) in sources) {
+            val code = maskSource(path, raw)
+            for (site in teardownEntrySites(code)) {
+                for (token in serviceLookupTokens) {
+                    var idx = site.body.indexOf(token)
+                    while (idx >= 0) {
+                        val line = lineOf(code, site.bodyStart + idx)
+                        if (!leadingCommentBlock(raw, line).contains("project-state:")) {
+                            offenders.add("$path:$line → ${site.name} 里的 $token")
+                        }
+                        idx = site.body.indexOf(token, idx + 1)
+                    }
+                }
+            }
+        }
+        return offenders
+    }
+
+    @Test
+    fun `收尾窗口不得取项目服务`() {
+        // T-AgentResiduals R2：见 [teardownServiceLookupOffenders] 的 KDoc。
+        // k2j 移植注：master 的 testSources() 即原文（不剥注释，豁免标注要在原文上认）；k2j 同口径的
+        // 原文扫描面是 [rawTestSources]（.kt/.java 双根、本守卫自身排除）——testSources() 是剥注释版
+        // （BrowserUtil/剪贴板两条片段规则用），注释被剥掉会让 `// project-state:` 豁免永不生效。
+        val sources = rawTestSources()
+        assertTestSourcesResolved(sources)
+        val offenders = teardownServiceLookupOffenders(sources)
+        assertTrue(
+            "tearDown/@After 里出现项目服务查找，命中 ${offenders.size} 处：$offenders。" +
+                "收尾正是「项目 temporarily-disposed」窗口的高发时段，此刻首次创建订阅 project.messageBus 的" +
+                "服务会让平台把 CannotInitialize 缓存下来、该服务在本项目实例上永久重抛（同片后续用例成片变红）。" +
+                "需要复原的共享服务请在 setUp 里连**引用**一起存（SqlLogManagerProjectState.capture 自持 manager " +
+                "引用，restore(snapshot) 单参），tearDown 全程不碰服务容器；确需收尾探测的加 " +
+                "`// project-state: <理由>` 标注",
+            offenders.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `R2自证_收尾窗口取服务必红_存快照形态放行`() {
+        // 负向自证：违规必报 + 三类合法形态放行 + 豁免标注只豁免被标注的那一行。
+        // k2j 移植注：master 的 Kotlin 样本逐字保留；补一条 Java `@After public void` 形态样本
+        // （k2j 测试树混放，收尾入口提取对 Java 声明形态同样生效——见 [teardownEntrySites]）。
+        val violating = listOf(
+            "src/test/kotlin/x/TearDownLookupSampleTest.kt" to """
+                class TearDownLookupSampleTest : BasePlatformTestCase() {
+                    override fun tearDown() {
+                        SqlLogManagerProjectState.restore(
+                            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "tearDown.restore"),
+                            null,
+                        )
+                        super.tearDown()
+                    }
+                }
+            """.trimIndent(),
+        )
+        val found = teardownServiceLookupOffenders(violating)
+        assertEquals("tearDown 里取项目服务必须命中：$found", 1, found.size)
+        assertTrue(
+            "命中点须锚在**取服务那一行**（行号靠保行掩码回推）：$found",
+            found[0].endsWith("TearDownLookupSampleTest.kt:4 → tearDown 里的 projectService("),
+        )
+
+        // 合法形态 ①：R2 后的单参 restore（快照自持引用）——tearDown 零服务查找
+        val restored = listOf(
+            "src/test/kotlin/x/TearDownSnapshotSampleTest.kt" to """
+                class TearDownSnapshotSampleTest : BasePlatformTestCase() {
+                    private var state: SqlLogManagerProjectState.Snapshot? = null
+
+                    override fun setUp() {
+                        super.setUp()
+                        state = SqlLogManagerProjectState.capture(project.getService(SqlLogManager::class.java))
+                    }
+
+                    override fun tearDown() {
+                        SqlLogManagerProjectState.restore(state)
+                        super.tearDown()
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "R2 形态（快照持有引用、tearDown 只 restore）不得误报：${teardownServiceLookupOffenders(restored)}",
+            0,
+            teardownServiceLookupOffenders(restored).size,
+        )
+
+        // 合法形态 ②：@After 形态同样在扫描面内（且它才是不经平台基类的纯 JUnit 类收尾口）
+        val afterForm = listOf(
+            "src/test/kotlin/x/AfterSampleTest.kt" to """
+                class AfterSampleTest {
+                    @After
+                    fun cleanup() {
+                        JoinFkRegistry.clearForTest()
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "@After 里不取服务不得误报：${teardownServiceLookupOffenders(afterForm)}",
+            0,
+            teardownServiceLookupOffenders(afterForm).size,
+        )
+
+        // 扫描面自证：@After 形态确实被提取（否则上面那个 0 是「入口没被识别」的空绿）
+        assertEquals(
+            "@After 入口应被提取：${teardownEntrySites(maskSource(afterForm[0].first, afterForm[0].second))}",
+            1,
+            teardownEntrySites(maskSource(afterForm[0].first, afterForm[0].second)).size,
+        )
+
+        // 合法形态 ②的 Java 侧（k2j）：`@After public void cleanup()` 与 Java `void tearDown()` 同样在扫描面
+        val javaAfterForm = listOf(
+            "src/test/java/x/JavaAfterSampleTest.java" to """
+                class JavaAfterSampleTest {
+                    @After
+                    public void cleanup() {
+                        JoinFkRegistry.clearForTest();
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "Java @After 入口应被提取（Java 声明形态不收，整个 src/test/java 收尾扫描面就恒绿）：" +
+                "${teardownEntrySites(maskSource(javaAfterForm[0].first, javaAfterForm[0].second)).map { it.name }}",
+            listOf("cleanup"),
+            teardownEntrySites(maskSource(javaAfterForm[0].first, javaAfterForm[0].second)).map { it.name },
+        )
+
+        val javaTearDownLookup = listOf(
+            "src/test/java/x/JavaTearDownLookupSampleTest.java" to """
+                class JavaTearDownLookupSampleTest {
+                    void tearDown() {
+                        SqlLogManager manager = project.getService(SqlLogManager.class);
+                        manager.setCapturingForTest(false);
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "Java `void tearDown()` 里取项目服务必须同样命中：${teardownServiceLookupOffenders(javaTearDownLookup)}",
+            1,
+            teardownServiceLookupOffenders(javaTearDownLookup).size,
+        )
+
+        // 豁免标注：只豁免被标注的那一行
+        val annotated = listOf(
+            "src/test/kotlin/x/AnnotatedTearDownSampleTest.kt" to """
+                class AnnotatedTearDownSampleTest : BasePlatformTestCase() {
+                    override fun tearDown() {
+                        // project-state: 本类 setUp 已创建该服务，此处只读探测（不发起创建）
+                        val m = AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "tearDown.probe")
+                        m.setCapturingForTest(false)
+                        super.tearDown()
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "带 `// project-state: <理由>` 标注的取服务应豁免：${teardownServiceLookupOffenders(annotated)}",
+            0,
+            teardownServiceLookupOffenders(annotated).size,
+        )
+
+        // 空扫描面自证：路径解析失败 = 空绿，主用例的非空断言必须能拦住
+        assertEquals("空扫描面下规则恒 0 违规", 0, teardownServiceLookupOffenders(emptyList()).size)
     }
 
     @Test
@@ -2394,12 +2814,12 @@ class BannedApiSourceScanTest {
             projectServiceStateOffenders(violatingCalls).size,
         )
 
-        // 复位调用（testutil 存复原）→ 放行
+        // 复位调用（testutil 存复原，R2 单参形态：快照自持服务引用）→ 放行
         val restored = listOf(
             "src/test/kotlin/x/RestoredSampleTest.kt" to """
                 class RestoredSampleTest : BasePlatformTestCase() {
                     private lateinit var manager: SqlLogManager
-                    private lateinit var state: SqlLogManagerProjectState.Snapshot
+                    private var state: SqlLogManagerProjectState.Snapshot? = null
 
                     override fun setUp() {
                         super.setUp()
@@ -2409,7 +2829,7 @@ class BannedApiSourceScanTest {
                     }
 
                     override fun tearDown() {
-                        SqlLogManagerProjectState.restore(manager, state)
+                        SqlLogManagerProjectState.restore(state)
                         super.tearDown()
                     }
                 }
@@ -2419,6 +2839,60 @@ class BannedApiSourceScanTest {
             "类内有 capture/restore 存复原的写不得误报：${projectServiceStateOffenders(restored)}",
             0,
             projectServiceStateOffenders(restored).size,
+        )
+
+        // R2 形态的鉴别力（负例 1）：restore 的快照名**未在初始化入口由 capture 绑定** → 不算复位证据
+        val unboundSnapshotRestore = listOf(
+            "src/test/kotlin/x/UnboundSnapshotSampleTest.kt" to """
+                class UnboundSnapshotSampleTest : BasePlatformTestCase() {
+                    private lateinit var manager: SqlLogManager
+
+                    override fun setUp() {
+                        super.setUp()
+                        manager = project.getService(SqlLogManager::class.java)
+                        manager.entries.dedupeEnabled = false
+                    }
+
+                    override fun tearDown() {
+                        SqlLogManagerProjectState.restore(state)
+                        super.tearDown()
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "restore(<未由 capture 绑定的快照名>) 不得算复位证据（否则认令牌就等于一律放行）：" +
+                "${projectServiceStateOffenders(unboundSnapshotRestore)}",
+            1,
+            projectServiceStateOffenders(unboundSnapshotRestore).size,
+        )
+
+        // R2 形态的鉴别力（负例 2）：快照是从**别的对象**（自建实例，非容器服务）捕获的 → 不算复位证据
+        val snapshotFromOtherObject = listOf(
+            "src/test/kotlin/x/SnapshotFromOtherSampleTest.kt" to """
+                class SnapshotFromOtherSampleTest : BasePlatformTestCase() {
+                    private lateinit var manager: SqlLogManager
+                    private var state: SqlLogManagerProjectState.Snapshot? = null
+
+                    override fun setUp() {
+                        super.setUp()
+                        manager = project.getService(SqlLogManager::class.java)
+                        state = SqlLogManagerProjectState.capture(SqlLogManager(project))
+                        manager.entries.dedupeEnabled = false
+                    }
+
+                    override fun tearDown() {
+                        SqlLogManagerProjectState.restore(state)
+                        super.tearDown()
+                    }
+                }
+            """.trimIndent(),
+        )
+        assertEquals(
+            "快照从自建实例（SqlLogManager(project)，不进容器）捕获时不得豁免对共享服务的写：" +
+                "${projectServiceStateOffenders(snapshotFromOtherObject)}",
+            1,
+            projectServiceStateOffenders(snapshotFromOtherObject).size,
         )
 
         // 自建实例（不进容器）→ 不判为泄漏
@@ -2592,29 +3066,30 @@ class BannedApiSourceScanTest {
                 .endsWith("WrapperBoundSampleTest.kt:7 → manager.entries.dedupeEnabled ="),
         )
 
-        // wrapper 承接 + wrapper 全量复位（承接名作首个实参）→ 绿
+        // wrapper 承接 + wrapper 全量复位（R2 单参形态，快照由 wrapper 取服务表达式捕获）→ 绿
         val wrapperRestored = listOf(
             "src/test/kotlin/x/WrapperRestoredSampleTest.kt" to """
                 class WrapperRestoredSampleTest : BasePlatformTestCase() {
-                    private lateinit var manager: SqlLogManager
-                    private lateinit var state: SqlLogManagerProjectState.Snapshot
+                    private var state: SqlLogManagerProjectState.Snapshot? = null
 
                     override fun setUp() {
                         super.setUp()
-                        manager = AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "setUp.manager")
-                        state = SqlLogManagerProjectState.capture(manager)
-                        manager.entries.dedupeEnabled = false
+                        state = SqlLogManagerProjectState.capture(
+                            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "setUp.capture")
+                        )
+                        AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "setUp.write")
+                            .entries.dedupeEnabled = false
                     }
 
                     override fun tearDown() {
-                        SqlLogManagerProjectState.restore(manager, state)
+                        SqlLogManagerProjectState.restore(state)
                         super.tearDown()
                     }
                 }
             """.trimIndent(),
         )
         assertEquals(
-            "wrapper 承接 + SqlLogManagerProjectState.restore(<承接名>, …) 全量复位不得误报：" +
+            "wrapper 取服务（换行形态）+ SqlLogManagerProjectState.restore(<快照名>) 全量复位不得误报：" +
                 "${projectServiceStateOffenders(wrapperRestored)}",
             0,
             projectServiceStateOffenders(wrapperRestored).size,

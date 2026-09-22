@@ -103,6 +103,102 @@ class DialectTest {
     }
 
     /**
+     * 标识符折叠方向族（O-51 / T-IdentifierFoldingFamily）：9 方言逐库声明——Oracle / H2 = UPPER、
+     * PostgreSQL / KingBase = LOWER、其余 5 方言 = NONE。
+     *
+     * 归属依据（真机/引擎实测，2026-09-22）：
+     *  - Oracle：`FROM dual` → 1（裸写折为大写命中）、`FROM "dual"` → `ORA-00942`；
+     *  - PostgreSQL：`FROM INFORMATION_SCHEMA.TABLES` → 366 行（折为小写命中）、`FROM information_schema."TABLES"`
+     *    → `relation "information_schema.TABLES" does not exist`；
+     *  - KingBase：同向（裸写 492 行、引号大写 `kb: relation ... does not exist`）；
+     *  - H2 2.3.232：引擎级对照实验（`DialectH2VerificationTest.标识符折叠方向_H2引擎实测对照`
+     *    逐次复现）——引号创建的 `"fold_lower"` 裸写访问失败、引号创建的 `"FOLD_UPPER"` 裸写命中
+     *    → 折为大写（与 Oracle 同族）。**此前归 NONE 与实测相反**，本轮按实测订正（该条经实测
+     *    推翻原结论：`DialectTest.kt:125` 那条 `assertEquals(NONE, H2Dialect...)` 已解冻）；
+     *  - DM8：三形态（`sys.sysobjects` / `sys."sysobjects"` / `sys."SYSOBJECTS"`）均 1029 行 → 大小写不敏感 → NONE。
+     */
+    @Test
+    fun `标识符折叠方向族`() {
+        assertEquals(IdentifierFolding.UPPER, OracleDialect.INSTANCE.identifierFolding)
+        assertEquals(IdentifierFolding.LOWER, PostgreSQLDialect.INSTANCE.identifierFolding)
+        assertEquals(IdentifierFolding.LOWER, KingBaseDialect.INSTANCE.identifierFolding)
+        assertEquals(IdentifierFolding.NONE, MySqlDialect.INSTANCE.identifierFolding)
+        assertEquals(IdentifierFolding.NONE, SqlServerDialect.INSTANCE.identifierFolding)
+        assertEquals(IdentifierFolding.UPPER, H2Dialect.INSTANCE.identifierFolding)
+        assertEquals(IdentifierFolding.NONE, SqliteDialect.INSTANCE.identifierFolding)
+        assertEquals(IdentifierFolding.NONE, MariaDbDialect.INSTANCE.identifierFolding)
+        assertEquals(IdentifierFolding.NONE, DmDialect.INSTANCE.identifierFolding)
+        // 逐库点名族成员（注册表顺序），新增方言漏声明或归错族时先红
+        assertEquals(
+            listOf("Oracle", "H2"),
+            DialectRegistry.INSTANCE.dialects.filter { it.identifierFolding == IdentifierFolding.UPPER }.map { it.name },
+        )
+        assertEquals(
+            listOf("PostgreSQL", "KingBase（人大金仓）"),
+            DialectRegistry.INSTANCE.dialects.filter { it.identifierFolding == IdentifierFolding.LOWER }.map { it.name },
+        )
+    }
+
+    /**
+     * 目录来源按族引用（O-51）：同一方法在 UPPER / LOWER 两族下「哪种大小写形态必须加引号」相反，
+     * NONE 族不判（[Dialect.quoteIfNeeded] 落回 [Dialect.quoteIfKeyword]）。
+     *
+     * 实体来源（[IdentifierCaseSource.ENTITY]）三族都**逐字不变**——族判定只允许写在 CATALOG 分支里。
+     */
+    @Test
+    fun `目录来源按折叠族引用`() {
+        // UPPER 族（Oracle）：含小写 → 包；全大写 → 裸写（保留字仍包）
+        assertEquals("\"issue_new\"", OracleDialect.INSTANCE.quoteIfNeeded("issue_new", IdentifierCaseSource.CATALOG))
+        assertEquals("ISSUE_NEW", OracleDialect.INSTANCE.quoteIfNeeded("ISSUE_NEW", IdentifierCaseSource.CATALOG))
+        assertEquals("\"NUMBER\"", OracleDialect.INSTANCE.quoteIfNeeded("NUMBER", IdentifierCaseSource.CATALOG))
+        // LOWER 族（PG / KingBase）：含大写 → 包；全小写 → 裸写
+        assertEquals("\"Issue_New\"", PostgreSQLDialect.INSTANCE.quoteIfNeeded("Issue_New", IdentifierCaseSource.CATALOG))
+        assertEquals("issue_new", PostgreSQLDialect.INSTANCE.quoteIfNeeded("issue_new", IdentifierCaseSource.CATALOG))
+        assertEquals("\"Issue_New\"", KingBaseDialect.INSTANCE.quoteIfNeeded("Issue_New", IdentifierCaseSource.CATALOG))
+        assertEquals("issue_new", KingBaseDialect.INSTANCE.quoteIfNeeded("issue_new", IdentifierCaseSource.CATALOG))
+        // NONE 族：目录来源也不按大小写判定（保留字行为不变）
+        assertEquals("Issue_New", DmDialect.INSTANCE.quoteIfNeeded("Issue_New", IdentifierCaseSource.CATALOG))
+        assertEquals("Issue_New", MySqlDialect.INSTANCE.quoteIfNeeded("Issue_New", IdentifierCaseSource.CATALOG))
+        assertEquals("`table`", MySqlDialect.INSTANCE.quoteIfNeeded("table", IdentifierCaseSource.CATALOG))
+        // 实体来源三族逐字不变（含大写派生名也不得被包）
+        assertEquals("Issue_New", OracleDialect.INSTANCE.quoteIfNeeded("Issue_New", IdentifierCaseSource.ENTITY))
+        assertEquals("Issue_New", PostgreSQLDialect.INSTANCE.quoteIfNeeded("Issue_New", IdentifierCaseSource.ENTITY))
+        assertEquals("Issue_New", KingBaseDialect.INSTANCE.quoteIfNeeded("Issue_New", IdentifierCaseSource.ENTITY))
+    }
+
+    /**
+     * UPSERT 后缀的列名引用与 INSERT 基座同一判定（O-51 接线）：目录来源含大写时后缀列名同样加引号
+     * ——否则产出「基座加引号、后缀裸写」的半包形态（裸写被折叠为小写 → 列不存在）。
+     *
+     * NONE 族（MySQL / SQLite）两来源产物逐字节一致（无行为变化）；H2 自本轮起为 UPPER 族
+     * （引擎实测折为大写），目录来源含小写的名字**加引号**。
+     */
+    @Test
+    fun `upsert列名按目录来源同一判定`() {
+        assertEquals(
+            "ON CONFLICT (\"Id\") DO UPDATE SET \"Name\" = EXCLUDED.\"Name\"",
+            PostgreSQLDialect.INSTANCE.renderUpsert("Id", listOf("Name"), IdentifierCaseSource.CATALOG),
+        )
+        assertEquals(
+            "ON CONFLICT (Id) DO UPDATE SET Name = EXCLUDED.Name",
+            PostgreSQLDialect.INSTANCE.renderUpsert("Id", listOf("Name"), IdentifierCaseSource.ENTITY),
+        )
+        assertEquals(
+            "ON CONFLICT (Id) DO UPDATE SET Name = EXCLUDED.Name",
+            SqliteDialect.INSTANCE.renderUpsert("Id", listOf("Name"), IdentifierCaseSource.CATALOG),
+        )
+        // H2 = UPPER 族：目录来源含小写 → 加引号（与 Oracle 同判定）
+        assertEquals(
+            "MERGE INTO \"Issue_New\" (\"Id\", \"Name\") KEY (\"Id\") VALUES (?, ?)",
+            H2Dialect.INSTANCE.renderUpsertStatement("Issue_New", listOf("Id", "Name"), "Id", IdentifierCaseSource.CATALOG),
+        )
+        assertEquals(
+            "MERGE INTO Issue_New (Id, Name) KEY (Id) VALUES (?, ?)",
+            H2Dialect.INSTANCE.renderUpsertStatement("Issue_New", listOf("Id", "Name"), "Id", IdentifierCaseSource.ENTITY),
+        )
+    }
+
+    /**
      * UPSERT 冲突子句（T-M43）：MySQL 系 ON DUPLICATE KEY UPDATE + VALUES()；
      * PG 系 ON CONFLICT + EXCLUDED；Oracle/SQL Server/DM 无原生形态 → null（渲染方降级纯 INSERT）。
      * 列名按需引用（`table` 保留字命中本方言符号）。

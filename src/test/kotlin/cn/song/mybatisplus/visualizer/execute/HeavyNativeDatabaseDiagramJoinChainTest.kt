@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.ui.diagram.EntityNode
 import cn.song.mybatisplus.visualizer.ui.diagram.RelationshipLine
 import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.NativeJoinDiagramOpener
 import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.JoinFkRegistry
+import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.JoinVirtualFkProvider
 import cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport
 import com.intellij.credentialStore.OneTimeString
 import com.intellij.database.access.DbCredentialManager
@@ -17,6 +18,7 @@ import com.intellij.database.util.GuardedRef
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.LightProjectDescriptor
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
@@ -195,11 +197,20 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
         )
         if (component == null) {
             // T-TS-08：本分支是本环境实际命中的那一条（见类注释）——绿是「未验证」而不是「已验证」。
-            // 降级原因已由产品侧日志给出（idea.log grep "B path not taken" / "B path locateDbTables"）
+            // N6：软返回不再无条件记绿——先用产品侧的可断言诊断出口区分两种降级：
+            //   ① 数据源模型里根本没定位到表（本环境受限，可跳过，但读数必须打印出来）
+            //   ② 表已定位到（nameHits > 0）却没接管 → DbElement 未登记 / 框架异常，属**新故障**，判失败
+            val counts = NativeDatabaseDiagramSupport.lastLocateCounts()
+            if (counts != null && counts.locatedAny()) {
+                fail(
+                    "表已在数据源模型里定位到（nameHits=${counts.nameHits}）但 B 路径仍未接管——" +
+                        "这是新故障（DbElement 未登记 / 框架异常），不是「环境定位不到表」；counts=$counts",
+                )
+            }
             println(
-                "[DB-IT] SKIP: B 路径链路不可用（表定位失败或框架异常，应降级 A 路径）" +
-                    "——注意：本用例记绿但 B 路径**未验证**（五组断言未执行）；降级原因见 idea.log 的 " +
-                    "\"B path not taken\" / \"B path locateDbTables\" 两行",
+                "[DB-IT] SKIP: B 路径链路不可用（表定位失败，应降级 A 路径）" +
+                    "——注意：本用例记绿但 B 路径**未验证**（五组断言未执行）；counts=$counts" +
+                    "（nameHits=0 即「数据源模型里没有这两张表」，是本环境受限而非产品缺陷）",
             )
             return
         }
@@ -228,6 +239,29 @@ class HeavyNativeDatabaseDiagramJoinChainTest : BasePlatformTestCase() {
         assertTrue(
             "连接线应来自虚拟外键（SQLV_JOIN 前缀），实际=$edgeNames",
             edgeNames.any { it?.startsWith("SQLV_JOIN") == true },
+        )
+
+        // N6 行为级守卫（直接调 provider，不依赖画布/布局的间接性）：平台建边链走的是**两参重载**
+        // `ModelRelationManager.getForeignKeys(Project, DasTable)`，字节码恒定把 refTable 传成 null，
+        // 契约是「不做引用表过滤、返回该表全部外键」。修复前 provider 见 null 即返回空 →
+        // `DbDiagramDataModel.calculateEdges` 建边恒空：节点/注释/类型全正常、连线一条都没有。
+        val nodeDasTables = ApplicationManager.getApplication()
+            .runReadAction<List<com.intellij.database.model.DasTable>> {
+                b.dataModel.nodes.mapNotNull { it.identifyingElement as? com.intellij.database.model.DasTable }
+            }
+        val childDas = nodeDasTables.firstOrNull { it.name.equals("station_info", ignoreCase = true) }
+        val refDas = nodeDasTables.firstOrNull { it.name.equals("car_device_info", ignoreCase = true) }
+        assertTrue("应能从图节点取回 station_info 的 DasTable（引用表实例解析的前提），实际=${nodeDasTables.map { it.name }}", childDas != null)
+        assertTrue("应能从图节点取回 car_device_info 的 DasTable，实际=${nodeDasTables.map { it.name }}", refDas != null)
+        val twoArgFks = JoinVirtualFkProvider().getForeignKeys(project, childDas!!, null)
+        assertTrue(
+            "N6：两参契约（refTable=null）必须返回该表的虚拟外键；返回空 = 建边恒空、原生图只剩节点",
+            twoArgFks.isNotEmpty(),
+        )
+        assertTrue(
+            "虚拟外键的引用表必须是图节点**同一实例**——calculateEdges 以 " +
+                "nodeMap.get(asDbElement(fk.getRefTable())) 查引用表节点，实例不等则边被静默丢掉",
+            twoArgFks.any { it.refTable === refDas },
         )
 
         // T-PreviewBgFit（问题二守卫）：原生图须置「布局后自适应」+「尺寸变化后保持自适应」——

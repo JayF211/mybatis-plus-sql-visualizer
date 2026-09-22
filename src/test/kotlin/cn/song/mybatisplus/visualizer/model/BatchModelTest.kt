@@ -1,9 +1,12 @@
 package cn.song.mybatisplus.visualizer.model
 
+import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DmDialect
 import cn.song.mybatisplus.visualizer.sql.H2Dialect
+import cn.song.mybatisplus.visualizer.sql.IdentifierCaseSource
 import cn.song.mybatisplus.visualizer.sql.KingBaseDialect
 import cn.song.mybatisplus.visualizer.sql.MariaDbDialect
+import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.OracleDialect
 import cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect
 import cn.song.mybatisplus.visualizer.sql.SqlServerDialect
@@ -125,6 +128,55 @@ class BatchModelTest {
             model.renderSql(setOf("name", "id", "version")),
         )
         assertEquals(listOf("entity.name", "entity.id", "entity.version"), model.orderedSources(setOf("name", "id", "version")))
+    }
+
+    /**
+     * 版本列 `= <col> + 1` 的**两侧同一判定**（独立复核 ㉘ 的同型「半包」残留）。
+     *
+     * 此前表达式右侧是裸写字面量、左侧走 [Dialect.quoteIfNeeded]——名字一旦需要引用就产出
+     * 「左侧加引号、右侧裸写」的半包形态，右侧裸写在 UPPER 族被折叠为大写 → 列不存在
+     * （与 UPSERT 后缀同款，见 `DialectTest.upsert列名按目录来源同一判定`）。
+     *
+     * **当前生产路径不可达**：`versionColumn` 只在实体侧产出（[cn.song.mybatisplus.visualizer.psi.EntityResolver]
+     * 的 `@Version` 派生名），目录侧 [cn.song.mybatisplus.visualizer.database.DbTableSpecAdapter] 恒 null
+     * ——故本用例是契约钉住（防将来接线后复发），非在跑缺陷回归。
+     */
+    @Test
+    fun updateVersionColumnQuotesBothSidesOfTheExpression() {
+        fun model(dialect: Dialect, version: String, source: IdentifierCaseSource) = BatchModel(
+            BatchKind.UPDATE,
+            "biz_store_coupon",
+            listOf(BatchColumn("name", "entity.name", true, true)),
+            listOf(
+                BatchColumn("id", "entity.id", false, true),
+                BatchColumn(version, "entity.$version", false, true),
+            ),
+            version,
+            null,
+            dialect,
+            source,
+        )
+        // UPPER 族（Oracle / H2）+ 目录来源：字典名含小写 → 两侧都加引号（`id` 含小写，同样加引号）
+        listOf(OracleDialect.INSTANCE, H2Dialect.INSTANCE).forEach { d ->
+            assertEquals(
+                "方言 ${d.name}：版本列表达式两侧须同一判定",
+                """
+                UPDATE "biz_store_coupon"
+                SET "name" = ?, "lock_ver" = "lock_ver" + 1
+                WHERE "id" = ? AND "lock_ver" = ?
+                """.trimIndent(),
+                model(d, "lock_ver", IdentifierCaseSource.CATALOG).renderSql(setOf("name", "id", "lock_ver")),
+            )
+        }
+        // 保留字命中的版本列名：实体来源两侧都包（此前左侧包、右侧裸写 → 右引用不成立）
+        assertEquals(
+            """
+            UPDATE biz_store_coupon
+            SET name = ?, `order` = `order` + 1
+            WHERE id = ? AND `order` = ?
+            """.trimIndent(),
+            model(MySqlDialect.INSTANCE, "order", IdentifierCaseSource.ENTITY).renderSql(setOf("name", "id", "order")),
+        )
     }
 
     @Test

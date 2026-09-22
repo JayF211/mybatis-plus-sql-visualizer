@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.mcp
 
+import cn.song.mybatisplus.visualizer.log.LogSqlEntry
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
 import cn.song.mybatisplus.visualizer.log.SqlSource
 import cn.song.mybatisplus.visualizer.log.StatementType
@@ -31,7 +32,7 @@ class McpHistoryIngestTest : BasePlatformTestCase() {
 
     /** T-TestIsolation：本类经 [McpToolsetSupportKt.recordMcpExecution] 往**项目服务级**共享 buffer 入队条目
      *  （light 项目片内跨类复用同一 SqlLogManager 实例）——存初值供 tearDown 清回。 */
-    private lateinit var serviceState: SqlLogManagerProjectState.Snapshot
+    private var serviceState: SqlLogManagerProjectState.Snapshot? = null
 
     override fun setUp() {
         super.setUp()
@@ -41,10 +42,7 @@ class McpHistoryIngestTest : BasePlatformTestCase() {
     }
 
     override fun tearDown() {
-        SqlLogManagerProjectState.restore(
-            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "tearDown.restore"),
-            serviceState,
-        )
+        SqlLogManagerProjectState.restore(serviceState)
         super.tearDown()
     }
 
@@ -92,6 +90,39 @@ class McpHistoryIngestTest : BasePlatformTestCase() {
         assertEquals(8L, last.executionTimeMs)
         assertEquals("demo-mysql", last.databaseName)
         assertTrue("入队分配捕获序号（列表行号 #N）", last.sequenceNumber > 0L)
+    }
+
+    /**
+     * D1 定案（2026-09-22 用户）：**MCP 审计不受「SQL 日志」捕获开关约束**——只受设置页
+     * 「启用 SQL Visualizer MCP 工具」＋工具级禁用清单（`McpToolGate`）控制。
+     *
+     * 本用例钉住该口径：`paused=true`（含用户显式「停止捕捉」后的状态）期间，审计条目**照样落库**；
+     * 同时用同一条入队路径上的**普通条目**作对照臂（被 `paused` 拦下）——两臂都断言，排除空真。
+     * 反向验证：把 `recordMcpExecution` 改回 `addEntry` → 本用例第一处断言必红。
+     */
+    fun test记录MCP执行_不受捕获开关约束_paused期间照样落条目() {
+        val manager = AlreadyDisposedDiagnostics.projectService(
+            project, SqlLogManager::class.java, "test.不受捕获开关约束",
+        )
+        manager.entries.dedupeEnabled = true
+        val before = manager.entries.size()
+        manager.entries.setPaused(true)
+        try {
+            assertFalse(
+                "对照臂：paused 期间普通入队应被拦下（证明本用例确实处于「开关关闭」态）",
+                manager.entries.addEntry(
+                    // k2j 适配：LogSqlEntry 为 Java 类，具名实参改位置实参（3 参重载）
+                    LogSqlEntry("SELECT plain_probe", "SELECT plain_probe", emptyList()),
+                ),
+            )
+            McpToolsetSupportKt.recordMcpExecution(project, "SELECT audit_probe", "demo-mysql", 3L, null)
+            val entries = manager.entries.snapshot()
+            assertEquals("paused 期间 MCP 审计条目照样落库（不受捕获开关约束）", before + 1, entries.size)
+            assertEquals("SELECT audit_probe", entries.last().restoredSql)
+            assertEquals(SqlSource.MCP, entries.last().source)
+        } finally {
+            manager.entries.setPaused(false)
+        }
     }
 
     fun test记录MCP执行_同一条SQL连续两次_去重窗口内折叠() {

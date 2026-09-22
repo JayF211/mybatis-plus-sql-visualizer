@@ -12,8 +12,26 @@ import java.util.logging.Logger;
  * 织入端到端测试夹具：最小 Driver。connect 返回 JDK Proxy 的 Connection
  * （prepareStatement 返回 JDK Proxy 的 PreparedStatement），避免手写接口全实现。
  * 织入钩子只包 connect 出口，与返回对象的真实形态无关。
+ *
+ * <p>T-AgentProxyCL 夹具缺口修复：返回对象实现的接口**必须包含驱动自定义接口**
+ * （{@link VendorConnection} / {@link VendorStatement}），且代理类定义在夹具自身的 loader 里——
+ * 这才是真实驱动的形态（Connector/J 的 {@code ConnectionImpl} 实现
+ * {@code com.mysql.cj.jdbc.JdbcConnection} / {@code MysqlConnection} / {@code TransactionEventHandler}
+ * 等驱动加载器里的接口）。旧夹具只实现 bootstrap 的 {@code java.sql.Connection}，
+ * 于是「代理定义 loader 看不见接口」这条唯一失败分支在测试里永远走不到：真机失效、测试全绿。
+ * 夹具被测试按「子优先 loader」加载时，本接口的副本只存在于子 loader → 系统 loader 看不见，
+ * 与 fat jar 下的真实现象同构。
  */
 public class FakeDriver implements java.sql.Driver {
+
+    /** 驱动自定义连接接口（非 bootstrap 接口，落在驱动 loader 的命名空间里）。 */
+    public interface VendorConnection extends Connection {
+        String vendorTag();
+    }
+
+    /** 驱动自定义语句接口（同款：真实驱动的 PreparedStatement 实现类也带驱动自定义接口）。 */
+    public interface VendorStatement extends java.sql.PreparedStatement {
+    }
 
     /** 最近一次 connect 返回的原对象（未织入语义断言用）。 */
     public static volatile Connection lastRaw;
@@ -24,7 +42,7 @@ public class FakeDriver implements java.sql.Driver {
             return null;
         }
         final ClassLoader cl = FakeDriver.class.getClassLoader();
-        lastRaw = (Connection) Proxy.newProxyInstance(cl, new Class<?>[]{Connection.class},
+        lastRaw = (Connection) Proxy.newProxyInstance(cl, new Class<?>[]{VendorConnection.class},
                 new FakeConnHandler());
         return lastRaw;
     }
@@ -36,8 +54,10 @@ public class FakeDriver implements java.sql.Driver {
             switch (method.getName()) {
                 case "prepareStatement":
                     return Proxy.newProxyInstance(proxy.getClass().getClassLoader(),
-                            new Class<?>[]{java.sql.PreparedStatement.class},
+                            new Class<?>[]{VendorStatement.class},
                             new FakeStmtHandler((String) args[0]));
+                case "vendorTag":
+                    return "fake-vendor";
                 case "isClosed":
                     return Boolean.FALSE;
                 case "isValid":

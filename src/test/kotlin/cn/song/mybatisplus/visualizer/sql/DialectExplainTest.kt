@@ -1,7 +1,9 @@
 package cn.song.mybatisplus.visualizer.sql
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -12,6 +14,11 @@ import org.junit.Test
  * 为自创形态无渲染器消费）、PostgreSQL 16（FORMAT JSON, VERBOSE）、KingbaseES V8
  * （FORMAT JSON）、DM8（原生 EXPLAIN）、H2（PLAN FOR）、SQLite（QUERY PLAN）；
  * Oracle（两步链）/ SQL Server（会话 SET）null 降级。
+ *
+ * T-ExplainChainHardening T-ECH-02（O-48）：形态字面量断言保留（渲染逐字节不变的回归网），
+ * 另加「支持表 vs 逐方言实现一致」「表覆盖注册表全量」「格式取值自洽」三组守卫——
+ * 支持面与输出格式已收敛为 [ExplainSupport] 显式表。
+ * 首关键字边界判定（T-ECH-01）用例见 [ExplainGateTest]。
  */
 class DialectExplainTest {
 
@@ -102,5 +109,110 @@ class DialectExplainTest {
     fun `幂等-不支持方言未包装降级null 已包装原样`() {
         assertNull(OracleDialect.INSTANCE.renderExplainStatementIdempotent(sample))
         assertEquals("EXPLAIN $sample", OracleDialect.INSTANCE.renderExplainStatementIdempotent("EXPLAIN $sample"))
+    }
+
+    /**
+     * 幂等短路旁的**多语句旁路**（T-ECH-01 订正，独立复核发现，2026-09-22）。
+     *
+     * 改前缺陷：幂等短路**无条件**原样返回已包装文本 → `EXPLAIN SELECT 1; DROP TABLE t` 整段
+     * 绕过 [ExplainGate] 被交回执行链（IDE 链只有 confirmDollarRawSegments/confirmUnknownParams
+     * 两闸，没有 executeSql 的 DML 确认闸），第二条 DDL 会真实执行；而首条包装成功后控制台文档
+     * 恰是 EXPLAIN 文本，用户追加一句即可命中。修法：已包装文本只在**单条语句**时原样返回。
+     */
+    @Test
+    fun `幂等订正-已包装文本夹带第二条语句即拒`() {
+        assertNull("已包装 + 夹带 DDL 必须拒", MySqlDialect.INSTANCE.renderExplainStatementIdempotent("EXPLAIN SELECT 1; DROP TABLE t"))
+        assertNull("已包装 + 夹带 DML 必须拒", MySqlDialect.INSTANCE.renderExplainStatementIdempotent("EXPLAIN SELECT 1; UPDATE t SET a = 1"))
+        assertNull("全查询形态的多语句同样拒（fail closed）", MySqlDialect.INSTANCE.renderExplainStatementIdempotent("EXPLAIN SELECT 1; SELECT 2"))
+    }
+
+    /** 正对照：带包装选项的**单条**已包装文本仍原样返回——不得把幂等短路一起修掉。 */
+    @Test
+    fun `幂等订正-单条已包装文本仍原样返回_正对照`() {
+        assertEquals(
+            "EXPLAIN (FORMAT JSON, VERBOSE) SELECT 1",
+            PostgreSQLDialect.INSTANCE.renderExplainStatementIdempotent("EXPLAIN (FORMAT JSON, VERBOSE) SELECT 1"),
+        )
+        assertEquals(
+            "EXPLAIN QUERY PLAN SELECT 1",
+            SqliteDialect.INSTANCE.renderExplainStatementIdempotent("EXPLAIN QUERY PLAN SELECT 1;"),
+        )
+    }
+
+    // ---------- T-ExplainChainHardening T-ECH-02：支持面/格式表守卫 ----------
+
+    /**
+     * 守卫：支持表覆盖注册表**全量**方言。
+     *
+     * 表是支持面的单一事实源，而「没覆写」与「故意不接」在代码上同形——新增方言时最容易漏的
+     * 就是漏登记（`Dialect.renderExplainStatement` 默认读表，漏登记即静默变成「不支持」，
+     * 与 Oracle/SQL Server 的有意不接无法区分）。本用例把漏项变成红灯。
+     */
+    @Test
+    fun `守卫-支持表覆盖注册表全量方言`() {
+        DialectRegistry.INSTANCE.dialects.forEach { d ->
+            assertNotNull("方言 ${d.name} 未登记进 ExplainSupport 表", ExplainSupport.entryFor(d.name))
+        }
+        assertEquals(
+            "支持表条目数应与注册方言数一致（表里不应有注册表外的孤儿条目）",
+            DialectRegistry.INSTANCE.dialects.size,
+            ExplainSupport.getEntries().size,
+        )
+    }
+
+    /**
+     * 守卫：表与逐方言实现**逐字节一致**（渲染产物不变的硬门禁）。
+     *
+     * 逐方言覆写已改为读表，本用例断言 `Dialect.renderExplainStatement` 与 `ExplainSupport.render`
+     * 同结果——将来任何人加回覆写并抄错模板，这里立刻红。
+     */
+    @Test
+    fun `守卫-表与逐方言实现逐字节一致`() {
+        DialectRegistry.INSTANCE.dialects.forEach { d ->
+            assertEquals(
+                "方言 ${d.name} 的实现与支持表不一致",
+                ExplainSupport.render(d.name, sample),
+                d.renderExplainStatement(sample),
+            )
+        }
+    }
+
+    /** 守卫：格式取值与模板形态自洽（JSON 档的模板必须真的带 `FORMAT JSON`）。 */
+    @Test
+    fun `守卫-格式取值与模板形态自洽`() {
+        ExplainSupport.getEntries().forEach { e ->
+            if (!e.supported()) {
+                assertNull("不支持的方言不应有格式取值: ${e.dialectName()}", e.outputFormat())
+                return@forEach
+            }
+            assertNotNull("支持的方言必须有格式取值: ${e.dialectName()}", e.outputFormat())
+            if (e.outputFormat() == ExplainOutputFormat.JSON) {
+                assertTrue(
+                    "JSON 档模板应含 FORMAT JSON: ${e.dialectName()} → ${e.template()}",
+                    e.template()!!.contains("FORMAT JSON"),
+                )
+            }
+        }
+    }
+
+    /** 守卫：模板占位符替换是字面量替换——SQL 里的 `$`/`\`/`{sql}` 不得被当成模板语法。 */
+    @Test
+    fun `守卫-模板替换为字面量替换`() {
+        val tricky = "SELECT '{sql}' AS a, '$' AS b, '\\' AS c FROM t"
+        assertEquals("EXPLAIN $tricky", MySqlDialect.INSTANCE.renderExplainStatement(tricky))
+        assertEquals(
+            "EXPLAIN (FORMAT JSON, VERBOSE) $tricky",
+            PostgreSQLDialect.INSTANCE.renderExplainStatement(tricky),
+        )
+    }
+
+    /** 守卫：查找大小写不敏感（MCP/外部调用方可能传小写方言名）。 */
+    @Test
+    fun `守卫-方言名查找大小写不敏感`() {
+        assertEquals(ExplainOutputFormat.TABLE, ExplainSupport.formatFor("mysql"))
+        assertEquals(ExplainOutputFormat.JSON, ExplainSupport.formatFor("postgresql"))
+        assertEquals(ExplainOutputFormat.JSON, ExplainSupport.formatFor("PostgreSQL"))
+        assertNull("未知方言无格式", ExplainSupport.formatFor("no-such-dialect"))
+        assertNull("null 容错", ExplainSupport.formatFor(null))
     }
 }

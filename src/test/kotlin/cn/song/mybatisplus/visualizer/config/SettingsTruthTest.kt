@@ -89,6 +89,9 @@ class SettingsTruthTest {
             "settings.enhancedCapture.status.authorizedWaiting",
             "settings.enhancedCapture.status.unauthorizedCooldown",
             "settings.enhancedCapture.status.unauthorizedPending",
+            // T-AgentHeartbeat T-05：心跳两因（停摆 / 首条心跳未到）必须各有独立键
+            "settings.enhancedCapture.status.heartbeatLost",
+            "settings.enhancedCapture.status.firstHeartbeatPending",
         ).forEach { key ->
             assertTrue("agentStatusText 应引用状态行键 $key", src.contains("\"$key\""))
         }

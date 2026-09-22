@@ -126,4 +126,31 @@ class AgentManagerLazyMonitorTest : BasePlatformTestCase() {
         assertFalse("摘除后会话离表", manager.sessions.contains(session))
         assertNull("会话全摘 → 持有者条目清除", AgentUrlRegistry.lastConnectionUrl(project))
     }
+
+    /**
+     * T-PerfSweep6 T-PS6-08（性能报告发现 8）：`shutdownAll` 复位巡检。
+     *
+     * 缺陷面：monitor 懒启后无复位点——用过一次增强捕获的项目在关开关后仍保留一条 5s 空转任务
+     * 至项目 dispose。修法是**取消已排定的定时任务**（持有 `ScheduledFuture` 并 `cancel`），
+     * 而不是只翻标志（那会让下次 enable 在同一单线程执行器上再排一个 → 5s 巡检变双份）。
+     *
+     * 断言两件事：① `shutdownAll` 后巡检复位；② **复位后还能重新懒启**——这条正是
+     * 「执行器不得被 shutdownNow」的判据（关掉执行器会让 `scheduleWithFixedDelay` 抛
+     * `RejectedExecutionException`，等于把「开关关一次」变成「本会话巡检永久失效」）。
+     */
+    fun testshutdownAll复位巡检_且复位后仍可重新懒启() {
+        val manager = freshManager()
+        assertFalse("前置：未使用时巡检未启", manager.monitorStartedForTest())
+        manager.ensureMonitorStarted()
+        assertTrue("懒启后巡检在位", manager.monitorStartedForTest())
+
+        manager.shutdownAll()
+        assertFalse("shutdownAll 后巡检应复位（发现 8）", manager.monitorStartedForTest())
+
+        // 再开启：复位必须只是「取消任务」，执行器本体仍在（否则这里会抛 RejectedExecutionException）
+        manager.ensureMonitorStarted()
+        assertTrue("复位后应能重新懒启（执行器不得被 shutdownNow）", manager.monitorStartedForTest())
+        manager.shutdownAll()
+        assertFalse("二次 shutdownAll 同样复位", manager.monitorStartedForTest())
+    }
 }

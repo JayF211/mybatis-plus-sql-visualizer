@@ -4,6 +4,7 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -51,8 +52,9 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
         fun getDocument(): Any = doc
     }
 
-    private class FakeConsoleView(private val historyViewer: Any?) {
+    private class FakeConsoleView(private val historyViewer: Any?, private val prompt: String? = null) {
         fun getHistoryViewer(): Any? = historyViewer
+        fun getPrompt(): String? = prompt
     }
 
     private class FakeConsole(private val consoleView: Any?) {
@@ -61,6 +63,10 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
 
     private fun consoleOf(seq: CharSequence): Any =
         FakeConsole(FakeConsoleView(FakeHistoryViewer(FakeDoc(seq))))
+
+    /** T-CEC：带提示符的假控制台（`mpj_demo>` 形态，回显前缀剥离用）。 */
+    private fun consoleWithPrompt(seq: CharSequence, prompt: String?): Any =
+        FakeConsole(FakeConsoleView(FakeHistoryViewer(FakeDoc(seq)), prompt))
 
     override fun setUp() {
         super.setUp()
@@ -87,7 +93,7 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
     @Test
     fun testBaselineSliceOnlyMaterializesNewSegment() {
         val oldPart = "select id from t\nUnknown column 'x' in 'field list'\n"
-        // 首个签名命中行起摘录（up to 4 行），目标错误行放摘录窗口内
+        // 错误行取 lastOrNull（末尾优先），目标错误行放最后
         val newPart = "select * from u\nTable 'u' doesn't exist\nSQLException: Unknown column 'y' in 'where clause'\n"
         val seq = RecordingSeq(oldPart + newPart)
         DataSourceSelector.consoleErrorBaseline = oldPart.length
@@ -136,5 +142,123 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
     fun testBrokenChainReturnsNull() {
         assertNull(DataSourceSelector.extractConsoleError(FakeConsole(null), LOG))
         assertNull(DataSourceSelector.extractConsoleError(null, LOG))
+    }
+
+    // ==================== T-CEC-02：服务端错误判据覆盖（用户真机 P15） ====================
+
+    /**
+     * 用户 2026-09-22 真机 Output 页报文逐字（每行带 `[时间戳] `，错误跨 4 行）。
+     * 改前：14 条短语词表对 `You have an error in your SQL syntax` 一条都不含 → 漏检。
+     */
+    private val USER_REAL_CASE = listOf(
+        "[2026-09-22 08:48:12] [42000][1064] You have an error in your SQL syntax; check the manual " +
+            "that corresponds to your MySQL server version for the right syntax to use near '\"user\" t",
+        "[2026-09-22 08:48:12] LEFT JOIN user_address addr",
+        "[2026-09-22 08:48:12] RIGHT JOIN area a",
+        "[2026-09-22 08:48:12] WHERE addr.tel LIKE '%' at line 5",
+    ).joinToString("\n")
+
+    @Test
+    fun testUserRealMachineMysqlSyntaxErrorDetected() {
+        val err = DataSourceSelector.extractConsoleError(consoleOf(RecordingSeq(USER_REAL_CASE)), LOG)
+        assertNotNull("MySQL 语法错必须命中（P15 真机漏检形态）", err)
+        assertTrue("错误原文须在", err!!.contains("You have an error in your SQL syntax"))
+        assertTrue("跨行报文的后继行须带上", err.contains("at line 5"))
+        assertFalse("时间戳前缀须剥掉（呈现与一键复制都更干净）", err.contains("[2026-09-22"))
+    }
+
+    /** DBN 给服务端错误加 `[SQLSTATE][errorCode]` 前缀（真机日志实证形态）——结构性判据跨方言。 */
+    @Test
+    fun testStructuralJudgementCoversDialects() {
+        val cases = listOf(
+            "[23000][1062] Duplicate entry '1' for key 'PRIMARY'",
+            "[42000][1064] You have an error in your SQL syntax",
+            "[42S22][1054] Unknown column 'x' in 'field list'",
+            "ORA-00933: SQL command not properly ended",
+            "ORA-00942: table or view does not exist",
+        )
+        for (line in cases) {
+            val err = DataSourceSelector.extractConsoleError(consoleOf(RecordingSeq("select 1\n$line\n")), LOG)
+            assertNotNull("应命中：$line", err)
+            assertTrue("原文须保留：$line", err!!.contains(line.take(10)))
+        }
+    }
+
+    /** 反例：正常 SQL 回显带方括号/比较符，结构性判据不得误命中。 */
+    @Test
+    fun testBracketBearingSqlEchoNotReported() {
+        val seq = RecordingSeq("select id from t where a in [1,2]\nselect 1 where b>1\n")
+        assertNull(DataSourceSelector.extractConsoleError(consoleOf(seq), LOG))
+    }
+
+    /** 反例：插件自己写进 Output 的回显行（writeConsoleOutput 的「执行失败: 」）不得被当成新错误。 */
+    @Test
+    fun testOwnFailureEchoNotReported() {
+        val seq = RecordingSeq("执行失败: [42000][1064] You have an error in your SQL syntax\n")
+        assertNull(DataSourceSelector.extractConsoleError(consoleOf(seq), LOG))
+    }
+
+    // ==================== T-CEC-03：兜底呈现（判据认不出时的残余） ====================
+
+    /** 正常执行的新增文本形态：SQL 回显（首行带提示符）+ 完成回显。 */
+    private val ECHO_AND_STATUS = listOf(
+        "mpj_demo> SELECT addr.tel",
+        "              LEFT JOIN user_address addr",
+        "[2026-09-22 08:48:29] completed in 7 ms",
+    ).joinToString("\n")
+
+    private val ECHOED_SQL = "SELECT addr.tel\n              LEFT JOIN user_address addr"
+
+    @Test
+    fun testResidueDropsSqlEchoAndStatusLines() {
+        val text = "$ECHO_AND_STATUS\n[2026-09-22 08:48:29] 未知形态的失败说明（自定义报文）\n"
+        val residue = DataSourceSelector.extractConsoleResidue(
+            consoleWithPrompt(text, "mpj_demo>"), ECHOED_SQL, LOG,
+        )
+        assertNotNull("有残余就该呈现（而不是笼统超时提示）", residue)
+        assertTrue("残余=控制台新增文本", residue!!.contains("未知形态的失败说明"))
+        assertFalse("SQL 回显不得混入", residue.contains("LEFT JOIN user_address"))
+        assertFalse("状态行不得混入", residue.contains("completed in"))
+    }
+
+    @Test
+    fun testResidueNullWhenOnlyEchoAndStatus() {
+        assertNull(
+            "只有回显+完成回显 → 无残余，落回既有提示（不误报错误）",
+            DataSourceSelector.extractConsoleResidue(
+                consoleWithPrompt(ECHO_AND_STATUS, "mpj_demo>"), ECHOED_SQL, LOG,
+            ),
+        )
+    }
+
+    /** 提示符读不到（getPrompt 缺失/为空）时，仍靠「剩余部分是本次 SQL 子串」剥掉回显。 */
+    @Test
+    fun testResidueDropsPromptEchoWithoutPromptReadable() {
+        val text = "mpj_demo> SELECT addr.tel\n未知形态失败\n"
+        val residue = DataSourceSelector.extractConsoleResidue(consoleOf(RecordingSeq(text)), "SELECT addr.tel", LOG)
+        assertNotNull(residue)
+        assertFalse("回显行须被剥掉", residue!!.contains("SELECT addr.tel"))
+        assertTrue(residue.contains("未知形态失败"))
+    }
+
+    /**
+     * 反例（关键）：DML / 工具语句成功时不建结果 Tab、同样走满 40 拍窗口——影响行数与完成回显
+     * 必须被剔干净，否则会把一次**成功**的执行报成「未知错误形态」。
+     */
+    @Test
+    fun testResidueNullForSuccessfulDmlSummary() {
+        val text = listOf(
+            "mpj_demo> UPDATE user SET username = 'x' WHERE id = 1",
+            "[2026-09-22 08:48:29] 1 row affected",
+            "[2026-09-22 08:48:29] completed in 12 ms",
+        ).joinToString("\n")
+        assertNull(
+            "成功 DML 的摘要行不得被当成残余",
+            DataSourceSelector.extractConsoleResidue(
+                consoleWithPrompt(text, "mpj_demo>"),
+                "UPDATE user SET username = 'x' WHERE id = 1",
+                LOG,
+            ),
+        )
     }
 }

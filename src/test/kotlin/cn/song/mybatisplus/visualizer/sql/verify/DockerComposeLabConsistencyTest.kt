@@ -132,6 +132,63 @@ class DockerComposeLabConsistencyTest {
         assertTrue(checkPorts(bad).any { it.contains("3306") })
     }
 
+    @Test
+    fun `漂移自证_缺必填环境变量被抓`() {
+        // 独立复核㉗：本检查此前无合成样本（被元守卫登记为「受机器保护的豁免」），此处关闭该缺口。
+        val bad = parseServices(
+            """
+            services:
+              mysql80:
+                image: mysql:8.0.36
+                environment:
+                  MYSQL_ROOT_PASSWORD: root
+            """.trimIndent(),
+        )
+        assertTrue(
+            "缺 MYSQL_DATABASE 必须被抓，实际 ${checkRequiredEnv(bad)}",
+            checkRequiredEnv(bad).any { it == "mysql80: 缺 MYSQL_DATABASE" },
+        )
+        // 正对照：补齐该服务必填项后不得再报「缺」（检查不得退化成「一律放行」）。只筛 mysql80 项——
+        // 单服务样例必然同时命中「其余四服务不在配方中」那一条。
+        val fixed = parseServices(
+            """
+            services:
+              mysql80:
+                image: mysql:8.0.36
+                environment:
+                  MYSQL_ROOT_PASSWORD: root
+                  MYSQL_DATABASE: demo
+            """.trimIndent(),
+        )
+        assertTrue(
+            "补齐必填项后不得再报 mysql80 缺项，实际 ${checkRequiredEnv(fixed)}",
+            checkRequiredEnv(fixed).none { it.startsWith("mysql80: 缺") },
+        )
+    }
+
+    @Test
+    fun `漂移自证_缺healthcheck被抓`() {
+        // 独立复核㉗：同上，本检查此前无合成样本。
+        val bad = parseServices(
+            """
+            services:
+              mysql80:
+                image: mysql:8.0.36
+            """.trimIndent(),
+        )
+        assertEquals("缺 healthcheck 的服务必须被抓", listOf("mysql80: 缺 healthcheck"), checkHealthcheck(bad))
+        val ok = parseServices(
+            """
+            services:
+              mysql80:
+                image: mysql:8.0.36
+                healthcheck:
+                  test: ["CMD", "mysqladmin", "ping"]
+            """.trimIndent(),
+        )
+        assertTrue("有 healthcheck 的服务不得被报缺：${checkHealthcheck(ok)}", checkHealthcheck(ok).isEmpty())
+    }
+
     // ------------------------------------------------------------------
     // 检查函数（纯函数，合成样例可注入）
     // ------------------------------------------------------------------

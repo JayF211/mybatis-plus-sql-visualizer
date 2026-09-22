@@ -19,7 +19,8 @@ import java.net.Socket
  * agent 又没产出 = **两条通道同时零产出且无超时恢复**，状态行还显示「已挂载 pid=…」。
  *
  * 本组用例的判据即修复目标：窗口过期后 ①不再算「已挂载」②被巡检摘除 ③桥回落（paused=false）
- * ④状态行改口为「心跳中断」。
+ * ④状态行改口：心跳停摆 / 首条心跳未到 / 连接断开三态分开叙述（T-AgentHeartbeat T-05 起，
+ * 前两态由 `AgentSession.livenessFrameSeen` 区分——只有「曾收到 HELLO 之外的存活帧」才算停摆）。
  *
  * 会话构造照 `AgentAttachChainTest` 惯例：loopback 真 socket 对（`AgentSession` internal 同包可构造），
  * 时间源两侧同源注入（会话记 `lastSeen` 与管理器算过期共用 [AgentManager.clockMs]），故无需真等 30s。
@@ -68,7 +69,10 @@ class AgentHeartbeatWindowTest : BasePlatformTestCase() {
         (f.get(manager) as java.util.concurrent.atomic.AtomicBoolean).set(true)
     }
 
-    /** loopback 真会话（不发任何帧 → lastSeen 停在构造时刻）。 */
+    /** agent 侧 socket（按 pid 记，供 [sendFrame] 补发帧用）。 */
+    private val clientSockets = mutableMapOf<Long, Socket>()
+
+    /** loopback 真会话（不发任何帧 → lastSeen 停在构造时刻，且未收到过存活帧）。 */
     private fun newSession(pid: Long): AgentSession {
         val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
         val client = Socket("127.0.0.1", server.localPort)
@@ -76,7 +80,32 @@ class AgentHeartbeatWindowTest : BasePlatformTestCase() {
         sockets += client
         sockets += accepted
         sockets += server
-        return AgentSession(project, pid, accepted, {}, { now })
+        clientSockets[pid] = client
+        return AgentSession(project, pid, accepted, {}, { now }) // k2j：AgentSession 为 Java 类，禁具名实参
+    }
+
+    /** agent → IDE 方向补发一帧（协议帧：4 字节 len + 1 字节 cmd + UTF-8 body）。 */
+    private fun sendFrame(pid: Long, cmd: Int, body: String) {
+        val bytes = body.toByteArray(Charsets.UTF_8)
+        val out = java.io.DataOutputStream(clientSockets.getValue(pid).getOutputStream())
+        out.writeInt(bytes.size)
+        out.write(cmd)
+        out.write(bytes)
+        out.flush()
+    }
+
+    /**
+     * 把会话置成「已收到过 HELLO 之外的存活帧」形态（T-AgentHeartbeat T-05 的「心跳停摆」前提）。
+     * 发帧后轮询 [AgentSession.livenessFrameSeen] 等读线程真的处理完——不等就会与读线程赛跑出假绿。
+     */
+    private fun markLivenessFrameSeen(session: AgentSession) {
+        sendFrame(session.pid, AgentProtocol.CMD_HEARTBEAT, "")
+        val deadline = System.currentTimeMillis() + 5_000L
+        while (!session.livenessFrameSeen && System.currentTimeMillis() < deadline) Thread.sleep(10L)
+        assertTrue(
+            "前置：补发的 HEARTBEAT 应被读线程处理（未处理则本用例落在错误的态上）",
+            session.livenessFrameSeen,
+        )
     }
 
     // ---------- ① 窗口内：健康，不得误摘 ----------
@@ -129,24 +158,28 @@ class AgentHeartbeatWindowTest : BasePlatformTestCase() {
         assertFalse("摘除应顺带清幂等表（既有语义不回归）", manager.attachedPids.containsKey(7003L))
     }
 
-    // ---------- ④ 状态行改口：心跳中断 ≠ 连接断开 ----------
+    // ---------- ④ 状态行改口：心跳停摆 ≠ 首条心跳未到 ≠ 连接断开 ----------
 
     fun test心跳过期回落文案与真断连区分() {
         markEverAttached()
         val session = newSession(7004L)
+        markLivenessFrameSeen(session) // T-AgentHeartbeat T-05：曾收到存活帧 → 才是「心跳停摆」
         manager.sessions.add(session)
         manager.sweepOffline() // 窗口内：确认健康路径不置位
         now += 30_001L
         manager.sweepOffline() // 过期摘除 → 记为心跳类回落
 
         val text = manager.statusSummary()!!
-        assertTrue("应提示心跳中断（应用侧无响应）：$text", text.contains("心跳中断"))
+        assertTrue("应提示未收到应用侧心跳（可核实的表述）：$text", text.contains("未收到应用侧心跳"))
+        assertTrue("应带出在线窗口秒数 30：$text", text.contains("30"))
+        assertFalse("不得再断言进程卡死（T-AgentHeartbeat T-05 去因果断言）：$text", text.contains("卡死"))
         assertFalse("不应与真断连文案混用：$text", text.contains("连接中断"))
     }
 
     fun test真断连仍走连接中断文案() {
         markEverAttached()
         val session = newSession(7005L)
+        markLivenessFrameSeen(session) // 曾有心跳也改不了结论：socket 断了就是断连
         manager.sessions.add(session)
         session.close() // alive=false（读循环退出/close），lastSeen 仍新鲜 → 属连接断开而非心跳过期
         manager.sweepOffline()
@@ -154,7 +187,71 @@ class AgentHeartbeatWindowTest : BasePlatformTestCase() {
         assertFalse("断连会话应被摘除", manager.sessions.contains(session))
         val text = manager.statusSummary()!!
         assertTrue("应走「连接中断」既有文案：$text", text.contains("连接中断"))
+        assertFalse("不得误报心跳停摆：$text", text.contains("未收到应用侧心跳"))
+        assertFalse("不得降级成连接早期叙述：$text", text.contains("连接已建立"))
+    }
+
+    // ---------- ④b T-AgentHeartbeat T-05：首条心跳未到独立成态（现场错误叙事的形态） ----------
+
+    fun test首条心跳未到摘除走等待中文案而非心跳停摆() {
+        markEverAttached()
+        val session = newSession(7009L) // 未收到任何存活帧（现场：首条心跳 60.6s 才发，窗口 30s）
+        manager.sessions.add(session)
+        now += 30_001L
+        manager.sweepOffline()
+
+        assertFalse("窗口语义不变：过期仍应摘除", manager.sessions.contains(session))
+        val text = manager.statusSummary()!!
+        assertTrue("应叙述「连接已建立」这一可核实事实：$text", text.contains("连接已建立"))
+        assertTrue("应说明尚未收到心跳：$text", text.contains("尚未收到应用侧心跳"))
+        assertFalse("连接早期不得说成「已回落」（现场错误叙事的形态）：$text", text.contains("已回落控制台捕获"))
         assertFalse("不得误报心跳中断：$text", text.contains("心跳中断"))
+        assertFalse("不得误报心跳停摆：$text", text.contains("心跳停摆"))
+        assertFalse("不得断言进程卡死：$text", text.contains("卡死"))
+        assertFalse("不应与真断连文案混用：$text", text.contains("连接中断"))
+    }
+
+    fun test仅收到HELLO仍算首条心跳未到() {
+        markEverAttached()
+        val session = newSession(7010L)
+        // 前置可观测：读循环对所有帧都刷新 lastSeen，故「HELLO 被处理」可由 lastSeen 推进证明
+        now += 1_000L
+        val before = session.lastSeen
+        sendFrame(7010L, AgentProtocol.CMD_HELLO, """{"pid":7010}""")
+        val deadline = System.currentTimeMillis() + 5_000L
+        while (session.lastSeen == before && System.currentTimeMillis() < deadline) Thread.sleep(10L)
+        assertEquals(
+            "前置：HELLO 应被读线程处理（否则本用例对「HELLO 是否算存活帧」零判别力）",
+            now,
+            session.lastSeen,
+        )
+        assertFalse("前置：HELLO 不得置存活帧标记", session.livenessFrameSeen)
+
+        manager.sessions.add(session)
+        now += 30_001L
+        manager.sweepOffline()
+
+        val text = manager.statusSummary()!!
+        assertTrue("HELLO 不算存活帧 → 仍属连接早期：$text", text.contains("连接已建立"))
+        assertFalse("HELLO 不得被当成「曾有心跳」：$text", text.contains("已回落控制台捕获"))
+    }
+
+    fun test收到过心跳后停摆与首条心跳未到两态文案不同() {
+        markEverAttached()
+        val pending = newSession(7011L)
+        manager.sessions.add(pending)
+        now += 30_001L
+        manager.sweepOffline()
+        val pendingText = manager.statusSummary()!!
+
+        val stale = newSession(7012L)
+        markLivenessFrameSeen(stale)
+        manager.sessions.add(stale)
+        now += 30_001L
+        manager.sweepOffline()
+        val staleText = manager.statusSummary()!!
+
+        assertFalse("两态不得收敛成同一句话：pending=$pendingText stale=$staleText", pendingText == staleText)
     }
 
     // ---------- ⑤ 边界：恰在窗口上仍健康，过 1ms 即过期 ----------
@@ -178,10 +275,11 @@ class AgentHeartbeatWindowTest : BasePlatformTestCase() {
     fun test新会话加入后状态行恢复已挂载且时钟同源() {
         markEverAttached()
         val stale = newSession(7007L)
+        markLivenessFrameSeen(stale) // T-AgentHeartbeat T-05：曾收到存活帧 → 摘除记为「心跳停摆」
         manager.sessions.add(stale)
         now += 30_001L
         manager.sweepOffline()
-        assertTrue("前置：已标记心跳类回落", manager.statusSummary()!!.contains("心跳中断"))
+        assertTrue("前置：已标记心跳类回落", manager.statusSummary()!!.contains("未收到应用侧心跳"))
 
         // 新一轮会话加入（真机路径还会经 attachToPid 清心跳标记；此处只需验证状态行回到「已挂载」）
         val fresh = newSession(7008L)

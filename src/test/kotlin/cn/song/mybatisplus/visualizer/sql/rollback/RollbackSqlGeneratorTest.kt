@@ -432,4 +432,171 @@ class RollbackSqlGeneratorTest {
         val prefixLike = generate("DELETE FROM t WHERE name LIKE 'abc%'")
         assertFalse(prefixLike.warnings.any { it.messageKey == "rollback.warn.likeWildcard" })
     }
+
+    // ======================== O-52：回滚侧 identity 包装 ========================
+
+    /** 回填 INSERT 的基准产物（无包装形态，改前改后同一读数）。 */
+    private fun backfill(
+        columns: List<String> = listOf("id", "name"),
+        rows: List<List<String>> = listOf(listOf("1", "Tom")),
+        dialect: cn.song.mybatisplus.visualizer.sql.Dialect? = null,
+        identityColumns: List<String> = emptyList(),
+    ) = RollbackSqlGenerator.generateFromSnapshotRows(
+        "rt_del",
+        columns,
+        rows,
+        RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
+        null,
+        emptyList(),
+        emptyMap(),
+        dialect,
+        identityColumns,
+    ).statements
+
+    /**
+     * SQL Server + 快照含 identity 列 → 回填 INSERT 成对包装（验收 2 的回滚侧）。
+     *
+     * 包装里的表名与 INSERT 里的表名同形（`rt_del` 非保留字，两侧都裸写）——回滚链全程按解析出的
+     * 文本渲染标识符（不引用），包装沿用同一形态即不会出现「一处加引号一处裸写」。
+     */
+    @Test
+    fun `快照回填_identity列经SQLServer包装`() {
+        assertEquals(
+            listOf(
+                "SET IDENTITY_INSERT rt_del ON;\n" +
+                    "INSERT INTO rt_del (id, name) VALUES (1, 'Tom');\n" +
+                    "SET IDENTITY_INSERT rt_del OFF;",
+            ),
+            backfill(
+                dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect.INSTANCE,
+                identityColumns = listOf("id"),
+            ),
+        )
+    }
+
+    /** 列名匹配大小写不敏感（与 REVERT_INSERT 主键判定同口径）：TSV 表头形态由驱动决定。 */
+    @Test
+    fun `快照回填_identity列大小写不敏感匹配`() {
+        val statements = backfill(
+            dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect.INSTANCE,
+            identityColumns = listOf("ID"),
+        )
+        assertTrue(statements.single().startsWith("SET IDENTITY_INSERT rt_del ON;"))
+    }
+
+    /**
+     * 未知语义不包装（O-52 D1=A 的 fail-safe）：方言与 identity 列**双双未知**（生成器入参全默认）→
+     * 不包装、不报错，产物与改前逐字节相同。
+     *
+     * **原名 `快照回填_旧快照无identity字段不包装`，其「旧快照」没有指称物**：`RollbackSnapshotStore`
+     * 是 project 级**内存**服务、不持久化（类 KDoc 明写「会话生命周期即生命周期」），故不存在跨会话
+     * 反序列化旧格式条目的形态；`SnapshotEntry` 那两个字段的默认值只服务「调用方未传参」这一**可达**
+     * 形态（该 data class 的 KDoc 已自述此点）。T-Round10 独立复核㉙ 点名该用例「空转」即此——
+     * 断言本身判别力尚可，但用例名与 KDoc 承诺的兼容场景在仓内无法发生，读绿灯会误以为跨会话兼容已被验。
+     *
+     * **本用例自带正对照（防自身空转）**：同批数据补上 SQL Server 方言与 identity 列即必须包装——
+     * 生成器若退化为「永不包装」，下面第二条断言必红，故本用例的「不包装」不是恒真断言。
+     */
+    @Test
+    fun `快照回填_方言与identity双未知时不包装`() {
+        assertEquals(
+            "入参全默认（方言未知 + identity 未知）→ 不包装，产物与改前逐字节相同",
+            listOf("INSERT INTO rt_del (id, name) VALUES (1, 'Tom');"),
+            backfill(),
+        )
+        assertEquals(
+            "正对照：同批数据带上 SQL Server 方言与 identity 列必须包装——" +
+                "否则上面那条「不包装」断言恒真（空转）",
+            listOf(
+                "SET IDENTITY_INSERT rt_del ON;\n" +
+                    "INSERT INTO rt_del (id, name) VALUES (1, 'Tom');\n" +
+                    "SET IDENTITY_INSERT rt_del OFF;",
+            ),
+            backfill(
+                dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect.INSTANCE,
+                identityColumns = listOf("id"),
+            ),
+        )
+    }
+
+    /**
+     * 逐字节不变（验收 1/4 的回滚侧）：identity 未知、方言未知、非包装方言三种形态都不得包装。
+     * 逐库点名非 SQL Server 方言（不按「renderInsertWrapper 是否为 null」自证）。
+     */
+    @Test
+    fun `快照回填_非包装方言与identity未知时逐字节不变`() {
+        val expected = listOf("INSERT INTO rt_del (id, name) VALUES (1, 'Tom');")
+        val sqlServer = cn.song.mybatisplus.visualizer.sql.SqlServerDialect.INSTANCE
+        // ① 方言在但 identity 未知（空清单）
+        assertEquals(expected, backfill(dialect = sqlServer, identityColumns = emptyList()))
+        // ② identity 在但方言未知（调用方未传 dialect 的条目形态；O-59 T-IIR-01 起两个生产登记点均已传）
+        assertEquals(expected, backfill(dialect = null, identityColumns = listOf("id")))
+        // ③ identity 声明了但不在本次快照列清单内（该表的自增列不是被回填的列）
+        assertEquals(expected, backfill(dialect = sqlServer, identityColumns = listOf("other_id")))
+        // ④ 其余方言一律不包装（DM8 于 2026-09-23 真机实证需要包装，已移出本清单 → 见下方 ⑤）
+        listOf(
+            cn.song.mybatisplus.visualizer.sql.MySqlDialect.INSTANCE,
+            cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect.INSTANCE,
+            cn.song.mybatisplus.visualizer.sql.OracleDialect.INSTANCE,
+            cn.song.mybatisplus.visualizer.sql.KingBaseDialect.INSTANCE,
+            cn.song.mybatisplus.visualizer.sql.H2Dialect.INSTANCE,
+            cn.song.mybatisplus.visualizer.sql.SqliteDialect.INSTANCE,
+            cn.song.mybatisplus.visualizer.sql.MariaDbDialect.INSTANCE,
+        ).forEach { dialect ->
+            assertEquals(
+                "方言 ${dialect.name} 不应包装",
+                expected,
+                backfill(dialect = dialect, identityColumns = listOf("id")),
+            )
+        }
+        // ⑤ DM8 与 SQL Server 同为包装方言（真机实测：不加包装 DM 报「仅当指定列列表，且 SET IDENTITY_INSERT
+        // 为ON时，才能对自增列赋值」；加包装后同一语句成功）——回滚链同样必须包装，否则回填 INSERT 在 DM 上必失败
+        val dmWrapped = backfill(
+            dialect = cn.song.mybatisplus.visualizer.sql.DmDialect.INSTANCE,
+            identityColumns = listOf("id"),
+        )
+        assertTrue(
+            "DM8 回填含自增列的 INSERT 必须成对包装：$dmWrapped",
+            dmWrapped.single().startsWith("SET IDENTITY_INSERT") &&
+                dmWrapped.single().endsWith("SET IDENTITY_INSERT rt_del OFF;"),
+        )
+    }
+
+    /**
+     * 合批多条 INSERT **逐条**包装：`SET IDENTITY_INSERT` 是会话级开关且同一时刻每会话只能有一个
+     * 表为 ON，只在整段首尾各包一次会让第二条 INSERT 报 544。
+     */
+    @Test
+    fun `快照回填_多批INSERT逐条包装`() {
+        val statements = backfill(
+            columns = listOf("id", "b"),
+            rows = (1..510).map { listOf(it.toString(), "v") },
+            dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect.INSTANCE,
+            identityColumns = listOf("id"),
+        )
+        assertEquals(2, statements.size)
+        statements.forEach { stmt ->
+            assertTrue("每条 INSERT 都应有前置开关: $stmt", stmt.startsWith("SET IDENTITY_INSERT rt_del ON;\nINSERT INTO rt_del (id, b) VALUES "))
+            assertTrue("每条 INSERT 都应有后置开关: $stmt", stmt.endsWith(";\nSET IDENTITY_INSERT rt_del OFF;"))
+        }
+    }
+
+    /** 只有 BACKFILL_INSERT 生成 INSERT——REVERT_INSERT/REVERT_UPDATE 传 identity 也不得改变产物。 */
+    @Test
+    fun `快照回填_非INSERT模式不受identity影响`() {
+        val sqlServer = cn.song.mybatisplus.visualizer.sql.SqlServerDialect.INSTANCE
+        // k2j 适配：generateFromSnapshotRows 为 Java 重载链，具名实参改位置实参（9 参全量形态）
+        val reverted = RollbackSqlGenerator.generateFromSnapshotRows(
+            "rt_del",
+            listOf("id", "name"),
+            listOf(listOf("1", "Tom")),
+            RollbackSqlGenerator.SnapshotMode.REVERT_INSERT,
+            listOf("id"),
+            emptyList(),
+            emptyMap(),
+            sqlServer,
+            listOf("id"),
+        )
+        assertEquals(listOf("DELETE FROM rt_del WHERE id = 1;"), reverted.statements)
+    }
 }

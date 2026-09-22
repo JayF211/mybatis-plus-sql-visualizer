@@ -282,4 +282,102 @@ class PluginXmlStructureGuardTest {
             !pluginXml.contains("com.intellij.ml.llm.agents.acp"),
         )
     }
+
+    // ------------------------------------------------------------------
+    // T-TemplateKeyDrop：快捷模板三动作默认键位摘除守卫
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `快捷模板三动作不得带默认键位`() {
+        // T-TemplateKeyDrop 定案：三动作不设默认键位。原注册 Alt+Shift+E/C/T 与平台动作冲突
+        // （Alt+Shift+C=RecentChanges、Alt+Shift+T=tasks.switch），而备选键 Ctrl+Alt+Shift+同字母
+        // 同样被占（Copy Reference / Refactor This）——「冲突自动换绑」无解，且换绑只加不摘、
+        // 即便成功也解决不了冲突（实测与键位表见开发计划 §一）。重新加回键位即红。
+        val xml = strippedXmls().first { it.first == "plugin.xml" }.second
+        val actionIds = listOf(
+            "cn.song.mybatisplus.visualizer.ExplainSelectedTable",
+            "cn.song.mybatisplus.visualizer.CountSelectedTable",
+            "cn.song.mybatisplus.visualizer.SampleSelectedTable",
+        )
+        for (id in actionIds) {
+            assertHolds(
+                "$id 重新带上了默认键位（与平台 RecentChanges / tasks.switch 冲突，备选键亦被占）",
+                !actionBlockHasKeyboardShortcut(xml, id),
+            )
+            assertHolds(
+                "plugin.xml 缺三动作注册之一（$id）——守卫失去意义，先修注册",
+                actionBlockExists(xml, id),
+            )
+        }
+        assertHolds(
+            "plugin.xml 仍注册 SqlTemplateShortcutConflictCheck（该类已随默认键位一并删除）",
+            !xml.contains("SqlTemplateShortcutConflictCheck"),
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // 守卫自检（独立复核㉗：本类此前以空 decisionFns 登记，判定函数与同性质助手
+    // tagsOf/assertHolds 完全不进登记面——与 BannedApiSourceScanTest 逐条登记站点提取器
+    // 的口径不一致。现逐条登记，并由下面两个自证用例提供语料）
+    // ------------------------------------------------------------------
+
+    /**
+     * 扫描自检：资源夹具健全 + 剥注释无残留 + 站点提取器非空——三条断言都落在**真实资源**上，
+     * 资源名漂移 / 剥注释失效 / 提取器退化成空面时本用例红，本类其余用例不会因扫描面为空而空绿。
+     */
+    @Test
+    fun `扫描自检_资源夹具健全且剥注释无残留`() {
+        val xmls = strippedXmls()
+        assertHolds("六份 xml 资源必须全部加载到，实际 ${xmls.size} 份", xmls.size == xmlNames.size)
+        xmls.forEach { (name, xml) ->
+            assertHolds("$name 剥注释后不得残留注释开标记（否则注释里的历史注册段会被当注册形态断言）", !xml.contains("<!--"))
+            assertHolds("$name 剥注释后正文不得为空", xml.isNotBlank())
+        }
+        val actions = tagsOf(xmls.first { it.first == "plugin.xml" }.second, "action")
+        assertTrue("plugin.xml 的 action 标签提取数应非零（空面会让全部标签形态断言空转），实际 ${actions.size}", actions.isNotEmpty())
+        assertTrue("提取器须返回标签本身而非整段：${actions.first()}", actions.all { it.startsWith("<action") })
+    }
+
+    /**
+     * 合成 XML 自证：两个判定函数三态各归其位——带键位必报 / **自闭合动作不得被算成带键位** /
+     * 未注册 id 不得被判存在。第二条即本类 KDoc（见 `actionBlockHasKeyboardShortcut` 注释）记载的
+     * 2026-09-21 变异实验形态（用 `<action …>(.*?)</action>` 取块会把后一个动作的键位算到前一个头上），
+     * 此处把它从「注释里的历史教训」变成合成样本自证。
+     */
+    @Test
+    fun `自证_合成XML带键位必报_自闭合动作不得误判`() {
+        val withShortcut = """<action id="A" class="X"><keyboard-shortcut first-keystroke="alt shift E"/></action>"""
+        assertTrue("带 keyboard-shortcut 的动作必须被判为带键位", actionBlockHasKeyboardShortcut(withShortcut, "A"))
+        assertTrue("已注册动作必须被判存在", actionBlockExists(withShortcut, "A"))
+
+        val selfClosing = """<action id="B" class="Y"/><action id="C" class="Z"><keyboard-shortcut first-keystroke="alt shift T"/></action>"""
+        assertTrue(
+            "自闭合动作不得被判为带键位（否则后一个动作的键位会串到它头上）",
+            !actionBlockHasKeyboardShortcut(selfClosing, "B"),
+        )
+        assertTrue("自闭合动作本身仍是「已注册」", actionBlockExists(selfClosing, "B"))
+        assertTrue("其后动作的键位仍须认出（自闭合短路不得吃掉后续块）", actionBlockHasKeyboardShortcut(selfClosing, "C"))
+
+        assertTrue("未注册的动作 id 不得被判存在", !actionBlockExists(withShortcut, "NOPE"))
+        assertTrue("未注册的动作 id 不得被判带键位", !actionBlockHasKeyboardShortcut(withShortcut, "NOPE"))
+    }
+
+    /**
+     * 取 action 块的「是否含子元素」判据（而非裸正则匹配整段）：
+     *
+     * classpath 上的 plugin.xml 是**构建期重写过的**版本（注入 change-notes + 属性压成一行），
+     * 其中无子元素的 action 被写成**自闭合** `<action … />`。若用 `<action …>(.*?)</action>`
+     * 取块，自闭合动作的「块」会一路吞到**下一个** `</action>`，于是把后一个动作的键位算到
+     * 前一个头上（2026-09-21 变异实验实测：把键位加回 Count，报错点名 Explain）。
+     * 故先判自闭合（自闭合=无子元素，必然无键位），非自闭合才取到首个 `</action>`。
+     */
+    private fun actionBlockHasKeyboardShortcut(xml: String, actionId: String): Boolean {
+        val tag = Regex("""<action\b[^>]*\bid\s*=\s*"$actionId"[^>]*?(/)?>""").find(xml) ?: return false
+        if (tag.groupValues[1] == "/") return false
+        return xml.substring(tag.range.last + 1).substringBefore("</action>").contains("<keyboard-shortcut")
+    }
+
+    /** 三动作注册存在性（自闭合与非自闭合都算存在）。 */
+    private fun actionBlockExists(xml: String, actionId: String): Boolean =
+        Regex("""<action\b[^>]*\bid\s*=\s*"$actionId"[^>]*?>""").containsMatchIn(xml)
 }
