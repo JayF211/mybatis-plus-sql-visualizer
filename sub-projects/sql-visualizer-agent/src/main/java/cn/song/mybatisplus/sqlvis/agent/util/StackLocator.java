@@ -48,18 +48,23 @@ import java.util.concurrent.ConcurrentHashMap;
  * </ol>
  *
  * <p><b>跳过规则与 IDE 侧 {@code CallerSourceLocator} 的关系（事实描述，勿再假设必然同值）</b>：
- * 两侧是<b>各自独立的两份实现</b>（agent 不引 IDE 类），前缀集合<b>不相等</b>——agent 侧另收驱动族 /
- * 连接池 / 数据层插件族（含 {@code com.github.yulichang.} 等 20 余项），IDE 侧只收 JDK/平台/插件/
- * MyBatis 系。两侧还<b>在不同时机取栈</b>（IDE 侧拦截器在 SQL 生成期，agent 在 JDBC 执行期），
- * 因此同一次执行的两处位置<b>可以不同</b>；跨侧漂移由
- * {@code LocatorSkipPrefixSyncTest}（IDE 侧）以源码扫描 + 差异登记锁定。
- * 动态前缀（用户登记的自研框架包名）经 CONFIG 下发，见 {@link #setExtraSkipPrefixes(String[])}。
+ * 两侧是<b>各自独立的两份实现</b>（agent 不引 IDE 类，IDE 侧也绝不引 agent 代码——IDE 侧是降级主路径，
+ * 必须在 agent 缺席时独立可用），但前缀集合自 <b>T-AgentResiduals R1（2026-09-22）起已同集</b>：
+ * IDE 侧原只收 JDK/平台/插件/MyBatis 系 15 项，本侧另收驱动族 / 连接池 / 数据层插件族三十余项，于是
+ * 同一次执行两侧可能给出<b>不同位置</b>（标记行指到框架帧）；现 IDE 侧已按本表逐项补齐，唯一刻意差异
+ * 只剩<b>各自的自身包</b>（本侧 {@code cn.song.mybatisplus.sqlvis.} vs IDE 侧
+ * {@code cn.song.mybatisplus.visualizer.}，语义等价）。两侧仍<b>在不同时机取栈</b>（IDE 侧拦截器在
+ * SQL 生成期，agent 在 JDBC 执行期），故同一次执行的两处位置<b>仍可能不同</b>（帧构成不同），但
+ * <b>跳过规则不再构成差异来源</b>；跨侧漂移由 {@code LocatorSkipPrefixSyncTest}（IDE 侧）以源码扫描 +
+ * 差异登记锁定。动态前缀（用户登记的自研框架包名）经 CONFIG 下发，见 {@link #setExtraSkipPrefixes(String[])}。
  */
 public final class StackLocator {
 
     /**
      * 框架/基础设施帧前缀（agent 侧独立副本，与 IDE 侧 {@code CallerSourceLocator} 跳过规则
-     * <b>不相等</b>——本表另收驱动/池/数据层插件族；跨侧差异由 IDE 侧 {@code LocatorSkipPrefixSyncTest} 登记锁定）。
+     * <b>自 T-AgentResiduals R1 起同集</b>——唯一差异是各自的自身包前缀；跨侧差异由 IDE 侧
+     * {@code LocatorSkipPrefixSyncTest} 登记锁定）。**改本表必须同步 IDE 侧
+     * {@code CallerSourceLocator.isFrameworkFrame} 与示例模板 {@code docs/instrumentation/SqlSourceInterceptor.kt}**。
      */
     private static final String[] FRAME_SKIP_PREFIXES = {
             "java.", "javax.", "jdk.", "sun.", "com.sun.", "jdk.internal.",

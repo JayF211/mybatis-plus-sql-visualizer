@@ -24,7 +24,7 @@ class AgentListenSyncTest : BasePlatformTestCase() {
 
     /** T-TestIsolation：本类读写的是**项目服务级**共享 SqlLogManager（light 项目片内跨类复用）——
      *  存初值供 tearDown 复位，兼防「邻居留下的脏捕获态」被本类当作初值再传下去。 */
-    private lateinit var serviceState: SqlLogManagerProjectState.Snapshot
+    private var serviceState: SqlLogManagerProjectState.Snapshot? = null
 
     override fun setUp() {
         super.setUp()
@@ -34,10 +34,7 @@ class AgentListenSyncTest : BasePlatformTestCase() {
     }
 
     override fun tearDown() {
-        SqlLogManagerProjectState.restore(
-            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "tearDown.restore"),
-            serviceState,
-        )
+        SqlLogManagerProjectState.restore(serviceState)
         super.tearDown()
     }
 

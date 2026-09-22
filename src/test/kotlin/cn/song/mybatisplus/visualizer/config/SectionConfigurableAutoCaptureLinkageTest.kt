@@ -28,7 +28,7 @@ class SectionConfigurableAutoCaptureLinkageTest : BasePlatformTestCase() {
     /** T-TestIsolation：本类经 `apply()` → `onAutoStartSettingEnabled()` → `startCapture()`
      *  改的是**项目服务级**共享 SqlLogManager（light 项目片内跨类复用）——捕获态 / 暂停态 /
      *  桥轮询都会被改动，存初值供 tearDown 复位。 */
-    private lateinit var serviceState: SqlLogManagerProjectState.Snapshot
+    private var serviceState: SqlLogManagerProjectState.Snapshot? = null
 
     override fun setUp() {
         super.setUp()
@@ -38,10 +38,7 @@ class SectionConfigurableAutoCaptureLinkageTest : BasePlatformTestCase() {
     }
 
     override fun tearDown() {
-        SqlLogManagerProjectState.restore(
-            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "tearDown.restore"),
-            serviceState,
-        )
+        SqlLogManagerProjectState.restore(serviceState)
         super.tearDown()
     }
 

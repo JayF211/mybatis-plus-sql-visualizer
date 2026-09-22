@@ -251,9 +251,11 @@ public class ConfigApplyEndToEndTest {
      * 本用例钉住三件事：① 停采态建立的连接仍被包装；② 停采态执行照旧且**不产出事件**（证明包装没把「停采静音」弄丢）；
      * ③ 恢复采集后**同一连接**上执行立刻产出事件（无需新建连接）。
      *
-     * <p>已知边界（如实登记，本用例一并钉住）：**停采期间 prepare 的语句仍不包装**——`ConnectionHandler` 的
-     * 逐调用短路在 `prepareStatement` 处即直通。MyBatis 默认 `SimpleExecutor` 每条查询现 prepare、执行后关闭，
-     * 故实际不可达；仅当使用 `ReuseExecutor` 一类复用语句的执行器时才会命中，届时该语句在恢复后仍哑。
+     * <p>**原已知边界已在 R5 收口**：本用例此前登记「停采期间 prepare 的语句仍不包装——`ConnectionHandler`
+     * 的逐调用短路在 `prepareStatement` 处即直通，仅 `ReuseExecutor` 一类会命中」。
+     * T-AgentResiduals R5 起该顶层短路已删除（本仓统一为「只在执行级短路」），
+     * 故这里 D 段用的是**恢复后新 prepare** 的语句——「停采期间 prepare、恢复后执行同一语句」的
+     * 专项用例见 {@link #停采期间prepare的语句_恢复后执行同一语句即产出事件}。
      */
     @Test
     public void 停采期间建立的连接仍被包装_恢复后同一连接即可产出事件() throws Exception {
@@ -293,10 +295,67 @@ public class ConfigApplyEndToEndTest {
         assertTrue("事件帧应携带该语句：" + ev.payload, ev.payload.contains("INSERT INTO t VALUES (3)"));
     }
 
+    /**
+     * T-AgentResiduals R5（定案 B：只在执行级短路）：**停采期间 prepare 的语句，恢复后执行同一语句必须产出事件**。
+     *
+     * <p>现场（R5 立项）：`ConnectionHandler.invoke` 顶层有 `if (AgentState.isDisabled()) return
+     * method.invoke(raw, args);` → 停采期间 `prepareStatement` 返回**原语句**（不包装），于是
+     * 「停采期间 prepare、恢复后才执行」的语句**永远哑**。MyBatis 默认 `SimpleExecutor` 每条查询现
+     * prepare、执行后关闭，故实际不可达；`ReuseExecutor` 一类复用语句的执行器、以及应用自持语句的场景会命中。
+     * R5 删掉该顶层短路后，包装一律在位，唯一闸门是 `StatementHandler.invoke` 的逐调用短路。
+     *
+     * <p>三段断言（缺一不可）：
+     * ① 停采态 `prepareStatement` 返回的语句**已被 agent 包装**（删顶层短路后才有；回退即红）；
+     * ② **对照臂**：停采态执行同一语句 → 窗口内无事件帧（证明停采静音没被这次改动弄丢）；
+     * ③ 恢复态执行**同一语句**（不重新 prepare）→ 产出事件帧且带该 SQL（本项的核心交付）。
+     *
+     * <p>为什么必须用「同一语句」而不是恢复后重新 prepare：重新 prepare 走的是另一条已生效的路径
+     * （R5 之前也能过），钉不住「停采期间那条语句恢复后能不能用」。
+     */
+    @Test
+    public void 停采期间prepare的语句_恢复后执行同一语句即产出事件() throws Exception {
+        startLoop(WATCHDOG_MS_CONFIG_CASE);
+        final DataInputStream in = new DataInputStream(socket.getInputStream());
+        final DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+        assertEquals("会话建立应先握手 HELLO", EventBus.CMD_HELLO, awaitFrame(in, 3000L).cmd);
+        assertEquals("连接建立即补发心跳", EventBus.CMD_HEARTBEAT, awaitFrame(in, 3000L).cmd);
+
+        // A) 先停采
+        SenderLoop.writeFrame(out, EventBus.CMD_CONFIG,
+                "{\"disabled\":true,\"desensitize\":false,\"skipPrefixes\":[]}");
+        assertNotNull("CONFIG 应获 ACK", awaitFrame(in, EventBus.CMD_CONFIG_ACK, 3000L));
+        assertTrue("应用侧应处于停采态", AgentState.isDisabled());
+
+        // B) 停采态 prepare：必须已被包装（① —— 顶层短路回退时这里是原语句，本用例必红）
+        final Connection raw = new FakeDriver().connect("jdbc:fake://cfg-e2e-offprepare", new Properties());
+        assertNotNull("夹具前提：FakeDriver 应返回连接", raw);
+        final Connection conn = (Connection) SqlHookCallbacks.onConnection(raw, "jdbc:fake://cfg-e2e-offprepare");
+        final PreparedStatement offStmt = conn.prepareStatement("INSERT INTO t VALUES (9)");
+        assertTrue("停采期间 prepare 的语句也须被 agent 包装（顶层 disabled 短路会让它恢复后仍哑）",
+                Proxy.isProxyClass(offStmt.getClass()));
+        assertEquals("包装者须为本 agent 的 StatementHandler（否则本用例对采集路径无鉴别力）",
+                "cn.song.mybatisplus.sqlvis.agent.hook.StatementHandler",
+                Proxy.getInvocationHandler(offStmt).getClass().getName());
+
+        // C) 对照臂：停采态执行同一语句 → 无事件帧（停采静音仍然成立）
+        assertEquals("停采只停采集，不得影响执行语义", 1, offStmt.executeUpdate());
+        assertNoEventFrame(in, 1200L);
+
+        // D) 恢复采集 → 执行**同一语句**（不重新 prepare）→ 必须产出事件
+        SenderLoop.writeFrame(out, EventBus.CMD_CONFIG,
+                "{\"disabled\":false,\"desensitize\":false,\"skipPrefixes\":[]}");
+        final Frame ack = awaitFrame(in, EventBus.CMD_CONFIG_ACK, 3000L);
+        assertNotNull("恢复采集的 ACK 应到达", ack);
+        assertFalse(AgentState.isDisabled());
+        assertEquals(1, offStmt.executeUpdate());
+        final Frame ev = awaitFrame(in, EventBus.CMD_EVENT, 3000L);
+        assertNotNull("恢复采集后执行「停采期间 prepare 的同一语句」应产出事件（R5 的核心断言）", ev);
+        assertTrue("事件帧应携带该语句：" + ev.payload, ev.payload.contains("INSERT INTO t VALUES (9)"));
+    }
+
     // ---------- 辅助 ----------
 
-    private void startLoop(long watchdogMs) throws Exception {
-        System.setProperty(SenderLoop.HEARTBEAT_MS_PROP, String.valueOf(HEARTBEAT_MS));
+    private void startLoop(long watchdogMs) throws Exception {        System.setProperty(SenderLoop.HEARTBEAT_MS_PROP, String.valueOf(HEARTBEAT_MS));
         System.setProperty(SenderLoop.CONFIG_WATCHDOG_MS_PROP, String.valueOf(watchdogMs));
         server = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
         server.setSoTimeout(5000);

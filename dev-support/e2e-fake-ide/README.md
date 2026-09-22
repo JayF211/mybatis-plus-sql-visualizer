@@ -6,9 +6,26 @@
 
 ## 一条命令复现
 
+**推荐（T-AgentResiduals R7 起已纳 gradle，属发布前置）**：
+
+```bash
+./gradlew e2eFakeIde
+```
+
+- 任务会先构建 agent jar（`dependsOn(":sql-visualizer-agent:agentFatJar")`），再跑本目录的 `run-e2e.sh`；
+- **已挂 `releaseGate`**（发版链路一命令：buildPlugin → verifyGate → testShards → **e2eFakeIde**），
+  **不挂 `testShards`**（日常门禁不因此变慢）；时序上排在最后——它启动真实应用并占用端口；
+- 前置缺失（demo 工程 / JDK / agent jar / MySQL）一律**硬失败并给指引**，不静默跳过
+  （跳过＝把「没验」伪装成「验过」）；
+- 覆盖项：`-Pe2eDemoDir=<demo 路径>`、`-Pe2eMvn=<mvn 路径>`、`-Pe2eJavaHome=<jdk 路径>`
+  （Gradle daemon 的 PATH 不含交互式 shell 的 JDK，任务把 JDK 交给脚本，脚本再把
+  `$JAVA_HOME/bin` 前置进 PATH）。
+
+手动运行（排障用，等价）：
+
 ```bash
 # 前置：agent jar 已构建（缺则按下行构建）
-cd F:/code/Java/Gitee/SongRenShuo/mpsv-agent-e2e
+cd F:/code/Java/Gitee/SongRenShuo/mpsv-agent-residuals
 ./gradlew :sql-visualizer-agent:agentFatJar -Pkotlin.compiler.execution.strategy=in-process
 
 # 跑端到端（探针 + 应用 + 断言）
@@ -20,6 +37,24 @@ bash dev-support/e2e-fake-ide/run-e2e.sh
 **前置条件**：本机 MySQL `127.0.0.1:3306`（`root/root`，库 `mpj_demo`，表 `car_device_info` / `station_info` / `user` / `user_address` / `area` 有数据）；
 demo 工程在 `F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-demo/mybatis-plus-join-demo`；
 `~/.m2` 已有 demo 依赖（离线跑）。
+
+## 可复跑读数（P-6 取证：2026-09-22 R7 纳门禁时连跑三轮）
+
+断言窗口内的读数是**逐值一致**的（不是「都绿」而已）；帧累计计数随运行时长浮动，不参与判定。
+
+| 读数 | 第 2 轮（23.8s） | 第 3 轮（44.7s，慢跑） |
+| --- | --- | --- |
+| 停采窗口 3000ms 内事件数（A 段） | 0 | 0 |
+| 恢复后窗口 3000ms 内事件数（B 段） | 2 | 2 |
+| 脱敏关 / 开窗口各 2000ms 内事件数（D1/D2） | 1 / 1 | 1 / 1 |
+| 收口停采窗口 2000ms 内事件数 | 0 | 0 |
+| 断言 | PASS=26 FAIL=0 | PASS=26 FAIL=0 |
+| 定位器 `primary`（`T-SourceJumpFunnel`） | `DeviceInfoServiceImpl.java:92/42/63` + `MpjFullCoverageServiceImpl.java:103` | 同上，逐值一致 |
+| `CONFIG_ACK` 累计 | 5 | 5 |
+| `EVENT` / `HEARTBEAT` 累计 | 4 / 2 | 6 / 1（窗口外多出的就绪探测与心跳；断言窗口内读数不变） |
+
+第 3 轮刻意取更慢的一次运行（应用启动 + 反射包装耗时约翻倍），窗口内读数仍逐值相同——
+判定不依赖「跑得快」，只依赖控制通道与定位链的实际行为。
 
 ## 产物
 

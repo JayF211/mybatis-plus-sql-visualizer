@@ -28,7 +28,7 @@ class McpHistoryIngestTest : BasePlatformTestCase() {
 
     /** T-TestIsolation：本类经 [recordMcpExecution] 往**项目服务级**共享 buffer 入队条目
      *  （light 项目片内跨类复用同一 SqlLogManager 实例）——存初值供 tearDown 清回。 */
-    private lateinit var serviceState: SqlLogManagerProjectState.Snapshot
+    private var serviceState: SqlLogManagerProjectState.Snapshot? = null
 
     override fun setUp() {
         super.setUp()
@@ -38,10 +38,7 @@ class McpHistoryIngestTest : BasePlatformTestCase() {
     }
 
     override fun tearDown() {
-        SqlLogManagerProjectState.restore(
-            AlreadyDisposedDiagnostics.projectService(project, SqlLogManager::class.java, "tearDown.restore"),
-            serviceState,
-        )
+        SqlLogManagerProjectState.restore(serviceState)
         super.tearDown()
     }
 
