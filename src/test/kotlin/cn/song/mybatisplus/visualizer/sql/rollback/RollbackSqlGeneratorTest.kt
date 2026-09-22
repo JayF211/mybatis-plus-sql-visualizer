@@ -527,12 +527,11 @@ class RollbackSqlGeneratorTest {
         assertEquals(expected, backfill(dialect = null, identityColumns = listOf("id")))
         // ③ identity 声明了但不在本次快照列清单内（该表的自增列不是被回填的列）
         assertEquals(expected, backfill(dialect = sqlServer, identityColumns = listOf("other_id")))
-        // ④ 其余方言一律不包装
+        // ④ 其余方言一律不包装（DM8 于 2026-09-23 真机实证需要包装，已移出本清单 → 见下方 ⑤）
         listOf(
             cn.song.mybatisplus.visualizer.sql.MySqlDialect,
             cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect,
             cn.song.mybatisplus.visualizer.sql.OracleDialect,
-            cn.song.mybatisplus.visualizer.sql.DmDialect,
             cn.song.mybatisplus.visualizer.sql.KingBaseDialect,
             cn.song.mybatisplus.visualizer.sql.H2Dialect,
             cn.song.mybatisplus.visualizer.sql.SqliteDialect,
@@ -544,6 +543,17 @@ class RollbackSqlGeneratorTest {
                 backfill(dialect = dialect, identityColumns = listOf("id")),
             )
         }
+        // ⑤ DM8 与 SQL Server 同为包装方言（真机实测：不加包装 DM 报「仅当指定列列表，且 SET IDENTITY_INSERT
+        // 为ON时，才能对自增列赋值」；加包装后同一语句成功）——回滚链同样必须包装，否则回填 INSERT 在 DM 上必失败
+        val dmWrapped = backfill(
+            dialect = cn.song.mybatisplus.visualizer.sql.DmDialect,
+            identityColumns = listOf("id"),
+        )
+        assertTrue(
+            "DM8 回填含自增列的 INSERT 必须成对包装：$dmWrapped",
+            dmWrapped.single().startsWith("SET IDENTITY_INSERT") &&
+                dmWrapped.single().endsWith("SET IDENTITY_INSERT rt_del OFF;"),
+        )
     }
 
     /**

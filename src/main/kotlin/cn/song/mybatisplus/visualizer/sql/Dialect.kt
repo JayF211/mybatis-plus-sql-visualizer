@@ -477,10 +477,29 @@ object SqlServerDialect : Dialect {
         tableName: String,
         sql: String,
         caseSource: IdentifierCaseSource,
-    ): String {
-        val ref = quoteIfNeeded(tableName, caseSource)
-        return "SET IDENTITY_INSERT $ref ON;\n$sql\nSET IDENTITY_INSERT $ref OFF;"
-    }
+    ): String = identityInsertWrapper(tableName, sql, caseSource)
+}
+
+/**
+ * identity 包装的**共用形态**（SQL Server 与 DM8 逐字符相同）：`SET IDENTITY_INSERT <表> ON;` +
+ * INSERT + `SET IDENTITY_INSERT <表> OFF;`。
+ *
+ * 抽成一处而非两处复写：两库语法位与关键字逐字相同（DM8 的报错文案本身就点名 `SET IDENTITY_INSERT`），
+ * 复写会让「改一处忘一处」的形态差异无人发现。
+ *
+ * **真机证据（2026-09-23，DM8）**：DM8 对「显式给自增列赋值」的拒绝与 SQL Server 同形——
+ * `dm.jdbc.driver.DMException: 仅当指定列列表，且SET IDENTITY_INSERT为ON时，才能对自增列赋值`
+ * （vendorCode -2723）；加本包装后同一语句实测**成功**（`SET … ON` → INSERT 影响 1 行 → `SET … OFF`），
+ * 且「不指定自增列」的 INSERT 无需包装即可成功（对照）。SQL Server 侧仍无真机实例（形态取自 DBX 同款
+ * 实现与 T-SQL 文法），故本函数的**共用形态在 DM8 上已真机验证、SQL Server 上仍未验**。
+ */
+private fun Dialect.identityInsertWrapper(
+    tableName: String,
+    sql: String,
+    caseSource: IdentifierCaseSource,
+): String {
+    val ref = quoteIfNeeded(tableName, caseSource)
+    return "SET IDENTITY_INSERT $ref ON;\n$sql\nSET IDENTITY_INSERT $ref OFF;"
 }
 
 /**
@@ -599,6 +618,26 @@ object DmDialect : Dialect {
     override val supportsDeleteLimit: Boolean = true
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    /**
+     * **DM8 需要 identity 包装（2026-09-23 真机实测新增，原默认「不包装」是缺陷）**。
+     *
+     * 该默认值此前是**无证据的保守选择**（O-52 计划 §五-3 明写「DBX 有 DM 实现，但我方无 DM identity
+     * 真机证据 → 默认不给 DM 造包装，不照抄；若 §五-3 证伪为需要，另立增量」）。本轮按该条真机复核，
+     * 结论是**证伪为需要**：DM8 对显式给自增列赋值的拒绝与 SQL Server 同形——
+     * `dm.jdbc.driver.DMException: 仅当指定列列表，且SET IDENTITY_INSERT为ON时，才能对自增列赋值`
+     * （vendorCode -2723，库 `DBX_TEST` 表 `T_AUTOINC_7658`，自增列 `ID`）。
+     * 故 DM 与 SQL Server 一样走 [identityInsertWrapper]（两库语法逐字相同，实测通过）。
+     *
+     * **真机读数**：同一 INSERT 不加包装 → 报上述异常；加 `SET IDENTITY_INSERT … ON/OFF` 成对包装 →
+     * `SET ON` 无影响行、INSERT **影响 1 行**、`SET OFF` 无影响行（探针行随后按 ID 删除并复验为 0 行，
+     * 未留残留）；对照：**不指定**自增列的 INSERT 无需包装即成功（即包装只在自增列被勾回时需要）。
+     */
+    override fun renderInsertWrapper(
+        tableName: String,
+        sql: String,
+        caseSource: IdentifierCaseSource,
+    ): String = identityInsertWrapper(tableName, sql, caseSource)
 
     override val reservedWords: Set<String> = DM_RESERVED
 }
