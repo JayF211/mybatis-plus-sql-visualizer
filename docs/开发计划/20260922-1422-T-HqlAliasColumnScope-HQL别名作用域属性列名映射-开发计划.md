@@ -33,7 +33,7 @@ ORDER BY item.code
 |---|---|---|---|
 | `pickTicket.warehouse_id` | 根实体属性 `warehouseId` | 已转列名 | ✅ |
 | `pickTicket.status` | 根实体属性（同名） | 无需转换 | ✅ |
-| `pickTicket.updateInfo.created_time` | 根实体嵌入对象内字段 `createdTime` | 内层字段已转列名 | ⚠️ 见 §六 D2 |
+| `pickTicket.updateInfo.createdTime` | 根实体嵌入对象内字段 `createdTime` | **嵌入段已按 `@Embedded` 展平去掉**（§六 D2 已实施） | ✅ |
 | `detail.pickTicketId` | **副表** `WmsPickTicketDetail` 的属性 | **原样透传** | ❌ 本缺陷 |
 | `detail.itemId` | **副表** `WmsPickTicketDetail` 的属性 | **原样透传** | ❌ 本缺陷 |
 
@@ -185,7 +185,7 @@ assertTrue("SQL 含 IN (?)", result.sql.contains("in (?)"))     // ← 只断言
 | P-4 | 副表实体的 `TableInfo` 在 HQL 预览链路上确实可取（`JpaEntityResolver` 能解析到 `WmsPickTicketDetail`） | 代码可判：`JpaFromEntityMapper.kt:59-61` 已经在用同一路径取 `tableName`，说明类能解析到；实施时用夹具实测列清单非空即可 |
 | P-5 | 别名收集是否会与 `JpaJoinRewriter` 的 JOIN 改写冲突（改写后别名可能新增/变化） | 步骤顺序上属性映射（第 9 步）在 JOIN 改写（第 5 步）之后，别名收集必须在改写**之后**做。实施时用「关联路径 JOIN + 显式实体 JOIN 混用」的夹具验证 |
 
-## 六、顺带发现（需用户定案，默认不在本任务范围）
+## 六、顺带发现（D2 已按用户后续指示实施，见本节末尾）
 
 ### D2：嵌入对象路径未展平，产出三段式无效 SQL
 
@@ -200,6 +200,27 @@ assertTrue("SQL 含 IN (?)", result.sql.contains("in (?)"))     // ← 只断言
   （本项在嵌入展平与路径消费侧），是否合并实施请用户定案。
 - 若纳入，需同时确认：`@AttributeOverride` 覆写后的列名、`@EmbeddedId` 复合主键路径、
   以及「用户确实写了三段式路径」这一前提（同 P-1，需先复现）。
+
+
+### D2 后续实施（2026-09-22，用户补充预览代码后指示「再次分析后调整」）
+
+**已实施**。用户 2026-09-22 先要求「先待定，等我补充预览 sql 时的代码再次分析后调整」，随后补齐了预览侧
+Java 代码（见 §十一.1），挂起条件解除，故本轮一并做掉。
+
+- **机制**：`ColumnInfo` 新增 `embeddedParent: String?`（展平列的**嵌入对象字段名**，按该文件既有约定
+  「尾部追加带默认值」追加）；`JpaEntityResolver.flattenEmbeddedColumns` 展平时写入该字段；
+  `JpaAliasPropertyMapper` 据**列自身的 `embeddedParent`** 判断是否去掉中间段——
+  `pickTicket.updateInfo.createdTime` → `pickTicket.created_time`（嵌入段 `updateInfo.` 去掉）。
+- **为什么用列元数据而不是猜**：若按「中间段不是本表字段就丢掉」来判，会误删别的合法中间段。
+  判据取自列自己记录的嵌入来源，非嵌入列（`embeddedParent == null`）恒不丢段。
+- **判据收紧**：只比中间段的**首段**——嵌套 `@Embedded` 展平后列名已按 `@AttributeOverride` 链算准，
+  整条中间段都该丢；而 `embeddedParent` 记录的是最外层那个字段。
+- **测试**：整串黄金比对的期望产物改为 `pickTicket.created_time`；新增
+  `test嵌入路径展平_嵌入段去掉而列名用覆写值`（含 `@Column(name="created_time")` 覆写与未覆写 snake 兜底两形态）
+  与 `test非嵌入中间段_保留不删`（「不靠猜测丢中间段」的反向判据）。
+- **反向验证**：把 `isFlattenedEmbeddedPath` 分支恒置 false（即恢复「保留嵌入段」）→
+  展平用例与整串黄金比对必红；读数见 §十二。
+- **原「必须保持现状」的硬约束（§11.2）随之作废**——那是用户挂起期间的临时约束，条件已解除。
 
 ## 七、验收
 
@@ -262,7 +283,7 @@ List<String> itemCodes = commonDao.findByQuery(hql,
 另附一条与映射无关但影响复现的旁证：该查询只有一列，Hibernate 返回标量本身而非 `Object[]`
 （用户代码注释已写明），所以复现时只看预览产物、不要按 `Object[]` 反推。
 
-### 11.2 边界：`pickTicket.updateInfo.createdTime` 本轮**必须保持现状**
+### 11.2 边界：`pickTicket.updateInfo.createdTime`（**该约束已被 2026-09-22 后续指示取代**，见 §六 D2 后续实施）
 
 用户 2026-09-22 明确：`@Embedded` 展平问题**先待定**，等补充更多预览代码后再分析调整。
 
@@ -373,7 +394,7 @@ sam 调度：单实施代理五轮迭代（初版 + 复核后四轮），主调�
 
 - **T-04（SELECT 副表别名展开）未做**，登记边界（见上第 1 条相关）。
 - **真机走查未做**（需 runIde 沙盒 + 用户工程或 demo），留人工。
-- **@Embedded 展平（§六 D2）未做**：用户 2026-09-22 明确挂起，等其补充材料后再定；本轮以「该形态产物逐字不变」的整串断言保证不误伤。
+- **@Embedded 展平（§六 D2）已实施**（用户补充预览代码后指示调整，见 §六 D2 后续实施）；原「产物逐字不变」的临时约束已作废。
 
 ### §十二 全量门禁
 
@@ -381,7 +402,7 @@ sam 调度：单实施代理五轮迭代（初版 + 复核后四轮），主调�
 
 | 门禁 | 读数 | 判定 |
 |---|---|---|
-| `testShards` 三片 | **5690 例 / 0 失败 / 0 错误 / 6 跳过**（1834 / 2166 / 1690，`BUILD SUCCESSFUL in 3m 41s`） | ✅ |
+| `testShards` 三片 | **5692 例 / 0 失败 / 0 错误 / 6 跳过**（1904 / 2045 / 1743，`BUILD SUCCESSFUL in 5m 6s`）——@Embedded 展平批次落地后复跑，较前一轮 5690 +2 例（新增的两条展平用例） | ✅ |
 | `verifyGate` 三目标 | IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63 **全 Compatible**（待移除 API 4/5/6 处、废弃 API 9/12/66 处） | ✅ |
 | `testDatabase` | 10 例 8 过 **2 红＝在册环境失败** | ✅ 与改动零交集 |
 

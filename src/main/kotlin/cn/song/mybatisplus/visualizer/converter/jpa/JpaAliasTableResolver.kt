@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.converter.jpa
 
+import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
 import com.intellij.openapi.project.Project
@@ -195,9 +196,10 @@ internal object JpaAliasPropertyMapper {
      *
      * 捕获组（只属于属性分支）：1 限定符 | 2 空白+点号 | 3 中间段（每段自带其后的空白+点号）| 4 属性名。
      * 限定符与点号之间的空白允许且**原样保留**（`u .code` / `u\n.code` 是合法写法，
-     * 不容忍就会从「旧实现会替换」变成「不替换」，即回归）；中间段同样允许并保留空白，
-     * 且必须允许存在（`pickTicket.updateInfo.createdTime` 的 `updateInfo.` 原样保留——
-     * @Embedded 展平是另一项任务，计划 §六 D2 用户已挂起）。
+     * 不容忍就会从「旧实现会替换」变成「不替换」，即回归）；中间段同样允许并保留空白。
+     * 中间段本身按**解析出的列**的 `embeddedParent` 决定去留（见 [isFlattenedEmbeddedPath]）：
+     * `@Embedded` 展平列的路径要去掉嵌入段（`pickTicket.updateInfo.createdTime` → `pickTicket.created_time`），
+     * 其余情况原样保留。
      */
     private val PROPERTY_OR_LITERAL = Regex("${STRING_LITERAL.pattern}|${PROPERTY_PATTERN}")
 
@@ -233,6 +235,13 @@ internal object JpaAliasPropertyMapper {
             val column = owner.columnByField(field)
             if (column == null || column.fieldName == column.columnName) {
                 match.value
+            } else if (isFlattenedEmbeddedPath(middle, column)) {
+                // @Embedded 展平（计划 §六 D2 已实施）：嵌入对象没有自己的表，其字段直接落在宿主表的列上，
+                // 故路径里的嵌入段必须去掉——`pickTicket.updateInfo.createdTime` 的正确产物是
+                // `pickTicket.created_time`；保留 `updateInfo.` 会产出无效 SQL（SQL 语义下
+                // `pickTicket.updateInfo` 被当成「库.表」）。判据取自**列自身的 embeddedParent**
+                // （展平时写入），而不是「中间段不是本表字段就丢掉」——后者会误删别的合法中间段。
+                "$qualifier$dot${column.columnName}"
             } else {
                 // 只换属性名，限定符/中间段及其间空白原样拼回；替换产物是列名（小写 snake），
                 // 不再命中本规则，天然幂等
@@ -240,6 +249,22 @@ internal object JpaAliasPropertyMapper {
             }
         }
         return appendUnmappedOnHint(mapped, scope)
+    }
+
+    /**
+     * 该匹配是否为「嵌入对象路径」——即 [column] 是 [middle] 首个嵌入段的展平列。
+     *
+     * 只认**首个**段：嵌套 `@Embedded` 展平后列名已按 `@AttributeOverride` 链算准，
+     * 整条中间段都该丢；而 `@Embedded` 的字段名记录的是最外层那个字段（见
+     * [ColumnInfo.embeddedParent] 的写入点），故与首段比较即可。
+     *
+     * 中间段为空（普通两段路径）恒为 false；中间段首段与列的 `embeddedParent` 不等时为 false
+     * ——即**不丢**中间段，保持既有行为。
+     */
+    private fun isFlattenedEmbeddedPath(middle: String, column: ColumnInfo): Boolean {
+        val parent = column.embeddedParent ?: return false
+        if (middle.isBlank()) return false
+        return middle.trim().substringBefore('.') == parent
     }
 
     /**

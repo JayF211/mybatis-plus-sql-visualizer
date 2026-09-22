@@ -73,11 +73,11 @@
 select distinct item.code from wms_pick_ticket pickTicket join wms_pick_ticket_detail detail
 on detail.pick_ticket_id = pickTicket.id join wms_item item on item.id = detail.item_id
 where pickTicket.warehouse_id = ? and pickTicket.status = 'EN'
-and pickTicket.updateInfo.created_time >= ? and pickTicket.updateInfo.created_time < ? order by item.code
+and pickTicket.created_time >= ? and pickTicket.created_time < ? order by item.code
 ```
 
 - `detail.pickTicketId` → `detail.pick_ticket_id`、`detail.itemId` → `detail.item_id`（**本批主症已消**）；
-- `pickTicket.updateInfo.created_time` **外层 `updateInfo.` 逐字保留**（`@Embedded` 展平是另一项，用户已明确挂起）；
+- `pickTicket.updateInfo.createdTime` → `pickTicket.created_time`（**嵌入段已按 `@Embedded` 展平去掉**，见 §六 D2 后续实施）；
 - 期望串是**首跑之前写死**的纯字面量，测试文件 md5 首跑前后未变（`3bbb6dd9…`）→ **非「改成实际值就绿」**。
 
 ### 2.3 反向验证（累计 9 处，读数原文均已贴入各轮回报）
@@ -161,7 +161,7 @@ bundle 键成对无幽灵键；`psi → ui.highlight` 无守卫拦阻且 KDoc �
 
 | 门禁 | 读数 | 判定 |
 |---|---|---|
-| `testShards`（三片） | **1834 / 2166 / 1690 = 5690 例 / 0 失败 / 0 错误 / 6 跳过**，`BUILD SUCCESSFUL in 3m 41s` | ✅ 通过 |
+| `testShards`（三片） | **1904 / 2045 / 1743 = 5692 例 / 0 失败 / 0 错误 / 6 跳过**，`BUILD SUCCESSFUL in 5m 6s`（@Embedded 展平批次后复跑；前一轮 1834/2166/1690 = 5690 为展平前读数） | ✅ 通过 |
 | `verifyGate`（三目标） | IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63 **全 Compatible**（待移除 API 4/5/6 处、废弃 API 9/12/66 处） | ✅ 通过 |
 | `testDatabase` | 10 例 / 8 过 / **2 红＝在册环境失败**（`DbDriverPipelineTest#testDriverArtifactResolvesToJarsOnClasspath` 报文「实际版本集: [8.2.0, 8.1.0, …]」、`#testSeedFilesLandWhereDbLooksForThem` 沙盒路径未播种，与 N6 计划记录逐字一致） | ✅ 与本批零交集 |
 
@@ -211,7 +211,7 @@ AlreadyDisposedException: Container is already disposed
 待走查项：
 
 1. 用用户那条 HQL（或等价夹具）打开预览 → 确认 `detail.pick_ticket_id` / `detail.item_id`，复制到数据源执行不再报 `Unknown column`；
-2. `@Embedded` 形态产物仍是 `pickTicket.updateInfo.created_time`（本轮不碰，用户挂起）；
+2. `@Embedded` 形态产物为 `pickTicket.created_time`（嵌入段已去掉，不再是无效的三段式）；
 3. **造一个字段名与列名不一致的实体**（字段 `orderID` 而列 `order_id`）→ 预览用真实列名；
 4. **断开/删除数据源** → 预览回到改造前产物；
 5. 对表执行一次 `ALTER TABLE`（改列名）→ 校正结果跟随（验证 `MetadataInvalidator` 链路）；
@@ -236,7 +236,7 @@ AlreadyDisposedException: Container is already disposed
 
 | 项 | 原因 |
 |---|---|
-| **`@Embedded` 展平**（O-57 计划 §六 D2） | 用户 2026-09-22 明确挂起，等其补充材料后再定；本轮以「该形态产物逐字不变」的整串断言保证不误伤 |
+| ~~**`@Embedded` 展平**（O-57 计划 §六 D2）~~ | **已实施**（用户补充预览代码后指示「再次分析后调整」）：`ColumnInfo.embeddedParent` + 映射器去嵌入段，产物 `pickTicket.created_time` |
 | **O-58 T-06 校正可见信号** | 需动 `model/TableInfo.kt` 与 `ui/SqlPreviewPanel.kt`（后者另有会话在用），且该条是主调度在计划里自加的、不在用户原始需求内 |
 | **O-58 T-08 缩写感知 snake 化** | 与 MP 官方策略不一致会引入「插件猜的与 MP 跑的不一样」的新错，D4 定为不纳入 |
 | **O-57 T-04 SELECT 副表别名展开** | 计划判「不确定就不做」，未实测 |

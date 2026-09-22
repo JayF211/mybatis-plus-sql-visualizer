@@ -20,13 +20,15 @@ import org.junit.Assert.assertTrue
  *
  * 验证点：
  *  1. 用户 HQL 同形复现——副表别名属性映射为列名（改前必红）
- *  2. `pickTicket.updateInfo.createdTime` 的嵌入路径中间段逐字保留（T-02 回归线，
- *     @Embedded 展平是另一项任务，本轮不得把 `updateInfo.` 去掉）
+ *  2. `pickTicket.updateInfo.createdTime` 的**嵌入路径展平**（`@Embedded` 展平，计划 §六 D2 已实施）：
+ *     嵌入段 `updateInfo.` 去掉，产物 `pickTicket.created_time`；去掉嵌入段是必须的——保留它会产出
+ *     无效 SQL（SQL 语义下 `别名.嵌入对象` 被当成「库.表」）。整串黄金比对同时钉住这一点
  *  3. 跨别名同名字段各按其实体列清单映射（T-02 判据，改前必红）
  *  4. 隐式作用域不回归：无别名限定的裸属性行为与改前一致
  *  5. 自连接：同一实体两个别名各自绑定，不合并
  *  6. 无 Project / 实体不可解析：原样透传，不猜列名
  *  7. 双链路一致：HqlConverter 与 JpqlConverter 行为逐字相同
+ *  8. 非嵌入的中间段**保留不删**（「不靠猜测丢中间段」的反向判据）
  *
  * 夹具用 LightPlatform 的 PsiClass 注入写法（照 [JpaJoinOnResolverTest] 既有形态，免索引依赖），
  * 另有一例走生产入口的 project 形态。BasePlatformTestCase 使用 JUnit 3 约定，
@@ -79,13 +81,49 @@ class HqlAliasColumnMappingTest : BasePlatformTestCase() {
      * O-57 §七 验收：用户报障 HQL 的**整串黄金比对**。
      *
      * 一次钉死：副表别名属性（`detail.pick_ticket_id` / `detail.item_id`）、根实体属性
-     * （`pickTicket.warehouse_id`）、同名属性不动（`pickTicket.status`）、嵌入路径中间段逐字保留
-     * （两处 `pickTicket.updateInfo.created_time`，@Embedded 展平是另一项任务，本轮不得去掉
-     * `updateInfo.`）、实体名→表名、参数替换、ORDER BY 原样。
+     * （`pickTicket.warehouse_id`）、同名属性不动（`pickTicket.status`）、**嵌入路径展平**
+     * （两处 `pickTicket.updateInfo.createdTime` → `pickTicket.created_time`，嵌入段 `updateInfo.` 去掉——
+     * 保留它会产出无效 SQL，见 [JpaAliasPropertyMapper.isFlattenedEmbeddedPath]）、
+     * 实体名→表名、参数替换、ORDER BY 原样。
      */
-    fun test用户HQL_整串黄金比对_嵌入路径逐字保留() {
+    fun test用户HQL_整串黄金比对_嵌入路径展平() {
         val result = convert(USER_HQL, "WmsPickTicket")
         assertEquals("用户报障 HQL 的完整产物", USER_HQL_EXPECTED, result.sql)
+        assertFalse("不得残留嵌入段（无效 SQL 形态）: ${result.sql}", result.sql.contains("updateInfo"))
+    }
+
+    // ------------------------------------------------------------------
+    // 嵌入路径展平（@Embedded，计划 §六 D2 已实施）
+    // ------------------------------------------------------------------
+
+    /** 嵌入段的去留由**列自身的 embeddedParent** 决定，而不是「中间段不是本表字段就丢」。 */
+    fun test嵌入路径展平_嵌入段去掉而列名用覆写值() {
+        // UpdateInfo.createdTime 经 @Column(name="created_time") 覆写，故展平后是 created_time
+        val flattened = convert(USER_HQL, "WmsPickTicket")
+        assertTrue("嵌入段应去掉: ${flattened.sql}", flattened.sql.contains("pickTicket.created_time"))
+        assertFalse("嵌入段不得残留: ${flattened.sql}", flattened.sql.contains("updateInfo."))
+        // 嵌入对象内部字段名原样出现在路径里时同样展平（非报障写法，同一机制）
+        val alt = convert(
+            "select pickTicket.updateInfo.updatedBy from WmsPickTicket pickTicket",
+            "WmsPickTicket",
+        )
+        assertTrue("未覆写的嵌入列按 snake 兜底: ${alt.sql}", alt.sql.contains("pickTicket.updated_by"))
+        assertFalse("嵌入段不得残留: ${alt.sql}", alt.sql.contains("updateInfo."))
+    }
+
+    /**
+     * 非嵌入的中间段**必须原样保留**——这是「不靠猜测丢中间段」的反向判据。
+     *
+     * `pickTicket.unknownMiddle.createdTime` 里 `unknownMiddle` 不是本表的嵌入对象，
+     * 故 `createdTime` 映射为列名但中间段保留（SQL 文本仍不可执行，属关联路径范畴、
+     * 由 `mapAssociationPath` 与降级注释承担，本映射器不越权删段）。
+     */
+    fun test非嵌入中间段_保留不删() {
+        val result = convert(
+            "select pickTicket.unknownMiddle.createdTime from WmsPickTicket pickTicket",
+            "WmsPickTicket",
+        )
+        assertTrue("属性名仍应映射: ${result.sql}", result.sql.contains("pickTicket.unknownMiddle.created_time"))
     }
 
     // ------------------------------------------------------------------
@@ -281,15 +319,15 @@ class HqlAliasColumnMappingTest : BasePlatformTestCase() {
         /** ON 未映射尾注的稳定片段（断言用；文案与 JpaAliasPropertyMapper 一致）。 */
         const val UNMAPPED_HINT = "未出现在 FROM/JOIN"
 
-        /** 用户报障 HQL 的完整期望产物：实体名→表名、副表别名属性→列名、嵌入路径逐字保留。 */
+        /** 用户报障 HQL 的完整期望产物：实体名→表名、副表别名属性→列名、嵌入路径展平。 */
         val USER_HQL_EXPECTED = "select distinct item.code" +
             " from wms_pick_ticket pickTicket" +
             " join wms_pick_ticket_detail detail on detail.pick_ticket_id = pickTicket.id" +
             " join wms_item item on item.id = detail.item_id" +
             " where pickTicket.warehouse_id = ?" +
             " and pickTicket.status = 'EN'" +
-            " and pickTicket.updateInfo.created_time >= ?" +
-            " and pickTicket.updateInfo.created_time < ?" +
+            " and pickTicket.created_time >= ?" +
+            " and pickTicket.created_time < ?" +
             " order by item.code"
 
         val USER_HQL = "select distinct item.code" +

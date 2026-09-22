@@ -307,6 +307,7 @@ class JpaEntityResolver {
                     comment = resolveComment(field),
                     role = if (isPrimaryKey) ColumnRole.PRIMARY else ColumnRole.BUSINESS,
                     embedded = true,
+                    embeddedParent = fieldName,
                 ),
             )
         }
@@ -323,6 +324,7 @@ class JpaEntityResolver {
                 insertable = spec.insertable,
                 updatable = spec.updatable,
                 embedded = true,
+                embeddedParent = fieldName,
             )
         }
     }
