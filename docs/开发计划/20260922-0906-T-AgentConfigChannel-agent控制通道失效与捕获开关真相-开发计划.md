@@ -506,24 +506,45 @@ CHANGELOG `[Unreleased]` 与 `docs/变更记录.md` 三处同步（**已落**，
 
 ### 十一、shard3 flake 根治（T-ST-02b2 生产侧收口，2026-09-22 收口后追加）
 
-**修法**：新增 `log/SqlLogManagerLookup.kt#sqlLogManagerOrNull(project)`——**在发起 `getService` 之前**先判
-`project.isDisposed`，返回 null 表示「项目关闭中 / 测试 temporarily-disposed 窗口」；**8 处取用点全部改走它**
-（`LogStartupCapture` / `SqlConsoleBridgeFilterProvider` / `AgentManager`×3 / `McpToolsetSupport` /
-`SqlPreviewService` / `SectionConfigurable`），各处 null 语义按「跳过本次动作」收口：审计旁路跳过、
-EP 不挂过滤器、事件丢弃不斩断流、耗时补全退化为未命中、自动启动分流沿用既有 warn 文案。
+> **两层修法，第一层经实测证伪（如实记录，勿只读结论）**：先按本仓登记的「根治方向」加了 `isDisposed` 守卫，
+> 重跑 `testShards` **仍 26 例失败**（形状不变）→ 定因见下「为什么第一层不够」，第二层才是根治。
+
+**第一层（`6df02ef`，必要但不充分）**：新增 `log/SqlLogManagerLookup.kt#sqlLogManagerOrNull(project)`——
+**在发起 `getService` 之前**先判 `project.isDisposed`；8 处取用点全部改走它，null 语义一律「跳过本次动作」
+（审计旁路跳过、EP 不挂过滤器、事件丢弃不斩断流、耗时补全退化为未命中、自动启动分流沿用既有 warn 文案）。
 **关键点：不能只靠 `runCatching`**——它只吞掉这一次的结果、仍发起了那次注定失败的创建
 （T-ST-02b2 定论，见 `SectionConfigurable` 的字节码级论证）。
 
+**为什么第一层不够（本轮门禁实测 + 本仓既有分析）**：`isDisposed` 判据对 light 测试的
+**temporarily-disposed 窗口不可达**——窗口内 `project.isDisposed` 为 **false**（诊断行实测组合即
+`project.isDisposed=false :: Container is already disposed`），而 `getService` 仍会因 `messageBus` owner
+已 disposed 失败并永久毒化。既然「判状态」判不准，就必须在**结构上不发起创建**。
+
+**第二层（`81196e5`，根治）**：新增 `sqlLogManagerIfCreated(project)`——只用 `getServiceIfCreated`
+**读已建实例、绝不发起创建**，故**无论项目处于何种窗口都不会毒化**。读路径 6 处全部改走它
+（`AgentManager` 的 `isListenActive` / `listenActiveProvider` / 事件入队、`McpToolsetSupport` 审计、
+`SqlPreviewService` 耗时补全、`SqlConsoleBridgeFilterProvider`——服务未创建＝本插件从未启用捕获＝无过滤需求）；
+需要**写**共享状态的两处（`LogStartupCapture` 启动期自动捕捉、`SectionConfigurable` 设置联动）仍用创建式入口
++ disposed 守卫（真实 IDE 关闭路径 `isDisposed` 为真，能挡住）。
+
+**真凶定位的推断（如实标注为推断）**：真凶不在「文件字面含 `SqlLogManager`」的类里（前缀子集实验已证伪）→
+最可能是**生产路径在某测试里被触发**并在窗口内发起创建，而那次失败被生产代码的 `runCatching` 吞掉，
+故诊断行里只有受害者、没有真凶。读路径正是「任意测试都可能触达」的那一片，第二层把它整片移除。
+
 **守卫（唯一可确定性验证的手段，因为该 flake 本身非确定）**：新增 `convention/SqlLogManagerLookupGuardTest`：
-① `src/main` 下任何直接取用必须在唯一白名单文件内；② 自检——白名单文件必须**真的**含 `isDisposed` 判定
-（防被「优化」掏空后守卫空绿）。与姊妹守卫 `BannedApiSourceScanTest` 的分工：那条管「测试类改了共享状态不复位」
-（状态泄漏），本条管「取用点在 disposed 窗口发起创建」（容器中毒）——两条机制不同、现场同源，不可互相替代。
+① `src/main` 下任何直接取用必须在唯一白名单文件内；② 自检——白名单文件必须**真的**含 `isDisposed` 判定，
+且必须含基于 `getServiceIfCreated` 的 `sqlLogManagerIfCreated`（缺任一支即说明入口被掏空或读路径被改回创建式）。
+与姊妹守卫 `BannedApiSourceScanTest` 的分工：那条管「测试类改了共享状态不复位」（状态泄漏），
+本条管「取用点在 disposed 窗口发起创建」（容器中毒）——两条机制不同、现场同源，不可互相替代。
 
 **反向验证（两臂，均临时改动后还原、无 RED PROBE 残留）**：① 把 `LogStartupCapture` 改回直接取用 →
 守卫红并点名该文件；② 掏空白名单文件里的 `isDisposed` 判定 → 自检用例红。还原后守卫绿。
 
-**读数**：定向（守卫 + 8 处改动各自用例 + 姊妹守卫）BUILD SUCCESSFUL（2m2s）；全量 `testShards` 与
-`verifyGate` 重跑读数见提交信息。
+**读数**：第一层后 `testShards` **FAILED（26 例）**、`verifyGate` 三目标 Compatible；
+第二层后的定向与 shard3 多轮读数见提交信息与验收文档。
+
+**已知局限（如实登记）**：该 flake 非确定（同一代码重跑可绿可红），故**绿读数不能证明已治好**；
+可给的最强证据是「结构上已无创建路径可被窗口命中」+ 多轮重复读数 + 守卫锁定。
 
 **另记（并行会话的独立证实，勿当重复劳动）**：另一会话就同一报障独立排障，用「假 IDE + 真 `SenderLoop`、
 两臂仅字节序不同」的受控实验独立证实本计划的根因——`[len][cmd]`（IDE 实际写序）下三键全不生效、
