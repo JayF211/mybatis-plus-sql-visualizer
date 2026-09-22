@@ -251,6 +251,10 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
      * 故富通道投递后**不得**再投一次旧通道（`onError(String)`）——`DataSourceSelector.deliverError`
      * 已把两条通道改为互斥，否则富信息刚置的定位态会被同一次执行的旧通道立刻抹掉。
      *
+     * **T-Round10FU 三态 tooltip（独立复核 ㉕）**：`positionChar` → 带驱动字符位置的文案；
+     * 否则 `lineInSql` → 带驱动行号的文案（MySQL 语法错误 `at line N` / `Line: N` 走这条）；
+     * 两者皆无 → 「语句起始行」兜底文案。三条都如实标注位置指向**被执行的 SQL 文本**。
+     *
      * @param info   执行链富错误信息（T-EL-02 富通道投递；[ExecutionErrorInfo.executedSqlLength]
      *               为投递点传入的提交文本长度，供 tooltip 标注「位置指向执行态 SQL」，不做换算）
      * @param locate 定位动作；null = 不显示定位按钮
@@ -259,10 +263,16 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         showError(info.message)
         locateHandler = locate
         if (locate != null) {
-            errorLocateButton.toolTipText = if (info.positionChar != null) {
-                MpSqlVisualizerBundle.message("execute.error.locate.tooltip.position", info.positionChar)
-            } else {
-                MpSqlVisualizerBundle.message("execute.error.locate.tooltip.start")
+            // T-Round10FU（独立复核 ㉕）：三态文案——字符位置 / 行号 / 两者皆无。
+            // 改前只判 positionChar，故**只带行号的驱动报错**（MySQL 语法错误 `at line N`、
+            // `Line: N`）落到「语句起始行」兜底文案：驱动其实报了行号，面板却当作没报
+            // （`ExecutionErrorInfo.lineInSql` 因此在 src/main 无任何消费方）。
+            errorLocateButton.toolTipText = when {
+                info.positionChar != null ->
+                    MpSqlVisualizerBundle.message("execute.error.locate.tooltip.position", info.positionChar)
+                info.lineInSql != null ->
+                    MpSqlVisualizerBundle.message("execute.error.locate.tooltip.line", info.lineInSql)
+                else -> MpSqlVisualizerBundle.message("execute.error.locate.tooltip.start")
             }
             errorLocateButton.isVisible = true
             errorLocateButton.revalidate()
