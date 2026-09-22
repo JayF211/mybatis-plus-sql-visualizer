@@ -36,4 +36,22 @@ public final class SqlServerDialect implements Dialect {
     public Set<String> getReservedWords() {
         return SqlKeywords.SQLSERVER_RESERVED;
     }
+
+    /**
+     * O-52 / T-IdentityInsertWrap：SQL Server 拒绝向 identity 列显式写值（错误 544
+     * {@code Cannot insert explicit value for identity column in table ... when IDENTITY_INSERT is set to OFF}），
+     * 必须先 {@code SET IDENTITY_INSERT <表> ON}，语句结束后 OFF。
+     *
+     * <p>该开关是<b>会话级</b>且同一时刻每会话只能有一个表为 ON，故包装必须<b>逐条 INSERT 成对</b>出现
+     * （多条 INSERT 合批时不能只在整段首尾各包一次）。</p>
+     *
+     * <p>表名与 INSERT 基座共用 {@link #quoteIfNeeded}（同一 {@code caseSource}）——{@code SET IDENTITY_INSERT}
+     * 的目标位与 {@code INSERT INTO} 的目标位是两处独立语法位，引用形态不一致会指向不同对象。
+     * <b>未真机验证</b>：本环境无 SQL Server 实例（DBX MCP 在册连接无 sqlserver 类型），形态取自
+     * DBX {@code d715b16b} 同款实现与 T-SQL 文法；真机端到端登记为环境受限未验证。</p>
+     */
+    @Override
+    public String renderInsertWrapper(String tableName, String sql, IdentifierCaseSource caseSource) {
+        return Dialect.identityInsertWrapper(this, tableName, sql, caseSource);
+    }
 }

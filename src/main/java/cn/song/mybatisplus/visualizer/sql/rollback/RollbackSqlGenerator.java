@@ -3,7 +3,9 @@
 package cn.song.mybatisplus.visualizer.sql.rollback;
 
 import cn.song.mybatisplus.visualizer.execute.UnboundedWriteDetector;
+import cn.song.mybatisplus.visualizer.sql.Dialect;
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper;
+import kotlin.jvm.functions.Function1;
 import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.DoubleValue;
 import net.sf.jsqlparser.expression.Expression;
@@ -553,6 +555,9 @@ public final class RollbackSqlGenerator {
      * @param primaryKeyColumns 主键列（REVERT_INSERT 谓词定位 / REVERT_UPDATE 的 WHERE 定位；null 走整行镜像）
      * @param changedColumns    REVERT_UPDATE 必传：原 UPDATE 的 SET 列清单
      * @param newValuesByColumn REVERT_UPDATE 必传：SET 列 → 写入后的新值（SQL 字面量，如 `'abc'`/`3`/`NULL`）
+     * @param dialect           O-52：回滚侧 identity 包装的方言（null = 未知 → 不包装，默认）
+     * @param identityColumns   O-52：目标表的自增列名（空 = 未知 → 不包装，默认）——只在
+     *                          {@link SnapshotMode#BACKFILL_INSERT} 生效（该模式才生成 INSERT）
      */
     @NotNull
     public static RollbackResult generateFromSnapshotRows(@NotNull String table, @NotNull List<String> columns,
@@ -580,6 +585,7 @@ public final class RollbackSqlGenerator {
         return generateFromSnapshotRows(table, columns, rows, mode, primaryKeyColumns, changedColumns, Map.of());
     }
 
+    /** {@link #generateFromSnapshotRows(String,List,List,SnapshotMode,List,List,Map,Dialect,List)} 的 O-52 两字段落「未知」形态。 */
     @NotNull
     public static RollbackResult generateFromSnapshotRows(@NotNull String table, @NotNull List<String> columns,
                                                           @NotNull List<List<String>> rows,
@@ -587,22 +593,63 @@ public final class RollbackSqlGenerator {
                                                           @Nullable List<String> primaryKeyColumns,
                                                           @NotNull List<String> changedColumns,
                                                           @NotNull Map<String, String> newValuesByColumn) {
+        return generateFromSnapshotRows(table, columns, rows, mode, primaryKeyColumns, changedColumns,
+                newValuesByColumn, null, List.of());
+    }
+
+    @NotNull
+    public static RollbackResult generateFromSnapshotRows(@NotNull String table, @NotNull List<String> columns,
+                                                          @NotNull List<List<String>> rows,
+                                                          @NotNull SnapshotMode mode,
+                                                          @Nullable List<String> primaryKeyColumns,
+                                                          @NotNull List<String> changedColumns,
+                                                          @NotNull Map<String, String> newValuesByColumn,
+                                                          @Nullable Dialect dialect,
+                                                          @NotNull List<String> identityColumns) {
         if (table.isBlank() || columns.isEmpty() || rows.isEmpty()) {
             return RollbackResult.unable(new RollbackWarning("rollback.snapshot.emptyInput"));
         }
         return switch (mode) {
-            case BACKFILL_INSERT -> backfillInsert(table, columns, rows);
+            case BACKFILL_INSERT -> backfillInsert(table, columns, rows, dialect, identityColumns);
             case REVERT_INSERT -> revertInsertFromSnapshot(table, columns, rows, primaryKeyColumns);
             case REVERT_UPDATE -> revertUpdateFromSnapshot(
                     table, columns, rows, primaryKeyColumns, changedColumns, newValuesByColumn);
         };
     }
 
-    /** DELETE 反向：INSERT 全列回填（多行 VALUES 合批 500 行/256KB；行数达快照上限按截断降级）。 */
+    /**
+     * DELETE 反向：INSERT 全列回填（多行 VALUES 合批 500 行/256KB；行数达快照上限按截断降级）。
+     *
+     * <p>O-52：快照列清单含自增列且方言有包装形态（{@link Dialect#renderInsertWrapper} 非 null）时，
+     * <b>每条</b> INSERT 各自成对包装——{@code SET IDENTITY_INSERT} 是会话级开关且同一时刻每会话只能有
+     * 一个表为 ON，合批出的多条 INSERT 不能只在整段首尾各包一次。identity 未知（空清单/方言为 null）→
+     * 不包装，产物与改前逐字节相同。</p>
+     */
     @NotNull
     private static RollbackResult backfillInsert(@NotNull String table, @NotNull List<String> columns,
-                                                 @NotNull List<List<String>> rows) {
+                                                 @NotNull List<List<String>> rows,
+                                                 @Nullable Dialect dialect,
+                                                 @NotNull List<String> identityColumns) {
         String columnList = String.join(", ", columns);
+        // 大小写不敏感匹配（与 REVERT_INSERT 的主键判定同口径）：粘贴 TSV 的列名来自网格，
+        // 大小写形态由驱动/表定义决定，不能按字面相等判
+        boolean wrapIdentity = false;
+        for (String id : identityColumns) {
+            for (String c : columns) {
+                if (c.equalsIgnoreCase(id)) {
+                    wrapIdentity = true;
+                    break;
+                }
+            }
+            if (wrapIdentity) break;
+        }
+        final Dialect wrapperDialect = dialect;
+        Function1<String, String> wrapper = (wrapperDialect != null && wrapIdentity)
+                ? insertSql -> {
+                    String wrapped = wrapperDialect.renderInsertWrapper(table, insertSql);
+                    return wrapped != null ? wrapped : insertSql;
+                }
+                : null;
         List<String> statements = new ArrayList<>(rows.size());
         StringBuilder sb = new StringBuilder();
         int batchRows = 0;
@@ -611,7 +658,7 @@ public final class RollbackSqlGenerator {
             for (String cell : row) rendered.add(renderCell(cell));
             String rowText = "(" + String.join(", ", rendered) + ")";
             if (batchRows == MAX_STATEMENTS || (!sb.isEmpty() && sb.length() + rowText.length() > MAX_TOTAL_CHARS)) {
-                statements.add(flushInsertBatch(sb, table, columnList));
+                statements.add(flushInsertBatch(sb, table, columnList, wrapper));
                 batchRows = 0;
             }
             if (sb.isEmpty()) {
@@ -622,7 +669,7 @@ public final class RollbackSqlGenerator {
             sb.append(rowText);
             batchRows++;
         }
-        if (!sb.isEmpty()) statements.add(flushInsertBatch(sb, table, columnList));
+        if (!sb.isEmpty()) statements.add(flushInsertBatch(sb, table, columnList, wrapper));
         List<RollbackWarning> warnings = new ArrayList<>();
         // 文案含两个占位符（{0} 行数 / {1} 上限）——曾只传 {0}，弹窗会原样显示「上限 {1}」
         if (rows.size() >= SNAPSHOT_ROW_LIMIT) {
@@ -636,10 +683,11 @@ public final class RollbackSqlGenerator {
 
     @NotNull
     private static String flushInsertBatch(@NotNull StringBuilder sb, @NotNull String table,
-                                           @NotNull String columnList) {
+                                           @NotNull String columnList,
+                                           @Nullable Function1<String, String> wrapper) {
         String text = sb.append(";").toString();
         sb.setLength(0);
-        return text;
+        return wrapper != null ? wrapper.invoke(text) : text;
     }
 
     /** INSERT 反向（快照行版本）：DELETE 谓词定位同 P1（pk 传入且在快照列内 → pk 谓词 Complete）。 */

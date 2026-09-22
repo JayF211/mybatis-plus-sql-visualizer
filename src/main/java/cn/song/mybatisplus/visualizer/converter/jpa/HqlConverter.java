@@ -30,8 +30,12 @@ import org.jetbrains.annotations.Nullable;
  *  5. JOIN FETCH / 关联 JOIN → LEFT/INNER JOIN（J7：ON 条件经 JpaJoinOnResolver
  *     按「PSI 注解 > 关联元数据 > 猜测降级」三级优先真实化）
  *  6. 实体名 → 表名映射（仅当有有效 TableInfo 时）
+ *  6.5 别名作用域解析（O-57）：`FROM/JOIN 别名 → 该实体的 TableInfo`，供第 9 步按作用域分派；
+ *     必须在实体名→表名替换**之前**扫描（那时实体名还在 SQL 里），见 JpaAliasTableResolver
  *  7. 关联字段路径映射：`alias.field.id` → 外键列名（仅当有有效 TableInfo 时）
- *  8. 属性名 → 列名映射（仅当有有效 TableInfo 时）
+ *  8. 属性名 → 列名映射（仅当有有效 TableInfo 时；O-57 起按别名作用域分派，
+ *     副表别名的属性同样映射——此前只映射根实体列清单，`detail.pickTicketId` 原样透传
+ *     导致预览 SQL 报 Unknown column）
  *  8.5 子查询 FROM/JOIN 中的其他实体名 → 表名（J13，需 Project；无 Project 跳过）
  *  9. SELECT 子句展开：`SELECT <别名>` → 列清单（T-HQL-SELECT-01）
  *     HQL 语义 `SELECT u` = 取整个实体，须展开为全部映射列，否则 MySQL 报 1054；
@@ -159,6 +163,38 @@ public final class HqlConverter {
      */
     public static Result convert(@NotNull String hql, @Nullable TableInfo tableInfo, @Nullable Project project,
                                  @Nullable String entityAlias) {
+        return convertInternal(hql, tableInfo, project, entityAlias, null);
+    }
+
+    /**
+     * 实体解析函数注入形态（O-57）：调用方已有 PsiClass / 解析结果时直入，
+     * 免按名 PSI 检索（LightPlatform 测试环境无需依赖索引；生产入口见 {@link #convert} 的 project 形态）。
+     *
+     * @param resolveEntity 收到 FROM/JOIN 中的实体标识符，返回其表信息；返回 null 表示无元数据，
+     *                      该别名回落既有根实体列清单行为（与无 Project 时一致）
+     * @return Result（转换后 SQL + 语句模型）
+     */
+    public static Result convertWithEntityResolver(@NotNull String hql, @Nullable TableInfo tableInfo,
+                                                   @Nullable String entityAlias,
+                                                   @NotNull kotlin.jvm.functions.Function1<String, TableInfo> resolveEntity) {
+        return convertInternal(hql, tableInfo, null, entityAlias, resolveEntity);
+    }
+
+    /** Kotlin 默认参数等价重载：{@code entityAlias = null}。 */
+    public static Result convertWithEntityResolver(@NotNull String hql, @Nullable TableInfo tableInfo,
+                                                   @NotNull kotlin.jvm.functions.Function1<String, TableInfo> resolveEntity) {
+        return convertWithEntityResolver(hql, tableInfo, null, resolveEntity);
+    }
+
+    /**
+     * 内部转换实现（全量形态）。
+     *
+     * @param resolveEntity O-57 别名作用域解析的实体解析函数；null 走生产入口（按 project + PSI 检索）
+     * @return Result（转换后 SQL + 语句模型）
+     */
+    private static Result convertInternal(@NotNull String hql, @Nullable TableInfo tableInfo,
+                                          @Nullable Project project, @Nullable String entityAlias,
+                                          @Nullable kotlin.jvm.functions.Function1<String, TableInfo> resolveEntity) {
         TableInfo table = tableInfo != null ? tableInfo : createFallbackTable();
 
         // 0. 检测 IN 子句参数（在命名参数替换前检测）
@@ -182,20 +218,28 @@ public final class HqlConverter {
         // 6. 处理 MEMBER OF（降级为注释提示）
         sql = handleMemberOf(sql);
 
+        // 6.5 别名作用域解析（O-57）：须在实体名→表名替换之前扫描——那时 FROM/JOIN 后的
+        // 实体标识符还在 SQL 里，替换成表名后 PSI 短名检索不再命中；
+        // 又须在第 5 步 JOIN 改写之后——改写新增的副表别名只有那时才存在
+        JpaAliasTableResolver.JpaAliasScope scope = resolveEntity != null
+                ? JpaAliasTableResolver.resolveAliases(sql, table, resolveEntity)
+                : JpaAliasTableResolver.resolveAliases(sql, table, project);
+
         // 7. 实体名 → 表名映射
         if (!table.getEntityClassName().isBlank()) {
             sql = mapEntityToTable(sql, table, entityAlias);
             // 8. 关联字段路径映射：alias.field.id → 外键列名（须在属性映射之前）
             sql = mapAssociationPath(sql, table);
-            // 9. 属性名 → 列名映射
-            sql = mapPropertyToColumn(sql, table);
+            // 9. 属性名 → 列名映射（按别名作用域分派，副表别名同样映射）
+            sql = mapPropertyToColumn(sql, table, scope);
         } else {
             // Fallback：实体不可解析时，从 FROM 子句提取实体名替换为 unknown_table
             sql = mapFallbackEntityToTable(sql, table.getTableName());
         }
 
-        // 8.5 子查询 FROM/JOIN 中其他实体名 → 表名（J13；需 Project，无则跳过）
-        sql = JpaFromEntityMapper.mapSubqueryEntities(sql, table, project);
+        // 8.5 子查询 FROM/JOIN 中其他实体名 → 表名（J13；需 Project，无则跳过）。
+        // 别名作用域已解析出实体→表名，透传给扫描器复用，免二次 PSI 检索
+        sql = JpaFromEntityMapper.mapSubqueryEntities(sql, table, project, scope.getEntityTableNames());
 
         // 9. SELECT 子句展开（T-HQL-SELECT-01 / T-BareFromSelect）
         // 必须排在步骤 5（JOIN 改写）之后——JOIN 别名只有改写后才存在，
@@ -471,17 +515,14 @@ public final class HqlConverter {
     // ------------------------------------------------------------------
 
     /**
-     * 将 HQL 中的属性名映射为数据库列名。
+     * 将 HQL 中的属性名映射为数据库列名（O-57 起按别名作用域分派）。
+     *
+     * 替换核心见 {@link JpaAliasTableResolver.JpaAliasPropertyMapper}（与 JpqlConverter 共用同一份实现）。
      * 仅在 TableInfo 有效时调用。
      */
-    private static String mapPropertyToColumn(@NotNull String hql, @NotNull TableInfo table) {
-        String result = hql;
-        for (ColumnInfo column : table.getColumns()) {
-            if (column.getFieldName().equals(column.getColumnName())) continue;
-            Pattern propertyPattern = Pattern.compile("\\.\\b" + Pattern.quote(column.getFieldName()) + "\\b");
-            result = propertyPattern.matcher(result).replaceAll(Matcher.quoteReplacement("." + column.getColumnName()));
-        }
-        return result;
+    private static String mapPropertyToColumn(@NotNull String hql, @NotNull TableInfo table,
+                                              @NotNull JpaAliasTableResolver.JpaAliasScope scope) {
+        return JpaAliasTableResolver.JpaAliasPropertyMapper.mapProperties(hql, table, scope);
     }
 
     /**

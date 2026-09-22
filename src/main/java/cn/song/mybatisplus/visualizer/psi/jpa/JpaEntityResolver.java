@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.model.ColumnRole;
 import cn.song.mybatisplus.visualizer.model.CollectionAssociationInfo;
 import cn.song.mybatisplus.visualizer.model.JoinColumnRef;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
+import cn.song.mybatisplus.visualizer.psi.ColumnNameCalibrator;
 import cn.song.mybatisplus.visualizer.util.NamingStrategy;
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature;
 import com.intellij.openapi.project.Project;
@@ -48,11 +49,21 @@ import org.jetbrains.annotations.Nullable;
  *    审计字段(AUDIT) 与系统字段(SYSTEM) 沉底，组内保持声明顺序
  *  - 解析结果按「PsiFile + classQualifiedName + configSignature」三维缓存，
  *    文件修改戳（modificationStamp）+ 配置签名双维度失效
+ *  - O-58：返回边界接 {@link cn.song.mybatisplus.visualizer.psi.ColumnNameCalibrator}——数据源可用时用真实
+ *    列集合纠正猜测出的列名，不可用/查不了/开关关闭时逐字段原样返回
  */
 public class JpaEntityResolver {
 
     /**
      * 解析 JPA 实体类为表信息（带缓存）。
+     *
+     * <p>缓存键：PsiFile + classQualifiedName + configSignature（三维）。
+     * 失效机制：文件修改（modificationStamp 变化）→ 缓存自然失效；
+     * 配置签名变化（tableNameInference 等设置变更）→ 缓存失效。</p>
+     *
+     * <p>O-58（列名数据源校正）：缓存<b>继续只存未校正的 PSI 产物</b>，校正在返回前作为一步廉价后处理
+     * （{@link cn.song.mybatisplus.visualizer.psi.ColumnNameCalibrator#calibrate(Project, TableInfo)}）执行——
+     * DDL 变更的失效面因此只有数据源 schema 缓存一处（已登记 MetadataInvalidator），不必给实体缓存键扩 DB 签名。</p>
      *
      * @param entityClass JPA 实体 PsiClass
      * @return 表信息；类名缺失等异常情况返回带推断表名、空列的表信息（保证不抛异常）
@@ -61,10 +72,14 @@ public class JpaEntityResolver {
     public TableInfo resolve(@NotNull PsiClass entityClass) {
         String className = entityClass.getName();
         if (className == null) return new TableInfo("", "", List.of(), null, null, null, List.of());
+        Project project = entityClass.getProject();
         PsiFile file = entityClass.getContainingFile();
-        if (file == null) return resolveInternal(entityClass);
+        if (file == null) {
+            return ColumnNameCalibrator.calibrate(project,
+                    resolveInternal(entityClass));
+        }
         String qName = entityClass.getQualifiedName() != null ? entityClass.getQualifiedName() : className;
-        String configSig = TableConfigSignature.projectSignature(entityClass.getProject());
+        String configSig = TableConfigSignature.projectSignature(project);
 
         // T-Perf-18：缓存键不持 PsiFile 强引用（VirtualFile.url 字符串标识）
         JpaCacheKey key = new JpaCacheKey(
@@ -73,12 +88,14 @@ public class JpaEntityResolver {
         long stamp = file.getModificationStamp();
         JpaEntry entry = cache.get(key);
         if (entry != null) {
-            if (entry.stamp() == stamp) return entry.value();
+            if (entry.stamp() == stamp) {
+                return ColumnNameCalibrator.calibrate(project, entry.value());
+            }
         }
 
         TableInfo value = resolveInternal(entityClass);
         cache.put(key, new JpaEntry(stamp, value));
-        return value;
+        return ColumnNameCalibrator.calibrate(project, value);
     }
 
     /**
@@ -325,14 +342,14 @@ public class JpaEntityResolver {
             return List.of(new ColumnInfo(fieldName, NamingStrategy.INSTANCE.toSnakeCase(fieldName),
                     isPrimaryKey, false, fallbackType, null, resolveComment(field),
                     isPrimaryKey ? ColumnRole.PRIMARY : ColumnRole.BUSINESS,
-                    true, true, null, true, false));
+                    true, true, null, true, false, fieldName));
         }
         List<ColumnInfo> result = new ArrayList<>();
         for (JpaMetadataReader.EmbeddedColumnSpec spec : specs) {
             result.add(new ColumnInfo(spec.getFieldName(), spec.getColumnName(), isPrimaryKey, false,
                     spec.getFieldType(), null, resolveComment(spec.getField()),
                     isPrimaryKey ? ColumnRole.PRIMARY : ColumnRole.BUSINESS,
-                    spec.isInsertable(), spec.isUpdatable(), null, true, false));
+                    spec.isInsertable(), spec.isUpdatable(), null, true, false, fieldName));
         }
         return result;
     }

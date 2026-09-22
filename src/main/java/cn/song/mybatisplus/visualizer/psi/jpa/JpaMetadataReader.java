@@ -545,7 +545,7 @@ public final class JpaMetadataReader {
 
     /**
      * 字段显式列名（M44 统一链）：jakarta/javax/relational/EQ @Column（name → value 兜底）→
-     * xbatis @TableField(value) → 驼峰转下划线。
+     * xbatis @TableField(value) → <b>同名 getter 上的 @Column（O-58/T-07）</b> → 驼峰转下划线。
      */
     public static String columnValueOrSnake(PsiField field, String fieldName) {
         PsiAnnotation column = findFlex(field, FQN_COLUMN);
@@ -558,7 +558,61 @@ public final class JpaMetadataReader {
             String name = attrString(tf, "value");
             if (name != null) return name;
         }
+        // O-58/T-07：JPA 的 @Access(AccessType.PROPERTY) 与「注解写在 getter 上」的工程里，
+        // 字段侧一个 @Column 都没有，此前静默回落 snake 盲猜（用户报障「字段命名不标准」的形态之一，
+        // 但与命名策略猜错在现象上不可区分）。回退读同名 getter 的 @Column 即可救回真值。
+        String getterColumn = getterColumnNameOf(field);
+        if (getterColumn != null) return getterColumn;
         return NamingStrategy.INSTANCE.toSnakeCase(fieldName);
+    }
+
+    /**
+     * O-58/T-07：同名 getter（{@code getXxx} / {@code isXxx}）上的 @Column 列名。
+     *
+     * <p><b>范围收窄</b>（有意为之）：只做 @Column 的 name/value 回退，不实现完整 JPA 属性访问语义——
+     * 字段与 getter 注解冲突时以 @Access 为准这类判定、以及 @JoinColumn/@TableField 的 getter 回退
+     * 都不在本函数内（多读一条即多一份半套语义的风险，且数据源校正已能覆盖大部分错配）。</p>
+     *
+     * <p><b>不受「列名数据源校正」开关约束</b>：本函数读的是源码里本来就写着的 {@code @Column}，不查数据源，
+     * 属<b>离线纠错</b>——无数据源时它照样生效（实体列名因此可能比改造前更准）。受开关与数据源可用性
+     * 约束的是 {@code psi.ColumnNameCalibrator} 那层，两者在交付说明里必须分开表述。</p>
+     *
+     * <p><b>MP 侧没有对应回退是有意的</b>（与 JPA 侧不对称，实读确认）：MyBatis-Plus 按<b>字段</b>建映射，
+     * 且其注解契约根本不允许写 getter——{@code mybatis-plus-annotation-3.5.17} 的 {@code TableField} 字节码实证
+     * {@code @Target({ElementType.FIELD, ElementType.ANNOTATION_TYPE})}（{@code TableName} 为 {@code {TYPE,
+     * ANNOTATION_TYPE}}），{@code METHOD} 不在合法目标里。所以「@TableField 写在 getter 上」在 MP 工程里
+     * 既编译不过、MP 运行时也不会读——给 MP 侧加 getter 回退等于实现一个 MP 自己都没有的语义。</p>
+     *
+     * 匹配口径：方法名去 {@code get}/{@code is} 前缀后与字段名<b>忽略大小写</b>相等（{@code orderID} 的 getter
+     * {@code getOrderID} / {@code getOrderId} 都算命中）；只有无参 getter 才可能是属性访问点。
+     */
+    private static String getterColumnNameOf(PsiField field) {
+        try {
+            PsiClass owner = field.getContainingClass();
+            if (owner == null) return null;
+            String fieldName = field.getName();
+            if (fieldName == null) return null;
+            for (com.intellij.psi.PsiMethod method : owner.getMethods()) {
+                if (method.getParameterList().getParameters().length != 0) continue;
+                String methodName = method.getName();
+                String property;
+                if (methodName.length() > 3 && methodName.startsWith("get")) {
+                    property = methodName.substring(3);
+                } else if (methodName.length() > 2 && methodName.startsWith("is")) {
+                    property = methodName.substring(2);
+                } else {
+                    continue;
+                }
+                if (!property.equalsIgnoreCase(fieldName)) continue;
+                PsiAnnotation columnAnnotation = findFlex(method, FQN_COLUMN);
+                if (columnAnnotation == null) continue;
+                String name = attrString(columnAnnotation, "name", "value");
+                if (name != null) return name;
+            }
+            return null;
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     /**

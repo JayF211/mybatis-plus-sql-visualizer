@@ -29,6 +29,15 @@ import java.util.Set;
  *      <b>批首限定 IF</b>：语句首 `IF` 无方言歧义（MySQL `IF()` 是函数不出现在语句首位）；
  *      裸 `BEGIN` 起头<b>不</b>并入——`BEGIN; …; COMMIT` 是 MySQL 事务语法，既有「无配对
  *      END 按顶层切分原样」保守承诺维持（形态良好的 T-SQL BEGIN 块已由上方块感知整段保护）；</li>
+ *  <li><b>Oracle PL/SQL 匿名块感知</b>（T-SqlSplitterPlsql / O-47，T-SSP-01）：语句首 `DECLARE` 且
+ *      后方存在配对 `END` 时进入<b>声明段</b>——段内顶层 `;` 是声明分隔符而非语句界符（前向声明
+ *      `PROCEDURE p IS;`、局部例程体 `PROCEDURE p IS BEGIN … END;` 与块主体同属一条语句）。
+ *      声明段边界（`DECLARE` 之后或声明段顶层 `;` 之后）的 `BEGIN` 即主体起始，此后按常规块
+ *      计数，主体 `END` 使深度归零、后续顶层 `;` 恢复切分。吞并边界＝<b>深度归零处</b>而非「末个
+ *      END」——后者会把紧随的第二个匿名块并进来（`DECLARE … END; BEGIN … END;` 实测 2 条）。</li>
+ *  <li><b>CASE 层隔离</b>（T-SSP-02）：`CASE … END` / `CASE … END CASE` 自成一层，其 `END` 不递减
+ *      块深度（否则块内 `CASE` 的 `END` 被当块尾 → 块被切碎）。`END CASE` 是双词终结形态，
+ *      尾随 `CASE` 词不再开新层——否则层数被补回、块尾 `END` 反被 CASE 层吞掉（吞并过度）。</li>
  *  <li><b>DELIMITER 指令感知</b>（T-DelimiterAware / O-39）：`DELIMITER &lt;token&gt;` 行首指令把
  *      语句界符由 `;` 切换为 `&lt;token&gt;`（`$$`/`//` 等多字符形态按整串匹配），直到下一条
  *      `DELIMITER` 指令或文本结束；指令行本身<b>不作为独立语句产出</b>（界符 token 一并丢弃），
@@ -90,6 +99,14 @@ public final class SqlStatementSplitter {
         int blockDepth = 0;
         // BEGIN/END 启用前视：见到 BEGIN 先看后方有无配对 END（保守启用）
         boolean beginModeEnabled = false;
+        // T-SSP-01：语句首 DECLARE 且后方存在配对 END → 处于声明段（段内顶层 `;` 不切分）
+        boolean declareSection = false;
+        // 声明段边界（`DECLARE` 之后或声明段顶层 `;` 之后）——紧随的 BEGIN 即块主体起始
+        boolean bodyBeginExpected = false;
+        // T-SSP-02：CASE 层计数（CASE…END / CASE…END CASE 不参与块配对）
+        int caseDepth = 0;
+        // `END CASE` 双词终结形态：END 前视到 CASE 词后置位，供紧随的 CASE 词消费
+        boolean caseEndTailPending = false;
         StringBuilder word = new StringBuilder();
         // 当前词的首字符下标与词起点处的缓冲长度（DELIMITER 指令的行首/语句边界判定用；
         // word 非空时有效）
@@ -140,15 +157,41 @@ public final class SqlStatementSplitter {
                     String token = word.toString();
                     word.setLength(0);
                     if (beginModeEnabled) {
-                        String upper = token.toUpperCase(Locale.ROOT);
-                        if (upper.equals("BEGIN")) blockDepth++;
-                        else if (upper.equals("END") && blockDepth > 0) blockDepth--;
+                        switch (token.toUpperCase(Locale.ROOT)) {
+                            // `END CASE` 的尾词：已由 END 分支按 CASE 终结符消费，不再开新层
+                            case "CASE" -> {
+                                if (caseEndTailPending) caseEndTailPending = false;
+                                else caseDepth++;
+                            }
+                            case "BEGIN" -> blockDepth++;
+                            // T-SSP-01 订正（独立复核 major③）：`END IF` / `END LOOP` / `END WHILE` /
+                            // `END REPEAT` 是内层终结符，不减块深度——否则含 IF/LOOP 的 PL/SQL 块
+                            // （匿名块与具名过程）依旧被切碎（复核实测 `BEGIN IF 1=1 THEN NULL; END IF; END;`
+                            // 基线 2 段 → 本改动前仍 2 段）。与 CASE 层的差别：CASE 有裸 END 收尾形态，
+                            // 故须 caseDepth 计数；而 IF/LOOP/WHILE/REPEAT 只有双词终结形态，直接跳过递减即可
+                            // （它们也不自增任何层计数，故无需配对状态）。
+                            case "END" -> {
+                                if (nextWordIs(sql, i, "CASE")) caseEndTailPending = true;
+                                boolean innerLayerTail = nextWordIs(sql, i, "IF") || nextWordIs(sql, i, "LOOP")
+                                        || nextWordIs(sql, i, "WHILE") || nextWordIs(sql, i, "REPEAT");
+                                if (!innerLayerTail) {
+                                    if (caseDepth > 0) caseDepth--;        // CASE 收尾（裸 END / END CASE）
+                                    else if (blockDepth > 0) blockDepth--; // 块尾
+                                }
+                            }
+                            default -> bodyBeginExpected = false;
+                        }
                     }
                 }
                 if (parenDepth == 0 && blockDepth == 0) {
                     String part = sb.toString().trim();
                     if (!part.isEmpty()) parts.add(part);
                     sb.setLength(0);
+                    // 语句边界：块/CASE/声明段状态随段重置（防跨语句状态残留）
+                    declareSection = false;
+                    bodyBeginExpected = false;
+                    caseDepth = 0;
+                    caseEndTailPending = false;
                 } else {
                     sb.append(delimiter);
                 }
@@ -159,9 +202,30 @@ public final class SqlStatementSplitter {
                     String token = word.toString();
                     word.setLength(0);
                     if (beginModeEnabled) {
-                        String upper = token.toUpperCase(Locale.ROOT);
-                        if (upper.equals("BEGIN")) blockDepth++;
-                        else if (upper.equals("END") && blockDepth > 0) blockDepth--;
+                        switch (token.toUpperCase(Locale.ROOT)) {
+                            // `END CASE` 的尾词：已由 END 分支按 CASE 终结符消费，不再开新层
+                            case "CASE" -> {
+                                if (caseEndTailPending) caseEndTailPending = false;
+                                else caseDepth++;
+                            }
+                            case "BEGIN" -> blockDepth++;
+                            // T-SSP-01 订正（独立复核 major③）：`END IF` / `END LOOP` / `END WHILE` /
+                            // `END REPEAT` 是内层终结符，不减块深度——否则含 IF/LOOP 的 PL/SQL 块
+                            // （匿名块与具名过程）依旧被切碎（复核实测 `BEGIN IF 1=1 THEN NULL; END IF; END;`
+                            // 基线 2 段 → 本改动前仍 2 段）。与 CASE 层的差别：CASE 有裸 END 收尾形态，
+                            // 故须 caseDepth 计数；而 IF/LOOP/WHILE/REPEAT 只有双词终结形态，直接跳过递减即可
+                            // （它们也不自增任何层计数，故无需配对状态）。
+                            case "END" -> {
+                                if (nextWordIs(sql, i, "CASE")) caseEndTailPending = true;
+                                boolean innerLayerTail = nextWordIs(sql, i, "IF") || nextWordIs(sql, i, "LOOP")
+                                        || nextWordIs(sql, i, "WHILE") || nextWordIs(sql, i, "REPEAT");
+                                if (!innerLayerTail) {
+                                    if (caseDepth > 0) caseDepth--;        // CASE 收尾（裸 END / END CASE）
+                                    else if (blockDepth > 0) blockDepth--; // 块尾
+                                }
+                            }
+                            default -> bodyBeginExpected = false;
+                        }
                     }
                 }
                 if (keepComments) sb.append(c);
@@ -173,9 +237,30 @@ public final class SqlStatementSplitter {
                     String token = word.toString();
                     word.setLength(0);
                     if (beginModeEnabled) {
-                        String upper = token.toUpperCase(Locale.ROOT);
-                        if (upper.equals("BEGIN")) blockDepth++;
-                        else if (upper.equals("END") && blockDepth > 0) blockDepth--;
+                        switch (token.toUpperCase(Locale.ROOT)) {
+                            // `END CASE` 的尾词：已由 END 分支按 CASE 终结符消费，不再开新层
+                            case "CASE" -> {
+                                if (caseEndTailPending) caseEndTailPending = false;
+                                else caseDepth++;
+                            }
+                            case "BEGIN" -> blockDepth++;
+                            // T-SSP-01 订正（独立复核 major③）：`END IF` / `END LOOP` / `END WHILE` /
+                            // `END REPEAT` 是内层终结符，不减块深度——否则含 IF/LOOP 的 PL/SQL 块
+                            // （匿名块与具名过程）依旧被切碎（复核实测 `BEGIN IF 1=1 THEN NULL; END IF; END;`
+                            // 基线 2 段 → 本改动前仍 2 段）。与 CASE 层的差别：CASE 有裸 END 收尾形态，
+                            // 故须 caseDepth 计数；而 IF/LOOP/WHILE/REPEAT 只有双词终结形态，直接跳过递减即可
+                            // （它们也不自增任何层计数，故无需配对状态）。
+                            case "END" -> {
+                                if (nextWordIs(sql, i, "CASE")) caseEndTailPending = true;
+                                boolean innerLayerTail = nextWordIs(sql, i, "IF") || nextWordIs(sql, i, "LOOP")
+                                        || nextWordIs(sql, i, "WHILE") || nextWordIs(sql, i, "REPEAT");
+                                if (!innerLayerTail) {
+                                    if (caseDepth > 0) caseDepth--;        // CASE 收尾（裸 END / END CASE）
+                                    else if (blockDepth > 0) blockDepth--; // 块尾
+                                }
+                            }
+                            default -> bodyBeginExpected = false;
+                        }
                     }
                 }
                 if (keepComments) sb.append(c);
@@ -187,9 +272,30 @@ public final class SqlStatementSplitter {
                     String token = word.toString();
                     word.setLength(0);
                     if (beginModeEnabled) {
-                        String upper = token.toUpperCase(Locale.ROOT);
-                        if (upper.equals("BEGIN")) blockDepth++;
-                        else if (upper.equals("END") && blockDepth > 0) blockDepth--;
+                        switch (token.toUpperCase(Locale.ROOT)) {
+                            // `END CASE` 的尾词：已由 END 分支按 CASE 终结符消费，不再开新层
+                            case "CASE" -> {
+                                if (caseEndTailPending) caseEndTailPending = false;
+                                else caseDepth++;
+                            }
+                            case "BEGIN" -> blockDepth++;
+                            // T-SSP-01 订正（独立复核 major③）：`END IF` / `END LOOP` / `END WHILE` /
+                            // `END REPEAT` 是内层终结符，不减块深度——否则含 IF/LOOP 的 PL/SQL 块
+                            // （匿名块与具名过程）依旧被切碎（复核实测 `BEGIN IF 1=1 THEN NULL; END IF; END;`
+                            // 基线 2 段 → 本改动前仍 2 段）。与 CASE 层的差别：CASE 有裸 END 收尾形态，
+                            // 故须 caseDepth 计数；而 IF/LOOP/WHILE/REPEAT 只有双词终结形态，直接跳过递减即可
+                            // （它们也不自增任何层计数，故无需配对状态）。
+                            case "END" -> {
+                                if (nextWordIs(sql, i, "CASE")) caseEndTailPending = true;
+                                boolean innerLayerTail = nextWordIs(sql, i, "IF") || nextWordIs(sql, i, "LOOP")
+                                        || nextWordIs(sql, i, "WHILE") || nextWordIs(sql, i, "REPEAT");
+                                if (!innerLayerTail) {
+                                    if (caseDepth > 0) caseDepth--;        // CASE 收尾（裸 END / END CASE）
+                                    else if (blockDepth > 0) blockDepth--; // 块尾
+                                }
+                            }
+                            default -> bodyBeginExpected = false;
+                        }
                     }
                 }
                 inSingle = true;
@@ -201,9 +307,30 @@ public final class SqlStatementSplitter {
                     String token = word.toString();
                     word.setLength(0);
                     if (beginModeEnabled) {
-                        String upper = token.toUpperCase(Locale.ROOT);
-                        if (upper.equals("BEGIN")) blockDepth++;
-                        else if (upper.equals("END") && blockDepth > 0) blockDepth--;
+                        switch (token.toUpperCase(Locale.ROOT)) {
+                            // `END CASE` 的尾词：已由 END 分支按 CASE 终结符消费，不再开新层
+                            case "CASE" -> {
+                                if (caseEndTailPending) caseEndTailPending = false;
+                                else caseDepth++;
+                            }
+                            case "BEGIN" -> blockDepth++;
+                            // T-SSP-01 订正（独立复核 major③）：`END IF` / `END LOOP` / `END WHILE` /
+                            // `END REPEAT` 是内层终结符，不减块深度——否则含 IF/LOOP 的 PL/SQL 块
+                            // （匿名块与具名过程）依旧被切碎（复核实测 `BEGIN IF 1=1 THEN NULL; END IF; END;`
+                            // 基线 2 段 → 本改动前仍 2 段）。与 CASE 层的差别：CASE 有裸 END 收尾形态，
+                            // 故须 caseDepth 计数；而 IF/LOOP/WHILE/REPEAT 只有双词终结形态，直接跳过递减即可
+                            // （它们也不自增任何层计数，故无需配对状态）。
+                            case "END" -> {
+                                if (nextWordIs(sql, i, "CASE")) caseEndTailPending = true;
+                                boolean innerLayerTail = nextWordIs(sql, i, "IF") || nextWordIs(sql, i, "LOOP")
+                                        || nextWordIs(sql, i, "WHILE") || nextWordIs(sql, i, "REPEAT");
+                                if (!innerLayerTail) {
+                                    if (caseDepth > 0) caseDepth--;        // CASE 收尾（裸 END / END CASE）
+                                    else if (blockDepth > 0) blockDepth--; // 块尾
+                                }
+                            }
+                            default -> bodyBeginExpected = false;
+                        }
                     }
                 }
                 inDouble = true;
@@ -215,16 +342,42 @@ public final class SqlStatementSplitter {
                     String token = word.toString();
                     word.setLength(0);
                     if (beginModeEnabled) {
-                        String upper = token.toUpperCase(Locale.ROOT);
-                        if (upper.equals("BEGIN")) blockDepth++;
-                        else if (upper.equals("END") && blockDepth > 0) blockDepth--;
+                        switch (token.toUpperCase(Locale.ROOT)) {
+                            // `END CASE` 的尾词：已由 END 分支按 CASE 终结符消费，不再开新层
+                            case "CASE" -> {
+                                if (caseEndTailPending) caseEndTailPending = false;
+                                else caseDepth++;
+                            }
+                            case "BEGIN" -> blockDepth++;
+                            // T-SSP-01 订正（独立复核 major③）：`END IF` / `END LOOP` / `END WHILE` /
+                            // `END REPEAT` 是内层终结符，不减块深度——否则含 IF/LOOP 的 PL/SQL 块
+                            // （匿名块与具名过程）依旧被切碎（复核实测 `BEGIN IF 1=1 THEN NULL; END IF; END;`
+                            // 基线 2 段 → 本改动前仍 2 段）。与 CASE 层的差别：CASE 有裸 END 收尾形态，
+                            // 故须 caseDepth 计数；而 IF/LOOP/WHILE/REPEAT 只有双词终结形态，直接跳过递减即可
+                            // （它们也不自增任何层计数，故无需配对状态）。
+                            case "END" -> {
+                                if (nextWordIs(sql, i, "CASE")) caseEndTailPending = true;
+                                boolean innerLayerTail = nextWordIs(sql, i, "IF") || nextWordIs(sql, i, "LOOP")
+                                        || nextWordIs(sql, i, "WHILE") || nextWordIs(sql, i, "REPEAT");
+                                if (!innerLayerTail) {
+                                    if (caseDepth > 0) caseDepth--;        // CASE 收尾（裸 END / END CASE）
+                                    else if (blockDepth > 0) blockDepth--; // 块尾
+                                }
+                            }
+                            default -> bodyBeginExpected = false;
+                        }
                     }
                 }
-                if (delimiter.equals(DEFAULT_DELIMITER) && parenDepth == 0 && blockDepth == 0) {
+                if (delimiter.equals(DEFAULT_DELIMITER) && parenDepth == 0 && blockDepth == 0 && !declareSection) {
                     String part = sb.toString().trim();
                     if (!part.isEmpty()) parts.add(part);
                     sb.setLength(0);
+                    // 语句边界：CASE 层状态随段重置（防截断 CASE 的层数泄漏到后续语句）
+                    caseDepth = 0;
+                    caseEndTailPending = false;
                 } else {
+                    // T-SSP-01：声明段顶层 `;` 是声明分隔符（不切分），且构成声明段边界
+                    if (declareSection && parenDepth == 0 && blockDepth == 0) bodyBeginExpected = true;
                     sb.append(c);
                 }
                 i++;
@@ -234,9 +387,30 @@ public final class SqlStatementSplitter {
                     String token = word.toString();
                     word.setLength(0);
                     if (beginModeEnabled) {
-                        String upper = token.toUpperCase(Locale.ROOT);
-                        if (upper.equals("BEGIN")) blockDepth++;
-                        else if (upper.equals("END") && blockDepth > 0) blockDepth--;
+                        switch (token.toUpperCase(Locale.ROOT)) {
+                            // `END CASE` 的尾词：已由 END 分支按 CASE 终结符消费，不再开新层
+                            case "CASE" -> {
+                                if (caseEndTailPending) caseEndTailPending = false;
+                                else caseDepth++;
+                            }
+                            case "BEGIN" -> blockDepth++;
+                            // T-SSP-01 订正（独立复核 major③）：`END IF` / `END LOOP` / `END WHILE` /
+                            // `END REPEAT` 是内层终结符，不减块深度——否则含 IF/LOOP 的 PL/SQL 块
+                            // （匿名块与具名过程）依旧被切碎（复核实测 `BEGIN IF 1=1 THEN NULL; END IF; END;`
+                            // 基线 2 段 → 本改动前仍 2 段）。与 CASE 层的差别：CASE 有裸 END 收尾形态，
+                            // 故须 caseDepth 计数；而 IF/LOOP/WHILE/REPEAT 只有双词终结形态，直接跳过递减即可
+                            // （它们也不自增任何层计数，故无需配对状态）。
+                            case "END" -> {
+                                if (nextWordIs(sql, i, "CASE")) caseEndTailPending = true;
+                                boolean innerLayerTail = nextWordIs(sql, i, "IF") || nextWordIs(sql, i, "LOOP")
+                                        || nextWordIs(sql, i, "WHILE") || nextWordIs(sql, i, "REPEAT");
+                                if (!innerLayerTail) {
+                                    if (caseDepth > 0) caseDepth--;        // CASE 收尾（裸 END / END CASE）
+                                    else if (blockDepth > 0) blockDepth--; // 块尾
+                                }
+                            }
+                            default -> bodyBeginExpected = false;
+                        }
                     }
                 }
                 parenDepth++;
@@ -248,9 +422,30 @@ public final class SqlStatementSplitter {
                     String token = word.toString();
                     word.setLength(0);
                     if (beginModeEnabled) {
-                        String upper = token.toUpperCase(Locale.ROOT);
-                        if (upper.equals("BEGIN")) blockDepth++;
-                        else if (upper.equals("END") && blockDepth > 0) blockDepth--;
+                        switch (token.toUpperCase(Locale.ROOT)) {
+                            // `END CASE` 的尾词：已由 END 分支按 CASE 终结符消费，不再开新层
+                            case "CASE" -> {
+                                if (caseEndTailPending) caseEndTailPending = false;
+                                else caseDepth++;
+                            }
+                            case "BEGIN" -> blockDepth++;
+                            // T-SSP-01 订正（独立复核 major③）：`END IF` / `END LOOP` / `END WHILE` /
+                            // `END REPEAT` 是内层终结符，不减块深度——否则含 IF/LOOP 的 PL/SQL 块
+                            // （匿名块与具名过程）依旧被切碎（复核实测 `BEGIN IF 1=1 THEN NULL; END IF; END;`
+                            // 基线 2 段 → 本改动前仍 2 段）。与 CASE 层的差别：CASE 有裸 END 收尾形态，
+                            // 故须 caseDepth 计数；而 IF/LOOP/WHILE/REPEAT 只有双词终结形态，直接跳过递减即可
+                            // （它们也不自增任何层计数，故无需配对状态）。
+                            case "END" -> {
+                                if (nextWordIs(sql, i, "CASE")) caseEndTailPending = true;
+                                boolean innerLayerTail = nextWordIs(sql, i, "IF") || nextWordIs(sql, i, "LOOP")
+                                        || nextWordIs(sql, i, "WHILE") || nextWordIs(sql, i, "REPEAT");
+                                if (!innerLayerTail) {
+                                    if (caseDepth > 0) caseDepth--;        // CASE 收尾（裸 END / END CASE）
+                                    else if (blockDepth > 0) blockDepth--; // 块尾
+                                }
+                            }
+                            default -> bodyBeginExpected = false;
+                        }
                     }
                 }
                 parenDepth = Math.max(parenDepth - 1, 0);
@@ -277,6 +472,59 @@ public final class SqlStatementSplitter {
                     DelimiterDirective directive = readDelimiterDirective(sql, i);
                     delimiter = directive.token();
                     i = directive.lineEnd();
+                } else if (word.length() > 0 && !declareSection && blockDepth == 0
+                        && word.toString().equalsIgnoreCase("DECLARE")
+                        && isStatementHead(sb, bufferLenAtWordStart, word.toString())
+                        && hasWordAhead(sql, i, "BEGIN")
+                        && hasMatchingEndAhead(sql, i)) {
+                    // T-SSP-01：语句首 DECLARE + 后方配对 END → 声明段（段内顶层 `;` 不切分）。
+                    // 同时启用块计数（声明段内局部例程体 BEGIN/END 照常成对计数）
+                    //
+                    // T-SSP-01 订正（独立复核回归）：早期实现只要求「后方存在 END 词」即武装，
+                    // 而 T-SQL `DECLARE @x INT;` 与 PG `DECLARE c CURSOR FOR SELECT … CASE … END …`
+                    // 都是合法顶层语句且后方本就有 END 词 → 一旦武装，顶层 `;` 直到文本尾都不再切分
+                    // （实测 `DECLARE @a INT;\nSELECT 1;\nSELECT CASE … END FROM t;` 3 段 → 1 段）。
+                    // 故武装条件补上「后方必须存在 BEGIN 词」——PL/SQL 声明段之后必有块主体 BEGIN，
+                    // 而 T-SQL/PG 的 DECLARE 语句没有，据此把两者分开。仍属保守判定（前视词扫描，
+                    // 不做完整语法分析），与 hasMatchingEndAhead 同口径。
+                    declareSection = true;
+                    bodyBeginExpected = true;
+                    beginModeEnabled = true;
+                    word.setLength(0);
+                    sb.append(c);
+                    i++;
+                } else if (declareSection && bodyBeginExpected && word.length() > 0
+                        && word.toString().equalsIgnoreCase("BEGIN")) {
+                    // T-SSP-01：声明段边界上的 BEGIN 即块主体起始——退出声明段（此后顶层 `;`
+                    // 恢复切分；主体 END 使深度归零，故吞并边界＝深度归零处）
+                    declareSection = false;
+                    bodyBeginExpected = false;
+                    // flushWord（BEGIN 入块计数，走上方主 flush 语义）
+                    if (word.length() > 0) {
+                        String token = word.toString();
+                        word.setLength(0);
+                        if (beginModeEnabled) {
+                            switch (token.toUpperCase(Locale.ROOT)) {
+                                case "CASE" -> {
+                                    if (caseEndTailPending) caseEndTailPending = false;
+                                    else caseDepth++;
+                                }
+                                case "BEGIN" -> blockDepth++;
+                                case "END" -> {
+                                    if (nextWordIs(sql, i, "CASE")) caseEndTailPending = true;
+                                    boolean innerLayerTail = nextWordIs(sql, i, "IF") || nextWordIs(sql, i, "LOOP")
+                                            || nextWordIs(sql, i, "WHILE") || nextWordIs(sql, i, "REPEAT");
+                                    if (!innerLayerTail) {
+                                        if (caseDepth > 0) caseDepth--;
+                                        else if (blockDepth > 0) blockDepth--;
+                                    }
+                                }
+                                default -> bodyBeginExpected = false;
+                            }
+                        }
+                    }
+                    sb.append(c);
+                    i++;
                 } else if (word.length() > 0 && word.toString().equalsIgnoreCase("BEGIN")
                         && !beginModeEnabled && hasMatchingEndAhead(sql, i)) {
                     beginModeEnabled = true;
@@ -290,9 +538,25 @@ public final class SqlStatementSplitter {
                         String token = word.toString();
                         word.setLength(0);
                         if (beginModeEnabled) {
-                            String upper = token.toUpperCase(Locale.ROOT);
-                            if (upper.equals("BEGIN")) blockDepth++;
-                            else if (upper.equals("END") && blockDepth > 0) blockDepth--;
+                            switch (token.toUpperCase(Locale.ROOT)) {
+                                // `END CASE` 的尾词：已由 END 分支按 CASE 终结符消费，不再开新层
+                                case "CASE" -> {
+                                    if (caseEndTailPending) caseEndTailPending = false;
+                                    else caseDepth++;
+                                }
+                                case "BEGIN" -> blockDepth++;
+                                case "END" -> {
+                                    // 内层终结符判定同上（T-SSP-01/T-SSP-02）
+                                    if (nextWordIs(sql, i, "CASE")) caseEndTailPending = true;
+                                    boolean innerLayerTail = nextWordIs(sql, i, "IF") || nextWordIs(sql, i, "LOOP")
+                                            || nextWordIs(sql, i, "WHILE") || nextWordIs(sql, i, "REPEAT");
+                                    if (!innerLayerTail) {
+                                        if (caseDepth > 0) caseDepth--;        // CASE 收尾（裸 END / END CASE）
+                                        else if (blockDepth > 0) blockDepth--; // 块尾
+                                    }
+                                }
+                                default -> bodyBeginExpected = false;
+                            }
                         }
                     }
                     sb.append(c);
@@ -312,9 +576,25 @@ public final class SqlStatementSplitter {
                 String token = word.toString();
                 word.setLength(0);
                 if (beginModeEnabled) {
-                    String upper = token.toUpperCase(Locale.ROOT);
-                    if (upper.equals("BEGIN")) blockDepth++;
-                    else if (upper.equals("END") && blockDepth > 0) blockDepth--;
+                    switch (token.toUpperCase(Locale.ROOT)) {
+                        // `END CASE` 的尾词：已由 END 分支按 CASE 终结符消费，不再开新层
+                        case "CASE" -> {
+                            if (caseEndTailPending) caseEndTailPending = false;
+                            else caseDepth++;
+                        }
+                        case "BEGIN" -> blockDepth++;
+                        case "END" -> {
+                            // 内层终结符判定同上（T-SSP-01/T-SSP-02）
+                            if (nextWordIs(sql, i, "CASE")) caseEndTailPending = true;
+                            boolean innerLayerTail = nextWordIs(sql, i, "IF") || nextWordIs(sql, i, "LOOP")
+                                    || nextWordIs(sql, i, "WHILE") || nextWordIs(sql, i, "REPEAT");
+                            if (!innerLayerTail) {
+                                if (caseDepth > 0) caseDepth--;        // CASE 收尾（裸 END / END CASE）
+                                else if (blockDepth > 0) blockDepth--; // 块尾
+                            }
+                        }
+                        default -> bodyBeginExpected = false;
+                    }
                 }
             }
         }
@@ -435,9 +715,16 @@ public final class SqlStatementSplitter {
         return null;
     }
 
-    /** 段内顶层 BEGIN/END 配对计数（字符串/注释感知；&gt;0 = 未闭合的截断批）。 */
+    /**
+     * 段内顶层 BEGIN/END 配对计数（字符串/注释感知；&gt;0 = 未闭合的截断批）。
+     *
+     * <p>T-SSP-02：与主循环同口径隔离 {@code CASE … END} / {@code END CASE}（CASE 的 {@code END} 不充当块尾
+     * 配对），否则批内一个 CASE 表达式会让截断批被误判为已闭合（后续段不再并入，破坏「宁整勿碎」）。</p>
+     */
     private static int beginEndBalance(@NotNull String part) {
         int depth = 0;
+        int caseDepth = 0;
+        boolean caseEndTailPending = false;
         boolean inSingle = false;
         boolean inDouble = false;
         boolean inLine = false;
@@ -470,8 +757,23 @@ public final class SqlStatementSplitter {
                 // flush
                 if (word.length() > 0) {
                     String upper = word.toString().toUpperCase(Locale.ROOT);
-                    if (upper.equals("BEGIN")) depth++;
-                    else if (upper.equals("END") && depth > 0) depth--;
+                    if (upper.equals("CASE")) {
+                        // `END CASE` 的尾词：已由 END 分支按 CASE 终结符消费，不再开新层
+                        if (caseEndTailPending) caseEndTailPending = false;
+                        else caseDepth++;
+                    } else if (upper.equals("BEGIN")) {
+                        depth++;
+                    } else if (upper.equals("END")) {
+                        // 同主状态机：`END IF` / `END LOOP` / `END WHILE` / `END REPEAT` 是内层终结符，
+                        // 不减深度（T-SQL 批本身没有这些形态，此处只为与主路径口径一致、避免两处漂移）。
+                        if (nextWordIs(part, i, "CASE")) caseEndTailPending = true;
+                        boolean innerLayerTail = nextWordIs(part, i, "IF") || nextWordIs(part, i, "LOOP")
+                                || nextWordIs(part, i, "WHILE") || nextWordIs(part, i, "REPEAT");
+                        if (!innerLayerTail) {
+                            if (caseDepth > 0) caseDepth--;
+                            else if (depth > 0) depth--;
+                        }
+                    }
                     word.setLength(0);
                 }
                 inLine = true;
@@ -480,8 +782,23 @@ public final class SqlStatementSplitter {
                 // flush
                 if (word.length() > 0) {
                     String upper = word.toString().toUpperCase(Locale.ROOT);
-                    if (upper.equals("BEGIN")) depth++;
-                    else if (upper.equals("END") && depth > 0) depth--;
+                    if (upper.equals("CASE")) {
+                        // `END CASE` 的尾词：已由 END 分支按 CASE 终结符消费，不再开新层
+                        if (caseEndTailPending) caseEndTailPending = false;
+                        else caseDepth++;
+                    } else if (upper.equals("BEGIN")) {
+                        depth++;
+                    } else if (upper.equals("END")) {
+                        // 同主状态机：`END IF` / `END LOOP` / `END WHILE` / `END REPEAT` 是内层终结符，
+                        // 不减深度（T-SQL 批本身没有这些形态，此处只为与主路径口径一致、避免两处漂移）。
+                        if (nextWordIs(part, i, "CASE")) caseEndTailPending = true;
+                        boolean innerLayerTail = nextWordIs(part, i, "IF") || nextWordIs(part, i, "LOOP")
+                                || nextWordIs(part, i, "WHILE") || nextWordIs(part, i, "REPEAT");
+                        if (!innerLayerTail) {
+                            if (caseDepth > 0) caseDepth--;
+                            else if (depth > 0) depth--;
+                        }
+                    }
                     word.setLength(0);
                 }
                 inBlock = true;
@@ -490,8 +807,23 @@ public final class SqlStatementSplitter {
                 // flush
                 if (word.length() > 0) {
                     String upper = word.toString().toUpperCase(Locale.ROOT);
-                    if (upper.equals("BEGIN")) depth++;
-                    else if (upper.equals("END") && depth > 0) depth--;
+                    if (upper.equals("CASE")) {
+                        // `END CASE` 的尾词：已由 END 分支按 CASE 终结符消费，不再开新层
+                        if (caseEndTailPending) caseEndTailPending = false;
+                        else caseDepth++;
+                    } else if (upper.equals("BEGIN")) {
+                        depth++;
+                    } else if (upper.equals("END")) {
+                        // 同主状态机：`END IF` / `END LOOP` / `END WHILE` / `END REPEAT` 是内层终结符，
+                        // 不减深度（T-SQL 批本身没有这些形态，此处只为与主路径口径一致、避免两处漂移）。
+                        if (nextWordIs(part, i, "CASE")) caseEndTailPending = true;
+                        boolean innerLayerTail = nextWordIs(part, i, "IF") || nextWordIs(part, i, "LOOP")
+                                || nextWordIs(part, i, "WHILE") || nextWordIs(part, i, "REPEAT");
+                        if (!innerLayerTail) {
+                            if (caseDepth > 0) caseDepth--;
+                            else if (depth > 0) depth--;
+                        }
+                    }
                     word.setLength(0);
                 }
                 inSingle = true;
@@ -499,8 +831,23 @@ public final class SqlStatementSplitter {
                 // flush
                 if (word.length() > 0) {
                     String upper = word.toString().toUpperCase(Locale.ROOT);
-                    if (upper.equals("BEGIN")) depth++;
-                    else if (upper.equals("END") && depth > 0) depth--;
+                    if (upper.equals("CASE")) {
+                        // `END CASE` 的尾词：已由 END 分支按 CASE 终结符消费，不再开新层
+                        if (caseEndTailPending) caseEndTailPending = false;
+                        else caseDepth++;
+                    } else if (upper.equals("BEGIN")) {
+                        depth++;
+                    } else if (upper.equals("END")) {
+                        // 同主状态机：`END IF` / `END LOOP` / `END WHILE` / `END REPEAT` 是内层终结符，
+                        // 不减深度（T-SQL 批本身没有这些形态，此处只为与主路径口径一致、避免两处漂移）。
+                        if (nextWordIs(part, i, "CASE")) caseEndTailPending = true;
+                        boolean innerLayerTail = nextWordIs(part, i, "IF") || nextWordIs(part, i, "LOOP")
+                                || nextWordIs(part, i, "WHILE") || nextWordIs(part, i, "REPEAT");
+                        if (!innerLayerTail) {
+                            if (caseDepth > 0) caseDepth--;
+                            else if (depth > 0) depth--;
+                        }
+                    }
                     word.setLength(0);
                 }
                 inDouble = true;
@@ -510,8 +857,23 @@ public final class SqlStatementSplitter {
                 // flush
                 if (word.length() > 0) {
                     String upper = word.toString().toUpperCase(Locale.ROOT);
-                    if (upper.equals("BEGIN")) depth++;
-                    else if (upper.equals("END") && depth > 0) depth--;
+                    if (upper.equals("CASE")) {
+                        // `END CASE` 的尾词：已由 END 分支按 CASE 终结符消费，不再开新层
+                        if (caseEndTailPending) caseEndTailPending = false;
+                        else caseDepth++;
+                    } else if (upper.equals("BEGIN")) {
+                        depth++;
+                    } else if (upper.equals("END")) {
+                        // 同主状态机：`END IF` / `END LOOP` / `END WHILE` / `END REPEAT` 是内层终结符，
+                        // 不减深度（T-SQL 批本身没有这些形态，此处只为与主路径口径一致、避免两处漂移）。
+                        if (nextWordIs(part, i, "CASE")) caseEndTailPending = true;
+                        boolean innerLayerTail = nextWordIs(part, i, "IF") || nextWordIs(part, i, "LOOP")
+                                || nextWordIs(part, i, "WHILE") || nextWordIs(part, i, "REPEAT");
+                        if (!innerLayerTail) {
+                            if (caseDepth > 0) caseDepth--;
+                            else if (depth > 0) depth--;
+                        }
+                    }
                     word.setLength(0);
                 }
             }
@@ -520,17 +882,74 @@ public final class SqlStatementSplitter {
         // flush（循环尾）
         if (word.length() > 0) {
             String upper = word.toString().toUpperCase(Locale.ROOT);
-            if (upper.equals("BEGIN")) depth++;
-            else if (upper.equals("END") && depth > 0) depth--;
+            if (upper.equals("CASE")) {
+                if (caseEndTailPending) caseEndTailPending = false;
+                else caseDepth++;
+            } else if (upper.equals("BEGIN")) {
+                depth++;
+            } else if (upper.equals("END")) {
+                if (nextWordIs(part, i, "CASE")) caseEndTailPending = true;
+                boolean innerLayerTail = nextWordIs(part, i, "IF") || nextWordIs(part, i, "LOOP")
+                        || nextWordIs(part, i, "WHILE") || nextWordIs(part, i, "REPEAT");
+                if (!innerLayerTail) {
+                    if (caseDepth > 0) caseDepth--;
+                    else if (depth > 0) depth--;
+                }
+            }
         }
         return depth;
     }
 
     /**
-     * 前视扫描：`from` 之后是否存在词边界形态的 END（字符串/注释感知，大小写不敏感）。
+     * 语句首判定（T-SSP-01）：当前缓冲（含本词）的首个有效关键字是否即本词——
+     * 前导仅空白与注释才算语句首（跳过规则同 {@link #firstKeywordOf}）。
+     */
+    private static boolean isStatementHead(@NotNull StringBuilder buffer, int bufferLenAtWordStart,
+                                           @NotNull String token) {
+        String head = firstKeywordOf(buffer.substring(0, bufferLenAtWordStart) + token);
+        return head != null && head.equals(token.toUpperCase(Locale.ROOT));
+    }
+
+    /**
+     * 前视扫描（T-SSP-02）：{@code from} 之后跳过空白与注释的首个标识符词是否即 {@code word}
+     * （大小写不敏感）。用于识别 {@code END CASE} 双词终结形态——尾随 {@code CASE} 词不得再开新层，
+     * 否则 CASE 层数被补回、块尾 {@code END} 反被吞掉（过度吞并）。
+     */
+    private static boolean nextWordIs(@NotNull String sql, int from, @NotNull String word) {
+        int i = from;
+        while (i < sql.length()) {
+            char c = sql.charAt(i);
+            Character next = i + 1 < sql.length() ? sql.charAt(i + 1) : null;
+            if (Character.isWhitespace(c)) {
+                i++;
+            } else if (c == '-' && next != null && next == '-') {
+                while (i < sql.length() && sql.charAt(i) != '\n') i++;
+            } else if (c == '/' && next != null && next == '*') {
+                i += 2;
+                while (i < sql.length()
+                        && !(sql.charAt(i) == '*' && i + 1 < sql.length() && sql.charAt(i + 1) == '/')) {
+                    i++;
+                }
+                i += 2;
+            } else if (isIdentifierChar(c)) {
+                StringBuilder sb = new StringBuilder();
+                while (i < sql.length() && isIdentifierChar(sql.charAt(i))) {
+                    sb.append(sql.charAt(i));
+                    i++;
+                }
+                return sb.toString().equalsIgnoreCase(word);
+            } else {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 前视扫描：{@code from} 之后是否存在词边界形态的目标词（字符串/注释感知，大小写不敏感）。
      * 保守判定——用于决定是否启用 BEGIN/END 块感知（识别不到配对 END 则按顶层切分原样）。
      */
-    private static boolean hasMatchingEndAhead(@NotNull String sql, int from) {
+    private static boolean hasWordAhead(@NotNull String sql, int from, @NotNull String target) {
         boolean inSingle = false;
         boolean inDouble = false;
         boolean inLine = false;
@@ -572,11 +991,15 @@ public final class SqlStatementSplitter {
             } else if (isIdentifierChar(c)) {
                 word.append(c);
             } else {
-                if (word.length() > 0 && word.toString().equalsIgnoreCase("END")) return true;
+                if (word.length() > 0 && word.toString().equalsIgnoreCase(target)) return true;
                 word.setLength(0);
             }
             i++;
         }
-        return word.length() > 0 && word.toString().equalsIgnoreCase("END");
+        return word.length() > 0 && word.toString().equalsIgnoreCase(target);
+    }
+
+    private static boolean hasMatchingEndAhead(@NotNull String sql, int from) {
+        return hasWordAhead(sql, from, "END");
     }
 }

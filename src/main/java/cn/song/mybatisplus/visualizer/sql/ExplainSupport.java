@@ -1,0 +1,137 @@
+// T-SyncK2JMaster184 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/sql/ExplainSupport.kt 移植
+package cn.song.mybatisplus.visualizer.sql;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+/**
+ * EXPLAIN 支持面与输出格式的<b>显式单一事实源</b>（T-ECH-02 / O-48）。
+ *
+ * <p>此前支持面散在 7 处 {@code Dialect.renderExplainStatement} 覆写里（默认 null），Oracle/SQL Server
+ * 靠「没覆写」隐式表达不支持——「没写」与「故意不接」在代码上同形，新增方言时也无从判定
+ * 该不该有 EXPLAIN。本表把两件事一次说清：</p>
+ * <ol>
+ *  <li><b>支持面</b>：{@code template == null} 即不接入（调用方降级提示），Oracle/SQL Server
+ *      <b>显式在册</b>；</li>
+ *  <li><b>输出格式</b>：{@link Entry#outputFormat()}，供建议器等消费方按形态选解析器。</li>
+ * </ol>
+ *
+ * <p>键是 {@link Dialect#getName()}（设置下拉显示名）——<b>不是</b>品牌短名：MCP 链的
+ * {@link cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor#advise} 收到的就是显示名。
+ * 查找大小写不敏感（兼容调用方传 {@code mysql} 这类小写形态）。</p>
+ *
+ * <p>渲染产物<b>逐字节不变</b>是硬约束：模板里的 {@link #SQL_PLACEHOLDER} 替换即旧覆写里的字符串拼接。
+ * 守卫用例（{@code DialectExplainTest}）逐方言断言「本表渲染结果 == {@code Dialect.renderExplainStatement}
+ * 结果」并钉住字面量，防止将来有人加回覆写后与表漂移。</p>
+ */
+public final class ExplainSupport {
+
+    private ExplainSupport() {}
+
+    /** 模板里的语句占位符（替换为字面量，非正则——SQL 里的 {@code $}/{@code \} 不受影响）。 */
+    public static final String SQL_PLACEHOLDER = "{sql}";
+
+    /**
+     * 单方言支持项。
+     *
+     * @param dialectName  方言显示名（{@link Dialect#getName()}，表的键）
+     * @param template     包装模板（含 {@link #SQL_PLACEHOLDER}）；null = 本方言不接入 EXPLAIN
+     * @param outputFormat 计划输出格式；null 与 {@code template == null} 同时成立（不支持即无格式）
+     * @param evidence     支持形态的依据出处（真机实证来源 / 官方文法），随表留证便于复核
+     */
+    public record Entry(
+            /** 方言显示名（表的键）。 */
+            String dialectName,
+            /** 包装模板（含 {@link #SQL_PLACEHOLDER}）；null = 本方言不接入 EXPLAIN。 */
+            String template,
+            /** 计划输出格式；null 与 {@code template == null} 同时成立。 */
+            ExplainOutputFormat outputFormat,
+            /** 支持形态的依据出处。 */
+            String evidence
+    ) {
+        /** 本方言是否接入 EXPLAIN。 */
+        public boolean supported() {
+            return template != null;
+        }
+    }
+
+    /**
+     * 全方言支持表（<b>覆盖 {@link DialectRegistry} 方言全量</b>——守卫用例断言不漏项）。
+     *
+     * <p>形态依据（沿用 Dialect 既有 KDoc 的真机实证留证，未新增未经验证的形态）：</p>
+     * <ul>
+     *  <li>MySQL 5.7/8.4、MariaDB：{@code EXPLAIN &lt;sql&gt;}，原生表格行（T-ExplainFirstNative 对齐
+     *      IDEA 原生 {@code MysqlBaseRawPlanData}——{@code FORMAT=JSON} 属自创形态且全树无渲染器消费）；</li>
+     *  <li>PostgreSQL 16：{@code EXPLAIN (FORMAT JSON, VERBOSE)}；</li>
+     *  <li>KingbaseES V8/V9：{@code EXPLAIN (FORMAT JSON)}（PG 兼容）；</li>
+     *  <li>DM8：{@code EXPLAIN &lt;sql&gt;}，返回 {@code #NSET2} 计划文本；</li>
+     *  <li>H2：{@code EXPLAIN PLAN FOR}；SQLite：{@code EXPLAIN QUERY PLAN}（引擎级单测覆盖）；</li>
+     *  <li>Oracle（需两步链查 PLAN_TABLE）与 SQL Server（需会话级 {@code SET SHOWPLAN_XML}）
+     *      <b>不接入</b>——各有独立前置，非本任务范围。</li>
+     * </ul>
+     */
+    private static final List<Entry> TABLE = List.of(
+            new Entry("MySQL", "EXPLAIN " + SQL_PLACEHOLDER, ExplainOutputFormat.TABLE,
+                    "真机实证 MySQL 5.7/8.4（DBX 通道 2026-09-02）"),
+            new Entry("MariaDB", "EXPLAIN " + SQL_PLACEHOLDER, ExplainOutputFormat.TABLE,
+                    "真机实证 MariaDB 10.x（DBX 通道 2026-09-02）"),
+            new Entry("PostgreSQL", "EXPLAIN (FORMAT JSON, VERBOSE) " + SQL_PLACEHOLDER, ExplainOutputFormat.JSON,
+                    "真机实证 PG 16（2026-09-02）+ 2026-09-22 复验返回形态"),
+            new Entry("KingBase（人大金仓）", "EXPLAIN (FORMAT JSON) " + SQL_PLACEHOLDER, ExplainOutputFormat.JSON,
+                    "真机实证 KingbaseES V8（PG 兼容）"),
+            new Entry("DM（达梦）", "EXPLAIN " + SQL_PLACEHOLDER, ExplainOutputFormat.TEXT,
+                    "真机实证 DM8（返回 #NSET2 计划文本）"),
+            new Entry("H2", "EXPLAIN PLAN FOR " + SQL_PLACEHOLDER, ExplainOutputFormat.TEXT,
+                    "H2 2.3.232 引擎级单测"),
+            new Entry("SQLite", "EXPLAIN QUERY PLAN " + SQL_PLACEHOLDER, ExplainOutputFormat.TEXT,
+                    "SQLite 引擎级单测"),
+            new Entry("Oracle", null, null, "不接入：需两步链查 PLAN_TABLE（另议）"),
+            new Entry("SQL Server", null, null, "不接入：需会话级 SET SHOWPLAN_XML（另议）"));
+
+    /** 按方言显示名的查找索引（键小写——查找大小写不敏感）。 */
+    private static final Map<String, Entry> BY_NAME = buildByName();
+
+    private static Map<String, Entry> buildByName() {
+        Map<String, Entry> index = new LinkedHashMap<>();
+        for (Entry e : TABLE) {
+            index.put(e.dialectName().toLowerCase(Locale.ROOT), e);
+        }
+        return index;
+    }
+
+    /** 全量支持项（守卫用例与文档生成用；顺序即表内声明顺序）。 */
+    public static List<Entry> getEntries() {
+        return TABLE;
+    }
+
+    /**
+     * 取方言支持项。
+     *
+     * @param dialectName 方言显示名（大小写不敏感）；未知方言返回 null
+     */
+    public static Entry entryFor(String dialectName) {
+        if (dialectName == null) return null;
+        String trimmed = dialectName.trim();
+        if (trimmed.isEmpty()) return null;
+        return BY_NAME.get(trimmed.toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * 渲染 EXPLAIN 语句。
+     *
+     * @return 包装后的语句；null = 方言未知或不接入 EXPLAIN（调用方降级提示）
+     */
+    public static String render(String dialectName, String sql) {
+        Entry entry = entryFor(dialectName);
+        if (entry == null || entry.template() == null) return null;
+        return entry.template().replace(SQL_PLACEHOLDER, sql);
+    }
+
+    /** 计划输出格式；null = 方言未知或不接入（与 {@link #render} 的 null 同源）。 */
+    public static ExplainOutputFormat formatFor(String dialectName) {
+        Entry entry = entryFor(dialectName);
+        return entry != null ? entry.outputFormat() : null;
+    }
+}

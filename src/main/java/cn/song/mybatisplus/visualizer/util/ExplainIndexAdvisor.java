@@ -1,11 +1,20 @@
 // T-SyncK2JMaster309 自 master util/ExplainIndexAdvisor.kt 移植
+// T-SyncK2JMaster184 吸收 O-48（T-ECH-02/T-ECH-03）：分派依据改 ExplainSupport 输出格式表 + PG/KingBase JSON 计划解析
 package cn.song.mybatisplus.visualizer.util;
 
+import cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat;
+import cn.song.mybatisplus.visualizer.sql.ExplainSupport;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.regex.MatchResult;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -22,9 +31,16 @@ import java.util.regex.Pattern;
  * 收益不成立）。
  *
  * <p>两方言先行（计划口径）：MySQL 表格式（type=ALL 全表扫 / key=NULL 且 rows 超阈 /
- * Extra 含 Using filesort/temporary）、PG 文本树（大表 Seq Scan）。
+ * Extra 含 Using filesort/temporary）、PG/KingBase JSON（大表 Seq Scan）。
  * 单源约定：规则集在本类，任何未来 plan-text 消费方（IDE 面备选 B、perf 工具扩展）
- * 都从这里取，不复制第二套（与 perf_advice 的静态 SQL 规则集是两个互补面，不互斥）。
+ * 都从这里取，不复制第二套（与 perf_advice 的静态 SQL 规则集是两个互补面，不互斥）。</p>
+ *
+ * <p>T-ExplainChainHardening T-ECH-02/T-ECH-03（O-48）修正：分派依据由<b>方言名</b>改为
+ * {@link ExplainSupport} 表里的<b>输出格式</b>——此前 PG 分支按 {@code Seq Scan on (\w+)} 文本树正则解析，
+ * 而 PG 方言渲染的是 {@code EXPLAIN (FORMAT JSON, VERBOSE)}（返回单列 JSON 文本），两种形态根本不匹配，
+ * <b>PG 索引建议实际永不触发</b>（真缺陷，真 PG 16.14 实测：返回列名 {@code QUERY PLAN}，值形如
+ * {@code [{"Plan":{"Node Type":"Seq Scan",…,"Relation Name":"bench_items",…,"Plan Rows":10000,…}}]}）。
+ * 现按格式分派：JSON → {@link #adviseJsonPlan}，TABLE → {@link #adviseMysql}，TEXT → {@link #advisePlanText}。</p>
  */
 public final class ExplainIndexAdvisor {
 
@@ -52,23 +68,28 @@ public final class ExplainIndexAdvisor {
     /**
      * 从 EXPLAIN 结果识别索引缺失类模式。
      *
-     * @param dialect 方言显示名（MySqlDialect/MariaDbDialect 走表格式；PostgreSQL/KingBase 走文本树）
-     * @param headers 结果列名（表格式形态；文本树形态通常单列）
+     * @param dialect 方言显示名（与 {@link cn.song.mybatisplus.visualizer.sql.Dialect#getName()} 同源；
+     *                分派读 {@link ExplainSupport#formatFor}，大小写不敏感；未知/不支持方言 → 空清单）
+     * @param headers 结果列名（表格式形态；文本/JSON 形态通常单列）
      * @param rows    结果行（每行与 headers 对齐；truncated 之前的部分）
      */
     @NotNull
     public static List<Hint> advise(@NotNull String dialect, @NotNull List<String> headers,
                                     @NotNull List<List<String>> rows) {
         List<Hint> out = new ArrayList<>();
-        String lower = dialect.toLowerCase(Locale.ROOT);
-        if (lower.contains("mysql") || lower.contains("mariadb")) {
+        ExplainOutputFormat format = ExplainSupport.formatFor(dialect);
+        if (format == ExplainOutputFormat.TABLE) {
             // MySQL 家族：表格式（id/select_type/table/type/key/rows/Extra…）
             adviseMysql(headers, rows, out);
-        } else if (lower.contains("postgres") || lower.contains("kingbase")) {
-            // PG 家族：文本树（QUERY PLAN 单列多行）
+        } else if (format == ExplainOutputFormat.JSON) {
+            // PG/KingBase：单列 JSON 文本（FORMAT JSON）
+            adviseJsonPlan(rows, out);
+        } else if (format == ExplainOutputFormat.TEXT) {
+            // 文本计划树（DM8 #NSET2 / H2 PLAN FOR / SQLite QUERY PLAN）——规则只覆盖 PG 文本树形态，
+            // 其余方言的文本形态不含该模式，天然零命中（不噪音）；将来新增文本规则在此扩展
             advisePlanText(rows, out);
         } else {
-            // 不支持方言静默降级（含信创系）——空清单与无命中同形
+            // 不支持方言/未知方言静默降级——空清单与无命中同形
         }
         return out;
     }
@@ -148,6 +169,144 @@ public final class ExplainIndexAdvisor {
         }
     }
 
+    // ---------- PG/KingBase FORMAT JSON（T-ECH-03） ----------
+
+    /** JSON 键名（PG 计划 JSON 的固定键；实测形态见类 KDoc）。 */
+    private static final String KEY_NODE_TYPE = "Node Type";
+    private static final String KEY_RELATION = "Relation Name";
+    private static final String KEY_ALIAS = "Alias";
+    private static final String KEY_PLAN_ROWS = "Plan Rows";
+    private static final String KEY_ACTUAL_ROWS = "Actual Rows";
+
+    /**
+     * JSON 计划解析（T-ECH-03，真缺陷修复点）：PG/KingBase 的 {@code FORMAT JSON} 返回<b>单列 JSON 文本</b>，
+     * 顶层是数组 {@code [{ "Plan": {…} }]}，节点键为 {@code "Node Type"} / {@code "Relation Name"} /
+     * {@code "Plan Rows"}，子节点在 {@code "Plans"} 数组里。
+     *
+     * <p>容错三段（计划 §六「先试 JSON，失败回落」）：</p>
+     * <ol>
+     *  <li>整段 JSON 解析成功 → 按对象树遍历（正确处理嵌套与转义）；</li>
+     *  <li>解析失败（<b>实测最常见的成因</b>是 {@code cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter}
+     *      的 2000 字符单元格预算把长计划截断）→ 按「节点分片」正则扫描：截断只影响尾部，
+     *      前面的节点对象仍完整，故仍能取到顶层节点；</li>
+     *  <li>前两段<b>零命中</b>时回落文本树规则 {@link #advisePlanText}（PG 文本树形态仍可识别；
+     *      真 JSON 计划零命中时该回落天然无命中，不产生噪音）。</li>
+     * </ol>
+     * <p>JSON 两段共用 {@link #emitSeqScanHint}——阈值与文案只有一份。</p>
+     */
+    private static void adviseJsonPlan(@NotNull List<List<String>> rows, @NotNull List<Hint> out) {
+        for (List<String> row : rows) {
+            for (String cell : row) {
+                String text = cell.trim();
+                if (text.isEmpty()) continue;
+                int before = out.size();
+                JsonElement parsed = null;
+                try {
+                    parsed = JsonParser.parseString(text);
+                } catch (RuntimeException ignored) {
+                    // runCatching 等价：解析失败（含截断）走节点分片扫描
+                }
+                if (parsed != null && (parsed.isJsonArray() || parsed.isJsonObject())) {
+                    walkJsonPlan(parsed, out);
+                } else {
+                    scanJsonNodes(text, out);
+                }
+                if (out.size() == before) advisePlanText(List.of(List.of(cell)), out);
+            }
+        }
+    }
+
+    /** 对象树遍历：每个带 {@code "Node Type"} 的对象判一次，再递归其所有值（含 {@code "Plans"} 子计划）。 */
+    private static void walkJsonPlan(@Nullable JsonElement el, @NotNull List<Hint> out) {
+        if (el == null || el.isJsonNull()) {
+            // nothing
+        } else if (el.isJsonArray()) {
+            for (JsonElement item : el.getAsJsonArray()) {
+                walkJsonPlan(item, out);
+            }
+        } else if (el.isJsonObject()) {
+            JsonObject obj = el.getAsJsonObject();
+            String relation = stringOf(obj, KEY_RELATION);
+            if (relation == null) relation = stringOf(obj, KEY_ALIAS);
+            Long planRows = longOf(obj, KEY_PLAN_ROWS);
+            if (planRows == null) planRows = longOf(obj, KEY_ACTUAL_ROWS);
+            emitSeqScanHint(stringOf(obj, KEY_NODE_TYPE), relation, planRows, out);
+            for (Map.Entry<String, JsonElement> entry : obj.entrySet()) {
+                walkJsonPlan(entry.getValue(), out);
+            }
+        }
+    }
+
+    @Nullable
+    private static String stringOf(@NotNull JsonObject obj, @NotNull String key) {
+        JsonElement v = obj.get(key);
+        if (v == null || !v.isJsonPrimitive()) return null;
+        try {
+            return v.getAsString();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** 数值容忍：PG 出数字字面量，某些驱动/版本可能把数字包成字符串。 */
+    @Nullable
+    private static Long longOf(@NotNull JsonObject obj, @NotNull String key) {
+        JsonElement v = obj.get(key);
+        if (v == null || !v.isJsonPrimitive()) return null;
+        try {
+            return v.getAsLong();
+        } catch (RuntimeException ignored) {
+            // 落字符串解析
+        }
+        try {
+            String s = v.getAsString();
+            return toLongOrNull(s.trim());
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** 节点分片扫描（JSON 被截断时的回落路径）：每段 = 一个 {@code "Node Type"} 到下一个之前。 */
+    private static void scanJsonNodes(@NotNull String text, @NotNull List<Hint> out) {
+        Matcher scanner = JSON_NODE_TYPE.matcher(text);
+        List<MatchResult> starts = new ArrayList<>();
+        while (scanner.find()) {
+            starts.add(scanner.toMatchResult());
+        }
+        for (int i = 0; i < starts.size(); i++) {
+            MatchResult m = starts.get(i);
+            int segmentEnd = i + 1 < starts.size() ? starts.get(i + 1).start() : text.length();
+            String segment = text.substring(m.end(), segmentEnd);
+            String relation = null;
+            Matcher rm = JSON_RELATION.matcher(segment);
+            if (rm.find()) {
+                relation = rm.group(1);
+            }
+            Long planRows = null;
+            Matcher pm = JSON_PLAN_ROWS.matcher(segment);
+            if (pm.find()) {
+                planRows = toLongOrNull(pm.group(1));
+            }
+            emitSeqScanHint(m.group(1), relation, planRows, out);
+        }
+    }
+
+    /**
+     * 单节点判据（JSON 两段路径共用）：{@code Seq Scan} 且（行数未知或 ≥ 阈值）→ 一条建议。
+     * 关系名缺失（PG 对无表节点不输出 {@code "Relation Name"}）时目标记 {@code ?}，不虚报表名。
+     */
+    private static void emitSeqScanHint(@Nullable String nodeType, @Nullable String relation,
+                                        @Nullable Long planRows, @NotNull List<Hint> out) {
+        if (!"Seq Scan".equalsIgnoreCase(nodeType)) return;
+        if (planRows != null && planRows < ROWS_THRESHOLD) return;
+        out.add(new Hint(
+                "SEQ_SCAN",
+                relation != null && !relation.isBlank() ? relation : "?",
+                "Sequential scan"
+                        + (planRows != null ? " over ~" + planRows + " rows" : "")
+                        + " — consider adding an index on the filter columns"));
+    }
+
     /** 行内取单元格（越界/负列返回空串），trim 后返回。 */
     @NotNull
     private static String cell(@NotNull List<String> row, int col) {
@@ -177,4 +336,13 @@ public final class ExplainIndexAdvisor {
         }
         return sb.toString();
     }
+
+    /** 节点分片扫描用：JSON 键形态（{@code "Node Type":"Seq Scan"}）。 */
+    private static final Pattern JSON_NODE_TYPE = Pattern.compile("\"Node Type\"\\s*:\\s*\"([^\"]*)\"");
+
+    /** 关系名/别名（PG 对无表节点不出 {@code Relation Name}，退 {@code Alias}）。 */
+    private static final Pattern JSON_RELATION = Pattern.compile("\"(?:Relation Name|Alias)\"\\s*:\\s*\"([^\"]*)\"");
+
+    /** 估算行数（{@code Actual Rows} 仅 EXPLAIN ANALYZE 出现——本插件不产 analyze，容忍读取不改变口径）。 */
+    private static final Pattern JSON_PLAN_ROWS = Pattern.compile("\"(?:Plan Rows|Actual Rows)\"\\s*:\\s*(\\d+)");
 }

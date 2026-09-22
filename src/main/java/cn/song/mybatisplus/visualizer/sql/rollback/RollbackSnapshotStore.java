@@ -2,6 +2,7 @@
 package cn.song.mybatisplus.visualizer.sql.rollback;
 
 import cn.song.mybatisplus.visualizer.log.LogSqlModelsKt;
+import cn.song.mybatisplus.visualizer.sql.Dialect;
 import com.intellij.openapi.components.Service;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
@@ -58,6 +59,14 @@ public final class RollbackSnapshotStore {
      * @param snapshotSelectSql 快照查询模板 `SELECT * FROM t [WHERE …]`
      * @param setColumns        UPDATE 的 SET 列清单（DELETE 恒空）
      * @param status            状态（见 {@link Status}）
+     * @param dialect           登记时的方言（O-52 回滚侧 identity 包装用；<b>null = 未知 → 不包装</b>）
+     * @param identityColumns   目标表的自增列名（O-52；<b>空 = 未知 → 不包装</b>）
+     *
+     * <p>O-52（D1=A 定案）：回滚链的行值来自粘贴 TSV、{@code backfillInsert} 生成 INSERT，显式插入自增列
+     * 在 SQL Server 上必然报 544——identity 知识只有<b>登记时</b>持有，故随快照一起留存。
+     * 两个字段均带默认值：旧条目（本会话改前登记的）与未传参的调用方<b>逐字节不变地</b>落到
+     * 「未知」，包装不触发（与既有「未知语义不臆造」口径一致）；{@link RollbackSnapshotStore} 是内存态、
+     * 不持久化（见类 KDoc），不存在跨会话反序列化旧格式的问题，默认值只服务「调用方未传」这一形态。</p>
      */
     public record SnapshotEntry(
             /** 本次 DML 执行序号（单调递增）。 */
@@ -75,14 +84,18 @@ public final class RollbackSnapshotStore {
             /** UPDATE 的 SET 列清单（DELETE 恒空）。 */
             @NotNull List<String> setColumns,
             /** 状态（见 {@link Status}）。 */
-            @NotNull Status status
+            @NotNull Status status,
+            /** 登记时的方言（O-52；null = 未知 → 不包装）。 */
+            @Nullable Dialect dialect,
+            /** 目标表的自增列名（O-52；空 = 未知 → 不包装）。 */
+            @NotNull List<String> identityColumns
     ) {
-        /** 常用形态：createdAt 取当前时刻、status 初始 REGISTERED。 */
+        /** 常用形态：createdAt 取当前时刻、status 初始 REGISTERED、O-52 两字段落「未知」。 */
         public SnapshotEntry(long executionId, long parentExecutionId, @NotNull String sql,
                              @Nullable String targetTable, @Nullable String snapshotSelectSql,
                              @NotNull List<String> setColumns) {
             this(executionId, parentExecutionId, System.currentTimeMillis(), sql, targetTable,
-                    snapshotSelectSql, setColumns, Status.REGISTERED);
+                    snapshotSelectSql, setColumns, Status.REGISTERED, null, List.of());
         }
 
         /** 最简形态：普通 DML（无父执行序号）。 */
@@ -141,6 +154,8 @@ public final class RollbackSnapshotStore {
      *
      * @param parentExecutionId 本次执行本身是回滚语句时，指向被回滚的原执行序号
      *                          （dbx `rollback_of` 指针语义；{@link #NO_EXECUTION_ID} = 普通 DML）
+     * @param dialect           登记时的方言（O-52；null = 未知 → 回滚侧不包装）
+     * @param identityColumns   目标表的自增列名（O-52；空 = 未知 → 回滚侧不包装）
      * @return 登记的条目（含分配的 executionId，LOG 埋点用）
      */
     @NotNull
@@ -157,20 +172,35 @@ public final class RollbackSnapshotStore {
         return register(sql, targetTable, snapshotSelectSql, setColumns, NO_EXECUTION_ID);
     }
 
+    /** {@link #register(String,String,String,List,long,Dialect,List)} 的 O-52 两字段落「未知」形态。 */
     @NotNull
     public synchronized SnapshotEntry register(@NotNull String sql, @Nullable String targetTable,
                                                @Nullable String snapshotSelectSql,
                                                @NotNull List<String> setColumns,
                                                long parentExecutionId) {
+        return register(sql, targetTable, snapshotSelectSql, setColumns, parentExecutionId, null, List.of());
+    }
+
+    @NotNull
+    public synchronized SnapshotEntry register(@NotNull String sql, @Nullable String targetTable,
+                                               @Nullable String snapshotSelectSql,
+                                               @NotNull List<String> setColumns,
+                                               long parentExecutionId,
+                                               @Nullable Dialect dialect,
+                                               @NotNull List<String> identityColumns) {
         String fingerprint = fingerprintOf(sql);
         Long previous = sqlIndex.get(fingerprint);
         SnapshotEntry entry = new SnapshotEntry(
                 nextExecutionId++,
                 parentExecutionId,
+                System.currentTimeMillis(),
                 sql,
                 targetTable,
                 snapshotSelectSql,
-                setColumns);
+                setColumns,
+                Status.REGISTERED,
+                dialect,
+                identityColumns);
         if (previous != null) {
             entries.remove(previous);
         }
@@ -180,7 +210,9 @@ public final class RollbackSnapshotStore {
                 "[TRollbackSql] snapshot registered: executionId=" + entry.executionId()
                         + ", parent=" + parentExecutionId + ", "
                         + "table=" + entry.targetTable() + ", sqlLen=" + sql.length()
-                        + ", setColumns=" + entry.setColumns());
+                        + ", setColumns=" + entry.setColumns() + ", "
+                        + "dialect=" + (entry.dialect() == null ? null : entry.dialect().getName())
+                        + ", identityColumns=" + entry.identityColumns());
         return entry;
     }
 
@@ -211,7 +243,10 @@ public final class RollbackSnapshotStore {
                 current.targetTable(),
                 current.snapshotSelectSql(),
                 current.setColumns(),
-                Status.ROLLBACK_EXECUTED));
+                Status.ROLLBACK_EXECUTED,
+                // O-52：copy(status=…) 语义——dialect/identityColumns 随条目保留
+                current.dialect(),
+                current.identityColumns()));
         LOG.info(
                 "[TRollbackSql] rollback executed: targetExecutionId=" + entry.executionId()
                         + ", table=" + entry.targetTable());

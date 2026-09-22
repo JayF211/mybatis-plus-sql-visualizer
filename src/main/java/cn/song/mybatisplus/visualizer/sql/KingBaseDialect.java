@@ -30,18 +30,27 @@ public final class KingBaseDialect implements Dialect {
         return "\"" + identifier + "\"";
     }
 
+    /**
+     * O-51：金仓与 PG 同折叠方向（裸标识符折叠为小写）→ LOWER 族。
+     *
+     * <p>真机依据（KingbaseES V8，DBX MCP 只读实测，2026-09-22）：{@code SELECT COUNT(*) FROM
+     * INFORMATION_SCHEMA.TABLES} → 492 行（裸写折为小写命中）；{@code FROM information_schema."TABLES"}
+     * → {@code kb: relation "information_schema.TABLES" does not exist}。此前为「按 PG 兼容推断」，
+     * 本轮实测证实（计划 §八 待验证前提 2 已可升级为已证实）。</p>
+     */
+    @Override
+    public IdentifierFolding getIdentifierFolding() {
+        return IdentifierFolding.LOWER;
+    }
+
     @Override
     public Set<String> getReservedWords() {
         return SqlKeywords.KINGBASE_RESERVED;
     }
 
     @Override
-    public String renderUpsert(String conflictKey, List<String> updateColumns) {
-        return Dialect.renderPgStyleUpsert(this, conflictKey, updateColumns);
-    }
-
-    @Override
-    public String renderExplainStatement(String sql) {
-        return "EXPLAIN (FORMAT JSON) " + sql;
+    public String renderUpsert(String conflictKey, List<String> updateColumns,
+                               IdentifierCaseSource caseSource) {
+        return Dialect.renderPgStyleUpsert(this, conflictKey, updateColumns, caseSource);
     }
 }

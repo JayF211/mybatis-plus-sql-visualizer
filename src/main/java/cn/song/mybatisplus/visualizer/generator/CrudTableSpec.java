@@ -18,9 +18,11 @@ import org.jetbrains.annotations.Nullable;
  * @param versionColumn     乐观锁版本列（实体侧 @Version，对齐 updateById 语义：SET 由
  *                          {@code version = version + 1} 取代、WHERE 末尾追加；DB 侧无此元数据恒 null）
  * @param dialect           方言（保留字引用包裹；读插件设置，缺省 MySQL）
- * @param identifierCaseSource 名字大小写来源（O-42）：目录来源 {@link IdentifierCaseSource#CATALOG} 时
- *                          Oracle 按「含小写字母即加引号」引用；缺省 {@link IdentifierCaseSource#ENTITY}
- *                          （实体派生名裸写，既有行为逐字不变——未接线点也落此默认值）
+ * @param identifierCaseSource 名字大小写来源（O-42；O-51 起按方言折叠方向族分流）：目录来源
+ *                          {@link IdentifierCaseSource#CATALOG} 时按 {@code Dialect.identifierFolding} 引用
+ *                          （UPPER 族含小写即加引号 / LOWER 族含大写即加引号 / NONE 族不判）；
+ *                          缺省 {@link IdentifierCaseSource#ENTITY}（实体派生名裸写，既有行为逐字不变
+ *                          ——未接线点也落此默认值）
  */
 public final class CrudTableSpec {
     private final String tableName;

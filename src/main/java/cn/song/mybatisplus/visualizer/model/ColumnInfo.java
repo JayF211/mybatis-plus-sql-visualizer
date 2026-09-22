@@ -27,6 +27,11 @@ import java.util.Objects;
  * @param embedded   列是否展平自 @Embedded/@Embeddable/@EmbeddedId 嵌入对象字段（T-J18）；
  *                   fieldName 为嵌入对象内部字段名
  * @param converted  @Convert 标记（T-J18）：字段经 AttributeConverter 转换绑定值（不改 SQL 形态，仅标记）
+ * @param embeddedParent 展平本列的<b>嵌入对象字段名</b>（{@code @Embedded} 展平时写入，非嵌入列为 null）。
+ *                   嵌入对象没有自己的表，其字段直接落在宿主表的列上，所以 HQL 路径
+ *                   {@code 别名.嵌入对象字段.内层字段} 必须映射为 {@code 别名.内层列名}（去掉嵌入段）——保留嵌入段会产出
+ *                   无效 SQL（SQL 语义下 {@code 别名.嵌入对象} 被当成「库.表」）。路径映射据此判断该不该丢中间段，
+ *                   而不是靠「中间段不是本表字段就丢掉」这种猜测（后者会误删别的合法中间段）
  */
 public final class ColumnInfo {
     private final String fieldName;
@@ -42,11 +47,12 @@ public final class ColumnInfo {
     private final String generatedValueStrategy;
     private final boolean embedded;
     private final boolean converted;
+    private final String embeddedParent;
 
     public ColumnInfo(String fieldName, String columnName, boolean isId, boolean idTypeAuto,
                       String fieldType, String fill, String comment, ColumnRole role,
                       boolean insertable, boolean updatable, String generatedValueStrategy,
-                      boolean embedded, boolean converted) {
+                      boolean embedded, boolean converted, String embeddedParent) {
         this.fieldName = fieldName;
         this.columnName = columnName;
         this.isId = isId;
@@ -60,12 +66,21 @@ public final class ColumnInfo {
         this.generatedValueStrategy = generatedValueStrategy;
         this.embedded = embedded;
         this.converted = converted;
+        this.embeddedParent = embeddedParent;
+    }
+
+    public ColumnInfo(String fieldName, String columnName, boolean isId, boolean idTypeAuto,
+                      String fieldType, String fill, String comment, ColumnRole role,
+                      boolean insertable, boolean updatable, String generatedValueStrategy,
+                      boolean embedded, boolean converted) {
+        this(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment, role,
+                insertable, updatable, generatedValueStrategy, embedded, converted, null);
     }
 
     public ColumnInfo(String fieldName, String columnName, boolean isId, boolean idTypeAuto,
                       String fieldType, String fill, String comment, ColumnRole role) {
         this(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment, role,
-                true, true, null, false, false);
+                true, true, null, false, false, null);
     }
 
     public ColumnInfo(String fieldName, String columnName, boolean isId, boolean idTypeAuto,
@@ -147,18 +162,31 @@ public final class ColumnInfo {
         return converted;
     }
 
+    /** 展平本列的嵌入对象字段名（{@code @Embedded} 展平时写入，非嵌入列为 null）。 */
+    public String getEmbeddedParent() {
+        return embeddedParent;
+    }
+
     public ColumnInfo copy(String fieldName, String columnName, boolean isId, boolean idTypeAuto,
                            String fieldType, String fill, String comment, ColumnRole role,
                            boolean insertable, boolean updatable, String generatedValueStrategy,
-                           boolean embedded, boolean converted) {
+                           boolean embedded, boolean converted, String embeddedParent) {
         return new ColumnInfo(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment, role,
-                insertable, updatable, generatedValueStrategy, embedded, converted);
+                insertable, updatable, generatedValueStrategy, embedded, converted, embeddedParent);
     }
 
     public ColumnInfo copy(String fieldName, String columnName, boolean isId, boolean idTypeAuto,
                            String fieldType, String fill, String comment, ColumnRole role) {
         return new ColumnInfo(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment, role,
-                insertable, updatable, generatedValueStrategy, embedded, converted);
+                insertable, updatable, generatedValueStrategy, embedded, converted, embeddedParent);
+    }
+
+    public ColumnInfo copy(String fieldName, String columnName, boolean isId, boolean idTypeAuto,
+                           String fieldType, String fill, String comment, ColumnRole role,
+                           boolean insertable, boolean updatable, String generatedValueStrategy,
+                           boolean embedded, boolean converted) {
+        return new ColumnInfo(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment, role,
+                insertable, updatable, generatedValueStrategy, embedded, converted, embeddedParent);
     }
 
     @Override
@@ -182,13 +210,14 @@ public final class ColumnInfo {
                 && Objects.equals(fill, that.fill)
                 && Objects.equals(comment, that.comment)
                 && Objects.equals(generatedValueStrategy, that.generatedValueStrategy)
+                && Objects.equals(embeddedParent, that.embeddedParent)
                 && role == that.role;
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment, role,
-                insertable, updatable, generatedValueStrategy, embedded, converted);
+                insertable, updatable, generatedValueStrategy, embedded, converted, embeddedParent);
     }
 
     @Override
@@ -197,6 +226,7 @@ public final class ColumnInfo {
                 + ", idTypeAuto=" + idTypeAuto + ", fieldType=" + fieldType + ", fill=" + fill
                 + ", comment=" + comment + ", role=" + role + ", insertable=" + insertable
                 + ", updatable=" + updatable + ", generatedValueStrategy=" + generatedValueStrategy
-                + ", embedded=" + embedded + ", converted=" + converted + ")";
+                + ", embedded=" + embedded + ", converted=" + converted
+                + ", embeddedParent=" + embeddedParent + ")";
     }
 }

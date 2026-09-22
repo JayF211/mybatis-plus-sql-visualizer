@@ -48,6 +48,8 @@ import java.util.function.Function;
  *       移除表名前缀/后缀（{@code ;} 分隔首匹配）；添加表前缀/后缀为<b>单值</b></li>
  *   <li>T-EntityCache：解析结果按「PsiFile + classQualifiedName + configSignature」三维缓存，
  *       文件修改戳（modificationStamp）+ 配置签名双维度失效，避免大项目重复 PSI 遍历</li>
+ *   <li>O-58：返回边界接 {@link ColumnNameCalibrator}——数据源可用时用真实列集合纠正猜测出的列名
+ *       （{@code orderID} → {@code order_i_d} 而库里是 {@code order_id}），不可用/查不了/开关关闭时逐字段原样返回</li>
  * </ul>
  */
 public class EntityResolver {
@@ -59,16 +61,22 @@ public class EntityResolver {
      * 失效机制：文件修改（modificationStamp 变化）→ 缓存自然失效；
      * 配置签名变化（tablePrefix/tableSuffix/tableNameInference 等设置变更）→ 缓存失效。</p>
      *
+     * <p>O-58（列名数据源校正）：缓存<b>继续只存未校正的 PSI 产物</b>，校正在返回前作为一步廉价后处理
+     * （{@link ColumnNameCalibrator#calibrate(Project, TableInfo)}，对 DB 列集合做几次 map 查找，无遍历）执行。
+     * 这样 DDL 变更的失效面只有数据源 schema 缓存一处（已登记 MetadataInvalidator），不必给实体缓存键扩 DB 签名。
+     * 代价是校正生效时返回的是新对象而非缓存里那一个——已核实全仓无消费方依赖 TableInfo 实例同一性。</p>
+     *
      * @param entityClass 实体 PsiClass（如 DeviceInfoEntity）
      * @return 表信息；类名缺失等异常情况返回带推断表名、空列的表信息（保证不抛异常）
      */
     public TableInfo resolve(PsiClass entityClass) {
         String className = entityClass.getName();
         if (className == null) return new TableInfo("", "", List.of());
+        Project project = entityClass.getProject();
         PsiFile file = entityClass.getContainingFile();
-        if (file == null) return resolveInternal(entityClass);
+        if (file == null) return ColumnNameCalibrator.calibrate(project, resolveInternal(entityClass));
         String qName = entityClass.getQualifiedName() != null ? entityClass.getQualifiedName() : className;
-        String configSig = TableConfigSignature.projectSignature(entityClass.getProject());
+        String configSig = TableConfigSignature.projectSignature(project);
 
         // T-Perf-18：缓存键不持 PsiFile 强引用（VirtualFile.url 字符串标识——PsiFile 随键
         // 永久驻留是长会话内存泄漏源；URL 相同的 PSI 重建由 modificationStamp 维度失效）
@@ -78,12 +86,12 @@ public class EntityResolver {
         long stamp = file.getModificationStamp();
         Entry entry = cache.get(key);
         if (entry != null && entry.stamp == stamp) {
-            return entry.value;
+            return ColumnNameCalibrator.calibrate(project, entry.value);
         }
 
         TableInfo value = resolveInternal(entityClass);
         cache.put(key, new Entry(stamp, value));
-        return value;
+        return ColumnNameCalibrator.calibrate(project, value);
     }
 
     /**
@@ -238,6 +246,9 @@ public class EntityResolver {
      * 注释来源优先级（M16，schema 预留）：
      * SCHEMA（数据源 schema 列/表注释，方案 B 接入后自动覆盖一切代码内注释）最高，
      * 当前实现 schema 返回 null——实际生效顺序 = 注解 &gt; javadoc &gt; 行注释。
+     *
+     * O-58 兑现的是「方案 B」的<b>列名</b>半边（{@link ColumnNameCalibrator} 在 {@link EntityResolver#resolve}
+     * 返回边界用数据源真值纠正列名）；<b>注释</b>半边（本枚举的 SCHEMA 源）仍未接入，故此处保持 null 占位。
      */
     public enum CommentSource { SCHEMA, ANNOTATION, JAVADOC, LINE_COMMENT }
 

@@ -1,12 +1,13 @@
 package cn.song.mybatisplus.visualizer.xml;
 
 import java.util.AbstractList;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
+import java.util.NoSuchElementException;
 import java.util.Set;
 
 /**
@@ -147,48 +148,53 @@ public class DynamicContext {
     }
 
     /**
-     * 判重错误表（T-FS-07）：LinkedHashSet 语义的 {@link List}——保首现顺序、同文案只留一行。
+     * 判重错误表（T-FS-07）：保首现顺序、同文案只留一行的 {@link List}。
      *
      * <p>只用于 {@link DynamicContext#getErrors()}（MyBatis 无此概念，属预览引擎专用扩展）；保留 List 形态
      * 使既有写入点（{@code context.errors += msg}）与既有测试无需改动。{@code add(index, element)} 忽略索引——
      * 判重集合无插入位置语义，仓内既有写入只有 {@code +=} / {@code add(msg)} 两种形态。
      *
-     * <p><b>只支持「追加 + 按值删」语义，不支持位置型写入</b>（T-FS-07 独立复核注记）：{@code add(index, element)}
-     * 忽略索引、{@code set(index, element)} 把新值挪到末尾（且新值已存在时会缩容）。当前仓内对 {@code .errors}
-     * 无任何位置型调用点（{@code listIterator().set/add}、{@code sort}、{@code subList} 写入、{@code addAll(index, …)} 全仓零处），
-     * 故无实际后果；日后若有人用位置型操作，行为会静默偏离 List 契约（modCount 也不自增，CME 保护失效）
-     * ——需要位置语义时应改用普通 ArrayList，而不是改本类。
+     * <p><b>T-PerfSweep6 T-PS6-08（性能报告发现 10）：列表 + 判重集合双结构</b>。此前用 LinkedHashSet 单结构
+     * 冒充 List，{@code get(index)} 走逐节点前进的 <b>O(n)</b>；而 {@code AbstractList}
+     * 的 {@code equals}/{@code hashCode}/{@code subList}/{@code indexOf} 与默认 listIterator 实现都按 index 遍历
+     * ——一次 {@code errors == other} 比较就是 O(n²)。现改为 items（ArrayList，承担顺序与随机访问）+
+     * seen（HashSet，承担 O(1) 判重），两个结构在所有写点同步维护。
+     *
+     * <p><b>仍不支持位置型写入语义</b>（T-FS-07 复核注记沿用）：{@code add(index, element)} 忽略索引、
+     * {@code set(index, element)} 把新值挪到末尾（且新值已存在时会缩容）。当前仓内对 {@code .errors} 无任何位置型
+     * 调用点，故无实际后果；需要位置语义时应改用普通 ArrayList，而不是改本类。
+     * modCount 沿用既有形态（不自增）：本类不是并发容器，仓内也无「边遍历边写」的调用点。
      */
     private static final class DedupErrorList extends AbstractList<String> {
 
-        private final LinkedHashSet<String> seen = new LinkedHashSet<>();
+        /** 首现顺序 + 随机访问（get O(1)）。 */
+        private final List<String> items = new ArrayList<>();
+
+        /** 判重集合（与 items 严格同集，所有写点成对维护）。 */
+        private final Set<String> seen = new HashSet<>();
 
         @Override
         public int size() {
-            return seen.size();
+            return items.size();
         }
 
         @Override
         public String get(int index) {
-            int i = 0;
-            for (String s : seen) {
-                if (i++ == index) {
-                    return s;
-                }
-            }
-            throw new IndexOutOfBoundsException("index: " + index + ", size: " + seen.size());
+            return items.get(index);
         }
 
         @Override
         public void add(int index, String element) {
-            seen.add(element);
+            if (seen.add(element)) {
+                items.add(element);
+            }
         }
 
         @Override
         public String remove(int index) {
-            String previous = get(index);
-            seen.remove(previous);
-            return previous;
+            String removed = items.remove(index);
+            seen.remove(removed);
+            return removed;
         }
 
         /** 判重集合无「按位替换」语义：旧值移除、新值追加到末尾（仓内无调用点，仅为满足 List 契约）。 */
@@ -196,19 +202,26 @@ public class DynamicContext {
         public String set(int index, String element) {
             String previous = get(index);
             if (!previous.equals(element)) {
-                seen.remove(previous);
-                seen.add(element);
+                remove(index); // 旧值出表（两结构同步）
+                if (seen.add(element)) {
+                    items.add(element);
+                }
             }
             return previous;
         }
 
         @Override
         public boolean add(String element) {
-            return seen.add(element);
+            if (!seen.add(element)) {
+                return false;
+            }
+            items.add(element);
+            return true;
         }
 
         @Override
         public void clear() {
+            items.clear();
             seen.clear();
         }
 
@@ -219,19 +232,48 @@ public class DynamicContext {
 
         @Override
         public int indexOf(Object element) {
-            int i = 0;
-            for (String s : seen) {
-                if (Objects.equals(s, element)) {
-                    return i;
-                }
-                i++;
-            }
-            return -1;
+            return items.indexOf(element);
         }
 
+        /**
+         * 迭代器（T-Round10 独立复核 ㉚ 订正）：<b>不再直接返回 items.iterator()</b>。
+         *
+         * <p>那个 ArrayList 迭代器的 {@code remove()} 只从 items 移除、<b>不动 seen</b>，于是删掉的元素
+         * {@code contains(x)} 恒真、{@code add(x)} 永远返回 false——<b>再也写不回来</b>；Java 侧 {@code removeIf} /
+         * {@code retainAll} 的默认实现同样走 {@code iterator().remove()}，同源受害。旧实现是单结构
+         * （LinkedHashSet）时该形态自洽，双结构改造（T-PS6-08）后才成失同步路径。
+         * 现改为游标式迭代器，{@code remove()} 走本类 {@link #remove(int)}（两结构成对维护）。
+         */
         @Override
         public Iterator<String> iterator() {
-            return seen.iterator();
+            return new Iterator<String>() {
+                private int cursor = 0;
+                private int lastReturned = -1;
+
+                @Override
+                public boolean hasNext() {
+                    return cursor < items.size();
+                }
+
+                @Override
+                public String next() {
+                    if (cursor >= items.size()) {
+                        throw new NoSuchElementException();
+                    }
+                    lastReturned = cursor;
+                    return items.get(cursor++);
+                }
+
+                @Override
+                public void remove() {
+                    if (lastReturned < 0) {
+                        throw new IllegalStateException("next() 之前不可 remove()");
+                    }
+                    DedupErrorList.this.remove(lastReturned); // 走本类实现 → items 与 seen 同步
+                    cursor = lastReturned;
+                    lastReturned = -1;
+                }
+            };
         }
     }
 }

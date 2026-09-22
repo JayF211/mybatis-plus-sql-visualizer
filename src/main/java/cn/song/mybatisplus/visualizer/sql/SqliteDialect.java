@@ -35,12 +35,8 @@ public final class SqliteDialect implements Dialect {
     }
 
     @Override
-    public String renderUpsert(String conflictKey, List<String> updateColumns) {
-        return Dialect.renderPgStyleUpsert(this, conflictKey, updateColumns);
-    }
-
-    @Override
-    public String renderExplainStatement(String sql) {
-        return "EXPLAIN QUERY PLAN " + sql;
+    public String renderUpsert(String conflictKey, List<String> updateColumns,
+                               IdentifierCaseSource caseSource) {
+        return Dialect.renderPgStyleUpsert(this, conflictKey, updateColumns, caseSource);
     }
 }

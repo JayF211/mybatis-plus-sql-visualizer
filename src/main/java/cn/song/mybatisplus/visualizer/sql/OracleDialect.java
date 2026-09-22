@@ -34,35 +34,21 @@ public final class OracleDialect implements Dialect {
     }
 
     /**
-     * O-42：Oracle 裸标识符<b>折叠为大写</b>，故目录来源（字典真实名字）按「含小写字母即加引号」判定。
+     * O-42 的「含小写字母即加引号」规则自 O-51 起由接口按族实现（{@link Dialect#quoteIfNeeded}），
+     * 本类<b>不再覆写</b>该方法——只声明族归属，判据落在 {@link IdentifierFolding#UPPER} 分支。
      *
-     * <p>真库（Oracle Free 23 / FREEPDB1，DBX MCP）实测依据：</p>
+     * <p>真库依据（Oracle Free 23 / FREEPDB1，DBX MCP 实测）：</p>
      * <ul>
      *   <li>{@code SELECT COUNT(*) FROM dbx_test.issue_new} → {@code ORA-00942: table or view
      *       "DBX_TEST"."ISSUE_NEW" does not exist}（裸写折叠成大写，命不中以引号创建的小写表）；</li>
-     *   <li>{@code SELECT COUNT(*) FROM dbx_test."issue_new"} → 成功（100 行）。</li>
+     *   <li>{@code SELECT COUNT(*) FROM dbx_test."issue_new"} → 成功（100 行）；</li>
+     *   <li>{@code SELECT COUNT(*) FROM dual} → 1，{@code FROM "dual"} → {@code ORA-00942}
+     *       （裸写折叠为 DUAL）。</li>
      * </ul>
-     *
-     * <p>判据「名字非全大写 → 必包」；不满足时落回 {@link #quoteIfKeyword}，<b>保留字命中即包的既有行为
-     * 不变</b>（{@code number}/{@code level} 等仍包）。实体来源（默认）不进入本分支——
-     * {@code NamingStrategy.toSnakeCase} 的小写派生名继续裸写。</p>
      */
     @Override
-    public String quoteIfNeeded(String identifier, IdentifierCaseSource caseSource) {
-        if (caseSource == IdentifierCaseSource.CATALOG && containsLowerCase(identifier)) {
-            return quoteIdentifier(identifier);
-        }
-        return quoteIfKeyword(identifier);
-    }
-
-    /** 是否含小写字母（master 的 {@code identifier.any { it.isLowerCase() }}）。 */
-    private static boolean containsLowerCase(String identifier) {
-        for (int i = 0; i < identifier.length(); i++) {
-            if (Character.isLowerCase(identifier.charAt(i))) {
-                return true;
-            }
-        }
-        return false;
+    public IdentifierFolding getIdentifierFolding() {
+        return IdentifierFolding.UPPER;
     }
 
     @Override

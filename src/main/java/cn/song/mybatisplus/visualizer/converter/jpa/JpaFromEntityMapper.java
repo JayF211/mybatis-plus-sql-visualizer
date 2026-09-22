@@ -27,6 +27,10 @@ import java.util.regex.Pattern;
  * 只做**有元数据依据**的替换：查不到实体类的标识符原样保留（不做命名策略盲猜——
  * 猜错表名比保留实体名更误导），因此无 Project 时调用方应跳过本扫描，行为与既有管道一致。
  *
+ * O-57 起调用方还可传入 {@code knownTableNames}（别名作用域扫描已解析出的「实体名 → 表名」）：
+ * 命中即免一次 PSI 检索；无 Project 而 {@code knownTableNames} 非空时仍可完成替换
+ * （解析来源不同，替换结果一致）。
+ *
  * 边界（刻意不做）：
  *  - 不解析子查询结构（EXISTS/IN 子查询按「识别 + 透传」处理，见 SelectClauseExpander）
  *  - 不为小写标识符（已映射表名/原生 SQL 表名）做任何替换
@@ -61,8 +65,30 @@ public final class JpaFromEntityMapper {
      * @return 替换后的 SQL；无可替换实体时原样返回（幂等）
      */
     public static String mapSubqueryEntities(String sql, TableInfo table, Project project) {
-        if (project == null) return sql;
+        return mapSubqueryEntities(sql, table, project, java.util.Map.of());
+    }
+
+    /**
+     * 扫描并替换子查询内的其他实体名为表名（Project + 已知表名映射形态——O-57 生产入口）。
+     *
+     * @param sql    管道中的 SQL 文本（主实体名已被既有 mapEntityToTable 替换）
+     * @param table  主表信息（其 entityClassName 已处理，跳过）
+     * @param project 项目（PSI 按名查找实体类）
+     * @param knownTableNames 调用方已解析出的「实体名 → 表名」（O-57：别名作用域扫描的副产物）。
+     *        命中即免一次 PSI 检索；缺省空表时行为与历史版本一致。
+     *        O-57 起 {@code project == null} 不再直接短路（改为「project 与 knownTableNames 同时为空才短路」）：
+     *        该守卫**只在注入形态下才会真正放开**——生产 {@code convert(..., project = null)} 时
+     *        {@code knownTableNames} 唯一可能的键是根实体名，而本扫描器明确过滤 {@code entityName != table.entityClassName}，
+     *        故对既有调用方逐字等价（独立复核确认）。
+     * @return 替换后的 SQL；无可替换实体时原样返回（幂等）
+     */
+    public static String mapSubqueryEntities(String sql, TableInfo table, Project project,
+                                             java.util.Map<String, String> knownTableNames) {
+        if (project == null && knownTableNames.isEmpty()) return sql;
         return mapSubqueryEntities(sql, table, entityName -> {
+            String known = knownTableNames.get(entityName);
+            if (known != null) return known;
+            if (project == null) return null;
             try {
                 PsiShortNamesCache cache = PsiShortNamesCache.getInstance(project);
                 PsiClass[] projectClasses =

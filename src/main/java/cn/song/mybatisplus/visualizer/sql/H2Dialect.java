@@ -31,21 +31,32 @@ public final class H2Dialect implements Dialect {
         return "\"" + identifier + "\"";
     }
 
+    /**
+     * O-51：H2 裸标识符<b>折叠为大写</b>（与 Oracle 同族）→ UPPER 族，目录来源的字典名
+     * 「含小写字母即加引号」。
+     *
+     * <p>引擎级对照实验依据（H2 2.3.232 REGULAR，{@code DialectH2VerificationTest.标识符折叠方向_H2引擎实测对照}
+     * 逐次复现）：引号创建的 {@code "fold_lower"} <b>裸写</b>访问失败（引擎折为 {@code FOLD_LOWER} 去找，
+     * {@code Table "FOLD_LOWER" not found}）、引号创建的 {@code "FOLD_UPPER"} 裸写命中 → 折为大写。
+     * 此前归 NONE（按「其余方言」继承默认）与实测相反，本轮按实测订正——NONE 下带引号创建的小写
+     * 字典名会被裸写 → 折叠为大写 → 对象不存在。</p>
+     */
+    @Override
+    public IdentifierFolding getIdentifierFolding() {
+        return IdentifierFolding.UPPER;
+    }
+
     @Override
     public Set<String> getReservedWords() {
         return SqlKeywords.H2_RESERVED;
     }
 
     @Override
-    public String renderUpsertStatement(String tableName, List<String> columns, String conflictKey) {
-        String cols = columns.stream().map(this::quoteIfKeyword).collect(Collectors.joining(", "));
+    public String renderUpsertStatement(String tableName, List<String> columns, String conflictKey,
+                                        IdentifierCaseSource caseSource) {
+        String cols = columns.stream().map(it -> quoteIfNeeded(it, caseSource)).collect(Collectors.joining(", "));
         String placeholders = columns.stream().map(it -> "?").collect(Collectors.joining(", "));
-        return "MERGE INTO " + quoteIfKeyword(tableName) + " (" + cols + ") KEY (" +
-                quoteIfKeyword(conflictKey) + ") VALUES (" + placeholders + ")";
-    }
-
-    @Override
-    public String renderExplainStatement(String sql) {
-        return "EXPLAIN PLAN FOR " + sql;
+        return "MERGE INTO " + quoteIfNeeded(tableName, caseSource) + " (" + cols + ") KEY (" +
+                quoteIfNeeded(conflictKey, caseSource) + ") VALUES (" + placeholders + ")";
     }
 }
