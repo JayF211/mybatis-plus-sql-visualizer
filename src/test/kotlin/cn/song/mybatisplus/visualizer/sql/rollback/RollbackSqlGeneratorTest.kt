@@ -479,14 +479,37 @@ class RollbackSqlGeneratorTest {
     }
 
     /**
-     * 向后兼容（验收 3）：旧快照（无 identity 字段）+ 无方言 → 不包装且不报错，
-     * 产物与改前逐字节相同。
+     * 未知语义不包装（O-52 D1=A 的 fail-safe）：方言与 identity 列**双双未知**（生成器入参全默认）→
+     * 不包装、不报错，产物与改前逐字节相同。
+     *
+     * **原名 `快照回填_旧快照无identity字段不包装`，其「旧快照」没有指称物**：`RollbackSnapshotStore`
+     * 是 project 级**内存**服务、不持久化（类 KDoc 明写「会话生命周期即生命周期」），故不存在跨会话
+     * 反序列化旧格式条目的形态；`SnapshotEntry` 那两个字段的默认值只服务「调用方未传参」这一**可达**
+     * 形态（该 data class 的 KDoc 已自述此点）。T-Round10 独立复核㉙ 点名该用例「空转」即此——
+     * 断言本身判别力尚可，但用例名与 KDoc 承诺的兼容场景在仓内无法发生，读绿灯会误以为跨会话兼容已被验。
+     *
+     * **本用例自带正对照（防自身空转）**：同批数据补上 SQL Server 方言与 identity 列即必须包装——
+     * 生成器若退化为「永不包装」，下面第二条断言必红，故本用例的「不包装」不是恒真断言。
      */
     @Test
-    fun `快照回填_旧快照无identity字段不包装`() {
+    fun `快照回填_方言与identity双未知时不包装`() {
         assertEquals(
+            "入参全默认（方言未知 + identity 未知）→ 不包装，产物与改前逐字节相同",
             listOf("INSERT INTO rt_del (id, name) VALUES (1, 'Tom');"),
             backfill(),
+        )
+        assertEquals(
+            "正对照：同批数据带上 SQL Server 方言与 identity 列必须包装——" +
+                "否则上面那条「不包装」断言恒真（空转）",
+            listOf(
+                "SET IDENTITY_INSERT rt_del ON;\n" +
+                    "INSERT INTO rt_del (id, name) VALUES (1, 'Tom');\n" +
+                    "SET IDENTITY_INSERT rt_del OFF;",
+            ),
+            backfill(
+                dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect,
+                identityColumns = listOf("id"),
+            ),
         )
     }
 
@@ -500,7 +523,7 @@ class RollbackSqlGeneratorTest {
         val sqlServer = cn.song.mybatisplus.visualizer.sql.SqlServerDialect
         // ① 方言在但 identity 未知（空清单）
         assertEquals(expected, backfill(dialect = sqlServer, identityColumns = emptyList()))
-        // ② identity 在但方言未知（旧登记点未传 dialect）
+        // ② identity 在但方言未知（调用方未传 dialect 的条目形态；O-59 T-IIR-01 起两个生产登记点均已传）
         assertEquals(expected, backfill(dialect = null, identityColumns = listOf("id")))
         // ③ identity 声明了但不在本次快照列清单内（该表的自增列不是被回填的列）
         assertEquals(expected, backfill(dialect = sqlServer, identityColumns = listOf("other_id")))
