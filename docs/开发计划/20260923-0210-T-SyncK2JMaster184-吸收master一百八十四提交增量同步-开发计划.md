@@ -89,4 +89,34 @@ plugin.xml（键位摘除后 action 声明面变化，核对）、bundle 两语�
 
 ## 9. 实施记录
 
-（作业中回填）
+**提交链**（2026-09-23，全部在 feature/kotlin-to-java）：
+
+| 段 | 提交 | 内容 |
+|---|---|---|
+| C1 | 69f2116 | 立项计划（本文件） |
+| C2 | a16f1d7 | 构建链 union：testShards 挂 agent 子项目测试（T-PS6-09）+ e2eFakeIde 任务（R7）+ releaseGate 四段编排 + dev-support/e2e-fake-ide 11 件直取 |
+| C3 | 9476638 | 生产第一波 W1：sql/ExplainGate+ExplainSupport+ExplainOutputFormat+IdentifierFolding 新建、Dialect 族折叠三分流与 explain 表驱动、rollback identity（O-52/O-59）、PL/SQL 块深度（O-47）、PG 索引建议（O-48）、HQL 别名（O-57）、列名校正（O-58）、xml/model/generator |
+| C4 | 83c43ef | 生产第二波 W2：log 包 11 件（前缀表 58 项/SqlLogManagerLookupKt 新建）、agent 心跳批次（AgentManager 拆件族 5 文件）、config 列名校正开关全链、mcp EXPLAIN 接线+审计 addAuditEntry（D1）、ACP 跨形态重载、mcpStub 桩直取 |
+| C5 | 447d0a9 | 生产补与资源：execute 包 DataSourceSelector/ExecutionErrorInfo/ErrorPositionExtractor 补移植（**波次清单遗漏件**，T2/T3 测试车道的生产缺口报告抓出）、ExplainGate 三变体嵌套订正、SqlPreviewPanel effectively-final、JpaAliasScope.EMPTY 补译、ColumnNameCalibrator 前向引用、资源三件直取+zh 注释措辞 union |
+| C5b | 16217f8 | 生产第三波 W3：SqlTemplateGroup 新建与冲突检测类删除、预览迟到恢复/降级横幅、EXPLAIN 三态、错误定位、N6 JOIN 图、inlay 缓存、动态热更新写安全 |
+| — | bb199b3 | 互操作收口四件：AgentSession 方法引用、ExecutionErrorInfo 六参重载、locatedAny 访问器名、AssociationInfo 七参重载 |
+| C6 | 0552571 | 测试移植：24 新建+43 增量+1 删除、守卫扫描根适配、agent 子项目 19 件（=master 逐字节）、src/test/java 双工具类 |
+| C7 | 8e98a85 | 文档 39 件直取 + CHANGELOG/MEMORY/变更记录三册 union（两侧行集合校验丢失 0/0/0） |
+| 收口 | d1ba309 | 门禁六红收口（见下） |
+| C8 | （本提交） | 锚点推进 c07b8e3 + 沙盒临时行还原 + 本节回填 |
+
+**门禁读数**（首轮 6 红→收口→复跑全绿）：
+
+- 编译三目标（compileJava/compileTestJava/compileTestKotlin）绿；中央编译收口共修 9 处互操作点（三波接口形态对齐 + 测试侧适配尾巴）。
+- testShards **511 套件/5869 用例/0 失败/0 错误/6 跳过**（shard1=170/2043、shard2=176/2144、shard3=165/1682）；testDatabase 5/10/0；agent 子项目 19 套件/86 用例/0 失败（与 master 侧 86/0 一致）；buildPlugin 出包 mybatis-plus-sql-visualizer-2026.9.18.zip；verifyGate 三目标 Compatible：**243=4+10+46+1、253=6+13+44+1、262=7+67+44+1——与上轮 T-SyncK2JMaster115 逐项相同，无翻译漂移**（第 6 节前提 5 验证通过）。
+- 首轮门禁 6 例守卫真发现（全部为守卫对真实形态可见的实证，非假红）与收口：
+  ①DynamicInstallSupport 的 `// write-safe:` 豁免标注被 Java `try {` 多行形态隔断（master 单行 runCatching 天然紧邻命中行）——标注挪回命中行正上方；
+  ②fatal 捕获站点基线 615→636 重登记（心跳/execute/config 批次新增 21 处 catch(Throwable)，与 master 同源降级形态）；
+  ③元守卫登记表四处对齐 k2j 源码事实：DialogWrapperInitOrderGuardTest::writesAt 条目删除（name=expr 正则内联进 initializerOf 未单独成函数）、throwableCatchSites 豁免随 TFP03 自证语料删除、AgentUrlDecoupleGuardTest.containsMemberAccess 定性 HELPER 登记（via=用例名，源码两处调用边核实）、assertNoHits 的 via 改写为两条真实调用点。
+  收口后定向 37 例绿 + 全量门禁复跑全绿。
+
+**待验证前提核销**：①agent 0 件 .kt ✓（开工实测 0）；②测试 24 件新建全部 .kt 直取 ✓（互操作尾巴中央编译暴露后收口，无改写 .java 先例新增）；③锚点差恰 184 提交、c07b8e3=origin/master=本地 master ✓；④fatal 基线 615 会变 ✓（实测 636，重登记）；⑤verifyGate 读数与上轮逐项相同 ✓；⑥plugin.xml action 面变化按 master 直取 ✓（三动作摘键位+冲突检测 postStartupActivity 删除+group 改 class 形态）；⑦dev-support/e2e-fake-ide 不进 sourceSets ✓（直取后构建不受影响）。
+
+**过程中的新坑（已入记忆）**：Bash 内 python heredoc 改文件同进程回读成功但跨调用不落盘（沙盒拦截，3 次中 2 次丢失）——文件修改改用 Edit/Write 工具；CaptureDiagnosticsTest/RollbackSqlPanelTest 的 `\n`/`\r`/`\t` 转义被移植成字面控制字符，按 python repr() 定位字节 + Edit 修复。
+
+**遗留与留档**：①CHANGELOG 的 9 条 `mpsv_` 前缀 k2j 专属行为更早同步波留下的重复（全仓零引用），按「k2j 专属行不变」铁律保留，清理与否留用户定夺；②文档车道直取的 03-开发与测试指南含 6 处 .kt 生产路径引用（锚点前既有，非本轮引入），按「架构文档 verbatim」惯例登记不改；③本轮未 push（与历轮同，分支留本地）。
