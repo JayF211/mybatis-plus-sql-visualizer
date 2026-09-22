@@ -40,7 +40,7 @@ import java.net.Socket
  */
 class AgentManagerIntakeGateTest : BasePlatformTestCase() {
 
-    private lateinit var serviceState: SqlLogManagerProjectState.Snapshot
+    private var serviceState: SqlLogManagerProjectState.Snapshot? = null
     private var now = 5_000_000L
     private val sockets = mutableListOf<java.io.Closeable>()
     private val freshManagers = mutableListOf<AgentManager>()
@@ -63,7 +63,7 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
         sockets.clear()
         agentSide.clear()
         SqlCaptureGate.paused.set(false)
-        SqlLogManagerProjectState.restore(logManager(), serviceState)
+        SqlLogManagerProjectState.restore(serviceState)
         super.tearDown()
     }
 
