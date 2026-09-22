@@ -12,15 +12,16 @@ package cn.song.mybatisplus.visualizer.sql
  * `FORMAT TEXT` 与 `FORMAT JSON`）分属不同取值，消费方按形态选解析器：
  *  - [TABLE]：行列二维表（MySQL 家族 `EXPLAIN` 的原生表格行）；
  *  - [TEXT]：单列文本计划树/文本行（DM8 `#NSET2`、H2 `PLAN FOR`、SQLite `QUERY PLAN`）；
- *  - [JSON]：单列 JSON 文本（PG/KingBase `FORMAT JSON`）；
- *  - [XML]：单列 XML 文本（SQL Server `SET SHOWPLAN_XML`——本插件**未接入**，仅占位枚举值，
- *    避免将来接入时再改枚举）。
+ *  - [JSON]：单列 JSON 文本（PG/KingBase `FORMAT JSON`）。
+ *
+ * **不设占位值**：SQL Server 的 XML 计划形态（`SET SHOWPLAN_XML`）本插件未接入，故不预留
+ * `XML` 常量——仓内守卫 `EnumReachabilityGuardTest` 判定「声明了却零产出」为死常量（消费者恒
+ * 走不到），且接入时补一个常量与一条表项的成本远低于长期维护一个死分支。
  */
 enum class ExplainOutputFormat {
     TABLE,
     TEXT,
     JSON,
-    XML,
 }
 
 /**
