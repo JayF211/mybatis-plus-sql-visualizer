@@ -509,6 +509,46 @@ class SqlStatementSplitterTest {
     }
 
     /**
+     * 含 `IF` / `LOOP` 的 PL/SQL 块整段一条（T-SSP-01 订正，独立复核 major③）。
+     *
+     * 改前缺陷：`END IF` / `END LOOP` 仍**无条件递减块深度**（只有 CASE 层做了隔离）→ 含 IF/LOOP 的
+     * 匿名块与具名过程依旧被切碎，而碎句仍会被逐条提交执行——正是本任务要消除的危害。
+     * 复核实测（改前）：`BEGIN IF 1=1 THEN NULL; END IF; END;` 基线 2 段 → 本订正前仍 2 段。
+     *
+     * 与 CASE 层的差别：CASE 有**裸 END** 收尾形态故须 caseDepth 计数；IF/LOOP/WHILE/REPEAT
+     * 只有双词终结形态，跳过递减即可（它们也不自增层计数，无需配对状态）。
+     */
+    @Test
+    fun `PLSQL_块内IF_END_IF不误判块尾`() {
+        assertEquals(1, split("BEGIN\n  IF 1=1 THEN\n    NULL;\n  END IF;\nEND;").size)
+    }
+
+    @Test
+    fun `PLSQL_块内LOOP_END_LOOP不误判块尾`() {
+        assertEquals(1, split("BEGIN\n  IF 1=1 THEN NULL; END IF;\n  LOOP NULL; END LOOP;\nEND;").size)
+    }
+
+    /** 具名过程体含 IF：`CREATE OR REPLACE PROCEDURE p IS BEGIN … END IF; END;` 整段一条。 */
+    @Test
+    fun `PLSQL_具名过程含IF不误碎`() {
+        assertEquals(1, split("CREATE OR REPLACE PROCEDURE p IS BEGIN IF 1=1 THEN NULL; END IF; END;").size)
+    }
+
+    /** 声明段 + 块主体含 IF：整段一条（复核改前读数 3 段）。 */
+    @Test
+    fun `PLSQL_声明段含IF整段一条`() {
+        assertEquals(1, split("DECLARE v NUMBER; BEGIN IF v=1 THEN NULL; END IF; END;").size)
+    }
+
+    /** 正对照：`END IF` 块后接独立语句仍须切开（层隔离不得反噬成吞并）。 */
+    @Test
+    fun `PLSQL_IF块后独立语句不误并`() {
+        val parts = split("BEGIN\n  IF 1=1 THEN NULL; END IF;\nEND;\nSELECT 1;")
+        assertEquals("IF 块一条 + 独立语句一条", 2, parts.size)
+        assertEquals("SELECT 1", parts[1])
+    }
+
+    /**
      * T-SQL 批内 `CASE … END` 不参与 `beginEndBalance` 配对（T-SSP-02 同步改造）：
      * 截断批（BEGIN 无配对 END）继续吞后续段，维持「宁整勿碎」。
      */

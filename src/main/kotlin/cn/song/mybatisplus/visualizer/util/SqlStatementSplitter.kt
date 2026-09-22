@@ -109,9 +109,19 @@ object SqlStatementSplitter {
                         "CASE" -> if (caseEndTailPending) caseEndTailPending = false else caseDepth++
                         "BEGIN" -> blockDepth++
                         "END" -> {
+                            // T-SSP-01 订正（独立复核 major③）：`END IF` / `END LOOP` / `END WHILE` /
+                            // `END REPEAT` 是**内层**终结符，不减块深度——否则含 IF/LOOP 的 PL/SQL 块
+                            // （匿名块与具名过程）依旧被切碎（复核实测 `BEGIN IF 1=1 THEN NULL; END IF; END;`
+                            // 基线 2 段 → 本改动前仍 2 段）。与 CASE 层的差别：CASE 有**裸 END** 收尾形态，
+                            // 故须 caseDepth 计数；而 IF/LOOP/WHILE/REPEAT 只有双词终结形态，直接跳过递减即可
+                            // （它们也不自增任何层计数，故无需配对状态）。
                             if (nextWordIs(sql, i, "CASE")) caseEndTailPending = true
-                            if (caseDepth > 0) caseDepth--       // CASE 收尾（裸 END / END CASE）
-                            else if (blockDepth > 0) blockDepth-- // 块尾
+                            val innerLayerTail = nextWordIs(sql, i, "IF") || nextWordIs(sql, i, "LOOP") ||
+                                nextWordIs(sql, i, "WHILE") || nextWordIs(sql, i, "REPEAT")
+                            if (!innerLayerTail) {
+                                if (caseDepth > 0) caseDepth--       // CASE 收尾（裸 END / END CASE）
+                                else if (blockDepth > 0) blockDepth-- // 块尾
+                            }
                         }
                         else -> bodyBeginExpected = false
                     }
@@ -434,8 +444,14 @@ object SqlStatementSplitter {
                     "CASE" -> if (caseEndTailPending) caseEndTailPending = false else caseDepth++
                     "BEGIN" -> depth++
                     "END" -> {
+                        // 同主状态机：`END IF` / `END LOOP` / `END WHILE` / `END REPEAT` 是内层终结符，
+                        // 不减深度（T-SQL 批本身没有这些形态，此处只为与主路径口径一致、避免两处漂移）。
                         if (nextWordIs(part, i, "CASE")) caseEndTailPending = true
-                        if (caseDepth > 0) caseDepth-- else if (depth > 0) depth--
+                        val innerLayerTail = nextWordIs(part, i, "IF") || nextWordIs(part, i, "LOOP") ||
+                            nextWordIs(part, i, "WHILE") || nextWordIs(part, i, "REPEAT")
+                        if (!innerLayerTail) {
+                            if (caseDepth > 0) caseDepth-- else if (depth > 0) depth--
+                        }
                     }
                 }
                 word.setLength(0)
