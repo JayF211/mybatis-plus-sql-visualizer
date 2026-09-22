@@ -254,9 +254,12 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 
 ## 八、待用户定案
 
-- **D1**：MCP 审计条目（`mcp/McpToolsetSupport.kt:202-215`）是否也应受「SQL 日志」开关约束？
-  现状按 T-McpAuditTrail 的既有边界只尊重 `buffer.paused`，即「从未点过捕获」时 MCP 执行语句会直接进列表。
-  与本缺陷是同一类「开关不真」观感，但那是当时的有意决策，需用户拍板（倾向：保持现状 + 在列表上给 MCP 徽标足以区分）。
+- **D1：已定案（2026-09-22 用户）——MCP 审计条目*不*应受「SQL 日志」开关约束。**
+  即「开关关着时，MCP 工具执行过的只读语句仍应入列表」。**注意：当前代码与这条定案不一致**——
+  T-04 让 `onConsoleRemoved` 的自动分支置 `buffer.paused = true`，而 MCP 审计（`mcp/McpToolsetSupport.kt:202-215`）
+  唯一的门就是 `buffer.paused` → 该状态下 MCP 条目被静默丢弃（本轮 IDE 侧复核 F1 抓到，当时按「保留 + 登记 D1」处理）。
+  落地改动（待实施，小改）：给审计路径一条**不受 `paused` 约束**的入队口（或让 `recordMcpExecution` 绕过开关门控），
+  并在 KDoc 与 CHANGELOG 里把「审计不受捕获开关约束」写成事实；实施后需重跑定向 + 门禁。
 - **D2**：T-07 看门狗的 X 秒取值与行为（停采 / 仅告警）。**已按计划建议定案**：X = 15000ms（`sqlvis.agent.configWatchdogMs` 可调），行为＝应用侧自停 + 一次性 WARN。**注**：IDE 侧的 `CONFIG_ACK_TIMEOUT_MS = 5000ms` 是另一件事（回执等待窗），两者勿混（见 §四 T-02 落地取值）。
 
 ## 九、涉及文件清单
