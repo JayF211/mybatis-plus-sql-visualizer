@@ -18,10 +18,18 @@ public final class EventBus {
     public static final int CMD_HEARTBEAT = 2;
     public static final int CMD_CONFIG = 3;
     public static final int CMD_HELLO = 4;
+    /**
+     * CONFIG 回执（T-AgentConfigChannel T-02）：应用侧成功应用 CONFIG 后回给 IDE 一帧，
+     * body 严格为 {@code {"disabled":…,"desensitize":…,"skipPrefixes":n}}（键序固定、无空格、
+     * 布尔小写字面量）——IDE 侧按同一字面契约解析，字段名与形态不得单侧改动。
+     * 旧版 IDE 忽略未知 cmd 天然兼容。
+     */
+    public static final int CMD_CONFIG_ACK = 5;
 
     private static final int QUEUE_CAPACITY = 2048;
     private static final BlockingQueue<SqlEvent> QUEUE = new ArrayBlockingQueue<SqlEvent>(QUEUE_CAPACITY);
     private static final AtomicLong DROPPED = new AtomicLong();
+    private static final AtomicLong CLEARED = new AtomicLong();
 
     private static volatile boolean started = false;
     private static volatile int port = 0;
@@ -46,6 +54,30 @@ public final class EventBus {
 
     public static long droppedCount() {
         return DROPPED.get();
+    }
+
+    /**
+     * 停采下降沿清空已排队事件（T-AgentConfigChannel T-01b）：返回本次清空条数，
+     * 累计条数经 {@link #clearedCount()} 可观测。
+     *
+     * <p>为什么必须清：队列在「未连接 / 未收到 CONFIG」期间照常入队，连接建立后
+     * {@link SenderLoop} 会先尽出队列——不清就会把开关关闭期间采集的存量事件补投到面板，
+     * 表现为「点停之后还冒条目」。
+     */
+    public static int clearQueued() {
+        int cleared = 0;
+        while (QUEUE.poll() != null) {
+            cleared++;
+        }
+        if (cleared > 0) {
+            CLEARED.addAndGet(cleared);
+        }
+        return cleared;
+    }
+
+    /** 累计被停采下降沿清空的排队事件数（T-AgentConfigChannel T-01b 可观测计数）。 */
+    public static long clearedCount() {
+        return CLEARED.get();
     }
 
     static boolean pollEvent(SqlEvent[] out, long timeoutMs) throws InterruptedException {
