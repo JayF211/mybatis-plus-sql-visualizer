@@ -1,0 +1,61 @@
+# 假 IDE 探针脚本：T-AgentE2EFakeIde 端到端验证（真 Spring Boot + 真 MPJ + 真 JDBC）
+#
+# 协议：帧 = [4 字节大端长度][1 字节命令][body UTF-8]
+#       1 EVENT / 2 HEARTBEAT / 3 CONFIG(IDE→app) / 4 HELLO / 5 CONFIG_ACK(app→IDE)
+#
+# 读数对应关系：
+#   A 停采生效    —— disabled=true 下发后触发业务 SQL，断言「收到 ACK 且此后 0 条 EVENT」
+#   B 恢复采集    —— disabled=false 下发后触发同一请求，断言「收到 ACK 且 EVENT 恢复」
+#   C 位置取证    —— B 段的 sf/sl 必须是 DeviceInfoServiceImpl.java:42 与 :63；
+#                    入口键原文在应用日志的 [T-SourceJumpFunnel] / [T-AgentSourceLocateStale] 行
+#   D 脱敏通道    —— desensitize=false/true 各下发一次，对比同一语句参数值是否打码
+
+mark 0 握手：等 agent 回连（premain 阶段即连）
+wait-hello 90000
+wait-http http://localhost:8082/mpj/device/one/1 120000
+
+mark A 停采生效：CONFIG disabled=true
+config {"disabled":true,"desensitize":true}
+expect-ack "disabled":true
+reset-events
+get http://localhost:8082/mpj/device/rightAlias
+get http://localhost:8082/mpj/device/extSub
+assert-no-events 3000
+report-events
+
+mark B 恢复采集：CONFIG disabled=false
+config {"disabled":false,"desensitize":true}
+expect-ack "disabled":false
+reset-events
+get http://localhost:8082/mpj/device/rightAlias
+get http://localhost:8082/mpj/device/extSub
+assert-events 3000
+report-events
+assert-event-sf-sl DeviceInfoServiceImpl.java:42
+assert-event-sf-sl DeviceInfoServiceImpl.java:63
+
+mark D1 脱敏关闭：CONFIG desensitize=false
+config {"disabled":false,"desensitize":false}
+expect-ack "desensitize":false
+reset-events
+get http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000
+assert-events 2000
+report-events
+
+mark D2 脱敏开启：CONFIG desensitize=true
+config {"disabled":false,"desensitize":true}
+expect-ack "desensitize":true
+reset-events
+get http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000
+assert-events 2000
+report-events
+
+mark 收口：再停采一次，确认通道可反复切换
+config {"disabled":true,"desensitize":true}
+expect-ack "disabled":true
+reset-events
+get http://localhost:8082/mpj/device/rightAlias
+assert-no-events 2000
+
+summary
+quit

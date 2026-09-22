@@ -143,6 +143,9 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
   IDE 侧收到后 INFO 记一行（含 pid 与三值），并在 `sendConfig` 后 N 秒内未收到 ACK 时 WARN
   「CONFIG 未获确认——应用侧可能未生效」。`pushCaptureActive` 的日志文案同步改为「已下发」而非「已停采」。
 - 收益：这一类「控制通道静默失效」从「只能靠行为反推」变成一行日志直接判定。
+- **落地取值（实施后补记，勿混）**：IDE 侧 ACK 等待窗 `CONFIG_ACK_TIMEOUT_MS = 5000ms`（车道 B，语义＝「CONFIG 回执等待」）；
+  应用侧 CONFIG 看门狗默认 `sqlvis.agent.configWatchdogMs = 15000ms`（车道 A，语义＝「从未收到任何 CONFIG 即自停」）。
+  两者语义不同、数值不同，勿互相引用。
 
 ### T-03（P1，防御性闸门）IDE 侧入队判 `capturing`
 
@@ -169,6 +172,11 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
   3. **降级路径**：发一个畸形长度帧，断言会话走重连（不静默吞）。
 - 改 `AgentProtocolSyncTest.帧格式_长度前缀加单字节命令`：补**入站**读顺序断言（源码扫描仅作廉价绊线），
   并在 KDoc 里记明「本断言对入站读顺序不可见＝本轮空绿的成因」，防止后来人再把它当覆盖证据。
+- **判据形态（本计划原文曾被证伪，订正于 2026-09-22）**：不要写成「入站必须 `readInt` 在 `readUnsignedByte` 之前」——
+  应用侧定稿形态是**帧头 4 字节逐字节读**（`len = (len << 8) | b` 之后才 `cmd = in.readUnsignedByte()`，为的是区分
+  「完全无数据」与「帧读到一半」），真实代码里**没有 `readInt`**（只出现在它的 KDoc 里，而判据先剥注释）→
+  照原样落地会变成**永久假红**，并可能诱导后来人去改应用侧。实际落地判据＝「**长度读位置 vs 命令读位置**」，
+  同时接受 `X.readInt()` 与 `len = (len << 8) | b` 两种规范形态（离线两侧核对：IDE 车道分支红、应用侧分支绿）。
 - **反向验证（必做）**：临时回退 T-01 的解析改动 → 上述 1/2 必红；临时摘掉 T-03 的闸门 → 对应 IDE 侧用例必红。两次读数都要贴进 §实施记录。
 
 ### T-06（P2，文案真实性）订正与事实不符的注释/文案
@@ -184,6 +192,22 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 - 建议：会话连接后 X 秒内**从未收到任何 CONFIG** → 应用侧主动停采并打一条 WARN（保留启动期捕获收益，同时把损害限制在 X 秒）。
   X 取值与「停采 vs 仅告警」待定（D2）。
 
+### T-08（P0，真机实证追加立项，2026-09-22）连接级不得跳过包装——否则「恢复采集」永久失效
+
+- **发现方式**：本计划的真机级端到端车道（假 IDE 探针，`dev-support/e2e-fake-ide`）实测：`CONFIG disabled=true` 的 ACK 已生效、停采窗口 0 事件 ✓，但随后下发 `disabled=false`（ACK 同样生效）后**三轮全零事件** ✗。
+- **根因**：`SqlHookCallbacks.onConnection`（**连接出口**回调）在连接级判 `AgentState.isDisabled()` 并直接返回原连接 →
+  **停采期间建立的连接永远不被包装**；连接池（Hikari）复用同一批连接，没有任何补偿点。后果是
+  **「先跑应用、再点开始捕获」与「停采 → 恢复」两条主路径都永久捕不到**——本计划的修复（CONFIG 首次真正生效）把这个潜伏缺口激活了。
+- **修法**：连接级**一律包装**，`disabled` 只做**逐调用**短路（`ConnectionHandler` / `StatementHandler` 里的 `isDisabled()`），
+  与设计红线「禁用 = volatile 短路、**不卸载**」一致；原 `AgentStateBridge`（宿主 loader 看不见 agent 类时视同禁用）随之删除，
+  包装失败的安全网改由 `dropToRaw` 承担，且从「静默跳过」变为**可观测**（计数 + 一次性告警）。
+- **测试**：`ConfigApplyEndToEndTest` 新增「停采期间建立的连接仍被包装_恢复后同一连接即可产出事件」，钉三件事：
+  ① 停采态建立的连接仍被包装；② 停采态执行照旧且**无事件**（证明「一律包装」没破坏停采静音）；③ 恢复后**同一连接**上执行立刻产出事件。
+  **反向验证**：把连接级判定加回（RED PROBE）→ 新用例立刻红（报「停采态建立的连接仍须被 agent 包装」）；还原后 agent 子项目 **83 例 / 0 失败**。
+- **如实登记的语句级边界**：停采期间 `prepare` 的语句仍不包装（`ConnectionHandler` 的逐调用短路在 `prepareStatement` 处即直通）。
+  MyBatis 默认 `SimpleExecutor` 每条查询现 prepare、执行后关闭，故**实际不可达**；仅当使用 `ReuseExecutor` 一类复用语句的执行器时会命中，
+  届时该语句在恢复后仍哑——已在本用例 KDoc 里钉住，供后续按需处理。
+
 ## 五、待验证前提（实施前先证伪，勿直接照抄）
 
 | # | 前提 | 现状与验证方式 |
@@ -192,7 +216,14 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 | P-2 | 该错位是本轮现象的唯一原因，而非另有第二条投递路径 | **已证（2026-09-22 受控实验，见 §十.2）**：真 `SenderLoop` 两臂对照，IDE 实际写序下 `skipPrefixes`/`disabled`/`desensitize` 三键全不生效，正确写序下三键全生效——唯一变量为字节序，不存在第二条投递路径。原「实施前用 T-05 环回用例跑一次（应红）」的要求已由该实验满足 |
 | P-3 | 应用侧队列补投（T-01b）在当前现场是否也发生过 | 未观测到（现场条目与请求时刻一一对应）。按「先证伪再动手」处理：T-05 的用例里加一条队列补投断言 |
 | P-4 | 修复后 `desensitize` 方向的用户语义（默认关＝采集真实值） | 代码可判（`PluginSettings.kt:473-476`），但**从未真机验证过打码/不打码的实际效果**——验收需真机看一条含敏感形态参数的 SQL |
-| P-5 | `SqlCaptureGate.paused`（agent 在线时桥让位）在 agent 停采后是否会把控制台通道还回来 | 代码可判（`:945` 按在线态置位），但「agent 在线但已停采」这一新常态下桥是否产出，需在 T-01 修复后真机确认（否则会从「误采集」变成「零捕获」） |
+| P-5 | `SqlCaptureGate.paused`（agent 在线时桥让位）在 agent 停采后是否会把控制台通道还回来 | **已闭合**：判据改为 `online && 应用侧已确认在采`（车道 B 落地，见 §实施记录 §二），且复核独立判定新判据是旧判据的子集、不新增「两条通道同时零产出」 |
+
+**P-1 与 P-5 之外的新增真机前提（2026-09-22 由假 IDE 探针实测，见 §实施记录 §八）**：
+
+| # | 前提 | 实测结论 |
+|---|---|---|
+| P-6 | 「CONFIG 生效」＝「用户点开始后就能捕到」 | **证伪**：连接在停采期间建立时从未被包装 → 「先跑应用、再点开始捕获」永久捕不到（T-08 已修） |
+| P-7 | 「停采 → 恢复」在同一连接上即可恢复产出 | 同上；T-08 修复后由新用例钉住（同一连接、新 prepare 的语句立刻产出事件） |
 
 ## 六、测试与验收
 
@@ -226,7 +257,7 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 - **D1**：MCP 审计条目（`mcp/McpToolsetSupport.kt:202-215`）是否也应受「SQL 日志」开关约束？
   现状按 T-McpAuditTrail 的既有边界只尊重 `buffer.paused`，即「从未点过捕获」时 MCP 执行语句会直接进列表。
   与本缺陷是同一类「开关不真」观感，但那是当时的有意决策，需用户拍板（倾向：保持现状 + 在列表上给 MCP 徽标足以区分）。
-- **D2**：T-07 看门狗的 X 秒取值与行为（停采 / 仅告警）。
+- **D2**：T-07 看门狗的 X 秒取值与行为（停采 / 仅告警）。**已按计划建议定案**：X = 15000ms（`sqlvis.agent.configWatchdogMs` 可调），行为＝应用侧自停 + 一次性 WARN。**注**：IDE 侧的 `CONFIG_ACK_TIMEOUT_MS = 5000ms` 是另一件事（回执等待窗），两者勿混（见 §四 T-02 落地取值）。
 
 ## 九、涉及文件清单
 
@@ -315,4 +346,160 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 
 ## 实施记录
 
-（未实施）
+### 一、车道与提交（2026-09-22）
+
+| 车道 | 分支 / 工作树 | 内容 | 状态 |
+|---|---|---|---|
+| A 应用侧 | `t-agent-cfg-agent` / `mpsv-agent-cfg-agent` | T-01 读帧对齐、T-01b 清队列+短路、T-02 ACK、T-07 看门狗、两个新测试类（10 例） | 首提交 `9c1a18d` + 复核整改 `4f22765`，均已合入集成分支（`bd222cc` / `deda071`） |
+| B IDE 侧 | `t-agent-cfg-ide` / `mpsv-agent-cfg-ide` | T-02 收 ACK+超时告警、T-03 入队闸门、T-04 关闭路径对齐、T-05 守卫换有效断言、T-06 文案、P-5 桥让位条件 | 实施中 |
+| C 定位器（O-55） | `t-agent-locate` / `mpsv-agent-locate` | 见 O-55 计划 §实施记录 | 实施中 |
+
+### 二、自动化读数
+
+**应用侧（车道 A 定向，每轮前清 `sub-projects/sql-visualizer-agent/build`，`--tests "…agent.transport.*"` + in-process + jvmargs）**
+
+- 最终绿：`BUILD SUCCESSFUL`，**TOTAL tests=16 failed=0**（新增 10 例 + 既有 6 例）
+- 反向验证 A（摘掉尽出短路 `if`）：`16 tests completed, 1 failed` → `停采期间_队列非空也不写出事件帧`（收到 `{"sql":"SELECT stale-0",…}` 的 EVENT 帧）
+- 反向验证 B（**外科式**只把读序改回错位形态）：`16 tests completed, 6 failed` = `停采生效`/`停采期间`（无 ACK）+ 金标准帧 + 畸形长度帧告警 + body 截断 + 会话走重连；还原后复跑全绿
+- 逐例鉴别力（车道 A 实测 + 复核独立判定一致）：对读序**有**鉴别力 6 例、**无** 4 例（未知命令绕开拆帧层、看门狗两例、清队列一例——各自是子特性守卫，已在测试 KDoc 逐个标明，不得计入读序覆盖证据）
+
+**IDE 侧（车道 B，分支内定向）**
+
+- 绿：`test --tests "…log.*"` → log 包 **119 类 / 1224 用例 / 失败 2**（仅两条跨车道断言）；`AgentManagerIntakeGateTest` **15/15**
+- 反向验证（一轮同时摘两处：T-03 闸门改 `if (false)` + P-5 回退 `paused.set(online)`）→ **4 红**：
+  `test监听关闭_事件丢弃并计数_不入队`、`test默认判据跟随捕获态`（闸门）；`test在线但未确认_桥不封`、`test确认停采_桥不封`（P-5）。
+  还原后复跑 15/15 绿、工作树与提交一致、无 `RED PROBE` 残留
+- 第二笔 `deba286`（仅测试）：修掉 P-5 用例里「等中间态」的竞态假红，改为只等终态
+
+**P-5 落地形态（已核实，写进记录以免后来人猜）**：`SqlCaptureGate.paused.set(online && captureConfirmedActive())`，
+`captureConfirmedActive()` ＝「存在 alive 会话且其最近一次 ACK 为 `disabled=false`」——确认值是**值语义**、派生自会话表
+（不另设布尔字段），故复位点天然齐全：会话摘除/关闭 → 不在表内；`shutdownAll`/`dispose` → 表清空；
+**每次 CONFIG 下发（含 `pushDesensitize`）→ 该会话确认值清回 null（待确认）并立即重算闸门**；ACK 到达 → 写值并重算。
+即「ACK `disabled=false` 才为真」；「下发成功但无 ACK」期间**桥不封**（有意取侧：宁可毫秒级双通道产出，也不接受零捕获）。
+
+**其余（全量 / verifyGate）**：待收口统一填。
+
+**合并态 agent 子项目全量套件（集成分支，2026-09-22，`deda071` 后）**：`BUILD SUCCESSFUL in 1m 1s`，
+`17 套件 / 77 用例 / 0 失败 / 0 错误 / 0 跳过`（读数按 mtime 过滤本次 XML 统计）——证明帧读取层改动
+（含半截帧走重连）没有波及 `AttachGateTest`（真子 JVM + 假 IDE）等其它套件。基线对照：K2J 记录的口径为
+14 套件 / 65 用例（更早时点），本轮新增 10 例来自车道 A。
+
+### 三、独立只读复核（2026-09-22，另一上下文，只读、未跑 gradle）
+
+**结论**：应用侧 4 项规格逐条落地、无阻塞性缺陷；「4 例转红」的核账独立吻合（复核者判定的 4 红与作者列举逐名一致）。同时抓出 8 处，处置如下。
+
+| 严重度 | 发现 | 处置 |
+|---|---|---|
+| 中 | 停采短路分支（`SenderLoop.java:155`）**零测试覆盖**——删掉该 `if` 后 9 例仍全绿；计划 §五 P-3 要求的队列补投断言未落地 | **回交车道 A**：补「置 disabled 后不再写出 EVENT 帧」用例 + 删 `if` 必红读数 |
+| 中 | 看门狗自停**无自愈**：`disabled` 跨重连保持 true，只有再收到 `disabled=false` 才恢复；叠加 IDE 侧桥让位仍看「在线」→ 可能「在线但已停采」= 两条通道零产出 | **由车道 B 的 P-5 桥让位条件闭合**（`paused = online && 应用侧已确认在采`）；与验收文档 §1 #7 是同一件事 |
+| 低-中 | 未知命令 stderr **逐帧打印**、无限流（与规格「记一行 WARN」字面不符） | **回交车道 A**：照 `SqlHookCallbacks` 的 `WARNED_ONCE` 范式改一次性 + 计数 |
+| 低 | `SenderLoopFrameTest.java:39` KDoc 写「本类全红」与事实不符（5 例中 2 例在错位形态下仍绿） | **回交车道 A**：改准确表述并逐个标明无鉴别力用例 |
+| 低 | `ConfigApplyEndToEndTest.java:49` 看门狗窗口 3000ms 相对用例前置偏小 → 潜在 flaky | **回交车道 A**：调大窗口或用例内使看门狗失效 |
+| 低 | `AgentProtocolSyncTest.kt:129` 守卫锚点文本消失 → `bodyIdx < 0` 使断言静默降级（仍绿但不再锚定主循环体之前） | 已在车道 B 的 T-05 清单内（另加「找不到目标形态即失败」要求） |
+| 低 | `SenderLoop.java:185` 只覆盖「完整 len 前缀」形态；帧内部分读超时仍被当「无数据」 | **已闭合**：整改把帧头改逐字节读，区分「完全无数据」（空闲，上抛读超时）与「帧读到一半」（流错位 → 非超时 IOException 走重连 + WARN），并让 body 截断用例真具鉴别力 |
+| 低 | `AgentState.setDisabled` 三步非原子（volatile 非 CAS）；生产仅 SenderLoop 单线程调用 | 登记为边界（当前不可达） |
+
+**另一处由车道 A 提出、经本计划裁决的规格外决策**：短路只保证「停采期间不投递」，**不承诺丢弃**已入队事件；停采期间入队的事件在恢复采集后会投出。裁决＝保持现状：`StatementHandler` 在停采态直接短路（`:47`/`:114`）故停采期间根本不会产生新事件，队列里可能残留的只有「停采前已在执行、停采后才完成」的在途事件——语义合法，恢复后投出无害（时间戳仍是其自身执行时刻）。不在上升沿加清空。
+
+**复核同时确认的既有边界（本计划采纳，不改实现）**：停采帧到达的那一轮仍会先尽出 **≤64 条**存量事件（`:155-167` 先于 `:175`）。判断：这些事件发生在用户点停之前，语义合法；且 IDE 侧入队闸门（T-03）会按 `capturing=false` 丢弃，用户可见结果正确；为消除它把读帧提到尽出之前，会让事件投递多等一个 1s 读超时，得不偿失。已要求车道 A 在代码注释里写明该边界。
+
+**复核的未验证项（如实登记）**：① 未跑 gradle，故「15 例全绿 / 4 例转红」两次读数未由复核者复现（读数出处＝车道 A 定向测试与本次补测）；② 反向验证的「回退」前提（外科式只回退读序 vs 整文件回退）此前无书面记录——**本计划自此明确为外科式**（只回退读序，其余改动保留），因为整文件回退会让 9 例全部不编译；③ 车道 B/C 内容与跨侧端到端、真机沙盒六步均未验证（收口阶段处理）。
+
+**环境噪音登记（车道 B 实测，2026-09-22）**：新工作树首次 `./gradlew test` 曾报环境错
+`No Java Runtime executable found`（IPGP `JavaRuntimePathResolver` 解析失败），**同命令重跑即恢复**；
+疑与多车道并行构建共享 Gradle transform 缓存有关，非代码问题。收口门禁若撞到同类环境错，
+**先原样重跑一次再判红**（本仓既有 flake 家族：共享 transform 缓存被崩溃 JVM 打坏）。
+
+### 四、集成分支核验（三车道合入后，2026-09-22）
+
+**跨车道契约核验通过**：IDE 侧车道在自己的分支上有两条断言**必红**（`AgentProtocolSyncTest` 的「`CMD_CONFIG_ACK` 两侧同值」与「入站读序」，因应用侧修复不在其分支），派活时即写明「合入后应自动转绿，若仍红说明应用侧修复被回退」。集成分支（`aca845b`，A+B+C 三车道合入后）实测：
+
+```
+./gradlew testFast --tests "cn.song.mybatisplus.visualizer.log.agent.*"
+→ BUILD SUCCESSFUL in 2m 24s；8 套件 / 47 用例 / 0 失败 / 0 错误 / 0 跳过
+```
+
+两条断言**如期转绿**，契约成立；同批 `AgentManagerIntakeGateTest`（15 例）与 `LocatorSkipPrefixSyncTest`（3 例）在合并态全绿。
+
+**合并顺序**：A（`bd222cc`/`deda071`）→ C（`8a88504`）→ B（`aca845b`），三路写集两两不相交、零冲突。**为不阻塞关键路径，B 的合入未等其自跑反向验证**（其实现与守卫已完整提交），反向验证改由主调度在集成分支补做。
+
+### 五、待收口补齐
+
+CHANGELOG `[Unreleased]` 与 `docs/变更记录.md` 三处同步（**已落**，`84f2cb9`）、验收文档 §2 读数、`testFast` 全量 / `testShards` / `verifyGate` 门禁读数、真机沙盒六步走查。
+
+### 六、实施期被推翻的计划前提与残留
+
+| # | 前提/规格 | 实测 | 处置 |
+|---|---|---|---|
+| 1 | T-05 判据「入站必须 `readInt` 在 `readUnsignedByte` 之前」 | **证伪**：应用侧定稿是帧头逐字节读（`len = (len << 8) \| b`），代码里没有 `readInt`（只在 KDoc）→ 照原样落地是永久假红 | §四 T-05 已订正为「长度读位置 vs 命令读位置」判据；落地并离线两侧核对 |
+| 2 | T-06「状态行/设置页双态」 | **未做**：bundle `settings.enhancedCapture.confirm.body` 的「关闭开关即停止采集」在 ACK 落地后**已为真**，且 bundle 不在车道写集 | 登记为残留；文案无需再改，仅「双态」形态未采纳 |
+| 3 | 混合版本（旧 agent 无 ACK）下的桥让位 | 应用侧未升级时确认值恒 `null` → 桥不封 → 捕获开启期间可能**持续双通道产出**（列表去重窗口折叠） | 登记为边界：属过渡态，应用侧合入后收敛为一次 ACK 往返 |
+| 4 | `HeartbeatRhythmTest` 计时断言 | 本轮门禁期间命中一次（472ms > 450ms），同代码复跑 82 例全绿 | 判定为 `T-PerfSweep6` 发现 14 的**既有 flake**（首次真实发生记录）；按登记口径处置，建议收口后按该计划把容差放宽到 2× |
+
+### 七、IDE 侧独立只读复核（2026-09-22，另一上下文）与处置
+
+**结论：有条件通过**——规格基本逐条落地、无阻塞性缺陷、跨侧 ACK 字面契约逐字符一致（键序/无空格/布尔小写/`skipPrefixes` 为 int，两侧常量 5 由守卫锁定）。抓出 1 处用户可见文案缺口 + 2 处中风险 + 6 处低风险，处置如下。
+
+| # | 严重度 | 发现 | 处置 |
+|---|---|---|---|
+| F1 | 中 | T-04 让 `onConsoleRemoved` 自动分支置 `buffer.paused=true`，而 MCP 审计唯一门就是 `buffer.paused` → 该状态下 MCP 执行语句被静默丢弃；计划 §七 原写「不动 MCP 审计（D1 待定案）」，此处事实上改了该边界 | **保留实现**（「捕获关＝列表不进新条目」正是 T-04 本意，MCP 同受约束自洽）；**登记为 D1 的新维度**：用户定案 D1 时须一并决定「项目停止态下 MCP 审计是否仍应入列表」 |
+| F2 | 中 | 旧 agent / 永不回执 → 确认值恒 `null` → 桥**永久放行**，双通道长期共存；**脱敏开启时两侧 SQL 文本不同**（应用侧打码 vs 控制台原文）→ 指纹不同 → 去重不折叠 → 可能出现可见重复条目（复核标注为读码推断，未实测） | 登记为边界：增强捕获通道**从未随任何发行 tag 交付**，故「旧 agent」只存在于 beta/dev 混合版本；应用侧合入后收敛为一次 ACK 往返；每次下发已有超时 WARN 可观测 |
+| F3 | 低-中 | ACK 超时 WARN 不判会话健康：socket 半死时 5s 后必报「应用侧可能未生效」，把「连接已半死」误叙成「应用侧未生效」 | **登记为残留**（不本轮改）：文案本身未失实（CONFIG 确实未获确认），仅少列「连接可能已断」一因；改生产代码会使在跑的 `verifyGate` 结论作废，性价比不足 |
+| F4 | 低 | `startCapture` 顺序为 `paused=false → pushCaptureActive(true) → capturing=true`，故「点开始」后极短窗口内到达的 agent 事件被入队闸门丢弃 | 登记为边界（窗口 ≤ 一次 CONFIG 往返，通常 <1s；闸门计数可观测） |
+| F5 | 低 | 抖动面宽于计划描述：**任何设置变更**都会 `SETTINGS_CHANGE_TOPIC → pushDesensitize → sendConfig` → 确认值清空并短暂放行桥 | 登记为边界（同 F2，靠去重折叠） |
+| F6 | 低 | 读序判据取**全文件首个**长度读/命令读：将来更早位置出现无关 `readInt()`/`cmd = …` 会**静默对准错处**（本仓顽疾同形） | **本轮已加固**：改为「形态唯一性」判据——每种形态在源码里必须**恰好一处**，多/少一处均显式失败并提示重新对准；`AgentProtocolSyncTest` 4 例复跑绿 |
+| F7 | 低 | `INTAKE_DROP_WARN_STEP`（刷屏防线）与 `CONFIG_ACK_TIMEOUT_MS` 取值无字面值断言；另称「计划未登记 IDE 侧反向验证读数」 | 后者**复核读的是旧版本**：读数已登记于 §实施记录 §二（4 红）；字面值断言登记为残留 |
+| T-06 | — | 授权弹窗 bundle「关闭开关即停止采集（已挂载的捕获点会保留但不工作）」与设置页「即时生效，无需重启应用」 | **裁定：无需改**——修复后前者**已为真**（CONFIG 现在真的能到应用侧），后者对正常路径（ACK 一次往返）成立；把「待确认」写进用户文案反而引入噪音 |
+
+**复核独立确认的正面结论（记入交付材料）**：新判据 `online && confirmed` 是旧判据的子集，只会「少封桥」不会「多封桥」→ **不新增「两条通道同时零产出且无信号」**；无永久封死；确认值复位点齐全（会话摘除/关闭、`shutdownAll`/`dispose`、每次下发转待确认）；`updateOnline`/`sweepOffline`/状态行/`epActive` 链路均未被改动（diff hunk 逐条核对）；闸门唯一生产消费者与 EP 通道自洽。**测试鉴别力逐例判定**：15 例中 11 例有鉴别力、4 例为控制例/无关例（已在测试内注明不得计入覆盖证据）；读序断言对修复前源码确判红（复核用 `9c1a18d^` 源码核对：`cmd = in.readUnsignedByte()`@127 vs `in.readInt()`@223）。
+
+### 八、真机级端到端（假 IDE 探针，2026-09-22）——发现 T-08 并闭合 P-1
+
+**方式**：车道 D 自建「假 IDE」探针（`dev-support/e2e-fake-ide`：loopback 按协议收发帧、可下发 CONFIG、打印 ACK 与 EVENT），
+用 `-javaagent` 把 agent 注入**真实 Spring Boot + MyBatis-Plus-Join + 真实 JDBC 驱动**的 demo 应用（JDK 1.8.0_181，
+`logLevel=info`），**不经 IntelliJ GUI** 即完成真机级验证。车道 D 实施到一半掉线（无活动任务、成果全未提交），
+其产物由主调度原样收编并提交（`9dde292`），证据保留在 `dev-support/e2e-fake-ide/evidence/`。
+
+| 项 | 读数 |
+|---|---|
+| A 停采生效 | `CONFIG disabled=true` → **ACK 到达** `{"disabled":true,…}` → 业务请求 200 → **停采窗口 3000ms 内事件数 = 0** ✓ |
+| B 恢复采集 | `CONFIG disabled=false` → ACK 到达 `{"disabled":false,…}` → 业务请求 200 → **窗口内事件数 = 0** ✗（D1/D2 两轮同形） |
+| **P-1 取证** | **成立**：`jstack` 25 次采样命中 1 次调用链，栈中实测 `com.github.yulichang.interceptor.MPJInterceptor.intercept(MPJInterceptor.java:85)` 位于业务帧与 JDBC 执行点之间（`evidence/p1-stack-evidence.txt`）→ 与静态推断一致，entryKey 确为 MPJ 拦截器帧 |
+| 环境元数据 | `run-meta.txt` 记 agent jar sha256、demo git head `4473308`、repo head、java 版本 |
+
+**B 轮 FAIL 的归因与处置＝T-08**（连接级跳过包装 → 恢复采集永久失效，见 §四 T-08）：已修 + 已加回归用例 + 已做反向验证（红/绿两次读数）。
+
+**同轮门禁噪音登记**：`testShards` 首跑 17 例失败，全部为同一
+`java.lang.NoSuchMethodError: AgentSession.<init>(…)`——即本仓已登记的**陈旧增量编译产物** flake
+（多分支合并后测试类仍解析旧构造函数签名；车道 B 给 `AgentSession` 加了参数）。
+按定例 `rm -rf build/classes build/kotlin` 后重跑即绿，**非代码缺陷**。
+
+### 九、门禁实况（2026-09-22 收口）
+
+| 项 | 读数 |
+|---|---|
+| `verifyGate` | **BUILD SUCCESSFUL**，三目标（IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63）**全 Compatible** |
+| agent 子项目全量 | **83 例 / 0 失败 / 0 错误**（含新增 T-08 回归用例） |
+| 主编译（`compileTestKotlin`） | BUILD SUCCESSFUL |
+| `testShards` shard1 / shard2 | 通过 |
+| `testShards` **shard3** | **20 例失败**——见下「跨类服务毒化」 |
+| `testDatabase` | 10 例 / **2 例失败**＝`DbDriverPipelineTest` 的 `testDriverArtifactResolvesToJarsOnClasspath`（本地驱动版本集不含 ConnectorJ 9.7.0）与 `testSeedFilesLandWhereDbLooksForThem`（新工作树测试沙盒路径未播种）——**在册环境性失败**，与本轮改动无关 |
+| 隔离验证 | shard3 三个受害类单独跑（含两两组合）**全绿** |
+
+**shard3 跨类服务毒化（本轮 testShards 未达 0 失败的唯一原因）**：
+
+- **形状**：`com.intellij.serviceContainer.AlreadyDisposedException: [T-ST-02] AlreadyDisposed@shard3
+  service=SqlLogManager … project.isDisposed=false :: Container is already disposed`——**项目未 disposed，但服务容器已 disposed**；
+  受害类恰是**所有使用共享 `SqlLogManager` 的类**（`AgentManagerIntakeGateTest` 15 / `McpHistoryIngestTest` 4 / `AgentManagerPremainTest` 1），
+  而中间不碰该服务的类（`EpActiveResetTest` / `FatalPassthroughTest` / `LocatorSkipPrefixSyncTest` / `CrudSqlToolTest` …）**全绿**。
+- **机制**（本仓已实证，见 `SqlLogManagerProjectState` KDoc 与 T-StabilityTail）：light 测试项目片内跨类复用同一 `ProjectImpl`；
+  一旦有调用点在「测试方法之间的 temporarily-disposed 窗口」里发起 `SqlLogManager` 的**失败创建**，
+  平台 `LazyInstanceHolder` 会缓存该失败并**在此后每次取用时永久重抛**——于是同片后续所有使用者成片变红。
+- **触发源**：本轮新增测试类改变了分片时长权重 → shard3 邻居重排 → 潜伏缺口发作（本仓登记形态：「新增用例即触发」）。
+- **排查已排除的两条假设（如实记录，避免后来人重走）**：① 紧邻受害者之前的 `AgentHeartbeatWindowTest`（两两同 JVM 跑绿）；
+  ② 前缀子集（6 个「文件内含 SqlLogManager 且无复原工具」的类 + `AgentHeartbeatWindowTest` + 受害类）同 JVM 跑绿
+  → 真凶不在「文件字面含 SqlLogManager」的类里，很可能经**生产代码间接取服务**（如控制台 EP 链路 `SqlConsoleBridgeFilterProvider`），
+  该形态无法用文件级 grep 定位。证据 XML 已留存（`F:/code/Java/Gitee/SongRenShuo/shard3-fail-evidence/`）。
+- **性质**：**测试基建/生产守卫的既有潜伏缺口，非本轮产品代码缺陷**（隔离全绿 + 机制与改动无关）；
+  根治方向＝按 T-StabilityTail 登记补齐「窗口内未受守卫的 `getService` 调用点」（该任务已登记 5 处），
+  并给测试工具 `SqlLogManagerProjectState.capture/restore` 加 `project.isDisposed` 守卫（避免工具自身在窗口内发起创建）。

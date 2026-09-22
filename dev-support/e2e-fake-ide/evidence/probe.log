@@ -1,0 +1,168 @@
+[23ms] LISTENING 127.0.0.1:53999（等待 agent 回连；agent 在 premain 阶段即连接）
+[26ms] 
+[27ms] >>> [13] mark 0 握手：等 agent 回连（premain 阶段即连）
+[27ms] ======== 0 握手：等 agent 回连（premain 阶段即连） ========
+[27ms] 
+[27ms] >>> [14] wait-hello 90000
+[8177ms] ACCEPT 来自 /127.0.0.1:54940（agent 回连）
+[8208ms] HELLO pid=9752 body={"pid":9752}（+ 8208ms 起连）
+[8208ms]   PASS HELLO 到达 pid=9752 (+8208ms)
+[8209ms] 
+[8209ms] >>> [15] wait-http http://localhost:8082/mpj/device/one/1 120000
+[8209ms] HEARTBEAT #1 body={}
+[10365ms]   等待应用就绪（第 1 次）：java.net.SocketTimeoutException: connect timed out
+[13375ms]   等待应用就绪（第 2 次）：java.net.SocketTimeoutException: connect timed out
+[16387ms]   等待应用就绪（第 3 次）：java.net.SocketTimeoutException: connect timed out
+[18982ms] HEARTBEAT #2 body={}
+[19400ms]   等待应用就绪（第 4 次）：java.net.SocketTimeoutException: connect timed out
+[22414ms]   等待应用就绪（第 5 次）：java.net.SocketTimeoutException: connect timed out
+[25424ms]   等待应用就绪（第 6 次）：java.net.SocketTimeoutException: connect timed out
+[29593ms]   PASS 应用就绪：GET http://localhost:8082/mpj/device/one/1 -> HTTP 200（第 7 次探测）
+[29595ms] 
+[29595ms] >>> [17] mark A 停采生效：CONFIG disabled=true
+[29596ms] ======== A 停采生效：CONFIG disabled=true ========
+[29596ms] 
+[29596ms] >>> [18] config {"disabled":true,"desensitize":true}
+[29597ms] SEND cmd=3 body={"disabled":true,"desensitize":true}
+[29597ms]   PASS 已下发 CONFIG
+[29597ms] 
+[29597ms] >>> [19] expect-ack "disabled":true
+[29600ms] CONFIG_ACK #1 body={"disabled":true,"desensitize":true,"skipPrefixes":0}
+[29600ms]   PASS CONFIG_ACK 到达且含 ""disabled":true"：{"disabled":true,"desensitize":true,"skipPrefixes":0}
+[29600ms] 
+[29600ms] >>> [20] reset-events
+[29600ms] 事件窗口已归零（累计 0 条）
+[29600ms] 
+[29600ms] >>> [21] get http://localhost:8082/mpj/device/rightAlias
+[29685ms] GET http://localhost:8082/mpj/device/rightAlias -> HTTP 200 len=71 body=[{"device_name":"充电桩A-01","station_id":101,"id":1,"share_scheme_id":1}]
+[29685ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/device/rightAlias
+[29685ms] 
+[29685ms] >>> [22] get http://localhost:8082/mpj/device/extSub
+[29750ms] GET http://localhost:8082/mpj/device/extSub -> HTTP 200 len=2 body=[]
+[29750ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/device/extSub
+[29750ms] 
+[29750ms] >>> [23] assert-no-events 3000
+[32754ms]   PASS 停采窗口 3000ms 内事件数 = 0
+[32754ms] 
+[32754ms] >>> [24] report-events
+[32754ms] 窗口内事件 0 条；sf:sl 分布 = (无)
+[32754ms] 
+[32755ms] >>> [26] mark B 恢复采集：CONFIG disabled=false
+[32755ms] ======== B 恢复采集：CONFIG disabled=false ========
+[32755ms] 
+[32755ms] >>> [27] config {"disabled":false,"desensitize":true}
+[32755ms] SEND cmd=3 body={"disabled":false,"desensitize":true}
+[32755ms]   PASS 已下发 CONFIG
+[32755ms] 
+[32755ms] >>> [28] expect-ack "disabled":false
+[32756ms] CONFIG_ACK #2 body={"disabled":false,"desensitize":true,"skipPrefixes":0}
+[32756ms]   PASS CONFIG_ACK 到达且含 ""disabled":false"：{"disabled":false,"desensitize":true,"skipPrefixes":0}
+[32756ms] 
+[32756ms] >>> [29] reset-events
+[32756ms] 事件窗口已归零（累计 0 条）
+[32756ms] 
+[32756ms] >>> [30] get http://localhost:8082/mpj/device/rightAlias
+[32823ms] GET http://localhost:8082/mpj/device/rightAlias -> HTTP 200 len=71 body=[{"device_name":"充电桩A-01","station_id":101,"id":1,"share_scheme_id":1}]
+[32823ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/device/rightAlias
+[32823ms] 
+[32823ms] >>> [31] get http://localhost:8082/mpj/device/extSub
+[32839ms] GET http://localhost:8082/mpj/device/extSub -> HTTP 200 len=2 body=[]
+[32840ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/device/extSub
+[32840ms] 
+[32840ms] >>> [32] assert-events 3000
+[35853ms]   FAIL 窗口 3000ms 内事件数 = 0（采集未恢复）
+[35853ms] 
+[35853ms] >>> [33] report-events
+[35853ms] 窗口内事件 0 条；sf:sl 分布 = (无)
+[35853ms] 
+[35853ms] >>> [34] assert-event-sf-sl DeviceInfoServiceImpl.java:42
+[35853ms]   FAIL 窗口内无事件 sf:sl = DeviceInfoServiceImpl.java:42；实际：(无)
+[35853ms] 
+[35853ms] >>> [35] assert-event-sf-sl DeviceInfoServiceImpl.java:63
+[35853ms]   FAIL 窗口内无事件 sf:sl = DeviceInfoServiceImpl.java:63；实际：(无)
+[35853ms] 
+[35853ms] >>> [37] mark D1 脱敏关闭：CONFIG desensitize=false
+[35853ms] ======== D1 脱敏关闭：CONFIG desensitize=false ========
+[35853ms] 
+[35853ms] >>> [38] config {"disabled":false,"desensitize":false}
+[35854ms] SEND cmd=3 body={"disabled":false,"desensitize":false}
+[35854ms]   PASS 已下发 CONFIG
+[35854ms] 
+[35854ms] >>> [39] expect-ack "desensitize":false
+[35854ms] CONFIG_ACK #3 body={"disabled":false,"desensitize":false,"skipPrefixes":0}
+[35854ms]   PASS CONFIG_ACK 到达且含 ""desensitize":false"：{"disabled":false,"desensitize":false,"skipPrefixes":0}
+[35854ms] 
+[35855ms] >>> [40] reset-events
+[35855ms] 事件窗口已归零（累计 0 条）
+[35855ms] 
+[35855ms] >>> [41] get http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000
+[35971ms] GET http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000 -> HTTP 200 len=2 body=[]
+[35971ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000
+[35971ms] 
+[35971ms] >>> [42] assert-events 2000
+[37975ms]   FAIL 窗口 2000ms 内事件数 = 0（采集未恢复）
+[37975ms] 
+[37975ms] >>> [43] report-events
+[37975ms] 窗口内事件 0 条；sf:sl 分布 = (无)
+[37975ms] 
+[37975ms] >>> [45] mark D2 脱敏开启：CONFIG desensitize=true
+[37975ms] ======== D2 脱敏开启：CONFIG desensitize=true ========
+[37975ms] 
+[37975ms] >>> [46] config {"disabled":false,"desensitize":true}
+[37976ms] SEND cmd=3 body={"disabled":false,"desensitize":true}
+[37976ms]   PASS 已下发 CONFIG
+[37976ms] 
+[37976ms] >>> [47] expect-ack "desensitize":true
+[37976ms] CONFIG_ACK #4 body={"disabled":false,"desensitize":true,"skipPrefixes":0}
+[37976ms]   PASS CONFIG_ACK 到达且含 ""desensitize":true"：{"disabled":false,"desensitize":true,"skipPrefixes":0}
+[37976ms] 
+[37976ms] >>> [48] reset-events
+[37976ms] 事件窗口已归零（累计 0 条）
+[37976ms] 
+[37976ms] >>> [49] get http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000
+[38000ms] GET http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000 -> HTTP 200 len=2 body=[]
+[38000ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/full/ifExists?age=20&tel=13800138000
+[38000ms] 
+[38000ms] >>> [50] assert-events 2000
+[40006ms]   FAIL 窗口 2000ms 内事件数 = 0（采集未恢复）
+[40006ms] 
+[40006ms] >>> [51] report-events
+[40006ms] 窗口内事件 0 条；sf:sl 分布 = (无)
+[40006ms] 
+[40006ms] >>> [53] mark 收口：再停采一次，确认通道可反复切换
+[40006ms] ======== 收口：再停采一次，确认通道可反复切换 ========
+[40006ms] 
+[40006ms] >>> [54] config {"disabled":true,"desensitize":true}
+[40007ms] SEND cmd=3 body={"disabled":true,"desensitize":true}
+[40007ms]   PASS 已下发 CONFIG
+[40007ms] 
+[40007ms] >>> [55] expect-ack "disabled":true
+[40007ms] CONFIG_ACK #5 body={"disabled":true,"desensitize":true,"skipPrefixes":0}
+[40007ms]   PASS CONFIG_ACK 到达且含 ""disabled":true"：{"disabled":true,"desensitize":true,"skipPrefixes":0}
+[40007ms] 
+[40007ms] >>> [56] reset-events
+[40007ms] 事件窗口已归零（累计 0 条）
+[40007ms] 
+[40007ms] >>> [57] get http://localhost:8082/mpj/device/rightAlias
+[40040ms] GET http://localhost:8082/mpj/device/rightAlias -> HTTP 200 len=71 body=[{"device_name":"充电桩A-01","station_id":101,"id":1,"share_scheme_id":1}]
+[40040ms]   PASS 业务请求 HTTP 200：http://localhost:8082/mpj/device/rightAlias
+[40041ms] 
+[40041ms] >>> [58] assert-no-events 2000
+[42053ms]   PASS 停采窗口 2000ms 内事件数 = 0
+[42053ms] 
+[42053ms] >>> [60] summary
+[42053ms] 
+[42053ms] ──────── SUMMARY ────────
+[42053ms] HELLO=pid=9752 @8208ms HEARTBEAT=2 EVENT(累计)=0 CONFIG_ACK=5 UNKNOWN_CMD=0
+[42053ms] 断言 PASS=21 FAIL=5
+[42053ms] RESULT: FAILED
+[42053ms]   FAIL: 窗口 3000ms 内事件数 = 0（采集未恢复）
+[42053ms]   FAIL: 窗口内无事件 sf:sl = DeviceInfoServiceImpl.java:42；实际：(无)
+[42053ms]   FAIL: 窗口内无事件 sf:sl = DeviceInfoServiceImpl.java:63；实际：(无)
+[42053ms]   FAIL: 窗口 2000ms 内事件数 = 0（采集未恢复）
+[42053ms]   FAIL: 窗口 2000ms 内事件数 = 0（采集未恢复）
+[42053ms] ─────────────────────────
+[42053ms] 
+[42053ms] >>> [61] quit
+PROBE-EXIT rc=1
+[42055ms] 连接断开/读帧结束: java.net.SocketException: Socket Closed

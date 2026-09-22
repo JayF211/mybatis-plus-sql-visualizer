@@ -1,6 +1,5 @@
 package cn.song.mybatisplus.sqlvis.agent.hook;
 
-import java.lang.reflect.Method;
 import java.sql.Connection;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -24,9 +23,22 @@ public final class SqlHookCallbacks {
      */
     private static final AtomicBoolean WARNED_ONCE = new AtomicBoolean();
 
+    /**
+     * 连接出口回调（织入字节码在 connect 出口调用）：**一律包装**，停采只做逐调用短路。
+     *
+     * <p><b>为什么这里不看 {@code disabled}</b>（T-AgentConfigChannel T-08，2026-09-22 真机实证）：
+     * 连接级跳过会让「停采期间建立的连接**永远不被包装**」——连接池（Hikari 等）复用同一批连接，
+     * 于是用户「先跑应用、再点开始捕获」时一条都捕不到，停采→恢复同样失效（真机现场：
+     * `disabled=false` 的 CONFIG 与 ACK 均已生效，业务窗口内事件数仍为 0）。设计红线本就是
+     * 「禁用 = volatile 短路、**不卸载**」：钩子在位、逐调用零成本直返，正是
+     * {@link ConnectionHandler#invoke} 与 {@code StatementHandler.invoke} 里的 {@code isDisabled()} 短路；
+     * 连接级跳过是与该语义不一致的额外优化，已移除。
+     *
+     * <p>包装失败的兜底不变：{@link #dropToRaw}（自吞 + 计数 + 一次性告警），宿主应用行为不受影响。
+     */
     public static Object onConnection(Object rawConnection, String url) {
         try {
-            if (rawConnection == null || AgentStateBridge.isDisabled()) {
+            if (rawConnection == null) {
                 return rawConnection;
             }
             if (ProxySupport.isOurProxy(rawConnection)) {
@@ -64,21 +76,9 @@ public final class SqlHookCallbacks {
         return DROP_FALLBACK.get();
     }
 
-    /** 隔离 AgentState 引用，便于宿主 loader 隐藏 agent 类时单测覆盖（HiddenAgentClassLoader 契约）。 */
-    private static final class AgentStateBridge {
-        static boolean isDisabled() {
-            try {
-                Class<?> state = Class.forName("cn.song.mybatisplus.sqlvis.agent.AgentState");
-                Method m = state.getMethod("isDisabled");
-                return (Boolean) m.invoke(null);
-            } catch (Throwable t) {
-                return true; // 看不见 agent 类 = 视同禁用（保守）
-            }
-        }
-
-        private AgentStateBridge() {
-        }
-    }
+    // T-AgentConfigChannel T-08：原 `AgentStateBridge`（宿主 loader 看不见 agent 类时视同禁用、连接级跳过包装）
+    // 已随连接级 `disabled` 判定一并删除——它带来的「连接永不包装」正是恢复采集失效的根因；包装失败的安全网
+    // 改由 dropToRaw（自吞 + 计数 + 一次性告警）承担，且从「静默跳过」变为**可观测**。
 
     private SqlHookCallbacks() {
     }

@@ -116,6 +116,22 @@ class AgentManager(private val project: Project) : Disposable {
         /** HELLO 首帧读取超时（agent 连上后立即发 HELLO，秒级足够；超时按「pid 未知」处理不丢会话）。 */
         private const val HELLO_READ_TIMEOUT_MS = 5_000
 
+        /**
+         * T-AgentConfigChannel T-02：CONFIG 回执等待窗——[AgentSession.sendConfig] 后本窗口内未收到
+         * [AgentProtocol.CMD_CONFIG_ACK] 即 WARN「CONFIG 未获确认——应用侧可能未生效」。
+         *
+         * 取值 5s 的理由：回执是「同一连接上、应用侧应用开关后立刻回一帧」，正常在毫秒级；
+         * 窗口只需容一次读循环轮转 + 调度抖动。窗口过长会把「控制通道已失效」这条最要紧的告警
+         * 推后到用户已经看到不该出现的条目之后。**不作为掉线判据**（掉线由心跳窗口判定）。
+         */
+        internal const val CONFIG_ACK_TIMEOUT_MS = 5_000L
+
+        /**
+         * T-AgentConfigChannel T-03：入队闸门告警步长——首次丢弃即 WARN，其后每本步长条记一次。
+         * 关闭状态下投递的事件会持续成批到达（应用侧在跑、控制通道失效），逐条 WARN 会刷满 idea.log。
+         */
+        internal const val INTAKE_DROP_WARN_STEP = 50L
+
         /** T-PS5-12：HELLO 首帧 pid 提取正则（冷路径，提常量免每次连接重编译）。 */
         private val HELLO_PID_REGEX = Regex("\"pid\"\\s*:\\s*(\\d+)")
 
@@ -509,7 +525,8 @@ class AgentManager(private val project: Project) : Disposable {
         }
         sessions.add(session)
         // B1：新 agent 默认 disabled=false（静态字段初始值），须按当前监听状态立即校正——
-        // 否则「监听关闭状态启动项目」场景新 agent 又开始白采集
+        // 否则「监听关闭状态启动项目」场景新 agent 又开始白采集。
+        // T-AgentConfigChannel T-06：本行只保证「已下发」，生效以 CMD_CONFIG_ACK 为准（见 pushCaptureActive KDoc）
         val active = isListenActive()
         runCatching { session.sendConfig(disabled = !active) }
             .onFailure { LOG.warn("attachToPid: 初始 CONFIG 下发失败（pid=$pid）", it) }
@@ -525,6 +542,21 @@ class AgentManager(private val project: Project) : Disposable {
         firstHeartbeatPending.set(false)
         publishStatusChanged()
         return true
+    }
+
+    /**
+     * T-AgentConfigChannel T-02：CONFIG 回执超时巡检的排定入口（构造会话时注入）。
+     *
+     * 复用既有 [monitor]（那条 5s 在线态巡检所在线程池），**不新开常驻线程**——回执窗口是
+     * 一次性延时任务，monitor 本就随会话懒启（[ensureMonitorStarted]）。项目销毁后 monitor 已
+     * shutdownNow，排定抛 RejectedExecutionException：会话随之关闭、无回执可等，按既有
+     * 「非致命只记一行」口径处理，不升级成错误。
+     */
+    private fun scheduleConfigAckCheck(delayMs: Long, task: () -> Unit) {
+        runCatching { monitor.schedule(task, delayMs, TimeUnit.MILLISECONDS) }
+            .onFailure {
+                LOG.info("CONFIG 回执超时巡检未排定（monitor 已停：${it.javaClass.simpleName}）——会话即将随项目销毁")
+            }
     }
 
     /**
@@ -545,6 +577,10 @@ class AgentManager(private val project: Project) : Disposable {
             clockMs = clockMs,
             // T-PS5-04：URL 捕获即回写推断持有者（会话建立时 URL 尚不可知，事件到达才拿到）
             onUrlCaptured = { syncInferenceUrl() },
+            // T-AgentConfigChannel T-02：CONFIG 回执超时巡检排定（复用 monitor）
+            scheduleConfigAckCheck = ::scheduleConfigAckCheck,
+            // 追加 P-5：回执到达 → 重算桥闸门（在线态不变时也要刷，故不走「仅变化才广播」的路径）
+            onCaptureConfirmationChanged = ::onCaptureConfirmationChanged,
         )
     }
 
@@ -831,10 +867,15 @@ class AgentManager(private val project: Project) : Disposable {
                 clockMs = clockMs,
                 // T-PS5-04：premain 会话同 attach 链——URL 捕获回写推断持有者
                 onUrlCaptured = { syncInferenceUrl() },
+                // T-AgentConfigChannel T-02：premain 会话同 attach 链——CONFIG 回执超时巡检排定
+                scheduleConfigAckCheck = ::scheduleConfigAckCheck,
+                // 追加 P-5：premain 会话同 attach 链——回执驱动桥闸门
+                onCaptureConfirmationChanged = ::onCaptureConfirmationChanged,
             )
             sessions.add(session)
             if (pid > 0L) attachedPids[pid] = clockMs()
             // B1 同款：新 agent 默认 disabled=false，须按当前监听状态立即校正
+            // （T-06：只保证「已下发」，生效以 CMD_CONFIG_ACK 为准）
             val active = isListenActive()
             runCatching { session.sendConfig(disabled = !active) }
                 .onFailure { LOG.warn("premain: 初始 CONFIG 下发失败（pid=$pid）", it) }
@@ -942,9 +983,37 @@ class AgentManager(private val project: Project) : Disposable {
             LOG.info("增强捕获在线态切换: $wasOnline -> $online")
         }
         // 接管/回落切换：桥暂停挂载 ↔ 恢复（§4.3；桥链路本身零改动）
-        SqlCaptureGate.paused.set(online)
+        //
+        // 追加 P-5（计划 §五 P-5）：判据由「在线」收窄为「在线 **且** 应用侧已确认在采集」。
+        // 原判据把「agent socket 活着」当成「agent 是产出方」——修复应用侧解析（T-01）后出现新常态
+        // 「agent 在线但已停采」（停采开关关着，或应用侧看门狗收不到 CONFIG 而自停）：此时桥被封着、
+        // agent 又静默 = **两条通道同时零产出，而用户以为捕获是开的**（把「误采集」换成「零捕获」，
+        // 且零产出没有任何可见信号）。收窄后：确认在采集才让桥让位（不引入双通道重复产出——
+        // T-M56-02 闸门的本意保留），未确认/确认停采则桥照常解析兜底。
+        // 「捕获关」时桥本就不产条目（Filter 的 isCapturing 守卫不挂载），故本处不必再判 capturing。
+        SqlCaptureGate.paused.set(online && captureConfirmedActive())
         // T-AgentDialectLoop：回落/关闭时清空日志时间相关器，防跨运行陈旧匹配
         if (!online) LogTimeCorrelator.clear()
+    }
+
+    /**
+     * 追加 P-5（计划 §五 P-5）：应用侧采集**已确认在跑**——存在存活会话且其最近一次 CONFIG 回执为
+     * `disabled=false`（见 [AgentSession.configAckDisabled]）。
+     *
+     * 派生自会话表（不另设布尔字段），故复位点天然齐全、无需逐处维护：会话被摘除/关闭 → 不再在表内；
+     * [shutdownAll] / 项目 [dispose] → 表清空；每次 CONFIG 下发 → 该会话确认态被清回「待确认」。
+     * 语义上「确认」是**值**（disabled true/false）而非单纯「收到过回执」：应用侧确认停采（disabled=true）
+     * 与从未确认（null）在闸门上一视同仁——都不封桥。
+     */
+    internal fun captureConfirmedActive(): Boolean = sessions.any { it.alive && it.configAckDisabled == false }
+
+    /**
+     * 追加 P-5：CONFIG 回执驱动 / 待确认下发的桥闸门刷新入口。
+     * 生产链路由会话回执回调（[AgentSession] 构造时注入）与 [pushCaptureActive] 调用；
+     * internal 为同模块测试缝（测试直连会话不经 attach 链）。
+     */
+    internal fun onCaptureConfirmationChanged() {
+        updateOnline()
     }
 
     /**
@@ -1097,15 +1166,26 @@ class AgentManager(private val project: Project) : Disposable {
     // SETTINGS_CHANGE_TOPIC 监听（本类 init）→ executor → pushDesensitize/sendConfig（sendConfig 读设置现拼 skipPrefixes）。
 
     /**
-     * 监听开关联动（T-AgentListenSync）：停止监听 → agent 停采（真停，非 IDE 侧丢弃）；
-     * 开启监听 → 恢复采集。由 SqlLogManager.startCapture/stopCapture 调用。
-     * agent 侧 CONFIG 即时生效（volatile 标志），织入点常驻，恢复后下一条 SQL 完整采集。
+     * 监听开关联动（T-AgentListenSync）：停止监听 → 向各会话**下发**停采指令；开启监听 → 下发恢复采集。
+     * 由 SqlLogManager.startCapture/stopCapture 调用。
+     *
+     * **文案订正（T-AgentConfigChannel T-06）**：此前 KDoc 写「真停，非 IDE 侧丢弃」「agent 侧 CONFIG
+     * 即时生效（volatile 标志）」，把「指令写出」说成了「应用侧已停采」。事实是——本轮现场（开关
+     * 未开却被捕获）里应用侧**从未收到过指令**（入站帧解析与出站格式错位，CONFIG 被静默丢弃），
+     * 而 IDE 侧日志照样写「已下发 disabled=true（sessions=N）」，排障时据此误判成「已停采」。
+     * 故本方法只保证**指令已写出到 socket**；是否生效以 [AgentProtocol.CMD_CONFIG_ACK] 为准
+     * （收到即 INFO 记一行含 pid 与三值，窗口内未收到即 WARN「CONFIG 未获确认」）。
      */
     fun pushCaptureActive(active: Boolean) {
         if (!isEnhancedActive()) return
         val desensitize = PluginSettings.getInstance().state.enhancedCaptureDesensitize
+        // 追加 P-5：每次下发（本方法 + pushDesensitize）在 AgentSession.sendConfig 内已把该会话确认态
+        // 清回「待确认」并触发桥闸门重算（见那里的 KDoc）——「下发成功但应用侧没生效」不会让桥一直封着。
         sessions.forEach { it.sendConfig(disabled = !active, desensitize = desensitize) }
-        LOG.info("pushCaptureActive: active=$active → disabled=${!active}（sessions=${sessions.size}）")
+        LOG.info(
+            "pushCaptureActive: active=$active → 已下发 CONFIG disabled=${!active}（sessions=${sessions.size}；" +
+                "生效与否待 CMD_CONFIG_ACK，超时 ${AgentManager.CONFIG_ACK_TIMEOUT_MS}ms 内无回执将 WARN）",
+        )
     }
 
     /** 当前 SQL 监听是否开启（SqlLogManager.capturing；服务缺失/异常按 false——宁停采勿白采）。 */
@@ -1308,7 +1388,13 @@ internal class PremainChannel(
 
 /**
  * 单个 agent 会话：读线程循环解帧（EVENT → 适配 → buffer；HEARTBEAT 刷新在线窗口；
- * HELLO 记录 agent 侧 pid），CONFIG 下发。alive = socket 未断。
+ * HELLO 记录 agent 侧 pid；CONFIG_ACK 记录生效值并清挂起），CONFIG 下发。alive = socket 未断。
+ *
+ * T-AgentConfigChannel T-02/T-03 两条新增语义：
+ *  - **回执可观测**：每次 [sendConfig] 记一次挂起，窗口内未收到 [AgentProtocol.CMD_CONFIG_ACK]
+ *    即 WARN「CONFIG 未获确认——应用侧可能未生效」（排定复用管理器的 monitor，不新开线程）；
+ *  - **入队闸门**：EVENT 帧在 SQL 监听关闭（[SqlLogManager.capturing] == false）时**不入队**并计数
+ *    ——即便应用侧再次失控投递，面板显示也不说谎（只闸入队点，MCP 审计/历史回读不经此处）。
  */
 internal class AgentSession(
     private val project: Project,
@@ -1326,6 +1412,18 @@ internal class AgentSession(
      * [AgentUrlRegistry]。只在 URL **变化**时触发（每个 SQL 事件都带 URL，逐事件回调无意义）。
      */
     private val onUrlCaptured: () -> Unit = {},
+    /**
+     * T-AgentConfigChannel T-02：CONFIG 回执超时巡检的排定入口（默认空操作 = 测试不排定）。
+     * 生产链路注入 [AgentManager] 的 monitor 排定（见 `AgentManager.scheduleConfigAckCheck`）——
+     * 不新开常驻线程；测试可直接持有任务引用同步驱动，无需真等 5s。
+     */
+    private val scheduleConfigAckCheck: (Long, () -> Unit) -> Unit = { _, _ -> },
+    /**
+     * 追加 P-5（计划 §五 P-5）：应用侧采集确认态变化通知（收到回执时触发，默认空操作）。
+     * 生产链路由 [AgentManager] 注入 → 重算 [SqlCaptureGate.paused]（见
+     * `AgentManager.captureConfirmedActive`）。
+     */
+    private val onCaptureConfirmationChanged: () -> Unit = {},
 ) {
 
     private val LOG = Logger.getInstance(AgentSession::class.java)
@@ -1340,6 +1438,87 @@ internal class AgentSession(
 
     private val output = java.io.DataOutputStream(socket.getOutputStream())
     private val eventDropped = AtomicLong()
+
+    /**
+     * T-AgentConfigChannel T-03：入队闸门丢弃计数（监听关闭状态下投递的 EVENT 条数）。
+     * 单调递增——它是「控制通道可能失效」的量化证据（应用侧仍在采集投递），不只丢弃了事。
+     */
+    internal val intakeDropped = AtomicLong()
+
+    /** T-AgentConfigChannel T-03：入队闸门判据（可注入测试缝；默认读 [SqlLogManager.capturing]）。 */
+    internal var listenActiveProvider: () -> Boolean = {
+        // 服务缺失/项目已销毁按 false —— 宁丢弃勿谎报（与 AgentManager.isListenActive 同口径）
+        runCatching { project.getService(SqlLogManager::class.java).capturing }.getOrDefault(false)
+    }
+
+    /**
+     * T-AgentConfigChannel T-02：已收到的 CONFIG 回执数（可观测/测试断言）。
+     * 收到回执 = 应用侧确实解析并应用了控制指令，与「已下发」是两件事。
+     */
+    internal val configAckCount = AtomicLong()
+
+    /** T-AgentConfigChannel T-02：回执超时告警数（每会话；>0 即「控制通道可能失效」）。 */
+    internal val configAckTimeoutCount = AtomicLong()
+
+    /** 挂起中的 CONFIG 回执（seq 区分「同一次下发的等待」，见 [onConfigAckTimeout]）。 */
+    private class PendingConfigAck(val seq: Long, val disabled: Boolean)
+
+    private val pendingConfigAck = java.util.concurrent.atomic.AtomicReference<PendingConfigAck?>(null)
+    private val configAckSeq = AtomicLong()
+
+    /**
+     * T-AgentConfigChannel T-02：记录一次 CONFIG 下发并排定回执超时巡检。
+     *
+     * 只在下发**成功写出**后调用（写失败走既有降级，无回执可等）。同会话可连续下发（脱敏开关、
+     * 监听开关），故用 seq 标记本次挂起：巡检到点时若挂起已被更新（更新的下发）或已被清（回执到达、
+     * 会话关闭）则静默退出——**不会**为一次已被取代的下发误报「未获确认」。
+     */
+    private fun markConfigSent(disabled: Boolean) {
+        val seq = configAckSeq.incrementAndGet()
+        pendingConfigAck.set(PendingConfigAck(seq, disabled))
+        scheduleConfigAckCheck(AgentManager.CONFIG_ACK_TIMEOUT_MS) { onConfigAckTimeout(seq) }
+    }
+
+    /**
+     * T-AgentConfigChannel T-02：回执超时巡检体（internal 供测试同步驱动，生产由 monitor 排定）。
+     *
+     * 到点时仍挂着**同一次**下发 → 计一次并 WARN：这是本轮缺陷从「只能靠行为反推」变成
+     * 一行日志的直接判据（应用侧未生效 / 旧版 agent 无回执能力 / 控制通道再次漂移，三者同形，
+     * 都要求用户去看应用侧而不是继续相信面板）。
+     */
+    internal fun onConfigAckTimeout(seq: Long) {
+        val pending = pendingConfigAck.get() ?: return
+        if (pending.seq != seq) return // 已被更新的下发取代或已收到回执
+        if (!pendingConfigAck.compareAndSet(pending, null)) return
+        configAckTimeoutCount.incrementAndGet()
+        LOG.warn(
+            "CONFIG 未获确认——应用侧可能未生效（pid=$pid, 下发 disabled=${pending.disabled} 后 " +
+                "${AgentManager.CONFIG_ACK_TIMEOUT_MS}ms 内未收到 CMD_CONFIG_ACK）；" +
+                "控制通道可能失效（入站帧解析错位 / 旧版 agent 不支持回执）——面板条目真实性以本机应用侧为准",
+        )
+    }
+
+    /** T-AgentConfigChannel T-02：清挂起（收到回执 / 会话关闭 / 掉线——挂起状态按会话，不得跨会话残留）。 */
+    private fun clearPendingConfigAck() {
+        pendingConfigAck.set(null)
+    }
+
+    /** T-AgentConfigChannel T-02：当前是否有挂起中的 CONFIG 下发（测试/诊断）。 */
+    internal fun hasPendingConfigAck(): Boolean = pendingConfigAck.get() != null
+
+    /**
+     * 追加 P-5：应用侧**已确认**的采集开关值（`null` = 未确认/待确认）。
+     *
+     * 与「已下发」严格区分：本字段只由 [AgentProtocol.CMD_CONFIG_ACK] 写入，每次 [sendConfig]
+     * 下发即清回 `null`（下发成功 ≠ 应用侧生效——本轮缺陷正是这两件事被混为一谈）。
+     * 读侧见 `AgentManager.captureConfirmedActive`（桥闸门依据）。
+     *
+     * 清空而非保留旧值：控制通道再出问题时，闸门必须回到「不确定就不封桥」这一侧——
+     * 宁可短暂双通道产出（列表去重窗口内折叠），也不接受「封着桥 + 应用侧静默 = 零捕获且无信号」。
+     */
+    @Volatile
+    internal var configAckDisabled: Boolean? = null
+        private set
 
     /** T-DialectAutoInfer：最近一次事件携带的连接 URL（connect 时捕获，会话内记忆；null=旧版 agent/未捕获）。 */
     @Volatile
@@ -1386,6 +1565,8 @@ internal class AgentSession(
                 if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传（读线程：透传即线程终止，平台记录现场）
                 LOG.warn("会话读循环退出（pid=$pid, alive 前=$alive）——掉线原因如下", t)
                 alive = false
+                // T-AgentConfigChannel T-02：挂起状态按会话——掉线即清（重连是新会话，旧挂起不得残留）
+                clearPendingConfigAck()
                 onStateChange()
             }
         }, "mps-agent-session-$pid").apply { isDaemon = true }.start()
@@ -1410,6 +1591,24 @@ internal class AgentSession(
                             onUrlCaptured()
                         }
                     }
+                    // T-AgentConfigChannel T-03：**入队闸门**——监听关闭时条目不得进列表。
+                    //
+                    // 放在此处（URL 记忆之后、stampLogTime 之前）的两个理由：
+                    //  ① 闸的是「入队点」本身（本任务边界：只作用于 agent 通道入队点，MCP 审计与
+                    //     历史回读不经这里，行为不变）；URL 记忆是**方言推断依据**，与列表显示无关，
+                    //     且既有用例 AgentManagerLazyMonitorTest 以非捕获态验证 URL 回写，闸在它之前会误伤；
+                    //  ② stampLogTime 会**消费**日志时间相关器的暂存匹配（未命中才回落），先丢弃再
+                    //     调用会把本该留给控制台通道的匹配白白取走。
+                    if (!listenActiveProvider()) {
+                        val n = intakeDropped.incrementAndGet()
+                        if (n == 1L || n % AgentManager.INTAKE_DROP_WARN_STEP == 0L) {
+                            LOG.warn(
+                                "增强通道在监听关闭状态下投递了 $n 条——控制通道可能失效" +
+                                    "（pid=$pid, 已丢弃不入队；首条/每 ${AgentManager.INTAKE_DROP_WARN_STEP} 条记一次）",
+                            )
+                        }
+                        return
+                    }
                     val entry = AgentEventAdapter.toEntry(event)
                     // T-AgentDialectLoop / T-AgentLogTime：接管期间控制台嗅探暂存的「日志行原始时间」
                     // 按 [logTimeKey]（占位符版 SQL 指纹）取回，参数值序列作次级判别（[stampLogTime]）。
@@ -1422,6 +1621,29 @@ internal class AgentSession(
             }
             // T-AgentHeartbeat T-05：HEARTBEAT 是存活帧（EVENT 分支已在上面置位）
             AgentProtocol.CMD_HEARTBEAT -> livenessFrameSeen = true
+            // T-AgentConfigChannel T-02：CONFIG 回执——应用侧「已生效」的唯一直接证据。
+            // 与 HEARTBEAT/EVENT 同属存活帧（应用侧真在跑才会发）。
+            AgentProtocol.CMD_CONFIG_ACK -> {
+                livenessFrameSeen = true
+                val ack = AgentProtocol.parseConfigAck(body)
+                if (ack == null) {
+                    LOG.warn(
+                        "CONFIG 回执解析失败（pid=$pid, 累计失败=${AgentProtocol.configAckParseFailures.get()}, " +
+                            "bodyLen=${body.length}, head=${body.take(120)}）——两侧回执形态漂移，按未确认处理",
+                    )
+                    return
+                }
+                configAckCount.incrementAndGet()
+                clearPendingConfigAck()
+                // 追加 P-5：确认值写入（桥闸门唯一真值来源）——disabled=false 才意味着「应用侧真在采集」
+                configAckDisabled = ack.disabled
+                LOG.info(
+                    "CONFIG 已生效（pid=$pid, ACK#${configAckCount.get()}）：disabled=${ack.disabled}, " +
+                        "desensitize=${ack.desensitize}, skipPrefixes=${ack.skipPrefixes}",
+                )
+                // 追加 P-5：回执是桥闸门的唯一依据——收到即同步（不能在等下一次 updateOnline 才刷）
+                onCaptureConfirmationChanged()
+            }
             // HELLO/未知命令：lastSeen 已刷新；HELLO 只是连接首帧、不算存活帧；未知命令忽略（协议向前兼容）
             else -> Unit
         }
@@ -1458,15 +1680,29 @@ internal class AgentSession(
                 output.write(body)
                 output.flush()
             }
+            // 追加 P-5：下发即转「待确认」——应用侧是否真的应用了这次 CONFIG，只有回执说了算。
+            // 随后立即重算桥闸门：待确认（null）与「确认停采」在闸门上一视同仁，都不封桥——
+            // 这是有意的取侧：宁可在一个 ACK 往返（毫秒级、且列表去重窗口会折叠同指纹条目）里
+            // 短暂双通道产出，也不接受「桥封着 + 应用侧静默 = 零捕获且无任何可见信号」。
+            // 注意次序：先清确认态再排超时巡检（巡检到点时读的是清空后的挂起，语义一致）。
+            configAckDisabled = null
+            onCaptureConfirmationChanged()
+            markConfigSent(disabled)
         } catch (t: Throwable) {
             if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传（原状：静默置 alive=false，致命错误会丢现场）
             alive = false
+            // T-AgentConfigChannel T-02：写失败即掉线——挂起与确认态一并清（无回执可等，也不该拿旧确认当真）
+            clearPendingConfigAck()
+            configAckDisabled = null
             onStateChange()
         }
     }
 
     fun close() {
         alive = false
+        // T-AgentConfigChannel T-02：挂起/确认态按会话——关闭即清，不残留到重连后的新会话
+        clearPendingConfigAck()
+        configAckDisabled = null
         runCatching { socket.close() }
         onStateChange()
     }

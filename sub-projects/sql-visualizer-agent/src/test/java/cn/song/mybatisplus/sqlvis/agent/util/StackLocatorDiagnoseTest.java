@@ -11,7 +11,7 @@ import java.io.PrintStream;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -23,7 +23,7 @@ import static org.junit.Assert.assertTrue;
  * 档位早退与字符串拼装都在其中，故本用例<b>不改生产行为</b>，经「接管 {@code System.err} + 调携栈出口
  * {@code locate(StackTraceElement[], ClassLoader)}」观测真实输出——断言覆盖档位闸门与输出内容本身。
  *
- * <p>与 {@link StackLocator} 同包以便清场（{@code clearLocatorCachesForTest}）：L1 整帧缓存命中路径
+ * <p>与 {@link StackLocator} 同包以便清场（{@code clearLocatorCachesForTest}）：判定缓存命中路径
  * <b>不</b>产生打点（{@code diagnose} 只在全量判定路径被调），用例间必须清场才能确保走到打点路径。
  */
 public class StackLocatorDiagnoseTest {
@@ -155,9 +155,13 @@ public class StackLocatorDiagnoseTest {
 
         final Run first = run(stack);
         assertTrue("首次全量判定应有打点", first.out.contains(MARK));
-        // L1 命中写整帧缓存：同 key 二次执行在缓存查询处返回，diagnose 不被调 → 零打点（每条 SQL 零噪音）
+        // 判定缓存命中：行号/候选列按当前栈重建（T-AgentSourceLocateStale T-01 后不再返回冻结整帧），
+        // 但 diagnose 仍只在全量判定路径被调 → 命中路径零打点（每条 SQL 零噪音）
         final Run second = run(stack);
-        assertSame("L1 整帧缓存命中应复用同一 Frame", first.frame, second.frame);
+        assertNotSame("判定缓存命中不再复用整帧实例（行号须按当前栈现算）", first.frame, second.frame);
+        assertEquals(first.frame.sourceFile, second.frame.sourceFile);
+        assertEquals(first.frame.line, second.frame.line);
+        assertEquals(first.frame.methodKey, second.frame.methodKey);
         assertEquals("缓存命中路径应静默: " + second.out, "", second.out);
     }
 

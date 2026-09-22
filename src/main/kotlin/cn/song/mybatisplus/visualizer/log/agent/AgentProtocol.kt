@@ -1,11 +1,16 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
+import java.util.concurrent.atomic.AtomicLong
+
 /**
  * agent 通信协议常量与编解码（§4.3，M56 T-M56-01/02）：
  * loopback TCP，长度前缀帧（4 字节 len + 1 字节 command + JSON body UTF-8）。
  * 命令三值起步 + HELLO（agent 连接后自报 pid）；loadAgent 参数 k=v 分号分隔。
  * 两侧（agent Java / IDE Kotlin）各自实现同一契约——本对象是 IDE 侧权威定义，
  * agent 侧 SenderLoop/EventBus 的常量须与这里逐值一致（AgentProtocolSyncTest 锁定）。
+ *
+ * T-AgentConfigChannel T-02：新增 agent → IDE 方向的 [CMD_CONFIG_ACK]（控制指令回执）——
+ * 此前只有 IDE → agent 单向，IDE 侧日志只证明「指令已写出」，应用侧生效与否零证据。
  */
 object AgentProtocol {
 
@@ -17,6 +22,20 @@ object AgentProtocol {
     const val CMD_CONFIG = 3
     /** 握手帧：agent 连接后首帧，body `{"pid":<n>}`。 */
     const val CMD_HELLO = 4
+
+    /**
+     * 配置回执帧（agent → IDE，T-AgentConfigChannel T-02）：应用侧把 CONFIG 应用到采集开关后
+     * 回一帧，body 见 [configAckBody]。
+     *
+     * 为什么需要：本轮现场（开关未开却被捕获）里 IDE 侧只有「CONFIG 已下发」的日志，
+     * 应用侧收到与否零证据——排障只能靠行为反推（全天无 `startCapture` 却有条目）。回执把
+     * 「生效」从推断变成一行可核实的日志，并把「控制通道静默失效」暴露成可观测事实。
+     *
+     * 取值 5（下一个空闲号）。**旧 agent 天然兼容**（未知 cmd 走 else 分支忽略），故本常量
+     * 只在支持回执的新 agent 侧出现——`AgentProtocolSyncTest.命令常量两侧一致` 因此暂不锁它，
+     * 待应用侧 T-02 落地后由两侧同步补断言。
+     */
+    const val CMD_CONFIG_ACK = 5
 
     /** 单帧 payload 上限（1MB：SQL/堆栈文本远小于此，超限视为流损坏立即断开）。 */
     const val MAX_FRAME_LEN = 1 shl 20
@@ -61,5 +80,57 @@ object AgentProtocol {
                 .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + "\""
         }
         return """{"disabled":$disabled,"desensitize":$desensitize,"skipPrefixes":[$arr]}"""
+    }
+
+    // ---------- T-AgentConfigChannel T-02：CONFIG 回执（agent → IDE） ----------
+
+    /**
+     * CONFIG 回执生效值三元（[parseConfigAck] 产物）。
+     * [skipPrefixes] 是应用侧**实际接受**的帧过滤前缀条数（不是列表本身——回执只报生效结果，
+     * 前缀文本两侧各自持有，IDE 侧下发源即设置页）。
+     */
+    internal data class ConfigAck(
+        val disabled: Boolean,
+        val desensitize: Boolean,
+        val skipPrefixes: Int,
+    )
+
+    /**
+     * 回执 body（agent 侧同契约逐字节一致）：`{"disabled":<bool>,"desensitize":<bool>,"skipPrefixes":<int>}`。
+     *
+     * 键序固定、无空格——**这是刻意的严格形态**：两侧各自手写 JSON，本轮缺陷正是「形态漂移
+     * 无人发现」（出站写 `[len][cmd]`、入站按 `[cmd][len]` 读，两侧都自认为对）。回执只认
+     * 这一种形态，任何偏差都会被 [parseConfigAck] 记成畸形并留痕，不会静默按「差不多」放行。
+     */
+    internal fun configAckBody(disabled: Boolean, desensitize: Boolean, skipPrefixes: Int): String =
+        """{"disabled":$disabled,"desensitize":$desensitize,"skipPrefixes":$skipPrefixes}"""
+
+    /** 严格形态判据（无空格、键序固定、值域受限）。 */
+    private val CONFIG_ACK_REGEX =
+        Regex("""\{"disabled":(true|false),"desensitize":(true|false),"skipPrefixes":(-?\d+)\}""")
+
+    /**
+     * 回执解析失败累计（诊断计数，跨会话单调递增）：畸形回执是「两侧契约漂移」的直接证据，
+     * 故不只丢帧，还要计数（会话侧 WARN 会带出该累计值）。
+     */
+    internal val configAckParseFailures = AtomicLong()
+
+    /**
+     * 解析 CONFIG 回执 body；**不抛**——非 [configAckBody] 的严格形态一律返回 null 并累加
+     * [configAckParseFailures]（调用方只记 WARN 不中断读循环；畸形回执不构成掉线理由）。
+     * `skipPrefixes` 溢出 Int 同样按畸形处理（回执值域本就该是小整数）。
+     */
+    internal fun parseConfigAck(body: String): ConfigAck? {
+        val m = CONFIG_ACK_REGEX.matchEntire(body)
+        val n = m?.groupValues?.get(3)?.toIntOrNull()
+        if (m == null || n == null) {
+            configAckParseFailures.incrementAndGet()
+            return null
+        }
+        return ConfigAck(
+            disabled = m.groupValues[1] == "true",
+            desensitize = m.groupValues[2] == "true",
+            skipPrefixes = n,
+        )
     }
 }
