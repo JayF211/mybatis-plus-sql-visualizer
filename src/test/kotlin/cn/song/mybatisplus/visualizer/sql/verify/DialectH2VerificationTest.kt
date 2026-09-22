@@ -1,9 +1,13 @@
 package cn.song.mybatisplus.visualizer.sql.verify
 
+import cn.song.mybatisplus.visualizer.sql.H2Dialect
 import cn.song.mybatisplus.visualizer.sql.H2_RESERVED
+import cn.song.mybatisplus.visualizer.sql.IdentifierCaseSource
+import cn.song.mybatisplus.visualizer.sql.IdentifierFolding
 import cn.song.mybatisplus.visualizer.sql.MYSQL_RESERVED
 import cn.song.mybatisplus.visualizer.sql.PG_RESERVED
 import cn.song.mybatisplus.visualizer.sql.SQLITE_RESERVED
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -124,5 +128,65 @@ class DialectH2VerificationTest {
                 "sort", "state", "result", "data", "group", "index", "table", "limit",
             ),
         )
+    }
+
+    // ------------------------------------------------------------------
+    // 标识符折叠方向实测对照（O-51 / T-IdentifierFoldingFamily：H2 族归属）
+    // ------------------------------------------------------------------
+
+    /**
+     * H2 折叠方向**引擎实测对照**——[H2Dialect.identifierFolding] 归属的唯一判据来源。
+     *
+     * 实验设计：用**带引号**创建两个名字（H2 的引号内大小写原样保留，故能造出「字典里就是小写」
+     * 与「字典里就是大写」两个真实存在的对象），再分别用**裸写**访问。裸写会被引擎折叠一次，
+     * 命中哪一个对象即暴露折叠方向（引号形态作基线，证明两个对象都真实存在）：
+     *
+     * | 读数 | 语句 | 命中 ⇒ | 不命中 ⇒ |
+     * |------|------|--------|----------|
+     * | A | `SELECT COUNT(*) FROM fold_lower`（引号创建的小写名，裸写） | 折为**小写** | 折为**大写** |
+     * | B | `SELECT COUNT(*) FROM FOLD_UPPER`（引号创建的大写名，裸写） | 折为**大写** | 折为**小写** |
+     * | C/D | `FROM "fold_lower"` / `FROM "FOLD_UPPER"` | 基线（对象存在） | 夹具异常 |
+     *
+     * 本机读数（H2 2.3.232 REGULAR，2026-09-22 实测）：**A 失败**（引擎把裸写 `fold_lower`
+     * 折叠成 `FOLD_LOWER` 去找 → `Table "FOLD_LOWER" not found`）、**B 成功**、C/D 成功
+     * ⇒ **裸标识符折为大写（UPPER 族，与 Oracle 同向）**。
+     *
+     * 本用例把族归属钉在**真实引擎读数**上（而非钉在另一条断言的期望值里）：归属写错时先红。
+     */
+    @Test
+    fun `标识符折叠方向_H2引擎实测对照`() {
+        DialectVerifySupport.open(DialectVerifySupport.h2Engines[0], "p05_h2_fold").use { conn ->
+            DialectVerifySupport.exec(conn, "CREATE TABLE \"fold_lower\" (id INT)")
+            DialectVerifySupport.exec(conn, "CREATE TABLE \"FOLD_UPPER\" (id INT)")
+
+            // 基线：引号形态必须命中（否则是夹具坏了，读到的不是折叠方向）
+            assertEquals(1, DialectVerifySupport.exec(conn, "SELECT COUNT(*) FROM \"fold_lower\""))
+            assertEquals(1, DialectVerifySupport.exec(conn, "SELECT COUNT(*) FROM \"FOLD_UPPER\""))
+
+            // 读数 A / B：裸写访问（引擎折叠一次）
+            val bareLowerHits = runCatching { DialectVerifySupport.exec(conn, "SELECT COUNT(*) FROM fold_lower") }
+                .isSuccess
+            val bareUpperHits = runCatching { DialectVerifySupport.exec(conn, "SELECT COUNT(*) FROM FOLD_UPPER") }
+                .isSuccess
+            val readings = "A 裸写小写名命中=$bareLowerHits / B 裸写大写名命中=$bareUpperHits"
+
+            val measured = when {
+                !bareLowerHits && bareUpperHits -> IdentifierFolding.UPPER
+                bareLowerHits && !bareUpperHits -> IdentifierFolding.LOWER
+                bareLowerHits && bareUpperHits -> IdentifierFolding.NONE
+                else -> null // 两个裸写都 miss：引号大小写敏感且不折叠 → 按名判定无意义（NONE）
+            }
+            assertEquals("H2 引擎实测折叠方向（$readings）", IdentifierFolding.UPPER, measured)
+            assertEquals("族声明须与引擎实测一致（$readings）", measured, H2Dialect.identifierFolding)
+
+            // 决定性对照：插件对「字典里的真实小写名」（CATALOG 来源）渲染出的引用形态，
+            // 必须在 H2 上真实命中该对象——NONE 族会裸写 → 被折叠为大写 → 表不存在。
+            val catalogRef = H2Dialect.quoteIfNeeded("fold_lower", IdentifierCaseSource.CATALOG)
+            assertEquals("目录来源含小写 → 必须加引号（UPPER 族）", "\"fold_lower\"", catalogRef)
+            assertTrue(
+                "插件渲染的目录来源引用 $catalogRef 在 H2 上须可执行（$readings）",
+                runCatching { DialectVerifySupport.exec(conn, "SELECT COUNT(*) FROM $catalogRef") }.isSuccess,
+            )
+        }
     }
 }

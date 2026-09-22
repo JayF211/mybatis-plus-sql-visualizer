@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.generator
 import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.DmDialect
+import cn.song.mybatisplus.visualizer.sql.H2Dialect
 import cn.song.mybatisplus.visualizer.sql.IdentifierCaseSource
 import cn.song.mybatisplus.visualizer.sql.IdentifierFolding
 import cn.song.mybatisplus.visualizer.sql.KingBaseDialect
@@ -465,17 +466,20 @@ class CrudSqlGeneratorTest {
      * 不折叠族（[Dialect.identifierFolding] = NONE）**逐字节不变**：目录来源与实体来源在同一 spec
      * 上的全部产物逐字符相同。
      *
-     * O-51 后本判据的适用面收窄为 NONE 族 6 方言——UPPER/LOWER 两族的目录来源分支必然产生差异
+     * O-51 后本判据的适用面收窄为 NONE 族 5 方言——UPPER/LOWER 两族的目录来源分支必然产生差异
      * （见上一用例）。夹具特意用**含大写**的名字（`Biz_Order`），使「族判定漏进默认路径」这类
      * 回归无法藏在小写夹具后面。这是「不改变其余方言产物」的结构性守卫（比逐方言快照更严：
      * 同 spec 双来源直接对比）。
+     *
+     * H2 自本轮起为 UPPER 族（`DialectH2VerificationTest.标识符折叠方向_H2引擎实测对照` 引擎实测
+     * 折为大写），故已从本清单移出——H2 的目录来源含小写名会加引号，与实体来源不再逐字节一致。
      */
     @Test
     fun nonFoldingDialectsRenderByteIdenticalRegardlessOfCaseSource() {
         val nonFolding = DialectRegistry.dialects.filter { it.identifierFolding == IdentifierFolding.NONE }
         // 逐库点名（不按属性自证）：族声明写错时本断言先红，避免「过滤条件与被测属性同源」的空绿
         assertEquals(
-            listOf("MySQL", "SQL Server", "H2", "SQLite", "MariaDB", "DM（达梦）"),
+            listOf("MySQL", "SQL Server", "SQLite", "MariaDB", "DM（达梦）"),
             nonFolding.map { it.name },
         )
         nonFolding.forEach { dialect ->
@@ -516,6 +520,26 @@ class CrudSqlGeneratorTest {
             dialect = PostgreSQLDialect,
             entitySql = "SELECT id\nFROM Issue_New",
             catalogSql = "SELECT id\nFROM \"Issue_New\"",
+        )
+    }
+
+    /**
+     * H2 = **UPPER 族**（本轮按引擎实测订正：`DialectH2VerificationTest.标识符折叠方向_H2引擎实测对照`
+     * 实测裸写折为大写）——目录来源含小写的字典名加引号、全大写名裸写，与 Oracle 同判定。
+     */
+    @Test
+    fun h2CatalogSourceFollowsUpperFamily() {
+        assertCaseSourceChangesOutput(
+            tableName = "issue_new",
+            dialect = H2Dialect,
+            entitySql = "SELECT id\nFROM issue_new",
+            catalogSql = "SELECT \"id\"\nFROM \"issue_new\"",
+        )
+        // 全大写字典名（裸写创建的对象）裸写——UPPER 族不含小写即不触发
+        assertEquals(
+            "SELECT ID\nFROM ISSUE_NEW",
+            CrudSqlGenerator.generate(catalogSpec("ISSUE_NEW", "ID", dialect = H2Dialect))
+                .first { it.kind == CrudKind.SELECT_ALL }.result.sql,
         )
     }
 
