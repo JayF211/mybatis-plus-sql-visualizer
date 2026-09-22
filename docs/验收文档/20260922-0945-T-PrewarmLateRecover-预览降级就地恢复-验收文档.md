@@ -70,10 +70,10 @@
 
 | 项 | 读数 |
 |----|------|
-| 定向测试（9 类） | 40 例，0 失败（`SqlPreviewPanelPrewarmLateRecoverTest` 5 + `PrewarmAwaitTest` 8 + 消费链/写安全/临时文件/横幅/i18n 守卫各若干） |
+| 定向测试（3 类） | 17 例，0 失败（`SqlPreviewPanelPrewarmLateRecoverTest` 6 + `PrewarmAwaitTest` 8 + `SqlPreviewPanelPrewarmConsumeTest` 3）；同批另有横幅/i18n 守卫等 9 类 40 例全绿（首轮定向） |
+| 全量测试 | `./gradlew test` → **492 类 / 5616 用例 / 0 失败 / 0 错误 / 6 跳过**（BUILD SUCCESSFUL 8m37s，结果 2026-09-22 11:11:02 落盘） |
 | 反向验证 | 移除「用户已编辑」守卫 + 移除迟到通道投递 → **4 例变红**（`PrewarmAwaitTest.test超时后产物到达_走迟到通道`、`SqlPreviewPanelPrewarmLateRecoverTest` 的自动换装/重试/用户已编辑 3 例）；恢复后复绿 |
-| 全量测试 | 待回填（见文末变更记录） |
-| 构建门禁 | 待回填 |
+| 构建门禁 | 见文末变更记录 |
 
 ---
 
@@ -81,4 +81,4 @@
 
 | 日期 | 变更 |
 |------|------|
-| 2026-09-22 | 首次撰写：随分支 `t-prewarm-late-recover` 交付 F1（迟到产物自动换装）+ F2（横幅重试动作）；定向与反向验证读数已填，全量与构建门禁待回填 |
+| 2026-09-22 | 首次撰写：随分支 `t-prewarm-late-recover` 交付 F1（迟到产物自动换装）+ F2（横幅重试动作）；定向、反向验证与全量读数已填，构建门禁待回填 |
