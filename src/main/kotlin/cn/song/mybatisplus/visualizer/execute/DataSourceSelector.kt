@@ -132,6 +132,11 @@ object DataSourceSelector {
     // T-PerfSweep2-01：internal 供 ConsoleErrorExtractTest 注入基线（生产路径仅 :2237 赋值）。
     internal var consoleErrorBaseline: Int = 0
 
+    /** T-CEC-01：最近一次已记入日志的「未命中判据的控制台尾部」——取证日志去重用（每次执行至多
+     * 记一条，避免 400ms 拍刷屏）。 */
+    @Volatile
+    private var lastUnrecognizedTail: String? = null
+
     /** T-ExecSilentNoop：本次执行的提示已发出标记——8s 连接监控与 40 拍超时窗口共用，
      * 保证同一次执行只报一次提示（此前二者各按同一 key 报一次，用户见两次红字）。 */
     @Volatile
@@ -602,44 +607,39 @@ object DataSourceSelector {
      * M36.5.48：从 console 历史文档提取真实错误文本——仅当**超时无结果**（真失败/真超时）时
      * 调用。DBN 查询执行失败（SQL 语法错/表不存在等）会把错误消息写入 console history。
      *
-     * 提取规则（防误判）：只认**明确的 SQL 错误签名**（[ERROR_SIGNATURES]），且错误行不得是
+     * 提取规则（防误判）：只认**明确的 SQL 错误判据**（[isErrorSignatureLine]），且错误行不得是
      * 纯 SQL 语句（含 SELECT/FROM/WHERE/JOIN 等 SQL 词），避免把正常 SQL 历史误判为错误
      * （日志实证 `extracted console error: WHERE t.id = 1`——A 并无真失败，正常 SQL 片段被误报）。
      *
      * M36.5.57：只扫 **consoleErrorBaseline 之后**的文本——历史残留错误（上个失败 SQL 写入的
      * Unknown column 等）不在本次范围，正常 SQL 执行后不会"带过来"旧错误。
+     *
+     * T-CEC-02（用户真机 P15）：判据由「短语词表」升级为「结构性判据 + 短语族」——原词表对
+     * `[42000][1064] You have an error in your SQL syntax`（MySQL 语法错）一条都不含，面板因此
+     * 全程无红字、无复制按钮，用户只能在 Output 页自己找。同批漏检的还有 Oracle `ORA-00933`、
+     * MySQL 1062/1451 等；历史真机验证过的错误恰好全是 `Unknown column` 系，故缺口长期未现。
      */
     internal fun extractConsoleError(console: Any?, LOG: com.intellij.openapi.diagnostic.Logger): String? {
         if (console == null) return null
         return runCatching {
-            val consoleView = console.javaClass.getMethod("getConsoleView").invoke(console) ?: return null
-            val historyViewer = consoleView.javaClass.getMethod("getHistoryViewer").invoke(consoleView) ?: return null
-            val doc = historyViewer.javaClass.getMethod("getDocument").invoke(historyViewer)
-                ?: return null
-            // T-PerfSweep2-01：getCharsSequence + subSequence 片段读取——本函数被 600ms×8 拍与
-            // 400ms×40/100 拍两个定时器**逐拍**调用，此前 doc.getText() 每拍整串拷贝全史
-            // （history 随长会话涨到 MB 级后是 EDT 上唯一可感知的 O(全史) 重复分配）。
-            // 只物化 baseline 之后的切片；getCharsSequence 与 getText 同属 Document 接口，
-            // 反射可达性一致，且免去 BadLocationException 面。
-            val seq = doc.javaClass.getMethod("getCharsSequence").invoke(doc) as? CharSequence
-                ?: return null
-            // M36.5.57：只扫本次执行之后新增的文本（基线截断）——忽略 history 残留的旧错误。
-            // baseline 可能因 DBN 写入历史而增长；若文本长度 <= 基线说明无新增内容，return null。
-            val baseline = consoleErrorBaseline
-            val text = when {
-                baseline <= 0 -> seq.toString()
-                seq.length > baseline -> seq.subSequence(baseline, seq.length).toString()
-                else -> return null
-            }
+            val text = newConsoleText(console) ?: return null
             if (text.isBlank()) return null
             val lines = text.lines().filter { it.isNotBlank() }
-            // 从末尾往前找"明确错误签名"且"非纯 SQL"的行
+            // 从末尾往前找"命中错误判据"且"非纯 SQL / 非本插件自写回显"的行
             val errorLine = lines.lastOrNull { line ->
-                ERROR_SIGNATURES.any { line.contains(it, ignoreCase = true) } && !isSqlLine(line)
-            } ?: return null
-            // 取错误行及其后非空行构成可读上下文（错误消息通常多行，后随详情）
+                isErrorSignatureLine(line) && !isSqlLine(line) && !isOwnEchoLine(line)
+            } ?: run {
+                // T-CEC-01：未命中即取证——记下本次新增文本的尾部（有界 + 每次执行只记一次），
+                // 下次扩判据时以真机报文为准，不照用户截图猜形态。
+                logUnrecognizedConsoleTail(lines, LOG)
+                return null
+            }
+            // 取错误行及其后非空行构成可读上下文——错误消息常跨多行（MySQL 语法错把 "near …" 的
+            // SQL 片段跟在其后）。T-CEC-02：4 行放宽到 8 行，并剥掉逐行的 `[时间戳] ` 与提示符。
+            val prompt = consolePrompt(console)
             val idx = lines.indexOf(errorLine)
-            val excerpt = lines.subList(idx, (idx + 4).coerceAtMost(lines.size)).joinToString("\n")
+            val excerpt = lines.subList(idx, (idx + EXCERPT_MAX_LINES).coerceAtMost(lines.size))
+                .joinToString("\n") { stripConsolePrefix(it, prompt) }
             // T-ConsoleDbContext A：附「当前库 / 数据源 / 数据源默认库」上下文——真实事故中 SQL 本身
             // 没问题，是执行落在了错的库（mpj_demo 的 user 表没有 username → 1054），而裸 MySQL 报文
             // 看不出这一层；带上上下文后一眼可归因
@@ -650,24 +650,221 @@ object DataSourceSelector {
         }.getOrNull()
     }
 
-    /** M36.5.48：明确 SQL 错误签名（防误报——只认这些才算真错误，而非正常 SQL 历史）。 */
+    /**
+     * T-CEC-03：兜底呈现——判据认不出的失败，把控制台**新增文本去掉本次 SQL 回显后的残余**交回
+     * 面板，而不是给「SQL 已提交执行，但等待结果超时……检查密码输入框/测试连接」这类笼统提示
+     * （真机 P15 实证：把一条 MySQL 语法错归因成密码/驱动问题，归因方向是错的）。
+     *
+     * 只做「减去回显」不做任何语义判断：残余是什么就报什么，面板侧附一句如实说明
+     * （`execute.error.unknownShape`）——不声称它是 SQL 错误，也不猜原因。
+     *
+     * 剔除规则（宁少勿错）：空行；DBN 回显行（剥掉时间戳/提示符后是本次执行 SQL 的子串）；
+     * DBN 状态行（Connected / completed in … 等）。全部被剔完返 null（调用方落回既有提示）。
+     */
+    internal fun extractConsoleResidue(
+        console: Any?,
+        sqlText: String?,
+        LOG: com.intellij.openapi.diagnostic.Logger,
+    ): String? {
+        if (console == null) return null
+        return runCatching {
+            val text = newConsoleText(console) ?: return null
+            if (text.isBlank()) return null
+            val sqlNorm = normalizeForEcho(sqlText.orEmpty())
+            val prompt = consolePrompt(console)
+            val kept = text.lines()
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .filterNot { isConsoleStatusLine(it) }
+                .filterNot { isSqlEchoLine(it, sqlNorm, prompt) }
+            if (kept.isEmpty()) return null
+            val joined = kept.takeLast(RESIDUE_MAX_LINES).joinToString("\n")
+            val out = if (joined.length > RESIDUE_MAX_CHARS) joined.take(RESIDUE_MAX_CHARS) else joined
+            LOG.info("[T-CEC] console residue (no known signature): ${out.replace('\n', '⏎').take(200)}")
+            out
+        }.getOrNull()
+    }
+
+    /**
+     * T-CEC：读取 console history 文档中**基线之后**的新增文本（读不到 / 无新增返 null）。
+     *
+     * T-PerfSweep2-01 的片段物化契约在此保持（ConsoleErrorExtractTest 逐条断言）：baseline<=0
+     * 走整串一次、>0 只切一刀、无增长零物化——本函数是两个定时器逐拍调用的共用读取面，
+     * 抽出来只为让兜底呈现复用同一份切片语义。
+     */
+    private fun newConsoleText(console: Any?): String? {
+        if (console == null) return null
+        val consoleView = console.javaClass.getMethod("getConsoleView").invoke(console) ?: return null
+        val historyViewer = consoleView.javaClass.getMethod("getHistoryViewer").invoke(consoleView) ?: return null
+        val doc = historyViewer.javaClass.getMethod("getDocument").invoke(historyViewer) ?: return null
+        // T-PerfSweep2-01：getCharsSequence + subSequence 片段读取——本函数被 600ms×8 拍与
+        // 400ms×40/100 拍两个定时器**逐拍**调用，此前 doc.getText() 每拍整串拷贝全史
+        // （history 随长会话涨到 MB 级后是 EDT 上唯一可感知的 O(全史) 重复分配）。
+        // 只物化 baseline 之后的切片；getCharsSequence 与 getText 同属 Document 接口，
+        // 反射可达性一致，且免去 BadLocationException 面。
+        val seq = doc.javaClass.getMethod("getCharsSequence").invoke(doc) as? CharSequence ?: return null
+        // M36.5.57：只扫本次执行之后新增的文本（基线截断）——忽略 history 残留的旧错误。
+        // baseline 可能因 DBN 写入历史而增长；若文本长度 <= 基线说明无新增内容，返回 null。
+        val baseline = consoleErrorBaseline
+        return when {
+            baseline <= 0 -> seq.toString()
+            seq.length > baseline -> seq.subSequence(baseline, seq.length).toString()
+            else -> null
+        }
+    }
+
+    /**
+     * T-CEC-01：未命中判据的控制台新增文本尾部（有界 + 同一段只记一次）——取证用，供下次扩判据
+     * 时核对 DBN 真实写入 history 的报文形态（是否带 `[时间戳]` 前缀、是否跨行、SQLSTATE 前缀
+     * 是否在场）。行数与字符数双上限，避免长会话刷屏。
+     */
+    private fun logUnrecognizedConsoleTail(lines: List<String>, LOG: com.intellij.openapi.diagnostic.Logger) {
+        val tail = lines.takeLast(UNRECOGNIZED_TAIL_LINES).joinToString("\n").take(UNRECOGNIZED_TAIL_CHARS)
+        if (tail.isBlank() || tail == lastUnrecognizedTail) return
+        lastUnrecognizedTail = tail
+        LOG.info("[T-CEC] console tail (no error signature matched): ${tail.replace('\n', '⏎')}")
+    }
+
+    /** T-CEC-02：错误上下文摘录的最大行数（错误行起算）。 */
+    private const val EXCERPT_MAX_LINES = 8
+
+    /** T-CEC-01：取证日志的行数 / 字符数上限。 */
+    private const val UNRECOGNIZED_TAIL_LINES = 6
+    private const val UNRECOGNIZED_TAIL_CHARS = 600
+
+    /** T-CEC-03：兜底呈现的行数 / 字符数上限。 */
+    private const val RESIDUE_MAX_LINES = 6
+    private const val RESIDUE_MAX_CHARS = 600
+
+    /**
+     * T-CEC-02：DBN 服务端错误前缀形态 `[SQLSTATE][errorCode]`——DBN 把驱动 SQLException 的
+     * SQLState 与 vendor code 拼在报文最前（真机日志实证：`[42S22][1054] Unknown column …`、
+     * `[42000][1064] You have an error in your SQL syntax …`）。跨方言同形，比短语词表硬：
+     * 原词表认 `syntax error`，却认不出 `You have an error in your SQL syntax`。
+     * 5 位定长是关键——`[2026-09-22 08:48:12]` 这类时间戳前缀（19 字符）不会被误命中。
+     */
+    private val SQLSTATE_PREFIX = Regex("""\[[0-9A-Za-z]{5}]\[\d+]""")
+
+    /** T-CEC-02：Oracle 错误码形态（`ORA-00933` 等）——Oracle 报文常不带 SQLSTATE 前缀。 */
+    private val ORACLE_CODE = Regex("""\bORA-\d{5}\b""", RegexOption.IGNORE_CASE)
+
+    /** T-CEC-02：错误签名短语族（结构性判据覆盖不到的方言 / 驱动惯用报文）。 */
     private val ERROR_SIGNATURES = listOf(
+        // M36.5.48 原有 14 条（历史命中系，行为保持不动）
         "sql exception", "syntax error", "sqlstate", "unknown column",
         "unknown table", "doesn't exist", "does not exist", "access denied",
         "deadlock", "error code", "broken pipe", "connection refused",
         "[\u65e5\u8bed\u9519\u8bef]", "sql\uff08", "exception in thread",
+        // T-CEC-02 新增：MySQL 语法错（用户 2026-09-22 真机 Output 报文逐字）
+        "you have an error in your sql syntax",
+        // T-CEC-02 新增：厂商固定报文（MySQL 1062 / 1451、Oracle ORA-00933）
+        "duplicate entry", "foreign key constraint",
+        "cannot add or update a child row", "cannot delete or update a parent row",
+        "sql command not properly ended",
     )
+
+    /** T-CEC-02：一行是否命中错误判据（结构性判据 + 短语族）。 */
+    private fun isErrorSignatureLine(line: String): Boolean =
+        SQLSTATE_PREFIX.containsMatchIn(line) ||
+            ORACLE_CODE.containsMatchIn(line) ||
+            ERROR_SIGNATURES.any { line.contains(it, ignoreCase = true) }
+
+    /**
+     * T-CEC-02：本插件自己写进 Output 的回显行前缀（[writeConsoleOutput] 的「执行失败: 」）——
+     * 提取时排除，避免「已上报的错误被自己写回控制台后又当成新错误」的自反馈。
+     */
+    private const val EXEC_FAILURE_ECHO_PREFIX = "执行失败:"
+
+    private fun isOwnEchoLine(line: String): Boolean =
+        stripConsolePrefix(line, null).startsWith(EXEC_FAILURE_ECHO_PREFIX)
+
+    /** T-CEC-02：DBN 输出行的 `[时间戳] ` 前缀（用户真机报文逐行带此前缀）。 */
+    private val TIMESTAMP_PREFIX = Regex("""^\[\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?]\s*""")
+
+    private fun stripTimestamp(line: String): String {
+        val s = line.trim()
+        val m = TIMESTAMP_PREFIX.find(s) ?: return s
+        return s.substring(m.range.last + 1).trim()
+    }
+
+    /** T-CEC-02：剥掉时间戳与（DBN 实读的）提示符前缀——呈现与复制都更干净。 */
+    private fun stripConsolePrefix(line: String, prompt: String?): String {
+        var s = stripTimestamp(line)
+        if (!prompt.isNullOrBlank() && s.startsWith(prompt)) s = s.substring(prompt.length).trim()
+        return s
+    }
+
+    /**
+     * T-CEC-02：读 DBN 控制台提示符（`mpj_demo>` / `ds>>`，即 `LanguageConsoleView.prompt`——
+     * 243 源码 jar 实证为 Kotlin `var prompt: String?`，插件既有 [clearConsolePrompt] 已用 setPrompt）。
+     * 取不到返 null：调用方退化为只剥时间戳，不猜提示符形态。
+     */
+    private fun consolePrompt(console: Any?): String? = runCatching {
+        if (console == null) return null
+        val consoleView = console.javaClass.getMethod("getConsoleView").invoke(console) ?: return null
+        (consoleView.javaClass.getMethod("getPrompt").invoke(consoleView) as? String)
+            ?.takeIf { it.isNotBlank() }
+    }.getOrNull()
+
+    /** T-CEC-03：回显比对用的归一化（空白折叠 + 小写）。 */
+    private val WHITESPACE_RUN = Regex("""\s+""")
+
+    private fun normalizeForEcho(text: String): String =
+        text.replace(WHITESPACE_RUN, " ").trim().lowercase()
+
+    /** T-CEC-03：兜底剥离提示符的候选形态（仅当剩余部分是本次 SQL 子串时才据此判为回显）。 */
+    private val PROMPT_CANDIDATE = Regex("""^\S{1,64}>+\s+""")
+
+    /**
+     * T-CEC-03：该行是否本次执行 SQL 的回显——剥掉时间戳后（必要时再剥提示符）是本次 SQL 文本的
+     * 子串即认（多行 SQL 的每一行都是 SQL 的子串）。判据宽松方向是「多剔」：宁可残余变空退回
+     * 既有提示，也不把回显当错误报给用户。
+     */
+    private fun isSqlEchoLine(line: String, sqlNorm: String, prompt: String?): Boolean {
+        if (sqlNorm.isEmpty()) return false
+        val body = stripTimestamp(line)
+        val candidates = mutableListOf(body)
+        if (!prompt.isNullOrBlank() && body.startsWith(prompt)) {
+            candidates += body.substring(prompt.length).trim()
+        }
+        PROMPT_CANDIDATE.find(body)?.let { m -> candidates += body.substring(m.value.length).trim() }
+        return candidates.any { c ->
+            val n = normalizeForEcho(c)
+            n.length >= 4 && sqlNorm.contains(n)
+        }
+    }
+
+    /**
+     * T-CEC-03：DBN 状态 / 结果摘要行——不是错误内容，兜底呈现时剔除。
+     *
+     * 判据刻意偏「多剔」：语句**成功**但 DBN 不建结果 Tab 的场景同样会走满 40 拍窗口（DML 与
+     * `use` 这类工具语句的影响行数/完成回显就写在 Output 里），把 `1 row affected` 当残余报出来
+     * 等于把成功说成失败；剔多了只是落回既有提示，属可接受方向（宁少勿错）。
+     */
+    private val CONSOLE_STATUS_LINES = listOf(
+        "connected", "completed in", "executing", "fetching", "fetched",
+        "cancelled", "canceled", "query ok", "affected", "took ", "elapsed",
+    )
+
+    /** T-CEC-03：结果摘要词（`1 row affected` / `N rows` / `updated` 等）——同上，偏多剔。 */
+    private val CONSOLE_STATUS_WORDS =
+        Regex("""\b(rows?|records?|updated|deleted|inserted)\b""", RegexOption.IGNORE_CASE)
+
+    private fun isConsoleStatusLine(line: String): Boolean {
+        val n = stripTimestamp(line).lowercase()
+        return CONSOLE_STATUS_LINES.any { n.contains(it) } || CONSOLE_STATUS_WORDS.containsMatchIn(n)
+    }
 
     /** M36.5.48：判断一行是否纯 SQL 语句（避免把「WHERE t.id=1」等当错误）。 */
     private fun isSqlLine(line: String): Boolean {
         val lower = line.trim().lowercase()
-        // 含 SQL 关键字且无错误签名增强词 → 大概率是 SQL 文本而非错误
+        // 含 SQL 关键字且无错误判据命中 → 大概率是 SQL 文本而非错误
         return (lower.startsWith("select") || lower.startsWith("from") ||
             lower.startsWith("where") || lower.startsWith("join") ||
             lower.startsWith("insert") || lower.startsWith("update") ||
             lower.startsWith("delete") || lower.startsWith("create") ||
             lower.startsWith("alter") || lower.startsWith("drop")) &&
-            !ERROR_SIGNATURES.any { line.contains(it, ignoreCase = true) }
+            !isErrorSignatureLine(line)
     }
 
     /**
@@ -853,7 +1050,11 @@ object DataSourceSelector {
                         // 且上游是 Swing Timer 拍（Timer 活动同样非用户活动）——必须 write-safe 模态投递，
                         // any() 恒 write-unsafe（见 DocWriteContext KDoc）。
                         ApplicationManager.getApplication().invokeLater({
-                            writeConsoleOutput(shared ?: preparedConsole, "执行失败: $err\n", isError = true)
+                            writeConsoleOutput(
+                                shared ?: preparedConsole,
+                                "$EXEC_FAILURE_ECHO_PREFIX $err\n",
+                                isError = true,
+                            )
                             onError?.invoke(err)
                         }, com.intellij.openapi.application.ModalityState.nonModal())
                         return
@@ -2405,6 +2606,8 @@ object DataSourceSelector {
         // M36.5.57：记录本次执行开始时 console history 基线长度——早检只扫本次之后新增文本，
         // 忽略 history 残留（正常 SQL 不再"带过来"上个失败的错误）。
         consoleErrorBaseline = consoleHistoryLength(console)
+        // T-CEC-01：取证日志去重基线同批重置——每次执行至多记一条未识别尾部。
+        lastUnrecognizedTail = null
         runCatching {
             val consoleClass = Class.forName(CONSOLE_CLASS)
 
@@ -2954,21 +3157,36 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                         // M36.5.48：优先取 console 真实错误文本（DBN 查询失败写入 history）；
                         // 读不到才 fallback 笼统 hint（超时/索引）。
                         val realError = extractConsoleError(sharedConsole ?: preparedConsole, LOG)
+                        // T-CEC-03：判据认不出的失败也要有下文——控制台确有新增输出（去掉本次 SQL
+                        // 回显后的残余）时如实呈现，而不是把语法错归因成密码/驱动（真机 P15 实证）。
+                        val residue = if (realError == null) {
+                            extractConsoleResidue(sharedConsole ?: preparedConsole, sqlText, LOG)
+                        } else {
+                            null
+                        }
                         // T-ExecSilentNoop：40 拍超时窗口与 8s 监控共用 executionHintReported 去重。
                         // 真实错误优先（DBN 已把失败写进 history 才叫真失败/真超时）；无错误痕迹时
                         // 不再一律归因凭据——先看本次是否探到"未提交"（freshModel 回落，DBN 侧静默
                         // 拒绝），按情况给 notSubmitted / timeout / indexing 三种真实提示。
                         if (realError == null && !executionHintReported) {
                             executionHintReported = true
-                            val fallbackHint = when {
-                                dumb -> MpSqlVisualizerBundle.message("execute.indexing.hint")
-                                demotedOverride -> MpSqlVisualizerBundle.message("execute.notSubmitted.hint", dsName ?: "")
-                                else -> MpSqlVisualizerBundle.message("execute.timeout.hint")
+                            val message = if (residue != null) {
+                                // 如实标注：这是控制台新增输出，**不是**已识别的错误形态（不猜原因）
+                                "${MpSqlVisualizerBundle.message("execute.error.unknownShape")}\n$residue"
+                            } else {
+                                when {
+                                    dumb -> MpSqlVisualizerBundle.message("execute.indexing.hint")
+                                    demotedOverride -> MpSqlVisualizerBundle.message("execute.notSubmitted.hint", dsName ?: "")
+                                    else -> MpSqlVisualizerBundle.message("execute.timeout.hint")
+                                }
                             }
-                            LOG.info("[M36] result tab not appeared, no console error (dumb=$dumb, demoted=$demotedOverride) - hint via 40-tick window")
+                            LOG.info(
+                                "[M36] result tab not appeared, no console error (dumb=$dumb, " +
+                                    "demoted=$demotedOverride, residue=${residue != null}) - hint via 40-tick window",
+                            )
                             // write-safe: UI-only（纯 Swing/只读，无文档写）
                             ApplicationManager.getApplication().invokeLater({
-                                onError?.invoke(fallbackHint)
+                                onError?.invoke(message)
                             }, com.intellij.openapi.application.ModalityState.any())
                         } else if (realError != null) {
                             // write-safe: UI-only（纯 Swing/只读，无文档写）
