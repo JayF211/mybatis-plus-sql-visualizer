@@ -98,7 +98,7 @@
 2. **R3：SSE 通道 agent 侧可达性**——`idea.log` 出现 `Running private IJ MCP session for agent acp.registry.claude-acp over Sse`（绕行成败点）。
 3. ACP 会话工具表出现十个 `sqlv_*` 且为原生 MCP 调用。
 4. `[MCP-AUDIT]` 审计行出现 `tool=sqlv_* status=OK`。
-5. **（实施期新增未验点）**装机制品 262.10968.97 的 EP 接口形参包是 `com.intellij.ml.llm.agents.acp.api`，而我方 `AcpIdeaMcpTransportProviderImpl` 实现的是 `com.intellij.platform.acp` 包——EP 类链接/调用是否真的失配**未在真机验证**（本任务只做字节码级取证）。护栏按登记表分组如实绿，不覆盖此项。
+5. **（2026-09-22 第二轮收口：字节码级半边已闭环，真机半边仍未验）**装机制品 262.10968.97 的 EP 接口形参包是 `com.intellij.ml.llm.agents.acp.api`，而我方 `AcpIdeaMcpTransportProviderImpl` 原只实现 `com.intellij.platform.acp` 形态——**JVM 按擦除后描述符匹配 override，故原实现在装机线上没有实现该接口的抽象方法**（EP 调用即 `AbstractMethodError`，SSE 绕行失效），而当时护栏按「制品→期望包名」分组各自成立即绿，看不见这个失配（独立复核 major⑯）。现：① 实现改为**跨形态**（两个 `AcpAgentId` 形态各声明一个重载，两条发行线各自匹配）；② 护栏补**断言⑥**——逐制品核「我方 impl 是否声明了与 provider 抽象方法逐字节相同描述符的 getTransport」，`--impl` 缺失或文件不存在一律记 MISS（fail-closed）。反向验证：摘掉 api 形态重载 → installed 制品 `RESULT MISSING 1`、用例 FAILED，而 transforms 制品仍 OK（证明按形态判别）。**仍未验**：真机上两线各自「EP 真被注册 / 不抛 AbstractMethodError / SSE 通道可达」。
 
 ## 六、风险
 
@@ -135,4 +135,4 @@ T-MLS-01（checker 与反射加载实测——先用 262 JBR 跑通）→ T-MLS-
 1. **反射加载可行性——已证伪**（结论与证据见上表 T-MLS-01 行）。改走字节码解析，且因此不再需要发行版 JBR。
 2. **gradle transforms 里 ml-llm 制品的产出机制——本机存在但 CI 未判定**：本机实测该制品存在（全机仅此一处 ml-llm transforms），`build.gradle.kts` 无显式声明这条未复核；若 CI 无此制品，发现面自动退化为装机插件目录（`assumeTrue` 跳过或只覆盖一处），**不得宣称「跨版本全覆盖」**。
 3. **`assumeTrue` 跳过与门禁口径——已确认**：沿用既有两条护栏的 `assumeTrue`；跳过计入 skip 不计入 failure（实测 `assumptionFailures=1`、`failures=0`），门禁读数的 skip 数会 +1（本机有制品时不跳过）。
-4. **新增未验点（实施期发现，交真机/后续任务）**：装机制品 provider 形参包与我方 impl 实现的包不一致（见 T-MLS-02 行）——护栏按「制品→期望包名」登记表如实分组，**不**对装机制品断言「包名 == 我方 impl 的包」，故该漂移不会让本护栏转红；须真机走查（§五-1）或后续任务定夺。
+4. **~~新增未验点（实施期发现，交真机/后续任务）~~ → 2026-09-22 第二轮收口：字节码级已闭环（独立复核 major⑯）**：装机制品 provider 形参包与我方 impl 实现的包不一致——当时护栏按「制品→期望包名」登记表如实分组、**不**断言「我方 impl 与该制品接口同形」，故该漂移不会让护栏转红（假绿）。现 ① 实现改为跨形态（两个 `AcpAgentId` 形态各一声明，两条发行线各自匹配，安全前提＝JVM 层实测（带缺席形参类型的额外重载不影响加载/实例化/接口判定/调匹配方法，仅显式方法反射失败）+ 平台层实测（两发行版 `com.intellij.openapi.extensions` 包 69 个类零方法反射））；② 护栏补断言⑥（`--impl` 核 impl 是否声明 provider 抽象方法的同描述符方法，缺失即 MISS）。**真机半边仍未验**（§五-5）：EP 真被注册 / 不抛 AbstractMethodError / SSE 通道可达。

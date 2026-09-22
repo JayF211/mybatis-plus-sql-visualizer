@@ -126,7 +126,7 @@
 **本次实施的新增偏离（与计划正文不同处）**：
 
 1. **计划漏改 UPSERT 路径，本任务一并接线**：`Dialect.renderUpsert` / `renderUpsertStatement` 增加 `caseSource: IdentifierCaseSource = IdentifierCaseSource.ENTITY` 尾参（默认值语义保持，既有调用点逐字节不变），PG 系后缀辅助改走 `quoteIfNeeded`。若不接线，PG 族会产出「基座加引号、后缀裸写」的半包形态（`ON CONFLICT (Id) ...` 里的裸写 `Id` 被折叠为小写 → 列不存在）——`model/BatchModel.kt:141-143` 的原注释明文点名了这一条件（「若日后为别的方言引入目录来源判定，此处须一并接线」），本任务正是该条件。
-2. **H2 归 NONE 与实测相反（有意维持，登记为后续）**：H2 2.3.232 实测裸写 `Issue_New` 被折成 `ISSUE_NEW`、带引号创建的 `"lower_tbl"` 无法裸写访问（与 Oracle 同族），但本轮**不扩面**（改 H2 会让 H2 现有产物变化，超出本任务写集与验收面）。已在 `Dialect.identifierFolding` KDoc 与 `DialectTest` 注明「有意维持 NONE」，缺口登记为后续。
+2. **H2 归 NONE 与实测相反（2026-09-22 第二轮收口已订正为 UPPER）**：H2 2.3.232 实测裸写 `Issue_New` 被折成 `ISSUE_NEW`、带引号创建的 `"lower_tbl"` 无法裸写访问（与 Oracle 同族），本任务当时**不扩面**（改 H2 会让 H2 现有产物变化，超出本任务写集与验收面），登记为后续。**后续已落地（独立复核 minor㉘）**：`H2Dialect.identifierFolding` 改为 `UPPER`；`DialectTest` 被钉死的断言与 `CrudSqlGeneratorTest` 的族点名清单同步解冻。判别力由真实 H2 引擎对照实验提供（`DialectH2VerificationTest.标识符折叠方向_H2引擎实测对照`：引号创建两个名字后裸写访问——裸写小写名失败、裸写大写名命中 ⇒ 折为大写）。反向验证：摘掉 H2 覆盖 → 定向 60 例 5 失败（恰为 5 条判别用例）。
 3. **KingBase 已由「推断」升级为「实测」**：待验证前提 2 的「未实测」作废，见上表基线读数。
 4. **DM 口径分歧保留按我方实测**：三形态均 1029 行 → NONE；DBX 的 `UPPER_FOLDING={dameng,db2}` 不照抄（待验证前提 1 维持）。
 5. **文档落点**：CHANGELOG / `docs/变更记录.md` / 第十轮报告 #55 落地备注按任务描述第 6 条由 T-Round10-08 统一写，本任务只回填本计划文档 §八（计划 §三 T-IFF-04 与任务描述口径不一致，取任务描述）。
@@ -137,4 +137,4 @@
 1. **DM 的口径分歧未解**：我方实测 DM8 大小写不敏感（三形态均命中），而 DBX 把 `{dameng, db2}` 归入 `UPPER_FOLDING`。可能因 DM8 的 `CASE_SENSITIVE` 初始化参数不同实例而异。**本计划按我方实测取 NONE**；若后续遇到 case-sensitive 的 DM8 实例证据，须重新评估（届时 DM 移入 UPPER 族）。
 2. ~~**KingBase 的折叠方向未实测**~~ → **已实测证实为 LOWER**（见上表基线读数：裸写 492 行、引号大写 `kb: relation ... does not exist`），前提作废。
 3. 「PG 族含大写即包」的判据形态——本计划按「含任一大写字母即包」表述，**确切判据**（是否排除保留字、是否用 `any { it.isUpperCase() }`）须与 O-42 的 `any { it.isLowerCase() }` 形态对称实现，并在用例中钉住。
-4. ~~H2 / SQLite / SQLServer 的折叠语义未实测（本计划归 NONE）~~ → **H2 已实测证伪**（2.3.232 折为大写，与 Oracle 同族），本轮**有意维持 NONE 不扩面**（缺口登记为后续，见偏离 2）；SQLite / SQLServer 仍未实测（SQL Server 大小写取决于 collation），维持 NONE。
+4. ~~H2 / SQLite / SQLServer 的折叠语义未实测（本计划归 NONE）~~ → **H2 已实测证伪**（2.3.232 折为大写，与 Oracle 同族），本任务当时**有意维持 NONE 不扩面**（登记为后续，见偏离 2）；**该后续已于 2026-09-22 第二轮收口落地为 UPPER（独立复核 minor㉘）**，判别力由真实 H2 引擎对照实验提供。SQLite / SQLServer 仍未实测（SQL Server 大小写取决于 collation），维持 NONE。
