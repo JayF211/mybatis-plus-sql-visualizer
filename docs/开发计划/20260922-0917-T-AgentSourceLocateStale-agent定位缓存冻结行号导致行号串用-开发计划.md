@@ -200,4 +200,41 @@ agent 的 KDoc 自称「框架帧过滤规则与 IDE 侧 `CallerSourceLocator` �
 
 ## 实施记录
 
-（未实施）
+### 一、车道与提交（2026-09-22）
+
+车道 C（分支 `t-agent-locate` / 工作树 `mpsv-agent-locate`），两个提交均已合入集成分支（`8a88504`）：
+
+| 提交 | 内容 |
+|---|---|
+| `30f4943` | agent 侧：T-01 判定缓存化（`CACHE` 与 `SAFETY_DECISIONS` 合并为 `DECISIONS=[via,主位置class,主位置method]`，命中经「身份在场」校验后按当前 pool 现算行号/候选）、T-02 补 `com.github.yulichang.`、T-05 入口键一次性摘要、KDoc 订正、新增 `StackLocatorCacheStalenessTest`（5 例） |
+| `344bf65` | IDE 侧：`CallerSourceLocator` 前缀与事实化 KDoc、`LocatorSkipPrefixSyncTest`（3 例，保守选项＝两份实现 + 差异登记 + 源码扫描守卫）、`docs/instrumentation/SqlSourceInterceptor.kt` 同步（模板确实内嵌跳过规则副本与失实「对齐」声明） |
+
+### 二、读数
+
+| 项 | 命令 | 读数 |
+|---|---|---|
+| agent 定向 | `:sql-visualizer-agent:test --tests "…agent.util.*"`（先清 build） | `BUILD SUCCESSFUL`；Convergence 8/8、**Staleness 5/5**、Diagnose 7/7 ＝ **20/20** |
+| IDE 守卫 | `testFast --tests "…LocatorSkipPrefixSyncTest"` | `BUILD SUCCESSFUL`，**3/3** |
+
+### 三、反向验证（三臂，均临时改动后 `git checkout` 还原，工作树最终干净）
+
+| 臂 | 改动 | 读数 | 证明了什么 |
+|---|---|---|---|
+| A | T-01 回退成整帧 `putIfAbsent`（T-02 保留） | Staleness **5 例 4 红**：`expected:<63> but was:<42>`（②③④ 同形，①因首调仍是 miss 而绿）；连带 Diagnose 5/7 红、Convergence 5/8 红 | **测试复现了用户报障同形**（42 vs 63），修复点正确 |
+| B | T-01 保留、仅从 agent 表移除 `com.github.yulichang.` | 用例① **仍绿**（同状态下红的只有用例②⑤自身的 T-02 锚点断言，行号断言全过） | **T-01 是根治、T-02 只是收敛面**（计划 T-04 明确要求证明的分离） |
+| C | IDE 侧移除 `com.github.yulichang.` | 跨侧守卫 **2 红**（`两侧共同前缀应含 com.github.yulichang.`、`模板出现插件侧没有的前缀`）；还原后 3/3 | 同步守卫有真实敏感度，不是空绿 |
+
+### 四、写集越界（已核实并接受）
+
+车道 C 另改了两个既有测试（`StackCaptureConvergenceTest`、`StackLocatorDiagnoseTest`）——它们的断言**编码的正是旧的整帧缓存语义**（`assertSame` 复用同一 Frame、「命中即免建池」计时口径），T-01 后必然失效，不改则定向套件必红。主调度逐行核实结论：
+
+- `assertSame` → **`assertNotSame` + 字段等价**（`sourceFile`/`methodKey`/`line`/`via`/候选列数）——**加强**而非放宽：新断言明确禁止「复用整帧实例」这一缺陷形态；
+- 深栈计时守卫重定基线（miss 侧改用 2000 个不可加载类名，使「命中省掉逐帧 `Class.forName`」可观测），**保留原 3 倍阈值**（`hitMin * 3 < missMin`）；
+- 诊断零噪音断言（命中路径不打点）**保留**；`SAFETY_DECISIONS` → `DECISIONS` 的探针改名与两缓存合并一致。
+- 遗留（登记不改）：`DeepCaller` 夹具 KDoc「缓存命中 O(1) 对 miss O(depth)」已过时，属写集外。
+
+### 五、未取证项与残留
+
+- **P-1 仍为「未取证」**：entryKey 是否确为 MPJ 拦截器帧，真机未读到（车道禁 runIde）。T-05 已让它在产线 `logLevel=warn` 档可读（`[T-AgentSourceLocateStale] 入口键非业务帧（一次性摘要，entry=… primary=… via=…）`），下次真机复现即可钉死。**不得把静态帧形态证明写成「已取证」**。
+- 车道 C 的 IDE 侧 gradle 曾多次 `BUILD FAILED` 于 `Unable to delete ~/.gradle/caches/9.7.0/transforms/…/ideaIU-2024.3.7.1-win`（另一车道占用 `jbr/bin/*.dll`），与改动无关；反向臂 C 因此改为直接用 JBR JDK21 运行**已编译的守卫类**（该守卫是源码扫描型，运行时读磁盘源码，等价于真跑），并以提交态对照证明红由漂移引起。收口门禁需注意同类锁竞争，撞到先重试。
+- D3 定案（保守选项）建议维持；若日后要单一事实源，只能走「生成式常量 + 同一扫描守卫」，因为 agent 不可引 IDE 类。
