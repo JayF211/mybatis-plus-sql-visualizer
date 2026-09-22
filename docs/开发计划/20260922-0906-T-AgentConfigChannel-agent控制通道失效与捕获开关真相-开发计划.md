@@ -541,10 +541,17 @@ CHANGELOG `[Unreleased]` 与 `docs/变更记录.md` 三处同步（**已落**，
 守卫红并点名该文件；② 掏空白名单文件里的 `isDisposed` 判定 → 自检用例红。还原后守卫绿。
 
 **读数**：第一层后 `testShards` **FAILED（26 例）**、`verifyGate` 三目标 Compatible；
-第二层后的定向与 shard3 多轮读数见提交信息与验收文档。
+第二层后——定向（守卫 + 受影响 6 处用例 + 姊妹守卫）**BUILD SUCCESSFUL（41s）**、
+`testShard3` **单独连续两轮 BUILD SUCCESSFUL**（2m47s / 3m3s）、
+**完整 `testShards` 三片全绿**（shard1 166 套件 / shard2 160 / shard3 169，失败文件 0，**5644 用例**，3m36s）；
+`verifyGate` 三目标（IU-243 / IU-253 / IU-262）仍全 Compatible。
 
 **已知局限（如实登记）**：该 flake 非确定（同一代码重跑可绿可红），故**绿读数不能证明已治好**；
 可给的最强证据是「结构上已无创建路径可被窗口命中」+ 多轮重复读数 + 守卫锁定。
+**残留（下一杆，若复发）**：**测试侧**的取用仍可能命中窗口——`SqlLogManagerProjectState` 的调用方
+（含本轮新增的 `AgentManagerIntakeGateTest`）在 `@After` 里经 `logManager()` 取服务做复原，
+而 `@After` 正是窗口高发时段。彻底做法＝让快照持有 manager 引用、`@After` 只 `restore(snapshot)` 不再取服务，
+但姊妹守卫 `BannedApiSourceScanTest` 认的是双参 `restore(承接名, snapshot)` 形态，需同步改守卫口径——本轮未做。
 
 **另记（并行会话的独立证实，勿当重复劳动）**：另一会话就同一报障独立排障，用「假 IDE + 真 `SenderLoop`、
 两臂仅字节序不同」的受控实验独立证实本计划的根因——`[len][cmd]`（IDE 实际写序）下三键全不生效、
