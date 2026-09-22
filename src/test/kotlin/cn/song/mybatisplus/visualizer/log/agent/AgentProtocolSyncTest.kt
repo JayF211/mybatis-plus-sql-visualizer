@@ -111,16 +111,24 @@ class AgentProtocolSyncTest {
         // 按方法名判会得到「合入后仍红」的假告警。故判据取「长度从流中读出的位置 vs 命令读出的位置」，
         // 接受两种规范形态：① `X.readInt()` 整型长度前缀；② `len = (len << 8) | b` 逐字节累积。
         // 已离线核对两侧：本分支（缺陷形态）判红、应用侧车道 t-agent-cfg-agent 的 SenderLoop 判绿。
-        val lengthReadIdx = listOf(
+        // 独立复核（2026-09-22）加固：原实现取**全文件首个**长度读与首个命令读，若将来在更早位置
+        // 出现无关的 `readInt()` / `cmd = x.readUnsignedByte()`（例如新增别的方法），判据会**静默
+        // 对准错误的站点**——正是本仓「守卫失去它要防的站点」顽疾的同形。故改为「形态唯一性」判据：
+        // 每种形态在整份源码里**必须恰好一处**，多一处即显式失败（提醒重新对准目标），
+        // 少一处同样失败（入站读帧形态已改）。
+        val lengthReads = listOf(
             Regex("""\w+\.readInt\(\)"""), // ① 整型长度前缀
             Regex("""len\s*=\s*\(\s*len\s*<<\s*8\s*\)"""), // ② 4 字节逐字节累积
-        ).mapNotNull { it.find(code)?.range?.first }.minOrNull() ?: -1
-        val commandReadIdx = Regex("""cmd\s*=\s*\w+\.readUnsignedByte\(\)""").find(code)?.range?.first ?: -1
+        ).flatMap { re -> re.findAll(code).map { it.range.first }.toList() }
+        val commandReads = Regex("""cmd\s*=\s*\w+\.readUnsignedByte\(\)""")
+            .findAll(code).map { it.range.first }.toList()
         assertTrue(
-            "SenderLoop 入站路径须能读到帧长度与命令（长度读 / 命令读均须在位）——" +
-                "找不到说明入站读帧形态已改，本守卫失去目标站点（不得静默跳过）",
-            lengthReadIdx >= 0 && commandReadIdx >= 0,
+            "SenderLoop 入站读帧形态应各恰一处（长度读 ${lengthReads.size} 处 / 命令读 ${commandReads.size} 处）——" +
+                "数量变化说明入站读帧形态已改或出现了新的同形语句，本守卫须重新对准目标站点（不得静默对准错处）",
+            lengthReads.size == 1 && commandReads.size == 1,
         )
+        val lengthReadIdx = lengthReads.first()
+        val commandReadIdx = commandReads.first()
         assertTrue(
             "应用侧 SenderLoop 入站读序未对齐：须先读长度（[len:4]）再读命令（[cmd:1]），" +
                 "当前 长度读@$lengthReadIdx / 命令读@$commandReadIdx。跨车道依赖：应用侧 T-01 未合入本分支时" +
