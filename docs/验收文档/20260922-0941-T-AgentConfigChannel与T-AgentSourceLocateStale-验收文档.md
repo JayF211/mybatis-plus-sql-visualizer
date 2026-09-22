@@ -21,12 +21,16 @@
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| 应用侧定向 | `./gradlew :sql-visualizer-agent:test --tests "cn.song.mybatisplus.sqlvis.agent.transport.*"` | 待填 |
-| 定位器定向 | `./gradlew :sql-visualizer-agent:test --tests "cn.song.mybatisplus.sqlvis.agent.util.*"` | 待填 |
-| IDE 侧定向 | `./gradlew testFast --tests "cn.song.mybatisplus.visualizer.log.agent.*"` | 待填 |
-| 全量 | `./gradlew test`（基线 491 类 / ~5600 用例） | 待填 |
-| 平台门禁 | `verifyGate`（三目标 Compatible） | 待填 |
-| 反向验证 | 各车道回退修复后必红的两轮读数 | 见各计划 §实施记录 |
+| 应用侧定向 | `:sql-visualizer-agent:test --tests "…agent.transport.*"` | **16 例全绿**（新 10 + 既有 6）；反向 A 摘尽出短路 1 红、反向 B 外科式回退读序 6 红 |
+| 定位器定向 | `:sql-visualizer-agent:test --tests "…agent.util.*"` | **20/20 绿**（Convergence 8 + Staleness 5 + Diagnose 7）；反向 A 回退 T-01 → 5 例 4 红（`expected:<63> but was:<42>`，与报障同形）、反向 B 仅摘 MPJ 前缀仍绿、反向 C 守卫 2 红 |
+| IDE 侧定向 | `testFast --tests "…log.agent.*"`（集成分支） | **8 套件 / 47 用例 / 0 失败 / 0 错误 / 0 跳过**；含 `AgentManagerIntakeGateTest` 15 例、`LocatorSkipPrefixSyncTest` 3 例 |
+| **跨车道契约核验** | 同上（A+B+C 合入后） | **两条跨车道断言如期由红转绿**（`CMD_CONFIG_ACK` 两侧同值、入站读序）；派活时即写明「仍红＝应用侧修复被回退」 |
+| 合并态 agent 子项目全量 | `:sql-visualizer-agent:test` | **18 套件 / 82 用例 / 0 失败 / 0 错误 / 0 跳过**（含真子 JVM 的 `AttachGateTest`） |
+| 主编译 | `compileTestKotlin` | `BUILD SUCCESSFUL in 11m 36s`（含平台依赖与多车道并发拖慢） |
+| 全量 | `testShards`（基线 491 类 / ~5600 用例） | 待收口 |
+| 平台门禁 | `verifyGate`（三目标 Compatible） | 待收口 |
+| 独立复核 | 应用侧（另一上下文、只读） | 4 项规格逐条落地、无阻塞性缺陷；「4 例转红」核账独立吻合；抓出 8 处（4 处回交整改、1 处并入 IDE 侧、3 处登记边界） |
+| 独立复核 | IDE 侧（另一上下文、只读） | 进行中（重点：P-5 四态是否引入双通道重复产出、15 例闸门测试逐例鉴别力、ACK 字面跨侧一致） |
 
 ## 3. 真机/沙盒走查（需人工执行，沙盒 runIde + demo `dm` profile）
 

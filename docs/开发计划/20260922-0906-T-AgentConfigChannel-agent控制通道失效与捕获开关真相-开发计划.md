@@ -293,6 +293,19 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 疑与多车道并行构建共享 Gradle transform 缓存有关，非代码问题。收口门禁若撞到同类环境错，
 **先原样重跑一次再判红**（本仓既有 flake 家族：共享 transform 缓存被崩溃 JVM 打坏）。
 
-### 四、待收口补齐
+### 四、集成分支核验（三车道合入后，2026-09-22）
 
-CHANGELOG `[Unreleased]` 与 `docs/变更记录.md` 三处同步、验收文档 §2 读数、真机沙盒六步走查。
+**跨车道契约核验通过**：IDE 侧车道在自己的分支上有两条断言**必红**（`AgentProtocolSyncTest` 的「`CMD_CONFIG_ACK` 两侧同值」与「入站读序」，因应用侧修复不在其分支），派活时即写明「合入后应自动转绿，若仍红说明应用侧修复被回退」。集成分支（`aca845b`，A+B+C 三车道合入后）实测：
+
+```
+./gradlew testFast --tests "cn.song.mybatisplus.visualizer.log.agent.*"
+→ BUILD SUCCESSFUL in 2m 24s；8 套件 / 47 用例 / 0 失败 / 0 错误 / 0 跳过
+```
+
+两条断言**如期转绿**，契约成立；同批 `AgentManagerIntakeGateTest`（15 例）与 `LocatorSkipPrefixSyncTest`（3 例）在合并态全绿。
+
+**合并顺序**：A（`bd222cc`/`deda071`）→ C（`8a88504`）→ B（`aca845b`），三路写集两两不相交、零冲突。**为不阻塞关键路径，B 的合入未等其自跑反向验证**（其实现与守卫已完整提交），反向验证改由主调度在集成分支补做。
+
+### 五、待收口补齐
+
+CHANGELOG `[Unreleased]` 与 `docs/变更记录.md` 三处同步（**已落**，`84f2cb9`）、验收文档 §2 读数、`testFast` 全量 / `testShards` / `verifyGate` 门禁读数、真机沙盒六步走查。
