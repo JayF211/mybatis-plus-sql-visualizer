@@ -139,6 +139,9 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
   IDE 侧收到后 INFO 记一行（含 pid 与三值），并在 `sendConfig` 后 N 秒内未收到 ACK 时 WARN
   「CONFIG 未获确认——应用侧可能未生效」。`pushCaptureActive` 的日志文案同步改为「已下发」而非「已停采」。
 - 收益：这一类「控制通道静默失效」从「只能靠行为反推」变成一行日志直接判定。
+- **落地取值（实施后补记，勿混）**：IDE 侧 ACK 等待窗 `CONFIG_ACK_TIMEOUT_MS = 5000ms`（车道 B，语义＝「CONFIG 回执等待」）；
+  应用侧 CONFIG 看门狗默认 `sqlvis.agent.configWatchdogMs = 15000ms`（车道 A，语义＝「从未收到任何 CONFIG 即自停」）。
+  两者语义不同、数值不同，勿互相引用。
 
 ### T-03（P1，防御性闸门）IDE 侧入队判 `capturing`
 
@@ -222,7 +225,7 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 - **D1**：MCP 审计条目（`mcp/McpToolsetSupport.kt:202-215`）是否也应受「SQL 日志」开关约束？
   现状按 T-McpAuditTrail 的既有边界只尊重 `buffer.paused`，即「从未点过捕获」时 MCP 执行语句会直接进列表。
   与本缺陷是同一类「开关不真」观感，但那是当时的有意决策，需用户拍板（倾向：保持现状 + 在列表上给 MCP 徽标足以区分）。
-- **D2**：T-07 看门狗的 X 秒取值与行为（停采 / 仅告警）。
+- **D2**：T-07 看门狗的 X 秒取值与行为（停采 / 仅告警）。**已按计划建议定案**：X = 15000ms（`sqlvis.agent.configWatchdogMs` 可调），行为＝应用侧自停 + 一次性 WARN。**注**：IDE 侧的 `CONFIG_ACK_TIMEOUT_MS = 5000ms` 是另一件事（回执等待窗），两者勿混（见 §四 T-02 落地取值）。
 
 ## 九、涉及文件清单
 
