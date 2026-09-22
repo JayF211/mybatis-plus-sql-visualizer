@@ -80,6 +80,14 @@ public final class EventBus {
         return CLEARED.get();
     }
 
+    /**
+     * 当前排队事件数（T-AgentConfigChannel T-01b 测试观测）：用于证明停采期间「队列非空却未写出」，
+     * 而不是「队列本来就是空的所以没写出」。
+     */
+    static int queuedCount() {
+        return QUEUE.size();
+    }
+
     static boolean pollEvent(SqlEvent[] out, long timeoutMs) throws InterruptedException {
         final SqlEvent e = QUEUE.poll(timeoutMs, TimeUnit.MILLISECONDS);
         if (e == null) {

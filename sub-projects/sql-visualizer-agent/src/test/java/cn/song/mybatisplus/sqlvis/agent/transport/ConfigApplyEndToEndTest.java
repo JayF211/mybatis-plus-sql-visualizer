@@ -39,14 +39,23 @@ import static org.junit.Assert.assertTrue;
  * 避免「根本没走采集路径」的空真绿。
  *
  * <p>计时全部经系统属性压短（心跳 200ms；看门狗按用例注入），整套用例秒级完成。
+ *
+ * <p><b>对入站读序的鉴别力（实测）</b>：读序改回错位形态后本类 5 例红 2（{@code 停采生效}、
+ * {@code 停采期间_队列非空也不写出事件帧}——都依赖 CONFIG 真被解析生效并回 ACK），
+ * 绿 3（看门狗 2 例 + 下降沿清队列 1 例，均不经入站读序）。
  */
 public class ConfigApplyEndToEndTest {
 
     /** 心跳间隔注入（毫秒）：缩短事件轮询/读超时节奏，让断言窗口落在百毫秒级。 */
     private static final long HEARTBEAT_MS = 200L;
 
-    /** CONFIG 用例的看门狗窗口：CONFIG 在百毫秒内就发出，取 3s 保证看门狗不抢跑（也不拖长用例）。 */
-    private static final long WATCHDOG_MS_CONFIG_CASE = 3000L;
+    /**
+     * CONFIG 用例的看门狗窗口（毫秒）：取 60s 让看门狗在本用例内**不可能**触发。
+     * 不能用「刚过首段」的量级（如 3s）：本用例前置含反射包装 + 语句执行 + 等帧，
+     * 高负载门禁下首段就可能超窗口 → 看门狗抢先把状态置成停采 → 步骤 A 断言偶发转红。
+     * 看门狗本身由 {@link #看门狗_从未收到CONFIG时主动停采而会话仍在} 用短窗口单独覆盖。
+     */
+    private static final long WATCHDOG_MS_CONFIG_CASE = 60_000L;
 
     /** 看门狗用例窗口（毫秒）：会话建立后不发 CONFIG，应在窗口过后主动停采。 */
     private static final long WATCHDOG_MS_CASE = 500L;
@@ -155,6 +164,43 @@ public class ConfigApplyEndToEndTest {
         final Frame f = awaitFrame(in, 3000L);
         assertNotNull("看门狗停采后会话不得关闭（应仍有心跳帧）", f);
         assertEquals("停采后仍应为心跳（会话存活）", EventBus.CMD_HEARTBEAT, f.cmd);
+    }
+
+    /**
+     * T-01b 尽出闸门（计划 §五 P-3 要求的「队列补投断言」）：**队列非空且已停采**时，
+     * 不得写出任何 EVENT 帧（心跳不受影响）。
+     *
+     * <p>为什么是「先停采、再塞事件」而不是「先塞、再停采」：后者要断言「停采生效前没被尽出」
+     * 就必须赌「入队 vs 尽出」的线程交错，那本身就是竞态，用例会偶发。这里构造的状态与现场等价
+     * ——队列里有事件、当前处于停采态——只是把顺序固定下来：停采帧先经真 socket 生效（ACK 为凭），
+     * 再注入事件，于是「有没有被写出」只取决于尽出前那道 {@code isDisabled()} 短路。
+     * 删掉该短路 → 下一轮尽出就把这 5 条写成 EVENT 帧 → 本用例转红（读数见实施记录）。
+     *
+     * <p>边界（有意保持现状）：短路只保证「停采期间不投递」，**不承诺丢弃**——丢弃职责在下降沿清空
+     * 与 IDE 侧入队闸门（T-03）。故末尾清队列，免把存量事件漏给同 JVM 的其它用例。
+     */
+    @Test
+    public void 停采期间_队列非空也不写出事件帧() throws Exception {
+        startLoop(WATCHDOG_MS_CONFIG_CASE);
+        final DataInputStream in = new DataInputStream(socket.getInputStream());
+        final DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+        assertEquals(EventBus.CMD_HELLO, awaitFrame(in, 3000L).cmd);
+
+        SenderLoop.writeFrame(out, EventBus.CMD_CONFIG, "{\"disabled\":true}");
+        assertNotNull("停采 CONFIG 应获 ACK", awaitFrame(in, EventBus.CMD_CONFIG_ACK, 3000L));
+        assertTrue("应用侧应处于停采态", AgentState.isDisabled());
+
+        final int queuedBefore = EventBus.queuedCount();
+        for (int i = 0; i < 5; i++) {
+            EventBus.offer(staleEvent("SELECT stale-" + i));
+        }
+
+        assertNoEventFrame(in, 1000L);
+        assertTrue("这 5 条应仍留在队列里（证明是「停采期间不投递」而非「已丢弃」）：实测 "
+                        + EventBus.queuedCount() + " 条",
+                EventBus.queuedCount() >= queuedBefore + 5);
+
+        EventBus.clearQueued(); // 边界清理：短路不承诺丢弃，用例内自行清干净
     }
 
     /** T-07 窗口取值：缺省/非法/非正数一律回落默认，不得因注入失误改变生产行为。 */

@@ -36,7 +36,24 @@ import static org.junit.Assert.fail;
  * <p>本类把读序钉在**行为**上（不是源码扫描）：按 IDE 侧写帧形态（{@code writeInt(len) +
  * writeByte(cmd) + body}）造帧，断言解析出 {@code cmd == CMD_CONFIG}、payload 完整、应用后
  * {@code AgentState.isDisabled() == true}；畸形长度帧断言**抛异常走重连 + WARN 记长度与首字节**，
- * 而不是被当成「无入站数据」静默吞。把读序改回错位形态 → 本类全红（反向验证读数见实施记录）。
+ * 而不是被当成「无入站数据」静默吞。
+ *
+ * <p><b>对读序的鉴别力（实测读数，勿再笼统写成「全红」）</b>：把读序改回错位形态
+ * （{@code readUnsignedByte()} 在前、{@code readInt()} 在后）后，本类 5 例中 **4 例转红**
+ * ——{@code 金标准帧}、{@code 畸形长度帧_抛异常并告警长度与首字节}（错位长度意外落进合法区间，
+ * 连 WARN 都打不出来）、{@code body截断_抛异常而非静默吞}（错位长度下 WARN 记的是 525691 而非 8）、
+ * {@code 畸形长度帧_会话走重连}（被读超时静默吞掉，永不重连）；另 1 例**对读序无鉴别力**，
+ * 不得计入覆盖证据：
+ * <ul>
+ *   <li>{@code 未知命令_只告警一条且计数可观测}——直接调 {@code handleInbound}，绕开了拆帧层，
+ *       错位形态下行为完全相同（绿）；它锁的是「一次性告警 + 计数」，不是读序。</li>
+ * </ul>
+ * 同类跨侧用例 {@code ConfigApplyEndToEndTest} 在错位形态下 5 例红 2（两个依赖 CONFIG 生效的用例）、
+ * 绿 3（看门狗 2 例与下降沿清队列 1 例都不经入站读序）。
+ *
+ * <p>本类曾被写成「改回错位形态 → 本类全红」——那是**未实测的断言**：当时 {@code body截断} 只断言
+ * 「抛 IOException」，而旧读序下 {@code readFully} 阻塞到读超时抛出的也是 IOException，天然成立
+ * （本仓「守卫看不见它要防的站点」顽疾）。现该例补上 WARN 关键字校验才真正随读序转红。
  */
 public class SenderLoopFrameTest {
 
@@ -81,20 +98,35 @@ public class SenderLoopFrameTest {
         assertTrue("CONFIG 应用计数应可观测（排障用）", AgentState.configAppliedCount() > 0L);
     }
 
-    /** 未知命令（旧读序下 CONFIG 就落在这里）不再静默丢弃。 */
+    /**
+     * 未知命令（旧读序下 CONFIG 就落在这里）不再静默丢弃；告警**只出一条**、计数逐条累加
+     * （照本仓 SqlHookCallbacks 的 WARNED_ONCE 范式——流错位会逐帧命中，逐帧打印等于刷屏宿主日志）。
+     *
+     * <p>本用例直接驱动 {@code handleInbound}，**对入站读序无鉴别力**（见类 KDoc）。
+     */
     @Test
-    public void 未知命令_不静默丢弃且不回执() throws Exception {
+    public void 未知命令_只告警一条且计数可观测() throws Exception {
+        SenderLoop.resetUnknownCmdWarnOnceForTest(); // 一次性告警是进程级状态，先重置起点才可断言条数
+        final long before = SenderLoop.unknownInboundCount();
+
         final ByteArrayOutputStream err = new ByteArrayOutputStream();
         final PrintStream prev = System.err;
         final String out;
         try {
             System.setErr(new PrintStream(err, true, "UTF-8"));
-            assertNull("非 CONFIG 命令不应回执", new SenderLoop(1).handleInbound(0, CONFIG_BODY));
+            final SenderLoop loop = new SenderLoop(1);
+            assertNull("非 CONFIG 命令不应回执", loop.handleInbound(0, CONFIG_BODY));
+            assertNull("另一个未知命令同样不回执", loop.handleInbound(7, CONFIG_BODY));
+            assertNull("第三条未知命令", loop.handleInbound(0, CONFIG_BODY));
         } finally {
             System.setErr(prev);
             out = err.toString("UTF-8");
         }
-        assertTrue("未知命令须留一行 WARN（cmd=0 正是旧读序下 CONFIG 的形态）：" + out, out.contains("cmd=0"));
+
+        assertEquals("三条未知命令须全部计入计数（计数不封顶，可判「偶发一条还是持续」）",
+                before + 3, SenderLoop.unknownInboundCount());
+        assertEquals("告警只出一条（一次性，不随命令值/帧数重复）：" + out,
+                1, occurrences(out, "忽略未知入站命令"));
         assertFalse("未知命令不得改状态", AgentState.isDisabled());
     }
 
@@ -106,7 +138,14 @@ public class SenderLoopFrameTest {
         assertMalformedLenRejected(SenderLoop.MAX_FRAME_LEN + 1, "len=" + (SenderLoop.MAX_FRAME_LEN + 1));
     }
 
-    /** 长度合法但 body 截断：解析异常同样必须抛出（否则流已错位却继续按「无数据」轮询）。 */
+    /**
+     * 长度合法但 body 截断：解析异常同样必须抛出（否则流已错位却继续按「无数据」轮询）。
+     *
+     * <p>断言里带 WARN 关键字校验是**鉴别力**所需，不是装饰：旧读序下这里读到的是错位长度
+     * （0x0008037B），阻塞到读超时后抛的仍是 IOException——只断言「抛 IOException」在旧形态下
+     * 天然成立（本仓「守卫看不见它要防的站点」的典型）。带上 WARN 后，旧形态读到的是
+     * {@code len=525691} 而非 {@code len=8}，本用例随读序转红。
+     */
     @Test
     public void body截断_抛异常而非静默吞() throws Exception {
         final ByteArrayOutputStream bos = new ByteArrayOutputStream();
@@ -115,12 +154,26 @@ public class SenderLoopFrameTest {
         dos.writeByte(EventBus.CMD_CONFIG);
         dos.write(new byte[]{'{', '}'});      // 只给 2 字节
         dos.flush();
+
+        final ByteArrayOutputStream err = new ByteArrayOutputStream();
+        final PrintStream prev = System.err;
+        final String warn;
         try {
-            SenderLoop.readInboundFrame(new DataInputStream(new ByteArrayInputStream(bos.toByteArray())));
-            fail("body 截断应抛 IOException（由外层循环走重连）");
-        } catch (IOException expected) {
-            // 期望：EOFException 形态的 IOException
+            System.setErr(new PrintStream(err, true, "UTF-8"));
+            try {
+                SenderLoop.readInboundFrame(new DataInputStream(new ByteArrayInputStream(bos.toByteArray())));
+                fail("body 截断应抛 IOException（由外层循环走重连）");
+            } catch (IOException expected) {
+                // 期望：包装后的 IOException（保留 EOF/超时原因），非静默吞
+                assertFalse("半截帧不得以 SocketTimeoutException 形态上抛（外层会把它当「无入站数据」吞掉）",
+                        expected instanceof java.net.SocketTimeoutException);
+            }
+        } finally {
+            System.setErr(prev);
+            warn = err.toString("UTF-8");
         }
+        assertTrue("半截帧须 WARN 记帧头声称的长度：" + warn, warn.contains("len=8"));
+        assertTrue("半截帧须 WARN 记首字节：" + warn, warn.contains("首字节=0x"));
     }
 
     /**
@@ -216,5 +269,16 @@ public class SenderLoopFrameTest {
             } catch (IOException ignore) {
             }
         }
+    }
+
+    /** needle 在 haystack 中出现次数（一次性告警断言用）。 */
+    private static int occurrences(String haystack, String needle) {
+        int count = 0;
+        int i = haystack.indexOf(needle);
+        while (i >= 0) {
+            count++;
+            i = haystack.indexOf(needle, i + needle.length());
+        }
+        return count;
     }
 }
