@@ -36,36 +36,40 @@
 | 门禁（首跑噪音） | — | 首跑 17 例 `NoSuchMethodError: AgentSession.<init>` 系**陈旧增量编译产物** flake（多分支合并后测试类解析旧构造签名），清 `build/classes`+`build/kotlin` 后即绿 |
 | **门禁（shard3 跨类服务毒化 → 已根治）** | T-ST-02b2 两层修法（`6df02ef` / `81196e5`） | 首跑 20 例、第一层后 26 例失败 → 定因「`isDisposed` 判据对 light 测试的 temporarily-disposed 窗口不可达」→ 第二层把读路径改走 `getServiceIfCreated`（**结构上不发起创建**）→ **shard3 连续三轮绿 + 全量 testShards 三片全绿**。该 flake 非确定，绿读数不构成证明；结构性论据 + 多轮读数 + 扫描守卫为准（见计划 §十一） |
 
-## 3. 真机/沙盒走查（需人工执行，沙盒 runIde + demo `dm` profile）
+## 3. 真机/沙盒走查（**2026-09-22 12:37~12:45 已执行 4/6 步，读数如下**）
 
-**准备（在集成分支工作树 `mpsv-agent-config-locate` 内执行）**
+**执行环境**：`runIde` 沙盒（IU-2024.3.7.1，插件为 master `6ac9e45` 构建）＋ demo `mybatis-plus-sql-visualizer-demo` 的
+`MybatisPlusJoinDemoApplication`（dm profile，面板角标实测 `[DM (达梦)]`）。驱动方式＝pyautogui（截图 + 坐标点击/按键）。
+截图存于 `F:/code/Java/Gitee/SongRenShuo/mpsv-walk/`。
+
+| 步 | 操作 | 预期 | **实测** |
+|---|---|---|---|
+| 1 | 开关保持 ▶（未捕获）→ 跑应用 → `GET /mpj/device/rightAlias` | 面板 0 条 | **✓ 通过**：请求 HTTP 200，面板仍「暂无捕获的 SQL。」；日志 `CONFIG 已生效（pid=7764, ACK#1）：disabled=true` |
+| 2 | 点 ▶ 开始捕获 → 同一请求 | 出现条目 | **✓ 通过**：`startCapture: 已开始捕捉` → `pushCaptureActive: 已下发 CONFIG disabled=false` → `CONFIG 已生效（ACK#3）：disabled=false`；面板出现条目，开关变 ⏸ |
+| 3 | 点 ⏸ 停止 → 同一请求 | 无新增 | **✓ 通过**：`CONFIG 已生效（ACK#4）：disabled=true`；请求仍 200（控制台可见 `<= ROW: 1, 101, 1, 充电桩A-01`＝SQL 真执行了），**面板仍只有 #1/#2 两条**，开关回到 ▶ |
+| 4 | 设置页切脱敏 → 跑含敏感形态参数的语句 | 打码/真实值切换 | **✗ 未走查**（见下「未走查原因」） |
+| 5 | 同一进程内先 `rightAlias`（真值 42）再 `extSub`（真值 63） | 面板位置分别 42 / 63 | **✓ 通过（本轮关键项）**：`#1 … [DM (达梦)] [DeviceInfoServiceImpl.java:42]`、`#2 … [DM (达梦)] [DeviceInfoServiceImpl.java:63]`；且与控制台标记行 `SQLVIS-SOURCE\|…DeviceInfoServiceImpl.java\|63` **逐条一致**（修复前 #2 会错成 42） |
+| 6 | 增强捕获关掉 → 非 MPJ 工程照常捕获 | 不得零捕获 | **未走查**（需先经设置页关总开关，同上原因）；该路径由控制台桥单测覆盖 |
+
+**未走查原因（如实登记）**：本机 GUI 自动化下**鼠标点击进不到设置对话框**（`Settings` 窗口对 pyautogui 的绝对坐标点击无响应——
+同一批坐标在主窗口上有效；键盘可达，Escape 能关窗），而第 4/6 步都必须先改设置页开关。两处的**通道**证据已有：
+`CONFIG 已生效` 回执里 `desensitize` 字段随 CONFIG 变化（应用侧回执取的是**应用后**的生效态）、打码行为由应用侧单测覆盖；
+面板级「打码观感」与「关总开关后的控制台回落」留待人工点一次设置页即可闭环。
+
+### 准备（可复现命令，与上表同）
 
 ```bash
-# 1) 起沙盒（首次会下平台发行物，较慢；后续走缓存）
-./gradlew runIde -Pkotlin.compiler.execution.strategy=in-process \
+# 1) 起沙盒（首次会下平台发行物，较慢；后续走缓存）；把 demo 工程作为参数传入即可直接打开
+./gradlew runIde --args="F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-demo" \
+  -Pkotlin.compiler.execution.strategy=in-process \
   -Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=1024m"
-# 2) 沙盒内打开 demo 工程 F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-demo
-#    并在 Maven 面板勾 dm profile（或直接改 application.yml 的 spring.profiles.active）
-# 3) 运行 MybatisPlusJoinDemoApplication（应用端口 8082）
-# 4) 触发业务 SQL（两个端点分别对应真值 42 与 63 行）
+# 2) 沙盒内 Services 面板双击 MybatisPlusJoinDemoApplication（dm profile 已由工程配置生效）
+# 3) 触发业务 SQL（两个端点分别对应真值 42 与 63 行）
 curl http://localhost:8082/mpj/device/rightAlias
 curl http://localhost:8082/mpj/device/extSub
-```
-
-> 自动化替代：车道 D 的「假 IDE 探针」用 `-javaagent` 把 agent 注入同一个 demo 应用（不经 IDE GUI），
-> 已覆盖「下发停采后应用侧真的停采」与「entryKey/位置取证」两项；**面板观感与开关交互仍需人眼**。
-
-1. **开关关着不采集**：捕获开关保持 ▶（未捕获）→ Run demo → `GET /mpj/device/rightAlias`。
-   预期：SQL 日志列表 0 条；`idea.log` 可见会话建立与「应用侧已确认」类日志（若未确认则有超时 WARN）。
-2. **开关打开才采集**：点 ▶ 开始捕获 → 同一请求。
-   预期：列表出现条目，带 `[DM（达梦）]` 角标与源码位置。
-3. **停止真停**：点 ⏸ → 同一请求。
-   预期：列表无新增；应用侧停采（ACK 可证）。
-4. **脱敏开关生效**：设置页切换脱敏 → 跑一条含敏感形态参数（如手机号/密码列）的语句。
-   预期：参数在打码 `***` 与真实值之间切换。
-5. **源码位置正确**（O-55）：同一进程内先 `GET /mpj/device/rightAlias`（真值 42 行）再 `GET /mpj/device/extSub`（真值 63 行）。
-   预期：两条条目的位置分别是 `DeviceInfoServiceImpl.java:42` / `:63`，且与控制台 `SQLVIS-SOURCE|…|<行号>` 标记行逐条一致（修复前第二条会错成 42）。
-6. **回归**：把增强捕获关掉（或换非 MPJ 工程 `mybatis-plus-demo`）→ 控制台通道照常捕获，不得变成零捕获。
+# 4) 面板工具栏第一个图标＝捕获开关（▶ 未捕获 / ⏸ 捕获中）
+# 5) 判据：面板条目位置应与控制台标记行 SQLVIS-SOURCE|…|<行号> 逐条一致；
+#    沙盒日志 .intellijPlatform/sandbox/…/log/idea.log 可见「CONFIG 已生效（…, ACK#N）」
 
 ## 4. 已知边界 / 不在本次交付范围
 
