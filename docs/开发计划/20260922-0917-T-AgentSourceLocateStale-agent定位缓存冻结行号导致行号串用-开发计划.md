@@ -157,7 +157,7 @@ agent 的 KDoc 自称「框架帧过滤规则与 IDE 侧 `CallerSourceLocator` �
 
 | # | 前提 | 验证方式 |
 |---|---|---|
-| P-1 | 本轮 entryKey 确为 MPJ 拦截器帧（而非别的共享帧） | 代码链已闭合（MPJ 自动配置注册 `MPJInterceptor`、前缀表缺 `com.github.yulichang.`），但**未在真机读到 entryKey**。实施时先开 `logLevel=info` 或加 T-05 的一次性打点，跑一次 rightAlias→extSub 复现，把 entryKey 原文贴进 §实施记录 |
+| P-1 | 本轮 entryKey 确为 MPJ 拦截器帧（而非别的共享帧） | **帧形态已静态证明**（2026-09-22 补）：`javap -v` 读 MPJ 1.5.8 `MPJInterceptor` 的 `RuntimeVisibleAnnotations` → `@Intercepts(@Signature(type = org.apache.ibatis.executor.Executor, method = "query", args = {MappedStatement, Object, RowBounds, ResultHandler}))`，即它拦 `Executor.query` → **全应用每次查询执行时都在栈上**，且位于业务帧与 JDBC 执行点之间（正是扫描遇到的「首个非框架帧」位置），类名不在跳过表 → 键被它占据。**剩余未取证**：该帧在用户那次运行里确为实际键值——实施时开 `logLevel=info` 或加 T-05 的一次性打点，跑一次 rightAlias→extSub 复现，把 entryKey 原文贴进 §实施记录 |
 | P-2 | 42 与 63 两次执行确实落在同一个应用 JVM（缓存跨请求存活） | 沙盒日志已证同一条会话 pid=70224（`premain 会话建立：pid=70224` → `会话读循环退出（pid=70224）`），其间无第二次会话建立 |
 | P-3 | 修复后两侧位置是否仍可能不同（取栈时机差异） | 代码可判（拦截器在生成期、agent 在执行期）；修完 T-01/T-02 后按 §六 步骤实测一次，若仍不同则按 T-03 D1 定口径并在文案里明示 |
 | P-4 | 跳过前缀表的其余漏项是否还有「共享键」形态 | 需一次库清单核对（按 `pool` 实际内容做，勿凭想象补表）；建议实施时把 `pool` 首 8 帧打进一次性日志，对着真机栈补 |
