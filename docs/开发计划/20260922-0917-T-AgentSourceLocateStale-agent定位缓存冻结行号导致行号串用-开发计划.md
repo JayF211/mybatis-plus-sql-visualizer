@@ -157,7 +157,7 @@ agent 的 KDoc 自称「框架帧过滤规则与 IDE 侧 `CallerSourceLocator` �
 
 | # | 前提 | 验证方式 |
 |---|---|---|
-| P-1 | 本轮 entryKey 确为 MPJ 拦截器帧（而非别的共享帧） | **帧形态已静态证明**（2026-09-22 补）：`javap -v` 读 MPJ 1.5.8 `MPJInterceptor` 的 `RuntimeVisibleAnnotations` → `@Intercepts(@Signature(type = org.apache.ibatis.executor.Executor, method = "query", args = {MappedStatement, Object, RowBounds, ResultHandler}))`，即它拦 `Executor.query` → **全应用每次查询执行时都在栈上**，且位于业务帧与 JDBC 执行点之间（正是扫描遇到的「首个非框架帧」位置），类名不在跳过表 → 键被它占据。**剩余未取证**：该帧在用户那次运行里确为实际键值——实施时开 `logLevel=info` 或加 T-05 的一次性打点，跑一次 rightAlias→extSub 复现，把 entryKey 原文贴进 §实施记录 |
+| P-1 | 本轮 entryKey 确为 MPJ 拦截器帧（而非别的共享帧） | **已取证（2026-09-22 真机 jstack 采样）**：帧形态先由 `javap -v` 静态证明（`@Intercepts(@Signature(type=Executor, method="query"))` → 全应用每次查询都在栈上）；随后假 IDE 探针在真实应用里 `jstack` 连打 25 次、命中 1 次调用链，栈中实测 `com.github.yulichang.interceptor.MPJInterceptor.intercept(MPJInterceptor.java:85)` 位于业务帧与 JDBC 执行点之间（证据 `dev-support/e2e-fake-ide/evidence/p1-stack-evidence.txt`）→ **entryKey 确为 MPJ 拦截器帧，静态推断成立** |
 | P-2 | 42 与 63 两次执行确实落在同一个应用 JVM（缓存跨请求存活） | 沙盒日志已证同一条会话 pid=70224（`premain 会话建立：pid=70224` → `会话读循环退出（pid=70224）`），其间无第二次会话建立 |
 | P-3 | 修复后两侧位置是否仍可能不同（取栈时机差异） | 代码可判（拦截器在生成期、agent 在执行期）；修完 T-01/T-02 后按 §六 步骤实测一次，若仍不同则按 T-03 D1 定口径并在文案里明示 |
 | P-4 | 跳过前缀表的其余漏项是否还有「共享键」形态 | 需一次库清单核对（按 `pool` 实际内容做，勿凭想象补表）；建议实施时把 `pool` 首 8 帧打进一次性日志，对着真机栈补 |
@@ -235,6 +235,8 @@ agent 的 KDoc 自称「框架帧过滤规则与 IDE 侧 `CallerSourceLocator` �
 
 ### 五、未取证项与残留
 
-- **P-1 仍为「未取证」**：entryKey 是否确为 MPJ 拦截器帧，真机未读到（车道禁 runIde）。T-05 已让它在产线 `logLevel=warn` 档可读（`[T-AgentSourceLocateStale] 入口键非业务帧（一次性摘要，entry=… primary=… via=…）`），下次真机复现即可钉死。**不得把静态帧形态证明写成「已取证」**。
+- **P-1 已取证（2026-09-22 真机 jstack 采样）**：entryKey 确为 `com.github.yulichang.interceptor.MPJInterceptor` 帧——
+  假 IDE 探针在真实应用里 `jstack` 连打 25 次、命中 1 次调用链，栈中实测该帧位于业务帧与 JDBC 执行点之间
+  （证据 `dev-support/e2e-fake-ide/evidence/p1-stack-evidence.txt`）。原先只有静态推断，现为真机实证。
 - 车道 C 的 IDE 侧 gradle 曾多次 `BUILD FAILED` 于 `Unable to delete ~/.gradle/caches/9.7.0/transforms/…/ideaIU-2024.3.7.1-win`（另一车道占用 `jbr/bin/*.dll`），与改动无关；反向臂 C 因此改为直接用 JBR JDK21 运行**已编译的守卫类**（该守卫是源码扫描型，运行时读磁盘源码，等价于真跑），并以提交态对照证明红由漂移引起。收口门禁需注意同类锁竞争，撞到先重试。
 - D3 定案（保守选项）建议维持；若日后要单一事实源，只能走「生成式常量 + 同一扫描守卫」，因为 agent 不可引 IDE 类。

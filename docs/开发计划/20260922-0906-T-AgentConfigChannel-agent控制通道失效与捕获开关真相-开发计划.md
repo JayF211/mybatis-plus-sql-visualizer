@@ -188,6 +188,22 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 - 建议：会话连接后 X 秒内**从未收到任何 CONFIG** → 应用侧主动停采并打一条 WARN（保留启动期捕获收益，同时把损害限制在 X 秒）。
   X 取值与「停采 vs 仅告警」待定（D2）。
 
+### T-08（P0，真机实证追加立项，2026-09-22）连接级不得跳过包装——否则「恢复采集」永久失效
+
+- **发现方式**：本计划的真机级端到端车道（假 IDE 探针，`dev-support/e2e-fake-ide`）实测：`CONFIG disabled=true` 的 ACK 已生效、停采窗口 0 事件 ✓，但随后下发 `disabled=false`（ACK 同样生效）后**三轮全零事件** ✗。
+- **根因**：`SqlHookCallbacks.onConnection`（**连接出口**回调）在连接级判 `AgentState.isDisabled()` 并直接返回原连接 →
+  **停采期间建立的连接永远不被包装**；连接池（Hikari）复用同一批连接，没有任何补偿点。后果是
+  **「先跑应用、再点开始捕获」与「停采 → 恢复」两条主路径都永久捕不到**——本计划的修复（CONFIG 首次真正生效）把这个潜伏缺口激活了。
+- **修法**：连接级**一律包装**，`disabled` 只做**逐调用**短路（`ConnectionHandler` / `StatementHandler` 里的 `isDisabled()`），
+  与设计红线「禁用 = volatile 短路、**不卸载**」一致；原 `AgentStateBridge`（宿主 loader 看不见 agent 类时视同禁用）随之删除，
+  包装失败的安全网改由 `dropToRaw` 承担，且从「静默跳过」变为**可观测**（计数 + 一次性告警）。
+- **测试**：`ConfigApplyEndToEndTest` 新增「停采期间建立的连接仍被包装_恢复后同一连接即可产出事件」，钉三件事：
+  ① 停采态建立的连接仍被包装；② 停采态执行照旧且**无事件**（证明「一律包装」没破坏停采静音）；③ 恢复后**同一连接**上执行立刻产出事件。
+  **反向验证**：把连接级判定加回（RED PROBE）→ 新用例立刻红（报「停采态建立的连接仍须被 agent 包装」）；还原后 agent 子项目 **83 例 / 0 失败**。
+- **如实登记的语句级边界**：停采期间 `prepare` 的语句仍不包装（`ConnectionHandler` 的逐调用短路在 `prepareStatement` 处即直通）。
+  MyBatis 默认 `SimpleExecutor` 每条查询现 prepare、执行后关闭，故**实际不可达**；仅当使用 `ReuseExecutor` 一类复用语句的执行器时会命中，
+  届时该语句在恢复后仍哑——已在本用例 KDoc 里钉住，供后续按需处理。
+
 ## 五、待验证前提（实施前先证伪，勿直接照抄）
 
 | # | 前提 | 现状与验证方式 |
@@ -196,7 +212,14 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 | P-2 | 该错位是本轮现象的唯一原因，而非另有第二条投递路径 | 帧模拟 + 全天无 startCapture + `databaseName` 唯一生产者三项互证；实施前用 T-05 的环回用例在当前 master 上跑一次（应红）钉住 |
 | P-3 | 应用侧队列补投（T-01b）在当前现场是否也发生过 | 未观测到（现场条目与请求时刻一一对应）。按「先证伪再动手」处理：T-05 的用例里加一条队列补投断言 |
 | P-4 | 修复后 `desensitize` 方向的用户语义（默认关＝采集真实值） | 代码可判（`PluginSettings.kt:473-476`），但**从未真机验证过打码/不打码的实际效果**——验收需真机看一条含敏感形态参数的 SQL |
-| P-5 | `SqlCaptureGate.paused`（agent 在线时桥让位）在 agent 停采后是否会把控制台通道还回来 | 代码可判（`:945` 按在线态置位），但「agent 在线但已停采」这一新常态下桥是否产出，需在 T-01 修复后真机确认（否则会从「误采集」变成「零捕获」） |
+| P-5 | `SqlCaptureGate.paused`（agent 在线时桥让位）在 agent 停采后是否会把控制台通道还回来 | **已闭合**：判据改为 `online && 应用侧已确认在采`（车道 B 落地，见 §实施记录 §二），且复核独立判定新判据是旧判据的子集、不新增「两条通道同时零产出」 |
+
+**P-1 与 P-5 之外的新增真机前提（2026-09-22 由假 IDE 探针实测，见 §实施记录 §八）**：
+
+| # | 前提 | 实测结论 |
+|---|---|---|
+| P-6 | 「CONFIG 生效」＝「用户点开始后就能捕到」 | **证伪**：连接在停采期间建立时从未被包装 → 「先跑应用、再点开始捕获」永久捕不到（T-08 已修） |
+| P-7 | 「停采 → 恢复」在同一连接上即可恢复产出 | 同上；T-08 修复后由新用例钉住（同一连接、新 prepare 的语句立刻产出事件） |
 
 ## 六、测试与验收
 
@@ -354,3 +377,24 @@ CHANGELOG `[Unreleased]` 与 `docs/变更记录.md` 三处同步（**已落**，
 | T-06 | — | 授权弹窗 bundle「关闭开关即停止采集（已挂载的捕获点会保留但不工作）」与设置页「即时生效，无需重启应用」 | **裁定：无需改**——修复后前者**已为真**（CONFIG 现在真的能到应用侧），后者对正常路径（ACK 一次往返）成立；把「待确认」写进用户文案反而引入噪音 |
 
 **复核独立确认的正面结论（记入交付材料）**：新判据 `online && confirmed` 是旧判据的子集，只会「少封桥」不会「多封桥」→ **不新增「两条通道同时零产出且无信号」**；无永久封死；确认值复位点齐全（会话摘除/关闭、`shutdownAll`/`dispose`、每次下发转待确认）；`updateOnline`/`sweepOffline`/状态行/`epActive` 链路均未被改动（diff hunk 逐条核对）；闸门唯一生产消费者与 EP 通道自洽。**测试鉴别力逐例判定**：15 例中 11 例有鉴别力、4 例为控制例/无关例（已在测试内注明不得计入覆盖证据）；读序断言对修复前源码确判红（复核用 `9c1a18d^` 源码核对：`cmd = in.readUnsignedByte()`@127 vs `in.readInt()`@223）。
+
+### 八、真机级端到端（假 IDE 探针，2026-09-22）——发现 T-08 并闭合 P-1
+
+**方式**：车道 D 自建「假 IDE」探针（`dev-support/e2e-fake-ide`：loopback 按协议收发帧、可下发 CONFIG、打印 ACK 与 EVENT），
+用 `-javaagent` 把 agent 注入**真实 Spring Boot + MyBatis-Plus-Join + 真实 JDBC 驱动**的 demo 应用（JDK 1.8.0_181，
+`logLevel=info`），**不经 IntelliJ GUI** 即完成真机级验证。车道 D 实施到一半掉线（无活动任务、成果全未提交），
+其产物由主调度原样收编并提交（`9dde292`），证据保留在 `dev-support/e2e-fake-ide/evidence/`。
+
+| 项 | 读数 |
+|---|---|
+| A 停采生效 | `CONFIG disabled=true` → **ACK 到达** `{"disabled":true,…}` → 业务请求 200 → **停采窗口 3000ms 内事件数 = 0** ✓ |
+| B 恢复采集 | `CONFIG disabled=false` → ACK 到达 `{"disabled":false,…}` → 业务请求 200 → **窗口内事件数 = 0** ✗（D1/D2 两轮同形） |
+| **P-1 取证** | **成立**：`jstack` 25 次采样命中 1 次调用链，栈中实测 `com.github.yulichang.interceptor.MPJInterceptor.intercept(MPJInterceptor.java:85)` 位于业务帧与 JDBC 执行点之间（`evidence/p1-stack-evidence.txt`）→ 与静态推断一致，entryKey 确为 MPJ 拦截器帧 |
+| 环境元数据 | `run-meta.txt` 记 agent jar sha256、demo git head `4473308`、repo head、java 版本 |
+
+**B 轮 FAIL 的归因与处置＝T-08**（连接级跳过包装 → 恢复采集永久失效，见 §四 T-08）：已修 + 已加回归用例 + 已做反向验证（红/绿两次读数）。
+
+**同轮门禁噪音登记**：`testShards` 首跑 17 例失败，全部为同一
+`java.lang.NoSuchMethodError: AgentSession.<init>(…)`——即本仓已登记的**陈旧增量编译产物** flake
+（多分支合并后测试类仍解析旧构造函数签名；车道 B 给 `AgentSession` 加了参数）。
+按定例 `rm -rf build/classes build/kotlin` 后重跑即绿，**非代码缺陷**。
