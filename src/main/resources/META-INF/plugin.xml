@@ -303,9 +303,6 @@
         <!-- T-M31.14 日志自动监听：设置「项目启动时自动开始监听」开启时项目打开即挂载控制台监听 -->
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.log.LogStartupCapture"/>
 
-        <!-- T-PreviewUx-Pack #3：快捷模板默认键位冲突检测（应用级单次——冲突换绑备选键位 + 通知提示） -->
-        <postStartupActivity implementation="cn.song.mybatisplus.visualizer.actions.SqlTemplateShortcutConflictCheck"/>
-
         <!-- T-UxOnboard T-UX-01：首用锚点一次性引导——编辑器打开事件节流探测（低频入口），
              检测到可预览 SQL 时经预览组弹一次「Alt+Shift+Q」指路通知；一次性状态持久化
              （PluginSettings.onboardingAnchorTipShown），gutter 快速路径零改动 -->
@@ -377,35 +374,34 @@
         <!-- T-PreviewUx-Pack #3：${table} 快捷模板三动作（选中表名一键 EXPLAIN / COUNT / 抽样 10 行；
              三动作共享一个 group 注册 EditorPopupMenu，与「生成 CRUD SQL」入口并存不合并菜单；
              执行走既有内嵌控制台链路（DataSourceSelector + SqlExecutor），凭证不出 IDE；
-             默认键位冲突由 SqlTemplateShortcutConflictCheck 启动检测并换绑备选键位 + 提示） -->
+             T-TemplateKeyDrop：三动作不设默认键位——原 Alt+Shift+E/C/T 与平台动作冲突
+             （RecentChanges / tasks.switch），而备选键 Ctrl+Alt+Shift+同字母同样被占（Copy Reference /
+             Refactor This），「冲突自动换绑」无解（实测见开发计划 §一）；改为由用户在设置页
+             「快捷键」节或 IDE 的 Settings > Keymap 自行录制，右键菜单入口不受影响） -->
+        <!-- 组文案由 class 提供（2026-09-23 真机走查修复）：<group> 的 text 属性不走 bundle 解析——
+             只写 text= 或再补 bundle= 都会在右键菜单里显示原始键（实测；同文件 <action> 的 text+bundle
+             正常）。平台对本地化组的正规做法是给 class，见 SqlTemplateGroup KDoc。 -->
         <group id="cn.song.mybatisplus.visualizer.SqlTemplateGroup"
-               popup="true"
-               text="action.cn.song.mybatisplus.visualizer.SqlTemplateGroup.text"
-               description="action.cn.song.mybatisplus.visualizer.SqlTemplateGroup.description">
+               class="cn.song.mybatisplus.visualizer.actions.SqlTemplateGroup"
+               popup="true">
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
             <action id="cn.song.mybatisplus.visualizer.ExplainSelectedTable"
                     class="cn.song.mybatisplus.visualizer.actions.ExplainSelectedTableAction"
                     text="action.cn.song.mybatisplus.visualizer.ExplainSelectedTable.text"
                     description="action.cn.song.mybatisplus.visualizer.ExplainSelectedTable.description"
                     icon="/icons/sqlGutter.svg">
-                <keyboard-shortcut keymap="$default" first-keystroke="alt shift E"/>
-                <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift E"/>
             </action>
             <action id="cn.song.mybatisplus.visualizer.CountSelectedTable"
                     class="cn.song.mybatisplus.visualizer.actions.CountSelectedTableAction"
                     text="action.cn.song.mybatisplus.visualizer.CountSelectedTable.text"
                     description="action.cn.song.mybatisplus.visualizer.CountSelectedTable.description"
                     icon="/icons/sqlGutter.svg">
-                <keyboard-shortcut keymap="$default" first-keystroke="alt shift C"/>
-                <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift C"/>
             </action>
             <action id="cn.song.mybatisplus.visualizer.SampleSelectedTable"
                     class="cn.song.mybatisplus.visualizer.actions.SampleSelectedTableAction"
                     text="action.cn.song.mybatisplus.visualizer.SampleSelectedTable.text"
                     description="action.cn.song.mybatisplus.visualizer.SampleSelectedTable.description"
                     icon="/icons/sqlGutter.svg">
-                <keyboard-shortcut keymap="$default" first-keystroke="alt shift T"/>
-                <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift T"/>
             </action>
         </group>
 

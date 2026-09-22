@@ -123,30 +123,31 @@ public final class ExplainGate {
      * EXPLAIN 提交判定结果（T-ECH-01）：两类拒绝理由<b>必须可区分</b>——「语句不可 EXPLAIN」与
      * 「方言不接入 EXPLAIN」的提示文案不同，合并成一个 null 会让用户拿到错的解释。
      *
-     * <p>移植注记：master 侧为 {@code sealed interface SubmitPlan}（三个 data class）；
+     * <p>移植注记：master 侧为 {@code sealed interface SubmitPlan}（三个 data class 嵌套在接口体内，
+     * 全名 {@code SubmitPlan.Submit / SubmitPlan.NotExplainable / SubmitPlan.DialectUnsupported}）；
      * Java 17 用 sealed interface + record 直译（record 访问器无 get 前缀，同 data class 语义）。</p>
      */
-    public sealed interface SubmitPlan permits Submit, NotExplainable, DialectUnsupported {
-    }
+    public sealed interface SubmitPlan {
 
-    /** 可提交的 EXPLAIN 语句（已包装文本原样提交，未包装文本按方言模板包装）。 */
-    public record Submit(String statement) implements SubmitPlan {
-    }
+        /** 可提交的 EXPLAIN 语句（已包装文本原样提交，未包装文本按方言模板包装）。 */
+        public record Submit(String statement) implements SubmitPlan {
+        }
 
-    /** 被包语句首关键字不在白名单（{@link ExplainGate#firstKeyword} 为实际取到的词，null = 取不到）。 */
-    public record NotExplainable(String firstKeyword) implements SubmitPlan {
-    }
+        /** 被包语句首关键字不在白名单（{@link ExplainGate#firstKeyword} 为实际取到的词，null = 取不到）。 */
+        public record NotExplainable(String firstKeyword) implements SubmitPlan {
+        }
 
-    /** 本方言不接入 EXPLAIN。 */
-    public record DialectUnsupported(String dialectName) implements SubmitPlan {
+        /** 本方言不接入 EXPLAIN。 */
+        public record DialectUnsupported(String dialectName) implements SubmitPlan {
+        }
     }
 
     /**
      * EXPLAIN 提交判定——<b>IDE 链的唯一决策点</b>（{@code SqlPreviewPanel.explainSql}）。
      *
      * <p>判定序：① 已以 EXPLAIN 开头（幂等场景，是本插件上一次的包装产物）→ 原样提交；
-     * ② 被包语句首关键字不在白名单 → {@link NotExplainable}；③ 方言不接入 →
-     * {@link DialectUnsupported}。</p>
+     * ② 被包语句首关键字不在白名单 → {@link SubmitPlan.NotExplainable}；③ 方言不接入 →
+     * {@link SubmitPlan.DialectUnsupported}。</p>
      *
      * <p>幂等分支<b>跳过</b>白名单是刻意的：包装产物首词是 {@code EXPLAIN}（不在白名单），若一并判会让
      * 「再点一次执行计划」被误拒（T-ExplainDbl 回归）。</p>
@@ -154,12 +155,12 @@ public final class ExplainGate {
     public static SubmitPlan planExplainSubmit(Dialect dialect, String sql) {
         String trimmed = sql.trim();
         if (!startsWithExplainKeyword(trimmed) && !isExplainableSource(trimmed)) {
-            return new NotExplainable(firstKeyword(trimmed));
+            return new SubmitPlan.NotExplainable(firstKeyword(trimmed));
         }
         String statement = dialect.renderExplainStatementIdempotent(trimmed);
         if (statement == null) {
-            return new DialectUnsupported(dialect.getName());
+            return new SubmitPlan.DialectUnsupported(dialect.getName());
         }
-        return new Submit(statement);
+        return new SubmitPlan.Submit(statement);
     }
 }

@@ -73,6 +73,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -169,6 +171,10 @@ public final class DataSourceSelector {
      * 文本，忽略 history 里的旧错误残留（否则正常 SQL 会把上个失败的错误"带过来"，用户实测）。
      * T-PerfSweep2-01：internal 供 ConsoleErrorExtractTest 注入基线（生产路径仅 executeOnConsole 赋值）。 */
     public static int consoleErrorBaseline = 0;
+
+    /** T-CEC-01：最近一次已记入日志的「未命中判据的控制台尾部」——取证日志去重用（每次执行至多
+     * 记一条，避免 400ms 拍刷屏）。 */
+    private static volatile String lastUnrecognizedTail = null;
 
     /** T-ExecSilentNoop：本次执行的提示已发出标记——8s 连接监控与 40 拍超时窗口共用，
      * 保证同一次执行只报一次提示（此前二者各按同一 key 报一次，用户见两次红字）。 */
@@ -602,51 +608,57 @@ public final class DataSourceSelector {
         return null;
     }
 
-    /** M36.5.48：从 console 历史文档提取真实错误文本。
-     * T-PerfSweep2-01：getCharsSequence + subSequence 片段读取——本函数被 600ms×8 拍与
-     * 400ms×40/100 拍两个定时器<b>逐拍</b>调用，此前 doc.getText() 每拍整串拷贝全史
-     * （history 随长会话涨到 MB 级后是 EDT 上唯一可感知的 O(全史) 重复分配）。
-     * 只物化 baseline 之后的切片；getCharsSequence 与 getText 同属 Document 接口，
-     * 反射可达性一致，且免去 BadLocationException 面。 */
+    /**
+     * M36.5.48：从 console 历史文档提取真实错误文本——仅当<b>超时无结果</b>（真失败/真超时）时
+     * 调用。DBN 查询执行失败（SQL 语法错/表不存在等）会把错误消息写入 console history。
+     *
+     * <p>提取规则（防误判）：只认<b>明确的 SQL 错误判据</b>（{@link #isErrorSignatureLine}），且错误行不得是
+     * 纯 SQL 语句（含 SELECT/FROM/WHERE/JOIN 等 SQL 词），避免把正常 SQL 历史误判为错误
+     * （日志实证 {@code extracted console error: WHERE t.id = 1}——A 并无真失败，正常 SQL 片段被误报）。</p>
+     *
+     * <p>M36.5.57：只扫 <b>consoleErrorBaseline 之后</b>的文本——历史残留错误（上个失败 SQL 写入的
+     * Unknown column 等）不在本次范围，正常 SQL 执行后不会"带过来"旧错误。</p>
+     *
+     * <p>T-CEC-02（用户真机 P15）：判据由「短语词表」升级为「结构性判据 + 短语族」——原词表对
+     * {@code [42000][1064] You have an error in your SQL syntax}（MySQL 语法错）一条都不含，面板因此
+     * 全程无红字、无复制按钮，用户只能在 Output 页自己找。同批漏检的还有 Oracle {@code ORA-00933}、
+     * MySQL 1062/1451 等；历史真机验证过的错误恰好全是 {@code Unknown column} 系，故缺口长期未现。</p>
+     */
     @Nullable
     public static String extractConsoleError(Object console, Logger LOG) {
         if (console == null) return null;
         try {
-            Object consoleView = console.getClass().getMethod("getConsoleView").invoke(console);
-            if (consoleView == null) return null;
-            Object historyViewer = consoleView.getClass().getMethod("getHistoryViewer").invoke(consoleView);
-            if (historyViewer == null) return null;
-            Object doc = historyViewer.getClass().getMethod("getDocument").invoke(historyViewer);
-            if (doc == null) return null;
-            Object seqObj = doc.getClass().getMethod("getCharsSequence").invoke(doc);
-            if (!(seqObj instanceof CharSequence)) return null;
-            CharSequence seq = (CharSequence) seqObj;
-            // M36.5.57：只扫本次执行之后新增的文本（基线截断）——忽略 history 残留的旧错误。
-            // baseline 可能因 DBN 写入历史而增长；若文本长度 <= 基线说明无新增内容，return null。
-            int baseline = consoleErrorBaseline;
-            String text;
-            if (baseline <= 0) {
-                text = seq.toString();
-            } else if (seq.length() > baseline) {
-                text = seq.subSequence(baseline, seq.length()).toString();
-            } else {
-                return null;
-            }
+            String text = newConsoleText(console);
+            if (text == null) return null;
             if (text.isBlank()) return null;
             List<String> lines = Arrays.stream(text.split("\n", -1))
                     .filter(s -> !s.isBlank()).collect(Collectors.toList());
+            // 从末尾往前找"命中错误判据"且"非纯 SQL / 非本插件自写回显"的行
             String errorLine = null;
-            for (String line : lines) {
-                boolean sig = false;
-                for (String s : ERROR_SIGNATURES) {
-                    if (line.toLowerCase().contains(s.toLowerCase())) { sig = true; break; }
+            for (int i = lines.size() - 1; i >= 0; i--) {
+                String line = lines.get(i);
+                if (isErrorSignatureLine(line) && !isSqlLine(line) && !isOwnEchoLine(line)) {
+                    errorLine = line;
+                    break;
                 }
-                if (sig && !isSqlLine(line)) { errorLine = line; break; }
             }
-            if (errorLine == null) return null;
+            if (errorLine == null) {
+                // T-CEC-01：未命中即取证——记下本次新增文本的尾部（有界 + 每次执行只记一次），
+                // 下次扩判据时以真机报文为准，不照用户截图猜形态。
+                logUnrecognizedConsoleTail(lines, LOG);
+                return null;
+            }
+            // 取错误行及其后非空行构成可读上下文——错误消息常跨多行（MySQL 语法错把 "near …" 的
+            // SQL 片段跟在其后）。T-CEC-02：4 行放宽到 8 行，并剥掉逐行的 `[时间戳] ` 与提示符。
+            String prompt = consolePrompt(console);
             int idx = lines.indexOf(errorLine);
-            int end = Math.min(idx + 4, lines.size());
-            String excerpt = String.join("\n", lines.subList(idx, end));
+            int end = Math.min(idx + EXCERPT_MAX_LINES, lines.size());
+            StringBuilder excerptBuilder = new StringBuilder();
+            for (int i = idx; i < end; i++) {
+                if (i > idx) excerptBuilder.append('\n');
+                excerptBuilder.append(stripConsolePrefix(lines.get(i), prompt));
+            }
+            String excerpt = excerptBuilder.toString();
             // T-ConsoleDbContext A：附「当前库 / 数据源 / 数据源默认库」上下文——真实事故中 SQL 本身
             // 没问题，是执行落在了错的库（mpj_demo 的 user 表没有 username → 1054），而裸 MySQL 报文
             // 看不出这一层；带上上下文后一眼可归因
@@ -659,27 +671,273 @@ public final class DataSourceSelector {
         }
     }
 
-    /** M36.5.48：明确 SQL 错误签名。 */
+    /**
+     * T-CEC-03：兜底呈现——判据认不出的失败，把控制台<b>新增文本去掉本次 SQL 回显后的残余</b>交回
+     * 面板，而不是给「SQL 已提交执行，但等待结果超时……检查密码输入框/测试连接」这类笼统提示
+     * （真机 P15 实证：把一条 MySQL 语法错归因成密码/驱动问题，归因方向是错的）。
+     *
+     * <p>只做「减去回显」不做任何语义判断：残余是什么就报什么，面板侧附一句如实说明
+     * （{@code execute.error.unknownShape}）——不声称它是 SQL 错误，也不猜原因。</p>
+     *
+     * <p>剔除规则（宁少勿错）：空行；DBN 回显行（剥掉时间戳/提示符后是本次执行 SQL 的子串）；
+     * DBN 状态行（Connected / completed in … 等）。全部被剔完返 null（调用方落回既有提示）。</p>
+     */
+    @Nullable
+    public static String extractConsoleResidue(Object console, @Nullable String sqlText, Logger LOG) {
+        if (console == null) return null;
+        try {
+            String text = newConsoleText(console);
+            if (text == null) return null;
+            if (text.isBlank()) return null;
+            String sqlNorm = normalizeForEcho(sqlText != null ? sqlText : "");
+            String prompt = consolePrompt(console);
+            List<String> kept = new ArrayList<>();
+            for (String rawLine : text.split("\n", -1)) {
+                String line = rawLine.trim();
+                if (line.isBlank()) continue;
+                if (isConsoleStatusLine(line)) continue;
+                if (isSqlEchoLine(line, sqlNorm, prompt)) continue;
+                kept.add(line);
+            }
+            if (kept.isEmpty()) return null;
+            int from = Math.max(0, kept.size() - RESIDUE_MAX_LINES);
+            StringBuilder joinedBuilder = new StringBuilder();
+            for (int i = from; i < kept.size(); i++) {
+                if (i > from) joinedBuilder.append('\n');
+                joinedBuilder.append(kept.get(i));
+            }
+            String joined = joinedBuilder.toString();
+            String out = joined.length() > RESIDUE_MAX_CHARS ? joined.substring(0, RESIDUE_MAX_CHARS) : joined;
+            String logTail = out.replace("\n", "⏎");
+            LOG.info("[T-CEC] console residue (no known signature): "
+                    + (logTail.length() > 200 ? logTail.substring(0, 200) : logTail));
+            return out;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * T-CEC：读取 console history 文档中<b>基线之后</b>的新增文本（读不到 / 无新增返 null）。
+     *
+     * <p>T-PerfSweep2-01 的片段物化契约在此保持（ConsoleErrorExtractTest 逐条断言）：baseline&lt;=0
+     * 走整串一次、&gt;0 只切一刀、无增长零物化——本函数是两个定时器逐拍调用的共用读取面，
+     * 抽出来只为让兜底呈现复用同一份切片语义。</p>
+     */
+    @Nullable
+    private static String newConsoleText(Object console) throws Exception {
+        if (console == null) return null;
+        Object consoleView = console.getClass().getMethod("getConsoleView").invoke(console);
+        if (consoleView == null) return null;
+        Object historyViewer = consoleView.getClass().getMethod("getHistoryViewer").invoke(consoleView);
+        if (historyViewer == null) return null;
+        Object doc = historyViewer.getClass().getMethod("getDocument").invoke(historyViewer);
+        if (doc == null) return null;
+        // T-PerfSweep2-01：getCharsSequence + subSequence 片段读取——本函数被 600ms×8 拍与
+        // 400ms×40/100 拍两个定时器<b>逐拍</b>调用，此前 doc.getText() 每拍整串拷贝全史
+        // （history 随长会话涨到 MB 级后是 EDT 上唯一可感知的 O(全史) 重复分配）。
+        // 只物化 baseline 之后的切片；getCharsSequence 与 getText 同属 Document 接口，
+        // 反射可达性一致，且免去 BadLocationException 面。
+        Object seqObj = doc.getClass().getMethod("getCharsSequence").invoke(doc);
+        if (!(seqObj instanceof CharSequence)) return null;
+        CharSequence seq = (CharSequence) seqObj;
+        // M36.5.57：只扫本次执行之后新增的文本（基线截断）——忽略 history 残留的旧错误。
+        // baseline 可能因 DBN 写入历史而增长；若文本长度 <= 基线说明无新增内容，返回 null。
+        int baseline = consoleErrorBaseline;
+        if (baseline <= 0) {
+            return seq.toString();
+        } else if (seq.length() > baseline) {
+            return seq.subSequence(baseline, seq.length()).toString();
+        } else {
+            return null;
+        }
+    }
+
+    /**
+     * T-CEC-01：未命中判据的控制台新增文本尾部（有界 + 同一段只记一次）——取证用，供下次扩判据
+     * 时核对 DBN 真实写入 history 的报文形态（是否带 {@code [时间戳]} 前缀、是否跨行、SQLSTATE 前缀
+     * 是否在场）。行数与字符数双上限，避免长会话刷屏。
+     */
+    private static void logUnrecognizedConsoleTail(List<String> lines, Logger LOG) {
+        int from = Math.max(0, lines.size() - UNRECOGNIZED_TAIL_LINES);
+        StringBuilder tailBuilder = new StringBuilder();
+        for (int i = from; i < lines.size(); i++) {
+            if (i > from) tailBuilder.append('\n');
+            tailBuilder.append(lines.get(i));
+        }
+        String joined = tailBuilder.toString();
+        String tail = joined.length() > UNRECOGNIZED_TAIL_CHARS ? joined.substring(0, UNRECOGNIZED_TAIL_CHARS) : joined;
+        if (tail.isBlank() || tail.equals(lastUnrecognizedTail)) return;
+        lastUnrecognizedTail = tail;
+        LOG.info("[T-CEC] console tail (no error signature matched): " + tail.replace("\n", "⏎"));
+    }
+
+    /** T-CEC-02：错误上下文摘录的最大行数（错误行起算）。 */
+    private static final int EXCERPT_MAX_LINES = 8;
+
+    /** T-CEC-01：取证日志的行数 / 字符数上限。 */
+    private static final int UNRECOGNIZED_TAIL_LINES = 6;
+    private static final int UNRECOGNIZED_TAIL_CHARS = 600;
+
+    /** T-CEC-03：兜底呈现的行数 / 字符数上限。 */
+    private static final int RESIDUE_MAX_LINES = 6;
+    private static final int RESIDUE_MAX_CHARS = 600;
+
+    /**
+     * T-CEC-02：DBN 服务端错误前缀形态 {@code [SQLSTATE][errorCode]}——DBN 把驱动 SQLException 的
+     * SQLState 与 vendor code 拼在报文最前（真机日志实证：{@code [42S22][1054] Unknown column …}、
+     * {@code [42000][1064] You have an error in your SQL syntax …}）。跨方言同形，比短语词表硬：
+     * 原词表认 {@code syntax error}，却认不出 {@code You have an error in your SQL syntax}。
+     * 5 位定长是关键——{@code [2026-09-22 08:48:12]} 这类时间戳前缀（19 字符）不会被误命中。
+     */
+    private static final Pattern SQLSTATE_PREFIX = Pattern.compile("\\[[0-9A-Za-z]{5}]\\[\\d+]");
+
+    /** T-CEC-02：Oracle 错误码形态（{@code ORA-00933} 等）——Oracle 报文常不带 SQLSTATE 前缀。 */
+    private static final Pattern ORACLE_CODE = Pattern.compile("\\bORA-\\d{5}\\b", Pattern.CASE_INSENSITIVE);
+
+    /** T-CEC-02：错误签名短语族（结构性判据覆盖不到的方言 / 驱动惯用报文）。 */
     private static final List<String> ERROR_SIGNATURES = List.of(
+            // M36.5.48 原有 14 条（历史命中系，行为保持不动）
             "sql exception", "syntax error", "sqlstate", "unknown column",
             "unknown table", "doesn't exist", "does not exist", "access denied",
             "deadlock", "error code", "broken pipe", "connection refused",
-            "[日本語エラー]", "sql（", "exception in thread"
+            "[日本語エラー]", "sql（", "exception in thread",
+            // T-CEC-02 新增：MySQL 语法错（用户 2026-09-22 真机 Output 报文逐字）
+            "you have an error in your sql syntax",
+            // T-CEC-02 新增：厂商固定报文（MySQL 1062 / 1451、Oracle ORA-00933）
+            "duplicate entry", "foreign key constraint",
+            "cannot add or update a child row", "cannot delete or update a parent row",
+            "sql command not properly ended"
     );
 
-    /** M36.5.48：判断一行是否纯 SQL 语句。 */
+    /** T-CEC-02：一行是否命中错误判据（结构性判据 + 短语族）。 */
+    private static boolean isErrorSignatureLine(String line) {
+        if (SQLSTATE_PREFIX.matcher(line).find()) return true;
+        if (ORACLE_CODE.matcher(line).find()) return true;
+        for (String s : ERROR_SIGNATURES) {
+            if (line.toLowerCase().contains(s.toLowerCase())) return true;
+        }
+        return false;
+    }
+
+    /**
+     * T-CEC-02：本插件自己写进 Output 的回显行前缀（{@link #writeConsoleOutput} 的「执行失败: 」）——
+     * 提取时排除，避免「已上报的错误被自己写回控制台后又当成新错误」的自反馈。
+     */
+    private static final String EXEC_FAILURE_ECHO_PREFIX = "执行失败:";
+
+    private static boolean isOwnEchoLine(String line) {
+        return stripConsolePrefix(line, null).startsWith(EXEC_FAILURE_ECHO_PREFIX);
+    }
+
+    /** T-CEC-02：DBN 输出行的 {@code [时间戳] } 前缀（用户真机报文逐行带此前缀）。 */
+    private static final Pattern TIMESTAMP_PREFIX =
+            Pattern.compile("^\\[\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(?:[.,]\\d+)?]\\s*");
+
+    private static String stripTimestamp(String line) {
+        String s = line.trim();
+        Matcher m = TIMESTAMP_PREFIX.matcher(s);
+        if (!m.find()) return s;
+        return s.substring(m.end()).trim();
+    }
+
+    /** T-CEC-02：剥掉时间戳与（DBN 实读的）提示符前缀——呈现与复制都更干净。 */
+    private static String stripConsolePrefix(String line, @Nullable String prompt) {
+        String s = stripTimestamp(line);
+        if (prompt != null && !prompt.isBlank() && s.startsWith(prompt)) {
+            s = s.substring(prompt.length()).trim();
+        }
+        return s;
+    }
+
+    /**
+     * T-CEC-02：读 DBN 控制台提示符（{@code mpj_demo>} / {@code ds>>}，即 {@code LanguageConsoleView.prompt}——
+     * 243 源码 jar 实证为 Kotlin {@code var prompt: String?}，插件既有 {@link #clearConsolePrompt} 已用 setPrompt）。
+     * 取不到返 null：调用方退化为只剥时间戳，不猜提示符形态。
+     */
+    @Nullable
+    private static String consolePrompt(Object console) {
+        try {
+            if (console == null) return null;
+            Object consoleView = console.getClass().getMethod("getConsoleView").invoke(console);
+            if (consoleView == null) return null;
+            Object promptObj = consoleView.getClass().getMethod("getPrompt").invoke(consoleView);
+            if (!(promptObj instanceof String)) return null;
+            String prompt = (String) promptObj;
+            return prompt.isBlank() ? null : prompt;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /** T-CEC-03：回显比对用的归一化（空白折叠 + 小写）。 */
+    private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s+");
+
+    private static String normalizeForEcho(String text) {
+        return WHITESPACE_RUN.matcher(text).replaceAll(" ").trim().toLowerCase();
+    }
+
+    /** T-CEC-03：兜底剥离提示符的候选形态（仅当剩余部分是本次 SQL 子串时才据此判为回显）。 */
+    private static final Pattern PROMPT_CANDIDATE = Pattern.compile("^\\S{1,64}>+\\s+");
+
+    /**
+     * T-CEC-03：该行是否本次执行 SQL 的回显——剥掉时间戳后（必要时再剥提示符）是本次 SQL 文本的
+     * 子串即认（多行 SQL 的每一行都是 SQL 的子串）。判据宽松方向是「多剔」：宁可残余变空退回
+     * 既有提示，也不把回显当错误报给用户。
+     */
+    private static boolean isSqlEchoLine(String line, String sqlNorm, @Nullable String prompt) {
+        if (sqlNorm.isEmpty()) return false;
+        String body = stripTimestamp(line);
+        List<String> candidates = new ArrayList<>();
+        candidates.add(body);
+        if (prompt != null && !prompt.isBlank() && body.startsWith(prompt)) {
+            candidates.add(body.substring(prompt.length()).trim());
+        }
+        Matcher promptMatcher = PROMPT_CANDIDATE.matcher(body);
+        if (promptMatcher.find()) {
+            candidates.add(body.substring(promptMatcher.end()).trim());
+        }
+        for (String c : candidates) {
+            String n = normalizeForEcho(c);
+            if (n.length() >= 4 && sqlNorm.contains(n)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * T-CEC-03：DBN 状态 / 结果摘要行——不是错误内容，兜底呈现时剔除。
+     *
+     * <p>判据刻意偏「多剔」：语句<b>成功</b>但 DBN 不建结果 Tab 的场景同样会走满 40 拍窗口（DML 与
+     * {@code use} 这类工具语句的影响行数/完成回显就写在 Output 里），把 {@code 1 row affected} 当残余报出来
+     * 等于把成功说成失败；剔多了只是落回既有提示，属可接受方向（宁少勿错）。</p>
+     */
+    private static final List<String> CONSOLE_STATUS_LINES = List.of(
+            "connected", "completed in", "executing", "fetching", "fetched",
+            "cancelled", "canceled", "query ok", "affected", "took ", "elapsed"
+    );
+
+    /** T-CEC-03：结果摘要词（{@code 1 row affected} / {@code N rows} / {@code updated} 等）——同上，偏多剔。 */
+    private static final Pattern CONSOLE_STATUS_WORDS =
+            Pattern.compile("\\b(rows?|records?|updated|deleted|inserted)\\b", Pattern.CASE_INSENSITIVE);
+
+    private static boolean isConsoleStatusLine(String line) {
+        String n = stripTimestamp(line).toLowerCase();
+        for (String s : CONSOLE_STATUS_LINES) {
+            if (n.contains(s)) return true;
+        }
+        return CONSOLE_STATUS_WORDS.matcher(n).find();
+    }
+
+    /** M36.5.48：判断一行是否纯 SQL 语句（避免把「WHERE t.id=1」等当错误）。 */
     private static boolean isSqlLine(String line) {
         String lower = line.trim().toLowerCase();
+        // 含 SQL 关键字且无错误判据命中 → 大概率是 SQL 文本而非错误
         boolean starts = lower.startsWith("select") || lower.startsWith("from")
                 || lower.startsWith("where") || lower.startsWith("join")
                 || lower.startsWith("insert") || lower.startsWith("update")
                 || lower.startsWith("delete") || lower.startsWith("create")
                 || lower.startsWith("alter") || lower.startsWith("drop");
-        if (!starts) return false;
-        for (String s : ERROR_SIGNATURES) {
-            if (line.toLowerCase().contains(s.toLowerCase())) return false;
-        }
-        return true;
+        return starts && !isErrorSignatureLine(line);
     }
 
     /** M36.5.62：清空 console 历史文档。 */
@@ -850,7 +1108,7 @@ public final class DataSourceSelector {
                 // any() 恒 write-unsafe（见 DocWriteContext KDoc）。
                 final String fErr = err;
                 ApplicationManager.getApplication().invokeLater(() -> {
-                    writeConsoleOutput(shared != null ? shared : preparedConsole, "执行失败: " + fErr + "\n", true);
+                    writeConsoleOutput(shared != null ? shared : preparedConsole, EXEC_FAILURE_ECHO_PREFIX + " " + fErr + "\n", true);
                     if (onError != null) onError.accept(fErr);
                 }, ModalityState.nonModal());
                 return;
@@ -2241,6 +2499,8 @@ public final class DataSourceSelector {
         // T-ExecSilentNoop：notSubmitted 提示携带本次目标数据源名（Kotlin 侧默认参 dsName = sharedDataSourceName）
         final String dsName = sharedDataSourceName;
         consoleErrorBaseline = consoleHistoryLength(console);
+        // T-CEC-01：取证日志去重基线同批重置——每次执行至多记一条未识别尾部。
+        lastUnrecognizedTail = null;
         try {
             Class<?> consoleClass = Class.forName(CONSOLE_CLASS);
             Method execute = consoleClass.getMethod("executeQueries", Editor.class, Class.forName("com.intellij.database.script.ScriptModel"), execOption.getClass());
@@ -2393,12 +2653,15 @@ public final class DataSourceSelector {
                                                     // M36.5.45：native 执行链失败必须通知 UI（此前仅 LOG.warn，用户看不到任何错误）
                                                     // T-ErrorLocate T-EL-02：富通道并行投递（SQLState/errorCode/驱动位置结构化），
                                                     // 旧 onError(String) 消费方零改动
+                                                    // T-ErrorLocateUsability T-ELU-03（O-49）：接上被执行文本长度——
+                                                    // 越界钳制此前只在单测生效（调用方全都不传 sqlMaxLength）
                                                     // write-safe: UI-only（纯 Swing/只读，无文档写）
                                                     ApplicationManager.getApplication().invokeLater(() -> {
                                                         try {
                                                             if (onErrorRich != null) {
                                                                 onErrorRich.accept(ErrorPositionExtractor.buildInfo(fCause,
-                                                                        fCause.getMessage() != null ? fCause.getMessage() : fCause.toString()));
+                                                                        fCause.getMessage() != null ? fCause.getMessage() : fCause.toString(),
+                                                                        executedSql.length()));
                                                             }
                                                         } catch (Throwable ex) {
                                                             LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", ex);
@@ -2439,7 +2702,8 @@ public final class DataSourceSelector {
                         // write-safe: UI-only（纯 Swing/只读，无文档写）
                         ApplicationManager.getApplication().invokeLater(() -> {
                             try {
-                                if (onErrorRich != null) onErrorRich.accept(ErrorPositionExtractor.buildInfo(fCause, fMsg));
+                                // T-ELU-03：接上被执行文本长度（越界钳制生效前提）
+                                if (onErrorRich != null) onErrorRich.accept(ErrorPositionExtractor.buildInfo(fCause, fMsg, executedSql.length()));
                             } catch (Throwable ex) {
                                 LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", ex);
                             }
@@ -2459,9 +2723,11 @@ public final class DataSourceSelector {
             Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
             final Throwable fCause = cause;
             try {
+                // T-ELU-03：接上被执行文本长度（越界钳制生效前提）
                 if (onErrorRich != null) {
                     onErrorRich.accept(ErrorPositionExtractor.buildInfo(fCause,
-                            fCause.getMessage() != null ? fCause.getMessage() : fCause.toString()));
+                            fCause.getMessage() != null ? fCause.getMessage() : fCause.toString(),
+                            executedSql.length()));
                 }
             } catch (Throwable ex) {
                 LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", ex);
@@ -2688,20 +2954,32 @@ public final class DataSourceSelector {
                     runPostExecutionInvalidate(sqlText, LOG);
                     LOG.info("[M36] result tab not appeared after " + attempts[0] + " attempts (dumb=" + dumb + ")");
                     String realError = extractConsoleError(sharedConsole != null ? sharedConsole : preparedConsole, LOG);
+                    // T-CEC-03：判据认不出的失败也要有下文——控制台确有新增输出（去掉本次 SQL
+                    // 回显后的残余）时如实呈现，而不是把语法错归因成密码/驱动（真机 P15 实证）。
+                    String residue = realError == null
+                            ? extractConsoleResidue(sharedConsole != null ? sharedConsole : preparedConsole, sqlText, LOG)
+                            : null;
                     // T-ExecSilentNoop：40 拍超时窗口与 8s 监控共用 executionHintReported 去重。
                     // 真实错误优先（DBN 已把失败写进 history 才叫真失败/真超时）；无错误痕迹时
                     // 不再一律归因凭据——先看本次是否探到"未提交"（freshModel 回落，DBN 侧静默
                     // 拒绝），按情况给 notSubmitted / timeout / indexing 三种真实提示。
                     if (realError == null && !executionHintReported) {
                         executionHintReported = true;
-                        String fallbackHint = dumb
-                                ? MpSqlVisualizerBundle.message("execute.indexing.hint")
-                                : (demotedOverride
-                                        ? MpSqlVisualizerBundle.message("execute.notSubmitted.hint", dsName != null ? dsName : "")
-                                        : MpSqlVisualizerBundle.message("execute.timeout.hint"));
-                        LOG.info("[M36] result tab not appeared, no console error (dumb=" + dumb + ", demoted=" + demotedOverride + ") - hint via 40-tick window");
+                        String message;
+                        if (residue != null) {
+                            // 如实标注：这是控制台新增输出，**不是**已识别的错误形态（不猜原因）
+                            message = MpSqlVisualizerBundle.message("execute.error.unknownShape") + "\n" + residue;
+                        } else {
+                            message = dumb
+                                    ? MpSqlVisualizerBundle.message("execute.indexing.hint")
+                                    : (demotedOverride
+                                            ? MpSqlVisualizerBundle.message("execute.notSubmitted.hint", dsName != null ? dsName : "")
+                                            : MpSqlVisualizerBundle.message("execute.timeout.hint"));
+                        }
+                        LOG.info("[M36] result tab not appeared, no console error (dumb=" + dumb + ", "
+                                + "demoted=" + demotedOverride + ", residue=" + (residue != null) + ") - hint via 40-tick window");
                         // write-safe: UI-only（纯 Swing/只读，无文档写）
-                        final String fHint = fallbackHint;
+                        final String fHint = message;
                         ApplicationManager.getApplication().invokeLater(() -> {
                             if (onError != null) onError.accept(fHint);
                         }, ModalityState.any());

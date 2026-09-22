@@ -1,3 +1,6 @@
+// T-SyncK2JMaster184 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt 增量移植
+// （T-PrewarmLateRecover F1/F2 迟到产物换装 + 横幅重试、T-PerfSweep6 T-PS6-04 目录清扫、
+//   T-ECH-01/O-48 ExplainGate 接线、T-ELU-01/O-49 先解析后显隐、O-59 T-IIR-01 快照登记带 dialect）
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
@@ -20,6 +23,7 @@ import cn.song.mybatisplus.visualizer.model.SqlPreviewModel;
 import cn.song.mybatisplus.visualizer.model.WrapperType;
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog;
 import cn.song.mybatisplus.visualizer.sql.Dialect;
+import cn.song.mybatisplus.visualizer.sql.ExplainGate;
 import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator;
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramModel;
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect;
@@ -201,6 +205,22 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
      * 抬高预算的代价是等待期变长，已由 {@link #showPreviewPreparingPlaceholder} 的占位覆盖观感。</p>
      */
     static final long PREWARM_WAIT_MS = 500L;
+
+    /**
+     * T-PerfSweep6 T-PS6-04（性能报告发现 4）：预热目录残留清扫的<b>年龄</b>上限（7 天）。
+     *
+     * <p>取值口径：残留来自 kill / 崩溃 / 未走 removeNotify 的会话，跨会话（IDE 重启）后本插件
+     * 不会再复用它们；7 天足以覆盖「用户当周内重开项目仍可能被兜底复用」的窗口
+     * （{@code projectPreviewFile} 的 existing 分支），又不会让残留无限驻留。</p>
+     */
+    static final long STALE_PREVIEW_MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000;
+
+    /**
+     * T-PerfSweep6 T-PS6-04：预热目录内本插件命名的文件<b>条数</b>上限（超出按 mtime 删最旧）。
+     *
+     * <p>200 = 常规使用下永远撞不到（一次预览最多留 1~2 个文件），只兜「异常路径反复泄漏」的底。</p>
+     */
+    static final int PREVIEW_DIR_MAX_FILES = 200;
 
     /**
      * T-FixN2 × T-InsertColumnInlay O-44b：生成下一次预热的唯一临时文件名。
@@ -415,6 +435,13 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
      * <b>不会</b>误删其它面板/其它 IDE 会话正在使用的预览文件（同项目多开进程各有自己的 pid 段）。</p>
      */
     private final Set<java.io.File> previewTempFilesCreated = ConcurrentHashMap.newKeySet();
+
+    /**
+     * T-PerfSweep6 T-PS6-04：目录级兜底清扫的「本面板已扫过」闸门（首次解析预热目录时扫一次）。
+     * 原子置位：{@code projectPreviewFile} 可能被预热线程与 EDT 同时触达。
+     */
+    private final java.util.concurrent.atomic.AtomicBoolean previewDirSwept =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
     private volatile Pair<VirtualFile, PsiFile> prewarmedTempFile = null;
 
     /**
@@ -424,6 +451,39 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     private volatile PrewarmAwait<Pair<VirtualFile, PsiFile>> prewarmAwait = null;
     /** T-GifRerecord：预热失败标志——await 快速降级用，避免 EDT 空等 2s 后再走降级路径。 */
     private volatile boolean prewarmFailed = false;
+
+    /**
+     * T-PrewarmLateRecover F1/F2：预热轮次令牌——每次发起预热（构造期 / {@code clear} 重预热 / 横幅重试）
+     * 自增，预热线程发布产物时比对。不等即「本轮已被后来的一轮取代」：产物不入字段（否则旧轮的
+     * 迟到产物会覆盖新轮刚交付的那份），文件仍由 {@link #releaseEditor} 按登记表回收。
+     */
+    private volatile int prewarmRound = 0;
+
+    /**
+     * T-PrewarmLateRecover F1：当前编辑器文档是<b>降级产物</b>时的身份标记（主路径装配成功置 null）。
+     * 迟到产物换装前用它确认「此刻显示的确实是那份降级文档」——不比对身份就可能把用户已经
+     * 在用的主路径文档误换掉。
+     */
+    private Document degradedPreviewDocument = null;
+
+    /**
+     * T-PrewarmLateRecover F1：插件最后一次写进编辑器文档的 SQL 文本——换装判据里的「用户没动过」。
+     * 三条写入支链（原生控制台 / 既有编辑器 / 新建编辑器）都要更新，漏一条即把插件的重渲染
+     * 误判成用户编辑（换装被永久挡掉）。
+     */
+    private String lastRenderedSql = null;
+
+    /**
+     * T-PrewarmLateRecover F1：预热相关回调的 EDT 派发通道（写安全模态）。
+     *
+     * <p>与 {@link #prewarmPreviewTempFile} 里 PrewarmAwait 的 dispatcher 是同一份实现：迟到产物换装也要
+     * 写文档（{@code WriteCommandAction { d.setText }}），故必须同款 {@code defaultModalityState()}——
+     * {@code any()} 恒 write-unsafe（T-FixN1 的 KDoc 有平台侧逐帧依据）。</p>
+     */
+    private final java.util.function.Consumer<Runnable> prewarmDispatcher = runnable ->
+            ApplicationManager.getApplication().invokeLater(
+                    runnable,
+                    com.intellij.openapi.application.ModalityState.defaultModalityState());
     /**
      * T-M36.6-03：面板释放标志——预热线程晚于 dispose 完成时丢弃产物并删除文件。
      * T-StabilityTail 起语义扩为「放弃预热」：面板 dispose 与<b>项目开始销毁</b>（见
@@ -725,10 +785,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         // 不冲突——该提交信息里没有「必须在模态对话框挂起期间完成装配」的场景。
         // 边界：控制台挂载/回填链路（M36.5，本文件 onConsole 回调的 post-attach 重渲染等站点）的
         // any()/nonModal() 是另一条链路，不在本改动范围。
-        PrewarmAwait<Pair<VirtualFile, PsiFile>> await = new PrewarmAwait<>(PREWARM_WAIT_MS, runnable ->
-                ApplicationManager.getApplication().invokeLater(
-                        runnable,
-                        com.intellij.openapi.application.ModalityState.defaultModalityState()));
+        // T-PrewarmLateRecover F1：轮次令牌与迟到产物接收方都必须在预热线程可能发布**之前**就位
+        // （令牌晚了会让旧轮产物盖掉新轮；接收方晚了会漏掉「超时已放弃、产物随后到达」这一态）。
+        int round = ++prewarmRound;
+        PrewarmAwait<Pair<VirtualFile, PsiFile>> await = new PrewarmAwait<>(PREWARM_WAIT_MS, prewarmDispatcher);
+        await.onLateProduct(product -> prewarmDispatcher.accept(() -> tryUpgradeToLateProduct(product)));
         prewarmAwait = await;
         // T-StabilityTail：把「项目开始销毁」接到取消门——池线程不得比项目活得更久
         bindPrewarmToProjectLifecycle();
@@ -813,7 +874,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                     return;
                 }
                 previewTempFile = vf;
-                publishPrewarmProduct(await, new Pair<>(vf, psi), prewarmStartedAt);
+                publishPrewarmProduct(await, new Pair<>(vf, psi), prewarmStartedAt, round);
             } catch (Throwable e) {
                 prewarmFailed = true;
                 await.fail(e);
@@ -838,7 +899,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     private void publishPrewarmProduct(
             PrewarmAwait<Pair<VirtualFile, PsiFile>> await,
             Pair<VirtualFile, PsiFile> product,
-            long startedAtNanos) {
+            long startedAtNanos,
+            int round) {
         // T-PrewarmBudget（2026-09-20）：预热**成功**耗时打点——消费侧预算 `PREWARM_WAIT_MS` 只有在
         // 「预热耗时 < 预算」时才可能走主路径；此前无此打点，预算取值只能靠间接夹逼。判读口径：
         // 本行耗时 > PREWARM_WAIT_MS ⇒ 该次打开必然落 onFallback 降级（可与紧随其后的
@@ -846,8 +908,19 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         Logger.getInstance(SqlPreviewPanel.class)
                 .info("[M36] prewarm done in " + prewarmElapsedMs(startedAtNanos) + "ms "
                         + "(file=" + product.getFirst().getName() + ", psi=" + product.getSecond().getName() + ")");
+        // T-PrewarmLateRecover F1：旧轮产物不入字段（见 prewarmRound）——文件仍由 releaseEditor
+        // 按登记表回收，不会漏删。
+        if (round != prewarmRound) {
+            Logger.getInstance(SqlPreviewPanel.class)
+                    .info("[M36] prewarm product dropped: stale round=" + round + " (current=" + prewarmRound + ")");
+            return;
+        }
         prewarmedTempFile = product;
-        await.complete(product);
+        // T-PrewarmLateRecover F1：complete 返回 false = 消费侧已放弃（超时以 null 完成 / 失败），
+        // 此时产物走迟到通道换装——这正是「首开预热 3016ms、预算 500ms」那类场景的恢复出口。
+        if (!await.complete(product)) {
+            prewarmDispatcher.accept(() -> tryUpgradeToLateProduct(product));
+        }
     }
 
     /** T-PrewarmBudget：预热打点用耗时（毫秒）；`nanoTime` 差值，不受系统时钟回拨影响。 */
@@ -942,6 +1015,12 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 ".idea" + java.io.File.separator + cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver.DATA_DIR_NAME
                         + java.io.File.separator + "preview");
         if (!dir.exists() && !dir.mkdirs()) return null;
+        // T-PerfSweep6 T-PS6-04（发现 4）：本面板首次解析预热目录时做一次目录级兜底清扫
+        // （年龄 > 7 天 / 条数 > 200），只认本插件自有命名——见 sweepStalePreviewFiles。
+        // 每次面板生命周期只扫一次（清扫是兜底，不必每次预览都付一遍 listFiles）。
+        if (previewDirSwept.compareAndSet(false, true)) {
+            sweepStalePreviewFiles(dir);
+        }
         // T-FixN2 × T-InsertColumnInlay O-44b 合并口径：文件名**唯一**（每次预热换名，见上）且**由
         // inlay 作用域锚点同一份常量生成**——锚点靠文件名形态判定「是不是本面板预览编辑器」，
         // 名字来源与形态判据同处 [PreviewInlayScope]，两处各自硬编码字面量会在改名时静默打穿锚点
@@ -1303,8 +1382,16 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         if (keyword == null) return;
         if (!keyword.equals("UPDATE") && !keyword.equals("DELETE")) return;
         RollbackSnapshotStore store = proj.getService(RollbackSnapshotStore.class);
+        // O-59 T-IIR-01：把**当前生效方言**随快照登记进去——取的是 SqlPreviewService.currentDialect
+        // （= DialectRegistry.effective(project)，与预览/执行链同源，含 T-DialectAutoInfer 的数据源
+        // 推断，不新造解析）。此前两处登记点都不传该参数 → SnapshotEntry.dialect 恒 null →
+        // RollbackSqlGenerator.backfillInsert 的 wrapIdentity 恒假 → 回滚侧 identity 包装在
+        // **生产链上永不触发**（T-Round10 独立复核 blocker②：用户在 SQL Server 上 DELETE 后粘贴快照
+        // 生成回填 INSERT 仍报 544）。取不到时保持 null（= 未知不包装，O-52 D1=A 契约不变）。
+        Dialect dialect = proj.getService(SqlPreviewService.class).currentDialect();
         if (rollbackOfEntry != null) {
-            store.register(sql, rollbackOfEntry.targetTable(), null, List.of(), rollbackOfEntry.executionId());
+            store.register(sql, rollbackOfEntry.targetTable(), null, List.of(),
+                    rollbackOfEntry.executionId(), dialect, List.of());
             return;
         }
         // T-PS5-02：传入已剥注释文本——键对齐靠 strip 幂等（详见本函数 KDoc 的两条前提）
@@ -1312,7 +1399,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 RollbackSqlGenerator.generate(SqlCommentStripper.strip(sql));
         String table = analyzed.targetTable();
         if (table == null) return;
-        store.register(sql, table, analyzed.snapshotSelectSql(), analyzed.setColumns());
+        store.register(sql, table, analyzed.snapshotSelectSql(), analyzed.setColumns(),
+                RollbackSnapshotStore.NO_EXECUTION_ID, dialect, List.of());
     }
 
     /** 当前编辑器 SQL 文本（原生编辑器文档优先，兜底自研编辑器；两处皆空 null）。 */
@@ -1498,24 +1586,14 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     }
 
     /**
-     * T-ErrorLocate T-EL-03：错误定位——跳转到预览源锚点（语句起始行）。
+     * T-ErrorLocate T-ELU-01：执行调用点共用的富错误回调——<b>先解析锚点、再决定按钮显隐</b>。
      *
      * <p>诚实降级定案：驱动报错位置（Position/at line）指向<b>被执行 SQL 文本</b>的字符/行，
      * 与 mapper 原文行不一一对应（动态 SQL 拼接、参数注入后行号必然错位），v1 只承诺
      * 「语句起始行」跳转 + 按钮 tooltip 如实说明，绝不虚标精确跳转。
-     * 锚点来自 {@link SqlPreviewService} 的 lastPreviewSourceAnchor（预览触发时登记）；
-     * 无锚点（gutter 面等未登记入口）定位按钮不出现。
+     * 锚点来自 {@link SqlPreviewService} 的 lastPreviewSourceAnchor（预览触发时登记）。</p>
      */
-    private void locateErrorSource() {
-        Project proj = project;
-        if (proj == null) return;
-        SqlPreviewService.SourceAnchor anchor = null;
-        try {
-            anchor = proj.getService(SqlPreviewService.class).lastPreviewSourceAnchor;
-        } catch (Throwable t) {
-            return;
-        }
-        if (anchor == null) return;
+    private void locateErrorSource(Project proj, SqlPreviewService.SourceAnchor anchor) {
         try {
             new com.intellij.openapi.fileEditor.OpenFileDescriptor(proj, anchor.file(), anchor.line0(), 0).navigate(true);
         } catch (Throwable ignored) {
@@ -1523,9 +1601,35 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         }
     }
 
-    /** T-ErrorLocate：执行调用点共用的富错误回调（错误呈现 + 可解析锚点时附定位动作）。 */
+    /**
+     * T-ErrorLocateUsability T-ELU-01（O-49）：<b>先解析锚点，再决定是否给按钮</b>。
+     *
+     * <p>缺陷（KDoc 与实现不符）：{@link SqlResultPanel#showErrorRich} 按 {@code locate != null} 决定按钮显隐，
+     * 而唯一调用方此前<b>恒传非 null lambda</b>（锚点解析发生在点击时，{@code project ?: return} /
+     * {@code anchor ?: return} 静默返回）→ <b>按钮可见，点了什么都不发生</b>。现把解析提到显隐之前：
+     * 锚点解析不出（无项目上下文 / 本会话尚未登记锚点 / 源文件已失效）→ 传 null，按钮不出现。</p>
+     *
+     * <p>对齐同仓已做对的先例 {@code cn.song.mybatisplus.visualizer.log.SqlLogPanel}（先解析、后显隐）。
+     * 顺带把「文件已失效」也算作不可解析——跳不动的按钮不给，比给了点不动诚实。</p>
+     */
+    @Nullable
+    private Runnable errorLocateAction() {
+        Project proj = project;
+        if (proj == null) return null;
+        SqlPreviewService.SourceAnchor resolved;
+        try {
+            resolved = proj.getService(SqlPreviewService.class).lastPreviewSourceAnchor;
+        } catch (Throwable t) {
+            return null;
+        }
+        if (resolved == null) return null;
+        if (!resolved.file().isValid()) return null;
+        return () -> locateErrorSource(proj, resolved);
+    }
+
+    /** T-ErrorLocate：执行调用点共用的富错误回调（错误呈现 + <b>锚点可解析时</b>才附定位动作）。 */
     private void showErrorRichWithLocate(cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo info) {
-        resultPanel.showErrorRich(info, () -> locateErrorSource());
+        resultPanel.showErrorRich(info, errorLocateAction());
         maybeProbeDdlEffective(info);
     }
 
@@ -1584,6 +1688,12 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
      * M37.2：真实 EXPLAIN——按当前方言把预览 SQL 包装为 EXPLAIN 语句，走执行链提交原生控制台。
      * 结果展示与普通执行一致（内嵌控制台结果 Tab）；静态性能规则标注保留在顶部 meta 区，同屏对照。
      * EXPLAIN 归免确认类（{@link SqlTypeClassifier}），无 DML 二次确认；方言不支持（null）→ 提示降级。
+     *
+     * <p>T-ExplainChainHardening T-ECH-01（O-48，D1=A 严格判定）：包装前先判<b>被包语句</b>的首关键字
+     * 是否落在 {@link ExplainGate} 白名单——此前对编辑器里的任意文本加前缀（{@code DELETE FROM t}、
+     * {@code CREATE TABLE …}、标识符 {@code SELECTED} 一律被包成 EXPLAIN 送进库），现改为明确提示、不执行。
+     * 判据只看「未包装」的文本：已以 EXPLAIN 开头的文本是本插件上一次的包装产物（T-ExplainDbl
+     * 幂等场景），不适用白名单，否则二次点击会被误拒。</p>
      */
     void explainSql() {
         Project proj = project;
@@ -1596,17 +1706,22 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         PreviewResult cur = current;
         Dialect dialect = (cur != null && cur.getPreviewModel() != null && cur.getPreviewModel().getDialect() != null)
                 ? cur.getPreviewModel().getDialect() : cn.song.mybatisplus.visualizer.sql.MySqlDialect.INSTANCE;
-        // T-ExplainDbl：幂等包装——首次执行后 EXPLAIN 语句已在控制台文档中，再点一次
-        // 不在已包装文本上二次加前缀（重复前缀 → MySQL 1064）
-        String explainSqlText = dialect.renderExplainStatementIdempotent(sql);
-        if (explainSqlText == null) {
+        // T-ECH-01：提交判定（幂等 → 首关键字白名单 → 方言支持面），两类拒绝理由分别提示
+        // （Kotlin when(is …) 直译：sealed interface + record，Java 17 形态见 ExplainGate 移植注记）
+        ExplainGate.SubmitPlan plan = ExplainGate.planExplainSubmit(dialect, sql);
+        String explainSqlText;
+        if (plan instanceof ExplainGate.SubmitPlan.NotExplainable) {
+            notifyExplainNotExplainable(proj, ((ExplainGate.SubmitPlan.NotExplainable) plan).firstKeyword());
+            return;
+        } else if (plan instanceof ExplainGate.SubmitPlan.DialectUnsupported) {
             // T-UiNative T-UN-02：方言不支持提示改轻通知（原模态弹窗——纯告知无需打断）
             if (!ApplicationManager.getApplication().isUnitTestMode()) {
                 try {
                     new Notification(
                             NOTIFICATION_GROUP_ID,
                             MpSqlVisualizerBundle.message("panel.explain"),
-                            MpSqlVisualizerBundle.message("panel.explain.unsupported", dialect.getName()),
+                            MpSqlVisualizerBundle.message("panel.explain.unsupported",
+                                    ((ExplainGate.SubmitPlan.DialectUnsupported) plan).dialectName()),
                             NotificationType.INFORMATION
                     ).notify(proj);
                 } catch (Throwable ignored) {
@@ -1614,6 +1729,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 }
             }
             return;
+        } else {
+            explainSqlText = ((ExplainGate.SubmitPlan.Submit) plan).statement();
         }
         Logger.getInstance(SqlPreviewPanel.class)
                 .info("[M37.2] explainSql: dialect=" + dialect.getName() + ", len=" + explainSqlText.length());
@@ -1631,6 +1748,29 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 consoleEditor -> onNativeEditorReady(consoleEditor),
                 errorMsg -> resultPanel.showError(errorMsg),
                 info -> showErrorRichWithLocate(info));
+    }
+
+    /**
+     * T-ExplainChainHardening T-ECH-01（O-48）：被包语句不可 EXPLAIN 时的轻通知（同
+     * {@code panel.explain.unsupported} 形态——纯告知无需打断，不新增弹窗）。文案给出<b>判定依据</b>
+     * （实际首关键字）而不只是结论，用户据此能自己改语句。
+     */
+    private void notifyExplainNotExplainable(Project proj, @Nullable String keyword) {
+        if (ApplicationManager.getApplication().isUnitTestMode()) return;
+        try {
+            new Notification(
+                    NOTIFICATION_GROUP_ID,
+                    MpSqlVisualizerBundle.message("panel.explain"),
+                    MpSqlVisualizerBundle.message(
+                            "panel.explain.notExplainable",
+                            keyword != null
+                                    ? keyword
+                                    : MpSqlVisualizerBundle.message("panel.explain.notExplainable.unknown")),
+                    NotificationType.INFORMATION
+            ).notify(proj);
+        } catch (Throwable ignored) {
+            // headless 无通知系统依赖，与原 runCatching 等价
+        }
     }
 
     /** M36.5：原生控制台编辑器就绪统一处理。 */
@@ -2802,6 +2942,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                     suppressAutoPopup = false;
                 }
             }
+            // T-PrewarmLateRecover F1：记录插件最后一次写入的文本——迟到产物换装据此判「用户没动过」
+            lastRenderedSql = text;
             // T-AutoFold F4-a：nativeDoc 支链的程序性折叠（关闭态 applyTo 内部即清除短路）
             Editor foldTarget = nativeConsoleEditor;
             if (foldTarget != null && !foldTarget.isDisposed()) {
@@ -2820,6 +2962,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                     suppressAutoPopup = false;
                 }
             }
+            // T-PrewarmLateRecover F1：记录插件最后一次写入的文本（同上）
+            lastRenderedSql = text;
             // T-AutoFold F4-a：自建编辑器支链
             cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(existing, text);
             return;
@@ -2832,6 +2976,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             fLogger.warn("[M36] createEditor fallback while prepared console detached → recoverConsole");
             recoverConsole(text);
         }
+        // T-PrewarmLateRecover F1：新建支链同样记录（装配后文档文本即 text）
+        lastRenderedSql = text;
         createEditor(text);
     }
 
@@ -2930,7 +3076,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                     VirtualFile vFile = prewarmed.getFirst();
                     PsiFile psi = prewarmed.getSecond();
                     // T-PreviewUx-Pack #2：主路径成功（项目内文件 + PSI 就绪）——清除降级横幅
+                    // T-PrewarmLateRecover F2：动作一并摘除（横幅已清，留着会被后续 RENDER_WARNING 继承）
+                    degradationBanner.onRetry = null;
                     degradationBanner.clear(DegradationBanner.Kind.DEGRADED);
+                    // T-PrewarmLateRecover F1：主路径装配 → 当前文档不再属于降级态
+                    degradedPreviewDocument = null;
                     previewTempFile = vFile;
                     psiFile = psi;
                     // T-PreviewDocLock：262 平台给「PSI 文件 → 文档」解析加了运行期读权限断言（243 只有
@@ -3008,25 +3158,152 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
      * 第二级 = 内存 PSI（PsiFileFactory.createFileFromText，无 VFS 文件但保留补全上下文载体）；
      * 第三级（兜底）= 纯内存文档编辑器（无 PSI，补全/注释灭）。
      * T-PreviewUx-Pack #2：降级链层级横幅——触发时明示当前层级与恢复指引（不破坏降级顺序）。
+     * T-PrewarmLateRecover F1：产出的文档登记为 {@link #degradedPreviewDocument}（迟到产物换装的身份判据）；
+     * F2：横幅挂上「重试」动作。
      */
     @NotNull
     private Document fallbackPreviewDocument(String sql, String msg) {
         // 第二级：内存 PSI（保留补全上下文载体）
         Document memoryPsiDoc = createInMemoryPreviewPsi(sql);
         if (memoryPsiDoc != null) {
-            degradationBanner.show(
-                    DegradationBanner.Kind.DEGRADED,
-                    MpSqlVisualizerBundle.message("panel.banner.degradedPsi"));
+            showDegradedBanner("panel.banner.degradedPsi");
+            degradedPreviewDocument = memoryPsiDoc;
             return memoryPsiDoc;
         }
         // 第三级：裸 document（内存 PSI 也失败）
         Logger.getInstance(SqlPreviewPanel.class)
                 .warn("[M36] preview temp file unavailable, fall back to bare in-memory editor: " + msg);
         psiFile = null;
+        showDegradedBanner("panel.banner.degradedPlain");
+        Document bare = EditorFactory.getInstance().createDocument(sql);
+        degradedPreviewDocument = bare;
+        return bare;
+    }
+
+    /**
+     * T-PrewarmLateRecover F2：挂降级横幅并接上「重试」动作。
+     *
+     * <p>动作覆盖的是 F1 够不到的那一类——预热<b>硬失败</b>（VFS refresh 失败 / findFile null /
+     * 项目内目录建不出来）：没有产物可等，只能由用户点一次重新臂预热。</p>
+     */
+    private void showDegradedBanner(String messageKey) {
+        degradationBanner.onRetry = this::retryPrewarm;
         degradationBanner.show(
                 DegradationBanner.Kind.DEGRADED,
-                MpSqlVisualizerBundle.message("panel.banner.degradedPlain"));
-        return EditorFactory.getInstance().createDocument(sql);
+                MpSqlVisualizerBundle.message(messageKey));
+    }
+
+    /**
+     * T-PrewarmLateRecover F1：迟到产物换装——把已经装配好的降级编辑器换成项目内文件背书的编辑器。
+     *
+     * <p>这是「首开预热超过预算 → 降级挂横幅 → 产物随后到达」的恢复出口（实测形态：预算 500ms、
+     * 冷启首开预热 3016ms）。<b>调用方负责线程归位</b>（{@link #prewarmDispatcher} 回 EDT，写安全模态）。</p>
+     *
+     * <p>换装判据（全部满足才动，任一条不满足就静默保持现状——产物留在 {@link #prewarmedTempFile} 里，
+     * 留给后续 {@code createEditor} 消费）：
+     * <ul>
+     *  <li>面板与项目未销毁；</li>
+     *  <li>已有编辑器，且当前文档就是降级装配的那一份（{@link #degradedPreviewDocument} 身份相等）；</li>
+     *  <li>文档文本与插件最后一次写入一致（{@link #lastRenderedSql}）——用户动过就不换，避免抢走编辑现场。
+     *      该条<b>只在自动换装时</b>生效：用户显式点「重试」时按 {@code userRequested} 跳过，改把当前文档文本
+     *      作为新装配的 SQL（内容不丢）——否则用户编辑过之后重试就成了按不出反应的假动作。</li>
+     * </ul></p>
+     *
+     * <p>换装走主路径装配（{@link #assemblePreviewEditor}），因此横幅由它统一清除；光标与焦点尽量复位
+     * （文本逐字相同，逻辑位置可直接搬）。</p>
+     */
+    void tryUpgradeToLateProduct(Pair<VirtualFile, PsiFile> product, boolean userRequested) {
+        if (previewDisposed || (project != null && project.isDisposed())) return;
+        Editor currentEditor = editor;
+        if (currentEditor == null) return;
+        Document degradedDoc = degradedPreviewDocument;
+        if (degradedDoc == null) return;
+        if (currentEditor.getDocument() != degradedDoc) return;
+        String text = currentEditor.getDocument().getText();
+        if (!userRequested && !text.equals(lastRenderedSql)) {
+            // 用户已经在编辑（或另有渲染尚未落定）：不抢编辑现场，产物留给下一次装配
+            Logger.getInstance(SqlPreviewPanel.class)
+                    .info("[M36] late prewarm product kept: document edited since last render (len=" + text.length() + ")");
+            return;
+        }
+        // Kotlin runCatching { current.caretModel.logicalPosition }.getOrNull() 等价
+        com.intellij.openapi.editor.LogicalPosition caret = null;
+        try {
+            caret = currentEditor.getCaretModel().getLogicalPosition();
+        } catch (Throwable ignored) {
+        }
+        // Kotlin runCatching { current.contentComponent?.isFocusOwner == true }.getOrDefault(false) 等价
+        boolean hadFocus;
+        try {
+            java.awt.Component contentComponent = currentEditor.getContentComponent();
+            hadFocus = contentComponent != null && contentComponent.isFocusOwner();
+        } catch (Throwable t) {
+            hadFocus = false;
+        }
+        disposeCurrentEditorOnly();
+        // 与 assemblePreviewEditor 的「引用相等 + 随即置 null」消费判定对齐：本次要消费的就是这一份
+        prewarmedTempFile = product;
+        assemblePreviewEditor(text, product);
+        if (caret != null) {
+            try {
+                Editor upgraded = editor;
+                if (upgraded != null) upgraded.getCaretModel().moveToLogicalPosition(caret);
+            } catch (Throwable ignored) {
+            }
+        }
+        if (hadFocus) {
+            try {
+                Editor upgraded = editor;
+                if (upgraded != null && upgraded.getContentComponent() != null) {
+                    upgraded.getContentComponent().requestFocusInWindow();
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        Logger.getInstance(SqlPreviewPanel.class)
+                .info("[M36] late prewarm product consumed: editor upgraded to " + product.getFirst().getName());
+    }
+
+    /** {@link #tryUpgradeToLateProduct(Pair, boolean)} 的 Kotlin 默认参 {@code userRequested = false} 形态。 */
+    void tryUpgradeToLateProduct(Pair<VirtualFile, PsiFile> product) {
+        tryUpgradeToLateProduct(product, false);
+    }
+
+    /**
+     * T-PrewarmLateRecover F2：横幅「重试」——重新臂一轮预热，产物到达后原地换装并清横幅。
+     *
+     * <p>两条出口都接上：预算内就绪走 {@link PrewarmAwait#scheduleOnce} 的 onReady；超预算到达走
+     * {@link PrewarmAwait#onLateProduct}（预热线程发布时发现消费侧已放弃）——所以重试<b>不会</b>因为
+     * 「预热又慢了一次」而白点。失败（硬失败）时什么都不做：横幅与动作保留，用户可再点。</p>
+     *
+     * <p>重臂本身受 {@link #prewarmRound} 保护：新轮自增令牌，旧轮迟到产物不再入字段（P9 记录的
+     * 「两次预热竞争 previewTempFile」即由该令牌挡住）。</p>
+     */
+    void retryPrewarm() {
+        if (previewDisposed || project == null) return;
+        // 上一轮若已有产物躺着（迟到但没人消费），直接换装，不必再预热一轮
+        Pair<VirtualFile, PsiFile> pending = prewarmedTempFile;
+        if (pending != null) {
+            tryUpgradeToLateProduct(pending, true);
+            if (degradedPreviewDocument == null) return;
+        }
+        // 降级态下「当前在用文件」这个指针没有意义（降级文档不在项目文件上），而 prewarmPreviewTempFile
+        // 的入口守卫见它非空即判「已备好」直接 fail——主路径设了指针之后才失败的那条窄路（如
+        // PsiDocumentManager.getDocument 返回 null）会让重试变成空动作。这里只丢指针、不删文件：
+        // 文件仍在 previewTempFilesCreated 登记表里，releaseEditor 统一回收。
+        previewTempFile = null;
+        prewarmFailed = false;
+        prewarmPreviewTempFile();
+        PrewarmAwait<Pair<VirtualFile, PsiFile>> await = prewarmAwait;
+        if (await != null) {
+            await.scheduleOnce(
+                    product -> {
+                        if (!previewDisposed) tryUpgradeToLateProduct(product, true);
+                    },
+                    () -> {
+                        // 超时/失败：保持现状（横幅与动作仍在）——迟到通道会在产物真正到达时收尾
+                    });
+        }
     }
 
     /**
@@ -3128,13 +3405,14 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         created.getDocument().addDocumentListener(listener, autoPopupDisposable);
     }
 
-    /** 释放当前编辑器（幂等）。 */
-    private void releaseEditor() {
-        // T-RefreshDbSteal：createEditor 兜底断言的对称端点——谁释放了自建编辑器决定了
-        // 下一次 showSql 走哪个分支，旧实现零日志
-        Logger.getInstance(SqlPreviewPanel.class)
-                .info("[M36] releaseEditor: editor=" + System.identityHashCode(editor)
-                        + ", nativeDoc=" + (nativeEditorDoc != null), new Throwable("releaseEditor path"));
+    /**
+     * T-PrewarmLateRecover F1：只释放当前编辑器（含 autopopup 监听），不动临时文件与预热产物。
+     *
+     * <p>从 {@link #releaseEditor} 抽出——迟到产物换装要在<b>保留</b>临时文件与产物的前提下换掉编辑器，
+     * 两条路径共用同一段释放逻辑，避免「谁负责 releaseEditor」出现两个说法（Editor 泄漏会被
+     * 平台报 "Memory leak detected"）。</p>
+     */
+    private void disposeCurrentEditorOnly() {
         if (editor != null) {
             // T-M52：监听器由 Disposable 管理，dispose 即移除（无需手动 removeDocumentListener，
             // 也不再有 listener 字段需要置 null——T-RA-02 删除）
@@ -3143,6 +3421,18 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             EditorFactory.getInstance().releaseEditor(editor);
             editor = null;
         }
+        // T-PrewarmLateRecover F1：编辑器没了，降级文档身份随之失效
+        degradedPreviewDocument = null;
+    }
+
+    /** 释放当前编辑器（幂等）。 */
+    private void releaseEditor() {
+        // T-RefreshDbSteal：createEditor 兜底断言的对称端点——谁释放了自建编辑器决定了
+        // 下一次 showSql 走哪个分支，旧实现零日志
+        Logger.getInstance(SqlPreviewPanel.class)
+                .info("[M36] releaseEditor: editor=" + System.identityHashCode(editor)
+                        + ", nativeDoc=" + (nativeEditorDoc != null), new Throwable("releaseEditor path"));
+        disposeCurrentEditorOnly();
         psiFile = null;
         if (previewTempFile != null) new java.io.File(previewTempFile.getPath()).delete();
         previewTempFile = null;
@@ -3152,6 +3442,20 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         // 否则 preview/ 目录会随预览次数只增不减。清理策略三选一取「按面板生命周期删除」：
         // 保留上限/文件池两条都要跨面板判断「谁在用」（同项目多开进程另有自己的文件），
         // 误删在用的预览文件会立刻复现 File Cache Conflict；本表只装本面板自己建的文件，天然无误删面。
+        // T-PerfSweep6 T-PS6-04③：抽成 recoverPreviewTempFiles，与 dispose 共用同一份回收逻辑
+        recoverPreviewTempFiles();
+        // T-M36.6-03：预热产物作废（面板重用时由 clear() 重新预热；dispose 由 previewDisposed 兜底）
+        prewarmedTempFile = null;
+    }
+
+    /**
+     * T-PerfSweep6 T-PS6-04③：回收本面板创建过的全部预览临时文件（幂等）。
+     *
+     * <p>抽成独立方法是为了让 {@link #releaseEditor} 与 {@link #dispose} 共用同一份回收逻辑——此前只有
+     * {@code removeNotify} → {@link #releaseEditor} 一条链会走到，而三种宿主（弹窗 / 工具窗 / 嵌入控制台）下
+     * {@code dispose} 与 {@code removeNotify} 的先后未穷尽，dispose 先到即漏删。</p>
+     */
+    private void recoverPreviewTempFiles() {
         for (java.io.File createdFile : previewTempFilesCreated) {
             try {
                 createdFile.delete();
@@ -3160,8 +3464,58 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             }
         }
         previewTempFilesCreated.clear();
-        // T-M36.6-03：预热产物作废（面板重用时由 clear() 重新预热；dispose 由 previewDisposed 兜底）
-        prewarmedTempFile = null;
+    }
+
+    /**
+     * T-PerfSweep6 T-PS6-04（性能报告发现 4）：预览目录级兜底清扫（<b>每个面板启动时一次</b>）。
+     *
+     * <p><b>为什么需要</b>：唯一命名（T-FixN2）把「覆盖写同一路径」变成「每次新建一个文件」，异常路径
+     * （kill / 崩溃 / 未走 {@code removeNotify} / 未走 {@code dispose}）留下的文件不再被任何后续预览复用，
+     * {@code preview/} 只增不减。三条兜底按性价比取二（计划 §三 T-PS6-04）：
+     *  ① <b>年龄</b>：mtime 早于 {@link #STALE_PREVIEW_MAX_AGE_MS}（7 天）的残留直接删；
+     *  ② <b>条数</b>：本插件命名的文件超过 {@link #PREVIEW_DIR_MAX_FILES}（200）时按 mtime 从最旧删到上限。
+     *  （第三条「dispose 补同款回收」落在 {@link #recoverPreviewTempFiles}，见其调用点。）</p>
+     *
+     * <p><b>宁漏删不误删</b>：只删<b>本插件自有命名</b>的文件——判据直接复用建名处的
+     * {@link PreviewInlayScope#isPrimaryPreviewFileName}（与生成端同一份形态常量，杜绝判据漂移）；
+     * 用户自己放进该目录的任何文件、二级内存名（{@code mpsql-preview-memory.sql}）、原生控制台临时文件
+     * （{@code mpsql-exec*.sql}）都不匹配即不触碰（照 {@code SqlLogAutoSaver.pruneRetainedFiles} 的
+     * familyRegex「先按名过滤再删」先例）。目录不存在/不可读时静默返回——清扫是兜底，
+     * 不得影响预览主链。</p>
+     */
+    private void sweepStalePreviewFiles(java.io.File dir) {
+        // Kotlin runCatching { dir.listFiles { … } }.getOrNull() 等价：listFiles 返回 null（不可读）同样早退
+        java.io.File[] listed;
+        try {
+            listed = dir.listFiles(f -> f.isFile() && PreviewInlayScope.isPrimaryPreviewFileName(f.getName()));
+        } catch (Throwable t) {
+            return;
+        }
+        if (listed == null || listed.length == 0) return;
+        List<java.io.File> files = new ArrayList<>(Arrays.asList(listed));
+        long now = System.currentTimeMillis();
+        for (java.io.File f : files) {
+            if (now - f.lastModified() > STALE_PREVIEW_MAX_AGE_MS) {
+                try {
+                    f.delete();
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        List<java.io.File> rest = new ArrayList<>();
+        for (java.io.File f : files) {
+            if (f.exists()) rest.add(f);
+        }
+        if (rest.size() > PREVIEW_DIR_MAX_FILES) {
+            rest.sort(java.util.Comparator.comparingLong(java.io.File::lastModified));
+            int excess = rest.size() - PREVIEW_DIR_MAX_FILES;
+            for (int i = 0; i < excess; i++) {
+                try {
+                    rest.get(i).delete();
+                } catch (Throwable ignored) {
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -4414,6 +4768,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         nativeConsoleEditor = null;
         // T-M36.6-03：面板销毁——晚到的预热线程产物作废（预热线程自查后删除临时文件）
         previewDisposed = true;
+        // T-PerfSweep6 T-PS6-04③（性能报告发现 4）：面板 dispose 补一次同款临时文件回收。
+        // 此前回收实际只由 removeNotify → releaseEditor 触发，而三种宿主（弹窗 / 工具窗 / 嵌入控制台）
+        // 下 dispose 与 removeNotify 的先后未穷尽——dispose 先到时残留文件无人回收。本方法幂等，
+        // 两条路径都走到也无副作用（集合已清空即零动作）。
+        recoverPreviewTempFiles();
         // T-StabilityTail：解除预热取消门在项目 earlyDisposable 树上的登记——面板先于项目销毁时
         // 不留指向本面板的引用（项目先销毁时该 gate 已被平台回收，Disposer 对已销毁件幂等）
         if (prewarmLifecycleGate != null) {
@@ -4496,6 +4855,55 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /** T-PreviewDocLock2 F3 回归守护：释放编辑器（<b>不</b>触发 clear 的重预热）——「产物已被消费」降级分支断言用。 */
     void releaseEditorForTest() {
         releaseEditor();
+    }
+
+    /**
+     * T-PerfSweep6 T-PS6-04 测试缝：对给定目录执行一次目录级兜底清扫（生产入口在
+     * {@code projectPreviewFile} 首次解析预热目录时）。测试用临时目录即可直测「按年龄/条数回收」
+     * 与「非本插件命名零删除」两条判据。
+     */
+    void sweepStalePreviewFilesForTest(java.io.File dir) {
+        sweepStalePreviewFiles(dir);
+    }
+
+    /** T-PrewarmLateRecover F1：当前是否处于「降级文档」态（换装判据里的身份字段）。 */
+    @Nullable
+    Document degradedDocumentForTest() {
+        return degradedPreviewDocument;
+    }
+
+    /**
+     * T-ErrorLocateUsability T-ELU-01（O-49）：错误定位动作的<b>显隐判据</b>缝——
+     * 锚点可解析 → 非 null（按钮出现）；不可解析 → null（按钮不出现）。
+     * 这是本任务修复点的直接可断言面（改前恒非 null）。
+     */
+    @Nullable
+    Runnable errorLocateActionForTest() {
+        return errorLocateAction();
+    }
+
+    /** T-ELU-01：富错误回调缝（端到端断言「锚点不可解析 → 定位按钮不出现」）。 */
+    void showErrorRichWithLocateForTest(cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo info) {
+        showErrorRichWithLocate(info);
+    }
+
+    /** T-PrewarmLateRecover F1：插件最后一次写入编辑器文档的文本（换装判据里的「用户没动过」）。 */
+    @Nullable
+    String lastRenderedSqlForTest() {
+        return lastRenderedSql;
+    }
+
+    /**
+     * T-PrewarmLateRecover F1：驱动迟到产物通道——与「预热线程发布时发现消费侧已放弃
+     * （{@code PrewarmAwait.complete} 返回 false）」走同一条代码路径（{@link #tryUpgradeToLateProduct}）。
+     */
+    void onLatePrewarmProductForTest(Pair<VirtualFile, PsiFile> product) {
+        tryUpgradeToLateProduct(product);
+    }
+
+    /** T-PrewarmLateRecover F2：横幅「重试」动作入口（等价于点击横幅上的动作）。 */
+    void retryPrewarmForTest() {
+        retryPrewarm();
     }
 
     /**

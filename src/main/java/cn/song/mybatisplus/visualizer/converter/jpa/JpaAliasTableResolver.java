@@ -178,6 +178,13 @@ public final class JpaAliasTableResolver {
      * HQL/JPQL 别名作用域解析产物（O-57）。
      */
     public static final class JpaAliasScope {
+        /**
+         * 空作用域（master companion {@code EMPTY}）：属性映射回落「只看根实体列清单」的历史行为。
+         */
+        @NotNull
+        public static final JpaAliasScope EMPTY =
+                new JpaAliasScope(Map.of(), Set.of(), Map.of());
+
         /** 别名（以及无别名表的实体名/表名自身）→ 该实体的表信息；属性映射按限定符分派到它。 */
         @NotNull
         private final Map<String, TableInfo> byAlias;

@@ -513,8 +513,8 @@ public final class ColumnNameCalibrator {
     /** 测试缝：全局在途预热数替身（null = 读真实计数器）。 */
     public static Integer inFlightForTest = null;
 
-    /** 测试缝：预热去重冷却窗口（毫秒）。 */
-    public static volatile long prefetchCooldownMs = PREFETCH_COOLDOWN_MS;
+    /** 测试缝：预热去重冷却窗口（毫秒）。限定名引用（简名前向引用非法，JLS 8.3.3）。 */
+    public static volatile long prefetchCooldownMs = ColumnNameCalibrator.PREFETCH_COOLDOWN_MS;
 
     /** 测试缝：清空预热去重登记与在途计数（用例间隔离）。 */
     public static void resetPrefetchStateForTest() {
