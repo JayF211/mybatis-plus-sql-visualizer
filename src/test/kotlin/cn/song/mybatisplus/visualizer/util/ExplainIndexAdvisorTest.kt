@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.util
 
+import cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat
+import cn.song.mybatisplus.visualizer.sql.ExplainSupport
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -164,8 +166,18 @@ class ExplainIndexAdvisorTest {
     @Test
     fun test不支持方言静默降级() {
         val rows = listOf(listOf("1", "SIMPLE", "t", "ALL", "NULL", "999999", ""))
+        // 独立复核 ⑳：分派键必须是**表键**（= Dialect.name = "DM（达梦）"）。此前本用例传品牌短名
+        // "DM"——`ExplainSupport` 里查不到 → 落到 else 静默降级分支，而下面的 `.isEmpty()` 对
+        // 「TEXT 档零命中」与「未登记降级」同形，肉眼区分不出 ⇒ 绿灯来自错误分支。
+        // 故先把**路由**钉住（键写错时本行先红），再断言输出。
+        val dmDialectName = "DM（达梦）"
+        assertEquals(
+            "DM 必须以表键（Dialect.name）路由到 TEXT 档，品牌短名 \"DM\" 不是表键",
+            ExplainOutputFormat.TEXT,
+            ExplainSupport.formatFor(dmDialectName),
+        )
         // DM（达梦）在册且接入（TEXT 档），但表格式行不含文本树模式 → 零命中（不噪音、不猜）
-        assertTrue(ExplainIndexAdvisor.advise("DM（达梦）", mysqlHeaders, rows).isEmpty())
+        assertTrue(ExplainIndexAdvisor.advise(dmDialectName, mysqlHeaders, rows).isEmpty())
         // Oracle 在册但**有意不接入**（两步链另议）→ 静默降级
         assertTrue(ExplainIndexAdvisor.advise("Oracle", mysqlHeaders, rows).isEmpty())
         assertTrue("未知方言静默降级", ExplainIndexAdvisor.advise("no-such-dialect", mysqlHeaders, rows).isEmpty())
