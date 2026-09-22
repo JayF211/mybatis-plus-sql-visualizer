@@ -1948,7 +1948,13 @@ object DataSourceSelector {
 
             // 5. 可选立即执行（selectAndExecute 全链语义；结果区已随完整 UI 内嵌，onResultsReady=null）
             if (executeAfterPrepare) {
-                executeOnConsole(project, console, editor, effectiveScriptModel, execOption, ui, onResultsReady = null, onError = onError)
+                // 2026-09-23 真机走查补：此处原**漏传** onErrorRich（默认 null）⇒ 这条路径上的错误
+                // 投递收口只能回退旧通道，定位按钮永不出现。本函数签名里一直有该参数，只是没往下传
+                // ——「实现有、接线漏」的又一例（同族见 ErrorPositionWiringGuardTest 的转发断言）。
+                executeOnConsole(
+                    project, console, editor, effectiveScriptModel, execOption, ui,
+                    onResultsReady = null, onError = onError, onErrorRich = onErrorRich,
+                )
             }
         }.onFailure { e ->
             LOG.warn("[M36] prepareInConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)

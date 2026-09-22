@@ -45,12 +45,16 @@ class ErrorPositionWiringGuardTest {
      */
     private val deliveryCallSite = Regex("""(?<![\w.])deliverError\s*\(""")
 
+    /** 富通道转发点：`executeOnConsole(` 的每个调用都必须带 `onErrorRich`。 */
+    private val forwardCallSite = Regex("""(?<![\w.])executeOnConsole\s*\(""")
+
     @Test
     fun `生产链位置提取调用都传了被执行文本长度`() {
         val root = repoRoot()
         val offenders = mutableListOf<String>()
         var checked = 0
         var deliveries = 0
+        var forwards = 0
         File(root, "src/main/kotlin").walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
             .forEach { file ->
@@ -92,8 +96,31 @@ class ErrorPositionWiringGuardTest {
                             "（实参：${args.trim().replace('\n', ' ').take(120)}）"
                     }
                 }
+                // 富通道的**转发点**：每个 `executeOnConsole(` 调用都必须把 `onErrorRich` 带下去。
+                // 2026-09-23 真机走查实证：`prepareInConsole` 的 `executeAfterPrepare` 分支漏传它
+                // （默认 null）⇒ 该路径上 `deliverError` 只能回退旧通道、定位按钮永不出现，
+                // 而所有单测与既有守卫全绿（「实现有、接线漏」）。
+                for (m in forwardCallSite.findAll(text)) {
+                    val cs3 = text.lastIndexOf('\n', m.range.first - 1).let { if (it < 0) 0 else it + 1 }
+                    val pre3 = text.substring(cs3, m.range.first)
+                    if (pre3.contains("//") || pre3.trimStart().startsWith("*") || pre3.trimStart().startsWith("/*")) continue
+                    if (text.substring(0, m.range.first).trimEnd().endsWith("fun")) continue
+                    val args = readArguments(text, m.range.last + 1) ?: run {
+                        offenders += "$rel:${lineOf(text, m.range.first)} executeOnConsole 实参无法配对（形态变更，请更新守卫）"
+                        continue
+                    }
+                    forwards++
+                    if (!args.contains("onErrorRich")) {
+                        offenders += "$rel:${lineOf(text, m.range.first)} executeOnConsole 未转发 onErrorRich" +
+                            "——富通道在此断链，定位按钮永不出现"
+                    }
+                }
             }
         assertTrue("守卫未扫到任何位置提取调用点——扫描规则已失效（空绿）：$checked", checked >= 1)
+        assertTrue(
+            "守卫未扫到任何 executeOnConsole 转发点——扫描规则已失效（空绿）：$forwards（期望 ≥3）",
+            forwards >= 3,
+        )
         assertTrue(
             "守卫未扫到任何错误投递收口调用点——扫描规则已失效（空绿）：$deliveries（期望 ≥6：提交链三处 + 控制台历史三处）",
             deliveries >= 6,
