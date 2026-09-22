@@ -34,7 +34,22 @@
 
 ## 3. 真机/沙盒走查（需人工执行，沙盒 runIde + demo `dm` profile）
 
-准备：`./gradlew runIde`（沙盒）+ demo 工程 `mybatis-plus-join-demo` 勾 `dm` Maven profile 运行。
+**准备（在集成分支工作树 `mpsv-agent-config-locate` 内执行）**
+
+```bash
+# 1) 起沙盒（首次会下平台发行物，较慢；后续走缓存）
+./gradlew runIde -Pkotlin.compiler.execution.strategy=in-process \
+  -Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=1024m"
+# 2) 沙盒内打开 demo 工程 F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-demo
+#    并在 Maven 面板勾 dm profile（或直接改 application.yml 的 spring.profiles.active）
+# 3) 运行 MybatisPlusJoinDemoApplication（应用端口 8082）
+# 4) 触发业务 SQL（两个端点分别对应真值 42 与 63 行）
+curl http://localhost:8082/mpj/device/rightAlias
+curl http://localhost:8082/mpj/device/extSub
+```
+
+> 自动化替代：车道 D 的「假 IDE 探针」用 `-javaagent` 把 agent 注入同一个 demo 应用（不经 IDE GUI），
+> 已覆盖「下发停采后应用侧真的停采」与「entryKey/位置取证」两项；**面板观感与开关交互仍需人眼**。
 
 1. **开关关着不采集**：捕获开关保持 ▶（未捕获）→ Run demo → `GET /mpj/device/rightAlias`。
    预期：SQL 日志列表 0 条；`idea.log` 可见会话建立与「应用侧已确认」类日志（若未确认则有超时 WARN）。
