@@ -254,10 +254,19 @@ object SqlStatementSplitter {
                     } else if (word.isNotEmpty() && !declareSection && blockDepth == 0 &&
                         word.toString().equals("DECLARE", ignoreCase = true) &&
                         isStatementHead(sb, bufferLenAtWordStart, word.toString()) &&
+                        hasWordAhead(sql, i, "BEGIN") &&
                         hasMatchingEndAhead(sql, i)
                     ) {
                         // T-SSP-01：语句首 DECLARE + 后方配对 END → 声明段（段内顶层 `;` 不切分）。
                         // 同时启用块计数（声明段内局部例程体 BEGIN/END 照常成对计数）
+                        //
+                        // **T-SSP-01 订正（独立复核回归）**：早期实现只要求「后方存在 END 词」即武装，
+                        // 而 T-SQL `DECLARE @x INT;` 与 PG `DECLARE c CURSOR FOR SELECT … CASE … END …`
+                        // 都是合法顶层语句且后方本就有 END 词 → 一旦武装，顶层 `;` 直到文本尾都不再切分
+                        // （实测 `DECLARE @a INT;\nSELECT 1;\nSELECT CASE … END FROM t;` 3 段 → 1 段）。
+                        // 故武装条件补上「后方必须存在 BEGIN 词」——PL/SQL 声明段之后必有块主体 BEGIN，
+                        // 而 T-SQL/PG 的 DECLARE 语句没有，据此把两者分开。仍属保守判定（前视词扫描，
+                        // 不做完整语法分析），与 [hasMatchingEndAhead] 同口径。
                         declareSection = true
                         bodyBeginExpected = true
                         beginModeEnabled = true
@@ -501,10 +510,10 @@ object SqlStatementSplitter {
     }
 
     /**
-     * 前视扫描：`from` 之后是否存在词边界形态的 END（字符串/注释感知，大小写不敏感）。
+     * 前视扫描：`from` 之后是否存在词边界形态的目标词（字符串/注释感知，大小写不敏感）。
      * 保守判定——用于决定是否启用 BEGIN/END 块感知（识别不到配对 END 则按顶层切分原样）。
      */
-    private fun hasMatchingEndAhead(sql: String, from: Int): Boolean {
+    private fun hasWordAhead(sql: String, from: Int, target: String): Boolean {
         var inSingle = false
         var inDouble = false
         var inLine = false
@@ -531,12 +540,14 @@ object SqlStatementSplitter {
                 c == '"' -> inDouble = true
                 isIdentifierChar(c) -> word.append(c)
                 else -> {
-                    if (word.isNotEmpty() && word.toString().equals("END", ignoreCase = true)) return true
+                    if (word.isNotEmpty() && word.toString().equals(target, ignoreCase = true)) return true
                     word.setLength(0)
                 }
             }
             i++
         }
-        return word.isNotEmpty() && word.toString().equals("END", ignoreCase = true)
+        return word.isNotEmpty() && word.toString().equals(target, ignoreCase = true)
     }
+
+    private fun hasMatchingEndAhead(sql: String, from: Int): Boolean = hasWordAhead(sql, from, "END")
 }

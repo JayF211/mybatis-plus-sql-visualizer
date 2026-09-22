@@ -439,6 +439,44 @@ class SqlStatementSplitterTest {
     }
 
     /**
+     * 声明段武装须以「后方确有块主体 BEGIN」为前提（T-SSP-01 订正，独立复核回归）。
+     *
+     * 改前缺陷：武装只要求「语句首 DECLARE + 后方存在 END 词」。T-SQL `DECLARE @x INT;` 与
+     * PG `DECLARE c CURSOR FOR SELECT … CASE … END …` 都是**合法顶层语句**且后方本就有 END 词
+     * （CASE 的 END），于是被误当 PL/SQL 声明段武装 → 顶层 `;` 直到文本尾都不再切分，
+     * 后续语句被整体吞并（实测 3 段 → 1 段）。修法：武装前再要求后方存在 BEGIN 词。
+     */
+    @Test
+    fun `TSQL_DECLARE语句不误开声明段`() {
+        val parts = split("DECLARE @a INT;\nSELECT 1;\nSELECT CASE WHEN 1=1 THEN 1 ELSE 0 END FROM t;")
+        assertEquals("T-SQL DECLARE 后方无 BEGIN，不得武装为声明段", 3, parts.size)
+        assertEquals("SELECT 1", parts[1])
+    }
+
+    /** 单条 T-SQL `DECLARE` + 后接一条含 CASE 的查询：不得并成一条。 */
+    @Test
+    fun `TSQL_DECLARE后接CASE查询不误并`() {
+        val parts = split("DECLARE @x INT;\nSELECT CASE WHEN 1=1 THEN 1 ELSE 0 END AS y;")
+        assertEquals(2, parts.size)
+        assertEquals("SELECT CASE WHEN 1=1 THEN 1 ELSE 0 END AS y", parts[1])
+    }
+
+    /** PG `DECLARE … CURSOR FOR …` 是合法顶层语法，同样不得武装（后方只有 CASE 的 END）。 */
+    @Test
+    fun `PG_DECLARE_CURSOR不误开声明段`() {
+        val parts = split("DECLARE c CURSOR FOR SELECT CASE WHEN a THEN 1 ELSE 2 END FROM t;\nFETCH ALL IN c;")
+        assertEquals(2, parts.size)
+        assertEquals("FETCH ALL IN c", parts[1])
+    }
+
+    /** 正对照：Oracle 匿名块声明段之后确有块主体 BEGIN，仍须整段一条（防「修回归修过头」）。 */
+    @Test
+    fun `PLSQL_声明段有BEGIN主体仍整段一条_正对照`() {
+        val parts = split("DECLARE\n  v NUMBER;\nBEGIN\n  v := 1;\n  SELECT CASE WHEN v=1 THEN 1 ELSE 0 END INTO v FROM dual;\nEND;")
+        assertEquals("声明段 + BEGIN 主体 + 块内 CASE 仍为一条", 1, parts.size)
+    }
+
+    /**
      * 块内 `CASE … END`（裸 END 收尾，T-SQL / PL/SQL CASE 表达式）——CASE 层隔离（T-SSP-02）。
      *
      * 改前缺陷：CASE 的 `END` 被当块尾递减 → 块内首个 CASE 后的 `;` 即切段（实测 3 段）。

@@ -175,6 +175,33 @@ class DialectExplainTest {
         assertEquals("EXPLAIN  SELECT 1", MySqlDialect.renderExplainStatementIdempotent("  EXPLAIN  SELECT 1;  "))
     }
 
+    /**
+     * 幂等短路旁的**多语句旁路**（T-ECH-01 订正，独立复核发现）。
+     *
+     * 改前缺陷：短路无条件原样返回已包装文本 → `EXPLAIN SELECT 1; DROP TABLE t` 整段绕过
+     * [ExplainGate] 被交回执行链，第二条 DDL 会真实执行；而首条包装成功后控制台文档恰是
+     * EXPLAIN 文本，用户追加一句即可命中。修法：已包装文本只在单条语句时原样返回。
+     */
+    @Test
+    fun `T-ECH-01 订正-已包装文本夹带第二条语句即拒`() {
+        assertNull("已包装 + 夹带 DDL 必须拒", MySqlDialect.renderExplainStatementIdempotent("EXPLAIN SELECT 1; DROP TABLE t"))
+        assertNull("已包装 + 夹带 DML 必须拒", MySqlDialect.renderExplainStatementIdempotent("EXPLAIN SELECT 1; UPDATE t SET a = 1"))
+        assertNull("全查询形态的多语句同样拒（fail closed）", MySqlDialect.renderExplainStatementIdempotent("EXPLAIN SELECT 1; SELECT 2"))
+    }
+
+    /** 正对照：带包装选项的**单条**已包装文本仍原样返回——不得把幂等短路一起修掉。 */
+    @Test
+    fun `T-ECH-01 订正-单条已包装文本仍原样返回_正对照`() {
+        assertEquals(
+            "EXPLAIN (FORMAT JSON, VERBOSE) SELECT 1",
+            PostgreSQLDialect.renderExplainStatementIdempotent("EXPLAIN (FORMAT JSON, VERBOSE) SELECT 1"),
+        )
+        assertEquals(
+            "EXPLAIN QUERY PLAN SELECT 1",
+            SqliteDialect.renderExplainStatementIdempotent("EXPLAIN QUERY PLAN SELECT 1;"),
+        )
+    }
+
     @Test
     fun `T-ECH-01 门-取词与白名单直测`() {
         assertEquals("SELECT", ExplainGate.firstKeyword("  -- c\nselect * from t"))

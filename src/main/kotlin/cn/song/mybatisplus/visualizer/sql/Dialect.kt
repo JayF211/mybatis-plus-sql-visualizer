@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.sql
 
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.SqlValue
+import cn.song.mybatisplus.visualizer.util.SqlStatementSplitter
 
 /**
  * 数据库方言 SPI（T-M5-03/F-14）。
@@ -205,7 +206,20 @@ interface Dialect {
      */
     fun renderExplainStatementIdempotent(sql: String): String? {
         val trimmed = sql.trim().trimEnd(';').trim()
-        if (startsWithExplainKeyword(trimmed)) return trimmed
+        if (startsWithExplainKeyword(trimmed)) {
+            // **T-ECH-01 订正（独立复核旁路）**：幂等短路此前无条件原样返回已包装文本，于是
+            // `EXPLAIN SELECT 1; DROP TABLE t` 这类「已包装 + 追加语句」的文本**绕过** [ExplainGate]
+            // 被整段交回执行链（IDE 链只有 confirmDollarRawSegments/confirmUnknownParams 两闸，
+            // 没有 executeSql 的 DML 确认闸）——第二条 DDL 会真实执行，正是 D1=A 要堵的形态；
+            // 且首条包装成功后控制台文档恰是 EXPLAIN 文本，用户追加一句即可命中。
+            // 处置：已包装文本只在**单条语句**时原样返回（T-ExplainDbl 防双前缀的既有价值保留），
+            // 多条一律拒（fail closed，由调用方按「非查询形态」提示且不执行）。
+            // 注：不复用 [ExplainGate.isExplainableSource] 判已包装文本——它认的是被包语句首词，
+            // 而 PG/KingBase/H2/SQLite 的已包装文本首词是包装选项（`(FORMAT JSON, VERBOSE)` 等），
+            // 直接判会把合法已包装文本误拒，打掉幂等短路本身。
+            if (SqlStatementSplitter.splitStripped(trimmed).size > 1) return null
+            return trimmed
+        }
         if (!ExplainGate.isExplainableSource(trimmed)) return null
         return renderExplainStatement(trimmed)
     }
