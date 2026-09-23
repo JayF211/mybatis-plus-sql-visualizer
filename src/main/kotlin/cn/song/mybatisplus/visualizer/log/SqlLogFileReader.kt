@@ -22,6 +22,12 @@ object SqlLogFileReader {
     private const val COUNT_CACHE_MAX = 256
 
     /**
+     * T-PerfSweep7 4a 测试缝：SimpleDateFormat 实际构造次数（仅供同模块测试断言
+     * 「同格式两次解析只建一次 formatter」；生产语义与本计数无关）。
+     */
+    internal val formatterCreateCount = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
      * 新版格式头部：兼容 2 或 3 个 `-` 起结（前缀与后缀的 `-` 数量独立，长度匹配即可）。
      * 捕获组：1=source 2=time 3=timestamp 4=logTime（可选）5=db（可选，T-AgentDialectLoop）。
      * 毫秒分数为非捕获组——曾误用捕获组占位第 4 组致 logTime 永远读丢（T-AgentDialectLoop 修复）。
@@ -260,11 +266,29 @@ object SqlLogFileReader {
         return timeStr.removeSuffix("ms").toLongOrNull()
     }
 
+    /**
+     * T-PerfSweep7 4a：SimpleDateFormat 每次解析新建 → **每线程每格式一次**（照
+     * [LogTimestampParser.parseTimestamp] 的 ThreadLocal + 格式串键缓存范式；日志导入是
+     * O(行数) 的解析热路径，SDF 构造是其中的固定开销）。
+     *
+     * **等价性红线**：复用实例的输出与逐次新建逐字节一致（`parse` 每次完整重置内部 calendar）；
+     * 且**刻意不**照搬 LogTimestampParser 的 `isLenient = false` 与时区赋值——本处现状是
+     * 默认宽松模式 + 默认时区，缓存化只改构造频率，不改任何解析语义（异常回落 null 不变）。
+     */
+    private val timestampFormatCache =
+        ThreadLocal.withInitial<HashMap<String, SimpleDateFormat>> { HashMap() }
+
+    private fun formatterFor(pattern: String): SimpleDateFormat =
+        timestampFormatCache.get().getOrPut(pattern) {
+            formatterCreateCount.incrementAndGet()
+            SimpleDateFormat(pattern, Locale.ENGLISH)
+        }
+
     private fun parseTimestampNew(ts: String): Long? = try {
-        SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ENGLISH).parse(ts)?.time
+        formatterFor("yyyy-MM-dd HH:mm:ss.SSS").parse(ts)?.time
     } catch (_: Exception) { null }
 
     private fun parseTimestampOld(ts: String): Long? = try {
-        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).parse(ts)?.time
+        formatterFor("yyyy-MM-dd HH:mm:ss").parse(ts)?.time
     } catch (_: Exception) { null }
 }

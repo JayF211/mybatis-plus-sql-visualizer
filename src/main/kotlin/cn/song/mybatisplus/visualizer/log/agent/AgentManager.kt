@@ -112,7 +112,18 @@ class AgentManager(private val project: Project) : Disposable {
          */
         internal const val PREMAIN_SKIP_ATTACH_WINDOW_MS = 30_000L
 
-        /** 同时挂起的 premain 通道上限：`updateJavaParameters` 每次 Run 都会触发，防重复准备泄漏 ServerSocket。 */
+        /**
+         * 同时挂起的 premain 通道上限：`updateJavaParameters` 每次 Run 都会触发，防重复准备泄漏 ServerSocket。
+         *
+         * T-PerfSweep6 T-PS6-06①② 登记的两处已知边界（有意保持现状，勿顺手「修」）：
+         *  ① **上限按并发服役数计，不按累计 Run 次数计**——通道绑定到单次运行（[onRunEnded] 关闭），
+         *     外加兜底 TTL 与 stale/pid 消亡清扫（[prunePremainChannels]），「规模随使用增长」的形态
+         *     不存在；只有同时活跃的运行超过本值，第 5 个 Run 才拿不到通道，而那一次回落 attach/桥（零劣化）。
+         *  ② **pid 未知时按 pid 的会话去重失效**（[onPremainConnected] 只在 pid>0 时判重）：同一应用
+         *     反复回连不会被去重，但峰值有上界——每条通道的 accept 数受 [MAX_PREMAIN_RECONNECTS]=32
+         *     封顶（达上限关通道并留 WARN；重新 Run 重注入即自愈），故「去重失效」形态下单通道至多
+         *     产生 32 条无去重会话，且其中不健康者仍会被 [sweepOffline] 摘除。
+         */
         internal const val MAX_PREMAIN_CHANNELS = 4
 
         /** HELLO 首帧读取超时（agent 连上后立即发 HELLO，秒级足够；超时按「pid 未知」处理不丢会话）。 */

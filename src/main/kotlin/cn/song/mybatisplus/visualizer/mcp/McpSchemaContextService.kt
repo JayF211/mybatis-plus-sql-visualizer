@@ -185,13 +185,16 @@ object McpSchemaContextService {
      * 单数据源扫描（一次遍历 → 表名索引）；[diagnostics] 非空时记一行实况供错误文案自解释。
      *
      * T-PerfSweep6 T-PS6-02：命中跨调用索引时**零遍历**（不再调 [readModelTables]，也不再逐列反射）。
+     * T-PerfSweep7 4b（性能报告发现 6）：两处 scan 实况 INFO 降 DEBUG——命中路径**每次调用**都会
+     * 拼行写 idea.log（30s TTL 窗口内每次 sqlv_schema_context 一条），持续调用期是纯噪音；
+     * 实况文本不变地进 [diagnostics]（错误文案自解释不受影响），需要排障时开 DEBUG 仍可见。
      */
     private fun scanSource(ds: Any, diagnostics: MutableList<String>?): Map<String, McpSchemaFormatter.TableEntry> {
         val target = targetDatabase(ds)
         cachedIndex(ds, target)?.let { cached ->
             val line = "ds=${dsName(ds)} targetDb=${target ?: "-"} 命中跨调用索引（T-PS6-02）" +
                 " indexed=${cached.size}"
-            LOG.info("McpSchemaContextService scan: $line")
+            LOG.debug("McpSchemaContextService scan: $line")
             diagnostics?.add(line)
             return cached
         }
@@ -199,7 +202,7 @@ object McpSchemaContextService {
         val index = indexModelTables(candidates, target)
         storeIndex(ds, target, index)
         val line = "ds=${dsName(ds)} targetDb=${target ?: "-"} modelTables=${candidates.size} indexed=${index.size}"
-        LOG.info("McpSchemaContextService scan: $line")
+        LOG.debug("McpSchemaContextService scan: $line")
         diagnostics?.add(line)
         return index
     }
