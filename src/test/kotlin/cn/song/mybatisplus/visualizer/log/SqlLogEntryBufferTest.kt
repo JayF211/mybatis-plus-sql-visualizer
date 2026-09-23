@@ -230,6 +230,78 @@ class SqlLogEntryBufferTest {
 
     // ---------- 去重（对齐 MybatisCodeHelper-Pro「移除重复的sql」） ----------
 
+    // ---------- T-SqlSuppress（O-69）：屏蔽闸门 ----------
+
+    /** 构造「屏蔽 SELECT 1」的指纹集（与 SqlSuppressRuleManager 发布口径同源：规范化文本的指纹）。 */
+    private fun suppressKeyOf(sql: String): String = sqlFingerprint(normalizeSqlWhitespace(sql))
+
+    @Test
+    fun `屏蔽规则命中_入队前丢弃`() {
+        buffer.dedupeEnabled = false // 与去重开关隔离，纯验屏蔽闸门
+        buffer.suppressKeys = setOf(suppressKeyOf("SELECT 1"))
+        assertFalse("命中规则 → 入队返回 false（从未捕获过）", buffer.addEntry(entry("SELECT 1")))
+        assertTrue("列表不含该条目", buffer.snapshot().isEmpty())
+        // 空白差异的变体天然命中（规范化口径与去重一致）
+        assertFalse("多空白/首尾空白变体同样被拦", buffer.addEntry(entry("  SELECT   1  ")))
+        assertTrue(buffer.snapshot().isEmpty())
+        // 大小写不同不命中（与既有规范化口径一致：大小写与分号不动）
+        assertTrue("大小写变体不被拦", buffer.addEntry(entry("select 1")))
+        assertEquals(1, buffer.snapshot().size)
+    }
+
+    @Test
+    fun `审计入队同样被屏蔽闸门拦截`() {
+        buffer.suppressKeys = setOf(suppressKeyOf("SELECT 1"))
+        assertFalse("addAuditEntry 走同一私有门序，屏蔽一并生效", buffer.addAuditEntry(entry("SELECT 1")))
+        assertTrue(buffer.snapshot().isEmpty())
+    }
+
+    @Test
+    fun `被拦条目不占捕获序号不产生去重计数`() {
+        buffer.dedupeEnabled = true
+        buffer.suppressKeys = setOf(suppressKeyOf("SELECT dup"))
+        buffer.addEntry(entryAt("SELECT dup", 0L))
+        buffer.addEntry(entryAt("SELECT dup", 1L)) // 若未被屏蔽，第二条会进去重计数
+        assertTrue("被拦条目无去重计数", buffer.dedupeCountsSnapshot().isEmpty())
+        assertTrue(buffer.snapshot().isEmpty())
+        // 序号：屏蔽条目不占号——解除屏蔽后首条成功入队从 #1 起
+        buffer.suppressKeys = emptySet()
+        assertTrue(buffer.addEntry(entryAt("SELECT 2", 2L)))
+        val numbered = buffer.snapshot().single()
+        assertEquals("屏蔽不占捕获序号", 1L, numbered.sequenceNumber)
+    }
+
+    @Test
+    fun `移除规则后恢复入队`() {
+        buffer.dedupeEnabled = false
+        val keys = mutableSetOf(suppressKeyOf("SELECT 1"))
+        buffer.suppressKeys = keys
+        assertFalse(buffer.addEntry(entry("SELECT 1")))
+        keys.clear() // 订阅者（SqlLogManager）整体替换/清空键集
+        buffer.suppressKeys = keys
+        assertTrue("规则移除后恢复入队", buffer.addEntry(entry("SELECT 1")))
+        assertEquals(1, buffer.snapshot().size)
+    }
+
+    @Test
+    fun `屏蔽命中走专用计数出口_不触内容与入队回调`() {
+        buffer.dedupeEnabled = false
+        buffer.suppressKeys = setOf(suppressKeyOf("SELECT 1"))
+        val hitKeys = mutableListOf<String>()
+        var accepted = 0
+        var storedCount = 0
+        var contentNotified = 0
+        buffer.onSuppressedHit = { key -> hitKeys.add(key) }
+        buffer.onEntryAccepted = { accepted += 1 }
+        buffer.onEntryStored = { storedCount += 1 }
+        buffer.addListener { contentNotified += 1 }
+        buffer.addEntry(entry("SELECT 1"))
+        assertEquals("命中指纹回调（管理对话框「已拦截 N 次」数据源）", listOf(suppressKeyOf("SELECT 1")), hitKeys)
+        assertEquals("从未捕获过：接受回调不触发", 0, accepted)
+        assertEquals("全量历史不写", 0, storedCount)
+        assertEquals("内容通知不触发", 0, contentNotified)
+    }
+
     companion object {
         /** 与 SqlLogEntryBuffer 默认窗口（60000ms，T-M31.17）同步——超窗口用例时间差须大于它。 */
         private const val DEFAULT_WINDOW = 60000L

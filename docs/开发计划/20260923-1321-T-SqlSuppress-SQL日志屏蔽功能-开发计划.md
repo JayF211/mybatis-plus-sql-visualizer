@@ -138,4 +138,59 @@
 
 ## 实施记录
 
-（待实施代理回填其工作树副本：读数、读数出处、过程中的干扰项、未做项。）
+（本节由实施代理回填其工作树副本：读数、读数出处、过程中的干扰项、未做项。以下为 T-SqlSuppress 实施代理 2026-09-23 回填，工作树 mpsv-sql-suppress @ t-sql-suppress。）
+
+### 0. 提交清单（本工作树，全部未 push 未 merge）
+
+| SHA | 内容 |
+| --- | --- |
+| 0bc99b9 | F1 SqlSuppressRule bean + SqlSuppressRuleManager + SqlSuppressRuleManagerTest（13 例） |
+| 2d2f5a6 | F2 SqlLogEntryBuffer 屏蔽闸门 + BufferTest 追加 5 例 |
+| 73f0a4c | F5 SqlSuppressManagerDialog（左列表 + 右只读高亮 editor） |
+| 32cc210 | F3+F4+F6 面板存量过滤 / 右键 SuppressSqlAction / 工具栏 ManageSuppressAction + SqlLogManager 订阅桥 |
+| ae600ba | F7 i18n en/zh 21 键 × 2 + plugin.xml logsuppress 通知组 |
+| 52ecabb | SqlLogPanelFilterTest 追加 4 例（含全链路面板用例）+ LogSqlModelsTest 追加 2 例 |
+
+### 1. §四 五条待验证前提逐条证伪结论
+
+1. **对话框内嵌 editor 生命周期**（读 `ParamImportDialog.kt:44~106、238~242` 与 `SqlClickPreview.kt:159~186`）：DialogWrapper 的成熟路径 = 覆写 `dispose()`，先 `EditorFactory.releaseEditor` 置 null 再 `super.dispose()`（平台 close() 处置自身 myDisposable 时回调）；SqlClickPreview 的 `JBPopupListener.onClosed` 释放口只适用于弹窗，不适用于对话框。N3 教训（`ParamImportDialog.kt:81~87` 注释）确认：挂平台监听的父 disposable 必须用 `disposable` 而非 `this`——本对话框无平台监听，KDoc 留防回归记录。**结论：按 ParamImportDialog 路径落笔，计划 F5 原文「Disposer.register(dialog.disposable){...}」的形态被更简的既有定例取代**。
+2. **增量刷新对规则变化不可感知**（读 `SqlLogPanel.refreshList()` 1381~1416：差分只比对 lastRendered vs newVisible，无任何规则感知）：证实必须显式触发。落法：SqlLogManager 的 suppressRuleListener 里规则变更 → 同步 buffer.suppressKeys + `notifyUi()`（invokeLater 幂等 flush → 面板 refreshList）；右键动作额外直调 `refreshList()` 保证即时反馈。**「屏蔽后存量行立即消失」已由面板级全链路用例 `testRegisterRuleHidesExistingHeartbeatRowsViaPanelRefresh` 证实（非只测缓冲层）**。
+3. **balloon 通知组归属**（读 plugin.xml:286~307 + `PlatformSignatureCrossVersionTest` 源码）：既有三组各属独立域（updates 更新检查 / preview 预览 toast / feedback 错误上报），且每组都带 bundle+key 本地化。**D5 最终选择：新增独立组 `cn.song.mybatisplus.visualizer.logsuppress`（plugin.xml +5 行含注释，key `notification.group.logsuppress` 进双 bundle）**。理由：屏蔽反馈复用任一现有组都会张冠李戴（组名与功能不符，用户按组过滤通知时错乱），照「一域一组」既有惯例新增最合规；notificationGroup 非 EP 反射入口，`PlatformSignatureCrossVersionTest` 只核 update 动态安装 API（`src/test/.../update/PlatformSignatureCrossVersionTest.kt:26~46`），确认无需登记。
+4. **多项目并存**：结构保证——SqlSuppressRuleManager（APP 级）监听器列表；每个项目窗口的 SqlLogManager 构造时 `addListener` + 初始化同步一次，`dispose()`（project close）`removeListener`。规则变更时每个窗口实例各自收到通知并同步各自缓冲 + 刷新各自面板。**验证受限：headless（BasePlatformTestCase 单 project）无法起两个项目窗口实测**；以代码结构保证 + 纯逻辑用例 `增删清都发布通知且订阅者读到新键集`（多订阅者通知语义）+ SqlLogManager dispose 注销路径代码审阅替代，未做真机双窗口验证。
+5. **dedupeKey 在闸门处的可用性**（读 `LogSqlModels.kt:150` lazy 实现 + `SqlLogEntryBuffer.isDuplicate`）：闸门处 `entry.dedupeKey in suppressKeys` 与既有去重路径同键同函数（lazy 只算一次）；热路径成本分析——**空集短路放在 lazy 访问之前**，无规则常态（绝大多数用户）零新增成本；有规则时每条入队多一次 Set 查找（O(1)，指纹串已在 lazy 缓存），无分配放大。回调用专用出口 `onSuppressedHit`，与既有回调零耦合。
+
+### 2. 定向测试读数（§五 验收 7 口径，只跑定向）
+
+**gradle 命令**：`./gradlew testFast --tests <FQCN>`（纯逻辑三件）+ `./gradlew test --tests "cn.song.mybatisplus.visualizer.log.SqlLogPanelFilterTest"`（平台件）。
+
+| 轮次 | 范围 | 读数 | 出处 |
+| --- | --- | --- | --- |
+| 绿 | SqlLogModelsTest | tests=10 failures=0 errors=0 | build/test-results/testFast/TEST-*.xml（tf_run6） |
+| 绿 | SqlLogEntryBufferTest | tests=52 failures=0 errors=0 | 同上 |
+| 绿 | SqlSuppressRuleManagerTest | tests=13 failures=0 errors=0 | 同上 |
+| 绿 | SqlLogPanelFilterTest（含新增 4 例） | tests=24 failures=0 errors=0 | build/test-results/test/TEST-*.xml（test_panel） |
+
+（补记：SqlLogPanelFilterTest 定向轮 `./gradlew test --tests ...SqlLogPanelFilterTest`，tests=24 failures=0 errors=0，BUILD SUCCESSFUL in 32s，出处 build/test_panel.log + build/test-results/test/TEST-cn.song.mybatisplus.visualizer.log.SqlLogPanelFilterTest.xml；XML 内确认 4 个新增用例均在执行清单。）
+
+**反向验证（§五 验收 5）**——探针锚点即 `SqlLogEntryBuffer.addEntryInternal` 的屏蔽判定 if 块：
+
+- **红**：注释掉判定块 → `SqlLogEntryBufferTest tests="52" failures="5" errors="0"`（2026-09-23T16:08:38Z，build/tf_red.log + TEST-XML）。失败恰为新增 5 例：屏蔽规则命中_入队前丢弃 / 审计入队同样被屏蔽闸门拦截 / 被拦条目不占捕获序号不产生去重计数 / 移除规则后恢复入队 / 屏蔽命中走专用计数出口_不触内容与入队回调。
+- **绿**：还原判定块 → `SqlLogEntryBufferTest tests="52" failures="0" errors="0"`（2026-09-23T16:10:10Z，build/tf_green.log，BUILD SUCCESSFUL）。
+- 探针已还原（`git diff` 干净，除临时 sandbox 行）。
+
+### 3. 干扰项与实施偏差
+
+- **平台 API 两处实证修正（本机 243 distro javap）**：① `Editor` 只有 `isViewer()` 读、`setViewer(boolean)` 写口在 `EditorEx`——Kotlin `created.isViewer = true` 对 Editor 静态类型编译不过（compileKotlin 报 val 不可赋值），改 `(editor as? EditorEx)?.setViewer(...)`；② `com.intellij.ui.Splitter` 不在本仓 243 编译 classpath（Unresolved reference），改 `javax.swing.JSplitPane`（DataSourceSelector 既有先例）。两者均已按「方法名以本地 jar 反编译为唯一权威」用 `ideaIU-2024.3.7.1-win/lib/app-client.jar` javap 落实。
+- **构建环境干扰**：首轮 gradle 起 daemon 撞 Metaspace 耗尽（机器并行会话内存压力，非代码问题），daemon 自动重启后恢复；后台命令用 `tail`/管道吞过退出码（管道末命令退出码陷阱），后续一律 `> log 2>&1; echo EXIT=$?` 显式检查。
+- **测试自纠两处**（提交前 compileKotlin/编译期拦下，未进历史）：manager 通知计数用例的监听器 lambda 首版 `() -> Boolean`（mutableList.add 返回 Boolean）不符 `() -> Unit`；State 构造参数非空不可传 null，防御分支改用空列表验证。
+- **sampleSql 语义敲定**：存原始还原 SQL（仅去首尾空白，内部空白原样保留）——与 pattern（规范化文本）分工「展示用户原始形态 vs 匹配规范化形态」；首版测试断言把它也当规范化文本是测试错非实现错，已改测试。
+- **D5 通知组**：见 §1.3 结论——独立组，未复用。
+- i18n 追加采用 heredoc 落盘（Bash 写文件陷阱知情操作，跨调用 grep 验证双文件各 21 键齐全后才继续）。
+
+### 4. 未做项与受限项
+
+- **真机双窗口验证（前提 4）**：headless 无法验证，见 §1.4——代码结构保证 + 单窗口链路测试替代。
+- **对话框/工具栏/右键/balloon 的真机走查**（F4/F5/F6 的视觉与交互：列表渲染格式、软换行外观、balloon 直达、Memory leak detected 红线）：headless 不可视验证，未做；释放路径按 ParamImportDialog 成熟定例 + 测试访问器（ruleCountForTest/editorTextForTest 等）留了后续 headless 钩子。
+- 全量 testShards/test、构建校验（verifyGate/buildPlugin/verifySmoke）：按「测试三档分层」纪律**明令不做**（本期不动 build.gradle.kts 生产段 / EP / since-build，非大改动）。
+- bundle 完整性守卫测试（`BundlePlaceholderArityTest`）只扫 RollbackWarning 站点，与本组键无关，未纳入定向集（验收 6 的「若仓内有…则一并跑」条件不成立——键齐全性已人工 grep 双文件比对证实）。
+- 工作树 `build.gradle.kts` 的 `sandboxContainer = MPSV-SqlSuppress` 临时行：任务收口前还原（见最终提交/工作树状态），不随提交入库。
