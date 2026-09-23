@@ -65,6 +65,7 @@ import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature
+import cn.song.mybatisplus.visualizer.xml.directTextOf
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.components.Service
@@ -1112,9 +1113,9 @@ class SqlPreviewService(private val project: Project) {
         val name = tag.getAttributeValue("name") ?: return null
         val kind = cn.song.mybatisplus.visualizer.ui.gutter.HbmNamedQueryGutterLineMarkerProvider.kindOf(tag.name)
             ?: return null
-        // 文本提取复用 resolver 的解析口径（直属 XmlText、排除子标签）；tag 与 findNamedQuery 同源
-        val text = tag.children.filterIsInstance<com.intellij.psi.xml.XmlText>()
-            .joinToString("") { it.text }.trim()
+        // 文本提取复用 resolver 的解析口径（直属 XmlText、CDATA 剥包裹、排除子标签）；
+        // tag 与 findNamedQuery 同源
+        val text = directTextOf(tag)
         return previewHbmNamedQuery(HbmXmlMapping.NamedQuery(name = name, kind = kind, queryText = text))
     }
 

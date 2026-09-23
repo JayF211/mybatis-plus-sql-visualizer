@@ -7,7 +7,7 @@ import com.intellij.psi.search.FileTypeIndex
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.xml.XmlFile
 import com.intellij.psi.xml.XmlTag
-import com.intellij.psi.xml.XmlText
+import cn.song.mybatisplus.visualizer.xml.directTextOf
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -120,18 +120,10 @@ object HbmXmlEntityResolver {
     }
 
     /**
-     * T-H1：提取命名查询文本——直属 XmlText 拼接（CDATA 已被 PSI 展开为文本节点），
-     * 排除 `<return-scalar>`/`<return>`/`<query-param>` 等子标签的子内容。
+     * T-H1：提取命名查询文本——直属 XmlText 拼接（CDATA 剥包裹、trim，口径见
+     * `xml/XmlDirectText.kt`）；排除 `<return-scalar>`/`<return>`/`<query-param>` 等子标签的子内容。
      */
-    private fun extractNamedQueryText(tag: XmlTag): String {
-        val sb = StringBuilder()
-        for (child in tag.children) {
-            if (child is XmlText) {
-                sb.append(child.text)
-            }
-        }
-        return sb.toString().trim()
-    }
+    private fun extractNamedQueryText(tag: XmlTag): String = directTextOf(tag)
 
     /**
      * T-J11：解析项目内全部 .hbm.xml 并按实体名索引（多 class 文件的每个 `<class>` 都会入索引）。

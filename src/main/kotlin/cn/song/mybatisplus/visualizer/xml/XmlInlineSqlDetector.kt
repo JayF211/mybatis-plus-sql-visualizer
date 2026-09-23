@@ -60,14 +60,8 @@ object XmlInlineSqlDetector {
         return word.uppercase(Locale.ROOT).ifEmpty { null }
     }
 
-    /** 完整提取载体标签内 SQL 文本（直属文本段拼接，CDATA 剥包裹，trim）。
-     *  实测（O-72）：XmlText.text 对 CDATA 返回带 <![CDATA[ ]]> 包裹的字面全文，
-     *  并非展开内容——统一剥包裹后再拼（混排文本/多 CDATA 段均安全）。 */
-    fun extractSqlText(tag: XmlTag): String =
-        tag.children
-            .filterIsInstance<XmlText>()
-            .joinToString("") { unwrapCdata(it.text) }
-            .trim()
+    /** 完整提取载体标签内 SQL 文本（直属文本段拼接，CDATA 剥包裹，trim；口径见 [directTextOf]）。 */
+    fun extractSqlText(tag: XmlTag): String = directTextOf(tag)
 
     /** 自身或祖先标签的 `type` 属性值（就近优先，小写；无 → null）。 */
     fun queryTypeOf(tag: XmlTag): String? {
@@ -97,11 +91,6 @@ object XmlInlineSqlDetector {
         }
         return null
     }
-
-    /** 剥 CDATA 包裹（保留内容；普通文本原样返回）。 */
-    private fun unwrapCdata(text: String): String = text.replace(CDATA_WRAPPER, "$1")
-
-    private val CDATA_WRAPPER = Regex("(?s)<!\\[CDATA\\[(.*?)]]>")
 
     private val WHITESPACE = Regex("\\s+")
 

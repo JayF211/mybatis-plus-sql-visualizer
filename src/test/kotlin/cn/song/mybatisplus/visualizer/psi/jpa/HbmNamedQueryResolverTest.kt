@@ -59,6 +59,10 @@ class HbmNamedQueryResolverTest : BasePlatformTestCase() {
         assertNotNull("hbm <query> 应可按名找到", q)
         assertEquals(HbmXmlMapping.QueryKind.HQL, q!!.kind)
         assertTrue("CDATA 文本应展开提取", q.queryText.contains("FROM LegacyItem li"))
+        // O-72 延伸修复判别式：本平台 XmlText.text 对 CDATA 返回带包裹字面全文，
+        // 旧断言（contains 字面量）在展开/不展开两态下恒真——此处钉死「包裹不得残留」。
+        assertFalse("CDATA 包裹不得残留（否则 HQL 转换会把 <![CDATA[ 带进 SQL）", q.queryText.contains("<![CDATA["))
+        assertFalse("CDATA 收尾标记不得残留", q.queryText.contains("]]>"))
         assertTrue(q.queryText.contains(":threshold"))
     }
 
@@ -84,6 +88,19 @@ class HbmNamedQueryResolverTest : BasePlatformTestCase() {
         assertNotNull(result)
         assertTrue("命名参数 :deprecated 应替换为 ?", result!!.sql.contains("deprecated = ?"))
         assertEquals(listOf("deprecated"), result.unresolvedParams)
+    }
+
+    fun testPreviewHbmNamedQueryTag_hqlCdata_noWrapperLeak() {
+        // O-72 延伸修复判别式：gutter 点击入口（previewHbmNamedQueryTag）对 CDATA 形态
+        // <query> 的提取不得把 <![CDATA[ 包裹带进 HQL 转换（旧实现裸拼接会泄漏）。
+        val file = myFixture.configureByText("LegacyItem.hbm.xml", hbmContent) as XmlFile
+        val tag = file.rootTag!!.findSubTags("query").first()
+        val service = project.getService(SqlPreviewService::class.java)
+        val result = service.previewHbmNamedQueryTag(project, tag)
+        assertNotNull("CDATA 形态 <query> 应可预览", result)
+        assertFalse("预览 SQL 不得含 CDATA 包裹: ${result!!.sql}", result.sql.contains("<![CDATA["))
+        assertFalse("预览 SQL 不得含 CDATA 收尾标记", result.sql.contains("]]>"))
+        assertTrue("HQL 实体应可解析渲染", result.sql.isNotBlank())
     }
 
     fun testClassMapping_stillResolved_alongsideNamedQueries() {

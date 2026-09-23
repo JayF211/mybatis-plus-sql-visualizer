@@ -136,9 +136,11 @@
 | 4 type 属性位置 | 按计划实现（自身→祖先就近优先，仅认 `type`，值 hql/jpql 大小写不敏感） |
 | 5 误报面（宽口径） | 首词命中即认领的行为已用 `test宽口径_首词命中即认领` 钉死；真实项目误报率待用户反馈，总开关兜底 |
 
-### 顺带发现（未在本任务修复，登记待议）
+### 顺带发现（O-72 延伸修复，2026-09-23 已实施）
 
-**hbm 命名查询链的 CDATA 缺口（既有问题）**：`HbmXmlEntityResolver.extractNamedQueryText` 与 `SqlPreviewService.previewHbmNamedQueryTag` 对 CDATA 形态的 `<query>` 会把 `<![CDATA[` 包裹原样带进 HQL 转换（同口径裸拼接）。该缺口此前不可见的原因：`HbmNamedQueryResolverTest` 的断言「CDATA 文本应展开提取」是**非判别性断言**——`<![CDATA[FROM LegacyItem li …]]>.contains("FROM LegacyItem li")` 在展开与不展开两种情况下同为真。建议后续任务：两处提取改走 unwrap 口径 + 该断言改为 `assertFalse(queryText.contains("<![CDATA["))` 判别式。
+**hbm 命名查询链的 CDATA 缺口（既有问题，已修复）**：`HbmXmlEntityResolver.extractNamedQueryText` 与 `SqlPreviewService.previewHbmNamedQueryTag` 对 CDATA 形态的 `<query>` 会把 `<![CDATA[` 包裹原样带进 HQL 转换（同口径裸拼接）。该缺口此前不可见的原因：`HbmNamedQueryResolverTest` 的断言「CDATA 文本应展开提取」是**非判别性断言**——`<![CDATA[FROM LegacyItem li …]]>.contains("FROM LegacyItem li")` 在展开与不展开两种情况下同为真。
+
+**修复（用户指示「3 完成下」收尾，2026-09-23）**：抽共享口径 `xml/XmlDirectText.kt`（`directTextOf` = 直属 XmlText 拼接 + `unwrapCdata` 剥包裹 + trim），三处提取点（Detector.extractSqlText / HbmResolver.extractNamedQueryText / SqlPreviewService.previewHbmNamedQueryTag）统一改走，Detector 本地重复实现删除。测试判别化：`testFindNamedQuery_hqlKind` 增 `assertFalse(queryText.contains("<![CDATA["))` + `]]>`；新增 `testPreviewHbmNamedQueryTag_hqlCdata_noWrapperLeak`（gutter 点击入口对 CDATA 形态 `<query>` 预览 SQL 无包裹泄漏）。反向验证（摘掉 unwrapCdata → 8 例红，hbm 2 + Detector 6）达标。定向 5 类全绿。
 
 ### 遗留
 
