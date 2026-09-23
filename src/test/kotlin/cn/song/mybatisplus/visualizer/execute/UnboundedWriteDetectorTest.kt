@@ -140,6 +140,45 @@ class UnboundedWriteDetectorTest {
         assertTrue("PARSE_FAILED fail closed", risk.dangerous)
     }
 
+    // ======================== O-64/T-RollbackIdentityParse：identity 包装产物 ========================
+
+    /**
+     * P19 正例（D1=A）：自产 identity 包装产物不再误报「无法解析」。
+     * JSqlParser 5.3 对 `SET IDENTITY_INSERT <表> ON|OFF` 抛 ParseException（离线五形态实证），
+     * 剥离开关语句后只剩 INSERT（不适用无界写规则）→ 无发现、不危险。
+     */
+    @Test
+    fun `identity包装产物_SQLServer形态_不再报无法解析`() {
+        val product = "SET IDENTITY_INSERT [user] ON;\n" +
+            "INSERT INTO [user] ([id], [name]) VALUES (1, 'Tom');\n" +
+            "SET IDENTITY_INSERT [user] OFF;"
+        val risk = UnboundedWriteDetector.detect(product)
+        assertTrue("P19 误报必须消除: ${risk.kinds()}", risk.findings.isEmpty())
+        assertFalse(risk.dangerous)
+    }
+
+    /** 双方言覆盖（前提 §二.4）：DM8 与 SQL Server 共用 identityInsertWrapper；DM8 产物为裸表名形态（RollbackSqlGeneratorTest rt_del 同款）。 */
+    @Test
+    fun `identity包装产物_DM8形态_不再报无法解析`() {
+        val product = "SET IDENTITY_INSERT T_AUTOINC ON;\n" +
+            "INSERT INTO T_AUTOINC (ID, NAME) VALUES (1, 'a');\n" +
+            "SET IDENTITY_INSERT T_AUTOINC OFF;"
+        val risk = UnboundedWriteDetector.detect(product)
+        assertTrue("DM8 形态同享修复: ${risk.kinds()}", risk.findings.isEmpty())
+        assertFalse(risk.dangerous)
+    }
+
+    /** 剥离只作用于开关语句——包装内真写语句的发现必须原样浮出（剥离不得变成洗白）。 */
+    @Test
+    fun `identity包装内真写语句_发现不被剥离吞掉`() {
+        val product = "SET IDENTITY_INSERT [t] ON;\n" +
+            "UPDATE t SET a = 1;\n" +
+            "SET IDENTITY_INSERT [t] OFF;"
+        val risk = UnboundedWriteDetector.detect(product)
+        assertTrue("无 WHERE 的 UPDATE 必须照报: ${risk.kinds()}", risk.kinds().contains(FindingKind.MISSING_WHERE))
+        assertTrue(risk.dangerous)
+    }
+
     // ======================== 多语句取最高风险 ========================
 
     @Test
