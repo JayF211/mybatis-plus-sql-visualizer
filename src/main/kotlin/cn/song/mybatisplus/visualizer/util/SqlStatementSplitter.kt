@@ -13,6 +13,13 @@ package cn.song.mybatisplus.visualizer.util
  *  - **括号深度**：`(…;…)` 括号内的 `;` 不切分（存储过程参数/函数实参形态）；
  *  - **BEGIN/END 块感知**（大小写不敏感，字符串/注释内不算）：块内 `;` 不切分——仅当后方
  *    存在配对 END 时启用（保守：识别不到配对 END 按顶层切分原样，不吞后续语句）；
+ *    `BEGIN` 后随 TRAN/TRANSACTION/DISTRIBUTED/DIALOG/CONVERSATION 是事务/会话形态
+ *    而非块，不武装（T-STG-01，DBX `SQLSERVER_NON_BLOCK_BEGIN_KEYWORDS` 同型；全表
+ *    未逐词核对，保守 5 词）——否则后方任何 END 词（CASE/注释/游标声明）都会误武装且
+ *    深度永不归零，后续顶层 `;` 全部失切；
+ *    块深度归零的**顶层** `END`（1→0，且不在声明段吞并中）产生一次隐式语句边界
+ *    （T-STG-02）：T-SQL 惯例 END 后分号可省，只认 `;` 会把后续语句误并入同段；
+ *    `END` 后跟 `;`/界符走既有分支（Oracle 匿名块 `END;` 语义不变）；
  *  - **T-SQL 控制流批首合并**（T-TsqlBatchSplit / O-28，DBX 1a7b44f 批首识别同型）：
  *    首段以 `IF` 起头时整批不拆——裸 `IF … ELSE …` 形态（两分支各以 `;` 终结、无
  *    BEGIN/END 包裹）后续以 `ELSE` 起头的顶层段并入同批；批内 BEGIN/END 配对失衡
@@ -48,6 +55,18 @@ object SqlStatementSplitter {
      */
     private val CONTROL_FLOW_BATCH_HEADS = setOf("IF")
 
+    /**
+     * T-SQL 非块 BEGIN 后随词表（T-STG-01，DBX `SQLSERVER_NON_BLOCK_BEGIN_KEYWORDS` 同型）：
+     * `BEGIN` 后随这些词是事务/会话开启形态而非块，不武装块计数。仅当 `BEGIN` 处于武装
+     * 候选（后方存在 END 词）时才有意义——此处恰是边缘 A 的误武装触发面。
+     * 全表未逐词核对（DBX 仓不可达），按计划保守 5 词执行，拿不准的词不进表。
+     */
+    private val NON_BLOCK_BEGIN_TAILS = setOf("TRAN", "TRANSACTION", "DISTRIBUTED", "DIALOG", "CONVERSATION")
+
+    /** `from` 之后首个词（跳过空白/注释，大小写不敏感）是否属于 [NON_BLOCK_BEGIN_TAILS]。 */
+    private fun isNonBlockBeginTail(sql: String, from: Int): Boolean =
+        NON_BLOCK_BEGIN_TAILS.any { nextWordIs(sql, from, it) }
+
     /** 默认语句界符（MySQL 客户端 `DELIMITER` 指令可切换；无参数指令复位为此值）。 */
     private const val DEFAULT_DELIMITER = ";"
 
@@ -72,6 +91,7 @@ object SqlStatementSplitter {
     fun splitStripped(sql: String): List<String> = splitInternal(sql, keepComments = false)
 
     private fun splitInternal(sql: String, keepComments: Boolean): List<String> {
+        lookaheadProbeCount = 0 // T-PS7-01 计数缝：每次切分清零
         val parts = ArrayList<String>()
         val sb = StringBuilder()
         var inSingle = false
@@ -90,6 +110,10 @@ object SqlStatementSplitter {
         var caseDepth = 0
         // `END CASE` 双词终结形态：END 前视到 CASE 词后置位，供紧随的 CASE 词消费
         var caseEndTailPending = false
+        // T-STG-02：块深度归零的顶层 END 已闭合——主循环下一个非空白内容（非 `;`/注释/
+        // DELIMITER 指令）处产生一次隐式语句边界（T-SQL 惯例 END 后分号可省，只认 `;`
+        // 会把后续语句误并入同段）
+        var topBlockJustClosed = false
         var word = StringBuilder()
         // 当前词的首字符下标与词起点处的缓冲长度（DELIMITER 指令的行首/语句边界判定用；
         // word 非空时有效）
@@ -115,17 +139,37 @@ object SqlStatementSplitter {
                             // 基线 2 段 → 本改动前仍 2 段）。与 CASE 层的差别：CASE 有**裸 END** 收尾形态，
                             // 故须 caseDepth 计数；而 IF/LOOP/WHILE/REPEAT 只有双词终结形态，直接跳过递减即可
                             // （它们也不自增任何层计数，故无需配对状态）。
-                            if (nextWordIs(sql, i, "CASE")) caseEndTailPending = true
-                            val innerLayerTail = nextWordIs(sql, i, "IF") || nextWordIs(sql, i, "LOOP") ||
-                                nextWordIs(sql, i, "WHILE") || nextWordIs(sql, i, "REPEAT")
+                            // T-PS7-01：CASE/IF/LOOP/WHILE/REPEAT 五个候选词单次取词后各自比对
+                            // （原为 nextWordIs 对同一空白注释段重复扫描 5 次；跳过语义逐位一致）
+                            val upper = nextWordToken(sql, i)?.uppercase()
+                            if (upper == "CASE") caseEndTailPending = true
+                            val innerLayerTail = upper == "IF" || upper == "LOOP" ||
+                                upper == "WHILE" || upper == "REPEAT"
                             if (!innerLayerTail) {
                                 if (caseDepth > 0) caseDepth--       // CASE 收尾（裸 END / END CASE）
-                                else if (blockDepth > 0) blockDepth-- // 块尾
+                                else if (blockDepth > 0) {
+                                    // T-STG-02：顶层块闭合（1→0 且不在声明段吞并中）——置隐式边界
+                                    // 标记。声明段内例程体的 END 归零后声明段仍在吞并（T-SSP-01），
+                                    // 边界由主体 BEGIN/END 接力，此处不得置位
+                                    if (blockDepth == 1 && !declareSection) topBlockJustClosed = true
+                                    blockDepth--
+                                }
                             }
                         }
                         else -> bodyBeginExpected = false
                     }
                 }
+            }
+        }
+
+        // T-STG-02：隐式边界兑现——已完成块作为独立段产出（空缓冲＝边界已被 `;`/界符
+        // 兑现过，空段跳过），残余内容续算
+        fun fireImplicitBoundary() {
+            if (topBlockJustClosed) {
+                topBlockJustClosed = false
+                val part = sb.toString().trim()
+                if (part.isNotEmpty()) parts += part
+                sb.setLength(0)
             }
         }
 
@@ -182,6 +226,7 @@ object SqlStatementSplitter {
                         bodyBeginExpected = false
                         caseDepth = 0
                         caseEndTailPending = false
+                        topBlockJustClosed = false // T-STG-02：界符已兑现边界
                     } else {
                         sb.append(delimiter)
                     }
@@ -200,12 +245,14 @@ object SqlStatementSplitter {
                     i++
                 }
                 c == '\'' -> {
+                    fireImplicitBoundary() // T-STG-02
                     flushWord()
                     inSingle = true
                     sb.append(c)
                     i++
                 }
                 c == '"' -> {
+                    fireImplicitBoundary() // T-STG-02
                     flushWord()
                     inDouble = true
                     sb.append(c)
@@ -220,6 +267,7 @@ object SqlStatementSplitter {
                         // 语句边界：CASE 层状态随段重置（防截断 CASE 的层数泄漏到后续语句）
                         caseDepth = 0
                         caseEndTailPending = false
+                        topBlockJustClosed = false // T-STG-02：`;` 边界已兑现（END; 形态走此分支）
                     } else {
                         // T-SSP-01：声明段顶层 `;` 是声明分隔符（不切分），且构成声明段边界
                         if (declareSection && parenDepth == 0 && blockDepth == 0) bodyBeginExpected = true
@@ -228,12 +276,14 @@ object SqlStatementSplitter {
                     i++
                 }
                 c == '(' -> {
+                    fireImplicitBoundary() // T-STG-02
                     flushWord()
                     parenDepth++
                     sb.append(c)
                     i++
                 }
                 c == ')' -> {
+                    fireImplicitBoundary() // T-STG-02
                     flushWord()
                     parenDepth = (parenDepth - 1).coerceAtLeast(0)
                     sb.append(c)
@@ -241,6 +291,8 @@ object SqlStatementSplitter {
                 }
                 isIdentifierChar(c) -> {
                     if (word.isEmpty()) {
+                        // T-STG-02：词起点的隐式边界（先于词起点记录——fire 可能重置 sb）
+                        fireImplicitBoundary()
                         wordStart = i
                         bufferLenAtWordStart = sb.length
                     }
@@ -250,6 +302,8 @@ object SqlStatementSplitter {
                 }
                 else -> {
                     // 非标识符定界符：词终结（DELIMITER 指令 / BEGIN 前视在此触发）
+                    // T-STG-02：非空白内容的隐式边界（`;` 分支自切、注释分支不算内容）
+                    if (!c.isWhitespace()) fireImplicitBoundary()
                     if (word.isNotEmpty() &&
                         word.toString().equals(DELIMITER_DIRECTIVE, ignoreCase = true) &&
                         c.isWhitespace() && isLineHead(sql, wordStart) &&
@@ -258,14 +312,15 @@ object SqlStatementSplitter {
                         // T-DA-02：行首 `DELIMITER <token>` 指令——切换界符并整行丢弃（不产出语句）
                         word.setLength(0)
                         sb.setLength(0)
+                        topBlockJustClosed = false // T-STG-02：指令行丢弃，挂起边界一并消费
                         val directive = readDelimiterDirective(sql, i)
                         delimiter = directive.first
                         i = directive.second
                     } else if (word.isNotEmpty() && !declareSection && blockDepth == 0 &&
                         word.toString().equals("DECLARE", ignoreCase = true) &&
                         isStatementHead(sb, bufferLenAtWordStart, word.toString()) &&
-                        hasWordAhead(sql, i, "BEGIN") &&
-                        hasMatchingEndAhead(sql, i)
+                        // T-PS7-01：BEGIN/END 两个存在性判定合并为单趟全文前视（原为两次独立扫描）
+                        hasBlockBodyAhead(sql, i)
                     ) {
                         // T-SSP-01：语句首 DECLARE + 后方配对 END → 声明段（段内顶层 `;` 不切分）。
                         // 同时启用块计数（声明段内局部例程体 BEGIN/END 照常成对计数）
@@ -294,7 +349,10 @@ object SqlStatementSplitter {
                         sb.append(c)
                         i++
                     } else if (word.isNotEmpty() && word.toString().equals("BEGIN", ignoreCase = true) &&
-                        !beginModeEnabled && hasMatchingEndAhead(sql, i)
+                        !beginModeEnabled && hasMatchingEndAhead(sql, i) &&
+                        // T-STG-01：`BEGIN TRAN/…` 事务/会话形态不武装（否则 CASE 等任何 END 词
+                        // 误武装后深度永不归零，后续顶层 `;` 全部失切）
+                        !isNonBlockBeginTail(sql, i)
                     ) {
                         beginModeEnabled = true
                         blockDepth = 1
@@ -446,9 +504,11 @@ object SqlStatementSplitter {
                     "END" -> {
                         // 同主状态机：`END IF` / `END LOOP` / `END WHILE` / `END REPEAT` 是内层终结符，
                         // 不减深度（T-SQL 批本身没有这些形态，此处只为与主路径口径一致、避免两处漂移）。
-                        if (nextWordIs(part, i, "CASE")) caseEndTailPending = true
-                        val innerLayerTail = nextWordIs(part, i, "IF") || nextWordIs(part, i, "LOOP") ||
-                            nextWordIs(part, i, "WHILE") || nextWordIs(part, i, "REPEAT")
+                        // T-PS7-01：与主循环同款单次取词（两处复制点同一提交同步改）
+                        val upper = nextWordToken(part, i)?.uppercase()
+                        if (upper == "CASE") caseEndTailPending = true
+                        val innerLayerTail = upper == "IF" || upper == "LOOP" ||
+                            upper == "WHILE" || upper == "REPEAT"
                         if (!innerLayerTail) {
                             if (caseDepth > 0) caseDepth-- else if (depth > 0) depth--
                         }
@@ -526,6 +586,42 @@ object SqlStatementSplitter {
     }
 
     /**
+     * 单次取词（T-PS7-01）：`from` 之后跳过空白与注释的首个标识符词（大小写原样，无则 null）。
+     * 词法走查与 [nextWordIs] 逐位一致（同一跳过规则、同一词边界），区别仅在不与目标词比对
+     * 而是返回词本身——END 分支的 CASE/IF/LOOP/WHILE/REPEAT 五个候选词一次取词后各自比对，
+     * 替代对同一段空白注释的 5 次重复扫描；计数缝 [lookaheadProbeCount] 同步累加。
+     */
+    private fun nextWordToken(sql: String, from: Int): String? {
+        lookaheadProbeCount++
+        var i = from
+        while (i < sql.length) {
+            val c = sql[i]
+            val next = sql.getOrNull(i + 1)
+            when {
+                c.isWhitespace() -> i++
+                c == '-' && next == '-' -> {
+                    while (i < sql.length && sql[i] != '\n') i++
+                }
+                c == '/' && next == '*' -> {
+                    i += 2
+                    while (i < sql.length && !(sql[i] == '*' && sql.getOrNull(i + 1) == '/')) i++
+                    i += 2
+                }
+                isIdentifierChar(c) -> {
+                    val sb = StringBuilder()
+                    while (i < sql.length && isIdentifierChar(sql[i])) {
+                        sb.append(sql[i])
+                        i++
+                    }
+                    return sb.toString()
+                }
+                else -> return null
+            }
+        }
+        return null
+    }
+
+    /**
      * 前视扫描：`from` 之后是否存在词边界形态的目标词（字符串/注释感知，大小写不敏感）。
      * 保守判定——用于决定是否启用 BEGIN/END 块感知（识别不到配对 END 则按顶层切分原样）。
      */
@@ -566,4 +662,67 @@ object SqlStatementSplitter {
     }
 
     private fun hasMatchingEndAhead(sql: String, from: Int): Boolean = hasWordAhead(sql, from, "END")
+
+    /**
+     * 单趟全文前视（T-PS7-01）：一次扫描同时判定「后方存在 BEGIN 词」与「后方存在 END 词」，
+     * 替代 `hasWordAhead(…, "BEGIN")` + [hasMatchingEndAhead] 的两次独立全文扫描
+     * （DECLARE 声明段武装的合取前提）。词法走查与 [hasWordAhead] 逐位一致
+     * （字符串/注释感知、大小写不敏感、词序无关），两布尔取自同一趟遍历，结果等价；
+     * 计数缝 [lookaheadProbeCount] 同步累加。
+     */
+    private fun hasBlockBodyAhead(sql: String, from: Int): Boolean {
+        lookaheadProbeCount++
+        var beginSeen = false
+        var endSeen = false
+        var inSingle = false
+        var inDouble = false
+        var inLine = false
+        var inBlock = false
+        var word = StringBuilder()
+        var i = from
+        while (i < sql.length) {
+            val c = sql[i]
+            val next = sql.getOrNull(i + 1)
+            when {
+                inLine -> if (c == '\n') inLine = false
+                inBlock -> if (c == '*' && next == '/') { inBlock = false; i++ }
+                inSingle -> when {
+                    c == '\\' && next != null -> i++
+                    c == '\'' -> inSingle = false
+                }
+                inDouble -> when {
+                    c == '\\' && next != null -> i++
+                    c == '"' -> inDouble = false
+                }
+                c == '-' && next == '-' -> { inLine = true; i++ }
+                c == '/' && next == '*' -> { inBlock = true; i++ }
+                c == '\'' -> inSingle = true
+                c == '"' -> inDouble = true
+                isIdentifierChar(c) -> word.append(c)
+                else -> {
+                    if (word.isNotEmpty()) {
+                        val token = word.toString()
+                        if (token.equals("BEGIN", ignoreCase = true)) beginSeen = true
+                        else if (token.equals("END", ignoreCase = true)) endSeen = true
+                        word.setLength(0)
+                        if (beginSeen && endSeen) return true // 两词俱在即早退（同一趟扫描内）
+                    }
+                }
+            }
+            i++
+        }
+        if (word.isNotEmpty()) {
+            val token = word.toString()
+            if (token.equals("BEGIN", ignoreCase = true)) beginSeen = true
+            else if (token.equals("END", ignoreCase = true)) endSeen = true
+        }
+        return beginSeen && endSeen
+    }
+
+    /**
+     * T-PS7-01 测试缝：切分过程内前视扫描的调用计数（每次 [splitInternal] 入口清零）。
+     * 供测试断言「END 分支每语句前视 ≤ 每 END 一次」——退回旧实现（同段重复扫描 5 次）
+     * 计数超阈值即红。仅测试读：生产并发调用计数无契约，纯函数语义不受影响。
+     */
+    internal var lookaheadProbeCount: Int = 0
 }
