@@ -1,7 +1,6 @@
 package cn.song.mybatisplus.visualizer.execute
 
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper
-import net.sf.jsqlparser.parser.CCJSqlParserUtil
 
 /**
  * 连接类异常分类器（T-DdlRecover T-DR-01，DBX 吸收清单 #20 语义）：
@@ -68,9 +67,9 @@ object DdlTargetExtractor {
     fun extractCreateTarget(sql: String): String? {
         val cleaned = SqlCommentStripper.strip(sql)
         if (cleaned.isBlank()) return null
-        // AST 路：CREATE TABLE 权威
+        // AST 路：CREATE TABLE 权威（T-PS7-03 收拢：走 SqlAstParser，方括号引用不再必然落正则兜底）
         try {
-            val statements = CCJSqlParserUtil.parseStatements(cleaned)
+            val statements = SqlAstParser.parseStatements(cleaned)
             for (statement in statements) {
                 if (statement is net.sf.jsqlparser.statement.create.table.CreateTable) {
                     statement.table?.name?.let { return normalize(it) }

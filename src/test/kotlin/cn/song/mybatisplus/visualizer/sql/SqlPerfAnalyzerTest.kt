@@ -93,4 +93,17 @@ class SqlPerfAnalyzerTest {
         SqlPerfAnalyzer.clearCache()
         assertEquals(0, SqlPerfAnalyzer.cacheSize())
     }
+
+    @Test
+    fun `方括号引用SELECT的AST规则生效（T-PS7-03② 先红）`() {
+        // 收拢前 CCJSqlParserUtil.parse 对方括号抛异常 → ast=null → 全部 AST 规则降级空转；
+        // 收拢后走 SqlAstParser.parseSingle → 方括号 SQL 的 AST 规则（此处 distinct_with_join，AST-only）全量生效
+        val warnings = SqlPerfAnalyzer.analyze(
+            "SELECT DISTINCT [t1].id FROM [t1] JOIN [t2] ON [t1].id = [t2].t1_id",
+        )
+        assertTrue(
+            "方括号 SQL 应触发 AST-only 规则 distinct_with_join，实际: $warnings",
+            warnings.any { it.ruleId == "distinct_with_join" },
+        )
+    }
 }

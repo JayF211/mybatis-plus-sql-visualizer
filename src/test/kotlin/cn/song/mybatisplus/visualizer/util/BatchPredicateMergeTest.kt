@@ -89,6 +89,18 @@ class BatchPredicateMergeTest {
         assertEquals("DELETE FROM T WHERE ID IN (1, 2)", preview(statements).mergedSql())
     }
 
+    @Test
+    fun `方括号引用的DELETE可参与合并（T-PS7-03① 先红）`() {
+        // SQL Server 方括号引用是产品方言层自产形态（Dialect.quoteIfNeeded 走 [...]）——
+        // 收拢前 CCJSqlParserUtil.parse 对方括号抛异常 → parseEqualityDelete null → 整批「不可合并」；
+        // 收拢后走 SqlAstParser.parseSingle 可解析 → 进入等值谓词合并预览
+        val statements = (1..10).map { "DELETE FROM [user] WHERE [id] = $it" }
+        val p = preview(statements)
+        assertEquals(10, p.coveredCount)
+        assertEquals(10, p.values.size)
+        assertEquals(0, p.hiddenValues)
+    }
+
     // ======================== 回退路径（任一命中 → 出局，绝不部分合并） ========================
 
     @Test

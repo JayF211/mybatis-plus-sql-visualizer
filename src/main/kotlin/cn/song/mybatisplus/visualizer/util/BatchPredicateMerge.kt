@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.util
 
+import cn.song.mybatisplus.visualizer.execute.SqlAstParser
 import net.sf.jsqlparser.expression.DoubleValue
 import net.sf.jsqlparser.expression.Expression
 import net.sf.jsqlparser.expression.HexValue
@@ -7,7 +8,6 @@ import net.sf.jsqlparser.expression.LongValue
 import net.sf.jsqlparser.expression.SignedExpression
 import net.sf.jsqlparser.expression.StringValue
 import net.sf.jsqlparser.expression.operators.relational.EqualsTo
-import net.sf.jsqlparser.parser.CCJSqlParserUtil
 import net.sf.jsqlparser.schema.Column
 import net.sf.jsqlparser.statement.delete.Delete
 
@@ -113,8 +113,9 @@ object BatchPredicateMerge {
     private fun parseEqualityDelete(statement: String): ParsedDelete? {
         val cleaned = cn.song.mybatisplus.visualizer.sql.SqlCommentStripper.strip(statement)
         if (cleaned.isBlank()) return null
+        // T-PS7-03 收拢：走 SqlAstParser.parseSingle——方括号引用的 DELETE 不再判「不可合并」
         val parsed = try {
-            CCJSqlParserUtil.parse(cleaned)
+            SqlAstParser.parseSingle(cleaned)
         } catch (_: Exception) {
             return null
         }
