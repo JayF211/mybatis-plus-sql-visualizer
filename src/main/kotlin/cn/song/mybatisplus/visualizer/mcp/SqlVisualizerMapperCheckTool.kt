@@ -10,7 +10,6 @@ import com.intellij.mcpserver.annotations.McpTool
 import com.intellij.mcpserver.annotations.McpToolHintValue
 import com.intellij.mcpserver.annotations.McpToolHints
 import com.intellij.openapi.application.ReadAction
-import com.intellij.openapi.vfs.LocalFileSystem
 
 /**
  * sqlv_mapper_check 工具（T-McpToolset2 / T-MTS2-03，R2）：mapper XML 静态契约核查。
@@ -33,7 +32,8 @@ class SqlVisualizerMapperCheckTool : McpToolsetSupport("sqlv_mapper_check") {
             "simulation parameters and runs write-risk and performance analysis on the RENDERED SQL — " +
             "validators return a confidence score; this returns deterministic evidence a static-only " +
             "validator cannot produce (rendering is this plugin's core). Pass 'xmlSnippet' (mapper XML " +
-            "text) or 'filePath' (project-relative or absolute). " +
+            "text) or 'filePath' (project-relative to the project root, or an absolute path inside " +
+            "the project; paths outside the project are rejected). " +
             "Read-only: analysis only — never executes SQL.",
     )
     @McpToolHints(
@@ -48,11 +48,18 @@ class SqlVisualizerMapperCheckTool : McpToolsetSupport("sqlv_mapper_check") {
     ): String = audit("sqlv_mapper_check") {
         val text = when {
             xmlSnippet.isNotBlank() -> xmlSnippet
-            filePath.isNotBlank() -> ReadAction.compute<String?, Throwable> {
-                LocalFileSystem.getInstance().findFileByPath(filePath)?.inputStream
-                    ?.use { it.readBytes().decodeToString() }
+            filePath.isNotBlank() -> requireProject().let { project ->
+                ReadAction.compute<String?, Throwable> {
+                    // T-McpFilePathUnify（O-70）：路径经 McpFilePathResolver 统一（项目相对 / 项目内绝对）
+                    McpFilePathResolver.resolveFile(project, filePath)?.inputStream
+                        ?.use { it.readBytes().decodeToString() }
+                }
             } ?: throwExpected(
-                McpToolErrors.code(McpToolErrors.SOURCE_NOT_FOUND, "file not found or unreadable: $filePath"),
+                McpToolErrors.code(
+                    McpToolErrors.SOURCE_NOT_FOUND,
+                    "file not found or unreadable: $filePath (pass a project-relative path, " +
+                        "or an absolute path inside the project).",
+                ),
             )
             else -> throwExpected(
                 McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "provide xmlSnippet or filePath."),

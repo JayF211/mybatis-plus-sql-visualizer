@@ -16,8 +16,9 @@ class SqlVisualizerRenderSqlTool : McpToolsetSupport("sqlv_render_sql") {
         "Render the exact executable SQL behind MyBatis-Plus Wrapper chains, mapper XML statements, " +
             "MyBatis annotation SQL (@Select etc.), JPA @Query/derived queries/CriteriaQuery, HQL and " +
             "JdbcTemplate string SQL in the current IntelliJ project, with real parameter values filled in. " +
-            "Pass (filePath, line) of the source location — filePath must be PROJECT-RELATIVE to the " +
-            "project root (e.g. src/main/resources/mapper/UserMapper.xml); absolute paths are rejected " +
+            "Pass (filePath, line) of the source location — filePath is project-relative to the " +
+            "project root (e.g. src/main/resources/mapper/UserMapper.xml) or an absolute path inside " +
+            "the project; paths outside the project are rejected " +
             "(line is 1-based; omit for the first statement), or pass xmlSnippet + " +
             "sourceType='xml_mapper' for a mapper XML text. One statement per call: " +
             "when several candidates match the location, the first is rendered and the output notes it; " +

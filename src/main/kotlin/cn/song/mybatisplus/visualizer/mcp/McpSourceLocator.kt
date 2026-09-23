@@ -58,13 +58,19 @@ object McpSourceLocator {
         error = McpToolErrors.code(code, message),
     )
 
-    /** 「项目相对文件路径 + 行号」渲染（内部 ReadAction；行号 1-based，null = 首个可预览语句）。 */
+    /**
+     * 「文件路径 + 行号」渲染（内部 ReadAction；行号 1-based，null = 首个可预览语句）。
+     *
+     * 路径形态经 [McpFilePathResolver] 统一（T-McpFilePathUnify，O-70）：项目相对路径与项目内
+     * 绝对路径都收，项目外拒绝（安全边界，见该对象头注）。
+     */
     fun renderAtLine(project: Project, filePath: String, line: Int?): Outcome {
         val outcome = ReadAction.compute<Outcome, Throwable> {
-            val vFile = LocalFileSystem.getInstance().findFileByPath(normalizeAbsolute(project, filePath))
+            val vFile = McpFilePathResolver.resolveFile(project, filePath)
                 ?: return@compute fail(
                     McpToolErrors.SOURCE_NOT_FOUND,
-                    "file not found in project: $filePath (use a project-relative path).",
+                    "file not found in project: $filePath (pass a project-relative path, " +
+                        "or an absolute path inside the project).",
                 )
             val psiFile = PsiManager.getInstance(project).findFile(vFile)
                 ?: return@compute fail(McpToolErrors.SOURCE_NOT_FOUND, "cannot parse file: $filePath")
@@ -229,17 +235,5 @@ object McpSourceLocator {
             paramTable = result.paramTable,
             degraded = degraded,
         )
-    }
-
-    private fun normalizeAbsolute(project: Project, relative: String): String {
-        val normalized = McpRenderInput.normalizeFilePath(relative)
-            ?: throw com.intellij.mcpserver.McpExpectedError(
-                McpToolErrors.code(
-                    McpToolErrors.INVALID_ARGUMENT,
-                    "invalid file path: $relative (pass a path relative to the project root)",
-                ),
-            )
-        val base = project.basePath?.trimEnd('/', '\\') ?: return normalized
-        return "$base/$normalized"
     }
 }
