@@ -23,6 +23,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 > - M28×M29 二次实证教训：登记会自锁 `check`（别把 check 链进自己命令）；共享 gradle daemon 会被对方 `--stop` 误杀（测试执行器莫名 FAILED）——权威全量回归建议 `git worktree` 独立目录 + `--no-daemon`（沙盒随 build 目录一并完全隔离）
 > - **`expected_end` 不是活性信号，判活要查进程**（2026-09-20 实证）：`T-GifRec-MCP` 登记 `expected_end=02:19`，到 15:50 仍在跑——`check` 只报「存在活跃任务」不报真死假死。要判某条登记是否已成残留，查进程命令行而非时钟：`powershell Get-CimInstance Win32_Process -Filter "Name='java.exe'"` 找 `idea-sandbox`/`-javaagent:…\build\MPSV-…`/对方 checkout 的 `gradlew`。
 > - **录制会话活跃时禁开新 runIde 沙盒**：新 IDE 窗口会抢前台，录制脚本的坐标点击与窗口 Z 序都会被打偏（录制管线本身要求「录制中系统空闲时优先」）——真机走查要么等对方注销，要么用独立沙盒且不抢焦点（难以保证，实际按前者）。
+> - **构建并发资源定例（2026-09-23 双树对照实测，T-BuildConcurrency O-65）**：构建并发上限 **2 路**——瓶颈是内存提交量不是 CPU（双路 Commit 峰值 66.9/上限 74.7 GB、free 最低 2.8 GB；单路 CPU 均值仅 49.8%，双路加速比 1.52）。日常验证走 `testFast`（可双路，94~155s），全量 `testShards` 3 片只在单路收口跑；**禁止降片（`-PtestShardCount` 调小）换并行或提速**（双路 2 片实测慢一倍且 free 跌到 0.3 GB）。跑全量前先 `timeout 10 docker info` 验 daemon 活性（引擎半活态 `DialectDockerVerificationTest` 会无限挂起且不产失败读数）。`~/.gradle` 实体已迁 `F:\gradle-home`（`C:\Users\USER\.gradle` 为 junction），拆联接只用 `rmdir`/`Remove-Item`、**禁 Git Bash `rm -rf`**。详版＝`docs/经验总结/20260923-1055-多工作树并行构建资源实测与定例-经验总结.md`
 > - 完整约定见本地记忆 `agent-parallel-test-isolation.md`（本机 `~/.zcode/cli/memories/projects/.../memory/`）
 
 ## 核心文档（docs/ 根目录）
