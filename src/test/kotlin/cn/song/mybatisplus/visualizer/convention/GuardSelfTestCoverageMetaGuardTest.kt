@@ -866,6 +866,13 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "断言直接内联在 @Test；repoRoot/isInsideComment/readArguments/lineOf 为夹具" +
                     "（2026-09-23 真机走查配套：目录来源 CRUD 必须按表所属项目解析方言）",
             ),
+            // ---- 2026-09-23 合并 dev 后补登记（master 侧 O-68 批次新增的守卫类，基线红收口） ----
+            GuardEntry(
+                "mcp/McpGateFilterRegistrationGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（O-68 注册结构守卫：mcpServer optional depends 恰一条 / " +
+                    "mcp-optional.xml 禁直宣 mcpToolFilterProvider / 探测式 registrar 与桥类在册防改名漂移）",
+            ),
             // ---- 本元守卫自身 ----
             GuardEntry(
                 "convention/GuardSelfTestCoverageMetaGuardTest.kt",
