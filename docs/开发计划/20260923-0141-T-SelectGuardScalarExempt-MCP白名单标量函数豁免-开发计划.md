@@ -83,3 +83,18 @@ T-SGE-02 红用例先跑改前代码（取先红读数）→ T-SGE-01 豁免实�
 1. **误拒形态的实测**：§1.1 的 `SELECT INSERT(...)` 误拒是代码走查推演（判定序 + 词表逐行读过），未跑过真实 `checkSingleSelect`——实施第一步先跑改前代码取先红读数，若实测放行（推演证伪）则本任务整体降级为「不适用」并登记。
 2. **update/delete 在粗扫位置的可匹配形态为零**的推断——实施时补一条「确认无同类误拒」的语料扫描（对 FORBIDDEN_WORDS 全表过一遍「词后随 `(` 的函数形态」清单，MySQL/PG/Oracle 函数名与写动词同形的只有 insert/replace 两个；若有第三个，扩表并登记出处）。
 3. `ExplainGate` 对 `SELECT INSERT(...)` 的路径（首词 select 在白名单 + 结构判定）——推演放行、无缺口；实施时以 ExplainGateTest 既有语料间接回归，不新增断言（写集外）。
+
+## 八、增量登记：MCP SELECT 闸门解析入口收拢（2026-09-23 并入，性能第十轮 D1 定案）
+
+**来源**：性能第十轮调研报告 §5 F15 / `T-PerfSweep7` 计划决策点 D1 定案（2026-09-23 用户确认）——「目的地 A、载体 O-61」：`McpSelectGuard` 的解析收拢不进性能 sweep，作为**本任务增量范围**随批实施（本就动 `McpSelectGuard.kt`，KDoc 判定序订正与收拢同文件同批）。
+
+**增量内容**：`checkSingleSelect` 的 `CCJSqlParserUtil.parseStatements(trimmed)`（`:68`）改走 `SqlAstParser.parseStatements`（开启 `allowSquareBracketQuotation`，共享单例 features）——效果：SQL Server 方括号 SELECT（产品方言层自产形态，`Dialect.quoteIfNeeded`）从「解析失败按写拒绝」变为可进入既有结构判定。
+
+**随批安全清单（缺一不收口）**：
+
+1. **负样本四组判据**（方括号开启后仍拒）：多语句走私 `SELECT * FROM [user]; DROP TABLE [x]`；`SELECT ... INTO [t] FROM [s]`；锁读 `SELECT * FROM [t] FOR UPDATE`；字面量剥离后粗扫命中形态。每组先红后绿或对照闸门既有读数。
+2. **Throwable/StackOverflowError fail-closed 路径原样保留**（`:69-77` 注释语义不动），补一条恶意构造输入仍 deny 的回归。
+3. **§五 真机走查清单随之作废重写**：本增量必须真机 MCP 实调 `sqlv_select` 传方括号 SELECT（改前拒/改后通各取一次读数）。
+4. **用户可见变更**：CHANGELOG `[Unreleased]` 条目（闸门能力扩展属用户可感知，非性能清扫）。
+
+**风险对齐**：本增量的安全论证范式沿用 §六 前两行（结构闸在先、粗扫在后，解析面扩大不改变结构判定集）；`SqlAstParser` 现只暴露多语句版，闸门语义（`statements.size != 1` 判定）不变。
