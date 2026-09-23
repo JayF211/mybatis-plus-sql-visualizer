@@ -36,6 +36,14 @@ tasks.withType<Test>().configureEach {
     // T-TestPerf2：测试 JVM 堆可临时覆盖（Gradle Test 默认 maxHeapSize=512m），用法
     // -PtestHeapSize=2g；缺省不动，是否转正由实测收益定（见 T-TestPerf2 计划 P9）。
     providers.gradleProperty("testHeapSize").orNull?.let { maxHeapSize = it }
+    // T-TestPerf4：测试 JVM GC 换型开关 -PtestGc=parallel（缺省 G1 不动）。测试负载是
+    // 「大量短类 + 少数 UI 重类长跑」的批处理形态，理论契合 ParallelGC 吞吐优先的特性；
+    // 2026-09-24 warm 对照实测：4 片 3m28s vs G1 同日 3m16s~3m30s——无明确收益（<5%），
+    // 不落默认，开关保留供负载形态变化后复测（堆加大实验 T-TestPerf2 同样无收益，GC 是
+    // 另一个维度，两维均已实测销账）。
+    if (providers.gradleProperty("testGc").getOrElse("") == "parallel") {
+        jvmArgs("-XX:+UseParallelGC")
+    }
     // Docker 测试默认关闭（20260923 用户定例）：daemon 半活态会让 testcontainers 的 ping
     // 探测阻塞无超时（runCatching 兜不住阻塞形态，20260923 发行门禁实录三片挂起 40 分钟），
     // daemon 活着时真容器方言验证的 pull/run 耗时也不可控。只有显式 -PmpvDockerTests=true
@@ -68,12 +76,15 @@ fun parseTestSuiteAttrs(f: File): Map<String, String>? = runCatching {
 fun listSuiteXmls(dir: File): List<File> =
     dir.listFiles { f: File -> f.isFile && f.name.startsWith("TEST-") && f.name.endsWith(".xml") }?.toList() ?: emptyList()
 
-// T-TestPerf2：分片数，-PtestShardCount=N（默认 3，上限 6；6C12T 实测 3 片最优，2 片慢 ~40%）。
-// T-TestPerf3（2026-09-17）4 片复测：3m02s vs 3 片 2m03s——4 片并发超出物理核竞争反而慢，
-// 默认 3 片定案维持。
+// T-TestPerf2：分片数，-PtestShardCount=N（上限 6）。
+// T-TestPerf3（2026-09-17）定案 3 片：4 片 3m02s vs 3 片 2m03s——当时片内执行仅 ~84s 量级，
+// 固定开销（JVM 冷启+沙盒准备）占比高，片数越多固定开销×片数越亏。
+// T-TestPerf4（2026-09-24）在片执行 ~210s 的新负载下 warm 重测：3 片 3m57s / 4 片 3m30s、
+// 3m16s / 5 片 3m36s——固定开销占比下降后拐点右移到 4 片，默认改 4。代价是 execSum 总和
+// 随并发度膨胀（601→687→858s），5 片起竞争损耗超过切分收益；负载形态再变时按同法重测。
 // 顶层声明——分片注册（testIde 块内）与聚合报告（testShards 任务）两处共用。
 val testShardCount = providers.gradleProperty("testShardCount").orNull
-    ?.toIntOrNull()?.coerceIn(1, 6) ?: 3
+    ?.toIntOrNull()?.coerceIn(1, 6) ?: 4
 
 // 测试源码单遍扫描（T-TestPerf3 提为顶层：分片分区与 testFast 划桶两处共用；内容提取类名，
 // Kotlin 文件名≠类名合法——CrudPreviewFlowAndTypesTest.kt 内是 DbTypeQuoteHintTest 的先例）。
@@ -137,6 +148,16 @@ tasks.register<Test>("testFast") {
     maxParallelForks = 1
 }
 
+// T-TestPerf4：聚合报告「预期 vs 实测」对照与并集 parity 校验的数据通道——testIde 配置期
+// 算出的预期各片 execSum 与计划类全集，先落这两个顶层 var，testShards 任务注册时写进
+// inputs.property（配置期即固化为 String，规避 doLast 引用脚本顶层对象导致的整段不可序列化，
+// 运行期经 inputs.properties 读回，同 testDatabase 的 mpProjectDirAbs 先例）。权重与分区
+// 每轮随结果目录变化重算（配置缓存对配置期目录列举做输入追踪，run2 实证日志
+// 「cannot be reused because directory build\test-results\testShard1 has changed」），
+// 因此对照行每轮反映最新权重表的预期，与实测并排后权重失准一眼可见。
+var shardPlanExpectedLoads: String = ""
+var shardPlanClasses: String = ""
+
 intellijPlatformTesting {
     testIde {
         // T-TestPerf-04（2026-09-14）分片包含清单自动分区 + T-TestPerf2（2026-09-15）时长均衡：
@@ -146,7 +167,7 @@ intellijPlatformTesting {
         // 退化为按类名字典序贪心均分，仍确定性。贪心排序键 = (时长降序, 类名升序)，
         // 同输入必得同分区——双开终端两进程与配置缓存复用前后结果一致。
         // 配置缓存语义与类发现一致：新增测试类/时长变化在下一次配置失效后生效，短暂失衡不影响正确性。
-        // 片数：-PtestShardCount=N（默认 3）。旧类名哈希两片实测失衡 26%（157.9s/93.7s），
+        // 片数：-PtestShardCount=N（默认 4，T-TestPerf4 定案，依据见顶层 testShardCount 注释）。旧类名哈希两片实测失衡 26%（157.9s/93.7s），
         // 时长均衡两片 125.8s/125.8s——并行墙钟被重片拖死的问题根除（数据见 T-TestPerf2 计划 §二）。
         // 类发现走顶层 testFileEntries（T-TestPerf3 提升为顶层，与 testFast 划桶共用单遍扫描）；
         // 列 0 的 class 声明含 Kotlin/Java 常见修饰符；无顶层类声明时回退文件名（嵌套类套件等形态）。
@@ -165,25 +186,33 @@ intellijPlatformTesting {
             .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
             .filter { it !in dbIntegrationClasses }
             .sorted()
-        // 时长权重表：discoveredTestClasses 全集覆盖（已知→实测秒数，未知→已知中位数）
+        // 时长权重表：discoveredTestClasses 全集覆盖。T-TestPerf4 起同类取 mtime 最新的
+        // K 份取中位数（-PtestShardWeightSamples，默认 2）——分片跑出的单类耗时带 ±7% 级
+        // 并发膨胀噪声且各片随机分布（预期均衡 209.8s×3 实测 195.3/209.3/196.7，T-TestPerf4
+        // run2），单份最新值会让均衡器逐轮追噪声；K 份中位数平滑。样本不足 K 份退化为现有
+        // 取法，全新检出零数据时全体同权，退化路径与 T-TestPerf2 一致。
         val durationWeights: Map<String, Double> = run {
+            val weightSamples = providers.gradleProperty("testShardWeightSamples").orNull
+                ?.toIntOrNull()?.coerceIn(1, 5) ?: 2
             val resultDirs = sequenceOf(file("build/test-results/test")) +
                 (1..testShardCount).asSequence().map { file("build/test-results/testShard$it") }
-            val best = HashMap<String, Pair<Long, Double>>() // FQCN -> (mtime, seconds)
+            val samples = HashMap<String, MutableList<Pair<Long, Double>>>() // FQCN -> [(mtime, seconds)]
             for (dir in resultDirs) {
                 if (!dir.isDirectory) continue
                 for (f in listSuiteXmls(dir)) {
                     val attrs = parseTestSuiteAttrs(f) ?: continue
                     val name = attrs["name"] ?: continue
                     val time = attrs["time"]?.toDoubleOrNull() ?: continue
-                    val mtime = f.lastModified()
-                    val prev = best[name]
-                    if (prev == null || mtime >= prev.first) best[name] = mtime to time
+                    samples.getOrPut(name) { mutableListOf() }.add(f.lastModified() to time)
                 }
             }
-            val known = best.values.map { it.second }.sorted()
+            val smoothed = samples.mapValues { (_, list) ->
+                list.sortedByDescending { it.first }.take(weightSamples).map { it.second }.sorted()
+                    .let { sorted -> sorted[sorted.size / 2] }
+            }
+            val known = smoothed.values.sorted()
             val median = if (known.isEmpty()) 1.0 else known[known.size / 2]
-            discoveredTestClasses.associateWith { best[it]?.second ?: median }
+            discoveredTestClasses.associateWith { smoothed[it] ?: median }
         }
         // 机器级全局资源亲和（T-TestPerf2 补丁）：Windows 剪贴板全机唯一（WClipboard.openClipboard
         // 互斥），并发分片 JVM 互抢 → cannot open system clipboard（2026-09-15 冷启动第一跑
@@ -222,6 +251,11 @@ intellijPlatformTesting {
                     )
                 }
         )
+        // T-TestPerf4：喂给聚合任务的两份配置期产物（见 shardPlanExpectedLoads 注释）
+        shardPlanExpectedLoads = shardAssignment.indices
+            .map { i -> "%.1f".format(shardAssignment[i].sumOf { durationWeights[it] ?: 0.0 }) }
+            .joinToString("|")
+        shardPlanClasses = discoveredTestClasses.joinToString("\n")
         for (i in 1..testShardCount) {
             val idx = i - 1
             register("testShard$i") {
@@ -389,6 +423,10 @@ tasks.register("testShards") {
     description =
         "分片全量测试（时长均衡自动分区 $testShardCount 片，一命令真并行；-PtestShardCount 调片数）"
     dependsOn(*(1..testShardCount).map { "testShard$it" }.toTypedArray())
+    // T-TestPerf4：预期各片 execSum 与计划类全集——配置期固化成 String（见
+    // shardPlanExpectedLoads 注释），doLast 只做文件 IO + 读 inputs，不触达脚本对象。
+    inputs.property("mpvExpectedShardLoads", shardPlanExpectedLoads)
+    inputs.property("mpvPlannedClasses", shardPlanClasses)
     // 聚合报告（T-TestPerf2）：分片跑完直接打印各片与总数四元组，与串行口径的计数 parity 目测即得。
     // 配置缓存约束：结果目录在配置期解析为 File，doLast 只做文件 IO 不触达 Project/layout，
     // 且解析辅助函数须定义在 doLast 体内——引用脚本顶层函数会整段不可序列化（实证报错）。
@@ -402,11 +440,17 @@ tasks.register("testShards") {
             if (tag.isEmpty()) null
             else Regex("([\\w.-]+)=\"([^\"]*)\"").findAll(tag).associate { it.groupValues[1] to it.groupValues[2] }
         }.getOrNull()
+        // T-TestPerf4：预期 loads（配置期权重表的各片合计，秒）与计划类全集
+        val expectedLoads = (inputs.properties["mpvExpectedShardLoads"] as? String ?: "")
+            .split("|").mapNotNull { it.toDoubleOrNull() }
+        val plannedClasses = (inputs.properties["mpvPlannedClasses"] as? String ?: "")
+            .split("\n").filter { it.isNotBlank() }.toSet()
         var total = 0
         var failed = 0
         var errored = 0
         var skipped = 0
         var execSeconds = 0.0
+        val seenClasses = HashSet<String>()
         shardResultDirs.forEachIndexed { idx, dir ->
             var n = 0
             var f = 0
@@ -419,6 +463,7 @@ tasks.register("testShards") {
             }
             for (xml in xmls) {
                 val attrs = suiteAttrs(xml) ?: continue
+                attrs["name"]?.let { seenClasses.add(it) }
                 fun num(key: String) = attrs[key]?.toDoubleOrNull() ?: 0.0
                 n += num("tests").toInt()
                 f += num("failures").toInt()
@@ -426,8 +471,12 @@ tasks.register("testShards") {
                 s += num("skipped").toInt()
                 t += num("time")
             }
+            // 预期 vs 实测对照（T-TestPerf4）：差值持续偏向同一片=权重失准信号；
+            // 随机 ±7% 内=并发膨胀噪声，均衡器无法也不必消除
+            val expectedTxt = expectedLoads.getOrNull(idx)
+                ?.let { " expected=%.1fs".format(it) } ?: ""
             logger.lifecycle(
-                "testShard${idx + 1}: tests=$n failures=$f errors=$e skipped=$s time=%.1fs".format(t),
+                "testShard${idx + 1}: tests=$n failures=$f errors=$e skipped=$s time=%.1fs$expectedTxt".format(t),
             )
             total += n; failed += f; errored += e; skipped += s; execSeconds += t
         }
@@ -435,6 +484,19 @@ tasks.register("testShards") {
             "SHARD TOTAL: tests=$total failures=$failed errors=$errored skipped=$skipped " +
                 "(parity 口径 = 串行 ./gradlew test 计数；两者同出一份自动分区清单，DB 集成三类都在 testDatabase)"
         )
+        // 计划类并集校验（T-TestPerf4）：某个计划类没产出结果 XML=进了分片却没被执行——
+        // 类发现回归或假绿嫌疑，必须可见。抽象基类/测试全在嵌套类的形态会误报，只 WARN 不 fail。
+        if (plannedClasses.isNotEmpty() && seenClasses.isNotEmpty()) {
+            val missing = plannedClasses - seenClasses
+            if (missing.isEmpty()) {
+                logger.lifecycle("testShards parity: 计划类全集 ${plannedClasses.size} 个均有结果 XML")
+            } else {
+                logger.warn(
+                    "testShards parity: ${missing.size} 个计划类无结果 XML（抽象基类/嵌套套件形态可忽略，其余排查类发现回归）:",
+                )
+                missing.sorted().forEach { logger.warn("  - $it") }
+            }
+        }
     }
 }
 
