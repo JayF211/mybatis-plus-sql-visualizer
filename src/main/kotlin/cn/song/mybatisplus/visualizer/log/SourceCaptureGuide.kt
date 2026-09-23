@@ -1,30 +1,66 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.config.EnhancedCaptureConsent
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.config.SqlLogConfigurable
+import cn.song.mybatisplus.visualizer.log.agent.AgentManager
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * T-JumpCapture：源码位置缺失时的引导编排（实时日志 / 历史面板「跳转到源码」共用）。
+ * T-JumpCapture / O-66 T-GuideEnhancedFirst：源码位置缺失时的引导编排（实时日志 / 历史面板「跳转到源码」共用）。
  *
- * 跳转源码完全依赖 [SqlSourceInterceptor] 捕获的真实调用位置（F-44-6/7）；
- * 条目无捕获位置时不再按表名搜索 Wrapper（同表名 ≠ 同调用点，命中即误导，已整体移除），
- * 而是弹框说明原因并给两个出口：打开「SQL 日志」设置页（源码捕获开关所在页），
- * 或立即在项目中注入拦截器代码。注入结果四类弹窗亦收敛于此（原设置页硬编码文案 i18n 化迁入）。
+ * 跳转源码完全依赖捕获的真实调用位置（F-44-6/7）——两条采集通道都带：控制台通道靠
+ * [SqlSourceInterceptor] 的标记行，增强捕获（agent 通道）靠应用 JVM 内 StackLocator 直取
+ * （SqlEvent.sourceFile → AgentEventAdapter 直通面板条目）。条目无捕获位置时不再按表名搜索
+ * Wrapper（同表名 ≠ 同调用点，命中即误导，已整体移除），而是弹框按**全局增强捕获状态**给出口：
+ *
+ * - 未开启 / 未授权（[GuideBranch.EnhanceFirst]）：默认按钮让位「开启增强捕获」——不改工程代码、
+ *   同意一次授权 + 重启应用即生效，对用户最省事；注入拦截器降为次选。
+ * - 已开启已授权（[GuideBranch.Legacy]）：维持原两出口（打开设置 / 注入拦截器），此时缺位置
+ *   另有原因（帧过滤前缀命中 / 应用未重启 / agent 未挂载），message 末尾附一行实时状态（D1）。
+ *
+ * 注入结果四类弹窗亦收敛于此（原设置页硬编码文案 i18n 化迁入）。
  */
 object SourceCaptureGuide {
 
     /** 引导弹框用户选择（纯函数映射，测试驱动不触 UI）。 */
-    enum class GuideChoice { OpenSettings, InjectNow, Cancel }
+    enum class GuideChoice { EnableEnhanced, OpenSettings, InjectNow, Cancel }
 
-    /** showDialog 返回码 → 选择（数组序 0=打开设置 1=立即注入 2=取消；关闭/ESC 视同取消）。 */
-    internal fun resolveChoice(returnCode: Int): GuideChoice = when (returnCode) {
-        0 -> GuideChoice.OpenSettings
-        1 -> GuideChoice.InjectNow
+    /** 引导分支（[decideActions] 产出）：EnhanceFirst＝增强捕获未开启/未授权，Legacy＝已开启已授权。 */
+    internal enum class GuideBranch { EnhanceFirst, Legacy }
+
+    /**
+     * 全局增强捕获状态 → 引导分支（纯函数）。
+     * 增强捕获未开启或未授权时，它是携带源码位置的通道里对用户最省事的一条（不注入工程代码），
+     * 默认按钮让位；已开启已授权时开关不再是原因，维持原出口。
+     */
+    internal fun decideActions(enabled: Boolean, confirmed: Boolean): GuideBranch =
+        if (enabled && confirmed) GuideBranch.Legacy else GuideBranch.EnhanceFirst
+
+    /**
+     * showDialog 返回码 → 选择，**序表随分支**（O-66）：EnhanceFirst 0=开启增强捕获，
+     * Legacy 0=打开设置；两分支 1=立即注入。分支参数是硬约束——两条序表 0 号语义不同，
+     * 无分支映射会把「开启增强捕获」错路由成「打开设置」。关闭/ESC/负值一律兜底取消。
+     */
+    internal fun resolveChoice(returnCode: Int, branch: GuideBranch): GuideChoice = when {
+        returnCode == 0 && branch == GuideBranch.EnhanceFirst -> GuideChoice.EnableEnhanced
+        returnCode == 0 -> GuideChoice.OpenSettings
+        returnCode == 1 -> GuideChoice.InjectNow
         else -> GuideChoice.Cancel
+    }
+
+    /**
+     * Legacy 分支 message＝基础文案末尾附一行增强捕获实时状态（D1 定案；复用链路诊断键
+     * log.diag.enhanced）。无读数（null/空白）时原样返回——分支语义已由按钮表达，不硬凑一行。
+     */
+    internal fun legacyMessage(baseMessage: String, enhancedStatus: String?): String {
+        val status = enhancedStatus?.takeIf { it.isNotBlank() } ?: return baseMessage
+        return baseMessage + "\n\n" + MpSqlVisualizerBundle.message("log.diag.enhanced", status)
     }
 
     /** 注入防重入（弹框与设置页共用本编排，检测期间不重复触发）。 */
@@ -32,24 +68,77 @@ object SourceCaptureGuide {
 
     /** 无捕获位置时的引导弹框（实时日志 sourceFile==null / 历史面板 NoSource 共用入口）。 */
     fun showMissingSourceDialog(project: Project) {
-        val rc = Messages.showDialog(
-            project,
-            MpSqlVisualizerBundle.message("log.jump.guide.message"),
-            MpSqlVisualizerBundle.message("log.jump.guide.title"),
-            arrayOf(
+        val state = PluginSettings.getInstance().state
+        val branch = decideActions(state.enhancedCaptureEnabled, state.enhancedCaptureConfirmed)
+        val message = when (branch) {
+            GuideBranch.EnhanceFirst -> MpSqlVisualizerBundle.message("log.jump.guide.message.enhanceFirst")
+            GuideBranch.Legacy -> legacyMessage(
+                MpSqlVisualizerBundle.message("log.jump.guide.message"),
+                runCatching { AgentManager.getInstance(project).statusSummary() }.getOrNull(),
+            )
+        }
+        val buttons = when (branch) {
+            GuideBranch.EnhanceFirst -> arrayOf(
+                MpSqlVisualizerBundle.message("log.jump.guide.enableEnhanced"),
+                MpSqlVisualizerBundle.message("log.jump.guide.injectNow"),
+                MpSqlVisualizerBundle.message("log.jump.guide.cancel"),
+            )
+            GuideBranch.Legacy -> arrayOf(
                 MpSqlVisualizerBundle.message("log.jump.guide.openSettings"),
                 MpSqlVisualizerBundle.message("log.jump.guide.injectNow"),
                 MpSqlVisualizerBundle.message("log.jump.guide.cancel"),
-            ),
+            )
+        }
+        val rc = Messages.showDialog(
+            project,
+            message,
+            MpSqlVisualizerBundle.message("log.jump.guide.title"),
+            buttons,
             0,
             Messages.getQuestionIcon(),
         )
-        when (resolveChoice(rc)) {
+        when (resolveChoice(rc, branch)) {
+            GuideChoice.EnableEnhanced -> enableEnhancedCapture(project)
             GuideChoice.OpenSettings ->
                 ShowSettingsUtil.getInstance().showSettingsDialog(project, SqlLogConfigurable::class.java)
             GuideChoice.InjectNow -> runInjection(project)
             GuideChoice.Cancel -> Unit
         }
+    }
+
+    /**
+     * 「开启增强捕获」动作（O-66，EnhanceFirst 分支默认按钮触发）。
+     *
+     * 总开关关闭时先置 enabled=true 并发布 [PluginSettings.SETTINGS_CHANGE_TOPIC]——与设置页
+     * Apply 同通道，AgentManager 的「关闭→再开启」上升沿据此清零拒绝冷却、CONFIG 下发链跟随；
+     * 已开启时不得重复发布（设置页面板的 isModified 对比读同一 state，乱发布会制造脏态假象）。
+     * 随后复用 [AgentManager.requestReauthorization] 确认流（清冷却 + 弹确认框 + 三态持久化全部
+     * 单点收在 AgentManager，本编排只经 [onOutcome] 消费结果，不复写状态机）：
+     * 同意 → 展示「重启应用后生效」提示（无句柄不挂载，挂载由下一次应用进程启动承接——本动作
+     * 不碰已在运行的应用）；拒绝 / 关闭增强 → 静默（尊重 24h 冷却与关闭语义，不再打扰）。
+     */
+    internal fun enableEnhancedCapture(
+        project: Project,
+        onOutcome: (EnhancedCaptureConsent) -> Unit = { consent ->
+            if (consent == EnhancedCaptureConsent.ACCEPTED) showEnhanceDone(project)
+        },
+    ) {
+        val state = PluginSettings.getInstance().state
+        if (!state.enhancedCaptureEnabled) {
+            state.enhancedCaptureEnabled = true
+            ApplicationManager.getApplication().messageBus
+                .syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC).settingsChanged()
+        }
+        AgentManager.getInstance(project).requestReauthorization(onOutcome)
+    }
+
+    /** 同意后的生效提示（title 复用确认框标题键，语义同属「启用增强捕获」）。 */
+    private fun showEnhanceDone(project: Project) {
+        Messages.showInfoMessage(
+            project,
+            MpSqlVisualizerBundle.message("log.jump.guide.enhanceDone"),
+            MpSqlVisualizerBundle.message("settings.enhancedCapture.confirm.title"),
+        )
     }
 
     /**

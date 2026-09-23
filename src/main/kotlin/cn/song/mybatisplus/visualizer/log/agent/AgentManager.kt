@@ -424,7 +424,8 @@ class AgentManager(private val project: Project) : Disposable {
         (rejectCooldownMs - (clockMs() - PluginSettings.getInstance().state.enhancedCaptureRejectedAtMs)).coerceAtLeast(0)
 
     /**
-     * T-CaptureTruth T-CT-02：重新授权入口（设置页「重新授权」按钮 / 面板链路诊断行的恢复动作）。
+     * T-CaptureTruth T-CT-02：重新授权入口（设置页「重新授权」按钮 / 面板链路诊断行的恢复动作 /
+     * O-66 引导弹框「开启增强捕获」动作）。
      *
      * 语义 = 清零拒绝冷却（与「关闭→再开启」上升沿同一条重置语义，抽为单一入口）后立即重走确认流：
      * 同意 → 置 confirmed 并（有进程句柄时）挂载；拒绝 → 重新计时冷却。此前用户被拒后唯一恢复路径是
@@ -432,8 +433,12 @@ class AgentManager(private val project: Project) : Disposable {
      *
      * 无进程句柄：本入口不携带 processStarted 事件，故只恢复授权、不尝试挂载——挂载由下一次
      * 应用进程启动承接（状态行随即转「已授权，等待应用进程启动后挂载」）。
+     *
+     * O-66 T-GuideEnhancedFirst：[onOutcome] 把三态结果回传给调用方（引导弹框据此决定是否展示
+     * 「重启应用后生效」提示）。持久化仍单点收在本类，调用方只消费不落盘；增强未开启早退时
+     * **不回调**（用户未做任何选择，不得谎报 REJECTED）。
      */
-    fun requestReauthorization() {
+    fun requestReauthorization(onOutcome: (EnhancedCaptureConsent) -> Unit = {}) {
         if (!isEnhancedEnabled()) {
             LOG.info("requestReauthorization: 增强未开启——忽略")
             return
@@ -441,7 +446,7 @@ class AgentManager(private val project: Project) : Disposable {
         PluginSettings.getInstance().state.enhancedCaptureRejectedAtMs = 0L
         LOG.info("requestReauthorization: 拒绝冷却已清零，重走注入确认流")
         publishStatusChanged()
-        requestConsentThenAttach(null)
+        requestConsentThenAttach(null, onOutcome)
     }
 
     /**
@@ -453,8 +458,10 @@ class AgentManager(private val project: Project) : Disposable {
      *   总开关关闭后冷却无意义），此后任何进程启动都不弹窗、不 attach，直到用户在设置页重新开启
      *   （重开的上升沿由 SETTINGS_CHANGE 监听重置冷却）。
      * 确认结果持久化（重开不再弹）；headless 由 [consentProvider] 默认实现直接拒绝。
+     * O-66：[onOutcome] 在三态各自落盘后回传（确认框异常按拒绝处理的路径同样回传）；
+     * 前置早退（项目已释放 / 增强未开启）不回调。
      */
-    private fun requestConsentThenAttach(processHandler: Any?) {
+    private fun requestConsentThenAttach(processHandler: Any?, onOutcome: (EnhancedCaptureConsent) -> Unit = {}) {
         com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
             if (project.isDisposed || !isEnhancedEnabled()) return@invokeLater
             val outcome = try {
@@ -475,6 +482,7 @@ class AgentManager(private val project: Project) : Disposable {
                     // T-CaptureTruth T-CT-01：三态结果都广播——否则设置页状态行要等下一次
                     // attach/掉线才刷新，用户点完同意/拒绝后看到的是过期文案。
                     publishStatusChanged()
+                    onOutcome(EnhancedCaptureConsent.ACCEPTED)
                     if (processHandler == null) {
                         // T-CaptureTruth T-CT-02：重新授权入口无进程句柄——只恢复授权，
                         // 挂载由下一次应用进程启动承接（避免 resolvePid(null) 的误导性 WARN）。
@@ -491,11 +499,13 @@ class AgentManager(private val project: Project) : Disposable {
                     state.enhancedCaptureEnabled = false
                     LOG.info("requestConsentThenAttach: 用户选择关闭增强捕获并不再询问——总开关已持久化关闭")
                     publishStatusChanged()
+                    onOutcome(EnhancedCaptureConsent.DISABLE_CAPTURE)
                 }
                 EnhancedCaptureConsent.REJECTED -> {
                     state.enhancedCaptureRejectedAtMs = clockMs()
                     LOG.info("requestConsentThenAttach: 用户拒绝注入——进入 ${rejectCooldownMs}ms 冷却（冷却期内不重复弹，不改同意门槛）")
                     publishStatusChanged()
+                    onOutcome(EnhancedCaptureConsent.REJECTED)
                 }
             }
         }

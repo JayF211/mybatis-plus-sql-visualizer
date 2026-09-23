@@ -81,8 +81,8 @@ class SettingsTruthTest {
         ).forEach { key ->
             assertTrue("agentStatusText 应引用状态行键 $key", src.contains("\"$key\""))
         }
-        // T-CT-02：重新授权入口存在且清零冷却
-        assertTrue("应有 requestReauthorization 入口", src.contains("fun requestReauthorization()"))
+        // T-CT-02：重新授权入口存在且清零冷却（O-66 起带可选 onOutcome 回调，断言放宽到名字前缀）
+        assertTrue("应有 requestReauthorization 入口", src.contains("fun requestReauthorization("))
         // Topic 声明形态（仿 PluginSettings.SETTINGS_CHANGE_TOPIC）
         assertTrue("AGENT_STATUS_TOPIC 应为 Topic.create", src.contains("AGENT_STATUS_TOPIC: Topic<AgentStatusListener> = Topic.create("))
     }
