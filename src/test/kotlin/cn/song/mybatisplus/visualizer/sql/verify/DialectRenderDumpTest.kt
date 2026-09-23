@@ -13,7 +13,7 @@ import java.io.File
 /**
  * P-立项-05 真机验证渲染导出（Tier 2 · DBX/MCP 执行路径）。
  *
- * 仅当提供 `-Dmpvs.dump.dir` 时运行（日常 `./gradlew test` 零影响）：把 9 方言的 TC-01~08
+ * 仅当提供 `-Dmpvs.dump.dir` 时运行（日常 `./gradlew test` 零影响）：把注册表全量方言的 TC-01~08
  * 渲染产物导出为 JSON——SQL 全部出自插件渲染链路（与 [DialectVerifySupport] 完全相同的
  * SqlGenerator / BatchModel 调用），由外部执行器（DBX MCP / 人工）在真实引擎上执行。
  *

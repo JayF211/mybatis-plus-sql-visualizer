@@ -63,4 +63,76 @@
 
 ## 七、实施记录
 
-（待实施后回填）
+- 实施日期：2026-09-23；分支 `t-dialect-xc`（基线 dev `3afc3bb`）；沙盒 `MPSV-DialectXc`（登记名 T-DialectXc，已注销）；`build.gradle.kts` 沙盒临时改动已还原（git diff 零残留）。
+
+### 7.1 交付物（提交清单）
+
+| 提交 | 内容 |
+|---|---|
+| 见 git log `feat(sql)` | `Dialect.kt` 双 object（`OceanBaseDialect`/`OpenGaussDialect`）+ 注册表扩容 9→11 + `ExplainSupport.kt` 两行登记 + URL 前缀三处登记（`DialectInference.kt` IDE 侧推断 / `JdbcUrlDialects.kt` agent 角标 / `McpDialectDetector.kt` MCP 链 URL_PATTERNS+ALIASES）+ `SqlVisualizerExplainTool` 校验报错文案补全 + 契约测试同步（`DialectTest`/`DialectExplainTest`/`CrudSqlGeneratorTest`/`DialectInferenceTest`/`JdbcUrlDialectsTest`/`McpRenderInputTest` 冻结面解冻）+ 新增 `DialectXcFamilyTest`（双方言语料 + 反向验证夹具）。代码与测试同一提交：言语料用例与 URL 推断链夹具互相咬合，拆开会产生中间红提交 |
+| 见 git log `docs(plan)` | 计划 §七 本节回填 + 陈旧计数文案订正（marketplace 页 9→11 种、`SqlTypeClassifierTest`/`DialectRenderDumpTest` 注释） |
+
+方言显示名定为 `OceanBase` / `openGauss`（品牌 ASCII 名，与既有 `MySQL`/`PostgreSQL` 命名风格一致；DM/KingBase 的中文后缀是既有先例的特例，非模板）。
+
+### 7.2 §二 六条待验证前提证伪结论
+
+1. **OceanBase MySQL 模式兼容面**：部分证实（文档级）。官方《与 MySQL 兼容性对比》声明 5.7/8.0 绝大部分语法兼容；EXPLAIN 文法官方在册（见 7.4）；反引号/LIMIT/`ON DUPLICATE KEY UPDATE`（官方《唯一键冲突》）形态成立。**dbx 在册确无 oceanbase 连接**——环境受限未验证，真机留账（折叠方向 NONE 与保留字集合均属推定，打脸按 H2 先例订正）。
+2. **openGauss 内核基线**：证实且**超预期**——dbx 在册连接里实际存在 **openGauss 5.0.0 真库**（`GaussDB / openGauss 5.0.0`，114.66.55.245:20105/dbx_test），与计划「预期没有」相反（计划依据的连接清单过时）。EXPLAIN 与 PG 同形获**真机实证**（见 7.4）。GaussDB 前缀差异查证：华为官方《Creating a Database Connection》实锤 `jdbc:gaussdb://`，与 `jdbc:opengauss://`（openGauss 官方）并存 → D2=A 落地为**一 object 三前缀键**（opengauss + gaussdb 两个子协议都归 openGauss；oceanbase 为 OB 自己的）。
+3. **折叠方向**：openGauss=LOWER 由推定升级为**真机实锤**（`INFORMATION_SCHEMA.TABLES` 裸大写 455 行命中；`information_schema."TABLES"` 报 `relation "information_schema.TABLES" does not exist on gaussdb`）；附带实锤反引号不可用（`` SELECT 1 AS `x` `` → syntax error）。OceanBase=NONE 维持推定（无真机）。
+4. **URL 推断注册点**：证实为**三处**而非两处——IDE 侧 `UrlSubprotocolDialects`（`DialectInference.kt`）、agent 角标 `JdbcUrlDialects.kt`、MCP 链 `McpDialectDetector.kt`（URL_PATTERNS + ALIASES 两张表）。**计划前提部分证伪**：`JdbcUrlDialects.kt` 在册已有 `"opengauss" to "openGauss"`（计划「全文 grep 零命中」对该文件不成立——openGauss 此前只有角标无渲染方言），本轮只需补 `oceanbase`/`gaussdb` 两个键。
+5. **ExplainSupport 表登记格式**：OB 登 TABLE 档（官方 V4.x《SQL 执行计划简介》：`EXPLAIN [explain_type] dml_statement`、`FORMAT = {TRADITIONAL | JSON}`、缺省 TRADITIONAL 表格行）；openGauss 登 JSON 档（真机 `EXPLAIN (FORMAT JSON) SELECT 1` 返回单列 `QUERY PLAN` JSON 文本）。均未臆测格式名。
+6. **Dialect 契约测试冻结面**：核对出 5 处冻结断言并同步解冻——`DialectTest.注册表_按名称与回退`（全量名单）、`DialectTest.标识符折叠方向族`（LOWER 族点名）、`CrudSqlGeneratorTest.nonFoldingDialects...`（NONE 族点名 + OceanBase 入列）、`CrudSqlGeneratorTest.onlyEvidenceBackedDialectsDeclareInsertWrapper`（包装白名单不改——双新方言保持默认无包装，断言原样绿）、`DialectExplainTest.守卫-支持表覆盖注册表全量方言`（自动覆盖，补两条字面量用例）。
+
+### 7.3 dbx 真库探询（只读通道，2026-09-23）
+
+**openGauss 5.0.0 探针读数**（会话已关闭，零写入——全部为 SELECT/EXPLAIN 规划期探针）：
+
+| 探针 | 读数 | 结论 |
+|---|---|---|
+| `SELECT version()` | `(openGauss 5.0.0 build ...)` | 引擎确认 |
+| `SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES` | 455 行 | 裸大写折小写命中 → LOWER |
+| `SELECT COUNT(*) FROM information_schema."TABLES"` | `relation "information_schema.TABLES" does not exist on gaussdb` | 引号保留大小写 → LOWER（与 PG/KingBase 同向） |
+| `SELECT 1 AS \`x\`` | `syntax error at or near "`"` | 反引号不可用 → 双引号族 |
+| `EXPLAIN (FORMAT JSON) SELECT 1` | 单列 `QUERY PLAN` JSON 文本 | JSON 档实锤 |
+| `EXPLAIN SELECT 1` | 文本计划树 | 默认 TEXT |
+| `SELECT 1 LIMIT 1 OFFSET 0` | 1 行 | PG 形态可用 |
+| `SELECT 1 LIMIT 1, 2` | **0 行**（无报错） | `LIMIT a,b` 被**按 PG 语义**（OFFSET a LIMIT b）静默错解 → MySQL 形态 LIMIT 不可用，必须渲染 PG 形态 |
+| `EXPLAIN INSERT INTO __no_such_table__ ... ON DUPLICATE KEY UPDATE name = VALUES(name)` | `relation ... does not exist`（规划期错） | **MySQL 形态 upsert 语法解析通过** |
+| `EXPLAIN INSERT INTO __no_such_table__ ... ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name` | `syntax error at or near "CONFLICT ("` | **PG 形态 upsert 语法不支持** |
+
+**关键证伪**：openGauss 虽为 PG 系，原生 upsert 却是 **MySQL 形态**（官方《INSERT》on_duplicate_key 文法同向，`VALUES(column_name)` 引用在册）——照抄 KingBase=PG 形态先例会产出语法错误 SQL。「族=形态」推定在 upsert 维度被打脸，`OpenGaussDialect.renderUpsert` 按真机证据落 `renderMySqlStyleUpsert`（引用符号仍随本方言双引号），并用 `opengauss_upsert_MySQL形态_非PG_ON_CONFLICT` 用例钉死。
+
+**OceanBase**：dbx 在册无 oceanbase 类型连接 → 环境受限未验证，全部形态按文档级登记（7.4），未冒充「验证通过」。
+
+### 7.4 查证结论与证据层级（三态口径）
+
+| 项 | 结论 | 层级 | 出处 |
+|---|---|---|---|
+| `jdbc:oceanbase://host:port/db` | OceanBase Connector/J URL 形态（另有 hamode/loadbalance 变体，子协议同为 oceanbase） | 文档级 | OceanBase 官方《Database URL》（Connector/J V2.4.16，en.oceanbase.com/docs） |
+| OB MySQL 模式 EXPLAIN=表格行 | `FORMAT={TRADITIONAL\|JSON}` 缺省 TRADITIONAL | 文档级 | OceanBase 官方《SQL 执行计划简介》（V4.2.1，oceanbase.com/docs） |
+| OB MySQL 模式反引号/LIMIT/`ON DUPLICATE KEY UPDATE` | MySQL 5.7/8.0 兼容面在册 | 文档级 | OceanBase 官方《与 MySQL 兼容性对比》《唯一键冲突》 |
+| `jdbc:opengauss://host:port/database` | openGauss JDBC URL 形态 | 文档级 | openGauss 官方《Connecting to a Database》（docs.opengauss.org） |
+| `jdbc:gaussdb://host:port/database` | 华为 GaussDB 驱动 URL 前缀，与 openGauss 同内核 → 同 object | 文档级 | 华为 GaussDB 官方《Creating a Database Connection》（doc.hcs.huawei.com） |
+| openGauss `EXPLAIN (FORMAT JSON)` | 单列 JSON 文本；官方文法 `FORMAT { TEXT \| XML \| JSON \| YAML }` | **引擎级（真机）** | openGauss 5.0.0 实测 + 官方《EXPLAIN》（6.0.0） |
+| openGauss 折叠 LOWER/双引号/LIMIT OFFSET | 见 7.3 读数 | **引擎级（真机）** | openGauss 5.0.0 实测 |
+| OceanBase 全形态 | 推定 + 官方文档 | **环境受限未验证**（真机留账） | — |
+
+### 7.5 验证读数
+
+- **反向验证（摘掉注册 → 必红）**：注释 `DialectRegistry.dialects` 末两项后 `./gradlew test --tests DialectXcFamilyTest --tests DialectTest` → **30 tests completed, 4 failed**：`注册表身份_摘掉注册即红`、`url推断_三前缀命中且全链落到本方言对象`（DialectXcFamilyTest.kt:161/:173）、`注册表_按名称与回退`、`标识符折叠方向族`（DialectTest.kt:79/:143）——URL 推断与格式化回落路径如预期变红。
+- **还原注册 → 绿**：定向 9 类 `--tests` 全量 `./gradlew test` → **BUILD SUCCESSFUL，110 tests, 0 failed, 0 skipped**（DialectXcFamilyTest 11 / DialectTest 19 / DialectExplainTest 23 / CrudSqlGeneratorTest 27 / DialectInferenceTest 9 / JdbcUrlDialectsTest 4 / McpDialectDetectorTest 6 / McpRenderInputTest 6 / SqlKeywordsTest 5）。
+- **testFast 快桶全量**：`./gradlew testFast` → **BUILD SUCCESSFUL，3189 tests, 0 failed, 6 skipped**（skip 为既有跳过项）——纯逻辑面回归零新增失败。
+- 未跑全量 testShards/test 全量、未跑构建校验、未 clean、未降片（三档分层口径）。
+
+### 7.6 i18n / 设置页核实结论
+
+设置页方言下拉（全局 `PluginSettingsPanel.kt:195` 与项目级 `ProjectPluginSettingsConfigurable.kt:165`）均直接取 `DialectRegistry.dialects.map { it.name }`，**无按方言的 i18n key**（双 bundle 只有 `settings.dialect.*` 通用键）——新方言 ASCII 显示名无需也无法加 bundle 条目，双 bundle 零改动即天然同步。此项按实况登记为「核实无需改动」。
+
+### 7.7 未做项与观察登记
+
+- **D1=A 已执行**：OceanBase Oracle 模式不做；**D3=A 已执行**：TiDB 登记观察（`url推断_未知前缀仍不猜` 用例把 `jdbc:tidb://` 钉在不猜面）。
+- **驱动跳帧前缀未动**：`CallerSourceLocator.kt`/`SourceInterceptorTemplates.kt`/agent StackLocator 的 JDBC 驱动族前缀表（`dm.jdbc.`/`com.kingbase8.` 等）未加 `com.oceanbase.`/`org.opengauss.`——属 T-LocatorSkip 家族写集，本任务写集不含；OceanBase/openGauss 用户如遇日志跳帧误指可按该家族流程增量（观察项）。
+- **`@KeySequence` 方言集未动**：`BatchOperationConverter.KEY_SEQUENCE_DIALECT_NAMES` 只含 Oracle/DM/KingBase（Oracle 式序列方言）；PostgreSQL 本就不在列，openGauss 同为 PG 系不加（与既有口径一致，非遗漏）。
+- **MCP 工具描述未动**：`SqlVisualizerExplainTool` 的 `@McpDescription`（工具声明面）保持原样——它本就是非穷举枚举（连 SQLite 都未列）；仅更新了**运行时校验报错文案**（`supported:` 清单，非声明面）。`plugin.xml`/`build.gradle.kts`/MCP 工具声明零改动（verifyGate 四判据全不触发）。
+- **保留字集合为基线复用**：OceanBase 用 `MYSQL_RESERVED`、openGauss 用 `PG_RESERVED`（各自 KDoc 标注基线口径）；双方言专属保留字黄金清单未逐词核对（OB/openGauss 官方保留字附录体量大，且本任务无真机逐词验证面）——真机到位后按 DM/KingBase 黄金清单先例增量。
+- **对外口径**：OceanBase/openGauss 为「已适配」（openGauss 核心形态引擎级已验，OceanBase 文档级）；「信创四备」叙事在 OceanBase 真机验证前不说「已验证」。
