@@ -60,6 +60,17 @@ class McpDialectDetectorTest {
         assertFalse(McpDialectDetector.isRecognized("madeupdb"))
     }
 
+    @Test
+    fun `isRecognized_空白视为未指定放行`() {
+        // T-McpRenderDialectFix：平台 JSON 绑定把省略的可选参数落成 Kotlin 默认值 ""——空白
+        // 必须视为「未指定」放行（真机实测省略 dialect 曾因 "" 被判不可识别必报
+        // INVALID_ARGUMENT）；resolve 链对空白走 URL 推断 + 默认 MySQL 兜底。
+        assertTrue(McpDialectDetector.isRecognized(""))
+        assertTrue(McpDialectDetector.isRecognized("   "))
+        assertEquals("MySQL", McpDialectDetector.resolve("", "jdbc:mysql://h/db"))
+        assertEquals("MySQL", McpDialectDetector.resolve("", null))
+    }
+
     // ------------------------------------------------------------------
     // 解析优先级：显式可识别 > URL > 默认 MySQL（不可识别名由 isRecognized 前置校验报错）
     // ------------------------------------------------------------------

@@ -86,11 +86,19 @@ object McpSourceLocator {
         return outcome
     }
 
-    /** mapper XML 片段直渲（XmlPreviewService 为 text 形态入口，零 PSI 锚点需求）。 */
-    fun renderXmlSnippet(project: Project, snippet: String): Outcome {
-        val result = XmlPreviewService.preview(snippet, statementId = null, project = project)
-        return toOutcome(result, sourceType = "mapper XML (snippet)")
-    }
+    /**
+     * mapper XML 片段直渲（XmlPreviewService 为 text 形态入口，零 PSI 锚点需求）。
+     *
+     * T-McpRenderDialectFix：「零 PSI 锚点」不等于零 PSI 读——text 链传 project 后会走跨 ns
+     * include（T-IC-02）/静态常量求值（T-M25.2）/mapper 参数类型（M29.5）三处 PSI 读，
+     * 平台协程线程（MCP 通道）无读锁即硬抛 read access（2026-09-23 真机实测 + 夹具回归
+     * McpRenderSnippetReadActionTest 双证）。与 [renderAtLine] 同口径整链包 ReadAction。
+     */
+    fun renderXmlSnippet(project: Project, snippet: String): Outcome =
+        ReadAction.compute<Outcome, Throwable> {
+            val result = XmlPreviewService.preview(snippet, statementId = null, project = project)
+            toOutcome(result, sourceType = "mapper XML (snippet)")
+        }
 
     /** 统一入口：在 [psiFile] 的 [offset] 处按 13 类触发面定位渲染。 */
     private fun renderAtOffset(

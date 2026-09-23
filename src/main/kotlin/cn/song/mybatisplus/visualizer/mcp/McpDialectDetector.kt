@@ -62,6 +62,14 @@ object McpDialectDetector {
     fun resolve(requested: String?, url: String?): String =
         normalize(requested) ?: guessFromUrl(url) ?: "MySQL"
 
-    /** agent 指定的方言名是否可识别（不可识别时调用方报 INVALID_ARGUMENT 并列可选项）。 */
-    fun isRecognized(requested: String?): Boolean = requested?.trim()?.let { normalize(it) != null } ?: true
+    /**
+     * agent 指定的方言名是否可识别（不可识别时调用方报 INVALID_ARGUMENT 并列可选项）。
+     *
+     * T-McpRenderDialectFix：null/空白一律视为「未指定」放行——平台 JSON 绑定把省略的可选
+     * 参数落成 Kotlin 默认值 `""`，此前 `""` 被判不可识别 → 省略 dialect 必报
+     * INVALID_ARGUMENT，与「omit to auto-detect」约定矛盾（2026-09-23 真机实测复现）；
+     * [resolve] 对空白本就有 URL 推断 + 默认 MySQL 兜底，行为不受影响。
+     */
+    fun isRecognized(requested: String?): Boolean =
+        requested?.trim()?.takeIf { it.isNotEmpty() }?.let { normalize(it) != null } ?: true
 }
