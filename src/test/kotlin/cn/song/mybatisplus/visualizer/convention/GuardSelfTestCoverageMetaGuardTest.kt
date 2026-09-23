@@ -840,6 +840,11 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "断言直接内联在 @Test；repoRoot/stripComments/stripStrings/stripXmlComments 为夹具",
             ),
             GuardEntry(
+                "mcp/McpGateFilterRegistrationGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（O-68 注册结构三条：单 depends、过滤 EP 禁直宣、探测与桥在册；T-MarketCompatProxy 代理形态后判据不变）",
+            ),
+            GuardEntry(
                 "mcp/McpSelectGuardTest.kt",
                 emptyList(),
                 "断言经 assertDenied(:17)/assertAllowed(:24) 助手内联在 @Test",

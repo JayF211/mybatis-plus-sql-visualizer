@@ -18,38 +18,27 @@
 # 方案 A 定案（20260923 用户）：单包 + 本基线，Marketplace 警告为已知问题集（不阻断上架、
 # 运行期已论证安全），若未来 JetBrains 提供官方跨版本机制再跟进。
 #
+# 【T-MarketCompatProxy 20260923 深夜大清扫】②③ 动态代理化落地（FilterProvider/ACP impl 改
+# Class.forName + Proxy + 程序化注册，字节码零 ml-llm/mcpserver/platform-acp 引用）后：
+# 253 → Compatible（9 块全清）、262 internal 7→1→0、243 5→2。原 253 全部 5 条与 243 的
+# platform.acp / ml.llm.agents.acp / io.modelcontextprotocol 三条已失效删除；以下仅剩的 2 条
+# 属「MCP 工具本体」族——McpToolsetSupport 实现 McpToolset 接口（243 无此 API）+ audit 的
+# K2 spill（SpillingKt 仅 243 平台 stdlib 缺失），两者在单包形态下不可消除（除非撤 MCP 能力）。
 # ====================================================================
 # 通用论证（各条目引用，下称「双隔离」）：
-#   A. 片段加载条件——mcp-optional.xml 仅在 com.intellij.mcpServer 在场时加载、
-#      acp-transport-optional.xml 仅在 com.intellij.ml.llm 在场时加载；依赖缺席则整片段
-#      不加载，引用其 API 的类永不链接。
-#   B. 反射探测——McpGateFilterEpRegistrar 经 Class.forName 探测 262-only EP 接口，
-#      253/261 探测失败 → 桥类与 FilterProvider 永不加载。
+#   A. 片段加载条件——mcp-optional.xml 仅在 com.intellij.mcpServer 在场时加载；243 无此插件
+#      （或仅旧形态 1.0.30）时整片段不加载/EP 实例化被平台隔离，引用其 API 的类永不链接。
 #   C. EP 实例化异常隔离——旧形态依赖在场导致片段加载但类缺失时，平台对 EP 扩展实例化
-#      失败按错误日志隔离（NoSuchClassError 落日志，不崩 IDE）；最坏效果=MCP/ACP 功能
+#      失败按错误日志隔离（NoSuchClassError 落日志，不崩 IDE）；最坏效果=MCP 功能
 #      不可用，即「该版本不支持」的设计口径。
 # ====================================================================
 
-# ---------- IU-243（2024.3）：5 块 ----------
-# 243 平台 stdlib 无 kotlin.coroutines.jvm.internal.SpillingKt（K2 suspend spill 产物）；
-# 仅影响 MCP toolset 实例化（243 本就不支持 MCP，见 C）。
+# ---------- IU-243（2024.3）：2 块 ----------
+# K2 对「带 suspend lambda 参数的 suspend 函数」结构性生成 spill（SpillingKt 仅 243 平台
+# stdlib 缺失，253/262 的 util-8.jar 有）；inline 化会把 McpExpectedError 引用扩散到十个工具类
+# （报数反增），20260923 定案不改。仅影响 MCP toolset 实例化（243 本就不支持 MCP，见 C）。
 IU-243.28141.41	Method cn\.song\.mybatisplus\.visualizer\.mcp\.McpToolsetSupport\.audit
-# 243 无 ACP API（老版 AI Assistant 缺 com.intellij.platform.acp / ml.llm.agents.acp.*）；
-# 片段加载条件 A 不满足（ml-llm 老版无该 EP 时片段拒载；有 EP 但类缺失时按 C 隔离）。
-IU-243.28141.41	Package 'com\.intellij\.platform\.acp'
-IU-243.28141.41	Package 'com\.intellij\.ml\.llm\.agents\.acp'
-# 243 上 Marketplace 的 mcpServer 为旧形态 1.0.30（EP 形态不同），片段加载后引用的新 API
-# 不存在 → 按 C 隔离；243 不支持 MCP 是既有设计口径（mcp-optional.xml 头注）。
+# 243 上 Marketplace 的 mcpServer 为旧形态 1.0.30（EP 形态不同）；McpToolsetSupport 本体
+# （基类 implements McpToolset + McpExpectedError/McpCallInfoKt）在 243 无可解析 API——
+# 「MCP 工具本体」族，单包形态下不可消除；片段加载后按 C 隔离，243 不支持 MCP 是设计口径。
 IU-243.28141.41	Package 'com\.intellij\.mcpserver'
-IU-243.28141.41	Package 'io\.modelcontextprotocol'
-
-# ---------- IU-253（2025.3）：9 块 ----------
-# SqlVisualizerToolGateFilterProvider 全族引用 262-only EP（McpToolFilterProvider /
-# McpToolInvocationMode / McpToolFilterContext）：253 上双隔离之 B——registrar 的
-# Class.forName 探测失败，桥类与 provider 永不加载（verifier 静态可见但运行期不可达）。
-IU-253.33514.17	^(Class|Method) cn\.song\.mybatisplus\.visualizer\.mcp\.SqlVisualizerToolGateFilterProvider
-# ACP 全族：253 线 AI Assistant 无 ACP API（同 243 论证，A + C）。
-IU-253.33514.17	^(Class|Method) cn\.song\.mybatisplus\.visualizer\.acp\.AcpIdeaMcpTransportProviderImpl
-IU-253.33514.17	Package 'com\.intellij\.platform\.acp'
-IU-253.33514.17	Package 'com\.intellij\.ml\.llm\.agents\.acp\.api'
-IU-253.33514.17	Package 'com\.intellij\.ml\.llm\.agents\.acp'

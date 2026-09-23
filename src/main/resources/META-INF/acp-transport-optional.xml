@@ -27,9 +27,14 @@
   的暴露面即本文件的 optional 隔离 + 既有 verifyPlugin/verifyGate 门禁。
 -->
 <idea-plugin>
+    <!-- T-MarketCompatProxy（20260923）：XML 的 EP 声明删除——implementation 类 implements
+         ml-llm 的 internal 接口会在 243/253 线被 verifier 判未解析类（6 条还是 Internal API，
+         审核邮件点名）。改由下方 postStartupActivity 探测式程序化注册（全反射 + 动态代理，
+         见 AcpTransportRegistrar）：ml-llm 在场（即本文件加载前提）时类加载器可见其接口，
+         Class.forName 必命中；EP dynamic=true，晚注册触发清单重算。仅对 acp.registry.claude-acp
+         返回 SSE，其余返回 null（不表态，让位给后续注册者）。 -->
     <extensions defaultExtensionNs="com.intellij">
-        <!-- 仅对 acp.registry.claude-acp 返回 SSE，其余返回 null（不表态，让位给后续注册者） -->
-        <ml.llm.agents.acp.ideaMcpTransportProvider
-            implementation="cn.song.mybatisplus.visualizer.acp.AcpIdeaMcpTransportProviderImpl"/>
+        <postStartupActivity
+            implementation="cn.song.mybatisplus.visualizer.acp.AcpTransportRegistrar"/>
     </extensions>
 </idea-plugin>

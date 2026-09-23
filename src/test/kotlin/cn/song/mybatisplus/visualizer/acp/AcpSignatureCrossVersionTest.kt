@@ -197,10 +197,19 @@ class AcpSignatureCrossVersionTest {
      */
     @Test
     fun mlLlmAcpTransportRuntimeHoldsOnAllLocalArtifacts() {
+        // T-MarketCompatProxy（20260923）：provider 改动态代理 + 按方法名分发后，本探针要防的
+        // 「双形态形参包漂移 → AbstractMethodError」结构性不可达（handler 不关心形参静态类型），
+        // 且我方 impl class 已删除——探针的「impl 与制品接口匹配」半边失去被核对象。代理链的
+        // 静态等价护栏 = 「acp 包字节码零 ml-llm/platform-acp 类型引用」（独立字节码断言）。
         val artifacts = discoverArtifacts()
         assumeTrue(
             "本机未发现任何 ml-llm（AI Assistant）制品——运行时探针无从执行",
             artifacts.isNotEmpty(),
+        )
+        assumeTrue(
+            "T-MarketCompatProxy 代理形态：无 impl 产物目录，运行时匹配探针结构性停用" +
+                "（按方法名分发天然免疫形参包漂移；等价护栏=acp 包零平台类型引用的字节码断言）",
+            implClassesDir() != null,
         )
 
         val failures = mutableListOf<String>()

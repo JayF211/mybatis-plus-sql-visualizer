@@ -254,7 +254,10 @@ class PluginXmlStructureGuardTest {
     @Test
     fun `acp可选依赖声明与传输provider注册成对存在`() {
         // 可选依赖铁律：声明与注册必须成对——只声明不注册=provider 不上线（绕行失效且无任何提示），
-        // 只注册不声明=未装 AI Assistant 的环境解析该文件即失败（缺类/未知 EP）
+        // 只注册不声明=未装 AI Assistant 的环境解析该文件即失败（缺类/未知 EP）。
+        // T-MarketCompatProxy（20260923）：provider 从 XML EP 声明改为 postStartupActivity
+        // 探测式程序化注册（动态代理形态，字节码零 ml-llm 类型引用）——成对判据同步为
+        // 「optional depends 声明 + registrar 类挂载」。
         val pluginXml = strippedXmls().first { it.first == "plugin.xml" }.second
         val acpXml = strippedXmls().first { it.first == "acp-transport-optional.xml" }.second
         assertHolds(
@@ -264,12 +267,8 @@ class PluginXmlStructureGuardTest {
             ),
         )
         assertHolds(
-            "acp-transport-optional.xml 缺 ideaMcpTransportProvider 注册（传输不生效）",
-            acpXml.contains("ml.llm.agents.acp.ideaMcpTransportProvider"),
-        )
-        assertHolds(
-            "acp-transport-optional.xml 缺 provider 实现类引用",
-            acpXml.contains("cn.song.mybatisplus.visualizer.acp.AcpIdeaMcpTransportProviderImpl"),
+            "acp-transport-optional.xml 缺传输注册入口（postStartupActivity 探测式注册）",
+            acpXml.contains("cn.song.mybatisplus.visualizer.acp.AcpTransportRegistrar"),
         )
     }
 
