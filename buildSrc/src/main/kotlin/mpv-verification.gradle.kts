@@ -182,6 +182,105 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
     }
 }
 
+// T-MarketCompatFix（2026-09-23）：Marketplace 同口径兼容校验——**在线 + 无豁免 + 按问题数判失败**。
+// 为什么必须单开一道（20260923 上传 Marketplace 实测，两道屏叠加导致门禁长期失明）：
+//   ① `verifyGate` 带 `-offline`——verifier 不解析可选依赖，凡引用可选插件 API 的类直接跳过
+//      （同一 zip：离线跑 243 报 0 问题，在线跑报 5 问题）；
+//   ② `-ignored-problems` 清单里有按包前缀成族的规则（`com.intellij.mcpserver.` /
+//      `io.modelcontextprotocol.`），把 Marketplace 判 Critical 的整族未解析类豁免掉；
+//   ③ 判定只看退出码，而实测 verifier-cli **带 4 个 compatibility problems 仍退出 0**（无豁免清单时实测），
+//      即「门禁绿」与「verdict 文本里写着 N compatibility problems」可以并存。
+// 本任务对齐 Marketplace 行为：在线解析可选依赖（会下载数百 MB 平台插件元数据）、不套用任何豁免、
+// 并在 doLast 里**逐份 verdict 判文本**——任何目标不是以 `Compatible` 开头即失败（GradleException）。
+// 覆盖面 = 下方 targets（本机 gradle 缓存内已下载的发行版集合，与 verifyGate 同源三目标）；要覆盖
+// Marketplace 的 251/252/261/263 需先在 intellijPlatform.pluginVerification.ides 里声明对应版本。
+val verifyMarketplace = tasks.register<JavaExec>("verifyMarketplace") {
+    group = "verification"
+    description = "Marketplace 同口径兼容校验（在线 + 无豁免 + 有问题即失败）；发布/上传前必跑"
+    dependsOn("buildPlugin")
+    mainClass.set("com.jetbrains.pluginverifier.PluginVerifierMain")
+    val verifyHome = layout.buildDirectory.dir("verify-home-marketplace").get().asFile
+    jvmArgs(
+        "-Dplugin.verifier.home.dir=${verifyHome.absolutePath}",
+        // 在线模式必须联网：verifier 是独立子进程，systemProp 代理不自动透传，显式注入（Clash 7890）
+        "-Dhttp.proxyHost=127.0.0.1",
+        "-Dhttp.proxyPort=7890",
+        "-Dhttps.proxyHost=127.0.0.1",
+        "-Dhttps.proxyPort=7890",
+    )
+    val pluginVersion = providers.gradleProperty("version").get()
+    val reportsDir = layout.buildDirectory.dir("reports/pluginVerifierMarketplace").get().asFile
+    val zipFile = layout.buildDirectory.file("distributions/mybatis-plus-sql-visualizer-$pluginVersion.zip").get().asFile
+    val gradleUserHome = gradle.gradleUserHomeDir
+    classpath(
+        gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
+            .walkTopDown().maxDepth(4)
+            .filter { it.isFile && it.name.matches(Regex("verifier-cli-.+-all\\.jar")) }
+            .firstOrNull() ?: error("verifier-cli jar 未在 gradle 缓存找到（先跑一次 verifyPlugin 重建缓存）"),
+    )
+    argumentProviders.add(CommandLineArgumentProvider {
+        val guh = gradleUserHome
+        fun ideDir(name: String): File =
+            guh.resolve("caches").listFiles()?.asSequence()
+                ?.filter { it.resolve("transforms").isDirectory }
+                ?.flatMap { ver -> ver.resolve("transforms").listFiles()?.asSequence() ?: emptySequence() }
+                ?.map { hash -> hash.resolve("transformed").resolve(name) }
+                ?.firstOrNull { it.isDirectory }
+                ?: error("IDE 发行目录 $name 未在 gradle 缓存 transforms 找到（先跑一次 verifyPlugin/构建一次对应平台）")
+
+        val ide243 = ideDir("ideaIU-2024.3.7.1-win")
+        val jbr = ide243.resolve("jbr").takeIf { it.isDirectory }
+            ?: error("243 发行版缺 jbr（-runtime-dir 必需）")
+        buildList {
+            add("check-plugin")
+            // 刻意不加 -offline、不加 -ignored-problems：这两项正是失明的成因
+            add("-verification-reports-dir")
+            add(reportsDir.absolutePath)
+            add("-runtime-dir")
+            add(jbr.absolutePath)
+            add("-verification-reports-formats")
+            add("plain,html")
+            add(zipFile.absolutePath)
+            add(ide243.absolutePath)
+            add(ideDir("idea-2025.3.5-win").absolutePath)
+            add(ideDir("idea-2026.2.3-win").absolutePath)
+        }
+    })
+    doFirst {
+        if (!zipFile.isFile) {
+            throw GradleException("verifyMarketplace 需要已存在的发行包：$zipFile 不存在。先跑 ./gradlew buildPlugin。")
+        }
+        logger.lifecycle("verifyMarketplace START ${System.currentTimeMillis()} plugin=$zipFile（在线、无豁免）")
+    }
+    doLast {
+        logger.lifecycle("verifyMarketplace END ${System.currentTimeMillis()}")
+        val verdicts = reportsDir.walkTopDown()
+            .filter { it.name == "verification-verdict.txt" }
+            .sortedBy { it.path }
+            .toList()
+        if (verdicts.isEmpty()) {
+            throw GradleException("verifyMarketplace: 未找到 verification-verdict.txt，请检查 $reportsDir")
+        }
+        // 判文本而非判退出码：verifier-cli 带 compatibility problems 仍可能退出 0（20260923 实测）
+        val failures = verdicts.filter { !it.readText().trimStart().startsWith("Compatible") }
+        verdicts.forEach { logger.lifecycle("verifyMarketplace verdict [${it.parentFile.parentFile.name}] ${it.readText().trim()}") }
+        if (failures.isNotEmpty()) {
+            val detail = failures.joinToString("\n") { v ->
+                val target = v.parentFile.parentFile.name
+                val problems = v.parentFile.resolve("compatibility-problems.txt")
+                "  - $target: ${v.readText().trim().take(90)}\n    明细: ${if (problems.isFile) problems.absolutePath else "(无 compatibility-problems.txt)"}"
+            }
+            throw GradleException(
+                "verifyMarketplace 失败：${failures.size}/${verdicts.size} 个目标存在兼容问题（Marketplace 同口径）。\n" +
+                    detail +
+                    "\n常见成因＝插件类引用了目标 IDE 上不存在的可选依赖 API（可选依赖形态跨版本不一致）。" +
+                    "豁免清单不作用于本任务——修复或按版本分支打包，勿改豁免绕行。",
+            )
+        }
+        logger.lifecycle("verifyMarketplace 全目标 Compatible（${verdicts.size} 个目标）")
+    }
+}
+
 // T-VerifyPlugin：封装 verifyPlugin 三态验证为独立 task（方便 ./gradlew verifySmoke / verifyFull 调用）
 // T-ReleasePerf-01（2026-09-15）：verifySmoke / verifyFull 改挂 verifyGate（权威门禁，口头 243 单目标、
 // 全量三目标），verifyPlugin 退居报告生成器——详见上方 failureLevel 处的判定缺陷字节码实证。
@@ -207,11 +306,15 @@ tasks {
     //   （日常门禁不因此变慢）；前置缺失时硬失败并给指引，不做静默跳过。
     //   串行顺序：放在最后——它启动真实应用并占用端口，跑在前面会与测试/门禁抢资源。
     // 用法：./gradlew releaseGate [-PverifyIdes=...] [-PverifyOnly=true] [-Pe2eDemoDir=...]
+    // T-MarketCompatFix（2026-09-23）：追加 verifyMarketplace——离线 verifyGate 与 Marketplace 判定
+    //   之间曾有系统性缺口（详见该任务头注：离线不解析可选依赖 + 成族豁免 + 只看退出码），
+    //   20260923 上传 Marketplace 时 7 个目标里 6 个被判 Critical 而本仓门禁全绿即由此而来。
+    //   该任务在线、无豁免、按 verdict 文本判失败，故本仓发布链自此会如实暴露 Marketplace 侧读数。
     register("releaseGate") {
         group = "verification"
         description =
-            "发版链路一命令：buildPlugin → verifyGate（三目标兼容门禁）→ testShards（全量测试）" +
-                " → e2eFakeIde（真机级端到端探针，需本机 MySQL + demo 工程）"
-        dependsOn("buildPlugin", "verifyGate", "testShards", "e2eFakeIde")
+            "发版链路一命令：buildPlugin → verifyGate（三目标兼容门禁）→ verifyMarketplace（Marketplace 同口径）" +
+                " → testShards（全量测试）→ e2eFakeIde（真机级端到端探针，需本机 MySQL + demo 工程）"
+        dependsOn("buildPlugin", "verifyGate", "verifyMarketplace", "testShards", "e2eFakeIde")
     }
 }
