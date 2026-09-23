@@ -24,7 +24,7 @@ import org.junit.Assert.assertTrue
  *     嵌入段 `updateInfo.` 去掉，产物 `pickTicket.created_time`；去掉嵌入段是必须的——保留它会产出
  *     无效 SQL（SQL 语义下 `别名.嵌入对象` 被当成「库.表」）。整串黄金比对同时钉住这一点
  *  3. 跨别名同名字段各按其实体列清单映射（T-02 判据，改前必红）
- *  4. 隐式作用域不回归：无别名限定的裸属性行为与改前一致
+ *  4. 隐式作用域（O-71 契约变更）：无别名限定的裸属性按根实体列清单精确映射为列名
  *  5. 自连接：同一实体两个别名各自绑定，不合并
  *  6. 无 Project / 实体不可解析：原样透传，不猜列名
  *  7. 双链路一致：HqlConverter 与 JpqlConverter 行为逐字相同
@@ -161,15 +161,40 @@ class HqlAliasColumnMappingTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
-    // 4：隐式作用域不回归
+    // 4：隐式作用域（裸属性）
     // ------------------------------------------------------------------
 
-    /** O-57：无别名限定的裸属性（`where beAutoZone = ...`）行为与改前一致（正则要求带点号）。 */
-    fun test隐式作用域_裸属性不回归() {
+    /**
+     * O-71：无别名限定的裸属性（`where beAutoZone = ...`）按根实体列清单精确映射。
+     * 契约变更：O-57 以「只收窄不丢失」为由保守排除裸属性（正则要求带点号），
+     * 实测证明该排除使无别名/漏写前缀的 HQL 永不映射、产物必为无效 SQL，故推翻
+     * （用户报障形态与机制归因见 docs/开发计划/20260923-1609-O71-T-HqlNoAliasProp）。
+     * 混合形态（有别名 z 但个别属性漏写前缀）同样覆盖。
+     */
+    fun test隐式作用域_裸属性映射为列名() {
         val hql = "select count(1) from WmsZone z where z.createdTime > :t and beAutoZone = true"
         val result = convert(hql, "WmsZone")
         assertTrue("别名限定属性应映射: ${result.sql}", result.sql.contains("z.create_time"))
-        assertTrue("裸属性应原样保留: ${result.sql}", result.sql.contains("beAutoZone = true"))
+        assertTrue("裸属性应映射为列名: ${result.sql}", result.sql.contains("be_auto_zone = true"))
+        assertFalse("不得残留裸属性名: ${result.sql}", result.sql.contains("beAutoZone"))
+    }
+
+    /** O-71：裸属性映射后 JPQL 链与 HQL 链产物逐字一致（同一份替换核心）。 */
+    fun testJpql链路_裸属性一致() {
+        val hql = "select count(1) from WmsZone z where z.createdTime > :t and beAutoZone = true"
+        val table = tableOf("WmsZone")
+        val hqlResult = HqlConverter.convert(hql, table, project)
+        val jpqlResult = JpqlConverter.convert(hql, table, project)
+        assertEquals("两条链产物应逐字一致", hqlResult.sql, jpqlResult.sql)
+        assertTrue("裸属性应映射为列名: ${jpqlResult.sql}", jpqlResult.sql.contains("be_auto_zone = true"))
+    }
+
+    /** O-71：UPDATE 的 SET 与 WHERE 裸属性同样映射；同名列（id）透传不变形。 */
+    fun testUpdate_SET裸属性映射() {
+        val result = convert("update WmsZone set beAutoZone = :b where id = :id", "WmsZone")
+        assertTrue("SET 裸属性应映射: ${result.sql}", result.sql.contains("set be_auto_zone = ?"))
+        assertTrue("同名列透传: ${result.sql}", result.sql.contains("where id = ?"))
+        assertFalse("不得残留裸属性名: ${result.sql}", result.sql.contains("beAutoZone"))
     }
 
     // ------------------------------------------------------------------
