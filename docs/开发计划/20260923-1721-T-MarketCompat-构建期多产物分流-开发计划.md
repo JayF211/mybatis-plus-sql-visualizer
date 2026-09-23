@@ -1,7 +1,7 @@
-# T-MarketCompat（O-72）：Marketplace 兼容读数清零——构建期多产物分流
+# T-MarketCompat（O-72）：Marketplace 兼容读数治理——问题块基线门禁（单包定案）
 
-> 20260923 立案，本会话（Marketplace 上传后兼容问题排查）实施。
-> 前置事实全部来自实测（见 §一、§二），不再写「待验证前提」之外的推断。
+> 20260923 立案，本会话实施。**方案经用户定案修正**：不出多版本包（用户反对），改为
+> 「单包 + verifyMarketplace 问题块基线」。前置事实全部来自实测（见 §一、§二）。
 
 ## 一、问题与已证事实
 
@@ -25,58 +25,37 @@
 
 **结论**：verifier 按「jar 内全部类 + 在线解析的可选依赖」判定，任何「同一份 jar 喂所有 IDE」的形态都必然在旧版 IDE 上报未解析类。唯一出路 = **构建期按平台分块打包**，让旧版 IDE 的 zip 里**根本不包含**引用新 API 的类。
 
-## 二、方案：构建期按平台分块打包（多产物分流）
+## 二、方案（用户定案修正）：单包 + 问题块基线
 
-核心思路：**一份源码，构建期生成两份（或多份）zip**，各自只含该平台可解析的类。MCP/ACP 相关类只进 262+ 的包；旧版包不含它们（也就没有未解析类），能力按旧版缺失。
+用户明确反对「出两个包」→ 放弃多产物分流。verifier 分析 jar 内全部类（两轮对照证伪），单包形态下旧版目标上的「可选依赖未解析」问题**机理上不可归零**。故目标从「读数归零」改为「**已知问题逐条登记 + 新增问题必红**」，由 verifyMarketplace 承担：
 
-### 分块边界（按已验证的事实）
+- `compatibility-problems.txt` 按块首行（顶格且以 `Class ` / `Method ` / `Package ` 起头）切问题块；
+- 每块必须命中 `dev-support/verifier-marketplace-baseline.txt` 里同目标的登记条目（格式「目标<TAB>块首行正则」）——**任何未登记的新问题块即构建失败**（防再次失明）；
+- 全部命中则通过（打印覆盖计数）；基线条目未命中打 WARN（提示可能已修复）。
 
-| 类 / 资源 | 归属 |
-|-----------|------|
-| `mcp/` 包全部（十 toolset、McpToolsetSupport、McpToolGate、McpGateFilter*、McpFilePathResolver 等） | 262+ 包 |
-| `acp/` 包（AcpIdeaMcpTransportProviderImpl） | 262+ 包 |
-| `config/McpConfigurable`（设置页） | 262+ 包（反射引用平台类，但设置入口归 262 更干净） |
-| `mcp-optional.xml` / `acp-transport-optional.xml` / mcp 相关 extends 声明 | 随 262+ 包 |
-| 其余全部（预览/日志/回滚/方言/CRUD/补全/执行等） | 两个包都含（核心功能全版本） |
+基线只收「运行期已被片段加载条件或反射探测隔离」的项（论证见基线文件头注：可选依赖缺席整片段不加载 / `Class.forName` 探测 / EP 实例化异常隔离，最坏效果=MCP/ACP 不可用而非崩溃）。
 
-旧版包 = 核心功能（2024.3+ 全兼容）；262+ 包 = 核心 + MCP/ACP。
+## 三、实施步骤（已完成）
 
-### 实现形态
-
-用 **Gradle source set 分离 + 条件打包**：
-- 新建 `src/main-mcp`（或 `src/mcp-integration`）source set，放 mcp/ + acp/ + McpConfigurable 的**集成接线**（若 mcp 类被核心代码引用，先做「引用收口」——把核心对 mcp 的引用改为反射/接口，见 §三 步骤 1）；
-- 主 source set 不含 mcp 类；
-- 构建脚本按 `-PmpvIncludeMcp=true` 决定是否把 mcp source set 编进主 jar，并动态决定 plugin.xml 里是否含 `<depends optional config-file="mcp-optional.xml">` 与 `mcp-optional.xml` 资源；
-- `buildPlugin` 产出两份 zip：`…-2026.9.23.zip`（核心，since-build=243）与 `…-2026.9.23-mcp.zip`（核心+MCP，since-build=262）；
-- `verifyMarketplace` 对两份分别跑：核心包应全目标 Compatible；MCP 包只需 262 目标（since-build=262 起，Marketplace 会只对 262+ 校验）。
-
-### 需先查清的「引用收口」点（§三 步骤 1）
-
-核心代码对 mcp 类的**直接引用**（本会话 grep 到）：`config/PluginSettings`（门控设置）、`config/McpConfigurable`（设置页）、`execute/ExecutionTimeoutGuard`（KDoc 提及）、`log/SqlLogEntryBuffer`（审计）、`util/ExplainIndexAdvisor`（KDoc 提及）。其中仅 KDoc 提及的（ExecutionTimeoutGuard / ExplainIndexAdvisor）无实际引用，其余需改为「核心只定义接口/常量，MCP 侧实现」或反射。
-
-## 三、实施步骤
-
-1. **引用收口**：把核心对 `mcp/` 的直接引用改为接口或反射（`SqlLogEntryBuffer` 的审计入队点、`PluginSettings` 的门控设置键），使核心 source set 编译不依赖 mcp 包；
-2. **source set 分离**：新建 `src/main-mcp` 放入 mcp/ + acp/ + McpConfigurable + 两个 optional xml + plugin.xml 的 mcp 段（或构建期动态拼 plugin.xml）；
-3. **构建脚本分流**：按 `-PmpvIncludeMcp` 决定主 jar 是否含 mcp source set；产出两份 zip；
-4. **verifyMarketplace 适配**：核心包全目标校验；MCP 包仅 262+ 校验；
-5. **回归**：定向测试 + testFast + verifyMarketplace 两份包读数 + 旧 verifyGate 三目标；
-6. **文档**：计划 §实施记录回填、变更记录、CHANGELOG（对外口径不变）、记忆。
+1. **verifyMarketplace 改造**（mpv-verification.gradle.kts + 新增 `buildSrc/.../MarketVerdictChecker.kt`）：判定逻辑抽独立 .kt 顶层函数（规避 Kotlin DSL 编译器「Exception while generating code」与配置缓存「cannot serialize script object」两个坑）；
+2. **目标名推导修正**：按 `reportsDir` 相对路径首段取（Windows 反斜杠切分），非 verdict 的 `parentFile.parentFile.name`（那层是插件名）；
+3. **基线文件** `dev-support/verifier-marketplace-baseline.txt`：登记 243（5 块）+ 253（9 块）共 14 块，逐块带运行期安全论证；
+4. **SpillingKt**（243 专属）：保留在基线——audit 是 suspend + suspend block，spill 为 K2 编译器自动产物，改造收益低风险高；243 本就不支持 MCP。
+5. **验证**：python 复刻逻辑确认 14 块全覆盖；`./gradlew verifyMarketplace` 实跑 BUILD SUCCESSFUL（3 目标、14 块全被基线覆盖、配置缓存无报错）。
 
 ## 四、验收
 
-- 核心包（since-build=243）：`verifyMarketplace` 全目标 **Compatible**（0 兼容问题）；
-- MCP 包（since-build=262）：262 目标 Compatible；Marketplace 侧因 since-build 只对 262+ 校验；
-- 旧版 IDE（243/251/252/253/261）安装核心包：无 MCP 能力、无兼容问题、其余功能不劣化；
-- 262+ 安装 MCP 包：十工具 + 门控 + ACP 传输可用（真机或沙盒验证）。
+- `./gradlew verifyMarketplace` 通过：3 目标（243=5 / 253=9 / 262=Compatible），14 个已知问题块全部被基线覆盖；
+- 篡改/新增任一问题块（临时移除基线条目）→ 该任务变红（反向验证在 §实施记录）；
+- 旧 `verifyGate`（离线三目标）不受影响，仍绿；
+- 门禁失明的三个成因（离线 / 成族豁免 / 只看退出码）在本任务全部消除：在线、不加载 `-ignored-problems`、按 verdict 文本判。
 
-## 五、待验证前提（实施者先证伪再动手）
+## 五、遗留（可选，不阻塞）
 
-1. 「plugin.xml 的 `<depends optional config-file>` 指向一个不存在的 config-file 会拒载整个插件」——若成立，核心包的 plugin.xml **必须**不含 mcp 段（不能只缺文件）；
-2. 「构建期动态拼 plugin.xml」与「两个 source set 各自的 extends 声明」哪种形态下 verifier 与平台都能正确加载——先做最小对照；
-3. 核心包在 243/251/252/253/261 上**真机**跑一遍（至少 243）确认核心功能无损。
+- SpillingKt 若未来想彻底消掉：把 `audit` 的 `block` 改为非 suspend（或拆小 lambda），需先对照实验确认 MCP 工具接口允许——收益是 243 少 1 块基线；
+- 覆盖面=本机缓存三目标（243/253/262）；Marketplace 的 251/252/261/263 需在 `intellijPlatform.pluginVerification.ides` 声明对应版本后才有本地读数。
 
 ## 六、相关
 
-- 门禁侧已交付：`verifyMarketplace`（4624c69）——在线、无豁免、按 verdict 文本判失败，已挂 releaseGate；
-- 本会话分析记录与记忆：`docs/变更记录.md` T-MarketCompatFix 行；本地记忆 pitfall-verification-blindspots §十二。
+- 门禁侧首版已提交 `4624c69`（verifyMarketplace 在线无豁免按文本判失败 + 挂 releaseGate）；本计划的基线机制改造见提交记录；
+- 本会话分析记录：`docs/变更记录.md` T-MarketCompatFix 行；本地记忆 pitfall-verification-blindspots §十二。

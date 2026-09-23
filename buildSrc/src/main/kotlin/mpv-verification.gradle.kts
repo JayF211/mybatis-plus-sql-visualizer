@@ -2,6 +2,7 @@ import org.gradle.process.CommandLineArgumentProvider
 import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
 import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask.FailureLevel
+import mpv.verification.checkMarketplaceVerdicts
 
 plugins {
     id("org.jetbrains.intellij.platform")
@@ -211,6 +212,7 @@ val verifyMarketplace = tasks.register<JavaExec>("verifyMarketplace") {
     val pluginVersion = providers.gradleProperty("version").get()
     val reportsDir = layout.buildDirectory.dir("reports/pluginVerifierMarketplace").get().asFile
     val zipFile = layout.buildDirectory.file("distributions/mybatis-plus-sql-visualizer-$pluginVersion.zip").get().asFile
+    val baselineFile = layout.projectDirectory.file("dev-support/verifier-marketplace-baseline.txt").asFile
     val gradleUserHome = gradle.gradleUserHomeDir
     classpath(
         gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
@@ -254,30 +256,7 @@ val verifyMarketplace = tasks.register<JavaExec>("verifyMarketplace") {
     }
     doLast {
         logger.lifecycle("verifyMarketplace END ${System.currentTimeMillis()}")
-        val verdicts = reportsDir.walkTopDown()
-            .filter { it.name == "verification-verdict.txt" }
-            .sortedBy { it.path }
-            .toList()
-        if (verdicts.isEmpty()) {
-            throw GradleException("verifyMarketplace: 未找到 verification-verdict.txt，请检查 $reportsDir")
-        }
-        // 判文本而非判退出码：verifier-cli 带 compatibility problems 仍可能退出 0（20260923 实测）
-        val failures = verdicts.filter { !it.readText().trimStart().startsWith("Compatible") }
-        verdicts.forEach { logger.lifecycle("verifyMarketplace verdict [${it.parentFile.parentFile.name}] ${it.readText().trim()}") }
-        if (failures.isNotEmpty()) {
-            val detail = failures.joinToString("\n") { v ->
-                val target = v.parentFile.parentFile.name
-                val problems = v.parentFile.resolve("compatibility-problems.txt")
-                "  - $target: ${v.readText().trim().take(90)}\n    明细: ${if (problems.isFile) problems.absolutePath else "(无 compatibility-problems.txt)"}"
-            }
-            throw GradleException(
-                "verifyMarketplace 失败：${failures.size}/${verdicts.size} 个目标存在兼容问题（Marketplace 同口径）。\n" +
-                    detail +
-                    "\n常见成因＝插件类引用了目标 IDE 上不存在的可选依赖 API（可选依赖形态跨版本不一致）。" +
-                    "豁免清单不作用于本任务——修复或按版本分支打包，勿改豁免绕行。",
-            )
-        }
-        logger.lifecycle("verifyMarketplace 全目标 Compatible（${verdicts.size} 个目标）")
+        checkMarketplaceVerdicts(reportsDir, baselineFile, logger)
     }
 }
 
