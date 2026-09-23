@@ -2,7 +2,9 @@
 
 # SQL Visualizer Changelog
 
-## [Unreleased]
+## [2026.9.23] - 2026-09-23
+
+> 正式版，承载 `v2026.9.18-beta.1` ~ `beta.4` 内测系列全部内容及其后至发行日的增量；`2026.9.18` 编号未随任何发行使用，按「版本号即发行当日日期」规则跳过。
 
 ### Added
 
@@ -60,7 +62,7 @@
 - **性能：第九轮发现点 18 项收敛（T-PerfSweep6）**：头号项 inlay 规划器无缓存 + 一次性闸门非线程安全——`PreviewInsertColumnInlayProvider` 的一次性闸门改 `AtomicBoolean.compareAndSet`（失败路径直接返回），新增**进程级** `InsertColumnInlayPlanCache`（键 = 文档身份 + `modificationStamp`，命中不读 `document.text`），`InsertColumnInlayPlanner` 补 `upper` 惰性缓存；`sqlv_schema_context` 增弱键索引缓存（TTL 30s + `MetadataInvalidator` 自登记 + DDL/换库失效）；`SecureXml` 工厂/构建器按线程复用（自定义回调现建现用，不吃掉告警）；预览临时文件目录级兜底（年龄 > 7 天 + 200 条上限，**只认本插件命名**，用户 `.sql` 零删除）；agent 侧退避复位点由「连上」后移到「存活超过阈值」+ 连续「连上即被关」达上限即放弃该端口；`AgentManager` premain 去重判据由 `alive` 改 `isSessionHealthy` 并补 monitor 复位；`JoinVirtualFkProvider` 每表 INFO 降为「首行 INFO + 其余 DEBUG」；`DedupErrorList` 的 O(n) `get(index)` 改双结构；`LogToSqlPanel` 未还原计数并入既有单遍遍历；agent 子项目测试挂进 `testShards` 依赖、心跳容差 1.5×→2×。**未实施/不做共四项，逐项如实留档**：① XML 预览两次解析共用一次 Document（必改文件不在写集）② `schema_context` 惰性建列（被命中判据与写集边界挡住）③ 发现 11 短 TTL 扫描失败标记（与 4 处既有护栏断言直接冲突）④ 发现 15 resize 去抖（按计划「收益比不佳可留档销账」不做）。性能报告 §5 汇总行的口径是「15 项已收口 + 1 项定案不改（发现 17）+ 2 项未实施/不做（发现 11、发现 15）」——它把 ①② 计入对应子项的未做部分，两处计数不可直接互推，故此处逐项列名以免歧义；**发现 17（`AgentProxyCL` loader 不缓存）定案不改**，属避免强引用驱动类的刻意取舍，保留取舍注释
 - **错误定位 tooltip 如实标注两态（T-ErrorLocateUsability T-ELU-04，O-49）**：定位按钮的悬停提示原写「错误行映射不可靠」——只说了映射不可靠，没说这个位置属于哪一态。现改为「驱动报错位置指向**被执行的 SQL 文本**，与 mapper 原文行不一一对应」：驱动报的位置属于执行态文本（动态 SQL 拼接、参数注入后行号必然错位），跳转落点仍是「语句起始行」（v1 承诺不变，**不引入执行态→源 SQL 的位置换算**）。中英双语同步
 - **EXPLAIN 包装链硬化（T-ExplainChainHardening，O-48）**：点「执行计划」此前对预览编辑器里的**任意文本**加 EXPLAIN 前缀——`DELETE FROM t`、`CREATE TABLE …`、标识符 `SELECTED` 都会被包成 EXPLAIN 送进数据库（EXPLAIN 不执行被包语句，但语法错误与解析副作用仍由库侧承担，且「点了没报错、结果无意义」比明确拒绝更不诚实）。现补首关键字词法边界判定：只放行只读查询表达式（`SELECT` / `VALUES` / `TABLE` / `WITH`，含 `SELECT*`、`SELECT(1)`、`VALUES(1)`、前导注释与括号化查询），DML/DDL/会话类与 `SELECTED`/`SELECT_foo` 这类标识符一律不执行并给出提示（提示里带实际判到的首词）。已以 `EXPLAIN` 开头的文本走幂等分支原样提交，二次点击行为不变。同一判定也接在 MCP 的 `sqlv_explain` 上（在结构白名单之后，实测两者完全对齐，见 Fixed 段）。**行为变更须留意**：此前「任意文本都能点执行计划」的场景现在会被明确拒绝
-- **CHANGELOG 已发布段卫生整改（T-ReleaseArtifactHygiene，N-31）**：`[2026.9.18]` 段此前把一批从未随该版本交付的内容（MCP 工具线等）写成了「已发布」——现整段并入 `[Unreleased]`，按 Added / Changed / Fixed / Test 归并并消掉重复小节标题（条目文本逐字保留，537 条零增删，已发布段内 MCP 相关命中 12 行 → 0 行）；另给发行工作流说明补上「已发布段准入约定」（发版前逐条核对条目所述能力确在该版本产物内、且先建 tag 再建发行版）。**发行动作本轮未做**（前置＝用户测试完成）：`2026.9.18` 从未发布过，新版本号取发行当日日期号
+- **CHANGELOG 已发布段卫生整改（T-ReleaseArtifactHygiene，N-31）**：`[2026.9.18]` 段此前把一批从未随该版本交付的内容（MCP 工具线等）写成了「已发布」——现整段并入 `[Unreleased]`，按 Added / Changed / Fixed / Test 归并并消掉重复小节标题（条目文本逐字保留，537 条零增删，已发布段内 MCP 相关命中 12 行 → 0 行）；另给发行工作流说明补上「已发布段准入约定」（发版前逐条核对条目所述能力确在该版本产物内、且先建 tag 再建发行版）。本条交付时发行动作仍未做（前置＝用户测试完成），`2026.9.18` 编号最终未随任何发行使用——本版按「版本号即发行当日日期」规则直接取用 2026.9.23
 - **错误通道 fatal 透传（T-FatalPassthrough）**：`VirtualMachineError` / `LinkageError` / `ThreadDeath` 不再被 `catch (Throwable)` 吞成一条日志（30 处捕获点加判定；其余 Error 与 Exception 行为不变）
 - **PSI 跨线程读取协议（T-PsiCaptureProtocol）**：池化线程内读 PSI 须走两段式快照校验（新增守卫规则防回潮）
 - **性能：第八轮发现 15 项收敛（T-PerfSweep5）**：执行链 DDL 判定与回滚链的重复 AST 解析改单槽复用、方言探测与 MapperXmlLocator 加短 TTL 缓存（禁引 PSI 监听）、Agent 常驻面解耦为「按需启动」、schema_context 负缓存按数据源记账与容量上界、若干低危分配与正则热路径收口
@@ -91,6 +93,8 @@
 
 ### Fixed
 
+- **sqlv_render_sql 的 XML 片段模式整条不可用（真机 MCP 走查发现，T-McpRenderDialectFix，O-67）**：`McpSourceLocator.renderXmlSnippet` 未包 ReadAction——text 链传 project 后会走跨 ns include（T-IC-02）/静态常量求值（T-M25.2）/mapper 参数类型（M29.5）三处 PSI 读，MCP 通道的平台协程线程无读锁即硬抛 `Read access is allowed from inside read-action only`，片段模式必炸；file+line 模式因 `renderAtLine` 原有读锁不受影响（同工具两模式一好一坏）。现与 `renderAtLine` 同口径整链包 `ReadAction.compute`；判别性回归 `McpRenderSnippetReadActionTest` 把调用置于无读权限的 worker 线程（夹具主线程可能被授锁，保证摘掉修复必红）
+- **sqlv_explain 省略 dialect 必报 INVALID_ARGUMENT（真机 MCP 走查发现，T-McpRenderDialectFix，O-67）**：平台 JSON 绑定把省略的可选参数落成 Kotlin 默认值空串，`McpDialectDetector.isRecognized("")` 判不可识别 ⇒ 工具描述与错误文案承诺的「omit to auto-detect」永远走不到，省略即报错。现 `isRecognized` 对 null/空白一律视为未指定放行，`resolve` 链原有「显式名 > URL 推断 > 默认 MySQL」兜底不变
 - **DM8 需要 identity 包装（真机实测发现的新缺陷）**：达梦 DM8 对「显式给自增列赋值」的拒绝与 SQL Server 同形（`仅当指定列列表，且SET IDENTITY_INSERT为ON时，才能对自增列赋值`），而此前只有 SQL Server 会产出 `SET IDENTITY_INSERT` 包装 ——于是 DM 上凡把自增列勾回生成的 INSERT（含回滚链回填）都必然失败。现 DM 与 SQL Server 共用同一包装形态（真机实测两库语法逐字相同）。**DM 产物形态属用户可见变化**：勾回自增列的 INSERT 自此带成对包装
 - **右键菜单「SQL 快捷模板」显示原始键（真机走查发现）**：`plugin.xml` 的 `<group>` 文案不走 bundle 解析（补 `bundle=` 亦无效，实测确认），导致编辑器右键菜单里该分组显示 `action.cn.song.mybatisplus.visualizer.SqlTemplateGroup.text` 原始键。现改为由 `SqlTemplateGroup`（`DefaultActionGroup` 子类）在 presentation 里取 bundle 文案，菜单正常显示「SQL Quick Templates / SQL 快捷模板」
 - **回滚回填在「取不到自增列」时不再静默**：SQL Server / 达梦上，若回填 INSERT 需要 `SET IDENTITY_INSERT` 包装但插件没能从表结构里取到自增列（例如该表尚未在 Database 工具窗内省），此前会**静默**产出无包装的 INSERT（执行即 544）；现在弹窗会明确告警并给出处置路径
@@ -177,6 +181,8 @@
 - **`SqlLogManager` 取用统一收口——取服务前先判 `isDisposed`（T-ST-02b2，生产侧根治 shard3 跨类服务毒化）**：`testShards` shard3 曾出现 20 例 `AlreadyDisposedException … service=SqlLogManager … project.isDisposed=false :: Container is already disposed`（项目未 disposed、**服务容器已 disposed**）；受害类恰是所有使用共享 `SqlLogManager` 的类、隔离跑全绿，且是否发作取决于分片邻居——**新增测试类即重排、即触发**。机制：平台服务容器**一次创建失败即把该服务在该项目实例上永久毒化**（`LazyInstanceHolder` 的 `catch Throwable` 无 `CancellationException` 过滤 → 缓存 `CannotInitialize` 后永久重抛），而 light 测试项目片内跨类复用同一 `ProjectImpl`，故中毒跨测试类传播。现新增 `log/SqlLogManagerLookup.kt#sqlLogManagerOrNull(project)`：**在发起 `getService` 之前**先判 `project.isDisposed`，8 处取用点（`LogStartupCapture` / `SqlConsoleBridgeFilterProvider` / `AgentManager`×3 / `McpToolsetSupport` / `SqlPreviewService` / `SectionConfigurable`）全部改走它，null 语义一律「跳过本次动作」（审计旁路跳过、EP 不挂过滤器、事件丢弃不斩断流、耗时补全退化为未命中）。**关键点：不能只靠 `runCatching`**——它只吞掉这一次的结果、仍发起了那次注定失败的创建。配套新增源码扫描守卫 `SqlLogManagerLookupGuardTest`（任何直接取用必须在唯一白名单文件内 + 白名单文件必须真的含 `isDisposed` 判定，防被掏空后空绿），与既有 `BannedApiSourceScanTest`（管「测试类改了共享状态不复位」）互补。
 
 - **MCP 审计条目不再受「SQL 日志」捕获开关约束（D1 定案，2026-09-22 用户）**：MCP 执行类工具（当前唯一产出点 `sqlv_explain`）在真实数据源上跑过的语句属**审计留痕**，其可用性只由 MCP 工具自身开关决定（设置页「启用 SQL Visualizer MCP 工具」＋工具级禁用清单，`McpToolGate`），与「SQL 日志」页签的捕获按钮无关。此前审计走普通入队口（`addEntry`），而该口在 `paused=true`（用户点过「停止捕捉」，或项目停止时 `onConsoleRemoved` 置位）期间直接丢弃 → MCP 条目被静默吞掉。现新增 `SqlLogEntryBuffer.addAuditEntry`（跳过 `paused` 门，其余门——关键字过滤 / 去重窗口 / 上限淘汰——与普通条目一致，因为它们是列表展示偏好而非开关），`recordMcpExecution` 改走它。**反向验证**：改回 `addEntry` → 新增对照用例 `test记录MCP执行_不受捕获开关约束_paused期间照样落条目` 必红（`expected:<1> but was:<0>`），还原后绿（`McpHistoryIngestTest` 5 例 0 失败）。
+
+- **MCP render 片段模式无读锁与省略 dialect 误报修复（T-McpRenderDialectFix，O-67）**：`sqlv_render_sql` 的片段模式整链包 ReadAction——text 链传 project 走跨命名空间 include/静态常量/mapper 参数类型三处 PSI 读，此前在平台协程线程无读锁硬抛（真机 MCP 通道实测复现；file+line 模式原有读锁不受影响）；`McpDialectDetector.isRecognized` 对 null/空白视为「未指定」放行——平台 JSON 绑定把省略的可选参数落成空串，此前省略 dialect 必报 INVALID_ARGUMENT、与 omit-to-auto-detect 约定矛盾（resolve 链 URL 推断 + 默认 MySQL 兜底不变）
 
 ### Test
 

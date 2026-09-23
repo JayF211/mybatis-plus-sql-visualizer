@@ -324,6 +324,12 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
           校验器给的是置信度评分，这里给的是确定性证据——静态校验器产不出的渲染产物实证；Claude Code / Cursor / AI Assistant 可直接调用</td>
     </tr>
     <tr>
+      <td>一键回滚 SQL <span class="tag tag-new">New</span></td>
+      <td>预览面板「更多」菜单对 INSERT 推导逆向 DELETE（NULL 走 <code>IS NULL</code>）一键复制；
+          SQL Server / 达梦自增列自动 <code>SET IDENTITY_INSERT</code> 包装；
+          UPDATE / DELETE 无 before-image 时走快照查询 + 粘贴回填的人工恢复路径</td>
+    </tr>
+    <tr>
       <td>检查更新</td>
       <td>设置页一键检查更新，热替换即时生效免重启；支持 Gitee 抢先体验通道</td>
     </tr>
