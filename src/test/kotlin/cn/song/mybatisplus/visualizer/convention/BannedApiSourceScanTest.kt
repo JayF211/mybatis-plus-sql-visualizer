@@ -220,13 +220,16 @@ class BannedApiSourceScanTest {
         // SourceCaptureGuide：跳转引导三按钮弹框（用户决策点）+ 引导结果 info/warning；
         // SqlPreviewPanel：执行前 YesNo 确认；PluginSettingsPanel：配置异常 warning；
         // LogToSqlPanel：DML 执行前 YesNo 确认（与预览面板同交互，ExecuteConfirmMessages 同款）；
-        // McpConfigurable：「前往 MCP Server 设置」目标不可用时 warning（与 PluginSettingsPanel 配置不可用同类）。
+        // McpConfigurable：「前往 MCP Server 设置」目标不可用时 warning（与 PluginSettingsPanel 配置不可用同类）；
+        // SqlSuppressManagerDialog（O-69）：清空全部规则前 YesNo 知情确认（破坏性、不可恢复；
+        //   对话框本体非模态 MODELESS，仅此一处确认弹窗，20260924 收口门禁守卫命中后按红线加白）。
         val whitelist = setOf(
             "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SourceCaptureGuide.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/config/McpConfigurable.kt",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlSuppressManagerDialog.kt",
         )
         val found = mainSources()
             .filter { (_, code) ->

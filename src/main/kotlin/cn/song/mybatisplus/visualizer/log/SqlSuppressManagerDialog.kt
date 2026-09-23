@@ -283,6 +283,8 @@ class SqlSuppressManagerDialog(
     /** 清空全部规则（确认后执行）。 */
     private fun clearAllRules() {
         if (ruleManager.rules.isEmpty()) return
+        // 弹窗克制红线准入依据（BannedApiSourceScanTest 白名单在册）：清空是不可恢复的破坏性操作，
+        // 属「用户必须知情确认」场景——本对话框本体非模态，仅此处用一次模态确认。
         val confirm = Messages.showYesNoDialog(
             project,
             MpSqlVisualizerBundle.message("log.suppress.dialog.clearConfirm"),
