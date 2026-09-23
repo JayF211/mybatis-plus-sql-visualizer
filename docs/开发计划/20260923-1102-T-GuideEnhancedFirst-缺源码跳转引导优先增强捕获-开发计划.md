@@ -122,4 +122,13 @@ T-GEF-02 文案先行 → T-GEF-03 红用例（decideActions 判定+序表映射
 
 ## 实施记录
 
-（实施时回填：分支/提交/读数/走查证据）
+（2026-09-23 本工作树实施，分支 `t-guide-enhanced-first`，基线 master `d41b0d5`）
+
+- **T-GEF-02 文案**：`log.jump.guide.enableEnhanced` / `log.jump.guide.message.enhanceFirst` / `log.jump.guide.enhanceDone` 三键双语落地（zh 781-783 行区 / 默认 bundle 同位）；生效提示弹窗 title 复用 `settings.enhancedCapture.confirm.title`，状态行复用 `log.diag.enhanced`，零冗余键。
+- **T-GEF-01 编排**：`SourceCaptureGuide` 状态感知三分支（`decideActions` 纯函数 + `resolveChoice(rc, branch)` 分支序表 + `legacyMessage` D1 状态行）；`enableEnhancedCapture(project, onOutcome)`：开关关闭时置位 + 发布 `SETTINGS_CHANGE_TOPIC`（已开启不重复发布），随后复用 `AgentManager.requestReauthorization`。`AgentManager.requestReauthorization` / `requestConsentThenAttach` 增可选 `onOutcome`（默认空实现，既有调用方零行为变化；持久化单点不变，三态各自落盘后回传，前置早退不回调）。
+- **守卫同步**：`SettingsTruthTest:85` 入口断言放宽为 `fun requestReauthorization(` 前缀匹配（签名加参后原断言会假红）；`publishStatusChanged` 计数守卫不受影响（未新增发布点）。
+- **定向测试（8 类 62/0/0/0 绿，新工作树首跑 3m9s）**：SourceCaptureGuideChoiceTest 12 / SourceCaptureGuideEnableFlowTest 4 / BundleParityGuardTest 5 / AgentStatusTextTest 14 / AgentConsentFlowTest 6 / SettingsTruthTest 5 / SqlLogPanelLiveJumpWithSourceTest 10 / HistorySqlLogPanelJumpToSourceTest 6。EnableFlowTest 以 consentProvider 注入走真实确认流：拒绝进冷却、同意清冷却+confirmed、DISABLE 持久化关闭、已开启不重复发布 SETTINGS_CHANGE，全部实证。
+- **反向验证（两次读数）**：`decideActions` 恒 Legacy 探针 → `test分支判定_未开启或未授权走EnhanceFirst FAILED`（12 例 1 红，Legacy 正对照不受影响）；还原 → `BUILD SUCCESSFUL`（ChoiceTest+EnableFlowTest 复绿）；探针 grep 0 残留。
+- **前提复核**：前提 1 实证成立——`doAttachAsync` 全部调用面仅 `onProcessAppeared`（:409）与确认流同意分支（:493），无轮询扫描，「开启动作不碰已运行的应用、重启后生效」话术成立；前提 2/3 由 EnableFlowTest 实测覆盖（发布通道与 requestReauthorization 复用均按方案走通）；前提 4（AGENT 通道无位置条目）按 D2 定案登记不做，未实证；前提 5（设置页同开脏态）按风险表登记口径，未另行处理。
+- **文档**：CHANGELOG `[Unreleased]` Changed 顶部新条目；`docs/变更记录.md` 表顶一行；架构文档 4 处（01 总览 `log` 行 SourceCaptureGuide 括注、02 详解 §6.4 表行 / §mermaid MissingSource 节点 / §排障表行）。
+- **移交事项**：① 真机走查未做（runIde 沙盒天然未授权样本，步骤见 §五；走查完还原沙盒开关）；② 全量门禁未跑——按用户指示「定向测试无问题后合并主分支」执行，定向 62 绿即合并；③ 合并 master 时与在途发版会话（T-Release20260923，`MPSV-Release0923`）可能撞 CHANGELOG/变更记录 表顶，冲突按「两侧行全保留」惯例处置。
