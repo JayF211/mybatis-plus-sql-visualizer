@@ -751,4 +751,48 @@ class SqlStatementSplitterTest {
         assertEquals(2, statements.size)
         assertEquals("CREATE", SqlTypeClassifier.getFirstKeyword(statements[0]))
     }
+
+    // ==================== 切分器 END 分支前视收口（T-PerfSweep7 / T-PS7-01） ====================
+
+    /**
+     * T-PS7-01 计数缝：END 分支每语句前视 ≤ 每 END 一次（单次取词替代 5 次同段扫描）。
+     * 语料含 3 个 END 词（两个 CASE 收尾 + 一个块尾），无 IF 批首（不触发 beginEndBalance
+     * 的 END 前视）与 DECLARE（不触发声明段前视）——计数纯净归因于主循环 END 分支。
+     * 退回旧实现（每 END 5 次独立前视）读数 15 超阈值即红。
+     */
+    @Test
+    fun `PS7_01_END分支前视单次取词计数不超阈值`() {
+        val sql = "BEGIN\n  SELECT CASE WHEN a THEN 1 ELSE 2 END;\n  SELECT CASE WHEN b THEN 3 ELSE 4 END;\nEND;"
+        SqlStatementSplitter.split(sql)
+        assertTrue(
+            "END 分支前视应 ≤ 每 END 一次（实际 ${SqlStatementSplitter.lookaheadProbeCount}）",
+            SqlStatementSplitter.lookaheadProbeCount <= 3,
+        )
+    }
+
+    /** 边缘（等价守卫）：END 与后随 IF 之间隔着块注释——单次取词仍须跳过注释识别 `END IF` 内层终结符。 */
+    @Test
+    fun `PS7_01_前视跳过块注释_END_IF不误判块尾`() {
+        assertEquals(1, split("BEGIN\n  IF 1=1 THEN NULL; END /* c */ IF;\nEND;").size)
+    }
+
+    /** 边缘（等价守卫）：注释内的 END 词不参与块配对（主循环字符串/注释感知语义不变）。 */
+    @Test
+    fun `PS7_01_注释内END不参与块配对`() {
+        assertEquals(1, split("BEGIN\n  SELECT 1; /* END */\n  SELECT 2;\nEND;").size)
+        assertEquals(1, split("BEGIN\n  SELECT 1; -- END\nEND;").size)
+    }
+
+    /** 边缘（等价守卫）：END 作引号标识符/列名——字符串内的 END 词不入状态机、不被前视误认。 */
+    @Test
+    fun `PS7_01_END作字符串标识符不参与配对`() {
+        assertEquals(1, split("BEGIN\n  SELECT \"END\" AS c;\nEND;").size)
+        assertEquals(1, split("BEGIN\n  SELECT 'END' AS c;\nEND;").size)
+    }
+
+    /** 边缘（等价守卫）：嵌套 BEGIN 内层 IF——`END IF` 吸收、内层块 END 正常配对，整段一条。 */
+    @Test
+    fun `PS7_01_嵌套BEGIN内层IF整段一条`() {
+        assertEquals(1, split("BEGIN\n  BEGIN\n    IF 1=1 THEN NULL; END IF;\n  END;\nEND;").size)
+    }
 }
