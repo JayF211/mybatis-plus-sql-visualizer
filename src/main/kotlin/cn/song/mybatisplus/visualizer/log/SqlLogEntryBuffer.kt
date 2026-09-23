@@ -81,6 +81,22 @@ class SqlLogEntryBuffer(
     @Volatile
     var filterKeywords: List<String> = emptyList()
 
+    /**
+     * T-SqlSuppress（O-69）：屏蔽规则指纹集合（各规则规范化文本的 [sqlFingerprint]，由
+     * [SqlSuppressRuleManager] 的项目订阅者 [SqlLogManager] 整体替换写入）。入队闸门命中即丢弃——
+     * 语义与关键字过滤一致（「从未捕获过」：不进去重计数、不占捕获序号、不触发任何内容/徽章/
+     * 入队回调）。空集时短路零成本（不触 `entry.dedupeKey` 的 lazy 计算——无规则的常态）。
+     */
+    @Volatile
+    var suppressKeys: Set<String> = emptySet()
+
+    /**
+     * T-SqlSuppress：屏蔽闸门命中回调（参数 = 命中指纹键）——[SqlSuppressRuleManager.recordHit]
+     * 命中计数的唯一出口（管理对话框「已拦截 N 次」，D4）。专用通道，不与既有回调混用：
+     * 被拦条目不触发 onEntryAccepted/onEntryStored/onDedupeCountsChanged/内容监听（从未捕获过）。
+     */
+    var onSuppressedHit: ((String) -> Unit)? = null
+
     /** 条目被淘汰时的回调（最早条目超出上限时被移除）；用于自动保存历史 SQL（F-43）。 */
     var onEvicted: ((LogSqlEntry) -> Unit)? = null
 
@@ -129,6 +145,14 @@ class SqlLogEntryBuffer(
     private fun addEntryInternal(entry: LogSqlEntry, respectPaused: Boolean): Boolean {
         if (respectPaused && paused) return false
         if (isFiltered(entry.restoredSql)) return false
+        // T-SqlSuppress（O-69）：屏蔽规则命中 → 入队前丢弃（isFiltered 之后、去重/上限之前——
+        // 「从未捕获过」：不进去重计数、不占捕获序号、不触发任何内容回调；命中计数走
+        // [onSuppressedHit] 专用出口）。空集短路：无规则时零成本，不触 dedupeKey lazy 计算。
+        // 【反向验证探针锚点】注释掉下面 if 块 = 摘除屏蔽闸门，SqlLogEntryBufferTest 屏蔽用例必红。
+        if (suppressKeys.isNotEmpty() && entry.dedupeKey in suppressKeys) {
+            onSuppressedHit?.invoke(entry.dedupeKey)
+            return false
+        }
         var duplicate = false
         val evictedEntries = mutableListOf<LogSqlEntry>()
         var storedEntry: LogSqlEntry? = null
