@@ -71,4 +71,23 @@
 
 ## 七、实施记录
 
-（待实施后回填）
+（2026-09-23 实施；实施时点已在计划快照之后约 7 小时，多数 git 动作被并行会话先行完成，本波逐条核对留痕。）
+
+| 步骤 | 现状核对与动作 |
+|---|---|
+| §三.1 本地 master 快进 | **已被并行会话完成**：master==origin/master==`66964f7`（`git status` ahead/behind 双零），无需动作 |
+| §三.2 t-round10 push + 并回 | **已完成**（`docs/变更记录.md` 2026-09-23 行在册：并入提交 `d4bcd93`、`t-round10-followup` 已删本地+远端）；`t-round10` 本地分支已不存在 |
+| §三.3 k2j push 留底 | **已完成**：`git ls-remote origin feature/kotlin-to-java` == 本地 tip `40626f7`（Master184 波次 11 提交已在远端） |
+| §三.4 删三零独有分支 | **t-hql-colmap / t-prewarm-late-recover 已被并行会话清理**（`git branch -a` 零命中）；**dev 删除按前提 §二.2 反向守卫中止**——dev 现有 10 个独有提交（T-HqlNoAliasProp + T-XmlInlineSql 合并链），`rev-list` 非 0，不再满足零独有前提；本波 dev 反向吸收 master（合并提交 `9d7c309`，冲突仅 `docs/变更记录.md` 表顶，双方行全保留），dev 作为活跃开发线存续 |
+| §三.5 T-BuildConcurrency 入库 + 编号订正 | **已完成**：master `985044a` 入库，计划文档编号行已是 O-65（含 2026-09-23 订正说明） |
+| §三.6 docs/MEMORY.md 台账补齐 | **本轮补**：2026-09-22 八行（PrewarmLateRecover / ConsoleErrorCoverage / O-54 / O-55 / O-56 / O-57 / O-58 / O-59；DynUpdateWriteSafe 已有记录不重复）+ O-62 行；O-63/O-64/O-65/O-69/T-PerfSweep7 行随本批次收口统一补（状态未定不宜预写） |
+| §三.7 beta.4 转正口径落 docs | **本轮补**：`20260920-1140-T-ReleaseArtifactHygiene` 计划「决策定案补充」节（技术口径 6 处焊点 + 三选项代价 + 复核倾向 B/C；并如实登记该路线已被 2026-09-23 `v2026.9.23` 发行取代的事实） |
+| §三.8 env 车道禁合登记 | **本轮补**：docs/MEMORY.md 并行必读块新增 `origin/env/cloud` / `origin/env/no-proxy` 禁合回条目 |
+| §三.9 testDatabase 门禁含义 | **本轮补**：docs/MEMORY.md 并行必读块新增「10 绿的含义」条目（5 类 10 例覆盖面 + 7 项平台行为假设失败经 T-Fix-TestDb `3457f77` 真实转绿非掩盖 + HeavyNative B 路径留真机），出处 `docs/调研报告/20260918-testDatabase驱动管线打通-记录.md` |
+| D1 t-round10-followup | 已删（本地+远端，§三.2 在册） |
+| D2 mpsv-t05-reverse detached worktree | **本轮清**：`3f7853b` 在 master 祖先链（O-52 交付提交）、树干净实测 → `git worktree remove` 成功，worktree 余 5 个 |
+| D3 ht.txt / wt.txt / nul | **消案**：三文件与 `Parameters` 已不在工作区（并行会话清理），`.zcodeignore` 已随 `985044a` 入库 |
+| D4 三零独有分支删除授权 | 前两项已被清理、dev 中止（见 §三.4 行），授权事项自然消案 |
+| D5 beta.4 转正内容口径 | 只落档不拍板（§三.7 行）；事实走向已登记 |
+
+**验证**：本计划无生产代码改动——本波改动仅 `docs/MEMORY.md`、两份计划文档（本件 + ReleaseArtifactHygiene）；合并 `9d7c309` 带入的 src 面属 master/dev 双侧已交付内容（MCP 代理化 + HQL/XML 引擎），非本计划引入，门禁复跑责任归本批次统一收口。
