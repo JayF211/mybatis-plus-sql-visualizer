@@ -114,7 +114,7 @@ Gradle 属性优先级为 GRADLE_USER_HOME > 项目根，故项目级那份 `-Xm
 |---|---|---|---|---|
 | **A** | **C 盘空间止血**：将 `C:\Users\USER\.gradle`（约 40 GB）迁至 F 盘 | 解除 C 盘 3.0 GB 的构建失败隐患；为后续隔离方案腾出空间 | 环境（文件系统 + 可选环境变量） | 中（需停 daemon；见 §六 R1） |
 | **B** | **统一 daemon 配置 + Kotlin 编译策略**：① 消除用户级与项目级的 jvmargs 覆盖冲突，使 Gradle daemon 参数在全工作树一致；② Kotlin 编译改 `in-process` 策略（先实测 Metaspace），绕开共享 Kotlin daemon 的串行化 | ① 止住 daemon 池膨胀（当前 3 个 daemon 两种参数）；② 消除多路编译排队 | `~/.gradle/gradle.properties` 与/或项目 `gradle.properties` | 低（①）/ 中（②，见 §四 P-3） |
-| **C** | **机器级构建闸门**：同时运行的 gradle 构建数上限（建议 2），并行时每路降 `-PtestShardCount` | 把"每路内并行"换成"路间并行"，总并行度收敛到物理核内 | `dev-support/` 新增脚本 + `docs/MEMORY.md` 约定节 | 低 |
+| **C** | **机器级构建闸门**：同时运行的 gradle 构建数上限（建议 2），并行时每路降 `-PtestShardCount`【2026-09-24 订正：降片已被 §实施记录 五 实测证伪并禁用，本项落地为**纯限流**闸门（`dev-support/gradle-gate.ps1`），不带任何降片逻辑】 | 把"每路内并行"换成"路间并行"，总并行度收敛到物理核内 | `dev-support/` 新增脚本 + `docs/MEMORY.md` 约定节 | 低 |
 | **D** | **共享状态隔离（可选）**：每路独立 `GRADLE_USER_HOME` + `GRADLE_RO_DEP_CACHE` 指向共享只读依赖缓存 | 彻底分离 daemon 与 transform 写锁 | 环境变量 + 启动脚本 | 中（内存翻倍；见 §四 P-5） |
 | **E** | **缓存复用（可选）**：`buildCache.local` 由"关闭"改为"按工作树隔离目录" | 恢复同分支反复构建的增量收益，同时不跨分支串味 | `settings.gradle.kts` | 中（须先证伪原失败根因；见 §四 P-4） |
 | **F** | **协调脚本可靠性**：登记表自动过期（定时 prune）+ 沙盒容器名从工作树名自动派生（不再手改 `build.gradle.kts` 再还原） | 让"此刻有谁在跑"可判、沙盒名不再靠人工纪律 | `parallel_tasks.py` + `buildSrc/mpv-testing.gradle.kts` 或独立约定 | 低 |
@@ -133,7 +133,7 @@ Gradle 属性优先级为 GRADLE_USER_HOME > 项目根，故项目级那份 `-Xm
 |---|---|---|---|
 | P-1 | ~~迁盘后 transform 缓存与增量编译历史因绝对路径变化而失效，首次构建退化为全量、之后恢复，且不报错~~ **【2026-09-23 实测：证伪】** 迁后首个构建 9/10 任务仍 `up-to-date`，缓存完全有效（junction 保持逻辑路径不变） | ~~迁移后取首次构建耗时读数对照~~ **已做**（`./gradlew help`，见 §实施记录 三） | 无需回退 |
 | P-2 | ~~单路 3 片已接近饱和，故「2 路并行跑全量」的总吞吐与串行接近（§九 D3 的推算）~~ **【2026-09-23 实测：推翻】** 单路 CPU 均值仅 49.8%（未饱和），双路加速比 1.52；真实约束是内存（双路 Commit 峰值 66.9/74.7 GB） | ~~N=1/2/3 路墙钟对照 + CPU 利用率~~ **已完成 N=1/2 两档**（读数见 §实施记录 一） | 已据实测重写 §九 D3；N=3 因内存余量不足未测 |
-| P-3 | Kotlin 编译改 `in-process` 策略可绕开共享 daemon 的串行化，且 Metaspace 需求在本机可控 | 单独实测该策略下的编译墙钟与 Metaspace 峰值；注意本仓既有记录为"只加该开关会在 `:compileMcpStubKotlin` 报 Metaspace OOM，须同配 `-Dorg.gradle.jvmargs`" | 改用 D 项（每路独立 Kotlin daemon） |
+| P-3 | Kotlin 编译改 `in-process` 策略可绕开共享 daemon 的串行化，且 Metaspace 需求在本机可控【2026-09-24 实测：成立】 | ~~单独实测该策略下的编译墙钟与 Metaspace 峰值~~ **已做**：统一 4096m/1536m 后新树首编 `:compileKotlin compileTestKotlin` 2m57s 无 OOM、KotlinDaemon 进程数 0（见 §实施记录 六）；既有记录「只加该开关在 `:compileMcpStubKotlin` 报 Metaspace OOM」的前提正是 jvmargs 被用户级压成 256m，本轮随参数统一一并消除 | 改用 D 项（每路独立 Kotlin daemon） |
 | P-4 | build cache 关闭的**原根因**确为"多分支共用一个 cache 目录导致复用陈旧 `compileTestKotlin` 产物"；按工作树隔离目录即可根除 | 查证 T-TestPerf-01 三次 `NoSuchMethodError` 假失败的现场记录与当时的 cache 目录配置 | 维持关闭，E 项不推进 |
 | P-5 | 每路独立 `GRADLE_USER_HOME` + 共享只读依赖缓存对本项目有效（IntelliJ 平台插件的 artifact transform 对只读缓存无特殊约束） | 在单个工作树做对照实验：独立 home + `GRADLE_RO_DEP_CACHE` 能否完成 `verifyGate` | D 项降级为"仅隔离 daemon 参数" |
 | P-6 | 机器级文件锁闸门与 Gradle 自身的 daemon 调度不发生死锁 | 构造两路并发申请闸门的用例，含异常退出后锁释放路径 | 改用"按工作树分波"的人工调度 |
@@ -169,10 +169,10 @@ Gradle 属性优先级为 GRADLE_USER_HOME > 项目根，故项目级那份 `-Xm
 
 ```
 ① 只读核实 + §四 P-2 并发档位对照实测                                   【2026-09-23 已完成，见 §实施记录 一】
-② B 项（统一 daemon 配置 + Kotlin 编译策略，风险最低，先做以便后续读数干净）  【待做】
+② B 项（统一 daemon 配置 + Kotlin 编译策略，风险最低，先做以便后续读数干净）  【2026-09-24 已完成，见 §实施记录 六】
 ③ A 项（迁盘止血）                                                      【2026-09-23 已完成，见 §实施记录 三】
-④ C 项（机器级闸门 + 约定登记）                                          【待做；上限依据已由 P-2 实测更新为「内存约束」】
-⑤ F 项（协调脚本可靠性）
+④ C 项（机器级闸门 + 约定登记）                                          【2026-09-24 已完成，见 §实施记录 七；约定文案待主控转录 docs/MEMORY.md】
+⑤ F 项（协调脚本可靠性）                                                【2026-09-24 已完成，见 §实施记录 八】
 ⑥ D / E 项（视 P-4 / P-5 实测结果与用户 D2 / D3 定案决定是否推进）
 ⑦ §五 验收读数 + `docs/变更记录.md` 台账行
 ```
@@ -319,4 +319,87 @@ Gradle 属性优先级为 GRADLE_USER_HOME > 项目根，故项目级那份 `-Xm
 **结论三：双路是 32 GB 配置的硬上限**（三组双路配置 free 均 ≤2.8 GB，2 片甚至跌到 0.3 GB）。提高并行度只剩两条路：加内存（CPU 始终有 20~28% 余量），或加快验证通道（testFast）。
 
 **环境注记**：本轮结束后的清理中发现，两个实验工作树已被并行治理会话摘除 worktree 注册（`.git` 指针与 `.git/worktrees/*` 已删、`git worktree list` 不再列出；对应分支清理属 BranchHygiene3 批次）——目录文件完好、两树 `DialectDockerVerificationTest.kt` 均已还原；worktree 元数据的删除属治理会话动作，本计划不做恢复。
+
+### 六、B 项实施：daemon 参数统一 + Kotlin in-process（2026-09-24 00:30~01:45）
+
+**实施位置**：独立工作树 `F:\code\Java\Gitee\SongRenShuo\mpsv-build-conc`（分支 `t-build-concurrency`，基于 dev 顶 `1b9ee73`）。开工第一步 `./gradlew --stop`（停 3 个 daemon，窗口期避开并行车道）。
+
+**改动**：
+1. 用户级 `~/.gradle/gradle.properties`（junction 实体 `F:\gradle-home\gradle.properties`）：`org.gradle.jvmargs` 由 `-Xmx2g -XX:MaxMetaspaceSize=256m` 改为 `-Xmx4096m -XX:MaxMetaspaceSize=1536m`，其余条目逐字保留（`codex.sdk.jar` 等）。
+2. 项目 `gradle.properties`：新增 `kotlin.compiler.execution.strategy=in-process` 常驻配置（注释写明机制、内存代价承接、OOM 回退方式与 §九 D2 备选）；订正「jvmargs 被用户级覆盖从未生效」的过时注释。提交 `2932b46`。
+
+**改前留底（用户级文件全文，2026-09-24 01:36 读）**：
+
+```
+# 并行构建
+org.gradle.parallel=true
+
+# 构建缓存
+org.gradle.caching=true
+
+# JVM 内存优化
+org.gradle.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=256m
+
+# coolrequest-vip: codex-java-sdk 的本地 jar（该仓库 build.gradle.kts 的默认值指向作者机器的路径）
+codex.sdk.jar=F:/code/Java/Github/other/houxinlin/coolrequest-vip/libs/codex-java-sdk-1.0-SNAPSHOT.jar
+```
+
+**改前读数**：`--stop`（01:35）后约 5 分钟，并行车道即拉起新 GradleDaemon（pid 18972），参数仍是 `-Xmx2g -XX:MaxMetaspaceSize=256m`（用户级旧值）——覆盖冲突与「每次构建拉新 daemon」的实证；此时机器另有 7 个非 gradle java 进程（IDE 等）。
+
+**改后验收读数（§五 2）**：
+- 编译密集定向：新工作树首编 `./gradlew :compileKotlin compileTestKotlin` → **BUILD SUCCESSFUL in 2m 57s**（24 tasks：18 executed + 6 from cache，全新树无增量可吃，属真全量编译），日志零 `OutOfMemory`/Metaspace 异常 → **P-3 成立**，daemon 1536m 元空间承接 in-process 编译足够；既有「`compileMcpStubKotlin` OOM」记录的前提（jvmargs 被压到 256m）已随参数统一消除。
+- KotlinDaemon 进程数：**0**（编译全程无 `KotlinCompileDaemon` 进程，in-process 生效，§五 2 的「实例数为 0」达成）。
+- GradleDaemon 参数：新建 daemon（pid 2400）参数 `-Xmx4096m -XX:MaxMetaspaceSize=1536m`，改后新建 daemon **取值唯一**；唯一 straggler（pid 18972，旧 2g/256m）产生于「`--stop` 之后、配置落盘之前」的窗口期，属改前遗产，与统一后参数不兼容、不会被复用，闲置 3 小时后自动退出（约束不许二次 `--stop`，如实记录）。
+- 终采补记（02:12）：并行车道（分支未含本改动）的构建拉起 1 个 KotlinDaemon（pid 78660）属预期——in-process 配置在本分支，合入 dev 后各树生效；该 Kotlin daemon 的 JVM 参数已随用户级统一自动变为 `4096m/1536m`，Kotlin daemon 池的参数一致性作为 B 项统一的连带收益。
+
+### 七、C 项实施：机器级构建闸门 dev-support/gradle-gate.ps1（2026-09-24 01:45~02:05）
+
+**实现形态**（`dev-support/gradle-gate.ps1`，提交 `038a662`）：
+- 锁目录 `%TEMP%\<GateName>\slot-0..slot-(N-1)`，**目录创建（create-or-fail）为原子互斥原语**；槽内 `holder.txt` 记 pid/session/utc/cmd。`%TEMP%` 按用户隔离，全部车道同一 Windows 用户运行时即等价机器级。
+- 默认 `-MaxConcurrent 2`（内存约束依据 §九 D3）；**无任何降片逻辑**（§三 C 行已订正）。
+- 两种用法：`-Command "<gradle 命令>"`（拿锁-执行-还锁-传播退出码，推荐）；`-Acquire [-HoldSeconds N] [-NoRelease]` / `-Release -Session <guid>` 两段式。
+- 自愈：持有者异常退出不删目录，下一路按「holder pid 已死」立即 TAKEOVER；15 秒初始化宽限防「建目录-写 holder」窗口被误判；`-StaleAfterMinutes`（默认 240）兜底 pid 复用。
+- 脚本头注释带 Windows 坑记录：`/X` 参数工具禁 Git Bash 直调（MSYS 路径转换）、robocopy 退出码 0~7 均成功、ps1 中文注释必须带 UTF-8 BOM。
+
+**P-6 实测读数**（`-GateName` 独立命名隔离，不触真实闸门）：
+
+| 用例 | 读数 | 判定 |
+|---|---|---|
+| 两路并发 + 第三路等待 | c1 01:48:42 取 slot-0、c2 01:48:43 取 slot-1（同时起步各得一槽）；c3 4s 后起步进入排队，01:48:55（c1 01:48:54 释放后）才取得 slot-0；总耗时 13s ≈ 12s 持锁 + 轮询粒度 | 通过，无双持 |
+| 异常退出后锁释放 | 伪造死 pid 的 holder（起一个即退的进程取其 pid 写入 holder.txt）→ 下一路输出 `GATE TAKEOVER slot=0 previous holder dead or expired` 并成功 ACQUIRED；对照用活 pid 的槽全程未被接管 | 通过 |
+| 退出码传播 | `-Command "cmd /c exit 7"` → 闸门进程退出码 **7**；`cmd /c echo` → **0**，命令 stdout 原样透传 | 通过 |
+
+**实测过程发现（均已修复或记录）**：
+1. **新建文件撞实时扫描**：`WriteAllLines` 写 holder 瞬间可报「正由另一进程使用」（AV/索引器对新生文件的瞬时独占），首轮实测直接崩死一个申请者并留下无 holder 的半初始化槽。修复：写入重试 5 次 ×200ms；重试耗尽删自建槽目录返回失败（绝不带槽假装持锁）。
+2. **PowerShell 函数输出捕获陷阱**：`Acquire-Gate` 内 `Write-Output` 的状态行被调用方 `$got = Acquire-Gate` 捕获进返回值，`GATE ACQUIRED` 等状态行全部丢失。修复：函数一律静默，状态行只在顶层输出，内部事件经 `$script:GateEvents` 由顶层转储。
+3. **沙盒环境 `Stop-Process` 失效**：对子进程 `-Force` 后进程仍存活（`taskkill //F` 可杀）——崩溃模拟改为「伪造死 pid」的确定性方案。
+4. **ps1 编码坑**：UTF-8 无 BOM 的 ps1 被 PowerShell 5.1 按 GBK 解析，中文注释尾字节可吞掉换行符导致解析错——本机 ps1 一律带 BOM。
+
+**验收对照（§五 3）**：并发数上限生效（第三路排队）✓；两路并发与异常释放读数齐 ✓；`docs/MEMORY.md` 条目——**待主控转录**（下方约定文案）。
+
+**约定文案（主控转录进 docs/MEMORY.md「并行测试协调登记表」节）**：
+
+> **构建并发闸门（2026-09-24 起）**：任何会话跑 gradle 前过机器级闸门——`powershell -NoProfile -ExecutionPolicy Bypass -File dev-support\gradle-gate.ps1 -Command "<gradle 命令>"`。最多 2 路并行（32 GB 内存约束，加路先加内存），第 3 路自动排队（超时默认 3600 s），持有者异常退出后锁由下一路自动接管。**禁降片**：不许用 `-PtestShardCount` 调小换并行（实测证伪）。
+
+### 八、F 项实施：登记表自动过期 + 沙盒名派生（2026-09-24 01:55~02:10）
+
+**改动点**（`C:\Users\USER\.zcode\cli\parallel_tasks.py`，仓库外文件，原子换装）：
+1. 自动过期：新增 `EXPIRE_GRACE_HOURS = 1.0` 与 `expire_stale()`——`check` 时把 `expectedEndAt` 已过且超宽限 1 小时的 active 条目改标 `status=expired`（记 `expiredAt`，**不删数据行**，历史可查；`expectedEndAt` 缺失/不可解析的保守不动）；`cmd_check` 先过期再判活，过期条目打点展示且**不触发 exit 1**。
+2. 沙盒名派生：`register` 不传 `--sandbox` 时按当前工作树目录名派生 `MPSV-<dirname>`；传参仍以传参为准。
+3. 文件头约定节与 `--help` 同步更新；既有行为（同名/同沙盒先注销旧的、裸 `done` 全注销、prune 按 startedAt 清理）逐字保留。
+4. `buildSrc/mpv-testing.gradle.kts` **未动**（超出 F 项「或独立约定」的授权范围，维持沙盒名手工传入与派生名约定并存）。
+
+**原子换装流程**：临时文件改好 → `%TEMP%` 独立数据文件受控自测 → `Move-Item -Force` 一次性覆盖正式脚本（无长半成品状态）。换装后并行车道 T-PreMainScope 即以新版成功 register（01:57:30），并发可用性顺带实证。
+
+**受控自测读数**（`%TEMP%\parallel-tasks.json` 种子 2 条：过期/存活各一）：
+
+| 用例 | 读数 | 判定 |
+|---|---|---|
+| check 自动过期 | 输出「自动过期 1 条」，仅存活条目列入 WARN；exit 1 由存活条目触发 | 通过 |
+| 数据行保留 | 过期条目 `status=expired` + `expiredAt` 落盘，行未删 | 通过 |
+| 沙盒名派生 | cwd=`mpsv-fake-tree` → `register` 落 `sandbox=MPSV-mpsv-fake-tree` | 通过 |
+| 传参优先 | `--sandbox MPSV-Override` → 落 `MPSV-Override`（派生不生效） | 通过 |
+| done 注销 | `done --name` → 「已注销 1 条」，check 不再列出 | 通过 |
+
+**换装后真实表读数**：真实 `parallel-tasks.json` 中 **11 条**陈旧 active（最早 `expectedEndAt` 停在 2026-09-22 11:32，即 §1.5「登记表不可信」的存量）一次清为 expired；剩余 active 仅 T-BuildConc（本任务）与 T-PreMainScope（并行车道），exit 1 语义正常。**自测三连 `check` / `register`（派生） / `done` 全通**（§五 5 达成：自动过期 ✓、沙盒名可由工作树名推导、无需改 `build.gradle.kts` ✓）。
 
