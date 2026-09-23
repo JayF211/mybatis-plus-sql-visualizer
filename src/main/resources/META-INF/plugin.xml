@@ -305,6 +305,13 @@
                            bundle="messages.MpSqlVisualizerBundle"
                            key="notification.group.feedback"
                            displayType="BALLOON"/>
+        <!-- T-SqlSuppress（O-69/D5）：SQL 屏蔽规则 balloon（右键屏蔽成功反馈 + 达上限提示 + 管理直达）——
+             独立组：既有三组各属独立域（updates 更新 / preview 预览 toast / feedback 错误上报），
+             屏蔽反馈复用会张冠李戴，照「一域一组」惯例新增 -->
+        <notificationGroup id="cn.song.mybatisplus.visualizer.logsuppress"
+                           bundle="messages.MpSqlVisualizerBundle"
+                           key="notification.group.logsuppress"
+                           displayType="BALLOON"/>
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.update.StartupUpdateCheck"/>
 
         <!-- T-M31.14 日志自动监听：设置「项目启动时自动开始监听」开启时项目打开即挂载控制台监听 -->
