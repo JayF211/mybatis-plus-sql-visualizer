@@ -69,7 +69,10 @@ class SqlVisualizerCrudSqlTool : McpToolsetSupport("sqlv_crud_sql") {
         } ?: throwExpected(
             McpToolErrors.code(
                 McpToolErrors.SOURCE_NOT_FOUND,
-                if (filePath.isNotBlank()) "entity file not found or contains no class: $filePath"
+                // T-McpFilePathUnify（O-70）：与 render_sql / mapper_check 同一引导语——项目外路径
+                // 也被拒，缺这句 agent 会误判成「文件不存在」而不知是路径出了项目范围
+                if (filePath.isNotBlank()) "entity file not found or contains no class: $filePath " +
+                    "(pass a project-relative path, or an absolute path inside the project)"
                 else "class not found in project: $className",
             ),
         )
