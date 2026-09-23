@@ -59,6 +59,18 @@ class DialectExplainTest {
         assertEquals("EXPLAIN $sample", DmDialect.renderExplainStatement(sample))
     }
 
+    /** T-DialectXcFamily：OceanBase 同 MySQL 形态（官方 V4.x EXPLAIN 文法缺省 TRADITIONAL 表格行——文档级）。 */
+    @Test
+    fun `OceanBase 同 MySQL 形态（文档实证）`() {
+        assertEquals("EXPLAIN $sample", OceanBaseDialect.renderExplainStatement(sample))
+    }
+
+    /** T-DialectXcFamily：openGauss 同金仓形态（openGauss 5.0.0 真机实证 FORMAT JSON 单列 JSON 文本）。 */
+    @Test
+    fun `openGauss 同金仓 JSON 形态（真机实证）`() {
+        assertEquals("EXPLAIN (FORMAT JSON) $sample", OpenGaussDialect.renderExplainStatement(sample))
+    }
+
     @Test
     fun `Oracle SQLServer 降级 null`() {
         assertNull(OracleDialect.renderExplainStatement(sample))

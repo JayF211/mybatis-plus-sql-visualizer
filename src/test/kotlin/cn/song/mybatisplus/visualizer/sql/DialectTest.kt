@@ -75,6 +75,9 @@ class DialectTest {
         assertEquals(MariaDbDialect, DialectRegistry.byName("MariaDB"))
         assertEquals(DmDialect, DialectRegistry.byName("DM（达梦）"))
         assertEquals(KingBaseDialect, DialectRegistry.byName("KingBase（人大金仓）"))
+        // T-DialectXcFamily（O-63）信创方言补全族
+        assertEquals(OceanBaseDialect, DialectRegistry.byName("OceanBase"))
+        assertEquals(OpenGaussDialect, DialectRegistry.byName("openGauss"))
         // 未知名称/空值回退 MySQL
         assertEquals(MySqlDialect, DialectRegistry.byName("Unknown"))
         assertEquals(MySqlDialect, DialectRegistry.byName(null))
@@ -82,7 +85,7 @@ class DialectTest {
         assertEquals(
             listOf(
                 "MySQL", "PostgreSQL", "Oracle", "SQL Server", "H2", "SQLite",
-                "MariaDB", "DM（达梦）", "KingBase（人大金仓）",
+                "MariaDB", "DM（达梦）", "KingBase（人大金仓）", "OceanBase", "openGauss",
             ),
             DialectRegistry.dialects.map { it.name },
         )
@@ -103,8 +106,8 @@ class DialectTest {
     }
 
     /**
-     * 标识符折叠方向族（O-51 / T-IdentifierFoldingFamily）：9 方言逐库声明——Oracle / H2 = UPPER、
-     * PostgreSQL / KingBase = LOWER、其余 5 方言 = NONE。
+     * 标识符折叠方向族（O-51 / T-IdentifierFoldingFamily）：方言逐库声明——Oracle / H2 = UPPER、
+     * PostgreSQL / KingBase / openGauss = LOWER、其余 6 方言 = NONE。
      *
      * 归属依据（真机/引擎实测，2026-09-22）：
      *  - Oracle：`FROM dual` → 1（裸写折为大写命中）、`FROM "dual"` → `ORA-00942`；
@@ -128,13 +131,17 @@ class DialectTest {
         assertEquals(IdentifierFolding.NONE, SqliteDialect.identifierFolding)
         assertEquals(IdentifierFolding.NONE, MariaDbDialect.identifierFolding)
         assertEquals(IdentifierFolding.NONE, DmDialect.identifierFolding)
+        // T-DialectXcFamily（O-63）：openGauss=LOWER（openGauss 5.0.0 真机实测 2026-09-23）、
+        // OceanBase=NONE（MySQL 模式推定，真机核对后增量）
+        assertEquals(IdentifierFolding.LOWER, OpenGaussDialect.identifierFolding)
+        assertEquals(IdentifierFolding.NONE, OceanBaseDialect.identifierFolding)
         // 逐库点名族成员（注册表顺序），新增方言漏声明或归错族时先红
         assertEquals(
             listOf("Oracle", "H2"),
             DialectRegistry.dialects.filter { it.identifierFolding == IdentifierFolding.UPPER }.map { it.name },
         )
         assertEquals(
-            listOf("PostgreSQL", "KingBase（人大金仓）"),
+            listOf("PostgreSQL", "KingBase（人大金仓）", "openGauss"),
             DialectRegistry.dialects.filter { it.identifierFolding == IdentifierFolding.LOWER }.map { it.name },
         )
     }

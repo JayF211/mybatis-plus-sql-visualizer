@@ -74,6 +74,11 @@ object ExplainSupport {
      *  - KingbaseES V8/V9：`EXPLAIN (FORMAT JSON)`（PG 兼容）；
      *  - DM8：`EXPLAIN <sql>`，返回 `#NSET2` 计划文本；
      *  - H2：`EXPLAIN PLAN FOR`；SQLite：`EXPLAIN QUERY PLAN`（引擎级单测覆盖）；
+     *  - OceanBase（T-DialectXcFamily）：`EXPLAIN <sql>`，TABLE 档——官方 V4.x《SQL 执行计划简介》
+     *    `EXPLAIN [explain_type] dml_statement`、缺省 `FORMAT = TRADITIONAL` 表格行（文档级，
+     *    无真机——环境受限未验证留账）；
+     *  - openGauss（T-DialectXcFamily）：`EXPLAIN (FORMAT JSON)`，JSON 档——openGauss 5.0.0
+     *    **真机实证**（DBX 只读通道 2026-09-23：FORMAT JSON 返回单列 `QUERY PLAN` JSON 文本）；
      *  - Oracle（需两步链查 PLAN_TABLE）与 SQL Server（需会话级 `SET SHOWPLAN_XML`）
      *    **不接入**——各有独立前置，非本任务范围。
      */
@@ -85,6 +90,8 @@ object ExplainSupport {
         Entry("DM（达梦）", "EXPLAIN $SQL_PLACEHOLDER", ExplainOutputFormat.TEXT, "真机实证 DM8（返回 #NSET2 计划文本）"),
         Entry("H2", "EXPLAIN PLAN FOR $SQL_PLACEHOLDER", ExplainOutputFormat.TEXT, "H2 2.3.232 引擎级单测"),
         Entry("SQLite", "EXPLAIN QUERY PLAN $SQL_PLACEHOLDER", ExplainOutputFormat.TEXT, "SQLite 引擎级单测"),
+        Entry("OceanBase", "EXPLAIN $SQL_PLACEHOLDER", ExplainOutputFormat.TABLE, "文档实证 OB 官方 V4.x EXPLAIN 文法（缺省 TRADITIONAL 表格行）；真机留账（T-DialectXcFamily）"),
+        Entry("openGauss", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "真机实证 openGauss 5.0.0（DBX 只读通道 2026-09-23，FORMAT JSON 单列 JSON 文本）"),
         Entry("Oracle", null, null, "不接入：需两步链查 PLAN_TABLE（另议）"),
         Entry("SQL Server", null, null, "不接入：需会话级 SET SHOWPLAN_XML（另议）"),
     )

@@ -26,6 +26,10 @@ internal object JdbcUrlDialects {
         "dm" to "DM（达梦）",
         "kingbase8" to "KingBase（人大金仓）",
         "kingbase" to "KingBase（人大金仓）",
+        // T-DialectXcFamily（O-63）：gaussdb（华为 GaussDB 官方前缀）与 opengauss 同归 openGauss
+        // 角标（D2=A 一 object 两前缀）；oceanbase 新增角标（此前在册即无）
+        "oceanbase" to "OceanBase",
+        "gaussdb" to "openGauss",
         "gbasedbt-sqli" to "GBASE",
         "gbasedbt" to "GBASE",
         "gbase" to "GBASE",

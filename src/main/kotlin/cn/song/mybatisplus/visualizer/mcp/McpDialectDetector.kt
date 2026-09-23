@@ -19,6 +19,10 @@ object McpDialectDetector {
         "jdbc:sqlite" to "SQLite",
         "jdbc:dm" to "DM（达梦）",
         "jdbc:kingbase" to "KingBase（人大金仓）",
+        // T-DialectXcFamily（O-63）：opengauss/gaussdb 同归 openGauss（D2=A 一 object 两前缀）
+        "jdbc:opengauss" to "openGauss",
+        "jdbc:gaussdb" to "openGauss",
+        "jdbc:oceanbase" to "OceanBase",
     )
 
     /** agent 显式方言名 → 注册名的精确别名表（小写；不 contains 防止 "oracle-no-such-x" 误归一）。 */
@@ -42,6 +46,10 @@ object McpDialectDetector {
         "kingbase8" to "KingBase（人大金仓）",
         "金仓" to "KingBase（人大金仓）",
         "人大金仓" to "KingBase（人大金仓）",
+        // T-DialectXcFamily（O-63）
+        "oceanbase" to "OceanBase",
+        "opengauss" to "openGauss",
+        "gaussdb" to "openGauss",
     )
 
     /** agent 显式方言名归一化（精确别名匹配；不可识别返回 null）。 */

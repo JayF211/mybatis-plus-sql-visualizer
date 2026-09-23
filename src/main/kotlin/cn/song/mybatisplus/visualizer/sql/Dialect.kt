@@ -321,11 +321,16 @@ private fun renderLimitValue(value: SqlValue): String = when (value) {
 }
 
 /**
- * 共享 upsert 辅助：MySQL 形态 `ON DUPLICATE KEY UPDATE col = VALUES(col), ...`。
+ * 共享渲染辅助：MySQL 形态 `ON DUPLICATE KEY UPDATE col = VALUES(col), ...`。
  * 供 MySQL / MariaDB 复用（VALUES() 对 5.7~8.0+/MariaDB 全版本可用）。
  *
  * O-51：列名引用走 [Dialect.quoteIfNeeded]（而非裸 [Dialect.quoteIfKeyword]），与 INSERT 基座同一判定；
  * MySQL / MariaDB 为 NONE 族，实体/目录来源产物逐字节不变。
+ *
+ * T-DialectXcFamily（O-63）扩员：OceanBase（MySQL 模式）与 openGauss 也以本形态为原生 upsert——
+ * 前者为 MySQL 兼容面（官方《与 MySQL 兼容性对比》+《唯一键冲突》）；后者**真机实证**仅本形态可用
+ * （openGauss 5.0.0：`ON DUPLICATE KEY UPDATE` 解析通过、PG 的 `ON CONFLICT` 语法错误，2026-09-23
+ * DBX 只读通道）——「PG 族=ON CONFLICT」的族推定在 openGauss 不成立（详见 [OpenGaussDialect]）。
  */
 private fun Dialect.renderMySqlStyleUpsert(
     updateColumns: List<String>,
@@ -681,6 +686,93 @@ object KingBaseDialect : Dialect {
 }
 
 /**
+ * OceanBase（MySQL 模式）方言（T-DialectXcFamily / O-63）：同 MySQL 的 `LIMIT [offset,] count`。
+ *
+ * 标识符引用反引号 `` `x` ``。upsert 同 MySQL 的 `ON DUPLICATE KEY UPDATE ... VALUES()` 形态。
+ * D1=A 定案：**只接 MySQL 模式**（主流装机面），Oracle 模式不做。
+ *
+ * 验证来源（**文档级**，无真机实例——环境受限未验证，真机核对后增量）：
+ *  - JDBC URL：OceanBase Connector/J 官方《Database URL》`jdbc:oceanbase://host:port/db`（V2.4.16）；
+ *  - EXPLAIN：官方 V4.x《SQL 执行计划简介》`EXPLAIN [explain_type] dml_statement`，
+ *    `FORMAT = {TRADITIONAL | JSON}`，缺省 TRADITIONAL **表格行** → 与 MySQL 同形态
+ *    （[ExplainSupport] 表登记 TABLE 档）；
+ *  - 兼容面：官方《与 MySQL 兼容性对比》声明 MySQL 5.7/8.0 绝大部分语法兼容（反引号 / LIMIT /
+ *    `ON DUPLICATE KEY UPDATE` 官方《唯一键冲突》在册）。
+ *
+ * 保留字：沿用 [MYSQL_RESERVED]（MySQL 8.0 全量）为基线——OB MySQL 模式的兼容性声明覆盖语法面，
+ * OB 特有保留字差异未逐词核对（真机核对后增量，参照 P-立项-05 的 DM/KingBase 黄金清单先例）。
+ * 折叠方向：推定 [IdentifierFolding.NONE]（MySQL 模式大小写不敏感兼容面）——真机打脸按 H2 先例订正。
+ */
+object OceanBaseDialect : Dialect {
+    override val name: String = "OceanBase"
+
+    override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
+
+    override val supportsDeleteLimit: Boolean = true
+
+    override fun quoteIdentifier(identifier: String): String = "`$identifier`"
+
+    override val reservedWords: Set<String> = MYSQL_RESERVED
+
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderMySqlStyleUpsert(updateColumns, caseSource)
+}
+
+/**
+ * openGauss 方言（T-DialectXcFamily / O-63）：PG 族形态——`LIMIT {count} OFFSET {offset}`、
+ * 双引号引用、[IdentifierFolding.LOWER] 折叠。D2=A 定案：GaussDB（华为云）与 openGauss 社区版
+ * 共用一个 object，两个 JDBC URL 前缀（`jdbc:opengauss://` 与 `jdbc:gaussdb://`）都归本方言
+ * （两前缀各有官方文档出处，见 [UrlSubprotocolDialects]）。
+ *
+ * **验证来源（openGauss 引擎级，DBX MCP 只读通道，GaussDB/openGauss 5.0.0，2026-09-23）**：
+ *  - 折叠 LOWER：`SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES` → 455 行（裸大写折小写命中）、
+ *    `FROM information_schema."TABLES"` → `relation "information_schema.TABLES" does not exist on gaussdb`；
+ *  - 反引号不可用：``SELECT 1 AS `x` `` → `syntax error`（双引号族实锤）；
+ *  - LIMIT 形态：`SELECT 1 LIMIT 1 OFFSET 0` → 1 行；`SELECT 1 LIMIT 1, 2` → **0 行**——
+ *    openGauss 把 `LIMIT a, b` 按 **PG 语义**（OFFSET a LIMIT b）解析，MySQL 形态会被静默错解，
+ *    故分页必须渲染 PG 形态（真机对照读数）；
+ *  - EXPLAIN：`EXPLAIN (FORMAT JSON) SELECT 1` → 单列 `QUERY PLAN` JSON 文本（JSON 档实锤）；
+ *    `EXPLAIN SELECT 1` → 文本计划树。
+ *
+ * **upsert 特例（真机对照对实锤）**：openGauss 的原生 upsert 是 **MySQL 形态**
+ * `ON DUPLICATE KEY UPDATE col = VALUES(col)`（EXPLAIN 规划期通过），而 PG 的
+ * `ON CONFLICT (k) DO UPDATE` 直接语法错误——「PG 族=ON CONFLICT」的族推定在本方言被打脸
+ * （KingBase 同为 PG 系但 upsert 相反），照抄 KingBase 先例会产出语法错误 SQL。
+ * 官方文档同向（openGauss《INSERT》on_duplicate_key 文法，`VALUES(column_name)` 引用在册）。
+ *
+ * 保留字：沿用 [PG_RESERVED]（PG 官方附录全量）为基线——openGauss 内核源自 PG 9.2 演化，
+ * openGauss 特有保留字差异未逐词核对（真机核对后增量）。
+ */
+object OpenGaussDialect : Dialect {
+    override val name: String = "openGauss"
+
+    override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
+
+    override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    /**
+     * 折叠方向 LOWER：openGauss 5.0.0 真机实测（2026-09-23，DBX 只读通道），与 PG/KingBase 同族
+     * ——目录来源「含大写字母即加引号」。
+     */
+    override val identifierFolding: IdentifierFolding = IdentifierFolding.LOWER
+
+    override val reservedWords: Set<String> = PG_RESERVED
+
+    /**
+     * MySQL 形态 upsert（真机对照对实锤，见类 KDoc）——复用 [renderMySqlStyleUpsert]，
+     * 列名引用符号随本方言的双引号（`VALUES()` 引用形态 openGauss 官方 INSERT 文法在册）。
+     */
+    override fun renderUpsert(
+        conflictKey: String,
+        updateColumns: List<String>,
+        caseSource: IdentifierCaseSource,
+    ): String = renderMySqlStyleUpsert(updateColumns, caseSource)
+}
+
+/**
  * 方言注册表：按名称获取方言，未知名称回退 MySQL。
  */
 object DialectRegistry {
@@ -696,6 +788,8 @@ object DialectRegistry {
         MariaDbDialect,
         DmDialect,
         KingBaseDialect,
+        OceanBaseDialect,
+        OpenGaussDialect,
     )
 
     /**

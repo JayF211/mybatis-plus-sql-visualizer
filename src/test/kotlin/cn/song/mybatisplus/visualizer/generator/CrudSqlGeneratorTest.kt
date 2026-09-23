@@ -466,20 +466,22 @@ class CrudSqlGeneratorTest {
      * 不折叠族（[Dialect.identifierFolding] = NONE）**逐字节不变**：目录来源与实体来源在同一 spec
      * 上的全部产物逐字符相同。
      *
-     * O-51 后本判据的适用面收窄为 NONE 族 5 方言——UPPER/LOWER 两族的目录来源分支必然产生差异
+     * O-51 后本判据的适用面收窄为 NONE 族方言——UPPER/LOWER 两族的目录来源分支必然产生差异
      * （见上一用例）。夹具特意用**含大写**的名字（`Biz_Order`），使「族判定漏进默认路径」这类
      * 回归无法藏在小写夹具后面。这是「不改变其余方言产物」的结构性守卫（比逐方言快照更严：
      * 同 spec 双来源直接对比）。
      *
      * H2 自本轮起为 UPPER 族（`DialectH2VerificationTest.标识符折叠方向_H2引擎实测对照` 引擎实测
      * 折为大写），故已从本清单移出——H2 的目录来源含小写名会加引号，与实体来源不再逐字节一致。
+     * T-DialectXcFamily：OceanBase=NONE（MySQL 模式推定）加入本清单；openGauss=LOWER
+     * （openGauss 5.0.0 真机实测 2026-09-23）不入本清单。
      */
     @Test
     fun nonFoldingDialectsRenderByteIdenticalRegardlessOfCaseSource() {
         val nonFolding = DialectRegistry.dialects.filter { it.identifierFolding == IdentifierFolding.NONE }
         // 逐库点名（不按属性自证）：族声明写错时本断言先红，避免「过滤条件与被测属性同源」的空绿
         assertEquals(
-            listOf("MySQL", "SQL Server", "SQLite", "MariaDB", "DM（达梦）"),
+            listOf("MySQL", "SQL Server", "SQLite", "MariaDB", "DM（达梦）", "OceanBase"),
             nonFolding.map { it.name },
         )
         nonFolding.forEach { dialect ->

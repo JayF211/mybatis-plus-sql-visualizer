@@ -24,6 +24,12 @@ internal object UrlSubprotocolDialects {
         "dm" to "DM（达梦）",
         "kingbase8" to "KingBase（人大金仓）",
         "kingbase" to "KingBase（人大金仓）",
+        // T-DialectXcFamily（O-63）：oceanbase（OceanBase Connector/J 官方《Database URL》）；
+        // opengauss（openGauss 官方《Connecting to a Database》）与 gaussdb（华为 GaussDB 官方
+        // 《Creating a Database Connection》）同归 openGauss——D2=A 定案，一 object 两前缀
+        "oceanbase" to "OceanBase",
+        "opengauss" to "openGauss",
+        "gaussdb" to "openGauss",
     )
 
     /**

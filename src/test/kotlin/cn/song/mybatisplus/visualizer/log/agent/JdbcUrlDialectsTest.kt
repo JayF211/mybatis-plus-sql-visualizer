@@ -6,7 +6,7 @@ import org.junit.Test
 
 /**
  * [JdbcUrlDialects] 纯逻辑测试（T-AgentDialectLoop）：URL 子协议 → 目标库显示名映射。
- * 覆盖 9 方言对应子协议 + 国产/兼容形态 + 畸形输入容错。
+ * 覆盖各方言对应子协议 + 国产/兼容形态 + 畸形输入容错。
  */
 class JdbcUrlDialectsTest {
 
@@ -29,6 +29,9 @@ class JdbcUrlDialectsTest {
         assertEquals("openGauss", JdbcUrlDialects.displayName("jdbc:opengauss://localhost:5432/db"))
         assertEquals("GBASE", JdbcUrlDialects.displayName("jdbc:gbasedbt-sqli://localhost:9088/db"))
         assertEquals("HSQL", JdbcUrlDialects.displayName("jdbc:hsqldb:mem:test"))
+        // T-DialectXcFamily（O-63）：OceanBase 新增角标；华为 GaussDB 前缀同归 openGauss 角标（D2=A）
+        assertEquals("OceanBase", JdbcUrlDialects.displayName("jdbc:oceanbase://localhost:2881/db"))
+        assertEquals("openGauss", JdbcUrlDialects.displayName("jdbc:gaussdb://localhost:8000/db"))
     }
 
     @Test
