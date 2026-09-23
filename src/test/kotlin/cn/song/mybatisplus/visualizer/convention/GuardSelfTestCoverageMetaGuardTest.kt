@@ -878,6 +878,28 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "断言直接内联在 @Test（O-68 注册结构守卫：mcpServer optional depends 恰一条 / " +
                     "mcp-optional.xml 禁直宣 mcpToolFilterProvider / 探测式 registrar 与桥类在册防改名漂移）",
             ),
+            // ---- O-64/T-RollbackIdentityParse 新增守卫（2026-09-23） ----
+            GuardEntry(
+                "sql/IdentityWholeScriptWiringGuardTest.kt",
+                listOf(
+                    DecisionFn(
+                        "argSpan",
+                        FnKind.HELPER,
+                        "括号配对实参提取器，被 callsWithin 调用（via 即该调用边）",
+                        via = listOf("callsWithin"),
+                    ),
+                    DecisionFn(
+                        "argSpanBody",
+                        FnKind.HELPER,
+                        "花括号配对函数体提取器，被 callsWithin 调用（via 即该调用边）",
+                        via = listOf("callsWithin"),
+                    ),
+                    // 裸条目：callsWithin 由本类自证语料 `自证_合成源码缺旗标被守卫抓到` 直接引用（勿加描述=豁免）
+                    DecisionFn("callsWithin", FnKind.SITES),
+                ),
+                "O-64 wholeScriptExec 接线守卫：生产链每个转发点必传旗标（P19 批次默认执行缺口的防复发面）；" +
+                    "callsWithin 的自证语料为合成源码直接喂入",
+            ),
             // ---- 本元守卫自身 ----
             GuardEntry(
                 "convention/GuardSelfTestCoverageMetaGuardTest.kt",
