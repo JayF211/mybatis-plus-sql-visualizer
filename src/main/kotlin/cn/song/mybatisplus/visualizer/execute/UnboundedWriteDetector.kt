@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.execute
 
+import cn.song.mybatisplus.visualizer.sql.IdentityInsertStatements
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper
 import net.sf.jsqlparser.expression.BinaryExpression
 import net.sf.jsqlparser.expression.BooleanValue
@@ -128,8 +129,15 @@ object UnboundedWriteDetector {
     fun detect(sql: String): WriteRisk {
         val cleaned = SqlCommentStripper.strip(sql)
         if (cleaned.isBlank()) return WriteRisk(emptyList())
+        // O-64/T-RollbackIdentityParse（P19）：先剥离插件自产 identity 包装语句（仅精确
+        // `SET IDENTITY_INSERT <表> ON|OFF;` 形态，判据见 IdentityInsertStatements KDoc）再解析——
+        // JSqlParser 对该 T-SQL 语句解析期抛 ParseException，不剥离则「开关 + 真写语句」的回滚产物
+        // 整体 fail closed 报「无法解析语句结构」（误报：一行 INSERT 的产物被说成可能影响全表）。
+        // 剥离只影响解析输入，findings 仍按剥离后的真实语句计算——真写语句（UPDATE/DELETE）照常报，
+        // 开关语句本就不产生发现。无 identity 痕迹时 stripForParse 返回原引用，单槽 `===` 快路径不动。
+        val parseable = IdentityInsertStatements.stripForParse(cleaned)
         val statements = try {
-            parseStatementsShared(cleaned)
+            parseStatementsShared(parseable)
         } catch (e: Exception) {
             return WriteRisk(listOf(Finding(FindingKind.PARSE_FAILED, e.message?.take(DETAIL_LIMIT) ?: "")))
         }

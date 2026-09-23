@@ -57,6 +57,19 @@ class ExecuteConfirmMessagesTest {
         assertTrue(message, message.contains(MpSqlVisualizerBundle.message("execute.confirm.unbounded.parseFailed")))
     }
 
+    /**
+     * O-64/T-RollbackIdentityParse（P19 正例）：identity 包装回滚产物的确认文案回到既有形态，
+     * 不再报「无法解析语句结构——请人工确认影响范围」（keyword 取执行链实传值 `SET`，
+     * `SqlTypeClassifier.getFirstKeyword` 对产物首语句的返回）。
+     */
+    @Test
+    fun `identity包装产物_确认文案回既有形态_不再报无法解析`() {
+        val product = "SET IDENTITY_INSERT [user] ON;\n" +
+            "INSERT INTO [user] ([id], [name]) VALUES (1, 'Tom');\n" +
+            "SET IDENTITY_INSERT [user] OFF;"
+        assertEquals(legacy("SET"), ExecuteConfirmMessages.build(product, "SET"))
+    }
+
     @Test
     fun `查询语句_既有文案`() {
         // 查询不走确认流，但构建函数对无发现输入恒走既有文案

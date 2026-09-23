@@ -1070,6 +1070,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val proj = project ?: return
         if (sql.isBlank()) return
         val isQuery = SqlTypeClassifier.isQuery(sql)
+        // O-64/T-RollbackIdentityParse（P19/D2=A）：identity 包装产物整批直跑。识别特征=
+        // 含 `SET IDENTITY_INSERT … ON|OFF` 语句（本插件自产回滚批次的封闭形态）；普通多语句
+        // 产物保持现态（Statements 选择层默认行为不变），避免行为突变。生产入口仅本函数
+        // （回滚弹窗「执行回滚/执行快照查询」），executeSql 的用户编辑器执行链不接旗标。
+        val wholeScriptExec = cn.song.mybatisplus.visualizer.sql.IdentityInsertStatements.containsStatement(sql)
         if (!isQuery && !dmlConfirmed) {
             val keyword = SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
             val confirm = Messages.showYesNoDialog(
@@ -1096,6 +1101,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                         onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
                         onError = { errorMsg -> resultPanel.showError(errorMsg) },
             onErrorRich = { info -> showErrorRichWithLocate(info) },
+                        wholeScriptExec = wholeScriptExec,
                     )
                     return
                 }
@@ -1112,6 +1118,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 onResultsReady = { fullConsole -> embedConsole(fullConsole) },
                 onError = { errorMsg -> resultPanel.showError(errorMsg) },
             onErrorRich = { info -> showErrorRichWithLocate(info) },
+                wholeScriptExec = wholeScriptExec,
             )
             if (executed) return
         }
@@ -1121,6 +1128,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
             onError = { errorMsg -> resultPanel.showError(errorMsg) },
             onErrorRich = { info -> showErrorRichWithLocate(info) },
+            wholeScriptExec = wholeScriptExec,
         )
     }
 

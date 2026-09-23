@@ -232,12 +232,13 @@ object DataSourceSelector {
         onResultsReady: ((javax.swing.JComponent) -> Unit)? = null,
         onError: ((String) -> Unit)? = null,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
+        wholeScriptExec: Boolean = false,
     ): Boolean {
         val console = preparedConsole ?: return false
         val editor = preparedEditor ?: return false
         val scriptModel = preparedScriptModel ?: return false
         val execOption = preparedExecOption ?: return false
-        executeOnConsole(project, console, editor, scriptModel, execOption, preparedUi, onResultsReady, onError, onErrorRich)
+        executeOnConsole(project, console, editor, scriptModel, execOption, preparedUi, onResultsReady, onError, onErrorRich, wholeScriptExec = wholeScriptExec)
         return true
     }
 
@@ -261,9 +262,11 @@ object DataSourceSelector {
         onError: ((String) -> Unit)? = null,
         callback: ((Boolean) -> Unit)? = null,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
+        wholeScriptExec: Boolean = false,
     ) {
         chooseAndPrepare(project, sql, executeAfterPrepare = true,
-            onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback, onErrorRich = onErrorRich)
+            onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback, onErrorRich = onErrorRich,
+            wholeScriptExec = wholeScriptExec)
     }
 
     /**
@@ -281,6 +284,7 @@ object DataSourceSelector {
         onError: ((String) -> Unit)?,
         callback: ((Boolean) -> Unit)?,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
+        wholeScriptExec: Boolean = false,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         if (!ExecuteSqlSupport.isAvailable()) {
@@ -299,7 +303,7 @@ object DataSourceSelector {
         // M36.5.5：共享控制台命中（last-used 数据源一致且控制台仍有效）→ 直接复用——
         // 不同步 session/连接/临时文件/方言映射，规避"第二个会话连接永不发起"挂死（见字段注释）。
         // 显式执行路径同样复用（结果落在已嵌入面板）；用户切换数据源走弹窗 → 新建并替换共享缓存。
-        if (reuseSharedConsole(project, submitSql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich)) return
+        if (reuseSharedConsole(project, submitSql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich, wholeScriptExec)) return
 
         // 临时文件 + VF + PsiFile：Runner 上下文 + 控制台挂载点（VF 须保持引用）
         val temp = createTempPsiFile(project, submitSql)
@@ -317,7 +321,7 @@ object DataSourceSelector {
         var chosenRunnerName: String? = null
         val sessionConsumer = com.intellij.util.Consumer<Any> { session ->
             LOG.info("[M36] session created: ${session?.javaClass?.name}, attaching console (execute=$executeAfterPrepare, ds=$chosenRunnerName)")
-            prepareInConsole(project, session, vf, executeAfterPrepare, chosenRunnerName, onConsole, onEditor, onError, onErrorRich)
+            prepareInConsole(project, session, vf, executeAfterPrepare, chosenRunnerName, onConsole, onEditor, onError, onErrorRich, wholeScriptExec)
         }
 
         val runners = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer)
@@ -394,6 +398,7 @@ object DataSourceSelector {
         onError: ((String) -> Unit)?,
         callback: ((Boolean) -> Unit)?,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
+        wholeScriptExec: Boolean = false,
     ): Boolean {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val console = sharedConsole ?: return false
@@ -517,7 +522,7 @@ object DataSourceSelector {
         clearConsolePrompt(console, LOG)
         LOG.info("[M36] shared console reused (ds=$dsName, execute=$executeAfterPrepare, liveResult=${liveResult != null})")
         if (executeAfterPrepare) {
-            executeOnConsole(project, console, editor, refreshedModel ?: scriptModel, execOption, sharedUi, onResultsReady = null, onError = onError, onErrorRich = onErrorRich)
+            executeOnConsole(project, console, editor, refreshedModel ?: scriptModel, execOption, sharedUi, onResultsReady = null, onError = onError, onErrorRich = onErrorRich, wholeScriptExec = wholeScriptExec)
         }
         callback?.invoke(true)
         return true
@@ -1439,6 +1444,7 @@ object DataSourceSelector {
         onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)?,
         onError: ((String) -> Unit)?,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
+        wholeScriptExec: Boolean = false,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
@@ -1517,7 +1523,7 @@ object DataSourceSelector {
                 val ed = editor
                 // M36.2：编辑器就绪回调（调用方注入插件补全上下文，与原生补全叠加）
                 onEditor?.invoke(ed)
-                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, ed, onErrorRich)
+                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, ed, onErrorRich, wholeScriptExec)
             } else {
                 ApplicationManager.getApplication().executeOnPooledThread {
                     var editor: com.intellij.openapi.editor.Editor? = null
@@ -1536,7 +1542,7 @@ object DataSourceSelector {
                         if (resolved != null) {
                             onEditor?.invoke(resolved)
                             runCatching {
-                                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, resolved, onErrorRich)
+                                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, resolved, onErrorRich, wholeScriptExec)
                             }.onFailure { e ->
                                 LOG.warn("[M36] prepareInConsole(editor async wait) FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
                                 val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
@@ -1588,6 +1594,7 @@ object DataSourceSelector {
         document: com.intellij.openapi.editor.Document?,
         editor: com.intellij.openapi.editor.Editor,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
+        wholeScriptExec: Boolean = false,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
@@ -1954,6 +1961,7 @@ object DataSourceSelector {
                 executeOnConsole(
                     project, console, editor, effectiveScriptModel, execOption, ui,
                     onResultsReady = null, onError = onError, onErrorRich = onErrorRich,
+                    wholeScriptExec = wholeScriptExec,
                 )
             }
         }.onFailure { e ->
@@ -2614,6 +2622,30 @@ object DataSourceSelector {
      * @param onResultsReady 执行触发成功后回调完整 UI（顶部块+结果区 SplitPane）——
      *                       仅 executePrepared 路径传入（准备时只嵌了顶部块，执行后换入结果区）
      */
+    /**
+     * O-64/T-RollbackIdentityParse：identity 包装产物的「整批直跑」ExecOption 副本。
+     *
+     * 平台语义（javap 243 `DatabaseSettings$ExecOption` + 常量组实证）：多语句执行范围由
+     * `execInside`（光标在语句内）/ `execOutside`（光标在语句间）两个 int 决定，默认
+     * `EXECUTE_INSIDE_SHOW_CHOOSER` 弹 Statements 选择层且默认只选第一条——P19 的 identity
+     * 产物首语句恰是无副作用的 `SET … ON`，按默认执行等于 INSERT 没跑。本副本把两键都覆写为
+     * `*_WHOLE_SCRIPT`：不弹层、整批全部执行，即「默认全选」的唯一平台杠杆。
+     *
+     * 只造副本：`copyFrom` 基础配置后覆写两键，preparedExecOption/sharedExecOption 缓存与
+     * 用户全局设置（`getDefaultExecOption()` 活实例）一概不碰。反射不可用 → 原样返回基础
+     * 实例（执行维持现态，不劣化）。测试直接覆盖本函数（DatabaseTools 在默认 test classpath）。
+     */
+    internal fun wholeScriptExecOption(base: Any): Any = runCatching {
+        val settingsClass = Class.forName("com.intellij.database.settings.DatabaseSettings")
+        val fresh = base.javaClass.getDeclaredConstructor().newInstance()
+        base.javaClass.getMethod("copyFrom", base.javaClass).invoke(fresh, base)
+        base.javaClass.getField("execInside").setInt(fresh, settingsClass.getField("EXECUTE_INSIDE_WHOLE_SCRIPT").getInt(null))
+        runCatching {
+            base.javaClass.getField("execOutside").setInt(fresh, settingsClass.getField("EXECUTE_OUTSIDE_WHOLE_SCRIPT").getInt(null))
+        }
+        fresh
+    }.getOrElse { base }
+
     private fun executeOnConsole(
         project: Project,
         console: Any,
@@ -2625,8 +2657,14 @@ object DataSourceSelector {
         onError: ((String) -> Unit)?,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
         dsName: String? = sharedDataSourceName,
+        wholeScriptExec: Boolean = false,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+        // O-64/T-RollbackIdentityParse：identity 包装产物整批直跑——覆写本次执行的 ExecOption
+        // （只造**副本**传下去，prepared/shared 缓存与用户全局设置一概不动），弹层不再出现、
+        // 整批（SET…ON + INSERT + SET…OFF）全部执行，即「Statements 默认全选」的平台实现杠杆。
+        // 反射不可用（Database 插件类缺席）时原样返回基础实例 = 维持现态，不劣化。
+        val effectiveExecOption = if (wholeScriptExec) wholeScriptExecOption(execOption) else execOption
         // T-MysqlGStrip T-MG-02：提交链总口（已备控制台路径）——提交文本源是控制台编辑器文档，
         // 执行前剥离 `\G` 后缀并把剥后文本**回写编辑器文档**（所见=所执行，避免显示/执行分叉）。
         // 回写复用既有 T-ExecDocSync 写纪律（dispatchDocWriteOnEdt → writeVfTextViaDocument：
@@ -2669,7 +2707,7 @@ object DataSourceSelector {
                 "executeQueries",
                 com.intellij.openapi.editor.Editor::class.java,
                 Class.forName("com.intellij.database.script.ScriptModel"),
-                execOption.javaClass,
+                effectiveExecOption.javaClass,
             )
 
             // M36.5.10：执行提交包 DumbService.runWhenSmart——索引期查询提交被 Database 插件
@@ -2789,7 +2827,7 @@ object DataSourceSelector {
                             // write 会死锁）。详见下方原生链处注释。
                             val vfPsiFinal = vfPsi
                             val editorFinal = editor
-                            val execOptionFinal = execOption
+                            val execOptionFinal = effectiveExecOption
                             var nativeRun = false
                             if (vfPsi != null && !demoteToFallback) {
                                 val providerClass = Class.forName(CONSOLE_PROVIDER_CLASS)
@@ -2798,7 +2836,7 @@ object DataSourceSelector {
                                     PsiFile::class.java,
                                     com.intellij.psi.PsiElement::class.java,
                                     com.intellij.openapi.editor.Editor::class.java,
-                                    execOption.javaClass,
+                                    effectiveExecOption.javaClass,
                                 )
                                 val doRunMethod = runCatching {
                                     providerClass.getMethod(
@@ -2838,7 +2876,7 @@ object DataSourceSelector {
                                             com.intellij.openapi.application.TransactionGuard.getInstance()
                                                 .submitTransactionLater(disposable) {
                                                     try {
-                                                        val info = findScriptModel.invoke(null, vfPsi, vfPsi, editor, execOption)
+                                                        val info = findScriptModel.invoke(null, vfPsi, vfPsi, editor, execOptionFinal)
                                                         if (info == null) {
                                                             LOG.warn("[M36] native findScriptModel returned null (nothing to run?)")
                                                             // M36.5.48：findScriptModel 空 = 无可执行语句——显示**真实原因**，
@@ -2889,7 +2927,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                             }
                             if (!nativeRun) {
                                 LOG.info("[M36][EXEC] fallback path (native not used: ${if (demoteToFallback) "demoted" else "no vf psi or doRun missing"}), executeQueries(freshModel)")
-                                execute.invoke(console, editor, freshModel, execOption)
+                                execute.invoke(console, editor, freshModel, execOptionFinal)
                                 submitted = true
                             }
                         }

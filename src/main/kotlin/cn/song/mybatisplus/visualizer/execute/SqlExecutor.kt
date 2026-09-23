@@ -38,6 +38,7 @@ object SqlExecutor {
         onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)? = null,
         onError: ((String) -> Unit)? = null,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
+        wholeScriptExec: Boolean = false,
     ) {
         DataSourceSelector.selectAndExecute(
             project, sql,
@@ -53,6 +54,7 @@ object SqlExecutor {
                     }
                 }
             },
+            wholeScriptExec = wholeScriptExec,
         )
     }
 
@@ -86,6 +88,9 @@ object SqlExecutor {
      * M36.5：在已准备的控制台上执行。
      * @param onResultsReady 执行触发成功回调（完整控制台 UI，顶部块+结果区）——
      *                       调用方据此把右侧从纯编辑器切换为带结果区的完整控制台
+     * @param wholeScriptExec O-64：identity 包装产物整批直跑（ExecOption 覆写为
+     *                        EXECUTE_INSIDE_WHOLE_SCRIPT/EXECUTE_OUTSIDE_WHOLE_SCRIPT，
+     *                        原生 Statements 选择弹层不再弹出、整批全部执行）；普通执行传默认 false
      * @return false = 控制台未就绪（调用方回退 [execute] 全链）
      */
     fun executePrepared(
@@ -93,9 +98,10 @@ object SqlExecutor {
         onResultsReady: ((javax.swing.JComponent) -> Unit)? = null,
         onError: ((String) -> Unit)? = null,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
+        wholeScriptExec: Boolean = false,
     ): Boolean {
         if (!ExecuteSqlSupport.isAvailable()) return false
-        return DataSourceSelector.executePrepared(project, onResultsReady, onError, onErrorRich)
+        return DataSourceSelector.executePrepared(project, onResultsReady, onError, onErrorRich, wholeScriptExec)
     }
 
     /** 控制台是否已就绪（[prepareConsole] 成功后 true）。 */
