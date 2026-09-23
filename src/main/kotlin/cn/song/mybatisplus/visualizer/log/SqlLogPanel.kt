@@ -28,6 +28,8 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.notification.Notification
+import com.intellij.notification.NotificationAction
+import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
@@ -188,6 +190,17 @@ internal fun filterByType(entries: List<LogSqlEntry>, activeTypes: Set<Statement
     // T-CrudColor：改用条目级缓存属性（行为等价）——避免每次刷新都重跑分类
     // （classify 内 Regex 每次编译 Pattern），与渲染器共用同一份结果。
     return entries.filter { it.statementType in activeTypes }
+}
+
+/**
+ * 屏蔽规则存量过滤（T-SqlSuppress O-69，纯逻辑，可独立单测）：命中屏蔽指纹集的条目
+ * 从列表隐藏（缓冲里仍在——删除规则后复现；闸门已丢弃的历史条目不可恢复，UI 文案明示）。
+ * [suppressKeys] 与闸门同一数据源（[SqlSuppressRuleManager.suppressedKeys] 经 [SqlLogManager]
+ * 同步进缓冲），空集透传（无规则常态零成本）。
+ */
+internal fun filterBySuppress(entries: List<LogSqlEntry>, suppressKeys: Set<String>): List<LogSqlEntry> {
+    if (suppressKeys.isEmpty()) return entries
+    return entries.filter { it.dedupeKey !in suppressKeys }
 }
 
 /**
@@ -561,12 +574,14 @@ class SqlLogPanel(
     /**
      * 工具栏动作组（T-M39：internal 供测试断言帮助入口存在性；
      * update 由工具栏生命周期驱动，headless 测试手动触发；须在 init 前声明）。
-     * T-CaptureBack：捕捉开关回迁首位（捕捉/清空/设置/搜索/帮助；搜索在帮助左侧为用户指定排序）。
+     * T-CaptureBack：捕捉开关回迁首位（捕捉/清空/设置/屏蔽管理/搜索/帮助；搜索在帮助左侧为用户指定排序）。
+     * T-SqlSuppress：屏蔽管理入口插设置旁（D1 主入口；D7 图标 AllIcons.General.Filter 漏斗）。
      */
     internal val toolbarGroup = DefaultActionGroup(
         captureToggleAction, // 捕捉开关（回迁面板工具栏首位，T-CaptureBack）
         ClearAction(),
         SettingsAction(),
+        ManageSuppressAction(), // T-SqlSuppress：屏蔽管理（设置旁，D1 主入口 + D7 漏斗图标）
         ShowSearchAction(), // 搜索在帮助左侧（用户指定排序）
         HelpAction(),
     )
@@ -1134,6 +1149,22 @@ class SqlLogPanel(
         }
     }
 
+    /**
+     * T-SqlSuppress（O-69）：屏蔽管理入口（D1 定案主入口，插设置旁；D7 图标漏斗
+     * `AllIcons.General.Filter`——262 jar 实渲染比对后用户选定，全栏无漏斗形不撞车）。
+     * 打开与右键「管理屏蔽规则…」同一非模态对话框。
+     */
+    private inner class ManageSuppressAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.General.Filter
+            e.presentation.text = MpSqlVisualizerBundle.message("log.suppress.manage")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            SqlSuppressManagerDialog(project).show()
+        }
+    }
+
     /** T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 内嵌浏览器打开本地 HTML 帮助文档。
      *  图标用 AllIcons.Actions.Help（纯灰 #6E6E6E 问号，与设置/清空按钮同色系；
      *  ContextHelp 为灰蓝圆圈 #9AA7B0，与旁边按钮色相不一致——用户反馈）。
@@ -1369,11 +1400,12 @@ class SqlLogPanel(
      * 刷新列表（过滤 → 搜索 → 排序 → 差分渲染）。
      *
      * 执行顺序：
-     * 1. [filterByType]：按 [activeFilter] 筛选（全选 = 全部，含 OTHER）
-     * 2. [filterByFocus]：按 [activeFocus] 聚焦（M56 T-M56-00 基础设施；null = 透传）
-     * 3. [filterBySearch]：按 [searchText] 搜索（大小写不敏感）
-     * 4. [applySort]：按 [sortMode] 排序（降序耗时）
-     * 5. 差分渲染：T-Perf-03 增量刷新——流式追加免全量重建；无法增量时回退分批全量重建
+     * 1. [filterBySuppress]：按屏蔽规则指纹集滤存量（T-SqlSuppress O-69；管线最前——空集零成本）
+     * 2. [filterByType]：按 [activeFilter] 筛选（全选 = 全部，含 OTHER）
+     * 3. [filterByFocus]：按 [activeFocus] 聚焦（M56 T-M56-00 基础设施；null = 透传）
+     * 4. [filterBySearch]：按 [searchText] 搜索（大小写不敏感）
+     * 5. [applySort]：按 [sortMode] 排序（降序耗时）
+     * 6. 差分渲染：T-Perf-03 增量刷新——流式追加免全量重建；无法增量时回退分批全量重建
      *
      * T-LogListFreeze-04：HTML 缓存随片段通道退役——徽章计数在渲染时直读 [dedupeCounts]，
      * 原「清缓存/选择性失效」机制一并移除。
@@ -1388,7 +1420,14 @@ class SqlLogPanel(
         dedupeCounts = manager.entries.dedupeCountsSnapshot()
         entryCellRenderer.dedupeCounts = dedupeCounts
 
-        val filtered = filterByFocus(filterByType(snapshot, activeFilter), activeFocus)
+        // T-SqlSuppress：屏蔽存量过滤插管线最前（与类型过滤同级；键集经 SqlLogManager 订阅同步）
+        val filtered = filterByFocus(
+            filterByType(
+                filterBySuppress(snapshot, manager.entries.suppressKeys),
+                activeFilter,
+            ),
+            activeFocus,
+        )
         // T-M55-03/04：动态聚焦页签层（页签=过滤器，多开并集；离散增删走 FullRebuild，差分零改动）
         val focused = filterByFocusTabs(filtered, focusTabs)
         val searched = filterBySearch(focused, searchText)
@@ -1678,6 +1717,9 @@ class SqlLogPanel(
         val timestampClip = batchCopyTimestamps(selectedEntries)
         group.add(CopyTimestampAction(selectedEntries, timestampClip))
         group.add(DeleteSqlAction(entry))
+        // T-SqlSuppress（O-69）：屏蔽此 SQL（多选按不同指纹各成一条规则，已存在跳过）——
+        // 置「删除」之后（计划定稿位），balloon 反馈带管理直达
+        group.add(SuppressSqlAction(selectedEntries))
         // T-M37 P1：发送到 SQL → Java 转换（第三 tab）——还原 SQL 写入输入区并切换选中该 tab
         group.add(SendToSqlToJavaAction(entry))
         // T-M38：发送到日志转 SQL（第二 tab）——条目渲染回日志文本并立即转换
@@ -1730,6 +1772,81 @@ class SqlLogPanel(
 
         override fun actionPerformed(e: AnActionEvent) {
             manager.entries.removeEntry(entry)
+        }
+    }
+
+    /**
+     * T-SqlSuppress（O-69）：屏蔽选中的 SQL。多选支持——去重后的**不同指纹**各成一条规则
+     * （空白变体同指纹只建一条），已存在跳过（幂等）；达上限拒新增并提示（D6）。
+     * 动作链：规则入库（监听器同步更新缓冲键集）→ refreshList（存量心跳行立即消失，D4 最强反馈）
+     * → balloon 反馈附「管理屏蔽规则…」直达对话框（D4 中层）。
+     */
+    private inner class SuppressSqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            val count = entries.distinctBy { it.dedupeKey }.size
+            e.presentation.text = if (count > 1) {
+                MpSqlVisualizerBundle.message("log.suppress.actionSelected", count.toString())
+            } else {
+                MpSqlVisualizerBundle.message("log.suppress.action")
+            }
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            val ruleManager = SqlSuppressRuleManager.getInstance()
+            var added = 0
+            var limitReached = false
+            entries.distinctBy { it.dedupeKey }.forEach { entry ->
+                when (ruleManager.addRule(entry.restoredSql)) {
+                    SqlSuppressRuleManager.AddResult.ADDED -> added++
+                    SqlSuppressRuleManager.AddResult.LIMIT_REACHED -> limitReached = true
+                    SqlSuppressRuleManager.AddResult.DUPLICATE -> Unit // 已存在：幂等跳过
+                }
+            }
+            refreshList() // addRule 的监听器已同步更新缓冲键集——存量行立即消失
+            if (added > 0) showSuppressBalloon(added)
+            if (limitReached) showSuppressLimitBalloon()
+        }
+    }
+
+    /**
+     * T-SqlSuppress：屏蔽成功 balloon（D5 定案独立通知组 logsuppress）。
+     * 附「管理屏蔽规则…」动作直达对话框；测试模式跳过（对齐 [showJumpToast] 约定）。
+     */
+    private fun showSuppressBalloon(addedCount: Int) {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            val notification = NotificationGroupManager.getInstance()
+                .getNotificationGroup(SUPPRESS_NOTIFICATION_GROUP_ID)
+                .createNotification(
+                    MpSqlVisualizerBundle.message("log.suppress.added.title"),
+                    MpSqlVisualizerBundle.message("log.suppress.added.body", addedCount.toString()),
+                    NotificationType.INFORMATION,
+                )
+            notification.addAction(
+                NotificationAction.createSimple(MpSqlVisualizerBundle.message("log.suppress.manage")) {
+                    notification.expire()
+                    SqlSuppressManagerDialog(project).show()
+                },
+            )
+            notification.notify(project)
+        }
+    }
+
+    /** T-SqlSuppress：达上限提示 balloon（D6：拒新增不淘汰，文案引导先删不用的规则）。 */
+    private fun showSuppressLimitBalloon() {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            NotificationGroupManager.getInstance()
+                .getNotificationGroup(SUPPRESS_NOTIFICATION_GROUP_ID)
+                .createNotification(
+                    MpSqlVisualizerBundle.message("log.suppress.added.title"),
+                    MpSqlVisualizerBundle.message(
+                        "log.suppress.limit",
+                        SqlSuppressRuleManager.MAX_RULES.toString(),
+                    ),
+                    NotificationType.WARNING,
+                )
+                .notify(project)
         }
     }
 
@@ -1908,6 +2025,8 @@ class SqlLogPanel(
         private const val TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar"
         /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+        /** T-SqlSuppress（O-69/D5）：屏蔽规则 balloon 通知组（plugin.xml 独立注册）。 */
+        private const val SUPPRESS_NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.logsuppress"
         /** T-Perf-24（自 dev 移植）：搜索输入防抖窗口（毫秒）。 */
         private const val SEARCH_DEBOUNCE_MS = 200
 

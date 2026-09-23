@@ -54,6 +54,22 @@ class SqlLogManager(private val project: Project) : Disposable {
     /** 缓冲变更 → 面板刷新（EDT 调度）；仅面板订阅时登记（命名引用——可被 removeListener 精确移除）。 */
     private val uiNotifyListener: () -> Unit = { notifyUi() }
 
+    /** T-SqlSuppress（O-69）：应用级屏蔽规则管理器（APP 级单例，与 [PluginSettings] 同获取形态）。 */
+    private val suppressRuleManager = SqlSuppressRuleManager.getInstance()
+
+    /**
+     * T-SqlSuppress：规则变更 → 重算缓冲屏蔽键集 + 显式触发存量刷新。
+     *
+     * 订阅挂本服务生命周期（[dispose] 注销）——规则是 APP 级、缓冲键集是项目级：两个项目
+     * 窗口各持独立 [SqlLogManager]，应用级监听器列表逐项目各记一条，改规则时每个窗口的
+     * 实例都会收到通知并各自同步（多项目并存的保证在结构上：注册即监听、close 即注销）。
+     * notifyUi 必要性：面板差分刷新只认缓冲快照变化，规则变更对它不可感知——必须显式触发。
+     */
+    private val suppressRuleListener: () -> Unit = {
+        buffer.suppressKeys = suppressRuleManager.suppressedKeys
+        notifyUi()
+    }
+
     /** 条目缓冲（面板与测试访问）。 */
     val entries: SqlLogEntryBuffer get() = buffer
 
@@ -155,6 +171,12 @@ class SqlLogManager(private val project: Project) : Disposable {
     private val autoShowBufferListener = { maybeAutoShow() }
 
     init {
+        // T-SqlSuppress：初始同步一次屏蔽键集 + 订阅规则变更（dispose 注销）；
+        // 命中计数归账同挂专用出口（被拦条目不触发其他任何回调）。
+        buffer.suppressKeys = suppressRuleManager.suppressedKeys
+        suppressRuleManager.addListener(suppressRuleListener)
+        buffer.onSuppressedHit = { key -> suppressRuleManager.recordHit(key) }
+
         // F-44：不再自动打开独立窗口（SQL 日志已合并到主侧边栏 tab 中）
         // M37.3：恢复 logAutoOpenOnCapture 行为——F-44 移除独立窗口时一并丢了解接线（设置项
         // 与设置页勾选保留至今，形同虚设）。挂**无条件**回调（面板未创建/未订阅时
@@ -586,6 +608,11 @@ class SqlLogManager(private val project: Project) : Disposable {
         }
         bridge.detach()
         buffer.removeListener(uiNotifyListener)
+        // T-SqlSuppress：注销应用级规则订阅（project close 断开——应用级监听器列表不残留本项目条目），
+        // 键集清零防 disposed 缓冲再被本项目残留订阅污染
+        suppressRuleManager.removeListener(suppressRuleListener)
+        buffer.onSuppressedHit = null
+        buffer.suppressKeys = emptySet()
         buffer.onEntryAccepted = null
         buffer.onEntryStored = null
         buffer.onDedupeCountsChanged = null
