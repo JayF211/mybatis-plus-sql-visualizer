@@ -49,6 +49,14 @@ class DialectDockerVerificationTest {
     // ------------------------------------------------------------------
 
     private fun assumeDockerAvailable() {
+        // Docker 测试默认关闭（20260923 用户定例，构建侧经 mpv-testing 注入该系统属性）：
+        // 只有 -PmpvDockerTests=true 才允许触达 daemon。根因=daemon 半活态时下方 ping 探测
+        // 会阻塞且无超时（try/catch 只兜异常、兜不住阻塞，20260923 发行门禁实录三片挂起），
+        // daemon 活着时真容器验证的 pull/run 耗时也不可控——开关前置后两者都不会发生。
+        assumeTrue(
+            "Docker 测试未启用（-PmpvDockerTests=true 开启），跳过真实数据库方言验证（H2/SQLite 嵌入式验证已覆盖语法形态）",
+            System.getProperty("mpvs.docker.tests.enabled") == "true",
+        )
         val available = try {
             DockerClientFactory.instance().client().pingCmd().exec() != null
             true

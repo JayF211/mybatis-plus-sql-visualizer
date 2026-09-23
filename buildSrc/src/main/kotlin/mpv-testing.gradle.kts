@@ -36,6 +36,11 @@ tasks.withType<Test>().configureEach {
     // T-TestPerf2：测试 JVM 堆可临时覆盖（Gradle Test 默认 maxHeapSize=512m），用法
     // -PtestHeapSize=2g；缺省不动，是否转正由实测收益定（见 T-TestPerf2 计划 P9）。
     providers.gradleProperty("testHeapSize").orNull?.let { maxHeapSize = it }
+    // Docker 测试默认关闭（20260923 用户定例）：daemon 半活态会让 testcontainers 的 ping
+    // 探测阻塞无超时（runCatching 兜不住阻塞形态，20260923 发行门禁实录三片挂起 40 分钟），
+    // daemon 活着时真容器方言验证的 pull/run 耗时也不可控。只有显式 -PmpvDockerTests=true
+    // 才启用；DialectDockerVerificationTest 读该系统属性做 Assume 前置判定。
+    systemProperty("mpvs.docker.tests.enabled", providers.gradleProperty("mpvDockerTests").getOrElse("false"))
 }
 
 // 并行分片测试（2026-08-15 提速；2026-09-14 T-TestPerf-04 自动分区；2026-09-15 T-TestPerf2
