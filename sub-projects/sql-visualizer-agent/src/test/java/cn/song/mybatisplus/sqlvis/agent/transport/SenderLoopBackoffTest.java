@@ -32,7 +32,10 @@ import static org.junit.Assert.assertTrue;
  *  1. **退避确实增长**（先红后绿主判据）：连上即被关时相邻两次重连的间隔应显著大于前一次；
  *     退回「连上即复位」形态时间隔恒定 → 本用例必红；
  *  2. 达上限后放弃该端口：不再有新的 accept；
- *  3. 存活超过阈值的连接掉线后，快速断开计数与退避**都复位**（正常路径语义不变）。
+ *  3. 存活超过阈值的连接掉线后，快速断开计数与退避**都复位**（正常路径语义不变）；
+ *  4. T-PerfSweep7 T-PS7-02（先红后绿主判据）：**慢拨号 + 连上即被关**——拨号耗时（注入 > 阈值）
+ *     不得计入「连接存活时长」，否则每次「连上即被关」都被误判成正常掉线而复位退避与
+ *     fastDrops（永不放弃端口，且误判恰发生在拨号最慢的真实场景）。
  */
 public class SenderLoopBackoffTest {
 
@@ -42,6 +45,11 @@ public class SenderLoopBackoffTest {
     /** 复位阈值：与生产同量级语义（存活过阈值才算一次正常掉线）。 */
     private static final long RESET_AFTER_MS = 200L;
     private static final int MAX_FAST_DROPS = 3;
+    /**
+     * 慢拨号注入耗时（毫秒）：必须 > [RESET_AFTER_MS]（测试量级对应生产「拨号 > 2s」——
+     * 远端网络不可达时 TCP 握手可挂数秒，正是 T-PS7-02 要防的形态）。
+     */
+    private static final long SLOW_DIAL_MS = 350L;
 
     /** 「连上即被关」的模拟服务：记录每次 accept 时刻，随即关闭连接。 */
     private static final class ClosingServer implements AutoCloseable {
@@ -184,6 +192,62 @@ public class SenderLoopBackoffTest {
                     1 + MAX_FAST_DROPS, observed);
 
             loop.interrupt();
+        }
+    }
+
+    /**
+     * T-PerfSweep7 T-PS7-02（先红后绿主判据）：慢拨号 + 连上即被关 → **不复位**且计入 fastDrops。
+     *
+     * 缺陷现场：拨号计时此前从「拨号发起前」（attemptStartMs）起算，且 {@code new Socket} 无 connect
+     * 超时——拨号本身挂数秒时，「连上即被关」的存活读数被拨号耗时撑过复位阈值，被误判成
+     * 「一次正常掉线」：退避与 fastDrops 每轮复位，永不放弃端口（且拨号越慢误判越必然）。
+     * 修法：连接成功那一刻另记 connectedAtMs，复位与 fastDrops 判据改按
+     * {@code now - connectedAtMs} 计——退回 attemptStartMs 起算本用例必红（accept 连绵不断）。
+     */
+    @Test
+    public void 慢拨号后连上即被关_拨号耗时不得计入存活_不复位且计入快速断开() throws Exception {
+        AgentState.resetPortAbandonedForTest();
+        final PrintStream originalErr = System.err;
+        final ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        try (ClosingServer server = new ClosingServer(0L)) {
+            System.setErr(new PrintStream(captured, true, "UTF-8"));
+            // 慢拨号缝：每次拨号先耗 SLOW_DIAL_MS（> RESET_AFTER_MS）再真拨号。
+            // 退回 attemptStartMs 起算时，aliveMs ≈ SLOW_DIAL_MS > 阈值 → 每次都按「正常掉线」复位；
+            // 改 connectedAtMs 起算后，aliveMs 只含建连后的存活（毫秒级）→ 正确计入 fastDrops。
+            final SenderLoop.SocketDialer slowDial = new SenderLoop.SocketDialer() {
+                @Override
+                public Socket dial(String host, int port) throws java.io.IOException {
+                    try {
+                        Thread.sleep(SLOW_DIAL_MS);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new java.io.InterruptedIOException(interrupted.toString());
+                    }
+                    return new Socket(host, port);
+                }
+            };
+            final Thread loop = new Thread(
+                    new SenderLoop(server.port(), INITIAL_MS, MAX_MS, RESET_AFTER_MS, MAX_FAST_DROPS, slowDial),
+                    "senderloop-slowdial");
+            loop.setDaemon(true);
+            loop.start();
+
+            awaitAccepts(server, MAX_FAST_DROPS, 15_000L);
+            // 观察窗：修复态此时已放弃该端口（不再有第 4 次 accept）；
+            // 缺陷态每次都被复位 → accept 连绵不断，观察窗内必然冒出第 4 次 → 本断言即先红判据
+            Thread.sleep(1_500L);
+            final List<Long> stamps = server.snapshot();
+            assertEquals("慢拨号（拨号耗时 > 阈值）+ 连上即被关必须按「存活 < 阈值」计入快速断开："
+                            + "恰 " + MAX_FAST_DROPS + " 次 accept 后放弃该端口，实际 " + stamps.size()
+                            + "（超出 = 拨号耗时被计入存活，被误判为正常掉线而复位）",
+                    MAX_FAST_DROPS, stamps.size());
+            assertEquals("慢拨号下的放弃必须记入 AgentState 记账（否则进程内不可读）",
+                    1L, AgentState.abandonedPortCount());
+            assertEquals("记账必须带上被放弃的端口号", server.port(), AgentState.lastAbandonedPort());
+
+            loop.interrupt();
+        } finally {
+            System.setErr(originalErr);
         }
     }
 }
