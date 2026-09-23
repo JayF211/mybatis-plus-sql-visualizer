@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -100,5 +101,31 @@ class LogSqlModelsTest {
         assertEquals("SELECT * FROM t WHERE id = 1", normalizeSqlWhitespace("SELECT * FROM t WHERE id = 1"))
         // 大小写与分号不动（COUNT 前缀判定、达梦带引号标识符大小写依赖）
         assertEquals("SELECT count(*) FROM T;", normalizeSqlWhitespace("SELECT count(*) FROM T;"))
+    }
+
+    // ---------- T-SqlSuppress（O-69）：屏蔽匹配口径（§五 验收 2） ----------
+
+    @Test
+    fun `SELECT_1 与多空白首尾空白变体命中同一指纹`() {
+        // 屏蔽规则按「规范化文本的指纹」匹配，与 entry.dedupeKey 同函数同口径：
+        // `SELECT 1` 与 `  select 变体 `（多空白/首尾空白）天然命中同一条规则。
+        val canonical = sqlFingerprint(normalizeSqlWhitespace("SELECT 1"))
+        assertEquals(canonical, sqlFingerprint(normalizeSqlWhitespace("  SELECT   1  ")))
+        assertEquals(canonical, sqlFingerprint(normalizeSqlWhitespace("SELECT\t1")))
+        assertEquals(canonical, sqlFingerprint(normalizeSqlWhitespace("SELECT\n1")))
+        // 条目侧：变体条目的 dedupeKey 与规则指纹同键（闸门 `entry.dedupeKey in suppressKeys` 判据）
+        val variantEntry = LogSqlEntry(rawSql = "  SELECT   1  ", restoredSql = "  SELECT   1  ", params = emptyList())
+        assertEquals(canonical, variantEntry.dedupeKey)
+    }
+
+    @Test
+    fun `大小写不同不命中同一指纹_写进用例防口径漂移`() {
+        // 防口径漂移注释（§五 验收 2 原文要求）：normalizeSqlWhitespace **大小写不动**
+        // （COUNT 前缀判定、达梦带引号标识符依赖），故 `select 1` 与 `SELECT 1` 是两条不同规则形态——
+        // 若将来有人把「忽略大小写」改进来，本用例必红，须先过用户定案（D2：精确匹配）。
+        assertNotEquals(
+            sqlFingerprint(normalizeSqlWhitespace("SELECT 1")),
+            sqlFingerprint(normalizeSqlWhitespace("select 1")),
+        )
     }
 }
