@@ -48,7 +48,6 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 文档 | 用途 |
 |------|------|
-| [20260915-0900-插件测试套件提速-经验总结.md](./经验总结/20260915-0900-插件测试套件提速-经验总结.md) | **插件测试套件提速经验（T-TestPerf2 方法论）**：先测量再动手（结果 XML 聚合耗时画像←头部集中决定分区策略）、已证伪的三条并行路（默认 test 多 fork=PersistentFS 互踩 / 纯逻辑分桶=68 例隐性平台依赖 / 片内再并行不必要）、可复用五招（任务级一命令并行 + 深沙盒隔离、历史耗时贪心均衡分区（串行与分片互相喂养）、并行度取核数一半、聚合报告打印四元组做计数 parity、全机唯一资源建亲和清单）、落地清单；提速之外三个真问题（用户级 gradle.properties 覆盖、分片类发现文件名≠类名、陈旧 XML 污染计数） |
 | [01-项目架构总览.md](./架构设计/01-项目架构总览.md) | 产品定位、分层架构图、包依赖图、运行时注册图、代码地图（包→类→职责全量）、关键设计决策（SPI/共享编排/缓存失效/反射隔离） |
 | [02-核心流程详解.md](./架构设计/02-核心流程详解.md) | 6 条链路流程图：正向预览（含 XML/注解子链路）、反向 SQL→Java、日志捕获、启动与自更新；每链路关键类方法表 |
 | [03-开发与测试指南.md](./架构设计/03-开发与测试指南.md) | 构建命令、测试体系（76 类三类 fixture）、扩展指南（converter/方言/设置项/gutter）、文档三处同步、并行开发铁律 |
@@ -66,13 +65,21 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 ## 经验总结（docs/经验总结/）
 
-> 跨任务可复用的工程实践沉淀（脚本管线、平台踩坑、录制/迁移等一次性但可复制的经验）。
+> 跨任务可复用的工程实践沉淀（脚本管线、平台踩坑、录制/迁移等一次性但可复制的经验）。**本节是唯一权威索引**（2026-09-22 合并去重：原文件里另有一条同名索引节，只登记 3 篇且滞后 6 篇）。
+> 目录内共 10 篇（2026-09-22 `ls` 实测），时间倒序。
 
 | 文档 | 用途 |
 |------|------|
+| [20260922-2310-子智能体测试分层与收口时序-经验总结.md](./经验总结/20260922-2310-子智能体测试分层与收口时序-经验总结.md) | **测试三档分层（用户口径）**：子代理只跑定向／全部完成后单派只读收口代理跑一次全量且主控并行写文档／构建校验仅大改动或发版前；**长命令一律后台启（`run_in_background`）、不用 sleep 等或轮询**；待办清单与进度同步。附 `dev-flow.dwf.ts` 改法与「npm install typescript + facade.d.ts 桩 + 与改前备份比对错误集」的编译校验方法（含提示词模板字面量插反引号致 TS1005 的坑） |
+| [20260920-1700-子智能体后台派发与并行调度-经验总结.md](./经验总结/20260920-1700-子智能体后台派发与并行调度-经验总结.md) | **并行靠后台派发（`run_in_background: true` 逐条派），不靠一条消息塞多个调用**（实测只产出一个）；派发前三检查（写集求交／主线程留不重叠车道／prompt 自包含）；收口协议（不轮询不读 transcript／压缩回报／写验分离／门禁改派只读收口代理）；本轮并行编排实况可作模板 |
+| [20260919-2345-多路并行开发中的验证盲区与收口陷阱-经验总结.md](./经验总结/20260919-2345-多路并行开发中的验证盲区与收口陷阱-经验总结.md) | 四类绿灯看不出的问题（诱饵绕过膨胀闸门／fatal 透传被外层 `runCatching` 吃掉／审计 clip 吞错误文本／整文件子串守卫）＋「判有无用户受影响看产物不看文档自述」＋收口禁 `&&` 串联＋合并本身重排分片触发顺序依赖；本仓最全的一篇流程级教训（证据基线 master `600ae4c`） |
+| [20260919-2210-AI-Assistant-ACP接入IDE-MCP工具-经验总结.md](./经验总结/20260919-2210-AI-Assistant-ACP接入IDE-MCP工具-经验总结.md) | 让 AI Assistant 的 ACP agent 调用插件注册到 IDE 内置 MCP Server 的十个只读工具（`sqlv_*`）：**Codex（`codex-acp`）与终端路线（Claude Code CLI）可用，Claude Agent（`claude-agent-acp`）因上游缺陷不可用**；含操作指引 |
+| [20260918-0837-sam与高级迭代模式选用-经验总结.md](./经验总结/20260918-0837-sam与高级迭代模式选用-经验总结.md) | **advanced-iterative-mode 是决策与统筹层（大脑），sam 是执行调度层（手脚）**；何时单用/组合用的判定方法；并行上限 ≤3 与 AGENTS.md 铁律的叠加理解 |
+| [20260915-0900-插件测试套件提速-经验总结.md](./经验总结/20260915-0900-插件测试套件提速-经验总结.md) | **插件测试套件提速经验（T-TestPerf2 方法论）**：先测量再动手（结果 XML 聚合耗时画像←头部集中决定分区策略）、已证伪的三条并行路（默认 test 多 fork=PersistentFS 互踩 / 纯逻辑分桶=68 例隐性平台依赖 / 片内再并行不必要）、可复用五招（任务级一命令并行 + 深沙盒隔离、历史耗时贪心均衡分区（串行与分片互相喂养）、并行度取核数一半、聚合报告打印四元组做计数 parity、全机唯一资源建亲和清单）、落地清单；提速之外三个真问题（用户级 gradle.properties 覆盖、分片类发现文件名≠类名、陈旧 XML 污染计数）。两轮提速（T-TestGuard/T-TestPerf + T-TestPerf2）合并后主工作树 4081/0/0/6 绿 |
 | [20260914-0907-ZCode仓库Wiki同步Gitee-经验总结.md](./经验总结/20260914-0907-ZCode仓库Wiki同步Gitee-经验总结.md) | **ZCode repo-wiki → Gitee Wiki 同步经验**：wiki.json 结构解析 + 导出脚本（`dev-support/export_zcode_wiki_to_gitee.py`）+ Gitee wiki 机制实测（页面树按文件名排序/Home 落底坑/00- 前缀落地首屏/_Sidebar 自动生效/API 需登录）+ 刷新后两条命令再同步流程 |
-| [20260902-1730-Kotlin转Java-经验总结.md](./经验总结/20260902-1730-Kotlin转Java-经验总结.md) | **Kotlin → Java 全量改写经验**：Wave 分批迁移 + 固定验证链 + 测试源集共存策略 + master 同步 + Git 历史管理 + Windows 内存映射锁/OOM 规避 |
+| [20260912-0855-插件免重启更新与跨版本签名核验-经验总结.md](./经验总结/20260912-0855-插件免重启更新与跨版本签名核验-经验总结.md) | 动态热替换平台机制/五入口反射范式/跨版本签名护栏/踩坑清单（vetoer 误判、签名漂移、配置缓存、Kotlin DSL 坑等）/本地热替换测试三步；真机 Gitee 通道实测免重启生效（243/253/262 三版本） |
 | [20260910-0100-IntelliJ演示GIF录制-经验总结.md](./经验总结/20260910-0100-IntelliJ演示GIF录制-经验总结.md) | **IntelliJ 插件演示 GIF 录制经验**：脚本重放+帧稳定采样管线（分块最大均值差消稀释/mss 光标回绘/无害 mp4 反复转制）、坐标标定、分镜偏离教训（关键词补全不存在/编辑器 Action 未注册/Ctrl+Space 系 IME 热键）、262 沙盒编译三处必改（v69 需 JDK24+JCEF 插件+沙盒隔离）、环境还原清单。脚本在 `record/` |
+| [20260902-1730-Kotlin转Java-经验总结.md](./经验总结/20260902-1730-Kotlin转Java-经验总结.md) | **Kotlin → Java 全量改写经验**：Wave 分批迁移 + 固定验证链 + 测试源集共存策略 + master 同步 + Git 历史管理 + Windows 内存映射锁/OOM 规避 |
 
 ## 需求文档与开发计划（docs/需求文档/ + docs/开发计划/，时间倒序）
 
@@ -233,11 +240,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 ## 经验总结（docs/经验总结/，2026-09-12 新建）
 
-| 文档 | 用途 |
-|------|------|
-| 20260914-0907-ZCode仓库Wiki同步Gitee-经验总结.md | repo-wiki 本地 wiki.json 结构/导出脚本 dev-support/、Gitee wiki 落地页与排序机制实测/中文链接尖括号/refresh 后再同步流程（60 页已上线 `0b9d0dc`+`0490a98`） |
-| 20260912-0855-插件免重启更新与跨版本签名核验-经验总结.md | 动态热替换平台机制/五入口反射范式/跨版本签名护栏/踩坑清单（vetoer 误判、签名漂移、配置缓存、Kotlin DSL 坑等）/本地热替换测试三步 |
-| 20260902-1730-Kotlin转Java-经验总结.md | Kotlin→Java 全量改写的 Wave 策略、语法映射、验证链与 master 同步经验 |
+> 已并入上方「经验总结（docs/经验总结/）」节（2026-09-22 合并去重：原两条索引指向同一目录，本条只登记 3 篇、滞后 6 篇；目录内共 10 篇）。**本节不再单独维护清单**。
 
 ## 发行说明（docs/发行说明/）
 
@@ -299,13 +302,15 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 | 产品介绍 / 使用说明 | `README.md`（产品定位、功能特性、截图、已知差异） |
 | 多智能体调度经验 / 踩坑指南 / 代码扩展点（本地私有） | `~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-*/memory/`（重点：并行测试协调登记表脚本 `C:\Users\USER\.zcode\cli\parallel_tasks.py`，用法见文件头 🔴 提示块） |
 | 已修复 Bug / 已解决踩坑（归档） | `docs/memory-archive/README.md` |
-| 全局通用记忆（跨项目复用） | `~/.zcode/cli/memories/global/`（85 个文件，手动查阅） |
+| 全局通用记忆（跨项目复用） | `~/.zcode/cli/memories/global/`（108 个内容文件，手动查阅；索引 `README.md`，2026-09-22 对账） |
 | 记忆精简规范 | `docs/记忆精简规范.md`（分类标准、归档流程、数量基线） |
 
 ## 变更记录
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-23 | 记忆第十五次精简（63→45 内容文件，三天翻倍触发定期审视）：**13 个已交付档归档**（全部逐项 git 实测交付状态——O-54 配置通道 `0eafa67`、O-55 定位缓存、O-59 回滚链 identity `32ff1f5`/`bfb15c7`、O-41 ml-llm 签名护栏 `4186231`、心跳 30 秒掉线六修法、控制台错误条覆盖 `a04b123`、键位冲突改绑[T-TemplateKeyDrop `e6ce2c5`]、卸载窗口 write-unsafe[T-DynUpdateWriteSafe `6e2a34d`]、原生图 null refTable[`03f6d25`] 归 pitfalls 9 个；O-57 HQL 副表属性 `4733ce6`[**@Embedded 段仍挂起**]、O-58 数据源列名校正[ColumnNameCalibrator 在 master]、快捷模板三动作参考、gutter 弹窗参考归 bug-fixes 4 个）；**3 个升全局**（JBList 空态 StatusText / AmendWorkflow 不能传参 / dev-flow 工作流）；**2 个删除**（python 写文件不落盘＝全局同日新版重复；commit -m 反引号变体并入全局 backtick 档后删）；补 2 个漏索引孤儿（O-57/O-58 两文件系并行会话新建未入索引，本次按已交付归档）；project-pending-plans 三次瘦身（**72KB→约 12KB**：20 条已交付条目压一行账，新收 O-60/O-61/T-PerfSweep7/T-BuildConcurrency 四份并行会话新计划，真机节补第八轮走查收账）；MEMORY.md 重建纯一行索引（**33KB→约 11KB**，去重回归清单双条，帧过滤条目更新「CONFIG 已修复」口径）；全局 README 补上一直欠账的 pitfall-settings-find-class-instantiates-tree 索引行并对账 111/111；AGENTS.md 补 3 摘要条（commit 反引号/python 写文件不落盘/StatusText）并订正头部计数；archive 增至 254（bug-fixes 172、pitfalls 79）、全局 113（ls 实测）、项目记忆保留 45 核心；精简前全量备份 memory-backup-2026-09-23（memory 796K）+ memory-backup-2026-09-23-global（110 文件）。**合流债同步实测**：master/dev/远端三点同位 `24d6e33` 无债，t-round10 领先 origin 41 未推、k2j 领先 11 未推 |
+| 2026-09-22 | **经验总结索引节补齐并合并去重**（用户要求「补齐并提交」）：`docs/经验总结/` 目录实有 **10 篇**，而文件里原有**两条**同名索引节（一条登记 3 篇、另一条也 3 篇且滞后 6 篇）→ 合并为一条权威节，时间倒序登记全 10 篇，摘要逐篇按**正文标题与导语**重写（不照抄旧行），另一条改为指针不再维护清单；顺带订正本文件「全局通用记忆 85 个文件」→ **108 个内容文件**（2026-09-22 按磁盘 ls 对账）。同轮的口径改动（测试三档分层与收口并行时序）见本表下方同日行与 `docs/变更记录.md` 同日行 |
 | 2026-09-22 | 第十轮批次九份计划全部交付（分支 `t-round10`，三波提交 `59e5293` / `4186231` / `3f7853b`）：**O-47** 匿名块与 PL/SQL 切分、**O-48** EXPLAIN 首关键字门与格式矩阵（修 PG 索引建议永不触发）、**O-49** 错误定位按钮「从不出现」抹除链、**O-50** 守卫自证覆盖率元守卫、**O-51** 标识符折叠方向族、**O-52** 可回放 INSERT identity 包装、**O-41** ml-llm 跨版本签名护栏（反射证伪→纯字节码解析）、**T-PerfSweep6** 性能第九轮 18 项、**T-BranchHygiene2（O-45）** 只做可逆部分（三类清单只读登记 + stash 逐条留档，零 drop/删除/push/重置）。本批次**共享文档由 T-Round10-08 唯一写者统一落笔**：CHANGELOG `[Unreleased]` 8 条（已发布段逐字节未变）、docs/变更记录.md 9 行、MEMORY 索引 9 行 + 本行、第十轮报告 §8 六项与 §7.2 Z-30、性能第九轮报告 §5 全 18 项（发现 17 定案不改留痕）。**登记边界**：T-MLS-05 点名的第九轮报告 §9.4 与 ACP 验收文档 §七-7 两处落地备注不在本批次任何写集内，**未写、无归属，须补派**。详见 docs/变更记录.md 同日 9 行 |
 | 2026-09-21 | T-TemplateKeyDrop 快捷模板三动作默认键位摘除与冲突检测下线（计划 `docs/开发计划/20260921-1640`，分支 `t-template-keydrop` 提交 `aefc140`）：`${table}` 快捷模板三动作（EXPLAIN / COUNT / 抽样 10 行）不再注册默认键位，`SqlTemplateShortcutConflictCheck` 启动检测下线。键位表实测两版平台：Alt+Shift+C = `RecentChanges`、Alt+Shift+T = 243 `tasks.switch`，备选键 Ctrl+Alt+Shift+C/T 被 `CopyReference` / `Refactorings.QuickListPopupAction` 占 → 「自动改绑」必然失败（KDoc 写的「scheme 不可写」与 243 源码不符：`KeymapImpl` 无 canModify 守卫）；该功能从未随发行物交付（CHANGELOG 在 Unreleased、beta.4 jar 无三动作与注册、`tag --contains` 全空）。新守卫带**自闭合动作感知**（构建期重写把无子元素的 action 写成 `<action … />`，裸正则取块会吞到下一个 `</action>` 而误报前一个动作）。门禁 testShards **5577/0/0/6** + 定向 39/0；文档站两页同步（站点仓 `3435ce0`，未部署）。详见 docs/变更记录.md 同日行 |
 | 2026-09-20 | 记忆第十四次精简（38→32 内容文件，含并行会话新增两个漏索引孤儿）：2 个已交付任务归档 bug-fixes（T-SyncK2JMaster92——锚点 b9aeeba 123 提交 5390 绿，两处结构性决策 Java fatal 透传 `throw (Error) t` 的 JLS 11.2.2 必要性 + fatal 守卫两段式 597 基线并入活跃记忆 project-kotlin-to-java-port-sync 新增「结构性决策勿改」节，掩码器 Java 树涂白坑并入 pitfall-scan-guard-mask-and-sample-power 坑三，elvis 误译与改名全仓 grep 并入翻译坑 7/8，fatalUnwrapUnjudgedBaseline=5 未收口尾款登记 pending-plans；task-queue skill——含闲时通道三次拒绝边界与废弃路线存档，pending-plans 指针改指归档）；1 个平台陷阱实例归档 pitfalls（toolwindow-titleactions 悬停才渲染——T-CaptureBack 捕捉按钮「消失」实录，精简版升全局+AGENTS.md 摘要条）；2 个升 global（python-requests 走代理 TLS 被掐用 curl -x、stale-session-git-snapshot 20260919 副本与全局版合并——补 Write 冲突先重读再写规则后删项目副本，cherrypick/batch-staging 两处 [[]] 链接改文字指向）；1 个删除（junit3 合成 lambda——全局 feedback-junit3-kotlin-lambda-testname 与 project-test-conventions 双覆盖，纯冗余副本）；勘误 worktree 索引行与正文矛盾（正文实测 rm -rf 删净+deregister 已生效，索引行误写 PowerShell 兜底）；AGENTS.md 补 python 代理/toolwindow 两摘要条并订正头部计数（94→104 实测口径）；archive 增至 241（bug-fixes 168、pitfalls 70）、全局 104、项目记忆保留 32 核心；精简前全量备份 backup-20260920.zip（global+projects 全量 766 文件，注：第十~十三次变更记录声称的 memory-backup-2026-09-1X 均无实档，本条为首个可验证备份） |
