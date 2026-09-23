@@ -555,6 +555,8 @@ class PluginSettingsFolderConfigurable : Configurable {
             // 界面与操作
             val u = PAGE_UI.ref
             fields.add(SearchableField(b.message("settings.showGutterIcon"), "", "settings.section.ui", u))
+            // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关（界面节）
+            fields.add(SearchableField(b.message("settings.xmlInlineSql"), b.message("settings.xmlInlineSql.tip"), "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.language"), "", "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.shortcut"), b.message("settings.shortcut.tip"), "settings.section.ui", u))
             fields.add(SearchableField(b.message("settings.shortcut.sqlToJava"), "", "settings.section.ui", u))

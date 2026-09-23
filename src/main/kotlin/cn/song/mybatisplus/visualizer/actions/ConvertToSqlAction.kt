@@ -13,12 +13,15 @@ import cn.song.mybatisplus.visualizer.ui.AnnotationSqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.PagesXmlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
+import cn.song.mybatisplus.visualizer.ui.XmlInlineSqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver
 import cn.song.mybatisplus.visualizer.ui.gutter.PagesXmlGutterLineMarkerProvider
 import cn.song.mybatisplus.visualizer.ui.gutter.StringSqlMethodGutterLineMarkerProvider
+import cn.song.mybatisplus.visualizer.ui.gutter.XmlInlineSqlGutterLineMarkerProvider
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider
+import cn.song.mybatisplus.visualizer.xml.XmlInlineSqlDetector
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -417,7 +420,12 @@ class ConvertToSqlAction : AnAction() {
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
                 ReadAction.compute<Pair<List<XmlTag>, List<SqlSelectionDialog.Row>>, Throwable> {
-                    val tags = XmlSqlGutterLineMarkerProvider.statementsInRange(file, selStart, selEnd)
+                    // O-72：mapper 语句候选 + 通用内嵌 SQL 载体候选（排除集合保证互斥，按 offset 归并）
+                    val mapperTags = XmlSqlGutterLineMarkerProvider.statementsInRange(file, selStart, selEnd)
+                    val inlineTags = if (XmlInlineSqlDetector.detectionEnabled()) {
+                        XmlInlineSqlGutterLineMarkerProvider.carriersInRange(file, selStart, selEnd)
+                    } else emptyList()
+                    val tags = (mapperTags + inlineTags).sortedBy { it.textRange.startOffset }
                     tags to tags.map { tag ->
                         val line = tag.containingFile.viewProvider.document
                             ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
@@ -436,11 +444,11 @@ class ConvertToSqlAction : AnAction() {
                 if (project.isDisposed) return@invokeLater
                 when (tags.size) {
                     0 -> SqlPreviewService.showResult(project, null, sourceLocation)
-                    1 -> previewXml(project, file, tags[0], sourceLocation)
+                    1 -> previewXmlTag(project, file, tags[0], sourceLocation)
                     else -> SqlSelectionDialog(project, tags, displayTexts) { selected ->
                         // T-M29.6：选中确定 → 编辑器定位（行首 + 滚动居中 + 整行选中）→ 预览 SQL
                         locateEditorTo(editor, selected)
-                        previewXml(project, file, selected, sourceLocation)
+                        previewXmlTag(project, file, selected, sourceLocation)
                     }.show()
                 }
             }
@@ -450,17 +458,20 @@ class ConvertToSqlAction : AnAction() {
     /**
      * T-M24-04/M25-01：XML mapper 语句预览——光标所在语句优先；不在语句内时
      * 收集全部语句（0/1/多分发，多候选走 [SqlSelectionDialog]，仿 Java 选择区候选交互）。
+     * O-72：光标上爬与全文件收集均追加通用内嵌 SQL 载体（开关 `xmlInlineSqlEnabled` 闸）。
      */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun previewXmlStatement(project: Project, file: XmlFile, editor: Editor, sourceLocation: String?) {
         val element = file.findElementAt(editor.caretModel.offset)
         val tag = element?.let { PsiTreeUtil.getParentOfType(it, XmlTag::class.java) }
         var statement = tag
-        while (statement != null && statement.name !in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS) {
+        while (statement != null && statement.name !in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS &&
+            !(XmlInlineSqlDetector.detectionEnabled() && XmlInlineSqlDetector.isSqlCarrierTag(statement))
+        ) {
             statement = statement.parentTag
         }
         if (statement != null) {
-            previewXml(project, file, statement, sourceLocation)
+            previewXmlTag(project, file, statement, sourceLocation)
             return
         }
         // 光标不在语句内 → 全部语句候选（T-M25-01）
@@ -470,7 +481,10 @@ class ConvertToSqlAction : AnAction() {
             val payload = try {
                 ReadAction.compute<Pair<List<XmlTag>, List<SqlSelectionDialog.Row>>, Throwable> {
                     val statements = PsiTreeUtil.findChildrenOfType(file, XmlTag::class.java)
-                        .filter { it.name in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS }
+                        .filter {
+                            it.name in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS ||
+                                (XmlInlineSqlDetector.detectionEnabled() && XmlInlineSqlDetector.isSqlCarrierTag(it))
+                        }
                     val displayTexts = statements.map { tag ->
                         val line = tag.containingFile.viewProvider.document
                             ?.getLineNumber(tag.textRange.startOffset)?.plus(1) ?: 0
@@ -490,12 +504,12 @@ class ConvertToSqlAction : AnAction() {
                 val (statements, displayTexts) = payload
                 when {
                     statements.isEmpty() -> SqlPreviewService.showResult(project, null, sourceLocation)
-                    statements.size == 1 -> previewXml(project, file, statements[0], sourceLocation)
+                    statements.size == 1 -> previewXmlTag(project, file, statements[0], sourceLocation)
                     displayTexts.size != statements.size -> SqlPreviewService.showResult(project, null, sourceLocation)
                     else -> SqlSelectionDialog(project, statements, displayTexts) { selected ->
                         // T-M29.6：选中确定 → 编辑器定位（行首 + 滚动居中 + 整行选中）→ 预览 SQL
                         locateEditorTo(editor, selected)
-                        previewXml(project, file, selected, sourceLocation)
+                        previewXmlTag(project, file, selected, sourceLocation)
                     }.show()
                 }
             }
@@ -503,6 +517,19 @@ class ConvertToSqlAction : AnAction() {
     }
 
     /** 预览单个 XML 语句（后台转换，EDT 渲染；T-M25.2 传 project 解析静态常量引用）。 */
+    /** O-72：统一 XML 语句分发——通用内嵌 SQL 载体走 inline 预览，其余走 mapper 语句预览。 */
+    private fun previewXmlTag(project: Project, file: XmlFile, tag: XmlTag, sourceLocation: String?) {
+        if (XmlInlineSqlDetector.isSqlCarrierTag(tag)) {
+            SqlPreviewService.previewAsync(project, {
+                XmlInlineSqlPreviewService.preview(project, tag)
+            }) { result ->
+                SqlPreviewService.showResult(project, result, sourceLocation)
+            }
+            return
+        }
+        previewXml(project, file, tag, sourceLocation)
+    }
+
     private fun previewXml(project: Project, file: XmlFile, tag: XmlTag, sourceLocation: String?) {
         SqlPreviewService.previewAsync(project, {
             // T-M27.3/4：注入实体上下文（namespace → Mapper 接口 → 主实体 + @TableName 联表候选）——
