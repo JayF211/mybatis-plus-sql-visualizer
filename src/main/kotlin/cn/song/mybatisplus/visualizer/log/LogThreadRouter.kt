@@ -20,6 +20,10 @@ package cn.song.mybatisplus.visualizer.log
  *   裸行必在等待态桶内），故默认关闭以保持已验证链路零变化。
  *
  * 桶状态由各解析器自定（[B] 泛型），本类只管「哪一行归哪个桶」与容量。
+ *
+ * T-ConsolePendingFlush 追加：本类同时记录**每个桶的最近活动时间**并提供 [settledBuckets]——分桶把
+ * 「条目闭合」的前提从「下一条语句到来」改成「**同线程**的下一行到来」，而同线程下一行可能永不到来
+ * （JdbcTemplate 参数行是 TRACE 级默认不开 + Tomcat 按请求新建线程），静默判定是唯一可行的补救信号。
  */
 internal class LogThreadRouter<B : Any>(
     private val factory: () -> B,
@@ -30,6 +34,8 @@ internal class LogThreadRouter<B : Any>(
     private val maxBuckets: Int = DEFAULT_MAX_BUCKETS,
     /** 无 token 且无收集态桶时，是否归属最近使用的桶（T-HibConc；默认关闭=回退共享桶）。 */
     private val routeNoTokenToRecent: Boolean = false,
+    /** settle 判定的时钟（毫秒）；测试注入可控件以获得确定性（T-ConsolePendingFlush）。 */
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
     /** 线程 token → 独立桶（保持插入序，便于 closePending 按序冲刷）。 */
@@ -41,13 +47,44 @@ internal class LogThreadRouter<B : Any>(
     /** 最近一次出现线程 token 的桶（[routeNoTokenToRecent] 的次选归属）。 */
     private var recent: B? = null
 
+    /**
+     * T-ConsolePendingFlush：桶 → 最近一次收到行的时钟毫秒（[settledBuckets] 的判据）。
+     * 用 IdentityHashMap（键是桶实例本身，无 equals 语义）；桶被淘汰/清空时同步清理，不滞留已淘汰桶。
+     */
+    private val lastActivity = java.util.IdentityHashMap<B, Long>()
+
+    /** 记录活动时间并返回该桶（路由的三个出口共用）。 */
+    private fun touch(bucket: B): B {
+        lastActivity[bucket] = clock()
+        return bucket
+    }
+
+    /**
+     * T-ConsolePendingFlush：已静默 ≥ [settleMs] 的桶（分桶在前、回退桶在后，与 [allBuckets] 同序）。
+     *
+     * 用途：按线程分桶后，一条语句的条目只在「**同线程桶**里再来一行」时才闭合产出；而该行可能永不
+     * 到来——JdbcTemplate 的参数行是 TRACE 级（默认不开），Tomcat 又按请求新建线程，于是每条语句都
+     * 停在自己的桶里等一个不存在的后继行，`takeEntries()` 永远取不到（面板「已扫描 N 行 / 产出 0 条」）。
+     * 静默超过阈值即可认定「后续行不会再来了」（参数行与语句行是同线程相邻输出，正常间隔 1ms 量级），
+     * 此时闭合是安全的。
+     */
+    fun settledBuckets(settleMs: Long, nowMs: Long = clock()): List<B> {
+        val out = ArrayList<B>()
+        for (bucket in buckets.values) {
+            val last = lastActivity[bucket] ?: continue
+            if (nowMs - last >= settleMs) out += bucket
+        }
+        lastActivity[fallback]?.let { if (nowMs - it >= settleMs) out += fallback }
+        return out
+    }
+
     /** 按行路由到对应桶。 */
     fun bucketFor(line: String): B {
         val token = threadTokenOf(line)
         if (token != null) {
-            buckets[token]?.let { recent = it; return it }
+            buckets[token]?.let { recent = it; return touch(it) }
             if (buckets.size >= maxBuckets) evictIdle()
-            return factory().also { buckets[token] = it; recent = it }
+            return touch(factory().also { buckets[token] = it; recent = it })
         }
         // 无线程 token 行（Hibernate 的多行 SQL 正文 / `Hibernate: ` stdout 标志行等）：
         // 1) MRU 桶优先——Hibernate 一条日志消息只有一个行首前缀，正文行紧跟在**同线程**那条
@@ -57,17 +94,17 @@ internal class LogThreadRouter<B : Any>(
         //     按真实控制台的书写节奏，整条消息一次写出、跨消息交错远比跨行交错常见 → 取 MRU。）
         // 2) 无 MRU 时退「收集态桶」（唯一收集态=确定归属）→ 3) 回退共享桶。
         if (routeNoTokenToRecent) {
-            recent?.let { return it }
+            recent?.let { return touch(it) }
             val collecting = buckets.values.filter { isCollecting(it) }
-            if (collecting.isNotEmpty()) return collecting.first()
-            return fallback
+            if (collecting.isNotEmpty()) return touch(collecting.first())
+            return touch(fallback)
         }
         // MyBatis/JdbcTemplate：收集态桶优先（其裸行必在等待态桶内），否则回退共享桶
         val collecting = buckets.values.filter { isCollecting(it) }
         if (collecting.isNotEmpty()) {
-            return collecting.firstOrNull { it === recent } ?: collecting.first()
+            return touch(collecting.firstOrNull { it === recent } ?: collecting.first())
         }
-        return fallback
+        return touch(fallback)
     }
 
     /** 全部桶（分桶在前、回退桶在后）——closePending 全量冲刷用。 */
@@ -79,6 +116,7 @@ internal class LogThreadRouter<B : Any>(
     /** 清空（面板销毁/重挂载时）。 */
     fun clear() {
         buckets.clear()
+        lastActivity.clear()
         recent = null
     }
 
@@ -89,6 +127,7 @@ internal class LogThreadRouter<B : Any>(
             val entry = iterator.next()
             if (isIdle(entry.value)) {
                 if (recent === entry.value) recent = null
+                lastActivity.remove(entry.value) // 活动时间随桶一并清理（防已淘汰桶滞留）
                 iterator.remove()
             }
         }

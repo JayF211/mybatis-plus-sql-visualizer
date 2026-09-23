@@ -38,6 +38,15 @@ class JdbcTemplateLogParser(
 
     /** 行解析最大长度（超长截断，防控制台大输出卡顿）。 */
     var maxParseLength: Int = DEFAULT_MAX_PARSE_LENGTH,
+
+    /**
+     * T-ConsolePendingFlush：静默冲刷阈值（毫秒）。桶内最后一行静默超过它，即认定「后续行不会再来了」
+     * （参数行与语句行是同线程相邻输出，正常间隔 1ms 量级），可安全闭合产出。
+     */
+    private val settleMs: Long = DEFAULT_SETTLE_MS,
+
+    /** settle 判定的时钟（测试注入可控件；与 [LogThreadRouter] 共用同一时钟）。 */
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
     private val entries = mutableListOf<LogSqlEntry>()
@@ -66,6 +75,7 @@ class JdbcTemplateLogParser(
         factory = { ThreadBucket() },
         isCollecting = { it.collecting },
         isIdle = { it.pendingSql == null && !it.collecting },
+        clock = clock,
     )
 
     /** 喂入一行控制台输出（任意线程，内部按线程 token 路由到对应桶——解析器实例按 console 隔离）。 */
@@ -195,6 +205,31 @@ val sql = bucket.pendingSql ?: return null
         val result = entries.toList()
         entries.clear()
         return result
+    }
+
+    /**
+     * T-ConsolePendingFlush：静默冲刷——闭合全部**已静默 ≥ [settleMs]** 的桶的待产出条目，产出进
+     * [entries]（由调用方随下一次 [takeEntries] 取走），返回本次产出条数。
+     *
+     * 为什么必须有它：本解析器的条目只在「同一线程桶里再来一行边界行」时经 [closeBucketPending] 产出，
+     * 而 JdbcTemplate 的语句行之后经常**没有同线程后继行**——参数行是 TRACE 级（`logging.level` 常只开
+     * `JdbcTemplate: debug`），Tomcat 又按请求新建线程（`exec-1`/`exec-2`…），低频访问下每条语句各自独占
+     * 一个新线程、此后不再有行。旧行为下这些语句永远停在桶里，`takeEntries()` 恒空——用户看到的是
+     * 面板「已扫描 N 行 / 产出 0 条」。
+     *
+     * 调用点两处：① [processConsoleLine] 逐行入口（同控制台线程，喂行后调用，零并发）；
+     * ② 控制台桥的常规轮询（EDT）——应用之后一行都不再打时，靠这一拍兜底。
+     *
+     * 已知代价：若某线程在语句行与它的参数行之间卡住超过阈值（连接池耗尽等），条目会先以未还原形态
+     * 产出，随后到达的参数行按「无上下文」丢弃（[LogParseDiag.paramWithoutContext] 留痕）。阈值取
+     * 1 秒即为把这一误伤面压到最小。
+     */
+    fun flushSettled(nowMs: Long = clock()): Int {
+        var produced = 0
+        for (bucket in router.settledBuckets(settleMs, nowMs)) {
+            if (closeBucketPending(bucket) != null) produced++
+        }
+        return produced
     }
 
     // ---------- 私有方法（与旧版同逻辑，按桶操作） ----------
@@ -396,6 +431,15 @@ val sql = bucket.pendingSql ?: return null
 
     companion object {
         const val DEFAULT_MAX_PARSE_LENGTH = 20000
+
+        /**
+         * T-ConsolePendingFlush：静默冲刷默认阈值（毫秒）。
+         *
+         * 取 1 秒的由来：参数行（TRACE）与语句行（DEBUG）由同线程相邻打印，`JdbcTemplate.execute` 先打
+         * 语句行、随后在 `psc.createPreparedStatement` 里逐参数打 TRACE 行，间隔 1ms 量级；1 秒的静默
+         * 足以判定「没有参数行可等」，而误伤（把参数行留在条目外）需要该线程在两步之间卡住 1 秒以上。
+         */
+        const val DEFAULT_SETTLE_MS = 1000L
 
         // T-LogParseConc：线程 token 提取 / 分桶 / 桶上限已下沉 [LogThreadRouter]（三解析器共享），
         // 原 THREAD_WINDOW / THREAD_BRACKET / PURE_DIGIT / LEVEL_KEYWORD_PATTERN / DEFAULT_MAX_BUCKETS 随之下沉。
