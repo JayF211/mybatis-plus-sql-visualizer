@@ -9,7 +9,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.psi.xml.XmlTag
 
 /**
- * 通用 XML 内嵌 SQL 预览服务（O-71 T-XmlInlineSql）：载体标签 → [PreviewResult]。
+ * 通用 XML 内嵌 SQL 预览服务（O-72 T-XmlInlineSql）：载体标签 → [PreviewResult]。
  *
  * - 无 `type` 或 type 非 HQL 族 → 原生 SQL 直显（pages 同款：`?` 占位符 → param 表）；
  * - `type` ∈ {hql, jpql}（就近祖先优先）→ 复用 hbm 命名查询的 HQL 管道

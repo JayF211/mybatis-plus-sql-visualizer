@@ -11,7 +11,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
 /**
- * 通用 XML 内嵌 SQL 检测器测试（O-71 T-XmlInlineSql）。
+ * 通用 XML 内嵌 SQL 检测器测试（O-72 T-XmlInlineSql）。
  *
  * 覆盖：用户真实 RF 框架样例（根元素不固定）、CDATA/纯文本两形态、既有三套
  * 白名单排除（防双图标）、type 属性就近探测、宽口径行为钉死（决策 D2）。

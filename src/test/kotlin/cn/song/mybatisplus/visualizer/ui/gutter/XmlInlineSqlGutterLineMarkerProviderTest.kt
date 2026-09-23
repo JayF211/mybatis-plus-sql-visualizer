@@ -15,7 +15,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 
 /**
- * 通用 XML 内嵌 SQL gutter provider 测试（O-71 T-XmlInlineSql）。
+ * 通用 XML 内嵌 SQL gutter provider 测试（O-72 T-XmlInlineSql）。
  *
  * 覆盖：RF 样例认领、既有三套白名单文件不双图标（mapper/hbm/pages）、
  * 检测总开关、选择区候选收集。

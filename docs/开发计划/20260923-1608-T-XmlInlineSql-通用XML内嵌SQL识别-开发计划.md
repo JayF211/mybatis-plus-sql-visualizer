@@ -1,6 +1,6 @@
 # T-XmlInlineSql 通用 XML 内嵌 SQL 识别（不依赖根元素）— 开发计划
 
-> 任务编号：O-71（暂定，立案时按 `docs/MEMORY.md` 台账顺延核对；O-70 已被 T-ConsolePendingFlush 占用）
+> 任务编号：**O-72**（立案时暂定 O-71；同日并行会话 T-HqlNoAliasProp 已将 O-71 落在 master `69a4028`，合并 dev 前订正为本号，实现与文档中编号已同步替换）
 > 立案日期：2026-09-23
 > 状态：**待确认**（写完停下等用户拍板，未动任何 src/main）
 

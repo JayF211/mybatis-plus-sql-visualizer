@@ -316,7 +316,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
     private val joinDiagramNativeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.joinDiagramNative"))
 
-    /** 通用 XML 内嵌 SQL 检测开关（O-71 T-XmlInlineSql，默认开）。 */
+    /** 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）。 */
     private val xmlInlineSqlCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.xmlInlineSql"))
 
     /** 首用锚点引导通知开关（T-UxOnboard T-UX-01，默认开）：关闭后首用引导全程静默。 */

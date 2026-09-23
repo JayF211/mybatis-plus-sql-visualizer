@@ -10,7 +10,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
 /**
- * 通用 XML 内嵌 SQL 预览服务测试（O-71 T-XmlInlineSql）。
+ * 通用 XML 内嵌 SQL 预览服务测试（O-72 T-XmlInlineSql）。
  *
  * 覆盖：原生 SQL 直显（pages 同款）、空文本 warning、HQL 分派（JPA 实体夹具 →
  * HqlConverter 管道）、project 缺席时回退原文。

@@ -420,7 +420,7 @@ class ConvertToSqlAction : AnAction() {
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
                 ReadAction.compute<Pair<List<XmlTag>, List<SqlSelectionDialog.Row>>, Throwable> {
-                    // O-71：mapper 语句候选 + 通用内嵌 SQL 载体候选（排除集合保证互斥，按 offset 归并）
+                    // O-72：mapper 语句候选 + 通用内嵌 SQL 载体候选（排除集合保证互斥，按 offset 归并）
                     val mapperTags = XmlSqlGutterLineMarkerProvider.statementsInRange(file, selStart, selEnd)
                     val inlineTags = if (XmlInlineSqlDetector.detectionEnabled()) {
                         XmlInlineSqlGutterLineMarkerProvider.carriersInRange(file, selStart, selEnd)
@@ -458,7 +458,7 @@ class ConvertToSqlAction : AnAction() {
     /**
      * T-M24-04/M25-01：XML mapper 语句预览——光标所在语句优先；不在语句内时
      * 收集全部语句（0/1/多分发，多候选走 [SqlSelectionDialog]，仿 Java 选择区候选交互）。
-     * O-71：光标上爬与全文件收集均追加通用内嵌 SQL 载体（开关 `xmlInlineSqlEnabled` 闸）。
+     * O-72：光标上爬与全文件收集均追加通用内嵌 SQL 载体（开关 `xmlInlineSqlEnabled` 闸）。
      */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun previewXmlStatement(project: Project, file: XmlFile, editor: Editor, sourceLocation: String?) {
@@ -517,7 +517,7 @@ class ConvertToSqlAction : AnAction() {
     }
 
     /** 预览单个 XML 语句（后台转换，EDT 渲染；T-M25.2 传 project 解析静态常量引用）。 */
-    /** O-71：统一 XML 语句分发——通用内嵌 SQL 载体走 inline 预览，其余走 mapper 语句预览。 */
+    /** O-72：统一 XML 语句分发——通用内嵌 SQL 载体走 inline 预览，其余走 mapper 语句预览。 */
     private fun previewXmlTag(project: Project, file: XmlFile, tag: XmlTag, sourceLocation: String?) {
         if (XmlInlineSqlDetector.isSqlCarrierTag(tag)) {
             SqlPreviewService.previewAsync(project, {

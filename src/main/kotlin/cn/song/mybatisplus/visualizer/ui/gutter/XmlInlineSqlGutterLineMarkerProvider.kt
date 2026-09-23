@@ -20,7 +20,7 @@ import java.awt.event.MouseEvent
 import javax.swing.Icon
 
 /**
- * 通用 XML 内嵌 SQL 预览图标（O-71 T-XmlInlineSql）：叶子标签文本首词命中 SQL
+ * 通用 XML 内嵌 SQL 预览图标（O-72 T-XmlInlineSql）：叶子标签文本首词命中 SQL
  * 关键字（CDATA 或普通文本，根元素与标签名不限）→ 该标签行显示预览图标。
  *
  * 作为 mapper / pages / hbm 三套白名单之后的**兜底通道**，认领条件与排除集合

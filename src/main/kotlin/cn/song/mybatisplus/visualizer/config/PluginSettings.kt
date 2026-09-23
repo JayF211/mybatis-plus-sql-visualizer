@@ -83,7 +83,7 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var showGutterIcon: Boolean = true,
 
         /**
-         * 通用 XML 内嵌 SQL 检测开关（O-71 T-XmlInlineSql，默认开）：
+         * 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）：
          * 叶子标签文本首词命中 SQL 关键字即认领（不限根元素/标签名）；
          * 关闭后 gutter 与 Alt+Shift+Q 兜底均不生效（mapper/pages/hbm 三套白名单不受影响）。
          */

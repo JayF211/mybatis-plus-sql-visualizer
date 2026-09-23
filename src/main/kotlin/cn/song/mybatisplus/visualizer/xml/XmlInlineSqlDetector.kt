@@ -5,7 +5,7 @@ import com.intellij.psi.xml.XmlText
 import java.util.Locale
 
 /**
- * 通用 XML 内嵌 SQL 检测（O-71 T-XmlInlineSql）。
+ * 通用 XML 内嵌 SQL 检测（O-72 T-XmlInlineSql）。
  *
  * 背景：RFListPage 等自研框架 XML 把 SQL/HQL 写在自定义标签的 CDATA/文本里，
  * 根元素名不固定（用户实证），mapper/pages/hbm 三套「根元素+标签名」白名单全部
@@ -61,7 +61,7 @@ object XmlInlineSqlDetector {
     }
 
     /** 完整提取载体标签内 SQL 文本（直属文本段拼接，CDATA 剥包裹，trim）。
-     *  实测（O-71）：XmlText.text 对 CDATA 返回带 <![CDATA[ ]]> 包裹的字面全文，
+     *  实测（O-72）：XmlText.text 对 CDATA 返回带 <![CDATA[ ]]> 包裹的字面全文，
      *  并非展开内容——统一剥包裹后再拼（混排文本/多 CDATA 段均安全）。 */
     fun extractSqlText(tag: XmlTag): String =
         tag.children

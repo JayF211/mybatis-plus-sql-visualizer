@@ -215,7 +215,7 @@
         <!-- T-H2 hbm 命名查询预览：<hibernate-mapping> 下 <query>/<sql-query> 行显示预览图标（O(1) 标签名判定） -->
         <codeInsight.lineMarkerProvider language="XML"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.HbmNamedQueryGutterLineMarkerProvider"/>
-        <!-- O-71 T-XmlInlineSql 通用内嵌 SQL 预览：叶子标签文本首词命中 SQL 关键字即认领（内容判定，不限根元素/标签名；mapper/pages/hbm 之后兜底） -->
+        <!-- O-72 T-XmlInlineSql 通用内嵌 SQL 预览：叶子标签文本首词命中 SQL 关键字即认领（内容判定，不限根元素/标签名；mapper/pages/hbm 之后兜底） -->
         <codeInsight.lineMarkerProvider language="XML"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.XmlInlineSqlGutterLineMarkerProvider"/>
 
