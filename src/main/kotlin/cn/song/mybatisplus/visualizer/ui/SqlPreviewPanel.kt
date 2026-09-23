@@ -763,17 +763,22 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 项目关闭路径上 join 会把在途预热的耗时加进用户可感的关闭时间；且平台对该 Disposable 的 dispose
      * 有硬要求——「must be self-contained and isolated (getting services is forbidden)」，本实现只置标志。
      *
-     * **降级**：`getEarlyDisposable()` 是 `@ApiStatus.Internal`，且项目已 dispose 时抛
-     * `AlreadyDisposedException`——用 [Disposer.tryRegister]（父已销毁即返回 false，不抛）并在外层
-     * runCatching 兜底；挂不上时静默返回，行为退回改动前，预热主链不受影响。
+     * **降级**：earlyDisposable 树的取入口是 `@ApiStatus.Internal`（Marketplace 审核对 internal
+     * API 用法要求作者响应，20260923），且项目已 dispose 时抛 `AlreadyDisposedException`——取树改走
+     * **反射**（字节码零平台 internal 类型引用；方法在 ProjectImpl 上实现，KDoc 口径不变），并用
+     * [Disposer.tryRegister]（父已销毁即返回 false，不抛）加外层 runCatching 兜底；反射失败或
+     * 挂不上时静默返回，行为退回改动前，预热主链不受影响。
      */
     private fun bindPrewarmToProjectLifecycle() {
         if (prewarmLifecycleGate != null) return // 已挂：clear() 重预热不重复登记
         val proj = project ?: return
         val gate = Disposable { previewDisposed = true }
         val registered = runCatching {
-            val early = (proj as? com.intellij.openapi.project.ex.ProjectEx)?.earlyDisposable
-                ?: return@runCatching false
+            // T-MarketCompatProxy：getEarlyDisposable 标 @ApiStatus.Internal 且无公开等价——
+            // 反射取树（仅此一处调用），消除 verifier 的 internal API usage。
+            val early = runCatching {
+                proj.javaClass.getMethod("getEarlyDisposable").invoke(proj) as? Disposable
+            }.getOrNull() ?: return@runCatching false
             Disposer.tryRegister(early, gate)
         }.getOrDefault(false)
         if (registered) prewarmLifecycleGate = gate

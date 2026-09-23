@@ -18,6 +18,15 @@
 # master 分支不含 MCP 适配层（cn/song/mybatisplus/visualizer/mcp/ 与 mcp-optional.xml 在 dev，
 # 未合入 master），因此 master 侧无永不可达缺类需要豁免，本文件只保留机制与格式。
 #
+# 【T-MarketCompatFix 2026-09-23 作用域订正——务必读完】
+# 本清单只作用于离线 verifyGate，对 Marketplace 判定无效。20260923 上传 Marketplace 实测：
+# 7 个目标里 6 个被判致命级，而本仓门禁长期全绿——成因是本清单按包前缀成族豁免了
+# Marketplace 所报的全部内容（即下方第三条规则），叠加 verifyGate 的离线口径（不解析可选依赖，
+# 同一产物离线 243 报 0 问题、在线报 5 问题）与「只看退出码」判定（实测 verifier 带 4 个兼容问题
+# 仍退出 0）。真实兼容性以 verifyMarketplace 任务为准——该任务在线、不加载本清单、并按
+# verdict 文本判失败。本清单后续只应放行逐条查明运行期永不可达的项，禁再按包前缀成族豁免。
+#
+# 下方三条规则为 20260923 之前登记、作用域仅限离线 verifyGate；其中第三条即成族豁免那一类。
 
 # dev 分支含 MCP 适配层（cn/song/mybatisplus/visualizer/mcp/ 与 mcp-optional.xml 在 dev），
 # 上述两类 243 永不可达缺类在此为真实豁免需求，以下两条规则生效中：
