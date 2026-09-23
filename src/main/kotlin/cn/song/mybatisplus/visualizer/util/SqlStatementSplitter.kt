@@ -13,6 +13,13 @@ package cn.song.mybatisplus.visualizer.util
  *  - **括号深度**：`(…;…)` 括号内的 `;` 不切分（存储过程参数/函数实参形态）；
  *  - **BEGIN/END 块感知**（大小写不敏感，字符串/注释内不算）：块内 `;` 不切分——仅当后方
  *    存在配对 END 时启用（保守：识别不到配对 END 按顶层切分原样，不吞后续语句）；
+ *    `BEGIN` 后随 TRAN/TRANSACTION/DISTRIBUTED/DIALOG/CONVERSATION 是事务/会话形态
+ *    而非块，不武装（T-STG-01，DBX `SQLSERVER_NON_BLOCK_BEGIN_KEYWORDS` 同型；全表
+ *    未逐词核对，保守 5 词）——否则后方任何 END 词（CASE/注释/游标声明）都会误武装且
+ *    深度永不归零，后续顶层 `;` 全部失切；
+ *    块深度归零的**顶层** `END`（1→0，且不在声明段吞并中）产生一次隐式语句边界
+ *    （T-STG-02）：T-SQL 惯例 END 后分号可省，只认 `;` 会把后续语句误并入同段；
+ *    `END` 后跟 `;`/界符走既有分支（Oracle 匿名块 `END;` 语义不变）；
  *  - **T-SQL 控制流批首合并**（T-TsqlBatchSplit / O-28，DBX 1a7b44f 批首识别同型）：
  *    首段以 `IF` 起头时整批不拆——裸 `IF … ELSE …` 形态（两分支各以 `;` 终结、无
  *    BEGIN/END 包裹）后续以 `ELSE` 起头的顶层段并入同批；批内 BEGIN/END 配对失衡
@@ -47,6 +54,18 @@ object SqlStatementSplitter {
      * 限定 IF：语句首 IF 无方言歧义；裸 BEGIN 是 MySQL 事务形态不并入（见类注释）。
      */
     private val CONTROL_FLOW_BATCH_HEADS = setOf("IF")
+
+    /**
+     * T-SQL 非块 BEGIN 后随词表（T-STG-01，DBX `SQLSERVER_NON_BLOCK_BEGIN_KEYWORDS` 同型）：
+     * `BEGIN` 后随这些词是事务/会话开启形态而非块，不武装块计数。仅当 `BEGIN` 处于武装
+     * 候选（后方存在 END 词）时才有意义——此处恰是边缘 A 的误武装触发面。
+     * 全表未逐词核对（DBX 仓不可达），按计划保守 5 词执行，拿不准的词不进表。
+     */
+    private val NON_BLOCK_BEGIN_TAILS = setOf("TRAN", "TRANSACTION", "DISTRIBUTED", "DIALOG", "CONVERSATION")
+
+    /** `from` 之后首个词（跳过空白/注释，大小写不敏感）是否属于 [NON_BLOCK_BEGIN_TAILS]。 */
+    private fun isNonBlockBeginTail(sql: String, from: Int): Boolean =
+        NON_BLOCK_BEGIN_TAILS.any { nextWordIs(sql, from, it) }
 
     /** 默认语句界符（MySQL 客户端 `DELIMITER` 指令可切换；无参数指令复位为此值）。 */
     private const val DEFAULT_DELIMITER = ";"
@@ -90,6 +109,10 @@ object SqlStatementSplitter {
         var caseDepth = 0
         // `END CASE` 双词终结形态：END 前视到 CASE 词后置位，供紧随的 CASE 词消费
         var caseEndTailPending = false
+        // T-STG-02：块深度归零的顶层 END 已闭合——主循环下一个非空白内容（非 `;`/注释/
+        // DELIMITER 指令）处产生一次隐式语句边界（T-SQL 惯例 END 后分号可省，只认 `;`
+        // 会把后续语句误并入同段）
+        var topBlockJustClosed = false
         var word = StringBuilder()
         // 当前词的首字符下标与词起点处的缓冲长度（DELIMITER 指令的行首/语句边界判定用；
         // word 非空时有效）
@@ -120,12 +143,29 @@ object SqlStatementSplitter {
                                 nextWordIs(sql, i, "WHILE") || nextWordIs(sql, i, "REPEAT")
                             if (!innerLayerTail) {
                                 if (caseDepth > 0) caseDepth--       // CASE 收尾（裸 END / END CASE）
-                                else if (blockDepth > 0) blockDepth-- // 块尾
+                                else if (blockDepth > 0) {
+                                    // T-STG-02：顶层块闭合（1→0 且不在声明段吞并中）——置隐式边界
+                                    // 标记。声明段内例程体的 END 归零后声明段仍在吞并（T-SSP-01），
+                                    // 边界由主体 BEGIN/END 接力，此处不得置位
+                                    if (blockDepth == 1 && !declareSection) topBlockJustClosed = true
+                                    blockDepth--
+                                }
                             }
                         }
                         else -> bodyBeginExpected = false
                     }
                 }
+            }
+        }
+
+        // T-STG-02：隐式边界兑现——已完成块作为独立段产出（空缓冲＝边界已被 `;`/界符
+        // 兑现过，空段跳过），残余内容续算
+        fun fireImplicitBoundary() {
+            if (topBlockJustClosed) {
+                topBlockJustClosed = false
+                val part = sb.toString().trim()
+                if (part.isNotEmpty()) parts += part
+                sb.setLength(0)
             }
         }
 
@@ -182,6 +222,7 @@ object SqlStatementSplitter {
                         bodyBeginExpected = false
                         caseDepth = 0
                         caseEndTailPending = false
+                        topBlockJustClosed = false // T-STG-02：界符已兑现边界
                     } else {
                         sb.append(delimiter)
                     }
@@ -200,12 +241,14 @@ object SqlStatementSplitter {
                     i++
                 }
                 c == '\'' -> {
+                    fireImplicitBoundary() // T-STG-02
                     flushWord()
                     inSingle = true
                     sb.append(c)
                     i++
                 }
                 c == '"' -> {
+                    fireImplicitBoundary() // T-STG-02
                     flushWord()
                     inDouble = true
                     sb.append(c)
@@ -220,6 +263,7 @@ object SqlStatementSplitter {
                         // 语句边界：CASE 层状态随段重置（防截断 CASE 的层数泄漏到后续语句）
                         caseDepth = 0
                         caseEndTailPending = false
+                        topBlockJustClosed = false // T-STG-02：`;` 边界已兑现（END; 形态走此分支）
                     } else {
                         // T-SSP-01：声明段顶层 `;` 是声明分隔符（不切分），且构成声明段边界
                         if (declareSection && parenDepth == 0 && blockDepth == 0) bodyBeginExpected = true
@@ -228,12 +272,14 @@ object SqlStatementSplitter {
                     i++
                 }
                 c == '(' -> {
+                    fireImplicitBoundary() // T-STG-02
                     flushWord()
                     parenDepth++
                     sb.append(c)
                     i++
                 }
                 c == ')' -> {
+                    fireImplicitBoundary() // T-STG-02
                     flushWord()
                     parenDepth = (parenDepth - 1).coerceAtLeast(0)
                     sb.append(c)
@@ -241,6 +287,8 @@ object SqlStatementSplitter {
                 }
                 isIdentifierChar(c) -> {
                     if (word.isEmpty()) {
+                        // T-STG-02：词起点的隐式边界（先于词起点记录——fire 可能重置 sb）
+                        fireImplicitBoundary()
                         wordStart = i
                         bufferLenAtWordStart = sb.length
                     }
@@ -250,6 +298,8 @@ object SqlStatementSplitter {
                 }
                 else -> {
                     // 非标识符定界符：词终结（DELIMITER 指令 / BEGIN 前视在此触发）
+                    // T-STG-02：非空白内容的隐式边界（`;` 分支自切、注释分支不算内容）
+                    if (!c.isWhitespace()) fireImplicitBoundary()
                     if (word.isNotEmpty() &&
                         word.toString().equals(DELIMITER_DIRECTIVE, ignoreCase = true) &&
                         c.isWhitespace() && isLineHead(sql, wordStart) &&
@@ -258,6 +308,7 @@ object SqlStatementSplitter {
                         // T-DA-02：行首 `DELIMITER <token>` 指令——切换界符并整行丢弃（不产出语句）
                         word.setLength(0)
                         sb.setLength(0)
+                        topBlockJustClosed = false // T-STG-02：指令行丢弃，挂起边界一并消费
                         val directive = readDelimiterDirective(sql, i)
                         delimiter = directive.first
                         i = directive.second
@@ -294,7 +345,10 @@ object SqlStatementSplitter {
                         sb.append(c)
                         i++
                     } else if (word.isNotEmpty() && word.toString().equals("BEGIN", ignoreCase = true) &&
-                        !beginModeEnabled && hasMatchingEndAhead(sql, i)
+                        !beginModeEnabled && hasMatchingEndAhead(sql, i) &&
+                        // T-STG-01：`BEGIN TRAN/…` 事务/会话形态不武装（否则 CASE 等任何 END 词
+                        // 误武装后深度永不归零，后续顶层 `;` 全部失切）
+                        !isNonBlockBeginTail(sql, i)
                     ) {
                         beginModeEnabled = true
                         blockDepth = 1

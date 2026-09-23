@@ -116,3 +116,44 @@
 3. 「我方用户会粘贴含 `BEGIN TRAN` 的 T-SQL 脚本」无直接证据（日志还原链以单语句为主）——若实测发现该形态在委托链不可达，本任务降级为防御性支持并如实登记（仍建议做：消费方含用户粘贴的脚本面）。
 4. TRY…CATCH 中缝带 `;` 的真实分布（`END TRY;` 写法是否常见）——未验证；登记观察，不做块类型配对。
 5. T-STG-02 的归零边界与 `mergeControlFlowBatches` 的净效果（§六 风险 4）——实施时用例实测，不靠推演。
+
+---
+
+## 八、实施记录（2026-09-23，车道 t-tsql-splitter，基线 dev 顶 ac6a91f）
+
+### 8.1 逐项落地
+
+- **红用例实测（先于一切生产改动）**：新增 8 例（边缘 A 语料、TRANSACTION/DIALOG 变体、边缘 B 语料、无分号匿名块串接、正对照×2、拆分后合并净效果守卫），跑改前代码 **81 例 5 红**：边缘 A 实测 1 段（期望 4）、TRANSACTION 变体 1 段（期望 3）、DIALOG 变体 1 段（期望 3）、边缘 B 实测 1 段（期望 2）、无分号匿名块串接 1 段（期望 2）；正对照×2 与净效果守卫改前即绿。**推演与实测一致**（无 O-47 式偏差）。
+- **T-STG-01**：武装条件追加否定前视 `!isNonBlockBeginTail(sql, i)`，`NON_BLOCK_BEGIN_TAILS` = {TRAN, TRANSACTION, DISTRIBUTED, DIALOG, CONVERSATION}（**全表未核，保守 5 词**——DBX 仓不可达，前提 2 按此登记）；实现复用既有 `nextWordIs`（冷路径：仅 BEGIN 武装候选时触发），不引入新状态。EOF 尾词补判定分支无需加豁免——`hasMatchingEndAhead(sql, length)` 在文本尾恒 false，该分支武装本就不可达。
+- **T-STG-02**（D1 定案 A）：`topBlockJustClosed` 标记 + `fireImplicitBoundary()` 兑现。fire 点＝词起点/引号/圆括号/非空白符号；`;`、`--`/`/* */` 注释、DELIMITER 指令、自定义界符不触发（`;`/界符分支自身兑现边界并清标记，指令行丢弃一并清标记）。
+- 反向验证：摘 T-STG-01 豁免 → A 族 3/3 转红；摘 T-STG-02 置位 → B 族 2/2 转红；还原后复绿（读数见 8.3）。
+- 类注释 BEGIN/END 块感知口径同步更新（豁免词表 + 隐式边界 + 声明段例外）。
+
+### 8.2 计划前提被证伪 / 就地更正
+
+1. 前提 1（推演段数）：未被证伪——推演「并成 1 段」与实测一致（边缘 A、边缘 B 双语料）。
+2. 前提 2（豁免全表）：DBX 仓不可达，按「全表未核，保守 5 词」执行，词表出处注释已注明。
+3. **T-STG-02 置位口径就地收紧（本轮唯一更正）**：计划口径「`beginModeEnabled && blockDepth` 由 1 归零」不完整——Oracle 匿名块声明段内例程体 END（1→0）后声明段仍在吞并、由主体 BEGIN 接力（T-SSP-01 语义），照原口径置位会把 `PLSQL_匿名块含局部例程整段一条` 碎成 2 段；置位条件补 `!declareSection` 后 73 例既有全绿。
+4. 前提 3（BEGIN TRAN 可达性）：消费面含日志面板用户粘贴脚本（LogToSqlPanel.splitSqlStatements 委托本实现），按防御性支持落地，如实登记。
+
+### 8.3 定向测试读数（本任务实跑，`./gradlew testFast --tests <FQCN>`）
+
+| 轮次 | 读数 |
+|---|---|
+| 改前基线 | SqlStatementSplitterTest 81 例：5 红 76 绿（GRADLE_EXIT=1） |
+| T-STG-01 后 | 81 例：2 红 79 绿（B 族仍红）——T-STG-01 独立生效证据 |
+| 摘 T-STG-01 豁免（反向） | A 族定向 3/3 红（BUILD FAILED） |
+| T-STG-01+02 后 | 81 例全绿（XML：tests=81 failures=0 errors=0） |
+| 摘 T-STG-02 置位（反向） | 81 例 2 红（恰 B 族 2 例，GRADLE_EXIT=1） |
+| 还原后回归 | SqlStatementSplitterTest 81 + SqlTypeClassifierTest 66 + ExecutionTimeoutGuardTest 12 全绿（XML 三类 failures=0 errors=0） |
+
+### 8.4 写集外改动 / 行为漂移登记
+
+- 既有例 `TSQL_IF_ELSE双BEGIN形态整批不拆`：隐式边界先在 ELSE 前拆开、`mergeControlFlowBatches` 再并回——**段数不变（1 段）**，合并批内 `END ELSE` 变为 `END; ELSE`（批首合并以 `"; "` 连接段）。该例仅断言段数仍绿；即 §六 风险 4 预告的两机制叠加净效果，已由净效果守卫用例（`TSQL_拆分后合并净效果_IF_END_ELSE无分号`）钉住。
+- 无写集外生产文件改动；`build.gradle.kts` 沙盒行临改已还原不入库。
+
+### 8.5 未实施清单（诚实销账）
+
+- TRY…CATCH `END TRY; BEGIN CATCH` 中缝带 `;` 形态：维持 §一.3 登记不做（无块类型配对）。
+- **复合场景「已武装文本内再出现 `BEGIN TRAN`」**（如 `IF…BEGIN…END;\nBEGIN TRAN; …`）：beginModeEnabled 语句间不重置，第二个 BEGIN 走已武装路径直接计数、豁免不复查——边缘 A 的残余窄面，**登记观察**。修它须给已武装 BEGIN 计数路径每次加 5 词前视，与 T-STG-01「仅武装条件」口径不符且违背 O-47「不为不存在的语法面过度设计」先例，不混入本任务。
+- WHILE 批首、`GO` 界符：维持 §一.3 登记不做。

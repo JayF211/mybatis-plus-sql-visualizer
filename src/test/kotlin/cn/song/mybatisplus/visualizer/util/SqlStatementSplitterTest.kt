@@ -343,6 +343,89 @@ class SqlStatementSplitterTest {
         )
     }
 
+    // ==================== T-SQL 控制流批次切分边缘治理（T-SqlSplitterTsqlGuard / O-60） ====================
+
+    /**
+     * 边缘 A：`BEGIN TRAN` 是事务形态而非块（DBX `SQLSERVER_NON_BLOCK_BEGIN_KEYWORDS` 同型），
+     * 不得因后方存在任何 END 词（本例是 CASE 的 END）而武装块计数——武装后 CASE 的 END 走
+     * CASE 层递减、blockDepth 永不归零，后续顶层 `;` 全部失切（改前实测 1 段）。
+     */
+    @Test
+    fun `TSQL_BEGIN_TRAN非块形态不武装_边缘A`() {
+        val parts = split("BEGIN TRAN; SELECT 1; SELECT CASE WHEN @x>0 THEN 1 ELSE 0 END AS y; SELECT 99;")
+        assertEquals("事务形态 BEGIN 不并入块——4 条语句 4 段", 4, parts.size)
+        assertEquals("BEGIN TRAN", parts[0])
+        assertEquals("SELECT 1", parts[1])
+        assertEquals("SELECT CASE WHEN @x>0 THEN 1 ELSE 0 END AS y", parts[2])
+        assertEquals("SELECT 99", parts[3])
+    }
+
+    /** 边缘 A 变体：`BEGIN TRANSACTION`（首词即豁免表词）。 */
+    @Test
+    fun `TSQL_BEGIN_TRANSACTION变体不武装`() {
+        val parts = split("BEGIN TRANSACTION; SELECT CASE WHEN 1=1 THEN 1 ELSE 0 END AS y;\nSELECT 2;")
+        assertEquals("3 条语句 3 段", 3, parts.size)
+        assertEquals("BEGIN TRANSACTION", parts[0])
+        assertEquals("SELECT 2", parts[2])
+    }
+
+    /** 边缘 A 变体：`BEGIN DIALOG CONVERSATION`（Service Broker 会话形态，首词 DIALOG 在豁免表）。 */
+    @Test
+    fun `TSQL_BEGIN_DIALOG变体不武装`() {
+        val parts = split("BEGIN DIALOG CONVERSATION @h; SELECT CASE WHEN 1=1 THEN 1 ELSE 0 END AS y;\nSELECT 2;")
+        assertEquals("3 条语句 3 段", 3, parts.size)
+        assertEquals("BEGIN DIALOG CONVERSATION @h", parts[0])
+        assertEquals("SELECT 2", parts[2])
+    }
+
+    /**
+     * 边缘 B：块深度归零的顶层 `END` 与下一条语句之间只有换行（T-SQL 惯例 END 后分号可省），
+     * 切分只认 `;` 则两条误并一条（改前实测 1 段）。
+     */
+    @Test
+    fun `TSQL_END无分号隐式边界_边缘B`() {
+        val parts = split("IF @x=1 BEGIN SELECT 1; END\nSELECT 2;")
+        assertEquals("END 归零处产隐式边界——2 条语句 2 段", 2, parts.size)
+        assertEquals("IF @x=1 BEGIN SELECT 1; END", parts[0])
+        assertEquals("SELECT 2", parts[1])
+    }
+
+    /** 边缘 B 变体：两个无分号匿名块串接——隐式边界使各自成条（改前实测 1 段）。 */
+    @Test
+    fun `TSQL_无分号匿名块串接各自成条`() {
+        val parts = split("BEGIN SELECT 1; END\nBEGIN SELECT 2; END")
+        assertEquals("两个无分号块两条", 2, parts.size)
+        assertEquals("BEGIN SELECT 1; END", parts[0])
+        assertEquals("BEGIN SELECT 2; END", parts[1])
+    }
+
+    /** 正对照（T-STG-01 不得误伤）：合法块 BEGIN（后随词非豁免表）仍整块一条。 */
+    @Test
+    fun `TSQL_合法块BEGIN仍整段一条_正对照`() {
+        assertEquals(1, split("BEGIN\n  SELECT 1;\nEND;").size)
+    }
+
+    /** 正对照：`IF…BEGIN…END;` 后接独立语句仍正常切开（既有语义不变）。 */
+    @Test
+    fun `TSQL_IF块后接独立语句仍切开_正对照`() {
+        val parts = split("IF @x = 1 BEGIN UPDATE t SET a = 1; END; SELECT 2;")
+        assertEquals(2, parts.size)
+        assertEquals("SELECT 2", parts[1])
+    }
+
+    /**
+     * 拆分后合并净效果（§六 风险 4 守卫）：`IF…BEGIN…END\nELSE…` 无分号形态——
+     * 隐式边界先在 ELSE 前拆开，`mergeControlFlowBatches` 再把 ELSE 起头段并回同批，
+     * 净效果仍整批一条（宁整勿碎维持）。改前即绿（原本就 1 段），钉住两机制叠加行为。
+     */
+    @Test
+    fun `TSQL_拆分后合并净效果_IF_END_ELSE无分号`() {
+        val parts = split("IF @x = 1 BEGIN UPDATE t SET a = 1; END\nELSE INSERT INTO t VALUES (1);")
+        assertEquals("拆开再并回——净效果整批一条", 1, parts.size)
+        assertTrue("ELSE 并入同批", parts[0].contains("ELSE INSERT INTO t VALUES (1)"))
+        assertTrue("批首保留 IF", parts[0].startsWith("IF @x = 1"))
+    }
+
     // ======================== MERGE 多行样例（O-42 / T-OQCS-04 守卫） ========================
 
     /**
