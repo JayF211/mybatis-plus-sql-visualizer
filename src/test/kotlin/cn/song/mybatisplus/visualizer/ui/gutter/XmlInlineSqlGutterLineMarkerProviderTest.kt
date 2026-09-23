@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.ui.gutter
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.xml.XmlInlineSqlDetector
 import com.intellij.codeInsight.daemon.LineMarkerInfo
+import com.intellij.codeInsight.daemon.LineMarkerProvider
 import com.intellij.psi.PsiElement
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlFile

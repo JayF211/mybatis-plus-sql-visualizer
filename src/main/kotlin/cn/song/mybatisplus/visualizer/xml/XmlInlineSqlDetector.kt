@@ -60,12 +60,13 @@ object XmlInlineSqlDetector {
         return word.uppercase(Locale.ROOT).ifEmpty { null }
     }
 
-    /** 完整提取载体标签内 SQL 文本（全部直属文本段拼接，CDATA 已由 PSI 展开，trim）。
-     *  口径与 hbm 命名查询文本提取一致（直属 XmlText、CDATA 展开）。 */
+    /** 完整提取载体标签内 SQL 文本（直属文本段拼接，CDATA 剥包裹，trim）。
+     *  实测（O-71）：XmlText.text 对 CDATA 返回带 <![CDATA[ ]]> 包裹的字面全文，
+     *  并非展开内容——统一剥包裹后再拼（混排文本/多 CDATA 段均安全）。 */
     fun extractSqlText(tag: XmlTag): String =
         tag.children
             .filterIsInstance<XmlText>()
-            .joinToString("") { it.text }
+            .joinToString("") { unwrapCdata(it.text) }
             .trim()
 
     /** 自身或祖先标签的 `type` 属性值（就近优先，小写；无 → null）。 */
@@ -87,15 +88,20 @@ object XmlInlineSqlDetector {
         cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.xmlInlineSqlEnabled
     }.getOrDefault(true)
 
-    /** 首段非空文本的截断前缀（遍历直属文本段，跳过纯空白段；无 → null）。 */
+    /** 首段非空文本的截断前缀（遍历直属文本段，剥 CDATA 包裹、跳过纯空白段；无 → null）。 */
     private fun firstNonBlankTextPrefix(tag: XmlTag): String? {
         for (child in tag.children) {
             val text = (child as? XmlText)?.text ?: continue
-            val trimmed = text.trim()
+            val trimmed = unwrapCdata(text).trim()
             if (trimmed.isNotEmpty()) return trimmed.take(PREFIX_PROBE_LENGTH)
         }
         return null
     }
+
+    /** 剥 CDATA 包裹（保留内容；普通文本原样返回）。 */
+    private fun unwrapCdata(text: String): String = text.replace(CDATA_WRAPPER, "$1")
+
+    private val CDATA_WRAPPER = Regex("(?s)<!\\[CDATA\\[(.*?)]]>")
 
     private val WHITESPACE = Regex("\\s+")
 

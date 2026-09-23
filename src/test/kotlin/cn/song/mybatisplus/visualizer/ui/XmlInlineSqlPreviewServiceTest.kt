@@ -59,7 +59,9 @@ class XmlInlineSqlPreviewServiceTest : BasePlatformTestCase() {
     }
 
     fun testHQL_实体可解析时走转换管道() {
-        myFixture.addClass(
+        // 实体夹具：默认包 JPA 注解实体（同 PreviewEndToEndTest 形态），findClass allScope 可命中
+        myFixture.addFileToProject(
+            "WmsQuality.java",
             """
             @javax.persistence.Entity
             @javax.persistence.Table(name = "wms_quality")
