@@ -23,3 +23,9 @@
 # 上述两类 243 永不可达缺类在此为真实豁免需求，以下两条规则生效中：
 cn\.song\.mybatisplus\.visualizer\.mybatis-plus-sql-visualizer:.*:Package 'com\.intellij\.mcpserver' is not found
 cn\.song\.mybatisplus\.visualizer\.mybatis-plus-sql-visualizer:.*:references an unresolved class kotlin\.coroutines\.jvm\.internal\.SpillingKt
+#
+# O-68 T-McpGateDynamicFilter 2026-09-23 起用：SqlVisualizerToolGateFilterProvider 注册在
+# mcp-filter-optional 文件，根节点 since-build 262 门控——253 线无 McpToolFilterProvider EP
+# 本地 jar 实测，253 上报未解析类属预期；运行时 253 整片段不加载故永不可达，262 起正常生效。
+# 结构守卫 McpGateFilterFragmentGuardTest 钉住片段的 since-build 与独立性。
+cn\.song\.mybatisplus\.visualizer\.mybatis-plus-sql-visualizer:.*:references an unresolved class (com\.intellij\.mcpserver\.|io\.modelcontextprotocol\.kotlin\.sdk\.types\.)[A-Za-z$.]+

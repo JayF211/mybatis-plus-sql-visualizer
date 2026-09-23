@@ -21,6 +21,9 @@ import com.intellij.openapi.project.Project
  * **为什么按工具拆类**：平台对工具的启用/禁用门控只有 toolset 粒度——
  * `McpToolset.Companion.getEnabledToolsets`（262 mcpserver.jar 字节码实证）按 `isEnabled()`
  * 过滤整个 toolset；工具级开关即一工具一 toolset 类，各以自己的 [toolName] 过 [McpToolGate]。
+ * （O-68 订正：该过滤只覆盖 ReflectionToolsProvider 路径；agent 真正看到的外部会话清单走
+ * `getMcpToolsFiltered` 过滤层，由 SqlVisualizerToolGateFilterProvider EP 承担，见 McpToolGate
+ * 头注。）
  *
  * **类名前缀 `SqlVisualizer` 是硬约定（T-McpToolNaming / T-MTN-01）**：平台「暴露工具」页按工具描述符的
  * category 分组，category 的 `shortName` 直接取 **toolset 类的 simpleName**

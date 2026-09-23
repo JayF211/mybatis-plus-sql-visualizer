@@ -44,6 +44,28 @@ class McpToolGateTest : BasePlatformTestCase() {
         assertFalse(McpToolGate.isEnabled("sqlv_render_logs"))
     }
 
+    // ---- T-McpGateDynamicFilter（O-68）：外部会话过滤决策核 ----------------------------
+
+    fun test外部过滤决策_总开关开_自家与外来工具全不隐藏() {
+        (McpToolGate.TOOL_NAMES + listOf("search_text", "git_status", "execute_sql_query"))
+            .forEach { assertFalse("不应隐藏：$it", McpToolGate.shouldHideFromExternalToolsList(it)) }
+    }
+
+    fun test外部过滤决策_总开关关_自家全隐藏外来不误伤() {
+        state.mcpToolsEnabled = false
+        McpToolGate.TOOL_NAMES.forEach { assertTrue("应隐藏：$it", McpToolGate.shouldHideFromExternalToolsList(it)) }
+        // 前缀近似但非本插件命名的工具（平台自带/其他插件）零命中——透传不误伤
+        listOf("search_text", "git_status", "sqlvX_y", "sqlv", "sqlv2_render_sql")
+            .forEach { assertFalse("不应误伤：$it", McpToolGate.shouldHideFromExternalToolsList(it)) }
+    }
+
+    fun test外部过滤决策_工具级禁用_仅该工具隐藏() {
+        state.mcpDisabledTools.add("sqlv_explain")
+        assertTrue(McpToolGate.shouldHideFromExternalToolsList("sqlv_explain"))
+        assertFalse(McpToolGate.shouldHideFromExternalToolsList("sqlv_render_sql"))
+        assertFalse(McpToolGate.shouldHideFromExternalToolsList("search_text"))
+    }
+
     fun test十个工具类钩子跟门控且稳定集恒定() {
         val toolsets = mapOf(
             "sqlv_render_sql" to SqlVisualizerRenderSqlTool(),

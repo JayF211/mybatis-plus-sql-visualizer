@@ -30,5 +30,10 @@
         <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.SqlVisualizerCrudSqlTool"/>
         <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.SqlVisualizerReverseSqlTool"/>
         <mcpServer.mcpToolset implementation="cn.song.mybatisplus.visualizer.mcp.SqlVisualizerMapperCheckTool"/>
+        <!-- T-McpGateDynamicFilter（O-68）：外部会话清单过滤注册器（探测式，262+ 命中 / 253 静默
+             跳过，见 McpGateFilterRegistrar 头注；不得把该过滤 EP 直接 XML 声明进本文件——
+             253 无此 EP 会拒载本文件连坐十个 toolset；亦不得为本 EP 加第二条 mcpServer
+             depends——verifier 判 duplicated dependency 结构缺陷） -->
+        <postStartupActivity implementation="cn.song.mybatisplus.visualizer.mcp.McpGateFilterRegistrar"/>
     </extensions>
 </idea-plugin>
