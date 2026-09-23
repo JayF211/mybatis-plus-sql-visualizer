@@ -234,7 +234,10 @@ object McpSourceLocator {
     private fun normalizeAbsolute(project: Project, relative: String): String {
         val normalized = McpRenderInput.normalizeFilePath(relative)
             ?: throw com.intellij.mcpserver.McpExpectedError(
-                McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "invalid file path: $relative"),
+                McpToolErrors.code(
+                    McpToolErrors.INVALID_ARGUMENT,
+                    "invalid file path: $relative (pass a path relative to the project root)",
+                ),
             )
         val base = project.basePath?.trimEnd('/', '\\') ?: return normalized
         return "$base/$normalized"
