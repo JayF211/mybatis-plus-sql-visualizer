@@ -37,9 +37,10 @@ tasks.withType<Test>().configureEach {
     // -PtestHeapSize=2g；缺省不动，是否转正由实测收益定（见 T-TestPerf2 计划 P9）。
     providers.gradleProperty("testHeapSize").orNull?.let { maxHeapSize = it }
     // T-TestPerf4：测试 JVM GC 换型开关 -PtestGc=parallel（缺省 G1 不动）。测试负载是
-    // 「大量短类 + 少数 UI 重类长跑」的批处理形态，ParallelGC 吞吐优先的特性理论契合；
-    // 收益对照实测后决定是否转正默认（堆加大实验 T-TestPerf2 已证无收益，GC 是另一个维度）。
-    // 只挂 -P 显式开关不落默认，排除对结果可观测性之外的任何影响。
+    // 「大量短类 + 少数 UI 重类长跑」的批处理形态，理论契合 ParallelGC 吞吐优先的特性；
+    // 2026-09-24 warm 对照实测：4 片 3m28s vs G1 同日 3m16s~3m30s——无明确收益（<5%），
+    // 不落默认，开关保留供负载形态变化后复测（堆加大实验 T-TestPerf2 同样无收益，GC 是
+    // 另一个维度，两维均已实测销账）。
     if (providers.gradleProperty("testGc").getOrElse("") == "parallel") {
         jvmArgs("-XX:+UseParallelGC")
     }
