@@ -199,4 +199,96 @@ class McpSelectGuardTest {
         assertDenied("SELECTED x FROM t", McpToolErrors.SQL_BLOCKED, "SELECTED 应拒")
         assertDenied("SELECT_foo FROM t", McpToolErrors.SQL_BLOCKED, "SELECT_foo 应拒")
     }
+
+    // ------------------------------------------------------------------
+    // T-SelectGuardScalarExempt（O-61）T-SGE-01/02：INSERT() 标量函数豁免
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `放行_INSERT串函数形态豁免（T-SGE-02 先红）`() {
+        // MySQL INSERT(str,pos,len,newstr) 串函数——改前粗扫 \binsert\b 命中函数名误拒 READ_ONLY
+        assertAllowed("SELECT INSERT('hello', 1, 0, 'X')")
+        // DBX #69 同款判据含「可选空白」：INSERT ( 与 INSERT( 都豁免
+        assertAllowed("SELECT INSERT (name, 1, 2, 'x') FROM t")
+    }
+
+    @Test
+    fun `放行_TRUNCATE数学函数形态豁免（T-SGE-02 扩表 先红）`() {
+        // §七 前提 2 全表排查唯一的第三个同形词：MySQL TRUNCATE(X,D) 数学函数（12.6.2）
+        // 改前粗扫 \btruncate\b 命中函数名误拒 READ_ONLY（TRUNCATE TABLE 写语句由结构闸照拒）
+        assertAllowed("SELECT TRUNCATE(price, 2) FROM orders")
+        assertAllowed("SELECT TRUNCATE (x, 0) FROM t")
+    }
+
+    @Test
+    fun `放行_insert前缀词不误杀（T-SGE-02 相邻形态）`() {
+        // \b 词边界既有行为：前缀/后缀相连的标识符不构成词边界
+        assertAllowed("SELECT insert_log, inserted FROM t")
+    }
+
+    @Test
+    fun `拒绝_函数豁免不打开写语句通路（T-SGE-02 安全回归）`() {
+        // INSERT 写语句（结构闸 READ_ONLY，非粗扫路径）——INSERT INTO 在既有用例已覆盖，此处补 INSERT…SELECT
+        assertDenied("insert into t select * from s", McpToolErrors.READ_ONLY, "INSERT…SELECT 应拒")
+        // DBX 同款口径：update 不豁免（MySQL 接受 UPDATE (t) 表形态）——仍拒；
+        // 结构闸（READ_ONLY）或解析 fail-closed（SQL_BLOCKED）任一路径都算拒，不钉码
+        val verdict = McpSelectGuard.checkSingleSelect("UPDATE (t) SET x = 1")
+        assertTrue("UPDATE (t) 形态应拒", !verdict.allowed)
+        assertTrue("拒绝必须带原因", !verdict.reason.isNullOrBlank())
+    }
+
+    // ------------------------------------------------------------------
+    // O-61 §八 增量：解析入口收拢 SqlAstParser（方括号 SELECT 能力扩展 + 负样本四组）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `放行_SQLServer方括号引用SELECT（§八收拢 先红）`() {
+        // 产品方言层自产形态（Dialect.quoteIfNeeded 走 [...]）——改前解析失败按写拒绝
+        assertAllowed("SELECT * FROM [user] WHERE [id] = 1")
+        assertAllowed("SELECT [name] FROM [dbo].[user]")
+    }
+
+    @Test
+    fun `拒绝_方括号开启后多语句走私（§八负样本一）`() {
+        assertDenied(
+            "SELECT * FROM [user]; DROP TABLE [x]",
+            McpToolErrors.SQL_BLOCKED,
+            "方括号多语句走私应拒",
+        )
+    }
+
+    @Test
+    fun `拒绝_方括号SELECT_INTO（§八负样本二）`() {
+        assertDenied(
+            "SELECT [a] INTO [bak] FROM [s]",
+            McpToolErrors.SQL_BLOCKED,
+            "方括号 INTO 落盘应拒",
+        )
+    }
+
+    @Test
+    fun `拒绝_方括号锁读（§八负样本三）`() {
+        assertDenied(
+            "SELECT * FROM [t] FOR UPDATE",
+            McpToolErrors.SQL_BLOCKED,
+            "方括号锁读应拒",
+        )
+    }
+
+    @Test
+    fun `拒绝_方括号字面量剥离后粗扫命中（§八负样本四）`() {
+        // 结构合规但剥离字面量后词面含写动词 → 粗扫兜底 READ_ONLY（改前解析失败走 SQL_BLOCKED，先红）
+        assertDenied(
+            "SELECT 1 FROM [t] WHERE analyze = 1",
+            McpToolErrors.READ_ONLY,
+            "方括号粗扫兜底应拒",
+        )
+    }
+
+    @Test
+    fun `拒绝_恶意构造输入解析失败仍fail_closed（§八）`() {
+        // Throwable/StackOverflowError fail-closed 路径原样保留：语法错误/截断输入照拒
+        assertDenied("SELEC * FORM [t]", McpToolErrors.SQL_BLOCKED, "方括号形态语法错误应拒")
+        assertDenied("SELECT * FROM [t] WHERE", McpToolErrors.SQL_BLOCKED, "截断语句应拒")
+    }
 }

@@ -57,9 +57,10 @@
 3. 既有 `McpSelectGuardTest` 全绿；`ExplainGateTest` 相关跨链用例（`包含性_白名单接受的输入必过首关键字判定`）不受影响。
 4. `:auto` MCP 面定向测试全绿（`test --tests "cn.song.mybatisplus.visualizer.mcp.*"`，在册读数 22 类 140 例）；全量由收口代理统一跑。
 
-## 五、真机走查清单
+## 五、真机走查清单（2026-09-23 §八收拢后作废重写；两项均**真机留人工**——实施车道无法起真机 IDE/MCP）
 
-无需真机（纯 headless 逻辑面）。可选：经 MCP 实调 `sqlv_explain` 传 `SELECT INSERT('ab',1,0,'X')` 观察改前拒/改后通——登记可选。
+1. **T-SGE-01 可选实调**：经 MCP 实调 `sqlv_explain` 传 `SELECT INSERT('ab',1,0,'X')` 观察改前拒/改后通——真机留人工（headless 单测已覆盖同一判定链）。
+2. **§八 收拢必须实调**：经 MCP 实调 `sqlv_select` 传方括号 SELECT（如 `SELECT * FROM [user] WHERE [id] = 1`）取改前拒/改后通各一次读数——真机留人工。
 
 ## 六、风险
 
@@ -98,3 +99,36 @@ T-SGE-02 红用例先跑改前代码（取先红读数）→ T-SGE-01 豁免实�
 4. **用户可见变更**：CHANGELOG `[Unreleased]` 条目（闸门能力扩展属用户可感知，非性能清扫）。
 
 **风险对齐**：本增量的安全论证范式沿用 §六 前两行（结构闸在先、粗扫在后，解析面扩大不改变结构判定集）；`SqlAstParser` 现只暴露多语句版，闸门语义（`statements.size != 1` 判定）不变。
+
+## 九、实施记录（2026-09-23 实施后回填，车道 t-guard-parse，基线 cb7e764）
+
+### 9.1 逐项落地
+
+- **T-SGE-01**：`scanWords` 改 `findAll` 逐命中判定——`SCALAR_FUNCTION_FORM_WORDS = {"insert", "truncate"}` 内的词，命中点后随「可选空白 + `(`」即跳过该命中（多处命中时任一处非函数形态即拒，fail closed）；其余词与其余形态逐字节不动（拒绝文案不变）。`replace` 整词豁免维持。
+- **§七 前提 2 扩表**：FORBIDDEN_WORDS 全表「词后随 ( 的函数形态」排查（MySQL/PG/Oracle 内建函数逐词核对）——与写动词同形的标量函数仅 **replace**（已整词豁免）、**insert**（本任务）、**truncate**（MySQL `TRUNCATE(X,D)` 数学函数，8.0 手册 12.6.2 Mathematical Functions）三个；truncate 随本批入豁免表并留出处。update/PG 命令族（vacuum/cluster/listen/notify/reindex/copy/checkpoint/discard 等）无同名标量函数，不豁免。jshell 对 jar 实测：`SELECT TRUNCATE(price,2) FROM t` 解析为 PlainSelect（粗扫可达，误拒形态真实存在）。
+- **§一 前提核实（非证伪）**：先红读数证实 `SELECT INSERT('hello',1,0,'X')` 走到粗扫被拒（READ_ONLY）——解析为单条 Select 的推演成立，主半不降级。
+- **§八 收拢**：`checkSingleSelect` 解析改走 `SqlAstParser.parseStatements`（internal 同模块，开 `allowSquareBracketQuotation` 共享单例 features）；`CCJSqlParserUtil` import 移除；`catch (Throwable)` fail-closed 路径逐字未动；错误码语义不变。
+- **T-SGE-03 KDoc 订正**：判定序描述改为「空 → 超长 → 解析 → 单语句 → Select 结构 → 锁读/INTO → 关键字粗扫（剥离字面量后）」，与实现一致。
+- **D2**：按定案不做，维持 §一.3 登记观察。
+
+### 9.2 测试读数（`./gradlew testFast --tests <FQCN>` 除注明外）
+
+| 轮次 | 代码态 | 读数 |
+|---|---|---|
+| 先红 | 改前 | McpSelectGuardTest 28 例 3 红：①`SELECT INSERT('hello',1,0,'X')` → **MCP_READ_ONLY**（粗扫命中 'insert'，主半误拒实锤）②方括号 SELECT 放行用例 → SQL_BLOCKED（解析失败）③方括号粗扫兜底用例 → SQL_BLOCKED（期望 READ_ONLY） |
+| 豁免后 | T-SGE-01 落地 | 29 例 2 红——新增 TRUNCATE 豁免用例绿（`TRUNCATE(price,2)`/`TRUNCATE (x,0)` 均放行）；余 2 红均为 §八 待收拢项 |
+| 反向验证 | 豁免表临时置空 | 恰 INSERT/TRUNCATE 两用例转红（均 READ_ONLY，误拒复现）＋§八 2 红；REPLACE 正对照/安全回归/相邻形态保持绿；还原后 R4 全绿即「还原后复绿」读数 |
+| 收拢后全绿 | O-61 完整 | McpSelectGuardTest 29 例全绿（含方括号放行、负样本四组、fail-closed 回归）；`test --tests "cn.song.mybatisplus.visualizer.mcp.*"` + ExplainGateTest 平台桶 **28 类 183 例全绿**（跨链包含性用例不受影响） |
+
+负样本四组读数（收拢后）：多语句走私 `SELECT * FROM [user]; DROP TABLE [x]` → SQL_BLOCKED（多语句分支）；`SELECT [a] INTO [bak] FROM [s]` → SQL_BLOCKED（INTO 分支）；`SELECT * FROM [t] FOR UPDATE` → SQL_BLOCKED（锁读分支）；`SELECT 1 FROM [t] WHERE analyze = 1` → READ_ONLY（剥离后粗扫兜底）。前三组改前经 fail-closed 同判拒（对照闸门既有读数），第四组改前 SQL_BLOCKED 改后 READ_ONLY（真先红）。
+
+### 9.3 计划前提被证伪 / 就地更正
+
+- 前提 1/3 核实成立，无证伪。前提 2 如实扩表：第三个同形词 truncate 存在（出处见 9.1），已按「有就扩表并登记出处」处置。
+
+### 9.4 未做项与移交
+
+- CHANGELOG `[Unreleased]` Fixed 行、变更记录行、第十一轮报告 §8 #69 落地备注、§八第 4 条用户可见变更条目——**主控统一写**（车道禁改三文件）。
+- §五 两项真机 MCP 实调——**真机留人工**（本车道无法起真机），清单已重写进 §五。
+- 红线族零增（未新增 Timer/Thread.sleep/Executors/现场正则/新 EP；`isScalarFunctionForm` 为手写字符扫描，非正则）。
+- 写集外改动：无（`build.gradle.kts` 沙盒行临改在提交前还原，不入库）。
