@@ -84,6 +84,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var showGutterIcon: Boolean = true,
 
         /**
+         * 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）：
+         * 叶子标签文本首词命中 SQL 关键字即认领（不限根元素/标签名）；
+         * 关闭后 gutter 与 Alt+Shift+Q 兜底均不生效（mapper/pages/hbm 三套白名单不受影响）。
+         */
+        var xmlInlineSqlEnabled: Boolean = true,
+
+        /**
          * JOIN 图渲染方式（T-Dgm-04）：true=IDE 原生图框架（Ultimate 的 Diagrams 插件，类图观感，
          * 缩放/布局/导出全框架托管）；false=经典自绘渲染器。
          * Community / Diagrams 插件缺席时无论此值均自动降级自绘。

@@ -1,6 +1,6 @@
 # T-XmlInlineSql 通用 XML 内嵌 SQL 识别（不依赖根元素）— 开发计划
 
-> 任务编号：O-71（暂定，立案时按 `docs/MEMORY.md` 台账顺延核对；O-70 已被 T-ConsolePendingFlush 占用）
+> 任务编号：**O-72**（立案时暂定 O-71；同日并行会话 T-HqlNoAliasProp 已将 O-71 落在 master `69a4028`，合并 dev 前订正为本号，实现与文档中编号已同步替换）
 > 立案日期：2026-09-23
 > 状态：**待确认**（写完停下等用户拍板，未动任何 src/main）
 
@@ -104,4 +104,43 @@
 
 ## 实施记录
 
-（待实施回填）
+### 交付方式
+
+用户确认「按推荐方案」后，主会话在独立工作树 `mpsv-xml-inline-sql`（分支 `t-xml-inline-sql`，基于 master `1f0b9fd`）单车道实施；parallel_tasks 登记 `T-XmlInlineSql / sandbox=MPSV-XmlInlineSql`。
+
+### 任务落地（对照 §三）
+
+- **T-01/T-02/T-03/T-04**：提交 `395b933`（13 文件 +704）——`XmlInlineSqlDetector`（认领/排除/type 探测/总开关）、`XmlInlineSqlGutterLineMarkerProvider`（plugin.xml 注册，`gutter.xmlInlineSql.*` 文案）、`XmlInlineSqlPreviewService`（原生直显 + HQL 复用 `previewHbmNamedQuery` + 异常回退原文）、`ConvertToSqlAction`（光标上爬/全文件收集/选择区候选三处兜底 + `previewXmlTag` 统一分发）、`PluginSettings.xmlInlineSqlEnabled`（默认开）+ 设置面板 5 处接线 + FolderConfigurable 搜索索引 + 中英 bundle 6 键。
+- **T-05**：**决策不实施**——`OnboardingAnchorTip` 的 XML 锚点词若加 `<statement`/`<DataSource` 这类通用词，任意含同名标签的 XML 都会触发首用引导，与该类「误报面最小」原则冲突；通用检测本身已让引导通知自然覆盖新场景。
+- **CDATA 修复**：提交 `f943b41`（见下「关键实测发现」）。
+
+### 关键实测发现（推翻计划前提 1）
+
+**本平台 PSI 的 `XmlText.text` 对 CDATA 返回带 `<![CDATA[ ... ]]>` 包裹的字面全文，并非展开内容**——判别性读数：`expected:<[DELETE FROM t]> but was:<[<![CDATA[DELETE FROM t]]>]>`（首跑 11 例红）。修法＝`XmlInlineSqlDetector` 统一剥包裹（`unwrapCdata`）后再判首词/提取文本。计划前提 1 照抄 hbm 口径的假设被证伪：`HbmXmlEntityResolver.extractNamedQueryText` 用的就是裸 `XmlText.text` 拼接。
+
+### 测试与反向验证
+
+- 定向新增 26 例全绿（Detector 14 / gutter 6 / PreviewService 6，含 HQL JPA 实体夹具转换集成例与不可解析透传例）；既有回归 51 例绿（ConvertToSqlActionTest 3 / GutterIconDedupTest 14 / GutterProvidersNegativeTest 1 / XmlSql·Pages·Hbm gutter 16 / PagesXmlParserTest 17），**合计 77/0**。
+- 反向验证三条（摘掉修复行 → 必红，均实测复绿）：
+  1. gutter 认领判定摘掉 → `testRF样例_statement行有图标` 红（6 例 1 失败）；
+  2. 排除集合摘掉 → `testmapper文件不双图标`、`testpages文件不双图标`、`test排除mapper语句标签`、`test排除pages数据源标签` 4 例红（hbm 例未红：其夹具文本 `FROM A a` 首词不在关键字集，本就不进入认领路径——该排除断言对此样本不构成判别，已如实记录）；
+  3. HQL 管道摘掉（强制按失败处理）→ `testHQL_实体可解析时走转换管道` 红（回退路径被激活，转换丢失）。
+
+### 待验证前提核销
+
+| 前提 | 结论 |
+|---|---|
+| 1 PSI 文本抽取口径 | **实测推翻**（CDATA 不展开），已修（见上） |
+| 2 gutter 大文件性能 | 按红线实现（叶子判定 + 64 字符截断前缀，type 探测不进快速路径）；未做大文件基准，**真机走查留待** |
+| 3 HqlConverter 转换能力 | 集成实测：`@Entity @Table` 实体夹具下 `SELECT qc.code FROM WmsQuality qc` → `wms_quality` 表名映射生效；不可解析实体**透传原文不抛错**（`testHQL_实体不可解析时透传原文不抛错` 绿） |
+| 4 type 属性位置 | 按计划实现（自身→祖先就近优先，仅认 `type`，值 hql/jpql 大小写不敏感） |
+| 5 误报面（宽口径） | 首词命中即认领的行为已用 `test宽口径_首词命中即认领` 钉死；真实项目误报率待用户反馈，总开关兜底 |
+
+### 顺带发现（未在本任务修复，登记待议）
+
+**hbm 命名查询链的 CDATA 缺口（既有问题）**：`HbmXmlEntityResolver.extractNamedQueryText` 与 `SqlPreviewService.previewHbmNamedQueryTag` 对 CDATA 形态的 `<query>` 会把 `<![CDATA[` 包裹原样带进 HQL 转换（同口径裸拼接）。该缺口此前不可见的原因：`HbmNamedQueryResolverTest` 的断言「CDATA 文本应展开提取」是**非判别性断言**——`<![CDATA[FROM LegacyItem li …]]>.contains("FROM LegacyItem li")` 在展开与不展开两种情况下同为真。建议后续任务：两处提取改走 unwrap 口径 + 该断言改为 `assertFalse(queryText.contains("<![CDATA["))` 判别式。
+
+### 遗留
+
+- runIde 真机走查（用户真实 `rfQcSampleListPage.xml` 的 gutter/预览/选择栏三态）未做，验收 §五-1 留人工。
+- 构建校验按「大改动判据」跑 `verifySmoke`：**BUILD SUCCESSFUL 45s**（plugin.xml 新增 lineMarkerProvider EP 实例，无新 API 面/since-build 变更，取 smoke 档平衡耗时）。

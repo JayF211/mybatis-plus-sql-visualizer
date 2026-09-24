@@ -319,6 +319,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
     private val joinDiagramNativeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.joinDiagramNative"))
 
+    /** 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）。 */
+    private val xmlInlineSqlCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.xmlInlineSql"))
+
     /** 首用锚点引导通知开关（T-UxOnboard T-UX-01，默认开）：关闭后首用引导全程静默。 */
     private val onboardingAnchorTipCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.onboardingAnchorTip"))
 
@@ -920,6 +923,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
         if (SECTION_UI in sections) {
             sectionGroup("settings.section.ui") { p, g ->
                 addRow(p, g, "", gutterIconCheck.apply { text = MpSqlVisualizerBundle.message("settings.showGutterIcon") })
+                addRow(p, g, "", xmlInlineSqlCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.xmlInlineSql")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.xmlInlineSql.tip")
+                })
                 addRow(p, g, "", joinDiagramNativeCheck.apply {
                     text = MpSqlVisualizerBundle.message("settings.joinDiagramNative")
                     toolTipText = MpSqlVisualizerBundle.message("settings.joinDiagramNative.tip")
@@ -1494,6 +1501,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     private fun isModifiedUi(s: PluginSettings.State): Boolean =
         gutterIconCheck.isSelected != s.showGutterIcon
+            || xmlInlineSqlCheck.isSelected != s.xmlInlineSqlEnabled
             || joinDiagramNativeCheck.isSelected != s.joinDiagramNative
             || onboardingAnchorTipCheck.isSelected != s.onboardingAnchorTipEnabled
             // T-PreviewWhitespaceToggle O-44a：空白符开关（漏挂 isModified → 勾选后 Apply 不启用）
@@ -1607,6 +1615,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
         }
         if (SECTION_UI in sections) {
             s.showGutterIcon = gutterIconCheck.isSelected
+            s.xmlInlineSqlEnabled = xmlInlineSqlCheck.isSelected
             s.joinDiagramNative = joinDiagramNativeCheck.isSelected
             // T-UxOnboard T-UX-01：首用锚点引导开关写回（随 UI 分区，读写判定同归属）
             s.onboardingAnchorTipEnabled = onboardingAnchorTipCheck.isSelected
@@ -1704,6 +1713,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
         }
         if (SECTION_UI in sections) {
             gutterIconCheck.isSelected = s.showGutterIcon
+            xmlInlineSqlCheck.isSelected = s.xmlInlineSqlEnabled
             joinDiagramNativeCheck.isSelected = s.joinDiagramNative
             onboardingAnchorTipCheck.isSelected = s.onboardingAnchorTipEnabled
             // T-PreviewWhitespaceToggle O-44a：空白符开关回填
