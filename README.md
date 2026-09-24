@@ -46,6 +46,9 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 **实体类 / 数据库表右键生成 CRUD SQL**（三入口右键 / 候选浮层打字过滤 / 列勾选实时收缩）
 <img src="docs/images/demo-09-crud-sql.gif" width="720" alt="CRUD SQL 生成演示"/>
 
+**MCP：AI agent 真实调用插件工具**（AI Assistant 的 Codex agent 经 ACP 调用 `sqlv_*` 工具并留痕，agent 拿到确定性可执行 SQL）
+<img src="docs/images/demo-10-mcp-agent.gif" width="720" alt="MCP 工具真实调用演示"/>
+
 > 更多功能细节与在线文档见 [官网](https://sql-visualizer.jvtools.cn)。
 
 ## 痛点分析
