@@ -20,10 +20,11 @@ import java.util.concurrent.atomic.AtomicInteger
  * `mp-sql-visualizer-suppress.xml`（不与 [PluginSettings] 的 `mp-sql-visualizer.xml` 互踩写盘）；
  * 应用级必须 `RoamingType.DISABLED`（Settings Sync 回滚坑，PluginSettings KDoc）。
  *
- * 运行时匹配集 [suppressedKeys]：各规则 [SqlSuppressRule.pattern]（已是规范化文本）的
- * [sqlFingerprint] 指纹不可变集合，增删规则时**整体替换**发布——项目级 [SqlLogEntryBuffer]
- * 只读该集（`entry.dedupeKey in set`），复用与去重完全同一口径（normalizeSqlWhitespace +
- * sqlFingerprint），空白差异的心跳 SQL 变体天然命中、大小写不命中（与既有规范化一致）。
+ * 运行时匹配集 [suppressedKeys]：各规则 [SqlSuppressRule.pattern] 的 [suppressFingerprint]
+ * 指纹不可变集合，增删规则时**整体替换**发布——项目级 [SqlLogEntryBuffer] 只读该集
+ * （`entry.suppressKey in set`）。口径 = 去重口径（normalizeSqlWhitespace + sqlFingerprint）
+ * 追加**尾部分号剥离**（20260924 用户走查返修：规则粘贴态常带收尾 `;` 而日志还原链不带）；
+ * 空白/换行差异天然命中、大小写不命中（D2 定案不变）。
  *
  * 变更通知：监听器列表（照 `SqlLogEntryBuffer.addListener` 形态），各项目 [SqlLogManager]
  * 订阅——回调里重算缓冲的 suppressKeys 并触发面板存量刷新；订阅挂 SqlLogManager 生命周期，
@@ -161,8 +162,9 @@ class SqlSuppressRuleManager : PersistentStateComponent<SqlSuppressRuleManager.S
         val keys = HashSet<String>(current.size * 2)
         val index = HashMap<String, String>(current.size * 2)
         for (rule in current) {
-            // pattern 本就是规范化文本，直接指纹（与 entry.dedupeKey 同一函数同一口径）
-            val key = sqlFingerprint(rule.pattern)
+            // T-SqlSuppressUx（20260924）：走屏蔽口径（去重口径 + 尾分号剥离）——与条目侧
+            // LogSqlEntry.suppressKey 同函数同源；大小写仍敏感（D2），空白差异仍命中
+            val key = suppressFingerprint(rule.pattern)
             keys += key
             index[key] = rule.id
         }

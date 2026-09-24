@@ -112,6 +112,32 @@ class SqlSuppressRuleManagerTest {
         assertEquals(2, m.rules.size)
     }
 
+    @Test
+    fun `尾分号剥离_规则带分号命中不带分号的日志还原SQL`() {
+        // T-SqlSuppressUx（20260924 用户走查返修）：规则粘贴态常带收尾 `;` 而日志还原链不带
+        // （实证「已拦截 0 次」根因）——屏蔽口径 = 去重口径 + 尾分号剥离（suppressFingerprint）。
+        // 剥离只作用字符串收尾：字面量内分号其后必有引号等其余内容，trimEnd(';') 触不到。
+        val m = newManager()
+        assertEquals(SqlSuppressRuleManager.AddResult.ADDED, m.addRule("SELECT 1;"))
+        assertTrue(
+            "不带分号的日志形态命中带分号规则",
+            m.isSuppressed(suppressFingerprint("SELECT 1")),
+        )
+        assertTrue(
+            "带分号规则自身指纹同样在集（对称）",
+            m.isSuppressed(suppressFingerprint("SELECT 1;")),
+        )
+        // 字面量内分号不影响既有命中（语义不外溢）
+        m.addRule("SELECT * FROM t WHERE s = 'a;b'")
+        assertTrue(
+            m.isSuppressed(suppressFingerprint("SELECT * FROM t WHERE s = 'a;b'")),
+        )
+        assertFalse(
+            "形状不同的语句不因分号剥离被误吞",
+            m.isSuppressed(suppressFingerprint("SELECT * FROM t WHERE s = 'a'")),
+        )
+    }
+
     // ---------- 上限（§五 验收 4 / D6） ----------
 
     @Test

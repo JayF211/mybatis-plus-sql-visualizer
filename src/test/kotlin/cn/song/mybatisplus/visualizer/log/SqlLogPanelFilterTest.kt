@@ -289,13 +289,13 @@ class SqlLogPanelFilterTest : BasePlatformTestCase() {
             // 空白变体同指纹（与去重/屏蔽同一规范化口径）——同样被滤
             entryOfType(StatementType.SELECT, "  $heartbeatSql  "),
         )
-        val keys = setOf(sqlFingerprint(normalizeSqlWhitespace(heartbeatSql)))
+        val keys = setOf(suppressFingerprint(heartbeatSql))
         val filtered = filterBySuppress(entries, keys)
         assertEquals(listOf("SELECT 2"), filtered.map { it.restoredSql })
     }
 
     fun testSuppressRemoveRuleEntryComesBack() {
-        val keys = setOf(sqlFingerprint(normalizeSqlWhitespace(heartbeatSql)))
+        val keys = setOf(suppressFingerprint(heartbeatSql))
         val entries = listOf(entryOfType(StatementType.SELECT, heartbeatSql))
         assertEquals(0, filterBySuppress(entries, keys).size)
         assertEquals("移除规则（空集）后复现", entries, filterBySuppress(entries, emptySet()))

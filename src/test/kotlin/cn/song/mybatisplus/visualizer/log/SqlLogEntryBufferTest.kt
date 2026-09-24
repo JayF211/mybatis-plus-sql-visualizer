@@ -232,8 +232,8 @@ class SqlLogEntryBufferTest {
 
     // ---------- T-SqlSuppress（O-69）：屏蔽闸门 ----------
 
-    /** 构造「屏蔽 SELECT 1」的指纹集（与 SqlSuppressRuleManager 发布口径同源：规范化文本的指纹）。 */
-    private fun suppressKeyOf(sql: String): String = sqlFingerprint(normalizeSqlWhitespace(sql))
+    /** 构造屏蔽指纹（与 SqlSuppressRuleManager 发布口径同源：suppressFingerprint = 去重口径 + 尾分号剥离）。 */
+    private fun suppressKeyOf(sql: String): String = suppressFingerprint(sql)
 
     @Test
     fun `屏蔽规则命中_入队前丢弃`() {
@@ -247,6 +247,21 @@ class SqlLogEntryBufferTest {
         // 大小写不同不命中（与既有规范化口径一致：大小写与分号不动）
         assertTrue("大小写变体不被拦", buffer.addEntry(entry("select 1")))
         assertEquals(1, buffer.snapshot().size)
+    }
+
+    @Test
+    fun `屏蔽规则带尾分号_命中不带分号的日志还原SQL`() {
+        // T-SqlSuppressUx（20260924 走查返修）：规则粘贴态带 `;`、日志还原链不带——尾分号剥离后互命中
+        buffer.dedupeEnabled = false
+        buffer.suppressKeys = setOf(suppressKeyOf("SELECT 1;")) // 规则侧带分号
+        assertFalse("不带分号的日志形态同样被拦", buffer.addEntry(entry("SELECT 1")))
+        assertTrue(buffer.snapshot().isEmpty())
+        buffer.suppressKeys = setOf(suppressKeyOf("SELECT 1")) // 规则侧不带分号
+        assertFalse("带分号的日志形态同样被拦（对称）", buffer.addEntry(entry("SELECT 1;")))
+        assertTrue(buffer.snapshot().isEmpty())
+        // 剥离只作用收尾终结符：字面量内分号不构成跨语句误吞
+        buffer.suppressKeys = setOf(suppressKeyOf("SELECT * FROM t WHERE s = 'a;b'"))
+        assertTrue("形状不同的语句不被误吞", buffer.addEntry(entry("SELECT * FROM t WHERE s = 'a'")))
     }
 
     @Test

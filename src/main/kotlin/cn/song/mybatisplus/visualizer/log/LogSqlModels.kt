@@ -149,6 +149,15 @@ data class LogSqlEntry(
      */
     val dedupeKey: String by lazy { sqlFingerprint(normalizeSqlWhitespace(restoredSql)) }
 
+    /**
+     * T-SqlSuppressUx（20260924 用户走查返修）：屏蔽匹配键 = [dedupeKey] 口径追加**尾部分号剥离**
+     * ——规则粘贴态常带收尾 `;` 而日志还原链不带（用户实证「已拦截 0 次」根因，多行/单行空白差异
+     * 本就被折叠）。与 [dedupeKey] 同属 body 属性不参与 equals/hashCode；仅在屏蔽规则集非空时被
+     * 闸门/面板过滤触达（空集短路），无规则常态零成本。口径函数 = [suppressFingerprint]（规则侧
+     * [cn.song.mybatisplus.visualizer.log.SqlSuppressRuleManager] 同源，两侧必须同函数）。
+     */
+    val suppressKey: String by lazy { suppressFingerprint(restoredSql) }
+
     // ---------- T-ListMode：多行显示模式行片段缓存（体属性不入 equals/copy；仅 EDT 渲染路径读写） ----------
 
     /**
@@ -186,6 +195,17 @@ internal fun sqlFingerprint(sql: String): String {
  */
 internal fun normalizeSqlWhitespace(sql: String): String =
     sql.trim().replace(WHITESPACE_RUN_REGEX, " ")
+
+/**
+ * T-SqlSuppressUx（20260924 用户走查返修）：屏蔽匹配口径 = 去重口径追加**尾部分号剥离**——
+ * 规则粘贴态常带收尾 `;` 而日志还原链不带（用户实证 0 命中根因）。只在字符串收尾剥终结符：
+ * `trimEnd(';')` 触不到字面量内分号（其后必有引号等其余内容，不满足「收尾」）。
+ * 大小写仍不动（O-69 D2 定案：与既有规范化一致）；空白折叠先行（[normalizeSqlWhitespace]）。
+ * 侧约定：[LogSqlEntry.suppressKey]（条目侧）与 [cn.song.mybatisplus.visualizer.log.SqlSuppressRuleManager]
+ * 的键集重建（规则侧）必须同走本函数，两侧口径永不手写第二份。
+ */
+internal fun suppressFingerprint(sql: String): String =
+    sqlFingerprint(normalizeSqlWhitespace(sql).trimEnd(';').trim())
 
 /** T-PS4-04：空白折叠正则提文件级常量（dedupeKey lazy/stampLogTime/桥嗅探三路共用，一处受益三路）。 */
 private val WHITESPACE_RUN_REGEX = Regex("""\s+""")

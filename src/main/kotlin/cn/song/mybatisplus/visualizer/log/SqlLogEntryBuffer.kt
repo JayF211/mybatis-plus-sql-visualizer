@@ -149,8 +149,8 @@ class SqlLogEntryBuffer(
         // 「从未捕获过」：不进去重计数、不占捕获序号、不触发任何内容回调；命中计数走
         // [onSuppressedHit] 专用出口）。空集短路：无规则时零成本，不触 dedupeKey lazy 计算。
         // 【反向验证探针锚点】注释掉下面 if 块 = 摘除屏蔽闸门，SqlLogEntryBufferTest 屏蔽用例必红。
-        if (suppressKeys.isNotEmpty() && entry.dedupeKey in suppressKeys) {
-            onSuppressedHit?.invoke(entry.dedupeKey)
+        if (suppressKeys.isNotEmpty() && entry.suppressKey in suppressKeys) {
+            onSuppressedHit?.invoke(entry.suppressKey)
             return false
         }
         var duplicate = false

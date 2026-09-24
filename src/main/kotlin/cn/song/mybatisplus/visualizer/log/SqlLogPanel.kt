@@ -200,7 +200,7 @@ internal fun filterByType(entries: List<LogSqlEntry>, activeTypes: Set<Statement
  */
 internal fun filterBySuppress(entries: List<LogSqlEntry>, suppressKeys: Set<String>): List<LogSqlEntry> {
     if (suppressKeys.isEmpty()) return entries
-    return entries.filter { it.dedupeKey !in suppressKeys }
+    return entries.filter { it.suppressKey !in suppressKeys }
 }
 
 /**
