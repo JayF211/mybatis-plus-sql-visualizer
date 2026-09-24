@@ -93,19 +93,41 @@ class XmlPreviewModel private constructor(
      * T-M29.5：参数路径 → 引号策略（精确匹配优先，前缀匹配兜底——
      * DTO 参数键为 `p.settlementStartDate` 精确路径；Map 参数键为 `p`，任意 `p.*` 属性命中）。
      * 未命中返回 null（面板兜底引号）。
+     *
+     * O-78 T-ForeachItemRender：paramQuotes 派生表未含 foreach item 键，末位再经 [paramTypeFor]
+     * 兜底派生（item 键 → 元素类别 → quoteRequired）；paramTypes 空的旧布尔通道 paramTypeFor 恒
+     * null，行为不变。
      */
     fun quoteFor(source: String): Boolean? {
         paramQuotes[source]?.let { return it }
-        return paramQuotes.entries.firstOrNull { (key, _) -> source.startsWith("$key.") }?.value
+        paramQuotes.entries.firstOrNull { (key, _) -> source.startsWith("$key.") }?.value?.let { return it }
+        return paramTypeFor(source)?.kind?.quoteRequired
     }
 
     /**
      * T-PT-01：参数路径 → 类型信息（精确匹配优先、前缀匹配兜底，命中规则与 [quoteFor] 一致）。
      * 未命中返回 null（调用方按 [ParamKind.UNKNOWN] 兜底）。
+     *
+     * O-78 T-ForeachItemRender：末位追加 foreach item 占位键解析（[foreachItemTypeInfo]）。
      */
     fun paramTypeFor(source: String): ParamTypeInfo? {
         paramTypes[source]?.let { return it }
-        return paramTypes.entries.firstOrNull { (key, _) -> source.startsWith("$key.") }?.value
+        paramTypes.entries.firstOrNull { (key, _) -> source.startsWith("$key.") }?.let { return it.value }
+        return foreachItemTypeInfo(source)
+    }
+
+    /**
+     * O-78 T-ForeachItemRender：foreach item 占位键（`__frch_<item>_<n>`，[ForeachSqlNode] 变量双写）
+     * → 集合元素类别。item 键不在 paramTypes（表按方法签名生成），借 [forEachViews] 反查
+     * collection 表达式取 [ParamTypeInfo.elementKind]；仅裸键命中（`__frch_st_0.name` 子路径不接）、
+     * 无元素类别信息返回 null（宁缺勿错，调用方按 UNKNOWN 兜底=升级前行为）。
+     */
+    private fun foreachItemTypeInfo(source: String): ParamTypeInfo? {
+        if (!source.startsWith(FRCH_PREFIX)) return null
+        val match = FOREACH_ITEM_KEY.matchEntire(source) ?: return null
+        val view = forEachViews.firstOrNull { it.item == match.groupValues[1] } ?: return null
+        val elementKind = paramTypes[view.collectionExpr]?.elementKind ?: return null
+        return ParamTypeInfo(kind = elementKind)
     }
 
     /** T-PT-01：参数路径 → 类型类别（无类型信息 → [ParamKind.UNKNOWN]）。 */
@@ -179,6 +201,12 @@ class XmlPreviewModel private constructor(
     companion object {
         /** foreach 默认展开次数（IN 场景两元素可直观展示 separator）。 */
         const val DEFAULT_FOREACH_SIZE = 2
+
+        /** foreach item 占位键前缀（变量双写形态 `__frch_<item>_<唯一编号>`，见 [ForeachSqlNode]）。 */
+        private const val FRCH_PREFIX = "__frch_"
+
+        /** item 占位键裸键形态：前缀 + item 名（贪婪）+ `_数字`；dotted 子路径（`__frch_st_0.x`）不匹配。 */
+        private val FOREACH_ITEM_KEY = Regex("""^__frch_(.+)_(\d+)$""")
 
         /**
          * T-PT-03：TEMPORAL 参数占位值——带引号的日期字面量（`${}` 直替进 SQL 后即为合法字面量；

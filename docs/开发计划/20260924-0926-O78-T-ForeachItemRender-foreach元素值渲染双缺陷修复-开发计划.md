@@ -82,4 +82,25 @@ demo 仓 `OrderMapper.xml` 的 `selectOrdersByCondition`（foreach `collection="
 
 ## 九、实施记录
 
-（实施中回填。）
+（20260924 本会话实施完毕，分支 `t-foreach-item-render`，基线 master=`324b29f`。）
+
+**生产改动**（与 §四一致，共四文件）：
+
+- `ParamKind.kt`：`ParamTypeInfo` 增尾置默认字段 `elementKind: ParamKind? = null`（惰性，既有构造零影响）；
+- `XmlParamTypeResolver.kt`：`typeInfoOf` 对 COLLECTION + `PsiClassType` 唯一泛型实参抽取元素类别（P3 边界全数落地：`List<Integer>`→NUMBER／`List<String>`→TEXT／`List<DTO>`→OBJECT／裸 `List`·数组→null）；
+- `XmlPreviewModel.kt`：`paramTypeFor` 末位追加 `foreachItemTypeInfo`（`^__frch_(.+)_(\d+)$` 裸键 → forEachViews 反查 → 元素类别合成）；`quoteFor` 末位加 `paramTypeFor()?.kind?.quoteRequired` 兜底（P2 实证：paramTypes 空的旧布尔通道 item 键仍 null）；
+- `SqlPreviewPanel.kt`：新增 `xmlForEachValues` 状态表（collectionExpr→值序）；`applyXmlForEachValues` 退化为「存状态+设次数+单次渲染」；新增 `syncForEachItemValues` 在 renderSql 帧内（`xmlMappings` 赋值后）按新鲜映射播种 `paramValues[__frch_*]`；两处状态复位点（结果切换 init、clear）同步清。
+
+**测试**（新增 3 类 9 用例）：`XmlPreviewModelForeachItemTest`（纯 JVM 6 用例：引号/类别派生、TEXT 引号不误伤、无元素类别兜底、陌生 item 兜底、旧通道不变、dotted 不接）；`XmlParamTypeResolverElementKindTest`（平台 1 用例：P3 全边界）；`SqlPreviewPanelForeachValuesTest`（平台 2 用例：write-unsafe 重投递下四值齐全+裸渲染、默认 2 项）。
+
+**读数台账**（定向 `gradlew test --tests`，已按 parallel_tasks 登记 T-ForeachItemRender）：
+
+- Run A（修复前）：模型 2 红（`quoteFor("__frch_st_0")` null≠false）+ 解析器 1 红（elementKind null≠NUMBER）+ 面板 1 红——面板红读数 `IN ('1','2',?,?)`，引号错与丢值双缺陷一次坐实（与用户截图同机制，丢值量随键清单滞后差浮动）；
+- **插曲（陈旧产物假失败，已在册形态）**：首跑 `compileTestKotlin` 红（测试漏 import，修正后）复跑撞 `NoSuchMethodError: ParamTypeInfo.<init>(ParamKind, boolean)` 成片——elementKind 加字段改构造签名后 Kotlin 增量编译漏刷旧调用方字节码；按在册处置 `rm -rf build/classes build/kotlin` 全量重编译后消失；
+- **对照实验（根因补证）**：`git checkout master -- SqlPreviewPanel.kt` 跑同一测试，`paramValues={__frch_st_0=, __frch_st_1=}` 空串播种依旧 → **空串播种系 master 既有行为**（写入点未逐帧定位，非本任务引入）；此前被 `?` 掩盖，是元素类别修复让其首次满足 T-PT-04「有签名类型」条件、翻出 NULL；
+- Run B（修复后）：4 类 14 用例全绿；
+- Run C（反向验证：摘掉模型兜底 + 注释 sync 调用）：4 红（面板两用例丢值回归 + 模型两用例引号回归）——双守卫均「摘掉必红」；恢复后 8 类定向回归（含 `XmlPreviewModelTest`/`XmlEwResolverTest`/`DocWriteContextTest` 等）+ `testFast` 全绿。
+
+**P1~P4 处置**：P1 实证成立（`writeAllowedProbe={false}` + `UIUtil.dispatchAllInvocationEvents()` 确定性复现丢值）；P2/P3 有专项用例钉住；P4（多 foreach 归属）未造专项用例，靠 collectionExpr→view→item 链路单一来源，登记真机走查。
+
+**新牵出的产品决策（待用户定案，不在本任务内擅动）**：元素类别修复使 item 键首次满足 T-PT-04「有签名类型」条件，未填写 item 由 `?` 翻为 NULL（普通参数既有契约同款）。用户已提出「空参数填充策略三态化：默认 `?` 占位、可切 ''/NULL、item 一并纳入」的意向，利弊分析见交付说明，定案后另行实施（含设置页三态单选、ParamKindTest/ForeachValuesTest 断言联动、默认值变更的 CHANGELOG 与设置文档同步）。

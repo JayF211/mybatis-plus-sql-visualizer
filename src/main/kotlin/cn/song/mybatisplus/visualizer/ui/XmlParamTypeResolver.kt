@@ -192,12 +192,22 @@ object XmlParamTypeResolver {
     }
 
     /** PSI 类型 → 类型信息（psi 层唯一映射入口；注解侧参数同用）。 */
-    internal fun typeInfoOf(type: PsiType, psiClass: PsiClass? = (type as? PsiClassType)?.resolve()): ParamTypeInfo =
-        ParamTypeInfo(
-            kind = kindOf(type, psiClass),
+    internal fun typeInfoOf(type: PsiType, psiClass: PsiClass? = (type as? PsiClassType)?.resolve()): ParamTypeInfo {
+        val kind = kindOf(type, psiClass)
+        // O-78 T-ForeachItemRender：集合元素类别——泛型实参唯一时取之（`List<Integer>`→NUMBER），
+        // 供 foreach item 占位键派生引号/类别；裸集合（无实参）、数组、多实参不产（宁缺勿错）
+        val elementKind = if (kind == ParamKind.COLLECTION && type is PsiClassType) {
+            type.parameters.singleOrNull()?.let { arg -> kindOf(arg, (arg as? PsiClassType)?.resolve()) }
+        } else {
+            null
+        }
+        return ParamTypeInfo(
+            kind = kind,
             // 原语类型（int/long 等）无 null 语义；其余保守视为可空
             nullable = type !is PsiPrimitiveType,
+            elementKind = elementKind,
         )
+    }
 
     /**
      * PSI 类型 → 类别（T-PT-01）：先按类型文本映射（简单名/全限定名两形态归一，与 [ParamQuote] 同口径），
