@@ -12,6 +12,12 @@ data class XmlStatement(
     val kind: XmlStatementKind,
     val node: SqlNode,
     val parameterType: String?,
+    /**
+     * O-77 T-EwStatementScope：语句原文（include 展开后的 element.textContent，实体已解码，
+     * 不含标签/属性/注释）——MP 占位按语句域扫描用。null＝非 mapper 解析链构造（注解 `<script>` 等），
+     * 调用方回落文件全文。
+     */
+    val rawText: String? = null,
 )
 
 /** mapper 文件解析结果（语句清单 + 解析期错误）。 */
@@ -74,6 +80,7 @@ class XmlMapperParser {
                     kind = kindOf(element.tagName),
                     node = XmlScriptBuilder().parse(element),
                     parameterType = element.getAttribute("parameterType").ifEmpty { null },
+                    rawText = element.textContent,
                 )
             }
         return XmlMapperModel(namespace, statements, errors)
