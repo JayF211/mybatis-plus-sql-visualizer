@@ -20,33 +20,43 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 ## 功能演示
 
 **Wrapper → SQL 预览**（动态条件勾选 / 参数回填 / 格式化 / 一键执行）
+
 <img src="docs/images/demo-01-wrapper-preview.gif" width="720" alt="Wrapper→SQL 预览演示"/>
 
 **XML / HQL 动态 SQL 预览**（动态标签、OGNL 条件勾选、参数回填）
+
 <img src="docs/images/demo-02-xml-preview.gif" width="720" alt="XML 动态 SQL 预览演示"/>
 
 **JPA / Hibernate SQL 预览**（派生方法 / JPQL / Criteria / hbm 命名查询）
+
 <img src="docs/images/demo-03-jpa-preview.gif" width="720" alt="JPA / Hibernate SQL 预览演示"/>
 
 **Java 注解 SQL 预览**（@Select/@Update 等，注解行 gutter 图标）
+
 <img src="docs/images/demo-04-annotation-preview.gif" width="720" alt="注解动态 SQL 预览演示"/>
 
 **SQL → MP Java 代码反向转换**（右键 / Alt+Shift+J / 侧边栏 tab）
+
 <img src="docs/images/demo-05-sql-to-java.gif" width="720" alt="SQL→Java 反向转换演示"/>
 
 **SQL 日志工具窗口**（控制台日志捕获还原、跳转源码、历史回看）
+
 <img src="docs/images/demo-06-sql-log.gif" width="720" alt="SQL 日志工具窗口演示"/>
 
 **批量操作参数面板**（批量 SQL 按列展开、参数逐列勾选）
+
 <img src="docs/images/demo-07-batch-operation.gif" width="720" alt="批量操作参数面板演示"/>
 
 **SQL 代码补全**（表名 / 列名 / `#{}` 参数 / XML 动态标签）
+
 <img src="docs/images/demo-08-code-completion.gif" width="720" alt="SQL 代码补全演示"/>
 
 **实体类 / 数据库表右键生成 CRUD SQL**（三入口右键 / 候选浮层打字过滤 / 列勾选实时收缩）
+
 <img src="docs/images/demo-09-crud-sql.gif" width="720" alt="CRUD SQL 生成演示"/>
 
 **MCP：AI agent 真实调用插件工具**（AI Assistant 的 Codex agent 经 ACP 调用 `sqlv_*` 工具并留痕，agent 拿到确定性可执行 SQL）
+
 <img src="docs/images/demo-10-mcp-agent.gif" width="720" alt="MCP 工具真实调用演示"/>
 
 > 更多功能细节与在线文档见 [官网](https://sql-visualizer.jvtools.cn)。
