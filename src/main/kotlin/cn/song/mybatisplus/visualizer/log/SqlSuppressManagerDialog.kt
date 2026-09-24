@@ -18,6 +18,7 @@ import com.intellij.ui.CollectionListModel
 import com.intellij.ui.JBColor
 import com.intellij.ui.SimpleColoredComponent
 import com.intellij.ui.SimpleTextAttributes
+import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
@@ -78,6 +79,22 @@ class SqlSuppressManagerDialog(
 
     private val statusLabel = JBLabel().apply { foreground = UIUtil.getInactiveTextColor() }
 
+    /**
+     * T-SqlSuppressUx 二段：结构匹配开关（用户定案手动开启）。作用于**选中规则**，标签随选中态
+     * 切换（开启/关闭结构匹配）；批量入口 = [structureAllCheckBox]（全部开/全部关）。
+     */
+    private val structureButton = JButton(MpSqlVisualizerBundle.message("log.suppress.dialog.structure.toggleOn")).apply {
+        isFocusable = false
+        isEnabled = false
+        addActionListener { toggleStructureForSelected() }
+    }
+
+    /** 批量开关：勾选 = 全部规则结构匹配开；取消 = 全关。派生状态由 [syncStructureControls] 回写。 */
+    private val structureAllCheckBox = JBCheckBox(MpSqlVisualizerBundle.message("log.suppress.dialog.structure.all")).apply {
+        isFocusable = false
+        addActionListener { toggleStructureAll(isSelected) }
+    }
+
     private val addButton = JButton(MpSqlVisualizerBundle.message("log.suppress.dialog.add")).apply {
         isFocusable = false
         addActionListener { onAddClicked() }
@@ -106,6 +123,7 @@ class SqlSuppressManagerDialog(
         ruleList.addListSelectionListener { event ->
             if (event.valueIsAdjusting || adding) return@addListSelectionListener
             updateEditorFromSelection()
+            syncStructureControls()
         }
 
         // 左：规则列表 + 操作按钮行；右：只读高亮编辑器 + 状态行（新增提示/重名/上限）+ 常驻说明
@@ -121,6 +139,8 @@ class SqlSuppressManagerDialog(
                 isFocusable = false
                 addActionListener { clearAllRules() }
             })
+            add(structureButton)
+            add(structureAllCheckBox)
         }
         val leftPanel = JPanel(BorderLayout()).apply {
             add(JBScrollPane(ruleList), BorderLayout.CENTER)
@@ -204,6 +224,12 @@ class SqlSuppressManagerDialog(
                 ),
                 SimpleTextAttributes.GRAYED_SMALL_ATTRIBUTES,
             )
+            if (value.structureMatch) {
+                metaLine.append(
+                    "  ·  " + MpSqlVisualizerBundle.message("log.suppress.dialog.structure.badge"),
+                    SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES,
+                )
+            }
             return this
         }
     }
@@ -263,6 +289,7 @@ class SqlSuppressManagerDialog(
         }
         updateEditorFromSelection()
         statusLabel.text = if (rules.isEmpty()) MpSqlVisualizerBundle.message("log.suppress.dialog.empty") else ""
+        syncStructureControls()
     }
 
     /** 新增：未在新增态 → 进入（编辑器清空可编辑）；已在新增态 → 确认（读编辑器文本成规则）。 */
@@ -309,6 +336,39 @@ class SqlSuppressManagerDialog(
         (editor as? EditorEx)?.setViewer(true)
         addButton.text = MpSqlVisualizerBundle.message("log.suppress.dialog.add")
         cancelAddButton.isVisible = false
+    }
+
+    /**
+     * 切换选中规则的结构匹配（T-SqlSuppressUx 二段：手动开启/关闭），刷新列表徽标、按钮标签与提示。
+     * 语义提示走 [statusLabel]（结构匹配会把「参数值不同的同形状 SQL」一并拦下，须让用户可见）。
+     */
+    private fun toggleStructureForSelected() {
+        val rule = ruleList.selectedValue ?: return
+        val newState = ruleManager.setStructureMatch(rule.id, !rule.structureMatch)
+        refreshRuleList(select = rule)
+        statusLabel.text = MpSqlVisualizerBundle.message(
+            if (newState == true) "log.suppress.dialog.structure.onHint" else "log.suppress.dialog.structure.offHint",
+        )
+    }
+
+    /** 批量：全部规则结构匹配开/关（「全部按结构匹配」勾选框）。 */
+    private fun toggleStructureAll(enabled: Boolean) {
+        ruleManager.setStructureMatchAll(enabled)
+        refreshRuleList(select = ruleList.selectedValue)
+        statusLabel.text = MpSqlVisualizerBundle.message(
+            if (enabled) "log.suppress.dialog.structure.onHint" else "log.suppress.dialog.structure.offHint",
+        )
+    }
+
+    /** 同步结构匹配控件态：按钮标签/可用性随选中规则；勾选框派生自全体规则（全开才勾选）。 */
+    private fun syncStructureControls() {
+        val rule = ruleList.selectedValue
+        structureButton.isEnabled = rule != null
+        structureButton.text = MpSqlVisualizerBundle.message(
+            if (rule?.structureMatch == true) "log.suppress.dialog.structure.toggleOff"
+            else "log.suppress.dialog.structure.toggleOn",
+        )
+        structureAllCheckBox.isSelected = ruleManager.rules.isNotEmpty() && ruleManager.rules.all { it.structureMatch }
     }
 
     /** 删除单条选中规则；删除后仍在缓冲内的条目重新显示（闸门已丢弃的不可恢复——底部常驻说明）。 */

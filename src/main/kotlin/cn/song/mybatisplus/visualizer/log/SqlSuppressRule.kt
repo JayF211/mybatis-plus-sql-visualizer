@@ -13,12 +13,18 @@ import java.util.UUID
  *                  人可读、XML 可查；运行时按其指纹进 [SqlSuppressRuleManager.suppressedKeys]
  * @param sampleSql 原始还原 SQL（右键动作捕获时的 [LogSqlEntry.restoredSql]），管理对话框高亮展示用
  * @param createdAt 创建时间戳（毫秒；管理对话框列表展示）
+ * @param structureMatch 结构匹配开关（T-SqlSuppressUx 二段，20260924 用户定案：**手动开启**）——
+ *                  开启后本规则按**结构指纹**（[structureFingerprint]：字符串字面量与裸数字参数化为 `?`）
+ *                  匹配，参数值不同的同形状 SQL 一并屏蔽；关闭（默认）按精确口径
+ *                  （[suppressFingerprint]：空白归一 + 尾分号剥离）。缺省字段（存量 XML）= false，
+ *                  存量规则行为不变。
  */
 data class SqlSuppressRule(
     var id: String = "",
     var pattern: String = "",
     var sampleSql: String = "",
     var createdAt: Long = 0L,
+    var structureMatch: Boolean = false,
 ) {
     /** 分配唯一 id（仅当当前为空白时）。 */
     fun ensureId() {

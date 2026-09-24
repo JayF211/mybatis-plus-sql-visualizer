@@ -143,6 +143,33 @@ class SqlSuppressRuleManager : PersistentStateComponent<SqlSuppressRuleManager.S
         if (cleared) republish()
     }
 
+    /**
+     * T-SqlSuppressUx 二段：切换单条规则的**结构匹配**开关（用户定案：手动开启，默认关）。
+     * 未知 id / 状态无变化时不发布通知；确有变化时重建键集（结构开 = 结构指纹键，关 = 精确键）。
+     *
+     * @return 切换后的实际状态；规则不存在返回 null（调用方 UI 层刷新即可，无需特判）。
+     */
+    fun setStructureMatch(ruleId: String, enabled: Boolean): Boolean? {
+        val changed = synchronized(rulesLock) {
+            val rule = state.rules.firstOrNull { it.id == ruleId } ?: return null
+            val changed = rule.structureMatch != enabled
+            rule.structureMatch = enabled
+            changed
+        }
+        if (changed) republish()
+        return enabled
+    }
+
+    /** 批量：全部规则结构匹配开/关（管理对话框「全部按结构匹配」勾选）；无规则或状态无变化不发布。 */
+    fun setStructureMatchAll(enabled: Boolean) {
+        val changed = synchronized(rulesLock) {
+            val changed = state.rules.any { it.structureMatch != enabled }
+            state.rules.forEach { it.structureMatch = enabled }
+            changed
+        }
+        if (changed) republish()
+    }
+
     // ---------- 变更通知 ----------
 
     fun addListener(listener: () -> Unit) {
@@ -162,9 +189,11 @@ class SqlSuppressRuleManager : PersistentStateComponent<SqlSuppressRuleManager.S
         val keys = HashSet<String>(current.size * 2)
         val index = HashMap<String, String>(current.size * 2)
         for (rule in current) {
-            // T-SqlSuppressUx（20260924）：走屏蔽口径（去重口径 + 尾分号剥离）——与条目侧
-            // LogSqlEntry.suppressKey 同函数同源；大小写仍敏感（D2），空白差异仍命中
-            val key = suppressFingerprint(rule.pattern)
+            // T-SqlSuppressUx：精确口径（去重口径 + 尾分号剥离）与条目侧 LogSqlEntry.suppressKey
+            // 同函数；结构匹配开启的规则改用结构指纹（字面量/数字参数化），与
+            // LogSqlEntry.structureKey 同源。大小写均仍敏感（D2），空白差异均仍命中
+            val key = if (rule.structureMatch) structureFingerprint(rule.pattern)
+            else suppressFingerprint(rule.pattern)
             keys += key
             index[key] = rule.id
         }

@@ -158,6 +158,13 @@ data class LogSqlEntry(
      */
     val suppressKey: String by lazy { suppressFingerprint(restoredSql) }
 
+    /**
+     * T-SqlSuppressUx 二段：结构匹配键（[structureFingerprint]，字面量/数字参数化）——仅当某条
+     * **手动开启结构匹配**的规则的键集含本键时命中；与 [suppressKey] 同属 lazy 体属性，空集短路下
+     * 无结构规则则零成本。
+     */
+    val structureKey: String by lazy { structureFingerprint(restoredSql) }
+
     // ---------- T-ListMode：多行显示模式行片段缓存（体属性不入 equals/copy；仅 EDT 渲染路径读写） ----------
 
     /**
@@ -206,6 +213,66 @@ internal fun normalizeSqlWhitespace(sql: String): String =
  */
 internal fun suppressFingerprint(sql: String): String =
     sqlFingerprint(normalizeSqlWhitespace(sql).trimEnd(';').trim())
+
+/**
+ * T-SqlSuppressUx 二段（20260924 用户定案「结构匹配手动开启」）：**结构指纹** = 屏蔽口径再追加
+ * 字面量参数化——字符串字面量（`'…'`，含 `''` 转义）与裸数字各自折叠为 `?`，参数值不同的同形状
+ * SQL 由此同指纹。边界（逐字扫描实现，非正则）：
+ * - 双引号/反引号**标识符**不参数化（`"MyCol"`、`` `t1` `` 逐字保留——不同列/表 = 不同形状）；
+ * - 标识符内数字不参数化（前邻词字符不满足边界，如 `t2024`、`plan_2026001`）；
+ * - IN 列表按元素个数区分形状（`IN (?,?)` ≠ `IN (?,?,?)`）——同形状不同个数不命中，已知边界；
+ * - 畸形未闭合字面量按一个 `?` 收尾（防御，不抛错）。
+ * 仅对**手动开启结构匹配的规则**与条目侧 [LogSqlEntry.structureKey] 使用；精确口径规则不走此函数。
+ */
+internal fun structureFingerprint(sql: String): String =
+    sqlFingerprint(parameterizeLiterals(normalizeSqlWhitespace(sql).trimEnd(';').trim()))
+
+/** 字面量参数化（[structureFingerprint] 专属，逐字扫描；口径边界见其 KDoc）。 */
+internal fun parameterizeLiterals(sql: String): String {
+    val sb = StringBuilder(sql.length)
+    var i = 0
+    while (i < sql.length) {
+        val c = sql[i]
+        when {
+            c == '\'' -> {
+                // 字符串字面量整体折叠为 ?（'' 转义跳过；未闭合按防御收尾）
+                var j = i + 1
+                while (j < sql.length) {
+                    if (sql[j] == '\'') {
+                        if (j + 1 < sql.length && sql[j + 1] == '\'') {
+                            j += 2
+                            continue
+                        }
+                        break
+                    }
+                    j++
+                }
+                sb.append('?')
+                i = if (j < sql.length) j + 1 else sql.length
+            }
+            c.isDigit() && (i == 0 || !isSqlWordChar(sql[i - 1])) -> {
+                // 裸数字折叠为 ?；前邻词字符 = 标识符内数字（t2024/_id1），逐字保留
+                var j = i
+                while (j < sql.length && (sql[j].isDigit() || sql[j] == '.')) j++
+                if (j < sql.length && isSqlWordChar(sql[j])) {
+                    sb.append(sql, i, j) // 2024Q1 类：数字后随词字符，属标识符
+                } else {
+                    sb.append('?')
+                }
+                i = j
+            }
+            else -> {
+                sb.append(c)
+                i++
+            }
+        }
+    }
+    return sb.toString()
+}
+
+/** SQL 词字符（标识符边界判定）：字母/数字/下划线/美元符。 */
+private fun isSqlWordChar(c: Char): Boolean =
+    c.isLetterOrDigit() || c == '_' || c == '$'
 
 /** T-PS4-04：空白折叠正则提文件级常量（dedupeKey lazy/stampLogTime/桥嗅探三路共用，一处受益三路）。 */
 private val WHITESPACE_RUN_REGEX = Regex("""\s+""")

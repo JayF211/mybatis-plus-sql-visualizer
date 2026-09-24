@@ -250,6 +250,21 @@ class SqlLogEntryBufferTest {
     }
 
     @Test
+    fun `结构匹配规则开启后_参数值不同的同形状SQL被拦_精确规则不误拦`() {
+        // T-SqlSuppressUx 二段：结构匹配 opt-in——精确口径规则不拦不同参数值；结构规则拦
+        buffer.dedupeEnabled = false
+        buffer.suppressKeys = setOf(suppressKeyOf("SELECT * FROM t WHERE p = 'a'"))
+        assertTrue("精确口径规则不拦不同参数值（opt-in 前置）", buffer.addEntry(entry("SELECT * FROM t WHERE p = 'b'")))
+        assertEquals("仅精确未拦的那条在列", 1, buffer.snapshot().size)
+        // 结构规则：同形状不同参数值被拦（闸门走 entry.structureKey）；被拦条目不入列
+        buffer.suppressKeys = setOf(structureFingerprint("SELECT * FROM t WHERE p = 'a'"))
+        assertFalse("结构规则拦同形状不同参数值", buffer.addEntry(entry("SELECT * FROM t WHERE p = 'c'")))
+        assertEquals("列表仍只有先前一条", 1, buffer.snapshot().size)
+        // 不同形状不拦
+        assertTrue(buffer.addEntry(entry("SELECT * FROM t WHERE q = 'a'")))
+    }
+
+    @Test
     fun `屏蔽规则带尾分号_命中不带分号的日志还原SQL`() {
         // T-SqlSuppressUx（20260924 走查返修）：规则粘贴态带 `;`、日志还原链不带——尾分号剥离后互命中
         buffer.dedupeEnabled = false

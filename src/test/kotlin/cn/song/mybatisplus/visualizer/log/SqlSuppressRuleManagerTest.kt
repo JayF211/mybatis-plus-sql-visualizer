@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -136,6 +137,54 @@ class SqlSuppressRuleManagerTest {
             "形状不同的语句不因分号剥离被误吞",
             m.isSuppressed(suppressFingerprint("SELECT * FROM t WHERE s = 'a'")),
         )
+    }
+
+    @Test
+    fun `结构匹配手动开启_开启后参数值不同的同形状SQL命中`() {
+        // T-SqlSuppressUx 二段（用户定案）：结构匹配默认关、手动开启；开启后键集换结构指纹
+        val m = newManager()
+        assertEquals(
+            SqlSuppressRuleManager.AddResult.ADDED,
+            m.addRule("SELECT * FROM biz_project_member WHERE plan_id IN ('PLAN_2026001')"),
+        )
+        val rule = m.rules.single()
+        val nextDay = suppressFingerprint("SELECT * FROM biz_project_member WHERE plan_id IN ('PLAN_2026002')")
+        assertFalse("默认精确口径：参数值不同不命中（opt-in 前置）", m.isSuppressed(nextDay))
+
+        m.setStructureMatch(rule.id, true)
+        assertTrue(
+            "开启后同形状不同参数值命中",
+            m.isSuppressed(structureFingerprint("SELECT * FROM biz_project_member WHERE plan_id IN ('PLAN_2026002')")),
+        )
+        assertFalse(
+            "不同形状仍不命中",
+            m.isSuppressed(structureFingerprint("SELECT * FROM biz_project_member WHERE plan_id IN ('PLAN_2026002') AND removed = 0")),
+        )
+        // 关闭回落精确口径
+        m.setStructureMatch(rule.id, false)
+        assertFalse(m.isSuppressed(structureFingerprint("SELECT * FROM biz_project_member WHERE plan_id IN ('PLAN_2026002')")))
+        // 未知 id：no-op 返回 null
+        assertNull(m.setStructureMatch("no-such-id", true))
+    }
+
+    @Test
+    fun `结构匹配批量开关与持久化roundtrip`() {
+        val m = newManager()
+        m.addRule("SELECT 1")
+        m.addRule("SELECT 2")
+        m.setStructureMatchAll(true)
+        assertTrue(m.rules.all { it.structureMatch })
+        assertTrue(
+            m.isSuppressed(structureFingerprint("SELECT 999")),
+        )
+        // roundtrip：structureMatch 随 XmlSerializer 状态保持
+        val restored = SqlSuppressRuleManager()
+        restored.loadState(m.getState())
+        assertTrue(restored.rules.all { it.structureMatch })
+        // 批量关：全回落精确口径
+        m.setStructureMatchAll(false)
+        assertTrue(m.rules.none { it.structureMatch })
+        assertFalse(m.isSuppressed(structureFingerprint("SELECT 999")))
     }
 
     // ---------- 上限（§五 验收 4 / D6） ----------

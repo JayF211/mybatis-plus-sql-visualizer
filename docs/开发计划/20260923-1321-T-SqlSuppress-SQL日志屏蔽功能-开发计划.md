@@ -194,3 +194,14 @@
 - 全量 testShards/test、构建校验（verifyGate/buildPlugin/verifySmoke）：按「测试三档分层」纪律**明令不做**（本期不动 build.gradle.kts 生产段 / EP / since-build，非大改动）。
 - bundle 完整性守卫测试（`BundlePlaceholderArityTest`）只扫 RollbackWarning 站点，与本组键无关，未纳入定向集（验收 6 的「若仓内有…则一并跑」条件不成立——键齐全性已人工 grep 双文件比对证实）。
 - 工作树 `build.gradle.kts` 的 `sandboxContainer = MPSV-SqlSuppress` 临时行：任务收口前还原（见最终提交/工作树状态），不随提交入库。
+
+## 实施记录·走查返修补记（20260924，主控收口）
+
+### 一段：UI 对齐（`37df4b5`）
+用户走查截图退回「弹框中间有一个白边」→ 根因 = 实施时误 import `com.intellij.ui.Splitter` 编译失败，误判「不在 classpath」退回原生 JSplitPane（分隔条新 UI 深色主题呈白竖条）。换仓内既有 `com.intellij.openapi.ui.Splitter`（LogToSqlPanel/SqlPreviewPanel/SqlToJavaPanel 同款）根除；规则行渲染器对齐 `LogEntryListCellRenderer` 两行形态（SQL 主体行 + 灰字元信息行 + matte 底分隔线）；去掉列表 preferredSize hack。教训已记 [[feedback-ui-match-existing]]：照抄既有实现的前置动作是先 grep 仓内同类构件。
+
+### 二段：尾分号剥离（`c831fc4`）
+用户实证手工新增规则「已拦截 0 次」→ 根因 = 规则粘贴态带收尾 `;` 而日志还原链不带（多行/单行空白差异本就折叠命中，分号才是杀手）。新增 `suppressFingerprint`（去重口径 + trimEnd(';') 收尾剥离；字面量内分号触不到；大小写仍敏感 D2），规则侧键集与条目侧闸门/面板过滤三处消费方同源切换；`LogSqlEntry.suppressKey` lazy 体属性。反向验证摘剥离恰 2 用例红。
+
+### 三段：结构匹配（手动开启，用户定案 opt-in）
+用户确认「结构匹配需要手动开启，弹框支持全部开启或按规则开启」→ `SqlSuppressRule.structureMatch`（缺省 false，存量 XML 不受影响）；开启后按 `structureFingerprint`（屏蔽口径 + `parameterizeLiterals`：'…' 字符串含 '' 转义与裸数字折叠 `?`；双引号/反引号标识符与标识符内数字保留；IN 列表个数=形状为已知边界；畸形未闭合字面量防御性收 `?`）匹配，参数值不同的同形状 SQL 一并屏蔽。Manager 增 `setStructureMatch(ruleId, enabled)`/`setStructureMatchAll(enabled)`（未知 id no-op、状态无变化不发布）；闸门/面板过滤改双键判定（suppressKey ∨ structureKey，命中键回传 recordHit 归账）。UI：按钮行增「开启/关闭结构匹配」（随选中态动态标签）+「全部按结构匹配」勾选框（派生态：全开才勾选），行内「结构匹配」徽标仅开启时显示，切换提示走状态行；i18n 双 bundle 6 键。读数：Manager 16/0 + Buffer 54/0 + Models 11/0 + PanelFilter 绿；反向验证摘 parameterizeLiterals 恰 4 结构用例红（Models 1/Buffer 1/Manager 2）其余不牵连。

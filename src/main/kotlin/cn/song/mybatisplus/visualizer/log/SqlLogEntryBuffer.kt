@@ -149,9 +149,18 @@ class SqlLogEntryBuffer(
         // 「从未捕获过」：不进去重计数、不占捕获序号、不触发任何内容回调；命中计数走
         // [onSuppressedHit] 专用出口）。空集短路：无规则时零成本，不触 dedupeKey lazy 计算。
         // 【反向验证探针锚点】注释掉下面 if 块 = 摘除屏蔽闸门，SqlLogEntryBufferTest 屏蔽用例必红。
-        if (suppressKeys.isNotEmpty() && entry.suppressKey in suppressKeys) {
-            onSuppressedHit?.invoke(entry.suppressKey)
-            return false
+        // T-SqlSuppressUx 二段：精确键（默认口径规则）或结构键（手动开启结构匹配的规则）任一命中即拦；
+        // 命中键回传 recordHit 归账到对应规则。空集短路下 structureKey 的 lazy 亦不被触达。
+        if (suppressKeys.isNotEmpty()) {
+            val hitKey = when {
+                entry.suppressKey in suppressKeys -> entry.suppressKey
+                entry.structureKey in suppressKeys -> entry.structureKey
+                else -> null
+            }
+            if (hitKey != null) {
+                onSuppressedHit?.invoke(hitKey)
+                return false
+            }
         }
         var duplicate = false
         val evictedEntries = mutableListOf<LogSqlEntry>()

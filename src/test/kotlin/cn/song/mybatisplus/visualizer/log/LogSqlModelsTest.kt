@@ -128,4 +128,35 @@ class LogSqlModelsTest {
             sqlFingerprint(normalizeSqlWhitespace("select 1")),
         )
     }
+
+    @Test
+    fun `structureFingerprint_字面量与数字参数化边界`() {
+        // T-SqlSuppressUx 二段：结构匹配 = 字符串字面量与裸数字折叠为 ?；同形状不同参数值同指纹
+        assertEquals(
+            structureFingerprint("SELECT * FROM t WHERE p = 'a'"),
+            structureFingerprint("SELECT * FROM t WHERE p = 'b'"),
+        )
+        assertEquals(
+            structureFingerprint("WHERE id = 5"),
+            structureFingerprint("WHERE id = 42"),
+        )
+        // 引号标识符不参数化：不同列/表 = 不同形状
+        assertNotEquals(
+            structureFingerprint("SELECT \"MyCol\" FROM t"),
+            structureFingerprint("SELECT \"YourCol\" FROM t"),
+        )
+        // 标识符内数字保留（前邻词字符不构成边界）、裸数字参数化
+        assertEquals(
+            structureFingerprint("SELECT t2024, 7 FROM t"),
+            structureFingerprint("SELECT t2024, 9 FROM t"),
+        )
+        // 尾分号剥离沿用 + 字面量内分号随字面量整体参数化
+        assertEquals(structureFingerprint("SELECT 1;"), structureFingerprint("SELECT 2"))
+        assertEquals(structureFingerprint("WHERE k = 'a;b'"), structureFingerprint("WHERE k = 'x'"))
+        // 已知边界：IN 列表按元素个数区分形状
+        assertNotEquals(
+            structureFingerprint("WHERE a IN ('x','y')"),
+            structureFingerprint("WHERE a IN ('x','y','z')"),
+        )
+    }
 }

@@ -200,7 +200,8 @@ internal fun filterByType(entries: List<LogSqlEntry>, activeTypes: Set<Statement
  */
 internal fun filterBySuppress(entries: List<LogSqlEntry>, suppressKeys: Set<String>): List<LogSqlEntry> {
     if (suppressKeys.isEmpty()) return entries
-    return entries.filter { it.suppressKey !in suppressKeys }
+    // T-SqlSuppressUx 二段：精确键或结构键（手动开启结构匹配的规则）任一命中即滤除
+    return entries.filter { it.suppressKey !in suppressKeys && it.structureKey !in suppressKeys }
 }
 
 /**
