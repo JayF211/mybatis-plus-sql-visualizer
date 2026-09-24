@@ -423,6 +423,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // T-M24-04：XML 预览渲染状态（条件开关复用 enabledIds，id = test 表达式原文；
     // T-M26.4：bind 覆盖状态已移除——bind 值由「参数」区输入统一承担）
     private val xmlForEachCounts = mutableMapOf<String, Int>()
+    // O-78 T-ForeachItemRender：foreach 集合值权威状态（collectionExpr → 逗号分隔解析后的值序）——
+    // 播种收进 renderSql 帧内按新鲜映射清单进行，值不再依赖「渲染后同步读键清单」
+    private val xmlForEachValues = mutableMapOf<String, List<String>>()
     private val xmlForEachNulls = mutableSetOf<String>()
     private var xmlErrors = listOf<String>()
     /** T-M25.4：最近一次 XML 渲染的参数映射（集合值输入按当前渲染键回填）。 */
@@ -1882,6 +1885,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             }
             xmlForEachCounts.clear()
             xmlForEachCounts.putAll(model.defaultState().forEachCounts)
+            xmlForEachValues.clear()
             xmlForEachNulls.clear()
             xmlErrors = emptyList()
             xmlDollarSubstitutions = 0
@@ -2353,6 +2357,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 val rendered = xml.renderSql(state)
                 xmlErrors = rendered.errors
                 xmlMappings = rendered.mappings
+                // O-78：foreach 值按本帧新鲜映射清单播种（写安全闸重投递时与映射刷新同帧延迟，
+                // 值状态→渲染单向流动，不再有「渲染后同步读键清单」的错位窗口）
+                syncForEachItemValues(xml)
                 xmlDollarSubstitutions = rendered.dollarSubstitutions
                 // T-M25.5：bind 自动求值结果并入参数回填（用户手动输入优先，清空则恢复自动值）
                 rendered.bindValues.forEach { (name, value) ->
@@ -2637,6 +2644,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         conditionValueFields.clear()
         batchCheckBoxes.clear()
         xmlForEachCounts.clear()
+        xmlForEachValues.clear()
         xmlForEachNulls.clear()
         xmlErrors = emptyList()
         xmlDollarSubstitutions = 0
@@ -3684,32 +3692,45 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /**
      * T-M25.4：foreach 集合值变更——逗号分隔值解析为展开项并**自动回填**：
      * `2,3` → 展开 2 项 + `IN ( 2 , 3 )`；留空 → 恢复默认展开次数并清空该 foreach 的参数值（`?` 保持）。
-     * **先渲染一次刷新键清单**（逐字符输入时中间态 counts 会改变渲染键数量，直接取旧键会漏填），
-     * 再按新键填值二次渲染。
      *
-     * T-Perf-04：击键路径每键两次全量渲染——整个处理器防抖（停顿后以最终文本执行一次；
-     * handler 内部的两段渲染依赖 xmlMappings 中间态，保持同步语义不拆散）。
+     * O-78 T-ForeachItemRender：值以 collectionExpr 为键存入 [xmlForEachValues]，播种收进
+     * [renderSql]（[syncForEachItemValues]）——原「渲染后同步读 xmlMappings 取键」在 write-unsafe
+     * （防抖 Timer）上下文里 renderSql 被重投递、键清单滞后一拍，值按旧键播种丢尾巴
+     * （真机形态 `IN ('1','2','4',?)`）；状态化后渲染延迟与否都按最新状态出图。
+     *
+     * T-Perf-04：击键路径防抖（停顿后以最终文本执行一次）语义不变。
      */
     private fun onXmlForEachValuesChanged(view: XmlForEachView, text: String) {
         scheduleRender { applyXmlForEachValues(view, text) }
     }
 
-    /** foreach 值应用（由防抖 Timer 调度；原 onXmlForEachValuesChanged 主体）。 */
+    /** foreach 值应用（由防抖 Timer 调度）：存状态 + 设展开次数 + 单次渲染（播种在渲染帧内）。 */
     private fun applyXmlForEachValues(view: XmlForEachView, text: String) {
-        val item = view.item ?: return
         val values = text.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        xmlForEachValues[view.collectionExpr] = values
         xmlForEachCounts[view.collectionExpr] =
             if (values.isEmpty()) XmlPreviewModel.DEFAULT_FOREACH_SIZE else values.size
-        renderSql() // 第一次渲染：刷新 xmlMappings 为当前 counts 对应的键
-        val keys = xmlMappings.map { it.property }.filter { it.startsWith("__frch_${item}_") }
-        if (values.isEmpty()) {
-            keys.forEach { paramValues.remove(it) }
-        } else {
-            keys.forEachIndexed { i, key ->
-                if (i < values.size) paramValues[key] = values[i] else paramValues.remove(key)
+        renderSql()
+    }
+
+    /**
+     * O-78：foreach 值播种——在 renderSql 帧内（[xmlMappings] 刚按当前状态刷新，恒新鲜）按
+     * collectionExpr → view.item 反查前缀回填/清除 `__frch_<item>_*` 参数值；多出键清除语义与
+     * 原实现一致（留空 → `?` 保持）。
+     */
+    private fun syncForEachItemValues(xml: XmlPreviewModel) {
+        if (xmlForEachValues.isEmpty()) return
+        xmlForEachValues.forEach { (expr, values) ->
+            val item = xml.forEachViews.firstOrNull { it.collectionExpr == expr }?.item ?: return@forEach
+            val keys = xmlMappings.map { it.property }.filter { it.startsWith("__frch_${item}_") }
+            if (values.isEmpty()) {
+                keys.forEach { paramValues.remove(it) }
+            } else {
+                keys.forEachIndexed { i, key ->
+                    if (i < values.size) paramValues[key] = values[i] else paramValues.remove(key)
+                }
             }
         }
-        renderSql() // 第二次渲染：按值回填
     }
 
     /** 普通参数行：`#<source>` 标签 + 值输入框（T-PT-02：按签名类型类别挂占位提示与行尾校验警示）。 */
@@ -4214,8 +4235,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun renderParamValue(v: String?, hint: ParamHint?, source: String? = null): String {
         // 未填写（paramValues 未播种的 source，非标准路径）保留 `?` 兜底提示
         if (v == null) return "?"
-        // T-PT-04：空输入按设置策略出 NULL / ''（默认 NULL）——**仅对带签名类型信息的参数**生效；
-        // 无类型信息（UNKNOWN）保留 `?` 占位提示，行为与升级前一致（验收 3）
+        // T-PT-04 / O-79：空输入按设置策略出 ?（默认占位档）/ NULL / ''——**仅对带签名类型信息的
+        // 参数**生效；无类型信息（UNKNOWN）恒 `?` 占位提示（宁缺勿错）
         if (v.isBlank()) return if (hasSignatureTypeInfo(source)) emptyParamLiteral() else "?"
         val like = hint?.likePosition
         // M19.6（用户实测）：IN 列表多值回填——逗号分割，每个值独立渲染（引号规则同单值），
@@ -4240,12 +4261,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * T-PT-04：空参数填充字面量——按设置「空参数填充策略」出 `NULL`（默认）或 `''`。
-     * 作用于 [renderParamValue] 的空值分支，且仅当参数带签名类型信息（[hasSignatureTypeInfo]）。
+     * T-PT-04 / O-79：空参数填充字面量——按设置「空参数填充策略」出 `?`（默认占位档，保留待填
+     * 提示，SQL 不臆造语义）/ `NULL` / `''`。作用于 [renderParamValue] 的空值分支，且仅当参数带
+     * 签名类型信息（[hasSignatureTypeInfo]）；未知策略值按占位档兜底。
      */
-    private fun emptyParamLiteral(): String =
-        if (PluginSettings.getInstance().state.emptyParamFill == PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING) "''"
-        else "NULL"
+    private fun emptyParamLiteral(): String = when (PluginSettings.getInstance().state.emptyParamFill) {
+        PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING -> "''"
+        PluginSettings.EMPTY_PARAM_FILL_NULL -> "NULL"
+        else -> "?"
+    }
 
     /** T-PT-04：参数是否带签名类型信息（XML/注解 mapper 参数行）——决定空输入是否走填充策略。 */
     private fun hasSignatureTypeInfo(source: String?): Boolean =

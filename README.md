@@ -20,31 +20,44 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 ## 功能演示
 
 **Wrapper → SQL 预览**（动态条件勾选 / 参数回填 / 格式化 / 一键执行）
+
 <img src="docs/images/demo-01-wrapper-preview.gif" width="720" alt="Wrapper→SQL 预览演示"/>
 
 **XML / HQL 动态 SQL 预览**（动态标签、OGNL 条件勾选、参数回填）
+
 <img src="docs/images/demo-02-xml-preview.gif" width="720" alt="XML 动态 SQL 预览演示"/>
 
 **JPA / Hibernate SQL 预览**（派生方法 / JPQL / Criteria / hbm 命名查询）
+
 <img src="docs/images/demo-03-jpa-preview.gif" width="720" alt="JPA / Hibernate SQL 预览演示"/>
 
 **Java 注解 SQL 预览**（@Select/@Update 等，注解行 gutter 图标）
+
 <img src="docs/images/demo-04-annotation-preview.gif" width="720" alt="注解动态 SQL 预览演示"/>
 
 **SQL → MP Java 代码反向转换**（右键 / Alt+Shift+J / 侧边栏 tab）
+
 <img src="docs/images/demo-05-sql-to-java.gif" width="720" alt="SQL→Java 反向转换演示"/>
 
 **SQL 日志工具窗口**（控制台日志捕获还原、跳转源码、历史回看）
+
 <img src="docs/images/demo-06-sql-log.gif" width="720" alt="SQL 日志工具窗口演示"/>
 
 **批量操作参数面板**（批量 SQL 按列展开、参数逐列勾选）
+
 <img src="docs/images/demo-07-batch-operation.gif" width="720" alt="批量操作参数面板演示"/>
 
 **SQL 代码补全**（表名 / 列名 / `#{}` 参数 / XML 动态标签）
+
 <img src="docs/images/demo-08-code-completion.gif" width="720" alt="SQL 代码补全演示"/>
 
 **实体类 / 数据库表右键生成 CRUD SQL**（三入口右键 / 候选浮层打字过滤 / 列勾选实时收缩）
+
 <img src="docs/images/demo-09-crud-sql.gif" width="720" alt="CRUD SQL 生成演示"/>
+
+**MCP：AI agent 真实调用插件工具**（AI Assistant 的 Codex agent 经 ACP 调用 `sqlv_*` 工具并留痕，agent 拿到确定性可执行 SQL）
+
+<img src="docs/images/demo-10-mcp-agent.gif" width="720" alt="MCP 工具真实调用演示"/>
 
 > 更多功能细节与在线文档见 [官网](https://sql-visualizer.jvtools.cn)。
 
@@ -71,7 +84,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **XML 与注解 SQL 预览**
 
-- mapper XML 动态 SQL 完整预览：`if` / `choose` / `where` / `set` / `foreach` / `bind` / `sql`+`include` 等标签按 MyBatis 语义渲染，OGNL 表达式可在面板勾选；`refid="其它命名空间.片段id"` 跨文件 include 同样展开（property 静态替换与环检测一致，`${}` 动态 refid 也支持）；`if` test 求值失败或超出受限 OGNL 支持面的条件行给可见标注，不再静默默认展开
+- mapper XML 动态 SQL 完整预览：`if` / `choose` / `where` / `set` / `foreach` / `bind` / `sql`+`include` 等标签按 MyBatis 语义渲染，OGNL 表达式可在面板勾选；`refid="其它命名空间.片段id"` 跨文件 include 同样展开（property 静态替换与环检测一致，`${}` 动态 refid 也支持）；`if` test 求值失败或超出受限 OGNL 支持面的条件行给可见标注，不再静默默认展开；mapper 方法未写 `@Param` 的单集合参数支持 `list` / `collection` / `array` 快捷别名（对齐 MyBatis 自身参数命名语义），`<foreach>` 按集合类型照常展开
 - `@Select` / `@Update` / `@Delete` / `@Insert` 注解（含 `<script>` 与 Provider 注解）同样支持，注解行有 gutter 图标
 
 **JPA / Hibernate SQL 预览**
@@ -91,7 +104,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **实体类 / 数据库表右键生成 CRUD SQL**
 
-- 实体类文件、项目视图实体节点或 Database 工具窗表节点右键，一键生成 INSERT / UPDATE / SELECT / DELETE 并进入预览：自增主键默认不勾选、`@Version` 列 SET 尾自动递增并进 WHERE、逻辑删除实体出对应变体语句；Community 版仅实体侧入口
+- 实体类文件、项目视图实体节点或 Database 工具窗表节点右键，一键生成 INSERT / UPDATE / SELECT / DELETE 并进入预览：自增主键默认不勾选、`@Version` 列 SET 尾自动递增并进 WHERE、逻辑删除实体出对应变体语句，SQL Server / 达梦上勾回自增列的 INSERT 自动带 `SET IDENTITY_INSERT … ON/OFF` 成对包装；Community 版仅实体侧入口
 - 候选语句以原生浮层选择：打字按摘要过滤、Enter / 双击选定、ESC 关闭
 
 **SQL 日志工具窗口（主侧边栏，4 个 tab）**
@@ -106,8 +119,8 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **MCP：给 AI agent 的确定性 SQL 工具**
 
-- 内置 MCP Server 注册十个只读工具（IDEA 2025.2+，未装 MCP Server 插件的环境零影响）：渲染三件套 `sqlv_render_sql`（源码定位直接渲染可执行 SQL，含真实参数）/ `sqlv_schema_context`（表列结构紧凑上下文）/ `sqlv_explain`（七方言执行计划），工作流四件套 `sqlv_render_logs`（MyBatis/Hibernate/JdbcTemplate 日志还原可执行 SQL）/ `sqlv_check_sql`（静态写风险与类型核查）/ `sqlv_rollback_plan`（回滚预案，不执行）/ `sqlv_perf_advice`（20 条规则性能建议），生成与核查三件套 `sqlv_crud_sql`（实体生成 CRUD）/ `sqlv_reverse_sql`（SQL 转 MyBatis-Plus 代码）/ `sqlv_mapper_check`（mapper 契约 + 渲染产物风险核查）——Claude Code / Cursor / AI Assistant 等 agent 可直接调用
-- 设置页「MCP 工具」子页可整体开关插件 MCP 功能、逐工具启用/禁用（平台工具面在下一次列表/调用即时生效）；与校验类工具的位差一句话：校验器给的是置信度评分，这里给的是确定性证据——静态校验器产不出的渲染产物实证。能力全景与 agent 侧接入说明（Claude Code / Cursor / AI Assistant）见[官网 MCP 专页](https://sql-visualizer.jvtools.cn/features/mcp)
+- 内置 MCP Server 注册十个只读工具（IDEA 2025.2+，未装 MCP Server 插件的环境零影响）：渲染三件套 `sqlv_render_sql`（源码定位直接渲染可执行 SQL，含真实参数）/ `sqlv_schema_context`（表列结构紧凑上下文）/ `sqlv_explain`（七方言执行计划），工作流四件套 `sqlv_render_logs`（MyBatis/Hibernate/JdbcTemplate 日志还原可执行 SQL）/ `sqlv_check_sql`（静态写风险与类型核查）/ `sqlv_rollback_plan`（回滚预案，不执行）/ `sqlv_perf_advice`（20 条规则性能建议），生成与核查三件套 `sqlv_crud_sql`（实体生成 CRUD）/ `sqlv_reverse_sql`（SQL 转 MyBatis-Plus 代码）/ `sqlv_mapper_check`（mapper 契约 + 渲染产物风险核查）——Claude Code / Cursor / AI Assistant 等 agent 可直接调用。带 `filePath` 的三个工具统一接受项目相对路径或项目内绝对路径（项目外路径与 `..` 上跳拒绝）；`sqlv_schema_context` / `sqlv_explain` 可选指定 `dataSource`（配置了多个数据源时建议显式指名），`sqlv_explain` 的 `dialect` 可省略、按数据源 URL 自动识别
+- 设置页「MCP 工具」子页可整体开关插件 MCP 功能、逐工具启用/禁用——插件开关与 IDE「工具 → MCP 服务器」的平台总开关相互独立，经平台工具过滤扩展在下一次工具列表刷新或新会话即时生效；与校验类工具的位差一句话：校验器给的是置信度评分，这里给的是确定性证据——静态校验器产不出的渲染产物实证。能力全景与 agent 侧接入说明（Claude Code / Cursor / AI Assistant）见[官网 MCP 专页](https://sql-visualizer.jvtools.cn/features/mcp)
 
 **检查更新（Gitee 抢先体验通道）**
 
@@ -123,7 +136,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 - 批量操作预览：`save` / `updateBatchById` 等批量 SQL 按列展开，参数可逐列勾选；`saveOrUpdate` 冲突子句按方言渲染（MySQL `ON DUPLICATE KEY UPDATE` / PG `ON CONFLICT` 等）
 - 逻辑删除注入：实体含 `@TableLogic` 时自动追加 `AND deleted = 0`（可配置关闭）；多租户 / 数据权限拦截器模拟（占位符注入，可配置）
 - UPDATE / DELETE 无 WHERE 条件时红色警示全表操作风险
-- 错误一键上报：IDE 内部错误对话框一键报告到官网需求池（异常预填、堆栈附件、IDE / 插件版本自动携带、24 小时去重），帮助菜单与设置页亦有反馈入口
+- 错误一键上报：IDE 内部错误对话框一键报告到官网需求池（默认只预填异常类名与栈帧摘要，异常消息全文与完整堆栈降为可勾选附加；IDE / 插件版本自动携带、24 小时去重），帮助菜单与设置页亦有反馈入口
 
 ## 从 MyBatis Log Free 迁移？
 
@@ -218,6 +231,7 @@ ORDER BY t1.create_time DESC
 | 逻辑删除值 | 0 | 逻辑删除条件的值（对齐 MP `logic-delete-value`） |
 | 字段列表自动折叠 | 关 | SELECT / INSERT 列清单、VALUES 组、UPDATE SET 超过阈值时折叠为「... N columns」占位，点击即展开（阈值可配，默认 10） |
 | 执行超时 | 30 秒 | 执行 / EXPLAIN 单语句超时兜底（0 = 不限），超时先请求取消再报错——锁等待、笛卡尔积等挂死查询不再永久 loading |
+| 按数据源校正列名 | 开 | 实体字段名与库真实列名不一致时（字段 `orderID` / 列 `order_id` 这类非标准命名）用数据源的真实列集合纠正预览 SQL 的列名——仅在能唯一确定是哪一列时改写，0 列或多列歧义保持原样；覆盖列清单、逻辑删除 / 乐观锁 / 复合主键列与 JOIN ON 外键列，项目级可覆盖。无可用数据源（社区版 / 未配置 / 未连接 / 表看不见）时与关闭本项完全等价 |
 
 **表名映射**
 
@@ -260,6 +274,7 @@ ORDER BY t1.create_time DESC
 | 界面语言 | 简体中文 | 插件 UI 语言（English / 跟随系统可选） |
 | 快捷键 | `Alt+Shift+Q` / `Alt+Shift+J` | 分别对应 Wrapper 转 SQL 与 SQL→Java 反向转换；录制式修改，保存写入 IDE Keymap（冲突可「强制使用」抢占） |
 | SQL 列表类型颜色标记 | 左侧色条 | 日志 / 历史列表按语句类型着色（SELECT 蓝 / INSERT 绿 / UPDATE 橙 / DELETE 红），形态三选一（色条 / 整行淡背景 / 关闭），四色可自定义 |
+| 在插件自建编辑器中显示空白符 | 关 | 插件自建的编辑器（SQL 预览、日志转 SQL、点击预览、回滚 SQL、SQL 输入、参数导入、SQL→Java）用 `·` / `→` / `↵` 标出空格、Tab 与行尾，排查动态拼接 SQL 里的多余空白一眼可见；纯显示层不改 SQL 文本，关闭时不设置该属性、沿用 IDE 全局「显示空白符」偏好 |
 
 **更新与诊断**
 
@@ -274,7 +289,7 @@ ORDER BY t1.create_time DESC
 
 ### SQL 预览弹窗
 
-弹窗默认尺寸按屏幕比例自适应（宽 62% / 高 65%，下限 900×600），可手动拉伸并记忆尺寸；左侧动态条件复选框 + 参数输入（参数按签名给类型占位提示——数字 / 日期 / 集合 / 对象，形态不符给淡色警示），右侧 SQL 可编辑（多 tab：SQL / 联表关系图 / 列信息）。工具栏提供格式化、关键字换行、竖向排列、执行计划、刷新等操作，「更多」菜单收纳低频动作（回滚 SQL、导入参数、差异对比、分享）；回滚 SQL 对当前 INSERT 推导可执行逆向语句（整行等值谓词 DELETE），UPDATE / DELETE 因缺 before-image 不自动生成，改走快照查询 + 粘贴回填的人工恢复路径。执行走 Ultimate 原生控制台内嵌；含 `${}` 直替的预览显示注入提示横幅，执行 / EXPLAIN 前弹一次确认；UPDATE 预览 SET 各项带 `(new)` 行尾标注；执行报错时给出 SQLState / 驱动错误码与出错位置，可一键定位到出错语句。
+弹窗默认尺寸按屏幕比例自适应（宽 62% / 高 65%，下限 900×600），可手动拉伸并记忆尺寸；左侧动态条件复选框 + 参数输入（参数按签名给类型占位提示——数字 / 日期 / 集合 / 对象，形态不符给淡色警示），右侧 SQL 可编辑（多 tab：SQL / 联表关系图 / 列信息）。工具栏提供格式化、关键字换行、竖向排列、执行计划（仅对只读查询包装 EXPLAIN，DML / DDL 明确拒绝并提示）、刷新等操作，「更多」菜单收纳低频动作（回滚 SQL、导入参数、差异对比、分享）；回滚 SQL 对当前 INSERT 推导可执行逆向语句（整行等值谓词 DELETE），UPDATE / DELETE 因缺 before-image 不自动生成，改走快照查询 + 粘贴回填的人工恢复路径（SQL Server / 达梦的回填 INSERT 同样自动带 `SET IDENTITY_INSERT` 包装，取不到自增列时显式告警不再静默产出必失败的语句）。执行走 Ultimate 原生控制台内嵌；含 `${}` 直替的预览显示注入提示横幅，执行 / EXPLAIN 前弹一次确认；UPDATE 预览 SET 各项带 `(new)` 行尾标注、INSERT 预览在各 VALUES 项旁标出目标列名（列-值错位一眼可见）；执行报错时给出 SQLState / 驱动错误码与出错位置，可一键定位到出错语句。
 
 ## 安装常见问题
 
@@ -335,10 +350,10 @@ ORDER BY t1.create_time DESC
 
 ```json
 {
-  "version": "2026.9.18",
-  "downloadUrl": "http://nexus.intranet.local/plugins/mybatis-plus-sql-visualizer-2026.9.18.zip",
+  "version": "2026.9.23",
+  "downloadUrl": "http://nexus.intranet.local/plugins/mybatis-plus-sql-visualizer-2026.9.23.zip",
   "changeNotes": "本次更新内容（纯文本，\n 可换行）",
-  "publishDate": "2026-09-15",
+  "publishDate": "2026-09-23",
   "sinceBuild": "243"
 }
 ```

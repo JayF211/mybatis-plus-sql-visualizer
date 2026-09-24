@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
 /**
@@ -20,7 +21,8 @@ class XmlEwResolverTest : BasePlatformTestCase() {
         val parsed = cn.song.mybatisplus.visualizer.xml.XmlMapperParser().parse(xml)
         val statement = parsed.statements.first { it.id == id }
         val warnings = mutableListOf<String>()
-        val placeholders = cn.song.mybatisplus.visualizer.xml.XmlEwExpander.placeholders(xml)
+        // O-77：占位按语句域扫描（statement.rawText），与生产 resolveEwPlaceholders 口径一致
+        val placeholders = cn.song.mybatisplus.visualizer.xml.XmlEwExpander.placeholders(statement.rawText ?: xml)
         val finder: (com.intellij.psi.PsiMethod) -> List<com.intellij.psi.PsiElement> = { method ->
             com.intellij.psi.util.PsiTreeUtil.collectElementsOfType(serviceFile, com.intellij.psi.PsiMethodCallExpression::class.java)
                 .filter { it.methodExpression.referenceName == method.name }
@@ -112,5 +114,117 @@ class XmlEwResolverTest : BasePlatformTestCase() {
         // 无 project（纯文本）→ 不展开（占位求值为空提示）
         val result = XmlPreviewService.preview(mapperXml, "selectList", null)
         assertTrue("无 project 时应保持占位求值为空提示", result.warning?.contains("求值为空") == true)
+    }
+
+    // O-77 T-EwStatementScope：同文件他语句的 ew 占位不再记账到本语句——
+    // 普通语句预览不得误报「无 Wrapper 参数（ew）」（修复前全文扫描把他语句占位算到本语句头上）
+    fun testCrossStatementEwPlaceholderNotAttributedToPlainStatement() {
+        myFixture.addFileToProject(
+            "UserMapper.java",
+            """
+            package com.example;
+            import com.baomidou.mybatisplus.core.conditions.Wrapper;
+
+            public class User {
+                private Long id;
+                private String name;
+            }
+
+            public interface UserMapper {
+                java.util.List<Object> selectByWrapper(Wrapper ew);
+                java.util.List<Object> selectByCondition(String orderNo);
+            }
+            """.trimIndent(),
+        )
+        myFixture.configureByText(
+            "Service.java",
+            """
+            package com.example;
+            import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+
+            public class Service {
+                public void run(UserMapper mapper) {
+                    mapper.selectByWrapper(new QueryWrapper<com.example.User>().eq("id", 1L));
+                }
+            }
+            """.trimIndent(),
+        )
+        val xml = """
+            <mapper namespace="com.example.UserMapper">
+              <select id="selectByWrapper" resultType="map">
+                SELECT * FROM t_user ${'$'}{ew.customSqlSegment}
+              </select>
+              <select id="selectByCondition" resultType="map">
+                SELECT * FROM t_user WHERE id = #{id}
+              </select>
+            </mapper>
+        """.trimIndent()
+        val plain = XmlPreviewService.preview(xml, "selectByCondition", project)
+        assertNull("普通语句不应有 ew 警示：${plain.warning}", plain.warning)
+        assertEquals("SELECT * FROM t_user WHERE id = ?", plain.sql.replace(Regex("\\s+"), " ").trim())
+        // Light 夹具 ReferencesSearch 搜不到调用（既有 testEwCustomSqlSegmentExpanded 同因走注入 finder），
+        // 展开能力断言走 previewWithFinder——helper 已按语句域扫占位，与生产口径一致
+        val withEw = previewWithFinder(xml, "selectByWrapper", project, myFixture.file)
+        assertTrue(
+            "带 ew 语句应照旧展开：sql=${withEw.sql} warning=${withEw.warning}",
+            withEw.sql.contains("WHERE (id = 1"),
+        )
+    }
+
+    // O-77：不同变量名占位按语句各自解析（守卫：语句域扫描不得破坏多 wrapper 变量场景）
+    fun testDifferentWrapperVariablesResolvedPerStatement() {
+        myFixture.addFileToProject(
+            "UserMapper.java",
+            """
+            package com.example;
+            import com.baomidou.mybatisplus.core.conditions.Wrapper;
+
+            public class User {
+                private Long id;
+                private String name;
+            }
+
+            public interface UserMapper {
+                java.util.List<Object> selectByEw(Wrapper ew);
+                java.util.List<Object> selectByEw2(Wrapper ew2);
+            }
+            """.trimIndent(),
+        )
+        myFixture.configureByText(
+            "Service.java",
+            """
+            package com.example;
+            import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+
+            public class Service {
+                public void run(UserMapper mapper) {
+                    mapper.selectByEw(new QueryWrapper<com.example.User>().eq("id", 1L));
+                    mapper.selectByEw2(new QueryWrapper<com.example.User>().eq("name", "x"));
+                }
+            }
+            """.trimIndent(),
+        )
+        val xml = """
+            <mapper namespace="com.example.UserMapper">
+              <select id="selectByEw" resultType="map">
+                SELECT * FROM t_user ${'$'}{ew.customSqlSegment}
+              </select>
+              <select id="selectByEw2" resultType="map">
+                SELECT * FROM t_user ${'$'}{ew2.customSqlSegment}
+              </select>
+            </mapper>
+        """.trimIndent()
+        val byEw = previewWithFinder(xml, "selectByEw", project, myFixture.file)
+        assertTrue(
+            "ew 语句应按本语句调用处展开：sql=${byEw.sql} warning=${byEw.warning}",
+            byEw.sql.contains("WHERE (id = 1"),
+        )
+        val byEw2 = previewWithFinder(xml, "selectByEw2", project, myFixture.file)
+        assertTrue(
+            "ew2 语句应按本语句调用处展开：sql=${byEw2.sql} warning=${byEw2.warning}",
+            byEw2.sql.contains("WHERE (name = 'x'"),
+        )
+        assertTrue("不应有跨语句误报：${byEw.warning}", byEw.warning?.contains("无 Wrapper 参数") != true)
+        assertTrue("不应有跨语句误报：${byEw2.warning}", byEw2.warning?.contains("无 Wrapper 参数") != true)
     }
 }

@@ -140,10 +140,13 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     // ---------- T-CrudColor 颜色控件辅助 ----------
 
-    /** T-PT-04：当前选中的空参数填充策略（NULL 档为默认——空选/异常态一律落默认档）。 */
-    private fun selectedEmptyParamFill(): String =
-        if (emptyParamFillEmptyRadio.isSelected) PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING
-        else PluginSettings.DEFAULT_EMPTY_PARAM_FILL
+    /** T-PT-04 / O-79：当前选中的空参数填充策略（占位档为默认——空选/异常态一律落默认档）。 */
+    private fun selectedEmptyParamFill(): String = when {
+        emptyParamFillPlaceholderRadio.isSelected -> PluginSettings.EMPTY_PARAM_FILL_PLACEHOLDER
+        emptyParamFillEmptyRadio.isSelected -> PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING
+        emptyParamFillNullRadio.isSelected -> PluginSettings.EMPTY_PARAM_FILL_NULL
+        else -> PluginSettings.DEFAULT_EMPTY_PARAM_FILL
+    }
 
     /** 当前下拉选中的样式值（空选兜默认——与渲染器 styleOf 的兜底保持一致）。 */
     private fun selectedCrudColorStyle(): String =
@@ -377,7 +380,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 界面语言下拉（M14：默认简体中文；跟随系统 / English 可选）。 */
     private val languageCombo = JComboBox<LanguageOption>()
 
-    /** T-PT-04：空参数填充策略单选（NULL 字面量 / 空字符串）。 */
+    /** T-PT-04 / O-79：空参数填充策略单选（`?` 占位符 / NULL 字面量 / 空字符串，占位档为默认）。 */
+    private val emptyParamFillPlaceholderRadio = JBRadioButton()
     private val emptyParamFillNullRadio = JBRadioButton()
     private val emptyParamFillEmptyRadio = JBRadioButton()
     private val emptyParamFillGroup = ButtonGroup()
@@ -591,7 +595,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     if (dialectCombo.selectedItem == autoDialectItem) refreshInferredLabel()
                 }
                 addRow(p, g, "", replaceParamsCheck.apply { text = MpSqlVisualizerBundle.message("settings.replaceParams") })
-                // T-PT-04：空参数填充策略（参数值为空时回填 NULL 字面量还是空字符串）
+                // T-PT-04 / O-79：空参数填充策略（参数值为空时保留 ? 占位，还是回填 NULL/空字符串）
+                emptyParamFillPlaceholderRadio.apply {
+                    text = MpSqlVisualizerBundle.message("settings.emptyParamFill.placeholder")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.emptyParamFill.placeholder.tip")
+                }
                 emptyParamFillNullRadio.apply {
                     text = MpSqlVisualizerBundle.message("settings.emptyParamFill.null")
                     toolTipText = MpSqlVisualizerBundle.message("settings.emptyParamFill.null.tip")
@@ -600,9 +608,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     text = MpSqlVisualizerBundle.message("settings.emptyParamFill.empty")
                     toolTipText = MpSqlVisualizerBundle.message("settings.emptyParamFill.empty.tip")
                 }
+                emptyParamFillGroup.add(emptyParamFillPlaceholderRadio)
                 emptyParamFillGroup.add(emptyParamFillNullRadio)
                 emptyParamFillGroup.add(emptyParamFillEmptyRadio)
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.emptyParamFill"), JPanel().apply {
+                    add(emptyParamFillPlaceholderRadio)
                     add(emptyParamFillNullRadio)
                     add(emptyParamFillEmptyRadio)
                 })
@@ -1281,12 +1291,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
         manualEntityCheck.isSelected = checked
     }
 
-    /** T-PT-04：空参数填充策略选择入口（测试用）——与用户点选同一路径（isModified/apply 检测）。 */
+    /** T-PT-04 / O-79：空参数填充策略选择入口（测试用）——与用户点选同一路径（isModified/apply 检测）。 */
     internal fun selectEmptyParamFill(value: String) {
-        if (value == PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING) {
-            emptyParamFillEmptyRadio.isSelected = true
-        } else {
-            emptyParamFillNullRadio.isSelected = true
+        when (value) {
+            PluginSettings.EMPTY_PARAM_FILL_PLACEHOLDER -> emptyParamFillPlaceholderRadio.isSelected = true
+            PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING -> emptyParamFillEmptyRadio.isSelected = true
+            else -> emptyParamFillNullRadio.isSelected = true
         }
     }
 
@@ -1660,9 +1670,16 @@ class PluginSettingsPanel @JvmOverloads constructor(
             refreshInferredLabel()
             replaceParamsCheck.isSelected = s.replaceParams
             formatCheck.isSelected = s.formatSql
-            // T-PT-04：空参数填充策略回填（非 EMPTY_STRING 一律按默认 NULL 档选中——旧配置/非法值容错）
+            // T-PT-04 / O-79：空参数填充策略回填（三档互斥；存量「NULL」持久化值保持原档，
+            // 空白/非法值落默认占位档——ButtonGroup 需至少一项选中）
+            emptyParamFillPlaceholderRadio.isSelected = s.emptyParamFill == PluginSettings.EMPTY_PARAM_FILL_PLACEHOLDER
+            emptyParamFillNullRadio.isSelected = s.emptyParamFill == PluginSettings.EMPTY_PARAM_FILL_NULL
             emptyParamFillEmptyRadio.isSelected = s.emptyParamFill == PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING
-            emptyParamFillNullRadio.isSelected = s.emptyParamFill != PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING
+            if (!emptyParamFillPlaceholderRadio.isSelected && !emptyParamFillNullRadio.isSelected &&
+                !emptyParamFillEmptyRadio.isSelected
+            ) {
+                emptyParamFillPlaceholderRadio.isSelected = true
+            }
             verticalPairAnnotationCheck.isSelected = s.verticalPairAnnotation
             autoFoldCheck.isSelected = s.autoFoldEnabled
             autoFoldThresholdField.text = s.autoFoldFieldThreshold.toString()

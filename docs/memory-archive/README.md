@@ -3,17 +3,20 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
-> **全局备份**：`~/.zcode/cli/memories/global/`（113 个通用文件）
-> **项目记忆**：保留 45 个核心文件 + MEMORY.md 索引（第十五次精简后）
+> **全局备份**：`~/.zcode/cli/memories/global/`（115 个通用文件）
+> **项目记忆**：保留 48 个核心文件 + MEMORY.md 索引（第十六次精简后）
 
 ---
 
-## 已修复 Bug（172 个）
+## 已修复 Bug（175 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [console-capture-zero-output-flush.md](bug-fixes/console-capture-zero-output-flush.md) | O-70 T-ConsolePendingFlush 已交付（dev `dc7e69a`）——控制台「已扫描 N 行 / 产出 0 条」根因＝按线程分桶后待闭合条目无产出点（JdbcTemplate 只开 DEBUG 无参数行+Tomcat 按请求新建线程+实时链路从不调 closePending）；静默冲刷修法（逐行+轮询两处冲刷点）、262 无 `removeMessageFilter` 的挂载代际号处置；归档注记含真机复验判据与 Hibernate 零参残留 |
+| [enhanced-capture-gates-and-consent-scope.md](bug-fixes/enhanced-capture-gates-and-consent-scope.md) | 增强捕获闸门与确认框作用域定案（20260923，O-66 引导链随交付）——链上无项目类型闸门、Gradle 任务配置未确认态静默跳过、授权按 IDE 配置目录隔离；premain 经 init script 会挂进 Gradle fork 的 JavaForkOptions 任务 JVM（判「不合适」）；归档注记＝路线 A 已实施为 T-GradleTaskInjectScope（`1597521`），受控实验仍在 pending-plans 真机复验节 |
+| [reference-acp-session-verification.md](bug-fixes/reference-acp-session-verification.md) | ACP/SSE 链路 runIde 沙盒验证入口（⑯ 全四项闭合 `24d6e33`）——ACP 会话不需登录就能起（卡点是模型凭据非登录）；判据行由 `AcpIdeaMcpProviderImpl` 打（FINER）、传输走 EP 遍历；ml-llm 的类在 `lib/modules/*.jar`（只 glob lib 会误判类不存在）；沙盒 plugins 目录每次 runIde 重建；64342 免 token 端点实证（401 的是 64442 router） |
 | [pitfall-hql-property-column-scope.md](bug-fixes/pitfall-hql-property-column-scope.md) | T-HqlAliasColumnScope（O-57）已交付（`4733ce6` 并入 master `1504fa0`，k2j 随 Master184 移植）——HQL 副表别名属性原样透传致预览 SQL 不可执行：根因=属性→列名映射只遍历根实体（`HqlConverter.mapPropertyToColumn` 只吃 `table.columns`、正则不含别名），副表属性落在 JOIN ON 真实化与属性映射两链的缝里；修法=别名→TableInfo 映射按别名分派+未解析别名回落现状行为；**@Embedded 展平缺口（`updateInfo.` 段无人处理）按用户定案挂起**，恢复分析先读本档（含用户补充 HQL 原文与「现状产物逐字不变」回归约束） |
 | [project-db-schema-calibration.md](bug-fixes/project-db-schema-calibration.md) | T-DbColumnCalibration（O-58）已交付（`4733ce6`，`ColumnNameCalibrator` 在 master）——实体列名数据源校正与自动降级：四层验收（能校正/数据源可用才校正/不可用降级等价/零性能回归）；能力底账=全仓零 JDBC、自省全走平台 DBN 反射（`columnsCached` 零遍历热路径读）、新 schema 缓存必登记 `MetadataInvalidator`、校正层不加引号（归 Dialect 渲染链）；可判定来源 H1~H4 用真值仲裁一次覆盖、H5（语义无关改名）明确不做 |
 | [reference-sql-quick-templates-actions.md](bug-fixes/reference-sql-quick-templates-actions.md) | SQL 快捷模板三动作（EXPLAIN/COUNT/Sample 10 Rows）语义与执行链——选中文本送控制台；局限=LIMIT 10 硬编码不走 `Dialect.renderLimit`、无 ORDER BY、SELECT *、结果网格显示宿主代码上定不下来；默认键位已由 T-TemplateKeyDrop 摘除（`e6ce2c5`）；候选「快捷模板 LIMIT 配置化」实施前先读本档 |
@@ -274,10 +277,12 @@
 | [project-m54-perf-redline-audit](bug-fixes/project-m54-perf-redline-audit.md) | M54 性能红线全面治理 24 任务交付（perf/redline-hardening 28 提交，2026-09-05，**已合 dev**）——禁卡死/禁拖慢/禁 ERROR 弹窗：LOG.error 与 ERROR 通知清零、3084 用例 0 失败；实施偏差 4 项备忘（T-Perf-23 正则 13/17、T-Perf-13 探针门控、T-Perf-18 URL 键、T-Perf-20 通知替代 HintManager）；真实防抖待 runIde 真机 |
 | [project-log-jump-no-wrapper-rootcause](bug-fixes/project-log-jump-no-wrapper-rootcause.md) | SQL 日志右键跳转「未找到表对应 Wrapper」根因（2026-09-02 分析，**已随 T-ServiceChainSearch/O-6 修复**）——事后搜索 Wrapper 本质不可靠（仅静态工厂不含 IService 链），正解=F-44-7 SqlSourceInterceptor 执行时注入源码位置，含方案 A 实施全程 12 个编译/运行陷阱 |
 
-## 已解决踩坑（79 个）
+## 已解决踩坑（81 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [pitfall-docker-guard-hangs-indefinitely.md](pitfalls/pitfall-docker-guard-hangs-indefinitely.md) | docker 引擎半活态（管道在、守护进程不应答）让 `assumeDockerAvailable` 无限挂死而非跳过——HTTP 读无超时、`catch (Throwable)` 永不触发，整片门禁挂住且零错误读数；判别＝`timeout 10 docker info` 看退出码（管道接 head 会误读 0）；根治＝`mpvs.docker.tests.enabled` 显式开关（`b71b382`，缺省关，`-PmpvDockerTests=true` 才跑容器验证），日常判别口径沉淀 AGENTS.md 与测试约定；dbx 替代 Oracle 用例未实施；含 testcontainers 策略写回、buildSrc 临时排除口径等实测细节 |
+| [pitfall-xmltext-cdata-literal.md](pitfalls/pitfall-xmltext-cdata-literal.md) | 平台 PSI 的 `XmlText.text` 对 CDATA 返回带 `<![CDATA[ ]]>` 包裹的字面全文（「CDATA 已展开」说法被判别性读数证伪）——按展开口径写的 hbm 命名查询提取链带缺口且非判别性断言恒绿；修法＝unwrap 正则剥包裹+断言改「不含包裹标记」；hbm 缺口已修（dev `9c0c9e7` 共享 `XmlDirectText` 口径），新写 XML 文本提取代码前先读本档 |
 | [pitfall-agent-config-channel-never-applied.md](pitfalls/pitfall-agent-config-channel-never-applied.md) | 增强捕获 CONFIG 帧格式错位——IDE 出站 `[4字节长度][1字节命令][body]`、应用侧 SenderLoop 错位读取→停采/脱敏/帧过滤三条指令从未生效；IDE 侧入队不判 capturing。O-54 交付（`0eafa67`）+ T-08 连接级跳过包装 P0（`ec2a3b9`）+ D1 定案 MCP 不受捕获开关约束（`e8ee771`）；含 CONFIG ACK=5 回执+看门狗 15s+入队闸门 |
 | [pitfall-agent-heartbeat-cadence-vs-online-window.md](pitfalls/pitfall-agent-heartbeat-cadence-vs-online-window.md) | 增强捕获 30 秒必掉线——agent 心跳记账耗时（实测 60.6s/发 vs 声明 10s）超 IDE 在线窗口 30s 必误杀，且 premain 只 accept 一次无法重连；六项修法交付 master+沙盒三轮验收九项全过；两条疑似缺陷实验证伪（复读历史行不成立/同 SQL 无新条目属去重预期，`×N` 徽标即丢弃数） |
 | [pitfall-agent-locator-cache-stale-line.md](pitfalls/pitfall-agent-locator-cache-stale-line.md) | StackLocator L1 整帧缓存冻结行号——键取「首个非框架帧」而 MPJ 拦截器帧全应用共享→所有条目同一位置；O-55 交付（两缓存合并判定缓存+身份在场校验，反向验证读数与报障同形）；D3 定案=两侧跳过规则保持两份+差异登记+跨侧同步守卫 |
@@ -385,13 +390,15 @@
 
 **第十五次精简升级（2026-09-23，3 个新文件 + 1 处内容合并 + 1 处重复删除）**：pitfall-statustext-no-html-no-wrap（JBList 空态是 StatusText 非 JLabel：不解析 HTML、`\n` 无声吞掉、超宽只裁不折，多行只能 appendLine 且它不更新 getText()）+ pitfall-workflow-amend-cannot-pass-args（AmendWorkflow 无 args 参数，必填参工作流修订即秒退 `ok:false`；循环内字面量 actor 名第二轮必 DuplicateActorName）+ reference-dev-flow-workflow（全局脚本 dev-flow.dwf.ts 七阶段骨架与迭代史，含改脚本编译校验法与模板字面量反引号截断 TS1005 坑）升全局；pitfall-git-commit-message-backticks-gitbash 的 commit -m 变体（信息静默缺段，一律 -F 文件）并入全局 pitfall-bash-backtick-inline-corruption 后删副本；pitfall-bash-python-write-not-persisted 与全局 pitfall-sandbox-python-write-not-persisted（20260923 并行会话新版）重复，删项目副本
 
+**第十六次精简升级（2026-09-24，5 个归档 + 1 个原地瘦身）**：console-capture-zero-output-flush（O-70 T-ConsolePendingFlush 已交付 `dc7e69a`）+ enhanced-capture-gates-and-consent-scope（O-66 引导链随交付；O-73 路线 A 已实施 `1597521`，归档注记录其推翻文中「均未实施」）+ reference-acp-session-verification（⑯ 全四项闭合 `24d6e33`）归 bug-fixes 3 个；pitfall-xmltext-cdata-literal（hbm CDATA 缺口已修 dev `9c0c9e7`）+ pitfall-docker-guard-hangs-indefinitely（处置口径已沉淀 AGENTS.md 与测试约定）归 pitfalls 2 个——后两者系并行会话新建的漏索引孤儿，本次一并补账；mcp-tools-live-test-and-open-bugs 原地瘦身（2 bug 已修删细节留实测口径，filePath 段更新为 T-McpFilePathUnify `fecd7cb` 统一后口径）。另：project-pending-plans 瘦身（30KB→约 10KB，深夜批次收口债销案、合流债刷新=dev 领先 52 笔+master 独有 9 笔 docs 未推）
+
 ---
 
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 46（含 MEMORY.md） |
-| 全局记忆 global/ | 113 |
-| 归档 archive/ | 254（bug-fixes 172 + pitfalls 79 + methodology 1 + user-context 1 + README） |
-| **合计** | **413** |
+| 项目 memory（保留） | 49（含 MEMORY.md） |
+| 全局记忆 global/ | 115 |
+| 归档 archive/ | 259（bug-fixes 175 + pitfalls 81 + methodology 1 + user-context 1 + README） |
+| **合计** | **423** |

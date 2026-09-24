@@ -18,6 +18,11 @@
 # 方案 A 定案（20260923 用户）：单包 + 本基线，Marketplace 警告为已知问题集（不阻断上架、
 # 运行期已论证安全），若未来 JetBrains 提供官方跨版本机制再跟进。
 #
+#
+# 【T-Mkt251Probe 20260924】2025.1.7.2 那条已查明=「MCP 工具本体」族（与 243 的 Package 块
+# 逐字同源：McpExpectedError/McpCallInfoKt/McpToolset 三类，251 内置 mcpserver 为 2025.2 前
+# 旧形态 1.0.x 无新 API）——在线口径本地复现 1 problem 与 Marketplace 页面一致，登记于下方
+# IU-251 条目。2026.3 eap（263.5153）待其正式版后同样复现登记。
 # 【T-MarketCompatProxy 20260923 深夜大清扫】②③ 动态代理化落地（FilterProvider/ACP impl 改
 # Class.forName + Proxy + 程序化注册，字节码零 ml-llm/mcpserver/platform-acp 引用）后：
 # 253 → Compatible（9 块全清）、262 internal 7→1→0、243 5→2。原 253 全部 5 条与 243 的
@@ -42,3 +47,9 @@ IU-243.28141.41	Method cn\.song\.mybatisplus\.visualizer\.mcp\.McpToolsetSupport
 # （基类 implements McpToolset + McpExpectedError/McpCallInfoKt）在 243 无可解析 API——
 # 「MCP 工具本体」族，单包形态下不可消除；片段加载后按 C 隔离，243 不支持 MCP 是设计口径。
 IU-243.28141.41	Package 'com\.intellij\.mcpserver'
+
+# ---------- IU-251（2025.1）：1 块（T-Mkt251Probe 本地复现，T-kt251 判定=与 243 的 Package 块同族） ----------
+# 251 内置 mcpserver 为 2025.2 前旧形态（无 McpToolset 新 API），McpToolsetSupport 本体三类
+# （McpExpectedError/McpCallInfoKt/McpToolset）在 251 无可解析 API——「MCP 工具本体」族，
+# 单包形态下不可消除；片段加载后按 C 隔离，251 不支持 MCP 新形态是设计口径。
+IU-251.29188.72	Package 'com\.intellij\.mcpserver'

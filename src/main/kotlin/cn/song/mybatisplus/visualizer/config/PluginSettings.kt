@@ -51,10 +51,11 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var formatSql: Boolean = true,
 
         /**
-         * 空参数填充策略（T-PT-04）：参数值为空时的回填形态——[EMPTY_PARAM_FILL_NULL]（默认，
-         * 渲染 `NULL`）或 [EMPTY_PARAM_FILL_EMPTY_STRING]（渲染 `''`）。
+         * 空参数填充策略（T-PT-04 / O-79 三态化）：参数值为空时的回填形态——
+         * [EMPTY_PARAM_FILL_PLACEHOLDER]（默认，保留 `?` 待填提示）/[EMPTY_PARAM_FILL_NULL]（渲染
+         * `NULL`）/[EMPTY_PARAM_FILL_EMPTY_STRING]（渲染 `''`）。
          * 消费点 = SqlPreviewPanel.renderParamValue 的空值分支，且仅对**带 mapper 签名类型信息**的
-         * 参数行生效（无类型信息路径保留 `?` 占位提示，行为与升级前一致）。
+         * 参数行生效（无类型信息路径恒 `?`，宁缺勿错）。
          */
         var emptyParamFill: String = DEFAULT_EMPTY_PARAM_FILL,
 
@@ -548,14 +549,17 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         // ---------- T-PT-04：空参数填充策略 ----------
 
-        /** 空参数填充策略：NULL 字面量（默认）。 */
+        /** 空参数填充策略：`?` 占位符（O-79 默认——未填写保留待填提示；NULL 会静默过滤行不易察觉）。 */
+        const val EMPTY_PARAM_FILL_PLACEHOLDER = "PLACEHOLDER"
+
+        /** 空参数填充策略：NULL 字面量。 */
         const val EMPTY_PARAM_FILL_NULL = "NULL"
 
         /** 空参数填充策略：空字符串字面量 `''`。 */
         const val EMPTY_PARAM_FILL_EMPTY_STRING = "EMPTY_STRING"
 
-        /** 空参数填充策略默认值（NULL 字面量，贴近 MyBatis 绑定 null 的真实效果）。 */
-        const val DEFAULT_EMPTY_PARAM_FILL = EMPTY_PARAM_FILL_NULL
+        /** 空参数填充策略默认值（O-79 定案：`?` 占位，待填提示醒目；NULL/'' 档换取可直接执行的 SQL）。 */
+        const val DEFAULT_EMPTY_PARAM_FILL = EMPTY_PARAM_FILL_PLACEHOLDER
 
         /** 表名推断策略：驼峰转下划线（默认，对齐 MP，`BikeDeviceInfoEntity` → `bike_device_info`）。 */
         const val INFERENCE_SNAKE = "SNAKE"
