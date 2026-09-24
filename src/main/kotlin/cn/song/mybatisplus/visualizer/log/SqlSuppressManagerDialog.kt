@@ -13,24 +13,30 @@ import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
-import com.intellij.ui.ColoredListCellRenderer
+import com.intellij.openapi.ui.Splitter
 import com.intellij.ui.CollectionListModel
+import com.intellij.ui.JBColor
+import com.intellij.ui.SimpleColoredComponent
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
-import java.awt.Dimension
+import java.awt.Component
 import java.awt.FlowLayout
+import java.awt.GridLayout
 import java.text.SimpleDateFormat
 import java.util.Date
 import javax.swing.Action
+import javax.swing.BorderFactory
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.JTextArea
+import javax.swing.ListCellRenderer
 import javax.swing.ListSelectionModel
+import javax.swing.border.EmptyBorder
 
 /**
  * SQL 屏蔽规则管理对话框（T-SqlSuppress O-69，F5）：左规则列表 + 右只读高亮编辑器。
@@ -95,22 +101,7 @@ class SqlSuppressManagerDialog(
     }
 
     override fun createCenterPanel(): JComponent {
-        ruleList.cellRenderer = object : ColoredListCellRenderer<SqlSuppressRule>() {
-            override fun customizeCellRenderer(
-                list: javax.swing.JList<out SqlSuppressRule>,
-                value: SqlSuppressRule,
-                index: Int,
-                selected: Boolean,
-                hasFocus: Boolean,
-            ) {
-                append(value.patternSummary(), SimpleTextAttributes.REGULAR_ATTRIBUTES)
-                val hits = MpSqlVisualizerBundle.message(
-                    "log.suppress.dialog.hitCount",
-                    ruleManager.hitCount(value.id).toString(),
-                )
-                append("  " + createdAtText(value) + " · " + hits, SimpleTextAttributes.GRAYED_ATTRIBUTES)
-            }
-        }
+        ruleList.cellRenderer = RuleRowRenderer()
         ruleList.selectionMode = ListSelectionModel.SINGLE_SELECTION
         ruleList.addListSelectionListener { event ->
             if (event.valueIsAdjusting || adding) return@addListSelectionListener
@@ -132,10 +123,7 @@ class SqlSuppressManagerDialog(
             })
         }
         val leftPanel = JPanel(BorderLayout()).apply {
-            add(
-                JBScrollPane(ruleList).apply { preferredSize = Dimension(LIST_WIDTH, LIST_HEIGHT) },
-                BorderLayout.CENTER,
-            )
+            add(JBScrollPane(ruleList), BorderLayout.CENTER)
             add(buttonRow, BorderLayout.SOUTH)
         }
 
@@ -155,18 +143,68 @@ class SqlSuppressManagerDialog(
             add(noteArea, BorderLayout.SOUTH)
         }
 
-        // 左右分栏：JSplitPane（com.intellij.ui.Splitter 不在本仓 243 编译 classpath——
-        // 2026-09-23 compileKotlin 实证 Unresolved reference；DataSourceSelector 既有 JSplitPane 先例）
-        return javax.swing.JSplitPane(javax.swing.JSplitPane.HORIZONTAL_SPLIT).apply {
-            leftComponent = leftPanel
-            rightComponent = JPanel(BorderLayout()).apply {
+        // 左右分栏：com.intellij.openapi.ui.Splitter（LogToSqlPanel/SqlPreviewPanel/SqlToJavaPanel 同款
+        // 主题化分栏）。此前误 import com.intellij.ui.Splitter 编译失败，误判「不在 classpath」退回原生
+        // JSplitPane——其分隔条在新 UI 深色主题下呈白条（20260924 用户走查截图），换仓内既有 Splitter 根除。
+        return Splitter(false, SPLIT_PROPORTION).apply {
+            firstComponent = leftPanel
+            secondComponent = JPanel(BorderLayout()).apply {
                 add(rightPanel, BorderLayout.CENTER)
                 add(statusLabel, BorderLayout.SOUTH)
             }
-            resizeWeight = SPLIT_PROPORTION.toDouble()
-            dividerLocation = (DIALOG_WIDTH * SPLIT_PROPORTION).toInt()
-            isOneTouchExpandable = false
-            border = null
+        }
+    }
+
+    /**
+     * 规则行渲染器：对齐日志列表（[LogEntryListCellRenderer]）的两行形态——SQL 主体行在上、
+     * 元信息行（创建时间 · 命中计数）在下灰字；行底分隔线与内边距同款
+     * （matte bottom `JBColor.border()` + EmptyBorder）；选中态背景/前景取平台列表选中色。
+     */
+    private inner class RuleRowRenderer :
+        JPanel(BorderLayout()),
+        ListCellRenderer<SqlSuppressRule> {
+
+        private val patternLine = SimpleColoredComponent()
+        private val metaLine = SimpleColoredComponent()
+        private val linesPanel = JPanel(GridLayout(0, 1)).apply { isOpaque = false }
+
+        init {
+            isOpaque = true
+            patternLine.isOpaque = false
+            metaLine.isOpaque = false
+            linesPanel.add(patternLine)
+            linesPanel.add(metaLine)
+            add(linesPanel, BorderLayout.CENTER)
+            border = BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
+                EmptyBorder(4, 8, 4, 8),
+            )
+        }
+
+        override fun getListCellRendererComponent(
+            list: javax.swing.JList<out SqlSuppressRule>,
+            value: SqlSuppressRule,
+            index: Int,
+            selected: Boolean,
+            hasFocus: Boolean,
+        ): Component {
+            background = if (selected) list.selectionBackground else list.background
+            val fg = if (selected) list.selectionForeground else list.foreground
+            patternLine.foreground = fg
+            patternLine.clear()
+            patternLine.append(value.patternSummary(), SimpleTextAttributes.REGULAR_ATTRIBUTES)
+            metaLine.foreground = if (selected) fg else UIUtil.getInactiveTextColor()
+            metaLine.clear()
+            metaLine.append(createdAtText(value), SimpleTextAttributes.GRAYED_SMALL_ATTRIBUTES)
+            metaLine.append("  ·  ", SimpleTextAttributes.GRAYED_SMALL_ATTRIBUTES)
+            metaLine.append(
+                MpSqlVisualizerBundle.message(
+                    "log.suppress.dialog.hitCount",
+                    ruleManager.hitCount(value.id).toString(),
+                ),
+                SimpleTextAttributes.GRAYED_SMALL_ATTRIBUTES,
+            )
+            return this
         }
     }
 
@@ -332,8 +370,6 @@ class SqlSuppressManagerDialog(
     companion object {
         const val DIALOG_WIDTH = 760
         const val DIALOG_HEIGHT = 480
-        const val LIST_WIDTH = 300
-        const val LIST_HEIGHT = 400
         const val SPLIT_PROPORTION = 0.38f
     }
 }
