@@ -49,12 +49,6 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 **MCP：AI agent 真实调用插件工具**（AI Assistant 的 Codex agent 经 ACP 调用 `sqlv_*` 工具并留痕，agent 拿到确定性可执行 SQL）
 <img src="docs/images/demo-10-mcp-agent.gif" width="720" alt="MCP 工具真实调用演示"/>
 
-**SQL 日志聚焦页签**（右键「聚焦调用方方法」/「按请求聚焦」，页签可多开，只看该方法 / 该请求发出的 SQL）
-<img src="docs/images/demo-11-sql-log-focus.gif" width="720" alt="SQL 日志聚焦页签演示"/>
-
-**XML 预览一键生成回滚 SQL**（INSERT 推导整行等值谓词 DELETE，弹窗展示一键复制）
-<img src="docs/images/demo-12-xml-preview-rollback.gif" width="720" alt="XML 预览回滚 SQL 演示"/>
-
 > 更多功能细节与在线文档见 [官网](https://sql-visualizer.jvtools.cn)。
 
 ## 痛点分析
