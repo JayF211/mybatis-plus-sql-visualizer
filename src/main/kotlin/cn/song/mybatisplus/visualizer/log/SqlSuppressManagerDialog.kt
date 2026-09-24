@@ -24,6 +24,7 @@ import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
+import java.awt.Dimension
 import java.awt.Component
 import java.awt.FlowLayout
 import java.awt.GridLayout
@@ -112,10 +113,17 @@ class SqlSuppressManagerDialog(
     init {
         title = MpSqlVisualizerBundle.message("log.suppress.dialog.title")
         setCancelButtonText(MpSqlVisualizerBundle.message("log.suppress.dialog.close"))
+        // T-SqlSuppressDialogResize（O-80，20260924 用户走查）：DialogWrapper 默认 fixed 不可拖拽缩放，
+        // 显式开启（照 ErrorReportDialog「拖拽：isResizable=true + getDimensionServiceKey 记忆尺寸」惯例）；
+        // 有记忆时 DimensionService 直接给尺寸，setSize 仅作首次打开（无记忆）的缺省。
+        isResizable = true
         init()
         setSize(DIALOG_WIDTH, DIALOG_HEIGHT)
         refreshRuleList(select = null)
     }
+
+    /** O-80：尺寸/位置记忆（RollbackSqlDialog/SqlPreviewDialog/ErrorReportDialog 同惯例，零自持久化）。 */
+    override fun getDimensionServiceKey(): String = DIMENSION_SERVICE_KEY
 
     override fun createCenterPanel(): JComponent {
         ruleList.cellRenderer = RuleRowRenderer()
@@ -166,13 +174,17 @@ class SqlSuppressManagerDialog(
         // 左右分栏：com.intellij.openapi.ui.Splitter（LogToSqlPanel/SqlPreviewPanel/SqlToJavaPanel 同款
         // 主题化分栏）。此前误 import com.intellij.ui.Splitter 编译失败，误判「不在 classpath」退回原生
         // JSplitPane——其分隔条在新 UI 深色主题下呈白条（20260924 用户走查截图），换仓内既有 Splitter 根除。
-        return Splitter(false, SPLIT_PROPORTION).apply {
+        val centerPanel = Splitter(false, SPLIT_PROPORTION).apply {
             firstComponent = leftPanel
             secondComponent = JPanel(BorderLayout()).apply {
                 add(rightPanel, BorderLayout.CENTER)
                 add(statusLabel, BorderLayout.SOUTH)
             }
         }
+        // O-80：最小尺寸兜底（SqlPreviewDialog 同款——DialogWrapper 无 setMinimumSize，设在中心面板；
+        // 下限=按钮行不折行 + 编辑器/列表可读，D3 默认 A 单行按钮）
+        centerPanel.minimumSize = Dimension(MIN_WIDTH, MIN_HEIGHT)
+        return centerPanel
     }
 
     /**
@@ -430,6 +442,13 @@ class SqlSuppressManagerDialog(
     companion object {
         const val DIALOG_WIDTH = 760
         const val DIALOG_HEIGHT = 480
+
+        /** O-80：DimensionService 键（尺寸/位置记忆；getDimensionServiceKey 返回）。 */
+        const val DIMENSION_SERVICE_KEY = "mpsv.sqlsuppress.manager.dialog"
+
+        /** O-80：拖拽下限（中心面板 minimumSize；量级取「按钮行不折行+两侧可读」，真机观感定）。 */
+        const val MIN_WIDTH = 560
+        const val MIN_HEIGHT = 360
         const val SPLIT_PROPORTION = 0.38f
     }
 }

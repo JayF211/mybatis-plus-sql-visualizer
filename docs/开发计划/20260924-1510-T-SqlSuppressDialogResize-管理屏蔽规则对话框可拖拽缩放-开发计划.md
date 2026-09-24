@@ -55,4 +55,15 @@
 
 ## 七、实施记录
 
-（待实施后回填；实施分支 = master，用户点名。）
+（2026-09-24 主分支实施完成，用户指令「主分支直接实施」。）
+
+| 步骤 | 落地 |
+|---|---|
+| F1 `isResizable = true` | init 内，注释引 ErrorReportDialog 惯例原话；`setSize` 保留为首次打开（无 DimensionService 记忆）缺省 |
+| F2 尺寸记忆 | `getDimensionServiceKey() = "mpsv.sqlsuppress.manager.dialog"`（DIMENSION_SERVICE_KEY 常量）——取代原 O-69 计划 F5「记住尺寸不做」表述（D1=A） |
+| F3 最小尺寸兜底 | 中心面板（Splitter）`minimumSize = 560×360`（MIN_WIDTH/MIN_HEIGHT 常量），SqlPreviewDialog 同款（DialogWrapper 无 setMinimumSize）；D3 默认 A（按钮行维持单行，真机观感待用户复查） |
+| F4 回归 | 定向 Manager 16/0 + Buffer 54/0 + Models 11/0（编译+屏蔽链无回归；本改动不触闸门口径） |
+
+**过程记录**：①`Dimension` import 曾在白边返修（去 preferredSize hack）时随之清掉，F3 落地时补回（编译期红拦截，0 风险）；②沙盒隔离照例（MPSV-SuppressResize，用后还原零残留）。
+
+**真机留人工**（计划 §四 验收 1/2/3 的三态）：拖拽缩放两态可用、重开尺寸记忆、最小尺寸下按钮行不折行错乱——headless 测不到观感，待用户重出包（runIde/zip）复查；若按钮行挤压错乱触发 D3-B（换 WrapLayout），另记一笔小改。
