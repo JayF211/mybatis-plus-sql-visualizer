@@ -44,6 +44,21 @@ tasks.withType<Test>().configureEach {
     if (providers.gradleProperty("testGc").getOrElse("") == "parallel") {
         jvmArgs("-XX:+UseParallelGC")
     }
+    // T-TestPerf5：SerialGC 补测档 -PtestGc=serial（缺省 G1 不动）。ParallelGC 实验未覆盖的
+    // 形态：4 路并发分片 JVM 各自按 12 逻辑核铺 GC 线程面互抢时，单线程 GC 反而可能占优；
+    // 代价是默认 512m 堆上单次停顿变长。收益 <5% 不落默认（对照实测结论回填此处）。
+    if (providers.gradleProperty("testGc").getOrElse("") == "serial") {
+        jvmArgs("-XX:+UseSerialGC")
+    }
+    // T-TestPerf5：测试 JVM 线程面治理 -PtestProcCap=N → -XX:ActiveProcessorCount=N（缺省
+    // 不动）。6C12T 上 4 路并发测试 JVM 每路都按 12 逻辑核自适应铺线程面（G1 GC 线程
+    // ≈12/路、C2 编译线程、ForkJoinPool commonPool），片间互抢是 execSum 并发膨胀的主要
+    // 嫌疑分量（T-TestPerf4 实测 3 片 601s→4 片 687s，+14%）。钉到 N 后 GC/编译/公共池
+    // 线程一并收窄。语义中立性：grep 实测仓内 src/ 无 availableProcessors 依赖（2026-09-25），
+    // EDT 单线程模型不受影响。收益 <5% 不落默认（对照实测结论回填此处）。
+    providers.gradleProperty("testProcCap").orNull?.toIntOrNull()?.let {
+        jvmArgs("-XX:ActiveProcessorCount=$it")
+    }
     // Docker 测试默认关闭（20260923 用户定例）：daemon 半活态会让 testcontainers 的 ping
     // 探测阻塞无超时（runCatching 兜不住阻塞形态，20260923 发行门禁实录三片挂起 40 分钟），
     // daemon 活着时真容器方言验证的 pull/run 耗时也不可控。只有显式 -PmpvDockerTests=true
