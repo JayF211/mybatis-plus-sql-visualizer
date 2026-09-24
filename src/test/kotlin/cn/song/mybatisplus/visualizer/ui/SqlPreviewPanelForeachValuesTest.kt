@@ -24,15 +24,21 @@ class SqlPreviewPanelForeachValuesTest : BasePlatformTestCase() {
 
     private var panel: SqlPreviewPanel? = null
 
+    private var oldEmptyParamFill: String = PluginSettings.DEFAULT_EMPTY_PARAM_FILL
+
     override fun setUp() {
         super.setUp()
         runCatching { PluginSettings.getInstance().state.formatSql = false }
+        oldEmptyParamFill = runCatching { PluginSettings.getInstance().state.emptyParamFill }
+            .getOrDefault(PluginSettings.DEFAULT_EMPTY_PARAM_FILL)
+        runCatching { PluginSettings.getInstance().state.emptyParamFill = PluginSettings.DEFAULT_EMPTY_PARAM_FILL }
     }
 
     override fun tearDown() {
         DocWriteContext.writeAllowedProbe = null
         runCatching { panel?.clear() }
         runCatching { PluginSettings.getInstance().state.formatSql = true }
+        runCatching { PluginSettings.getInstance().state.emptyParamFill = oldEmptyParamFill }
         panel = null
         super.tearDown()
     }
@@ -80,11 +86,10 @@ class SqlPreviewPanelForeachValuesTest : BasePlatformTestCase() {
     fun testForeachValuesFullRenderUnderWriteUnsafeDeferral() {
         val p = openPanel()
         val field = p.paramFieldForTest(0)!!
-        // 未输入值：item 键被既有链路播种空串，元素类别修复后按 T-PT-04 契约出 NULL
-        // （与普通参数「空输入 + 签名类型 → NULL」一致，见 SqlPreviewPanelParamKindTest）
+        // 未输入值：item 键被既有链路播种空串，占位档（默认）下保留 ? 待填提示
         assertTrue(
             "初始默认展开 2 项：${sqlText(p)} / paramValues=${p.paramValuesForTest()}",
-            sqlText(p).contains("IN (NULL,NULL)"),
+            sqlText(p).contains("IN (?,?)"),
         )
         // write-unsafe 注入：renderSql 走重投递（生产防抖 Timer 同构），值播种不得读滞后键清单
         DocWriteContext.writeAllowedProbe = { false }
@@ -96,7 +101,7 @@ class SqlPreviewPanelForeachValuesTest : BasePlatformTestCase() {
 
     fun testForeachValuesDefaultTwoItemsKept() {
         val p = openPanel()
-        // 不动输入框：默认 2 项，空值按 T-PT-04 出 NULL
-        assertTrue(sqlText(p).contains("IN (NULL,NULL)"))
+        // 不动输入框：默认 2 项，占位档下保留 ? 待填提示
+        assertTrue(sqlText(p).contains("IN (?,?)"))
     }
 }
