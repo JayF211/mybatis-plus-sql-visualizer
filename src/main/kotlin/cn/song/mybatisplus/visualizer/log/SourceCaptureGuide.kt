@@ -24,7 +24,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * - 已开启已授权（[GuideBranch.Legacy]）：维持原两出口（打开设置 / 注入拦截器），此时缺位置
  *   另有原因（帧过滤前缀命中 / 应用未重启 / agent 未挂载），message 末尾附一行实时状态（D1）。
  *
- * 注入结果四类弹窗亦收敛于此（原设置页硬编码文案 i18n 化迁入）。
+ * 注入结果四类弹窗亦收敛于此（原设置页硬编码文案 i18n 化迁入）；其中 UnsupportedProject 在
+ * EnhanceFirst 分支复用本编排引导开启增强捕获（20260924 定案：不再指路手动配置），Legacy 维持普通警告。
  */
 object SourceCaptureGuide {
 
@@ -180,11 +181,18 @@ object SourceCaptureGuide {
                 false
             }
             is InjectionResult.UnsupportedProject -> {
-                Messages.showWarningDialog(
-                    project,
-                    MpSqlVisualizerBundle.message("log.inject.unsupported"),
-                    title,
-                )
+                val state = PluginSettings.getInstance().state
+                if (decideActions(state.enhancedCaptureEnabled, state.enhancedCaptureConfirmed) ==
+                    GuideBranch.EnhanceFirst
+                ) {
+                    showUnsupportedWithEnhanceGuide(project, title)
+                } else {
+                    Messages.showWarningDialog(
+                        project,
+                        MpSqlVisualizerBundle.message("log.inject.unsupported"),
+                        title,
+                    )
+                }
                 false
             }
             is InjectionResult.CannotDetectStructure -> {
@@ -198,5 +206,26 @@ object SourceCaptureGuide {
             // T-ModPick：用户在模块勾选弹框取消——静默返回，无结果弹窗（用户主动退出非异常态）
             InjectionResult.Cancelled -> false
         }
+    }
+
+    /**
+     * 注入识别不了项目类型时的兜底引导（20260924 定案）：不再指路手动配置示例（对用户太重），
+     * 默认按钮让位「开启增强捕获」——agent 通道不依赖项目类型、不改工程代码，与缺位置引导
+     * （[showMissingSourceDialog]）复用同一 [enableEnhancedCapture] 编排；取消/关闭静默返回。
+     * 仅 EnhanceFirst 分支进入（Legacy 已开启已授权，「开启增强捕获」不再是有效出口，维持普通警告）。
+     */
+    private fun showUnsupportedWithEnhanceGuide(project: Project, title: String) {
+        val rc = Messages.showDialog(
+            project,
+            MpSqlVisualizerBundle.message("log.inject.unsupported.enhanceFirst"),
+            title,
+            arrayOf(
+                MpSqlVisualizerBundle.message("log.jump.guide.enableEnhanced"),
+                MpSqlVisualizerBundle.message("log.jump.guide.cancel"),
+            ),
+            0,
+            Messages.getWarningIcon(),
+        )
+        if (rc == 0) enableEnhancedCapture(project)
     }
 }

@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 
@@ -97,6 +98,7 @@ class SourceCaptureGuideChoiceTest : BasePlatformTestCase() {
             "log.inject.title",
             "log.inject.alreadyExists",
             "log.inject.unsupported",
+            "log.inject.unsupported.enhanceFirst",
             "log.inject.cannotDetect",
             "log.inject.noProject",
         )) {
@@ -108,6 +110,17 @@ class SourceCaptureGuideChoiceTest : BasePlatformTestCase() {
         val formatted = MpSqlVisualizerBundle.message("log.inject.success", "A.java", "B.java", "com.example")
         assertNotEquals("log.inject.success", formatted)
         assertTrue("success 文案参数未全部就位：$formatted", !formatted.contains("{0}") && !formatted.contains("{1}") && !formatted.contains("{2}"))
+    }
+
+    fun test注入不支持文案已去手动配置指引并转向增强捕获() {
+        // 20260924 定案：识别不了项目类型不再让用户参考手动配置，转向引导开启增强捕获
+        val base = MpSqlVisualizerBundle.message("log.inject.unsupported")
+        assertFalse("基础文案不应再含手动配置指引：$base", base.contains("手动配置") || base.contains("Manual setup"))
+        assertFalse("基础文案不应再含 docs 示例路径：$base", base.contains("docs/"))
+        val enhanceFirst = MpSqlVisualizerBundle.message("log.inject.unsupported.enhanceFirst")
+        assertTrue("enhanceFirst 文案应推荐增强捕获：$enhanceFirst", enhanceFirst.contains("增强捕获") || enhanceFirst.contains("Enhanced capture"))
+        assertTrue("enhanceFirst 文案应交代重启生效：$enhanceFirst", enhanceFirst.contains("重启") || enhanceFirst.contains("restart"))
+        assertTrue("enhanceFirst 文案不应再含手动配置指引：$enhanceFirst", !enhanceFirst.contains("手动配置") && !enhanceFirst.contains("Manual setup"))
     }
 
     fun test多模块聚合成功键有真实文案() {
