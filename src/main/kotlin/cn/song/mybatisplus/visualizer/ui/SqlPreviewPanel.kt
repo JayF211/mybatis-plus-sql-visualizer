@@ -4227,8 +4227,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun renderParamValue(v: String?, hint: ParamHint?, source: String? = null): String {
         // 未填写（paramValues 未播种的 source，非标准路径）保留 `?` 兜底提示
         if (v == null) return "?"
-        // T-PT-04：空输入按设置策略出 NULL / ''（默认 NULL）——**仅对带签名类型信息的参数**生效；
-        // 无类型信息（UNKNOWN）保留 `?` 占位提示，行为与升级前一致（验收 3）
+        // T-PT-04 / O-79：空输入按设置策略出 ?（默认占位档）/ NULL / ''——**仅对带签名类型信息的
+        // 参数**生效；无类型信息（UNKNOWN）恒 `?` 占位提示（宁缺勿错）
         if (v.isBlank()) return if (hasSignatureTypeInfo(source)) emptyParamLiteral() else "?"
         val like = hint?.likePosition
         // M19.6（用户实测）：IN 列表多值回填——逗号分割，每个值独立渲染（引号规则同单值），
@@ -4253,12 +4253,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /**
-     * T-PT-04：空参数填充字面量——按设置「空参数填充策略」出 `NULL`（默认）或 `''`。
-     * 作用于 [renderParamValue] 的空值分支，且仅当参数带签名类型信息（[hasSignatureTypeInfo]）。
+     * T-PT-04 / O-79：空参数填充字面量——按设置「空参数填充策略」出 `?`（默认占位档，保留待填
+     * 提示，SQL 不臆造语义）/ `NULL` / `''`。作用于 [renderParamValue] 的空值分支，且仅当参数带
+     * 签名类型信息（[hasSignatureTypeInfo]）；未知策略值按占位档兜底。
      */
-    private fun emptyParamLiteral(): String =
-        if (PluginSettings.getInstance().state.emptyParamFill == PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING) "''"
-        else "NULL"
+    private fun emptyParamLiteral(): String = when (PluginSettings.getInstance().state.emptyParamFill) {
+        PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING -> "''"
+        PluginSettings.EMPTY_PARAM_FILL_NULL -> "NULL"
+        else -> "?"
+    }
 
     /** T-PT-04：参数是否带签名类型信息（XML/注解 mapper 参数行）——决定空输入是否走填充策略。 */
     private fun hasSignatureTypeInfo(source: String?): Boolean =
