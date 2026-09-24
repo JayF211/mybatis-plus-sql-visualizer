@@ -44,18 +44,22 @@ tasks.withType<Test>().configureEach {
     if (providers.gradleProperty("testGc").getOrElse("") == "parallel") {
         jvmArgs("-XX:+UseParallelGC")
     }
-    // T-TestPerf5：SerialGC 补测档 -PtestGc=serial（缺省 G1 不动）。ParallelGC 实验未覆盖的
-    // 形态：4 路并发分片 JVM 各自按 12 逻辑核铺 GC 线程面互抢时，单线程 GC 反而可能占优；
-    // 代价是默认 512m 堆上单次停顿变长。收益 <5% 不落默认（对照实测结论回填此处）。
+    // T-TestPerf5：SerialGC 档 -PtestGc=serial。2026-09-25 warm 对照实测：serial 两跑 177s/173s
+    // vs G1 基线两跑 194s/180s（均值 -6.4%，达 5% 门槛且复跑确认），各片 exec 失衡 ±10~13% 收到
+    // ±4.4%；execSum 持平（≈600s）——收益来自 4 路并发 JVM 的 GC 线程面互抢消除后的片间重叠
+    // 质量，不是总活变少。默认已落 gradle.properties `testGc=serial`（回退=-PtestGc=parallel）。
+    // 注意与 T-TestPerf4 销账的 ParallelGC 是两回事：ParallelGC 线程面与 G1 同样大，无收益；
+    // SerialGC 是「无线程面」形态，恰好命中多 JVM 并发场景。负载形态再变时按同法复测。
     if (providers.gradleProperty("testGc").getOrElse("") == "serial") {
         jvmArgs("-XX:+UseSerialGC")
     }
     // T-TestPerf5：测试 JVM 线程面治理 -PtestProcCap=N → -XX:ActiveProcessorCount=N（缺省
-    // 不动）。6C12T 上 4 路并发测试 JVM 每路都按 12 逻辑核自适应铺线程面（G1 GC 线程
-    // ≈12/路、C2 编译线程、ForkJoinPool commonPool），片间互抢是 execSum 并发膨胀的主要
-    // 嫌疑分量（T-TestPerf4 实测 3 片 601s→4 片 687s，+14%）。钉到 N 后 GC/编译/公共池
-    // 线程一并收窄。语义中立性：grep 实测仓内 src/ 无 availableProcessors 依赖（2026-09-25），
-    // EDT 单线程模型不受影响。收益 <5% 不落默认（对照实测结论回填此处）。
+    // 不动）。2026-09-25 对照实测：cap3 189s / cap4（该跑中途 1 例 FatalPassthroughTest 回调
+    // 计数断言失败，定向复跑 cap4×2 + 裸跑×2 全绿不复现——负载形态敏感的时序竞态嫌疑，非
+    // 确定性语义影响）vs G1 基线均值 187s——无收益（<5%），路线销账不落默认；「线程面超额
+    // 认领是争用主因」假说证伪（片间膨胀主分量不在 JVM 线程层，内存带宽/调度更可能）。
+    // 开关保留供负载形态变化后复测。语义中立性前提：grep 实测仓内 src/ 无 availableProcessors
+    // 依赖（2026-09-25），EDT 单线程模型不受影响。
     providers.gradleProperty("testProcCap").orNull?.toIntOrNull()?.let {
         jvmArgs("-XX:ActiveProcessorCount=$it")
     }
@@ -97,6 +101,8 @@ fun listSuiteXmls(dir: File): List<File> =
 // T-TestPerf4（2026-09-24）在片执行 ~210s 的新负载下 warm 重测：3 片 3m57s / 4 片 3m30s、
 // 3m16s / 5 片 3m36s——固定开销占比下降后拐点右移到 4 片，默认改 4。代价是 execSum 总和
 // 随并发度膨胀（601→687→858s），5 片起竞争损耗超过切分收益；负载形态再变时按同法重测。
+// T-TestPerf5（2026-09-25）：5 片×SerialGC 复测 186s 仍回劣（4 片×serial 同日 173~177s；
+// execSum 718s，+20% 并发膨胀不随 GC 换型消失）——4 片定案维持。
 // 顶层声明——分片注册（testIde 块内）与聚合报告（testShards 任务）两处共用。
 val testShardCount = providers.gradleProperty("testShardCount").orNull
     ?.toIntOrNull()?.coerceIn(1, 6) ?: 4
