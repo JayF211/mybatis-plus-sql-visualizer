@@ -154,4 +154,40 @@ commonDao.findByQuery(
 
 （实施者回填；工作树、提交链、门禁读数按批次收口清单七步登记）
 
-- 复现探针现状：`HqlConverterBarePropertyReproTest.kt` 已在主仓工作树（未提交，`??` 状态），基线 `testFast` 两用例绿（钉现状）。实施时先翻转断言为红，再随 T-01/T-02 变绿。
+### 2026-09-23 实施回填（主控亲自实施，未派子代理）
+
+**工作树与提交链**：
+
+- 工作树 `F:/code/Java/Gitee/SongRenShuo/mpsv-hql-noalias-prop`，分支 `t-hql-noalias-prop`（扁平名，自 master `69a4028` 切出）。
+- `69a4028` docs(计划)：计划文件 + 现状探针（master 上先行提交）。
+- `f025a67` fix(jpa)：T-01 + T-02 实施 + 探针转正（`git mv` 为 `HqlBarePropertyMappingTest`）+ 契约改造。
+
+**生产代码落点**（收敛在 `converter/jpa/JpaAliasTableResolver.kt` 单文件，管线结构未动）：
+
+- T-02：`mapProperties` 三分支中新增「owner 为空（qualifier 非别名）且 `column.embeddedParent == qualifier`」分支，产出裸列名；带别名三段形态走既有 `isFlattenedEmbeddedPath` 分支不变。
+- T-01：新增 `BARE_WORD_OR_LITERAL`（字面量分支在前 + 函数调用负前瞻）、`BARE_WORD_EXCLUDED`（TRUE/FALSE/EMPTY/MEMBER/ESCAPE/SOME/ANY/ALL/OF）与 `mapBareProperties`；排除表还含文件顶层 `CLAUSE_KEYWORDS`（自 `JpaAliasTableResolver` 提为顶层共用）与 `scope.knownQualifiers`。
+- `mapProperties` 尾部串接：`appendUnmappedOnHint(mapBareProperties(mapped, rootTable, scope), scope)`——尾注生成仍在裸词映射之后，尾注文本不进裸词扫描。
+- KDoc：类 KDoc 契约变更登记（O-57 保守契约推翻 + 既有红线仍成立）；`CLAUSE_KEYWORDS` 顶层化注释。
+
+**测试落点**：
+
+- `HqlBarePropertyMappingTest`（纯 JUnit，手工 TableInfo，免平台依赖）：用户场景 2 例 + 负例矩阵 6 例 + UPDATE 1 例 + 幂等 1 例，共 10 例。
+- `HqlAliasColumnMappingTest`：`test隐式作用域_裸属性不回归` 改造为 `test隐式作用域_裸属性映射为列名`（期望 `be_auto_zone = true`），新增 `testJpql链路_裸属性一致`、`testUpdate_SET裸属性映射`。
+
+**读数**（`test --tests` 两类定向）：
+
+- RED 基线（实施前）：31 条跑、8 红，全红在预期断言——现状产物原样保留 `beAutoZone = true` / `stationCode = ?` / `set beAutoZone = ?`（三类形态均实证）。
+- 反向验证（临时摘除 T-01/T-02 修复分支，源内标记 REVERSE-VERIFY 后恢复）：**同样 8 条红**，与 RED 基线形态一致——绿由两修复带来，非断言空转。
+- 实施后：定向 **BUILD SUCCESSFUL 全绿**（31 条）；`testFast` 全桶 **3172 条，1 失败**——失败为 `GuardSelfTestCoverageMetaGuardTest`（`mcp/McpGateFilterRegistrationGuardTest.kt` 未登记进 GUARD_CLASSES），**master 基线自带**（69a4028 已含该类，非本任务引入，留相关会话收口）；本任务新增 10 例已进桶（3162→3172）。
+- 全量门禁：**未执行**——只读收口代理按预案在第 2 步停止：`timeout 10/15 docker info`、`docker version` 三次探测全部超时挂起（引擎半活态），照「半活态跑全量会无限挂死」定例不跑 `testShards`。收口代理登记已正常注销。**权威全量门禁缺口未闭合**，待 docker daemon 恢复后可直接重派收口代理（步骤：register 独立沙盒 → docker info 验活 → testShards → done）；当前绿读数止于定向 31 条全绿 + `testFast` 全桶 3172 条（残余风险面主要是 ui 包平台测试类，其中走 HqlConverter 生产链的形态已由 `HqlAliasColumnMappingTest` 的 project 形态用例定向覆盖）。
+
+**实施过程中的坑（留档）**：
+
+1. `testFast` 不兼容 `--tests` 过滤：`No tests found for given includes`（划桶 include 与命令行 filter 组合后为空）。定向请用标准 `test --tests`；`testFast` 只裸跑全桶。
+2. 新测试类「跑不到」的排查顺序：先查 `@Test` 注解是否真的写了（本次 Write 重写时漏注解，JUnit4 发现器判「无测试」，产物 class 二进制里无 `org/junit/Test` 字符串可作判据——javap 只显方法不显注解，用 grep 查 class 二进制），再查配置缓存/划桶。
+3. 工作树副本的 Edit 前必须先 Read 工作树路径（此前读过的是主仓路径，Edit 工具按路径校验）。
+
+**遗留与移交**：
+
+- `GuardSelfTestCoverageMetaGuardTest` 基线红：MCP 守卫类登记缺口，属 MCP 相关会话任务面，本任务不动。
+- demo 侧复验（用户无别名形态真机 runIde 走查）：待合并后由用户确认，不阻塞合并。

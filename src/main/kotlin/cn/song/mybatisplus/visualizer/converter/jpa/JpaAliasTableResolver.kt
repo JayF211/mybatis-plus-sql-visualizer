@@ -8,6 +8,18 @@ import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.PsiShortNamesCache
 
 /**
+ * 子句关键字表（沿用 [JpaJoinRewriter.normalizeAlias] 的口径，补 JOIN 族与集合运算词）。
+ * O-71 T-01 起由 [JpaAliasPropertyMapper] 共用（裸词替换的排除表之一），故提为文件顶层。
+ */
+private val CLAUSE_KEYWORDS = setOf(
+    "ON", "WHERE", "SET", "GROUP", "ORDER", "HAVING", "INNER", "LEFT",
+    "RIGHT", "OUTER", "CROSS", "FULL", "JOIN", "FETCH", "AS", "UNION", "WITH",
+    "BY", "AND", "OR", "NOT", "IN", "IS", "NULL", "EXISTS", "BETWEEN", "LIKE",
+    "SELECT", "FROM", "DELETE", "UPDATE", "INSERT", "INTO", "VALUES", "NEW",
+    "DISTINCT", "LIMIT", "OFFSET", "USING", "ASC", "DESC", "CASE", "WHEN", "THEN", "ELSE", "END",
+)
+
+/**
  * HQL/JPQL 别名作用域解析产物（O-57）。
  *
  * @param byAlias 别名（以及无别名表的实体名/表名自身）→ 该实体的表信息；属性映射按限定符分派到它。
@@ -66,15 +78,6 @@ internal object JpaAliasTableResolver {
     private val TABLE_REFERENCE = Regex(
         "(?i:\\b(?:FROM|JOIN)\\s+)([a-zA-Z_][a-zA-Z0-9_.\$]*)" +
             "(?:\\s+AS\\s+([a-zA-Z_][a-zA-Z0-9_]*)|\\s+([a-zA-Z_][a-zA-Z0-9_]*))?",
-    )
-
-    /** 子句关键字表（沿用 [JpaJoinRewriter.normalizeAlias] 的口径，补 JOIN 族与集合运算词）。 */
-    private val CLAUSE_KEYWORDS = setOf(
-        "ON", "WHERE", "SET", "GROUP", "ORDER", "HAVING", "INNER", "LEFT",
-        "RIGHT", "OUTER", "CROSS", "FULL", "JOIN", "FETCH", "AS", "UNION", "WITH",
-        "BY", "AND", "OR", "NOT", "IN", "IS", "NULL", "EXISTS", "BETWEEN", "LIKE",
-        "SELECT", "FROM", "DELETE", "UPDATE", "INSERT", "INTO", "VALUES", "NEW",
-        "DISTINCT", "LIMIT", "OFFSET", "USING", "ASC", "DESC", "CASE", "WHEN", "THEN", "ELSE", "END",
     )
 
     /**
@@ -160,14 +163,18 @@ internal object JpaAliasTableResolver {
 }
 
 /**
- * 别名作用域属性映射（O-57 T-01/T-02/T-06 的替换核心）。
+ * 别名作用域属性映射（O-57 T-01/T-02/T-06 的替换核心；O-71 T-01/T-02 扩展）。
  *
  * 放在本文件而非两个转换器内，是因为 [HqlConverter] 与 [JpqlConverter] 必须逐字一致——
  * 逻辑只有一份才谈得上「两条链行为一致」。
  *
- * 单遍扫描：每个 `限定符.中间段.属性` 命中时按限定符分派到已解析别名；未命中
- * （裸限定符 / 别名解析不出实体）回落根实体列清单——与改前行为逐字一致，
- * 这是「只收窄不丢失」的落点。
+ * 点号路径单遍扫描：每个 `限定符.中间段.属性` 命中时按限定符分派到已解析别名；未命中
+ * （裸限定符 / 别名解析不出实体）回落根实体列清单。O-71 起该回落不再「原样透传」：
+ * 限定符位是嵌入段（`updateInfo.beDelete`）时剥离，裸属性（无点号的独立词）按根实体列
+ * 清单精确映射——**契约变更**：O-57 以「只收窄不丢失」为由保守排除裸属性（正则要求带
+ * 点号），实测证明该排除使无别名/漏写前缀的 HQL 的 WHERE/SELECT 投影永不映射，产物必为
+ * 无效 SQL，故推翻。O-57 的既有红线（不产生「原本会被替换、现在不替换」的回归）仍然成立：
+ * 本次只新增替换面，点号路径的行为逐字未变。
  */
 internal object JpaAliasPropertyMapper {
 
@@ -204,6 +211,22 @@ internal object JpaAliasPropertyMapper {
     private val PROPERTY_OR_LITERAL = Regex("${STRING_LITERAL.pattern}|${PROPERTY_PATTERN}")
 
     /**
+     * O-71 T-01：裸标识符分支（无点号路径的独立词）——「字面量 | 裸词」交替，字面量分支
+     * 在前且不带捕获组，手法与 [PROPERTY_OR_LITERAL] 一致。词后紧跟 `(` 的负前瞻排除
+     * 函数调用（`count(1)` / `count (1)` 均覆盖）。
+     */
+    private val BARE_WORD_OR_LITERAL =
+        Regex("${STRING_LITERAL.pattern}|\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b(?!\\s*\\()")
+
+    /**
+     * T-01 裸词替换的补充排除表：布尔/常量字面量与 HQL 特有操作词（子句关键字见文件顶层的
+     * [CLAUSE_KEYWORDS]；函数调用已由负前瞻排除）。`OF` 是给 `MEMBER OF` 降级注释里残留词的
+     * 双保险——该注释在本映射之前生成，其内的英文词不参与裸词替换。
+     */
+    private val BARE_WORD_EXCLUDED =
+        setOf("TRUE", "FALSE", "EMPTY", "MEMBER", "ESCAPE", "SOME", "ANY", "ALL", "OF")
+
+    /**
      * `ON <条件>` 区域：到下一个子句关键字为止（跨行，`.*?` 配 DOT_MATCHES_ALL）。
      *
      * 整体 `(?i)`——大小写不敏感必须覆盖**前瞻里的子句关键字**，否则小写 HQL（常态）下
@@ -217,10 +240,10 @@ internal object JpaAliasPropertyMapper {
     )
 
     /**
-     * 把 `限定符.属性` 映射为 `限定符.列名`。
+     * 把 `限定符.属性` 映射为 `限定符.列名`，再对裸属性做同口径映射（O-71 T-01）。
      *
      * @param sql 已完成实体名→表名映射的 SQL（限定符是别名，不受实体名替换影响）
-     * @param rootTable 根实体表信息（未映射别名的兜底来源）
+     * @param rootTable 根实体表信息（未映射别名的兜底来源，也是裸词映射的唯一来源）
      * @param scope 别名作用域（见 [JpaAliasTableResolver]）
      */
     fun mapProperties(sql: String, rootTable: TableInfo, scope: JpaAliasScope): String {
@@ -231,10 +254,16 @@ internal object JpaAliasPropertyMapper {
             val dot = match.groupValues[2]
             val middle = match.groupValues[3]
             val field = match.groupValues[4]
-            val owner = scope.byAlias[qualifier] ?: rootTable
-            val column = owner.columnByField(field)
+            val owner = scope.byAlias[qualifier]
+            val column = (owner ?: rootTable).columnByField(field)
             if (column == null || column.fieldName == column.columnName) {
                 match.value
+            } else if (owner == null && column.embeddedParent == qualifier) {
+                // O-71 T-02：无别名 HQL 下嵌入段占限定符位（`updateInfo.beDelete`）→ 剥离限定符
+                // 产出裸列名（嵌入对象没有自己的表，`updateInfo.BE_DELETE` 在 SQL 语义下被当成
+                // 「库.表」限定）。判据仍是列自身的 embeddedParent；带别名时 qualifier 是真别名
+                // （owner 命中），走下方 isFlattenedEmbeddedPath 分支，行为不变
+                column.columnName
             } else if (isFlattenedEmbeddedPath(middle, column)) {
                 // @Embedded 展平（计划 §六 D2 已实施）：嵌入对象没有自己的表，其字段直接落在宿主表的列上，
                 // 故路径里的嵌入段必须去掉——`pickTicket.updateInfo.createdTime` 的正确产物是
@@ -248,8 +277,40 @@ internal object JpaAliasPropertyMapper {
                 "$qualifier$dot$middle${column.columnName}"
             }
         }
-        return appendUnmappedOnHint(mapped, scope)
+        return appendUnmappedOnHint(mapBareProperties(mapped, rootTable, scope), scope)
     }
+
+    /**
+     * O-71 T-01：裸属性（无点号路径的独立词）→ 列名映射。
+     *
+     * 覆盖两类形态：完全无别名的 HQL（`from WorkstationStatus where stationCode = ...`，用户报障
+     * 场景），与有别名但个别属性漏写前缀的混合形态（`where z.createdTime > :t and beAutoZone = true`）。
+     * 这两类产物此前原样透传，而 Hibernate 真实生成的列名是大写下划线——透传产物执行必报
+     * `Unknown column`，故 O-57 的保守契约（裸属性不替换）被推翻（契约变更登记见类 KDoc）。
+     *
+     * 替换口径从严（误伤面压到最小）：
+     *  - `columnByField` **精确命中**且 `fieldName != columnName` 才替换，不猜命名规则；
+     *  - 子句关键字（[CLAUSE_KEYWORDS]）、布尔/常量词（[BARE_WORD_EXCLUDED]）不替换，
+     *    词后紧跟 `(` 的（函数调用，`count(1)`）由正则负前瞻排除；
+     *  - `scope.knownQualifiers`（FROM/JOIN 出现过的别名、实体名、表名）不替换——防「别名/实体名
+     *    恰好撞字段名」的误伤；
+     *  - 单引号字面量内不替换（与 [PROPERTY_OR_LITERAL] 同款「字面量分支在前」手法；
+     *    未闭合单引号其后裸词照常映射，与点号路径口径一致）；
+     *  - 多别名歧义场景沿用根实体列清单（与既有「未命中回落根实体」原则一致，不猜副表）。
+     *
+     * 替换产物是列名，再次扫描不命中（fieldName 是驼峰、列名是 snake/大写），天然幂等。
+     */
+    private fun mapBareProperties(sql: String, rootTable: TableInfo, scope: JpaAliasScope): String =
+        BARE_WORD_OR_LITERAL.replace(sql) { match ->
+            val word = match.groupValues[1]
+            // 字面量分支（无捕获组）→ 原样返回：引号内的词不是属性引用
+            if (word.isEmpty()) return@replace match.value
+            val upper = word.uppercase()
+            if (upper in CLAUSE_KEYWORDS || upper in BARE_WORD_EXCLUDED) return@replace match.value
+            if (word in scope.knownQualifiers) return@replace match.value
+            val column = rootTable.columnByField(word)
+            if (column == null || column.fieldName == column.columnName) match.value else column.columnName
+        }
 
     /**
      * 该匹配是否为「嵌入对象路径」——即 [column] 是 [middle] 首个嵌入段的展平列。
