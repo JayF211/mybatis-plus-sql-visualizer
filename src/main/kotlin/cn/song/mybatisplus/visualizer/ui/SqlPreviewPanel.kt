@@ -2371,10 +2371,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 // T-M29.5：参数回填引号按 mapper 方法参数 Java 类型判定（XmlParamTypeResolver 注入
                 // model.paramQuotes：DTO 字段 LocalDate→引号/Integer→裸渲染，贴近真实绑定效果）；
                 // 未命中（Map/无类型信息）→ 兜底引号（T-M29.4：日期/字符串列安全，数值列隐式转换等价）
+                // O-81 T-XmlListParamSplit：提示组装抽为 xmlBackfillHints——签名集合参数
+                // （List<String> 等）无条件按逗号多值渲染 + 引号按元素类别派生，
+                // 形态探测（detectInClauseParams）降级为无签名信息参数的兜底通道
                 val inListIndices = detectInClauseParams(sql)
-                val xmlHints = sources.mapIndexed { index, source ->
-                    ParamHint(quote = xml.quoteFor(source) ?: true, inList = index in inListIndices)
-                }
+                val xmlHints = xmlBackfillHints(xml, sources, inListIndices, xmlMappings)
                 showSql(backfillParamsBySource(sql, sources, xmlHints))
             }
             // T-M23-04：批量列级勾选路径——BatchModel.renderSql 按活跃列重建 + 按列序回填
@@ -4181,6 +4182,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * T-Perf-04：单趟 O(N) 扫描——旧实现对每个 `?` 复制并大写化整个前缀（O(L×P)）；
      * 现改为就地回扫（跳过空白 → `(` → 可选一个空格 → `IN`，与旧 trimEnd+endsWith 语义一致），
      * 零分配。
+     *
+     * O-81 T-XmlListParamSplit：`IN` 与 `(` 之间从「可选一个空格」放宽为**任意空白串**——
+     * mapper 排版 `IN\n(`（先红读数实证：升级前漏判 → 集合参数整串单值 `'PI,WP'`）不再漏。
+     * 多 `?` IN 列表仍仅首位命中（foreach 已有逐项回填通道，扩面会双拆，语义钉住不变）。
      */
     internal fun detectInClauseParams(sql: String): Set<Int> {
         val result = mutableSetOf<Int>()
@@ -4191,7 +4196,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             while (j >= 0 && sql[j].isWhitespace()) j--
             if (j >= 0 && sql[j] == '(') {
                 j--
-                if (j >= 0 && sql[j] == ' ') j-- // "IN (" 单空格形态（"IN(" 直接判 N/I）
+                while (j >= 0 && sql[j].isWhitespace()) j--
                 if (j >= 1 && (sql[j] == 'N' || sql[j] == 'n') && (sql[j - 1] == 'I' || sql[j - 1] == 'i')) {
                     result.add(paramIndex)
                 }

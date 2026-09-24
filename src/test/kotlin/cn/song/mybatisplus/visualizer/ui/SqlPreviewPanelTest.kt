@@ -1834,4 +1834,18 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             panel.dispose()
         }
     }
+
+    fun testDetectInClauseParams_IN与括号间任意空白命中() {
+        // O-81 T-XmlListParamSplit（R2）：IN 与 ( 之间换行/制表/多空格均命中——
+        // 升级前只容忍恰一个空格，mapper 常见排版 `IN\n(` 漏判 → 集合参数整串单值渲染
+        val panel = SqlPreviewPanel(project)
+        try {
+            assertEquals(setOf(0), panel.detectInClauseParams("SELECT * FROM t WHERE id IN\n(?)"))
+            assertEquals(setOf(0), panel.detectInClauseParams("SELECT * FROM t WHERE id IN\t(?)"))
+            assertEquals(setOf(0), panel.detectInClauseParams("SELECT * FROM t WHERE id IN  (?)"))
+            assertEquals(setOf(1), panel.detectInClauseParams("SELECT * FROM t WHERE a = ? AND b IN (\n?)"))
+        } finally {
+            panel.dispose()
+        }
+    }
 }

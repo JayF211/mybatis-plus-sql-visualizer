@@ -3,6 +3,8 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.xml.ParamKind
+import cn.song.mybatisplus.visualizer.xml.ParamTypeInfo
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -57,9 +59,12 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
 
     private fun xmlResult(): PreviewResult = xmlResultOf(mapper)
 
-    private fun xmlResultOf(source: String): PreviewResult {
+    private fun xmlResultOf(
+        source: String,
+        paramTypes: Map<String, ParamTypeInfo> = emptyMap(),
+    ): PreviewResult {
         val parsed = XmlMapperParser().parse(source)
-        val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
+        val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors, paramTypes = paramTypes)
         val rendered = model.renderSql()
         return PreviewResult(
             sql = rendered.sql,
@@ -270,6 +275,91 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         val sql = compact(panel.editorForTest()!!.document.text)
         assertTrue("日期参数应带引号：$sql", sql.contains("t.settlement_period >= '2025'"))
         assertTrue("数值参数默认也带引号（隐式转换等价）：$sql", sql.contains("t.dic_credit_status = '2'"))
+        panel.clear()
+    }
+
+    fun testXmlListParamSplitsCommaInputBySignature() {
+        // O-81 T-XmlListParamSplit（R1，用户实测）：List<String> 签名 + `IN (#{taskTypeList})` 直写
+        // 形态（无 foreach，左栏为普通参数行）——输入 PI,WP 应按签名拆分多值渲染。
+        // 升级前：inList 只看 SQL 形态探测，形态漏判即整串单值 `IN ('PI,WP')`
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            xmlResultOf(
+                """
+                <mapper namespace="n">
+                  <select id="s1">
+                    SELECT * FROM t_order WHERE EXISTS (
+                      SELECT 1 FROM t_task task WHERE task.order_id = t_order.id
+                      AND task.type IN (#{taskTypeList})
+                    )
+                  </select>
+                </mapper>
+                """.trimIndent(),
+                paramTypes = mapOf(
+                    "taskTypeList" to ParamTypeInfo(ParamKind.COLLECTION, elementKind = ParamKind.TEXT),
+                ),
+            ),
+        )
+        val field = (0 until 20).mapNotNull { panel.paramFieldForTest(it) }
+            .firstOrNull { it.toolTipText == "#taskTypeList" }
+        assertNotNull("应有 taskTypeList 参数输入行", field)
+        field!!.text = "PI,WP"
+        val sql = compact(panel.editorForTest()!!.document.text)
+        assertTrue("List<String> 输入 PI,WP 应拆分为 IN ('PI', 'WP')：$sql", sql.contains("task.type IN ('PI', 'WP')"))
+        panel.clear()
+    }
+
+    fun testXmlListParamNumberElementsRenderBare() {
+        // O-81：元素类别 NUMBER（List<Long>）→ 拆分后裸渲染（与 O-78 foreach item 派生同口径）
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            xmlResultOf(
+                """
+                <mapper namespace="n">
+                  <select id="s1">
+                    SELECT * FROM t_order WHERE t.move_doc_id IN (#{idList})
+                  </select>
+                </mapper>
+                """.trimIndent(),
+                paramTypes = mapOf(
+                    "idList" to ParamTypeInfo(ParamKind.COLLECTION, elementKind = ParamKind.NUMBER),
+                ),
+            ),
+        )
+        val field = (0 until 20).mapNotNull { panel.paramFieldForTest(it) }
+            .firstOrNull { it.toolTipText == "#idList" }
+        assertNotNull("应有 idList 参数输入行", field)
+        field!!.text = "1,2"
+        val sql = compact(panel.editorForTest()!!.document.text)
+        assertTrue("List<Long> 输入 1,2 应裸渲染 IN (1, 2)：$sql", sql.contains("t.move_doc_id IN (1, 2)"))
+        panel.clear()
+    }
+
+    fun testXmlListParamShapeDetectionToleratesNewline() {
+        // O-81 R2 端到端：无签名类型信息（接口不可解析/Map 入参）时纯走形态探测——
+        // `IN` 与 `(` 之间换行的 mapper 排版不再漏判（升级前整串单值）
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            xmlResultOf(
+                """
+                <mapper namespace="n">
+                  <select id="s1">
+                    SELECT * FROM t_order WHERE EXISTS (
+                      SELECT 1 FROM t_task task WHERE task.order_id = t_order.id
+                      AND task.type IN
+                      (#{taskTypeList})
+                    )
+                  </select>
+                </mapper>
+                """.trimIndent(),
+            ),
+        )
+        val field = (0 until 20).mapNotNull { panel.paramFieldForTest(it) }
+            .firstOrNull { it.toolTipText == "#taskTypeList" }
+        assertNotNull("应有 taskTypeList 参数输入行", field)
+        field!!.text = "PI,WP"
+        val sql = compact(panel.editorForTest()!!.document.text)
+        assertTrue("IN 与 ( 换行也应拆分：$sql", sql.contains("task.type IN ('PI', 'WP')"))
         panel.clear()
     }
 
