@@ -89,4 +89,27 @@ SQL 本身渲染正常（动态条件、foreach 都对），警示属于误报�
 
 ## 九、实施记录
 
-（待实施回填。）
+（20260924 本会话实施完毕，分支 `t-ew-statement-scope`，基线 master=`969b06f`。）
+
+**生产改动**（与 §四方案 A 一致，共两文件）：
+
+- `XmlMapperParser.kt`：`XmlStatement` 增尾置默认字段 `rawText: String? = null`；`parse()` 在 `XmlIncludeExpander.expand` 之后以 `element.textContent` 填充（实体已解码、不含标签/属性/注释，include 展开内容一并计入）；
+- `XmlPreviewService.kt`：`resolveEwPlaceholders` 增 `statementText` 参数，扫描域改 `statementText ?: fileText`（null 回落文件全文，注解 `<script>` 等非 mapper 解析链路径行为不变）；调用点改传 `statement.rawText`。
+
+**测试**（新增 5 用例＋1 处 helper 对齐）：
+
+- 新增 `XmlMapperParserRawTextTest`（纯 JVM，3 用例）：语句域占位不串／include 展开后占位计入（P1 实证成立）／语句外注释占位不记账（demo OrderMapper.xml 同款注释形态）；
+- `XmlEwResolverTest` 增 2 用例：`testCrossStatementEwPlaceholderNotAttributedToPlainStatement`（用户 bug 的测试形态：普通语句断言无 ew 警示＋带 ew 语句照旧展开）、`testDifferentWrapperVariablesResolvedPerStatement`（ew/ew2 各按本语句调用处展开，守卫）；`previewWithFinder` helper 的占位扫描同步改语句域（与生产口径一致）；
+- **P2 实证**：`AnnotationSqlParser`／`ConvertToSqlAction` 构造点零改动编译通过（默认 null 回落），`AnnotationPreviewServiceTest` 定向回归绿。
+
+**读数台账**（定向 `gradlew test --tests`，全程 buildSrc 未变更；已按 parallel_tasks 登记 T-EwStatementScope）：
+
+- Run A（修复前）：9 跑 2 红——`testCrossStatement…` 报「普通语句不应有 ew 警示：方法 selectByCondition 无 Wrapper 参数（ew），无法展开 MP 占位」（即用户警示原文）；`testDifferentWrapperVariables…` 红系 Light 夹具 ReferencesSearch 搜不到调用（环境限制，与既有 `testEwCustomSqlSegmentExpanded` 走注入 finder 同因），展开断言随之改走 helper，生产 preview 只留不依赖调用搜索的「无警示」断言；
+- Run B（修复后）：9 跑 0 红，BUILD SUCCESSFUL；
+- Run C（反向验证：扫描行临时摘回 `fileText`）：6 跑 1 红——`testCrossStatement…` 复报用户警示原文，「摘掉修复必红」实证成立，随即恢复；
+- Run D（恢复后 8 类定向回归：RawText／XmlEwResolver／XmlEwExpander／XmlPreviewService／XmlIncludeExpander／GutterPreviewConsistency／AnnotationPreviewService／SqlPreviewService）：全绿 BUILD SUCCESSFUL；
+- testFast 秒级通道：BUILD SUCCESSFUL（1m 15s）。
+
+**P3/P4 处置**：P3（跨命名空间 include 占位由漏检转检出）纯文本环境难造 PSI 用例，登记真机走查项不阻塞；P4 实证无隐含分支依赖（Run B 普通语句 `warning=null` 直接渲染正常态）。
+
+**真机复验判据**（用户侧，对应 §七）：demo 仓 `OrderMapper.xml` 预览 `selectOrdersByCondition` 无任何红色警示；预览 `selectByCustomSqlSegment`／`selectOrderWithUserByEw` ew 展开照旧；gutter 与 MCP render 工具同链路不再误报。

@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- **XML 预览对无 ew 参数语句误报「无 Wrapper 参数」红色警示修复（T-EwStatementScope，O-77）**：同一 mapper 文件里其他语句带 `${ew.customSqlSegment}` 时，预览普通语句（如 demo 的 selectOrdersByCondition）会误报「方法 … 无 Wrapper 参数（ew），无法展开 MP 占位」——占位识别域从整个文件收窄为当前语句原文（含 include 展开后内容），同文件他语句的占位不再记账到本语句；顺带收敛跨语句不同变量名占位污染与跨命名空间 include 占位漏检，语句外注释里的占位不再记账。
 - **控制台捕获在「只开 JdbcTemplate DEBUG、无参数行」的工程里零产出修复（T-ConsolePendingFlush，O-70）**：关闭增强捕获后仅靠控制台通道时，语句行之后没有同线程后续行的语句（未开 TRACE 参数行、Tomcat 按请求新建线程）此前会一直停在解析桶里不产出（面板显示「已扫描 N 行 / 产出 0 条」）——现按「静默 1 秒」判定语句已完整并交出，轮询每拍兜底一次；同时修掉 2026.2 上停止后重启捕捉时旧 filter 摘不掉导致的重复解析。
 
 ## [2026.9.23] - 2026-09-23
