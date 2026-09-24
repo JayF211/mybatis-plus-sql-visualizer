@@ -44,12 +44,12 @@ tasks.withType<Test>().configureEach {
     if (providers.gradleProperty("testGc").getOrElse("") == "parallel") {
         jvmArgs("-XX:+UseParallelGC")
     }
-    // T-TestPerf5：SerialGC 档 -PtestGc=serial。2026-09-25 warm 对照实测：serial 两跑 177s/173s
-    // vs G1 基线两跑 194s/180s（均值 -6.4%，达 5% 门槛且复跑确认），各片 exec 失衡 ±10~13% 收到
-    // ±4.4%；execSum 持平（≈600s）——收益来自 4 路并发 JVM 的 GC 线程面互抢消除后的片间重叠
-    // 质量，不是总活变少。默认已落 gradle.properties `testGc=serial`（回退=-PtestGc=parallel）。
-    // 注意与 T-TestPerf4 销账的 ParallelGC 是两回事：ParallelGC 线程面与 G1 同样大，无收益；
-    // SerialGC 是「无线程面」形态，恰好命中多 JVM 并发场景。负载形态再变时按同法复测。
+    // T-TestPerf5：SerialGC 档 -PtestGc=serial。2026-09-25 对照实测全程留档：筛查窗读出
+    // −6.4%（177s/173s vs G1 基线 194s/180s），但晚窗收口 193s/188s 不复现，同刻 G1 对照
+    // 187s/190s 与 serial 无差——机器窗口漂移 ±5~8%（execSum 配置无关地早窗 ~595s → 晚窗
+    // ~630s）与效应同量级，净效应 ≈0，不落默认回退 G1。教训定例：效应量 <10% 的调参实验
+    // 必须同窗交错 A/B，单窗成对对照 + 「复跑确认」防不了窗口漂移。开关保留供负载形态变化
+    // 后按同窗交错法复测（ParallelGC 无收益是 T-TestPerf4 的另一档，两档均已实测）。
     if (providers.gradleProperty("testGc").getOrElse("") == "serial") {
         jvmArgs("-XX:+UseSerialGC")
     }
