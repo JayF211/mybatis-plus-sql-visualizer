@@ -146,6 +146,31 @@ val fastBucketClasses: List<String> = testFileEntries
         "cn.song.mybatisplus.visualizer.feedback.ErrorReportDialogLayoutTest",
     ) }
 
+// T-TestPerf6：S3 外部进程型护栏桶——签名护栏类对本机发行版逐个起外部 JBR JVM 核验，
+// 不需要平台沙盒（testFast 非沙盒 JVM 定向全绿实证，20260926）；从分片类集摘出后与 4 片
+// 并行执行（桶内 invokeAll 池并行核验 + 桶与分片并发），护栏族扩容不再挤占片墙钟。
+// AcpSignatureCrossVersionTest 暂留分片（未做非沙盒验证，保守；验证通过后可移入本名单）。
+val testExternalClasses = setOf(
+    "cn.song.mybatisplus.visualizer.mcp.McpDbSignatureCrossVersionTest",
+    "cn.song.mybatisplus.visualizer.update.PlatformSignatureCrossVersionTest",
+)
+
+tasks.register<Test>("testExternal") {
+    group = "verification"
+    description = "签名护栏外部分离桶（非沙盒 JVM，与 testShards 分片并行；一命令全量自动触发）"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    // classpath 三段构造同 testFast（T-TestPerf3 实测定案）：main+test output 前置（mpvBuild
+    // manifest 读取前提）、平台 jar 复用默认 test 成品、剔除插件自身 jar
+    classpath = sourceSets["main"].output + sourceSets["test"].output +
+        tasks.named<Test>("test").get().classpath.filter {
+            !it.name.startsWith("mybatis-plus-sql-visualizer-")
+        }
+    filter {
+        testExternalClasses.forEach { includeTestsMatching(it) }
+    }
+    maxParallelForks = 1
+}
+
 tasks.register<Test>("testFast") {
     group = "verification"
     description =
@@ -206,6 +231,7 @@ intellijPlatformTesting {
         val discoveredTestClasses: List<String> = testFileEntries
             .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
             .filter { it !in dbIntegrationClasses }
+            .filter { it !in testExternalClasses }
             .sorted()
         // 时长权重表：discoveredTestClasses 全集覆盖。T-TestPerf4 起同类取 mtime 最新的
         // K 份取中位数（-PtestShardWeightSamples，默认 2）——分片跑出的单类耗时带 ±7% 级
@@ -444,6 +470,8 @@ tasks.register("testShards") {
     description =
         "分片全量测试（时长均衡自动分区 $testShardCount 片，一命令真并行；-PtestShardCount 调片数）"
     dependsOn(*(1..testShardCount).map { "testShard$it" }.toTypedArray())
+    // T-TestPerf6：S3 外部护栏桶与分片同命令并行（org.gradle.parallel 已开）
+    dependsOn("testExternal")
     // T-TestPerf4：预期各片 execSum 与计划类全集——配置期固化成 String（见
     // shardPlanExpectedLoads 注释），doLast 只做文件 IO + 读 inputs，不触达脚本对象。
     inputs.property("mpvExpectedShardLoads", shardPlanExpectedLoads)
@@ -451,7 +479,8 @@ tasks.register("testShards") {
     // 聚合报告（T-TestPerf2）：分片跑完直接打印各片与总数四元组，与串行口径的计数 parity 目测即得。
     // 配置缓存约束：结果目录在配置期解析为 File，doLast 只做文件 IO 不触达 Project/layout，
     // 且解析辅助函数须定义在 doLast 体内——引用脚本顶层函数会整段不可序列化（实证报错）。
-    val shardResultDirs = (1..testShardCount).map { file("build/test-results/testShard$it") }
+    val shardResultDirs = (1..testShardCount).map { file("build/test-results/testShard$it") } +
+        file("build/test-results/testExternal")
     doLast {
         fun suiteXmls(dir: File): List<File> =
             dir.listFiles { f: File -> f.isFile && f.name.startsWith("TEST-") && f.name.endsWith(".xml") }?.toList() ?: emptyList()
@@ -473,6 +502,9 @@ tasks.register("testShards") {
         var execSeconds = 0.0
         val seenClasses = HashSet<String>()
         shardResultDirs.forEachIndexed { idx, dir ->
+            // T-TestPerf6：末位目录是 testExternal 桶；标签用目录名（testShardN 名即标签，
+            // 不引用脚本顶层 testShardCount——doLast 引用脚本对象会炸配置缓存，本轮实证）
+            val label = dir.name
             var n = 0
             var f = 0
             var e = 0
@@ -480,7 +512,7 @@ tasks.register("testShards") {
             var t = 0.0
             val xmls = suiteXmls(dir)
             if (xmls.isEmpty()) {
-                logger.lifecycle("testShard${idx + 1}: $dir 下无结果 XML（该分片未跑？）")
+                logger.lifecycle("$label: $dir 下无结果 XML（该分片未跑？）")
             }
             for (xml in xmls) {
                 val attrs = suiteAttrs(xml) ?: continue
@@ -497,7 +529,7 @@ tasks.register("testShards") {
             val expectedTxt = expectedLoads.getOrNull(idx)
                 ?.let { " expected=%.1fs".format(it) } ?: ""
             logger.lifecycle(
-                "testShard${idx + 1}: tests=$n failures=$f errors=$e skipped=$s time=%.1fs$expectedTxt".format(t),
+                "$label: tests=$n failures=$f errors=$e skipped=$s time=%.1fs$expectedTxt".format(t),
             )
             total += n; failed += f; errored += e; skipped += s; execSeconds += t
         }
