@@ -3,17 +3,18 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简），2026-09-25（第十七次精简）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
 > **全局备份**：`~/.zcode/cli/memories/global/`（115 个通用文件）
-> **项目记忆**：保留 48 个核心文件 + MEMORY.md 索引（第十六次精简后）
+> **项目记忆**：保留 48 个核心文件 + MEMORY.md 索引（第十七次精简后）
 
 ---
 
-## 已修复 Bug（175 个）
+## 已修复 Bug（176 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [project-o77-ew-statement-scope.md](bug-fixes/project-o77-ew-statement-scope.md) | O-77 T-EwStatementScope 已交付（20260924 立项当日合并 `4ca473e` 并推送，master/dev/t-testperf5 三支均含）——XML 预览对无 ew 参数的普通语句误报「无 Wrapper 参数（ew）」红横幅：根因=MP 占位识别域（`XmlEwExpander.placeholders` 扫整文件）与解析域（当前语句）不一致，引入 `3959a8e4`（M26-B）起全 tag 受影响、发布版 2026.9.14 在内；修法=语句域扫描（`XmlStatement` 尾置默认字段 `rawText`，include 展开后 textContent 填充，null 回落 fileText），同族两形态（ew2 变量错配/跨命名空间 include 漏检）一并收敛；四轮读数含反向验证，详版=计划 §实施记录（`969b06f`） |
 | [console-capture-zero-output-flush.md](bug-fixes/console-capture-zero-output-flush.md) | O-70 T-ConsolePendingFlush 已交付（dev `dc7e69a`）——控制台「已扫描 N 行 / 产出 0 条」根因＝按线程分桶后待闭合条目无产出点（JdbcTemplate 只开 DEBUG 无参数行+Tomcat 按请求新建线程+实时链路从不调 closePending）；静默冲刷修法（逐行+轮询两处冲刷点）、262 无 `removeMessageFilter` 的挂载代际号处置；归档注记含真机复验判据与 Hibernate 零参残留 |
 | [enhanced-capture-gates-and-consent-scope.md](bug-fixes/enhanced-capture-gates-and-consent-scope.md) | 增强捕获闸门与确认框作用域定案（20260923，O-66 引导链随交付）——链上无项目类型闸门、Gradle 任务配置未确认态静默跳过、授权按 IDE 配置目录隔离；premain 经 init script 会挂进 Gradle fork 的 JavaForkOptions 任务 JVM（判「不合适」）；归档注记＝路线 A 已实施为 T-GradleTaskInjectScope（`1597521`），受控实验仍在 pending-plans 真机复验节 |
 | [reference-acp-session-verification.md](bug-fixes/reference-acp-session-verification.md) | ACP/SSE 链路 runIde 沙盒验证入口（⑯ 全四项闭合 `24d6e33`）——ACP 会话不需登录就能起（卡点是模型凭据非登录）；判据行由 `AcpIdeaMcpProviderImpl` 打（FINER）、传输走 EP 遍历；ml-llm 的类在 `lib/modules/*.jar`（只 glob lib 会误判类不存在）；沙盒 plugins 目录每次 runIde 重建；64342 免 token 端点实证（401 的是 64442 router） |
@@ -392,6 +393,8 @@
 
 **第十六次精简升级（2026-09-24，5 个归档 + 1 个原地瘦身）**：console-capture-zero-output-flush（O-70 T-ConsolePendingFlush 已交付 `dc7e69a`）+ enhanced-capture-gates-and-consent-scope（O-66 引导链随交付；O-73 路线 A 已实施 `1597521`，归档注记录其推翻文中「均未实施」）+ reference-acp-session-verification（⑯ 全四项闭合 `24d6e33`）归 bug-fixes 3 个；pitfall-xmltext-cdata-literal（hbm CDATA 缺口已修 dev `9c0c9e7`）+ pitfall-docker-guard-hangs-indefinitely（处置口径已沉淀 AGENTS.md 与测试约定）归 pitfalls 2 个——后两者系并行会话新建的漏索引孤儿，本次一并补账；mcp-tools-live-test-and-open-bugs 原地瘦身（2 bug 已修删细节留实测口径，filePath 段更新为 T-McpFilePathUnify `fecd7cb` 统一后口径）。另：project-pending-plans 瘦身（30KB→约 10KB，深夜批次收口债销案、合流债刷新=dev 领先 52 笔+master 独有 9 笔 docs 未推）
 
+**第十七次精简升级（2026-09-25，1 个归档 + 1 个升全局并入后删 + MEMORY.md 重建纯索引）**：project-o77-ew-statement-scope（O-77 T-EwStatementScope 已交付 `4ca473e` 并推送）归 bug-fixes，系并行会话新建的漏索引孤儿本次补账；pitfall-python-c-backtick-command-substitution 增量点（stderr 混流+退出码 0 照常「成功」最隐蔽/回读校验防锚点被吃短）并入全局 pitfall-bash-backtick-inline-corruption 后删项目副本，AGENTS.md 反引号条同步补句；MEMORY.md 索引行再瘦身 16.4K→约 8K（承重细节先逐项 grep 验明已落各底层文件再瘦）；project-release-workflow 补 20260925 Marketplace「已落位审核队列未放行」新结论（原文停在第十轮 hasUnapprovedUpdate=false 旧口径）并订正 update.json 待办已消除（实测已指 2026.9.23）
+
 ---
 
 ## 统计
@@ -400,5 +403,5 @@
 |------|--------|
 | 项目 memory（保留） | 49（含 MEMORY.md） |
 | 全局记忆 global/ | 115 |
-| 归档 archive/ | 259（bug-fixes 175 + pitfalls 81 + methodology 1 + user-context 1 + README） |
-| **合计** | **423** |
+| 归档 archive/ | 260（bug-fixes 176 + pitfalls 81 + methodology 1 + user-context 1 + README） |
+| **合计** | **424** |
