@@ -122,7 +122,7 @@ public final class SqlPerfAnalyzer {
      */
     private static Statement parseSql(String sql) {
         try {
-            return SqlAstParser.parseSingle(sql);
+            return SqlAstParser.INSTANCE.parseSingle(sql);
         } catch (Exception e) {
             return null;
         }

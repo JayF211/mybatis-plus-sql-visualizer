@@ -4041,8 +4041,9 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 }
             }
             if (item == null) continue;
+            final String frchItem = item; // lambda 捕获需终局变量（Kotlin 可变循环变量的等价改写）
             List<ParameterMapping> keys = xmlMappings.stream()
-                    .filter(m -> m.property().startsWith("__frch_" + item + "_")).collect(Collectors.toList());
+                    .filter(m -> m.property().startsWith("__frch_" + frchItem + "_")).collect(Collectors.toList());
             if (values.isEmpty()) {
                 for (ParameterMapping key : keys) paramValues.remove(key.property());
             } else {

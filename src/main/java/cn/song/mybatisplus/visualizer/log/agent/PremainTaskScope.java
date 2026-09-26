@@ -110,7 +110,7 @@ public final class PremainTaskScope {
      */
     public static Decision decide(boolean isExternalSystemConfiguration, List<String> taskNames) {
         if (!isExternalSystemConfiguration) {
-            return Inject.INSTANCE;
+            return Decision.Inject.INSTANCE;
         }
         List<String> normalized = new ArrayList<>();
         for (String taskName : taskNames) {
@@ -128,15 +128,15 @@ public final class PremainTaskScope {
         // 【反向验证实验 A 摘除点】测试族分支（摘除后测试族行必红）
         for (String s : normalized) {
             if (TEST_TASKS.contains(s) || s.startsWith(TEST_TASK_PREFIX)) {
-                return new Skip(REASON_TEST_TASK);
+                return new Decision.Skip(REASON_TEST_TASK);
             }
         }
         // 【反向验证实验 B 摘除点】IDE/构建验证族分支（摘除后 IDE 族行必红）
         for (String s : normalized) {
             if (IDE_TASKS.contains(s) || s.startsWith(IDE_TASK_PREFIX)) {
-                return new Skip(REASON_IDE_TASK);
+                return new Decision.Skip(REASON_IDE_TASK);
             }
         }
-        return Inject.INSTANCE;
+        return Decision.Inject.INSTANCE;
     }
 }
