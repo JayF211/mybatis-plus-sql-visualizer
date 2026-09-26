@@ -317,6 +317,25 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /** gutter 预览 SQL 图标开关（M10）。 */
     private val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
+
+    /**
+     * T-ToolSiteBizFrame：JAR 业务帧反向名单（一行一个前缀，如 `com.corp.shared.util.`）。
+     * 语义与 [frameSkipPrefixesField] 相反——名单内包名的帧即使来自 JAR 也按业务帧对待；
+     * Apply 后随 CONFIG 热下发 agent。
+     */
+    private val bizJarPrefixesField = com.intellij.ui.components.JBTextArea(3, 24).apply {
+        emptyText.text = MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes.placeholder")
+        lineWrap = true
+        wrapStyleWord = true
+        // 与帧过滤前缀框同款高度保底与边框形态（T-FramePrefixVisibility F1/F1b）
+        preferredSize = java.awt.Dimension(preferredSize.width, preferredSize.height.coerceAtLeast(60))
+        background = com.intellij.util.ui.UIUtil.getTextFieldBackground()
+        border = javax.swing.border.CompoundBorder(
+            com.intellij.util.ui.UIUtil.getTextFieldBorder(),
+            javax.swing.border.EmptyBorder(4, 6, 4, 6),
+        )
+    }
+
     private val joinDiagramNativeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.joinDiagramNative"))
 
     /** 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）。 */
@@ -916,6 +935,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     toolTipText = MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.tip")
                 }
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes"), frameSkipPrefixesField)
+                // T-ToolSiteBizFrame：JAR 业务帧反向名单（与跳过前缀语义相反，热下发 agent）
+                bizJarPrefixesField.apply {
+                    text = PluginSettings.getInstance().state.sourceFrameBizJarPrefixes
+                    toolTipText = MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes.tip")
+                }
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes"), bizJarPrefixesField)
             }
         }
 
@@ -1482,6 +1507,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
             || enhancedDesensitizeCheck.isSelected != s.enhancedCaptureDesensitize
             || frameSkipPrefixesField.text.trim() != s.sourceFrameSkipPrefixes.trim()
+            || bizJarPrefixesField.text.trim() != s.sourceFrameBizJarPrefixes.trim()
             || logHibernateEnabledCheck.isSelected != s.logHibernateEnabled
             || logHibernateSqlPrefixField.text.trim() != s.logHibernateSqlPrefix
             || logHibernateParamPrefixField.text.trim() != s.logHibernateParamPrefix
@@ -1593,6 +1619,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.enhancedCaptureDesensitize = enhancedDesensitizeCheck.isSelected
             // T-SourceJumpFunnel P1-3：前缀规范化（逐行 trim、去空行）写回；下发走 SETTINGS_CHANGE_TOPIC
             s.sourceFrameSkipPrefixes = frameSkipPrefixesField.text.lines()
+                .map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
+            // T-ToolSiteBizFrame：反向名单同款规范化写回
+            s.sourceFrameBizJarPrefixes = bizJarPrefixesField.text.lines()
                 .map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
             s.logHibernateEnabled = logHibernateEnabledCheck.isSelected
             s.logHibernateSqlPrefix = logHibernateSqlPrefixField.text.trim()
@@ -1757,6 +1786,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled
             enhancedDesensitizeCheck.isSelected = s.enhancedCaptureDesensitize
             frameSkipPrefixesField.text = s.sourceFrameSkipPrefixes
+            bizJarPrefixesField.text = s.sourceFrameBizJarPrefixes
             logHibernateEnabledCheck.isSelected = s.logHibernateEnabled
             logHibernateSqlPrefixField.text = s.logHibernateSqlPrefix
             logHibernateParamPrefixField.text = s.logHibernateParamPrefix

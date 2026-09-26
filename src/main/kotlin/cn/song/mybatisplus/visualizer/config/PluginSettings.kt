@@ -516,6 +516,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 空 = 未登记。
          */
         var sourceFrameSkipPrefixes: String = "",
+
+        /**
+         * T-ToolSiteBizFrame：JAR 业务帧反向名单（一行一个，如 `com.corp.shared.util.`）。
+         * 语义与 [sourceFrameSkipPrefixes] 相反——名单内包名的帧即使以依赖 JAR 形态运行，
+         * agent 侧来源判定也按业务帧对待（不再上顶到调用方）。CONFIG 热下发。空 = 未登记。
+         */
+        var sourceFrameBizJarPrefixes: String = "",
     )
 
     private var state = State()

@@ -30,4 +30,27 @@ class AgentProtocolSkipPrefixesTest {
         val body = AgentProtocol.configBody(true, false, listOf("a\"b\\c"))
         assertTrue(body.contains("\"skipPrefixes\":[\"a\\\"b\\\\c\"]"))
     }
+
+    // ---------- T-ToolSiteBizFrame：bizJarPrefixes 追加键 ----------
+
+    @Test
+    fun test反向名单_列尾追加且空列表省略键() {
+        // 空反向名单 → 退化为三键形态（与既有 skipPrefixes-only body 逐字节一致）
+        assertEquals(
+            """{"disabled":false,"desensitize":true,"skipPrefixes":["com.corp.engine."]}""",
+            AgentProtocol.configBody(false, true, listOf("com.corp.engine."), emptyList()),
+        )
+        // 两键齐发：skipPrefixes 在前、bizJarPrefixes 列尾追加，布尔键序不变
+        val body = AgentProtocol.configBody(false, true, listOf("com.corp.engine."), listOf("com.corp.shared.util."))
+        assertEquals(
+            """{"disabled":false,"desensitize":true,"skipPrefixes":["com.corp.engine."],"""
+                + """"bizJarPrefixes":["com.corp.shared.util."]}""",
+            body,
+        )
+        // 仅反向名单：skipPrefixes 空省略键，agent 侧缺键=清空语义
+        assertEquals(
+            """{"disabled":true,"desensitize":false,"bizJarPrefixes":["com.corp.shared.util."]}""",
+            AgentProtocol.configBody(true, false, emptyList(), listOf("com.corp.shared.util.")),
+        )
+    }
 }

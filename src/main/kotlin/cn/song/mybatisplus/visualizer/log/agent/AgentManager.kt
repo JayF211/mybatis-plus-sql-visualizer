@@ -1822,7 +1822,8 @@ internal class AgentSession(
                 configAckDisabled = ack.disabled
                 LOG.info(
                     "CONFIG 已生效（pid=$pid, ACK#${configAckCount.get()}）：disabled=${ack.disabled}, " +
-                        "desensitize=${ack.desensitize}, skipPrefixes=${ack.skipPrefixes}",
+                        "desensitize=${ack.desensitize}, skipPrefixes=${ack.skipPrefixes}, " +
+                        "bizJarPrefixes=${ack.bizJarPrefixes}",
                 )
                 // 追加 P-5：回执是桥闸门的唯一依据——收到即同步（不能在等下一次 updateOnline 才刷）
                 onCaptureConfirmationChanged()
@@ -1856,7 +1857,10 @@ internal class AgentSession(
             // T-SourceJumpFunnel P1-3：随 CONFIG 附带用户登记的帧过滤前缀（热下发；旧 agent 忽略该键）
             val prefixes = PluginSettings.getInstance().state.sourceFrameSkipPrefixes
                 .lineSequence().filter { it.isNotBlank() }.toList()
-            val body = AgentProtocol.configBody(disabled, desensitize, prefixes).toByteArray(Charsets.UTF_8)
+            // T-ToolSiteBizFrame：随 CONFIG 附带 JAR 业务帧反向名单（语义与跳过前缀相反，热下发）
+            val bizPrefixes = PluginSettings.getInstance().state.sourceFrameBizJarPrefixes
+                .lineSequence().filter { it.isNotBlank() }.toList()
+            val body = AgentProtocol.configBody(disabled, desensitize, prefixes, bizPrefixes).toByteArray(Charsets.UTF_8)
             synchronized(output) {
                 output.writeInt(body.size)
                 output.write(AgentProtocol.CMD_CONFIG)

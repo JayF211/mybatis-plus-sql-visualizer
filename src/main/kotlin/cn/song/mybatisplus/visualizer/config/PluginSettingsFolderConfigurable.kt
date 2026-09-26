@@ -551,6 +551,7 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.enhancedCapture"), b.message("settings.enhancedCapture.status"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.enhancedCapture.desensitize"), "", "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.sourceFrameSkipPrefixes"), b.message("settings.sourceFrameSkipPrefixes.tip"), "settings.section.sqlLog", l))
+            fields.add(SearchableField(b.message("settings.sourceFrameBizJarPrefixes"), b.message("settings.sourceFrameBizJarPrefixes.tip"), "settings.section.sqlLog", l))
 
             // 界面与操作
             val u = PAGE_UI.ref
