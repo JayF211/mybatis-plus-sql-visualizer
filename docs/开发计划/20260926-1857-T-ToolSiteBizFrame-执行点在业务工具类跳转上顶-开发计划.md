@@ -62,14 +62,30 @@ agent 单测（同包缝：`jarOriginProbe` + `clearLocatorCachesForTest`，合�
 
 | 步 | 内容 | 交付 |
 |---|---|---|
-| M1 | agent 侧复现测试（E34/E29 同形两用例，先红留读数） | 提交 1 |
-| M2 | 修 1：判定缓存命中深度比选 + 快路径；回归护栏跑绿 | 提交 2 |
-| M3 | 修 2 agent 侧：EXTRA_BIZ_PREFIXES + isBusinessOrigin + SenderLoop 提取/ACK；M1 用例转绿 | 提交 3 |
-| M4 | IDE 侧：AgentProtocol/AgentManager/设置面/i18n；同步测试补断言 | 提交 4 |
-| M5 | 定向测试收口（`:sql-visualizer-agent:test` 定向类 + IDE 侧定向类）＋计划文档实施记录回填 | 提交 5 |
+| M1 | agent 侧复现测试（E34/E29 同形两用例，先红留读数） | ✅ `9d7f5d6` |
+| M2 | 修 1：判定缓存命中深度比选 + 快路径；回归护栏跑绿 | ✅ `2eed8f9` |
+| M3 | 修 2 agent 侧：EXTRA_BIZ_PREFIXES + isBusinessOrigin + SenderLoop 提取/ACK；M1 用例转绿 | ✅ `c25d780` |
+| M4 | IDE 侧：AgentProtocol/AgentManager/设置面/i18n；同步测试补断言 | ✅ `7a6fc81` |
+| M5 | 定向测试收口＋计划文档实施记录回填 | ✅ 本提交 |
 
-**验证口径**：只跑定向测试（agent 子项目改动 ⇒ `:sql-visualizer-agent:test` 定向类；IDE 侧改动 ⇒ 对应定向类）；不跑全量、不跑构建校验、不 `clean`、不 `--stop`；沙盒 `MPSV-ToolSite` 已登记（并行任务 T-FullRegression 活跃，构建并发让位）。
+## 六、实施记录（2026-09-26 收口）
 
-## 六、实施记录
+**提交链**：`50cc15a`（计划）→ `9d7f5d6`（M1 复现）→ `2eed8f9`（M2 修 B′）→ `c25d780`（M3 修 A·agent 侧）→ `7a6fc81`（M4 修 A·IDE 侧）→ 本提交（M5 收口）。
 
-（回填处）
+**复现读数（先红）**：M1 跑 `StackLocatorToolSiteTest`，机制 B′ 用例唯一失败，读数
+`第二条应落工具类内真执行点 expected:<cn/song/selfdevdemo/[util/PlanTreeQueryBuilder].java> but was:<…[service/impl/SourceCaptureToolSiteServiceImpl].java>`
+——与 demo PR §7.3 实测表 E34 P0 档「SQL② 落调用工具类那一行、真执行点只在候选列」同形。修后同用例转绿，且第三条回归直发用例证未反向钉死。
+
+**定向测试读数（修后全绿）**：
+- `:sql-visualizer-agent:test` 全模块 **93 例 0 失败 0 错误**（含新增：StackLocatorToolSiteTest 5 例＝E34 复现/回归护栏/缓解路径/反向名单救回/自愈；SenderLoopFrameTest 反向名单生效+缺键清空；SourceJumpFunnelTest 提取器 3 例）；
+- IDE 侧定向 5 类 33 例绿（AgentManagerIntakeGateTest 19、AgentProtocolSkipPrefixesTest 4、LocatorSkipPrefixSyncTest 6、AgentListenSyncTest 3、FrameSkipPrefixesFieldVisibilityTest 1）＋ PluginSettingsPanelBindingTest 绿（isModified/apply/reset 三处改动连带覆盖）。
+
+**与计划§四前提的核对**：前提 1~5 全部成立，无一被证伪。补充两点实测细节：
+1. ACK 契约扩为严格四键后，畸形形态清单新增「旧 agent 三键形态」条目（AgentManagerIntakeGateTest），与前提 4 的边界描述一致；
+2. `extractSkipPrefixes` 泛化为 `extractStringArray(payload, key)` 供两键共用（比计划多一步小重构），帧格式测试锁定两键互不串扰。
+
+**残留（如实）**：
+- 机制 C（主位置文件三级路径解析失败 → 候选回退）仍未造语料，维持 PR 原状（留打点排除）；
+- 真机 runIde 面板走查未做（本轮无 MySQL 走查环境；B′ 的真机取证口径见 PR §7.5——重启应用后只触发一次目标接口看 `[T-AgentSourceLocateStale]` 摘要）；E 组 HTTP 冒烟（PASS=35）同样待有 MySQL 的走查轮；
+- 判定缓存命中的深帧探测仅扫 `[0..at-1]`（更深层段），「目录帧出现在缓存 SAFETY 身份之后」的混合部署残面维持 T-01 原记录不变；
+- 分支 `toolsite-bizframe` 未合 master，合流时按并行协调登记表走（合流债已登记项目记忆台账）。
