@@ -11,6 +11,11 @@ import cn.song.mybatisplus.visualizer.log.StatementType
 import cn.song.mybatisplus.visualizer.log.formatDatabaseFragment
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
+import kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn
+import kotlin.coroutines.intrinsics.startCoroutineUninterceptedOrReturn
 
 /**
  * MCP 工具集抽象基类（T-McpToolset2 / T-MTS2-00）：一工具一 toolset 类的平台门控基座。
@@ -70,50 +75,114 @@ abstract class McpToolsetSupport(private val toolName: String) {
 
     /**
      * 审计包裹：成功/预期错误统一记 idea.log。非预期异常不在此吞（平台记 Internal error）。
-     *  tool/started 打包单值 [AuditTicket] 过挂起点——挂起帧单槽位，杜绝 K2 nullOutSpilledVariable
-     *  → SpillingKt 引用（该类 243 平台 stdlib 缺失，verifyPlugin 实证）。
+     *
+     *  **Long token＋审计上下文旁路——零跨挂起点引用结构（T-McpDynamicToolset 定案）**：
+     *  suspend 函数中跨挂起点存活的**引用**（局部对象或参数，如 catch 分支读 tool/argsSummary、
+     *  原形态的 AuditTicket）令 K2 生成 SpillingKt spill 引用（243 平台 stdlib 缺该类，verifier
+     *  compatibility problem；20260926 三版结构实测收敛出该规律——ticket 对象版/argsSummary 参数版
+     *  均报，primitive 跨挂起点不报）。本形态：tool/argsSummary/started 挂起前存入 [AUDIT_CTX]
+     *  旁路 map，audit 链只让 primitive token 跨挂起点，记账（含异常路径）在挂起后按 token 取回；
+     *  finally 兜底移除防 Internal error 路径泄漏。此前 suspend inline 方案（体分散进工具方法）
+     *  亦因 catch 引用 argsSummary 参数 spill 而废弃。
      *
      *  T-McpAuditTrail T-MAT-04：[argsSummary] 为真实入参摘要（经 [McpAuditLog.summarize] 产出，
-     *  如 sqlv_explain 的 dataSource/dialect/SQL 首段，整体受 [McpAuditLog] 的 SUMMARY_LIMIT 截断）。
-     *  默认值 [LEGACY_ARGS_SUMMARY] 是改造前的字面量：其余九个**纯静态**工具无执行面、参数面未立项，
-     *  保持审计行逐字节不变（计划 §验收 4，**仅 OK 路径**——错误路径的入参段格式十个工具统一变化）；
-     *  新增执行类工具应显式传摘要，勿再落 "ok"。
+     *  整体受 [McpAuditLog] 的 SUMMARY_LIMIT 截断）。默认值 [LEGACY_ARGS_SUMMARY] 是改造前的
+     *  字面量：其余九个**纯静态**工具无执行面、参数面未立项，保持审计行逐字节不变（**仅 OK 路径**
+     *  ——错误路径的入参段格式十个工具统一变化）；新增执行类工具应显式传摘要，勿再落 "ok"。
      *
      *  错误路径（EXPECTED_ERROR）的组合串走 [errorArgsSummary] 的两段分预算：错误文本优先，
      *  入参摘要让位——长 SQL 场景下错误原因不被摘要挤掉（T-MAT-04 回退修复）。
      */
     protected suspend fun audit(
         tool: String,
-        argsSummary: String = LEGACY_ARGS_SUMMARY,
+        block: suspend () -> String,
+    ): String = audit(tool, LEGACY_ARGS_SUMMARY, block)
+
+    /**
+     * 审计包裹：成功/预期错误统一记 idea.log。非预期异常不在此吞（平台记 Internal error）。
+     *
+     *  **intrinsics 透传＋continuation 包装——零 SpillingKt 结构（T-McpDynamicToolset 定案）**：
+     *  K2（2.1+）对「try-catch/finally 包裹挂起调用」的 suspend 函数无条件生成
+     *  `SpillingKt.nullOutSpilledVariable` 引用（参数复制进 continuation 槽时的防泄漏清槽；
+     *  20260926 四版结构+探针矩阵实证，catch 内容无关）——而 243 平台捆绑 stdlib 2.0.21 缺
+     *  SpillingKt，verifier compatibility problem（20260926 审核拒绝主因之一）。降/升编译器
+     *  与携带该类均不可行（gradle 兼容矩阵/类加载委派），本形态绕开触发条件：audit 体内
+     *  **不再有被 try 包裹的挂起调用**——挂起段经 [suspendCoroutineUninterceptedOrReturn]
+     *  透传（TAIL 形态），成败记账收进包装 continuation（[AuditGate.resumeWith]）与同步
+     *  catch 两处；同步/挂起双路径行为与原 try-catch 逐语义等价（预期错误转译平台异常、
+     *  其余异常原样传播、成功记账 elapsed）。
+     *
+     *  T-McpAuditTrail T-MAT-04：[argsSummary] 为真实入参摘要（经 [McpAuditLog.summarize] 产出，
+     *  整体受 [McpAuditLog] 的 SUMMARY_LIMIT 截断）。两参重载默认 [LEGACY_ARGS_SUMMARY]：纯静态
+     *  工具无执行面、参数面未立项，保持审计行逐字节不变（**仅 OK 路径**——错误路径的入参段格式
+     *  十个工具统一变化）；新增执行类工具应显式传摘要，勿再落 "ok"。
+     *
+     *  错误路径（EXPECTED_ERROR）的组合串走 [errorArgsSummary] 的两段分预算：错误文本优先，
+     *  入参摘要让位——长 SQL 场景下错误原因不被摘要挤掉（T-MAT-04 回退修复）。
+     */
+    protected suspend fun audit(
+        tool: String,
+        argsSummary: String,
         block: suspend () -> String,
     ): String {
-        val ticket = AuditTicket(tool, argsSummary)
-        try {
-            val result = block()
-            ticket.ok()
-            return result
-        } catch (e: SqlvExpectedToolException) {
-            ticket.expectedError(e)
-            // 对平台抛出的必须是平台 McpExpectedError（agent 可读错误而非 Internal error）；
-            // 转译经反射（T-McpDynamicToolset 零平台类型引用），失败降级原样抛自有异常。
-            throw McpExpectedBridge.wrapExpected(e)
+        val token = AUDIT_SEQ.incrementAndGet()
+        AUDIT_CTX[token] = AuditContext(tool, argsSummary, System.currentTimeMillis())
+        return suspendCoroutineUninterceptedOrReturn { cont ->
+            val gate = AuditGate(token, cont)
+            val outcome = try {
+                block.startCoroutineUninterceptedOrReturn(gate)
+            } catch (e: Throwable) {
+                // 同步路径：block 体在当前帧直接失败（未挂起），记账后按原语义抛出
+                throw gate.onFailure(e)
+            }
+            if (outcome !== COROUTINE_SUSPENDED) gate.onSuccess(outcome as String)
+            outcome
         }
     }
 
-    private class AuditTicket(private val tool: String, private val argsSummary: String) {
-        private val started = System.currentTimeMillis()
-        fun ok() = McpAuditLog.call(tool, argsSummary, "OK", System.currentTimeMillis() - started)
+    /**
+     * 审计闸门：挂起路径成败记账＋预期错误转译＋结果转发（包装 completion 的被动转发者，
+     * 不自建状态机）。[onSuccess]/[onFailure] 同样服务同步路径（见 [audit]）。
+     */
+    private class AuditGate(
+        private val token: Long,
+        private val completion: Continuation<String>,
+    ) : Continuation<String> {
+        override val context: CoroutineContext = completion.context
 
-        /** 预期错误：入参摘要 + 错误文本同列（改造前该槽位只放错误文本；两者同列后错误文本
-         *  可能被摘要挤掉——T-MAT-04 回退修复改为 [errorArgsSummary] 的两段分预算，错误文本优先）。 */
-        fun expectedError(e: SqlvExpectedToolException) =
+        override fun resumeWith(result: Result<String>) {
+            val r = result
+            if (r.isSuccess) {
+                auditOk(token)
+                completion.resumeWith(Result.success(r.getOrThrow()))
+            } else {
+                completion.resumeWith(Result.failure(onFailure(r.exceptionOrNull()!!)))
+            }
+        }
+
+        /** 失败记账＋预期错误转译；其余异常原样返回（平台记 Internal error）。 */
+        fun onFailure(e: Throwable): Throwable {
+            val ctx = AUDIT_CTX.remove(token) ?: return e
+            if (e !is SqlvExpectedToolException) return e
             McpAuditLog.call(
-                tool,
-                errorArgsSummary(argsSummary, e.mcpErrorText),
+                ctx.tool,
+                errorArgsSummary(ctx.argsSummary, e.mcpErrorText),
                 "EXPECTED_ERROR",
-                System.currentTimeMillis() - started,
+                System.currentTimeMillis() - ctx.started,
             )
+            // 对平台抛出的必须是平台 McpExpectedError（agent 可读错误而非 Internal error）；
+            // 转译经反射（零平台类型引用），失败降级原样抛自有异常。
+            return McpExpectedBridge.wrapExpected(e)
+        }
+
+        /** 同步成功记账（返回值走 audit 的 outcome 透传，不经 completion）。 */
+        fun onSuccess(@Suppress("UNUSED_PARAMETER") value: String) {
+            auditOk(token)
+        }
     }
+
+    /** 审计上下文（tool/argsSummary/started 打包，挂起前入 [AUDIT_CTX]、成败记账时取回移除）。 */
+    private class AuditContext(val tool: String, val argsSummary: String, val started: Long)
 
     /** 取当前项目（框架注入 coroutineContext；反射解析平台 McpCallInfoKt，见 McpExpectedBridge）。 */
     protected suspend fun requireProject(): Project =
@@ -145,6 +214,18 @@ abstract class McpToolsetSupport(private val toolName: String) {
          * （无执行面、参数面未立项）的审计行因此逐字节不变；执行类工具显式传真实摘要。
          */
         private const val LEGACY_ARGS_SUMMARY = "ok"
+
+        /** 审计上下文旁路（T-McpDynamicToolset 零跨挂起点引用结构，见 [audit] 头注）：key=token。 */
+        private val AUDIT_CTX = java.util.concurrent.ConcurrentHashMap<Long, AuditContext>()
+
+        /** 审计 token 发号器。 */
+        private val AUDIT_SEQ = java.util.concurrent.atomic.AtomicLong()
+
+        /** 成功记账并移除上下文（AuditGate 同步/挂起两路径共用；静态域供嵌套类触达）。 */
+        private fun auditOk(token: Long) {
+            val ctx = AUDIT_CTX.remove(token) ?: return
+            McpAuditLog.call(ctx.tool, ctx.argsSummary, "OK", System.currentTimeMillis() - ctx.started)
+        }
     }
 }
 
