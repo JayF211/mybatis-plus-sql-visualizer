@@ -51,32 +51,10 @@ import java.io.File
 class SettingsRealityGuardTest {
 
     // ------------------------------------------------------------------
-    // 资源装载（仿 BannedApiSourceScanTest）
+    // 资源装载（仿 BannedApiSourceScanTest；repoRoot/stripComments/快照统一放类尾 companion）
     // ------------------------------------------------------------------
 
-    private fun repoRoot(): File {
-        var dir = File(System.getProperty("user.dir")).absoluteFile
-        repeat(6) {
-            if (File(dir, "src/main/kotlin").isDirectory) return dir
-            dir = dir.parentFile ?: return@repeat
-        }
-        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
-    }
-
     private fun mainFile(rel: String): File = repoRoot().resolve(rel)
-
-    /**
-     * 剥离 block 注释与行注释（自 BannedApiSourceScanTest 搬入复用）。
-     *
-     * 字符串字面量中的 `//` 会被连带截断——只可能产生漏报不产生误报，可接受。
-     * 断言二依赖行结构（apply/reset 切片按 4 空格缩进定位函数边界），不能用本函数
-     * （block 注释整段删除会合并行、错切边界），改用 [stripCommentsKeepLines]。
-     */
-    private fun stripComments(source: String): String =
-        source
-            .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
-            .lineSequence()
-            .joinToString("\n") { it.substringBefore("//") }
 
     /** 同 [stripComments]，但注释内容替换为等量空白、换行原样保留（行数不变）。 */
     private fun stripCommentsKeepLines(source: String): String =
@@ -85,16 +63,11 @@ class SettingsRealityGuardTest {
             .lineSequence()
             .joinToString("\n") { it.substringBefore("//") }
 
-    /** src/main 全部 .kt/.java（含路径与文本，路径统一 / 分隔）。 */
-    private fun mainSources(): List<Pair<String, String>> =
-        repoRoot().resolve("src/main").walkTopDown()
-            .filter { it.isFile && (it.extension == "kt" || it.extension == "java") }
-            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') to it.readText() }
-            .toList()
+    /** src/main 全部 .kt/.java（含路径与文本，路径统一 / 分隔）。T-TestPerf6 起读快照。 */
+    private fun mainSources(): List<Pair<String, String>> = mainSourcesSnapshot
 
-    /** 非 config 包的 src/main 源码（断言一/三的消费判定面）。 */
-    private fun nonConfigSources(): List<Pair<String, String>> =
-        mainSources().filter { (path, _) -> !path.contains("/config/") }
+    /** 非 config 包的 src/main 源码（断言一/三的消费判定面）。T-TestPerf6 起读快照（filter+剥注释只算一次）。 */
+    private fun nonConfigSources(): List<Pair<String, String>> = nonConfigStrippedSnapshot
 
     // ------------------------------------------------------------------
     // 断言一（写而不读）：State 每个 var 字段在非 config 包有消费
@@ -111,7 +84,8 @@ class SettingsRealityGuardTest {
         assertTrue("State 应解析出 var 字段（正则失效？）", fields.size >= 60)
 
         // 注释剥离后再判消费：KDoc/注释里提一句字段名不算消费（T-Fix-SettingsScope 收紧）
-        val code = nonConfigSources().map { (p, t) -> p to stripComments(t) }
+        // T-TestPerf6：nonConfigSources() 已是快照剥注释版，此处不再重复 strip
+        val code = nonConfigSources()
         // 间接消费别名：字段本身不出现在非 config 包，但经 config 包同名/派生访问器转出后真实驱动行为
         // （logListSqlDisplayMode → sqlListDisplayMode()，消费点 SqlLogPanel.kt / HistorySqlLogPanel.kt）。
         // 显式登记而非泛化匹配——新增别名须留注释可审计。
@@ -150,9 +124,50 @@ class SettingsRealityGuardTest {
             // T-CaptureTruth T-CT-02：enhancedReauthButton 为纯动作按钮（点击即清零拒绝冷却并重走确认流，
             // 无自身状态可存可回填），与 clearCacheButton / crudColorResetButton 同类。
             "enhancedReauthButton",
+            // T-PrefixValidate（master 7b51d57，20260926）：前缀校验结果行与一键修复按钮——
+            // label 纯展示（可见性随校验结果翻转）、button 纯动作（点击回写两栏后自隐），
+            // 均无自身状态可存可回填，按本白名单既有口径豁免（20260927 T-TestPerf7 合流树首轮全量红补登记）
+            "prefixValidationLabel", "prefixFixButton",
             // ShortcutEditor 内部控件（随 shortcutEditor 整体进出 apply/reset）
             "textField", "editButton",
         )
+
+        private fun repoRoot(): File {
+            var dir = File(System.getProperty("user.dir")).absoluteFile
+            repeat(6) {
+                if (File(dir, "src/main/kotlin").isDirectory) return dir
+                dir = dir.parentFile ?: return@repeat
+            }
+            error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
+        }
+
+        /**
+         * 剥离 block 注释与行注释（自 BannedApiSourceScanTest 搬入复用）。
+         *
+         * 字符串字面量中的 `//` 会被连带截断——只可能产生漏报不产生误报，可接受。
+         * 断言二依赖行结构（apply/reset 切片按 4 空格缩进定位函数边界），不能用本函数
+         * （block 注释整段删除会合并行、错切边界），改用 [stripCommentsKeepLines]。
+         */
+        private fun stripComments(source: String): String =
+            source
+                .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
+                .lineSequence()
+                .joinToString("\n") { it.substringBefore("//") }
+
+        // T-TestPerf6：src/main 源码快照——同一次测试 JVM 内文件内容恒定，四个断言共享一次
+        // 遍历+读取（原口径每个 @Test 独立 walkTopDown+readText 全仓，单轮共付 3 遍全仓读）；
+        // 「非 config 包 + 剥注释」版本同样只算一次。断言逻辑与判红条件零改动。
+        private val mainSourcesSnapshot: List<Pair<String, String>> by lazy {
+            repoRoot().resolve("src/main").walkTopDown()
+                .filter { it.isFile && (it.extension == "kt" || it.extension == "java") }
+                .map { it.relativeTo(repoRoot()).path.replace('\\', '/') to it.readText() }
+                .toList()
+        }
+
+        private val nonConfigStrippedSnapshot: List<Pair<String, String>> by lazy {
+            mainSourcesSnapshot.filter { (path, _) -> !path.contains("/config/") }
+                .map { (p, t) -> p to stripComments(t) }
+        }
     }
 
     @Test
@@ -244,7 +259,6 @@ class SettingsRealityGuardTest {
         // 「同一文件内他类的同名调用」。
         val psReference = Regex("""(?<![\w$])ProjectPluginSettings(?![\w$])""")
         val code = nonConfigSources()
-            .map { (p, t) -> p to stripComments(t) }
             .filter { (_, t) -> psReference.containsMatchIn(t) }
         val dead = methods.filter { m ->
             // 调用形态（T-TS-06 收紧）：标识符前须有接收者限定符（`.` / `?.`）——裸调用
@@ -306,7 +320,7 @@ class SettingsRealityGuardTest {
             "settings.mcp.tool.desc.reversesql",
             "settings.mcp.tool.desc.mappercheck",
         )
-        val texts = mainSources().map { (p, t) -> p to t }
+        val texts = mainSources()
         val xmlText = mainFile("src/main/resources/META-INF/plugin.xml").readText()
         val ghosts = keys.filter { k -> k !in whitelist && texts.none { (_, t) -> k in t } && k !in xmlText }
         assertTrue(

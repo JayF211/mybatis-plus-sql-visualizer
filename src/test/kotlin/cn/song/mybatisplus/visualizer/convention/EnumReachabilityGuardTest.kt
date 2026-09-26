@@ -48,32 +48,14 @@ import java.io.File
  */
 class EnumReachabilityGuardTest {
 
-    private fun repoRoot(): File {
-        var dir = File(System.getProperty("user.dir")).absoluteFile
-        repeat(6) {
-            if (File(dir, "src/main/kotlin").isDirectory) return dir
-            dir = dir.parentFile ?: return@repeat
-        }
-        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
-    }
+    // T-TestPerf6：repoRoot/stripComments 挪 companion（快照构建在 companion 内），语义不变
+    private fun repoRoot(): File = Companion.repoRoot()
 
     /** 剥离 // 行注释与 /* */ 块注释（KDoc 里的文档词与交叉引用不算代码引用）。 */
-    private fun stripComments(text: String): String {
-        val noBlock = Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL).replace(text) { m ->
-            m.value.replace(Regex("[^\n]"), " ")
-        }
-        return noBlock.split('\n').joinToString("\n") { line ->
-            val idx = line.indexOf("//")
-            if (idx >= 0) line.substring(0, idx) else line
-        }
-    }
+    private fun stripComments(text: String): String = Companion.stripComments(text)
 
-    /** 全仓 src/main 源码（剥注释）。 */
-    private fun mainSources(): List<Pair<String, String>> =
-        repoRoot().resolve("src/main").walkTopDown()
-            .filter { it.isFile && it.extension == "kt" }
-            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') to stripComments(it.readText()) }
-            .toList()
+    /** 全仓 src/main 源码（剥注释）。T-TestPerf6 起读快照（两个门禁用例共享一次遍历+读取+剥注释；scan/enumDecls 的判定逻辑与「入口统一 strip」契约不动）。 */
+    private fun mainSources(): List<Pair<String, String>> = mainSourcesSnapshot
 
     // ------------------------------------------------------------------
     // 扫描器（可注入源码：主用例与灵敏度自证共用同一实现）
@@ -334,6 +316,35 @@ class EnumReachabilityGuardTest {
     private companion object {
         val ENUM_DEF = Regex("\\benum\\s+class\\s+(\\w+)")
         val IDENT = Regex("[A-Za-z_]\\w*")
+
+        private fun repoRoot(): File {
+            var dir = File(System.getProperty("user.dir")).absoluteFile
+            repeat(6) {
+                if (File(dir, "src/main/kotlin").isDirectory) return dir
+                dir = dir.parentFile ?: return@repeat
+            }
+            error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
+        }
+
+        /** 剥离 // 行注释与 /* */ 块注释（KDoc 里的文档词与交叉引用不算代码引用）。 */
+        private fun stripComments(text: String): String {
+            val noBlock = Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL).replace(text) { m ->
+                m.value.replace(Regex("[^\n]"), " ")
+            }
+            return noBlock.split('\n').joinToString("\n") { line ->
+                val idx = line.indexOf("//")
+                if (idx >= 0) line.substring(0, idx) else line
+            }
+        }
+
+        // T-TestPerf6：src/main 扫描快照——同一次 JVM 内文件内容恒定，两个门禁用例共享一次
+        // 遍历+读+剥注释；scan/enumDecls 的判定逻辑不动（自证用例依赖「入口统一 strip」契约）。
+        private val mainSourcesSnapshot: List<Pair<String, String>> by lazy {
+            repoRoot().resolve("src/main").walkTopDown()
+                .filter { it.isFile && it.extension == "kt" }
+                .map { it.relativeTo(repoRoot()).path.replace('\\', '/') to stripComments(it.readText()) }
+                .toList()
+        }
 
         /**
          * 白名单（每条必须带理由）。

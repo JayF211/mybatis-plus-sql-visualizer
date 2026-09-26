@@ -1,9 +1,13 @@
 package cn.song.mybatisplus.visualizer.update
 
+import cn.song.mybatisplus.visualizer.acp.SignatureDistroDiscovery
 import org.junit.Assert.assertEquals
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
 
 
 /**
@@ -27,13 +31,27 @@ class PlatformSignatureCrossVersionTest {
 
     @Test
     fun dynamicInstallApisResolveOnAllLocalTargetPlatforms() {
-        val distros = discoverDistros()
+        val distros = SignatureDistroDiscovery.ideaDistros
         assumeTrue("本机未发现任何 IDEA 发行版，跨版本签名核验无从执行", distros.isNotEmpty())
+
+        // T-TestPerf6：逐发行版核验并行化（口径与 McpDbSignatureCrossVersionTest 同款——
+        // invokeAll 保提交序、聚合与输出顺序不变、ExecutionException 还原为测试 error 形态、
+        // 池上限 3）。
+        val pool = Executors.newFixedThreadPool(minOf(3, distros.size))
+        val results: List<Pair<Pair<String, File>, CheckResult>> = try {
+            pool.invokeAll(distros.map { (family, root) ->
+                Callable { (family to root) to runChecker(root) }
+            }).map { future ->
+                try { future.get() } catch (e: ExecutionException) { throw e.cause ?: e }
+            }
+        } finally {
+            pool.shutdownNow()
+        }
 
         val failures = mutableListOf<String>()
         val covered = mutableListOf<String>()
-        for ((family, root) in distros) {
-            val result = runChecker(root)
+        for ((target, result) in results) {
+            val (family, root) = target
             covered.add(family)
             if (result.exitCode != 0) {
                 failures.add("IU-$family (${root.path}):\n${result.output}")
@@ -45,33 +63,9 @@ class PlatformSignatureCrossVersionTest {
     }
 
     // ------------------------------------------------------------------
-    // 发行版发现：gradle caches 下 verifyPlugin 转压的发行目录 + 已安装 IDE 兜底
+    // 发行版发现：T-TestPerf6 起收敛到 testutil/SignatureDistroDiscovery 单例（口径原样：
+    // gradle caches 下 verifyPlugin 转压的发行目录 + 已安装 IDE 兜底，一次遍历三类共享）
     // ------------------------------------------------------------------
-
-    private fun discoverDistros(): List<Pair<String, File>> {
-        val roots = mutableListOf<File>()
-        val caches = File(System.getProperty("user.home"), ".gradle/caches")
-        caches.listFiles { f -> f.isDirectory }?.forEach { versionDir ->
-            File(versionDir, "transforms").listFiles { f -> f.isDirectory }?.forEach { hashDir ->
-                File(hashDir, "transformed").listFiles { f -> f.isDirectory }?.forEach { distro ->
-                    if (File(distro, "build.txt").isFile && File(distro, "lib").isDirectory) {
-                        roots.add(distro)
-                    }
-                }
-            }
-        }
-        // 已安装 IDE 兜底（如本机 262 实机）
-        System.getenv("LOCALAPPDATA")?.let { laf ->
-            val installed = File(laf, "Programs/IntelliJ IDEA")
-            if (File(installed, "build.txt").isFile && File(installed, "lib").isDirectory) {
-                roots.add(installed)
-            }
-        }
-        return roots.mapNotNull { distro ->
-            val build = File(distro, "build.txt").readText().trim()
-            Regex("(\\d{3})\\.").find(build)?.groupValues?.get(1)?.let { family -> family to distro }
-        }.distinctBy { it.first }.sortedBy { it.first }
-    }
 
     // ------------------------------------------------------------------
     // 检查器编译（一次性）与执行
