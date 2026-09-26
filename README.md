@@ -5,13 +5,13 @@
 MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试利器——IntelliJ IDEA 插件：Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），SQL 日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。支持 IDEA 2024.3 及以上版本，[功能矩阵与在线文档](https://sql-visualizer.jvtools.cn)见官网。
 > **别的插件给你文本，我们给你可执行的 SQL。**
 > 支持 IntelliJ IDEA 2024.3~2026.x 全版本（含 2025.1–2025.3）。
-> 四条理由：Wrapper 链静态生成 SQL 预览（无需运行代码，市场上唯一）；JPA/Hibernate 全家桶支持（派生查询 / JPQL / Criteria / HQL / NamedQuery / Specification / QBE）；预览即可一键执行验证（内嵌 IDEA 原生数据库控制台）；支持达梦/人大金仓等 9 种数据库方言（含信创场景）。
+> 四条理由：Wrapper 链静态生成 SQL 预览（无需运行代码，市场上唯一）；JPA/Hibernate 全家桶支持（派生查询 / JPQL / Criteria / HQL / NamedQuery / Specification / QBE）；预览即可一键执行验证（内嵌 IDEA 原生数据库控制台）；支持达梦/人大金仓/OceanBase/openGauss 等 11 种数据库方言（含信创场景）。
 
 ## 能力全景：覆盖调试的两个阶段
 
-**编码期（写代码时，静态预览）**：Wrapper 链（Lambda / Query / Update / Delete / MPJ 联表 / 服务链）、XML 动态 SQL（if/foreach/OGNL）、注解 SQL、JPA 派生方法 / JPQL / Criteria、HQL —— gutter 图标一键预览最终 SQL（含逻辑删除、乐观锁、多租户拦截器模拟渲染），并支持 SQL 反向转 Java 代码、实体类 / 数据库表右键生成 CRUD SQL。
+**编码期（写代码时，静态预览）**：Wrapper 链（Lambda / Query / Update / Delete / MPJ 联表 / 服务链）、XML 动态 SQL（if/foreach/OGNL，自研框架自定义标签内嵌 SQL 兜底识别）、注解 SQL、JPA 派生方法 / JPQL / Criteria、HQL —— gutter 图标一键预览最终 SQL（含逻辑删除、乐观锁、多租户拦截器模拟渲染），并支持 SQL 反向转 Java 代码、实体类 / 数据库表右键生成 CRUD SQL。
 
-**运行期（跑起来后，动态还原）**：控制台 SQL 日志自动捕获，`?` 占位符参数填充为可执行 SQL（MyBatis / Hibernate / JdbcTemplate 三族日志，并发多线程交错按线程分桶还原）；字节码增强捕获为默认通道，无需应用开启 SQL 日志，即得真实参数、执行耗时、影响行数与真实源码位置；日志条目与源码双向跳转，历史 SQL 全量落盘与两级导航。
+**运行期（跑起来后，动态还原）**：控制台 SQL 日志自动捕获，`?` 占位符参数填充为可执行 SQL（MyBatis / Hibernate / JdbcTemplate 三族日志，并发多线程交错按线程分桶还原）；字节码增强捕获为默认通道，无需应用开启 SQL 日志，即得真实参数、执行耗时、影响行数与真实源码位置；日志条目与源码双向跳转（自研框架、JAR 形态业务工具库的调用自动定位到业务代码行），保活心跳类刷屏 SQL 一键屏蔽，历史 SQL 全量落盘与两级导航。
 
 **验证（随时）**：预览结果内嵌原生数据库控制台一键执行，EXPLAIN 执行计划（7 种方言真机验证），SQL 性能规则引擎与静态标注对照，JOIN 关系图可视化；执行前有 `${}` 注入确认与无界写发现清单两道闸、执行超时护栏兜底，UPDATE / DELETE 预览可一键生成回滚 SQL。
 
@@ -80,18 +80,19 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 - 其他 ORM / JDBC 写法同样行内 gutter 一键预览：JdbcTemplate 字符串 SQL（命名参数按名回填、`StringBuilder` 拼接自动聚合）、自研 DAO 字符串 SQL（调用行与方法定义行双锚点）、xbatis（原 mybatis-mp）、Easy-Query、MyBatis Dynamic SQL、Querydsl
 - Wrapper 锚点行 gutter 图标：左键直接弹出预览，右键菜单可选「预览 SQL」或「最近执行记录」，反查本会话捕获的该位置执行记录
 - 左侧面板可勾选动态条件（`.eq(true, ...)` 布尔重载）、回填 `?` 参数（LIKE 自动拼百分号、按字段类型决定是否加引号）、调整 foreach / bind 值
-- SQL 自动格式化（多行 / 单行），分页子句按 9 种方言差异渲染（MySQL / PostgreSQL / Oracle / SQL Server / H2 / SQLite / MariaDB / DM / KingBase）
+- SQL 自动格式化（多行 / 单行），分页子句按 11 种方言差异渲染（MySQL / PostgreSQL / Oracle / SQL Server / H2 / SQLite / MariaDB / DM / KingBase / OceanBase / openGauss）
 
 **XML 与注解 SQL 预览**
 
-- mapper XML 动态 SQL 完整预览：`if` / `choose` / `where` / `set` / `foreach` / `bind` / `sql`+`include` 等标签按 MyBatis 语义渲染，OGNL 表达式可在面板勾选；`refid="其它命名空间.片段id"` 跨文件 include 同样展开（property 静态替换与环检测一致，`${}` 动态 refid 也支持）；`if` test 求值失败或超出受限 OGNL 支持面的条件行给可见标注，不再静默默认展开；mapper 方法未写 `@Param` 的单集合参数支持 `list` / `collection` / `array` 快捷别名（对齐 MyBatis 自身参数命名语义），`<foreach>` 按集合类型照常展开
+- mapper XML 动态 SQL 完整预览：`if` / `choose` / `where` / `set` / `foreach` / `bind` / `sql`+`include` 等标签按 MyBatis 语义渲染，OGNL 表达式可在面板勾选；`refid="其它命名空间.片段id"` 跨文件 include 同样展开（property 静态替换与环检测一致，`${}` 动态 refid 也支持）；`if` test 求值失败或超出受限 OGNL 支持面的条件行给可见标注，不再静默默认展开；mapper 方法未写 `@Param` 的单集合参数支持 `list` / `collection` / `array` 快捷别名（对齐 MyBatis 自身参数命名语义），`<foreach>` 按集合类型照常展开；集合参数按签名拆分多值——`List` 直写 `IN (#{list})`（无 `<foreach>`）的语句输入 `PI,WP` 渲染为 `IN ('PI', 'WP')`，引号按元素类型（`List<Long>` 裸渲染）
+- 自研框架 mapper XML 兜底识别：根元素名不固定、SQL 写在自定义标签 CDATA/文本里的通用 XML 同样可预览——叶子标签首段文本以 SELECT / INSERT / UPDATE / DELETE / WITH / REPLACE 开头即出 gutter 图标，不依赖标签名与根元素名；载体标签自身或祖先带 `type="hql"` / `"jpql"` 时走 HQL 转换管道，实体不可解析或转换失败回退原文直显；右键 / Alt+Shift+Q 与多语句候选行为一致，设置页「界面与操作」总开关默认开
 - `@Select` / `@Update` / `@Delete` / `@Insert` 注解（含 `<script>` 与 Provider 注解）同样支持，注解行有 gutter 图标
 
 **JPA / Hibernate SQL 预览**
 
 - Spring Data JPA 派生方法（`findByXxx`）、Repository CRUD 方法（`save` / `findById` / `deleteById` 等直接解析出 SQL）、`@Query`（JPQL / 原生 SQL）、`@NamedQuery`、CriteriaBuilder 调用链、HQL（含自定义 DAO）均可一键预览为 SQL
 - `JpaSpecificationExecutor` 的 Specification 调用链与 `QueryByExampleExecutor`（`Example.of`）按实体映射解析为 WHERE 条件；Hibernate `.hbm.xml` 映射实体及其 `<query>` / `<sql-query>` 命名查询同样支持
-- 实体解析支持 `@Entity` / `@Table` / `@Column` / `@ManyToOne` 注解；HQL 的 `SELECT u` 自动展开为实体列清单
+- 实体解析支持 `@Entity` / `@Table` / `@Column` / `@ManyToOne` 注解；HQL 的 `SELECT u` 自动展开为实体列清单，无别名 HQL 的 WHERE 裸属性（如 `stationCode`）同样转成真实列名（`STATION_CODE`）
 
 **SQL 代码补全**
 
@@ -109,13 +110,14 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **SQL 日志工具窗口（主侧边栏，4 个 tab）**
 
-- 两种捕获通道，条目统一还原成可执行 SQL 列表：**增强捕获**（字节码增强，默认通道）在首次运行项目时弹一次注入确认，同意后插件把 `-javaagent` 写进运行配置 VM 参数，agent 在应用 JVM 的 `premain` 阶段即完成采集织入——启动期 SQL（框架初始化、数据源探活、Flyway/Liquibase 迁移）不再落在挂载完成之前，注入任一步失败自动回落 attach 热挂载；在 JDBC 接口层直接采集——无需应用开启 SQL 日志，真实参数（默认不脱敏，设置页可开启打码）、执行耗时、影响行数、报错信息、目标库角标（`[MySQL]`、`[DM（达梦）]` 等，方言智能推断：agent 连接 URL 优先、IDE 数据源配置次之、均未命中回退 MySQL，覆盖全部 9 种方言及 openGauss / GBASE）开箱即得；**控制台捕获**自动识别 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式，并发多线程交错的日志按线程分桶还原，参数不错挂不丢失），JdbcTemplate 命名参数为集合值时按元素还原（`IN (:p)` + `[a]` → `IN ('a')`，方括号不落进 SQL）；停止监听时同步停掉应用内采集
+- 两种捕获通道，条目统一还原成可执行 SQL 列表：**增强捕获**（字节码增强，默认通道）在首次运行项目时弹一次注入确认，同意后插件把 `-javaagent` 写进运行配置 VM 参数，agent 在应用 JVM 的 `premain` 阶段即完成采集织入——启动期 SQL（框架初始化、数据源探活、Flyway/Liquibase 迁移）不再落在挂载完成之前，注入任一步失败自动回落 attach 热挂载；在 JDBC 接口层直接采集——无需应用开启 SQL 日志，真实参数（默认不脱敏，设置页可开启打码）、执行耗时、影响行数、报错信息、目标库角标（`[MySQL]`、`[DM（达梦）]` 等，方言智能推断：agent 连接 URL 优先、IDE 数据源配置次之、均未命中回退 MySQL，覆盖全部 11 种方言及 HSQL / GBASE）开箱即得；**控制台捕获**自动识别 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式，并发多线程交错的日志按线程分桶还原，参数不错挂不丢失），JdbcTemplate 命名参数为集合值时按元素还原（`IN (:p)` + `[a]` → `IN ('a')`，方括号不落进 SQL）；停止监听时同步停掉应用内采集
 - 单击条目轻量预览（可编辑高亮编辑器，改个值直接复制；零占位符的字面量 SQL 与 IN 列表同样识别出可编辑参数行）、双击完整弹窗、右键复制 / 复制时间戳 / 跳转源码；控制台的执行异常行（MyBatis `###` 错误块、Spring DAO、JDBC 异常）自动绑定到对应条目——列表行显示错误片段，详情含报错全文
 - 条目元信息：`#N` 会话内捕获序号、时间（时间来源可选「日志时间」——自动识别 Logback / Log4j2 / Spring Boot 默认、ISO 8601 等常见格式的原始时间戳，解析不到回退捕获时间；或「捕获时间」）、耗时（增强条目为毫秒级精确值，控制台通道解析 p6spy / MP TimeCount / 自定义前缀）、影响行数；超阈值红色标记并统计慢查询
 - 列表支持 SQL 类型筛选、Ctrl+F 搜索（SQL 内容 / 源文件 / `#行号` / 时间文本）、排序方式选择器（时间升 / 降序、耗时升 / 降序、行号）、重复条目去重（⨉N 徽章即时同步）、Ctrl/Shift 多选批量复制；条目按 SELECT / INSERT / UPDATE / DELETE 类型着色标记（左侧色条或整行淡背景，颜色与形态可自定义），单行 / 关键字换行 / 格式化三种显示模式在设置页「列表显示」切换、即时生效
 - 聚焦页签：条目右键「聚焦调用方方法」按源码行号区间静态近似只看该方法发出的 SQL；Web 请求内的 SQL 可「按请求聚焦」——聚焦页签可多开（上限 8）可关闭，与类型过滤、搜索正确叠加，范围外条目隐藏并显示计数
+- 屏蔽刷屏 SQL：保活心跳类语句（如 `SELECT 1`）右键「屏蔽此 SQL」一键屏蔽，支持多选；工具栏漏斗图标与右键「管理屏蔽规则…」打开同一管理对话框（规则列表 / 已拦截 N 次计数 / SQL 语法高亮预览），匹配口径为空白规范化后精确匹配（自动剥离尾分号），可选「结构匹配」按语句形状一并屏蔽参数值不同的同形状 SQL；删除规则后缓冲内条目恢复显示
 - 「日志 → SQL」tab 可粘贴整段日志批量还原（多组语句自动分隔）；「历史」tab 浏览全量落盘的历史 SQL（两级导航：文件 → 条目；条目持久化参数与原始时间，新版可读全部旧文件），可再次预览与跳转源码；历史文件超出保留上限自动清理最旧（默认 30 个，可配全量保留）
-- 「跳转到源码」：增强捕获条目取自真实调用栈，直达执行 SQL 的代码行——自研框架统一入口的调用自动上溯跳过框架帧定位业务代码（框架前缀可在设置页配置，实时与历史面板共用同一解析）；控制台通道可注册内置 `InnerInterceptor` 示例（`docs/instrumentation/SqlSourceInterceptor.kt`）获得同等的精确定位，未配置时弹引导一键注入；携带 mapper 语句信息的条目可直跳 mapper XML，定位到语句节点起始行（XML 不存在或定位失败回退跳 Java）
+- 「跳转到源码」：增强捕获条目取自真实调用栈，直达执行 SQL 的代码行——自研框架统一入口的调用自动上溯跳过框架帧定位业务代码（框架引擎链登记进「源码捕获帧过滤前缀」、以依赖 JAR 形态运行的业务工具库登记进「JAR 业务帧包名前缀」——登记后跳转直接落进工具类内部的 SQL 行；两栏随输入即时校验格式与跨栏冲突、可一键修复，实时与历史面板共用同一解析）；控制台通道可注册内置 `InnerInterceptor` 示例（`docs/instrumentation/SqlSourceInterceptor.kt`）获得同等的精确定位，未配置时弹引导一键注入；携带 mapper 语句信息的条目可直跳 mapper XML，定位到语句节点起始行（XML 不存在或定位失败回退跳 Java）
 
 **MCP：给 AI agent 的确定性 SQL 工具**
 
@@ -144,7 +146,7 @@ MyBatis Log Free 新版已放弃 2025.x；如果你正从它换过来，几个�
 
 - 日志面板不用盯：开始调试自动捕捉、首条 SQL 自动展开；嫌占空间手动关掉后本次会话不再弹回。
 - 字符串值按字段类型自动加引号，IN 列表逗号分隔回填——不再漏引号。
-- 日期时间按类型正确回填，9 种方言渲染经 1538 保留字逐词引擎验证。
+- 日期时间按类型正确回填，11 种方言渲染经保留字逐词引擎验证。
 - JPA/Hibernate 全家桶预览：findByXxx 派生、JPQL、Criteria、HQL 一键转 SQL——日志插件做不到的事，写代码时就能看到。
 
 IntelliJ IDEA 2024.3 起全版本兼容（含 2025.1–2025.3 与 2026.x）。
@@ -209,7 +211,7 @@ ORDER BY t1.create_time DESC
 
 ### 其他入口
 
-- **XML / 注解 SQL**：mapper XML 的 `<select>` 等语句或 Java Mapper 注解行左侧 gutter 图标，点击即预览；选中包含多条 SQL 的代码段会弹出候选栏（行号 + 摘要 + 定位跳转）
+- **XML / 注解 SQL**：mapper XML 的 `<select>` 等语句或 Java Mapper 注解行左侧 gutter 图标，点击即预览（自研框架自定义标签内嵌 SQL 同样识别）；选中包含多条 SQL 的代码段会弹出候选栏（行号 + 摘要 + 定位跳转）
 - **JPA / Hibernate**：Repository 派生方法、`@Query`、Criteria 链、HQL（含自定义 DAO）行左侧 gutter 图标，点击即预览
 - **SQL → Java**：选中 SQL 文本右键 → `Convert SQL to MP Java Code`（或 Alt+Shift+J）；侧边栏工具窗口「SQL → Java」tab 粘贴即转
 - **CRUD SQL**：实体类文件 / 项目视图实体节点 / Database 工具窗表节点右键 → 生成 CRUD SQL，浮层选定语句后进入预览
@@ -224,8 +226,9 @@ ORDER BY t1.create_time DESC
 
 | 配置项 | 默认值 | 作用 |
 |--------|--------|------|
-| 数据库方言 | 智能推断（跟随数据源） | 分页 / upsert 子句按方言渲染（MySQL / PostgreSQL / Oracle / SQL Server / H2 / SQLite / MariaDB / DM / KingBase）。默认「智能推断」：增强捕获连接的 JDBC URL 优先、IDE 数据源配置次之、均未命中回退 MySQL，状态行显示推断结果与依据；手动选定后按手动值生效、可随时切回（升级时从未动过该设置的老用户自动进入推断模式，手动值原样保留） |
+| 数据库方言 | 智能推断（跟随数据源） | 分页 / upsert 子句按方言渲染（MySQL / PostgreSQL / Oracle / SQL Server / H2 / SQLite / MariaDB / DM / KingBase / OceanBase / openGauss）。默认「智能推断」：增强捕获连接的 JDBC URL 优先、IDE 数据源配置次之、均未命中回退 MySQL，状态行显示推断结果与依据；手动选定后按手动值生效、可随时切回（升级时从未动过该设置的老用户自动进入推断模式，手动值原样保留） |
 | 替换 ? 占位符 | 开 | 关闭后变量也渲染为 `?`，在左栏输入框手动填值；代码字面量恒内联 |
+| 空参数填充策略 | 占位符 `?` | 带签名信息的参数输入行留空时的填充方式，占位符 `?`（默认）/ NULL 字面量 / 空字符串三选一；默认保留 `?` 待填提示，避免 NULL 静默过滤行（如 `amount >= NULL` 恒不匹配），需要可直接执行的 SQL 时切 NULL / 空字符串档，已持久化过 NULL / 空字符串的老用户保持原档 |
 | 格式化输出 | 开 | 多行缩进（关 = 单行） |
 | 逻辑删除注入 | 开 | 实体含 `@TableLogic` 时自动追加 `AND deleted = 值` |
 | 逻辑删除值 | 0 | 逻辑删除条件的值（对齐 MP `logic-delete-value`） |
@@ -289,7 +292,7 @@ ORDER BY t1.create_time DESC
 
 ### SQL 预览弹窗
 
-弹窗默认尺寸按屏幕比例自适应（宽 62% / 高 65%，下限 900×600），可手动拉伸并记忆尺寸；左侧动态条件复选框 + 参数输入（参数按签名给类型占位提示——数字 / 日期 / 集合 / 对象，形态不符给淡色警示），右侧 SQL 可编辑（多 tab：SQL / 联表关系图 / 列信息）。工具栏提供格式化、关键字换行、竖向排列、执行计划（仅对只读查询包装 EXPLAIN，DML / DDL 明确拒绝并提示）、刷新等操作，「更多」菜单收纳低频动作（回滚 SQL、导入参数、差异对比、分享）；回滚 SQL 对当前 INSERT 推导可执行逆向语句（整行等值谓词 DELETE），UPDATE / DELETE 因缺 before-image 不自动生成，改走快照查询 + 粘贴回填的人工恢复路径（SQL Server / 达梦的回填 INSERT 同样自动带 `SET IDENTITY_INSERT` 包装，取不到自增列时显式告警不再静默产出必失败的语句）。执行走 Ultimate 原生控制台内嵌；含 `${}` 直替的预览显示注入提示横幅，执行 / EXPLAIN 前弹一次确认；UPDATE 预览 SET 各项带 `(new)` 行尾标注、INSERT 预览在各 VALUES 项旁标出目标列名（列-值错位一眼可见）；执行报错时给出 SQLState / 驱动错误码与出错位置，可一键定位到出错语句。
+弹窗默认尺寸按屏幕比例自适应（宽 62% / 高 65%，下限 900×600），可手动拉伸并记忆尺寸；左侧动态条件复选框 + 参数输入（参数按签名给类型占位提示——数字 / 日期 / 集合 / 对象，形态不符给淡色警示；未填写的参数默认保留 `?` 待填，「空参数填充策略」可切 NULL / 空字符串），右侧 SQL 可编辑（多 tab：SQL / 联表关系图 / 列信息）。工具栏提供格式化、关键字换行、竖向排列、执行计划（仅对只读查询包装 EXPLAIN，DML / DDL 明确拒绝并提示）、刷新等操作，「更多」菜单收纳低频动作（回滚 SQL、导入参数、差异对比、分享）；回滚 SQL 对当前 INSERT 推导可执行逆向语句（整行等值谓词 DELETE），UPDATE / DELETE 因缺 before-image 不自动生成，改走快照查询 + 粘贴回填的人工恢复路径（SQL Server / 达梦的回填 INSERT 同样自动带 `SET IDENTITY_INSERT` 包装，取不到自增列时显式告警不再静默产出必失败的语句）。执行走 Ultimate 原生控制台内嵌；含 `${}` 直替的预览显示注入提示横幅，执行 / EXPLAIN 前弹一次确认；UPDATE 预览 SET 各项带 `(new)` 行尾标注、INSERT 预览在各 VALUES 项旁标出目标列名（列-值错位一眼可见）；执行报错时给出 SQLState / 驱动错误码与出错位置，可一键定位到出错语句。
 
 ## 安装常见问题
 
