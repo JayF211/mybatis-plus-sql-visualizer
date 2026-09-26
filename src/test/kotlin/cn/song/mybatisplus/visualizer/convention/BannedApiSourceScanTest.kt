@@ -1264,6 +1264,9 @@ class BannedApiSourceScanTest {
      * → **615**（T-SyncK2JMaster115，master b9aeeba..8f51b9e 增量）
      * → **636**（k2j 树 2026-09-23 T-SyncK2JMaster184 重登记，597→615→636：心跳/execute/config
      * 等批次移植新增 21 处 `catch (Throwable)`，与 master 侧同源的降级形态，均不覆盖 fatal 面）。
+     * → **660**（k2j 树 2026-09-27 T-SyncK2JMaster187 重登记，636→660：本轮 187 提交移植
+     * SqlSuppress 屏蔽族/MCP 动态化反射桥/设置校验/identity 执行链/acp 程序化注册等批次，
+     * master 侧同为 `runCatching` 形态、均只降级不覆盖 fatal 面；600 个 .java 文件实测）。
      *
      * **+18 的来源（本轮逐文件对账）**：master 侧全部是 `runCatching {}.onFailure{}/getOrElse{}`
      * 形态（Kotlin 的 `runCatching` 不产生 catch 块，故 master 的 Kotlin 树守卫看不见），Java 侧只能
@@ -1277,7 +1280,7 @@ class BannedApiSourceScanTest {
      * 以上均**只做降级、不覆盖 fatal 面**（无一处吞掉 `VirtualMachineError`/`LinkageError`/
      * `ThreadDeath` 后继续运行），与 master 同源；故按守卫既定流程重新登记基线，而非逐站点补判定。
      */
-    private val fatalCatchSiteTotalBaseline = 636
+    private val fatalCatchSiteTotalBaseline = 660
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线
@@ -1673,8 +1676,8 @@ class BannedApiSourceScanTest {
     private val psiCaptureExemptions: Map<String, PsiCaptureExemption> = mapOf(
         "src/main/java/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.java" to
             PsiCaptureExemption(
-                2,
-                "文件级捕获 + 块内重取 PSI（XmlTag 候选/行号，T-M29.6 / T-Perf-14），非元素级快照；计划未含本文件",
+                3,
+                "文件级捕获 + 块内重取 PSI（XmlTag 候选/行号，T-M29.6 / T-Perf-14；O-72 内嵌 SQL 载体候选 +1），非元素级快照；计划未含本文件",
             ),
     )
 
