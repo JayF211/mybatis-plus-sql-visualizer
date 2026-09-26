@@ -60,6 +60,7 @@ public class StackLocatorToolSiteTest {
     public void 清场并接管全局态() throws Exception {
         StackLocator.clearLocatorCachesForTest();
         StackLocator.setExtraSkipPrefixes(new String[0]);
+        StackLocator.setExtraBizJarPrefixes(new String[0]);
         AgentState.setLogLevel("warn");
         StackLocator.jarOriginProbe = new StackLocator.JarOriginProbe() {
             @Override
@@ -86,6 +87,7 @@ public class StackLocatorToolSiteTest {
         System.setErr(originalErr);
         StackLocator.jarOriginProbe = null;
         StackLocator.setExtraSkipPrefixes(new String[0]);
+        StackLocator.setExtraBizJarPrefixes(new String[0]);
         StackLocator.clearLocatorCachesForTest();
         AgentState.setLogLevel("warn");
     }
@@ -149,6 +151,33 @@ public class StackLocatorToolSiteTest {
         // JAR 工具类真执行点保留在候选列（区分机制 A 与 B′ 的判据，PR §7.5）
         assertTrue("JAR 工具类帧应留在候选列: " + candidates(second),
                 candidates(second).contains(TOOL_JAR_FILE));
+    }
+
+    // ---------- 机制 A（E29 同形）：JAR 业务帧反向名单救回真执行点 ----------
+
+    @Test
+    public void 反向名单登记后_JAR态工具类落真执行点() {
+        // 登记前（机制 A 现状）：JAR 工具类被 L1 当第三方帧 → 落调用方 Service（见 E30/E31 护栏用例）
+
+        // 登记反向名单（用户把公司工具库包名按新语义登记）→ 工具类帧按业务帧对待 → 落真执行点
+        StackLocator.setExtraBizJarPrefixes(new String[]{"com.corp.shared.util."});
+        final StackLocator.Frame fixed = StackLocator.locate(engineStack(
+                kernelFrame(), f(TOOL_JAR, "buildTree", "PlanTreeQueryBuilder.java", 38),
+                f(SVC, "first", "SourceCaptureToolSiteServiceImpl.java", 82), controllerFrame()), null);
+        assertNotNull(fixed);
+        assertEquals("登记反向名单后应落 JAR 工具类内真执行点", TOOL_JAR_FILE, fixed.sourceFile);
+        assertEquals(38, fixed.line);
+        assertEquals("PlanTreeQueryBuilder#buildTree", fixed.methodKey);
+        // 反向名单不得变成跳过语义：工具类帧仍是主位置而非从池中消失；Service 调用帧留候选列
+        assertTrue("Service 帧应留在候选列: " + candidates(fixed),
+                candidates(fixed).contains("cn/song/selfdevdemo/service/impl/SourceCaptureToolSiteServiceImpl.java"));
+        // 判定缓存按工具类身份写入，第二次同形命中路径保持一致
+        final StackLocator.Frame again = StackLocator.locate(engineStack(
+                kernelFrame(), f(TOOL_JAR, "buildTree", "PlanTreeQueryBuilder.java", 53),
+                f(SVC, "first", "SourceCaptureToolSiteServiceImpl.java", 82), controllerFrame()), null);
+        assertNotNull(again);
+        assertEquals("同形第二次执行应跟随当前栈行号", TOOL_JAR_FILE, again.sourceFile);
+        assertEquals(53, again.line);
     }
 
     // ---------- 机制 B′ 缓解路径（E34 P1 档）：登记内核包名后入口键各自独立 ----------

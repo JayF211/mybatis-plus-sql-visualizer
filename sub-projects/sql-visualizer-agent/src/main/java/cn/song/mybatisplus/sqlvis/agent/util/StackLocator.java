@@ -100,6 +100,15 @@ public final class StackLocator {
     /** T-SourceJumpFunnel P1-3：用户登记的动态跳过前缀（CONFIG 热下发，volatile 整组替换）。 */
     private static volatile String[] EXTRA_SKIP_PREFIXES = new String[0];
 
+    /**
+     * T-ToolSiteBizFrame（机制 A）：用户登记的 <b>JAR 业务帧反向名单</b>（CONFIG 热下发，volatile
+     * 整组替换）——名单内包名前缀的帧即使来自 JAR 也按业务帧对待（L1 不再上顶到调用方）。
+     *
+     * <p><b>语义与「跳过前缀」相反，不得接入 {@link #isFrameworkFrame}</b>：那等价于跳过语义，
+     * 会把业务帧从候选池抽空、跳转能力消失（demo PR !1 E29 P2 档实证「登记 JAR 业务包救不回落点」）。
+     */
+    private static volatile String[] EXTRA_BIZ_PREFIXES = new String[0];
+
     /** 候选帧上限（IDE 侧解析回退用；过深无意义且加长事件体）。T-SourceJumpFunnel：3→8——汇聚门面下深层业务帧须可见。 */
     private static final int MAX_CANDIDATES = 8;
 
@@ -241,9 +250,10 @@ public final class StackLocator {
         int primaryAt = -1;
         String via = "SAFETY";
 
-        // L1 来源过滤：优先取「非 JAR 来源」帧（开发态用户业务类在目录）
+        // L1 来源过滤：优先取「非 JAR 来源」帧（开发态用户业务类在目录）；
+        // T-ToolSiteBizFrame（机制 A）：反向名单登记的包名前缀，其帧即使来自 JAR 也按业务帧对待
         for (int i = 0; i < pool.size(); i++) {
-            if (Boolean.FALSE.equals(loadedFromJar(pool.get(i)[2], loader))) {
+            if (isBusinessOrigin(pool.get(i)[2], loader)) {
                 primaryAt = i;
                 via = "L1";
                 break;
@@ -294,11 +304,26 @@ public final class StackLocator {
      */
     private static int firstBusinessFrameBefore(List<String[]> pool, ClassLoader loader, int bound) {
         for (int i = 0; i < bound; i++) {
-            if (Boolean.FALSE.equals(loadedFromJar(pool.get(i)[2], loader))) {
+            if (isBusinessOrigin(pool.get(i)[2], loader)) {
                 return i;
             }
         }
         return -1;
+    }
+
+    /**
+     * L1 业务来源判据（T-ToolSiteBizFrame 起 L1 与缓存命中路径的深帧探测共用）：
+     * 命中用户反向名单（{@link #EXTRA_BIZ_PREFIXES}）或目录来源（{@link #loadedFromJar} = false）。
+     * 刻意与 {@link #isFrameworkFrame} 分立——跳过语义与业务帧提升是两回事，混用即 PR P2 档实证的
+     * 「候选池抽空」劣化。
+     */
+    private static boolean isBusinessOrigin(String className, ClassLoader loader) {
+        for (String p : EXTRA_BIZ_PREFIXES) {
+            if (className.startsWith(p)) {
+                return true;
+            }
+        }
+        return Boolean.FALSE.equals(loadedFromJar(className, loader));
     }
 
     /**
@@ -421,6 +446,25 @@ public final class StackLocator {
 
     public static String[] getExtraSkipPrefixes() {
         return EXTRA_SKIP_PREFIXES;
+    }
+
+    /** T-ToolSiteBizFrame：CONFIG 下发的 JAR 业务帧反向名单（整组替换，空/畸形输入安全）。 */
+    public static void setExtraBizJarPrefixes(String[] prefixes) {
+        if (prefixes == null || prefixes.length == 0) {
+            EXTRA_BIZ_PREFIXES = new String[0];
+            return;
+        }
+        final List<String> cleaned = new ArrayList<String>(prefixes.length);
+        for (String p : prefixes) {
+            if (p != null && !p.trim().isEmpty()) {
+                cleaned.add(p.trim());
+            }
+        }
+        EXTRA_BIZ_PREFIXES = cleaned.toArray(new String[0]);
+    }
+
+    public static String[] getExtraBizJarPrefixes() {
+        return EXTRA_BIZ_PREFIXES;
     }
 
     public static boolean isFrameworkFrame(String className) {

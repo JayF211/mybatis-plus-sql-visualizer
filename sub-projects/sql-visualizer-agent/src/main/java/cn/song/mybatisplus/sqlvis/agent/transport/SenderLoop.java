@@ -385,9 +385,16 @@ final class SenderLoop implements Runnable {
         // T-SourceJumpFunnel P1-3：用户登记的帧过滤前缀（"skipPrefixes":["a.","b."]；缺省键=清空）。
         // 极简提取：定位键名后逐项扫描双引号对，支持 \" 转义（IDE 侧同规则转义）。
         if (payload.contains("\"skipPrefixes\"")) {
-            StackLocator.setExtraSkipPrefixes(extractSkipPrefixes(payload));
+            StackLocator.setExtraSkipPrefixes(extractStringArray(payload, "\"skipPrefixes\":"));
         } else {
             StackLocator.setExtraSkipPrefixes(new String[0]);
+        }
+        // T-ToolSiteBizFrame（机制 A）：JAR 业务帧反向名单（"bizJarPrefixes":["a.","b."]；缺省键=清空，
+        // 与 skipPrefixes 同语义——IDE 侧空列表省略键）。
+        if (payload.contains("\"bizJarPrefixes\"")) {
+            StackLocator.setExtraBizJarPrefixes(extractStringArray(payload, "\"bizJarPrefixes\":"));
+        } else {
+            StackLocator.setExtraBizJarPrefixes(new String[0]);
         }
         AgentState.markConfigApplied();
         // T-02：CONFIG 应用成功回执（取值取**应用后**的生效态，含本次生效的前缀条数）
@@ -409,18 +416,19 @@ final class SenderLoop implements Runnable {
 
     /**
      * CONFIG 回执 body（T-02 跨侧字面契约，IDE 侧按同一字面解析）：
-     * {@code {"disabled":<true|false>,"desensitize":<true|false>,"skipPrefixes":<整数>}}
-     * ——键序固定、无空格、布尔小写字面量、skipPrefixes 为本次生效的帧过滤前缀条数。
+     * {@code {"disabled":<true|false>,"desensitize":<true|false>,"skipPrefixes":<整数>,
+     * "bizJarPrefixes":<整数>}} ——键序固定、无空格、布尔小写字面量；skipPrefixes/bizJarPrefixes
+     * 分别为本次生效的帧过滤前缀与 JAR 业务帧反向名单条数（T-ToolSiteBizFrame 追加后段）。
      */
     static String configAckBody() {
         return "{\"disabled\":" + AgentState.isDisabled()
                 + ",\"desensitize\":" + AgentState.isDesensitize()
-                + ",\"skipPrefixes\":" + StackLocator.getExtraSkipPrefixes().length + "}";
+                + ",\"skipPrefixes\":" + StackLocator.getExtraSkipPrefixes().length
+                + ",\"bizJarPrefixes\":" + StackLocator.getExtraBizJarPrefixes().length + "}";
     }
 
-    /** 从 CONFIG payload 提取 "skipPrefixes":[...] 项（无该键/畸形返回空组）。 */
-    static String[] extractSkipPrefixes(String payload) {
-        final String key = "\"skipPrefixes\":";
+    /** 从 CONFIG payload 提取指定字符串数组键的项（无该键/畸形返回空组）。 */
+    static String[] extractStringArray(String payload, String key) {
         final int k = payload.indexOf(key);
         if (k < 0) {
             return new String[0];

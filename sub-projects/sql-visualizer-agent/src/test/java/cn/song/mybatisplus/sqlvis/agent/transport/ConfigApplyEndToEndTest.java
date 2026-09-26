@@ -125,7 +125,7 @@ public class ConfigApplyEndToEndTest {
         final Frame ack = awaitFrame(in, EventBus.CMD_CONFIG_ACK, 3000L);
         assertNotNull("CONFIG 应获 ACK（IDE 侧据此判「生效」，不再靠行为反推）", ack);
         assertEquals("ACK body 为跨侧字面契约",
-                "{\"disabled\":true,\"desensitize\":false,\"skipPrefixes\":0}", ack.payload);
+                "{\"disabled\":true,\"desensitize\":false,\"skipPrefixes\":0,\"bizJarPrefixes\":0}", ack.payload);
         assertTrue("应用侧应处于停采态", AgentState.isDisabled());
 
         // C) 停采态：语句照旧执行（返回原语义值），窗口内不得出现任何事件帧
@@ -137,7 +137,7 @@ public class ConfigApplyEndToEndTest {
                 "{\"disabled\":false,\"desensitize\":false,\"skipPrefixes\":[]}");
         final Frame ack2 = awaitFrame(in, EventBus.CMD_CONFIG_ACK, 3000L);
         assertEquals("恢复采集的 ACK 应反映生效态",
-                "{\"disabled\":false,\"desensitize\":false,\"skipPrefixes\":0}", ack2.payload);
+                "{\"disabled\":false,\"desensitize\":false,\"skipPrefixes\":0,\"bizJarPrefixes\":0}", ack2.payload);
         assertFalse(AgentState.isDisabled());
         assertEquals(1, ps.executeUpdate());
         assertNotNull("恢复采集后应重新产出事件帧", awaitFrame(in, EventBus.CMD_EVENT, 3000L));
