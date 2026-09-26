@@ -49,10 +49,11 @@ if (gifRecord) {
     }
 }
 
-// T-McpToolset：MCP Server 插件（com.intellij.mcpServer）编译期 API 桩源集。
-// 基线平台 243 不含 mcpServer 插件，而本机 262 内置 mcpserver.jar 类文件是 major 69（Java 25），
-// JDK 17 编译读不了（javac 17/21 报「错误的版本 69.0」，T-GifRecordSwitch 注释同源实证）——
-// 故用桩源码提供与真实 jar 完全一致的编译期签名（签名逐条 javap 自 262 jar，见桩文件头注释）。
+// T-McpToolset / T-AcpMcpTransport：平台可选插件编译期 API 桩源集。
+// 基线平台 243 不含 mcpServer 插件、也不含 AI Assistant（com.intellij.ml.llm），而本机 262 的
+// mcpserver.jar 与 ml-llm 模块 jar 类文件都是 major 69（Java 25），JDK 17 编译读不了
+// （javac 17/21/24 报「错误的版本 69.0」，T-GifRecordSwitch 注释同源实证）——故用桩源码提供与
+// 真实 jar 完全一致的编译期签名（签名逐条反编译自 262 jar，见各桩文件头注释）。
 // 接线方式（防 task 依赖环）：
 //  - 主编译任务 compileKotlin.libraries 挂桩产物目录（task 依赖：compileKotlin → compileKotlinMcpStub）；
 //  - 桩源集编译类路径复用 main 的 compileClasspath（平台 jar/stdlib/JSqlParser 等，不含桩产物，
@@ -122,6 +123,10 @@ dependencies {
     // F-xx 替代方案：移除 PlantUML 1.2024.8 (21.9MB) + Batik (~8MB)，改用自绘引擎
     // F-2：SQL 性能分析（JSqlParser 5.3 — 零依赖 SQL 解析器，静态分析用）
     implementation("com.github.jsqlparser:jsqlparser:5.3")
+    // T-McpDynamicToolset：运行期生成 MCP toolset 壳类（McpToolsetDynamicRegistrar）的 ASM。
+    // 自带而非用平台 lib 的 asm——插件 classloader 自成一体，无跨版本平台 ASM 可达性差异；
+    // 字节码生成发生在运行期，壳类不进插件 jar（verifier 不可见）。
+    implementation("org.ow2.asm:asm:9.7.1")
 
     // IntelliJ Platform Gradle Plugin Dependencies Extension - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-dependencies-extension.html
     intellijPlatform {
