@@ -7,7 +7,10 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -27,6 +30,12 @@ public class XmlPreviewModel {
 
     /** foreach 默认展开次数（IN 场景两元素可直观展示 separator）。 */
     public static final int DEFAULT_FOREACH_SIZE = 2;
+
+    /** foreach item 占位键前缀（变量双写形态 {@code __frch_<item>_<唯一编号>}，见 ForeachSqlNode）。 */
+    private static final String FRCH_PREFIX = "__frch_";
+
+    /** item 占位键裸键形态：前缀 + item 名（贪婪）+ {@code _数字}；dotted 子路径（{@code __frch_st_0.x}）不匹配。 */
+    private static final Pattern FOREACH_ITEM_KEY = Pattern.compile("^__frch_(.+)_(\\d+)$");
 
     /**
      * T-PT-03：TEMPORAL 参数占位值——带引号的日期字面量（${} 直替进 SQL 后即为合法字面量；
@@ -159,22 +168,30 @@ public class XmlPreviewModel {
     /**
      * T-M29.5：参数路径 → 引号策略（精确匹配优先，前缀匹配兜底）。
      * 未命中返回 null（面板兜底引号）。
+     *
+     * <p>O-78 T-ForeachItemRender：paramQuotes 派生表未含 foreach item 键，末位再经 {@link #paramTypeFor}
+     * 兜底派生（item 键 → 元素类别 → quoteRequired）；paramTypes 空的旧布尔通道 paramTypeFor 恒
+     * null，行为不变。</p>
      */
     public Boolean quoteFor(String source) {
-        if (paramQuotes.containsKey(source)) {
-            return paramQuotes.get(source);
+        Boolean exact = paramQuotes.get(source);
+        if (exact != null) {
+            return exact;
         }
         for (Map.Entry<String, Boolean> e : paramQuotes.entrySet()) {
             if (source.startsWith(e.getKey() + ".")) {
                 return e.getValue();
             }
         }
-        return null;
+        ParamTypeInfo info = paramTypeFor(source);
+        return info != null ? info.kind().isQuoteRequired() : null;
     }
 
     /**
      * T-PT-01：参数路径 → 类型信息（精确匹配优先、前缀匹配兜底，命中规则与 {@link #quoteFor} 一致）。
      * 未命中返回 null（调用方按 {@link ParamKind#UNKNOWN} 兜底）。
+     *
+     * <p>O-78 T-ForeachItemRender：末位追加 foreach item 占位键解析（{@link #foreachItemTypeInfo}）。</p>
      */
     public ParamTypeInfo paramTypeFor(String source) {
         ParamTypeInfo exact = paramTypes.get(source);
@@ -186,7 +203,31 @@ public class XmlPreviewModel {
                 return e.getValue();
             }
         }
-        return null;
+        return foreachItemTypeInfo(source);
+    }
+
+    /**
+     * O-78 T-ForeachItemRender：foreach item 占位键（{@code __frch_<item>_<n>}，{@link ForeachSqlNode} 变量双写）
+     * → 集合元素类别。item 键不在 paramTypes（表按方法签名生成），借 {@link #forEachViews} 反查
+     * collection 表达式取 {@link ParamTypeInfo#elementKind}；仅裸键命中（{@code __frch_st_0.name} 子路径不接）、
+     * 无元素类别信息返回 null（宁缺勿错，调用方按 UNKNOWN 兜底=升级前行为）。
+     */
+    private ParamTypeInfo foreachItemTypeInfo(String source) {
+        if (!source.startsWith(FRCH_PREFIX)) return null;
+        Matcher match = FOREACH_ITEM_KEY.matcher(source);
+        if (!match.matches()) return null;
+        XmlForEachView view = null;
+        for (XmlForEachView v : forEachViews) {
+            if (Objects.equals(v.item(), match.group(1))) {
+                view = v;
+                break;
+            }
+        }
+        if (view == null) return null;
+        // 双层判空直译会漏内层 null 合并：paramTypes 可能未含该键、elementKind 亦可能为 null
+        ParamTypeInfo collectionInfo = paramTypes.get(view.collectionExpr());
+        if (collectionInfo == null || collectionInfo.elementKind() == null) return null;
+        return new ParamTypeInfo(collectionInfo.elementKind());
     }
 
     /** T-PT-01：参数路径 → 类型类别（无类型信息 → {@link ParamKind#UNKNOWN}）。 */

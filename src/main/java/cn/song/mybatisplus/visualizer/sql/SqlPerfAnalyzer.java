@@ -1,11 +1,11 @@
 package cn.song.mybatisplus.visualizer.sql;
 
+import cn.song.mybatisplus.visualizer.execute.SqlAstParser;
 import cn.song.mybatisplus.visualizer.sql.perf.PerfRuleEngine;
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning;
 import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch1;
 import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch2;
 import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch3;
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.statement.Statement;
 
 import java.util.ArrayList;
@@ -115,13 +115,14 @@ public final class SqlPerfAnalyzer {
     }
 
     /**
-     * 解析 SQL 为 AST。
+     * 解析 SQL 为 AST（T-PS7-03 收拢：走 SqlAstParser.parseSingle，方括号引用 SQL 的
+     * AST 规则不再整体降级）。
      *
      * @return 解析成功返回 Statement；失败返回 null（降级到纯正则规则）
      */
     private static Statement parseSql(String sql) {
         try {
-            return CCJSqlParserUtil.parse(sql);
+            return SqlAstParser.parseSingle(sql);
         } catch (Exception e) {
             return null;
         }

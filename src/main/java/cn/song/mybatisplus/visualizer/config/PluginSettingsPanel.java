@@ -369,11 +369,12 @@ public class PluginSettingsPanel implements Disposable {
 
     // ---------- T-CrudColor 颜色控件辅助 ----------
 
-    /** T-PT-04：当前选中的空参数填充策略（NULL 档为默认——空选/异常态一律落默认档）。 */
+    /** T-PT-04 / O-79：当前选中的空参数填充策略（占位档为默认——空选/异常态一律落默认档）。 */
     private String selectedEmptyParamFill() {
-        return emptyParamFillEmptyRadio.isSelected()
-            ? PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING
-            : PluginSettings.DEFAULT_EMPTY_PARAM_FILL;
+        if (emptyParamFillPlaceholderRadio.isSelected()) return PluginSettings.EMPTY_PARAM_FILL_PLACEHOLDER;
+        if (emptyParamFillEmptyRadio.isSelected()) return PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING;
+        if (emptyParamFillNullRadio.isSelected()) return PluginSettings.EMPTY_PARAM_FILL_NULL;
+        return PluginSettings.DEFAULT_EMPTY_PARAM_FILL;
     }
 
     /** 当前下拉选中的样式值（空选兜默认——与渲染器 styleOf 的兜底保持一致）。 */
@@ -568,6 +569,68 @@ public class PluginSettingsPanel implements Disposable {
         disposeResources();
     }
 
+    // ── T-PrefixValidate：两栏前缀的校验结果行（有问题才露出；一键修复回写两栏后自动消失） ──
+    // 监听器一律挂在字段初始化处：rebuild（语言切换）会重跑 buildSections，挂在 addRow 处会随重建叠加回调
+
+    private final JBLabel prefixValidationLabel = new JBLabel(" ");
+
+    {
+        prefixValidationLabel.setIcon(com.intellij.icons.AllIcons.General.Warning);
+        prefixValidationLabel.setVisible(false);
+    }
+
+    private final JButton prefixFixButton = new JButton(MpSqlVisualizerBundle.message("settings.sourceFramePrefixes.fix"));
+
+    {
+        prefixFixButton.setVisible(false);
+        prefixFixButton.addActionListener(e -> onPrefixAutoFixClicked());
+    }
+
+    private final JPanel prefixValidationRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+
+    {
+        prefixValidationRow.setOpaque(false);
+        prefixValidationRow.add(prefixValidationLabel);
+        prefixValidationRow.add(prefixFixButton);
+    }
+
+    /** 校验两栏并刷新结果行；无问题整行隐藏（GridBag 不可见组件不占位，同 enhancedReauthButton 范式）。 */
+    private void refreshPrefixValidationRow() {
+        SourceFramePrefixesValidator.Report report = SourceFramePrefixesValidator.validate(
+                frameSkipPrefixesField.getText(),
+                bizJarPrefixesField.getText());
+        java.util.List<String> problems = new java.util.ArrayList<>();
+        for (SourceFramePrefixesValidator.InvalidLine line : report.invalidLines()) {
+            problems.add(MpSqlVisualizerBundle.message("settings.sourceFramePrefixes.invalidLine", line.lineNo(), line.text()));
+        }
+        for (SourceFramePrefixesValidator.CrossFieldConflict conflict : report.conflicts()) {
+            problems.add(MpSqlVisualizerBundle.message("settings.sourceFramePrefixes.conflict", conflict.prefix()));
+        }
+        for (SourceFramePrefixesValidator.DuplicatePrefix duplicate : report.duplicates()) {
+            problems.add(MpSqlVisualizerBundle.message("settings.sourceFramePrefixes.duplicate", duplicate.prefix()));
+        }
+        if (problems.isEmpty()) {
+            prefixValidationLabel.setVisible(false);
+            prefixFixButton.setVisible(false);
+            return;
+        }
+        prefixValidationLabel.setText(problems.size() == 1
+                ? problems.get(0)
+                : MpSqlVisualizerBundle.message("settings.sourceFramePrefixes.problems", problems.size()) + "　" + problems.get(0));
+        prefixValidationLabel.setToolTipText(String.join("\n", problems));
+        prefixValidationLabel.setVisible(true);
+        prefixFixButton.setVisible(true);
+    }
+
+    /** 一键修复：回写两栏（setText 触发 document 监听 → 校验行自动刷新为隐藏）。 */
+    private void onPrefixAutoFixClicked() {
+        kotlin.Pair<String, String> fixed = SourceFramePrefixesValidator.autoFix(
+                frameSkipPrefixesField.getText(),
+                bizJarPrefixesField.getText());
+        frameSkipPrefixesField.setText(fixed.getFirst());
+        bizJarPrefixesField.setText(fixed.getSecond());
+    }
+
     /**
      * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（一行一个前缀，如 {@code com.corp.engine.}）。
      * Apply 后经 CONFIG 热下发 agent（即时生效，无需重启应用），IDE 侧候选解析同步过滤。
@@ -579,6 +642,13 @@ public class PluginSettingsPanel implements Disposable {
         frameSkipPrefixesField.getEmptyText().setText(MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.placeholder"));
         frameSkipPrefixesField.setLineWrap(true);
         frameSkipPrefixesField.setWrapStyleWord(true);
+        // T-PrefixValidate：格式/冲突校验随输入即时刷新（面板只展示，判定在 SourceFramePrefixesValidator）
+        frameSkipPrefixesField.getDocument().addDocumentListener(new com.intellij.ui.DocumentAdapter() {
+            @Override
+            protected void textChanged(javax.swing.event.DocumentEvent e) {
+                refreshPrefixValidationRow();
+            }
+        });
         // T-FramePrefixVisibility F1：GridBag 外层高度不足时行被压缩，fill=NONE 下多行文本框
         // 会塌成一条细线（真机截图实证：标签可见、框不可见）——锁定首选高度兜底
         java.awt.Dimension framePrefixPref = frameSkipPrefixesField.getPreferredSize();
@@ -594,8 +664,40 @@ public class PluginSettingsPanel implements Disposable {
 
     /** gutter 预览 SQL 图标开关（M10）。 */
     private final JBCheckBox gutterIconCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"));
+
+    /**
+     * T-ToolSiteBizFrame：JAR 业务帧反向名单（一行一个前缀，如 {@code com.corp.shared.util.}）。
+     * 语义与 {@link #frameSkipPrefixesField} 相反——名单内包名的帧即使来自 JAR 也按业务帧对待；
+     * Apply 后随 CONFIG 热下发 agent。
+     */
+    private final JBTextArea bizJarPrefixesField = new JBTextArea(3, 24);
+
+    {
+        bizJarPrefixesField.getEmptyText().setText(MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes.placeholder"));
+        bizJarPrefixesField.setLineWrap(true);
+        bizJarPrefixesField.setWrapStyleWord(true);
+        // T-PrefixValidate：格式/冲突校验随输入即时刷新（同 skip 栏）
+        bizJarPrefixesField.getDocument().addDocumentListener(new com.intellij.ui.DocumentAdapter() {
+            @Override
+            protected void textChanged(javax.swing.event.DocumentEvent e) {
+                refreshPrefixValidationRow();
+            }
+        });
+        // 与帧过滤前缀框同款高度保底与边框形态（T-FramePrefixVisibility F1/F1b）
+        java.awt.Dimension bizJarPref = bizJarPrefixesField.getPreferredSize();
+        bizJarPref.height = Math.max(bizJarPref.height, 60);
+        bizJarPrefixesField.setPreferredSize(bizJarPref);
+        bizJarPrefixesField.setBackground(com.intellij.util.ui.UIUtil.getTextFieldBackground());
+        bizJarPrefixesField.setBorder(new CompoundBorder(
+            com.intellij.util.ui.UIUtil.getTextFieldBorder(),
+            new EmptyBorder(4, 6, 4, 6)));
+    }
+
     /** JOIN 图渲染方式（T-Dgm-04）：原生 Diagrams 框架 vs 经典自绘渲染器。 */
     private final JBCheckBox joinDiagramNativeCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.joinDiagramNative"));
+
+    /** 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）。 */
+    private final JBCheckBox xmlInlineSqlCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.xmlInlineSql"));
 
     /** 首用锚点引导通知开关（T-UxOnboard T-UX-01，默认开）：关闭后首用引导全程静默。 */
     private final JBCheckBox onboardingAnchorTipCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.onboardingAnchorTip"));
@@ -655,7 +757,8 @@ public class PluginSettingsPanel implements Disposable {
     /** 界面语言下拉（M14：默认简体中文；跟随系统 / English 可选）。 */
     private final JComboBox<LanguageOption> languageCombo = new JComboBox<>();
 
-    /** T-PT-04：空参数填充策略单选（NULL 字面量 / 空字符串）。 */
+    /** T-PT-04 / O-79：空参数填充策略单选（{@code ?} 占位符 / NULL 字面量 / 空字符串，占位档为默认）。 */
+    private final JBRadioButton emptyParamFillPlaceholderRadio = new JBRadioButton();
     private final JBRadioButton emptyParamFillNullRadio = new JBRadioButton();
     private final JBRadioButton emptyParamFillEmptyRadio = new JBRadioButton();
     private final ButtonGroup emptyParamFillGroup = new ButtonGroup();
@@ -828,15 +931,19 @@ public class PluginSettingsPanel implements Disposable {
                 });
                 replaceParamsCheck.setText(msg("settings.replaceParams"));
                 addRow(p, g, "", replaceParamsCheck);
-                // T-PT-04：空参数填充策略（参数值为空时回填 NULL 字面量还是空字符串）
+                // T-PT-04 / O-79：空参数填充策略（参数值为空时保留 ? 占位，还是回填 NULL/空字符串）
+                emptyParamFillPlaceholderRadio.setText(msg("settings.emptyParamFill.placeholder"));
+                emptyParamFillPlaceholderRadio.setToolTipText(msg("settings.emptyParamFill.placeholder.tip"));
                 emptyParamFillNullRadio.setText(msg("settings.emptyParamFill.null"));
                 emptyParamFillNullRadio.setToolTipText(msg("settings.emptyParamFill.null.tip"));
                 emptyParamFillEmptyRadio.setText(msg("settings.emptyParamFill.empty"));
                 emptyParamFillEmptyRadio.setToolTipText(msg("settings.emptyParamFill.empty.tip"));
+                emptyParamFillGroup.add(emptyParamFillPlaceholderRadio);
                 emptyParamFillGroup.add(emptyParamFillNullRadio);
                 emptyParamFillGroup.add(emptyParamFillEmptyRadio);
                 JPanel emptyParamFillPanel = new JPanel();
                 emptyParamFillPanel.setOpaque(false);
+                emptyParamFillPanel.add(emptyParamFillPlaceholderRadio);
                 emptyParamFillPanel.add(emptyParamFillNullRadio);
                 emptyParamFillPanel.add(emptyParamFillEmptyRadio);
                 addRow(p, g, msg("settings.emptyParamFill"), emptyParamFillPanel);
@@ -1111,6 +1218,12 @@ public class PluginSettingsPanel implements Disposable {
                 frameSkipPrefixesField.setText(PluginSettings.getInstance().getState().getSourceFrameSkipPrefixes());
                 frameSkipPrefixesField.setToolTipText(msg("settings.sourceFrameSkipPrefixes.tip"));
                 addRow(p2, g2, msg("settings.sourceFrameSkipPrefixes"), frameSkipPrefixesField);
+                // T-ToolSiteBizFrame：JAR 业务帧反向名单（与跳过前缀语义相反，热下发 agent）
+                bizJarPrefixesField.setText(PluginSettings.getInstance().getState().getSourceFrameBizJarPrefixes());
+                bizJarPrefixesField.setToolTipText(msg("settings.sourceFrameBizJarPrefixes.tip"));
+                addRow(p2, g2, msg("settings.sourceFrameBizJarPrefixes"), bizJarPrefixesField);
+                // T-PrefixValidate：校验结果行（问题数 + 首条，悬停看全部；一键修复按钮同行）
+                addRow(p2, g2, "", prefixValidationRow);
             });
         }
 
@@ -1119,6 +1232,9 @@ public class PluginSettingsPanel implements Disposable {
             sectionGroup(panel, gbc, "settings.section.ui", (p, g) -> {
                 gutterIconCheck.setText(msg("settings.showGutterIcon"));
                 addRow(p, g, "", gutterIconCheck);
+                xmlInlineSqlCheck.setText(msg("settings.xmlInlineSql"));
+                xmlInlineSqlCheck.setToolTipText(msg("settings.xmlInlineSql.tip"));
+                addRow(p, g, "", xmlInlineSqlCheck);
                 joinDiagramNativeCheck.setText(msg("settings.joinDiagramNative"));
                 joinDiagramNativeCheck.setToolTipText(msg("settings.joinDiagramNative.tip"));
                 addRow(p, g, "", joinDiagramNativeCheck);
@@ -1587,9 +1703,11 @@ public class PluginSettingsPanel implements Disposable {
         reverseFormatCombo.setSelectedItem(option);
     }
 
-    /** T-PT-04：空参数填充策略选择入口（测试用）——与用户点选同一路径（isModified/apply 检测）。 */
+    /** T-PT-04 / O-79：空参数填充策略选择入口（测试用）——与用户点选同一路径（isModified/apply 检测）。 */
     public void selectEmptyParamFill(String value) {
-        if (PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING.equals(value)) {
+        if (PluginSettings.EMPTY_PARAM_FILL_PLACEHOLDER.equals(value)) {
+            emptyParamFillPlaceholderRadio.setSelected(true);
+        } else if (PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING.equals(value)) {
             emptyParamFillEmptyRadio.setSelected(true);
         } else {
             emptyParamFillNullRadio.setSelected(true);
@@ -1837,6 +1955,7 @@ public class PluginSettingsPanel implements Disposable {
             || enhancedCaptureCheck.isSelected() != s.getEnhancedCaptureEnabled()
             || enhancedDesensitizeCheck.isSelected() != s.getEnhancedCaptureDesensitize()
             || !frameSkipPrefixesField.getText().trim().equals(s.getSourceFrameSkipPrefixes().trim())
+            || !bizJarPrefixesField.getText().trim().equals(s.getSourceFrameBizJarPrefixes().trim())
             || logHibernateEnabledCheck.isSelected() != s.getLogHibernateEnabled()
             || !logHibernateSqlPrefixField.getText().trim().equals(s.getLogHibernateSqlPrefix())
             || !logHibernateParamPrefixField.getText().trim().equals(s.getLogHibernateParamPrefix())
@@ -1861,6 +1980,7 @@ public class PluginSettingsPanel implements Disposable {
     private boolean isModifiedUi(PluginSettings.State s) {
         Object lang = languageCombo.getSelectedItem();
         return gutterIconCheck.isSelected() != s.getShowGutterIcon()
+            || xmlInlineSqlCheck.isSelected() != s.getXmlInlineSqlEnabled()
             || joinDiagramNativeCheck.isSelected() != s.getJoinDiagramNative()
             // T-PreviewWhitespaceToggle O-44a：空白符开关（漏挂 isModified → 勾选后 Apply 不启用）
             || editorShowWhitespacesCheck.isSelected() != s.getEditorShowWhitespaces()
@@ -1980,6 +2100,18 @@ public class PluginSettingsPanel implements Disposable {
                 }
             }
             s.setSourceFrameSkipPrefixes(normalizedPrefixes.toString());
+            // T-ToolSiteBizFrame：反向名单同款规范化写回
+            StringBuilder normalizedBizJar = new StringBuilder();
+            for (String line : bizJarPrefixesField.getText().lines().toList()) {
+                String trimmed = line.trim();
+                if (!trimmed.isEmpty()) {
+                    if (normalizedBizJar.length() > 0) {
+                        normalizedBizJar.append('\n');
+                    }
+                    normalizedBizJar.append(trimmed);
+                }
+            }
+            s.setSourceFrameBizJarPrefixes(normalizedBizJar.toString());
             s.setLogHibernateEnabled(logHibernateEnabledCheck.isSelected());
             s.setLogHibernateSqlPrefix(logHibernateSqlPrefixField.getText().trim());
             s.setLogHibernateParamPrefix(logHibernateParamPrefixField.getText().trim());
@@ -2005,6 +2137,7 @@ public class PluginSettingsPanel implements Disposable {
         }
         if (sections.contains(SECTION_UI)) {
             s.setShowGutterIcon(gutterIconCheck.isSelected());
+            s.setXmlInlineSqlEnabled(xmlInlineSqlCheck.isSelected());
             s.setJoinDiagramNative(joinDiagramNativeCheck.isSelected());
             // T-UxOnboard T-UX-01：首用锚点引导开关写回（随 UI 分区，读写判定同归属）
             s.setOnboardingAnchorTipEnabled(onboardingAnchorTipCheck.isSelected());
@@ -2063,9 +2196,15 @@ public class PluginSettingsPanel implements Disposable {
             refreshInferredLabel();
             replaceParamsCheck.setSelected(s.getReplaceParams());
             formatCheck.setSelected(s.getFormatSql());
-            // T-PT-04：空参数填充策略回填（非 EMPTY_STRING 一律按默认 NULL 档选中——旧配置/非法值容错）
+            // T-PT-04 / O-79：空参数填充策略回填（三档互斥；存量「NULL」持久化值保持原档，
+            // 空白/非法值落默认占位档——ButtonGroup 需至少一项选中）
+            emptyParamFillPlaceholderRadio.setSelected(PluginSettings.EMPTY_PARAM_FILL_PLACEHOLDER.equals(s.getEmptyParamFill()));
+            emptyParamFillNullRadio.setSelected(PluginSettings.EMPTY_PARAM_FILL_NULL.equals(s.getEmptyParamFill()));
             emptyParamFillEmptyRadio.setSelected(PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING.equals(s.getEmptyParamFill()));
-            emptyParamFillNullRadio.setSelected(!PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING.equals(s.getEmptyParamFill()));
+            if (!emptyParamFillPlaceholderRadio.isSelected() && !emptyParamFillNullRadio.isSelected()
+                    && !emptyParamFillEmptyRadio.isSelected()) {
+                emptyParamFillPlaceholderRadio.setSelected(true);
+            }
             verticalPairAnnotationCheck.setSelected(s.getVerticalPairAnnotation());
             autoFoldCheck.setSelected(s.getAutoFoldEnabled());
             autoFoldThresholdField.setText(String.valueOf(s.getAutoFoldFieldThreshold()));
@@ -2099,6 +2238,7 @@ public class PluginSettingsPanel implements Disposable {
         }
         if (sections.contains(SECTION_UI)) {
             gutterIconCheck.setSelected(s.getShowGutterIcon());
+            xmlInlineSqlCheck.setSelected(s.getXmlInlineSqlEnabled());
             joinDiagramNativeCheck.setSelected(s.getJoinDiagramNative());
             onboardingAnchorTipCheck.setSelected(s.getOnboardingAnchorTipEnabled());
             // T-PreviewWhitespaceToggle O-44a：空白符开关回填
@@ -2143,6 +2283,7 @@ public class PluginSettingsPanel implements Disposable {
             enhancedCaptureCheck.setSelected(s.getEnhancedCaptureEnabled());
             enhancedDesensitizeCheck.setSelected(s.getEnhancedCaptureDesensitize());
             frameSkipPrefixesField.setText(s.getSourceFrameSkipPrefixes());
+            bizJarPrefixesField.setText(s.getSourceFrameBizJarPrefixes());
             logHibernateEnabledCheck.setSelected(s.getLogHibernateEnabled());
             logHibernateSqlPrefixField.setText(s.getLogHibernateSqlPrefix());
             logHibernateParamPrefixField.setText(s.getLogHibernateParamPrefix());

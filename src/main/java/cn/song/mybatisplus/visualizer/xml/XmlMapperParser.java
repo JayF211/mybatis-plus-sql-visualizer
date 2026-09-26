@@ -52,7 +52,9 @@ public class XmlMapperParser {
                             element.getAttribute("id"),
                             kindOf(element.getTagName()),
                             new XmlScriptBuilder().parse(element),
-                            element.getAttribute("parameterType").isEmpty() ? null : element.getAttribute("parameterType")
+                            element.getAttribute("parameterType").isEmpty() ? null : element.getAttribute("parameterType"),
+                            // O-77 T-EwStatementScope：语句原文（include 展开后的 textContent，实体已解码）
+                            element.getTextContent()
                     );
                 })
                 .toList();

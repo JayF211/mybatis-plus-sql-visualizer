@@ -101,10 +101,11 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private boolean formatSql = true;
 
         /**
-         * 空参数填充策略（T-PT-04）：参数值为空时的回填形态——{@link #EMPTY_PARAM_FILL_NULL}（默认，
-         * 渲染 {@code NULL}）或 {@link #EMPTY_PARAM_FILL_EMPTY_STRING}（渲染 {@code ''}）。
+         * 空参数填充策略（T-PT-04 / O-79 三态化）：参数值为空时的回填形态——
+         * {@link #EMPTY_PARAM_FILL_PLACEHOLDER}（默认，保留 {@code ?} 待填提示）/
+         * {@link #EMPTY_PARAM_FILL_NULL}（渲染 {@code NULL}）/{@link #EMPTY_PARAM_FILL_EMPTY_STRING}（渲染 {@code ''}）。
          * 消费点 = SqlPreviewPanel.renderParamValue 的空值分支，且仅对<b>带 mapper 签名类型信息</b>的
-         * 参数行生效（无类型信息路径保留 {@code ?} 占位提示，行为与升级前一致）。
+         * 参数行生效（无类型信息路径恒 {@code ?}，宁缺勿错）。
          */
         private String emptyParamFill = DEFAULT_EMPTY_PARAM_FILL;
         /**
@@ -127,6 +128,13 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          */
         private int autoFoldFieldThreshold = DEFAULT_AUTO_FOLD_FIELD_THRESHOLD;
         private boolean showGutterIcon = true;
+
+        /**
+         * 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）：
+         * 叶子标签文本首词命中 SQL 关键字即认领（不限根元素/标签名）；
+         * 关闭后 gutter 与 Alt+Shift+Q 兜底均不生效（mapper/pages/hbm 三套白名单不受影响）。
+         */
+        private boolean xmlInlineSqlEnabled = true;
 
         /**
          * JOIN 图渲染方式（T-Dgm-04）：true=IDE 原生图框架（Ultimate 的 Diagrams 插件，类图观感，
@@ -361,6 +369,13 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          */
         private String sourceFrameSkipPrefixes = "";
 
+        /**
+         * T-ToolSiteBizFrame：JAR 业务帧反向名单（一行一个，如 {@code com.corp.shared.util.}）。
+         * 语义与 {@link #sourceFrameSkipPrefixes} 相反——名单内包名的帧即使以依赖 JAR 形态运行，
+         * agent 侧来源判定也按业务帧对待（不再上顶到调用方）。CONFIG 热下发。空 = 未登记。
+         */
+        private String sourceFrameBizJarPrefixes = "";
+
         public boolean getDialectAuto() { return dialectAuto; }
         public void setDialectAuto(boolean dialectAuto) { this.dialectAuto = dialectAuto; }
 
@@ -387,6 +402,11 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
         public boolean getShowGutterIcon() { return showGutterIcon; }
         public void setShowGutterIcon(boolean showGutterIcon) { this.showGutterIcon = showGutterIcon; }
+
+        /** 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）。 */
+        public boolean getXmlInlineSqlEnabled() { return xmlInlineSqlEnabled; }
+        public void setXmlInlineSqlEnabled(boolean xmlInlineSqlEnabled) { this.xmlInlineSqlEnabled = xmlInlineSqlEnabled; }
+
         public boolean getJoinDiagramNative() { return joinDiagramNative; }
         public void setJoinDiagramNative(boolean joinDiagramNative) { this.joinDiagramNative = joinDiagramNative; }
 
@@ -600,6 +620,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public String getSourceFrameSkipPrefixes() { return sourceFrameSkipPrefixes; }
         public void setSourceFrameSkipPrefixes(String sourceFrameSkipPrefixes) { this.sourceFrameSkipPrefixes = sourceFrameSkipPrefixes; }
 
+        public String getSourceFrameBizJarPrefixes() { return sourceFrameBizJarPrefixes; }
+        public void setSourceFrameBizJarPrefixes(String sourceFrameBizJarPrefixes) { this.sourceFrameBizJarPrefixes = sourceFrameBizJarPrefixes; }
+
         /** 浅拷贝（仅复制字段引用/值；供持久化 loadState 触发引用变化）。 */
         @NotNull
         public State copy() {
@@ -613,6 +636,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.autoFoldEnabled = autoFoldEnabled;
             c.autoFoldFieldThreshold = autoFoldFieldThreshold;
             c.showGutterIcon = showGutterIcon;
+            c.xmlInlineSqlEnabled = xmlInlineSqlEnabled;
             c.editorShowWhitespaces = editorShowWhitespaces;
             c.language = language;
             c.injectLogicDelete = injectLogicDelete;
@@ -683,6 +707,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.onboardingAnchorTipEnabled = onboardingAnchorTipEnabled;
             c.onboardingAnchorTipShown = onboardingAnchorTipShown;
             c.sourceFrameSkipPrefixes = sourceFrameSkipPrefixes;
+            c.sourceFrameBizJarPrefixes = sourceFrameBizJarPrefixes;
             return c;
         }
 
@@ -697,6 +722,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && verticalPairAnnotation == that.verticalPairAnnotation
                     && autoFoldEnabled == that.autoFoldEnabled
                     && showGutterIcon == that.showGutterIcon
+                    && xmlInlineSqlEnabled == that.xmlInlineSqlEnabled
                     && editorShowWhitespaces == that.editorShowWhitespaces
                     && injectLogicDelete == that.injectLogicDelete
                     && injectTenantLine == that.injectTenantLine
@@ -766,6 +792,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && Objects.equals(reportSubmitterEmail, that.reportSubmitterEmail)
                     && Objects.equals(mcpDisabledTools, that.mcpDisabledTools)
                     && Objects.equals(sourceFrameSkipPrefixes, that.sourceFrameSkipPrefixes)
+                    && Objects.equals(sourceFrameBizJarPrefixes, that.sourceFrameBizJarPrefixes)
                     && Objects.equals(logHibernateSqlPrefix, that.logHibernateSqlPrefix)
                     && Objects.equals(logHibernateParamPrefix, that.logHibernateParamPrefix)
                     && Objects.equals(dynamicTableNameRules, that.dynamicTableNameRules)
@@ -776,7 +803,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public int hashCode() {
             return Objects.hash(
                     dialectAuto, dialect, replaceParams, formatSql, emptyParamFill, verticalPairAnnotation, autoFoldEnabled, autoFoldFieldThreshold,
-                    showGutterIcon, editorShowWhitespaces, language, injectLogicDelete,
+                    showGutterIcon, xmlInlineSqlEnabled, editorShowWhitespaces, language, injectLogicDelete,
                     logicDeleteValue, injectTenantLine, tenantColumnName, tenantColumnDefault, injectTenantOnInsert,
                     tablePrefix, tableSuffix, tableNameInference, ignoredFields, removeTablePrefix, removeTableSuffix,
                     columnCalibrationEnabled,
@@ -791,7 +818,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     dynamicTableNameRules, dataPermissionHint, dataPermissionMockCondition, historyMaxSize,
                     reportSubmitterName, reportSubmitterEmail, mcpToolsEnabled, mcpDisabledTools,
                     enhancedCaptureEnabled, enhancedCaptureConfirmed, enhancedCaptureRejectedAtMs, enhancedCaptureDesensitize,
-                    onboardingAnchorTipEnabled, onboardingAnchorTipShown, sourceFrameSkipPrefixes);
+                    onboardingAnchorTipEnabled, onboardingAnchorTipShown, sourceFrameSkipPrefixes, sourceFrameBizJarPrefixes);
         }
 
         @Override
@@ -814,14 +841,17 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
     // ---------- T-PT-04：空参数填充策略 ----------
 
-    /** 空参数填充策略：NULL 字面量（默认）。 */
+    /** 空参数填充策略：{@code ?} 占位符（O-79 默认——未填写保留待填提示；NULL 会静默过滤行不易察觉）。 */
+    public static final String EMPTY_PARAM_FILL_PLACEHOLDER = "PLACEHOLDER";
+
+    /** 空参数填充策略：NULL 字面量。 */
     public static final String EMPTY_PARAM_FILL_NULL = "NULL";
 
     /** 空参数填充策略：空字符串字面量 {@code ''}。 */
     public static final String EMPTY_PARAM_FILL_EMPTY_STRING = "EMPTY_STRING";
 
-    /** 空参数填充策略默认值（NULL 字面量，贴近 MyBatis 绑定 null 的真实效果）。 */
-    public static final String DEFAULT_EMPTY_PARAM_FILL = EMPTY_PARAM_FILL_NULL;
+    /** 空参数填充策略默认值（O-79 定案：{@code ?} 占位，待填提示醒目；NULL/'' 档换取可直接执行的 SQL）。 */
+    public static final String DEFAULT_EMPTY_PARAM_FILL = EMPTY_PARAM_FILL_PLACEHOLDER;
 
     /** 表名推断策略：驼峰转下划线（默认，对齐 MP，`BikeDeviceInfoEntity` → `bike_device_info`）。 */
     public static final String INFERENCE_SNAKE = "SNAKE";

@@ -1,6 +1,7 @@
 // T-SyncK2JMaster309 自 master util/BatchPredicateMerge.kt 移植
 package cn.song.mybatisplus.visualizer.util;
 
+import cn.song.mybatisplus.visualizer.execute.SqlAstParser;
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -18,7 +19,6 @@ import net.sf.jsqlparser.expression.LongValue;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.operators.relational.EqualsTo;
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.statement.delete.Delete;
 import kotlin.Pair;
@@ -157,9 +157,10 @@ public final class BatchPredicateMerge {
     private static ParsedDelete parseEqualityDelete(@NotNull String statement) {
         String cleaned = SqlCommentStripper.strip(statement);
         if (cleaned.isBlank()) return null;
+        // T-PS7-03 收拢：走 SqlAstParser.parseSingle——方括号引用的 DELETE 不再判「不可合并」
         net.sf.jsqlparser.statement.Statement parsed;
         try {
-            parsed = CCJSqlParserUtil.parse(cleaned);
+            parsed = SqlAstParser.INSTANCE.parseSingle(cleaned);
         } catch (Exception e) {
             return null;
         }

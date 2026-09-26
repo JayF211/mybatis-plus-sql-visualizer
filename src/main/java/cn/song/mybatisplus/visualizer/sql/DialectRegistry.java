@@ -19,7 +19,9 @@ public final class DialectRegistry {
             SqliteDialect.INSTANCE,
             MariaDbDialect.INSTANCE,
             DmDialect.INSTANCE,
-            KingBaseDialect.INSTANCE);
+            KingBaseDialect.INSTANCE,
+            OceanBaseDialect.INSTANCE,
+            OpenGaussDialect.INSTANCE);
 
     private DialectRegistry() {}
 

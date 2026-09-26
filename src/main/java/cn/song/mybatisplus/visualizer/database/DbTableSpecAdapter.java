@@ -74,7 +74,15 @@ public final class DbTableSpecAdapter {
                 columns,
                 null,
                 null,
-                PsiDialect.currentDialect(),
+                // 2026-09-23 真机走查发现并修：此处原为 `currentDialect()`（**不传 project**），
+                // 而 `DialectRegistry.effective(null)` 在 auto 分支里因 `project ?: return byName(manualName)`
+                // 直接落到全局设置 → `PluginSettings.DEFAULT_DIALECT = "MySQL"` ⇒ **无论表属于哪个库，
+                // 一律按 MySQL 渲染**。真机实证（本机 SQL Server 2022 容器）：右键 `dbo.[user]` 生成 CRUD SQL
+                // 得到 `INSERT INTO `user` (…)`（反引号），而该形态在 SQL Server 上直接
+                // `Msg 102 … Incorrect syntax near '`'`；同时因方言不是 SqlServerDialect，
+                // 勾选自增列时也不会过 `renderIdentityWrapper`（O-52 的 CRUD 侧判据因此在真机上不成立）。
+                // 修法＝把表所属项目传进解析链，与插件其余路径同源（项目数据源 URL 推断方言）。
+                PsiDialect.currentDialect(table.getProject()),
                 // O-42：本类是目录来源的**唯一**入口——`das.name` / `col.name` 直取自省元数据，
                 // 即字典里的真实大小写（真库实测：`all_tables.table_name` 对带引号创建的表返回
                 // 小写 `issue_new`，未归一）。标记后按方言折叠方向族引用（O-51）：

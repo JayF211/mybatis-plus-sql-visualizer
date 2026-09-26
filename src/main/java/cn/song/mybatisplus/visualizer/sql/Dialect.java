@@ -289,11 +289,16 @@ public interface Dialect {
     }
 
     /**
-     * 共享 upsert 辅助：MySQL 形态 {@code ON DUPLICATE KEY UPDATE col = VALUES(col), ...}。
+     * 共享渲染辅助：MySQL 形态 {@code ON DUPLICATE KEY UPDATE col = VALUES(col), ...}。
      * 供 MySQL / MariaDB 复用（VALUES() 对 5.7~8.0+/MariaDB 全版本可用）。
      *
      * <p>O-51：列名引用走 {@link #quoteIfNeeded}（而非裸 {@link #quoteIfKeyword}），与 INSERT 基座同一判定；
      * MySQL / MariaDB 为 NONE 族，实体/目录来源产物逐字节不变。</p>
+     *
+     * <p>T-DialectXcFamily（O-63）扩员：OceanBase（MySQL 模式）与 openGauss 也以本形态为原生 upsert——
+     * 前者为 MySQL 兼容面（官方《与 MySQL 兼容性对比》+《唯一键冲突》）；后者<b>真机实证</b>仅本形态可用
+     * （openGauss 5.0.0：{@code ON DUPLICATE KEY UPDATE} 解析通过、PG 的 {@code ON CONFLICT} 语法错误，
+     * 2026-09-23 DBX 只读通道）——「PG 族=ON CONFLICT」的族推定在 openGauss 不成立（见 {@link OpenGaussDialect}）。</p>
      */
     static String renderMySqlStyleUpsert(Dialect self, List<String> updateColumns,
                                          IdentifierCaseSource caseSource) {

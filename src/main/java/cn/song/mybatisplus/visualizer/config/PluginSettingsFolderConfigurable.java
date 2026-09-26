@@ -665,10 +665,13 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         fields.add(new SearchableField(msg("settings.enhancedCapture"), msg("settings.enhancedCapture.status"), "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.enhancedCapture.desensitize"), "", "settings.section.sqlLog", l));
         fields.add(new SearchableField(msg("settings.sourceFrameSkipPrefixes"), msg("settings.sourceFrameSkipPrefixes.tip"), "settings.section.sqlLog", l));
+        fields.add(new SearchableField(msg("settings.sourceFrameBizJarPrefixes"), msg("settings.sourceFrameBizJarPrefixes.tip"), "settings.section.sqlLog", l));
 
         // 界面与操作
         SubPageRef u = PAGE_UI.ref;
         fields.add(new SearchableField(msg("settings.showGutterIcon"), "", "settings.section.ui", u));
+        // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关（界面节）
+        fields.add(new SearchableField(msg("settings.xmlInlineSql"), msg("settings.xmlInlineSql.tip"), "settings.section.ui", u));
         fields.add(new SearchableField(msg("settings.language"), "", "settings.section.ui", u));
         fields.add(new SearchableField(msg("settings.shortcut"), msg("settings.shortcut.tip"), "settings.section.ui", u));
         fields.add(new SearchableField(msg("settings.shortcut.sqlToJava"), "", "settings.section.ui", u));

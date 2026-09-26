@@ -8,7 +8,7 @@ import com.intellij.psi.search.FileTypeIndex;
 import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.xml.XmlFile;
 import com.intellij.psi.xml.XmlTag;
-import com.intellij.psi.xml.XmlText;
+import cn.song.mybatisplus.visualizer.xml.XmlDirectText;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -146,17 +146,11 @@ public final class HbmXmlEntityResolver {
     }
 
     /**
-     * T-H1：提取命名查询文本——直属 XmlText 拼接（CDATA 已被 PSI 展开为文本节点），
-     * 排除 {@code <return-scalar>}/{@code <return>}/{@code <query-param>} 等子标签的子内容。
+     * T-H1：提取命名查询文本——直属 XmlText 拼接（CDATA 剥包裹、trim，口径见
+     * {@code xml/XmlDirectText}）；排除 {@code <return-scalar>}/{@code <return>}/{@code <query-param>} 等子标签的子内容。
      */
     private static String extractNamedQueryText(@NotNull XmlTag tag) {
-        StringBuilder sb = new StringBuilder();
-        for (com.intellij.psi.PsiElement child : tag.getChildren()) {
-            if (child instanceof XmlText text) {
-                sb.append(text.getText());
-            }
-        }
-        return sb.toString().trim();
+        return XmlDirectText.directTextOf(tag);
     }
 
     /**

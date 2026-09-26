@@ -18,13 +18,16 @@ import cn.song.mybatisplus.visualizer.ui.AnnotationSqlPreviewService;
 import cn.song.mybatisplus.visualizer.ui.PagesXmlPreviewService;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService;
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog;
+import cn.song.mybatisplus.visualizer.ui.XmlInlineSqlPreviewService;
 import cn.song.mybatisplus.visualizer.ui.XmlPreviewService;
 import cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver;
 import cn.song.mybatisplus.visualizer.ui.SourceSqlContext;
 import cn.song.mybatisplus.visualizer.ui.gutter.PagesXmlGutterLineMarkerProvider;
 import cn.song.mybatisplus.visualizer.ui.gutter.StringSqlMethodGutterLineMarkerProvider;
+import cn.song.mybatisplus.visualizer.ui.gutter.XmlInlineSqlGutterLineMarkerProvider;
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext;
+import cn.song.mybatisplus.visualizer.xml.XmlInlineSqlDetector;
 import com.intellij.openapi.actionSystem.ActionUpdateThread;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
@@ -48,8 +51,10 @@ import com.intellij.psi.xml.XmlTag;
 import kotlin.Unit;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -458,7 +463,15 @@ public final class ConvertToSqlAction extends AnAction {
             Pair<List<XmlTag>, List<SqlSelectionDialog.Row>> payload;
             try {
                 payload = ReadAction.compute(() -> {
-                    List<XmlTag> tags = XmlSqlGutterLineMarkerProvider.statementsInRange(file, selStart, selEnd);
+                    // O-72：mapper 语句候选 + 通用内嵌 SQL 载体候选（排除集合保证互斥，按 offset 归并）
+                    List<XmlTag> mapperTags = XmlSqlGutterLineMarkerProvider.statementsInRange(file, selStart, selEnd);
+                    List<XmlTag> inlineTags = XmlInlineSqlDetector.INSTANCE.detectionEnabled()
+                            ? XmlInlineSqlGutterLineMarkerProvider.carriersInRange(file, selStart, selEnd)
+                            : Collections.<XmlTag>emptyList();
+                    List<XmlTag> tags = new ArrayList<>(mapperTags.size() + inlineTags.size());
+                    tags.addAll(mapperTags);
+                    tags.addAll(inlineTags);
+                    tags.sort(Comparator.comparingInt(t -> t.getTextRange().getStartOffset()));
                     List<SqlSelectionDialog.Row> rows = tags.stream().map(t -> {
                         int line = lineOf(t);
                         String text = t.getText() != null ? t.getText().trim() : "";
@@ -478,27 +491,31 @@ public final class ConvertToSqlAction extends AnAction {
                 if (tags.isEmpty()) {
                     SqlPreviewService.showResult(project, null, sourceLocation);
                 } else if (tags.size() == 1) {
-                    previewXml(project, file, tags.get(0), sourceLocation);
+                    previewXmlTag(project, file, tags.get(0), sourceLocation);
                 } else {
                     new SqlSelectionDialog<>(project, tags, displayTexts, (XmlTag selected) -> {
                         locateEditorTo(editor, selected);
-                        previewXml(project, file, selected, sourceLocation);
+                        previewXmlTag(project, file, selected, sourceLocation);
                     }).show();
                 }
             });
         });
     }
 
-    /** XML mapper 语句预览——光标所在语句优先；不在语句内时收集全部语句（0/1/多分发）。 */
+    /**
+     * XML mapper 语句预览——光标所在语句优先；不在语句内时收集全部语句（0/1/多分发）。
+     * O-72：光标上爬与全文件收集均追加通用内嵌 SQL 载体（开关 {@code xmlInlineSqlEnabled} 闸）。
+     */
     private void previewXmlStatement(Project project, XmlFile file, Editor editor, String sourceLocation) {
         PsiElement element = file.findElementAt(editor.getCaretModel().getOffset());
         XmlTag tag = element != null ? PsiTreeUtil.getParentOfType(element, XmlTag.class) : null;
         XmlTag statement = tag;
-        while (statement != null && !XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS.contains(statement.getName())) {
+        while (statement != null && !XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS.contains(statement.getName())
+                && !(XmlInlineSqlDetector.INSTANCE.detectionEnabled() && XmlInlineSqlDetector.INSTANCE.isSqlCarrierTag(statement))) {
             statement = statement.getParentTag();
         }
         if (statement != null) {
-            previewXml(project, file, statement, sourceLocation);
+            previewXmlTag(project, file, statement, sourceLocation);
             return;
         }
         // 光标不在语句内 → 全部语句候选（T-M25-01）
@@ -509,7 +526,8 @@ public final class ConvertToSqlAction extends AnAction {
             try {
                 payload = ReadAction.compute(() -> {
                     List<XmlTag> statements = PsiTreeUtil.findChildrenOfType(file, XmlTag.class).stream()
-                            .filter(it -> XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS.contains(it.getName()))
+                            .filter(it -> XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS.contains(it.getName())
+                                    || (XmlInlineSqlDetector.INSTANCE.detectionEnabled() && XmlInlineSqlDetector.INSTANCE.isSqlCarrierTag(it)))
                             .collect(Collectors.toList());
                     List<SqlSelectionDialog.Row> rows = statements.stream().map(t -> {
                         int line = lineOf(t);
@@ -531,18 +549,30 @@ public final class ConvertToSqlAction extends AnAction {
                 if (statements.isEmpty()) {
                     SqlPreviewService.showResult(project, null, sourceLocation);
                 } else if (statements.size() == 1) {
-                    previewXml(project, file, statements.get(0), sourceLocation);
+                    previewXmlTag(project, file, statements.get(0), sourceLocation);
                 } else if (displayTexts.size() != statements.size()) {
                     SqlPreviewService.showResult(project, null, sourceLocation);
                 } else {
                     new SqlSelectionDialog<>(project, statements, displayTexts, (XmlTag selected) -> {
                         // T-M29.6：选中确定 → 编辑器定位（行首 + 滚动居中 + 整行选中）→ 预览 SQL
                         locateEditorTo(editor, selected);
-                        previewXml(project, file, selected, sourceLocation);
+                        previewXmlTag(project, file, selected, sourceLocation);
                     }).show();
                 }
             });
         });
+    }
+
+    /** 预览单个 XML 语句（后台转换，EDT 渲染；T-M25.2 传 project 解析静态常量引用）。 */
+    /** O-72：统一 XML 语句分发——通用内嵌 SQL 载体走 inline 预览，其余走 mapper 语句预览。 */
+    private void previewXmlTag(Project project, XmlFile file, XmlTag tag, String sourceLocation) {
+        if (XmlInlineSqlDetector.INSTANCE.isSqlCarrierTag(tag)) {
+            SqlPreviewService.previewAsync(project,
+                    () -> XmlInlineSqlPreviewService.INSTANCE.preview(project, tag),
+                    (PreviewResult result) -> { SqlPreviewService.showResult(project, result, sourceLocation); return Unit.INSTANCE; });
+            return;
+        }
+        previewXml(project, file, tag, sourceLocation);
     }
 
     /** 预览单个 XML 语句（注入实体上下文）。 */

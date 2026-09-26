@@ -1,5 +1,7 @@
 // T-SyncK2JMaster309 自 master sql/rollback/RollbackSqlGenerator.kt 移植
 // T-SyncK2JMaster115 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/sql/rollback/RollbackSqlGenerator.kt 移植（P8：快照上限警示补传 {1} 上限实参；同提交的 P11 补键在 resources 侧，本文件未动）
+// T-SyncK2JMaster187 c07b8e3 增量：方言需包装而自增列未知时补显式告警 rollback.warn.identityUnknown
+// （不再静默产出必失败的 INSERT；探针 SQL 判「本方言有无包装形态」）
 package cn.song.mybatisplus.visualizer.sql.rollback;
 
 import cn.song.mybatisplus.visualizer.execute.UnboundedWriteDetector;
@@ -650,6 +652,13 @@ public final class RollbackSqlGenerator {
                     return wrapped != null ? wrapped : insertSql;
                 }
                 : null;
+        // 方言能力探测：探针 SQL 只为问「本方言有没有包装形态」（默认 null，SQL Server/DM 有）。
+        boolean dialectNeedsWrapper = dialect != null && dialect.renderInsertWrapper(table,
+                "INSERT INTO " + table + " (" + columnList + ") VALUES (…);") != null;
+        // 「未知即不包装」是 O-52 D1=A 的既定契约，但**不能静默**：方言明明需要包装、而本次又没取到自增列时，
+        // 产物就是一个执行必失败（SQL Server/DM 报 544 一类）的 INSERT。真机走查（2026-09-23）正是在这条路上翻车：
+        // DAS 没给出自增列 → 无包装 → 用户只看到 544、且不知道是「没内省」导致的。故补一条显式告警。
+        boolean identityUnknown = !wrapIdentity && dialectNeedsWrapper && identityColumns.isEmpty();
         List<String> statements = new ArrayList<>(rows.size());
         StringBuilder sb = new StringBuilder();
         int batchRows = 0;
@@ -671,6 +680,10 @@ public final class RollbackSqlGenerator {
         }
         if (!sb.isEmpty()) statements.add(flushInsertBatch(sb, table, columnList, wrapper));
         List<RollbackWarning> warnings = new ArrayList<>();
+        if (identityUnknown) {
+            warnings.add(new RollbackWarning("rollback.warn.identityUnknown",
+                    List.of(dialect != null ? dialect.getName() : "")));
+        }
         // 文案含两个占位符（{0} 行数 / {1} 上限）——曾只传 {0}，弹窗会原样显示「上限 {1}」
         if (rows.size() >= SNAPSHOT_ROW_LIMIT) {
             warnings.add(new RollbackWarning(

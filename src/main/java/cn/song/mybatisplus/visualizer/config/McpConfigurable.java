@@ -30,6 +30,11 @@ import javax.swing.JPanel;
  * 平台 getEnabledToolsets 每次列表/调用重新求值——262 mcpserver.jar 字节码实证，切换即时生效）。
  * 平台侧工具过滤（McpServerSettingsConfigurable）仍是另一独立维度，本页只管插件自有工具；
  * 「点击前往」跳转入口保留（平台级 disallow list 与本页互补，各自单一真相源）。
+ *
+ * T-McpGateDynamicFilter（O-68）订正与增补：getEnabledToolsets 过滤只覆盖 ReflectionToolsProvider
+ * 路径，agent 真正看到的外部会话清单走 getMcpToolsFiltered 过滤层——本页门控经
+ * SqlVisualizerToolGateFilterProvider（mcpServer.mcpToolFilterProvider EP，mcp-filter-optional.xml
+ * 注册、since-build="262" 门控）同步驱动外部路径，两条路径均出自 McpToolGate 单一真相源。
  */
 public class McpConfigurable implements Configurable {
 

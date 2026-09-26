@@ -68,8 +68,12 @@ public final class JpaAliasTableResolver {
             "(?i:\\b(?:FROM|JOIN)\\s+)([a-zA-Z_][a-zA-Z0-9_.$]*)" +
                     "(?:\\s+AS\\s+([a-zA-Z_][a-zA-Z0-9_]*)|\\s+([a-zA-Z_][a-zA-Z0-9_]*))?");
 
-    /** 子句关键字表（沿用 JpaJoinRewriter.normalizeAlias 的口径，补 JOIN 族与集合运算词）。 */
-    private static final Set<String> CLAUSE_KEYWORDS = Set.of(
+    /**
+     * 子句关键字表（沿用 JpaJoinRewriter.normalizeAlias 的口径，补 JOIN 族与集合运算词）。
+     * O-71 T-01 起由 {@link JpaAliasPropertyMapper} 共用（裸词替换的排除表之一）——master 侧提为
+     * 文件顶层，本移植中留在外层类、内层类直接可见。
+     */
+    static final Set<String> CLAUSE_KEYWORDS = Set.of(
             "ON", "WHERE", "SET", "GROUP", "ORDER", "HAVING", "INNER", "LEFT",
             "RIGHT", "OUTER", "CROSS", "FULL", "JOIN", "FETCH", "AS", "UNION", "WITH",
             "BY", "AND", "OR", "NOT", "IN", "IS", "NULL", "EXISTS", "BETWEEN", "LIKE",
@@ -241,14 +245,18 @@ public final class JpaAliasTableResolver {
     }
 
     /**
-     * 别名作用域属性映射（O-57 T-01/T-02/T-06 的替换核心）。
+     * 别名作用域属性映射（O-57 T-01/T-02/T-06 的替换核心；O-71 T-01/T-02 扩展）。
      *
      * 放在本文件而非两个转换器内，是因为 HqlConverter 与 JpqlConverter 必须逐字一致——
      * 逻辑只有一份才谈得上「两条链行为一致」。
      *
-     * 单遍扫描：每个 {@code 限定符.中间段.属性} 命中时按限定符分派到已解析别名；未命中
-     * （裸限定符 / 别名解析不出实体）回落根实体列清单——与改前行为逐字一致，
-     * 这是「只收窄不丢失」的落点。
+     * 点号路径单遍扫描：每个 {@code 限定符.中间段.属性} 命中时按限定符分派到已解析别名；未命中
+     * （裸限定符 / 别名解析不出实体）回落根实体列清单。O-71 起该回落不再「原样透传」：
+     * 限定符位是嵌入段（{@code updateInfo.beDelete}）时剥离，裸属性（无点号的独立词）按根实体列
+     * 清单精确映射——<b>契约变更</b>：O-57 以「只收窄不丢失」为由保守排除裸属性（正则要求带
+     * 点号），实测证明该排除使无别名/漏写前缀的 HQL 的 WHERE/SELECT 投影永不映射，产物必为
+     * 无效 SQL，故推翻。O-57 的既有红线（不产生「原本会被替换、现在不替换」的回归）仍然成立：
+     * 本次只新增替换面，点号路径的行为逐字未变。
      */
     public static final class JpaAliasPropertyMapper {
 
@@ -292,6 +300,22 @@ public final class JpaAliasTableResolver {
                 STRING_LITERAL.pattern() + "|" + PROPERTY_PATTERN);
 
         /**
+         * O-71 T-01：裸标识符分支（无点号路径的独立词）——「字面量 | 裸词」交替，字面量分支
+         * 在前且不带捕获组，手法与 {@link #PROPERTY_OR_LITERAL} 一致。词后紧跟 {@code (} 的负前瞻排除
+         * 函数调用（{@code count(1)} / {@code count (1)} 均覆盖）。
+         */
+        private static final Pattern BARE_WORD_OR_LITERAL = Pattern.compile(
+                STRING_LITERAL.pattern() + "|\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b(?!\\s*\\()");
+
+        /**
+         * T-01 裸词替换的补充排除表：布尔/常量字面量与 HQL 特有操作词（子句关键字见外层
+         * {@link JpaAliasTableResolver#CLAUSE_KEYWORDS}；函数调用已由负前瞻排除）。{@code OF} 是给
+         * {@code MEMBER OF} 降级注释里残留词的双保险——该注释在本映射之前生成，其内的英文词不参与裸词替换。
+         */
+        private static final Set<String> BARE_WORD_EXCLUDED =
+                Set.of("TRUE", "FALSE", "EMPTY", "MEMBER", "ESCAPE", "SOME", "ANY", "ALL", "OF");
+
+        /**
          * {@code ON <条件>} 区域：到下一个子句关键字为止（跨行，{@code .*?} 配 DOTALL）。
          *
          * 整体 {@code (?i)}——大小写不敏感必须覆盖<b>前瞻里的子句关键字</b>，否则小写 HQL（常态）下
@@ -304,10 +328,10 @@ public final class JpaAliasTableResolver {
                 Pattern.DOTALL);
 
         /**
-         * 把 {@code 限定符.属性} 映射为 {@code 限定符.列名}。
+         * 把 {@code 限定符.属性} 映射为 {@code 限定符.列名}，再对裸属性做同口径映射（O-71 T-01）。
          *
          * @param sql       已完成实体名→表名映射的 SQL（限定符是别名，不受实体名替换影响）
-         * @param rootTable 根实体表信息（未映射别名的兜底来源）
+         * @param rootTable 根实体表信息（未映射别名的兜底来源，也是裸词映射的唯一来源）
          * @param scope     别名作用域（见 JpaAliasTableResolver）
          */
         public static String mapProperties(@NotNull String sql, @NotNull TableInfo rootTable,
@@ -325,10 +349,15 @@ public final class JpaAliasTableResolver {
                     String middle = matcher.group(3);
                     String field = matcher.group(4);
                     TableInfo owner = scope.getByAlias().get(qualifier);
-                    if (owner == null) owner = rootTable;
-                    ColumnInfo column = owner.columnByField(field);
+                    ColumnInfo column = (owner != null ? owner : rootTable).columnByField(field);
                     if (column == null || column.getFieldName().equals(column.getColumnName())) {
                         replacement = matcher.group(0);
+                    } else if (owner == null && qualifier.equals(column.getEmbeddedParent())) {
+                        // O-71 T-02：无别名 HQL 下嵌入段占限定符位（`updateInfo.beDelete`）→ 剥离限定符
+                        // 产出裸列名（嵌入对象没有自己的表，`updateInfo.BE_DELETE` 在 SQL 语义下被当成
+                        // 「库.表」限定）。判据仍是列自身的 embeddedParent；带别名时 qualifier 是真别名
+                        // （owner 命中），走下方 isFlattenedEmbeddedPath 分支，行为不变
+                        replacement = column.getColumnName();
                     } else if (isFlattenedEmbeddedPath(middle, column)) {
                         // @Embedded 展平（计划 §六 D2 已实施）：嵌入对象没有自己的表，其字段直接落在宿主表的列上，
                         // 故路径里的嵌入段必须去掉——`pickTicket.updateInfo.createdTime` 的正确产物是
@@ -345,7 +374,57 @@ public final class JpaAliasTableResolver {
                 matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
             }
             matcher.appendTail(sb);
-            return appendUnmappedOnHint(sb.toString(), scope);
+            return appendUnmappedOnHint(mapBareProperties(sb.toString(), rootTable, scope), scope);
+        }
+
+        /**
+         * O-71 T-01：裸属性（无点号路径的独立词）→ 列名映射。
+         *
+         * <p>覆盖两类形态：完全无别名的 HQL（{@code from WorkstationStatus where stationCode = ...}，用户报障
+         * 场景），与有别名但个别属性漏写前缀的混合形态（{@code where z.createdTime > :t and beAutoZone = true}）。
+         * 这两类产物此前原样透传，而 Hibernate 真实生成的列名是大写下划线——透传产物执行必报
+         * {@code Unknown column}，故 O-57 的保守契约（裸属性不替换）被推翻（契约变更登记见类 KDoc）。</p>
+         *
+         * <p>替换口径从严（误伤面压到最小）：
+         * <ul>
+         *  <li>{@code columnByField} <b>精确命中</b>且 {@code fieldName != columnName} 才替换，不猜命名规则；</li>
+         *  <li>子句关键字（{@link JpaAliasTableResolver#CLAUSE_KEYWORDS}）、布尔/常量词（{@link #BARE_WORD_EXCLUDED}）不替换，
+         *      词后紧跟 {@code (} 的（函数调用，{@code count(1)}）由正则负前瞻排除；</li>
+         *  <li>{@code scope.knownQualifiers}（FROM/JOIN 出现过的别名、实体名、表名）不替换——防「别名/实体名
+         *      恰好撞字段名」的误伤；</li>
+         *  <li>单引号字面量内不替换（与 {@link #PROPERTY_OR_LITERAL} 同款「字面量分支在前」手法；
+         *      未闭合单引号其后裸词照常映射，与点号路径口径一致）；</li>
+         *  <li>多别名歧义场景沿用根实体列清单（与既有「未命中回落根实体」原则一致，不猜副表）。</li>
+         * </ul>
+         *
+         * <p>替换产物是列名，再次扫描不命中（fieldName 是驼峰、列名是 snake/大写），天然幂等。</p>
+         */
+        private static String mapBareProperties(@NotNull String sql, @NotNull TableInfo rootTable,
+                                                @NotNull JpaAliasScope scope) {
+            StringBuilder sb = new StringBuilder();
+            Matcher matcher = BARE_WORD_OR_LITERAL.matcher(sql);
+            while (matcher.find()) {
+                String word = matcher.group(1);
+                String replacement;
+                // 字面量分支（无捕获组）→ 原样返回：引号内的词不是属性引用
+                if (word == null || word.isEmpty()) {
+                    replacement = matcher.group(0);
+                } else {
+                    String upper = word.toUpperCase(Locale.ROOT);
+                    if (CLAUSE_KEYWORDS.contains(upper) || BARE_WORD_EXCLUDED.contains(upper)) {
+                        replacement = matcher.group(0);
+                    } else if (scope.knownQualifiers.contains(word)) {
+                        replacement = matcher.group(0);
+                    } else {
+                        ColumnInfo column = rootTable.columnByField(word);
+                        replacement = column == null || column.getFieldName().equals(column.getColumnName())
+                                ? matcher.group(0) : column.getColumnName();
+                    }
+                }
+                matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+            }
+            matcher.appendTail(sb);
+            return sb.toString();
         }
 
         /**

@@ -1,4 +1,6 @@
 // T-SyncK2JMaster184 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/sql/ExplainSupport.kt 移植
+// T-SyncK2JMaster187 c07b8e3 增量：T-DialectXcFamily（O-63）表扩员 OceanBase（TABLE 档，文档级留账）+
+// openGauss（JSON 档，真机实证）
 package cn.song.mybatisplus.visualizer.sql;
 
 import java.util.LinkedHashMap;
@@ -68,6 +70,11 @@ public final class ExplainSupport {
      *  <li>KingbaseES V8/V9：{@code EXPLAIN (FORMAT JSON)}（PG 兼容）；</li>
      *  <li>DM8：{@code EXPLAIN &lt;sql&gt;}，返回 {@code #NSET2} 计划文本；</li>
      *  <li>H2：{@code EXPLAIN PLAN FOR}；SQLite：{@code EXPLAIN QUERY PLAN}（引擎级单测覆盖）；</li>
+     *  <li>OceanBase（T-DialectXcFamily）：{@code EXPLAIN &lt;sql&gt;}，TABLE 档——官方 V4.x《SQL 执行计划简介》
+     *      {@code EXPLAIN [explain_type] dml_statement}、缺省 {@code FORMAT = TRADITIONAL} 表格行（文档级，
+     *      无真机——环境受限未验证留账）；</li>
+     *  <li>openGauss（T-DialectXcFamily）：{@code EXPLAIN (FORMAT JSON)}，JSON 档——openGauss 5.0.0
+     *      <b>真机实证</b>（DBX 只读通道 2026-09-23：FORMAT JSON 返回单列 {@code QUERY PLAN} JSON 文本）；</li>
      *  <li>Oracle（需两步链查 PLAN_TABLE）与 SQL Server（需会话级 {@code SET SHOWPLAN_XML}）
      *      <b>不接入</b>——各有独立前置，非本任务范围。</li>
      * </ul>
@@ -87,6 +94,10 @@ public final class ExplainSupport {
                     "H2 2.3.232 引擎级单测"),
             new Entry("SQLite", "EXPLAIN QUERY PLAN " + SQL_PLACEHOLDER, ExplainOutputFormat.TEXT,
                     "SQLite 引擎级单测"),
+            new Entry("OceanBase", "EXPLAIN " + SQL_PLACEHOLDER, ExplainOutputFormat.TABLE,
+                    "文档实证 OB 官方 V4.x EXPLAIN 文法（缺省 TRADITIONAL 表格行）；真机留账（T-DialectXcFamily）"),
+            new Entry("openGauss", "EXPLAIN (FORMAT JSON) " + SQL_PLACEHOLDER, ExplainOutputFormat.JSON,
+                    "真机实证 openGauss 5.0.0（DBX 只读通道 2026-09-23，FORMAT JSON 单列 JSON 文本）"),
             new Entry("Oracle", null, null, "不接入：需两步链查 PLAN_TABLE（另议）"),
             new Entry("SQL Server", null, null, "不接入：需会话级 SET SHOWPLAN_XML（另议）"));
 

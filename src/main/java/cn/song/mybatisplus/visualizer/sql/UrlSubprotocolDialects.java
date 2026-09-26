@@ -1,4 +1,6 @@
 // T-SyncK2JMaster309 自 master sql/DialectInference.kt 移植
+// T-SyncK2JMaster187 c07b8e3 增量：T-DialectXcFamily（O-63）补 oceanbase/opengauss/gaussdb 三前缀
+// （openGauss 一 object 两前缀，D2=A 定案）
 package cn.song.mybatisplus.visualizer.sql;
 
 import org.jetbrains.annotations.NotNull;
@@ -33,7 +35,13 @@ public final class UrlSubprotocolDialects {
             Map.entry("sqlite", "SQLite"),
             Map.entry("dm", "DM（达梦）"),
             Map.entry("kingbase8", "KingBase（人大金仓）"),
-            Map.entry("kingbase", "KingBase（人大金仓）")
+            Map.entry("kingbase", "KingBase（人大金仓）"),
+            // T-DialectXcFamily（O-63）：oceanbase（OceanBase Connector/J 官方《Database URL》）；
+            // opengauss（openGauss 官方《Connecting to a Database》）与 gaussdb（华为 GaussDB 官方
+            // 《Creating a Database Connection》）同归 openGauss——D2=A 定案，一 object 两前缀
+            Map.entry("oceanbase", "OceanBase"),
+            Map.entry("opengauss", "openGauss"),
+            Map.entry("gaussdb", "openGauss")
     ));
 
     /**
