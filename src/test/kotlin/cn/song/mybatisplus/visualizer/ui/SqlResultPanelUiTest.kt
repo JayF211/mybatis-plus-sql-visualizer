@@ -25,6 +25,9 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
 
     private fun waitForEdt() = UIUtil.dispatchAllInvocationEvents()
 
+    /** JUnit3 把测试方法内联零参 lambda 的合成方法（`testXxx$lambda$0`）误判为非 public 测试方法——抽工厂挂名（k2j 309 轮先例）。 */
+    private fun emptyLocateAction(): Runnable = Runnable { }
+
     private fun allComponents(c: Component): List<Component> {
         val list = mutableListOf(c)
         if (c is Container) for (child in c.components) list += allComponents(child)
@@ -183,7 +186,7 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
     fun testShowErrorRich_可定位时显示按钮且tooltip如实标注两态() {
         val panel = SqlResultPanel()
         try {
-            panel.showErrorRich(info(positionChar = 24), { })
+            panel.showErrorRich(info(positionChar = 24), emptyLocateAction())
             waitForEdt()
             val btn = locateButton(panel)!!
             assertTrue("locate 非 null 时定位按钮应可见", btn.isVisible)
@@ -207,7 +210,7 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
     fun testShowErrorRich_无位置信号用起始行口径() {
         val panel = SqlResultPanel()
         try {
-            panel.showErrorRich(info(), { })
+            panel.showErrorRich(info(), emptyLocateAction())
             waitForEdt()
             val tip = locateButton(panel)!!.toolTipText
             assertTrue("tooltip 应标注两态", tip.contains("被执行的 SQL"))
@@ -246,7 +249,7 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
     fun testShowErrorRich_转普通错误后按钮收起() {
         val panel = SqlResultPanel()
         try {
-            panel.showErrorRich(info(), { })
+            panel.showErrorRich(info(), emptyLocateAction())
             waitForEdt()
             assertTrue(locateButton(panel)!!.isVisible)
             panel.showError("boom again")
