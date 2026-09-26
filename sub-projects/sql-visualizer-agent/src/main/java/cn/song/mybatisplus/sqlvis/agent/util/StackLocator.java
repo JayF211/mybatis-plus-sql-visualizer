@@ -212,9 +212,28 @@ public final class StackLocator {
         if (decision != null) {
             final int at = indexOfIdentity(pool, decision[1], decision[2]);
             if (at >= 0 && pool.get(at)[0] != null) {
-                final Frame hit = buildFrame(pool, at, decision[0]);
-                reportEntryKeyMismatch(entryKey, hit);
-                return hit;
+                // T-ToolSiteBizFrame（机制 B′，demo PR !1 E34 实测钉死）：「身份在场」还不够——
+                // 缓存身份可能是本执行栈的<b>祖先浅帧</b>（同一 Service 方法先直发过一条 SQL 时，
+                // 它以「最深业务帧」身份写入共享 entryKey 的判定；其后经业务工具类发的 SQL 栈上
+                // 该方法是祖先帧、必然在场），直接采用会把主位置钉在「调用工具类」那一行。
+                // 命中后与全量路径对齐：在 [0..at-1]（比缓存身份更深的调用链段）里找首个业务来源帧，
+                // 找到即改用并刷新判定。at==0（直发形态，pool[0] 本就是最深业务帧）无更深层段，
+                // 零反射直取——健康路径不付来源解析成本。
+                final int deeper = at == 0 ? -1 : firstBusinessFrameBefore(pool, loader, at);
+                if (deeper < 0) {
+                    final Frame hit = buildFrame(pool, at, decision[0]);
+                    reportEntryKeyMismatch(entryKey, hit);
+                    return hit;
+                }
+                final Frame refreshed = buildFrame(pool, deeper, "L1");
+                if (refreshed == null) {
+                    // 与全量路径对齐：改用深帧后无调试信息 → 本次不产出位置、不刷新判定（下次重算）
+                    return null;
+                }
+                final String[] p = pool.get(deeper);
+                writeCaches(entryKey, p[2] + "#" + p[3], "L1");
+                reportEntryKeyMismatch(entryKey, refreshed);
+                return refreshed;
             }
         }
 
@@ -262,6 +281,20 @@ public final class StackLocator {
         for (int i = 0; i < pool.size(); i++) {
             final String[] c = pool.get(i);
             if (className.equals(c[2]) && method.equals(c[3])) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * {@code pool[0..bound-1]}（比缓存身份<b>更深</b>的调用链段）中首个「业务来源帧」的下标，
+     * 无则 -1。T-ToolSiteBizFrame（机制 B′）：缓存身份是祖先浅帧而本执行经业务工具类下钻时，
+     * 真执行点就在这一段里——全量路径 L1 本会选中它，命中路径须对齐。
+     */
+    private static int firstBusinessFrameBefore(List<String[]> pool, ClassLoader loader, int bound) {
+        for (int i = 0; i < bound; i++) {
+            if (Boolean.FALSE.equals(loadedFromJar(pool.get(i)[2], loader))) {
                 return i;
             }
         }
