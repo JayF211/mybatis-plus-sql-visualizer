@@ -52,6 +52,87 @@ public final class LogSqlModelsKt {
     private static final java.util.regex.Pattern WHITESPACE_RUN_REGEX = java.util.regex.Pattern.compile("\\s+");
 
     /**
+     * T-SqlSuppressUx（20260924 用户走查返修）：屏蔽匹配口径 = 去重口径追加<b>尾部分号剥离</b>——
+     * 规则粘贴态常带收尾 {@code ;} 而日志还原链不带（用户实证 0 命中根因）。只在字符串收尾剥终结符：
+     * {@code trimEnd(';')} 触不到字面量内分号（其后必有引号等其余内容，不满足「收尾」）。
+     * 大小写仍不动（O-69 D2 定案：与既有规范化一致）；空白折叠先行（{@link #normalizeSqlWhitespace}）。
+     * 侧约定：{@link LogSqlEntry#suppressKey()}（条目侧）与 {@code SqlSuppressRuleManager}
+     * 的键集重建（规则侧）必须同走本函数，两侧口径永不手写第二份。
+     */
+    public static String suppressFingerprint(String sql) {
+        return sqlFingerprint(trimEndSemicolon(normalizeSqlWhitespace(sql)).trim());
+    }
+
+    /**
+     * T-SqlSuppressUx 二段（20260924 用户定案「结构匹配手动开启」）：<b>结构指纹</b> = 屏蔽口径再追加
+     * 字面量参数化——字符串字面量（{@code '…'}，含 {@code ''} 转义）与裸数字各自折叠为 {@code ?}，参数值不同的同形状
+     * SQL 由此同指纹。边界（逐字扫描实现，非正则）：
+     * - 双引号/反引号<b>标识符</b>不参数化（{@code "MyCol"}、{@code `t1`} 逐字保留——不同列/表 = 不同形状）；
+     * - 标识符内数字不参数化（前邻词字符不满足边界，如 {@code t2024}、{@code plan_2026001}）；
+     * - IN 列表按元素个数区分形状（{@code IN (?,?)} ≠ {@code IN (?,?,?)}）——同形状不同个数不命中，已知边界；
+     * - 畸形未闭合字面量按一个 {@code ?} 收尾（防御，不抛错）。
+     * 仅对<b>手动开启结构匹配的规则</b>与条目侧 {@link LogSqlEntry#structureKey()} 使用；精确口径规则不走此函数。
+     */
+    public static String structureFingerprint(String sql) {
+        return sqlFingerprint(parameterizeLiterals(trimEndSemicolon(normalizeSqlWhitespace(sql)).trim()));
+    }
+
+    /** Kotlin {@code String.trimEnd(';')} 等价：剥掉收尾的<b>全部</b>分号（JDK String 无对应 API）。 */
+    private static String trimEndSemicolon(String s) {
+        int end = s.length();
+        while (end > 0 && s.charAt(end - 1) == ';') {
+            end--;
+        }
+        return s.substring(0, end);
+    }
+
+    /** 字面量参数化（{@link #structureFingerprint} 专属，逐字扫描；口径边界见其 Javadoc）。 */
+    public static String parameterizeLiterals(String sql) {
+        StringBuilder sb = new StringBuilder(sql.length());
+        int i = 0;
+        while (i < sql.length()) {
+            char c = sql.charAt(i);
+            if (c == '\'') {
+                // 字符串字面量整体折叠为 ?（'' 转义跳过；未闭合按防御收尾）
+                int j = i + 1;
+                while (j < sql.length()) {
+                    if (sql.charAt(j) == '\'') {
+                        if (j + 1 < sql.length() && sql.charAt(j + 1) == '\'') {
+                            j += 2;
+                            continue;
+                        }
+                        break;
+                    }
+                    j++;
+                }
+                sb.append('?');
+                i = j < sql.length() ? j + 1 : sql.length();
+            } else if (Character.isDigit(c) && (i == 0 || !isSqlWordChar(sql.charAt(i - 1)))) {
+                // 裸数字折叠为 ?；前邻词字符 = 标识符内数字（t2024/_id1），逐字保留
+                int j = i;
+                while (j < sql.length() && (Character.isDigit(sql.charAt(j)) || sql.charAt(j) == '.')) {
+                    j++;
+                }
+                if (j < sql.length() && isSqlWordChar(sql.charAt(j))) {
+                    sb.append(sql, i, j); // 2024Q1 类：数字后随词字符，属标识符
+                } else {
+                    sb.append('?');
+                }
+                i = j;
+            } else {
+                sb.append(c);
+                i++;
+            }
+        }
+        return sb.toString();
+    }
+
+    /** SQL 词字符（标识符边界判定）：字母/数字/下划线/美元符。 */
+    private static boolean isSqlWordChar(char c) {
+        return Character.isLetterOrDigit(c) || c == '_' || c == '$';
+    }
+
+    /**
      * T-AgentLogTime：日志时间关联键——<b>占位符版 rawSql 的指纹</b>。
      *
      * 增强通道的 logTimestamp 是派生的（控制台链嗅探暂存 → agent 事件取回），关联键必须两侧同源：

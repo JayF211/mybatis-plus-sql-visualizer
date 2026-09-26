@@ -24,6 +24,12 @@ final class BridgeLineContext {
      */
     StringBuilder pendingError;
 
+    /**
+     * T-ConsolePendingFlush：本上下文当前有效的 filter 挂载代际号（{@code SqlLogConsoleBridge.attachFilter}
+     * 每次挂载 +1 写入）。旧代际的 filter 代理凭它识别自身已作废——2026.2 无单 filter 移除，旧代理摘不下来。
+     */
+    long generation = 0L;
+
     /** T-PreviewFlash：重放守卫（每 console 独立；editor 不可得时降级为恒 Process）。 */
     final ConsoleReplayGuard replayGuard = new ConsoleReplayGuard();
 

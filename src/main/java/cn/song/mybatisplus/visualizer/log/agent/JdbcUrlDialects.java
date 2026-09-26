@@ -32,6 +32,10 @@ public final class JdbcUrlDialects {
         Map.entry("dm", "DM（达梦）"),
         Map.entry("kingbase8", "KingBase（人大金仓）"),
         Map.entry("kingbase", "KingBase（人大金仓）"),
+        // T-DialectXcFamily（O-63）：gaussdb（华为 GaussDB 官方前缀）与 opengauss 同归 openGauss
+        // 角标（D2=A 一 object 两前缀）；oceanbase 新增角标（此前在册即无）
+        Map.entry("oceanbase", "OceanBase"),
+        Map.entry("gaussdb", "openGauss"),
         Map.entry("gbasedbt-sqli", "GBASE"),
         Map.entry("gbasedbt", "GBASE"),
         Map.entry("gbase", "GBASE"));

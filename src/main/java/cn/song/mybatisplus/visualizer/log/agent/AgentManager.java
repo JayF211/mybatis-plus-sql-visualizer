@@ -114,7 +114,18 @@ public final class AgentManager implements Disposable {
      */
     public static final long PREMAIN_SKIP_ATTACH_WINDOW_MS = 30_000L;
 
-    /** 同时挂起的 premain 通道上限：{@code updateJavaParameters} 每次 Run 都会触发，防重复准备泄漏 ServerSocket。 */
+    /**
+     * 同时挂起的 premain 通道上限：{@code updateJavaParameters} 每次 Run 都会触发，防重复准备泄漏 ServerSocket。
+     *
+     * <p>T-PerfSweep6 T-PS6-06①② 登记的两处已知边界（有意保持现状，勿顺手「修」）：
+     * ① <b>上限按并发服役数计，不按累计 Run 次数计</b>——通道绑定到单次运行（{@link #onRunEnded} 关闭），
+     * 外加兜底 TTL 与 stale/pid 消亡清扫（{@code prunePremainChannels}），「规模随使用增长」的形态
+     * 不存在；只有同时活跃的运行超过本值，第 5 个 Run 才拿不到通道，而那一次回落 attach/桥（零劣化）。
+     * ② <b>pid 未知时按 pid 的会话去重失效</b>（{@code onPremainConnected} 只在 pid&gt;0 时判重）：同一应用
+     * 反复回连不会被去重，但峰值有上界——每条通道的 accept 数受 {@link #MAX_PREMAIN_RECONNECTS}=32
+     * 封顶（达上限关通道并留 WARN；重新 Run 重注入即自愈），故「去重失效」形态下单通道至多
+     * 产生 32 条无去重会话，且其中不健康者仍会被 {@code sweepOffline} 摘除。
+     */
     public static final int MAX_PREMAIN_CHANNELS = 4;
 
     /** HELLO 首帧读取超时（agent 连上后立即发 HELLO，秒级足够；超时按「pid 未知」处理不丢会话）。 */
@@ -478,8 +489,12 @@ public final class AgentManager implements Disposable {
      *
      * 无进程句柄：本入口不携带 processStarted 事件，故只恢复授权、不尝试挂载——挂载由下一次
      * 应用进程启动承接（状态行随即转「已授权，等待应用进程启动后挂载」）。
+     *
+     * O-66 T-GuideEnhancedFirst：{@code onOutcome} 把三态结果回传给调用方（引导弹框据此决定是否展示
+     * 「重启应用后生效」提示）。持久化仍单点收在本类，调用方只消费不落盘；增强未开启早退时
+     * <b>不回调</b>（用户未做任何选择，不得谎报 REJECTED）。
      */
-    public void requestReauthorization() {
+    public void requestReauthorization(kotlin.jvm.functions.Function1<? super EnhancedCaptureConsent, kotlin.Unit> onOutcome) {
         if (!isEnhancedEnabled()) {
             LOG.info("requestReauthorization: 增强未开启——忽略");
             return;
@@ -487,7 +502,12 @@ public final class AgentManager implements Disposable {
         PluginSettings.getInstance().getState().setEnhancedCaptureRejectedAtMs(0L);
         LOG.info("requestReauthorization: 拒绝冷却已清零，重走注入确认流");
         publishStatusChanged();
-        requestConsentThenAttach(null);
+        requestConsentThenAttach(null, onOutcome);
+    }
+
+    /** 便捷重载（Kotlin 默认参数 {@code onOutcome = {}}：不关心三态结果的调用方）。 */
+    public void requestReauthorization() {
+        requestReauthorization(consent -> kotlin.Unit.INSTANCE);
     }
 
     /**
@@ -499,8 +519,11 @@ public final class AgentManager implements Disposable {
      *   总开关关闭后冷却无意义），此后任何进程启动都不弹窗、不 attach，直到用户在设置页重新开启
      *   （重开的上升沿由 SETTINGS_CHANGE 监听重置冷却）。
      * 确认结果持久化（重开不再弹）；headless 由 {@link #consentProvider} 默认实现直接拒绝。
+     * O-66：{@code onOutcome} 在三态各自落盘后回传（确认框异常按拒绝处理的路径同样回传）；
+     * 前置早退（项目已释放 / 增强未开启）不回调。
      */
-    private void requestConsentThenAttach(Object processHandler) {
+    private void requestConsentThenAttach(Object processHandler,
+            kotlin.jvm.functions.Function1<? super EnhancedCaptureConsent, kotlin.Unit> onOutcome) {
         ApplicationManager.getApplication().invokeLater(() -> {
             if (project.isDisposed() || !isEnhancedEnabled()) {
                 return;
@@ -526,6 +549,8 @@ public final class AgentManager implements Disposable {
                     // T-CaptureTruth T-CT-01：三态结果都广播——否则设置页状态行要等下一次
                     // attach/掉线才刷新，用户点完同意/拒绝后看到的是过期文案。
                     publishStatusChanged();
+                    // O-66：三态回传（在进程句柄分支之前——无句柄路径同样要回传）。
+                    onOutcome.invoke(EnhancedCaptureConsent.ACCEPTED);
                     if (processHandler == null) {
                         // T-CaptureTruth T-CT-02：重新授权入口无进程句柄——只恢复授权，
                         // 挂载由下一次应用进程启动承接（避免 resolvePid(null) 的误导性 WARN）。
@@ -542,15 +567,22 @@ public final class AgentManager implements Disposable {
                     state.setEnhancedCaptureEnabled(false);
                     LOG.info("requestConsentThenAttach: 用户选择关闭增强捕获并不再询问——总开关已持久化关闭");
                     publishStatusChanged();
+                    onOutcome.invoke(EnhancedCaptureConsent.DISABLE_CAPTURE);
                 }
                 case REJECTED -> {
                     state.setEnhancedCaptureRejectedAtMs(clockMs.getAsLong());
                     LOG.info("requestConsentThenAttach: 用户拒绝注入——进入 " + rejectCooldownMs
                         + "ms 冷却（冷却期内不重复弹，不改同意门槛）");
                     publishStatusChanged();
+                    onOutcome.invoke(EnhancedCaptureConsent.REJECTED);
                 }
             }
         });
+    }
+
+    /** 便捷重载（Kotlin 默认参数 {@code onOutcome = {}}）。 */
+    private void requestConsentThenAttach(Object processHandler) {
+        requestConsentThenAttach(processHandler, consent -> kotlin.Unit.INSTANCE);
     }
 
     /**

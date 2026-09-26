@@ -34,6 +34,13 @@ public final class SqlLogFileReader {
     private static final int COUNT_CACHE_MAX = 256;
 
     /**
+     * T-PerfSweep7 4a 测试缝：SimpleDateFormat 实际构造次数（仅供同模块测试断言
+     * 「同格式两次解析只建一次 formatter」；生产语义与本计数无关）。
+     */
+    public static final java.util.concurrent.atomic.AtomicInteger formatterCreateCount =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    /**
      * T-Perf-05：countInFile 结果缓存（键=绝对路径，值=(lastModified, length, 计数)）。
      * 自动保存单文件滚动阈值 100MB（SqlLogAutoSaver），长期开启必然长出大文件——
      * 每次 refresh 逐行全量扫描是历史 tab 打开冻结的主要来源；lastModified+length 未变即命中
@@ -313,9 +320,34 @@ public final class SqlLogFileReader {
         return toLongOrNull(s);
     }
 
+    /**
+     * T-PerfSweep7 4a：SimpleDateFormat 每次解析新建 → <b>每线程每格式一次</b>（照
+     * {@code LogTimestampParser.parseTimestamp} 的 ThreadLocal + 格式串键缓存范式；日志导入是
+     * O(行数) 的解析热路径，SDF 构造是其中的固定开销）。
+     *
+     * <p><b>等价性红线</b>：复用实例的输出与逐次新建逐字节一致（{@code parse} 每次完整重置内部 calendar）；
+     * 且<b>刻意不</b>照搬 LogTimestampParser 的 {@code isLenient = false} 与时区赋值——本处现状是
+     * 默认宽松模式 + 默认时区，缓存化只改构造频率，不改任何解析语义（异常回落 null 不变）。
+     */
+    private static final ThreadLocal<java.util.HashMap<String, SimpleDateFormat>> TIMESTAMP_FORMAT_CACHE =
+            ThreadLocal.withInitial(java.util.HashMap::new);
+
+    /** 取（或按格式串新建并缓存）本线程的 SimpleDateFormat（{@code getOrPut} 语义）。 */
+    private static SimpleDateFormat formatterFor(String pattern) {
+        java.util.HashMap<String, SimpleDateFormat> cache = TIMESTAMP_FORMAT_CACHE.get();
+        SimpleDateFormat existing = cache.get(pattern);
+        if (existing != null) {
+            return existing;
+        }
+        formatterCreateCount.incrementAndGet();
+        SimpleDateFormat created = new SimpleDateFormat(pattern, Locale.ENGLISH);
+        cache.put(pattern, created);
+        return created;
+    }
+
     private Long parseTimestampNew(String ts) {
         try {
-            return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ENGLISH).parse(ts).getTime();
+            return formatterFor("yyyy-MM-dd HH:mm:ss.SSS").parse(ts).getTime();
         } catch (Exception e) {
             return null;
         }
@@ -323,7 +355,7 @@ public final class SqlLogFileReader {
 
     private Long parseTimestampOld(String ts) {
         try {
-            return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ENGLISH).parse(ts).getTime();
+            return formatterFor("yyyy-MM-dd HH:mm:ss").parse(ts).getTime();
         } catch (Exception e) {
             return null;
         }

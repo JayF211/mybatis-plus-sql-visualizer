@@ -12,6 +12,8 @@ import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
 import com.intellij.icons.AllIcons;
 import com.intellij.ide.BrowserUtil;
 import com.intellij.notification.Notification;
+import com.intellij.notification.NotificationAction;
+import com.intellij.notification.NotificationGroupManager;
 import com.intellij.notification.NotificationType;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.actionSystem.ActionManager;
@@ -79,6 +81,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -232,7 +235,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
     /** 工具栏引用（capturing 变化时经平台更新机制刷新动作 presentation，T-UN-11）。 */
     private ActionToolbar _toolbarRef = null;
     /** 工具栏动作组（T-M39：internal 供测试断言帮助入口存在性）。
-     *  T-CaptureBack：捕捉开关回迁首位（捕捉/清空/设置/搜索/帮助；搜索在帮助左侧为用户指定排序）。 */
+     *  T-CaptureBack：捕捉开关回迁首位（捕捉/清空/设置/屏蔽管理/搜索/帮助；搜索在帮助左侧为用户指定排序）。
+     *  T-SqlSuppress：屏蔽管理入口插设置旁（D1 主入口；D7 图标 AllIcons.General.Filter 漏斗）。 */
     public final DefaultActionGroup toolbarGroup;
 
     // ---------- T-M55-03/04：动态聚焦过滤页签栏字段（须在 init 块之前——Kotlin 按文本序初始化，
@@ -471,6 +475,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
                 captureToggleAction, // 捕捉开关（回迁面板工具栏首位，T-CaptureBack）
                 new ClearAction(),
                 new SettingsAction(),
+                new ManageSuppressAction(), // T-SqlSuppress：屏蔽管理（设置旁，D1 主入口 + D7 漏斗图标）
                 new ShowSearchAction(), // 搜索在帮助左侧（用户指定排序）
                 new HelpAction()
         );
@@ -974,6 +979,24 @@ public class SqlLogPanel extends JPanel implements Disposable {
     }
 
     /**
+     * T-SqlSuppress（O-69）：屏蔽管理入口（D1 定案主入口，插设置旁；D7 图标漏斗
+     * {@code AllIcons.General.Filter}——262 jar 实渲染比对后用户选定，全栏无漏斗形不撞车）。
+     * 打开与右键「管理屏蔽规则…」同一非模态对话框。
+     */
+    private class ManageSuppressAction extends AnAction {
+        @Override
+        public void update(AnActionEvent e) {
+            e.getPresentation().setIcon(AllIcons.General.Filter);
+            e.getPresentation().setText(MpSqlVisualizerBundle.message("log.suppress.manage"));
+        }
+
+        @Override
+        public void actionPerformed(AnActionEvent e) {
+            new SqlSuppressManagerDialog(project).show();
+        }
+    }
+
+    /**
      * T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 内嵌浏览器打开本地 HTML 帮助文档。
      */
     private class HelpAction extends AnAction {
@@ -1211,11 +1234,12 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * 刷新列表（过滤 → 搜索 → 排序 → 差分渲染）。
      *
      * 执行顺序：
-     * 1. filterByType：按 activeFilter 筛选（全选 = 全部，含 OTHER）
-     * 2. filterByFocus：按 activeFocus 聚焦（M56 T-M56-00 基础设施；null = 透传）
-     * 3. filterBySearch：按 searchText 搜索（大小写不敏感）
-     * 4. applySort：按 sortMode 排序（默认时间升序）
-     * 5. 差分渲染：T-Perf-03 增量刷新——流式追加免全量重建；无法增量时回退分批全量重建
+     * 1. filterBySuppress：按屏蔽规则指纹集滤存量（T-SqlSuppress O-69；管线最前——空集零成本）
+     * 2. filterByType：按 activeFilter 筛选（全选 = 全部，含 OTHER）
+     * 3. filterByFocus：按 activeFocus 聚焦（M56 T-M56-00 基础设施；null = 透传）
+     * 4. filterBySearch：按 searchText 搜索（大小写不敏感）
+     * 5. applySort：按 sortMode 排序（降序耗时）
+     * 6. 差分渲染：T-Perf-03 增量刷新——流式追加免全量重建；无法增量时回退分批全量重建
      *
      * T-LogListFreeze-04：HTML 缓存随片段通道退役——徽章计数在渲染时直读 dedupeCounts，
      * 原「清缓存/选择性失效」机制一并移除。
@@ -1230,8 +1254,12 @@ public class SqlLogPanel extends JPanel implements Disposable {
         dedupeCounts = manager.getEntries().dedupeCountsSnapshot();
         entryCellRenderer.dedupeCounts = dedupeCounts;
 
+        // T-SqlSuppress：屏蔽存量过滤插管线最前（与类型过滤同级；键集经 SqlLogManager 订阅同步）
         List<LogSqlEntry> filtered = SqlLogPanelKt.filterByFocus(
-                SqlLogPanelKt.filterByType(snapshot, activeFilter), activeFocus);
+                SqlLogPanelKt.filterByType(
+                        SqlLogPanelKt.filterBySuppress(snapshot, manager.getEntries().getSuppressKeys()),
+                        activeFilter),
+                activeFocus);
         // T-M55-03/04：动态聚焦页签层（页签=过滤器，多开并集；离散增删走 FullRebuild，差分零改动）
         List<LogSqlEntry> focused = FocusTab.filterByFocusTabs(filtered, focusTabs);
         List<LogSqlEntry> searched = SqlLogPanelKt.filterBySearch(focused, searchText);
@@ -1602,6 +1630,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
         String timestampClip = SqlLogPanelKt.batchCopyTimestamps(selectedEntries);
         group.add(new CopyTimestampAction(selectedEntries, timestampClip));
         group.add(new DeleteSqlAction(entry));
+        // T-SqlSuppress（O-69）：屏蔽此 SQL（多选按不同指纹各成一条规则，已存在跳过）——
+        // 置「删除」之后（计划定稿位），balloon 反馈带管理直达
+        group.add(new SuppressSqlAction(selectedEntries));
         // T-M37 P1：发送到 SQL → Java 转换（第三 tab）——还原 SQL 写入输入区并切换选中该 tab
         group.add(new SendToSqlToJavaAction(entry));
         // T-M38：发送到日志转 SQL（第二 tab）——条目渲染回日志文本并立即转换
@@ -1683,6 +1714,107 @@ public class SqlLogPanel extends JPanel implements Disposable {
         @Override
         public void actionPerformed(AnActionEvent e) {
             manager.getEntries().removeEntry(entry);
+        }
+    }
+
+    /**
+     * T-SqlSuppress（O-69）：屏蔽选中的 SQL。多选支持——去重后的<b>不同指纹</b>各成一条规则
+     * （空白变体同指纹只建一条），已存在跳过（幂等）；达上限拒新增并提示（D6）。
+     * 动作链：规则入库（监听器同步更新缓冲键集）→ refreshList（存量心跳行立即消失，D4 最强反馈）
+     * → balloon 反馈附「管理屏蔽规则…」直达对话框（D4 中层）。
+     */
+    private class SuppressSqlAction extends AnAction {
+        private final List<LogSqlEntry> entries;
+
+        SuppressSqlAction(List<LogSqlEntry> entries) {
+            this.entries = entries;
+        }
+
+        @Override
+        public void update(AnActionEvent e) {
+            // Kotlin entries.distinctBy { it.dedupeKey }（保持首现序）的等价内联
+            Map<String, LogSqlEntry> distinct = new LinkedHashMap<>();
+            for (LogSqlEntry it : entries) {
+                distinct.putIfAbsent(it.dedupeKey(), it);
+            }
+            int count = distinct.size();
+            e.getPresentation().setText(count > 1
+                    ? MpSqlVisualizerBundle.message("log.suppress.actionSelected", Integer.toString(count))
+                    : MpSqlVisualizerBundle.message("log.suppress.action"));
+        }
+
+        @Override
+        public void actionPerformed(AnActionEvent e) {
+            SqlSuppressRuleManager ruleManager = SqlSuppressRuleManager.getInstance();
+            int[] added = {0};
+            boolean[] limitReached = {false};
+            // Kotlin entries.distinctBy { it.dedupeKey }.forEach（不同指纹各一条，空白变体同指纹只建一条）
+            Map<String, LogSqlEntry> distinct = new LinkedHashMap<>();
+            for (LogSqlEntry it : entries) {
+                distinct.putIfAbsent(it.dedupeKey(), it);
+            }
+            for (LogSqlEntry entry : distinct.values()) {
+                SqlSuppressRuleManager.AddResult result = ruleManager.addRule(entry.restoredSql());
+                if (result == SqlSuppressRuleManager.AddResult.ADDED) {
+                    added[0]++;
+                } else if (result == SqlSuppressRuleManager.AddResult.LIMIT_REACHED) {
+                    limitReached[0] = true;
+                }
+                // DUPLICATE：已存在——幂等跳过
+            }
+            refreshList(); // addRule 的监听器已同步更新缓冲键集——存量行立即消失
+            if (added[0] > 0) {
+                showSuppressBalloon(added[0]);
+            }
+            if (limitReached[0]) {
+                showSuppressLimitBalloon();
+            }
+        }
+    }
+
+    /**
+     * T-SqlSuppress：屏蔽成功 balloon（D5 定案独立通知组 logsuppress）。
+     * 附「管理屏蔽规则…」动作直达对话框；测试模式跳过（对齐 showJumpToast 约定）。
+     */
+    private void showSuppressBalloon(int addedCount) {
+        if (ApplicationManager.getApplication().isUnitTestMode()) {
+            return;
+        }
+        try {
+            Notification notification = NotificationGroupManager.getInstance()
+                    .getNotificationGroup(SUPPRESS_NOTIFICATION_GROUP_ID)
+                    .createNotification(
+                            MpSqlVisualizerBundle.message("log.suppress.added.title"),
+                            MpSqlVisualizerBundle.message("log.suppress.added.body", Integer.toString(addedCount)),
+                            NotificationType.INFORMATION);
+            notification.addAction(
+                    NotificationAction.createSimple(MpSqlVisualizerBundle.message("log.suppress.manage"), () -> {
+                        notification.expire();
+                        new SqlSuppressManagerDialog(project).show();
+                    }));
+            notification.notify(project);
+        } catch (Throwable ignored) {
+            // runCatching 语义：通知通道异常不阻塞主链（headless/裁剪发行环境）
+        }
+    }
+
+    /** T-SqlSuppress：达上限提示 balloon（D6：拒新增不淘汰，文案引导先删不用的规则）。 */
+    private void showSuppressLimitBalloon() {
+        if (ApplicationManager.getApplication().isUnitTestMode()) {
+            return;
+        }
+        try {
+            NotificationGroupManager.getInstance()
+                    .getNotificationGroup(SUPPRESS_NOTIFICATION_GROUP_ID)
+                    .createNotification(
+                            MpSqlVisualizerBundle.message("log.suppress.added.title"),
+                            MpSqlVisualizerBundle.message(
+                                    "log.suppress.limit",
+                                    String.valueOf(SqlSuppressRuleManager.MAX_RULES)),
+                            NotificationType.WARNING)
+                    .notify(project);
+        } catch (Throwable ignored) {
+            // runCatching 语义：通知通道异常不阻塞主链（headless/裁剪发行环境）
         }
     }
 
@@ -1997,6 +2129,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
     private static final String TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar";
     /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
     private static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
+    /** T-SqlSuppress（O-69/D5）：屏蔽规则 balloon 通知组（plugin.xml 独立注册）。 */
+    private static final String SUPPRESS_NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.logsuppress";
     public static final String DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss";
     /** T-M39：帮助文档 URL（降级系统浏览器打开）。
      *  2026-08-31 改为自建站点 jvtools.cn（可自主接入国内 CDN；

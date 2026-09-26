@@ -145,6 +145,26 @@ public final class SqlLogPanelKt {
     }
 
     /**
+     * 屏蔽规则存量过滤（T-SqlSuppress O-69，纯逻辑，可独立单测）：命中屏蔽指纹集的条目
+     * 从列表隐藏（缓冲里仍在——删除规则后复现；闸门已丢弃的历史条目不可恢复，UI 文案明示）。
+     * {@code suppressKeys} 与闸门同一数据源（SqlSuppressRuleManager.getSuppressedKeys 经
+     * {@link SqlLogManager} 同步进缓冲），空集透传（无规则常态零成本）。
+     */
+    public static List<LogSqlEntry> filterBySuppress(List<LogSqlEntry> entries, Set<String> suppressKeys) {
+        if (suppressKeys.isEmpty()) {
+            return entries;
+        }
+        // T-SqlSuppressUx 二段：精确键或结构键（手动开启结构匹配的规则）任一命中即滤除
+        List<LogSqlEntry> result = new ArrayList<>();
+        for (LogSqlEntry it : entries) {
+            if (!suppressKeys.contains(it.suppressKey()) && !suppressKeys.contains(it.structureKey())) {
+                result.add(it);
+            }
+        }
+        return result;
+    }
+
+    /**
      * 搜索过滤（纯逻辑，可独立单测）：查询词忽略大小写 contains，匹配还原 SQL 与摘要
      * （摘要含参数值的还原 SQL 前缀；参数值是常见检索目标）；空白查询透传全部。
      *

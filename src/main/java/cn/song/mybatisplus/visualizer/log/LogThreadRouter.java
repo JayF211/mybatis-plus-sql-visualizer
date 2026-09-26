@@ -1,12 +1,15 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import kotlin.jvm.functions.Function0;
 
 /**
  * 控制台日志「线程分桶」路由与日志行形态判定（T-LogParseConc）。
@@ -28,6 +31,10 @@ import java.util.regex.Pattern;
  *   裸行必在等待态桶内），故默认关闭以保持已验证链路零变化。
  *
  * 桶状态由各解析器自定（{@code B} 泛型），本类只管「哪一行归哪个桶」与容量。
+ *
+ * <p>T-ConsolePendingFlush 追加：本类同时记录<b>每个桶的最近活动时间</b>并提供 {@link #settledBuckets}——
+ * 分桶把「条目闭合」的前提从「下一条语句到来」改成「<b>同线程</b>的下一行到来」，而同线程下一行可能永不到来
+ * （JdbcTemplate 参数行是 TRACE 级默认不开 + Tomcat 按请求新建线程），静默判定是唯一可行的补救信号。
  */
 public final class LogThreadRouter<B> {
 
@@ -44,6 +51,12 @@ public final class LogThreadRouter<B> {
     /** 无 token 且无收集态桶时，是否归属最近使用的桶（T-HibConc；默认关闭=回退共享桶）。 */
     private final boolean routeNoTokenToRecent;
 
+    /**
+     * settle 判定的时钟（毫秒）；测试注入可控件以获得确定性（T-ConsolePendingFlush）。
+     * Kotlin 函数类型字段，按移植约定落 {@link Function0}（非 JDK SAM）。
+     */
+    private final Function0<Long> clock;
+
     /** 线程 token → 独立桶（保持插入序，便于 closePending 按序冲刷）。 */
     private final LinkedHashMap<String, B> buckets = new LinkedHashMap<>();
 
@@ -52,6 +65,12 @@ public final class LogThreadRouter<B> {
 
     /** 最近一次出现线程 token 的桶（{@code routeNoTokenToRecent} 的次选归属）。 */
     private B recent;
+
+    /**
+     * T-ConsolePendingFlush：桶 → 最近一次收到行的时钟毫秒（{@link #settledBuckets} 的判据）。
+     * 用 IdentityHashMap（键是桶实例本身，无 equals 语义）；桶被淘汰/清空时同步清理，不滞留已淘汰桶。
+     */
+    private final IdentityHashMap<B, Long> lastActivity = new IdentityHashMap<>();
 
     /**
      * 常用形态（master 默认参数）：maxBuckets={@link #DEFAULT_MAX_BUCKETS}、routeNoTokenToRecent=false。
@@ -71,12 +90,60 @@ public final class LogThreadRouter<B> {
     /** 全参形态（master 主构造器）。 */
     public LogThreadRouter(Supplier<B> factory, Predicate<B> isCollecting, Predicate<B> isIdle,
             int maxBuckets, boolean routeNoTokenToRecent) {
+        this(factory, isCollecting, isIdle, maxBuckets, routeNoTokenToRecent, System::currentTimeMillis);
+    }
+
+    /**
+     * 含时钟注入形态（T-ConsolePendingFlush：master 主构造 {@code clock} 参数的显式入口；
+     * 测试传可控 {@link Function0} 获得确定性）。
+     */
+    public LogThreadRouter(Supplier<B> factory, Predicate<B> isCollecting, Predicate<B> isIdle,
+            int maxBuckets, boolean routeNoTokenToRecent, Function0<Long> clock) {
         this.factory = factory;
         this.isCollecting = isCollecting;
         this.isIdle = isIdle;
         this.maxBuckets = maxBuckets;
         this.routeNoTokenToRecent = routeNoTokenToRecent;
+        this.clock = clock;
         this.fallback = factory.get();
+    }
+
+    /**
+     * T-ConsolePendingFlush：已静默 ≥ {@code settleMs} 的桶（分桶在前、回退桶在后，与 {@link #allBuckets} 同序）。
+     *
+     * <p>用途：按线程分桶后，一条语句的条目只在「<b>同线程桶</b>里再来一行」时才闭合产出；而该行可能永不
+     * 到来——JdbcTemplate 的参数行是 TRACE 级（默认不开），Tomcat 又按请求新建线程，于是每条语句都
+     * 停在自己的桶里等一个不存在的后继行，{@code takeEntries()} 永远取不到（面板「已扫描 N 行 / 产出 0 条」）。
+     * 静默超过阈值即可认定「后续行不会再来了」（参数行与语句行是同线程相邻输出，正常间隔 1ms 量级），
+     * 此时闭合是安全的。时钟取 {@link #clock}（Kotlin 默认参数 {@code nowMs = clock()} 的便捷重载）。
+     */
+    public List<B> settledBuckets(long settleMs) {
+        return settledBuckets(settleMs, clock.invoke());
+    }
+
+    /** 同上，显式传当前时刻（master 的 {@code settledBuckets(settleMs, nowMs)} 全参形态）。 */
+    public List<B> settledBuckets(long settleMs, long nowMs) {
+        List<B> out = new ArrayList<>();
+        for (B bucket : buckets.values()) {
+            Long last = lastActivity.get(bucket);
+            if (last == null) {
+                continue;
+            }
+            if (nowMs - last >= settleMs) {
+                out.add(bucket);
+            }
+        }
+        Long fallbackLast = lastActivity.get(fallback);
+        if (fallbackLast != null && nowMs - fallbackLast >= settleMs) {
+            out.add(fallback);
+        }
+        return out;
+    }
+
+    /** 记录活动时间并返回该桶（路由的三个出口共用）。 */
+    private B touch(B bucket) {
+        lastActivity.put(bucket, clock.invoke());
+        return bucket;
     }
 
     /** 按行路由到对应桶。 */
@@ -86,7 +153,7 @@ public final class LogThreadRouter<B> {
             B existing = buckets.get(token);
             if (existing != null) {
                 recent = existing;
-                return existing;
+                return touch(existing);
             }
             if (buckets.size() >= maxBuckets) {
                 evictIdle();
@@ -94,7 +161,7 @@ public final class LogThreadRouter<B> {
             B created = factory.get();
             buckets.put(token, created);
             recent = created;
-            return created;
+            return touch(created);
         }
         // 无线程 token 行（Hibernate 的多行 SQL 正文 / `Hibernate: ` stdout 标志行等）：
         // 1) MRU 桶优先——Hibernate 一条日志消息只有一个行首前缀，正文行紧跟在**同线程**那条
@@ -105,25 +172,25 @@ public final class LogThreadRouter<B> {
         // 2) 无 MRU 时退「收集态桶」（唯一收集态=确定归属）→ 3) 回退共享桶。
         if (routeNoTokenToRecent) {
             if (recent != null) {
-                return recent;
+                return touch(recent);
             }
             List<B> collecting = collectCollecting();
             if (!collecting.isEmpty()) {
-                return collecting.get(0);
+                return touch(collecting.get(0));
             }
-            return fallback;
+            return touch(fallback);
         }
         // MyBatis/JdbcTemplate：收集态桶优先（其裸行必在等待态桶内），否则回退共享桶
         List<B> collecting = collectCollecting();
         if (!collecting.isEmpty()) {
             for (B b : collecting) {
                 if (b == recent) {
-                    return b;
+                    return touch(b);
                 }
             }
-            return collecting.get(0);
+            return touch(collecting.get(0));
         }
-        return fallback;
+        return touch(fallback);
     }
 
     /** 全部桶（分桶在前、回退桶在后）——closePending 全量冲刷用。 */
@@ -141,6 +208,7 @@ public final class LogThreadRouter<B> {
     /** 清空（面板销毁/重挂载时）。 */
     public void clear() {
         buckets.clear();
+        lastActivity.clear();
         recent = null;
     }
 
@@ -164,6 +232,7 @@ public final class LogThreadRouter<B> {
                 if (recent == entry.getValue()) {
                     recent = null;
                 }
+                lastActivity.remove(entry.getValue()); // 活动时间随桶一并清理（防已淘汰桶滞留）
                 iterator.remove();
             }
         }

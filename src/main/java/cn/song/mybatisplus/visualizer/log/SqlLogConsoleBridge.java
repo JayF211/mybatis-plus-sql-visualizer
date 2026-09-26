@@ -57,6 +57,10 @@ public class SqlLogConsoleBridge {
     public final java.util.concurrent.atomic.AtomicLong epActiveShortCircuitCount =
             new java.util.concurrent.atomic.AtomicLong();
 
+    /** T-ConsolePendingFlush：filter 挂载代际号（每次 {@link #attachFilter} 成功挂载 +1，写入 ctx）。 */
+    private final java.util.concurrent.atomic.AtomicLong filterGeneration =
+            new java.util.concurrent.atomic.AtomicLong();
+
     /**
      * T-CaptureTruth T-CT-03：控制台观测行数（每行进入桥 filter 即 +1，短路行也计）。
      * 面板零产出诊断用——「已扫描 N 行 / 产出 0 条」是区分「控制台压根没输出」与
@@ -341,6 +345,12 @@ public class SqlLogConsoleBridge {
         if (diagReport != null) {
             LOG.info(diagReport);
         }
+        // T-ConsolePendingFlush：待闭合条目静默冲刷——应用执行完 SQL 后一行都不再打时，只有这一拍能把
+        // 桶里的待产出条目交出去（见 flushSettledEntries KDoc）。增强接管中（paused）不冲——那期间条目
+        // 由 agent 通道产出，桥侧冲刷会造成双路重复。
+        if (isCapturing.getAsBoolean() && !SqlCaptureGate.paused.get()) {
+            flushSettledEntries();
+        }
         if (lastHadMainConsole && !hasMain) {
             LOG.info("scanAll: 主控制台已移除（上轮有、当前无），触发 onConsoleRemoved");
             onConsoleRemoved.run();
@@ -468,55 +478,14 @@ public class SqlLogConsoleBridge {
                 // T-LogPerf-04：timePrefix 缓存化——设置变更走 refreshConsoleContexts，逐行不再读 PluginSettings
                 String rawTimePrefix = PluginSettings.getInstance().getState().getLogTimePrefix();
                 timePrefixCache = (rawTimePrefix != null && !rawTimePrefix.isBlank()) ? rawTimePrefix : null;
+                // T-ConsolePendingFlush：代际号写入上下文——旧代理凭它识别自身已作废（见 handleConsoleLine）
+                long generation = filterGeneration.incrementAndGet();
+                ctx.generation = generation;
                 Object filter = Proxy.newProxyInstance(
                         filterIface.getClassLoader(),
                         new Class<?>[]{filterIface},
-                        new LogFilterProxyHandler((line, endOffset) -> {
-                            // T-CaptureTruth T-CT-03：控制台观测行计数（短路行也计——「桥看到过多少行」是
-                            // 面板零产出诊断的输入）
-                            consoleLinesSeen.incrementAndGet();
-                            // T-PS4-02 双路解析封口 / T-CaptureTruth T-CT-04 语义收窄：平台 filter 链中 EP
-                            // （consoleFilterProvider）先于后挂的桥 filter 执行，且 epActive 只在 EP **实证
-                            // 产出过条目**后才置位——置位即意味着「EP 在本会话确实在链上且确实能产出」，桥侧
-                            // 短路重复解析（条目由 EP 单路产出）。EP 不在链上/产不出条目时 epActive 恒 false，
-                            // 桥照常解析：这正是回落通道的保底（原口径「EP 被调用过就封口」会让未覆盖的控制台
-                            // 静默零捕获）。防误伤可观测：计数 + debug 日志（计数即测试探针/丢行排查锚点）。
-                            if (SqlCaptureGate.epActive) {
-                                long total = epActiveShortCircuitCount.incrementAndGet();
-                                if (LOG.isDebugEnabled()) {
-                                    LOG.debug("bridge filter: EP 已生效，短路桥侧重复解析（累计 " + total + " 行）");
-                                }
-                                return;
-                            }
-                            BridgeLineContext context = consoleContexts.get(console);
-                            if (context == null) {
-                                return;
-                            }
-                            // T-PS5-07：此处原有第二道 `if (SqlCaptureGate.epActive) return` ——不可达冗余
-                            // （同条件已在处理函数首行短路并计数/留痕），删除。
-                            // T-PreviewFlash：重放守卫——rehighlight 全文档重跑 filter 时丢弃历史行（平台契约要求幂等）。
-                            // 守卫依赖反射取到的编辑器文档（stamp/行0）；取不到（非真 ConsoleViewImpl，如测试桩）
-                            // 则降级停用，直连现状语义——绝不能因守卫误丢正常流式行。
-                            Supplier<Long> stampReader = context.docStampReader;
-                            if (stampReader != null) {
-                                if (context.replayGuard.decide(
-                                        endOffset,
-                                        stampReader.get(),
-                                        line,
-                                        // T-PerfSweep F1：行 0 提供者惰性传递——只有混合态分支才求值，
-                                        // 流式/纯重放路径不再付 O(文档大小) 的全文档拷贝
-                                        context.line0Reader)
-                                        == ConsoleReplayGuard.Decision.Replay) {
-                                    context.replayDropCount.incrementAndGet();
-                                } else {
-                                    SqlLogConsoleBridgeKt.processConsoleLine(line, context, timePrefixCache, syncBufferConfig, this::bindConsoleError)
-                                            .forEach(buffer::addEntry);
-                                }
-                            } else {
-                                SqlLogConsoleBridgeKt.processConsoleLine(line, context, timePrefixCache, syncBufferConfig, this::bindConsoleError)
-                                        .forEach(buffer::addEntry);
-                            }
-                        }));
+                        new LogFilterProxyHandler((line, endOffset) ->
+                                handleConsoleLine(console, generation, line, endOffset)));
                 console.getClass().getMethod("addMessageFilter", filterIface).invoke(console, filter);
                 attachedConsoles.put(console, new Pair<>(filter, filterIface));
                 LOG.info("attachFilter: filter(" + filterIfaceName + ") attached to " + console.getClass().getName());
@@ -526,6 +495,113 @@ public class SqlLogConsoleBridge {
             }
         }
         LOG.warn("attachFilter: all filter candidates failed on " + console.getClass().getName());
+    }
+
+    /**
+     * T-CaptureTruth T-CT-03 / T-PS4-02 / T-PreviewFlash / T-ConsolePendingFlush：桥 filter 的逐行处理体。
+     *
+     * <p>代际守卫（T-ConsolePendingFlush）：{@code generation} 是本代理挂载时的代际号，
+     * {@code BridgeLineContext.generation} 是当前有效代际。2026.2 起 {@code ConsoleViewImpl} 只提供
+     * {@code clearMessageFilters()}、<b>没有</b> {@code removeMessageFilter}（javap 实证），stop→start 会在
+     * 同一个 console 上留下摘不掉的旧代理；旧代理若继续按 console 键取到<b>新</b>上下文，就会与新代理
+     * 逐行重复解析、重复计数。代际不符即惰性退出（不解析、不计数）。
+     *
+     * <p>并发（T-ConsolePendingFlush）：本方法在控制台输出线程执行，而轮询侧 {@link #flushSettledEntries}
+     * 在 EDT 冲刷同一套解析器状态 → 以 ctx 为锁互斥（同线程重入无副作用；无 Swing 调用，不构成 EDT 死锁面）。
+     */
+    private void handleConsoleLine(Object console, long generation, String line, int endOffset) {
+        BridgeLineContext context = consoleContexts.get(console);
+        if (context == null) {
+            return;
+        }
+        if (context.generation != generation) {
+            return; // 旧代际代理：惰性退出
+        }
+        // T-CaptureTruth T-CT-03：控制台观测行计数（短路行也计——「桥看到过多少行」是面板零产出诊断的输入）
+        consoleLinesSeen.incrementAndGet();
+        synchronized (context) {
+            // T-PS4-02 双路解析封口 / T-CaptureTruth T-CT-04 语义收窄：平台 filter 链中 EP
+            // （consoleFilterProvider）先于后挂的桥 filter 执行，且 epActive 只在 EP **实证
+            // 产出过条目**后才置位——置位即意味着「EP 在本会话确实在链上且确实能产出」，桥侧
+            // 短路重复解析（条目由 EP 单路产出）。EP 不在链上/产不出条目时 epActive 恒 false，
+            // 桥照常解析：这正是回落通道的保底（原口径「EP 被调用过就封口」会让未覆盖的控制台
+            // 静默零捕获）。防误伤可观测：计数 + debug 日志（计数即测试探针/丢行排查锚点）。
+            if (SqlCaptureGate.epActive) {
+                long total = epActiveShortCircuitCount.incrementAndGet();
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("bridge filter: EP 已生效，短路桥侧重复解析（累计 " + total + " 行）");
+                }
+                return;
+            }
+            // T-PS5-07：此处原有第二道 `if (SqlCaptureGate.epActive) return` ——不可达冗余
+            // （同条件已在处理函数首行短路并计数/留痕），删除。
+            // T-PreviewFlash：重放守卫——rehighlight 全文档重跑 filter 时丢弃历史行（平台契约要求幂等）。
+            // 守卫依赖反射取到的编辑器文档（stamp/行0）；取不到（非真 ConsoleViewImpl，如测试桩）
+            // 则降级停用，直连现状语义——绝不能因守卫误丢正常流式行。
+            Supplier<Long> stampReader = context.docStampReader;
+            if (stampReader != null) {
+                if (context.replayGuard.decide(
+                        endOffset,
+                        stampReader.get(),
+                        line,
+                        // T-PerfSweep F1：行 0 提供者惰性传递——只有混合态分支才求值，
+                        // 流式/纯重放路径不再付 O(文档大小) 的全文档拷贝
+                        context.line0Reader) == ConsoleReplayGuard.Decision.Replay) {
+                    context.replayDropCount.incrementAndGet();
+                } else {
+                    emitEntries(SqlLogConsoleBridgeKt.processConsoleLine(
+                            line, context, timePrefixCache, syncBufferConfig, this::bindConsoleError));
+                }
+            } else {
+                emitEntries(SqlLogConsoleBridgeKt.processConsoleLine(
+                        line, context, timePrefixCache, syncBufferConfig, this::bindConsoleError));
+            }
+        }
+    }
+
+    /** 条目入队（桥的两条产出路径共用：逐行与轮询静默冲刷）。 */
+    private void emitEntries(List<LogSqlEntry> entries) {
+        for (LogSqlEntry entry : entries) {
+            buffer.addEntry(entry);
+        }
+    }
+
+    /**
+     * T-ConsolePendingFlush：静默冲刷全部已挂载上下文的待产出条目（EDT，随轮询每拍调用一次，见 scanAll）。
+     *
+     * <p>为什么需要轮询这一拍：processConsoleLine 的逐行冲刷只在「控制台还在出下一行」时被触发；应用执行完
+     * 最后一条 SQL 就安静下来（没人再打日志）时，那条语句的待闭合状态没有后继行来触发任何路径——只有定时器
+     * 能兜住。没有它，低频工程仍然表现为「已扫描 N 行 / 产出 0 条」。
+     *
+     * @return 本次真正入队的条目数（测试断言用；生产路径只用于 INFO 留痕）。
+     */
+    public int flushSettledEntries() {
+        return flushSettledEntries(System.currentTimeMillis());
+    }
+
+    /** {@link #flushSettledEntries()} 的显式时间形态（默认实参 nowMs = 当前时刻的等价重载）。 */
+    public int flushSettledEntries(long nowMs) {
+        int produced = 0;
+        List<BridgeLineContext> snapshot;
+        synchronized (consoleContexts) {
+            snapshot = new java.util.ArrayList<>(consoleContexts.values());
+        }
+        for (BridgeLineContext ctx : snapshot) {
+            synchronized (ctx) {
+                ctx.jdbcParser.flushSettled(nowMs);
+                for (LogSqlEntry entry : ctx.jdbcParser.takeEntries()) {
+                    if (buffer.addEntry(entry)) {
+                        produced++;
+                    }
+                }
+            }
+        }
+        if (produced > 0) {
+            LOG.info("flushSettledEntries: 静默冲刷待闭合条目 " + produced + " 条（语句行之后同线程再无后继行——"
+                    + "JdbcTemplate 无 TRACE 参数行 / 线程按请求新建；阈值 "
+                    + JdbcTemplateLogParser.DEFAULT_SETTLE_MS + "ms）");
+        }
+        return produced;
     }
 
     /**
@@ -667,8 +743,13 @@ public class SqlLogConsoleBridge {
                 }
             }
             if (!removed) {
-                LOG.warn("detachAllFilters: FAILED to remove filter from " + console.getClass().getName() +
-                        " (filter will remain active!)");
+                // T-ConsolePendingFlush：2026.2 起 ConsoleViewImpl 只提供 clearMessageFilters()、无
+                // removeMessageFilter（javap 实证），移除失败是**平台事实**而非异常路径——旧代理由
+                // 「上下文已从 consoleContexts 摘除 + 代际号不符」双向失活（见 handleConsoleLine），
+                // 不会再解析也不会计数。原 WARN「filter will remain active!」把平台限制说成故障，
+                // 排查时会把人引向错误方向（本次故障现场就有这 4 条 WARN 做噪音）。
+                LOG.info("detachAllFilters: 平台不支持单 filter 移除（" + console.getClass().getSimpleName()
+                        + "）——旧 filter 已代际失活");
             }
         }
         attachedConsoles.clear();

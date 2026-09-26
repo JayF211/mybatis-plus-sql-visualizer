@@ -2,7 +2,6 @@
 package cn.song.mybatisplus.visualizer.execute;
 
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper;
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.statement.Statement;
 
 import java.util.LinkedHashMap;
@@ -116,7 +115,7 @@ public final class MetadataInvalidator {
         List<Statement> parse(String sql) throws Exception;
     }
 
-    public static volatile StatementParser parseStatementsForTest = CCJSqlParserUtil::parseStatements;
+    public static volatile StatementParser parseStatementsForTest = SqlAstParser.INSTANCE::parseStatements;
 
     /** T-PS5-01 测试缝：清空单槽缓存（用例间隔离；生产链路无调用点）。 */
     public static void clearParseCacheForTest() {

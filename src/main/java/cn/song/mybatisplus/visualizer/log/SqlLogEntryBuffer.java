@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -83,6 +84,21 @@ public class SqlLogEntryBuffer {
 
     /** 过滤关键字（T-M31.14，`;` 分隔后传入）：还原 SQL 包含任一关键字则丢弃。 */
     private volatile List<String> filterKeywords = List.of();
+
+    /**
+     * T-SqlSuppress（O-69）：屏蔽规则指纹集合（各规则规范化文本的 {@link LogSqlModelsKt#sqlFingerprint}，由
+     * {@link SqlSuppressRuleManager} 的项目订阅者 {@link SqlLogManager} 整体替换写入）。入队闸门命中即丢弃——
+     * 语义与关键字过滤一致（「从未捕获过」：不进去重计数、不占捕获序号、不触发任何内容/徽章/
+     * 入队回调）。空集时短路零成本（不触 {@code entry.dedupeKey()} 的惰性计算——无规则的常态）。
+     */
+    private volatile Set<String> suppressKeys = Set.of();
+
+    /**
+     * T-SqlSuppress：屏蔽闸门命中回调（参数 = 命中指纹键）——{@link SqlSuppressRuleManager#recordHit}
+     * 命中计数的唯一出口（管理对话框「已拦截 N 次」，D4）。专用通道，不与既有回调混用：
+     * 被拦条目不触发 onEntryAccepted/onEntryStored/onDedupeCountsChanged/内容监听（从未捕获过）。
+     */
+    private Consumer<String> onSuppressedHit = null;
 
     /** 条目被淘汰时的回调（最早条目超出上限时被移除）；用于自动保存历史 SQL（F-43）。 */
     private Consumer<LogSqlEntry> onEvicted = null;
@@ -163,6 +179,22 @@ public class SqlLogEntryBuffer {
 
     public void setFilterKeywords(List<String> filterKeywords) {
         this.filterKeywords = filterKeywords;
+    }
+
+    public Set<String> getSuppressKeys() {
+        return suppressKeys;
+    }
+
+    public void setSuppressKeys(Set<String> suppressKeys) {
+        this.suppressKeys = suppressKeys;
+    }
+
+    public Consumer<String> getOnSuppressedHit() {
+        return onSuppressedHit;
+    }
+
+    public void setOnSuppressedHit(Consumer<String> onSuppressedHit) {
+        this.onSuppressedHit = onSuppressedHit;
     }
 
     public Consumer<LogSqlEntry> getOnEvicted() {
@@ -252,6 +284,27 @@ public class SqlLogEntryBuffer {
         }
         if (isFiltered(entry.restoredSql())) {
             return false;
+        }
+        // T-SqlSuppress（O-69）：屏蔽规则命中 → 入队前丢弃（isFiltered 之后、去重/上限之前——
+        // 「从未捕获过」：不进去重计数、不占捕获序号、不触发任何内容回调；命中计数走
+        // onSuppressedHit 专用出口）。空集短路：无规则时零成本，不触 dedupeKey 惰性计算。
+        // 【反向验证探针锚点】注释掉下面 if 块 = 摘除屏蔽闸门，SqlLogEntryBufferTest 屏蔽用例必红。
+        // T-SqlSuppressUx 二段：精确键（默认口径规则）或结构键（手动开启结构匹配的规则）任一命中即拦；
+        // 命中键回传 recordHit 归账到对应规则。空集短路下 structureKey 的惰性亦不被触达。
+        if (!suppressKeys.isEmpty()) {
+            String hitKey = null;
+            if (suppressKeys.contains(entry.suppressKey())) {
+                hitKey = entry.suppressKey();
+            } else if (suppressKeys.contains(entry.structureKey())) {
+                hitKey = entry.structureKey();
+            }
+            if (hitKey != null) {
+                Consumer<String> hit = onSuppressedHit;
+                if (hit != null) {
+                    hit.accept(hitKey);
+                }
+                return false;
+            }
         }
         boolean duplicate = false;
         List<LogSqlEntry> evictedEntries = new ArrayList<>();

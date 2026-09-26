@@ -447,7 +447,8 @@ public class AgentSession {
             // 追加 P-5：确认值写入（桥闸门唯一真值来源）——disabled=false 才意味着「应用侧真在采集」
             configAckDisabled = ack.disabled();
             LOG.info("CONFIG 已生效（pid=" + pid + ", ACK#" + configAckCount.get() + "）：disabled=" + ack.disabled()
-                + ", desensitize=" + ack.desensitize() + ", skipPrefixes=" + ack.skipPrefixes());
+                + ", desensitize=" + ack.desensitize() + ", skipPrefixes=" + ack.skipPrefixes()
+                + ", bizJarPrefixes=" + ack.bizJarPrefixes());
             // 追加 P-5：回执是桥闸门的唯一依据——收到即同步（不能在等下一次 updateOnline 才刷）
             onCaptureConfirmationChanged.run();
         }
@@ -486,7 +487,15 @@ public class AgentSession {
                     prefixes.add(line);
                 }
             }
-            byte[] body = AgentProtocol.configBody(disabled, desensitize, prefixes).getBytes(StandardCharsets.UTF_8);
+            // T-ToolSiteBizFrame：随 CONFIG 附带 JAR 业务帧反向名单（语义与跳过前缀相反，热下发）
+            List<String> bizPrefixes = new ArrayList<>();
+            for (String line : PluginSettings.getInstance().getState().getSourceFrameBizJarPrefixes().lines().toList()) {
+                if (!line.isBlank()) {
+                    bizPrefixes.add(line);
+                }
+            }
+            byte[] body = AgentProtocol.configBody(disabled, desensitize, prefixes, bizPrefixes)
+                .getBytes(StandardCharsets.UTF_8);
             synchronized (output) {
                 output.writeInt(body.length);
                 output.write(AgentProtocol.CMD_CONFIG);

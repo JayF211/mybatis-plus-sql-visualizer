@@ -194,6 +194,36 @@ public record LogSqlEntry(
         return dedupeKey();
     }
 
+    /**
+     * T-SqlSuppressUx（20260924 用户走查返修）：屏蔽匹配键 = {@link #dedupeKey()} 口径追加<b>尾部分号剥离</b>
+     * ——规则粘贴态常带收尾 {@code ;} 而日志还原链不带（用户实证「已拦截 0 次」根因，多行/单行空白差异
+     * 本就被折叠）。与 dedupeKey 同属 body 属性不参与 equals/hashCode；仅在屏蔽规则集非空时被
+     * 闸门/面板过滤触达（空集短路），无规则常态零成本。口径函数 = {@link LogSqlModelsKt#suppressFingerprint}
+     * （规则侧 {@code SqlSuppressRuleManager} 同源，两侧必须同函数）。
+     */
+    public String suppressKey() {
+        return LogSqlModelsKt.suppressFingerprint(restoredSql);
+    }
+
+    /** Kotlin {@code val suppressKey} 的 JVM 访问器等价入口（Kotlin 调用方按属性名读取）。 */
+    public String getSuppressKey() {
+        return suppressKey();
+    }
+
+    /**
+     * T-SqlSuppressUx 二段：结构匹配键（{@link LogSqlModelsKt#structureFingerprint}，字面量/数字参数化）
+     * ——仅当某条<b>手动开启结构匹配</b>的规则的键集含本键时命中；与 {@link #suppressKey()} 同属 lazy 体属性，
+     * 空集短路下无结构规则则零成本。
+     */
+    public String structureKey() {
+        return LogSqlModelsKt.structureFingerprint(restoredSql);
+    }
+
+    /** Kotlin {@code val structureKey} 的 JVM 访问器等价入口（Kotlin 调用方按属性名读取）。 */
+    public String getStructureKey() {
+        return structureKey();
+    }
+
     /** 仅原始/还原 SQL + 参数（其余取默认）。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params) {
         this(rawSql, restoredSql, params, System.currentTimeMillis(), null,

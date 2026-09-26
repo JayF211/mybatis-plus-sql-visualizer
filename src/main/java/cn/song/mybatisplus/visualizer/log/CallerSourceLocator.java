@@ -58,6 +58,12 @@ public final class CallerSourceLocator {
     /**
      * 框架 / 基础设施帧（一律跳过，不视为调用点）。
      *
+     * <p><b>副本定性（T-PerfSweep7 4d，按 20260923 性能调研报告发现 5 登记）</b>：本类（含本函数）在
+     * src/main 内<b>无生产调用点</b>（全仓 grep 仅 {@code LocatorSkipPrefixSyncTest}（log.agent 包）与本侧
+     * 单测引用）——存在性是 {@code LocatorSkipPrefixSyncTest} 跨侧同集守卫的一部分（该守卫登记的
+     * 4 份「跳过规则」副本中的第 2 份，源码扫描锁定两侧前缀同集），<b>删除本副本 = 删守卫的覆盖对象之一</b>，
+     * 去留属设计定夺事项（疑死代码/设计遗留，只登记不处理），勿顺手删除。
+     *
      * <p>本侧独立副本，<b>前缀集合与 agent 侧 {@code StackLocator.FRAME_SKIP_PREFIXES} 同集</b>
      * （T-AgentResiduals R1 起；唯一差异是各自的自身包前缀，见类注释）。分组与 agent 侧逐行对齐，
      * 便于两侧对照；<b>改任一侧必须同步另一侧</b>，否则 {@code LocatorSkipPrefixSyncTest} 转红。

@@ -42,6 +42,15 @@ public class JdbcTemplateLogParser {
 
     public static final int DEFAULT_MAX_PARSE_LENGTH = 20000;
 
+    /**
+     * T-ConsolePendingFlush：静默冲刷默认阈值（毫秒）。
+     *
+     * 取 1 秒的由来：参数行（TRACE）与语句行（DEBUG）由同线程相邻打印，{@code JdbcTemplate.execute} 先打
+     * 语句行、随后在 {@code psc.createPreparedStatement} 里逐参数打 TRACE 行，间隔 1ms 量级；1 秒的静默
+     * 足以判定「没有参数行可等」，而误伤（把参数行留在条目外）需要该线程在两步之间卡住 1 秒以上。
+     */
+    public static final long DEFAULT_SETTLE_MS = 1000L;
+
     // T-LogParseConc：线程 token 提取 / 分桶 / 桶上限已下沉 LogThreadRouter（三解析器共享），
     // 原 THREAD_WINDOW / THREAD_BRACKET / PURE_DIGIT / LEVEL_KEYWORD_PATTERN / DEFAULT_MAX_BUCKETS 随之下沉。
 
@@ -95,6 +104,15 @@ public class JdbcTemplateLogParser {
     private boolean enabled;
     private int maxParseLength;
 
+    /**
+     * T-ConsolePendingFlush：静默冲刷阈值（毫秒）。桶内最后一行静默超过它，即认定「后续行不会再来了」
+     * （参数行与语句行是同线程相邻输出，正常间隔 1ms 量级），可安全闭合产出。
+     */
+    private final long settleMs;
+
+    /** settle 判定的时钟（测试注入可控件；与 {@link LogThreadRouter} 共用同一时钟）。 */
+    private final kotlin.jvm.functions.Function0<Long> clock;
+
     private final List<LogSqlEntry> entries = new ArrayList<>();
 
     // ----- T-JdbcThreadBucket / T-LogParseConc：按线程 token 分桶的独立状态机（修复并发参数错挂） -----
@@ -118,11 +136,12 @@ public class JdbcTemplateLogParser {
         }
     }
 
-    /** 线程分桶路由（T-LogParseConc 起为三解析器共享实现，见 LogThreadRouter）。 */
-    private final LogThreadRouter<ThreadBucket> router = new LogThreadRouter<>(
-            ThreadBucket::new,
-            b -> b.collecting,
-            b -> b.pendingSql == null && !b.collecting);
+    /**
+     * 线程分桶路由（T-LogParseConc 起为三解析器共享实现，见 {@link LogThreadRouter}）。
+     * router 持有实例级 {@code clock}（T-ConsolePendingFlush），须在构造体内建（字段初始化器先于
+     * 构造体执行，届时 clock 尚未赋值）。
+     */
+    private final LogThreadRouter<ThreadBucket> router;
 
     public JdbcTemplateLogParser() {
         this(new LogSqlRestorer());
@@ -133,14 +152,29 @@ public class JdbcTemplateLogParser {
     }
 
     public JdbcTemplateLogParser(LogSqlRestorer restorer, boolean enabled, int maxParseLength) {
-        this.restorer = restorer;
-        this.enabled = enabled;
-        this.maxParseLength = maxParseLength;
+        this(restorer, enabled, maxParseLength, DEFAULT_SETTLE_MS, System::currentTimeMillis);
     }
 
     /** 全配置便捷构造（restorer 取默认）——master 具名默认参数形态（EP Filter/桥用）。 */
     public JdbcTemplateLogParser(boolean enabled, int maxParseLength) {
         this(new LogSqlRestorer(), enabled, maxParseLength);
+    }
+
+    /** master 主构造全参形态（T-ConsolePendingFlush：settleMs/clock 注入入口，测试用）。 */
+    public JdbcTemplateLogParser(LogSqlRestorer restorer, boolean enabled, int maxParseLength,
+                                 long settleMs, kotlin.jvm.functions.Function0<Long> clock) {
+        this.restorer = restorer;
+        this.enabled = enabled;
+        this.maxParseLength = maxParseLength;
+        this.settleMs = settleMs;
+        this.clock = clock;
+        this.router = new LogThreadRouter<>(
+                ThreadBucket::new,
+                b -> b.collecting,
+                b -> b.pendingSql == null && !b.collecting,
+                LogThreadRouter.DEFAULT_MAX_BUCKETS,
+                false,
+                clock);
     }
 
     public LogSqlRestorer getRestorer() {
@@ -303,6 +337,38 @@ public class JdbcTemplateLogParser {
         List<LogSqlEntry> result = new ArrayList<>(entries);
         entries.clear();
         return result;
+    }
+
+    /**
+     * T-ConsolePendingFlush：静默冲刷——闭合全部<b>已静默 ≥ {@code settleMs}</b> 的桶的待产出条目，产出进
+     * {@code entries}（由调用方随下一次 {@link #takeEntries()} 取走），返回本次产出条数。
+     *
+     * <p>为什么必须有它：本解析器的条目只在「同一线程桶里再来一行边界行」时经 closeBucketPending 产出，
+     * 而 JdbcTemplate 的语句行之后经常<b>没有同线程后继行</b>——参数行是 TRACE 级（{@code logging.level}
+     * 常只开 {@code JdbcTemplate: debug}），Tomcat 又按请求新建线程（{@code exec-1}/{@code exec-2}…），
+     * 低频访问下每条语句各自独占一个新线程、此后不再有行。旧行为下这些语句永远停在桶里，
+     * {@code takeEntries()} 恒空——用户看到的是面板「已扫描 N 行 / 产出 0 条」。
+     *
+     * <p>调用点两处：① processConsoleLine 逐行入口（同控制台线程，喂行后调用，零并发）；
+     * ② 控制台桥的常规轮询（EDT）——应用之后一行都不再打时，靠这一拍兜底。
+     *
+     * <p>已知代价：若某线程在语句行与它的参数行之间卡住超过阈值（连接池耗尽等），条目会先以未还原形态
+     * 产出，随后到达的参数行按「无上下文」丢弃（{@link LogParseDiag#paramWithoutContext} 留痕）。阈值取
+     * 1 秒即为把这一误伤面压到最小。
+     */
+    public int flushSettled() {
+        return flushSettled(clock.invoke());
+    }
+
+    /** {@link #flushSettled()} 的显式时刻形态（master 默认参数 {@code nowMs = clock()} 的等价重载）。 */
+    public int flushSettled(long nowMs) {
+        int produced = 0;
+        for (ThreadBucket bucket : router.settledBuckets(settleMs, nowMs)) {
+            if (closeBucketPending(bucket) != null) {
+                produced++;
+            }
+        }
+        return produced;
     }
 
     // ---------- 私有方法（与旧版同逻辑，按桶操作） ----------

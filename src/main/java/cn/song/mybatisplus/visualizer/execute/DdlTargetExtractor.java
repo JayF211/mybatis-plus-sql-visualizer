@@ -2,7 +2,6 @@
 package cn.song.mybatisplus.visualizer.execute;
 
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper;
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.statement.Statement;
 
 import java.util.regex.Matcher;
@@ -31,9 +30,9 @@ public final class DdlTargetExtractor {
     public static String extractCreateTarget(@org.jetbrains.annotations.NotNull String sql) {
         String cleaned = SqlCommentStripper.strip(sql);
         if (cleaned.isBlank()) return null;
-        // AST 路：CREATE TABLE 权威
+        // AST 路：CREATE TABLE 权威（T-PS7-03 收拢：走 SqlAstParser，方括号引用不再必然落正则兜底）
         try {
-            for (Statement statement : CCJSqlParserUtil.parseStatements(cleaned)) {
+            for (Statement statement : SqlAstParser.INSTANCE.parseStatements(cleaned)) {
                 if (statement instanceof net.sf.jsqlparser.statement.create.table.CreateTable) {
                     net.sf.jsqlparser.statement.create.table.CreateTable create =
                             (net.sf.jsqlparser.statement.create.table.CreateTable) statement;

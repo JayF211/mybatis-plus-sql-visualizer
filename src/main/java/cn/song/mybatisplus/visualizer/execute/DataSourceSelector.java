@@ -238,25 +238,41 @@ public final class DataSourceSelector {
             @Nullable Consumer<Editor> onEditor,
             @Nullable Consumer<String> onError,
             @Nullable Consumer<Boolean> callback) {
-        chooseAndPrepare(project, sql, false, onConsole, onEditor, onError, callback, null);
+        chooseAndPrepare(project, sql, false, onConsole, onEditor, onError, callback, null, false);
     }
 
-    /** M36.5：在已准备的控制台上执行。 */
+    /** M36.5：在已准备的控制台上执行（Kotlin 默认参 {@code wholeScriptExec = false} 形态）。 */
     public static boolean executePrepared(
             @NotNull Project project,
             @Nullable Consumer<JComponent> onResultsReady,
             @Nullable Consumer<String> onError,
             @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
+        return executePrepared(project, onResultsReady, onError, onErrorRich, false);
+    }
+
+    /**
+     * M36.5：在已准备的控制台上执行。
+     *
+     * @param wholeScriptExec O-64：identity 包装产物整批直跑（ExecOption 覆写为
+     *                        EXECUTE_INSIDE_WHOLE_SCRIPT/EXECUTE_OUTSIDE_WHOLE_SCRIPT，
+     *                        原生 Statements 选择弹层不再弹出、整批全部执行）；普通执行传默认 false
+     */
+    public static boolean executePrepared(
+            @NotNull Project project,
+            @Nullable Consumer<JComponent> onResultsReady,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec) {
         Object console = preparedConsole;
         Editor editor = preparedEditor;
         Object scriptModel = preparedScriptModel;
         Object execOption = preparedExecOption;
         if (console == null || editor == null || scriptModel == null || execOption == null) return false;
-        executeOnConsole(project, console, editor, scriptModel, execOption, preparedUi, onResultsReady, onError, onErrorRich);
+        executeOnConsole(project, console, editor, scriptModel, execOption, preparedUi, onResultsReady, onError, onErrorRich, wholeScriptExec);
         return true;
     }
 
-    /** 选择数据源并执行 SQL（准备 + 执行合一）。 */
+    /** 选择数据源并执行 SQL（准备 + 执行合一，Kotlin 默认参 {@code wholeScriptExec = false} 形态）。 */
     public static void selectAndExecute(
             @NotNull Project project,
             @NotNull String sql,
@@ -265,7 +281,20 @@ public final class DataSourceSelector {
             @Nullable Consumer<String> onError,
             @Nullable Consumer<Boolean> callback,
             @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
-        chooseAndPrepare(project, sql, true, onConsole, onEditor, onError, callback, onErrorRich);
+        selectAndExecute(project, sql, onConsole, onEditor, onError, callback, onErrorRich, false);
+    }
+
+    /** 选择数据源并执行 SQL（准备 + 执行合一，O-64 wholeScriptExec 重载）。 */
+    public static void selectAndExecute(
+            @NotNull Project project,
+            @NotNull String sql,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<Boolean> callback,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec) {
+        chooseAndPrepare(project, sql, true, onConsole, onEditor, onError, callback, onErrorRich, wholeScriptExec);
     }
 
     private static void chooseAndPrepare(
@@ -276,7 +305,8 @@ public final class DataSourceSelector {
             @Nullable Consumer<Editor> onEditor,
             @Nullable Consumer<String> onError,
             @Nullable Consumer<Boolean> callback,
-            @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         if (!ExecuteSqlSupport.isAvailable()) {
             LOG.warn("[M36] database plugin NOT available, abort");
@@ -294,7 +324,7 @@ public final class DataSourceSelector {
         // M36.5.5：共享控制台命中（last-used 数据源一致且控制台仍有效）→ 直接复用——
         // 不同步 session/连接/临时文件/方言映射，规避"第二个会话连接永不发起"挂死（见字段注释）。
         // 显式执行路径同样复用（结果落在已嵌入面板）；用户切换数据源走弹窗 → 新建并替换共享缓存。
-        if (reuseSharedConsole(project, submitSql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich)) return;
+        if (reuseSharedConsole(project, submitSql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich, wholeScriptExec)) return;
 
         // 临时文件 + VF + PsiFile：Runner 上下文 + 控制台挂载点（VF 须保持引用）
         TempPsiFile temp = createTempPsiFile(project, submitSql);
@@ -314,7 +344,7 @@ public final class DataSourceSelector {
         com.intellij.util.Consumer<Object> sessionConsumer = session -> {
             LOG.info("[M36] session created: " + (session != null ? session.getClass().getName() : "null")
                     + ", attaching console (execute=" + executeAfterPrepare + ", ds=" + chosenRunnerName[0] + ")");
-            prepareInConsole(project, session, vf, executeAfterPrepare, chosenRunnerName[0], onConsole, onEditor, onError, onErrorRich);
+            prepareInConsole(project, session, vf, executeAfterPrepare, chosenRunnerName[0], onConsole, onEditor, onError, onErrorRich, wholeScriptExec);
         };
 
         List<Object> runners = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer);
@@ -387,7 +417,8 @@ public final class DataSourceSelector {
             @Nullable Consumer<Editor> onEditor,
             @Nullable Consumer<String> onError,
             @Nullable Consumer<Boolean> callback,
-            @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         Object console = sharedConsole;
         if (console == null) return false;
@@ -508,7 +539,7 @@ public final class DataSourceSelector {
         clearConsolePrompt(console, LOG);
         LOG.info("[M36] shared console reused (ds=" + dsName + ", execute=" + executeAfterPrepare + ", liveResult=" + (liveResult != null) + ")");
         if (executeAfterPrepare) {
-            executeOnConsole(project, console, editor, refreshedModel != null ? refreshedModel : scriptModel, execOption, sharedUi, null, onError, onErrorRich);
+            executeOnConsole(project, console, editor, refreshedModel != null ? refreshedModel : scriptModel, execOption, sharedUi, null, onError, onErrorRich, wholeScriptExec);
         }
         if (callback != null) callback.accept(true);
         return true;
@@ -1078,7 +1109,10 @@ public final class DataSourceSelector {
     }
 
     /** M36.5.8/M36.5.9/M36.5.13：执行后结果区刷新——限时多次重取。 */
-    private static void refreshResultsComponent(Object ui, Logger LOG, boolean forceSwapIn, int generation, @Nullable Consumer<String> onError) {
+    private static void refreshResultsComponent(Object ui, Logger LOG, boolean forceSwapIn, int generation,
+                                                @Nullable Consumer<String> onError,
+                                                @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+                                                @Nullable String sqlText) {
         Consumer<JComponent> callback = pendingOnConsole;
         if (callback == null) return;
         JComponent top = sharedTopBlock != null ? sharedTopBlock : preparedTopBlock;
@@ -1109,7 +1143,8 @@ public final class DataSourceSelector {
                 final String fErr = err;
                 ApplicationManager.getApplication().invokeLater(() -> {
                     writeConsoleOutput(shared != null ? shared : preparedConsole, EXEC_FAILURE_ECHO_PREFIX + " " + fErr + "\n", true);
-                    if (onError != null) onError.accept(fErr);
+                    // T-ELU-01/03：语句级错误同 startResultTabRetry 的早检路径——走富通道收口
+                    deliverError(onErrorRich, onError, null, fErr, sqlText != null ? sqlText.length() : null);
                 }, ModalityState.nonModal());
                 return;
             }
@@ -1495,7 +1530,8 @@ public final class DataSourceSelector {
             @Nullable Consumer<JComponent> onConsole,
             @Nullable Consumer<Editor> onEditor,
             @Nullable Consumer<String> onError,
-            @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         try {
             Class<?> providerClass = Class.forName(CONSOLE_PROVIDER_CLASS);
@@ -1577,7 +1613,7 @@ public final class DataSourceSelector {
                 // M36.2：编辑器就绪回调（调用方注入插件补全上下文，与原生补全叠加）
                 if (onEditor != null) onEditor.accept(ed);
                 prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName,
-                        onConsole, onError, console, document, ed, onErrorRich);
+                        onConsole, onError, console, document, ed, onErrorRich, wholeScriptExec);
             } else {
                 ApplicationManager.getApplication().executeOnPooledThread(() -> {
                     Editor editor = null;
@@ -1598,7 +1634,7 @@ public final class DataSourceSelector {
                             if (onEditor != null) onEditor.accept(resolved);
                             try {
                                 prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName,
-                                        onConsole, onError, console, document, resolved, onErrorRich);
+                                        onConsole, onError, console, document, resolved, onErrorRich, wholeScriptExec);
                             } catch (Throwable e) {
                                 LOG.warn("[M36] prepareInConsole(editor async wait) FAILED: "
                                         + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
@@ -1653,7 +1689,8 @@ public final class DataSourceSelector {
             Object console,
             Document document,
             Editor editor,
-            @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         try {
             Class<?> consoleClass = Class.forName(CONSOLE_CLASS);
@@ -1884,7 +1921,13 @@ public final class DataSourceSelector {
             }
 
             if (executeAfterPrepare) {
-                executeOnConsole(project, console, editor, effectiveScriptModel, execOption, ui, null, onError, onErrorRich);
+                // 2026-09-23 真机走查补：此处原**漏传** onErrorRich（默认 null）⇒ 这条路径上的错误
+                // 投递收口只能回退旧通道，定位按钮永不出现。本函数签名里一直有该参数，只是没往下传
+                // ——「实现有、接线漏」的又一例（同族见 ErrorPositionWiringGuardTest 的转发断言）。
+                // （k2j 移植基线此处已传 onErrorRich，语义等价；本轮按 master 统一为显式多行形态并接 wholeScriptExec）
+                executeOnConsole(
+                        project, console, editor, effectiveScriptModel, execOption, ui,
+                        null, onError, onErrorRich, wholeScriptExec);
             }
         } catch (Throwable e) {
             LOG.warn("[M36] prepareInConsole FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
@@ -2451,6 +2494,90 @@ public final class DataSourceSelector {
         }
     }
 
+    /**
+     * T-ErrorLocate T-ELU-01/03：错误投递<b>统一收口</b>——富通道优先，富通道缺席才回退旧
+     * {@code onError(String)}；两者<b>互斥</b>，不再先后各投一次。
+     *
+     * <p><b>为什么必须互斥</b>（T-ELU-01 实测的真相，与计划 §一.1 的「按钮可见但点了没反应」不同）：
+     * 消费方 {@code SqlPreviewPanel} 的 {@code onError} 恒为 {@code resultPanel.showError(errorMsg)}，而
+     * {@code showError} 会清掉定位动作与定位按钮（{@code ui/SqlResultPanel.kt} 的
+     * {@code locateHandler = null} + {@code errorLocateButton.isVisible = false}）。原实现先投富通道
+     * （{@code showErrorRich} 置按钮可见）、紧接着无条件投旧通道——<b>同一 EDT 任务内</b>后者立刻把
+     * 前者抹掉，端态恒为「按钮不可见」，T-ELU-01 的「先解析后显隐」因此形同 no-op。
+     * 两者呈现的文本同源（富通道 {@code showErrorRich} 内部就是 {@code showError(info.message)}），
+     * 故富通道成功时不再投旧通道，展示行为等价而定位态得以保留。</p>
+     *
+     * <p>富通道自身抛异常（{@code runCatching}）时<b>回退旧通道</b>——不让「结构化」这一增强把错误呈现吞掉。</p>
+     *
+     * <p><b>2026-09-23 真机走查补记（本函数曾丢失过，勿再删）</b>：本函数在分支上实现于 {@code 4186231}，
+     * 但 {@code 914724c}（「O-48/O-49 采信 master 侧已合入实现」）把 O-49 整体改回 master 侧形态，
+     * 该收口随之消失，端态退回「按钮永不出现」——真机走查实证：一条锚点可解析的失败语句
+     * （{@code DELETE FROM no_such_table_xyz}）面板只出现红字 +「复制错误信息」，<b>没有定位按钮</b>。</p>
+     *
+     * @param cause        解包后的异常（取 SQLState/errorCode；控制台历史文本错误传 null）
+     * @param message      错误文本（位置 marker 从它提取）
+     * @param sqlMaxLength 提交/被执行文本长度（T-ELU-03 越界钳制上界）；null = 不钳制
+     */
+    public static void deliverError(
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            @Nullable Consumer<String> onError,
+            @Nullable Throwable cause,
+            @NotNull String message,
+            @Nullable Integer sqlMaxLength) {
+        if (onErrorRich != null) {
+            try {
+                onErrorRich.accept(ErrorPositionExtractor.buildInfo(cause, message, sqlMaxLength));
+            } catch (Throwable t) {
+                Logger.getInstance(DataSourceSelector.class)
+                        .warn("[T-ErrorLocate] onErrorRich invoke failed → fallback to onError", t);
+                if (onError != null) onError.accept(message);
+            }
+        } else {
+            if (onError != null) onError.accept(message);
+        }
+    }
+
+    /** Kotlin 默认参 {@code sqlMaxLength = null} 的缺省形态。 */
+    public static void deliverError(
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            @Nullable Consumer<String> onError,
+            @Nullable Throwable cause,
+            @NotNull String message) {
+        deliverError(onErrorRich, onError, cause, message, null);
+    }
+
+    /**
+     * O-64/T-RollbackIdentityParse：identity 包装产物的「整批直跑」ExecOption 副本。
+     *
+     * <p>平台语义（javap 243 {@code DatabaseSettings$ExecOption} + 常量组实证）：多语句执行范围由
+     * {@code execInside}（光标在语句内）/ {@code execOutside}（光标在语句间）两个 int 决定，默认
+     * {@code EXECUTE_INSIDE_SHOW_CHOOSER} 弹 Statements 选择层且默认只选第一条——P19 的 identity
+     * 产物首语句恰是无副作用的 {@code SET … ON}，按默认执行等于 INSERT 没跑。本副本把两键都覆写为
+     * {@code *_WHOLE_SCRIPT}：不弹层、整批全部执行，即「默认全选」的唯一平台杠杆。</p>
+     *
+     * <p>只造副本：{@code copyFrom} 基础配置后覆写两键，preparedExecOption/sharedExecOption 缓存与
+     * 用户全局设置（{@code getDefaultExecOption()} 活实例）一概不碰。反射不可用 → 原样返回基础
+     * 实例（执行维持现态，不劣化）。测试直接覆盖本函数（DatabaseTools 在默认 test classpath）。</p>
+     */
+    public static Object wholeScriptExecOption(Object base) {
+        try {
+            Class<?> settingsClass = Class.forName("com.intellij.database.settings.DatabaseSettings");
+            Object fresh = base.getClass().getDeclaredConstructor().newInstance();
+            base.getClass().getMethod("copyFrom", base.getClass()).invoke(fresh, base);
+            base.getClass().getField("execInside").setInt(fresh,
+                    settingsClass.getField("EXECUTE_INSIDE_WHOLE_SCRIPT").getInt(null));
+            try {
+                base.getClass().getField("execOutside").setInt(fresh,
+                        settingsClass.getField("EXECUTE_OUTSIDE_WHOLE_SCRIPT").getInt(null));
+            } catch (Throwable ignored) {
+                // 内层 runCatching：execOutside 缺席不致命，保留 execInside 覆写
+            }
+            return fresh;
+        } catch (Throwable t) {
+            return base;
+        }
+    }
+
     /** M36.5：在指定控制台上执行 SQL。 */
     private static void executeOnConsole(
             @NotNull Project project,
@@ -2461,8 +2588,14 @@ public final class DataSourceSelector {
             Object ui,
             @Nullable Consumer<JComponent> onResultsReady,
             @Nullable Consumer<String> onError,
-            @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
+        // O-64/T-RollbackIdentityParse：identity 包装产物整批直跑——覆写本次执行的 ExecOption
+        // （只造**副本**传下去，prepared/shared 缓存与用户全局设置一概不动），弹层不再出现、
+        // 整批（SET…ON + INSERT + SET…OFF）全部执行，即「Statements 默认全选」的平台实现杠杆。
+        // 反射不可用（Database 插件类缺席）时原样返回基础实例 = 维持现态，不劣化。
+        Object effectiveExecOption = wholeScriptExec ? wholeScriptExecOption(execOption) : execOption;
         // T-MysqlGStrip T-MG-02：提交链总口（已备控制台路径）——提交文本源是控制台编辑器文档，
         // 执行前剥离 `\G` 后缀并把剥后文本**回写编辑器文档**（所见=所执行，避免显示/执行分叉）。
         // 回写复用既有 T-ExecDocSync 写纪律（dispatchDocWriteOnEdt → writeVfTextViaDocument：
@@ -2503,7 +2636,7 @@ public final class DataSourceSelector {
         lastUnrecognizedTail = null;
         try {
             Class<?> consoleClass = Class.forName(CONSOLE_CLASS);
-            Method execute = consoleClass.getMethod("executeQueries", Editor.class, Class.forName("com.intellij.database.script.ScriptModel"), execOption.getClass());
+            Method execute = consoleClass.getMethod("executeQueries", Editor.class, Class.forName("com.intellij.database.script.ScriptModel"), effectiveExecOption.getClass());
 
             final int generation = executionGeneration;
             LOG.info("[M36] executeOnConsole begin (build=" + BUILD_STAMP + ")");
@@ -2602,11 +2735,11 @@ public final class DataSourceSelector {
                             execSilentProbe(console, freshModel, freshModelDemoted, dsName, LOG);
                             final PsiFile vfPsiFinal = vfPsi;
                             final Editor editorFinal = editor;
-                            final Object execOptionFinal = execOption;
+                            final Object execOptionFinal = effectiveExecOption;
                             final boolean[] nativeRunRef = {false};
                             if (vfPsi != null && !demoteToFallback) {
                                 Class<?> providerClass = Class.forName(CONSOLE_PROVIDER_CLASS);
-                                Method findScriptModel = providerClass.getMethod("findScriptModel", PsiFile.class, com.intellij.psi.PsiElement.class, Editor.class, execOption.getClass());
+                                Method findScriptModel = providerClass.getMethod("findScriptModel", PsiFile.class, com.intellij.psi.PsiElement.class, Editor.class, effectiveExecOption.getClass());
                                 final Method[] doRunMethodRef = {null};
                                 try {
                                     doRunMethodRef[0] = providerClass.getMethod("doRunQueryInConsole", consoleClass, Class.forName("com.intellij.database.console.JdbcConsoleProvider$Info"));
@@ -2641,7 +2774,7 @@ public final class DataSourceSelector {
                                                     LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole");
                                                     doRunMethodRef[0].invoke(null, console, info);
                                                     LOG.info("[M36] native query SUBMITTED (starting result watch)");
-                                                    afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false, executedSql);
+                                                    afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false, executedSql, onErrorRich);
                                                 } catch (Throwable t) {
                                                     Throwable cause = (t instanceof InvocationTargetException) ? ((InvocationTargetException) t).getTargetException() : t;
                                                     final Throwable fCause = cause;
@@ -2657,16 +2790,10 @@ public final class DataSourceSelector {
                                                     // 越界钳制此前只在单测生效（调用方全都不传 sqlMaxLength）
                                                     // write-safe: UI-only（纯 Swing/只读，无文档写）
                                                     ApplicationManager.getApplication().invokeLater(() -> {
-                                                        try {
-                                                            if (onErrorRich != null) {
-                                                                onErrorRich.accept(ErrorPositionExtractor.buildInfo(fCause,
-                                                                        fCause.getMessage() != null ? fCause.getMessage() : fCause.toString(),
-                                                                        executedSql.length()));
-                                                            }
-                                                        } catch (Throwable ex) {
-                                                            LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", ex);
-                                                        }
-                                                        if (onError != null) onError.accept(fCause.getMessage() != null ? fCause.getMessage() : fCause.toString());
+                                                        deliverError(
+                                                                onErrorRich, onError, fCause,
+                                                                fCause.getMessage() != null ? fCause.getMessage() : fCause.toString(),
+                                                                executedSql.length());
                                                     }, ModalityState.any());
                                                 }
                                             });
@@ -2680,7 +2807,7 @@ public final class DataSourceSelector {
                             }
                             if (!nativeRunRef[0]) {
                                 LOG.info("[M36][EXEC] fallback path (native not used: " + (demoteToFallback ? "demoted" : "no vf psi or doRun missing") + "), executeQueries(freshModel)");
-                                execute.invoke(console, editor, freshModel, execOption);
+                                execute.invoke(console, editor, freshModel, execOptionFinal);
                                 submittedRef[0] = true;
                             }
                             return null;
@@ -2701,20 +2828,16 @@ public final class DataSourceSelector {
                         // pump 中照常执行（纯 Swing 更新，安全）。
                         // write-safe: UI-only（纯 Swing/只读，无文档写）
                         ApplicationManager.getApplication().invokeLater(() -> {
-                            try {
-                                // T-ELU-03：接上被执行文本长度（越界钳制生效前提）
-                                if (onErrorRich != null) onErrorRich.accept(ErrorPositionExtractor.buildInfo(fCause, fMsg, executedSql.length()));
-                            } catch (Throwable ex) {
-                                LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", ex);
-                            }
-                            if (onError != null) onError.accept(fMsg);
+                            // T-ELU-01/03：经 deliverError 收口——富通道优先、**不再**同时投旧通道
+                            // （旧通道会抹掉定位按钮），并接上被执行文本长度作越界钳制上界
+                            deliverError(onErrorRich, onError, fCause, fMsg, executedSql.length());
                         }, ModalityState.any());
                         return;
                     }
                     if (submittedRef[0]) {
                         // 兜底路径（executeQueries 同步提交）：监听在此启动；原生路径由事务内
                         // afterSubmitted 启动，此处不再重复（防双重监听互相顶掉结果）。
-                        afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false, executedSql);
+                        afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false, executedSql, onErrorRich);
                     }
                 });
             });
@@ -2722,17 +2845,12 @@ public final class DataSourceSelector {
             LOG.warn("[M36] executeOnConsole FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
             Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
             final Throwable fCause = cause;
-            try {
-                // T-ELU-03：接上被执行文本长度（越界钳制生效前提）
-                if (onErrorRich != null) {
-                    onErrorRich.accept(ErrorPositionExtractor.buildInfo(fCause,
-                            fCause.getMessage() != null ? fCause.getMessage() : fCause.toString(),
-                            executedSql.length()));
-                }
-            } catch (Throwable ex) {
-                LOG.warn("[T-ErrorLocate] onErrorRich invoke failed", ex);
-            }
-            if (onError != null) onError.accept(fCause.getMessage() != null ? fCause.getMessage() : fCause.toString());
+            // T-ELU-01/03：经 deliverError 收口（富通道优先 + 提交文本长度钳制上界）。
+            // 本对回调在 executeOnPooledThread 的后台线程上（非 EDT）——deliverError 只做纯计算
+            // 与回调转发，不含 Swing 操作，故不改变既有线程契约。
+            deliverError(onErrorRich, onError, fCause,
+                    fCause.getMessage() != null ? fCause.getMessage() : fCause.toString(),
+                    executedSql.length());
         }
     }
 
@@ -2754,7 +2872,8 @@ public final class DataSourceSelector {
             Logger LOG,
             String dsName,
             boolean demotedOverride,
-            @Nullable String sqlText) {
+            @Nullable String sqlText,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
         swapGeneration++;
         // write-safe: UI-only（纯 Swing/只读，无文档写）
         ApplicationManager.getApplication().invokeLater(() -> {
@@ -2816,7 +2935,7 @@ public final class DataSourceSelector {
             }
             if (ui != null) {
                 Set<String> names = preExistingNames;
-                startResultTabRetry(project, ui, onError, names, swapGeneration, dsName, demotedOverride, sqlText);
+                startResultTabRetry(project, ui, onError, names, swapGeneration, dsName, demotedOverride, sqlText, onErrorRich);
             }
         }, ModalityState.any());
     }
@@ -2889,7 +3008,8 @@ public final class DataSourceSelector {
             int generation,
             String dsName,
             boolean demotedOverride,
-            @Nullable String sqlText) {
+            @Nullable String sqlText,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         final javax.swing.Timer[] timerHolder = {null};
         final int[] attempts = {0};
@@ -2907,9 +3027,13 @@ public final class DataSourceSelector {
                 lastReportedError = err;
                 LOG.info("[M36] early console error detected (attempts=" + attempts[0] + "): " + (err.length() > 120 ? err.substring(0, 120) : err));
                 // write-safe: UI-only（纯 Swing/只读，无文档写）
+                // T-ELU-01/03：DBN 写进 console history 的**语句级**错误也走富通道——
+                // 这是「正常 SQL 执行失败」的主路径（提交链不抛异常，错误只落在 history），
+                // 原实现只投旧 onError ⇒ 定位按钮永不出现。cause 传 null（文本里已有
+                // 位置 marker，SQLState/errorCode 由驱动器在 history 文本中给出）。
                 final String fErr = err;
                 ApplicationManager.getApplication().invokeLater(() -> {
-                    if (onError != null) onError.accept(fErr);
+                    deliverError(onErrorRich, onError, null, fErr, sqlText != null ? sqlText.length() : null);
                 }, ModalityState.any());
                 return;
             }
@@ -2944,7 +3068,7 @@ public final class DataSourceSelector {
                 } catch (Throwable ex) {
                     LOG.warn("[M36] select result tab FAILED: " + ex.getMessage());
                 }
-                refreshResultsComponent(ui, LOG, true, generation, onError);
+                refreshResultsComponent(ui, LOG, true, generation, onError, onErrorRich, sqlText);
             } else {
                 boolean dumb = false;
                 try { dumb = DumbService.isDumb(project); } catch (Throwable ignored) { /* ignore */ }
@@ -2985,9 +3109,10 @@ public final class DataSourceSelector {
                         }, ModalityState.any());
                     } else if (realError != null) {
                         // write-safe: UI-only（纯 Swing/只读，无文档写）
+                        // T-ELU-01/03：语句级错误同早检路径，走富通道收口
                         final String fErr = realError;
                         ApplicationManager.getApplication().invokeLater(() -> {
-                            if (onError != null) onError.accept(fErr);
+                            deliverError(onErrorRich, onError, null, fErr, sqlText != null ? sqlText.length() : null);
                         }, ModalityState.any());
                     }
                 }
@@ -2998,7 +3123,7 @@ public final class DataSourceSelector {
         timer.start();
     }
 
-    /** 结果 Tab 激活重试（使用当前 swapGeneration 作为监听代际）。 */
+    /** 结果 Tab 激活重试（使用当前 swapGeneration 作为监听代际，Kotlin 默认参缺省形态）。 */
     private static void startResultTabRetry(
             @NotNull Project project,
             Object ui,
@@ -3006,7 +3131,7 @@ public final class DataSourceSelector {
             Set<String> preExistingNames,
             String dsName,
             boolean demotedOverride) {
-        startResultTabRetry(project, ui, onError, preExistingNames, swapGeneration, dsName, demotedOverride, null);
+        startResultTabRetry(project, ui, onError, preExistingNames, swapGeneration, dsName, demotedOverride, null, null);
     }
 
     /** M36.5：读取 last-used 数据源名（prepareConsole 静默复用；异常兜底 null）。 */

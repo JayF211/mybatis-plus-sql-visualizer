@@ -39,7 +39,7 @@ public final class SqlExecutor {
         execute(project, sql, dataSource, isQuery, onConsole, onEditor, onError, null);
     }
 
-    /** 准备 + 执行合一（M36 原语义，T-ErrorLocate 富错误通道重载）：选数据源 → 建控制台 → 直接执行。 */
+    /** 准备 + 执行合一（M36 原语义，T-ErrorLocate 富错误通道重载）：选数据源 → 建控制台 → 直接执行（Kotlin 默认参 {@code wholeScriptExec = false} 形态）。 */
     public static void execute(
             @NotNull Project project,
             @NotNull String sql,
@@ -49,6 +49,20 @@ public final class SqlExecutor {
             @Nullable Consumer<Editor> onEditor,
             @Nullable Consumer<String> onError,
             @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
+        execute(project, sql, dataSource, isQuery, onConsole, onEditor, onError, onErrorRich, false);
+    }
+
+    /** 准备 + 执行合一（O-64：wholeScriptExec 重载——identity 包装产物整批直跑）。 */
+    public static void execute(
+            @NotNull Project project,
+            @NotNull String sql,
+            @Nullable Object dataSource,
+            boolean isQuery,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec) {
         DataSourceSelector.selectAndExecute(project, sql, onConsole, onEditor, onError,
                 success -> {
                     if (!Boolean.TRUE.equals(success)) {
@@ -58,7 +72,7 @@ public final class SqlExecutor {
                         }
                     }
                 },
-                onErrorRich);
+                onErrorRich, wholeScriptExec);
     }
 
     /** M36.5：准备控制台（不执行）。Community 下静默失败（callback(false)）。 */
@@ -85,14 +99,30 @@ public final class SqlExecutor {
         return executePrepared(project, onResultsReady, onError, null);
     }
 
-    /** M36.5：在已准备的控制台上执行（T-ErrorLocate 富错误通道重载）。 */
+    /** M36.5：在已准备的控制台上执行（T-ErrorLocate 富错误通道重载，Kotlin 默认参 {@code wholeScriptExec = false} 形态）。 */
     public static boolean executePrepared(
             @NotNull Project project,
             @Nullable Consumer<JComponent> onResultsReady,
             @Nullable Consumer<String> onError,
             @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
+        return executePrepared(project, onResultsReady, onError, onErrorRich, false);
+    }
+
+    /**
+     * M36.5：在已准备的控制台上执行。
+     *
+     * @param wholeScriptExec O-64：identity 包装产物整批直跑（ExecOption 覆写为
+     *                        EXECUTE_INSIDE_WHOLE_SCRIPT/EXECUTE_OUTSIDE_WHOLE_SCRIPT，
+     *                        原生 Statements 选择弹层不再弹出、整批全部执行）；普通执行传默认 false
+     */
+    public static boolean executePrepared(
+            @NotNull Project project,
+            @Nullable Consumer<JComponent> onResultsReady,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec) {
         if (!ExecuteSqlSupport.isAvailable()) return false;
-        return DataSourceSelector.executePrepared(project, onResultsReady, onError, onErrorRich);
+        return DataSourceSelector.executePrepared(project, onResultsReady, onError, onErrorRich, wholeScriptExec);
     }
 
     /** 控制台是否已就绪（prepareConsole 成功后 true）。 */

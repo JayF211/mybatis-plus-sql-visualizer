@@ -1,6 +1,7 @@
 // T-SyncK2JMaster309 自 execute/UnboundedWriteDetector.kt 移植
 package cn.song.mybatisplus.visualizer.execute;
 
+import cn.song.mybatisplus.visualizer.sql.IdentityInsertStatements;
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.BooleanValue;
@@ -15,7 +16,6 @@ import net.sf.jsqlparser.expression.operators.relational.EqualsTo;
 import net.sf.jsqlparser.expression.operators.relational.InExpression;
 import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
 import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.statement.Statement;
 import net.sf.jsqlparser.statement.delete.Delete;
@@ -137,7 +137,7 @@ public final class UnboundedWriteDetector {
         List<Statement> parse(String sql) throws Exception;
     }
 
-    public static volatile StatementParser parseStatementsForTest = CCJSqlParserUtil::parseStatements;
+    public static volatile StatementParser parseStatementsForTest = SqlAstParser.INSTANCE::parseStatements;
 
     /** T-PS5-02 测试缝：清空单槽（用例隔离；生产链路无调用点）。 */
     public static void clearAstSlotForTest() {
@@ -174,9 +174,16 @@ public final class UnboundedWriteDetector {
     public static WriteRisk detect(@org.jetbrains.annotations.NotNull String sql) {
         String cleaned = SqlCommentStripper.strip(sql);
         if (cleaned.isBlank()) return new WriteRisk(List.of());
+        // O-64/T-RollbackIdentityParse（P19）：先剥离插件自产 identity 包装语句（仅精确
+        // `SET IDENTITY_INSERT <表> ON|OFF;` 形态，判据见 IdentityInsertStatements KDoc）再解析——
+        // JSqlParser 对该 T-SQL 语句解析期抛 ParseException，不剥离则「开关 + 真写语句」的回滚产物
+        // 整体 fail closed 报「无法解析语句结构」（误报：一行 INSERT 的产物被说成可能影响全表）。
+        // 剥离只影响解析输入，findings 仍按剥离后的真实语句计算——真写语句（UPDATE/DELETE）照常报，
+        // 开关语句本就不产生发现。无 identity 痕迹时 stripForParse 返回原引用，单槽 `===` 快路径不动。
+        String parseable = IdentityInsertStatements.stripForParse(cleaned);
         List<Statement> statements;
         try {
-            statements = parseStatementsShared(cleaned);
+            statements = parseStatementsShared(parseable);
         } catch (Exception e) {
             return new WriteRisk(List.of(new Finding(FindingKind.PARSE_FAILED,
                     e.getMessage() != null && e.getMessage().length() > DETAIL_LIMIT

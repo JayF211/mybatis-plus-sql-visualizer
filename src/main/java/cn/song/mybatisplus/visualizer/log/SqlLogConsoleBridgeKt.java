@@ -26,6 +26,9 @@ public final class SqlLogConsoleBridgeKt {
      *  1.5) T-M55-02：SQL 执行报错行（{@link SqlErrorLineRecognizer} 词表命中）→ 旁路聚合错误块并经
      *     onErrorText 实时反向绑定缓冲最近条目（不改控制台输出、不干扰解析器主链）；
      *  2. 喂行到三个解析器（配置快照已由设置变更事件同步——T-LogPerf-04），取出已配对 SQL 条目；
+     *  2.5) T-ConsolePendingFlush：喂行后冲刷「已静默 ≥1s」桶的待产出条目（见
+     *     {@link JdbcTemplateLogParser#flushSettled()}）——按线程分桶后，语句行之后没有同线程后继行的
+     *     语句（JdbcTemplate 无 TRACE 参数行 + 线程按请求新建）否则永远停在桶里；
      *  3. 附加耗时解析结果 + 暂存源码位置，写入 LogSqlEntry。
      * 纯函数式、无 IDE 依赖，可在单元测试中直接驱动（SqlLogConsoleBridgeMarkerTest）。
      */
@@ -96,6 +99,11 @@ public final class SqlLogConsoleBridgeKt {
             ctx.hibernateParser.feed(line);
         }
         ctx.jdbcParser.feed(line);
+        // 2.5) T-ConsolePendingFlush：喂行后冲刷**已静默**桶的待产出条目。放在喂行之后是有意的——本行刚
+        // 触达它自己的桶（活动时间刷新），该桶因此不会出现在冲刷名单里，本行所属语句的参数行不会被截断；
+        // 被冲刷的只有「别的线程静默 ≥1s 的语句」（JdbcTemplate 无 TRACE 参数行 + 线程按请求新建时，
+        // 那些语句永无同线程后继行）。冲刷出的条目与本次喂行产出的条目由下方同一次 takeEntries() 一并交出。
+        ctx.jdbcParser.flushSettled();
         List<LogSqlEntry> taken = new ArrayList<>();
         taken.addAll(ctx.myBatisParser.takeEntries());
         taken.addAll(ctx.hibernateParser.takeEntries());
