@@ -1,9 +1,13 @@
 package cn.song.mybatisplus.visualizer.mcp
 
+import cn.song.mybatisplus.visualizer.acp.SignatureDistroDiscovery
 import org.junit.Assert.assertEquals
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
 
 /**
  * T-McpToolset MCP headless 执行链跨版本签名回归（铁律：新增反射入口必须登记跨版本签名护栏）。
@@ -22,13 +26,29 @@ class McpDbSignatureCrossVersionTest {
 
     @Test
     fun mcpDbExecutorApisResolveOnAllLocalTargetPlatforms() {
-        val distros = discoverDistros()
+        val distros = SignatureDistroDiscovery.ideaDistros
         assumeTrue("本机未发现任何 IDEA 发行版，跨版本签名核验无从执行", distros.isNotEmpty())
+
+        // T-TestPerf6：逐发行版核验由串行改并行——每个发行版一个独立 JBR 外部 JVM（互不共享
+        // 状态），并行只省墙钟不改判红语义；invokeAll 保提交序（family 升序），covered/failures
+        // 的聚合口径与输出顺序与原串行版逐字符一致。池大小 3：外部 JVM 与 4 个测试片并存的
+        // 资源上限，收益与假失败风险由定向读数验证（T-TestPerf6 计划 V4）。
+        val pool = Executors.newFixedThreadPool(minOf(3, distros.size))
+        val results = try {
+            pool.invokeAll(distros.map { (family, root) ->
+                Callable { (family to root) to runChecker(root) }
+            }).map { future ->
+                // 执行环境故障（ProcessBuilder IOException 等）保持原串行版的测试 error 形态
+                try { future.get() } catch (e: ExecutionException) { throw e.cause ?: e }
+            }
+        } finally {
+            pool.shutdownNow()
+        }
 
         val failures = mutableListOf<String>()
         val covered = mutableListOf<String>()
-        for ((family, root) in distros) {
-            val result = runChecker(root)
+        for ((target, result) in results) {
+            val (family, root) = target
             covered.add(family)
             if (result.exitCode != 0) {
                 failures.add("IU-$family (${root.path}):\n${result.output}")
@@ -40,33 +60,11 @@ class McpDbSignatureCrossVersionTest {
     }
 
     // ------------------------------------------------------------------
-    // 发行版发现与执行（与 PlatformSignatureCrossVersionTest 同模式；DatabaseTools 全系捆绑，
-    // 发行版根目录直接含 plugins/DatabaseTools）
+    // 发行版发现（T-TestPerf6 起收敛到 testutil/SignatureDistroDiscovery 单例，口径原样：
+    // transforms 判 build.txt+lib + LOCALAPPDATA 装机兜底，family 去重升序，一次遍历三类共享）；
+    // 本类只保留执行（与 PlatformSignatureCrossVersionTest 同模式；DatabaseTools 全系捆绑，
+    // 发行版根目录直接含 plugins/DatabaseTools）。
     // ------------------------------------------------------------------
-
-    private fun discoverDistros(): List<Pair<String, File>> {
-        val roots = mutableListOf<File>()
-        val caches = File(System.getProperty("user.home"), ".gradle/caches")
-        caches.listFiles { f -> f.isDirectory }?.forEach { versionDir ->
-            File(versionDir, "transforms").listFiles { f -> f.isDirectory }?.forEach { hashDir ->
-                File(hashDir, "transformed").listFiles { f -> f.isDirectory }?.forEach { distro ->
-                    if (File(distro, "build.txt").isFile && File(distro, "lib").isDirectory) {
-                        roots.add(distro)
-                    }
-                }
-            }
-        }
-        System.getenv("LOCALAPPDATA")?.let { laf ->
-            val installed = File(laf, "Programs/IntelliJ IDEA")
-            if (File(installed, "build.txt").isFile && File(installed, "lib").isDirectory) {
-                roots.add(installed)
-            }
-        }
-        return roots.mapNotNull { distro ->
-            val build = File(distro, "build.txt").readText().trim()
-            Regex("(\\d{3})\\.").find(build)?.groupValues?.get(1)?.let { family -> family to distro }
-        }.distinctBy { it.first }.sortedBy { it.first }
-    }
 
     private fun runChecker(distro: File): McpDbCheckResult {
         val java = sequenceOf(

@@ -4,6 +4,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
 
 /**
  * T-MlLlmSignatureGuard ml-llm（AI Assistant）ACP internal 类型跨版本签名护栏（O-41，P2）。
@@ -69,8 +72,18 @@ class AcpSignatureCrossVersionTest {
 
         val failures = mutableListOf<String>()
         val covered = mutableListOf<String>()
-        for (artifact in artifacts) {
-            val result = runChecker(artifact)
+        // T-TestPerf6：逐制品核验由串行改并行（每制品一个独立外部 JVM，互不共享状态）；
+        // invokeAll 保提交序，println 输出与 failures 聚合顺序与原串行版一致（T-TestPerf6 V4 验证）。
+        val pool = Executors.newFixedThreadPool(artifacts.size)
+        val results = try {
+            pool.invokeAll(artifacts.map { artifact -> Callable { artifact to runChecker(artifact) } })
+                .map { future ->
+                    try { future.get() } catch (e: ExecutionException) { throw e.cause ?: e }
+                }
+        } finally {
+            pool.shutdownNow()
+        }
+        for ((artifact, result) in results) {
             covered += artifact.label
             println("[ml-llm 签名护栏] ${artifact.label} (${artifact.root.path}) exit=${result.exitCode}")
             println(result.output.trimEnd())
@@ -83,7 +96,9 @@ class AcpSignatureCrossVersionTest {
     }
 
     // ------------------------------------------------------------------
-    // 制品发现（照 McpDbSignatureCrossVersionTest 的发现+执行模式；发现面换成 ml-llm 的两处落点）
+    // 制品发现（T-TestPerf6 起收敛到 testutil/SignatureDistroDiscovery 单例——transforms 全盘
+    // 遍历一次完成、三护栏类共享；本类的 artifacts/companions/platformLib 全部变为对单例清单
+    // 的内存过滤，判据/排序/去重口径原样照抄原私有实现）
     // ------------------------------------------------------------------
 
     private enum class ArtifactKind { TRANSFORMS, INSTALLED }
@@ -104,84 +119,30 @@ class AcpSignatureCrossVersionTest {
         val companions: List<File>,
     )
 
-    /** companion 根：配对发行版的 `platform-acp-plugin/lib/modules`（transforms 制品的 AcpAgentId 只在这里）。 */
-    private data class Companion(val root: File, val segment: String?)
-
     private data class CheckerResult(val exitCode: Int, val output: String)
 
     private fun discoverArtifacts(): List<Artifact> {
-        val companions = discoverCompanions()
         val out = mutableListOf<Artifact>()
-        for (transforms in gradleTransforms()) {
-            transforms.listFiles { f -> f.isDirectory }?.forEach { hashDir ->
-                File(hashDir, "transformed").listFiles { f -> f.isDirectory }?.forEach { distro ->
-                    if (distro.name.startsWith("com.intellij.ml.llm-") && File(distro, "ml-llm/lib/modules").isDirectory) {
-                        out += Artifact(
-                            label = "transforms ${distro.name}",
-                            root = File(distro, "ml-llm"),
-                            expectedPackage = expectedPackages.getValue(ArtifactKind.TRANSFORMS),
-                            companions = orderCompanions(companions, segmentOf(distro.name)),
-                        )
-                    }
-                }
-            }
+        for (distro in SignatureDistroDiscovery.mlLlmTransformedDistros) {
+            out += Artifact(
+                label = "transforms ${distro.name}",
+                root = File(distro, "ml-llm"),
+                expectedPackage = expectedPackages.getValue(ArtifactKind.TRANSFORMS),
+                companions = SignatureDistroDiscovery.companionsOrdered(
+                    SignatureDistroDiscovery.segmentOf(distro.name),
+                ),
+            )
         }
-        System.getenv("APPDATA")?.let { appData ->
-            File(appData, "JetBrains").listFiles { f -> f.isDirectory && f.name.startsWith("IntelliJIdea") }
-                ?.forEach { ide ->
-                    val mlLlm = File(ide, "plugins/ml-llm")
-                    if (File(mlLlm, "lib/modules").isDirectory) {
-                        out += Artifact(
-                            label = "installed ${ide.name}",
-                            root = mlLlm,
-                            expectedPackage = expectedPackages.getValue(ArtifactKind.INSTALLED),
-                            companions = orderCompanions(companions, null),
-                        )
-                    }
-                }
+        for ((ide, mlLlm) in SignatureDistroDiscovery.mlLlmInstalled) {
+            out += Artifact(
+                label = "installed ${ide.name}",
+                root = mlLlm,
+                expectedPackage = expectedPackages.getValue(ArtifactKind.INSTALLED),
+                companions = SignatureDistroDiscovery.companionsOrdered(null),
+            )
         }
         return out.distinctBy { it.root.canonicalPath }
     }
-
-    private fun gradleTransforms(): List<File> {
-        val caches = File(System.getProperty("user.home"), ".gradle/caches")
-        return caches.listFiles { f -> f.isDirectory }
-            ?.map { File(it, "transforms") }
-            ?.filter { it.isDirectory }
-            ?: emptyList()
-    }
-
-    private fun discoverCompanions(): List<Companion> {
-        val out = mutableListOf<Companion>()
-        for (transforms in gradleTransforms()) {
-            transforms.listFiles { f -> f.isDirectory }?.forEach { hashDir ->
-                File(hashDir, "transformed").listFiles { f -> f.isDirectory }?.forEach { distro ->
-                    val modules = File(distro, "plugins/platform-acp-plugin/lib/modules")
-                    if (modules.isDirectory) {
-                        out += Companion(modules, segmentOf(File(distro, "build.txt").takeIf { it.isFile }?.readText().orEmpty()))
-                    }
-                }
-            }
-        }
-        System.getenv("LOCALAPPDATA")?.let { laf ->
-            val install = File(laf, "Programs/IntelliJ IDEA")
-            val modules = File(install, "plugins/platform-acp-plugin/lib/modules")
-            if (modules.isDirectory) {
-                out += Companion(modules, segmentOf(File(install, "build.txt").takeIf { it.isFile }?.readText().orEmpty()))
-            }
-        }
-        return out.distinctBy { it.root.canonicalPath }
-    }
-
-    /** 同一 build 段（如 ml-llm `262.9437.276` 与发行版 `IU-262.9437.185` 的 `9437`）的 companion 排前。 */
-    private fun orderCompanions(companions: List<Companion>, segment: String?): List<File> =
-        companions
-            .sortedWith(compareBy({ if (segment != null && it.segment == segment) 0 else 1 }, { it.root.path }))
-            .map { it.root }
-
-    /** 取版本号中段（`262.9437.276` / `IU-262.9437.185` → `9437`；段长可变，243 系为 5 位）。 */
-    private fun segmentOf(text: String): String? =
-        Regex("\\.(\\d+)\\.").find(text)?.groupValues?.get(1)
 
     /**
      * **运行时**核验（复核 major⑯ 的运行时半边）：在受控 classpath 下加载**真制品**的接口与枚举，
@@ -201,15 +162,19 @@ class AcpSignatureCrossVersionTest {
         // 「双形态形参包漂移 → AbstractMethodError」结构性不可达（handler 不关心形参静态类型），
         // 且我方 impl class 已删除——探针的「impl 与制品接口匹配」半边失去被核对象。代理链的
         // 静态等价护栏 = 「acp 包字节码零 ml-llm/platform-acp 类型引用」（独立字节码断言）。
-        val artifacts = discoverArtifacts()
-        assumeTrue(
-            "本机未发现任何 ml-llm（AI Assistant）制品——运行时探针无从执行",
-            artifacts.isNotEmpty(),
-        )
+        // T-TestPerf6：skip 判定前移——impl 判定是两次文件存在性检查，制品发现是 transforms
+        // 全盘遍历；前移后结构性 skip 不再白付一遍遍历。副作用（计划 V3 登记）：「无制品且无
+        // impl」场景 assumeTrue 的理由文本从制品理由变为 impl 理由；本机形态（有制品、无 impl）
+        // 的 skip 行为与消息不变。
         assumeTrue(
             "T-MarketCompatProxy 代理形态：无 impl 产物目录，运行时匹配探针结构性停用" +
                 "（按方法名分发天然免疫形参包漂移；等价护栏=acp 包零平台类型引用的字节码断言）",
             implClassesDir() != null,
+        )
+        val artifacts = discoverArtifacts()
+        assumeTrue(
+            "本机未发现任何 ml-llm（AI Assistant）制品——运行时探针无从执行",
+            artifacts.isNotEmpty(),
         )
 
         val failures = mutableListOf<String>()
@@ -239,8 +204,9 @@ class AcpSignatureCrossVersionTest {
             .map { File(it, "intellij.platform.acp.jar") }
             .firstOrNull { it.isFile }
             ?: return CheckerResult(1, "MISS 未找到 platform-acp 制品（platform.acp.AcpAgentId 的来源）")
-        val platformLib = platformLibDir(artifact)
-            ?: return CheckerResult(1, "MISS 未找到该发行线的平台 lib 目录（真制品初始化需要平台类）")
+        val platformLib = SignatureDistroDiscovery.platformLibFor(
+            SignatureDistroDiscovery.segmentOf(artifact.root.parentFile?.name.orEmpty()),
+        ) ?: return CheckerResult(1, "MISS 未找到该发行线的平台 lib 目录（真制品初始化需要平台类）")
         // 真制品是 class file 69（Java 25），测试 JVM（21）加载不了 —— 用**该发行线自带的 JBR**跑探针：
         // 既满足版本要求，又与真机 IDE 的运行时一致（找不到 JBR 才回落测试 JVM，届时会明确报版本错）
         val java = distroJava(platformLib)
@@ -280,28 +246,11 @@ class AcpSignatureCrossVersionTest {
     }
 
     /**
-     * 该制品所属发行线的平台 `lib` 目录（与制品同 build 段优先）。真制品的 `AcpRegistryAgentId`
-     * 静态初始化要 `com.intellij.openapi.extensions.ExtensionPointName` 等平台类，故须把发行版 lib 全量挂上
-     * ——逐个挑 jar 会陷入「缺一个类补一个 jar」的循环。
+     * 该制品所属发行线的平台 `lib` 目录已收敛到 [SignatureDistroDiscovery.platformLibFor]
+     * （与制品同 build 段优先；真制品的 `AcpRegistryAgentId` 静态初始化要
+     * `com.intellij.openapi.extensions.ExtensionPointName` 等平台类，故须把发行版 lib 全量挂上
+     * ——逐个挑 jar 会陷入「缺一个类补一个 jar」的循环）。
      */
-    private fun platformLibDir(artifact: Artifact): File? {
-        val segment = segmentOf(artifact.root.parentFile?.name.orEmpty())
-        val candidates = mutableListOf<File>()
-        for (transforms in gradleTransforms()) {
-            transforms.listFiles { f -> f.isDirectory }?.forEach { hashDir ->
-                File(hashDir, "transformed").listFiles { f -> f.isDirectory }?.forEach { distro ->
-                    val lib = File(distro, "lib")
-                    if (distro.name.startsWith("idea") && File(lib, "util.jar").isFile) {
-                        candidates += lib
-                    }
-                }
-            }
-        }
-        if (candidates.isEmpty()) return null
-        return candidates.sortedWith(
-            compareBy({ if (segment != null && segmentOf(it.parentFile.name) == segment) 0 else 1 }, { it.path }),
-        ).first()
-    }
 
     /** 该发行线自带的 JBR（`<distro>/jbr/bin/java`）——真机 IDE 用的就是它。 */
     private fun distroJava(platformLib: File): String? {

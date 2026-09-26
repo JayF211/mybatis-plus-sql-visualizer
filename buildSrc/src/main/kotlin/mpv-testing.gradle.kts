@@ -44,6 +44,25 @@ tasks.withType<Test>().configureEach {
     if (providers.gradleProperty("testGc").getOrElse("") == "parallel") {
         jvmArgs("-XX:+UseParallelGC")
     }
+    // T-TestPerf5：SerialGC 档 -PtestGc=serial。2026-09-25 对照实测全程留档：筛查窗读出
+    // −6.4%（177s/173s vs G1 基线 194s/180s），但晚窗收口 193s/188s 不复现，同刻 G1 对照
+    // 187s/190s 与 serial 无差——机器窗口漂移 ±5~8%（execSum 配置无关地早窗 ~595s → 晚窗
+    // ~630s）与效应同量级，净效应 ≈0，不落默认回退 G1。教训定例：效应量 <10% 的调参实验
+    // 必须同窗交错 A/B，单窗成对对照 + 「复跑确认」防不了窗口漂移。开关保留供负载形态变化
+    // 后按同窗交错法复测（ParallelGC 无收益是 T-TestPerf4 的另一档，两档均已实测）。
+    if (providers.gradleProperty("testGc").getOrElse("") == "serial") {
+        jvmArgs("-XX:+UseSerialGC")
+    }
+    // T-TestPerf5：测试 JVM 线程面治理 -PtestProcCap=N → -XX:ActiveProcessorCount=N（缺省
+    // 不动）。2026-09-25 对照实测：cap3 189s / cap4（该跑中途 1 例 FatalPassthroughTest 回调
+    // 计数断言失败，定向复跑 cap4×2 + 裸跑×2 全绿不复现——负载形态敏感的时序竞态嫌疑，非
+    // 确定性语义影响）vs G1 基线均值 187s——无收益（<5%），路线销账不落默认；「线程面超额
+    // 认领是争用主因」假说证伪（片间膨胀主分量不在 JVM 线程层，内存带宽/调度更可能）。
+    // 开关保留供负载形态变化后复测。语义中立性前提：grep 实测仓内 src/ 无 availableProcessors
+    // 依赖（2026-09-25），EDT 单线程模型不受影响。
+    providers.gradleProperty("testProcCap").orNull?.toIntOrNull()?.let {
+        jvmArgs("-XX:ActiveProcessorCount=$it")
+    }
     // Docker 测试默认关闭（20260923 用户定例）：daemon 半活态会让 testcontainers 的 ping
     // 探测阻塞无超时（runCatching 兜不住阻塞形态，20260923 发行门禁实录三片挂起 40 分钟），
     // daemon 活着时真容器方言验证的 pull/run 耗时也不可控。只有显式 -PmpvDockerTests=true
@@ -82,6 +101,8 @@ fun listSuiteXmls(dir: File): List<File> =
 // T-TestPerf4（2026-09-24）在片执行 ~210s 的新负载下 warm 重测：3 片 3m57s / 4 片 3m30s、
 // 3m16s / 5 片 3m36s——固定开销占比下降后拐点右移到 4 片，默认改 4。代价是 execSum 总和
 // 随并发度膨胀（601→687→858s），5 片起竞争损耗超过切分收益；负载形态再变时按同法重测。
+// T-TestPerf5（2026-09-25）：5 片×SerialGC 复测 186s 仍回劣（4 片×serial 同日 173~177s；
+// execSum 718s，+20% 并发膨胀不随 GC 换型消失）——4 片定案维持。
 // 顶层声明——分片注册（testIde 块内）与聚合报告（testShards 任务）两处共用。
 val testShardCount = providers.gradleProperty("testShardCount").orNull
     ?.toIntOrNull()?.coerceIn(1, 6) ?: 4
@@ -124,6 +145,31 @@ val fastBucketClasses: List<String> = testFileEntries
         "cn.song.mybatisplus.visualizer.actions.CrudSqlPreviewFlowTest",
         "cn.song.mybatisplus.visualizer.feedback.ErrorReportDialogLayoutTest",
     ) }
+
+// T-TestPerf6：S3 外部进程型护栏桶——签名护栏类对本机发行版逐个起外部 JBR JVM 核验，
+// 不需要平台沙盒（testFast 非沙盒 JVM 定向全绿实证，20260926）；从分片类集摘出后与 4 片
+// 并行执行（桶内 invokeAll 池并行核验 + 桶与分片并发），护栏族扩容不再挤占片墙钟。
+// AcpSignatureCrossVersionTest 暂留分片（未做非沙盒验证，保守；验证通过后可移入本名单）。
+val testExternalClasses = setOf(
+    "cn.song.mybatisplus.visualizer.mcp.McpDbSignatureCrossVersionTest",
+    "cn.song.mybatisplus.visualizer.update.PlatformSignatureCrossVersionTest",
+)
+
+tasks.register<Test>("testExternal") {
+    group = "verification"
+    description = "签名护栏外部分离桶（非沙盒 JVM，与 testShards 分片并行；一命令全量自动触发）"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    // classpath 三段构造同 testFast（T-TestPerf3 实测定案）：main+test output 前置（mpvBuild
+    // manifest 读取前提）、平台 jar 复用默认 test 成品、剔除插件自身 jar
+    classpath = sourceSets["main"].output + sourceSets["test"].output +
+        tasks.named<Test>("test").get().classpath.filter {
+            !it.name.startsWith("mybatis-plus-sql-visualizer-")
+        }
+    filter {
+        testExternalClasses.forEach { includeTestsMatching(it) }
+    }
+    maxParallelForks = 1
+}
 
 tasks.register<Test>("testFast") {
     group = "verification"
@@ -185,6 +231,7 @@ intellijPlatformTesting {
         val discoveredTestClasses: List<String> = testFileEntries
             .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
             .filter { it !in dbIntegrationClasses }
+            .filter { it !in testExternalClasses }
             .sorted()
         // 时长权重表：discoveredTestClasses 全集覆盖。T-TestPerf4 起同类取 mtime 最新的
         // K 份取中位数（-PtestShardWeightSamples，默认 2）——分片跑出的单类耗时带 ±7% 级
@@ -423,6 +470,8 @@ tasks.register("testShards") {
     description =
         "分片全量测试（时长均衡自动分区 $testShardCount 片，一命令真并行；-PtestShardCount 调片数）"
     dependsOn(*(1..testShardCount).map { "testShard$it" }.toTypedArray())
+    // T-TestPerf6：S3 外部护栏桶与分片同命令并行（org.gradle.parallel 已开）
+    dependsOn("testExternal")
     // T-TestPerf4：预期各片 execSum 与计划类全集——配置期固化成 String（见
     // shardPlanExpectedLoads 注释），doLast 只做文件 IO + 读 inputs，不触达脚本对象。
     inputs.property("mpvExpectedShardLoads", shardPlanExpectedLoads)
@@ -430,7 +479,8 @@ tasks.register("testShards") {
     // 聚合报告（T-TestPerf2）：分片跑完直接打印各片与总数四元组，与串行口径的计数 parity 目测即得。
     // 配置缓存约束：结果目录在配置期解析为 File，doLast 只做文件 IO 不触达 Project/layout，
     // 且解析辅助函数须定义在 doLast 体内——引用脚本顶层函数会整段不可序列化（实证报错）。
-    val shardResultDirs = (1..testShardCount).map { file("build/test-results/testShard$it") }
+    val shardResultDirs = (1..testShardCount).map { file("build/test-results/testShard$it") } +
+        file("build/test-results/testExternal")
     doLast {
         fun suiteXmls(dir: File): List<File> =
             dir.listFiles { f: File -> f.isFile && f.name.startsWith("TEST-") && f.name.endsWith(".xml") }?.toList() ?: emptyList()
@@ -452,6 +502,9 @@ tasks.register("testShards") {
         var execSeconds = 0.0
         val seenClasses = HashSet<String>()
         shardResultDirs.forEachIndexed { idx, dir ->
+            // T-TestPerf6：末位目录是 testExternal 桶；标签用目录名（testShardN 名即标签，
+            // 不引用脚本顶层 testShardCount——doLast 引用脚本对象会炸配置缓存，本轮实证）
+            val label = dir.name
             var n = 0
             var f = 0
             var e = 0
@@ -459,7 +512,7 @@ tasks.register("testShards") {
             var t = 0.0
             val xmls = suiteXmls(dir)
             if (xmls.isEmpty()) {
-                logger.lifecycle("testShard${idx + 1}: $dir 下无结果 XML（该分片未跑？）")
+                logger.lifecycle("$label: $dir 下无结果 XML（该分片未跑？）")
             }
             for (xml in xmls) {
                 val attrs = suiteAttrs(xml) ?: continue
@@ -476,7 +529,7 @@ tasks.register("testShards") {
             val expectedTxt = expectedLoads.getOrNull(idx)
                 ?.let { " expected=%.1fs".format(it) } ?: ""
             logger.lifecycle(
-                "testShard${idx + 1}: tests=$n failures=$f errors=$e skipped=$s time=%.1fs$expectedTxt".format(t),
+                "$label: tests=$n failures=$f errors=$e skipped=$s time=%.1fs$expectedTxt".format(t),
             )
             total += n; failed += f; errored += e; skipped += s; execSeconds += t
         }
