@@ -48,7 +48,7 @@ class SettingsTruthTest {
 
     // ---------- P2 / T-CaptureTruth T-CT-01/02：接线源码守卫（语义走 AgentStatusTextTest） ----------
 
-    private fun mainSrc(rel: String) = java.io.File("src/main/kotlin/$rel").readText()
+    private fun mainSrc(rel: String) = java.io.File("src/main/java/$rel").readText()
 
     /** 剥 // 行注释与块注释——守卫扫的是代码事实，注释里写「不得如何」不该被判违规。 */
     private fun stripComments(src: String): String {
@@ -63,11 +63,15 @@ class SettingsTruthTest {
 
     @Test
     fun testP2_状态行接线与五态键源码守卫() {
-        val src = mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt")
+        // k2j 互操作：master 的 AgentManager.kt 单文件在这里拆为 AgentManager.java（类）+
+        // AgentManagerKt.java（顶层函数 agentStatusText），接线断言读合并文本，等价同文件。
+        val src = mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManager.java") + "\n" +
+            mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManagerKt.java")
         // statusSummary 只取数，文案交纯函数（纯函数五态语义由 AgentStatusTextTest 运行期覆盖）
-        assertTrue("AgentManager 应声明 statusSummary", src.contains("internal fun statusSummary()"))
+        assertTrue("AgentManager 应声明 statusSummary", src.contains("String statusSummary()"))
         assertTrue("statusSummary 应委托纯函数 agentStatusText", src.contains("agentStatusText("))
-        assertTrue("应有状态行输入快照 AgentStatusSnapshot", src.contains("internal data class AgentStatusSnapshot("))
+        // data class 快照翻为独立文件 AgentStatusSnapshot.java（存在性由编译期保证），这里钉接线调用
+        assertTrue("应有状态行输入快照 AgentStatusSnapshot", src.contains("new AgentStatusSnapshot("))
         // 五态文案键齐备（不许再出现「无会话恒 null」的收敛）
         listOf(
             "settings.enhancedCapture.status.attached",
@@ -82,9 +86,9 @@ class SettingsTruthTest {
             assertTrue("agentStatusText 应引用状态行键 $key", src.contains("\"$key\""))
         }
         // T-CT-02：重新授权入口存在且清零冷却（O-66 起带可选 onOutcome 回调，断言放宽到名字前缀）
-        assertTrue("应有 requestReauthorization 入口", src.contains("fun requestReauthorization("))
+        assertTrue("应有 requestReauthorization 入口", src.contains("void requestReauthorization("))
         // Topic 声明形态（仿 PluginSettings.SETTINGS_CHANGE_TOPIC）
-        assertTrue("AGENT_STATUS_TOPIC 应为 Topic.create", src.contains("AGENT_STATUS_TOPIC: Topic<AgentStatusListener> = Topic.create("))
+        assertTrue("AGENT_STATUS_TOPIC 应为 Topic.create", src.contains("Topic<AgentStatusListener> AGENT_STATUS_TOPIC = Topic.create("))
     }
 
     @Test
@@ -98,18 +102,18 @@ class SettingsTruthTest {
 
     @Test
     fun testP2_面板接线与不得自注册Disposer() {
-        val panelSrc = stripComments(mainSrc("cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt"))
+        val panelSrc = stripComments(mainSrc("cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.java"))
         assertTrue("面板应订阅 AGENT_STATUS_TOPIC", panelSrc.contains("AgentManager.AGENT_STATUS_TOPIC"))
-        assertTrue("面板应有 disposeResources", panelSrc.contains("internal fun disposeResources()"))
+        assertTrue("面板应有 disposeResources", panelSrc.contains("void disposeResources()"))
         assertTrue("面板 reset 应拉取状态行", panelSrc.contains("refreshEnhancedStatusLabel()"))
         // T-CaptureTruth T-CT-05：面板不得把自身注册进 Disposer 树——父节点未注册会落 ROOT_DISPOSABLE
         // 子节点而 Configurable 链路无 dispose 面板的动作，IDE 退出即报 Memory leak（沙盒实测 6 例）
         assertFalse(
-            "面板不得 Disposer.register(this@PluginSettingsPanel, …)（ROOT 子节点无释放路径 → 泄漏）",
-            panelSrc.contains("Disposer.register(this@PluginSettingsPanel"),
+            "面板不得 Disposer.register(this, …)（ROOT 子节点无释放路径 → 泄漏）",
+            panelSrc.contains("Disposer.register(this"),
         )
         assertTrue("面板应有重新授权按钮接线", panelSrc.contains("requestReauthorization()"))
-        val secSrc = mainSrc("cn/song/mybatisplus/visualizer/config/SectionConfigurable.kt")
+        val secSrc = mainSrc("cn/song/mybatisplus/visualizer/config/SectionConfigurable.java")
         assertTrue("SectionConfigurable.disposeUIResources 应调 panel.disposeResources()",
             Regex("disposeUIResources[\\s\\S]{0,200}panel\\.disposeResources\\(\\)").containsMatchIn(secSrc))
         // P1 面板三处绑定已删

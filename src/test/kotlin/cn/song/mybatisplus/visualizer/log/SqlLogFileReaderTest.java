@@ -384,4 +384,25 @@ public class SqlLogFileReaderTest {
     public void 空内容序号无影响() throws Exception {
         assertTrue(SqlLogFileReader.INSTANCE.parseContent("").isEmpty());
     }
+
+    @Test
+    public void 同格式两次解析只建一次formatter_缓存命中不重建() throws Exception {
+        // T-PerfSweep7 4a（先红后绿主判据）：逐次新建形态下第二次解析仍计数 +1；缓存化后 +0。
+        // 刻意用独立新线程保证冷启动：测试类此前用例可能已在本线程预热过缓存，复用当前线程
+        // 会让绿态读数退化成 +0/+0，无法与「缝失效空绿」区分；deltas[0] >= 1 即缝活性自检。
+        String content = "-- 2026-08-25 10:00:00\nSELECT 1\n";
+        int[] deltas = new int[2];
+        Thread t = new Thread(() -> {
+            int before = SqlLogFileReader.formatterCreateCount.get();
+            SqlLogFileReader.INSTANCE.parseContent(content);
+            deltas[0] = SqlLogFileReader.formatterCreateCount.get() - before;
+            SqlLogFileReader.INSTANCE.parseContent(content);
+            deltas[1] = SqlLogFileReader.formatterCreateCount.get() - before - deltas[0];
+        });
+        t.setDaemon(true);
+        t.start();
+        t.join(10_000L);
+        assertTrue("计数缝必须可用（冷线程首次解析应记录到 formatter 构造），实际 " + deltas[0], deltas[0] >= 1);
+        assertEquals("同格式第二次解析必须命中缓存（不新建 formatter），实际计数 +" + deltas[1], 0, deltas[1]);
+    }
 }

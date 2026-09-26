@@ -120,7 +120,7 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
             waitForEdt()
             assertEquals("showUpdateResult 应为 SUCCESS 态", "SUCCESS", panel.stateForTest())
 
-            panel.showLoading()
+            panel.showLoading("")
             waitForEdt()
             assertEquals("showLoading 应为 LOADING 态", "LOADING", panel.stateForTest())
             assertFalse("加载态不应显示错误复制按钮", copyButton(panel)!!.isVisible)
@@ -156,9 +156,8 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
 
     private fun info(positionChar: Int? = null, lineInSql: Int? = null) =
         cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo(
-            message = "boom",
-            positionChar = positionChar,
-            lineInSql = lineInSql,
+            // k2j 适配：Java 6 参位置形态（message, sqlState, errorCode, positionChar, lineInSql, positionSource）
+            "boom", null, null, positionChar, lineInSql, null,
         )
 
     /**
@@ -275,17 +274,18 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
             val richCalls = java.util.concurrent.atomic.AtomicInteger(0)
             val plainCalls = java.util.concurrent.atomic.AtomicInteger(0)
             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.deliverError(
-                onErrorRich = { info ->
+                // k2j 适配：Java 5 参位置形态（onErrorRich, onError, cause, message, sqlMaxLength）
+                { info ->
                     richCalls.incrementAndGet()
                     panel.showErrorRich(info, { })
                 },
-                onError = { msg ->
+                { msg ->
                     plainCalls.incrementAndGet()
                     panel.showError(msg)
                 },
-                cause = null,
-                message = "boom: Invalid object name 'no_such_table_xyz'.",
-                sqlMaxLength = 128,
+                null,
+                "boom: Invalid object name 'no_such_table_xyz'.",
+                128,
             )
             waitForEdt()
             assertEquals("富通道应被投递一次", 1, richCalls.get())
@@ -302,14 +302,15 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
         try {
             val plain = java.util.concurrent.atomic.AtomicInteger(0)
             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.deliverError(
-                onErrorRich = null,
-                onError = { m ->
+                // k2j 适配：位置形态
+                null,
+                { m ->
                     plain.incrementAndGet()
                     panel1.showError(m)
                 },
-                cause = null,
-                message = "boom",
-                sqlMaxLength = null,
+                null,
+                "boom",
+                null,
             )
             waitForEdt()
             assertEquals("无富通道时必须回退旧通道", 1, plain.get())
@@ -321,14 +322,15 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
         try {
             val plain = java.util.concurrent.atomic.AtomicInteger(0)
             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.deliverError(
-                onErrorRich = { throw IllegalStateException("rich boom") },
-                onError = { m ->
+                // k2j 适配：位置形态
+                { throw IllegalStateException("rich boom") },
+                { m ->
                     plain.incrementAndGet()
                     panel2.showError(m)
                 },
-                cause = null,
-                message = "boom2",
-                sqlMaxLength = null,
+                null,
+                "boom2",
+                null,
             )
             waitForEdt()
             assertEquals("富通道抛异常时必须回退旧通道", 1, plain.get())

@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.converter.jpa
 
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
+import cn.song.mybatisplus.visualizer.model.ColumnRole
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -25,17 +26,18 @@ class HqlBarePropertyMappingTest {
 
     /** 用户实体同构 TableInfo：驼峰自有字段 + 父类链 @Embedded updateInfo 展平列 + 同名列。 */
     private val workstationTable = TableInfo(
-        entityClassName = "WorkstationStatus",
-        tableName = "WORKSTATION_STATUS",
-        columns = listOf(
-            ColumnInfo("id", "ID", isId = true),
+        "WorkstationStatus",
+        "WORKSTATION_STATUS",
+        listOf(
+            ColumnInfo("id", "ID", true),
             ColumnInfo("creatorUnikey", "CREATOR_UNIKEY"),
             ColumnInfo("creator", "CREATOR"),
             ColumnInfo("createdTime", "CREATED_TIME"),
             ColumnInfo("lastOperatorUnikey", "LAST_OPERATOR_UNIKEY"),
             ColumnInfo("lastOperator", "LAST_OPERATOR"),
             ColumnInfo("updateTime", "UPDATE_TIME"),
-            ColumnInfo("beDelete", "BE_DELETE", embedded = true, embeddedParent = "updateInfo"),
+            ColumnInfo("beDelete", "BE_DELETE", false, false, null, null, null,
+                ColumnRole.BUSINESS, true, true, null, true, false, "updateInfo"),
             ColumnInfo("version", "VERSION"),
             ColumnInfo("boxNo", "BOX_NO"),
             ColumnInfo("stationCode", "STATION_CODE"),

@@ -15,26 +15,35 @@ class RenderLogsToolTest {
     fun `MyBatis日志对还原为可执行SQL`() {
         val text = "==>  Preparing: SELECT * FROM t_user WHERE id = ?\n" +
             "==> Parameters: 1(Long)"
-        val entries = SqlVisualizerRenderLogsTool.renderLogEntries(text)
+        // k2j 适配：Java 静态方法无默认参数，7 参全量（末参 defaults 传内置默认）；record 组件访问带 ()
+        val entries = SqlVisualizerRenderLogsTool.renderLogEntries(
+            text, "", "", "", "", null, SqlVisualizerRenderLogsTool.LogPrefixDefaults(),
+        )
         org.junit.Assert.assertEquals(1, entries.size)
-        org.junit.Assert.assertEquals(cn.song.mybatisplus.visualizer.log.SqlSource.MYBATIS, entries[0].source)
-        assertTrue(entries[0].restoredSql, entries[0].restoredSql.contains("id = 1"))
+        org.junit.Assert.assertEquals(cn.song.mybatisplus.visualizer.log.SqlSource.MYBATIS, entries[0].source())
+        assertTrue(entries[0].restoredSql(), entries[0].restoredSql().contains("id = 1"))
     }
 
     @Test
     fun `无匹配日志返回空集_合法结果`() {
-        val entries = SqlVisualizerRenderLogsTool.renderLogEntries("hello world 业务日志，没有任何 SQL")
+        val entries = SqlVisualizerRenderLogsTool.renderLogEntries(
+            "hello world 业务日志，没有任何 SQL", "", "", "", "", null, SqlVisualizerRenderLogsTool.LogPrefixDefaults(),
+        )
         org.junit.Assert.assertEquals(0, entries.size)
     }
 
     @Test
     fun `空文本返回空集`() {
-        org.junit.Assert.assertEquals(0, SqlVisualizerRenderLogsTool.renderLogEntries("").size)
+        org.junit.Assert.assertEquals(
+            0,
+            SqlVisualizerRenderLogsTool.renderLogEntries("", "", "", "", "", null, SqlVisualizerRenderLogsTool.LogPrefixDefaults()).size,
+        )
     }
 
     @Test
     fun `空输入走预期错误`() {
-        val error = runCatching { SqlVisualizerRenderLogsTool().renderLogs("  ") }.exceptionOrNull()
+        // k2j 适配：renderLogs 无 1 参重载，走 6 参 overload（defaults 收口 null）
+        val error = runCatching { SqlVisualizerRenderLogsTool().renderLogs("  ", "", "", "", "", null) }.exceptionOrNull()
         assertTrue("空输入应抛 SqlvExpectedToolException", error is SqlvExpectedToolException)
     }
 }

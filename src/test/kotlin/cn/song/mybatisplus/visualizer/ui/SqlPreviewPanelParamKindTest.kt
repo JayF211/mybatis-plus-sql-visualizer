@@ -57,10 +57,12 @@ class SqlPreviewPanelParamKindTest : BasePlatformTestCase() {
     /** 构造带类型类别的 XML 预览结果：前四参数有类型，userIds/address 无类型信息（UNKNOWN）。 */
     private fun result(): PreviewResult {
         val parsed = XmlMapperParser().parse(mapper)
+        // k2j 适配：from 为 Java 7 参全量（paramTypes 具名实参→末位位置实参）；ParamTypeInfo 无具名实参
         val model = XmlPreviewModel.from(
-            parsed.statements.single(), parsed.errors,
-            paramTypes = mapOf(
-                "pageNum" to ParamTypeInfo(ParamKind.NUMBER, nullable = false),
+            parsed.statements().single(), parsed.errors(),
+            emptySet(), emptyMap(), emptyMap(), emptyMap(),
+            mapOf(
+                "pageNum" to ParamTypeInfo(ParamKind.NUMBER, false),
                 "startDate" to ParamTypeInfo(ParamKind.TEMPORAL),
                 "ids" to ParamTypeInfo(ParamKind.COLLECTION),
                 "status" to ParamTypeInfo(ParamKind.TEXT),
@@ -69,13 +71,27 @@ class SqlPreviewPanelParamKindTest : BasePlatformTestCase() {
         )
         val rendered = model.renderSql()
         return PreviewResult(
-            sql = rendered.sql,
-            compactSql = rendered.sql.replace(Regex("\\s+"), " ").trim(),
-            unresolvedParams = rendered.mappings.map { it.property },
-            paramTable = ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
-            wrapperType = null,
-            tableName = null,
-            xmlModel = model,
+            // k2j 适配：20 参位置构造
+            rendered.sql(),
+            rendered.sql().replace(Regex("\\s+"), " ").trim(),
+            rendered.mappings().map { it.property() },
+            ParameterReplacer.buildParamTable(rendered.mappings().map { it.property() }),
+            null,
+            null,
+            null,
+            emptyList(),
+            emptyMap(),
+            null,
+            null,
+            emptyList(),
+            emptyList(),
+            null,
+            model,
+            emptyMap(),
+            null,
+            null,
+            null,
+            null,
         )
     }
 

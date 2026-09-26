@@ -261,10 +261,10 @@ class RollbackSqlGeneratorTest {
     @Test
     fun `DELETE原语句经快照回填生成INSERT`() {
         val result = RollbackSqlGenerator.generateFromSnapshotRows(
-            table = "user",
-            columns = listOf("id", "name"),
-            rows = listOf(listOf("1", "Tom"), listOf("2", "NULL")),
-            mode = RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
+            "user",
+            listOf("id", "name"),
+            listOf(listOf("1", "Tom"), listOf("2", "NULL")),
+            RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
         )
         assertEquals(listOf("INSERT INTO user (id, name) VALUES (1, 'Tom'), (2, NULL);"), result.statements)
         assertTrue(result.warnings.any { it.messageKey == "rollback.warn.snapshotCompleteness" })
@@ -282,12 +282,15 @@ class RollbackSqlGeneratorTest {
     @Test
     fun `方言需要包装而自增列未知时必须显式告警`() {
         val unknown = RollbackSqlGenerator.generateFromSnapshotRows(
-            table = "[user]",
-            columns = listOf("id", "username"),
-            rows = listOf(listOf("1", "alice")),
-            mode = RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
-            dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect,
-            identityColumns = emptyList(),
+            "[user]",
+            listOf("id", "username"),
+            listOf(listOf("1", "alice")),
+            RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
+            null,
+            emptyList(),
+            emptyMap(),
+            cn.song.mybatisplus.visualizer.sql.SqlServerDialect.INSTANCE,
+            emptyList(),
         )
         assertTrue(
             "方言需要包装但自增列未知时必须告警（否则用户只看到 544、不知道是没内省）：" +
@@ -301,12 +304,15 @@ class RollbackSqlGeneratorTest {
 
         // 正对照：已知自增列 → 出包装、且不得再报该告警
         val known = RollbackSqlGenerator.generateFromSnapshotRows(
-            table = "[user]",
-            columns = listOf("id", "username"),
-            rows = listOf(listOf("1", "alice")),
-            mode = RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
-            dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect,
-            identityColumns = listOf("id"),
+            "[user]",
+            listOf("id", "username"),
+            listOf(listOf("1", "alice")),
+            RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
+            null,
+            emptyList(),
+            emptyMap(),
+            cn.song.mybatisplus.visualizer.sql.SqlServerDialect.INSTANCE,
+            listOf("id"),
         )
         assertTrue("已知自增列必须成对包装", known.statements.single().startsWith("SET IDENTITY_INSERT"))
         assertFalse(
@@ -318,10 +324,10 @@ class RollbackSqlGeneratorTest {
     @Test
     fun `快照回填INSERT_单引号转义与NULL`() {
         val result = RollbackSqlGenerator.generateFromSnapshotRows(
-            table = "t",
-            columns = listOf("v"),
-            rows = listOf(listOf("O'Brien")),
-            mode = RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
+            "t",
+            listOf("v"),
+            listOf(listOf("O'Brien")),
+            RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
         )
         assertEquals(listOf("INSERT INTO t (v) VALUES ('O''Brien');"), result.statements)
     }
@@ -330,10 +336,10 @@ class RollbackSqlGeneratorTest {
     fun `快照回填INSERT_多行合批与上限`() {
         val rows = (1..510).map { listOf(it.toString(), "v") }
         val result = RollbackSqlGenerator.generateFromSnapshotRows(
-            table = "t",
-            columns = listOf("a", "b"),
-            rows = rows,
-            mode = RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
+            "t",
+            listOf("a", "b"),
+            rows,
+            RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
         )
         // 500 行合批上限 → 两条 INSERT（500 + 10）
         assertEquals(2, result.statements.size)
@@ -346,13 +352,13 @@ class RollbackSqlGeneratorTest {
     @Test
     fun `UPDATE原语句经快照回填生成反向UPDATE乐观锁谓词`() {
         val result = RollbackSqlGenerator.generateFromSnapshotRows(
-            table = "user",
-            columns = listOf("id", "age"),
-            rows = listOf(listOf("1", "20")),
-            mode = RollbackSqlGenerator.SnapshotMode.REVERT_UPDATE,
-            primaryKeyColumns = listOf("id"),
-            changedColumns = listOf("age"),
-            newValuesByColumn = mapOf("age" to "3"),
+            "user",
+            listOf("id", "age"),
+            listOf(listOf("1", "20")),
+            RollbackSqlGenerator.SnapshotMode.REVERT_UPDATE,
+            listOf("id"),
+            listOf("age"),
+            mapOf("age" to "3"),
         )
         assertEquals(RollbackSqlGenerator.Rating.COMPLETE, result.rating)
         assertEquals(listOf("UPDATE user SET age = 20 WHERE id = 1 AND age = 3;"), result.statements)
@@ -361,12 +367,13 @@ class RollbackSqlGeneratorTest {
     @Test
     fun `UPDATE反向_无主键走整行旧值镜像降级Partial`() {
         val result = RollbackSqlGenerator.generateFromSnapshotRows(
-            table = "t",
-            columns = listOf("a", "b"),
-            rows = listOf(listOf("1", "old")),
-            mode = RollbackSqlGenerator.SnapshotMode.REVERT_UPDATE,
-            changedColumns = listOf("b"),
-            newValuesByColumn = mapOf("b" to "'new'"),
+            "t",
+            listOf("a", "b"),
+            listOf(listOf("1", "old")),
+            RollbackSqlGenerator.SnapshotMode.REVERT_UPDATE,
+            null,
+            listOf("b"),
+            mapOf("b" to "'new'"),
         )
         assertEquals(RollbackSqlGenerator.Rating.PARTIAL, result.rating)
         assertEquals(listOf("UPDATE t SET b = 'old' WHERE a = 1 AND b = 'old' AND b = 'new';"), result.statements)
@@ -375,12 +382,13 @@ class RollbackSqlGeneratorTest {
     @Test
     fun `UPDATE反向_SET列不在快照中拒绝`() {
         val result = RollbackSqlGenerator.generateFromSnapshotRows(
-            table = "t",
-            columns = listOf("a"),
-            rows = listOf(listOf("1")),
-            mode = RollbackSqlGenerator.SnapshotMode.REVERT_UPDATE,
-            changedColumns = listOf("missing"),
-            newValuesByColumn = emptyMap(),
+            "t",
+            listOf("a"),
+            listOf(listOf("1")),
+            RollbackSqlGenerator.SnapshotMode.REVERT_UPDATE,
+            null,
+            listOf("missing"),
+            emptyMap(),
         )
         assertEquals(RollbackSqlGenerator.Rating.UNABLE, result.rating)
         assertTrue(result.warnings.any { it.messageKey == "rollback.snapshot.columnMismatch" })
@@ -402,10 +410,10 @@ class RollbackSqlGeneratorTest {
         // ②键名在 bundle 里不存在（弹窗显示裸键名，P11）。此处走真实渲染路径核对——
         // 静态核对另见 convention/BundlePlaceholderArityTest（覆盖全部 30 处告警站点）。
         val rowLimit = RollbackSqlGenerator.generateFromSnapshotRows(
-            table = "t",
-            columns = listOf("a"),
-            rows = (1..250).map { listOf(it.toString()) },
-            mode = RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
+            "t",
+            listOf("a"),
+            (1..250).map { listOf(it.toString()) },
+            RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
         )
         val rowLimitWarning = rowLimit.warnings.first { it.messageKey == "rollback.warn.snapshotRowLimit" }
         val rowLimitText = render(rowLimitWarning)
@@ -417,12 +425,13 @@ class RollbackSqlGeneratorTest {
         assertFalse("不得残留未回填占位符: $rowLimitText", rowLimitText.contains("{"))
 
         val mismatch = RollbackSqlGenerator.generateFromSnapshotRows(
-            table = "t",
-            columns = listOf("a"),
-            rows = listOf(listOf("1")),
-            mode = RollbackSqlGenerator.SnapshotMode.REVERT_UPDATE,
-            changedColumns = listOf("missing"),
-            newValuesByColumn = emptyMap(),
+            "t",
+            listOf("a"),
+            listOf(listOf("1")),
+            RollbackSqlGenerator.SnapshotMode.REVERT_UPDATE,
+            null,
+            listOf("missing"),
+            emptyMap(),
         )
         val mismatchWarning = mismatch.warnings.first { it.messageKey == "rollback.snapshot.columnMismatch" }
         val mismatchText = render(mismatchWarning)
@@ -433,11 +442,11 @@ class RollbackSqlGeneratorTest {
     @Test
     fun `INSERT原语句经快照回填生成DELETE主键Complete`() {
         val result = RollbackSqlGenerator.generateFromSnapshotRows(
-            table = "t",
-            columns = listOf("id", "name"),
-            rows = listOf(listOf("1", "Tom")),
-            mode = RollbackSqlGenerator.SnapshotMode.REVERT_INSERT,
-            primaryKeyColumns = listOf("id"),
+            "t",
+            listOf("id", "name"),
+            listOf(listOf("1", "Tom")),
+            RollbackSqlGenerator.SnapshotMode.REVERT_INSERT,
+            listOf("id"),
         )
         assertEquals(RollbackSqlGenerator.Rating.COMPLETE, result.rating)
         assertEquals(listOf("DELETE FROM t WHERE id = 1;"), result.statements)
@@ -447,10 +456,10 @@ class RollbackSqlGeneratorTest {
     @Test
     fun `空快照输入拒绝`() {
         val result = RollbackSqlGenerator.generateFromSnapshotRows(
-            table = "t",
-            columns = listOf("a"),
-            rows = emptyList(),
-            mode = RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
+            "t",
+            listOf("a"),
+            emptyList(),
+            RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
         )
         assertEquals(RollbackSqlGenerator.Rating.UNABLE, result.rating)
         assertTrue(result.warnings.any { it.messageKey == "rollback.snapshot.emptyInput" })
@@ -514,12 +523,15 @@ class RollbackSqlGeneratorTest {
         dialect: cn.song.mybatisplus.visualizer.sql.Dialect? = null,
         identityColumns: List<String> = emptyList(),
     ) = RollbackSqlGenerator.generateFromSnapshotRows(
-        table = "rt_del",
-        columns = columns,
-        rows = rows,
-        mode = RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
-        dialect = dialect,
-        identityColumns = identityColumns,
+        "rt_del",
+        columns,
+        rows,
+        RollbackSqlGenerator.SnapshotMode.BACKFILL_INSERT,
+        null,
+        emptyList(),
+        emptyMap(),
+        dialect,
+        identityColumns,
     ).statements
 
     /**
@@ -537,7 +549,7 @@ class RollbackSqlGeneratorTest {
                     "SET IDENTITY_INSERT rt_del OFF;",
             ),
             backfill(
-                dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect,
+                dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect.INSTANCE,
                 identityColumns = listOf("id"),
             ),
         )
@@ -547,7 +559,7 @@ class RollbackSqlGeneratorTest {
     @Test
     fun `快照回填_identity列大小写不敏感匹配`() {
         val statements = backfill(
-            dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect,
+            dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect.INSTANCE,
             identityColumns = listOf("ID"),
         )
         assertTrue(statements.single().startsWith("SET IDENTITY_INSERT rt_del ON;"))
@@ -582,7 +594,7 @@ class RollbackSqlGeneratorTest {
                     "SET IDENTITY_INSERT rt_del OFF;",
             ),
             backfill(
-                dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect,
+                dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect.INSTANCE,
                 identityColumns = listOf("id"),
             ),
         )
@@ -595,7 +607,7 @@ class RollbackSqlGeneratorTest {
     @Test
     fun `快照回填_非包装方言与identity未知时逐字节不变`() {
         val expected = listOf("INSERT INTO rt_del (id, name) VALUES (1, 'Tom');")
-        val sqlServer = cn.song.mybatisplus.visualizer.sql.SqlServerDialect
+        val sqlServer = cn.song.mybatisplus.visualizer.sql.SqlServerDialect.INSTANCE
         // ① 方言在但 identity 未知（空清单）
         assertEquals(expected, backfill(dialect = sqlServer, identityColumns = emptyList()))
         // ② identity 在但方言未知（调用方未传 dialect 的条目形态；O-59 T-IIR-01 起两个生产登记点均已传）
@@ -604,13 +616,13 @@ class RollbackSqlGeneratorTest {
         assertEquals(expected, backfill(dialect = sqlServer, identityColumns = listOf("other_id")))
         // ④ 其余方言一律不包装（DM8 于 2026-09-23 真机实证需要包装，已移出本清单 → 见下方 ⑤）
         listOf(
-            cn.song.mybatisplus.visualizer.sql.MySqlDialect,
-            cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect,
-            cn.song.mybatisplus.visualizer.sql.OracleDialect,
-            cn.song.mybatisplus.visualizer.sql.KingBaseDialect,
-            cn.song.mybatisplus.visualizer.sql.H2Dialect,
-            cn.song.mybatisplus.visualizer.sql.SqliteDialect,
-            cn.song.mybatisplus.visualizer.sql.MariaDbDialect,
+            cn.song.mybatisplus.visualizer.sql.MySqlDialect.INSTANCE,
+            cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect.INSTANCE,
+            cn.song.mybatisplus.visualizer.sql.OracleDialect.INSTANCE,
+            cn.song.mybatisplus.visualizer.sql.KingBaseDialect.INSTANCE,
+            cn.song.mybatisplus.visualizer.sql.H2Dialect.INSTANCE,
+            cn.song.mybatisplus.visualizer.sql.SqliteDialect.INSTANCE,
+            cn.song.mybatisplus.visualizer.sql.MariaDbDialect.INSTANCE,
         ).forEach { dialect ->
             assertEquals(
                 "方言 ${dialect.name} 不应包装",
@@ -621,7 +633,7 @@ class RollbackSqlGeneratorTest {
         // ⑤ DM8 与 SQL Server 同为包装方言（真机实测：不加包装 DM 报「仅当指定列列表，且 SET IDENTITY_INSERT
         // 为ON时，才能对自增列赋值」；加包装后同一语句成功）——回滚链同样必须包装，否则回填 INSERT 在 DM 上必失败
         val dmWrapped = backfill(
-            dialect = cn.song.mybatisplus.visualizer.sql.DmDialect,
+            dialect = cn.song.mybatisplus.visualizer.sql.DmDialect.INSTANCE,
             identityColumns = listOf("id"),
         )
         assertTrue(
@@ -640,7 +652,7 @@ class RollbackSqlGeneratorTest {
         val statements = backfill(
             columns = listOf("id", "b"),
             rows = (1..510).map { listOf(it.toString(), "v") },
-            dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect,
+            dialect = cn.song.mybatisplus.visualizer.sql.SqlServerDialect.INSTANCE,
             identityColumns = listOf("id"),
         )
         assertEquals(2, statements.size)
@@ -653,15 +665,17 @@ class RollbackSqlGeneratorTest {
     /** 只有 BACKFILL_INSERT 生成 INSERT——REVERT_INSERT/REVERT_UPDATE 传 identity 也不得改变产物。 */
     @Test
     fun `快照回填_非INSERT模式不受identity影响`() {
-        val sqlServer = cn.song.mybatisplus.visualizer.sql.SqlServerDialect
+        val sqlServer = cn.song.mybatisplus.visualizer.sql.SqlServerDialect.INSTANCE
         val reverted = RollbackSqlGenerator.generateFromSnapshotRows(
-            table = "rt_del",
-            columns = listOf("id", "name"),
-            rows = listOf(listOf("1", "Tom")),
-            mode = RollbackSqlGenerator.SnapshotMode.REVERT_INSERT,
-            primaryKeyColumns = listOf("id"),
-            dialect = sqlServer,
-            identityColumns = listOf("id"),
+            "rt_del",
+            listOf("id", "name"),
+            listOf(listOf("1", "Tom")),
+            RollbackSqlGenerator.SnapshotMode.REVERT_INSERT,
+            listOf("id"),
+            emptyList(),
+            emptyMap(),
+            sqlServer,
+            listOf("id"),
         )
         assertEquals(listOf("DELETE FROM rt_del WHERE id = 1;"), reverted.statements)
     }

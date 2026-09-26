@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNull;
 import org.junit.Test;
 
@@ -95,5 +96,56 @@ public class LogSqlModelsTest {
         assertEquals("SELECT * FROM t WHERE id = 1", LogSqlModelsKt.normalizeSqlWhitespace("SELECT * FROM t WHERE id = 1"));
         // 大小写与分号不动（COUNT 前缀判定、达梦带引号标识符大小写依赖）
         assertEquals("SELECT count(*) FROM T;", LogSqlModelsKt.normalizeSqlWhitespace("SELECT count(*) FROM T;"));
+    }
+
+    // ---------- T-SqlSuppress（O-69）：屏蔽匹配口径（§五 验收 2） ----------
+
+    @Test
+    public void SELECT_1_与多空白首尾空白变体命中同一指纹() throws Exception {
+        // 屏蔽规则按「规范化文本的指纹」匹配，与 entry.dedupeKey 同函数同口径：
+        // `SELECT 1` 与 `  select 变体 `（多空白/首尾空白）天然命中同一条规则。
+        String canonical = LogSqlModelsKt.sqlFingerprint(LogSqlModelsKt.normalizeSqlWhitespace("SELECT 1"));
+        assertEquals(canonical, LogSqlModelsKt.sqlFingerprint(LogSqlModelsKt.normalizeSqlWhitespace("  SELECT   1  ")));
+        assertEquals(canonical, LogSqlModelsKt.sqlFingerprint(LogSqlModelsKt.normalizeSqlWhitespace("SELECT\t1")));
+        assertEquals(canonical, LogSqlModelsKt.sqlFingerprint(LogSqlModelsKt.normalizeSqlWhitespace("SELECT\n1")));
+        // 条目侧：变体条目的 dedupeKey 与规则指纹同键（闸门 `entry.dedupeKey in suppressKeys` 判据）
+        LogSqlEntry variantEntry = new LogSqlEntry("  SELECT   1  ", "  SELECT   1  ", List.of());
+        assertEquals(canonical, variantEntry.dedupeKey());
+    }
+
+    @Test
+    public void 大小写不同不命中同一指纹_写进用例防口径漂移() throws Exception {
+        // 防口径漂移注释（§五 验收 2 原文要求）：normalizeSqlWhitespace **大小写不动**
+        // （COUNT 前缀判定、达梦带引号标识符依赖），故 `select 1` 与 `SELECT 1` 是两条不同规则形态——
+        // 若将来有人把「忽略大小写」改进来，本用例必红，须先过用户定案（D2：精确匹配）。
+        assertNotEquals(
+                LogSqlModelsKt.sqlFingerprint(LogSqlModelsKt.normalizeSqlWhitespace("SELECT 1")),
+                LogSqlModelsKt.sqlFingerprint(LogSqlModelsKt.normalizeSqlWhitespace("select 1")));
+    }
+
+    @Test
+    public void structureFingerprint_字面量与数字参数化边界() throws Exception {
+        // T-SqlSuppressUx 二段：结构匹配 = 字符串字面量与裸数字折叠为 ?；同形状不同参数值同指纹
+        assertEquals(
+                LogSqlModelsKt.structureFingerprint("SELECT * FROM t WHERE p = 'a'"),
+                LogSqlModelsKt.structureFingerprint("SELECT * FROM t WHERE p = 'b'"));
+        assertEquals(
+                LogSqlModelsKt.structureFingerprint("WHERE id = 5"),
+                LogSqlModelsKt.structureFingerprint("WHERE id = 42"));
+        // 引号标识符不参数化：不同列/表 = 不同形状
+        assertNotEquals(
+                LogSqlModelsKt.structureFingerprint("SELECT \"MyCol\" FROM t"),
+                LogSqlModelsKt.structureFingerprint("SELECT \"YourCol\" FROM t"));
+        // 标识符内数字保留（前邻词字符不构成边界）、裸数字参数化
+        assertEquals(
+                LogSqlModelsKt.structureFingerprint("SELECT t2024, 7 FROM t"),
+                LogSqlModelsKt.structureFingerprint("SELECT t2024, 9 FROM t"));
+        // 尾分号剥离沿用 + 字面量内分号随字面量整体参数化
+        assertEquals(LogSqlModelsKt.structureFingerprint("SELECT 1;"), LogSqlModelsKt.structureFingerprint("SELECT 2"));
+        assertEquals(LogSqlModelsKt.structureFingerprint("WHERE k = 'a;b'"), LogSqlModelsKt.structureFingerprint("WHERE k = 'x'"));
+        // 已知边界：IN 列表按元素个数区分形状
+        assertNotEquals(
+                LogSqlModelsKt.structureFingerprint("WHERE a IN ('x','y')"),
+                LogSqlModelsKt.structureFingerprint("WHERE a IN ('x','y','z')"));
     }
 }

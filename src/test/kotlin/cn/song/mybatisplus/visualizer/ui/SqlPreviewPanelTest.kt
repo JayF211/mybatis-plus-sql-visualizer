@@ -80,14 +80,27 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         tableName: String? = "tbl",
         candidateTables: List<TableInfo> = emptyList(),
     ) = PreviewResult(
-        sql = sql,
-        compactSql = compact,
-        unresolvedParams = params,
-        paramTable = if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]",
-        wrapperType = WrapperType.LAMBDA_QUERY,
-        tableName = tableName,
-        columns = columns,
-        candidateTables = candidateTables,
+        // k2j 适配：PreviewResult 为 Java 类（20 参构造），具名实参→位置实参，缺省槽按 Kotlin 数据类默认值补齐
+        sql,
+        compact,
+        params,
+        if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]",
+        WrapperType.LAMBDA_QUERY,
+        tableName,
+        null,
+        columns,
+        emptyMap(),
+        null,
+        null,
+        emptyList(),
+        candidateTables,
+        null,
+        null,
+        emptyMap(),
+        null,
+        null,
+        null,
+        null,
     )
 
     fun testShowResultCreatesEditorView() {
@@ -124,36 +137,60 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         selectColumns: List<ColumnRef> = emptyList(),
     ): PreviewResult {
         val statement = SelectStatement(
-            table = mainTable,
-            selectColumns = selectColumns,
-            tableAlias = "u",
-            joins = listOf(
+            // k2j 适配：SelectStatement 无 (table,selectColumns,tableAlias,joins) 重载，走 16 参全量构造（缺省槽按 Kotlin 默认值）
+            mainTable,
+            selectColumns,
+            "u",
+            listOf(
                 JoinClause(
-                    type = JoinType.LEFT,
-                    tableName = "user_address",
-                    alias = "a",
-                    onConditions = listOf(
+                    JoinType.LEFT,
+                    "user_address",
+                    "a",
+                    listOf(
                         Condition.ColumnComparison(
-                            left = ColumnRef(tableAlias = "u", columnName = "id"),
-                            right = ColumnRef(tableAlias = "a", columnName = "user_id"),
+                            ColumnRef("u", "id"),
+                            ColumnRef("a", "user_id"),
+                            null,
                         ),
                     ),
                 ),
             ),
+            false,
+            emptyList(),
+            emptyList(),
+            null,
+            emptyList(),
+            null,
+            null,
+            null,
+            null,
+            emptyList(),
+            null,
+            null,
         )
         val sql = "SELECT u.id, u.name FROM car_device_info u " +
             "LEFT JOIN user_address a ON u.id = a.user_id"
         return PreviewResult(
-            sql = sql,
-            compactSql = sql,
-            unresolvedParams = emptyList(),
-            paramTable = null,
-            wrapperType = WrapperType.LAMBDA_QUERY,
-            tableName = "car_device_info",
-            columns = listOf("id", "name"),
-            previewModel = SqlPreviewModel(
-                statement, MySqlDialect, formatSql = false, conditionViews = emptyList(),
-            ),
+            sql,
+            sql,
+            emptyList(),
+            null,
+            WrapperType.LAMBDA_QUERY,
+            "car_device_info",
+            null,
+            listOf("id", "name"),
+            emptyMap(),
+            null,
+            SqlPreviewModel(statement, MySqlDialect.INSTANCE, false, emptyList()),
+            emptyList(),
+            emptyList(),
+            null,
+            null,
+            emptyMap(),
+            null,
+            null,
+            null,
+            null,
         )
     }
 
@@ -306,8 +343,14 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(null)
         panel.showResult(
             joinResult(
-                mainTable = tableInfo().copy(columns = sizeExplodingColumns(tableInfo().columns)),
-                selectColumns = listOf(ColumnRef(tableAlias = "u", columnName = "id")),
+                mainTable = tableInfo().copy(
+                    // k2j 适配：TableInfo.copy 为 7 参位置形态（无具名/缺省）
+                    tableInfo().entityClassName, tableInfo().tableName,
+                    sizeExplodingColumns(tableInfo().columns),
+                    tableInfo().logicDeleteColumn, tableInfo().versionColumn, tableInfo().comment,
+                    tableInfo().associations,
+                ),
+                listOf(ColumnRef("u", "id")),
             ),
         )
         // 无 project → 同步分支：showResult 返回时该跑的都跑完了，无需排空 EDT 队列
@@ -399,7 +442,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         assertTrue("有内容时应复制成功", panel.copySql())
         assertFalse("无 project 弹框跳过，回调不应触发", closed)
         // 链路：点「关闭 SQL 面板」→ onClosePanelRequested?.invoke()
-        panel.onClosePanelRequested?.invoke()
+        panel.onClosePanelRequested?.run()
         assertTrue("注入的回调应可触发", closed)
         panel.clear()
     }
@@ -552,14 +595,26 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val sql = "SELECT id FROM tbl WHERE username = ?"
         panel.showResult(
             PreviewResult(
-                sql = sql,
-                compactSql = sql,
-                unresolvedParams = listOf("param1"),
-                paramTable = null,
-                wrapperType = WrapperType.LAMBDA_QUERY,
-                tableName = "tbl",
-                paramHints = listOf(ParamHint(quote = true)),
-                initialParamValues = mapOf("param1" to "admin"),
+                // k2j 适配：20 参位置构造（下同）
+                sql, sql,
+                listOf("param1"),
+                null,
+                WrapperType.LAMBDA_QUERY,
+                "tbl",
+                null,
+                emptyList(),
+                emptyMap(),
+                null,
+                null,
+                listOf(ParamHint(true)),
+                emptyList(),
+                null,
+                null,
+                mapOf("param1" to "admin"),
+                null,
+                null,
+                null,
+                null,
             ),
         )
         assertEquals("参数行应预填日志参数值", "admin", panel.paramFieldForTest(0)!!.text)
@@ -576,14 +631,25 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val sql = "SELECT id FROM tbl WHERE username = ?"
         panel.showResult(
             PreviewResult(
-                sql = sql,
-                compactSql = sql,
-                unresolvedParams = listOf("param1"),
-                paramTable = null,
-                wrapperType = WrapperType.LAMBDA_QUERY,
-                tableName = "tbl",
-                paramHints = listOf(ParamHint(quote = true)),
-                initialParamValues = mapOf("param1" to "admin"),
+                sql, sql,
+                listOf("param1"),
+                null,
+                WrapperType.LAMBDA_QUERY,
+                "tbl",
+                null,
+                emptyList(),
+                emptyMap(),
+                null,
+                null,
+                listOf(ParamHint(true)),
+                emptyList(),
+                null,
+                null,
+                mapOf("param1" to "admin"),
+                null,
+                null,
+                null,
+                null,
             ),
         )
         panel.paramFieldForTest(0)!!.text = "zhang"
@@ -601,14 +667,25 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val sql = "SELECT id FROM tbl WHERE phone = ? AND type = ?"
         panel.showResult(
             PreviewResult(
-                sql = sql,
-                compactSql = sql,
-                unresolvedParams = listOf("param1", "param2"),
-                paramTable = null,
-                wrapperType = WrapperType.LAMBDA_QUERY,
-                tableName = "tbl",
-                paramHints = listOf(ParamHint(quote = true), ParamHint(quote = false)),
-                initialParamValues = mapOf("param1" to "admin"),
+                sql, sql,
+                listOf("param1", "param2"),
+                null,
+                WrapperType.LAMBDA_QUERY,
+                "tbl",
+                null,
+                emptyList(),
+                emptyMap(),
+                null,
+                null,
+                listOf(ParamHint(true), ParamHint(false)),
+                emptyList(),
+                null,
+                null,
+                mapOf("param1" to "admin"),
+                null,
+                null,
+                null,
+                null,
             ),
         )
         assertEquals("param1 应预填", "admin", panel.paramFieldForTest(0)!!.text)
@@ -653,12 +730,12 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     private fun tableInfo() = TableInfo(
-        entityClassName = "DeviceInfoEntity",
-        tableName = "car_device_info",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true, fieldType = "java.lang.Long"),
-            ColumnInfo("stationId", "station_id", fieldType = "java.lang.Long"),
-            ColumnInfo("name", "name", fieldType = "java.lang.String"),
+         "DeviceInfoEntity",
+         "car_device_info",
+        listOf(
+            ColumnInfo("id", "id", true, false, "java.lang.Long"),
+            ColumnInfo("stationId", "station_id", false, false, "java.lang.Long"),
+            ColumnInfo("name", "name", false, false, "java.lang.String"),
         ),
     )
 
@@ -668,17 +745,30 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         views: List<ConditionView>,
         params: List<String> = emptyList(),
     ): PreviewResult {
-        val statement = SelectStatement(table = tableInfo(), conditions = conditions)
-        val model = SqlPreviewModel(statement, MySqlDialect, formatSql = true, conditionViews = views)
+        val statement = SelectStatement(tableInfo(), emptyList(), null, conditions)
+        val model = SqlPreviewModel(statement, MySqlDialect.INSTANCE, true, views)
         return PreviewResult(
-            sql = "SELECT id, station_id, name\nFROM car_device_info",
-            compactSql = "SELECT id, station_id, name FROM car_device_info",
-            unresolvedParams = params,
-            paramTable = if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]",
-            wrapperType = WrapperType.LAMBDA_QUERY,
-            tableName = "car_device_info",
-            columns = listOf("id", "station_id", "name"),
-            previewModel = model,
+            // k2j 适配：20 参位置构造
+            "SELECT id, station_id, name\nFROM car_device_info",
+            "SELECT id, station_id, name FROM car_device_info",
+            params,
+            if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]",
+            WrapperType.LAMBDA_QUERY,
+            "car_device_info",
+            null,
+            listOf("id", "station_id", "name"),
+            emptyMap(),
+            null,
+            model,
+            emptyList(),
+            emptyList(),
+            null,
+            null,
+            emptyMap(),
+            null,
+            null,
+            null,
+            null,
         )
     }
 
@@ -686,11 +776,11 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(
             dynamicResult(
-                conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
-                        toggle = ConditionToggle("c0", "true", true, "id = 1")),
-                    Condition.Simple(ColumnRef(columnName = "station_id"), "=", SqlValue.Literal("2"),
-                        toggle = ConditionToggle("c1", "false", false, "station_id = 2")),
+                listOf(
+                    Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"),
+                        ConditionToggle("c0", "true", true, "id = 1")),
+                    Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Literal("2"),
+                        ConditionToggle("c1", "false", false, "station_id = 2")),
                 ),
                 views = listOf(
                     ConditionView("c0", "id = 1", "true", true, null),
@@ -719,11 +809,11 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(
             dynamicResult(
-                conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
-                        toggle = ConditionToggle("c0", "true", true, "id = 1")),
-                    Condition.Simple(ColumnRef(columnName = "station_id"), "=", SqlValue.Literal("2"),
-                        toggle = ConditionToggle("c1", "false", false, "station_id = 2")),
+                listOf(
+                    Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"),
+                        ConditionToggle("c0", "true", true, "id = 1")),
+                    Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Literal("2"),
+                        ConditionToggle("c1", "false", false, "station_id = 2")),
                 ),
                 views = listOf(
                     ConditionView("c0", "id = 1", "true", true, null),
@@ -767,9 +857,9 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(
             dynamicResult(
-                conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
-                        toggle = ConditionToggle("c0", "true", true, "id = 1")),
+                listOf(
+                    Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"),
+                        ConditionToggle("c0", "true", true, "id = 1")),
                 ),
                 views = listOf(ConditionView("c0", "id = 1", "true", true, null)),
             ),
@@ -789,11 +879,11 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(
             dynamicResult(
-                conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Placeholder("nameVar"),
-                        toggle = ConditionToggle("c0", "StringUtils.isNotBlank(name)", true, "name = ?", "nameVar")),
-                    Condition.Simple(ColumnRef(columnName = "station_id"), "=", SqlValue.Placeholder("stationIdVar"),
-                        toggle = ConditionToggle("c1", "stationId != null", false, "station_id = ?", "stationIdVar")),
+                listOf(
+                    Condition.Simple(ColumnRef("name"), "=", SqlValue.Placeholder("nameVar"),
+                        ConditionToggle("c0", "StringUtils.isNotBlank(name)", true, "name = ?", "nameVar", emptyList())),
+                    Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Placeholder("stationIdVar"),
+                        ConditionToggle("c1", "stationId != null", false, "station_id = ?", "stationIdVar", emptyList())),
                 ),
                 views = listOf(
                     ConditionView("c0", "name = ?", "StringUtils.isNotBlank(name)", true, "nameVar"),
@@ -829,9 +919,9 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(
             dynamicResult(
-                conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Placeholder("nameVar"),
-                        toggle = ConditionToggle("c0", "StringUtils.isNotBlank(name)", true, "name = ?", "nameVar")),
+                listOf(
+                    Condition.Simple(ColumnRef("name"), "=", SqlValue.Placeholder("nameVar"),
+                        ConditionToggle("c0", "StringUtils.isNotBlank(name)", true, "name = ?", "nameVar", emptyList())),
                 ),
                 views = listOf(
                     ConditionView("c0", "name = ?", "StringUtils.isNotBlank(name)", true, "nameVar"),
@@ -862,10 +952,10 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(
             dynamicResult(
-                conditions = listOf(
-                    Condition.Like(ColumnRef(columnName = "name"), negated = false,
-                        pattern = SqlValue.Placeholder("likeVar"), position = LikePosition.ANYWHERE,
-                        toggle = ConditionToggle("c0", "true", true, "name LIKE ?", "likeVar")),
+                listOf(
+                    Condition.Like(ColumnRef("name"), false,
+                        SqlValue.Placeholder("likeVar"), LikePosition.ANYWHERE,
+                        ConditionToggle("c0", "true", true, "name LIKE ?", "likeVar", emptyList())),
                 ),
                 views = listOf(
                     ConditionView("c0", "name LIKE ?", "true", true, "likeVar"),
@@ -882,9 +972,9 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(
             dynamicResult(
-                conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Placeholder("nameVar"),
-                        toggle = ConditionToggle("c0", "true", true, "name = ?", "nameVar")),
+                listOf(
+                    Condition.Simple(ColumnRef("name"), "=", SqlValue.Placeholder("nameVar"),
+                        ConditionToggle("c0", "true", true, "name = ?", "nameVar", emptyList())),
                 ),
                 views = listOf(
                     ConditionView("c0", "name = ?", "true", true, "nameVar"),
@@ -901,9 +991,9 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(
             dynamicResult(
-                conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "station_id"), "=", SqlValue.Placeholder("stationVar"),
-                        toggle = ConditionToggle("c0", "true", true, "station_id = ?", "stationVar")),
+                listOf(
+                    Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Placeholder("stationVar"),
+                        ConditionToggle("c0", "true", true, "station_id = ?", "stationVar", emptyList())),
                 ),
                 views = listOf(
                     ConditionView("c0", "station_id = ?", "true", true, "stationVar"),
@@ -919,31 +1009,50 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         // T-M23-03（用户实测：LocalDateTime 参数回填不带引号）：除确定的数值类型外其他类型默认带引号——
         // LocalDateTime 列回填 `2024-01-01 00:00:00` → `use_time = '2024-01-01 00:00:00'`（原实现无引号，SQL 无效）
         val statement = SelectStatement(
-            table = tableInfo().copy(
-                columns = tableInfo().columns + ColumnInfo("useTime", "use_time", fieldType = "java.time.LocalDateTime"),
+            // k2j 适配：4 参重载第 4 位是 conditions，selectColumns/tableAlias 按 Kotlin 默认值补位
+            tableInfo().copy(
+                tableInfo().entityClassName, tableInfo().tableName,
+                tableInfo().columns + ColumnInfo("useTime", "use_time", false, false, "java.time.LocalDateTime"),
+                tableInfo().logicDeleteColumn, tableInfo().versionColumn, tableInfo().comment,
+                tableInfo().associations,
             ),
-            conditions = listOf(
+            emptyList(),
+            null,
+            listOf(
                 Condition.Simple(
-                    ColumnRef(columnName = "use_time"), "=", SqlValue.Placeholder("now"),
-                    toggle = ConditionToggle("c0", "true", true, "use_time = ?", "now"),
+                    ColumnRef("use_time"), "=", SqlValue.Placeholder("now"),
+                    ConditionToggle("c0", "true", true, "use_time = ?", "now", emptyList()),
                 ),
             ),
         )
         val model = SqlPreviewModel(
-            statement, MySqlDialect, formatSql = true,
-            conditionViews = listOf(ConditionView("c0", "use_time = ?", "true", true, "now")),
+            statement, MySqlDialect.INSTANCE, true,
+            listOf(ConditionView("c0", "use_time = ?", "true", true, "now")),
         )
         val panel = SqlPreviewPanel(project)
         panel.showResult(
             PreviewResult(
-                sql = "SELECT id, station_id, name, use_time\nFROM car_device_info",
-                compactSql = "SELECT id, station_id, name, use_time FROM car_device_info",
-                unresolvedParams = emptyList(),
-                paramTable = null,
-                wrapperType = WrapperType.LAMBDA_QUERY,
-                tableName = "car_device_info",
-                columns = listOf("id", "station_id", "name", "use_time"),
-                previewModel = model,
+                // k2j 适配：20 参位置构造
+                "SELECT id, station_id, name, use_time\nFROM car_device_info",
+                "SELECT id, station_id, name, use_time FROM car_device_info",
+                emptyList(),
+                null,
+                WrapperType.LAMBDA_QUERY,
+                "car_device_info",
+                null,
+                listOf("id", "station_id", "name", "use_time"),
+                emptyMap(),
+                null,
+                model,
+                emptyList(),
+                emptyList(),
+                null,
+                null,
+                emptyMap(),
+                null,
+                null,
+                null,
+                null,
             ),
         )
         panel.conditionValueFieldForTest(0)!!.text = "2024-01-01 00:00:00"
@@ -960,26 +1069,39 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val active = (model.toggleColumns.filter { it.checked }.map { it.columnName } + model.fixedColumns.map { it.columnName }).toSet()
         val sql = model.renderSql(active)
         return PreviewResult(
-            sql = sql,
-            compactSql = sql,
-            unresolvedParams = model.orderedSources(active),
-            paramTable = null,
-            wrapperType = null,
-            tableName = model.tableName,
-            columns = model.toggleColumns.map { it.columnName },
-            batchModel = model,
+            // k2j 适配：20 参位置构造
+            sql,
+            sql,
+            model.orderedSources(active),
+            null,
+            null,
+            model.tableName,
+            null,
+            model.toggleColumns.map { it.columnName },
+            emptyMap(),
+            null,
+            null,
+            emptyList(),
+            emptyList(),
+            model,
+            null,
+            emptyMap(),
+            null,
+            null,
+            null,
+            null,
         )
     }
 
     fun testBatchModelAutoIdDefaultUncheckedRendersWithoutId() {
         // T-M23-04（用户建议）：save(entity) 自增主键默认不勾选 → 初始 SQL 无 id 列
         val model = BatchModel(
-            kind = BatchKind.INSERT,
-            tableName = "biz_store_coupon",
-            toggleColumns = listOf(
-                BatchColumn("id", "entity.id", quote = false, checked = false),
-                BatchColumn("name", "entity.name", quote = true, checked = true),
-                BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
+            BatchKind.INSERT,
+            "biz_store_coupon",
+            listOf(
+                BatchColumn("id", "entity.id", false, false),
+                BatchColumn("name", "entity.name", true, true),
+                BatchColumn("dic_status", "entity.dic_status", false, true),
             ),
         )
         val panel = SqlPreviewPanel(project)
@@ -994,12 +1116,12 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     fun testBatchModelCheckboxToggleRebuildsSql() {
         // T-M23-04：勾选 id 复选框 → SQL 列清单恢复 id；取消 name → SET/列清单移除 name
         val model = BatchModel(
-            kind = BatchKind.INSERT,
-            tableName = "biz_store_coupon",
-            toggleColumns = listOf(
-                BatchColumn("id", "entity.id", quote = false, checked = false),
-                BatchColumn("name", "entity.name", quote = true, checked = true),
-                BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
+            BatchKind.INSERT,
+            "biz_store_coupon",
+            listOf(
+                BatchColumn("id", "entity.id", false, false),
+                BatchColumn("name", "entity.name", true, true),
+                BatchColumn("dic_status", "entity.dic_status", false, true),
             ),
         )
         val panel = SqlPreviewPanel(project)
@@ -1031,12 +1153,12 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     fun testBatchModelFixedColumnHasNoCheckbox() {
         // T-M23-04：UPDATE 的 WHERE 主键为固定列——仅值输入框（无复选框），复选框数 = toggle 列数
         val model = BatchModel(
-            kind = BatchKind.UPDATE,
-            tableName = "device_info",
-            toggleColumns = listOf(
-                BatchColumn("name", "entity.name", quote = true, checked = true),
+            BatchKind.UPDATE,
+            "device_info",
+            listOf(
+                BatchColumn("name", "entity.name", true, true),
             ),
-            fixedColumns = listOf(BatchColumn("id", "entity.id", quote = false, checked = true)),
+            listOf(BatchColumn("id", "entity.id", false, true)),
         )
         val panel = SqlPreviewPanel(project)
         panel.showResult(batchResult(model))
@@ -1054,12 +1176,12 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         // T-M23.2（用户要求：参数可选场景必须有【全选/全不选】按钮）：
         // 全不选 → 全部取消勾选、SQL 空列清单；全选 → 全部勾选、SQL 全列
         val model = BatchModel(
-            kind = BatchKind.INSERT,
-            tableName = "biz_store_coupon",
-            toggleColumns = listOf(
-                BatchColumn("id", "entity.id", quote = false, checked = false),
-                BatchColumn("name", "entity.name", quote = true, checked = true),
-                BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
+            BatchKind.INSERT,
+            "biz_store_coupon",
+            listOf(
+                BatchColumn("id", "entity.id", false, false),
+                BatchColumn("name", "entity.name", true, true),
+                BatchColumn("dic_status", "entity.dic_status", false, true),
             ),
         )
         val panel = SqlPreviewPanel(project)
@@ -1092,12 +1214,12 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         panel.showResult(
             dynamicResult(
-                conditions = listOf(
+                listOf(
                     Condition.In(
-                        ColumnRef(columnName = "name"),
-                        negated = false,
-                        values = listOf(SqlValue.Placeholder("names")),
-                        toggle = ConditionToggle("c0", null, true, "name IN (?)", "names", listOf("names")),
+                        ColumnRef("name"),
+                        false,
+                        listOf(SqlValue.Placeholder("names")),
+                        ConditionToggle("c0", null, true, "name IN (?)", "names", listOf("names")),
                     ),
                 ),
                 views = listOf(
@@ -1172,9 +1294,9 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         (split.firstComponent as JBScrollPane).doLayout() // 布局 viewport bounds（否则宽度为 0，截断上限回落默认值）
         panel.showResult(
             dynamicResult(
-                conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "station_id"), "IN", SqlValue.Placeholder("stationIds"),
-                        toggle = ConditionToggle("c0", "true", true, "station_id IN (?)", "stationIds", listOf("stationIds"))),
+                listOf(
+                    Condition.Simple(ColumnRef("station_id"), "IN", SqlValue.Placeholder("stationIds"),
+                        ConditionToggle("c0", "true", true, "station_id IN (?)", "stationIds", listOf("stationIds"))),
                 ),
                 views = listOf(ConditionView("c0", long, "true", true, "stationIds", listOf("stationIds"))),
             ),
@@ -1426,30 +1548,57 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         // 断言物用 ORDER BY 多字段——竖排把它拆成逐行（format 保持同行），可区分模式是否真在生效
         val panel = SqlPreviewPanel(project)
         val statement = SelectStatement(
-            table = tableInfo(),
-            conditions = listOf(
-                Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
-                    toggle = ConditionToggle("c0", "true", true, "id = 1")),
+            // k2j 适配：16 参全量构造（缺省槽按 Kotlin 默认值）
+            tableInfo(),
+            emptyList(),
+            null,
+            emptyList(),
+            false,
+            listOf(
+                Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"),
+                    ConditionToggle("c0", "true", true, "id = 1")),
             ),
-            orderBy = listOf(
-                OrderByItem(ColumnRef(columnName = "id"), asc = true),
-                OrderByItem(ColumnRef(columnName = "name"), asc = false),
+            emptyList(),
+            null,
+            listOf(
+                OrderByItem(ColumnRef("id"), true),
+                OrderByItem(ColumnRef("name"), false),
             ),
+            null,
+            null,
+            null,
+            null,
+            emptyList(),
+            null,
+            null,
         )
         val model = SqlPreviewModel(
-            statement, MySqlDialect, formatSql = true,
-            conditionViews = listOf(ConditionView("c0", "id = 1", "true", true, null)),
+            statement, MySqlDialect.INSTANCE, true,
+            listOf(ConditionView("c0", "id = 1", "true", true, null)),
         )
         panel.showResult(
             PreviewResult(
-                sql = "SELECT id, name\nFROM car_device_info",
-                compactSql = "SELECT id, name FROM car_device_info",
-                unresolvedParams = emptyList(),
-                paramTable = null,
-                wrapperType = WrapperType.LAMBDA_QUERY,
-                tableName = "car_device_info",
-                columns = listOf("id", "name"),
-                previewModel = model,
+                // k2j 适配：20 参位置构造
+                "SELECT id, name\nFROM car_device_info",
+                "SELECT id, name FROM car_device_info",
+                emptyList(),
+                null,
+                WrapperType.LAMBDA_QUERY,
+                "car_device_info",
+                null,
+                listOf("id", "name"),
+                emptyMap(),
+                null,
+                model,
+                emptyList(),
+                emptyList(),
+                null,
+                null,
+                emptyMap(),
+                null,
+                null,
+                null,
+                null,
             ),
         )
         panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.VERTICAL)
@@ -1474,9 +1623,9 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         // 动态条件 → 条件组
         panel.showResult(
             dynamicResult(
-                conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
-                        toggle = ConditionToggle("c0", "true", true, "id = 1")),
+                listOf(
+                    Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"),
+                        ConditionToggle("c0", "true", true, "id = 1")),
                 ),
                 views = listOf(ConditionView("c0", "id = 1", "true", true, null)),
             ),
@@ -1487,10 +1636,10 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.showResult(
             batchResult(
                 BatchModel(
-                    kind = BatchKind.INSERT,
-                    tableName = "biz_store_coupon",
-                    toggleColumns = listOf(
-                        BatchColumn("name", "entity.name", quote = true, checked = true),
+                    BatchKind.INSERT,
+                    "biz_store_coupon",
+                    listOf(
+                        BatchColumn("name", "entity.name", true, true),
                     ),
                 ),
             ),
@@ -1637,7 +1786,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             result(
                 sql = "SELECT i FROM ",
                 compact = "SELECT i FROM tbl",
-                columns = listOf("id", "name"),
+                listOf("id", "name"),
                 tableName = null,
             ),
         )

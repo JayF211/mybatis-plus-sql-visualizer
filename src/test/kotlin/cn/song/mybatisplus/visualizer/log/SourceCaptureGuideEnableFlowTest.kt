@@ -29,7 +29,8 @@ import org.junit.Assert.assertTrue
 class SourceCaptureGuideEnableFlowTest : BasePlatformTestCase() {
 
     private lateinit var manager: AgentManager
-    private lateinit var savedProvider: () -> EnhancedCaptureConsent
+    // k2j 适配：AgentManager.consentProvider 为 java.util.function.Supplier（Java SAM），照 AgentConsentFlowTest 口径声明
+    private lateinit var savedProvider: java.util.function.Supplier<EnhancedCaptureConsent>
     private var settingsChangeCount = 0
 
     override fun setUp() {

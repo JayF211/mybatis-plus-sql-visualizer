@@ -22,14 +22,14 @@ class SourceFramePrefixesValidatorTest {
         )
         assertFalse(
             "合法前缀不得报任何问题: $report",
-            report.hasProblems,
+            report.hasProblems(),
         )
     }
 
     @Test
     fun test空文本与空行_不算问题() {
         val report = SourceFramePrefixesValidator.validate("", "  \n  \n\t")
-        assertFalse("空登记不是问题: $report", report.hasProblems)
+        assertFalse("空登记不是问题: $report", report.hasProblems())
     }
 
     // ---------- 非法行 ----------
@@ -113,7 +113,7 @@ class SourceFramePrefixesValidatorTest {
         val second = SourceFramePrefixesValidator.autoFix(first.first, first.second)
         assertEquals("修复应幂等（再跑不变）", first, second)
         val report = SourceFramePrefixesValidator.validate(first.first, first.second)
-        assertFalse("修复后应零问题: $report", report.hasProblems)
+        assertFalse("修复后应零问题: $report", report.hasProblems())
     }
 
     @Test
@@ -135,6 +135,6 @@ class SourceFramePrefixesValidatorTest {
         )
         // 「com.corp. 」trim 后合法不计；其余 4 条全非法
         assertEquals(4, report.invalidLines.size)
-        assertTrue(report.hasProblems)
+        assertTrue(report.hasProblems())
     }
 }

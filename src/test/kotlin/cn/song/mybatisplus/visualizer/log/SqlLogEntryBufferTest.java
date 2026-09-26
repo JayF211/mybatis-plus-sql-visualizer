@@ -6,7 +6,9 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
@@ -240,6 +242,111 @@ public class SqlLogEntryBufferTest {
     }
 
     // ---------- 去重（对齐 MybatisCodeHelper-Pro「移除重复的sql」） ----------
+
+    // ---------- T-SqlSuppress（O-69）：屏蔽闸门 ----------
+
+    /** 构造屏蔽指纹（与 SqlSuppressRuleManager 发布口径同源：suppressFingerprint = 去重口径 + 尾分号剥离）。 */
+    private static String suppressKeyOf(String sql) {
+        return LogSqlModelsKt.suppressFingerprint(sql);
+    }
+
+    @Test
+    public void 屏蔽规则命中_入队前丢弃() throws Exception {
+        buffer.setDedupeEnabled(false); // 与去重开关隔离，纯验屏蔽闸门
+        buffer.setSuppressKeys(Set.of(suppressKeyOf("SELECT 1")));
+        assertFalse("命中规则 → 入队返回 false（从未捕获过）", buffer.addEntry(entry("SELECT 1")));
+        assertTrue("列表不含该条目", buffer.snapshot().isEmpty());
+        // 空白差异的变体天然命中（规范化口径与去重一致）
+        assertFalse("多空白/首尾空白变体同样被拦", buffer.addEntry(entry("  SELECT   1  ")));
+        assertTrue(buffer.snapshot().isEmpty());
+        // 大小写不同不命中（与既有规范化口径一致：大小写与分号不动）
+        assertTrue("大小写变体不被拦", buffer.addEntry(entry("select 1")));
+        assertEquals(1, buffer.snapshot().size());
+    }
+
+    @Test
+    public void 结构匹配规则开启后_参数值不同的同形状SQL被拦_精确规则不误拦() throws Exception {
+        // T-SqlSuppressUx 二段：结构匹配 opt-in——精确口径规则不拦不同参数值；结构规则拦
+        buffer.setDedupeEnabled(false);
+        buffer.setSuppressKeys(Set.of(suppressKeyOf("SELECT * FROM t WHERE p = 'a'")));
+        assertTrue("精确口径规则不拦不同参数值（opt-in 前置）", buffer.addEntry(entry("SELECT * FROM t WHERE p = 'b'")));
+        assertEquals("仅精确未拦的那条在列", 1, buffer.snapshot().size());
+        // 结构规则：同形状不同参数值被拦（闸门走 entry.structureKey）；被拦条目不入列
+        buffer.setSuppressKeys(Set.of(LogSqlModelsKt.structureFingerprint("SELECT * FROM t WHERE p = 'a'")));
+        assertFalse("结构规则拦同形状不同参数值", buffer.addEntry(entry("SELECT * FROM t WHERE p = 'c'")));
+        assertEquals("列表仍只有先前一条", 1, buffer.snapshot().size());
+        // 不同形状不拦
+        assertTrue(buffer.addEntry(entry("SELECT * FROM t WHERE q = 'a'")));
+    }
+
+    @Test
+    public void 屏蔽规则带尾分号_命中不带分号的日志还原SQL() throws Exception {
+        // T-SqlSuppressUx（20260924 走查返修）：规则粘贴态带 `;`、日志还原链不带——尾分号剥离后互命中
+        buffer.setDedupeEnabled(false);
+        buffer.setSuppressKeys(Set.of(suppressKeyOf("SELECT 1;"))); // 规则侧带分号
+        assertFalse("不带分号的日志形态同样被拦", buffer.addEntry(entry("SELECT 1")));
+        assertTrue(buffer.snapshot().isEmpty());
+        buffer.setSuppressKeys(Set.of(suppressKeyOf("SELECT 1"))); // 规则侧不带分号
+        assertFalse("带分号的日志形态同样被拦（对称）", buffer.addEntry(entry("SELECT 1;")));
+        assertTrue(buffer.snapshot().isEmpty());
+        // 剥离只作用收尾终结符：字面量内分号不构成跨语句误吞
+        buffer.setSuppressKeys(Set.of(suppressKeyOf("SELECT * FROM t WHERE s = 'a;b'")));
+        assertTrue("形状不同的语句不被误吞", buffer.addEntry(entry("SELECT * FROM t WHERE s = 'a'")));
+    }
+
+    @Test
+    public void 审计入队同样被屏蔽闸门拦截() throws Exception {
+        buffer.setSuppressKeys(Set.of(suppressKeyOf("SELECT 1")));
+        assertFalse("addAuditEntry 走同一私有门序，屏蔽一并生效", buffer.addAuditEntry(entry("SELECT 1")));
+        assertTrue(buffer.snapshot().isEmpty());
+    }
+
+    @Test
+    public void 被拦条目不占捕获序号不产生去重计数() throws Exception {
+        buffer.setDedupeEnabled(true);
+        buffer.setSuppressKeys(Set.of(suppressKeyOf("SELECT dup")));
+        buffer.addEntry(entry("SELECT dup", 0L));
+        buffer.addEntry(entry("SELECT dup", 1L)); // 若未被屏蔽，第二条会进去重计数
+        assertTrue("被拦条目无去重计数", buffer.dedupeCountsSnapshot().isEmpty());
+        assertTrue(buffer.snapshot().isEmpty());
+        // 序号：屏蔽条目不占号——解除屏蔽后首条成功入队从 #1 起
+        buffer.setSuppressKeys(Set.of());
+        assertTrue(buffer.addEntry(entry("SELECT 2", 2L)));
+        List<LogSqlEntry> snap = buffer.snapshot();
+        assertEquals(1, snap.size());
+        assertEquals("屏蔽不占捕获序号", 1L, snap.get(0).sequenceNumber());
+    }
+
+    @Test
+    public void 移除规则后恢复入队() throws Exception {
+        buffer.setDedupeEnabled(false);
+        Set<String> keys = new HashSet<>(Set.of(suppressKeyOf("SELECT 1")));
+        buffer.setSuppressKeys(keys);
+        assertFalse(buffer.addEntry(entry("SELECT 1")));
+        keys.clear(); // 订阅者（SqlLogManager）整体替换/清空键集
+        buffer.setSuppressKeys(keys);
+        assertTrue("规则移除后恢复入队", buffer.addEntry(entry("SELECT 1")));
+        assertEquals(1, buffer.snapshot().size());
+    }
+
+    @Test
+    public void 屏蔽命中走专用计数出口_不触内容与入队回调() throws Exception {
+        buffer.setDedupeEnabled(false);
+        buffer.setSuppressKeys(Set.of(suppressKeyOf("SELECT 1")));
+        List<String> hitKeys = new ArrayList<>();
+        int[] accepted = {0};
+        int[] storedCount = {0};
+        int[] contentNotified = {0};
+        buffer.setOnSuppressedHit(key -> hitKeys.add(key));
+        buffer.setOnEntryAccepted(() -> accepted[0] += 1);
+        buffer.setOnEntryStored(e -> storedCount[0] += 1);
+        buffer.addListener(() -> contentNotified[0] += 1);
+        buffer.addEntry(entry("SELECT 1"));
+        assertEquals("命中指纹回调（管理对话框「已拦截 N 次」数据源）", List.of(suppressKeyOf("SELECT 1")), hitKeys);
+        assertEquals("从未捕获过：接受回调不触发", 0, accepted[0]);
+        assertEquals("全量历史不写", 0, storedCount[0]);
+        assertEquals("内容通知不触发", 0, contentNotified[0]);
+    }
 
     @Test
     public void 去重窗口内相同_SQL_丢弃且通知徽章() throws Exception {

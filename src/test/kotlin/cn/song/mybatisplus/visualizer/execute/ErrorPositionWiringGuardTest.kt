@@ -24,13 +24,24 @@ class ErrorPositionWiringGuardTest {
     /** 豁免文件（相对仓库根的路径，正斜杠）：目前为空——生产链四个调用点都应钳制。 */
     private val exemptFiles = emptySet<String>()
 
+    /**
+     * 豁免投递点（相对路径 → 实参包含片段，均须写明理由）。
+     * k2j 互操作适配：master 的 Kotlin 默认参 {@code sqlMaxLength = null} 翻译为 4 参重载桥，
+     * 桥体内 {@code deliverError(..., null)} 的转发是缺省形态的机械转写（生产链对它零调用，
+     * 真实投递点全部显式传长度），非「接线漏」——按本守卫豁免惯例登记；桥形态一变即重新报违例。
+     */
+    private val exemptDeliveries = mapOf(
+        "cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to
+            "onErrorRich, onError, cause, message, null",
+    )
+
     private fun repoRoot(): File {
         var dir: File? = File(System.getProperty("user.dir")).absoluteFile
         while (dir != null) {
-            if (File(dir, "src/main/kotlin").isDirectory) return dir
+            if (File(dir, "src/main/java").isDirectory) return dir
             dir = dir.parentFile
         }
-        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
+        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
     }
 
     private val callSite = Regex("""ErrorPositionExtractor\.(buildInfo|extractPosition)\s*\(""")
@@ -55,8 +66,8 @@ class ErrorPositionWiringGuardTest {
         var checked = 0
         var deliveries = 0
         var forwards = 0
-        File(root, "src/main/kotlin").walkTopDown()
-            .filter { it.isFile && it.extension == "kt" }
+        File(root, "src/main/java").walkTopDown()
+            .filter { it.isFile && it.extension == "java" }
             .forEach { file ->
                 val rel = file.relativeTo(root).path.replace('\\', '/')
                 if (rel in exemptFiles) return@forEach
@@ -84,14 +95,15 @@ class ErrorPositionWiringGuardTest {
                     val cs2 = text.lastIndexOf('\n', m.range.first - 1).let { if (it < 0) 0 else it + 1 }
                     val pre2 = text.substring(cs2, m.range.first)
                     if (pre2.contains("//") || pre2.trimStart().startsWith("*") || pre2.trimStart().startsWith("/*")) continue
-                    // 定义处 `internal fun deliverError(` 不是调用点
-                    if (text.substring(0, m.range.first).trimEnd().endsWith("fun")) continue
+                    // 定义处 `public static void deliverError(` 不是调用点
+                    if (text.substring(0, m.range.first).trimEnd().endsWith("void")) continue
                     val args = readArguments(text, m.range.last + 1) ?: run {
                         offenders += "$rel:${lineOf(text, m.range.first)} deliverError 实参无法配对（形态变更，请更新守卫）"
                         continue
                     }
                     deliveries++
-                    if (!args.contains(".length")) {
+                    val deliveryExempted = exemptDeliveries[rel]?.let { args.contains(it) } == true
+                    if (!deliveryExempted && !args.contains(".length")) {
                         offenders += "$rel:${lineOf(text, m.range.first)} deliverError 未传被执行文本长度" +
                             "（实参：${args.trim().replace('\n', ' ').take(120)}）"
                     }
@@ -104,7 +116,7 @@ class ErrorPositionWiringGuardTest {
                     val cs3 = text.lastIndexOf('\n', m.range.first - 1).let { if (it < 0) 0 else it + 1 }
                     val pre3 = text.substring(cs3, m.range.first)
                     if (pre3.contains("//") || pre3.trimStart().startsWith("*") || pre3.trimStart().startsWith("/*")) continue
-                    if (text.substring(0, m.range.first).trimEnd().endsWith("fun")) continue
+                    if (text.substring(0, m.range.first).trimEnd().endsWith("void")) continue
                     val args = readArguments(text, m.range.last + 1) ?: run {
                         offenders += "$rel:${lineOf(text, m.range.first)} executeOnConsole 实参无法配对（形态变更，请更新守卫）"
                         continue

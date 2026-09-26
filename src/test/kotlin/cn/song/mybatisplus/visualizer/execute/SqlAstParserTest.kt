@@ -16,24 +16,24 @@ class SqlAstParserTest {
 
     @Test
     fun `parseStatements_方括号引用可解析且多语句计数正确`() {
-        val statements = SqlAstParser.parseStatements("SELECT * FROM [user]; DELETE FROM [t]")
+        val statements = SqlAstParser.INSTANCE.parseStatements("SELECT * FROM [user]; DELETE FROM [t]")
         assertEquals(2, statements.size)
     }
 
     @Test
     fun `parseSingle_方括号引用DELETE可解析`() {
-        val statement = SqlAstParser.parseSingle("DELETE FROM [user] WHERE [id] = 1")
+        val statement = SqlAstParser.INSTANCE.parseSingle("DELETE FROM [user] WHERE [id] = 1")
         assertTrue("应为 Delete AST", statement is Delete)
     }
 
     @Test
     fun `parseSingle_普通SELECT不受影响`() {
-        val statement = SqlAstParser.parseSingle("SELECT 1")
+        val statement = SqlAstParser.INSTANCE.parseSingle("SELECT 1")
         assertTrue("应为 PlainSelect AST", statement is PlainSelect)
     }
 
     @Test(expected = Exception::class)
     fun `parseSingle_解析失败原样抛出由调用方定fail语义`() {
-        SqlAstParser.parseSingle("SELEC * FORM t")
+        SqlAstParser.INSTANCE.parseSingle("SELEC * FORM t")
     }
 }

@@ -3,7 +3,7 @@ package cn.song.mybatisplus.visualizer.log.agent
 import cn.song.mybatisplus.visualizer.log.SqlCaptureGate
 import cn.song.mybatisplus.visualizer.log.SqlLogFileReader
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
-import cn.song.mybatisplus.visualizer.mcp.recordMcpExecution
+import cn.song.mybatisplus.visualizer.mcp.McpToolsetSupportKt
 import cn.song.mybatisplus.visualizer.testutil.AlreadyDisposedDiagnostics
 import cn.song.mybatisplus.visualizer.testutil.SqlLogManagerProjectState
 import com.intellij.openapi.util.Disposer
@@ -86,7 +86,7 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
     private fun newSession(
         pid: Long,
         manager: AgentManager? = null,
-        scheduleAckCheck: ((Long, () -> Unit) -> Unit)? = null,
+        scheduleAckCheck: ((Long, Runnable) -> Unit)? = null,
     ): AgentSession {
         val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
         val client = Socket("127.0.0.1", server.localPort)
@@ -95,14 +95,18 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
         sockets += accepted
         sockets += server
         agentSide[pid] = client
+        // k2j 适配：AgentSession 是 Java 类，构造器禁具名实参；末两参为 Java SAM
+        // （Runnable/BiConsumer 与 Kotlin 函数类型之间无隐式转换，显式桥接——同 LazyMonitorTest 口径）。
+        val ack: (Long, Runnable) -> Unit = scheduleAckCheck ?: { _, _ -> }
         return AgentSession(
             project,
             pid,
             accepted,
-            onStateChange = { manager?.onCaptureConfirmationChanged() },
-            clockMs = { now },
-            scheduleConfigAckCheck = scheduleAckCheck ?: { _, _ -> },
-            onCaptureConfirmationChanged = { manager?.onCaptureConfirmationChanged() },
+            { manager?.onCaptureConfirmationChanged() },
+            { now },
+            { },
+            java.util.function.BiConsumer<Long, Runnable> { d, t -> ack(d, Runnable { t.run() }) },
+            { manager?.onCaptureConfirmationChanged() },
         )
     }
 
@@ -132,7 +136,7 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
 
     fun test监听关闭_事件丢弃并计数_不入队() {
         val manager = logManager()
-        manager.entries.paused = false
+        manager.entries.setPaused(false)
         manager.setCapturingForTest(false)
         val before = manager.entries.size()
 
@@ -146,7 +150,7 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
 
     fun test监听开启_事件放行入队() {
         val manager = logManager()
-        manager.entries.paused = false
+        manager.entries.setPaused(false)
         manager.setCapturingForTest(true)
         val before = manager.entries.size()
 
@@ -161,18 +165,18 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
     /** 默认判据（不注入 provider）必须跟随 `SqlLogManager.capturing`——闸门不能只挂在测试缝上。 */
     fun test默认判据跟随捕获态() {
         val manager = logManager()
-        manager.entries.paused = false
+        manager.entries.setPaused(false)
         val session = newSession(7403L)
         val before = manager.entries.size()
 
         manager.setCapturingForTest(false)
-        assertFalse("监听关闭 → 默认判据为不活跃", session.listenActiveProvider())
+        assertFalse("监听关闭 → 默认判据为不活跃", session.listenActiveProvider.getAsBoolean())
         writeFrame(7403L, AgentProtocol.CMD_EVENT, eventBody("select gate_default_off"))
         awaitTrue("关闭态事件应被丢弃") { session.intakeDropped.get() == 1L }
         assertEquals(before, manager.entries.size())
 
         manager.setCapturingForTest(true)
-        assertTrue("监听开启 → 默认判据为活跃", session.listenActiveProvider())
+        assertTrue("监听开启 → 默认判据为活跃", session.listenActiveProvider.getAsBoolean())
         writeFrame(7403L, AgentProtocol.CMD_EVENT, eventBody("select gate_default_on"))
         awaitTrue("开启态事件应入队") { manager.entries.size() == before + 1 }
     }
@@ -180,11 +184,11 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
     /** T-03 边界：MCP 审计不经 agent 入队点——监听关闭（甚至缓冲暂停）也照旧落历史。 */
     fun test监听关闭_MCP审计路径不受影响() {
         val manager = logManager()
-        manager.entries.paused = false
+        manager.entries.setPaused(false)
         manager.setCapturingForTest(false)
         val before = manager.entries.size()
 
-        recordMcpExecution(project, "select mcp_gate_probe", null, 1L, null)
+        McpToolsetSupportKt.recordMcpExecution(project, "select mcp_gate_probe", null, 1L, null)
 
         assertEquals("MCP 审计不受入队闸门约束（D1 既有边界：只尊重 buffer.paused）", before + 1, manager.entries.size())
     }
@@ -193,14 +197,14 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
     fun test监听关闭_历史回读路径不受影响() {
         val manager = logManager()
         manager.setCapturingForTest(false)
-        manager.entries.paused = true
+        manager.entries.setPaused(true)
 
         val content = "--- source: a/A.java:9 | time: 5ms | 2026-08-25 10:00:00.123 ---\n" +
             "SELECT 1 FROM history_gate_probe\n\n"
-        val entries = SqlLogFileReader.parseContent(content)
+        val entries = SqlLogFileReader.INSTANCE.parseContent(content)
 
         assertTrue("历史回读须在「监听关闭 + 缓冲暂停」下照常返回条目", entries.isNotEmpty())
-        assertEquals("SELECT 1 FROM history_gate_probe", entries[0].restoredSql)
+        assertEquals("SELECT 1 FROM history_gate_probe", entries[0].restoredSql())
     }
 
     // ---------- ② T-02 回执解析 ----------
@@ -215,10 +219,7 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
         assertEquals(3, ack.skipPrefixes)
         assertEquals(1, ack.bizJarPrefixes)
         // 编解码往返：IDE 侧构造的规范形态必须能被自己的严格解析吃下
-        assertEquals(
-            body,
-            AgentProtocol.configAckBody(disabled = true, desensitize = false, skipPrefixes = 3, bizJarPrefixes = 1),
-        )
+        assertEquals(body, AgentProtocol.configAckBody(true, false, 3, 1))
         assertEquals(ack, AgentProtocol.parseConfigAck(AgentProtocol.configAckBody(true, false, 3, 1)))
     }
 
@@ -248,10 +249,10 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
     // ---------- ② T-02 回执到达 / 超时 ----------
 
     fun test收到回执_清挂起并记生效值() {
-        val scheduled = mutableListOf<Pair<Long, () -> Unit>>()
+        val scheduled = mutableListOf<Pair<Long, Runnable>>()
         val session = newSession(7501L, scheduleAckCheck = { d, t -> scheduled += d to t })
 
-        session.sendConfig(disabled = false, desensitize = false)
+        session.sendConfig(false, false)
         assertTrue("下发后应有挂起等待回执", session.hasPendingConfigAck())
         assertEquals(
             "回执等待窗应为常量（与 AgentManager.CONFIG_ACK_TIMEOUT_MS 同值）",
@@ -265,18 +266,18 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
         assertFalse("收到回执即清挂起", session.hasPendingConfigAck())
         assertEquals("生效值写入确认态（disabled=false）", false, session.configAckDisabled)
 
-        scheduled.single().second() // 到点执行巡检：挂起已清 → 静默
+        scheduled.single().second.run() // 到点执行巡检：挂起已清 → 静默
         assertEquals("已获回执不得再报「未获确认」", 0L, session.configAckTimeoutCount.get())
     }
 
     fun test回执超时_告警一次且不重复() {
-        val scheduled = mutableListOf<Pair<Long, () -> Unit>>()
+        val scheduled = mutableListOf<Pair<Long, Runnable>>()
         val session = newSession(7502L, scheduleAckCheck = { d, t -> scheduled += d to t })
 
-        session.sendConfig(disabled = true, desensitize = false)
+        session.sendConfig(true, false)
         assertTrue(session.hasPendingConfigAck())
 
-        scheduled.single().second() // 驱动超时巡检（生产由 monitor 排定，测试同步执行）
+        scheduled.single().second.run() // 驱动超时巡检（生产由 monitor 排定，测试同步执行）
         assertEquals("窗口内未收到回执 → 计一次告警", 1L, session.configAckTimeoutCount.get())
         assertFalse("超时后挂起清空（不再重复告警）", session.hasPendingConfigAck())
 
@@ -326,26 +327,20 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
      * 「连接已断」态（该态正常路径被 `clearPendingConfigAck` 提前挡掉，只有竞态窗口可达）。
      */
     fun test超时文案三态互斥且各含判据词() {
-        val disconnected = configAckTimeoutMessage(
-            pid = 1L, disabled = true, aliveNow = false, frameAfterSend = false, sinceLastFrameMs = 9_999L,
-        )
+        val disconnected = AgentManagerKt.configAckTimeoutMessage(1L, true, false, false, 9_999L)
         assertTrue("连接已断态必须叙述「控制通道已断开」：$disconnected", "控制通道已断开" in disconnected)
         assertFalse(
             "连接已断时不得叙述成「应用侧可能未生效」（连接都不在，与应用侧应用与否无关）：$disconnected",
             "应用侧可能未生效" in disconnected,
         )
 
-        val appAlive = configAckTimeoutMessage(
-            pid = 2L, disabled = false, aliveNow = true, frameAfterSend = true, sinceLastFrameMs = 120L,
-        )
+        val appAlive = AgentManagerKt.configAckTimeoutMessage(2L, false, true, true, 120L)
         assertTrue("应用侧在跑态必须叙述「应用侧仍在跑」：$appAlive", "应用侧仍在跑" in appAlive)
         assertTrue("应用侧在跑态应给出最近入站帧距巡检的毫秒数：$appAlive", "120ms" in appAlive)
         assertTrue("应用侧在跑态应点明旧版 agent 无回执这条成因：$appAlive", "旧版 agent" in appAlive)
         assertFalse("应用侧在跑时不得叙述成「应用侧可能未生效」：$appAlive", "应用侧可能未生效" in appAlive)
 
-        val silent = configAckTimeoutMessage(
-            pid = 3L, disabled = true, aliveNow = true, frameAfterSend = false, sinceLastFrameMs = 5_000L,
-        )
+        val silent = AgentManagerKt.configAckTimeoutMessage(3L, true, true, false, 5_000L)
         assertTrue("应用侧静默态才用「应用侧可能未生效」：$silent", "应用侧可能未生效" in silent)
         assertFalse("静默态不得叙述成连接已断：$silent", "控制通道已断开" in silent)
         assertFalse("静默态不得叙述成应用侧仍在跑：$silent", "应用侧仍在跑" in silent)
@@ -353,15 +348,15 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
 
     /** R4-① 端到端（臂 1）：下发后**仍收到入站帧** → 文案落在「应用侧仍在跑」。 */
     fun test超时文案_应用侧仍在跑() {
-        val scheduled = mutableListOf<Pair<Long, () -> Unit>>()
+        val scheduled = mutableListOf<Pair<Long, Runnable>>()
         val session = newSession(7511L, scheduleAckCheck = { d, t -> scheduled += d to t })
 
-        session.sendConfig(disabled = true, desensitize = false)
+        session.sendConfig(true, false)
         // 下发之后再写一帧（HEARTBEAT）：应用侧「活着」的直接证据，且不清挂起（只有 ACK 才清）
         writeFrame(7511L, AgentProtocol.CMD_HEARTBEAT, "{}")
         awaitTrue("HEARTBEAT 应被读线程处理") { session.livenessFrameSeen }
 
-        scheduled.single().second() // 到点驱动巡检
+        scheduled.single().second.run() // 到点驱动巡检
         assertEquals("仍计一次回执超时", 1L, session.configAckTimeoutCount.get())
         val message = session.lastConfigAckTimeoutMessage
         assertNotNull("巡检体应留下文案（测试缝）", message)
@@ -373,11 +368,11 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
 
     /** R4-① 端到端（臂 2）：下发后**一条入站帧都没有** → 文案落在「应用侧可能未生效」。 */
     fun test超时文案_应用侧静默() {
-        val scheduled = mutableListOf<Pair<Long, () -> Unit>>()
+        val scheduled = mutableListOf<Pair<Long, Runnable>>()
         val session = newSession(7512L, scheduleAckCheck = { d, t -> scheduled += d to t })
 
-        session.sendConfig(disabled = true, desensitize = false)
-        scheduled.single().second() // 不写任何帧：应用侧静默
+        session.sendConfig(true, false)
+        scheduled.single().second.run() // 不写任何帧：应用侧静默
         assertEquals(1L, session.configAckTimeoutCount.get())
         val message = session.lastConfigAckTimeoutMessage
         assertNotNull("巡检体应留下文案（测试缝）", message)
@@ -402,7 +397,7 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
 
     fun test关闭会话_清挂起与确认态() {
         val session = newSession(7504L)
-        session.sendConfig(disabled = false, desensitize = false)
+        session.sendConfig(false, false)
         writeFrame(7504L, AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(false, true, 0, 0))
         awaitTrue("回执应被读线程处理") { session.configAckDisabled == false }
 

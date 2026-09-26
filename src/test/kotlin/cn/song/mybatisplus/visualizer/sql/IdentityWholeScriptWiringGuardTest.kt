@@ -24,14 +24,14 @@ class IdentityWholeScriptWiringGuardTest {
     private fun repoRoot(): File {
         var dir: File? = File(System.getProperty("user.dir")).absoluteFile
         while (dir != null) {
-            if (File(dir, "src/main/kotlin").isDirectory) return dir
+            if (File(dir, "src/main/java").isDirectory) return dir
             dir = dir.parentFile
         }
-        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）")
+        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）")
     }
 
-    private fun mainKt(relative: String): String =
-        File(repoRoot(), "src/main/kotlin/$relative").readText()
+    private fun mainSrc(relative: String): String =
+        File(repoRoot(), "src/main/java/$relative").readText()
 
     /** 从 `open` 字符起做括号配对，返回覆盖整个实参列表的片段。 */
     private fun argSpan(text: String, open: Int): String {
@@ -107,16 +107,16 @@ class IdentityWholeScriptWiringGuardTest {
 
     @Test
     fun `executeAdhocSql体内每个SqlExecutor调用都传wholeScriptExec`() {
-        val body = mainKt("cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt")
-        val fnStart = body.indexOf("internal fun executeAdhocSql(")
+        val body = mainSrc("cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.java")
+        val fnStart = body.indexOf("void executeAdhocSql(String sql, boolean dmlConfirmed,")
         assertTrue("未找到 executeAdhocSql", fnStart >= 0)
         val fn = body.substring(fnStart)
         val offenders = mutableListOf<String>()
         var checked = 0
         for (call in listOf("SqlExecutor.execute(", "SqlExecutor.executePrepared(")) {
-            for (span in callsWithin(fn, "internal fun executeAdhocSql(", call)) {
+            for (span in callsWithin(fn, "void executeAdhocSql(String sql, boolean dmlConfirmed,", call)) {
                 checked++
-                val exempted = exempt["SqlPreviewPanel.kt"]?.any { span.contains(it) } == true
+                val exempted = exempt["SqlPreviewPanel.java"]?.any { span.contains(it) } == true
                 if (!exempted && !span.contains("wholeScriptExec")) {
                     offenders += span.take(120)
                 }
@@ -131,17 +131,17 @@ class IdentityWholeScriptWiringGuardTest {
 
     @Test
     fun `DataSourceSelector每个executeOnConsole调用都传wholeScriptExec`() {
-        val text = mainKt("cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt")
+        val text = mainSrc("cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java")
         val offenders = mutableListOf<String>()
         var checked = 0
         var idx = text.indexOf("executeOnConsole(")
         while (idx >= 0) {
             val before = text.substring(maxOf(0, idx - 30), idx)
-            if (!before.contains("fun ")) { // 定义点（private fun executeOnConsole(）不计
+            if (!before.contains("void ")) { // 定义点（private static void executeOnConsole(）不计
                 val open = text.indexOf('(', idx)
                 val span = argSpan(text, open)
                 checked++
-                val exempted = exempt["DataSourceSelector.kt"]?.any { span.contains(it) } == true
+                val exempted = exempt["DataSourceSelector.java"]?.any { span.contains(it) } == true
                 if (!exempted && !span.contains("wholeScriptExec")) {
                     offenders += span.take(120)
                 }
@@ -157,11 +157,11 @@ class IdentityWholeScriptWiringGuardTest {
 
     @Test
     fun `executeAdhocSql确实计算了identity识别特征`() {
-        val fn = mainKt("cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt")
-        val fnStart = fn.indexOf("internal fun executeAdhocSql(")
+        val fn = mainSrc("cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.java")
+        val fnStart = fn.indexOf("void executeAdhocSql(String sql, boolean dmlConfirmed,")
         assertTrue(
             "executeAdhocSql 必须用 IdentityInsertStatements 判定旗标（识别特征=含 SET IDENTITY_INSERT 语句）",
-            callsWithin(fn.substring(fnStart), "internal fun executeAdhocSql(", "IdentityInsertStatements.containsStatement(")
+            callsWithin(fn.substring(fnStart), "void executeAdhocSql(String sql, boolean dmlConfirmed,", "IdentityInsertStatements.containsStatement(")
                 .isNotEmpty(),
         )
     }
@@ -170,21 +170,21 @@ class IdentityWholeScriptWiringGuardTest {
     @Test
     fun 自证_合成源码缺旗标被守卫抓到() {
         val synthetic = """
-            internal fun executeAdhocSqlExample() {
+            void executeAdhocSqlExample() {
                 SqlExecutor.execute(
                     proj, sql, null, false,
-                    onError = { e -> },
-                )
+                    e -> {},
+                );
                 SqlExecutor.executePrepared(
                     proj,
-                    wholeScriptExec = wholeScriptExec,
-                )
+                    wholeScriptExec,
+                );
             }
         """.trimIndent()
-        val bad = callsWithin(synthetic, "internal fun executeAdhocSqlExample(", "SqlExecutor.execute(")
+        val bad = callsWithin(synthetic, "void executeAdhocSqlExample(", "SqlExecutor.execute(")
         assertTrue("缺旗标调用必须被提取", bad.size == 1)
         assertTrue("缺旗标调用必须判违例", !bad[0].contains("wholeScriptExec"))
-        val good = callsWithin(synthetic, "internal fun executeAdhocSqlExample(", "SqlExecutor.executePrepared(")
+        val good = callsWithin(synthetic, "void executeAdhocSqlExample(", "SqlExecutor.executePrepared(")
         assertTrue("带旗标调用必须被提取", good.size == 1)
         assertTrue("带旗标调用不得误报", good[0].contains("wholeScriptExec"))
     }

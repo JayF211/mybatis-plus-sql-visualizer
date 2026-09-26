@@ -30,15 +30,15 @@ class XmlParamTypeResolverElementKindTest : BasePlatformTestCase() {
             }
             """.trimIndent(),
         )
-        val types = XmlParamTypeResolver.resolveTypes(project, "com.example.ProbeMapper", "q")
-        assertEquals(ParamKind.COLLECTION, types["statusList"]?.kind)
-        assertEquals("List<Integer> 元素 → NUMBER", ParamKind.NUMBER, types["statusList"]?.elementKind)
-        assertEquals("List<String> 元素 → TEXT", ParamKind.TEXT, types["names"]?.elementKind)
-        assertEquals("List<DTO> 元素 → OBJECT", ParamKind.OBJECT, types["users"]?.elementKind)
-        assertNull("裸 List 无泛型实参 → null", types["rawList"]?.elementKind)
-        assertEquals(ParamKind.COLLECTION, types["arr"]?.kind)
-        assertNull("数组不产元素类别（宁缺勿错）", types["arr"]?.elementKind)
-        assertNull("Map 非元素场景 → null", types["map"]?.elementKind)
-        assertNull("标量非集合 → null", types["pageNum"]?.elementKind)
+        val types = XmlParamTypeResolver.INSTANCE.resolveTypes(project, "com.example.ProbeMapper", "q")
+        assertEquals(ParamKind.COLLECTION, types["statusList"]?.kind())
+        assertEquals("List<Integer> 元素 → NUMBER", ParamKind.NUMBER, types["statusList"]?.elementKind())
+        assertEquals("List<String> 元素 → TEXT", ParamKind.TEXT, types["names"]?.elementKind())
+        assertEquals("List<DTO> 元素 → OBJECT", ParamKind.OBJECT, types["users"]?.elementKind())
+        assertNull("裸 List 无泛型实参 → null", types["rawList"]?.elementKind())
+        assertEquals(ParamKind.COLLECTION, types["arr"]?.kind())
+        assertNull("数组不产元素类别（宁缺勿错）", types["arr"]?.elementKind())
+        assertNull("Map 非元素场景 → null", types["map"]?.elementKind())
+        assertNull("标量非集合 → null", types["pageNum"]?.elementKind())
     }
 }

@@ -30,7 +30,7 @@ class AcpTransportRegistrarProxyTest {
     /** SSE 标记对象（注入 handler 的 sseProvider 返回值；真形态是平台枚举常量）。 */
     private object SseMarker
 
-    private fun handler(): InvocationHandler = transportHandler { SseMarker }
+    private fun handler(): InvocationHandler = AcpTransportRegistrarKt.transportHandler { SseMarker }
 
     private fun transportOf(agent: FakeAgent): Any? {
         val m = FakeAgentTransport::class.java.methods.first { it.name == "getTransport" }

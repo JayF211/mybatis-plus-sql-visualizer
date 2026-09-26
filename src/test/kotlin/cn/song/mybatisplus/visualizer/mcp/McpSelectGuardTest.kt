@@ -16,16 +16,16 @@ class McpSelectGuardTest {
 
     private fun assertDenied(sql: String?, code: String, message: String) {
         val verdict = McpSelectGuard.checkSingleSelect(sql)
-        assertFalse(message, verdict.allowed)
-        assertEquals(message, code, verdict.errorCode)
-        assertTrue(message, !verdict.reason.isNullOrBlank())
+        assertFalse(message, verdict.allowed())
+        assertEquals(message, code, verdict.errorCode())
+        assertTrue(message, !verdict.reason().isNullOrBlank())
     }
 
     private fun assertAllowed(sql: String) {
         val verdict = McpSelectGuard.checkSingleSelect(sql)
-        assertTrue("应放行: $sql → ${verdict.errorCode}: ${verdict.reason}", verdict.allowed)
-        assertNull(verdict.errorCode)
-        assertNull(verdict.reason)
+        assertTrue("应放行: $sql → ${verdict.errorCode()}: ${verdict.reason()}", verdict.allowed())
+        assertNull(verdict.errorCode())
+        assertNull(verdict.reason())
     }
 
     // ------------------------------------------------------------------
@@ -233,8 +233,8 @@ class McpSelectGuardTest {
         // DBX 同款口径：update 不豁免（MySQL 接受 UPDATE (t) 表形态）——仍拒；
         // 结构闸（READ_ONLY）或解析 fail-closed（SQL_BLOCKED）任一路径都算拒，不钉码
         val verdict = McpSelectGuard.checkSingleSelect("UPDATE (t) SET x = 1")
-        assertTrue("UPDATE (t) 形态应拒", !verdict.allowed)
-        assertTrue("拒绝必须带原因", !verdict.reason.isNullOrBlank())
+        assertTrue("UPDATE (t) 形态应拒", !verdict.allowed())
+        assertTrue("拒绝必须带原因", !verdict.reason().isNullOrBlank())
     }
 
     // ------------------------------------------------------------------

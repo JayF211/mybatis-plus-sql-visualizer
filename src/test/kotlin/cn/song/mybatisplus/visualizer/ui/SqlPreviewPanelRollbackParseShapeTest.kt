@@ -46,7 +46,8 @@ class SqlPreviewPanelRollbackParseShapeTest {
 
     @After
     fun tearDown() {
-        UnboundedWriteDetector.parseStatementsForTest = { s -> SqlAstParser.parseStatements(s) }
+        // k2j 适配：parseStatements 为 SqlAstParser 单例实例方法（StatementParser.parse 声明 throws Exception 可容 JSQLParserException）
+        UnboundedWriteDetector.parseStatementsForTest = { s -> SqlAstParser.INSTANCE.parseStatements(s) }
         UnboundedWriteDetector.clearAstSlotForTest()
     }
 

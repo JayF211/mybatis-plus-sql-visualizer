@@ -57,7 +57,7 @@ class HqlAliasColumnMappingTest : BasePlatformTestCase() {
         classes[name]?.let { JpaEntityResolver().resolve(it) }
 
     private fun convert(hql: String, rootEntity: String): HqlConverter.Result =
-        HqlConverter.convertWithEntityResolver(hql, tableOf(rootEntity), resolveEntity = ::resolveEntity)
+        HqlConverter.convertWithEntityResolver(hql, tableOf(rootEntity), ::resolveEntity)
 
     // ------------------------------------------------------------------
     // 1 + 2：用户报障形态（副表别名属性 + 嵌入路径）
@@ -336,7 +336,7 @@ class HqlAliasColumnMappingTest : BasePlatformTestCase() {
     /** O-57 T-03：替换产物是列名，重复调用结果一致（幂等）。 */
     fun test幂等_重复调用结果一致() {
         val once = convert(USER_HQL, "WmsPickTicket").sql
-        val twice = HqlConverter.convertWithEntityResolver(once, tableOf("WmsPickTicket"), resolveEntity = ::resolveEntity)
+        val twice = HqlConverter.convertWithEntityResolver(once, tableOf("WmsPickTicket"), ::resolveEntity)
         assertEquals("列名产物不得再次命中别名规则", once, twice.sql)
     }
 

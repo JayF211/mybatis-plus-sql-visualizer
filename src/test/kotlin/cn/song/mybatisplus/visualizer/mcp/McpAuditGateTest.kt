@@ -19,9 +19,14 @@ import kotlinx.coroutines.runBlocking
  */
 class McpAuditGateTest {
 
-    /** 探针工具：暴露 protected audit/throwExpected 供直调。 */
+    /**
+     * 探针工具：暴露 protected audit/throwExpected 供直调。
+     * k2j 适配：audit 为 Java 同步承载（ToolBlock 函数接口 `String get()` 无挂起形态）——
+     * 挂起块经 runBlocking 桥接进 ToolBlock，记账语义（成功 token 记账）与 master 挂起形态一致。
+     */
     private class ProbeTool : McpToolsetSupport("sqlv_probe") {
-        suspend fun probe(block: suspend () -> String): String = audit("sqlv_probe", "probe", block)
+        suspend fun probe(block: suspend () -> String): String =
+            audit("sqlv_probe", "probe") { runBlocking { block() } }
         suspend fun fail(msg: String): Nothing = throwExpected(msg)
     }
 

@@ -34,7 +34,7 @@ class MetadataInvalidatorTest {
 
     @After
     fun tearDown() {
-        MetadataInvalidator.parseStatementsForTest = { s -> SqlAstParser.parseStatements(s) }
+        MetadataInvalidator.parseStatementsForTest = { s -> SqlAstParser.INSTANCE.parseStatements(s) }
         MetadataInvalidator.batchPrefilterStatements = 50
         MetadataInvalidator.clearParseCacheForTest()
     }

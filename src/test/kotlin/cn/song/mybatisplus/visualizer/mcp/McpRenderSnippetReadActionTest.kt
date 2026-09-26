@@ -13,6 +13,8 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
  * 判别力设计：调用放在**独立 worker 线程**而非测试主线程——夹具若给测试线程授了读权限，
  * 主线程直调会「摘掉修复也绿」；worker 线程与平台协程线程同样无读权限，未包 ReadAction 必抛，
  * 修复后 ReadAction.compute 在任意线程均可取锁放行。
+ *
+ * k2j 适配：Outcome 为 Java record，组件访问带 `()`。
  */
 class McpRenderSnippetReadActionTest : BasePlatformTestCase() {
 
@@ -38,8 +40,8 @@ class McpRenderSnippetReadActionTest : BasePlatformTestCase() {
         error?.let { throw it }
 
         val result = outcome!!
-        assertNull("expected clean render, got error: ${result.error}", result.error)
-        assertTrue("rendered SQL missing table name: ${result.sql}", result.sql.orEmpty().contains("user", ignoreCase = true))
-        assertEquals("mapper XML (snippet)", result.sourceType)
+        assertNull("expected clean render, got error: ${result.error()}", result.error())
+        assertTrue("rendered SQL missing table name: ${result.sql()}", result.sql().orEmpty().contains("user", ignoreCase = true))
+        assertEquals("mapper XML (snippet)", result.sourceType())
     }
 }

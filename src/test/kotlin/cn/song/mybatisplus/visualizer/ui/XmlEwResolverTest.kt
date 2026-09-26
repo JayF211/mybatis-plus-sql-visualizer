@@ -19,20 +19,23 @@ class XmlEwResolverTest : BasePlatformTestCase() {
         serviceFile: com.intellij.psi.PsiFile,
     ): cn.song.mybatisplus.visualizer.model.PreviewResult {
         val parsed = cn.song.mybatisplus.visualizer.xml.XmlMapperParser().parse(xml)
-        val statement = parsed.statements.first { it.id == id }
+        // k2j 适配：XmlMapperModel/XmlStatement 为 record，组件访问带 ()
+        val statement = parsed.statements().first { it.id() == id }
         val warnings = mutableListOf<String>()
         // O-77：占位按语句域扫描（statement.rawText），与生产 resolveEwPlaceholders 口径一致
-        val placeholders = cn.song.mybatisplus.visualizer.xml.XmlEwExpander.placeholders(statement.rawText ?: xml)
+        val placeholders = cn.song.mybatisplus.visualizer.xml.XmlEwExpander.placeholders(statement.rawText() ?: xml)
         val finder: (com.intellij.psi.PsiMethod) -> List<com.intellij.psi.PsiElement> = { method ->
             com.intellij.psi.util.PsiTreeUtil.collectElementsOfType(serviceFile, com.intellij.psi.PsiMethodCallExpression::class.java)
                 .filter { it.methodExpression.referenceName == method.name }
         }
-        val resolved = XmlEwResolver.resolve(parsed.namespace, id, placeholders, project, warnings, finder)
+        // k2j 适配：resolve 为单例实例方法（finder 经 CallFinder SAM 转换）
+        val resolved = XmlEwResolver.INSTANCE.resolve(parsed.namespace(), id, placeholders, project, warnings, finder)
         println("DEBUG-RESOLVED: " + resolved)
         println("DEBUG-WARNINGS: " + warnings)
-        val ewBindings = resolved.mapValues { (_, fragments) -> cn.song.mybatisplus.visualizer.xml.MockObject(fragments) }
-        val model = cn.song.mybatisplus.visualizer.xml.XmlPreviewModel.from(statement, parsed.errors, extraBindings = ewBindings)
-        return XmlPreviewService.toResult(model, warnings)
+        val ewBindings = resolved.mapValues { (_, fragments) -> cn.song.mybatisplus.visualizer.xml.MockObject(fragments as Map<String, Any>) }
+        // k2j 适配：from 为 Java 全参重载（extraBindings 落第 5 位）
+        val model = cn.song.mybatisplus.visualizer.xml.XmlPreviewModel.from(statement, parsed.errors(), emptySet(), emptyMap(), ewBindings, emptyMap())
+        return XmlPreviewService.INSTANCE.toResult(model, warnings)
     }
 
     private val mapperXml = """
@@ -95,7 +98,7 @@ class XmlEwResolverTest : BasePlatformTestCase() {
             """.trimIndent(),
         )
         myFixture.configureByText("Unrelated.java", "public class Unrelated { int x = 1; }")
-        val result = XmlPreviewService.preview(mapperXml, "selectList", project)
+        val result = XmlPreviewService.INSTANCE.preview(mapperXml, "selectList", project)
         assertTrue("应提示未找到调用：${result.warning}", result.warning?.contains("未找到") == true)
         assertEquals("SELECT * FROM t_user", result.sql.replace(Regex("\\s+"), " ").trim())
     }
@@ -106,13 +109,13 @@ class XmlEwResolverTest : BasePlatformTestCase() {
               <select id="selectList">SELECT * FROM t WHERE ${'$'}{ew.customSqlSegment}</select>
             </mapper>
         """.trimIndent()
-        val result = XmlPreviewService.preview(noNsXml, "selectList", project)
+        val result = XmlPreviewService.INSTANCE.preview(noNsXml, "selectList", project)
         assertTrue("应提示缺 namespace：${result.warning}", result.warning?.contains("namespace") == true)
     }
 
     fun testEwWithoutProjectKeepsOldBehavior() {
         // 无 project（纯文本）→ 不展开（占位求值为空提示）
-        val result = XmlPreviewService.preview(mapperXml, "selectList", null)
+        val result = XmlPreviewService.INSTANCE.preview(mapperXml, "selectList", null)
         assertTrue("无 project 时应保持占位求值为空提示", result.warning?.contains("求值为空") == true)
     }
 
@@ -159,7 +162,7 @@ class XmlEwResolverTest : BasePlatformTestCase() {
               </select>
             </mapper>
         """.trimIndent()
-        val plain = XmlPreviewService.preview(xml, "selectByCondition", project)
+        val plain = XmlPreviewService.INSTANCE.preview(xml, "selectByCondition", project)
         assertNull("普通语句不应有 ew 警示：${plain.warning}", plain.warning)
         assertEquals("SELECT * FROM t_user WHERE id = ?", plain.sql.replace(Regex("\\s+"), " ").trim())
         // Light 夹具 ReferencesSearch 搜不到调用（既有 testEwCustomSqlSegmentExpanded 同因走注入 finder），

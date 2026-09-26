@@ -46,39 +46,39 @@ class DialectXcFamilyTest {
 
     @Test
     fun `oceanbase_分页_MySQL形态`() {
-        assertEquals("LIMIT 10", OceanBaseDialect.renderLimit(LimitClause(count = 10)))
-        assertEquals("LIMIT 5, 10", OceanBaseDialect.renderLimit(LimitClause(offset = 5, count = 10)))
+        assertEquals("LIMIT 10", OceanBaseDialect.INSTANCE.renderLimit(LimitClause(null, 10L)))
+        assertEquals("LIMIT 5, 10", OceanBaseDialect.INSTANCE.renderLimit(LimitClause(5L, 10L)))
         // 运行时占位符（T-M29-03 形态）
         assertEquals(
             "LIMIT ?, ?",
-            OceanBaseDialect.renderLimit(
-                LimitClause(offset = SqlValue.Placeholder("(pageNum - 1) * pageSize"), count = SqlValue.Placeholder("pageSize")),
+            OceanBaseDialect.INSTANCE.renderLimit(
+                LimitClause(SqlValue.Placeholder("(pageNum - 1) * pageSize"), SqlValue.Placeholder("pageSize")),
             ),
         )
         // DELETE LIMIT 尾段：MySQL 语法族（官方兼容性声明覆盖）
-        assertTrue(OceanBaseDialect.supportsDeleteLimit)
+        assertTrue(OceanBaseDialect.INSTANCE.supportsDeleteLimit)
     }
 
     @Test
     fun `oceanbase_引用与保留字`() {
         // 反引号（MySQL 模式兼容面，官方《与 MySQL 兼容性对比》——文档级）
-        assertEquals("`id`", OceanBaseDialect.quoteIdentifier("id"))
-        assertEquals("`order`", OceanBaseDialect.quoteIfKeyword("order"))
+        assertEquals("`id`", OceanBaseDialect.INSTANCE.quoteIdentifier("id"))
+        assertEquals("`order`", OceanBaseDialect.INSTANCE.quoteIfKeyword("order"))
         // 折叠方向推定 NONE：目录来源不按大小写判定（保留字行为不变）
-        assertEquals(IdentifierFolding.NONE, OceanBaseDialect.identifierFolding)
-        assertEquals("Issue_New", OceanBaseDialect.quoteIfNeeded("Issue_New", IdentifierCaseSource.CATALOG))
-        assertEquals("Issue_New", OceanBaseDialect.quoteIfNeeded("Issue_New", IdentifierCaseSource.ENTITY))
+        assertEquals(IdentifierFolding.NONE, OceanBaseDialect.INSTANCE.identifierFolding)
+        assertEquals("Issue_New", OceanBaseDialect.INSTANCE.quoteIfNeeded("Issue_New", IdentifierCaseSource.CATALOG))
+        assertEquals("Issue_New", OceanBaseDialect.INSTANCE.quoteIfNeeded("Issue_New", IdentifierCaseSource.ENTITY))
     }
 
     @Test
     fun `oceanbase_upsert_MySQL形态`() {
         assertEquals(
             "ON DUPLICATE KEY UPDATE name = VALUES(name)",
-            OceanBaseDialect.renderUpsert("id", listOf("name")),
+            OceanBaseDialect.INSTANCE.renderUpsert("id", listOf("name")),
         )
         assertEquals(
             "ON DUPLICATE KEY UPDATE `table` = VALUES(`table`), name = VALUES(name)",
-            OceanBaseDialect.renderUpsert("id", listOf("table", "name")),
+            OceanBaseDialect.INSTANCE.renderUpsert("id", listOf("table", "name")),
         )
     }
 
@@ -86,30 +86,30 @@ class DialectXcFamilyTest {
 
     @Test
     fun `opengauss_分页_PG形态`() {
-        assertEquals("LIMIT 10", OpenGaussDialect.renderLimit(LimitClause(count = 10)))
-        assertEquals("LIMIT 10 OFFSET 5", OpenGaussDialect.renderLimit(LimitClause(offset = 5, count = 10)))
+        assertEquals("LIMIT 10", OpenGaussDialect.INSTANCE.renderLimit(LimitClause(null, 10L)))
+        assertEquals("LIMIT 10 OFFSET 5", OpenGaussDialect.INSTANCE.renderLimit(LimitClause(5L, 10L)))
         assertEquals(
             "LIMIT ? OFFSET ?",
-            OpenGaussDialect.renderLimit(
-                LimitClause(offset = SqlValue.Placeholder("(pageNum - 1) * pageSize"), count = SqlValue.Placeholder("pageSize")),
+            OpenGaussDialect.INSTANCE.renderLimit(
+                LimitClause(SqlValue.Placeholder("(pageNum - 1) * pageSize"), SqlValue.Placeholder("pageSize")),
             ),
         )
         // PG 族无 DELETE LIMIT 尾段（真机佐证：LIMIT 1,2 按 PG 语义解析——DELETE LIMIT 非 PG 文法）
-        assertFalse(OpenGaussDialect.supportsDeleteLimit)
+        assertFalse(OpenGaussDialect.INSTANCE.supportsDeleteLimit)
     }
 
     @Test
     fun `opengauss_引用与折叠_LOWER族`() {
         // 双引号（真机：反引号语法错误）
-        assertEquals("\"id\"", OpenGaussDialect.quoteIdentifier("id"))
-        assertEquals("\"table\"", OpenGaussDialect.quoteIfKeyword("table"))
+        assertEquals("\"id\"", OpenGaussDialect.INSTANCE.quoteIdentifier("id"))
+        assertEquals("\"table\"", OpenGaussDialect.INSTANCE.quoteIfKeyword("table"))
         // 折叠方向 LOWER（真机 455 行 / relation does not exist 实锤）
-        assertEquals(IdentifierFolding.LOWER, OpenGaussDialect.identifierFolding)
+        assertEquals(IdentifierFolding.LOWER, OpenGaussDialect.INSTANCE.identifierFolding)
         // 目录来源：含大写必须包（裸写被折为小写 → 查不到）；全小写裸写
-        assertEquals("\"Issue_New\"", OpenGaussDialect.quoteIfNeeded("Issue_New", IdentifierCaseSource.CATALOG))
-        assertEquals("issue_new", OpenGaussDialect.quoteIfNeeded("issue_new", IdentifierCaseSource.CATALOG))
+        assertEquals("\"Issue_New\"", OpenGaussDialect.INSTANCE.quoteIfNeeded("Issue_New", IdentifierCaseSource.CATALOG))
+        assertEquals("issue_new", OpenGaussDialect.INSTANCE.quoteIfNeeded("issue_new", IdentifierCaseSource.CATALOG))
         // 实体来源逐字不变（O-51 族判定只许在 CATALOG 分支）
-        assertEquals("Issue_New", OpenGaussDialect.quoteIfNeeded("Issue_New", IdentifierCaseSource.ENTITY))
+        assertEquals("Issue_New", OpenGaussDialect.INSTANCE.quoteIfNeeded("Issue_New", IdentifierCaseSource.ENTITY))
     }
 
     /**
@@ -121,15 +121,15 @@ class DialectXcFamilyTest {
     fun `opengauss_upsert_MySQL形态_非PG_ON_CONFLICT`() {
         assertEquals(
             "ON DUPLICATE KEY UPDATE name = VALUES(name)",
-            OpenGaussDialect.renderUpsert("id", listOf("name")),
+            OpenGaussDialect.INSTANCE.renderUpsert("id", listOf("name")),
         )
         // 保留字列用本方言符号（双引号），非反引号
         assertEquals(
             "ON DUPLICATE KEY UPDATE \"table\" = VALUES(\"table\"), id = VALUES(id)",
-            OpenGaussDialect.renderUpsert("id", listOf("table", "id")),
+            OpenGaussDialect.INSTANCE.renderUpsert("id", listOf("table", "id")),
         )
         // 整语句形态（H2 那种）不存在
-        assertNull(OpenGaussDialect.renderUpsertStatement("t", listOf("id", "name"), "id"))
+        assertNull(OpenGaussDialect.INSTANCE.renderUpsertStatement("t", listOf("id", "name"), "id"))
     }
 
     // ---------- EXPLAIN 渲染（模板经 ExplainSupport 表） ----------
@@ -137,19 +137,19 @@ class DialectXcFamilyTest {
     @Test
     fun `explain渲染_OceanBase同MySQL形态`() {
         val sample = "SELECT * FROM users WHERE id > 1"
-        assertEquals("EXPLAIN $sample", OceanBaseDialect.renderExplainStatement(sample))
+        assertEquals("EXPLAIN $sample", OceanBaseDialect.INSTANCE.renderExplainStatement(sample))
         assertEquals(ExplainOutputFormat.TABLE, ExplainSupport.formatFor("OceanBase"))
     }
 
     @Test
     fun `explain渲染_openGauss_KingBase同款JSON形态`() {
         val sample = "SELECT * FROM users WHERE id > 1"
-        assertEquals("EXPLAIN (FORMAT JSON) $sample", OpenGaussDialect.renderExplainStatement(sample))
+        assertEquals("EXPLAIN (FORMAT JSON) $sample", OpenGaussDialect.INSTANCE.renderExplainStatement(sample))
         assertEquals(ExplainOutputFormat.JSON, ExplainSupport.formatFor("openGauss"))
         // 幂等包装（T-ExplainDbl）在新方言同样成立
         assertEquals(
             "EXPLAIN (FORMAT JSON) $sample",
-            OpenGaussDialect.renderExplainStatementIdempotent("EXPLAIN (FORMAT JSON) $sample"),
+            OpenGaussDialect.INSTANCE.renderExplainStatementIdempotent("EXPLAIN (FORMAT JSON) $sample"),
         )
     }
 
@@ -158,8 +158,8 @@ class DialectXcFamilyTest {
     @Test
     fun `注册表身份_摘掉注册即红`() {
         // byName 未知名回落 MySQL——本断言在「摘掉注册」反向验证中必红（回落即身份失配）
-        assertSame(OceanBaseDialect, DialectRegistry.byName("OceanBase"))
-        assertSame(OpenGaussDialect, DialectRegistry.byName("openGauss"))
+        assertSame(OceanBaseDialect.INSTANCE, DialectRegistry.INSTANCE.byName("OceanBase"))
+        assertSame(OpenGaussDialect.INSTANCE, DialectRegistry.INSTANCE.byName("openGauss"))
     }
 
     @Test
@@ -170,11 +170,11 @@ class DialectXcFamilyTest {
         assertEquals("openGauss", UrlSubprotocolDialects.dialectName("jdbc:gaussdb://host:8000/db"))
         // 全链：推断名 → 注册表命中本方言对象（摘掉任何一环：URL 表或注册表，链路即在此断）
         val ob = DialectInference.infer("jdbc:oceanbase://host:2881/db", null)
-        assertSame(OceanBaseDialect, DialectRegistry.byName(ob.dialectName))
+        assertSame(OceanBaseDialect.INSTANCE, DialectRegistry.INSTANCE.byName(ob.dialectName))
         val og = DialectInference.infer(null, "jdbc:opengauss://host:5432/db")
-        assertSame(OpenGaussDialect, DialectRegistry.byName(og.dialectName))
+        assertSame(OpenGaussDialect.INSTANCE, DialectRegistry.INSTANCE.byName(og.dialectName))
         val gdb = DialectInference.infer(null, "jdbc:gaussdb://host:8000/db")
-        assertSame(OpenGaussDialect, DialectRegistry.byName(gdb.dialectName))
+        assertSame(OpenGaussDialect.INSTANCE, DialectRegistry.INSTANCE.byName(gdb.dialectName))
         // 大小写不敏感既有口径
         assertEquals("openGauss", UrlSubprotocolDialects.dialectName("JDBC:OpenGauss://h/db"))
     }

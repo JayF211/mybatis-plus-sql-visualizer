@@ -35,7 +35,8 @@ class McpToolsetShellFactoryTest {
         val major = ((bytes[6].toInt() and 0xFF) shl 8) or (bytes[7].toInt() and 0xFF)
         assertEquals("壳类字节码版本应为 major 61（Java 17）", 61, major)
 
-        val shell = McpToolsetDynamicRegistrar.ShellClassLoader.define(shellName, bytes)
+        // k2j 适配：ShellClassLoader 落为静态嵌套单例（define 为实例方法），经 INSTANCE 直调
+        val shell = McpToolsetDynamicRegistrar.ShellClassLoader.INSTANCE.define(shellName, bytes)
         assertEquals("壳 extends 业务类（工具方法/三钩子全继承）", FakeTool::class.java, shell.superclass)
         assertTrue(
             "壳 implements 指定接口",

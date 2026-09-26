@@ -29,7 +29,7 @@ class XmlInlineSqlPreviewServiceTest : BasePlatformTestCase() {
         xmlFile(
             "<DataSource type=\"SQL\"><statement><![CDATA[SELECT * FROM t WHERE id = ? AND code = ?]]></statement></DataSource>",
         )
-        val result = XmlInlineSqlPreviewService.preview(null, tagNamed("statement"))
+        val result = XmlInlineSqlPreviewService.INSTANCE.preview(null, tagNamed("statement"))
         assertEquals("SQL 原样直显", "SELECT * FROM t WHERE id = ? AND code = ?", result.sql)
         assertNull("无 warning", result.warning)
         assertEquals("两个 ? 占位符", listOf("param1", "param2"), result.unresolvedParams)
@@ -39,14 +39,14 @@ class XmlInlineSqlPreviewServiceTest : BasePlatformTestCase() {
 
     fun test无type按原生直显() {
         xmlFile("<root><statement><![CDATA[DELETE FROM t]]></statement></root>")
-        val result = XmlInlineSqlPreviewService.preview(null, tagNamed("statement"))
+        val result = XmlInlineSqlPreviewService.INSTANCE.preview(null, tagNamed("statement"))
         assertEquals("DELETE FROM t", result.sql)
         assertNull(result.warning)
     }
 
     fun test空文本返回warning() {
         xmlFile("<root><statement>   </statement></root>")
-        val result = XmlInlineSqlPreviewService.preview(null, tagNamed("statement"))
+        val result = XmlInlineSqlPreviewService.INSTANCE.preview(null, tagNamed("statement"))
         assertNotNull("空文本应有 warning", result.warning)
         assertEquals("", result.sql)
     }
@@ -54,7 +54,7 @@ class XmlInlineSqlPreviewServiceTest : BasePlatformTestCase() {
     fun testHQL_project缺席回退原文直显() {
         // project=null 时无法进 SqlPreviewService 管道——必须回退原文直显，不抛错
         xmlFile("<DataSource type=\"HQL\"><statement><![CDATA[SELECT qc.code FROM WmsQuality qc]]></statement></DataSource>")
-        val result = XmlInlineSqlPreviewService.preview(null, tagNamed("statement"))
+        val result = XmlInlineSqlPreviewService.INSTANCE.preview(null, tagNamed("statement"))
         assertEquals("回退原文", "SELECT qc.code FROM WmsQuality qc", result.sql)
     }
 
@@ -75,7 +75,7 @@ class XmlInlineSqlPreviewServiceTest : BasePlatformTestCase() {
         xmlFile(
             "<DataSource type=\"HQL\"><statement><![CDATA[SELECT qc.code FROM WmsQuality qc]]></statement></DataSource>",
         )
-        val result = XmlInlineSqlPreviewService.preview(project, tagNamed("statement"))
+        val result = XmlInlineSqlPreviewService.INSTANCE.preview(project, tagNamed("statement"))
         assertNotNull("HQL 管道应产出结果", result)
         assertTrue("实体名应映射为表名（wms_quality），实际：${result.sql}", result.sql.contains("wms_quality"))
         assertTrue("HQL 属性应映射为列名（code），实际：${result.sql}", result.sql.contains("code"))
@@ -86,7 +86,7 @@ class XmlInlineSqlPreviewServiceTest : BasePlatformTestCase() {
         xmlFile(
             "<DataSource type=\"HQL\"><statement><![CDATA[SELECT qc.code FROM WmsQuality qc]]></statement></DataSource>",
         )
-        val result = XmlInlineSqlPreviewService.preview(project, tagNamed("statement"))
+        val result = XmlInlineSqlPreviewService.INSTANCE.preview(project, tagNamed("statement"))
         assertNotNull(result)
         assertTrue("至少应展示原文，实际：${result.sql}", result.sql.contains("qc.code"))
     }

@@ -298,6 +298,75 @@ public class SqlLogPanelFilterTest extends BasePlatformTestCase {
         assertEquals(List.of("SELECT alpha"), searched.stream().map(LogSqlEntry::restoredSql).toList());
     }
 
+    // ---------- T-SqlSuppress（O-69）：屏蔽规则存量过滤 ----------
+
+    /** 唯一的心跳 SQL 常量（测试间经 manager 清理隔离，防 APP 级单例串台）。 */
+    private final String heartbeatSql = "SELECT HEARTBEAT_69";
+
+    public void testSuppressEmptyKeysPassThrough() throws Exception {
+        List<LogSqlEntry> entries = List.of(entryOfType(StatementType.SELECT, "SELECT 1"));
+        assertEquals(entries, SqlLogPanelKt.filterBySuppress(entries, Set.of()));
+    }
+
+    public void testSuppressFiltersMatchingDedupeKeyOnly() throws Exception {
+        List<LogSqlEntry> entries = List.of(
+                entryOfType(StatementType.SELECT, heartbeatSql),
+                entryOfType(StatementType.SELECT, "SELECT 2"),
+                // 空白变体同指纹（与去重/屏蔽同一规范化口径）——同样被滤
+                entryOfType(StatementType.SELECT, "  " + heartbeatSql + "  "));
+        Set<String> keys = Set.of(LogSqlModelsKt.suppressFingerprint(heartbeatSql));
+        List<LogSqlEntry> filtered = SqlLogPanelKt.filterBySuppress(entries, keys);
+        assertEquals(List.of("SELECT 2"), filtered.stream().map(LogSqlEntry::restoredSql).toList());
+    }
+
+    public void testSuppressRemoveRuleEntryComesBack() throws Exception {
+        Set<String> keys = Set.of(LogSqlModelsKt.suppressFingerprint(heartbeatSql));
+        List<LogSqlEntry> entries = List.of(entryOfType(StatementType.SELECT, heartbeatSql));
+        assertEquals(0, SqlLogPanelKt.filterBySuppress(entries, keys).size());
+        assertEquals("移除规则（空集）后复现", entries, SqlLogPanelKt.filterBySuppress(entries, Set.of()));
+    }
+
+    /**
+     * 全链路（§五 验收 3 / §四 前提 2）：缓冲中已有心跳行 → 注册规则 → refreshList 输出不含匹配行；
+     * 移除规则后复现。真链路：SqlSuppressRuleManager（APP 级）通知 → SqlLogManager 同步缓冲键集
+     * + notifyUi → 面板 refreshList（规则变更必须显式触发——差分只认缓冲快照变化）。
+     */
+    public void testRegisterRuleHidesExistingHeartbeatRowsViaPanelRefresh() throws Exception {
+        SqlLogPanel panel = new SqlLogPanel(getProject(), manager);
+        SqlSuppressRuleManager suppressManager = SqlSuppressRuleManager.getInstance();
+        try {
+            manager.getEntries().addEntry(entryOfType(StatementType.SELECT, heartbeatSql, 0L));
+            manager.getEntries().addEntry(entryOfType(StatementType.SELECT, "SELECT 2", 1L));
+            pumpEdt();
+            assertEquals("屏蔽前 2 条全部展示", 2, panel.getVisibleEntryCount());
+
+            suppressManager.addRule(heartbeatSql);
+            pumpEdt();
+            assertEquals("注册规则后心跳行立即消失（前提 2 显式刷新已接通）", 1, panel.getVisibleEntryCount());
+            assertEquals(List.of("SELECT 2"), panel.getVisibleEntries());
+            assertTrue(
+                    "缓冲仍在（只是隐藏——删除规则后可复现）",
+                    manager.getEntries().snapshot().stream().anyMatch(it -> it.restoredSql().equals(heartbeatSql)));
+
+            suppressManager.removeRule(suppressManager.getRules().stream()
+                    .filter(it -> it.getPattern().equals(heartbeatSql)).findFirst().orElseThrow().getId());
+            pumpEdt();
+            assertEquals("移除规则后存量行复现", 2, panel.getVisibleEntryCount());
+        } finally {
+            // APP 级单例跨测试类共享（分片 JVM 复用）——必须清理，防后续测试类被殃及
+            suppressManager.clearRules();
+            panel.dispose();
+        }
+    }
+
+    /**
+     * 泵空 EDT 队列（DedupeToggleTest 同款）：manager.notifyUi 用 invokeLater 调度刷新，
+     * headless 测试必须 dispatchAllInvocationEvents 才能让列表刷新执行（invokeAndWait 空任务不够）。
+     */
+    private void pumpEdt() {
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents();
+    }
+
     /** 等待 EDT 调度完成。 */
     private void waitForEdt() {
         ApplicationManager.getApplication().invokeAndWait(() -> {

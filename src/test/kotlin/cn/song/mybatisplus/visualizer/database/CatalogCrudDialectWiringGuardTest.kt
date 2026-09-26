@@ -27,10 +27,10 @@ class CatalogCrudDialectWiringGuardTest {
     private fun repoRoot(): File {
         var dir: File? = File(System.getProperty("user.dir")).absoluteFile
         while (dir != null) {
-            if (File(dir, "src/main/kotlin").isDirectory) return dir
+            if (File(dir, "src/main/java").isDirectory) return dir
             dir = dir.parentFile
         }
-        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
+        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
     }
 
     private val callSite = Regex("""currentDialect\s*\(""")
@@ -38,7 +38,7 @@ class CatalogCrudDialectWiringGuardTest {
     @Test
     fun `目录来源适配器解析方言时必须传项目上下文`() {
         val root = repoRoot()
-        val file = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/database/DbTableSpecAdapter.kt")
+        val file = File(root, "src/main/java/cn/song/mybatisplus/visualizer/database/DbTableSpecAdapter.java")
         assertTrue("守卫目标文件不存在（路径已变，扫描规则失效）：${file.path}", file.isFile)
         val text = file.readText()
         val offenders = mutableListOf<String>()

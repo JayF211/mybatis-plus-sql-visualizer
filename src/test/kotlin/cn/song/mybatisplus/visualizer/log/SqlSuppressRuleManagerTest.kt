@@ -31,8 +31,8 @@ class SqlSuppressRuleManagerTest {
         assertTrue("自动分配 id", rule.id.isNotBlank())
         assertTrue("记录创建时间", rule.createdAt > 0)
         // 运行时匹配集：pattern 指纹
-        assertEquals(setOf(sqlFingerprint("SELECT 1")), m.suppressedKeys)
-        assertTrue(m.isSuppressed(sqlFingerprint("SELECT 1")))
+        assertEquals(setOf(LogSqlModelsKt.sqlFingerprint("SELECT 1")), m.suppressedKeys)
+        assertTrue(m.isSuppressed(LogSqlModelsKt.sqlFingerprint("SELECT 1")))
     }
 
     @Test
@@ -61,13 +61,13 @@ class SqlSuppressRuleManagerTest {
         m.addRule("SELECT 1")
         m.addRule("SELECT 2")
         var notified = 0
-        val listener = { notified += 1 }
+        val listener = Runnable { notified += 1 }
         m.addListener(listener)
         val id1 = m.rules.first { it.pattern == "SELECT 1" }.id
         m.removeRule(id1)
         assertEquals(1, notified)
         assertEquals(listOf("SELECT 2"), m.rules.map { it.pattern })
-        assertFalse(m.isSuppressed(sqlFingerprint("SELECT 1")))
+        assertFalse(m.isSuppressed(LogSqlModelsKt.sqlFingerprint("SELECT 1")))
         m.removeRule("不存在的id")
         assertEquals("删不到东西不发通知", 1, notified)
         m.removeListener(listener)
@@ -92,8 +92,8 @@ class SqlSuppressRuleManagerTest {
         // 规范化 = trim + 连续空白折叠单空格；大小写与分号不动（既有口径，勿漂移）
         assertTrue(
             "多空白/首尾空白变体的指纹与规则指纹相同",
-            sqlFingerprint(normalizeSqlWhitespace("  SELECT   1  ")) ==
-                sqlFingerprint(normalizeSqlWhitespace("SELECT 1")),
+            LogSqlModelsKt.sqlFingerprint(LogSqlModelsKt.normalizeSqlWhitespace("  SELECT   1  ")) ==
+                LogSqlModelsKt.sqlFingerprint(LogSqlModelsKt.normalizeSqlWhitespace("SELECT 1")),
         )
     }
 
@@ -104,10 +104,10 @@ class SqlSuppressRuleManagerTest {
         val m = newManager()
         m.addRule("SELECT 1")
         assertNotEquals(
-            sqlFingerprint("SELECT 1"),
-            sqlFingerprint("select 1"),
+            LogSqlModelsKt.sqlFingerprint("SELECT 1"),
+            LogSqlModelsKt.sqlFingerprint("select 1"),
         )
-        assertFalse(m.isSuppressed(sqlFingerprint("select 1")))
+        assertFalse(m.isSuppressed(LogSqlModelsKt.sqlFingerprint("select 1")))
         // 大小写变体可各自成规则（去重按规范化文本，非大小写折叠）
         assertEquals(SqlSuppressRuleManager.AddResult.ADDED, m.addRule("select 1"))
         assertEquals(2, m.rules.size)
@@ -122,20 +122,20 @@ class SqlSuppressRuleManagerTest {
         assertEquals(SqlSuppressRuleManager.AddResult.ADDED, m.addRule("SELECT 1;"))
         assertTrue(
             "不带分号的日志形态命中带分号规则",
-            m.isSuppressed(suppressFingerprint("SELECT 1")),
+            m.isSuppressed(LogSqlModelsKt.suppressFingerprint("SELECT 1")),
         )
         assertTrue(
             "带分号规则自身指纹同样在集（对称）",
-            m.isSuppressed(suppressFingerprint("SELECT 1;")),
+            m.isSuppressed(LogSqlModelsKt.suppressFingerprint("SELECT 1;")),
         )
         // 字面量内分号不影响既有命中（语义不外溢）
         m.addRule("SELECT * FROM t WHERE s = 'a;b'")
         assertTrue(
-            m.isSuppressed(suppressFingerprint("SELECT * FROM t WHERE s = 'a;b'")),
+            m.isSuppressed(LogSqlModelsKt.suppressFingerprint("SELECT * FROM t WHERE s = 'a;b'")),
         )
         assertFalse(
             "形状不同的语句不因分号剥离被误吞",
-            m.isSuppressed(suppressFingerprint("SELECT * FROM t WHERE s = 'a'")),
+            m.isSuppressed(LogSqlModelsKt.suppressFingerprint("SELECT * FROM t WHERE s = 'a'")),
         )
     }
 
@@ -148,21 +148,21 @@ class SqlSuppressRuleManagerTest {
             m.addRule("SELECT * FROM biz_project_member WHERE plan_id IN ('PLAN_2026001')"),
         )
         val rule = m.rules.single()
-        val nextDay = suppressFingerprint("SELECT * FROM biz_project_member WHERE plan_id IN ('PLAN_2026002')")
+        val nextDay = LogSqlModelsKt.suppressFingerprint("SELECT * FROM biz_project_member WHERE plan_id IN ('PLAN_2026002')")
         assertFalse("默认精确口径：参数值不同不命中（opt-in 前置）", m.isSuppressed(nextDay))
 
         m.setStructureMatch(rule.id, true)
         assertTrue(
             "开启后同形状不同参数值命中",
-            m.isSuppressed(structureFingerprint("SELECT * FROM biz_project_member WHERE plan_id IN ('PLAN_2026002')")),
+            m.isSuppressed(LogSqlModelsKt.structureFingerprint("SELECT * FROM biz_project_member WHERE plan_id IN ('PLAN_2026002')")),
         )
         assertFalse(
             "不同形状仍不命中",
-            m.isSuppressed(structureFingerprint("SELECT * FROM biz_project_member WHERE plan_id IN ('PLAN_2026002') AND removed = 0")),
+            m.isSuppressed(LogSqlModelsKt.structureFingerprint("SELECT * FROM biz_project_member WHERE plan_id IN ('PLAN_2026002') AND removed = 0")),
         )
         // 关闭回落精确口径
         m.setStructureMatch(rule.id, false)
-        assertFalse(m.isSuppressed(structureFingerprint("SELECT * FROM biz_project_member WHERE plan_id IN ('PLAN_2026002')")))
+        assertFalse(m.isSuppressed(LogSqlModelsKt.structureFingerprint("SELECT * FROM biz_project_member WHERE plan_id IN ('PLAN_2026002')")))
         // 未知 id：no-op 返回 null
         assertNull(m.setStructureMatch("no-such-id", true))
     }
@@ -173,18 +173,18 @@ class SqlSuppressRuleManagerTest {
         m.addRule("SELECT 1")
         m.addRule("SELECT 2")
         m.setStructureMatchAll(true)
-        assertTrue(m.rules.all { it.structureMatch })
+        assertTrue(m.rules.all { it.isStructureMatch() })
         assertTrue(
-            m.isSuppressed(structureFingerprint("SELECT 999")),
+            m.isSuppressed(LogSqlModelsKt.structureFingerprint("SELECT 999")),
         )
         // roundtrip：structureMatch 随 XmlSerializer 状态保持
         val restored = SqlSuppressRuleManager()
         restored.loadState(m.getState())
-        assertTrue(restored.rules.all { it.structureMatch })
+        assertTrue(restored.rules.all { it.isStructureMatch() })
         // 批量关：全回落精确口径
         m.setStructureMatchAll(false)
-        assertTrue(m.rules.none { it.structureMatch })
-        assertFalse(m.isSuppressed(structureFingerprint("SELECT 999")))
+        assertTrue(m.rules.none { it.isStructureMatch() })
+        assertFalse(m.isSuppressed(LogSqlModelsKt.structureFingerprint("SELECT 999")))
     }
 
     // ---------- 上限（§五 验收 4 / D6） ----------
@@ -214,12 +214,12 @@ class SqlSuppressRuleManagerTest {
         m.addRule("SELECT 1")
         val rule = m.rules.single()
         assertEquals(0, m.hitCount(rule.id))
-        m.recordHit(sqlFingerprint("SELECT 1"))
-        m.recordHit(sqlFingerprint("SELECT 1"))
-        m.recordHit(sqlFingerprint("SELECT 999")) // 未命中任何规则的键
+        m.recordHit(LogSqlModelsKt.sqlFingerprint("SELECT 1"))
+        m.recordHit(LogSqlModelsKt.sqlFingerprint("SELECT 1"))
+        m.recordHit(LogSqlModelsKt.sqlFingerprint("SELECT 999")) // 未命中任何规则的键
         assertEquals(2, m.hitCount(rule.id))
         m.removeRule(rule.id)
-        m.recordHit(sqlFingerprint("SELECT 1")) // 规则已删 → 索引无键 → 静默跳过
+        m.recordHit(LogSqlModelsKt.sqlFingerprint("SELECT 1")) // 规则已删 → 索引无键 → 静默跳过
         assertEquals("删除后不再归账", 2, m.hitCount(rule.id))
     }
 
@@ -229,7 +229,8 @@ class SqlSuppressRuleManagerTest {
     fun `增删清都发布通知且订阅者读到新键集`() {
         val m = newManager()
         val observedSizes = mutableListOf<Int>()
-        val listener = {
+        // k2j 适配：addListener 收 Java SAM（Runnable），lambda 字面量直接作构造实参
+        val listener = Runnable {
             observedSizes.add(m.suppressedKeys.size)
             Unit
         }
@@ -267,7 +268,7 @@ class SqlSuppressRuleManagerTest {
             source.suppressedKeys,
             restored.suppressedKeys,
         )
-        assertTrue(restored.isSuppressed(sqlFingerprint(normalizeSqlWhitespace("  SELECT   1  "))))
+        assertTrue(restored.isSuppressed(LogSqlModelsKt.sqlFingerprint(LogSqlModelsKt.normalizeSqlWhitespace("  SELECT   1  "))))
     }
 
     @Test
@@ -282,9 +283,12 @@ class SqlSuppressRuleManagerTest {
     @Test
     fun `规则bean_摘要截断与ensureId幂等`() {
         val rule = SqlSuppressRule(
-            pattern = "SELECT " + "x".repeat(200),
-            sampleSql = "SELECT x",
-            createdAt = 1L,
+            // k2j 适配：Java 无默认参数——id/structureMatch 显式补默认值
+            "", // id（空白由 ensureId 分配）
+            "SELECT " + "x".repeat(200),
+            "SELECT x",
+            1L,
+            false,
         )
         rule.ensureId()
         val firstId = rule.id

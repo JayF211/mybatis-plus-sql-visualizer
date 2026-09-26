@@ -28,11 +28,11 @@ class XmlPreviewModelForeachItemTest {
 
     private fun model(
         paramTypes: Map<String, ParamTypeInfo> = mapOf(
-            "statusList" to ParamTypeInfo(ParamKind.COLLECTION, elementKind = ParamKind.NUMBER),
+            "statusList" to ParamTypeInfo(ParamKind.COLLECTION, true, ParamKind.NUMBER),
         ),
         paramQuotes: Map<String, Boolean> = emptyMap(),
     ): XmlPreviewModel = XmlMapperParser().parse(mapper).let {
-        XmlPreviewModel.from(it.statements.single(), it.errors, paramQuotes = paramQuotes, paramTypes = paramTypes)
+        XmlPreviewModel.from(it.statements.single(), it.errors, setOf(), mapOf(), mapOf(), paramQuotes, paramTypes)
     }
 
     @Test
@@ -46,7 +46,7 @@ class XmlPreviewModelForeachItemTest {
     @Test
     fun `TEXT元素仍引号`() {
         val m = model(
-            mapOf("statusList" to ParamTypeInfo(ParamKind.COLLECTION, elementKind = ParamKind.TEXT)),
+            mapOf("statusList" to ParamTypeInfo(ParamKind.COLLECTION, true, ParamKind.TEXT)),
         )
         assertEquals("TEXT 元素保持引号", true, m.quoteFor("__frch_st_0"))
         assertEquals(ParamKind.TEXT, m.kindFor("__frch_st_0"))

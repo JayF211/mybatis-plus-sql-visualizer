@@ -40,7 +40,7 @@ class DialectInferenceTest {
             "MySQL", "MariaDB", "PostgreSQL", "Oracle", "SQL Server", "H2", "SQLite",
             "DM（达梦）", "KingBase（人大金仓）", "OceanBase", "openGauss",
         ).forEach { name ->
-            assertEquals(name, DialectRegistry.byName(name).name)
+            assertEquals(name, DialectRegistry.INSTANCE.byName(name).name)
         }
     }
 

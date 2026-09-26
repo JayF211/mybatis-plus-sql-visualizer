@@ -28,7 +28,7 @@ class DialectRenderDumpTest {
         val out = File(dir)
         out.mkdirs()
         val mapper = ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT)
-        for (dialect in DialectRegistry.dialects) {
+        for (dialect in DialectRegistry.INSTANCE.dialects) {
             mapper.writeValue(File(out, dumpFileName(dialect) + ".json"), RenderSet.of(dialect))
         }
     }
@@ -43,7 +43,7 @@ object RenderSet {
 
     fun of(dialect: Dialect): Map<String, Any?> {
         val q = dialect::quoteIdentifier
-        val multiRowValues = !(dialect === OracleDialect || dialect === DmDialect)
+        val multiRowValues = !(dialect === OracleDialect.INSTANCE || dialect === DmDialect.INSTANCE)
         val upsertNative = dialect.renderUpsert("id", listOf("name")) != null ||
             dialect.renderUpsertStatement("t", listOf("id", "name"), "id") != null
 

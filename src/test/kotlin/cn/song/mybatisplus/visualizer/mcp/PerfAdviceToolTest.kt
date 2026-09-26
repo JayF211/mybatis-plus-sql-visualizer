@@ -83,7 +83,8 @@ class PerfAdviceToolTest {
     fun `单条文案超预算_截断加省略号`() {
         // 未知键兜底返回键名 = 稳定的超长文案（messageEn 契约）
         val longKey = "z".repeat(SqlVisualizerPerfAdviceTool.MAX_ADVICE_CHARS + 50)
-        val output = SqlVisualizerPerfAdviceTool().renderFindings(listOf(finding("r", PerfSeverity.WARN).copy(messageKey = longKey)))
+        // k2j 适配：PerfWarning 为 Java 类无 data class copy()，按「同 ruleId/severity + 换 messageKey」直接构造（语义同 master copy）
+        val output = SqlVisualizerPerfAdviceTool().renderFindings(listOf(PerfWarning("r", PerfSeverity.WARN, longKey)))
         assertTrue(
             "含截断形态: $output",
             output.contains("z".repeat(SqlVisualizerPerfAdviceTool.MAX_ADVICE_CHARS) + "…"),

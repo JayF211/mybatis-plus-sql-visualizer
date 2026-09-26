@@ -13,7 +13,7 @@ import org.junit.Test
 class ConnectionErrorClassifierTest {
 
     private fun info(msg: String, sqlState: String? = null, errorCode: Int? = null) =
-        ExecutionErrorInfo(message = msg, sqlState = sqlState, errorCode = errorCode)
+        ExecutionErrorInfo(msg, sqlState, errorCode, null, null, null, null)
 
     // ---------- 分类器：SQLState 路 ----------
 

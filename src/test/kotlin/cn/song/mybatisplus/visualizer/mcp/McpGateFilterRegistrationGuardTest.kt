@@ -41,9 +41,12 @@ class McpGateFilterRegistrationGuardTest {
         assertTrue(
             McpGateFilterEpRegistrar::class.java.name.endsWith("McpGateFilterEpRegistrar"),
         )
-        val registrarSrc = File("src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpGateFilterRegistrar.kt").readText()
+        // k2j 适配：master 的 McpGateFilterRegistrar.kt（class + object 同文件）在 Java 侧拆为
+        // McpGateFilterRegistrar.java（ProjectActivity 入口）与 McpGateFilterEpRegistrar.java
+        // （探测+注册本体）两件——Class.forName 探针锚点随拆分下沉到 Ep 文件（FILTER_IFACE_FQN 常量）。
+        val registrarSrc = File("src/main/java/cn/song/mybatisplus/visualizer/mcp/McpGateFilterEpRegistrar.java").readText()
         assertTrue("Class.forName 探针必须在册", registrarSrc.contains("com.intellij.mcpserver.McpToolFilterProvider"))
-        val bridgeSrc = File("src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpGateFilterEpBridge.kt").readText()
+        val bridgeSrc = File("src/main/java/cn/song/mybatisplus/visualizer/mcp/McpGateFilterEpBridge.java").readText()
         assertTrue("EP 名 ldc 依据必须在册", bridgeSrc.contains("com.intellij.mcpServer.mcpToolFilterProvider"))
     }
 }

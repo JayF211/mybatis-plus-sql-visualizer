@@ -81,7 +81,7 @@ class PremainTaskScopeTest {
     fun 任务名归一化_空白与空段不参与判定() {
         // 空白/空段归一化后丢弃，不产生任何族命中
         assertEquals(
-            PremainTaskScope.Decision.Inject,
+            PremainTaskScope.Decision.Inject.INSTANCE,
             PremainTaskScope.decide(true, listOf(" ", "", "  ", "bootRun")),
         )
         assertEquals(
@@ -100,7 +100,8 @@ class PremainTaskScopeTest {
     @Test
     fun 注入单例与既有四闸门决策核无类型纠缠() {
         // Inject 是单例：范围闸门 skip 不携带端口类载荷，注入与否由 AgentManager 四闸门续判
-        assertEquals(PremainTaskScope.Decision.Inject, PremainTaskScope.decide(false, listOf("test")))
-        assertEquals(PremainTaskScope.Decision.Inject, PremainTaskScope.decide(true, listOf("bootRun")))
+        // （k2j 适配：Kotlin object → Java 单例，值引用走 INSTANCE）
+        assertEquals(PremainTaskScope.Decision.Inject.INSTANCE, PremainTaskScope.decide(false, listOf("test")))
+        assertEquals(PremainTaskScope.Decision.Inject.INSTANCE, PremainTaskScope.decide(true, listOf("bootRun")))
     }
 }

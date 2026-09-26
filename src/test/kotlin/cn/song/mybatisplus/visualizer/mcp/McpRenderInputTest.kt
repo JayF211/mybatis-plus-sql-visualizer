@@ -100,15 +100,15 @@ class McpRenderInputTest {
         val (parsed, error) = McpRenderInput.parse("src/main/java/A.java", 12, null, null)
         assertNull(error)
         assertNotNull(parsed)
-        assertEquals("src/main/java/A.java", parsed?.filePath)
-        assertEquals(12, parsed?.line)
+        assertEquals("src/main/java/A.java", parsed?.filePath())
+        assertEquals(12, parsed?.line())
     }
 
     @Test
     fun `路径形态_行号缺省与非法`() {
         val (noLine, e1) = McpRenderInput.parse("a.xml", null, null, null)
         assertNull(e1)
-        assertNull("line=null 表示取首个语句", noLine?.line)
+        assertNull("line=null 表示取首个语句", noLine?.line())
 
         val (_, e2) = McpRenderInput.parse("a.xml", -1, null, null)
         assertTrue(e2!!.startsWith("[${McpToolErrors.INVALID_ARGUMENT}]"))
@@ -120,8 +120,8 @@ class McpRenderInputTest {
     fun `片段形态_仅xml_mapper`() {
         val (parsed, error) = McpRenderInput.parse(null, null, "<select id=\"q\">SELECT 1</select>", "xml_mapper")
         assertNull(error)
-        assertEquals("xml_mapper", parsed?.sourceType)
-        assertEquals("<select id=\"q\">SELECT 1</select>", parsed?.xmlSnippet)
+        assertEquals("xml_mapper", parsed?.sourceType())
+        assertEquals("<select id=\"q\">SELECT 1</select>", parsed?.xmlSnippet())
 
         val (_, err) = McpRenderInput.parse(null, null, "<select/>", "java_snippet")
         assertNotNull("java 片段不支持应报 INVALID_ARGUMENT", err)
@@ -142,8 +142,8 @@ class McpRenderInputTest {
     fun `路径形态优先于片段`() {
         val (parsed, error) = McpRenderInput.parse("a.xml", 3, "<select/>", "xml_mapper")
         assertNull(error)
-        assertEquals("a.xml", parsed?.filePath)
-        assertNull(parsed?.xmlSnippet)
+        assertEquals("a.xml", parsed?.filePath())
+        assertNull(parsed?.xmlSnippet())
     }
 
     @Test

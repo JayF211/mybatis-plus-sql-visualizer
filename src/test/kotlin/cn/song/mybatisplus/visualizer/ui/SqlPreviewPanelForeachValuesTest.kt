@@ -59,9 +59,11 @@ class SqlPreviewPanelForeachValuesTest : BasePlatformTestCase() {
 
     private fun openPanel(): SqlPreviewPanel {
         val parsed = XmlMapperParser().parse(mapper)
+        // k2j 适配：from 为 Java 7 参全量（paramTypes 落末位）；ParamTypeInfo 3 组件 record 无具名实参
         val model = XmlPreviewModel.from(
-            parsed.statements.single(), parsed.errors,
-            paramTypes = mapOf("statusList" to ParamTypeInfo(ParamKind.COLLECTION, elementKind = ParamKind.NUMBER)),
+            parsed.statements().single(), parsed.errors(),
+            emptySet(), emptyMap(), emptyMap(), emptyMap(),
+            mapOf("statusList" to ParamTypeInfo(ParamKind.COLLECTION, true, ParamKind.NUMBER)),
         )
         val rendered = model.renderSql()
         val p = SqlPreviewPanel(project)
@@ -69,13 +71,27 @@ class SqlPreviewPanelForeachValuesTest : BasePlatformTestCase() {
         Disposer.register(testRootDisposable, p)
         p.showResult(
             PreviewResult(
-                sql = rendered.sql,
-                compactSql = rendered.sql.replace(Regex("\\s+"), " ").trim(),
-                unresolvedParams = rendered.mappings.map { it.property },
-                paramTable = ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
-                wrapperType = null,
-                tableName = null,
-                xmlModel = model,
+                // k2j 适配：20 参位置构造
+                rendered.sql(),
+                rendered.sql().replace(Regex("\\s+"), " ").trim(),
+                rendered.mappings().map { it.property() },
+                ParameterReplacer.buildParamTable(rendered.mappings().map { it.property() }),
+                null,
+                null,
+                null,
+                emptyList(),
+                emptyMap(),
+                null,
+                null,
+                emptyList(),
+                emptyList(),
+                null,
+                model,
+                emptyMap(),
+                null,
+                null,
+                null,
+                null,
             )
         )
         return p

@@ -53,30 +53,34 @@ class ConsoleSettleFlushTest : BasePlatformTestCase() {
     private fun newContext(): BridgeLineContext {
         val cfg = ParserConfig("Preparing:", "Parameters:", true, 20000)
         return BridgeLineContext(
-            myBatisParser = MyBatisLogParser(
-                sqlPrefix = cfg.sqlPrefix,
-                paramPrefix = cfg.paramPrefix,
-                mixedPrefix = cfg.mixedPrefix,
-                maxParseLength = cfg.maxParseLength,
+            // k2j 适配：生产为 Java 类，构造器禁具名实参
+            MyBatisLogParser(
+                cfg.sqlPrefix,
+                cfg.paramPrefix,
+                cfg.mixedPrefix,
+                cfg.maxParseLength,
             ),
-            hibernateParser = HibernateLogParser(
-                sqlPrefix = cfg.hibernateSqlPrefix,
-                paramPrefix = cfg.hibernateParamPrefix,
-                mixedPrefix = cfg.mixedPrefix,
-                maxParseLength = cfg.maxParseLength,
+            HibernateLogParser(
+                cfg.hibernateSqlPrefix,
+                cfg.hibernateParamPrefix,
+                cfg.mixedPrefix,
+                cfg.maxParseLength,
             ),
-            jdbcParser = JdbcTemplateLogParser(
-                enabled = cfg.jdbcEnabled,
-                maxParseLength = cfg.maxParseLength,
-                clock = { fakeNow },
+            // k2j 适配：Java 无默认参数——restorer/settleMs 显式补参（master 具名默认形态走 5 参全参构造）
+            JdbcTemplateLogParser(
+                LogSqlRestorer(),
+                cfg.jdbcEnabled,
+                cfg.maxParseLength,
+                JdbcTemplateLogParser.DEFAULT_SETTLE_MS,
+                { fakeNow },
             ),
-            configProvider = { cfg },
-            hibernateEnabled = cfg.hibernateEnabled,
+            { cfg },
+            cfg.hibernateEnabled,
         )
     }
 
     private fun feed(ctx: BridgeLineContext, vararg lines: String): List<LogSqlEntry> =
-        lines.flatMap { processConsoleLine(it, ctx, null, {}) }
+        lines.flatMap { SqlLogConsoleBridgeKt.processConsoleLine(it, ctx, null, {}) }
 
     /**
      * 主场景：两条语句分属 `exec-1`/`exec-2`，都没有 TRACE 参数行、线程此后不再有行。
