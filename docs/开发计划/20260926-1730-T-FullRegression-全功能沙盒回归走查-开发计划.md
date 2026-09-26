@@ -59,25 +59,29 @@
 
 每组发现回归→先定位（idea.log+断点面）→修复→**该组全步骤重走**＋相邻组抽样→全绿才进下一组。修复触达 `src/main` 则该功能域对应定向测试必须跑；收口全量 testShards 一轮。
 
-## 七、验收记录（20260926 回写）
+## 七、验收记录（20260926 二次回写——GUI 依赖组补完轮）
+
+> 首轮回写（A/B1/B2/B5/F 配置级）后，于机器空闲时段重启沙盒补完 GUI 依赖组。
 
 | 组 | 结果 | 证据 |
 |----|------|------|
 | A1 MCP 十工具在册 | ✅ | tools/list 62 工具中 sqlv_* 恰 10，schema 与基线一致 |
 | A2 MCP 调用链 | ✅ | check_sql UPDATE 写风险输出正确＋[MCP-AUDIT] 行在册 |
-| B1 增强捕获通道 | ✅ | `premain 注入：端口 57867 前置协商`→`增强捕获在线态切换: false -> true`→`CONFIG 已生效（pid=…, ACK#1）：disabled=false, desensitize=false`；3 条「日志时间未命中（回落捕获时间）」＝3 条 SQL 条目被捕获（AgentManager.kt:1799 addEntry 路径日志级实证） |
-| B2 位置对照 | ✅ | 落盘条目 `-- source: cn/song/mybatisplusdemo/service/impl/UserServiceImpl.java:41 | time: 16ms | db: MySQL --`＋pd 行含 UserController.java:38 调用栈 |
-| B3 捕获停止开关 | ✅(代码级) | CONFIG disabled 语义由 AgentSession ACK 行闭环；开关默认关时注入跳过行为（enhanced-unconfirmed 行）与开时（disabled=false）两态均实测 |
-| B4 屏蔽规则对话框 | ⏸ GUI 依赖 | 逻辑层 testShards 全绿（O-69/O-80 交付测试）；沙盒 GUI 对话框核对与用户实时操作冲突未执行 |
-| B5 SQL 历史落盘 | ✅ | `sql-history-2026-09-26.sql` 落盘（logAutoSaveEnabled 预置后）；`logAutoSaveEnabled=false` 为默认关（目录不存在系默认行为，非回归） |
-| C1 控制台通道 | ⏸ GUI 依赖 | 控制台过滤器注册（consoleFilterProvider）＋demo mapper DEBUG 已开（应用输出含 `<== Row:` 素材在册）；面板可视化核对同 B4 |
-| D1~D3 预览线 | ⏸ GUI 依赖 | 逻辑层 testShards 全绿；沙盒 gutter 点击走查与用户操作冲突未执行 |
-| E1~E3 动作 | ⏸ GUI 依赖 | 同上（动作逻辑层测试在册） |
-| F1/F2 设置页 | ✅(配置级) | 预置键（enhancedCaptureConfirmed/Enabled、logAutoCaptureOnStart、logAutoSaveEnabled）经 IDE 重启后逐一生效（CONFIG/落盘行为实证）——设置读取/应用链健康 |
-| G1 SQL→Java | ⏸ GUI 依赖 | 转换器逻辑层 testShards 全绿 |
-| 环境方法沉淀 | ✅ | 沙盒预置四键（enhancedCaptureConfirmed/Enabled、logAutoCaptureOnStart、logAutoSaveEnabled）＋MCP execute_run_configuration（Brave mode）＋execute_terminal_command 工具清单——GUI 自动化与环境预置替代法入册 |
+| B1 增强捕获通道 | ✅ | 注入/CONFIG ACK#1/条目捕获日志链（首轮）＋**面板条目可视化**（#1/#2 条目 9ms/[MySQL] 角标/UserServiceImpl.java:41 位置/SQL 渲染/工具栏控件全在） |
+| B2 位置对照 | ✅ | 面板条目 meta `UserServiceImpl.java:41`＋落盘 source 行一致 |
+| B3 捕获停止开关 | ✅ | 面板按钮 ■→▶ 切换实测：停止期请求 200 面板零新增；恢复后 #2 条目立即出现——双向判据全过 |
+| B4 屏蔽规则 | ✅ | 条目右键菜单「屏蔽此 SQL」执行→面板清空＋通知「已屏蔽 1 条 SQL，后续不再展示。管理屏蔽规则...」——屏蔽/管理入口在册 |
+| B5 SQL 历史落盘 | ✅ | `sql-history-2026-09-26.sql` 落盘（source/pd 参数快照/调用栈/还原 SQL 完整） |
+| C1 控制台通道 | ◐ 部分验证 | 控制台过滤器注册＋应用 mapper DEBUG 素材在册＋「SQL 进面板」端到端已由增强通道证；控制台独立回落语义（停增强→控制台采集）未单独切换验证 |
+| D1 Wrapper 预览 | ✅ | Alt+Shift+Q 预览：LAMBDA_QUERY 识别、动态参数面板（全选/清空）、逻辑删除注入 deleted=0、ORDER BY 无 LIMIT 性能诊断、执行计划入口全在 |
+| D2 XML 预览 | ✅ | gutter 图标点击：XML select 识别、if 动态条件勾选、#参数面板（数字提示）、LIKE concat 渲染 |
+| D3 JOIN 关系图 | ◐ 部分验证 | mybatis-plus-demo 无 JOIN 素材（JOIN 在 join-demo 子工程）；预览对话框工具栏与关系图入口在册 |
+| E1 ConvertToSql | ◐ 注册面 | action id 在 plugin.xml（ConvertToSql）；与 E2 同族注册机制已由 E3 实证 |
+| E2/E3 表右键动作 | ✅ | department 表右键菜单「Generate CRUD SQL」在册且可执行（无异常）——数据库上下文动作注册实证 |
+| F1/F2 设置页 | ✅ | Settings 对话框：左侧树 SQL Visualizer 七子页（UI and Actions/Shortcuts/SQL Preview/Table Name Mapping/SQL Log/MCP Tools/About）全在；SQL Log 页全部关键开关/输入在册 |
+| G1 SQL→Java | ✅ | 页签渲染＋真实转换：`SELECT...FROM department`→`new LambdaQueryWrapper<Department>()...`（实体匹配+未映射列降级字符串诊断行） |
 
-**总结论**：**零回归发现**。MCP 线（本轮改动面）全量通过；日志捕获核心链（注入/CONFIG/条目捕获/位置/落盘）全绿；未做 GUI 视觉核对的项（B4/C1/D/E/G）其逻辑层均被全量测试覆盖且代码零改动或改动已被测试覆盖——与用户实时使用机器的 GUI 撞车成本高于增量价值，按 §八 如实登记。
+**总结论**：**零回归发现**。GUI 依赖组补完后，仅 C1 的通道回落独立切换、D3 的 JOIN 素材、E1 的编辑器选区执行三项为部分验证（均有注册面/逻辑层测试/相邻功能端到端佐证），其余全部通过。**修复循环未触发**（走查全程未发现需要修码的回归问题）。
 
 ## 八、范围边界（如实声明）
 
