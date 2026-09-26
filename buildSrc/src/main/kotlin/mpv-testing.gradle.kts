@@ -149,10 +149,18 @@ val fastBucketClasses: List<String> = testFileEntries
 // T-TestPerf6：S3 外部进程型护栏桶——签名护栏类对本机发行版逐个起外部 JBR JVM 核验，
 // 不需要平台沙盒（testFast 非沙盒 JVM 定向全绿实证，20260926）；从分片类集摘出后与 4 片
 // 并行执行（桶内 invokeAll 池并行核验 + 桶与分片并发），护栏族扩容不再挤占片墙钟。
-// AcpSignatureCrossVersionTest 暂留分片（未做非沙盒验证，保守；验证通过后可移入本名单）。
+// T-TestPerf7 S1 扩容四类（20260927，桶内单跑行为验证绿后入册）：AcpSignature（纯 JUnit 声明，
+// 源文本 com.intellij 均为字面量非 import，T6 留尾巴「验证通过后移入」）+ S2 快照化三类守卫
+// （源码扫描守卫，repoRoot 走 user.dir 上溯，Gradle Test 工作目录=项目根同样满足；
+// EnumReachability 本就是 testFast 桶成员=日常非沙盒实证）。全部红则回退留分片（68 例隐性
+// 平台依赖教训口径），分片 execSum 相应 −19s 档。
 val testExternalClasses = setOf(
     "cn.song.mybatisplus.visualizer.mcp.McpDbSignatureCrossVersionTest",
     "cn.song.mybatisplus.visualizer.update.PlatformSignatureCrossVersionTest",
+    "cn.song.mybatisplus.visualizer.acp.AcpSignatureCrossVersionTest",
+    "cn.song.mybatisplus.visualizer.config.SettingsRealityGuardTest",
+    "cn.song.mybatisplus.visualizer.convention.BannedApiSourceScanTest",
+    "cn.song.mybatisplus.visualizer.convention.EnumReachabilityGuardTest",
 )
 
 tasks.register<Test>("testExternal") {
