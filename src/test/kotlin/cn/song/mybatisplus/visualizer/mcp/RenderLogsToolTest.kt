@@ -35,6 +35,6 @@ class RenderLogsToolTest {
     @Test
     fun `空输入走预期错误`() {
         val error = runCatching { SqlVisualizerRenderLogsTool().renderLogs("  ") }.exceptionOrNull()
-        assertTrue("空输入应抛 McpExpectedError", error is com.intellij.mcpserver.McpExpectedError)
+        assertTrue("空输入应抛 SqlvExpectedToolException", error is SqlvExpectedToolException)
     }
 }

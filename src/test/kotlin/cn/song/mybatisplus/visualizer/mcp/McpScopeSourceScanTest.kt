@@ -63,6 +63,30 @@ class McpScopeSourceScanTest {
     }
 
     @Test
+    fun testMcpCoreApiReferencesAreAnnotationOrStringOnly() {
+        // T-McpDynamicToolset（20260926 审核拒绝轮）：MCP 核心 API（McpToolset/McpExpectedError/
+        // McpCallInfoKt）在 243/251 的 mcpServer 旧形态中不存在——任何编译期类型引用都会成为
+        // verifier compatibility problems（拒绝主因）。核心 API 只允许以 Class.forName 字符串
+        // （stripStrings 剥除）或 annotations 子包（@McpTool 等，243/251 实证可解析）存在。
+        val offenders = repoRoot().resolve("src/main/kotlin/cn/song/mybatisplus/visualizer/mcp")
+            .walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .map { it.name to stripStrings(stripComments(it.readText())) }
+            .filter { (_, text) -> coreApiRefMarker.containsMatchIn(text) }
+            .map { (name, _) -> name }
+            .toList()
+        assertTrue(
+            "mcp 包内出现核心 API 编译期引用：$offenders。只允许 annotations 子包注解与" +
+                "字符串反射（McpExpectedBridge/McpToolsetDynamicRegistrar 模式）——真类型引用会" +
+                "重新引入 243/251 兼容问题（见 dev-support/verifier-marketplace-baseline.txt）",
+            offenders.isEmpty(),
+        )
+    }
+
+    /** 核心 API 真引用标记：annotations 子包之外的 com.intellij.mcpserver.* 类型引用。 */
+    private val coreApiRefMarker = Regex("""com\.intellij\.mcpserver\.(?!annotations)""")
+
+    @Test
     fun testMcpServerPluginXmlReferencesOnlyInOptionalFile() {
         val offenders = repoRoot().resolve("src/main/resources/META-INF").walkTopDown()
             .filter { it.isFile && it.extension == "xml" && it.name != "mcp-optional.xml" }

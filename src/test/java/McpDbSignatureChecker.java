@@ -85,8 +85,44 @@ public class McpDbSignatureChecker {
         missing += check(method(meta, "getColumnCount"), "RemoteResultSetMetaData.getColumnCount()");
         missing += check(method(meta, "getColumnLabel", params("int")), "RemoteResultSetMetaData.getColumnLabel(int)");
 
+        // T-McpDynamicToolset：McpExpectedBridge 反射链（McpToolsetSupport 审计边界转译 + 项目解析）。
+        // mcpserver 新形态 API——243 内置 1.0.30/253 未装 Marketplace 包时类不可达，属预期
+        // （该版本 MCP 工具线本就不加载），缺席按 SKIP 处理不计 missing；252+/262+ 在场则漂移即 fail。
+        Class<?> callInfo = tryForName("com.intellij.mcpserver.McpCallInfoKt", loader);
+        if (callInfo == null) {
+            System.out.println("SKIP mcpserver new-form API absent (old-form 1.0.x or no mcpserver)");
+        } else {
+            missing += check(method(callInfo, "getProjectOrNull", params("kotlin.coroutines.CoroutineContext")),
+                "McpCallInfoKt.getProjectOrNull(CoroutineContext)");
+            Class<?> expectedError = tryForName("com.intellij.mcpserver.McpExpectedError", loader);
+            boolean ctorOk = false;
+            if (expectedError != null) {
+                for (java.lang.reflect.Constructor<?> c : expectedError.getConstructors()) {
+                    if (c.getParameterTypes().length == 2 && c.getParameterTypes()[0] == String.class) {
+                        ctorOk = true;
+                        break;
+                    }
+                }
+            }
+            if (ctorOk) {
+                System.out.println("OK   McpExpectedError.(String, ?) constructor");
+            } else {
+                System.out.println("MISS McpExpectedError.(String, ?) constructor");
+                missing++;
+            }
+        }
+
         System.out.println(missing == 0 ? "RESULT OK" : "RESULT MISSING " + missing);
         System.exit(missing == 0 ? 0 : 1);
+    }
+
+    /** 探测式类解析：类不可达（旧形态/未装）返回 null 交由调用方按缺席处理。 */
+    private static Class<?> tryForName(String fqn, ClassLoader loader) {
+        try {
+            return Class.forName(fqn, false, loader);
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     // ------------------------------------------------------------------

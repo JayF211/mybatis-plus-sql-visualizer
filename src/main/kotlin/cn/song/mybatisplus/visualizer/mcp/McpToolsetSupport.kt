@@ -9,9 +9,6 @@ import cn.song.mybatisplus.visualizer.log.sqlLogManagerIfCreated
 import cn.song.mybatisplus.visualizer.log.SqlSource
 import cn.song.mybatisplus.visualizer.log.StatementType
 import cn.song.mybatisplus.visualizer.log.formatDatabaseFragment
-import com.intellij.mcpserver.McpExpectedError
-import com.intellij.mcpserver.McpToolset
-import com.intellij.mcpserver.projectOrNull
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 
@@ -32,10 +29,12 @@ import com.intellij.openapi.project.Project
  * 扫视即知同属一个插件。**新增工具类必须照此命名**（`SqlVisualizer<Xxx>Tool`），
  * 否则该工具在「暴露工具」页会脱离本插件组群。
  *
- * **253 兼容（T-McpToolset 定案继承）**：三钩子在基类**显式字面量覆写**——K2（jvm-default=
- * all-compatibility）只为「实现类未覆写的接口默认方法」生成 invokespecial 兼容桥，253 分支
- * 接口缺 isEnabled/alwaysIncluded 默认方法即桥悬空（verifyPlugin 实证）；基类提供具体覆写后
- * 子类零接口默认引用，253/262 双清。子类**不得**再覆写三钩子。
+ * **253 兼容（T-McpDynamicToolset 形态）**：本基类**零平台接口实现**（T-McpDynamicToolset：
+ * jar 字节码零 com.intellij.mcpserver.* 类型引用——243/251 的 mcpServer 旧形态缺新 API，静态
+ * 引用即 verifier compatibility problems，20260926 审核拒绝主因）。平台接口由运行期 ASM 生成的
+ * 壳类实现（壳 extends 本基类链上的工具类 + implements McpToolset，三钩子直接继承本类实现，
+ * 见 McpToolsetDynamicRegistrar）；此前「显式字面量覆写防 K2 兼容桥悬空」的三钩子约定随
+ * implements 摘除自然消解（K2 桥只为接口默认方法生成）。
  *
  * **输出预算登记表（T-McpOutputBudget / O-20 守卫约定——新增工具或调整预算必须在此登记对齐，
  * MetadataInvalidator 缓存登记表同款防漏）**：
@@ -50,19 +49,20 @@ import com.intellij.openapi.project.Project
  *  - 其余七工具：输出规模由输入决定天然有界（渲染=源码规模、logs=日志条数、crud/reverse/
  *    rollback=单实体单语句），不设额外预算。
  *
- * 注册：mcp-optional.xml `mcpServer.mcpToolset` EP（com.intellij.mcpServer 插件在 253+/262
- * 内置；243 整文件不加载）。线程模型/零弹窗/审计约定与一期一致：协程线程调用（PSI 读包
- * ReadAction 于各服务内部）；拒绝走 [McpExpectedError]；每次调用经 [McpAuditLog] 审计。
+ * 注册：运行期探测式程序化注册（McpToolsetDynamicRegistrar，mcpServer 新形态在场的 253+/262
+ * 命中；243/251 旧形态静默跳过）。线程模型/零弹窗/审计约定与一期一致：协程线程调用（PSI 读包
+ * ReadAction 于各服务内部）；拒绝经 [SqlvExpectedToolException]＋audit 边界反射转译为平台
+ * McpExpectedError（见 [McpExpectedBridge]）；每次调用经 [McpAuditLog] 审计。
  */
-abstract class McpToolsetSupport(private val toolName: String) : McpToolset {
+abstract class McpToolsetSupport(private val toolName: String) {
 
     /** 平台门控：总开关 ∧ 工具级未禁用（McpToolGate 读插件设置，测试环境兜底启用）。 */
-    final override fun isEnabled(): Boolean = McpToolGate.isEnabled(toolName)
+    fun isEnabled(): Boolean = McpToolGate.isEnabled(toolName)
 
-    /** 稳定工具集（真实接口 isExperimental 默认 true = 实验态，必须显式 false 才进稳定集）。 */
-    final override fun isExperimental(): Boolean = false
+    /** 稳定工具集（平台 McpToolset.isExperimental 默认 true = 实验态，必须显式 false 才进稳定集）。 */
+    fun isExperimental(): Boolean = false
 
-    final override fun alwaysIncluded(): Boolean = false
+    fun alwaysIncluded(): Boolean = false
 
     // ------------------------------------------------------------------
     // 共用骨架（一期 SqlVisualizerToolset 逐行迁入）
@@ -92,9 +92,11 @@ abstract class McpToolsetSupport(private val toolName: String) : McpToolset {
             val result = block()
             ticket.ok()
             return result
-        } catch (e: McpExpectedError) {
+        } catch (e: SqlvExpectedToolException) {
             ticket.expectedError(e)
-            throw e
+            // 对平台抛出的必须是平台 McpExpectedError（agent 可读错误而非 Internal error）；
+            // 转译经反射（T-McpDynamicToolset 零平台类型引用），失败降级原样抛自有异常。
+            throw McpExpectedBridge.wrapExpected(e)
         }
     }
 
@@ -104,7 +106,7 @@ abstract class McpToolsetSupport(private val toolName: String) : McpToolset {
 
         /** 预期错误：入参摘要 + 错误文本同列（改造前该槽位只放错误文本；两者同列后错误文本
          *  可能被摘要挤掉——T-MAT-04 回退修复改为 [errorArgsSummary] 的两段分预算，错误文本优先）。 */
-        fun expectedError(e: McpExpectedError) =
+        fun expectedError(e: SqlvExpectedToolException) =
             McpAuditLog.call(
                 tool,
                 errorArgsSummary(argsSummary, e.mcpErrorText),
@@ -113,9 +115,9 @@ abstract class McpToolsetSupport(private val toolName: String) : McpToolset {
             )
     }
 
-    /** 取当前项目（框架注入 coroutineContext；桩扩展运行时解析平台 McpCallInfoKt）。 */
+    /** 取当前项目（框架注入 coroutineContext；反射解析平台 McpCallInfoKt，见 McpExpectedBridge）。 */
     protected suspend fun requireProject(): Project =
-        kotlin.coroutines.coroutineContext.projectOrNull
+        McpExpectedBridge.currentProjectOrNull(kotlin.coroutines.coroutineContext)
             ?: throwExpected(
                 McpToolErrors.code(McpToolErrors.PROJECT_NOT_READY, "no project bound to this MCP call."),
             )
@@ -132,8 +134,8 @@ abstract class McpToolsetSupport(private val toolName: String) : McpToolset {
         }
     }
 
-    /** 拒绝通道：agent 可读结构化错误，零弹窗（McpExpectedError 由框架转工具错误）。 */
-    protected fun throwExpected(message: String): Nothing = throw McpExpectedError(message)
+    /** 拒绝通道：agent 可读结构化错误，零弹窗（audit 边界转译为平台 McpExpectedError）。 */
+    protected fun throwExpected(message: String): Nothing = throw SqlvExpectedToolException(message)
 
     protected fun firstLine(text: String): String = text.lineSequence().firstOrNull { it.isNotBlank() } ?: text
 

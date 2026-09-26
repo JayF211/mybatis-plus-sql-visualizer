@@ -117,6 +117,10 @@ dependencies {
     // F-xx 替代方案：移除 PlantUML 1.2024.8 (21.9MB) + Batik (~8MB)，改用自绘引擎
     // F-2：SQL 性能分析（JSqlParser 5.3 — 零依赖 SQL 解析器，静态分析用）
     implementation("com.github.jsqlparser:jsqlparser:5.3")
+    // T-McpDynamicToolset：运行期生成 MCP toolset 壳类（McpToolsetDynamicRegistrar）的 ASM。
+    // 自带而非用平台 lib 的 asm——插件 classloader 自成一体，无跨版本平台 ASM 可达性差异；
+    // 字节码生成发生在运行期，壳类不进插件 jar（verifier 不可见）。
+    implementation("org.ow2.asm:asm:9.7.1")
 
     // IntelliJ Platform Gradle Plugin Dependencies Extension - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-dependencies-extension.html
     intellijPlatform {

@@ -25,6 +25,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 class McpGateFilterRegistrar : ProjectActivity {
 
     override suspend fun execute(project: Project) {
+        // T-McpDynamicToolset：十工具动态壳注册先走（探测 McpToolset 接口，253+ Marketplace 包/
+        // 262 内置命中；filter EP 仅 262+，两者独立探测独立降级）。
+        McpToolsetDynamicRegistrar.registerOnce()
         McpGateFilterEpRegistrar.registerOnce()
     }
 }

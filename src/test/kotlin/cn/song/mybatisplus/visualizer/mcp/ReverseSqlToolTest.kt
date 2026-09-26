@@ -21,7 +21,7 @@ class ReverseSqlToolTest {
     @Test
     fun `解析失败_带行号的预期错误`() {
         val error = runCatching { reverse("SELEKT x FORM y") }.exceptionOrNull()
-        assertTrue("解析失败应抛 McpExpectedError", error is com.intellij.mcpserver.McpExpectedError)
+        assertTrue("解析失败应抛 SqlvExpectedToolException", error is SqlvExpectedToolException)
         assertTrue(
             "错误消息应带行号定位",
             (error?.message ?: "").contains("cannot parse SQL (line"),
@@ -31,6 +31,6 @@ class ReverseSqlToolTest {
     @Test
     fun `空输入_预期错误`() {
         val error = runCatching { SqlVisualizerReverseSqlTool().reverseSql("  ") }.exceptionOrNull()
-        assertTrue(error is com.intellij.mcpserver.McpExpectedError)
+        assertTrue(error is SqlvExpectedToolException)
     }
 }

@@ -62,21 +62,21 @@ class CrudSqlToolTest : com.intellij.testFramework.fixtures.BasePlatformTestCase
             """.trimIndent(),
         )
         val error = runCatching { crud("className" to "EmptyEntity") }.exceptionOrNull()
-        assertTrue(error is com.intellij.mcpserver.McpExpectedError)
+        assertTrue(error is SqlvExpectedToolException)
         assertTrue((error?.message ?: "").contains("no mappable columns"))
     }
 
     @Test
     fun test类不存在_预期错误() {
         val error = runCatching { crud("className" to "com.example.NoSuchEntity") }.exceptionOrNull()
-        assertTrue(error is com.intellij.mcpserver.McpExpectedError)
+        assertTrue(error is SqlvExpectedToolException)
         assertTrue((error?.message ?: "").contains("class not found"))
     }
 
     @Test
     fun test无入参_预期错误() {
         val error = runCatching { tool.resolveSpec(project, "", "") }.exceptionOrNull()
-        assertTrue(error is com.intellij.mcpserver.McpExpectedError)
+        assertTrue(error is SqlvExpectedToolException)
         assertTrue((error?.message ?: "").contains("provide filePath or className"))
     }
 }
