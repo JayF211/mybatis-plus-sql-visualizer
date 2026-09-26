@@ -179,6 +179,30 @@ verifier 1.410 在线口径对上传原包 × **IU-263.5701.42**（当前 Market
   行为与 XML 声明等价），非对抗性规避；
 - 若 B3 全绿但 Marketplace 审核仍拒（非 verifier 因素），转申诉主路径（邮件回复已有论证骨架）。
 
-## 九、实施记录
+## 九、实施记录（20260926 回写）
 
-（实施时回写）
+**提交链**：`4bf3b6b`（B1+B2 业务层解耦+动态壳）→ `cd15454`（B3 门禁轮发现 SpillingKt 残留→audit 改
+intrinsics 透传＋AuditGate 包装续体）→ `5a1f6ca`（B4 沙盒三修复：工具类 open/AuditGate fatal 短路/
+壳 simpleName 保持＋基线/豁免清理）→ `edeb9a6`（README 校准）。并行走查计划＝
+`20260926-1730-T-FullRegression-全功能沙盒回归走查-开发计划.md`（零回归结论）。
+
+**验收标准逐项**（§七）：
+
+1. ✅ verifyMarketplace 五目标全 Compatible：243/253/262（在线口径，最终复跑 BUILD SUCCESSFUL
+   12m50s）＋251.27812.49/263.5701.42（手跑 probe，见 `dev-support/market-probe/README.md`）；
+   baseline 清空为空基线（MarketVerdictChecker 机制在役）。
+2. ✅ 262 沙盒真机十工具：tools/list schema 逐字一致＋九工具调用 OK＋两预期错误正确＋
+   [MCP-AUDIT] 对账（详见 FullRegression 计划 §七 与 `dev-support/mcp-test/README.md` 基线节）。
+3. ◐ 243/251/253 无新形态环境：代码路径验证（XML 片段不加载/Class.forName 探测静默 return，
+   与 O-68 同构先例）＋三目标 verifier Compatible 佐证；253 沙盒未单独起（如实登记）。
+4. ✅ jar 内零编译期 mcpserver 引用：McpScopeSourceScanTest 新增核心 API 守卫＋全 mcp 包
+   SpillingKt 字节码扫描零命中＋verifier 零块实证。
+
+**V 前提落点**：V1/V2 真机证实（schema/挂起链全绿）；V3 ✅（verifier 实证）；V4 ✅（EP 程序化
+注册真机成立）；V5 代码路径验证；V6 ✅（263 实测 Compatible，正式版发布后复跑）；V7 ✅
+（262 jar 字节码实证 getProjectOrNull/(String,JsonObject)，253 真机 ACK 佐证）。
+
+**可复用沉淀**：`dev-support/mcp-test/`（MCP 客户端）、`dev-support/market-probe/`（verifier
+复现口径）、`dev-support/sandbox-preset/`（沙盒预置）。
+
+**B5 重传**：未执行（待用户）——新版本号＋发行 8 处同步＋回复审核邮件（§六 B5）。
