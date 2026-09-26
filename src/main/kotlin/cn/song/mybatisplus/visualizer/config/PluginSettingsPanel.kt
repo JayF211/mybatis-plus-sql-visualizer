@@ -294,6 +294,67 @@ class PluginSettingsPanel @JvmOverloads constructor(
         disposeResources()
     }
 
+    // ── T-PrefixValidate：两栏前缀的校验结果行（有问题才露出；一键修复回写两栏后自动消失） ──
+    // 监听器一律挂在字段初始化处：rebuild（语言切换）会重跑 buildSections，挂在 addRow 处会随重建叠加回调
+
+    private val prefixValidationLabel = com.intellij.ui.components.JBLabel(" ").apply {
+        icon = com.intellij.icons.AllIcons.General.Warning
+        isVisible = false
+    }
+
+    private val prefixFixButton = JButton(MpSqlVisualizerBundle.message("settings.sourceFramePrefixes.fix")).apply {
+        isVisible = false
+        addActionListener { onPrefixAutoFixClicked() }
+    }
+
+    private val prefixValidationRow = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 8, 0)).apply {
+        isOpaque = false
+        add(prefixValidationLabel)
+        add(prefixFixButton)
+    }
+
+    /** 校验两栏并刷新结果行；无问题整行隐藏（GridBag 不可见组件不占位，同 enhancedReauthButton 范式）。 */
+    private fun refreshPrefixValidationRow() {
+        val report = SourceFramePrefixesValidator.validate(
+            frameSkipPrefixesField.text,
+            bizJarPrefixesField.text,
+        )
+        val problems = buildList {
+            report.invalidLines.forEach {
+                add(MpSqlVisualizerBundle.message("settings.sourceFramePrefixes.invalidLine", it.lineNo, it.text))
+            }
+            report.conflicts.forEach {
+                add(MpSqlVisualizerBundle.message("settings.sourceFramePrefixes.conflict", it.prefix))
+            }
+            report.duplicates.forEach {
+                add(MpSqlVisualizerBundle.message("settings.sourceFramePrefixes.duplicate", it.prefix))
+            }
+        }
+        if (problems.isEmpty()) {
+            prefixValidationLabel.isVisible = false
+            prefixFixButton.isVisible = false
+            return
+        }
+        prefixValidationLabel.text = if (problems.size == 1) {
+            problems.single()
+        } else {
+            MpSqlVisualizerBundle.message("settings.sourceFramePrefixes.problems", problems.size) + "　" + problems.first()
+        }
+        prefixValidationLabel.toolTipText = problems.joinToString("\n")
+        prefixValidationLabel.isVisible = true
+        prefixFixButton.isVisible = true
+    }
+
+    /** 一键修复：回写两栏（setText 触发 document 监听 → 校验行自动刷新为隐藏）。 */
+    private fun onPrefixAutoFixClicked() {
+        val (skip, biz) = SourceFramePrefixesValidator.autoFix(
+            frameSkipPrefixesField.text,
+            bizJarPrefixesField.text,
+        )
+        frameSkipPrefixesField.text = skip
+        bizJarPrefixesField.text = biz
+    }
+
     /**
      * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（一行一个前缀，如 `com.corp.engine.`）。
      * Apply 后经 CONFIG 热下发 agent（即时生效，无需重启应用），IDE 侧候选解析同步过滤。
@@ -303,6 +364,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
         emptyText.text = MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.placeholder")
         lineWrap = true
         wrapStyleWord = true
+        // T-PrefixValidate：格式/冲突校验随输入即时刷新（面板只展示，判定在 SourceFramePrefixesValidator）
+        document.addDocumentListener(object : com.intellij.ui.DocumentAdapter() {
+            override fun textChanged(e: javax.swing.event.DocumentEvent) {
+                refreshPrefixValidationRow()
+            }
+        })
         // T-FramePrefixVisibility F1：GridBag 外层高度不足时行被压缩，fill=NONE 下多行文本框
         // 会塌成一条细线（真机截图实证：标签可见、框不可见）——锁定首选高度兜底
         preferredSize = java.awt.Dimension(preferredSize.width, preferredSize.height.coerceAtLeast(60))
@@ -327,6 +394,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
         emptyText.text = MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes.placeholder")
         lineWrap = true
         wrapStyleWord = true
+        // T-PrefixValidate：格式/冲突校验随输入即时刷新（同 skip 栏）
+        document.addDocumentListener(object : com.intellij.ui.DocumentAdapter() {
+            override fun textChanged(e: javax.swing.event.DocumentEvent) {
+                refreshPrefixValidationRow()
+            }
+        })
         // 与帧过滤前缀框同款高度保底与边框形态（T-FramePrefixVisibility F1/F1b）
         preferredSize = java.awt.Dimension(preferredSize.width, preferredSize.height.coerceAtLeast(60))
         background = com.intellij.util.ui.UIUtil.getTextFieldBackground()
@@ -941,6 +1014,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     toolTipText = MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes.tip")
                 }
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes"), bizJarPrefixesField)
+                // T-PrefixValidate：校验结果行（问题数 + 首条，悬停看全部；一键修复按钮同行）
+                addRow(p, g, "", prefixValidationRow)
             }
         }
 
