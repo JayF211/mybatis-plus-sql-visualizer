@@ -71,43 +71,77 @@ object AgentProtocol {
      * 前缀文本 JSON 转义走最简 deny-list（反斜杠/引号/控制字符），与 [configBody] 的
      * 固定布尔键序兼容（agent 侧 disabled/desensitize 判定不受追加键影响）。
      */
-    fun configBody(disabled: Boolean, desensitize: Boolean, skipPrefixes: List<String>): String {
+    fun configBody(disabled: Boolean, desensitize: Boolean, skipPrefixes: List<String>): String =
+        configBody(disabled, desensitize, skipPrefixes, emptyList())
+
+    /**
+     * T-ToolSiteBizFrame：CONFIG 帧再追加 JAR 业务帧反向名单
+     * （`"bizJarPrefixes":["a.","b."]`；空列表省略键，旧 agent contains 解析天然忽略未知键）。
+     * 语义与 skipPrefixes 相反（名单内包名的帧即使来自 JAR 也按业务帧对待），键彼此独立。
+     */
+    fun configBody(
+        disabled: Boolean,
+        desensitize: Boolean,
+        skipPrefixes: List<String>,
+        bizJarPrefixes: List<String>,
+    ): String {
         val clean = skipPrefixes.map { it.trim() }.filter { it.isNotEmpty() }
-        if (clean.isEmpty()) return configBody(disabled, desensitize)
-        val arr = clean.joinToString(",") { p ->
-            "\"" + p.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\b", "\\b").replace("\u000c", "\\f")
-                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + "\""
+        val cleanBiz = bizJarPrefixes.map { it.trim() }.filter { it.isNotEmpty() }
+        val parts = mutableListOf(
+            "\"disabled\":$disabled",
+            "\"desensitize\":$desensitize",
+        )
+        // 空列表省略键（agent 侧缺键=清空，语义等同）
+        if (clean.isNotEmpty()) {
+            parts += "\"skipPrefixes\":[" + clean.joinToString(",") { escapeArrayItem(it) } + "]"
         }
-        return """{"disabled":$disabled,"desensitize":$desensitize,"skipPrefixes":[$arr]}"""
+        if (cleanBiz.isNotEmpty()) {
+            parts += "\"bizJarPrefixes\":[" + cleanBiz.joinToString(",") { escapeArrayItem(it) } + "]"
+        }
+        return parts.joinToString(",", "{", "}")
     }
+
+    /** 数组项最简 deny-list JSON 转义（反斜杠/引号/控制字符）。 */
+    private fun escapeArrayItem(p: String): String =
+        "\"" + p.replace("\\", "\\\\").replace("\"", "\\\"")
+            .replace("\b", "\\b").replace("\u000c", "\\f")
+            .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + "\""
 
     // ---------- T-AgentConfigChannel T-02：CONFIG 回执（agent → IDE） ----------
 
     /**
-     * CONFIG 回执生效值三元（[parseConfigAck] 产物）。
-     * [skipPrefixes] 是应用侧**实际接受**的帧过滤前缀条数（不是列表本身——回执只报生效结果，
-     * 前缀文本两侧各自持有，IDE 侧下发源即设置页）。
+     * CONFIG 回执生效值四元（[parseConfigAck] 产物）。
+     * [skipPrefixes]/[bizJarPrefixes] 是应用侧**实际接受**的帧过滤前缀与 JAR 业务帧反向名单条数
+     * （不是列表本身——回执只报生效结果，前缀文本两侧各自持有，IDE 侧下发源即设置页）。
      */
     internal data class ConfigAck(
         val disabled: Boolean,
         val desensitize: Boolean,
         val skipPrefixes: Int,
+        val bizJarPrefixes: Int,
     )
 
     /**
-     * 回执 body（agent 侧同契约逐字节一致）：`{"disabled":<bool>,"desensitize":<bool>,"skipPrefixes":<int>}`。
+     * 回执 body（agent 侧同契约逐字节一致）：
+     * `{"disabled":<bool>,"desensitize":<bool>,"skipPrefixes":<int>,"bizJarPrefixes":<int>}`。
      *
      * 键序固定、无空格——**这是刻意的严格形态**：两侧各自手写 JSON，本轮缺陷正是「形态漂移
      * 无人发现」（出站写 `[len][cmd]`、入站按 `[cmd][len]` 读，两侧都自认为对）。回执只认
      * 这一种形态，任何偏差都会被 [parseConfigAck] 记成畸形并留痕，不会静默按「差不多」放行。
+     * bizJarPrefixes 为 T-ToolSiteBizFrame 列尾追加段（agent 与 IDE 同制品分发、版本恒同对；
+     * 旧 agent 错配窗口的 3 键 ACK 按畸形留痕——与 skipPrefixes 引入时同边界）。
      */
-    internal fun configAckBody(disabled: Boolean, desensitize: Boolean, skipPrefixes: Int): String =
-        """{"disabled":$disabled,"desensitize":$desensitize,"skipPrefixes":$skipPrefixes}"""
+    internal fun configAckBody(
+        disabled: Boolean,
+        desensitize: Boolean,
+        skipPrefixes: Int,
+        bizJarPrefixes: Int,
+    ): String =
+        """{"disabled":$disabled,"desensitize":$desensitize,"skipPrefixes":$skipPrefixes,"bizJarPrefixes":$bizJarPrefixes}"""
 
     /** 严格形态判据（无空格、键序固定、值域受限）。 */
     private val CONFIG_ACK_REGEX =
-        Regex("""\{"disabled":(true|false),"desensitize":(true|false),"skipPrefixes":(-?\d+)\}""")
+        Regex("""\{"disabled":(true|false),"desensitize":(true|false),"skipPrefixes":(-?\d+),"bizJarPrefixes":(-?\d+)\}""")
 
     /**
      * 回执解析失败累计（诊断计数，跨会话单调递增）：畸形回执是「两侧契约漂移」的直接证据，
@@ -118,12 +152,13 @@ object AgentProtocol {
     /**
      * 解析 CONFIG 回执 body；**不抛**——非 [configAckBody] 的严格形态一律返回 null 并累加
      * [configAckParseFailures]（调用方只记 WARN 不中断读循环；畸形回执不构成掉线理由）。
-     * `skipPrefixes` 溢出 Int 同样按畸形处理（回执值域本就该是小整数）。
+     * `skipPrefixes`/`bizJarPrefixes` 溢出 Int 同样按畸形处理（回执值域本就该是小整数）。
      */
     internal fun parseConfigAck(body: String): ConfigAck? {
         val m = CONFIG_ACK_REGEX.matchEntire(body)
         val n = m?.groupValues?.get(3)?.toIntOrNull()
-        if (m == null || n == null) {
+        val biz = m?.groupValues?.get(4)?.toIntOrNull()
+        if (m == null || n == null || biz == null) {
             configAckParseFailures.incrementAndGet()
             return null
         }
@@ -131,6 +166,7 @@ object AgentProtocol {
             disabled = m.groupValues[1] == "true",
             desensitize = m.groupValues[2] == "true",
             skipPrefixes = n,
+            bizJarPrefixes = biz,
         )
     }
 }

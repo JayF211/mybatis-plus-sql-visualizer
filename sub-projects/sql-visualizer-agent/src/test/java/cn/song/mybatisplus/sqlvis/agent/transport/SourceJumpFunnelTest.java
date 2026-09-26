@@ -12,13 +12,13 @@ import static org.junit.Assert.assertTrue;
  */
 public class SourceJumpFunnelTest {
 
-    // ---------- SenderLoop.extractSkipPrefixes ----------
+    // ---------- SenderLoop.extractStringArray ----------
 
     @Test
     public void 前缀提取_多项与转义() {
         String payload = "{\"disabled\":false,\"desensitize\":true," +
                 "\"skipPrefixes\":[\"com.corp.engine.\",\"a\\\"b\\\\c\"]}";
-        String[] out = SenderLoop.extractSkipPrefixes(payload);
+        String[] out = SenderLoop.extractStringArray(payload, "\"skipPrefixes\":");
         assertEquals(2, out.length);
         assertEquals("com.corp.engine.", out[0]);
         assertEquals("a\"b\\c", out[1]);
@@ -26,9 +26,24 @@ public class SourceJumpFunnelTest {
 
     @Test
     public void 前缀键缺失_空组() {
-        assertEquals(0, SenderLoop.extractSkipPrefixes("{\"disabled\":true}").length);
-        assertEquals(0, SenderLoop.extractSkipPrefixes("skipPrefixes broken").length);
-        assertEquals(0, SenderLoop.extractSkipPrefixes("{\"skipPrefixes\":{}}").length);
+        assertEquals(0, SenderLoop.extractStringArray("{\"disabled\":true}", "\"skipPrefixes\":").length);
+        assertEquals(0, SenderLoop.extractStringArray("skipPrefixes broken", "\"skipPrefixes\":").length);
+        assertEquals(0, SenderLoop.extractStringArray("{\"skipPrefixes\":{}}", "\"skipPrefixes\":").length);
+    }
+
+    @Test
+    public void 反向名单提取_同扫描器() {
+        // T-ToolSiteBizFrame：bizJarPrefixes 与 skipPrefixes 共用同一数组扫描器
+        String payload = "{\"disabled\":false,\"desensitize\":false," +
+                "\"skipPrefixes\":[\"com.corp.engine.\"],\"bizJarPrefixes\":[\"com.corp.shared.util.\"]}";
+        String[] skip = SenderLoop.extractStringArray(payload, "\"skipPrefixes\":");
+        String[] biz = SenderLoop.extractStringArray(payload, "\"bizJarPrefixes\":");
+        assertEquals(1, skip.length);
+        assertEquals("com.corp.engine.", skip[0]);
+        assertEquals(1, biz.length);
+        assertEquals("com.corp.shared.util.", biz[0]);
+        // 两键互不串扰：对 biz 键提取不会误读 skip 数组
+        assertEquals(0, SenderLoop.extractStringArray("{\"bizJarPrefixes\":[]}", "\"skipPrefixes\":").length);
     }
 
     // ---------- StackDigest ----------

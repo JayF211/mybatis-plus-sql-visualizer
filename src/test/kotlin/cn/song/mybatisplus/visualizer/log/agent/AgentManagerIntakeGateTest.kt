@@ -206,15 +206,20 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
     // ---------- ② T-02 回执解析 ----------
 
     fun test回执解析_规范形态() {
-        val body = """{"disabled":true,"desensitize":false,"skipPrefixes":3}"""
+        // T-ToolSiteBizFrame 起严格形态扩为四键（bizJarPrefixes 列尾追加段）
+        val body = """{"disabled":true,"desensitize":false,"skipPrefixes":3,"bizJarPrefixes":1}"""
         val ack = AgentProtocol.parseConfigAck(body)
         assertNotNull("规范回执必须解析成功: $body", ack)
         assertTrue(ack!!.disabled)
         assertFalse(ack.desensitize)
         assertEquals(3, ack.skipPrefixes)
+        assertEquals(1, ack.bizJarPrefixes)
         // 编解码往返：IDE 侧构造的规范形态必须能被自己的严格解析吃下
-        assertEquals(body, AgentProtocol.configAckBody(disabled = true, desensitize = false, skipPrefixes = 3))
-        assertEquals(ack, AgentProtocol.parseConfigAck(AgentProtocol.configAckBody(true, false, 3)))
+        assertEquals(
+            body,
+            AgentProtocol.configAckBody(disabled = true, desensitize = false, skipPrefixes = 3, bizJarPrefixes = 1),
+        )
+        assertEquals(ack, AgentProtocol.parseConfigAck(AgentProtocol.configAckBody(true, false, 3, 1)))
     }
 
     fun test回执解析_畸形形态返回null并计数() {
@@ -230,6 +235,7 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
             """{"disabled":true,"desensitize":false,"skipPrefixes":x}""", // 非数字
             """{"disabled":true,"desensitize":false,"skipPrefixes":99999999999999}""", // 溢出 Int
             """{"disabled":true,"desensitize":false,"skipPrefixes":0} """, // 尾随空格
+            """{"disabled":true,"desensitize":false,"skipPrefixes":0}""", // 旧 agent 三键形态（缺 bizJarPrefixes）
         )
         malformed.forEach { assertNull("畸形回执必须返回 null: <$it>", AgentProtocol.parseConfigAck(it)) }
         assertEquals(
@@ -253,7 +259,7 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
             scheduled.single().first,
         )
 
-        writeFrame(7501L, AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(false, true, 2))
+        writeFrame(7501L, AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(false, true, 2, 0))
         awaitTrue("回执应被读线程处理") { session.configAckCount.get() == 1L }
 
         assertFalse("收到回执即清挂起", session.hasPendingConfigAck())
@@ -397,7 +403,7 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
     fun test关闭会话_清挂起与确认态() {
         val session = newSession(7504L)
         session.sendConfig(disabled = false, desensitize = false)
-        writeFrame(7504L, AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(false, true, 0))
+        writeFrame(7504L, AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(false, true, 0, 0))
         awaitTrue("回执应被读线程处理") { session.configAckDisabled == false }
 
         session.close()
@@ -424,7 +430,7 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
         val session = newSession(7602L, manager)
         manager.sessions.add(session)
 
-        writeFrame(7602L, AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(false, true, 0))
+        writeFrame(7602L, AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(false, true, 0, 0))
         // 等**被断言的那个观测量**（闸门），不等中间态：确认值写入与回调刷新闸门是读线程上的两步，
         // 等中间态会与读线程赛跑（首跑曾因此假红一次）
         awaitTrue("确认在采集后桥应让位（回执经回调刷新闸门）") { SqlCaptureGate.paused.get() }
@@ -439,7 +445,7 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
         val session = newSession(7603L, manager)
         manager.sessions.add(session)
 
-        writeFrame(7603L, AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(true, true, 0))
+        writeFrame(7603L, AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(true, true, 0, 0))
         awaitTrue("回执应被读线程处理") { session.configAckDisabled == true }
 
         assertFalse("确认停采不得算「应用侧在采集」", manager.captureConfirmedActive())
@@ -450,7 +456,7 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
         val manager = freshManager()
         val session = newSession(7604L, manager)
         manager.sessions.add(session)
-        writeFrame(7604L, AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(false, true, 0))
+        writeFrame(7604L, AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(false, true, 0, 0))
         awaitTrue("确认采集后桥应封") { SqlCaptureGate.paused.get() }
 
         session.close()

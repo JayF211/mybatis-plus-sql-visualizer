@@ -294,6 +294,67 @@ class PluginSettingsPanel @JvmOverloads constructor(
         disposeResources()
     }
 
+    // ── T-PrefixValidate：两栏前缀的校验结果行（有问题才露出；一键修复回写两栏后自动消失） ──
+    // 监听器一律挂在字段初始化处：rebuild（语言切换）会重跑 buildSections，挂在 addRow 处会随重建叠加回调
+
+    private val prefixValidationLabel = com.intellij.ui.components.JBLabel(" ").apply {
+        icon = com.intellij.icons.AllIcons.General.Warning
+        isVisible = false
+    }
+
+    private val prefixFixButton = JButton(MpSqlVisualizerBundle.message("settings.sourceFramePrefixes.fix")).apply {
+        isVisible = false
+        addActionListener { onPrefixAutoFixClicked() }
+    }
+
+    private val prefixValidationRow = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 8, 0)).apply {
+        isOpaque = false
+        add(prefixValidationLabel)
+        add(prefixFixButton)
+    }
+
+    /** 校验两栏并刷新结果行；无问题整行隐藏（GridBag 不可见组件不占位，同 enhancedReauthButton 范式）。 */
+    private fun refreshPrefixValidationRow() {
+        val report = SourceFramePrefixesValidator.validate(
+            frameSkipPrefixesField.text,
+            bizJarPrefixesField.text,
+        )
+        val problems = buildList {
+            report.invalidLines.forEach {
+                add(MpSqlVisualizerBundle.message("settings.sourceFramePrefixes.invalidLine", it.lineNo, it.text))
+            }
+            report.conflicts.forEach {
+                add(MpSqlVisualizerBundle.message("settings.sourceFramePrefixes.conflict", it.prefix))
+            }
+            report.duplicates.forEach {
+                add(MpSqlVisualizerBundle.message("settings.sourceFramePrefixes.duplicate", it.prefix))
+            }
+        }
+        if (problems.isEmpty()) {
+            prefixValidationLabel.isVisible = false
+            prefixFixButton.isVisible = false
+            return
+        }
+        prefixValidationLabel.text = if (problems.size == 1) {
+            problems.single()
+        } else {
+            MpSqlVisualizerBundle.message("settings.sourceFramePrefixes.problems", problems.size) + "　" + problems.first()
+        }
+        prefixValidationLabel.toolTipText = problems.joinToString("\n")
+        prefixValidationLabel.isVisible = true
+        prefixFixButton.isVisible = true
+    }
+
+    /** 一键修复：回写两栏（setText 触发 document 监听 → 校验行自动刷新为隐藏）。 */
+    private fun onPrefixAutoFixClicked() {
+        val (skip, biz) = SourceFramePrefixesValidator.autoFix(
+            frameSkipPrefixesField.text,
+            bizJarPrefixesField.text,
+        )
+        frameSkipPrefixesField.text = skip
+        bizJarPrefixesField.text = biz
+    }
+
     /**
      * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（一行一个前缀，如 `com.corp.engine.`）。
      * Apply 后经 CONFIG 热下发 agent（即时生效，无需重启应用），IDE 侧候选解析同步过滤。
@@ -303,6 +364,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
         emptyText.text = MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.placeholder")
         lineWrap = true
         wrapStyleWord = true
+        // T-PrefixValidate：格式/冲突校验随输入即时刷新（面板只展示，判定在 SourceFramePrefixesValidator）
+        document.addDocumentListener(object : com.intellij.ui.DocumentAdapter() {
+            override fun textChanged(e: javax.swing.event.DocumentEvent) {
+                refreshPrefixValidationRow()
+            }
+        })
         // T-FramePrefixVisibility F1：GridBag 外层高度不足时行被压缩，fill=NONE 下多行文本框
         // 会塌成一条细线（真机截图实证：标签可见、框不可见）——锁定首选高度兜底
         preferredSize = java.awt.Dimension(preferredSize.width, preferredSize.height.coerceAtLeast(60))
@@ -317,6 +384,31 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /** gutter 预览 SQL 图标开关（M10）。 */
     private val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
+
+    /**
+     * T-ToolSiteBizFrame：JAR 业务帧反向名单（一行一个前缀，如 `com.corp.shared.util.`）。
+     * 语义与 [frameSkipPrefixesField] 相反——名单内包名的帧即使来自 JAR 也按业务帧对待；
+     * Apply 后随 CONFIG 热下发 agent。
+     */
+    private val bizJarPrefixesField = com.intellij.ui.components.JBTextArea(3, 24).apply {
+        emptyText.text = MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes.placeholder")
+        lineWrap = true
+        wrapStyleWord = true
+        // T-PrefixValidate：格式/冲突校验随输入即时刷新（同 skip 栏）
+        document.addDocumentListener(object : com.intellij.ui.DocumentAdapter() {
+            override fun textChanged(e: javax.swing.event.DocumentEvent) {
+                refreshPrefixValidationRow()
+            }
+        })
+        // 与帧过滤前缀框同款高度保底与边框形态（T-FramePrefixVisibility F1/F1b）
+        preferredSize = java.awt.Dimension(preferredSize.width, preferredSize.height.coerceAtLeast(60))
+        background = com.intellij.util.ui.UIUtil.getTextFieldBackground()
+        border = javax.swing.border.CompoundBorder(
+            com.intellij.util.ui.UIUtil.getTextFieldBorder(),
+            javax.swing.border.EmptyBorder(4, 6, 4, 6),
+        )
+    }
+
     private val joinDiagramNativeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.joinDiagramNative"))
 
     /** 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）。 */
@@ -916,6 +1008,14 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     toolTipText = MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.tip")
                 }
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes"), frameSkipPrefixesField)
+                // T-ToolSiteBizFrame：JAR 业务帧反向名单（与跳过前缀语义相反，热下发 agent）
+                bizJarPrefixesField.apply {
+                    text = PluginSettings.getInstance().state.sourceFrameBizJarPrefixes
+                    toolTipText = MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes.tip")
+                }
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes"), bizJarPrefixesField)
+                // T-PrefixValidate：校验结果行（问题数 + 首条，悬停看全部；一键修复按钮同行）
+                addRow(p, g, "", prefixValidationRow)
             }
         }
 
@@ -1482,6 +1582,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
             || enhancedDesensitizeCheck.isSelected != s.enhancedCaptureDesensitize
             || frameSkipPrefixesField.text.trim() != s.sourceFrameSkipPrefixes.trim()
+            || bizJarPrefixesField.text.trim() != s.sourceFrameBizJarPrefixes.trim()
             || logHibernateEnabledCheck.isSelected != s.logHibernateEnabled
             || logHibernateSqlPrefixField.text.trim() != s.logHibernateSqlPrefix
             || logHibernateParamPrefixField.text.trim() != s.logHibernateParamPrefix
@@ -1593,6 +1694,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.enhancedCaptureDesensitize = enhancedDesensitizeCheck.isSelected
             // T-SourceJumpFunnel P1-3：前缀规范化（逐行 trim、去空行）写回；下发走 SETTINGS_CHANGE_TOPIC
             s.sourceFrameSkipPrefixes = frameSkipPrefixesField.text.lines()
+                .map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
+            // T-ToolSiteBizFrame：反向名单同款规范化写回
+            s.sourceFrameBizJarPrefixes = bizJarPrefixesField.text.lines()
                 .map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
             s.logHibernateEnabled = logHibernateEnabledCheck.isSelected
             s.logHibernateSqlPrefix = logHibernateSqlPrefixField.text.trim()
@@ -1757,6 +1861,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled
             enhancedDesensitizeCheck.isSelected = s.enhancedCaptureDesensitize
             frameSkipPrefixesField.text = s.sourceFrameSkipPrefixes
+            bizJarPrefixesField.text = s.sourceFrameBizJarPrefixes
             logHibernateEnabledCheck.isSelected = s.logHibernateEnabled
             logHibernateSqlPrefixField.text = s.logHibernateSqlPrefix
             logHibernateParamPrefixField.text = s.logHibernateParamPrefix

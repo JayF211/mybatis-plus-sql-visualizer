@@ -100,6 +100,15 @@ public final class StackLocator {
     /** T-SourceJumpFunnel P1-3：用户登记的动态跳过前缀（CONFIG 热下发，volatile 整组替换）。 */
     private static volatile String[] EXTRA_SKIP_PREFIXES = new String[0];
 
+    /**
+     * T-ToolSiteBizFrame（机制 A）：用户登记的 <b>JAR 业务帧反向名单</b>（CONFIG 热下发，volatile
+     * 整组替换）——名单内包名前缀的帧即使来自 JAR 也按业务帧对待（L1 不再上顶到调用方）。
+     *
+     * <p><b>语义与「跳过前缀」相反，不得接入 {@link #isFrameworkFrame}</b>：那等价于跳过语义，
+     * 会把业务帧从候选池抽空、跳转能力消失（demo PR !1 E29 P2 档实证「登记 JAR 业务包救不回落点」）。
+     */
+    private static volatile String[] EXTRA_BIZ_PREFIXES = new String[0];
+
     /** 候选帧上限（IDE 侧解析回退用；过深无意义且加长事件体）。T-SourceJumpFunnel：3→8——汇聚门面下深层业务帧须可见。 */
     private static final int MAX_CANDIDATES = 8;
 
@@ -212,9 +221,28 @@ public final class StackLocator {
         if (decision != null) {
             final int at = indexOfIdentity(pool, decision[1], decision[2]);
             if (at >= 0 && pool.get(at)[0] != null) {
-                final Frame hit = buildFrame(pool, at, decision[0]);
-                reportEntryKeyMismatch(entryKey, hit);
-                return hit;
+                // T-ToolSiteBizFrame（机制 B′，demo PR !1 E34 实测钉死）：「身份在场」还不够——
+                // 缓存身份可能是本执行栈的<b>祖先浅帧</b>（同一 Service 方法先直发过一条 SQL 时，
+                // 它以「最深业务帧」身份写入共享 entryKey 的判定；其后经业务工具类发的 SQL 栈上
+                // 该方法是祖先帧、必然在场），直接采用会把主位置钉在「调用工具类」那一行。
+                // 命中后与全量路径对齐：在 [0..at-1]（比缓存身份更深的调用链段）里找首个业务来源帧，
+                // 找到即改用并刷新判定。at==0（直发形态，pool[0] 本就是最深业务帧）无更深层段，
+                // 零反射直取——健康路径不付来源解析成本。
+                final int deeper = at == 0 ? -1 : firstBusinessFrameBefore(pool, loader, at);
+                if (deeper < 0) {
+                    final Frame hit = buildFrame(pool, at, decision[0]);
+                    reportEntryKeyMismatch(entryKey, hit);
+                    return hit;
+                }
+                final Frame refreshed = buildFrame(pool, deeper, "L1");
+                if (refreshed == null) {
+                    // 与全量路径对齐：改用深帧后无调试信息 → 本次不产出位置、不刷新判定（下次重算）
+                    return null;
+                }
+                final String[] p = pool.get(deeper);
+                writeCaches(entryKey, p[2] + "#" + p[3], "L1");
+                reportEntryKeyMismatch(entryKey, refreshed);
+                return refreshed;
             }
         }
 
@@ -222,9 +250,10 @@ public final class StackLocator {
         int primaryAt = -1;
         String via = "SAFETY";
 
-        // L1 来源过滤：优先取「非 JAR 来源」帧（开发态用户业务类在目录）
+        // L1 来源过滤：优先取「非 JAR 来源」帧（开发态用户业务类在目录）；
+        // T-ToolSiteBizFrame（机制 A）：反向名单登记的包名前缀，其帧即使来自 JAR 也按业务帧对待
         for (int i = 0; i < pool.size(); i++) {
-            if (Boolean.FALSE.equals(loadedFromJar(pool.get(i)[2], loader))) {
+            if (isBusinessOrigin(pool.get(i)[2], loader)) {
                 primaryAt = i;
                 via = "L1";
                 break;
@@ -266,6 +295,35 @@ public final class StackLocator {
             }
         }
         return -1;
+    }
+
+    /**
+     * {@code pool[0..bound-1]}（比缓存身份<b>更深</b>的调用链段）中首个「业务来源帧」的下标，
+     * 无则 -1。T-ToolSiteBizFrame（机制 B′）：缓存身份是祖先浅帧而本执行经业务工具类下钻时，
+     * 真执行点就在这一段里——全量路径 L1 本会选中它，命中路径须对齐。
+     */
+    private static int firstBusinessFrameBefore(List<String[]> pool, ClassLoader loader, int bound) {
+        for (int i = 0; i < bound; i++) {
+            if (isBusinessOrigin(pool.get(i)[2], loader)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * L1 业务来源判据（T-ToolSiteBizFrame 起 L1 与缓存命中路径的深帧探测共用）：
+     * 命中用户反向名单（{@link #EXTRA_BIZ_PREFIXES}）或目录来源（{@link #loadedFromJar} = false）。
+     * 刻意与 {@link #isFrameworkFrame} 分立——跳过语义与业务帧提升是两回事，混用即 PR P2 档实证的
+     * 「候选池抽空」劣化。
+     */
+    private static boolean isBusinessOrigin(String className, ClassLoader loader) {
+        for (String p : EXTRA_BIZ_PREFIXES) {
+            if (className.startsWith(p)) {
+                return true;
+            }
+        }
+        return Boolean.FALSE.equals(loadedFromJar(className, loader));
     }
 
     /**
@@ -388,6 +446,25 @@ public final class StackLocator {
 
     public static String[] getExtraSkipPrefixes() {
         return EXTRA_SKIP_PREFIXES;
+    }
+
+    /** T-ToolSiteBizFrame：CONFIG 下发的 JAR 业务帧反向名单（整组替换，空/畸形输入安全）。 */
+    public static void setExtraBizJarPrefixes(String[] prefixes) {
+        if (prefixes == null || prefixes.length == 0) {
+            EXTRA_BIZ_PREFIXES = new String[0];
+            return;
+        }
+        final List<String> cleaned = new ArrayList<String>(prefixes.length);
+        for (String p : prefixes) {
+            if (p != null && !p.trim().isEmpty()) {
+                cleaned.add(p.trim());
+            }
+        }
+        EXTRA_BIZ_PREFIXES = cleaned.toArray(new String[0]);
+    }
+
+    public static String[] getExtraBizJarPrefixes() {
+        return EXTRA_BIZ_PREFIXES;
     }
 
     public static boolean isFrameworkFrame(String className) {
