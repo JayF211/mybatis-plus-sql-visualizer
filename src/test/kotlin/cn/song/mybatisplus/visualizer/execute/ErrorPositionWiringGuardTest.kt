@@ -25,13 +25,13 @@ class ErrorPositionWiringGuardTest {
     private val exemptFiles = emptySet<String>()
 
     /**
-     * 豁免投递点（相对路径 → 实参包含片段，均须写明理由）。
+     * 豁免投递点（相对仓库根路径（正斜杠，与扫描的 {@code rel} 同口径）→ 实参包含片段，均须写明理由）。
      * k2j 互操作适配：master 的 Kotlin 默认参 {@code sqlMaxLength = null} 翻译为 4 参重载桥，
      * 桥体内 {@code deliverError(..., null)} 的转发是缺省形态的机械转写（生产链对它零调用，
      * 真实投递点全部显式传长度），非「接线漏」——按本守卫豁免惯例登记；桥形态一变即重新报违例。
      */
     private val exemptDeliveries = mapOf(
-        "cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to
             "onErrorRich, onError, cause, message, null",
     )
 

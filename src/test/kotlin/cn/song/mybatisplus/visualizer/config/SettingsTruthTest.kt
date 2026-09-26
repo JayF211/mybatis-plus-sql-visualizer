@@ -93,7 +93,10 @@ class SettingsTruthTest {
 
     @Test
     fun testP2_状态变更广播点覆盖同意流三态() {
-        val src = mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt")
+        // k2j 互操作（同 testP2_状态行接线与五态键源码守卫）：master 的 AgentManager.kt 单文件
+        // 在这里拆为 AgentManager.java（类）+ AgentManagerKt.java（顶层函数），守卫读合并文本。
+        val src = mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManager.java") + "\n" +
+            mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManagerKt.java")
         // 广播点：定义 1 + attach 成功 1 + sweepOffline 1 + shutdownAll 1 + 确认流三态 3 + 重新授权 1 = 8
         // T-M56Phase2-Premain（合流后 +1）：premain 回连建会话成功亦广播一次状态行（启动即捕获生效）
         val count = Regex("publishStatusChanged\\(\\)").findAll(src).count()

@@ -7,6 +7,7 @@ import net.sf.jsqlparser.statement.Statement;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -161,9 +162,14 @@ public final class MetadataInvalidator {
             parseSlot = new ParseSlot(cleaned, false);
             return false;
         }
+        // Kotlin 平台类型判空显式化（同 UnboundedWriteDetector.parseStatementsShared 注记）：
+        // jsqlparser 5.3 同 JVM 已成功解析一次后，解析失败静默返回 null；null 在此转抛，
+        // 落入下方 catch 的 fail-closed true，与 master 行为一致。
         List<Statement> statements;
         try {
-            statements = parseStatementsForTest.parse(cleaned);
+            statements = Objects.requireNonNull(
+                    parseStatementsForTest.parse(cleaned),
+                    "parseStatementsForTest(cleaned) must not be null");
         } catch (Exception ignored) {
             parseSlot = new ParseSlot(cleaned, true);
             return true; // fail closed：宁多失效不多缓存（PL/SQL 块/方言形态解析不出即失效）

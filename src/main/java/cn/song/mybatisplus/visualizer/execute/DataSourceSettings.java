@@ -27,7 +27,7 @@ import java.util.stream.Collectors;
         storages = @Storage("mp-sql-visualizer-datasource.xml")
 )
 @Service(Service.Level.PROJECT)
-public class DataSourceSettings implements PersistentStateComponent<DataSourceSettings.State> {
+public final class DataSourceSettings implements PersistentStateComponent<DataSourceSettings.State> {
 
     /** DataSourceStorage 类名（反射入口）。 */
     private static final String DS_STORAGE_CLASS = "com.intellij.database.dataSource.DataSourceStorage";

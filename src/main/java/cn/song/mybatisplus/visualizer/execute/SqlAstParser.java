@@ -8,6 +8,7 @@ import net.sf.jsqlparser.parser.feature.FeatureConfiguration;
 import net.sf.jsqlparser.statement.Statement;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * SQL 文本 → AST 的<b>单一解析入口</b>（T-PerfSweep7 T-PS7-03 收拢后共四处：无界写探测/回滚推导、
@@ -37,13 +38,28 @@ public final class SqlAstParser {
     private static final FeatureConfiguration features =
             new FeatureConfiguration().setValue(Feature.allowSquareBracketQuotation, true);
 
-    /** 解析（可含多条语句与注释）；失败原样抛出，由调用方决定 fail 语义。 */
+    /**
+     * 解析（可含多条语句与注释）；失败原样抛出，由调用方决定 fail 语义。
+     *
+     * <p><b>移植注记（Kotlin 空安全显式化）</b>：master 的 Kotlin 返回类型声明为非空
+     * {@code List<Statement>}，编译器在返回平台类型值处内置 {@code checkNotNullExpressionValue}。
+     * jsqlparser 5.3 实测：同一 JVM 内<b>已成功解析过一次</b>之后，解析失败的
+     * {@code parseStatements(String, Consumer)} 会<b>静默返回 null 而非抛 {@link JSQLParserException}</b>
+     * （首败抛、次败返 null；探测产物 {@code statements=null} 直达调用方迭代 NPE）。
+     * Java 无编译器判空，必须显式拒绝——null 在此转抛 {@code NullPointerException}，
+     * 各调用方的 {@code catch (Exception)} fail-closed 语义（探测 PARSE_FAILED / 回滚 UNABLE /
+     * 元数据失效 fail-closed true）照常接管，与 master 行为一致。
+     */
     public List<Statement> parseStatements(String sql) throws JSQLParserException {
-        return CCJSqlParserUtil.parseStatements(sql, parser -> parser.withConfiguration(features));
+        return Objects.requireNonNull(
+                CCJSqlParserUtil.parseStatements(sql, parser -> parser.withConfiguration(features)),
+                "CCJSqlParserUtil.parseStatements(sql) must not be null");
     }
 
     /** 解析单条语句（T-PS7-03 新增，共享既有 {@link #features}）；失败原样抛出，由调用方决定 fail 语义。 */
     public Statement parseSingle(String sql) throws JSQLParserException {
-        return CCJSqlParserUtil.parse(sql, parser -> parser.withConfiguration(features));
+        return Objects.requireNonNull(
+                CCJSqlParserUtil.parse(sql, parser -> parser.withConfiguration(features)),
+                "CCJSqlParserUtil.parse(sql) must not be null");
     }
 }

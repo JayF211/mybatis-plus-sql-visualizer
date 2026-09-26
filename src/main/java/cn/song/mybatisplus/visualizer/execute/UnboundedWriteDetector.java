@@ -25,6 +25,7 @@ import net.sf.jsqlparser.statement.update.Update;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -158,7 +159,15 @@ public final class UnboundedWriteDetector {
                 return slot.statements;
             }
         }
-        List<Statement> statements = parseStatementsForTest.parse(cleaned);
+        // Kotlin 平台类型判空显式化：master 对 parseStatementsForTest(cleaned)（声明非空返回）
+        // 内置 checkNotNullExpressionValue——jsqlparser 5.3 在同 JVM 已成功解析一次后，解析失败
+        // 会静默返回 null 而非抛异常；null 在此转抛，由调用方 catch 接管 fail-closed（detect
+        // 返回 PARSE_FAILED、RollbackSqlGenerator 返回 UNABLE），与 master 行为一致。
+        // 测试注入的替身同样受此约束（主解析入口 SqlAstParser 已有同款守卫，此处按 Kotlin
+        // 语义再护一层：替身不得返回 null，且 null 不得写入共享槽）。
+        List<Statement> statements = Objects.requireNonNull(
+                parseStatementsForTest.parse(cleaned),
+                "parseStatementsForTest(cleaned) must not be null");
         astSlot = new AstSlot(cleaned, statements);
         return statements;
     }

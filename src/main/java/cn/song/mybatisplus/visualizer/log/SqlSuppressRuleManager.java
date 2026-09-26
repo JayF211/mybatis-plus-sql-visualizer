@@ -51,7 +51,7 @@ import java.util.concurrent.atomic.AtomicInteger;
         storages = @Storage(value = "mp-sql-visualizer-suppress.xml", roamingType = RoamingType.DISABLED)
 )
 @Service(Service.Level.APP)
-public class SqlSuppressRuleManager implements PersistentStateComponent<SqlSuppressRuleManager.State> {
+public final class SqlSuppressRuleManager implements PersistentStateComponent<SqlSuppressRuleManager.State> {
 
     /** 可持久化状态（XmlSerializer 序列化）。规则按创建序排列（index 0 = 最早）。 */
     public static class State {
