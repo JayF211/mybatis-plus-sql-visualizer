@@ -34,6 +34,8 @@
             <li><b>SQL → Java</b>: convert any SQL back into compilable QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper code (CRUD &amp; joins)</li>
             <li><b>JOIN diagram &amp; execution</b>: native IDE ER diagram with PNG / SVG export; execute SQL and one-click EXPLAIN plans in an embedded native Database console (Ultimate)</li>
             <li><b>CRUD SQL in one step</b>: right-click an entity class or database table to generate INSERT / UPDATE / SELECT / DELETE</li>
+            <li><b>Rollback SQL in one click</b>: derive the reverse DELETE for an INSERT preview with identity-column wrapping for SQL Server and DM; snapshot-assisted recovery for UPDATE / DELETE</li>
+            <li><b>MCP tools for AI agents</b>: 10 deterministic read-oriented tools (render, check, explain, rollback plan, CRUD, reverse SQL and more) registered with the platform MCP Server, per-tool gating in settings (IDEA 2025.2+)</li>
             <li>One keystroke away: gutter icon / context menu / <code>Alt+Shift+Q</code></li>
         </ul>
         <p>Feature matrix &amp; docs: <a href="https://sql-visualizer.jvtools.cn">sql-visualizer.jvtools.cn</a> · Screenshots on the <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">Marketplace page</a></p>
@@ -51,6 +53,8 @@
             <li><b>SQL 反向转 Java</b>：一键生成可直接编译的 QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 代码（增删改查与多表 JOIN）</li>
             <li><b>JOIN 关系图与执行</b>：IDE 原生 ER 图渲染（PNG / SVG 导出）；内嵌原生 Database 控制台直接执行 SQL 与一键执行计划 EXPLAIN（Ultimate）</li>
             <li><b>CRUD SQL 一步直出</b>：实体类 / 数据库表右键生成 INSERT / UPDATE / SELECT / DELETE</li>
+            <li><b>一键回滚 SQL</b>：对预览的 INSERT 推导逆向 DELETE，SQL Server / 达梦自增列自动包装；UPDATE / DELETE 走快照回填恢复</li>
+            <li><b>MCP 工具面向 AI agent</b>：10 个确定性只读工具接入平台 MCP Server（渲染 / 核查 / 执行计划 / 回滚预案 / CRUD / 反向转换等），设置页逐项门控（IDEA 2025.2+）</li>
             <li>触发零门槛：代码左侧 gutter 图标 / 右键菜单 / <code>Alt+Shift+Q</code></li>
         </ul>
         <p>功能矩阵与文档：<a href="https://sql-visualizer.jvtools.cn">sql-visualizer.jvtools.cn</a> · 截图见 <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">Marketplace 页面</a></p>
@@ -211,6 +215,9 @@
         <!-- T-H2 hbm 命名查询预览：<hibernate-mapping> 下 <query>/<sql-query> 行显示预览图标（O(1) 标签名判定） -->
         <codeInsight.lineMarkerProvider language="XML"
                                         implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.HbmNamedQueryGutterLineMarkerProvider"/>
+        <!-- O-72 T-XmlInlineSql 通用内嵌 SQL 预览：叶子标签文本首词命中 SQL 关键字即认领（内容判定，不限根元素/标签名；mapper/pages/hbm 之后兜底） -->
+        <codeInsight.lineMarkerProvider language="XML"
+                                        implementationClass="cn.song.mybatisplus.visualizer.ui.gutter.XmlInlineSqlGutterLineMarkerProvider"/>
 
         <!-- F-14 JPA：Repository 推导方法（findByXxx）行显示预览图标 -->
         <codeInsight.lineMarkerProvider language="JAVA"
@@ -297,6 +304,13 @@
         <notificationGroup id="cn.song.mybatisplus.visualizer.feedback"
                            bundle="messages.MpSqlVisualizerBundle"
                            key="notification.group.feedback"
+                           displayType="BALLOON"/>
+        <!-- T-SqlSuppress（O-69/D5）：SQL 屏蔽规则 balloon（右键屏蔽成功反馈 + 达上限提示 + 管理直达）——
+             独立组：既有三组各属独立域（updates 更新 / preview 预览 toast / feedback 错误上报），
+             屏蔽反馈复用会张冠李戴，照「一域一组」惯例新增 -->
+        <notificationGroup id="cn.song.mybatisplus.visualizer.logsuppress"
+                           bundle="messages.MpSqlVisualizerBundle"
+                           key="notification.group.logsuppress"
                            displayType="BALLOON"/>
         <postStartupActivity implementation="cn.song.mybatisplus.visualizer.update.StartupUpdateCheck"/>
 

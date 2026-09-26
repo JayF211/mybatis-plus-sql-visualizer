@@ -1,0 +1,93 @@
+package cn.song.mybatisplus.visualizer.ui
+
+import com.intellij.psi.util.PsiTreeUtil
+import com.intellij.psi.xml.XmlFile
+import com.intellij.psi.xml.XmlTag
+import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+
+/**
+ * 通用 XML 内嵌 SQL 预览服务测试（O-72 T-XmlInlineSql）。
+ *
+ * 覆盖：原生 SQL 直显（pages 同款）、空文本 warning、HQL 分派（JPA 实体夹具 →
+ * HqlConverter 管道）、project 缺席时回退原文。
+ */
+class XmlInlineSqlPreviewServiceTest : BasePlatformTestCase() {
+
+    private fun xmlFile(text: String): XmlFile {
+        myFixture.configureByText("sample.xml", text)
+        return myFixture.file as XmlFile
+    }
+
+    private fun tagNamed(name: String): XmlTag =
+        PsiTreeUtil.collectElementsOfType(myFixture.file, XmlTag::class.java).first { it.name == name }
+
+    fun test原生SQL直显_占位符参数表() {
+        xmlFile(
+            "<DataSource type=\"SQL\"><statement><![CDATA[SELECT * FROM t WHERE id = ? AND code = ?]]></statement></DataSource>",
+        )
+        val result = XmlInlineSqlPreviewService.preview(null, tagNamed("statement"))
+        assertEquals("SQL 原样直显", "SELECT * FROM t WHERE id = ? AND code = ?", result.sql)
+        assertNull("无 warning", result.warning)
+        assertEquals("两个 ? 占位符", listOf("param1", "param2"), result.unresolvedParams)
+        assertNotNull(result.paramTable)
+        assertTrue("compactSql 无换行", !result.compactSql.contains("\n"))
+    }
+
+    fun test无type按原生直显() {
+        xmlFile("<root><statement><![CDATA[DELETE FROM t]]></statement></root>")
+        val result = XmlInlineSqlPreviewService.preview(null, tagNamed("statement"))
+        assertEquals("DELETE FROM t", result.sql)
+        assertNull(result.warning)
+    }
+
+    fun test空文本返回warning() {
+        xmlFile("<root><statement>   </statement></root>")
+        val result = XmlInlineSqlPreviewService.preview(null, tagNamed("statement"))
+        assertNotNull("空文本应有 warning", result.warning)
+        assertEquals("", result.sql)
+    }
+
+    fun testHQL_project缺席回退原文直显() {
+        // project=null 时无法进 SqlPreviewService 管道——必须回退原文直显，不抛错
+        xmlFile("<DataSource type=\"HQL\"><statement><![CDATA[SELECT qc.code FROM WmsQuality qc]]></statement></DataSource>")
+        val result = XmlInlineSqlPreviewService.preview(null, tagNamed("statement"))
+        assertEquals("回退原文", "SELECT qc.code FROM WmsQuality qc", result.sql)
+    }
+
+    fun testHQL_实体可解析时走转换管道() {
+        // 实体夹具：默认包 JPA 注解实体（同 PreviewEndToEndTest 形态），findClass allScope 可命中
+        myFixture.addFileToProject(
+            "WmsQuality.java",
+            """
+            @javax.persistence.Entity
+            @javax.persistence.Table(name = "wms_quality")
+            public class WmsQuality {
+                @javax.persistence.Id
+                private Long id;
+                private String code;
+            }
+            """.trimIndent(),
+        )
+        xmlFile(
+            "<DataSource type=\"HQL\"><statement><![CDATA[SELECT qc.code FROM WmsQuality qc]]></statement></DataSource>",
+        )
+        val result = XmlInlineSqlPreviewService.preview(project, tagNamed("statement"))
+        assertNotNull("HQL 管道应产出结果", result)
+        assertTrue("实体名应映射为表名（wms_quality），实际：${result.sql}", result.sql.contains("wms_quality"))
+        assertTrue("HQL 属性应映射为列名（code），实际：${result.sql}", result.sql.contains("code"))
+    }
+
+    fun testHQL_实体不可解析时透传原文不抛错() {
+        // 未注册 WmsQuality 实体——HqlConverter 对无 TableInfo 的处理是透传原文（非异常路径）
+        xmlFile(
+            "<DataSource type=\"HQL\"><statement><![CDATA[SELECT qc.code FROM WmsQuality qc]]></statement></DataSource>",
+        )
+        val result = XmlInlineSqlPreviewService.preview(project, tagNamed("statement"))
+        assertNotNull(result)
+        assertTrue("至少应展示原文，实际：${result.sql}", result.sql.contains("qc.code"))
+    }
+}

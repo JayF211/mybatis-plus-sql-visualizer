@@ -15,9 +15,7 @@ class RenderLogsToolTest {
     fun `MyBatis日志对还原为可执行SQL`() {
         val text = "==>  Preparing: SELECT * FROM t_user WHERE id = ?\n" +
             "==> Parameters: 1(Long)"
-        val entries = SqlVisualizerRenderLogsTool.renderLogEntries(
-            text, "", "", "", "", null, SqlVisualizerRenderLogsTool.LogPrefixDefaults(),
-        )
+        val entries = SqlVisualizerRenderLogsTool.renderLogEntries(text)
         org.junit.Assert.assertEquals(1, entries.size)
         org.junit.Assert.assertEquals(cn.song.mybatisplus.visualizer.log.SqlSource.MYBATIS, entries[0].source)
         assertTrue(entries[0].restoredSql, entries[0].restoredSql.contains("id = 1"))
@@ -25,23 +23,18 @@ class RenderLogsToolTest {
 
     @Test
     fun `无匹配日志返回空集_合法结果`() {
-        val entries = SqlVisualizerRenderLogsTool.renderLogEntries(
-            "hello world 业务日志，没有任何 SQL", "", "", "", "", null, SqlVisualizerRenderLogsTool.LogPrefixDefaults(),
-        )
+        val entries = SqlVisualizerRenderLogsTool.renderLogEntries("hello world 业务日志，没有任何 SQL")
         org.junit.Assert.assertEquals(0, entries.size)
     }
 
     @Test
     fun `空文本返回空集`() {
-        org.junit.Assert.assertEquals(
-            0,
-            SqlVisualizerRenderLogsTool.renderLogEntries("", "", "", "", "", null, SqlVisualizerRenderLogsTool.LogPrefixDefaults()).size,
-        )
+        org.junit.Assert.assertEquals(0, SqlVisualizerRenderLogsTool.renderLogEntries("").size)
     }
 
     @Test
     fun `空输入走预期错误`() {
-        val error = runCatching { SqlVisualizerRenderLogsTool().renderLogs("  ", "", "", "", "", null) }.exceptionOrNull()
-        assertTrue("空输入应抛 McpExpectedError", error is com.intellij.mcpserver.McpExpectedError)
+        val error = runCatching { SqlVisualizerRenderLogsTool().renderLogs("  ") }.exceptionOrNull()
+        assertTrue("空输入应抛 SqlvExpectedToolException", error is SqlvExpectedToolException)
     }
 }

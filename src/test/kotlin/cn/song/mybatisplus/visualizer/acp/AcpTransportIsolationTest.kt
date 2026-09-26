@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.acp
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import java.io.File
 
 /**
  * T-AcpMcpTransport 可选依赖隔离的 headless 实证（验收标准 4 的可测部分）。
@@ -32,20 +33,41 @@ class AcpTransportIsolationTest : BasePlatformTestCase() {
             mlLlmPresent,
         )
 
-        val providerClass = runCatching {
-            Class.forName("cn.song.mybatisplus.visualizer.acp.AcpIdeaMcpTransportProviderImpl")
+        // T-MarketCompatProxy（20260923）：provider 实现类（implements ml-llm internal 接口）已删除，
+        // 改为动态代理 + 探测式注册（AcpTransportRegistrar）。隔离断言同步为两层：
+        // ① 注册器在沙盒内可解析（插件 jar/描述文件加载正常）；
+        // ② 注册器字节码零 ml-llm / platform.acp 类型引用（单包形态下消 Marketplace「未解析类」
+        //    读数的机制本体——类引用全部经 Class.forName 字符串，缺 ml-llm 环境下永不链接）。
+        val registrarClass = runCatching {
+            Class.forName("cn.song.mybatisplus.visualizer.acp.AcpTransportRegistrar")
         }.getOrNull()
         assertNotNull(
-            "本插件的 provider 实现类在沙盒内不可解析——插件 jar/描述文件加载异常",
-            providerClass,
+            "本插件的传输注册器在沙盒内不可解析——插件 jar/描述文件加载异常",
+            registrarClass,
         )
-        // 类实现了 EP 声明的接口（此处由桩提供同一 FQN），且类可加载 ⇒ 签名与 EP 声明一致
-        val implemented = providerClass!!.interfaces.map { it.name }
-        assertTrue(
-            "provider 未实现 EP 声明的接口：$implemented（acp-transport-optional.xml 的 EP 注册会失败）",
-            implemented.contains("com.intellij.ml.llm.agents.acp.client.AcpIdeaMcpTransportProvider"),
-        )
+        // location 可为 null（沙盒内类经共享 loader 装载，无独立 codeSource）——此时跳过字节级
+        // 断言：Class.forName 通过已证明类可加载；字节级守卫另有源码扫描守卫（AcpTransportScopeSourceScanTest）
+        registrarClass!!.protectionDomain.codeSource?.location?.toURI()?.let { uri ->
+            val dir = File(uri).takeIf { it.isDirectory } ?: return@let
+            val classFile = File(dir, "cn/song/mybatisplus/visualizer/acp/AcpTransportRegistrar.class")
+            if (classFile.isFile) {
+                // ISO_8859_1 把字节无损映射到 char，contains 即字节序列查找（不引依赖）
+                val text = String(classFile.readBytes(), Charsets.ISO_8859_1)
+                val leaked = listOf(
+                    "com/intellij/ml/llm",
+                    "com/intellij/platform/acp",
+                    "com/intellij/mcpserver",
+                ).filter { text.contains(it) }
+                assertTrue(
+                    "注册器字节码出现 ml-llm/acp 平台类型引用：$leaked——" +
+                        "动态代理形态的「旧版零未解析类读数」依赖字节码零引用，破坏即回归",
+                    leaked.isEmpty(),
+                )
+            }
+            // classFile 不在目录形态（如 jar 内）时跳过字节级断言：Class.forName 通过已证明加载正常
+        }
     }
+
 
     private companion object {
         /** ml-llm 真实类（非本项目桩类型），用于探测插件是否在场。 */

@@ -125,6 +125,16 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
             configurable.reset()
             assertFalse("reset 后应回到与配置一致（无变化）", configurable.isModified())
             assertEquals("reset 不应改写配置", PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING, settings.state.emptyParamFill)
+
+            // O-79：占位档（默认档）round-trip
+            panel.selectEmptyParamFill(PluginSettings.EMPTY_PARAM_FILL_PLACEHOLDER)
+            assertTrue("切到占位档应检测到变化", configurable.isModified())
+            configurable.apply()
+            assertEquals(
+                "apply 后 state.emptyParamFill 应为 PLACEHOLDER",
+                PluginSettings.EMPTY_PARAM_FILL_PLACEHOLDER,
+                settings.state.emptyParamFill,
+            )
         } finally {
             settings.state.emptyParamFill = old
         }

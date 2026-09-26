@@ -24,6 +24,12 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * T-PerfSweep6 T-PS6-05：退避复位点由「连上即复位」后移到「连接存活超过 [BACKOFF_RESET_AFTER_MS]
  * 才复位」，并对连续「连上即被关」计满 [MAX_FAST_DROPS] 次后放弃该端口（性能报告发现 5 / 发现 9）。
+ *
+ * T-PerfSweep7 T-PS7-02：上述「存活时长」由拨号发起前（attemptStartMs）改按**建连成功时刻**
+ * （connectedAtMs）起算——new Socket 无 connect 超时，慢拨号（远端不可达时握手挂数秒）会把
+ * 「连上即被关」撑过复位阈值，被误判成正常掉线而每轮复位退避与 fastDrops；拨号提为包内可注入
+ * 函数缝 [SocketDialer]（默认真拨号，不新增生产可配置面）。帧协议不动。
+ *
  * T-AgentConfigChannel T-01：入站读序对齐为 `[4 字节 len][1 字节 cmd][body]`（与出站、与 IDE 侧
  * 读写完全同形）。此前入站先读 1 字节当命令、再读 4 字节当长度——IDE 下发的 CONFIG 被解析成
  * cmd=0 丢弃、随后按错位长度（实测 9475）阻塞读超时被静默吞掉，控制通道等于完全不通，
@@ -85,7 +91,8 @@ final class SenderLoop implements Runnable {
      * **复位点后移**：此前 `backoffMs = 1000` 打在「socket 连上」处——只要 TCP 握手成功就算成功，
      * 于是「连上即被关」（attach 端口 accept 后即释放，或端口被无关进程复用）这种**必然失败**的
      * 连接每轮都把退避打回 1s，agent 以固定短节奏对着一个不存在的对端写帧（性能报告发现 9）。
-     * 现在改为：连接**存活**超过本阈值才算「一次正常掉线」，才复位退避与快速断开计数。
+     * 现在改为：连接**存活**超过本阈值才算「一次正常掉线」，才复位退避与快速断开计数
+     * （T-PerfSweep7 T-PS7-02：存活自建连成功时刻起算，不含拨号耗时）。
      * 取值 2s 远小于任何真实会话寿命（IDE 侧在线窗口 30s），故正常路径的复位时机体感不变
      * （正常连接掉线时阈值必已满足，退避照旧回到 1s）。
      */
@@ -109,6 +116,8 @@ final class SenderLoop implements Runnable {
     private final long backoffMaxMs;
     private final long backoffResetAfterMs;
     private final int maxFastDrops;
+    /** 拨号函数缝（T-PerfSweep7 T-PS7-02）：默认真拨号，仅同包测试构造器可达（不新增生产可配置面）。 */
+    private final SocketDialer dialer;
 
     SenderLoop(int serverPort) {
         this(serverPort, BACKOFF_INITIAL_MS, BACKOFF_MAX_MS, BACKOFF_RESET_AFTER_MS, MAX_FAST_DROPS);
@@ -119,12 +128,35 @@ final class SenderLoop implements Runnable {
      * 退避节奏是秒级，靠系统属性压时间会给生产侧多出一个可配置面，故改为构造器注入。
      */
     SenderLoop(int serverPort, long backoffInitialMs, long backoffMaxMs, long backoffResetAfterMs, int maxFastDrops) {
+        this(serverPort, backoffInitialMs, backoffMaxMs, backoffResetAfterMs, maxFastDrops, DEFAULT_DIAL);
+    }
+
+    /**
+     * 拨号注入构造器（T-PerfSweep7 T-PS7-02，同包测试缝）：在退避参数之上可注入慢拨号，
+     * 用于证明「拨号耗时不得计入连接存活时长」；生产路径一律走单参构造器 + [DEFAULT_DIAL]。
+     */
+    SenderLoop(int serverPort, long backoffInitialMs, long backoffMaxMs, long backoffResetAfterMs, int maxFastDrops,
+            SocketDialer dialer) {
         this.serverPort = serverPort;
         this.backoffInitialMs = backoffInitialMs;
         this.backoffMaxMs = backoffMaxMs;
         this.backoffResetAfterMs = backoffResetAfterMs;
         this.maxFastDrops = maxFastDrops;
+        this.dialer = dialer;
     }
+
+    /** 拨号函数缝：与被替换的 {@code new Socket(host, port)} 逐字同形（生产缺省实现）。 */
+    interface SocketDialer {
+        Socket dial(String host, int port) throws IOException;
+    }
+
+    /** 默认拨号：真拨号（与 T-PS7-02 改造前同一行代码，零行为变化）。 */
+    private static final SocketDialer DEFAULT_DIAL = new SocketDialer() {
+        @Override
+        public Socket dial(String host, int port) throws IOException {
+            return new Socket(host, port);
+        }
+    };
 
     /** 心跳间隔：系统属性 [HEARTBEAT_MS_PROP] 优先，解析失败/非正数回落 [DEFAULT_HEARTBEAT_MS]。 */
     static long resolveHeartbeatIntervalMs() {
@@ -184,10 +216,15 @@ final class SenderLoop implements Runnable {
         while (true) {
             Socket socket = null;
             boolean connected = false;
-            final long attemptStartMs = System.currentTimeMillis();
+            // T-PerfSweep7 T-PS7-02：连接成功那一刻另记（拨号返回后），复位与 fastDrops 的
+            // 「存活时长」判据改按本时刻起算——attemptStartMs 把**拨号耗时**也算进存活，
+            // 而 new Socket 无 connect 超时，远端网络不可达时握手可挂数秒：慢拨号 + 连上即被关
+            // 会被误判成「存活过阈值的正常掉线」而每轮复位退避与 fastDrops（永不放弃端口）。
+            long connectedAtMs = 0L;
             try {
-                socket = new Socket("127.0.0.1", serverPort);
+                socket = dialer.dial("127.0.0.1", serverPort);
                 connected = true;
+                connectedAtMs = System.currentTimeMillis();
                 final long heartbeatIntervalMs = resolveHeartbeatIntervalMs();
                 final long watchdogMs = resolveConfigWatchdogMs();
                 socket.setSoTimeout(configReadTimeoutMs(heartbeatIntervalMs));
@@ -201,8 +238,9 @@ final class SenderLoop implements Runnable {
                 // 连接建立即补发一条心跳：即便首轮迭代被 CONFIG 读超时拖住，IDE 侧 lastSeen 也从头新鲜
                 writeFrame(out, EventBus.CMD_HEARTBEAT, "{}");
                 long lastOutboundMs = System.currentTimeMillis();
-                // T-07 看门狗：本连接是否收到过任何 CONFIG / 本连接是否已触发（每条连接只触发一次）
-                final long connectedAtMs = lastOutboundMs;
+                // T-07 看门狗：本连接是否收到过任何 CONFIG / 本连接是否已触发（每条连接只触发一次）。
+                // T-PS7-02 起与复位判据共用 [connectedAtMs]（同一时刻：拨号返回即连接成功，
+                // 与写 HELLO 后的差是毫秒级，对 15s 窗口语义无差）。
                 boolean configSeen = false;
                 boolean watchdogFired = false;
 
@@ -279,7 +317,9 @@ final class SenderLoop implements Runnable {
                 // T-PerfSweep6 T-PS6-05：退避复位点后移 + 「连上即被关」连续计数。
                 // 判据只看「是否建连成功」与「存活时长」，与异常类型无关（断开形态多样：
                 // EOFException / SocketException / 读超时后写失败…，逐类型分支必漏）。
-                final long aliveMs = System.currentTimeMillis() - attemptStartMs;
+                // T-PerfSweep7 T-PS7-02：存活自 [connectedAtMs]（建连成功时刻）起算，
+                // 不含拨号耗时——退回 attemptStartMs（拨号发起前）起算即把慢拨号误判成正常掉线。
+                final long aliveMs = System.currentTimeMillis() - connectedAtMs;
                 if (connected && aliveMs < backoffResetAfterMs) {
                     // 连上即被关：**不复位**退避（下一轮等待翻倍），并累计快速断开计数
                     fastDrops++;
@@ -345,9 +385,16 @@ final class SenderLoop implements Runnable {
         // T-SourceJumpFunnel P1-3：用户登记的帧过滤前缀（"skipPrefixes":["a.","b."]；缺省键=清空）。
         // 极简提取：定位键名后逐项扫描双引号对，支持 \" 转义（IDE 侧同规则转义）。
         if (payload.contains("\"skipPrefixes\"")) {
-            StackLocator.setExtraSkipPrefixes(extractSkipPrefixes(payload));
+            StackLocator.setExtraSkipPrefixes(extractStringArray(payload, "\"skipPrefixes\":"));
         } else {
             StackLocator.setExtraSkipPrefixes(new String[0]);
+        }
+        // T-ToolSiteBizFrame（机制 A）：JAR 业务帧反向名单（"bizJarPrefixes":["a.","b."]；缺省键=清空，
+        // 与 skipPrefixes 同语义——IDE 侧空列表省略键）。
+        if (payload.contains("\"bizJarPrefixes\"")) {
+            StackLocator.setExtraBizJarPrefixes(extractStringArray(payload, "\"bizJarPrefixes\":"));
+        } else {
+            StackLocator.setExtraBizJarPrefixes(new String[0]);
         }
         AgentState.markConfigApplied();
         // T-02：CONFIG 应用成功回执（取值取**应用后**的生效态，含本次生效的前缀条数）
@@ -369,18 +416,19 @@ final class SenderLoop implements Runnable {
 
     /**
      * CONFIG 回执 body（T-02 跨侧字面契约，IDE 侧按同一字面解析）：
-     * {@code {"disabled":<true|false>,"desensitize":<true|false>,"skipPrefixes":<整数>}}
-     * ——键序固定、无空格、布尔小写字面量、skipPrefixes 为本次生效的帧过滤前缀条数。
+     * {@code {"disabled":<true|false>,"desensitize":<true|false>,"skipPrefixes":<整数>,
+     * "bizJarPrefixes":<整数>}} ——键序固定、无空格、布尔小写字面量；skipPrefixes/bizJarPrefixes
+     * 分别为本次生效的帧过滤前缀与 JAR 业务帧反向名单条数（T-ToolSiteBizFrame 追加后段）。
      */
     static String configAckBody() {
         return "{\"disabled\":" + AgentState.isDisabled()
                 + ",\"desensitize\":" + AgentState.isDesensitize()
-                + ",\"skipPrefixes\":" + StackLocator.getExtraSkipPrefixes().length + "}";
+                + ",\"skipPrefixes\":" + StackLocator.getExtraSkipPrefixes().length
+                + ",\"bizJarPrefixes\":" + StackLocator.getExtraBizJarPrefixes().length + "}";
     }
 
-    /** 从 CONFIG payload 提取 "skipPrefixes":[...] 项（无该键/畸形返回空组）。 */
-    static String[] extractSkipPrefixes(String payload) {
-        final String key = "\"skipPrefixes\":";
+    /** 从 CONFIG payload 提取指定字符串数组键的项（无该键/畸形返回空组）。 */
+    static String[] extractStringArray(String payload, String key) {
         final int k = payload.indexOf(key);
         if (k < 0) {
             return new String[0];

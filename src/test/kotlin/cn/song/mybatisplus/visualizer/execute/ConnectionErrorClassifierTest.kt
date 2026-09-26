@@ -13,7 +13,7 @@ import org.junit.Test
 class ConnectionErrorClassifierTest {
 
     private fun info(msg: String, sqlState: String? = null, errorCode: Int? = null) =
-        ExecutionErrorInfo(msg, sqlState, errorCode, null, null, null)
+        ExecutionErrorInfo(message = msg, sqlState = sqlState, errorCode = errorCode)
 
     // ---------- 分类器：SQLState 路 ----------
 
@@ -73,5 +73,21 @@ class ConnectionErrorClassifierTest {
         assertNull(DdlTargetExtractor.extractCreateTarget("SELECT 1"))
         assertNull(DdlTargetExtractor.extractCreateTarget("DROP TABLE t"))
         assertNull(DdlTargetExtractor.extractCreateTarget("-- CREATE TABLE fake\nSELECT 1"))
+    }
+
+    // T-PS7-03③：无先红、等价保绿（禁伪造先红）——
+    // 改前：AST 路对方括号解析失败 → CREATE_TABLE_REGEX 兜底捕获 `[user]` → normalize 剥 [] → user；
+    // 改后：SqlAstParser 开方括号直解 AST → normalize 同剥 → user。两路结果必须一致
+    @Test
+    fun test方括号CreateTable提取收拢前后等价保绿() {
+        assertEquals("user", DdlTargetExtractor.extractCreateTarget("CREATE TABLE [user] (id INT)"))
+    }
+
+    // T-PS7-03③ 附带读数（真先红，计划外行为改进随 ③ 登记）：schema 限定的方括号表名——
+    // 改前正则兜底捕获首个标识符 `[dbo]` → 返回 "dbo"（错表，探测落空）；
+    // 改后 AST 权威取表名 → "user"。收拢修正了该降级误差，非计划 ③ 的等价性主张
+    @Test
+    fun test方括号Schema限定提取收拢后修正() {
+        assertEquals("user", DdlTargetExtractor.extractCreateTarget("create table [dbo].[user] (id int)"))
     }
 }

@@ -90,19 +90,6 @@ import java.io.File
  *
  * 本守卫是**测试基建**，不改产品代码、不改既有守卫逻辑；零平台依赖（源码无平台包引用，
  * 故进 `testFast` 快桶——该桶按「源码文本是否出现平台包名」划桶，故本 KDoc 也不得写出那个包名）。
- *
- * ## k2j 移植注（测试树 .kt/.java 混放）
- *
- * 1. **全量测试源码双根**：[allTestSources] 扫 `src/test/kotlin`（.kt）+ `src/test/java`（.java）两处；
- *    登记表路径全是 `.kt`（k2j 测试树以 .kt 为主，守卫类尚未有 .java 移植件），`sourceOf` 仍从
- *    `src/test/kotlin` 读。
- * 2. **登记表按 k2j 树复核**（2026-09-23）：文件名闭包面（含 `Guard`/`SourceScanTest`）在 k2j 树实测
- *    21 个文件，与登记表一一对应；登记表（25 项）另含 2 个手工扩展登记 + 本元守卫 + 本轮 R2/接线
- *    两个新守卫，磁盘核对全部存在。判定形状兜底面（`*Offenders` 等）全树仅 3 个文件含字样，其中
- *    `ui/SqlPreviewPanelPrewarmWriteSafeTest.kt` 的命中在嵌套类内（4 空格缩进口径外，漏报面第 3 条）。
- * 3. **Java 声明形态对命名兜底面不可见**：[FUN_DECL] 只认 `fun` 关键字（Kotlin）——src/test/java 里的
- *    Java 判定函数不进兜底面（登记表是主识别面，见漏报面第 1 条）；将来出现 .java 守卫类时登记表
- *    仍能约束（文件名闭包认名字不认语言）。
  */
 class GuardSelfTestCoverageMetaGuardTest {
 
@@ -113,35 +100,27 @@ class GuardSelfTestCoverageMetaGuardTest {
     private fun repoRoot(): File {
         var dir = File(System.getProperty("user.dir")).absoluteFile
         repeat(6) {
-            if (File(dir, "src/main/java").isDirectory) return dir
+            if (File(dir, "src/main/kotlin").isDirectory) return dir
             dir = dir.parentFile ?: return@repeat
         }
-        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
+        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
     }
 
-    /** 登记表路径目前全是 .kt（k2j 测试树以 .kt 为主），从 Kotlin 根读。 */
     private fun testRoot(): File = repoRoot().resolve("src/test/kotlin")
 
     /** 登记表路径是 `cn/song/mybatisplus/visualizer/` 之后的包相对路径（如 `convention/XxxTest.kt`）。 */
     private fun sourceOf(entryPath: String): String = File(testRoot(), TEST_PKG + entryPath).readText()
 
-    /** 全量测试源码（包相对路径 → 文本）；k2j 双根：src/test/kotlin（.kt）+ src/test/java（.java）。 */
+    /** 全量测试源码（包相对路径 → 文本）；登记表与命名兜底面共用。 */
     private fun allTestSources(): List<Pair<String, String>> =
-        listOf("src/test/kotlin" to "kt", "src/test/java" to "java").flatMap { (root, _) ->
-            val dir = repoRoot().resolve(root)
-            if (!dir.isDirectory) {
-                emptyList()
-            } else {
-                dir.walkTopDown()
-                    .filter { it.isFile && (it.extension == "kt" || it.extension == "java") }
-                    .map { file ->
-                        val full = file.relativeTo(dir).path.replace('\\', '/')
-                        val rel = if (full.startsWith(TEST_PKG)) full.removePrefix(TEST_PKG) else full
-                        rel to file.readText()
-                    }
-                    .toList()
+        testRoot().walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .map { file ->
+                val full = file.relativeTo(testRoot()).path.replace('\\', '/')
+                val rel = if (full.startsWith(TEST_PKG)) full.removePrefix(TEST_PKG) else full
+                rel to file.readText()
             }
-        }
+            .toList()
 
     // ------------------------------------------------------------------
     // 判定实现（可注入源码：主用例与灵敏度自证共用同一实现）
@@ -655,7 +634,6 @@ class GuardSelfTestCoverageMetaGuardTest {
          * 样本的判定内核（`BannedApiSourceScanTest` / `DialogWrapperInitOrderGuardTest` /
          * `EnumReachabilityGuardTest` / `DmlAliasGuardTest` / `PluginXmlStructureGuardTest`），另两例手工扩展登记
          * （`BundlePlaceholderArityTest` / `DockerComposeLabConsistencyTest`）。
-         * k2j 树 2026-09-23 复核：文件名闭包面 21 文件与本表一一对应（见类头移植注 2）。
          *
          * 独立复核㉗ 后：本表**不再接受散文豁免**——`exempt` 只是说明，豁免依据必须是 `via` 调用边
          * （判据 6）；已登记类里的类级 Boolean 判定函数也必须逐条登记（判据 7）。
@@ -669,12 +647,11 @@ class GuardSelfTestCoverageMetaGuardTest {
                         "assertNoHits",
                         FnKind.HELPER,
                         "断言助手（返回 Unit，不返回违规点集合），命名偶然命中 *Hits 兜底形状；" +
-                            "其行为由下列主用例的断言直接覆盖（via 即这两个调用点）。k2j 树注（2026-09-23）：原第三条 " +
-                            "via `剪贴板写入只允许收口与白名单直用` 已删——该用例在 k2j 移植后改走白名单过滤断言，" +
-                            "不再调用本函数，转发边不存在",
+                            "其行为由下列主用例的断言直接覆盖（via 即这三个调用点）",
                         via = listOf(
                             "禁用ActionToolbar旧式刷新API与反射强改按钮hack",
                             "禁用IPGP发行版裁剪平台类",
+                            "剪贴板写入只允许收口与白名单直用",
                         ),
                     ),
                     DecisionFn(
@@ -691,10 +668,12 @@ class GuardSelfTestCoverageMetaGuardTest {
                     ),
                     DecisionFn("anyModalityWriteOffenders", FnKind.VIOLATIONS),
                     DecisionFn("defaultModalityWriteOffenders", FnKind.VIOLATIONS),
-                    // 原「经 fatalPassthroughOffenders 转发」的豁免已删（2026-09-23）：`TFP03自证_…`
-                    // 用例已在断言里**直接引用**本函数（嵌套块注释口径对照断言），自证不再依赖转发边——
-                    // 按判据 3 豁免随语料补齐而删除。
-                    DecisionFn("throwableCatchSites", FnKind.SITES),
+                    DecisionFn(
+                        "throwableCatchSites",
+                        FnKind.SITES,
+                        "站点提取器（catch (…: Throwable) 站点），被 fatalPassthroughOffenders 调用；自证经该转发边到达",
+                        via = listOf("fatalPassthroughOffenders"),
+                    ),
                     DecisionFn("fatalPassthroughOffenders", FnKind.VIOLATIONS),
                     DecisionFn("pooledThreadSites", FnKind.SITES),
                     DecisionFn("psiCaptureOffenders", FnKind.VIOLATIONS),
@@ -725,10 +704,17 @@ class GuardSelfTestCoverageMetaGuardTest {
             ),
             GuardEntry(
                 "convention/DialogWrapperInitOrderGuardTest.kt",
-                listOf(DecisionFn("scan", FnKind.VIOLATIONS)),
-                "判定函数名不命中命名形状（叫 scan，:178）——正是「登记表为主识别面」的实证；自证 :363。" +
-                    "k2j 树注（2026-09-23）：master 侧的 `writesAt` 形态谓词在本类 k2j 移植时未单独成函数，" +
-                    "`name = expr` 赋值判定正则内联进 initializerOf/scan 函数体——以 k2j 源码为准，登记条目删除",
+                listOf(
+                    DecisionFn("scan", FnKind.VIOLATIONS),
+                    // 独立复核㉗ 判据 7 补登记：Boolean 形态谓词此前完全不在登记面内
+                    DecisionFn(
+                        "writesAt",
+                        FnKind.HELPER,
+                        "纯赋值形态谓词（`name = expr`，排除 `==`/`+=`），是判定内核 scan 的输入谓词；自证经该转发边到达",
+                        via = listOf("scan"),
+                    ),
+                ),
+                "判定函数名不命中命名形状（叫 scan，:178）——正是「登记表为主识别面」的实证；自证 :363",
             ),
             GuardEntry(
                 "convention/EnumReachabilityGuardTest.kt",
@@ -845,24 +831,18 @@ class GuardSelfTestCoverageMetaGuardTest {
             ),
             GuardEntry(
                 "log/agent/AgentUrlDecoupleGuardTest.kt",
-                listOf(
-                    // 判据 7 补登记（2026-09-23）：类级 Boolean 返回函数必须逐条登记。
-                    // 定性为 HELPER：只是「容忍换行/空白的成员访问」匹配谓词（k2j Java 形态适配件），
-                    // 不返回违规点/站点集合，本类断言仍直接内联在 @Test——非判定内核。
-                    DecisionFn(
-                        "containsMemberAccess",
-                        FnKind.HELPER,
-                        "成员访问匹配谓词（容忍换行/空白的正则，k2j Java 形态适配件），只是断言助手、" +
-                            "非判定内核（本类断言直接内联在 @Test）；via 即调用它的用例",
-                        via = listOf("推断读点不再引用AgentManager"),
-                    ),
-                ),
-                "断言直接内联在 @Test；source(:38) 为夹具，containsMemberAccess(:51) 为匹配助手（经上面 via 用例调用）",
+                emptyList(),
+                "断言直接内联在 @Test；source(:38) 为夹具",
             ),
             GuardEntry(
                 "mcp/McpScopeSourceScanTest.kt",
                 emptyList(),
                 "断言直接内联在 @Test；repoRoot/stripComments/stripStrings/stripXmlComments 为夹具",
+            ),
+            GuardEntry(
+                "mcp/McpGateFilterRegistrationGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（O-68 注册结构三条：单 depends、过滤 EP 禁直宣、探测与桥在册；T-MarketCompatProxy 代理形态后判据不变）",
             ),
             GuardEntry(
                 "mcp/McpSelectGuardTest.kt",
@@ -884,6 +864,41 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "execute/ErrorPositionWiringGuardTest.kt",
                 emptyList(),
                 "断言直接内联在 @Test；repoRoot/readArguments/lineOf 为夹具（T-ELU-03 接线守卫）",
+            ),
+            GuardEntry(
+                "database/CatalogCrudDialectWiringGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test；repoRoot/isInsideComment/readArguments/lineOf 为夹具" +
+                    "（2026-09-23 真机走查配套：目录来源 CRUD 必须按表所属项目解析方言）",
+            ),
+            // ---- 2026-09-23 合并 dev 后补登记（master 侧 O-68 批次新增的守卫类，基线红收口） ----
+            GuardEntry(
+                "mcp/McpGateFilterRegistrationGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（O-68 注册结构守卫：mcpServer optional depends 恰一条 / " +
+                    "mcp-optional.xml 禁直宣 mcpToolFilterProvider / 探测式 registrar 与桥类在册防改名漂移）",
+            ),
+            // ---- O-64/T-RollbackIdentityParse 新增守卫（2026-09-23） ----
+            GuardEntry(
+                "sql/IdentityWholeScriptWiringGuardTest.kt",
+                listOf(
+                    DecisionFn(
+                        "argSpan",
+                        FnKind.HELPER,
+                        "括号配对实参提取器，被 callsWithin 调用（via 即该调用边）",
+                        via = listOf("callsWithin"),
+                    ),
+                    DecisionFn(
+                        "argSpanBody",
+                        FnKind.HELPER,
+                        "花括号配对函数体提取器，被 callsWithin 调用（via 即该调用边）",
+                        via = listOf("callsWithin"),
+                    ),
+                    // 裸条目：callsWithin 由本类自证语料 `自证_合成源码缺旗标被守卫抓到` 直接引用（勿加描述=豁免）
+                    DecisionFn("callsWithin", FnKind.SITES),
+                ),
+                "O-64 wholeScriptExec 接线守卫：生产链每个转发点必传旗标（P19 批次默认执行缺口的防复发面）；" +
+                    "callsWithin 的自证语料为合成源码直接喂入",
             ),
             // ---- 本元守卫自身 ----
             GuardEntry(

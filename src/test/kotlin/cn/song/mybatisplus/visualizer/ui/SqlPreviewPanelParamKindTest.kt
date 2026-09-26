@@ -59,9 +59,8 @@ class SqlPreviewPanelParamKindTest : BasePlatformTestCase() {
         val parsed = XmlMapperParser().parse(mapper)
         val model = XmlPreviewModel.from(
             parsed.statements.single(), parsed.errors,
-            emptySet(), emptyMap(), emptyMap(), emptyMap(),
-            mapOf(
-                "pageNum" to ParamTypeInfo(ParamKind.NUMBER, false),
+            paramTypes = mapOf(
+                "pageNum" to ParamTypeInfo(ParamKind.NUMBER, nullable = false),
                 "startDate" to ParamTypeInfo(ParamKind.TEMPORAL),
                 "ids" to ParamTypeInfo(ParamKind.COLLECTION),
                 "status" to ParamTypeInfo(ParamKind.TEXT),
@@ -70,26 +69,13 @@ class SqlPreviewPanelParamKindTest : BasePlatformTestCase() {
         )
         val rendered = model.renderSql()
         return PreviewResult(
-            rendered.sql,
-            rendered.sql.replace(Regex("\\s+"), " ").trim(),
-            rendered.mappings.map { it.property },
-            ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
-            null,
-            null,
-            null,
-            emptyList(),
-            emptyMap(),
-            null,
-            null,
-            emptyList(),
-            emptyList(),
-            null,
-            model,
-            emptyMap(),
-            null,
-            null,
-            null,
-            null,
+            sql = rendered.sql,
+            compactSql = rendered.sql.replace(Regex("\\s+"), " ").trim(),
+            unresolvedParams = rendered.mappings.map { it.property },
+            paramTable = ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
+            wrapperType = null,
+            tableName = null,
+            xmlModel = model,
         )
     }
 
@@ -165,16 +151,23 @@ class SqlPreviewPanelParamKindTest : BasePlatformTestCase() {
     // 空参数填充策略（T-PT-04）
     // ------------------------------------------------------------------
 
-    fun testEmptyParamFillStrategyTwoModes() {
-        PluginSettings.getInstance().state.emptyParamFill = PluginSettings.EMPTY_PARAM_FILL_NULL
+    fun testEmptyParamFillStrategyThreeModes() {
+        // O-79：默认占位档——未填写保留 ? 待填提示（NULL 会静默过滤行不易察觉）
+        PluginSettings.getInstance().state.emptyParamFill = PluginSettings.EMPTY_PARAM_FILL_PLACEHOLDER
         val p = openPanel()
-        assertTrue("NULL 档（默认）：空输入出 NULL: ${sqlText(p)}", sqlText(p).contains("page_num = NULL"))
-        assertTrue("NULL 档：IN 列表空输入同样出 NULL: ${sqlText(p)}", sqlText(p).contains("id IN (NULL)"))
+        assertTrue("? 档（默认）：空输入出 ?: ${sqlText(p)}", sqlText(p).contains("page_num = ?"))
+        assertTrue("? 档：IN 列表同档: ${sqlText(p)}", sqlText(p).contains("id IN (?)"))
+
+        PluginSettings.getInstance().state.emptyParamFill = PluginSettings.EMPTY_PARAM_FILL_NULL
+        p.renderSqlForTest()
+        assertTrue("NULL 档：空输入出 NULL: ${sqlText(p)}", sqlText(p).contains("page_num = NULL"))
+        assertTrue("NULL 档：IN 列表空输入同档: ${sqlText(p)}", sqlText(p).contains("id IN (NULL)"))
 
         PluginSettings.getInstance().state.emptyParamFill = PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING
-        p.paramFieldForTest(3)!!.text = "z"
+        p.renderSqlForTest()
         assertTrue("空字符串档：空输入出 '': ${sqlText(p)}", sqlText(p).contains("created = ''"))
-        assertTrue("空字符串档：IN 列表空输入同档: ${sqlText(p)}", sqlText(p).contains("id IN ('')"))
+        assertTrue("空字符串档：IN 列表同档: ${sqlText(p)}", sqlText(p).contains("id IN ('')"))
+
         // 有值输入不受策略影响（策略只作用于空输入）
         p.paramFieldForTest(0)!!.text = "42"
         assertTrue("有值输入照常渲染: ${sqlText(p)}", sqlText(p).contains("page_num = 42"))

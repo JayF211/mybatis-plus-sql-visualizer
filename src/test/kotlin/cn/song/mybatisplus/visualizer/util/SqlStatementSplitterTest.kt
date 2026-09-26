@@ -343,6 +343,89 @@ class SqlStatementSplitterTest {
         )
     }
 
+    // ==================== T-SQL 控制流批次切分边缘治理（T-SqlSplitterTsqlGuard / O-60） ====================
+
+    /**
+     * 边缘 A：`BEGIN TRAN` 是事务形态而非块（DBX `SQLSERVER_NON_BLOCK_BEGIN_KEYWORDS` 同型），
+     * 不得因后方存在任何 END 词（本例是 CASE 的 END）而武装块计数——武装后 CASE 的 END 走
+     * CASE 层递减、blockDepth 永不归零，后续顶层 `;` 全部失切（改前实测 1 段）。
+     */
+    @Test
+    fun `TSQL_BEGIN_TRAN非块形态不武装_边缘A`() {
+        val parts = split("BEGIN TRAN; SELECT 1; SELECT CASE WHEN @x>0 THEN 1 ELSE 0 END AS y; SELECT 99;")
+        assertEquals("事务形态 BEGIN 不并入块——4 条语句 4 段", 4, parts.size)
+        assertEquals("BEGIN TRAN", parts[0])
+        assertEquals("SELECT 1", parts[1])
+        assertEquals("SELECT CASE WHEN @x>0 THEN 1 ELSE 0 END AS y", parts[2])
+        assertEquals("SELECT 99", parts[3])
+    }
+
+    /** 边缘 A 变体：`BEGIN TRANSACTION`（首词即豁免表词）。 */
+    @Test
+    fun `TSQL_BEGIN_TRANSACTION变体不武装`() {
+        val parts = split("BEGIN TRANSACTION; SELECT CASE WHEN 1=1 THEN 1 ELSE 0 END AS y;\nSELECT 2;")
+        assertEquals("3 条语句 3 段", 3, parts.size)
+        assertEquals("BEGIN TRANSACTION", parts[0])
+        assertEquals("SELECT 2", parts[2])
+    }
+
+    /** 边缘 A 变体：`BEGIN DIALOG CONVERSATION`（Service Broker 会话形态，首词 DIALOG 在豁免表）。 */
+    @Test
+    fun `TSQL_BEGIN_DIALOG变体不武装`() {
+        val parts = split("BEGIN DIALOG CONVERSATION @h; SELECT CASE WHEN 1=1 THEN 1 ELSE 0 END AS y;\nSELECT 2;")
+        assertEquals("3 条语句 3 段", 3, parts.size)
+        assertEquals("BEGIN DIALOG CONVERSATION @h", parts[0])
+        assertEquals("SELECT 2", parts[2])
+    }
+
+    /**
+     * 边缘 B：块深度归零的顶层 `END` 与下一条语句之间只有换行（T-SQL 惯例 END 后分号可省），
+     * 切分只认 `;` 则两条误并一条（改前实测 1 段）。
+     */
+    @Test
+    fun `TSQL_END无分号隐式边界_边缘B`() {
+        val parts = split("IF @x=1 BEGIN SELECT 1; END\nSELECT 2;")
+        assertEquals("END 归零处产隐式边界——2 条语句 2 段", 2, parts.size)
+        assertEquals("IF @x=1 BEGIN SELECT 1; END", parts[0])
+        assertEquals("SELECT 2", parts[1])
+    }
+
+    /** 边缘 B 变体：两个无分号匿名块串接——隐式边界使各自成条（改前实测 1 段）。 */
+    @Test
+    fun `TSQL_无分号匿名块串接各自成条`() {
+        val parts = split("BEGIN SELECT 1; END\nBEGIN SELECT 2; END")
+        assertEquals("两个无分号块两条", 2, parts.size)
+        assertEquals("BEGIN SELECT 1; END", parts[0])
+        assertEquals("BEGIN SELECT 2; END", parts[1])
+    }
+
+    /** 正对照（T-STG-01 不得误伤）：合法块 BEGIN（后随词非豁免表）仍整块一条。 */
+    @Test
+    fun `TSQL_合法块BEGIN仍整段一条_正对照`() {
+        assertEquals(1, split("BEGIN\n  SELECT 1;\nEND;").size)
+    }
+
+    /** 正对照：`IF…BEGIN…END;` 后接独立语句仍正常切开（既有语义不变）。 */
+    @Test
+    fun `TSQL_IF块后接独立语句仍切开_正对照`() {
+        val parts = split("IF @x = 1 BEGIN UPDATE t SET a = 1; END; SELECT 2;")
+        assertEquals(2, parts.size)
+        assertEquals("SELECT 2", parts[1])
+    }
+
+    /**
+     * 拆分后合并净效果（§六 风险 4 守卫）：`IF…BEGIN…END\nELSE…` 无分号形态——
+     * 隐式边界先在 ELSE 前拆开，`mergeControlFlowBatches` 再把 ELSE 起头段并回同批，
+     * 净效果仍整批一条（宁整勿碎维持）。改前即绿（原本就 1 段），钉住两机制叠加行为。
+     */
+    @Test
+    fun `TSQL_拆分后合并净效果_IF_END_ELSE无分号`() {
+        val parts = split("IF @x = 1 BEGIN UPDATE t SET a = 1; END\nELSE INSERT INTO t VALUES (1);")
+        assertEquals("拆开再并回——净效果整批一条", 1, parts.size)
+        assertTrue("ELSE 并入同批", parts[0].contains("ELSE INSERT INTO t VALUES (1)"))
+        assertTrue("批首保留 IF", parts[0].startsWith("IF @x = 1"))
+    }
+
     // ======================== MERGE 多行样例（O-42 / T-OQCS-04 守卫） ========================
 
     /**
@@ -485,6 +568,27 @@ class SqlStatementSplitterTest {
     fun `PLSQL_块内CASE表达式不误判块尾`() {
         val sql = "BEGIN\n  SELECT CASE WHEN a THEN 1 ELSE 2 END;\n  SELECT 2;\nEND;"
         assertEquals("CASE 的 END 不递减块深度", 1, split(sql).size)
+    }
+
+    /**
+     * 块内 `CASE … END CASE`（PL/SQL CASE 语句双词收尾）——尾随 `CASE` 词不得再开新层。
+     *
+     * 改前缺陷：`END` 递减块深度 → 3 段；且若只做「CASE 自增 / END 自减」的朴素计数，
+     * `END CASE` 的尾随 CASE 会把层数补回，块尾 END 被吞 → 反噬成 1 段并把后续语句并进来
+     * （故须显式识别双词终结形态）。
+     */
+    @Test
+    fun `PLSQL_块内CASE语句END_CASE不误判块尾`() {
+        val sql = "BEGIN\n  CASE WHEN x THEN y;\n  ELSE z;\n  END CASE;\n  NULL;\nEND;"
+        assertEquals("END CASE 整体作为 CASE 终结符消费", 1, split(sql).size)
+    }
+
+    /** `END CASE` 块后接独立语句——CASE 层隔离不得反噬成吞并（保守原则：宁碎不吞错）。 */
+    @Test
+    fun `PLSQL_CASE块后独立语句不误并`() {
+        val parts = split("BEGIN\n  CASE WHEN x THEN y; ELSE z; END CASE;\n  NULL;\nEND;\nSELECT 1;")
+        assertEquals("块一条 + 独立语句一条", 2, parts.size)
+        assertEquals("SELECT 1", parts[1])
     }
 
     /**
@@ -646,5 +750,49 @@ class SqlStatementSplitterTest {
         val statements = stripped(procedureScript())
         assertEquals(2, statements.size)
         assertEquals("CREATE", SqlTypeClassifier.getFirstKeyword(statements[0]))
+    }
+
+    // ==================== 切分器 END 分支前视收口（T-PerfSweep7 / T-PS7-01） ====================
+
+    /**
+     * T-PS7-01 计数缝：END 分支每语句前视 ≤ 每 END 一次（单次取词替代 5 次同段扫描）。
+     * 语料含 3 个 END 词（两个 CASE 收尾 + 一个块尾），无 IF 批首（不触发 beginEndBalance
+     * 的 END 前视）与 DECLARE（不触发声明段前视）——计数纯净归因于主循环 END 分支。
+     * 退回旧实现（每 END 5 次独立前视）读数 15 超阈值即红。
+     */
+    @Test
+    fun `PS7_01_END分支前视单次取词计数不超阈值`() {
+        val sql = "BEGIN\n  SELECT CASE WHEN a THEN 1 ELSE 2 END;\n  SELECT CASE WHEN b THEN 3 ELSE 4 END;\nEND;"
+        SqlStatementSplitter.split(sql)
+        assertTrue(
+            "END 分支前视应 ≤ 每 END 一次（实际 ${SqlStatementSplitter.lookaheadProbeCount}）",
+            SqlStatementSplitter.lookaheadProbeCount <= 3,
+        )
+    }
+
+    /** 边缘（等价守卫）：END 与后随 IF 之间隔着块注释——单次取词仍须跳过注释识别 `END IF` 内层终结符。 */
+    @Test
+    fun `PS7_01_前视跳过块注释_END_IF不误判块尾`() {
+        assertEquals(1, split("BEGIN\n  IF 1=1 THEN NULL; END /* c */ IF;\nEND;").size)
+    }
+
+    /** 边缘（等价守卫）：注释内的 END 词不参与块配对（主循环字符串/注释感知语义不变）。 */
+    @Test
+    fun `PS7_01_注释内END不参与块配对`() {
+        assertEquals(1, split("BEGIN\n  SELECT 1; /* END */\n  SELECT 2;\nEND;").size)
+        assertEquals(1, split("BEGIN\n  SELECT 1; -- END\nEND;").size)
+    }
+
+    /** 边缘（等价守卫）：END 作引号标识符/列名——字符串内的 END 词不入状态机、不被前视误认。 */
+    @Test
+    fun `PS7_01_END作字符串标识符不参与配对`() {
+        assertEquals(1, split("BEGIN\n  SELECT \"END\" AS c;\nEND;").size)
+        assertEquals(1, split("BEGIN\n  SELECT 'END' AS c;\nEND;").size)
+    }
+
+    /** 边缘（等价守卫）：嵌套 BEGIN 内层 IF——`END IF` 吸收、内层块 END 正常配对，整段一条。 */
+    @Test
+    fun `PS7_01_嵌套BEGIN内层IF整段一条`() {
+        assertEquals(1, split("BEGIN\n  BEGIN\n    IF 1=1 THEN NULL; END IF;\n  END;\nEND;").size)
     }
 }

@@ -38,7 +38,7 @@ class ConfirmRollbackParseShareTest {
 
     @After
     fun tearDown() {
-        UnboundedWriteDetector.parseStatementsForTest = { s -> CCJSqlParserUtil.parseStatements(s) }
+        UnboundedWriteDetector.parseStatementsForTest = { s -> SqlAstParser.parseStatements(s) }
         UnboundedWriteDetector.clearAstSlotForTest()
     }
 

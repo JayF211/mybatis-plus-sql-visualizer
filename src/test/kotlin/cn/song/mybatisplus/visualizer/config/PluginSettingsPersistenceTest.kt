@@ -2,7 +2,6 @@ package cn.song.mybatisplus.visualizer.config
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 
 /**
@@ -166,7 +165,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // T-UxOnboard T-UX-01：首用锚点引导通知开关 +1（界面节）
             // T-PreviewWhitespaceToggle O-44a：空白符可视化开关 +1（界面节，默认关＝不设置该属性）
             // O-58：列名数据源校正开关 +1（表名映射节）
-            assertEquals("复选框总数应为 30", 30, texts.size)
+            // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关 +1（界面节）
+            assertEquals("复选框总数应为 31", 31, texts.size)
         } finally {
             settings.state.language = old
         }

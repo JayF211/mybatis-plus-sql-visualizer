@@ -26,48 +26,60 @@ class DialectExplainTest {
 
     @Test
     fun `MySQL 形态`() {
-        assertEquals("EXPLAIN $sample", MySqlDialect.INSTANCE.renderExplainStatement(sample))
+        assertEquals("EXPLAIN $sample", MySqlDialect.renderExplainStatement(sample))
     }
 
     @Test
     fun `MariaDB 同 MySQL 形态`() {
-        assertEquals("EXPLAIN $sample", MariaDbDialect.INSTANCE.renderExplainStatement(sample))
+        assertEquals("EXPLAIN $sample", MariaDbDialect.renderExplainStatement(sample))
     }
 
     @Test
     fun `PostgreSQL 形态`() {
-        assertEquals("EXPLAIN (FORMAT JSON, VERBOSE) $sample", PostgreSQLDialect.INSTANCE.renderExplainStatement(sample))
+        assertEquals("EXPLAIN (FORMAT JSON, VERBOSE) $sample", PostgreSQLDialect.renderExplainStatement(sample))
     }
 
     @Test
     fun `H2 形态`() {
-        assertEquals("EXPLAIN PLAN FOR $sample", H2Dialect.INSTANCE.renderExplainStatement(sample))
+        assertEquals("EXPLAIN PLAN FOR $sample", H2Dialect.renderExplainStatement(sample))
     }
 
     @Test
     fun `SQLite 形态`() {
-        assertEquals("EXPLAIN QUERY PLAN $sample", SqliteDialect.INSTANCE.renderExplainStatement(sample))
+        assertEquals("EXPLAIN QUERY PLAN $sample", SqliteDialect.renderExplainStatement(sample))
     }
 
     @Test
     fun `金仓 PG 兼容形态（V8 真机实证）`() {
-        assertEquals("EXPLAIN (FORMAT JSON) $sample", KingBaseDialect.INSTANCE.renderExplainStatement(sample))
+        assertEquals("EXPLAIN (FORMAT JSON) $sample", KingBaseDialect.renderExplainStatement(sample))
     }
 
     @Test
     fun `达梦原生形态（DM8 真机实证）`() {
-        assertEquals("EXPLAIN $sample", DmDialect.INSTANCE.renderExplainStatement(sample))
+        assertEquals("EXPLAIN $sample", DmDialect.renderExplainStatement(sample))
+    }
+
+    /** T-DialectXcFamily：OceanBase 同 MySQL 形态（官方 V4.x EXPLAIN 文法缺省 TRADITIONAL 表格行——文档级）。 */
+    @Test
+    fun `OceanBase 同 MySQL 形态（文档实证）`() {
+        assertEquals("EXPLAIN $sample", OceanBaseDialect.renderExplainStatement(sample))
+    }
+
+    /** T-DialectXcFamily：openGauss 同金仓形态（openGauss 5.0.0 真机实证 FORMAT JSON 单列 JSON 文本）。 */
+    @Test
+    fun `openGauss 同金仓 JSON 形态（真机实证）`() {
+        assertEquals("EXPLAIN (FORMAT JSON) $sample", OpenGaussDialect.renderExplainStatement(sample))
     }
 
     @Test
     fun `Oracle SQLServer 降级 null`() {
-        assertNull(OracleDialect.INSTANCE.renderExplainStatement(sample))
-        assertNull(SqlServerDialect.INSTANCE.renderExplainStatement(sample))
+        assertNull(OracleDialect.renderExplainStatement(sample))
+        assertNull(SqlServerDialect.renderExplainStatement(sample))
     }
 
     @Test
     fun `全部方言均可调用不抛异常`() {
-        DialectRegistry.INSTANCE.dialects.forEach { d ->
+        DialectRegistry.dialects.forEach { d ->
             @Suppress("UNUSED_EXPRESSION")
             d.renderExplainStatement(sample)
         }
@@ -78,37 +90,37 @@ class DialectExplainTest {
     @Test
     fun `幂等-已包装文本原样返回`() {
         val wrapped = "EXPLAIN FORMAT=JSON $sample"
-        assertEquals(wrapped, MySqlDialect.INSTANCE.renderExplainStatementIdempotent(wrapped))
+        assertEquals(wrapped, MySqlDialect.renderExplainStatementIdempotent(wrapped))
         // 首次点击后该文本写回控制台文档，二次点击读取到的即此文本——不再产生双前缀
-        assertEquals(wrapped, MySqlDialect.INSTANCE.renderExplainStatementIdempotent(wrapped))
+        assertEquals(wrapped, MySqlDialect.renderExplainStatementIdempotent(wrapped))
     }
 
     @Test
     fun `幂等-大小写与首尾空白结尾分号`() {
-        assertEquals("explain $sample", MySqlDialect.INSTANCE.renderExplainStatementIdempotent("  explain $sample;  "))
-        assertEquals("EXPLAIN $sample", DmDialect.INSTANCE.renderExplainStatementIdempotent("EXPLAIN $sample"))
+        assertEquals("explain $sample", MySqlDialect.renderExplainStatementIdempotent("  explain $sample;  "))
+        assertEquals("EXPLAIN $sample", DmDialect.renderExplainStatementIdempotent("EXPLAIN $sample"))
     }
 
     @Test
     fun `幂等-词边界不误判标识符`() {
         // EXPLAINING_... 是标识符不是关键字 → 正常包装
         val ident = "EXPLAINING_TABLE"
-        assertEquals("EXPLAIN $ident", MySqlDialect.INSTANCE.renderExplainStatementIdempotent(ident))
+        assertEquals("EXPLAIN $ident", MySqlDialect.renderExplainStatementIdempotent(ident))
     }
 
     @Test
     fun `幂等-未包装文本正常加前缀`() {
-        assertEquals("EXPLAIN $sample", MySqlDialect.INSTANCE.renderExplainStatementIdempotent(sample))
+        assertEquals("EXPLAIN $sample", MySqlDialect.renderExplainStatementIdempotent(sample))
         assertEquals(
             "EXPLAIN (FORMAT JSON, VERBOSE) $sample",
-            PostgreSQLDialect.INSTANCE.renderExplainStatementIdempotent(sample),
+            PostgreSQLDialect.renderExplainStatementIdempotent(sample),
         )
     }
 
     @Test
     fun `幂等-不支持方言未包装降级null 已包装原样`() {
-        assertNull(OracleDialect.INSTANCE.renderExplainStatementIdempotent(sample))
-        assertEquals("EXPLAIN $sample", OracleDialect.INSTANCE.renderExplainStatementIdempotent("EXPLAIN $sample"))
+        assertNull(OracleDialect.renderExplainStatementIdempotent(sample))
+        assertEquals("EXPLAIN $sample", OracleDialect.renderExplainStatementIdempotent("EXPLAIN $sample"))
     }
 
     /**
@@ -121,9 +133,9 @@ class DialectExplainTest {
      */
     @Test
     fun `幂等订正-已包装文本夹带第二条语句即拒`() {
-        assertNull("已包装 + 夹带 DDL 必须拒", MySqlDialect.INSTANCE.renderExplainStatementIdempotent("EXPLAIN SELECT 1; DROP TABLE t"))
-        assertNull("已包装 + 夹带 DML 必须拒", MySqlDialect.INSTANCE.renderExplainStatementIdempotent("EXPLAIN SELECT 1; UPDATE t SET a = 1"))
-        assertNull("全查询形态的多语句同样拒（fail closed）", MySqlDialect.INSTANCE.renderExplainStatementIdempotent("EXPLAIN SELECT 1; SELECT 2"))
+        assertNull("已包装 + 夹带 DDL 必须拒", MySqlDialect.renderExplainStatementIdempotent("EXPLAIN SELECT 1; DROP TABLE t"))
+        assertNull("已包装 + 夹带 DML 必须拒", MySqlDialect.renderExplainStatementIdempotent("EXPLAIN SELECT 1; UPDATE t SET a = 1"))
+        assertNull("全查询形态的多语句同样拒（fail closed）", MySqlDialect.renderExplainStatementIdempotent("EXPLAIN SELECT 1; SELECT 2"))
     }
 
     /** 正对照：带包装选项的**单条**已包装文本仍原样返回——不得把幂等短路一起修掉。 */
@@ -131,11 +143,11 @@ class DialectExplainTest {
     fun `幂等订正-单条已包装文本仍原样返回_正对照`() {
         assertEquals(
             "EXPLAIN (FORMAT JSON, VERBOSE) SELECT 1",
-            PostgreSQLDialect.INSTANCE.renderExplainStatementIdempotent("EXPLAIN (FORMAT JSON, VERBOSE) SELECT 1"),
+            PostgreSQLDialect.renderExplainStatementIdempotent("EXPLAIN (FORMAT JSON, VERBOSE) SELECT 1"),
         )
         assertEquals(
             "EXPLAIN QUERY PLAN SELECT 1",
-            SqliteDialect.INSTANCE.renderExplainStatementIdempotent("EXPLAIN QUERY PLAN SELECT 1;"),
+            SqliteDialect.renderExplainStatementIdempotent("EXPLAIN QUERY PLAN SELECT 1;"),
         )
     }
 
@@ -150,13 +162,13 @@ class DialectExplainTest {
      */
     @Test
     fun `守卫-支持表覆盖注册表全量方言`() {
-        DialectRegistry.INSTANCE.dialects.forEach { d ->
+        DialectRegistry.dialects.forEach { d ->
             assertNotNull("方言 ${d.name} 未登记进 ExplainSupport 表", ExplainSupport.entryFor(d.name))
         }
         assertEquals(
             "支持表条目数应与注册方言数一致（表里不应有注册表外的孤儿条目）",
-            DialectRegistry.INSTANCE.dialects.size,
-            ExplainSupport.getEntries().size,
+            DialectRegistry.dialects.size,
+            ExplainSupport.entries.size,
         )
     }
 
@@ -168,7 +180,7 @@ class DialectExplainTest {
      */
     @Test
     fun `守卫-表与逐方言实现逐字节一致`() {
-        DialectRegistry.INSTANCE.dialects.forEach { d ->
+        DialectRegistry.dialects.forEach { d ->
             assertEquals(
                 "方言 ${d.name} 的实现与支持表不一致",
                 ExplainSupport.render(d.name, sample),
@@ -180,16 +192,16 @@ class DialectExplainTest {
     /** 守卫：格式取值与模板形态自洽（JSON 档的模板必须真的带 `FORMAT JSON`）。 */
     @Test
     fun `守卫-格式取值与模板形态自洽`() {
-        ExplainSupport.getEntries().forEach { e ->
-            if (!e.supported()) {
-                assertNull("不支持的方言不应有格式取值: ${e.dialectName()}", e.outputFormat())
+        ExplainSupport.entries.forEach { e ->
+            if (!e.supported) {
+                assertNull("不支持的方言不应有格式取值: ${e.dialectName}", e.outputFormat)
                 return@forEach
             }
-            assertNotNull("支持的方言必须有格式取值: ${e.dialectName()}", e.outputFormat())
-            if (e.outputFormat() == ExplainOutputFormat.JSON) {
+            assertNotNull("支持的方言必须有格式取值: ${e.dialectName}", e.outputFormat)
+            if (e.outputFormat == ExplainOutputFormat.JSON) {
                 assertTrue(
-                    "JSON 档模板应含 FORMAT JSON: ${e.dialectName()} → ${e.template()}",
-                    e.template()!!.contains("FORMAT JSON"),
+                    "JSON 档模板应含 FORMAT JSON: ${e.dialectName} → ${e.template}",
+                    e.template!!.contains("FORMAT JSON"),
                 )
             }
         }
@@ -199,10 +211,10 @@ class DialectExplainTest {
     @Test
     fun `守卫-模板替换为字面量替换`() {
         val tricky = "SELECT '{sql}' AS a, '$' AS b, '\\' AS c FROM t"
-        assertEquals("EXPLAIN $tricky", MySqlDialect.INSTANCE.renderExplainStatement(tricky))
+        assertEquals("EXPLAIN $tricky", MySqlDialect.renderExplainStatement(tricky))
         assertEquals(
             "EXPLAIN (FORMAT JSON, VERBOSE) $tricky",
-            PostgreSQLDialect.INSTANCE.renderExplainStatement(tricky),
+            PostgreSQLDialect.renderExplainStatement(tricky),
         )
     }
 

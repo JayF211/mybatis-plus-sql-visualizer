@@ -65,6 +65,7 @@ public class SenderLoopFrameTest {
         AgentState.setDisabled(false);
         AgentState.setDesensitize(true);
         StackLocator.setExtraSkipPrefixes(new String[0]);
+        StackLocator.setExtraBizJarPrefixes(new String[0]);
     }
 
     @After
@@ -72,6 +73,7 @@ public class SenderLoopFrameTest {
         AgentState.setDisabled(false);
         AgentState.setDesensitize(true);
         StackLocator.setExtraSkipPrefixes(new String[0]);
+        StackLocator.setExtraBizJarPrefixes(new String[0]);
     }
 
     /**
@@ -94,8 +96,29 @@ public class SenderLoopFrameTest {
         assertFalse("desensitize=false 应生效为不打码", AgentState.isDesensitize());
         assertEquals("帧过滤前缀应生效", 2, StackLocator.getExtraSkipPrefixes().length);
         assertEquals("CONFIG ACK body 为跨侧字面契约（键序固定/无空格/布尔小写/前缀条数）",
-                "{\"disabled\":true,\"desensitize\":false,\"skipPrefixes\":2}", ack);
+                "{\"disabled\":true,\"desensitize\":false,\"skipPrefixes\":2,\"bizJarPrefixes\":0}", ack);
         assertTrue("CONFIG 应用计数应可观测（排障用）", AgentState.configAppliedCount() > 0L);
+    }
+
+    /**
+     * T-ToolSiteBizFrame（机制 A）：反向名单随 CONFIG 下发生效 + 缺键清空——
+     * 与 skipPrefixes 同语义（IDE 侧空列表省略键，缺键不得残留上一轮值）。
+     */
+    @Test
+    public void 反向名单_随CONFIG生效且缺键清空() {
+        final SenderLoop loop = new SenderLoop(1);
+        final String body = "{\"disabled\":false,\"desensitize\":true,"
+                + "\"skipPrefixes\":[],\"bizJarPrefixes\":[\"com.corp.shared.util.\",\"com.corp.platform.\"]}";
+        final String ack = loop.handleInbound(EventBus.CMD_CONFIG, body);
+
+        assertEquals("反向名单应生效", 2, StackLocator.getExtraBizJarPrefixes().length);
+        assertEquals("ACK 应带反向名单生效条数",
+                "{\"disabled\":false,\"desensitize\":true,\"skipPrefixes\":0,\"bizJarPrefixes\":2}", ack);
+
+        // 缺键=清空（IDE 侧空列表省略键的同义形态）
+        loop.handleInbound(EventBus.CMD_CONFIG, "{\"disabled\":false,\"desensitize\":true}");
+        assertEquals("缺键应清空反向名单", 0, StackLocator.getExtraBizJarPrefixes().length);
+        assertEquals("缺键应同步清空跳过前缀（语义一致）", 0, StackLocator.getExtraSkipPrefixes().length);
     }
 
     /**

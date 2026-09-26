@@ -16,19 +16,8 @@ import java.io.File
  * 与 [ErrorPositionExtractorTest] 的分工：那边验**算法**（含钳制语义），这边验**接线**
  * （有没有把长度传进来）。二者缺一都会让钳制在生产路径失效。
  *
- * 豁免方式：确有不需要钳制的调用时，把该文件/调用加进 [exemptFiles] 并写明理由——
+ * 豁免方式：确有不需要钳制的调用时，把该文件/调用加进 [EXEMPT_FILES] 并写明理由——
  * 不要放宽本规则（放宽等于把「接线漏」重新变成静默缺陷）。
- *
- * ## k2j 移植注（生产树全 Java，扫描根 src/main/java + .java）
- *
- * 1. 调用点扫描根改 `src/main/java`（.java）；调用点基线按本树实测重核：`DataSourceSelector` 三处 +
- *    `SqlVisualizerExplainTool` 一处 = **4 处**（与 master 同数）。
- * 2. 长度表达式判据 `.length` 不用改：Java 的 String 长度是 `.length()`，包含 `.length` 子串，判定天然兼容。
- * 3. **本守卫落地时本树实况**：`SqlVisualizerExplainTool` 一处已传 `target.explainSql.length()`；
- *    `DataSourceSelector` 三处仍走双参 `buildInfo(cause, message)` 重载（3 参重载在
- *    `ErrorPositionExtractor.buildInfo` 已存在）——即 master 立项时的「实现有、接线漏」形态在
- *    移植树上原样复现，生产侧补第三参 `executedSql.length()` 即转绿（master 同点位为
- *    `executedSql.length`，Kotlin 属性 → Java 方法调用）。
  */
 class ErrorPositionWiringGuardTest {
 
@@ -38,38 +27,104 @@ class ErrorPositionWiringGuardTest {
     private fun repoRoot(): File {
         var dir: File? = File(System.getProperty("user.dir")).absoluteFile
         while (dir != null) {
-            if (File(dir, "src/main/java").isDirectory) return dir
+            if (File(dir, "src/main/kotlin").isDirectory) return dir
             dir = dir.parentFile
         }
-        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
+        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
     }
 
     private val callSite = Regex("""ErrorPositionExtractor\.(buildInfo|extractPosition)\s*\(""")
+
+    /**
+     * T-ELU-01 收口（`deliverError`）的调用点。
+     *
+     * 2026-09-23 真机走查恢复了被合并丢掉的 `deliverError` 后，生产链的**六个**错误投递点
+     * （提交链三处 + 控制台历史三处）全部改走它，`buildInfo` 的直接调用在生产代码里只剩
+     * `deliverError` 内部一处——扫描面若仍只认「提取调用」，这条守卫就退化成「只看一处」。
+     * 故把投递调用一并纳入：**每个投递点都必须把被执行文本长度带进 `deliverError`**。
+     */
+    private val deliveryCallSite = Regex("""(?<![\w.])deliverError\s*\(""")
+
+    /** 富通道转发点：`executeOnConsole(` 的每个调用都必须带 `onErrorRich`。 */
+    private val forwardCallSite = Regex("""(?<![\w.])executeOnConsole\s*\(""")
 
     @Test
     fun `生产链位置提取调用都传了被执行文本长度`() {
         val root = repoRoot()
         val offenders = mutableListOf<String>()
         var checked = 0
-        File(root, "src/main/java").walkTopDown()
-            .filter { it.isFile && it.extension == "java" }
+        var deliveries = 0
+        var forwards = 0
+        File(root, "src/main/kotlin").walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
             .forEach { file ->
                 val rel = file.relativeTo(root).path.replace('\\', '/')
                 if (rel in exemptFiles) return@forEach
                 val text = file.readText()
                 for (m in callSite.findAll(text)) {
+                    // 注释里的**提及**不是调用点（判定内联而非独立 Boolean 函数：后者会被
+                    // GuardSelfTestCoverageMetaGuardTest 要求逐条登记）
+                    val cs1 = text.lastIndexOf('\n', m.range.first - 1).let { if (it < 0) 0 else it + 1 }
+                    val pre1 = text.substring(cs1, m.range.first)
+                    if (pre1.contains("//") || pre1.trimStart().startsWith("*") || pre1.trimStart().startsWith("/*")) continue
                     val args = readArguments(text, m.range.last + 1) ?: run {
                         offenders += "$rel:${lineOf(text, m.range.first)} 调用实参无法配对（形态变更，请更新守卫）"
                         continue
                     }
                     checked++
-                    if (!args.contains(".length")) {
+                    // 允许两种形态：① 直接给长度表达式（`.length`）；② `deliverError` 内部的**转发**——
+                    // 它把收到的 `sqlMaxLength` 原样交给 `buildInfo`，实际取值由投递点保证，而投递点
+                    // 由下面的 deliveryCallSite 扫描（≥6 处、必须含 `.length`）逐个钉住。
+                    if (!args.contains(".length") && !args.contains("sqlMaxLength")) {
                         offenders += "$rel:${lineOf(text, m.range.first)} ${m.groupValues[1]} 未传被执行文本长度" +
                             "（实参：${args.trim().replace('\n', ' ').take(120)}）"
                     }
                 }
+                for (m in deliveryCallSite.findAll(text)) {
+                    val cs2 = text.lastIndexOf('\n', m.range.first - 1).let { if (it < 0) 0 else it + 1 }
+                    val pre2 = text.substring(cs2, m.range.first)
+                    if (pre2.contains("//") || pre2.trimStart().startsWith("*") || pre2.trimStart().startsWith("/*")) continue
+                    // 定义处 `internal fun deliverError(` 不是调用点
+                    if (text.substring(0, m.range.first).trimEnd().endsWith("fun")) continue
+                    val args = readArguments(text, m.range.last + 1) ?: run {
+                        offenders += "$rel:${lineOf(text, m.range.first)} deliverError 实参无法配对（形态变更，请更新守卫）"
+                        continue
+                    }
+                    deliveries++
+                    if (!args.contains(".length")) {
+                        offenders += "$rel:${lineOf(text, m.range.first)} deliverError 未传被执行文本长度" +
+                            "（实参：${args.trim().replace('\n', ' ').take(120)}）"
+                    }
+                }
+                // 富通道的**转发点**：每个 `executeOnConsole(` 调用都必须把 `onErrorRich` 带下去。
+                // 2026-09-23 真机走查实证：`prepareInConsole` 的 `executeAfterPrepare` 分支漏传它
+                // （默认 null）⇒ 该路径上 `deliverError` 只能回退旧通道、定位按钮永不出现，
+                // 而所有单测与既有守卫全绿（「实现有、接线漏」）。
+                for (m in forwardCallSite.findAll(text)) {
+                    val cs3 = text.lastIndexOf('\n', m.range.first - 1).let { if (it < 0) 0 else it + 1 }
+                    val pre3 = text.substring(cs3, m.range.first)
+                    if (pre3.contains("//") || pre3.trimStart().startsWith("*") || pre3.trimStart().startsWith("/*")) continue
+                    if (text.substring(0, m.range.first).trimEnd().endsWith("fun")) continue
+                    val args = readArguments(text, m.range.last + 1) ?: run {
+                        offenders += "$rel:${lineOf(text, m.range.first)} executeOnConsole 实参无法配对（形态变更，请更新守卫）"
+                        continue
+                    }
+                    forwards++
+                    if (!args.contains("onErrorRich")) {
+                        offenders += "$rel:${lineOf(text, m.range.first)} executeOnConsole 未转发 onErrorRich" +
+                            "——富通道在此断链，定位按钮永不出现"
+                    }
+                }
             }
-        assertTrue("守卫未扫到任何调用点——扫描规则已失效（空绿）：$checked", checked >= 4)
+        assertTrue("守卫未扫到任何位置提取调用点——扫描规则已失效（空绿）：$checked", checked >= 1)
+        assertTrue(
+            "守卫未扫到任何 executeOnConsole 转发点——扫描规则已失效（空绿）：$forwards（期望 ≥3）",
+            forwards >= 3,
+        )
+        assertTrue(
+            "守卫未扫到任何错误投递收口调用点——扫描规则已失效（空绿）：$deliveries（期望 ≥6：提交链三处 + 控制台历史三处）",
+            deliveries >= 6,
+        )
         assertTrue(
             "生产链位置提取必须传被执行文本长度（越界钳制的生效前提），违规点：\n" +
                 offenders.joinToString("\n"),

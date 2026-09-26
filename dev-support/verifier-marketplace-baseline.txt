@@ -1,0 +1,33 @@
+# verifyMarketplace 基线——单包形态下已登记的兼容问题块（逐块豁免，带运行期安全论证）
+#
+# 背景（20260923 用户定案）：不出多版本包 → 旧版目标上「可选依赖未解析」问题在机理上不可归零
+# （verifier 分析 jar 内全部类，与片段声明/可达性无关；片段级 idea-version 与反射防火墙两轮对照
+# 实验均证伪）。本任务据此改为「问题块基线」判定：
+#   - compatibility-problems.txt 按块首行（顶格且以 Class /Method /Package 起头）切问题块；
+#   - 每块必须命中下方同目标条目，任何未登记的新问题块 → 构建失败（防再次失明）；
+#   - 全部命中 → 通过（本任务会打印覆盖计数）。
+#
+# 行格式：目标名<TAB>块首行正则（containsMatchIn 语义）。井号开头为注释（本文件由任务自行解析，
+# 注释不进正则引擎——与 verifier-ignored-problems 的「每行皆规则」约束不同，但仍请保持整洁）。
+# 登记门槛：仅收「运行期已被片段加载条件或反射探测隔离、最坏效果是功能不可用而非崩溃」的项；
+# 每条必须带论证。问题修掉后请删除对应条目（任务会对未命中的条目打 WARN）。
+#
+# 【20260926 基线清空（T-McpDynamicToolset）】20260923 上传的 v2026.9.23 因 243×2＋251×1
+# compatibility problems 被 Marketplace 拒绝（IU-243：McpToolsetSupport.audit 的 K2 SpillingKt
+# spill＋Package 'com.intellij.mcpserver' 三类；IU-251：同族 Package 块）。全动态化改造后
+# 五目标实测全 Compatible：243/253/262（verifyMarketplace 在线口径）＋251（IU-251.27812.49
+# probe）＋263 EAP（IU-263.5701.42 probe，在案「263.5153 报 1 条」随 EAP 演进消失）。本文件
+# 保留零条目：机制与 MarketVerdictChecker 在役——任何新兼容问题块（未登记）仍会构建失败。
+#
+# 【T-MarketCompatProxy 20260923 深夜大清扫（历史）】②③ 动态代理化（FilterProvider/ACP impl 改
+# Class.forName + Proxy + 程序化注册）后：253 → Compatible（9 块全清）、262 internal 7→1→0、
+# 243 5→2。最终由 T-McpDynamicToolset（20260926）把「EP 接口实现类＋SpillingKt」两个残块也
+# 消除（XML toolset 声明退役改运行期 ASM 壳注册；audit 改 intrinsics 透传零 try 包挂起调用）。
+# ====================================================================
+# 通用论证（历史条目引用，下称「双隔离」）：
+#   A. 片段加载条件——mcp-optional.xml 仅在 com.intellij.mcpServer 在场时加载；无 mcpServer
+#      环境整片段不加载/EP 实例化被平台隔离。
+#   C. EP 实例化异常隔离——旧形态依赖在场导致片段加载但类缺失时，平台对 EP 扩展实例化
+#      失败按错误日志隔离（NoSuchClassError 落日志，不崩 IDE）；最坏效果=MCP 功能
+#      不可用，即「该版本不支持」的设计口径。
+# ====================================================================

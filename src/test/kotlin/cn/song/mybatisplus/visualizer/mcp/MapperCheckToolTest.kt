@@ -49,13 +49,13 @@ class MapperCheckToolTest : com.intellij.testFramework.fixtures.BasePlatformTest
     @Test
     fun test无语句mapper_预期错误() {
         val error = runCatching { check("<mapper namespace=\"n\"></mapper>") }.exceptionOrNull()
-        assertTrue(error is com.intellij.mcpserver.McpExpectedError)
+        assertTrue(error is SqlvExpectedToolException)
         assertTrue((error?.message ?: "").contains("no <select|insert|update|delete>"))
     }
 
     @Test
     fun test空文本_预期错误() {
         val error = runCatching { SqlVisualizerMapperCheckTool().mapperCheck("", false) }.exceptionOrNull()
-        assertTrue(error is com.intellij.mcpserver.McpExpectedError)
+        assertTrue(error is SqlvExpectedToolException)
     }
 }

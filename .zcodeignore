@@ -1,0 +1,122 @@
+.gradle
+.intellijPlatform
+
+target/
+logs/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+.kotlin
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+rebel.xml
+.xcodemap/
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+!**/src/reloc/**/build/
+
+### VS Code ###
+.vscode/
+
+### Trae IDE ###
+.trae/
+
+### AI CODE TOOLS ###
+.claude/
+.codemoss/
+.ccgui/
+AGENTS
+
+# T-AcpMcpTransport（2026-09-19）：上面的 `AGENTS` 规则在 Windows 大小写不敏感下会命中
+# `src/mcpStub/**/agents/`（ml-llm ACP 桩目录），导致该目录新增文件被静默忽略（曾需 `git add -f` 才入库）。
+# 下面两行把该路径从忽略中排除；请勿删除。
+!src/mcpStub/**/agents/
+!src/mcpStub/**/agents/**
+.reasonix/
+reasonix.toml
+.workbuddy/
+.workbuddy-ai/
+
+### Mac OS ###
+.DS_Store
+/.idea/
+.ace-tool/
+/AGENTS.md
+/scripts/**
+/.agents/
+/.codex/
+
+### ZCode ###
+.zcode/
+out/
+
+### 演示 GIF 录制（record/ 只入库可复用脚本，中间产物不进仓库）###
+record/perf/
+record/**/__pycache__/
+
+### Plugin Verifier（校验产物，不进仓库） ###
+dev-support/verify-target/
+dev-support/verify-logs/
+verification-*/
+*.hprof
+
+### 本地凭据（严禁提交） ###
+gitee-token.*
+*.token
+.secrets/
+
+# task-queue 本地运行产物（journal/开关/归档），不进 git
+.tasks/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+node_modules/
+bower_components/
+jspm_packages/
+__pycache__/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

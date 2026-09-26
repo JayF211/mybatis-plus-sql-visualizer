@@ -11,7 +11,7 @@ import org.junit.Test
  * SQL 类型分类器测试（M36）：验证查询类/非查询类语句分类逻辑。
  *
  * 纯字符串解析，无需 Database 插件或 IDE 沙盒。
- * 覆盖全部 9 种方言通用的标准 SQL 关键字。
+ * 覆盖各方言通用的标准 SQL 关键字。
  */
 class SqlTypeClassifierTest {
 

@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages
+import cn.song.mybatisplus.visualizer.execute.SqlAstParser
 import cn.song.mybatisplus.visualizer.execute.UnboundedWriteDetector
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator
@@ -45,7 +46,7 @@ class SqlPreviewPanelRollbackParseShapeTest {
 
     @After
     fun tearDown() {
-        UnboundedWriteDetector.parseStatementsForTest = { s -> CCJSqlParserUtil.parseStatements(s) }
+        UnboundedWriteDetector.parseStatementsForTest = { s -> SqlAstParser.parseStatements(s) }
         UnboundedWriteDetector.clearAstSlotForTest()
     }
 

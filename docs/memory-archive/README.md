@@ -3,17 +3,25 @@
 > 本目录存放从本地记忆系统（`~/.zcode/cli/memories/projects/.../memory/`）归档的历史记忆文件。
 > 这些内容已完成/已交付/已修复，不再需要每次会话加载，但作为历史记录保留。
 >
-> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简）
+> **归档时间**：2026-08-22（首次），2026-08-26（第二次补充），2026-09-04（第三次精简），2026-09-06（第四次精简），2026-09-07（第五次精简），2026-09-12（第六次精简），2026-09-13（第七次精简），2026-09-14（第八次精简），2026-09-15（第九次精简），2026-09-15（T-TestPerf2 提速经验与三篇踩坑归档），2026-09-16（第十次精简），2026-09-17（第十一次精简），2026-09-18（第十二次精简），2026-09-19（第十三次精简），2026-09-20（第十四次精简），2026-09-23（第十五次精简），2026-09-24（第十六次精简），2026-09-25（第十七次精简）
 > **原始位置**：`~/.zcode/cli/memories/projects/mybatis-plus-sql-visualizer-09474abd1ce62ee6/memory/`
-> **全局备份**：`~/.zcode/cli/memories/global/`（104 个通用文件）
-> **项目记忆**：保留 32 个核心文件 + MEMORY.md 索引（第十四次精简后）
+> **全局备份**：`~/.zcode/cli/memories/global/`（115 个通用文件）
+> **项目记忆**：保留 48 个核心文件 + MEMORY.md 索引（第十七次精简后）
 
 ---
 
-## 已修复 Bug（168 个）
+## 已修复 Bug（176 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [project-o77-ew-statement-scope.md](bug-fixes/project-o77-ew-statement-scope.md) | O-77 T-EwStatementScope 已交付（20260924 立项当日合并 `4ca473e` 并推送，master/dev/t-testperf5 三支均含）——XML 预览对无 ew 参数的普通语句误报「无 Wrapper 参数（ew）」红横幅：根因=MP 占位识别域（`XmlEwExpander.placeholders` 扫整文件）与解析域（当前语句）不一致，引入 `3959a8e4`（M26-B）起全 tag 受影响、发布版 2026.9.14 在内；修法=语句域扫描（`XmlStatement` 尾置默认字段 `rawText`，include 展开后 textContent 填充，null 回落 fileText），同族两形态（ew2 变量错配/跨命名空间 include 漏检）一并收敛；四轮读数含反向验证，详版=计划 §实施记录（`969b06f`） |
+| [console-capture-zero-output-flush.md](bug-fixes/console-capture-zero-output-flush.md) | O-70 T-ConsolePendingFlush 已交付（dev `dc7e69a`）——控制台「已扫描 N 行 / 产出 0 条」根因＝按线程分桶后待闭合条目无产出点（JdbcTemplate 只开 DEBUG 无参数行+Tomcat 按请求新建线程+实时链路从不调 closePending）；静默冲刷修法（逐行+轮询两处冲刷点）、262 无 `removeMessageFilter` 的挂载代际号处置；归档注记含真机复验判据与 Hibernate 零参残留 |
+| [enhanced-capture-gates-and-consent-scope.md](bug-fixes/enhanced-capture-gates-and-consent-scope.md) | 增强捕获闸门与确认框作用域定案（20260923，O-66 引导链随交付）——链上无项目类型闸门、Gradle 任务配置未确认态静默跳过、授权按 IDE 配置目录隔离；premain 经 init script 会挂进 Gradle fork 的 JavaForkOptions 任务 JVM（判「不合适」）；归档注记＝路线 A 已实施为 T-GradleTaskInjectScope（`1597521`），受控实验仍在 pending-plans 真机复验节 |
+| [reference-acp-session-verification.md](bug-fixes/reference-acp-session-verification.md) | ACP/SSE 链路 runIde 沙盒验证入口（⑯ 全四项闭合 `24d6e33`）——ACP 会话不需登录就能起（卡点是模型凭据非登录）；判据行由 `AcpIdeaMcpProviderImpl` 打（FINER）、传输走 EP 遍历；ml-llm 的类在 `lib/modules/*.jar`（只 glob lib 会误判类不存在）；沙盒 plugins 目录每次 runIde 重建；64342 免 token 端点实证（401 的是 64442 router） |
+| [pitfall-hql-property-column-scope.md](bug-fixes/pitfall-hql-property-column-scope.md) | T-HqlAliasColumnScope（O-57）已交付（`4733ce6` 并入 master `1504fa0`，k2j 随 Master184 移植）——HQL 副表别名属性原样透传致预览 SQL 不可执行：根因=属性→列名映射只遍历根实体（`HqlConverter.mapPropertyToColumn` 只吃 `table.columns`、正则不含别名），副表属性落在 JOIN ON 真实化与属性映射两链的缝里；修法=别名→TableInfo 映射按别名分派+未解析别名回落现状行为；**@Embedded 展平缺口（`updateInfo.` 段无人处理）按用户定案挂起**，恢复分析先读本档（含用户补充 HQL 原文与「现状产物逐字不变」回归约束） |
+| [project-db-schema-calibration.md](bug-fixes/project-db-schema-calibration.md) | T-DbColumnCalibration（O-58）已交付（`4733ce6`，`ColumnNameCalibrator` 在 master）——实体列名数据源校正与自动降级：四层验收（能校正/数据源可用才校正/不可用降级等价/零性能回归）；能力底账=全仓零 JDBC、自省全走平台 DBN 反射（`columnsCached` 零遍历热路径读）、新 schema 缓存必登记 `MetadataInvalidator`、校正层不加引号（归 Dialect 渲染链）；可判定来源 H1~H4 用真值仲裁一次覆盖、H5（语义无关改名）明确不做 |
+| [reference-sql-quick-templates-actions.md](bug-fixes/reference-sql-quick-templates-actions.md) | SQL 快捷模板三动作（EXPLAIN/COUNT/Sample 10 Rows）语义与执行链——选中文本送控制台；局限=LIMIT 10 硬编码不走 `Dialect.renderLimit`、无 ORDER BY、SELECT *、结果网格显示宿主代码上定不下来；默认键位已由 T-TemplateKeyDrop 摘除（`e6ce2c5`）；候选「快捷模板 LIMIT 配置化」实施前先读本档 |
+| [reference-gutter-recent-executions-popup.md](bug-fixes/reference-gutter-recent-executions-popup.md) | gutter 最近执行记录弹窗——读会话内 SQL 日志缓冲（非磁盘），同文件+锚点 ±30 行、列表 20 条上限不无限增长；两个可增长口子（最大条数无钳制/自动保存历史默认关 30×100MB）；与 F-7「SQL 历史」两套数据勿混 |
 | [t-synck2jmaster92-delivered.md](bug-fixes/t-synck2jmaster92-delivered.md) | T-SyncK2JMaster92 已交付（20260919，锚点 ec584e2→b9aeeba，123 提交同步，testShards 5390/0/0/6 + verifyGate 三目标绿；4 生产新建翻译 FatalErrors/SecureXml/PsiSnapshot/AgentUrlRegistry + ACP 传输 + 10 MCP 工具类改名 + BannedApi 1035→2734 五族守卫）；两处结构性决策（Java fatal 透传 `throw (Error) t` 的 JLS 11.2.2 必要性 / fatal 守卫两段式 597 基线与落地集精确计数）与三处移植陷阱（掩码器 Java 树涂白/elvis 误译/改名全仓 grep）已并入活跃记忆 project-kotlin-to-java-port-sync 与 pitfall-scan-guard-mask-and-sample-power 续用 |
 | [t-task-queue-skill.md](bug-fixes/t-task-queue-skill.md) | task-queue 任务队列 skill 定案交付（会话挂起守望进程、实施必须在会话内做；端到端实测通过并常态化运行）：含用户两度纠偏后的架构定案、废弃路线存档（CronCreate 底座平台 20 上限/zcode CLI headless 认证链）、闲时通道滥用请求三次拒绝边界（绕配额/计费类内容不分析不评估）、四个待选 skill 优化在册 pending-plans 续踪 |
 | [project-merge-dev2master-plan.md](bug-fixes/project-merge-dev2master-plan.md) | T-MergeDev2Master 合流方案与实战（20260918 定案「除 K2J 外全合」→ 同日执行完成双树归一）：真实冲突面算法=以合流基点取「两侧都改过的文件」（11 交叠仅 2 真冲突）；三条风险应验实录（PS4 双实现未成冲突源/近三批改动须并集活着过——AgentManager 三方差集实证/合并≠发行）；大合流先打退路 tag 最省事；自动合并抓不到跨两侧语义耦合（A 侧加参 B 侧加调用点会静默断裂）；dev worktree 运维定例已并入项目记忆 pending-plans 合流债节 |
@@ -270,10 +278,21 @@
 | [project-m54-perf-redline-audit](bug-fixes/project-m54-perf-redline-audit.md) | M54 性能红线全面治理 24 任务交付（perf/redline-hardening 28 提交，2026-09-05，**已合 dev**）——禁卡死/禁拖慢/禁 ERROR 弹窗：LOG.error 与 ERROR 通知清零、3084 用例 0 失败；实施偏差 4 项备忘（T-Perf-23 正则 13/17、T-Perf-13 探针门控、T-Perf-18 URL 键、T-Perf-20 通知替代 HintManager）；真实防抖待 runIde 真机 |
 | [project-log-jump-no-wrapper-rootcause](bug-fixes/project-log-jump-no-wrapper-rootcause.md) | SQL 日志右键跳转「未找到表对应 Wrapper」根因（2026-09-02 分析，**已随 T-ServiceChainSearch/O-6 修复**）——事后搜索 Wrapper 本质不可靠（仅静态工厂不含 IService 链），正解=F-44-7 SqlSourceInterceptor 执行时注入源码位置，含方案 A 实施全程 12 个编译/运行陷阱 |
 
-## 已解决踩坑（70 个）
+## 已解决踩坑（81 个）
 
 | 文件 | 内容摘要 |
 |------|----------|
+| [pitfall-docker-guard-hangs-indefinitely.md](pitfalls/pitfall-docker-guard-hangs-indefinitely.md) | docker 引擎半活态（管道在、守护进程不应答）让 `assumeDockerAvailable` 无限挂死而非跳过——HTTP 读无超时、`catch (Throwable)` 永不触发，整片门禁挂住且零错误读数；判别＝`timeout 10 docker info` 看退出码（管道接 head 会误读 0）；根治＝`mpvs.docker.tests.enabled` 显式开关（`b71b382`，缺省关，`-PmpvDockerTests=true` 才跑容器验证），日常判别口径沉淀 AGENTS.md 与测试约定；dbx 替代 Oracle 用例未实施；含 testcontainers 策略写回、buildSrc 临时排除口径等实测细节 |
+| [pitfall-xmltext-cdata-literal.md](pitfalls/pitfall-xmltext-cdata-literal.md) | 平台 PSI 的 `XmlText.text` 对 CDATA 返回带 `<![CDATA[ ]]>` 包裹的字面全文（「CDATA 已展开」说法被判别性读数证伪）——按展开口径写的 hbm 命名查询提取链带缺口且非判别性断言恒绿；修法＝unwrap 正则剥包裹+断言改「不含包裹标记」；hbm 缺口已修（dev `9c0c9e7` 共享 `XmlDirectText` 口径），新写 XML 文本提取代码前先读本档 |
+| [pitfall-agent-config-channel-never-applied.md](pitfalls/pitfall-agent-config-channel-never-applied.md) | 增强捕获 CONFIG 帧格式错位——IDE 出站 `[4字节长度][1字节命令][body]`、应用侧 SenderLoop 错位读取→停采/脱敏/帧过滤三条指令从未生效；IDE 侧入队不判 capturing。O-54 交付（`0eafa67`）+ T-08 连接级跳过包装 P0（`ec2a3b9`）+ D1 定案 MCP 不受捕获开关约束（`e8ee771`）；含 CONFIG ACK=5 回执+看门狗 15s+入队闸门 |
+| [pitfall-agent-heartbeat-cadence-vs-online-window.md](pitfalls/pitfall-agent-heartbeat-cadence-vs-online-window.md) | 增强捕获 30 秒必掉线——agent 心跳记账耗时（实测 60.6s/发 vs 声明 10s）超 IDE 在线窗口 30s 必误杀，且 premain 只 accept 一次无法重连；六项修法交付 master+沙盒三轮验收九项全过；两条疑似缺陷实验证伪（复读历史行不成立/同 SQL 无新条目属去重预期，`×N` 徽标即丢弃数） |
+| [pitfall-agent-locator-cache-stale-line.md](pitfalls/pitfall-agent-locator-cache-stale-line.md) | StackLocator L1 整帧缓存冻结行号——键取「首个非框架帧」而 MPJ 拦截器帧全应用共享→所有条目同一位置；O-55 交付（两缓存合并判定缓存+身份在场校验，反向验证读数与报障同形）；D3 定案=两侧跳过规则保持两份+差异登记+跨侧同步守卫 |
+| [pitfall-rollback-identity-wrap-never-fires.md](pitfalls/pitfall-rollback-identity-wrap-never-fires.md) | 回滚链 identity 包装永不触发——快照登记点不传 dialect/identityColumns 而消费侧只从 snapshotEntry 取→SQL Server 回填仍报 544；单测直构 SnapshotEntry 全绿而产品不可用；O-59 交付（`32ff1f5`/`e1b5136`）+未知自增列显式告警（`bfb15c7`）；「单测直构绕过生产接线」形态教训在册 |
+| [pitfall-console-error-signature-coverage.md](pitfalls/pitfall-console-error-signature-coverage.md) | 预览面板错误条只认控制台文本 14 条短语词表——服务端 SQL 错误（如 `You have an error in your SQL syntax`）整类漏检→无红字无复制按钮、16s 后错向归因「密码/驱动」；T-ConsoleErrorCoverage 交付（`a04b123`）=认结构性 `[SQLSTATE][errorCode]` 前缀+兜底呈现残余 |
+| [ml-llm-acp-signature-divergence.md](pitfalls/ml-llm-acp-signature-divergence.md) | ml-llm 两份制品 AcpAgentId 包路径分歧（262.10968.97=`ml.llm.agents.acp.api` vs 262.9437.276=`com.intellij.platform.acp`，后者 jar 不含前者类）——O-41 跨版本签名护栏已按纯字节码解析交付（`4186231`），迁桩 `f0251af` 定为平台包；分歧不再阻塞断言 |
+| [native-diagram-relation-provider-null-ref.md](pitfalls/native-diagram-relation-provider-null-ref.md) | 原生 JOIN 图两参 `getForeignKeys(Project, DasTable)` 恒传 refTable=null=「不过滤返回全部 FK」（243/253/262 字节码同构）——误读成「无关系」致 B 路径连线全丢；N6 修复已合 master（`03f6d25`）；排障要点=日志打在守卫之后 hits=1 假健康、Heavy 用例三级软返回、扫 jar 用 Python zipfile |
+| [pitfall-keymap-conflicts-never-resolve.md](pitfalls/pitfall-keymap-conflicts-never-resolve.md) | 快捷模板三动作默认键与备选键全撞平台既有键位（Alt+Shift+C/T、Ctrl+Alt+Shift+C/T 实测表）→「自动改绑」必然失败；T-TemplateKeyDrop 定案摘除默认键位+冲突检测下线（`e6ce2c5`，三键位从未随发行物交付零影响）；附 classpath 上 plugin.xml 被构建重写成自闭合标签、裸正则取块吞下一个动作键位的坑 |
+| [pitfall-unload-modality-write-unsafe.md](pitfalls/pitfall-unload-modality-write-unsafe.md) | 自更新用 `invokeAndWait(..., any())` 从后台派发平台卸载→模态串带 `[Unloading of SQL Visualizer]` 的 Write-unsafe context（write-safe 资格是进入模态那一刻的快照）；T-DynUpdateWriteSafe 收敛交付（`6e2a34d`）；含断言调用点清单与「读模态串判分支」判别法 |
 | [pitfall-toolwindow-titleactions-hover-only.md](pitfalls/pitfall-toolwindow-titleactions-hover-only.md) | ToolWindow.setTitleActions 挂的动作新 UI 悬停/激活才渲染——主操作入口挂标题栏在用户视角「消失」（T-CaptureBack 实录：捕捉按钮「不见了」，截图实证存在但不渲染）；回迁面板内工具栏单一入口 + 删 setTitleActions；顺带教训=迁移动作引入硬编码中文漏接 bundle 键。平台通用部分已升全局同名文件 + AGENTS.md 摘要条 |
 | [pitfall-dbn-objectkind-not-java-enum.md](pitfalls/pitfall-dbn-objectkind-not-java-enum.md) | DBN `ObjectKind` 是 type-safe enum 手写类（非 java.lang.Enum），反射 enumConstants 恒 null → DatabaseSchemaResolver 每次调用静默早退、schema 链全程空转且日志谎报 "not found in N data sources"；修法=getField("COLUMN").get(null)（T-DbSchemaCompletion 已交付，另 `To many roots from database` 是平台噪音非根因） |
 | [pitfall-dbn-perfile-datasource-mapping.md](pitfalls/pitfall-dbn-perfile-datasource-mapping.md) | `.idea/data_source_mapping.xml` 把 exec 文件钉到数据源、控制台库上下文随之而定，与插件按数据源名选的 runner 错位 → 42S22/1054 Unknown column（跨库同名表陷阱）；已修 T-ConsoleDbContext（d51cc0a：预览默认以数据源 URL 库为准、手调记忆保留、错误行附当前库） |
@@ -370,13 +389,19 @@
 
 **第十四次精简升级（2026-09-20，2 个新文件 + 1 处内容合并）**：pitfall-python-requests-proxy-tls（python requests 走本地代理 127.0.0.1:7890 时 TLS 握手被掐 SSLEOFError，curl -x 同代理正常——抓取类任务直接用 curl -x；GitHub 匿名额度被共享出口 IP 耗尽时如实登记）/ pitfall-toolwindow-titleactions-hover-only（setTitleActions 新 UI 悬停才渲染，主操作入口放面板内工具栏；完整 T-CaptureBack 实例归档 pitfalls/，精简版升全局 + AGENTS.md 摘要条）/ pitfall-stale-session-git-snapshot 项目侧 20260919 副本的内容（盘点类结论几十分钟即过时 + Write 撞 "file modified since read" 先重读合并再写）合并进全局同名文件后删除副本。另：全局 feedback-junit3-kotlin-lambda-testname 已完整覆盖项目侧 pitfall-junit3-synthetic-lambda-method（project-test-conventions 亦有全记录），项目副本删除不归档
 
+**第十五次精简升级（2026-09-23，3 个新文件 + 1 处内容合并 + 1 处重复删除）**：pitfall-statustext-no-html-no-wrap（JBList 空态是 StatusText 非 JLabel：不解析 HTML、`\n` 无声吞掉、超宽只裁不折，多行只能 appendLine 且它不更新 getText()）+ pitfall-workflow-amend-cannot-pass-args（AmendWorkflow 无 args 参数，必填参工作流修订即秒退 `ok:false`；循环内字面量 actor 名第二轮必 DuplicateActorName）+ reference-dev-flow-workflow（全局脚本 dev-flow.dwf.ts 七阶段骨架与迭代史，含改脚本编译校验法与模板字面量反引号截断 TS1005 坑）升全局；pitfall-git-commit-message-backticks-gitbash 的 commit -m 变体（信息静默缺段，一律 -F 文件）并入全局 pitfall-bash-backtick-inline-corruption 后删副本；pitfall-bash-python-write-not-persisted 与全局 pitfall-sandbox-python-write-not-persisted（20260923 并行会话新版）重复，删项目副本
+
+**第十六次精简升级（2026-09-24，5 个归档 + 1 个原地瘦身）**：console-capture-zero-output-flush（O-70 T-ConsolePendingFlush 已交付 `dc7e69a`）+ enhanced-capture-gates-and-consent-scope（O-66 引导链随交付；O-73 路线 A 已实施 `1597521`，归档注记录其推翻文中「均未实施」）+ reference-acp-session-verification（⑯ 全四项闭合 `24d6e33`）归 bug-fixes 3 个；pitfall-xmltext-cdata-literal（hbm CDATA 缺口已修 dev `9c0c9e7`）+ pitfall-docker-guard-hangs-indefinitely（处置口径已沉淀 AGENTS.md 与测试约定）归 pitfalls 2 个——后两者系并行会话新建的漏索引孤儿，本次一并补账；mcp-tools-live-test-and-open-bugs 原地瘦身（2 bug 已修删细节留实测口径，filePath 段更新为 T-McpFilePathUnify `fecd7cb` 统一后口径）。另：project-pending-plans 瘦身（30KB→约 10KB，深夜批次收口债销案、合流债刷新=dev 领先 52 笔+master 独有 9 笔 docs 未推）
+
+**第十七次精简升级（2026-09-25，1 个归档 + 1 个升全局并入后删 + MEMORY.md 重建纯索引）**：project-o77-ew-statement-scope（O-77 T-EwStatementScope 已交付 `4ca473e` 并推送）归 bug-fixes，系并行会话新建的漏索引孤儿本次补账；pitfall-python-c-backtick-command-substitution 增量点（stderr 混流+退出码 0 照常「成功」最隐蔽/回读校验防锚点被吃短）并入全局 pitfall-bash-backtick-inline-corruption 后删项目副本，AGENTS.md 反引号条同步补句；MEMORY.md 索引行再瘦身 16.4K→约 8K（承重细节先逐项 grep 验明已落各底层文件再瘦）；project-release-workflow 补 20260925 Marketplace「已落位审核队列未放行」新结论（原文停在第十轮 hasUnapprovedUpdate=false 旧口径）并订正 update.json 待办已消除（实测已指 2026.9.23）
+
 ---
 
 ## 统计
 
 | 位置 | 文件数 |
 |------|--------|
-| 项目 memory（保留） | 33（含 MEMORY.md） |
-| 全局记忆 global/ | 104 |
-| 归档 archive/ | 241（bug-fixes 168 + pitfalls 70 + methodology 1 + user-context 1 + README） |
-| **合计** | **378** |
+| 项目 memory（保留） | 49（含 MEMORY.md） |
+| 全局记忆 global/ | 115 |
+| 归档 archive/ | 260（bug-fixes 176 + pitfalls 81 + methodology 1 + user-context 1 + README） |
+| **合计** | **424** |

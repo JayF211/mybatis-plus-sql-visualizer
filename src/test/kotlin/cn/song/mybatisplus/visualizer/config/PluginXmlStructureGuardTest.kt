@@ -211,7 +211,11 @@ class PluginXmlStructureGuardTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun `mcp可选依赖声明与工具集注册成对存在`() {
+    fun `mcp可选依赖声明与动态注册入口成对存在`() {
+        // T-McpDynamicToolset（20260926）：十 toolset 的 XML 声明退役（implementation 类 implements
+        // 平台接口，静态引用在 243/251 被 verifier 判未解析类——Marketplace 审核拒绝主因），改由
+        // McpToolsetDynamicRegistrar 运行期注册。守卫反转：XML 不得再出现 toolset 声明（回归即红），
+        // 注册入口 postStartupActivity 必须在册。
         val pluginXml = strippedXmls().first { it.first == "plugin.xml" }.second
         val mcpXml = strippedXmls().first { it.first == "mcp-optional.xml" }.second
         assertHolds(
@@ -219,20 +223,13 @@ class PluginXmlStructureGuardTest {
             pluginXml.contains("""<depends optional="true" config-file="mcp-optional.xml">com.intellij.mcpServer</depends>"""),
         )
         assertHolds(
-            "mcp-optional.xml 缺 mcpServer.mcpToolset 注册（工具不上线）",
-            mcpXml.contains("mcpServer.mcpToolset"),
+            "mcp-optional.xml 缺动态注册入口 McpGateFilterRegistrar（postStartupActivity；T-McpDynamicToolset）",
+            mcpXml.contains("cn.song.mybatisplus.visualizer.mcp.McpGateFilterRegistrar"),
         )
-        // T-McpToolset2 / T-MTS2-00：一工具一 toolset 类（平台 per-tool 门控只有 toolset 粒度
-        // isEnabled）——十工具逐类断言，新工具漏注册即红
-        val expectedToolsets = listOf(
-            "SqlVisualizerRenderSqlTool", "SqlVisualizerSchemaContextTool", "SqlVisualizerExplainTool",
-            "SqlVisualizerRenderLogsTool", "SqlVisualizerCheckSqlTool", "SqlVisualizerRollbackPlanTool", "SqlVisualizerPerfAdviceTool",
-            "SqlVisualizerCrudSqlTool", "SqlVisualizerReverseSqlTool", "SqlVisualizerMapperCheckTool",
-        )
-        val missing = expectedToolsets.filter { !mcpXml.contains("cn.song.mybatisplus.visualizer.mcp.$it") }
         assertHolds(
-            "mcp-optional.xml 缺 toolset 注册：$missing（清单与 McpToolGate.TOOL_NAMES 对齐）",
-            missing.isEmpty(),
+            "mcp-optional.xml 出现 mcpServer.mcpToolset XML 声明（T-McpDynamicToolset 已退役该形态，" +
+                "静态引用会 reintroduce 243/251 compatibility problems——工具注册改走动态壳）",
+            !mcpXml.contains("mcpServer.mcpToolset"),
         )
     }
 
@@ -254,7 +251,10 @@ class PluginXmlStructureGuardTest {
     @Test
     fun `acp可选依赖声明与传输provider注册成对存在`() {
         // 可选依赖铁律：声明与注册必须成对——只声明不注册=provider 不上线（绕行失效且无任何提示），
-        // 只注册不声明=未装 AI Assistant 的环境解析该文件即失败（缺类/未知 EP）
+        // 只注册不声明=未装 AI Assistant 的环境解析该文件即失败（缺类/未知 EP）。
+        // T-MarketCompatProxy（20260923）：provider 从 XML EP 声明改为 postStartupActivity
+        // 探测式程序化注册（动态代理形态，字节码零 ml-llm 类型引用）——成对判据同步为
+        // 「optional depends 声明 + registrar 类挂载」。
         val pluginXml = strippedXmls().first { it.first == "plugin.xml" }.second
         val acpXml = strippedXmls().first { it.first == "acp-transport-optional.xml" }.second
         assertHolds(
@@ -264,12 +264,8 @@ class PluginXmlStructureGuardTest {
             ),
         )
         assertHolds(
-            "acp-transport-optional.xml 缺 ideaMcpTransportProvider 注册（传输不生效）",
-            acpXml.contains("ml.llm.agents.acp.ideaMcpTransportProvider"),
-        )
-        assertHolds(
-            "acp-transport-optional.xml 缺 provider 实现类引用",
-            acpXml.contains("cn.song.mybatisplus.visualizer.acp.AcpIdeaMcpTransportProviderImpl"),
+            "acp-transport-optional.xml 缺传输注册入口（postStartupActivity 探测式注册）",
+            acpXml.contains("cn.song.mybatisplus.visualizer.acp.AcpTransportRegistrar"),
         )
     }
 

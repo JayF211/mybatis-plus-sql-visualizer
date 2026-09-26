@@ -25,6 +25,10 @@ class DialectInferenceTest {
             "jdbc:dm://localhost:5236" to "DM（达梦）",
             "jdbc:kingbase8://localhost:54321/db" to "KingBase（人大金仓）",
             "jdbc:kingbase://localhost:54321/db" to "KingBase（人大金仓）",
+            // T-DialectXcFamily（O-63）：信创双备 + GaussDB 前缀（D2=A 同归 openGauss）
+            "jdbc:oceanbase://localhost:2881/db" to "OceanBase",
+            "jdbc:opengauss://localhost:5432/db" to "openGauss",
+            "jdbc:gaussdb://localhost:8000/db" to "openGauss",
         )
         expected.forEach { (url, name) -> assertEquals(name, UrlSubprotocolDialects.dialectName(url)) }
     }
@@ -32,10 +36,12 @@ class DialectInferenceTest {
     @Test
     fun dialectNamesAllResolvableByRegistry() {
         // 映射值必须能被 DialectRegistry.byName 命中（回退 MySQL 视为失配）
-        setOf("MySQL", "MariaDB", "PostgreSQL", "Oracle", "SQL Server", "H2", "SQLite", "DM（达梦）", "KingBase（人大金仓）")
-            .forEach { name ->
-                assertEquals(name, DialectRegistry.INSTANCE.byName(name).name)
-            }
+        setOf(
+            "MySQL", "MariaDB", "PostgreSQL", "Oracle", "SQL Server", "H2", "SQLite",
+            "DM（达梦）", "KingBase（人大金仓）", "OceanBase", "openGauss",
+        ).forEach { name ->
+            assertEquals(name, DialectRegistry.byName(name).name)
+        }
     }
 
     @Test

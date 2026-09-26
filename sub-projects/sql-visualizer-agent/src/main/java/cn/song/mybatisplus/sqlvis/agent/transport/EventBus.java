@@ -20,8 +20,9 @@ public final class EventBus {
     public static final int CMD_HELLO = 4;
     /**
      * CONFIG 回执（T-AgentConfigChannel T-02）：应用侧成功应用 CONFIG 后回给 IDE 一帧，
-     * body 严格为 {@code {"disabled":…,"desensitize":…,"skipPrefixes":n}}（键序固定、无空格、
-     * 布尔小写字面量）——IDE 侧按同一字面契约解析，字段名与形态不得单侧改动。
+     * body 严格为 {@code {"disabled":…,"desensitize":…,"skipPrefixes":n,"bizJarPrefixes":n}}
+     * （键序固定、无空格、布尔小写字面量；bizJarPrefixes=T-ToolSiteBizFrame 追加的 JAR 业务帧
+     * 反向名单生效条数）——IDE 侧按同一字面契约解析，字段名与形态不得单侧改动。
      * 旧版 IDE 忽略未知 cmd 天然兼容。
      */
     public static final int CMD_CONFIG_ACK = 5;

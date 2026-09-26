@@ -37,6 +37,6 @@ class RollbackPlanToolTest {
     @Test
     fun `空输入_预期错误`() {
         val error = runCatching { SqlVisualizerRollbackPlanTool().rollbackPlan("", "") }.exceptionOrNull()
-        assertTrue(error is com.intellij.mcpserver.McpExpectedError)
+        assertTrue(error is SqlvExpectedToolException)
     }
 }
