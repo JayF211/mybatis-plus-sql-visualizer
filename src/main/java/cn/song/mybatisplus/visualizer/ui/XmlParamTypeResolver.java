@@ -246,10 +246,22 @@ public final class XmlParamTypeResolver {
     /** PSI 类型 → 类型信息（psi 层唯一映射入口；注解侧参数同用）。 */
     @NotNull
     public ParamTypeInfo typeInfoOf(@NotNull PsiType type, @Nullable PsiClass psiClass) {
+        ParamKind kind = kindOf(type, psiClass);
+        // O-78 T-ForeachItemRender：集合元素类别——泛型实参唯一时取之（`List<Integer>`→NUMBER），
+        // 供 foreach item 占位键派生引号/类别；裸集合（无实参）、数组、多实参不产（宁缺勿错）
+        ParamKind elementKind = null;
+        if (kind == ParamKind.COLLECTION && type instanceof PsiClassType) {
+            PsiType[] parameters = ((PsiClassType) type).getParameters();
+            if (parameters.length == 1) { // Kotlin singleOrNull()
+                PsiType arg = parameters[0];
+                elementKind = kindOf(arg, (arg instanceof PsiClassType) ? ((PsiClassType) arg).resolve() : null);
+            }
+        }
         return new ParamTypeInfo(
-                kindOf(type, psiClass),
+                kind,
                 // 原语类型（int/long 等）无 null 语义；其余保守视为可空
-                !(type instanceof PsiPrimitiveType));
+                !(type instanceof PsiPrimitiveType),
+                elementKind);
     }
 
     /** {@link #typeInfoOf(PsiType, PsiClass)} 的缺省 psiClass 形态（Kotlin 默认实参 {@code (type as? PsiClassType)?.resolve()}）。 */

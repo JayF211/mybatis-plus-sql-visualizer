@@ -11,8 +11,6 @@ import com.intellij.mcpserver.annotations.McpToolHintValue;
 import com.intellij.mcpserver.annotations.McpToolHints;
 import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.util.io.FileUtil;
-import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiClass;
@@ -52,7 +50,8 @@ public class SqlVisualizerCrudSqlTool extends McpToolsetSupport {
             + "current IntelliJ project (same chain as the IDE right-click action): primary keys, "
             + "auto-generated columns excluded from INSERT, @Version optimistic-lock SET tail, "
             + "@TableLogic logic-delete variant; no-primary-key degrades to a '1 = 0' placeholder WHERE. "
-            + "Pass 'filePath' (project-relative or absolute, .java/.kt entity file) or 'className' "
+            + "Pass 'filePath' (project-relative to the project root, or an absolute path inside the "
+            + "project; paths outside the project are rejected; .java/.kt entity file) or 'className' "
             + "(fully-qualified). Deterministic generation; read-only: produces SQL text only — "
             + "never executes; pair with sqlv_check_sql before any real execution."
     )
@@ -88,9 +87,12 @@ public class SqlVisualizerCrudSqlTool extends McpToolsetSupport {
             throwExpected(
                 McpToolErrors.code(
                     McpToolErrors.SOURCE_NOT_FOUND,
+                    // T-McpFilePathUnify（O-70）：与 render_sql / mapper_check 同一引导语——项目外路径
+                    // 也被拒，缺这句 agent 会误判成「文件不存在」而不知是路径出了项目范围
                     filePath.isBlank()
                         ? "class not found in project: " + className
                         : "entity file not found or contains no class: " + filePath
+                            + " (pass a project-relative path, or an absolute path inside the project)"
                 )
             );
         }
@@ -133,19 +135,12 @@ public class SqlVisualizerCrudSqlTool extends McpToolsetSupport {
         return McpExplainFormatter.trimEnd(out.toString());
     }
 
-    /** 文件 → 实体 PsiClass（McpSourceLocator 同款定位：绝对/项目相对均收，PsiClassOwner 取首类）。 */
+    /**
+     * 文件 → 实体 PsiClass（T-McpFilePathUnify O-70：路径经 {@link McpFilePathResolver} 统一——
+     * 项目相对与项目内绝对都收、项目外拒绝；PsiClassOwner 取首类）。
+     */
     private static PsiClass locateEntityFile(Project project, String filePath) {
-        VirtualFile vFile = LocalFileSystem.getInstance().findFileByPath(filePath);
-        if (vFile == null && !FileUtil.isAbsolute(filePath)) {
-            String base = project.getBasePath();
-            if (base != null) {
-                String relative = filePath;
-                while (relative.startsWith("/")) {
-                    relative = relative.substring(1);
-                }
-                vFile = LocalFileSystem.getInstance().findFileByPath(base + "/" + relative);
-            }
-        }
+        VirtualFile vFile = McpFilePathResolver.resolveFile(project, filePath);
         if (vFile == null) {
             return null;
         }

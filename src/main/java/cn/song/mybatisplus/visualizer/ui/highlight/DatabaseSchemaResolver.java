@@ -549,6 +549,19 @@ public final class DatabaseSchemaResolver {
     }
 
     /**
+     * 剥掉标识符的<b>成对</b>引用符：{@code [user]} / {@code "user"} / {@code `user`} → {@code user}；
+     * 无包裹符原样返回。只剥首尾成对的一层，不动表名内部出现的引号/方括号（那些在真实对象名里是合法字符）。
+     */
+    private static String unquoteIdentifier(String raw) {
+        String t = raw.trim();
+        if (t.length() < 2) return t;
+        char head = t.charAt(0);
+        char tail = t.charAt(t.length() - 1);
+        boolean paired = (head == '[' && tail == ']') || (head == '"' && tail == '"') || (head == '`' && tail == '`');
+        return paired ? t.substring(1, t.length() - 1) : t;
+    }
+
+    /**
      * 按数据源逐个解析：正缓存命中 → 负缓存 TTL 内跳过 → 全扫（扫描探针可注入供表驱动测试，
      * 无 database 插件的单测环境走不了真实反射链；生产 scanProbe 传 null 走既有反射路径，
      * 正命中回填与返回行为与 T-Perf-09 原实现一致）。
@@ -560,13 +573,19 @@ public final class DatabaseSchemaResolver {
      */
     public static TableMeta resolveFromSources(String tableName, List<Object> sources,
                                                BiFunction<Object, String, TableMeta> scanProbe) {
+        // 真机走查（2026-09-23）实测：SQL 文本里的表名可能<b>带引用符</b>（SQL Server `[user]`、PG `"user"`、
+        // MySQL `` `user` ``），而 DAS 里存的是裸名——原样带进去必然解析不到（沙盒日志：
+        // `scan: table=[user] … table=[user] 无法解析`）。后果不止补全：回滚链靠它取自增列，
+        // 取不到 ⇒ 回填 INSERT 不带 `SET IDENTITY_INSERT` 包装 ⇒ 真机仍报 544。
+        // 故入口先剥引用符（只剥「成对的包裹符」，表名内部的引号/方括号不受影响）。
+        String name = unquoteIdentifier(tableName);
         BiFunction<Object, String, TableMeta> scan = (scanProbe != null) ? scanProbe : DatabaseSchemaResolver::collectFromDataSource;
         ScanBudget budget = scanBudget.get();
         int bailed = 0;
         for (Object ds : sources) {
             // P7：缓存键带库名维度（同一数据源可同时看见多个库/模式，同名表结论按库不同；
             // 库名取不到时键退回纯表名，与修复前逐字一致）
-            String cacheKey = cacheKeyOf(databaseNameOf(ds), tableName);
+            String cacheKey = cacheKeyOf(databaseNameOf(ds), name);
             // T-Perf-09：缓存命中直接返回（同一数据源同一表零遍历）
             TableMeta cached;
             synchronized (metaCache) {
@@ -583,7 +602,7 @@ public final class DatabaseSchemaResolver {
                 stampNegative(ds, cacheKey);
                 continue;
             }
-            TableMeta found = scan.apply(ds, tableName);
+            TableMeta found = scan.apply(ds, name);
             if (!found.columns().isEmpty() || found.comment() != null) {
                 synchronized (metaCache) {
                     metaCache.computeIfAbsent(ds, k -> new HashMap<>()).put(cacheKey, found);
@@ -606,10 +625,10 @@ public final class DatabaseSchemaResolver {
         }
         // 表在所有数据源都没拿到（通常=未连接/introspection 未完成/表不在当前库）
         if (bailed > 0) {
-            LOG.info("DatabaseSchemaResolver: table=" + tableName + " 无法解析——" + bailed + "/" + sources.size()
+            LOG.info("DatabaseSchemaResolver: table=" + name + " 无法解析——" + bailed + "/" + sources.size()
                     + " 个数据源查不了（模型未加载/ObjectKind 取不到，原因见上方 scan 行），未记负缓存、下次调用重试");
         } else {
-            LOG.info("DatabaseSchemaResolver: table=" + tableName + " not found in " + sources.size() + " data sources");
+            LOG.info("DatabaseSchemaResolver: table=" + name + " not found in " + sources.size() + " data sources");
         }
         return new TableMeta(null, Map.of(), bailed > 0 && bailed == sources.size());
     }

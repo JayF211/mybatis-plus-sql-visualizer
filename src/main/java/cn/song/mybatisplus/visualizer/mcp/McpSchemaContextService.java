@@ -1,4 +1,4 @@
-// T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSchemaContextService.kt 移植
+// T-SyncK2JMaster187 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSchemaContextService.kt 移植（增量同步 c07b8e3→bccbfc5）
 // T-SyncK2JMaster115 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSchemaContextService.kt 移植（P4 / T-McpSchemaScope 整文件重写级：自建 DasModel「表名 → 目标库那张表」索引）
 package cn.song.mybatisplus.visualizer.mcp;
 
@@ -256,7 +256,10 @@ public final class McpSchemaContextService {
     /**
      * 单数据源扫描（一次遍历 → 表名索引）；{@code diagnostics} 非空时记一行实况供错误文案自解释。
      *
-     * <p>T-PerfSweep6 T-PS6-02：命中跨调用索引时<b>零遍历</b>（不再调 {@link #readModelTables}，也不再逐列反射）。</p>
+     * <p>T-PerfSweep6 T-PS6-02：命中跨调用索引时<b>零遍历</b>（不再调 {@link #readModelTables}，也不再逐列反射）。
+     * T-PerfSweep7 4b（性能报告发现 6）：两处 scan 实况 INFO 降 DEBUG——命中路径<b>每次调用</b>都会
+     * 拼行写 idea.log（30s TTL 窗口内每次 sqlv_schema_context 一条），持续调用期是纯噪音；
+     * 实况文本不变地进 {@code diagnostics}（错误文案自解释不受影响），需要排障时开 DEBUG 仍可见。</p>
      */
     private static Map<String, McpSchemaFormatter.TableEntry> scanSource(Object ds, List<String> diagnostics) {
         String target = targetDatabase(ds);
@@ -264,7 +267,7 @@ public final class McpSchemaContextService {
         if (cached != null) {
             String line = "ds=" + dsName(ds) + " targetDb=" + (target != null ? target : "-")
                 + " 命中跨调用索引（T-PS6-02） indexed=" + cached.size();
-            LOG.info("McpSchemaContextService scan: " + line);
+            LOG.debug("McpSchemaContextService scan: " + line);
             if (diagnostics != null) {
                 diagnostics.add(line);
             }
@@ -278,7 +281,7 @@ public final class McpSchemaContextService {
         storeIndex(ds, target, index);
         String line = "ds=" + dsName(ds) + " targetDb=" + (target != null ? target : "-")
             + " modelTables=" + candidates.size() + " indexed=" + index.size();
-        LOG.info("McpSchemaContextService scan: " + line);
+        LOG.debug("McpSchemaContextService scan: " + line);
         if (diagnostics != null) {
             diagnostics.add(line);
         }

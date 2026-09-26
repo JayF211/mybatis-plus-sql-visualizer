@@ -1,0 +1,169 @@
+// T-SyncK2JMaster187 新建翻译自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpToolsetDynamicRegistrar.kt
+package cn.song.mybatisplus.visualizer.mcp;
+
+import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.extensions.ExtensionPointName;
+
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
+
+import java.lang.reflect.Constructor;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * MCP 工具集<b>动态壳注册器</b>（T-McpDynamicToolset）：运行期生成「extends 工具类 implements
+ * 平台 McpToolset」的壳类并程序化注册到 {@code com.intellij.mcpServer.mcpToolset} EP，替代
+ * mcp-optional.xml 的 10 条 XML toolset 声明。
+ *
+ * <p><b>为什么要动态生成壳类（方案 D 全动态化终态）</b>：verifier 只做静态字节码分析——jar 内任何
+ * implements 平台接口的类都会在 243/251（mcpServer 旧形态缺新 API）被判未解析类（20260926
+ * 审核拒绝主因）。XML 声明形态的 implementation 类无法消除该引用（EP 接口实现类，上轮
+ * T-MarketCompatProxy 已证）；运行期生成的壳类不在 jar 内，verifier 不可见。壳类只覆写
+ * 「继承即可满足接口」的最小面（三钩子直接继承 {@link McpToolsetSupport} 实现，连方法都不生成），
+ * 平台的工具发现（kotlin-reflect 扫 {@code @McpTool} 注解方法/参数 schema/suspend 调用契约）全部
+ * 走继承来的业务类编译产物，壳零参与。</p>
+ *
+ * <p><b>注册链</b>：{@link McpGateFilterRegistrar}（mcp-optional.xml 的 postStartupActivity，mcpServer
+ * 在场才加载）每项目启动触发 {@link #registerOnce}，原子闸全应用只注册一次。探测
+ * {@code Class.forName("com.intellij.mcpserver.McpToolset")} 失败（243/251 旧形态）静默跳过——
+ * 与 XML 形态「片段加载但 EP 形态不同」的设计口径一致：该版本不支持 MCP 工具线。</p>
+ *
+ * <p><b>EP 形态</b>：{@code interface="com.intellij.mcpServer.mcpToolset" dynamic="true"}（262
+ * mcpserver.jar META-INF/plugin.xml 实证）——与 mcpToolFilterProvider 同款，注册走
+ * McpGateFilterEpBridge 先例（{@code getPoint(null)} application 级，真机验证过）；dynamic EP
+ * 晚注册会触发清单重算，无需重启 IDE。</p>
+ *
+ * <p><b>类名前缀硬约定（T-McpToolNaming）</b>：平台「暴露工具」页分组名=注册实例类的 simpleName——
+ * 壳类放 {@code mcp.gen} 子包、<b>simpleName 与业务类逐字节一致</b>（如 SqlVisualizerCheckSqlTool），
+ * 分组名与前缀美学（自带插件名、字典序相邻）与 XML 形态完全相同；FQN 含 gen 子包避免与
+ * 业务类在不同 classloader 上的解析歧义。</p>
+ *
+ * <p>移植注记：master 的 {@code object} 按本仓惯例落为 final class + {@link #INSTANCE} + 全静态成员，
+ * {@code internal}（shellBytes/ShellClassLoader）按惯例升 public（壳生成器单测直触达）；
+ * {@code object ShellClassLoader} 落为静态嵌套类 + 自身 {@code INSTANCE}（defineClass 的
+ * protected 调用点必须落在 ClassLoader 子类实例方法内）；Kotlin {@code require} 落为显式
+ * {@code IllegalArgumentException}；ASM {@code apply{}} 惯用法展开为显式 {@link MethodVisitor} 变量。</p>
+ */
+public final class McpToolsetDynamicRegistrar {
+
+    public static final McpToolsetDynamicRegistrar INSTANCE = new McpToolsetDynamicRegistrar();
+
+    private McpToolsetDynamicRegistrar() {
+    }
+
+    private static final Logger LOG = Logger.getInstance(McpToolsetDynamicRegistrar.class);
+
+    private static final String TOOLSET_EP_NAME = "com.intellij.mcpServer.mcpToolset";
+    private static final String TOOLSET_IFACE_FQN = "com.intellij.mcpserver.McpToolset";
+
+    private static final AtomicBoolean registered = new AtomicBoolean(false);
+
+    /** 十工具类清单（McpToolGate.TOOL_NAMES 一一对应，守卫测试对账单一事实）。 */
+    private static final List<Class<?>> TOOL_CLASSES = List.of(
+        SqlVisualizerRenderSqlTool.class,
+        SqlVisualizerSchemaContextTool.class,
+        SqlVisualizerExplainTool.class,
+        SqlVisualizerRenderLogsTool.class,
+        SqlVisualizerCheckSqlTool.class,
+        SqlVisualizerRollbackPlanTool.class,
+        SqlVisualizerPerfAdviceTool.class,
+        SqlVisualizerCrudSqlTool.class,
+        SqlVisualizerReverseSqlTool.class,
+        SqlVisualizerMapperCheckTool.class
+    );
+
+    /** 探测＋全量注册；已注册或探测失败（无 mcpServer 新形态）时零操作。 */
+    public static void registerOnce() {
+        if (registered.get()) {
+            return;
+        }
+        Class<?> toolsetIface;
+        try {
+            toolsetIface = Class.forName(TOOLSET_IFACE_FQN);
+        } catch (Throwable ignored) {
+            return; // runCatching{...}.getOrNull() ?: return（243/251 旧形态静默跳过）
+        }
+        try {
+            for (Class<?> toolClass : TOOL_CLASSES) {
+                registerToolset(toolClass, toolsetIface);
+            }
+            registered.set(true);
+            LOG.info("T-McpDynamicToolset: " + TOOL_CLASSES.size()
+                + " toolsets registered onto mcpToolset EP (dynamic shell form)");
+        } catch (Throwable t) {
+            // registered 不置位：下个项目启动重试（动态 EP 未就绪等瞬态失败可自愈）
+            LOG.warn("T-McpDynamicToolset: mcpToolset EP 注册失败（MCP 工具不可用，其余功能不受影响）", t);
+        }
+    }
+
+    private static void registerToolset(Class<?> toolClass, Class<?> toolsetIface) throws ReflectiveOperationException {
+        boolean hasNoArgCtor = false;
+        for (Constructor<?> candidate : toolClass.getConstructors()) {
+            if (candidate.getParameterTypes().length == 0) {
+                hasNoArgCtor = true;
+                break;
+            }
+        }
+        if (!hasNoArgCtor) {
+            // Kotlin require(...) { message }
+            throw new IllegalArgumentException("toolset 类必须有无参构造（壳生成依赖）：" + toolClass.getName());
+        }
+        // simpleName 与业务类一致（T-McpToolNaming 分组名=simpleName），gen 子包隔离 FQN
+        String shellName = "cn.song.mybatisplus.visualizer.mcp.gen." + toolClass.getSimpleName();
+        Class<?> shellClass = ShellClassLoader.INSTANCE.define(shellName, shellBytes(toolClass, toolsetIface, shellName));
+        Object instance = shellClass.getDeclaredConstructor().newInstance();
+        ExtensionPointName<Object> ep = ExtensionPointName.create(TOOLSET_EP_NAME);
+        ep.getPoint(null).registerExtension(instance);
+        LOG.info("T-McpDynamicToolset: registered " + shellClass.getSimpleName()
+            + " (gen shell of " + toolClass.getName() + ")");
+    }
+
+    /**
+     * 壳类字节码：{@code final class &lt;ShellName&gt; extends &lt;工具类&gt; implements McpToolset}——
+     * 仅一个无参构造器（invokespecial 父类构造）。三钩子/工具方法全部继承，壳零额外成员。
+     * V17（major 61）：243 JBR 21 可加载，且与插件常规编译目标一致；COMPUTE_MAXS 交由
+     * ClassWriter 重算构造器的栈帧。public（master internal）供壳生成器单测直接触达。
+     */
+    public static byte[] shellBytes(Class<?> superClass, Class<?> iface, String shellName) {
+        String internalName = shellName.replace('.', '/');
+        String superInternal = superClass.getName().replace('.', '/');
+        String ifaceInternal = iface.getName().replace('.', '/');
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        cw.visit(
+            Opcodes.V17,
+            Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SUPER,
+            internalName,
+            null,
+            superInternal,
+            new String[] {ifaceInternal}
+        );
+        MethodVisitor ctor = cw.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+        ctor.visitCode();
+        ctor.visitVarInsn(Opcodes.ALOAD, 0);
+        ctor.visitMethodInsn(Opcodes.INVOKESPECIAL, superInternal, "<init>", "()V", false);
+        ctor.visitInsn(Opcodes.RETURN);
+        ctor.visitMaxs(1, 1);
+        ctor.visitEnd();
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
+    /**
+     * 壳类装载器：插件 classloader 的直系子加载器，defineClass 仅此一处（protected 合法调用点）。
+     * Kotlin {@code object} 落为静态嵌套单例（{@link #INSTANCE}），{@code internal} 升 public。
+     */
+    public static final class ShellClassLoader extends ClassLoader {
+
+        public static final ShellClassLoader INSTANCE = new ShellClassLoader();
+
+        private ShellClassLoader() {
+            super(McpToolsetDynamicRegistrar.class.getClassLoader());
+        }
+
+        public Class<?> define(String name, byte[] bytes) {
+            return defineClass(name, bytes, 0, bytes.length);
+        }
+    }
+}

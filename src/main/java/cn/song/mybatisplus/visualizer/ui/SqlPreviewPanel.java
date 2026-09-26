@@ -601,6 +601,9 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     private final Set<String> enabledIds = new LinkedHashSet<>();
     private final Map<String, String> paramValues = new LinkedHashMap<>();
     private final Map<String, Integer> xmlForEachCounts = new LinkedHashMap<>();
+    // O-78 T-ForeachItemRender：foreach 集合值权威状态（collectionExpr → 逗号分隔解析后的值序）——
+    // 播种收进 renderSql 帧内按新鲜映射清单进行，值不再依赖「渲染后同步读键清单」
+    private final Map<String, List<String>> xmlForEachValues = new LinkedHashMap<>();
     private final Set<String> xmlForEachNulls = new LinkedHashSet<>();
     private List<String> xmlErrors = new ArrayList<>();
     private List<ParameterMapping> xmlMappings = new ArrayList<>();
@@ -949,9 +952,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
      * 项目关闭路径上 join 会把在途预热的耗时加进用户可感的关闭时间；且平台对该 Disposable 的 dispose
      * 有硬要求——「must be self-contained and isolated (getting services is forbidden)」，本实现只置标志。</p>
      *
-     * <p><b>降级</b>：{@code getEarlyDisposable()} 是 {@code @ApiStatus.Internal}，且项目已 dispose 时抛
-     * {@code AlreadyDisposedException}——用 {@code Disposer.tryRegister}（父已销毁即返回 false，不抛）并在外层
-     * try 兜底；挂不上时静默返回，行为退回改动前，预热主链不受影响。</p>
+     * <p><b>降级</b>：earlyDisposable 树的取入口是 {@code @ApiStatus.Internal}（Marketplace 审核对 internal
+     * API 用法要求作者响应，20260923），且项目已 dispose 时抛 {@code AlreadyDisposedException}——取树改走
+     * <b>反射</b>（字节码零平台 internal 类型引用；方法在 ProjectImpl 上实现，KDoc 口径不变），并用
+     * {@code Disposer.tryRegister}（父已销毁即返回 false，不抛）加外层 try 兜底；反射失败或
+     * 挂不上时静默返回，行为退回改动前，预热主链不受影响。</p>
      */
     private void bindPrewarmToProjectLifecycle() {
         if (prewarmLifecycleGate != null) return; // 已挂：clear() 重预热不重复登记
@@ -960,10 +965,16 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         Disposable gate = () -> previewDisposed = true;
         boolean registered = false;
         try {
-            if (proj instanceof com.intellij.openapi.project.ex.ProjectEx ex) {
-                registered = Disposer.tryRegister(ex.getEarlyDisposable(), gate);
+            // T-MarketCompatProxy：getEarlyDisposable 标 @ApiStatus.Internal 且无公开等价——
+            // 反射取树（仅此一处调用），消除 verifier 的 internal API usage。
+            Disposable early;
+            try { // Kotlin 内层 runCatching.getOrNull() 语义
+                early = (Disposable) proj.getClass().getMethod("getEarlyDisposable").invoke(proj);
+            } catch (Throwable ignored) {
+                early = null;
             }
-        } catch (Throwable ignored) {
+            registered = early != null && Disposer.tryRegister(early, gate);
+        } catch (Throwable ignored) { // Kotlin 外层 runCatching.getOrDefault(false) 语义
             registered = false;
         }
         if (registered) prewarmLifecycleGate = gate;
@@ -1305,6 +1316,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         if (proj == null) return;
         if (sql.isBlank()) return;
         boolean isQuery = SqlTypeClassifier.isQuery(sql);
+        // O-64/T-RollbackIdentityParse（P19/D2=A）：identity 包装产物整批直跑。识别特征=
+        // 含 `SET IDENTITY_INSERT … ON|OFF` 语句（本插件自产回滚批次的封闭形态）；普通多语句
+        // 产物保持现态（Statements 选择层默认行为不变），避免行为突变。生产入口仅本函数
+        // （回滚弹窗「执行回滚/执行快照查询」），executeSql 的用户编辑器执行链不接旗标。
+        boolean wholeScriptExec = cn.song.mybatisplus.visualizer.sql.IdentityInsertStatements.containsStatement(sql);
         if (!isQuery && !dmlConfirmed) {
             String keyword = SqlTypeClassifier.getFirstKeyword(sql);
             if (keyword == null) keyword = "SQL";
@@ -1330,7 +1346,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                             consoleComponent -> embedConsole(consoleComponent, true),
                             consoleEditor -> onNativeEditorReady(consoleEditor),
                             errorMsg -> resultPanel.showError(errorMsg),
-                            info -> showErrorRichWithLocate(info));
+                            info -> showErrorRichWithLocate(info),
+                            wholeScriptExec);
                     return;
                 }
             }
@@ -1343,7 +1360,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                     proj,
                     fullConsole -> embedConsole(fullConsole),
                     errorMsg -> resultPanel.showError(errorMsg),
-                    info -> showErrorRichWithLocate(info));
+                    info -> showErrorRichWithLocate(info),
+                    wholeScriptExec);
             if (executed) return;
         }
         SqlExecutor.execute(
@@ -1351,7 +1369,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
                 consoleComponent -> embedConsole(consoleComponent, true),
                 consoleEditor -> onNativeEditorReady(consoleEditor),
                 errorMsg -> resultPanel.showError(errorMsg),
-                info -> showErrorRichWithLocate(info));
+                info -> showErrorRichWithLocate(info),
+                wholeScriptExec);
     }
 
     /**
@@ -2091,6 +2110,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             }
             xmlForEachCounts.clear();
             xmlForEachCounts.putAll(xmlModel.defaultState().forEachCounts());
+            xmlForEachValues.clear();
             xmlForEachNulls.clear();
             xmlErrors = new ArrayList<>();
             xmlDollarSubstitutions = 0;
@@ -2567,6 +2587,9 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             RenderedXmlSql rendered = xml.renderSql(state);
             xmlErrors = rendered.errors();
             xmlMappings = rendered.mappings();
+            // O-78：foreach 值按本帧新鲜映射清单播种（写安全闸重投递时与映射刷新同帧延迟，
+            // 值状态→渲染单向流动，不再有「渲染后同步读键清单」的错位窗口）
+            syncForEachItemValues(xml);
             xmlDollarSubstitutions = rendered.dollarSubstitutions();
             for (Map.Entry<String, String> e : rendered.bindValues().entrySet()) {
                 String name = e.getKey();
@@ -2580,13 +2603,10 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             List<String> sources = new ArrayList<>();
             for (ParameterMapping m : rendered.mappings()) sources.add(m.property());
             Set<Integer> inListIndices = detectInClauseParams(sql);
-            List<ParamHint> xmlHints = new ArrayList<>();
-            for (int idx = 0; idx < sources.size(); idx++) {
-                String source = sources.get(idx);
-                Boolean q = xml.quoteFor(source);
-                boolean quote = q != null ? q : true;
-                xmlHints.add(new ParamHint(quote, null, inListIndices.contains(idx)));
-            }
+            // O-81 T-XmlListParamSplit：提示组装抽为 XmlParamBackfillHints.xmlBackfillHints——签名集合参数
+            // （List<String> 等）无条件按逗号多值渲染 + 引号按元素类别派生，
+            // 形态探测（detectInClauseParams）降级为无签名信息参数的兜底通道
+            List<ParamHint> xmlHints = XmlParamBackfillHints.xmlBackfillHints(xml, sources, inListIndices, xmlMappings);
             showSql(backfillParamsBySource(sql, sources, xmlHints));
         } else if (batch != null) {
             Set<String> active = new LinkedHashSet<>(enabledIds);
@@ -2844,6 +2864,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         conditionValueFields.clear();
         batchCheckBoxes.clear();
         xmlForEachCounts.clear();
+        xmlForEachValues.clear();
         xmlForEachNulls.clear();
         xmlErrors = new ArrayList<>();
         xmlDollarSubstitutions = 0;
@@ -3986,34 +4007,53 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     }
 
     /**
-     * foreach 值变更：T-Perf-04 击键路径每键两次全量渲染——整个处理器防抖
-     * （停顿后以最终文本执行一次；handler 内部的两段渲染依赖 xmlMappings 中间态，保持同步语义不拆散）。
+     * foreach 值变更：T-Perf-04 击键路径防抖（停顿后以最终文本执行一次）语义不变。
      */
     private void onXmlForEachValuesChanged(XmlForEachView view, String text) {
         scheduleRender(() -> applyXmlForEachValues(view, text));
     }
 
-    /** foreach 值应用（由防抖 Timer 调度；原 onXmlForEachValuesChanged 主体）。 */
+    /** foreach 值应用（由防抖 Timer 调度）：存状态 + 设展开次数 + 单次渲染（播种在渲染帧内）。 */
     private void applyXmlForEachValues(XmlForEachView view, String text) {
-        String item = view.item();
-        if (item == null) return;
         List<String> values = Arrays.stream(text.split(","))
                 .map(s -> s.trim()).filter(s -> !s.isEmpty()).collect(Collectors.toList());
+        xmlForEachValues.put(view.collectionExpr(), values);
         xmlForEachCounts.put(view.collectionExpr(), values.isEmpty() ? XmlPreviewModel.DEFAULT_FOREACH_SIZE : values.size());
         renderSql();
-        List<ParameterMapping> keys = xmlMappings.stream()
-                .filter(m -> m.property().startsWith("__frch_" + item + "_")).collect(Collectors.toList());
-        if (values.isEmpty()) {
-            for (ParameterMapping key : keys) paramValues.remove(key.property());
-        } else {
-            int i = 0;
-            for (ParameterMapping key : keys) {
-                if (i < values.size()) paramValues.put(key.property(), values.get(i));
-                else paramValues.remove(key.property());
-                i++;
+    }
+
+    /**
+     * O-78：foreach 值播种——在 renderSql 帧内（{@link #xmlMappings} 刚按当前状态刷新，恒新鲜）按
+     * collectionExpr → view.item 反查前缀回填/清除 {@code __frch_<item>_*} 参数值；多出键清除语义与
+     * 原实现一致（留空 → {@code ?} 保持）。
+     */
+    private void syncForEachItemValues(XmlPreviewModel xml) {
+        if (xmlForEachValues.isEmpty()) return;
+        for (Map.Entry<String, List<String>> entry : xmlForEachValues.entrySet()) {
+            String expr = entry.getKey();
+            List<String> values = entry.getValue();
+            // collectionExpr → view.item 反查（无匹配视图或 item 为空跳过：Kotlin ?: return@forEach 语义）
+            String item = null;
+            for (XmlForEachView v : xml.getForEachViews()) {
+                if (v.collectionExpr().equals(expr)) {
+                    item = v.item();
+                    break;
+                }
+            }
+            if (item == null) continue;
+            List<ParameterMapping> keys = xmlMappings.stream()
+                    .filter(m -> m.property().startsWith("__frch_" + item + "_")).collect(Collectors.toList());
+            if (values.isEmpty()) {
+                for (ParameterMapping key : keys) paramValues.remove(key.property());
+            } else {
+                int i = 0;
+                for (ParameterMapping key : keys) {
+                    if (i < values.size()) paramValues.put(key.property(), values.get(i));
+                    else paramValues.remove(key.property());
+                    i++;
+                }
             }
         }
-        renderSql();
     }
 
     /** 普通参数行：`#&lt;source&gt;` 标签 + 值输入框（T-PT-02：按签名类型类别挂占位提示与行尾校验警示）。 */
@@ -4448,6 +4488,10 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
      * <p>T-Perf-04：单趟 O(N) 扫描——旧实现对每个 `?` 复制并大写化整个前缀（O(L×P)）；
      * 现改为就地回扫（跳过空白 → `(` → 可选一个空格 → `IN`，与旧 trimEnd+endsWith 语义一致），
      * 零分配。
+     *
+     * <p>O-81 T-XmlListParamSplit：`IN` 与 `(` 之间从「可选一个空格」放宽为<b>任意空白串</b>——
+     * mapper 排版 `IN\n(`（先红读数实证：升级前漏判 → 集合参数整串单值 `'PI,WP'`）不再漏。
+     * 多 `?` IN 列表仍仅首位命中（foreach 已有逐项回填通道，扩面会双拆，语义钉住不变）。</p>
      */
     Set<Integer> detectInClauseParams(String sql) {
         Set<Integer> result = new LinkedHashSet<>();
@@ -4458,7 +4502,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             while (j >= 0 && Character.isWhitespace(sql.charAt(j))) j--;
             if (j >= 0 && sql.charAt(j) == '(') {
                 j--;
-                if (j >= 0 && sql.charAt(j) == ' ') j--; // "IN (" 单空格形态（"IN(" 直接判 N/I）
+                while (j >= 0 && Character.isWhitespace(sql.charAt(j))) j--; // "IN (" 与 "IN\n(" 等任意空白串形态（"IN(" 直接判 N/I）
                 if (j >= 1 && (sql.charAt(j) == 'N' || sql.charAt(j) == 'n')
                         && (sql.charAt(j - 1) == 'I' || sql.charAt(j - 1) == 'i')) {
                     result.add(paramIndex);
@@ -4512,8 +4556,8 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     private String renderParamValue(String v, ParamHint hint, @Nullable String source) {
         // 未填写（paramValues 未播种的 source，非标准路径）保留 `?` 兜底提示
         if (v == null) return "?";
-        // T-PT-04：空输入按设置策略出 NULL / ''（默认 NULL）——**仅对带签名类型信息的参数**生效；
-        // 无类型信息（UNKNOWN）保留 `?` 占位提示，行为与升级前一致（验收 3）
+        // T-PT-04 / O-79：空输入按设置策略出 ?（默认占位档）/ NULL / ''——**仅对带签名类型信息的
+        // 参数**生效；无类型信息（UNKNOWN）恒 `?` 占位提示（宁缺勿错）
         if (v.isBlank()) return hasSignatureTypeInfo(source) ? emptyParamLiteral() : "?";
         LikePosition like = hint != null ? hint.getLikePosition() : null;
         if (hint != null && hint.getInList()) {
@@ -4546,15 +4590,18 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     }
 
     /**
-     * T-PT-04：空参数填充字面量——按设置「空参数填充策略」出 {@code NULL}（默认）或 {@code ''}。
-     * 作用于 renderParamValue 的空值分支，且仅当参数带签名类型信息（hasSignatureTypeInfo）。
+     * T-PT-04 / O-79：空参数填充字面量——按设置「空参数填充策略」出 {@code ?}（默认占位档，保留待填
+     * 提示，SQL 不臆造语义）/ {@code NULL} / {@code ''}。作用于 renderParamValue 的空值分支，且仅当参数带
+     * 签名类型信息（hasSignatureTypeInfo）；未知策略值按占位档兜底。
      */
     private String emptyParamLiteral() {
         try {
-            return PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING.equals(PluginSettings.getInstance().getState().getEmptyParamFill())
-                    ? "''" : "NULL";
+            String fill = PluginSettings.getInstance().getState().getEmptyParamFill();
+            if (PluginSettings.EMPTY_PARAM_FILL_EMPTY_STRING.equals(fill)) return "''";
+            if (PluginSettings.EMPTY_PARAM_FILL_NULL.equals(fill)) return "NULL";
+            return "?";
         } catch (Throwable t) {
-            return "NULL";
+            return "?";
         }
     }
 

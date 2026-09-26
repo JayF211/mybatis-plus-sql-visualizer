@@ -17,10 +17,8 @@ import cn.song.mybatisplus.visualizer.ui.XmlPreviewService;
 import cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext;
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider;
-import com.intellij.mcpserver.McpExpectedError;
 import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiElement;
@@ -88,14 +86,20 @@ public final class McpSourceLocator {
         );
     }
 
-    /** 「项目相对文件路径 + 行号」渲染（内部 ReadAction；行号 1-based，null = 首个可预览语句）。 */
+    /**
+     * 「文件路径 + 行号」渲染（内部 ReadAction；行号 1-based，null = 首个可预览语句）。
+     *
+     * <p>路径形态经 {@link McpFilePathResolver} 统一（T-McpFilePathUnify，O-70）：项目相对路径与项目内
+     * 绝对路径都收，项目外拒绝（安全边界，见该对象头注）。
+     */
     public static Outcome renderAtLine(Project project, String filePath, Integer line) {
         return ReadAction.compute(() -> {
-            VirtualFile vFile = LocalFileSystem.getInstance().findFileByPath(normalizeAbsolute(project, filePath));
+            VirtualFile vFile = McpFilePathResolver.resolveFile(project, filePath);
             if (vFile == null) {
                 return fail(
                     McpToolErrors.SOURCE_NOT_FOUND,
-                    "file not found in project: " + filePath + " (use a project-relative path)."
+                    "file not found in project: " + filePath + " (pass a project-relative path, "
+                        + "or an absolute path inside the project)."
                 );
             }
             PsiFile psiFile = PsiManager.getInstance(project).findFile(vFile);
@@ -122,10 +126,19 @@ public final class McpSourceLocator {
         });
     }
 
-    /** mapper XML 片段直渲（XmlPreviewService 为 text 形态入口，零 PSI 锚点需求）。 */
+    /**
+     * mapper XML 片段直渲（XmlPreviewService 为 text 形态入口，零 PSI 锚点需求）。
+     *
+     * <p>T-McpRenderDialectFix：「零 PSI 锚点」不等于零 PSI 读——text 链传 project 后会走跨 ns
+     * include（T-IC-02）/静态常量求值（T-M25.2）/mapper 参数类型（M29.5）三处 PSI 读，
+     * 平台协程线程（MCP 通道）无读锁即硬抛 read access（2026-09-23 真机实测 + 夹具回归
+     * McpRenderSnippetReadActionTest 双证）。与 {@link #renderAtLine} 同口径整链包 ReadAction。
+     */
     public static Outcome renderXmlSnippet(Project project, String snippet) {
-        PreviewResult result = XmlPreviewService.INSTANCE.preview(snippet, null, project);
-        return toOutcome(result, "mapper XML (snippet)", null);
+        return ReadAction.compute(() -> {
+            PreviewResult result = XmlPreviewService.INSTANCE.preview(snippet, null, project);
+            return toOutcome(result, "mapper XML (snippet)", null);
+        });
     }
 
     /** 统一入口：在 psiFile 的 offset 处按 13 类触发面定位渲染。 */
@@ -284,41 +297,5 @@ public final class McpSourceLocator {
             degraded,
             null
         );
-    }
-
-    private static String normalizeAbsolute(Project project, String relative) {
-        String normalized = McpRenderInput.normalizeFilePath(relative);
-        if (normalized == null) {
-            // McpExpectedError 第二参（mcpErrorStructureContent）在平台 Kotlin 声明中带默认值 null，
-            // Java 无默认参数、只能走全参构造器 → 显式补 null（与桩签名/平台擦除签名一致）。
-            // 经 sneakyThrow 逃逸：本方法被工具方法（override 平台接口）调用，不能声明受检异常。
-            throw McpToolsetSupport.<RuntimeException>sneakyThrow(new McpExpectedError(
-                McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "invalid file path: " + relative),
-                null
-            ));
-        }
-        String base = project.getBasePath();
-        if (base != null) {
-            base = stripTrailing(base, '/', '\\');
-            return base + "/" + normalized;
-        }
-        return normalized;
-    }
-
-    /** Kotlin trimEnd(vararg chars) 等价：剥除尾部指定字符。 */
-    private static String stripTrailing(String value, char... chars) {
-        int end = value.length();
-        outer:
-        while (end > 0) {
-            char c = value.charAt(end - 1);
-            for (char candidate : chars) {
-                if (c == candidate) {
-                    end--;
-                    continue outer;
-                }
-            }
-            break;
-        }
-        return value.substring(0, end);
     }
 }

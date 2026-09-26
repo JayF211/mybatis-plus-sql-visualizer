@@ -1,7 +1,7 @@
 // T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSelectGuard.kt 移植
 package cn.song.mybatisplus.visualizer.mcp;
 
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
+import cn.song.mybatisplus.visualizer.execute.SqlAstParser;
 import net.sf.jsqlparser.statement.Statement;
 import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.select.Select;
@@ -10,6 +10,8 @@ import net.sf.jsqlparser.statement.select.SetOperationList;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -54,6 +56,9 @@ public final class McpSelectGuard {
      * 写/DDL/会话类动词（词边界粗扫；标识符如 last_update 因下划线不构成词边界不会误伤）。
      * 刻意不含：desc（ORDER BY DESC 合法方向）、replace（REPLACE() 纯读函数）、comment（常见列名）——
      * 对应的写语句形态由 JSqlParser 结构判定兜底拒绝（fail closed 双保险分工）。
+     *
+     * <p>T-SGE-01（O-61）：{@link #SCALAR_FUNCTION_FORM_WORDS} 中的词在「后随可选空白 + (」的标量函数
+     * 形态下豁免（同名列在 {@link #FORBIDDEN_WORDS} 内的其余形态照拒）。
      */
     private static final List<String> FORBIDDEN_WORDS = List.of(
         "insert", "update", "delete", "merge", "upsert", "call", "exec", "execute",
@@ -64,6 +69,24 @@ public final class McpSelectGuard {
         "notify", "reindex", "vacuum", "cluster", "copy", "checkpoint", "discard",
         "import", "export", "admin"
     );
+
+    /**
+     * 同名标量函数豁免表（T-SGE-01，O-61）：表内词命中后若后随「可选空白 + (」即视为
+     * 同名标量函数（纯读）跳过，判据对齐 DBX 只读边界豁免 {@code WRITE_VERBS_WITH_SCALAR_FUNCTION_FORMS
+     * = ["replace","insert"]}（{@code crates/dbx-sql/src/query_execution_sql.rs:263-313}，含方言空格）。
+     *
+     * <ul>
+     *  <li>insert：MySQL {@code INSERT(str,pos,len,newstr)} 串函数（8.0 手册 14.4 字符串函数）；</li>
+     *  <li>truncate：MySQL {@code TRUNCATE(X,D)} 数学函数（8.0 手册 12.6.2 Mathematical Functions）——
+     *    FORBIDDEN_WORDS 全表「词后随 ( 函数形态」排查（计划 §七 前提 2）唯一的第三个同形词
+     *    （replace 已整词豁免），MySQL/PG/Oracle 再无其余同形。</li>
+     * </ul>
+     *
+     * <p>安全边界（计划 §一.2）：粗扫是结构闸（解析 → 单语句 → Select → 锁读/INTO）之后的
+     * 第二道闸，能到达粗扫的输入必已解析为单条 Select——真实写语句到不了这一步，
+     * 「后随 ( 豁免」不可能放行任何真实写语句；update 无同名标量函数，不豁免（DBX 同款保守口径）。
+     */
+    private static final Set<String> SCALAR_FUNCTION_FORM_WORDS = Set.of("insert", "truncate");
 
     /** 锁读 / 落盘形态（词边界粗扫；FOR XML/JSON 是 SQL Server 合法读形态，不在表内）。 */
     private static final List<String> FORBIDDEN_PHRASES = List.of(
@@ -84,7 +107,7 @@ public final class McpSelectGuard {
 
     /**
      * 校验 sql 是单条纯查询（SELECT / UNION 等 {@link Select} 形态，含 CTE）。
-     * 判定序固定：空 → 超长 → 关键字粗扫 → 解析 → 单语句 → Select 结构 → 锁读/INTO。
+     * 判定序固定：空 → 超长 → 解析 → 单语句 → Select 结构 → 锁读/INTO → 关键字粗扫（剥离字面量后）。
      */
     public static Verdict checkSingleSelect(String sql) {
         if (sql == null || sql.isBlank()) {
@@ -98,10 +121,13 @@ public final class McpSelectGuard {
             );
         }
         // 双保险判定序：结构判定优先（错误码语义准确：写语句 READ_ONLY、形态违规 SQL_BLOCKED），
-        // 关键字粗扫兜底（拦结构判定覆盖不到的可疑词面）；粗扫在剥离字面量后的文本上进行
+        // 关键字粗扫兜底（拦结构判定覆盖不到的可疑词面）；粗扫在剥离字面量后的文本上进行。
+        // O-61 §八：解析走 SqlAstParser 单一入口（开 allowSquareBracketQuotation，共享单例 features）——
+        // SQL Server 方括号 SELECT（产品方言层自产形态）从「解析失败按写拒绝」变为可进入既有结构判定；
+        // 解析失败仍 fail-closed 拒绝（Throwable 含 StackOverflowError 等恶意构造输入场景，语义不动）
         List<Statement> statements;
         try {
-            statements = CCJSqlParserUtil.parseStatements(trimmed).getStatements();
+            statements = SqlAstParser.INSTANCE.parseStatements(trimmed);
         } catch (Throwable e) {
             // 解析失败按写处理（fail closed），不暴露解析器内部细节给 agent；
             // 捕 Throwable：解析器对恶意构造输入可能抛 StackOverflowError 等 Error
@@ -201,8 +227,14 @@ public final class McpSelectGuard {
 
     private static Verdict scanWords(String lower) {
         for (int i = 0; i < FORBIDDEN_WORDS.size(); i++) {
-            if (FORBIDDEN_WORD_PATTERNS.get(i).matcher(lower).find()) {
-                String word = FORBIDDEN_WORDS.get(i);
+            String word = FORBIDDEN_WORDS.get(i);
+            Matcher matcher = FORBIDDEN_WORD_PATTERNS.get(i).matcher(lower);
+            while (matcher.find()) {
+                // T-SGE-01：同名标量函数形态（后随可选空白 + (）豁免；其余形态照拒，
+                // 同一词多处命中时任一处非函数形态即拒（fail closed）
+                if (SCALAR_FUNCTION_FORM_WORDS.contains(word) && isScalarFunctionForm(lower, matcher.end() - 1)) {
+                    continue;
+                }
                 return deny(
                     McpToolErrors.READ_ONLY,
                     "statement contains the non-read-only keyword '" + word + "'; only SELECT is allowed."
@@ -210,6 +242,15 @@ public final class McpSelectGuard {
             }
         }
         return null;
+    }
+
+    /** 词命中点后方是否「可选空白 + (」（DBX {@code WRITE_VERBS_WITH_SCALAR_FUNCTION_FORMS} 同款判据，含方言空格）。 */
+    private static boolean isScalarFunctionForm(String lower, int matchEnd) {
+        int i = matchEnd + 1;
+        while (i < lower.length() && Character.isWhitespace(lower.charAt(i))) {
+            i++;
+        }
+        return i < lower.length() && lower.charAt(i) == '(';
     }
 
     private static Verdict scanPhrases(String lower) {

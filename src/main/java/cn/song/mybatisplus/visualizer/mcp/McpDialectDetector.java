@@ -32,7 +32,11 @@ public final class McpDialectDetector {
         new SimpleEntry<>("jdbc:h2", "H2"),
         new SimpleEntry<>("jdbc:sqlite", "SQLite"),
         new SimpleEntry<>("jdbc:dm", "DM（达梦）"),
-        new SimpleEntry<>("jdbc:kingbase", "KingBase（人大金仓）")
+        new SimpleEntry<>("jdbc:kingbase", "KingBase（人大金仓）"),
+        // T-DialectXcFamily（O-63）：opengauss/gaussdb 同归 openGauss（D2=A 一 object 两前缀）
+        new SimpleEntry<>("jdbc:opengauss", "openGauss"),
+        new SimpleEntry<>("jdbc:gaussdb", "openGauss"),
+        new SimpleEntry<>("jdbc:oceanbase", "OceanBase")
     );
 
     /** agent 显式方言名 → 注册名的精确别名表（小写；不 contains 防止 "oracle-no-such-x" 误归一）。 */
@@ -60,6 +64,10 @@ public final class McpDialectDetector {
         m.put("kingbase8", "KingBase（人大金仓）");
         m.put("金仓", "KingBase（人大金仓）");
         m.put("人大金仓", "KingBase（人大金仓）");
+        // T-DialectXcFamily（O-63）
+        m.put("oceanbase", "OceanBase");
+        m.put("opengauss", "openGauss");
+        m.put("gaussdb", "openGauss");
         return m;
     }
 
@@ -107,12 +115,22 @@ public final class McpDialectDetector {
         return "MySQL";
     }
 
-    /** agent 指定的方言名是否可识别（不可识别时调用方报 INVALID_ARGUMENT 并列可选项）。 */
+    /**
+     * agent 指定的方言名是否可识别（不可识别时调用方报 INVALID_ARGUMENT 并列可选项）。
+     *
+     * <p>T-McpRenderDialectFix：null/空白一律视为「未指定」放行——平台 JSON 绑定把省略的可选
+     * 参数落成 Kotlin 默认值 {@code ""}，此前 {@code ""} 被判不可识别 → 省略 dialect 必报
+     * INVALID_ARGUMENT，与「omit to auto-detect」约定矛盾（2026-09-23 真机实测复现）；
+     * {@link #resolve} 对空白本就有 URL 推断 + 默认 MySQL 兜底，行为不受影响。
+     */
     public static boolean isRecognized(String requested) {
         if (requested == null) {
             return true;
         }
         String trimmed = requested.trim();
+        if (trimmed.isEmpty()) {
+            return true;
+        }
         return normalize(trimmed) != null;
     }
 }

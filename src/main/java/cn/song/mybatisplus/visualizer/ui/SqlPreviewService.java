@@ -87,6 +87,7 @@ import cn.song.mybatisplus.visualizer.sql.interceptor.TenantLineEnhancer;
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature;
+import cn.song.mybatisplus.visualizer.xml.XmlDirectText;
 import cn.song.mybatisplus.visualizer.ui.gutter.HbmNamedQueryGutterLineMarkerProvider;
 import com.intellij.notification.Notification;
 import com.intellij.notification.NotificationType;
@@ -111,7 +112,6 @@ import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiModifierList;
 import com.intellij.psi.PsiParameter;
 import com.intellij.psi.xml.XmlTag;
-import com.intellij.psi.xml.XmlText;
 import com.intellij.psi.search.PsiShortNamesCache;
 import com.intellij.psi.PsiExpression;
 import com.intellij.psi.PsiType;
@@ -1476,14 +1476,10 @@ public final class SqlPreviewService {
         if (name == null) return null;
         HbmXmlMapping.QueryKind kind = HbmNamedQueryGutterLineMarkerProvider.kindOf(tag.getName());
         if (kind == null) return null;
-        // 文本提取复用 resolver 的解析口径（直属 XmlText、排除子标签）；tag 与 findNamedQuery 同源
-        StringBuilder text = new StringBuilder();
-        for (PsiElement child : tag.getChildren()) {
-            if (child instanceof XmlText) {
-                text.append(child.getText());
-            }
-        }
-        return previewHbmNamedQuery(new HbmXmlMapping.NamedQuery(name, kind, text.toString().trim()));
+        // 文本提取复用 resolver 的解析口径（直属 XmlText、CDATA 剥包裹、排除子标签）；
+        // tag 与 findNamedQuery 同源
+        String text = XmlDirectText.directTextOf(tag);
+        return previewHbmNamedQuery(new HbmXmlMapping.NamedQuery(name, kind, text));
     }
 
     /**

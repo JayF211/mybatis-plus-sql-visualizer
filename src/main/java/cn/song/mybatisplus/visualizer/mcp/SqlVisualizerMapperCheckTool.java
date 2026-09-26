@@ -15,7 +15,7 @@ import com.intellij.mcpserver.annotations.McpTool;
 import com.intellij.mcpserver.annotations.McpToolHintValue;
 import com.intellij.mcpserver.annotations.McpToolHints;
 import com.intellij.openapi.application.ReadAction;
-import com.intellij.openapi.vfs.LocalFileSystem;
+import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.VirtualFile;
 
 import java.nio.charset.StandardCharsets;
@@ -48,7 +48,8 @@ public class SqlVisualizerMapperCheckTool extends McpToolsetSupport {
             + "simulation parameters and runs write-risk and performance analysis on the RENDERED SQL — "
             + "validators return a confidence score; this returns deterministic evidence a static-only "
             + "validator cannot produce (rendering is this plugin's core). Pass 'xmlSnippet' (mapper XML "
-            + "text) or 'filePath' (project-relative or absolute). "
+            + "text) or 'filePath' (project-relative to the project root, or an absolute path inside "
+            + "the project; paths outside the project are rejected). "
             + "Read-only: analysis only — never executes SQL."
     )
     @McpToolHints(
@@ -62,8 +63,10 @@ public class SqlVisualizerMapperCheckTool extends McpToolsetSupport {
             if (!xmlSnippet.isBlank()) {
                 text = xmlSnippet;
             } else if (!filePath.isBlank()) {
+                Project project = requireProject();
                 String read = ReadAction.compute(() -> {
-                    VirtualFile vFile = LocalFileSystem.getInstance().findFileByPath(filePath);
+                    // T-McpFilePathUnify（O-70）：路径经 McpFilePathResolver 统一（项目相对 / 项目内绝对）
+                    VirtualFile vFile = McpFilePathResolver.resolveFile(project, filePath);
                     if (vFile == null) {
                         return null;
                     }
@@ -75,8 +78,11 @@ public class SqlVisualizerMapperCheckTool extends McpToolsetSupport {
                 });
                 if (read == null) {
                     throwExpected(
-                        McpToolErrors.code(McpToolErrors.SOURCE_NOT_FOUND,
-                            "file not found or unreadable: " + filePath)
+                        McpToolErrors.code(
+                            McpToolErrors.SOURCE_NOT_FOUND,
+                            "file not found or unreadable: " + filePath + " (pass a project-relative path, "
+                                + "or an absolute path inside the project)."
+                        )
                     );
                 }
                 text = read;

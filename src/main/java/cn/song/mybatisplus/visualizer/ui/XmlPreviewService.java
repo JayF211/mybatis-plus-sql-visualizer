@@ -99,7 +99,8 @@ public final class XmlPreviewService {
             }
             List<String> warnings = new ArrayList<>();
             Map<String, Object> staticValues = resolveStaticFields(fileText, project, warnings);
-            Map<String, Object> ewBindings = resolveEwPlaceholders(fileText, parsed.namespace(), statement.id(), project, warnings);
+            // O-77 T-EwStatementScope：占位按语句域扫描（statement.rawText），他语句占位不再记账到本语句
+            Map<String, Object> ewBindings = resolveEwPlaceholders(fileText, statement.rawText(), parsed.namespace(), statement.id(), project, warnings);
             // T-M29.5 / T-PT-01：mapper 方法参数类型 → 类型类别映射（引号由类别派生；
             // Map/解析失败不含键 → 面板兜底引号、无占位提示）
             Map<String, ParamTypeInfo> paramTypes = XmlParamTypeResolver.INSTANCE.resolveTypes(project, parsed.namespace(), statement.id());
@@ -118,10 +119,15 @@ public final class XmlPreviewService {
      * T-M26-B：MP 占位展开——扫描 `${变量.customSqlSegment/sqlSelect/sqlSet}`，
      * 经 XmlEwResolver 关联 Java Mapper 方法 wrapper 实参展开为 SQL 片段，
      * 包装为 MockObject 注入 mock bindings。
+     *
+     * <p>O-77 T-EwStatementScope：扫描域为当前语句原文（{@code statementText}，include 展开后内容，
+     * 不含他语句与注释），识别域对齐解析域——同文件他语句的 ew 占位不再触发本语句的关联与警示；
+     * {@code statementText} 为 null（注解 {@code <script>} 等非 mapper 解析链构造）回落文件全文，行为不变。</p>
      */
-    private Map<String, Object> resolveEwPlaceholders(String fileText, String namespace,
+    private Map<String, Object> resolveEwPlaceholders(String fileText, String statementText, String namespace,
                                                      String statementId, Project project, List<String> warnings) {
-        List<cn.song.mybatisplus.visualizer.xml.EwPlaceholder> placeholders = XmlEwExpander.placeholders(fileText);
+        List<cn.song.mybatisplus.visualizer.xml.EwPlaceholder> placeholders =
+                XmlEwExpander.placeholders(statementText != null ? statementText : fileText);
         if (placeholders.isEmpty() || project == null) return java.util.Collections.emptyMap();
         Map<String, Map<String, String>> resolved =
                 XmlEwResolver.INSTANCE.resolve(namespace, statementId, placeholders, project, warnings);
