@@ -16,7 +16,7 @@ import com.intellij.mcpserver.annotations.McpToolHints
  * 交互链，agent 面一期不提供，输出注明）。SELECT/UPDATE/DELETE/INSERT 与多表 JOIN 全支持。
  * 逻辑分层同 [SqlVisualizerCheckSqlTool]：[reverseSql] 纯函数可测，挂起方法只做 audit 包装。
  */
-class SqlVisualizerReverseSqlTool : McpToolsetSupport("sqlv_reverse_sql") {
+open class SqlVisualizerReverseSqlTool : McpToolsetSupport("sqlv_reverse_sql") {
 
     @McpTool(name = "sqlv_reverse_sql", title = "Convert SQL into MyBatis-Plus Java code")
     @McpDescription(

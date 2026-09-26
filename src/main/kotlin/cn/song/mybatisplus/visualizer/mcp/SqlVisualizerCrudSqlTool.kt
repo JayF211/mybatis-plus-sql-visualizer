@@ -26,7 +26,7 @@ import com.intellij.psi.search.GlobalSearchScope
  * 双轨别名约定（T-DmlAliasGuard，O-27）：产物 DML 目标位禁别名（约定全文见
  * CrudSqlGenerator 类头），守卫测试 `DmlAliasGuardTest` 覆盖本链出口。
  */
-class SqlVisualizerCrudSqlTool : McpToolsetSupport("sqlv_crud_sql") {
+open class SqlVisualizerCrudSqlTool : McpToolsetSupport("sqlv_crud_sql") {
 
     @McpTool(name = "sqlv_crud_sql", title = "Generate CRUD SQL from a MyBatis-Plus entity class")
     @McpDescription(

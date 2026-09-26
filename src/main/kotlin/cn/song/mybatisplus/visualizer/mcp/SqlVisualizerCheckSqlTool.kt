@@ -19,7 +19,7 @@ import com.intellij.mcpserver.annotations.McpToolHints
  * 在测试进程加载即 NoClassDefFoundError（一期语义=mcp-optional.xml 不加载则类永不可达，
  * ignored-problems 豁免留痕），故测试一律走纯函数层，挂起链只有真机/生产触达。
  */
-class SqlVisualizerCheckSqlTool : McpToolsetSupport("sqlv_check_sql") {
+open class SqlVisualizerCheckSqlTool : McpToolsetSupport("sqlv_check_sql") {
 
     @McpTool(name = "sqlv_check_sql", title = "Static write-risk and type check for a SQL statement")
     @McpDescription(

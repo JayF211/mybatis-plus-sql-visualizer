@@ -30,8 +30,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 晚注册会触发清单重算，无需重启 IDE。
  *
  * **类名前缀硬约定（T-McpToolNaming）**：平台「暴露工具」页分组名=注册实例类的 simpleName——
- * 壳类名=`<业务类名>Gen`（如 SqlVisualizerCheckSqlToolGen），SqlVisualizer 前缀与字典序相邻
- * 性保持。
+ * 壳类放 `mcp.gen` 子包、**simpleName 与业务类逐字节一致**（如 SqlVisualizerCheckSqlTool），
+ * 分组名与前缀美学（自带插件名、字典序相邻）与 XML 形态完全相同；FQN 含 gen 子包避免与
+ * 业务类在不同 classloader 上的解析歧义。
  */
 object McpToolsetDynamicRegistrar {
 
@@ -74,20 +75,19 @@ object McpToolsetDynamicRegistrar {
         require(toolClass.constructors.any { it.parameterTypes.isEmpty() }) {
             "toolset 类必须有无参构造（壳生成依赖）：${toolClass.name}"
         }
-        val shellName = toolClass.name + "Gen"
+        // simpleName 与业务类一致（T-McpToolNaming 分组名=simpleName），gen 子包隔离 FQN
+        val shellName = "cn.song.mybatisplus.visualizer.mcp.gen." + toolClass.simpleName
         val shellClass = ShellClassLoader.define(shellName, shellBytes(toolClass, toolsetIface, shellName))
         val instance = shellClass.getDeclaredConstructor().newInstance()
         ExtensionPointName.create<Any>(TOOLSET_EP_NAME).getPoint(null).registerExtension(instance)
-        LOG.info("T-McpDynamicToolset: registered ${shellClass.simpleName} -> ${toolClass.simpleName}")
+        LOG.info("T-McpDynamicToolset: registered ${shellClass.simpleName} (gen shell of ${toolClass.name})")
     }
 
-    /**
-     * 壳类字节码：`final class <ShellName> extends <工具类> implements McpToolset`——
-     * 仅一个无参构造器（invokespecial 父类构造）。三钩子/工具方法全部继承，壳零额外成员。
-     * V17（major 61）：243 JBR 21 可加载，且与插件常规编译目标一致；COMPUTE_MAXS 交由
-     * ClassWriter 重算构造器的栈帧。
-     */
-    private fun shellBytes(superClass: Class<*>, iface: Class<*>, shellName: String): ByteArray {
+    /** 壳类字节码：`final class <ShellName> extends <工具类> implements McpToolset`——
+     *  仅一个无参构造器（invokespecial 父类构造）。三钩子/工具方法全部继承，壳零额外成员。
+     *  V17（major 61）：243 JBR 21 可加载，且与插件常规编译目标一致；COMPUTE_MAXS 交由
+     *  ClassWriter 重算构造器的栈帧。internal 供壳生成器单测直接触达。 */
+    internal fun shellBytes(superClass: Class<*>, iface: Class<*>, shellName: String): ByteArray {
         val internalName = shellName.replace('.', '/')
         val superInternal = superClass.name.replace('.', '/')
         val ifaceInternal = iface.name.replace('.', '/')
@@ -113,7 +113,7 @@ object McpToolsetDynamicRegistrar {
     }
 
     /** 壳类装载器：插件 classloader 的直系子加载器，defineClass 仅此一处（protected 合法调用点）。 */
-    private object ShellClassLoader : ClassLoader(McpToolsetDynamicRegistrar::class.java.classLoader) {
+    internal object ShellClassLoader : ClassLoader(McpToolsetDynamicRegistrar::class.java.classLoader) {
         fun define(name: String, bytes: ByteArray): Class<*> = defineClass(name, bytes, 0, bytes.size)
     }
 }

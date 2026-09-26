@@ -9,7 +9,7 @@ import com.intellij.mcpserver.annotations.McpToolHints
  * sqlv_render_sql 工具（T-McpToolset2 / T-MTS2-00：一期 SqlVisualizerToolset 方法体逐行迁入，
  * 按工具拆 toolset 类——平台 per-tool 门控只有 toolset 粒度 isEnabled）。
  */
-class SqlVisualizerRenderSqlTool : McpToolsetSupport("sqlv_render_sql") {
+open class SqlVisualizerRenderSqlTool : McpToolsetSupport("sqlv_render_sql") {
 
     @McpTool(name = "sqlv_render_sql", title = "Render source code into executable SQL")
     @McpDescription(

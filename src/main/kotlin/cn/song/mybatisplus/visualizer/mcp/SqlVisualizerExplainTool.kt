@@ -13,7 +13,7 @@ import kotlinx.coroutines.withContext
  * sqlv_explain 工具（T-McpToolset2 / T-MTS2-00：一期方法体逐行迁入，按工具拆 toolset 类；
  * resolveExplainTarget/executeExplain/ExplainTarget 随本类走）。
  */
-class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
+open class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
 
     @McpTool(name = "sqlv_explain", title = "Explain a SELECT against a configured data source")
     @McpDescription(

@@ -17,7 +17,7 @@ import com.intellij.mcpserver.annotations.McpToolHints
  * 警示文案经 [MpSqlVisualizerBundle.messageEn]（bundle base 即英文，零新键）。
  * 逻辑分层同 [SqlVisualizerCheckSqlTool]：[rollbackPlan] 纯函数可测，挂起方法只做 audit 包装。
  */
-class SqlVisualizerRollbackPlanTool : McpToolsetSupport("sqlv_rollback_plan") {
+open class SqlVisualizerRollbackPlanTool : McpToolsetSupport("sqlv_rollback_plan") {
 
     @McpTool(name = "sqlv_rollback_plan", title = "Generate a rollback plan for INSERT/UPDATE/DELETE")
     @McpDescription(

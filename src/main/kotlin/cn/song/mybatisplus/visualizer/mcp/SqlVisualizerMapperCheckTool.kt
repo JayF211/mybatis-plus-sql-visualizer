@@ -22,7 +22,7 @@ import com.intellij.openapi.application.ReadAction
  * simulate 的空参数上下文（`<if>` 全关 → 空语句）是正常态不算 finding，输出注明语境。
  * 逻辑分层同 [SqlVisualizerCheckSqlTool]：[mapperCheck] 纯函数可测，挂起方法只做文本定位 + audit 包装。
  */
-class SqlVisualizerMapperCheckTool : McpToolsetSupport("sqlv_mapper_check") {
+open class SqlVisualizerMapperCheckTool : McpToolsetSupport("sqlv_mapper_check") {
 
     @McpTool(name = "sqlv_mapper_check", title = "Static contract check for a mapper XML")
     @McpDescription(

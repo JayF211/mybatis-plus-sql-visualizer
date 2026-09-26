@@ -12,44 +12,22 @@
 # 登记门槛：仅收「运行期已被片段加载条件或反射探测隔离、最坏效果是功能不可用而非崩溃」的项；
 # 每条必须带论证。问题修掉后请删除对应条目（任务会对未命中的条目打 WARN）。
 #
-# 【在案备忘 20260923】263 EAP（263.5153.40）Marketplace 实测报 1 条 compatibility problem
-# （本地缓存无 263 发行版未复现，大概率仍是 mcp/ACP 族在 263 的包形态变化——262 两条发行线
-# 之间就搬过 AcpAgentId 的包）。263 正式版发布后把该版本加入校验目标、查明后按门槛登记或修复。
-# 方案 A 定案（20260923 用户）：单包 + 本基线，Marketplace 警告为已知问题集（不阻断上架、
-# 运行期已论证安全），若未来 JetBrains 提供官方跨版本机制再跟进。
+# 【20260926 基线清空（T-McpDynamicToolset）】20260923 上传的 v2026.9.23 因 243×2＋251×1
+# compatibility problems 被 Marketplace 拒绝（IU-243：McpToolsetSupport.audit 的 K2 SpillingKt
+# spill＋Package 'com.intellij.mcpserver' 三类；IU-251：同族 Package 块）。全动态化改造后
+# 五目标实测全 Compatible：243/253/262（verifyMarketplace 在线口径）＋251（IU-251.27812.49
+# probe）＋263 EAP（IU-263.5701.42 probe，在案「263.5153 报 1 条」随 EAP 演进消失）。本文件
+# 保留零条目：机制与 MarketVerdictChecker 在役——任何新兼容问题块（未登记）仍会构建失败。
 #
-#
-# 【T-Mkt251Probe 20260924】2025.1.7.2 那条已查明=「MCP 工具本体」族（与 243 的 Package 块
-# 逐字同源：McpExpectedError/McpCallInfoKt/McpToolset 三类，251 内置 mcpserver 为 2025.2 前
-# 旧形态 1.0.x 无新 API）——在线口径本地复现 1 problem 与 Marketplace 页面一致，登记于下方
-# IU-251 条目。2026.3 eap（263.5153）待其正式版后同样复现登记。
-# 【T-MarketCompatProxy 20260923 深夜大清扫】②③ 动态代理化落地（FilterProvider/ACP impl 改
-# Class.forName + Proxy + 程序化注册，字节码零 ml-llm/mcpserver/platform-acp 引用）后：
-# 253 → Compatible（9 块全清）、262 internal 7→1→0、243 5→2。原 253 全部 5 条与 243 的
-# platform.acp / ml.llm.agents.acp / io.modelcontextprotocol 三条已失效删除；以下仅剩的 2 条
-# 属「MCP 工具本体」族——McpToolsetSupport 实现 McpToolset 接口（243 无此 API）+ audit 的
-# K2 spill（SpillingKt 仅 243 平台 stdlib 缺失），两者在单包形态下不可消除（除非撤 MCP 能力）。
+# 【T-MarketCompatProxy 20260923 深夜大清扫（历史）】②③ 动态代理化（FilterProvider/ACP impl 改
+# Class.forName + Proxy + 程序化注册）后：253 → Compatible（9 块全清）、262 internal 7→1→0、
+# 243 5→2。最终由 T-McpDynamicToolset（20260926）把「EP 接口实现类＋SpillingKt」两个残块也
+# 消除（XML toolset 声明退役改运行期 ASM 壳注册；audit 改 intrinsics 透传零 try 包挂起调用）。
 # ====================================================================
-# 通用论证（各条目引用，下称「双隔离」）：
-#   A. 片段加载条件——mcp-optional.xml 仅在 com.intellij.mcpServer 在场时加载；243 无此插件
-#      （或仅旧形态 1.0.30）时整片段不加载/EP 实例化被平台隔离，引用其 API 的类永不链接。
+# 通用论证（历史条目引用，下称「双隔离」）：
+#   A. 片段加载条件——mcp-optional.xml 仅在 com.intellij.mcpServer 在场时加载；无 mcpServer
+#      环境整片段不加载/EP 实例化被平台隔离。
 #   C. EP 实例化异常隔离——旧形态依赖在场导致片段加载但类缺失时，平台对 EP 扩展实例化
 #      失败按错误日志隔离（NoSuchClassError 落日志，不崩 IDE）；最坏效果=MCP 功能
 #      不可用，即「该版本不支持」的设计口径。
 # ====================================================================
-
-# ---------- IU-243（2024.3）：2 块 ----------
-# K2 对「带 suspend lambda 参数的 suspend 函数」结构性生成 spill（SpillingKt 仅 243 平台
-# stdlib 缺失，253/262 的 util-8.jar 有）；inline 化会把 McpExpectedError 引用扩散到十个工具类
-# （报数反增），20260923 定案不改。仅影响 MCP toolset 实例化（243 本就不支持 MCP，见 C）。
-IU-243.28141.41	Method cn\.song\.mybatisplus\.visualizer\.mcp\.McpToolsetSupport\.audit
-# 243 上 Marketplace 的 mcpServer 为旧形态 1.0.30（EP 形态不同）；McpToolsetSupport 本体
-# （基类 implements McpToolset + McpExpectedError/McpCallInfoKt）在 243 无可解析 API——
-# 「MCP 工具本体」族，单包形态下不可消除；片段加载后按 C 隔离，243 不支持 MCP 是设计口径。
-IU-243.28141.41	Package 'com\.intellij\.mcpserver'
-
-# ---------- IU-251（2025.1）：1 块（T-Mkt251Probe 本地复现，T-kt251 判定=与 243 的 Package 块同族） ----------
-# 251 内置 mcpserver 为 2025.2 前旧形态（无 McpToolset 新 API），McpToolsetSupport 本体三类
-# （McpExpectedError/McpCallInfoKt/McpToolset）在 251 无可解析 API——「MCP 工具本体」族，
-# 单包形态下不可消除；片段加载后按 C 隔离，251 不支持 MCP 新形态是设计口径。
-IU-251.29188.72	Package 'com\.intellij\.mcpserver'

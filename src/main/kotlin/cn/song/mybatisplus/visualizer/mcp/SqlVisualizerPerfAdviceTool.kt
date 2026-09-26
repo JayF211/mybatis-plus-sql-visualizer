@@ -17,7 +17,7 @@ import com.intellij.mcpserver.annotations.McpToolHints
  * 逻辑分层同 [SqlVisualizerCheckSqlTool]：[perfAdvice] 纯函数可测，挂起方法只做 audit 包装。
  * 输出预算（T-McpOutputBudget / O-20）见 [renderFindings] 与 McpToolsetSupport 类注释登记表。
  */
-class SqlVisualizerPerfAdviceTool : McpToolsetSupport("sqlv_perf_advice") {
+open class SqlVisualizerPerfAdviceTool : McpToolsetSupport("sqlv_perf_advice") {
 
     companion object {
         /**

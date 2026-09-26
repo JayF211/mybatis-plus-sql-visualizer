@@ -28,13 +28,14 @@
 #
 # 下方三条规则为 20260923 之前登记、作用域仅限离线 verifyGate；其中第三条即成族豁免那一类。
 
-# dev 分支含 MCP 适配层（cn/song/mybatisplus/visualizer/mcp/ 与 mcp-optional.xml 在 dev），
-# 上述两类 243 永不可达缺类在此为真实豁免需求，以下两条规则生效中：
-cn\.song\.mybatisplus\.visualizer\.mybatis-plus-sql-visualizer:.*:Package 'com\.intellij\.mcpserver' is not found
-cn\.song\.mybatisplus\.visualizer\.mybatis-plus-sql-visualizer:.*:references an unresolved class kotlin\.coroutines\.jvm\.internal\.SpillingKt
+# 【20260926 T-McpDynamicToolset 清理】原「Package 'com.intellij.mcpserver' + SpillingKt」两条
+# 豁免随全动态化改造退役：jar 字节码零 mcpserver 类型引用＋audit 零 try 包挂起调用（无
+# SpillingKt null-out），offline verifyGate 实测 243 Compatible 零问题。规则删除后若回归会
+# 在 verifyGate 直接失败（防失明）。
 #
 # O-68 T-McpGateDynamicFilter 2026-09-23 起用：SqlVisualizerToolGateFilterProvider 注册在
 # mcp-filter-optional 文件，根节点 since-build 262 门控——253 线无 McpToolFilterProvider EP
 # 本地 jar 实测，253 上报未解析类属预期；运行时 253 整片段不加载故永不可达，262 起正常生效。
 # 结构守卫 McpGateFilterFragmentGuardTest 钉住片段的 since-build 与独立性。
-cn\.song\.mybatisplus\.visualizer\.mybatis-plus-sql-visualizer:.*:references an unresolved class (com\.intellij\.mcpserver\.|io\.modelcontextprotocol\.kotlin\.sdk\.types\.)[A-Za-z$.]+
+# 【20260926 T-McpDynamicToolset 清理】原「mcpserver/io.modelcontextprotocol 成族豁免」退役：
+# FilterProvider/ACP 已 Proxy 化、toolset 已 ASM 壳注册，jar 内无该族类型引用。

@@ -18,7 +18,7 @@ import com.intellij.mcpserver.annotations.McpToolHints
  * `LogSqlEntry.restoredSql`。前缀参数缺省读插件设置（与面板同源单点），工具参数可逐项覆盖
  * （null/空串 = 不覆盖，遵循设置）。逻辑分层同 [SqlVisualizerCheckSqlTool]：[renderLogs] 纯函数可测。
  */
-class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
+open class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
 
     @McpTool(name = "sqlv_render_logs", title = "Restore MyBatis/Hibernate/JdbcTemplate logs into executable SQL")
     @McpDescription(

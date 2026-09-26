@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.log.sqlLogManagerIfCreated
 import cn.song.mybatisplus.visualizer.log.SqlSource
 import cn.song.mybatisplus.visualizer.log.StatementType
 import cn.song.mybatisplus.visualizer.log.formatDatabaseFragment
+import cn.song.mybatisplus.visualizer.util.FatalErrors
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import kotlin.coroutines.Continuation
@@ -132,6 +133,7 @@ abstract class McpToolsetSupport(private val toolName: String) {
             val outcome = try {
                 block.startCoroutineUninterceptedOrReturn(gate)
             } catch (e: Throwable) {
+                if (FatalErrors.isFatal(e)) throw e
                 // 同步路径：block 体在当前帧直接失败（未挂起），记账后按原语义抛出
                 throw gate.onFailure(e)
             }

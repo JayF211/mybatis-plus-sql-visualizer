@@ -30,7 +30,7 @@ import kotlinx.serialization.json.JsonPrimitive
  * 编译器插件），descriptor 仍是 primitive STRING/INT——平台生成的 inputSchema 与改前**逐字节相同**，
  * 但任意 JSON 形态都能解进来，形态记进 [McpArgKind] 由校验层转 `[INVALID_ARGUMENT]`。
  */
-class SqlVisualizerSchemaContextTool : McpToolsetSupport("sqlv_schema_context") {
+open class SqlVisualizerSchemaContextTool : McpToolsetSupport("sqlv_schema_context") {
 
     @McpTool(name = "sqlv_schema_context", title = "Get compact table/column schema context")
     @McpDescription(
