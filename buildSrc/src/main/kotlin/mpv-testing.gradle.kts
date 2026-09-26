@@ -103,9 +103,16 @@ fun listSuiteXmls(dir: File): List<File> =
 // 随并发度膨胀（601→687→858s），5 片起竞争损耗超过切分收益；负载形态再变时按同法重测。
 // T-TestPerf5（2026-09-25）：5 片×SerialGC 复测 186s 仍回劣（4 片×serial 同日 173~177s；
 // execSum 718s，+20% 并发膨胀不随 GC 换型消失）——4 片定案维持。
+// T-TestPerf7（2026-09-27）保质期规则第三次触发后 5 片翻案定案：T6（execSum −13.8%）+T7-S1
+// （testExternal 扩容再摘 ~20s）之后片执行降到 ~135s 档、testExternal 桶又把签名护栏的
+// 外部 JVM 核验移出分片算术，同窗交错 A/B 实测 4/5/6 片各两轮 warm＝4 片 166s/170s
+// （4b 189s 含 1 例负载敏感 flake 嫌疑不复现）/5 片 153s·146s/6 片 167s·160s（execSum +39%
+// 并发膨胀、Commit 峰值 66.4GB 触顶）——**5 片中位 150s，−10.7% 达标定案**；Commit 峰值
+// 5 片 65.0GB（余量 9.7GB > 8GB 判据），两轮零假失败。负载形态再变（execSum 或固定开销）
+// 时按同法重测。
 // 顶层声明——分片注册（testIde 块内）与聚合报告（testShards 任务）两处共用。
 val testShardCount = providers.gradleProperty("testShardCount").orNull
-    ?.toIntOrNull()?.coerceIn(1, 6) ?: 4
+    ?.toIntOrNull()?.coerceIn(1, 6) ?: 5
 
 // 测试源码单遍扫描（T-TestPerf3 提为顶层：分片分区与 testFast 划桶两处共用；内容提取类名，
 // Kotlin 文件名≠类名合法——CrudPreviewFlowAndTypesTest.kt 内是 DbTypeQuoteHintTest 的先例）。
