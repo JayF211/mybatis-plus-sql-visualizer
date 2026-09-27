@@ -227,7 +227,7 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
     fun testShowErrorRich_只带行号时tooltip用行号文案() {
         val panel = SqlResultPanel()
         try {
-            panel.showErrorRich(info(lineInSql = 3), { })
+            panel.showErrorRich(info(lineInSql = 3), emptyLocateAction())
             waitForEdt()
             val btn = locateButton(panel)!!
             assertTrue("locate 非 null 时定位按钮应可见", btn.isVisible)
@@ -280,7 +280,7 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
                 // k2j 适配：Java 5 参位置形态（onErrorRich, onError, cause, message, sqlMaxLength）
                 { info ->
                     richCalls.incrementAndGet()
-                    panel.showErrorRich(info, { })
+                    panel.showErrorRich(info, emptyLocateAction())
                 },
                 { msg ->
                     plainCalls.incrementAndGet()
