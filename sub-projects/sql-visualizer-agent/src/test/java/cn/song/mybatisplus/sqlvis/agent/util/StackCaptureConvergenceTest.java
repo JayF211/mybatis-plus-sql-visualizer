@@ -40,6 +40,45 @@ public class StackCaptureConvergenceTest {
         StackLocator.clearLocatorCachesForTest();
     }
 
+    /** F30 计数 loader：findClass 调用计数（每次尝试解析计 1，恒抛 CNFE）。 */
+    private static class CountingLoader extends ClassLoader {
+        int attempts = 0;
+
+        CountingLoader() {
+            super(CountingLoader.class.getClassLoader());
+        }
+
+        @Override
+        protected Class<?> findClass(String name) throws ClassNotFoundException {
+            attempts++;
+            throw new ClassNotFoundException(name);
+        }
+    }
+
+    /** F30 行为断言：同一 loader 下二次定位，同类名帧不再访问 loader（ORIGIN_MEMO 记忆化命中）。
+     *  防回潮形态=摘掉记忆化后第二次定位 loader 访问数回涨。 */
+    @org.junit.Test
+    public void F30_来源解析记忆化_二次定位不再访问loader() {
+        clearCaches();
+        final CountingLoader loader = new CountingLoader();
+        final StackTraceElement[] stack = new StackTraceElement[6];
+        stack[0] = new StackTraceElement("java.lang.Thread", "getStackTrace", "Thread.java", -2);
+        stack[1] = new StackTraceElement("cn.song.mybatisplus.sqlvis.agent.util.StackLocator",
+                "locate", "StackLocator.java", 165);
+        for (int i = 0; i < 4; i++) {
+            stack[i + 2] = new StackTraceElement("com.absent.memo.Cls", "m" + i, "Cls.java", 10 + i);
+        }
+        clearCaches();
+        StackLocator.locate(stack, loader);
+        final int afterFirst = loader.attempts;
+        org.junit.Assert.assertTrue("首次定位应至少访问一次 loader（来源解析）", afterFirst >= 1);
+        StackLocator.locate(stack, loader);
+        org.junit.Assert.assertEquals(
+                "二次定位同类名帧应零 loader 访问（记忆化命中；摘掉 ORIGIN_MEMO 此值回涨）",
+                afterFirst, loader.attempts);
+        clearCaches();
+    }
+
     // ---------- ① 一次捕获两用：携栈出口 ----------
 
     @Test
@@ -119,8 +158,10 @@ public class StackCaptureConvergenceTest {
         deep[0] = new StackTraceElement("java.lang.Thread", "getStackTrace", "Thread.java", -2);
         deep[1] = new StackTraceElement("cn.song.mybatisplus.sqlvis.agent.util.StackLocator",
                 "locate", "StackLocator.java", 165);
+        // F30 起类名互异：miss 路径「逐帧来源解析」的计时前提需要每帧都是新类名——同名深栈的
+        // 重复 CNFE 已被 ORIGIN_MEMO 记忆化吸收（F30 的生产价值），同名语料的计时口径随之失效。
         for (int i = 0; i < depth; i++) {
-            deep[i + 2] = new StackTraceElement("com.absent.deep.DeepFrame", "m" + i, "DeepFrame.java", 100 + i);
+            deep[i + 2] = new StackTraceElement("com.absent.deep.DeepFrame" + i, "m" + i, "DeepFrame.java", 100 + i);
         }
 
         // 预热：JIT 编译 + 两路径缓存状态各自就位

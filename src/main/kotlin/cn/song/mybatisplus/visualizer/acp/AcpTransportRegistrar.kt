@@ -53,6 +53,36 @@ internal object AcpTransportEpRegistrar {
 
     private val registered = AtomicBoolean(false)
 
+    /** 4a（T-PerfSweep8）：SSE 常量缓存——KDoc 既有承诺「首次 getTransport 时解析并缓存」，
+     *  实现此前每次调用重跑 Class.forName+getField（MCP 会话清单刷新级频率）。按计划口径：
+     *  首次解析成功缓存（getField 返回 static final 枚举常量，每类加载器单实例）；解析失败
+     *  **不缓存、维持 throw 路径**（与原实现语义一致）；getFullId 的 Method 保留现查
+     *  （上游两条发行线 agentId 运行时类可能不同，单槽复杂度不值当）。 */
+    @Volatile private var cachedSse: Any? = null
+    @Volatile private var sseResolved = false
+
+    /** 4a 测试缝（internal）：SSE 解析函数可注入计数实现驱动先红后绿；生产=真反射。 */
+    @Volatile internal var sseResolver: () -> Any? = {
+        Class.forName(TRANSPORT_ENUM_FQN).getField("SSE").get(null)
+    }
+
+    private fun sseConstant(): Any? {
+        if (sseResolved) return cachedSse
+        val v = sseResolver() // 解析失败抛出——不缓存，维持原 throw 语义（计划口径）
+        cachedSse = v
+        sseResolved = true
+        return v
+    }
+
+    /** 4a 测试缝：handler 消费入口 internal 化（生产链路仍走 registerProxy 私有调用）。 */
+    internal fun sseConstantForTest(): Any? = sseConstant()
+
+    /** 4a 测试缝：清缓存态（跨用例隔离）。 */
+    internal fun resetSseCacheForTest() {
+        cachedSse = null
+        sseResolved = false
+    }
+
     /** 与原 impl 的 CLAUDE_ACP_ID 同源：ml-llm 常量池实证（AcpBundledAgentUtils.CLAUDE_ACP_ID）。 */
     const val CLAUDE_ACP_ID: String = "acp.registry.claude-acp"
 
@@ -76,10 +106,7 @@ internal object AcpTransportEpRegistrar {
 
     private fun registerProxy(iface: Class<*>) {
         val loader = AcpTransportEpRegistrar::class.java.classLoader
-        val handler = transportHandler {
-            runCatching { Class.forName(TRANSPORT_ENUM_FQN).getField("SSE").get(null) }
-                .getOrElse { throw it }
-        }
+        val handler = transportHandler { sseConstant() }
         val provider = Proxy.newProxyInstance(loader, arrayOf(iface), handler)
         val ep = ExtensionPointName.create<Any>(EP_NAME)
         ep.getPoint(null).registerExtension(provider)

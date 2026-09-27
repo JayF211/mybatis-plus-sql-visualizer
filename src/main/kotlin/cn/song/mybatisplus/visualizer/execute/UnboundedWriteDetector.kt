@@ -15,7 +15,6 @@ import net.sf.jsqlparser.expression.operators.relational.EqualsTo
 import net.sf.jsqlparser.expression.operators.relational.InExpression
 import net.sf.jsqlparser.expression.operators.relational.IsNullExpression
 import net.sf.jsqlparser.expression.operators.relational.LikeExpression
-import net.sf.jsqlparser.parser.CCJSqlParserUtil
 import net.sf.jsqlparser.schema.Column
 import net.sf.jsqlparser.statement.delete.Delete
 import net.sf.jsqlparser.statement.select.Select

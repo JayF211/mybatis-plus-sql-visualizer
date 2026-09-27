@@ -84,4 +84,24 @@ class AcpTransportRegistrarProxyTest {
         // 本断言把内联字面量钉住，改错即红（跨版本漂移须重新反编译取证）。
         assertEquals("acp.registry.claude-acp", AcpTransportEpRegistrar.CLAUDE_ACP_ID)
     }
+
+    /** 4a（T-PerfSweep8）缓存命中用例：sseResolver 注入计数实现——两次 getTransport 解析计数=1
+     *  （缓存命中）；缓存退回每次现查时计数=2 即红（先红形态）。 */
+    @Test
+    fun `4a SSE常量缓存 二次调用单次解析`() {
+        AcpTransportEpRegistrar.resetSseCacheForTest()
+        var count = 0
+        val old = AcpTransportEpRegistrar.sseResolver
+        AcpTransportEpRegistrar.sseResolver = { count++; Any() }
+        try {
+            val m = FakeAgentTransport::class.java.methods.first { it.name == "getTransport" }
+            val h = transportHandler { AcpTransportEpRegistrar.sseConstantForTest() }
+            h.invoke(ANY_PROXY, m, arrayOf(FakeAgent("acp.registry.claude-acp")))
+            h.invoke(ANY_PROXY, m, arrayOf(FakeAgent("acp.registry.claude-acp")))
+            assertEquals("SSE 解析应命中缓存只跑一次", 1, count)
+        } finally {
+            AcpTransportEpRegistrar.sseResolver = old
+            AcpTransportEpRegistrar.resetSseCacheForTest()
+        }
+    }
 }

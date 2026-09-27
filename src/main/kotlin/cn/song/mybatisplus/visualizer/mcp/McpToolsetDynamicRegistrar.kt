@@ -43,6 +43,12 @@ object McpToolsetDynamicRegistrar {
 
     private val registered = AtomicBoolean(false)
 
+    /** F29（D1=A）：已成功 define 的壳类缓存（FQN→Class）——define 不可撤销，重试复用免撞同 FQN LinkageError。 */
+    internal val definedShells = mutableMapOf<String, Class<*>>()
+
+    /** F29（D1=A）：已注册到 mcpToolset EP 的壳 FQN——重试防重复注册。 */
+    internal val epRegistered = mutableSetOf<String>()
+
     /** 十工具类清单（McpToolGate.TOOL_NAMES 一一对应，守卫测试对账单一事实）。 */
     private val TOOL_CLASSES = listOf(
         SqlVisualizerRenderSqlTool::class.java,
@@ -57,7 +63,11 @@ object McpToolsetDynamicRegistrar {
         SqlVisualizerMapperCheckTool::class.java,
     )
 
-    /** 探测＋全量注册；已注册或探测失败（无 mcpServer 新形态）时零操作。 */
+    /** 探测＋全量注册；已注册或探测失败（无 mcpServer 新形态）时零操作。
+     *  F29（D1=A 按工具粒度记账）：[definedShells] 缓存已 define 壳类（define 不可逆——
+     *  部分失败重试撞同 FQN LinkageError 的根治）、[epRegistered] 记账已注册到 EP 的 FQN
+     *  （防重试重复注册）；@Synchronized 封 check-then-act 竞态。 */
+    @Synchronized
     fun registerOnce() {
         if (registered.get()) return
         val toolsetIface = runCatching { Class.forName(TOOLSET_IFACE_FQN) }.getOrNull() ?: return
@@ -66,20 +76,32 @@ object McpToolsetDynamicRegistrar {
             registered.set(true)
             LOG.info("T-McpDynamicToolset: ${TOOL_CLASSES.size} toolsets registered onto mcpToolset EP (dynamic shell form)")
         }.onFailure {
-            // registered 不置位：下个项目启动重试（动态 EP 未就绪等瞬态失败可自愈）
+            // registered 不置位：下个项目启动重试（动态 EP 未就绪等瞬态失败可自愈）——
+            // 已 define/已注册的 FQN 由两本台账跳过，重试只补未完成项
             LOG.warn("T-McpDynamicToolset: mcpToolset EP 注册失败（MCP 工具不可用，其余功能不受影响）", it)
         }
     }
 
     private fun registerToolset(toolClass: Class<*>, toolsetIface: Class<*>) {
+        // simpleName 与业务类一致（T-McpToolNaming 分组名=simpleName），gen 子包隔离 FQN
+        registerToolset(toolClass, toolsetIface, "cn.song.mybatisplus.visualizer.mcp.gen." + toolClass.simpleName)
+    }
+
+    /** F29 测试触点：显式 shellName 驱动 define/台账路径（EP 注册在平台无 EP 的测试环境会失败，由调用方 runCatching）。 */
+    internal fun registerToolsetForTest(toolClass: Class<*>, toolsetIface: Class<*>, shellName: String) =
+        registerToolset(toolClass, toolsetIface, shellName)
+
+    private fun registerToolset(toolClass: Class<*>, toolsetIface: Class<*>, shellName: String) {
         require(toolClass.constructors.any { it.parameterTypes.isEmpty() }) {
             "toolset 类必须有无参构造（壳生成依赖）：${toolClass.name}"
         }
-        // simpleName 与业务类一致（T-McpToolNaming 分组名=simpleName），gen 子包隔离 FQN
-        val shellName = "cn.song.mybatisplus.visualizer.mcp.gen." + toolClass.simpleName
-        val shellClass = ShellClassLoader.define(shellName, shellBytes(toolClass, toolsetIface, shellName))
+        if (shellName in epRegistered) return // F29：EP 已注册，重试跳过（防重复注册）
+        val shellClass = definedShells.getOrPut(shellName) {
+            ShellClassLoader.define(shellName, shellBytes(toolClass, toolsetIface, shellName))
+        }
         val instance = shellClass.getDeclaredConstructor().newInstance()
         ExtensionPointName.create<Any>(TOOLSET_EP_NAME).getPoint(null).registerExtension(instance)
+        epRegistered.add(shellName)
         LOG.info("T-McpDynamicToolset: registered ${shellClass.simpleName} (gen shell of ${toolClass.name})")
     }
 

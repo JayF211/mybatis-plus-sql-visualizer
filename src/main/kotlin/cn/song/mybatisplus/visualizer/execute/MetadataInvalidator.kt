@@ -1,7 +1,6 @@
 package cn.song.mybatisplus.visualizer.execute
 
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper
-import net.sf.jsqlparser.parser.CCJSqlParserUtil
 
 /**
  * 元数据缓存失效器（T-DdlCacheInvalidate / O-12，吸收 DBX `object_cache.rs` 语义）：

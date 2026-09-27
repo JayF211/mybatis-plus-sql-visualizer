@@ -115,6 +115,15 @@ public final class StackLocator {
     /** 判定缓存上限（溢出整体清空——既有粗粒度策略）。 */
     private static final int CACHE_MAX = 512;
 
+    /** F30 类来源记忆化（loader 作用域 + className → loadedFromJar 结果；Optional 承载 null「未知」负缓存——CHM 禁 null 值；同 CACHE_MAX 界）。
+     *  键含 loader 身份：同名类在不同 loader 下 codeSource 可不同（测试夹具动态 define 形态），纯 className 键会跨 loader 污染。 */
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.Optional<Boolean>> ORIGIN_MEMO =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static String originMemoKey(String className, ClassLoader loader) {
+        return Integer.toHexString(System.identityHashCode(loader)) + "#" + className;
+    }
+
     /**
      * 定位「判定」缓存（T-AgentSourceLocateStale T-01 起 L1 与安全网<b>合并为一条</b>）：
      * key = 首个非框架帧 class#method → [via, 主位置 className, 主位置 method]。
@@ -500,28 +509,45 @@ public final class StackLocator {
         return defaultLoadedFromJar(className, loader);
     }
 
-    /** 默认来源判定（codeSource 路径形态；注入口非 null 时被替代）。 */
+    /** 默认来源判定（codeSource 路径形态；注入口非 null 时被替代）。
+     *  F30：per-class 记忆化（含 null 负缓存）——「缓存身份=祖先浅帧 + 更深段全为名单外 JAR 帧」
+     *  形态下同一类每事件重付 at 次 Class.forName + CodeSource 解析（无记忆化），B′ 深帧探测
+     *  的唯一实质重付点；类的 codeSource 在同一 JVM 内不变，记忆化语义安全。EXTRA_BIZ_PREFIXES
+     *  仍每事件活读（名单 volatile 整组替换，缓存化会读旧名单）。 */
     static Boolean defaultLoadedFromJar(String className, ClassLoader loader) {
         if (className == null) {
             return null;
+        }
+        Boolean result = null;
+        final String memoKey = originMemoKey(className, loader);
+        final java.util.Optional<Boolean> memo = ORIGIN_MEMO.get(memoKey);
+        if (memo != null) {
+            return memo.orElse(null);
         }
         try {
             final Class<?> c = Class.forName(className, false, loader);
             final CodeSource cs = c.getProtectionDomain().getCodeSource();
             if (cs == null || cs.getLocation() == null) {
-                return null;
+                result = null;
+            } else {
+                final String loc = cs.getLocation().toString();
+                result = loc.endsWith(".jar") || loc.contains(".jar!") || loc.contains(".jar/");
             }
-            final String loc = cs.getLocation().toString();
-            return loc.endsWith(".jar") || loc.contains(".jar!") || loc.contains(".jar/");
         } catch (Throwable t) {
-            return null;
+            result = null;
         }
+        if (ORIGIN_MEMO.size() >= CACHE_MAX) {
+            ORIGIN_MEMO.clear();
+        }
+        ORIGIN_MEMO.put(memoKey, java.util.Optional.ofNullable(result));
+        return result;
     }
 
     /** 仅供同包测试清场（判定缓存/一次性摘要去重集合为全局静态，跨用例隔离用）；产线勿调。 */
     static void clearLocatorCachesForTest() {
         DECISIONS.clear();
         ENTRY_MISMATCH_REPORTED.clear();
+        ORIGIN_MEMO.clear();
     }
 
     private static ClassLoader resolveLoader(ClassLoader hint) {

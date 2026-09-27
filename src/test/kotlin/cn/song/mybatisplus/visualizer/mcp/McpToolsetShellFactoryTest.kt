@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.mcp
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
+import org.junit.Assert.fail
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -49,5 +51,39 @@ class McpToolsetShellFactoryTest {
         assertTrue(!tool.isExperimental())
         assertTrue(!tool.alwaysIncluded())
         assertEquals("业务方法继承可调", "ok", tool.business())
+    }
+
+    /** F29 反向验证探针：同 FQN 二次 define 必 LinkageError（ShellClassLoader 单例、define 不可逆）——
+     *  台账（definedShells/epRegistered）防的就是这个：无台账的部分失败重试必撞此形态。 */
+    @Test
+    fun testF29_同FQN二次define必LinkageError() {
+        val shellName = "cn.song.mybatisplus.visualizer.mcp.gen.FakeToolF29" + System.nanoTime()
+        val bytes = McpToolsetDynamicRegistrar.shellBytes(
+            FakeTool::class.java,
+            FakeToolset::class.java,
+            shellName,
+        )
+        McpToolsetDynamicRegistrar.ShellClassLoader.define(shellName, bytes)
+        try {
+            McpToolsetDynamicRegistrar.ShellClassLoader.define(shellName, bytes)
+            fail("同 FQN 二次 define 应抛 LinkageError——该形态即 F29 台账要防的重试炸点")
+        } catch (expected: LinkageError) {
+            // 预期
+        }
+    }
+
+    /** F29 台账语义：registerToolset 经 define 缓存复用——同 FQN 两次调用不炸、Class 实例同一（无重 define）。 */
+    @Test
+    fun testF29_台账复用_二次调用不重define() {
+        val fqn = "cn.song.mybatisplus.visualizer.mcp.gen.FakeToolLedger" + System.nanoTime()
+        val iface = FakeToolset::class.java
+        // 平台 EP 不存在时注册步会失败（runCatching 于 registerOnce 兜底）——本测试直接驱动 registerToolset
+        // 的 define/台账面：两次调用第二次必须走缓存（assertSame 钉死无重 define，LinkageError 即红）。
+        val first = runCatching { McpToolsetDynamicRegistrar.registerToolsetForTest(FakeTool::class.java, iface, fqn) }
+        val cls1 = McpToolsetDynamicRegistrar.definedShells[fqn]
+        assertTrue("首次调用应完成 define 入台账", cls1 != null)
+        runCatching { McpToolsetDynamicRegistrar.registerToolsetForTest(FakeTool::class.java, iface, fqn) }
+        val cls2 = McpToolsetDynamicRegistrar.definedShells[fqn]
+        assertSame("二次调用必须复用缓存实例（重 define = LinkageError = F29 形态）", cls1, cls2)
     }
 }

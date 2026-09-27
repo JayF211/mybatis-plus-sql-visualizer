@@ -2616,13 +2616,6 @@ object DataSourceSelector {
     }
 
     /**
-     * M36.5：在指定控制台上执行 SQL（后台线程 + ReadAction + 5s 超时 + 结果 Tab 激活重试）。
-     * 由 [executePrepared]（已备控制台）与准备全链（executeAfterPrepare=true）共用。
-     *
-     * @param onResultsReady 执行触发成功后回调完整 UI（顶部块+结果区 SplitPane）——
-     *                       仅 executePrepared 路径传入（准备时只嵌了顶部块，执行后换入结果区）
-     */
-    /**
      * O-64/T-RollbackIdentityParse：identity 包装产物的「整批直跑」ExecOption 副本。
      *
      * 平台语义（javap 243 `DatabaseSettings$ExecOption` + 常量组实证）：多语句执行范围由
@@ -2646,6 +2639,13 @@ object DataSourceSelector {
         fresh
     }.getOrElse { base }
 
+    /**
+     * M36.5：在指定控制台上执行 SQL（后台线程 + ReadAction + 5s 超时 + 结果 Tab 激活重试）。
+     * 由 [executePrepared]（已备控制台）与准备全链（executeAfterPrepare=true）共用。
+     *
+     * @param onResultsReady 执行触发成功后回调完整 UI（顶部块+结果区 SplitPane）——
+     *                       仅 executePrepared 路径传入（准备时只嵌了顶部块，执行后换入结果区）
+     */
     private fun executeOnConsole(
         project: Project,
         console: Any,
