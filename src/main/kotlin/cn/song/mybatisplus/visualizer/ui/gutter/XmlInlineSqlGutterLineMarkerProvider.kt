@@ -38,8 +38,7 @@ class XmlInlineSqlGutterLineMarkerProvider : LineMarkerProvider {
         val token = element as? XmlToken ?: return null
         if (token.tokenType != XmlTokenType.XML_NAME) return null
         val tag = token.parent as? XmlTag ?: return null
-        if (!XmlInlineSqlDetector.detectionEnabled()) return null
-        if (!gutterEnabled()) return null
+        if (!XmlInlineSqlDetector.gutterFastPathEnabled()) return null // F19：一次服务查找取两布尔
         if (!XmlInlineSqlDetector.isSqlCarrierTag(tag)) return null
         return LineMarkerInfo(
             element,
@@ -51,11 +50,6 @@ class XmlInlineSqlGutterLineMarkerProvider : LineMarkerProvider {
             { MpSqlVisualizerBundle.message("gutter.xmlInlineSql.accessible.name") },
         )
     }
-
-    /** 读取 gutter 图标开关（测试环境 service 未注册时按默认 true 处理）。 */
-    private fun gutterEnabled(): Boolean = runCatching {
-        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.showGutterIcon
-    }.getOrDefault(true)
 
     /** 点击处理：后台解析 + 渲染（HQL 转换失败回退原文直显），结果走统一展示入口。 */
     private object XmlInlineSqlNavigationHandler : GutterIconNavigationHandler<PsiElement> {

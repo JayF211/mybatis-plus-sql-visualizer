@@ -82,12 +82,64 @@ object XmlInlineSqlDetector {
         cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.xmlInlineSqlEnabled
     }.getOrDefault(true)
 
-    /** 首段非空文本的截断前缀（遍历直属文本段，剥 CDATA 包裹、跳过纯空白段；无 → null）。 */
-    private fun firstNonBlankTextPrefix(tag: XmlTag): String? {
+    /**
+     * gutter 快速路径合并开关（F19：一次设置服务查找取两布尔——平台逐 provider 全量跑、
+     * 无共享短路，每次高亮 pass 两次查找是白付的；与 [detectionEnabled]/gutter 开关语义逐字节等价）。
+     */
+    fun gutterFastPathEnabled(): Boolean = runCatching {
+        val s = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        s.xmlInlineSqlEnabled && s.showGutterIcon
+    }.getOrDefault(true)
+
+    /** 首段非空文本的截断前缀（遍历直属文本段，剥 CDATA 包裹、跳过纯空白段；无 → null）。
+     *  F18 收口（性能红线「零全文件遍历」的自洽修复）：无包裹直读 trim+take；有包裹走
+     *  「空白/标记跳过 + 截到闭合标记前的内容窗口剥包裹」——O(前缀窗) 而非 O(全文) 单次大正则
+     *  （大 CDATA 段自研框架载体几十~几百 KB，此前每高亮 pass 付一次全文正则）。
+     *  语义：CDATA 段级包裹不出现在首词内部，窗口剥包裹与全文剥包裹在首词判定上等价；
+     *  短 CDATA 语料闭合标记截进窗口的历史形态由 close-cut 精确保持（窗口不含闭合）。 */
+    internal fun firstNonBlankTextPrefix(tag: XmlTag): String? {
         for (child in tag.children) {
             val text = (child as? XmlText)?.text ?: continue
-            val trimmed = unwrapCdata(text).trim()
-            if (trimmed.isNotEmpty()) return trimmed.take(PREFIX_PROBE_LENGTH)
+            if (!text.contains("<![CDATA[")) {
+                val t = text.trim()
+                if (t.isNotEmpty()) return t.take(PREFIX_PROBE_LENGTH)
+                continue
+            }
+            var p = 0
+            while (p < text.length) {
+                while (p < text.length && text[p].isWhitespace()) p++
+                if (p < text.length && (text.startsWith("<![CDATA[", p) || text.startsWith("]]>", p))) {
+                    p += if (text[p] == '<') 9 else 3
+                    continue
+                }
+                break
+            }
+            if (p >= text.length) continue
+            // 内容窗口：截到首个闭合标记前（窗口含闭合会留 unmatched 伪影），超长取 PREFIX+64
+            val closeIdx = text.indexOf("]]>", p)
+            val hardEnd = if (closeIdx >= 0) closeIdx else text.length
+            val end = minOf(text.length, p + PREFIX_PROBE_LENGTH + 64, hardEnd)
+            val piece = unwrapCdata(text.substring(p, end)).trim()
+            if (piece.isNotEmpty()) return piece.take(PREFIX_PROBE_LENGTH)
+            // 窗口全空白（内容起点后紧跟闭合/再开标记）：从闭合之后继续找下一段内容
+            var resume = if (closeIdx >= 0) closeIdx + 3 else end
+            while (resume < text.length) {
+                var q = resume
+                while (q < text.length && text[q].isWhitespace()) q++
+                if (q < text.length && (text.startsWith("<![CDATA[", q) || text.startsWith("]]>", q))) {
+                    q += if (text[q] == '<') 9 else 3
+                    resume = q
+                    continue
+                }
+                if (q >= text.length) return null
+                val c2 = text.indexOf("]]>", q)
+                val e2 = minOf(text.length, q + PREFIX_PROBE_LENGTH + 64, if (c2 >= 0) c2 else text.length)
+                val piece2 = unwrapCdata(text.substring(q, e2)).trim()
+                if (piece2.isNotEmpty()) return piece2.take(PREFIX_PROBE_LENGTH)
+                if (c2 >= 0) { resume = c2 + 3; continue }
+                return null
+            }
+            return null
         }
         return null
     }

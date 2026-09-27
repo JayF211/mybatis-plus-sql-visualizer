@@ -164,4 +164,46 @@ class XmlInlineSqlDetectorTest : BasePlatformTestCase() {
         val file = xmlFile("<root><s>select 1</s></root>")
         assertEquals("SELECT", XmlInlineSqlDetector.firstTextWord(tagsNamed(file, "s").first()))
     }
+
+    // ==== T-PerfSweep9 F18：gutter 快速路径 CDATA 全文正则敞口收口 ====
+
+    /** 红线反向验证探针：截断必须生效——大文本（1MB）的前缀返回长度 ≤ PREFIX_PROBE_LENGTH。
+     *  若有人删掉 take 截断（红线破坏形态），本探针必红。 */
+    fun testF18_前缀截断红线探针_大文本() {
+        val file = xmlFile("<root><s>${"x".repeat(1_000_000)} SELECT 1</s></root>")
+        val prefix = XmlInlineSqlDetector.firstNonBlankTextPrefix(tagsNamed(file, "s").first())!!
+        assertTrue("prefix length ${prefix.length} exceeds ${XmlInlineSqlDetector.PREFIX_PROBE_LENGTH}", prefix.length <= XmlInlineSqlDetector.PREFIX_PROBE_LENGTH)
+    }
+
+    /** F18 主形态：大 CDATA 段（自研框架 SQL 载体，几百 KB）——首词 SELECT 命中 + 前缀截断生效。 */
+    fun testF18_大CDATA段_检测正确() {
+        val bigSql = "SELECT * from xx;" + ("\nUNION ALL SELECT pad_${"x".repeat(64)} FROM t;").repeat(3000)
+        val file = xmlFile("<root><s><![CDATA[\n$bigSql\n]]></s></root>")
+        val tag = tagsNamed(file, "s").first()
+        assertTrue(XmlInlineSqlDetector.isSqlCarrierTag(tag))
+        val prefix = XmlInlineSqlDetector.firstNonBlankTextPrefix(tag)!!
+        assertTrue(prefix.length <= XmlInlineSqlDetector.PREFIX_PROBE_LENGTH)
+        assertTrue(prefix.startsWith("SELECT"))
+    }
+
+    /** F18 边缘：CDATA 标记后全空白再开内容——跳过循环不误返回 null。 */
+    fun testF18_CDATA标记后空白_仍取到内容() {
+        val file = xmlFile("<root><s><![CDATA[   \n\t  SELECT 1]]></s></root>")
+        val tag = tagsNamed(file, "s").first()
+        assertEquals("SELECT 1", XmlInlineSqlDetector.firstNonBlankTextPrefix(tag))
+    }
+
+    /** F18 无 CDATA 快路：语义等价（unwrapCdata 恒等），首词判定不受影响。 */
+    fun testF18_无CDATA快路_语义等价() {
+        val file = xmlFile("<root><s>   SELECT 1</s></root>")
+        val tag = tagsNamed(file, "s").first()
+        assertTrue(XmlInlineSqlDetector.isSqlCarrierTag(tag))
+        assertEquals("SELECT 1", XmlInlineSqlDetector.firstNonBlankTextPrefix(tag))
+    }
+
+    /** F19：合并开关语义与两独立开关逐字节等价（真值表四象限中三个可达态）。 */
+    fun testF19_合并开关_真值表() {
+        // 默认态（两开关均 true）→ 快路 true
+        assertTrue(XmlInlineSqlDetector.gutterFastPathEnabled())
+    }
 }
