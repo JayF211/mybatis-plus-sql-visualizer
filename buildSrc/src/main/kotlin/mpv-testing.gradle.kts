@@ -184,6 +184,11 @@ tasks.register<Test>("testExternal") {
         testExternalClasses.forEach { includeTestsMatching(it) }
     }
     maxParallelForks = 1
+    // T-TestPerf8 S6：强制每轮真跑。分片任务因 MPV-Build 时间戳（Jar 任务恒重跑）+ prepareSandbox
+    // 链而恒重跑，本桶 classpath 不含插件 jar，无源码变更的连跑会被判 UP-TO-DATE 静默跳过
+    // （20260928 warm2 轮实证）——聚合报告照读旧 XML，护栏「本轮已验」是假。与分片语义对齐；
+    // 墙钟代价≈0（桶与分片并行且早收，warm1 实证 59.4s ≪ 片窗口 120s+）。
+    outputs.upToDateWhen { false }
 }
 
 tasks.register<Test>("testFast") {
