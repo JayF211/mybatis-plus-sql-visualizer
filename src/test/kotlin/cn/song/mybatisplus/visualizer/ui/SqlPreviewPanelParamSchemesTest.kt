@@ -92,7 +92,6 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         p.toggleCheckForTest(idToDisable, false)
 
         val snapshot = p.buildHistorySnapshotForTest()
-        println("DIAG conditionCheckBoxes=${p.conditionCheckBoxCountForTest()} foreachNullBoxes=${p.forEachNullBoxCountForTest()} enabledIds=${p.enabledIdsForTest()}")
         val chkKeys = snapshot.keys.filter { it.startsWith("__chk__:") }
         assertTrue("快照应含 __chk__ 键（缺口②修复）", chkKeys.isNotEmpty())
                 assertEquals("被取消勾选的 id 应编码为 0", "0", snapshot["__chk__:$idToDisable"])
