@@ -85,10 +85,15 @@ class CountSelectedTableAction : SelectedTableSqlTemplateAction(
     }
 }
 
-/** 抽样 10 行：`SELECT * FROM <选中表> LIMIT 10`。 */
+/** 抽样 N 行（R5：LIMIT 值设置页可配，默认 10；范围钳制 1..10000 防 0/负数与误输入全表）：`SELECT * FROM <选中表> LIMIT N`。 */
 class SampleSelectedTableAction : SelectedTableSqlTemplateAction(
     "action.cn.song.mybatisplus.visualizer.SampleSelectedTable.text",
-    { selected -> "SELECT * FROM $selected LIMIT 10" },
+    { selected ->
+        val limit = runCatching {
+            cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.sampleLimit
+        }.getOrDefault(10).coerceIn(1, 10000)
+        "SELECT * FROM $selected LIMIT $limit"
+    },
 ) {
     companion object {
         const val ACTION_ID = "cn.song.mybatisplus.visualizer.SampleSelectedTable"

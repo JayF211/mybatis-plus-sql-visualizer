@@ -91,6 +91,12 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var xmlInlineSqlEnabled: Boolean = true,
 
         /**
+         * R5（T-PerfSweep910 同期小件）：快捷模板「抽样」的 LIMIT 行数（默认 10，现值硬编码于
+         * SampleSelectedTableAction）。范围钳制 1..10000（防误输入全表扫）；仅影响抽样语句。
+         */
+        var sampleLimit: Int = 10,
+
+        /**
          * JOIN 图渲染方式（T-Dgm-04）：true=IDE 原生图框架（Ultimate 的 Diagrams 插件，类图观感，
          * 缩放/布局/导出全框架托管）；false=经典自绘渲染器。
          * Community / Diagrams 插件缺席时无论此值均自动降级自绘。
