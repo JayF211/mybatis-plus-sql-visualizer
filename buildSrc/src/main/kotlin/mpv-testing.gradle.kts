@@ -291,11 +291,14 @@ intellijPlatformTesting {
             .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
             .toSet()
 
-        // T-TestPerf8 S3：头部巨类方法级跨片拆分（-PtestSplitHeavy=true 开启，默认关）。
+        // T-TestPerf8 S3：头部巨类方法级跨片拆分（-PtestSplitHeavy=false 可关，默认开）。
         // 均衡器以类为最小调度单元，头部巨类是单片内不可分割的原子载荷（SqlPreviewPanelTest
-        // 43.4s=片均值 35%，T7 收口逐片 ±7% 失衡的主分量）。开启时把候选类的测试方法按实测
+        // 43.4s=片均值 35%，T7 收口 ±7% 失衡的主分量）。开启时把候选类的测试方法按实测
         // 逐例权重贪心对半拆成两片段：主体片 include 全类 + exclude 片段 B 方法清单；片段 B
         // （include "FQCN.method" 清单）挂到除主体片外最轻的片。
+        // 默认开的依据（20260928 实验轮）：机制全证绿（两轮 parity 6082 全绿 + union 配置期
+        // 断言 + 今日 3 例 flake 全部发生在关闭态=零拆分归因）；exec 临界片 −1~3s（方向性，
+        // <5% 判据如实入账），收益随头部类增长复利；回退= -PtestSplitHeavy=false 一词。
         // 红线：零删例（两片段并集=该类全集，同一份数据配置期生成、天然互补）、零断言改动
         // （不动测试源码）；隔离语义只增不减（两 JVM 各自完整平台 bootstrap，TestCase 每例
         // 新实例 setUp/tearDown 不变）。数据驱动自维护：新增用例不在片段 B 清单→自然落主体片；
@@ -309,7 +312,7 @@ intellijPlatformTesting {
                 .toList()
         }.getOrNull()?.takeIf { it.isNotEmpty() }
 
-        val testSplitHeavy = providers.gradleProperty("testSplitHeavy").orNull?.toBoolean() ?: false
+        val testSplitHeavy = providers.gradleProperty("testSplitHeavy").orNull?.toBoolean() ?: true
         val splitHeavyClassCandidates = listOf(
             "cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelTest",
         )
