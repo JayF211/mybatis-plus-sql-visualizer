@@ -255,6 +255,9 @@ tasks.named<Task>("testShards") { mustRunAfter("verifyGate") }
 // 代价：每次 testShards 会连带构建 agent fat jar 并起子 JVM（attach 集成测试），收口时间变长；
 // 清理口径见计划 §六——清 build 时须连 `sub-projects/sql-visualizer-agent/build` 一起清。
 tasks.named<Task>("testShards") { dependsOn(":sql-visualizer-agent:test") }
+// T-TestPerf8 S6：agent 测试与 testExternal 的「UP-TO-DATE 静默跳过」修复不在本文件——
+// agent 侧落在子项目脚本（tasks.named("test") 同项目配置，免跨项目 task 解析），
+// testExternal 侧落在 mpv-testing 桶注册块。两处均为强制每轮真跑，理由见各自注释。
 
 // ---------- M56 T-M56-01：agent fat jar 内嵌主插件资源（resources/agent/mps-sql-agent.jar） ----------
 // 运行时 AgentManager 解压落盘 + deleteOnExit 后经 attach loadAgent 挂载；
