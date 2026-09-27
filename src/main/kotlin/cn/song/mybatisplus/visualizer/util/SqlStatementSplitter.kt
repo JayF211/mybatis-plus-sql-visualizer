@@ -65,9 +65,43 @@ object SqlStatementSplitter {
      */
     private val NON_BLOCK_BEGIN_TAILS = setOf("TRAN", "TRANSACTION", "DISTRIBUTED", "DIALOG", "CONVERSATION")
 
-    /** `from` 之后首个词（跳过空白/注释，大小写不敏感）是否属于 [NON_BLOCK_BEGIN_TAILS]。 */
-    private fun isNonBlockBeginTail(sql: String, from: Int): Boolean =
-        NON_BLOCK_BEGIN_TAILS.any { nextWordIs(sql, from, it) }
+    /** `from` 之后首个词（跳过空白/注释，大小写不敏感）是否属于 [NON_BLOCK_BEGIN_TAILS]。
+     *  F23（T-PerfSweep9）：单趟取词进 Set 比对——原 `NON_BLOCK_BEGIN_TAILS.any { nextWordIs(...) }`
+     *  同段最多 5 次扫描（与 PS7-01 消灭的「同段重复扫描」同型）。 */
+    private fun isNonBlockBeginTail(sql: String, from: Int): Boolean {
+        val word = nextWord(sql, from) ?: return false
+        return NON_BLOCK_BEGIN_TAILS.any { word.equals(it, ignoreCase = true) }
+    }
+
+    /** 从 `from` 跳过空白/注释后的下一个标识符词（大写；无 → null）——[nextWordIs] 的单趟提取形态。 */
+    private fun nextWord(sql: String, from: Int): String? {
+        var i = from
+        while (i < sql.length) {
+            val c = sql[i]
+            val next = sql.getOrNull(i + 1)
+            when {
+                c.isWhitespace() -> i++
+                c == '-' && next == '-' -> {
+                    while (i < sql.length && sql[i] != '\n') i++
+                }
+                c == '/' && next == '*' -> {
+                    i += 2
+                    while (i < sql.length && !(sql[i] == '*' && sql.getOrNull(i + 1) == '/')) i++
+                    i += 2
+                }
+                isIdentifierChar(c) -> {
+                    val sb = StringBuilder()
+                    while (i < sql.length && isIdentifierChar(sql[i])) {
+                        sb.append(sql[i])
+                        i++
+                    }
+                    return sb.toString().uppercase()
+                }
+                else -> return null
+            }
+        }
+        return null
+    }
 
     /** 默认语句界符（MySQL 客户端 `DELIMITER` 指令可切换；无参数指令复位为此值）。 */
     private const val DEFAULT_DELIMITER = ";"

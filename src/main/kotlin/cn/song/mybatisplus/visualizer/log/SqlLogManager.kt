@@ -67,6 +67,7 @@ class SqlLogManager(private val project: Project) : Disposable {
      */
     private val suppressRuleListener: () -> Unit = {
         buffer.suppressKeys = suppressRuleManager.suppressedKeys
+        buffer.hasStructureKeys = suppressRuleManager.suppressedKeysContainStructure
         notifyUi()
     }
 
@@ -174,6 +175,7 @@ class SqlLogManager(private val project: Project) : Disposable {
         // T-SqlSuppress：初始同步一次屏蔽键集 + 订阅规则变更（dispose 注销）；
         // 命中计数归账同挂专用出口（被拦条目不触发其他任何回调）。
         buffer.suppressKeys = suppressRuleManager.suppressedKeys
+        buffer.hasStructureKeys = suppressRuleManager.suppressedKeysContainStructure
         suppressRuleManager.addListener(suppressRuleListener)
         buffer.onSuppressedHit = { key -> suppressRuleManager.recordHit(key) }
 
@@ -613,6 +615,7 @@ class SqlLogManager(private val project: Project) : Disposable {
         suppressRuleManager.removeListener(suppressRuleListener)
         buffer.onSuppressedHit = null
         buffer.suppressKeys = emptySet()
+        buffer.hasStructureKeys = false
         buffer.onEntryAccepted = null
         buffer.onEntryStored = null
         buffer.onDedupeCountsChanged = null

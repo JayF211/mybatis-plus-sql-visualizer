@@ -406,9 +406,15 @@ class SqlSuppressManagerDialog(
         refreshRuleList(select = null)
     }
 
-    /** createdAt 展示片段（yyyy-MM-dd HH:mm；EDT 渲染专用，SimpleDateFormat 线程约束不适用）。 */
+    /** createdAt 展示片段（yyyy-MM-dd HH:mm）。F22（T-PerfSweep9）：SDF ThreadLocal 缓存化
+     *  （照 LogTimestampParser 范式；此前每行每次重绘新建一个实例，分配面与 PS7-04 缓存化方向相逆）。
+     *  复用实例输出与逐次新建逐字节一致（format 不读旧状态）。 */
+    private val createdAtFormat = ThreadLocal.withInitial {
+        SimpleDateFormat("yyyy-MM-dd HH:mm")
+    }
+
     private fun createdAtText(rule: SqlSuppressRule): String =
-        SimpleDateFormat("yyyy-MM-dd HH:mm").format(Date(rule.createdAt))
+        createdAtFormat.get().format(Date(rule.createdAt))
 
     /** 只挂「关闭」（F5：关闭即生效，无确定/应用缓存层）。 */
     override fun createActions(): Array<Action> = arrayOf(cancelAction)

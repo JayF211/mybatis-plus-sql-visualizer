@@ -60,6 +60,13 @@ class SqlSuppressRuleManager : PersistentStateComponent<SqlSuppressRuleManager.S
     var suppressedKeys: Set<String> = emptySet()
         private set
 
+    /** F20（T-PerfSweep9）：键集中是否含结构口径键（任一规则 structureMatch 开启）——与
+     *  [suppressedKeys] 同批重建发布；SqlLogEntryBuffer 据此跳过结构键第二查找
+     *  （全部精确口径形态下 structureKey lazy 不触达）。 */
+    @Volatile
+    var suppressedKeysContainStructure: Boolean = false
+        private set
+
     /** 指纹 → 规则 id 索引（与 [suppressedKeys] 同批重建发布；命中计数按 id 归账）。 */
     @Volatile
     private var keyIndex: Map<String, String> = emptyMap()
@@ -115,6 +122,35 @@ class SqlSuppressRuleManager : PersistentStateComponent<SqlSuppressRuleManager.S
         }
         republish()
         return AddResult.ADDED
+    }
+
+    /**
+     * F21（T-PerfSweep9）：批量新增——单次 synchronized + **单次 republish**（多选屏蔽 N 条
+     * 逐条 addRule 会付 N 次 EDT 键集重建 + 监听器遍历）。语义与 N 次 [addRule] 等价：
+     * 空白/重复跳过、上限先到先得拒新增（先到按入参序）。返回 (新增数, 是否有规则被上限拒)。
+     */
+    fun addRules(sampleSqls: Collection<String>): Pair<Int, Boolean> {
+        var added = 0
+        var limitReached = false
+        synchronized(rulesLock) {
+            sampleSqls.forEach { sampleSql ->
+                val normalized = normalizeSqlWhitespace(sampleSql)
+                if (normalized.isEmpty()) return@forEach
+                if (state.rules.any { it.pattern == normalized }) return@forEach
+                if (state.rules.size >= MAX_RULES) {
+                    limitReached = true
+                    return@forEach
+                }
+                state.rules += SqlSuppressRule(
+                    pattern = normalized,
+                    sampleSql = sampleSql.trim(),
+                    createdAt = System.currentTimeMillis(),
+                ).apply { ensureId() }
+                added++
+            }
+        }
+        if (added > 0) republish()
+        return added to limitReached
     }
 
     /** 按 id 删除单条规则；确有删除时发布通知。 */
@@ -198,6 +234,7 @@ class SqlSuppressRuleManager : PersistentStateComponent<SqlSuppressRuleManager.S
             index[key] = rule.id
         }
         suppressedKeys = keys
+        suppressedKeysContainStructure = current.any { it.structureMatch }
         keyIndex = index
         listeners.forEach { it() }
     }

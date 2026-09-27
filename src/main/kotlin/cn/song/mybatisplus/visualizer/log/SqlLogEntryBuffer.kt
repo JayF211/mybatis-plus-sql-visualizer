@@ -90,6 +90,11 @@ class SqlLogEntryBuffer(
     @Volatile
     var suppressKeys: Set<String> = emptySet()
 
+    /** F20（T-PerfSweep9）：键集中是否存在结构口径键——与 [suppressKeys] 同点写入（SqlLogManager
+     *  订阅者同步刷写），false 时结构键第二查找整体跳过（structureKey lazy 不触达）。 */
+    @Volatile
+    var hasStructureKeys: Boolean = false
+
     /**
      * T-SqlSuppress：屏蔽闸门命中回调（参数 = 命中指纹键）——[SqlSuppressRuleManager.recordHit]
      * 命中计数的唯一出口（管理对话框「已拦截 N 次」，D4）。专用通道，不与既有回调混用：
@@ -151,10 +156,13 @@ class SqlLogEntryBuffer(
         // 【反向验证探针锚点】注释掉下面 if 块 = 摘除屏蔽闸门，SqlLogEntryBufferTest 屏蔽用例必红。
         // T-SqlSuppressUx 二段：精确键（默认口径规则）或结构键（手动开启结构匹配的规则）任一命中即拦；
         // 命中键回传 recordHit 归账到对应规则。空集短路下 structureKey 的 lazy 亦不被触达。
+        // F20（T-PerfSweep9）：结构键独立门控——键集里无任何结构口径键（SqlSuppressRuleManager 的
+        // 「(结构)」后缀约定）时跳过第二查找，避免「全部精确口径规则」形态每条捕获白付一次
+        // structureKey lazy（O(n) 字面量参数化扫描 + StringBuilder 分配）。
         if (suppressKeys.isNotEmpty()) {
             val hitKey = when {
                 entry.suppressKey in suppressKeys -> entry.suppressKey
-                entry.structureKey in suppressKeys -> entry.structureKey
+                hasStructureKeys && entry.structureKey in suppressKeys -> entry.structureKey
                 else -> null
             }
             if (hitKey != null) {

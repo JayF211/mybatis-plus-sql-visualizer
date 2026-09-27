@@ -1794,15 +1794,7 @@ class SqlLogPanel(
 
         override fun actionPerformed(e: AnActionEvent) {
             val ruleManager = SqlSuppressRuleManager.getInstance()
-            var added = 0
-            var limitReached = false
-            entries.distinctBy { it.dedupeKey }.forEach { entry ->
-                when (ruleManager.addRule(entry.restoredSql)) {
-                    SqlSuppressRuleManager.AddResult.ADDED -> added++
-                    SqlSuppressRuleManager.AddResult.LIMIT_REACHED -> limitReached = true
-                    SqlSuppressRuleManager.AddResult.DUPLICATE -> Unit // 已存在：幂等跳过
-                }
-            }
+            val (added, limitReached) = ruleManager.addRules(entries.distinctBy { it.dedupeKey }.map { it.restoredSql }) // F21：单次 republish
             refreshList() // addRule 的监听器已同步更新缓冲键集——存量行立即消失
             if (added > 0) showSuppressBalloon(added)
             if (limitReached) showSuppressLimitBalloon()

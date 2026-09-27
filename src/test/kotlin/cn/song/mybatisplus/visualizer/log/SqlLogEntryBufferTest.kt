@@ -258,6 +258,7 @@ class SqlLogEntryBufferTest {
         assertEquals("仅精确未拦的那条在列", 1, buffer.snapshot().size)
         // 结构规则：同形状不同参数值被拦（闸门走 entry.structureKey）；被拦条目不入列
         buffer.suppressKeys = setOf(structureFingerprint("SELECT * FROM t WHERE p = 'a'"))
+        buffer.hasStructureKeys = true // F20：结构键在集（生产由 SqlLogManager 同步 manager 标志）
         assertFalse("结构规则拦同形状不同参数值", buffer.addEntry(entry("SELECT * FROM t WHERE p = 'c'")))
         assertEquals("列表仍只有先前一条", 1, buffer.snapshot().size)
         // 不同形状不拦
