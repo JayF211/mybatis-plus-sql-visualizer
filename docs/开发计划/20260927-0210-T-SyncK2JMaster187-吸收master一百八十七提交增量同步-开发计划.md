@@ -91,4 +91,24 @@ agent 子项目 8 件全 .java 直取（=master 逐字节；生产 3：EventBus/
 
 ## 8. 实施记录（收官回填）
 
-（待回填：波次实际读数、门禁读数、守卫发现、偏离计划的决策。）
+**提交链（十二段）**：C1 计划 c0750ee → C2 构建链 026738c → C3 W1 292fec5 → C4 W2 9e3bb87 → C5 W3 ab4ecf9 → C6 测试移植 6aa9be3 → 中央编译修复 48fb239 → C7 资源/文档 5c82919 → 守卫基线重登记 2a03e72 → 门禁六簇修复 26b3857 →（C8 收官 = 本文件回填 + `.port-sync` 推进 + 沙盒还原 + 变更记录台账行）。
+
+**波次实落**（对账后零遗漏）：W1 22 件清单实落 26 个 Java 文件（k2j 一拆多：OceanBaseDialect/OpenGaussDialect 新建、UrlSubprotocolDialects 独立、ParamTypeInfo/XmlStatement 拆件增量）；W2 26 件实落 33 文件（acp 三件套拆分、SqlAstParser 新建、AgentSession 落点修正）；W3 30 件实落 30 文件（McpGateFilterRegistrar 拆 EpRegistrar）。测试 84 件 + agent 8 件逐字节（git hash-object 全 IDENTICAL）+ docs 80 件直取 + dev-support 10 件直取。
+
+**编译收口**：compileJava 首轮 6 错三处（SqlPreviewPanel lambda 捕获非终局变量、PremainTaskScope Decision 嵌套前缀、SqlPerfAnalyzer INSTANCE 契约）修后绿；compileTestKotlin 首轮 204 错 13 文件（具名实参/INSTANCE 补点/record 访问器/构造器补槽/字段遮蔽/`)`缺括号/Kt 门面）修后绿；三链最终全绿。
+
+**门禁与守卫发现**（全量首轮 testShards 166 败/26 类，六簇全收口）：
+1. 主根因＝`SqlSuppressRuleManager` 漏 final（@Service 轻服务平台强制，146 败连锁；`DataSourceSettings` 同病一并修）——**新坑：Kotlin class 隐式 final，Java 侧 @Service 类必须显式写**。
+2. **新坑（本地独立复现实证）**：jsqlparser 5.3 `CCJSqlParserUtil.parseStatements` 同 JVM 首败抛异常、次败**静默返回 null**——master 侧 Kotlin 非空类型 intrinsic 转抛被 catch(Exception) fail-closed 接管，Java 直译丢判空即 NPE；修法＝`SqlAstParser` 出口 `Objects.requireNonNull` + UnboundedWriteDetector/MetadataInvalidator seam 判空（3 败，修后本地 107/107 绿）。
+3. 守卫登记三处尾款：fatal 基线 636→**660**（真读数，KDoc 补 597→615→636→660 链）、ConvertToSqlAction PSI 豁免 2→**3**（master 侧已登记 4；O-72 载体候选新增站点）、SettingsRealityGuard prefix 两控件白名单照 **master 86876ed**（t-testperf7 分支，master 侧同红的先行修复）补登记。
+4. ErrorPositionWiringGuard 豁免键口径＝相对仓库根（含 `src/main/java/` 前缀）。
+5. MultiHostInjector 表断言 13 败判定为簇 1 下游污染（fixture setup 中断致注入器栈失衡），不修码。
+6. **McpAuditGateTest 桥接挂起点死锁（本轮最重发现，全量两度挂死）**：k2j 把 master 的 suspend audit 折叠为同步 ToolBlock 承载，测试桥接层 `runBlocking { block() }` 内的 `yield()` 挂起 lambda 恢复被派回创建方事件循环，而创建方正阻塞在内层 joinBlocking——恢复永不到达（线程转储实证：Default worker 全空闲、主线程停内层 parkNanos；换 `Dispatchers.Default`、去外层 runBlocking 均无效）。定案=块内挂起点改 `delay(50)`（恢复经桥接层事件循环自身定时器兑现，与创建方上下文零耦合）；叠加 243 测试 JVM 平台 stdlib 2.0.21 遮蔽项目 stdlib 致 DebugProbes 读挂起帧报 Debug metadata version mismatch——按 testDatabase 显式绿跳口径撞墙跳过并打印原因，统一 stdlib 环境仍真跑。反向验证：`yield` 形态两度复现挂死、delay+绿跳形态定向 15 测试全绿。
+7. **SqlResultPanelUiTest JUnit3 幻影测试方法**：`showErrorRich` 调用点的内联零参 lambda 合成 `testXxx$lambda$0` 被 JUnit3 判为非 public 测试方法（309 轮同坑），全文件共 6 处抽 `emptyLocateAction()` 工厂挂名后绿。
+反向验证：fatal 基线改前红（expected 636 was 660）改后定向 29 测试绿；jsqlparser null 先精确复现 3 败再修复转绿；死锁形态两度全量复现、delay+绿跳形态定向绿且终局全量未再挂死。
+
+**前提核销（计划 §6）**：①agent 8 件纯 Java 直取 ✓（0 .kt 变更实测）；②ASM 注册器直译 ✓（壳类经 McpToolsetShellFactoryTest 断言）；③反射桥形态 ✓（引用面对账：代码级 mcpserver/iomcp 引用为零，Class.forName 字符串与 master 同位同串）；④acp 替换面 ✓（旧名全仓 grep 零残留）；⑤fatal 基线漂移 ✓（636→660 重登记）；⑥verifyGate 对齐目标换锚 ✓（读数见下）；⑦28 件新测试直取 ✓（互操作适配零断言改动）；⑧版本号 ✓（出包 2026.9.23.zip）；⑨SqlvExpectedToolException 照抄 ✓；⑩锚点 187 提交 ✓（作业期间 master 未前进，post-anchor 漂移零）。
+
+**最终门禁读数**：compileJava/compileTestJava/compileTestKotlin 三链全绿；testShards **6087/0/0/9**（4 片 1438/1484/1500/1665，时间 172/203/161/142s，预期对照行逐片在案）；testDatabase 0 失败（5 套件，jdbc 种子在位、docker 关闭态秒跳）；agent 子项目 20 套件 93 用例 0 失败（=master 侧 93）；buildPlugin 出包 mybatis-plus-sql-visualizer-2026.9.23.zip（6,946,892 字节）；verifyGate 三目标 Compatible——243=4 for-removal+15 dep+46 exp、253=6+18+44、262=7+73+44（for-removal/experimental 与上轮持平＝无翻译漂移；deprecated +5/+5/+6 逐条归因 master 本轮新 API 面：jsqlparser 5.3 Parenthesis 弃用、ExtensionPointName.getPoint(AreaInstance)（MCP/ACP 程序化注册）、Disposer.isDisposed、ActionToolbar.updateActionsImmediately）。
+
+**收官提交**：C8 = 本文件回填 + `.port-sync` 锚点推进 bccbfc5 + build.gradle.kts 沙盒临时行还原 + 变更记录台账行（含本轮读数）。
