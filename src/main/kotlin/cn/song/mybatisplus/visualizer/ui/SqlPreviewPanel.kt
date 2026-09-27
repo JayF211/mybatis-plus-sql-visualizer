@@ -427,6 +427,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // 播种收进 renderSql 帧内按新鲜映射清单进行，值不再依赖「渲染后同步读键清单」
     private val xmlForEachValues = mutableMapOf<String, List<String>>()
     private val xmlForEachNulls = mutableSetOf<String>()
+    // R22 T-02/T-03：勾选态与 foreach 行的组件登记（快照枚举 + 召回视觉同步；随 rebuild 清场）
+    private val xmlForEachNullBoxes = mutableListOf<JCheckBox>()
+    private val xmlForEachValueFields = mutableListOf<Pair<String, JBTextField>>()
     private var xmlErrors = listOf<String>()
     /** T-M25.4：最近一次 XML 渲染的参数映射（集合值输入按当前渲染键回填）。 */
     private var xmlMappings = emptyList<cn.song.mybatisplus.visualizer.xml.ParameterMapping>()
@@ -2644,6 +2647,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         conditionCheckBoxes.clear()
         conditionValueFields.clear()
         batchCheckBoxes.clear()
+        xmlForEachNullBoxes.clear()
+        xmlForEachValueFields.clear()
         xmlForEachCounts.clear()
         xmlForEachValues.clear()
         xmlForEachNulls.clear()
@@ -3306,6 +3311,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         conditionCheckBoxes.clear()
         conditionValueFields.clear()
         batchCheckBoxes.clear()
+        xmlForEachNullBoxes.clear()
+        xmlForEachValueFields.clear()
         // T-M26.3：按钮随场景重建（标题行右侧）——先清空上次场景的残留引用
         toggleSelectButton = null
         clearButton = null
@@ -3401,6 +3408,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (isToggle) {
             val checkBox = JCheckBox(checkBoxText(col.source), col.columnName in enabledIds).apply {
                 toolTipText = if (checkBoxText(col.source) != col.source) col.source else col.columnName
+                putClientProperty(PROP_TOGGLE_ID, col.columnName) // R22 T-02：快照枚举/召回同步的 id 锚点
                 addActionListener {
                     if (isSelected) enabledIds.add(col.columnName) else enabledIds.remove(col.columnName)
                     renderSql()
@@ -3542,6 +3550,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val checkBox = JCheckBox(displayLabel, view.id in enabledIds).apply {
             // T-M26.3：标签被截断时 tooltip 展示表达式原文（否则保留 flagSource 提示）
             toolTipText = if (displayLabel != rawLabel) rawLabel else conditionTooltip(view)
+            putClientProperty(PROP_TOGGLE_ID, view.id) // R22 T-02：快照枚举/召回同步的 id 锚点
             addActionListener {
                 if (isSelected) enabledIds.add(view.id) else enabledIds.remove(view.id)
                 renderSql()
@@ -3621,6 +3630,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val checkBox = JCheckBox(displayLabel, view.id in enabledIds).apply {
             // T-M26.3：标签被截断时 tooltip 展示 test 表达式原文（否则保留条件提示）
             toolTipText = if (displayLabel != rawLabel) rawLabel else MpSqlVisualizerBundle.message("panel.xml.condition")
+            putClientProperty(PROP_TOGGLE_ID, view.id) // R22 T-02：快照枚举/召回同步的 id 锚点（XML 条件行）
             addActionListener {
                 if (isSelected) enabledIds.add(view.id) else enabledIds.remove(view.id)
                 renderSql()
@@ -3679,12 +3689,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         row.add(valuesField)
         paramFields += valuesField
+        xmlForEachValueFields += view.collectionExpr to valuesField // R22 T-03：召回时按 expr 同步字段文本
         val nullBox = JCheckBox(MpSqlVisualizerBundle.message("panel.xml.foreach.null"), view.collectionExpr in xmlForEachNulls).apply {
+            putClientProperty(PROP_FOREACH_NULL, view.collectionExpr) // R22 T-02：召回同步的 expr 锚点
             addActionListener {
                 if (isSelected) xmlForEachNulls.add(view.collectionExpr) else xmlForEachNulls.remove(view.collectionExpr)
                 renderSql()
             }
         }
+        xmlForEachNullBoxes += nullBox // R22 T-02：召回视觉同步登记
         row.add(nullBox)
         row.border = JBUI.Borders.empty(0, 8, 2, 8)
         return row
@@ -3712,6 +3725,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         xmlForEachCounts[view.collectionExpr] =
             if (values.isEmpty()) XmlPreviewModel.DEFAULT_FOREACH_SIZE else values.size
         renderSql()
+        saveToHistory() // R22 T-03：foreach 权威态变更触发历史保存（原缺口③——权威态仅间接入库且不触发）
     }
 
     /**
@@ -4125,23 +4139,84 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      *
      * 命中时按 source 回填（用户已输入值优先，不覆盖）。
      * 召回成功显示淡入提示。
+     *
+     * R22 T-02/T-03：快照特殊键一并还原——`__chk__:<id>`=1/0 勾选态（1 加 0 移，可复现
+     * 「关掉默认勾选」的方案）、`__fnull__:<expr>`=1 foreach null 勾选、`__fev__:<expr>`=
+     * 逗号分隔 foreach 权威值（还原权威 map + 同步可见输入框）。还原后 renderSql 收敛。
      */
-    private fun recallFromHistory() {
+    internal fun recallFromHistory() {
         val key = historyCacheKey() ?: return
         val history = paramHistoryCache.recall(key) ?: return
         if (history.isEmpty()) return
         var applied = 0
+        var stateRestored = false
         history.forEach { (source, value) ->
-            // 用户已输入值优先（不覆盖）
-            if (paramValues[source].isNullOrEmpty()) {
-                paramValues[source] = value
-                syncParamFieldText(source, value)
-                applied++
+            when {
+                source.startsWith(SNAPSHOT_CHK) -> {
+                    val id = source.removePrefix(SNAPSHOT_CHK)
+                    if (value == "1") enabledIds.add(id) else enabledIds.remove(id)
+                    stateRestored = true
+                }
+                source.startsWith(SNAPSHOT_FNULL) -> {
+                    val expr = source.removePrefix(SNAPSHOT_FNULL)
+                    if (value == "1") xmlForEachNulls.add(expr) else xmlForEachNulls.remove(expr)
+                    stateRestored = true
+                }
+                source.startsWith(SNAPSHOT_FEV) -> {
+                    val expr = source.removePrefix(SNAPSHOT_FEV)
+                    val values = value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    if (values.isNotEmpty()) {
+                        xmlForEachValues[expr] = values
+                        xmlForEachValueFields.firstOrNull { it.first == expr }?.second?.text = value
+                        stateRestored = true
+                    }
+                }
+                // 用户已输入值优先（不覆盖）
+                else -> if (paramValues[source].isNullOrEmpty()) {
+                    paramValues[source] = value
+                    syncParamFieldText(source, value)
+                    applied++
+                }
             }
         }
-        if (applied > 0) {
+        if (stateRestored) syncToggleChecksFromState()
+        if (applied > 0 || stateRestored) {
             renderSql()
         }
+    }
+
+    /** R22 T-02：把当前状态集同步到可见勾选框（召回路径——勾选框初始态在渲染时定型，
+     *  召回发生在面板已建之后，须显式回写 isSelected）。 */
+    private fun syncToggleChecksFromState() {
+        (conditionCheckBoxes + batchCheckBoxes).forEach { cb ->
+            val id = cb.getClientProperty(PROP_TOGGLE_ID) as? String ?: return@forEach
+            cb.isSelected = id in enabledIds
+        }
+        xmlForEachNullBoxes.forEach { cb ->
+            val expr = cb.getClientProperty(PROP_FOREACH_NULL) as? String ?: return@forEach
+            cb.isSelected = expr in xmlForEachNulls
+        }
+    }
+
+    /** R22 T-02：参数历史快照构建——paramValues 之外并入勾选态与 foreach 权威态：
+     *  - `__chk__:<id>` = "1"/"0"：条件/批量勾选**全量 1/0 编码**（可见组件逐个枚举 + enabledIds
+     *    残留项补 "1"）——只存 "1" 无法复现「关掉默认勾选」的方案；
+     *  - `__fnull__:<expr>` = "1"：foreach null 勾选（默认态=未勾，只存勾选侧）；
+     *  - `__fev__:<expr>` = 逗号分隔值：foreach 集合权威值（空值不存=默认展开）。 */
+    internal fun buildHistorySnapshot(): Map<String, String> {
+        val snapshot = paramValues.toMutableMap()
+        val seenToggles = mutableSetOf<String>()
+        (conditionCheckBoxes + batchCheckBoxes).forEach { cb ->
+            val id = cb.getClientProperty(PROP_TOGGLE_ID) as? String ?: return@forEach
+            seenToggles += id
+            snapshot["$SNAPSHOT_CHK$id"] = if (id in enabledIds) "1" else "0"
+        }
+        enabledIds.forEach { if (it !in seenToggles) snapshot["$SNAPSHOT_CHK$it"] = "1" }
+        xmlForEachNulls.forEach { snapshot["$SNAPSHOT_FNULL$it"] = "1" }
+        xmlForEachValues.forEach { (expr, values) ->
+            if (values.isNotEmpty()) snapshot["$SNAPSHOT_FEV$expr"] = values.joinToString(",")
+        }
+        return snapshot
     }
 
     /**
@@ -4157,7 +4232,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * T-Perf-24：序列化/持久化写挪 pooled 线程（EDT 只做取值快照）。 */
     private fun flushHistoryToCache() {
         val key = historyCacheKey() ?: return
-        val snapshot = paramValues.toMap()
+        val snapshot = buildHistorySnapshot()
         // headless 单测：同步执行保持既有测试语义
         if (ApplicationManager.getApplication().isUnitTestMode) {
             paramHistoryCache.save(key, snapshot)
@@ -4744,6 +4819,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun conditionValueFieldForTest(index: Int): JBTextField? = conditionValueFields.getOrNull(index)
     /** T-M23-04：第 index 个批量列级勾选复选框（toggle 列按 BatchModel 顺序）。 */
     internal fun batchCheckboxForTest(index: Int): JCheckBox? = batchCheckBoxes.getOrNull(index)
+
     /** T-M23.2 / T-SelToggle：批量「参数列」区全选/全不选切换按钮。 */
     internal fun batchToggleSelectButtonForTest(): JButton? = batchToggleSelectButton
     internal fun enabledIdsForTest(): Set<String> = enabledIds.toSet()
@@ -4781,9 +4857,70 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** P-05.1：当前 paramValues 序列化为 JSON（测试调用用）。 */
     internal fun serializeParamsToJsonForTest(): String = serializeParamsToJson()
 
+    /** R22 T-02/T-03 测试缝：历史快照构建（含勾选态/foreach 权威态特殊键）。 */
+    internal fun buildHistorySnapshotForTest(): Map<String, String> = buildHistorySnapshot()
+    /** R22 T-02/T-03 测试缝：召回（含勾选态/foreach 权威态还原）。 */
+    internal fun recallFromHistoryForTest() = recallFromHistory()
+    /** R22 T-02 测试缝：可见勾选框选中态（按 client property id/expr 查）。 */
+    internal fun toggleCheckSelectedForTest(id: String): Boolean? =
+        (conditionCheckBoxes + batchCheckBoxes).firstOrNull { it.getClientProperty(PROP_TOGGLE_ID) == id }?.isSelected
+    /** R22 T-02 测试缝：foreach null 勾选框选中态。 */
+    internal fun forEachNullSelectedForTest(expr: String): Boolean? =
+        xmlForEachNullBoxes.firstOrNull { it.getClientProperty(PROP_FOREACH_NULL) == expr }?.isSelected
+    /** R22 T-03 测试缝：foreach 值字段文本。 */
+    internal fun forEachValueFieldTextForTest(expr: String): String? =
+        xmlForEachValueFields.firstOrNull { it.first == expr }?.second?.text
+    /** R22 T-02/T-03 测试缝：权威状态集（召回断言用）。 */
+    internal fun forEachNullsForTest(): Set<String> = xmlForEachNulls.toSet()
+    internal fun forEachValuesForTest(): Map<String, List<String>> = xmlForEachValues.toMap()
+    /** R22 T-02 测试缝：程序化切换条件勾选（同步可见勾选框，等价用户点击的状态面）。 */
+    internal fun toggleCheckForTest(id: String, selected: Boolean) {
+        if (selected) enabledIds.add(id) else enabledIds.remove(id)
+        (conditionCheckBoxes + batchCheckBoxes).firstOrNull { it.getClientProperty(PROP_TOGGLE_ID) == id }?.isSelected = selected
+    }
+    /** R22 T-02 测试缝：程序化切换 foreach null 勾选。 */
+    internal fun toggleForEachNullForTest(expr: String, selected: Boolean) {
+        if (selected) xmlForEachNulls.add(expr) else xmlForEachNulls.remove(expr)
+        xmlForEachNullBoxes.firstOrNull { it.getClientProperty(PROP_FOREACH_NULL) == expr }?.isSelected = selected
+    }
+    /** R22 T-03 测试缝：程序化设置 foreach 权威值（同步可见字段文本）。 */
+    internal fun setForEachValuesForTest(expr: String, values: List<String>) {
+        xmlForEachValues[expr] = values
+        xmlForEachValueFields.firstOrNull { it.first == expr }?.second?.text = values.joinToString(",")
+    }
+    /** R22 T-03 测试缝：直驱 applyXmlForEachValues（等价字段 listener 链路的状态面）。 */
+    internal fun applyXmlForEachValuesForTest(expr: String, text: String) {
+        applyXmlForEachValues(XmlForEachView(expr), text)
+    }
+    /** R22 T-02 测试缝：清空权威状态（模拟新会话；组件在场便于断言视觉同步）。 */
+    internal fun clearStateForTest() {
+        enabledIds.clear()
+        paramValues.clear()
+        xmlForEachValues.clear()
+        xmlForEachNulls.clear()
+    }
+    /** R22 T-02 测试缝：快照灌入当前键的历史缓存（模拟既有方案）。 */
+    internal fun loadSnapshotForTest(snapshot: Map<String, String>) {
+        val key = historyCacheKey() ?: return
+        paramHistoryCache.save(key, snapshot)
+    }
+    /** R22 测试缝：当前预览 SQL。 */
+    internal fun historyCacheKeyForTest(): String? = historyCacheKey()
+
     companion object {
         /** O-4：通知分组 id（plugin.xml 注册，diff/copy 共用）。 */
         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+
+        /** R22 T-02/T-03：参数历史快照特殊键前缀（勾选态/foreach null/foreach 权威值；普通参数键
+         *  不以 `__` 开头——键空间约定，ParamHistoryCache 对值透明）。 */
+        private const val SNAPSHOT_CHK = "__chk__:"
+        private const val SNAPSHOT_FNULL = "__fnull__:"
+        private const val SNAPSHOT_FEV = "__fev__:"
+
+        /** R22 T-02：勾选框 client property 锚点（快照枚举 + 召回视觉同步）。 */
+        private const val PROP_TOGGLE_ID = "mpsv.toggleId"
+        private const val PROP_FOREACH_NULL = "mpsv.forEachNull"
+
         /** F-45：列信息标签页标题。 */
         private const val COLUMN_INFO_TAB_TITLE = "列信息"
 
