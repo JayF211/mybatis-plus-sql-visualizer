@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.ui
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -100,10 +101,13 @@ class ParamHistoryCacheTest {
 
     @Test
     fun testComputeKeyNullTableNameReturnsNull() {
+        // R22 T-01（D1=A）契约变更：无表名不再返回 null——以 SQL 文本规范化指纹为键持久化
+        // （缺口①修复；旧契约「无表名不缓存」随纯文本预览参数全丢的缺陷一并废除）。
         val cache = ParamHistoryCache()
         cache.clear()
-        assertNull("无表名应返回 null（不缓存）", cache.computeKey(null, "SELECT 1"))
-        assertNull("空表名应返回 null（不缓存）", cache.computeKey("", "SELECT 1"))
+        assertNotNull("无表名应以规范化指纹为键（R22 契约）", cache.computeKey(null, "SELECT 1"))
+        assertNotNull("空表名同上", cache.computeKey("", "SELECT 1"))
+        assertTrue(cache.computeKey(null, "SELECT 1")!!.startsWith("sql:"))
     }
 
     // ------------------------------------------------------------------
@@ -158,5 +162,29 @@ class ParamHistoryCacheTest {
         assertNotNull("新实例应从持久化恢复", recalled)
         assertEquals(mapOf("id" to "42", "status" to "active"), recalled)
         cache2.clear()
+    }
+
+    // ==== R22 T-01（D1=A）：无表名预览以 SQL 文本规范化指纹为键 ====
+
+    /** 缺口①修复：无表名 computeKey 恒非 null（改前返回 null 不缓存——纯文本预览参数全丢）。 */
+    @Test
+    fun `R22_T01_无表名_键非空且同SQL同键`() {
+        val cache = ParamHistoryCache()
+        val k1 = cache.computeKey(null, "SELECT * FROM custom_dao_table WHERE a = ?")
+        assertNotNull("无表名预览应有键（dedupeKey 同源规范化指纹）", k1)
+        assertTrue("键应以 sql: 前缀标识无表名形态", k1!!.startsWith("sql:"))
+        assertEquals("同 SQL 同键", k1, cache.computeKey(null, "SELECT * FROM custom_dao_table WHERE a = ?"))
+        // 规范化口径：空白差异折叠（dedupeKey 同源）
+        assertEquals("空白差异折叠后同键", k1, cache.computeKey(null, "SELECT  *  FROM custom_dao_table WHERE a = ?"))
+        assertNotEquals("不同 SQL 不同键", k1, cache.computeKey(null, "SELECT 1"))
+    }
+
+    /** 存量兼容：有表名键形态逐字节不变（tableName:fingerprint）。 */
+    @Test
+    fun `R22_T01_有表名_现键兼容`() {
+        val cache = ParamHistoryCache()
+        val key = cache.computeKey("t_user", "SELECT * FROM t_user WHERE id = ?")
+        assertNotNull(key)
+        assertTrue("有表名键保持 tableName: 前缀", key!!.startsWith("t_user:"))
     }
 }

@@ -33,9 +33,19 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
      * @param rawSql    原始 SQL（用于计算指纹）
      * @return 缓存键，或 null（无表名时不缓存）
      */
+    /**
+     * 计算缓存键（R22 T-01，D1=A 定案）：有表名 = `tableName:fingerprint`（存量兼容）；
+     * **无表名 = `sql:` + SQL 文本规范化指纹**（dedupeKey 同源口径——`normalizeSqlWhitespace`
+     * + `sqlFingerprint`），纯文本/自定义 DAO 预览的调试参数不再丢失。
+     *
+     * @param tableName 表名（null 表示纯文本预览——R22 起以规范化指纹为键持久化）
+     * @param rawSql    原始 SQL（用于计算指纹）
+     * @return 缓存键（恒非 null——rawSql 空串也有指纹；调用方仍可按需判空）
+     */
     fun computeKey(tableName: String?, rawSql: String): String? {
-        if (tableName.isNullOrEmpty()) return null
-        return "$tableName:${fingerprint(rawSql)}"
+        if (!tableName.isNullOrEmpty()) return "$tableName:${fingerprint(rawSql)}"
+        val normalized = cn.song.mybatisplus.visualizer.log.normalizeSqlWhitespace(rawSql)
+        return "sql:${cn.song.mybatisplus.visualizer.log.sqlFingerprint(normalized)}"
     }
 
     /**

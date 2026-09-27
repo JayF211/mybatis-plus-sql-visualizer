@@ -4112,7 +4112,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         applyMetaTruncation()
     }
 
-    /** P-05：计算当前预览的缓存键（无表名返回 null，不缓存）。 */
+    /** P-05：计算当前预览的缓存键（R22 T-01 起：无表名以 SQL 文本规范化指纹为键，恒非 null）。 */
     private fun historyCacheKey(): String? {
         val result = current ?: return null
         val tableName = result.tableName
