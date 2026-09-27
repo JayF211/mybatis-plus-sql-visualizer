@@ -290,38 +290,171 @@ intellijPlatformTesting {
             .filter { (_, _, text) -> text.contains("CopyPasteManager") || text.contains("systemClipboard") }
             .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
             .toSet()
-        // 贪心均衡：亲和类先固定第 1 片（discoveredTestClasses 已字典序，分区确定性不变），
-        // 其余逐类放入当前最轻片（并列取最小下标，minByOrNull 语义即确定性）
-        val shardAssignment: List<List<String>> = run {
+
+        // T-TestPerf8 S3：头部巨类方法级跨片拆分（-PtestSplitHeavy=true 开启，默认关）。
+        // 均衡器以类为最小调度单元，头部巨类是单片内不可分割的原子载荷（SqlPreviewPanelTest
+        // 43.4s=片均值 35%，T7 收口逐片 ±7% 失衡的主分量）。开启时把候选类的测试方法按实测
+        // 逐例权重贪心对半拆成两片段：主体片 include 全类 + exclude 片段 B 方法清单；片段 B
+        // （include "FQCN.method" 清单）挂到除主体片外最轻的片。
+        // 红线：零删例（两片段并集=该类全集，同一份数据配置期生成、天然互补）、零断言改动
+        // （不动测试源码）；隔离语义只增不减（两 JVM 各自完整平台 bootstrap，TestCase 每例
+        // 新实例 setUp/tearDown 不变）。数据驱动自维护：新增用例不在片段 B 清单→自然落主体片；
+        // 已删用例的残留 pattern 无害；数据缺失/半截 XML/例数不足→退化不拆，确定性不破坏。
+        // 安全前提（20260928 实施轮预检口径）：候选类不得含剪贴板亲和（跨片会复刻互抢 flake）、
+        // 不得含 companion/@BeforeClass 类内共享状态（V4，逐候选源码审计）。
+        fun parseTestCaseEntries(xml: File): List<Pair<String, Double>>? = runCatching {
+            Regex("""<testcase name="([^"]+)"[^>]*?time="([\d.]+)"""")
+                .findAll(xml.readText())
+                .map { it.groupValues[1] to it.groupValues[2].toDouble() }
+                .toList()
+        }.getOrNull()?.takeIf { it.isNotEmpty() }
+
+        val testSplitHeavy = providers.gradleProperty("testSplitHeavy").orNull?.toBoolean() ?: false
+        val splitHeavyClassCandidates = listOf(
+            "cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelTest",
+        )
+        val splitResultDirs = sequenceOf(file("build/test-results/test")) +
+            (1..testShardCount).asSequence().map { file("build/test-results/testShard$it") }
+        // 拆分计划：FQCN -> 该类逐例 (method, seconds)。门槛：例数 ≥30（太小的类不值 exclude/
+        // include 维护面）；候选含机器全局亲和类则跳过；testShardCount<2 无处可搬不拆。
+        val splitPlan: Map<String, List<Pair<String, Double>>> =
+            if (!testSplitHeavy || testShardCount < 2) emptyMap() else {
+                splitHeavyClassCandidates
+                    .filter { it !in machineGlobalAffinityClasses }
+                    .mapNotNull { fqcn ->
+                        val xmls = splitResultDirs.map { File(it, "TEST-$fqcn.xml") }
+                            .filter { it.isFile }.toList()
+                        val latest = xmls.maxByOrNull { it.lastModified() } ?: return@mapNotNull null
+                        val entries = parseTestCaseEntries(latest) ?: return@mapNotNull null
+                        // 拆分开启后同类 XML 一分为二分布两目录：mtime 最新半 + 互补半合并成全集
+                        val merged = if (xmls.size > 1) {
+                            (entries + xmls.filter { it != latest }
+                                .maxByOrNull { it.lastModified() }
+                                ?.let { parseTestCaseEntries(it) ?: emptyList() }.orEmpty())
+                                .distinctBy { it.first }
+                        } else entries
+                        if (merged.size < 30) null else fqcn to merged
+                    }.toMap()
+            }
+        // 片段划分：逐例按（权重降序, 名字升序）贪心进轻半，轻半=跨片的片段 B。
+        val splitFragments: Map<String, Pair<List<Pair<String, Double>>, List<Pair<String, Double>>>> =
+            splitPlan.mapValues { (_, entries) ->
+                var ta = 0.0
+                var tb = 0.0
+                val fa = mutableListOf<Pair<String, Double>>()
+                val fb = mutableListOf<Pair<String, Double>>()
+                entries.sortedWith(compareByDescending<Pair<String, Double>> { it.second }.thenBy { it.first })
+                    .forEach { e ->
+                        if (ta <= tb) { fa += e; ta += e.second } else { fb += e; tb += e.second }
+                    }
+                fa to fb
+            }
+        // 拆分类的类权重=各结果目录最新 XML 之和（逐类 K 中位数会把半截 XML 当全类——
+        // 片段 XML 各含约一半用例，mtime 取新只读到一截）。
+        val effectiveWeights: Map<String, Double> = if (splitFragments.isEmpty()) durationWeights else {
+            durationWeights.mapValues { (fqcn, w) ->
+                if (fqcn !in splitFragments) w
+                else splitResultDirs.mapNotNull { d ->
+                    val f = File(d, "TEST-$fqcn.xml")
+                    if (f.isFile) parseTestSuiteAttrs(f)?.get("time")?.toDoubleOrNull() else null
+                }.sum().takeIf { it > 0.0 } ?: w
+            }
+        }
+        // 贪心均衡（S3 片段感知）：亲和类先固定第 1 片；其余逐项放入当前最轻片（并列取最小
+        // 下标，确定性）。拆分类产生两项：主体（权重=全类−片段B）与片段B——排序键
+        // （权重降序, 非片段优先, 名字升序）保证主体先落位；片段B落位时排除主体所在片。
+        class ShardPlan(
+            val classes: List<List<String>>,
+            val loads: List<Double>,
+            val fragExcludes: Map<Int, List<String>>,
+            val fragIncludes: Map<Int, List<String>>,
+            val fragHome: Map<String, Int>,
+            val fragTarget: Map<String, Int>,
+        )
+        val plan = run {
             val shards = List(testShardCount) { mutableListOf<String>() }
             val loads = DoubleArray(testShardCount)
+            val fragExcludes = HashMap<Int, MutableList<String>>()
+            val fragIncludes = HashMap<Int, MutableList<String>>()
+            val classShard = HashMap<String, Int>()
+            val fragOfHome = HashMap<String, Int>()
+            val fragOfTarget = HashMap<String, Int>()
             discoveredTestClasses.filter { it in machineGlobalAffinityClasses }.forEach { name ->
                 shards[0] += name
-                loads[0] += durationWeights[name] ?: 0.0
+                loads[0] += effectiveWeights[name] ?: 0.0
+                classShard[name] = 0
             }
-            durationWeights.entries
+            val items = ArrayList<Triple<String, Double, String?>>() // (名, 权重, 非null=片段B所属类)
+            effectiveWeights.entries
                 .filter { it.key !in machineGlobalAffinityClasses }
-                .sortedWith(compareByDescending<Map.Entry<String, Double>> { it.value }.thenBy { it.key })
-                .forEach { entry ->
+                .forEach { (name, w) ->
+                    val frag = splitFragments[name]
+                    if (frag == null) items += Triple(name, w, null)
+                    else {
+                        val fb = frag.second
+                        val fbW = fb.sumOf { it.second }
+                        items += Triple(name, w - fbW, null)
+                        items += Triple("$name#fragB", fbW, name)
+                    }
+                }
+            items.sortedWith(
+                compareByDescending<Triple<String, Double, String?>> { it.second }
+                    .thenBy { if (it.third != null) 1 else 0 }
+                    .thenBy { it.first },
+            ).forEach { (name, w, fragOf) ->
+                if (fragOf == null) {
                     val target = loads.indices.minByOrNull { loads[it] }!!
-                    shards[target] += entry.key
-                    loads[target] += entry.value
+                    shards[target] += name
+                    loads[target] += w
+                    classShard[name] = target
+                } else {
+                    val home = classShard[fragOf] ?: 0
+                    val target = loads.indices.filter { it != home }.minByOrNull { loads[it] }!!
+                    shards[target] += name
+                    loads[target] += w
+                    splitFragments[fragOf]!!.second.forEach { (method, _) ->
+                        val pattern = "$fragOf.$method"
+                        fragExcludes.getOrPut(home) { mutableListOf() } += pattern
+                        fragIncludes.getOrPut(target) { mutableListOf() } += pattern
+                    }
+                    fragOfHome[fragOf] = home
+                    fragOfTarget[fragOf] = target
                 }
-            shards
+            }
+            ShardPlan(shards, loads.toList(), fragExcludes, fragIncludes, HashMap(fragOfHome), HashMap(fragOfTarget))
         }
-        logger.lifecycle(
-            "testShards: $testShardCount shards duration-balanced, loads=" +
-                shardAssignment.indices.joinToString(" ") { i ->
-                    "shard${i + 1}=%.1fs/%dclasses".format(
-                        shardAssignment[i].sumOf { durationWeights[it] ?: 0.0 },
-                        shardAssignment[i].size,
-                    )
-                }
-        )
+        val shardAssignment = plan.classes
+        // task{} 惰性块只捕获可序列化的纯 Map/List（局部类实例进 CC 序列化有拒收风险）
+        val fragExcludesByShard: Map<Int, List<String>> =
+            plan.fragExcludes.mapValues { (_, v) -> v.toList() }
+        val fragIncludesByShard: Map<Int, List<String>> =
+            plan.fragIncludes.mapValues { (_, v) -> v.toList() }
+        if (splitFragments.isEmpty()) {
+            logger.lifecycle(
+                "testShards: $testShardCount shards duration-balanced, loads=" +
+                    plan.loads.indices.joinToString(" ") { i ->
+                        "shard${i + 1}=%.1fs/%dclasses".format(plan.loads[i], shardAssignment[i].size)
+                    },
+            )
+        } else {
+            splitFragments.forEach { (fqcn, frag) ->
+                val (fa, fb) = frag
+                val home = plan.fragHome[fqcn]?.plus(1) ?: "?"
+                val target = plan.fragTarget[fqcn]?.plus(1) ?: "?"
+                logger.lifecycle(
+                    "testShards S3 split $fqcn: fragA=%.1fs/%dm + fragB=%.1fs/%dm (union=%d)，主体片=shard$home 片段B=shard$target"
+                        .format(fa.sumOf { it.second }, fa.size, fb.sumOf { it.second }, fb.size, fa.size + fb.size),
+                )
+            }
+            logger.lifecycle(
+                "testShards: $testShardCount shards duration-balanced (S3 split on), loads=" +
+                    plan.loads.indices.joinToString(" ") { i ->
+                        "shard${i + 1}=%.1fs/%dclasses".format(plan.loads[i], shardAssignment[i].size)
+                    },
+            )
+        }
         // T-TestPerf4：喂给聚合任务的两份配置期产物（见 shardPlanExpectedLoads 注释）
-        shardPlanExpectedLoads = shardAssignment.indices
-            .map { i -> "%.1f".format(shardAssignment[i].sumOf { durationWeights[it] ?: 0.0 }) }
-            .joinToString("|")
+        shardPlanExpectedLoads = plan.loads.joinToString("|") { "%.1f".format(it) }
         shardPlanClasses = discoveredTestClasses.joinToString("\n")
         for (i in 1..testShardCount) {
             val idx = i - 1
@@ -339,6 +472,10 @@ intellijPlatformTesting {
                     classpath = classpath + files(sourceSets.named("mcpStub").map { it.output })
                     filter {
                         shardAssignment[idx].forEach { includeTestsMatching(it) }
+                        // T-TestPerf8 S3 拆分互补过滤：主体片 exclude 片段 B 方法；片段 B 所在片
+                        // include 之。两份清单出自同一份片段集（配置期生成），天然互补防双跑/漏跑。
+                        fragExcludesByShard[idx]?.forEach { excludeTestsMatching(it) }
+                        fragIncludesByShard[idx]?.forEach { includeTestsMatching(it) }
                     }
                     // 并发审计锚点：起止毫秒时间戳，验证一命令多片是否真并行（T-TestPerf-05）
                     doFirst { logger.lifecycle("testShard$i START ${System.currentTimeMillis()}") }
