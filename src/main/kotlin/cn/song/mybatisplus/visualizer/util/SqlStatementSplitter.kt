@@ -10,7 +10,9 @@ package cn.song.mybatisplus.visualizer.util
  *  - 单/双引号内 `;` 不切分（含反斜杠转义与 SQL 标准 `''` 加倍——加倍形态按开闭交替天然受保护）；
  *  - `--` 行注释与块注释内的 `;` 不切分（[split] 注释随语句保留——原生控制台接受注释；
  *    [splitStripped] 连注释一并剥离——分类/判据消费）；
- *  - **括号深度**：`(…;…)` 括号内的 `;` 不切分（存储过程参数/函数实参形态）；
+ *  - **括号深度**：`(…;…)` 括号内的 `;` 不切分（存储过程参数/函数实参形态）；全角括号
+ *    （U+FF08/09，IME 误输形态）同栈计数——`（…)` 混对误切、`(…）` 混对 parenDepth
+ *    泄漏吞并后续语句（O-76，字符串态先行已保证字符串内全角字符不进此分支）；
  *  - **BEGIN/END 块感知**（大小写不敏感，字符串/注释内不算）：块内 `;` 不切分——仅当后方
  *    存在配对 END 时启用（保守：识别不到配对 END 按顶层切分原样，不吞后续语句）；
  *    `BEGIN` 后随 TRAN/TRANSACTION/DISTRIBUTED/DIALOG/CONVERSATION 是事务/会话形态
@@ -275,14 +277,14 @@ object SqlStatementSplitter {
                     }
                     i++
                 }
-                c == '(' -> {
+                c == '(' || c == '（' -> { // O-76 T-SFP-01：全角括号（U+FF08，IME 误输）同栈计数
                     fireImplicitBoundary() // T-STG-02
                     flushWord()
                     parenDepth++
                     sb.append(c)
                     i++
                 }
-                c == ')' -> {
+                c == ')' || c == '）' -> { // O-76 T-SFP-01：全角括号（U+FF09）同栈计数
                     fireImplicitBoundary() // T-STG-02
                     flushWord()
                     parenDepth = (parenDepth - 1).coerceAtLeast(0)

@@ -795,4 +795,43 @@ class SqlStatementSplitterTest {
     fun `PS7_01_嵌套BEGIN内层IF整段一条`() {
         assertEquals(1, split("BEGIN\n  BEGIN\n    IF 1=1 THEN NULL; END IF;\n  END;\nEND;").size)
     }
+
+    // ==== O-76 T-SFP-02：全角括号（U+FF08/09）参与括号深度 ====
+
+    /** 形态 A（`（…)` 混对，误切）：`（` 抬深度后 `;` 受保护——一条坏语句不再碎成两条。 */
+    @Test
+    fun `O76_形态A_全角开混ASCII闭_分号受保护`() {
+        val parts = split("INSERT INTO t VALUES （1, 2; 3)")
+        assertEquals(1, parts.size)
+    }
+
+    /** 形态 B（`(…）` 混对，吞并——核心反向验证载体）：ASCII `(` 抬深度后全角 `）` 归零，
+     *  后续语句不再被吞并成一条。改前 parenDepth 泄漏恒正 → 1 段；改后 2 段。 */
+    @Test
+    fun `O76_形态B_ASCII开全角闭_后续语句不吞并`() {
+        val parts = split("SELECT * FROM t WHERE id IN (1; 2）; SELECT 3;")
+        assertEquals(2, parts.size)
+    }
+
+    /** 正对照（纯全角对）：深度恒 0，切分边界与无括号一致——修复不得改变此形态段数。 */
+    @Test
+    fun `O76_纯全角对_边界不变`() {
+        val a = split("INSERT INTO t VALUES （1, 2); SELECT 1")
+        val b = split("SELECT （a; b） FROM t; SELECT 2;")
+        assertEquals(2, a.size)
+        assertEquals(2, b.size)
+    }
+
+    /** 嵌套混合：全角包 ASCII——内层 `;` 受 ASCII 括号（经全角抬升的深度栈）保护，1 段。 */
+    @Test
+    fun `O76_嵌套混合_全角包ASCII内层分号受保护`() {
+        assertEquals(1, split("f（(1; 2)）").size)
+    }
+
+    /** 字符串态先行：字符串内全角括号不进深度分支。 */
+    @Test
+    fun `O76_字符串内全角括号_不影响深度`() {
+        val parts = split("INSERT INTO t VALUES ('a（b')；SELECT 1")
+        assertEquals(1, parts.size)
+    }
 }
