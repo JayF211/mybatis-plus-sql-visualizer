@@ -28,8 +28,8 @@ import javax.swing.JPanel
  *
  * T-McpGateDynamicFilter（O-68）订正与增补：getEnabledToolsets 过滤只覆盖 ReflectionToolsProvider
  * 路径，agent 真正看到的外部会话清单走 getMcpToolsFiltered 过滤层——本页门控经
- * SqlVisualizerToolGateFilterProvider（mcpServer.mcpToolFilterProvider EP，mcp-filter-optional.xml
- * 注册、since-build="262" 门控）同步驱动外部路径，两条路径均出自 McpToolGate 单一真相源。
+ * SqlVisualizerToolGateFilterProvider（mcpServer.mcpToolFilterProvider EP，经 McpGateFilterRegistrar
+ * 程序化注册，平台 mcpServer 类可达性门控）同步驱动外部路径，两条路径均出自 McpToolGate 单一真相源。
  */
 class McpConfigurable : Configurable {
 

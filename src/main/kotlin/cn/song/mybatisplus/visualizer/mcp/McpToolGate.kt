@@ -13,8 +13,9 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
  *  2. **外部会话清单路径**：`McpServerService.getMcpToolsFiltered` = 基座清单 +
  *     `McpToolFilterProvider` EP 过滤层 + 平台设置页偏好——该链**不经过** `isEnabled`。
  *     故 O-68 新增 [SqlVisualizerToolGateFilterProvider] 注册
- *     `com.intellij.mcpServer.mcpToolFilterProvider`（注册文件 mcp-filter-optional.xml 以根节点
- *     since-build="262" 门控：253 线本地 idea-2025.3.5 mcpserver.jar 实测无此 EP），以
+ *     `com.intellij.mcpServer.mcpToolFilterProvider`（经 McpGateFilterRegistrar 程序化注册——
+ *     mcp-filter-optional.xml 已删除；253 线本地 idea-2025.3.5 mcpserver.jar 实测无此 EP，
+ *     注册代码以平台 mcpServer 类可达性门控），以
  *     [shouldHideFromExternalToolsList] 在过滤层动态隐藏自家工具。
  *
  * 设置切换在两条路径均为下一次工具列表/调用重新求值，无需重启 IDE。
