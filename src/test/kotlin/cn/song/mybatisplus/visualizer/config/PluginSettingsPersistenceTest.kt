@@ -166,7 +166,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // T-PreviewWhitespaceToggle O-44a：空白符可视化开关 +1（界面节，默认关＝不设置该属性）
             // O-58：列名数据源校正开关 +1（表名映射节）
             // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关 +1（界面节）
-            assertEquals("复选框总数应为 31", 31, texts.size)
+            // R2 W3 历史工作流：gutter 六分组开关 +6（mapperXml/annotation/jpaHql/jdbc/inlineFallback/other）
+            assertEquals("复选框总数应为 37", 37, texts.size)
         } finally {
             settings.state.language = old
         }

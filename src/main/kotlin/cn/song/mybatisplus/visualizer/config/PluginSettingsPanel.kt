@@ -1331,8 +1331,17 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /**
      * 语言切换后重建表单（设置页自身文案即时刷新；控件值从配置回读）。
+     * 六组 gutter 复选框为字段级实例（reset/apply 引用，随 rebuild 复用不重建）——
+     * 须在此显式刷新文本，否则切语言后残留旧语言文案（testShard3
+     * PluginSettingsPersistenceTest.testLanguageWriteThroughRefreshesCheckboxTexts 真红实证）。
      */
     fun rebuild() {
+        gutterGroupMapperXmlCheck.text = MpSqlVisualizerBundle.message("settings.gutterGroup.mapperXml")
+        gutterGroupAnnotationCheck.text = MpSqlVisualizerBundle.message("settings.gutterGroup.annotation")
+        gutterGroupJpaHqlCheck.text = MpSqlVisualizerBundle.message("settings.gutterGroup.jpaHql")
+        gutterGroupJdbcCheck.text = MpSqlVisualizerBundle.message("settings.gutterGroup.jdbc")
+        gutterGroupInlineFallbackCheck.text = MpSqlVisualizerBundle.message("settings.gutterGroup.inlineFallback")
+        gutterGroupOtherCheck.text = MpSqlVisualizerBundle.message("settings.gutterGroup.other")
         rootPanel.removeAll()
         buildSections(rootPanel)
         reset()
