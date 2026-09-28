@@ -44,4 +44,14 @@ class ResultMapColumnsTest {
         val out = ResultMapColumns.suggest(listOf("b", "a"), "")
         assertEquals(listOf("b", "a"), out)
     }
+
+    /** D5 后半接线验证：resultMap column 补全的真实调用链语料——提取+前缀+驼峰排序组合。 */
+    @Test
+    fun testD5后半_组合语料() {
+        val cols = ResultMapColumns.extractColumns(mapper)
+        val out = ResultMapColumns.suggest(cols, "order")
+        assertEquals("order_id", out.first())
+        val out2 = ResultMapColumns.suggest(cols, "user")
+        assertEquals("user_name", out2.first())
+    }
 }
