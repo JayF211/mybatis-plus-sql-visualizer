@@ -294,6 +294,21 @@ ORDER BY t1.create_time DESC
 
 弹窗默认尺寸按屏幕比例自适应（宽 62% / 高 65%，下限 900×600），可手动拉伸并记忆尺寸；左侧动态条件复选框 + 参数输入（参数按签名给类型占位提示——数字 / 日期 / 集合 / 对象，形态不符给淡色警示；未填写的参数默认保留 `?` 待填，「空参数填充策略」可切 NULL / 空字符串），右侧 SQL 可编辑（多 tab：SQL / 联表关系图 / 列信息）。工具栏提供格式化、关键字换行、竖向排列、执行计划（仅对只读查询包装 EXPLAIN，DML / DDL 明确拒绝并提示）、刷新等操作，「更多」菜单收纳低频动作（回滚 SQL、导入参数、差异对比、分享）；回滚 SQL 对当前 INSERT 推导可执行逆向语句（整行等值谓词 DELETE），UPDATE / DELETE 因缺 before-image 不自动生成，改走快照查询 + 粘贴回填的人工恢复路径（SQL Server / 达梦的回填 INSERT 同样自动带 `SET IDENTITY_INSERT` 包装，取不到自增列时显式告警不再静默产出必失败的语句）。执行走 Ultimate 原生控制台内嵌；含 `${}` 直替的预览显示注入提示横幅，执行 / EXPLAIN 前弹一次确认；UPDATE 预览 SET 各项带 `(new)` 行尾标注、INSERT 预览在各 VALUES 项旁标出目标列名（列-值错位一眼可见）；执行报错时给出 SQLState / 驱动错误码与出错位置，可一键定位到出错语句。
 
+## 兼容矩阵
+
+| JetBrains IDE | 兼容性（verifyGate 实测） | 说明 |
+|---|---|---|
+| IDEA / IU 2024.3（243） | Compatible | since-build 243 起步 |
+| IDEA / IU 2025.1~2025.3（253） | Compatible | |
+| IDEA / IU 2026.1~2026.2（262） | Compatible | 含 MCP 动态化与增强捕获全链 |
+
+- 三目标读数随每次发行由 `verifyGate` 门禁（构建校验 + 插件验证器离线三目标）实测产出，
+  读数随批次落 `docs/验收文档/`，本表随发行同步更新。
+- Community 版可用（部分 Ultimate 专属能力如内嵌执行控制台自动降级，功能主体不受影响）。
+- 数据库方言：MySQL / PostgreSQL / Oracle / SQL Server / H2 / SQLite / MariaDB / 达梦（DM） /
+  人大金仓（KingBase）/ OceanBase / openGauss 共 11 种（信创场景含达梦与金仓真机验证）。
+
+
 ## 安装常见问题
 
 **Q: 从插件市场安装时提示 "Remote host terminated the handshake"？**
