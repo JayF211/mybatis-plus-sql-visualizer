@@ -86,9 +86,20 @@ class PluginSettingsFolderConfigurable : Configurable {
             border = JBUI.Borders.empty()
         }
 
+        // R20（W3 可发现性修缮包）：落地页价值展示——三行能力矩阵 + 官网链接
+        // （原页=搜索框+子页列表，用户不知道插件能干什么；「设置两层深」的兜底从搜索变一眼）
+        val valuePanel = JPanel(GridLayout(0, 1)).apply {
+            border = JBUI.Borders.empty(10, 16, 10, 16)
+            add(JBLabel("<html><b>增强捕获</b>：运行即采集真实参数、耗时、影响行数与目标库</html>"))
+            add(JBLabel("<html><b>免库预览</b>：Wrapper / mapper XML / JPA·HQL / 注解 SQL 写前静态还原</html>"))
+            add(JBLabel("<html><b>MCP 十工具</b>：AI agent 直连渲染 / 审计 / 执行计划（Ultimate）</html>"))
+            add(JBLabel("<html>兼容矩阵与文档：<a href=\"https://sql-visualizer.jvtools.cn\">sql-visualizer.jvtools.cn</a></html>"))
+        }
+
         return JPanel(BorderLayout()).apply {
             add(searchPanel, BorderLayout.NORTH)
             add(scrollPane, BorderLayout.CENTER)
+            add(valuePanel, BorderLayout.SOUTH)
         }
     }
 
