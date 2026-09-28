@@ -341,8 +341,10 @@
              候选=mapper 全文 SELECT 投影列名，前缀/驼峰近邻/Levenshtein 排序；非结果映射上下文零候选） -->
         <completion.contributor language="XML"
                                 implementationClass="cn.song.mybatisplus.visualizer.ui.inject.ResultMapColumnCompletionContributor"/>
-        <!-- T-XmlSynHi D5：# / $ 敲键自动闭合 {}（先查后插防与共存插件双开双插；门控同 injector） -->
-        <typedHandlerDelegate implementation="cn.song.mybatisplus.visualizer.ui.inject.ParamBraceTypedHandler"/>
+        <!-- T-XmlSynHi D5：# / $ 敲键自动闭合 {}（先查后插防与共存插件双开双插；门控同 injector）。
+             EP 名=typedHandler（TypedHandlerDelegate.EP_NAME 实际常量，243/253/262 三版 javap 实测一致；
+             历史误写 typedHandlerDelegate 会被平台按未知 EP 静默忽略——handler 永不触发） -->
+        <typedHandler implementation="cn.song.mybatisplus.visualizer.ui.inject.ParamBraceTypedHandler"/>
         <syntaxHighlighterFactory language="MpSqlMapper"
                                   implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperSyntaxHighlighterFactory"/>
     </extensions>

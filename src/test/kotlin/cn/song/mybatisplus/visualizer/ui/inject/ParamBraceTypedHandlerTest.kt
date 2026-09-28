@@ -85,4 +85,55 @@ class ParamBraceTypedHandlerTest : BasePlatformTestCase() {
             result,
         )
     }
+
+    @Test
+    fun testD5_子标签标记区内_不接管() {
+        // 20260928 真机实证：光标落 <trim prefix=|"where"> 属性间隙（父=select 语句标签），
+        // 旧宽判（parentTag∈语句标签）误接管闭合 #{}——子标签自身标记区必须放行
+        val base = "<mapper namespace=\"n\">\n  <select id=\"a\">SELECT 1\n    <trim <caret>prefix=\"where\"></trim>\n  </select>\n</mapper>"
+        val caret = base.indexOf("<caret>")
+        val text = base.replace("<caret>", "")
+        openFile(text, caret)
+        val handler = ParamBraceTypedHandler()
+        val result = handler.beforeCharTyped('#', project, myFixture.editor, myFixture.file, myFixture.file.fileType)
+        assertEquals(
+            "子标签标记区内不接管（offset < 子标签 endOffset）",
+            com.intellij.codeInsight.editorActions.TypedHandlerDelegate.Result.CONTINUE,
+            result,
+        )
+    }
+
+    @Test
+    fun testD5_子标签边界之后_接管() {
+        // `</if>` 右侧属父语句内容区，敲 # 应接管（offset >= 子标签 endOffset）
+        val base = "<mapper namespace=\"n\">\n  <update id=\"u\">update t\n    <if></if><caret>\n  </update>\n</mapper>"
+        val caret = base.indexOf("<caret>")
+        val text = base.replace("<caret>", "")
+        openFile(text, caret)
+        val handler = ParamBraceTypedHandler()
+        val result = handler.beforeCharTyped('#', project, myFixture.editor, myFixture.file, myFixture.file.fileType)
+        assertEquals(
+            "子标签边界之后（父语句内容区）接管",
+            com.intellij.codeInsight.editorActions.TypedHandlerDelegate.Result.STOP,
+            result,
+        )
+    }
+
+    @Test
+    fun testD5_pluginXml_typedHandler_EP接线在场() {
+        // 真机实证（20260928）：TypedHandlerDelegate.EP_NAME 实际常量=「com.intellij.typedHandler」
+        // （243/253/262 三版 javap 一致）；写成「typedHandlerDelegate」会被平台按未知 EP **静默忽略**，
+        // handler 永不触发且单测（直接实例化，不经 EP 分发）探不到——守卫钉住接线本身。
+        val xml = javaClass.classLoader.getResourceAsStream("META-INF/plugin.xml")!!
+            .readBytes().toString(Charsets.UTF_8)
+        org.junit.Assert.assertTrue(
+            "plugin.xml 须含 <typedHandler implementation=…ParamBraceTypedHandler>（EP 真名）",
+            Regex("<typedHandler\\s+implementation=\"cn\\.song\\.mybatisplus\\.visualizer\\.ui\\.inject\\.ParamBraceTypedHandler\"")
+                .containsMatchIn(xml),
+        )
+        org.junit.Assert.assertFalse(
+            "历史误名 typedHandlerDelegate（未知 EP 被静默忽略）不得回潮",
+            Regex("<typedHandlerDelegate\\s").containsMatchIn(xml),
+        )
+    }
 }
