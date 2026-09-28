@@ -1,0 +1,64 @@
+package cn.song.mybatisplus.visualizer.log
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * R4 导出格式化纯逻辑测试（CSV 转义 / TSV 扁平化 / TXT 保形）。
+ */
+class SqlExportServiceTest {
+
+    private val row = SqlExportRow(
+        time = "2026-09-27 10:00:00.123",
+        sql = "SELECT * FROM t WHERE a = 'x'",
+        source = "UserMapper.java:10",
+        durationMs = 42L,
+    )
+
+    @Test
+    fun testCsv_常规行() {
+        val out = SqlExportService.format(listOf(row), SqlExportFormat.CSV)
+        assertEquals(
+            "time,source,duration_ms,sql\n" +
+                "2026-09-27 10:00:00.123,UserMapper.java:10,42,SELECT * FROM t WHERE a = 'x'\n",
+            out,
+        )
+    }
+
+    @Test
+    fun testCsv_字段含逗号引号换行_包裹与加倍() {
+        val tricky = SqlExportRow(
+            time = "t1",
+            sql = "SELECT 'a,b' FROM t -- 注释\"引号\"\n第二行",
+            source = "",
+            durationMs = null,
+        )
+        val out = SqlExportService.format(listOf(tricky), SqlExportFormat.CSV)
+        // sql 字段含逗号/引号/换行 → 整体包裹 + 内部双引号加倍；空 source/duration 为空字段
+        assertTrue(out.contains("\"SELECT 'a,b' FROM t -- 注释\"\"引号\"\"\n第二行\""))
+        assertTrue(out.contains("t1,,,\"SELECT"))
+    }
+
+    @Test
+    fun testTsv_字段内tab与换行扁平化() {
+        val tricky = SqlExportRow("t1", "SELECT\ta\nFROM\tb", "", 7L)
+        val out = SqlExportService.format(listOf(tricky), SqlExportFormat.TSV)
+        assertEquals("time\tsource\tduration_ms\tsql\nt1\t\t7\tSELECT a FROM b\n", out)
+    }
+
+    @Test
+    fun testTxt_多行SQL保形与序号() {
+        val multi = SqlExportRow("t1", "SELECT 1;\nUPDATE t SET a = 1", "UserMapper.java:3", 12L)
+        val out = SqlExportService.format(listOf(multi, row), SqlExportFormat.TXT)
+        assertTrue(out.contains("-- === SQL #1 ==="))
+        assertTrue(out.contains("-- === SQL #2 ==="))
+        assertTrue(out.contains("-- time: t1 | source: UserMapper.java:3 | 12 ms"))
+        assertTrue(out.contains("UPDATE t SET a = 1\n"))
+    }
+
+    @Test
+    fun testCsv_空行集_仅表头() {
+        assertEquals("time,source,duration_ms,sql\n", SqlExportService.format(emptyList(), SqlExportFormat.CSV))
+    }
+}
