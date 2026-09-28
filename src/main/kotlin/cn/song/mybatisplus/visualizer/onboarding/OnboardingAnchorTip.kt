@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
+import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
@@ -102,14 +103,28 @@ class OnboardingAnchorTip : ProjectActivity {
             ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed) return@invokeLater
                 runCatching {
-                    NotificationGroupManager.getInstance()
+                    val notification = NotificationGroupManager.getInstance()
                         .getNotificationGroup(NOTIFICATION_GROUP_ID)
                         .createNotification(
                             MpSqlVisualizerBundle.message("onboarding.anchorTip.title"),
                             MpSqlVisualizerBundle.message("onboarding.anchorTip.content"),
                             NotificationType.INFORMATION,
                         )
-                        .notify(project)
+                    // R21（可发现性修缮包）：通知动作化——「立即试用」一键直达预览（原来只有文字，
+                    // 用户要自己翻快捷键）。ConvertToSql 需 editor data context，经 tryToExecute 从
+                    // 焦点解析（balloon 非模态不抢编辑器焦点，命中通知时用户正在看的文件即是目标）。
+                    notification.addAction(object : com.intellij.openapi.actionSystem.AnAction(
+                        MpSqlVisualizerBundle.message("onboarding.anchorTip.tryNow"),
+                    ) {
+                        override fun actionPerformed(e: com.intellij.openapi.actionSystem.AnActionEvent) {
+                            // 事件本身无 editor context——经 tryToExecute 从**焦点**（balloon 不抢焦点，
+                            // 仍在用户正在看的编辑器）解析 data context 后调度 ConvertToSql
+                            ActionManager.getInstance()
+                                .getAction("cn.song.mybatisplus.visualizer.ConvertToSql")
+                                ?.let { ActionManager.getInstance().tryToExecute(it, null, null, null, true) }
+                        }
+                    })
+                    notification.notify(project)
                 }
             }
         }
