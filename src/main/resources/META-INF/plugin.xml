@@ -332,6 +332,13 @@
                     factoryClass="cn.song.mybatisplus.visualizer.log.SqlLogToolWindowFactory"/>
         <!-- F-44：SQL 历史记录已合并到主侧边栏 tab，不再独立注册；
              T-UN-12（T-UiNative）：独立历史 ToolWindow 工厂类已删除 -->
+        <!-- T-XmlSynHi（D1/D2/D3）：mapper XML 语句文本与属性表达式注入（lexer-only 自研语言
+             SqlMapperLanguage；双让位门控见 XmlSynHiGate——Ultimate 平台注入 / CodeHelperPro
+             在位 / 设置关闭时全族让位零注入）。语言注册走 multiHostInjector + syntaxHighlighterFactory，
+             无独立 FileType（注入语言不挂编辑器文件类型）。 -->
+        <multiHostInjector implementation="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperInjector"/>
+        <syntaxHighlighterFactory language="MpSqlMapper"
+                                  implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperSyntaxHighlighterFactory"/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，

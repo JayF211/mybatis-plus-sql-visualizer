@@ -97,6 +97,13 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var sampleLimit: Int = 10,
 
         /**
+         * T-XmlSynHi（D4，默认开）：mapper XML 语法高亮注入（关键字着色 + #{} / ${} 参数占位底色
+         * + test/value 属性表达式着色）。与 Ultimate 平台注入或 CodeHelperPro 共存时自动让位
+         * （决策 1-A 双让位）；关闭后本插件对 mapper XML 零注入（反向验证）。
+         */
+        var xmlSynHiEnabled: Boolean = true,
+
+        /**
          * JOIN 图渲染方式（T-Dgm-04）：true=IDE 原生图框架（Ultimate 的 Diagrams 插件，类图观感，
          * 缩放/布局/导出全框架托管）；false=经典自绘渲染器。
          * Community / Diagrams 插件缺席时无论此值均自动降级自绘。
