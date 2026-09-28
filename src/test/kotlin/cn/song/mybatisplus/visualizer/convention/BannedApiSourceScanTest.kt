@@ -219,6 +219,9 @@ class BannedApiSourceScanTest {
             "src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/config/McpConfigurable.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlSuppressManagerDialog.kt",
+            // R4（导出格式三选）：用户必须选择导出格式（CSV/TSV/TXT）才能继续——知情选择场景加白
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/HistorySqlLogPanel.kt",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt",
         )
         val found = mainSources()
             .filter { (_, code) ->
