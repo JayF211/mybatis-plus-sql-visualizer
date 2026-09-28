@@ -2188,6 +2188,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             autoResizeMode = com.intellij.ui.table.JBTable.AUTO_RESIZE_ALL_COLUMNS
             tableHeader.reorderingAllowed = false
         }
+        // O-85：列信息表恢复 Ctrl+A 全选（IDEA 全局 Ctrl+A 被「选中文本」语义抢占、
+        // JBTable 默认 selectAll 绑定在此场景不生效——显式绑 InputMap/ActionMap）。
+        val selectAllKey = javax.swing.KeyStroke.getKeyStroke("control pressed A")
+        table.setInputMap(javax.swing.JComponent.WHEN_FOCUSED, javax.swing.InputMap().apply {
+            put(selectAllKey, "mpsv.selectAll")
+        })
+        table.actionMap.put("mpsv.selectAll", object : javax.swing.AbstractAction() {
+            override fun actionPerformed(e: java.awt.event.ActionEvent) {
+                table.selectAll()
+            }
+        })
         return JBScrollPane(table)
     }
 
