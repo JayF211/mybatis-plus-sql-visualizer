@@ -146,7 +146,7 @@ abstract class McpToolsetSupport(private val toolName: String) {
      * 审计闸门：挂起路径成败记账＋预期错误转译＋结果转发（包装 completion 的被动转发者，
      * 不自建状态机）。[onSuccess]/[onFailure] 同样服务同步路径（见 [audit]）。
      */
-    private class AuditGate(
+    internal class AuditGate(
         private val token: Long,
         private val completion: Continuation<String>,
     ) : Continuation<String> {
@@ -162,9 +162,15 @@ abstract class McpToolsetSupport(private val toolName: String) {
             }
         }
 
-        /** 失败记账＋预期错误转译；其余异常原样返回（平台记 Internal error）。 */
-        fun onFailure(e: Throwable): Throwable {
+        /** 失败记账＋预期错误转译；其余异常原样返回（平台记 Internal error）。
+         *  O-86（DBX #116 对照）：中断/取消（CancellationException）也落审计（status=INTERRUPTED）——
+         *  此前该分支直接透传，被取消的请求在 [MCP-AUDIT] 流里无痕（审计纵深缺口）。 */
+        internal fun onFailure(e: Throwable): Throwable {
             val ctx = AUDIT_CTX.remove(token) ?: return e
+            if (e is java.util.concurrent.CancellationException) {
+                McpAuditLog.call(ctx.tool, ctx.argsSummary, "INTERRUPTED", System.currentTimeMillis() - ctx.started)
+                return e
+            }
             if (e !is SqlvExpectedToolException) return e
             McpAuditLog.call(
                 ctx.tool,
@@ -184,7 +190,7 @@ abstract class McpToolsetSupport(private val toolName: String) {
     }
 
     /** 审计上下文（tool/argsSummary/started 打包，挂起前入 [AUDIT_CTX]、成败记账时取回移除）。 */
-    private class AuditContext(val tool: String, val argsSummary: String, val started: Long)
+    internal class AuditContext(val tool: String, val argsSummary: String, val started: Long)
 
     /** 取当前项目（框架注入 coroutineContext；反射解析平台 McpCallInfoKt，见 McpExpectedBridge）。 */
     protected suspend fun requireProject(): Project =
@@ -218,7 +224,7 @@ abstract class McpToolsetSupport(private val toolName: String) {
         private const val LEGACY_ARGS_SUMMARY = "ok"
 
         /** 审计上下文旁路（T-McpDynamicToolset 零跨挂起点引用结构，见 [audit] 头注）：key=token。 */
-        private val AUDIT_CTX = java.util.concurrent.ConcurrentHashMap<Long, AuditContext>()
+        internal val AUDIT_CTX = java.util.concurrent.ConcurrentHashMap<Long, AuditContext>()
 
         /** 审计 token 发号器。 */
         private val AUDIT_SEQ = java.util.concurrent.atomic.AtomicLong()
