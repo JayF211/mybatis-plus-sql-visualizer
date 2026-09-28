@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.ColumnRole
 import cn.song.mybatisplus.visualizer.model.TableInfo
+import cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader
 import cn.song.mybatisplus.visualizer.util.NamingStrategy
 import cn.song.mybatisplus.visualizer.util.TableConfigSignature
 import com.intellij.openapi.project.Project
@@ -103,7 +104,11 @@ class EntityResolver {
         // SELECT 全列展开/参数对照/补全列集合（resolveColumn 返回 null 跳过；@TableField(exist=false) 注解优先）
         // T-M23.3：按角色分组稳定排序（PRIMARY 置顶 → BUSINESS 居中 → AUDIT/SYSTEM 沉底，
         // 组内保持声明顺序）——三处消费点（SELECT 全列/批量面板/补全）共用 columns 自动统一生效
-        val columns = fields.mapNotNull { field -> resolveColumn(field, ignoredFieldNames(entityClass.project)) }
+        // T-Embedded D3：类级 @AttributeOverride（混合注解实体的嵌入覆写，与 JPA 轨同语义）；
+        // 嵌入字段可能展开为多列，列收集改 flatMap
+        val classOverrides = JpaMetadataReader.attributeOverrides(entityClass)
+        val columns = fields
+            .flatMap { field -> resolveColumns(field, ignoredFieldNames(entityClass.project), classOverrides) }
             .sortedWith(compareBy { it.role })
         // T-M15-07：逻辑删除列（@TableLogic 标注字段，X07——真实项目 BaseEntity.deleted + 全局 logic-delete-field；
         // T-M16.2-02 修复：父类字段同样识别，继承实体的 deleted 不再丢失）
@@ -118,7 +123,23 @@ class EntityResolver {
             ?.let { annotationValue(it, TABLE_FIELD) ?: NamingStrategy.toSnakeCase(it.name) }
         // T-M16-05：表注释（类级注解 > javadoc > 行注释；schema 预留最高优先级，当前返回 null）
         val comment = resolveComment(entityClass)
-        return TableInfo(className, tableName, columns, logicDeleteColumn, versionColumn, comment)
+        // T-Embedded D3：@EmbeddedId 展平列回填复合主键清单（isId 已在展平分支标记；
+        // 普通 @TableId 单主键不进清单，与 JPA 轨口径一致）
+        val embeddedIdColumns =
+            if (fields.any { JpaMetadataReader.hasEmbeddedIdAnnotation(it) }) {
+                columns.filter { it.isId && it.embedded }.map { it.columnName }
+            } else {
+                emptyList()
+            }
+        return TableInfo(
+            className,
+            tableName,
+            columns,
+            logicDeleteColumn,
+            versionColumn,
+            comment,
+            compositeIdColumns = embeddedIdColumns,
+        )
     }
 
     /**
@@ -134,19 +155,24 @@ class EntityResolver {
     }
 
     /**
-     * 解析单个字段为列信息；非表字段（@TableField(exist=false) / T-M19.4 忽略字段名配置）返回 null。
+     * 解析单个字段为列信息（T-Embedded D3 起可能展开为多列——嵌入对象展平）；
+     * 非表字段（@TableField(exist=false) / T-M19.4 忽略字段名配置）返回空列表。
      */
-    private fun resolveColumn(field: PsiField, ignoredFields: Set<String>): ColumnInfo? {
+    private fun resolveColumns(
+        field: PsiField,
+        ignoredFields: Set<String>,
+        classOverrides: Map<String, String>,
+    ): List<ColumnInfo> {
         val fieldName = field.name
         val tableFieldAnnotation = findAnnotation(field, TABLE_FIELD)
         // @TableField(exist = false)：非数据库字段，跳过（注解优先）
         if (annotationAttributeBoolean(tableFieldAnnotation, "exist") == false) {
-            return null
+            return emptyList()
         }
         // T-M19.4-03-②：忽略字段名（`;` 分隔，Java 字段名匹配）——与 @TableField(exist=false) 并存
         // （注解优先）；命中即跳过：SELECT 全列展开、参数对照、补全列集合均不含该字段（M19.4-R3）
         if (fieldName in ignoredFields) {
-            return null
+            return emptyList()
         }
         // T-M42（用户实证：SQL 含 serial_version_u_i_d 列时生成 User::getSerialVersionUID 编译失败）：
         // serialVersionUID（static final 序列化字段，无 getter/setter，MP 官方不映射为列）默认忽略——
@@ -154,7 +180,14 @@ class EntityResolver {
         // SERIAL_VERSION_UID 等全部形态；正向（SELECT 全列展开/批量面板/补全）与反向（columnToField）
         // 统一受益
         if (fieldName.lowercase().replace("_", "") == "serialversionuid") {
-            return null
+            return emptyList()
+        }
+        // T-Embedded D3（混合注解实体）：jakarta/javax @Embedded / @Embeddable / @EmbeddedId 值对象字段
+        // 展平为宿主表列。MP 运行时本身不展平（该字段按平铺伪列生成 SQL、真实库中不存在），插件口径
+        // =跟真实数据库（计划 §四 D3 决策 A，与 O-58 校正层「用真值纠正猜测」同哲学）；
+        // @TableField 显式列名时 MP 语义优先，走下方单列路径不展平
+        if (annotationValue(field, TABLE_FIELD) == null && JpaMetadataReader.isEmbeddedField(field)) {
+            return resolveEmbeddedColumns(field, classOverrides)
         }
         val columnName = annotationValue(field, TABLE_FIELD)
             ?: NamingStrategy.toSnakeCase(fieldName)
@@ -182,7 +215,56 @@ class EntityResolver {
             hasAnnotation(field, TABLE_LOGIC) || hasAnnotation(field, VERSION) -> ColumnRole.SYSTEM
             else -> ColumnRole.BUSINESS
         }
-        return ColumnInfo(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment, role)
+        return listOf(
+            ColumnInfo(fieldName, columnName, isId, idTypeAuto, fieldType, fill, comment, role)
+        )
+    }
+
+    /**
+     * 展平嵌入对象字段（T-Embedded D3）：覆写与列名推导复用 JPA 轨
+     * [JpaMetadataReader.flattenEmbeddedColumns]（类级/字段级 @AttributeOverride、点路径覆写、
+     * 嵌套递归同语义）；@EmbeddedId 展平列全部标记主键（由 [resolveInternal] 回填
+     * TableInfo.compositeIdColumns）。嵌入类型不可解析时降级为单列形态（字段名推断列名），不丢字段。
+     */
+    private fun resolveEmbeddedColumns(field: PsiField, classOverrides: Map<String, String>): List<ColumnInfo> {
+        val fieldName = field.name
+        val isEmbeddedId = JpaMetadataReader.hasEmbeddedIdAnnotation(field)
+        val overrides = classOverrides + JpaMetadataReader.attributeOverrides(field)
+        val specs = runCatching { JpaMetadataReader.flattenEmbeddedColumns(field, overrides) }
+            .getOrDefault(emptyList())
+        if (specs.isEmpty()) {
+            val fieldType = runCatching { field.type.canonicalText }.getOrNull()
+            return listOf(
+                ColumnInfo(
+                    fieldName,
+                    NamingStrategy.toSnakeCase(fieldName),
+                    isEmbeddedId,
+                    false,
+                    fieldType,
+                    null,
+                    resolveComment(field),
+                    if (isEmbeddedId) ColumnRole.PRIMARY else ColumnRole.BUSINESS,
+                    embedded = true,
+                    embeddedParent = fieldName,
+                ),
+            )
+        }
+        return specs.map { spec ->
+            ColumnInfo(
+                fieldName = spec.fieldName,
+                columnName = spec.columnName,
+                isId = isEmbeddedId,
+                idTypeAuto = false,
+                fieldType = spec.fieldType,
+                fill = null,
+                comment = resolveComment(spec.field),
+                role = if (isEmbeddedId) ColumnRole.PRIMARY else ColumnRole.BUSINESS,
+                insertable = spec.insertable,
+                updatable = spec.updatable,
+                embedded = true,
+                embeddedParent = fieldName,
+            )
+        }
     }
 
     // ------------------------------------------------------------------

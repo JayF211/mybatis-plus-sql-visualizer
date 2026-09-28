@@ -228,9 +228,16 @@ class JpaEntityResolver {
         val isOneToOne = hasAnnotation(field, ONE_TO_ONE_ANNOTATION)
         val isEmbeddedId = JpaMetadataReader.hasEmbeddedIdAnnotation(field)
 
-        // @Embedded / @Embeddable / @EmbeddedId：嵌入对象字段展平（T-J18）
-        if (isEmbeddedId || JpaMetadataReader.isEmbeddedField(field)) {
-            return flattenEmbeddedColumns(field, isPrimaryKey = isEmbeddedId, classOverrides)
+        // @Embedded / @Embeddable / @EmbeddedId：嵌入对象字段展平（T-J18）；
+        // SD8 形态（裸 @Embedded / 捷径 @Embedded.Nullable / @Embedded.Empty，T-Embedded D2）——
+        // SD 判定在前取 prefix 语义，jakarta 轨兜底（裸 SD @Embedded 此前经短名轨命中，行为不回归）
+        // @Embedded / @Embeddable / @EmbeddedId：嵌入对象字段展平（T-J18）；
+        // SD8 形态（裸 @Embedded / 捷径 @Embedded.Nullable / @Embedded.Empty，T-Embedded D2）——
+        // SD 判定在前取 prefix 语义，jakarta 轨兜底（裸 SD @Embedded 此前经短名轨命中，行为不回归）
+        val sdEmbedded = JpaMetadataReader.isSpringDataEmbeddedField(field)
+        if (isEmbeddedId || sdEmbedded || JpaMetadataReader.isEmbeddedField(field)) {
+            val sdPrefix = if (sdEmbedded) JpaMetadataReader.springDataEmbeddedPrefixOf(field) else ""
+            return flattenEmbeddedColumns(field, isPrimaryKey = isEmbeddedId, classOverrides, sdPrefix)
         }
 
         // @JoinColumns 复合外键：多列外键无法以单列表达，完整清单记入 AssociationInfo.joinColumns（T-J7）
@@ -283,11 +290,15 @@ class JpaEntityResolver {
     /**
      * 展平嵌入对象字段为列清单（T-J18）：@AttributeOverride 覆写 > 内部字段 @Column > 驼峰转下划线；
      * @EmbeddedId 展平列全部标记主键。嵌入类型不可解析等异常场景降级为单列形态（字段名推断列名），不丢字段。
+     *
+     * T-Embedded D2：[sdPrefix] 为 SD @Embedded(prefix) 前缀，官方语义拼在嵌入对象每一列之前
+     * （同一值对象多次嵌入防撞车）；非 SD 轨为空串，列名逐字节不变。
      */
     private fun flattenEmbeddedColumns(
         field: PsiField,
         isPrimaryKey: Boolean,
         classOverrides: Map<String, String>,
+        sdPrefix: String = "",
     ): List<ColumnInfo> {
         val fieldName = field.name
         // 字段级 @AttributeOverride 优先于类级（合并顺序：右侧覆盖左侧同名键）
@@ -314,7 +325,7 @@ class JpaEntityResolver {
         return specs.map { spec ->
             ColumnInfo(
                 fieldName = spec.fieldName,
-                columnName = spec.columnName,
+                columnName = sdPrefix + spec.columnName,
                 isId = isPrimaryKey,
                 idTypeAuto = false,
                 fieldType = spec.fieldType,

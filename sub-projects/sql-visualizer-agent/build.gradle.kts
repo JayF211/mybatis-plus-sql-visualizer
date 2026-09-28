@@ -144,3 +144,11 @@ val agentFatJar = tasks.register<JavaExec>("agentFatJar") {
 artifacts {
     add("archives", agentFatJar)
 }
+
+// T-TestPerf8 S6（20260928）：agent 测试强制每轮真跑——根门禁 testShards 的分片任务因
+// MPV-Build 时间戳恒重跑，而本任务可被判 UP-TO-DATE 静默跳过（20260928 warm2 轮实证：
+// 分片全跑、agent:test 跳过，聚合门禁静默缩水）。与分片「每次真跑」语义对齐；墙钟代价≈0
+// （与分片并行且早收，XML mtime 实证落在窗口头部）。
+tasks.named<Test>("test") {
+    outputs.upToDateWhen { false }
+}
