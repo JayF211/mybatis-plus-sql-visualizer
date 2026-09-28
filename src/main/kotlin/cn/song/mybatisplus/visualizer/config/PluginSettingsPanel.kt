@@ -384,6 +384,13 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /** gutter 预览 SQL 图标开关（M10）。 */
     private val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
+    // R2（gutter 按来源分组显隐）：六组开关（默认全开=现行为不变）
+    private val gutterGroupMapperXmlCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.mapperXml"))
+    private val gutterGroupAnnotationCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.annotation"))
+    private val gutterGroupJpaHqlCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.jpaHql"))
+    private val gutterGroupJdbcCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.jdbc"))
+    private val gutterGroupInlineFallbackCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.inlineFallback"))
+    private val gutterGroupOtherCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.other"))
 
     /**
      * T-ToolSiteBizFrame：JAR 业务帧反向名单（一行一个前缀，如 `com.corp.shared.util.`）。
@@ -1023,6 +1030,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
         if (SECTION_UI in sections) {
             sectionGroup("settings.section.ui") { p, g ->
                 addRow(p, g, "", gutterIconCheck.apply { text = MpSqlVisualizerBundle.message("settings.showGutterIcon") })
+                addRow(p, g, "", gutterGroupMapperXmlCheck)
+                addRow(p, g, "", gutterGroupAnnotationCheck)
+                addRow(p, g, "", gutterGroupJpaHqlCheck)
+                addRow(p, g, "", gutterGroupJdbcCheck)
+                addRow(p, g, "", gutterGroupInlineFallbackCheck)
+                addRow(p, g, "", gutterGroupOtherCheck)
                 addRow(p, g, "", xmlInlineSqlCheck.apply {
                     text = MpSqlVisualizerBundle.message("settings.xmlInlineSql")
                     toolTipText = MpSqlVisualizerBundle.message("settings.xmlInlineSql.tip")
@@ -1601,7 +1614,13 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || colorHexOf(crudColorDeletePanel) != s.crudColorDelete
 
     private fun isModifiedUi(s: PluginSettings.State): Boolean =
-        gutterIconCheck.isSelected != s.showGutterIcon
+        gutterIconCheck.isSelected != s.showGutterIcon ||
+            gutterGroupMapperXmlCheck.isSelected != s.gutterGroupMapperXml ||
+            gutterGroupAnnotationCheck.isSelected != s.gutterGroupAnnotation ||
+            gutterGroupJpaHqlCheck.isSelected != s.gutterGroupJpaHql ||
+            gutterGroupJdbcCheck.isSelected != s.gutterGroupJdbc ||
+            gutterGroupInlineFallbackCheck.isSelected != s.gutterGroupInlineFallback ||
+            gutterGroupOtherCheck.isSelected != s.gutterGroupOther
             || xmlInlineSqlCheck.isSelected != s.xmlInlineSqlEnabled
             || joinDiagramNativeCheck.isSelected != s.joinDiagramNative
             || onboardingAnchorTipCheck.isSelected != s.onboardingAnchorTipEnabled
@@ -1719,6 +1738,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
         }
         if (SECTION_UI in sections) {
             s.showGutterIcon = gutterIconCheck.isSelected
+            s.gutterGroupMapperXml = gutterGroupMapperXmlCheck.isSelected
+            s.gutterGroupAnnotation = gutterGroupAnnotationCheck.isSelected
+            s.gutterGroupJpaHql = gutterGroupJpaHqlCheck.isSelected
+            s.gutterGroupJdbc = gutterGroupJdbcCheck.isSelected
+            s.gutterGroupInlineFallback = gutterGroupInlineFallbackCheck.isSelected
+            s.gutterGroupOther = gutterGroupOtherCheck.isSelected
             s.xmlInlineSqlEnabled = xmlInlineSqlCheck.isSelected
             s.joinDiagramNative = joinDiagramNativeCheck.isSelected
             // T-UxOnboard T-UX-01：首用锚点引导开关写回（随 UI 分区，读写判定同归属）
@@ -1817,6 +1842,12 @@ class PluginSettingsPanel @JvmOverloads constructor(
         }
         if (SECTION_UI in sections) {
             gutterIconCheck.isSelected = s.showGutterIcon
+        gutterGroupMapperXmlCheck.isSelected = s.gutterGroupMapperXml
+        gutterGroupAnnotationCheck.isSelected = s.gutterGroupAnnotation
+        gutterGroupJpaHqlCheck.isSelected = s.gutterGroupJpaHql
+        gutterGroupJdbcCheck.isSelected = s.gutterGroupJdbc
+        gutterGroupInlineFallbackCheck.isSelected = s.gutterGroupInlineFallback
+        gutterGroupOtherCheck.isSelected = s.gutterGroupOther
             xmlInlineSqlCheck.isSelected = s.xmlInlineSqlEnabled
             joinDiagramNativeCheck.isSelected = s.joinDiagramNative
             onboardingAnchorTipCheck.isSelected = s.onboardingAnchorTipEnabled

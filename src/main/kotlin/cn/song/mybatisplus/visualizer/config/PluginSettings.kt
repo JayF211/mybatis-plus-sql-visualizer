@@ -109,7 +109,6 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var gutterGroupAnnotation: Boolean = true,
         var gutterGroupJpaHql: Boolean = true,
         var gutterGroupJdbc: Boolean = true,
-        var gutterGroupCustomDao: Boolean = true,
         var gutterGroupOther: Boolean = true,
         var gutterGroupInlineFallback: Boolean = true,
 
