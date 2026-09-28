@@ -337,6 +337,8 @@
              在位 / 设置关闭时全族让位零注入）。语言注册走 multiHostInjector + syntaxHighlighterFactory，
              无独立 FileType（注入语言不挂编辑器文件类型）。 -->
         <multiHostInjector implementation="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperInjector"/>
+        <!-- T-XmlSynHi D5：# / $ 敲键自动闭合 {}（先查后插防与共存插件双开双插；门控同 injector） -->
+        <typedHandlerDelegate implementation="cn.song.mybatisplus.visualizer.ui.inject.ParamBraceTypedHandler"/>
         <syntaxHighlighterFactory language="MpSqlMapper"
                                   implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperSyntaxHighlighterFactory"/>
     </extensions>
