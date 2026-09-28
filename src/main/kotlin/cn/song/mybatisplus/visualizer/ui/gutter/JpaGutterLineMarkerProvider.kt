@@ -51,6 +51,7 @@ class JpaGutterLineMarkerProvider : LineMarkerProvider {
         // 避免方法声明内的每个叶子（返回类型、参数名、关键字等）都产生重复图标。
         if (element !is PsiIdentifier) return null
         if (!gutterEnabled()) return null
+        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
 
         // T-J16：@Procedure 方法声明锚点（Repository 接口方法名 identifier）
         val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java)

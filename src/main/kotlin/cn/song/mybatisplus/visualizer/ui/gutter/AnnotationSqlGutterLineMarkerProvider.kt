@@ -37,6 +37,7 @@ class AnnotationSqlGutterLineMarkerProvider : LineMarkerProvider {
         val annotation = PsiTreeUtil.getParentOfType(token, PsiAnnotation::class.java, false) ?: return null
         if (!AnnotationSqlPreviewService.isSqlAnnotation(annotation)) return null
         if (!gutterEnabled()) return null
+        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
         return LineMarkerInfo(
             element,

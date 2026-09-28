@@ -39,6 +39,7 @@ class PagesXmlGutterLineMarkerProvider : LineMarkerProvider {
         if (tag.name != "maintainPage") return null
         if (tag.parentTag?.name != "pages") return null
         if (!gutterEnabled()) return null
+        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
         return LineMarkerInfo(
             element,
             element.textRange,

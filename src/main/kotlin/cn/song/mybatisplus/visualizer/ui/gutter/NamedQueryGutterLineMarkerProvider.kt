@@ -49,6 +49,7 @@ class NamedQueryGutterLineMarkerProvider : LineMarkerProvider {
         val cls = PsiTreeUtil.getParentOfType(annotation, PsiClass::class.java, false) ?: return null
         if (NamedQueryLocator.locate(cls).none { it.annotation === annotation }) return null
         if (!gutterEnabled()) return null
+        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
         return LineMarkerInfo(
             element,
             element.textRange,

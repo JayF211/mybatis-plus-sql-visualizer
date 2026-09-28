@@ -40,6 +40,7 @@ class HbmNamedQueryGutterLineMarkerProvider : LineMarkerProvider {
         if (tag.parentTag?.name != "hibernate-mapping") return null
         if (tag.getAttributeValue("name") == null) return null
         if (!gutterEnabled()) return null
+        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
         return LineMarkerInfo(
             element,
             element.textRange,

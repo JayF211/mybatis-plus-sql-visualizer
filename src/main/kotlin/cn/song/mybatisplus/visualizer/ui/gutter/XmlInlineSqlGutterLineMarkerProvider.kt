@@ -39,6 +39,7 @@ class XmlInlineSqlGutterLineMarkerProvider : LineMarkerProvider {
         if (token.tokenType != XmlTokenType.XML_NAME) return null
         val tag = token.parent as? XmlTag ?: return null
         if (!XmlInlineSqlDetector.gutterFastPathEnabled()) return null // F19：一次服务查找取两布尔
+        if (!GutterGroups.enabledFor(javaClass, true)) return null // R2 分组显隐（组开关独立于全局总闸；F19 已在后续行判定总闸+检测开关）
         if (!XmlInlineSqlDetector.isSqlCarrierTag(tag)) return null
         return LineMarkerInfo(
             element,

@@ -73,6 +73,7 @@ class JdbcTemplateSqlGutterLineMarkerProvider : LineMarkerProvider {
 
         // 开关关闭时不显示
         if (!gutterEnabled()) return null
+        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
 
         return LineMarkerInfo(
             element,

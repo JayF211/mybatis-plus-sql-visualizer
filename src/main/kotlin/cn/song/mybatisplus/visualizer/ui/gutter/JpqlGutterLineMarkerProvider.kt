@@ -49,6 +49,7 @@ class JpqlGutterLineMarkerProvider : LineMarkerProvider {
         if (DerivedMethodLocator.isDerivedQuery(method)) return null
         if (!JpqlQueryLocator.hasQueryAnnotation(method)) return null
         if (!gutterEnabled()) return null
+        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
         return LineMarkerInfo(
             element,
             element.textRange,

@@ -47,6 +47,7 @@ class HqlGutterLineMarkerProvider : LineMarkerProvider {
         // 【关键过滤】确保第一个参数是字符串字面量（HQL/JPQL/SQL），排除 cb.createQuery(Class)
         if (!hasStringFirstArgument(grandParent)) return null
         if (!gutterEnabled()) return null
+        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
         // 复用 HqlQueryLocator.locate 非 null 判定（精确匹配该调用）
         if (HqlQueryLocator.locate(grandParent) == null) return null
         return LineMarkerInfo(

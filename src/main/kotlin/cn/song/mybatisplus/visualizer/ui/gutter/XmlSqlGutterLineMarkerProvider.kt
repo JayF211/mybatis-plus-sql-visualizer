@@ -41,6 +41,7 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
         if (tag.name !in STATEMENT_TAGS) return null
         if (tag.parentTag?.name != "mapper") return null
         if (!gutterEnabled()) return null
+        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
         return LineMarkerInfo(
             element,

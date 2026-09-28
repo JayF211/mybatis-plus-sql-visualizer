@@ -35,6 +35,7 @@ class CriteriaQueryGutterLineMarkerProvider : LineMarkerProvider {
         // 其它 leaf（关键字、括号、字面量等）不可能位于 CriteriaQuery 调用链上——早退。
         if (element !is PsiIdentifier) return null
         if (!gutterEnabled()) return null
+        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
         // T-PerfSweep F4：文件级门控——不含 criteria 特征子串的文件整体跳过 locate。
         // daemon 每趟对本 provider 传入打开文件的每个方法名 identifier，无门控时每个方法
         // 定义都要付一次 locate 全代码块 PSI 扫描（分析 P1-1 在 dev 的唯一残留）。

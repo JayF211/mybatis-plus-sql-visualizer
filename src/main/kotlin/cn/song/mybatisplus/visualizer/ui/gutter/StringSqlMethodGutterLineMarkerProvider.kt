@@ -62,6 +62,7 @@ class StringSqlMethodGutterLineMarkerProvider : LineMarkerProvider {
 
         if (!hasStringSqlCall(body)) return null
         if (!gutterEnabled()) return null
+        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
 
         return LineMarkerInfo(
             element,
