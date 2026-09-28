@@ -1,0 +1,75 @@
+package cn.song.mybatisplus.visualizer.ui.inject
+
+import kotlin.math.min
+
+/**
+ * T-XmlSynHi D5 后半：resultMap `column` 属性补全的候选提取与排序（纯函数）。
+ *
+ * 候选来源 = mapper 文本中全部语句（select）的**投影列名**提取：
+ *  - `SELECT a, b, c FROM …` 逗号分段取末段标识符（`t.col`/`a AS x` 取别名或末段）；
+ *  - `SELECT *` 不可枚举（跳过）；
+ *  - `t.col` 形态剥前缀取 `col`，同时保留 `t.col` 原形作为次选。
+ *
+ * 排序 = 前缀精确命中 > 前缀前缀命中 > 其余；同级按与已输入的 Levenshtein 距离升序
+ * （计划 §六 D5「下划线驼峰建议」：`order_id` 与 `orderId` 双向互为近邻建议）。
+ */
+object ResultMapColumns {
+
+    /** 从 mapper 全文中提取 SELECT 投影列名（去重保序）。 */
+    fun extractColumns(mapperText: String): List<String> {
+        val out = LinkedHashSet<String>()
+        val regex = Regex("(?is)\\bselect\\b(.*?)(?:\\bfrom\\b|\$)")
+        regex.findAll(mapperText).forEach { m ->
+            val proj = m.groupValues[1]
+            proj.split(",").forEach { seg ->
+                val col = seg.trim()
+                    .split(' ').last { it.isNotBlank() } // 末 token：AS 别名或列本身（取别名语义）
+                    .substringAfterLast('.')             // `t.col` → `col`
+                    .trim()
+                if (col.isNotEmpty() && col.matches(Regex("[\\w*]+")) && col != "*") out += col
+            }
+        }
+        return out.toList()
+    }
+
+    /** 补全建议：前缀过滤 + 排序（下划线/驼峰双向近邻提升）。 */
+    fun suggest(columns: List<String>, typed: String): List<String> {
+        val t = typed.trim()
+        if (t.isEmpty()) return columns
+        val scored = columns.mapNotNull { col ->
+            val lower = col.lowercase()
+            val target = t.lowercase()
+            when {
+                lower.startsWith(target) -> col to 0
+                camelSnakeMatch(col, t) -> col to 1
+                else -> null
+            }
+        }.sortedWith(compareBy({ it.second }, { levenshtein(it.first.lowercase(), t.lowercase()) }, { it.first }))
+            .map { it.first }
+        return scored
+    }
+
+    /** 下划线-驼峰近邻：`order_id` vs `orderId` 同形（归一化 `_` 与大小写后比较前缀）。 */
+    private fun camelSnakeMatch(col: String, typed: String): Boolean {
+        val normCol = col.replace("_", "").lowercase()
+        val normTyped = typed.replace("_", "").lowercase()
+        return normCol.startsWith(normTyped)
+    }
+
+    private fun levenshtein(a: String, b: String): Int {
+        val m = a.length
+        val n = b.length
+        if (m == 0) return n
+        if (n == 0) return m
+        var prev = IntArray(n + 1) { it }
+        var cur = IntArray(n + 1)
+        for (i in 1..m) {
+            cur[0] = i
+            for (j in 1..n) {
+                cur[j] = min(min(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + if (a[i - 1] == b[j - 1]) 0 else 1)
+            }
+            val tmp = prev; prev = cur; cur = tmp
+        }
+        return prev[n]
+    }
+}
