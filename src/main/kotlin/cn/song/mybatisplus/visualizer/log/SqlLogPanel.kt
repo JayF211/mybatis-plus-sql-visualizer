@@ -1677,6 +1677,81 @@ class SqlLogPanel(
         SqlPreviewService.showResult(project, entry.toPreviewResult(formatSql = state.logFormatSql, literalRecovery = state.literalParamRecovery))
     }
 
+    /** R4（W3 历史工作流包）：导出当前可见行集（lastRendered=面板过滤/搜索/排序后的实际可见集）。 */
+    private inner class ExportVisibleAction : AnAction(MpSqlVisualizerBundle.message("log.export.visible")) {
+        override fun actionPerformed(e: AnActionEvent) {
+            exportVisibleEntries()
+        }
+    }
+
+    /** R4 导出：格式三选 → 文件保存 → 后台写盘 → 通知（行集=lastRendered 快照）。 */
+    internal fun exportVisibleEntries() {
+        val rows = lastRendered.map {
+            val source = buildString {
+                if (!it.sourceFile.isNullOrBlank()) {
+                    append(it.sourceFile)
+                    if (it.sourceLine > 0) append(":").append(it.sourceLine)
+                }
+            }
+            SqlExportRow(
+                time = SqlExportService.formatTime(it.timestamp),
+                sql = it.restoredSql,
+                source = source,
+                durationMs = it.executionTimeMs,
+            )
+        }
+        if (rows.isEmpty()) return
+        val format = chooseExportFormat() ?: return
+        val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
+            MpSqlVisualizerBundle.message("log.export.visible"),
+            "SQL (${format.ext.uppercase()})",
+            format.ext,
+        )
+        val dialog = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance()
+            .createSaveFileDialog(descriptor, project)
+        val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, "sql-log.${format.ext}")
+            ?: return
+        val target = saved.file
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching {
+                SqlExportService.exportToFile(target, SqlExportService.format(rows, format))
+            }.onSuccess {
+                com.intellij.notification.NotificationGroupManager.getInstance()
+                    .getNotificationGroup(NOTIFICATION_GROUP_ID)
+                    .createNotification(
+                        MpSqlVisualizerBundle.message("log.history.export.done", rows.size, target.absolutePath),
+                        com.intellij.notification.NotificationType.INFORMATION,
+                    ).notify(project)
+            }.onFailure {
+                com.intellij.notification.NotificationGroupManager.getInstance()
+                    .getNotificationGroup(NOTIFICATION_GROUP_ID)
+                    .createNotification(
+                        MpSqlVisualizerBundle.message("log.history.export.failed", it.message ?: ""),
+                        com.intellij.notification.NotificationType.ERROR,
+                    ).notify(project)
+            }
+        }
+    }
+
+    /** R4：导出格式三选（取消返回 null）。 */
+    private fun chooseExportFormat(): SqlExportFormat? {
+        val names = arrayOf("CSV", "TSV", "TXT")
+        val idx = com.intellij.openapi.ui.Messages.showChooseDialog(
+            project,
+            MpSqlVisualizerBundle.message("log.history.export.choose"),
+            MpSqlVisualizerBundle.message("log.export.visible"),
+            com.intellij.openapi.ui.Messages.getQuestionIcon(),
+            names,
+            names[0],
+        )
+        if (idx < 0) return null
+        return when (idx) {
+            0 -> SqlExportFormat.CSV
+            1 -> SqlExportFormat.TSV
+            else -> SqlExportFormat.TXT
+        }
+    }
+
     private fun showContextMenu(e: MouseEvent) {
         val index = list.locationToIndex(e.point)
         if (index < 0) return
@@ -1707,6 +1782,8 @@ class SqlLogPanel(
         group.add(FocusCallerMethodAction(entry))
         // T-M55-04：按请求聚焦（requestTag 非空时可用；页签 K 有界防高基数爆列表）
         group.add(FocusRequestAction(entry))
+        // R4（W3 历史工作流包）：导出当前可见行集（与面板过滤/搜索一致；CSV/TSV/TXT，后台写盘）
+        group.add(ExportVisibleAction())
         val popup = ActionManager.getInstance().createActionPopupMenu("mpvs.log.list", group)
         // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
         popup.setTargetComponent(list)

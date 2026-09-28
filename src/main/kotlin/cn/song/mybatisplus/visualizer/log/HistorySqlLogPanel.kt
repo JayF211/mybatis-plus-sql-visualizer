@@ -526,10 +526,95 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         group.add(JumpToSourceAction(entry))
         // T-M55-01：拆「跳转到 XML」双目标（与日志页同套）
         group.add(JumpToMapperXmlAction(entry))
+        // R4（W3 历史工作流包）：导出选中/全部条目（CSV/TSV/TXT，后台写盘）
+        val allEntries = (0 until sqlList.model.size).map { sqlList.model.getElementAt(it) }
+        group.add(ExportSqlAction(selectedEntries.ifEmpty { allEntries }))
         val popup = ActionManager.getInstance().createActionPopupMenu("mpvs.history.sql", group)
         // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
         popup.setTargetComponent(sqlList)
         popup.component.show(sqlList, e.x, e.y)
+    }
+
+    // ---------- R4（W3 历史工作流包）：二级 SQL 导出（CSV/TSV/TXT，后台写盘） ----------
+
+    private inner class ExportSqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.EditSource
+            e.presentation.text = MpSqlVisualizerBundle.message("log.history.export")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            exportEntries(entries)
+        }
+    }
+
+    /** R4：导出选中/全部条目——格式三选（CSV/TSV/TXT）→ 文件保存对话框 → 后台写盘 → 通知。
+     *  照 ShareDialog 的 FileSaverDialog 惯例（仓内既有形态）。 */
+    internal fun exportEntries(entries: List<LogSqlEntry>) {
+        if (entries.isEmpty()) return
+        val format = chooseExportFormat() ?: return
+        val rows = entries.map {
+            val source = buildString {
+                if (!it.sourceFile.isNullOrBlank()) {
+                    append(it.sourceFile)
+                    if (it.sourceLine > 0) append(":").append(it.sourceLine)
+                }
+            }
+            SqlExportRow(
+                time = SqlExportService.formatTime(it.timestamp),
+                sql = it.restoredSql,
+                source = source,
+                durationMs = it.executionTimeMs,
+            )
+        }
+        val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
+            MpSqlVisualizerBundle.message("log.history.export"),
+            "SQL (${format.ext.toUpperCase(Locale.ROOT)})",
+            format.ext,
+        )
+        val dialog = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance()
+            .createSaveFileDialog(descriptor, project)
+        val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, "sql-history.${format.ext}")
+            ?: return
+        val target = saved.file
+        com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching {
+                SqlExportService.exportToFile(target, SqlExportService.format(rows, format))
+            }.onSuccess {
+                com.intellij.notification.NotificationGroupManager.getInstance()
+                    .getNotificationGroup(NOTIFICATION_GROUP_ID)
+                    .createNotification(
+                        MpSqlVisualizerBundle.message("log.history.export.done", rows.size, target.absolutePath),
+                        com.intellij.notification.NotificationType.INFORMATION,
+                    ).notify(project)
+            }.onFailure {
+                com.intellij.notification.NotificationGroupManager.getInstance()
+                    .getNotificationGroup(NOTIFICATION_GROUP_ID)
+                    .createNotification(
+                        MpSqlVisualizerBundle.message("log.history.export.failed", it.message ?: ""),
+                        com.intellij.notification.NotificationType.ERROR,
+                    ).notify(project)
+            }
+        }
+    }
+
+    /** R4：导出格式三选（取消返回 null）。选项文本用格式名（CSV/TSV/TXT 无需翻译）。 */
+    private fun chooseExportFormat(): SqlExportFormat? {
+        val names = arrayOf("CSV", "TSV", "TXT")
+        val idx = com.intellij.openapi.ui.Messages.showChooseDialog(
+            project,
+            MpSqlVisualizerBundle.message("log.history.export.choose"),
+            MpSqlVisualizerBundle.message("log.history.export"),
+            com.intellij.icons.AllIcons.Actions.EditSource,
+            names,
+            names[0],
+        )
+        if (idx < 0) return null
+        return when (idx) {
+            0 -> SqlExportFormat.CSV
+            1 -> SqlExportFormat.TSV
+            else -> SqlExportFormat.TXT
+        }
     }
 
     // ---------- T-UiNative P1a：二级右键菜单动作（原 JMenuItem 语义平移，update 设图标/文案/灰置） ----------
