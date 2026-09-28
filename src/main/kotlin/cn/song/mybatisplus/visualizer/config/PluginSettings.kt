@@ -103,6 +103,16 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var xmlSynHiEnabled: Boolean = true,
 
+        // R2（gutter 按来源分组显隐）：各来源组独立开关（默认全开=现行为不变）。
+        // 组口径与 15 个 provider 对应：mapperXml / annotation / jpaHql / jdbc / customDao / other。
+        var gutterGroupMapperXml: Boolean = true,
+        var gutterGroupAnnotation: Boolean = true,
+        var gutterGroupJpaHql: Boolean = true,
+        var gutterGroupJdbc: Boolean = true,
+        var gutterGroupCustomDao: Boolean = true,
+        var gutterGroupOther: Boolean = true,
+        var gutterGroupInlineFallback: Boolean = true,
+
         /**
          * JOIN 图渲染方式（T-Dgm-04）：true=IDE 原生图框架（Ultimate 的 Diagrams 插件，类图观感，
          * 缩放/布局/导出全框架托管）；false=经典自绘渲染器。
