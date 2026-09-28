@@ -223,16 +223,18 @@ class SqlPreviewPanelImportTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     fun testNoTableNameNoCache() {
-        // P-05：纯文本预览（tableName=null）→ 不读写缓存
+        // R22 T-01（D1=A）契约变更：无表名纯文本预览以 SQL 文本规范化指纹为键正常读写缓存
+        // （旧契约「无表名不缓存」随缺口①修复废除——纯文本预览参数全丢是缺陷而非特性）
         val sql = "SELECT id FROM tbl WHERE name = ?"
         val panel = SqlPreviewPanel(project)
         panel.showResult(result(sql = sql, compact = sql, params = listOf("name"), tableName = null))
         panel.paramFieldForTest(0)!!.text = "test"
         panel.flushHistoryForTest()
-        // 无表名时 computeKey 返回 null → 不缓存
         val cache = panel.paramHistoryCacheForTest()
         val key = cache.computeKey(null, sql)
-        assertEquals("无表名 computeKey 应返回 null", null, key)
+        assertNotNull("无表名应以规范化指纹为键（R22 新契约）", key)
+        val recalled = cache.recall(key!!)
+        assertEquals(mapOf("name" to "test"), recalled)
         panel.clear()
     }
 
