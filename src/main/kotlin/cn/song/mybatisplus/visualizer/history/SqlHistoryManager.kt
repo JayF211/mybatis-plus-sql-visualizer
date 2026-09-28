@@ -82,11 +82,30 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
         if (idx < 0) list.add(entry) else list.add(idx, entry)
     }
 
-    /** 超出上限时淘汰最旧的非收藏条目（队尾）。 */
+    /**
+     * 超出上限时淘汰最旧的非收藏条目（队尾）。R15：钉住条目跳过（防翻找丢失）——
+     * 从队尾向前找首个非钉住条目移除；全为钉住则不淘汰（钉住总量由 MAX_PINNED 把关）。
+     */
     private fun evictIfNeeded() {
         while (state.entries.size > maxSize) {
-            state.entries.removeAt(state.entries.lastIndex)
+            val idx = state.entries.indexOfLast { !it.pinned }
+            if (idx < 0) return // 全为钉住：不再淘汰（钉住上限由 togglePin 把关）
+            state.entries.removeAt(idx)
         }
+    }
+
+    /** R15：钉住上限（防钉住分区无限膨胀挤占淘汰机制）。 */
+    private val MAX_PINNED = 50
+
+    /** R15：切换钉住态；钉住数达 [MAX_PINNED] 上限时拒绝并返回 false。 */
+    fun togglePin(id: String): Boolean {
+        val entry = findById(id) ?: return false
+        if (!entry.pinned) {
+            val pinnedCount = state.entries.count { it.pinned } + state.favoriteEntries.count { it.pinned }
+            if (pinnedCount >= MAX_PINNED) return false
+        }
+        entry.pinned = !entry.pinned
+        return true
     }
 
     // ---------- 查询（最新在前） ----------

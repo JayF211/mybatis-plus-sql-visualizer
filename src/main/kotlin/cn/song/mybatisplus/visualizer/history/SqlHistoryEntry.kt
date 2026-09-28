@@ -30,6 +30,8 @@ data class SqlHistoryEntry(
     var favorite: Boolean = false,
     var tags: MutableList<String> = mutableListOf(),
     var executionTimeMs: Long? = null,
+    /** R15（W3 历史工作流包）：钉住——非收藏分区裁剪跳过钉住条目（防翻找丢失）；上限由 manager 把关。 */
+    var pinned: Boolean = false,
 ) {
     /** 分配唯一 id（仅当当前为空白时）。 */
     fun ensureId() {

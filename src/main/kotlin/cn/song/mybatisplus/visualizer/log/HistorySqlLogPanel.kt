@@ -437,6 +437,20 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      */
     private fun applySqlSearch() {
         val q = searchField.text.trim()
+        // R16（检索强化增量）：`regex:` 前缀启用正则匹配（作用 SQL/摘要/源文件三目标）——
+        // 非法正则 fail-closed 回退子串匹配（不产生空结果假象）。
+        if (q.startsWith("regex:")) {
+            val pattern = runCatching { Regex(q.removePrefix("regex:")) }.getOrNull()
+            if (pattern != null) {
+                fillSqlList(currentEntries.filter { entry ->
+                    pattern.containsMatchIn(entry.restoredSql) ||
+                        pattern.containsMatchIn(entry.summary) ||
+                        entry.sourceFile?.let { pattern.containsMatchIn(it) } == true
+                })
+                return
+            }
+            // 非法正则：回退普通子串匹配（继续走下方通用路径）
+        }
         val filtered = if (q.isEmpty()) {
             currentEntries
         } else {
