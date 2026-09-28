@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Test
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -376,6 +377,26 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             val tabCount = (panel2.getComponent(0) as? javax.swing.JTabbedPane)?.tabCount ?: -1
             assertTrue("含历史/转换等 tab，tab 数应 ≥ 3", tabCount >= 3)
             panel2.dispose()
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    /** R19：历史 tab 常驻——未开启自动保存且无历史文件时 tab 仍在（原 F-44 条件挂载废除），
+     *  空态由文件列表引导文案承接（开启自动保存的指引）。 */
+    @Test
+    fun testR19_历史tab常驻_未开启自动保存也无历史文件时仍在() {
+        runCatching { PluginSettings.getInstance().state.logAutoSaveEnabled = false }
+        val manager = SqlLogManager(project)
+        val panel = SqlLogPanel(project, manager)
+        try {
+            val tabs = panel.getComponent(0) as? javax.swing.JTabbedPane
+            org.junit.Assert.assertNotNull(tabs)
+            var found = false
+            for (i in 0 until tabs!!.tabCount) {
+                if (tabs.getTitleAt(i).contains("历史") || tabs.getTitleAt(i).contains("History")) found = true
+            }
+            assertTrue("未开启自动保存时历史 tab 也应常驻（R19）", found)
         } finally {
             panel.dispose()
         }
