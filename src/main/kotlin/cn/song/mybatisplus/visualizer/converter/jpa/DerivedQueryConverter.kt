@@ -427,6 +427,9 @@ object DerivedQueryConverter {
          *
          * 规则：
          *  - 先从 TableInfo 的列映射按实体字段名查找（驼峰形式）
+         *  - T-Embedded：嵌入段驼峰拼接路径（`updateInfoCreatedTime` = 嵌入字段名 + 展平列字段名，
+         *    PartTree 穿透 @Embedded 的解析形态）按展平列匹配，命中即用真实列名——否则 snake 兜底
+         *    会产出 `update_info_created_time` 伪列（demo 真机实测缺陷）
          *  - 找不到则使用驼峰转下划线作为列名
          *
          * 注意：PartTreeParser 输出的 propertyPath 是驼峰形式（如 "lastName"）。
@@ -434,12 +437,16 @@ object DerivedQueryConverter {
         private fun resolveColumn(propertyPath: String, joins: List<JoinClause> = emptyList()): ColumnRef {
             // 从 TableInfo 按实体字段名查找
             val matched = tableInfo.columnByField(propertyPath)
-            return if (matched != null) {
-                ColumnRef(columnName = matched.columnName)
-            } else {
-                // 驼峰转下划线兜底
-                ColumnRef(columnName = NamingStrategy.toSnakeCase(propertyPath))
+            if (matched != null) {
+                return ColumnRef(columnName = matched.columnName)
             }
+            // T-Embedded：嵌入段驼峰拼接路径 → 展平列
+            val embedded = tableInfo.columnByEmbeddedPath(propertyPath)
+            if (embedded != null) {
+                return ColumnRef(columnName = embedded.columnName)
+            }
+            // 驼峰转下划线兜底
+            return ColumnRef(columnName = NamingStrategy.toSnakeCase(propertyPath))
         }
 
         /**

@@ -217,9 +217,10 @@ object JpaQueryEnhancer {
         }
     }.getOrNull()
 
-    /** 实体字段名 → 列名（表元数据匹配优先，驼峰转下划线兜底）。 */
+    /** 实体字段名 → 列名（表元数据匹配优先，T-Embedded 嵌入段驼峰拼接路径次之，驼峰转下划线兜底）。 */
     private fun mapColumn(fieldName: String, table: TableInfo?): String {
         val matched = table?.columnByField(fieldName)
+            ?: table?.columnByEmbeddedPath(fieldName)
         return matched?.columnName ?: NamingStrategy.toSnakeCase(fieldName)
     }
 

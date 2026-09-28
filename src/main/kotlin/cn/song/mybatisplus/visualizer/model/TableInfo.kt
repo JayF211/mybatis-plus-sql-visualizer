@@ -112,6 +112,21 @@ data class TableInfo(
     /** 便捷查找：按实体字段名取列信息，找不到返回 null。 */
     fun columnByField(fieldName: String): ColumnInfo? = columns.firstOrNull { it.fieldName == fieldName }
 
+    /**
+     * T-Embedded：按「嵌入字段名 + 内部字段名」的驼峰拼接路径查展平列。
+     *
+     * Spring Data 派生查询把 `updateInfo.createdTime` 穿透 @Embedded 的属性路径整体解析成单个
+     * 驼峰名 `updateInfoCreatedTime`（无点号；**内层字段首字母大写**——`UpdateInfo` + `CreatedTime`
+     * 驼峰化的产物），`columnByField` 查不中（它不是任何字段的裸名），消费方据此 snake 兜底会产出
+     * `update_info_created_time` 伪列。拼接匹配展平列（`embeddedParent + 首字母大写的 fieldName ==
+     * path`）即可还原真实列名 `created_time`。
+     */
+    fun columnByEmbeddedPath(path: String): ColumnInfo? =
+        columns.firstOrNull {
+            it.embedded && it.embeddedParent != null &&
+                it.embeddedParent + it.fieldName.replaceFirstChar { c -> c.uppercaseChar() } == path
+        }
+
     /** 全部列名（用于 SELECT * 展开）。 */
     val allColumnNames: List<String> get() = columns.map { it.columnName }
 
