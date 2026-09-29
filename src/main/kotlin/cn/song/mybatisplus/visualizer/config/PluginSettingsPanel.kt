@@ -421,6 +421,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）。 */
     private val xmlInlineSqlCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.xmlInlineSql"))
 
+    /** mapper XML 语法高亮注入开关（T-XmlSynHi D4=T-PerfSweep16 F46 补 UI）：State.xmlSynHiEnabled 字段原有，此前无面板入口。 */
+    private val xmlSynHiCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.xmlSynHi"))
+
     /** 首用锚点引导通知开关（T-UxOnboard T-UX-01，默认开）：关闭后首用引导全程静默。 */
     private val onboardingAnchorTipCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.onboardingAnchorTip"))
 
@@ -1040,6 +1043,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     text = MpSqlVisualizerBundle.message("settings.xmlInlineSql")
                     toolTipText = MpSqlVisualizerBundle.message("settings.xmlInlineSql.tip")
                 })
+                // T-PerfSweep16 F46（D4=A 定案）：mapper XML 语法高亮开关行（照 R2 六组复选框形态）
+                addRow(p, g, "", xmlSynHiCheck)
                 addRow(p, g, "", joinDiagramNativeCheck.apply {
                     text = MpSqlVisualizerBundle.message("settings.joinDiagramNative")
                     toolTipText = MpSqlVisualizerBundle.message("settings.joinDiagramNative.tip")
@@ -1342,6 +1347,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
         gutterGroupJdbcCheck.text = MpSqlVisualizerBundle.message("settings.gutterGroup.jdbc")
         gutterGroupInlineFallbackCheck.text = MpSqlVisualizerBundle.message("settings.gutterGroup.inlineFallback")
         gutterGroupOtherCheck.text = MpSqlVisualizerBundle.message("settings.gutterGroup.other")
+        // T-PerfSweep16 F46：字段级实例随 rebuild 复用，语言切换须显式刷文本（同 R2 六组口径）
+        xmlSynHiCheck.text = MpSqlVisualizerBundle.message("settings.xmlSynHi")
         rootPanel.removeAll()
         buildSections(rootPanel)
         reset()
@@ -1631,6 +1638,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             gutterGroupInlineFallbackCheck.isSelected != s.gutterGroupInlineFallback ||
             gutterGroupOtherCheck.isSelected != s.gutterGroupOther
             || xmlInlineSqlCheck.isSelected != s.xmlInlineSqlEnabled
+            // T-PerfSweep16 F46：mapper XML 语法高亮开关变更即为 modified
+            || xmlSynHiCheck.isSelected != s.xmlSynHiEnabled
             || joinDiagramNativeCheck.isSelected != s.joinDiagramNative
             || onboardingAnchorTipCheck.isSelected != s.onboardingAnchorTipEnabled
             // T-PreviewWhitespaceToggle O-44a：空白符开关（漏挂 isModified → 勾选后 Apply 不启用）
@@ -1754,6 +1763,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.gutterGroupInlineFallback = gutterGroupInlineFallbackCheck.isSelected
             s.gutterGroupOther = gutterGroupOtherCheck.isSelected
             s.xmlInlineSqlEnabled = xmlInlineSqlCheck.isSelected
+            // T-PerfSweep16 F46：mapper XML 语法高亮开关写回（随 UI 分区）
+            s.xmlSynHiEnabled = xmlSynHiCheck.isSelected
             s.joinDiagramNative = joinDiagramNativeCheck.isSelected
             // T-UxOnboard T-UX-01：首用锚点引导开关写回（随 UI 分区，读写判定同归属）
             s.onboardingAnchorTipEnabled = onboardingAnchorTipCheck.isSelected
@@ -1858,6 +1869,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
         gutterGroupInlineFallbackCheck.isSelected = s.gutterGroupInlineFallback
         gutterGroupOtherCheck.isSelected = s.gutterGroupOther
             xmlInlineSqlCheck.isSelected = s.xmlInlineSqlEnabled
+            // T-PerfSweep16 F46：mapper XML 语法高亮开关回填
+            xmlSynHiCheck.isSelected = s.xmlSynHiEnabled
             joinDiagramNativeCheck.isSelected = s.joinDiagramNative
             onboardingAnchorTipCheck.isSelected = s.onboardingAnchorTipEnabled
             // T-PreviewWhitespaceToggle O-44a：空白符开关回填
