@@ -222,6 +222,12 @@ class BannedApiSourceScanTest {
             // R4（导出格式三选）：用户必须选择导出格式（CSV/TSV/TXT）才能继续——知情选择场景加白
             "src/main/kotlin/cn/song/mybatisplus/visualizer/log/HistorySqlLogPanel.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt",
+            // ParamSchemeManagerDialog（R22 T-04）：新建/重命名方案 showInputDialog（用户必须输入
+            //   方案名才能继续，与 R4 导出格式三选同类）+ 删除方案前 showYesNoDialog 知情确认
+            //   （破坏性、不可恢复，与 SqlSuppressManagerDialog 清空前确认同类）；对话框本体
+            //   非模态 MODELESS（DialogWrapper(project, false, MODELESS)，与 SqlSuppressManagerDialog
+            //   逐字段同形态），20260929 收口门禁守卫命中后按红线加白。
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/ParamSchemeManagerDialog.kt",
         )
         val found = mainSources()
             .filter { (_, code) ->

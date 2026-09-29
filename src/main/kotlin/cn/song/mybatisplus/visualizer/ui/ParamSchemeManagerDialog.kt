@@ -202,7 +202,8 @@ class ParamSchemeManagerDialog(
         deleteButton.isEnabled = !protectedOrNone
     }
 
-    /** 另存为：输入方案名 → 快照由 [snapshotProvider] 注入 → [ParamHistoryCache.saveAsScheme]。 */
+    /** 另存为：输入方案名 → 快照由 [snapshotProvider] 注入 → [ParamHistoryCache.saveAsScheme]。
+     *  弹窗克制红线白名单场景：用户必须输入方案名才能继续（BannedApiSourceScanTest 白名单登记）。 */
     private fun saveAsClicked() {
         val name = Messages.showInputDialog(
             project,
@@ -227,7 +228,8 @@ class ParamSchemeManagerDialog(
         performRename(newName)
     }
 
-    /** 删除：确认一次（不可恢复）→ [ParamHistoryCache.deleteScheme]。 */
+    /** 删除：确认一次（不可恢复）→ [ParamHistoryCache.deleteScheme]。
+     *  弹窗克制红线白名单场景：破坏性知情确认，与 SqlSuppressManagerDialog 清空前确认同类。 */
     private fun deleteClicked() {
         val confirm = Messages.showYesNoDialog(
             project,

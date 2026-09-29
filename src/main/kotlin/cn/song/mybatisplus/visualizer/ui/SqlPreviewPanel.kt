@@ -3454,6 +3454,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             openSchemeManagerDialog()
         }
         return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6)).apply {
+            name = SCHEME_ROW_NAME
             add(JBLabel(MpSqlVisualizerBundle.message("panel.scheme.label")))
             add(combo)
             add(manageButton)
@@ -4945,10 +4946,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * T-M19.4-01：第 index 个普通参数行的标签（JBLabel）——布局断言用
      * （宽度自适应/tooltip 全名）。按 paramPanel 中「含 JBLabel 的 JBPanel 行」定位，
      * 与 paramFields 的顺序一致（普通参数行按 source 顺序追加）。
+     * R22 T-04：方案行同为「含 JBLabel 的 JBPanel」且插在头部，按 [SCHEME_ROW_NAME]
+     * 排除——访问器契约是「普通参数行」，不含方案行（否则序号错位、断言取到方案行标签）。
      */
     internal fun paramRowLabelForTest(index: Int): JBLabel? = paramPanel.components
         .filterIsInstance<JBPanel<*>>()
-        .filter { row -> row.components.any { it is JBLabel } }
+        .filter { row -> row.name != SCHEME_ROW_NAME && row.components.any { it is JBLabel } }
         .getOrNull(index)
         ?.components?.filterIsInstance<JBLabel>()?.firstOrNull()
 
@@ -5062,6 +5065,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     companion object {
         /** O-4：通知分组 id（plugin.xml 注册，diff/copy 共用）。 */
         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+
+        /** R22 T-04：方案行 panel.name 锚点——方案行也是「含 JBLabel 的 JBPanel」且插在 paramPanel
+         *  头部，[paramRowLabelForTest] 按契约只取普通参数行，须按此排除（否则布局断言序号错位）。 */
+        private const val SCHEME_ROW_NAME = "mpsv.schemeRow"
 
         /** R22 T-02/T-03：参数历史快照特殊键前缀（勾选态/foreach null/foreach 权威值；普通参数键
          *  不以 `__` 开头——键空间约定，ParamHistoryCache 对值透明）。 */
