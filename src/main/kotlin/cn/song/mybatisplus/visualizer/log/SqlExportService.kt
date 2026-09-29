@@ -92,7 +92,15 @@ object SqlExportService {
         return sb.toString()
     }
 
-    /** 时间戳 → 导出用显示文本（毫秒精度，调用方口径统一）。 */
-    fun formatTime(ts: Long): String =
-        SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ROOT).format(Date(ts))
+    /**
+     * 时间戳 → 导出用显示文本（毫秒精度，调用方口径统一）。
+     * F43（T-PerfSweep16）：SDF ThreadLocal 缓存化——照 SqlSuppressManagerDialog F22 范式
+     * （SimpleDateFormat 非线程安全；导出 EDT 行投影调用，ThreadLocal 同时覆盖后台线程触达面）。
+     * 复用实例输出与逐次新建逐字节一致（format 不读旧状态），此前每行投影新建一个实例。
+     */
+    private val TIME_FORMAT = ThreadLocal.withInitial {
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ROOT)
+    }
+
+    fun formatTime(ts: Long): String = TIME_FORMAT.get().format(Date(ts))
 }
