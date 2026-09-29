@@ -67,7 +67,7 @@ foreach ($d in $dirs) {
         if (-not $name -or -not [double]::TryParse($attrs["time"], [ref]$time)) { continue }
         $mtime = $f.LastWriteTimeUtc.Ticks
         if (-not $byClass.ContainsKey($name)) { $byClass[$name] = New-Object System.Collections.Generic.List[object] }
-        $byClass[$name].Add([pscustomobject]@{ M = $mtime; T = $time })
+        $byClass[$name].Add([pscustomobject]@{ M = $mtime; T = $time; D = $d })
         if (($newest - $f.LastWriteTimeUtc).TotalMinutes -lt 30) { $roundSum += $time; $roundFiles++ }
     }
 }
@@ -83,10 +83,24 @@ $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add("# generator=weight-refresh.ps1 (T-TestPerf10 S1)")
 $lines.Add(("# source=latest round execSum={0:N1}s files={1} samples={2} perClass={3} generated={4:yyyy-MM-dd HH:mm}" -f $roundSum, $roundFiles, $Samples, $byClass.Count, (Get-Date)))
 foreach ($name in ($byClass.Keys | Sort-Object)) {
-    $list = $byClass[$name] | Sort-Object -Property M -Descending | Select-Object -First $Samples
-    $vals = @($list | ForEach-Object { $_.T } | Sort-Object)
-    $median = $vals[[int]($vals.Count / 2)]  # same rule as the balancer: sorted ascending [size/2]
-    $lines.Add(("{0}`t{1:F1}" -f $name, $median))
+    # S3-split-aware class weight (matches the balancer's effectiveWeights semantics):
+    # if the class's freshest samples come from 2+ shard dirs within a 10 min window
+    # (one gate round), it is a method-level split class -- record the SUM (whole-class
+    # weight, what a fresh tree without split data will actually run). Otherwise take
+    # the K most recent samples by mtime, value-median = sorted ascending [count/2].
+    $list = $byClass[$name]
+    $dirLatest = $list | Group-Object -Property D | ForEach-Object {
+        $_.Group | Sort-Object -Property M -Descending | Select-Object -First 1
+    }
+    $maxM = ($dirLatest | Measure-Object -Property M -Maximum).Maximum
+    $recent = @($dirLatest | Where-Object { ($maxM - $_.M) -lt [long](10 * 60 * 10000000) })
+    if ($recent.Count -ge 2) {
+        $median = ($recent | Measure-Object -Property T -Sum).Sum
+    } else {
+        $vals = @($list | Sort-Object -Property M -Descending | Select-Object -First $Samples | ForEach-Object { $_.T } | Sort-Object)
+        $median = $vals[[int]($vals.Count / 2)]  # same rule as the balancer: sorted ascending [size/2]
+    }
+    $lines.Add(("{0}`t{1:F3}" -f $name, $median))
 }
 
 $dir = Split-Path -Parent $Out
