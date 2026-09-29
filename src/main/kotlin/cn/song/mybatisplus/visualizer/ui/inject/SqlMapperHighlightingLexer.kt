@@ -85,9 +85,7 @@ class SqlMapperHighlightingLexer : LexerBase() {
                 var i = tokenStart
                 while (i < endOffset && (buffer[i].isLetterOrDigit() || buffer[i] == '_')) i++
                 tokenEnd = i
-                if (buffer.subSequence(tokenStart, i).toString().uppercase() in SqlMapperLanguage.KEYWORDS) {
-                    SqlMapperTT.KEYWORD
-                } else SqlMapperTT.IDENTIFIER
+                if (isKeywordAt(tokenStart, i)) SqlMapperTT.KEYWORD else SqlMapperTT.IDENTIFIER
             }
             c.isWhitespace() -> {
                 var i = tokenStart
@@ -99,6 +97,18 @@ class SqlMapperHighlightingLexer : LexerBase() {
                 tokenEnd = tokenStart + 1
                 SqlMapperTT.OPERATOR
             }
+        }
+    }
+
+    /**
+     * 无分配关键字判定（T-PerfSweep16 F46）：原 `subSequence().toString().uppercase()` 对
+     * 每个词做两次串分配（子串副本 + 大写副本）；改为对词集逐词 `regionMatches` 忽略大小写
+     * 直读缓冲，零分配。词集大小写不敏感口径不变（[SqlMapperLanguage.KEYWORDS] 存大写形态）。
+     */
+    private fun isKeywordAt(start: Int, end: Int): Boolean {
+        val len = end - start
+        return SqlMapperLanguage.KEYWORDS.any { keyword ->
+            keyword.length == len && buffer.regionMatches(start, keyword, 0, len, ignoreCase = true)
         }
     }
 }
