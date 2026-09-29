@@ -9,6 +9,8 @@ import com.intellij.codeInsight.completion.CompletionParameters
 import com.intellij.codeInsight.completion.CompletionProvider
 import com.intellij.codeInsight.completion.CompletionResultSet
 import com.intellij.codeInsight.completion.CompletionType
+import com.intellij.injected.editor.DocumentWindow
+import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.patterns.PlatformPatterns
 import com.intellij.psi.PsiElement
 import com.intellij.psi.util.PsiTreeUtil
@@ -43,6 +45,9 @@ import com.intellij.util.ProcessingContext
  * `result.prefixMatcher.prefixMatches(lookupString)` 过滤（参数/标签同理按项名匹配）。
  *
  * 设计决策：
+ *  - **注入片段 caret 宿主还原**（T-PerfSweep16 修复）：mapper XML 注入活代码化（F37）后，光标
+ *    落注入片段内时 position/offset 可能是注入侧坐标——入口先按 ParamBraceTypedHandler 宿主
+ *    三件套范式还原到宿主元素+宿主偏移再走原解析链；真机平台建参已按宿主坐标，还原为 no-op；
  *  - 语句文本取 `statementTag.textRange` 内**原文**（含子标签原文），光标偏移用
  *    `parameters.offset`（真实光标，比 position 起点精确——光标位于词中时 position.startOffset 会少算已输入部分）；
  *  - 动态标签/属性名位置判定基于语句文本而非 position 所在文本节点（对 XmlToken/文本节点/补全
@@ -63,15 +68,36 @@ class XmlSqlCompletionContributor : CompletionContributor() {
                     context: ProcessingContext,
                     result: CompletionResultSet,
                 ) {
+                    // 宿主还原（T-PerfSweep16 修复：mapper XML 注入活代码化后，光标落在本插件注入片段内时
+                    // position/offset 是注入侧坐标——夹具里平台开编辑器甚至把 file 路由成注入 PsiFile）。
+                    // 照 ParamBraceTypedHandler 的宿主三件套范式还原到宿主元素+宿主偏移再走原解析链。
+                    // 真机注入补全主路径平台已按宿主坐标建参（CompletionInitializationUtil 走 getHostOffsets），
+                    // 此还原对真机为 no-op，仅接住注入侧坐标形态。
+                    val injectedFile = parameters.position.containingFile
+                    val injectionHost = injectedFile
+                        ?.let { InjectedLanguageManager.getInstance(it.project).getInjectionHost(it) }
+                    val hostFile = injectionHost?.containingFile
+                    val position: PsiElement
+                    val offset: Int
+                    if (hostFile != null && hostFile.textLength > 0) {
+                        val hostOffset = (parameters.editor.document as? DocumentWindow)
+                            ?.injectedToHost(parameters.offset) ?: parameters.offset
+                        position = hostFile.findElementAt(hostOffset.coerceIn(0, hostFile.textLength - 1)) ?: return
+                        offset = hostOffset.coerceIn(0, hostFile.textLength)
+                    } else {
+                        position = parameters.position
+                        offset = parameters.offset
+                    }
+
                     // 守卫：祖先链最近语句标签 + 根 <mapper>（O(1) 语法判定）
-                    val statementTag = findStatementTag(parameters.position) ?: return
+                    val statementTag = findStatementTag(position) ?: return
                     if (rootTag(statementTag).name != "mapper") return
 
                     val prefix = result.prefixMatcher
-                    val fileText = parameters.position.containingFile?.text ?: return
+                    val fileText = position.containingFile?.text ?: return
                     val statementStart = statementTag.textRange.startOffset
                     val statementText = fileText.substring(statementStart, statementTag.textRange.endOffset)
-                    val caretInStatement = (parameters.offset - statementStart).coerceIn(0, statementText.length)
+                    val caretInStatement = (offset - statementStart).coerceIn(0, statementText.length)
                     val beforeCaret = statementText.substring(0, caretInStatement)
 
                     // a. 动态标签：光标前非空白字符是 `<`（`1=1 <caret>` 等插入点）
@@ -83,7 +109,7 @@ class XmlSqlCompletionContributor : CompletionContributor() {
                     }
 
                     // c. OGNL：position 在 test/collection 属性值内（含自身为 XmlAttributeValue 的形态）
-                    val attributeValue = PsiTreeUtil.getParentOfType(parameters.position, XmlAttributeValue::class.java, false)
+                    val attributeValue = PsiTreeUtil.getParentOfType(position, XmlAttributeValue::class.java, false)
                     if (attributeValue != null) {
                         val attributeName = (attributeValue.parent as? XmlAttribute)?.name
                         if (attributeName == "test" || attributeName == "collection") {
@@ -102,9 +128,9 @@ class XmlSqlCompletionContributor : CompletionContributor() {
 
                     // b. 属性名位置：position 在 XmlAttribute 上（属性名 token 内）或语句文本
                     //    光标前匹配 `<tagName  `（标签内属性名位）
-                    val nearestTag = PsiTreeUtil.getParentOfType(parameters.position, XmlTag::class.java)
+                    val nearestTag = PsiTreeUtil.getParentOfType(position, XmlTag::class.java)
                     val attributeNamePosition = nearestTag != null && (
-                        parameters.position.parent is XmlAttribute ||
+                        position.parent is XmlAttribute ||
                             SourceSqlSuggestionFactory.ATTRIBUTE_POSITION_PATTERN.containsMatchIn(beforeCaret)
                         )
                     if (attributeNamePosition) {

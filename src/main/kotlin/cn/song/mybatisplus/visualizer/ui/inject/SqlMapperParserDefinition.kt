@@ -7,6 +7,7 @@ import com.intellij.openapi.fileTypes.FileType
 import com.intellij.openapi.fileTypes.PlainTextFileType
 import com.intellij.openapi.fileTypes.PlainTextParserDefinition
 import com.intellij.psi.FileViewProvider
+import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PlainTextTokenTypes
 import com.intellij.psi.tree.IFileElementType
@@ -38,6 +39,21 @@ class SqlMapperParserDefinition : PlainTextParserDefinition() {
     private class SqlMapperFile(viewProvider: FileViewProvider) : PsiFileBase(viewProvider, SqlMapperLanguage) {
         override fun getFileType(): FileType = PlainTextFileType.INSTANCE
         override fun toString(): String = "MpSqlMapper:" + name
+
+        /**
+         * T-PerfSweep16 修复：片段末尾边界（offset == textLength）也返回叶子。
+         *
+         * 平台把光标落在注入区间内（含两端边界，243 实测）的编辑器路由成 EditorWindow，此后
+         * 「caret 处元素」类查询全部按片段坐标进行；EOF 是合法编辑位（语句文本最后一字符之后），
+         * 单叶文件默认在该位答 null，令以 caret 定位的下游链（补全参数构建等）无从起步。
+         * 越界（offset > textLength）仍为 null，不放宽其他边界语义。
+         */
+        override fun findElementAt(offset: Int): PsiElement? {
+            if (offset == textLength && textLength > 0) {
+                return super.findElementAt(textLength - 1)
+            }
+            return super.findElementAt(offset)
+        }
     }
 
     private companion object {
