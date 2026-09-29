@@ -364,7 +364,14 @@ intellijPlatformTesting {
                 .toList()
         }.getOrNull()?.takeIf { it.isNotEmpty() }
 
-        val testSplitHeavy = providers.gradleProperty("testSplitHeavy").orNull?.toBoolean() ?: true
+        // T-TestPerf10 S3 处置（20260930）：默认改关，转 opt-in（-PtestSplitHeavy=true 显式开启）。
+        // 证据：执行侧 exclude 间歇性失效——round2 与 round7 双重执行 37 例（盘面：home 片整类 73 例
+        // 全跑 + 片段B 37 例复跑，SHARD TOTAL 虚胖 6222 vs 真实 6185；round3/5/6 同机制干净），
+        // 接线自证桩显示配置期计划自洽仍挡不住执行侧失火，根因在 Gradle filter/JUnit RT 之下
+        // 未能定位。期望值裁定：T8 自己的诚实测量收益仅临界片 −1~3s（<5% 判据如实入账），失火
+        // 一轮即 +21.9s 双跑 + 计数污染——负 EV。零删例零语义变化（关=整类原子装箱，冷态模拟
+        // 已证画像均衡下无拆分临界 150.4s 照样贴地板带）。接线自证桩与告警保留，供显式开启时排查。
+        val testSplitHeavy = providers.gradleProperty("testSplitHeavy").orNull?.toBoolean() ?: false
         val splitHeavyClassCandidates = listOf(
             "cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelTest",
         )
