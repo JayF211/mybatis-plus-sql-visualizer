@@ -435,12 +435,35 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      * 同款语义：行号 `#5`/`5` 精确 equals、时间按显示片段 contains（所见即所搜，开关关闭不参与）；
      * 源文件为历史页特有检索目标，保留独立分支。
      */
+    /**
+     * F41（T-PerfSweep16）：正则检索 pattern 双字段 memo——源串与上次相同即复用 [lastRegex]，
+     * 不同才重编。调用面 = [applySqlSearch] 的 `regex:` 分支（搜索防抖 200ms Timer 每次应用都走到，
+     * 此前每次现场 `Regex(…)` 编译）。面板单实例且调用全部发生在 EDT（Swing Timer 回调），
+     * 实例字段无需并发容器。非法正则 fail-closed 回退子串匹配语义保持：编译失败时把**失败源串**
+     * 一并 memo（[lastRegex] 置 null）——同坏串反复 apply 不再重复抛编译异常，换串即重试，
+     * 匹配行为与逐次重编完全一致（Regex 实例的 containsMatchIn 无状态，复用安全）。
+     */
+    private fun resolveSearchPattern(source: String): Regex? {
+        if (source == lastRegexSource) return lastRegex
+        val compiled = runCatching { Regex(source) }.getOrNull()
+        lastRegexSource = source
+        lastRegex = compiled
+        return compiled
+    }
+
+    /** F41：上次 memo 的正则源串（null = 尚无 memo，首次必重编）。 */
+    private var lastRegexSource: String? = null
+
+    /** F41：与 [lastRegexSource] 配对的编译结果（非法源串配 null，走回退路径）。 */
+    private var lastRegex: Regex? = null
+
     private fun applySqlSearch() {
         val q = searchField.text.trim()
         // R16（检索强化增量）：`regex:` 前缀启用正则匹配（作用 SQL/摘要/源文件三目标）——
         // 非法正则 fail-closed 回退子串匹配（不产生空结果假象）。
+        // F41（T-PerfSweep16）：pattern 经 [resolveSearchPattern] 双字段 memo，同源串不再每次重编。
         if (q.startsWith("regex:")) {
-            val pattern = runCatching { Regex(q.removePrefix("regex:")) }.getOrNull()
+            val pattern = resolveSearchPattern(q.removePrefix("regex:"))
             if (pattern != null) {
                 fillSqlList(currentEntries.filter { entry ->
                     pattern.containsMatchIn(entry.restoredSql) ||
