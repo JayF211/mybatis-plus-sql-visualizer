@@ -51,8 +51,11 @@ class CustomDaoHqlGutterLineMarkerProvider : LineMarkerProvider {
         // 【关键排除】标准 JPA/Hibernate 方法（createQuery/createNamedQuery/createNativeQuery）由 HqlGutterLineMarkerProvider 负责，
         // 本 provider 仅处理自定义 DAO 方法（findByQuery/executeHql 等），避免同行双图标。
         if (element.text in EXCLUDED_JPA_METHODS) return null
-        if (!gutterEnabled()) return null
-        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
+        // F36（T-PerfSweep16）：单次取 state，总闸与组显隐共用（原 gutterEnabled + enabledFor
+        // 双路径每到达元素 3 次 app 级查找收敛为 1 次）
+        val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
+        if (gutterState != null && !gutterState.showGutterIcon) return null
+        if (!GutterGroups.enabledFor(javaClass, gutterState)) return null // R2 分组显隐
         // T-Perf-02：纯文本预筛（O(1)，零 resolve、零正则）——qualifier 名与方法名均无 DAO/HQL
         // 特征的调用直接排除，不进 locate()。locate 内部会跑接收者 classify（名字启发失败时
         // resolve 类型）与 4 条 HQL 内容正则；daemon 每趟对项目内每个方法调用都执行本 provider，
@@ -69,10 +72,6 @@ class CustomDaoHqlGutterLineMarkerProvider : LineMarkerProvider {
             { MpSqlVisualizerBundle.message("gutter.customDaoHql.accessible.name") },
         )
     }
-
-    private fun gutterEnabled(): Boolean = runCatching {
-        PluginSettings.getInstance().state.showGutterIcon
-    }.getOrDefault(true)
 
     /**
      * T-Perf-02：纯文本预筛（O(1)，零 PSI resolve）——镜像 [CustomDaoHqlLocator] 的名字层启发

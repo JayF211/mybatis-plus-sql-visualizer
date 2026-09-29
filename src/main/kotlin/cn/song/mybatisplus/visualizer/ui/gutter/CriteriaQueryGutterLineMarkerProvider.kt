@@ -34,8 +34,11 @@ class CriteriaQueryGutterLineMarkerProvider : LineMarkerProvider {
         // LineMarker 框架只传递 leaf 元素：锚点为 PsiIdentifier（变量名 / 方法名 leaf）。
         // 其它 leaf（关键字、括号、字面量等）不可能位于 CriteriaQuery 调用链上——早退。
         if (element !is PsiIdentifier) return null
-        if (!gutterEnabled()) return null
-        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
+        // F36（T-PerfSweep16）：单次取 state，总闸与组显隐共用（原 gutterEnabled + enabledFor
+        // 双路径每到达元素 3 次 app 级查找收敛为 1 次）
+        val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
+        if (gutterState != null && !gutterState.showGutterIcon) return null
+        if (!GutterGroups.enabledFor(javaClass, gutterState)) return null // R2 分组显隐
         // T-PerfSweep F4：文件级门控——不含 criteria 特征子串的文件整体跳过 locate。
         // daemon 每趟对本 provider 传入打开文件的每个方法名 identifier，无门控时每个方法
         // 定义都要付一次 locate 全代码块 PSI 扫描（分析 P1-1 在 dev 的唯一残留）。
@@ -56,10 +59,6 @@ class CriteriaQueryGutterLineMarkerProvider : LineMarkerProvider {
             { MpSqlVisualizerBundle.message("gutter.criteria.accessible.name") },
         )
     }
-
-    private fun gutterEnabled(): Boolean = runCatching {
-        PluginSettings.getInstance().state.showGutterIcon
-    }.getOrDefault(true)
 
     private object CriteriaQueryGutterNavigationHandler : GutterIconNavigationHandler<PsiElement> {
         override fun navigate(e: MouseEvent?, elt: PsiElement) {

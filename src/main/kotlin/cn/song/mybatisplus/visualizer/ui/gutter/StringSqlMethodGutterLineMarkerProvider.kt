@@ -54,6 +54,12 @@ import javax.swing.Icon
 class StringSqlMethodGutterLineMarkerProvider : LineMarkerProvider {
 
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
+        // F36（T-PerfSweep16）：组显隐门前置——组关时 hasStringSqlCall 方法体扫描重活零触达
+        // （原门在重活判定之后，组关省不掉重活）；单次取 state，总闸与组显隐共用
+        // （原双路径每到达元素 3 次 app 级查找收敛为 1 次）
+        val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
+        if (gutterState != null && !gutterState.showGutterIcon) return null
+        if (!GutterGroups.enabledFor(javaClass, gutterState)) return null // R2 分组显隐
         // LineMarker 框架只传递 leaf 元素：锚点为方法定义名 PsiIdentifier
         if (element !is PsiIdentifier) return null
         val method = element.parent as? PsiMethod ?: return null
@@ -61,8 +67,6 @@ class StringSqlMethodGutterLineMarkerProvider : LineMarkerProvider {
         val body = method.body ?: return null
 
         if (!hasStringSqlCall(body)) return null
-        if (!gutterEnabled()) return null
-        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
 
         return LineMarkerInfo(
             element,
@@ -100,11 +104,6 @@ class StringSqlMethodGutterLineMarkerProvider : LineMarkerProvider {
                 }
         }
     }
-
-    /** 读取 gutter 图标开关（测试环境 service 未注册时按默认 true 处理）。 */
-    private fun gutterEnabled(): Boolean = runCatching {
-        PluginSettings.getInstance().state.showGutterIcon
-    }.getOrDefault(true)
 
     /**
      * 点击处理：EDT 捕获锚点方法，候选收集走后台 ReadAction（EDT 禁止 PSI 慢操作），

@@ -31,13 +31,17 @@ import javax.swing.Icon
 class AnnotationSqlGutterLineMarkerProvider : LineMarkerProvider {
 
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
+        // F36（T-PerfSweep16）：组显隐门前置——组关时 isSqlAnnotation 重活零触达（原门在重活
+        // 判定之后，组关省不掉重活）；单次取 state，总闸与组显隐共用（原双路径每到达元素
+        // 3 次 app 级查找收敛为 1 次）
+        val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
+        if (gutterState != null && !gutterState.showGutterIcon) return null
+        if (!GutterGroups.enabledFor(javaClass, gutterState)) return null // R2 分组显隐
         // LineMarker 必须注册在 leaf 元素：注解的 `@` token
         val token = element as? PsiJavaToken ?: return null
         if (token.tokenType != JavaTokenType.AT) return null
         val annotation = PsiTreeUtil.getParentOfType(token, PsiAnnotation::class.java, false) ?: return null
         if (!AnnotationSqlPreviewService.isSqlAnnotation(annotation)) return null
-        if (!gutterEnabled()) return null
-        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
         return LineMarkerInfo(
             element,
@@ -49,11 +53,6 @@ class AnnotationSqlGutterLineMarkerProvider : LineMarkerProvider {
             { MpSqlVisualizerBundle.message("gutter.annotation.accessible.name") },
         )
     }
-
-    /** 读取 gutter 图标开关（测试环境 service 未注册时按默认 true 处理）。 */
-    private fun gutterEnabled(): Boolean = runCatching {
-        PluginSettings.getInstance().state.showGutterIcon
-    }.getOrDefault(true)
 
     /** 点击处理：后台解析 + 渲染（EDT 禁止 PSI 慢操作），结果走统一展示入口。 */
     private object AnnotationGutterNavigationHandler : GutterIconNavigationHandler<PsiElement> {

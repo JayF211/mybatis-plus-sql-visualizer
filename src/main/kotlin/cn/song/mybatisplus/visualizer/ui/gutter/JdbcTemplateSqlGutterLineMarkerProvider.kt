@@ -71,9 +71,12 @@ class JdbcTemplateSqlGutterLineMarkerProvider : LineMarkerProvider {
         // 杜绝 `execute(callback)` / MP select 族（Wrapper 实参）误标
         if (!PreviewReceiverResolver.hasStringLikeArg(grandParent)) return null
 
-        // 开关关闭时不显示
-        if (!gutterEnabled()) return null
-        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
+        // 开关关闭时不显示。F36（T-PerfSweep16）：单次取 state——本 provider 在总闸之外还受
+        // jdbcSqlPreviewEnabled 约束（原 gutterEnabled 语义等价保留：失败回退按 true），总闸/组显隐/
+        // JDBC 预览开关共用这一次读取（原双路径每到达元素 3 次 app 级查找收敛为 1 次）
+        val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
+        if (gutterState != null && (!gutterState.showGutterIcon || !gutterState.jdbcSqlPreviewEnabled)) return null
+        if (!GutterGroups.enabledFor(javaClass, gutterState)) return null // R2 分组显隐
 
         return LineMarkerInfo(
             element,
@@ -85,12 +88,6 @@ class JdbcTemplateSqlGutterLineMarkerProvider : LineMarkerProvider {
             { MpSqlVisualizerBundle.message("gutter.jdbcTemplate.accessible.name") },
         )
     }
-
-    /** 读取 gutter 图标开关 + JDBC 预览开关（测试环境 service 未注册时按默认 true 处理）。 */
-    private fun gutterEnabled(): Boolean = runCatching {
-        val state = PluginSettings.getInstance().state
-        state.showGutterIcon && state.jdbcSqlPreviewEnabled
-    }.getOrDefault(true)
 
     /**
      * 点击处理：在 EDT 捕获锚点元素，转换走后台线程 + ReadAction（EDT 禁止 PSI 慢操作），

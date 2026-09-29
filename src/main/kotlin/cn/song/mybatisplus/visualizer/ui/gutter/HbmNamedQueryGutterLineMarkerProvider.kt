@@ -39,8 +39,11 @@ class HbmNamedQueryGutterLineMarkerProvider : LineMarkerProvider {
         if (tag.name !in QUERY_TAGS) return null
         if (tag.parentTag?.name != "hibernate-mapping") return null
         if (tag.getAttributeValue("name") == null) return null
-        if (!gutterEnabled()) return null
-        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
+        // F36（T-PerfSweep16）：单次取 state，总闸与组显隐共用（原 gutterEnabled + enabledFor
+        // 双路径每到达元素 3 次 app 级查找收敛为 1 次）
+        val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
+        if (gutterState != null && !gutterState.showGutterIcon) return null
+        if (!GutterGroups.enabledFor(javaClass, gutterState)) return null // R2 分组显隐
         return LineMarkerInfo(
             element,
             element.textRange,
@@ -51,11 +54,6 @@ class HbmNamedQueryGutterLineMarkerProvider : LineMarkerProvider {
             { MpSqlVisualizerBundle.message("gutter.hbmNamedQuery.accessible.name") },
         )
     }
-
-    /** 读取 gutter 图标开关（测试环境 service 未注册时按默认 true 处理）。 */
-    private fun gutterEnabled(): Boolean = runCatching {
-        PluginSettings.getInstance().state.showGutterIcon
-    }.getOrDefault(true)
 
     /** 点击处理：按查询种类分派 HQL / 原生 SQL 转换（后台线程），结果走统一展示入口。 */
     private object HbmNamedQueryNavigationHandler : GutterIconNavigationHandler<PsiElement> {

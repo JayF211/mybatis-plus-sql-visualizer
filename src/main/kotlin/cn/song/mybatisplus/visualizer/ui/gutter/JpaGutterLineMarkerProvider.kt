@@ -50,8 +50,11 @@ class JpaGutterLineMarkerProvider : LineMarkerProvider {
         // 必须锚定在方法名 PsiIdentifier 上——仅当 element 是方法的名称 token 时才创建 marker，
         // 避免方法声明内的每个叶子（返回类型、参数名、关键字等）都产生重复图标。
         if (element !is PsiIdentifier) return null
-        if (!gutterEnabled()) return null
-        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
+        // F36（T-PerfSweep16）：单次取 state，总闸与组显隐共用（原 gutterEnabled + enabledFor
+        // 双路径每到达元素 3 次 app 级查找收敛为 1 次）
+        val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
+        if (gutterState != null && !gutterState.showGutterIcon) return null
+        if (!GutterGroups.enabledFor(javaClass, gutterState)) return null // R2 分组显隐
 
         // T-J16：@Procedure 方法声明锚点（Repository 接口方法名 identifier）
         val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java)
@@ -123,10 +126,6 @@ class JpaGutterLineMarkerProvider : LineMarkerProvider {
         if (name in JpaCrudOperationConverter.crudAnchorMethodNames) return false
         return name in SpecificationQueryConverter.EXECUTOR_METHODS || name in QueryByExampleConverter.EXAMPLE_METHODS
     }
-
-    private fun gutterEnabled(): Boolean = runCatching {
-        PluginSettings.getInstance().state.showGutterIcon
-    }.getOrDefault(true)
 
     /**
      * 方法所在类是否为 Repository 接口（M38.1，文本级 O(1)——无 resolve，符合性能红线）：

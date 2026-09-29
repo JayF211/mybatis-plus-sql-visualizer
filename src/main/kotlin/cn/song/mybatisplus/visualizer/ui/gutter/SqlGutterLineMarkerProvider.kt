@@ -41,9 +41,12 @@ import javax.swing.SwingUtilities
 class SqlGutterLineMarkerProvider : LineMarkerProvider {
 
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
-        // T-Perf-23：开关判断前置——用户关闭图标后不再对每个 leaf 跑锚点判定
-        if (!gutterEnabled()) return null
-        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
+        // T-Perf-23：开关判断前置——用户关闭图标后不再对每个 leaf 跑锚点判定。
+        // F36（T-PerfSweep16）：单次取 state，总闸与组显隐共用（原 gutterEnabled + enabledFor
+        // 双路径每到达元素 3 次 app 级查找收敛为 1 次）
+        val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
+        if (gutterState != null && !gutterState.showGutterIcon) return null
+        if (!GutterGroups.enabledFor(javaClass, gutterState)) return null // R2 分组显隐
         val anchor = WrapperAnchorDetector.anchorElement(element) ?: return null
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用。
         // T-MergeFollowup-02：覆写 createGutterRenderer——243 平台 LineMarkerGutterIconRenderer 不覆写
@@ -64,11 +67,6 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
                 }
         }
     }
-
-    /** 读取 gutter 图标开关（测试环境 service 未注册时按默认 true 处理）。 */
-    private fun gutterEnabled(): Boolean = runCatching {
-        PluginSettings.getInstance().state.showGutterIcon
-    }.getOrDefault(true)
 
     /**
      * 点击处理（M38.2 重构：左键直接预览 + 右键弹菜单）。
