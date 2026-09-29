@@ -63,6 +63,30 @@ tasks.withType<Test>().configureEach {
     providers.gradleProperty("testProcCap").orNull?.toIntOrNull()?.let {
         jvmArgs("-XX:ActiveProcessorCount=$it")
     }
+    // T-TestPerf9：JVM 线程面二代旋钮——一代 ActiveProcessorCount 帽的是应用线程池本身
+    // （测试代码并行度一起被压，T5 证伪）；二代只压 JVM 自带线程，应用并发度不动。
+    // 全部缺省不动，筛查轮 -P 逐旋钮启用；适用面=根项目全部 Test 任务（分片/外部桶/testFast），
+    // agent 子项目不在面内（早收非瓶颈）。flag 合法性已用 JBR 17 -version 预验。
+    // -PtestGcThreads=N → ParallelGCThreads=N + ConcGCThreads=N/2：5 并发平台测试 JVM 的
+    //   G1 工作线程（Windows 12 逻辑核默认 ~6-8/JVM）×5 风暴压帽，GC 停顿更短更稳。
+    providers.gradleProperty("testGcThreads").orNull?.toIntOrNull()?.let { n ->
+        jvmArgs("-XX:ParallelGCThreads=$n", "-XX:ConcGCThreads=${maxOf(1, n / 2)}")
+    }
+    // -PtestCiCount=N → CICompilerCount=N（tiered 下限取 3 档）：JIT 编译线程 ×5 压帽，
+    //   头部 EDT 敏感类的 JIT 争用回吐。
+    providers.gradleProperty("testCiCount").orNull?.toIntOrNull()?.let {
+        jvmArgs("-XX:CICompilerCount=$it")
+    }
+    // -PtestNoExplicitGc=true → DisableExplicitGC：平台显式 System.gc() 触发的全暂停 ×5
+    //   JVM 根除。风险=512m 堆失去显式回收点（V3：OOM/长尾即销案）。
+    if (providers.gradleProperty("testNoExplicitGc").getOrElse("") == "true") {
+        jvmArgs("-XX:+DisableExplicitGC")
+    }
+    // -PtestTieredStop=true → TieredStopAtLevel=1：bootstrap JIT 预热提速，长 UI 类回退风险
+    // （T8 S5 遗留项，本轮一并筛查销案或转正）。
+    if (providers.gradleProperty("testTieredStop").getOrElse("") == "true") {
+        jvmArgs("-XX:TieredStopAtLevel=1")
+    }
     // Docker 测试默认关闭（20260923 用户定例）：daemon 半活态会让 testcontainers 的 ping
     // 探测阻塞无超时（runCatching 兜不住阻塞形态，20260923 发行门禁实录三片挂起 40 分钟），
     // daemon 活着时真容器方言验证的 pull/run 耗时也不可控。只有显式 -PmpvDockerTests=true
