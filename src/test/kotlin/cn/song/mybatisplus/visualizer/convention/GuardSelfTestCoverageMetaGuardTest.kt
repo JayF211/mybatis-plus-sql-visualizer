@@ -900,6 +900,32 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "O-64 wholeScriptExec 接线守卫：生产链每个转发点必传旗标（P19 批次默认执行缺口的防复发面）；" +
                     "callsWithin 的自证语料为合成源码直接喂入",
             ),
+            // ---- T-PerfSweep16 新增守卫补登记（2026-09-29 合并 dev 后收口门禁基线红，防整体脱离扫描面） ----
+            GuardEntry(
+                "convention/SuppressKeysPairingGuardTest.kt",
+                listOf(
+                    // 裸条目：判定内核由本类 4 个 `守卫自证_` 合成样本用例直接引用（勿加描述=豁免）
+                    DecisionFn("unpairedSuppressKeyLines", FnKind.VIOLATIONS),
+                    DecisionFn(
+                        "isAssignmentTo",
+                        FnKind.HELPER,
+                        "赋值判别谓词（`token =` 形态，排除 `==` 比较与前缀粘连），是判定内核 unpairedSuppressKeyLines " +
+                            "与扫描面保鲜计数 countSuppressKeyAssignments 的共同输入；自证语料经该转发边到达",
+                        via = listOf("unpairedSuppressKeyLines"),
+                    ),
+                ),
+                "T-PerfSweep16 F44 suppressKeys 配对写源码守卫：扫描面保鲜计数与 stripComments/repoRoot/" +
+                    "readSqlLogManagerSource 为夹具",
+            ),
+            GuardEntry(
+                "ui/gutter/GutterProviderSingleLookupGuardTest.kt",
+                listOf(
+                    // 裸条目：判定内核由 `守卫自证_合成样本双读必报单读放行` 直接引用
+                    DecisionFn("fastPathLookupCount", FnKind.VIOLATIONS),
+                ),
+                "T-PerfSweep16 F36 gutter provider 单次查找守卫：providerFiles/extractBracedBody/countToken/" +
+                    "stripComments/repoRoot 为夹具",
+            ),
             // ---- 本元守卫自身 ----
             GuardEntry(
                 "convention/GuardSelfTestCoverageMetaGuardTest.kt",
