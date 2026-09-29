@@ -6,6 +6,7 @@
 
 ### Added
 
+- **预览参数命名方案（R22 T-04）**：参数区新增「方案」行——当前填好的参数可**另存为命名方案**，下拉一键切换（参数值/OGNL 勾选态/foreach 权威值随方案整组还原），「管理方案…」对话框支持另存为/重命名/删除（默认方案受保护，删除带知情确认）；历史自动记录在「默认方案」下照常工作，旧数据零迁移自动成为默认方案；后台写回按激活方案归桶，切换后不再串写
 - **SQL 高亮分组开关（R2）**：设置页可按语句来源分组控制 gutter SQL 图标显隐——mapper XML / 注解 SQL（@Select 族）/ JPA·HQL 族 / JdbcTemplate 字符串 / 通用 XML 内嵌兜底 / Wrapper 链及其它，默认全开（现行为不变）
 - **历史条目钉住与正则检索（R15/R16）**：历史 SQL 条目可钉住防淘汰；二级搜索支持 `regex:` 前缀正则匹配（SQL/摘要/源文件三目标，非法正则回退子串）
 - **历史/日志导出（R4）**：历史面板与日志面板右键「导出」CSV / TSV / 纯文本（行集与面板当前可见一致，后台写盘不卡 EDT）
@@ -29,6 +30,7 @@
 
 ### Fixed
 
+- **日期/时间类型参数还原改 ANSI 类型字面量（R3）**：日志还原链对带日期族类型标注（Timestamp/Date/LocalDate/LocalDateTime 等）的参数此前渲染裸单引号字符串——在 Oracle 上对日期/时间戳列的隐式转换恒失败（ORA-01861/01843，与同类产品同款缺陷）。现按类型标注渲染 ANSI 类型字面量 `DATE '…'` / `TIMESTAMP '…'`（ISO 'T' 分隔符归一为空格、缺秒补 `:00`、值文本不匹配日期形态时回落引号；`LocalTime`/带时区值/无类型标注维持原行为）。该字面量形态经 Oracle 11g/23、达梦 DM8、金仓、MySQL 5.7/8.4、PostgreSQL、openGauss 真库逐格实测通用，无需方言分支
 - **premain 注入不再落入 Gradle 测试与 IDE 任务的 fork JVM（T-GradleTaskInjectScope，O-73）**：开启增强捕获后，`-javaagent` 此前会经 init script 传播进 Gradle/Maven 任务 fork 出的全部 JVM——从 IDE 工具窗跑 `test`/`runIde` 等任务的 fork 进程也被挂上 agent。现按任务语义收窄：测试族（test/check/verification/surefire 等）与 IDE 族（runIde/buildSearchableOptions/prepareSandbox 等）不再注入，`bootRun`/`run`/`quarkusDev` 等真实应用运行任务照常注入，非 Gradle 的普通 Java/Spring Boot 运行配置行为完全不变；跳过时提前退出，不落盘 agent jar、不开协商端口，判定异常时按原行为注入兜底（绝不影响任务本身）
 - **T-SQL 控制流批次切分两处误合并（T-SqlSplitterTsqlGuard，O-60）**：①`BEGIN TRAN/TRANSACTION/DIALOG/CONVERSATION/DISTRIBUTED` 等非块形态此后方文本中任意位置的 `END` 词（如 CASE 表达式）误武装块计数、后续所有顶层 `;` 不再切分——整段脚本并成一条送执行；此类 BEGIN 不再武装；②`IF @x=1 BEGIN SELECT 1; END` 换行后接下一条语句（T-SQL 惯例 END 后分号可省）此前被并成一条——块深度归零的顶层 `END` 现产生隐式语句边界（声明段内例程体的 END 不受影响，Oracle 匿名块/DELIMITER 存储过程语义逐字节不变）。定向 81 例（先红 5）全绿，切分消费方回归 159 例全绿
 - **回滚产物含 `SET IDENTITY_INSERT` 时静态检查误报与默认执行不完整（T-RollbackIdentityParse，O-64，P19 收口）**：①含 `SET IDENTITY_INSERT [user] ON; INSERT …; SET IDENTITY_INSERT [user] OFF;` 的回滚产物走无界写静态检查此前报「无法解析语句结构」（JSqlParser 对 T-SQL `SET` 语句解析期抛错，五种表名形态实证全败）——现检查前按精确形态剥离 identity 包装语句再解析（单表引用 + ON/OFF + 干净边界；该检查面同时服务用户手写输入故不宽剥，剥不到维持 fail-closed），SQL Server 与 DM8 双方言受益；②执行对话框 Statements 选择此前默认只勾第一条（＝第一条 `SET … ON`），不逐项勾选直接执行时只切了开关、INSERT 不跑——identity 包装产物现默认整批直跑（执行期副本覆写，不弹选择层、不改全局设置与缓存），普通多语句产物行为不变
