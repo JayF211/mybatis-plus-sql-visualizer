@@ -46,12 +46,29 @@ object GutterGroups {
     /** 该 provider 的组开关是否开启（全局 showGutterIcon 总闸在前；测试环境兜底全开）。 */
     fun enabledFor(providerClass: Class<*>, showGutterIcon: Boolean): Boolean {
         if (!showGutterIcon) return false
-        val group = groupOf(providerClass.simpleName)
         return runCatching {
-            val s = PluginSettings.getInstance().state
-            groupEnabled(group, s)
+            groupAllowed(providerClass, PluginSettings.getInstance().state)
         }.getOrDefault(true)
     }
+
+    /**
+     * F36（T-PerfSweep16）：调用方已持有 State 的重载——provider 在 getLineMarkerInfo 方法头
+     * 单次取 state 后传入，消掉原 `(Class, Boolean)` 路径里包装层与本函数内部的重复
+     * app 级服务查找（每到达元素 3 次 → 1 次）。
+     *
+     * 语义与 `(Class, Boolean)` 版逐值等价：state 非空时总闸（`showGutterIcon`）与组开关判定
+     * 同现状；state 为 null（设置服务不可读）承接失败回退语义返回 true（全开）。
+     * 组判定共用 [groupAllowed] 单一事实。
+     */
+    fun enabledFor(providerClass: Class<*>, state: PluginSettings.State?): Boolean {
+        if (state == null) return true // 设置读取失败回退：同 runCatching { … }.getOrDefault(true)
+        if (!state.showGutterIcon) return false
+        return groupAllowed(providerClass, state)
+    }
+
+    /** 组判定私有实现（两个重载共用）：组解析 + 组开关读取的单一事实源。 */
+    private fun groupAllowed(providerClass: Class<*>, state: PluginSettings.State): Boolean =
+        groupEnabled(groupOf(providerClass.simpleName), state)
 
     /** 纯逻辑面（可测）：组开关读取（组 → State 字段映射单一事实）。 */
     fun groupEnabled(group: String, s: PluginSettings.State): Boolean = when (group) {
