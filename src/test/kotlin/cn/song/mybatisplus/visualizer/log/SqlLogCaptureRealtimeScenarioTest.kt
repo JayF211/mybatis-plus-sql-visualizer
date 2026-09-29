@@ -90,7 +90,7 @@ class SqlLogCaptureRealtimeScenarioTest {
         )
         assertEquals(1, entries.size)
         assertEquals(200L, entries[0].executionTimeMs)
-        assertTrue(entries[0].restoredSql.contains("'2026-08-31 17:00:00.0'"))
+        assertTrue(entries[0].restoredSql.contains("TIMESTAMP '2026-08-31 17:00:00.0'"))
     }
 
     // ---------- 真实场景 2：分页查询连续 5 次 → 去重留 1 条 + 徽章 4 ----------
