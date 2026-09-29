@@ -31,6 +31,9 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
 
     override fun tearDown() {
         DocWriteContext.writeAllowedProbe = null
+        // R22 T-04：必须清历史缓存——ParamHistoryCache 测试态持久化走静态 fallbackStorage，
+        // panel.clear() 不清缓存，激活方案/方案快照会跨测试（乃至跨测试类）泄漏
+        runCatching { panel?.paramHistoryCacheForTest()?.clear() }
         runCatching { panel?.clear() }
         runCatching { PluginSettings.getInstance().state.formatSql = true }
         panel = null
@@ -165,5 +168,73 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         p.flushHistoryForTest()
         val stored = cache.recall(key)
         assertEquals("改值后历史应跟随（原实现此键缺失）", "7,9", stored!!["__fev__:statusList"])
+    }
+
+    // ==== R22 T-04：命名方案面板层 round-trip ====
+
+    /** 方案行在场：默认选中默认方案；下拉含另存的命名方案（对话框回调同步）。 */
+    fun testT04_方案行在场_默认选中() {
+        val p = openPanel()
+        val combo = p.schemeComboForTest()
+        assertNotNull("参数区应有方案下拉（T-04）", combo)
+        assertEquals("默认应选中默认方案（空串内部名）", ParamHistoryCache.DEFAULT_SCHEME, combo!!.selectedItem)
+    }
+
+    /** 面板层 round-trip：默认流快照 → 另存「边界流」→ 清态切回 → 参数/勾选/foreach 逐字节还原。 */
+    fun testT04_面板方案roundTrip_切换还原() {
+        val p = openPanel()
+        val cache = p.paramHistoryCacheForTest()
+        val key = p.historyCacheKeyForTest()!!
+        // 默认流：改 foreach 权威值 + 关掉一个默认勾选，快照落默认方案
+        p.setForEachValuesForTest("statusList", listOf("1", "2"))
+        p.applyXmlForEachValuesForTest("statusList", "1,2")
+        val defaultDisabled = p.enabledIdsForTest().first()
+        p.toggleCheckForTest(defaultDisabled, false)
+        p.flushHistoryForTest()
+        val defaultSnapshot = cache.recall(key)!!
+
+        // 边界流：另一组参数（foreach 权威值不同），快照直取不走 flush——
+        // flush 会把边界值写进当前激活的默认方案，覆盖掉要断言的默认快照
+        p.clearStateForTest()
+        p.setForEachValuesForTest("statusList", listOf("8", "9"))
+        p.applyXmlForEachValuesForTest("statusList", "8,9")
+        val boundarySnapshot = p.buildHistorySnapshotForTest()
+        cache.saveAsScheme("边界流", key, boundarySnapshot)
+        p.onSchemesChangedForTest() // 对话框回调链：同步下拉
+        assertEquals("另存后下拉应选中「边界流」", "边界流", p.schemeComboForTest()!!.selectedItem)
+
+        // 边界流 → 默认：清态切换后默认快照逐字节还原
+        p.switchSchemeForTest(ParamHistoryCache.DEFAULT_SCHEME)
+        assertEquals("切回默认方案应还原默认快照", defaultSnapshot, cache.recall(key))
+        assertEquals("默认被禁勾选应保持禁用", false, p.toggleCheckSelectedForTest(defaultDisabled))
+        assertEquals("默认 foreach 权威值应还原", listOf("1", "2"), p.forEachValuesForTest()["statusList"])
+
+        // 默认 → 边界流：边界快照还原（清场不得残留默认流残值——防串桶的用户可见面）
+        p.switchSchemeForTest("边界流")
+        assertEquals("切到边界流应还原边界快照", boundarySnapshot, cache.recall(key))
+        assertEquals("边界 foreach 权威值应还原", listOf("8", "9"), p.forEachValuesForTest()["statusList"])
+    }
+
+    /** 防串桶（面板层）：flushHistoryToCache 必须以「取快照时刻」的激活方案落库——
+     *  在命名方案下取快照后（模拟池化线程延迟写回前）切走，写回不得串进默认方案。 */
+    fun testT04_防串桶_快照随捕获方案落库() {
+        val p = openPanel()
+        val cache = p.paramHistoryCacheForTest()
+        val key = p.historyCacheKeyForTest()!!
+        // 默认方案先落一份基准快照
+        p.setForEachValuesForTest("statusList", listOf("1"))
+        p.applyXmlForEachValuesForTest("statusList", "1")
+        p.flushHistoryForTest()
+        val defaultSnapshot = cache.recall(key)!!
+        // 激活命名方案，取快照（flushForTest 内部捕获激活名），随后立刻切回默认
+        cache.saveAsScheme("边界流", key, mapOf("id" to "9", "__fev__:statusList" to "8"))
+        p.onSchemesChangedForTest()
+        p.setForEachValuesForTest("statusList", listOf("5"))
+        p.applyXmlForEachValuesForTest("statusList", "5")
+        p.flushHistoryForTest() // 捕获方案 = 边界流
+        p.switchSchemeForTest(ParamHistoryCache.DEFAULT_SCHEME)
+        // 写回已完成：默认方案快照必须仍是默认流（未被边界流的延迟写回覆盖）
+        assertEquals("默认方案快照不得被命名方案的写回串写", defaultSnapshot, cache.recall(key))
+        assertEquals("边界流快照应含其捕获的值", "5", cache.recallFromScheme("边界流", key)!!["__fev__:statusList"])
     }
 }
