@@ -75,6 +75,7 @@ import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiFileFactory
 import com.intellij.ui.JBColor
+import com.intellij.ui.SimpleListCellRenderer
 import com.intellij.ui.TitledSeparator
 import com.intellij.ui.OnePixelSplitter
 import com.intellij.ui.components.JBLabel
@@ -95,8 +96,10 @@ import java.awt.datatransfer.UnsupportedFlavorException
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
 import javax.swing.BoxLayout
+import javax.swing.DefaultComboBoxModel
 import javax.swing.JButton
 import javax.swing.JCheckBox
+import javax.swing.JComboBox
 import javax.swing.JComponent
 import javax.swing.JTabbedPane
 import javax.swing.KeyStroke
@@ -483,6 +486,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private val paramHistoryCache = ParamHistoryCache()
     /** P-05：debounce 写回调度器（Swing Timer，500ms 延迟，restart 实现防抖）。 */
     private val historyAlarm = javax.swing.Timer(500) { flushHistoryToCache() }.apply { isRepeats = false }
+
+    // R22 T-04：命名方案下拉（rebuildLeftPanel 随参数区重建；syncSchemeCombo 填充/刷新）
+    private var schemeCombo: JComboBox<String>? = null
+    /** 程序化填 combo 模型时置位（抑制 addActionListener 的用户切换语义）。 */
+    private var schemeSyncingCombo = false
+    /** 上次已同步到下拉的激活方案名——对话框回调时比对判定「激活方案被对话框切走」。 */
+    private var lastShownActiveScheme: String = ParamHistoryCache.DEFAULT_SCHEME
+    /** 管理方案对话框（MODELESS，单实例防堆叠；关闭后由可见性判断重建）。 */
+    private var schemeManagerDialog: ParamSchemeManagerDialog? = null
 
     // T-Perf-04：参数击键路径 renderSql 防抖（Swing Timer，150ms，模式同 historyAlarm）
     /** 待执行的渲染任务（最后一次调度者生效——防抖语义）。 */
@@ -3331,8 +3343,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         batchClearButton = null
         val views = result.previewModel?.conditionViews.orEmpty()
         val batchModel = result.batchModel
+        // R22 T-04：先算 hasParams——方案行插在首个早退之后，xml 无控件早退场景必须覆盖
+        // （xml 无控件时无参数可存召回，不插方案行，避免「方案下拉 + 无参数提示」同屏）
+        val xmlModelForSchemeRow = result.xmlModel
+        val xmlHasControls = xmlModelForSchemeRow != null &&
+            (xmlModelForSchemeRow.conditionViews.isNotEmpty() || xmlModelForSchemeRow.forEachViews.isNotEmpty())
 
-        if (views.isEmpty() && result.unresolvedParams.isEmpty() && batchModel == null) {
+        if (views.isEmpty() && result.unresolvedParams.isEmpty() && batchModel == null && !xmlHasControls) {
             paramPanel.add(JBLabel(MpSqlVisualizerBundle.message("panel.param.none")).apply {
                 border = JBUI.Borders.empty(6, 8)
             })
@@ -3340,6 +3357,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             paramPanel.repaint()
             return
         }
+
+        // R22 T-04：方案行（设计定稿位置——首个早退之后、batchModel 分支之前）
+        paramPanel.add(buildSchemeRow())
 
         // T-M23-04：批量列级勾选（toggle 列：复选框 + 值输入框，勾选决定列是否进入 SQL；
         // fixed 列：仅值输入框，恒参与）——与动态条件区互斥（批量预览无 conditionViews）
@@ -3407,6 +3427,118 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         paramPanel.revalidate()
         paramPanel.repaint()
+    }
+
+    // ------------------------------------------------------------------
+    // R22 T-04：命名方案下拉 + 管理对话框接入（设计定稿：方案行 / 防串桶 / 对话框回调）
+    // ------------------------------------------------------------------
+
+    /**
+     * R22 T-04：方案行——「方案: [下拉] [管理方案…]」（compactButton 同字号，非自创形态）。
+     * 下拉项为原始方案名（默认方案 = 空串内部名），显示名经 bundle 本地化
+     * （默认方案显示名与用户命名可撞名，故渲染器映射而非直接用显示名作条目）。
+     */
+    private fun buildSchemeRow(): JBPanel<JBPanel<*>> {
+        val combo = JComboBox<String>()
+        schemeCombo = combo
+        combo.renderer = SimpleListCellRenderer.create<String> { label, value, _ ->
+            label.text = displaySchemeName(value ?: ParamHistoryCache.DEFAULT_SCHEME)
+        }
+        combo.addActionListener {
+            if (schemeSyncingCombo) return@addActionListener
+            val raw = combo.selectedItem as? String ?: return@addActionListener
+            if (raw != paramHistoryCache.activeSchemeName()) switchToScheme(raw)
+        }
+        syncSchemeCombo()
+        val manageButton = compactButton(MpSqlVisualizerBundle.message("panel.scheme.manage")) {
+            openSchemeManagerDialog()
+        }
+        return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6)).apply {
+            add(JBLabel(MpSqlVisualizerBundle.message("panel.scheme.label")))
+            add(combo)
+            add(manageButton)
+            border = JBUI.Borders.empty(0, 8, 2, 8)
+        }
+    }
+
+    /** R22 T-04：按 cache 当前态重建下拉模型与选中项（程序化填充，抑制切换语义）。 */
+    private fun syncSchemeCombo() {
+        val combo = schemeCombo ?: return
+        schemeSyncingCombo = true
+        try {
+            val model = DefaultComboBoxModel<String>()
+            model.addElement(ParamHistoryCache.DEFAULT_SCHEME)
+            paramHistoryCache.schemeNames().forEach { model.addElement(it) }
+            combo.model = model
+            val active = paramHistoryCache.activeSchemeName()
+            combo.selectedItem = active
+            lastShownActiveScheme = active
+        } finally {
+            schemeSyncingCombo = false
+        }
+    }
+
+    /**
+     * R22 T-04：切换方案（下拉/对话框回调共用）——清态 → [ParamHistoryCache.switchScheme] →
+     * [recallFromHistory]。清场含可见字段文本与勾选框视觉态（新方案快照未覆盖的键不得残留旧值）；
+     * 末尾无条件 renderSql：召回未命中时 SQL 也必须反映清空后的参数态。
+     */
+    private fun switchToScheme(name: String) {
+        clearParamStateForSchemeSwitch()
+        paramHistoryCache.switchScheme(name)
+        lastShownActiveScheme = name
+        recallFromHistory()
+        renderSql()
+    }
+
+    /** R22 T-04：方案切换清场（等价 clearStateForTest 的状态面 + 可见组件视觉态回默认）。
+     *  顺序敏感：先清可见字段文本（DocumentListener 回写空值——onParamChanged 无条件 put，
+     *  先清 map 会被复写），状态集清场放最后，保证 paramValues 干净、召回「已输入值优先」不误判。 */
+    private fun clearParamStateForSchemeSwitch() {
+        paramFields.forEach { it.text = "" }
+        xmlForEachValueFields.forEach { it.second.text = "" }
+        // 编程式 isSelected 不触发 ActionListener，enabledIds 不受影响（末尾直接清）
+        (conditionCheckBoxes + batchCheckBoxes).forEach { it.isSelected = false }
+        xmlForEachNullBoxes.forEach { it.isSelected = false }
+        enabledIds.clear()
+        paramValues.clear()
+        xmlForEachValues.clear()
+        xmlForEachNulls.clear()
+    }
+
+    /** R22 T-04：管理方案对话框工厂（快照与回调在此接线——面板供给，对话框不知面板）。 */
+    private fun createSchemeManagerDialog(proj: Project): ParamSchemeManagerDialog =
+        ParamSchemeManagerDialog(
+            proj,
+            paramHistoryCache,
+            snapshotProvider = {
+                val key = historyCacheKey()
+                if (key == null) null else key to buildHistorySnapshot()
+            },
+            onSchemesChanged = { onSchemesChangedFromDialog() },
+        )
+
+    /** R22 T-04：管理方案对话框（MODELESS 单实例——可见时置前，不堆叠）。 */
+    private fun openSchemeManagerDialog() {
+        val proj = project ?: return
+        schemeManagerDialog?.let { existing ->
+            if (existing.isVisible) {
+                existing.toFront()
+                return
+            }
+        }
+        createSchemeManagerDialog(proj).also {
+            schemeManagerDialog = it
+            it.show()
+        }
+    }
+
+    /** R22 T-04：对话框回调——同步下拉；激活方案被对话框变更（另存为自动切换）时整面重召回。 */
+    private fun onSchemesChangedFromDialog() {
+        val active = paramHistoryCache.activeSchemeName()
+        val activeChanged = active != lastShownActiveScheme
+        syncSchemeCombo()
+        if (activeChanged) switchToScheme(active)
     }
 
     /**
@@ -4240,17 +4372,20 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /** P-05：Timer 动作——实际写回缓存（由 historyAlarm 调度）。
-     * T-Perf-24：序列化/持久化写挪 pooled 线程（EDT 只做取值快照）。 */
+     * T-Perf-24：序列化/持久化写挪 pooled 线程（EDT 只做取值快照）。
+     * R22 T-04 防串桶：取快照（EDT）与写回（pooled 线程）之间用户可能切换方案——
+     * 快照时捕获激活方案名随行落库（saveForScheme），不再依赖写回时刻的激活态。 */
     private fun flushHistoryToCache() {
         val key = historyCacheKey() ?: return
         val snapshot = buildHistorySnapshot()
+        val scheme = paramHistoryCache.activeSchemeName()
         // headless 单测：同步执行保持既有测试语义
         if (ApplicationManager.getApplication().isUnitTestMode) {
-            paramHistoryCache.save(key, snapshot)
+            paramHistoryCache.saveForScheme(scheme, key, snapshot)
             return
         }
         ApplicationManager.getApplication().executeOnPooledThread {
-            paramHistoryCache.save(key, snapshot)
+            paramHistoryCache.saveForScheme(scheme, key, snapshot)
         }
     }
 
@@ -4917,6 +5052,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
     /** R22 测试缝：当前预览 SQL。 */
     internal fun historyCacheKeyForTest(): String? = historyCacheKey()
+    /** R22 T-04 测试缝：方案下拉（在场/选中态断言）。 */
+    internal fun schemeComboForTest(): JComboBox<String>? = schemeCombo
+    /** R22 T-04 测试缝：程序化切换方案（等价下拉用户切换：清态→switchScheme→召回→渲染）。 */
+    internal fun switchSchemeForTest(name: String) = switchToScheme(name)
+    /** R22 T-04 测试缝：对话框回调链（同步下拉 + 激活变更整面重召回）。 */
+    internal fun onSchemesChangedForTest() = onSchemesChangedFromDialog()
 
     companion object {
         /** O-4：通知分组 id（plugin.xml 注册，diff/copy 共用）。 */

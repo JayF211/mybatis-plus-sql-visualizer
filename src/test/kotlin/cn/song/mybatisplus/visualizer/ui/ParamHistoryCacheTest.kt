@@ -187,4 +187,134 @@ class ParamHistoryCacheTest {
         assertNotNull(key)
         assertTrue("有表名键保持 tableName: 前缀", key!!.startsWith("t_user:"))
     }
+
+    // ==== R22 T-04（D2 定案）：命名方案多方案结构 ====
+
+    /** 缺口④/D2：旧 `paramHistoryJson` 存量自动成为「默认方案」——零迁移损失，老用户无感。 */
+    @Test
+    fun `R22_T04_D2_旧字段数据自动成为默认方案`() {
+        // 旧构建数据形态 = 默认方案 save 产物（同键同格式）：cache1.save 写 paramHistoryJson 旧字段
+        val cache1 = ParamHistoryCache()
+        cache1.clear()
+        val key = cache1.computeKey("user", "SELECT * FROM user WHERE id = ?")!!
+        cache1.save(key, mapOf("id" to "7", "name" to "张三"))
+        // 模拟 IDE 重启：新实例从旧字段恢复——数据必须落进默认方案（不是凭空丢、也不是新造方案）
+        val cache2 = ParamHistoryCache()
+        assertEquals("D2：旧字段数据应从默认方案召回", mapOf("id" to "7", "name" to "张三"), cache2.recall(key))
+        assertEquals("D2：旧数据不应生成命名方案", emptyList<String>(), cache2.schemeNames())
+        assertEquals("D2：激活方案应保持默认方案", ParamHistoryCache.DEFAULT_SCHEME, cache2.activeSchemeName())
+        cache2.clear()
+    }
+
+    /** 缺口④：另存方案 → 切走 → 切回，参数快照（含勾选态特殊键）逐字节还原。 */
+    @Test
+    fun `R22_T04_方案另存切走切回_逐字节还原`() {
+        val cache = ParamHistoryCache()
+        cache.clear()
+        val key = cache.computeKey(null, "SELECT * FROM t_order WHERE id = ?")!!
+        // 默认方案：正常流参数（含 T-02 勾选态特殊键形态）
+        val normal = mapOf("id" to "1", "__chk__:onlyActive" to "1", "__chk__:onlyVip" to "0", "__fev__:ids" to "2,3")
+        cache.save(key, normal)
+        // 另存「边界流」：边界流参数（勾选/foreach 形态不同）
+        val boundary = mapOf("id" to "999", "__chk__:onlyActive" to "0", "__fev__:ids" to "8")
+        cache.saveAsScheme("边界流", key, boundary)
+        assertEquals("另存应切换激活方案", "边界流", cache.activeSchemeName())
+        assertEquals("激活方案召回边界流快照", boundary, cache.recall(key))
+        // 切走再切回：默认方案快照逐字节还原
+        cache.switchScheme(ParamHistoryCache.DEFAULT_SCHEME)
+        assertEquals("切回默认方案快照逐字节还原", normal, cache.recall(key))
+        cache.switchScheme("边界流")
+        assertEquals("再切回命名方案快照逐字节还原", boundary, cache.recall(key))
+        cache.clear()
+    }
+
+    /** 方案隔离：命名方案快照不串默认方案，默认方案不被另存覆盖。 */
+    @Test
+    fun `R22_T04_方案隔离_命名与默认互不串写`() {
+        val cache = ParamHistoryCache()
+        cache.clear()
+        val key = cache.computeKey("t_user", "SELECT * FROM t_user WHERE id = ?")!!
+        cache.save(key, mapOf("id" to "1"))
+        cache.switchScheme(ParamHistoryCache.DEFAULT_SCHEME) // saveAsScheme 会切激活，显式回默认再存
+        cache.saveAsScheme("边界流", key, mapOf("id" to "2"))
+        assertEquals(mapOf("id" to "2"), cache.recallFromScheme("边界流", key))
+        cache.switchScheme(ParamHistoryCache.DEFAULT_SCHEME)
+        assertEquals("默认方案快照不被另存覆盖", mapOf("id" to "1"), cache.recall(key))
+        assertEquals("命名方案条目数", 1, cache.schemeEntryCount("边界流"))
+        cache.clear()
+    }
+
+    /** 重命名/删除语义：默认方案受保护、重名拒绝、未知方案 NOT_FOUND、激活指针随迁。 */
+    @Test
+    fun `R22_T04_重命名与删除_语义`() {
+        val cache = ParamHistoryCache()
+        cache.clear()
+        val key = cache.computeKey("t_a", "SELECT * FROM t_a WHERE id = ?")!!
+        cache.saveAsScheme("A", key, mapOf("id" to "1"))
+        cache.switchScheme(ParamHistoryCache.DEFAULT_SCHEME)
+        cache.saveAsScheme("B", key, mapOf("id" to "2"))
+        // 默认方案保护
+        assertEquals(
+            "默认方案不可重命名",
+            ParamHistoryCache.SchemeOpResult.DEFAULT_PROTECTED,
+            cache.renameScheme(ParamHistoryCache.DEFAULT_SCHEME, "X"),
+        )
+        assertEquals(
+            "默认方案不可删除",
+            ParamHistoryCache.SchemeOpResult.DEFAULT_PROTECTED,
+            cache.deleteScheme(ParamHistoryCache.DEFAULT_SCHEME),
+        )
+        // 重名 / 未知
+        assertEquals(
+            "重命名到已存在名应拒绝",
+            ParamHistoryCache.SchemeOpResult.DUPLICATE,
+            cache.renameScheme("A", "B"),
+        )
+        assertEquals(
+            "未知方案重命名 NOT_FOUND",
+            ParamHistoryCache.SchemeOpResult.NOT_FOUND,
+            cache.renameScheme("NOPE", "X"),
+        )
+        // 重命名保序 + 激活指针随迁
+        assertEquals(ParamHistoryCache.SchemeOpResult.OK, cache.renameScheme("A", "A2"))
+        assertEquals("创建序应保持", listOf("A2", "B"), cache.schemeNames())
+        assertEquals(mapOf("id" to "1"), cache.recallFromScheme("A2", key))
+        assertNull("旧名应消失", cache.recallFromScheme("A", key))
+        cache.switchScheme("A2")
+        assertEquals(ParamHistoryCache.SchemeOpResult.OK, cache.renameScheme("A2", "A3"))
+        assertEquals("激活指针应随迁", "A3", cache.activeSchemeName())
+        // 删除激活方案 → 归位默认方案
+        assertEquals(ParamHistoryCache.SchemeOpResult.OK, cache.deleteScheme("A3"))
+        assertEquals("删除激活方案后应归位默认方案", ParamHistoryCache.DEFAULT_SCHEME, cache.activeSchemeName())
+        assertEquals(ParamHistoryCache.SchemeOpResult.OK, cache.deleteScheme("B"))
+        assertEquals(emptyList<String>(), cache.schemeNames())
+        cache.clear()
+    }
+
+    /** 命名方案持久化往返（模拟 IDE 重启）+ 未知激活名兜底归位默认方案。 */
+    @Test
+    fun `R22_T04_方案持久化往返与激活兜底`() {
+        val cache1 = ParamHistoryCache()
+        cache1.clear()
+        val key = cache1.computeKey("t_b", "SELECT * FROM t_b WHERE id = ?")!!
+        val snapshot = mapOf("id" to "42", "__chk__:flag" to "0")
+        cache1.saveAsScheme("边界流", key, snapshot)
+        // 新实例恢复：方案清单/内容/激活态全量还原
+        val cache2 = ParamHistoryCache()
+        assertEquals("方案清单应恢复", listOf("边界流"), cache2.schemeNames())
+        assertEquals("方案快照应恢复", snapshot, cache2.recallFromScheme("边界流", key))
+        assertEquals("激活方案应恢复", "边界流", cache2.activeSchemeName())
+        assertEquals("激活方案路由召回应命中", snapshot, cache2.recall(key))
+        cache2.clear()
+    }
+
+    /** 防脏态：switchScheme 对未知方案名忽略（激活态不漂移）。 */
+    @Test
+    fun `R22_T04_切换未知方案名忽略`() {
+        val cache = ParamHistoryCache()
+        cache.clear()
+        cache.switchScheme("不存在")
+        assertEquals("未知方案名不应改变激活态", ParamHistoryCache.DEFAULT_SCHEME, cache.activeSchemeName())
+        cache.clear()
+    }
 }
