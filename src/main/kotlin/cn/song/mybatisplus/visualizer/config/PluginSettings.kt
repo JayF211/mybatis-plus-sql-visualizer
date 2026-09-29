@@ -379,8 +379,20 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * 参数历史缓存（P-05）：JSON 字符串，key = 表名+SQL 指纹，value = Map<source, value>。
          * 持久化到 mp-sql-visualizer.xml，IDE 重启后恢复。
          * 空字符串表示无历史。
+         * R22 T-04（D2 定案）：语义收窄为**默认方案**数据——存量自动成为「默认方案」（零迁移损失），
+         * 旧版构建仍可读本字段（降级兼容）。
          */
         var paramHistoryJson: String = "",
+
+        /**
+         * 参数命名方案（R22 T-04）：`{"方案名":[{"key":{...params}}], ...}`——每个方案的条目复用
+         * [paramHistoryJson] 的旧数组格式；默认方案不进本字段（仍走 [paramHistoryJson]）。
+         * 空字符串表示无命名方案。消费方 = [cn.song.mybatisplus.visualizer.ui.ParamHistoryCache]。
+         */
+        var paramSchemesJson: String = "",
+
+        /** R22 T-04：激活方案名（空串 = 默认方案；面板下拉切换后随持久化落盘）。 */
+        var paramActiveScheme: String = "",
 
         // ---------- Hibernate/JPA 日志捕获 ----------
 
