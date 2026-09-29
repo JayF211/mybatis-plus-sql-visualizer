@@ -31,19 +31,36 @@ object XmlSynHiGate {
         runCatching { Class.forName(PLATFORM_SQL_INJECTOR_FQN) }.isSuccess
     }
 
-    /** 三方插件在位（已安装且**未禁用**；读不到安装态按不在位）。 */
-    private fun codeHelperActive(): Boolean = runCatching {
-        val pluginManagerClass = Class.forName("com.intellij.ide.plugins.PluginManagerCore")
-        val pluginIdClass = Class.forName("com.intellij.openapi.extensions.PluginId")
-        val getId = pluginIdClass.getMethod("getId", String::class.java)
-        val pluginId = getId.invoke(null, CODEHELPER_PLUGIN_ID)
-        val findEnabledProjectLevel = pluginManagerClass.methods.firstOrNull {
-            it.name == "getEnabledPlugins"
-        } ?: return false
-        @Suppress("UNCHECKED_CAST")
-        val enabled = findEnabledProjectLevel.invoke(null) as? List<Any> ?: return false
-        enabled.any { p -> p.javaClass.getMethod("pluginId").invoke(p) == pluginId }
-    }.getOrDefault(false)
+    /**
+     * 三方插件在位反射探针（原每次判定的原始逻辑，T-PerfSweep16 F38 提为独立缝）：
+     * internal var 供测试注入计数 lambda 验证缓存语义（两次查询只触发一次解析）。
+     */
+    internal var codeHelperProbe: () -> Boolean = {
+        runCatching {
+            val pluginManagerClass = Class.forName("com.intellij.ide.plugins.PluginManagerCore")
+            val pluginIdClass = Class.forName("com.intellij.openapi.extensions.PluginId")
+            val getId = pluginIdClass.getMethod("getId", String::class.java)
+            val pluginId = getId.invoke(null, CODEHELPER_PLUGIN_ID)
+            val findEnabledProjectLevel = pluginManagerClass.methods.firstOrNull {
+                it.name == "getEnabledPlugins"
+            } ?: return@runCatching false
+            @Suppress("UNCHECKED_CAST")
+            val enabled = findEnabledProjectLevel.invoke(null) as? List<Any> ?: return@runCatching false
+            enabled.any { p -> p.javaClass.getMethod("pluginId").invoke(p) == pluginId }
+        }.getOrDefault(false)
+    }
+
+    /** 探针结果缓存：插件安装态变化低频，进程内缓存一次（首次查询解析，此后直读）。 */
+    @Volatile
+    private var codeHelperActiveCache: Boolean? = null
+
+    /** 三方插件在位（已安装且**未禁用**；读不到安装态按不在位）——进程内缓存一次（T-PerfSweep16 F38）。 */
+    private fun codeHelperActive(): Boolean = codeHelperActiveCache ?: codeHelperProbe().also { codeHelperActiveCache = it }
+
+    /** 测试缝：清空缓存，让下一次 shouldYield 重新走 [codeHelperProbe]（验证「只解析一次」语义）。 */
+    internal fun resetCodeHelperActiveCacheForTest() {
+        codeHelperActiveCache = null
+    }
 
     /** 全族让位判定（D2/D3 共用）。 */
     fun shouldYield(project: Project?): Boolean {

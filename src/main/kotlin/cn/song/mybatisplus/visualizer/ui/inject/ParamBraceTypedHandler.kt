@@ -15,9 +15,9 @@ import com.intellij.psi.xml.XmlTag
 /**
  * T-XmlSynHi D5：mapper XML 语句文本内敲 `#` / `$` 自动闭合 `{}`（光标落 #/{ 之间）。
  *
- * 「先查后插」双开防（决策 4-A，共存插件同型行为）：插入前查光标后方字符——
- *  - 已是 `{` → 不补插（对方插件/用户已手敲 `{`，双插会产出 `#{{}}`）；
- *  - 已是 `}` → 也不补插（包住已有 `}` 会让用户多删一次）——直接放行原字符。
+ * 「先查后插」防双插（决策 4-A，共存插件同型行为）：插入前查光标后方字符——
+ *  - 已是 `{` → 不补插（对方插件/用户已手敲 `{`，双插会产出 `#{{}}`）——直接放行原字符。
+ *  （T-PerfSweep16 F46 口径对齐：历史 KDoc 声称 `}` 后也放行，实现自始只查 `{`——修文档不改行为。）
  * 守卫：XmlSynHiGate 双让位（平台/CodeHelperPro 在位即不接管）+ 根 mapper + 语句标签内。
  *
  * 243+ 注入片段击键路由（TypedHandler.callDelegates 字节码实证）：光标在注入片段内时
@@ -52,7 +52,8 @@ class ParamBraceTypedHandler : TypedHandlerDelegate() {
         } else {
             editor.caretModel.offset
         }
-        val text = hostEditor.document.text
+        // T-PerfSweep16 F39：getCharsSequence 直读底层文本（原 document.text 每次击键整文档复制一份 String）
+        val text = hostEditor.document.charsSequence
         // 光标后方已有 `{`（对方插件已补/用户已敲）→ 放行，不双插
         if (offset < text.length && text[offset] == '{') return TypedHandlerDelegate.Result.CONTINUE
         // 光标须在 mapper 语句标签文本内（根 mapper 守卫 + 标签定位）；宿主偏移左邻字符定位
