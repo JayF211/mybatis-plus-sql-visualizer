@@ -15,18 +15,22 @@ import kotlin.math.min
  */
 object ResultMapColumns {
 
+    // T-PerfSweep16 F40：Regex 提为伴生对象单例（原每模式每次调用现场编译——主正则每补全一次、
+    // 段内 `[\\w*]+` 每投影列分段一次）
+    private val SELECT_PROJECTION = Regex("(?is)\\bselect\\b(.*?)(?:\\bfrom\\b|\$)")
+    private val COLUMN_IDENT = Regex("[\\w*]+")
+
     /** 从 mapper 全文中提取 SELECT 投影列名（去重保序）。 */
     fun extractColumns(mapperText: String): List<String> {
         val out = LinkedHashSet<String>()
-        val regex = Regex("(?is)\\bselect\\b(.*?)(?:\\bfrom\\b|\$)")
-        regex.findAll(mapperText).forEach { m ->
+        SELECT_PROJECTION.findAll(mapperText).forEach { m ->
             val proj = m.groupValues[1]
             proj.split(",").forEach { seg ->
                 val col = seg.trim()
                     .split(' ').last { it.isNotBlank() } // 末 token：AS 别名或列本身（取别名语义）
                     .substringAfterLast('.')             // `t.col` → `col`
                     .trim()
-                if (col.isNotEmpty() && col.matches(Regex("[\\w*]+")) && col != "*") out += col
+                if (col.isNotEmpty() && col.matches(COLUMN_IDENT) && col != "*") out += col
             }
         }
         return out.toList()

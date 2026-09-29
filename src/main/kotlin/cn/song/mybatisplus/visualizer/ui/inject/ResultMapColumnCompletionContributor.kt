@@ -17,9 +17,12 @@ import com.intellij.util.ProcessingContext
  * T-XmlSynHi D5 后半：resultMap `column` 属性值补全（ResultMapColumns 接线）。
  *
  * 触发位：`<result|id … column="…">` 属性值（resultMap 上下文）。
- * 候选 = mapper 全文 SELECT 投影列名（[ResultMapColumns.extractColumns]），
+ * 候选 = mapper 全文 SELECT 投影列名（[ResultMapColumnCompletionMemo.columnsFor]），
  * 按已输入前缀过滤/排序（[ResultMapColumns.suggest]：前缀精确 > 下划线驼峰近邻 > Levenshtein）。
  * 非结果映射上下文零候选（反向验证）。
+ *
+ * T-PerfSweep16 F40：补全链接让位门（[XmlSynHiGate.shouldYield]，与 typedHandler 口径对齐）
+ * + 全文重扫单槽 memo（键=文件 url + modificationStamp，stamp 变化即失效）。
  */
 class ResultMapColumnCompletionContributor : CompletionContributor() {
 
@@ -40,8 +43,10 @@ class ResultMapColumnCompletionContributor : CompletionContributor() {
                     val tag = attr.parent as? XmlTag ?: return
                     if (tag.name != "result" && tag.name != "id") return
                     if (!inResultMap(tag)) return
+                    // T-PerfSweep16 F40：让位门（设置关/平台注入器/三方插件在场 → 零候选）
+                    if (XmlSynHiGate.shouldYield(position.project)) return
                     val file = tag.containingFile as? XmlFile ?: return
-                    val columns = ResultMapColumns.extractColumns(file.text)
+                    val columns = ResultMapColumnCompletionMemo.columnsFor(file)
                     val typed = currentTyped(attrValue, parameters)
                     ResultMapColumns.suggest(columns, typed).forEach { candidate ->
                         result.addElement(
@@ -70,5 +75,48 @@ class ResultMapColumnCompletionContributor : CompletionContributor() {
             cur = cur.parentTag
         }
         return false
+    }
+}
+
+/**
+ * T-PerfSweep16 F40：`extractColumns` 全文重扫的单槽 memo（进程内一份，补全触发高频）。
+ *
+ * 键 = 文件 url + modificationStamp + 文本长度（指纹组合）：stamp 变化即失效；**长度是
+ * 实测补上的第二键**——测试夹具与部分内存态文件的 LightVirtualFile 在文档变更后
+ * modificationStamp 不动（ResultMapColumnCompletionMemoTest 真红实证），单靠 stamp 会
+ * 返回陈旧候选。编辑后自然回源重扫。
+ * [extractor] 为 internal 缝——测试注入计数 lambda 断言「二次补全零重扫」。
+ */
+internal object ResultMapColumnCompletionMemo {
+
+    /** 提取函数缝（默认=纯函数本体；测试可注入计数 lambda）。 */
+    internal var extractor: (String) -> List<String> = { text -> ResultMapColumns.extractColumns(text) }
+
+    @Volatile private var memoUrl: String? = null
+    @Volatile private var memoStamp: Long = Long.MIN_VALUE
+    @Volatile private var memoLen: Int = -1
+    @Volatile private var memoValue: List<String> = emptyList()
+
+    /** 命中 memo 直接返回缓存（零重扫）；键不匹配才全文提取并回填。 */
+    internal fun columnsFor(file: XmlFile): List<String> {
+        val vf = file.virtualFile
+        val url = vf?.url
+        val stamp = vf?.modificationStamp ?: file.modificationStamp
+        val len = file.textLength
+        if (url == memoUrl && stamp == memoStamp && len == memoLen) return memoValue
+        val value = extractor(file.text)
+        memoUrl = url
+        memoStamp = stamp
+        memoLen = len
+        memoValue = value
+        return value
+    }
+
+    /** 测试缝：清空 memo，保证断言从冷态起算。 */
+    internal fun resetForTest() {
+        memoUrl = null
+        memoStamp = Long.MIN_VALUE
+        memoLen = -1
+        memoValue = emptyList()
     }
 }
