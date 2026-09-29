@@ -213,6 +213,14 @@ tasks.register<Test>("testExternal") {
     // （20260928 warm2 轮实证）——聚合报告照读旧 XML，护栏「本轮已验」是假。与分片语义对齐；
     // 墙钟代价≈0（桶与分片并行且早收，warm1 实证 59.4s ≪ 片窗口 120s+）。
     outputs.upToDateWhen { false }
+    // T-TestPerf10 S2：与分片同款 .round-start 戳（聚合的 mtime 闸需要），语义见分片 doFirst 注释
+    inputs.property("mpvResultsRootAbs", project.projectDir.absolutePath)
+    doFirst {
+        val root = inputs.properties["mpvResultsRootAbs"] as String
+        val dir = File(root, "build/test-results/testExternal")
+        dir.mkdirs()
+        File(dir, ".round-start").writeText(System.currentTimeMillis().toString())
+    }
 }
 
 tasks.register<Test>("testFast") {
@@ -301,9 +309,29 @@ intellijPlatformTesting {
                 list.sortedByDescending { it.first }.take(weightSamples).map { it.second }.sorted()
                     .let { sorted -> sorted[sorted.size / 2] }
             }
-            val known = smoothed.values.sorted()
+            // T-TestPerf10 S1：权重画像回填（dev-support/test-shard-weights.tsv，weight-refresh.ps1
+            // 从 clean 轮生成的派生物入库）。本地样本优先、画像只补缺类——根治两个失衡源：
+            // ①新落地重类零本地权重被中位数插值成轻类（批次8 PluginSettingsPanelUiTest 4例19.5s
+            // 被按 ~1.5s 插值，20260929 门禁轮临界片失衡 +13.7% 的实证形态）；②新工作树零数据
+            // 退化为类数均分（T-TestPerf10 S0 冷轮临界片失衡 +15.4% 实证）。画像陈旧的退化面=
+            // 回到插值现状；贪心装箱只需相对量级，画像绝对刻度的跨机差异不影响均衡。
+            val weightProfile: Map<String, Double> = run {
+                val f = file("dev-support/test-shard-weights.tsv")
+                if (!f.isFile) emptyMap<String, Double>() else runCatching {
+                    f.readLines().mapNotNull { line ->
+                        if (line.isEmpty() || line.startsWith("#")) return@mapNotNull null
+                        val tab = line.indexOf('\t')
+                        if (tab <= 0) return@mapNotNull null
+                        val seconds = line.substring(tab + 1).trim().toDoubleOrNull()
+                            ?: return@mapNotNull null
+                        if (seconds <= 0.0) return@mapNotNull null
+                        line.substring(0, tab).trim() to seconds
+                    }.toMap()
+                }.getOrDefault(emptyMap())
+            }
+            val known = (smoothed.values + weightProfile.values).sorted()
             val median = if (known.isEmpty()) 1.0 else known[known.size / 2]
-            discoveredTestClasses.associateWith { smoothed[it] ?: median }
+            discoveredTestClasses.associateWith { smoothed[it] ?: weightProfile[it] ?: median }
         }
         // 机器级全局资源亲和（T-TestPerf2 补丁）：Windows 剪贴板全机唯一（WClipboard.openClipboard
         // 互斥），并发分片 JVM 互抢 → cannot open system clipboard（2026-09-15 冷启动第一跑
@@ -480,6 +508,26 @@ intellijPlatformTesting {
                     },
             )
         }
+        // T-TestPerf10 S3 接线自证：拆分类的类项落位与 exclude/include 片归属一行可见。
+        // 20260930 T-TestPerf10 S0 round2 实证双重执行 37 例（盘面 shard4 整类 73 例 + shard5
+        // 片段B 37 例，而计划行打印主体片=shard1）——接线与执行不符必须当场可见，不能靠
+        // 计数漂移倒查。
+        if (splitFragments.isNotEmpty()) {
+            splitFragments.forEach { (fqcn, _) ->
+                val holder = shardAssignment.withIndex().firstOrNull { fqcn in it.value }?.index
+                logger.lifecycle(
+                    "testShards S3 wiring: %s class-item=shard%s home=shard%s target=shard%s excludeOn=%s includeOn=%s"
+                        .format(
+                            fqcn.substringAfterLast('.'),
+                            (holder?.plus(1) ?: -1).toString(),
+                            (plan.fragHome[fqcn]?.plus(1) ?: -1).toString(),
+                            (plan.fragTarget[fqcn]?.plus(1) ?: -1).toString(),
+                            plan.fragExcludes.keys.map { it + 1 }.sorted().toString(),
+                            plan.fragIncludes.keys.map { it + 1 }.sorted().toString(),
+                        ),
+                )
+            }
+        }
         // T-TestPerf4：喂给聚合任务的两份配置期产物（见 shardPlanExpectedLoads 注释）
         shardPlanExpectedLoads = plan.loads.joinToString("|") { "%.1f".format(it) }
         shardPlanClasses = discoveredTestClasses.joinToString("\n")
@@ -504,8 +552,20 @@ intellijPlatformTesting {
                         fragExcludesByShard[idx]?.forEach { excludeTestsMatching(it) }
                         fragIncludesByShard[idx]?.forEach { includeTestsMatching(it) }
                     }
-                    // 并发审计锚点：起止毫秒时间戳，验证一命令多片是否真并行（T-TestPerf-05）
-                    doFirst { logger.lifecycle("testShard$i START ${System.currentTimeMillis()}") }
+                    // 并发审计锚点：起止毫秒时间戳，验证一命令多片是否真并行（T-TestPerf-05）。
+                    // T-TestPerf10 S2：doFirst 落 .round-start 毫秒戳，聚合报告只计 mtime ≥ 该戳的
+                    // 结果 XML——权重变化使类跨片后，旧分片目录残留上一轮 XML，按目录全扫会把
+                    // 两轮混计（20260930 S0 round2 假读数 6222 vs 真实 6185 即此形态）。
+                    // 项目根绝对路径走 inputs.property（CC 官方通道，doFirst 相对路径按 daemon
+                    // CWD 解析的坑与 testDatabase 同源）。
+                    inputs.property("mpvResultsRootAbs", project.projectDir.absolutePath)
+                    doFirst {
+                        val root = inputs.properties["mpvResultsRootAbs"] as String
+                        val dir = File(root, "build/test-results/testShard$i")
+                        dir.mkdirs()
+                        File(dir, ".round-start").writeText(System.currentTimeMillis().toString())
+                        logger.lifecycle("testShard$i START ${System.currentTimeMillis()}")
+                    }
                     doLast { logger.lifecycle("testShard$i END ${System.currentTimeMillis()}") }
                 }
             }
@@ -685,6 +745,8 @@ tasks.register("testShards") {
         var skipped = 0
         var execSeconds = 0.0
         val seenClasses = HashSet<String>()
+        // T-TestPerf10 S2：各分片本轮实测 exec（不含 testExternal），供失衡/缺权告警
+        val shardExec = ArrayList<Double>()
         shardResultDirs.forEachIndexed { idx, dir ->
             // T-TestPerf6：末位目录是 testExternal 桶；标签用目录名（testShardN 名即标签，
             // 不引用脚本顶层 testShardCount——doLast 引用脚本对象会炸配置缓存，本轮实证）
@@ -694,11 +756,19 @@ tasks.register("testShards") {
             var e = 0
             var s = 0
             var t = 0.0
+            var counted = 0
             val xmls = suiteXmls(dir)
             if (xmls.isEmpty()) {
                 logger.lifecycle("$label: $dir 下无结果 XML（该分片未跑？）")
             }
+            // T-TestPerf10 S2：mtime 闸——只计本轮（≥ .round-start 戳）的结果 XML。权重变化使
+            // 类跨片后，旧分片目录残留上一轮 XML，按目录全扫会把两轮混计（20260930 S0 round2
+            // 假读数 6222 vs 真实 6185 即此形态）；戳缺失（首次出现该目录/手工单跑）退化为全计。
+            val roundStart = File(dir, ".round-start").let { m ->
+                if (m.isFile) m.readText().trim().toLongOrNull() ?: 0L else 0L
+            }
             for (xml in xmls) {
+                if (roundStart > 0 && xml.lastModified() < roundStart) continue
                 val attrs = suiteAttrs(xml) ?: continue
                 attrs["name"]?.let { seenClasses.add(it) }
                 fun num(key: String) = attrs[key]?.toDoubleOrNull() ?: 0.0
@@ -707,6 +777,10 @@ tasks.register("testShards") {
                 e += num("errors").toInt()
                 s += num("skipped").toInt()
                 t += num("time")
+                counted++
+            }
+            if (xmls.isNotEmpty() && counted == 0) {
+                logger.lifecycle("$label: 本轮无新结果 XML（${xmls.size} 个文件全为陈旧残留，已按 mtime 闸排除——该分片本轮真跑了吗？）")
             }
             // 预期 vs 实测对照（T-TestPerf4）：差值持续偏向同一片=权重失准信号；
             // 随机 ±7% 内=并发膨胀噪声，均衡器无法也不必消除
@@ -716,6 +790,29 @@ tasks.register("testShards") {
                 "$label: tests=$n failures=$f errors=$e skipped=$s time=%.1fs$expectedTxt".format(t),
             )
             total += n; failed += f; errored += e; skipped += s; execSeconds += t
+            if (idx < shardResultDirs.size - 1) shardExec += t
+        }
+        // T-TestPerf10 S2：失衡/缺权告警（只增 WARN，不改执行面）——把「预期 vs 实测」从人眼
+        // 比对固化为机器判据，防 20260929 dev 树 3m07s 式漂移静默复发（批次8 新类零本地权重
+        // 被中位数插值 → 所在片实际超重 +13.7%）。失衡判据 12%（并发噪声正常带 ±7% 上限加余量）；
+        // 缺权判据 = 临界片实测超预期 10%（新类被插值成轻类的特征形态）。
+        if (shardExec.size >= 2) {
+            val mx = shardExec.max()
+            val avg = shardExec.average()
+            val critIdx = shardExec.indexOf(mx)
+            if (avg > 0 && (mx - avg) / avg > 0.12) {
+                logger.warn(
+                    "testShards WARN: 临界片失衡 +%.0f%%（shard%d %.1fs vs 片均值 %.1fs）——权重失准/新类缺权嫌疑，clean 轮后跑 dev-support/weight-refresh.ps1 刷新画像"
+                        .format((mx - avg) / avg * 100, critIdx + 1, mx, avg),
+                )
+            }
+            val expCrit = expectedLoads.getOrNull(critIdx)
+            if (expCrit != null && expCrit > 0 && mx > expCrit * 1.10) {
+                logger.warn(
+                    "testShards WARN: 临界片实测超预期 +%.0f%%（%.1fs vs expected %.1fs）——新类零权重插值/画像过期嫌疑"
+                        .format((mx - expCrit) / expCrit * 100, mx, expCrit),
+                )
+            }
         }
         logger.lifecycle(
             "SHARD TOTAL: tests=$total failures=$failed errors=$errored skipped=$skipped " +
