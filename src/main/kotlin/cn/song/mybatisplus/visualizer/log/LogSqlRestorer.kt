@@ -8,7 +8,13 @@ import cn.song.mybatisplus.visualizer.sql.placeholderPositions
  *
  * 引号规则（对齐 MyBatis 参数绑定语义与既有 ParameterReplacer 的引号判定经验）：
  * - 数值/布尔类型标注（Long/Integer/Double/Boolean 等）→ 原样
- * - String/时间/其他类型标注 → 引号包裹 + 内部 `'` 转义为 `''`（标准 SQL 字符串转义）
+ * - **日期族类型标注（R3，2026-09-29）→ ANSI 类型字面量** `DATE '…'` / `TIMESTAMP '…'`：
+ *   裸引号串在 Oracle 对日期/时间戳列隐式转换恒败（ORA-01861/01843，竞品同款差评形态；
+ *   dbx 六引擎缺口矩阵实测见 `docs/调研报告/20260929-1500-R3-日期类型缺口矩阵-验证报告.md`），
+ *   而 ANSI 类型字面量在全部实测引擎（Oracle 11g/23、达梦 DM8、金仓、MySQL 5.7/8.4、
+ *   PostgreSQL 16、openGauss）通用——无需方言分支。值文本不匹配日期形态时回落引号，
+ *   包装永不产生非法字面量；`LocalTime`/带时区值/无类型标注不包装（边界见 renderDateFamily KDoc）
+ * - String/其他类型标注 → 引号包裹 + 内部 `'` 转义为 `''`（标准 SQL 字符串转义）
  * - null 字面量 → `NULL`
  * - 无类型标注（旧版/第三方日志）→ 启发式：数值（含科学计数）与 true/false 原样，其余引号
  *
@@ -38,7 +44,45 @@ class LogSqlRestorer {
     fun renderParam(param: LogSqlParam): String {
         val value = param.value ?: return NULL_SQL // null 字面量（value/type 均 null）
         val type = param.type ?: return renderUntyped(value)
+        renderDateFamily(value, type)?.let { return it }
         return if (type in PLAIN_TYPES) value else quote(value)
+    }
+
+    /**
+     * 日期族类型标注 → ANSI 类型字面量（R3 缺口矩阵修复）。按简单名归一匹配
+     * （兼容 MyBatis 简单名 `Timestamp`、Hibernate JDBC 类型 `TIMESTAMP`、全限定名 `java.sql.Timestamp`）。
+     *
+     * 刻意不包装（边界登记）：
+     * - `LocalTime`/`Time`：纯时刻比较语义取决于目标列类型（对 TIME 列各库皆可、对 datetime 列
+     *   表现分裂），且 Oracle 不支持 ANSI `TIME` 字面量——维持引号；
+     * - `OffsetDateTime` 等带时区值：ANSI TIMESTAMP 字面量不收时区后缀，方言级包装需
+     *   `TO_TIMESTAMP_TZ` 一类机制，超出本件（登记决策点 D3）；
+     * - 无类型标注：启发式无法区分日期串与字符串列的日期值（`WHERE code='2025-01-01'`），
+     *   误包装会改变字符串列语义（决策点 D2）。
+     */
+    private fun renderDateFamily(value: String, type: String): String? {
+        val v = value.trim()
+        if (v.isEmpty()) return null
+        return when (type.substringAfterLast('.')) {
+            "LocalDate" ->
+                if (DATE_RE.matches(v)) "DATE '$v'" else null
+            "Date", "DATE" ->
+                when {
+                    DATE_RE.matches(v) -> "DATE '$v'"
+                    TS_RE.matches(v) -> "TIMESTAMP '${normalizeTs(v)}'"
+                    else -> null
+                }
+            "Timestamp", "LocalDateTime", "TIMESTAMP", "DATETIME" ->
+                if (TS_RE.matches(v)) "TIMESTAMP '${normalizeTs(v)}'" else null
+            else -> null
+        }
+    }
+
+    /** ISO 'T' 分隔符归一为空格（ANSI 字面量不接受 'T'；LocalDateTime.toString 产出 'T'）；缺秒补 `:00`（Oracle 实测缺秒 ORA-01861）。 */
+    private fun normalizeTs(v: String): String {
+        var out = if (v.length > 10 && v[10] == 'T') v.substring(0, 10) + ' ' + v.substring(11) else v
+        if (TS_NO_SEC_RE.matches(out)) out += ":00"
+        return out
     }
 
     private fun renderUntyped(value: String): String =
@@ -75,6 +119,15 @@ class LogSqlRestorer {
 
         /** 数值字面量（含小数与科学计数，如 `1.0E10`）。 */
         private val NUMERIC_REGEX = Regex("""-?\d+(\.\d+)?([eE][+-]?\d+)?""")
+
+        /** 日期字面量形态（`yyyy-MM-dd`，Java 日期 toString 标准补零形态）。 */
+        private val DATE_RE = Regex("""\d{4}-\d{2}-\d{2}""")
+
+        /** 时间戳字面量形态（`yyyy-MM-dd[ T]HH:mm[:ss][.f…`，秒与小数可选——缺秒由 normalizeTs 归一）。 */
+        private val TS_RE = Regex("""\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?(\.\d{1,9})?""")
+
+        /** 缺秒时间戳（`yyyy-MM-dd HH:mm`）——normalizeTs 补 `:00` 用。 */
+        private val TS_NO_SEC_RE = Regex("""\d{4}-\d{2}-\d{2} \d{2}:\d{2}""")
     }
 }
 

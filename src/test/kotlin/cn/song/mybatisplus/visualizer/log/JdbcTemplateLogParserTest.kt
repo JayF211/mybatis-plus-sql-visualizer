@@ -186,8 +186,8 @@ class JdbcTemplateLogParserTest {
             "Setting SQL statement parameter value: column index 1, parameter value [2025-01-01 12:00:00.0], value class [java.sql.Timestamp], SQL type unknown",
         )
         assertEquals("Timestamp", entries[0].params[0].type)
-        // Timestamp 不在 PLAIN_TYPES → 引号包裹
-        assertTrue(entries[0].restoredSql.contains("'2025-01-01 12:00:00.0'"))
+        // Timestamp 类型标注 → ANSI TIMESTAMP 字面量（R3 契约变更）
+        assertTrue(entries[0].restoredSql.contains("TIMESTAMP '2025-01-01 12:00:00.0'"))
     }
 
     // ========== 参数排序 ==========

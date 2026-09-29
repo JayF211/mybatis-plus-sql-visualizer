@@ -64,10 +64,10 @@ class ParamEdgeCaseRegressionTest {
     }
 
     @Test
-    fun `时间类型带空格分隔加引号`() {
-        assertEquals("'2025-01-01 12:00:00'", render("2025-01-01 12:00:00", "Timestamp"))
-        assertEquals("'2025-01-01 12:00:00'", render("2025-01-01 12:00:00", "java.sql.Timestamp"))
-        assertEquals("'2025-01-01'", render("2025-01-01", "LocalDate"))
+    fun `日期族类型标注渲染 ANSI 字面量`() {
+        assertEquals("TIMESTAMP '2025-01-01 12:00:00'", render("2025-01-01 12:00:00", "Timestamp"))
+        assertEquals("TIMESTAMP '2025-01-01 12:00:00'", render("2025-01-01 12:00:00", "java.sql.Timestamp"))
+        assertEquals("DATE '2025-01-01'", render("2025-01-01", "LocalDate"))
     }
 
     @Test
@@ -114,7 +114,7 @@ class ParamEdgeCaseRegressionTest {
             "==>  Preparing: SELECT * FROM t WHERE created > ?",
             "==> Parameters: 2025-01-01 12:00:00.0(Timestamp)",
         )
-        assertEquals("SELECT * FROM t WHERE created > '2025-01-01 12:00:00.0'", entries[0].restoredSql)
+        assertEquals("SELECT * FROM t WHERE created > TIMESTAMP '2025-01-01 12:00:00.0'", entries[0].restoredSql)
     }
 
     @Test
@@ -153,7 +153,7 @@ class ParamEdgeCaseRegressionTest {
             "binding parameter [1] as [TIMESTAMP] - [2025-01-01 12:00:00.0]",
         )
         assertEquals(
-            "select u0_.id from users u0_ where u0_.created>'2025-01-01 12:00:00.0'",
+            "select u0_.id from users u0_ where u0_.created>TIMESTAMP '2025-01-01 12:00:00.0'",
             entries[0].restoredSql,
         )
     }
@@ -202,7 +202,7 @@ class ParamEdgeCaseRegressionTest {
             jdbcLine("Executing prepared SQL statement [SELECT * FROM t WHERE created > ?]"),
             jdbcTrace("Setting SQL statement parameter value: column index 1, parameter value [2025-01-01 12:00:00.0], value class [java.sql.Timestamp], SQL type unknown"),
         )
-        assertEquals("SELECT * FROM t WHERE created > '2025-01-01 12:00:00.0'", entries[0].restoredSql)
+        assertEquals("SELECT * FROM t WHERE created > TIMESTAMP '2025-01-01 12:00:00.0'", entries[0].restoredSql)
     }
 
     @Test

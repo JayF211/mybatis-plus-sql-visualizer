@@ -39,12 +39,33 @@ class LogSqlRestorerTest {
     }
 
     @Test
-    fun `时间类型加引号`() {
-        assertEquals("'2025-01-01 12:00:00.0'", render("2025-01-01 12:00:00.0", "Timestamp"))
-        assertEquals("'2025-01-01'", render("2025-01-01", "LocalDate"))
-        assertEquals("'12:00:00'", render("12:00:00", "Time"))
-        assertEquals("'2025-01-01T12:00:00'", render("2025-01-01T12:00:00", "LocalDateTime"))
-        assertEquals("'2025-01-01'", render("2025-01-01", "Date"))
+    fun `日期族类型标注渲染 ANSI 类型字面量`() {
+        // R3 契约变更（2026-09-29）：裸引号串在 Oracle 对日期/时间戳列隐式转换恒败（ORA-01861/01843，
+        // 竞品同款差评形态）；ANSI 类型字面量经 dbx 六引擎实测通用（Oracle 23/DM8/金仓/MySQL 8.4·5.7/PG 16/openGauss）。
+        assertEquals("TIMESTAMP '2025-01-01 12:00:00.0'", render("2025-01-01 12:00:00.0", "Timestamp"))
+        assertEquals("DATE '2025-01-01'", render("2025-01-01", "LocalDate"))
+        assertEquals("'12:00:00'", render("12:00:00", "Time")) // LocalTime 不包装：ANSI TIME 字面量 Oracle 不支持且语义取决于目标列类型
+        assertEquals("TIMESTAMP '2025-01-01 12:00:00'", render("2025-01-01T12:00:00", "LocalDateTime")) // ISO 'T' 归一为空格
+        assertEquals("DATE '2025-01-01'", render("2025-01-01", "Date"))
+    }
+
+    @Test
+    fun `日期族全限定名与 JDBC 类型标注同规则`() {
+        assertEquals("TIMESTAMP '2025-01-01 12:00:00.0'", render("2025-01-01 12:00:00.0", "java.sql.Timestamp"))
+        assertEquals("TIMESTAMP '2025-01-01 12:00:00.0'", render("2025-01-01 12:00:00.0", "java.util.Date"))
+        assertEquals("DATE '2025-01-01'", render("2025-01-01", "java.time.LocalDate"))
+        assertEquals("TIMESTAMP '2025-01-01 12:00:00.0'", render("2025-01-01 12:00:00.0", "TIMESTAMP"))
+        assertEquals("DATE '2025-01-01'", render("2025-01-01", "DATE"))
+    }
+
+    @Test
+    fun `日期族秒缺省补 00 与不可解析值回落引号`() {
+        assertEquals("TIMESTAMP '2025-01-01 00:00:00'", render("2025-01-01T00:00", "LocalDateTime")) // LocalDateTime.toString 省略秒
+        assertEquals("TIMESTAMP '2025-01-01 00:00:00'", render("2025-01-01 00:00", "Timestamp"))
+        assertEquals("'Mon Jan 01 00:00:00 CST 2025'", render("Mon Jan 01 00:00:00 CST 2025", "Date")) // 非 ISO 文本回落既有引号
+        assertEquals("'2025-01-01T12:00:00+08:00'", render("2025-01-01T12:00:00+08:00", "OffsetDateTime")) // 带时区值不包装（边界登记）
+        assertEquals("'12:00'", render("12:00", "LocalTime"))
+        assertEquals("'abc'", render("abc", "LocalDate"))
     }
 
     @Test

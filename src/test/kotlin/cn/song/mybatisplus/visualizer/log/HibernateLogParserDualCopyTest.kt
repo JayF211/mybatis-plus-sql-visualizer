@@ -70,7 +70,7 @@ class HibernateLogParserDualCopyTest {
         assertEquals("合并条目应带全部参数", 3, entry.params.size)
         assertEquals("参数值年份应完整", "2026-01-01T00:00", entry.params[1].value)
         assertTrue("restoredSql 不应残留 ?", '?' !in entry.restoredSql)
-        assertTrue("restoredSql 应含全值日期", "'2026-01-01T00:00'" in entry.restoredSql)
+        assertTrue("restoredSql 应含 ANSI 时间戳全值（'T' 归一+秒补 00）", "TIMESTAMP '2026-01-01 00:00:00'" in entry.restoredSql)
         val expectedNormalized = "select count(case when wmsdockboo0_.status='F' then 0 end) as col_0_0_ " +
             "from wms_dock_booking wmsdockboo0_ where wmsdockboo0_.warehouse_id=? " +
             "and wmsdockboo0_.created_time>=? and wmsdockboo0_.created_time<?"
