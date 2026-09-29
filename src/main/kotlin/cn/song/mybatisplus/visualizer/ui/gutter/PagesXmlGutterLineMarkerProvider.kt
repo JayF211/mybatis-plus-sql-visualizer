@@ -38,8 +38,11 @@ class PagesXmlGutterLineMarkerProvider : LineMarkerProvider {
         // maintainPage 标签 + 直接父级是 <pages>（避免非 pages XML 误显）
         if (tag.name != "maintainPage") return null
         if (tag.parentTag?.name != "pages") return null
-        if (!gutterEnabled()) return null
-        if (!GutterGroups.enabledFor(javaClass, runCatching { PluginSettings.getInstance().state.showGutterIcon }.getOrDefault(true))) return null // R2 分组显隐
+        // F36（T-PerfSweep16）：单次取 state，总闸与组显隐共用（原 gutterEnabled + enabledFor
+        // 双路径每到达元素 3 次 app 级查找收敛为 1 次）
+        val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
+        if (gutterState != null && !gutterState.showGutterIcon) return null
+        if (!GutterGroups.enabledFor(javaClass, gutterState)) return null // R2 分组显隐
         return LineMarkerInfo(
             element,
             element.textRange,
@@ -50,11 +53,6 @@ class PagesXmlGutterLineMarkerProvider : LineMarkerProvider {
             { MpSqlVisualizerBundle.message("gutter.pages.accessible.name") },
         )
     }
-
-    /** 读取 gutter 图标开关（测试环境 service 未注册时按默认 true 处理）。 */
-    private fun gutterEnabled(): Boolean = runCatching {
-        PluginSettings.getInstance().state.showGutterIcon
-    }.getOrDefault(true)
 
     /** 点击处理：后台解析 + 渲染（EDT 禁止 PSI 慢操作），结果走统一展示入口。 */
     private object PagesGutterNavigationHandler : GutterIconNavigationHandler<PsiElement> {

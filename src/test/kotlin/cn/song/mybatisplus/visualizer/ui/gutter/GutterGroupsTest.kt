@@ -60,6 +60,33 @@ class GutterGroupsTest {
         assertFalse(GutterGroups.enabledFor(XmlSqlGutterLineMarkerProviderStub::class.java, false))
     }
 
+    @Test
+    fun testF36_enabledFor_state重载_真值表() {
+        // F36（T-PerfSweep16）：(Class, State?) 重载的四态真值表。
+        // stub 未登记 → 落 other 组；组映射本身已由 testR2_组开关读取 钉住，此处钉总闸×组的组合语义。
+        val stub = XmlSqlGutterLineMarkerProviderStub::class.java
+
+        // 组开 × 图标开 = true
+        val allOn = PluginSettings.State()
+        assertTrue(GutterGroups.enabledFor(stub, allOn))
+
+        // 组关 × 图标开 = false
+        val groupOff = PluginSettings.State().apply { gutterGroupOther = false }
+        assertFalse(GutterGroups.enabledFor(stub, groupOff))
+
+        // 任意 × 图标关 = false（组开/组关都关）
+        val iconOffAllGroupsOn = PluginSettings.State().apply { showGutterIcon = false }
+        assertFalse(GutterGroups.enabledFor(stub, iconOffAllGroupsOn))
+        val iconOffAndGroupOff = PluginSettings.State().apply {
+            showGutterIcon = false
+            gutterGroupOther = false
+        }
+        assertFalse(GutterGroups.enabledFor(stub, iconOffAndGroupOff))
+
+        // state = null（设置服务不可读的失败回退）= true
+        assertTrue(GutterGroups.enabledFor(stub, null))
+    }
+
     /** 空壳类仅用于 enabledFor 的组解析路径。 */
     private class XmlSqlGutterLineMarkerProviderStub
 }
