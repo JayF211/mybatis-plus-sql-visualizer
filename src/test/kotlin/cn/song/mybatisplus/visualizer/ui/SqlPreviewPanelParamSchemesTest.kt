@@ -10,8 +10,12 @@ import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.intellij.ui.HideableTitledPanel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 
 /**
@@ -58,7 +62,8 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         </mapper>
     """.trimIndent()
 
-    private fun openPanel(): SqlPreviewPanel {
+    /** 语料渲染为 PreviewResult（openPanel 与 O-88 跨重建用例共用）。 */
+    private fun buildProbePreviewResult(): PreviewResult {
         val parsed = XmlMapperParser().parse(mapper)
         val model = XmlPreviewModel.from(
             parsed.statements.single(), parsed.errors,
@@ -68,20 +73,22 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
             ),
         )
         val rendered = model.renderSql()
+        return PreviewResult(
+            sql = rendered.sql,
+            compactSql = rendered.sql.replace(Regex("\\s+"), " ").trim(),
+            unresolvedParams = rendered.mappings.map { it.property },
+            paramTable = ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
+            wrapperType = null,
+            tableName = null,
+            xmlModel = model,
+        )
+    }
+
+    private fun openPanel(): SqlPreviewPanel {
         val p = SqlPreviewPanel(project)
         panel = p
         Disposer.register(testRootDisposable, p)
-        p.showResult(
-            PreviewResult(
-                sql = rendered.sql,
-                compactSql = rendered.sql.replace(Regex("\\s+"), " ").trim(),
-                unresolvedParams = rendered.mappings.map { it.property },
-                paramTable = ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
-                wrapperType = null,
-                tableName = null,
-                xmlModel = model,
-            )
-        )
+        p.showResult(buildProbePreviewResult())
         com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents() // EDT 排队的参数区构建（勾选框/字段列表）就位
         return p
     }
@@ -236,5 +243,49 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         // 写回已完成：默认方案快照必须仍是默认流（未被边界流的延迟写回覆盖）
         assertEquals("默认方案快照不得被命名方案的写回串写", defaultSnapshot, cache.recall(key))
         assertEquals("边界流快照应含其捕获的值", "5", cache.recallFromScheme("边界流", key)!!["__fev__:statusList"])
+    }
+
+    // ==== O-88：预设行折叠件（平台标准 HideableTitledPanel） ====
+
+    /** O-88 ①：缺省展开——折叠件在场、isExpanded=true、锚点方案行可见且挂在折叠件内容区。 */
+    fun testO88_预设折叠件缺省展开() {
+        val p = openPanel()
+        val fold = p.presetFoldForTest()
+        assertNotNull("参数区应有预设折叠件（O-88）", fold)
+        assertTrue("缺省应展开", fold!!.isExpanded)
+        val row = p.schemeRowForTest()
+        assertNotNull("折叠内容里应有 SCHEME_ROW_NAME 锚点行", row)
+        assertTrue("展开态下方案行可见", row!!.isVisible)
+        assertSame(
+            "方案行应挂在折叠件内容区（非 paramPanel 直插）",
+            fold,
+            javax.swing.SwingUtilities.getAncestorOfClass(HideableTitledPanel::class.java, row),
+        )
+    }
+
+    /** O-88 ②：折叠后内容区收起（平台件源码语义：off() 将 content setVisible(false)，不占竖向空间）。 */
+    fun testO88_折叠后内容区收起() {
+        val p = openPanel()
+        val fold = p.presetFoldForTest()!!
+        fold.setOn(false)
+        assertFalse("isExpanded 应为 false", fold.isExpanded)
+        assertFalse("方案行应不可见（内容区收起）", p.schemeRowForTest()!!.isVisible)
+    }
+
+    /** O-88 ③：折叠态跨预览重建保留——折叠后同一面板重新 showResult，重建的折叠件仍收起（不持久化）。 */
+    fun testO88_折叠态跨预览重建保留() {
+        val p = openPanel()
+        val oldFold = p.presetFoldForTest()!!
+        oldFold.setOn(false)
+
+        // 切换语句语义：同一面板重新 showResult → rebuildLeftPanel → paramPanel.removeAll + 方案行重建
+        p.showResult(buildProbePreviewResult())
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+
+        val newFold = p.presetFoldForTest()
+        assertNotNull("重建后应有新的折叠件", newFold)
+        assertNotSame("参数区重建应重建出新的折叠件实例", oldFold, newFold)
+        assertFalse("重建后折叠态应保留（面板内存字段）", newFold!!.isExpanded)
+        assertFalse("重建后方案行仍收起", p.schemeRowForTest()!!.isVisible)
     }
 }

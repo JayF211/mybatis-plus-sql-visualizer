@@ -74,6 +74,7 @@ import com.intellij.openapi.ui.Messages
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiFileFactory
+import com.intellij.ui.HideableTitledPanel
 import com.intellij.ui.JBColor
 import com.intellij.ui.SimpleListCellRenderer
 import com.intellij.ui.TitledSeparator
@@ -495,6 +496,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private var lastShownActiveScheme: String = ParamHistoryCache.DEFAULT_SCHEME
     /** 管理方案对话框（MODELESS，单实例防堆叠；关闭后由可见性判断重建）。 */
     private var schemeManagerDialog: ParamSchemeManagerDialog? = null
+
+    // O-88：预设行折叠件（平台标准 HideableTitledPanel，Run Config「Before launch」区同款）。
+    // 折叠态=面板内存字段：跨预览重建保留（换语句/清空后再显示不丢）、不跨重启持久化、无设置开关。
+    /** 预设分区是否处于折叠态（缺省展开=false；重建时由当前折叠件实例回写，见 [buildSchemeRow]）。 */
+    @Volatile
+    private var presetSectionCollapsed = false
+
+    /**
+     * 当前预设折叠件实例——[HideableTitledPanel] 公共面无状态变更监听器（装饰器私有），
+     * 用户点标题折叠的变化以「重建时读 [HideableTitledPanel.isExpanded] 回写」的懒惰捕获跟进；
+     * 折叠件随 paramPanel.removeAll 摘除后实例仍持有最后视觉态，跨 clear/rebuild 均可恢复。
+     */
+    private var presetFold: HideableTitledPanel? = null
 
     // T-Perf-04：参数击键路径 renderSql 防抖（Swing Timer，150ms，模式同 historyAlarm）
     /** 待执行的渲染任务（最后一次调度者生效——防抖语义）。 */
@@ -3434,11 +3448,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // ------------------------------------------------------------------
 
     /**
-     * R22 T-04：方案行——「方案: [下拉] [管理方案…]」（compactButton 同字号，非自创形态）。
+     * R22 T-04：方案行——「预设: [下拉] [管理预设…]」（compactButton 同字号，非自创形态）。
      * 下拉项为原始方案名（默认方案 = 空串内部名），显示名经 bundle 本地化
      * （默认方案显示名与用户命名可撞名，故渲染器映射而非直接用显示名作条目）。
+     * O-88：整行收进平台标准折叠件 [HideableTitledPanel]，标题复用 `panel.scheme.label`，
+     * 缺省展开；折叠时内容区 setVisible(false) 不占竖向空间。折叠态存内存字段
+     * （[presetSectionCollapsed]，跨预览重建保留、不持久化）。
      */
-    private fun buildSchemeRow(): JBPanel<JBPanel<*>> {
+    private fun buildSchemeRow(): JComponent {
+        // O-88：懒惰捕获——上一份折叠件实例若被用户点标题折叠过，先回写内存字段再重建
+        // （HideableTitledPanel 公共面无监听器；摘除后实例仍持有最后视觉态，clear/rebuild 均不丢）
+        presetFold?.let { presetSectionCollapsed = !it.isExpanded() }
         val combo = JComboBox<String>()
         schemeCombo = combo
         combo.renderer = SimpleListCellRenderer.create<String> { label, value, _ ->
@@ -3453,13 +3473,21 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val manageButton = compactButton(MpSqlVisualizerBundle.message("panel.scheme.manage")) {
             openSchemeManagerDialog()
         }
-        return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6)).apply {
+        val schemeRow = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6)).apply {
             name = SCHEME_ROW_NAME
             add(JBLabel(MpSqlVisualizerBundle.message("panel.scheme.label")))
             add(combo)
             add(manageButton)
             border = JBUI.Borders.empty(0, 8, 2, 8)
         }
+        // O-88：adjustWindow=false——预览面板嵌在弹窗/工具窗内容区，折叠/展开不得调整窗口尺寸
+        // （源码语义：true 时 adjustWindow 会按内容尺寸改祖先 Window 大小，Run Config 弹窗专用）
+        return HideableTitledPanel(
+            MpSqlVisualizerBundle.message("panel.scheme.label"),
+            false,
+            schemeRow,
+            !presetSectionCollapsed,
+        ).also { presetFold = it }
     }
 
     /** R22 T-04：按 cache 当前态重建下拉模型与选中项（程序化填充，抑制切换语义）。 */
@@ -5057,6 +5085,20 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     internal fun historyCacheKeyForTest(): String? = historyCacheKey()
     /** R22 T-04 测试缝：方案下拉（在场/选中态断言）。 */
     internal fun schemeComboForTest(): JComboBox<String>? = schemeCombo
+
+    /** O-88：当前预设折叠件实例（null=本轮参数区未建预设行——无参数早退/清空后）。 */
+    internal fun presetFoldForTest(): HideableTitledPanel? = presetFold
+
+    /** O-88：按 SCHEME_ROW_NAME 锚点取折叠内容里的方案行（折叠态下 visible=false 仍可取到）。 */
+    internal fun schemeRowForTest(): JComponent? = presetFold?.let { findSchemeRowDeep(it) }
+
+    private fun findSchemeRowDeep(root: java.awt.Container): JComponent? {
+        for (child in root.components) {
+            if (child.name == SCHEME_ROW_NAME) return child as? JComponent
+            if (child is java.awt.Container) findSchemeRowDeep(child)?.let { return it }
+        }
+        return null
+    }
     /** R22 T-04 测试缝：程序化切换方案（等价下拉用户切换：清态→switchScheme→召回→渲染）。 */
     internal fun switchSchemeForTest(name: String) = switchToScheme(name)
     /** R22 T-04 测试缝：对话框回调链（同步下拉 + 激活变更整面重召回）。 */
