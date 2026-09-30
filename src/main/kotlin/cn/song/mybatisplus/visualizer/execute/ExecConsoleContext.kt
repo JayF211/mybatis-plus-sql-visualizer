@@ -81,6 +81,16 @@ object ExecConsoleContext {
     }.getOrNull()
 
     /**
+     * R33 EXPLAIN 结构化通道：控制台已绑的 DBN 数据源对象（`JdbcConsole.getDataSource()`，
+     * LocalDataSource 同时是 DatabaseConnectionPoint——McpDbExecutor 反射链的入参形态）。
+     * 取不到（非 JdbcConsole/平台异常）返回 null → 调用方 fail-closed 回退直送通道。
+     * 只取**引用**不做 PSI 遍历；调用方须在 ReadAction 内调用（EDT 读 PSI 硬抛平台陷阱）。
+     */
+    fun boundDataSource(console: Any?): Any? = runCatching {
+        (console as? JdbcConsole)?.dataSource
+    }.getOrNull()
+
+    /**
      * T-SI-03 ②：读回校验（纯函数，默认 test 通道可覆盖）——切换/强设之后 searchPath 的当前
      * 节点必须等于目标库，否则返回不一致描述（一致返回 null）。大小写不敏感：MySQL 库名在
      * 不同平台的回读大小写不保证（Linux 服务端按库名大小写敏感，回读可能与 URL 写法不同）。
