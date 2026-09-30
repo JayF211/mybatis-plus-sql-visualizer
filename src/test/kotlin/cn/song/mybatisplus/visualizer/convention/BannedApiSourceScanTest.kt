@@ -62,38 +62,14 @@ import java.io.File
  */
 class BannedApiSourceScanTest {
 
-    private fun repoRoot(): File {
-        var dir = File(System.getProperty("user.dir")).absoluteFile
-        repeat(6) {
-            if (File(dir, "src/main/java").isDirectory) return dir
-            dir = dir.parentFile ?: return@repeat
-        }
-        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
-    }
+    // T-TestPerf6：repoRoot/stripComments 挪 companion（三棵源码树快照与 mainSources 剥注释版
+    // 都在 companion 构建），调用点签名不变，语义不变
+    private fun repoRoot(): File = Companion.repoRoot()
 
     /** 剥离 block 注释与行注释（字符串字面量中的 // 会被连带截断——只可能产生漏报不产生误报，可接受）。 */
-    private fun stripComments(source: String): String =
-        source
-            .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
-            .lineSequence()
-            .joinToString("\n") { it.substringBefore("//") }
+    private fun stripComments(source: String): String = Companion.stripComments(source)
 
-    /** k2j 生产树：src/main/java（.java）。 */
-    private fun mainSources(): List<Pair<String, String>> =
-        repoRoot().resolve("src/main/java").walkTopDown()
-            .filter { it.isFile && it.extension == "java" }
-            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') to stripComments(it.readText()) }
-            .toList()
-
-    /** k2j 测试树：src/test/kotlin 与 src/test/java（.kt/.java 混放）——规则对两处同样生效。 */
-    private fun testSources(): List<Pair<String, String>> =
-        listOf("src/test/kotlin", "src/test/java")
-            .flatMap { rel ->
-                repoRoot().resolve(rel).takeIf { it.isDirectory }?.walkTopDown()?.toList() ?: emptyList()
-            }
-            .filter { it.isFile && (it.extension == "kt" || it.extension == "java") }
-            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') to stripComments(it.readText()) }
-            .toList()
+    private fun mainSources(): List<Pair<String, String>> = mainSourcesSnapshot
 
     /** 全量源码中「禁用片段」命中清单：List<文件相对路径>。 */
     private fun hits(banned: String): List<String> =
@@ -163,11 +139,14 @@ class BannedApiSourceScanTest {
         // T-BrowserLeak2（2026-09-18）：SafeBrowserTest 直调真实 URL 曾致定时回归每次真开 Edge
         // （守卫「app != null && isUnitTestMode」在无 Application 环境放行）。src/test 同样禁直调，
         // 统一走 util.SafeBrowser——其 fail-safe 守卫在无 Application 环境恒短路。
+        // T-TestPerf6：读 src/test 快照（过滤链原样：自豁免本守卫文件）
         // k2j 注：测试树 src/test/kotlin 与 src/test/java 混放（.kt/.java），两处一并扫。
-        val bad = testSources()
-            .filter { (path, _) -> !path.endsWith("BannedApiSourceScanTest.kt") } // 本守卫自身的报错文案含该片段，须自豁免
-            .filter { (_, code) -> code.contains("BrowserUtil.browse(") }
-            .map { (path, _) -> path }
+        val bad = srcTestKotlinTree
+            .filter { (f, _) -> f.extension == "kt" || f.extension == "java" }
+            .filter { (f, _) -> f.name != "BannedApiSourceScanTest.kt" } // 本守卫自身的报错文案含该片段，须自豁免
+            .filter { (_, text) -> stripComments(text).contains("BrowserUtil.browse(") }
+            .map { (f, _) -> f.relativeTo(repoRoot()).path.replace('\\', '/') }
+            .toList()
         assertTrue(
             "src/test 出现 BrowserUtil.browse( 直调（$bad）——测试进程触达即弹宿主机浏览器，" +
                 "统一改走 util.SafeBrowser",
@@ -183,14 +162,17 @@ class BannedApiSourceScanTest {
         // SqlPreviewPanelTest setUp 快照处单类 10 例全红），且测试写入会覆盖用户自己的剪贴板。
         // 故 src/test 禁直连系统剪贴板：一律 installFakeClipboard（testutil）替换平台服务。
         // 唯一豁免 = testutil 假实现本体（不含系统剪贴板访问，仅作类型引用）。
+        // T-TestPerf6：读 src/test 快照（过滤链原样：双豁免本守卫与假实现本体，原文口径判读）
         // k2j 注：假实现本体为 testutil/FakeClipboardInstaller.java（src/test/java）与
-        // testutil/FakeClipboard.kt（src/test/kotlin），两者均自豁免。
-        val bad = testSources()
-            .filter { (path, _) -> !path.endsWith("BannedApiSourceScanTest.kt") } // 本守卫自身报错文案含该片段，须自豁免
-            .filter { (path, _) -> !path.endsWith("FakeClipboard.kt") } // 假实现本体（不含 systemClipboard 访问）
-            .filter { (path, _) -> !path.endsWith("FakeClipboardInstaller.java") } // 同上（Java 侧安装器）
-            .filter { (_, t) -> t.contains("systemClipboard") || t.contains("getSystemClipboard") }
-            .map { (path, _) -> path }
+        // testutil/FakeClipboard.kt（src/test/kotlin），两者均自豁免；测试树 .kt/.java 混放两处一并扫。
+        val bad = srcTestKotlinTree
+            .filter { (f, _) -> f.extension == "kt" || f.extension == "java" }
+            .filter { (f, _) -> f.name != "BannedApiSourceScanTest.kt" } // 本守卫自身的报错文案含该片段，须自豁免
+            .filter { (f, _) -> f.name != "FakeClipboard.kt" } // 假实现本体（不含 systemClipboard 访问）
+            .filter { (f, _) -> f.name != "FakeClipboardInstaller.java" } // 同上（Java 侧安装器）
+            .filter { (_, text) -> text.contains("systemClipboard") || text.contains("getSystemClipboard") }
+            .map { (f, _) -> f.relativeTo(repoRoot()).path.replace('\\', '/') }
+            .toList()
         assertTrue(
             "src/test 出现系统剪贴板直连（$bad）——用户复制/并行会话占用时必抛 cannot open system " +
                 "clipboard（整类用例假失败），且会覆盖用户剪贴板；改走 testutil.installFakeClipboard",
@@ -276,10 +258,11 @@ class BannedApiSourceScanTest {
         // T-BS-01 实录（pitfall-filecontents-charset）：providers.fileContents().asText 按 JVM
         // 平台默认字符集解码，本机 GBK daemon 把 UTF-8 的 change-notes 读成乱码（集合→闆嗗悎）。
         // 正确形态 = asBytes + toString(Charsets.UTF_8) 显式解码（mpv-release.gradle.kts 先例）。
-        val bad = repoRoot().resolve("buildSrc/src/main/kotlin").walkTopDown()
-            .filter { it.isFile && it.extension == "kts" }
-            .filter { stripComments(it.readText()).contains(".asText") }
-            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') }
+        // T-TestPerf6：读 buildSrc 快照
+        val bad = buildSrcKotlinTree
+            .filter { (f, _) -> f.extension == "kts" }
+            .filter { (_, text) -> stripComments(text).contains(".asText") }
+            .map { (f, _) -> f.relativeTo(repoRoot()).path.replace('\\', '/') }
             .toList()
         assertTrue(
             "buildSrc 脚本出现 fileContents().asText（按 daemon 平台字符集解码，GBK 机器读 UTF-8 文件乱码）：$bad。" +
@@ -381,12 +364,11 @@ class BannedApiSourceScanTest {
     // write-safe 上下文（T-WriteSafeCtx：2026-09-17 真机 Write-unsafe context 事故）
     // ------------------------------------------------------------------
 
-    /** src/main 原文（**不剥注释**——豁免标注要在原文上认；CRLF/缩进原样保留）。 */
+    /** src/main 原文（**不剥注释**——豁免标注要在原文上认；CRLF/缩进原样保留）。T-TestPerf6 起读快照。 */
     private fun rawMainSources(): List<Pair<String, String>> =
-        repoRoot().resolve("src/main/java").walkTopDown()
-            .filter { it.isFile && it.extension == "java" }
-            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') to it.readText() }
-            .toList()
+        srcMainKotlinTree
+            .filter { (f, _) -> f.extension == "java" }
+            .map { (f, text) -> f.relativeTo(repoRoot()).path.replace('\\', '/') to text }
 
     /**
      * 配平/提取专用文本：注释与字符串、字符字面量的**内容**替换为等长空白，换行与其余字符原样保留。
@@ -1284,8 +1266,15 @@ class BannedApiSourceScanTest {
      * `ui/EditorWhitespaceSettings.java` 的 `runCatching { 取设置 }.getOrDefault(false)`）。
      * 以上均**只做降级、不覆盖 fatal 面**（无一处吞掉 `VirtualMachineError`/`LinkageError`/
      * `ThreadDeath` 后继续运行），与 master 同源；故按守卫既定流程重新登记基线，而非逐站点补判定。
+     *
+     * **660 → 666（T-SyncK2JMaster70，2026-10-01，本轮逐文件对账 +6）**：T-Embedded 族翻译新增
+     * `runCatching` 等价的 try/catch(Throwable)——`psi/jpa/JpaMetadataReader.java` +4（SD @Embedded
+     * 三方法 isSpringDataEmbeddedField/springDataEmbeddedPrefixOf/isSpringDataEmbeddedAnnotation 各 1 +
+     * flattenEmbeddedColumns 出口 rootFieldName 取名降级 1）、`psi/EntityResolver.java` +2
+     * （resolveEmbeddedColumns 的展平调用与字段类型读取降级）。全部为 master 侧 `runCatching` 同源
+     * 形态、只做降级不覆盖 fatal 面，按既定流程重新登记基线。
      */
-    private val fatalCatchSiteTotalBaseline = 660
+    private val fatalCatchSiteTotalBaseline = 666
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线
@@ -2052,24 +2041,20 @@ class BannedApiSourceScanTest {
 
     /**
      * src/test 源码（**原文**，不剥注释——`// project-state:` 豁免标注要在原文上认；掩码由调用方
-     * 按需生成）。扫描 `src/test/kotlin` + `src/test/java`（k2j 的测试树是 `.kt` 为主、`.java` 混放）。
-     * 本守卫自身排除在外（其合成样本与报错文案含被扫片段）。
+     * 按需生成）。T-TestPerf6 起读快照。扫描 `src/test/kotlin` + `src/test/java`
+     * （k2j 的测试树是 `.kt` 为主、`.java` 混放）。本守卫自身排除在外（其合成样本与报错文案含被扫片段）。
      *
-     * 与 [testSources]（剥注释版）并存的原因：既有两条测试树规则做的是「片段是否出现」判定，
+     * 与剥注释版 [mainSources]（src/main 快照）的口径差异：既有两条测试树规则做的是「片段是否出现」判定，
      * 剥注释可避免注释里的字样误报；本族要认**注释里的豁免标注**并做掩码配平，必须在原文上跑。
      */
-    private fun rawTestSources(): List<Pair<String, String>> =
-        listOf("src/test/kotlin", "src/test/java")
-            .flatMap { rel ->
-                repoRoot().resolve(rel).takeIf { it.isDirectory }?.walkTopDown()?.toList() ?: emptyList()
-            }
-            .filter { it.isFile && (it.extension == "kt" || it.extension == "java") }
-            .filter { it.name != "BannedApiSourceScanTest.kt" }
-            .map { it.relativeTo(repoRoot()).path.replace('\\', '/') to it.readText() }
-            .toList()
+    private fun testSources(): List<Pair<String, String>> =
+        srcTestKotlinTree
+            .filter { (f, _) -> f.extension == "kt" || f.extension == "java" }
+            .filter { (f, _) -> f.name != "BannedApiSourceScanTest.kt" }
+            .map { (f, text) -> f.relativeTo(repoRoot()).path.replace('\\', '/') to text }
 
     /**
-     * 扫描面保鲜断言：路径解析失败（`src/test/kotlin` 改名 / `user.dir` 异常）时 [rawTestSources] 返回
+     * 扫描面保鲜断言：路径解析失败（`src/test/kotlin` 改名 / `user.dir` 异常）时 [testSources] 返回
      * **空列表**，而规则对空列表恒 0 违规 → 主用例会**静默空绿**（T-ST-02d 独立复核条件项）。
      * k2j 历史上出过「扫描根不匹配 → 命中 0 文件 → 断言恒真」的静默假绿，故本断言是本族的第一道闸。
      * 空面自证见 `TST02d自证_…`（空列表必须让本断言变红）。
@@ -2471,7 +2456,7 @@ class BannedApiSourceScanTest {
     fun `初始化入口改项目服务级状态须复位`() {
         // T-StabilityTail T-ST-02d：把「改共享服务状态须复位」这条人工审计结论固化为源码扫描守卫。
         // 判据与误报边界见 [projectServiceStateOffenders] 的 KDoc。
-        val sources = rawTestSources()
+        val sources = testSources()
         // 路径解析失败 = 空扫描面 = 规则恒 0 违规的**空绿**（自证见 TST02d自证_… 的空面样本）
         assertTestSourcesResolved(sources)
         // 初始化入口提取面保鲜：入口为 0（正则口径与测试声明形态不匹配）时本规则同样恒绿
@@ -2545,10 +2530,9 @@ class BannedApiSourceScanTest {
     @Test
     fun `收尾窗口不得取项目服务`() {
         // T-AgentResiduals R2：见 [teardownServiceLookupOffenders] 的 KDoc。
-        // k2j 移植注：master 的 testSources() 即原文（不剥注释，豁免标注要在原文上认）；k2j 同口径的
-        // 原文扫描面是 [rawTestSources]（.kt/.java 双根、本守卫自身排除）——testSources() 是剥注释版
-        // （BrowserUtil/剪贴板两条片段规则用），注释被剥掉会让 `// project-state:` 豁免永不生效。
-        val sources = rawTestSources()
+        // k2j 移植注：[testSources] 即原文扫描面（不剥注释、.kt/.java 双根、本守卫自身排除，
+        // T-TestPerf6 起读快照）；豁免标注要在原文上认——剥注释版会让 `// project-state:` 豁免永不生效。
+        val sources = testSources()
         assertTestSourcesResolved(sources)
         val offenders = teardownServiceLookupOffenders(sources)
         assertTrue(
@@ -3239,5 +3223,54 @@ class BannedApiSourceScanTest {
         assertEquals("Java `void setUp()` 入口应被提取：$javaSetUpSites", 1, javaSetUpSites.size)
         assertEquals("Java 入口名", "setUp", javaSetUpSites[0].name)
         assertEquals("Java 入口行号须与原文对齐", 5, javaSetUpSites[0].line)
+    }
+
+    private companion object {
+        private fun repoRoot(): File {
+            var dir = File(System.getProperty("user.dir")).absoluteFile
+            repeat(6) {
+                // k2j 生产树为 src/main/java（.java），仓库根探测与 master 的 src/main/kotlin 不同
+                if (File(dir, "src/main/java").isDirectory) return dir
+                dir = dir.parentFile ?: return@repeat
+            }
+            error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: " + System.getProperty("user.dir"))
+        }
+
+        /** 剥离 block 注释与行注释（字符串字面量中的 // 会被连带截断——只可能产生漏报不产生误报，可接受）。 */
+        private fun stripComments(source: String): String =
+            source
+                .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
+                .lineSequence()
+                .joinToString("\n") { it.substringBefore("//") }
+
+        // T-TestPerf6：三棵源码树快照——同一次测试 JVM 内文件内容恒定，全部扫描点共享一次
+        // 遍历+读取（原口径 mainSources 每个断言各付一遍全仓、src/test 三处与 buildSrc 一处内联
+        // 各付一遍）；各使用处的过滤/豁免/判读口径在使用点原样保留，快照只消除重复文件系统 IO。
+        private val CHAR_BS: Char = '\\'
+
+        private fun snapshotTree(rel: String): List<Pair<File, String>> =
+            File(repoRoot(), rel).walkTopDown()
+                .filter { it.isFile }
+                .map { it to it.readText() }
+                .toList()
+
+        // k2j：main 树=src/main/java（.java）、测试树=src/test/kotlin 与 src/test/java（.kt/.java
+        // 混放）两处并扫、buildSrc 与 master 同为 .kt——快照名沿用 master（减少后续轮合并噪声）。
+        private val srcMainKotlinTree: List<Pair<File, String>> by lazy { snapshotTree("src/main/java") }
+        private val srcTestKotlinTree: List<Pair<File, String>> by lazy {
+            listOf("src/test/kotlin", "src/test/java")
+                .flatMap { rel ->
+                    File(repoRoot(), rel).takeIf { it.isDirectory }?.walkTopDown()?.toList() ?: emptyList()
+                }
+                .filter { it.isFile }
+                .map { it to it.readText() }
+        }
+        private val buildSrcKotlinTree: List<Pair<File, String>> by lazy { snapshotTree("buildSrc/src/main/kotlin") }
+
+        private val mainSourcesSnapshot: List<Pair<String, String>> by lazy {
+            srcMainKotlinTree
+                .filter { (f, _) -> f.extension == "java" }
+                .map { (f, text) -> f.relativeTo(repoRoot()).path.replace('\\', '/') to stripComments(text) }
+        }
     }
 }

@@ -126,6 +126,13 @@ class HqlAliasColumnMappingTest : BasePlatformTestCase() {
         assertTrue("属性名仍应映射: ${result.sql}", result.sql.contains("pickTicket.unknownMiddle.created_time"))
     }
 
+    /** T-Embedded D1：嵌套嵌入点路径覆写的列名进入属性映射产物（嵌入段剥离 + 覆写列名）。 */
+    fun test嵌套嵌入点路径覆写列名_属性映射产物() {
+        val result = convert("select cust.addr.zip.code from CustEntity cust", "CustEntity")
+        assertTrue("点路径覆写列名应在产物中: ${result.sql}", result.sql.contains("cust.addr_zip_code"))
+        assertFalse("嵌入段不得残留（无效 SQL 形态）: ${result.sql}", result.sql.contains("addr.zip"))
+    }
+
     // ------------------------------------------------------------------
     // N1：限定符与点号之间的空白（合法 HQL/JPQL 写法）
     // ------------------------------------------------------------------
@@ -452,6 +459,31 @@ class HqlAliasColumnMappingTest : BasePlatformTestCase() {
 
                     @javax.persistence.Column(name = "gmt_create")
                     private java.util.Date createdTime;
+                }
+
+                // T-Embedded D1：嵌套嵌入 + 类级点路径覆写（addr.zip.code）
+                @javax.persistence.Embeddable
+                public static class Zip {
+                    private String code;
+                }
+
+                @javax.persistence.Embeddable
+                public static class FullAddress {
+                    private String city;
+
+                    @javax.persistence.Embedded
+                    private Zip zip;
+                }
+
+                @javax.persistence.Entity
+                @javax.persistence.Table(name = "t_cust")
+                @javax.persistence.AttributeOverride(name = "addr.zip.code", column = @javax.persistence.Column(name = "addr_zip_code"))
+                public static class CustEntity {
+                    @javax.persistence.Id
+                    private Long id;
+
+                    @javax.persistence.Embedded
+                    private FullAddress addr;
                 }
             }
         """.trimIndent()

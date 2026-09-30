@@ -91,6 +91,17 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
         return result;
     }
 
+    /** 等待状态行出现目标文本（T-TestPerf7 S2：解析失败路径只更新状态不写结果区，
+     *  等结果文本的用例会恒空转到 5s 轮询上限——等本用例真正等待的信号，断言零改动）。 */
+    private void awaitStatusContains(String substring) throws Exception {
+        int waited = 0;
+        while (!panel.statusForTest().contains(substring) && waited < 100) {
+            UIUtil.dispatchAllInvocationEvents();
+            Thread.sleep(50);
+            waited++;
+        }
+    }
+
     @Test
     public void testConvertNoEntityFallsBackToQueryWrapper() throws Exception {
         // 手动选择开关关闭 → 0 候选直接回落（开关开启的弹窗路径由 EntitySelectionDialogTest 覆盖）
@@ -113,8 +124,11 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
     public void testConvertParseErrorShowsStatus() throws Exception {
         panel.inputEditorForTest().setSql("SELECT * FROM t WHERE a = 'abc");
         panel.convertForTest();
-        String result = awaitResult();
-        assertEquals("", result);
+        // T-TestPerf7 S2：本用例等的是「状态行报错」这一信号（结果区恒空是预期形态），
+        // 原先 awaitResult 等结果文本每轮烧满 5s 上限（实测 6.4s vs 本类 p50 0.13s）；
+        // 改等状态行信号，断言与失败形态零改动——生产回归（状态不出错文案）时照样超时后红
+        awaitStatusContains("无法解析");
+        assertEquals("", panel.resultTextForTest());
         assertTrue(panel.statusForTest(), panel.statusForTest().contains("无法解析"));
     }
 

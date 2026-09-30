@@ -193,6 +193,171 @@ class JpaEntityResolverMappingDeepTest : BasePlatformTestCase() {
         }
     }
 
+    // ------------------------------------------------------------------
+    // 嵌套点路径 @AttributeOverride（T-Embedded D1）+ Spring Data @Embedded（T-Embedded D2）
+    // ------------------------------------------------------------------
+
+    /** 类级 @AttributeOverride 的实体根相对点路径：`address.zipcode.zip`（jakarta javadoc 强制形态）。 */
+    fun test嵌套点路径覆写_类级实体根相对键_T_Embedded() {
+        withTableConfig {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntityByName(
+                "CustomerEntity",
+                """
+                @jakarta.persistence.Embeddable
+                public class Zipcode {
+                    private String zip;
+                }
+
+                @jakarta.persistence.Embeddable
+                public class Address {
+                    private String street;
+
+                    @jakarta.persistence.Embedded
+                    private Zipcode zipcode;
+                }
+
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_customer")
+                @jakarta.persistence.AttributeOverride(name = "address.street", column = @jakarta.persistence.Column(name = "addr_street"))
+                @jakarta.persistence.AttributeOverride(name = "address.zipcode.zip", column = @jakarta.persistence.Column(name = "addr_zip"))
+                public class CustomerEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+
+                    @jakarta.persistence.Embedded
+                    private Address address;
+                }
+                """.trimIndent(),
+            )
+            val table = JpaEntityResolver().resolve(clazz)
+            assertEquals("addr_street", table.columnByField("street")?.columnName)
+            assertEquals("嵌套点路径覆写命中深层展平列", "addr_zip", table.columnByField("zip")?.columnName)
+            assertTrue(table.columnByField("zip")?.isEmbedded == true)
+        }
+    }
+
+    /** 规范 Example 2 形态：字段级 @AttributeOverrides，键相对该嵌入对象（`zipcode.zip`）。 */
+    fun test嵌套点路径覆写_字段级相对键_规范例2形态_T_Embedded() {
+        withTableConfig {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntityByName(
+                "CustomerEntity",
+                """
+                @jakarta.persistence.Embeddable
+                public class Zipcode {
+                    private String zip;
+                }
+
+                @jakarta.persistence.Embeddable
+                public class Address {
+                    private String state;
+
+                    @jakarta.persistence.Embedded
+                    private Zipcode zipcode;
+                }
+
+                @jakarta.persistence.Entity
+                @jakarta.persistence.Table(name = "t_customer")
+                public class CustomerEntity {
+                    @jakarta.persistence.Id
+                    private Long id;
+
+                    @jakarta.persistence.Embedded
+                    @jakarta.persistence.AttributeOverrides({
+                        @jakarta.persistence.AttributeOverride(name = "state", column = @jakarta.persistence.Column(name = "ADDR_STATE")),
+                        @jakarta.persistence.AttributeOverride(name = "zipcode.zip", column = @jakarta.persistence.Column(name = "ADDR_ZIP"))
+                    })
+                    private Address address;
+                }
+                """.trimIndent(),
+            )
+            val table = JpaEntityResolver().resolve(clazz)
+            assertEquals("ADDR_STATE", table.columnByField("state")?.columnName)
+            assertEquals("字段级嵌套点路径覆写命中", "ADDR_ZIP", table.columnByField("zip")?.columnName)
+        }
+    }
+
+    /**
+     * Spring Data JDBC @Embedded 五形态（T-Embedded D2，官方 mapping 文档语义）：
+     * 裸 @Embedded、捷径 @Embedded.Nullable / @Embedded.Empty 均展平；prefix 拼在每一列之前；
+     * 无注解实体引用保持一对一语义不展平。夹具全 FQN 写法 + 无 SD 依赖 → 走 [JpaMetadataReader]
+     * `isSpringDataEmbeddedAnnotation` 的文本兜底轨（可解析轨=全名 startsWith，代码同函数覆盖）。
+     */
+    fun testSpringDataEmbedded五形态_T_Embedded() {
+        withTableConfig {
+            JpaEntityResolver.clearCache()
+            val clazz = resolveEntityByName(
+                "MyEntity",
+                """
+                public class AddressVo {
+                    private String street;
+                    private String city;
+                }
+
+                public class NameVo {
+                    private String firstName;
+                    private String lastName;
+                }
+
+                public class AuditVo {
+                    private String createdBy;
+                }
+
+                @jakarta.persistence.Entity
+                public class RelatedVo {
+                    private String code;
+                }
+
+                @org.springframework.data.relational.core.mapping.Table
+                public class MyEntity {
+                    @org.springframework.data.annotation.Id
+                    private Long id;
+
+                    @org.springframework.data.relational.core.mapping.Embedded
+                    private AddressVo home;
+
+                    @org.springframework.data.relational.core.mapping.Embedded.Nullable
+                    private NameVo work;
+
+                    @org.springframework.data.relational.core.mapping.Embedded.Empty
+                    private AuditVo billing;
+
+                    @org.springframework.data.relational.core.mapping.Embedded(prefix = "shipping_")
+                    private AddressVo shipping;
+
+                    @org.springframework.data.relational.core.mapping.Embedded(prefix = "billing_")
+                    private AddressVo invoice;
+
+                    private RelatedVo related;
+                }
+                """.trimIndent(),
+            )
+            val table = JpaEntityResolver().resolve(clazz)
+            // 形态 1：裸 @Embedded 展平（改前经短名轨「碰巧正确」，此处显式钉住；SD 不可解析时
+            // 不认 SD → 走 jakarta 短名轨，前缀为空，行为与真实项目 SD 可解析场景一致）
+            assertEquals("street", table.columnByField("street")?.columnName)
+            assertTrue(table.columnByField("street")?.isEmbedded == true)
+            assertEquals("home", table.columnByField("street")?.embeddedParent)
+            assertNull("嵌入字段本身不落列", table.columnByField("home"))
+            // 形态 2/3：捷径组合注解（改前短名是 Nullable/Empty 命不中、落伪单列）
+            assertEquals("first_name", table.columnByField("firstName")?.columnName)
+            assertTrue(table.columnByField("firstName")?.isEmbedded == true)
+            assertEquals("created_by", table.columnByField("createdBy")?.columnName)
+            assertNull(table.columnByField("work"))
+            assertNull(table.columnByField("billing"))
+            // 形态 4：同一值对象多次嵌入，prefix 拼在每一列之前防撞车（改前 prefix 丢失、列名撞车被去重）
+            assertEquals("shipping_street", table.columns
+                .firstOrNull { it.fieldName == "street" && it.embeddedParent == "shipping" }?.columnName)
+            assertEquals("shipping_city", table.columns
+                .firstOrNull { it.fieldName == "city" && it.embeddedParent == "shipping" }?.columnName)
+            assertEquals("billing_street", table.columns
+                .firstOrNull { it.fieldName == "street" && it.embeddedParent == "invoice" }?.columnName)
+            // 形态 5：无注解实体引用保持一对一语义不展平（isNestedEntityOrEntityCollectionField 既有行为）
+            assertNull("实体引用不落宿主表列", table.columnByField("related"))
+        }
+    }
+
     fun testIdClass复合主键列清单_T_J18() {
         withTableConfig {
             JpaEntityResolver.clearCache()

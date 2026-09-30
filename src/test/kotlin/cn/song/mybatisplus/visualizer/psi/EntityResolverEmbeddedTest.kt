@@ -75,13 +75,13 @@ class EntityResolverEmbeddedTest : BasePlatformTestCase() {
             // 嵌入字段展平：覆写列名 > 内部字段 @Column > 驼峰转下划线；伪单列 address 不再出现
             assertNull("嵌入字段本身不落伪列", table.columnByField("address"))
             assertEquals("home_city", table.columnByField("city")?.columnName)
-            assertTrue(table.columnByField("city")?.embedded == true)
+            assertTrue(table.columnByField("city")?.isEmbedded == true)
             assertEquals("address", table.columnByField("city")?.embeddedParent)
             assertEquals("street", table.columnByField("street")?.columnName)
             // 无嵌入注解的裸 POJO 字段保持既有单列形态（本计划不收窄既有行为）
             val remark = table.columnByField("remark")
             assertNotNull("裸 POJO 字段保持既有单列形态", remark)
-            assertFalse(remark!!.embedded)
+            assertFalse(remark!!.isEmbedded)
             assertEquals("remark", remark.columnName)
             // MP 注解列不回归
             assertEquals("t_order", table.tableName)
@@ -175,7 +175,7 @@ class EntityResolverEmbeddedTest : BasePlatformTestCase() {
             val column = table.columnByField("address")
             assertNotNull("@TableField 显式列名时 MP 语义优先，不展平", column)
             assertEquals("ext_info", column?.columnName)
-            assertFalse(column!!.embedded)
+            assertFalse(column!!.isEmbedded)
         }
     }
 }

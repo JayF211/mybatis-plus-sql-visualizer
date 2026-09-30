@@ -92,6 +92,56 @@ public class DerivedQueryConverterTest {
     }
 
     // ------------------------------------------------------------------
+    // T-Embedded：嵌入段驼峰拼接路径 → 展平列（demo 真机实测缺陷回归）
+    // ------------------------------------------------------------------
+
+    /** WmsDockBooking 同构夹具：@Embedded updateInfo 展平列（embeddedParent=updateInfo）。 */
+    private static final TableInfo EMBEDDED_TABLE = new TableInfo(
+            "WmsDockBooking",
+            "wms_dock_booking",
+            List.of(
+                    new ColumnInfo("id", "id", true, false, null, null, null, ColumnRole.BUSINESS),
+                    new ColumnInfo("warehouseId", "warehouse_id", false, false, null, null, null, ColumnRole.BUSINESS),
+                    new ColumnInfo("status", "status", false, false, null, null, null, ColumnRole.BUSINESS),
+                    new ColumnInfo("createdTime", "created_time", false, false, null, null, null,
+                            ColumnRole.BUSINESS, true, true, null, true, false, "updateInfo")),
+            null, null, null, List.of());
+
+    @Test
+    public void findBy嵌入段驼峰路径_映射展平列而非伪列() throws Exception {
+        // findByUpdateInfoCreatedTimeAfter → PartTree 属性路径 updateInfoCreatedTime（无点号，
+        // PartTree 穿透 @Embedded 的单驼峰形态）——改前 snake 兜底产出伪列 update_info_created_time
+        PartTree partTree = findTree(
+                new PredicatePart(Connector.AND, List.of(simpleProp("updateInfoCreatedTime", PartType.AFTER))));
+        SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, EMBEDDED_TABLE);
+        String sql = SqlGenerator.INSTANCE.generate(statement);
+
+        assertTrue("应映射为展平列 created_time: " + sql, sql.contains("WHERE created_time > ?"));
+        assertFalse("不得残留伪列 update_info_created_time: " + sql, sql.contains("update_info_created_time"));
+    }
+
+    @Test
+    public void orderBy嵌入段驼峰路径_同样映射展平列() throws Exception {
+        PartTree partTree = findTreeOrderBy(
+                List.of(new OrderByPart("updateInfoCreatedTime", SortDirection.DESC)));
+        SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, EMBEDDED_TABLE);
+        String sql = SqlGenerator.INSTANCE.generate(statement);
+
+        assertTrue("ORDER BY 应为展平列: " + sql, sql.contains("ORDER BY created_time DESC"));
+        assertFalse("不得残留伪列: " + sql, sql.contains("update_info_created_time"));
+    }
+
+    @Test
+    public void 非嵌入拼接路径_仍走snake兜底不误判() throws Exception {
+        // updateInfoCreatedTimeNotMatch 故意不等于任何 parent+field 拼接 → 保持既有 snake 兜底
+        PartTree partTree = findTree(
+                new PredicatePart(Connector.AND, List.of(simpleProp("updateInfoCreatedTimeX"))));
+        SelectStatement statement = (SelectStatement) DerivedQueryConverter.convert(partTree, EMBEDDED_TABLE);
+        String sql = SqlGenerator.INSTANCE.generate(statement);
+        assertTrue("未命中拼接应保持 snake 兜底: " + sql, sql.contains("update_info_created_time_x"));
+    }
+
+    // ------------------------------------------------------------------
     // 基础条件测试
     // ------------------------------------------------------------------
 
