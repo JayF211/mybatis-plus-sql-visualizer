@@ -683,10 +683,19 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /**
          * 获取全局配置实例。
+         *
+         * F47（V38 基准计数缝）：非空时每次调用回调一次——注入器喂入税基准测试用它数
+         * 「每高亮 pass 的 app 级服务查找次数」（喂入面=每 XmlText/XmlAttributeValue 一次）。
+         * null（常态）零开销。
          */
+        @Volatile
+        internal var getInstanceProbe: (() -> Unit)? = null
+
         @JvmStatic
-        fun getInstance(): PluginSettings =
-            ApplicationManager.getApplication().getService(PluginSettings::class.java)
+        fun getInstance(): PluginSettings {
+            getInstanceProbe?.invoke()
+            return ApplicationManager.getApplication().getService(PluginSettings::class.java)
+        }
 
         /**
          * 序列化为 JSON 字符串（O-5：设置导入导出）；委托 [SettingsIO.exportToJson]。
