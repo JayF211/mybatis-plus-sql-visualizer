@@ -95,4 +95,11 @@
 
 ## 七、实施记录（收官回填）
 
-- C1 计划提交：20261001-0205。（后续逐段回填）
+- C1 计划提交：20261001-0205，`c5417df`。
+- C2 构建链：`4409327`。六件锚点两侧逐字节一致实证后直取（gradle.properties/buildSrc/agent build.gradle.kts/plugin.xml/preview.update.json/plugin-change-notes.html）+root build.gradle.kts 保 k2j 专属段仅并注释三行。
+- C3 生产翻译：`63afd75`。6 文件 + TableInfo 22 参构造直呼（计划内映射表兑现）。**待验证前提逐条回执**：①模型零改动前提成立（编译零模型文件改动；中途一波三折——Kotlin 具名默认参重载路线因与 associations 七参重载擦除同疑符编译红，改 JPA 轨既有 22 参直呼形态，见 §二缩编决策附注）；②TableInfo 构造器参数序先读后写兑现（discriminator 两参/compositeIdColumns/idClassType 位置对齐 JpaEntityResolver:187 既有形态）；③新测试直取可编译成立（EntityResolverEmbeddedTest 直取后仅 .isEmbedded 互操作适配 3 处）；④签名测试重构可干净 union 成立（Acp/McpDb/Platform 三件锚点两侧本就逐字节一致，直取）；⑤枚举/守卫基线：本轮无新枚举；fatal 站点 +6 基线 660→666 按守卫实测读数登记；⑥驱动种子在位兑现（build/test-sandbox/database/config_testDatabase/jdbc-drivers/jdbc-drivers.xml）。
+- C4 测试移植：`391f445`。直取 5+union 5+A 类 .java 合并 2。**计划外发现两笔**：①hqlalias/settingsguard/enumguard 三件首轮三方合并整文件伪冲突＝工作树 CRLF vs git 库 LF，改用 git blob 作 current 重跑即零冲突（新坑：k2j 三方合并一律以 git blob 为基准，勿 cat 工作树文件）；②BannedApiSourceScanTest 首轮合并稿以 25fcd97 为 current，检查时发现会把作业期间并行会话（K2J 尾款清偿）已提交的基线归零改动抹回——废弃重做（HEAD blob 为 current + 叠加其 diff 补丁），其 fatalUnwrapUnjudgedBaseline=0 与 runRunner 用例保真复核在场。守卫三件适配语义见 C4 提交信息与 .port-sync note。fatal 基线 660→666（守卫实测读数，BannedApiSourceScanTest 首轮 1 红取数后登记复绿 29/0）。
+- C5 文档同步：`5cc85b2`。docs 48 件直取 + 四册处理（CHANGELOG 整册直取＝计划「拼装」决策的实测修正——k2j 无专属行 grep 实证且 master 已轮换旧账进发行分区；三册三方合并零冲突+专属行 byte-exact 存活校验 8/16/1 条）。
+- 门禁：编译三链全绿 + testShards **6100/0/0/9**（5 片 1244/1119/1282/1181/1234 + testExternal 40/0/1，4m13s）+ testDatabase 首轮 3 例 freetype 环境假失败复跑全绿（5m21s）+ agent 93/0 + buildPlugin 2026.10.6.zip（6,950,416 字节）+ verifyGate 三目标 Compatible（243=4+15+46、253=6+18+44、262=7+73+44，与上轮逐项持平零漂移）。
+- C6 收官：`.port-sync` 锚点→32a7d99（全 SHA 32a7d996bc9bb02341f4f3dea4ca09396304f102）+ note 重写 + 变更记录台账行入册 + 本节回填；parallel_tasks 注销 `t-synck2jmaster70`。分支未 push（用户未指令）；作业期间 master 零新增量，登记表并行会话 t-o91r10/t-r33explain 均在自己 worktree 未与本轮冲突（bannedapi 除外，已按上述处置归一）。
+
