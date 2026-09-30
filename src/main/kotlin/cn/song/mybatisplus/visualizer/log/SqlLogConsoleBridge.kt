@@ -335,8 +335,10 @@ open class SqlLogConsoleBridge(
                         maxParseLength = cfg0.maxParseLength,
                     ),
                     jdbcParser = JdbcTemplateLogParser(enabled = cfg0.jdbcEnabled, maxParseLength = cfg0.maxParseLength),
+                    shardingParser = ShardingSphereLogParser(maxParseLength = cfg0.maxParseLength),
                     configProvider = parserConfig,
                     hibernateEnabled = cfg0.hibernateEnabled,
+                    shardingEnabled = cfg0.shardingEnabled,
                 )
                 consoleContexts[console] = ctx
                 // T-PreviewFlash：反射缓存 console.getEditor()（ConsoleView.getEditor 为 public）。
@@ -448,6 +450,13 @@ open class SqlLogConsoleBridge(
                 ctx.jdbcParser.flushSettled(nowMs)
                 for (entry in ctx.jdbcParser.takeEntries()) {
                     if (buffer.addEntry(entry)) produced++
+                }
+                // R10：ShardingSphere 同款静默兜底（条目只在下一条 Logic 行闭合，最后一语句无后继行）
+                if (ctx.shardingEnabled) {
+                    ctx.shardingParser.flushSettled(nowMs)
+                    for (entry in ctx.shardingParser.takeEntries()) {
+                        if (buffer.addEntry(entry)) produced++
+                    }
                 }
             }
         }
@@ -570,6 +579,8 @@ open class SqlLogConsoleBridge(
         ctx.jdbcParser.enabled = cfg.jdbcEnabled
         ctx.jdbcParser.maxParseLength = cfg.maxParseLength
         ctx.hibernateEnabled = cfg.hibernateEnabled
+        ctx.shardingParser.maxParseLength = cfg.maxParseLength
+        ctx.shardingEnabled = cfg.shardingEnabled
     }
 
     /**
@@ -764,10 +775,18 @@ internal class BridgeLineContext(
     val myBatisParser: MyBatisLogParser,
     val hibernateParser: HibernateLogParser,
     val jdbcParser: JdbcTemplateLogParser,
+    /**
+     * ShardingSphere 第四解析器（R10 T-ShardingSphereCompat，循三解析器并列先例）。
+     * 默认值只为既有测试构造点零改动（8 处直构 BridgeLineContext 的用例不传即得新实例）；
+     * 生产两处（EP EpLineFilter / 桥 attachFilter）**显式传入**。
+     */
+    val shardingParser: ShardingSphereLogParser = ShardingSphereLogParser(),
     val configProvider: () -> ParserConfig,
     var pendingSource: SourceMarkerData? = null,
     /** Hibernate 喂行开关（快照同步自 ParserConfig.hibernateEnabled）。 */
     var hibernateEnabled: Boolean = true,
+    /** ShardingSphere 喂行开关（快照同步自 ParserConfig.shardingEnabled；R10 D3=A 默认开）。 */
+    var shardingEnabled: Boolean = true,
 ) {
     /**
      * T-M55-02：正在聚合的执行报错文本块（错误行起，堆栈/`###` 续行追加；null = 块外）。
@@ -890,16 +909,20 @@ internal fun processConsoleLine(
         // 块外普通行（含空行放行，容忍堆栈间空行）结束当前错误块
         !line.isBlank() -> ctx.pendingError = null
     }
-    // 2) 喂行到三个解析器（各自忽略不匹配的行；配置快照随设置变更事件刷新，逐行零同步成本）
+    // 2) 喂行到四个解析器（各自忽略不匹配的行；配置快照随设置变更事件刷新，逐行零同步成本）
     ctx.myBatisParser.feed(line)
     if (ctx.hibernateEnabled) ctx.hibernateParser.feed(line)
     ctx.jdbcParser.feed(line)
+    if (ctx.shardingEnabled) ctx.shardingParser.feed(line)
     // 2.5) T-ConsolePendingFlush：喂行后冲刷**已静默**桶的待产出条目。放在喂行之后是有意的——本行刚
     // 触达它自己的桶（活动时间刷新），该桶因此不会出现在冲刷名单里，本行所属语句的参数行不会被截断；
     // 被冲刷的只有「别的线程静默 ≥1s 的语句」（JdbcTemplate 无 TRACE 参数行 + 线程按请求新建时，
     // 那些语句永无同线程后继行）。冲刷出的条目与本次喂行产出的条目由下方同一次 takeEntries() 一并交出。
+    // R10：ShardingSphere 解析器同款接入（其条目只在下一条 Logic 行闭合，静默冲刷是低频访问的兜底）。
     ctx.jdbcParser.flushSettled()
-    val taken = ctx.myBatisParser.takeEntries() + ctx.hibernateParser.takeEntries() + ctx.jdbcParser.takeEntries()
+    if (ctx.shardingEnabled) ctx.shardingParser.flushSettled()
+    val taken = ctx.myBatisParser.takeEntries() + ctx.hibernateParser.takeEntries() +
+        ctx.jdbcParser.takeEntries() + ctx.shardingParser.takeEntries()
     if (taken.isEmpty()) return emptyList()
     // 3) 耗时 + 源码位置（标记不可用时 sourceFile/sourceLine 为 null，回退表名搜索）
     // 解析策略：优先从日志行文本解析（ExecutionTimeParser），命中则统一填入；
@@ -939,7 +962,9 @@ private fun sniffLogTimestamp(line: String, ctx: BridgeLineContext) {
     ctx.myBatisParser.feed(line)
     if (ctx.hibernateEnabled) ctx.hibernateParser.feed(line)
     ctx.jdbcParser.feed(line)
-    val taken = ctx.myBatisParser.takeEntries() + ctx.hibernateParser.takeEntries() + ctx.jdbcParser.takeEntries()
+    if (ctx.shardingEnabled) ctx.shardingParser.feed(line)
+    val taken = ctx.myBatisParser.takeEntries() + ctx.hibernateParser.takeEntries() +
+        ctx.jdbcParser.takeEntries() + ctx.shardingParser.takeEntries()
     for (e in taken) {
         LogTimeCorrelator.put(logTimeKey(e), e.logTimestamp ?: e.timestamp, logTimeParamSignature(e.params))
     }

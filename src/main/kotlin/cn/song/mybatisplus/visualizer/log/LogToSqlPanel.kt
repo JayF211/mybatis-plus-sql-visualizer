@@ -369,44 +369,59 @@ class LogToSqlPanel(
         }.queue()
     }
 
-    /** 三解析器装配（转换配置每次转换即时读取）。 */
-    private fun buildParsers(): Triple<MyBatisLogParser, HibernateLogParser, JdbcTemplateLogParser> {
+    /** 四解析器装配（转换配置每次转换即时读取；R10 增第四格式 ShardingSphere 双段日志）。 */
+    private class LogParsers(
+        val myBatis: MyBatisLogParser,
+        val hibernate: HibernateLogParser,
+        val jdbc: JdbcTemplateLogParser,
+        val sharding: ShardingSphereLogParser,
+        /** ShardingSphere 喂行开关（与自动捕获同源读取设置）。 */
+        val shardingEnabled: Boolean,
+    )
+
+    private fun buildParsers(): LogParsers {
         val state = PluginSettings.getInstance().state
-        return Triple(
-            MyBatisLogParser(
+        return LogParsers(
+            myBatis = MyBatisLogParser(
                 sqlPrefix = state.logSqlPrefix,
                 paramPrefix = state.logParamPrefix,
                 mixedPrefix = state.logMixedPrefix,
                 maxParseLength = state.logMaxParseLength,
             ),
-            HibernateLogParser(
+            hibernate = HibernateLogParser(
                 sqlPrefix = state.logHibernateSqlPrefix,
                 paramPrefix = state.logHibernateParamPrefix,
                 mixedPrefix = state.logMixedPrefix,
                 maxParseLength = state.logMaxParseLength,
             ),
-            JdbcTemplateLogParser(
+            jdbc = JdbcTemplateLogParser(
                 enabled = state.logJdbcEnabled,
                 maxParseLength = state.logMaxParseLength,
             ),
+            sharding = ShardingSphereLogParser(
+                maxParseLength = state.logMaxParseLength,
+            ),
+            shardingEnabled = state.logShardingSphereEnabled,
         )
     }
 
-    /** 纯计算：逐行喂三解析器 + 逐条还原/格式化（后台线程安全——不触碰 Swing）。 */
+    /** 纯计算：逐行喂四解析器 + 逐条还原/格式化（后台线程安全——不触碰 Swing）。 */
     private fun computeConversion(
         text: String,
-        parsers: Triple<MyBatisLogParser, HibernateLogParser, JdbcTemplateLogParser>,
+        parsers: LogParsers,
     ): ConversionOutput {
-        val (myBatisParser, hibernateParser, jdbcParser) = parsers
         text.lineSequence().forEach { line ->
-            myBatisParser.feed(line)
-            hibernateParser.feed(line)
-            jdbcParser.feed(line)
+            parsers.myBatis.feed(line)
+            parsers.hibernate.feed(line)
+            parsers.jdbc.feed(line)
+            if (parsers.shardingEnabled) parsers.sharding.feed(line)
         }
-        myBatisParser.closePending()
-        hibernateParser.closePending()
-        jdbcParser.closePending()
-        val entries = myBatisParser.takeEntries() + hibernateParser.takeEntries() + jdbcParser.takeEntries()
+        parsers.myBatis.closePending()
+        parsers.hibernate.closePending()
+        parsers.jdbc.closePending()
+        parsers.sharding.closePending()
+        val entries = parsers.myBatis.takeEntries() + parsers.hibernate.takeEntries() +
+            parsers.jdbc.takeEntries() + parsers.sharding.takeEntries()
         if (entries.isEmpty()) return ConversionOutput(null, 0, 0)
         val multi = entries.size > 1
         // T-PerfSweep6 T-PS6-08（性能报告发现 16）：未还原计数**并入既有单遍 mapIndexed**。

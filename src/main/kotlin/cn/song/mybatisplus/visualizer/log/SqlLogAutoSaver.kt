@@ -370,11 +370,14 @@ class SqlLogAutoSaver(
             // T-McpAuditTrail T-MAT-03：**source == MCP 必须入条件**——一条无参数、无占位符、
             // 无 mapperStatement 的 MCP SELECT（explain 的常态）若不带本条件就不会写出 pd 行，
             // 来源标记随之丢失（历史读回退化为 UNKNOWN，MCP 徽标消失）——这正是本任务的存在意义。
+            // R10：actualSql 附注与 SHARDINGSPHERE 来源同款入条件（无参 Logic SELECT 的 Actual
+            // 对照与来源标记若不落 pd 行，历史读回即丢）。
             if (entry.params.isNotEmpty() || countPlaceholders(entry.rawSql) > 0 ||
                 entry.mapperStatement != null || entry.errorText != null ||
                 entry.requestTag != null || entry.updateCount != null ||
                 entry.sourceCandidates.isNotEmpty() || entry.stackDigest != null ||
-                entry.source == SqlSource.MCP
+                entry.actualSql != null ||
+                entry.source == SqlSource.MCP || entry.source == SqlSource.SHARDINGSPHERE
             ) {
                 w.write("-- pd: ${SqlLogParamCodec.encodeEntry(entry)} --\n")
             }

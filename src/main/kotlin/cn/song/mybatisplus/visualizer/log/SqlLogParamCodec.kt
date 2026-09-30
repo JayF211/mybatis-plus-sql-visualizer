@@ -46,6 +46,8 @@ object SqlLogParamCodec {
     private const val CANDS_FIELD = "cd"
     private const val CAND_CLASSES_FIELD = "cc"
     private const val STACK_DIGEST_FIELD = "sd"
+    /** R10 T-ShardingSphereCompat：Actual SQL 折叠附注（仅非默认落键；旧 payload 无此键 → null）。 */
+    private const val ACTUAL_SQL_FIELD = "a"
 
     private val gson = Gson()
 
@@ -63,11 +65,12 @@ object SqlLogParamCodec {
         val candidateClasses: List<String> = emptyList(),
         /** T-SourceJumpFunnel：调用栈快照；旧 payload 为 null。 */
         val stackDigest: String? = null,
-        /**
-         * T-McpAuditTrail T-MAT-03：来源（当前仅 [SqlSource.MCP] 落键）；旧 payload / 非 MCP 条目为 null。
+        /** T-McpAuditTrail T-MAT-03：来源（当前仅 [SqlSource.MCP] 落键）；旧 payload / 非 MCP 条目为 null。
          * 读端把它回填进 [LogSqlEntry.source]，不填则沿用默认 [SqlSource.UNKNOWN]。
          */
         val source: SqlSource? = null,
+        /** R10 T-ShardingSphereCompat：Actual SQL 折叠附注；旧 payload 为 null。 */
+        val actualSql: String? = null,
     )
 
     /** 编码 rawSql + params 为 Base64 载荷（无 M56 扩展字段形态，等价 [encodeEntry] 全默认条目）。 */
@@ -122,9 +125,13 @@ object SqlLogParamCodec {
                 )
             }
             entry.stackDigest?.let { addProperty(STACK_DIGEST_FIELD, it) }
+            entry.actualSql?.let { addProperty(ACTUAL_SQL_FIELD, it) }
             // T-McpAuditTrail T-MAT-03：来源标记——仅 MCP 落键（本任务范围：其余来源的读回口径
             // 维持 UNKNOWN 不变，不做未立项的行为扩张）。枚举名而非序号：新增常量不使旧文件失效。
-            if (entry.source == SqlSource.MCP) addProperty(SOURCE_FIELD, entry.source.name)
+            // R10：SHARDINGSPHERE 同样落键——控制台解析产出的来源若无键，历史读回退化为 UNKNOWN。
+            if (entry.source == SqlSource.MCP || entry.source == SqlSource.SHARDINGSPHERE) {
+                addProperty(SOURCE_FIELD, entry.source.name)
+            }
         }
         return Base64.getEncoder().encodeToString(gson.toJson(obj).toByteArray(Charsets.UTF_8))
     }
@@ -177,6 +184,7 @@ object SqlLogParamCodec {
             // 不认识的值只丢来源标记，绝不丢弃整条——与其余扩展键同款容错口径）
             source = json.get(SOURCE_FIELD)?.takeIf { it.isJsonPrimitive }?.asString
                 ?.let { name -> SqlSource.values().firstOrNull { it.name == name } },
+            actualSql = json.get(ACTUAL_SQL_FIELD)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() },
         )
     }.getOrNull()
 

@@ -57,8 +57,12 @@ class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFil
                 enabled = parserConfig().jdbcEnabled,
                 maxParseLength = parserConfig().maxParseLength,
             ),
+            shardingParser = ShardingSphereLogParser(
+                maxParseLength = parserConfig().maxParseLength,
+            ),
             configProvider = { parserConfig() },
             hibernateEnabled = parserConfig().hibernateEnabled,
+            shardingEnabled = parserConfig().shardingEnabled,
         )
 
         private fun parserConfig(): ParserConfig {
@@ -72,6 +76,7 @@ class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFil
                 hibernateParamPrefix = state.logHibernateParamPrefix,
                 hibernateEnabled = state.logHibernateEnabled,
                 jdbcEnabled = state.logJdbcEnabled,
+                shardingEnabled = state.logShardingSphereEnabled,
             )
         }
 

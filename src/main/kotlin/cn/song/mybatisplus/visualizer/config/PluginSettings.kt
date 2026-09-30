@@ -410,6 +410,16 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /** 启用 Spring JdbcTemplate 日志解析（默认开）。 */
         var logJdbcEnabled: Boolean = true,
 
+        // ---------- ShardingSphere 双段日志捕获（R10 T-ShardingSphereCompat） ----------
+
+        /**
+         * 启用 ShardingSphere 日志解析（R10 D3=A 默认开，与 logHibernateEnabled 同款口径）：
+         * `Logic SQL:` 主条目 + `Actual SQL:` 折叠附注（5.x sql-show 形态）。
+         * 骨架按公开文档形态实现，真实语料未采样（V36）——语料驱动的行为细节见
+         * ShardingSphereLogParser TODO 与计划 §实施记录登记。
+         */
+        var logShardingSphereEnabled: Boolean = true,
+
         // ---------- JDBC 模板 SQL 字符串预览 ----------
 
         /** 启用 JdbcTemplate / NamedParameterJdbcTemplate SQL 字符串预览（默认开）。 */

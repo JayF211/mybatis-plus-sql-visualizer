@@ -528,6 +528,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private val logHibernateParamPrefixField = JBTextField(12)
     private val logJdbcEnabledCheck = JBCheckBox()
 
+    // R10 T-ShardingSphereCompat：ShardingSphere 双段日志捕获开关（照抄 Hibernate/Jdbc 开关形态）
+    private val logShardingSphereEnabledCheck = JBCheckBox()
+
     // ---------- F-43 自动保存历史 SQL ----------
     private val logAutoSaveCheck = JBCheckBox()
     private val logAutoSavePathField = JBTextField(20)
@@ -948,6 +951,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 addRow(p, g, "", logJdbcEnabledCheck.apply {
                     text = MpSqlVisualizerBundle.message("settings.log.jdbc")
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.jdbc.tip")
+                })
+                // R10：ShardingSphere 双段日志捕获（Logic 主条目 + Actual 折叠附注；默认开）
+                addRow(p, g, "", logShardingSphereEnabledCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.log.shardingsphere.enabled")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.shardingsphere.enabled.tip")
                 })
             }
 
@@ -1649,6 +1657,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logHibernateSqlPrefixField.text.trim() != s.logHibernateSqlPrefix
             || logHibernateParamPrefixField.text.trim() != s.logHibernateParamPrefix
             || logJdbcEnabledCheck.isSelected != s.logJdbcEnabled
+            || logShardingSphereEnabledCheck.isSelected != s.logShardingSphereEnabled
             || logAutoSaveCheck.isSelected != s.logAutoSaveEnabled
             || logAutoSavePathField.text.trim() != s.logAutoSavePath
             || logAutoSavePatternField.text.trim() != s.logAutoSaveFileNamePattern
@@ -1773,6 +1782,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.logHibernateSqlPrefix = logHibernateSqlPrefixField.text.trim()
             s.logHibernateParamPrefix = logHibernateParamPrefixField.text.trim()
             s.logJdbcEnabled = logJdbcEnabledCheck.isSelected
+            s.logShardingSphereEnabled = logShardingSphereEnabledCheck.isSelected
             s.logAutoSaveEnabled = logAutoSaveCheck.isSelected
             s.logAutoSavePath = logAutoSavePathField.text.trim()
             s.logAutoSaveFileNamePattern = logAutoSavePatternField.text.trim()
@@ -1954,6 +1964,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logHibernateSqlPrefixField.text = s.logHibernateSqlPrefix
             logHibernateParamPrefixField.text = s.logHibernateParamPrefix
             logJdbcEnabledCheck.isSelected = s.logJdbcEnabled
+            logShardingSphereEnabledCheck.isSelected = s.logShardingSphereEnabled
             logAutoSaveCheck.isSelected = s.logAutoSaveEnabled
             logAutoSavePathField.text = s.logAutoSavePath
             logAutoSavePatternField.text = s.logAutoSaveFileNamePattern
