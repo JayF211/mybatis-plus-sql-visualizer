@@ -92,6 +92,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 - Spring Data JPA 派生方法（`findByXxx`）、Repository CRUD 方法（`save` / `findById` / `deleteById` 等直接解析出 SQL）、`@Query`（JPQL / 原生 SQL）、`@NamedQuery`、CriteriaBuilder 调用链、HQL（含自定义 DAO）均可一键预览为 SQL
 - `JpaSpecificationExecutor` 的 Specification 调用链与 `QueryByExampleExecutor`（`Example.of`）按实体映射解析为 WHERE 条件；Hibernate `.hbm.xml` 映射实体及其 `<query>` / `<sql-query>` 命名查询同样支持
+- 写前静态预览与运行期调试互补：IDEA 2026.3 起官方提供 Hibernate Debugger（debugger 会话内查看运行期语句）；本插件管写代码时——不启动应用、不连数据库即可预览与 EXPLAIN，两者分工不同、互不替代
 - 实体解析支持 `@Entity` / `@Table` / `@Column` / `@ManyToOne` 注解；HQL 的 `SELECT u` 自动展开为实体列清单，无别名 HQL 的 WHERE 裸属性（如 `stationCode`）同样转成真实列名（`STATION_CODE`）
 
 **SQL 代码补全**
@@ -307,6 +308,9 @@ ORDER BY t1.create_time DESC
 - Community 版可用（部分 Ultimate 专属能力如内嵌执行控制台自动降级，功能主体不受影响）。
 - 数据库方言：MySQL / PostgreSQL / Oracle / SQL Server / H2 / SQLite / MariaDB / 达梦（DM） /
   人大金仓（KingBase）/ OceanBase / openGauss 共 11 种（信创场景含达梦与金仓真机验证）。
+- 对比参考（竞品兼容区间为截至 2026-09-30 的 Marketplace 读数）：同域主流插件新版兼容线多已收缩——
+  MyBatisX 251–263、MyBatis Log Free 262+、MybatisLogFormat 233–262、Mybatis-Flex-Helper 261–262；
+  本插件自 2024.3 起全线可装，老版本 IDEA 用户无需先升级 IDE。
 
 
 ## 安装常见问题
