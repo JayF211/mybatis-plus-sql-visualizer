@@ -926,6 +926,13 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "T-PerfSweep16 F36 gutter provider 单次查找守卫：providerFiles/extractBracedBody/countToken/" +
                     "stripComments/repoRoot 为夹具",
             ),
+            // ---- R33 EXPLAIN 结构化渲染接线守卫（2026-10-01 批次 9 门禁第一轮修复补登记） ----
+            GuardEntry(
+                "ui/ExplainPanelWiringGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（R33 接线四断言：ExplainPanelChannel.decide 可达/submitExplainDirect 直送链单函数收敛/" +
+                    "embedExplainView 结构化视图嵌入/ExplainIndexAdvisor.advise 面板侧建议接入）",
+            ),
             // ---- 本元守卫自身 ----
             GuardEntry(
                 "convention/GuardSelfTestCoverageMetaGuardTest.kt",

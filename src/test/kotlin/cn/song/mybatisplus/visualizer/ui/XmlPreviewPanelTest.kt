@@ -452,28 +452,43 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
             ),
         )
 
-        assertEquals("支持面内的条件行不应有标注", 0, conditionAnnotations(panel, 0).size)
-
-        val unsupported = conditionAnnotations(panel, 1)
-        assertEquals(1, unsupported.size)
-        assertEquals(
-            MpSqlVisualizerBundle.message("panel.xml.expr.unsupported"),
-            unsupported.single().text,
+        // R30 条件求值探镜起，支持面内的条件行带三态求值标注（真/假/未求值），恰一个
+        val supportedAnnotations = conditionAnnotations(panel, 0)
+        assertEquals(1, supportedAnnotations.size)
+        val outcomeTexts = listOf(
+            MpSqlVisualizerBundle.message("panel.xml.outcome.true"),
+            MpSqlVisualizerBundle.message("panel.xml.outcome.false"),
+            MpSqlVisualizerBundle.message("panel.xml.outcome.unevaluated"),
         )
         assertTrue(
-            "不支持语法行的 tooltip 应给理由：${unsupported.single().toolTipText}",
-            unsupported.single().toolTipText.contains("三元"),
+            "支持面内条件行标注应为三态之一：${supportedAnnotations.single().text}",
+            supportedAnnotations.single().text in outcomeTexts,
+        )
+
+        // R30 起不支持行并存两个标注：不支持语法提示＋探镜三态「未求值」（不可求值即未求值）
+        val unsupported = conditionAnnotations(panel, 1)
+        assertEquals(2, unsupported.size)
+        val unsupportedNotice = unsupported.single { it.text == MpSqlVisualizerBundle.message("panel.xml.expr.unsupported") }
+        assertTrue(
+            "不支持行的另一标注应为探镜三态之一：${unsupported.map { it.text }}",
+            unsupported.map { it.text }.any { it in outcomeTexts },
+        )
+        assertTrue(
+            "不支持语法行的 tooltip 应给理由：${unsupportedNotice.toolTipText}",
+            unsupportedNotice.toolTipText.contains("三元"),
         )
 
         val fallback = conditionAnnotations(panel, 2)
-        assertEquals(1, fallback.size)
-        assertEquals(
-            MpSqlVisualizerBundle.message("panel.xml.expr.fallback"),
-            fallback.single().text,
+        // R30 起降级行同样并存探镜三态标注（降级路径仍参与求值，标真/假）＋降级提示
+        assertEquals(2, fallback.size)
+        val fallbackNotice = fallback.single { it.text == MpSqlVisualizerBundle.message("panel.xml.expr.fallback") }
+        assertTrue(
+            "降级行的另一标注应为探镜三态之一：${fallback.map { it.text }}",
+            fallback.map { it.text }.any { it in outcomeTexts },
         )
         assertTrue(
-            "降级行的 tooltip 应点名方法：${fallback.single().toolTipText}",
-            fallback.single().toolTipText.contains("length"),
+            "降级行的 tooltip 应点名方法：${fallbackNotice.toolTipText}",
+            fallbackNotice.toolTipText.contains("length"),
         )
 
         // 标注只是提示：三个条件仍按启发式默认全部展开
