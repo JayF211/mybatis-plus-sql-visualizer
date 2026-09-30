@@ -26,7 +26,8 @@ import cn.song.mybatisplus.visualizer.sql.ExplainSupport
  * `EXPLAIN (FORMAT JSON, VERBOSE)`（返回单列 JSON 文本），两种形态根本不匹配，
  * **PG 索引建议实际永不触发**（真缺陷，真 PG 16.14 实测：返回列名 `QUERY PLAN`，值形如
  * `[{"Plan":{"Node Type":"Seq Scan",…,"Relation Name":"bench_items",…,"Plan Rows":10000,…}}]`）。
- * 现按格式分派：JSON → [adviseJsonPlan]，TABLE → [adviseMysql]，TEXT → [advisePlanText]。
+ * 现按格式分派：JSON → [adviseJsonPlan]，TABLE → [adviseMysql]，TEXT → [advisePlanText]；
+ * R23 增 XML（SQL Server）→ 有意不解析（计划 XML 是附加结果集，本通道不采集，勿硬解析）。
  */
 object ExplainIndexAdvisor {
 
@@ -53,8 +54,12 @@ object ExplainIndexAdvisor {
             // PG/KingBase：单列 JSON 文本（FORMAT JSON）
             ExplainOutputFormat.JSON -> adviseJsonPlan(rows, out)
             // 文本计划树（DM8 #NSET2 / H2 PLAN FOR / SQLite QUERY PLAN）——规则只覆盖 PG 文本树形态，
-            // 其余方言的文本形态不含该模式，天然零命中（不噪音）；将来新增文本规则在此扩展
+            // 其余方言的文本形态不含该模式，天然零命中（不噪音）；将来新增文本规则在此扩展。
+            // R23 Oracle 同为 TEXT 档：本插件通道不产出行（EXPLAIN PLAN FOR 只登记），空行天然零命中
             ExplainOutputFormat.TEXT -> advisePlanText(rows, out)
+            // R23 SQL Server XML 档：Showplan XML 是**附加结果集**（本通道不采集），且 XML 计划
+            // 无行内固定可判定模式——**不硬解析**（勿硬解析红线），真实形态驱动的新规则在此扩展
+            ExplainOutputFormat.XML -> Unit
             // 不支持方言/未知方言静默降级——空清单与无命中同形
             else -> Unit
         }

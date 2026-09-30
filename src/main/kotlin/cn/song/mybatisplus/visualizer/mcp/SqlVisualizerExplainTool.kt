@@ -153,6 +153,10 @@ open class SqlVisualizerExplainTool : McpToolsetSupport("sqlv_explain") {
                     target.project, target.ds, target.explainSql, target.maxRows,
                     timeoutSeconds = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
                         .state.executionTimeoutSeconds,
+                    // R23：二段式/多结果集方言（Oracle/SQL Server）的通道说明——随执行结果以
+                    // notices 节透出（「行里为什么没有计划」的诚实降级）；null（其余 9 家）零追加
+                    channelNote = cn.song.mybatisplus.visualizer.sql.ExplainSupport
+                        .entryFor(target.dialectName)?.channelNote,
                     onExecuted = { outcome ->
                         recordMcpExecution(
                             target.project,

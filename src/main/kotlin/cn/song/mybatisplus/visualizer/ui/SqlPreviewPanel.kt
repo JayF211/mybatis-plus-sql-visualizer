@@ -1510,7 +1510,23 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 }
                 return
             }
-            is ExplainGate.SubmitPlan.Submit -> plan.statement
+            is ExplainGate.SubmitPlan.Submit -> {
+                // R23：二段式方言（Oracle）的计划不在本次语句的返回行里——提交前轻通知告知另查路径
+                //（描述的是方言固有形态，不预设执行成败；SQL Server 无 postPlanQuery，控制台多结果页签自明）
+                cn.song.mybatisplus.visualizer.sql.ExplainSupport.entryFor(dialect.name)?.postPlanQuery?.let { followUp ->
+                    if (!ApplicationManager.getApplication().isUnitTestMode) {
+                        runCatching {
+                            Notification(
+                                NOTIFICATION_GROUP_ID,
+                                MpSqlVisualizerBundle.message("panel.explain"),
+                                MpSqlVisualizerBundle.message("panel.explain.planRegistered", followUp),
+                                NotificationType.INFORMATION,
+                            ).notify(proj)
+                        }
+                    }
+                }
+                plan.statement
+            }
         }
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
             .info("[M37.2] explainSql: dialect=${dialect.name}, len=${explainSql.length}")

@@ -10,18 +10,18 @@ package cn.song.mybatisplus.visualizer.sql
  *
  * 取值按「计划文本的物理形态」分类，不按数据库品牌——同一品牌不同格式（如 PG 的
  * `FORMAT TEXT` 与 `FORMAT JSON`）分属不同取值，消费方按形态选解析器：
- *  - [TABLE]：行列二维表（MySQL 家族 `EXPLAIN` 的原生表格行）；
- *  - [TEXT]：单列文本计划树/文本行（DM8 `#NSET2`、H2 `PLAN FOR`、SQLite `QUERY PLAN`）；
- *  - [JSON]：单列 JSON 文本（PG/KingBase `FORMAT JSON`）。
- *
- * **不设占位值**：SQL Server 的 XML 计划形态（`SET SHOWPLAN_XML`）本插件未接入，故不预留
- * `XML` 常量——仓内守卫 `EnumReachabilityGuardTest` 判定「声明了却零产出」为死常量（消费者恒
- * 走不到），且接入时补一个常量与一条表项的成本远低于长期维护一个死分支。
+ *  - [ExplainOutputFormat.TABLE]：行列二维表（MySQL 家族 `EXPLAIN` 的原生表格行）；
+ *  - [ExplainOutputFormat.TEXT]：单列文本计划树/文本行（DM8 `#NSET2`、H2 `PLAN FOR`、SQLite `QUERY PLAN`、
+ *    Oracle DBMS_XPLAN 文本树）；
+ *  - [ExplainOutputFormat.JSON]：单列 JSON 文本（PG/KingBase `FORMAT JSON`）；
+ *  - [ExplainOutputFormat.XML]：SQL Server `SET STATISTICS XML` 的 Showplan XML（R23 接入时补的
+ *    常量与表项——「接入时补一个常量」即本取值）。
  */
 enum class ExplainOutputFormat {
     TABLE,
     TEXT,
     JSON,
+    XML,
 }
 
 /**
@@ -30,7 +30,8 @@ enum class ExplainOutputFormat {
  * 此前支持面散在 7 处 `Dialect.renderExplainStatement` 覆写里（默认 null），Oracle/SQL Server
  * 靠「没覆写」隐式表达不支持——「没写」与「故意不接」在代码上同形，新增方言时也无从判定
  * 该不该有 EXPLAIN。本表把两件事一次说清：
- *  1. **支持面**：`template == null` 即不接入（调用方降级提示），Oracle/SQL Server **显式在册**；
+ *  1. **支持面**：`template == null` 即不接入（调用方降级提示）；R23 起 11/11 全接入
+ *     （Oracle/SQL Server 此前显式登记「不接入」，本轮改为带实证留账的真实接入）；
  *  2. **输出格式**：[outputFormat]，供建议器等消费方按形态选解析器。
  *
  * 键是 [Dialect.name]（设置下拉显示名）——**不是**品牌短名：MCP 链的
@@ -59,6 +60,15 @@ object ExplainSupport {
         val template: String?,
         val outputFormat: ExplainOutputFormat?,
         val evidence: String,
+        /** 二段式方言：计划另查语句（Oracle：`SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY)`）；
+         *  null = 单语句通道即取到计划（默认）。 */
+        val postPlanQuery: String? = null,
+        /**
+         * MCP 单语句通道的诚实降级说明（英文——MCP 输出口径不进 bundle；随执行结果以
+         * notices 节透出）：仅计划不随本通道行返回的方言在册。null（默认）= 不追加，
+         * 输出与无此字段时逐字节一致（防回归硬门禁的判据）。
+         */
+        val channelNote: String? = null,
     ) {
         /** 本方言是否接入 EXPLAIN。 */
         val supported: Boolean get() = template != null
@@ -79,8 +89,18 @@ object ExplainSupport {
      *    无真机——环境受限未验证留账）；
      *  - openGauss（T-DialectXcFamily）：`EXPLAIN (FORMAT JSON)`，JSON 档——openGauss 5.0.0
      *    **真机实证**（DBX 只读通道 2026-09-23：FORMAT JSON 返回单列 `QUERY PLAN` JSON 文本）；
-     *  - Oracle（需两步链查 PLAN_TABLE）与 SQL Server（需会话级 `SET SHOWPLAN_XML`）
-     *    **不接入**——各有独立前置，非本任务范围。
+     *  - Oracle（R23 接入）：`EXPLAIN PLAN FOR <sql>`，TEXT 档——**真机实证** Oracle Free 23 +
+     *    XE 11g（DBX 只读通道 2026-09-30）：单语句执行成功（0 行），计划登记进会话级 PLAN_TABLE
+     *    （PUBLIC 同义词 → SYS.PLAN_TABLE$，免建表；写入仅诊断行、随会话消散，无 DDL/DML）；
+     *    **跨连接不可见**（另一连接 `DBMS_XPLAN.DISPLAY` 返回 "cannot fetch last explain plan"），
+     *    而本插件两条链都是单语句通道（IDE 控制台一/script、MCP 一 execute）→ 二段式在插件内
+     *    不可达，走 [Entry.postPlanQuery]/[Entry.channelNote] 诚实降级：语句照发（登记真实发生），
+     *    计划行指引到数据库端同连接另查；
+     *  - SQL Server（R23 接入）：`SET STATISTICS XML ON; <sql>; SET STATISTICS XML OFF`，XML 档——
+     *    文档实证 Microsoft Learn《SET STATISTICS XML》「need not be the only statement in a batch」
+     *    （SHOWPLAN_XML 才有批内独占限制，故不取）；计划 XML 是语句执行后的**附加结果集**，
+     *    MCP 单结果集通道返回的是查询行而非计划（[Entry.channelNote] 澄清），IDE 控制台多结果
+     *    页签可见；**真机未验证**（DBX 在册无 sqlserver 实例），末尾 OFF 还原会话态防连接复用串扰。
      */
     private val table: List<Entry> = listOf(
         Entry("MySQL", "EXPLAIN $SQL_PLACEHOLDER", ExplainOutputFormat.TABLE, "真机实证 MySQL 5.7/8.4（DBX 通道 2026-09-02）"),
@@ -92,8 +112,21 @@ object ExplainSupport {
         Entry("SQLite", "EXPLAIN QUERY PLAN $SQL_PLACEHOLDER", ExplainOutputFormat.TEXT, "SQLite 引擎级单测"),
         Entry("OceanBase", "EXPLAIN $SQL_PLACEHOLDER", ExplainOutputFormat.TABLE, "文档实证 OB 官方 V4.x EXPLAIN 文法（缺省 TRADITIONAL 表格行）；真机留账（T-DialectXcFamily）"),
         Entry("openGauss", "EXPLAIN (FORMAT JSON) $SQL_PLACEHOLDER", ExplainOutputFormat.JSON, "真机实证 openGauss 5.0.0（DBX 只读通道 2026-09-23，FORMAT JSON 单列 JSON 文本）"),
-        Entry("Oracle", null, null, "不接入：需两步链查 PLAN_TABLE（另议）"),
-        Entry("SQL Server", null, null, "不接入：需会话级 SET SHOWPLAN_XML（另议）"),
+        Entry(
+            "Oracle",
+            "EXPLAIN PLAN FOR $SQL_PLACEHOLDER",
+            ExplainOutputFormat.TEXT,
+            "真机实证 Oracle Free 23 + XE 11g（DBX 通道 2026-09-30）：EXPLAIN PLAN FOR 单语句成功（0 行）；计划入会话级 PLAN_TABLE（PUBLIC 同义词→SYS.PLAN_TABLE$ 免建表），跨连接不可见——单语句通道拿不到计划行，postPlanQuery 指引数据库端同连接另查",
+            postPlanQuery = "SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY)",
+            channelNote = "Oracle registers the plan into PLAN_TABLE and returns no rows; run SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY) on the same session/connection to view the plan (plan rows are session-scoped, so a fresh connection cannot read them).",
+        ),
+        Entry(
+            "SQL Server",
+            "SET STATISTICS XML ON; $SQL_PLACEHOLDER; SET STATISTICS XML OFF",
+            ExplainOutputFormat.XML,
+            "文档实证 Microsoft Learn《SET STATISTICS XML》（need not be the only statement in a batch；计划 XML 为执行后的附加结果集）；真机未验证（DBX 在册无 sqlserver 实例留账）——MCP 单结果集通道返回查询行而非计划，channelNote 澄清；末尾 OFF 还原会话态",
+            channelNote = "SET STATISTICS XML ON returns the plan XML as an additional result set AFTER the query rows; the rows above are the query result, not the plan - use the IDE database console to see the plan tab (documented syntax; not verified against a live instance).",
+        ),
     )
 
     /** 按方言显示名的查找索引（键小写——查找大小写不敏感）。 */

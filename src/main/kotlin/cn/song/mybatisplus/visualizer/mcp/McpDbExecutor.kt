@@ -157,6 +157,16 @@ object McpDbExecutor {
      * T-McpAuditTrail（T-MAT-01）：[onExecuted] 为执行链唯一出口钩子——成功与失败**两条路径**
      * 都回调一次（失败回调后异常原样冒泡）。钩子是旁路：自身抛异常只记日志，绝不连坐执行结果
      * 或吞掉失败（审计不得成为门控）。null（默认）时零行为差异——既有调用点逐字节不变。
+     *
+     * R23（Oracle/SQL Server EXPLAIN 接入）：[channelNote] 非 null 时走 **execute() 多结果宽容
+     * 通道**——`executeQuery(String)` 只接受「首结果即 ResultSet」的语句，而 Oracle 的
+     * `EXPLAIN PLAN FOR`（首结果为 update count、无行返回）与 SQL Server 的 `SET STATISTICS XML
+     * ON; …` 批（前导 SET 产生 update count）都会让它直接抛错。宽容通道按 JDBC 结果游走协议
+     * （execute → updateCount → getMoreResults，有界）取**首个** ResultSet；一个 ResultSet 都
+     * 拿不到时返回空行列（诚实降级）。[channelNote] 追加在驱动 notices 之后的 notices 节——
+     * 二段式/附加结果集方言的计划「为什么不在上面的行里」的说明由
+     * [cn.song.mybatisplus.visualizer.sql.ExplainSupport] 表单源持有。null（默认）走既有
+     * executeQuery 通道，**行为逐字节不变**（其余 9 家方言与其他调用点的防回归面）。
      */
     fun executeQuery(
         project: Project,
@@ -165,10 +175,11 @@ object McpDbExecutor {
         maxRows: Int,
         timeoutSeconds: Int = 0,
         onExecuted: ((ExecutedOutcome) -> Unit)? = null,
+        channelNote: String? = null,
     ): McpExplainFormatter.RawResult {
         val started = System.currentTimeMillis()
         return try {
-            executeQueryInternal(project, dataSource, sql, maxRows, timeoutSeconds).also {
+            executeQueryInternal(project, dataSource, sql, maxRows, timeoutSeconds, channelNote).also {
                 notifyExecuted(onExecuted, sql, System.currentTimeMillis() - started, null, dataSource)
             }
         } catch (e: Throwable) {
@@ -233,6 +244,7 @@ object McpDbExecutor {
         sql: String,
         maxRows: Int,
         timeoutSeconds: Int = 0,
+        channelNote: String? = null,
     ): McpExplainFormatter.RawResult {
         val rowBudget = channelRowBudget(maxRows)
         val manager = Class.forName(DCM).getMethod("getInstance").invoke(null)
@@ -259,13 +271,20 @@ object McpDbExecutor {
                 // notices 不允许串扰进本次结果；返回值丢弃，只做清空。
                 drainWarnings(*surfaces)
                 try {
-                    val resultSet = Class.forName(REMOTE_STATEMENT).getMethod("executeQuery", String::class.java)
-                        .invoke(statement, sql)
-                    val raw = collect(resultSet, rowBudget)
+                    // R23：channelNote 非 null（二段式/多结果集方言）走 execute() 宽容通道；
+                    // null（默认）保持 executeQuery 通道——既有 9 家方言与其他调用点逐字节不变
+                    val raw = if (channelNote == null) {
+                        val resultSet = Class.forName(REMOTE_STATEMENT).getMethod("executeQuery", String::class.java)
+                            .invoke(statement, sql)
+                        collect(resultSet, rowBudget)
+                    } else {
+                        executeStatementCollectFirst(statement, sql, rowBudget)
+                    }
                     // 执行成功才采集 notices；失败路径直接抛出（notices 无从产生=DBX「出错丢弃」口径）
                     val notices = drainWarnings(*surfaces)
                     if (notices.isNotEmpty()) LOG.info("McpDbExecutor: drained ${notices.size} driver notice(s)")
-                    return raw.copy(notices = notices)
+                    // R23：通道说明固定排在驱动 notices 之后——「行里为什么没有计划」的说明总是收尾
+                    return raw.copy(notices = if (channelNote == null) notices else notices + channelNote)
                 } catch (e: java.lang.reflect.InvocationTargetException) {
                     // T-ExecTimeoutGuard：超时先收尾再报错——cancel 请求（RMI 镜像尽力而为）
                     // 后再冒泡带 timed out 标记的异常；cancel 失败不吞超时事实（如实措辞）
@@ -314,9 +333,40 @@ object McpDbExecutor {
         },
     )
 
+    /**
+     * R23：execute() 多结果宽容通道——按 JDBC 结果游走协议取**首个** ResultSet。
+     *
+     * 协议（java.sql.Statement 契约，RemoteStatement 镜像 262 javap 同形实证）：
+     * `execute(sql)` 返回首结果是否为 ResultSet；false 时 `getUpdateCount()` 给出当前结果的
+     * update count（**-1 = 再无结果**）；`getMoreResults()` 前进到下一结果。前导 SET 语句
+     * （Oracle `EXPLAIN PLAN FOR` / SQL Server `SET STATISTICS XML ON`）产生 update count=0
+     * 的首结果——本函数跳过它们取到真正的查询行；一个 ResultSet 都没有（Oracle 计划只登记）
+     * 返回空行列。游走**有界**（[MAX_RESULT_HOPS]）——驱动 getMoreResults 失灵时不挂死。
+     */
+    private fun executeStatementCollectFirst(statement: Any, sql: String, maxRows: Int): McpExplainFormatter.RawResult {
+        val stmtClass = Class.forName(REMOTE_STATEMENT)
+        val execute = stmtClass.getMethod("execute", String::class.java)
+        val getResultSet = stmtClass.getMethod("getResultSet")
+        val getMoreResults = stmtClass.getMethod("getMoreResults")
+        val getUpdateCount = stmtClass.getMethod("getUpdateCount")
+        var rs: Any? = if (execute.invoke(statement, sql) as Boolean) getResultSet.invoke(statement) else null
+        var hops = 0
+        while (rs == null && hops < MAX_RESULT_HOPS) {
+            hops++
+            if (getUpdateCount.invoke(statement) as Int == -1) break
+            if (getMoreResults.invoke(statement) as Boolean) {
+                rs = getResultSet.invoke(statement)
+            }
+        }
+        LOG.info("McpDbExecutor: execute-channel first-result walk done (hops=$hops, resultSet=${rs != null})")
+        return if (rs != null) collect(rs, maxRows) else McpExplainFormatter.RawResult(emptyList(), emptyList())
+    }
+
+    /** execute() 宽容通道的结果游走上限（防驱动失灵挂死；正常批 ≤3~4 个结果，余量充足）。 */
+    private const val MAX_RESULT_HOPS = 32
+
     /** 采集 ResultSet 行列（读满 [maxRows] 即停，truncated 标记供格式化层提示）。 */
-    private fun collect(resultSet: Any, maxRows: Int): McpExplainFormatter.RawResult {
-        val rsClass = Class.forName(REMOTE_RESULT_SET)
+    private fun collect(resultSet: Any, maxRows: Int): McpExplainFormatter.RawResult {        val rsClass = Class.forName(REMOTE_RESULT_SET)
         val meta = rsClass.getMethod("getMetaData").invoke(resultSet)
         val columnCount = Class.forName(REMOTE_META).getMethod("getColumnCount").invoke(meta) as Int
         val headers = (1..columnCount).map { col ->
