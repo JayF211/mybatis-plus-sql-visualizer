@@ -814,6 +814,31 @@ class PluginSettingsPanel @JvmOverloads constructor(
         // 组 4：SQL 日志（分割线分隔 3 个子分组）
         if (SECTION_SQL_LOG in sections) {
             sectionGroup("settings.log.tab.mybatis") { p, g ->
+                // P1-4 摩擦 #3（批次9 波次2）：帧过滤前缀入口指向说明——设置项本体留在页末
+                // 「源码捕获」组（与 JAR 业务帧反向名单同域成对、SearchableField 已按域索引，
+                // 搬动即拆散配对语义），按任务定案取侵入最小形态：本页首组顶加一行零交互指向
+                // 说明（R20 落地页提示形态，零监听器），让从上往下扫的用户在第一屏即得知该
+                // 能力在场。说明行跨两列直挂（不经 addRow 的首列标签位），且 JBLabel 必须包一
+                // 层面板——sectionGroup 的 maxLabelWidth 列宽计算扫描全部直接 JBLabel 子件，
+                // 长说明行入列会把组内首列撑到整行宽、其余行字段列被挤没。
+                g.gridx = 0
+                g.gridwidth = 2
+                g.weightx = 1.0
+                g.fill = GridBagConstraints.HORIZONTAL
+                p.add(
+                    JPanel(BorderLayout()).apply {
+                        isOpaque = false
+                        add(
+                            JBLabel(
+                                "<html>" + MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.hint") + "</html>",
+                            ).apply { foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND },
+                            BorderLayout.CENTER,
+                        )
+                    },
+                    g,
+                )
+                g.gridwidth = 1
+                g.gridy++
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.log.sqlPrefix"), logSqlPrefixField.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.sqlPrefix.tip")
                 })

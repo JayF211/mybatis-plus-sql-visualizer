@@ -56,4 +56,34 @@ class FrameSkipPrefixesFieldVisibilityTest : BasePlatformTestCase() {
         }
         return false
     }
+
+    // ---------------- P1-4 摩擦 #3：帧前缀入口指向说明行 ----------------
+
+    fun test帧前缀指向说明行在本子页在场() {
+        // P1-4 摩擦 #3：设置项本体留在「源码位置捕获」组末（与 JAR 业务帧反向名单同域成对，
+        // SearchableField 已按域索引，搬动即拆散配对），页首组加零交互指向说明提级入口——
+        // 说明行被误删本用例转红。
+        val configurable = newConfigurable()
+        configurable.createComponent()
+        val root = configurable.panelForTest().getRoot()
+        val hint = MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.hint")
+        val labels = mutableListOf<com.intellij.ui.components.JBLabel>()
+        collectLabels(root, labels)
+        assertTrue(
+            "SQL 日志子页应存在帧前缀指向说明行（P1-4 提级入口，摘掉即红）：hint=$hint",
+            labels.any { it.text.contains(hint.take(12)) },
+        )
+    }
+
+    private fun collectLabels(
+        root: java.awt.Container,
+        out: MutableList<com.intellij.ui.components.JBLabel>,
+    ) {
+        for (c in root.components) {
+            when {
+                c is com.intellij.ui.components.JBLabel -> out.add(c)
+                c is java.awt.Container -> collectLabels(c, out)
+            }
+        }
+    }
 }
