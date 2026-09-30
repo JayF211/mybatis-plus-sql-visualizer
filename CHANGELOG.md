@@ -23,6 +23,21 @@
 - **无别名 HQL 属性映射盲区修复（T-HqlNoAliasProp，O-71）**：预览无别名形态 HQL 时，`WHERE stationCode = ?` 这类裸属性与 `updateInfo.BE_DELETE = 0` 这类嵌入段占限定符位此前残留属性名不转列名（O-57 别名作用域映射只覆盖带别名形态）——现收敛在 `JpaAliasTableResolver` 单文件：新增 `mapBareProperties` 裸词映射（字面量分支前置 + 函数调用负前瞻 + 子句关键字/已知限定符/TRUE·FALSE·MEMBER 等排除），嵌入段占限定符位按 `column.embeddedParent == qualifier` 判据剥离产出裸列名（带别名三段形态逐字不变）。**契约变更（显式登记）**：O-57「裸属性透传不回归」保守契约推翻——透传产物本就不可执行，属修复非回归。测试：探针转正 `HqlBarePropertyMappingTest` 10 例 + `HqlAliasColumnMappingTest` 契约改造 3 例，RED 与反向验证 8 红同形态、实施后定向 31 条全绿；用户场景产物与 Hibernate 真实语义一致（`WHERE STATION_CODE = ? AND BE_DELETE = 0`）。
 - **通用 XML 内嵌 SQL 识别（T-XmlInlineSql，O-72）**：RFListPage 这类自研框架 XML（根元素名不固定、SQL/HQL 写在自定义标签的 CDATA/文本里）此前被 mapper/pages/hbm 三套「标签名+父标签名」白名单全部挡下——无 gutter 图标、右键/Alt+Shift+Q 弹「未找到」。现新增作为三套白名单之后的**兜底第四通道，锚定内容不锚定标签名**：叶子标签首段文本以 SELECT/INSERT/UPDATE/DELETE/WITH/REPLACE 开头（大小写不敏感）即认领，任意根元素/任意框架生效；载体标签自身或祖先的 `type="hql"/"jpql"` 走 HQL 转换管道（复用 hbm 命名查询链，别名作用域属性列名映射自动生效），转换失败或实体不可解析**回退原文直显不抛错**，原生 SQL 直显带 `?` 占位符参数表；右键/Alt+Shift+Q 的光标定位、全文件候选与选择区候选同步追加载体兜底，多语句弹选择栏（与既有 XML 候选交互一致）；既有 mapper/pages/hbm 文件由排除集合保证零双图标；设置页「界面与操作」新增总开关（默认开）。附带判别性实测：本平台 `XmlText.text` 对 CDATA 返回带 `<![CDATA[` 包裹的字面全文而非展开内容（首跑 11 例红实证），检测器统一剥包裹；同口径缺口经延伸修复收口——抽共享 `xml/XmlDirectText.kt`（`directTextOf` 直属文本拼接 + CDATA 剥包裹 + trim），`HbmXmlEntityResolver` 与 `previewHbmNamedQueryTag` 两处 hbm 命名查询提取点改走共享口径，旧「CDATA 展开」非判别性断言改判别式（钉死包裹不得残留）。测试：新增 26 例（RF 真实样例/根元素改名/CDATA 与纯文本/排除集合防双图标/HQL 实体转换与回退）+ 既有回归 51 例全绿；反向验证三条读数达标（摘认领→RF 图标红、摘排除→mapper/pages 双图标红、摘 HQL 管道→转换红）；hbm CDATA 延伸修复反向验证 8 例红、定向 5 类全绿。
 
+### Added（批次 9，2026-10-01 收口）
+
+- **MCP 第十一工具 sqlv_history_search（R14 T-HistorySearch）**：AI agent 可检索本地 SQL 历史落盘——关键词/正则/时间范围/来源文件四维过滤，默认只查当天（`allDates` 跨全量），返回条目摘要（最新在前，maxResults 默认 20 上限 100），只读不执行；agent 使用指南见 `docs/mcp/MCP-Tools-Agent-Guide.md`
+- **分页拦截器模拟（R12 T-PaginationSim，默认开）**：mapper 方法/XML 路径带 `IPage` 形参的查询此前预览不分页——现按方言在 SELECT 尾追 LIMIT（参数取 `(当前页-1)×页大小` 公式，手写 LIMIT 不重复追加），并并列产出 COUNT 包裹语句（`SELECT COUNT(*) FROM (…) TOTAL`，对齐 MyBatis-Plus 运行时形态）；Wrapper 链 `selectList/selectMaps/selectMapsPage` 的 Page 构造器 `searchCount` 布尔同步识别
+- **ShardingSphere 双段日志捕获（R10，解析器骨架默认开）**：控制台通道新增第四解析器——`Logic SQL:` 作主条目、`Actual SQL:` 逐行折叠为附注（数据源路由可见）；真实双段日志语料到位后的行为细节按显式 TODO 清单补全（合成夹具基于公开文档样例形态）
+- **Oracle / SQL Server EXPLAIN 接入（R23，EXPLAIN 支持面 11/11）**：Oracle 走 `EXPLAIN PLAN FOR`（执行计划登记到 PLAN_TABLE，插件内以诚实提示说明查看方式——PLAN_TABLE 会话级，二段式 DBMS_XPLAN 在插件两条单语句通道内不可达，经 Oracle 11g/23 真机实证）；SQL Server 走 `SET STATISTICS XML`（官方文档级形态，真机未验证如实留账）
+- **EXPLAIN 结果结构化渲染（R33，默认开）**：MySQL 表格 / PostgreSQL JSON 计划在预览面板内直接渲染成表格/可折叠树（带方言/数据源/耗时头部与索引建议），不再只有原生控制台原始文本；执行失败或环境不满足自动回退原通道，其余方言维持原样不硬解析
+- **动态 SQL 条件求值探镜（R30）**：XML 条件行（`<if>`）旁标注本轮预览的求值结果三态（真/假/未求值）——哪条条件命中不再靠手动试；纯只读探针，渲染行为零变更
+- **历史/版本 SQL 对比（R31）**：历史面板多选恰两条右键「对比选中两条」——逐行差异＋结构指纹判定（同指纹提示「结构等价，仅参数不同」），IDEA 原生 Diff 窗口呈现
+- **数据源上下文角标（R32）**：SQL 条目角标从纯方言显示名升级为「方言 · 库名@host」（从 JDBC URL 解析；支持 Oracle service_name/SID 双形态与 SQL Server 分号参数；凭据信息不入任何展示）
+- **N+1 同模板计数徽章（O-90）**：日志/历史面板对同结构模板的 SQL 计数，≥3 条显示「×N 同模板」琥珀徽章——慢 SQL 重复出现一眼可见；右键可聚焦该模板全部条目（不做实时 profiler）
+- **CRUD/回滚 SQL 可移植导出（O-91 缩范围首版）**：预览面板「更多」菜单新增「导出可移植 SQL」——当前 CRUD 语句与回滚语句串联输出，每条前注释标注方言/种类/UPSERT 形态（回滚链对无法生成的形态诚实跳过不造半成品）；走既有 CSV/TSV/TXT 三格式
+- **日志转 SQL 剪贴板读取按钮（O-92）**：工具窗「日志转 SQL」输入栏新增「从剪贴板读取」——一键贴入并立即转换（有内容才启用，空剪贴板轻提示）；编辑器右键/意图入口留后续评估
+- **设置页与面板可发现性三处（P1-3/P1-4）**：MCP 设置页顶部新增工具面就绪横幅（工具数与门控状态一眼可见）；SQL 日志空面板引导补「增强捕获」第三径（零配置通道此前在空态不可见）；帧过滤前缀入口在 SQL 日志设置子页顶部加指向说明（此前埋在「源码位置捕获」组两层深）
+
 ### Changed
 
 - **空参数填充策略三态化，默认改为占位符 `?`（T-EmptyParamFillTernary，O-79）**：未填写的参数（含 foreach 集合元素）默认保留 `?` 待填提示，不再默认渲染 `NULL`——NULL 会静默过滤行（如 `amount >= NULL` 恒不匹配），不易察觉有参数未填。需要可直接执行的 SQL 时在 设置 → 空参数填充策略 切换 NULL / 空字符串档；已在设置里持久化过 NULL / 空字符串的用户保持原档不受影响。
@@ -41,6 +56,8 @@
 - **foreach 集合元素渲染双缺陷修复（T-ForeachItemRender，O-78）**：`List<Integer>` 等数值集合在 foreach 值框输入 `1,2,4,5` 后，预览渲染 `IN ('1','2','4',?)`——数值元素被误加引号成字符串，且部分值丢失留裸 `?`。现元素值按集合元素类型渲染（数值裸渲染、字符串/日期保持引号），且任意输入节奏下所填值全部完整回填（渲染帧内播种，不再受界面防抖重投递影响）。连带效果：foreach 元素与普通参数一样纳入「空参数填充策略」（未填写且有签名类型信息时按设置渲染 NULL/''）。
 - **XML 预览对无 ew 参数语句误报「无 Wrapper 参数」红色警示修复（T-EwStatementScope，O-77）**：同一 mapper 文件里其他语句带 `${ew.customSqlSegment}` 时，预览普通语句（如 demo 的 selectOrdersByCondition）会误报「方法 … 无 Wrapper 参数（ew），无法展开 MP 占位」——占位识别域从整个文件收窄为当前语句原文（含 include 展开后内容），同文件他语句的占位不再记账到本语句；顺带收敛跨语句不同变量名占位污染与跨命名空间 include 占位漏检，语句外注释里的占位不再记账。
 - **控制台捕获在「只开 JdbcTemplate DEBUG、无参数行」的工程里零产出修复（T-ConsolePendingFlush，O-70）**：关闭增强捕获后仅靠控制台通道时，语句行之后没有同线程后续行的语句（未开 TRACE 参数行、Tomcat 按请求新建线程）此前会一直停在解析桶里不产出（面板显示「已扫描 N 行 / 产出 0 条」）——现按「静默 1 秒」判定语句已完整并交出，轮询每拍兜底一次；同时修掉 2026.2 上停止后重启捕捉时旧 filter 摘不掉导致的重复解析。
+- **性能修缮五件（F47~F51，批次 9 快件批）**：①语法高亮注入器喂入税消解——开启高亮后每个 XML 元素每次高亮 pass 的一次服务查找改为快照直读（实测 85→14ns/元素，喂入位查找 3002→0）；②mapper 解析器的编程式注册挂应用级 Disposer 宿主——插件动态卸载时容器级联摘除，不再被注册表钉住（附跨版本护栏与运行时对照测试）；③参数预设切换只写激活指针不再全量序列化＋方案数上限 20；④两处并发缓存修缮——参数方案顶层结构改并发安全容器（修掉并发建桶可致真损坏的潜伏缺陷）、控制台桥方法缓存负缓存此前因 null 值被吞从未生效（改 Optional 承载）并补 ClassLoader 身份键；⑤XML 内嵌 SQL 行标记两道闸并一（每元素查找 2→1，语义逐值等价）。
+- **原生 MyBatis（非 Spring Boot）项目拦截器自动注入补完（R24）**：设置页「注入」对 mybatis-config.xml 工程此前只给手动指引（全仓仅有的 2 处生产 TODO）——现自动检测配置文件 `<plugins>` 装配同一拦截器（无 config/多处 config/结构不符一律不注入维持引导，fail-closed）；「全场景闭环」叙事无星号。
 
 ## [2026.9.23] - 2026-09-23
 
