@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import com.intellij.util.ui.StatusText
 import java.awt.Font
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -75,5 +76,37 @@ class EmptyTextRenderTest {
         val status = bareStatusText()
         applyEmptyTextLines(status, "", 400, stubMeasure)
         assertTrue("空文案不得抛异常，也不得留下裸换行", paintedLineCount(status) <= 1)
+    }
+
+    // ---------------- P1-4 摩擦 #1：空面板起步引导内容守卫 ----------------
+
+    /** 从仓内任一工作目录向上定位仓库根（仿 SettingsRealityGuardTest 的 repoRoot 惯例）。 */
+    private fun repoFile(rel: String): File {
+        var dir: File? = File(System.getProperty("user.dir")!!)
+        repeat(5) {
+            val candidate = File(dir, rel)
+            if (candidate.exists()) return candidate
+            dir = dir!!.parentFile
+        }
+        error("repo file not found: $rel (cwd=${System.getProperty("user.dir")})")
+    }
+
+    @Test
+    fun test空态起步引导三径齐全() {
+        // P1-4 摩擦 #1：空面板起步引导必须三径同段——自动捕捉 / 手动粘贴 / 增强捕获发现径
+        //（增强捕获是插件「运行即采集」的头条通道，空态只提两径时新用户无从得知其存在；
+        //  引导不弹窗，弹窗克制红线不动 EnhancedCaptureConfirmDialog）。摘掉任一径本用例转红。
+        val zhLine = Regex("^log\\.panel\\.empty=(.*)$", RegexOption.MULTILINE)
+            .find(repoFile("src/main/resources/messages/MpSqlVisualizerBundle_zh.properties").readText())!!
+            .groupValues[1]
+        val enLine = Regex("^log\\.panel\\.empty=(.*)$", RegexOption.MULTILINE)
+            .find(repoFile("src/main/resources/messages/MpSqlVisualizerBundle.properties").readText())!!
+            .groupValues[1]
+        assertTrue("zh 引导缺「捕捉」自动捕获径：$zhLine", zhLine.contains("捕捉"))
+        assertTrue("zh 引导缺「日志转 SQL」粘贴径：$zhLine", zhLine.contains("日志转 SQL"))
+        assertTrue("zh 引导缺「增强捕获」发现径（P1-4 补第三径，摘掉即红）：$zhLine", zhLine.contains("增强捕获"))
+        assertTrue("en 引导缺 Capture 自动径：$enLine", enLine.contains("Capture"))
+        assertTrue("en 引导缺 paste 粘贴径：$enLine", enLine.contains("paste"))
+        assertTrue("en 引导缺 Enhanced Capture 发现径：$enLine", enLine.contains("Enhanced Capture"))
     }
 }
