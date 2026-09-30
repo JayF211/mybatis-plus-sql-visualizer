@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.util
 
 import com.intellij.openapi.ide.CopyPasteManager
+import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.StringSelection
 
 /**
@@ -19,4 +20,14 @@ object UiTextClipboard {
     fun copy(text: String) {
         CopyPasteManager.getInstance().setContents(StringSelection(text))
     }
+
+    /**
+     * 读取系统剪贴板文本（O-92 增设读侧，与 [copy] 同轨收口——读写同走平台 CopyPasteManager，
+     * 与编辑器复制栈互通）。剪贴板无文本内容（空 / 非文本 flavor）时返回 null。
+     * API 权威：243 基线 app-client.jar javap 核实 `CopyPasteManager.getContents(DataFlavor)`
+     * 在场（泛型按期望类型 String? 推断）；单元测试沙盒内可用（与 [copy] 同一先例）。
+     */
+    @JvmStatic
+    fun readText(): String? =
+        CopyPasteManager.getInstance().getContents(DataFlavor.stringFlavor)
 }
