@@ -500,12 +500,16 @@ object WrapperLocator {
         val existsConsumed = consumingCall?.let { it.methodExpression.referenceName == EXISTS_CONSUMER } == true
         val updateEntityConsumed = isEntityUpdateConsumer(newExpr)
         // T-M29-02/03：分页消费（`service.page(page, new W()...)`）——Page 实参解析为 LIMIT 子句
-        val pageLimit = consumingCall?.let {
-            if (it.methodExpression.referenceName in pageConsumerMethodNames) parsePageLimit(it) else null
+        // R12 T-PaginationSim：连同 searchCount 标志一并解析（D3=A）
+        val pageArg = consumingCall?.let {
+            if (it.methodExpression.referenceName in pageConsumerMethodNames) parsePageArg(it) else null
         }
 
         return LocatedWrapper(
-            chain = WrapperChain(wrapperType, resolvedEntity?.name, wrapperCalls, constructorAlias, deleteConsumed, countConsumed, existsConsumed, updateEntityConsumed, pageLimit),
+            chain = WrapperChain(
+                wrapperType, resolvedEntity?.name, wrapperCalls, constructorAlias, deleteConsumed, countConsumed,
+                existsConsumed, updateEntityConsumed, pageArg?.limit, pageArg?.searchCount ?: true,
+            ),
             table = table,
             entityFile = resolvedEntity?.containingFile,
         )
@@ -610,7 +614,8 @@ object WrapperLocator {
         val chainUpdateEntity = terminalName == UPDATE_TERMINAL &&
             terminal.argumentList.expressions.isNotEmpty()
         // T-M29-02/03：链式分页终结点（`service.lambdaQuery()...page(new Page<>(...))`）——Page 实参解析为 LIMIT
-        val chainPageLimit = if (terminalName == PAGE_TERMINAL) parsePageLimit(terminal) else null
+        // R12 T-PaginationSim：连同 searchCount 标志一并解析（D3=A）
+        val chainPageArg = if (terminalName == PAGE_TERMINAL) parsePageArg(terminal) else null
 
         val wrapperCalls = nonTerminalCalls.map { ArgResolver.toWrapperCall(it, table, entityClass?.name, resolveVariables) }
 
@@ -624,9 +629,11 @@ object WrapperLocator {
             (consumingCall?.let { it.methodExpression.referenceName == EXISTS_CONSUMER } == true)
         val updateEntityConsumed = isEntityUpdateConsumer(factoryCall) || chainUpdateEntity
         // T-M29-02/03：分页消费（链式终结点 page / `service.page(page, Wrappers.lambdaQuery()...)` 实参形态）
-        val pageLimit = chainPageLimit ?: consumingCall?.let {
-            if (it.methodExpression.referenceName in pageConsumerMethodNames) parsePageLimit(it) else null
+        // R12 T-PaginationSim：链式终结点优先，实参形态次之；searchCount 取命中形态的解析值
+        val pageArg = chainPageArg ?: consumingCall?.let {
+            if (it.methodExpression.referenceName in pageConsumerMethodNames) parsePageArg(it) else null
         }
+        val pageLimit = pageArg?.limit
 
         // O-8（缺陷 B）：字符串服务链实体解析失败标记（preview 侧显式降级，不再静默 null）——
         // 仅服务链形态（接收者非静态工厂类：Wrappers/ChainWrappers/MPJ/Db 解析为 PsiClass 排除，
@@ -640,6 +647,7 @@ object WrapperLocator {
                 wrapperType, table?.entityClassName ?: entityClass?.name, wrapperCalls, constructorAlias = null,
                 deleteConsumed = deleteConsumed, countConsumed = countConsumed, existsConsumed = existsConsumed,
                 updateEntityConsumed = updateEntityConsumed, pageLimit = pageLimit,
+                pageSearchCount = pageArg?.searchCount ?: true,
             ),
             table = table,
             entityFile = entityClass?.containingFile,
@@ -965,7 +973,9 @@ object WrapperLocator {
         var existsConsumed = false
         var updateEntityConsumed = false
         // T-M29-02/03：分页消费（`service.page(new Page<>(...), wrapper)`）→ Page 实参解析的 LIMIT 子句
+        // R12 T-PaginationSim：连同 searchCount 标志一并解析（D3=A，默认 true 对齐 MP Page 默认）
         var pageLimit: LimitClause? = null
+        var pageSearchCount = true
 
         // 1. 初始化表达式中的链式调用；若链首为工厂方法调用（baseJoinWrapper()），展开其方法体内的 wrapper 链（P03）；
         //    Wrappers 静态工厂调用（Wrappers.<T>lambdaQuery()）不是 Wrapper 操作，从链中剔除
@@ -982,7 +992,14 @@ object WrapperLocator {
             if (isConsumerArgument(refExpression, setOf(EXISTS_CONSUMER))) existsConsumed = true
             if (isEntityUpdateArgument(refExpression)) updateEntityConsumed = true
             // T-M29-02：分页消费（`service.page(page, wrapper)` / `mapper.selectPage(page, wrapper)`）
-            if (pageLimit == null) pageConsumingCall(refExpression)?.let { pageLimit = parsePageLimit(it) }
+            if (pageLimit == null) {
+                pageConsumingCall(refExpression)?.let { call ->
+                    parsePageArg(call)?.let { arg ->
+                        pageLimit = arg.limit
+                        pageSearchCount = arg.searchCount
+                    }
+                }
+            }
             // w 引用的 PSI 结构：w.eq(...) 中 w 引用 → methodExpression(eq 引用) → PsiMethodCallExpression
             // 向上遍历找最近的调用表达式
             val call = generateSequence(refExpression.parent) { it.parent }
@@ -1039,7 +1056,7 @@ object WrapperLocator {
 
         val wrapperCalls = dedupedCalls.map { ArgResolver.toWrapperCall(it, table, entityClass?.name, resolveVariables) }
         return LocatedWrapper(
-            chain = WrapperChain(wrapperType, entityClass?.name, wrapperCalls, constructorAlias, deleteConsumed, countConsumed, existsConsumed, updateEntityConsumed, pageLimit),
+            chain = WrapperChain(wrapperType, entityClass?.name, wrapperCalls, constructorAlias, deleteConsumed, countConsumed, existsConsumed, updateEntityConsumed, pageLimit, pageSearchCount),
             table = table,
         )
     }
@@ -1162,7 +1179,17 @@ object WrapperLocator {
      *  - 任一为运行时值 → `?` 占位（offset 来源标注计算公式，面板回填后即真实偏移）；
      *  - 解析失败（Page 变量不可解析 / 非 Page 类型等）→ null（不渲染 LIMIT，维持现状）。
      */
-    private fun parsePageLimit(call: PsiMethodCallExpression): LimitClause? {
+    private fun parsePageLimit(call: PsiMethodCallExpression): LimitClause? = parsePageArg(call)?.limit
+
+    /**
+     * R12 T-PaginationSim：解析分页消费调用的 Page 实参全量（LIMIT 子句 + searchCount 标志）。
+     *
+     * searchCount 判定（D3=A）：Page 构造器第 3/4 参的布尔字面量（MP 3.5.17 反编译实证构造器全集
+     * `(long,long)` / `(long,long,long)` / `(long,long,boolean)` / `(long,long,long,boolean)`，
+     * boolean 位于下标 2 或 3）；布尔字面量缺失（无此参 / 变量实参静态不可判）→ 保守 true
+     * （对齐 MP `Page()` 默认 searchCount=true，宁多勿少）。
+     */
+    private fun parsePageArg(call: PsiMethodCallExpression): PageArg? {
         val pageExpr = call.argumentList.expressions.firstNotNullOfOrNull { arg -> resolvePageNewExpression(arg) }
             ?: return null
         val args = pageExpr.argumentList?.expressions.orEmpty()
@@ -1180,8 +1207,15 @@ object WrapperLocator {
             }
             else -> pageOffsetPlaceholder(current, size)
         }
-        return LimitClause(offset = offset, count = size)
+        val searchCount = args.drop(2)
+            .filterIsInstance<PsiLiteralExpression>()
+            .mapNotNull { it.value as? Boolean }
+            .firstOrNull() ?: true
+        return PageArg(LimitClause(offset = offset, count = size), searchCount)
     }
+
+    /** Page 实参解析产物（R12 T-PaginationSim）：LIMIT 子句 + searchCount 标志（见 [parsePageArg]）。 */
+    private data class PageArg(val limit: LimitClause, val searchCount: Boolean)
 
     /** new Page 表达式解析：直接 new 表达式，或变量引用 → 初始化表达式（分步写法 `Page p = new Page<>(...); service.page(p, w)`）。 */
     private fun resolvePageNewExpression(expr: PsiExpression): PsiNewExpression? {
@@ -1419,8 +1453,14 @@ object WrapperLocator {
      * T-M29-02：分页类消费方法——wrapper 作为实参传入时查询转分页渲染（LIMIT 子句）：
      * `IService.page(Page, wrapper)` / `BaseMapper.selectPage(Page, wrapper)` / MPJ `selectJoinPage` /
      * `Db.page(Page, wrapper)`（链式 `lambdaQuery()...page(...)` 终结点由 [PAGE_TERMINAL] 单独识别）。
+     *
+     * R12 T-PaginationSim：补注册 BaseMapper 3.5.17 的 IPage 重载族（本地 jar 反编译实证全集 =
+     * selectList(IPage,Wrapper) / selectMaps(IPage,Wrapper) / selectPage / selectMapsPage，
+     * **无 selectObjs(IPage,...) 重载故不收**）——`mapper.selectList(page, w)` 此前按无分页
+     * SELECT 渲染（LIMIT 缺失）。
      */
-    internal val pageConsumerMethodNames: Set<String> = setOf("page", "selectPage", "selectJoinPage")
+    internal val pageConsumerMethodNames: Set<String> =
+        setOf("page", "selectPage", "selectJoinPage", "selectList", "selectMaps", "selectMapsPage")
 
     /**
      * 计数类消费方法：wrapper 作为实参传入时，查询类 wrapper 转 `SELECT COUNT(*) FROM ...`。

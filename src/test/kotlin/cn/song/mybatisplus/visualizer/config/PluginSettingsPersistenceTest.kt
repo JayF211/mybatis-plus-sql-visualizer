@@ -168,8 +168,9 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关 +1（界面节）
             // R2 W3 历史工作流：gutter 六分组开关 +6（mapperXml/annotation/jpaHql/jdbc/inlineFallback/other）
             // T-PerfSweep16 F46（40ee1fd）：新增「mapper XML 语法高亮」开关（xmlSynHiCheck）+1 后为 38；
+            // R12 T-PaginationSim：分页拦截器模拟开关（paginationSimCheck）+1 后为 39；
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
-            assertEquals("复选框总数应为 38", 38, texts.size)
+            assertEquals("复选框总数应为 39", 39, texts.size)
         } finally {
             settings.state.language = old
         }

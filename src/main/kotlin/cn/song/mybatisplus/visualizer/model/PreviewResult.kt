@@ -76,4 +76,10 @@ data class PreviewResult(
      * 复制可执行 SQL 据此给产物加标记注释。非 XML 链（Wrapper/JPA/日志还原）无 `${}` 语义恒 false。
      */
     val hasDollarRawSegments: Boolean = false,
+    /**
+     * R12 T-PaginationSim：分页 COUNT 包裹 SQL（D1=A 预览附第二条语句，面板在主 SQL 后并列渲染；
+     * D2=A 基础形态 `SELECT COUNT(*) FROM (原SQL) TOTAL`，MP 3.5.17 反编译逐字节形态）。
+     * null = 无分页 COUNT（未分页 / count·exists 消费 / searchCount=false / 开关关闭）。
+     */
+    val countSql: String? = null,
 )

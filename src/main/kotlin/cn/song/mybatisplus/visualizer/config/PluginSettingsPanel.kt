@@ -452,6 +452,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 数据权限模拟条件输入框（F-6 Phase C）：用户手动填写的 WHERE 片段。 */
     private val dataPermissionMockConditionField = JBTextField(20)
 
+    /** 分页拦截器模拟开关（R12 T-PaginationSim）：COUNT 包裹预览第二语句产出（默认开）。 */
+    private val paginationSimCheck = JBCheckBox()
+
     /** JDBC 模板 SQL 字符串预览开关：queryForList/update 等方法的字符串 SQL 实参显示预览图标。 */
     private val jdbcSqlPreviewCheck = JBCheckBox()
 
@@ -750,6 +753,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.dataPermissionMockCondition"), dataPermissionMockConditionField.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.dataPermissionMockCondition.tip")
+                })
+                addRow(p, g, "", paginationSimCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.paginationSim")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.paginationSim.tip")
                 })
                 addRow(p, g, "", jdbcSqlPreviewCheck.apply {
                     text = MpSqlVisualizerBundle.message("settings.preview.jdbc")
@@ -1573,6 +1580,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || injectTenantOnInsertCheck.isSelected != s.injectTenantOnInsert
             || dataPermissionHintCheck.isSelected != s.dataPermissionHint
             || dataPermissionMockConditionField.text.trim() != s.dataPermissionMockCondition
+            || paginationSimCheck.isSelected != s.paginationSimEnabled
             || jdbcSqlPreviewCheck.isSelected != s.jdbcSqlPreviewEnabled
             || executionTimeoutField.text.trim().toIntOrNull() != s.executionTimeoutSeconds
 
@@ -1690,6 +1698,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.injectTenantOnInsert = injectTenantOnInsertCheck.isSelected
             s.dataPermissionHint = dataPermissionHintCheck.isSelected
             s.dataPermissionMockCondition = dataPermissionMockConditionField.text.trim()
+            s.paginationSimEnabled = paginationSimCheck.isSelected
             s.jdbcSqlPreviewEnabled = jdbcSqlPreviewCheck.isSelected
             s.executionTimeoutSeconds = executionTimeoutField.text.trim().toIntOrNull()
                 ?: PluginSettings.DEFAULT_EXECUTION_TIMEOUT_SECONDS
@@ -1842,6 +1851,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             injectTenantOnInsertCheck.isSelected = s.injectTenantOnInsert
             dataPermissionHintCheck.isSelected = s.dataPermissionHint
             dataPermissionMockConditionField.text = s.dataPermissionMockCondition
+            paginationSimCheck.isSelected = s.paginationSimEnabled
             jdbcSqlPreviewCheck.isSelected = s.jdbcSqlPreviewEnabled
             executionTimeoutField.text = s.executionTimeoutSeconds.toString()
         }

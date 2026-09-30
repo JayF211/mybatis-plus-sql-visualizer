@@ -60,4 +60,36 @@
 
 ## 七、实施记录
 
-（待续——实施时回填本节）
+（2026-09-30 实施，分支 t-r12pagsim，基=dev c9c05eb；D1/D2/D3 全按推荐 A 定案。）
+
+**重锚与证伪（§五待验证前提逐条落地）**
+
+- §一七条锚点全部实测重锚确认：WrapperLocator 页消费三装配点（:503-508 new 构造链 / :613-642 工厂链 / :976-1042 变量分步）、SqlPreviewService 分页消费判断+applyPageLimit、Dialect renderLimit 三形态、SqlSourceMarker.MP_PAGINATION_COUNT、PluginSettings F-6 节段——行号有漂移，锚语义全数在场。
+- **V13b（最重条）已证伪钉死，MP 3.5.17 本地 jar 反编译为准（curl -x 代理取 extension/jsqlparser 3.5.17 + gradle 缓存 core 3.5.17）**：
+  - COUNT 基础包裹形态 = `SqlParserUtils.getOriginalCountSql` 常量池 `SELECT COUNT(*) FROM (%s) TOTAL`（别名 TOTAL、大写）——T-02 逐字节对齐；
+  - `Page()` 无参构造默认 current=1 / size=10 / searchCount=true（字节码 ldc2_w 10l/lconst_1/iconst_1 实证）——既有 parsePageLimit 默认值正确；
+  - `IPage.searchCount()` false 时 `willDoQuery` 不执行 COUNT——D3=A 的运行时依据；
+  - `BaseMapper` IPage 重载全集 = selectList(IPage,Wrapper)/selectMaps(IPage,Wrapper)/selectPage/selectMapsPage，**无 selectObjs(IPage,...)**（未收，防记忆错收）；selectMapsPage 此前不在消费名单（本次补）；
+  - COUNT 优化形态真身（autoCountSql 字节码）：optimizeCountSql 门 + ORDER BY 含 `?` 不去 + distinct/groupBy 不动 + selectItem 含 `?` 不换 + optimizeJoin 左联 where 未引用才裁——含多形态分支，印证 D2=A「先不做优化形态」的控本决策。
+- **V13a 落点结论**：仓内无独立 MapperMethodLocator——XML 路径「namespace+语句 id → mapper 方法」定位现居 `ui/XmlParamTypeResolver.resolveTypes`（JavaPsiFacade findClass→findMethodsByName）；新定位器 MapperPageParamLocator 与其同链就近落位 ui/ 包（计划写集标 psi/ 偏差已留痕）。
+- **V13c 边界定案**：XML 语句已含 LIMIT（手写）→ 不重复追加、不产 COUNT（预览保守口径；MP 运行时为字面拼接会双 LIMIT，预览偏离已登记）——用例 testXmlStatementWithHandWrittenLimitNotDuplicated 钉住。
+
+**实施内容（提交 2eb2c49 全案 + 7061309 契约对账）**
+
+- T-01（缺口 A）：`WrapperLocator.pageConsumerMethodNames` 补注册 selectList/selectMaps/selectMapsPage（反编译全集）；`parsePageArg` 连带解析 Page 构造器第 3/4 参布尔字面量为 searchCount（三处 WrapperChain 装配点透传新字段 `pageSearchCount`，默认 true）；XML/注解路径 `MapperPageParamLocator`（Page/IPage/PageImpl 简单名文本匹配，任意位置形参）+ `XmlPreviewService.applyPaginationShared`（SELECT 尾追方言 LIMIT 占位 `LIMIT ?, ?`，参数来源标注 `(形参.current-1)*形参.size` 公式）。
+- T-02（缺口 B）：`sql/interceptor/PaginationSimulator.kt` 纯函数新件（对齐三件先例形态）；Wrapper 链 `SqlPreviewService.paginationCountSql`（模型级 `copy(limit=null)` 重生成包裹体——运行时 COUNT 先于 LIMIT 执行的反编译顺序；count/exists 消费与 searchCount=false 与开关关闭三重跳过）；`PreviewResult.countSql` 新字段 + `SqlPreviewPanel.appendCountSection`（照 T-MpjFill fill 段先例，主 SQL 后注释头并列渲染第二条语句，D1=A）。
+- T-03：`PluginSettings.paginationSimEnabled` 默认开（F-6 节段；对齐 injectLogicDelete 保真增强默认开口径）+ PluginSettingsPanel 五处接线 + 双语 bundle 三键（settings.paginationSim[.tip] / panel.pagination.count.section）。
+
+**测试读数（先红后绿=摘钩子反向验证，四钩子齐摘/齐还原）**
+
+- PaginationSimTest 17 用例（wrapper IPage 三方法+负例 / XML 四形态 / 注解 / COUNT 包裹含字节形态钉 / searchCount / 开关 / last 并存单 LIMIT / 方言矩阵 MySQL-PG-Oracle）：
+  - **红（钩子摘除）**：17 completed, **9 failed**——判别用例全红（ComparisonFailure/AssertionFailedError 逐条在案），8 个负例守卫与形态钉按设计不判红；
+  - **绿（还原）**：17 completed, **0 failed**。
+- 零回归定向（不跑全量，按分层纪律交收口代理）：批次一 180 completed 1 failed（=PluginSettingsPersistenceTest 复选框总数契约 38→39，预期内连带，7061309 修正后 15/15 绿）；批次二 72/72（SettingsIOTest 11 / PluginSettingsPanelBindingTest 14 / UnknownParamGateTest 6 / DollarInjectBannerTest 6 / HeavyXmlParamTypeResolverTest 16 / DialectTest 19）。
+
+**遗留登记**
+
+1. 优化 COUNT 形态（去 ORDER BY 直查表/左联裁剪，autoCountSql 优化支）——D2=A 明确登记后续，本件只做基础包裹；
+2. 分步写法 `page.setSearchCount(false)`（构造后 setter）不可静态判——保守恒产 COUNT（宁多勿少，文档化）；
+3. BatchOperationConverter 路径的无 wrapper `mapper.selectList(page)`（Page 实参但无 wrapper 链）未扩 LIMIT——不在本计划写集，登记后续候选；
+4. IPage 自定义实现类（非 Page/PageImpl/IPage 简单名）形参不识别——快速路径口径（不 resolve）的文档化边界。

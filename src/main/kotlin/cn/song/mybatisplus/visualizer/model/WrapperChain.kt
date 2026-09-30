@@ -20,6 +20,10 @@ package cn.song.mybatisplus.visualizer.model
      *                        true 时用实体字段展开 SET 列（值占位）
      * @param pageLimit       分页消费解析产物（`service.page(Page, wrapper)` / `selectPage` / 链式 `page()`，
      *                        T-M29-02/03）；null 表示无分页消费或 Page 实参不可解析（不渲染 LIMIT）
+     * @param pageSearchCount 分页 Page 实参的 searchCount 标志（R12 T-PaginationSim D3=A，MP 3.5.17
+     *                        `Page()` 默认 true 反编译实证；`new Page<>(c, s, false)` → false 时
+     *                        PaginationInnerInterceptor 不执行 COUNT → 预览不产出 COUNT 包裹；
+     *                        标志不可静态判定时保守取 true）
      */
 data class WrapperChain(
     val wrapperType: WrapperType,
@@ -31,6 +35,7 @@ data class WrapperChain(
     val existsConsumed: Boolean = false,
     val updateEntityConsumed: Boolean = false,
     val pageLimit: LimitClause? = null,
+    val pageSearchCount: Boolean = true,
 )
 
 /**
