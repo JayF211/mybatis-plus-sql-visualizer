@@ -1640,6 +1640,10 @@ public final class DataSourceSelector {
                                         + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
                                 Throwable cause = (e instanceof InvocationTargetException)
                                         ? ((InvocationTargetException) e).getTargetException() : e;
+                                // T-FP-02 定例（守卫解包锚点尾款收口）：反射包装层是普通异常，
+                                // 只判外层会漏判目标方法抛出的 fatal——解包后判 fatal 并透传给平台
+                                // EDT 处理器记录现场；非 fatal 路径行为不变。
+                                if (FatalErrors.isFatal(cause)) throw (Error) cause;
                                 if (onError != null) {
                                     onError.accept(cause.getMessage() != null ? cause.getMessage() : cause.toString());
                                 }
@@ -1659,6 +1663,9 @@ public final class DataSourceSelector {
             LOG.warn("[M36] prepareInConsole FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
             // M36.3：通知调用方错误，确保 UI 从「执行中」状态恢复
             Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
+            // T-FP-02 定例（守卫解包锚点尾款收口）：反射包装层是普通异常，只判外层会漏判——
+            // 解包后判 fatal 并透传给调用方捕获边界；非 fatal 路径行为不变。
+            if (FatalErrors.isFatal(cause)) throw (Error) cause;
             // T-PreviewExecDs-03 F3：console 被清扫 dispose 的处置（prepare 链后段撞上时同款
             // 特判，见 prepareAfterEditorResolved onFailure）
             if (cause instanceof com.intellij.util.IncorrectOperationException
@@ -1932,6 +1939,9 @@ public final class DataSourceSelector {
         } catch (Throwable e) {
             LOG.warn("[M36] prepareInConsole FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
             Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
+            // T-FP-02 定例（守卫解包锚点尾款收口）：反射包装层是普通异常，只判外层会漏判——
+            // 解包后判 fatal 并透传给调用方捕获边界；非 fatal 路径行为不变。
+            if (FatalErrors.isFatal(cause)) throw (Error) cause;
             // T-PreviewExecDs-03 F3：console 已被 getActiveConsoles 清扫（Disposer.register 撞
             // 已 dispose 父节点抛 IncorrectOperationException）→ 清单例缓存（否则下轮执行复用
             // dead 缓存继续失败）+ 可读文案，不再透平台异常长串。
@@ -2820,6 +2830,9 @@ public final class DataSourceSelector {
                     } catch (Exception e) {
                         LOG.warn("[M36] executeQueries FAILED: " + e.getMessage(), e);
                         Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
+                        // T-FP-02 定例（守卫解包锚点尾款收口）：解包 ITE 后判 fatal 并透传；本块为
+                        // catch(Exception) 形态、不入守卫解包锚点计数，收口语录见守卫落地集表注。
+                        if (FatalErrors.isFatal(cause)) throw (Error) cause;
                         String msg = cause.getMessage() != null ? cause.getMessage() : cause.toString();
                         final String fMsg = msg;
                         final Throwable fCause = cause;
@@ -2844,6 +2857,9 @@ public final class DataSourceSelector {
         } catch (Throwable e) {
             LOG.warn("[M36] executeOnConsole FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
             Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
+            // T-FP-02 定例（守卫解包锚点尾款收口）：反射包装层是普通异常，只判外层会漏判——
+            // 解包后判 fatal 并透传（本链跑在池化线程，透传即线程终止、平台记录现场）；非 fatal 路径行为不变。
+            if (FatalErrors.isFatal(cause)) throw (Error) cause;
             final Throwable fCause = cause;
             // T-ELU-01/03：经 deliverError 收口（富通道优先 + 提交文本长度钳制上界）。
             // 本对回调在 executeOnPooledThread 的后台线程上（非 EDT）——deliverError 只做纯计算
@@ -3324,6 +3340,9 @@ public final class DataSourceSelector {
             LOG.info("[M36] runRunner invoked OK");
         } catch (Throwable e) {
             Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
+            // T-FP-02 定例（守卫解包锚点尾款收口）：反射包装层是普通异常，只判外层会漏判——
+            // 解包后判 fatal 并透传给调用方捕获边界；非 fatal 路径行为不变（仍走 onError 面板回调降级）。
+            if (FatalErrors.isFatal(cause)) throw (Error) cause;
             LOG.warn("[M36] runRunner FAILED: " + cause.getClass().getSimpleName() + ": " + cause.getMessage(), cause);
             // T-DsCover：预览默认准备路径静默失败（被动展示不应弹模态打断）；
             // 并清 last-used 记忆，避免驱动损坏的数据源每次预览都白失败一次。
