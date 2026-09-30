@@ -61,4 +61,12 @@
 
 ## 七、实施记录
 
-（待续——实施时回填本节）
+**已实施收口（2026-09-30，批次 9 第三次启动——前两次因账户并发限制零产出，本次全新开始）**。分支 t-r14histsrch（基=dev b686bd2），交付 SHA：02853ef（T-01）、6e75d9d（T-02/T-03）。
+
+- **T-01 检索器**：新增 `mcp/HistorySearchService.kt`——四维过滤（关键词/正则/时间范围/来源文件）纯逻辑，域中立零 com.intellij/mcpserver 依赖（D3=A，R16 UI 可复用）；默认当日条目（D1=A，按条目 timestamp ≥ 当日本地零点过滤而非按文件名挑文件——滚动块/自定义模板/跨天追加天然正确）、`allDates=true` 扩展全目录且默认范围内显式 fromMs 不可放宽；摘要返回（D2=A）：SQL 预览 ≤8 行/600 字符 + 命中计数 + truncated 标记，maxResults 默认 20/硬上限 100 越界钳制；扫描封顶 200_000 条（scanTruncated 警示）；命中最新在前（V14b 排序兜底按 timestamp 自排）。读取面复用 SqlLogFileReader 流式解析，未重造。定向测试 HistorySearchServiceTest 23/23 绿；先红读数=实现前 compileTestKotlin 编译失败（red 在案），后绿。
+- **T-02 注册**：新增 `mcp/SqlVisualizerHistorySearchTool.kt`（@McpTool name=sqlv_history_search，readOnlyHint=TRUE/destructiveHint=FALSE/idempotentHint=TRUE，描述强调只读不执行）；TOOL_CLASSES 与 TOOL_NAMES 双清单各加一行（十→十一）；审计入参摘要显式传（T-MAT-04）；输出预算在 McpToolsetSupport 基类登记表补行（守卫约定）。**V14a 已核**：mcp-optional.xml 十条 XML toolset 声明已随 T-McpDynamicToolset 退役（文件仅剩 postStartupActivity 一条），注册只走 McpToolsetDynamicRegistrar 运行期动态壳，**零 XML 改动**。零 PSI/索引依赖故不 requireSmart（dumb 模式可用）。
+- **T-03 设置面+守卫**：bundle 双语补 `settings.mcp.tool.desc.historysearch`（en：search persisted SQL execution history (read-only)／zh：历史落盘 SQL 检索（只读））；SettingsRealityGuardTest 动态拼键白名单补 historysearch；McpToolGateTest 新增两守卫：①注册器 TOOL_CLASSES ↔ TOOL_NAMES 按 T-McpToolNaming 命名约定一一对账（此前 TOOL_CLASSES 为 private 无对账，摘任一侧即静默漂移——本次转为 internal 钉死）②每工具描述键双语在场。
+- **反向验证读数**：临时摘除 TOOL_NAMES 注册项 → McpToolGateTest `test十一个工具类钩子跟门控且稳定集恒定`＋`test注册器工具类清单与工具名清单按命名约定一一对账` 两处红（2 failed / 10 completed，BUILD FAILED）；恢复后同套件绿（BUILD SUCCESSFUL）。
+- **实施期重锚证伪（口径微调）**：计划「来源过滤」原设想按通道（SqlSource）实现，实测落盘数据里**通道标记仅 MCP 存活**（SqlLogParamCodec.encodeEntry 只对 MCP 落 `s` 键，控制台/agent 来源读回一律 UNKNOWN，头部 `source:` 段已被 parseSource 占用为源码位置）——按数据实况改为**按来源文件（sourceFile）大小写不敏感子串过滤**，通道标记仅在命中元信息透出；对 agent「找某服务类落过的 SQL」才具实用价值。
+- **文档口径**：`docs/架构设计/02-核心流程详解.md` 十工具→十一工具两处（顺带订正注册面仍写 mcp-optional.xml 的过时描述）；`docs/mcp/MCP-Tools-Agent-Guide.md` 在本工作树不存在（dev 侧并行道交付，「已立项未注册」句由主控合并时对齐，本道登记未改）；汇总计划 `20260930-1712-竞品对比近轮汇总-*.md` 自 master 仓 17d9617 拷入工作树副本回填 §十（副本来源已在文内注明）。
+- **验收对账**：①先红后绿＝检索器编译期红＋反向验证摘注册红，两读数在案；②四维+组合过滤夹具齐（含 pd 行不劈开条目）；③上限截断断言（30 命中 maxResults=5 → totalHits=30/returned=5/truncated=true）；④只读断言＝readOnlyHint 与实现一致（纯文件读零写零执行，无平台写 API 触点）；⑤既有工具零回归＝McpToolGateTest/McpConfigurableGateTest/McpToolsetShellFactoryTest/McpScopeSourceScanTest/SettingsRealityGuardTest 定向全绿（未跑全量，收口门禁归主控）。遗留：V14c（平台 11 工具是否触发分页/裁剪）属真机行为，留 runIde 沙盒批次验证。

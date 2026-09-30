@@ -27,7 +27,7 @@ object McpToolGate {
     /** 自家工具名前缀（命名硬约定 T-McpToolNaming 同源；O-68 过滤谓词按此识别自家工具）。 */
     const val TOOL_NAME_PREFIX = "sqlv_"
 
-    /** 全部注册工具名（mcp-optional.xml 的 10 个 toolset 一一对应；设置页 UI 与守卫测试共用单一清单）。 */
+    /** 全部注册工具名（与 McpToolsetDynamicRegistrar.TOOL_CLASSES 一一对应，守卫测试对账单一清单；R14 起十一工具）。 */
     val TOOL_NAMES: List<String> = listOf(
         "sqlv_render_sql",
         "sqlv_schema_context",
@@ -39,6 +39,7 @@ object McpToolGate {
         "sqlv_crud_sql",
         "sqlv_reverse_sql",
         "sqlv_mapper_check",
+        "sqlv_history_search",
     )
 
     /** 工具是否对平台可见：总开关开 且 不在工具级禁用清单（大小写不敏感比对）。 */

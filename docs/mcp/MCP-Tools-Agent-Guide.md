@@ -12,9 +12,9 @@
 - 运行环境：IntelliJ IDEA（IU）2025.2 及以上，IDE 内置 MCP Server。更老版本或未装 MCP Server 的环境插件零影响，工具不注册。
 - 插件侧开关：设置页「MCP 工具」子页有总开关（启用/停用插件 MCP 功能）和工具级启用/禁用清单。插件开关与 IDE「工具 → MCP 服务器」的平台开关相互独立，两处都要开 agent 才看得见工具。
 - 生效时机：开关切换在下一次工具列表刷新或新会话即生效，不需要重启 IDE。
-- 工具命名：全部工具带 `sqlv_` 前缀，共十个，全部只读（readOnlyHint=true，destructiveHint=false）——没有任何工具会执行你给的 SQL 或改动项目文件。
+- 工具命名：全部工具带 `sqlv_` 前缀，共十一个，全部只读（readOnlyHint=true，destructiveHint=false）——没有任何工具会执行你给的 SQL 或改动项目文件。
 
-## 二、十工具总表
+## 二、工具总表
 
 | 工具 | 用途一句话 | 是否需要项目/数据源 |
 |------|-----------|-------------------|
@@ -28,6 +28,7 @@
 | sqlv_crud_sql | 实体类生成 CRUD 四件套 SQL | 需项目（索引就绪） |
 | sqlv_reverse_sql | SQL 转 MyBatis-Plus QueryWrapper 代码 | 纯文本 |
 | sqlv_mapper_check | mapper XML 契约核查 + 渲染产物风险分析 | xmlSnippet 纯文本 / filePath 需项目 |
+| sqlv_history_search | 检索本地 SQL 历史落盘（关键词/正则/时间/来源文件） | 纯检索，不执行 |
 
 共同约定：
 
@@ -172,6 +173,25 @@
 
 失败语义：`INVALID_ARGUMENT`（两个都没给 / 不是合法 mapper XML）；`SOURCE_NOT_FOUND`。
 
+### 3.11 sqlv_history_search — 历史检索
+
+用途：检索插件落盘的 SQL 历史（之前预览/捕获过的语句），按条件筛出历史条目摘要。只读检索，不执行任何 SQL，也不需要数据源。
+
+| 入参 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| keyword | string | 否 | 关键词，大小写不敏感，匹配 SQL 文本与 mapper 语句标识 |
+| regex | string | 否 | 正则匹配 SQL 文本（与 keyword 二选一或组合，按工具返回的错误提示为准） |
+| startTime / endTime | string | 否 | 时间范围过滤；缺省只查当天条目 |
+| allDates | bool | 否 | true 时跨全部历史日期检索（默认 false=仅当日） |
+| sourceFile | string | 否 | 按来源文件路径子串过滤 |
+| maxResults | int | 否 | 返回条数上限，默认 20，硬上限 100 |
+
+返回：命中条目摘要（SQL 预览截断至约 8 行/600 字符、命中计数、是否截断标记），最新在前；扫描量有封顶（约 20 万条），超量会在返回里说明。
+
+调用时机：想知道「之前有没有见过这条 SQL / 某个表被哪些语句用过 / 今天预览过什么」——先检索历史再决定要不要 render/render_logs，比盲猜更快。
+
+失败语义：`INVALID_ARGUMENT`（非法正则等）。
+
 ## 四、组合工作流
 
 典型链路（按任务选段，不必全走）：
@@ -180,7 +200,7 @@
 2. 结构与风险：`sqlv_schema_context` 拿列类型；`sqlv_check_sql` 判类型与无界写；写语句先过 `sqlv_rollback_plan` 拿回滚预案。
 3. 执行计划：`sqlv_explain`（只收纯 SELECT）看真实计划；`sqlv_perf_advice` 补静态建议。
 4. 代码化与 review：`sqlv_reverse_sql` 把 SQL 固化成 Wrapper 链；`sqlv_mapper_check` 带 simulate 复核 mapper 渲染产物。
-5. 历史检索：`sqlv_history_search`（SQL 历史检索 MCP 工具）已立项（T-HistorySearch，20260929-1400 开发计划）但截至本文写作尚未注册进代码，agent 侧暂无此工具，不要调用。
+5. 历史检索：`sqlv_history_search` 查本地历史落盘（默认当日，`allDates=true` 跨全量）——先检索历史再决定是否 render/render_logs，避免重复还原；只读，不执行。
 
 失败语义约定（全工具通用）：错误以 `[错误码] 文本` 结构返回，agent 可解析。错误码：`MCP_READ_ONLY`、`SQL_BLOCKED`、`INVALID_ARGUMENT`、`DATASOURCE_NOT_FOUND`、`DATASOURCE_UNREACHABLE`、`SCHEMA_NOT_AVAILABLE`、`DIALECT_UNSUPPORTED`、`SOURCE_NOT_FOUND`、`PROJECT_NOT_READY`。拒绝通道零弹窗，agent 收到结构化错误即可自行决策重试或换路。
 

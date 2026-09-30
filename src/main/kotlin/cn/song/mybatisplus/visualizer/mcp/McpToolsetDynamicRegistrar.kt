@@ -49,8 +49,8 @@ object McpToolsetDynamicRegistrar {
     /** F29（D1=A）：已注册到 mcpToolset EP 的壳 FQN——重试防重复注册。 */
     internal val epRegistered = mutableSetOf<String>()
 
-    /** 十工具类清单（McpToolGate.TOOL_NAMES 一一对应，守卫测试对账单一事实）。 */
-    private val TOOL_CLASSES = listOf(
+    /** 十一工具类清单（R14 T-HistorySearch 增至十一；McpToolGate.TOOL_NAMES 一一对应，守卫测试对账单一事实）。 */
+    internal val TOOL_CLASSES = listOf(
         SqlVisualizerRenderSqlTool::class.java,
         SqlVisualizerSchemaContextTool::class.java,
         SqlVisualizerExplainTool::class.java,
@@ -61,6 +61,7 @@ object McpToolsetDynamicRegistrar {
         SqlVisualizerCrudSqlTool::class.java,
         SqlVisualizerReverseSqlTool::class.java,
         SqlVisualizerMapperCheckTool::class.java,
+        SqlVisualizerHistorySearchTool::class.java,
     )
 
     /** 探测＋全量注册；已注册或探测失败（无 mcpServer 新形态）时零操作。

@@ -52,7 +52,10 @@ import kotlin.coroutines.intrinsics.startCoroutineUninterceptedOrReturn
  *    MAX_CELL_CHARS）；notices 节无条数预算（驱动会话通道天然有界，个案个位数）；
  *  - sqlv_perf_advice：建议 ≤30 条（MAX_FINDINGS，超限 SEVERITY 等级序先裁低级）+ 单条文案
  *    200 字符（MAX_ADVICE_CHARS，对齐 schema 200 口径）（常量在 SqlVisualizerPerfAdviceTool）；
- *  - 其余七工具：输出规模由输入决定天然有界（渲染=源码规模、logs=日志条数、crud/reverse/
+ *  - sqlv_history_search（R14）：返回条 ≤20 默认 / 硬上限 100（maxResults 钳制）、单条 SQL 预览
+ *    8 行 / 600 字符、扫描封顶 200_000 条（常量在 HistorySearchService：DEFAULT_MAX_RESULTS /
+ *    HARD_MAX_RESULTS / MAX_PREVIEW_LINES / MAX_PREVIEW_CHARS）；范围默认当日（D1=A）防全量倾泻；
+ *  - 其余六工具：输出规模由输入决定天然有界（渲染=源码规模、logs=日志条数、crud/reverse/
  *    rollback=单实体单语句），不设额外预算。
  *
  * 注册：运行期探测式程序化注册（McpToolsetDynamicRegistrar，mcpServer 新形态在场的 253+/262
