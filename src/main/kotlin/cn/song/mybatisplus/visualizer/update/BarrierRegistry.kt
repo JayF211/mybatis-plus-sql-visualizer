@@ -8,8 +8,7 @@ package cn.song.mybatisplus.visualizer.update
  * `docs/memory-archive/bug-fixes/project-dynamic-unload-barriers.md` 呼应：把「哪些注册
  * 会挡卸载、各自按什么路径解除」从散落注释收敛为单一事实源，新增编程式注册必须在此登记。
  *
- * 摘除路径三型：
- *  - [RemovalPath.EP_AUTO_REMOVAL]：EP 声明扩展，平台卸载时自动移除（无屏障）；
+ * 摘除路径两型（本登记簿只收**屏障项**——EP 声明扩展平台卸载时自动移除、本就无屏障，不入册）：
  *  - [RemovalPath.DISPOSER_CASCADE_ON_UNLOAD]：编程式注册挂 Disposer 子节点于插件应用级
  *    宿主，平台 `DynamicPlugins.unloadPlugin` dispose 插件应用级容器时级联摘除
  *    （挂靠定案=ExecDocAutosaveHost KDoc 同款：容器级联释放是平台对插件级注册的惯例摘法，
@@ -20,7 +19,7 @@ package cn.song.mybatisplus.visualizer.update
 object BarrierRegistry {
 
     /** 摘除路径（KDoc 详注）。 */
-    enum class RemovalPath { EP_AUTO_REMOVAL, DISPOSER_CASCADE_ON_UNLOAD, STRUCTURAL_NOT_REMOVABLE }
+    enum class RemovalPath { DISPOSER_CASCADE_ON_UNLOAD, STRUCTURAL_NOT_REMOVABLE }
 
     /** 在役登记条目。 */
     data class Entry(
