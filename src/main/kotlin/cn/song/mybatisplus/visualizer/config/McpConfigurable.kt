@@ -11,6 +11,7 @@ import com.intellij.util.ui.FormBuilder
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.FlowLayout
+import java.awt.GridLayout
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JPanel
@@ -43,6 +44,12 @@ class McpConfigurable : Configurable {
 
     /** 全部启用/全部禁用状态切换单按钮（全勾→「全部禁用」点击清空，否则「全部启用」补满）。 */
     private var toggleAllButton: JButton? = null
+
+    /** P1-3：就绪横幅标题行（静态渲染快照，测试断言用）。 */
+    private var bannerHeadline: JBLabel? = null
+
+    /** P1-3：就绪横幅门控现状行（静态渲染快照，测试断言用）。 */
+    private var bannerGateLine: JBLabel? = null
 
     override fun getDisplayName(): String = MpSqlVisualizerBundle.message("settings.mcp.title")
 
@@ -77,16 +84,40 @@ class McpConfigurable : Configurable {
 
         // T-MTS2-00：门控区——总开关 + 工具级复选框（测试环境服务未注册 → state=null 默认全启用）
         val state = runCatching { PluginSettings.getInstance().state }.getOrNull()
-        masterCheckBox = JBCheckBox(
+
+        // P1-3（批次9 波次2）：页内就绪横幅——差异化最强的功能面此前在页内零自我陈述（第十轮
+        // 摩擦 #2「MCP 工具可发现性黑洞」，锚点 :62-73 仅 jumpRow、:92-99 复选框循环、:146 才有
+        // warning）。形态照抄 R20 落地页零监听器定例：**静态构建时按门控现状渲染，不做动态刷新
+        // 监听**（工具数动态取 [McpToolGate.TOOL_NAMES] 的 size，不写死数字——R14 十工具升十一
+        // 工具时旧写死文案即过期）。横幅是页内静态提示不是弹窗，不触 BannedApiSourceScanTest
+        // 弹窗白名单（弹窗克制红线：文案只指向下方开关，不弹任何对话框）。
+        bannerHeadline = JBLabel(
+            MpSqlVisualizerBundle.message(
+                "settings.mcp.banner.ready",
+                McpToolGate.TOOL_NAMES.size.toString(),
+            ),
+        )
+        bannerGateLine = JBLabel(bannerGateHint(state)).apply {
+            foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND
+        }
+        val banner = JPanel(GridLayout(0, 1)).apply {
+            border = JBUI.Borders.emptyBottom(10)
+            add(bannerHeadline)
+            add(bannerGateLine)
+        }
+
+        val masterCheckBox = JBCheckBox(
             MpSqlVisualizerBundle.message("settings.mcp.enable.master"),
             state?.mcpToolsEnabled ?: true,
         ).apply {
             toolTipText = MpSqlVisualizerBundle.message("settings.mcp.enable.master.desc")
         }
+        this.masterCheckBox = masterCheckBox
 
         val builder = FormBuilder.createFormBuilder()
+            .addComponent(banner)
             .addComponent(jumpRow)
-            .addComponent(masterCheckBox!!)
+            .addComponent(masterCheckBox)
         McpToolGate.TOOL_NAMES.forEach { toolName ->
             // 复选框只表达「工具级未禁用」，与总开关正交（否则 master off 时复选框全不勾，
             // apply 会把全部工具误写进禁用清单）
@@ -116,6 +147,23 @@ class McpConfigurable : Configurable {
     private fun checkBoxText(toolName: String): String {
         val descKey = "settings.mcp.tool.desc." + toolName.removePrefix("sqlv_").replace("_", "")
         return toolName + " — " + MpSqlVisualizerBundle.message(descKey)
+    }
+
+    /**
+     * P1-3：就绪横幅门控现状行（纯函数，三态与 [isToolListedInState] 同一真相源）——
+     * 总开关关 > 工具级有禁用 > 全启用。state=null（测试环境服务未注册）按全启用兜底，
+     * 与门控默认口径一致。
+     */
+    private fun bannerGateHint(state: PluginSettings.State?): String = when {
+        state?.mcpToolsEnabled == false -> MpSqlVisualizerBundle.message("settings.mcp.banner.masterOff")
+        else -> {
+            val disabledCount = McpToolGate.TOOL_NAMES.count { !isToolListedInState(state, it) }
+            if (disabledCount == 0) {
+                MpSqlVisualizerBundle.message("settings.mcp.banner.allEnabled")
+            } else {
+                MpSqlVisualizerBundle.message("settings.mcp.banner.someDisabled", disabledCount.toString())
+            }
+        }
     }
 
     /** 工具级禁用判定（仅禁用清单，不含总开关——总开关是独立维度）。 */
@@ -192,6 +240,8 @@ class McpConfigurable : Configurable {
         panel = null
         masterCheckBox = null
         toggleAllButton = null
+        bannerHeadline = null
+        bannerGateLine = null
         toolCheckBoxes.clear()
     }
 
@@ -204,4 +254,10 @@ class McpConfigurable : Configurable {
     internal fun toolCheckBoxForTest(toolName: String): JBCheckBox? = toolCheckBoxes[toolName]
 
     internal fun toggleAllButtonForTest(): JButton? = toggleAllButton
+
+    /** P1-3：就绪横幅标题行文案（null = 横幅未构建/已释放）。 */
+    internal fun bannerHeadlineForTest(): String? = bannerHeadline?.text
+
+    /** P1-3：就绪横幅门控现状行文案。 */
+    internal fun bannerGateLineForTest(): String? = bannerGateLine?.text
 }
