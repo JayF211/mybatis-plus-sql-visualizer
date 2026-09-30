@@ -53,6 +53,10 @@ class LogToSqlPanel(
 
     private val inputEditor: Editor = createInputEditor()
     private val resultEditor: Editor = createResultEditor()
+
+    /** O-92：「从剪贴板读取」动作（输入工具栏成员引用，测试驱动/断言用）。 */
+    private val readClipboardAction = ReadClipboardAction()
+
     private val statusLabel = JBLabel(" ").apply {
         border = JBUI.Borders.empty(2, 6, 2, 6)
     }
@@ -104,6 +108,10 @@ class LogToSqlPanel(
     private fun buildInputToolbar(): JPanel {
         val group = DefaultActionGroup(
             ConvertAction(),
+            // O-92（批次9 波次2，用户定案「剪贴板按钮先行」）：粘贴还原入口低门槛化——
+            // V32 实证唯一入口=本 tab 手动 Ctrl+V，DBX #167「贴文本得 SQL」默认期待下降为
+            // 一次点击；编辑器右键/意图入口留后续批次评估（不在本件扩面）。
+            readClipboardAction,
             ClearInputAction(),
         )
         val toolbar = ActionManager.getInstance()
@@ -138,6 +146,27 @@ class LogToSqlPanel(
 
         override fun actionPerformed(e: AnActionEvent) {
             convert()
+        }
+    }
+
+    /**
+     * O-92：从剪贴板读取日志文本填入输入区——「新增 UI 交互须照抄既有同类实现」定例：
+     * 同族工具栏动作形态（update 设图标/文案 + actionPerformed 直调面板方法，同
+     * [ConvertAction] / [CopyAction]）；填入即转照抄 [loadFromEntry]（列表「发送到日志转 SQL」
+     * 的既有同语义链路）。「有内容才启用」在 update 内探测剪贴板（同平台粘贴动作惯例；
+     * 工具窗工具栏刷新频度低，探测成本可忽略），剪贴板空点击给状态行轻提示（不弹窗，
+     * 弹窗克制红线）。图标 MenuPaste：243 基线 AllIcons$Actions javap 204 字段核实
+     * **无 Paste 字段**（MenuPaste/Menu_paste 在），自家动作同族取用防 NoSuchFieldError。
+     */
+    private inner class ReadClipboardAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.MenuPaste
+            e.presentation.text = MpSqlVisualizerBundle.message("logToSql.panel.readClipboard")
+            e.presentation.isEnabled = !UiTextClipboard.readText().isNullOrBlank()
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            readFromClipboard()
         }
     }
 
@@ -284,6 +313,20 @@ class LogToSqlPanel(
     // ------------------------------------------------------------------
     // 转换流程
     // ------------------------------------------------------------------
+
+    /**
+     * O-92：剪贴板 → 输入区（EDT）。有文本：填入即转（[loadFromEntry] 同款链路，小输入同步
+     * 转换、大输入走 [convert] 既有的后台分频路径）；剪贴板空：状态行轻提示，零写入零弹窗。
+     */
+    private fun readFromClipboard() {
+        val text = UiTextClipboard.readText()
+        if (text.isNullOrBlank()) {
+            status(MpSqlVisualizerBundle.message("logToSql.clipboard.empty"), error = false)
+            return
+        }
+        setDocumentText(inputEditor, text)
+        convert()
+    }
 
     /**
      * 逐行解析输入日志 → 批量还原（每组 withTerminator + 格式化/压缩切换）→ 写结果区。
@@ -519,6 +562,12 @@ class LogToSqlPanel(
     internal fun setInputForTest(text: String) = setDocumentText(inputEditor, text)
 
     internal fun convertForTest() = convert()
+
+    /** O-92：输入区当前文本（剪贴板填入断言用）。 */
+    internal fun inputTextForTest(): String = inputEditor.document.text
+
+    /** O-92：等价点击「从剪贴板读取」。 */
+    internal fun readClipboardForTest() = readFromClipboard()
 
     internal fun toggleFormatForTest() {
         formatToggled = !formatToggled
