@@ -1236,8 +1236,13 @@ class BannedApiSourceScanTest {
      * 空绿只能靠合成样本钉住）；生产树判据走上面的两段式。
      */
     private val fatalPassthroughGuardedFiles: Map<String, Int> = mapOf(
-        // 16 处：原生执行链（prepareInConsole / executeOnConsole / runRunner 的 fatal 透传）。
-        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to 16,
+        // 22 处：原生执行链（prepareInConsole / executeOnConsole / runRunner 的 fatal 透传）。
+        // 16→22（T-K2JTail5，fatalUnwrapUnjudgedBaseline=5 生产收口）：补判定 6 处——
+        // 解包锚点 5 处（prepareInConsole 同步外层 / 异步等编辑器 lambda / prepareAfterEditorResolved /
+        // executeOnConsole 外层 / runRunner，原登记为未判定解包基线）+ 1 处守卫锚点**不可见**的
+        // catch(Exception) 形态（executeQueries 兜底提交块，正则只匹配 catch(Throwable)，但
+        // execute.invoke 反射链同源吞 Error），一并按 T-FP-02 定例补 `isFatal(cause)` 透传。
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to 22,
         // 8 处：agent 采集/attach 链（accept 线程透传即线程终止，平台记录现场）。
         "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java" to 8,
         // 3 处：agent 会话（读取/写入循环的 fatal 透传）。
@@ -1286,13 +1291,19 @@ class BannedApiSourceScanTest {
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线
      * （[fatalPassthroughGuardedFiles] 之外的独立锚点）。
      *
-     * k2j 实测 5 处（`execute/DataSourceSelector.java` 的 1344 / 1364 / 1631 / 2457 / 2922 行附近，
-     * 全部是「catch (Throwable) → 解包 cause → 记日志/回调 onError」形态，**没有**判 fatal）——
-     * 这些点位是 T-FP-02 在 Java 侧的**未收口面**：反射链上目标方法抛出的 Error 会被吞成一条 warn。
-     * 基线登记而非直接判红，是因为收口要改生产代码（本守卫只准改测试文件）；修一处即少一处，
-     * 届时把数字改小即可——**不得**因为「已经 0 了」就把本锚点删掉，删掉等于放弃该形态的回归保护。
+     * 基线变迁：**5**（T-SyncK2JMaster92 首次登记——`execute/DataSourceSelector.java` 的
+     * prepareInConsole 同步外层 / prepareInConsole 异步等编辑器 lambda / prepareAfterEditorResolved /
+     * executeOnConsole 外层 / runRunner 五处「catch (Throwable) → 解包 cause → 记日志/回调 onError」
+     * 形态未判 fatal：反射链上目标方法抛出的 Error 会被吞成一条 warn，系 T-FP-02 在 Java 侧的
+     * 未收口面，基线登记是因为收口要改生产代码）→ **0**（T-K2JTail5 生产收口：五处全部按
+     * T-FP-02 定例补 `if (FatalErrors.isFatal(cause)) throw (Error) cause;`，非 fatal 路径行为不变；
+     * 同批还收口了守卫锚点不可见的 catch(Exception) 形态一处——executeQueries 兜底提交块，
+     * 见 [fatalPassthroughGuardedFiles] 该文件 22 处的表注）。
+     *
+     * 保持 0 并**不得删除本锚点**：删掉等于放弃「解包了 ITE 却不判 cause」形态的回归保护——
+     * 今后新增含 `InvocationTargetException` 解包的捕获点必须同样补判定，否则此处变红。
      */
-    private val fatalUnwrapUnjudgedBaseline = 5
+    private val fatalUnwrapUnjudgedBaseline = 0
 
     /** 反射解包锚点所在文件（原生执行链）。 */
     private val fatalUnwrapAnchorFile =

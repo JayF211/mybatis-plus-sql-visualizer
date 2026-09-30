@@ -11,6 +11,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.PipedInputStream
+import java.lang.reflect.InvocationTargetException
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -20,7 +21,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * 落地子集里绝大多数捕获点没有可注入的测试缝（监听器的私有判定、invokeLater lambda 内的抛点——
  * 异常交给平台 EDT 处理器，断言侧接不住），那部分由
  * [cn.song.mybatisplus.visualizer.convention.BannedApiSourceScanTest] 的**逐站点结构断言**兜住。
- * 本类覆盖两个可注入的真实站点：
+ * 本类覆盖可注入的真实站点（T-K2JTail5 补第三组：执行链 runRunner 解包锚点收口的行为判别）：
  *
  *  - agent 长驻链 [AgentSession.sendConfig] 的 CONFIG 下发捕获块：
  *    fatal（真递归撞栈得到的 StackOverflowError、构造的 NoClassDefFoundError）**原样透传**，
@@ -151,12 +152,74 @@ class FatalPassthroughTest : BasePlatformTestCase() {
         assertNull("普通异常仍走既有降级（只记 INFO，不抛）——防「顺手全改」回归", thrown)
     }
 
+    // ---------- 执行链解包锚点收口（T-K2JTail5）：runRunner 反射调用 ----------
+
+    /**
+     * fatalUnwrapUnjudgedBaseline=5 生产收口的行为判别。[DataSourceSelector.runRunner] 是
+     * 5 处解包锚点里唯一可同步注入的站点（prepare 链各 catch 位于 EDT lambda / 池化线程，
+     * 断言侧接不住，由 BannedApiSourceScanTest 的解包锚点结构断言兜底——同本类头注口径）：
+     * 假 runner 的 `run()` 抛真 SOE，`Method.invoke` 把它包进 `InvocationTargetException`
+     * （普通异常）——捕获块须解包后判 fatal 并透传（改前实况：被吞成一条 warn + onError 面板文案，
+     * 崩溃现场降级成「数据源初始化失败」）。
+     */
+    fun test执行链Runner反射调用_致命错误解包后透传() {
+        val soe = realStackOverflow()
+        val errors = mutableListOf<String>()
+        val thrown = try {
+            invokeRunRunner(FakeRunner { throw soe }, silent = true, errors)
+            null
+        } catch (t: Throwable) {
+            // 测试侧 Method.invoke 会把 runRunner 抛出的任何 Throwable 再包一层 ITE（JLS 反射契约）
+            // ——这层是测试自己的包装，须解掉；生产块内那层 ITE（runner.run 的包装）由生产代码解包。
+            (t as? InvocationTargetException)?.targetException ?: t
+        }
+        assertSame("反射链 fatal 须解包 ITE 后原样透传（原状：吞成 warn + 面板文案）", soe, thrown)
+        assertTrue("透传路径不得再走 onError 面板降级", errors.isEmpty())
+    }
+
+    /** 非 fatal 回归：普通异常仍走既有降级（不抛、onError 面板行内回调、silent 路径清 last-used）。 */
+    fun test执行链Runner反射调用_普通异常仍走面板回调降级() {
+        val errors = mutableListOf<String>()
+        val thrown = try {
+            invokeRunRunner(FakeRunner { throw RuntimeException("driver missing") }, silent = true, errors)
+            null
+        } catch (t: Throwable) {
+            (t as? InvocationTargetException)?.targetException ?: t
+        }
+        assertNull("普通异常仍走既有降级（不抛）——防「顺手全改」回归", thrown)
+        assertEquals("普通异常仍回调 onError（面板行内文案）", 1, errors.size)
+        assertTrue("文案保留原始原因（execute.datasource.failed 的 {0} 占位）", errors[0].contains("driver missing"))
+    }
+
     // ---------- 夹具 ----------
 
     private fun socketFailingOnWrite(t: Throwable): Socket = FakeSocket { throw t }
 
     /** k2j 适配：Java 构造器第 4 参为 `Runnable`（master 侧 Kotlin 为 `() -> Unit`），直接返回 Runnable。 */
     private fun stateChangeCounter(counter: AtomicInteger): Runnable = Runnable { counter.incrementAndGet() }
+
+    /**
+     * 反射调私有静态 [DataSourceSelector.runRunner]（Project, Object, boolean, Consumer）。
+     * `silent = true` 走「清 last-used 后返回」路径，不触发平台通知——判别只需 onError 回调面。
+     */
+    private fun invokeRunRunner(runner: Any, silent: Boolean, errors: MutableList<String>) {
+        val m = DataSourceSelector::class.java.getDeclaredMethod(
+            "runRunner",
+            com.intellij.openapi.project.Project::class.java,
+            Any::class.java,
+            Boolean::class.java,
+            java.util.function.Consumer::class.java,
+        )
+        m.isAccessible = true
+        m.invoke(null, project, runner, silent, java.util.function.Consumer<String> { errors.add(it) })
+    }
+
+    /** 假 runner：只需公开的 `run()`（生产反射链形态：`getMethod("run").invoke(runner)`）。 */
+    class FakeRunner(private val action: () -> Unit) {
+        fun run() {
+            action()
+        }
+    }
 
     /** 让会话读线程停在阻塞读上退出（daemon 线程，避免跨用例残留）。 */
     private fun interruptSessionThread(pid: Long) {
