@@ -103,4 +103,53 @@ object SqlExportService {
     }
 
     fun formatTime(ts: Long): String = TIME_FORMAT.get().format(Date(ts))
+
+    // ------------------------------------------------------------------
+    // O-91 可移植导出（缩范围首版）：CRUD/回滚语句 + 方言形态标注，走既有三格式通道
+    // ------------------------------------------------------------------
+
+    /** 可移植脚本可执行格式（CSV/TSV 共用列序；TXT 走注释头形态）。 */
+    private val PORTABLE_HEADER = listOf("dialect", "kind", "upsert", "sql")
+
+    /** 方言形态注释头（TXT 可移植脚本逐字形态；CSV/TSV 同三字段作列）。 */
+    internal fun portableAnnotation(row: PortableSqlRow): String =
+        "-- dialect: ${row.dialect} | kind: ${row.kind.name} | upsert: ${row.upsert}"
+
+    /**
+     * O-91 可移植导出（[PortableSqlRow] 行集 → 三格式，行集由
+     * [PortableSqlExport.collectRows] 串联：CRUD 行 + 回滚链产物行）。语句本体不改写；
+     * TXT 每条语句前带注释头（`-- dialect: X | kind: Y | upsert: Z`），CSV/TSV 把同三字段
+     * 作列（机器可读形态），SQL 字段沿用既有转义/扁平化口径。
+     */
+    fun formatPortable(rows: List<PortableSqlRow>, format: SqlExportFormat): String = when (format) {
+        SqlExportFormat.CSV -> formatPortableFlat(rows, ",") { csvField(it) }
+        SqlExportFormat.TSV -> formatPortableFlat(rows, "\t") { v ->
+            v.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
+        }
+        SqlExportFormat.TXT -> formatPortableTxt(rows)
+    }
+
+    private fun formatPortableFlat(rows: List<PortableSqlRow>, sep: String, escape: (String) -> String): String {
+        val sb = StringBuilder(PORTABLE_HEADER.joinToString(sep))
+        sb.append('\n')
+        rows.forEach { r ->
+            sb.append(escape(r.dialect)).append(sep)
+                .append(escape(r.kind.name)).append(sep)
+                .append(escape(r.upsert)).append(sep)
+                .append(escape(r.sql))
+            sb.append('\n')
+        }
+        return sb.toString()
+    }
+
+    private fun formatPortableTxt(rows: List<PortableSqlRow>): String {
+        val sb = StringBuilder()
+        rows.forEachIndexed { i, r ->
+            sb.append("-- === SQL #").append(i + 1).append(" ===\n")
+            sb.append(portableAnnotation(r)).append('\n')
+            sb.append(r.sql.trimEnd())
+            sb.append("\n\n")
+        }
+        return sb.toString()
+    }
 }

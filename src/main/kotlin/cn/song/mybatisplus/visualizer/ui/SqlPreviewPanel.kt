@@ -1015,6 +1015,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         MpSqlVisualizerBundle.message("panel.param.import") to { importParamsFromClipboard() },
         MpSqlVisualizerBundle.message("panel.compare") to { showSqlDiff() },
         MpSqlVisualizerBundle.message("panel.share") to { showShareDialog() },
+        MpSqlVisualizerBundle.message("panel.portableExport") to { exportPortableSql() },
     )
 
     /**
@@ -1083,6 +1084,74 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             return
         }
         RollbackSqlDialog(project, this, result, kind, entry).show()
+    }
+
+    /**
+     * O-91（缩范围首版）：当前预览的 CRUD SQL + 回滚链产物串成可移植脚本导出。
+     *
+     * 语句本体不改写（生成侧方言降级链已保证「标准语法优先」），导出只串联＋标注：
+     * 每条语句前 `-- dialect: X | kind: CRUD/ROLLBACK | upsert: 形态或 no` 注释头；
+     * 格式走 R4 既有三格式通道（[cn.song.mybatisplus.visualizer.log.SqlExportService.formatPortable]）。
+     * 回滚链诚实拒绝（UPDATE/DELETE 无 before-image、UPSERT 三形态等）时导出面不造回滚行
+     * （与 [showRollbackSql] 的 UNABLE 弹说明同口径，不降级造半成品）。
+     * 写盘在后台线程（对齐 SqlLogPanel R4 导出流程）。
+     */
+    internal fun exportPortableSql() {
+        val sql = currentEditorSql()?.let { SqlCommentStripper.strip(it) }?.takeIf { it.isNotBlank() } ?: return
+        val dialect = current?.previewModel?.dialect ?: MySqlDialect
+        val rows = cn.song.mybatisplus.visualizer.log.PortableSqlExport
+            .collectRows(sql, dialect, current?.batchModel)
+        if (rows.isEmpty()) return
+        val format = choosePortableExportFormat() ?: return
+        val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
+            MpSqlVisualizerBundle.message("panel.portableExport"),
+            "SQL (${format.ext.uppercase()})",
+            format.ext,
+        )
+        val dialog = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance()
+            .createSaveFileDialog(descriptor, project)
+        val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, "sql-portable.${format.ext}")
+            ?: return
+        val target = saved.file
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching {
+                cn.song.mybatisplus.visualizer.log.SqlExportService
+                    .exportToFile(target, cn.song.mybatisplus.visualizer.log.SqlExportService.formatPortable(rows, format))
+            }.onSuccess {
+                com.intellij.notification.NotificationGroupManager.getInstance()
+                    .getNotificationGroup(NOTIFICATION_GROUP_ID)
+                    .createNotification(
+                        MpSqlVisualizerBundle.message("log.history.export.done", rows.size, target.absolutePath),
+                        com.intellij.notification.NotificationType.INFORMATION,
+                    ).notify(project)
+            }.onFailure {
+                com.intellij.notification.NotificationGroupManager.getInstance()
+                    .getNotificationGroup(NOTIFICATION_GROUP_ID)
+                    .createNotification(
+                        MpSqlVisualizerBundle.message("log.history.export.failed", it.message ?: ""),
+                        com.intellij.notification.NotificationType.ERROR,
+                    ).notify(project)
+            }
+        }
+    }
+
+    /** O-91：可移植导出格式三选（取消返回 null；形态对齐 SqlLogPanel R4 同款对话框）。 */
+    private fun choosePortableExportFormat(): cn.song.mybatisplus.visualizer.log.SqlExportFormat? {
+        val names = arrayOf("CSV", "TSV", "TXT")
+        val idx = com.intellij.openapi.ui.Messages.showChooseDialog(
+            project,
+            MpSqlVisualizerBundle.message("log.history.export.choose"),
+            MpSqlVisualizerBundle.message("panel.portableExport"),
+            com.intellij.openapi.ui.Messages.getQuestionIcon(),
+            names,
+            names[0],
+        )
+        if (idx < 0) return null
+        return when (idx) {
+            0 -> cn.song.mybatisplus.visualizer.log.SqlExportFormat.CSV
+            1 -> cn.song.mybatisplus.visualizer.log.SqlExportFormat.TSV
+            else -> cn.song.mybatisplus.visualizer.log.SqlExportFormat.TXT
+        }
     }
 
     /**
