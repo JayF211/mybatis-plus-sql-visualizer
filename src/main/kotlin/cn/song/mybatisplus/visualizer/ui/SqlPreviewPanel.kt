@@ -37,6 +37,8 @@ import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import cn.song.mybatisplus.visualizer.xml.ExprReason
 import cn.song.mybatisplus.visualizer.xml.ExprSupport
+import cn.song.mybatisplus.visualizer.xml.ConditionOutcome
+import cn.song.mybatisplus.visualizer.xml.RenderedXmlSql
 import cn.song.mybatisplus.visualizer.xml.XmlConditionView
 import cn.song.mybatisplus.visualizer.xml.XmlForEachView
 import cn.song.mybatisplus.visualizer.xml.ParamKind
@@ -195,6 +197,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     // T-PT-02：普通参数行行尾校验警示标（与 paramFields 同序，仅 buildParamRow 产出）
     private val paramWarnLabels = mutableListOf<JBLabel>()
     private val conditionCheckBoxes = mutableListOf<JCheckBox>()
+    // R30 条件求值探镜：XML 条件行尾的三态结果标注（条件 id → 标签），renderSql 每轮刷新（零监听器）
+    private val xmlConditionOutcomeLabels = mutableMapOf<String, JBLabel>()
     private var autoPopupDisposable: Disposable? = null
     private val conditionValueFields = mutableListOf<JBTextField>()
     // T-M23-04：批量列级勾选复选框（INSERT/UPDATE/UPSERT 参数列，与动态条件复选框互斥——批量预览无 conditionViews）
@@ -2399,6 +2403,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 // 值状态→渲染单向流动，不再有「渲染后同步读键清单」的错位窗口）
                 syncForEachItemValues(xml)
                 xmlDollarSubstitutions = rendered.dollarSubstitutions
+                // R30 探镜：本轮条件判定结果刷新条件行尾三态标注（只读观测，不参与渲染文本）
+                syncXmlConditionOutcomeLabels(xml, rendered)
                 // T-M25.5：bind 自动求值结果并入参数回填（用户手动输入优先，清空则恢复自动值）
                 rendered.bindValues.forEach { (name, value) ->
                     if (paramValues[name].isNullOrEmpty()) paramValues[name] = value
@@ -2680,6 +2686,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         paramValues.clear()
         paramFields.clear()
         conditionCheckBoxes.clear()
+        xmlConditionOutcomeLabels.clear()
         conditionValueFields.clear()
         batchCheckBoxes.clear()
         xmlForEachNullBoxes.clear()
@@ -3362,6 +3369,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         paramFields.clear()
         paramWarnLabels.clear()
         conditionCheckBoxes.clear()
+        xmlConditionOutcomeLabels.clear()
         conditionValueFields.clear()
         batchCheckBoxes.clear()
         xmlForEachNullBoxes.clear()
@@ -3825,11 +3833,36 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             }
         }
         conditionCheckBoxes += checkBox
+        val outcomeLabel = JBLabel().apply {
+            foreground = UIUtil.getContextHelpForeground()
+        }.also { xmlConditionOutcomeLabels[view.id] = it }
         return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
             add(checkBox)
             // T-ExprAstPrecheck T-EP-03：表达式超出支持面时补淡色标注（提示，不改展开行为）
             xmlConditionAnnotation(view)?.let { add(it) }
+            // R30 探镜：本轮求值结果标注（真/假/未求值；占位空串，renderSql 首轮刷新）
+            add(outcomeLabel)
             border = JBUI.Borders.empty(0, 8, 2, 8)
+        }
+    }
+
+    /**
+     * R30 条件求值探镜：渲染后按本轮判定结果刷新各条件行尾的三态标注（真/假/未求值）。
+     * 只读探针——读 [XmlPreviewModel.conditionOutcomes] 判定产物，不参与渲染文本；零监听器
+     * （刷新挂在 renderSql 单点，勾选/参数/foreach 变更后的每轮渲染自动跟上）。
+     */
+    private fun syncXmlConditionOutcomeLabels(xml: XmlPreviewModel, rendered: RenderedXmlSql) {
+        if (xmlConditionOutcomeLabels.isEmpty()) return
+        val outcomes = xml.conditionOutcomes(rendered)
+        xmlConditionOutcomeLabels.forEach { (id, label) ->
+            val outcome = outcomes[id] ?: return@forEach
+            val text = when (outcome) {
+                ConditionOutcome.TRUE -> MpSqlVisualizerBundle.message("panel.xml.outcome.true")
+                ConditionOutcome.FALSE -> MpSqlVisualizerBundle.message("panel.xml.outcome.false")
+                ConditionOutcome.UNEVALUATED -> MpSqlVisualizerBundle.message("panel.xml.outcome.unevaluated")
+            }
+            label.text = text
+            label.toolTipText = MpSqlVisualizerBundle.message("panel.xml.outcome.tooltip", text)
         }
     }
 

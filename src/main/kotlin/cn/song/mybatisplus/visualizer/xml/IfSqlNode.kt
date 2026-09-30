@@ -13,6 +13,8 @@ class IfSqlNode(val contents: SqlNode, val test: String) : SqlNode {
 
     override fun apply(context: DynamicContext): Boolean {
         val truth = context.conditionResult(test) ?: evaluate(context)
+        // R30 探镜：登记本轮判定结果（只读观测，不改渲染语义——真值来源不受影响）
+        context.recordConditionOutcome(test, truth)
         if (truth) contents.apply(context)
         return truth
     }

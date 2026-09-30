@@ -66,6 +66,10 @@ open class TrimSqlNode(
         override val errors: MutableList<String>
             get() = delegate.errors
 
+        // R30 探镜：体内条件判定结果转发根上下文（同 errors 的转发缺陷形态，缺席即丢）
+        override val conditionOutcomes: MutableMap<String, Boolean>
+            get() = delegate.conditionOutcomes
+
         fun applyAll() {
             var sql = sqlBuffer.toString().trim()
             val upper = sql.uppercase(Locale.ENGLISH)

@@ -46,6 +46,12 @@ data class RenderedXmlSql(
      * 「直接替换未转义」提示。只加元数据不改渲染文本（防回归断言见任务测试）。
      */
     val dollarSubstitutions: Int = 0,
+    /**
+     * 条件求值结果（R30 探镜）：test 表达式原文 → 本轮判定真值；**只含本轮被走到的条件**——
+     * 假 if 体内层 / choose 短路后的 when 不在表中（调用方按缺席映射「未求值」）。
+     * 默认空表：直接构造的既有调用点与消费者无感。
+     */
+    val conditionResults: Map<String, Boolean> = emptyMap(),
 )
 
 /**
@@ -74,7 +80,8 @@ class XmlSqlRenderer {
             context.bindings[name]?.toString()?.let { name to it }
         }.toMap()
         val (sql, mappings) = parseParameterMappings(context.getSql(), context.errors)
-        return RenderedXmlSql(sql, mappings, context.errors, bindValues, context.dollarSubstitutions)
+        // R30 探镜：条件判定结果随渲染产物出栈（只登记被走到的条件，见 DynamicContext.conditionOutcomes）
+        return RenderedXmlSql(sql, mappings, context.errors, bindValues, context.dollarSubstitutions, context.conditionOutcomes.toMap())
     }
 
     private fun parseParameterMappings(sql: String, errors: List<String>): Pair<String, List<ParameterMapping>> {
