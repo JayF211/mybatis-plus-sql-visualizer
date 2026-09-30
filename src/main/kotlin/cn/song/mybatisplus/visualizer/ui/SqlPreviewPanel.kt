@@ -498,11 +498,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private var schemeManagerDialog: ParamSchemeManagerDialog? = null
 
     // O-88：预设行折叠件（平台标准 HideableTitledPanel，Run Config「Before launch」区同款）。
-    // 折叠态=面板内存字段：跨预览重建保留（换语句/清空后再显示不丢）、不跨重启持久化、无设置开关。
-    /** 预设分区是否处于折叠态（缺省展开=false；重建时由当前折叠件实例回写，见 [buildSchemeRow]）。 */
-    @Volatile
-    private var presetSectionCollapsed = false
-
+    // 折叠态=companion 静态字段（声明见伴生对象 [Companion.presetSectionCollapsed]）：
+    // 跨预览重建且跨面板实例保留——gutter 换语句走「关旧弹窗、开新面板实例」（真机走查实证：
+    // 实例字段在新实例归零、折叠态丢失），静态化后新实例初始态继承；不跨重启持久化、无设置开关。
     /**
      * 当前预设折叠件实例——[HideableTitledPanel] 公共面无状态变更监听器（装饰器私有），
      * 用户点标题折叠的变化以「重建时读 [HideableTitledPanel.isExpanded] 回写」的懒惰捕获跟进；
@@ -3452,11 +3450,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 下拉项为原始方案名（默认方案 = 空串内部名），显示名经 bundle 本地化
      * （默认方案显示名与用户命名可撞名，故渲染器映射而非直接用显示名作条目）。
      * O-88：整行收进平台标准折叠件 [HideableTitledPanel]，标题复用 `panel.scheme.label`，
-     * 缺省展开；折叠时内容区 setVisible(false) 不占竖向空间。折叠态存内存字段
-     * （[presetSectionCollapsed]，跨预览重建保留、不持久化）。
+     * 缺省展开；折叠时内容区 setVisible(false) 不占竖向空间。折叠态存静态字段
+     * （[presetSectionCollapsed]，跨预览重建且跨面板实例保留、不持久化）。
      */
     private fun buildSchemeRow(): JComponent {
-        // O-88：懒惰捕获——上一份折叠件实例若被用户点标题折叠过，先回写内存字段再重建
+        // O-88：懒惰捕获——上一份折叠件实例若被用户点标题折叠过，先回写静态字段再重建
         // （HideableTitledPanel 公共面无监听器；摘除后实例仍持有最后视觉态，clear/rebuild 均不丢）
         presetFold?.let { presetSectionCollapsed = !it.isExpanded() }
         val combo = JComboBox<String>()
@@ -5107,6 +5105,22 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     companion object {
         /** O-4：通知分组 id（plugin.xml 注册，diff/copy 共用）。 */
         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+
+        /**
+         * O-88：预设分区是否处于折叠态（缺省展开=false；重建时由当前折叠件实例懒惰回写，见 [buildSchemeRow]）。
+         * 静态而非实例：gutter 换语句=关旧弹窗、开新面板实例，实例字段在新实例归零丢折叠态（真机走查实证）；
+         * 跨面板实例保留、不持久化（无 PropertiesComponent/磁盘写入）。@Volatile：读写入口可能非 EDT，可见性保守处理。
+         */
+        @Volatile
+        private var presetSectionCollapsed = false
+
+        /** O-88 测试缝：折叠态静态字段读（跨实例保留用例断言用）。 */
+        internal fun presetCollapsedForTest(): Boolean = presetSectionCollapsed
+
+        /** O-88 测试缝：折叠态静态字段复位（setUp 调用，防静态态跨用例/跨测试类串扰）。 */
+        internal fun resetPresetCollapsedForTest() {
+            presetSectionCollapsed = false
+        }
 
         /** R22 T-04：方案行 panel.name 锚点——方案行也是「含 JBLabel 的 JBPanel」且插在 paramPanel
          *  头部，[paramRowLabelForTest] 按契约只取普通参数行，须按此排除（否则布局断言序号错位）。 */

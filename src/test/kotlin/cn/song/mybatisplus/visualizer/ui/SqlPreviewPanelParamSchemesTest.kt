@@ -31,6 +31,8 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
     override fun setUp() {
         super.setUp()
         runCatching { PluginSettings.getInstance().state.formatSql = false }
+        // O-88：折叠态已静态化（跨面板实例保留）——复位防静态态跨用例/跨测试类串扰
+        runCatching { SqlPreviewPanel.resetPresetCollapsedForTest() }
     }
 
     override fun tearDown() {
@@ -285,7 +287,36 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         val newFold = p.presetFoldForTest()
         assertNotNull("重建后应有新的折叠件", newFold)
         assertNotSame("参数区重建应重建出新的折叠件实例", oldFold, newFold)
-        assertFalse("重建后折叠态应保留（面板内存字段）", newFold!!.isExpanded)
+        assertFalse("重建后折叠态应保留（静态字段）", newFold!!.isExpanded)
         assertFalse("重建后方案行仍收起", p.schemeRowForTest()!!.isVisible)
+    }
+
+    /**
+     * O-88 ④：折叠态跨面板实例保留——真机走查实证：gutter 换语句走「关旧弹窗、开新面板实例」，
+     * 折叠态为实例字段时新实例归零丢失；静态化后新实例初始应继承折叠态（仍不持久化，非 PropertiesComponent）。
+     */
+    fun testO88_折叠态跨面板实例保留() {
+        // 实例 A：折叠后触发一次重建，懒惰捕获把折叠态回写静态字段（等价换语句/清空路径）
+        val a = openPanel()
+        a.presetFoldForTest()!!.setOn(false)
+        a.showResult(buildProbePreviewResult())
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        assertFalse("A 重建后应仍折叠（懒惰捕获回写静态字段）", a.presetFoldForTest()!!.isExpanded)
+        assertTrue("静态字段应已被 A 回写为折叠", SqlPreviewPanel.presetCollapsedForTest())
+
+        // 模拟 gutter 换语句：关旧弹窗（清空+dispose A）→ 开新面板实例 B
+        // （clear() 先走 releaseEditor——测试里组件不在容器、removeNotify 不会触发，直接 dispose 会漏编辑器）
+        a.clear()
+        Disposer.dispose(a)
+        panel = null
+        val b = SqlPreviewPanel(project)
+        panel = b
+        Disposer.register(testRootDisposable, b)
+        b.showResult(buildProbePreviewResult())
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+
+        assertFalse("新实例 B 初始应继承折叠态（跨实例保留）", b.presetFoldForTest()!!.isExpanded)
+        assertFalse("B 的方案行应收起", b.schemeRowForTest()!!.isVisible)
+        assertTrue("静态字段仍是折叠（B 未被重置）", SqlPreviewPanel.presetCollapsedForTest())
     }
 }
