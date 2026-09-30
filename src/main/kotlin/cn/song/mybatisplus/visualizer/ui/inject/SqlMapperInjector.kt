@@ -68,14 +68,11 @@ class SqlMapperInjector : MultiHostInjector, com.intellij.openapi.project.DumbAw
      * ParserDefinition——243 `InjectionRegistrarImpl.parseFile` 对缺失定义直接 assert 失败
      * （断言关闭则紧跟空指针）。[SqlMapperLanguage] 是 lexer-only 语言，按
      * PlainTextParserDefinition 单叶形态补注册（[SqlMapperParserDefinition]）；不走
-     * plugin.xml EP（本轮 EP 声明冻结），进程内一次，并发下重复注册同实例无副作用。
+     * plugin.xml EP（本轮 EP 声明冻结），进程内一次。F48 起：注册挂 Disposer 宿主、动态
+     * 卸载随容器级联摘除（详见 [SqlMapperParserDefinition.ensureRegistered]）。
      */
-    @Synchronized
     private fun ensureParserDefinitionRegistered() {
-        val registry = com.intellij.lang.LanguageParserDefinitions.INSTANCE
-        if (registry.forLanguage(SqlMapperLanguage) == null) {
-            registry.addExplicitExtension(SqlMapperLanguage, SqlMapperParserDefinition())
-        }
+        SqlMapperParserDefinition.ensureRegistered()
     }
 
     /** 文本段内去首尾空白的注入区间（相对文本段）。 */

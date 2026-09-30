@@ -72,6 +72,16 @@ public class PlatformSignatureChecker {
         //    Database Tools 未捆绑的发行版（Community/裁剪包）跳过本项，不计缺失。
         missing += checkObjectKindColumn(loader);
 
+        // 7. F48（T-PerfQuick5）：SqlMapperParserDefinition 编程式注册的卸载摘除路径——
+        //    KeyedExtensionCollector 三参 addExplicitExtension（内部 Disposer.register(parent,
+        //    removeExplicitExtension)，243 源码 :80-82）与两参 removeExplicitExtension。
+        //    生产摘除挂插件应用级宿主（SqlMapperInjectionBarrierHost），动态卸载容器级联即摘。
+        Class<?> collector = Class.forName("com.intellij.openapi.util.KeyedExtensionCollector", true, loader);
+        missing += check(byNameAndCount(collector, "addExplicitExtension", 3),
+                "addExplicitExtension(3 params)");
+        missing += check(byNameAndCount(collector, "removeExplicitExtension", 2),
+                "removeExplicitExtension(2 params)");
+
         if (missing > 0) {
             System.out.println("RESULT MISSING " + missing);
             System.exit(1);
