@@ -319,7 +319,7 @@ class ParamHistoryCacheTest {
     }
 
     // ------------------------------------------------------------------
-    // F49（T-PerfQuick5 性能快件批）
+    // F49/F50（T-PerfQuick5 性能快件批）
     // ------------------------------------------------------------------
 
     /**
@@ -383,5 +383,58 @@ class ParamHistoryCacheTest {
         // 删除腾出名额后可新建
         assertEquals(ParamHistoryCache.SchemeOpResult.OK, cache.saveAsScheme("新名额", key, mapOf("id" to "N")))
         cache.clear()
+    }
+
+    /**
+     * F50：方案存储 CHM 结构守卫——`schemes` 须为 ConcurrentHashMap。
+     * 反向验证锚：摘掉 CHM 化（回退 LinkedHashMap）→ 本测试红（确定性红，并发压测只作辅助面）。
+     */
+    @Test
+    fun `F50_方案存储_CHM结构守卫`() {
+        val field = ParamHistoryCache::class.java.getDeclaredField("schemes")
+        field.isAccessible = true
+        assertTrue(
+            "schemes 须为 ConcurrentHashMap（F50：后台 pooled 写回 vs EDT 读原裸 LinkedHashMap 无同步保护）",
+            java.util.concurrent.ConcurrentHashMap::class.java.isAssignableFrom(field.type),
+        )
+    }
+
+    /** F50：pooled 写回与 EDT 读并发——多线程 saveForScheme 建桶，主线程连续读清单，全量在册且读侧不抛。 */
+    @Test
+    fun `F50_pooled写回与EDT读并发_全量在册`() {
+        val cache = ParamHistoryCache()
+        cache.clear()
+        val threads = (0 until 4).map { t ->
+            Thread {
+                repeat(25) { i -> cache.saveForScheme("并发$t-$i", "k", mapOf("id" to "$i")) }
+            }
+        }
+        threads.forEach { it.start() }
+        var reads = 0
+        while (threads.any { it.isAlive }) {
+            val names = cache.schemeNames() // EDT 侧读形态：结构遍历不得抛 CME
+            check(names.size <= 4 * 25) { "方案清单越界：${names.size}" }
+            reads++
+        }
+        threads.forEach { it.join(5000) }
+        assertTrue("读循环应实际执行（防空转空绿）", reads > 0)
+        assertEquals("并发建桶方案应全量在册", 100, cache.schemeNames().size)
+        cache.clear()
+    }
+
+    /** F50：创建序经持久化往返不漂移（serializeSchemesToJson 按创建序遍历，CHM 哈希序不外泄）。 */
+    @Test
+    fun `F50_创建序_持久化往返不漂移`() {
+        val cache1 = ParamHistoryCache()
+        cache1.clear()
+        val key = cache1.computeKey("t_f50", "SELECT * FROM t_f50 WHERE id = ?")!!
+        // 以乱哈希序感明显的名字集创建
+        val names = listOf("кирпич", "alpha", "方案Z", "0start", "Omega")
+        names.forEachIndexed { i, n -> cache1.saveAsScheme(n, key, mapOf("id" to "$i")) }
+        assertEquals("创建序在册", names, cache1.schemeNames())
+        val cache2 = ParamHistoryCache() // 模拟重启恢复
+        assertEquals("持久化往返后创建序不漂移", names, cache2.schemeNames())
+        cache2.clear()
+        cache1.clear()
     }
 }

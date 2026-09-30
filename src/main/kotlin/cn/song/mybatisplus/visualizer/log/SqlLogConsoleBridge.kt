@@ -671,18 +671,31 @@ open class SqlLogConsoleBridge(
         internal fun shouldSkipRescan(cachedConsole: Any?, attachedConsoles: Collection<Any>): Boolean =
             cachedConsole != null && attachedConsoles.any { it === cachedConsole }
 
-        /** T-LogPerf-02：反射 Method 缓存（热路径每拍轮询不再重复 getMethod 查找；找不到也缓存 null）。 */
-        private val methodCache = java.util.concurrent.ConcurrentHashMap<String, java.lang.reflect.Method?>()
+        /**
+         * T-LogPerf-02：反射 Method 缓存（热路径每拍轮询不再重复 getMethod 查找；找不到也缓存）。
+         *
+         * F50（T-PerfQuick5）两处修正：
+         *  - **值改 [Optional]**——CHM 禁 null：原值类型 `Method?` 在负缓存路径
+         *    `methodCache[key] = null` 运行时 NPE（被 descriptorsOf/componentOf 的
+         *    catch(Throwable) 吞掉——负缓存从未生效，每拍重付 getMethod+NPE 构造成本）；
+         *  - **键含 ClassLoader 身份**——同签名类名跨 classloader（平台与插件遮蔽同名类/
+         *    动态卸载后的新 loader）不是同一个类，裸类名记忆化会跨 loader 撞键。
+         */
+        private val methodCache = java.util.concurrent.ConcurrentHashMap<String, java.util.Optional<java.lang.reflect.Method>>()
 
-        private fun cachedMethod(clazz: Class<*>, name: String): java.lang.reflect.Method? {
-            val key = "${clazz.name}#$name"
-            methodCache[key]?.let { return it }
+        /** F50：记忆化键（纯函数可测）——类名 + ClassLoader 身份 + 方法名三元组。 */
+        internal fun methodCacheKey(className: String, loader: ClassLoader?, name: String): String =
+            "${className}@${System.identityHashCode(loader)}#$name"
+
+        internal fun cachedMethod(clazz: Class<*>, name: String): java.lang.reflect.Method? {
+            val key = methodCacheKey(clazz.name, clazz.classLoader, name)
+            methodCache[key]?.let { return it.orElse(null) }
             val method = try {
                 clazz.getMethod(name)
             } catch (_: Throwable) {
                 null
             }
-            methodCache[key] = method
+            methodCache[key] = java.util.Optional.ofNullable(method)
             return method
         }
 

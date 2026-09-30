@@ -28,8 +28,24 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
     /** LRU 内存缓存（accessOrder=true：访问顺序，最近访问在尾部）。默认方案（R22 T-04）的数据落点。 */
     private val cache = LinkedHashMap<String, Map<String, String>>(maxSize + 1, 0.75f, true)
 
-    /** R22 T-04：命名方案存储——方案名 → (缓存键 → 参数快照)（accessOrder=true，逐方案 LRU）。 */
-    private val schemes = LinkedHashMap<String, LinkedHashMap<String, Map<String, String>>>()
+    /**
+     * R22 T-04：命名方案存储——方案名 → (缓存键 → 参数快照)（逐方案 LRU）。
+     *
+     * F50（T-PerfQuick5）：顶层结构 **ConcurrentHashMap 化**——后台 pooled 写回
+     * （[saveForScheme]，SqlPreviewPanel 写回线程）与 EDT 读（[schemeNames]/对话框渲染器）
+     * 此前共用裸 LinkedHashMap 无任何同步保护，结构写与遍历并发即 CME/丢条目面
+     * （性能十七轮 §4.5，T-Perf-24 同族形态的面扩大）。内层逐方案 LRU（accessOrder）
+     * 维持原样——与默认方案 [cache] 同族既知形态，本轮在案不动。
+     */
+    private val schemes = java.util.concurrent.ConcurrentHashMap<String, LinkedHashMap<String, Map<String, String>>>()
+
+    /**
+     * F50：命名方案**创建序**索引——CHM 无序，而方案清单的「创建序」是 UI 既有语义
+     * （对话框列表/下拉顺序，ParamHistoryCacheTest 创建序断言在案）。序列化顺序也按本索引
+     * 走（[serializeSchemesToJson]），持久化往返创建序不漂移。复制写清单（读多写少、
+     * 写仅限方案操作与惰性建桶）。
+     */
+    private val schemeOrder = java.util.concurrent.CopyOnWriteArrayList<String>()
 
     /** R22 T-04：当前激活方案（面板下拉切换；随持久化落盘；空串 = 默认方案）。 */
     private var activeScheme: String = DEFAULT_SCHEME
@@ -107,20 +123,25 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
     fun clear() {
         cache.clear()
         schemes.clear()
+        schemeOrder.clear()
         activeScheme = DEFAULT_SCHEME
         persistToStorage()
     }
 
     // ---------------- R22 T-04：命名方案 API（D2 定案——旧数据自动成为默认方案） ----------------
 
-    /** 命名方案清单（默认方案除外，创建序）。 */
-    fun schemeNames(): List<String> = schemes.keys.toList()
+    /**
+     * 命名方案清单（默认方案除外，创建序）。
+     * F50：创建序由 [schemeOrder] 承载；CHM 直查键拼接在尾部（极窄竞态窗内「已建桶未入序」
+     * 的条目不丢），distinct 去重。
+     */
+    fun schemeNames(): List<String> = (schemeOrder + schemes.keys).distinct()
 
     /** 当前激活方案名（[DEFAULT_SCHEME] = 默认方案）。 */
     fun activeSchemeName(): String = activeScheme
 
     /** 是否存在指定命名方案。 */
-    fun hasScheme(name: String): Boolean = name in schemes
+    fun hasScheme(name: String): Boolean = schemes.containsKey(name)
 
     /**
      * 切换激活方案（面板下拉驱动）。未知方案名忽略（防脏态）；同名幂等不重复落盘。
@@ -130,7 +151,7 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
      * legacy 字段属纯写放大，且发生在 EDT 同步路径（性能十七轮 §5.3）。
      */
     fun switchScheme(name: String) {
-        if (name != DEFAULT_SCHEME && name !in schemes) return
+        if (name != DEFAULT_SCHEME && !schemes.containsKey(name)) return
         if (activeScheme == name) return
         activeScheme = name
         persistActiveSchemePointer()
@@ -144,8 +165,8 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
      */
     fun saveAsScheme(name: String, key: String, params: Map<String, String>): SchemeOpResult {
         if (name.isBlank() || name == DEFAULT_SCHEME || params.isEmpty()) return SchemeOpResult.INVALID
-        if (name !in schemes && schemes.size >= MAX_SCHEME_COUNT) return SchemeOpResult.LIMIT_REACHED
-        schemes.getOrPut(name) { newSchemeEntries() }[key] = params
+        if (!schemes.containsKey(name) && schemes.size >= MAX_SCHEME_COUNT) return SchemeOpResult.LIMIT_REACHED
+        entriesForScheme(name)[key] = params
         enforceMaxSize(schemes.getValue(name))
         activeScheme = name
         persistToStorage()
@@ -161,15 +182,22 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
     /** R22 T-04：方案操作结果（对话框状态行分流）。F49 增 LIMIT_REACHED（个数上限）与 INVALID（入参不合规）。 */
     enum class SchemeOpResult { OK, DUPLICATE, NOT_FOUND, DEFAULT_PROTECTED, LIMIT_REACHED, INVALID }
 
-    /** 重命名方案（LinkedHashMap 重建保创建序；激活指针随迁）。 */
+    /**
+     * 重命名方案（激活指针随迁）。
+     * F50：CHM 化后不再整表重建——remove+put 保序（创建序由 [schemeOrder] 原位换名承载），
+     * 语义与旧 LinkedHashMap 重建逐值等价（NOT_FOUND/DUPLICATE 判定次序不变）。
+     */
     fun renameScheme(oldName: String, newName: String): SchemeOpResult {
         if (oldName == DEFAULT_SCHEME) return SchemeOpResult.DEFAULT_PROTECTED
-        if (oldName !in schemes) return SchemeOpResult.NOT_FOUND
-        if (newName.isBlank() || newName == DEFAULT_SCHEME || newName in schemes) return SchemeOpResult.DUPLICATE
-        val rebuilt = LinkedHashMap<String, LinkedHashMap<String, Map<String, String>>>()
-        schemes.forEach { (name, entries) -> rebuilt[if (name == oldName) newName else name] = entries }
-        schemes.clear()
-        schemes.putAll(rebuilt)
+        val entries = schemes[oldName] ?: return SchemeOpResult.NOT_FOUND
+        if (newName.isBlank() || newName == DEFAULT_SCHEME || schemes.containsKey(newName)) return SchemeOpResult.DUPLICATE
+        schemes.remove(oldName)
+        schemes[newName] = entries
+        val idx = schemeOrder.indexOf(oldName)
+        if (idx >= 0) {
+            schemeOrder.removeAt(idx)
+            schemeOrder.add(idx, newName)
+        }
         if (activeScheme == oldName) activeScheme = newName
         persistToStorage()
         return SchemeOpResult.OK
@@ -179,6 +207,7 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
     fun deleteScheme(name: String): SchemeOpResult {
         if (name == DEFAULT_SCHEME) return SchemeOpResult.DEFAULT_PROTECTED
         if (schemes.remove(name) == null) return SchemeOpResult.NOT_FOUND
+        schemeOrder.remove(name)
         if (activeScheme == name) activeScheme = DEFAULT_SCHEME
         persistToStorage()
         return SchemeOpResult.OK
@@ -190,9 +219,14 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
     /** 是否包含指定键（激活方案；测试断言用，触发 LRU 顺序更新）。 */
     internal fun containsKey(key: String): Boolean = entriesForScheme(activeScheme).containsKey(key)
 
-    /** R22 T-04：指定方案的条目视图（默认方案 = [cache]；命名方案惰性建，accessOrder=true 同 LRU 语义）。 */
-    private fun entriesForScheme(scheme: String): LinkedHashMap<String, Map<String, String>> =
-        if (scheme == DEFAULT_SCHEME) cache else schemes.getOrPut(scheme) { newSchemeEntries() }
+    /** R22 T-04：指定方案的条目视图（默认方案 = [cache]；命名方案惰性建，同 LRU 语义）。
+     * F50：CHM 原子建桶（computeIfAbsent，原 getOrPut 非原子），建桶同时补创建序（幂等）。 */
+    private fun entriesForScheme(scheme: String): LinkedHashMap<String, Map<String, String>> {
+        if (scheme == DEFAULT_SCHEME) return cache
+        val entries = schemes.computeIfAbsent(scheme) { newSchemeEntries() }
+        schemeOrder.addIfAbsent(scheme)
+        return entries
+    }
 
     /** R22 T-04：新建方案条目映射（与默认方案同 LRU 形态）。 */
     private fun newSchemeEntries(): LinkedHashMap<String, Map<String, String>> =
@@ -266,11 +300,12 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
             runCatching {
                 deserializeSchemesFromJson(schemesJson).forEach { (name, entries) ->
                     schemes[name] = LinkedHashMap(entries)
+                    schemeOrder.addIfAbsent(name) // F50：JSON 序 = 创建序，恢复时同步入序
                 }
             }
         }
         var active = readPersisted(ACTIVE_SCHEME_STORAGE_KEY) { PluginSettings.getInstance().state.paramActiveScheme }
-        if (active != DEFAULT_SCHEME && active !in schemes) active = DEFAULT_SCHEME
+        if (active != DEFAULT_SCHEME && !schemes.containsKey(active)) active = DEFAULT_SCHEME
         activeScheme = active
         // 全方案统一执行上限（含 D2 迁入的默认方案）
         enforceMaxSize(cache)
@@ -308,12 +343,15 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
     /**
      * R22 T-04：命名方案序列化——`{"方案名":[{key:{...params}}], ...}`。
      * 每个方案的条目复用旧数组格式（[serializeToJson]）；空方案跳过，全空返回空串（对齐旧字段「无数据=空串」）。
+     * F50：按 [schemeOrder] 创建序遍历（CHM 直查键序为哈希序，直接遍历会使持久化 JSON 序漂移）。
      */
     private fun serializeSchemesToJson(): String {
-        if (schemes.isEmpty()) return ""
+        val orderedNames = schemeNames()
+        if (orderedNames.isEmpty()) return ""
         val sb = StringBuilder("{")
         var first = true
-        for ((name, entries) in schemes) {
+        for (name in orderedNames) {
+            val entries = schemes[name] ?: continue
             if (entries.isEmpty()) continue
             if (!first) sb.append(",")
             first = false
