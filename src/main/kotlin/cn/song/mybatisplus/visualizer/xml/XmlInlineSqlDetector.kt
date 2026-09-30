@@ -85,6 +85,10 @@ object XmlInlineSqlDetector {
     /**
      * gutter 快速路径合并开关（F19：一次设置服务查找取两布尔——平台逐 provider 全量跑、
      * 无共享短路，每次高亮 pass 两次查找是白付的；与 [detectionEnabled]/gutter 开关语义逐字节等价）。
+     *
+     * F51（T-PerfQuick5）起生产路径不再调用：[cn.song.mybatisplus.visualizer.ui.gutter.XmlInlineSqlGutterLineMarkerProvider]
+     * 改为方法头单次取 state 并闸（经本函数自读属第二次查找）。函数保留——语义锚点与
+     * 既有测试（XmlInlineSqlDetectorTest）仍在用。
      */
     fun gutterFastPathEnabled(): Boolean = runCatching {
         val s = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state

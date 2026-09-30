@@ -256,7 +256,14 @@ class ParamSchemeManagerDialog(
             statusLabel.text = MpSqlVisualizerBundle.message("panel.scheme.dialog.noSnapshot")
             return false
         }
-        cache.saveAsScheme(name, snapshot.first, snapshot.second)
+        val result = cache.saveAsScheme(name, snapshot.first, snapshot.second)
+        if (result == ParamHistoryCache.SchemeOpResult.LIMIT_REACHED) {
+            // F49：方案个数上限（ParamHistoryCache.MAX_SCHEME_COUNT）——状态行提示，不落库
+            statusLabel.text = MpSqlVisualizerBundle.message(
+                "panel.scheme.dialog.limitReached", ParamHistoryCache.MAX_SCHEME_COUNT,
+            )
+            return false
+        }
         refreshSchemeList(select = name)
         statusLabel.text = MpSqlVisualizerBundle.message("panel.scheme.dialog.saved", name)
         onSchemesChanged()
@@ -289,6 +296,9 @@ class ParamSchemeManagerDialog(
                 statusLabel.text = MpSqlVisualizerBundle.message("panel.scheme.dialog.notFound")
             ParamHistoryCache.SchemeOpResult.DEFAULT_PROTECTED ->
                 statusLabel.text = MpSqlVisualizerBundle.message("panel.scheme.dialog.defaultProtected")
+            // F49 不可达守卫：renameScheme 不产 LIMIT_REACHED/INVALID（仅 saveAsScheme 产），穷尽性收口
+            ParamHistoryCache.SchemeOpResult.LIMIT_REACHED, ParamHistoryCache.SchemeOpResult.INVALID ->
+                statusLabel.text = MpSqlVisualizerBundle.message("panel.scheme.dialog.notFound")
         }
         return false
     }
@@ -313,6 +323,9 @@ class ParamSchemeManagerDialog(
                 statusLabel.text = MpSqlVisualizerBundle.message("panel.scheme.dialog.defaultProtected")
             ParamHistoryCache.SchemeOpResult.DUPLICATE ->
                 statusLabel.text = MpSqlVisualizerBundle.message("panel.scheme.dialog.duplicate")
+            // F49 不可达守卫：deleteScheme 不产 LIMIT_REACHED/INVALID（仅 saveAsScheme 产），穷尽性收口
+            ParamHistoryCache.SchemeOpResult.LIMIT_REACHED, ParamHistoryCache.SchemeOpResult.INVALID ->
+                statusLabel.text = MpSqlVisualizerBundle.message("panel.scheme.dialog.notFound")
         }
         return false
     }

@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui.gutter
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.XmlInlineSqlPreviewService
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -38,8 +39,15 @@ class XmlInlineSqlGutterLineMarkerProvider : LineMarkerProvider {
         val token = element as? XmlToken ?: return null
         if (token.tokenType != XmlTokenType.XML_NAME) return null
         val tag = token.parent as? XmlTag ?: return null
-        if (!XmlInlineSqlDetector.gutterFastPathEnabled()) return null // F19：一次服务查找取两布尔
-        if (!GutterGroups.enabledFor(javaClass, true)) return null // R2 分组显隐（组开关独立于全局总闸；F19 已在后续行判定总闸+检测开关）
+        // F51（T-PerfQuick5）：F19 快路径（xmlInlineSqlEnabled+总闸）与 R2 分组显隐并闸——
+        // 方法头单次取 state 后传 (Class, State?) 重载，每到达元素 app 级服务查找 2→1
+        // （原形态：gutterFastPathEnabled 内 1 次 + enabledFor(Class, Boolean) 包装内 1 次）。
+        // 语义逐值等价：state 不可读承接两道闸原 runCatching 兜底（全放行）；可读时合取式
+        // xmlInlineSqlEnabled && showGutterIcon && 组开关 与原两道闸串联逐值相同
+        // （GutterGroupsTest testF51_合成对照 真值表在案）。
+        val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
+        if (gutterState != null && (!gutterState.xmlInlineSqlEnabled || !gutterState.showGutterIcon)) return null
+        if (!GutterGroups.enabledFor(javaClass, gutterState)) return null // R2 分组显隐
         if (!XmlInlineSqlDetector.isSqlCarrierTag(tag)) return null
         return LineMarkerInfo(
             element,

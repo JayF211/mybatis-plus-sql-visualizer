@@ -56,10 +56,51 @@ class SqlMapperParserDefinition : PlainTextParserDefinition() {
         }
     }
 
-    private companion object {
+    companion object {
         private val FILE_ELEMENT_TYPE = object : IFileElementType(SqlMapperLanguage) {
             override fun parseContents(chameleon: ASTNode): ASTNode =
                 ASTFactory.leaf(PlainTextTokenTypes.PLAIN_TEXT, chameleon.chars)
+        }
+
+        /** 当前显式注册实例（进程内一次；卸载摘除/测试清理按同实例 identity 摘）。 */
+        @Volatile
+        private var registered: SqlMapperParserDefinition? = null
+
+        /**
+         * 编程式注册（进程内一次，幂等；注册表已在位即跳过）。
+         *
+         * F48（T-PerfQuick5）：注册挂 [SqlMapperInjectionBarrierHost]（插件应用级宿主）为
+         * Disposer parent——243 平台 KeyedExtensionCollector.addExplicitExtension 三参重载
+         * （V39 源码实证）内部 `Disposer.register(parent) { removeExplicitExtension(key, t) }`，
+         * 动态卸载容器级联即摘除，旧 classloader 不再被注册表钉住；摘除路径已登记
+         * [cn.song.mybatisplus.visualizer.update.BarrierRegistry]。测试环境无应用容器时
+         * 退回两参裸注册（无卸载语义，测试自清理）。
+         */
+        @Synchronized
+        fun ensureRegistered() {
+            val registry = com.intellij.lang.LanguageParserDefinitions.INSTANCE
+            if (registry.forLanguage(SqlMapperLanguage) != null) return
+            val def = SqlMapperParserDefinition()
+            val host = runCatching {
+                com.intellij.openapi.application.ApplicationManager.getApplication()
+                    ?.getService(SqlMapperInjectionBarrierHost::class.java)
+            }.getOrNull()
+            if (host != null) {
+                registry.addExplicitExtension(SqlMapperLanguage, def, host)
+            } else {
+                registry.addExplicitExtension(SqlMapperLanguage, def)
+            }
+            registered = def
+        }
+
+        /** 测试缝：显式摘除（V39 运行时证据——removeExplicitExtension 对显式注册真实生效）。 */
+        @Synchronized
+        fun unregisterForTest() {
+            registered?.let {
+                com.intellij.lang.LanguageParserDefinitions.INSTANCE
+                    .removeExplicitExtension(SqlMapperLanguage, it)
+            }
+            registered = null
         }
     }
 }

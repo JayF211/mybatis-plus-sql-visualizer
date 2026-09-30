@@ -70,9 +70,25 @@ object XmlSynHiGate {
         return false
     }
 
-    private fun xmlSynHiEnabled(): Boolean = runCatching {
-        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.xmlSynHiEnabled
-    }.getOrDefault(true)
+    /**
+     * F47（T-PerfQuick5，V38 选型）：设置开关快照——喂入税消解。
+     *
+     * 喂入面（性能十七轮 §5.1）= 任意 XML 族文件每 XmlText/XmlAttributeValue 每 pass 一次
+     * shouldYield，原形态每次付 1 次 app 级服务查找（85ns/元素实测）。V38 两案实测（3002 喂入位）：
+     * 快照直读 14ns/元素、per-psi-vfs-epoch memo 202ns/元素（查表+containingFile 反超服务查找）
+     * ——**快照案占优落地**。刷新漏斗唯一：[PluginSettings.loadState]（设置页 apply 与 JSON
+     * 导入均汇入，PluginSettingsPanel.apply 末尾恒 loadState(s.copy())）；快照默认 true 同
+     * State 默认值，测试环境无服务时语义不变。
+     */
+    @Volatile
+    private var xmlSynHiEnabledSnapshot: Boolean = true
+
+    /** 快照刷新（PluginSettings.loadState 唯一漏斗调用；测试经 loadState 走同一路径）。 */
+    internal fun refreshXmlSynHiEnabledSnapshot(enabled: Boolean) {
+        xmlSynHiEnabledSnapshot = enabled
+    }
+
+    private fun xmlSynHiEnabled(): Boolean = xmlSynHiEnabledSnapshot
 
     /** 语句文本守卫：祖先链含 mapper 标签 + 文本长度未超熔断。 */
     fun allowStatementText(tag: XmlTag): Boolean {

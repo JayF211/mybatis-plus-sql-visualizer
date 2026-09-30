@@ -87,6 +87,52 @@ class GutterGroupsTest {
         assertTrue(GutterGroups.enabledFor(stub, null))
     }
 
+    /**
+     * F51（T-PerfQuick5）：XmlInline 快路径两道闸并为一道单次取 state 合取式——
+     * 「旧两道闸串联」（gutterFastPathEnabled 语义 + enabledFor(Class, Boolean) 语义）
+     * 与「新并闸」（provider 修复后逐行同构）在同 State 集上逐值等价。
+     * 对照证明语义等价；性能面（2 次→1 次服务查找）由 GutterProviderSingleLookupGuardTest 钉住。
+     */
+    @Test
+    fun testF51_xmlInline并闸合成_新旧形态逐值等价() {
+        val stub = XmlSqlGutterLineMarkerProviderStub::class.java
+
+        // 旧形态：闸1 = runCatching { s.xmlInlineSqlEnabled && s.showGutterIcon }.getOrDefault(true)；
+        //         闸2 = enabledFor(javaClass, true) =（字面 true 跳过总闸短路）s 可读时 showGutterIcon && 组开，不可读回退 true
+        fun oldComposition(s: PluginSettings.State?): Boolean {
+            val fast = if (s == null) true else s.xmlInlineSqlEnabled && s.showGutterIcon
+            val group = if (s == null) true else GutterGroups.enabledFor(stub, s)
+            return fast && group
+        }
+
+        // 新形态（provider getLineMarkerInfo 修复后逐行同构）
+        fun newComposition(s: PluginSettings.State?): Boolean {
+            if (s == null) return true
+            if (!s.xmlInlineSqlEnabled || !s.showGutterIcon) return false
+            return GutterGroups.enabledFor(stub, s)
+        }
+
+        val samples = listOf(
+            null,
+            PluginSettings.State(),
+            PluginSettings.State().apply { xmlInlineSqlEnabled = false },
+            PluginSettings.State().apply { showGutterIcon = false },
+            PluginSettings.State().apply { gutterGroupOther = false },
+            PluginSettings.State().apply {
+                xmlInlineSqlEnabled = false
+                showGutterIcon = false
+                gutterGroupOther = false
+            },
+        )
+        samples.forEachIndexed { i, s ->
+            assertEquals("样本 $i 新旧并闸判定须逐值等价", oldComposition(s), newComposition(s))
+        }
+        // 关键负样本独立可判（防「两边恒真/恒假」的假对照）
+        assertTrue(newComposition(PluginSettings.State()))
+        assertFalse(newComposition(PluginSettings.State().apply { xmlInlineSqlEnabled = false }))
+        assertFalse(newComposition(PluginSettings.State().apply { gutterGroupOther = false }))
+    }
+
     /** 空壳类仅用于 enabledFor 的组解析路径。 */
     private class XmlSqlGutterLineMarkerProviderStub
 }

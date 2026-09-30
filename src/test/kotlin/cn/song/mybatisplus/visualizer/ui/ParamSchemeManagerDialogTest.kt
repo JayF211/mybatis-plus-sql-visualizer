@@ -101,6 +101,22 @@ class ParamSchemeManagerDialogTest : BasePlatformTestCase() {
         d.dispose()
     }
 
+    fun testF49_另存为_方案个数上限状态行() {
+        repeat(ParamHistoryCache.MAX_SCHEME_COUNT) { i ->
+            cache.saveAsScheme("S$i", "stmt-key", mapOf("id" to "$i"))
+        }
+        val d = openDialog()
+        assertFalse("达上限后另存应拒绝", d.saveAsForTest("溢出方案"))
+        assertEquals(
+            "状态行应提示上限",
+            bundle("panel.scheme.dialog.limitReached", ParamHistoryCache.MAX_SCHEME_COUNT.toString()),
+            d.statusTextForTest(),
+        )
+        assertEquals("回调不应触发", 0, changedCount)
+        assertFalse("被拒方案不应入库", cache.hasScheme("溢出方案"))
+        d.dispose()
+    }
+
     fun testT04_重命名_成功与重名拒绝() {
         cache.saveAsScheme("A", "k", mapOf("id" to "1"))
         val d = openDialog()
