@@ -220,6 +220,31 @@ public final class TableInfo {
         return null;
     }
 
+    /**
+     * T-Embedded：按「嵌入字段名 + 内部字段名」的驼峰拼接路径查展平列。
+     *
+     * <p>Spring Data 派生查询把 {@code updateInfo.createdTime} 穿透 @Embedded 的属性路径整体解析成单个
+     * 驼峰名 {@code updateInfoCreatedTime}（无点号；<b>内层字段首字母大写</b>——{@code UpdateInfo} +
+     * {@code CreatedTime} 驼峰化的产物），{@link #columnByField} 查不中（它不是任何字段的裸名），消费方
+     * 据 snake 兜底会产出 {@code update_info_created_time} 伪列。拼接匹配展平列（{@code embeddedParent +
+     * 首字母大写的 fieldName == path}）即可还原真实列名 {@code created_time}。
+     */
+    public ColumnInfo columnByEmbeddedPath(String path) {
+        for (ColumnInfo c : columns) {
+            if (!c.isEmbedded() || c.getEmbeddedParent() == null) {
+                continue;
+            }
+            String fieldName = c.getFieldName();
+            String capped = fieldName.isEmpty()
+                    ? fieldName
+                    : Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
+            if ((c.getEmbeddedParent() + capped).equals(path)) {
+                return c;
+            }
+        }
+        return null;
+    }
+
     /** 全部列名（用于 SELECT * 展开）。 */
     public List<String> getAllColumnNames() {
         List<String> result = new ArrayList<>();

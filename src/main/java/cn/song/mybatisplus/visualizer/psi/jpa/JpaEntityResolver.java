@@ -266,9 +266,13 @@ public class JpaEntityResolver {
         boolean isOneToOne = hasAnnotation(field, ONE_TO_ONE_ANNOTATION);
         boolean isEmbeddedId = JpaMetadataReader.hasEmbeddedIdAnnotation(field);
 
-        // @Embedded / @Embeddable / @EmbeddedId：嵌入对象字段展平（T-J18）
-        if (isEmbeddedId || JpaMetadataReader.isEmbeddedField(field)) {
-            return flattenEmbeddedColumns(field, isEmbeddedId, classOverrides);
+        // @Embedded / @Embeddable / @EmbeddedId：嵌入对象字段展平（T-J18）；
+        // SD8 形态（裸 @Embedded / 捷径 @Embedded.Nullable / @Embedded.Empty，T-Embedded D2）——
+        // SD 判定在前取 prefix 语义，jakarta 轨兜底（裸 SD @Embedded 此前经短名轨命中，行为不回归）
+        boolean sdEmbedded = JpaMetadataReader.isSpringDataEmbeddedField(field);
+        if (isEmbeddedId || sdEmbedded || JpaMetadataReader.isEmbeddedField(field)) {
+            String sdPrefix = sdEmbedded ? JpaMetadataReader.springDataEmbeddedPrefixOf(field) : "";
+            return flattenEmbeddedColumns(field, isEmbeddedId, classOverrides, sdPrefix);
         }
 
         // @JoinColumns 复合外键：多列外键无法以单列表达，完整清单记入 AssociationInfo.joinColumns（T-J7）
@@ -316,12 +320,16 @@ public class JpaEntityResolver {
     /**
      * 展平嵌入对象字段为列清单（T-J18）：@AttributeOverride 覆写 > 内部字段 @Column > 驼峰转下划线；
      * @EmbeddedId 展平列全部标记主键。嵌入类型不可解析等异常场景降级为单列形态（字段名推断列名），不丢字段。
+     *
+     * <p>T-Embedded D2：{@code sdPrefix} 为 SD @Embedded(prefix) 前缀，官方语义拼在嵌入对象每一列之前
+     * （同一值对象多次嵌入防撞车）；非 SD 轨为空串，列名逐字节不变。
      */
     @NotNull
     private List<ColumnInfo> flattenEmbeddedColumns(
             @NotNull PsiField field,
             boolean isPrimaryKey,
-            @NotNull java.util.Map<String, String> classOverrides) {
+            @NotNull java.util.Map<String, String> classOverrides,
+            @NotNull String sdPrefix) {
         String fieldName = field.getName();
         // 字段级 @AttributeOverride 优先于类级（合并顺序：右侧覆盖左侧同名键）
         java.util.Map<String, String> overrides = new LinkedHashMap<>(classOverrides);
@@ -346,7 +354,7 @@ public class JpaEntityResolver {
         }
         List<ColumnInfo> result = new ArrayList<>();
         for (JpaMetadataReader.EmbeddedColumnSpec spec : specs) {
-            result.add(new ColumnInfo(spec.getFieldName(), spec.getColumnName(), isPrimaryKey, false,
+            result.add(new ColumnInfo(spec.getFieldName(), sdPrefix + spec.getColumnName(), isPrimaryKey, false,
                     spec.getFieldType(), null, resolveComment(spec.getField()),
                     isPrimaryKey ? ColumnRole.PRIMARY : ColumnRole.BUSINESS,
                     spec.isInsertable(), spec.isUpdatable(), null, true, false, fieldName));

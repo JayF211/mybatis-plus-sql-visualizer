@@ -307,9 +307,12 @@ public final class JpaQueryEnhancer {
         }
     }
 
-    /** 实体字段名 → 列名（表元数据匹配优先，驼峰转下划线兜底）。 */
+    /** 实体字段名 → 列名（表元数据匹配优先，T-Embedded 嵌入段驼峰拼接路径次之，驼峰转下划线兜底）。 */
     private static String mapColumn(String fieldName, TableInfo table) {
         ColumnInfo matched = table != null ? table.columnByField(fieldName) : null;
+        if (matched == null && table != null) {
+            matched = table.columnByEmbeddedPath(fieldName);
+        }
         return matched != null && matched.getColumnName() != null
                 ? matched.getColumnName()
                 : NamingStrategy.INSTANCE.toSnakeCase(fieldName);

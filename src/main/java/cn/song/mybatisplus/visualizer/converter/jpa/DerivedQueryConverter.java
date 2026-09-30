@@ -431,6 +431,9 @@ public final class DerivedQueryConverter {
          *
          * 规则：
          *  - 先从 TableInfo 的列映射按实体字段名查找（驼峰形式）
+         *  - T-Embedded：嵌入段驼峰拼接路径（{@code updateInfoCreatedTime} = 嵌入字段名 + 展平列字段名，
+         *    PartTree 穿透 @Embedded 的解析形态）按展平列匹配，命中即用真实列名——否则 snake 兜底
+         *    会产出 {@code update_info_created_time} 伪列（demo 真机实测缺陷）
          *  - 找不到则使用驼峰转下划线作为列名
          */
         private ColumnRef resolveColumn(@NotNull String propertyPath, @NotNull List<JoinClause> joins) {
@@ -438,6 +441,11 @@ public final class DerivedQueryConverter {
             ColumnInfo matched = tableInfo.columnByField(propertyPath);
             if (matched != null) {
                 return new ColumnRef(null, matched.getColumnName(), null, null, null, null, null);
+            }
+            // T-Embedded：嵌入段驼峰拼接路径 → 展平列
+            ColumnInfo embedded = tableInfo.columnByEmbeddedPath(propertyPath);
+            if (embedded != null) {
+                return new ColumnRef(null, embedded.getColumnName(), null, null, null, null, null);
             }
             // 驼峰转下划线兜底
             return new ColumnRef(null, NamingStrategy.INSTANCE.toSnakeCase(propertyPath), null, null, null, null, null);

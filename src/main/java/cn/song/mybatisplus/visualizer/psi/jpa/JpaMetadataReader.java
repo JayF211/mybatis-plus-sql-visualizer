@@ -801,6 +801,76 @@ public final class JpaMetadataReader {
         return findFlex(field, FQN_EMBEDDED_ID) != null;
     }
 
+    // ------------------------------------------------------------------
+    // Spring Data relational @Embedded（T-Embedded D2）
+    // ------------------------------------------------------------------
+
+    /**
+     * 字段是否标注 Spring Data JDBC 嵌入注解（T-Embedded D2）：裸 @Embedded、捷径
+     * {@code @Embedded.Nullable} / {@code @Embedded.Empty}。捷径是组合注解——PSI 短名是末段
+     * （Nullable/Empty），{@link #findFlex} 按短名 "Embedded" 命不中，须按注解类型全名/文本匹配。
+     *
+     * <p>判定必须确证注解<b>属于 SD</b>：{@link #findFlex} 的短名兜底轨会把 jakarta @Embedded 一起命中，
+     * 不能直接当 SD 证据。注解类型可解析时按全名判定；不可解析（SD jar 不在 classpath）时按文本
+     * 兜底——此时项目里不可能真用 SD，裸 @Embedded 返回 false 交给 jakarta 轨（无害），
+     * 捷径 {@code @Embedded.} 点号形态 jakarta 不存在、按文本判定不误伤。
+     */
+    public static boolean isSpringDataEmbeddedField(PsiField field) {
+        try {
+            for (String simpleName : List.of("Embedded", "Nullable", "Empty")) {
+                for (PsiAnnotation annotation : directAnnotations(field, simpleName)) {
+                    if (isSpringDataEmbeddedAnnotation(annotation)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * SD {@code @Embedded(prefix = "...")} 的列名前缀（T-Embedded D2）：官方语义是拼在嵌入对象
+     * <b>每一列</b>之前（同一值对象多次嵌入的防撞车手段）；无注解/未指定 prefix/捷径注解
+     * （无 prefix 属性）返回空串。
+     */
+    public static String springDataEmbeddedPrefixOf(PsiField field) {
+        try {
+            for (PsiAnnotation annotation : directAnnotations(field, "Embedded")) {
+                if (isSpringDataEmbeddedAnnotation(annotation)) {
+                    String prefix = attrString(annotation, "prefix");
+                    return prefix != null ? prefix : "";
+                }
+            }
+            return "";
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
+    private static boolean isSpringDataEmbeddedAnnotation(PsiAnnotation annotation) {
+        try {
+            // 轨 1：注解类型可解析（真实项目有 SD jar）→ 按全名判定
+            String qualified = annotation.getQualifiedName();
+            if (qualified != null &&
+                    (qualified.equals(FQN_RELATIONAL_EMBEDDED)
+                            || qualified.startsWith(FQN_RELATIONAL_EMBEDDED + "."))) {
+                return true;
+            }
+            // 轨 2：不可解析（jar 缺失/测试夹具）→ 按注解文本兜底。全限定写法（含捷径 `.Nullable`/
+            // `.Empty` 与带属性 `(...)` 两种后缀形态）逐字匹配；短名捷径 `@Embedded.` 点号形态 jakarta
+            // 不存在、不误伤；裸 @Embedded 无从区分且此时 SD 必不在 classpath，不认（交给 jakarta 轨）
+            String text = annotation.getText();
+            if (text == null) return false;
+            return text.startsWith("@" + FQN_RELATIONAL_EMBEDDED + ".")
+                    || text.startsWith("@" + FQN_RELATIONAL_EMBEDDED + "(")
+                    || text.startsWith("@Embedded.");
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     /** @Column(insertable)，未指定时规范默认 true。 */
     public static boolean columnInsertableOf(PsiField field) {
         PsiAnnotation column = findFlex(field, FQN_COLUMN);
@@ -899,6 +969,17 @@ public final class JpaMetadataReader {
      * 展平嵌入对象字段为列清单（T-J18）：逐字段解析 @AttributeOverride 覆写 →
      * 内部字段 @Column → 驼峰转下划线；嵌套 @Embedded 递归展平（JPA 无隐式列名前缀）。
      * 嵌入类型不可解析时返回空列表（调用方降级为单列形态）。
+     *
+     * <p>T-Embedded D1（点路径覆写）：{@code overrides} 的键支持三种形态，查找按点路径优先、裸名兜底——
+     * <ul>
+     *   <li>实体根相对点路径（类级 @AttributeOverride，如 {@code address.zipcode.zip}——覆写嵌套嵌入必须用
+     *       点路径，jakarta persistence javadoc「a dot (".") notation form must be used」）；</li>
+     *   <li>嵌入对象相对点路径（字段级 @AttributeOverride，规范 Example 2 的 {@code zipcode.zip}）；</li>
+     *   <li>裸属性名（既有形态，T-J18 用例不回归）。</li>
+     * </ul>
+     *
+     * @param rootKeyPrefix 实体根起算的键前缀（顶层嵌入字段名 + {@code .}，如 {@code address.}）——类级覆写键
+     *   相对实体根，而展平内部按嵌入对象相对路径查找，靠它把两个键空间对上
      */
     public static List<EmbeddedColumnSpec> flattenEmbeddedColumns(PsiField field, Map<String, String> overrides) {
         PsiClass clazz;
@@ -908,11 +989,19 @@ public final class JpaMetadataReader {
             return List.of();
         }
         if (clazz == null) return List.of();
-        return flattenEmbeddableClass(clazz, overrides, new LinkedHashSet<>());
+        String rootFieldName;
+        try {
+            rootFieldName = field.getName();
+        } catch (Throwable ignored) {
+            rootFieldName = null;
+        }
+        String rootKeyPrefix = rootFieldName != null ? rootFieldName + "." : "";
+        return flattenEmbeddableClass(clazz, overrides, new LinkedHashSet<>(), rootKeyPrefix, "");
     }
 
     private static List<EmbeddedColumnSpec> flattenEmbeddableClass(
-            PsiClass clazz, Map<String, String> overrides, Set<PsiClass> seen) {
+            PsiClass clazz, Map<String, String> overrides, Set<PsiClass> seen,
+            String rootKeyPrefix, String pathPrefix) {
         if (!seen.add(clazz)) return List.of();
         List<EmbeddedColumnSpec> result = new ArrayList<>();
         for (PsiField field : clazz.getAllFields()) {
@@ -932,7 +1021,9 @@ public final class JpaMetadataReader {
             }
             if (isStatic) continue;
             if (findFlex(field, FQN_TRANSIENT) != null) continue;
-            // 嵌套 @Embedded / @Embeddable：递归展平，覆写清单取该字段自身的 @AttributeOverride(s)
+            // 嵌套 @Embedded / @Embeddable：递归展平（D1）。覆写键空间双层并存——类级键（实体根相对）
+            // 随 overrides 逐层传递、pathPrefix 累积；该字段自身 @AttributeOverride(s) 的相对键合并进
+            // overrides（右侧覆盖左侧，字段级相对语义与改前「只传该字段覆写」一致）
             if (isEmbeddedField(field)) {
                 PsiClass nestedClass;
                 try {
@@ -941,11 +1032,16 @@ public final class JpaMetadataReader {
                     nestedClass = null;
                 }
                 if (nestedClass == null) continue;
-                result.addAll(flattenEmbeddableClass(nestedClass, attributeOverrides(field), seen));
+                Map<String, String> merged = new LinkedHashMap<>(overrides);
+                merged.putAll(attributeOverrides(field));
+                result.addAll(flattenEmbeddableClass(
+                        nestedClass, merged, seen, rootKeyPrefix, pathPrefix + fieldName + "."));
                 continue;
             }
             PsiAnnotation columnAnnotation = findFlex(field, FQN_COLUMN);
-            String columnName = overrides.get(fieldName);
+            String columnName = overrides.get(rootKeyPrefix + pathPrefix + fieldName);
+            if (columnName == null) columnName = overrides.get(pathPrefix + fieldName);
+            if (columnName == null) columnName = overrides.get(fieldName);
             if (columnName == null && columnAnnotation != null) columnName = attrString(columnAnnotation, "name");
             if (columnName == null) columnName = NamingStrategy.INSTANCE.toSnakeCase(fieldName);
             String fieldType;
