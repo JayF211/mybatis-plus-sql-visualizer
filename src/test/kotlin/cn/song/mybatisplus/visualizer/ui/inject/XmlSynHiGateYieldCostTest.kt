@@ -70,18 +70,23 @@ class XmlSynHiGateYieldCostTest : BasePlatformTestCase() {
         val elements = feedElements(file)
         assertTrue("喂入元素须成规模（.XmlText+XmlAttributeValue）", elements.size >= 900)
 
-        // 计数证据：BASELINE 逐元素 shouldYield → 服务查找次数 == 元素数（每 pass 每元素一次）。
+        // 计数证据（修复后守卫）：生产 shouldYield（快照形态）整 pass 零服务查找；
+        // 旧形态（每元素 runCatching+getInstance）在测试内同形仿制，计数 == 元素数仍在案。
         val counter = intArrayOf(0)
         cn.song.mybatisplus.visualizer.config.PluginSettings.getInstanceProbe = { counter[0]++ }
         try {
             elements.forEach { XmlSynHiGate.shouldYield(project) }
+            assertEquals("快照形态：整 pass 零 app 级服务查找（反向验证：摘快照退回旧读形 → ==元素数 → 红）", 0, counter[0])
+            elements.forEach {
+                @Suppress("UNUSED_EXPRESSION")
+                runCatching {
+                    cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.xmlSynHiEnabled
+                }.getOrDefault(true)
+            }
+            assertEquals("旧形态同形仿制：每元素恰一次服务查找（喂入税计数证据，与修复前基线一致）", elements.size, counter[0])
         } finally {
             cn.song.mybatisplus.visualizer.config.PluginSettings.getInstanceProbe = null
         }
-        assertEquals(
-            "现状形态：每喂入元素一次 app 级服务查找（喂入税计数）",
-            elements.size, counter[0],
-        )
 
         // 耗时对照：暖机后测各形 ns/元素（最小值口径，噪声鲁棒；绝对值只作选型参照不进断言）。
         fun bench(label: String, passes: Int, block: (com.intellij.psi.PsiElement) -> Any) {
@@ -96,8 +101,49 @@ class XmlSynHiGateYieldCostTest : BasePlatformTestCase() {
             println("V38-READINGS $label ns/element=$best elements=${elements.size}")
         }
 
-        bench("BASELINE-current-shouldYield", 40) { XmlSynHiGate.shouldYield(project) }
+        bench("BASELINE-emulated-old-shouldYield", 40) {
+            runCatching {
+                cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.xmlSynHiEnabled
+            }.getOrDefault(true)
+        }
+        bench("POSTFIX-production-shouldYield", 40) { XmlSynHiGate.shouldYield(project) }
         bench("A-snapshot-volatile-read", 40) { snapshotHolder.get() }
         bench("B-psi-vfs-epoch-memo", 40) { memoYield(it) }
+    }
+
+    /**
+     * F47 修复后守卫：喂入 pass 零服务查找（快照直读）。
+     * 反向验证：摘掉快照（退回每元素 runCatching+getInstance）→ 计数 == 元素数 → 红。
+     */
+    @Test
+    fun testF47_修复后_喂入pass零服务查找() {
+        val file = openMapperFile()
+        val elements = feedElements(file)
+        val counter = intArrayOf(0)
+        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstanceProbe = { counter[0]++ }
+        try {
+            elements.forEach { XmlSynHiGate.shouldYield(project) }
+            assertEquals("快照形态：整 pass 零 app 级服务查找", 0, counter[0])
+        } finally {
+            cn.song.mybatisplus.visualizer.config.PluginSettings.getInstanceProbe = null
+        }
+    }
+
+    /** F47 快照刷新漏斗：设置切换（经 loadState，生产 apply 契约）即时生效且可逆。 */
+    @Test
+    fun testF47_快照漏斗_设置切换生效且可逆() {
+        val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
+        val old = settings.state.xmlSynHiEnabled
+        try {
+            settings.loadState(settings.state.copy(xmlSynHiEnabled = false))
+            assertEquals("开关关 → 全族让位（快照已刷新）", true, XmlSynHiGate.shouldYield(project))
+            settings.loadState(settings.state.copy(xmlSynHiEnabled = true))
+            assertEquals(
+                "开关开（测试环境无平台注入器/无三方）→ 不让位（快照已刷新）",
+                false, XmlSynHiGate.shouldYield(project),
+            )
+        } finally {
+            settings.loadState(settings.state.copy(xmlSynHiEnabled = old))
+        }
     }
 }

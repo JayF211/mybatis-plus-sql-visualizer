@@ -565,6 +565,11 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
     override fun loadState(state: State) {
         this.state = state
+        // F47（T-PerfQuick5）：注入器喂入税消解的快照刷新漏斗——设置页 apply（面板末尾恒
+        // loadState(s.copy())）与 JSON 导入（fromJson）均汇入本点，XmlSynHiGate 每元素
+        // 服务查找（85ns/元素，V38 基准）由此降为快照直读（14ns/元素）。
+        cn.song.mybatisplus.visualizer.ui.inject.XmlSynHiGate
+            .refreshXmlSynHiEnabledSnapshot(state.xmlSynHiEnabled)
     }
 
     /** 当前 SQL 列表显示模式（T-ListMode；旧配置残留非法值时回退默认关键字换行）。 */
