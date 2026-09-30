@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
+import cn.song.mybatisplus.visualizer.ui.diff.SqlDiffer
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
@@ -554,6 +555,18 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         val selectedEntries = sqlList.selectedIndices.map { sqlListModel.getElementAt(it) }
 
         // T-UiNative P1a：JPopupMenu+JMenuItem → 平台 DefaultActionGroup+AnAction（ActionPopupMenu 承载）
+        val popup = ActionManager.getInstance()
+            .createActionPopupMenu("mpvs.history.sql", buildSqlContextMenu(entry, selectedEntries))
+        // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
+        popup.setTargetComponent(sqlList)
+        popup.component.show(sqlList, e.x, e.y)
+    }
+
+    /**
+     * 二级右键菜单动作组（R31 抽取 internal：测试断言「对比选中两条」接线与灰置规则）。
+     * 动作集与抽取前逐项一致，末位追加 R31 对比动作。
+     */
+    internal fun buildSqlContextMenu(entry: LogSqlEntry, selectedEntries: List<LogSqlEntry>): DefaultActionGroup {
         val group = DefaultActionGroup()
         group.add(CopySqlAction(selectedEntries))
         // T-LogSearchRowTime：复制时间戳（与日志页同款——纯时间文本无方括号；显示关闭时置灰，
@@ -566,10 +579,52 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         // R4（W3 历史工作流包）：导出选中/全部条目（CSV/TSV/TXT，后台写盘）
         val allEntries = (0 until sqlList.model.size).map { sqlList.model.getElementAt(it) }
         group.add(ExportSqlAction(selectedEntries.ifEmpty { allEntries }))
-        val popup = ActionManager.getInstance().createActionPopupMenu("mpvs.history.sql", group)
-        // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
-        popup.setTargetComponent(sqlList)
-        popup.component.show(sqlList, e.x, e.y)
+        // R31：历史/版本 SQL 对比（恰两条选中可用）
+        group.add(CompareSelectedAction(selectedEntries))
+        return group
+    }
+
+    /**
+     * R31：历史/版本 SQL 对比——多选恰两条时可用；对比 = [SqlDiffer] 逐行 diff + 结构指纹
+     * （[LogSqlEntry.structureKey]，同指纹提示「结构等价，仅参数不同」）。
+     * 呈现复用预览面板 showSqlDiff 的 IDEA 原生 Diff 形态（非模态、SQL 语法高亮、同步滚动）。
+     */
+    internal inner class CompareSelectedAction(private val entries: List<LogSqlEntry>) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.Diff
+            e.presentation.text = MpSqlVisualizerBundle.message("log.history.compare")
+            e.presentation.description = MpSqlVisualizerBundle.message("log.history.compare.tip")
+            e.presentation.isEnabled = entries.size == 2
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            if (entries.size != 2) return
+            showHistoryDiff(entries[0], entries[1])
+        }
+    }
+
+    /**
+     * R31：打开对比窗口——IDEA 原生 Diff（形态照抄 SqlPreviewPanel.showSqlDiff：
+     * DiffContentFactory.createEditable + SimpleDiffRequest → DiffManager.showDiff），
+     * 标题带结构指纹结论（等价提示「仅参数不同」，否则带差异行数）。
+     */
+    private fun showHistoryDiff(first: LogSqlEntry, second: LogSqlEntry) {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        val verdict = historyDiffVerdict(first, second)
+        val diffContentFactory = com.intellij.diff.DiffContentFactory.getInstance()
+        val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getStdFileType("SQL")
+        val leftContent: com.intellij.diff.contents.DocumentContent =
+            diffContentFactory.createEditable(project, verdict.oldSql, sqlFileType)
+        val rightContent: com.intellij.diff.contents.DocumentContent =
+            diffContentFactory.createEditable(project, verdict.newSql, sqlFileType)
+        val request = com.intellij.diff.requests.SimpleDiffRequest(
+            historyDiffDialogTitle(verdict),
+            leftContent,
+            rightContent,
+            MpSqlVisualizerBundle.message("log.history.compare.old"),
+            MpSqlVisualizerBundle.message("log.history.compare.new"),
+        )
+        com.intellij.diff.DiffManager.getInstance().showDiff(project, request)
     }
 
     // ---------- R4（W3 历史工作流包）：二级 SQL 导出（CSV/TSV/TXT，后台写盘） ----------
@@ -1030,5 +1085,49 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
             entry.cachedListLineFragments = it
             entry.cachedListLineFragmentsMode = mode
         }
+    }
+}
+
+/**
+ * R31 历史/版本 SQL 对比结论：[SqlDiffer] 逐行 diff 统计 + 结构指纹等价判定（测试断言载体）。
+ */
+internal data class HistoryDiffVerdict(
+    /** 结构指纹等价（[LogSqlEntry.structureKey] 同键）——UI 据此提示「结构等价，仅参数不同」。 */
+    val structurallyEquivalent: Boolean,
+    /** 行级差异条数（非 EQUAL 条目数；一行改写 = DELETE + INSERT 成对）。 */
+    val diffCount: Int,
+    val deleteCount: Int,
+    val insertCount: Int,
+    /** 时间序旧 SQL（Diff 左侧）。 */
+    val oldSql: String,
+    /** 时间序新 SQL（Diff 右侧）。 */
+    val newSql: String,
+)
+
+/**
+ * R31：两条目对比结论——按时间戳升序定「旧/新」（旧在左、新在右，入参顺序无关），
+ * [SqlDiffer.computeDiff] 逐行 diff 统计，结构指纹（字面量/数字参数化，[LogSqlEntry.structureKey]）
+ * 判等价。死代码复活：[SqlDiffer]（T-Perf-24 标注「无任何调用方」）自此获得唯一真实调用方。
+ */
+internal fun historyDiffVerdict(first: LogSqlEntry, second: LogSqlEntry): HistoryDiffVerdict {
+    val (older, newer) = listOf(first, second).sortedBy { it.timestamp }
+    val entries = SqlDiffer.computeDiff(older.restoredSql, newer.restoredSql)
+    return HistoryDiffVerdict(
+        structurallyEquivalent = older.structureKey == newer.structureKey,
+        diffCount = entries.size,
+        deleteCount = entries.count { it.type == SqlDiffer.DiffType.DELETE },
+        insertCount = entries.count { it.type == SqlDiffer.DiffType.INSERT },
+        oldSql = older.restoredSql,
+        newSql = newer.restoredSql,
+    )
+}
+
+/** R31 对比窗口标题：结构等价提示「仅参数不同」，否则带差异行数。 */
+internal fun historyDiffDialogTitle(verdict: HistoryDiffVerdict): String {
+    val base = MpSqlVisualizerBundle.message("log.history.compare.title")
+    return if (verdict.structurallyEquivalent) {
+        "$base — ${MpSqlVisualizerBundle.message("log.history.compare.equivalent")}"
+    } else {
+        "$base — ${MpSqlVisualizerBundle.message("log.history.compare.diffLines", verdict.diffCount)}"
     }
 }

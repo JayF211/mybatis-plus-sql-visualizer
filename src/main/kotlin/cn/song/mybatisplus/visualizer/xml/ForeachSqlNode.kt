@@ -136,6 +136,10 @@ class ForeachSqlNode(
         // T-FS-07：errors 必须转发——否则体内 `<if test="非法表达式">` 的求值失败写进本层临时列表后被丢弃
         override val errors: MutableList<String>
             get() = delegate.errors
+
+        // R30 探镜：体内条件判定结果转发根上下文（同 errors 的转发缺陷形态，缺席即丢）
+        override val conditionOutcomes: MutableMap<String, Boolean>
+            get() = delegate.conditionOutcomes
     }
 
     /** `#{item.x}` / `#{index.x}` 重写上下文：把 token 内容开头的 item/index 名重写为 `__frch_` 唯一名。 */
@@ -184,5 +188,9 @@ class ForeachSqlNode(
         // T-FS-07：同上（本层 delegate 是 PrefixedContext，逐级转发到根上下文）
         override val errors: MutableList<String>
             get() = delegate.errors
+
+        // R30 探镜：逐级转发（本层 delegate 是 PrefixedContext，最终落根上下文）
+        override val conditionOutcomes: MutableMap<String, Boolean>
+            get() = delegate.conditionOutcomes
     }
 }

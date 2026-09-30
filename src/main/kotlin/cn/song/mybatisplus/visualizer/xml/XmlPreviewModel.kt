@@ -26,6 +26,13 @@ data class XmlForEachView(val collectionExpr: String, val item: String? = null)
 data class XmlBindView(val name: String, val expression: String)
 
 /**
+ * 条件求值结果三态（R30 探镜）：面板条件行按本轮渲染标注。
+ * TRUE / FALSE = 该 `<if>` 本轮被走到且判定；UNEVALUATED = 未被走到（假 if 体内层 / choose 短路后的
+ * 其余 when）——探针只读判定结果，不改变勾选与渲染行为。
+ */
+enum class ConditionOutcome { TRUE, FALSE, UNEVALUATED }
+
+/**
  * XML 预览渲染状态（面板勾选产物）：
  *
  * @param enabledIds    启用中的条件开关 id（test 表达式原文）
@@ -163,6 +170,20 @@ class XmlPreviewModel private constructor(
         staticFieldValues = staticFieldValues,
         bindNames = bindViews.map { it.name }.toSet(),
     )
+
+    /**
+     * R30 探镜：本轮渲染的条件求值结果（三态，键与 [conditionViews] 的 id 同源——面板条件行
+     * 按 id 定位标注）。判定结果取 [RenderedXmlSql.conditionResults]（只含被走到的条件），
+     * 缺席映射 [ConditionOutcome.UNEVALUATED]。
+     */
+    fun conditionOutcomes(rendered: RenderedXmlSql): Map<String, ConditionOutcome> = conditionViews.associate { view ->
+        val recorded = rendered.conditionResults[view.id]
+        view.id to when (recorded) {
+            true -> ConditionOutcome.TRUE
+            false -> ConditionOutcome.FALSE
+            null -> ConditionOutcome.UNEVALUATED
+        }
+    }
 
     private fun mockBindings(state: XmlPreviewState): Map<String, Any?> {
         val bindings = mutableMapOf<String, Any?>()
