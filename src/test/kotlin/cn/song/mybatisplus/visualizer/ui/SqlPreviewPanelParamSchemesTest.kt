@@ -294,21 +294,26 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
     /**
      * O-88 ④：折叠态跨面板实例保留——真机走查实证：gutter 换语句走「关旧弹窗、开新面板实例」，
      * 折叠态为实例字段时新实例归零丢失；静态化后新实例初始应继承折叠态（仍不持久化，非 PropertiesComponent）。
+     *
+     * 复验修复（dispose 链捕获）：真机「收起→取消→换语句」走 DialogWrapper.dispose→Disposer 级联
+     * 释放面板，全程无 buildSchemeRow 调用——懒惰捕获不触发。本用例走真序列：折叠后**不经重建**
+     * 直接 dispose 释放 A，断言静态字段在 dispose 时被捕获，再开实例 B 验初始折叠。
      */
     fun testO88_折叠态跨面板实例保留() {
-        // 实例 A：折叠后触发一次重建，懒惰捕获把折叠态回写静态字段（等价换语句/清空路径）
+        // 实例 A：折叠（测试缝 setOn(false)，等价用户点标题），不触发任何参数区重建
         val a = openPanel()
         a.presetFoldForTest()!!.setOn(false)
-        a.showResult(buildProbePreviewResult())
-        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
-        assertFalse("A 重建后应仍折叠（懒惰捕获回写静态字段）", a.presetFoldForTest()!!.isExpanded)
-        assertTrue("静态字段应已被 A 回写为折叠", SqlPreviewPanel.presetCollapsedForTest())
+        assertFalse("懒惰捕获未触发（无重建路径），dispose 前静态字段应为展开", SqlPreviewPanel.presetCollapsedForTest())
 
-        // 模拟 gutter 换语句：关旧弹窗（清空+dispose A）→ 开新面板实例 B
-        // （clear() 先走 releaseEditor——测试里组件不在容器、removeNotify 不会触发，直接 dispose 会漏编辑器）
+        // 直接 dispose 释放 A（不经重建）——面板挂在宿主 disposable 树上，关闭路径级联走 panel.dispose()
+        // （clear() 先走 releaseEditor——测试里组件不在容器、removeNotify 不会触发，直接 dispose 会漏编辑器；
+        //   clear() 只 paramPanel.removeAll()，不触发 buildSchemeRow 懒惰捕获，序列仍为「直接释放」）
         a.clear()
         Disposer.dispose(a)
         panel = null
+        assertTrue("dispose 释放 A 后静态字段应被捕获为折叠（dispose 链捕获）", SqlPreviewPanel.presetCollapsedForTest())
+
+        // 模拟 gutter 换语句：开新面板实例 B
         val b = SqlPreviewPanel(project)
         panel = b
         Disposer.register(testRootDisposable, b)
@@ -318,5 +323,18 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         assertFalse("新实例 B 初始应继承折叠态（跨实例保留）", b.presetFoldForTest()!!.isExpanded)
         assertFalse("B 的方案行应收起", b.schemeRowForTest()!!.isVisible)
         assertTrue("静态字段仍是折叠（B 未被重置）", SqlPreviewPanel.presetCollapsedForTest())
+    }
+
+    /**
+     * O-88 ④b（保留）：懒惰捕获路径——折叠后同实例触发重建（刷新/换语句不清弹窗的路径），
+     * buildSchemeRow 开头懒惰回写静态字段，重建出的折叠件仍收起。
+     */
+    fun testO88_折叠态懒惰捕获经重建回写() {
+        val a = openPanel()
+        a.presetFoldForTest()!!.setOn(false)
+        a.showResult(buildProbePreviewResult())
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        assertFalse("A 重建后应仍折叠（懒惰捕获回写静态字段）", a.presetFoldForTest()!!.isExpanded)
+        assertTrue("静态字段应已被 A 回写为折叠", SqlPreviewPanel.presetCollapsedForTest())
     }
 }

@@ -4732,6 +4732,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 工具窗口模式下面板可能长期存活，由 [SqlPreviewDialog] 或工具窗口工厂调用释放。
      */
     override fun dispose() {
+        // O-88 复验修复：dispose 链捕获折叠态——懒惰回写（buildSchemeRow 开头）只在同实例触发参数区
+        // 重建时执行，真机「收起→取消→换语句」走 DialogWrapper.dispose→Disposer 级联释放面板，
+        // 全程无 buildSchemeRow 调用，静态字段从未写 true。面板自身是 Disposable 且经
+        // Disposer.register(宿主 disposable, this) 挂树（弹窗见 SqlPreviewDialog，工具窗同惯例），
+        // 宿主任何关闭路径（取消/Alt+F4/父级释放）级联触发本方法——在此读当前折叠件视觉态回写
+        // 静态字段（真值语义=取反，与懒惰捕获行一致）。懒惰捕获行保留，覆盖刷新等重建路径。
+        presetFold?.let { presetSectionCollapsed = !it.isExpanded() }
         // T-RefreshDbSteal：面板废弃——移除 rehost 监听（共享控制台可能已被新面板接管，
         // 本面板的监听不得残活抢组件）；embedConsole 对 null 安全
         runCatching { detachConsole() }
