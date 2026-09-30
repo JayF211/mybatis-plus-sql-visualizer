@@ -274,6 +274,20 @@ internal fun parameterizeLiterals(sql: String): String {
     return sb.toString()
 }
 
+/**
+ * O-90：同模板计数聚合（structureKey → 条数）——N+1 **捕获后聚类标记**的计数数据源
+ * （与 Hibernate Debugger 的运行期实时检测差异化：对已捕获条目离线聚合，零运行时开销，
+ * 不做实时 profiler——红线）。
+ * 判别口径 = [structureFingerprint]（字面量参数化后同形状同键）：参数值不同的同模板 SQL 计入
+ * 同键；IN 元素个数 / 表名 / 列名不同的异形互不计入。条目侧 structureKey 为 lazy 体属性
+ * （每条只算一次，空集短路），本聚合 O(N) 单遍。
+ */
+internal fun structureKeyCounts(entries: List<LogSqlEntry>): Map<String, Int> =
+    entries.groupingBy { it.structureKey }.eachCount()
+
+/** O-90：同模板徽章显示阈值（≥N 显示「×N 同模板」；常量起步不做设置项——缩范围定案）。 */
+internal const val TEMPLATE_BADGE_MIN_COUNT = 3
+
 /** SQL 词字符（标识符边界判定）：字母/数字/下划线/美元符。 */
 private fun isSqlWordChar(c: Char): Boolean =
     c.isLetterOrDigit() || c == '_' || c == '$'

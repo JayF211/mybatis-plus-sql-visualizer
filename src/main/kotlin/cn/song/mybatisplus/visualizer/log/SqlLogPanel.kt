@@ -424,6 +424,9 @@ class SqlLogPanel(
     /** 去重丢弃计数快照（refreshList 后更新；cellRenderer 渲染 ⨉N 徽章用）。 */
     private var dedupeCounts: Map<String, Int> = emptyMap()
 
+    /** O-90：同模板计数快照（refreshList 后更新；cellRenderer 徽章与右键聚焦动作共用）。 */
+    private var templateCounts: Map<String, Int> = emptyMap()
+
     // ---------- T-Perf-03（自 dev 移植）：增量刷新状态 ----------
 
     /** 刷新代际：新 refreshList 启动时 +1，旧分批追加链检测到代际过期即终止。 */
@@ -722,6 +725,7 @@ class SqlLogPanel(
         val next = when (tab) {
             is FocusTab.Request -> addRequestTab(focusTabs, tab.requestTag)
             is FocusTab.Method -> if (focusTabs.contains(tab)) focusTabs.toList() else focusTabs + tab
+            is FocusTab.Template -> addTemplateTab(focusTabs, tab.structureKey, tab.count)
         }
         focusTabs.clear()
         focusTabs.addAll(next)
@@ -1396,6 +1400,11 @@ class SqlLogPanel(
         dedupeCounts = manager.entries.dedupeCountsSnapshot()
         entryCellRenderer.dedupeCounts = dedupeCounts
 
+        // O-90：同模板计数快照（**全量条目**聚合——徽章计数不随当前过滤/搜索波动；
+        // snapshot 本就为过滤链物化，structureKey 惰性缓存后单遍 O(N)）
+        templateCounts = structureKeyCounts(snapshot)
+        entryCellRenderer.templateCounts = templateCounts
+
         // T-SqlSuppress：屏蔽存量过滤插管线最前（与类型过滤同级；键集经 SqlLogManager 订阅同步）
         val filtered = filterByFocus(
             filterByType(
@@ -1782,6 +1791,8 @@ class SqlLogPanel(
         group.add(FocusCallerMethodAction(entry))
         // T-M55-04：按请求聚焦（requestTag 非空时可用；页签 K 有界防高基数爆列表）
         group.add(FocusRequestAction(entry))
+        // O-90：按模板聚焦（「×N 同模板」徽章达阈值才可用；过滤出该模板全部条目）
+        group.add(FocusTemplateAction(entry))
         // R4（W3 历史工作流包）：导出当前可见行集（与面板过滤/搜索一致；CSV/TSV/TXT，后台写盘）
         group.add(ExportVisibleAction())
         val popup = ActionManager.getInstance().createActionPopupMenu("mpvs.log.list", group)
@@ -1989,6 +2000,25 @@ class SqlLogPanel(
 
         override fun actionPerformed(e: AnActionEvent) {
             entry.requestTag?.takeIf { it.isNotBlank() }?.let { addFocusTab(FocusTab.Request(it)) }
+        }
+    }
+
+    /**
+     * O-90：按模板聚焦——右键带「×N 同模板」徽章的条目产生模板页签（structureKey 精确匹配，
+     * 过滤出该模板全部条目；与 04 请求聚焦同一交互形态：条目驱动的聚焦过滤器，页签可关闭恢复）。
+     * 准入 = 计数达 [TEMPLATE_BADGE_MIN_COUNT]（徽章在场才可点）；同模板重复创建幂等
+     * （[addTemplateTab] 按 structureKey 判重）。徽章本体为展示性（与去重徽章先例一致——
+     * 列表片段非交互组件），聚焦入口落在本动作。
+     */
+    private inner class FocusTemplateAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.focusTemplate")
+            e.presentation.isEnabled = (templateCounts[entry.structureKey] ?: 0) >= TEMPLATE_BADGE_MIN_COUNT
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            val n = templateCounts[entry.structureKey] ?: return
+            if (n >= TEMPLATE_BADGE_MIN_COUNT) addFocusTab(FocusTab.Template(entry.structureKey, n))
         }
     }
 
@@ -2245,6 +2275,24 @@ internal fun formatDurationFragment(ms: Long?, isSelected: Boolean): Pair<String
 
 /** M56 T-M56-02：增强捕获角标已按用户要求移除（增强为默认通道，逐行标来源属噪音）。 */
 
+/**
+ * O-90：同模板计数徽章（N+1 捕获后聚类标记）——counts[structureKey] 达 [TEMPLATE_BADGE_MIN_COUNT]
+ * 才显示「×N 同模板」，与去重 ⨉N 徽章相邻同落点（元信息行尾）。计数由调用方传面板全量条目的
+ * [structureKeyCounts] 聚合快照（徽章计数不随当前过滤波动）；无计数/未达阈值返回 null 不显示。
+ * 文案走双语 bundle（log.panel.templateBadge）；着色 [MpvsUiColors.TEMPLATE_N1]（选中白同规）。
+ */
+internal fun formatTemplateCountFragment(
+    entry: LogSqlEntry,
+    counts: Map<String, Int>,
+    isSelected: Boolean,
+): Pair<String, SimpleTextAttributes>? {
+    val n = counts[entry.structureKey] ?: return null
+    if (n < TEMPLATE_BADGE_MIN_COUNT) return null
+    val color = if (isSelected) Color(0xFFFFFF) else MpvsUiColors.TEMPLATE_N1
+    return MpSqlVisualizerBundle.message("log.panel.templateBadge", n) + " " to
+        SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
+}
+
 /** T-AgentDialectLoop：目标库角标（agent 通道由连接 URL 推断）；未知返回 null 不显示。 */
 internal fun formatDatabaseFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
     val db = entry.databaseName ?: return null
@@ -2309,6 +2357,9 @@ internal fun formatSourceFragment(entry: LogSqlEntry, isSelected: Boolean): Pair
 internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.ListCellRenderer<Any?> {
     /** 去重丢弃计数快照（徽章渲染数据源；由 [SqlLogPanel.refreshList] 更新）。 */
     var dedupeCounts: Map<String, Int> = emptyMap()
+
+    /** O-90：同模板计数快照（「×N 同模板」徽章渲染数据源；refreshList 随 dedupeCounts 一并更新）。 */
+    var templateCounts: Map<String, Int> = emptyMap()
 
     /** 元信息行（internal 供 UI 测试遍历片段断言文本与着色）。 */
     internal val metaLine = SimpleColoredComponent()
@@ -2400,6 +2451,8 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
             formatUpdateCountFragment(entry, isSelected)?.let { (t, a) -> metaLine.append(t, a) }
             formatErrorFragment(entry)?.let { (t, a) -> metaLine.append(t, a) }
             dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 }?.let { metaLine.append("⨉$it ", LIST_META_GRAY) }
+            // O-90：同模板 ×N 徽章（去重徽章后相邻；≥TEMPLATE_BADGE_MIN_COUNT 才显示）
+            formatTemplateCountFragment(entry, templateCounts, isSelected)?.let { (t, a) -> metaLine.append(t, a) }
             sqlLineFragmentsFor(entry)
         } else {
             null
