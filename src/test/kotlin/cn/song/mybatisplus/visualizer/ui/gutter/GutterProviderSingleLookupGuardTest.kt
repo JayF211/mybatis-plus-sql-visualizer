@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.gutter
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -14,19 +15,18 @@ import java.io.File
  * `enabledFor(Class, Boolean)` 包装内部 1 次。F36 收敛为方法头单次取 state
  * （`val gutterState = runCatching { … }.getOrNull()`）后传给 `(Class, State?)` 重载。
  *
- * 本守卫钉住「每到达元素严格 1 次」不回潮：扫描面 = `getLineMarkerInfo` 方法体 +
- * 其私有门助手 `gutterEnabled()` 体（**两处合计 ≤1**——修复前形态是方法体 1 次、
- * 助手体 1 次，只扫方法体会空绿，故助手必须一并计入；修复后助手删除，仅方法体 1 次）。
- *
- * 豁免：[XmlInlineSqlGutterLineMarkerProvider]（F19 快路径特例，传字面 `true` 走
- * `(Class, Boolean)` 重载，总闸由 XmlInlineSqlDetector 的 gutterFastPathEnabled 自读，
- * 形态保持不动）。
+ * F51（T-PerfQuick5）：最后的豁免户 [XmlInlineSqlGutterLineMarkerProvider] 同款收敛——
+ * 原 F19 快路径 `gutterFastPathEnabled()` 自读 1 次 + `enabledFor(Class, Boolean)` 包装
+ * 自读 1 次（每到达元素 2 次），并闸为方法头单次取 state（F19 两布尔直推 + `(Class, State?)`
+ * 重载），2→1。旧豁免段撤销；其「体内 0 次命中」的修复前形态由专用测试钉住
+ * （主清单 ≤1 规则对 0 次不红——防空绿由 `F51_` 两测试承担）。
  *
  * 防空绿三件套（对齐 BannedApiSourceScanTest 惯例）：
- *  ① 扫描面保鲜——13 个 provider 文件必须全部存在且 `getLineMarkerInfo` 体必须提取成功
+ *  ① 扫描面保鲜——provider 文件必须全部存在且 `getLineMarkerInfo` 体必须提取成功
  *     （提取失败按红处理，不静默跳过）；
  *  ② 合成样本自证——双读样本必须被计数器报出、单读样本放行（提取器退化成恒 0 即红）；
- *  ③ 先红后绿落地——本守卫提交前已在未修复的 dev tip 形态上实测红（13 文件各 2 次命中）。
+ *  ③ 先红后绿落地——F36 守卫提交前已在未修复的 dev tip 形态上实测红（13 文件各 2 次命中），
+ *     F51 守卫对修复前形态（体内 0 次）同样先红后绿。
  */
 class GutterProviderSingleLookupGuardTest {
 
@@ -90,11 +90,71 @@ class GutterProviderSingleLookupGuardTest {
         )
     }
 
+    /**
+     * F51（T-PerfQuick5）：XmlInline 快路径并闸守卫——方法体内 `PluginSettings.getInstance()`
+     * 严格恰 1 次。与主清单 ≤1 规则的差异在**下界**：修复前形态的两次查找都藏在被调函数内
+     * （`gutterFastPathEnabled` 自读 + `enabledFor(Class, Boolean)` 包装自读），体内计数为 0，
+     * ≤1 规则对它不红——故此处钉「恰 1」加「旧形态调用点禁残留」双条件。
+     *
+     * 反向验证锚：回退 provider 到修复前形态 → count=0 → 本测试红。
+     */
+    @Test
+    fun `F51_xmlInline快路径_单次取state并闸守卫`() {
+        val file = File(File(repoRoot(), gutterDir), "XmlInlineSqlGutterLineMarkerProvider.kt")
+        assertTrue("守卫扫描面失效：XmlInlineSqlGutterLineMarkerProvider.kt 缺失", file.isFile)
+        val body = extractBracedBody(stripComments(file.readText()), "override fun getLineMarkerInfo")
+            ?: error("无法提取 XmlInline getLineMarkerInfo 方法体（签名形态漂移？）——守卫扫描面失效按红处理")
+        val count = countToken(body)
+        assertTrue(
+            "XmlInline 快路径须方法头单次取 state（F51 并闸后每到达元素 app 级服务查找 2→1）：实测 $count 次。" +
+                "0 次 = 修复前双查找隐藏形态（gutterFastPathEnabled 自读 + enabledFor(Class, Boolean) 包装自读）；" +
+                "≥2 次 = 并闸回潮",
+            count == 1,
+        )
+        assertFalse("并闸后不得再走 gutterFastPathEnabled（其自读属第二次查找）", body.contains("gutterFastPathEnabled"))
+        assertFalse(
+            "并闸后不得再走 (Class, Boolean) 旧重载（字面 true 实参）",
+            Regex("enabledFor\\(javaClass,\\s*true\\)").containsMatchIn(body),
+        )
+    }
+
+    /** F51 守卫自证：修复前形态计数 0（配合「恰 1」断言即红）、修复后形态计数 1——计数器退化成恒 0 时后者必红。 */
+    @Test
+    fun `F51守卫自证_修复前形态读数0修复后读数1`() {
+        val legacy = """
+            class Sample : LineMarkerProvider {
+                override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
+                    if (!detector.gutterFastPathEnabled()) return null
+                    if (!GutterGroups.enabledFor(javaClass, true)) return null
+                    return null
+                }
+            }
+        """.trimIndent()
+        val legacyBody = extractBracedBody(legacy, "override fun getLineMarkerInfo")!!
+        assertEquals(
+            "修复前双查找隐藏形态的方法体读数应为 0（此读数配合主守卫「恰 1」即红）",
+            0,
+            countToken(legacyBody),
+        )
+        val fixed = """
+            class Sample : LineMarkerProvider {
+                override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
+                    val gutterState = runCatching { PluginSettings.getInstance().state }.getOrNull()
+                    if (gutterState != null && !gutterState.showGutterIcon) return null
+                    if (!GutterGroups.enabledFor(javaClass, gutterState)) return null
+                    return null
+                }
+            }
+        """.trimIndent()
+        val fixedBody = extractBracedBody(fixed, "override fun getLineMarkerInfo")!!
+        assertEquals("修复后单读形态读数应为 1（计数器退化成恒 0 时本断言必红）", 1, countToken(fixedBody))
+    }
+
     // ------------------------------------------------------------------
     // 扫描面与提取器
     // ------------------------------------------------------------------
 
-    /** 被守卫的 13 个 provider（XmlInlineSqlGutterLineMarkerProvider 豁免：F19 快路径特例，见类 KDoc）。 */
+    /** 被守卫的 14 个 provider（F51 起 XmlInlineSqlGutterLineMarkerProvider 收编，豁免撤销）。 */
     private val providerFileNames = listOf(
         "SqlGutterLineMarkerProvider.kt",
         "AnnotationSqlGutterLineMarkerProvider.kt",
@@ -109,6 +169,7 @@ class GutterProviderSingleLookupGuardTest {
         "JdbcTemplateSqlGutterLineMarkerProvider.kt",
         "NamedQueryGutterLineMarkerProvider.kt",
         "StringSqlMethodGutterLineMarkerProvider.kt",
+        "XmlInlineSqlGutterLineMarkerProvider.kt",
     )
 
     private val gutterDir =
