@@ -498,4 +498,44 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             panel.dispose()
         }
     }
+
+    /* O-90：同模板计数与聚焦流（右键动作/chip 共用 applyTemplateFocus 入口） */
+
+    fun testO90同模板聚焦_计数聚合与聚焦过滤恢复() {
+        writeHistoryFile(
+            "sql-history-2026-09-01.sql",
+            f44FileContent(
+                listOf(
+                    Triple("SELECT * FROM t_user WHERE id = 1", "UserMapper.java:10", 3L),
+                    Triple("SELECT * FROM t_user WHERE id = 2", "UserMapper.java:11", 3L),
+                    Triple("SELECT * FROM t_user WHERE id = 3", "UserMapper.java:12", 3L),
+                    Triple("SELECT * FROM t_order WHERE id = 1", "OrderMapper.java:5", 8L),
+                ),
+            ),
+        )
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+        try {
+            panel.openFileForTest(panel.fileListEntries.single())
+            assertEquals("聚焦前全量 4 条", 4, panel.sqlListEntries.size)
+
+            // 计数聚合：3 条同模板同键 + 1 条异形 = 2 组
+            val counts = panel.templateCountsForTest
+            assertEquals("聚合键组数 = 2", 2, counts.size)
+            val hotKey = counts.entries.first { it.value == 3 }.key
+            assertEquals(3, counts[hotKey])
+
+            // 聚焦：只显同模板 3 条（参数值不同的同形状全保留），异形被隔离
+            panel.applyTemplateFocus(hotKey)
+            assertEquals("聚焦后仅同模板 3 条", 3, panel.sqlListEntries.size)
+            assertTrue("全部命中聚焦键", panel.sqlListEntries.all { it.structureKey == hotKey })
+            assertEquals("聚焦键在位", hotKey, panel.templateFocusKeyForTest)
+
+            // 清除恢复全量
+            panel.applyTemplateFocus(null)
+            assertEquals("清除后恢复全量 4 条", 4, panel.sqlListEntries.size)
+            assertNull("聚焦键已清", panel.templateFocusKeyForTest)
+        } finally {
+            panel.dispose()
+        }
+    }
 }

@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.config.PluginSettings.Companion.LOG_TIMESTAMP_SOURCE_CAPTURE
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.ui.SimpleColoredComponent
 import com.intellij.ui.SimpleTextAttributes
 import org.junit.Assert.assertEquals
@@ -81,6 +82,25 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         val longSql = "SELECT " + (1..200).joinToString(", ") { "c$it" } + " FROM t WHERE id = 1"
         val r = renderSql(sqlEntry(longSql))
         assertTrue("超长 SQL 摘要含省略号", joinedText(r.sqlLine).contains("…"))
+    }
+
+    // ---------- O-90：同模板 ×N 徽章 ----------
+
+    fun test二级条目_同模板徽章达阈值渲染() {
+        val sql = "SELECT * FROM hist_orders WHERE uid = 7"
+        sqlRenderer.templateCounts = mapOf(structureFingerprint(sql) to 3)
+        val meta = joinedText(renderSql(sqlEntry(sql)).metaLine)
+        assertTrue("达阈值应渲染同模板徽章", meta.contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)))
+        sqlRenderer.templateCounts = mapOf(structureFingerprint(sql) to 2)
+        assertFalse(
+            "未达阈值不渲染",
+            joinedText(renderSql(sqlEntry(sql)).metaLine).contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 2)),
+        )
+        sqlRenderer.templateCounts = emptyMap()
+        assertFalse(
+            "无计数不渲染",
+            joinedText(renderSql(sqlEntry(sql)).metaLine).contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)),
+        )
     }
 
     // ---------- T-TwoLine：元信息换行显示（元信息行在上，SQL 行在下） ----------

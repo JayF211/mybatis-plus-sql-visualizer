@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.log.SqlSource
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.ui.SimpleColoredComponent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -202,6 +203,53 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         val c = renderer.getListCellRendererComponent(list, entry("SELECT 1"), 0, false, false)
         assertNotNull("渲染组件不应为 null", c)
         assertTrue("渲染组件应为渲染器自身（含双行组件面板）", c is java.awt.Component)
+    }
+
+    // ---------- O-90：同模板 ×N 徽章 ----------
+
+    fun test同模板徽章_达阈值渲染到元信息行() {
+        val sql = "SELECT * FROM big_orders WHERE uid = 7"
+        renderer.templateCounts = mapOf(structureFingerprint(sql) to 3)
+        val meta = joinedText(render(entry(sql)).metaLine)
+        assertTrue("达阈值应渲染同模板徽章: $meta", meta.contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)))
+        // 与去重徽章相邻共存（本条无去重计数，仅模板徽章）
+        renderer.templateCounts = mapOf(structureFingerprint(sql) to 5)
+        assertTrue(
+            "计数 5 显示 ×5",
+            joinedText(render(entry(sql)).metaLine).contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 5)),
+        )
+    }
+
+    fun test同模板徽章_未达阈值不渲染() {
+        val sql = "SELECT * FROM small_orders WHERE uid = 7"
+        renderer.templateCounts = mapOf(structureFingerprint(sql) to TEMPLATE_BADGE_MIN_COUNT - 1)
+        assertFalse(
+            "计数 ${TEMPLATE_BADGE_MIN_COUNT - 1} 未达阈值不渲染",
+            joinedText(render(entry(sql)).metaLine)
+                .contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", TEMPLATE_BADGE_MIN_COUNT - 1)),
+        )
+        renderer.templateCounts = emptyMap()
+        assertFalse(
+            "无计数不渲染",
+            joinedText(render(entry(sql)).metaLine).contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)),
+        )
+    }
+
+    fun test同模板徽章片段_选中白未选中琥珀() {
+        val sql = "SELECT * FROM t WHERE id = 1"
+        val e = entry(sql)
+        val counts = mapOf(structureFingerprint(sql) to 3)
+        assertEquals(
+            "未选中琥珀（与耗时偏慢同族）",
+            Color(0xE67E22),
+            formatTemplateCountFragment(e, counts, false)!!.second.fgColor,
+        )
+        assertEquals("选中白（不抢 SQL 高亮）", Color(0xFFFFFF), formatTemplateCountFragment(e, counts, true)!!.second.fgColor)
+        assertNull(
+            "未达阈值返回 null",
+            formatTemplateCountFragment(e, mapOf(structureFingerprint(sql) to 2), false),
+        )
+        assertNull("无计数返回 null", formatTemplateCountFragment(e, emptyMap(), false))
     }
 
     // ---------- T-ListMode：三种显示模式（嫁接片段管线） ----------

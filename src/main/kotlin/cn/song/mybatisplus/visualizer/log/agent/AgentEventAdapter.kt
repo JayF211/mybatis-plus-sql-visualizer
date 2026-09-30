@@ -37,8 +37,9 @@ object AgentEventAdapter {
             errorText = event.errorText,
             requestTag = event.requestTag,
             updateCount = event.updateCount,
-            // T-AgentDialectLoop：连接 URL → 目标库显示名（未知/畸形 URL 为 null，面板不显示角标）
-            databaseName = JdbcUrlDialects.displayName(event.url),
+            // R32 弱形态：连接 URL → 目标库标注（方言名 · 库名@host:port url 解析真值；
+            // 凭据在 JdbcUrlDialects.targetOf 解析期剔除；未知/畸形 URL 为 null，面板不显示角标）
+            databaseName = JdbcUrlDialects.badgeName(event.url),
         )
     }
 

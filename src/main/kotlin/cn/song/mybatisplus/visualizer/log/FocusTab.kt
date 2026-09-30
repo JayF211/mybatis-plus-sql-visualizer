@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+
 /**
  * T-M55-03/T-M55-04 共用：动态聚焦过滤页签模型（页签是过滤器不是分组——不碰 VisibleDiff
  * 差分与缓冲分组模型，呈现保持扁平时间序）。
@@ -29,6 +31,15 @@ internal sealed class FocusTab {
     data class Request(val requestTag: String) : FocusTab() {
         override val label: String get() = requestTag
     }
+
+    /**
+     * O-90：同模板聚焦（[LogSqlEntry.structureKey] 精确匹配——字面量参数化后的同形状 SQL 全部可见）。
+     * [count] 为创建时点的计数快照，只用于页签文案（计数随捕获增长不回写页签）；相等性按
+     * structureKey 判重（[addTemplateTab]），count 不参与判重。
+     */
+    data class Template(val structureKey: String, val count: Int) : FocusTab() {
+        override val label: String get() = MpSqlVisualizerBundle.message("log.panel.templateBadge", count)
+    }
 }
 
 /** 单条目是否命中单个聚焦页签。 */
@@ -38,6 +49,7 @@ internal fun entryMatchesFocusTab(entry: LogSqlEntry, tab: FocusTab): Boolean = 
             EntrySourceMatcher.sameFile(EntrySourceMatcher.normalize(entry.sourceFile), tab.sourceFile) &&
             entry.sourceLine in tab.startLine..tab.endLine
     is FocusTab.Request -> entry.requestTag != null && entry.requestTag == tab.requestTag
+    is FocusTab.Template -> entry.structureKey == tab.structureKey
 }
 
 /**
@@ -66,3 +78,14 @@ internal fun addRequestTab(tabs: List<FocusTab>, requestTag: String): List<Focus
     val trimmed = if (next.size > FOCUS_REQUEST_TAB_MAX) next.drop(next.size - FOCUS_REQUEST_TAB_MAX) else next
     return others + trimmed
 }
+
+/**
+ * O-90：新增模板页签的准入（纯函数）：按 structureKey 判重（count 快照不同不算新页签），
+ * 返回收缩后的**新**列表（调用方 clear+addAll 回写，不得别名回写——与 [addRequestTab] 同纪律）。
+ */
+internal fun addTemplateTab(tabs: List<FocusTab>, structureKey: String, count: Int): List<FocusTab> =
+    if (tabs.any { it is FocusTab.Template && it.structureKey == structureKey }) {
+        tabs.toList()
+    } else {
+        tabs + FocusTab.Template(structureKey, count)
+    }

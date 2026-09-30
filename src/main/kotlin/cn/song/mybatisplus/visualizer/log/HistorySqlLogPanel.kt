@@ -85,6 +85,31 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private var currentFile: HistoryFileEntry? = null
     private var currentEntries: List<LogSqlEntry> = emptyList()
 
+    // ---------- O-90：同模板计数徽章与聚焦 ----------
+
+    /** O-90：当前文件全量条目的同模板计数（徽章渲染与右键聚焦动作共用；applySqlSearch 重建）。 */
+    private var templateCounts: Map<String, Int> = emptyMap()
+
+    /** O-90：同模板聚焦键（非 null 时二级列表只显该模板条目；右键动作与 chip 点击经 [applyTemplateFocus]）。 */
+    private var templateFocusKey: String? = null
+
+    /** O-90 测试断言：当前同模板计数与聚焦键。 */
+    internal val templateCountsForTest: Map<String, Int> get() = templateCounts
+
+    /** O-90 测试断言：当前聚焦键（null = 未聚焦）。 */
+    internal val templateFocusKeyForTest: String? get() = templateFocusKey
+
+    /** O-90 同模板聚焦提示 chip（聚焦时显示该模板计数，点击清除；构建于 [buildUI] 工具栏）。 */
+    private val templateFilterChip = javax.swing.JLabel().apply {
+        isVisible = false
+        font = font.deriveFont(java.awt.Font.BOLD)
+        foreground = MpvsUiColors.TEMPLATE_N1
+        cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+        addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) = applyTemplateFocus(null)
+        })
+    }
+
     // ---------- T-Perf-05：后台任务代际 + 搜索防抖 ----------
 
     /** 后台刷新/加载代际：新任务启动即作废旧任务的 EDT apply。 */
@@ -219,6 +244,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             override fun changedUpdate(e: javax.swing.event.DocumentEvent) = scheduleSearch()
         })
         toolbar.add(searchField)
+        // O-90：同模板聚焦提示 chip（聚焦时显示；点击清除）
+        toolbar.add(templateFilterChip)
         add(toolbar, BorderLayout.NORTH)
 
         // T-ListMode：设置变更（含模式切换广播）→ 清二级列表渲染缓存并重绘；
@@ -290,6 +317,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private fun showFileContent(fileEntry: HistoryFileEntry) {
         currentFile = fileEntry
+        templateFocusKey = null // O-90：换文件即清除同模板聚焦（旧文件的模板键对新文件无意义）
         // T-UiNative T-UN-05：二级 SQL 列表切卡可见后重挂速度搜索（构造于隐藏卡时 installOn
         // 仍不生效的兜底；标记防重复装——平台 installOn 重复挂载同一列表不幂等）
         if (!sqlSpeedSearchInstalled) {
@@ -321,6 +349,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 测试缝：同步加载文件内容（生产路径 showFileContent 已后台化，headless 测试需要确定性）。 */
     private fun loadFileContentSync(fileEntry: HistoryFileEntry) {
         currentFile = fileEntry
+        templateFocusKey = null // O-90：换文件即清除同模板聚焦（与生产路径同语义）
         // T-UiNative T-UN-05：二级 SQL 列表可见后确保速度搜索安装（生产 showFileContent 已装，
         // 此同步路径 headless 下 CardLayout 不见真机 showing，marker 判定可能不触发，故统一补装）
         if (!sqlSpeedSearchInstalled) {
@@ -402,6 +431,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         // 否则回一级（默认展示文件列表）
         currentFile = null
         currentEntries = emptyList()
+        templateFocusKey = null // O-90：回一级清除同模板聚焦（chip 同步隐）
         refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = false）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         cardLayout.show(cards, CARD_FILES)
@@ -459,6 +489,10 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private var lastRegex: Regex? = null
 
     private fun applySqlSearch() {
+        // O-90：同模板计数随文件内容重建（**全量条目**聚合——徽章计数不随搜索/聚焦波动）；
+        // 渲染器与右键聚焦动作共用同一快照
+        templateCounts = structureKeyCounts(currentEntries)
+        (sqlList.cellRenderer as? HistoryCellRenderer)?.templateCounts = templateCounts
         val q = searchField.text.trim()
         // R16（检索强化增量）：`regex:` 前缀启用正则匹配（作用 SQL/摘要/源文件三目标）——
         // 非法正则 fail-closed 回退子串匹配（不产生空结果假象）。
@@ -466,7 +500,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         if (q.startsWith("regex:")) {
             val pattern = resolveSearchPattern(q.removePrefix("regex:"))
             if (pattern != null) {
-                fillSqlList(currentEntries.filter { entry ->
+                showSqlEntries(currentEntries.filter { entry ->
                     pattern.containsMatchIn(entry.restoredSql) ||
                         pattern.containsMatchIn(entry.summary) ||
                         entry.sourceFile?.let { pattern.containsMatchIn(it) } == true
@@ -487,7 +521,40 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
                     entry.sourceFile?.contains(q, ignoreCase = true) == true
             }
         }
-        fillSqlList(filtered)
+        showSqlEntries(filtered)
+    }
+
+    /**
+     * O-90：二级列表统一出口——搜索过滤结果再过同模板聚焦层后填充，并同步聚焦 chip。
+     * （聚焦层插在搜索层之后：模板聚焦是对当前可见行集的再收敛，与日志页
+     * filterByFocusTabs 插在 filterByFocus 之后同序。）
+     */
+    private fun showSqlEntries(entries: List<LogSqlEntry>) {
+        val key = templateFocusKey
+        fillSqlList(if (key == null) entries else entries.filter { it.structureKey == key })
+        syncTemplateChip()
+    }
+
+    /**
+     * O-90：同模板聚焦统一入口（右键动作 / chip 点击 / 测试驱动同缝）：key 非空 → 二级列表
+     * 只显该模板条目；null → 清除。非二级视图只记状态不刷列表（切入文件时按现状重算）。
+     */
+    internal fun applyTemplateFocus(key: String?) {
+        templateFocusKey = key
+        if (currentFile != null) applySqlSearch() else syncTemplateChip()
+    }
+
+    /** O-90：同步聚焦提示 chip（聚焦时显示该模板计数 + ✕，点击清除；未聚焦隐藏）。 */
+    private fun syncTemplateChip() {
+        val key = templateFocusKey
+        if (key == null) {
+            templateFilterChip.isVisible = false
+            templateFilterChip.toolTipText = null
+            return
+        }
+        templateFilterChip.text = MpSqlVisualizerBundle.message("log.panel.templateBadge", templateCounts[key] ?: 0) + " ✕"
+        templateFilterChip.toolTipText = MpSqlVisualizerBundle.message("log.history.templateFilter.clearTip")
+        templateFilterChip.isVisible = true
     }
 
     /**
@@ -576,6 +643,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         group.add(JumpToSourceAction(entry))
         // T-M55-01：拆「跳转到 XML」双目标（与日志页同套）
         group.add(JumpToMapperXmlAction(entry))
+        // O-90：按模板聚焦（「×N 同模板」徽章达阈值才可用；过滤出该模板全部条目，chip 点击清除）
+        group.add(FocusTemplateAction(entry))
         // R4（W3 历史工作流包）：导出选中/全部条目（CSV/TSV/TXT，后台写盘）
         val allEntries = (0 until sqlList.model.size).map { sqlList.model.getElementAt(it) }
         group.add(ExportSqlAction(selectedEntries.ifEmpty { allEntries }))
@@ -745,6 +814,24 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
         override fun actionPerformed(e: AnActionEvent) {
             jumpToSource(entry)
+        }
+    }
+
+    /**
+     * O-90：按模板聚焦——右键带「×N 同模板」徽章的条目聚焦该模板（structureKey 精确匹配，
+     * 与日志页 FocusTemplateAction 同形态：条目驱动的聚焦过滤器）；历史页无页签栏，
+     * 聚焦态由工具栏 chip 承载（计数 + ✕ 点击清除，[applyTemplateFocus]）。
+     * 准入 = 计数达 [TEMPLATE_BADGE_MIN_COUNT]（徽章在场才可点）。
+     */
+    private inner class FocusTemplateAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.focusTemplate")
+            e.presentation.isEnabled = (templateCounts[entry.structureKey] ?: 0) >= TEMPLATE_BADGE_MIN_COUNT
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            val n = templateCounts[entry.structureKey] ?: return
+            if (n >= TEMPLATE_BADGE_MIN_COUNT) applyTemplateFocus(entry.structureKey)
         }
     }
 
@@ -949,6 +1036,9 @@ internal class HistoryFileCellRenderer : JPanel(BorderLayout()), javax.swing.Lis
  * internal 供 UI 测试断言各种条目状态（空耗时/空源码/特殊字符/超长 SQL）下的渲染健壮性。
  */
 internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCellRenderer<Any?> {
+    /** O-90：同模板计数快照（「×N 同模板」徽章渲染数据源；HistorySqlLogPanel.applySqlSearch 更新）。 */
+    var templateCounts: Map<String, Int> = emptyMap()
+
     /** 元信息行（internal 供 UI 测试遍历片段断言）。 */
     internal val metaLine = SimpleColoredComponent()
 
@@ -1036,6 +1126,8 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
             formatDatabaseFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
             // T-McpAuditTrail T-MAT-05：MCP 徽标（与日志页同款落点与协议；非 MCP 返回 null 不显示）
             formatMcpFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
+            // O-90：同模板 ×N 徽章（与日志页同款同落点；计数=当前文件全量条目聚合）
+            formatTemplateCountFragment(entry, templateCounts, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
             metaLine.append("[$source] ", HISTORY_META_GRAY)
             sqlLineFragmentsFor(entry)
         } else {

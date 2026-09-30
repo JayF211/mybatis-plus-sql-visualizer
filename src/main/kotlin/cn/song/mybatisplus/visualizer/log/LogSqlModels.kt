@@ -119,9 +119,13 @@ data class LogSqlEntry(
      */
     val updateCount: Long? = null,
     /**
-     * 目标数据库显示名（T-AgentDialectLoop：agent 通道由连接 URL 子协议映射，
-     * 如 "MySQL" / "DM（达梦）"）；null 表示未知（桥通道 / 旧版 agent / 畸形 URL）。
-     * 展示性字段，不入去重指纹。
+     * 目标数据库标注（T-AgentDialectLoop 起，R32 弱形态升级：agent 通道由连接 URL 解析——
+     * 方言显示名 · url 解析连接事实，如 "MySQL · jpa_demo@localhost:3306"、"DM（达梦） · localhost:5236"；
+     * 只有方言可辨或只有连接事实可解析时输出其一）。解析与凭据剔除在
+     * [cn.song.mybatisplus.visualizer.log.agent.JdbcUrlDialects.badgeName]（user/password 参数、
+     * Oracle thin 登录前缀解析期剔除，凭据串绝不入本字段）。
+     * null 表示未知（桥通道 / 旧版 agent / 畸形 URL）。展示性字段，不入去重指纹；
+     * 自动存档/读回按自由文本回环（SqlLogAutoSaver/SqlLogFileReader，格式无关）。
      */
     val databaseName: String? = null,
 ) {
@@ -269,6 +273,20 @@ internal fun parameterizeLiterals(sql: String): String {
     }
     return sb.toString()
 }
+
+/**
+ * O-90：同模板计数聚合（structureKey → 条数）——N+1 **捕获后聚类标记**的计数数据源
+ * （与 Hibernate Debugger 的运行期实时检测差异化：对已捕获条目离线聚合，零运行时开销，
+ * 不做实时 profiler——红线）。
+ * 判别口径 = [structureFingerprint]（字面量参数化后同形状同键）：参数值不同的同模板 SQL 计入
+ * 同键；IN 元素个数 / 表名 / 列名不同的异形互不计入。条目侧 structureKey 为 lazy 体属性
+ * （每条只算一次，空集短路），本聚合 O(N) 单遍。
+ */
+internal fun structureKeyCounts(entries: List<LogSqlEntry>): Map<String, Int> =
+    entries.groupingBy { it.structureKey }.eachCount()
+
+/** O-90：同模板徽章显示阈值（≥N 显示「×N 同模板」；常量起步不做设置项——缩范围定案）。 */
+internal const val TEMPLATE_BADGE_MIN_COUNT = 3
 
 /** SQL 词字符（标识符边界判定）：字母/数字/下划线/美元符。 */
 private fun isSqlWordChar(c: Char): Boolean =

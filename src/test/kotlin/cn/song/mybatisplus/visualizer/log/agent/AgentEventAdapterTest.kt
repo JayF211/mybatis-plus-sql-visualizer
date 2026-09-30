@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.log.SqlSource
 import cn.song.mybatisplus.visualizer.log.normalizeSqlWhitespace
 import cn.song.mybatisplus.visualizer.log.sqlFingerprint
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -201,14 +202,26 @@ class AgentEventAdapterTest {
     }
 
     @Test
-    fun `映射_url推断目标库名_缺失为null`() {
+    fun `映射_url充实目标库标注_缺失为null`() {
+        // R32 弱形态：databaseName 从「纯方言名」升级为「方言名 · 库名@host:port」url 解析真值
         val dm = AgentEventAdapter.toEntry(event("SELECT 1").copy(url = "jdbc:dm://localhost:5236"))
-        assertEquals("DM（达梦）", dm.databaseName)
+        assertEquals("DM（达梦） · localhost:5236", dm.databaseName)
         val mysql = AgentEventAdapter.toEntry(event("SELECT 1").copy(url = "jdbc:mysql://localhost/db"))
-        assertEquals("MySQL", mysql.databaseName)
-        val unknown = AgentEventAdapter.toEntry(event("SELECT 1").copy(url = "jdbc:weirddb://x"))
-        assertNull("未知子协议不显示角标", unknown.databaseName)
+        assertEquals("MySQL · db@localhost", mysql.databaseName)
+        val unknown = AgentEventAdapter.toEntry(event("SELECT 1").copy(url = "jdbc:weirddb://x/db9"))
+        assertEquals("未知方言但有连接事实 → 输出真值", "db9@x", unknown.databaseName)
         val legacy = AgentEventAdapter.toEntry(event("SELECT 1"))
         assertNull("旧版 agent 无 url → null", legacy.databaseName)
+    }
+
+    @Test
+    fun `R32_条目标注不含凭据`() {
+        // 安全红线：url 带 user/password 参数（假凭据夹具）→ 条目字段绝不出现
+        val e = AgentEventAdapter.toEntry(
+            event("SELECT 1").copy(url = "jdbc:mysql://dbhost.example:3306/shop?user=app&password=s3cret"),
+        )
+        assertEquals("MySQL · shop@dbhost.example:3306", e.databaseName)
+        assertFalse("password 值不得入条目", e.databaseName!!.contains("s3cret"))
+        assertFalse("user 值不得入条目", e.databaseName!!.contains("app"))
     }
 }
