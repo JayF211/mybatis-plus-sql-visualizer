@@ -222,6 +222,7 @@ object SqlLogFileReader {
                 sourceCandidates = decodedExt?.sourceCandidates ?: emptyList(),
                 candidateClasses = decodedExt?.candidateClasses ?: emptyList(),
                 stackDigest = decodedExt?.stackDigest,
+                actualSql = decodedExt?.actualSql,
             )
         }
 
@@ -242,6 +243,7 @@ object SqlLogFileReader {
                 sourceCandidates = decodedExt?.sourceCandidates ?: emptyList(),
                 candidateClasses = decodedExt?.candidateClasses ?: emptyList(),
                 stackDigest = decodedExt?.stackDigest,
+                actualSql = decodedExt?.actualSql,
             )
         }
 

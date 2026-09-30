@@ -60,4 +60,7 @@
 
 ## 七、实施记录
 
-（待续——实施时回填本节）
+- **2026-09-30（批次9 R10，骨架首版落地；V36 语料采样外部动作缺位→按计划降级口径执行）**：
+  - **已落地**：第四解析器 `ShardingSphereLogParser`（`log/ShardingSphereLogParser.kt`，Logic SQL 主条目 + Actual SQL 逐行折叠附注，循 Hibernate 等待态配对先例 + LogThreadRouter 线程分桶 + JdbcTemplate 静默冲刷先例）；`LogSqlEntry.actualSql` 附注字段 + `SqlSource.SHARDINGSPHERE`（D1=A 模型承载）；pd 载荷扩展键 `a` + SHARDINGSPHERE 来源落键（SqlLogParamCodec/AutoSaver/FileReader 持久化闭环，旧文件兼容）；双轨接线（EP EpLineFilter + 桥 attachFilter 的 BridgeLineContext 第四解析器、processConsoleLine/sniffLogTimestamp 喂行、applyConfig 快照同步、flushSettledEntries 静默兜底）；设置开关 `logShardingSphereEnabled`（D3=A 默认开，照抄 Hibernate 组形态，复选框对账守卫 39→40 同步）；`sqlv_render_logs` 第四格式 + `LogToSqlPanel` 四解析器（T-03 解析链面）。
+  - **等语料（V36，真实双段日志语料到位后补全）**：①`Parameters: [..]` 值含 ", " 的拆分规则（骨架按 5.x 公开文档样例「逗号+空格分隔」直拆）；②4.x 输出形态（D2=A 登记不支持）；③与 MyBatis `Preparing:` 行交错的配对语义与去重兜底（V11a；骨架保守：PENDING 态噪声行不闭合，条目滞后一条产出、静默冲刷兜底）；④Actual 折叠附注的面板对照渲染（T-03 UI 面，模型字段已在）；⑤参数行类型标注是否在位（当前无类型走 LogSqlRestorer 启发式，V11b 复用结论=可复用）。显式 TODO 注释见解析器类头与 `extractParams`。
+  - **测试**：合成夹具全部按 5.x 公开文档形态合成、注明 synthetic（不冒充真实语料）。先红后绿：判别测试实现前编译红 32 处 Unresolved reference（ShardingSphereLogParser×9/SHARDINGSPHERE×2/actualSql×4/shardingEnabled×2 及连坐）→ 实现后 ShardingSphereLogParserTest 9/0 绿；反向验证摘 processConsoleLine 第四解析器注册 → 1 failed（9 tests, failures=1）→ 还原复绿 9/0。定向回归（快桶）：SqlLogParamCodecTest 14/0 + SqlLogConsoleBridgeMarkerTest 13/0 + HibernateLogParserTest 56/0 + JdbcTemplateLogParserTest 52/0 + RenderLogsToolTest 4/0 + McpRenderInputTest 6/0 + BundleParityGuardTest 5/0；平台桶：PluginSettingsPersistenceTest 15/0（含复选框 40 守卫）+ ConsoleSettleFlushTest 5/0。插曲：主源 ABI 变更（ParserConfig/LogSqlEntry 构造签名）后 Kotlin 增量编译未重建未改动测试调用方 → NoSuchMethodError 假红，定向清 test classes 全量重编测试后全绿（非 clean，主产物未动）。

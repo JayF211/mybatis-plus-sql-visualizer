@@ -1,0 +1,190 @@
+package cn.song.mybatisplus.visualizer.log
+
+/**
+ * ShardingSphere 双段日志解析器（R10 T-ShardingSphereCompat，**骨架首版**）。
+ *
+ * 支持的日志形态（ShardingSphere 5.x sql-show 公开文档形态，**真实语料未采样——V36**）：
+ * - Logic SQL 行：`Logic SQL: select ...`（逻辑 SQL，占位符形态）
+ * - Actual SQL 行：`Actual SQL: ds_0 ::: select ... ::: Parameters: [1, abc]`
+ *   （路由后真实执行片段；`::: Parameters:` 段无参时缺省）
+ *
+ * D1=A 定案：**Logic SQL 为主条目**（可还原参数执行——参数取首个 Actual 的 `Parameters:`
+ * 段，同语句各分片绑定值相同），**Actual SQL 段折叠为附注**（[LogSqlEntry.actualSql]，
+ * 逐行原文，面板对照渲染等语料）。
+ *
+ * 三态状态机（循 [HibernateLogParser] 等待态配对先例 + [LogThreadRouter] 线程分桶）：
+ * - IDLE：等待 Logic SQL 行；
+ * - PENDING：Logic 行开启、Actual 行逐行折叠；下一条 Logic 行 / [closePending] / [flushSettled]
+ *   （静默 ≥1s，循 JdbcTemplate T-ConsolePendingFlush 先例）闭合产出。
+ * - 噪声行在 PENDING 态**不闭合**（保守：与 MyBatis 行交错的场景 V11a 未采样，先保配对；
+ *   代价是条目滞后一条语句产出，面板可见性由静默冲刷兜底）。
+ *
+ * TODO(等语料/V36)：真实双段日志语料到位后补全——①`Parameters: [..]` 值含 ", "（字符串内逗号）
+ * 的拆分规则（骨架按文档样例「逗号+空格分隔」直拆）；②4.x 输出形态（D2=A 登记不支持）；③与
+ * MyBatis `Preparing:` 行交错的配对语义与去重兜底（V11a）；④参数类型标注是否在位（当前按无类型
+ * 还原，走 [LogSqlRestorer] 启发式，V11b 的复用结论=可复用）；⑤Actual 折叠附注的面板对照渲染（T-03）。
+ */
+class ShardingSphereLogParser(
+    private val restorer: LogSqlRestorer = LogSqlRestorer(),
+
+    /** 行解析最大长度（超长截断，防控制台大输出卡顿；与其余解析器同口径）。 */
+    var maxParseLength: Int = DEFAULT_MAX_PARSE_LENGTH,
+
+    /** 静默冲刷阈值（毫秒）；语义与 [JdbcTemplateLogParser] 同款。 */
+    private val settleMs: Long = DEFAULT_SETTLE_MS,
+
+    /** settle 判定的时钟（测试注入可控件）。 */
+    private val clock: () -> Long = System::currentTimeMillis,
+) {
+
+    /** 单线程桶：一条双段语句从 Logic 行到闭合之间的全部状态。 */
+    private class Bucket {
+        /** Logic SQL（关键字后原文；null = 空闲态）。 */
+        var logicSql: String? = null
+
+        /** Logic 行原文（日志时间取它）。 */
+        var pendingLogLine: String? = null
+
+        /** Actual 段折叠缓冲（关键字后原文逐行）。 */
+        val actualLines = mutableListOf<String>()
+
+        /** 参数（取首个带 `Parameters:` 段的 Actual 行）。 */
+        val pendingParams = mutableListOf<LogSqlParam>()
+    }
+
+    private val router = LogThreadRouter(
+        factory = { Bucket() },
+        isCollecting = { it.logicSql != null },
+        isIdle = { it.logicSql == null },
+        // Logic/Actual 行各带日志框架前缀（线程 token 在位），裸行只有正文续行形态——骨架按
+        // 「收集态桶优先」共享路由即可，不开 MRU（Hibernate 专属开关，无其双行形态）。
+        // 时钟与 [clock] 同源（flushSettled 的静默判定一致性；测试注入可控件）。
+        clock = clock,
+    )
+
+    private val entries = mutableListOf<LogSqlEntry>()
+
+    /** 喂入一行控制台输出（任意线程；按线程 token 路由到独立桶）。 */
+    fun feed(line: String) {
+        feedInto(router.bucketFor(line), line)
+    }
+
+    private fun feedInto(bucket: Bucket, line: String) {
+        // 1. Actual SQL 行 → 折叠附注（PENDING 态才有上下文；IDLE 态丢弃）
+        val actualSegment = extractAfterKeyword(line, ACTUAL_SQL_PREFIX)
+        if (actualSegment != null) {
+            val logic = bucket.logicSql ?: return // 未配对 Actual 丢弃（等待态配对先例同口径）
+            if (logic.isNotEmpty() && bucket.actualLines.size < MAX_ACTUAL_LINES &&
+                bucket.actualLines.joinToString("\n").length < maxParseLength
+            ) {
+                bucket.actualLines += actualSegment.take(maxParseLength)
+                if (bucket.pendingParams.isEmpty()) {
+                    bucket.pendingParams += extractParams(actualSegment)
+                }
+            }
+            return
+        }
+        // 2. Logic SQL 行 → 闭合上一条、开启新收集
+        val logicSegment = extractAfterKeyword(line, LOGIC_SQL_PREFIX)
+        if (logicSegment != null) {
+            closeBucketPending(bucket)
+            // TODO(等语料)：remainder 为空的分行形态（Logic SQL: 独占一行）5.x 文档无此形态，
+            // 骨架按空串拒绝开启（不产条目），语料实证后再补等待态。
+            if (logicSegment.isBlank()) return
+            bucket.logicSql = logicSegment.take(maxParseLength)
+            bucket.pendingLogLine = line
+            return
+        }
+        // 3. 噪声行：PENDING 态不闭合（保守保配对，见类头 TODO/V11a）
+    }
+
+    /** 闭合全部桶的未完成条目（面板刷新/MCP 工具收尾用）。返回首个产出的条目。 */
+    fun closePending(): LogSqlEntry? {
+        var first: LogSqlEntry? = null
+        for (bucket in router.allBuckets()) {
+            val produced = closeBucketPending(bucket)
+            if (first == null) first = produced
+        }
+        return first
+    }
+
+    /** 取出全部已闭合条目并清空缓冲区（面板刷新用）。 */
+    fun takeEntries(): List<LogSqlEntry> {
+        val result = entries.toList()
+        entries.clear()
+        return result
+    }
+
+    /**
+     * 静默冲刷——闭合全部已静默 ≥ [settleMs] 的桶的待产出条目，产出进 [entries]
+     * （由调用方随下一次 [takeEntries] 取走），返回本次产出条数。
+     * 语义与调用点同 [JdbcTemplateLogParser.flushSettled]（逐行入口 + 桥轮询兜底两处）——
+     * ShardingSphere 条目只在「下一条 Logic 行」闭合，低频访问下最后一条没有后继行，靠这一拍兜底。
+     */
+    fun flushSettled(nowMs: Long = clock()): Int {
+        var produced = 0
+        for (bucket in router.settledBuckets(settleMs, nowMs)) {
+            if (closeBucketPending(bucket) != null) produced++
+        }
+        return produced
+    }
+
+    // ---------- 私有方法 ----------
+
+    private fun closeBucketPending(bucket: Bucket): LogSqlEntry? {
+        val logic = bucket.logicSql ?: return null
+        bucket.logicSql = null
+        val logLine = bucket.pendingLogLine
+        bucket.pendingLogLine = null
+        val actual = bucket.actualLines.joinToString("\n")
+        val params = bucket.pendingParams.toList()
+        bucket.actualLines.clear()
+        bucket.pendingParams.clear()
+        if (logic.isBlank()) return null
+        val entry = LogSqlEntry(
+            rawSql = logic,
+            restoredSql = restorer.restore(logic, params),
+            params = params,
+            source = SqlSource.SHARDINGSPHERE,
+            logTimestamp = logLine?.let { LogTimestampParser.parse(it) },
+            actualSql = actual.ifEmpty { null },
+        )
+        entries += entry
+        return entry
+    }
+
+    /** 提取关键字后的文本（行中任意位置定位——容忍日志框架前缀；与其余解析器 mixed 语义一致）。 */
+    private fun extractAfterKeyword(line: String, keyword: String): String? {
+        val idx = line.indexOf(keyword)
+        if (idx < 0) return null
+        return line.substring(idx + keyword.length).trim()
+    }
+
+    /**
+     * 从 Actual 段提取 `Parameters: [...]` 绑定值（无类型标注；还原走 [LogSqlRestorer] 启发式）。
+     * TODO(等语料)：值文本含 ", " 的拆分、空参形态 `[]`、null 字面量形态——骨架按公开文档样例直拆。
+     */
+    private fun extractParams(actualSegment: String): List<LogSqlParam> {
+        val idx = actualSegment.lastIndexOf(PARAMETERS_KEYWORD)
+        if (idx < 0) return emptyList()
+        val bracket = actualSegment.substring(idx + PARAMETERS_KEYWORD.length).trim()
+        if (!bracket.startsWith("[") || !bracket.endsWith("]")) return emptyList()
+        val content = bracket.substring(1, bracket.length - 1)
+        if (content.isBlank()) return emptyList()
+        return content.split(", ").map { LogSqlParam(value = it, type = null) }
+    }
+
+    companion object {
+        const val LOGIC_SQL_PREFIX = "Logic SQL:"
+        const val ACTUAL_SQL_PREFIX = "Actual SQL:"
+        const val PARAMETERS_KEYWORD = "Parameters:"
+
+        /** Actual 行折叠上限（防异常日志膨胀；路由/条目另有 maxParseLength 与桶上限兜底）。 */
+        const val MAX_ACTUAL_LINES = 64
+
+        const val DEFAULT_MAX_PARSE_LENGTH = 20000
+
+        /** 静默冲刷阈值（对齐 [JdbcTemplateLogParser.DEFAULT_SETTLE_MS]）。 */
+        const val DEFAULT_SETTLE_MS = 1000L
+    }
+}

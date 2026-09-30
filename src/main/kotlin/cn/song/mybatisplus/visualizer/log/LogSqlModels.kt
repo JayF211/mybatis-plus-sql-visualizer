@@ -10,6 +10,12 @@ enum class SqlSource {
     HIBERNATE,
     /** Spring JdbcTemplate 控制台日志（`Executing prepared SQL statement [SQL]` / `Setting SQL statement parameter value: ...` 格式）。 */
     JDBC,
+    /**
+     * ShardingSphere 双段日志（R10 T-ShardingSphereCompat，5.x sql-show 形态）：
+     * `Logic SQL:` 主条目 + `Actual SQL:` 折叠附注（[LogSqlEntry.actualSql]）。
+     * 骨架按公开文档形态实现，真实语料未采样（V36）——行为细节见解析器 TODO。
+     */
+    SHARDINGSPHERE,
     /** agent 字节码通道（M56 增强捕获）：应用 JVM 内 JDBC 执行点 hook 直取的结构化事件。 */
     AGENT,
     /**
@@ -124,6 +130,13 @@ data class LogSqlEntry(
      * 展示性字段，不入去重指纹。
      */
     val databaseName: String? = null,
+    /**
+     * Actual SQL 折叠附注（R10 T-ShardingSphereCompat，D1=A）：[SqlSource.SHARDINGSPHERE]
+     * 条目的 `Actual SQL:` 段原文（多分片逐行、换行连接）；其余来源恒 null。
+     * Logic 主条目 + Actual 折叠的模型承载——面板对照渲染（折叠态样式）等真实语料（V36）。
+     * 展示性字段：随 pd 载荷键 `a` 落盘（仅非默认落键），不入去重指纹。
+     */
+    val actualSql: String? = null,
 ) {
     /**
      * T-CrudColor：条目语句类型（渲染热路径缓存，惰性计算一次）。

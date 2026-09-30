@@ -3,7 +3,9 @@ package cn.song.mybatisplus.visualizer.mcp
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.log.HibernateLogParser
 import cn.song.mybatisplus.visualizer.log.JdbcTemplateLogParser
+import cn.song.mybatisplus.visualizer.log.LogSqlEntry
 import cn.song.mybatisplus.visualizer.log.MyBatisLogParser
+import cn.song.mybatisplus.visualizer.log.ShardingSphereLogParser
 import com.intellij.mcpserver.annotations.McpDescription
 import com.intellij.mcpserver.annotations.McpTool
 import com.intellij.mcpserver.annotations.McpToolHintValue
@@ -20,10 +22,11 @@ import com.intellij.mcpserver.annotations.McpToolHints
  */
 open class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
 
-    @McpTool(name = "sqlv_render_logs", title = "Restore MyBatis/Hibernate/JdbcTemplate logs into executable SQL")
+    @McpTool(name = "sqlv_render_logs", title = "Restore MyBatis/Hibernate/JdbcTemplate/ShardingSphere logs into executable SQL")
     @McpDescription(
         "Restore executable SQL from application log text (MyBatis 'Preparing:'/'Parameters:' pairs, " +
-            "Hibernate 'Hibernate:' SQL with 'binding parameter' lines, or Spring JdbcTemplate debug lines). " +
+            "Hibernate 'Hibernate:' SQL with 'binding parameter' lines, Spring JdbcTemplate debug lines, " +
+            "or ShardingSphere 5.x sql-show 'Logic SQL:'/'Actual SQL:' dual segments). " +
             "Pass the raw multi-line log text as 'logText'. Prefix overrides (sqlPrefix/paramPrefix/" +
             "hibernateSqlPrefix/hibernateParamPrefix) and 'mixedPrefixMatching' are optional and default to " +
             "the plugin's log-capture settings. Each restored statement is prefixed with a '-- SQL #N' " +
@@ -71,6 +74,7 @@ open class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
                     hibernateParamPrefix = state.logHibernateParamPrefix,
                     jdbcEnabled = state.logJdbcEnabled,
                     maxParseLength = state.logMaxParseLength,
+                    shardingEnabled = state.logShardingSphereEnabled,
                 )
             }
         }.getOrDefault(LogPrefixDefaults())
@@ -108,12 +112,15 @@ open class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
         val hibernateParamPrefix: String = "binding parameter",
         val jdbcEnabled: Boolean = true,
         val maxParseLength: Int = 20_000,
+        /** R10：ShardingSphere 双段日志解析开关（D3=A 默认开）。 */
+        val shardingEnabled: Boolean = true,
     )
 
     companion object {
         /**
-         * 纯函数核心（普通 JUnit 直测）：装配三解析器 → 逐行喂 → 合并条目。
+         * 纯函数核心（普通 JUnit 直测）：装配四解析器 → 逐行喂 → 合并条目。
          * 覆盖参数空串/null 回落 [defaults]；解析器装配与 `LogToSqlPanel.buildParsers` 同参同构。
+         * R10：第四格式 = ShardingSphere 双段日志（Logic SQL / Actual SQL，骨架按公开文档形态）。
          */
         fun renderLogEntries(
             logText: String,
@@ -123,33 +130,37 @@ open class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
             hibernateParamPrefix: String = "",
             mixedPrefixMatching: Boolean? = null,
             defaults: LogPrefixDefaults = LogPrefixDefaults(),
-        ) = Triple(
-            MyBatisLogParser(
+        ): List<LogSqlEntry> {
+            val myBatis = MyBatisLogParser(
                 sqlPrefix = sqlPrefix.ifBlank { defaults.sqlPrefix },
                 paramPrefix = paramPrefix.ifBlank { defaults.paramPrefix },
                 mixedPrefix = mixedPrefixMatching ?: defaults.mixedPrefixMatching,
                 maxParseLength = defaults.maxParseLength,
-            ),
-            HibernateLogParser(
+            )
+            val hibernate = HibernateLogParser(
                 sqlPrefix = hibernateSqlPrefix.ifBlank { defaults.hibernateSqlPrefix },
                 paramPrefix = hibernateParamPrefix.ifBlank { defaults.hibernateParamPrefix },
                 mixedPrefix = mixedPrefixMatching ?: defaults.mixedPrefixMatching,
                 maxParseLength = defaults.maxParseLength,
-            ),
-            JdbcTemplateLogParser(
+            )
+            val jdbc = JdbcTemplateLogParser(
                 enabled = defaults.jdbcEnabled,
                 maxParseLength = defaults.maxParseLength,
-            ),
-        ).let { (myBatis, hibernate, jdbc) ->
+            )
+            val sharding = ShardingSphereLogParser(
+                maxParseLength = defaults.maxParseLength,
+            )
             logText.lineSequence().forEach { line ->
                 myBatis.feed(line)
                 hibernate.feed(line)
                 jdbc.feed(line)
+                if (defaults.shardingEnabled) sharding.feed(line)
             }
             myBatis.closePending()
             hibernate.closePending()
             jdbc.closePending()
-            myBatis.takeEntries() + hibernate.takeEntries() + jdbc.takeEntries()
+            sharding.closePending()
+            return myBatis.takeEntries() + hibernate.takeEntries() + jdbc.takeEntries() + sharding.takeEntries()
         }
     }
 }

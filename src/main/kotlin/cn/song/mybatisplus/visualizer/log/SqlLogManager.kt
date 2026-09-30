@@ -587,6 +587,7 @@ class SqlLogManager(private val project: Project) : Disposable {
             hibernateParamPrefix = state.logHibernateParamPrefix,
             hibernateEnabled = state.logHibernateEnabled,
             jdbcEnabled = state.logJdbcEnabled,
+            shardingEnabled = state.logShardingSphereEnabled,
         )
     }
 
@@ -657,4 +658,6 @@ data class ParserConfig(
     val hibernateEnabled: Boolean = true,
     // JdbcTemplate 解析器配置（M47）
     val jdbcEnabled: Boolean = true,
+    // ShardingSphere 解析器配置（R10 T-ShardingSphereCompat；D3=A 默认开）
+    val shardingEnabled: Boolean = true,
 )
