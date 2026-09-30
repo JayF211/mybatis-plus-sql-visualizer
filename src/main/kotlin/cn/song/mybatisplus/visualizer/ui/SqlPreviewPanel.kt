@@ -338,6 +338,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private var embeddedConsole: JComponent? = null
 
     /**
+     * R33：结构化 EXPLAIN 回调代际计数——每次发起新的 EXPLAIN 结构化提交/新预览/清空都递增，
+     * 在途 pooled 回调（JDBC 可能慢于用户操作）按提交时捕获的代际判过期，过期即丢弃：
+     * 慢计划绝不覆盖用户已经看到的新预览/新提交（与 DataSourceSelector 的 swapGeneration 同思路）。
+     */
+    private var explainStructuredGeneration = 0
+
+    /**
      * M36.5.39-A2：持久包装容器——console 组件统一嵌入此容器、容器整体挂入 editorHolder。
      * DBN results refreshed 期间会临时拿走 console 组件，旧的直挂方式（editorHolder.add(console)）
      * 会把 editorHolder 的显示链一并波及（holderShowing=false → 右侧空白）；隔离后 DBN 只动
@@ -1610,6 +1617,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (!confirmUnknownParams(proj)) return
         // T-PSG-04（N-33）：对账非阻断标注与 executeSql 同址同款（EXPLAIN 也是执行旁路）
         warnOnPlaceholderMismatch()
+        // R33：面板 EXPLAIN 双通道分派（结构化渲染为增量——判定/执行/渲染任一环不成立都
+        // fail-closed 回退直送通道，双通道并存不替换既有行为，见 submitExplainOrStructured）
+        // 代际先递增（所有路径）——作废前一次提交的在途结构化回调
+        explainStructuredGeneration++
+        submitExplainOrStructured(proj, dialect, explainSql)
+    }
+
+    /**
+     * R33：EXPLAIN **直送通道**（既有行为原样收敛）——包装语句交原生 Database 控制台执行，
+     * 结果区内嵌控制台（embedConsole）。结构化通道的初始回退与「回到原生控制台」入口都复用
+     * 本函数：直送链只此一份，绝不新增第二套执行链。
+     */
+    private fun submitExplainDirect(proj: Project, explainSql: String) {
         resultPanel.showLoading()
         SqlExecutor.execute(
             proj, explainSql, null, true,
@@ -1620,6 +1640,134 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             },
             onErrorRich = { info -> showErrorRichWithLocate(info) },
         )
+    }
+
+    /**
+     * R33：面板 EXPLAIN 双通道分派（自建执行链路线，批次 9 核实报告 §三 V41 定案）。
+     *
+     * 判定（[ExplainPanelChannel.decide]，纯逻辑）：开关开 ∧ 输出格式 ∈ {TABLE, JSON}
+     * ∧ database 插件在场 ∧ 预览会话已绑数据源 → 结构化通道；开关关/其余方言（TEXT/XML，
+     * 含 R23 Oracle 二段式与 SQL Server XML——不硬解析红线）→ 设计内直送（静默）；无数据源/
+     * 无插件 → fail-closed 回退直送＋一条轻提示（不弹窗）。执行/渲染异常同样回退直送——
+     * **结构化通道绝不成为 EXPLAIN 的唯一路径**。
+     *
+     * 数据源取当前预览会话已绑数据源（循 T-ConsoleDbContext 既有选择形态：预览用哪条
+     * 数据源，EXPLAIN 就在同一条上跑）；JDBC 全程 pooled 线程（禁 EDT），结果经 EDT 回调
+     * 换入结构化视图，代际计数防过期回调覆盖新预览。
+     */
+    private fun submitExplainOrStructured(proj: Project, dialect: cn.song.mybatisplus.visualizer.sql.Dialect, explainSql: String) {
+        val settings = PluginSettings.getInstance().state
+        val boundDs = runCatching {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
+        }.getOrNull()
+        val format = cn.song.mybatisplus.visualizer.sql.ExplainSupport.formatFor(dialect.name)
+        when (
+            val verdict = cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.decide(
+                enabled = settings.explainStructuredRender,
+                format = format,
+                databaseAvailable = cn.song.mybatisplus.visualizer.mcp.McpDbExecutor.isDatabaseAvailable(),
+                hasBoundDataSource = boundDs != null,
+            )
+        ) {
+            cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.DirectSilent ->
+                submitExplainDirect(proj, explainSql)
+
+            is cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.DirectFallback -> {
+                notifyExplainStructuredFallback(proj, verdict.reason, detail = null)
+                submitExplainDirect(proj, explainSql)
+            }
+
+            cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.Structured -> {
+                val ds = boundDs
+                val outFormat = format
+                // 防御：判定与取值之间环境可能变化（数据源失效等）——缺一即回退，不硬解包
+                if (ds == null || outFormat == null) {
+                    submitExplainDirect(proj, explainSql)
+                    return
+                }
+                resultPanel.showLoading()
+                val generation = explainStructuredGeneration
+                cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.executeStructured(
+                    proj, ds, explainSql,
+                    timeoutSeconds = settings.executionTimeoutSeconds,
+                    onPlan = { outcome ->
+                        if (com.intellij.openapi.util.Disposer.isDisposed(this) || generation != explainStructuredGeneration) {
+                            return@executeStructured
+                        }
+                        // 索引建议联动（ExplainIndexAdvisor 规则集的面板侧消费——只提示不执行；
+                        // 建议器异常不连坐计划渲染，降级为无建议）
+                        val hints = runCatching {
+                            cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor.advise(
+                                dialect.name, outcome.raw.headers, outcome.raw.rows,
+                            )
+                        }.getOrDefault(emptyList())
+                        embedExplainView(
+                            ExplainPlanResultView(
+                                dialectName = dialect.name,
+                                dataSourceName = outcome.dataSourceName,
+                                elapsedMs = outcome.elapsedMs,
+                                raw = outcome.raw,
+                                format = outFormat,
+                                hints = hints,
+                                onBackToConsole = { submitExplainDirect(proj, explainSql) },
+                            ),
+                        )
+                        resultPanel.showIdle()
+                    },
+                    onFailed = { errorText ->
+                        if (com.intellij.openapi.util.Disposer.isDisposed(this) || generation != explainStructuredGeneration) {
+                            return@executeStructured
+                        }
+                        notifyExplainStructuredFallback(proj, null, detail = errorText)
+                        submitExplainDirect(proj, explainSql)
+                    },
+                )
+            }
+        }
+    }
+
+    /**
+     * R33：结构化 EXPLAIN 视图换入结果区（consoleHost 同位换入，循 embedConsole 的宿主形态；
+     * 先 detachConsole 解绑旧控制台的 rehost 监听——残活会把控制台抢回已废弃面板，6 连抢实锤）。
+     * 下一次控制台嵌入/预览/清空都会自然替换本视图，双通道并存不互斥。
+     */
+    private fun embedExplainView(component: JComponent) {
+        detachConsole()
+        editorHolder.removeAll()
+        editorHolder.add(consoleHost, java.awt.BorderLayout.CENTER)
+        consoleHost.removeAll()
+        consoleHost.add(component, java.awt.BorderLayout.CENTER)
+        component.border = JBUI.Borders.empty()
+        revalidate()
+        repaint()
+    }
+
+    /**
+     * R33：结构化通道回退轻提示（fail-closed 姿态的一部分——落回直送通道并告知原因，
+     * 不弹窗打断）。[reason] 非 null = 环境性回退（无数据源/无插件）；null = 执行失败，
+     * [detail] 携带驱动错误文本。
+     */
+    private fun notifyExplainStructuredFallback(
+        proj: Project,
+        reason: cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.FallbackReason?,
+        detail: String?,
+    ) {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            val why = when (reason) {
+                cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.FallbackReason.NO_DATA_SOURCE ->
+                    MpSqlVisualizerBundle.message("panel.explain.structured.reason.noDataSource")
+                cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.FallbackReason.NO_DATABASE_PLUGIN ->
+                    MpSqlVisualizerBundle.message("panel.explain.structured.reason.noDatabasePlugin")
+                null -> detail ?: ""
+            }
+            Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("panel.explain"),
+                MpSqlVisualizerBundle.message("panel.explain.structured.fallback", why),
+                NotificationType.INFORMATION,
+            ).notify(proj)
+        }
     }
 
     /**
@@ -2808,6 +2956,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // M36：清空结果面板 + 摘除内嵌控制台
         resultPanel.clear()
         detachConsole()
+        // R33：作废在途结构化 EXPLAIN 回调 + 清掉结构化视图残留（consoleHost 子层换空，
+        // 下次预览重新走 prepareConsole 正常换入控制台；editorHolder 清空在本函数开头已做）
+        explainStructuredGeneration++
+        consoleHost.removeAll()
         // M36.4：重置原生编辑器文档引用
         nativeEditorDoc = null
         // T-AutoFold F5：控制台编辑器引用随清空复位
@@ -2828,6 +2980,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 渲染 SQL 到可编辑编辑器；已存在时更新文档（保留焦点/撤销）。 */
     private fun showSql(sql: String) {
+        // R33：新预览作废在途结构化 EXPLAIN 回调（慢计划不覆盖用户已切换的新预览）
+        explainStructuredGeneration++
         // T-RefreshDbSteal：三分支走查埋点——真机故障期症状②（左参数不再同步右侧 SQL）的
         // 丢失路径必经此方法（三个静默分支之一吞掉了渲染），带分支标签定位
         val fLogger = com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)

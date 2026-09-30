@@ -476,6 +476,14 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var paginationSimEnabled: Boolean = true,
 
+        /**
+         * R33：EXPLAIN 结构化渲染开关（面板执行计划按钮的双通道增量，核实报告 V41 定案的
+         * 自建执行链路线）——开=MySQL 家族表格行/PG 家族 JSON 计划在面板内结构化渲染＋索引
+         * 建议条；其余方言（TEXT/XML 不硬解析）与判定/执行/渲染任一失败路径一律 fail-closed
+         * 回退原生控制台直送通道（双通道并存不替换）。默认开。
+         */
+        var explainStructuredRender: Boolean = true,
+
         // ---------- F-7 SQL 历史记录 ----------
 
         /**

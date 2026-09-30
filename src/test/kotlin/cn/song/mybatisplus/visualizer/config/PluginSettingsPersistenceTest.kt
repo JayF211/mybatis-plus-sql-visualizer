@@ -136,6 +136,11 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
                 "zh 下 O-58 列名数据源校正开关应为中文文案: $zhTexts",
                 zhTexts.any { it.contains("按数据源校正列名") },
             )
+            // R33 T-ExplainStructured：EXPLAIN 结构化渲染开关文案正反两面（zh 侧）
+            assertTrue(
+                "zh 下 R33 EXPLAIN 结构化渲染开关应为中文文案: $zhTexts",
+                zhTexts.any { it.contains("结构化渲染 EXPLAIN") },
+            )
             // 模拟用户选择 English（写穿）→ 重建表单（invokeLater 在测试环境不保证执行，直接调用）
             panel.selectLanguage("en")
             panel.rebuild()
@@ -147,6 +152,11 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             assertTrue(
                 "rebuild 后 O-58 列名数据源校正开关应刷新为英文文案: $texts",
                 texts.any { it.contains("Calibrate column names") },
+            )
+            // R33 T-ExplainStructured：EXPLAIN 结构化渲染开关文案（en 侧）
+            assertTrue(
+                "rebuild 后 R33 EXPLAIN 结构化渲染开关应刷新为英文文案: $texts",
+                texts.any { it.contains("Structured EXPLAIN") },
             )
             // M28：更新分区新增「启动时自动检查更新」开关（默认开）——复选框总数 4 → 5；
             // T-M31.14 SQL 日志组 +5；手动选择实体类开关 +1（T-M38+）；关闭工具窗口停止监听 +1；
@@ -170,8 +180,9 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // T-PerfSweep16 F46（40ee1fd）：新增「mapper XML 语法高亮」开关（xmlSynHiCheck）+1 后为 38；
             // R12 T-PaginationSim：分页拦截器模拟开关（paginationSimCheck）+1 后为 39；
             // R10 T-ShardingSphereCompat：ShardingSphere 双段日志捕获开关（logShardingSphereEnabledCheck）+1 后为 40；
+            // R33 T-ExplainStructured：EXPLAIN 结构化渲染开关（explainStructuredCheck）+1 后为 41；
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
-            assertEquals("复选框总数应为 40", 40, texts.size)
+            assertEquals("复选框总数应为 41", 41, texts.size)
         } finally {
             settings.state.language = old
         }
@@ -209,6 +220,23 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             assertTrue("清空后应为出厂默认 true", settings.state.columnCalibrationEnabled)
             settings.loadState(saved)                         // 模拟重启重载
             assertFalse("往返后 columnCalibrationEnabled 应保持 false", settings.state.columnCalibrationEnabled)
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testStateRoundTripKeepsExplainStructuredRender() {
+        // R33 T-ExplainStructured：EXPLAIN 结构化渲染开关随 State 持久化往返保留（O-58 同款契约）；
+        // 默认 = 开（结构化是双通道增量，失败自动回退直送，默认开无风险面）
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.explainStructuredRender = false
+            val saved = settings.getState().copy()          // 模拟落盘快照
+            settings.loadState(PluginSettings.State())        // 清成出厂默认（true）
+            assertTrue("清空后应为出厂默认 true", settings.state.explainStructuredRender)
+            settings.loadState(saved)                         // 模拟重启重载
+            assertFalse("往返后 explainStructuredRender 应保持 false", settings.state.explainStructuredRender)
         } finally {
             settings.loadState(snapshot)
         }

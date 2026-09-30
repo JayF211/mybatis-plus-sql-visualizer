@@ -169,6 +169,27 @@ object DataSourceSelector {
     @JvmStatic
     fun isPrepared(): Boolean = preparedConsole != null
 
+    /**
+     * R33 EXPLAIN 结构化通道：当前预览会话已绑控制台的 DBN 数据源（共享/已备控制台二者取一，
+     * 循 T-ConsoleDbContext 既有选择形态——预览会话用哪条数据源，EXPLAIN 就在同一条上跑）。
+     *
+     * 控制台有效性先探（`isValid()` 反射，复用链同款判据——失效控制台的数据源对象不可信）；
+     * 取引用包 ReadAction（EDT 读 PSI 硬抛平台陷阱；[ExecConsoleContext.boundDataSource]
+     * 是 DBN 链内 API，Community 下经 McpDbExecutor.isDatabaseAvailable 前置闸不会到达）。
+     * 无控制台/已失效/反射失败一律 null → 调用方 fail-closed 回退直送通道。
+     */
+    @JvmStatic
+    fun boundConsoleDataSource(): Any? {
+        val console = sharedConsole ?: preparedConsole ?: return null
+        val live = runCatching {
+            console.javaClass.getMethod("isValid").invoke(console) == true
+        }.getOrDefault(false)
+        if (!live) return null
+        return ReadAction.compute<Any?, RuntimeException> {
+            ExecConsoleContext.boundDataSource(console)
+        }
+    }
+
     /** 释放已准备控制台引用（面板清空/关闭时调用；JdbcConsole 本体由 IDE 管理）。 */
     @JvmStatic
     fun clearPrepared() {

@@ -458,6 +458,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** JDBC 模板 SQL 字符串预览开关：queryForList/update 等方法的字符串 SQL 实参显示预览图标。 */
     private val jdbcSqlPreviewCheck = JBCheckBox()
 
+    /** EXPLAIN 结构化渲染开关（R33）：面板执行计划按钮的结构化通道（默认开，失败自动回退原生控制台）。 */
+    private val explainStructuredCheck = JBCheckBox()
+
     /** T-ExecTimeoutGuard：执行超时（秒，0=不限）——JBIntSlider 过重，JBTextField + 数字容错。 */
     private val executionTimeoutField = JBTextField(8)
 
@@ -764,6 +767,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 addRow(p, g, "", jdbcSqlPreviewCheck.apply {
                     text = MpSqlVisualizerBundle.message("settings.preview.jdbc")
                     toolTipText = MpSqlVisualizerBundle.message("settings.preview.jdbc.tip")
+                })
+                addRow(p, g, "", explainStructuredCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.explain.structured")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.explain.structured.tip")
                 })
                 addRow(p, g, MpSqlVisualizerBundle.message("settings.preview.executionTimeout"), executionTimeoutField.apply {
                     toolTipText = MpSqlVisualizerBundle.message("settings.preview.executionTimeout.tip")
@@ -1615,6 +1622,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || dataPermissionMockConditionField.text.trim() != s.dataPermissionMockCondition
             || paginationSimCheck.isSelected != s.paginationSimEnabled
             || jdbcSqlPreviewCheck.isSelected != s.jdbcSqlPreviewEnabled
+            || explainStructuredCheck.isSelected != s.explainStructuredRender
             || executionTimeoutField.text.trim().toIntOrNull() != s.executionTimeoutSeconds
 
     private fun isModifiedTableMapping(s: PluginSettings.State): Boolean =
@@ -1734,6 +1742,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.dataPermissionMockCondition = dataPermissionMockConditionField.text.trim()
             s.paginationSimEnabled = paginationSimCheck.isSelected
             s.jdbcSqlPreviewEnabled = jdbcSqlPreviewCheck.isSelected
+            s.explainStructuredRender = explainStructuredCheck.isSelected
             s.executionTimeoutSeconds = executionTimeoutField.text.trim().toIntOrNull()
                 ?: PluginSettings.DEFAULT_EXECUTION_TIMEOUT_SECONDS
         }
@@ -1888,6 +1897,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             dataPermissionMockConditionField.text = s.dataPermissionMockCondition
             paginationSimCheck.isSelected = s.paginationSimEnabled
             jdbcSqlPreviewCheck.isSelected = s.jdbcSqlPreviewEnabled
+            explainStructuredCheck.isSelected = s.explainStructuredRender
             executionTimeoutField.text = s.executionTimeoutSeconds.toString()
         }
         if (SECTION_TABLE_MAPPING in sections) {
