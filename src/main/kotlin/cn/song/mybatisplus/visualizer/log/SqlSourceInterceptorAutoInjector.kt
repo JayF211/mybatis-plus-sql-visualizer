@@ -11,6 +11,7 @@ import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.psi.PsiDirectory
 import com.intellij.psi.PsiFileFactory
 import com.intellij.psi.PsiManager
+import com.intellij.psi.xml.XmlFile
 
 /**
  * F-44-7：SqlSourceInterceptor 自动注入核心。
@@ -266,6 +267,7 @@ object SqlSourceInterceptorAutoInjector {
 
     /**
      * 成功消息：全部为升级 → 升级文案（已更新旧版拦截器文件）；
+     * 新注入模块**全部为原生 MyBatis** → 原生文案（第二个文件是原生包装类且 XML 已注册）；
      * 单模块纯新建沿用既有三参文案；其余多模块/混合形态列模块清单（T-JumpPath-04 聚合形态）。
      */
     private fun successMessage(
@@ -275,12 +277,19 @@ object SqlSourceInterceptorAutoInjector {
         outcome: PrepareOutcome.Ready,
     ): String {
         val bundle = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+        val injectedStructures = outcome.ready.filter { (it.moduleName ?: it.basePackage ?: "?") in injectedNames }
         return when {
             created.isEmpty() && upgraded.isNotEmpty() -> bundle.message(
                 "log.inject.upgraded",
                 upgraded.size.toString(),
                 upgraded.joinToString("、"),
             )
+            injectedStructures.isNotEmpty() && injectedStructures.all { it.type == ProjectType.MYBATIS_NATIVE } ->
+                bundle.message(
+                    "log.inject.successNative",
+                    SourceInterceptorTemplates.INTERCEPTOR_FILE_NAME,
+                    SourceInterceptorTemplates.NATIVE_PLUGIN_FILE_NAME,
+                )
             injectedNames.size == 1 -> {
                 val structure = outcome.ready.first { (it.moduleName ?: it.basePackage ?: "?") == injectedNames[0] }
                 bundle.message(
@@ -340,15 +349,76 @@ object SqlSourceInterceptorAutoInjector {
         }
     }
 
-    /** MyBatis 原生项目注入（TODO：后续实现）。 */
+    /**
+     * MyBatis 原生（非 Spring Boot）项目注入（R24 补完）。
+     *
+     * 装配点 = mybatis-config.xml 的 `<plugins>`：落两文件（拦截器本体 [SourceInterceptorTemplates.INTERCEPTOR_FILE_NAME]
+     * ＋原生包装 [SourceInterceptorTemplates.NATIVE_PLUGIN_FILE_NAME]——`<plugin>` 注册硬前提是
+     * org.apache.ibatis.plugin.Interceptor，本体是 MP InnerInterceptor 不满足，包装类按无参构造
+     * 实例化并分发），再把 `<plugin interceptor="FQCN"/>` 注册进 `<plugins>`（缺席新建、幂等跳过）。
+     *
+     * fail-closed（[MyBatisNativeWiring.decide]）：检测不到 config / config 多处 / 根标签非
+     * `<configuration>` → 不注入返回 [InjectionResult.UnsupportedProject]（引导文案照旧）；
+     * 已注册（文件被用户删过）→ 只补文件、XML 不动。config 定位只搜源根同级 `src/main/resources`
+     * （classpath 根惯用位置），别处放置即 NO_CONFIG，不猜。
+     */
     private fun injectMyBatisNative(
         project: Project,
         basePackage: String,
         sourceRoot: VirtualFile,
     ): InjectionResult {
-        // TODO：检测 mybatis-config.xml 并添加拦截器配置
-        LOG.info("SqlSourceInterceptorAutoInjector: MyBatis 原生项目暂不支持自动注入")
-        return InjectionResult.UnsupportedProject
+        return try {
+            WriteCommandAction.runWriteCommandAction<InjectionResult>(project) {
+                val candidates = MyBatisNativeWiring.findConfigCandidates(sourceRoot)
+                val psiManager = PsiManager.getInstance(project)
+                val xmlFile = candidates.singleOrNull()?.let { psiManager.findFile(it) as? XmlFile }
+                val rootTag = xmlFile?.rootTag
+                val fqcn = MyBatisNativeWiring.pluginFqcn(basePackage)
+                val decision = MyBatisNativeWiring.decide(
+                    candidates.size,
+                    rootTag?.name,
+                    rootTag != null && MyBatisNativeWiring.isPluginRegistered(rootTag, fqcn),
+                )
+                when (decision) {
+                    MyBatisNativeWiring.Decision.NO_CONFIG,
+                    MyBatisNativeWiring.Decision.AMBIGUOUS_CONFIG,
+                    MyBatisNativeWiring.Decision.NOT_MYBATIS_CONFIG,
+                    -> {
+                        LOG.info("SqlSourceInterceptorAutoInjector: MyBatis 原生项目注入跳过（$decision），basePackage=$basePackage")
+                        InjectionResult.UnsupportedProject
+                    }
+                    MyBatisNativeWiring.Decision.ALREADY_REGISTERED, MyBatisNativeWiring.Decision.INJECT -> {
+                        val configDir = createPackageDirectories(project, sourceRoot, "$basePackage.config")
+                            ?: return@runWriteCommandAction InjectionResult.CannotDetectStructure
+                        // 拦截器本体与 Spring Boot 路径共用一份模板（循本体、换装配点）
+                        createJavaFile(
+                            project, configDir,
+                            SourceInterceptorTemplates.INTERCEPTOR_FILE_NAME,
+                            SourceInterceptorTemplates.generateInterceptorClass(basePackage),
+                        )
+                        createJavaFile(
+                            project, configDir,
+                            SourceInterceptorTemplates.NATIVE_PLUGIN_FILE_NAME,
+                            SourceInterceptorTemplates.generateNativePluginClass(basePackage),
+                        )
+                        if (decision == MyBatisNativeWiring.Decision.INJECT) {
+                            MyBatisNativeWiring.registerPluginInConfig(xmlFile!!, fqcn)
+                            // PSI 编辑落盘：配置类改动要被用户机的应用进程读到（与文件创建同批次持久化）
+                            com.intellij.psi.PsiDocumentManager.getInstance(project).getDocument(xmlFile)?.let { doc ->
+                                com.intellij.psi.PsiDocumentManager.getInstance(project).commitDocument(doc)
+                                com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().saveDocument(doc)
+                            }
+                        }
+                        InjectionResult.Success(basePackage)
+                    }
+                }
+            }.also {
+                LOG.info("SqlSourceInterceptorAutoInjector: MyBatis 原生注入${if (it is InjectionResult.Success) "成功" else "未成功"}，basePackage=$basePackage")
+            }
+        } catch (e: Exception) {
+            LOG.warn("SqlSourceInterceptorAutoInjector: MyBatis 原生注入失败", e)
+            InjectionResult.CannotDetectStructure
+        }
     }
 
     /** 创建包目录（递归）。 */
