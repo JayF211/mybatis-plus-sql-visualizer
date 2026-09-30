@@ -44,6 +44,49 @@ tasks.withType<Test>().configureEach {
     if (providers.gradleProperty("testGc").getOrElse("") == "parallel") {
         jvmArgs("-XX:+UseParallelGC")
     }
+    // T-TestPerf5：SerialGC 档 -PtestGc=serial。2026-09-25 对照实测全程留档：筛查窗读出
+    // −6.4%（177s/173s vs G1 基线 194s/180s），但晚窗收口 193s/188s 不复现，同刻 G1 对照
+    // 187s/190s 与 serial 无差——机器窗口漂移 ±5~8%（execSum 配置无关地早窗 ~595s → 晚窗
+    // ~630s）与效应同量级，净效应 ≈0，不落默认回退 G1。教训定例：效应量 <10% 的调参实验
+    // 必须同窗交错 A/B，单窗成对对照 + 「复跑确认」防不了窗口漂移。开关保留供负载形态变化
+    // 后按同窗交错法复测（ParallelGC 无收益是 T-TestPerf4 的另一档，两档均已实测）。
+    if (providers.gradleProperty("testGc").getOrElse("") == "serial") {
+        jvmArgs("-XX:+UseSerialGC")
+    }
+    // T-TestPerf5：测试 JVM 线程面治理 -PtestProcCap=N → -XX:ActiveProcessorCount=N（缺省
+    // 不动）。2026-09-25 对照实测：cap3 189s / cap4（该跑中途 1 例 FatalPassthroughTest 回调
+    // 计数断言失败，定向复跑 cap4×2 + 裸跑×2 全绿不复现——负载形态敏感的时序竞态嫌疑，非
+    // 确定性语义影响）vs G1 基线均值 187s——无收益（<5%），路线销账不落默认；「线程面超额
+    // 认领是争用主因」假说证伪（片间膨胀主分量不在 JVM 线程层，内存带宽/调度更可能）。
+    // 开关保留供负载形态变化后复测。语义中立性前提：grep 实测仓内 src/ 无 availableProcessors
+    // 依赖（2026-09-25），EDT 单线程模型不受影响。
+    providers.gradleProperty("testProcCap").orNull?.toIntOrNull()?.let {
+        jvmArgs("-XX:ActiveProcessorCount=$it")
+    }
+    // T-TestPerf9：JVM 线程面二代旋钮——一代 ActiveProcessorCount 帽的是应用线程池本身
+    // （测试代码并行度一起被压，T5 证伪）；二代只压 JVM 自带线程，应用并发度不动。
+    // 全部缺省不动，筛查轮 -P 逐旋钮启用；适用面=根项目全部 Test 任务（分片/外部桶/testFast），
+    // agent 子项目不在面内（早收非瓶颈）。flag 合法性已用 JBR 17 -version 预验。
+    // -PtestGcThreads=N → ParallelGCThreads=N + ConcGCThreads=N/2：5 并发平台测试 JVM 的
+    //   G1 工作线程（Windows 12 逻辑核默认 ~6-8/JVM）×5 风暴压帽，GC 停顿更短更稳。
+    providers.gradleProperty("testGcThreads").orNull?.toIntOrNull()?.let { n ->
+        jvmArgs("-XX:ParallelGCThreads=$n", "-XX:ConcGCThreads=${maxOf(1, n / 2)}")
+    }
+    // -PtestCiCount=N → CICompilerCount=N（tiered 下限取 3 档）：JIT 编译线程 ×5 压帽，
+    //   头部 EDT 敏感类的 JIT 争用回吐。
+    providers.gradleProperty("testCiCount").orNull?.toIntOrNull()?.let {
+        jvmArgs("-XX:CICompilerCount=$it")
+    }
+    // -PtestNoExplicitGc=true → DisableExplicitGC：平台显式 System.gc() 触发的全暂停 ×5
+    //   JVM 根除。风险=512m 堆失去显式回收点（V3：OOM/长尾即销案）。
+    if (providers.gradleProperty("testNoExplicitGc").getOrElse("") == "true") {
+        jvmArgs("-XX:+DisableExplicitGC")
+    }
+    // -PtestTieredStop=true → TieredStopAtLevel=1：bootstrap JIT 预热提速，长 UI 类回退风险
+    // （T8 S5 遗留项，本轮一并筛查销案或转正）。
+    if (providers.gradleProperty("testTieredStop").getOrElse("") == "true") {
+        jvmArgs("-XX:TieredStopAtLevel=1")
+    }
     // Docker 测试默认关闭（20260923 用户定例）：daemon 半活态会让 testcontainers 的 ping
     // 探测阻塞无超时（runCatching 兜不住阻塞形态，20260923 发行门禁实录三片挂起 40 分钟），
     // daemon 活着时真容器方言验证的 pull/run 耗时也不可控。只有显式 -PmpvDockerTests=true
@@ -82,9 +125,18 @@ fun listSuiteXmls(dir: File): List<File> =
 // T-TestPerf4（2026-09-24）在片执行 ~210s 的新负载下 warm 重测：3 片 3m57s / 4 片 3m30s、
 // 3m16s / 5 片 3m36s——固定开销占比下降后拐点右移到 4 片，默认改 4。代价是 execSum 总和
 // 随并发度膨胀（601→687→858s），5 片起竞争损耗超过切分收益；负载形态再变时按同法重测。
+// T-TestPerf5（2026-09-25）：5 片×SerialGC 复测 186s 仍回劣（4 片×serial 同日 173~177s；
+// execSum 718s，+20% 并发膨胀不随 GC 换型消失）——4 片定案维持。
+// T-TestPerf7（2026-09-27）保质期规则第三次触发后 5 片翻案定案：T6（execSum −13.8%）+T7-S1
+// （testExternal 扩容再摘 ~20s）之后片执行降到 ~135s 档、testExternal 桶又把签名护栏的
+// 外部 JVM 核验移出分片算术，同窗交错 A/B 实测 4/5/6 片各两轮 warm＝4 片 166s/170s
+// （4b 189s 含 1 例负载敏感 flake 嫌疑不复现）/5 片 153s·146s/6 片 167s·160s（execSum +39%
+// 并发膨胀、Commit 峰值 66.4GB 触顶）——**5 片中位 150s，−10.7% 达标定案**；Commit 峰值
+// 5 片 65.0GB（余量 9.7GB > 8GB 判据），两轮零假失败。负载形态再变（execSum 或固定开销）
+// 时按同法重测。
 // 顶层声明——分片注册（testIde 块内）与聚合报告（testShards 任务）两处共用。
 val testShardCount = providers.gradleProperty("testShardCount").orNull
-    ?.toIntOrNull()?.coerceIn(1, 6) ?: 4
+    ?.toIntOrNull()?.coerceIn(1, 6) ?: 5
 
 // 测试源码单遍扫描（T-TestPerf3 提为顶层：分片分区与 testFast 划桶两处共用；内容提取类名，
 // Kotlin 文件名≠类名合法——CrudPreviewFlowAndTypesTest.kt 内是 DbTypeQuoteHintTest 的先例）。
@@ -124,6 +176,44 @@ val fastBucketClasses: List<String> = testFileEntries
         "cn.song.mybatisplus.visualizer.actions.CrudSqlPreviewFlowTest",
         "cn.song.mybatisplus.visualizer.feedback.ErrorReportDialogLayoutTest",
     ) }
+
+// T-TestPerf6：S3 外部进程型护栏桶——签名护栏类对本机发行版逐个起外部 JBR JVM 核验，
+// 不需要平台沙盒（testFast 非沙盒 JVM 定向全绿实证，20260926）；从分片类集摘出后与 4 片
+// 并行执行（桶内 invokeAll 池并行核验 + 桶与分片并发），护栏族扩容不再挤占片墙钟。
+// T-TestPerf7 S1 扩容四类（20260927，桶内单跑行为验证绿后入册）：AcpSignature（纯 JUnit 声明，
+// 源文本 com.intellij 均为字面量非 import，T6 留尾巴「验证通过后移入」）+ S2 快照化三类守卫
+// （源码扫描守卫，repoRoot 走 user.dir 上溯，Gradle Test 工作目录=项目根同样满足；
+// EnumReachability 本就是 testFast 桶成员=日常非沙盒实证）。全部红则回退留分片（68 例隐性
+// 平台依赖教训口径），分片 execSum 相应 −19s 档。
+val testExternalClasses = setOf(
+    "cn.song.mybatisplus.visualizer.mcp.McpDbSignatureCrossVersionTest",
+    "cn.song.mybatisplus.visualizer.update.PlatformSignatureCrossVersionTest",
+    "cn.song.mybatisplus.visualizer.acp.AcpSignatureCrossVersionTest",
+    "cn.song.mybatisplus.visualizer.config.SettingsRealityGuardTest",
+    "cn.song.mybatisplus.visualizer.convention.BannedApiSourceScanTest",
+    "cn.song.mybatisplus.visualizer.convention.EnumReachabilityGuardTest",
+)
+
+tasks.register<Test>("testExternal") {
+    group = "verification"
+    description = "签名护栏外部分离桶（非沙盒 JVM，与 testShards 分片并行；一命令全量自动触发）"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    // classpath 三段构造同 testFast（T-TestPerf3 实测定案）：main+test output 前置（mpvBuild
+    // manifest 读取前提）、平台 jar 复用默认 test 成品、剔除插件自身 jar
+    classpath = sourceSets["main"].output + sourceSets["test"].output +
+        tasks.named<Test>("test").get().classpath.filter {
+            !it.name.startsWith("mybatis-plus-sql-visualizer-")
+        }
+    filter {
+        testExternalClasses.forEach { includeTestsMatching(it) }
+    }
+    maxParallelForks = 1
+    // T-TestPerf8 S6：强制每轮真跑。分片任务因 MPV-Build 时间戳（Jar 任务恒重跑）+ prepareSandbox
+    // 链而恒重跑，本桶 classpath 不含插件 jar，无源码变更的连跑会被判 UP-TO-DATE 静默跳过
+    // （20260928 warm2 轮实证）——聚合报告照读旧 XML，护栏「本轮已验」是假。与分片语义对齐；
+    // 墙钟代价≈0（桶与分片并行且早收，warm1 实证 59.4s ≪ 片窗口 120s+）。
+    outputs.upToDateWhen { false }
+}
 
 tasks.register<Test>("testFast") {
     group = "verification"
@@ -185,6 +275,7 @@ intellijPlatformTesting {
         val discoveredTestClasses: List<String> = testFileEntries
             .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
             .filter { it !in dbIntegrationClasses }
+            .filter { it !in testExternalClasses }
             .sorted()
         // 时长权重表：discoveredTestClasses 全集覆盖。T-TestPerf4 起同类取 mtime 最新的
         // K 份取中位数（-PtestShardWeightSamples，默认 2）——分片跑出的单类耗时带 ±7% 级
@@ -223,38 +314,174 @@ intellijPlatformTesting {
             .filter { (_, _, text) -> text.contains("CopyPasteManager") || text.contains("systemClipboard") }
             .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
             .toSet()
-        // 贪心均衡：亲和类先固定第 1 片（discoveredTestClasses 已字典序，分区确定性不变），
-        // 其余逐类放入当前最轻片（并列取最小下标，minByOrNull 语义即确定性）
-        val shardAssignment: List<List<String>> = run {
+
+        // T-TestPerf8 S3：头部巨类方法级跨片拆分（-PtestSplitHeavy=false 可关，默认开）。
+        // 均衡器以类为最小调度单元，头部巨类是单片内不可分割的原子载荷（SqlPreviewPanelTest
+        // 43.4s=片均值 35%，T7 收口 ±7% 失衡的主分量）。开启时把候选类的测试方法按实测
+        // 逐例权重贪心对半拆成两片段：主体片 include 全类 + exclude 片段 B 方法清单；片段 B
+        // （include "FQCN.method" 清单）挂到除主体片外最轻的片。
+        // 默认开的依据（20260928 实验轮）：机制全证绿（两轮 parity 6082 全绿 + union 配置期
+        // 断言 + 今日 3 例 flake 全部发生在关闭态=零拆分归因）；exec 临界片 −1~3s（方向性，
+        // <5% 判据如实入账），收益随头部类增长复利；回退= -PtestSplitHeavy=false 一词。
+        // 红线：零删例（两片段并集=该类全集，同一份数据配置期生成、天然互补）、零断言改动
+        // （不动测试源码）；隔离语义只增不减（两 JVM 各自完整平台 bootstrap，TestCase 每例
+        // 新实例 setUp/tearDown 不变）。数据驱动自维护：新增用例不在片段 B 清单→自然落主体片；
+        // 已删用例的残留 pattern 无害；数据缺失/半截 XML/例数不足→退化不拆，确定性不破坏。
+        // 安全前提（20260928 实施轮预检口径）：候选类不得含剪贴板亲和（跨片会复刻互抢 flake）、
+        // 不得含 companion/@BeforeClass 类内共享状态（V4，逐候选源码审计）。
+        fun parseTestCaseEntries(xml: File): List<Pair<String, Double>>? = runCatching {
+            Regex("""<testcase name="([^"]+)"[^>]*?time="([\d.]+)"""")
+                .findAll(xml.readText())
+                .map { it.groupValues[1] to it.groupValues[2].toDouble() }
+                .toList()
+        }.getOrNull()?.takeIf { it.isNotEmpty() }
+
+        val testSplitHeavy = providers.gradleProperty("testSplitHeavy").orNull?.toBoolean() ?: true
+        val splitHeavyClassCandidates = listOf(
+            "cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelTest",
+        )
+        val splitResultDirs = sequenceOf(file("build/test-results/test")) +
+            (1..testShardCount).asSequence().map { file("build/test-results/testShard$it") }
+        // 拆分计划：FQCN -> 该类逐例 (method, seconds)。门槛：例数 ≥30（太小的类不值 exclude/
+        // include 维护面）；候选含机器全局亲和类则跳过；testShardCount<2 无处可搬不拆。
+        val splitPlan: Map<String, List<Pair<String, Double>>> =
+            if (!testSplitHeavy || testShardCount < 2) emptyMap() else {
+                splitHeavyClassCandidates
+                    .filter { it !in machineGlobalAffinityClasses }
+                    .mapNotNull { fqcn ->
+                        val xmls = splitResultDirs.map { File(it, "TEST-$fqcn.xml") }
+                            .filter { it.isFile }.toList()
+                        val latest = xmls.maxByOrNull { it.lastModified() } ?: return@mapNotNull null
+                        val entries = parseTestCaseEntries(latest) ?: return@mapNotNull null
+                        // 拆分开启后同类 XML 一分为二分布两目录：mtime 最新半 + 互补半合并成全集
+                        val merged = if (xmls.size > 1) {
+                            (entries + xmls.filter { it != latest }
+                                .maxByOrNull { it.lastModified() }
+                                ?.let { parseTestCaseEntries(it) ?: emptyList() }.orEmpty())
+                                .distinctBy { it.first }
+                        } else entries
+                        if (merged.size < 30) null else fqcn to merged
+                    }.toMap()
+            }
+        // 片段划分：逐例按（权重降序, 名字升序）贪心进轻半，轻半=跨片的片段 B。
+        val splitFragments: Map<String, Pair<List<Pair<String, Double>>, List<Pair<String, Double>>>> =
+            splitPlan.mapValues { (_, entries) ->
+                var ta = 0.0
+                var tb = 0.0
+                val fa = mutableListOf<Pair<String, Double>>()
+                val fb = mutableListOf<Pair<String, Double>>()
+                entries.sortedWith(compareByDescending<Pair<String, Double>> { it.second }.thenBy { it.first })
+                    .forEach { e ->
+                        if (ta <= tb) { fa += e; ta += e.second } else { fb += e; tb += e.second }
+                    }
+                fa to fb
+            }
+        // 拆分类的类权重=各结果目录最新 XML 之和（逐类 K 中位数会把半截 XML 当全类——
+        // 片段 XML 各含约一半用例，mtime 取新只读到一截）。
+        val effectiveWeights: Map<String, Double> = if (splitFragments.isEmpty()) durationWeights else {
+            durationWeights.mapValues { (fqcn, w) ->
+                if (fqcn !in splitFragments) w
+                else splitResultDirs.mapNotNull { d ->
+                    val f = File(d, "TEST-$fqcn.xml")
+                    if (f.isFile) parseTestSuiteAttrs(f)?.get("time")?.toDoubleOrNull() else null
+                }.sum().takeIf { it > 0.0 } ?: w
+            }
+        }
+        // 贪心均衡（S3 片段感知）：亲和类先固定第 1 片；其余逐项放入当前最轻片（并列取最小
+        // 下标，确定性）。拆分类产生两项：主体（权重=全类−片段B）与片段B——排序键
+        // （权重降序, 非片段优先, 名字升序）保证主体先落位；片段B落位时排除主体所在片。
+        class ShardPlan(
+            val classes: List<List<String>>,
+            val loads: List<Double>,
+            val fragExcludes: Map<Int, List<String>>,
+            val fragIncludes: Map<Int, List<String>>,
+            val fragHome: Map<String, Int>,
+            val fragTarget: Map<String, Int>,
+        )
+        val plan = run {
             val shards = List(testShardCount) { mutableListOf<String>() }
             val loads = DoubleArray(testShardCount)
+            val fragExcludes = HashMap<Int, MutableList<String>>()
+            val fragIncludes = HashMap<Int, MutableList<String>>()
+            val classShard = HashMap<String, Int>()
+            val fragOfHome = HashMap<String, Int>()
+            val fragOfTarget = HashMap<String, Int>()
             discoveredTestClasses.filter { it in machineGlobalAffinityClasses }.forEach { name ->
                 shards[0] += name
-                loads[0] += durationWeights[name] ?: 0.0
+                loads[0] += effectiveWeights[name] ?: 0.0
+                classShard[name] = 0
             }
-            durationWeights.entries
+            val items = ArrayList<Triple<String, Double, String?>>() // (名, 权重, 非null=片段B所属类)
+            effectiveWeights.entries
                 .filter { it.key !in machineGlobalAffinityClasses }
-                .sortedWith(compareByDescending<Map.Entry<String, Double>> { it.value }.thenBy { it.key })
-                .forEach { entry ->
+                .forEach { (name, w) ->
+                    val frag = splitFragments[name]
+                    if (frag == null) items += Triple(name, w, null)
+                    else {
+                        val fb = frag.second
+                        val fbW = fb.sumOf { it.second }
+                        items += Triple(name, w - fbW, null)
+                        items += Triple("$name#fragB", fbW, name)
+                    }
+                }
+            items.sortedWith(
+                compareByDescending<Triple<String, Double, String?>> { it.second }
+                    .thenBy { if (it.third != null) 1 else 0 }
+                    .thenBy { it.first },
+            ).forEach { (name, w, fragOf) ->
+                if (fragOf == null) {
                     val target = loads.indices.minByOrNull { loads[it] }!!
-                    shards[target] += entry.key
-                    loads[target] += entry.value
+                    shards[target] += name
+                    loads[target] += w
+                    classShard[name] = target
+                } else {
+                    val home = classShard[fragOf] ?: 0
+                    val target = loads.indices.filter { it != home }.minByOrNull { loads[it] }!!
+                    shards[target] += name
+                    loads[target] += w
+                    splitFragments[fragOf]!!.second.forEach { (method, _) ->
+                        val pattern = "$fragOf.$method"
+                        fragExcludes.getOrPut(home) { mutableListOf() } += pattern
+                        fragIncludes.getOrPut(target) { mutableListOf() } += pattern
+                    }
+                    fragOfHome[fragOf] = home
+                    fragOfTarget[fragOf] = target
                 }
-            shards
+            }
+            ShardPlan(shards, loads.toList(), fragExcludes, fragIncludes, HashMap(fragOfHome), HashMap(fragOfTarget))
         }
-        logger.lifecycle(
-            "testShards: $testShardCount shards duration-balanced, loads=" +
-                shardAssignment.indices.joinToString(" ") { i ->
-                    "shard${i + 1}=%.1fs/%dclasses".format(
-                        shardAssignment[i].sumOf { durationWeights[it] ?: 0.0 },
-                        shardAssignment[i].size,
-                    )
-                }
-        )
+        val shardAssignment = plan.classes
+        // task{} 惰性块只捕获可序列化的纯 Map/List（局部类实例进 CC 序列化有拒收风险）
+        val fragExcludesByShard: Map<Int, List<String>> =
+            plan.fragExcludes.mapValues { (_, v) -> v.toList() }
+        val fragIncludesByShard: Map<Int, List<String>> =
+            plan.fragIncludes.mapValues { (_, v) -> v.toList() }
+        if (splitFragments.isEmpty()) {
+            logger.lifecycle(
+                "testShards: $testShardCount shards duration-balanced, loads=" +
+                    plan.loads.indices.joinToString(" ") { i ->
+                        "shard${i + 1}=%.1fs/%dclasses".format(plan.loads[i], shardAssignment[i].size)
+                    },
+            )
+        } else {
+            splitFragments.forEach { (fqcn, frag) ->
+                val (fa, fb) = frag
+                val home = plan.fragHome[fqcn]?.plus(1) ?: "?"
+                val target = plan.fragTarget[fqcn]?.plus(1) ?: "?"
+                logger.lifecycle(
+                    "testShards S3 split $fqcn: fragA=%.1fs/%dm + fragB=%.1fs/%dm (union=%d)，主体片=shard$home 片段B=shard$target"
+                        .format(fa.sumOf { it.second }, fa.size, fb.sumOf { it.second }, fb.size, fa.size + fb.size),
+                )
+            }
+            logger.lifecycle(
+                "testShards: $testShardCount shards duration-balanced (S3 split on), loads=" +
+                    plan.loads.indices.joinToString(" ") { i ->
+                        "shard${i + 1}=%.1fs/%dclasses".format(plan.loads[i], shardAssignment[i].size)
+                    },
+            )
+        }
         // T-TestPerf4：喂给聚合任务的两份配置期产物（见 shardPlanExpectedLoads 注释）
-        shardPlanExpectedLoads = shardAssignment.indices
-            .map { i -> "%.1f".format(shardAssignment[i].sumOf { durationWeights[it] ?: 0.0 }) }
-            .joinToString("|")
+        shardPlanExpectedLoads = plan.loads.joinToString("|") { "%.1f".format(it) }
         shardPlanClasses = discoveredTestClasses.joinToString("\n")
         for (i in 1..testShardCount) {
             val idx = i - 1
@@ -272,6 +499,10 @@ intellijPlatformTesting {
                     classpath = classpath + files(sourceSets.named("mcpStub").map { it.output })
                     filter {
                         shardAssignment[idx].forEach { includeTestsMatching(it) }
+                        // T-TestPerf8 S3 拆分互补过滤：主体片 exclude 片段 B 方法；片段 B 所在片
+                        // include 之。两份清单出自同一份片段集（配置期生成），天然互补防双跑/漏跑。
+                        fragExcludesByShard[idx]?.forEach { excludeTestsMatching(it) }
+                        fragIncludesByShard[idx]?.forEach { includeTestsMatching(it) }
                     }
                     // 并发审计锚点：起止毫秒时间戳，验证一命令多片是否真并行（T-TestPerf-05）
                     doFirst { logger.lifecycle("testShard$i START ${System.currentTimeMillis()}") }
@@ -423,6 +654,8 @@ tasks.register("testShards") {
     description =
         "分片全量测试（时长均衡自动分区 $testShardCount 片，一命令真并行；-PtestShardCount 调片数）"
     dependsOn(*(1..testShardCount).map { "testShard$it" }.toTypedArray())
+    // T-TestPerf6：S3 外部护栏桶与分片同命令并行（org.gradle.parallel 已开）
+    dependsOn("testExternal")
     // T-TestPerf4：预期各片 execSum 与计划类全集——配置期固化成 String（见
     // shardPlanExpectedLoads 注释），doLast 只做文件 IO + 读 inputs，不触达脚本对象。
     inputs.property("mpvExpectedShardLoads", shardPlanExpectedLoads)
@@ -430,7 +663,8 @@ tasks.register("testShards") {
     // 聚合报告（T-TestPerf2）：分片跑完直接打印各片与总数四元组，与串行口径的计数 parity 目测即得。
     // 配置缓存约束：结果目录在配置期解析为 File，doLast 只做文件 IO 不触达 Project/layout，
     // 且解析辅助函数须定义在 doLast 体内——引用脚本顶层函数会整段不可序列化（实证报错）。
-    val shardResultDirs = (1..testShardCount).map { file("build/test-results/testShard$it") }
+    val shardResultDirs = (1..testShardCount).map { file("build/test-results/testShard$it") } +
+        file("build/test-results/testExternal")
     doLast {
         fun suiteXmls(dir: File): List<File> =
             dir.listFiles { f: File -> f.isFile && f.name.startsWith("TEST-") && f.name.endsWith(".xml") }?.toList() ?: emptyList()
@@ -452,6 +686,9 @@ tasks.register("testShards") {
         var execSeconds = 0.0
         val seenClasses = HashSet<String>()
         shardResultDirs.forEachIndexed { idx, dir ->
+            // T-TestPerf6：末位目录是 testExternal 桶；标签用目录名（testShardN 名即标签，
+            // 不引用脚本顶层 testShardCount——doLast 引用脚本对象会炸配置缓存，本轮实证）
+            val label = dir.name
             var n = 0
             var f = 0
             var e = 0
@@ -459,7 +696,7 @@ tasks.register("testShards") {
             var t = 0.0
             val xmls = suiteXmls(dir)
             if (xmls.isEmpty()) {
-                logger.lifecycle("testShard${idx + 1}: $dir 下无结果 XML（该分片未跑？）")
+                logger.lifecycle("$label: $dir 下无结果 XML（该分片未跑？）")
             }
             for (xml in xmls) {
                 val attrs = suiteAttrs(xml) ?: continue
@@ -476,7 +713,7 @@ tasks.register("testShards") {
             val expectedTxt = expectedLoads.getOrNull(idx)
                 ?.let { " expected=%.1fs".format(it) } ?: ""
             logger.lifecycle(
-                "testShard${idx + 1}: tests=$n failures=$f errors=$e skipped=$s time=%.1fs$expectedTxt".format(t),
+                "$label: tests=$n failures=$f errors=$e skipped=$s time=%.1fs$expectedTxt".format(t),
             )
             total += n; failed += f; errored += e; skipped += s; execSeconds += t
         }
