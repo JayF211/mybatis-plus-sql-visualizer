@@ -168,14 +168,15 @@ class ExplainGateTest {
 
     @Test
     fun `提交判定_方言不接入与语句不可解释_两类理由可区分`() {
-        // 同一句 SELECT：Oracle 得到「方言不支持」，MySQL 得到可提交——理由不合并
-        assertEquals(
-            ExplainGate.SubmitPlan.DialectUnsupported("Oracle"),
-            ExplainGate.planExplainSubmit(OracleDialect, "SELECT 1"),
-        )
+        // 两类拒绝理由仍可区分：不可解释语句拿到 NotExplainable（实际首词在案），
+        // 可解释语句拿到 Submit——R23 后 11/11 全接入，DialectUnsupported 只剩未知键路径
         assertEquals(
             ExplainGate.SubmitPlan.NotExplainable("delete"),
             ExplainGate.planExplainSubmit(OracleDialect, "DELETE FROM t"),
+        )
+        assertEquals(
+            ExplainGate.SubmitPlan.Submit("EXPLAIN PLAN FOR SELECT 1"),
+            ExplainGate.planExplainSubmit(OracleDialect, "SELECT 1"),
         )
     }
 

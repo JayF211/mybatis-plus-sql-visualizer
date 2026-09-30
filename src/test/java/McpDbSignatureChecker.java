@@ -69,6 +69,12 @@ public class McpDbSignatureChecker {
         missing += check(method(remoteConnection, "clearWarnings"), "RemoteConnection.clearWarnings()");
         Class<?> remoteStatement = Class.forName("com.intellij.database.remote.jdbc.RemoteStatement", true, loader);
         missing += check(method(remoteStatement, "executeQuery", params("java.lang.String")), "RemoteStatement.executeQuery(String)");
+        // R23：Oracle/SQL Server EXPLAIN 走 execute() 多结果宽容通道（RemoteStatement 镜像，
+        // 262 intellij.database.jdbcConsole.jar javap 实证 2026-09-30）
+        missing += check(method(remoteStatement, "execute", params("java.lang.String")), "RemoteStatement.execute(String)");
+        missing += check(method(remoteStatement, "getResultSet"), "RemoteStatement.getResultSet()");
+        missing += check(method(remoteStatement, "getMoreResults"), "RemoteStatement.getMoreResults()");
+        missing += check(method(remoteStatement, "getUpdateCount"), "RemoteStatement.getUpdateCount()");
         missing += check(method(remoteStatement, "close"), "RemoteStatement.close()");
         missing += check(method(remoteStatement, "getAllWarnings"), "RemoteStatement.getAllWarnings()");
         missing += check(method(remoteStatement, "clearWarnings"), "RemoteStatement.clearWarnings()");
