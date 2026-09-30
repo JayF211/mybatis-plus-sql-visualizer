@@ -2741,9 +2741,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val fLogger = com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
         // T-MpjFill：追加 fill 附加查询段（MPJ 1.5.1+）——在主 SQL 之后渲染 fill 附加 SELECT
         val withFill = appendFillSection(sql)
+        // R12 T-PaginationSim：追加分页 COUNT 包裹段（D1=A 预览附第二条语句，对齐捕获侧 COUNT 独立条目口径）
+        val withFillAndCount = appendCountSection(withFill)
         // T-PreviewDisplayMode：显示模式在渲染管线内统一套用（唯一收敛点——XML/批量/模型/旧文本
         // 四条重建路径都经此处，故参数输入/勾选/foreach 变更后形态保持）
-        val text = applyDisplayMode(withFill)
+        val text = applyDisplayMode(withFillAndCount)
         // M36.4：优先写入原生编辑器文档（内嵌后）
         val nativeDoc = nativeEditorDoc
         if (nativeDoc != null) {
@@ -2847,6 +2849,22 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             sb.append("\n")
         }
         return sb.toString()
+    }
+
+    /**
+     * R12 T-PaginationSim：追加分页 COUNT 包裹段（D1=A 预览附第二条语句）。
+     *
+     * 在主 SQL（含 fill 段）之后以注释头并列渲染 COUNT 包裹 SQL（对齐捕获侧 MP_PAGINATION_COUNT
+     * 独立条目口径——运行时 COUNT 是分页查询之外的独立语句）。无 COUNT 产出时原样返回。
+     */
+    private fun appendCountSection(sql: String): String {
+        val result = current ?: return sql
+        val countSql = result.countSql ?: return sql
+        return StringBuilder(sql)
+            .append("\n\n-- ").append(MpSqlVisualizerBundle.message("panel.pagination.count.section")).append("\n")
+            .append(countSql)
+            .append("\n")
+            .toString()
     }
 
     /** 首次创建：原生 SQL FileType PSI → 文档 → 可编辑编辑器，附补全上下文（Editor + PSI 双载体，M16.2）。 */

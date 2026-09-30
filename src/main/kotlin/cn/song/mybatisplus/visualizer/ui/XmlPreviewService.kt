@@ -1,15 +1,19 @@
 package cn.song.mybatisplus.visualizer.ui
-import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
-
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.psi.XmlCrossNsFragmentResolver
+import cn.song.mybatisplus.visualizer.sql.DialectRegistry
+import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
+import cn.song.mybatisplus.visualizer.sql.interceptor.PaginationSimulator
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.xml.MockObject
 import cn.song.mybatisplus.visualizer.xml.XmlEwExpander
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
 import cn.song.mybatisplus.visualizer.xml.XmlParseException
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import cn.song.mybatisplus.visualizer.xml.XmlScriptException
+import cn.song.mybatisplus.visualizer.xml.XmlStatementKind
 import com.intellij.openapi.project.Project
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.search.GlobalSearchScope
@@ -38,12 +42,15 @@ object XmlPreviewService {
         project: Project? = null,
         entityContext: SqlCompletionContext? = null,
     ): PreviewResult {
+        // R12 T-PaginationSim：解析产物三元组（namespace/语句 id/语句类型）透出 try 块——分页模拟后处理用
+        var parsedRef: Triple<String?, String, XmlStatementKind>? = null
         val (model, staticWarnings) = try {
             // T-IC-02：跨命名空间 include 片段表（无 project → 空表，纯文本链行为不变）
             val crossNamespace = XmlCrossNsFragmentResolver.resolve(fileText, project)
             val parsed = XmlMapperParser().parse(fileText, crossNamespace)
             val statement = parsed.statements.firstOrNull { it.id == statementId } ?: parsed.statements.firstOrNull()
                 ?: return emptyResult("未找到可预览的 SQL 语句（mapper 中无 select/insert/update/delete）。")
+            parsedRef = Triple(parsed.namespace, statement.id, statement.kind)
             val warnings = mutableListOf<String>()
             val staticValues = resolveStaticFields(fileText, project, warnings)
             // T-M26-B（P-立项-03）：MP 占位展开（${ew.customSqlSegment} 等）——Java 关联 wrapper 实参 → 片段注入
@@ -61,9 +68,72 @@ object XmlPreviewService {
         } catch (e: XmlScriptException) {
             return emptyResult(e.message ?: "SQL 脚本解析失败。")
         }
+        val ref = parsedRef ?: return toResult(model, staticWarnings, entityContext)
 
-        return toResult(model, staticWarnings, entityContext)
+        return applyPagination(
+            toResult(model, staticWarnings, entityContext),
+            project = project,
+            namespace = ref.first,
+            statementId = ref.second,
+            kind = ref.third,
+        )
     }
+
+    /**
+     * R12 T-PaginationSim：XML 语句路径的分页拦截器模拟后处理（mapper 接口方法带 Page/IPage 形参时）。
+     * 定位形参后委托 [applyPaginationShared]。
+     */
+    private fun applyPagination(
+        result: PreviewResult,
+        project: Project?,
+        namespace: String?,
+        statementId: String,
+        kind: XmlStatementKind,
+    ): PreviewResult = runCatching {
+        if (!paginationSimEnabled()) return@runCatching result
+        val paramName = MapperPageParamLocator.fromStatement(project, namespace, statementId)
+            ?: return@runCatching result
+        applyPaginationShared(result, project, paramName, kind)
+    }.getOrDefault(result)
+
+    /**
+     * R12 T-PaginationSim：分页拦截器模拟后处理共享实现（XML 路径与注解路径共用，
+     * [pageParamName] 非 null 且语句为 SELECT 时生效）。
+     *
+     *  - SELECT 语句 → 渲染文本尾部追加分页 LIMIT（方言形态，[DialectRegistry.effective]；
+     *    形参运行时值静态不可得 → `LIMIT ?, ?` 占位，参数来源标注 IPage 访问器公式）；
+     *  - 同产出 COUNT 包裹附第二条语句（`SELECT COUNT(*) FROM (原SQL) TOTAL`，MP 3.5.17
+     *    getOriginalCountSql 逐字节形态，包裹体**不含** LIMIT——运行时 COUNT 先于 LIMIT 执行）；
+     *  - 语句已含 LIMIT（用户手写，V13c 边界）→ 不重复追加、不产 COUNT（预览保守口径，偏离
+     *    MP 运行时「字面拼接」的偏离已登记）；
+     *  - 非 SELECT（INSERT/UPDATE/DELETE）不分页（对齐 T-M29-03「仅 SELECT 生效」口径）。
+     */
+    internal fun applyPaginationShared(
+        result: PreviewResult,
+        project: Project?,
+        pageParamName: String?,
+        kind: XmlStatementKind,
+    ): PreviewResult = runCatching {
+        if (pageParamName == null) return@runCatching result
+        if (kind != XmlStatementKind.SELECT) return@runCatching result
+        if (PaginationSimulator.hasExistingLimit(result.sql)) return@runCatching result
+        val limitClause = PaginationSimulator.placeholderLimitClause(pageParamName)
+        val limitLine = DialectRegistry.effective(project = project).renderLimit(limitClause)
+        val countSql = PaginationSimulator.wrapCountSql(result.sql.replace(WHITESPACE_REGEX, " ").trim())
+        val extraSources = PaginationSimulator.placeholderParamSources(pageParamName)
+        result.copy(
+            sql = result.sql.trimEnd() + "\n" + limitLine,
+            compactSql = result.compactSql.trimEnd() + " " + limitLine,
+            unresolvedParams = result.unresolvedParams + extraSources,
+            paramTable = ParameterReplacer.buildParamTable(result.unresolvedParams + extraSources),
+            paramHints = result.paramHints + extraSources.map { ParamHint(quote = false) },
+            countSql = countSql,
+        )
+    }.getOrDefault(result)
+
+    /** 分页模拟开关（测试环境未注册设置服务时按默认开）。 */
+    internal fun paginationSimEnabled(): Boolean =
+        runCatching { PluginSettings.getInstance().state.paginationSimEnabled }.getOrDefault(true)
 
     /**
      * T-M26-B：MP 占位展开——扫描 `${变量.customSqlSegment/sqlSelect/sqlSet}`，

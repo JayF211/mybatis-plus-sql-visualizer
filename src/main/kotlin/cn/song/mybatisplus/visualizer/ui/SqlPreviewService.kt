@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.log.SqlLogManager
 import cn.song.mybatisplus.visualizer.log.sqlLogManagerIfCreated
 import cn.song.mybatisplus.visualizer.sql.interceptor.DataPermissionPlaceholder
 import cn.song.mybatisplus.visualizer.sql.interceptor.DynamicTableNameProcessor
+import cn.song.mybatisplus.visualizer.sql.interceptor.PaginationSimulator
 import cn.song.mybatisplus.visualizer.sql.interceptor.TenantLineEnhancer
 import cn.song.mybatisplus.visualizer.converter.EasyQueryConverter
 import cn.song.mybatisplus.visualizer.converter.MdsConverter
@@ -345,7 +346,10 @@ class SqlPreviewService(private val project: Project) {
             } else {
                 applyPageLimit(dataPermissionStatement, located.chain.pageLimit)
             }
-            val result = buildPreviewResult(located.chain.wrapperType, table, pagedStatement)
+            // R12 T-PaginationSim：分页 COUNT 包裹预览（D1=A 预览附第二条语句；D2=A 基础包裹形态；
+            // D3=A searchCount=false 跳过；count/exists 消费不产 COUNT——复用 T-M29-02/03 分页消费口径）
+            val countSql = paginationCountSql(located.chain, pagedStatement)
+            val result = buildPreviewResult(located.chain.wrapperType, table, pagedStatement, countSql)
             recordHistory(result, anchor)
             // exists 消费：外层包裹 SELECT EXISTS（对齐 MP 3.5.15 BaseMapper.exists 语义）
             return if (located.chain.existsConsumed && located.chain.wrapperType.isQueryLike()) {
@@ -1303,11 +1307,13 @@ class SqlPreviewService(private val project: Project) {
 
     /**
      * 由语句模型构建预览结果（应用方言与格式化配置）。
+     * R12 T-PaginationSim：[countSql] 非 null 时透传 [PreviewResult.countSql]（面板在主 SQL 后并列渲染）。
      */
     private fun buildPreviewResult(
         wrapperType: cn.song.mybatisplus.visualizer.model.WrapperType?,
         table: cn.song.mybatisplus.visualizer.model.TableInfo,
         statement: SqlStatement,
+        countSql: String? = null,
     ): PreviewResult {
         val dialect = currentDialect()
         val compact = !formatSql()
@@ -1334,7 +1340,35 @@ class SqlPreviewService(private val project: Project) {
             perfWarnings = analyzePerf(generated.sql, statement),
             // T-MpjFill：fill 附加查询子句（MPJ 1.5.1+）——透传至面板追加渲染
             fillClauses = (statement as? SelectStatement)?.fillClauses,
+            // R12 T-PaginationSim：分页 COUNT 包裹（面板在主 SQL 后并列渲染第二条语句）
+            countSql = countSql,
         )
+    }
+
+    /**
+     * R12 T-PaginationSim：分页 COUNT 包裹预览文本（D2=A 基础包裹形态）。
+     *
+     * MP PaginationInnerInterceptor 运行时先对**原语句（不含 LIMIT）**执行 COUNT、再给分页语句
+     * 追加 LIMIT（willDoQuery → autoCountSql → handlerLimit 顺序，3.5.17 反编译实证）——故包裹体
+     * 取 `copy(limit = null)` 的语句重生成（模型级去 LIMIT，避免文本截断）。
+     *
+     * 产出条件（全部满足）：
+     *  - 设置开关 [PluginSettings.State.paginationSimEnabled]（默认开）；
+     *  - 语句为 SELECT 且已应用分页 LIMIT（`mapper.selectList(page, w)` 等分页消费产物）；
+     *  - 非 count/exists 消费（其本身即计数语义，不再包裹——对齐 T-M29-02/03 分页消费排除口径）；
+     *  - Page.searchCount != false（D3=A；MP 运行时 searchCount=false 不执行 COUNT，反编译实证）。
+     */
+    private fun paginationCountSql(
+        chain: cn.song.mybatisplus.visualizer.model.WrapperChain,
+        statement: SqlStatement,
+    ): String? {
+        if (settings?.state?.paginationSimEnabled == false) return null
+        if (chain.countConsumed || chain.existsConsumed) return null
+        if (!chain.pageSearchCount) return null
+        val select = statement as? SelectStatement ?: return null
+        if (select.limit == null) return null
+        val base = SqlGenerator.generate(select.copy(limit = null), compact = true, dialect = currentDialect())
+        return PaginationSimulator.wrapCountSql(base)
     }
 
     /**

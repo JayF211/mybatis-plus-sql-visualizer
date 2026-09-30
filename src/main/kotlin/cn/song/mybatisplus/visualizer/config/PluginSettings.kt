@@ -458,6 +458,14 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var dataPermissionMockCondition: String = "",
 
+        /**
+         * 分页拦截器模拟（R12 T-PaginationSim）：mapper 方法/XML/注解语句路径的 Page/IPage 参数
+         * 按 MP PaginationInnerInterceptor 语义模拟——COUNT 包裹预览（D1=A 第二条语句；
+         * searchCount=false 跳过，D3=A）。默认开（对齐 injectLogicDelete 预览保真增强默认开口径；
+         * MP 运行时 Page 默认 searchCount=true 恒执行 COUNT，反编译实证）。
+         */
+        var paginationSimEnabled: Boolean = true,
+
         // ---------- F-7 SQL 历史记录 ----------
 
         /**

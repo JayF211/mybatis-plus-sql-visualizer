@@ -99,7 +99,7 @@ object AnnotationSqlPreviewService {
         }
         val sql = values.joinToString(" ").trim()
         val method = PsiTreeUtil.getParentOfType(annotation, PsiMethod::class.java)
-        return buildResult(sql, shortName, previewParamTypes(method), warnings, project)
+        return buildResult(sql, shortName, previewParamTypes(method), warnings, project, method)
     }
 
     // ------------------------------------------------------------------
@@ -129,7 +129,7 @@ object AnnotationSqlPreviewService {
         if (sql == null) {
             return nullResult(MpSqlVisualizerBundle.message("annotation.provider.notSupported"))
         }
-        return buildResult(sql, shortName, previewParamTypes(mapperMethod), warnings, project)
+        return buildResult(sql, shortName, previewParamTypes(mapperMethod), warnings, project, mapperMethod)
     }
 
     /** Provider type 解析：value/type 属性（PsiClassObjectAccessExpression）→ PsiClass。 */
@@ -228,13 +228,15 @@ object AnnotationSqlPreviewService {
     }
 
     /** 模型 → 结果（解析异常兜底 warning；T-M25.2 静态常量引用经 project 解析注入）。
-     *  T-PT-01：paramTypes 为「参数名 → 类型类别」，名字作 mock 键、类别入预览模型（占位提示/mock 分派）。 */
+     *  T-PT-01：paramTypes 为「参数名 → 类型类别」，名字作 mock 键、类别入预览模型（占位提示/mock 分派）。
+     *  R12 T-PaginationSim：[method] 非 null 且带 Page/IPage 形参 → 分页模拟后处理（LIMIT 追加 + COUNT 包裹）。 */
     private fun buildResult(
         sql: String,
         shortName: String,
         paramTypes: Map<String, ParamTypeInfo>,
         warnings: MutableList<String>,
         project: Project?,
+        method: PsiMethod? = null,
     ): PreviewResult {
         val kind = when (shortName.removeSuffix("Provider")) {
             "Select" -> XmlStatementKind.SELECT
@@ -245,7 +247,16 @@ object AnnotationSqlPreviewService {
         return try {
             val staticValues = XmlPreviewService.resolveStaticFields(sql, project, warnings)
             val model = AnnotationSqlParser().parse(sql, kind, paramTypes.keys.toList(), staticValues, paramTypes)
-            XmlPreviewService.toResult(model, warnings)
+            XmlPreviewService.applyPaginationShared(
+                XmlPreviewService.toResult(model, warnings),
+                project = project,
+                pageParamName = if (XmlPreviewService.paginationSimEnabled()) {
+                    MapperPageParamLocator.fromMethod(method)
+                } else {
+                    null
+                },
+                kind = kind,
+            )
         } catch (e: XmlParseException) {
             nullResult(e.message ?: "SQL 解析失败。")
         } catch (e: XmlScriptException) {
