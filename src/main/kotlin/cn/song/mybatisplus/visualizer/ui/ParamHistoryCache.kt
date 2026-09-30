@@ -124,24 +124,32 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
 
     /**
      * 切换激活方案（面板下拉驱动）。未知方案名忽略（防脏态）；同名幂等不重复落盘。
+     *
+     * F49（T-PerfQuick5）：切换**只写激活指针**（[persistActiveSchemePointer]），不再走
+     * [persistToStorage] 全量序列化——方案内容未变，重序列化全部命名方案 + 无条件重写
+     * legacy 字段属纯写放大，且发生在 EDT 同步路径（性能十七轮 §5.3）。
      */
     fun switchScheme(name: String) {
         if (name != DEFAULT_SCHEME && name !in schemes) return
         if (activeScheme == name) return
         activeScheme = name
-        persistToStorage()
+        persistActiveSchemePointer()
     }
 
     /**
      * 另存为命名方案：把 [params] 作为 [key] 的快照写入 [name]（已存在同键则覆盖），
-     * 并切换激活到该方案。默认方案名/空名/空快照拒收。
+     * 并切换激活到该方案。默认方案名/空名/空快照返回 [SchemeOpResult.INVALID]（调用方
+     * 此前静默守卫的显式化——对话框在更早的输入环节已拦，行为不变）；新建方案个数达
+     * [MAX_SCHEME_COUNT] 上限返回 [SchemeOpResult.LIMIT_REACHED]（F49）。
      */
-    fun saveAsScheme(name: String, key: String, params: Map<String, String>) {
-        if (name.isBlank() || name == DEFAULT_SCHEME || params.isEmpty()) return
+    fun saveAsScheme(name: String, key: String, params: Map<String, String>): SchemeOpResult {
+        if (name.isBlank() || name == DEFAULT_SCHEME || params.isEmpty()) return SchemeOpResult.INVALID
+        if (name !in schemes && schemes.size >= MAX_SCHEME_COUNT) return SchemeOpResult.LIMIT_REACHED
         schemes.getOrPut(name) { newSchemeEntries() }[key] = params
         enforceMaxSize(schemes.getValue(name))
         activeScheme = name
         persistToStorage()
+        return SchemeOpResult.OK
     }
 
     /** 召回指定方案的 [key] 快照（方案不存在/键未命中返回 null）。 */
@@ -150,8 +158,8 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
     /** 指定方案当前条目数（缓存键数，测试/对话框摘要用）。 */
     fun schemeEntryCount(name: String): Int = schemes[name]?.size ?: 0
 
-    /** R22 T-04：方案操作结果（对话框状态行分流）。 */
-    enum class SchemeOpResult { OK, DUPLICATE, NOT_FOUND, DEFAULT_PROTECTED }
+    /** R22 T-04：方案操作结果（对话框状态行分流）。F49 增 LIMIT_REACHED（个数上限）与 INVALID（入参不合规）。 */
+    enum class SchemeOpResult { OK, DUPLICATE, NOT_FOUND, DEFAULT_PROTECTED, LIMIT_REACHED, INVALID }
 
     /** 重命名方案（LinkedHashMap 重建保创建序；激活指针随迁）。 */
     fun renameScheme(oldName: String, newName: String): SchemeOpResult {
@@ -198,8 +206,12 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
         }
     }
 
-    /** 持久化到 PluginSettings（IDE 环境）：命名方案 + 激活方案入新字段，默认方案继续写旧字段（降级兼容）；测试环境回落静态存储。 */
+    /**
+     * 全量持久化到 PluginSettings（IDE 环境）：命名方案 + 激活方案入新字段，默认方案继续写旧字段（降级兼容）；测试环境回落静态存储。
+     * F49 计数缝：[persistProbe] 非空时回调一次（基准/守卫测试数「全量序列化次数」）。
+     */
     private fun persistToStorage() {
+        persistProbe?.invoke()
         val schemesJson = serializeSchemesToJson()
         val active = activeScheme
         val written = runCatching {
@@ -219,6 +231,20 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
         val legacyWritten = runCatching { PluginSettings.getInstance().state.paramHistoryJson = legacyJson }.isSuccess
         if (!legacyWritten) {
             synchronized(fallbackStorage) { fallbackStorage[STORAGE_KEY] = legacyJson }
+        }
+    }
+
+    /**
+     * F49：只写激活方案指针——`switchScheme` 专用轻量落盘路径，不做方案集/legacy 的
+     * 全量重序列化（内容未变，重写属 EDT 同步路径上的纯写放大）。
+     */
+    private fun persistActiveSchemePointer() {
+        val active = activeScheme
+        val written = runCatching {
+            PluginSettings.getInstance().state.paramActiveScheme = active
+        }.isSuccess
+        if (!written) {
+            synchronized(fallbackStorage) { fallbackStorage[ACTIVE_SCHEME_STORAGE_KEY] = active }
         }
     }
 
@@ -488,6 +514,16 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
     companion object {
         /** 缓存上限（LRU 淘汰）。 */
         const val MAX_HISTORY_SIZE = 50
+
+        /** F49：命名方案个数上限（防方案集无界膨胀；达上限后新建另存被拒，存量操作不受影响）。 */
+        const val MAX_SCHEME_COUNT = 20
+
+        /**
+         * F49 计数缝（测试用）：非空时 [persistToStorage]（全量序列化）每次回调一次。
+         * 「switch 只写指针」守卫=switchScheme 前后计数不变；摘掉修复（switch 回走全量）→ 计数+1 → 红。
+         */
+        @Volatile
+        internal var persistProbe: (() -> Unit)? = null
 
         /** R22 T-04：默认方案内部名（空串——用户方案名恒非空不冲突；UI 显示名经 bundle「默认方案」本地化）。 */
         const val DEFAULT_SCHEME = ""

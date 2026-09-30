@@ -317,4 +317,71 @@ class ParamHistoryCacheTest {
         assertEquals("未知方案名不应改变激活态", ParamHistoryCache.DEFAULT_SCHEME, cache.activeSchemeName())
         cache.clear()
     }
+
+    // ------------------------------------------------------------------
+    // F49（T-PerfQuick5 性能快件批）
+    // ------------------------------------------------------------------
+
+    /**
+     * F49：switch 只写激活指针——不触发全量序列化（persistProbe 计数守卫）。
+     * 反向验证锚：摘掉修复（switchScheme 回走 persistToStorage）→ 计数 +1 → 本测试红。
+     */
+    @Test
+    fun `F49_switch只写指针_不触发全量序列化`() {
+        val cache = ParamHistoryCache()
+        cache.clear()
+        val key = cache.computeKey("t_f49", "SELECT * FROM t_f49 WHERE id = ?")!!
+        val probeCount = java.util.concurrent.atomic.AtomicInteger()
+        ParamHistoryCache.persistProbe = { probeCount.incrementAndGet() }
+        try {
+            cache.saveAsScheme("S1", key, mapOf("id" to "1")) // 另存仍走全量序列化（1 次）
+            val afterSave = probeCount.get()
+            assertEquals("前置：另存应恰好触发一次全量序列化", 1, afterSave)
+            cache.switchScheme(ParamHistoryCache.DEFAULT_SCHEME)
+            cache.switchScheme("S1")
+            cache.switchScheme("S1") // 同名幂等
+            assertEquals(
+                "switch 不得走全量序列化（只写激活指针）：计数 $afterSave → ${probeCount.get()}",
+                afterSave,
+                probeCount.get(),
+            )
+            // 指针本身仍轻量落盘：新实例恢复激活态
+            val cache2 = ParamHistoryCache()
+            assertEquals("激活指针经轻路径落盘仍可恢复", "S1", cache2.activeSchemeName())
+            cache2.clear()
+        } finally {
+            ParamHistoryCache.persistProbe = null
+        }
+        cache.clear()
+    }
+
+    /** F49：方案个数上限——达 [ParamHistoryCache.MAX_SCHEME_COUNT] 后新建另存拒收，存量操作不受影响。 */
+    @Test
+    fun `F49_方案个数上限_新建拒收存量不受影响`() {
+        val cache = ParamHistoryCache()
+        cache.clear()
+        val key = cache.computeKey("t_f49b", "SELECT * FROM t_f49b WHERE id = ?")!!
+        repeat(ParamHistoryCache.MAX_SCHEME_COUNT) { i ->
+            assertEquals(
+                "第 ${i + 1} 个方案应成功",
+                ParamHistoryCache.SchemeOpResult.OK,
+                cache.saveAsScheme("S$i", key, mapOf("id" to "$i")),
+            )
+        }
+        assertEquals(
+            "达上限后新建另存应拒收",
+            ParamHistoryCache.SchemeOpResult.LIMIT_REACHED,
+            cache.saveAsScheme("溢出方案", key, mapOf("id" to "X")),
+        )
+        assertFalse("被拒方案不应入库", cache.hasScheme("溢出方案"))
+        assertEquals("方案个数不得超上限", ParamHistoryCache.MAX_SCHEME_COUNT, cache.schemeNames().size)
+        // 存量操作不受影响：既有方案覆盖写 / 重命名 / 删除
+        assertEquals(ParamHistoryCache.SchemeOpResult.OK, cache.saveAsScheme("S0", key, mapOf("id" to "overwritten")))
+        assertEquals(mapOf("id" to "overwritten"), cache.recallFromScheme("S0", key))
+        assertEquals(ParamHistoryCache.SchemeOpResult.OK, cache.renameScheme("S1", "S1R"))
+        assertEquals(ParamHistoryCache.SchemeOpResult.OK, cache.deleteScheme("S1R"))
+        // 删除腾出名额后可新建
+        assertEquals(ParamHistoryCache.SchemeOpResult.OK, cache.saveAsScheme("新名额", key, mapOf("id" to "N")))
+        cache.clear()
+    }
 }
