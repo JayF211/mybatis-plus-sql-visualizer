@@ -353,6 +353,8 @@ flowchart TD
 
 ## 11. 发布检查清单（最终 Checklist）
 
+> 2026-09-30 起，发行动作的唯一权威清单为 [`T-ReleaseChecklist-发行检查清单.md`](T-ReleaseChecklist-发行检查清单.md)（N-28 / T-RC-01）；本节 12 条保留作历史素材，执行时以权威清单为准。
+
 ```markdown
 □ 1. 测试全绿：./gradlew testShards
 □ 2. 兼容门禁：./gradlew verifyGate（三目标，离线；日常档 verifySmoke / -PverifyIdes=minimal）

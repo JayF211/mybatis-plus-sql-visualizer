@@ -37,6 +37,8 @@ parallel_tasks check/register
 
 ### 八处同步清单
 
+> 2026-09-30 起，发行动作的唯一权威清单为 [`T-ReleaseChecklist-发行检查清单.md`](T-ReleaseChecklist-发行检查清单.md)（N-28 / T-RC-01）；下表保留作素材，执行时以权威清单为准。
+
 | # | 文件 | 内容 |
 |---|------|------|
 | 1 | `docs/发行说明/{YYYYMMDD}-{HHMM}-{主题}-发行说明.md` | 新建，完整发行说明（新增/修复/测试/兼容性/安装/反馈）；全文同时作为 Gitee 发行版正文 |
