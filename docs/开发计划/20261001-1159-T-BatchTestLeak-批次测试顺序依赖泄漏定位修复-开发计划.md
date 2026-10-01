@@ -46,4 +46,12 @@
 
 ## 六、实施记录
 
-（待实施——用户令 20261001 立项，未排期未派工）
+- **20261001 实施完成**（工作树 `mybatis-plus-sql-visualizer-o93leak`，分支 `t-o93leak`，基线 `a044b77`）。
+- **T-1 定位结论**：污染源＝`PaginationSimTest`（`src/test/kotlin/cn/song/mybatisplus/visualizer/ui/PaginationSimTest.kt`）——方言矩阵用例 `testDialectMatrixLimitShapeForPaginatedMapperSelect` 逐个 `setManualDialect("MySQL"/"PostgreSQL"/"Oracle")`（写全局 `PluginSettings.state.dialect`），tearDown 只还原 `dialectAuto`/`paginationSimEnabled`，**残值 "Oracle" 泄漏**。放大器＝`DialectRegistry.effective` 旧实现（`Dialect.kt:843`）：project=null（psi 渲染链 `BatchOperationConverter:166 → psi currentDialect`）+ auto=true 时仍 `return byName(manualName)`，手动残值劫持 auto 模式 → Oracle 方言下 upsert 降级纯 INSERT + 反引号变双引号，恰好 BatchTest 5 例。
+- **最小复现集**：单前驱类 `{PaginationSimTest}` + `SqlPreviewServiceBatchTest` 同 JVM（`--tests` 组合实测：修复前 42 例中恰好 5 例 ComparisonFailure，失败集合与全量门禁泄漏例一致；修复一后 42 例全绿）。
+- **待验证前提核销**：①「全局/缓存单例猜测」证实为「全局 PluginSettings 残值 + effective null-project 分支」组合，非缓存/线程局部；②复现稳定（同组合两轮同失败集合）；③基线以 dev tip 重测。
+- **T-2 修复（D1=A + D2=A）**：
+  - 修复一（commit `c91e39e`）：`PaginationSimTest.tearDown` 补还原 `state.dialect = DEFAULT_DIALECT`；
+  - 修复二（src/main，D2=A 标红提醒主控）：`DialectRegistry.effective` project=null 且 auto=true 时改回退 `MySqlDialect`（不再取手动残值；auto=false 手动语义不变）。旧 KDoc 标注「有意为之」系放大器根源——生产用户「手动切回 auto」后 psi 批量渲染（gutter）仍吃残值方言，与面板预览（project 路径走推断）分叉，属真实语义缺陷，已随任务修。
+- **T-3 守卫**：新增 `DialectStaleManualLeakGuardTest`（同 JVM 内显式写残值→断言 effective 回 MySQL / 手动模式对照不变 / 批量 upsert 预览免疫污染）。反向验证：修复二落地前探针 2 例红（effective 返回 OracleDialect + upsert 被污染渲染）、对照组绿；修复后全绿。定向回归（探针+BatchTest+PaginationSim+DialectProbeCache+DialectInference+ConfigTest+ProjectSettingsTest+SettingsRealityGuard+JpaCrud）全绿。
+- **偏离**：分片基建未动（未走 C 案）；验收 3 的收口全量门禁由主控统一安排（本任务只跑定向）。

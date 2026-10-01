@@ -821,10 +821,14 @@ object DialectRegistry {
      *     [cn.song.mybatisplus.visualizer.config.ProjectPluginSettings.effectiveDialect]
      *     （启用且非空）> 全局 [cn.song.mybatisplus.visualizer.config.PluginSettings.State.dialect]。
      *
-     * 边界（**有意为之，非缺陷**）：[project]=null 时推断链不可用——[cn.song.mybatisplus.visualizer.log.agent.AgentManager]
-     * 与 [DataSourceUrlProbe] 都要求项目上下文，故落回手动值（无项目则取全局手动值）。psi 侧
-     * [cn.song.mybatisplus.visualizer.psi.currentDialect] 的调用点全部为无参调用，因此 PSI 路径
-     * auto 推断不生效（与合流前一致，无回归）；要让 PSI 路径生效，须由调用方传入宿主 PSI 项目。
+     * 边界（O-93 修订）：[project]=null 时推断链不可用——[cn.song.mybatisplus.visualizer.log.agent.AgentManager]
+     * 与 [DataSourceUrlProbe] 都要求项目上下文。psi 侧 [cn.song.mybatisplus.visualizer.psi.currentDialect]
+     * 的调用点全部为无参调用，因此 PSI 路径 auto 推断不生效；要让 PSI 路径生效，须由调用方传入宿主
+     * PSI 项目。此时 auto=true 落回 [MySqlDialect]（与推断未命中的兜底同源）——**不取全局手动值**：
+     * 旧实现此处返回 `byName(manualName)`，等于让 auto 模式被手动残值劫持，任何曾设过手动方言又切回
+     * 智能推断的环境（生产用户切回 auto、测试前序类泄漏残值）都会把残值泄漏给 psi 渲染链
+     * （O-93 实证：PaginationSimTest 泄漏 "Oracle" 致 SqlPreviewServiceBatchTest 5 例方言/引用
+     * ComparisonFailure 随装箱顺序间歇爆发）。auto=false 的手动语义不变（仍取手动值）。
      *
      * @param project 数据源探测与项目级设置读取用项目（null=无项目上下文，见上「边界」）
      */
@@ -836,12 +840,11 @@ object DialectRegistry {
         val manualName = projectManualDialectName(project) ?: settings?.dialect
         val auto = projectDialectAuto(project) ?: settings?.dialectAuto ?: true
         if (!auto) return byName(manualName)
+        if (project == null) return MySqlDialect // O-93：无推断通道时 auto 回退 MySQL，手动残值不参与（见 KDoc「边界」）
         // T-PS5-04：agentUrl 读轻量持有者（不再经 AgentManager.getInstance 触发项目级服务实例化
         // ——那是「预览一次即驻留 executor+monitor 双守护线程」的根因）；URL 由会话生命周期点回写，
         // 推断优先级语义（agent URL > 数据源 URL > null 回退）逐字不变。
-        val agentUrl = cn.song.mybatisplus.visualizer.log.agent.AgentUrlRegistry.lastConnectionUrl(
-            project ?: return byName(manualName),
-        )
+        val agentUrl = cn.song.mybatisplus.visualizer.log.agent.AgentUrlRegistry.lastConnectionUrl(project)
         val inferred = DialectInference.infer(agentUrl, DataSourceUrlProbe.firstUrl(project))
         return inferred.dialectName?.let { byName(it) } ?: MySqlDialect
     }
