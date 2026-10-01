@@ -143,6 +143,18 @@ val testShardCount = providers.gradleProperty("testShardCount").orNull
 // 问题（OS 调度/核分配类）。诊断轮专用，与 S3 巨类拆分互斥（片段映射按片号索引，对调会错位）。
 val testShardSwapProbe = providers.gradleProperty("testShardSwapProbe").orNull?.toBoolean() ?: false
 
+// T-TestPerf12 S2 槽位补偿：若 S1 对调探针定案「结构性临界跟槽位走」（环境因素，仓内无根除
+// 杠杆），对恒临界槽位按少装补偿——均衡器贪心比较键对目标槽位除以补偿因子（<1 放大其负载
+// 视图 → 更早判满 → 装配量按因子缩水），聚合 expected 同步缩放（告警刻度自洽：临界片的
+// 「预期」按补偿后口径对照，结构性因子不再被误判为缺权）。
+// -PtestShardHandicap=0.87（因子，钳 0.5..1.0，缺省 1.0=无补偿）+ -PtestShardHandicapTarget=2
+// （目标槽位号 1-based，缺省 2=T11 六轮恒临界槽位）。宁欠勿过：欠补偿只损失部分收益，
+// 过补偿制造新失衡（失衡告警是同轮相对量，过补会立刻以新临界片形态现形）。
+val testShardHandicap = providers.gradleProperty("testShardHandicap").orNull
+    ?.toDoubleOrNull()?.takeIf { it in 0.5..1.0 } ?: 1.0
+val testShardHandicapTarget = providers.gradleProperty("testShardHandicapTarget").orNull
+    ?.toIntOrNull()?.coerceIn(1, testShardCount) ?: 2
+
 // 测试源码单遍扫描（T-TestPerf3 提为顶层：分片分区与 testFast 划桶两处共用；内容提取类名，
 // Kotlin 文件名≠类名合法——CrudPreviewFlowAndTypesTest.kt 内是 DbTypeQuoteHintTest 的先例）。
 // Triple(包名, 顶层测试类名列表, 原文)。
@@ -464,19 +476,24 @@ intellijPlatformTesting {
                         items += Triple("$name#fragB", fbW, name)
                     }
                 }
+            // T-TestPerf12 S2：补偿槽位的贪心比较键——负载除以补偿因子（<1 放大视图 → 更早判满
+            // → 少装）。loads 数组仍存原始权重和（日志/parity 语义不变），缩放只影响「哪个片被
+            // 视为最轻」的判定；确定性不变（并列取最小下标的次序与因子无关）。
+            fun greedyKey(i: Int): Double =
+                loads[i] / (if (i == testShardHandicapTarget - 1) testShardHandicap else 1.0)
             items.sortedWith(
                 compareByDescending<Triple<String, Double, String?>> { it.second }
                     .thenBy { if (it.third != null) 1 else 0 }
                     .thenBy { it.first },
             ).forEach { (name, w, fragOf) ->
                 if (fragOf == null) {
-                    val target = loads.indices.minByOrNull { loads[it] }!!
+                    val target = loads.indices.minByOrNull { greedyKey(it) }!!
                     shards[target] += name
                     loads[target] += w
                     classShard[name] = target
                 } else {
                     val home = classShard[fragOf] ?: 0
-                    val target = loads.indices.filter { it != home }.minByOrNull { loads[it] }!!
+                    val target = loads.indices.filter { it != home }.minByOrNull { greedyKey(it) }!!
                     shards[target] += name
                     loads[target] += w
                     splitFragments[fragOf]!!.second.forEach { (method, _) ->
@@ -491,6 +508,9 @@ intellijPlatformTesting {
             // T-TestPerf12 S1 对调探针：交换前两片的清单与负载后再出计划（诊断轮专用）。
             // classShard/fragHome/fragTarget 记录的片号随 require 保证的「拆分关」而恒空，无需翻转。
             if (testShardSwapProbe && testShardCount >= 2) {
+                require(testShardHandicap == 1.0) {
+                    "testShardSwapProbe 与槽位补偿互斥（对调后补偿目标槽位语义已错位）；探针轮请勿传 -PtestShardHandicap"
+                }
                 require(fragExcludes.isEmpty() && fragIncludes.isEmpty()) {
                     "testShardSwapProbe 与 S3 巨类拆分互斥（片段映射按片号索引，对调会错位）；探针轮请勿开 -PtestSplitHeavy"
                 }
@@ -509,6 +529,12 @@ intellijPlatformTesting {
             plan.fragIncludes.mapValues { (_, v) -> v.toList() }
         if (testShardSwapProbe && testShardCount >= 2) {
             logger.lifecycle("testShards SWAP-PROBE ACTIVE: shard1<->shard2 class lists swapped before plan emit")
+        }
+        if (testShardHandicap < 1.0) {
+            logger.lifecycle(
+                "testShards S2 handicap ON: shard%d ÷%.2f in greedy key & expected（上方 loads 显示原始权重和）"
+                    .format(testShardHandicapTarget, testShardHandicap),
+            )
         }
         if (splitFragments.isEmpty()) {
             logger.lifecycle(
@@ -555,7 +581,12 @@ intellijPlatformTesting {
             }
         }
         // T-TestPerf4：喂给聚合任务的两份配置期产物（见 shardPlanExpectedLoads 注释）
-        shardPlanExpectedLoads = plan.loads.joinToString("|") { "%.1f".format(it) }
+        // T-TestPerf12 S2：expected 存补偿后有效预期（目标槽位 ÷ 因子）——聚合的超预期告警
+        // 与「预期 vs 实测」对照自动吃到补偿刻度，结构性因子（若存在）不再被误判为缺权；
+        // 无补偿（因子 1.0）时与原始 loads 逐位相等，行为不变。
+        shardPlanExpectedLoads = plan.loads.indices.joinToString("|") { i ->
+            "%.1f".format(plan.loads[i] / (if (i == testShardHandicapTarget - 1) testShardHandicap else 1.0))
+        }
         shardPlanClasses = discoveredTestClasses.joinToString("\n")
         for (i in 1..testShardCount) {
             val idx = i - 1
