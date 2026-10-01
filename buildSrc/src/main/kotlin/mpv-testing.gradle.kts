@@ -138,18 +138,17 @@ fun listSuiteXmls(dir: File): List<File> =
 val testShardCount = providers.gradleProperty("testShardCount").orNull
     ?.toIntOrNull()?.coerceIn(1, 6) ?: 5
 
-// T-TestPerf12 S1 诊断探针：-PtestShardSwapProbe=true 时交换 shard1/shard2 的类清单与负载，
-// 定案 T11 §三.3 留给后续的「shard2 结构性临界」成因——临界跟着清单走=权重问题，留在槽位=环境
-// 问题（OS 调度/核分配类）。诊断轮专用，与 S3 巨类拆分互斥（片段映射按片号索引，对调会错位）。
-val testShardSwapProbe = providers.gradleProperty("testShardSwapProbe").orNull?.toBoolean() ?: false
-
-// T-TestPerf12 S2 槽位补偿：若 S1 对调探针定案「结构性临界跟槽位走」（环境因素，仓内无根除
-// 杠杆），对恒临界槽位按少装补偿——均衡器贪心比较键对目标槽位除以补偿因子（<1 放大其负载
-// 视图 → 更早判满 → 装配量按因子缩水），聚合 expected 同步缩放（告警刻度自洽：临界片的
-// 「预期」按补偿后口径对照，结构性因子不再被误判为缺权）。
+// T-TestPerf12 S2 槽位补偿：对恒临界槽位按少装补偿——均衡器贪心比较键对目标槽位除以补偿
+// 因子（<1 放大其负载视图 → 更早判满 → 装配量按因子缩水），聚合 expected 同步缩放（告警刻度
+// 自洽：临界片的「预期」按补偿后口径对照，结构性因子不再被误判为缺权）。
 // -PtestShardHandicap=0.87（因子，钳 0.5..1.0，缺省 1.0=无补偿）+ -PtestShardHandicapTarget=2
-// （目标槽位号 1-based，缺省 2=T11 六轮恒临界槽位）。宁欠勿过：欠补偿只损失部分收益，
-// 过补偿制造新失衡（失衡告警是同轮相对量，过补会立刻以新临界片形态现形）。
+// （目标槽位号 1-based）。宁欠勿过：欠补偿只损失部分收益，过补偿制造新失衡（失衡告警是
+// 同轮相对量，过补会立刻以新临界片形态现形）。
+// T12 定案（2026-10-02，R1~R6 六轮）：临界片**跟类清单走不跟槽位走**（对调探针定案：互换
+// shard1/shard2 清单后临界从 shard2 翻到 shard1），T11「OS 调度/核分配的环境因素」猜想证伪；
+// 且超权片逐轮漂移（R1/R2=shard2、R3=原清单进 shard1、R4/R6=shard2）——固定槽位补偿打不准，
+// **不落默认**（D34）。旋钮保留作未来「某片真恒临界」形态的应急杠杆；主修通道=权重稳态
+// （冷轮样本污染经 K=2 mtime 窗口两轮挤出自愈，R4 实证失衡 +30%→+10.8%、drift 1.012）。
 val testShardHandicap = providers.gradleProperty("testShardHandicap").orNull
     ?.toDoubleOrNull()?.takeIf { it in 0.5..1.0 } ?: 1.0
 val testShardHandicapTarget = providers.gradleProperty("testShardHandicapTarget").orNull
@@ -307,6 +306,10 @@ intellijPlatformTesting {
         // 并发膨胀噪声且各片随机分布（预期均衡 209.8s×3 实测 195.3/209.3/196.7，T-TestPerf4
         // run2），单份最新值会让均衡器逐轮追噪声；K 份中位数平滑。样本不足 K 份退化为现有
         // 取法，全新检出零数据时全体同权，退化路径与 T-TestPerf2 一致。
+        // T-TestPerf12 K=3 销案（2026-10-02 R5 实测）：K=3 失衡 +18% vs K=2 同带 +10.8%，无优势，
+        // 默认 2 维持；附带定例=新树冷轮样本会污染 K 窗（R1 冷值致 R2/R3 装箱错位、失衡 +21~30%），
+        // 但 K=2 mtime 窗两轮自然挤出自愈（R4 双 warm 失衡回落、drift 1.012），纪律=新树冷轮
+        // 读数不作判据、均衡观察等两轮 warm（dev-support/test-shard-aggregate.py 的 drift 读数可见）。
         val durationWeights: Map<String, Double> = run {
             val weightSamples = providers.gradleProperty("testShardWeightSamples").orNull
                 ?.toIntOrNull()?.coerceIn(1, 5) ?: 2
@@ -505,20 +508,6 @@ intellijPlatformTesting {
                     fragOfTarget[fragOf] = target
                 }
             }
-            // T-TestPerf12 S1 对调探针：交换前两片的清单与负载后再出计划（诊断轮专用）。
-            // classShard/fragHome/fragTarget 记录的片号随 require 保证的「拆分关」而恒空，无需翻转。
-            if (testShardSwapProbe && testShardCount >= 2) {
-                require(testShardHandicap == 1.0) {
-                    "testShardSwapProbe 与槽位补偿互斥（对调后补偿目标槽位语义已错位）；探针轮请勿传 -PtestShardHandicap"
-                }
-                require(fragExcludes.isEmpty() && fragIncludes.isEmpty()) {
-                    "testShardSwapProbe 与 S3 巨类拆分互斥（片段映射按片号索引，对调会错位）；探针轮请勿开 -PtestSplitHeavy"
-                }
-                val tmpClasses = shards[0].toList()
-                shards[0].clear(); shards[0].addAll(shards[1])
-                shards[1].clear(); shards[1].addAll(tmpClasses)
-                val tmpLoad = loads[0]; loads[0] = loads[1]; loads[1] = tmpLoad
-            }
             ShardPlan(shards, loads.toList(), fragExcludes, fragIncludes, HashMap(fragOfHome), HashMap(fragOfTarget))
         }
         val shardAssignment = plan.classes
@@ -527,9 +516,6 @@ intellijPlatformTesting {
             plan.fragExcludes.mapValues { (_, v) -> v.toList() }
         val fragIncludesByShard: Map<Int, List<String>> =
             plan.fragIncludes.mapValues { (_, v) -> v.toList() }
-        if (testShardSwapProbe && testShardCount >= 2) {
-            logger.lifecycle("testShards SWAP-PROBE ACTIVE: shard1<->shard2 class lists swapped before plan emit")
-        }
         if (testShardHandicap < 1.0) {
             logger.lifecycle(
                 "testShards S2 handicap ON: shard%d ÷%.2f in greedy key & expected（上方 loads 显示原始权重和）"
