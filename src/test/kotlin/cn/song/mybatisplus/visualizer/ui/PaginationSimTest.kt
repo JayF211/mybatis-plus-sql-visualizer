@@ -40,6 +40,11 @@ class PaginationSimTest : BasePlatformTestCase() {
 
     override fun tearDown() {
         PluginSettings.getInstance().state.dialectAuto = true
+        // T-BatchTestLeak（O-93）：setManualDialect 写入的 state.dialect 也须还原——psi 渲染链
+        // （BatchOperationConverter → currentDialect(project=null)）在 auto=true 时仍取全局手动值，
+        // 残留的 "Oracle"/"PostgreSQL" 会污染同 JVM 后续测试类（曾致 SqlPreviewServiceBatchTest
+        // 5 例方言/引用 ComparisonFailure 随装箱顺序间歇爆发）。
+        PluginSettings.getInstance().state.dialect = PluginSettings.DEFAULT_DIALECT
         PluginSettings.getInstance().state.paginationSimEnabled = true
         super.tearDown()
     }
