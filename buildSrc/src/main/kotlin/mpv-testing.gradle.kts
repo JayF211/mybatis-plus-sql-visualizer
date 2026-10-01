@@ -138,6 +138,11 @@ fun listSuiteXmls(dir: File): List<File> =
 val testShardCount = providers.gradleProperty("testShardCount").orNull
     ?.toIntOrNull()?.coerceIn(1, 6) ?: 5
 
+// T-TestPerf12 S1 诊断探针：-PtestShardSwapProbe=true 时交换 shard1/shard2 的类清单与负载，
+// 定案 T11 §三.3 留给后续的「shard2 结构性临界」成因——临界跟着清单走=权重问题，留在槽位=环境
+// 问题（OS 调度/核分配类）。诊断轮专用，与 S3 巨类拆分互斥（片段映射按片号索引，对调会错位）。
+val testShardSwapProbe = providers.gradleProperty("testShardSwapProbe").orNull?.toBoolean() ?: false
+
 // 测试源码单遍扫描（T-TestPerf3 提为顶层：分片分区与 testFast 划桶两处共用；内容提取类名，
 // Kotlin 文件名≠类名合法——CrudPreviewFlowAndTypesTest.kt 内是 DbTypeQuoteHintTest 的先例）。
 // Triple(包名, 顶层测试类名列表, 原文)。
@@ -483,6 +488,17 @@ intellijPlatformTesting {
                     fragOfTarget[fragOf] = target
                 }
             }
+            // T-TestPerf12 S1 对调探针：交换前两片的清单与负载后再出计划（诊断轮专用）。
+            // classShard/fragHome/fragTarget 记录的片号随 require 保证的「拆分关」而恒空，无需翻转。
+            if (testShardSwapProbe && testShardCount >= 2) {
+                require(fragExcludes.isEmpty() && fragIncludes.isEmpty()) {
+                    "testShardSwapProbe 与 S3 巨类拆分互斥（片段映射按片号索引，对调会错位）；探针轮请勿开 -PtestSplitHeavy"
+                }
+                val tmpClasses = shards[0].toList()
+                shards[0].clear(); shards[0].addAll(shards[1])
+                shards[1].clear(); shards[1].addAll(tmpClasses)
+                val tmpLoad = loads[0]; loads[0] = loads[1]; loads[1] = tmpLoad
+            }
             ShardPlan(shards, loads.toList(), fragExcludes, fragIncludes, HashMap(fragOfHome), HashMap(fragOfTarget))
         }
         val shardAssignment = plan.classes
@@ -491,6 +507,9 @@ intellijPlatformTesting {
             plan.fragExcludes.mapValues { (_, v) -> v.toList() }
         val fragIncludesByShard: Map<Int, List<String>> =
             plan.fragIncludes.mapValues { (_, v) -> v.toList() }
+        if (testShardSwapProbe && testShardCount >= 2) {
+            logger.lifecycle("testShards SWAP-PROBE ACTIVE: shard1<->shard2 class lists swapped before plan emit")
+        }
         if (splitFragments.isEmpty()) {
             logger.lifecycle(
                 "testShards: $testShardCount shards duration-balanced, loads=" +
