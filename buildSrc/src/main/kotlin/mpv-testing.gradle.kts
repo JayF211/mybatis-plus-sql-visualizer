@@ -863,11 +863,19 @@ tasks.register("testShards") {
                         .format((mx - avg) / avg * 100, critIdx + 1, mx, avg),
                 )
             }
+            // T-TestPerf12 S3：缺权判据改全局漂移归一化——原判据「临界片实测>预期×1.10」是跨刻度
+            // 比较，execSum 窗口漂移（T11 夜间 +5% 实录）下对逐类无失准的轮次连发误鸣 4 轮
+            // （T11 §三.2）。改判据＝临界片的（实测/预期）相对全体片平均比（=漂移因子）的偏离
+            // >10%：全局刻度整体漂移被除法消去，只剩该片真超预期（缺权/新类插值形态）才鸣。
+            // 自参照零跨轮状态；失衡告警（上方 12% 同轮相对量）本就漂移免疫，不动。
             val expCrit = expectedLoads.getOrNull(critIdx)
-            if (expCrit != null && expCrit > 0 && mx > expCrit * 1.10) {
+            val expSum = expectedLoads.filter { it > 0 }.sum()
+            val drift = if (expSum > 0 && shardExec.sum() > 0) shardExec.sum() / expSum else 1.0
+            val relCrit = if (expCrit != null && expCrit > 0) (mx / expCrit) / drift else 1.0
+            if (relCrit > 1.10) {
                 logger.warn(
-                    "testShards WARN: 临界片实测超预期 +%.0f%%（%.1fs vs expected %.1fs）——新类零权重插值/画像过期嫌疑"
-                        .format((mx - expCrit) / expCrit * 100, mx, expCrit),
+                    "testShards WARN: 临界片超预期 +%.0f%%（%.1fs vs expected %.1fs，已按全局漂移 %.2f 归一化）——新类零权重插值/画像过期嫌疑"
+                        .format((relCrit - 1) * 100, mx, expCrit ?: 0.0, drift),
                 )
             }
         }
