@@ -3439,7 +3439,16 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             // 也不再有 listener 字段需要置 null——T-RA-02 删除）
             if (autoPopupDisposable != null) Disposer.dispose(autoPopupDisposable);
             autoPopupDisposable = null;
-            EditorFactory.getInstance().releaseEditor(editor);
+            // T-K2JWalk1 KW-1：跨工程切换残留的预览弹窗关闭时，两个面板实例可能先后持有同一编辑器
+            // （showSql 双走 createEditor 后字段被覆盖转移），后到方的 releaseEditor 会被平台
+            // TraceableDisposable 断言为「Double release of editor」SEVERE（DisposalException 是
+            // package-private，不可 catch）——isDisposed 前置判断幂等跳过，首次释放已生效无资源可补
+            if (editor.isDisposed()) {
+                Logger.getInstance(SqlPreviewPanel.class)
+                        .warn("[KW-1] editor already disposed, skip release: " + System.identityHashCode(editor));
+            } else {
+                EditorFactory.getInstance().releaseEditor(editor);
+            }
             editor = null;
         }
         // T-PrewarmLateRecover F1：编辑器没了，降级文档身份随之失效
