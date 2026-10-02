@@ -3778,9 +3778,14 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
      *    只把写体过闸（`runWriteSafe`）：常态判为可写 → 就地写 + 同拍 countDown；仅当判为不安全
      *    才转 nonModal 投递并**立即** countDown（ok=false）——不让调用方白等 2 秒预算。延后那一拍
      *    重跑 [docWriteOnce] 是幂等的（内容相同不 setText、已落盘不 saveDocument），且该超时/未完成
-     *    路径已由 T-ExecDocSync3 定为无害（不裸写、内容旧一拍由后续同步链收敛）。
+     *    路径已由 T-ExecDocSync3 定为无害（不裸写、内容旧一拍由后续同步链收敛）；
+     *  - EDT 直调（T-PreviewEdtGuard S2 补口）：原样直跑 [docWriteOnce]，write-unsafe 活动里
+     *    （WriteAction 不 confer 写安全资格，T-WriteSafeCtx）即 R33 三验 2 组 Write-unsafe 的本体
+     *    ——现同样过闸（runWriteSafe）：可写就地执行（ok=写结果）；不可写转 nonModal 延后一拍
+     *    并返回 false（调用方均不消费该返回值，见分支内注释）。
      */
-    private fun dispatchDocWriteOnEdt(
+    /** internal 供测试（T-PreviewEdtGuard S2：EDT 直调分支闸门行为直测）。 */
+    internal fun dispatchDocWriteOnEdt(
         project: Project,
         vf: com.intellij.openapi.vfs.VirtualFile,
         sql: String,
@@ -3788,7 +3793,24 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
     ): Boolean {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         val app = ApplicationManager.getApplication()
-        if (app.isDispatchThread) return docWriteOnce(project, vf, sql)
+        if (app.isDispatchThread) {
+            // T-PreviewEdtGuard S2：EDT 直调同样过写安全闸——R33 三验真机日志实证 2 组
+            // Write-unsafe context（帧=writeVfTextViaDocument）：write-unsafe EDT 活动（any() 投递 /
+            // 「写不安全进入」的模态泵）里 WriteAction.compute 并不 confer 写安全资格（T-WriteSafeCtx
+            // 平台源码定例：「写入合法性与是否在 WriteCommandAction 内无关」），commitDocument 的
+            // PSI 事件链（PsiDocumentManagerBase 为平台断言点之一）即报 Write-unsafe context!。
+            // 本分支是 [writeVfTextViaDocument] 调用面里唯一未过 DocWriteContext 闸的入口
+            // （本函数另两形态已闸；471/1699/2776 三处直调各自包 WriteAction，R33 日志无实证指向）。
+            // 判为可写 → 就地写（常态行为逐字不变）；判为不安全 → 转 nonModal 延后一拍并返回
+            // false（写体 docWriteOnce 幂等：内容相同不 setText、已落盘不 save；现有调用方——
+            // gStrip 回写不消费返回值、syncExecVfContentIfNeeded 各调用方亦不消费——延后语义安全，
+            // 与下方有界等待路径「判不安全立即交还」同一纪律）。
+            var ok = false
+            DocWriteContext.runWriteSafe(project, "exec doc sync (edt direct)") {
+                ok = docWriteOnce(project, vf, sql)
+            }
+            return ok
+        }
         if (waitBudgetMs <= 0L) {
             // project 即 owner disposable：项目关闭后丢弃该拍（写目标就是项目内临时文件，重跑无意义）
             DocWriteContext.invokeLaterWriteSafe(project, "exec prewarm doc write (fire-and-forget)") {

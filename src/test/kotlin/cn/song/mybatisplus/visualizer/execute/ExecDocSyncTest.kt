@@ -285,6 +285,66 @@ class ExecDocSyncTest : BasePlatformTestCase() {
         }
     }
 
+    // ============ T-PreviewEdtGuard S2：EDT 直调派发的 write-safe 闸门（R33 三验 2 组补口） ============
+    //
+    // R33 三验真机日志实证 2 组 Write-unsafe context（帧=writeVfTextViaDocument）：EDT 直调分支
+    // 原样直跑 docWriteOnce，write-unsafe 活动（any() 投递/「写不安全进入」的模态泵）里
+    // WriteAction.compute 不 confer 写安全资格（T-WriteSafeCtx 平台源码定例）→ commitDocument
+    // 的 PSI 事件链即报错。修复=该分支同样过 DocWriteContext.runWriteSafe 闸。
+    //
+    // 证据边界（与 DocWriteContextTest 头注同口径）：真实 TransactionGuard 断言需生产 EDT 活动
+    // 语义，单测环境 TestLogger 只收集不抛、且 isUnitTestMode 恒放行——这里用 writeAllowedProbe
+    // 注入「当前不可写」观测**闸门分支行为**（同 T-FixWriteSafe 两例），真实判据交真机门禁。
+
+    /**
+     * 核心：闸门判「不可写」时 EDT 直调必须**不同步写**（磁盘/document 均保持旧值）、转 nonModal
+     * 投递一拍并**立即返回 false**（不白等）。
+     *
+     * 反证（摘掉修复必红）：分支改回 `return docWriteOnce(...)` → 写体当场执行（磁盘变 SELECT 2、
+     * deferredCount 不动、返回 true），本例三条断言全红。
+     */
+    fun testEdtDirectDispatchDefersWriteWhenContextUnsafe() {
+        writeIo("SELECT 1")
+        val vf = refreshVf()
+        val doc = FileDocumentManager.getInstance().getDocument(vf!!)
+        assertNotNull("document 应已加载（有冲突面）", doc)
+        DocWriteContext.writeAllowedProbe = { false }
+        try {
+            val before = DocWriteContext.deferredCount.get()
+            val ok = DataSourceSelector.dispatchDocWriteOnEdt(project, vf, "SELECT 2")
+
+            assertFalse("不可写：应立即交还 false（不白等）", ok)
+            assertEquals("不可写：应转 nonModal 投递一拍", before + 1, DocWriteContext.deferredCount.get())
+            assertEquals("不可写：磁盘不得同步写", "SELECT 1", diskText())
+            assertEquals("不可写：document 不得同步写", "SELECT 1", doc!!.text)
+
+            // 延后那一拍（nonModal，平台已套 runWithWritingAllowed）→ 模拟「下一拍已可写」再泵队列
+            DocWriteContext.writeAllowedProbe = { true }
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals("延后一拍应把 SQL 写进文档并落盘（写体幂等）", "SELECT 2", diskText())
+        } finally {
+            DocWriteContext.writeAllowedProbe = null
+        }
+    }
+
+    /** 闸门判「可写」（常态用户活动）：就地写、返回 true、零投递——改前行为逐字保留。 */
+    fun testEdtDirectDispatchWritesInlineWhenContextAllowed() {
+        writeIo("SELECT 1")
+        val vf = refreshVf()
+        FileDocumentManager.getInstance().getDocument(vf!!)
+        DocWriteContext.writeAllowedProbe = { true }
+        try {
+            val before = DocWriteContext.deferredCount.get()
+            val ok = DataSourceSelector.dispatchDocWriteOnEdt(project, vf, "SELECT 2")
+
+            assertTrue("可写：应就地写并返回 true", ok)
+            assertEquals("可写：磁盘应立即是新 SQL", "SELECT 2", diskText())
+            assertEquals("可写：闸门不得产生投递", before, DocWriteContext.deferredCount.get())
+        } finally {
+            DocWriteContext.writeAllowedProbe = null
+        }
+    }
+
     // ======================== 辅助 ========================
 
     /**
