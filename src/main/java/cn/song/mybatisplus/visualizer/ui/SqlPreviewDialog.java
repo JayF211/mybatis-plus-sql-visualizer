@@ -39,6 +39,20 @@ public class SqlPreviewDialog extends DialogWrapper {
         setCancelButtonText(MpSqlVisualizerBundle.message("dialog.preview.cancel"));
         Dimension size = initialSize();
         setSize(size.width, size.height);
+        // T-K2JWalk1 KW-1：弹窗自挂 project Disposer 树——工程关闭（含 Open This Window 切换）
+        // 时平台遍历树执行本回调收口存活弹窗，根除「预览弹窗跨工程残留」（首个修法把收口挂在
+        // SqlPreviewService 构造器，但 gutter 的 XML 链在 getService 之前就 return，服务从未
+        // 实例化、收口从未挂上——真机复测残留依旧后改挂此处，弹窗创建即注册必在树上）。
+        // 幂等：先被关旧开新/用户关闭 dispose 过的弹窗此处 isDisposed 直接跳过。
+        if (project != null) {
+            Disposer.register(project, () -> {
+                if (!isDisposed()) {
+                    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewDialog.class)
+                            .info("[KW-1] project closing: dispose leftover preview dialog");
+                    doDispose();
+                }
+            });
+        }
     }
 
     @NotNull

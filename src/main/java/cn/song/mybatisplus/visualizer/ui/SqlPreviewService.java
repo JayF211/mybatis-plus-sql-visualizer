@@ -206,23 +206,9 @@ public final class SqlPreviewService {
                         cache.evictFile(file.getUrl());
                     }
                 });
-        // T-K2JWalk1 KW-1：项目关闭时收口存活的预览弹窗——弹窗此前只按弱引用登记，项目切换
-        // （Open This Window）不关它，残留到下一个工程里仍可交互（其面板释放链还会对已转移的
-        // 编辑器二次 release，见 SqlPreviewPanel KW-1 守卫）。注册在 project Disposer 树上，
-        // 项目关闭必走；doDispose 幂等（isDisposed 已防），失败不阻断项目关闭。
-        com.intellij.openapi.util.Disposer.register(project, () -> {
-            WeakReference<SqlPreviewDialog> ref = ACTIVE_PREVIEW_DIALOGS.remove(project);
-            SqlPreviewDialog leftover = ref != null ? ref.get() : null;
-            if (leftover != null && !leftover.isDisposed()) {
-                LOG.info("[KW-1] project closing: dispose leftover preview dialog (id="
-                        + System.identityHashCode(leftover) + ")");
-                try {
-                    leftover.doDispose();
-                } catch (Throwable t) {
-                    LOG.warn("[KW-1] leftover preview dialog dispose failed: " + t);
-                }
-            }
-        });
+        // T-K2JWalk1 KW-1：弹窗工程关闭收口**不在本服务注册**——gutter 的 XML 链在 getService
+        // 之前即 return，本服务可能整个会话都不实例化，这里挂收口等于没挂（真机复测已证）。
+        // 收口改挂在 SqlPreviewDialog 构造器（弹窗自挂 project Disposer 树，创建即必在）。
     }
 
     /**
