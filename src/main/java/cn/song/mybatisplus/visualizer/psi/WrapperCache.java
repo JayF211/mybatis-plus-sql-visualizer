@@ -100,7 +100,10 @@ public class WrapperCache {
     private final Map<CacheKey, Entry> cache = java.util.Collections.synchronizedMap(
             new LinkedHashMap<>(16, 0.75f, true) {
                 @Override
-                protected boolean removeEldestEntry(Map.Entry<CacheKey, Entry> eldest) {
+                // T-K2JWalkMcp262：Entry 必须显式限定为 WrapperCache.Entry——JDK 25 javac（262 工具链）
+                // 在匿名子类里把裸 Entry 解析成 java.util.Map.Entry，与本方法签名构成「相同疑符但
+                // 互不覆盖」的名称冲突（243/JDK 21 无此歧义）；显式限定后两代编译器一致
+                protected boolean removeEldestEntry(Map.Entry<CacheKey, WrapperCache.Entry> eldest) {
                     return size() > maxEntries;
                 }
             }
