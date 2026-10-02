@@ -933,6 +933,14 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "断言直接内联在 @Test（R33 接线四断言：ExplainPanelChannel.decide 可达/submitExplainDirect 直送链单函数收敛/" +
                     "embedExplainView 结构化视图嵌入/ExplainIndexAdvisor.advise 面板侧建议接入）",
             ),
+            // ---- O-93 全局手动方言残值泄漏守卫（2026-10-02 T-BatchTestLeak 补登记——漏登记由 R33 修复轮元守卫红抓出） ----
+            GuardEntry(
+                "sql/DialectStaleManualLeakGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（O-93 三断言：effective(project=null) auto 态忽略手动残值回退 MySQL/" +
+                    "手动模式语义不变对照/saveOrUpdate 批量预览 upsert+反引号不受残值污染）；" +
+                    "私有 leakStaleManualDialect 为污染动作夹具非判定函数",
+            ),
             // ---- 本元守卫自身 ----
             GuardEntry(
                 "convention/GuardSelfTestCoverageMetaGuardTest.kt",
