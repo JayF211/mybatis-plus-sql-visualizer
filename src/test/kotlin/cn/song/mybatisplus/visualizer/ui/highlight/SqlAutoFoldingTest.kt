@@ -7,6 +7,7 @@ import com.intellij.openapi.editor.FoldRegion
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 
 /**
@@ -121,6 +122,66 @@ class SqlAutoFoldingTest : BasePlatformTestCase() {
             val others = editor.foldingModel.getAllFoldRegions().filter { it.placeholderText == "[other]" }
             assertEquals("他人区域应保留", 1, others.size)
             assertEquals("本方区域照常添加", 1, ownRegions(editor).size)
+        } finally {
+            releaseEditor(editor)
+        }
+    }
+
+    // ============ T-PreviewEdtGuard S1：同文本幂等短路（重渲染链 EDT 降噪） ============
+    //
+    // renderSql→showSql 每轮渲染都调 applyTo；参数防抖后的常态是渲染文本未变——全量重建
+    // （2×N 个 fold region 增删 + 两次批操作）是纯冗余 EDT 工作。修复=同文本 + 本方区域仍有效
+    // → 短路返回。两例配对：上例钉「短路生效」（摘掉修复即红——区域被重建、实例换代），
+    // 下例钉「防御语义保留」（短路判据含 isValid 检查，平台抹除后照常重建）。
+
+    fun test同文本二次applyTo短路区域实例不重建() {
+        enable()
+        val editor = newEditor(wideSql)
+        try {
+            SqlAutoFolding.applyTo(editor, wideSql)
+            val first = ownRegions(editor).single()
+            SqlAutoFolding.applyTo(editor, wideSql)
+            val second = ownRegions(editor).single()
+            assertSame(
+                "同文本二次 applyTo 必须短路（区域实例不重建——每轮渲染全量重建是重渲染链 EDT 噪音主体）",
+                first, second,
+            )
+        } finally {
+            releaseEditor(editor)
+        }
+    }
+
+    fun test同文本但区域被外部抹除后照常重建() {
+        enable()
+        val editor = newEditor(wideSql)
+        try {
+            SqlAutoFolding.applyTo(editor, wideSql)
+            // 外部抹除（模拟平台重算清折叠）——短路判据的 isValid 检查必须放行重建
+            editor.foldingModel.runBatchFoldingOperation {
+                ownRegions(editor).forEach { editor.foldingModel.removeFoldRegion(it) }
+            }
+            SqlAutoFolding.applyTo(editor, wideSql)
+            assertEquals(
+                "区域被外部抹除后同文本 applyTo 必须照常重建（T-AutoFold 防御语义保留）",
+                1, ownRegions(editor).size,
+            )
+        } finally {
+            releaseEditor(editor)
+        }
+    }
+
+    fun test同文本但开启态翻转后不短路照常收敛() {
+        enable()
+        val editor = newEditor(wideSql)
+        try {
+            SqlAutoFolding.applyTo(editor, wideSql)
+            assertEquals(1, ownRegions(editor).size)
+            PluginSettings.getInstance().state.autoFoldEnabled = false
+            SqlAutoFolding.applyTo(editor, wideSql)
+            assertEquals(
+                "关闭态不受短路影响（短路判据含开启态检查）——本方区域照常清除",
+                0, editor.foldingModel.getAllFoldRegions().size,
+            )
         } finally {
             releaseEditor(editor)
         }
