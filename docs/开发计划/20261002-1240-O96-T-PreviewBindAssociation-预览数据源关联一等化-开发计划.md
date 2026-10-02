@@ -28,4 +28,33 @@
 
 ## 五、实施记录
 
-（待实施分支 t-o96fix 回填。）
+实施分支 `t-o96fix`（自 dev tip 2e8115f 切出），20261002 完成。
+
+### 待验证前提证伪结论（先行，后动码）
+
+1. **前提 S2（EXPLAIN 直送与 last-used 同源）——证伪（部分），走 S2 备选文案区分**。取证：EXPLAIN 直送链 `SqlPreviewPanel.submitExplainDirect → SqlExecutor.execute → DataSourceSelector.selectAndExecute → chooseAndPrepare(executeAfterPrepare=true)`，而 last-used 静默复用分支被 `if (!executeAfterPrepare)` 门控（DataSourceSelector.kt :371）——同一条 M36 链但记忆分支只在 prepareConsole 路径生效。即：无活控制台窗口内，直送通道的数据源解析=单源直连或**用户弹窗**（多源），与记忆非严格同源；结构化视图通道要求 `hasBoundDataSource`（活控制台），不涉及记忆。主执行链（面板打开 prepareConsole）与记忆严格同源。→ 按计划 S2 备选执行：记忆态指示文案区分（`panel.bindstate.associated`=「关联（上次使用）：{0}」），不冒称「已绑定」；回退链对齐=指示行记忆判定**复用 T-SI-02 `resolveLastUsedRunnerIndex` 同一纯函数**（UUID 精确→名唯一→歧义弃），与执行链静默复用同口径。
+2. **前提 2（记忆生命周期）——证实**：`lastUsedRunner` 存储为 `PropertiesComponent.getInstance(project)`（DataSourceSelector.kt :3410~3413），项目级持久化，**跨 IDE 重启**存活；指示行重开语义即跨重启级。验收 1 口径按持久化记忆执行，无需会话级注记。
+3. **前提 3（getDataSourceById 删除语义）——证实**：`DataSourceSettings.getDataSourceById` 反射调用 `DataSourceStorage.getDataSourceById(String)`，未命中返回 null、反射异常 runCatching 兜底 null（DataSourceSettings.kt :85~93），fail-closed 成立。
+
+### 改动清单
+
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt`：新增 `rememberedDataSourceName(project)`（记忆回退取名，**只读**——歧义不清记忆不弹窗，展示路径禁副作用；记忆缺失快速早退）+ `resolveRememberedDataSourceName`（纯函数壳，复用 T-SI-02 判定）+ 测试缝 `rememberedLookupForTest`（headless 无 Database 插件真链恒空）+ `plantLastUsedMemoryForTest`（直写记忆双键）。
+- `src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt`：新增 `rememberedDataSourceNameForDisplay()`（project 在场才走记忆层）；`bindStateText()` 升级三级：活控制台「已绑定」> 记忆态「关联（上次使用）」> 未绑定。既有 `bindStateNameProvider` 测试缝与 O-95 S3 语义不动。
+- `src/main/resources/messages/MpSqlVisualizerBundle.properties` + `_zh.properties`：新增 `panel.bindstate.associated=Associated (last used): {0}` / 「关联（上次使用）：{0}」（占位符 arity 两语种一致）。
+- `src/test/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelBindStateTest.kt`：扩展 4 例（详见下）。
+
+### 定向读数
+
+- `SqlPreviewPanelBindStateTest`：**7 例 0 失败 0 错误 9.6s**（恢复后权威复跑；新增 4 例=test记忆命中显示关联上次使用文案 / testUUID失效且名字不在籍回落未绑定 / testUUID失效但名字唯一命中仍显示关联 / test同名歧义回落未绑定，三态覆盖记忆命中、UUID 失效（名字不在籍回落 + 名字唯一命中按 T-SI-02 口径仍关联）、同名歧义弃记忆）。
+- 相关既有定向：`DataSourceSelectorTest` 2 例全绿（0.021s）、`SessionIdentityGuardTest` 23 例全绿（0.034s，T-SI-02 判定回归无扰动）。
+
+### 反向验证（红→绿）
+
+- 红：临时摘除 `bindStateText` 记忆回退分支（`&& false` 短路，REVERSE-PROBE）→ `SqlPreviewPanelBindStateTest` **7 例 2 失败**——恰好两条记忆命中断言红（test记忆命中显示关联上次使用文案 :137 ComparisonFailure「关联（上次使用）：mp_…」、testUUID失效但名字唯一命中仍显示关联 :165），未绑定断言 3 例与版式 2 例保持绿（预期内——回落未绑定本就是摘除后的行为）。
+- 绿：恢复分支后复跑 → **7 例 0 失败 0 错误 9.6s**，工作树与提交 ac826e4 逐字节一致（git diff 空）。
+
+### 偏差说明与遗留
+
+- 签名偏差：计划 S1 写「`boundConsoleDataSourceName()` 增加记忆回退、签名带 project」——实际拆为「`boundConsoleDataSourceName()`（活控制台，无参不动）+ `rememberedDataSourceName(project)`（记忆层）」两函数、面板侧组合优先级（活控制台 > 记忆 > 未绑定）。原因：S2 证伪后记忆态需要**独立文案**，单函数返回 String 无法区分来源；拆分后 O-95 S3 既有调用面零扰动。
+- 验收 1（沙盒真机 1b 场景反转：执行一次→关闭→重开显示记忆源名 / 删除数据源后回落未绑定）与守卫元核对留待收口代理 runIde 沙盒复测+门禁（本代理无沙盒环境，headless 定向已覆盖三态判定逻辑）。
+- 展示优先级中「记忆命中后活控制台接管」依赖既有 renderSql 尾部单点刷新（S3 通道不变，零监听器口径维持）。

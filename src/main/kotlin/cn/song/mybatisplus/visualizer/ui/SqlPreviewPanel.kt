@@ -3805,14 +3805,32 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             }.getOrNull()
 
     /**
-     * S3 指示行文案：绑定=「已绑定：<源名>」（panel.bindstate.bound，数据源名与 R33 结构化
-     * 视图头部同源）；未绑定=「未绑定数据源（在控制台执行一次查询即可绑定）」（panel.bindstate.
-     * unbound，与 R33 回退通知 panel.explain.structured.reason.noDataSource 同源文案族）。
+     * O-96 T-PreviewBindAssociation S1：last-used 记忆回退取名（指示行第二优先级——无活控制台时，
+     * 经 [cn.song.mybatisplus.visualizer.execute.DataSourceSelector.rememberedDataSourceName] 按
+     * T-SI-02 同一口径（UUID→名唯一→歧义弃）解析在籍数据源名；只读，歧义不清记忆不弹窗）。
+     * project 为 null（无项目上下文）或解析异常 → null，回落未绑定。
+     */
+    private fun rememberedDataSourceNameForDisplay(): String? {
+        val proj = project ?: return null
+        return runCatching {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.rememberedDataSourceName(proj)
+        }.getOrNull()
+    }
+
+    /**
+     * S3 指示行文案（O-96 S1 升级为三级）：活控制台绑定=「已绑定：<源名>」（panel.bindstate.bound，
+     * 数据源名与 R33 结构化视图头部同源）；无活控制台但 last-used 记忆命中在籍数据源=
+     * 「关联（上次使用）：<源名>」（panel.bindstate.associated——S2 证伪定案：EXPLAIN 直送通道
+     * 走 selectAndExecute 不做记忆静默复用，与主执行链 prepareConsole 非严格同源，故记忆态
+     * 文案区分，不冒称「已绑定」）；两者皆无=「未绑定数据源（在控制台执行一次查询即可绑定）」
+     * （panel.bindstate.unbound，与 R33 回退通知同源文案族）。
      */
     private fun bindStateText(): String {
         val name = boundDataSourceNameForDisplay()
-        return if (name != null) MpSqlVisualizerBundle.message("panel.bindstate.bound", name)
-        else MpSqlVisualizerBundle.message("panel.bindstate.unbound")
+        if (name != null) return MpSqlVisualizerBundle.message("panel.bindstate.bound", name)
+        val remembered = rememberedDataSourceNameForDisplay()
+        if (remembered != null) return MpSqlVisualizerBundle.message("panel.bindstate.associated", remembered)
+        return MpSqlVisualizerBundle.message("panel.bindstate.unbound")
     }
 
     /**
