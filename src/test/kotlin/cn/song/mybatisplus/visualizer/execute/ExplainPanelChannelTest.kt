@@ -121,4 +121,53 @@ class ExplainPanelChannelTest {
                 as ExplainPanelChannel.Decision.DirectFallback).reason,
         )
     }
+
+    // ------------------------------------------------------------------
+    // 第四组：未回填参数（R33 真机走查修复——残留 `?` 不发结构化探测，响亮失败优于语法错）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `回退_存在未回填参数`() {
+        // 参数已填满（hasUnfilledParams=false）是结构化准入的第五条件——残留 `?` 下发探测
+        // = 字面 `?` 送 JDBC 语法错（真机 SQLException: You have an error in your SQL syntax）
+        assertEquals(
+            ExplainPanelChannel.Decision.DirectFallback(ExplainPanelChannel.FallbackReason.UNFILLED_PARAMS),
+            ExplainPanelChannel.decide(
+                enabled = true,
+                format = ExplainOutputFormat.TABLE,
+                databaseAvailable = true,
+                hasBoundDataSource = true,
+                hasUnfilledParams = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `参数已回填则结构化准入不受影响`() {
+        assertEquals(
+            ExplainPanelChannel.Decision.Structured,
+            ExplainPanelChannel.decide(
+                enabled = true,
+                format = ExplainOutputFormat.TABLE,
+                databaseAvailable = true,
+                hasBoundDataSource = true,
+                hasUnfilledParams = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `回退理由序_环境缺项优先于未回填参数`() {
+        // 环境缺项（插件/数据源）是更基础的根因——先修环境再谈参数，提示措辞按此序
+        assertEquals(
+            ExplainPanelChannel.FallbackReason.NO_DATA_SOURCE,
+            (ExplainPanelChannel.decide(
+                enabled = true,
+                format = ExplainOutputFormat.JSON,
+                databaseAvailable = true,
+                hasBoundDataSource = false,
+                hasUnfilledParams = true,
+            ) as ExplainPanelChannel.Decision.DirectFallback).reason,
+        )
+    }
 }

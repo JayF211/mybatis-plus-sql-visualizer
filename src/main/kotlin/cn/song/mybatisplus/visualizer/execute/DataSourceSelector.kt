@@ -789,11 +789,22 @@ object DataSourceSelector {
         "sql command not properly ended",
     )
 
-    /** T-CEC-02：一行是否命中错误判据（结构性判据 + 短语族）。 */
+    /**
+     * R33 真机走查修复：EXPLAIN 附随的 SHOW WARNINGS note 行（`[HY000][1003] Note: …`，
+     * 内含重写查询）——informational，不是执行失败。MySQL 服务端 1003 号属 note 消息段
+     * （ER_YES，不落失败码段）；结构化通道回退后直送通道执行 EXPLAIN 成功时，DBN 会把这条
+     * note 写进 history，早检逐拍扫到即被 [SQLSTATE_PREFIX] 命中误报红条（真机实证：
+     * 结果已正常出，底部红条却是这条 note）。整行排除（不要求行内带 "Note" 字样——DBN
+     * 是否透出级别词无源码级实锤，宁可宽放：1003 号在 MySQL 不是失败码）。
+     */
+    private val NOTE_1003_PREFIX = Regex("""\[HY000]\[1003]""", RegexOption.IGNORE_CASE)
+
+    /** T-CEC-02：一行是否命中错误判据（结构性判据 + 短语族；EXPLAIN note 1003 行除外）。 */
     private fun isErrorSignatureLine(line: String): Boolean =
-        SQLSTATE_PREFIX.containsMatchIn(line) ||
-            ORACLE_CODE.containsMatchIn(line) ||
-            ERROR_SIGNATURES.any { line.contains(it, ignoreCase = true) }
+        !NOTE_1003_PREFIX.containsMatchIn(line) &&
+            (SQLSTATE_PREFIX.containsMatchIn(line) ||
+                ORACLE_CODE.containsMatchIn(line) ||
+                ERROR_SIGNATURES.any { line.contains(it, ignoreCase = true) })
 
     /**
      * T-CEC-02：本插件自己写进 Output 的回显行前缀（[writeConsoleOutput] 的「执行失败: 」）——

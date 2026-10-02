@@ -1661,12 +1661,17 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
         }.getOrNull()
         val format = cn.song.mybatisplus.visualizer.sql.ExplainSupport.formatFor(dialect.name)
+        // R33 真机走查修复：编辑器文本就是回填链的终点产物（参数击键防抖重渲染），此处残留
+        // `?`（串感知位点，字符串/注释里的 `?` 不计）即真未填——不下发结构化探测（字面 `?`
+        // 送 JDBC = 语法错），按响亮失败回退并明示「存在未回填参数」
+        val hasUnfilledParams = placeholderPositions(explainSql).isNotEmpty()
         when (
             val verdict = cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.decide(
                 enabled = settings.explainStructuredRender,
                 format = format,
                 databaseAvailable = cn.song.mybatisplus.visualizer.mcp.McpDbExecutor.isDatabaseAvailable(),
                 hasBoundDataSource = boundDs != null,
+                hasUnfilledParams = hasUnfilledParams,
             )
         ) {
             cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.DirectSilent ->
@@ -1759,6 +1764,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     MpSqlVisualizerBundle.message("panel.explain.structured.reason.noDataSource")
                 cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.FallbackReason.NO_DATABASE_PLUGIN ->
                     MpSqlVisualizerBundle.message("panel.explain.structured.reason.noDatabasePlugin")
+                cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.FallbackReason.UNFILLED_PARAMS ->
+                    MpSqlVisualizerBundle.message("panel.explain.structured.reason.unfilledParams")
                 null -> detail ?: ""
             }
             Notification(

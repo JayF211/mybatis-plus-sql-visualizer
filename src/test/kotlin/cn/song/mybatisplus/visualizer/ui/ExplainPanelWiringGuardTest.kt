@@ -58,6 +58,21 @@ class ExplainPanelWiringGuardTest {
         )
     }
 
+    /**
+     * R33 真机走查修复接线钉：结构化探测前必须做未回填 `?` 占位探测并显式传给判定——
+     * `hasUnfilledParams` 是带默认值的参数（漏传编译不红），删掉这行接线判定层就是死参数，
+     * 语法错场景会重新滑进结构化探测（真机 `SQLException: … SQL syntax` 复现）。
+     */
+    @Test
+    fun `结构化探测前钉占位回填检查`() {
+        val source = sqlPreviewPanelSource()
+        assertTrue(
+            "submitExplainOrStructured 必须用串感知占位探测喂 hasUnfilledParams（否则残留 ? 重新下发探测）",
+            source.contains("hasUnfilledParams = placeholderPositions(explainSql).isNotEmpty()") &&
+                source.contains("hasUnfilledParams = hasUnfilledParams,"),
+        )
+    }
+
     private fun sqlPreviewPanelSource(): String =
         File(repoRoot(), "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt").readText()
 

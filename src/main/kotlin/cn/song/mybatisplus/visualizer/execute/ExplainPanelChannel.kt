@@ -47,6 +47,15 @@ object ExplainPanelChannel {
 
         /** Community / 无 Database 插件（自建链与控制台链同样不可用——此时直送链自身会提示引导）。 */
         NO_DATABASE_PLUGIN,
+
+        /**
+         * R33 真机走查修复：SQL 仍含未回填的 `?` 占位符——预览文本是回填链的终点产物
+         * （参数击键有防抖重渲染），残留 `?` 即真未填（默认占位档 / 无类型信息）。此时下发
+         * 结构化探测 = 把字面 `?` 送进 JDBC → 语法错（真机 `SQLException: You have an error
+         * in your SQL syntax`）。响亮失败优于语法错：不发探测，明示「存在未回填参数」后
+         * 落回直送通道（控制台如实呈现语法错）。
+         */
+        UNFILLED_PARAMS,
     }
 
     /**
@@ -54,18 +63,24 @@ object ExplainPanelChannel {
      *
      * 判定序：① 开关关 → 直送；② 格式非结构化档（TEXT/XML/未知，含 R23 Oracle 二段式与
      * SQL Server XML——**不硬解析**红线）→ 直送；③ database 插件不在场 → 回退（提示）；
-     * ④ 无已绑数据源 → 回退（提示）；⑤ 全部成立 → 结构化。
+     * ④ 无已绑数据源 → 回退（提示）；⑤ SQL 仍含未回填 `?`（R33 真机走查修复）→ 回退（提示）；
+     * ⑥ 全部成立 → 结构化。
+     *
+     * `hasUnfilledParams` 默认 false 只为既有调用点零改编译——面板接线必须显式传
+     * 占位探测结论（WiringGuard 钉住），漏传会让语法错场景重新滑进结构化探测。
      */
     fun decide(
         enabled: Boolean,
         format: ExplainOutputFormat?,
         databaseAvailable: Boolean,
         hasBoundDataSource: Boolean,
+        hasUnfilledParams: Boolean = false,
     ): Decision {
         if (!enabled) return Decision.DirectSilent
         if (format == null || format !in STRUCTURED_FORMATS) return Decision.DirectSilent
         if (!databaseAvailable) return Decision.DirectFallback(FallbackReason.NO_DATABASE_PLUGIN)
         if (!hasBoundDataSource) return Decision.DirectFallback(FallbackReason.NO_DATA_SOURCE)
+        if (hasUnfilledParams) return Decision.DirectFallback(FallbackReason.UNFILLED_PARAMS)
         return Decision.Structured
     }
 
