@@ -190,6 +190,23 @@ object DataSourceSelector {
         }
     }
 
+    /**
+     * O-95 T-PreviewEdtGuard S3：当前预览会话绑定数据源**名**（预览面板绑定指示行数据源）。
+     * 选择链与 [boundConsoleDataSource] 完全同源（共享/已备控制台二者取一 + isValid 先探 +
+     * DBN 链内取引用）；取名走反射（本类对 DBN 类型一律反射惯例，Community/无 Database 插件
+     * fail-closed → null）。`LocalDataSource.getName()` 出处：243 平台 jar 反编译
+     * （ExecConsoleContext KDoc 同款口径：`JdbcConsole.getDataSource(): LocalDataSource`），
+     * 与 `ds?.name`（ExecConsoleContext 诊断行在用）同一方法面。
+     * null = 未绑定/失效/反射失败 → 面板显示未绑定灰字（panel.bindstate.unbound）。
+     */
+    @JvmStatic
+    fun boundConsoleDataSourceName(): String? {
+        val ds = boundConsoleDataSource() ?: return null
+        return runCatching {
+            ds.javaClass.getMethod("getName").invoke(ds) as? String
+        }.getOrNull()
+    }
+
     /** 释放已准备控制台引用（面板清空/关闭时调用；JdbcConsole 本体由 IDE 管理）。 */
     @JvmStatic
     fun clearPrepared() {

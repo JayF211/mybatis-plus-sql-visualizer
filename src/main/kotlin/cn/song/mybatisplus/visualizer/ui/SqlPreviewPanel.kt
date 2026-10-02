@@ -501,6 +501,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     // R22 T-04：命名方案下拉（rebuildLeftPanel 随参数区重建；syncSchemeCombo 填充/刷新）
     private var schemeCombo: JComboBox<String>? = null
+    // O-95 S3：绑定数据源指示行标签（rebuildLeftPanel 重建；renderSql 尾部单点刷新）
+    private var bindStateLabel: JBLabel? = null
     /** 程序化填 combo 模型时置位（抑制 addActionListener 的用户切换语义）。 */
     private var schemeSyncingCombo = false
     /** 上次已同步到下拉的激活方案名——对话框回调时比对判定「激活方案被对话框切走」。 */
@@ -2688,6 +2690,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         // T-SelToggle：勾选态一切变更均以 renderSql 收尾——切换按钮文案在此单点同步
         syncToggleSelectLabels()
+        // O-95 S3：绑定数据源指示行同帧刷新（控制台 attach/reuse/clear 链的既有渲染路径即刷新通道）
+        refreshBindStateRow()
     }
 
     /**
@@ -3634,6 +3638,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             (xmlModelForSchemeRow.conditionViews.isNotEmpty() || xmlModelForSchemeRow.forEachViews.isNotEmpty())
 
         if (views.isEmpty() && result.unresolvedParams.isEmpty() && batchModel == null && !xmlHasControls) {
+            // O-95 S3：无参数早退同样保留绑定指示行（常驻语义——用户此时最需要看到「有没有绑定」）
+            paramPanel.add(buildBindStateRow())
             paramPanel.add(JBLabel(MpSqlVisualizerBundle.message("panel.param.none")).apply {
                 border = JBUI.Borders.empty(6, 8)
             })
@@ -3644,6 +3650,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
         // R22 T-04：方案行（设计定稿位置——首个早退之后、batchModel 分支之前）
         paramPanel.add(buildSchemeRow())
+        // O-95 T-PreviewEdtGuard S3：绑定数据源常驻指示行（预设行之下，灰字文本行——D2=A，
+        // 不自创图形形态；绑定态=R33 结构化视图头部同源数据 boundConsoleDataSource，
+        // 未绑定=R33 回退通知同源文案族）
+        paramPanel.add(buildBindStateRow())
 
         // T-M23-04：批量列级勾选（toggle 列：复选框 + 值输入框，勾选决定列是否进入 SQL；
         // fixed 列：仅值输入框，恒参与）——与动态条件区互斥（批量预览无 conditionViews）
@@ -3775,6 +3785,61 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         } finally {
             schemeSyncingCombo = false
         }
+    }
+
+    // ------------------------------------------------------------------
+    // O-95 T-PreviewEdtGuard S3：绑定数据源常驻指示行（预设行之下，灰字文本行）
+    // ------------------------------------------------------------------
+
+    /**
+     * S3 指示行数据源名（null = 未绑定/取不到）。测试缝优先——无 Database 插件的 headless
+     * 用例经 [bindStateNameProvider] 构造绑定态；生产走 [cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSourceName]
+     * （T-ConsoleDbContext 同源链：共享/已备控制台 + isValid 先探 + DBN 取名，全程 fail-closed）。
+     */
+    internal var bindStateNameProvider: (() -> String?)? = null
+
+    private fun boundDataSourceNameForDisplay(): String? =
+        bindStateNameProvider?.invoke()
+            ?: runCatching {
+                cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSourceName()
+            }.getOrNull()
+
+    /**
+     * S3 指示行文案：绑定=「已绑定：<源名>」（panel.bindstate.bound，数据源名与 R33 结构化
+     * 视图头部同源）；未绑定=「未绑定数据源（在控制台执行一次查询即可绑定）」（panel.bindstate.
+     * unbound，与 R33 回退通知 panel.explain.structured.reason.noDataSource 同源文案族）。
+     */
+    private fun bindStateText(): String {
+        val name = boundDataSourceNameForDisplay()
+        return if (name != null) MpSqlVisualizerBundle.message("panel.bindstate.bound", name)
+        else MpSqlVisualizerBundle.message("panel.bindstate.unbound")
+    }
+
+    /**
+     * S3 指示行（灰字文本行，D2=A 定案——轻量形态禁自创图形）：contextHelp 灰字与同面板
+     * 既有灰字形态一致（degradation 提示行同款 UIUtil.getContextHelpForeground）。
+     */
+    private fun buildBindStateRow(): JComponent {
+        val label = JBLabel(bindStateText()).apply {
+            name = BIND_STATE_LABEL_NAME
+            foreground = UIUtil.getContextHelpForeground()
+        }
+        bindStateLabel = label
+        return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 2)).apply {
+            name = BIND_STATE_ROW_NAME
+            add(label)
+            border = JBUI.Borders.empty(0, 8, 2, 8)
+        }
+    }
+
+    /**
+     * S3 绑定态刷新：renderSql 尾部单点收口（循 R30 条件探镜「零监听器」口径——控制台上下文
+     * 变更链〔attach/reuse/clearPrepared〕的既有 post-attach 渲染/清空路径都会走 renderSql，
+     * 不另立监听器；纯文本读，write-safe 闸重投递亦无副作用）。
+     */
+    private fun refreshBindStateRow() {
+        val label = bindStateLabel ?: return
+        label.text = bindStateText()
     }
 
     /**
@@ -5278,10 +5343,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 与 paramFields 的顺序一致（普通参数行按 source 顺序追加）。
      * R22 T-04：方案行同为「含 JBLabel 的 JBPanel」且插在头部，按 [SCHEME_ROW_NAME]
      * 排除——访问器契约是「普通参数行」，不含方案行（否则序号错位、断言取到方案行标签）。
+     * O-95 S3：绑定指示行同形状（含 JBLabel 的 JBPanel），按 BIND_STATE_ROW_NAME 同口径排除。
      */
     internal fun paramRowLabelForTest(index: Int): JBLabel? = paramPanel.components
         .filterIsInstance<JBPanel<*>>()
-        .filter { row -> row.name != SCHEME_ROW_NAME && row.components.any { it is JBLabel } }
+        .filter {
+            row -> row.name != SCHEME_ROW_NAME && row.name != BIND_STATE_ROW_NAME && row.components.any { it is JBLabel }
+        }
         .getOrNull(index)
         ?.components?.filterIsInstance<JBLabel>()?.firstOrNull()
 
@@ -5394,6 +5462,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** O-88：按 SCHEME_ROW_NAME 锚点取折叠内容里的方案行（折叠态下 visible=false 仍可取到）。 */
     internal fun schemeRowForTest(): JComponent? = presetFold?.let { findSchemeRowDeep(it) }
 
+    /** O-95 S3 测试缝：绑定指示行标签（null=本轮参数区未建指示行）。 */
+    internal fun bindStateLabelForTest(): JBLabel? = bindStateLabel
+
+    /** O-95 S3 测试缝：参数区组件序列（指示行在预设行之下的次序断言用，BoxLayout Y_AXIS 视觉序=组件序）。 */
+    internal fun paramPanelComponentsForTest(): List<java.awt.Component> = paramPanel.components.toList()
+
     private fun findSchemeRowDeep(root: java.awt.Container): JComponent? {
         for (child in root.components) {
             if (child.name == SCHEME_ROW_NAME) return child as? JComponent
@@ -5429,6 +5503,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         /** R22 T-04：方案行 panel.name 锚点——方案行也是「含 JBLabel 的 JBPanel」且插在 paramPanel
          *  头部，[paramRowLabelForTest] 按契约只取普通参数行，须按此排除（否则布局断言序号错位）。 */
         private const val SCHEME_ROW_NAME = "mpsv.schemeRow"
+
+        /** O-95 S3：绑定数据源指示行/标签 panel.name 锚点（测试定位 + paramRowLabelForTest 排除同口径）。 */
+        private const val BIND_STATE_ROW_NAME = "mpsv.bindStateRow"
+        private const val BIND_STATE_LABEL_NAME = "mpsv.bindStateLabel"
 
         /** R22 T-02/T-03：参数历史快照特殊键前缀（勾选态/foreach null/foreach 权威值；普通参数键
          *  不以 `__` 开头——键空间约定，ParamHistoryCache 对值透明）。 */
