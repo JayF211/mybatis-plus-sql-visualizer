@@ -93,6 +93,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 - Spring Data JPA 派生方法（`findByXxx`）、Repository CRUD 方法（`save` / `findById` / `deleteById` 等直接解析出 SQL）、`@Query`（JPQL / 原生 SQL）、`@NamedQuery`、CriteriaBuilder 调用链、HQL（含自定义 DAO）均可一键预览为 SQL
 - `JpaSpecificationExecutor` 的 Specification 调用链与 `QueryByExampleExecutor`（`Example.of`）按实体映射解析为 WHERE 条件；Hibernate `.hbm.xml` 映射实体及其 `<query>` / `<sql-query>` 命名查询同样支持
 - 写前静态预览与运行期调试互补：IDEA 2026.3 起官方提供 Hibernate Debugger（debugger 会话内查看运行期语句）；本插件管写代码时——不启动应用、不连数据库即可预览与 EXPLAIN，两者分工不同、互不替代
+- 嵌入值对象（`@Embedded` / `@Embeddable` / `@EmbeddedId`）字段按宿主表列展平参与预览：嵌套嵌入的 `@AttributeOverride` 支持 `name="zipcode.zip"` 点路径覆写（JPA 规范强制形态）；Spring Data 形态的裸 `@Embedded` 按 `prefix` 列名前缀展平，`@Embedded.Nullable` / `@Embedded.Empty` 捷径注解正确识别；派生查询方法名里的嵌入段驼峰路径（`findByUpdateInfoCreatedTime` 这类）解析到真实展平列，WHERE / ORDER BY（含 `Sort.by`）不产出 `update_info_created_time` 这类伪列；混合注解实体（MyBatis-Plus `@TableName` 与 jakarta 嵌入注解共存）在 Wrapper 预览、批量模板与 CRUD 生成里同样展平为宿主表列
 - 实体解析支持 `@Entity` / `@Table` / `@Column` / `@ManyToOne` 注解；HQL 的 `SELECT u` 自动展开为实体列清单，无别名 HQL 的 WHERE 裸属性（如 `stationCode`）同样转成真实列名（`STATION_CODE`）
 
 **SQL 代码补全**
