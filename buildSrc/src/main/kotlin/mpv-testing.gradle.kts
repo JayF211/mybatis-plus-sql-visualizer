@@ -138,6 +138,22 @@ fun listSuiteXmls(dir: File): List<File> =
 val testShardCount = providers.gradleProperty("testShardCount").orNull
     ?.toIntOrNull()?.coerceIn(1, 6) ?: 5
 
+// T-TestPerf12 S2 槽位补偿：对恒临界槽位按少装补偿——均衡器贪心比较键对目标槽位除以补偿
+// 因子（<1 放大其负载视图 → 更早判满 → 装配量按因子缩水），聚合 expected 同步缩放（告警刻度
+// 自洽：临界片的「预期」按补偿后口径对照，结构性因子不再被误判为缺权）。
+// -PtestShardHandicap=0.87（因子，钳 0.5..1.0，缺省 1.0=无补偿）+ -PtestShardHandicapTarget=2
+// （目标槽位号 1-based）。宁欠勿过：欠补偿只损失部分收益，过补偿制造新失衡（失衡告警是
+// 同轮相对量，过补会立刻以新临界片形态现形）。
+// T12 定案（2026-10-02，R1~R6 六轮）：临界片**跟类清单走不跟槽位走**（对调探针定案：互换
+// shard1/shard2 清单后临界从 shard2 翻到 shard1），T11「OS 调度/核分配的环境因素」猜想证伪；
+// 且超权片逐轮漂移（R1/R2=shard2、R3=原清单进 shard1、R4/R6=shard2）——固定槽位补偿打不准，
+// **不落默认**（D34）。旋钮保留作未来「某片真恒临界」形态的应急杠杆；主修通道=权重稳态
+// （冷轮样本污染经 K=2 mtime 窗口两轮挤出自愈，R4 实证失衡 +30%→+10.8%、drift 1.012）。
+val testShardHandicap = providers.gradleProperty("testShardHandicap").orNull
+    ?.toDoubleOrNull()?.takeIf { it in 0.5..1.0 } ?: 1.0
+val testShardHandicapTarget = providers.gradleProperty("testShardHandicapTarget").orNull
+    ?.toIntOrNull()?.coerceIn(1, testShardCount) ?: 2
+
 // 测试源码单遍扫描（T-TestPerf3 提为顶层：分片分区与 testFast 划桶两处共用；内容提取类名，
 // Kotlin 文件名≠类名合法——CrudPreviewFlowAndTypesTest.kt 内是 DbTypeQuoteHintTest 的先例）。
 // Triple(包名, 顶层测试类名列表, 原文)。
@@ -290,6 +306,10 @@ intellijPlatformTesting {
         // 并发膨胀噪声且各片随机分布（预期均衡 209.8s×3 实测 195.3/209.3/196.7，T-TestPerf4
         // run2），单份最新值会让均衡器逐轮追噪声；K 份中位数平滑。样本不足 K 份退化为现有
         // 取法，全新检出零数据时全体同权，退化路径与 T-TestPerf2 一致。
+        // T-TestPerf12 K=3 销案（2026-10-02 R5 实测）：K=3 失衡 +18% vs K=2 同带 +10.8%，无优势，
+        // 默认 2 维持；附带定例=新树冷轮样本会污染 K 窗（R1 冷值致 R2/R3 装箱错位、失衡 +21~30%），
+        // 但 K=2 mtime 窗两轮自然挤出自愈（R4 双 warm 失衡回落、drift 1.012），纪律=新树冷轮
+        // 读数不作判据、均衡观察等两轮 warm（dev-support/test-shard-aggregate.py 的 drift 读数可见）。
         val durationWeights: Map<String, Double> = run {
             val weightSamples = providers.gradleProperty("testShardWeightSamples").orNull
                 ?.toIntOrNull()?.coerceIn(1, 5) ?: 2
@@ -459,19 +479,24 @@ intellijPlatformTesting {
                         items += Triple("$name#fragB", fbW, name)
                     }
                 }
+            // T-TestPerf12 S2：补偿槽位的贪心比较键——负载除以补偿因子（<1 放大视图 → 更早判满
+            // → 少装）。loads 数组仍存原始权重和（日志/parity 语义不变），缩放只影响「哪个片被
+            // 视为最轻」的判定；确定性不变（并列取最小下标的次序与因子无关）。
+            fun greedyKey(i: Int): Double =
+                loads[i] / (if (i == testShardHandicapTarget - 1) testShardHandicap else 1.0)
             items.sortedWith(
                 compareByDescending<Triple<String, Double, String?>> { it.second }
                     .thenBy { if (it.third != null) 1 else 0 }
                     .thenBy { it.first },
             ).forEach { (name, w, fragOf) ->
                 if (fragOf == null) {
-                    val target = loads.indices.minByOrNull { loads[it] }!!
+                    val target = loads.indices.minByOrNull { greedyKey(it) }!!
                     shards[target] += name
                     loads[target] += w
                     classShard[name] = target
                 } else {
                     val home = classShard[fragOf] ?: 0
-                    val target = loads.indices.filter { it != home }.minByOrNull { loads[it] }!!
+                    val target = loads.indices.filter { it != home }.minByOrNull { greedyKey(it) }!!
                     shards[target] += name
                     loads[target] += w
                     splitFragments[fragOf]!!.second.forEach { (method, _) ->
@@ -491,6 +516,12 @@ intellijPlatformTesting {
             plan.fragExcludes.mapValues { (_, v) -> v.toList() }
         val fragIncludesByShard: Map<Int, List<String>> =
             plan.fragIncludes.mapValues { (_, v) -> v.toList() }
+        if (testShardHandicap < 1.0) {
+            logger.lifecycle(
+                "testShards S2 handicap ON: shard%d ÷%.2f in greedy key & expected（上方 loads 显示原始权重和）"
+                    .format(testShardHandicapTarget, testShardHandicap),
+            )
+        }
         if (splitFragments.isEmpty()) {
             logger.lifecycle(
                 "testShards: $testShardCount shards duration-balanced, loads=" +
@@ -536,7 +567,12 @@ intellijPlatformTesting {
             }
         }
         // T-TestPerf4：喂给聚合任务的两份配置期产物（见 shardPlanExpectedLoads 注释）
-        shardPlanExpectedLoads = plan.loads.joinToString("|") { "%.1f".format(it) }
+        // T-TestPerf12 S2：expected 存补偿后有效预期（目标槽位 ÷ 因子）——聚合的超预期告警
+        // 与「预期 vs 实测」对照自动吃到补偿刻度，结构性因子（若存在）不再被误判为缺权；
+        // 无补偿（因子 1.0）时与原始 loads 逐位相等，行为不变。
+        shardPlanExpectedLoads = plan.loads.indices.joinToString("|") { i ->
+            "%.1f".format(plan.loads[i] / (if (i == testShardHandicapTarget - 1) testShardHandicap else 1.0))
+        }
         shardPlanClasses = discoveredTestClasses.joinToString("\n")
         for (i in 1..testShardCount) {
             val idx = i - 1
@@ -813,11 +849,19 @@ tasks.register("testShards") {
                         .format((mx - avg) / avg * 100, critIdx + 1, mx, avg),
                 )
             }
+            // T-TestPerf12 S3：缺权判据改全局漂移归一化——原判据「临界片实测>预期×1.10」是跨刻度
+            // 比较，execSum 窗口漂移（T11 夜间 +5% 实录）下对逐类无失准的轮次连发误鸣 4 轮
+            // （T11 §三.2）。改判据＝临界片的（实测/预期）相对全体片平均比（=漂移因子）的偏离
+            // >10%：全局刻度整体漂移被除法消去，只剩该片真超预期（缺权/新类插值形态）才鸣。
+            // 自参照零跨轮状态；失衡告警（上方 12% 同轮相对量）本就漂移免疫，不动。
             val expCrit = expectedLoads.getOrNull(critIdx)
-            if (expCrit != null && expCrit > 0 && mx > expCrit * 1.10) {
+            val expSum = expectedLoads.filter { it > 0 }.sum()
+            val drift = if (expSum > 0 && shardExec.sum() > 0) shardExec.sum() / expSum else 1.0
+            val relCrit = if (expCrit != null && expCrit > 0) (mx / expCrit) / drift else 1.0
+            if (relCrit > 1.10) {
                 logger.warn(
-                    "testShards WARN: 临界片实测超预期 +%.0f%%（%.1fs vs expected %.1fs）——新类零权重插值/画像过期嫌疑"
-                        .format((mx - expCrit) / expCrit * 100, mx, expCrit),
+                    "testShards WARN: 临界片超预期 +%.0f%%（%.1fs vs expected %.1fs，已按全局漂移 %.2f 归一化）——新类零权重插值/画像过期嫌疑"
+                        .format((relCrit - 1) * 100, mx, expCrit ?: 0.0, drift),
                 )
             }
         }
