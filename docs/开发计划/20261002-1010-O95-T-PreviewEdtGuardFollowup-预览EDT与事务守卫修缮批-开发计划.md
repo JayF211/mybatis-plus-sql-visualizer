@@ -69,3 +69,10 @@
 - **防串扰**：`paramRowLabelForTest` 同形状排除扩展到指示行（含 JBLabel 的 JBPanel 行契约不变）。
 - **定向**：`SqlPreviewPanelBindStateTest` 三例（无绑定灰字文案/有绑定态显示源名+随渲染刷新回流/指示行位于预设行之下〔组件序=BoxLayout 视觉序〕）3/0+`SqlPreviewPanelTest` 73/0+`SqlPreviewPanelParamSchemesTest` 13/0 布局回归+`BundlePlaceholderArityTest` 4/0 占位符契约（0 失败）。
 - **真机走查**（验收 3）：绑定态指示出现/未绑定灰字留下一轮沙盒走查批（计划 §二既定）。
+
+## 六、收口门禁（基线=merge `716a703`，2026-10-02）
+
+- **testShards 5 片**：6350/0/0/8（566 类，XML 产物 10:47 新鲜，python ET 聚合器直读）；**testExternal**：40/0/0/1——合计 **6390/0/0/9**（skip 9=docker 三态口径）。
+- **agent**：94/0（XML 10:45 新鲜）。
+- **verifyGate 三目标**：243/253/262 全 **Compatible**（11:13~11:14 新鲜产物）。过程注记＝门禁代理早退后核实其 08:56 旧 verdict 早于合并判过期，主控在 dev tip 复跑（BUILD SUCCESSFUL 2m1s）以产物 mtime+内容双核验入账。
+- **移交**：S3 指示行真机判定留下轮沙盒走查批（§二验收 3 既定）；S1 余量归因账（54 次原始栈缺失）维持登记。
