@@ -54,7 +54,7 @@
             <li><b>JOIN 关系图与执行</b>：IDE 原生 ER 图渲染（PNG / SVG 导出）；内嵌原生 Database 控制台直接执行 SQL 与一键执行计划 EXPLAIN（Ultimate）</li>
             <li><b>CRUD SQL 一步直出</b>：实体类 / 数据库表右键生成 INSERT / UPDATE / SELECT / DELETE</li>
             <li><b>一键回滚 SQL</b>：对预览的 INSERT 推导逆向 DELETE，SQL Server / 达梦自增列自动包装；UPDATE / DELETE 走快照回填恢复</li>
-            <li><b>MCP 工具面向 AI agent</b>：10 个确定性只读工具接入平台 MCP Server（渲染 / 核查 / 执行计划 / 回滚预案 / CRUD / 反向转换等），设置页逐项门控（IDEA 2025.2+）</li>
+            <li><b>MCP 工具面向 AI agent</b>：11 个确定性只读工具接入平台 MCP Server（渲染 / 核查 / 执行计划 / 回滚预案 / CRUD / 反向转换等），设置页逐项门控（IDEA 2025.2+）</li>
             <li>触发零门槛：代码左侧 gutter 图标 / 右键菜单 / <code>Alt+Shift+Q</code></li>
         </ul>
         <p>功能矩阵与文档：<a href="https://sql-visualizer.jvtools.cn">sql-visualizer.jvtools.cn</a> · 截图见 <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">Marketplace 页面</a></p>
