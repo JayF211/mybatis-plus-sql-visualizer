@@ -182,4 +182,39 @@ class SqlPreviewPanelBindStateTest : BasePlatformTestCase() {
             p.bindStateLabelForTest()!!.text,
         )
     }
+
+    // ------------------------------------------------------------------
+    // O-96fix2：控制台挂载即刷新指示行（执行路径无 renderSql 的补拍刷新）
+    // ------------------------------------------------------------------
+
+    /**
+     * 真机缺陷复现（O-96 复测轮）：执行 SQL 挂载控制台的路径**不走 renderSql**（SqlExecutor
+     * execute/executePrepared 的 onConsole → embedConsole，控制台文档已是执行 SQL，重渲染会冲掉），
+     * 指示行停留在挂载前的记忆态「关联（上次使用）」，手动点刷新才升级「已绑定」。
+     * 修复=embedConsole 单点补一拍刷新（全挂载路径统一钩子）。
+     * 本用例：记忆态（关联）面板 → 模拟挂载（bindStateNameProvider 测试缝替代生产
+     * boundConsoleDataSourceName，与 test有绑定态同款口径）→ 只 dispatch 不 renderSql →
+     * 指示行应即时升级「已绑定」。
+     */
+    fun test挂载控制台后指示行即时升级无需重渲染() {
+        plantRegisteredDataSources(
+            listOf("mp_demo@localhost"),
+        ) { id -> if (id == "uuid-1") "mp_demo@localhost" else null }
+        DataSourceSelector.plantLastUsedMemoryForTest(project, "uuid-1", "mp_demo@localhost")
+        val p = openPanel("id")
+        assertEquals(
+            "前置：无活控制台时应显示记忆态关联文案",
+            MpSqlVisualizerBundle.message("panel.bindstate.associated", "mp_demo@localhost"),
+            p.bindStateLabelForTest()!!.text,
+        )
+        // 活控制台上线（生产链在 onConsole 回调前已写 preparedConsole/记忆，测试缝同步在挂载前置好）
+        p.bindStateNameProvider = { "mp_demo@localhost" }
+        p.embedConsoleForTest(javax.swing.JPanel())
+        UIUtil.dispatchAllInvocationEvents() // 挂载补拍的 invokeLater 刷新——不经 renderSql
+        assertEquals(
+            "挂载控制台后指示行应即时升级「已绑定」（无需手动刷新/重渲染）",
+            MpSqlVisualizerBundle.message("panel.bindstate.bound", "mp_demo@localhost"),
+            p.bindStateLabelForTest()!!.text,
+        )
+    }
 }

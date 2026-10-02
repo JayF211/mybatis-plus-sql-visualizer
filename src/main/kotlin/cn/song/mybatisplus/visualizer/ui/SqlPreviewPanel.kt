@@ -1908,6 +1908,22 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val prev = lastConsoleEmbeddedId
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
             .info("[M36] embedConsole identity: id=$id, prevEmbedded=$prev, sameAsPrev=${prev == id}, sameInstance=${consoleComponent === embeddedConsole}, previewMode=$previewMode")
+        // O-96fix2：控制台**挂载即刷新**绑定指示行。S3 的刷新通道原本只收口在 renderSql 尾部，
+        // 但「执行 SQL」路径（SqlExecutor.execute/executePrepared 的 onConsole → 本方法）挂载后
+        // 不重渲染（控制台文档已是执行 SQL，重渲染反而冲掉）——指示行停留在挂载前的记忆态
+        // 「关联（上次使用）：X」，须手动点刷新才升级「已绑定：X」（真机两路复现：选择数据源
+        // 弹窗路径与 T-SI-02 静默复用路径一致复现）。本方法是全挂载路径的单点钩子，在此补一拍
+        // 刷新即覆盖执行/预览/复用三链；调用时序安全——onConsole 回调前 preparedConsole/
+        // sharedConsole 与 rememberRunner（T-SI-02 记忆写入）均已赋值（prepareInConsole/
+        // reuseSharedConsole 同款顺序）。refreshBindStateRow 为纯文本读（O-95 口径），排
+        // invokeLater(any) 与本方法既有 UI-only 调度同模态，无写副作用、重入幂等。
+        ApplicationManager.getApplication().invokeLater({
+            if (com.intellij.openapi.util.Disposer.isDisposed(this)) return@invokeLater
+            runCatching { refreshBindStateRow() }.onFailure { e ->
+                com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                    .warn("[O-96fix2] bind-state refresh on embed FAILED: ${e.javaClass.simpleName}: ${e.message}")
+            }
+        }, com.intellij.openapi.application.ModalityState.any())
         if (consoleComponent === embeddedConsole) {
             // M36.5.47：同实例防抖时**不清空结果、不重挂**（防闪烁），但必须清除"执行中"
             // loading 态——A 执行成功后 onResultsReady 回调同一实例（复用共享 console），
