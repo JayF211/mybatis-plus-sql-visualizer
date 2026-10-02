@@ -207,6 +207,56 @@ object DataSourceSelector {
         }.getOrNull()
     }
 
+    /**
+     * O-96 测试缝：headless 无 Database 插件时注入「在籍数据源名单 + UUID→名解析」替代
+     * 真链（[DataSourceSettings.getAllDataSources] 反射在 Community 沙盒恒空）；生产为 null
+     * 走真链。测试用例负责置空复位（object 单例静态状态）。
+     */
+    internal var rememberedLookupForTest: ((Project) -> Pair<List<String>, (String) -> String?>)? = null
+
+    /**
+     * O-96 T-PreviewBindAssociation S1：last-used 记忆回退取名（绑定指示行第二优先级专用，
+     * **只读**——歧义不清记忆、不弹窗、不触碰任何状态，展示路径禁副作用）。
+     *
+     * 判定与执行链 T-SI-02 静默复用**同一纯函数** [resolveLastUsedRunnerIndex]（UUID 精确命中
+     * → 名字唯一命中 → 同名多条歧义即弃），runner 名单换为在籍数据源名
+     * （[DataSourceSettings.getAllDataSources]）——指示行所说「下次执行会用哪条」与 prepareConsole
+     * 静默复用的实际解析完全同源。记忆缺失 → null（快速早退）；UUID 失效（数据源已删）按
+     * T-SI-02 口径退回名字判定；歧义/不存在 → null = 未绑定，不静默猜。
+     *
+     * 优先级契约（S3）：活控制台 [boundConsoleDataSourceName] 恒高于本记忆回退 > 未绑定。
+     */
+    @JvmStatic
+    fun rememberedDataSourceName(project: Project): String? {
+        val memory = lastUsedRunner(project)
+        if (memory.dataSourceId.isNullOrBlank() && memory.displayName.isNullOrBlank()) return null
+        val (registeredNames, nameById) = rememberedLookupForTest?.invoke(project) ?: run {
+            DataSourceSettings.getAllDataSources(project).map { DataSourceSettings.getName(it) } to
+                { id: String ->
+                    runCatching {
+                        DataSourceSettings.getDataSourceById(project, id)?.let { DataSourceSettings.getName(it) }
+                    }.getOrNull()
+                }
+        }
+        return resolveRememberedDataSourceName(memory, registeredNames, nameById)
+    }
+
+    /** O-96 S1：记忆回退取名判定（纯函数壳——复用 T-SI-02 判定，命中下标换算在籍名）。 */
+    internal fun resolveRememberedDataSourceName(
+        memory: LastUsedMemory,
+        registeredNames: List<String>,
+        dataSourceNameById: (String) -> String?,
+    ): String? =
+        resolveLastUsedRunnerIndex(memory, registeredNames, dataSourceNameById)
+            .index?.let { registeredNames.getOrNull(it) }
+
+    /** O-96 测试辅助：headless 直写 last-used 记忆双键（生产写入口 [rememberRunner] 为 private）。 */
+    internal fun plantLastUsedMemoryForTest(project: Project, id: String?, name: String?) {
+        val pc = com.intellij.ide.util.PropertiesComponent.getInstance(project)
+        if (id.isNullOrBlank()) pc.unsetValue(LAST_RUNNER_ID_KEY) else pc.setValue(LAST_RUNNER_ID_KEY, id)
+        if (name.isNullOrBlank()) pc.unsetValue(LAST_RUNNER_KEY) else pc.setValue(LAST_RUNNER_KEY, name)
+    }
+
     /** 释放已准备控制台引用（面板清空/关闭时调用；JdbcConsole 本体由 IDE 管理）。 */
     @JvmStatic
     fun clearPrepared() {
