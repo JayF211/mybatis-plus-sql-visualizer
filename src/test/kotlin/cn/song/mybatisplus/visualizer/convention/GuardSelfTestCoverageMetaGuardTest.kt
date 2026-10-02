@@ -758,6 +758,14 @@ class GuardSelfTestCoverageMetaGuardTest {
                 listOf(DecisionFn("warningSites", FnKind.SITES)),
                 "手工扩展登记（文件名不含 Guard，靠命名兜底面发现）；扫描自检 :129 覆盖 warningSites",
             ),
+            GuardEntry(
+                "ui/PreviewRenderSlowOpsGuardTest.kt",
+                listOf(DecisionFn("slowOpDirectCallHits", FnKind.VIOLATIONS)),
+                "T-PreviewEdtGuard S1：预览重渲染链宿主文件（SqlPreviewPanel/SqlAutoFolding）禁直调慢操作 " +
+                    "API 族（getSyntaxHighlighter/findFileByUrl/findFileByPath——2026-09-24 沙盒实栈：" +
+                    "SQL 方言映射 ensureStateLoaded→VFS findChild→FSRecords 慢操作门控）；" +
+                    "自证 `test自证_慢操作API族判定内核可判别`（三令牌逐一必中+干净源零误报）",
+            ),
             // ---- 无判定内核的守卫类（断言直接内联在 @Test；登记以关闭文件名闭包） ----
             GuardEntry(
                 "acp/AcpTransportScopeSourceScanTest.kt",
