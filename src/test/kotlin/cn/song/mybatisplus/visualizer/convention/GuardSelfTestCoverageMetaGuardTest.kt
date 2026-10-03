@@ -925,6 +925,15 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "O-64 wholeScriptExec 接线守卫：生产链每个转发点必传旗标（P19 批次默认执行缺口的防复发面）；" +
                     "callsWithin 的自证语料为合成源码直接喂入",
             ),
+            // ---- T-K2JWalkMcp262 新增守卫（2026-10-03） ----
+            GuardEntry(
+                "ui/SqlPreviewPanelDoubleReleaseGuardTest.kt",
+                emptyList(),
+                "KW-1 守卫：编辑器已释放时 releaseEditor 幂等跳过（isDisposed 前置判断防平台 " +
+                    "Double release SEVERE）。断言为「行为结果」形态（先行释放后再走面板释放链不抛）" +
+                    "而非违规点/站点集合，无 offenders/sites 判定内核——decisionFns 留空" +
+                    "（修法提示口径：无判定内核时留空并写明依据）",
+            ),
             // ---- 本元守卫自身 ----
             GuardEntry(
                 "convention/GuardSelfTestCoverageMetaGuardTest.kt",
