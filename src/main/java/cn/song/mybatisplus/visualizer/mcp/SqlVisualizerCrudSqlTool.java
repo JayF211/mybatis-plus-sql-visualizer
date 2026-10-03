@@ -60,7 +60,7 @@ public class SqlVisualizerCrudSqlTool extends McpToolsetSupport {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE
     )
-    public String sqlv_crud_sql(String filePath, String className) {
+    public McpToolTextResult sqlv_crud_sql(String filePath, String className) {
         return audit("sqlv_crud_sql", () -> {
             Project project = requireProject();
             requireSmart(project);

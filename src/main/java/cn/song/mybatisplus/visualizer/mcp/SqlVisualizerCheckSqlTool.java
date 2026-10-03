@@ -48,7 +48,7 @@ public class SqlVisualizerCheckSqlTool extends McpToolsetSupport {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE
     )
-    public String sqlv_check_sql(String sql) {
+    public McpToolTextResult sqlv_check_sql(String sql) {
         return audit("sqlv_check_sql", () -> checkSql(sql));
     }
 

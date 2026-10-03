@@ -30,14 +30,14 @@ class McpAuditGateTest {
      * 事件循环自身定时器（parkNanos 到点唤醒），与创建方上下文零耦合，实测自洽。
      */
     private class ProbeTool : McpToolsetSupport("sqlv_probe") {
-        suspend fun probe(block: suspend () -> String): String =
+        suspend fun probe(block: suspend () -> String): McpToolTextResult =
             audit("sqlv_probe", "probe") { runBlocking { block() } }
         suspend fun fail(msg: String): Nothing = throwExpected(msg)
     }
 
     @Test
     fun `同步成功路径_记账并返回结果`() {
-        assertEquals("ok", runBlocking { ProbeTool().probe { "ok" } })
+        assertEquals("ok", runBlocking { ProbeTool().probe { "ok" } }.text)
     }
 
     @Test
@@ -51,7 +51,7 @@ class McpAuditGateTest {
         // got 2）——平台墙与本测试要断言的记账语义无关；撞墙即打印原因绿跳，统一 stdlib 环境
         // （如纯 262 载体）仍真跑断言；其余异常照抛。
         try {
-            assertEquals("async", runBlocking { ProbeTool().probe { delay(50); "async" } })
+            assertEquals("async", runBlocking { ProbeTool().probe { delay(50); "async" } }.text)
         } catch (e: IllegalStateException) {
             if (e.message?.contains("Debug metadata version mismatch") == true) {
                 println("SKIP 挂起成功路径：243 测试 JVM 平台 stdlib 遮蔽 → DebugProbes 元数据不匹配（${e.message}）")

@@ -38,7 +38,7 @@ public class SqlVisualizerReverseSqlTool extends McpToolsetSupport {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE
     )
-    public String sqlv_reverse_sql(String sql) {
+    public McpToolTextResult sqlv_reverse_sql(String sql) {
         return audit("sqlv_reverse_sql", () -> reverseSql(sql));
     }
 

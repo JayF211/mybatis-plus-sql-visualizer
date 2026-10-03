@@ -115,7 +115,7 @@ public abstract class McpToolsetSupport {
     /**
      * Kotlin 默认参数等价重载：argsSummary 缺省 {@link #LEGACY_ARGS_SUMMARY}（纯静态工具零改动）。
      */
-    protected String audit(String tool, ToolBlock block) {
+    protected McpToolTextResult audit(String tool, ToolBlock block) {
         return audit(tool, LEGACY_ARGS_SUMMARY, block);
     }
 
@@ -136,13 +136,17 @@ public abstract class McpToolsetSupport {
      * <p>错误路径（EXPECTED_ERROR）的组合串走 {@link McpAuditLogKt#errorArgsSummary} 的两段分预算：
      * 错误文本优先，入参摘要让位——长 SQL 场景下错误原因不被摘要挤掉（T-MAT-04 回退修复）。</p>
      */
-    protected String audit(String tool, String argsSummary, ToolBlock block) {
+    protected McpToolTextResult audit(String tool, String argsSummary, ToolBlock block) {
         long token = AUDIT_SEQ.incrementAndGet();
         AUDIT_CTX.put(token, new AuditContext(tool, argsSummary, System.currentTimeMillis()));
         try {
             String outcome = block.get();
             auditOk(token);
-            return outcome;
+            // T-K2JWalkMcp262（KW-262B）：262 mcpServer 新形态要求返回 Properties（class kind）——
+            // 裸 String 返回在 returnTypeSchema 被拒、十工具全部 Cannot load（沙盒活体 +
+            // tools/list 对账 sqlv_* 为空实证）。统一在此包 McpToolTextResult（{"text": …}），
+            // 工具体内的 String 返回语义逐字节迁入 text 字段。
+            return new McpToolTextResult(outcome);
         } catch (Throwable e) {
             if (FatalErrors.isFatal(e)) {
                 throw (Error) e;

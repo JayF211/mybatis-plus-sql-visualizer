@@ -39,7 +39,7 @@ public class SqlVisualizerExplainTool extends McpToolsetSupport {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE
     )
-    public String sqlv_explain(String selectSql, String dataSource, String dialect, int maxRows) {
+    public McpToolTextResult sqlv_explain(String selectSql, String dataSource, String dialect, int maxRows) {
         return audit("sqlv_explain", McpAuditLogKt.executionArgsSummary(dataSource, dialect, selectSql), () -> {
             // 行预算钳制（T-McpRowBudget / T-MRB-03）：越界静默收进 [1..HARD_MAX_ROWS]，不抛错。
             // 生效值随 target 过挂起点（单引用，维持 ExplainTarget 的 K2 防溢出约定）；通道层另有一道兜底。

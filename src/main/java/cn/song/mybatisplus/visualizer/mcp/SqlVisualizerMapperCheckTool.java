@@ -57,7 +57,7 @@ public class SqlVisualizerMapperCheckTool extends McpToolsetSupport {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE
     )
-    public String sqlv_mapper_check(String xmlSnippet, String filePath, boolean simulate) {
+    public McpToolTextResult sqlv_mapper_check(String xmlSnippet, String filePath, boolean simulate) {
         return audit("sqlv_mapper_check", () -> {
             String text;
             if (!xmlSnippet.isBlank()) {

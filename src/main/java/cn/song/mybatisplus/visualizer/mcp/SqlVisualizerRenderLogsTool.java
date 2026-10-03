@@ -70,7 +70,7 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE
     )
-    public String sqlv_render_logs(
+    public McpToolTextResult sqlv_render_logs(
         String logText,
         String sqlPrefix,
         String paramPrefix,

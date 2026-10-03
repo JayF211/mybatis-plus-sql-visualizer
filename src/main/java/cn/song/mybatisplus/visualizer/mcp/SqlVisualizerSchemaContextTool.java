@@ -53,7 +53,7 @@ public class SqlVisualizerSchemaContextTool extends McpToolsetSupport {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE
     )
-    public String sqlv_schema_context(McpStringArg tables, McpStringArg dataSource, McpIntArg maxTables) {
+    public McpToolTextResult sqlv_schema_context(McpStringArg tables, McpStringArg dataSource, McpIntArg maxTables) {
         return audit("sqlv_schema_context", () -> {
             Project project = requireProject();
             requireSmart(project);

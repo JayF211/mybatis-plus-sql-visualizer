@@ -45,7 +45,7 @@ public class SqlVisualizerRollbackPlanTool extends McpToolsetSupport {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE
     )
-    public String sqlv_rollback_plan(String sql, String primaryKeyColumns) {
+    public McpToolTextResult sqlv_rollback_plan(String sql, String primaryKeyColumns) {
         return audit("sqlv_rollback_plan", () -> rollbackPlan(sql, primaryKeyColumns));
     }
 

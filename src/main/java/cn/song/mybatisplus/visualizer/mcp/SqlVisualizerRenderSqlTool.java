@@ -41,7 +41,7 @@ public class SqlVisualizerRenderSqlTool extends McpToolsetSupport {
         destructiveHint = McpToolHintValue.FALSE,
         idempotentHint = McpToolHintValue.TRUE
     )
-    public String sqlv_render_sql(String filePath, int line, String xmlSnippet, String sourceType) {
+    public McpToolTextResult sqlv_render_sql(String filePath, int line, String xmlSnippet, String sourceType) {
         return audit("sqlv_render_sql", () -> {
             var project = requireProject();
             var parsedPair = McpRenderInput.parse(filePath, line > 0 ? line : null, xmlSnippet, sourceType);
