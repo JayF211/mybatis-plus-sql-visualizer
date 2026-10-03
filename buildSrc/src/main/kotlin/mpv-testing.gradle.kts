@@ -17,10 +17,11 @@ plugins {
 // M17：同样排除 Database 插件（com.intellij.database）——本地平台为 Ultimate 时测试沙盒会加载它，
 // 使 ExecuteSqlSupport.isAvailable() 恒为 true（无法单测 Community 降级路径）；排除后测试环境
 // 稳定模拟「无 database 插件」（按钮降级/提示分支可测）。排除 jar 名含 database/sql 的模块 jar。
-// M36.5.23：**testDatabase 任务除外**——DB 集成测试需要 Database 插件真实加载（模拟 Ultimate
-// 沙盒环境，见下方 intellijPlatformTesting.testIde.register("testDatabase")）。
+// M36.5.23：**DB 集成任务除外**——DB 集成测试需要 Database 插件真实加载（模拟 Ultimate
+// 沙盒环境）。T-TestPerf14 S2：五类拆 testDb* 任务后按前缀特判（原单任务名 testDatabase
+// 判断保留，兼容旧树/聚合容器同名不冲突）。
 tasks.withType<Test>().configureEach {
-    val isDbIntegration = name == "testDatabase"
+    val isDbIntegration = name == "testDatabase" || name.startsWith("testDb")
     classpath = classpath.filter {
         !it.name.contains("vue", ignoreCase = true) &&
             (isDbIntegration || (
@@ -107,6 +108,17 @@ tasks.withType<Test>().configureEach {
 val mpDemoProjectDirDefault = rootProject.projectDir.parentFile
     .resolve("mybatis-plus-sql-visualizer-demo").absolutePath
 
+// T-TestPerf14 S2：DB 集成五类 → 五个并行 testIde 任务（任务名→FQCN），聚合任务 testDatabase
+// dependsOn 与各任务 filter 均由本清单驱动。分片排除清单仍是 testIde 块内 dbIntegrationClasses
+// ——两份清单类集必须一致，类集漂移时 SHARD TOTAL 计数与 parity 会现形。
+val dbIntegrationTaskSpecs: List<Pair<String, String>> = listOf(
+    "testDbConsole" to "cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest",
+    "testDbSelector" to "cn.song.mybatisplus.visualizer.execute.DataSourceSelectorIntegrationTest",
+    "testDbDiagram" to "cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest",
+    "testDbExecDocGate" to "cn.song.mybatisplus.visualizer.execute.ExecDocGateIntegrationTest",
+    "testDbDriverPipeline" to "cn.song.mybatisplus.visualizer.execute.DbDriverPipelineTest",
+)
+
 // T-TestPerf2：Gradle JUnit XML testsuite 根属性解析（只读文件头，避免大文件全读）与结果文件枚举。
 // 供配置期时长权重与 testShards 聚合报告两处复用；解析失败静默跳过（半截 XML 不挡分区）。
 fun parseTestSuiteAttrs(f: File): Map<String, String>? = runCatching {
@@ -153,6 +165,85 @@ val testShardHandicap = providers.gradleProperty("testShardHandicap").orNull
     ?.toDoubleOrNull()?.takeIf { it in 0.5..1.0 } ?: 1.0
 val testShardHandicapTarget = providers.gradleProperty("testShardHandicapTarget").orNull
     ?.toIntOrNull()?.coerceIn(1, testShardCount) ?: 2
+
+// T-TestPerf14 S1：auto-handicap——T13 §七.1 裁定规则（同槽 ≥3 连失衡 WARN 且临界片清单
+// 更替不漂移 → 按 1/(1+超权比中位) 启用补偿）的机制化执行件。三段式：
+//   ① 聚合 doLast 每轮落盘 {临界槽位, 归一化临界比 relCrit, 临界片类清单 hash, 本轮补偿模式}
+//      到 build/test-results/shard-imbalance-history.jsonl（写入失败静默跳过——历史是优化
+//      输入不是正确性依赖；build/test-results 每轮变化本就使配置缓存失效，下轮读到必含上轮）；
+//   ② 配置期（均衡器装箱前）读历史尾部执行触发判定，命中则自动启用补偿（因子现算）；
+//   ③ 过补自愈：最近 2 轮 auto 中出现「临界换到非目标槽」或「目标槽被压显著偏轻
+//      （relCrit<0.90）」→ 本轮退避（mode=cooldown，无补偿可比），此后需重新攒满 3 连可比
+//      WARN 才再启用（防振荡，宁欠勿过）。
+// 安全三重：总闸 -PtestShardAutoHandicap=false（缺省 true，D45）；手工 -PtestShardHandicap
+// 显式给定时全程优先（auto 不介入）；零历史（新树/清 build）不触发、行为与无补偿逐字节等价。
+// 语义边界（对照 D34）：D34 否决的是「无条件默认开启」；本机制只在触发条件满足时介入，
+// 是 T13 既定裁定的执行件而非翻案。
+val testShardAutoHandicap = providers.gradleProperty("testShardAutoHandicap").orNull?.toBoolean() ?: true
+
+// 失衡历史一轮的读取形态（自产 jsonl 字段固定，正则提取不引 JSON 依赖）。
+// mode：off=无补偿可比轮 / manual|auto=补偿生效轮（expected 已缩放，relCrit≈1 为到位，不可比）
+// / cooldown=过补退避轮（无补偿、可比）。触发判定的可比集 = off + cooldown。
+data class MpvImbalanceRound(
+    val critSlot: Int,
+    val relCrit: Double,
+    val classSetHash: String,
+    val mode: String,
+    val factor: Double?,
+    val target: Int?,
+)
+
+val mpvImbalanceHistory: List<MpvImbalanceRound> = runCatching {
+    val f = file("build/test-results/shard-imbalance-history.jsonl")
+    if (!f.isFile) emptyList()
+    else f.readLines().filter { it.isNotBlank() }.takeLast(12).mapNotNull { line ->
+        fun str(key: String) = Regex("\"$key\":\"([^\"]*)\"").find(line)?.groupValues?.get(1)
+        fun num(key: String) = Regex("\"$key\":(-?[\\d.]+)").find(line)?.groupValues?.get(1)
+        runCatching {
+            MpvImbalanceRound(
+                critSlot = num("critSlot")?.toDoubleOrNull()?.toInt() ?: return@mapNotNull null,
+                relCrit = num("relCrit")?.toDoubleOrNull() ?: return@mapNotNull null,
+                classSetHash = str("classSetHash") ?: "",
+                mode = str("mode") ?: "off",
+                factor = num("factor")?.toDoubleOrNull(),
+                target = num("target")?.toDoubleOrNull()?.toInt(),
+            )
+        }.getOrNull()
+    }
+}.getOrDefault(emptyList())
+
+// 本轮有效补偿三元组 (因子, 目标槽, 落盘模式)：手工参数优先 > auto 判定命中 > 无补偿。
+// 触发判据（T13 规则的机器形态）：按时间序最近 3 轮全部是可比 WARN 轮（off/cooldown 且
+// relCrit>1.10）、临界槽位恒定、且临界片类清单 hash ≥2 个不同值（清单换人临界不换槽=结构性
+// 恒槽；清单不变=个别类缺权嫌疑，走 weight-refresh 通道不补偿）。auto/manual 轮插队即断链
+// ——过补退避后需重新攒满 3 连才再启用（防振荡，宁欠勿过）。
+// 过补自愈：最近 2 轮 auto 中任一轮 relCrit 仍 >1.10（auto 轮的 expected 已按补偿缩放，
+// 仍超阈=补偿未达标或制造了新失衡）→ 本轮退避（mode=cooldown，无补偿可比）。
+val mpvHandicapDecision: Triple<Double, Int, String> = run {
+    if (testShardHandicap < 1.0) return@run Triple(testShardHandicap, testShardHandicapTarget, "manual")
+    if (!testShardAutoHandicap || mpvImbalanceHistory.size < 3) return@run Triple(1.0, 2, "off")
+    val hist = mpvImbalanceHistory
+    val recentAuto = hist.takeLast(2)
+    val overHeal = recentAuto.size == 2 && recentAuto.all { it.mode == "auto" } &&
+        recentAuto.any { it.relCrit > 1.10 }
+    if (overHeal) return@run Triple(1.0, 2, "cooldown")
+    val recent = hist.takeLast(3)
+    val trigger = recent.all { (it.mode == "off" || it.mode == "cooldown") && it.relCrit > 1.10 } &&
+        recent.all { it.critSlot == recent[0].critSlot } &&
+        recent.map { it.classSetHash }.distinct().size >= 2
+    if (!trigger) return@run Triple(1.0, 2, "off")
+    val medianOver = recent.map { it.relCrit - 1.0 }.sorted()[1]
+    val factor = (1.0 / (1.0 + medianOver)).coerceIn(0.5, 1.0)
+    val target = recent[0].critSlot
+    logger.lifecycle(
+        "testShards AUTO-HANDICAP engaged: shard%d factor=%.2f（近3可比轮超权中位 +%.0f%%；触发=T13 规则：同槽≥3连且清单更替不漂移）"
+            .format(target, factor, medianOver * 100),
+    )
+    Triple(factor, target, "auto")
+}
+val effHandicapFactor = mpvHandicapDecision.first
+val effHandicapTarget = mpvHandicapDecision.second
+val effHandicapMode = mpvHandicapDecision.third
 
 // 测试源码单遍扫描（T-TestPerf3 提为顶层：分片分区与 testFast 划桶两处共用；内容提取类名，
 // Kotlin 文件名≠类名合法——CrudPreviewFlowAndTypesTest.kt 内是 DbTypeQuoteHintTest 的先例）。
@@ -271,6 +362,9 @@ tasks.register<Test>("testFast") {
 // 因此对照行每轮反映最新权重表的预期，与实测并排后权重失准一眼可见。
 var shardPlanExpectedLoads: String = ""
 var shardPlanClasses: String = ""
+// T-TestPerf14 S1：各片类清单 hash（片序→hash，"|" 连接）——聚合落盘时取临界片的 hash，
+// 供 auto-handicap 判定「临界不随清单更替漂移」。
+var shardPlanHashes: String = ""
 
 intellijPlatformTesting {
     testIde {
@@ -482,8 +576,9 @@ intellijPlatformTesting {
             // T-TestPerf12 S2：补偿槽位的贪心比较键——负载除以补偿因子（<1 放大视图 → 更早判满
             // → 少装）。loads 数组仍存原始权重和（日志/parity 语义不变），缩放只影响「哪个片被
             // 视为最轻」的判定；确定性不变（并列取最小下标的次序与因子无关）。
+            // T-TestPerf14 S1：补偿来源三选一（手工 > auto > 无），见顶层 mpvHandicapDecision。
             fun greedyKey(i: Int): Double =
-                loads[i] / (if (i == testShardHandicapTarget - 1) testShardHandicap else 1.0)
+                loads[i] / (if (i == effHandicapTarget - 1) effHandicapFactor else 1.0)
             items.sortedWith(
                 compareByDescending<Triple<String, Double, String?>> { it.second }
                     .thenBy { if (it.third != null) 1 else 0 }
@@ -516,10 +611,10 @@ intellijPlatformTesting {
             plan.fragExcludes.mapValues { (_, v) -> v.toList() }
         val fragIncludesByShard: Map<Int, List<String>> =
             plan.fragIncludes.mapValues { (_, v) -> v.toList() }
-        if (testShardHandicap < 1.0) {
+        if (effHandicapFactor < 1.0) {
             logger.lifecycle(
-                "testShards S2 handicap ON: shard%d ÷%.2f in greedy key & expected（上方 loads 显示原始权重和）"
-                    .format(testShardHandicapTarget, testShardHandicap),
+                "testShards S2 handicap ON ($effHandicapMode): shard%d ÷%.2f in greedy key & expected（上方 loads 显示原始权重和）"
+                    .format(effHandicapTarget, effHandicapFactor),
             )
         }
         if (splitFragments.isEmpty()) {
@@ -571,9 +666,10 @@ intellijPlatformTesting {
         // 与「预期 vs 实测」对照自动吃到补偿刻度，结构性因子（若存在）不再被误判为缺权；
         // 无补偿（因子 1.0）时与原始 loads 逐位相等，行为不变。
         shardPlanExpectedLoads = plan.loads.indices.joinToString("|") { i ->
-            "%.1f".format(plan.loads[i] / (if (i == testShardHandicapTarget - 1) testShardHandicap else 1.0))
+            "%.1f".format(plan.loads[i] / (if (i == effHandicapTarget - 1) effHandicapFactor else 1.0))
         }
         shardPlanClasses = discoveredTestClasses.joinToString("\n")
+        shardPlanHashes = shardAssignment.joinToString("|") { it.hashCode().toUInt().toString(16) }
         for (i in 1..testShardCount) {
             val idx = i - 1
             register("testShard$i") {
@@ -613,143 +709,147 @@ intellijPlatformTesting {
                 }
             }
         }
-        register("testDatabase") {
-            testFramework(TestFrameworkType.Platform)
-            sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/database"))
-            task {
-                testClassesDirs = sourceSets["test"].output.classesDirs
-                classpath = classpath + sourceSets["test"].output
-                // T-Fix-TestDb 20260918：**每类一个测试 JVM**（forkEvery=1）。DB 集成类依赖的 DBN
-                // 状态是**应用级**的：数据源（LocalDataSourceManager）、控制台登记
-                // （JdbcConsole$ScriptingDatabaseSessionClientHolder 的 project user data 列表）、
-                // 引擎/会话、DbPsiFacade 快照——同 JVM 内跨类串扰已实测出多条失败：
-                //   ① 前序类残留数据源让「恰好 N 个 runner」契约读到别人建的数据源；
-                //   ② 移除数据源触发的引擎终止与后一类的 attachConsole 并发 → DBN 清扫
-                //      （getActiveClients 逐条 dispose isValid()=false 的控制台）顺手回收刚建的控制台
-                //      （`console DISPOSED right after attach`，插件 T-PreviewExecDs-03 F3 同款现象）；
-                //   ③ exec 文件路径在同一个 light 工程里恒定 → 控制台/文档/VFS 状态跨类残留。
-                // 测试侧已做的隔离（稳定工程目录 + 用例边界摘控制台/清文档）无法消除①②的竞态，
-                // 因为它们来自应用级单例；分 JVM 是这类「共享应用级状态」平台测试的标准隔离手段。
-                // 代价：5 个类各一次 JVM 冷启动（约 +2~3 分钟）。
-                forkEvery = 1
-                // M36.5.23：DB 集成测试配置
-                //  - mpDemoProjectDir：demo 项目路径（读 dataSources.xml 连接信息），默认兄弟目录。
-                //    密码硬编码在测试里（root/root，从 demo application.yml 复制，本地开发库无敏感性）。
-                systemProperty(
-                    "mpDemoProjectDir",
-                    providers.gradleProperty("mpDemoProjectDir").getOrElse(mpDemoProjectDirDefault),
-                )
-                // 代理透传（与 runIde/verifyPlugin 一致）——DBN createBlocking 内部 HttpRequests
-                // 访问外部（驱动元数据/校验）需要代理；无代理时建连失败 → introspect 返回 false → skip
-                systemProperty("http.proxyHost", "127.0.0.1")
-                systemProperty("http.proxyPort", "7890")
-                systemProperty("https.proxyHost", "127.0.0.1")
-                systemProperty("https.proxyPort", "7890")
-                // T-ExecDocGate 20260917：doFirst 需要项目根绝对路径——相对路径在 doFirst 按
-                // daemon CWD 解析（实测为 .gradle/daemon/<ver>，跨构建不一致）；直接捕获
-                // project 字符串又是脚本对象引用（配置缓存拒绝）。inputs.property 是官方
-                // CC 兼容通道：执行期经 inputs.properties 读回
-                inputs.property("mpProjectDirAbs", project.projectDir.absolutePath)
-                // 沙盒首次启动前预置 runIde 沙盒已下载的 jdbc-drivers（MySQL Connector/J），
-                // 免集成测试联网下驱动；runIde 沙盒不存在时静默跳过（首次连接时 DBN 自行下载）。
-                // 注意：doFirst 内不可引用 rootProject/layout（配置缓存不支持序列化 Project），
-                // 用相对路径 File（Test 任务工作目录 = 项目根）。
-                // M36.5.23d：IPGP testIde 任务的实际 config 目录是 `config_<任务名>`（非 `config`）——
-                // DBN 从 config_testDatabase/jdbc-drivers 读 driver 文件，复制到 `config/` 无效
-                //（实证：RemoteDriver.classpath.txt 只含 jdbc-console.jar，缺 mysql jar → ClassNotFound）。
-                doFirst {
-                    // T-ExecDocGate 20260917：种子源三级回退（本地 runIde 沙盒 → dev 工作树沙盒 →
-                    // 日常 IDE 驱动存储）。runIde 沙盒 clean 后原版静默跳过 → 驱动缺失 →
-                    // RemoteJdbcServer ClassNotFound（四集成类 introspect 全跳，本日实测）。
-                    // 一切路径绝对锚定（见上方 inputs.property 注释）。
-                    val root = inputs.properties["mpProjectDirAbs"] as String
-                    val configRoot = File(root, "build/test-sandbox/database/config_testDatabase")
-                    val driverDir = File(configRoot, "jdbc-drivers")
-                    val sandboxDrivers = File(
-                        root,
-                        ".intellijPlatform/sandbox/mybatis-plus-sql-visualizer/IU-2024.3.7.1/config/jdbc-drivers",
+        // T-TestPerf14 S2（D44 转正）：testDatabase 五类并行化。原形态=单任务 filter 五类 +
+        // forkEvery=1 串行换 JVM（+2~3min，T-Fix-TestDb 20260918 在案）。拆五任务后每类：
+        //   ① 独占 JVM（原 forkEvery=1 的「类间换 JVM」语义由「每类一任务」承载，应用级单例
+        //      串扰三形态——数据源残留/DBN 清扫抢控制台/exec 路径恒定——的隔离不弱化）；
+        //   ② 独占沙盒 build/test-sandbox/database/<任务名>（隔离面只增不减：原方案 5 类还共享
+        //      同一 config_testDatabase 目录，现各享 config_<任务名>；测试侧 DbIntegrationSeedSupport
+        //      按 PathManager.getConfigPath() 绝对锚定，零测试源码改动自动适配新 config 目录）。
+        // 并行前提（T13 S4 评估 + 本轮反转的前提）：五类对 demo MySQL 全只读（源码面零 DML/DDL
+        // 实证）→ 五路并发读无共享写冲突；Commit 峰值≈5 分片量级（评估③在案）；真库在跑
+        // （20261004 netstat 3306 LISTENING 实测，T13「真库未起」前提反转）。
+        // 命令语义不变：./gradlew testDatabase 仍是「一命令五类全跑」（块外聚合任务 dependsOn
+        // 五者，org.gradle.parallel 并行执行）。
+        // 种子逻辑与原单任务逐字等价、仅 configRoot 参数化（config_<任务名> 规则 M36.5.23d 在案，
+        // IPGP testIde 任务的实际 config 目录 = sandboxDirectory 下 config_<任务名>）。
+        fun registerDbShard(name: String, fqcn: String) {
+            register(name) {
+                testFramework(TestFrameworkType.Platform)
+                sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/database/$name"))
+                task {
+                    testClassesDirs = sourceSets["test"].output.classesDirs
+                    classpath = classpath + sourceSets["test"].output
+                    // M36.5.23：DB 集成测试配置
+                    //  - mpDemoProjectDir：demo 项目路径（读 dataSources.xml 连接信息），默认兄弟目录。
+                    //    密码硬编码在测试里（root/root，从 demo application.yml 复制，本地开发库无敏感性）。
+                    systemProperty(
+                        "mpDemoProjectDir",
+                        providers.gradleProperty("mpDemoProjectDir").getOrElse(mpDemoProjectDirDefault),
                     )
-                    val devSandboxDrivers = File(
-                        root,
-                        "../mybatis-plus-sql-visualizer-dev/.intellijPlatform/sandbox/mybatis-plus-sql-visualizer/IU-2024.3.7.1/config/jdbc-drivers",
-                    )
-                    // ① artifact 清单：两级沙盒源（xml；通常不含 jar）
-                    if (!File(driverDir, "jdbc-drivers.xml").isFile) {
-                        val src = listOf(sandboxDrivers, devSandboxDrivers).firstOrNull { it.isDirectory }
-                        if (src != null) {
-                            driverDir.mkdirs()
-                            File(src, "jdbc-drivers.xml").copyTo(File(driverDir, "jdbc-drivers.xml"))
-                            logger.lifecycle("testDatabase: jdbc-drivers.xml pre-seeded from ${src.path}")
-                        }
-                    }
-                    // ② jar 树：日常 IDE 驱动存储（Roaming，maven 布局；本机实存 9.7.0）。
-                    //    逐文件 mkdirs——copyRecursively walkBottomUp 深层文件先于父目录落地会
-                    //    ERROR_PATH_NOT_FOUND（实测）
-                    val artifactVersion = "9.7.0"
-                    val roamingVersionDir = File(
-                        System.getProperty("user.home"),
-                        "AppData/Roaming/JetBrains/IntelliJIdea2024.3/jdbc-drivers/MySQL ConnectorJ/$artifactVersion",
-                    )
-                    val versionDir = File(driverDir, "MySQL ConnectorJ/$artifactVersion")
-                    if (roamingVersionDir.isDirectory && !versionDir.isDirectory) {
-                        var copied = 0
-                        roamingVersionDir.walkTopDown().filter { it.isFile }.forEach { f ->
-                            val out = File(versionDir, f.relativeTo(roamingVersionDir).path)
-                            out.parentFile.mkdirs()
-                            if (runCatching { f.copyTo(out, overwrite = true) }.isSuccess) copied++
-                        }
-                        logger.lifecycle("testDatabase: mysql connector jar tree pre-seeded (copied=$copied)")
-                    }
-                    // ③ driver 就绪状态：必须含 mysql.8 的 artifact 版本条目（真实 IDE 同款；
-                    //    空壳文件时 DBN 不知道 mysql.8 解析哪个版本 → classpath 恒空 → CNFE）
-                    val driverState = File(configRoot, "options/databaseDrivers.xml")
-                    if (!driverState.isFile || driverState.readText().contains("mysql.8").not()) {
-                        File(configRoot, "options").mkdirs()
-                        driverState.writeText(
-                            "<application>\n" +
-                                "  <component name=\"LocalDatabaseDriverManager\" version=\"201\">\n" +
-                                "    <driver id=\"mysql.8\">\n" +
-                                "      <artifact id=\"MySQL ConnectorJ\" name=\"MySQL ConnectorJ\" use=\"true\" version=\"$artifactVersion\" />\n" +
-                                "    </driver>\n" +
-                                "  </component>\n" +
-                                "</application>\n",
+                    // 代理透传（与 runIde/verifyPlugin 一致）——DBN createBlocking 内部 HttpRequests
+                    // 访问外部（驱动元数据/校验）需要代理；无代理时建连失败 → introspect 返回 false → skip
+                    systemProperty("http.proxyHost", "127.0.0.1")
+                    systemProperty("http.proxyPort", "7890")
+                    systemProperty("https.proxyHost", "127.0.0.1")
+                    systemProperty("https.proxyPort", "7890")
+                    // T-ExecDocGate 20260917：doFirst 需要项目根绝对路径——相对路径在 doFirst 按
+                    // daemon CWD 解析（实测为 .gradle/daemon/<ver>，跨构建不一致）；直接捕获
+                    // project 字符串又是脚本对象引用（配置缓存拒绝）。inputs.property 是官方
+                    // CC 兼容通道：执行期经 inputs.properties 读回
+                    inputs.property("mpProjectDirAbs", project.projectDir.absolutePath)
+                    // T-TestPerf14 S2：config 目录随任务名（IPGP 规则 config_<任务名>，M36.5.23d）
+                    inputs.property("mpvDbConfigDirRel", "build/test-sandbox/database/$name/config_$name")
+                    // 沙盒首次启动前预置 runIde 沙盒已下载的 jdbc-drivers（MySQL Connector/J），
+                    // 免集成测试联网下驱动；runIde 沙盒不存在时静默跳过（首次连接时 DBN 自行下载）。
+                    // 注意：doFirst 内不可引用 rootProject/layout（配置缓存不支持序列化 Project），
+                    // 用相对路径 File（Test 任务工作目录 = 项目根）。
+                    doFirst {
+                        // T-ExecDocGate 20260917：种子源三级回退（本地 runIde 沙盒 → dev 工作树沙盒 →
+                        // 日常 IDE 驱动存储）。runIde 沙盒 clean 后原版静默跳过 → 驱动缺失 →
+                        // RemoteJdbcServer ClassNotFound（四集成类 introspect 全跳，本日实测）。
+                        // 一切路径绝对锚定（见上方 inputs.property 注释）。
+                        val root = inputs.properties["mpProjectDirAbs"] as String
+                        val configRoot = File(root, inputs.properties["mpvDbConfigDirRel"] as String)
+                        val driverDir = File(configRoot, "jdbc-drivers")
+                        val sandboxDrivers = File(
+                            root,
+                            ".intellijPlatform/sandbox/mybatis-plus-sql-visualizer/IU-2024.3.7.1/config/jdbc-drivers",
                         )
+                        val devSandboxDrivers = File(
+                            root,
+                            "../mybatis-plus-sql-visualizer-dev/.intellijPlatform/sandbox/mybatis-plus-sql-visualizer/IU-2024.3.7.1/config/jdbc-drivers",
+                        )
+                        // ① artifact 清单：两级沙盒源（xml；通常不含 jar）
+                        if (!File(driverDir, "jdbc-drivers.xml").isFile) {
+                            val src = listOf(sandboxDrivers, devSandboxDrivers).firstOrNull { it.isDirectory }
+                            if (src != null) {
+                                driverDir.mkdirs()
+                                File(src, "jdbc-drivers.xml").copyTo(File(driverDir, "jdbc-drivers.xml"))
+                                logger.lifecycle("$name: jdbc-drivers.xml pre-seeded from ${src.path}")
+                            }
+                        }
+                        // ② jar 树：日常 IDE 驱动存储（Roaming，maven 布局；本机实存 9.7.0）。
+                        //    逐文件 mkdirs——copyRecursively walkBottomUp 深层文件先于父目录落地会
+                        //    ERROR_PATH_NOT_FOUND（实测）
+                        val artifactVersion = "9.7.0"
+                        val roamingVersionDir = File(
+                            System.getProperty("user.home"),
+                            "AppData/Roaming/JetBrains/IntelliJIdea2024.3/jdbc-drivers/MySQL ConnectorJ/$artifactVersion",
+                        )
+                        val versionDir = File(driverDir, "MySQL ConnectorJ/$artifactVersion")
+                        if (roamingVersionDir.isDirectory && !versionDir.isDirectory) {
+                            var copied = 0
+                            roamingVersionDir.walkTopDown().filter { it.isFile }.forEach { f ->
+                                val out = File(versionDir, f.relativeTo(roamingVersionDir).path)
+                                out.parentFile.mkdirs()
+                                if (runCatching { f.copyTo(out, overwrite = true) }.isSuccess) copied++
+                            }
+                            logger.lifecycle("$name: mysql connector jar tree pre-seeded (copied=$copied)")
+                        }
+                        // ③ driver 就绪状态：必须含 mysql.8 的 artifact 版本条目（真实 IDE 同款；
+                        //    空壳文件时 DBN 不知道 mysql.8 解析哪个版本 → classpath 恒空 → CNFE）
+                        val driverState = File(configRoot, "options/databaseDrivers.xml")
+                        if (!driverState.isFile || driverState.readText().contains("mysql.8").not()) {
+                            File(configRoot, "options").mkdirs()
+                            driverState.writeText(
+                                "<application>\n" +
+                                    "  <component name=\"LocalDatabaseDriverManager\" version=\"201\">\n" +
+                                    "    <driver id=\"mysql.8\">\n" +
+                                    "      <artifact id=\"MySQL ConnectorJ\" name=\"MySQL ConnectorJ\" use=\"true\" version=\"$artifactVersion\" />\n" +
+                                    "    </driver>\n" +
+                                    "  </component>\n" +
+                                    "</application>\n",
+                            )
+                        }
+                        // ④ 单测模式 artifact 清单副本 + ⑤ driver 定义钉版本（T-Embed-08 原逻辑）
+                        // T-TestDbDriver 20260918：落点改 config 根下的 options/ ——
+                        // DatabaseArtifactLoaderImpl.getTestArtifactLists() 经
+                        // DatabaseDriverManagerImpl.existentTestPath(name) 只认
+                        // `<homePath>/dbe/database/testResources/<name>` 与 `<configPath>/options/<name>`
+                        // （bytecode 常量池 \u0001/options/\u0001 实证）；原落 config 根 → 探针实测
+                        // getTestArtifactLists() 恒空（该文件从未被 DBN 读到）。
+                        val manifest = File(driverDir, "jdbc-drivers.xml")
+                        val dstArtifactList = File(configRoot, "options/test-database-artifacts.xml")
+                        if (manifest.isFile && !dstArtifactList.isFile) {
+                            dstArtifactList.parentFile.mkdirs()
+                            manifest.copyTo(dstArtifactList)
+                            logger.lifecycle("$name: test-database-artifacts.xml seeded (options/)")
+                        }
+                        // ⑤ driver 定义（test-database-drivers.xml）不再由本块落盘：
+                        //    ① DBN 在单测模式显式忽略该名——DatabaseDriverManagerImpl.existentTestPath
+                        //       bytecode 实证 `isUnitTestMode() && name.endsWith("test-database-drivers.xml")`
+                        //       → 直接 return null；② 原落盘用的是相对路径 `build/test-sandbox/...`，
+                        //       按 Gradle daemon 进程 CWD 解析（见上方注释实测）。落盘职责归测试侧
+                        //       DbIntegrationSeedSupport（PathManager.getConfigPath() 绝对锚定）。
                     }
-                    // ④ 单测模式 artifact 清单副本 + ⑤ driver 定义钉版本（T-Embed-08 原逻辑）
-                    // T-TestDbDriver 20260918：落点改 config 根下的 options/ ——
-                    // DatabaseArtifactLoaderImpl.getTestArtifactLists() 经
-                    // DatabaseDriverManagerImpl.existentTestPath(name) 只认
-                    // `<homePath>/dbe/database/testResources/<name>` 与 `<configPath>/options/<name>`
-                    // （bytecode 常量池 \u0001/options/\u0001 实证）；原落 config 根 → 探针实测
-                    // getTestArtifactLists() 恒空（该文件从未被 DBN 读到）。
-                    val manifest = File(driverDir, "jdbc-drivers.xml")
-                    val dstArtifactList = File(configRoot, "options/test-database-artifacts.xml")
-                    if (manifest.isFile && !dstArtifactList.isFile) {
-                        dstArtifactList.parentFile.mkdirs()
-                        manifest.copyTo(dstArtifactList)
-                        logger.lifecycle("testDatabase: test-database-artifacts.xml seeded (options/)")
+                    filter {
+                        includeTestsMatching(fqcn)
                     }
-                    // ⑤ driver 定义（test-database-drivers.xml）不再由本块落盘：
-                    //    ① DBN 在单测模式显式忽略该名——DatabaseDriverManagerImpl.existentTestPath
-                    //       bytecode 实证 `isUnitTestMode() && name.endsWith("test-database-drivers.xml")`
-                    //       → 直接 return null；② 原落盘用的是相对路径 `build/test-sandbox/...`，
-                    //       按 Gradle daemon 进程 CWD 解析（见上方注释实测）。落盘职责归测试侧
-                    //       DbIntegrationSeedSupport（PathManager.getConfigPath() 绝对锚定）。
                 }
-                filter {
-                includeTestsMatching("cn.song.mybatisplus.visualizer.execute.DbConsoleIntegrationTest")
-                // M36.5.23 续：DataSourceSelector 选择/发现层集成骨架（仅 testDatabase 跑，database jar 在 classpath）
-                includeTestsMatching("cn.song.mybatisplus.visualizer.execute.DataSourceSelectorIntegrationTest")
-                // T-Embed-03/04/08：B 路径 Database 原生图 + 虚拟外键 JOIN 线真实链路
-                includeTestsMatching("cn.song.mybatisplus.visualizer.execute.HeavyNativeDatabaseDiagramJoinChainTest")
-                // T-ExecDocGate：执行文档落盘纪律断言（prepare/reuse/手改防抖三断言）
-                includeTestsMatching("cn.song.mybatisplus.visualizer.execute.ExecDocGateIntegrationTest")
-                // T-TestDbDriver：驱动解析管线回归
-                includeTestsMatching("cn.song.mybatisplus.visualizer.execute.DbDriverPipelineTest")
-            }
             }
         }
+        dbIntegrationTaskSpecs.forEach { (taskName, fqcn) -> registerDbShard(taskName, fqcn) }
     }
+}
+
+// T-TestPerf14 S2：testDatabase 聚合任务（命令名与语义不变，一命令五类全跑）——纯容器，
+// 五个 testDb* 任务在 org.gradle.parallel 下并行执行。原单任务串行形态见 git 历史。
+tasks.register("testDatabase") {
+    group = "verification"
+    description =
+        "DB 集成五类并行门禁（T-TestPerf14 S2：五任务各独占 JVM+沙盒，原单任务串行形态见 git 历史）"
+    dependsOn(*dbIntegrationTaskSpecs.map { it.first }.toTypedArray())
 }
 
 tasks.register("testShards") {
@@ -763,6 +863,13 @@ tasks.register("testShards") {
     // shardPlanExpectedLoads 注释），doLast 只做文件 IO + 读 inputs，不触达脚本对象。
     inputs.property("mpvExpectedShardLoads", shardPlanExpectedLoads)
     inputs.property("mpvPlannedClasses", shardPlanClasses)
+    // T-TestPerf14 S1：落盘通道——本轮补偿模式/因子/目标槽、各片类清单 hash、历史文件目录，
+    // 配置期固化成 String（CC 约束同上），doLast 落盘 shard-imbalance-history.jsonl 用。
+    inputs.property("mpvHandicapMode", effHandicapMode)
+    inputs.property("mpvHandicapFactor", effHandicapFactor.toString())
+    inputs.property("mpvHandicapTarget", effHandicapTarget.toString())
+    inputs.property("mpvShardHashes", shardPlanHashes)
+    inputs.property("mpvHistDirAbs", file("build/test-results").absolutePath)
     // 聚合报告（T-TestPerf2）：分片跑完直接打印各片与总数四元组，与串行口径的计数 parity 目测即得。
     // 配置缓存约束：结果目录在配置期解析为 File，doLast 只做文件 IO 不触达 Project/layout，
     // 且解析辅助函数须定义在 doLast 体内——引用脚本顶层函数会整段不可序列化（实证报错）。
@@ -863,6 +970,26 @@ tasks.register("testShards") {
                     "testShards WARN: 临界片超预期 +%.0f%%（%.1fs vs expected %.1fs，已按全局漂移 %.2f 归一化）——新类零权重插值/画像过期嫌疑"
                         .format((relCrit - 1) * 100, mx, expCrit ?: 0.0, drift),
                 )
+            }
+            // T-TestPerf14 S1：失衡历史落盘（auto-handicap 跨轮状态通道）。每轮一行追加，
+            // 写入失败静默跳过（历史是优化输入不是正确性依赖，runCatching 兜磁盘异常）。
+            runCatching {
+                val histDir = File(inputs.properties["mpvHistDirAbs"] as String)
+                val hashes = (inputs.properties["mpvShardHashes"] as? String ?: "").split("|")
+                val critHash = hashes.getOrNull(critIdx)?.takeIf { it.isNotBlank() } ?: "unknown"
+                val mode = inputs.properties["mpvHandicapMode"] as? String ?: "off"
+                val factor = (inputs.properties["mpvHandicapFactor"] as? String)?.toDoubleOrNull()
+                val target = (inputs.properties["mpvHandicapTarget"] as? String)?.toIntOrNull()
+                val line = "{\"ts\":${System.currentTimeMillis()}" +
+                    ",\"critSlot\":${critIdx + 1}" +
+                    ",\"relCrit\":${"%.3f".format(relCrit)}" +
+                    ",\"classSetHash\":\"$critHash\"" +
+                    ",\"execSum\":${"%.1f".format(shardExec.sum())}" +
+                    ",\"mode\":\"$mode\"" +
+                    ",\"factor\":${factor?.let { "%.2f".format(it) } ?: "null"}" +
+                    ",\"target\":${target ?: "null"}}\n"
+                histDir.mkdirs()
+                File(histDir, "shard-imbalance-history.jsonl").appendText(line)
             }
         }
         logger.lifecycle(
