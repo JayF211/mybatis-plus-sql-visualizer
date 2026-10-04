@@ -13,7 +13,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **运行期（跑起来后，动态还原）**：控制台 SQL 日志自动捕获，`?` 占位符参数填充为可执行 SQL（MyBatis / Hibernate / JdbcTemplate 三族日志，并发多线程交错按线程分桶还原）；字节码增强捕获为默认通道，无需应用开启 SQL 日志，即得真实参数、执行耗时、影响行数与真实源码位置；日志条目与源码双向跳转（自研框架、JAR 形态业务工具库的调用自动定位到业务代码行），保活心跳类刷屏 SQL 一键屏蔽，历史 SQL 全量落盘与两级导航。
 
-**验证（随时）**：预览结果内嵌原生数据库控制台一键执行，EXPLAIN 执行计划（7 种方言真机验证），SQL 性能规则引擎与静态标注对照，JOIN 关系图可视化；执行前有 `${}` 注入确认与无界写发现清单两道闸、执行超时护栏兜底，UPDATE / DELETE 预览可一键生成回滚 SQL。
+**验证（随时）**：预览结果内嵌原生数据库控制台一键执行，EXPLAIN 执行计划（9 种方言，8 种真机 / 引擎实证、OceanBase 文档级验证），SQL 性能规则引擎与静态标注对照，JOIN 关系图可视化；执行前有 `${}` 注入确认与无界写发现清单两道闸、执行超时护栏兜底，UPDATE / DELETE 预览可一键生成回滚 SQL。
 
 本插件原名为 MyBatis-Plus SQL Visualizer，现更名 SQL Visualizer——仍全面支持 MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate，插件 ID 与升级链路不变。
 
@@ -93,7 +93,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 - Spring Data JPA 派生方法（`findByXxx`）、Repository CRUD 方法（`save` / `findById` / `deleteById` 等直接解析出 SQL）、`@Query`（JPQL / 原生 SQL）、`@NamedQuery`、CriteriaBuilder 调用链、HQL（含自定义 DAO）均可一键预览为 SQL
 - `JpaSpecificationExecutor` 的 Specification 调用链与 `QueryByExampleExecutor`（`Example.of`）按实体映射解析为 WHERE 条件；Hibernate `.hbm.xml` 映射实体及其 `<query>` / `<sql-query>` 命名查询同样支持
 - 嵌入值对象（`@Embedded` / `@Embeddable` / `@EmbeddedId`）字段按宿主表列展平参与预览：嵌套嵌入的 `@AttributeOverride` 支持 `name="zipcode.zip"` 点路径覆写（JPA 规范强制形态）；Spring Data 形态的裸 `@Embedded` 按 `prefix` 列名前缀展平，`@Embedded.Nullable` / `@Embedded.Empty` 捷径注解正确识别；派生查询方法名里的嵌入段驼峰路径（`findByUpdateInfoCreatedTime` 这类）解析到真实展平列，WHERE / ORDER BY（含 `Sort.by`）不产出 `update_info_created_time` 这类伪列；混合注解实体（MyBatis-Plus `@TableName` 与 jakarta 嵌入注解共存）在 Wrapper 预览、批量模板与 CRUD 生成里同样展平为宿主表列
-- 实体解析支持 `@Entity` / `@Table` / `@Column` / `@ManyToOne` 注解；HQL 的 `SELECT u` 自动展开为实体列清单，无别名 HQL 的 WHERE 裸属性（如 `stationCode`）同样转成真实列名（`STATION_CODE`）
+- 实体解析支持 `@Entity` / `@Table` / `@Column` / `@ManyToOne` 注解；HQL 的 `SELECT u` 自动展开为实体列清单，无别名 HQL 的 WHERE 裸属性（如 `stationCode`）同样转成真实列名（`STATION_CODE`），嵌入段限定形态（如 `updateInfo.BE_DELETE = 0`）也落到真实裸列名（`BE_DELETE = 0`）而不再残留属性名
 
 **SQL 代码补全**
 
@@ -111,7 +111,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **SQL 日志工具窗口（主侧边栏，4 个 tab）**
 
-- 两种捕获通道，条目统一还原成可执行 SQL 列表：**增强捕获**（字节码增强，默认通道）在首次运行项目时弹一次注入确认，同意后插件把 `-javaagent` 写进运行配置 VM 参数，agent 在应用 JVM 的 `premain` 阶段即完成采集织入——启动期 SQL（框架初始化、数据源探活、Flyway/Liquibase 迁移）不再落在挂载完成之前，注入任一步失败自动回落 attach 热挂载；在 JDBC 接口层直接采集——无需应用开启 SQL 日志，真实参数（默认不脱敏，设置页可开启打码）、执行耗时、影响行数、报错信息、目标库角标（`[MySQL]`、`[DM（达梦）]` 等，方言智能推断：agent 连接 URL 优先、IDE 数据源配置次之、均未命中回退 MySQL，覆盖全部 11 种方言及 HSQL / GBASE）开箱即得；**控制台捕获**自动识别 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式，并发多线程交错的日志按线程分桶还原，参数不错挂不丢失），JdbcTemplate 命名参数为集合值时按元素还原（`IN (:p)` + `[a]` → `IN ('a')`，方括号不落进 SQL）；停止监听时同步停掉应用内采集
+- 两种捕获通道，条目统一还原成可执行 SQL 列表：**增强捕获**（字节码增强，默认通道）在首次运行项目时弹一次注入确认，同意后插件把 `-javaagent` 写进运行配置 VM 参数，agent 在应用 JVM 的 `premain` 阶段即完成采集织入——启动期 SQL（框架初始化、数据源探活、Flyway/Liquibase 迁移）不再落在挂载完成之前，注入任一步失败自动回落 attach 热挂载；`-javaagent` 只进真实应用运行任务，Gradle / Maven 的测试与 IDE 任务（`test`、`runIde` 等）fork 出的 JVM 一律不注入；自动注入识别不了项目类型（非 Spring Boot + MyBatis-Plus 工程）时改弹引导框，一键开启增强捕获——agent 通道不依赖项目类型、不改工程代码；在 JDBC 接口层直接采集——无需应用开启 SQL 日志，真实参数（默认不脱敏，设置页可开启打码）、执行耗时、影响行数、报错信息、目标库角标（`[MySQL]`、`[DM（达梦）]` 等，方言智能推断：agent 连接 URL 优先、IDE 数据源配置次之、均未命中回退 MySQL，覆盖全部 11 种方言及 HSQL / GBASE）开箱即得；**控制台捕获**自动识别 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式，并发多线程交错的日志按线程分桶还原，参数不错挂不丢失），JdbcTemplate 命名参数为集合值时按元素还原（`IN (:p)` + `[a]` → `IN ('a')`，方括号不落进 SQL）；停止监听时同步停掉应用内采集
 - 单击条目轻量预览（可编辑高亮编辑器，改个值直接复制；零占位符的字面量 SQL 与 IN 列表同样识别出可编辑参数行）、双击完整弹窗、右键复制 / 复制时间戳 / 跳转源码；控制台的执行异常行（MyBatis `###` 错误块、Spring DAO、JDBC 异常）自动绑定到对应条目——列表行显示错误片段，详情含报错全文
 - 条目元信息：`#N` 会话内捕获序号、时间（时间来源可选「日志时间」——自动识别 Logback / Log4j2 / Spring Boot 默认、ISO 8601 等常见格式的原始时间戳，解析不到回退捕获时间；或「捕获时间」）、耗时（增强条目为毫秒级精确值，控制台通道解析 p6spy / MP TimeCount / 自定义前缀）、影响行数；超阈值红色标记并统计慢查询
 - 列表支持 SQL 类型筛选、Ctrl+F 搜索（SQL 内容 / 源文件 / `#行号` / 时间文本）、排序方式选择器（时间升 / 降序、耗时升 / 降序、行号）、重复条目去重（⨉N 徽章即时同步）、Ctrl/Shift 多选批量复制；条目按 SELECT / INSERT / UPDATE / DELETE 类型着色标记（左侧色条或整行淡背景，颜色与形态可自定义），单行 / 关键字换行 / 格式化三种显示模式在设置页「列表显示」切换、即时生效
@@ -122,7 +122,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **MCP：给 AI agent 的确定性 SQL 工具**
 
-- 向 IDEA 内置的 MCP Server 注册十个只读工具（IDEA 2025.2+，未装 MCP Server 插件的环境零影响）：渲染三件套 `sqlv_render_sql`（源码定位直接渲染可执行 SQL，含真实参数）/ `sqlv_schema_context`（表列结构紧凑上下文）/ `sqlv_explain`（七方言执行计划），工作流四件套 `sqlv_render_logs`（MyBatis/Hibernate/JdbcTemplate 日志还原可执行 SQL）/ `sqlv_check_sql`（静态写风险与类型核查）/ `sqlv_rollback_plan`（回滚预案，不执行）/ `sqlv_perf_advice`（20 条规则性能建议），生成与核查三件套 `sqlv_crud_sql`（实体生成 CRUD）/ `sqlv_reverse_sql`（SQL 转 MyBatis-Plus 代码）/ `sqlv_mapper_check`（mapper 契约 + 渲染产物风险核查）——Claude Code / Cursor / AI Assistant 等 agent 可直接调用。带 `filePath` 的三个工具统一接受项目相对路径或项目内绝对路径（项目外路径与 `..` 上跳拒绝）；`sqlv_schema_context` / `sqlv_explain` 可选指定 `dataSource`（配置了多个数据源时建议显式指名），`sqlv_explain` 的 `dialect` 可省略、按数据源 URL 自动识别
+- 向 IDEA 内置的 MCP Server 注册十个只读工具（IDEA 2025.2+，未装 MCP Server 插件的环境零影响）：渲染三件套 `sqlv_render_sql`（源码定位直接渲染可执行 SQL，含真实参数）/ `sqlv_schema_context`（表列结构紧凑上下文）/ `sqlv_explain`（九方言执行计划），工作流四件套 `sqlv_render_logs`（MyBatis/Hibernate/JdbcTemplate 日志还原可执行 SQL）/ `sqlv_check_sql`（静态写风险与类型核查）/ `sqlv_rollback_plan`（回滚预案，不执行）/ `sqlv_perf_advice`（20 条规则性能建议），生成与核查三件套 `sqlv_crud_sql`（实体生成 CRUD）/ `sqlv_reverse_sql`（SQL 转 MyBatis-Plus 代码）/ `sqlv_mapper_check`（mapper 契约 + 渲染产物风险核查）——Claude Code / Cursor / AI Assistant 等 agent 可直接调用。带 `filePath` 的三个工具统一接受项目相对路径或项目内绝对路径（项目外路径与 `..` 上跳拒绝）；`sqlv_schema_context` / `sqlv_explain` 可选指定 `dataSource`（配置了多个数据源时建议显式指名），`sqlv_explain` 的 `dialect` 可省略、按数据源 URL 自动识别
 - 设置页「MCP 工具」子页可整体开关插件 MCP 功能、逐工具启用/禁用——插件开关与 IDE「工具 → MCP 服务器」的平台总开关相互独立，经平台工具过滤扩展在下一次工具列表刷新或新会话即时生效；与校验类工具的位差一句话：校验器给的是置信度评分，这里给的是确定性证据——静态校验器产不出的渲染产物实证。能力全景与 agent 侧接入说明（Claude Code / Cursor / AI Assistant）见[官网 MCP 专页](https://sql-visualizer.jvtools.cn/features/mcp)
 
 **检查更新（Gitee 抢先体验通道）**
