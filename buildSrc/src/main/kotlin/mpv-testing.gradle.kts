@@ -175,14 +175,16 @@ val testShardHandicapTarget = providers.gradleProperty("testShardHandicapTarget"
 //   ③ 过补自愈：最近 2 轮 auto 中出现「临界换到非目标槽」或「目标槽被压显著偏轻
 //      （relCrit<0.90）」→ 本轮退避（mode=cooldown，无补偿可比），此后需重新攒满 3 连可比
 //      WARN 才再启用（防振荡，宁欠勿过）。
-// 安全三重：总闸 -PtestShardAutoHandicap=true（**缺省 false**，D45 定案——R2/R6 实测 auto 轮
-// 3 轮中 2 轮踩 SqlPreviewService 族顺序竞态〔O-97 18 例+O-93 族 1 例，off 轮 5 轮全零〕，
-// 自动改分区=把确定性门禁变概率性门禁，违背「测试效果不能变」的实用语义；O-97 根因修复后
-// 可翻回默认开）；手工 -PtestShardHandicap 显式给定时全程优先（auto 不介入）；零历史（新树/
-// 清 build）不触发、行为与无补偿逐字节等价。
+// 安全三重：总闸 -PtestShardAutoHandicap（**缺省 true**，T15 定案——T14 D45 曾定缺省关，因
+// auto 轮 3 轮中 2 轮踩 SqlPreviewService 族顺序竞态〔O-97 18 例+O-93 族 1 例〕；T15 已两层
+// 治理该竞态根因=测试间全局设置态泄漏〔27 类 setUp 进态出厂复位+BindState 堵源，复现实验
+// 修复前 18/39 红→修复后同命令 39/0 绿〕，分区变化不再改写测试结果，恢复「确定性门禁」
+// 语义后翻回默认开；需要退回旧口径时 -PtestShardAutoHandicap=false 显式关）；手工
+// -PtestShardHandicap 显式给定时全程优先（auto 不介入）；零历史（新树/清 build）不触发、
+// 行为与无补偿逐字节等价。
 // 语义边界（对照 D34）：D34 否决的是「无条件默认开启」；本机制只在触发条件满足时介入，
 // 是 T13 既定裁定的执行件而非翻案。
-val testShardAutoHandicap = providers.gradleProperty("testShardAutoHandicap").orNull?.toBoolean() ?: false
+val testShardAutoHandicap = providers.gradleProperty("testShardAutoHandicap").orNull?.toBoolean() ?: true
 
 // 失衡历史一轮的读取形态（自产 jsonl 字段固定，正则提取不引 JSON 依赖）。
 // mode：off=无补偿可比轮 / manual|auto=补偿生效轮（expected 已缩放，relCrit≈1 为到位，不可比）
