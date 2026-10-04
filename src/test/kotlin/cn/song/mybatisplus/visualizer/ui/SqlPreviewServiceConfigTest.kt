@@ -20,6 +20,13 @@ class SqlPreviewServiceConfigTest : BasePlatformTestCase() {
 
     private fun newService() = SqlPreviewService(project)
 
+    override fun setUp() {
+        super.setUp()
+        // O-97 治理（T-TestPerf15）：进态恢复出厂默认，截断跨类全局设置态泄漏
+        // （tearDown 租户复位保留；测内 try/finally 恢复「进入时值」在进态恒出厂后语义稳定）
+        cn.song.mybatisplus.visualizer.testutil.PluginSettingsTestSupport.resetToFactoryDefaults()
+    }
+
     /** T-TenantLine：每个测试结束后重置多租户配置为默认，防止状态泄漏。 */
     override fun tearDown() {
         PluginSettings.getInstance().state.injectTenantLine = false
