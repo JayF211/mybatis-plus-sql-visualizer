@@ -60,4 +60,11 @@
 
 ## 七、实施记录
 
-（收官时回填）
+- **提交链**：C1 `b136dd6`（本计划）→ C7 `36dc956`（文档同步 21 件）→ C8（本笔：锚点+变更记录台账+本节回填）。C2~C6 按范围裁定跳过。
+- **缩编决策落实**：零生产码零测试增量，主控直做、未派子代理；无需翻译自查清单。
+- **待验证前提结账**：V-c 证毕（merge-file rc=0 零冲突）；V-d 按裁决执行（归档 README 整册取 master，staged blob byte-exact）；V-e 证毕（testShards 6101/0/0/9 零失败零错误，skip 9 与上轮全等；计数 +1 单例漂移与 docs-only 变更无因果面，如实登记不追认）。V-a/V-b 开工前已证。
+- **过程抓错一处**：`git checkout master -- <path>` 自动暂存 master 版 MEMORY.md，合并稿 `cp` 覆盖工作树后漏 `git add`——首验 staged=master 原版（gt=0）暴露，补 add 后字节级复验（lt=8/gt=0 单向 +8 行）通过。教训入 C7 提交信息。
+- **直取方式改判**：计划原写目录级 `git checkout master -- docs/`，实施前自查发现会连带覆盖 `docs/变更记录.md`（不在本轮 delta 但 k2j 侧有 16+ 条专属行）——改 21 delta 路径逐文件直取（路径清单 git 输出重定向进临时文件循环读取，规避命令行中文乱码）。
+- **门禁读数**：testShards **6101/0/0/9**（5 片 1127/1164/1358/1226/1186+testExternal 40/0/1，4m45s，534 计划类全有结果 XML）+agent **20 套件/93/0/0**+verifyGate 三目标 Compatible（243=4+15+46、253=6+18+44、262=7+73+44，与上轮逐项持平零漂移）+buildPlugin `2026.10.6.zip`（6,954,122 字节）+testDatabase **5m17s 全绿**（docker 29.6.2 预检通过）。全项零失败，未触发修复流程。
+- **沙盒实际做法**：并行表开工时为空，check 后登记 `t-synck2jmaster22`（预期 03:18）；临时行 `test-sandbox-k2jsync22` 已加（testShards/agent/verifyGate/buildPlugin 期间在位），testDatabase 前因驱动种子链取源 sandboxContainer（K2J 记忆坑 11）提前还原——还原先于收官提交，未随提交入库。
+- **收官**：锚点 32a7d99→8f89c72；push 留底与 done 注销结果随本节最终态。
