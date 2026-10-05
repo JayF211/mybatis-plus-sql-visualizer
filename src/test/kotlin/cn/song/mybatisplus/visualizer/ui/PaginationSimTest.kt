@@ -26,6 +26,12 @@ import org.junit.Assert.assertTrue
  */
 class PaginationSimTest : BasePlatformTestCase() {
 
+    override fun setUp() {
+        super.setUp()
+        // O-97 治理（T-TestPerf15）：进态恢复出厂默认，截断跨类全局设置态泄漏
+        cn.song.mybatisplus.visualizer.testutil.PluginSettingsTestSupport.resetToFactoryDefaults()
+    }
+
     private fun newService() = SqlPreviewService(project)
 
     private fun anchor(): PsiElement {

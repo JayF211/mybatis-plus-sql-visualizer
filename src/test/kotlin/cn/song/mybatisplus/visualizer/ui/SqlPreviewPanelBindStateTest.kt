@@ -35,12 +35,16 @@ class SqlPreviewPanelBindStateTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
+        // O-97 治理（T-TestPerf15）：进态恢复出厂默认，截断跨类全局设置态泄漏
+        cn.song.mybatisplus.visualizer.testutil.PluginSettingsTestSupport.resetToFactoryDefaults()
         runCatching { PluginSettings.getInstance().state.formatSql = false }
         // O-88：折叠态已静态化——复位防跨用例串扰（ParamSchemes 同款）
         runCatching { SqlPreviewPanel.resetPresetCollapsedForTest() }
     }
 
     override fun tearDown() {
+        // O-97 治理（T-TestPerf15）：本类 setUp 改写 formatSql，出口恢复出厂默认防跨类泄漏
+        cn.song.mybatisplus.visualizer.testutil.PluginSettingsTestSupport.resetToFactoryDefaults()
         panel?.bindStateNameProvider = null
         // O-96：object 单例静态缝复位（防跨用例串扰）
         DataSourceSelector.rememberedLookupForTest = null

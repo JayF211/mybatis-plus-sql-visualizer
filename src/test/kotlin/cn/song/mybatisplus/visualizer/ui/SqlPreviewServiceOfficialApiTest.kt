@@ -18,6 +18,13 @@ import org.junit.Assert.assertTrue
 
 class SqlPreviewServiceOfficialApiTest : BasePlatformTestCase() {
 
+    override fun setUp() {
+        super.setUp()
+        // O-97 治理（T-TestPerf15）：进态恢复出厂默认，截断跨类全局设置态泄漏
+        // （本类 18 例期望多行格式化 SQL，O-97 复现实验钉死受害链=前类 formatSql 泄漏）
+        cn.song.mybatisplus.visualizer.testutil.PluginSettingsTestSupport.resetToFactoryDefaults()
+    }
+
     private fun newService() = SqlPreviewService(project)
 
     /** T-TenantLine：每个测试结束后重置多租户配置为默认，防止状态泄漏。 */

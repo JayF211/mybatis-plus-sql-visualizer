@@ -30,6 +30,8 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
+        // O-97 治理（T-TestPerf15）：进态恢复出厂默认，截断跨类全局设置态泄漏
+        cn.song.mybatisplus.visualizer.testutil.PluginSettingsTestSupport.resetToFactoryDefaults()
         runCatching { PluginSettings.getInstance().state.formatSql = false }
         // O-88：折叠态已静态化（跨面板实例保留）——复位防静态态跨用例/跨测试类串扰
         runCatching { SqlPreviewPanel.resetPresetCollapsedForTest() }

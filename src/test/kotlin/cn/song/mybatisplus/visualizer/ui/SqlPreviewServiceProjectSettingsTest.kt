@@ -28,6 +28,8 @@ class SqlPreviewServiceProjectSettingsTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
+        // O-97 治理（T-TestPerf15）：进态恢复出厂默认，使下方快照基线恒为出厂态
+        cn.song.mybatisplus.visualizer.testutil.PluginSettingsTestSupport.resetToFactoryDefaults()
         savedProjectState = ProjectPluginSettings.getInstance(project).state.copy()
         savedGlobalState = PluginSettings.getInstance().state.copy()
     }
