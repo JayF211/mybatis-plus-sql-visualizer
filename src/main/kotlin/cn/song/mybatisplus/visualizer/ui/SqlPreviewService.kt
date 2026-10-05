@@ -26,6 +26,7 @@ import cn.song.mybatisplus.visualizer.converter.jpa.SpecificationQueryConverter
 import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaQueryLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.CustomDaoHqlLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.DaoQueryKind
+import cn.song.mybatisplus.visualizer.psi.jpa.HqlEntityNameExtractor
 import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryInfo
 import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryLocator
 import cn.song.mybatisplus.visualizer.model.ColumnRef
@@ -1917,12 +1918,12 @@ class SqlPreviewService(private val project: Project) {
         com.intellij.openapi.util.Key.create<EntityNameLookupCache>("mp-visualizer.entityNameLookupCache")
 
     /**
-     * 从 HQL 的 FROM 子句提取实体类名。
-     * 适用于 createQuery(HQL) 单参数场景（无 Entity.class 二参）。
+     * 从 HQL 提取实体类名（T-HqlUpdateEntityMap S1 起委托共享提取器）。
+     * 适用于 createQuery(HQL) 单参数场景（无 Entity.class 二参）；
+     * 语句头优先口径——UPDATE/DELETE 头同样命中，不再只认 FROM 子句。
      */
     private fun extractEntityNameFromHql(hql: String): String? {
-        val fromPattern = Regex("""\bFROM\s+([A-Z][a-zA-Z0-9_]*)\b""", RegexOption.IGNORE_CASE)
-        return fromPattern.find(hql)?.groupValues?.get(1)
+        return HqlEntityNameExtractor.extract(hql)
     }
 
     /**

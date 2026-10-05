@@ -104,16 +104,18 @@ class JpaUpdateConverterTest {
             userTable,
         )
         val update = result.statement as UpdateStatement
-        assertEquals("主表别名应解析", "u", update.tableAlias)
+        // T-HqlUpdateEntityMap S2：单表 UPDATE 语义，别名不透出（对齐 Hibernate 真实产物）
+        assertNull("单表 UPDATE 别名应剥除", update.tableAlias)
         assertEquals("应解析出 1 个 SET 对", 1, update.sets.size)
         val set = update.sets[0]
         assertFalse("参数赋值不应是 raw 形态", set.isRaw)
         assertEquals("status", set.column!!.columnName)
-        assertEquals("u", set.column!!.tableAlias)
+        assertNull(set.column!!.tableAlias)
         assertTrue("SET 值应为 ? 占位符", set.value!!.isPlaceholder)
         assertEquals(1, update.conditions.size)
         val condition = update.conditions[0] as Condition.Simple
         assertEquals("status", condition.column.columnName)
+        assertNull(condition.column.tableAlias)
         assertEquals("=", condition.op)
         assertTrue(condition.value.isPlaceholder)
     }
@@ -126,11 +128,12 @@ class JpaUpdateConverterTest {
             userTable,
         )
         val sql = SqlGenerator.generate(result.statement)
-        // 表名 `user` 命中方言保留字会被 T-M23.4 反引号包裹（UPDATE `user` u），
+        // 表名 `user` 命中方言保留字会被 T-M23.4 反引号包裹（UPDATE `user`），
         // 引号属渲染层预期行为，此处不校验表名引号形态
         assertTrue("渲染应为 UPDATE 语句: $sql", sql.trimStart().startsWith("UPDATE"))
-        assertTrue("渲染应含 SET u.status = ?: $sql", sql.contains("SET u.status = ?"))
-        assertTrue("渲染应含 id 条件: $sql", sql.contains("u.id = ?"))
+        // T-HqlUpdateEntityMap S2：SET 左值与 WHERE 列均剥别名（`UPDATE user SET status = ? WHERE id = ?`）
+        assertTrue("渲染应含 SET status = ?: $sql", sql.contains("SET status = ?"))
+        assertTrue("渲染应含 id 条件: $sql", sql.contains("id = ?"))
     }
 
     // ------------------------------------------------------------------
@@ -312,7 +315,9 @@ class JpaUpdateConverterTest {
         )
         val update = result.statement as UpdateStatement
         assertEquals("unknown_table", update.table.tableName)
-        assertEquals("u.status", update.sets[0].column!!.let { "${it.tableAlias}.${it.columnName}" })
+        // T-HqlUpdateEntityMap S2：模型层剥别名（管道文本 `u.status` 原样透传不受影响）
+        assertEquals("status", update.sets[0].column!!.columnName)
+        assertNull(update.sets[0].column!!.tableAlias)
         assertEquals("占位符仍应替换", 2, result.sql.count { it == '?' })
     }
 
@@ -372,12 +377,84 @@ class JpaUpdateConverterTest {
         assertNull("缺 SET 关键字应返回 null", JpaUpdateParser.parse("UPDATE user u WHERE u.id = 1"))
     }
 
-    /** T-J2：带 AS 别名形态。 */
+    /** T-J2：带 AS 别名形态（S2：别名识别用于结构解析，不透出）。 */
     @Test
     fun `parser_asAliasForm_parsed`() {
         val parsed = JpaUpdateParser.parse("UPDATE user AS u SET u.status = ? WHERE u.id = ?")
-        assertEquals("u", parsed!!.tableAlias)
+        assertNull(parsed!!.tableAlias)
         assertEquals(1, parsed.sets.size)
         assertEquals(1, parsed.conditions.size)
+    }
+
+    // ------------------------------------------------------------------
+    // T-HqlUpdateEntityMap：嵌入段路径 + 别名剥除（用户报障 demo 形态 17 同款）
+    // ------------------------------------------------------------------
+
+    /** 报障形态的展平列表：@Embedded UpdateInfo 展平列（fieldName/columnName/embeddedParent 三元组）。 */
+    private val bookingTable = TableInfo(
+        entityClassName = "WmsDockBooking",
+        tableName = "wms_dock_booking",
+        columns = listOf(
+            ColumnInfo("id", "id", isId = true),
+            ColumnInfo("status", "status"),
+            ColumnInfo("createdTime", "created_time", embedded = true, embeddedParent = "updateInfo"),
+        ),
+    )
+
+    /**
+     * 用户报障形态：无 FROM 的 UPDATE + 嵌入段 SET。
+     * 管道文本嵌入段剥离（`booking.updateInfo.createdTime` → `booking.created_time`）；
+     * 渲染产物（面板所见）剥别名，与 Hibernate 真实产物逐字对齐：
+     * `UPDATE wms_dock_booking SET created_time = ? WHERE id = ?`。
+     */
+    @Test
+    fun `updateEmbeddedSet_mapsToFlatColumn_renderAliasStripped`() {
+        val result = HqlConverter.convert(
+            "update WmsDockBooking booking set booking.updateInfo.createdTime = :t where booking.id = :id",
+            bookingTable,
+        )
+        // 管道文本：实体→表名、嵌入段剥离生效（别名限定符按管道口径保留）
+        assertEquals(
+            "update wms_dock_booking booking set booking.created_time = ? where booking.id = ?",
+            result.sql,
+        )
+        // 渲染产物：S2 剥别名——SET 左值裸列名，头部不拼别名（面板 previewModel 所见）；
+        // generate 默认多行渲染，断言前空白归一
+        val sql = SqlGenerator.generate(result.statement).replace(Regex("\\s+"), " ").trim()
+        assertEquals("UPDATE wms_dock_booking SET created_time = ? WHERE id = ?", sql)
+        val update = result.statement as UpdateStatement
+        assertNull(update.tableAlias)
+        assertFalse(update.sets[0].isRaw)
+        assertEquals("created_time", update.sets[0].column!!.columnName)
+        assertNull(update.sets[0].column!!.tableAlias)
+    }
+
+    /** demo 形态 18 语料镜像：带 FROM 的 DELETE + 嵌入段路径 → 展平列。 */
+    @Test
+    fun `deleteEmbeddedPath_mapsToFlatColumn`() {
+        val result = HqlConverter.convert(
+            "DELETE FROM WmsDockBooking booking WHERE booking.updateInfo.createdTime < :t",
+            bookingTable,
+        )
+        assertEquals(
+            "DELETE FROM wms_dock_booking booking WHERE booking.created_time < ?",
+            result.sql,
+        )
+        assertTrue(result.statement is cn.song.mybatisplus.visualizer.model.DeleteStatement)
+    }
+
+    /** TableInfo 落空 + 无 FROM UPDATE：fallback 下实体名仍按语句头提取替换为兜底表名（S1）。 */
+    @Test
+    fun `updateEmbedded_withoutTableInfo_fallbackReplacesHeadEntity`() {
+        val result = HqlConverter.convert(
+            "update WmsDockBooking booking set booking.updateInfo.createdTime = ?2 where booking.id = ?1",
+            null,
+        )
+        // S1 前：FROM-only 提取不命中 → 实体名原样；S1 后：语句头提取命中 → 兜底表名
+        assertEquals(
+            "update unknown_table booking set booking.updateInfo.createdTime = ? where booking.id = ?",
+            result.sql,
+        )
+        assertTrue(result.statement is UpdateStatement)
     }
 }

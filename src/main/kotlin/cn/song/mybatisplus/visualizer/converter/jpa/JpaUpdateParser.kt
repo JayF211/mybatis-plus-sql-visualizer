@@ -17,12 +17,12 @@ import cn.song.mybatisplus.visualizer.model.SqlValue
  *
  * 解析产物直接映射既有 MP 侧模型 [UpdateStatement]：
  *  - SET 对：`[别名.]列 = 值` → [SetClause]（值支持 `?` 占位符 / 字面量）；
- *    简单算术、函数、列引用表达式（如 `u.age = u.age + 1`、`u.updatedAt = NOW()`）
- *    超出模型 value 语义 → [SetClause.rawSql] 原样透传（模型由另一智能体维护，
- *    字段不满足处一律 raw 降级，不改 model/）
- *  - WHERE：只精细解析「AND 连接的简单比较 / IS [NOT] NULL / IN (值清单)」；
- *    含 OR、括号嵌套、LIKE、BETWEEN、子查询等复杂形态 → 整体作 [Condition.Raw]
- *    透传（参数已替换为 `?`，渲染语义无损）
+ *    别名前缀剥除（T-HqlUpdateEntityMap S2：单表 UPDATE 语义，对齐 Hibernate
+ *    真实产物）；简单算术、函数、列引用表达式（如 `u.age = u.age + 1`、`u.updatedAt = NOW()`）
+ *    超出模型 value 语义 → [SetClause.rawSql] 原样透传（raw 文本不剥别名，已知边界）
+ *  - WHERE：只精细解析「AND 连接的简单比较 / IS [NOT] NULL / IN (值清单)」，
+ *    列引用同样剥别名前缀；含 OR、括号嵌套、LIKE、BETWEEN、子查询等复杂形态 →
+ *    整体作 [Condition.Raw] 透传（参数已替换为 `?`，渲染语义无损；Raw 文本不剥别名）
  *
  * 无状态单例，纯函数逻辑，可独立单测。解析失败返回 null（调用方维持原语句透传），
  * 绝不抛异常。
@@ -32,8 +32,12 @@ internal object JpaUpdateParser {
     /**
      * UPDATE 语句解析产物。
      *
-     * @param tableAlias 主表别名（`UPDATE user u SET ...` 的 `u`；无别名为 null）
-     * @param sets       SET 赋值列表（raw 透传形态含完整 `lhs = rhs` 文本）
+     * @param tableAlias 恒为 null（T-HqlUpdateEntityMap S2：HQL/JPQL UPDATE 是单表
+     *        语义，Hibernate 真实产物丢弃别名——`update t set col=? where id=?`；
+     *        头部别名仅用于识别结构，不再透出，渲染头部不拼 `表 别名`）
+     * @param sets       SET 赋值列表（raw 透传形态含完整 `lhs = rhs` 文本；结构化形态
+     *        的 [SetClause.column] 不带 tableAlias——单表 UPDATE 的 SET 左值带表别名
+     *        在 MySQL 报 Unknown column、Oracle 不支持 UPDATE 别名）
      * @param conditions WHERE 条件（不可精细解析时为单个 [Condition.Raw]；无 WHERE 为空列表）
      */
     data class ParsedUpdate(
@@ -57,7 +61,6 @@ internal object JpaUpdateParser {
     /** 解析 UPDATE 文本；非 UPDATE 或结构异常返回 null。 */
     fun parse(sql: String): ParsedUpdate? {
         val head = UPDATE_HEAD.find(sql) ?: return null
-        val alias = head.groupValues[2].takeIf { it.isNotEmpty() }
         val rest = sql.substring(head.value.length)
 
         // SET ... [WHERE ...]：顶层 WHERE 分界（括号内的 WHERE 属于子查询，不算）
@@ -67,7 +70,9 @@ internal object JpaUpdateParser {
 
         val sets = parseSetAssignments(setPart.trim().trimEnd(','))
         if (sets.isEmpty()) return null
-        return ParsedUpdate(tableAlias = alias, sets = sets, conditions = parseWhere(wherePart))
+        // T-HqlUpdateEntityMap S2：头部别名（head.groupValues[2]）仅用于结构识别，
+        // 不透出——单表 UPDATE 渲染为 `UPDATE 表 SET 列 = ?`（Hibernate 真实产物形态）
+        return ParsedUpdate(tableAlias = null, sets = sets, conditions = parseWhere(wherePart))
     }
 
     // ------------------------------------------------------------------
@@ -100,12 +105,9 @@ internal object JpaUpdateParser {
             ?: return SetClause(rawSql = assignment) // 算术/函数/列引用等复杂表达式 → raw
 
         if (!COLUMN_PATH.matches(lhs)) return SetClause(rawSql = assignment)
-        val dot = lhs.indexOf('.')
-        val column = if (dot > 0) {
-            ColumnRef(tableAlias = lhs.substring(0, dot), columnName = lhs.substring(dot + 1))
-        } else {
-            ColumnRef(columnName = lhs)
-        }
+        // T-HqlUpdateEntityMap S2：剥别名前缀——单表 UPDATE 的 SET 左值不带表别名
+        // （`u.status` → `status`；COLUMN_PATH 最多一段点号，substringAfterLast 安全）
+        val column = ColumnRef(columnName = lhs.substringAfterLast('.'))
         return SetClause(column = column, value = value)
     }
 
@@ -188,15 +190,10 @@ internal object JpaUpdateParser {
         return Condition.Simple(column = column, op = match.groupValues[2], value = value)
     }
 
-    /** 解析 `列` / `别名.列` 路径为 [ColumnRef]；白名单外返回 null。 */
+    /** 解析 `列` / `别名.列` 路径为 [ColumnRef]；白名单外返回 null（S2：别名前缀剥除）。 */
     private fun parseColumnPath(path: String): ColumnRef? {
         if (!COLUMN_PATH.matches(path)) return null
-        val dot = path.indexOf('.')
-        return if (dot > 0) {
-            ColumnRef(tableAlias = path.substring(0, dot), columnName = path.substring(dot + 1))
-        } else {
-            ColumnRef(columnName = path)
-        }
+        return ColumnRef(columnName = path.substringAfterLast('.'))
     }
 
     // ------------------------------------------------------------------

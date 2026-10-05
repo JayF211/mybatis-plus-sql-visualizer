@@ -629,4 +629,42 @@ class HqlQueryLocatorTest : BasePlatformTestCase() {
         return methods.firstOrNull { it.name == methodName }
             ?: error("测试文件缺少方法: $methodName")
     }
+
+    /**
+     * T-HqlUpdateEntityMap S1：无 FROM 子句的 HQL UPDATE（用户报障 demo 形态 17 同款）——
+     * 实体类名按语句头提取，不再恒为 null（此前 FROM-only 正则提取不到，
+     * 下游 resolveHqlTable 三路径全跳过、TableInfo 落空）。
+     */
+    fun testCreateQuery_updateHqlWithoutFrom_extractsEntityName() {
+        myFixture.configureByText(
+            "WmsDockBookingDao.java",
+            """
+            public class HibernateTemplateDemoService {
+                public int updateEmbeddedCreatedTime(Session session, Long id, java.time.LocalDateTime createdTime) {
+                    return session.createQuery(
+                        "update WmsDockBooking booking set booking.updateInfo.createdTime = ?2 where booking.id = ?1")
+                        .setParameter(1, id)
+                        .setParameter(2, createdTime)
+                        .executeUpdate();
+                }
+            }
+            interface Session {
+                Query createQuery(String hql);
+            }
+            interface Query {
+                Query setParameter(int pos, Object value);
+                int executeUpdate();
+            }
+            class WmsDockBooking {}
+            """.trimIndent(),
+        )
+        val method = findMethod("updateEmbeddedCreatedTime")
+        val info = HqlQueryLocator.locate(method)
+        assertNotNull("无 FROM 的 update HQL 应被识别", info)
+        assertEquals(
+            "update WmsDockBooking booking set booking.updateInfo.createdTime = ?2 where booking.id = ?1",
+            info!!.hql,
+        )
+        assertEquals("无 FROM 的 UPDATE 应按语句头提取实体类名", "WmsDockBooking", info.entityClassName)
+    }
 }

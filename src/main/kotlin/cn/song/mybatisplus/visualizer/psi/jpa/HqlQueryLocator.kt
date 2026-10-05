@@ -368,13 +368,13 @@ object HqlQueryLocator {
             return typeArg.resolve() to typeArg.className
         }
 
-        // 三级 fallback：从 HQL/JPQL 字符串的 FROM 子句提取实体类名
-        // 适用于 em.createQuery("JPQL") 单参数场景（无 Entity.class 二参）
+        // 三级 fallback：从 HQL/JPQL 字符串提取实体类名（单参数 createQuery 场景）
+        // T-HqlUpdateEntityMap S1：提取走共享提取器（语句头优先）——不再只认 FROM，
+        // `update Entity b set ...` 无 FROM 子句的 UPDATE 同样提取得到实体名
         if (args.isNotEmpty()) {
             val (hql, _) = extractHqlString(call)
             if (!hql.isNullOrBlank()) {
-                val fromPattern = Regex("""\bFROM\s+([A-Z][a-zA-Z0-9_]*)\b""", RegexOption.IGNORE_CASE)
-                fromPattern.find(hql)?.let { return null to it.groupValues[1] }
+                HqlEntityNameExtractor.extract(hql)?.let { return null to it }
             }
         }
 

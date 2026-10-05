@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SqlStatement
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.UpdateStatement
+import cn.song.mybatisplus.visualizer.psi.jpa.HqlEntityNameExtractor
 import com.intellij.openapi.project.Project
 
 /**
@@ -414,13 +415,13 @@ object HqlConverter {
         JpaAliasPropertyMapper.mapProperties(hql, table, scope)
 
     /**
-     * Fallback：实体不可解析时，从 FROM 子句提取实体名替换为 unknown_table。
+     * Fallback：实体不可解析时，从语句提取实体名替换为 unknown_table。
      * 仅替换第一个匹配（主表），避免重复替换导致 SQL 异常。
+     * T-HqlUpdateEntityMap S1：实体名提取走共享提取器（语句头优先）——
+     * UPDATE/DELETE 头同样命中，不再只认 FROM 子句。
      */
     private fun mapFallbackEntityToTable(hql: String, tableName: String): String {
-        val fromPattern = Regex("""\bFROM\s+([A-Z][a-zA-Z0-9_]*)\b""", RegexOption.IGNORE_CASE)
-        val match = fromPattern.find(hql) ?: return hql
-        val entityName = match.groupValues[1]
+        val entityName = HqlEntityNameExtractor.extract(hql) ?: return hql
         return hql.replaceFirst(entityName, tableName)
     }
 
