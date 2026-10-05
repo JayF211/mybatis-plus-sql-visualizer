@@ -72,4 +72,18 @@
 
 ## 八、实施记录
 
-（实施完毕回填：提交链、门禁读数、冲突与坑实录、前提逐条回执。）
+**收官时刻**：2026-10-06 05:5x；提交链十段 `c321d17`(C1 计划)→`5bf1907`(C2 构建链删 asm)→`1e70273`(C3 波A 14 文件)→`1e9f819`(C4 波B 4 文件)→`59529d0`(C5 波C 7 文件)→`9b16e10`(C6 测试 22 件)→`5ac8f11`(C7 文档)→`14c9a39`(修复笔)→`1338aa6`(基线登记笔)→本笔(C8 收官)。范围收官修正：master 收官复核前进 1 笔（`94c71e8` 性能二十三轮报告，纯 docs 新增 1 件）补直取零漂移后锚点直接钉新 tip——坑 18「回写前再查分支前进」实证命中；实际吸收=**30 提交**，锚点 `8f89c72`→`94c71e8`。
+
+**前提逐条回执**：V-a ✅（四册全 blob 口径零冲突，专属行逐行校验全存活）；V-b ✅（DemoJpaSqlPipelineTest 语料可达，testShards 全绿）；V-c ✅（shellBytes 对接编译+壳工厂绿+zip 无 asm jar）；V-d ✅（consent 族 26/0 绿）；V-e ✅（TinyClassFileWriter 直译零互操作坑）；V-f ✅（6146 = +45 例，在预期 +40~60 内）；V-g ✅（守卫正向 4/0+26/0，ASM 守卫反向双读数：探针在场 4 测 1 败精确点名探针文件/还原 4-0）。
+
+**门禁终态**：testShards **6146/8/0/0**（5 片 1359/1047/1112/1245/1383 全绿；skip 8=固定 docker 桶 6+ExecWholeScriptOptionTest 2，daemon 关/活两轮稳定=显式开关口径与 daemon 无关，-1 vs 基线 9 系非确定性单例漂移如实登记）+testExternal **40/0/1→基线登记后全绿** +agent **93/0** +verifyGate 三目标 Compatible **零漂移**（243=4+15+46、253=6+18+44、262=7+73+44）+buildPlugin **2026.10.6.zip 6,848,397 字节**（lib 无 asm jar，-105,725=asm 移除与 master c7a75a3 同款）+testDatabase **全绿零 skip 5m11s**。收口代理（只读）74 分钟两轮：run1 三起环境性事故（shard5 worker 病态索引挂起、mmap 536MB errno=1455、SenderLoopBackoff 负载敏感假红）复跑排除非代码问题。
+
+**冲突与坑实录**（新增 3 条进 K2J 记忆）：
+1. **tail 管道假绿二度复现**（同 bb4f9a7）：C3 前的 compileJava「一次通过」、C6 前的 compileTestKotlin、守卫正向定向三轮「exit 0」全是管道末命令退出码——PIPESTATUS 真值复验暴露 1 生产编译错（attachFallbackNotifier 字段初始化器引用空白 final project）+3 处直取件互操作错；教训=gradle 真实退出码一律 `; echo EXIT=${PIPESTATUS[0]}`。
+2. **attachFallbackNotifier 构造期装配**（翻译形态差异新坑）：Kotlin 属性初始化器可引用主构造参数（语言保证），Java 字段初始化器先于构造器体执行读空白 final 直接编译红——修法=字段纯声明+lambda 移入构造器赋值后装配。
+3. **直取≠免适配**：直取 13 件只查了源码扫描根引用，漏查 Kotlin 调 Java 生产类的互操作形态（JpaSqlLiteralSafetyTest 具名实参 12 处/record 解构、AgentPremainConsentTest 函数类型变量赋 Supplier 不做 SAM 转换 1 处——字面 lambda 赋值走 setter SAM 转换合法，变量赋值不做）——直取清单固定自查项须含互操作形态 grep。
+4. **fatal 守卫三层连环**：守卫单次只报首个失配（文件判定 8→9→文件判定 7→8→总量 666→674），grep 行计数对账预判两次失灵（守卫判定口径≠行计数），以守卫实测为准走完；判别力经连环红充分实证。
+5. **CRLF 伪冲突**（坑 18 前半复现）：四册三方合并预演三度全红（ours/theirs 任一侧取工作树副本即整文件伪冲突），全 blob 口径 rc=0——合并稿全程 git blob 取值。
+6. **并行表纪律**：一次未 register 就跑 gradle（与 t-releaseperf6 重活并存窗口）+沙盒临时行补加/还原闭环；Docker Desktop 主控补启（daemon 关闭窗口 testDatabase 跳过→补跑）。
+
+**遗留与观察项**：①testShards skip -1 单例漂移（两轮稳定 8，基线 9 构成不可考，无因果面）；②k2j 轨既有登记项（McpSourceLocator 相对路径/line 语义两小 bug、McpExpectedBridge 243 降级语义）维持原状；③分支 push 留底随收官执行。
