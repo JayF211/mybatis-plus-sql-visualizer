@@ -203,6 +203,19 @@ class AgentManager(private val project: Project) : Disposable {
     internal var clockMs: () -> Long = { System.currentTimeMillis() }
 
     /**
+     * 去重窗宽度（默认 [DEFAULT_CONSENT_ASK_GUARD_MS]；测试注入 0 = 关闭去重）。
+     *
+     * 须声明在 init 块**之前**：SETTINGS_CHANGE 监听（init 注册）的上升沿回调链同步走
+     * [requestConsentOnce] 读之——声明在 init 之后则构造期触发时读到 JVM 默认值 0（去重窗
+     * 失效）且 `lastConsentAskAtMs` 为 null（NPE），初始化顺序守卫
+     * （DialogWrapperInitOrderGuardTest）按此钉死声明位置。
+     */
+    internal var consentAskGuardMs: Long = DEFAULT_CONSENT_ASK_GUARD_MS
+
+    /** 最近一次确认弹窗时刻（[requestConsentOnce] 去重窗基准；测试复位缝）。 */
+    internal val lastConsentAskAtMs = AtomicLong(0L)
+
+    /**
      * T-ReachAudit T-RA-01：心跳窗口（默认 [AgentProtocol.ONLINE_WINDOW_MS]；测试注入短窗驱动过期语义）。
      *
      * 此前该窗口只存在于协议常量与 KDoc（[AgentProtocol.ONLINE_WINDOW_MS] 全仓零消费、[AgentSession.lastSeen]
@@ -662,12 +675,6 @@ class AgentManager(private val project: Project) : Disposable {
         lastConsentAskAtMs.set(now)
         return confirmEnhancedCapture()
     }
-
-    /** 去重窗宽度（测试注入 0 = 关闭去重）。 */
-    internal var consentAskGuardMs: Long = DEFAULT_CONSENT_ASK_GUARD_MS
-
-    /** 最近一次确认弹窗时刻（[requestConsentOnce] 去重窗基准；测试复位缝）。 */
-    internal val lastConsentAskAtMs = AtomicLong(0L)
 
     /**
      * 确认提供者（默认弹注入确认框三态结果，headless 恒拒绝；测试替换以驱动同意/关闭/拒绝分支）。

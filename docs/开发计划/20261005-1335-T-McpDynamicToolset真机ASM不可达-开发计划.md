@@ -89,6 +89,7 @@
 | 13:41 | S2：删 build.gradle.kts `org.ow2.asm:asm:9.7.1` 与错误结论注释 | buildPlugin zip lib **无 asm jar**（8253292→8135271，−118KB 吻合）；主 jar 内 TinyClassFileWriter 在场、objectweb/asm 条目零 |
 | 13:42~13:44 | S3：McpScopeSourceScanTest 新增 asm 引用守卫；mcp 包定向全量 | 守卫 4/0；mcp 包定向 BUILD SUCCESSFUL |
 | 13:46 | testFast 回归 | mcp 相关全绿；**既有红与本项目无关**：`DialogWrapperInitOrderGuardTest` 报 `AgentManager.kt` consentAskGuardMs/lastConsentAskAtMs 初始化顺序陷阱——git stash 对净 HEAD（769a1b0）复跑同红坐实归属 T-FirstUseFreshInstallConsent R3 遗留，留原车道处置 |
+| 13:55 | 遗留红随本轮修复（用户点名）：`consentAskGuardMs`/`lastConsentAskAtMs` 两属性声明上移到测试缝区块（init 块之前，原 666/670 行），零语义变化 | DialogWrapperInitOrderGuardTest 绿；AgentPremainConsentTest/AgentConsentFlowTest/AgentManagerPremainTest 绿；agent 包全量 BUILD SUCCESSFUL；testFast 复跑读数见下 |
 | 13:44~ | S4：真机复验 | 待用户重装日常 IDE 262.10968 后：idea.log `T-McpDynamicToolset: 10 toolsets registered` + tools/list 十工具在册 + sqlv_check_sql 端到端 + [MCP-AUDIT] OK |
 
 过程坑留档（本计划实施两处）：
