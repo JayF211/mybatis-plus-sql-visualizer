@@ -121,6 +121,14 @@ open class SqlVisualizerMapperCheckTool : McpToolsetSupport("sqlv_mapper_check")
                         append(if (risk.dangerous) "DANGEROUS" else "bounded")
                         risk.kinds().forEach { append(' ').append(it.name) }
                         append('\n')
+                        // T-McpWalkFindings S2：PARSE_FAILED 附 parser 报错 detail（Finding.detail
+                        // 已截断 60 字符）——真机 20261005 实测空参模拟 6/10 fail closed 且输出零
+                        // 归因线索，同文本折叠空白后喂 check_sql 却解析通过；detail 先行让每次
+                        // PARSE_FAILED 自带归因线索，真因修复按 detail 落点另议（不预设）。
+                        risk.findings
+                            .filter { it.kind == UnboundedWriteDetector.FindingKind.PARSE_FAILED }
+                            .filter { it.detail.isNotBlank() }
+                            .forEach { append("    simulate risk note: ").append(it.detail).append('\n') }
                         val perf = SqlPerfAnalyzer.analyze(rendered.sql)
                         if (perf.isNotEmpty()) {
                             append("    simulate perf:\n")

@@ -96,10 +96,14 @@
 
 ## 七、实施记录
 
-> 实施时回填；多路并行时各管各文件，回填写各自工作树副本。
+> 2026-10-05 当日实施完毕（本表回填自实施会话）。
 
 | 子项 | 状态 | 读数与备注 |
 |---|---|---|
-| S1 | 未开始 | |
-| S2 | 未开始 | |
-| S3 | 未开始 | |
+| S1 | 完成 | `McpSourceLocator.renderAtLine` offset 改 `firstNonBlankOffset`（行内首非空白 + 纯空白行顺延 ≤2 行，全落空退回行首旧行为）；SOURCE_NOT_FOUND 文案补「Pass the line of a statement tag or any line inside it」。新测试 `McpSourceLocatorRenderAtLineTest` 6 例（标签行/语句体行/if 内行/空白行顺延/落空文案/超界回归）；fixture 需写磁盘 basePath 再刷新 VFS（`addFileToProject` 落 VFS 虚根 `/src/`，resolver 按 basePath 拼磁盘路径找不到——探针实测） |
+| S2 | 完成 | **真因定案（探针三步归因，计划假设两处被证伪见下）**：渲染产物保留源 XML 换行+缩进 → `SqlCommentStripper` 把空行压成**真空行**（`\n\n` 行内无空格）→ JSqlParser 5.3 简单模式（allowComplexParsing 默认关）解析失败时**静默返回 null 不抛异常**（`CCJSqlParserUtil.java:395-417` 源码实证）→ `SqlAstParser` 非空断言 NPE `parseStatements(...) must not be null` → fail closed 误报。修法三层：①`UnboundedWriteDetector.detect` 入口 `normalizeWhitespace`（`\s+` 折叠，字面量空白对称判定不敏感）治本；②`SqlAstParser.parseStatements/parseSingle` null → 带输入摘录的 `JSQLParserException` 响亮防御；③mapper_check 输出补 `simulate risk note:` detail 行。**证伪更正**：计划 §四-3 的「≥2 动态分支 → FAIL」归纳不成立（毒性成分是真空行本身，V6 单 if+真空行同 FAIL）；「detail 指向渲染器残片」方向落空——真修法是输入规范化，未动 `renderSql()` 渲染器（§四-4 的波及面顾虑整体解除）。demo UserMapper.xml 全文复现 6 条 PARSE_FAILED、规范化后 6/6 可解析；demo 文件 CRLF 实测但渲染产物已归一 LF（换行形态非变量） |
+| S3 | 完成 | `collectEntries` 返回 `CollectResult(entries, missing, sourceNames)`（命中源名保序去重，`dsName` 取不到不披露）；`outcomeOf` 加 `sourceNames`/`autoResolved`，成功路径首行 `source: X`、未指名附 `(auto-resolved; pass 'dataSource' to pin one)`；`dsNameForTest` 测试缝新增。`McpSchemaContextScopeTest` 同步 6 处解构 + 新增 5 用例；`McpSchemaContextIndexCacheTest` Pair→CollectResult 2 处同步 |
+
+**门禁与反向验证**：定向（mcp + execute.UnboundedWriteDetector/SqlAstParser + sql 三包）217 例 0 失败；反向验证一轮五处摘除（S1 行首回退 / S2 规范化摘除 / S2 detail 摘除 / S2 null 防御摘除 / S3 source 行摘除）→ 6 用例红全部对号（`标签行命中`/`真空行不再误报`/`PARSE_FAILED带detail`/`静默null转响亮`/`来源披露_显式指名`/`来源披露_跨源auto`）→ 恢复后全绿。testFast 冒烟与 testFast 归口读数见提交信息。
+
+**前提 1/2 处置**：S1 的 PSI 根因推断经 fixture 用例证实（标签行行首 leaf 挂父级 content）；非 XML 面（12 类触发面）未逐一真机验，以「行内首非空白是所有触发面的改善方向」+定向回归护住，登记观察不阻断。前提 5（跨源名字管线）按计划落地（IdentityHashMap 键 + dsName 反射/测试缝），前提 6（文档站）实改 `features/mcp.md` 中英两页（guide/configuration 中英两页经 grep 确认无 schema_context 内容，无需改——计划里「四页」的预估口径修正）。
