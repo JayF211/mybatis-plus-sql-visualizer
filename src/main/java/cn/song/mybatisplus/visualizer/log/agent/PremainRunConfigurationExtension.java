@@ -27,12 +27,16 @@ import java.util.List;
  * 问 AgentManager 要一个 VM 选项字符串，非空就加」这两件事，全链
  * {@code runCatching} 包裹——注入链任何异常（jar 落盘失败/端口协商失败/平台 API 意外形态）只记
  * WARN，绝不抛 {@code ExecutionException}、绝不弹窗、绝不动用户保存的配置（JavaParameters 是每次
- * 执行现建的瞬时对象，改动不落盘）。
+ * 执行现建的瞬时对象，改动不落盘）。弹窗例外只有
+ * T-FirstUsePremainConsent S1 这一种形态（未确认态的前置知情同意，委托 {@link AgentManager} 收口；
+ * EDT/headless 前提不成立时静默回落，不跨线程弹窗），其余路径仍绝不弹窗。
  *
  * 与 attach 链的关系：本扩展只在「增强捕获开启 + 注入确认已达成」时产出参数（复用
- * {@link AgentManager#isEnhancedEnabled} / {@link AgentManager#isEnhancedConfirmed}），未确认态的首次
- * 知情同意仍由既有 attach 链在进程启动后弹一次（AgentManager.onProcessAppeared）——本任务
- * 不改动该语义，故首次运行必然走 attach，确认后的后续运行才吃到 premain。
+ * {@link AgentManager#isEnhancedEnabled} / {@link AgentManager#isEnhancedConfirmed}）。T-FirstUsePremainConsent
+ * S1 起，未确认态在<b>本扩展内先走一次前置确认</b>（{@link AgentManager#ensureConfirmedBeforePremain}，
+ * 进程启动前唯一能按结果改 JavaParameters 的平台窗口）：同意则本轮即带 -javaagent，首轮不再
+ * 必然走 attach 零捕获；EDT/headless 前提不成立或用户拒绝时回落既有 attach 链确认语义
+ * （AgentManager.onProcessAppeared），attach 兜底挂载成功后由能力边界通知告知捕获范围（S2）。
  */
 public class PremainRunConfigurationExtension extends RunConfigurationExtension {
 
@@ -52,6 +56,9 @@ public class PremainRunConfigurationExtension extends RunConfigurationExtension 
             if (manager == null) {
                 return;
             }
+            // T-FirstUsePremainConsent S1：未确认态先前置确认（同意后本轮即可注入，首轮不再必走
+            // attach 零捕获）；headless/非EDT/冷却/拒绝各态本入口静默返回，回落既有 attach 链语义。
+            manager.ensureConfirmedBeforePremain();
             String option = manager.preparePremainVmOption();
             if (option == null) {
                 return;

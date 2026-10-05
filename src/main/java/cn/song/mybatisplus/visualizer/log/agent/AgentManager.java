@@ -39,6 +39,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
@@ -49,8 +51,9 @@ import java.util.function.Supplier;
  *   {@code VirtualMachine.attach(pid)} + loadAgent → 会话接受 → 在线态。
  * - 惰性挂载（Ultra 4.0.20 教训）：开启增强 + 注入确认后，后台线程等进程就绪 + 去抖 3s 再
  *   attach，全程不进 EDT——不拖慢项目启动。
- * - 幂等表：插件侧 pid 表 + agent 侧 system property 双保险（JDK8 二次 loadAgent 抛
- *   AgentLoadException("0") 实证容错）。
+ * - 幂等表：插件侧 pid 表 + agent 侧 system property 双保险（loadAgent 抛
+ *   AgentLoadException("0") 实测容错——JDK8 二次挂载与 243 沙盒现代 JDK 首次挂载均观察过，
+ *   见 AgentMain javadoc；握手成功为准）。
  * - 降级三分支：attach 失败 / 连接丢失 / 关闭开关 → 桥恢复（capturePaused=false），零劣化。
  * - 在线态：最近 {@link AgentProtocol#ONLINE_WINDOW_MS} 内有心跳/事件（§4.3）。
  * - 随 project dispose 摘除：会话全关 + 连接池线程停转。
@@ -63,11 +66,17 @@ public final class AgentManager implements Disposable {
     /** agent jar 类路径资源（构建产物内嵌）。 */
     public static final String AGENT_RESOURCE = "/agent/mps-sql-agent.jar";
 
+    /** T-FirstUsePremainConsent S2：attach 兜底能力边界通知的独立分组（「一域一组」惯例）。 */
+    public static final String AGENT_NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.agent";
+
     /**
      * 拒绝冷却默认窗（T-PS4-01）：24h。冷却只作用于确认弹窗频率、不改变同意门槛（保守口径——
      * 冷却过期后再弹一次，用户仍可同意）；设置页关闭再开启增强捕获时重置。
      */
     public static final long DEFAULT_REJECT_COOLDOWN_MS = 24L * 60 * 60 * 1000;
+
+    /** 确认请求去重窗默认值（T-FirstUsePremainConsent R2）：吸收上升沿与 O-66 引导流毫秒级连发的第二次请求。 */
+    public static final long DEFAULT_CONSENT_ASK_GUARD_MS = 1_500L;
 
     /** attach 排队去抖窗默认值（T-PS4-03）：同 pid 窗口内重复启动不重复排队（与挂载前静默等待解耦）。 */
     public static final long DEFAULT_ATTACH_DEBOUNCE_MS = 3_000L;
@@ -195,6 +204,20 @@ public final class AgentManager implements Disposable {
     public LongSupplier clockMs = System::currentTimeMillis;
 
     /**
+     * 去重窗宽度（默认 {@link #DEFAULT_CONSENT_ASK_GUARD_MS}；测试注入 0 = 关闭去重）。
+     *
+     * <p><b>须声明在构造器（注册 SETTINGS_CHANGE 监听）之前</b>：监听注册后的上升沿回调链同步走
+     * {@link #requestConsentOnce} 读之——声明在构造器之后（Kotlin 为 init 块之后）则构造期触发时读到
+     * JVM 默认值 0（去重窗失效）且 {@code lastConsentAskAtMs} 为 null（NPE），初始化顺序守卫
+     * （DialogWrapperInitOrderGuardTest）按此钉死声明位置。（Java 字段初始化器先于构造器体执行，
+     * 本条为与 Kotlin master 对齐的文本位置约束，照钉。）
+     */
+    public long consentAskGuardMs = DEFAULT_CONSENT_ASK_GUARD_MS;
+
+    /** 最近一次确认弹窗时刻（{@link #requestConsentOnce} 去重窗基准；测试复位缝）。 */
+    public final AtomicLong lastConsentAskAtMs = new AtomicLong(0L);
+
+    /**
      * T-ReachAudit T-RA-01：心跳窗口（默认 {@link AgentProtocol#ONLINE_WINDOW_MS}；测试注入短窗驱动过期语义）。
      *
      * 此前该窗口只存在于协议常量与 KDoc（{@link AgentProtocol#ONLINE_WINDOW_MS} 全仓零消费、
@@ -283,6 +306,20 @@ public final class AgentManager implements Disposable {
                 if (state.getEnhancedCaptureEnabled() && !lastKnownEnabled) {
                     state.setEnhancedCaptureRejectedAtMs(0L);
                     LOG.info("设置变更：增强捕获重新开启——拒绝冷却已重置");
+                    // T-FirstUsePremainConsent R2-C：确认前置到「开启」时刻。Round1 把确认挂在
+                    // updateJavaParameters 窗口，沙盒实测（idea.log 11:06:54）该窗口在后台线程跑、
+                    // EDT 闸门恒跳过 → 首轮仍静默。开启那一刻在设置页/引导链上下文天然是 EDT——
+                    // 在此同步弹一次确认，授权持久化先于任何 Run，之后每轮启动即带 premain。
+                    // O-66 引导链「置位+发布+requestReauthorization」会连发两次请求：requestConsentOnce
+                    // 的去重窗吸收第二次，只弹一个框。
+                    if (needsReauthorization() && premainConsentGate.getAsBoolean()) {
+                        EnhancedCaptureConsent outcome = requestConsentOnce();
+                        if (outcome == EnhancedCaptureConsent.ACCEPTED) {
+                            LOG.info("设置变更上升沿确认：用户同意注入——后续 Run 即可 premain（启动即捕获）");
+                        } else if (outcome == EnhancedCaptureConsent.REJECTED) {
+                            LOG.info("设置变更上升沿确认：用户拒绝注入——进冷却（Run 链不再重复弹）");
+                        }
+                    }
                 }
                 lastKnownEnabled = state.getEnhancedCaptureEnabled();
                 if (!state.getEnhancedCaptureEnabled()) {
@@ -525,31 +562,14 @@ public final class AgentManager implements Disposable {
     private void requestConsentThenAttach(Object processHandler,
             kotlin.jvm.functions.Function1<? super EnhancedCaptureConsent, kotlin.Unit> onOutcome) {
         ApplicationManager.getApplication().invokeLater(() -> {
-            if (project.isDisposed() || !isEnhancedEnabled()) {
+            // 早退返回 null（不弹、不落盘、不得误当拒绝）：三态落盘/广播/fatal 透传收口在
+            // confirmEnhancedCapture 单点；本方法只负责同意后继续挂载与三态回传（O-66）。
+            EnhancedCaptureConsent outcome = requestConsentOnce();
+            if (outcome == null) {
                 return;
             }
-            EnhancedCaptureConsent outcome;
-            try {
-                outcome = consentProvider.get();
-            } catch (Throwable t) {
-                // T-FatalPassthrough T-FP-02：JVM 级致命错误透传（见 util/FatalErrors.kt）——本文件
-                // 是长驻链路（attach / premain / 会话读线程 / CONFIG 下发），捕获面覆盖 Error：
-                // 普通异常（含 ClassNotFoundException 这类可选能力缺失）仍走既有降级，
-                // VirtualMachineError/LinkageError 不得被吞成一条 warn 后让流程带病继续。
-                // Java 形态：isFatal 蕴含 Error，显式收窄后 throw（裸 `throw t` 在 try 含受检异常时
-                // 因精确重抛分析要求方法声明该受检异常而不可编译；语义与原对象逐字一致，不包装）。
-                if (FatalErrors.isFatal(t)) throw (Error) t;
-                LOG.warn("requestConsentThenAttach: 确认框异常——按拒绝处理（进冷却）", t);
-                outcome = EnhancedCaptureConsent.REJECTED;
-            }
-            PluginSettings.State state = PluginSettings.getInstance().getState();
             switch (outcome) {
                 case ACCEPTED -> {
-                    state.setEnhancedCaptureConfirmed(true);
-                    // T-CaptureTruth T-CT-01：三态结果都广播——否则设置页状态行要等下一次
-                    // attach/掉线才刷新，用户点完同意/拒绝后看到的是过期文案。
-                    publishStatusChanged();
-                    // O-66：三态回传（在进程句柄分支之前——无句柄路径同样要回传）。
                     onOutcome.invoke(EnhancedCaptureConsent.ACCEPTED);
                     if (processHandler == null) {
                         // T-CaptureTruth T-CT-02：重新授权入口无进程句柄——只恢复授权，
@@ -561,19 +581,12 @@ public final class AgentManager implements Disposable {
                     doAttachAsync(processHandler);
                 }
                 case DISABLE_CAPTURE -> {
-                    // 「关闭增强捕获并不再询问」：总开关持久化关闭（与设置页 Apply 同通道，
-                    // XmlSerializer 随平台自动保存落盘）。enabled 门在 onProcessAppeared 入口，
-                    // 后续任何进程启动都不再进入本确认流，也不 attach。
-                    state.setEnhancedCaptureEnabled(false);
                     LOG.info("requestConsentThenAttach: 用户选择关闭增强捕获并不再询问——总开关已持久化关闭");
-                    publishStatusChanged();
                     onOutcome.invoke(EnhancedCaptureConsent.DISABLE_CAPTURE);
                 }
                 case REJECTED -> {
-                    state.setEnhancedCaptureRejectedAtMs(clockMs.getAsLong());
                     LOG.info("requestConsentThenAttach: 用户拒绝注入——进入 " + rejectCooldownMs
                         + "ms 冷却（冷却期内不重复弹，不改同意门槛）");
-                    publishStatusChanged();
                     onOutcome.invoke(EnhancedCaptureConsent.REJECTED);
                 }
             }
@@ -583,6 +596,158 @@ public final class AgentManager implements Disposable {
     /** 便捷重载（Kotlin 默认参数 {@code onOutcome = {}}）。 */
     private void requestConsentThenAttach(Object processHandler) {
         requestConsentThenAttach(processHandler, consent -> kotlin.Unit.INSTANCE);
+    }
+
+    /**
+     * 确认落盘单点（T-FirstUsePremainConsent S1 抽取，原 requestConsentThenAttach 内联体）：
+     * 调 {@link #consentProvider} 取三态结果并按既有语义持久化。<b>须在 EDT 调用</b>（默认 provider 弹模态框）。
+     *
+     * <p>早退返回 null（不弹、不落盘、调用方不得误当拒绝）：项目已释放 / 增强未开启 / 拒绝冷却期内
+     * （冷却只作用于弹窗频率、不改变同意门槛——保守口径，与 onProcessAppeared 入口判定同源）。
+     * 三态各自落盘并广播（T-CaptureTruth T-CT-01：三态结果都广播，否则设置页状态行等到下一次
+     * attach/掉线才刷新）：ACCEPTED → confirmed=true；REJECTED → 拒绝时刻；DISABLE_CAPTURE →
+     * 总开关 false（与设置页 Apply 同通道，XmlSerializer 随平台自动保存落盘）。
+     */
+    public EnhancedCaptureConsent confirmEnhancedCapture() {
+        if (project.isDisposed() || !isEnhancedEnabled()) {
+            return null;
+        }
+        if (isInRejectCooldown()) {
+            LOG.info("confirmEnhancedCapture: 拒绝冷却期内——不弹窗不落盘");
+            return null;
+        }
+        EnhancedCaptureConsent outcome;
+        try {
+            outcome = consentProvider.get();
+        } catch (Throwable t) {
+            // T-FatalPassthrough T-FP-02：JVM 级致命错误透传（见 util/FatalErrors.kt）——本文件
+            // 是长驻链路（attach / premain / 会话读线程 / CONFIG 下发），捕获面覆盖 Error：
+            // 普通异常（含 ClassNotFoundException 这类可选能力缺失）仍走既有降级，
+            // VirtualMachineError/LinkageError 不得被吞成一条 warn 后让流程带病继续。
+            // Java 形态：isFatal 蕴含 Error，显式收窄后 throw（裸 `throw t` 在 try 含受检异常时
+            // 因精确重抛分析要求方法声明该受检异常而不可编译；语义与原对象逐字一致，不包装）。
+            if (FatalErrors.isFatal(t)) throw (Error) t;
+            LOG.warn("requestConsentThenAttach: 确认框异常——按拒绝处理（进冷却）", t);
+            outcome = EnhancedCaptureConsent.REJECTED;
+        }
+        PluginSettings.State state = PluginSettings.getInstance().getState();
+        switch (outcome) {
+            case ACCEPTED -> state.setEnhancedCaptureConfirmed(true);
+            case DISABLE_CAPTURE -> state.setEnhancedCaptureEnabled(false);
+            case REJECTED -> state.setEnhancedCaptureRejectedAtMs(clockMs.getAsLong());
+        }
+        publishStatusChanged();
+        return outcome;
+    }
+
+    /**
+     * T-FirstUsePremainConsent S1：进程启动<b>前</b>的注入确认（{@link PremainRunConfigurationExtension}
+     * 的 updateJavaParameters 窗口内同步调用）。首次使用的旧语义是「首轮 Run 注入跳过
+     * enhanced-unconfirmed → 同意弹窗由 attach 链在进程启动后弹」，而 agent 只在驱动 connect 时
+     * 包装连接、retransform 不能回溯已存在的池化连接——首轮必然零捕获。本入口把确认前置到
+     * JavaParameters 构建期，同意后首轮 Run 即带 -javaagent（连接从建池起就被包装）。
+     *
+     * <p>返回 true = 确认已达成（或本就 confirmed），可继续 {@link #preparePremainVmOption}；false = 本轮
+     * 不注入（未开启 / 冷却 / headless / 非EDT 早退，回落既有 attach 链确认，零劣化）。
+     * EDT 守卫（待验证前提 1）：updateJavaParameters 若不在 EDT，同步弹模态框有死锁风险——
+     * 静默跳过不跨线程弹窗；生产形态由沙盒实测落账。
+     */
+    public boolean ensureConfirmedBeforePremain() {
+        if (!isEnhancedEnabled()) {
+            return false;
+        }
+        if (isEnhancedConfirmed()) {
+            return true;
+        }
+        if (!premainConsentGate.getAsBoolean()) {
+            LOG.info("premain 提前确认跳过：headless 或非 EDT 线程——回落既有 attach 链确认（零劣化）");
+            return false;
+        }
+        EnhancedCaptureConsent outcome = requestConsentOnce();
+        if (outcome == EnhancedCaptureConsent.ACCEPTED) {
+            LOG.info("premain 提前确认：用户同意注入——本轮即可注入 premain");
+            return true;
+        }
+        if (outcome == EnhancedCaptureConsent.REJECTED) {
+            LOG.info("premain 提前确认：用户拒绝注入——本轮不注入（冷却语义同 attach 链）");
+            return false;
+        }
+        // DISABLE_CAPTURE 或早退 null（Kotlin when 的 `DISABLE_CAPTURE, null` 合并臂）
+        LOG.info("premain 提前确认：增强已关闭或早退——本轮不注入");
+        return false;
+    }
+
+    /**
+     * 提前确认的线程/环境闸门（默认 = EDT 且非 headless）；测试注入以驱动「可弹/不可弹」两分支。
+     */
+    public BooleanSupplier premainConsentGate = () -> {
+        com.intellij.openapi.application.Application app = ApplicationManager.getApplication();
+        return app != null && !app.isHeadlessEnvironment() && app.isDispatchThread();
+    };
+
+    /**
+     * T-FirstUseFreshInstallConsent S1：项目打开即确认（出厂未确认态专用通道）。
+     *
+     * <p>出厂态 {@code enhancedCaptureEnabled=true}（默认开）+ {@code confirmed=false}——从出生就是开着的，
+     * <b>永远不产生 SETTINGS_CHANGE 上升沿</b>，R2「开启时刻确认」在最普遍的首次使用形态永不触发；
+     * 首轮 Run 回落 attach 链又撞 SqlLogManager 懒创建的订阅竞态（沙盒 12:41 会话实录：首启全程静默）。
+     * 本入口在项目打开期主动补一次确认：同意持久化先于任何 Run → 首轮 Run 的
+     * updateJavaParameters 即产出 premain（连接从建池起包装、捕获完整），attach 链与订阅竞态整体旁路。
+     *
+     * <p>调用方（LogStartupCapture ProjectActivity）在 BG 线程：invokeLater 转 EDT 弹窗；
+     * EDT/headless 前提不成立（headless 测试）静默跳过回落既有 attach 链——零劣化不变。
+     * 三态语义沿用 {@link #requestConsentOnce} 单点（同意=confirmed / 取消=24h 冷却 / 关闭增强=enabled=false），
+     * 去重窗天然防「启动即弹 + O-66 引导链」双弹。已知边界（登记）：多项目同时打开各自实例独立计数，
+     * 极端并发下可能各弹一次（第二次读 state 多半已被第一次的落盘短路）。
+     */
+    public void maybeAskConsentAtStartup() {
+        if (!needsReauthorization()) {
+            LOG.info("maybeAskConsentAtStartup: 无需授权（已确认或未开启）——跳过");
+            return;
+        }
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (project.isDisposed()) {
+                return;
+            }
+            if (!premainConsentGate.getAsBoolean()) {
+                LOG.info("maybeAskConsentAtStartup: headless 或非 EDT——静默跳过（回落 attach 链确认，零劣化）");
+                return;
+            }
+            EnhancedCaptureConsent outcome = requestConsentOnce();
+            if (outcome == EnhancedCaptureConsent.ACCEPTED) {
+                LOG.info("maybeAskConsentAtStartup: 项目打开期确认——用户同意注入，首轮 Run 即可 premain");
+            } else if (outcome == EnhancedCaptureConsent.REJECTED) {
+                LOG.info("maybeAskConsentAtStartup: 项目打开期确认——用户拒绝注入，进冷却");
+            }
+        });
+    }
+
+    /**
+     * 去重确认入口（T-FirstUsePremainConsent R2）：四个触发点（设置页开启上升沿 / O-66 引导链
+     * requestReauthorization / 进程出现 attach 链 / premain 提前确认）共用。同一时刻只应有一个框——
+     * O-66 引导链「置位开关 + 发布 SETTINGS_CHANGE + 立即 requestReauthorization」会让上升沿与
+     * 引导流在毫秒级内连发两次请求，本入口按 {@link #consentAskGuardMs} 时间窗把第二次吞掉（只弹一个框）。
+     *
+     * <p>早退返回 null（不弹不落盘）：项目已释放 / 未开启 / 冷却期内 / 去重窗内。
+     * 其余语义（三态落盘、广播、fatal 透传）收口在 {@link #confirmEnhancedCapture} 单点不变。
+     */
+    public EnhancedCaptureConsent requestConsentOnce() {
+        if (project.isDisposed() || !isEnhancedEnabled()) {
+            return null;
+        }
+        if (isInRejectCooldown()) {
+            LOG.info("requestConsentOnce: 拒绝冷却期内——不弹窗");
+            return null;
+        }
+        long now = clockMs.getAsLong();
+        long last = lastConsentAskAtMs.get();
+        if (last > 0L && now - last < consentAskGuardMs) {
+            LOG.info("requestConsentOnce: " + (now - last) + "ms 前已弹过确认（去重窗 "
+                + consentAskGuardMs + "ms）——吞掉本次重复请求");
+            return null;
+        }
+        lastConsentAskAtMs.set(now);
+        return confirmEnhancedCapture();
     }
 
     /**
@@ -682,8 +847,57 @@ public final class AgentManager implements Disposable {
         // T-AgentHeartbeat T-05：同一口径清「首条心跳未到」标记
         firstHeartbeatPending.set(false);
         publishStatusChanged();
+        // T-FirstUsePremainConsent S2：attach 兜底挂载成功（能走到这里必非 premain 在场——
+        // premain 通道在场的进程在 doAttachAsync 入口就跳过）→ 能力边界告知（每轮至多一次）
+        notifyAttachFallbackOnce();
         return true;
     }
+
+    /**
+     * T-FirstUsePremainConsent S2：attach 兜底挂载成功后的能力边界告知——agent 只在驱动 connect
+     * 时包装连接，attach 前已存在的（池化）连接不可回溯包装，该轮 SQL 可能不全；如实告知
+     * 「重新运行项目后完整生效」，不做虚假承诺。每轮运行至多一次（{@link #onRunEnded} 复位）。
+     */
+    public void notifyAttachFallbackOnce() {
+        if (!attachFallbackNoticedThisRun.compareAndSet(false, true)) {
+            return;
+        }
+        LOG.info("notifyAttachFallbackOnce: attach 兜底挂载成功——发能力边界通知（本轮仅一次）");
+        // 通知出口自吞异常（挂载已成功，通知失败不得打断链路）；fatal 按项目惯例透传（T-FP-02）
+        Runnable notifier = attachFallbackNotifier;
+        if (notifier == null) {
+            return;
+        }
+        try {
+            notifier.run();
+        } catch (Throwable t) {
+            if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
+            LOG.warn("notifyAttachFallbackOnce: 能力边界通知发送失败（挂载不受影响）", t);
+        }
+    }
+
+    /**
+     * 通知出口（默认 balloon，测试模式跳过平台通知；测试注入计数器驱动断言）。
+     */
+    public Runnable attachFallbackNotifier = () -> {
+        com.intellij.openapi.application.Application app = ApplicationManager.getApplication();
+        if (app == null || !app.isUnitTestMode()) {
+            try {
+                com.intellij.notification.NotificationGroupManager.getInstance()
+                    .getNotificationGroup(AGENT_NOTIFICATION_GROUP_ID)
+                    .createNotification(
+                        cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("notification.agent.attachFallback.title"),
+                        cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("notification.agent.attachFallback.body"),
+                        com.intellij.notification.NotificationType.INFORMATION)
+                    .notify(project);
+            } catch (Throwable ignored) {
+                // 对齐 Kotlin runCatching：平台通知失败不外抛（外层还有 fatal 透传兜底）
+            }
+        }
+    };
+
+    /** 本轮 attach 兜底通知已发标记（每轮复位；public 为同模块测试缝，供测试实例复用场景复位）。 */
+    public final AtomicBoolean attachFallbackNoticedThisRun = new AtomicBoolean(false);
 
     /**
      * T-AgentConfigChannel T-02：CONFIG 回执超时巡检的排定入口（构造会话时注入）。
@@ -815,8 +1029,11 @@ public final class AgentManager implements Disposable {
      * 这两步在未开启态纯属浪费（且端口协商会开 ServerSocket）。判定本身走纯函数
      * {@link PremainInjection#decide}，此处只负责按序求值事实与打日志。
      *
-     * 注意确认闸门：未确认态不注入，首次运行的知情同意仍由既有 attach 链在进程启动后弹一次
-     * （{@link #onProcessAppeared}）——确认后的后续运行才吃到 premain，该语义本任务不改。
+     * 注意确认闸门：本入口只读不弹——未确认态不注入。知情同意的前置弹出由调用方
+     * （{@link PremainRunConfigurationExtension}）在调用本方法前走 {@link #ensureConfirmedBeforePremain}
+     * （T-FirstUsePremainConsent S1）；EDT/headless 前提不成立的路径回落既有 attach 链确认
+     * （{@link #onProcessAppeared}），attach 兜底挂载成功后由能力边界通知如实告知捕获范围
+     * （{@link #notifyAttachFallbackOnce}，S2）。
      */
     public String preparePremainVmOption() {
         boolean enabled = isEnhancedEnabled();
@@ -1429,6 +1646,8 @@ public final class AgentManager implements Disposable {
      * 与 {@link #PREMAIN_CHANNEL_TTL_MS}（见 {@link #isChannelExpired}）。
      */
     public void onRunEnded() {
+        // T-FirstUsePremainConsent S2：运行结束 → attach 兜底通知的「每轮一次」记忆复位
+        attachFallbackNoticedThisRun.set(false);
         if (premainChannels.isEmpty()) {
             return;
         }

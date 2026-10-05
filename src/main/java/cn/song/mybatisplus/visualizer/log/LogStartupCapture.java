@@ -30,6 +30,17 @@ public class LogStartupCapture implements ProjectActivity {
     }
 
     private void doExecute(Project project) {
+        // T-FirstUseFreshInstallConsent S1：出厂未确认态项目打开即确认——必须在任何 early return
+        // 之前（自动监听开关与本确认无关）。同意持久化先于任何 Run → 首轮 Run 即 premain 完整捕获。
+        // 对齐 master 形态：AgentManager/FatalErrors 全限定（master 侧亦全限定）；fatal 透传按项目
+        // 惯例显式收窄 throw（T-FP-02），其余异常只记 WARN 不影响项目打开。
+        try {
+            cn.song.mybatisplus.visualizer.log.agent.AgentManager.getInstance(project).maybeAskConsentAtStartup();
+        } catch (Throwable t) {
+            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
+            LOG.warn("LogStartupCapture: 启动期增强捕获确认失败（不影响项目打开）", t);
+        }
+
         PluginSettings.State state = PluginSettings.getInstance().getState();
         LOG.info("LogStartupCapture.execute: 触发（project=" + project.getName()
                 + ", logAutoCaptureOnStart=" + state.getLogAutoCaptureOnStart()
