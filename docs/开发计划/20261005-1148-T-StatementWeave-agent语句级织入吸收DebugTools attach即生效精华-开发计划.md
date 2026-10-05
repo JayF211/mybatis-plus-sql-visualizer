@@ -92,3 +92,47 @@ IDE 侧既有地基：`AgentEventAdapter` 事件消费、`AgentUrlRegistry`/`Jdb
 - 驱动字段反射兜底（mysql Query 链 / h2 Command）：二期，前提 §四.2/3 证伪后立项。
 - redefine（非 retransform）路径：不碰（增删成员能力带卸载屏障语义，风险面大收益小）。
 - connect 织入与包装代理层不拆：语句级织入是**补位**通道，代理层对新连接的参数捕获/耗时精度更优，双通道并存按事件幂等去重（同语句同时间窗一条）——去重判据随 S7 定。
+
+
+## 七、实施记录（2026-10-05 当轮回填，工作树 mybatis-plus-sql-visualizer-tsw @ t-statementweave）
+
+### 落地内容
+
+- **S1 登记单源化**：语句面/prepare 面名单与织入形态标注统一在 `StatementWeaver.SPECS`（`Kind[]` 按类标注），`DriverRegistry.isStatementWeavable/isPrepareWeavable` 委托 `specOf` 判定——防两份名单漂移（守卫钉住）。登记面：mysql 8.x（StatementImpl/ClientPreparedStatement/ServerPreparedStatement）+ 5.x 遗留路径 + h2 2.x（JdbcStatement/JdbcPreparedStatement/JdbcCallableStatement）；prepare 面：ConnectionImpl（mysql 双包路径）/JdbcConnection。
+- **S2 织入器**：`StatementWeaver`（ASM Tree API，入口+出口双插桩）。出口覆盖 **ARETURN/ATHROW/IRETURN/LRETURN** 四类返回点——executeUpdate→int、execute→boolean 走 IRETURN，executeLargeUpdate→long 走 LRETURN，结果装箱（Integer/Long.valueOf）后恢复原值返回；PREPARE 面只插 ARETURN，ADD_BATCH 只插 RETURN。
+- **回调四件套**（`SqlHookCallbacks`）：`onStatementEnter`（token=nanoTime，停采 volatile 短路 + 代理层门禁双闸，0=短路）／`onExecuteExit`（EXEC 与 BATCH 统一签名，批 SQL 按 op 名从登记表取）／`onAddBatchExit`（批串累积）／`onStatementPrepare`（PS→SQL+URL 登记）。`WovenEvents` 组装事件（字段语义对齐代理层；params 置空与 timestamp 出口回推两处结构性差异如实注释）。
+- **S3 归属登记**：`StatementRegistry`（WeakHashMap 弱键，PS GC 即清账；盲区跳过 + `unresolvedCount` 计数可观测；`clearForTest` 测试缝）。`UrlResolver`（getURL 按类缓存 Method，h2 包私有 setAccessible；`noteConnectUrl` 在 onConnection 记最近 URL 兜底）。
+- **S4 归属链**：ctx.url（prepare 时连接）→ `stmt.getConnection()` 反射 → 驱动 getURL → 最近 connect URL → 空（IDE 推断链接管）。
+- **双通道去重门**：`WeaveGate`（ThreadLocal）——`StatementHandler.executeWithCapture` 在 `method.invoke(raw)` 期间置位，织入入口读到即短路。不设门：包装连接的语句 invoke 到的 raw 方法体已被织入，同一条 SQL 双通道双事件。
+- **S5 attach 即生效落点**：`AgentMain.retransformLoadedDrivers` 扩展三面（驱动 connect + 语句 + prepare），attach 时对已加载语句实现类 retransform——存量对象的下一次 execute 即带钩子。
+- **S6 IDE 侧**：能力边界通知双语口径升级（「此后执行的 SQL 即时可见（含挂载前已存在的连接）；挂载前已 prepare 且未再执行的语句不在捕获范围内」）。
+- **S7 测试**：`StatementWeaveEndToEndTest` 8 例（带参/登记/盲区计数/门禁短路/停采短路/批处理/异常原样重抛/loader 契约）+ 主仓 `StatementWeaveWiringGuardTest` 6 例（源码扫描接线守卫 + 登记单一真相 + 通知口径）。
+
+### 实施过程三坑（留档）
+
+1. **出口只认 ARETURN 的盲织**（探针实证）：首版出口只插 ARETURN/ATHROW——executeUpdate→int、execute→boolean 走 IRETURN，整个出口钩子没插上，织入体执行但零事件。修正为四类返回点分派 + 基本类型装箱。
+2. **IRETURN 装箱参数顺序反**：`Integer.valueOf` 先于 `ILOAD` 压栈 → VerifyError（Bad type on operand stack）。先压参再调 valueOf。
+3. **BATCH 出口栈错位**（红探针钓出）：BATCH 出口块按 6 参压栈（多压一个 sql 槽）但 `onBatchExit` 描述符只收 5 参——token 读到垃圾值、failure 槽套上 int[]，回调链静默错乱且零事件零计数。定案=撤掉独立 onBatchExit，EXEC/BATCH 统一 `onExecuteExit` 签名（sql 槽 BATCH 传 null，op 名分支在回调内）。教训：**织入块的压栈序必须与回调描述符逐槽对账，多一个 ACONST_NULL 都是无声灾难**；这类错误 VerifyError 都未必报（栈形态经 COMPUTE_FRAMES 后可能恰好可验），只有运行期行为探针能钉住。
+
+### 待验证前提的实测落账（对照 §四）
+
+1. 弱映射：WeakHashMap 弱键 + 不织 close（连接池归还≠废弃）——按定案落地，泄漏面=弱键本身。
+2/3. mysql Query 链/h2 Command 字段兜底：一期未做（盲区跳过+计数），维持二期登记。
+4. 插桩复杂度：入口+出口双插桩落地（含基本类型返回分派），未走「出口单点」降级案。
+5. Wrapper 族：未登记（原生实现类先行），守卫登记名单可随时扩。
+6. 性能红线：双闸均为 volatile 读，与现代理层同级；对照性能轮（F 系列）未跑，登记下轮性能报告批。
+7. 驱动版本面：demo 在用版本已 javap 实证；漂移按织不上降级契约。
+8. batch 口径：织入通道批串格式 `;
+` 连接与代理层 batchSqls 一致；双通道并存去重由 WeaveGate 保证（代理层优先，织入通道只服务无代理的老连接——天然互斥，无需时间窗去重）。
+
+### 反向验证与读数
+
+- **红**：摘 `AgentMain` 语句面/prepare 面 retransform → `test接线守卫_retransform三面_语句面摘除必红` 红（断言「retransformLoadedDrivers 必须对语句面 retransform（attach 即生效落点，摘掉必红）」）。
+- **绿**：恢复后 agent 子项目 **101/0**（含 8 新例）+ 主仓定向 **31/0**（WiringGuard 6 + AgentPremainConsent + AgentConsentFlow）。
+- **真机时序判别用例留下轮 runIde 批**（单测 JVM 无 Instrumentation，retransform 语义无法纯单测复现——本类只证织入通道自身正确；「先建池再 attach 存量连接可见」的端到端判别随下轮沙盒走查）。
+
+### 遗留
+
+- 全量门禁（testShards/agent 子项目全量）按三档分层另派只读收口代理。
+- 性能对照（织入钩子每条 execute 的固定开销）随下轮性能报告批（§四.6）。
+- 更多驱动语句类登记随真库验证轮扩面（§六）。
