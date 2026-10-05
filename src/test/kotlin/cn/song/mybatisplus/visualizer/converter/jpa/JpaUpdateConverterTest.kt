@@ -457,4 +457,104 @@ class JpaUpdateConverterTest {
         )
         assertTrue(result.statement is UpdateStatement)
     }
+
+    // ------------------------------------------------------------------
+    // T-JpaDeleteWhereGuard：DELETE 条件树解析（修复前 conditions 恒空，
+    // buildJpaWarning 对带 WHERE 的 DELETE 误报 BlockAttack 全表删除）
+    // ------------------------------------------------------------------
+
+    /** T-JpaDeleteWhereGuard：HQL 带 WHERE 的 DELETE → Simple 条件（剥别名），管道文本不变。 */
+    @Test
+    fun `hqlDelete_withWhere_conditionsParsed`() {
+        val result = HqlConverter.convert("DELETE FROM UserEntity u WHERE u.age > :min", userTable)
+
+        assertTrue(
+            "DELETE 应返回 DeleteStatement，实际 ${result.statement::class.simpleName}",
+            result.statement is cn.song.mybatisplus.visualizer.model.DeleteStatement,
+        )
+        // 管道文本不变（修复只补条件树，不改写文本）
+        assertEquals("DELETE FROM user u WHERE u.age > ?", result.sql)
+        val delete = result.statement as cn.song.mybatisplus.visualizer.model.DeleteStatement
+        assertEquals("应解析出 1 个条件", 1, delete.conditions.size)
+        val condition = delete.conditions[0] as Condition.Simple
+        assertEquals(">", condition.op)
+        assertEquals("age", condition.column.columnName)
+        assertNull("列引用应剥别名前缀", condition.column.tableAlias)
+        assertTrue("值应为 ? 占位符", condition.value.isPlaceholder)
+    }
+
+    /** T-JpaDeleteWhereGuard：JPQL 同形态走 JpqlConverter，条件树同样落位。 */
+    @Test
+    fun `jpqlDelete_withWhere_conditionsParsed`() {
+        val result = JpqlConverter.convert("DELETE FROM UserEntity u WHERE u.age > :min", userTable)
+
+        assertTrue(result.statement is cn.song.mybatisplus.visualizer.model.DeleteStatement)
+        assertEquals("DELETE FROM user u WHERE u.age > ?", result.sql)
+        val delete = result.statement as cn.song.mybatisplus.visualizer.model.DeleteStatement
+        assertEquals(1, delete.conditions.size)
+        val condition = delete.conditions[0] as Condition.Simple
+        assertEquals(">", condition.op)
+        assertEquals("age", condition.column.columnName)
+        assertNull(condition.column.tableAlias)
+        assertTrue(condition.value.isPlaceholder)
+    }
+
+    /** T-JpaDeleteWhereGuard：嵌入段路径 WHERE → 展平列名（嵌入段剥离 + 别名剥除双重语义）。 */
+    @Test
+    fun `delete_embeddedPathWithWhere_conditionsParsed`() {
+        val result = HqlConverter.convert(
+            "DELETE FROM WmsDockBooking booking WHERE booking.updateInfo.createdTime < :t",
+            bookingTable,
+        )
+        val delete = result.statement as cn.song.mybatisplus.visualizer.model.DeleteStatement
+        assertTrue("嵌入段路径应解析出条件，实际 ${delete.conditions}", delete.conditions.isNotEmpty())
+        val condition = delete.conditions[0] as Condition.Simple
+        assertEquals("created_time", condition.column.columnName)
+        assertNull(condition.column.tableAlias)
+    }
+
+    /** T-JpaDeleteWhereGuard：无 WHERE 的裸 DELETE → conditions 为空（BlockAttack 警示语义保持）。 */
+    @Test
+    fun `delete_withoutWhere_conditionsEmpty`() {
+        val result = HqlConverter.convert("DELETE FROM UserEntity u", userTable)
+        assertTrue(result.statement is cn.song.mybatisplus.visualizer.model.DeleteStatement)
+        val delete = result.statement as cn.song.mybatisplus.visualizer.model.DeleteStatement
+        assertEquals("裸全表删除应无条件树", 0, delete.conditions.size)
+    }
+
+    /** T-JpaDeleteWhereGuard：WHERE 含 OR → 整体 Raw 兜底（Raw 非空即不误报 BlockAttack）。 */
+    @Test
+    fun `delete_whereOr_fallsBackToRawCondition`() {
+        val result = JpqlConverter.convert(
+            "DELETE FROM UserEntity u WHERE u.role = :r OR u.age > 18",
+            userTable,
+        )
+        val delete = result.statement as cn.song.mybatisplus.visualizer.model.DeleteStatement
+        assertEquals(1, delete.conditions.size)
+        val raw = delete.conditions[0] as Condition.Raw
+        assertTrue("Raw 文本应含 OR: ${raw.sqlText}", raw.sqlText.contains("OR"))
+    }
+
+    /** T-JpaDeleteWhereGuard：解析器直测——无 FROM 宽松形态命中（返回非 null 产物）。 */
+    @Test
+    fun `parser_delete_noFromLooseForm_parsed`() {
+        val parsed = JpaUpdateParser.parseDelete("delete UserEntity u where u.age < :max")
+        assertTrue("无 FROM 宽松形态应命中", parsed != null)
+        assertEquals(1, parsed!!.conditions.size)
+    }
+
+    /** T-JpaDeleteWhereGuard：解析器直测——畸形形态（DELETE 带 SET）不抛异常。 */
+    @Test
+    fun `parser_delete_malformedWithSet_noThrow`() {
+        // `AS u` 后跟 SET：头部按 AS 别名形态命中，rest 无 WHERE → 空 conditions，不抛
+        val parsed = JpaUpdateParser.parseDelete("DELETE FROM user AS u SET")
+        assertTrue(parsed != null)
+        assertEquals(0, parsed!!.conditions.size)
+    }
+
+    /** T-JpaDeleteWhereGuard：解析器直测——SELECT 头部不命中 → null。 */
+    @Test
+    fun `parser_delete_selectHead_returnsNull`() {
+        assertNull(JpaUpdateParser.parseDelete("SELECT u FROM UserEntity u WHERE u.id = 1"))
+    }
 }
