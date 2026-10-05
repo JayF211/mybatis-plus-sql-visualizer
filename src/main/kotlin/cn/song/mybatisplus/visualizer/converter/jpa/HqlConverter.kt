@@ -166,9 +166,15 @@ object HqlConverter {
 
         // 10. 检测 DELETE HQL → DeleteStatement
         if (sql.trimStart().uppercase().startsWith("DELETE")) {
+            // T-JpaDeleteWhereGuard：WHERE 接进条件树（与 UPDATE 同一套白名单 + Raw 兜底）——
+            // 此前 conditions 恒空，buildJpaWarning 对带 WHERE 的 DELETE 误报 BlockAttack 全表删除
+            val parsedDelete = JpaUpdateParser.parseDelete(sql)
             return Result(
                 sql = sql,
-                statement = DeleteStatement(table = table, conditions = emptyList()),
+                statement = DeleteStatement(
+                    table = table,
+                    conditions = parsedDelete?.conditions ?: emptyList(),
+                ),
                 inClauseParams = inClauseParams,
             )
         }

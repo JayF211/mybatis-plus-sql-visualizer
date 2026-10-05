@@ -52,11 +52,51 @@ internal object JpaUpdateParser {
         RegexOption.IGNORE_CASE,
     )
 
+    /**
+     * DELETE 头部：`DELETE [FROM] 表 [别名]`（JPQL 标准带 FROM；Hibernate 宽松形态无 FROM 也认）。
+     * 别名前瞻排除 WHERE——`DELETE FROM user WHERE ...` 无别名形态下 WHERE 不能被当别名吞掉。
+     */
+    private val DELETE_HEAD = Regex(
+        "^\\s*DELETE\\s+(?:FROM\\s+)?([a-zA-Z_][a-zA-Z0-9_.$]*)" +
+            "(?:\\s+AS\\s+([a-zA-Z_][a-zA-Z0-9_$]*)|\\s+(?!WHERE\\b)([a-zA-Z_][a-zA-Z0-9_$]*))?",
+        RegexOption.IGNORE_CASE,
+    )
+
     /** SET 左值：`列` 或 `别名.列`（管道已完成属性→列名映射）。 */
     private val COLUMN_PATH = Regex("^[a-zA-Z_][a-zA-Z0-9_$]*(\\.[a-zA-Z_][a-zA-Z0-9_$]*)?$")
 
     /** 数值字面量（含负号与小数）。 */
     private val NUMERIC = Regex("^-?\\d+(\\.\\d+)?$")
+
+    /**
+     * DELETE 语句解析产物。
+     *
+     * @param conditions WHERE 条件（复用 UPDATE 同一套白名单解析：简单比较 / IS [NOT] NULL /
+     *        IN 值清单；OR/LIKE/BETWEEN 等复杂形态整体 [Condition.Raw] 兜底——Raw 亦非空，
+     *        下游 BlockAttack 警示据此区分「真带条件」与「裸全表删除」）。无 WHERE 为空列表。
+     */
+    data class ParsedDelete(
+        val conditions: List<Condition>,
+    )
+
+    /**
+     * 解析 DELETE 文本为条件树（T-JpaDeleteWhereGuard）。
+     *
+     * 缺陷背景：JPA 链两个转换器此前构造 DeleteStatement 时 conditions 恒写空，
+     * `buildJpaWarning` 按 `conditions.isEmpty()` 判 BlockAttack 全表删除——带 WHERE 的
+     * DELETE 误报警示（SQL 文本正确但模型无条件树）。本方法把 DELETE 的 WHERE 接进
+     * 与 UPDATE 同一套解析（白名单 + Raw 兜底、列引用剥别名前缀）。
+     *
+     * @return 头部结构异常返回 null（调用方维持空 conditions 透传，不抛异常）
+     */
+    fun parseDelete(sql: String): ParsedDelete? {
+        val head = DELETE_HEAD.find(sql) ?: return null
+        val rest = sql.substring(head.value.length)
+        val whereIdx = indexOfTopLevelKeyword(rest, "WHERE")
+        if (whereIdx < 0) return ParsedDelete(conditions = emptyList())
+        val wherePart = rest.substring(whereIdx + "WHERE".length).trim()
+        return ParsedDelete(conditions = parseWhere(wherePart))
+    }
 
     /** 解析 UPDATE 文本；非 UPDATE 或结构异常返回 null。 */
     fun parse(sql: String): ParsedUpdate? {
