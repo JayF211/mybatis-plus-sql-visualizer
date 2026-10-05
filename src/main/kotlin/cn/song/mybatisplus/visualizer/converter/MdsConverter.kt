@@ -186,7 +186,12 @@ object MdsConverter {
             "update" -> UpdateStatement(table, ctx.sets, ctx.conditions)
             else -> return null
         }
-        val warning = if (entryName == "deleteFrom" && ctx.conditions.isEmpty()) "⚠ 无 WHERE 条件，将删除全表数据！" else null
+        // 普查批：update 无 where → 全表更新警示（此前只报 deleteFrom，不对称）
+        val warning = when {
+            entryName == "deleteFrom" && ctx.conditions.isEmpty() -> "⚠ 无 WHERE 条件，将删除全表数据！"
+            entryName == "update" && ctx.conditions.isEmpty() -> "⚠ 无 WHERE 条件，将更新全表数据！"
+            else -> null
+        }
         val generated = SqlGenerator.generateWithParams(statement)
         return MdsPreview(
             methodName = entryName,

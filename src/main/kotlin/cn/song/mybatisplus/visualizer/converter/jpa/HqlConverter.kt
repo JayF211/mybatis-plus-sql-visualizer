@@ -345,13 +345,15 @@ object HqlConverter {
      */
     private fun mapEntityToTable(hql: String, table: TableInfo, entityAlias: String? = null): String {
         if (table.entityClassName.isBlank()) return hql
-        var result = hql
+        // 普查批：字面量掩码——`like '%UserEntity%'` 等单引号字面量内的实体名不得被替换
+        val (masked, literals) = JpaSqlLiteralMasking.mask(hql)
+        var result = masked
         entityPattern(table.entityClassName)?.let { result = it.replace(result, table.tableName) }
         val alias = entityAlias?.takeIf { it.isNotBlank() && it != table.entityClassName }
         if (alias != null) {
             entityPattern(alias)?.let { result = it.replace(result, table.tableName) }
         }
-        return result
+        return JpaSqlLiteralMasking.unmask(result, literals)
     }
 
     /** 实体标识符全词匹配 Pattern（词边界防子串误伤；构造失败容错返回 null）。 */
@@ -378,7 +380,9 @@ object HqlConverter {
     private fun mapAssociationPath(hql: String, table: TableInfo): String {
         if (table.associations.isEmpty()) return hql
 
-        var result = hql
+        // 普查批：字面量掩码——字面量内的 `x.<关联字段名>.y` 点号串不得被改写或注入注释
+        val (masked, literals) = JpaSqlLiteralMasking.mask(hql)
+        var result = masked
         // 匹配三段式路径：alias.fieldName.propertyName
         val threeLevelPattern = Regex(
             "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)\\b"
@@ -404,7 +408,7 @@ object HqlConverter {
             }
         }
 
-        return result
+        return JpaSqlLiteralMasking.unmask(result, literals)
     }
 
     // ------------------------------------------------------------------
@@ -428,7 +432,11 @@ object HqlConverter {
      */
     private fun mapFallbackEntityToTable(hql: String, tableName: String): String {
         val entityName = HqlEntityNameExtractor.extract(hql) ?: return hql
-        return hql.replaceFirst(entityName, tableName)
+        // 普查批：掩码 + 词边界——裸 replaceFirst 会命中更长标识符的前缀子串
+        // （`OwnerInfo` 命中 `OwnerInfoHelper` → `unknown_tableHelper`）或字面量内容
+        val (masked, literals) = JpaSqlLiteralMasking.mask(hql)
+        val replaced = entityPattern(entityName)?.let { it.replaceFirst(masked, tableName) } ?: masked
+        return JpaSqlLiteralMasking.unmask(replaced, literals)
     }
 
     /**

@@ -293,10 +293,12 @@ object JpqlConverter {
      */
     private fun mapEntityToTable(jpql: String, table: TableInfo): String {
         if (table.entityClassName.isBlank()) return jpql
+        // 普查批：字面量掩码——`like '%UserEntity%'` 等单引号字面量内的实体名不得被替换
+        val (masked, literals) = JpaSqlLiteralMasking.mask(jpql)
         // 替换 FROM 子句中的实体类名（简单替换，仅在确认不是更大标识符的一部分时）
         // 注意：这里只做简单替换，精确替换需要完整语法解析
         val entityPattern = Regex("\\b${Regex.escape(table.entityClassName)}\\b")
-        return entityPattern.replace(jpql, table.tableName)
+        return JpaSqlLiteralMasking.unmask(entityPattern.replace(masked, table.tableName), literals)
     }
 
     /**

@@ -313,15 +313,24 @@ object EasyQueryConverter {
                 ?: conditions
             val statement = UpdateStatement(table, sets, where)
             val generated = SqlGenerator.generateWithParams(statement)
+            // 普查批：无主键且无 where 段 → WHERE 整体缺位（全表更新），notes 按实际 WHERE 语义给
+            val whereNote = when {
+                idColumn != null -> "主键 WHERE"
+                conditions.isNotEmpty() -> "沿用 where 段条件"
+                else -> "无 WHERE 条件，将更新全表"
+            }
             previewOf(
                 entry, statement, generated,
-                listOf("updatable(entity)：未调用 setColumns，按实体全列 SET 近似（主键 WHERE）"),
+                listOf("updatable(entity)：未调用 setColumns，按实体全列 SET 近似（$whereNote）"),
                 table, ctx,
+                if (idColumn == null && conditions.isEmpty()) "⚠ 无 WHERE 条件，将更新全表数据！" else null,
             )
         } else {
             val statement = UpdateStatement(table, ctx.sets, conditions)
             val generated = SqlGenerator.generateWithParams(statement)
-            previewOf(entry, statement, generated, emptyList(), table, ctx)
+            // 普查批：update 无 where → 全表更新警示（对齐同文件 deletePreview 既有形态）
+            previewOf(entry, statement, generated, emptyList(), table, ctx,
+                if (conditions.isEmpty()) "⚠ 无 WHERE 条件，将更新全表数据！" else null)
         }
     }
 

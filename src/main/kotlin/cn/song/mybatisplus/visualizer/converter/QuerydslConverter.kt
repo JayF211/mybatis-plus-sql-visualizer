@@ -222,6 +222,8 @@ object QuerydslConverter {
         val hints: List<ParamHint>
         when (entryName) {
             "update" -> {
+                // 普查批：update 无 where → notes + 警示（对齐同函数 delete 分支既有形态）
+                if (ctx.conditions.isEmpty()) notes += "无 WHERE 条件：update(根).execute() 将更新全表（运行时 Querydsl update 无条件即全改）"
                 statement = UpdateStatement(table, ctx.sets, ctx.conditions)
                 val generated = SqlGenerator.generateWithParams(statement)
                 sql = generated.sql
@@ -276,7 +278,11 @@ object QuerydslConverter {
             paramHints = hints,
             tableName = table.tableName,
             columns = table.allColumnNames,
-            warning = if (entryName == "delete" && ctx.conditions.isEmpty()) "⚠ 无 WHERE 条件，将删除全表数据！" else null,
+            warning = when {
+                entryName == "delete" && ctx.conditions.isEmpty() -> "⚠ 无 WHERE 条件，将删除全表数据！"
+                entryName == "update" && ctx.conditions.isEmpty() -> "⚠ 无 WHERE 条件，将更新全表数据！"
+                else -> null
+            },
         )
     }
 

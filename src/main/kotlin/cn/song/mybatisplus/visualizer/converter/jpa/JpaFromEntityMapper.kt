@@ -91,20 +91,23 @@ internal object JpaFromEntityMapper {
         table: TableInfo,
         resolveTableName: (String) -> String?,
     ): String {
-        val entityNames = ENTITY_REFERENCE.findAll(sql)
+        // 普查批：字面量掩码——字面量内的 `from OrderEntity`（FROM/JOIN 假象）不得驱动扫描，
+        // 字面量内的实体名原文不得被替换正则命中
+        val (masked, literals) = JpaSqlLiteralMasking.mask(sql)
+        val entityNames = ENTITY_REFERENCE.findAll(masked)
             .map { it.groupValues[1] }
             .filter { it != table.entityClassName }
             .distinct()
             .toList()
-        if (entityNames.isEmpty()) return sql
+        if (entityNames.isEmpty()) return JpaSqlLiteralMasking.unmask(masked, literals)
 
-        var result = sql
+        var result = masked
         for (entityName in entityNames) {
             // 已无该实体名残留（如实体名与表名同形被主映射替换）时跳过，保证幂等
             if (!Regex("\\b${Regex.escape(entityName)}\\b").containsMatchIn(result)) continue
             val tableName = resolveTableName(entityName) ?: continue
             result = Regex("\\b${Regex.escape(entityName)}\\b").replace(result, tableName)
         }
-        return result
+        return JpaSqlLiteralMasking.unmask(result, literals)
     }
 }

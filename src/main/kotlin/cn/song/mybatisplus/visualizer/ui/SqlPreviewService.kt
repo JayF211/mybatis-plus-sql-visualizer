@@ -1290,8 +1290,14 @@ class SqlPreviewService(private val project: Project) {
         "Float", "float", "Double", "double", "BigDecimal", "BigInteger", "Number",
     )
 
-    /** JPA 语句风险警示：DELETE 无 WHERE 时提示全表删除（BlockAttack 风格）。 */
+    /**
+     * JPA 语句风险警示：DELETE/UPDATE 无 WHERE 时提示全表删除/更新（BlockAttack 风格）。
+     * T-JpaDeleteWhereGuard 普查批：补 UPDATE 分支——此前只报 DELETE，JPA 链无 WHERE 的
+     * bulk UPDATE 静默（MP 链 buildWarning 两种都报，不对称）；UPDATE 的 conditions 空
+     * ⟺ 文本无 WHERE（JpaUpdateParser.parseWhere 对非空 WHERE 必产 Raw 兜底），无错报面。
+     */
     private fun buildJpaWarning(statement: SqlStatement): String? = when (statement) {
+        is UpdateStatement -> if (statement.conditions.isEmpty()) "⚠ [BlockAttack] 无 WHERE 条件，将更新全表数据！" else null
         is DeleteStatement -> if (statement.conditions.isEmpty()) "⚠ [BlockAttack] 无 WHERE 条件，将删除全表数据！" else null
         else -> null
     }
