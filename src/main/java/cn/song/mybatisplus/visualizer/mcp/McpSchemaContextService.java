@@ -5,13 +5,13 @@ package cn.song.mybatisplus.visualizer.mcp;
 import cn.song.mybatisplus.visualizer.execute.JdbcUrlDatabase;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
-import kotlin.Pair;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -107,6 +107,9 @@ public final class McpSchemaContextService {
     /** 测试缝：数据源连接 URL 替身（默认 null = 走 DBN 反射链）。 */
     public static Function<Object, String> dataSourceUrlForTest = null;
 
+    /** 测试缝：数据源显示名替身（默认 null = 走 DBN 反射链；单测环境无 database 插件取不到名）。 */
+    public static Function<Object, String> dsNameForTest = null;
+
     public static Outcome buildContext(Project project, String dataSourceAlias, List<String> tableNames, int maxTables) {
         int requested = tableNames.size();
         int limit = McpSchemaFormatter.clampMaxTables(maxTables);
@@ -139,9 +142,13 @@ public final class McpSchemaContextService {
         }
 
         List<String> diagnostics = new ArrayList<>();
-        Pair<List<McpSchemaFormatter.TableEntry>, List<String>> collected =
-            collectEntries(targetSources(project, alias, names), tableNames, limit, diagnostics);
-        return outcomeOf(collected.getFirst(), collected.getSecond(), limit, requested, diagnostics);
+        CollectResult result = collectEntries(targetSources(project, alias, names), tableNames, limit, diagnostics);
+        return outcomeOf(
+            result.entries(), result.missing(), limit, requested, diagnostics,
+            result.sourceNames(),
+            // 未指名 alias = 跨源扫描命中，输出披露 auto-resolved 并带 pin 提示（S3）
+            alias == null
+        );
     }
 
     /**
@@ -177,6 +184,23 @@ public final class McpSchemaContextService {
      */
     public static Outcome outcomeOf(List<McpSchemaFormatter.TableEntry> entries, List<String> missing,
                                     int limit, int requested, List<String> diagnostics) {
+        return outcomeOf(entries, missing, limit, requested, diagnostics, List.of(), false);
+    }
+
+    /** {@link #outcomeOf} 便捷形态：diagnostics 缺省空（无实况时不追加括号）。 */
+    public static Outcome outcomeOf(List<McpSchemaFormatter.TableEntry> entries, List<String> missing,
+                                    int limit, int requested) {
+        return outcomeOf(entries, missing, limit, requested, List.of(), List.of(), false);
+    }
+
+    /**
+     * 组装结果完整形态（T-McpWalkFindings S3）：{@code sourceNames} 非空时成功文本前置
+     * 「source: …」来源披露行，{@code autoResolved}（调用方未指名 alias = 跨源扫描命中）再附
+     * pin 提示让 agent 下一次调用自纠。
+     */
+    public static Outcome outcomeOf(List<McpSchemaFormatter.TableEntry> entries, List<String> missing,
+                                    int limit, int requested, List<String> diagnostics,
+                                    List<String> sourceNames, boolean autoResolved) {
         if (entries.isEmpty()) {
             String scan = (diagnostics == null || diagnostics.isEmpty())
                 ? ""
@@ -192,14 +216,19 @@ public final class McpSchemaContextService {
                 )
             );
         }
-        String text = McpSchemaFormatter.format(entries, limit, requested);
-        return new Outcome(text);
-    }
-
-    /** {@link #outcomeOf} 便捷形态：diagnostics 缺省空（无实况时不追加括号）。 */
-    public static Outcome outcomeOf(List<McpSchemaFormatter.TableEntry> entries, List<String> missing,
-                                    int limit, int requested) {
-        return outcomeOf(entries, missing, limit, requested, List.of());
+        // T-McpWalkFindings S3：成功路径披露数据源来源——跨源静默解析不披露来源已有两次真机
+        // 实证（20260923 jpa_demo 顶替意图库 mp_demo、20261005 两套 user 列结构对不上），
+        // agent 拿到的 schema 可能不是意图库的表；未指名 alias 时附 pin 提示让下一次调用自纠。
+        StringBuilder text = new StringBuilder();
+        if (sourceNames != null && !sourceNames.isEmpty()) {
+            text.append("source: ").append(String.join(", ", sourceNames));
+            if (autoResolved) {
+                text.append(" (auto-resolved; pass 'dataSource' to pin one)");
+            }
+            text.append("\n\n");
+        }
+        text.append(McpSchemaFormatter.format(entries, limit, requested));
+        return new Outcome(text.toString());
     }
 
     /**
@@ -209,7 +238,7 @@ public final class McpSchemaContextService {
      * <p>public 供表驱动单测（单测环境无 database 插件，{@link #modelTablesForTest} /
      * {@link #dataSourceUrlForTest} 注入替身即可直测「限定目标库」整条链路；生产路径无注入，行为一致）。
      */
-    public static Pair<List<McpSchemaFormatter.TableEntry>, List<String>> collectEntries(
+    public static CollectResult collectEntries(
         List<Object> sources,
         List<String> tableNames,
         int limit,
@@ -217,6 +246,9 @@ public final class McpSchemaContextService {
     ) {
         List<McpSchemaFormatter.TableEntry> entries = new ArrayList<>();
         List<String> missing = new ArrayList<>();
+        // 命中表所在数据源名（保序去重；T-McpWalkFindings S3 来源披露——跨源静默解析不披露
+        // 来源的两次真机实证：20260923 jpa_demo 顶替 mp_demo、20261005 两套 user 列结构对不上）
+        LinkedHashSet<String> sourceNames = new LinkedHashSet<>();
         // 身份键（DBN 数据源对象无稳定 equals 语义，沿用 DatabaseSchemaResolver 的 IdentityHashMap 口径）
         Map<Object, Map<String, McpSchemaFormatter.TableEntry>> indexBySource = new IdentityHashMap<>();
         for (String name : tableNames.subList(0, Math.min(limit, tableNames.size()))) {
@@ -231,6 +263,10 @@ public final class McpSchemaContextService {
                 McpSchemaFormatter.TableEntry found = index.get(key);
                 if (found != null) {
                     hit = found;
+                    String name0 = dsName(ds);
+                    if (!"?".equals(name0)) {
+                        sourceNames.add(name0);
+                    }
                     break;
                 }
             }
@@ -241,16 +277,31 @@ public final class McpSchemaContextService {
                 entries.add(new McpSchemaFormatter.TableEntry(name, hit.comment(), hit.columns()));
             }
         }
-        return new Pair<>(entries, missing);
+        return new CollectResult(entries, missing, List.copyOf(sourceNames));
     }
 
     /** {@link #collectEntries} 便捷形态：diagnostics 缺省 null（不记实况）。 */
-    public static Pair<List<McpSchemaFormatter.TableEntry>, List<String>> collectEntries(
+    public static CollectResult collectEntries(
         List<Object> sources,
         List<String> tableNames,
         int limit
     ) {
         return collectEntries(sources, tableNames, limit, null);
+    }
+
+    /** 取数结果：命中表、缺失表名、命中表所在数据源名（S3 来源披露；保序去重）。 */
+    public record CollectResult(
+        /** 命中表清单。 */
+        List<McpSchemaFormatter.TableEntry> entries,
+        /** 缺失表名清单。 */
+        List<String> missing,
+        /** 命中表所在数据源名（保序去重；Kotlin 默认参数等价重载缺省空）。 */
+        List<String> sourceNames
+    ) {
+        /** Kotlin 默认参数等价重载：sourceNames 缺省空。 */
+        public CollectResult(List<McpSchemaFormatter.TableEntry> entries, List<String> missing) {
+            this(entries, missing, List.of());
+        }
     }
 
     /**
@@ -441,8 +492,14 @@ public final class McpSchemaContextService {
         }
     }
 
-    /** 数据源显示名（日志用；取不到返回 `?`）。 */
+    /** 数据源显示名（S3 来源披露与日志用；取不到返回 `?`，披露侧跳过）。 */
     private static String dsName(Object ds) {
+        if (dsNameForTest != null) {
+            String fromTest = dsNameForTest.apply(ds);
+            if (fromTest != null) {
+                return fromTest;
+            }
+        }
         try {
             Object name = Class.forName(DAS_DATA_SOURCE).getMethod("getName").invoke(ds);
             return (name instanceof String) ? (String) name : "?";

@@ -169,6 +169,18 @@ public class SqlVisualizerMapperCheckTool extends McpToolsetSupport {
                         out.append(' ').append(kind.name());
                     }
                     out.append('\n');
+                    // T-McpWalkFindings S2：PARSE_FAILED 附 parser 报错 detail（Finding.detail
+                    // 已截断 60 字符）——真机 20261005 实测空参模拟 6/10 fail closed 且输出零
+                    // 归因线索，同文本折叠空白后喂 check_sql 却解析通过；detail 先行让每次
+                    // PARSE_FAILED 自带归因线索，真因修复按 detail 落点另议（不预设）。
+                    // k2j 保形注记：master 的 Finding.detail 是非空 String 默认 ""，本仓 record
+                    // 一参构造落 null——null 按空串同口径过滤（isBlank 语义一致，不 NPE）。
+                    for (UnboundedWriteDetector.Finding finding : risk.findings()) {
+                        if (finding.kind() == UnboundedWriteDetector.FindingKind.PARSE_FAILED
+                            && finding.detail() != null && !finding.detail().isBlank()) {
+                            out.append("    simulate risk note: ").append(finding.detail()).append('\n');
+                        }
+                    }
                     var perf = SqlPerfAnalyzer.analyze(rendered.sql());
                     if (!perf.isEmpty()) {
                         out.append("    simulate perf:\n");

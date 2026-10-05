@@ -4,10 +4,6 @@ package cn.song.mybatisplus.visualizer.mcp;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.extensions.ExtensionPointName;
 
-import org.objectweb.asm.ClassWriter;
-import org.objectweb.asm.MethodVisitor;
-import org.objectweb.asm.Opcodes;
-
 import java.lang.reflect.Constructor;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -23,7 +19,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * T-MarketCompatProxy 已证）；运行期生成的壳类不在 jar 内，verifier 不可见。壳类只覆写
  * 「继承即可满足接口」的最小面（三钩子直接继承 {@link McpToolsetSupport} 实现，连方法都不生成），
  * 平台的工具发现（kotlin-reflect 扫 {@code @McpTool} 注解方法/参数 schema/suspend 调用契约）全部
- * 走继承来的业务类编译产物，壳零参与。</p>
+ * 走继承来的业务类编译产物，壳零参与。<b>壳字节码由 {@link TinyClassFileWriter} 手写生成，零外部
+ * 依赖</b>（真机 ASM 不可达修复，20261005：平台 262 自带 asm 库接管 org.objectweb.asm 包，
+ * 插件自带 asm jar 不可达 → 真机 NoClassDefFoundError，见开发计划 20261005-1335）。本类自此
+ * 对 org.objectweb.asm 零编译期引用（守卫扫描项）。</p>
  *
  * <p><b>注册链</b>：{@link McpGateFilterRegistrar}（mcp-optional.xml 的 postStartupActivity，mcpServer
  * 在场才加载）每项目启动触发 {@link #registerOnce}，原子闸全应用只注册一次。探测
@@ -44,7 +43,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@code internal}（shellBytes/ShellClassLoader）按惯例升 public（壳生成器单测直触达）；
  * {@code object ShellClassLoader} 落为静态嵌套类 + 自身 {@code INSTANCE}（defineClass 的
  * protected 调用点必须落在 ClassLoader 子类实例方法内）；Kotlin {@code require} 落为显式
- * {@code IllegalArgumentException}；ASM {@code apply{}} 惯用法展开为显式 {@link MethodVisitor} 变量。</p>
+ * {@code IllegalArgumentException}；壳字节码生成自 ASM {@code ClassWriter} 换为
+ * {@link TinyClassFileWriter} 手写字节码（T-SyncK2JMaster29 同 master 20261005 修复）。</p>
  */
 public final class McpToolsetDynamicRegistrar {
 
@@ -122,32 +122,13 @@ public final class McpToolsetDynamicRegistrar {
 
     /**
      * 壳类字节码：{@code final class &lt;ShellName&gt; extends &lt;工具类&gt; implements McpToolset}——
-     * 仅一个无参构造器（invokespecial 父类构造）。三钩子/工具方法全部继承，壳零额外成员。
-     * V17（major 61）：243 JBR 21 可加载，且与插件常规编译目标一致；COMPUTE_MAXS 交由
-     * ClassWriter 重算构造器的栈帧。public（master internal）供壳生成器单测直接触达。
+     * 仅一个无参构造器（invokespecial 父类构造）。工具方法/三钩子全部继承，壳零额外成员。
+     * V17（major 61）：243 JBR 21 可加载，且与插件常规编译目标一致。
+     * 生成器为 {@link TinyClassFileWriter} 手写字节码（真机 ASM 不可达修复，见其类注），零外部依赖。
+     * public（master internal）供壳生成器单测直接触达。
      */
     public static byte[] shellBytes(Class<?> superClass, Class<?> iface, String shellName) {
-        String internalName = shellName.replace('.', '/');
-        String superInternal = superClass.getName().replace('.', '/');
-        String ifaceInternal = iface.getName().replace('.', '/');
-        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
-        cw.visit(
-            Opcodes.V17,
-            Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SUPER,
-            internalName,
-            null,
-            superInternal,
-            new String[] {ifaceInternal}
-        );
-        MethodVisitor ctor = cw.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
-        ctor.visitCode();
-        ctor.visitVarInsn(Opcodes.ALOAD, 0);
-        ctor.visitMethodInsn(Opcodes.INVOKESPECIAL, superInternal, "<init>", "()V", false);
-        ctor.visitInsn(Opcodes.RETURN);
-        ctor.visitMaxs(1, 1);
-        ctor.visitEnd();
-        cw.visitEnd();
-        return cw.toByteArray();
+        return TinyClassFileWriter.shellBytes(shellName, superClass.getName(), iface.getName());
     }
 
     /**

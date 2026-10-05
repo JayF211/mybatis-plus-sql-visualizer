@@ -635,7 +635,7 @@ public class PluginSettingsPanel implements Disposable {
      * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（一行一个前缀，如 {@code com.corp.engine.}）。
      * Apply 后经 CONFIG 热下发 agent（即时生效，无需重启应用），IDE 侧候选解析同步过滤。
      */
-    private final JBTextArea frameSkipPrefixesField = new JBTextArea(3, 24);
+    private final JBTextArea frameSkipPrefixesField = new JBTextArea(5, 40);
 
     {
         // T-SourceJumpFunnel：空态灰色占位提示（悬停 tooltip 之外的第一眼引导）
@@ -649,11 +649,15 @@ public class PluginSettingsPanel implements Disposable {
                 refreshPrefixValidationRow();
             }
         });
-        // T-FramePrefixVisibility F1：GridBag 外层高度不足时行被压缩，fill=NONE 下多行文本框
-        // 会塌成一条细线（真机截图实证：标签可见、框不可见）——锁定首选高度兜底
+        // T-FramePrefixVisibility F1：fill=NONE 下多行文本框会塌成一条细线（真机截图实证）——
+        // T-FramePrefixResize：默认加大（5 行），首选高保底提到 100px
         java.awt.Dimension framePrefixPref = frameSkipPrefixesField.getPreferredSize();
-        framePrefixPref.height = Math.max(framePrefixPref.height, 60);
+        framePrefixPref.height = Math.max(framePrefixPref.height, 100);
         frameSkipPrefixesField.setPreferredSize(framePrefixPref);
+        // T-FramePrefixResize：最小高保底 60px，作为分栏拖拽下限（拖到极限不塌成细线）
+        java.awt.Dimension framePrefixMin = frameSkipPrefixesField.getMinimumSize();
+        framePrefixMin.height = Math.max(framePrefixMin.height, 60);
+        frameSkipPrefixesField.setMinimumSize(framePrefixMin);
         // T-FramePrefixVisibility F1b：深色主题下 JBTextArea 默认背景与面板几乎同色，输入框
         // 「看不出是个框」（真机截图二轮反馈）——按平台编辑器标准形态补边框+背景区分度
         frameSkipPrefixesField.setBackground(com.intellij.util.ui.UIUtil.getTextFieldBackground());
@@ -670,7 +674,7 @@ public class PluginSettingsPanel implements Disposable {
      * 语义与 {@link #frameSkipPrefixesField} 相反——名单内包名的帧即使来自 JAR 也按业务帧对待；
      * Apply 后随 CONFIG 热下发 agent。
      */
-    private final JBTextArea bizJarPrefixesField = new JBTextArea(3, 24);
+    private final JBTextArea bizJarPrefixesField = new JBTextArea(5, 40);
 
     {
         bizJarPrefixesField.getEmptyText().setText(MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes.placeholder"));
@@ -683,14 +687,52 @@ public class PluginSettingsPanel implements Disposable {
                 refreshPrefixValidationRow();
             }
         });
-        // 与帧过滤前缀框同款高度保底与边框形态（T-FramePrefixVisibility F1/F1b）
+        // 与帧过滤前缀框同款高度保底、拖拽下限与边框形态（T-FramePrefixVisibility F1/F1b + T-FramePrefixResize）
         java.awt.Dimension bizJarPref = bizJarPrefixesField.getPreferredSize();
-        bizJarPref.height = Math.max(bizJarPref.height, 60);
+        bizJarPref.height = Math.max(bizJarPref.height, 100);
         bizJarPrefixesField.setPreferredSize(bizJarPref);
+        java.awt.Dimension bizJarMin = bizJarPrefixesField.getMinimumSize();
+        bizJarMin.height = Math.max(bizJarMin.height, 60);
+        bizJarPrefixesField.setMinimumSize(bizJarMin);
         bizJarPrefixesField.setBackground(com.intellij.util.ui.UIUtil.getTextFieldBackground());
         bizJarPrefixesField.setBorder(new CompoundBorder(
             com.intellij.util.ui.UIUtil.getTextFieldBorder(),
             new EmptyBorder(4, 6, 4, 6)));
+    }
+
+    /**
+     * T-FramePrefixResize：两前缀框的垂直分栏——拖拽中缝即重分配两框高度（语义经用户 2026-10-05
+     * 确认：互相腾挪、总高固定），比例经 proportionKey 记忆跨重启（同款形态见 SqlPreviewPanel 预览分栏）。
+     * 每格 = 标签（左、顶对齐，两格标签同宽对齐）+ 文本框（占满余宽）；rebuild 重建新实例时按同键自动加载记忆比例。
+     */
+    private com.intellij.ui.OnePixelSplitter buildFramePrefixesSplitter() {
+        JBLabel skipLabel = new JBLabel(MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes"));
+        JBLabel bizLabel = new JBLabel(MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes"));
+        int labelWidth = Math.max(skipLabel.getPreferredSize().width, bizLabel.getPreferredSize().width);
+        for (JBLabel label : List.of(skipLabel, bizLabel)) {
+            label.setVerticalAlignment(javax.swing.SwingConstants.TOP);
+            label.setPreferredSize(new java.awt.Dimension(labelWidth, label.getPreferredSize().height));
+            label.setBorder(new EmptyBorder(0, 0, 0, 8));
+        }
+        com.intellij.ui.OnePixelSplitter splitter =
+            new com.intellij.ui.OnePixelSplitter(true, "mpvs.settings.framePrefixes.split", 0.5f);
+        splitter.setFirstComponent(framePrefixCell(skipLabel, frameSkipPrefixesField));
+        splitter.setSecondComponent(framePrefixCell(bizLabel, bizJarPrefixesField));
+        splitter.setShowDividerControls(false);
+        // 拖拽下限跟随组件 minimumSize（两框保底 60px 高）
+        splitter.setHonorComponentsMinimumSize(true);
+        return splitter;
+    }
+
+    /** Kotlin 局部函数 {@code cell} 等价：一格 = 标签（左）+ 文本框（占满余宽）。 */
+    private static JPanel framePrefixCell(JBLabel label, JComponent field) {
+        JPanel cell = new JPanel(new BorderLayout());
+        cell.setOpaque(false);
+        // 上下各 4px 呼吸空隙，中缝分隔条不贴框
+        cell.setBorder(new EmptyBorder(4, 0, 4, 0));
+        cell.add(label, BorderLayout.WEST);
+        cell.add(field, BorderLayout.CENTER);
+        return cell;
     }
 
     /** JOIN 图渲染方式（T-Dgm-04）：原生 Diagrams 框架 vs 经典自绘渲染器。 */
@@ -1217,11 +1259,12 @@ public class PluginSettingsPanel implements Disposable {
                 // T-SourceJumpFunnel P1-3：帧过滤前缀（自研框架包名登记，热下发 agent）
                 frameSkipPrefixesField.setText(PluginSettings.getInstance().getState().getSourceFrameSkipPrefixes());
                 frameSkipPrefixesField.setToolTipText(msg("settings.sourceFrameSkipPrefixes.tip"));
-                addRow(p2, g2, msg("settings.sourceFrameSkipPrefixes"), frameSkipPrefixesField);
                 // T-ToolSiteBizFrame：JAR 业务帧反向名单（与跳过前缀语义相反，热下发 agent）
                 bizJarPrefixesField.setText(PluginSettings.getInstance().getState().getSourceFrameBizJarPrefixes());
                 bizJarPrefixesField.setToolTipText(msg("settings.sourceFrameBizJarPrefixes.tip"));
-                addRow(p2, g2, msg("settings.sourceFrameBizJarPrefixes"), bizJarPrefixesField);
+                // T-FramePrefixResize：两框置入垂直分栏（拖拽中缝重分配高度 + 比例记忆）；
+                // 行 fill=HORIZONTAL，宽度随设置对话框拉伸，占位文案不再截断
+                addRow(p2, g2, "", buildFramePrefixesSplitter(), GridBagConstraints.HORIZONTAL);
                 // T-PrefixValidate：校验结果行（问题数 + 首条，悬停看全部；一键修复按钮同行）
                 addRow(p2, g2, "", prefixValidationRow);
             });
@@ -1335,12 +1378,17 @@ public class PluginSettingsPanel implements Disposable {
     }
 
     private static void addRow(JPanel panel, GridBagConstraints gbc, String label, JComponent component) {
+        addRow(panel, gbc, label, component, GridBagConstraints.NONE);
+    }
+
+    /** Kotlin 默认参数等价重载：{@code fill} 缺省 NONE（T-FramePrefixResize 分栏行用 HORIZONTAL）。 */
+    private static void addRow(JPanel panel, GridBagConstraints gbc, String label, JComponent component, int fill) {
         gbc.gridx = 0;
         gbc.weightx = 0.0;
         panel.add(new JBLabel(label), gbc);
         gbc.gridx = 1;
         gbc.weightx = 1.0;
-        gbc.fill = GridBagConstraints.NONE;
+        gbc.fill = fill;
         panel.add(component, gbc);
         gbc.fill = GridBagConstraints.NONE;
         gbc.gridy++;
