@@ -260,6 +260,94 @@ class EasyQueryConverterTest : BasePlatformTestCase() {
         )
     }
 
+    fun testEq10UpdatableSetColumnsWithoutWhereWarns() {
+        // 普查批：updatable + setColumns 无 where 段 → 全表更新警示
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private EasyEntityQuery easyEntityQuery;
+
+                public void demo(Topic entity) {
+                    easyEntityQuery.updatable(entity)
+                        .setColumns(s -> s.name().set("新标题"))
+                        .execute();
+                }
+            }
+
+            class EasyEntityQuery {}
+
+            $topicEntity
+            """.trimIndent(),
+        )
+        val result = newService().preview(call("updatable"))
+        assertNotNull(result)
+        assertEquals("⚠ 无 WHERE 条件，将更新全表数据！", result!!.warning)
+        assertEquals("UPDATE t_topic\nSET topic_name = '新标题'", result.sql)
+    }
+
+    fun testEq10UpdatableSetColumnsWithWhereNoWarning() {
+        // 对照：updatable + setColumns 带 where 段 → 不出警示
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private EasyEntityQuery easyEntityQuery;
+
+                public void demo(Topic entity) {
+                    easyEntityQuery.updatable(entity)
+                        .setColumns(s -> s.name().set("标题b"))
+                        .where(o -> o.id().eq("456"))
+                        .execute();
+                }
+            }
+
+            class EasyEntityQuery {}
+
+            $topicEntity
+            """.trimIndent(),
+        )
+        val result = newService().preview(call("updatable"))
+        assertNotNull(result)
+        assertNull("带 WHERE 的 update 不应出全表警示", result!!.warning)
+        assertEquals(
+            "UPDATE t_topic\nSET topic_name = '标题b'\nWHERE t_id = '456'",
+            result.sql,
+        )
+    }
+
+    fun testEq10UpdatableEntityWithoutPrimaryKeyWarns() {
+        // 普查批：updatable(entity) 无 setColumns + 实体无 primaryKey 列 → 全表更新警示 + notes 按实际语义
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private EasyEntityQuery easyEntityQuery;
+
+                public void demo(Plain entity) {
+                    easyEntityQuery.updatable(entity).execute();
+                }
+            }
+
+            class EasyEntityQuery {}
+
+            @com.easy.query.core.annotation.Table("t_plain")
+            class Plain {
+                @com.easy.query.core.annotation.Column(value = "p_name")
+                private String name;
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(call("updatable"))
+        assertNotNull(result)
+        assertEquals("⚠ 无 WHERE 条件，将更新全表数据！", result!!.warning)
+        assertEquals(
+            "UPDATE t_plain\nSET p_name = ?" +
+                "\n-- updatable(entity)：未调用 setColumns，按实体全列 SET 近似（无 WHERE 条件，将更新全表）",
+            result.sql,
+        )
+    }
+
     fun testEq10DeletableWithWhereRendersDelete() {
         myFixture.configureByText(
             "Demo.java",
