@@ -203,4 +203,31 @@ class UnboundedWriteDetectorTest {
         val risk = UnboundedWriteDetector.detect("DELETE FROM t /* WHERE 1=1 LIKE '%' */")
         assertEquals(setOf(FindingKind.MISSING_WHERE), risk.kinds())
     }
+
+    // ======================== 空白规范化（T-McpWalkFindings S2） ========================
+
+    /**
+     * 真机 20261005 归因：mapper 渲染产物保留源 XML 换行+缩进（多动态分支空隙尤甚），经
+     * SqlCommentStripper 后空行变**真空行**（`\n\n` 行内无空格），JSqlParser 5.3 简单模式对
+     * 真空行解析失败且静默返回 null → 误报 PARSE_FAILED（mapper_check 空参模拟 6/10
+     * DANGEROUS）。detect 入口规范化后按真实语法判定（本例有界 WHERE → 零 finding）。
+     * 反向验证：摘 normalizeWhitespace 接线 → 本用例必红（PARSE_FAILED）。
+     */
+    @Test
+    fun `真空行产物规范化后不再误报PARSE_FAILED`() {
+        // 变异矩阵定案的毒性形态：真空行（`\n\n` 行内无空格）+ 行首缩进内容行——JSqlParser 5.3
+        // 简单模式解析失败且静默 null（真机 mapper 渲染产物经 SqlCommentStripper 后即此形态）
+        val rendered = "select id from t\n\n\n        where a = ?\n\n\n        and b = ?"
+        val risk = UnboundedWriteDetector.detect(rendered)
+        assertTrue("真空行产物规范化后应可解析: ${risk.findings}", risk.findings.isEmpty())
+        assertFalse(risk.dangerous)
+    }
+
+    @Test
+    fun `normalizeWhitespace_折叠连续空白去首尾`() {
+        assertEquals(
+            "select a from t where b = ?",
+            UnboundedWriteDetector.normalizeWhitespace("  select a from t\n\n\n   where b = ?\n"),
+        )
+    }
 }

@@ -125,11 +125,14 @@ object JpqlConverter {
 
         // 8. 检测 DELETE JPQL → DeleteStatement
         if (sql.trimStart().uppercase().startsWith("DELETE")) {
+            // T-JpaDeleteWhereGuard：WHERE 接进条件树（与 HqlConverter 同款，两条链行为一致）——
+            // 此前 conditions 恒空，buildJpaWarning 对带 WHERE 的 DELETE 误报 BlockAttack 全表删除
+            val parsedDelete = JpaUpdateParser.parseDelete(sql)
             return Result(
                 sql = sql,
                 statement = DeleteStatement(
                     table = table,
-                    conditions = emptyList(),
+                    conditions = parsedDelete?.conditions ?: emptyList(),
                 ),
                 inClauseParams = inClauseParams,
             )
@@ -290,10 +293,12 @@ object JpqlConverter {
      */
     private fun mapEntityToTable(jpql: String, table: TableInfo): String {
         if (table.entityClassName.isBlank()) return jpql
+        // 普查批：字面量掩码——`like '%UserEntity%'` 等单引号字面量内的实体名不得被替换
+        val (masked, literals) = JpaSqlLiteralMasking.mask(jpql)
         // 替换 FROM 子句中的实体类名（简单替换，仅在确认不是更大标识符的一部分时）
         // 注意：这里只做简单替换，精确替换需要完整语法解析
         val entityPattern = Regex("\\b${Regex.escape(table.entityClassName)}\\b")
-        return entityPattern.replace(jpql, table.tableName)
+        return JpaSqlLiteralMasking.unmask(entityPattern.replace(masked, table.tableName), literals)
     }
 
     /**

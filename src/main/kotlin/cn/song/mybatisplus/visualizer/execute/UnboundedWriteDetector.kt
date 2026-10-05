@@ -102,21 +102,43 @@ object UnboundedWriteDetector {
      * （fail 语义由调用方决定：[detect] 返回 PARSE_FAILED，RollbackSqlGenerator 返回 UNABLE）。
      */
     internal fun parseStatementsShared(cleaned: String): List<net.sf.jsqlparser.statement.Statement> {
+        // T-McpWalkFindings S2：key 与解析输入统一规范化（真空行免疫 + 两链 key 对齐共享）
+        val normalized = normalizeWhitespace(cleaned)
         astSlot?.let { slot ->
-            if (slot.cleaned === cleaned) return slot.statements
-            if (slot.cleaned.length == cleaned.length && slot.cleaned.hashCode() == cleaned.hashCode() &&
-                slot.cleaned == cleaned
+            if (slot.cleaned === normalized) return slot.statements
+            if (slot.cleaned.length == normalized.length && slot.cleaned.hashCode() == normalized.hashCode() &&
+                slot.cleaned == normalized
             ) {
                 return slot.statements
             }
         }
-        val statements = parseStatementsForTest(cleaned)
-        astSlot = AstSlot(cleaned, statements)
+        val statements = parseStatementsForTest(normalized)
+        astSlot = AstSlot(normalized, statements)
         return statements
     }
 
     /** LIKE 纯通配：至少一个 `%`，且只含 `%`/`_`。 */
     private val LIKE_WILDCARD_REGEX = Regex("[%_]*%[%_]*")
+
+    private val WHITESPACE_RUN = Regex("\\s+")
+
+    /**
+     * 空白规范化（T-McpWalkFindings S2）：连续空白（换行/缩进/空格）折叠为单空格并去首尾。
+     *
+     * 真机 20261005 实证链：mapper 渲染产物保留源 XML 换行+缩进（多动态分支空隙尤甚），
+     * 经 [SqlCommentStripper.strip] 后空行变**真空行**（`\n\n` 行内无空格）——JSqlParser 5.3
+     * 简单模式（allowComplexParsing 默认关）对真空行解析失败且**静默返回 null**（不抛异常，
+     * CCJSqlParserUtil.parseStatements/parse 失败即返回 null）→ [SqlAstParser] 非空断言 NPE
+     * → 本探测器 fail closed 误报 PARSE_FAILED（mapper_check 空参模拟 6/10 DANGEROUS，demo
+     * UserMapper.xml 实测）。折叠后产物可解析；字面量内空白被折叠不影响判定面（恒真/通配
+     * 判定与回滚推导对字面量空白左右对称不敏感）。
+     *
+     * 接线位置＝**共享解析槽入口**（[parseStatementsShared]）而非本探测器 detect：确认流与
+     * 回滚链必须拿到同一个槽 key 才能共享解析（T-PS5-02 的「共一次」），只在 detect 侧规范化
+     * 会让回滚链的未规范化 key 错位、二次解析（testFast 首跑 `SqlPreviewPanelRollbackParseShape
+     * Test.含注释文本_面板一次点击仍只解析一次` 当场抓到）。回滚链同样因此获得真空行免疫。
+     */
+    internal fun normalizeWhitespace(sql: String): String = WHITESPACE_RUN.replace(sql, " ").trim()
 
     /**
      * 探测 SQL 文本（可含注释与多条语句）。UPDATE/DELETE 逐条判定；INSERT 不适用（忽略）；

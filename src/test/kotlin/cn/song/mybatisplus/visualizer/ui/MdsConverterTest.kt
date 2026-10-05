@@ -215,6 +215,59 @@ class MdsConverterTest : BasePlatformTestCase() {
         assertTrue("全表删除应渲染 DELETE 语句", result.sql.startsWith("DELETE FROM t_user"))
     }
 
+    fun testDsUpdateWithoutWhereWarns() {
+        // 普查批：update 无 where → 全表更新警示（对齐 deleteFrom 既有形态）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void updateDemo() {
+                    int rows = org.mybatis.dynamic.sql.dsl.UpdateDSL.update(SqlTableHolder.user)
+                        .set(SqlTableHolder.userName)
+                        .equalTo("b")
+                        .build()
+                        .render(null);
+                }
+            }
+
+            $stubs
+            """.trimIndent(),
+        )
+        val result = newService().preview(call("update"))
+        assertNotNull(result)
+        assertEquals("⚠ 无 WHERE 条件，将更新全表数据！", result!!.warning)
+        assertTrue("全表更新应渲染 UPDATE 语句", result.sql.startsWith("UPDATE t_user\nSET user_name = 'b'"))
+    }
+
+    fun testDsUpdateWithWhereNoWarning() {
+        // 对照：update 带 where 段 → 不出警示
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                public void updateDemo() {
+                    int rows = org.mybatis.dynamic.sql.dsl.UpdateDSL.update(SqlTableHolder.user)
+                        .set(SqlTableHolder.userName)
+                        .equalTo("c")
+                        .where(SqlTableHolder.userId, org.mybatis.dynamic.sql.SqlBuilder.isEqualTo(9))
+                        .build()
+                        .render(null);
+                }
+            }
+
+            $stubs
+            """.trimIndent(),
+        )
+        val result = newService().preview(call("update"))
+        assertNotNull(result)
+        assertNull("带 WHERE 的 update 不应出全表警示", result!!.warning)
+        assertEquals(
+            "UPDATE t_user\nSET user_name = 'c'\nWHERE id = 9" +
+                "\n-- MyBatis Dynamic SQL：运行时渲染占位符为 #{parameters[..]}（MyBatis3 策略），预览统一 ? 顺序占位",
+            result.sql,
+        )
+    }
+
     fun testDsNegativeCaseNotRecognized() {
         // 负例守卫：普通类同名 select 方法（非 DSL 工厂 qualifier）不识别
         myFixture.configureByText(

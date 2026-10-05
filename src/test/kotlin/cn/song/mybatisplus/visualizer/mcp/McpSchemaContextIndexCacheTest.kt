@@ -70,13 +70,13 @@ class McpSchemaContextIndexCacheTest {
 
         val first = McpSchemaContextService.collectEntries(listOf(ds), listOf("user"), 8)
         assertEquals("首次调用建索引", 1, scans)
-        assertEquals(1, first.first.size)
-        assertTrue(first.second.isEmpty())
+        assertEquals(1, first.entries.size)
+        assertTrue(first.missing.isEmpty())
 
         val second = McpSchemaContextService.collectEntries(listOf(ds), listOf("user"), 8)
         assertEquals("TTL 内第二次调用不得重扫（T-PS6-02 的省法）", 1, scans)
-        assertEquals("命中缓存后输出必须逐条一致", first.first, second.first)
-        assertEquals("缺失表读数一致", first.second, second.second)
+        assertEquals("命中缓存后输出必须逐条一致", first.entries, second.entries)
+        assertEquals("缺失表读数一致", first.missing, second.missing)
     }
 
     @Test
@@ -143,8 +143,8 @@ class McpSchemaContextIndexCacheTest {
     fun `缓存条目与调用内索引不是同一份状态`() {
         inject(listOf(table("user")))
         val ds = Any()
-        val first = McpSchemaContextService.collectEntries(listOf(ds), listOf("user"), 8).first
-        val second = McpSchemaContextService.collectEntries(listOf(ds), listOf("user"), 8).first
+        val first = McpSchemaContextService.collectEntries(listOf(ds), listOf("user"), 8).entries
+        val second = McpSchemaContextService.collectEntries(listOf(ds), listOf("user"), 8).entries
         // collectEntries 对命中表做 name 覆写（copy），故两次调用产出的是各自的对象图——
         // 断言「结果等值但缓存确实被复用」：计数探针已证复用（scans==1），此处只钉不共享可变对象
         assertEquals(first, second)

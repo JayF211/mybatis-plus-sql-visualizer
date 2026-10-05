@@ -18,6 +18,15 @@ import com.intellij.openapi.startup.ProjectActivity
 class LogStartupCapture : ProjectActivity {
 
     override suspend fun execute(project: Project) {
+        // T-FirstUseFreshInstallConsent S1：出厂未确认态项目打开即确认——必须在任何 early return
+        // 之前（自动监听开关与本确认无关）。同意持久化先于任何 Run → 首轮 Run 即 premain 完整捕获。
+        runCatching {
+            cn.song.mybatisplus.visualizer.log.agent.AgentManager.getInstance(project).maybeAskConsentAtStartup()
+        }.onFailure { t ->
+            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw t
+            LOG.warn("LogStartupCapture: 启动期增强捕获确认失败（不影响项目打开）", t)
+        }
+
         val settings = PluginSettings.getInstance().state
         LOG.info("LogStartupCapture.execute: 触发（project=${project.name}, logAutoCaptureOnStart=${settings.logAutoCaptureOnStart}, suppressed=${settings.logAutoCaptureSuppressed}）")
 

@@ -84,12 +84,42 @@ object McpSourceLocator {
                         McpToolErrors.SOURCE_NOT_FOUND,
                         "line $line is beyond the end of $filePath (${lastLine + 1} lines).",
                     )
-                    document.getLineStartOffset((line - 1).coerceAtLeast(0))
+                    // T-McpWalkFindings S1：定位锚取**行内首个非空白字符**——gutter/编辑器标注的
+                    // 行号是语句标签行，而标签行行首是缩进空白 leaf（XML PSI 里挂父级 content），
+                    // findElementAt 沿 parentOf 爬到的是 mapper 根而非语句 tag（真机 20261005 实测：
+                    // line=标签行 SOURCE_NOT_FOUND、line=语句体首行命中）。行内首非空白直接落在
+                    // 标签/语句文本上；纯空白行顺延下一行，全落空退回行首旧行为（少新增失败模式，
+                    // 定位链自行报错）。
+                    firstNonBlankOffset(document, line - 1) ?: document.getLineStartOffset(line - 1)
                 }
             }
             renderAtOffset(project, psiFile, offset, filePath, line)
         }
         return outcome
+    }
+
+    /** 纯空白行顺延上限（起始行之外最多再试 2 行：标签行与语句体之间夹空行/注释行的容错边界）。 */
+    private const val MAX_BLANK_LINE_SKIP = 2
+
+    /**
+     * 行内首个非空白字符偏移（[startLine] 0-based）；该行纯空白时顺延下一行，
+     * 最多越界 [MAX_BLANK_LINE_SKIP] 行，全部落空返回 null。
+     */
+    private fun firstNonBlankOffset(document: com.intellij.openapi.editor.Document, startLine: Int): Int? {
+        val textLength = document.textLength
+        val lastLine = document.getLineNumber(textLength)
+        val chars = document.charsSequence
+        var line = startLine
+        var skips = 0
+        while (line <= lastLine && skips <= MAX_BLANK_LINE_SKIP) {
+            var offset = document.getLineStartOffset(line)
+            val end = document.getLineEndOffset(line).coerceAtMost(textLength)
+            while (offset < end && Character.isWhitespace(chars[offset])) offset++
+            if (offset < end) return offset
+            line++
+            skips++
+        }
+        return null
     }
 
     /**
@@ -133,7 +163,8 @@ object McpSourceLocator {
             if (tag == null) {
                 return fail(
                     McpToolErrors.SOURCE_NOT_FOUND,
-                    "no mapper statement (select/insert/update/delete) at the given location ($location).",
+                    "no mapper statement (select/insert/update/delete) at the given location ($location)." +
+                        " Pass the line of a statement tag or any line inside it.",
                 )
             }
             val statementId = tag.getAttributeValue("id")

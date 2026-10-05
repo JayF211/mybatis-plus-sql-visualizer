@@ -62,8 +62,89 @@ object RunConfigurationProcessListener {
         return isModuleBasedProfile(profile)
     }
 
-    /** 纯判定（测试缝）：profile 是否模块型主配置；反射失败保守按主进程处理（宁清零勿永不归零）。 */
-    private fun isModuleBasedProfile(profile: Any): Boolean = try {
+    /**
+     * T-FirstUseFreshInstallConsent S2：订阅后补扫在跑的主配置进程——堵「事件早于订阅」竞态。
+     * 沙盒实录（idea.log 12:41 会话）：项目打开瞬间 Run 已在跑，EXECUTION_TOPIC 订阅完成于
+     * 进程出现之后 → 首轮既无确认弹窗也无 attach（全静默）。
+     *
+     * **判据勘误（R3）**：R2 首版用 `descriptor.getRunProfile()` 探测主配置——243 平台
+     * `RunContentDescriptor` 无此方法（javap 全方法列表实证，构造器可传入但无 getter），
+     * 每个描述符 `NoSuchMethodException` 被静默 continue，补扫结构性空转零诊断。现改为
+     * **JVM 进程判据**：handler 为 BaseOSProcessHandler 系实例（Java 应用/测试 fork 均是；
+     * HTTP 客户端 handler 不在该继承链，天然排除）。残余口径（登记）：首启窗口的测试 fork JVM
+     * 会被视为候选——弹确认有三态+冷却兜底，可接受。
+     *
+     * **诊断性红线（R3）**：每个描述符的跳过原因记 debug、汇总结果记 INFO——「补扫没命中」
+     * 必须可观测，禁止再出现「结构性空转零日志」形态。
+     *
+     * 全链反射（execution 域 API 不在编译 classpath，同 [isModuleBasedLaunch] 口径）；
+     * 任何异常只记 WARN 降级不抛（补扫是补位路径，绝不能影响项目打开）。
+     */
+    private fun backfillRunningProcesses(project: Project) {
+        runCatching {
+            val rcmClass = Class.forName(
+                "com.intellij.execution.ui.RunContentManager",
+                true,
+                platformClassLoader,
+            )
+            val rcm = rcmClass.getMethod("getInstance", Project::class.java).invoke(null, project)
+            val raw = runCatching { rcmClass.getMethod("getAllDescriptors").invoke(rcm) }.getOrNull()
+            val descriptors = when (raw) {
+                is Array<*> -> raw
+                is Collection<*> -> raw.toTypedArray()
+                else -> null
+            } ?: run {
+                LOG.info("backfill: getAllDescriptors 不可用——跳过补扫（project=${project.name}）")
+                return
+            }
+            var noHandler = 0
+            var dead = 0
+            var nonJvm = 0
+            var backfilled = 0
+            val jvmHandlerClass = runCatching {
+                Class.forName("com.intellij.execution.process.BaseOSProcessHandler", true, platformClassLoader)
+            }.getOrNull()
+            for (descriptor in descriptors) {
+                val d = descriptor ?: continue
+                val handler = runCatching {
+                    d.javaClass.getMethod("getProcessHandler").invoke(d)
+                }.getOrNull()
+                if (handler == null) {
+                    noHandler++
+                    LOG.debug("backfill: 描述符 ${d.javaClass.name} 无 processHandler——跳过")
+                    continue
+                }
+                val alive = runCatching {
+                    val terminated = handler.javaClass.getMethod("isProcessTerminated").invoke(handler) as? Boolean
+                    val terminating = handler.javaClass.getMethod("isProcessTerminating").invoke(handler) as? Boolean
+                    terminated == false && terminating == false
+                }.getOrNull()
+                if (alive != true) {
+                    dead++
+                    LOG.debug("backfill: 描述符 ${d.javaClass.name} 进程已结束/正在结束——跳过")
+                    continue
+                }
+                val isJvm = jvmHandlerClass != null && jvmHandlerClass.isInstance(handler)
+                if (!isJvm) {
+                    nonJvm++
+                    LOG.debug("backfill: 描述符 ${d.javaClass.name} handler 非 JVM 进程（${handler.javaClass.name}）——跳过")
+                    continue
+                }
+                backfilled++
+                LOG.info("backfill: 发现订阅前已在跑的 JVM 进程（${handler.javaClass.name}）——补发 onProcessAppeared")
+                project.getService(AgentManager::class.java).onProcessAppeared(handler, isMainConfigLaunch = true)
+            }
+            LOG.info(
+                "backfill: 订阅后补扫完成——描述符 ${descriptors.size} 个，补发 $backfilled" +
+                    "（无handler $noHandler / 已结束 $dead / 非JVM $nonJvm，project=${project.name}）",
+            )
+        }.onFailure { t ->
+            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
+            LOG.warn("backfill: 订阅后在跑进程补扫失败（补位路径，不影响项目打开）", t)
+        }
+    }
+
+    /** 纯判定（测试缝）：profile 是否模块型主配置；反射失败保守按主进程处理（宁清零勿永不归零）。 */    private fun isModuleBasedProfile(profile: Any): Boolean = try {
         Class.forName(
             "com.intellij.execution.configurations.ModuleBasedConfiguration",
             true,
@@ -148,6 +229,7 @@ object RunConfigurationProcessListener {
                 listener,
             )
             LOG.info("RunConfigurationProcessListener: 已订阅 EXECUTION_TOPIC（project=${project.name}）")
+            backfillRunningProcesses(project)
             true
         } catch (t: Throwable) {
             if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传

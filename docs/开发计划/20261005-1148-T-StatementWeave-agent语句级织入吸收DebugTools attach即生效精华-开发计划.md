@@ -1,0 +1,94 @@
+# T-StatementWeave：agent 语句级织入——吸收 DebugTools「attach 即生效」精华——开发计划
+
+> 2026-10-05 用户点名转正：原 [T-FirstUsePremainConsent 计划](20261005-1026-T-FirstUsePremainConsent-首次启用增强捕获首轮运行零捕获修复-开发计划.md) §三 S6「agent 语句级织入」从登记候选升级为本任务。用户质询「DebugTools 插件支持项目启动后贴附上，这个精华没有吸收吗」——结论：只吸收了 retransform 教训（`AgentMain` javadoc「DebugTools 半成品陷阱的硬验收项」），**织入点模型这个真正的精华没吸收**。本计划写完停等确认，未获确认不实施。
+
+## 一、缺口归因（现状架构事实）
+
+- 当前捕获模型：`SqlHookTransformer` 只织驱动 `connect(String,Properties)`，连接**创建时**包装代理；`StatementHandler`（采集核心：参数捕获/耗时/栈定位/批处理）是 `InvocationHandler`，活在包装代理后面。
+- attach（agentmain）虽对已加载驱动类 `retransformClasses`，但改的只是 connect 方法体——只影响**之后新建**的连接；池化场景（Hikari）attach 前建好的老连接永远裸奔 → attach 兜底对存量连接结构性零捕获。
+- DebugTools 类工具 attach 即生效的原因：织入点在**语句执行方法**（execute 族方法体）——钩子随方法调用触发，与连接/Statement 对象的创建时间无关，retransform 后下一次 execute 即带钩子。
+
+## 二、已实证事实（2026-10-05 javap + zip 扫描，实施者可直接引用）
+
+| 项 | mysql-connector-j 8.0.33 | h2 2.3.232 |
+|---|---|---|
+| 语句实现类 | `com.mysql.cj.jdbc.StatementImpl` / `ClientPreparedStatement` / `ServerPreparedStatement`（另有 pooled Wrapper 族见 §四.5） | `org.h2.jdbc.JdbcStatement` / `JdbcPreparedStatement` / `JdbcCallableStatement` |
+| 带参形态 | `StatementImpl.execute(String)` / `executeQuery(String)` / `executeUpdate(String)`（含 int[]/String[] 重载） | `JdbcStatement.execute(String)`（final）/ `executeQuery(String)` / `executeUpdate(String)` |
+| PS 无参形态 | `ClientPreparedStatement.execute()` / `executeQuery()` / `executeUpdate()` | `JdbcPreparedStatement.execute()` / `executeQuery()` / `executeUpdate()` |
+| 连接归属 | `ConnectionImpl.getURL()` **public** 直调 | `JdbcConnection.getURL()` **包私有**（反射 + setAccessible，classpath 应用为未命名模块可行） |
+| 内部字段线索 | StatementImpl 无裸 sql 字段（SQL 在 Query 对象链，`getQueryAsString()` 待 javap） | `JdbcStatement.batchCommands`（ArrayList\<String\>，批处理现成）/ `executingCommand`（CommandInterface，toString 是否含 sql 待验） |
+| 批处理入口 | `addBatch(String)`（带参，可织入累积） | 同左 |
+
+IDE 侧既有地基：`AgentEventAdapter` 事件消费、`AgentUrlRegistry`/`JdbcUrlDialects` URL 推断链、`CONFIG` 热下发、脱敏/跳过前缀/业务帧定位全部在 `EventBuilder` 下游——语句级钩子只须产出一个同构事件。
+
+## 三、方案设计
+
+### S1：DriverRegistry 语句面登记
+
+- `isWeavable` 拆两面：驱动面（现 connect 织入，不动）+ **语句面**（新增：上述两驱动的语句实现类名单；按具体类名登记，织不上安全降级——沿用现 classloader 契约「织入期判定可见性、回调自吞一切 Throwable」红线）。
+- 织入面匹配走精确名 + 前缀双轨（防驱动小版本类名漂移静默漏织；漂移即降级不炸宿主）。
+
+### S2：StatementWeaver（新织入器，与 ConnectWeaver 并列）
+
+- 织 execute 族方法体，**入口+出口双插桩**：入口解析 sql 并记 nanoTime 起点，出口组装事件（耗时/异常/影响行数对齐代理层 `StatementHandler` 语义）；异常路径记录类名+消息后**原样重抛**（宿主语义不变，代理层同红线）。
+- 带参形态 sql 从方法参数 aload 直取；无参 PS 形态从 S3 弱映射取，取不到按 S3 盲区策略处置。
+- `executeBatch` 从 `addBatch(String)` 织入累积的批串组装（弱映射/字段，同 PS 口径）。
+- 回调入口 `SqlHookCallbacks.onStatement(...)` 新增静态方法（签名被织入字节码硬编码，与 ConnectWeaver↔onConnection 同步约束相同，javadoc 互指）。
+- retransform 合规：只改方法体、不增删成员（与 ConnectWeaver 同约束，agentmain 可重转换前提）。
+
+### S3：SQL 解析链与盲区处置
+
+- **PreparedStatement sql 登记**：织驱动的 `prepareStatement(String)`（及 `nativeSQL` 不需要）出口，把「PS 实例 → sql」写入**弱引用映射**（WeakHashMap/Identity 弱键，PS 被 GC 或 `close()` 织入移除——内存边界见 §四.1）。attach 后新建的 PS 全覆盖。
+- **attach 前已存在的 PS**（映射未登记）：一期**跳过不上报 + 计数器**（`unresolvedPreparedStatements`，宿主侧可观测）；驱动字段反射兜底（mysql Query 链 / h2 executingCommand）列二期，先证伪 §四.2/3 再做。
+- Statement 带参形态零盲区（sql 就在参数里）。
+
+### S4：连接归属链
+
+- 语句钩子从 `statement.getConnection()` 拿物理连接，URL 解析顺序：包装代理标记（attach 后新连接已带）→ 驱动内部 `getURL()` 反射（mysql public 直调 / h2 setAccessible 包私有）→ 最近 connect 钩子 URL 兜底 → 空（IDE 侧推断链接管，事件 url 允许空）。
+- 方言识别复用 `JdbcUrlDialects`，空 url 事件面板按「来源未知」既有降级显示。
+
+### S5：attach / premain 接线
+
+- `AgentMain.retransformLoadedDrivers` 扩展为双面（驱动面 + 语句面）：attach 时对**已加载的语句实现类** retransform——这是「attach 即生效」的直接落点。
+- premain 路径零改动（transformer 挂上后新加载类自动织入）。
+
+### S6：IDE 侧配套
+
+- 无 url 事件消费兜底（推断链）。
+- **文案口径修订**：R2 S2 能力边界通知与状态行从「挂载前的连接不在捕获范围，重新运行后完整生效」改为「已挂载，此后执行的 SQL 即时可见；挂载前已 prepare 且未再执行的语句不在范围内」——attach 兜底价值从「下轮才完整」升级为「立即可用」。
+- attach 兜底挂载成功后可同步触发一次回执性提示计数（登录 idea.log，不新增弹窗）。
+
+### S7：测试与反向验证
+
+- agent 单测：`FakeDriver` 扩展语句实现类 + 织入端到端（对齐 `ConnectWeaveEndToEndTest` 形态）：带参 execute / PS 映射形态 / 盲区跳过计数 / 批处理 / 异常原样重抛 / url 反射失败降级。
+- 真驱动端到端：mysql 8.0.33 + h2 2.3.232 双 jar 驱动级测试（现有真驱动测试同形态），**attach 时序模拟**：先建连接池 → 再 install（retransform 语句面）→ 断言老连接上的后续 execute 产出事件（本任务的核心判别用例）。
+- 反向验证：摘 S5 的语句面 retransform → 上述 attach 时序用例必红（两次读数留档）。
+- IDE 侧：`AgentPremainConsentTest` 文案断言随 S6 修订；agent+config 全包回归 + `testFast`。
+- 宿主零影响红线验证：钩子内异常注入 → 宿主 SQL 执行结果不变（现有采集红线测试同款）。
+- 沙盒走查（留下轮批可并）：长跑 demo 中途 attach 场景面板可见性 + 老连接盲区计数展示。
+
+## 四、待验证前提（实施者先证伪再动手）
+
+1. **PS 弱映射内存边界**：键必须弱引用（PS 池长持有不泄漏）；规模上限与驱逐策略；`close()` 织入移除的时机准确性（连接池复用 close 是归还不是关闭——归还后映射应保留，判据=GC 而非 close，倾向只按 GC 清理不织 close）。
+2. **mysql sql 字段反射链**：`StatementImpl` 的 Query 对象链（`query` 字段 → `getQueryAsString()`）逐环 javap 实证后才可做字段兜底；一期不做则盲区跳过策略即终态。
+3. **h2 字段兜底可行性**：`executingCommand`（CommandInterface）的 toString/内部字段是否含原始 sql；`batchCommands` 能否直接服务批处理事件。
+4. **插桩复杂度**：入口+出口双插桩在 ASM 层对多返回点方法（catch/finally/异常路径）的覆盖——若复杂超预算，降级方案=出口单点（duration 缺省，sql 仍可得），先保功能后保耗时精度。
+5. **Wrapper 族是否登记**：mysql `StatementWrapper`/`PreparedStatementWrapper` 是 pooled/connection-wrapper 形态，Hikari 默认透传原生句柄大概率不需要；误登记会撞 `ProxySupport.isOurProxy` 幂等（无害但浪费）。先只登记原生实现类，实测漏了再补。
+6. **性能红线**：每条 execute 过钩子的 volatile 短路成本须与现代理层同级（现有 perf 测试口径跑对照）；入口解析 sql（带参形态）是字符串引用传递非拷贝，预期零成本。
+7. **驱动版本面**：实证面为 demo 工程在用版本（mysql 8.0.33 / h2 2.3.232）；更老/更新版本类名漂移按 S1 前缀+降级契约兜住，不追全版本兼容。
+8. **`executeBatch` 空批/混合批**语义与代理层 `batchSqls` 组装口径对齐（防止同一批两种通道产出两种格式）。
+
+## 五、验收标准
+
+1. **核心**：应用已运行、连接池已建好的进程，中途 attach 后，**老连接上执行的新 SQL**（Statement 带参 + attach 后新建 PS）在面板即时可见——这是与现状的判别性差异。
+2. premain 场景全链路回归绿（现行为零变化）。
+3. 盲区如实：attach 前 prepare 的 PS 不产生错误/伪 sql 事件（跳过 + 计数可见）。
+4. 宿主零影响：钩子异常自吞、SQL 执行语义与结果不变（红线测试）。
+5. 反向验证「摘语句面 retransform 必红」两次读数留档；agent 定向 + `testFast` 绿。
+
+## 六、范围外（登记不做）
+
+- 更多驱动（PostgreSQL/Oracle/达梦等）语句类登记：随真库验证轮扩面（本任务架构留好登记位即可）。
+- 驱动字段反射兜底（mysql Query 链 / h2 Command）：二期，前提 §四.2/3 证伪后立项。
+- redefine（非 retransform）路径：不碰（增删成员能力带卸载屏障语义，风险面大收益小）。
+- connect 织入与包装代理层不拆：语句级织入是**补位**通道，代理层对新连接的参数捕获/耗时精度更优，双通道并存按事件幂等去重（同语句同时间窗一条）——去重判据随 S7 定。

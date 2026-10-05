@@ -2,8 +2,6 @@ package cn.song.mybatisplus.visualizer.mcp
 
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.extensions.ExtensionPointName
-import org.objectweb.asm.ClassWriter
-import org.objectweb.asm.Opcodes
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -17,7 +15,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * T-MarketCompatProxy 已证）；运行期生成的壳类不在 jar 内，verifier 不可见。壳类只覆写
  * 「继承即可满足接口」的最小面（三钩子直接继承 [McpToolsetSupport] 实现，连方法都不生成），
  * 平台的工具发现（kotlin-reflect 扫 @McpTool 注解方法/参数 schema/suspend 调用契约）全部
- * 走继承来的业务类编译产物，壳零参与。
+ * 走继承来的业务类编译产物，壳零参与。**壳字节码由 [TinyClassFileWriter] 手写生成，零外部
+ * 依赖**（真机 ASM 不可达修复，20261005：平台 262 自带 asm 库接管 org.objectweb.asm 包，
+ * 插件自带 asm jar 不可达 → 真机 NoClassDefFoundError，见开发计划 20261005-1335）。
  *
  * **注册链**：[McpGateFilterRegistrar]（mcp-optional.xml 的 postStartupActivity，mcpServer
  * 在场才加载）每项目启动触发 [registerOnce]，原子闸全应用只注册一次。探测
@@ -107,33 +107,12 @@ object McpToolsetDynamicRegistrar {
     }
 
     /** 壳类字节码：`final class <ShellName> extends <工具类> implements McpToolset`——
-     *  仅一个无参构造器（invokespecial 父类构造）。三钩子/工具方法全部继承，壳零额外成员。
-     *  V17（major 61）：243 JBR 21 可加载，且与插件常规编译目标一致；COMPUTE_MAXS 交由
-     *  ClassWriter 重算构造器的栈帧。internal 供壳生成器单测直接触达。 */
-    internal fun shellBytes(superClass: Class<*>, iface: Class<*>, shellName: String): ByteArray {
-        val internalName = shellName.replace('.', '/')
-        val superInternal = superClass.name.replace('.', '/')
-        val ifaceInternal = iface.name.replace('.', '/')
-        val cw = ClassWriter(ClassWriter.COMPUTE_MAXS)
-        cw.visit(
-            Opcodes.V17,
-            Opcodes.ACC_PUBLIC or Opcodes.ACC_FINAL or Opcodes.ACC_SUPER,
-            internalName,
-            null,
-            superInternal,
-            arrayOf(ifaceInternal),
-        )
-        cw.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null).apply {
-            visitCode()
-            visitVarInsn(Opcodes.ALOAD, 0)
-            visitMethodInsn(Opcodes.INVOKESPECIAL, superInternal, "<init>", "()V", false)
-            visitInsn(Opcodes.RETURN)
-            visitMaxs(1, 1)
-            visitEnd()
-        }
-        cw.visitEnd()
-        return cw.toByteArray()
-    }
+     *  仅一个无参构造器（invokespecial 父类构造）。工具方法/三钩子全部继承，壳零额外成员。
+     *  V17（major 61）：243 JBR 21 可加载，且与插件常规编译目标一致。
+     *  生成器为 [TinyClassFileWriter] 手写字节码（真机 ASM 不可达修复，见其 KDoc），零外部依赖。
+     *  internal 供壳生成器单测直接触达。 */
+    internal fun shellBytes(superClass: Class<*>, iface: Class<*>, shellName: String): ByteArray =
+        TinyClassFileWriter.shellBytes(shellName, superClass.name, iface.name)
 
     /** 壳类装载器：插件 classloader 的直系子加载器，defineClass 仅此一处（protected 合法调用点）。 */
     internal object ShellClassLoader : ClassLoader(McpToolsetDynamicRegistrar::class.java.classLoader) {

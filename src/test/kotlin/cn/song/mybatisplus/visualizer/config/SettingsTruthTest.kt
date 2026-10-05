@@ -90,10 +90,17 @@ class SettingsTruthTest {
     @Test
     fun testP2_状态变更广播点覆盖同意流三态() {
         val src = mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt")
-        // 广播点：定义 1 + attach 成功 1 + sweepOffline 1 + shutdownAll 1 + 确认流三态 3 + 重新授权 1 = 8
+        // 广播点：定义 1 + attach 成功 1 + sweepOffline 1 + shutdownAll 1 + 确认流单点 1 + 重新授权 1 = 6
         // T-M56Phase2-Premain（合流后 +1）：premain 回连建会话成功亦广播一次状态行（启动即捕获生效）
+        // T-FirstUsePremainConsent S1：同意流三态落盘收进 confirmEnhancedCapture 单点，单点内
+        // 1 处广播覆盖三态（新分支自动纳入，比逐分支三处更不易漏），总数 9 → 7
         val count = Regex("publishStatusChanged\\(\\)").findAll(src).count()
-        assertTrue("publishStatusChanged 应有 9 处（定义 1 + 调用 8，实际 $count）", count == 9)
+        assertTrue("publishStatusChanged 应有 7 处（定义 1 + 调用 6，实际 $count）", count == 7)
+        // 三态广播必须收口在确认落盘单点体内（三态语义运行期覆盖见 AgentConsentFlowTest / AgentPremainConsentTest）
+        assertTrue(
+            "confirmEnhancedCapture 单点体内应广播状态变更",
+            Regex("internal fun confirmEnhancedCapture[\\s\\S]*?publishStatusChanged\\(\\)").find(src) != null,
+        )
     }
 
     @Test

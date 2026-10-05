@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.model.SqlStatement
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.UpdateStatement
+import cn.song.mybatisplus.visualizer.psi.jpa.HqlEntityNameExtractor
 import com.intellij.openapi.project.Project
 
 /**
@@ -165,9 +166,15 @@ object HqlConverter {
 
         // 10. 检测 DELETE HQL → DeleteStatement
         if (sql.trimStart().uppercase().startsWith("DELETE")) {
+            // T-JpaDeleteWhereGuard：WHERE 接进条件树（与 UPDATE 同一套白名单 + Raw 兜底）——
+            // 此前 conditions 恒空，buildJpaWarning 对带 WHERE 的 DELETE 误报 BlockAttack 全表删除
+            val parsedDelete = JpaUpdateParser.parseDelete(sql)
             return Result(
                 sql = sql,
-                statement = DeleteStatement(table = table, conditions = emptyList()),
+                statement = DeleteStatement(
+                    table = table,
+                    conditions = parsedDelete?.conditions ?: emptyList(),
+                ),
                 inClauseParams = inClauseParams,
             )
         }
@@ -338,13 +345,15 @@ object HqlConverter {
      */
     private fun mapEntityToTable(hql: String, table: TableInfo, entityAlias: String? = null): String {
         if (table.entityClassName.isBlank()) return hql
-        var result = hql
+        // 普查批：字面量掩码——`like '%UserEntity%'` 等单引号字面量内的实体名不得被替换
+        val (masked, literals) = JpaSqlLiteralMasking.mask(hql)
+        var result = masked
         entityPattern(table.entityClassName)?.let { result = it.replace(result, table.tableName) }
         val alias = entityAlias?.takeIf { it.isNotBlank() && it != table.entityClassName }
         if (alias != null) {
             entityPattern(alias)?.let { result = it.replace(result, table.tableName) }
         }
-        return result
+        return JpaSqlLiteralMasking.unmask(result, literals)
     }
 
     /** 实体标识符全词匹配 Pattern（词边界防子串误伤；构造失败容错返回 null）。 */
@@ -371,7 +380,9 @@ object HqlConverter {
     private fun mapAssociationPath(hql: String, table: TableInfo): String {
         if (table.associations.isEmpty()) return hql
 
-        var result = hql
+        // 普查批：字面量掩码——字面量内的 `x.<关联字段名>.y` 点号串不得被改写或注入注释
+        val (masked, literals) = JpaSqlLiteralMasking.mask(hql)
+        var result = masked
         // 匹配三段式路径：alias.fieldName.propertyName
         val threeLevelPattern = Regex(
             "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)\\b"
@@ -397,7 +408,7 @@ object HqlConverter {
             }
         }
 
-        return result
+        return JpaSqlLiteralMasking.unmask(result, literals)
     }
 
     // ------------------------------------------------------------------
@@ -414,14 +425,18 @@ object HqlConverter {
         JpaAliasPropertyMapper.mapProperties(hql, table, scope)
 
     /**
-     * Fallback：实体不可解析时，从 FROM 子句提取实体名替换为 unknown_table。
+     * Fallback：实体不可解析时，从语句提取实体名替换为 unknown_table。
      * 仅替换第一个匹配（主表），避免重复替换导致 SQL 异常。
+     * T-HqlUpdateEntityMap S1：实体名提取走共享提取器（语句头优先）——
+     * UPDATE/DELETE 头同样命中，不再只认 FROM 子句。
      */
     private fun mapFallbackEntityToTable(hql: String, tableName: String): String {
-        val fromPattern = Regex("""\bFROM\s+([A-Z][a-zA-Z0-9_]*)\b""", RegexOption.IGNORE_CASE)
-        val match = fromPattern.find(hql) ?: return hql
-        val entityName = match.groupValues[1]
-        return hql.replaceFirst(entityName, tableName)
+        val entityName = HqlEntityNameExtractor.extract(hql) ?: return hql
+        // 普查批：掩码 + 词边界——裸 replaceFirst 会命中更长标识符的前缀子串
+        // （`OwnerInfo` 命中 `OwnerInfoHelper` → `unknown_tableHelper`）或字面量内容
+        val (masked, literals) = JpaSqlLiteralMasking.mask(hql)
+        val replaced = entityPattern(entityName)?.let { it.replaceFirst(masked, tableName) } ?: masked
+        return JpaSqlLiteralMasking.unmask(replaced, literals)
     }
 
     /**

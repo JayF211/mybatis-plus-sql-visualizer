@@ -203,6 +203,63 @@ class QuerydslConverterTest : BasePlatformTestCase() {
         assertTrue(result.sql.startsWith("DELETE FROM t_user"))
     }
 
+    fun testQdUpdateWithoutWhereWarnsAndNotes() {
+        // 普查批：update 无 where → 警示 + notes 行（对齐 delete 分支既有形态）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private JPAQueryFactory queryFactory;
+
+                public long demo() {
+                    return queryFactory.update(QUser.user)
+                        .set(QUser.user.name, "新名")
+                        .execute();
+                }
+            }
+
+            $stubs
+            """.trimIndent(),
+        )
+        val result = newService().preview(call("update"))
+        assertNotNull(result)
+        assertEquals("⚠ 无 WHERE 条件，将更新全表数据！", result!!.warning)
+        assertTrue("全表更新应渲染 UPDATE 语句", result.sql.startsWith("UPDATE t_user\nSET name = '新名'"))
+        assertTrue(
+            "无 WHERE 的 update 应在 notes 里给全表说明",
+            result.sql.contains("-- 无 WHERE 条件：update(根).execute() 将更新全表（运行时 Querydsl update 无条件即全改）"),
+        )
+    }
+
+    fun testQdUpdateWithWhereNoWarning() {
+        // 对照：update 带 where 段 → 不出警示
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private JPAQueryFactory queryFactory;
+
+                public long demo() {
+                    return queryFactory.update(QUser.user)
+                        .set(QUser.user.name, "x")
+                        .where(QUser.user.id.eq(2L))
+                        .execute();
+                }
+            }
+
+            $stubs
+            """.trimIndent(),
+        )
+        val result = newService().preview(call("update"))
+        assertNotNull(result)
+        assertNull("带 WHERE 的 update 不应出全表警示", result!!.warning)
+        assertEquals(
+            "UPDATE t_user\nSET name = 'x'\nWHERE id = 2" +
+                "\n-- Querydsl：Q 类仅携带 Java 属性名，列名按实体注解映射的近似 SQL",
+            result.sql,
+        )
+    }
+
     fun testQdNegativeCaseNotRecognized() {
         // 负例守卫：receiver 非 JPAQueryFactory（普通类同名方法）不识别
         myFixture.configureByText(

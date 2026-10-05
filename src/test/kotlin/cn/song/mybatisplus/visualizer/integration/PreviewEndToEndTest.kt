@@ -213,4 +213,59 @@ class PreviewEndToEndTest : BasePlatformTestCase() {
         return calls.firstOrNull { it.methodExpression.referenceName == methodName }
             ?: error("测试文件缺少方法调用: $methodName")
     }
+
+    // ------------------------------------------------------------------
+    // T-JpaDeleteWhereGuard 普查批：JPA 链 UPDATE 无 WHERE → BlockAttack 警示
+    // （此前 buildJpaWarning 只报 DELETE，无 WHERE 的 bulk UPDATE 静默）
+    // ------------------------------------------------------------------
+
+    fun testHqlUpdateWithoutWhere_blockAttackWarning() {
+        myFixture.configureByText("UserDao.java", """
+            public class UserDao {
+                public int bumpAll(EntityManager em) {
+                    return em.createQuery(
+                        "UPDATE UserEntity u SET u.status = 'X'")
+                        .executeUpdate();
+                }
+            }
+            interface EntityManager {
+                Query createQuery(String qlString);
+            }
+            interface Query { int executeUpdate(); }
+            @Entity
+            @Table(name = "user")
+            class UserEntity {}
+        """.trimIndent())
+        val call = findMethodCall("createQuery")
+        val result = service.previewHql(call)
+        assertNotNull("无 WHERE 的 UPDATE 应识别", result)
+        assertEquals("无 WHERE 的 UPDATE 应报全表更新警示", "⚠ [BlockAttack] 无 WHERE 条件，将更新全表数据！", result!!.warning)
+    }
+
+    fun testHqlUpdateWithWhere_noWarning() {
+        myFixture.configureByText("UserDao.java", """
+            public class UserDao {
+                public int bumpOne(EntityManager em, Long id) {
+                    return em.createQuery(
+                        "UPDATE UserEntity u SET u.status = 'X' WHERE u.id = ?1")
+                        .setParameter(1, id)
+                        .executeUpdate();
+                }
+            }
+            interface EntityManager {
+                Query createQuery(String qlString);
+            }
+            interface Query {
+                Query setParameter(int position, Object value);
+                int executeUpdate();
+            }
+            @Entity
+            @Table(name = "user")
+            class UserEntity {}
+        """.trimIndent())
+        val call = findMethodCall("createQuery")
+        val result = service.previewHql(call)
+        assertNotNull("带 WHERE 的 UPDATE 应识别", result)
+        assertEquals("带 WHERE 的 UPDATE 不应警示", null, result!!.warning)
+    }
 }

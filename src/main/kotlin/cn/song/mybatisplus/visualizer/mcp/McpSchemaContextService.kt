@@ -71,6 +71,9 @@ object McpSchemaContextService {
     /** 测试缝：数据源连接 URL 替身（默认 null = 走 DBN 反射链）。 */
     internal var dataSourceUrlForTest: ((Any) -> String?)? = null
 
+    /** 测试缝：数据源显示名替身（默认 null = 走 DBN 反射链；单测环境无 database 插件取不到名）。 */
+    internal var dsNameForTest: ((Any) -> String?)? = null
+
     fun buildContext(project: Project, dataSourceAlias: String?, tableNames: List<String>, maxTables: Int): Outcome {
         val requested = tableNames.size
         val limit = McpSchemaFormatter.clampMaxTables(maxTables)
@@ -100,8 +103,13 @@ object McpSchemaContextService {
         }
 
         val diagnostics = mutableListOf<String>()
-        val (entries, missing) = collectEntries(targetSources(project, alias, names), tableNames, limit, diagnostics)
-        return outcomeOf(entries, missing, limit, requested, diagnostics)
+        val result = collectEntries(targetSources(project, alias, names), tableNames, limit, diagnostics)
+        return outcomeOf(
+            result.entries, result.missing, limit, requested, diagnostics,
+            sourceNames = result.sourceNames,
+            // 未指名 alias = 跨源扫描命中，输出披露 auto-resolved 并带 pin 提示（S3）
+            autoResolved = alias == null,
+        )
     }
 
     /**
@@ -129,6 +137,8 @@ object McpSchemaContextService {
         limit: Int,
         requested: Int,
         diagnostics: List<String> = emptyList(),
+        sourceNames: List<String> = emptyList(),
+        autoResolved: Boolean = false,
     ): Outcome {
         if (entries.isEmpty()) {
             val scan = if (diagnostics.isEmpty()) "" else " (scanned: ${diagnostics.joinToString("; ")})"
@@ -143,7 +153,17 @@ object McpSchemaContextService {
                 ),
             )
         }
-        val text = McpSchemaFormatter.format(entries, limit, requested)
+        // T-McpWalkFindings S3：成功路径披露数据源来源——跨源静默解析不披露来源已有两次真机
+        // 实证（20260923 jpa_demo 顶替意图库 mp_demo、20261005 两套 user 列结构对不上），
+        // agent 拿到的 schema 可能不是意图库的表；未指名 alias 时附 pin 提示让下一次调用自纠。
+        val text = buildString {
+            if (sourceNames.isNotEmpty()) {
+                append("source: ").append(sourceNames.joinToString(", "))
+                if (autoResolved) append(" (auto-resolved; pass 'dataSource' to pin one)")
+                append("\n\n")
+            }
+            append(McpSchemaFormatter.format(entries, limit, requested))
+        }
         return Outcome(text)
     }
 
@@ -159,9 +179,12 @@ object McpSchemaContextService {
         tableNames: List<String>,
         limit: Int,
         diagnostics: MutableList<String>? = null,
-    ): Pair<MutableList<McpSchemaFormatter.TableEntry>, MutableList<String>> {
+    ): CollectResult {
         val entries = mutableListOf<McpSchemaFormatter.TableEntry>()
         val missing = mutableListOf<String>()
+        // 命中表所在数据源名（保序去重；T-McpWalkFindings S3 来源披露——跨源静默解析不披露
+        // 来源的两次真机实证：20260923 jpa_demo 顶替 mp_demo、20261005 两套 user 列结构对不上）
+        val sourceNames = LinkedHashSet<String>()
         // 身份键（DBN 数据源对象无稳定 equals 语义，沿用 DatabaseSchemaResolver 的 IdentityHashMap 口径）
         val indexBySource = java.util.IdentityHashMap<Any, Map<String, McpSchemaFormatter.TableEntry>>()
         for (name in tableNames.take(limit)) {
@@ -172,14 +195,22 @@ object McpSchemaContextService {
                 val found = index[key]
                 if (found != null) {
                     hit = found
+                    dsName(ds).takeIf { it != "?" }?.let { sourceNames.add(it) }
                     break
                 }
             }
             // 标签沿用调用方请求的表名（与一期一致：agent 看到的是自己写下的名字）
             if (hit == null) missing.add(name) else entries.add(hit.copy(name = name))
         }
-        return entries to missing
+        return CollectResult(entries, missing, sourceNames.toList())
     }
+
+    /** 取数结果：命中表、缺失表名、命中表所在数据源名（S3 来源披露；保序去重）。 */
+    internal data class CollectResult(
+        val entries: MutableList<McpSchemaFormatter.TableEntry>,
+        val missing: MutableList<String>,
+        val sourceNames: List<String> = emptyList(),
+    )
 
     /**
      * 单数据源扫描（一次遍历 → 表名索引）；[diagnostics] 非空时记一行实况供错误文案自解释。
@@ -320,10 +351,13 @@ object McpSchemaContextService {
         }.getOrNull()
     }
 
-    /** 数据源显示名（日志用；取不到返回 `?`）。 */
-    private fun dsName(ds: Any): String = runCatching {
-        Class.forName(DAS_DATA_SOURCE).getMethod("getName").invoke(ds) as? String
-    }.getOrNull() ?: "?"
+    /** 数据源显示名（S3 来源披露与日志用；取不到返回 `?`，披露侧跳过）。 */
+    private fun dsName(ds: Any): String =
+        dsNameForTest?.invoke(ds)
+            ?: runCatching {
+                Class.forName(DAS_DATA_SOURCE).getMethod("getName").invoke(ds) as? String
+            }.getOrNull()
+            ?: "?"
 
     /**
      * 读一个数据源 DasModel 里的全部表（表注释 + 列元数据 + 命名空间祖先链）。
