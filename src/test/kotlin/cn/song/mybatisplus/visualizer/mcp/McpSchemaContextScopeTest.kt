@@ -63,6 +63,7 @@ class McpSchemaContextScopeTest {
     fun tearDown() {
         McpSchemaContextService.modelTablesForTest = null
         McpSchemaContextService.dataSourceUrlForTest = null
+        McpSchemaContextService.dsNameForTest = null
         // T-PerfSweep6 T-PS6-02：跨调用索引缓存是进程级静态状态，而本类各用例用**字符串** "ds"
         // 当数据源键（生产键是 DBN 数据源对象）——字符串 equals 会让不同用例命中同一条缓存，
         // 探针计数随用例顺序漂移（`取数_同一数据源一次调用只遍历一次模型` 曾读成 0 次）。
@@ -120,12 +121,12 @@ class McpSchemaContextScopeTest {
     @Test
     fun `取数_只返回目标库那张且列不合并`() {
         inject(listOf(mpDemoUser, mysqlUser))
-        val (entries, missing) = McpSchemaContextService.collectEntries(listOf("ds"), listOf("user"), 8)
-        assertEquals(1, entries.size)
-        assertTrue("不应记入缺失: $missing", missing.isEmpty())
-        assertEquals(listOf("id", "username", "email"), entries[0].columns().map { it.name() })
-        assertEquals("用户表", entries[0].comment())
-        assertEquals("标签沿用请求写法", "user", entries[0].name())
+        val result = McpSchemaContextService.collectEntries(listOf("ds"), listOf("user"), 8)
+        assertEquals(1, result.entries().size)
+        assertTrue("不应记入缺失: ${result.missing()}", result.missing().isEmpty())
+        assertEquals(listOf("id", "username", "email"), result.entries()[0].columns().map { it.name() })
+        assertEquals("用户表", result.entries()[0].comment())
+        assertEquals("标签沿用请求写法", "user", result.entries()[0].name())
     }
 
     @Test
@@ -138,15 +139,15 @@ class McpSchemaContextScopeTest {
         McpSchemaContextService.modelTablesForTest = java.util.function.Function { ds ->
             if (ds == "ds-jpa") listOf(mysqlUser) else listOf(mpDemoUser)
         }
-        val (entries, missing) = McpSchemaContextService.collectEntries(
+        val result = McpSchemaContextService.collectEntries(
             listOf("ds-jpa", "ds-mp"),
             listOf("user"),
             8,
         )
-        assertEquals(1, entries.size)
-        assertTrue(missing.isEmpty())
-        assertEquals("应命中 mp_demo 那张，而非 jpa 数据源里的 mysql.user", "用户表", entries[0].comment())
-        assertEquals(listOf("id", "username", "email"), entries[0].columns().map { it.name() })
+        assertEquals(1, result.entries().size)
+        assertTrue(result.missing().isEmpty())
+        assertEquals("应命中 mp_demo 那张，而非 jpa 数据源里的 mysql.user", "用户表", result.entries()[0].comment())
+        assertEquals(listOf("id", "username", "email"), result.entries()[0].columns().map { it.name() })
     }
 
     @Test
@@ -157,14 +158,14 @@ class McpSchemaContextScopeTest {
             scans++
             listOf(mpDemoUser, mysqlUser)
         }
-        val (entries, missing) = McpSchemaContextService.collectEntries(
+        val result = McpSchemaContextService.collectEntries(
             listOf("ds"),
             listOf("user", "role", "absent"),
             8,
         )
         assertEquals("模型只读一次（索引共用）", 1, scans)
-        assertEquals(1, entries.size)
-        assertEquals(listOf("role", "absent"), missing)
+        assertEquals(1, result.entries().size)
+        assertEquals(listOf("role", "absent"), result.missing())
     }
 
     @Test
@@ -178,8 +179,81 @@ class McpSchemaContextScopeTest {
     }
 
     // ------------------------------------------------------------------
-    // 错误文案：scope 过滤掉全部表时必须与「未连接/内省未完成」区分
+    // 来源披露（T-McpWalkFindings S3）：跨源静默解析不披露来源的两次真机实证
+    // （20260923 jpa_demo 顶替意图库、20261005 两套 user 列结构对不上）后，成功路径
+    // 披露命中数据源；未指名 alias 附 auto-resolved + pin 提示。
     // ------------------------------------------------------------------
+
+    @Test
+    fun `来源披露_collectEntries记录命中源名并保序去重`() {
+        McpSchemaContextService.dsNameForTest = java.util.function.Function { if (it == "ds-mp") "mp_demo@localhost" else null }
+        McpSchemaContextService.dataSourceUrlForTest = java.util.function.Function { mpDemoUrl }
+        // ds-other 模型为空（不占命中），ds-mp 命中——sourceNames 只收命中源
+        McpSchemaContextService.modelTablesForTest = java.util.function.Function { ds ->
+            if (ds == "ds-mp") listOf(mpDemoUser) else emptyList()
+        }
+        val result = McpSchemaContextService.collectEntries(listOf("ds-other", "ds-mp"), listOf("user"), 8)
+        assertEquals(listOf("mp_demo@localhost"), result.sourceNames())
+        assertEquals("命中表 1 张", 1, result.entries().size)
+    }
+
+    @Test
+    fun `来源披露_取不到名不进披露`() {
+        // dsNameForTest 返回 null = 生产反射链取不到名的退化路径（`?`）——不披露
+        McpSchemaContextService.dsNameForTest = java.util.function.Function { null }
+        McpSchemaContextService.dataSourceUrlForTest = java.util.function.Function { mpDemoUrl }
+        McpSchemaContextService.modelTablesForTest = java.util.function.Function { listOf(mpDemoUser) }
+        val result = McpSchemaContextService.collectEntries(listOf("ds"), listOf("user"), 8)
+        assertTrue("取不到名不得进披露: ${result.sourceNames()}", result.sourceNames().isEmpty())
+    }
+
+    @Test
+    fun `来源披露_显式指名不带auto提示`() {
+        val outcome = McpSchemaContextService.outcomeOf(
+            listOf(McpSchemaFormatter.TableEntry("user", "用户表", businessColumns)),
+            emptyList(),
+            8,
+            1,
+            emptyList(),
+            listOf("mp_demo@localhost"),
+            false,
+        )
+        val text = outcome.text()!!
+        assertTrue("应披露来源: $text", text.startsWith("source: mp_demo@localhost\n"))
+        assertFalse("指名路径不得带 auto 提示: $text", text.contains("auto-resolved"))
+        assertTrue("正文应保留表结构: $text", text.contains("用户表"))
+    }
+
+    @Test
+    fun `来源披露_跨源auto带pin提示`() {
+        val outcome = McpSchemaContextService.outcomeOf(
+            listOf(McpSchemaFormatter.TableEntry("user", "用户表", businessColumns)),
+            emptyList(),
+            8,
+            1,
+            emptyList(),
+            listOf("jpa_demo@localhost"),
+            true,
+        )
+        val text = outcome.text()!!
+        assertTrue("应披露 auto-resolved: $text", text.contains("source: jpa_demo@localhost (auto-resolved"))
+        assertTrue("应带 pin 提示: $text", text.contains("pass 'dataSource' to pin one"))
+    }
+
+    @Test
+    fun `来源披露_未命中错误路径无source行`() {
+        val outcome = McpSchemaContextService.outcomeOf(
+            emptyList(),
+            listOf("user"),
+            8,
+            1,
+            listOf("ds=mp_demo targetDb=mp_demo modelTables=0 indexed=0"),
+            listOf("mp_demo@localhost"),
+            true,
+        )
+        assertNull("错误分支无正文", outcome.text())
+        assertFalse("错误文案不得带 source 行: ${outcome.error()}", outcome.error()!!.contains("source:"))
+    }
 
     @Test
     fun `错误文案_scope过滤掉全部表时点明库不匹配并带实况`() {
@@ -216,8 +290,11 @@ class McpSchemaContextScopeTest {
     fun `错误文案_命中时不报错`() {
         inject(listOf(mpDemoUser))
         val diagnostics = mutableListOf<String>()
-        val (entries, missing) = McpSchemaContextService.collectEntries(listOf("ds"), listOf("user"), 8, diagnostics)
-        val outcome = McpSchemaContextService.outcomeOf(entries, missing, 8, 1, diagnostics)
+        val result = McpSchemaContextService.collectEntries(listOf("ds"), listOf("user"), 8, diagnostics)
+        val outcome = McpSchemaContextService.outcomeOf(
+            result.entries(), result.missing(), 8, 1, diagnostics,
+            listOf("mp_demo@localhost"), true,
+        )
         assertNull("命中路径不得带错误: ${outcome.error()}", outcome.error())
         assertTrue("应给正文: ${outcome.text()}", outcome.text()?.contains("user") == true)
     }

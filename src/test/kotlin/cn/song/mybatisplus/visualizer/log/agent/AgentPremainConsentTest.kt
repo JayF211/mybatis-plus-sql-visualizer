@@ -237,7 +237,8 @@ class AgentPremainConsentTest : BasePlatformTestCase() {
      */
     fun testR3启动即弹接线源码守卫() {
         val src = stripKtComments(
-            java.io.File("src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogStartupCapture.kt").readText(),
+            // k2j 适配：生产树是 Java，扫描根 src/main/kotlin→src/main/java、.kt→.java（SettingsTruthTest 同款惯例）
+            java.io.File("src/main/java/cn/song/mybatisplus/visualizer/log/LogStartupCapture.java").readText(),
         )
         assertTrue(
             "LogStartupCapture.execute 必须调 maybeAskConsentAtStartup（T-FirstUseFreshInstallConsent S1 接线，摘掉必红）",
@@ -256,17 +257,18 @@ class AgentPremainConsentTest : BasePlatformTestCase() {
      */
     fun testR3补扫判据与诊断源码守卫() {
         val src = stripKtComments(
-            java.io.File("src/main/kotlin/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.kt").readText(),
+            java.io.File("src/main/java/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.java").readText(),
         )
         assertTrue(
             "补扫主配置判据应为 JVM 进程判定（BaseOSProcessHandler 系）",
             src.contains("BaseOSProcessHandler"),
         )
-        // 限定补扫函数体：getRunProfile 在 ExecutionEnvironment（事件链）上合法存在，
-        // 禁令只针对 descriptor 探测（243 RunContentDescriptor 无此方法，结构性空转）
-        val bfStart = src.indexOf("private fun backfillRunningProcesses")
+        // 限定补扫函数体：getRunProfile 在 ExecutionEnvironment（事件链）上合法存在
+        // （本文件 :65 反射调用），禁令只针对 descriptor 探测（243 RunContentDescriptor 无此方法）
+        // k2j 适配：函数声明为 Java 形态 private static void
+        val bfStart = src.indexOf("private static void backfillRunningProcesses")
         assertTrue("守卫前置：backfill 函数应在场", bfStart >= 0)
-        val nextMember = src.indexOf("private fun", bfStart + 10)
+        val nextMember = src.indexOf("private ", bfStart + 10)
         val bf = src.substring(bfStart, if (nextMember > bfStart) nextMember else src.length)
         assertFalse(
             "backfill 不得再用 getRunProfile 探测（243 RunContentDescriptor 无此方法，结构性空转）",
@@ -424,7 +426,7 @@ class AgentPremainConsentTest : BasePlatformTestCase() {
      * 字节码守卫探不到「调用点摘除」，故用 SettingsTruthTest 同款源码扫描惯例）。
      */
     fun testR2补扫接线守卫_subscribe后必须backfill() {
-        val src = java.io.File("src/main/kotlin/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.kt")
+        val src = java.io.File("src/main/java/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.java")
             .readText()
         val noComments = Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL).replace(src) { m ->
             m.value.replace(Regex("[^\n]"), " ")

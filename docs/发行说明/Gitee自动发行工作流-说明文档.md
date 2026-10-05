@@ -103,6 +103,18 @@ description / 市场页定位是纯能力陈列，不承担「最近更新」播
 
 ## 三、Gitee API 发布（本次实证端点与参数）
 
+> **一键脚本（2026-10-05 起）：`dev-support/gitee-release.py`**——把本节三步（建发行版 → 传附件 → 回读校验）
+> 串成一条命令，动态内容全走参数：
+>
+> ```bash
+> python dev-support/gitee-release.py --version 2026.10.6 \
+>     --notes docs/发行说明/20260930-2213-嵌入实体识别与SQL日志屏蔽-发行说明.md
+> # 内测通道：加 --prerelease，标题显式传「🎉 SQL Visualizer v{ver} 内测版」
+> ```
+>
+> 前置：`gitee-token.json` 在仓库根、`buildPlugin` 已产 zip、远端标签 `{version}` 已 push。
+> 下方为端点级明细与坑位（脚本已规避，排障时对照）。
+
 鉴权一律 `access_token` 参数（Personal Access Token，需 projects 权限）。
 令牌存仓库根 `gitee-token.json`（字段 `gitee_personal_access_token`/`owner`/`repo`；已进 .gitignore，
 严禁提交/外传），脚本读取：
@@ -181,6 +193,9 @@ GET https://gitee.com/api/v5/repos/{owner}/{repo}/releases/{id}
 
 
 ### 附：Python 无依赖参考实现
+
+> 正式脚本见 `dev-support/gitee-release.py`（已含参数化、错误前置校验、回读断言）；
+> 下方为最小原理片段，供无脚本环境下手工照做。
 
 ```python
 import json, os, urllib.request, urllib.parse

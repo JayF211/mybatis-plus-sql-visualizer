@@ -88,6 +88,29 @@ class McpScopeSourceScanTest {
     private val coreApiRefMarker = Regex("""com\.intellij\.mcpserver\.(?!annotations)""")
 
     @Test
+    fun testNoOrgObjectwebAsmReferenceInMcpPackage() {
+        // T-McpDynamicToolset 真机 ASM 不可达修复（20261005）：org.objectweb.asm 是平台已知包
+        // （262 lib 自带 intellij.libraries.asm.jar），插件 classloader 对该包 parent-first 接管、
+        // 自带 asm jar 不可达 → 真机 NoClassDefFoundError（日常 IDE 262.10968 六轮日志实锤）。
+        // mcp 包绝不允许 reintroduce org.objectweb.asm 编译期引用——壳类字节码必须走
+        // TinyClassFileWriter 手写（零外部依赖）。字符串字面量（帧过滤名单等）经 stripStrings
+        // 豁免，只盯 import/类型位置真引用。
+        val offenders = repoRoot().resolve("src/main/java/cn/song/mybatisplus/visualizer/mcp")
+            .walkTopDown()
+            .filter { it.isFile && it.extension == "java" }
+            .map { it.name to stripStrings(stripComments(it.readText())) }
+            .filter { (_, text) -> text.contains("org.objectweb.asm") }
+            .map { (name, _) -> name }
+            .toList()
+        assertTrue(
+            "mcp 包出现 org.objectweb.asm 编译期引用：$offenders。平台 262 自带 asm 库→插件" +
+                "classloader 对该包 parent-first 接管、自带 asm jar 不可达（真机 CNFE），壳类生成" +
+                "必须走 TinyClassFileWriter 手写字节码（见 20261005-1335 开发计划）",
+            offenders.isEmpty(),
+        )
+    }
+
+    @Test
     fun testMcpServerPluginXmlReferencesOnlyInOptionalFile() {
         val offenders = repoRoot().resolve("src/main/resources/META-INF").walkTopDown()
             .filter { it.isFile && it.extension == "xml" && it.name != "mcp-optional.xml" }

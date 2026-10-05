@@ -38,6 +38,10 @@ class SourceCaptureGuideEnableFlowTest : BasePlatformTestCase() {
         manager = AgentManager.getInstance(project)
         // 防御性还原默认时间源（同 AgentConsentFlowTest：实例跨测试类复用防闭包污染）
         manager.clockMs = { System.currentTimeMillis() }
+        // 去重窗复位（同 AgentConsentFlowTest）：引导链「置位+发布+requestReauthorization」
+        // 的上升沿会先消耗去重窗，不复位则引导链 onOutcome 被吞、断言收到 null
+        manager.consentAskGuardMs = 0
+        manager.lastConsentAskAtMs.set(0)
         val state = PluginSettings.getInstance().state
         state.enhancedCaptureEnabled = false
         state.enhancedCaptureConfirmed = false

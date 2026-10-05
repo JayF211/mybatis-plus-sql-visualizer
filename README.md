@@ -111,7 +111,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **SQL 日志工具窗口（主侧边栏，4 个 tab）**
 
-- 两种捕获通道，条目统一还原成可执行 SQL 列表：**增强捕获**（字节码增强，默认通道）在首次运行项目时弹一次注入确认，同意后插件把 `-javaagent` 写进运行配置 VM 参数，agent 在应用 JVM 的 `premain` 阶段即完成采集织入——启动期 SQL（框架初始化、数据源探活、Flyway/Liquibase 迁移）不再落在挂载完成之前，注入任一步失败自动回落 attach 热挂载；`-javaagent` 只进真实应用运行任务，Gradle / Maven 的测试与 IDE 任务（`test`、`runIde` 等）fork 出的 JVM 一律不注入；自动注入识别不了项目类型（非 Spring Boot + MyBatis-Plus 工程）时改弹引导框，一键开启增强捕获——agent 通道不依赖项目类型、不改工程代码；在 JDBC 接口层直接采集——无需应用开启 SQL 日志，真实参数（默认不脱敏，设置页可开启打码）、执行耗时、影响行数、报错信息、目标库角标（`[MySQL]`、`[DM（达梦）]` 等，方言智能推断：agent 连接 URL 优先、IDE 数据源配置次之、均未命中回退 MySQL，覆盖全部 11 种方言及 HSQL / GBASE）开箱即得；**控制台捕获**自动识别 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式，并发多线程交错的日志按线程分桶还原，参数不错挂不丢失），JdbcTemplate 命名参数为集合值时按元素还原（`IN (:p)` + `[a]` → `IN ('a')`，方括号不落进 SQL）；停止监听时同步停掉应用内采集
+- 两种捕获通道，条目统一还原成可执行 SQL 列表：**增强捕获**（字节码增强，默认通道）注入确认前置到任何运行之前——开启增强捕获或打开项目（出厂未确认态）时即弹一次，授权持久化先于任何 Run；同意后插件把 `-javaagent` 写进运行配置 VM 参数，agent 在应用 JVM 的 `premain` 阶段即完成采集织入，首轮运行即完整捕获启动期 SQL（框架初始化、数据源探活、Flyway/Liquibase 迁移），不用等重启项目；监听启动时对已在运行的应用进程自动补扫（未确认弹确认、已确认直接挂载）；注入任一步失败自动回落 attach 热挂载，挂载成功会如实提示能力边界——挂载前已创建的连接不在捕获范围，重新运行项目后完整生效；`-javaagent` 只进真实应用运行任务，Gradle / Maven 的测试与 IDE 任务（`test`、`runIde` 等）fork 出的 JVM 一律不注入；自动注入识别不了项目类型（非 Spring Boot + MyBatis-Plus 工程）时改弹引导框，一键开启增强捕获——agent 通道不依赖项目类型、不改工程代码；在 JDBC 接口层直接采集——无需应用开启 SQL 日志，真实参数（默认不脱敏，设置页可开启打码）、执行耗时、影响行数、报错信息、目标库角标（`[MySQL]`、`[DM（达梦）]` 等，方言智能推断：agent 连接 URL 优先、IDE 数据源配置次之、均未命中回退 MySQL，覆盖全部 11 种方言及 HSQL / GBASE）开箱即得；**控制台捕获**自动识别 MyBatis `Preparing:` / `Parameters:` 日志（另支持 Hibernate 与 JdbcTemplate 日志格式，并发多线程交错的日志按线程分桶还原，参数不错挂不丢失），JdbcTemplate 命名参数为集合值时按元素还原（`IN (:p)` + `[a]` → `IN ('a')`，方括号不落进 SQL）；停止监听时同步停掉应用内采集
 - 单击条目轻量预览（可编辑高亮编辑器，改个值直接复制；零占位符的字面量 SQL 与 IN 列表同样识别出可编辑参数行）、双击完整弹窗、右键复制 / 复制时间戳 / 跳转源码；控制台的执行异常行（MyBatis `###` 错误块、Spring DAO、JDBC 异常）自动绑定到对应条目——列表行显示错误片段，详情含报错全文
 - 条目元信息：`#N` 会话内捕获序号、时间（时间来源可选「日志时间」——自动识别 Logback / Log4j2 / Spring Boot 默认、ISO 8601 等常见格式的原始时间戳，解析不到回退捕获时间；或「捕获时间」）、耗时（增强条目为毫秒级精确值，控制台通道解析 p6spy / MP TimeCount / 自定义前缀）、影响行数；超阈值红色标记并统计慢查询
 - 列表支持 SQL 类型筛选、Ctrl+F 搜索（SQL 内容 / 源文件 / `#行号` / 时间文本）、排序方式选择器（时间升 / 降序、耗时升 / 降序、行号）、重复条目去重（⨉N 徽章即时同步）、Ctrl/Shift 多选批量复制；条目按 SELECT / INSERT / UPDATE / DELETE 类型着色标记（左侧色条或整行淡背景，颜色与形态可自定义），单行 / 关键字换行 / 格式化三种显示模式在设置页「列表显示」切换、即时生效
@@ -122,7 +122,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **MCP：给 AI agent 的确定性 SQL 工具**
 
-- 向 IDEA 内置的 MCP Server 注册十个只读工具（IDEA 2025.2+，未装 MCP Server 插件的环境零影响）：渲染三件套 `sqlv_render_sql`（源码定位直接渲染可执行 SQL，含真实参数）/ `sqlv_schema_context`（表列结构紧凑上下文）/ `sqlv_explain`（九方言执行计划），工作流四件套 `sqlv_render_logs`（MyBatis/Hibernate/JdbcTemplate 日志还原可执行 SQL）/ `sqlv_check_sql`（静态写风险与类型核查）/ `sqlv_rollback_plan`（回滚预案，不执行）/ `sqlv_perf_advice`（20 条规则性能建议），生成与核查三件套 `sqlv_crud_sql`（实体生成 CRUD）/ `sqlv_reverse_sql`（SQL 转 MyBatis-Plus 代码）/ `sqlv_mapper_check`（mapper 契约 + 渲染产物风险核查）——Claude Code / Cursor / AI Assistant 等 agent 可直接调用。带 `filePath` 的三个工具统一接受项目相对路径或项目内绝对路径（项目外路径与 `..` 上跳拒绝）；`sqlv_schema_context` / `sqlv_explain` 可选指定 `dataSource`（配置了多个数据源时建议显式指名），`sqlv_explain` 的 `dialect` 可省略、按数据源 URL 自动识别
+- 向 IDEA 内置的 MCP Server 注册十个只读工具（IDEA 2025.2+，未装 MCP Server 插件的环境零影响）：渲染三件套 `sqlv_render_sql`（源码定位直接渲染可执行 SQL，含真实参数）/ `sqlv_schema_context`（表列结构紧凑上下文，输出首行披露实际命中的数据源、未指名时标注 auto-resolved）/ `sqlv_explain`（九方言执行计划），工作流四件套 `sqlv_render_logs`（MyBatis/Hibernate/JdbcTemplate 日志还原可执行 SQL）/ `sqlv_check_sql`（静态写风险与类型核查）/ `sqlv_rollback_plan`（回滚预案，不执行）/ `sqlv_perf_advice`（20 条规则性能建议），生成与核查三件套 `sqlv_crud_sql`（实体生成 CRUD）/ `sqlv_reverse_sql`（SQL 转 MyBatis-Plus 代码）/ `sqlv_mapper_check`（mapper 契约 + 渲染产物风险核查）——Claude Code / Cursor / AI Assistant 等 agent 可直接调用。带 `filePath` 的三个工具统一接受项目相对路径或项目内绝对路径（项目外路径与 `..` 上跳拒绝）；`sqlv_schema_context` / `sqlv_explain` 可选指定 `dataSource`（配置了多个数据源时建议显式指名），`sqlv_explain` 的 `dialect` 可省略、按数据源 URL 自动识别
 - 设置页「MCP 工具」子页可整体开关插件 MCP 功能、逐工具启用/禁用——插件开关与 IDE「工具 → MCP 服务器」的平台总开关相互独立，经平台工具过滤扩展在下一次工具列表刷新或新会话即时生效；与校验类工具的位差一句话：校验器给的是置信度评分，这里给的是确定性证据——静态校验器产不出的渲染产物实证。能力全景与 agent 侧接入说明（Claude Code / Cursor / AI Assistant）见[官网 MCP 专页](https://sql-visualizer.jvtools.cn/features/mcp)
 
 **检查更新（Gitee 抢先体验通道）**
@@ -216,7 +216,7 @@ ORDER BY t1.create_time DESC
 - **JPA / Hibernate**：Repository 派生方法、`@Query`、Criteria 链、HQL（含自定义 DAO）行左侧 gutter 图标，点击即预览
 - **SQL → Java**：选中 SQL 文本右键 → `Convert SQL to MP Java Code`（或 Alt+Shift+J）；侧边栏工具窗口「SQL → Java」tab 粘贴即转
 - **CRUD SQL**：实体类文件 / 项目视图实体节点 / Database 工具窗表节点右键 → 生成 CRUD SQL，浮层选定语句后进入预览
-- **SQL 日志**：增强捕获默认开启——首次运行项目弹注入确认后自动采集；也可侧边栏「SQL Visualizer」工具窗口点「捕捉」监听控制台日志；双击日志条目预览还原 SQL；「日志 → SQL」tab 粘贴日志批量还原；「历史」tab 浏览自动保存的历史 SQL
+- **SQL 日志**：增强捕获默认开启——开启或打开项目时弹注入确认（先于任何运行），同意后首轮运行即自动采集，不用等重启项目；也可侧边栏「SQL Visualizer」工具窗口点「捕捉」监听控制台日志；双击日志条目预览还原 SQL；「日志 → SQL」tab 粘贴日志批量还原；「历史」tab 浏览自动保存的历史 SQL
 - **帮助**：工具窗口工具栏「?」按钮在内嵌浏览器打开功能与快捷键一览（本地页面，无网络依赖）
 
 ### 配置
@@ -258,7 +258,7 @@ ORDER BY t1.create_time DESC
 | 配置项 | 默认值 | 作用 |
 |--------|--------|------|
 | SQL / 参数前缀 | `Preparing:` / `Parameters:` | 控制台日志识别前缀（「混合前缀」开启后可同时识别两种格式；另支持 Hibernate / JdbcTemplate 前缀与耗时前缀配置） |
-| 增强捕获 | 开 | 字节码增强捕获通道：首次运行项目弹注入确认，同意后 agent 挂载应用 JVM 直接采集（无需开启 SQL 日志）；参数脱敏默认关闭、可开启打码；停止监听联动停采 |
+| 增强捕获 | 开 | 字节码增强捕获通道：开启或打开项目时弹注入确认（先于任何运行），同意后 agent 挂载应用 JVM 直接采集（无需开启 SQL 日志；监听启动时已在运行的应用进程由补扫接管）；参数脱敏默认关闭、可开启打码；停止监听联动停采 |
 | 自动捕捉 | 关 | 运行 / 调试项目时自动开始监听控制台（进程级被动监听；手动点「停止捕捉」后本会话不再自动弹回） |
 | 发现 SQL 自动打开窗口 | 开 | 捕获到 SQL 时自动展开日志工具窗口（60 秒防抖、不抢编辑器焦点；手动关闭后本次会话不再自动弹出） |
 | 时间来源 | 日志时间 | 条目时间取日志行解析的原始时间戳（自动识别 Logback / Log4j2 / Spring Boot 默认、ISO 8601 等常见格式，解析不到回退捕获时间），或插件捕获时刻 |
