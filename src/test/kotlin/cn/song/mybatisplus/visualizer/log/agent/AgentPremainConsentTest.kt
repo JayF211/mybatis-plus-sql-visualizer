@@ -168,6 +168,126 @@ class AgentPremainConsentTest : BasePlatformTestCase() {
         )
     }
 
+    // ---------- R3：出厂未确认态项目打开即确认 ----------
+
+    fun testR3出厂态启动即弹_同意持久化() {
+        val state = PluginSettings.getInstance().state
+        state.enhancedCaptureEnabled = true
+        state.enhancedCaptureConfirmed = false
+        manager.premainConsentGate = { true }
+        providerReturning(EnhancedCaptureConsent.ACCEPTED)
+        manager.maybeAskConsentAtStartup()
+        flushEdt()
+        assertEquals("出厂未确认态项目打开应弹一次确认（不等首轮 Run）", 1, askedCount)
+        assertTrue("同意后 confirmed 应持久化——首轮 Run 即 premain", state.enhancedCaptureConfirmed)
+    }
+
+    fun testR3启动即弹_拒绝_冷却持久化() {
+        val state = PluginSettings.getInstance().state
+        state.enhancedCaptureEnabled = true
+        state.enhancedCaptureConfirmed = false
+        manager.premainConsentGate = { true }
+        providerReturning(EnhancedCaptureConsent.REJECTED)
+        manager.maybeAskConsentAtStartup()
+        flushEdt()
+        assertEquals(1, askedCount)
+        assertTrue(state.enhancedCaptureRejectedAtMs > 0)
+        assertFalse(state.enhancedCaptureConfirmed)
+    }
+
+    fun testR3启动即弹_已确认态不弹() {
+        val state = PluginSettings.getInstance().state
+        state.enhancedCaptureEnabled = true
+        state.enhancedCaptureConfirmed = true
+        manager.premainConsentGate = { true }
+        providerReturning(EnhancedCaptureConsent.ACCEPTED)
+        manager.maybeAskConsentAtStartup()
+        flushEdt()
+        assertEquals("已确认态启动不得弹窗", 0, askedCount)
+    }
+
+    fun testR3启动即弹_冷却期不弹() {
+        val state = PluginSettings.getInstance().state
+        state.enhancedCaptureEnabled = true
+        state.enhancedCaptureConfirmed = false
+        state.enhancedCaptureRejectedAtMs = System.currentTimeMillis()
+        manager.premainConsentGate = { true }
+        providerReturning(EnhancedCaptureConsent.ACCEPTED)
+        manager.maybeAskConsentAtStartup()
+        flushEdt()
+        assertEquals("冷却期内启动不得弹窗", 0, askedCount)
+    }
+
+    fun testR3启动即弹_EDT守卫false不弹() {
+        val state = PluginSettings.getInstance().state
+        state.enhancedCaptureEnabled = true
+        state.enhancedCaptureConfirmed = false
+        manager.premainConsentGate = { false }
+        providerReturning(EnhancedCaptureConsent.ACCEPTED)
+        manager.maybeAskConsentAtStartup()
+        flushEdt()
+        assertEquals("headless/非EDT 前提不成立不得弹窗（回落 attach 链）", 0, askedCount)
+        assertFalse(state.enhancedCaptureConfirmed)
+    }
+
+    /**
+     * S1 接线源码守卫：LogStartupCapture.execute 必须调用 maybeAskConsentAtStartup 且在任何
+     * early return 之前（摘掉接线必红）。扫剥注释后的源码代码事实——调用点级判据字节码
+     * 探不到（R2 反向验证已实证勘误过一轮），用 SettingsTruthTest 同款源码扫描惯例。
+     */
+    fun testR3启动即弹接线源码守卫() {
+        val src = stripKtComments(
+            java.io.File("src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogStartupCapture.kt").readText(),
+        )
+        assertTrue(
+            "LogStartupCapture.execute 必须调 maybeAskConsentAtStartup（T-FirstUseFreshInstallConsent S1 接线，摘掉必红）",
+            src.contains("maybeAskConsentAtStartup()"),
+        )
+        // 必须在 shouldStartCapture 早退之前（出厂态与自动监听开关无关）
+        val callIdx = src.indexOf("maybeAskConsentAtStartup()")
+        val earlyReturnIdx = src.indexOf("if (!shouldStartCapture(")
+        assertTrue("守卫前置：两锚点均应在场", callIdx in 0 until earlyReturnIdx)
+    }
+
+    /**
+     * S2 接线源码守卫：补扫判据必须是 JVM 进程判定（BaseOSProcessHandler），不得再用
+     * getRunProfile 探测（243 无此方法），且必须有无命中也输出的汇总诊断日志
+     * （R2「结构性空转零诊断」形态禁再发生）。
+     */
+    fun testR3补扫判据与诊断源码守卫() {
+        val src = stripKtComments(
+            java.io.File("src/main/kotlin/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.kt").readText(),
+        )
+        assertTrue(
+            "补扫主配置判据应为 JVM 进程判定（BaseOSProcessHandler 系）",
+            src.contains("BaseOSProcessHandler"),
+        )
+        // 限定补扫函数体：getRunProfile 在 ExecutionEnvironment（事件链）上合法存在，
+        // 禁令只针对 descriptor 探测（243 RunContentDescriptor 无此方法，结构性空转）
+        val bfStart = src.indexOf("private fun backfillRunningProcesses")
+        assertTrue("守卫前置：backfill 函数应在场", bfStart >= 0)
+        val nextMember = src.indexOf("private fun", bfStart + 10)
+        val bf = src.substring(bfStart, if (nextMember > bfStart) nextMember else src.length)
+        assertFalse(
+            "backfill 不得再用 getRunProfile 探测（243 RunContentDescriptor 无此方法，结构性空转）",
+            bf.contains("getRunProfile"),
+        )
+        assertTrue(
+            "补扫必须有无命中也输出的汇总诊断日志",
+            src.contains("backfill: 订阅后补扫完成"),
+        )
+    }
+
+    private fun stripKtComments(src: String): String {
+        val noBlock = Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL).replace(src) { m ->
+            m.value.replace(Regex("[^\n]"), " ")
+        }
+        return noBlock.lineSequence().joinToString("\n") { line ->
+            val i = line.indexOf("//")
+            if (i >= 0) line.substring(0, i) else line
+        }
+    }
+
     // ---------- S2：attach 兜底能力边界通知 ----------
 
     fun testattach兜底通知_每轮至多一次_运行结束复位() {
@@ -321,6 +441,4 @@ class AgentPremainConsentTest : BasePlatformTestCase() {
             noComments.contains("getAllDescriptors"),
         )
     }
-
-    // ---------- S2：attach 兜底能力边界通知 ----------
 }

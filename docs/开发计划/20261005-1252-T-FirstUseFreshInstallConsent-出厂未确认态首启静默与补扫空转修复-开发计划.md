@@ -70,3 +70,27 @@ SqlLogManager 懒创建（12:41:59.8，晚于首启进程 ~17s）→ EXECUTION_T
 2. 首启进程先于订阅的场景：补扫按新判据命中并补发（日志可见「命中 M 个」），或如实记录跳过原因——不再静默空转。
 3. 拒绝/关闭/冷却三态行为与现语义一致。
 4. 反向验证两次读数留档；agent+config 全包回归绿。
+
+## 六、实施记录（2026-10-05 当轮回填，master 直做）
+
+### 实施内容
+
+- **S1**：`AgentManager.maybeAskConsentAtStartup()`——`needsReauthorization()` 前置短路（已确认/未开启同步返回）→ `invokeLater` EDT → `premainConsentGate` 复核（headless/非EDT 静默回落）→ `requestConsentOnce()`（三态落盘+去重窗单点）。接线在 `LogStartupCapture.execute` **最顶部**（任何 early return 之前——自动监听开关与确认无关），`runCatching` + fatal 透传。
+- **S2**：`backfillRunningProcesses` 判据替换——删除不存在的 `getRunProfile` 探测，改 `BaseOSProcessHandler` 系实例判定（反射 Class.forName，与文件既有口径一致）；诊断性=逐描述符 skip 原因 debug + **无命中也输出**的汇总 INFO（描述符数/补发数/无handler/已结束/非JVM 分类计数）。
+- **S4 测试**（`AgentPremainConsentTest` 新增 7 例）：启动即弹五态（同意持久化/拒绝冷却/已确认不弹/冷却期不弹/EDT守卫false不弹）+ S1 接线源码守卫（调用在场且在 `shouldStartCapture` 早退**之前**）+ S2 判据与诊断源码守卫（`BaseOSProcessHandler` 在场 / backfill 函数体内无 `getRunProfile` / 汇总日志在场）。
+
+### 过程坑（留档）
+
+- **源码守卫扫描面**：首版「全文件禁 `getRunProfile`」误伤 `isModuleBasedLaunch`——`ExecutionEnvironment.getRunProfile()` 在 243 **存在且合法**（事件链用），禁令只针对 descriptor 探测。守卫收窄为 backfill 函数体切片判定。
+- 无其他坑；`requestConsentOnce` 去重窗、`premainConsentGate` 均直接复用 R2 资产。
+
+### 反向验证两次读数
+
+- **红**：摘 LogStartupCapture 接线 → `testR3启动即弹接线源码守卫` 红；摘 BaseOSProcessHandler 判据 → `testR3补扫判据与诊断源码守卫` 红（同跑双红）。
+- **绿**：恢复接线 → agent+config+LogStartupCapture 回归 **44 类 335/0 绿**。
+
+### 遗留与收口状态
+
+- **runIde 沙盒走查留下轮批**（真机段验收 1：出厂态打开项目即弹框→同意→首轮 Run `premain 注入完成` 日志+启动期 SQL 捕获；补扫汇总日志读数）。
+- 「同意后 attach 零捕获」由 T-StatementWeave 计划解决，随 `t-statementweave` 车道实施（在途）。
+- 全量门禁按三档分层另派只读收口代理。

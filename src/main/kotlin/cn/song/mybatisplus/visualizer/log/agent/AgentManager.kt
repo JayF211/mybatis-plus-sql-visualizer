@@ -603,6 +603,42 @@ class AgentManager(private val project: Project) : Disposable {
     }
 
     /**
+     * T-FirstUseFreshInstallConsent S1：项目打开即确认（出厂未确认态专用通道）。
+     *
+     * 出厂态 `enhancedCaptureEnabled=true`（默认开）+ `confirmed=false`——从出生就是开着的，
+     * **永远不产生 SETTINGS_CHANGE 上升沿**，R2「开启时刻确认」在最普遍的首次使用形态永不触发；
+     * 首轮 Run 回落 attach 链又撞 SqlLogManager 懒创建的订阅竞态（沙盒 12:41 会话实录：首启全程静默）。
+     * 本入口在项目打开期主动补一次确认：同意持久化先于任何 Run → 首轮 Run 的
+     * updateJavaParameters 即产出 premain（连接从建池起包装、捕获完整），attach 链与订阅竞态整体旁路。
+     *
+     * 调用方（LogStartupCapture ProjectActivity）在 BG 线程：invokeLater 转 EDT 弹窗；
+     * EDT/headless 前提不成立（headless 测试）静默跳过回落既有 attach 链——零劣化不变。
+     * 三态语义沿用 [requestConsentOnce] 单点（同意=confirmed / 取消=24h 冷却 / 关闭增强=enabled=false），
+     * 去重窗天然防「启动即弹 + O-66 引导链」双弹。已知边界（登记）：多项目同时打开各自实例独立计数，
+     * 极端并发下可能各弹一次（第二次读 state 多半已被第一次的落盘短路）。
+     */
+    fun maybeAskConsentAtStartup() {
+        if (!needsReauthorization()) {
+            LOG.info("maybeAskConsentAtStartup: 无需授权（已确认或未开启）——跳过")
+            return
+        }
+        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+            if (project.isDisposed) return@invokeLater
+            if (!premainConsentGate()) {
+                LOG.info("maybeAskConsentAtStartup: headless 或非 EDT——静默跳过（回落 attach 链确认，零劣化）")
+                return@invokeLater
+            }
+            when (requestConsentOnce()) {
+                EnhancedCaptureConsent.ACCEPTED ->
+                    LOG.info("maybeAskConsentAtStartup: 项目打开期确认——用户同意注入，首轮 Run 即可 premain")
+                EnhancedCaptureConsent.REJECTED ->
+                    LOG.info("maybeAskConsentAtStartup: 项目打开期确认——用户拒绝注入，进冷却")
+                else -> Unit
+            }
+        }
+    }
+
+    /**
      * 去重确认入口（T-FirstUsePremainConsent R2）：四个触发点（设置页开启上升沿 / O-66 引导链
      * requestReauthorization / 进程出现 attach 链 / premain 提前确认）共用。同一时刻只应有一个框——
      * O-66 引导链「置位开关 + 发布 SETTINGS_CHANGE + 立即 requestReauthorization」会让上升沿与
