@@ -97,3 +97,37 @@
 2. 拒绝/关闭增强两态首轮行为与现状一致（不注入、不重复弹、冷却语义不变）。
 3. attach 兜底仍可发生的路径（前提 1 证伪时）：挂载成功后出现能力边界通知，文案不含虚假承诺。
 4. 全部新单测绿 + 端到端守卫「摘修复必红」两次读数留档 + testFast 绿。
+
+## 六、实施记录（2026-10-05 当轮回填）
+
+### 实施内容
+
+- **S1**（`AgentManager.kt`）：从 `requestConsentThenAttach` 抽出三态落盘单点 `confirmEnhancedCapture(): EnhancedCaptureConsent?`（冷却/已释放/未开启早退返回 null 不弹不落盘；三态各自持久化 + `publishStatusChanged` 广播，语义与原内联体逐行对齐）；新增 `ensureConfirmedBeforePremain(): Boolean`（开启+未确认+闸门通过才弹，同意→true 本轮即可注入）与可注入线程闸门 `premainConsentGate`（默认 = EDT 且非 headless）。`requestConsentThenAttach` 改为复用单点，onOutcome/attach 分支与各日志逐字保留。
+- **S1 接线**（`PremainRunConfigurationExtension.kt`）：`updateJavaParameters` 在范围闸门后、`preparePremainVmOption` 前调用 `ensureConfirmedBeforePremain()`；javadoc 两处修订（「首次运行必然走 attach」旧语义作废；「绝不弹窗」收窄为「仅未确认首弹一种形态」）。
+- **S2**（`AgentManager.kt` + `plugin.xml` + bundle 双语）：`attachToPid` 成功路径挂 `notifyAttachFallbackOnce()`（能到该路径必非 premain 在场——premain 在场在 doAttachAsync 入口即跳过）；`onRunEnded` 复位「每轮一次」标记（复位前移到 isEmpty 早退之前）；通知出口自吞异常、fatal 透传（T-FP-02）；独立通知组 `cn.song.mybatisplus.visualizer.agent`（一域一组惯例）+ `notification.agent.attachFallback.title/body` 双语键。
+- **S3**：`AgentMain.java` javadoc 勘误（「AgentLoadException:0 仅 JDK8 二次挂载」旧口径推翻——243 沙盒现代 JDK **首次**挂载亦观察〔idea.log 10:15:23 实录〕，握手成功为准）；`AgentManager` 类注释同步。
+- **S4 测试**（`AgentPremainConsentTest`，12 例）：`ensureConfirmedBeforePremain` 六态（可弹同意/拒绝/关闭增强/EDT 守卫 false 静默回落/冷却期内/已确认不弹/未开启）+ 首轮 Run 链路（未确认可弹同意 → `preparePremainVmOption` 产出 `-javaagent:`）+ 扩展接线字节码守卫（常量池须含 `ensureConfirmedBeforePremain` 引用，证据边界=证明接线在场不证明执行时序）+ S2 通知每轮一次/onRunEnded 复位/出口异常不外泄。
+
+### 待验证前提的实测落账
+
+1. **updateJavaParameters 调用线程**：守卫采用「EDT 且非 headless 才弹，否则静默回落」设计，两种形态都安全——沙盒线程实测定论随下轮 runIde 走查批留账（生产形态大概率 EDT，BaseJavaApplicationCommandLineState 链在执行启动期）。
+2. 同意为同步模态形态；若真机走查出现「Run 点击到进程启动被感知卡顿」，备选弱化形态（balloon+下轮生效）留产品拍板，本形态组合 S2 通知兜底。
+3. 三态落盘语义经 6 个单测逐态对齐，未发现漂移。
+4. attach 成功可编程判定成立（`attachToPid` 返回值即判定点），S2 触发即挂其成功路径。
+
+### 过程坑（留档）
+
+- **`testFast` 不吃 `--tests` 过滤**：任务自带固定 include 清单，传 `--tests` 报「No tests found for given includes」——定向跑用标准 `test` 任务 + `--tests`。
+- **测试类路径缺平台 execution 深层类型**（`ExecutionEnvironment`/`RunProfileState` 解析失败）：fake `RunConfigurationBase` 路线放弃，扩展接线守卫改字节码常量池判据（仍可「摘掉必红」，见反向验证）。
+- **AgentManager 实例跨测试复用**（同 AgentConsentFlowTest 在案口径）：「每轮一次」标记跨用例残留致用例假红——标记开放 `internal` 并在 setUp 复位。
+
+### 反向验证两次读数
+
+- **红**：摘掉扩展里 `manager.ensureConfirmedBeforePremain()` 调用 → `test扩展接线字节码守卫_updateJavaParameters必须走前置确认` 失败，断言原文「扩展必须在注入前调用 ensureConfirmedBeforePremain（T-FirstUsePremainConsent S1 接线，摘掉必红）」。
+- **绿**：恢复接线 → `AgentPremainConsentTest` + `AgentConsentFlowTest` + `AgentManagerPremainTest` 三类 **32/32 绿**（BUILD SUCCESSFUL）。
+
+### 遗留与收口状态
+
+- 定向绿 32/32 + agent/config 包回归（读数见提交信息）；`testFast` 全桶与全量门禁按三档分层另派只读收口代理。
+- **runIde 沙盒走查留下轮批**：出厂态首轮 Run 弹窗时机（进程启动前）+ 同意后首轮启动期 SQL 即捕获 + 不重启直接打 .http 可见（验收标准 1/3 的真机段）+ 前提 1 线程实测定论。
+- 本任务未触达 build.gradle.kts / plugin.xml EP 面（仅新增 notificationGroup 声明，既有 EP 无改动）——构建校验按三档分层判据不在必跑面。

@@ -10,8 +10,12 @@ import java.lang.instrument.Instrumentation;
  * retransform（DebugTools 半成品陷阱的硬验收项）。
  *
  * 幂等：system property {@code sqlvis.agent.active} 标记（IDE 侧 pid 表双保险）——
- * 二次 loadAgent 直接返回，不再叠加 transformer/代理（JDK8 二次挂载抛 AgentLoadException:0
- * 场景由 IDE 侧容错，见 AgentManager）。
+ * 二次 loadAgent 直接返回，不再叠加 transformer/代理。
+ *
+ * 勘误（T-FirstUsePremainConsent S3，2026-10-05）：「AgentLoadException:0 只出现在 JDK8 二次
+ * 挂载」的旧口径不准——243 沙盒（attach 目标为现代 JDK）**首次**挂载也观察到该异常（idea.log
+ * 10:15:23 实录），随后握手成功证明 agent 实际装载。该异常只作「结果以握手为准」的容错信号，
+ * 不作为幂等判据，IDE 侧容错见 AgentManager。
  */
 public final class AgentMain {
 

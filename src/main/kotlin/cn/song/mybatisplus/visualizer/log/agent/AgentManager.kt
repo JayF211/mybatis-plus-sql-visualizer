@@ -32,6 +32,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -41,8 +42,9 @@ import java.util.concurrent.atomic.AtomicLong
  *   `VirtualMachine.attach(pid)` + loadAgent → 会话接受 → 在线态。
  * - 惰性挂载（Ultra 4.0.20 教训）：开启增强 + 注入确认后，后台线程等进程就绪 + 去抖 3s 再
  *   attach，全程不进 EDT——不拖慢项目启动。
- * - 幂等表：插件侧 pid 表 + agent 侧 system property 双保险（JDK8 二次 loadAgent 抛
- *   AgentLoadException("0") 实证容错）。
+ * - 幂等表：插件侧 pid 表 + agent 侧 system property 双保险（loadAgent 抛
+ *   AgentLoadException("0") 实测容错——JDK8 二次挂载与 243 沙盒现代 JDK 首次挂载均观察过，
+ *   见 AgentMain javadoc；握手成功为准）。
  * - 降级三分支：attach 失败 / 连接丢失 / 关闭开关 → 桥恢复（capturePaused=false），零劣化。
  * - 在线态：最近 [AgentProtocol.ONLINE_WINDOW_MS] 内有心跳/事件（§4.3）。
  * - 随 project dispose 摘除：会话全关 + 连接池线程停转。
@@ -60,6 +62,9 @@ class AgentManager(private val project: Project) : Disposable {
     companion object {
         private val LOG = Logger.getInstance(AgentManager::class.java)
         const val AGENT_RESOURCE = "/agent/mps-sql-agent.jar"
+
+        /** T-FirstUsePremainConsent S2：attach 兜底能力边界通知的独立分组（「一域一组」惯例）。 */
+        const val AGENT_NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.agent"
 
         /**
          * 拒绝冷却默认窗（T-PS4-01）：24h。冷却只作用于确认弹窗频率、不改变同意门槛（保守口径——
@@ -474,25 +479,9 @@ class AgentManager(private val project: Project) : Disposable {
      */
     private fun requestConsentThenAttach(processHandler: Any?, onOutcome: (EnhancedCaptureConsent) -> Unit = {}) {
         com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-            if (project.isDisposed || !isEnhancedEnabled()) return@invokeLater
-            val outcome = try {
-                consentProvider()
-            } catch (t: Throwable) {
-                // T-FatalPassthrough T-FP-02：JVM 级致命错误透传（见 util/FatalErrors.kt）——本文件
-                // 是长驻链路（attach / premain / 会话读线程 / CONFIG 下发），捕获面覆盖 Error：
-                // 普通异常（含 ClassNotFoundException 这类可选能力缺失）仍走既有降级，
-                // VirtualMachineError/LinkageError 不得被吞成一条 warn 后让流程带病继续。
-                if (FatalErrors.isFatal(t)) throw t
-                LOG.warn("requestConsentThenAttach: 确认框异常——按拒绝处理（进冷却）", t)
-                EnhancedCaptureConsent.REJECTED
-            }
-            val state = PluginSettings.getInstance().state
+            val outcome = confirmEnhancedCapture() ?: return@invokeLater
             when (outcome) {
                 EnhancedCaptureConsent.ACCEPTED -> {
-                    state.enhancedCaptureConfirmed = true
-                    // T-CaptureTruth T-CT-01：三态结果都广播——否则设置页状态行要等下一次
-                    // attach/掉线才刷新，用户点完同意/拒绝后看到的是过期文案。
-                    publishStatusChanged()
                     onOutcome(EnhancedCaptureConsent.ACCEPTED)
                     if (processHandler == null) {
                         // T-CaptureTruth T-CT-02：重新授权入口无进程句柄——只恢复授权，
@@ -504,22 +493,95 @@ class AgentManager(private val project: Project) : Disposable {
                     doAttachAsync(processHandler)
                 }
                 EnhancedCaptureConsent.DISABLE_CAPTURE -> {
-                    // 「关闭增强捕获并不再询问」：总开关持久化关闭（与设置页 Apply 同通道，
-                    // XmlSerializer 随平台自动保存落盘）。enabled 门在 onProcessAppeared 入口，
-                    // 后续任何进程启动都不再进入本确认流，也不 attach。
-                    state.enhancedCaptureEnabled = false
                     LOG.info("requestConsentThenAttach: 用户选择关闭增强捕获并不再询问——总开关已持久化关闭")
-                    publishStatusChanged()
                     onOutcome(EnhancedCaptureConsent.DISABLE_CAPTURE)
                 }
                 EnhancedCaptureConsent.REJECTED -> {
-                    state.enhancedCaptureRejectedAtMs = clockMs()
                     LOG.info("requestConsentThenAttach: 用户拒绝注入——进入 ${rejectCooldownMs}ms 冷却（冷却期内不重复弹，不改同意门槛）")
-                    publishStatusChanged()
                     onOutcome(EnhancedCaptureConsent.REJECTED)
                 }
             }
         }
+    }
+
+    /**
+     * 确认落盘单点（T-FirstUsePremainConsent S1 抽取，原 requestConsentThenAttach 内联体）：
+     * 调 [consentProvider] 取三态结果并按既有语义持久化。**须在 EDT 调用**（默认 provider 弹模态框）。
+     *
+     * 早退返回 null（不弹、不落盘、调用方不得误当拒绝）：项目已释放 / 增强未开启 / 拒绝冷却期内
+     * （冷却只作用于弹窗频率、不改变同意门槛——保守口径，与 onProcessAppeared 入口判定同源）。
+     * 三态各自落盘并广播（T-CaptureTruth T-CT-01：三态结果都广播，否则设置页状态行等到下一次
+     * attach/掉线才刷新）：ACCEPTED → confirmed=true；REJECTED → 拒绝时刻；DISABLE_CAPTURE →
+     * 总开关 false（与设置页 Apply 同通道，XmlSerializer 随平台自动保存落盘）。
+     */
+    internal fun confirmEnhancedCapture(): EnhancedCaptureConsent? {
+        if (project.isDisposed || !isEnhancedEnabled()) return null
+        if (isInRejectCooldown()) {
+            LOG.info("confirmEnhancedCapture: 拒绝冷却期内——不弹窗不落盘")
+            return null
+        }
+        val outcome = try {
+            consentProvider()
+        } catch (t: Throwable) {
+            // T-FatalPassthrough T-FP-02：JVM 级致命错误透传（见 util/FatalErrors.kt）——本文件
+            // 是长驻链路（attach / premain / 会话读线程 / CONFIG 下发），捕获面覆盖 Error：
+            // 普通异常（含 ClassNotFoundException 这类可选能力缺失）仍走既有降级，
+            // VirtualMachineError/LinkageError 不得被吞成一条 warn 后让流程带病继续。
+            if (FatalErrors.isFatal(t)) throw t
+            LOG.warn("requestConsentThenAttach: 确认框异常——按拒绝处理（进冷却）", t)
+            EnhancedCaptureConsent.REJECTED
+        }
+        val state = PluginSettings.getInstance().state
+        when (outcome) {
+            EnhancedCaptureConsent.ACCEPTED -> state.enhancedCaptureConfirmed = true
+            EnhancedCaptureConsent.DISABLE_CAPTURE -> state.enhancedCaptureEnabled = false
+            EnhancedCaptureConsent.REJECTED -> state.enhancedCaptureRejectedAtMs = clockMs()
+        }
+        publishStatusChanged()
+        return outcome
+    }
+
+    /**
+     * T-FirstUsePremainConsent S1：进程启动**前**的注入确认（[PremainRunConfigurationExtension]
+     * 的 updateJavaParameters 窗口内同步调用）。首次使用的旧语义是「首轮 Run 注入跳过
+     * enhanced-unconfirmed → 同意弹窗由 attach 链在进程启动后弹」，而 agent 只在驱动 connect 时
+     * 包装连接、retransform 不能回溯已存在的池化连接——首轮必然零捕获。本入口把确认前置到
+     * JavaParameters 构建期，同意后首轮 Run 即带 -javaagent（连接从建池起就被包装）。
+     *
+     * 返回 true = 确认已达成（或本就 confirmed），可继续 [preparePremainVmOption]；false = 本轮
+     * 不注入（未开启 / 冷却 / headless / 非EDT 早退，回落既有 attach 链确认，零劣化）。
+     * EDT 守卫（待验证前提 1）：updateJavaParameters 若不在 EDT，同步弹模态框有死锁风险——
+     * 静默跳过不跨线程弹窗；生产形态由沙盒实测落账。
+     */
+    fun ensureConfirmedBeforePremain(): Boolean {
+        if (!isEnhancedEnabled()) return false
+        if (isEnhancedConfirmed()) return true
+        if (!premainConsentGate()) {
+            LOG.info("premain 提前确认跳过：headless 或非 EDT 线程——回落既有 attach 链确认（零劣化）")
+            return false
+        }
+        return when (confirmEnhancedCapture()) {
+            EnhancedCaptureConsent.ACCEPTED -> {
+                LOG.info("premain 提前确认：用户同意注入——本轮即可注入 premain")
+                true
+            }
+            EnhancedCaptureConsent.REJECTED -> {
+                LOG.info("premain 提前确认：用户拒绝注入——本轮不注入（冷却语义同 attach 链）")
+                false
+            }
+            EnhancedCaptureConsent.DISABLE_CAPTURE, null -> {
+                LOG.info("premain 提前确认：增强已关闭或早退——本轮不注入")
+                false
+            }
+        }
+    }
+
+    /**
+     * 提前确认的线程/环境闸门（默认 = EDT 且非 headless）；测试注入以驱动「可弹/不可弹」两分支。
+     */
+    internal var premainConsentGate: () -> Boolean = {
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+        app != null && !app.isHeadlessEnvironment && app.isDispatchThread
     }
 
     /**
@@ -612,8 +674,48 @@ class AgentManager(private val project: Project) : Disposable {
         // T-AgentHeartbeat T-05：同一口径清「首条心跳未到」标记
         firstHeartbeatPending.set(false)
         publishStatusChanged()
+        // T-FirstUsePremainConsent S2：attach 兜底挂载成功（能走到这里必非 premain 在场——
+        // premain 通道在场的进程在 doAttachAsync 入口就跳过）→ 能力边界告知（每轮至多一次）
+        notifyAttachFallbackOnce()
         return true
     }
+
+    /**
+     * T-FirstUsePremainConsent S2：attach 兜底挂载成功后的能力边界告知——agent 只在驱动 connect
+     * 时包装连接，attach 前已存在的（池化）连接不可回溯包装，该轮 SQL 可能不全；如实告知
+     * 「重新运行项目后完整生效」，不做虚假承诺。每轮运行至多一次（[onRunEnded] 复位）。
+     */
+    internal fun notifyAttachFallbackOnce() {
+        if (!attachFallbackNoticedThisRun.compareAndSet(false, true)) return
+        LOG.info("notifyAttachFallbackOnce: attach 兜底挂载成功——发能力边界通知（本轮仅一次）")
+        // 通知出口自吞异常（挂载已成功，通知失败不得打断链路）；fatal 按项目惯例透传（T-FP-02）
+        runCatching { attachFallbackNotifier?.invoke() }
+            .onFailure {
+                if (FatalErrors.isFatal(it)) throw it
+                LOG.warn("notifyAttachFallbackOnce: 能力边界通知发送失败（挂载不受影响）", it)
+            }
+    }
+
+    /**
+     * 通知出口（默认 balloon，测试模式跳过平台通知；测试注入计数器驱动断言）。
+     */
+    internal var attachFallbackNotifier: (() -> Unit)? = {
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+        if (app == null || !app.isUnitTestMode) {
+            runCatching {
+                com.intellij.notification.NotificationGroupManager.getInstance()
+                    .getNotificationGroup(AGENT_NOTIFICATION_GROUP_ID)
+                    .createNotification(
+                        MpSqlVisualizerBundle.message("notification.agent.attachFallback.title"),
+                        MpSqlVisualizerBundle.message("notification.agent.attachFallback.body"),
+                        com.intellij.notification.NotificationType.INFORMATION,
+                    ).notify(project)
+            }
+        }
+    }
+
+    /** 本轮 attach 兜底通知已发标记（每轮复位；internal 供测试实例复用场景复位）。 */
+    internal val attachFallbackNoticedThisRun = AtomicBoolean(false)
 
     /**
      * T-AgentConfigChannel T-02：CONFIG 回执超时巡检的排定入口（构造会话时注入）。
@@ -726,8 +828,11 @@ class AgentManager(private val project: Project) : Disposable {
      * 这两步在未开启态纯属浪费（且端口协商会开 ServerSocket）。判定本身走纯函数
      * [PremainInjection.decide]，此处只负责按序求值事实与打日志。
      *
-     * 注意确认闸门：未确认态不注入，首次运行的知情同意仍由既有 attach 链在进程启动后弹一次
-     * （[onProcessAppeared]）——确认后的后续运行才吃到 premain，该语义本任务不改。
+     * 注意确认闸门：本入口只读不弹——未确认态不注入。知情同意的前置弹出由调用方
+     * （[PremainRunConfigurationExtension]）在调用本方法前走 [ensureConfirmedBeforePremain]
+     * （T-FirstUsePremainConsent S1）；EDT/headless 前提不成立的路径回落既有 attach 链确认
+     * （[onProcessAppeared]），attach 兜底挂载成功后由能力边界通知如实告知捕获范围
+     * （[notifyAttachFallbackOnce]，S2）。
      */
     internal fun preparePremainVmOption(): String? {
         val enabled = isEnhancedEnabled()
@@ -1211,6 +1316,8 @@ class AgentManager(private val project: Project) : Disposable {
      * 与 [PREMAIN_CHANNEL_TTL_MS]（见 [isChannelExpired]）。
      */
     internal fun onRunEnded() {
+        // T-FirstUsePremainConsent S2：运行结束 → attach 兜底通知的「每轮一次」记忆复位
+        attachFallbackNoticedThisRun.set(false)
         if (premainChannels.isEmpty()) return
         val closed = premainChannels.size
         closePremainChannels()
