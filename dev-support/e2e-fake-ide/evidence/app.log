@@ -7,19 +7,19 @@
  =========|_|==============|___/=/_/_/_/
  :: Spring Boot ::                (v2.6.3)
 
-2026-09-26 14:24:40.959  INFO 63132 --- [           main] c.s.m.MybatisPlusJoinDemoApplication     : Starting MybatisPlusJoinDemoApplication using Java 1.8.0_181 on HQZC-01 with PID 63132 (F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer-demo\mybatis-plus-join-demo\target\classes started by USER in F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer\dev-support\e2e-fake-ide)
-2026-09-26 14:24:40.963  INFO 63132 --- [           main] c.s.m.MybatisPlusJoinDemoApplication     : The following profiles are active: dm
-2026-09-26 14:24:42.126  INFO 63132 --- [           main] c.g.y.a.MybatisPlusJoinAutoConfiguration : MPJ SqlSessionFactory bean definition: sqlSessionFactory factoryBeanName: com.baomidou.mybatisplus.autoconfigure.MybatisPlusAutoConfiguration factoryMethodName: sqlSessionFactory source: com.baomidou.mybatisplus.autoconfigure.MybatisPlusAutoConfiguration.sqlSessionFactory(javax.sql.DataSource)
-2026-09-26 14:24:43.046  INFO 63132 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port(s): 8082 (http)
-2026-09-26 14:24:43.064  INFO 63132 --- [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
-2026-09-26 14:24:43.064  INFO 63132 --- [           main] org.apache.catalina.core.StandardEngine  : Starting Servlet engine: [Apache Tomcat/9.0.56]
-2026-09-26 14:24:43.197  INFO 63132 --- [           main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
-2026-09-26 14:24:43.198  INFO 63132 --- [           main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 2172 ms
+2026-10-05 16:29:08.613  INFO 52352 --- [           main] c.s.m.MybatisPlusJoinDemoApplication     : Starting MybatisPlusJoinDemoApplication using Java 1.8.0_181 on HQZC-01 with PID 52352 (F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer-demo\mybatis-plus-join-demo\target\classes started by USER in F:\code\Java\Gitee\SongRenShuo\mybatis-plus-sql-visualizer\dev-support\e2e-fake-ide)
+2026-10-05 16:29:08.617  INFO 52352 --- [           main] c.s.m.MybatisPlusJoinDemoApplication     : The following profiles are active: dm
+2026-10-05 16:29:09.842  INFO 52352 --- [           main] c.g.y.a.MybatisPlusJoinAutoConfiguration : MPJ SqlSessionFactory bean definition: sqlSessionFactory factoryBeanName: com.baomidou.mybatisplus.autoconfigure.MybatisPlusAutoConfiguration factoryMethodName: sqlSessionFactory source: com.baomidou.mybatisplus.autoconfigure.MybatisPlusAutoConfiguration.sqlSessionFactory(javax.sql.DataSource)
+2026-10-05 16:29:10.596  INFO 52352 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port(s): 8082 (http)
+2026-10-05 16:29:10.613  INFO 52352 --- [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-10-05 16:29:10.613  INFO 52352 --- [           main] org.apache.catalina.core.StandardEngine  : Starting Servlet engine: [Apache Tomcat/9.0.56]
+2026-10-05 16:29:10.745  INFO 52352 --- [           main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-10-05 16:29:10.745  INFO 52352 --- [           main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 2064 ms
 Logging initialized using 'class org.apache.ibatis.logging.stdout.StdOutImpl' adapter.
-2026-09-26 14:24:43.518  INFO 63132 --- [           main] c.g.y.a.MybatisPlusJoinAutoConfiguration : mybatis plus join properties config complete
-2026-09-26 14:24:43.630  INFO 63132 --- [           main] c.g.y.a.MybatisPlusJoinAutoConfiguration : mybatis plus join SqlInjector init
-Registered plugin: 'com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor@3fdecce'
-Registered plugin: 'com.github.yulichang.interceptor.MPJInterceptor@344426bf'
+2026-10-05 16:29:11.023  INFO 52352 --- [           main] c.g.y.a.MybatisPlusJoinAutoConfiguration : mybatis plus join properties config complete
+2026-10-05 16:29:11.149  INFO 52352 --- [           main] c.g.y.a.MybatisPlusJoinAutoConfiguration : mybatis plus join SqlInjector init
+Registered plugin: 'com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor@6fd5717c'
+Registered plugin: 'com.github.yulichang.interceptor.MPJInterceptor@7e2f86e6'
 Property 'mapperLocations' was not specified.
  _ _   |_  _ _|_. ___ _ |    _ 
 | | |\/|_)(_| | |_\  |_)||_|_\ 
@@ -29,96 +29,96 @@ Property 'mapperLocations' was not specified.
 | | |\/|_)(_| | |_\  |_)||_|_\  | (_) | | | 
      /               |          /
                                     1.5.8
-2026-09-26 14:24:45.136  INFO 63132 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port(s): 8082 (http) with context path ''
-2026-09-26 14:24:45.146  INFO 63132 --- [           main] c.s.m.MybatisPlusJoinDemoApplication     : Started MybatisPlusJoinDemoApplication in 4.739 seconds (JVM running for 5.658)
-2026-09-26 14:24:46.282  INFO 63132 --- [nio-8082-exec-1] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
-2026-09-26 14:24:46.282  INFO 63132 --- [nio-8082-exec-1] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
-2026-09-26 14:24:46.283  INFO 63132 --- [nio-8082-exec-1] o.s.web.servlet.DispatcherServlet        : Completed initialization in 0 ms
+2026-10-05 16:29:12.680  INFO 52352 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port(s): 8082 (http) with context path ''
+2026-10-05 16:29:12.690  INFO 52352 --- [           main] c.s.m.MybatisPlusJoinDemoApplication     : Started MybatisPlusJoinDemoApplication in 4.645 seconds (JVM running for 5.529)
+2026-10-05 16:29:13.953  INFO 52352 --- [nio-8082-exec-1] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-10-05 16:29:13.953  INFO 52352 --- [nio-8082-exec-1] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-10-05 16:29:13.954  INFO 52352 --- [nio-8082-exec-1] o.s.web.servlet.DispatcherServlet        : Completed initialization in 1 ms
 Creating a new SqlSession
-SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@128aeaf8] was not registered for synchronization because synchronization is not active
+SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@788f3ae0] was not registered for synchronization because synchronization is not active
 SQLVIS-SOURCE|cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java|92|cn.song.mpjdemo.mapper.DeviceInfoMapper.selectJoinOne
-2026-09-26 14:24:46.458  INFO 63132 --- [nio-8082-exec-1] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
-2026-09-26 14:24:47.225  INFO 63132 --- [nio-8082-exec-1] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
-JDBC Connection [HikariProxyConnection@1511974920 wrapping dm.jdbc.driver.DmdbConnection@533f54f] will not be managed by Spring
+2026-10-05 16:29:14.224  INFO 52352 --- [nio-8082-exec-1] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-10-05 16:29:15.237  INFO 52352 --- [nio-8082-exec-1] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+JDBC Connection [HikariProxyConnection@2131269499 wrapping dm.jdbc.driver.DmdbConnection@50a5babe] will not be managed by Spring
 ==>  Preparing: SELECT t.id,t.station_id,t.share_scheme_id,t.device_name,t1.station_name,t1.merchant_id FROM car_device_info t LEFT JOIN station_info t1 ON (t1.station_id = t.station_id) WHERE (t.id = ?)
 ==> Parameters: 1(Integer)
 [T-SourceJumpFunnel] primary=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java:92 via=L1 entry=cn.song.mpjdemo.service.impl.DeviceInfoServiceImpl#joinOneAndCount pool=2 | #0 cn.song.mpjdemo.service.impl.DeviceInfoServiceImpl#joinOneAndCount:92 jar=false | #1 cn.song.mpjdemo.controller.DeviceInfoController#one:57 jar=false
 <==    Columns: id, station_id, share_scheme_id, device_name, station_name, merchant_id
 <==        Row: 1, 101, 1, 充电桩A-01, 中心站, 1001
 <==      Total: 1
-Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@128aeaf8]
+Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@788f3ae0]
 Creating a new SqlSession
-SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@334b7827] was not registered for synchronization because synchronization is not active
+SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@6d9bd849] was not registered for synchronization because synchronization is not active
 SQLVIS-SOURCE|cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java|94|cn.song.mpjdemo.mapper.DeviceInfoMapper.selectJoinCount
-JDBC Connection [HikariProxyConnection@1509031693 wrapping dm.jdbc.driver.DmdbConnection@533f54f] will not be managed by Spring
+JDBC Connection [HikariProxyConnection@1818997692 wrapping dm.jdbc.driver.DmdbConnection@50a5babe] will not be managed by Spring
 ==>  Preparing: SELECT COUNT( * ) FROM car_device_info t LEFT JOIN station_info t1 ON (t1.station_id = t.station_id) WHERE (t.id = ?)
 ==> Parameters: 1(Integer)
 <==    Columns: COUNT(*)
 <==        Row: 1
 <==      Total: 1
-Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@334b7827]
+Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@6d9bd849]
 Creating a new SqlSession
-SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@5268f661] was not registered for synchronization because synchronization is not active
+SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@562753b5] was not registered for synchronization because synchronization is not active
 SQLVIS-SOURCE|cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java|42|cn.song.mpjdemo.mapper.DeviceInfoMapper.selectJoinList
-JDBC Connection [HikariProxyConnection@1834601255 wrapping dm.jdbc.driver.DmdbConnection@533f54f] will not be managed by Spring
+JDBC Connection [HikariProxyConnection@839987332 wrapping dm.jdbc.driver.DmdbConnection@50a5babe] will not be managed by Spring
 ==>  Preparing: SELECT t.id,t.station_id,t.share_scheme_id,t.device_name,st.station_name FROM car_device_info t LEFT JOIN station_info st ON (st.station_id = t.id) WHERE (t.id = ?)
 ==> Parameters: 1(Integer)
 <==    Columns: id, station_id, share_scheme_id, device_name, station_name
 <==        Row: 1, 101, 1, 充电桩A-01, null
 <==      Total: 1
-Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@5268f661]
+Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@562753b5]
 Creating a new SqlSession
-SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@2083823e] was not registered for synchronization because synchronization is not active
+SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@1e3b70dc] was not registered for synchronization because synchronization is not active
 SQLVIS-SOURCE|cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java|63|cn.song.mpjdemo.mapper.DeviceInfoMapper.selectJoinList
-JDBC Connection [HikariProxyConnection@1795849822 wrapping dm.jdbc.driver.DmdbConnection@533f54f] will not be managed by Spring
+JDBC Connection [HikariProxyConnection@74992636 wrapping dm.jdbc.driver.DmdbConnection@50a5babe] will not be managed by Spring
 ==>  Preparing: SELECT t.id,t.station_id,t.share_scheme_id,t.device_name FROM car_device_info t LEFT JOIN station_info t1 ON (t1.id = t.station_id) LEFT JOIN ( SELECT tt.id,tt.station_id,tt.station_name,tt.merchant_id FROM station_info tt WHERE (tt.merchant_id >= ?) ) t2 ON (t2.station_id = t.station_id) WHERE (t1.station_name = ? AND t.id = ?)
 ==> Parameters: 0(Integer), 中心站(String), 1(Integer)
 <==      Total: 0
-Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@2083823e]
+Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@1e3b70dc]
 Creating a new SqlSession
-SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@4f23c063] was not registered for synchronization because synchronization is not active
+SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@3491e5b] was not registered for synchronization because synchronization is not active
 SQLVIS-SOURCE|cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java|42|cn.song.mpjdemo.mapper.DeviceInfoMapper.selectJoinList
-JDBC Connection [HikariProxyConnection@1105471479 wrapping dm.jdbc.driver.DmdbConnection@533f54f] will not be managed by Spring
+JDBC Connection [HikariProxyConnection@227471426 wrapping dm.jdbc.driver.DmdbConnection@50a5babe] will not be managed by Spring
 ==>  Preparing: SELECT t.id,t.station_id,t.share_scheme_id,t.device_name,st.station_name FROM car_device_info t LEFT JOIN station_info st ON (st.station_id = t.id) WHERE (t.id = ?)
 ==> Parameters: 1(Integer)
 [T-SourceJumpFunnel] primary=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java:42 via=L1 entry=cn.song.mpjdemo.service.impl.DeviceInfoServiceImpl#joinRightAlias pool=2 | #0 cn.song.mpjdemo.service.impl.DeviceInfoServiceImpl#joinRightAlias:42 jar=false | #1 cn.song.mpjdemo.controller.DeviceInfoController#rightAlias:33 jar=false
 <==    Columns: id, station_id, share_scheme_id, device_name, station_name
 <==        Row: 1, 101, 1, 充电桩A-01, null
 <==      Total: 1
-Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@4f23c063]
+Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@3491e5b]
 Creating a new SqlSession
-SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@65b66719] was not registered for synchronization because synchronization is not active
+SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@412d9ec2] was not registered for synchronization because synchronization is not active
 SQLVIS-SOURCE|cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java|63|cn.song.mpjdemo.mapper.DeviceInfoMapper.selectJoinList
-JDBC Connection [HikariProxyConnection@464262699 wrapping dm.jdbc.driver.DmdbConnection@533f54f] will not be managed by Spring
+JDBC Connection [HikariProxyConnection@1058229273 wrapping dm.jdbc.driver.DmdbConnection@50a5babe] will not be managed by Spring
 ==>  Preparing: SELECT t.id,t.station_id,t.share_scheme_id,t.device_name FROM car_device_info t LEFT JOIN station_info t1 ON (t1.id = t.station_id) LEFT JOIN ( SELECT tt.id,tt.station_id,tt.station_name,tt.merchant_id FROM station_info tt WHERE (tt.merchant_id >= ?) ) t2 ON (t2.station_id = t.station_id) WHERE (t1.station_name = ? AND t.id = ?)
 ==> Parameters: 0(Integer), 中心站(String), 1(Integer)
 [T-SourceJumpFunnel] primary=cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java:63 via=L1 entry=cn.song.mpjdemo.service.impl.DeviceInfoServiceImpl#joinExtAndSubTable pool=2 | #0 cn.song.mpjdemo.service.impl.DeviceInfoServiceImpl#joinExtAndSubTable:63 jar=false | #1 cn.song.mpjdemo.controller.DeviceInfoController#extSub:41 jar=false
 <==      Total: 0
-Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@65b66719]
+Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@412d9ec2]
 Creating a new SqlSession
-SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@4ac90968] was not registered for synchronization because synchronization is not active
+SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@753720fe] was not registered for synchronization because synchronization is not active
 SQLVIS-SOURCE|cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java|103|cn.song.mpjdemo.mapper.UserMapper.selectJoinList
-JDBC Connection [HikariProxyConnection@244815306 wrapping dm.jdbc.driver.DmdbConnection@533f54f] will not be managed by Spring
+JDBC Connection [HikariProxyConnection@1805689853 wrapping dm.jdbc.driver.DmdbConnection@50a5babe] will not be managed by Spring
 ==>  Preparing: SELECT t.id,t.name,t.age,t.sex,t.head_img,t1.tel FROM "user" t LEFT JOIN user_address t1 ON (t1.user_id = t.id) WHERE (t.age = ? AND t1.tel LIKE ? AND t.sex > ? AND t.age BETWEEN ? AND ? AND t.age BETWEEN ? AND ? AND t.id IN (?,?,?)) ORDER BY t.id ASC
 ==> Parameters: 20(Integer), %13800138000%(String), 0(Integer), 10(Integer), 80(Integer), 100(Integer), 200(Integer), 1(Integer), 2(Integer), 3(Integer)
 [T-SourceJumpFunnel] primary=cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java:103 via=L1 entry=cn.song.mpjdemo.service.impl.MpjFullCoverageServiceImpl#ifExistsFamily pool=2 | #0 cn.song.mpjdemo.service.impl.MpjFullCoverageServiceImpl#ifExistsFamily:103 jar=false | #1 cn.song.mpjdemo.controller.MpjFullCoverageController#ifExists:47 jar=false
 <==      Total: 0
-Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@4ac90968]
+Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@753720fe]
 Creating a new SqlSession
-SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@474e19f3] was not registered for synchronization because synchronization is not active
+SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@5c79284b] was not registered for synchronization because synchronization is not active
 SQLVIS-SOURCE|cn/song/mpjdemo/service/impl/MpjFullCoverageServiceImpl.java|103|cn.song.mpjdemo.mapper.UserMapper.selectJoinList
-JDBC Connection [HikariProxyConnection@1131513282 wrapping dm.jdbc.driver.DmdbConnection@533f54f] will not be managed by Spring
+JDBC Connection [HikariProxyConnection@1481025308 wrapping dm.jdbc.driver.DmdbConnection@50a5babe] will not be managed by Spring
 ==>  Preparing: SELECT t.id,t.name,t.age,t.sex,t.head_img,t1.tel FROM "user" t LEFT JOIN user_address t1 ON (t1.user_id = t.id) WHERE (t.age = ? AND t1.tel LIKE ? AND t.sex > ? AND t.age BETWEEN ? AND ? AND t.age BETWEEN ? AND ? AND t.id IN (?,?,?)) ORDER BY t.id ASC
 ==> Parameters: 20(Integer), %13800138000%(String), 0(Integer), 10(Integer), 80(Integer), 100(Integer), 200(Integer), 1(Integer), 2(Integer), 3(Integer)
 <==      Total: 0
-Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@474e19f3]
+Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@5c79284b]
 Creating a new SqlSession
-SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@52becc6c] was not registered for synchronization because synchronization is not active
+SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@5387e178] was not registered for synchronization because synchronization is not active
 SQLVIS-SOURCE|cn/song/mpjdemo/service/impl/DeviceInfoServiceImpl.java|42|cn.song.mpjdemo.mapper.DeviceInfoMapper.selectJoinList
-JDBC Connection [HikariProxyConnection@1481025308 wrapping dm.jdbc.driver.DmdbConnection@533f54f] will not be managed by Spring
+JDBC Connection [HikariProxyConnection@1501530632 wrapping dm.jdbc.driver.DmdbConnection@50a5babe] will not be managed by Spring
 ==>  Preparing: SELECT t.id,t.station_id,t.share_scheme_id,t.device_name,st.station_name FROM car_device_info t LEFT JOIN station_info st ON (st.station_id = t.id) WHERE (t.id = ?)
 ==> Parameters: 1(Integer)
 <==    Columns: id, station_id, share_scheme_id, device_name, station_name
 <==        Row: 1, 101, 1, 充电桩A-01, null
 <==      Total: 1
-Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@52becc6c]
+Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@5387e178]
