@@ -64,6 +64,7 @@ import cn.song.mybatisplus.visualizer.psi.jpa.DerivedMethodInfo;
 import cn.song.mybatisplus.visualizer.psi.jpa.DerivedMethodLocator;
 import cn.song.mybatisplus.visualizer.psi.jpa.HbmXmlEntityResolver;
 import cn.song.mybatisplus.visualizer.psi.jpa.HbmXmlMapping;
+import cn.song.mybatisplus.visualizer.psi.jpa.HqlEntityNameExtractor;
 import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryInfo;
 import cn.song.mybatisplus.visualizer.psi.jpa.HqlQueryLocator;
 import cn.song.mybatisplus.visualizer.psi.jpa.HqlParameter;
@@ -1755,9 +1756,16 @@ public final class SqlPreviewService {
             "Float", "float", "Double", "double", "BigDecimal", "BigInteger", "Number");
 
     /**
-     * JPA 语句风险警示：DELETE 无 WHERE 时提示全表删除（BlockAttack 风格）。
+     * JPA 语句风险警示：DELETE/UPDATE 无 WHERE 时提示全表删除/更新（BlockAttack 风格）。
+     * T-JpaDeleteWhereGuard 普查批：补 UPDATE 分支——此前只报 DELETE，JPA 链无 WHERE 的
+     * bulk UPDATE 静默（MP 链 buildWarning 两种都报，不对称）；UPDATE 的 conditions 空
+     * ⟺ 文本无 WHERE（JpaUpdateParser.parseWhere 对非空 WHERE 必产 Raw 兜底），无错报面。
      */
     private String buildJpaWarning(@NotNull SqlStatement statement) {
+        if (statement instanceof UpdateStatement) {
+            UpdateStatement upd = (UpdateStatement) statement;
+            if (upd.getConditions().isEmpty()) return "⚠ [BlockAttack] 无 WHERE 条件，将更新全表数据！";
+        }
         if (statement instanceof DeleteStatement) {
             DeleteStatement del = (DeleteStatement) statement;
             if (del.getConditions().isEmpty()) return "⚠ [BlockAttack] 无 WHERE 条件，将删除全表数据！";
@@ -2377,11 +2385,12 @@ public final class SqlPreviewService {
             com.intellij.openapi.util.Key.create("mp-visualizer.entityNameLookupCache");
 
     /**
-     * 从 HQL 的 FROM 子句提取实体类名。
+     * 从 HQL 提取实体类名（T-HqlUpdateEntityMap S1 起委托共享提取器）。
+     * 适用于 createQuery(HQL) 单参数场景（无 Entity.class 二参）；
+     * 语句头优先口径——UPDATE/DELETE 头同样命中，不再只认 FROM 子句。
      */
     private String extractEntityNameFromHql(@NotNull String hql) {
-        Matcher m = Pattern.compile("\\bFROM\\s+([A-Z][a-zA-Z0-9_]*)", Pattern.CASE_INSENSITIVE).matcher(hql);
-        return m.find() ? m.group(1) : null;
+        return HqlEntityNameExtractor.extract(hql);
     }
 
     /**

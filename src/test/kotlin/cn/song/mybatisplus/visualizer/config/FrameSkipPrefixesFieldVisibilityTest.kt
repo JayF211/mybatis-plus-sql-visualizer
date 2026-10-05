@@ -49,6 +49,45 @@ class FrameSkipPrefixesFieldVisibilityTest : BasePlatformTestCase() {
         assertTrue("根面板应包含该输入框", isInTree(root, field))
     }
 
+    /**
+     * T-FramePrefixResize 守卫：两前缀框必须置入垂直 OnePixelSplitter（拖拽中缝重分配两框高度
+     * + 比例记忆），且默认加大（首选高 ≥100px）、保留 60px 拖拽下限（minimumSize）。
+     */
+    fun test测试两前缀框置入垂直分栏且默认加大() {
+        val configurable = newConfigurable()
+        configurable.createComponent()
+        val root = configurable.panelForTest().getRoot()
+
+        val splitters = mutableListOf<com.intellij.ui.OnePixelSplitter>()
+        findAllOfType(root, com.intellij.ui.OnePixelSplitter::class.java, splitters)
+        assertTrue("SQL 日志页组件树中应存在两前缀框的分栏（OnePixelSplitter）", splitters.isNotEmpty())
+        val splitter = splitters.first()
+        assertTrue("分栏应为垂直方向（上下两框、中缝横向拖拽）", splitter.orientation)
+
+        val areas = mutableListOf<JTextArea>()
+        findAll(root, JTextArea::class.java, areas)
+        assertTrue("分栏两侧应各有一个前缀多行输入框，实为 ${areas.size}", areas.size >= 2)
+        for (field in areas.take(2)) {
+            assertTrue(
+                "输入框默认首选高度应 ≥100px（T-FramePrefixResize 默认加大，实为 ${field.preferredSize.height}）",
+                field.preferredSize.height >= 100,
+            )
+            assertTrue(
+                "输入框最小高度应 ≥60px（分栏拖拽下限，实为 ${field.minimumSize.height}）",
+                field.minimumSize.height >= 60,
+            )
+        }
+    }
+
+    private fun <T : java.awt.Container> findAllOfType(container: java.awt.Container, type: Class<T>, out: MutableList<T>) {
+        for (c in container.components) {
+            when {
+                type.isInstance(c) -> out.add(type.cast(c))
+                c is java.awt.Container -> findAllOfType(c, type, out)
+            }
+        }
+    }
+
     private fun isInTree(root: java.awt.Container, target: JComponent): Boolean {
         if (root === target) return true
         for (c in root.components) {

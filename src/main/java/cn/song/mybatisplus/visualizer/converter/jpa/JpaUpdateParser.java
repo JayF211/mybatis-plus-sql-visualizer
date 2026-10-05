@@ -22,12 +22,12 @@ import java.util.regex.Pattern;
  *
  * 解析产物直接映射既有 MP 侧模型 [UpdateStatement]：
  *  - SET 对：`[别名.]列 = 值` → [SetClause]（值支持 `?` 占位符 / 字面量）；
- *    简单算术、函数、列引用表达式（如 `u.age = u.age + 1`、`u.updatedAt = NOW()`）
- *    超出模型 value 语义 → [SetClause.rawSql] 原样透传（模型由另一智能体维护，
- *    字段不满足处一律 raw 降级，不改 model/）
- *  - WHERE：只精细解析「AND 连接的简单比较 / IS [NOT] NULL / IN (值清单)」；
- *    含 OR、括号嵌套、LIKE、BETWEEN、子查询等复杂形态 → 整体作 [Condition.Raw]
- *    透传（参数已替换为 `?`，渲染语义无损）
+ *    别名前缀剥除（T-HqlUpdateEntityMap S2：单表 UPDATE 语义，对齐 Hibernate
+ *    真实产物）；简单算术、函数、列引用表达式（如 `u.age = u.age + 1`、`u.updatedAt = NOW()`）
+ *    超出模型 value 语义 → [SetClause.rawSql] 原样透传（raw 文本不剥别名，已知边界）
+ *  - WHERE：只精细解析「AND 连接的简单比较 / IS [NOT] NULL / IN (值清单)」，
+ *    列引用同样剥别名前缀；含 OR、括号嵌套、LIKE、BETWEEN、子查询等复杂形态 →
+ *    整体作 [Condition.Raw] 透传（参数已替换为 `?`，渲染语义无损；Raw 文本不剥别名）
  *
  * 无状态单例，纯函数逻辑，可独立单测。解析失败返回 null（调用方维持原语句透传），
  * 绝不抛异常。
@@ -43,8 +43,12 @@ public final class JpaUpdateParser {
     /**
      * UPDATE 语句解析产物。
      *
-     * @param tableAlias 主表别名（`UPDATE user u SET ...` 的 `u`；无别名为 null）
-     * @param sets       SET 赋值列表（raw 透传形态含完整 `lhs = rhs` 文本）
+     * @param tableAlias 恒为 null（T-HqlUpdateEntityMap S2：HQL/JPQL UPDATE 是单表
+     *        语义，Hibernate 真实产物丢弃别名——`update t set col=? where id=?`；
+     *        头部别名仅用于识别结构，不再透出，渲染头部不拼 `表 别名`）
+     * @param sets       SET 赋值列表（raw 透传形态含完整 `lhs = rhs` 文本；结构化形态
+     *        的 [SetClause.column] 不带 tableAlias——单表 UPDATE 的 SET 左值带表别名
+     *        在 MySQL 报 Unknown column、Oracle 不支持 UPDATE 别名）
      * @param conditions WHERE 条件（不可精细解析时为单个 [Condition.Raw]；无 WHERE 为空列表）
      */
     public static final class ParsedUpdate {
@@ -68,6 +72,15 @@ public final class JpaUpdateParser {
             "^\\s*UPDATE\\s+([a-zA-Z_][a-zA-Z0-9_.$]*)(?:\\s+(?:AS\\s+)?([a-zA-Z_][a-zA-Z0-9_$]*))?\\s+SET\\s+",
             Pattern.CASE_INSENSITIVE);
 
+    /**
+     * DELETE 头部：`DELETE [FROM] 表 [别名]`（JPQL 标准带 FROM；Hibernate 宽松形态无 FROM 也认）。
+     * 别名前瞻排除 WHERE——`DELETE FROM user WHERE ...` 无别名形态下 WHERE 不能被当别名吞掉。
+     */
+    private static final Pattern DELETE_HEAD = Pattern.compile(
+            "^\\s*DELETE\\s+(?:FROM\\s+)?([a-zA-Z_][a-zA-Z0-9_.$]*)"
+                    + "(?:\\s+AS\\s+([a-zA-Z_][a-zA-Z0-9_$]*)|\\s+(?!WHERE\\b)([a-zA-Z_][a-zA-Z0-9_$]*))?",
+            Pattern.CASE_INSENSITIVE);
+
     /** SET 左值：`列` 或 `别名.列`（管道已完成属性→列名映射）。 */
     private static final Pattern COLUMN_PATH =
             Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_$]*(\\.[a-zA-Z_][a-zA-Z0-9_$]*)?$");
@@ -89,12 +102,47 @@ public final class JpaUpdateParser {
             Pattern.CASE_INSENSITIVE);
     private static final Pattern COMPARISON = Pattern.compile("^(.+?)\\s*(<=|>=|<>|!=|=|<|>)\\s*(.+)$");
 
+    /**
+     * DELETE 语句解析产物。
+     *
+     * @param conditions WHERE 条件（复用 UPDATE 同一套白名单解析：简单比较 / IS [NOT] NULL /
+     *        IN 值清单；OR/LIKE/BETWEEN 等复杂形态整体 [Condition.Raw] 兜底——Raw 亦非空，
+     *        下游 BlockAttack 警示据此区分「真带条件」与「裸全表删除」）。无 WHERE 为空列表。
+     */
+    public static final class ParsedDelete {
+        private final List<Condition> conditions;
+
+        public ParsedDelete(List<Condition> conditions) {
+            this.conditions = conditions;
+        }
+
+        public List<Condition> getConditions() { return conditions; }
+    }
+
+    /**
+     * 解析 DELETE 文本为条件树（T-JpaDeleteWhereGuard）。
+     *
+     * 缺陷背景：JPA 链两个转换器此前构造 DeleteStatement 时 conditions 恒写空，
+     * `buildJpaWarning` 按 `conditions.isEmpty()` 判 BlockAttack 全表删除——带 WHERE 的
+     * DELETE 误报警示（SQL 文本正确但模型无条件树）。本方法把 DELETE 的 WHERE 接进
+     * 与 UPDATE 同一套解析（白名单 + Raw 兜底、列引用剥别名前缀）。
+     *
+     * @return 头部结构异常返回 null（调用方维持空 conditions 透传，不抛异常）
+     */
+    public static ParsedDelete parseDelete(String sql) {
+        Matcher head = DELETE_HEAD.matcher(sql);
+        if (!head.find()) return null;
+        String rest = sql.substring(head.group(0).length());
+        int whereIdx = indexOfTopLevelKeyword(rest, "WHERE");
+        if (whereIdx < 0) return new ParsedDelete(List.of());
+        String wherePart = rest.substring(whereIdx + "WHERE".length()).trim();
+        return new ParsedDelete(parseWhere(wherePart));
+    }
+
     /** 解析 UPDATE 文本；非 UPDATE 或结构异常返回 null。 */
     public static ParsedUpdate parse(String sql) {
         Matcher head = UPDATE_HEAD.matcher(sql);
         if (!head.find()) return null;
-        String alias = head.group(2);
-        if (alias != null && alias.isEmpty()) alias = null;
         String rest = sql.substring(head.group(0).length());
 
         // SET ... [WHERE ...]：顶层 WHERE 分界（括号内的 WHERE 属于子查询，不算）
@@ -108,7 +156,9 @@ public final class JpaUpdateParser {
         }
         List<SetClause> sets = parseSetAssignments(trimmedSetPart);
         if (sets.isEmpty()) return null;
-        return new ParsedUpdate(alias, sets, parseWhere(wherePart));
+        // T-HqlUpdateEntityMap S2：头部别名（head.group(2)）仅用于结构识别，
+        // 不透出——单表 UPDATE 渲染为 `UPDATE 表 SET 列 = ?`（Hibernate 真实产物形态）
+        return new ParsedUpdate(null, sets, parseWhere(wherePart));
     }
 
     // ------------------------------------------------------------------
@@ -143,13 +193,9 @@ public final class JpaUpdateParser {
         if (value == null) return new SetClause(assignment); // 算术/函数/列引用等复杂表达式 → raw
 
         if (!COLUMN_PATH.matcher(lhs).matches()) return new SetClause(assignment);
-        int dot = lhs.indexOf('.');
-        ColumnRef column;
-        if (dot > 0) {
-            column = new ColumnRef(lhs.substring(0, dot), lhs.substring(dot + 1));
-        } else {
-            column = new ColumnRef(lhs);
-        }
+        // T-HqlUpdateEntityMap S2：剥别名前缀——单表 UPDATE 的 SET 左值不带表别名
+        // （`u.status` → `status`；COLUMN_PATH 最多一段点号，substringAfterLast 安全）
+        ColumnRef column = new ColumnRef(lhs.substring(lhs.lastIndexOf('.') + 1));
         return new SetClause(column, value);
     }
 
@@ -243,14 +289,10 @@ public final class JpaUpdateParser {
         return new Condition.Simple(column, matcher.group(2), value, null);
     }
 
-    /** 解析 `列` / `别名.列` 路径为 [ColumnRef]；白名单外返回 null。 */
+    /** 解析 `列` / `别名.列` 路径为 [ColumnRef]；白名单外返回 null（S2：别名前缀剥除）。 */
     private static ColumnRef parseColumnPath(String path) {
         if (!COLUMN_PATH.matcher(path).matches()) return null;
-        int dot = path.indexOf('.');
-        if (dot > 0) {
-            return new ColumnRef(path.substring(0, dot), path.substring(dot + 1));
-        }
-        return new ColumnRef(path);
+        return new ColumnRef(path.substring(path.lastIndexOf('.') + 1));
     }
 
     // ------------------------------------------------------------------

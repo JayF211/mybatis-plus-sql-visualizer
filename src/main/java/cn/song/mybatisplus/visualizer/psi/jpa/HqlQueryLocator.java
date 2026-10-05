@@ -21,7 +21,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.regex.Pattern;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -364,14 +363,15 @@ public final class HqlQueryLocator {
             return new EntityInfoResult(typeArg.resolve(), typeArg.getClassName());
         }
 
-        // 三级 fallback：从 HQL/JPQL 字符串的 FROM 子句提取实体类名
+        // 三级 fallback：从 HQL/JPQL 字符串提取实体类名（单参数 createQuery 场景）
+        // T-HqlUpdateEntityMap S1：提取走共享提取器（语句头优先）——不再只认 FROM，
+        // `update Entity b set ...` 无 FROM 子句的 UPDATE 同样提取得到实体名
         if (args.length > 0) {
             HqlStringResult hqlResult = extractHqlString(call);
             String hql = hqlResult.hql();
             if (hql != null && !hql.isBlank()) {
-                Pattern fromPattern = Pattern.compile("\\bFROM\\s+([A-Z][a-zA-Z0-9_]*)\\b", Pattern.CASE_INSENSITIVE);
-                java.util.regex.Matcher m = fromPattern.matcher(hql);
-                if (m.find()) return new EntityInfoResult(null, m.group(1));
+                String entityName = HqlEntityNameExtractor.extract(hql);
+                if (entityName != null) return new EntityInfoResult(null, entityName);
             }
         }
 

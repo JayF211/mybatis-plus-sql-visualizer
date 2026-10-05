@@ -100,6 +100,8 @@ public final class UnboundedWriteDetector {
     /** LIKE 纯通配：至少一个 `%`，且只含 `%`/`_`。 */
     private static final Pattern LIKE_WILDCARD_REGEX = Pattern.compile("[%_]*%[%_]*");
 
+    private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s+");
+
     /**
      * T-PS5-02：AST 单槽共享缓存——确认流（本探测器 {@link #detect}）与回滚链
      * （{@code cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator.generate}）对<b>同一 SQL 文本</b>
@@ -150,12 +152,14 @@ public final class UnboundedWriteDetector {
      * （fail 语义由调用方决定：{@link #detect} 返回 PARSE_FAILED，RollbackSqlGenerator 返回 UNABLE）。
      */
     public static List<Statement> parseStatementsShared(String cleaned) throws Exception {
+        // T-McpWalkFindings S2：key 与解析输入统一规范化（真空行免疫 + 两链 key 对齐共享）
+        String normalized = normalizeWhitespace(cleaned);
         AstSlot slot = astSlot;
         if (slot != null) {
-            if (slot.cleaned == cleaned) return slot.statements;
-            if (slot.cleaned.length() == cleaned.length()
-                    && slot.cleaned.hashCode() == cleaned.hashCode()
-                    && slot.cleaned.equals(cleaned)) {
+            if (slot.cleaned == normalized) return slot.statements;
+            if (slot.cleaned.length() == normalized.length()
+                    && slot.cleaned.hashCode() == normalized.hashCode()
+                    && slot.cleaned.equals(normalized)) {
                 return slot.statements;
             }
         }
@@ -166,10 +170,30 @@ public final class UnboundedWriteDetector {
         // 测试注入的替身同样受此约束（主解析入口 SqlAstParser 已有同款守卫，此处按 Kotlin
         // 语义再护一层：替身不得返回 null，且 null 不得写入共享槽）。
         List<Statement> statements = Objects.requireNonNull(
-                parseStatementsForTest.parse(cleaned),
+                parseStatementsForTest.parse(normalized),
                 "parseStatementsForTest(cleaned) must not be null");
-        astSlot = new AstSlot(cleaned, statements);
+        astSlot = new AstSlot(normalized, statements);
         return statements;
+    }
+
+    /**
+     * 空白规范化（T-McpWalkFindings S2）：连续空白（换行/缩进/空格）折叠为单空格并去首尾。
+     *
+     * <p>真机 20261005 实证链：mapper 渲染产物保留源 XML 换行+缩进（多动态分支空隙尤甚），
+     * 经 {@link SqlCommentStripper#strip} 后空行变<b>真空行</b>（{@code \n\n} 行内无空格）——JSqlParser 5.3
+     * 简单模式（allowComplexParsing 默认关）对真空行解析失败且<b>静默返回 null</b>（不抛异常，
+     * CCJSqlParserUtil.parseStatements/parse 失败即返回 null）→ {@link SqlAstParser} 非空断言 NPE
+     * → 本探测器 fail closed 误报 PARSE_FAILED（mapper_check 空参模拟 6/10 DANGEROUS，demo
+     * UserMapper.xml 实测）。折叠后产物可解析；字面量内空白被折叠不影响判定面（恒真/通配
+     * 判定与回滚推导对字面量空白左右对称不敏感）。</p>
+     *
+     * <p>接线位置＝<b>共享解析槽入口</b>（{@link #parseStatementsShared}）而非本探测器 detect：确认流与
+     * 回滚链必须拿到同一个槽 key 才能共享解析（T-PS5-02 的「共一次」），只在 detect 侧规范化
+     * 会让回滚链的未规范化 key 错位、二次解析（testFast 首跑 {@code SqlPreviewPanelRollbackParseShape
+     * Test.含注释文本_面板一次点击仍只解析一次} 当场抓到）。回滚链同样因此获得真空行免疫。</p>
+     */
+    public static String normalizeWhitespace(String sql) {
+        return WHITESPACE_RUN.matcher(sql).replaceAll(" ").trim();
     }
 
     /**

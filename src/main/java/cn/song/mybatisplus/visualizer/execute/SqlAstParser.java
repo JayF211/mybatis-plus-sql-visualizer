@@ -8,7 +8,6 @@ import net.sf.jsqlparser.parser.feature.FeatureConfiguration;
 import net.sf.jsqlparser.statement.Statement;
 
 import java.util.List;
-import java.util.Objects;
 
 /**
  * SQL 文本 → AST 的<b>单一解析入口</b>（T-PerfSweep7 T-PS7-03 收拢后共四处：无界写探测/回滚推导、
@@ -23,6 +22,14 @@ import java.util.Objects;
  * <p>只开 {@code allowSquareBracketQuotation} 一项，不放宽其它解析行为（最小面）。
  * 失败语义：<b>原样抛出</b>（{@link JSQLParserException}），由调用方决定 fail 方向
  * （闸门 fail-closed / 探测 fail-through / 分析降级）。</p>
+ *
+ * <p><b>null 防御（T-McpWalkFindings S2）</b>：JSqlParser 5.3 的 {@code parseStatements}/{@code parse} 在简单模式
+ * （allowComplexParsing 默认关）解析失败时<b>静默返回 null</b> 而非抛异常（源码
+ * {@code CCJSqlParserUtil.java:362-418/:81-111}，空输入也返回 null）——平台类型落到本对象非空返回声明
+ * 时由 Kotlin 断言抛 {@code parseStatements(...) must not be null} NPE，消息零归因价值。显式把 null
+ * 转成带输入摘录的 {@link JSQLParserException}，各消费者按既有 fail 语义走（探测 fail closed /
+ * 回滚 UNABLE），残余失败不再静默。治本（消除可消除的失败形态：mapper 渲染产物的真空行）在
+ * {@code UnboundedWriteDetector.normalizeWhitespace}。</p>
  *
  * <p>移植注记：master 的 Kotlin {@code internal object} 按本仓互操作惯例落为
  * {@code final class} + {@link #INSTANCE} 单例；两个方法为<b>实例方法</b>，调用形态
@@ -42,24 +49,31 @@ public final class SqlAstParser {
      * 解析（可含多条语句与注释）；失败原样抛出，由调用方决定 fail 语义。
      *
      * <p><b>移植注记（Kotlin 空安全显式化）</b>：master 的 Kotlin 返回类型声明为非空
-     * {@code List<Statement>}，编译器在返回平台类型值处内置 {@code checkNotNullExpressionValue}。
-     * jsqlparser 5.3 实测：同一 JVM 内<b>已成功解析过一次</b>之后，解析失败的
-     * {@code parseStatements(String, Consumer)} 会<b>静默返回 null 而非抛 {@link JSQLParserException}</b>
-     * （首败抛、次败返 null；探测产物 {@code statements=null} 直达调用方迭代 NPE）。
-     * Java 无编译器判空，必须显式拒绝——null 在此转抛 {@code NullPointerException}，
-     * 各调用方的 {@code catch (Exception)} fail-closed 语义（探测 PARSE_FAILED / 回滚 UNABLE /
-     * 元数据失效 fail-closed true）照常接管，与 master 行为一致。
+     * {@code List<Statement>}，且 {@code CCJSqlParserUtil.parseStatements} 的平台类型返回值
+     * 以 elvis {@code ?: throw JSQLParserException(...)} 兜底——null 在此转抛带输入摘录的
+     * {@link JSQLParserException}（jsqlparser 5.3 简单模式解析失败静默返回 null 而非抛异常，
+     * 消息须自带归因信息），各调用方的 {@code catch (Exception)} fail-closed 语义
+     * （探测 PARSE_FAILED / 回滚 UNABLE / 元数据失效 fail-closed true）照常接管。
      */
     public List<Statement> parseStatements(String sql) throws JSQLParserException {
-        return Objects.requireNonNull(
-                CCJSqlParserUtil.parseStatements(sql, parser -> parser.withConfiguration(features)),
-                "CCJSqlParserUtil.parseStatements(sql) must not be null");
+        List<Statement> statements =
+                CCJSqlParserUtil.parseStatements(sql, parser -> parser.withConfiguration(features));
+        if (statements == null) {
+            throw new JSQLParserException(
+                    "JSqlParser returned null statements (simple-parse failed, complex parsing disabled): "
+                            + sql.substring(0, Math.min(80, sql.length())));
+        }
+        return statements;
     }
 
     /** 解析单条语句（T-PS7-03 新增，共享既有 {@link #features}）；失败原样抛出，由调用方决定 fail 语义。 */
     public Statement parseSingle(String sql) throws JSQLParserException {
-        return Objects.requireNonNull(
-                CCJSqlParserUtil.parse(sql, parser -> parser.withConfiguration(features)),
-                "CCJSqlParserUtil.parse(sql) must not be null");
+        Statement statement = CCJSqlParserUtil.parse(sql, parser -> parser.withConfiguration(features));
+        if (statement == null) {
+            throw new JSQLParserException(
+                    "JSqlParser returned null statement (simple-parse failed, complex parsing disabled): "
+                            + sql.substring(0, Math.min(80, sql.length())));
+        }
+        return statement;
     }
 }

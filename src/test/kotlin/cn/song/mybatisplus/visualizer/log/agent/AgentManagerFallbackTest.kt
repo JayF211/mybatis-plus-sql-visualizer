@@ -26,6 +26,11 @@ class AgentManagerFallbackTest : BasePlatformTestCase() {
         manager.rejectCooldownMs = AgentManager.DEFAULT_REJECT_COOLDOWN_MS
         // 防御性还原默认时间源（实例可能跨测试类复用）
         manager.clockMs = { System.currentTimeMillis() }
+        // 去重窗复位（AgentManager 是项目级单例，跨测试类/用例复用）：不复位则前一个用例
+        // 设过的 lastConsentAskAtMs 会让本类的确认请求被 1500ms 去重窗吞掉、回调不触发
+        // （与 AgentConsentFlowTest / AgentPremainConsentTest 同口径）
+        manager.consentAskGuardMs = 0
+        manager.lastConsentAskAtMs.set(0)
     }
 
     override fun tearDown() {

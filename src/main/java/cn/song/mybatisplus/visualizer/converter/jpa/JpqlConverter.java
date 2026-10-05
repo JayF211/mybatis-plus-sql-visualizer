@@ -189,7 +189,12 @@ public final class JpqlConverter {
 
         // 8. 检测 DELETE JPQL → DeleteStatement
         if (sql.trim().toUpperCase().startsWith("DELETE")) {
-            return new Result(sql, new DeleteStatement(table, List.of(), List.of(), null, List.of()), inClauseParams);
+            // T-JpaDeleteWhereGuard：WHERE 接进条件树（与 HqlConverter 同款，两条链行为一致）——
+            // 此前 conditions 恒空，buildJpaWarning 对带 WHERE 的 DELETE 误报 BlockAttack 全表删除
+            JpaUpdateParser.ParsedDelete parsedDelete = JpaUpdateParser.parseDelete(sql);
+            return new Result(sql,
+                    new DeleteStatement(table, parsedDelete != null ? parsedDelete.getConditions() : List.of()),
+                    inClauseParams);
         }
 
         // 8.5 检测 UPDATE JPQL → UpdateStatement（J2）
@@ -357,9 +362,13 @@ public final class JpqlConverter {
      */
     private static String mapEntityToTable(@NotNull String jpql, @NotNull TableInfo table) {
         if (table.getEntityClassName().isBlank()) return jpql;
+        // 普查批：字面量掩码——`like '%UserEntity%'` 等单引号字面量内的实体名不得被替换
+        JpaSqlLiteralMasking.Masked maskResult = JpaSqlLiteralMasking.mask(jpql);
         // 替换 FROM 子句中的实体类名（简单替换，仅在确认不是更大标识符的一部分时）
         Pattern entityPattern = Pattern.compile("\\b" + Pattern.quote(table.getEntityClassName()) + "\\b");
-        return entityPattern.matcher(jpql).replaceAll(Matcher.quoteReplacement(table.getTableName()));
+        String replaced = entityPattern.matcher(maskResult.text())
+                .replaceAll(Matcher.quoteReplacement(table.getTableName()));
+        return JpaSqlLiteralMasking.unmask(replaced, maskResult.literals());
     }
 
     /**

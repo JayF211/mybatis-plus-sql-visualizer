@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.model.SelectStatement;
 import cn.song.mybatisplus.visualizer.model.SqlStatement;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.model.UpdateStatement;
+import cn.song.mybatisplus.visualizer.psi.jpa.HqlEntityNameExtractor;
 import com.intellij.openapi.project.Project;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -248,9 +249,12 @@ public final class HqlConverter {
 
         // 10. 检测 DELETE HQL → DeleteStatement
         if (sql.trim().toUpperCase().startsWith("DELETE")) {
+            // T-JpaDeleteWhereGuard：WHERE 接进条件树（与 UPDATE 同一套白名单 + Raw 兜底）——
+            // 此前 conditions 恒空，buildJpaWarning 对带 WHERE 的 DELETE 误报 BlockAttack 全表删除
+            JpaUpdateParser.ParsedDelete parsedDelete = JpaUpdateParser.parseDelete(sql);
             return new Result(
                     sql,
-                    new DeleteStatement(table, List.of(), List.of(), null, List.of()),
+                    new DeleteStatement(table, parsedDelete != null ? parsedDelete.getConditions() : List.of()),
                     inClauseParams);
         }
 
@@ -441,7 +445,9 @@ public final class HqlConverter {
      */
     private static String mapEntityToTable(@NotNull String hql, @NotNull TableInfo table, @Nullable String entityAlias) {
         if (table.getEntityClassName().isBlank()) return hql;
-        String result = hql;
+        // 普查批：字面量掩码——`like '%UserEntity%'` 等单引号字面量内的实体名不得被替换
+        JpaSqlLiteralMasking.Masked maskResult = JpaSqlLiteralMasking.mask(hql);
+        String result = maskResult.text();
         Pattern classNamePattern = entityPattern(table.getEntityClassName());
         if (classNamePattern != null) {
             result = classNamePattern.matcher(result).replaceAll(Matcher.quoteReplacement(table.getTableName()));
@@ -452,7 +458,7 @@ public final class HqlConverter {
                 result = aliasPattern.matcher(result).replaceAll(Matcher.quoteReplacement(table.getTableName()));
             }
         }
-        return result;
+        return JpaSqlLiteralMasking.unmask(result, maskResult.literals());
     }
 
     /** 实体标识符全词匹配 Pattern（词边界防子串误伤；构造失败容错返回 null）。 */
@@ -479,7 +485,9 @@ public final class HqlConverter {
     private static String mapAssociationPath(@NotNull String hql, @NotNull TableInfo table) {
         if (table.getAssociations().isEmpty()) return hql;
 
-        String result = hql;
+        // 普查批：字面量掩码——字面量内的 `x.<关联字段名>.y` 点号串不得被改写或注入注释
+        JpaSqlLiteralMasking.Masked maskResult = JpaSqlLiteralMasking.mask(hql);
+        String result = maskResult.text();
         // 匹配三段式路径：alias.fieldName.propertyName
         Pattern threeLevelPattern = Pattern.compile(
                 "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)\\b");
@@ -507,7 +515,7 @@ public final class HqlConverter {
             }
         }
         matcher.appendTail(sb);
-        return sb.toString();
+        return JpaSqlLiteralMasking.unmask(sb.toString(), maskResult.literals());
     }
 
     // ------------------------------------------------------------------
@@ -526,15 +534,22 @@ public final class HqlConverter {
     }
 
     /**
-     * Fallback：实体不可解析时，从 FROM 子句提取实体名替换为 unknown_table。
+     * Fallback：实体不可解析时，从语句提取实体名替换为 unknown_table。
      * 仅替换第一个匹配（主表），避免重复替换导致 SQL 异常。
+     * T-HqlUpdateEntityMap S1：实体名提取走共享提取器（语句头优先）——
+     * UPDATE/DELETE 头同样命中，不再只认 FROM 子句。
      */
     private static String mapFallbackEntityToTable(@NotNull String hql, @NotNull String tableName) {
-        Pattern fromPattern = Pattern.compile("\\bFROM\\s+([A-Z][a-zA-Z0-9_]*)\\b", Pattern.CASE_INSENSITIVE);
-        Matcher match = fromPattern.matcher(hql);
-        if (!match.find()) return hql;
-        String entityName = match.group(1);
-        return hql.replaceFirst(Pattern.quote(entityName), Matcher.quoteReplacement(tableName));
+        String entityName = HqlEntityNameExtractor.extract(hql);
+        if (entityName == null) return hql;
+        // 普查批：掩码 + 词边界——裸 replaceFirst 会命中更长标识符的前缀子串
+        // （`OwnerInfo` 命中 `OwnerInfoHelper` → `unknown_tableHelper`）或字面量内容
+        JpaSqlLiteralMasking.Masked maskResult = JpaSqlLiteralMasking.mask(hql);
+        Pattern entityNamePattern = entityPattern(entityName);
+        String replaced = entityNamePattern != null
+                ? entityNamePattern.matcher(maskResult.text()).replaceFirst(Matcher.quoteReplacement(tableName))
+                : maskResult.text();
+        return JpaSqlLiteralMasking.unmask(replaced, maskResult.literals());
     }
 
     // ------------------------------------------------------------------

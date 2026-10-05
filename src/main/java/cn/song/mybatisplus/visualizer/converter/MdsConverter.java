@@ -314,9 +314,15 @@ public final class MdsConverter {
                 return null;
             }
         }
-        String warning = "deleteFrom".equals(entryName) && ctx.conditions.isEmpty()
-                ? "⚠ 无 WHERE 条件，将删除全表数据！"
-                : null;
+        // 普查批：update 无 where → 全表更新警示（此前只报 deleteFrom，不对称）
+        String warning;
+        if ("deleteFrom".equals(entryName) && ctx.conditions.isEmpty()) {
+            warning = "⚠ 无 WHERE 条件，将删除全表数据！";
+        } else if ("update".equals(entryName) && ctx.conditions.isEmpty()) {
+            warning = "⚠ 无 WHERE 条件，将更新全表数据！";
+        } else {
+            warning = null;
+        }
         GeneratedSql generated = SqlGenerator.generateWithParams(statement);
         StringBuilder sql = new StringBuilder(generated.getSql());
         for (String note : notes) {

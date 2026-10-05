@@ -126,13 +126,6 @@ public final class CustomDaoHqlLocator {
     /** HQL 命名参数正则。匹配 `:paramName` 形式的命名参数（排除 `::` 类型转换运算符）。 */
     private static final Pattern NAMED_PARAM_PATTERN = Pattern.compile("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)");
 
-    /** HQL FROM 子句实体类名提取正则。匹配 `FROM EntityName` 中的驼峰类名。 */
-    private static final Pattern FROM_ENTITY_PATTERN = Pattern.compile("\\bFROM\\s+([A-Z][a-zA-Z0-9_]*)\\b", Pattern.CASE_INSENSITIVE);
-
-    /** HQL UPDATE/DELETE 语句实体类名提取正则。 */
-    private static final Pattern UPDATE_ENTITY_PATTERN = Pattern.compile("\\bUPDATE\\s+([A-Z][a-zA-Z0-9_]*)\\b", Pattern.CASE_INSENSITIVE);
-    private static final Pattern DELETE_ENTITY_PATTERN = Pattern.compile("\\bDELETE\\s+FROM\\s+([A-Z][a-zA-Z0-9_]*)\\b", Pattern.CASE_INSENSITIVE);
-
     /** 单例（保持对 Kotlin `CustomDaoHqlLocator.method()` 调用的二进制兼容）。 */
     public static final CustomDaoHqlLocator INSTANCE = new CustomDaoHqlLocator();
 
@@ -425,25 +418,18 @@ public final class CustomDaoHqlLocator {
     // ------------------------------------------------------------------
 
     /**
-     * 从 HQL 字符串的 FROM 子句提取实体类名。
+     * 从 HQL 字符串提取实体类名（T-HqlUpdateEntityMap S1 起收敛到共享提取器）。
      *
-     * 取第一个匹配 `FROM EntityName` 的驼峰标识符作为实体类名。
+     * 口径由本类先例的「FROM 优先」统一为语句头优先（UPDATE/DELETE 头先行）：
+     * 无 FROM 子句的 UPDATE 同样命中，且 `UPDATE ... SET x = (SELECT ... FROM y)`
+     * 不再误命中子查询实体；SELECT / 裸 from 行为不变。
      *
      * @param hql HQL 字符串
      * @return 实体类名；未匹配到时返回 null
      */
     @Nullable
     private static String extractEntityClassNameFromHql(@NotNull String hql) {
-        // 优先匹配 FROM 子句（SELECT）
-        Matcher fromMatch = FROM_ENTITY_PATTERN.matcher(hql);
-        if (fromMatch.find()) return fromMatch.group(1);
-        // 适配 UPDATE 语句：UPDATE EntityName SET ...
-        Matcher updateMatch = UPDATE_ENTITY_PATTERN.matcher(hql);
-        if (updateMatch.find()) return updateMatch.group(1);
-        // 适配 DELETE 语句：DELETE FROM EntityName ...
-        Matcher deleteMatch = DELETE_ENTITY_PATTERN.matcher(hql);
-        if (deleteMatch.find()) return deleteMatch.group(1);
-        return null;
+        return HqlEntityNameExtractor.extract(hql);
     }
 
     // ------------------------------------------------------------------

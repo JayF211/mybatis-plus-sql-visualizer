@@ -7,6 +7,7 @@ import com.intellij.psi.PsiClass;
 import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.search.PsiShortNamesCache;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.regex.Matcher;
@@ -118,17 +119,22 @@ public final class JpaFromEntityMapper {
      */
     public static String mapSubqueryEntities(String sql, TableInfo table,
                                              Function<String, String> resolveTableName) {
+        // 普查批：字面量掩码——字面量内的 `from OrderEntity`（FROM/JOIN 假象）不得驱动扫描，
+        // 字面量内的实体名原文不得被替换正则命中
+        JpaSqlLiteralMasking.Masked maskResult = JpaSqlLiteralMasking.mask(sql);
+        String masked = maskResult.text();
+        List<String> literals = maskResult.literals();
         Set<String> entityNames = new LinkedHashSet<>();
-        Matcher matcher = ENTITY_REFERENCE.matcher(sql);
+        Matcher matcher = ENTITY_REFERENCE.matcher(masked);
         while (matcher.find()) {
             String entityName = matcher.group(1);
             if (!entityName.equals(table.getEntityClassName())) {
                 entityNames.add(entityName);
             }
         }
-        if (entityNames.isEmpty()) return sql;
+        if (entityNames.isEmpty()) return JpaSqlLiteralMasking.unmask(masked, literals);
 
-        String result = sql;
+        String result = masked;
         for (String entityName : entityNames) {
             Pattern word = Pattern.compile("\\b" + Pattern.quote(entityName) + "\\b");
             // 已无该实体名残留（如实体名与表名同形被主映射替换）时跳过，保证幂等
@@ -137,6 +143,6 @@ public final class JpaFromEntityMapper {
             if (tableName == null) continue;
             result = word.matcher(result).replaceAll(Matcher.quoteReplacement(tableName));
         }
-        return result;
+        return JpaSqlLiteralMasking.unmask(result, literals);
     }
 }

@@ -381,6 +381,10 @@ public final class QuerydslConverter {
         List<ParamHint> hints;
         switch (entryName) {
             case "update" -> {
+                // 普查批：update 无 where → notes + 警示（对齐同函数 delete 分支既有形态）
+                if (ctx.conditions.isEmpty()) {
+                    notes.add("无 WHERE 条件：update(根).execute() 将更新全表（运行时 Querydsl update 无条件即全改）");
+                }
                 statement = new UpdateStatement(table, ctx.sets, ctx.conditions);
                 GeneratedSql generated = SqlGenerator.generateWithParams(statement);
                 sql = generated.getSql();
@@ -453,9 +457,17 @@ public final class QuerydslConverter {
         for (String note : notes) {
             finalSql.append("\n-- ").append(note);
         }
+        // 普查批：update 无 where → 全表更新警示（此前只报 delete，不对称）
+        String warning;
+        if ("delete".equals(entryName) && ctx.conditions.isEmpty()) {
+            warning = "⚠ 无 WHERE 条件，将删除全表数据！";
+        } else if ("update".equals(entryName) && ctx.conditions.isEmpty()) {
+            warning = "⚠ 无 WHERE 条件，将更新全表数据！";
+        } else {
+            warning = null;
+        }
         return new QdPreview(entryName, statement, finalSql.toString(), params, hints, table.getTableName(),
-                table.getAllColumnNames(),
-                "delete".equals(entryName) && ctx.conditions.isEmpty() ? "⚠ 无 WHERE 条件，将删除全表数据！" : null);
+                table.getAllColumnNames(), warning);
     }
 
     // ------------------------------------------------------------------
