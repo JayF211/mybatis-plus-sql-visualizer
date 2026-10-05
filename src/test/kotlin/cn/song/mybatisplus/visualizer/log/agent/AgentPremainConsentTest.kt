@@ -2,10 +2,12 @@ package cn.song.mybatisplus.visualizer.log.agent
 
 import cn.song.mybatisplus.visualizer.config.EnhancedCaptureConsent
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.log.RunConfigurationProcessListener
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
 /**
@@ -34,6 +36,9 @@ class AgentPremainConsentTest : BasePlatformTestCase() {
         manager.clockMs = { System.currentTimeMillis() }
         // 实例可能跨测试类复用（同 AgentConsentFlowTest 防御口径）：复位「每轮一次」通知标记
         manager.attachFallbackNoticedThisRun.set(false)
+        // 去重窗默认关闭（按用例需要显式开启），防跨用例残留时间戳吞掉后续用例的确认请求
+        manager.consentAskGuardMs = 0
+        manager.lastConsentAskAtMs.set(0)
         val state = PluginSettings.getInstance().state
         state.enhancedCaptureEnabled = true
         state.enhancedCaptureConfirmed = false
@@ -55,6 +60,8 @@ class AgentPremainConsentTest : BasePlatformTestCase() {
                 app != null && !app.isHeadlessEnvironment && app.isDispatchThread
             }
             manager.attachFallbackNotifier = null
+            manager.consentAskGuardMs = 0
+            manager.lastConsentAskAtMs.set(0)
         } finally {
             super.tearDown()
         }
@@ -185,4 +192,135 @@ class AgentPremainConsentTest : BasePlatformTestCase() {
         }
         assertEquals(1, notified)
     }
+
+    // ---------- R2-C：设置页开启上升沿立即确认 ----------
+
+    private fun publishSettingsChange() {
+        project.messageBus.syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC).settingsChanged()
+    }
+
+    /**
+     * lastKnownEnabled 在 AgentManager 构造时快照 state（测试里 setUp 改 state 不发事件，快照滞留旧值）。
+     * 先置关并发一次事件同步基线，再走「开」上升沿——生产不受影响（真实 toggle 每步都发事件）。
+     */
+    private fun armRisingEdgeBaseline() {
+        PluginSettings.getInstance().state.enhancedCaptureEnabled = false
+        publishSettingsChange()
+    }
+
+    fun testR2设置页开启上升沿_未确认_立即弹确认_同意持久化() {
+        val state = PluginSettings.getInstance().state
+        state.enhancedCaptureConfirmed = false
+        manager.premainConsentGate = { true }
+        providerReturning(EnhancedCaptureConsent.ACCEPTED)
+        armRisingEdgeBaseline()
+        // 模拟设置页开启：先置位再发布（上升沿）
+        state.enhancedCaptureEnabled = true
+        publishSettingsChange()
+        assertEquals("开启上升沿应立即弹一次确认（不等首轮 Run）", 1, askedCount)
+        assertTrue("同意后 confirmed 应持久化——之后每轮 Run 天然带 premain", state.enhancedCaptureConfirmed)
+    }
+
+    fun testR2设置页开启上升沿_拒绝_冷却持久化且不置confirmed() {
+        val state = PluginSettings.getInstance().state
+        state.enhancedCaptureConfirmed = false
+        manager.premainConsentGate = { true }
+        providerReturning(EnhancedCaptureConsent.REJECTED)
+        armRisingEdgeBaseline()
+        state.enhancedCaptureEnabled = true
+        publishSettingsChange()
+        assertEquals(1, askedCount)
+        assertTrue("拒绝应持久化拒绝时刻", state.enhancedCaptureRejectedAtMs > 0)
+        assertFalse(state.enhancedCaptureConfirmed)
+    }
+
+    fun testR2已确认或冷却态_上升沿不弹() {
+        val state = PluginSettings.getInstance().state
+        manager.premainConsentGate = { true }
+        providerReturning(EnhancedCaptureConsent.ACCEPTED)
+        armRisingEdgeBaseline()
+        state.enhancedCaptureConfirmed = true
+        state.enhancedCaptureEnabled = true
+        publishSettingsChange()
+        assertEquals("已确认态上升沿不得弹窗", 0, askedCount)
+    }
+
+    fun testR2设置页关闭_下降沿不弹() {
+        val state = PluginSettings.getInstance().state
+        state.enhancedCaptureEnabled = true
+        manager.premainConsentGate = { true }
+        providerReturning(EnhancedCaptureConsent.ACCEPTED)
+        state.enhancedCaptureEnabled = false
+        publishSettingsChange()
+        assertEquals("下降沿不得弹窗", 0, askedCount)
+    }
+
+    // ---------- R2：确认请求去重窗（O-66 引导链连发防双弹） ----------
+
+    fun testR2去重窗内重复请求_只弹一次() {
+        manager.consentAskGuardMs = AgentManager.DEFAULT_CONSENT_ASK_GUARD_MS
+        manager.premainConsentGate = { true }
+        providerReturning(EnhancedCaptureConsent.ACCEPTED)
+        val first = manager.requestConsentOnce()
+        assertEquals(EnhancedCaptureConsent.ACCEPTED, first)
+        val second = manager.requestConsentOnce()
+        assertNull("去重窗内的第二次请求应被吞掉（O-66 引导链连发形态）", second)
+        assertEquals("两次请求只应弹一次", 1, askedCount)
+    }
+
+    fun testR2去重窗关闭_连续请求都放行() {
+        manager.consentAskGuardMs = 0
+        manager.premainConsentGate = { true }
+        providerReturning(EnhancedCaptureConsent.ACCEPTED)
+        assertNotNull(manager.requestConsentOnce())
+        assertNotNull(manager.requestConsentOnce())
+        assertEquals(2, askedCount)
+    }
+
+    fun testR2上升沿与O66引导连发_全局只弹一次() {
+        val state = PluginSettings.getInstance().state
+        manager.consentAskGuardMs = AgentManager.DEFAULT_CONSENT_ASK_GUARD_MS
+        manager.premainConsentGate = { true }
+        providerReturning(EnhancedCaptureConsent.ACCEPTED)
+        // O-66 引导链完整形态：置位开关 → 发布 SETTINGS_CHANGE（触发上升沿确认）→ 紧接 requestReauthorization
+        armRisingEdgeBaseline()
+        state.enhancedCaptureEnabled = true
+        publishSettingsChange()
+        manager.requestReauthorization()
+        flushEdt()
+        assertEquals("上升沿与引导流毫秒级连发只应弹一个框", 1, askedCount)
+        assertTrue(state.enhancedCaptureConfirmed)
+    }
+
+    private fun flushEdt() {
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+    }
+
+    // ---------- R2-A2：订阅后补扫接线守卫 ----------
+
+    /**
+     * 订阅后补扫接线守卫：[RunConfigurationProcessListener] 必须调 backfillRunningProcesses 且
+     * 实现须枚举 RCM 描述符。扫的是剥注释后的源码代码事实（方法声明自身会把符号留在常量池，
+     * 字节码守卫探不到「调用点摘除」，故用 SettingsTruthTest 同款源码扫描惯例）。
+     */
+    fun testR2补扫接线守卫_subscribe后必须backfill() {
+        val src = java.io.File("src/main/kotlin/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.kt")
+            .readText()
+        val noComments = Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL).replace(src) { m ->
+            m.value.replace(Regex("[^\n]"), " ")
+        }.lineSequence().joinToString("\n") { line ->
+            val i = line.indexOf("//")
+            if (i >= 0) line.substring(0, i) else line
+        }
+        assertTrue(
+            "订阅成功后必须调 backfillRunningProcesses（T-FirstUsePremainConsent R2-A2 接线，摘掉必红）",
+            noComments.contains("backfillRunningProcesses(project)"),
+        )
+        assertTrue(
+            "补扫实现应枚举 RCM getAllDescriptors",
+            noComments.contains("getAllDescriptors"),
+        )
+    }
+
+    // ---------- S2：attach 兜底能力边界通知 ----------
 }

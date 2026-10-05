@@ -72,6 +72,9 @@ class AgentManager(private val project: Project) : Disposable {
          */
         const val DEFAULT_REJECT_COOLDOWN_MS = 24L * 60 * 60 * 1000
 
+        /** 确认请求去重窗默认值（T-FirstUsePremainConsent R2）：吸收上升沿与 O-66 引导流毫秒级连发的第二次请求。 */
+        const val DEFAULT_CONSENT_ASK_GUARD_MS = 1_500L
+
         /** attach 排队去抖窗默认值（T-PS4-03）：同 pid 窗口内重复启动不重复排队（与挂载前静默等待解耦）。 */
         const val DEFAULT_ATTACH_DEBOUNCE_MS = 3_000L
 
@@ -274,6 +277,21 @@ class AgentManager(private val project: Project) : Disposable {
                 if (state.enhancedCaptureEnabled && !lastKnownEnabled) {
                     state.enhancedCaptureRejectedAtMs = 0L
                     LOG.info("设置变更：增强捕获重新开启——拒绝冷却已重置")
+                    // T-FirstUsePremainConsent R2-C：确认前置到「开启」时刻。Round1 把确认挂在
+                    // updateJavaParameters 窗口，沙盒实测（idea.log 11:06:54）该窗口在后台线程跑、
+                    // EDT 闸门恒跳过 → 首轮仍静默。开启那一刻在设置页/引导链上下文天然是 EDT——
+                    // 在此同步弹一次确认，授权持久化先于任何 Run，之后每轮启动即带 premain。
+                    // O-66 引导链「置位+发布+requestReauthorization」会连发两次请求：requestConsentOnce
+                    // 的去重窗吸收第二次，只弹一个框。
+                    if (needsReauthorization() && premainConsentGate()) {
+                        when (requestConsentOnce()) {
+                            EnhancedCaptureConsent.ACCEPTED ->
+                                LOG.info("设置变更上升沿确认：用户同意注入——后续 Run 即可 premain（启动即捕获）")
+                            EnhancedCaptureConsent.REJECTED ->
+                                LOG.info("设置变更上升沿确认：用户拒绝注入——进冷却（Run 链不再重复弹）")
+                            else -> Unit
+                        }
+                    }
                 }
                 lastKnownEnabled = state.enhancedCaptureEnabled
                 if (!state.enhancedCaptureEnabled) {
@@ -479,7 +497,7 @@ class AgentManager(private val project: Project) : Disposable {
      */
     private fun requestConsentThenAttach(processHandler: Any?, onOutcome: (EnhancedCaptureConsent) -> Unit = {}) {
         com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-            val outcome = confirmEnhancedCapture() ?: return@invokeLater
+            val outcome = requestConsentOnce() ?: return@invokeLater
             when (outcome) {
                 EnhancedCaptureConsent.ACCEPTED -> {
                     onOutcome(EnhancedCaptureConsent.ACCEPTED)
@@ -560,7 +578,7 @@ class AgentManager(private val project: Project) : Disposable {
             LOG.info("premain 提前确认跳过：headless 或非 EDT 线程——回落既有 attach 链确认（零劣化）")
             return false
         }
-        return when (confirmEnhancedCapture()) {
+        return when (requestConsentOnce()) {
             EnhancedCaptureConsent.ACCEPTED -> {
                 LOG.info("premain 提前确认：用户同意注入——本轮即可注入 premain")
                 true
@@ -583,6 +601,37 @@ class AgentManager(private val project: Project) : Disposable {
         val app = com.intellij.openapi.application.ApplicationManager.getApplication()
         app != null && !app.isHeadlessEnvironment && app.isDispatchThread
     }
+
+    /**
+     * 去重确认入口（T-FirstUsePremainConsent R2）：四个触发点（设置页开启上升沿 / O-66 引导链
+     * requestReauthorization / 进程出现 attach 链 / premain 提前确认）共用。同一时刻只应有一个框——
+     * O-66 引导链「置位开关 + 发布 SETTINGS_CHANGE + 立即 requestReauthorization」会让上升沿与
+     * 引导流在毫秒级内连发两次请求，本入口按 [consentAskGuardMs] 时间窗把第二次吞掉（只弹一个框）。
+     *
+     * 早退返回 null（不弹不落盘）：项目已释放 / 未开启 / 冷却期内 / 去重窗内。
+     * 其余语义（三态落盘、广播、fatal 透传）收口在 [confirmEnhancedCapture] 单点不变。
+     */
+    internal fun requestConsentOnce(): EnhancedCaptureConsent? {
+        if (project.isDisposed || !isEnhancedEnabled()) return null
+        if (isInRejectCooldown()) {
+            LOG.info("requestConsentOnce: 拒绝冷却期内——不弹窗")
+            return null
+        }
+        val now = clockMs()
+        val last = lastConsentAskAtMs.get()
+        if (last > 0L && now - last < consentAskGuardMs) {
+            LOG.info("requestConsentOnce: ${now - last}ms 前已弹过确认（去重窗 ${consentAskGuardMs}ms）——吞掉本次重复请求")
+            return null
+        }
+        lastConsentAskAtMs.set(now)
+        return confirmEnhancedCapture()
+    }
+
+    /** 去重窗宽度（测试注入 0 = 关闭去重）。 */
+    internal var consentAskGuardMs: Long = DEFAULT_CONSENT_ASK_GUARD_MS
+
+    /** 最近一次确认弹窗时刻（[requestConsentOnce] 去重窗基准；测试复位缝）。 */
+    internal val lastConsentAskAtMs = AtomicLong(0L)
 
     /**
      * 确认提供者（默认弹注入确认框三态结果，headless 恒拒绝；测试替换以驱动同意/关闭/拒绝分支）。

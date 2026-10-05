@@ -62,8 +62,64 @@ object RunConfigurationProcessListener {
         return isModuleBasedProfile(profile)
     }
 
-    /** 纯判定（测试缝）：profile 是否模块型主配置；反射失败保守按主进程处理（宁清零勿永不归零）。 */
-    private fun isModuleBasedProfile(profile: Any): Boolean = try {
+    /**
+     * T-FirstUsePremainConsent R2-A2：订阅后补扫在跑的主配置进程——堵「事件早于订阅」竞态。
+     * 沙盒实录（idea.log 11:07:01~11:07:36）：项目打开瞬间 Run 已在跑，EXECUTION_TOPIC 订阅完成于
+     * 进程出现之后 → 首轮既无确认弹窗也无 attach（全静默）。补扫在订阅成功后立即枚举 RCM 描述符，
+     * 对**存活且主配置**的进程补发 [AgentManager.onProcessAppeared]（未确认 → 弹确认；已确认 →
+     * attach）。非主配置（HTTP/profiler 等）静默过滤（T-PS4-01 同源判据，不产生 resolvePid WARN）。
+     * 全链反射（execution 域 API 不在编译 classpath，同 [isModuleBasedLaunch] 口径）；
+     * 任何异常只记 WARN 降级不抛（补扫是补位路径，绝不能影响项目打开）。
+     */
+    private fun backfillRunningProcesses(project: Project) {
+        runCatching {
+            val rcmClass = Class.forName(
+                "com.intellij.execution.ui.RunContentManager",
+                true,
+                platformClassLoader,
+            )
+            val rcm = rcmClass.getMethod("getInstance", Project::class.java).invoke(null, project)
+            val raw = runCatching { rcmClass.getMethod("getAllDescriptors").invoke(rcm) }.getOrNull()
+            val descriptors = when (raw) {
+                is Array<*> -> raw
+                is Collection<*> -> raw.toTypedArray()
+                else -> null
+            } ?: run {
+                LOG.info("backfill: getAllDescriptors 不可用——跳过补扫（project=${project.name}）")
+                return
+            }
+            var backfilled = 0
+            for (descriptor in descriptors) {
+                val d = descriptor ?: continue
+                val handler = runCatching {
+                    d.javaClass.getMethod("getProcessHandler").invoke(d)
+                }.getOrNull() ?: continue
+                val alive = runCatching {
+                    val terminated = handler.javaClass.getMethod("isProcessTerminated").invoke(handler) as? Boolean
+                    val terminating = handler.javaClass.getMethod("isProcessTerminating").invoke(handler) as? Boolean
+                    terminated == false && terminating == false
+                }.getOrNull() ?: continue
+                if (!alive) continue
+                val profile = runCatching {
+                    d.javaClass.getMethod("getRunProfile").invoke(d)
+                }.getOrNull()
+                // 仅主配置进程补扫：与 processStarted 事件链的 isMainLaunch 同源判定——
+                // 未确认态弹确认只对主配置触发（T-PS4-01），HTTP 等非主配置不得借补扫绕过
+                if (profile == null || !isModuleBasedProfile(profile)) continue
+                backfilled++
+                LOG.info("backfill: 发现订阅前已在跑的主配置进程（${d.javaClass.name}）——补发 onProcessAppeared")
+                project.getService(AgentManager::class.java).onProcessAppeared(handler, isMainConfigLaunch = true)
+            }
+            if (backfilled > 0) {
+                LOG.info("backfill: 订阅后补扫完成——补发 $backfilled 个在跑主配置进程（project=${project.name}）")
+            }
+        }.onFailure { t ->
+            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
+            LOG.warn("backfill: 订阅后在跑进程补扫失败（补位路径，不影响项目打开）", t)
+        }
+    }
+
+    /** 纯判定（测试缝）：profile 是否模块型主配置；反射失败保守按主进程处理（宁清零勿永不归零）。 */    private fun isModuleBasedProfile(profile: Any): Boolean = try {
         Class.forName(
             "com.intellij.execution.configurations.ModuleBasedConfiguration",
             true,
@@ -148,6 +204,7 @@ object RunConfigurationProcessListener {
                 listener,
             )
             LOG.info("RunConfigurationProcessListener: 已订阅 EXECUTION_TOPIC（project=${project.name}）")
+            backfillRunningProcesses(project)
             true
         } catch (t: Throwable) {
             if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传

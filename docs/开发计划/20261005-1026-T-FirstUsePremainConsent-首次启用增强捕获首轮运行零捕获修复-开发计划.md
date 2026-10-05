@@ -131,3 +131,35 @@
 - 定向绿 32/32 + agent/config 包回归（读数见提交信息）；`testFast` 全桶与全量门禁按三档分层另派只读收口代理。
 - **runIde 沙盒走查留下轮批**：出厂态首轮 Run 弹窗时机（进程启动前）+ 同意后首轮启动期 SQL 即捕获 + 不重启直接打 .http 可见（验收标准 1/3 的真机段）+ 前提 1 线程实测定论。
 - 本任务未触达 build.gradle.kts / plugin.xml EP 面（仅新增 notificationGroup 声明，既有 EP 无改动）——构建校验按三档分层判据不在必跑面。
+
+## 七、第二轮（20261005 午后用户实测反馈 + 沙盒日志归因，方案 C+A2 定案并实施）
+
+### 用户反馈与日志实证
+
+用户实施后实测：**第一次 Run 全静默（连弹窗都没有），第二次 Run 才弹确认框**——比修复前更迷惑。沙盒日志（同文件 11:06~11:09 会话）两层根因：
+
+1. **待验证前提 1 被实测证伪**：11:06:54 `premain 提前确认跳过：headless 或非 EDT 线程——回落既有 attach 链确认`——`updateJavaParameters` 在**后台线程**执行，Round1 的 EDT 闸门在真实环境恒触发，S1 前置确认从未生效（设计时已备该回落分支，落地后证实回落形态在主路径上恒触发，等于主修空转）。
+2. **订阅竞态（既有缺陷被暴露）**：`RunConfigurationProcessListener` 的 EXECUTION_TOPIC 订阅挂在 `LogStartupCapture`（ProjectActivity，11:07:01.8 完成），而首轮进程出现在 ~11:07:01.5——事件早于订阅，首轮连旧 attach 链的确认弹窗都不触发。「项目刚打开就 Run」必触。
+
+第二轮的弹窗实为旧 attach 链所弹（11:07:36），同意后走 attach 兜底（能力边界通知 11:07:40 已发出，机制按设计工作）——但用户体验链变成「第一次静默 → 第二次弹但同意后该轮仍不完整 → 第三次才完整」，不可接受。
+
+### 定案（用户拍板「按推荐」：C 为主、A2 为兜底）
+
+- **方案 C（主修）：确认前置到「开启」时刻**——设置页开启上升沿（SETTINGS_CHANGE 监听，AgentManager init）在 `needsReauthorization() && 可弹闸门` 时同步走一次确认。开启上下文天然在 EDT（设置页 Apply / O-66 引导链动作），授权持久化先于任何 Run，此后每轮启动即带 premain——彻底绕开「updateJavaParameters 后台线程」与订阅竞态两个坑。
+- **去重窗（C 的伴生件）**：O-66 引导链「置位开关 + 发布 SETTINGS_CHANGE + 立即 requestReauthorization」会让上升沿与引导流毫秒级连发两次确认请求。新增 `requestConsentOnce()` 去重入口（默认窗 1500ms，`DEFAULT_CONSENT_ASK_GUARD_MS`），四个触发点（上升沿 / requestReauthorization / onProcessAppeared attach 链 / premain 提前确认）统一走它，第二次请求在窗内被吞、只弹一个框。
+- **方案 A2（兜底）：订阅后补扫在跑进程**——`RunConfigurationProcessListener.subscribe` 成功后 `backfillRunningProcesses`：反射枚举 RCM `getAllDescriptors`，对**存活且 ModuleBasedConfiguration 主配置**的进程补发 `onProcessAppeared`（未确认 → 弹确认；已确认 → attach）；非主配置静默过滤（T-PS4-01 同源判据，不产生 resolvePid WARN 噪音）；全链 runCatching、fatal 透传，补扫失败只 WARN 绝不影响项目打开。
+
+### Round1 遗留路径的处置
+
+- `PremainRunConfigurationExtension` 的 `ensureConfirmedBeforePremain` 接线保留：confirmed 已达成时直接放行（不再弹）；EDT 闸门保留为后台线程静默回落——C 生效后该回落只存在于「用户从未在开启时确认」的边缘态。
+- Round1 测试与守卫全部继续有效（`requestConsentOnce` 内部仍收口到 `confirmEnhancedCapture` 单点）。
+
+### R2 实施记录（当轮回填）
+
+- `AgentManager`：init 上升沿监听加确认触发；`requestConsentOnce` + `consentAskGuardMs`/`lastConsentAskAtMs`（测试可注入/复位）；`requestConsentThenAttach` 与 `ensureConfirmedBeforePremain` 改走 `requestConsentOnce`。
+- `RunConfigurationProcessListener`：`subscribe` 成功路径挂 `backfillRunningProcesses`（RCM 反射枚举 + 存活判定 + isModuleBasedProfile 过滤 + 补发 onProcessAppeared）。
+- 测试：`AgentPremainConsentTest` 新增 8 例（上升沿同意/拒绝/已确认不弹/下降沿不弹 + 去重窗吞重放行 + O-66 连发全局一弹 + backfill 源码扫描守卫）；`AgentConsentFlowTest`/`AgentPremainConsentTest` setUp 关闭去重窗防跨用例残留。
+- **守卫形态勘误**：backfill 接线守卫初版用字节码常量池判据，反向验证实测**探不到调用点摘除**（方法声明自身把符号留在常量池，摘调用不摘声明时守卫恒绿）——改源码扫描守卫（剥注释后断言 `backfillRunningProcesses(project)` 调用在场，SettingsTruthTest 同款惯例）。教训：字节码守卫只适用于「符号整体消失」的接线，调用点级判据须扫源码。
+- **测试基线快照坑（留档）**：`lastKnownEnabled` 在 AgentManager 构造时快照 state，测试里 setUp 改 state 不发事件 → 快照滞留旧值，上升沿判不出（两例假红）。修法=测试先置关并发布一次事件同步基线（`armRisingEdgeBaseline`）再走开上升沿；生产不受影响（真实 toggle 每步都发事件）。
+- 反向验证读数：①摘上升沿确认块 → 上升沿两例红；②摘 `backfillRunningProcesses(project)` 调用 → 源码守卫红（首轮字节码守卫未红即本次勘误依据）；恢复后 agent+config 全包回归 **43 类 323/0 绿**（含 8 新例）+ LogStartupCaptureTest 回归。
+- 已知取舍（登记）：O-66 引导流中若上升沿先弹并由用户作答，引导流的 onOutcome 回调因去重被吞——引导框的「重启生效」提示该形态下不展示；实际影响趋零（同意后下一轮 Run 即完整生效，提示语义本就指向同一动作）。runIde 真机走查（弹窗时机/首轮启动期捕获/线程定论）仍留下轮沙盒批。

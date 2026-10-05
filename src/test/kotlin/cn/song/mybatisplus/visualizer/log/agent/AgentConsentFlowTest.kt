@@ -34,6 +34,9 @@ class AgentConsentFlowTest : BasePlatformTestCase() {
         state.enhancedCaptureConfirmed = false
         state.enhancedCaptureRejectedAtMs = 0
         manager.rejectCooldownMs = AgentManager.DEFAULT_REJECT_COOLDOWN_MS
+        // R2 去重窗：本类用例自带「冷却过期后再弹」等瞬时连发场景，默认关闭去重（专类专测）
+        manager.consentAskGuardMs = 0
+        manager.lastConsentAskAtMs.set(0)
         savedProvider = manager.consentProvider
         askedCount = 0
         manager.consentProvider = { askedCount++; EnhancedCaptureConsent.REJECTED }
