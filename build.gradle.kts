@@ -244,6 +244,13 @@ tasks.withType<Jar>().configureEach {
 tasks.named<Task>("verifyGate") { mustRunAfter("buildPlugin") }
 tasks.named<Task>("testShards") { mustRunAfter("verifyGate") }
 
+// T-ReleasePerf6 S1：buildPlugin 起止毫秒锚点——发版链各环节分解台账补缺口（此前 buildPlugin
+// 无单独读数，Jar 恒重跑语义不变，只加观测不动行为；配置缓存兼容=动作内零脚本对象引用）。
+tasks.named<Task>("buildPlugin") {
+    doFirst { logger.lifecycle("buildPlugin START ${System.currentTimeMillis()}") }
+    doLast { logger.lifecycle("buildPlugin END ${System.currentTimeMillis()}") }
+}
+
 // T-PerfSweep6 T-PS6-09（性能报告发现 14b）：`:sql-visualizer-agent:test` 挂进收口清单。
 // agent 子项目是**独立构建/测试通道**，默认门禁 testShards 此前不覆盖它——心跳节奏、退避语义、
 // attach 端到端这些 agent 侧用例只有手动点名才跑。接线点在 root body（本块），**不是**下方
@@ -303,6 +310,10 @@ val e2eFakeIde = tasks.register<Exec>("e2eFakeIde") {
     val e2eJavaHome = providers.gradleProperty("e2eJavaHome").orNull
         ?: file("D:/HuanJing/Java/jdk1.8.0_181").takeIf { it.isDirectory }?.absolutePath
     e2eJavaHome?.let { environment("JAVA_HOME", it) }
+    // T-ReleasePerf6 S1：起止毫秒锚点（与 testShardN/verifyGate 同款）——历史读数 24~45s 量级，
+    // 锚点让它进 releaseGate 整链分解台账有数可对
+    doFirst { logger.lifecycle("e2eFakeIde START ${System.currentTimeMillis()}") }
+    doLast { logger.lifecycle("e2eFakeIde END ${System.currentTimeMillis()}") }
 }
 // R7 时序：真机级探针放在发版链路最后——它启动真实应用并占用端口，跑在前面会与测试/门禁抢资源。
 // （与文件顶部的 verifyGate→testShards 同款做法：依赖只保证「都执行」，mustRunAfter 才定序。）

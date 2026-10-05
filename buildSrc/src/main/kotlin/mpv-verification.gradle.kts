@@ -295,5 +295,10 @@ tasks {
             "发版链路一命令：buildPlugin → verifyGate（三目标兼容门禁）→ verifyMarketplace（Marketplace 同口径）" +
                 " → testShards（全量测试）→ e2eFakeIde（真机级端到端探针，需本机 MySQL + demo 工程）"
         dependsOn("buildPlugin", "verifyGate", "verifyMarketplace", "testShards", "e2eFakeIde")
+        // T-ReleasePerf6 S1：整链起止毫秒锚点——与 verifyGate/testShardN/verifyMarketplace 各自
+        // 的锚点配合，一次 releaseGate 日志即可对出各环节分解耗时（此前只有各环节零散锚点，
+        // 总墙钟要从 daemon 日志或表纪实测）。动作内零脚本对象引用，配置缓存兼容。
+        doFirst { logger.lifecycle("releaseGate START ${System.currentTimeMillis()}") }
+        doLast { logger.lifecycle("releaseGate END ${System.currentTimeMillis()}") }
     }
 }
