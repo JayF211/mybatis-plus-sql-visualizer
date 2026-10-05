@@ -79,3 +79,27 @@
 **全量门禁读数**：testShards 5 片单路 **6156/0/0/9**（较上轮 6108 +48：本任务 A 车道 3 + C 车道 8，其余为并行会话同期新增〔T-FramePrefixResize 等〕；skip 9 仍为 docker 桶）+ testExternal 40/0/1 + agent 93/0/0 + parity 计划类 535 个均有结果 XML；BUILD SUCCESSFUL 3m16s exit 0。
 
 **沙盒 UI 走查**：留待下轮沙盒走查批——形态 18 预览不再出红警示、DELETE 条件树/参数回填激活逐字核对。
+
+## 七、同构普查批（20261005，用户令「其他功能类似问题一起修复」）
+
+**扫描方式**：两路只读 Explore 子代理并行（B 路=模型文本脱节类：全量核对 buildWarning/buildJpaWarning 两警示判定点、11 个 buildJpaPreviewResult 消费链、20 处 DeleteStatement/UpdateStatement 生产点的模型-文本同源性；A 路=语句头/字面量假设类：全 src/main 的 FROM/UPDATE/DELETE 正则、startsWith 头部分派、裸词替换场景）+ 主控亲核 CRU 族逐方法警示对齐。
+
+**B 路结论**：修复后本仓绝大多数 converter 的 SQL 文本由语句模型经 SqlGenerator 生成，文本与模型天然同源，「文本带 WHERE、模型 conditions 空」错报路径未再出现；现存的是**警示通道不对称**（delete 全家齐备、update 集体缺位、无决策登记）。修复 F1~F5（`0261b44`）：
+- F1 `buildJpaWarning` 补 UpdateStatement 分支（JPA 链无 WHERE bulk UPDATE 此前静默；conditions 空 ⟺ 文本无 WHERE，无错报面）；
+- F2/F5 EasyQueryConverter `updatePreview` 两分支补全表更新警示 + updatable(entity) notes 无主键时失实修正（按实际 WHERE 语义三分支）；
+- F3 MdsConverter warning 判定 when 化补 update 分支；
+- F4 QuerydslConverter update 分支补警示+notes（对齐 delete 分支既有形态）。
+- B 路另登记设计内边界两处（Hql/Jpql UPDATE 解析失败→SelectStatement 透传、SelectClauseExpander J19 短路，均有行内登记）不扩面。
+
+**A 路结论**：确定缺陷三处+顺带一处，全部是「替换端裸词、字面量不设防」与已修缺陷同管道的残留，统一修法=新增 `JpaSqlLiteralMasking`（掩码→替换→还原；字面量口径沿用 JpaAliasPropertyMapper.STRING_LITERAL 仓内唯一份）：
+- G1 `HqlConverter.mapFallbackEntityToTable` 裸 replaceFirst 无词边界无字面量保护（`OwnerInfo` 命中 `OwnerInfoHelper` 前缀 → `unknown_tableHelper`）；
+- G2 HqlConverter/JpqlConverter `mapEntityToTable` 的 `\b实体名\b` 全局替换吃字面量（`like '%UserEntity%'` → `'%user%'`）；
+- G3 `JpaFromEntityMapper` ENTITY_REFERENCE 扫描与替换正则均吃字面量（`set note = 'copy from OrderEntity x'` 字面量内的 FROM 假象驱动错表映射）；
+- G5 `HqlConverter.mapAssociationPath` 三段路径正则命中字面量内容（掩码接入顺带覆盖）。
+- A 路理论风险四处**登记不扩面**（触发面窄、修复收益低于回归风险，留作后续候选）：注释开头语句头部分派失效（JPQL 标准不支持注释）/JpqlConverter.expandSelectAliases 首个 FROM 假设/SqlPreviewService.detectMainAlias 子查询前置/JdbcTemplateSqlPreviewService.extractFirstTableName。
+
+**测试**：`JpaSqlLiteralSafetyTest` 6 用例（HQL/JPQL/UPDATE SET 字面量保护、fallback 前缀子串、关联路径字面量、掩码往返）+ `PreviewEndToEndTest` 2 用例（JPA UPDATE 无 WHERE 警示/带 WHERE 无警示）+ 三链 converter 警示正反用例 7 个（并行子代理 `a4af61d`，EasyQuery 12/Mds 7/Querydsl 7 全绿）。
+
+**反向验证（两次读数）**：摘 `mapEntityToTable` 掩码 → 恰 2 条字面量用例失败；恢复 → 全绿。首轮字面量测试 2 失败系用例自身 `select u` 触发既有裸别名展开语义（T-HQL-SELECT-01 正当行为），改具体列投影后绿——非实现缺陷。
+
+**全量门禁读数**：首轮 testShards 出现 `SenderLoopBackoffTest`（退避时序）+`FatalPassthroughTest`（状态回调计数）两处失败，均在本轮未触碰的 agent 传输/日志包；串行复跑 BUILD SUCCESSFUL 判定为本轮并行负载下的时序抖动（与在册回归假失败清单同族；上一轮门禁同代码全绿佐证）。复跑 testShards 又出现 `SettingsTruthTest`（publishStatusChanged 计数 9→7）+`BundleParityGuardTest`（AgentManager bundle key 缺失）两处守卫失败——git 实测系**并行会话在途实施 T-FirstUsePremainConsent**（AgentManager.kt/PremainRunConfigurationExtension.kt/plugin.xml/bundle 正被其修改，计划 `2b38c5e`），属他人 WIP 被源码扫描守卫如实检出，非本任务回归。**两轮门禁中本任务触碰的全部包（converter/jpa、converter、ui、integration）零失败**；字面量掩码 6 用例+三链警示 26 例+JPA 族回归均定向全绿。权威全量门禁随占用工作树的会话收口统一复跑（并行纪律：记录证据并交回）。
