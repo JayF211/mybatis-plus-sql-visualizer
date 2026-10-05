@@ -1225,12 +1225,14 @@ class BannedApiSourceScanTest {
         // catch(Exception) 形态（executeQueries 兜底提交块，正则只匹配 catch(Throwable)，但
         // execute.invoke 反射链同源吞 Error），一并按 T-FP-02 定例补 `isFatal(cause)` 透传。
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to 22,
-        // 8 处：agent 采集/attach 链（accept 线程透传即线程终止，平台记录现场）。
-        "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java" to 8,
+        // 9 处：agent 采集/attach 链（accept 线程透传即线程终止，平台记录现场）；
+        // +1 = notifyAttachFallbackOnce 通知出口 fatal 透传（T-SyncK2JMaster29 随 master 增强捕获族移植）。
+        "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java" to 9,
         // 3 处：agent 会话（读取/写入循环的 fatal 透传）。
         "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentSession.java" to 3,
-        // 7 处：运行配置监听（T-FP-02 落地批）。
-        "src/main/java/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.java" to 7,
+        // 8 处：运行配置监听（T-FP-02 落地批）；
+        // +1 = backfillRunningProcesses 补扫外层 fatal 透传（T-SyncK2JMaster29 随 master 增强捕获族移植）。
+        "src/main/java/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.java" to 8,
         // 1 处：MCP 执行器（解包后的 cause 判定）。
         "src/main/java/cn/song/mybatisplus/visualizer/mcp/McpDbExecutor.java" to 1,
         // 2 处：预览服务（T-FP-02b 收口：预览主链降级不算「可选能力探测」，见 master 同族注）。
@@ -1273,8 +1275,16 @@ class BannedApiSourceScanTest {
      * flattenEmbeddedColumns 出口 rootFieldName 取名降级 1）、`psi/EntityResolver.java` +2
      * （resolveEmbeddedColumns 的展平调用与字段类型读取降级）。全部为 master 侧 `runCatching` 同源
      * 形态、只做降级不覆盖 fatal 面，按既定流程重新登记基线。
+     *
+     * **666 → 674（T-SyncK2JMaster29，2026-10-06，本轮净增 +8）**：增强捕获确认族翻译（master
+     * T-FirstUsePremainConsent R1~R3 + T-FirstUseFreshInstallConsent 同源 runCatching 形态）——
+     * `log/agent/AgentManager.java` +3（confirmEnhancedCapture 三态单点/requestConsentOnce 去重入口/
+     * notifyAttachFallbackOnce 通知出口）、`log/RunConfigurationProcessListener.java` +5（backfill
+     * 反射归一与逐描述符补发链+外层兜底）、`log/LogStartupCapture.java` +1（doExecute 顶部确认接线）。
+     * 全部只降级不覆盖 fatal 面；其中 2 处已判 fatal（AgentManager/RunConfigurationProcessListener
+     * 各 +1，见 [fatalPassthroughGuardedFiles] 注记），其余为未判定降级站点，按既定流程重新登记基线。
      */
-    private val fatalCatchSiteTotalBaseline = 666
+    private val fatalCatchSiteTotalBaseline = 674
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线
