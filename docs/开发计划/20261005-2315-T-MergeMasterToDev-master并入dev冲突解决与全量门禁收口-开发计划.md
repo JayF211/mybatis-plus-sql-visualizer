@@ -62,6 +62,21 @@
 - 构建校验：`verifyGate` 三目标。
 - 三档分层：本任务为主控直做，全量与 verifyGate 均本会话收口，不另派收口代理（无并行车道在飞）。
 
-## 七、实施记录（实施后回填）
+## 七、实施记录（2026-10-05 23:04~23:5x 回填）
 
-- 待回填：合并提交号、冲突裁决实际清单、门禁读数（testFast/testShards/agent/verifyGate）、修复循环记录（如有）、push 读数。
+**结论：合并完成，四道门禁全绿，零修复循环。**
+
+1. **计划落库**：本文件提交 `43a3769`（先于一切代码调整）。
+2. **合并执行**：`git merge master` → 合并提交 **`6002808`**。实际冲突面与 merge-tree 预演完全一致（5 文件，待验证前提 1 证实），无预演外冲突：
+   - `CHANGELOG.md`：两 hunk union，dev 三条（R3 日期字面量/性能五件 F47~F51/R24）+ master 五条（ASM 修复/走查收口/去重窗顺序陷阱/首轮零捕获/确认流测试隔离）全保留，八锚点 grep 在场；
+   - `docs/变更记录.md`：master 10-05 四行按「最新在上」插入 dev 10-02 行之上，插入行与 master 原文 `diff` **逐字一致**（机械校验 TRANScription-EXACT-MATCH），dev 侧四行原位在场；
+   - T15 计划 add/add：取 dev 实施完成版（待验证前提 2 证实——master 版唯一独有行为「（实施开始后回填）」占位，已被 dev 版实施记录取代）；
+   - 两 bundle：dev 新键 `settings.sourceFrameSkipPrefixes.hint`（含注释）+ master 的 `autoInjectInterceptor` 增强捕获推荐语，双语侧同规则。
+3. **语义核查**（S3）：11 个自动合并交集文件双向净变化过目——master 侧符号全部到达（TinyClassFileWriter 引用、JPA 字面量掩码、前缀分栏等），dev 侧符号全部幸存（SqlPreviewService +36 行相对 master、PluginSettingsPanel +111 行等）；仓内零冲突标记残留。
+4. **门禁读数**（docker daemon 全程离线，skip 面按实际记录；任务登记 mpsv-merge-m2d）：
+   - `testFast` 快桶：**3571/0/6 全绿**（2m02s；6 skip 全部=DialectDockerVerificationTest 真库套件，docker 离线口径）；
+   - `testShards` 全量（5 片单路）：**6480/0/9 全绿**（2m51s，落 warm 稳态带；较 dev 基线 6395 增 85 例=master 新增测试，防陈旧抽查=AgentPremainConsentTest/DemoJpaSqlPipelineTest/JpaSqlLiteralSafetyTest/McpToolsetShellFactoryTest 均在本轮 XML；9 skip=docker 桶与基线口径一致）；
+   - `:sql-visualizer-agent:test`：**94/0/0 全绿**（与基线持平；首轮被 UP-TO-DATE 静默跳过〔T8 在册陷阱再现，且本树无历史结果目录〕，按定例 `:sql-visualizer-agent:clean` 后复跑取权威读数）；
+   - `verifyGate` 三目标构建校验：**IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63 全 Compatible**（2m13s；弃用计数 25/31/87 较在售版 14/17/72 上行=dev 侧未发行增量面，观察项非问题块；产物为本轮合并后新构建）。
+5. **待验证前提核销**：前提 1/2/4/5 全部证实（冲突面一致/T15 取舍成立/门禁全绿且总数上行/verifyGate Compatible）；前提 3（交集文件语义兼容）由 testFast+testShards+agent 三层全绿证实；前提 6 成立（登记后单会话收口，全量单路无并行抢占）。
+6. **收尾**：dev push（本批 `43a3769`+`6002808`+本回填笔）；并行任务注销。dev→master 回流未做（用户在案禁令，且用户未令）。
