@@ -294,6 +294,23 @@ public final class AgentManager implements Disposable {
 
     public AgentManager(Project project) {
         this.project = project;
+        // 通知出口默认实现（master 属性初始化器直译；测试可注入替身）。须在 project 赋值之后。
+        this.attachFallbackNotifier = () -> {
+            com.intellij.openapi.application.Application app = ApplicationManager.getApplication();
+            if (app == null || !app.isUnitTestMode()) {
+                try {
+                    com.intellij.notification.NotificationGroupManager.getInstance()
+                        .getNotificationGroup(AGENT_NOTIFICATION_GROUP_ID)
+                        .createNotification(
+                            cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("notification.agent.attachFallback.title"),
+                            cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("notification.agent.attachFallback.body"),
+                            com.intellij.notification.NotificationType.INFORMATION)
+                        .notify(project);
+                } catch (Throwable ignored) {
+                    // 对齐 Kotlin runCatching：平台通知失败不外抛（外层还有 fatal 透传兜底）
+                }
+            }
+        };
         // T-PS5-04：monitor 定时任务不再在此排定（见 ensureMonitorStarted）。
         // T-M56-08：设置变更驱动——开启（已确认）→ 惰性挂载由进程出现回调承接；
         // 关闭 → CONFIG 停采集 + 会话关闭 + 桥回落；脱敏开关 → CONFIG 下发
@@ -878,23 +895,11 @@ public final class AgentManager implements Disposable {
 
     /**
      * 通知出口（默认 balloon，测试模式跳过平台通知；测试注入计数器驱动断言）。
+     * 实例在构造器内 {@code project} 赋值之后装配——Java 字段初始化器先于构造器体执行，
+     * 直接初始化会因 lambda 引用空白 final {@code project} 报「可能尚未初始化」
+     * （Kotlin 属性初始化器引用主构造参数无此时序约束，翻译形态差异）。
      */
-    public Runnable attachFallbackNotifier = () -> {
-        com.intellij.openapi.application.Application app = ApplicationManager.getApplication();
-        if (app == null || !app.isUnitTestMode()) {
-            try {
-                com.intellij.notification.NotificationGroupManager.getInstance()
-                    .getNotificationGroup(AGENT_NOTIFICATION_GROUP_ID)
-                    .createNotification(
-                        cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("notification.agent.attachFallback.title"),
-                        cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("notification.agent.attachFallback.body"),
-                        com.intellij.notification.NotificationType.INFORMATION)
-                    .notify(project);
-            } catch (Throwable ignored) {
-                // 对齐 Kotlin runCatching：平台通知失败不外抛（外层还有 fatal 透传兜底）
-            }
-        }
-    };
+    public Runnable attachFallbackNotifier;
 
     /** 本轮 attach 兜底通知已发标记（每轮复位；public 为同模块测试缝，供测试实例复用场景复位）。 */
     public final AtomicBoolean attachFallbackNoticedThisRun = new AtomicBoolean(false);

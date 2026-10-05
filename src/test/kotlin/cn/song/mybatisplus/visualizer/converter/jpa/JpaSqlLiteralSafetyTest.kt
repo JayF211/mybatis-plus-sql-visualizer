@@ -17,11 +17,12 @@ import org.junit.Test
  */
 class JpaSqlLiteralSafetyTest {
 
+    // k2j 互操作：TableInfo/ColumnInfo 是 Java 构造器，具名实参禁用改位置形态（同包 JpaUpdateConverterTest 先例）
     private val userTable = TableInfo(
-        entityClassName = "UserEntity",
-        tableName = "user",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+        "UserEntity",
+        "user",
+        listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("username", "username"),
             ColumnInfo("remark", "remark"),
             ColumnInfo("status", "status"),
@@ -29,13 +30,16 @@ class JpaSqlLiteralSafetyTest {
     )
 
     private val ruleTableItemTable = TableInfo(
-        entityClassName = "RuleTableItem",
-        tableName = "THORN_RULE_TABLE_ITEM",
-        columns = listOf(
-            ColumnInfo("id", "ID", isId = true),
+        "RuleTableItem",
+        "THORN_RULE_TABLE_ITEM",
+        listOf(
+            ColumnInfo("id", "ID", true),
             ColumnInfo("note", "NOTE"),
         ),
-        associations = listOf(
+        null,
+        null,
+        null,
+        listOf(
             AssociationInfo("ruleTable", "RULE_TABLE_ID", "THORN_RULE_TABLE", "thornRuleTable"),
         ),
     )
@@ -108,8 +112,9 @@ class JpaSqlLiteralSafetyTest {
     @Test
     fun `masking_roundTrip_preservesLiterals`() {
         val sql = "select 'it''s a.%UserEntity%' from t where x = '' and y = 'from OrderEntity'"
-        val (masked, literals) = JpaSqlLiteralMasking.mask(sql)
-        assertTrue("掩码文本不得含引号字面量内容", !masked.contains("UserEntity"))
-        assertEquals(sql, JpaSqlLiteralMasking.unmask(masked, literals))
+        // k2j 互操作：Masked 是 Java record，解构需 component1/2 改访问器方法调用
+        val result = JpaSqlLiteralMasking.mask(sql)
+        assertTrue("掩码文本不得含引号字面量内容", !result.text().contains("UserEntity"))
+        assertEquals(sql, JpaSqlLiteralMasking.unmask(result.text(), result.literals()))
     }
 }

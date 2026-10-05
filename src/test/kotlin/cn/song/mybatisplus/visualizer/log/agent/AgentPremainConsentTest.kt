@@ -67,8 +67,9 @@ class AgentPremainConsentTest : BasePlatformTestCase() {
         }
     }
 
-    private fun providerReturning(outcome: EnhancedCaptureConsent): () -> EnhancedCaptureConsent {
-        return { askedCount++; outcome }.also { manager.consentProvider = it }
+    // k2j 互操作：consentProvider 是 Java Supplier 字段，Kotlin lambda 赋值不做 SAM 转换，显式构造（SourceCaptureGuideEnableFlowTest 同款）
+    private fun providerReturning(outcome: EnhancedCaptureConsent): java.util.function.Supplier<EnhancedCaptureConsent> {
+        return java.util.function.Supplier { askedCount++; outcome }.also { manager.consentProvider = it }
     }
 
     // ---------- S1：ensureConfirmedBeforePremain 三态语义 ----------
