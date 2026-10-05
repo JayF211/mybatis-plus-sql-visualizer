@@ -1,7 +1,7 @@
 # T-HqlUpdateEntityMap：session 查询通道 UPDATE 语句实体名提取缺失与嵌入列映射修复 —— 开发计划
 
 > 用户 2026-10-05 报障：demo 项目（jpa-hibernate-demo）`cn.song.jpademo.service.impl.HibernateTemplateDemoServiceImpl#updateEmbeddedCreatedTime`（形态 17）预览产物不正确——`createdTime` 应为下划线物理列名，判断「识别逻辑和使用数据源辅助有问题」，点名先分析原因、出开发计划。
-> 状态：根因已实证（主控逐文件亲证），**计划停等拍板**。
+> 状态：**已拍板实施（2026-10-05 用户令 master 按方案 A 实施）**，实施与验证读数见 §六。
 
 ## 一、现状与根因（已实证）
 
@@ -135,9 +135,29 @@ runIde 沙盒打开 jpa-hibernate-demo：
 5. **S2 影响面**：`JpaUpdateParser` 剥别名后 `JpaUpdateConverterTest` 中带别名的既有用例（如 `update_withoutAlias_tableAliasNull` 之外的别名形态）断言需同步调整，实施前先全量核对列出清单，防「改实现忘改断言」或「断言迁就实现」；
 6. **参数对照表不受影响**：形态 17 用位置参数 `?1/?2` + 显式 setParameter，paramNames 提取走 `extractParamNamesFromHql` fallback，S1/S2 均不触该路径。
 
-## 六、实施记录
+## 六、实施记录（20261005，master）
 
-（实施开始后回填：反向验证读数、门禁读数、走查截图编号。）
+**实施提交**：`8e9ca7e`（9 files，+296/−67；src/main 6 文件 + src/test 3 文件，新件 `HqlEntityNameExtractor.kt` / `HqlEntityNameExtractorTest.kt`）。
+
+**S1 落地**：共享提取器 `psi/jpa/HqlEntityNameExtractor`（语句头优先：UPDATE/DELETE/INSERT 头 > FROM；DELETE 分带 FROM 版先试防 `from` 被当实体名、畸形头回落 FROM 宽容降级）；四处接入＝计划 S1 三处 + CustomDaoHqlLocator 收敛（可选项做了，消掉第五份拷贝，`CustomDaoHqlLocatorTest` 回归护航）。提取器单测 10 条全绿。
+
+**S2 落地（方案 A 全剥）**：`JpaUpdateParser.parse` 的 `tableAlias` 恒 null、`parseAssignment`/`parseColumnPath` 列引用剥别名前缀；raw 透传文本不剥别名（`update_arithmeticSet_*` 两用例原样保留 `u.age = u.age + 1` 形态）——与计划「raw 文本不剥」一致，登记为已知边界。
+
+**S3 落地**：`HqlEntityNameExtractorTest` 新增 10 条；`HqlQueryLocatorTest` 补 `testCreateQuery_updateHqlWithoutFrom_extractsEntityName`（报障形态钉死）；`JpaUpdateConverterTest` 断言调整 4 处（statementFields/roundTrip/withoutTableInfo/asAliasForm）+ 新增 3 条（报障形态端到端：管道文本 `update wms_dock_booking booking set booking.created_time = ? where booking.id = ?` + 渲染产物 `UPDATE wms_dock_booking SET created_time = ? WHERE id = ?` 空白归一断言；DELETE 嵌入段；无 TableInfo fallback 语句头提取）。
+
+**待验证前提实测回填**：前提 1 证实——`bookingTable` 展平列三元组按 `(createdTime, created_time, updateInfo)` 构造后管道断言通过（真实 `JpaEntityResolver` 对 demo 实体的展平推演由形态 19 SELECT 链既有正常行为间接佐证）；前提 2/3 随定向绿证实；前提 4 证实（产物特征与 previewHql 链吻合，沙盒 UI 走查留待下轮批次，与 O-95 S3 先例同惯例）；前提 5 已逐条核对（4 处调整全清单化，见 S3）；前提 6 证实（paramNames 路径零改动）。
+
+**反向验证（必做项，两次读数）**：①摘除提取器 UPDATE 头分支（RED-PROBE 注释）→ `testFast` 定向 35 例中 **5 条失败**（提取器 4 条 UPDATE 用例 + 报障形态端到端 `updateEmbedded_withoutTableInfo_fallbackReplacesHeadEntity`）——守卫看得见它要防的站点；②恢复分支 → **35/35 全绿**（testFast BUILD SUCCESSFUL 13s）。
+
+**定向读数**：5 类 35 例全绿（HqlEntityNameExtractorTest 10 + JpaUpdateConverterTest 18 + HqlQueryLocatorTest + CustomDaoHqlLocatorTest + DemoRecognitionTest；首轮 1 失败为断言未做空白归一〔`SqlGenerator.generate` 默认多行渲染〕，修断言后绿，非实现缺陷）。
+
+**全量门禁**：testShards 5 片单路后台（docker 引擎离线〔管道不存在，非半活态〕→ docker 依赖型测试进默认 skip 桶，与基线 6395/0/0/9 的 9 skip 口径一致）；首轮启动失败＝verifier-cli jar 不在 gradle 缓存（`Could not create task ':verifyGate'`），先跑 verifyPlugin 重建缓存后复跑，读数见下。
+
+**demo 对照语料（并行子代理交付）**：jpa-hibernate-demo 补形态 18（带 FROM 的 HQL DELETE + 嵌入段路径，同病面对照）/形态 19（带 FROM 的 SELECT + 嵌入段+普通属性混合，回归保护），接口/Controller 同步，mvnd 编译通过，demo 仓提交 `a0b827b`；mpsv-walk-proj 探查后未改名（`probe` 包 MyBatis-Plus 注解走查工程，零 JPA 内容、不在 git 仓，与 jpa-hibernate-demo 无归属关系）。
+
+**沙盒 UI 走查**：留待下轮沙盒走查批（同 O-95 S3 惯例）——形态 17/18/19 三条 gutter 点击逐字核对。
+
+**全量门禁读数**：testShards 5 片单路 **6108/0/0/9**（skip 9 恰为 docker 桶，与基线 6395/0/0/9 口径一致；docker 引擎离线系管道不存在非半活态，skip 路径干净）+ testExternal 40/0/1 + agent 子项目 93/0/0 + parity 计划类全集 534 个均有结果 XML；BUILD SUCCESSFUL 4m36s 退出码 0。过程坑两笔＝①`tail` 管道末命令退出码掩盖 gradle 失败（仓内在册坑，改 `> log 2>&1; echo exit=$?` 口径）；②testShards 启动报 verifier-cli jar 未在 gradle 缓存，跑一次 verifyPlugin 重建（其在 prepareSandbox 因沙盒 jsqlparser jar 被并行会话进程内存映射锁定而 FAILED，但依赖解析阶段已把 verifier-cli 1.410 拉入缓存，复跑 testShards 通过；prepareSandbox 锁与本任务改动无关，src/main 未触 build.gradle/plugin.xml，按三档分层不触发 verifyGate）。
 
 ---
 
