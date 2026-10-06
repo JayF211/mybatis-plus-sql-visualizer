@@ -5,6 +5,7 @@ import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.FrameNode;
 import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.LdcInsnNode;
@@ -27,6 +28,23 @@ import java.util.Map;
  *
  * <p>回调签名被本类字节码硬编码，改动须两侧同步（SqlHookCallbacks javadoc 互指）。
  * spec 驱动：类名 → 允许的织入形态（[Kind]），签名不匹配安全跳过（登记表契约）。
+ *
+ * <p>COMPUTE_FRAMES 禁用（红线，20261006 dev 验收⑥ P0）：帧合并的 getCommonSuperClass
+ * 按 Class.forName 解析类型层级，而 transform 回调运行于被织类自身 defineClass1 进行中
+ * （ClassFileLoadHook 时点）——同线程重入 loadClass 时 findLoadedClass 返回 null、
+ * findClass 二次 defineClass，宿主启动即炸 {@code LinkageError: attempted duplicate
+ * class definition}（mysql 8.0.28 ConnectionImpl prepare 面实录）。本类固定
+ * {@code new ZeroLoadClassWriter(COMPUTE_MAXS)}；[ZeroLoadClassWriter]
+ * 仅作防误挂 COMPUTE_FRAMES 的零类加载兜底。
+ *
+ * <p>COMPUTE_MAXS-only 的帧语义（20261006 全套回归 7 例 VerifyError 实测定形）：出口直线
+ * 插桩不新增存活局部，原方法 StackMapTable 原样有效（ClassNode 下帧挂 Label 锚点，序列化
+ * 偏移随插桩自动平移）；但 EXEC 族**头插 token 槽（long）在原方法全部分支帧点存活**，原帧
+ * 不含该槽 → 校验器按帧断言槽位为 top、lload 读 long 即 VerifyError。对策：读入固定
+ * EXPAND_FRAMES（压缩帧 local 为 null 无法补），织入成功的 timed 方法把每个 FrameNode 的
+ * local 数组（info 计数，long 占一元素——ASM Frame.setInputFrameFromApiFormat 契约）尾部
+ * 追加一个 LONG：token 槽恰起于原 maxLocals（= 原 info 数末尾，与 long/double 形参无关），
+ * 且自方法头至任一出口恒为已赋值 long，对所有帧点一致成立。
  */
 public final class StatementWeaver implements Opcodes {
 
@@ -120,8 +138,10 @@ public final class StatementWeaver implements Opcodes {
             return classfileBuffer;
         }
 
+        // EXPAND_FRAMES：压缩帧（same_frame 等）local 为 null 无法补帧；展开后为全量 info 数组，
+        // 写出时由 MethodWriter 重压缩。帧补丁见 patchFramesWithTokenSlot。
         final ClassNode node = new ClassNode();
-        new ClassReader(classfileBuffer).accept(node, 0);
+        new ClassReader(classfileBuffer).accept(node, ClassReader.EXPAND_FRAMES);
         boolean changed = false;
         for (MethodNode mn : node.methods) {
             if ((mn.access & ACC_ABSTRACT) != 0 || (mn.access & ACC_NATIVE) != 0
@@ -140,7 +160,7 @@ public final class StatementWeaver implements Opcodes {
         if (!changed) {
             return classfileBuffer;
         }
-        final ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
+        final ClassWriter writer = new ZeroLoadClassWriter(ClassWriter.COMPUTE_MAXS);
         node.accept(writer);
         return writer.toByteArray();
     }
@@ -295,8 +315,29 @@ public final class StatementWeaver implements Opcodes {
         }
         if (inserted > 0) {
             mn.maxLocals = retSlot + 2; // token 2 槽 + 暂存 2 槽（long 返回占 2）
+            if (timed) {
+                patchFramesWithTokenSlot(mn);
+            }
             return true;
         }
         return false;
+    }
+
+    /**
+     * timed 面头插 token(long) 槽在原方法全部分支帧点存活，原 StackMapTable 帧不含该槽
+     * （校验器按帧断言为 top，lload 读 long 即 VerifyError）——给织入成功方法的每个
+     * FrameNode 的 local 数组尾部追加一个 LONG。info 计数语义下 long 占一元素，token 槽
+     * 恰起于原 maxLocals（= 原 info 数末尾，与 long/double 形参个数无关），且自方法头
+     * （LSTORE token）至任一出口恒为已赋值，对所有帧点一致成立。出口暂存槽（retSlot）
+     * 只在最后一个帧点与返回指令之间瞬态使用，不进帧、无需补。
+     */
+    private static void patchFramesWithTokenSlot(MethodNode mn) {
+        AbstractInsnNode insn = mn.instructions.getFirst();
+        while (insn != null) {
+            if (insn instanceof FrameNode && ((FrameNode) insn).local != null) {
+                ((FrameNode) insn).local.add(Opcodes.LONG);
+            }
+            insn = insn.getNext();
+        }
     }
 }

@@ -92,6 +92,10 @@ tasks.test {
     dependsOn(agentFatJar)
     dependsOn(tasks.named("childappClasses"))
     systemProperty("sqlvis.h2jdk8", h2jdk8.singleFile.absolutePath)
+    // ZeroLoadClassWriterWeaveTest 以 findLoadedClass 反射探查夹具预载态（织入零加载判别的
+    // 鉴别力前提）——JDK17 模块封装默认拒开 java.lang，测试 JVM 显式放开（仅测试进程，
+    // 不影响 agent 产物）。
+    jvmArgs("--add-opens", "java.base/java.lang=ALL-UNNAMED")
     useJUnit()
     // 根项目 `test --tests <IDE 测试>` 触发本任务时无匹配用例——不视为失败
     filter {
