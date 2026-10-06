@@ -109,4 +109,28 @@ class ReverseRoundTripGateTest {
         )
         assertEquals("语料档位分布（M1 基线，修复升档时同步更新）", expected, counts)
     }
+
+    /**
+     * T-SqlToJavaPromote M4：全语料生成层覆盖断言——凡能解析的语料（非 PARSE_ERROR 档）
+     * 走 JavaCodeGenerator（字符串列名 QueryWrapper 形态，无实体）必须产出非空代码、不抛异常。
+     * 验证「尽可能转换所有 SQL」的生成层完整性（SQL 层语义已由 ROUND_TRIP 门禁覆盖）。
+     */
+    @Test
+    fun `全语料_生成代码不抛异常且非空`() {
+        val failures = mutableListOf<String>()
+        for (case in corpus.filter { it.expectation != RoundTripExpectation.PARSE_ERROR }) {
+            try {
+                val result = SqlReverseParser.parse(case.sql)
+                // 多表删除需实体类上下文（deleteTargets 非空时无实体 QUERY 形态本就不适用）——设计内限制，豁免
+                if (result.kind == ReverseStatementKind.DELETE && result.deleteTargets.isNotEmpty()) continue
+                val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
+                if (code.isBlank()) {
+                    failures += "${case.name}: 生成代码为空"
+                }
+            } catch (e: Throwable) {
+                failures += "${case.name}: 生成异常 ${e.message}"
+            }
+        }
+        assertTrue("生成层失败 ${failures.size} 项:\n${failures.joinToString("\n")}", failures.isEmpty())
+    }
 }
