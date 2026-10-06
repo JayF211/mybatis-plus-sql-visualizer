@@ -90,6 +90,10 @@ tasks.named<VerifyPluginTask>("verifyPlugin") {
 // 改文案/文档后重验不必重打包（Jar 任务带 MPV-Build 时间戳，outputs.upToDateWhen{false} 恒重跑）。
 val verifyOnly = providers.gradleProperty("verifyOnly").orNull?.toBoolean() ?: false
 
+// T-ReleasePerf7 N1（20261007）：verifyGate 时间性错峰延迟（毫秒，缺省 0=关，浮动作不变）。
+// 分片叶子侧同款开关=mpv-testing 的 testStaggerMs。只延迟任务启动，不删不减不重排任何环节。
+val gateStaggerMs = providers.gradleProperty("gateStaggerMs").orNull?.toLongOrNull() ?: 0L
+
 val verifyGate = tasks.register<JavaExec>("verifyGate") {
     group = "verification"
     description = "权威兼容门禁：verifier-cli 直驱（-offline + -ignored-problems；-PverifyIdes / -PverifyOnly）"
@@ -167,6 +171,13 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
                 "-PverifyOnly=true 需要已存在的发行包：$zipFile 不存在。" +
                     "先跑 ./gradlew buildPlugin 产出，或去掉 -PverifyOnly 走完整链路。",
             )
+        }
+        // T-ReleasePerf7 N1（20261007）：时间性错峰开关（缺省 0=关）。语义与分片叶子同款
+        //（mpv-testing testStaggerMs）：把 verifyGate 真实起点推后 N 毫秒，嵌入 verifyMarketplace
+        // 高占用解析段之后的低占用等待窗。仅延迟启动，验证口径零变化。
+        if (gateStaggerMs > 0) {
+            logger.lifecycle("verifyGate stagger ${gateStaggerMs}ms")
+            Thread.sleep(gateStaggerMs)
         }
         logger.lifecycle("verifyGate START ${System.currentTimeMillis()} plugin=$zipFile")
     }

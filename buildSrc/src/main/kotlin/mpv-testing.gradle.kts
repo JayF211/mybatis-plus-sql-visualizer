@@ -150,6 +150,11 @@ fun listSuiteXmls(dir: File): List<File> =
 val testShardCount = providers.gradleProperty("testShardCount").orNull
     ?.toIntOrNull()?.coerceIn(1, 6) ?: 5
 
+// T-ReleasePerf7 N1（20261007）：分片叶子时间性错峰延迟（毫秒，缺省 0=关）。
+// 只在 releaseGate 实验与错峰运行时显式传入（-PtestStaggerMs=285000），
+// 日常 testShards/releaseGate 浮动作零变化。verifyGate 侧同款开关见 mpv-verification.gradle.kts。
+val testStaggerMs = providers.gradleProperty("testStaggerMs").orNull?.toLongOrNull() ?: 0L
+
 // T-TestPerf12 S2 槽位补偿：对恒临界槽位按少装补偿——均衡器贪心比较键对目标槽位除以补偿
 // 因子（<1 放大其负载视图 → 更早判满 → 装配量按因子缩水），聚合 expected 同步缩放（告警刻度
 // 自洽：临界片的「预期」按补偿后口径对照，结构性因子不再被误判为缺权）。
@@ -711,6 +716,15 @@ intellijPlatformTesting {
                         val dir = File(root, "build/test-results/testShard$i")
                         dir.mkdirs()
                         File(dir, ".round-start").writeText(System.currentTimeMillis().toString())
+                        // T-ReleasePerf7 N1（20261007）：时间性错峰开关（默认 0=关，浮动作不变）。
+                        // R1 warm 探针实证 verifyMarketplace 前段高占用（START 后 ~285s CPU 141~199%），
+                        // 之后 ~7 分钟低占用（在线等待窗，多分钟 <40%）；分片窗 208s 现状与高占用段
+                        // 完全重叠 = 双向争用（market +86~165s、分片 +22~43s）。本开关把分片真实
+                        // 起点推后 N 毫秒嵌入低占用段。仅延迟启动，不删不减不重排任何任务语义。
+                        if (testStaggerMs > 0) {
+                            logger.lifecycle("testShard$i stagger ${testStaggerMs}ms")
+                            Thread.sleep(testStaggerMs)
+                        }
                         logger.lifecycle("testShard$i START ${System.currentTimeMillis()}")
                     }
                     doLast { logger.lifecycle("testShard$i END ${System.currentTimeMillis()}") }
