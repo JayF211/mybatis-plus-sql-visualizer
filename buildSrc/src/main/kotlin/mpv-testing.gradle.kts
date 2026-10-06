@@ -333,6 +333,9 @@ tasks.register<Test>("testExternal") {
         dir.mkdirs()
         File(dir, ".round-start").writeText(System.currentTimeMillis().toString())
     }
+    // T-ReleasePerf6 S1：起止毫秒锚点（与 testShardN/verifyGate 同款），供 releaseGate 整链
+    // 分解读数（本桶与分片并行早收，锚点重叠与否则是「浮动态任务真并行」的持续审计点）
+    doLast { logger.lifecycle("testExternal END ${System.currentTimeMillis()}") }
 }
 
 tasks.register<Test>("testFast") {
