@@ -94,3 +94,48 @@ C1 计划（本笔）→ C2 构建链（版本号）→ C3 波 A → C4 波 B �
 - buildPlugin 2026.10.7 zip 产出
 - 四册 union 后 k2j 专属行 byte-exact 校验全存活
 - 锚点推进 `7ffc642` + note 重写为本轮记录；push 与远端零债
+
+## 8. 实施记录回填（2026-10-07 收官）
+
+### 8.1 提交链七段
+
+C1 `3a4d89b` 计划 → C2 `cad6f9f` 版本 2026.10.7 → C3 `213c2f2` 波A log 族 5 件 → C4 `b588f61` 波B jpa/ui 族 6 件+跨文件适配 3 处 → C5 `8b025ce` 资源 → C6 `756a291` 测试 6 件 → C7 `ebade40` 文档 → C8 本笔（锚点推进+台账+本节回填+沙盒行还原验证）。
+
+### 8.2 待验证前提逐条回执
+
+| 前提 | 回执 |
+|---|---|
+| 1. k2j 侧对应文件在场 | ✅ 实证全在场；LogPerfProbe.java 新建 |
+| 2. Result/PreviewResult Java 形态 | ✅ PreviewResult=final class+伸缩构造器链（非 record）；HqlConverter.Result 保留 getXxx()/xxx() 双访问器。**衍生修复笔见 8.3** |
+| 3. LogPerfProbe 调用点 | ✅ master 全仓 4 处（SqlLogFileReader:70/HistorySqlLogPanel:500/SqlLogPanel:1478+定义）全在本轮清单内，无溢出；object→final 工具类+measure 双静态重载落地 |
+| 4. backfillSources/unresolvedParams 关系 | ✅ master 全文证实**并存不取代**：unresolvedParams 仍有 SqlShareManager×3+ShareDialog×1 共 4 调用方，原样保留；仅 CopyExecutableSqlAction 切换 |
+| 5. 直取互操作三查 | ✅ SqlLogEntryBufferDedupeIndexTest 8 处适配（具名实参→位置 7 处+LogSqlEntry 4 参便捷构造器 1 处）；其余两新建件 blob 级一致免适配取证 |
+| 6. appendPendingForTest 测试缝 | ✅ 波 A 落 public（注明 master 为 internal），波 T 核对调用形态逐字匹配 |
+| 7. fatal 基线 674 | ✅ 本轮 **零新增** catch(Throwable) 站点（两波子代理分文件自报+守卫实测维持），基线 674 不动 |
+| 8. HelpDialogTest 基线 | ✅ k2j 侧 6 项取证（原 28 行断言），直取 master 版 7 项 |
+| 9. 四册合并 | ✅ CHANGELOG/归档 README 零专属整册直取；MEMORY/变更记录 merge-file rc=0 零冲突，k2j 专属 8+19 行存活、master 增量 2+1 行在场；ledger 4 行 2026-09-14~19 差异=分支基线固有（ours vs theirs 实证）维持现状 |
+| 10. 资源零专属 | ✅ 9 件 diff --stat 空（零输出）后 restore 直取；bundle 双语新 key grep 3 处验证 |
+
+### 8.3 修复笔（一笔）
+
+**PreviewResult 23 参历史构造重载恢复**：波 B 把 23 参规范构造器扩为 25 参（追加 placeholderParamNames/duplicateParamNames），只保全了 20/21/22/9 参伸缩链；但 k2j 测试树 `SqlPreviewPanelStackDigestTest.makeResult` 以 23 参位置实参构造（历轮 K2J 互操作适配形态，注释自证），compileTestKotlin 首轮 5 处编译红。根因=波 B 构造点扫描只 grep 了 Java 形态 `new PreviewResult(`（.java 树 33 处全对账），**漏了 .kt 测试树的 `PreviewResult(` 形态**——坑 23「直取≠免适配」的构造点扫描变体。修复=恢复 23 参重载委托 25 参传 `List.of()/Set.of()`（master 侧新字段带 Kotlin 默认值，历史构造形态天然合法，Java 等价即保留重载），带 K2J 互操作注释。复跑 compileJava+compileTestKotlin 全绿。
+
+### 8.4 门禁终态
+
+| 项 | 读数 | 对账 |
+|---|---|---|
+| 中央编译 | compileJava 一次过；compileTestKotlin 首轮红→修复后绿 | EXIT=0（PIPESTATUS 真值） |
+| testShards | **6202/0/0/9**（5 片 1197/1321/1194/1375/1075） | 一次全绿；+56 例=本轮新增测试（JpaChainParamBackfillTest 等）；skip 9 回历史基线（上轮 8 系漂移） |
+| testExternal | 40/0/0/1 | 全绿 |
+| agent | **93/0**（20 套件） | =基线；UP-TO-DATE 清 `sub-projects/sql-visualizer-agent/build` 真跑（include 名与 projectDir 分离，先清错路径白清一次——新坑记录） |
+| verifyGate | 三目标 Compatible 零漂移 | 243=4+15+46、253=6+18+44、262=7+73+44 与上轮逐项相等 |
+| buildPlugin | mybatis-plus-sql-visualizer-2026.10.7.zip **6,858,569 字节** | +10,172 vs 上轮 2026.10.6=功能增量 |
+| testDatabase | 复跑全绿 **10/0/0/0** | 首轮 3 例 `UnsatisfiedLinkError: no freetype`=transform 争用家族环境性假失败（Master70 同款 3 例），复跑排除；docker 29.6.2 主控补启 |
+
+### 8.5 过程坑与遗留
+
+- **坑 23 变体入册**：互操作构造点扫描必须同时覆盖 `.java` 的 `new X(` 与 `.kt` 的 `X(`（测试树），下轮直取/翻译固定自查项沿用。
+- **agent 子项目路径坑**：`settings.gradle.kts` 里 include 名 `:sql-visualizer-agent` 与 projectDir `sub-projects/sql-visualizer-agent` 分离，清 build 清错路径不报错白清一次；UP-TO-DATE 时「清 build 真跑」须清真实 projectDir 下的 build。
+- freetype 假失败家族第三次复现（Master70→本轮），处置恒定=复跑排除，不入代码修复面。
+- 沙盒临时行 `test-sandbox-k2jsynkm31` 已还原（build.gradle.kts 与 HEAD 一致零 diff），未随提交入库；并行表 `t-synck2jm31` 随 C8 注销。
+- 遗留观察项：真机走查随下轮 runIde 批（滚动到底部/尾部跟随/写重提示/F6 预填四处 UI 新交互）。
