@@ -25,6 +25,12 @@ import java.util.concurrent.Executors
  * 枚举取导致 schema 列遍历从未执行且静默无日志；本项在捆绑 Database Tools 的发行版上验证该入口
  * 可用，未捆绑者打印 SKIP 不计缺失。
  *
+ * T-XmlSynHi D68 追加第 8 项：mapper XML 注入门「平台 per-host 探测」运行面——
+ * `MultiHostInjector.MULTIHOST_INJECTOR_EP_NAME` 常量 + `ProjectExtensionPointName.getExtensions`
+ * + `MultiHostRegistrar` stub 三方法（243 lib/util-8.jar / 262 lib/intellij.platform.core.jar 双版
+ * javap 实证同形态）；顺带 INFO 打印三代 SQL 注入器在场实况（SqlLanguageInjector 243+ 已移除、
+ * SqlTypeBasedInjector 代际改名——探测经 EP 枚举对改名免疫，INFO 不计缺失）。
+ *
  * 发行版缺失时按 Assume 跳过对应家族（CI 机器可能只装部分版本）；一个家族都没有则整类跳过。
  */
 class PlatformSignatureCrossVersionTest {

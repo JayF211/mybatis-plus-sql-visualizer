@@ -82,6 +82,15 @@ public class PlatformSignatureChecker {
         missing += check(byNameAndCount(collector, "removeExplicitExtension", 2),
                 "removeExplicitExtension(2 params)");
 
+        // 8. T-XmlSynHi D68：mapper XML 注入门「平台 per-host 探测」的运行面——
+        //    MultiHostInjector.MULTIHOST_INJECTOR_EP_NAME（ProjectExtensionPointName，EP 名串
+        //    com.intellij.multiHostInjector；243 lib/util-8.jar / 262 lib/intellij.platform.core.jar
+        //    双版 javap 实证同形态）+ getExtensions(AreaInstance) + MultiHostRegistrar stub 三方法
+        //    （startInjecting 二参默认实现委托一参）。均为运行期按名解析的平台签名，漂移即本项红。
+        //    注：initialize=false——仅核签名不触发静态初始化（EP 常量构造依赖平台引导态，裸
+        //    URLClassLoader 不具备，true 形态会 NoClassDefFoundError 假红）。
+        missing += checkPerHostProbeApis(loader);
+
         if (missing > 0) {
             System.out.println("RESULT MISSING " + missing);
             System.exit(1);
@@ -114,6 +123,81 @@ public class PlatformSignatureChecker {
             System.out.println("MISS ObjectKind.COLUMN resolve failed: " + t);
             return 1;
         }
+    }
+
+    /**
+     * #8（T-XmlSynHi D68）：per-host 注入探针运行面核验。
+     *
+     * 顺带打印三代 SQL 注入器在本发行版的在场实况（INFO 不计缺失）——
+     *  - `com.intellij.sql.injector.SqlLanguageInjector`（历史让位门槛的判定对象）在 243/262
+     *    发行物已不存在（本仓 599/1809 jar 全扫实证），类在场判定废止的直接证据；
+     *  - SqlTypeBasedInjector 按代际不同名（243=com.intellij.sql.injection，database-plugin.jar
+     *    META-INF/intellilang-sql-support.xml 注册；262=com.intellij.database.sql.intelliLang.injection，
+     *    META-INF/plugin.xml 注册）——per-host 探测经 EP 枚举对改名免疫，故只作 INFO 不判缺失。
+     */
+    private static int checkPerHostProbeApis(ClassLoader loader) {
+        int missing = 0;
+        try {
+            Class<?> mhi = Class.forName("com.intellij.lang.injection.MultiHostInjector", false, loader);
+            try {
+                java.lang.reflect.Field epField = mhi.getField("MULTIHOST_INJECTOR_EP_NAME");
+                System.out.println("INFO MULTIHOST_INJECTOR_EP_NAME type=" + epField.getType().getName());
+                missing += check(byNameAndCount(epField.getType(), "getExtensions", 1),
+                        "ProjectExtensionPointName.getExtensions(1 param)");
+            } catch (NoSuchFieldException e) {
+                System.out.println("MISS MULTIHOST_INJECTOR_EP_NAME field: " + e);
+                missing++;
+            }
+            missing += check(byNameAndCount(mhi, "getLanguagesToInject", 2),
+                    "MultiHostInjector.getLanguagesToInject(2 params)");
+            missing += check(byNameAndCount(mhi, "elementsToInjectIn", 0),
+                    "MultiHostInjector.elementsToInjectIn()");
+
+            Class<?> registrar = Class.forName("com.intellij.lang.injection.MultiHostRegistrar", false, loader);
+            missing += check(byNameAndCount(registrar, "startInjecting", 1),
+                    "MultiHostRegistrar.startInjecting(1 param)");
+            missing += check(byNameAndCount(registrar, "addPlace", 4),
+                    "MultiHostRegistrar.addPlace(4 params)");
+            missing += check(byNameAndCount(registrar, "doneInjecting", 0),
+                    "MultiHostRegistrar.doneInjecting()");
+        } catch (ClassNotFoundException e) {
+            System.out.println("MISS per-host probe platform types: " + e);
+            return 1;
+        }
+
+        try {
+            Class.forName("com.intellij.sql.injector.SqlLanguageInjector", false, loader);
+            System.out.println("INFO legacy SqlLanguageInjector present (pre-243 代际；类在场判定已废止)");
+        } catch (ClassNotFoundException absent) {
+            System.out.println("INFO legacy SqlLanguageInjector absent（243+ 已移除——类在场让位门槛废止的实证）");
+        }
+        boolean anyTypeBased = false;
+        String[] generations = {
+                "com.intellij.sql.injection.SqlTypeBasedInjector",
+                "com.intellij.database.sql.intelliLang.injection.SqlTypeBasedInjector",
+        };
+        for (String fqn : generations) {
+            try {
+                Class<?> c = Class.forName(fqn, false, loader);
+                Class<?>[] ifaces = c.getInterfaces();
+                boolean multiHost = false;
+                for (Class<?> i : ifaces) {
+                    if ("com.intellij.lang.injection.MultiHostInjector".equals(i.getName())) {
+                        multiHost = true;
+                        break;
+                    }
+                }
+                System.out.println("INFO SqlTypeBasedInjector present: " + fqn
+                        + " implementsMultiHostInjector=" + multiHost);
+                anyTypeBased = true;
+            } catch (ClassNotFoundException otherGeneration) {
+                // 代际缺席正常（243 无 database.* 代、262 无 sql.injection 注册代）
+            }
+        }
+        if (!anyTypeBased) {
+            System.out.println("INFO SqlTypeBasedInjector absent in this distro（Community/裁剪包形态，探针按 EP 空清单判不让位）");
+        }
+        return missing;
     }
 
     private static int check(Method m, String label) {

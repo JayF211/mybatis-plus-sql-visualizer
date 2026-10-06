@@ -20,7 +20,11 @@ import java.io.File
  *  - mapper 文件：语句文本 + 白名单属性注入位均收集（按 [SqlMapperLanguage] 过滤计数，
  *    免受同环境其他 EP 注入器——Spring/Angular 族——对同文件的注入噪声）；
  *  - 非 mapper XML：零注入位；
- *  - shouldYield 让位态（置设置开关关）：零注入位。
+ *  - shouldYield 让位态（置设置开关关 / D68 平台探针判定会注入）：零注入位。
+ *
+ * D68 注：平台让位线已改 per-host 探测（真实 EP 枚举）——接线测试的注入位断言经
+ * [XmlSynHiGate.platformInjectionProbe] 缝固定为「平台不注入」，免受测试环境 EP 内容漂移
+ * 影响；「平台会注入」让位形态单列一例（缝置 true → 零注入位）。
  *
  * 形态注（两坑实证）：
  *  1. 文件须**物理临时文件**（LocalFileSystem）——enumerate 管线对非物理文件
@@ -37,10 +41,21 @@ class SqlMapperInjectorWiringTest : BasePlatformTestCase() {
   </select>
 </mapper>"""
 
+    /** D68 前置探针缝原件（tearDown 还原）。 */
+    private val originalProbe = XmlSynHiGate.platformInjectionProbe
+
     override fun setUp() {
         super.setUp()
+        // D68：接线级断言钉「本注入器」行为——平台 per-host 探针读真实 EP（内容随测试环境漂移），
+        // 经缝固定为「平台不注入」；平台让位形态见 testF68_平台探针让位_零注入位。
+        XmlSynHiGate.platformInjectionProbe = { _, _ -> false }
         InjectedLanguageManager.getInstance(project)
             .registerMultiHostInjector(SqlMapperInjector(), testRootDisposable)
+    }
+
+    override fun tearDown() {
+        XmlSynHiGate.platformInjectionProbe = originalProbe
+        super.tearDown()
     }
 
     /** 物理临时文件形态打开 mapper XML（enumerate 管线只对物理文件跑注入探针）。 */
@@ -104,6 +119,18 @@ class SqlMapperInjectorWiringTest : BasePlatformTestCase() {
             assertEquals("设置开关关闭 → shouldYield 让位 → 零注入位（反向验证）", 0, myLanguagePlaceCount(file))
         } finally {
             settings.loadState(settings.state.copy(xmlSynHiEnabled = old))
+        }
+    }
+
+    @Test
+    fun testF68_平台探针让位_零注入位() {
+        val file = openPhysicalFile(mapper)
+        // D68 关键让位形态（管线级）：探针判定平台会注入该宿主 → 全族让位 → 零注入位
+        XmlSynHiGate.platformInjectionProbe = { _, _ -> true }
+        try {
+            assertEquals("平台探针判定会注入 → 零注入位（反向验证：摘掉让位分支 → 3 位 → 红）", 0, myLanguagePlaceCount(file))
+        } finally {
+            XmlSynHiGate.platformInjectionProbe = { _, _ -> false }
         }
     }
 

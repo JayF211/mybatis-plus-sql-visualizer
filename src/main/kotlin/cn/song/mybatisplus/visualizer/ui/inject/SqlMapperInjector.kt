@@ -17,7 +17,7 @@ import com.intellij.psi.xml.XmlText
  *    标签名/属性不被注入）；
  *  - D3 属性 OGNL：`test`/`value`/`collection`/`item` 等 [XmlSynHiGate.allowAttributeValue]
  *    白名单属性值注入同语言（属性位无 SQL 文本，独立注入位；决策 1-A 注）；
- *  - 守卫：[XmlSynHiGate] 双让位（设置/平台/三方插件）+ 根 mapper（[XmlSynHiGate.inMapperFile]）
+ *  - 守卫：[XmlSynHiGate] 双让位（设置/平台 per-host/三方插件）+ 根 mapper（[XmlSynHiGate.inMapperFile]）
  *    + 文本长度熔断（[XmlSynHiGate.allowStatementText]）；让位命中 → 零注入（反向验证）。
  *
  * T-PerfSweep16 F37（D1=B 案落地）：喂入契约按**元素级**——243 平台源码 jar 实证：
@@ -34,8 +34,12 @@ import com.intellij.psi.xml.XmlText
 class SqlMapperInjector : MultiHostInjector, com.intellij.openapi.project.DumbAware {
 
     override fun getLanguagesToInject(registrar: MultiHostRegistrar, context: PsiElement) {
-        if (XmlSynHiGate.shouldYield(context.project)) return
+        // D68 重排：先 host 类型分发（O(1) instanceof），再问 per-host 让位门——平台让位线从
+        // 「SqlLanguageInjector 类在场」一票否决改为「平台会对该宿主注入」探测（该类 243/262
+        // 发行物均不存在，且用户真机实证平台并不给 mapper XML 语句文本着色，详见 XmlSynHiGate）。
         val host = context as? PsiLanguageInjectionHost ?: return
+        if (context !is XmlText && context !is XmlAttributeValue) return
+        if (XmlSynHiGate.shouldYield(context.project, host)) return
         val rangeInsideHost: TextRange = when (context) {
             // D2 语句文本：直属文本经语句文本守卫（祖先链 mapper + 长度熔断），段内去首尾空白
             is XmlText -> {
