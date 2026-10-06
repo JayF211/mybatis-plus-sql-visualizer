@@ -90,10 +90,6 @@ tasks.named<VerifyPluginTask>("verifyPlugin") {
 // 改文案/文档后重验不必重打包（Jar 任务带 MPV-Build 时间戳，outputs.upToDateWhen{false} 恒重跑）。
 val verifyOnly = providers.gradleProperty("verifyOnly").orNull?.toBoolean() ?: false
 
-// T-ReleasePerf7 N1（20261007）：verifyGate 时间性错峰延迟（毫秒，缺省 0=关，浮动作不变）。
-// 分片叶子侧同款开关=mpv-testing 的 testStaggerMs。只延迟任务启动，不删不减不重排任何环节。
-val gateStaggerMs = providers.gradleProperty("gateStaggerMs").orNull?.toLongOrNull() ?: 0L
-
 val verifyGate = tasks.register<JavaExec>("verifyGate") {
     group = "verification"
     description = "权威兼容门禁：verifier-cli 直驱（-offline + -ignored-problems；-PverifyIdes / -PverifyOnly）"
@@ -119,6 +115,11 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
     // Gradle script object references"），故在配置期捕获为普通值（startParameter 与属性值在配置期已确定）。
     val invokedTaskNames = gradle.startParameter.taskNames
     val verifyIdesProperty = providers.gradleProperty("verifyIdes").orNull
+    // T-ReleasePerf7 N1（20261007）：verifyGate 时间性错峰延迟（毫秒，缺省 0=关，浮动作不变）。
+    // 分片叶子侧同款开关=mpv-testing 的 testStaggerMs。只延迟任务启动，不删不减不重排任何环节。
+    // 配置缓存约束：必须在 register 块内捕获为普通 Long（脚本顶层 val 经 lambda 引用=持有脚本
+    // 对象引用不可序列化，T-ReleasePerf-05 同款坑，S2 round2 实测 5 problems storing）。
+    val gateStaggerMs = providers.gradleProperty("gateStaggerMs").orNull?.toLongOrNull() ?: 0L
     classpath(
         gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
             .walkTopDown().maxDepth(4)

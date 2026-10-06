@@ -150,11 +150,6 @@ fun listSuiteXmls(dir: File): List<File> =
 val testShardCount = providers.gradleProperty("testShardCount").orNull
     ?.toIntOrNull()?.coerceIn(1, 6) ?: 5
 
-// T-ReleasePerf7 N1（20261007）：分片叶子时间性错峰延迟（毫秒，缺省 0=关）。
-// 只在 releaseGate 实验与错峰运行时显式传入（-PtestStaggerMs=285000），
-// 日常 testShards/releaseGate 浮动作零变化。verifyGate 侧同款开关见 mpv-verification.gradle.kts。
-val testStaggerMs = providers.gradleProperty("testStaggerMs").orNull?.toLongOrNull() ?: 0L
-
 // T-TestPerf12 S2 槽位补偿：对恒临界槽位按少装补偿——均衡器贪心比较键对目标槽位除以补偿
 // 因子（<1 放大其负载视图 → 更早判满 → 装配量按因子缩水），聚合 expected 同步缩放（告警刻度
 // 自洽：临界片的「预期」按补偿后口径对照，结构性因子不再被误判为缺权）。
@@ -683,6 +678,11 @@ intellijPlatformTesting {
         }
         shardPlanClasses = discoveredTestClasses.joinToString("\n")
         shardPlanHashes = shardAssignment.joinToString("|") { it.hashCode().toUInt().toString(16) }
+        // T-ReleasePerf7 N1（20261007）：分片叶子时间性错峰延迟（毫秒，缺省 0=关，浮动作不变）。
+        // verifyGate 侧同款开关=mpv-verification 的 gateStaggerMs。块内声明+doFirst 只捕获局部
+        // Long（脚本顶层 val 经 doFirst lambda 引用=持有脚本对象引用，配置缓存不可序列化——
+        // S2 round2 实测 5 problems storing 后挪位，T-ReleasePerf-05 同款坑）。
+        val testStaggerMs = providers.gradleProperty("testStaggerMs").orNull?.toLongOrNull() ?: 0L
         for (i in 1..testShardCount) {
             val idx = i - 1
             register("testShard$i") {
