@@ -78,16 +78,26 @@ public final class HqlConverter {
      * @param sql        转换后的 SQL 字符串（命名参数已替换为 ?）
      * @param statement  语句模型（SelectStatement / UpdateStatement / DeleteStatement）
      * @param inClauseParams 使用 IN 子句的参数名集合
+     * @param placeholderParamNames T-JpaParamOrder F3：HQL 命名参数名序（首现序，与替换后
+     *         SQL 中 {@code ?} 一一对应）；位置参数 {@code ?N} 不在内。调用方据此做按名回填——
+     *         仅当 SQL 全部 {@code ?} 均来自命名参数时可用（位置参数混入时数量不齐）。
      */
     public static final class Result {
     private final @NotNull String sql;
     private final @NotNull SqlStatement statement;
     private final @NotNull Set<String> inClauseParams;
+    private final @NotNull List<String> placeholderParamNames;
 
     public Result(@NotNull String sql, @NotNull SqlStatement statement, @NotNull Set<String> inClauseParams) {
+        this(sql, statement, inClauseParams, List.of());
+    }
+
+    public Result(@NotNull String sql, @NotNull SqlStatement statement, @NotNull Set<String> inClauseParams,
+                  @NotNull List<String> placeholderParamNames) {
         this.sql = sql;
         this.statement = statement;
         this.inClauseParams = inClauseParams;
+        this.placeholderParamNames = placeholderParamNames;
     }
 
     public @NotNull String getSql() { return sql; }
@@ -96,23 +106,25 @@ public final class HqlConverter {
     public @NotNull SqlStatement statement() { return statement; }
     public @NotNull Set<String> getInClauseParams() { return inClauseParams; }
     public @NotNull Set<String> inClauseParams() { return inClauseParams; }
+    public @NotNull List<String> getPlaceholderParamNames() { return placeholderParamNames; }
+    public @NotNull List<String> placeholderParamNames() { return placeholderParamNames; }
 
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
         if (!(o instanceof Result)) return false;
         Result that = (Result) o;
-        return java.util.Objects.equals(this.sql, that.sql) && java.util.Objects.equals(this.statement, that.statement) && java.util.Objects.equals(this.inClauseParams, that.inClauseParams);
+        return java.util.Objects.equals(this.sql, that.sql) && java.util.Objects.equals(this.statement, that.statement) && java.util.Objects.equals(this.inClauseParams, that.inClauseParams) && java.util.Objects.equals(this.placeholderParamNames, that.placeholderParamNames);
     }
 
     @Override
     public int hashCode() {
-        return java.util.Objects.hash(sql, statement, inClauseParams);
+        return java.util.Objects.hash(sql, statement, inClauseParams, placeholderParamNames);
     }
 
     @Override
     public String toString() {
-        return "Result[" + "sql=" + sql + ", " + "statement=" + statement + ", " + "inClauseParams=" + inClauseParams + "]";
+        return "Result[" + "sql=" + sql + ", " + "statement=" + statement + ", " + "inClauseParams=" + inClauseParams + ", " + "placeholderParamNames=" + placeholderParamNames + "]";
     }
 }
 
@@ -202,6 +214,13 @@ public final class HqlConverter {
         Set<String> inClauseParams = findInClauseParams(hql);
 
         // 1. 替换命名参数 :param → ?
+        // T-JpaParamOrder F3：替换前用同一正则收集名序（findAll 顺序=首现序=替换后 `?` 序），
+        // 供渲染期按名回填；`::` 双冒号由正则负向断言排除，与替换语义一致
+        List<String> placeholderParamNames = new ArrayList<>();
+        Matcher namedParamMatcher = HQL_NAMED_PARAM_TO_Q.matcher(hql);
+        while (namedParamMatcher.find()) {
+            placeholderParamNames.add(namedParamMatcher.group(1));
+        }
         String sql = replaceNamedParameters(hql);
 
         // 2. 替换位置参数 ?1 → ?
@@ -255,7 +274,8 @@ public final class HqlConverter {
             return new Result(
                     sql,
                     new DeleteStatement(table, parsedDelete != null ? parsedDelete.getConditions() : List.of()),
-                    inClauseParams);
+                    inClauseParams,
+                    placeholderParamNames);
         }
 
         // 10.5 检测 UPDATE HQL → UpdateStatement（J2）
@@ -266,7 +286,8 @@ public final class HqlConverter {
                         sql,
                         new UpdateStatement(table, parsed.getSets(), parsed.getConditions(),
                                 null, parsed.getTableAlias(), List.of()),
-                        inClauseParams);
+                        inClauseParams,
+                        placeholderParamNames);
             }
             // 头部结构异常（非法 HQL）→ 维持历史 SelectStatement 透传，不抛异常
         }
@@ -294,7 +315,8 @@ public final class HqlConverter {
                         List.of(),
                         null,
                         null),
-                inClauseParams);
+                inClauseParams,
+                placeholderParamNames);
     }
 
     // ------------------------------------------------------------------

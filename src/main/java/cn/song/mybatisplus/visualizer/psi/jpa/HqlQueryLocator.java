@@ -18,8 +18,11 @@ import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiVariable;
 import com.intellij.psi.util.PsiTreeUtil;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -55,6 +58,14 @@ public final class HqlQueryLocator {
     private static final Set<String> SET_POSITIONAL_METHODS = Set.of(
             "setString", "setInteger", "setLong", "setDouble",
             "setFloat", "setBoolean", "setByte", "setShort", "setCharacter");
+
+    /** F2 去重键：位置参数键前缀（与命名参数名隔离，防命名参数恰为纯数字形态时撞键）。 */
+    private static final String POSITIONAL_DEDUPE_PREFIX = "\u0000pos:";
+
+    /** F2 去重键：命名参数按名；位置参数按索引（带前缀隔离）。 */
+    private static String dedupeKey(HqlParameter parameter) {
+        return parameter.isPositional() ? POSITIONAL_DEDUPE_PREFIX + parameter.getParamName() : parameter.getParamName();
+    }
 
     /** HQL 字符串 + 是否字面量（extractHqlString 返回值载体）。 */
     private static final class HqlStringResult {
@@ -237,10 +248,20 @@ public final class HqlQueryLocator {
         if (assigned != null) queryVars.add(assigned);
 
         // 第二遍：收集参数设置
-        List<HqlParameter> parameters = new ArrayList<>();
+        List<HqlParameter> collected = new ArrayList<>();
         if (!queryVars.isEmpty()) {
-            List<PsiMethodCallExpression> calls = allCalls != null ? allCalls
-                    : new ArrayList<>(PsiTreeUtil.collectElementsOfType(method.getBody(), PsiMethodCallExpression.class));
+            // T-JpaParamOrder F1：链式写法 `em.createQuery(...).setParameter(a).setParameter(b)`
+            // 的 PSI 是嵌套结构——越靠链尾的调用越在外层，collectElementsOfType 前序遍历先外后内，
+            // 收集序=书写序的逆序（用户实测参数面板行序倒挂的根因，先红读数见
+            // HqlQueryLocatorChainOrderTest）。按参数表偏移升序归位=文档序=书写序；
+            // 非链式分语句写法本就文档序，排序幂等。
+            // 排序键须用 argumentList（各层调用独有部分）：PsiMethodCallExpression.textOffset
+            // 含 receiver 链，链式下所有层级同值（=链起点 em 的偏移），按它排=没排（先红后绿
+            // 中间轮实测：读数仍逆序，前提 B 原假设被证伪后换键）。
+            List<PsiMethodCallExpression> calls = new ArrayList<>(allCalls != null
+                    ? allCalls
+                    : PsiTreeUtil.collectElementsOfType(method.getBody(), PsiMethodCallExpression.class));
+            calls.sort(Comparator.comparingInt(c -> c.getArgumentList().getTextOffset()));
             for (PsiMethodCallExpression paramCall : calls) {
                 String paramMethodName = paramCall.getMethodExpression().getReferenceName();
                 if (paramMethodName == null) continue;
@@ -259,9 +280,39 @@ public final class HqlQueryLocator {
                 if (qualifierVar == null) continue;
                 if (queryVars.contains(qualifierVar)) {
                     HqlParameter p = extractParameter(paramCall, paramMethodName);
-                    if (p != null) parameters.add(p);
+                    if (p != null) collected.add(p);
                 }
             }
+        }
+        // T-JpaParamOrder F2：同名命名参数多次 set 为覆盖语义（值槽位按名共享），去重保首现序
+        // ——不去重会把 unresolvedParams 撑到多于 SQL `?` 数，渲染期位置配对整体错切
+        // （用户截图场景 6 set/5 占位、尾参被丢弃）。位置参数按索引天然唯一，
+        // 去重键加前缀隔离，防命名参数恰为纯数字形态时撞键。
+        Map<String, List<HqlParameter>> collectedByKey = new LinkedHashMap<>();
+        for (HqlParameter p : collected) {
+            collectedByKey.computeIfAbsent(dedupeKey(p), k -> new ArrayList<>()).add(p);
+        }
+        Set<String> duplicateParamNames = new LinkedHashSet<>();
+        for (Map.Entry<String, List<HqlParameter>> entry : collectedByKey.entrySet()) {
+            if (entry.getValue().size() > 1) {
+                String key = entry.getKey();
+                duplicateParamNames.add(key.startsWith(POSITIONAL_DEDUPE_PREFIX)
+                        ? key.substring(POSITIONAL_DEDUPE_PREFIX.length()) : key);
+            }
+        }
+        // T-JpaParamOrder F6：同名参数值取末次（运行时覆盖语义）——参数框初值预填与代码事实
+        // 对齐，与 F5 提示「以最后一次为准」同口径（位置参数按键隔离，不受影响）
+        Map<String, String> lastValueByKey = new LinkedHashMap<>();
+        for (HqlParameter p : collected) {
+            lastValueByKey.put(dedupeKey(p), p.getValueExpr());
+        }
+        List<HqlParameter> parameters = new ArrayList<>();
+        Set<String> seenKeys = new LinkedHashSet<>();
+        for (HqlParameter p : collected) {
+            if (!seenKeys.add(dedupeKey(p))) continue;
+            String lastValue = lastValueByKey.get(dedupeKey(p));
+            parameters.add(new HqlParameter(p.getParamName(), lastValue != null ? lastValue : p.getValueExpr(),
+                    p.isPositional()));
         }
 
         String createQueryMethodName = call.getMethodExpression().getReferenceName() != null
@@ -271,7 +322,7 @@ public final class HqlQueryLocator {
 
         return new HqlQueryInfo(method.getName(), hqlResult.hql(), hqlResult.isLiteral(),
                 entityInfo.entityClass(), entityInfo.entityClassName(), parameters, method,
-                isNativeQuery, createQueryMethodName);
+                isNativeQuery, createQueryMethodName, duplicateParamNames);
     }
 
     /**
@@ -348,8 +399,13 @@ public final class HqlQueryLocator {
             PsiExpression entityArg = args[1];
             if (entityArg instanceof PsiClassObjectAccessExpression coa) {
                 PsiClass psiClass = (coa.getOperand().getType() instanceof PsiClassType ct) ? ct.resolve() : null;
-                String className = (coa.getOperand().getType() instanceof PsiClassType ct2) ? ct2.getClassName() : null;
-                return new EntityInfoResult(psiClass, psiClass != null ? psiClass.getName() : className);
+                if (psiClass != null && JpaMetadataReader.entityNameOf(psiClass) != null) {
+                    String className = (coa.getOperand().getType() instanceof PsiClassType ct2) ? ct2.getClassName() : null;
+                    return new EntityInfoResult(psiClass, psiClass.getName() != null ? psiClass.getName() : className);
+                }
+                // T-JpaParamOrder F4：createQuery(hql, X.class) 的第二参是**结果类型**而非查询实体
+                // （JPA 规范 resultClass 语义）——非 JPA 实体（Long/Tuple/DTO 投影）不再按实体解析
+                // （用户实测「表： long」根因），回落下方语句头实体名提取路径解析真表
             }
         }
 

@@ -127,6 +127,7 @@ import org.jetbrains.annotations.Nullable;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -1049,9 +1050,91 @@ public final class SqlPreviewService {
 
     /**
      * 将原生 SQL 中的命名参数 :paramName 转换为 ? 占位符。
+     * 示例：{@code :keyword} → {@code ?}，{@code CONCAT('%', :keyword, '%')} → {@code CONCAT('%', ?, '%')}
      */
+    // T-JpaParamOrder F3：正则提常量——extractNativeParamNames 与替换共用同一 pattern，
+    // 保证名序与替换产物 `?` 序一致
+    private static final Pattern NATIVE_NAMED_PARAM = Pattern.compile("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)");
+
     private String convertNativeSqlParameters(@NotNull String nativeSql) {
-        return nativeSql.replaceAll("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)", "?");
+        return NATIVE_NAMED_PARAM.matcher(nativeSql).replaceAll("?");
+    }
+
+    /**
+     * T-JpaParamOrder F3：原生 SQL 命名参数名序（首现序，与 {@link #convertNativeSqlParameters}
+     * 替换出的 {@code ?} 一一对应）。位置参数 {@code ?N} 不在内。
+     */
+    private List<String> extractNativeParamNames(@NotNull String nativeSql) {
+        List<String> names = new ArrayList<>();
+        Matcher matcher = NATIVE_NAMED_PARAM.matcher(nativeSql);
+        while (matcher.find()) {
+            names.add(matcher.group(1));
+        }
+        return names;
+    }
+
+    /**
+     * T-JpaParamOrder F3：全部 {@code ?} 均来自命名参数替换时返回名序（供按名回填），否则 null
+     * 维持按序回填。位置参数混入时名序数量与 {@code ?} 不齐，按名会把无名的 {@code ?} 配空值——
+     * 保守回退既有语义。{@code ?} 计数用朴素 count（判定用途，非替换位点）。
+     */
+    @Nullable
+    private List<String> usableNamedPlaceholderSources(@NotNull String sql, @NotNull List<String> namedParamNames) {
+        int questionMarks = 0;
+        for (int i = 0; i < sql.length(); i++) {
+            if (sql.charAt(i) == '?') questionMarks++;
+        }
+        return !namedParamNames.isEmpty() && namedParamNames.size() == questionMarks ? namedParamNames : null;
+    }
+
+    // T-JpaParamOrder F6：静态值字面量形态（数字含 Java 类型后缀 / 枚举常量引用）
+    private static final Pattern NUMERIC_LITERAL = Pattern.compile("-?\\d+(\\.\\d+)?[LlFfDd]?");
+    private static final Pattern ENUM_CONSTANT_REF = Pattern.compile("[A-Za-z_$][A-Za-z0-9_$.]*\\.[A-Z][A-Z0-9_]*");
+
+    /**
+     * T-JpaParamOrder F6：setParameter 静态值求值——参数框初值自动回显。
+     *
+     * <p>用户追问「为什么这些常量没有回显」（20261006）：{@code setParameter("locationStatus", "E")}
+     * 这类字面量/枚举常量可静态求值，此前面板一律留空、渲染全 {@code ?}，与代码事实不符。</p>
+     *
+     * <p>识别面（保守，宁缺勿错）：</p>
+     * <ul>
+     *  <li>字符串字面量 {@code "E"} → E（去引号 + 简单反转义）</li>
+     *  <li>数字字面量 {@code 0} / {@code 1L} / {@code 0.5f} → 去 Java 类型后缀</li>
+     *  <li>布尔字面量 {@code true} / {@code false}</li>
+     *  <li>枚举常量引用 {@code Enum.CONST}（取末段；{@code @Enumerated(STRING)} 运行期绑定值即该名）</li>
+     * </ul>
+     * <p>变量引用 / 方法调用 / 任意表达式 → null（保持空待填，用户手动输入）。</p>
+     */
+    @Nullable
+    private String staticParamValue(@NotNull String valueExpr) {
+        String expr = valueExpr.trim();
+        if (expr.isEmpty()) return null;
+        // 注意：单字符字面量（数字 `0`）合法——长度守卫只挡空串，勿写成 length < 2
+        if (expr.startsWith("\"") && expr.endsWith("\"") && expr.length() >= 2) {
+            return expr.substring(1, expr.length() - 1)
+                    .replace("\\\"", "\"")
+                    .replace("\\\\", "\\");
+        }
+        if (NUMERIC_LITERAL.matcher(expr).matches()) {
+            int end = expr.length();
+            while (end > 0 && "LlFfDd".indexOf(expr.charAt(end - 1)) >= 0) end--;
+            return expr.substring(0, end);
+        }
+        if ("true".equals(expr) || "false".equals(expr)) return expr;
+        if (ENUM_CONSTANT_REF.matcher(expr).matches()) return expr.substring(expr.lastIndexOf('.') + 1);
+        return null;
+    }
+
+    /** T-JpaParamOrder F6：setParameter 追踪列表 → 参数框初值表（仅静态可求值项入表）。 */
+    private Map<String, String> staticParamValues(@NotNull List<HqlParameter> parameters) {
+        Map<String, String> map = new LinkedHashMap<>();
+        for (HqlParameter p : parameters) {
+            if (p.isPositional()) continue;
+            String value = staticParamValue(p.getValueExpr());
+            if (value != null) map.put(p.getParamName(), value);
+        }
+        return map;
     }
 
     /**
@@ -1226,7 +1309,10 @@ public final class SqlPreviewService {
         allParamNames.addAll(extraParams);
         // 关键：使用 HqlConverter 转换后的 SQL 字符串（含 ? 占位符），而非从 statement 重新生成。
         return buildJpaPreviewResult(result.getStatement(), enhancedSql, table != null ? table.getTableName() : "",
-                allParamNames, info.getMethod(), result.getInClauseParams(), dialect);
+                allParamNames, info.getMethod(), result.getInClauseParams(), dialect,
+                result.getPlaceholderParamNames(), info.getDuplicateParamNames(),
+                // T-JpaParamOrder F6：字面量/枚举常量自动预填参数框（变量引用不入表，保持待填）
+                staticParamValues(info.getParameters()));
     }
 
     /**
@@ -1250,13 +1336,22 @@ public final class SqlPreviewService {
                 ? pageSort.getExtraParamNames() : List.of();
         List<String> allParamNames = new ArrayList<>(paramNames);
         allParamNames.addAll(extraParams);
+        // T-JpaParamOrder F3：native 命名参数名序透传（全部 `?` 来自 :name 替换时启用按名回填）
+        List<String> usableNamedSources = usableNamedPlaceholderSources(enhancedSql, extractNativeParamNames(info.getHql()));
         return new PreviewResult(
                 enhancedSql, enhancedSql.replaceAll("\\s+", " ").trim(), allParamNames,
                 ParameterReplacer.buildParamTable(allParamNames),
                 null, tableName, null,
                 List.of(), Map.of(), null, null,
-                allParamNames.stream().map(n -> new ParamHint(Boolean.valueOf(!isNumericParam(info.getMethod(), n)), null, false)).toList(),
-                List.of(), null, null, Map.of(), null, null, null, null);
+                (usableNamedSources != null ? usableNamedSources : allParamNames).stream()
+                        .map(n -> new ParamHint(Boolean.valueOf(!isNumericParam(info.getMethod(), n)), null, false)).toList(),
+                List.of(), null, null,
+                // T-JpaParamOrder F6：native 链同样预填静态常量
+                staticParamValues(info.getParameters()),
+                null, null, null, null,
+                Map.of(), null, false,
+                usableNamedSources != null ? usableNamedSources : List.of(),
+                info.getDuplicateParamNames());
     }
 
     /**
@@ -1379,7 +1474,10 @@ public final class SqlPreviewService {
         List<String> paramNames = extractHqlParamNames(info.getParameters());
         if (paramNames.isEmpty()) paramNames = extractParamNamesFromHql(info.getHql());
         return buildJpaPreviewResult(result.getStatement(), result.getSql(), table != null ? table.getTableName() : "",
-                paramNames, info.getMethod(), result.getInClauseParams());
+                paramNames, info.getMethod(), result.getInClauseParams(),
+                result.getPlaceholderParamNames(),
+                // T-JpaParamOrder F6：自定义 DAO 链同样预填静态常量
+                staticParamValues(info.getParameters()));
     }
 
     /** T-J21：可读占位预览卡（优雅降级：无 SQL 模板时给出解释性注释，不抛异常）。 */
@@ -1429,6 +1527,8 @@ public final class SqlPreviewService {
         if (query.getKind() == HbmXmlMapping.QueryKind.NATIVE) {
             String sql = convertNativeSqlParameters(query.getQueryText());
             String enhancedSql = applyJpaMethodEnhancements(hostMethod, sql, null, true);
+            // T-JpaParamOrder F3：native 命名参数名序透传（与 previewNativeSql 同款判定）
+            List<String> usableNamedSources = usableNamedPlaceholderSources(enhancedSql, extractNativeParamNames(query.getQueryText()));
             return new PreviewResult(
                     enhancedSql,
                     enhancedSql.replaceAll("\\s+", " ").trim(),
@@ -1441,7 +1541,8 @@ public final class SqlPreviewService {
                     Map.of(),
                     null,
                     null,
-                    paramNames.stream().map(n -> new ParamHint(Boolean.TRUE, null, false)).toList(),
+                    (usableNamedSources != null ? usableNamedSources : paramNames).stream()
+                            .map(n -> new ParamHint(Boolean.TRUE, null, false)).toList(),
                     List.of(),
                     null,
                     null,
@@ -1449,7 +1550,12 @@ public final class SqlPreviewService {
                     null,
                     null,
                     null,
-                    null);
+                    null,
+                    Map.of(),
+                    null,
+                    false,
+                    usableNamedSources != null ? usableNamedSources : List.of(),
+                    Set.of());
         }
         // HQL：查询名前缀（LegacyItem.findLowStockHql → LegacyItem）优先，回落 FROM 子句实体
         String namePrefix = query.getName();
@@ -1470,7 +1576,10 @@ public final class SqlPreviewService {
                 paramNames,
                 hostMethod,
                 result.getInClauseParams(),
-                dialect);
+                dialect,
+                result.getPlaceholderParamNames(),
+                Set.of(),
+                Map.of());
     }
 
     /** T-H2：hbm 文件 gutter 点击入口——从 {@code <query>}/{@code <sql-query>} XmlTag 构造命名查询后预览。 */
@@ -1685,13 +1794,63 @@ public final class SqlPreviewService {
             @Nullable PsiMethod method,
             @NotNull Set<String> inClauseParams,
             @Nullable Dialect dialectOverride) {
+        return buildJpaPreviewResult(statement, convertedSql, tableName, paramNames, method, inClauseParams,
+                dialectOverride, List.of(), Set.of(), Map.of());
+    }
+
+    /**
+     * JPA 预览结果构建统一入口（T-JpaParamOrder：带占位符名序 + 初值预填，方言取本地）。
+     * Kotlin 默认参数 {@code duplicateParamNames = emptySet()} 等价重载。
+     */
+    private PreviewResult buildJpaPreviewResult(
+            @NotNull SqlStatement statement,
+            @NotNull String convertedSql,
+            @NotNull String tableName,
+            @NotNull List<String> paramNames,
+            @Nullable PsiMethod method,
+            @NotNull Set<String> inClauseParams,
+            @NotNull List<String> placeholderParamNames,
+            @NotNull Map<String, String> initialParamValues) {
+        return buildJpaPreviewResult(statement, convertedSql, tableName, paramNames, method, inClauseParams,
+                null, placeholderParamNames, Set.of(), initialParamValues);
+    }
+
+    /**
+     * JPA 预览结果构建统一入口（全量形态，T-JpaParamOrder F3/F5/F6）。
+     *
+     * @param placeholderParamNames JPA 命名参数占位符名序（HQL {@code :name} 首现序）；空 = 按序回填
+     * @param duplicateParamNames   同名命名参数多次 setParameter 的参数名集合；空集 = 无重复
+     * @param initialParamValues    参数行初值预填（静态可求值的字面量/枚举常量）
+     */
+    private PreviewResult buildJpaPreviewResult(
+            @NotNull SqlStatement statement,
+            @NotNull String convertedSql,
+            @NotNull String tableName,
+            @NotNull List<String> paramNames,
+            @Nullable PsiMethod method,
+            @NotNull Set<String> inClauseParams,
+            @Nullable Dialect dialectOverride,
+            @NotNull List<String> placeholderParamNames,
+            @NotNull Set<String> duplicateParamNames,
+            @NotNull Map<String, String> initialParamValues) {
         // T-PS5-03：方言由调用入口透传（未传则本地求一次）——见 applyJpaMethodEnhancements 同款说明
         Dialect dialect = dialectOverride != null ? dialectOverride : currentDialect();
         List<ConditionView> views = collectConditionViews(statement);
+        // T-JpaParamOrder F3：占位符名序可用性判定——convertedSql 可能是增强后形态（LIMIT 等），
+        // 但增强不增删 `?`；全部 `?` 均来自命名参数时启用按名回填，否则置空维持按序
+        List<String> usableNamed = usableNamedPlaceholderSources(convertedSql, placeholderParamNames);
+        List<String> usableNamedSources = usableNamed != null ? usableNamed : List.of();
+        // T-JpaParamOrder F3：回填提示与「渲染实际用的 sources」平行——按名回填启用时随名序，
+        // 否则随面板行序（paramNames），保证 backfillParamsBySource 的第 i 位提示对第 i 位来源
+        List<String> backfillSources = !usableNamedSources.isEmpty() ? usableNamedSources : paramNames;
+        // 参数回填提示：根据方法签名参数类型判定是否需要引号
+        // - IN 子句参数：数值类型不加引号，字符串加引号
+        // - 非 IN 参数：数值类型不加引号，字符串加引号（quote=true）
+        // - 无法判定类型时默认加引号（保守策略）
         List<ParamHint> paramHints;
-        if (!paramNames.isEmpty()) {
+        if (!backfillSources.isEmpty()) {
             paramHints = new ArrayList<>();
-            for (String name : paramNames) {
+            for (String name : backfillSources) {
                 boolean inList = inClauseParams.contains(name);
                 boolean isNumeric = isNumericParam(method, name);
                 paramHints.add(new ParamHint(Boolean.valueOf(!isNumeric), null, inList));
@@ -1717,11 +1876,16 @@ public final class SqlPreviewService {
                 List.of(),
                 null,
                 null,
+                initialParamValues,
+                null,
+                null,
+                null,
+                null,
                 Map.of(),
                 null,
-                null,
-                null,
-                null);
+                false,
+                usableNamedSources,
+                duplicateParamNames);
     }
 
     /**

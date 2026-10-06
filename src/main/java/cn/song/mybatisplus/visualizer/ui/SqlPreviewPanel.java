@@ -2628,7 +2628,11 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
         } else {
             // JDBC 命名参数按名回填（先），再对残留 `?` 按序回填
             String base = compactMode ? result.getCompactSql() : result.getSql();
-            showSql(backfillParamsBySource(applyNamedParams(base), result.getUnresolvedParams(), result.getParamHints()));
+            // T-JpaParamOrder F3：JPA 占位符名序非空时按名回填（同名占位复用同值，
+            // 与 setParameter 书写顺序解耦）；hints 在服务端已与该 sources 序平行
+            List<String> sources = !result.getPlaceholderParamNames().isEmpty()
+                    ? result.getPlaceholderParamNames() : result.getUnresolvedParams();
+            showSql(backfillParamsBySource(applyNamedParams(base), sources, result.getParamHints()));
         }
         // T-SelToggle：勾选态一切变更均以 renderSql 收尾——切换按钮文案在此单点同步
         syncToggleSelectLabels();
@@ -3641,6 +3645,17 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
             if (!views.isEmpty()) paramPanel.add(sectionHeaderRow(MpSqlVisualizerBundle.message("panel.param.section")));
             for (String source : ordinarySources) paramPanel.add(buildParamRow(source, labelWidth));
         }
+        // T-JpaParamOrder F5：同名参数多次 setParameter 轻提示（JPA 覆盖语义，运行时以最后一次
+        // 为准）——帮用户发现自身代码的写重；灰字注记行，不发通知、不弹窗
+        if (!result.getDuplicateParamNames().isEmpty()) {
+            List<String> sortedDuplicates = new ArrayList<>(result.getDuplicateParamNames());
+            Collections.sort(sortedDuplicates);
+            JBLabel duplicateNote = new JBLabel(MpSqlVisualizerBundle.message(
+                    "panel.param.duplicate.note", String.join(", ", sortedDuplicates)));
+            duplicateNote.setForeground(JBColor.GRAY);
+            duplicateNote.setBorder(JBUI.Borders.empty(0, 8, 2, 8));
+            paramPanel.add(duplicateNote);
+        }
         paramPanel.revalidate();
         paramPanel.repaint();
     }
@@ -4142,11 +4157,15 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
     /**
      * 集合命名启发式（T-PT-02，zMyBatis ParameterInputDialog 同款）：参数名以 {@code s} 结尾
      * （排除 status/address 等单数词）或含 list/ids/array/collection → 按数组提示。
+     * O-111 追加（用户 demo 实测 locationStatus 误配集合占位）：排除词改<b>后缀匹配</b>——
+     * 复合驼峰词（locationStatus/orderStatus/userAddress）以单数词结尾同样不是集合。
      */
     private boolean looksLikeCollectionName(String source) {
         int dot = source.lastIndexOf('.');
         String name = (dot >= 0 ? source.substring(dot + 1) : source).toLowerCase();
-        if (COLLECTION_NAME_EXCEPTIONS.contains(name)) return false;
+        for (String exception : COLLECTION_NAME_EXCEPTIONS) {
+            if (name.equals(exception) || name.endsWith(exception)) return false;
+        }
         if (name.contains("list") || name.contains("ids") || name.contains("array") || name.contains("collection")) {
             return true;
         }
@@ -5091,6 +5110,16 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     public List<String> unresolvedParams() {
         return current != null ? current.getUnresolvedParams() : Collections.emptyList();
+    }
+
+    /**
+     * T-JpaParamOrder F3：复制可执行 SQL 的回填 sources——JPA 占位符名序非空时优先
+     * （按名回填口径），否则回落 {@link #unresolvedParams()}，与面板渲染（renderSql else 分支）同口径。
+     */
+    public List<String> backfillSources() {
+        if (current == null) return Collections.emptyList();
+        List<String> placeholderNames = current.getPlaceholderParamNames();
+        return !placeholderNames.isEmpty() ? placeholderNames : current.getUnresolvedParams();
     }
 
     public Map<String, String> paramValuesSnapshot() {

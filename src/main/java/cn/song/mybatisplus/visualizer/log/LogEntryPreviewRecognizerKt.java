@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * {@code LogEntryPreviewRecognizer.kt} 顶层扩展函数（{@code LogSqlEntry.toRecognizedPreview()}）的 Java 承载类。
@@ -217,7 +218,9 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
             null,                              // pagesColumns
             Map.of(),                          // namedParamHints
             entry.stackDigest(),
-            false);
+            false,
+            List.of(),                         // placeholderParamNames
+            Set.of());                         // duplicateParamNames
     }
 
     private static String formatIfNeeded(String sql, boolean formatSql) {

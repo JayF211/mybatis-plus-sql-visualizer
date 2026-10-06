@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 /**
  * 预览结果（M3-01 整合层产物）：一次 Wrapper 转换的完整展示数据。
  *
@@ -36,6 +37,10 @@ import java.util.Objects;
  *                         null = 无（桥通道 / 旧条目），面板不显示栈节点
  * @param hasDollarRawSegments 本次预览语句含 ${} 原文拼接段（T-InjectionGate T-IG-01，解析期 token 事实）；
  *                         非 XML 链恒 false
+ * @param placeholderParamNames JPA 命名参数占位符名序（T-JpaParamOrder F3，首现序与 SQL `?` 一一对应）；
+ *                         空表 = 按序回填（既有语义）
+ * @param duplicateParamNames  同名命名参数多次 setParameter 的参数名集合（T-JpaParamOrder F5，覆盖语义）；
+ *                         空集 = 无重复
  */
 public final class PreviewResult {
     private final String sql;
@@ -71,6 +76,19 @@ public final class PreviewResult {
      * 复制可执行 SQL 据此给产物加标记注释。非 XML 链（Wrapper/JPA/日志还原）无 `${}` 语义恒 false。
      */
     private final boolean hasDollarRawSegments;
+    /**
+     * T-JpaParamOrder F3：JPA 命名参数占位符名序（HQL {@code :name} 首现序，与转换后 SQL 中
+     * {@code ?} 一一对应）。非空时渲染/复制按名回填（同名占位复用同值，JPA 命名参数语义），
+     * 与 setParameter 书写顺序解耦；空表 = 维持按序回填（既有语义）。仅当全部 {@code ?}
+     * 均来自命名参数替换时才置非空（位置参数混入时数量不齐，服务端置空回退按序），
+     * 由 SqlPreviewService 出口保证。
+     */
+    private final List<String> placeholderParamNames;
+    /**
+     * T-JpaParamOrder F5：同名命名参数多次 setParameter 的参数名集合（JPA 覆盖语义，运行时以
+     * 最后一次为准）。面板据此给「写重」轻提示；空集 = 无重复。
+     */
+    private final Set<String> duplicateParamNames;
 
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
@@ -80,7 +98,8 @@ public final class PreviewResult {
                          List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns) {
         this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
-                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, Map.of(), null, false);
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, Map.of(), null, false,
+                List.of(), Set.of());
     }
 
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
@@ -93,7 +112,25 @@ public final class PreviewResult {
         this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
-                namedParamHints, null, false);
+                namedParamHints, null, false, List.of(), Set.of());
+    }
+
+    /**
+     * K2J 互操作：master 侧 {@code placeholderParamNames}/{@code duplicateParamNames} 为带默认值的
+     * 后置字段（Kotlin 默认参），历史 23 参构造形态在 Kotlin 调用方（测试树位置实参）天然合法——
+     * Java 侧保留同形重载，新两参取默认空值（与 25 参规范构造器同为 {@code null} 归一语义）。
+     */
+    public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
+                         WrapperType wrapperType, String tableName, String warning, List<String> columns,
+                         Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
+                         List<ParamHint> paramHints, List<TableInfo> candidateTables, BatchModel batchModel,
+                         XmlPreviewModel xmlModel, Map<String, String> initialParamValues, List<PerfWarning> perfWarnings,
+                         List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
+                         Map<String, ParamHint> namedParamHints, String stackDigest, boolean hasDollarRawSegments) {
+        this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
+                columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, stackDigest, hasDollarRawSegments, List.of(), Set.of());
     }
 
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
@@ -102,7 +139,8 @@ public final class PreviewResult {
                          List<ParamHint> paramHints, List<TableInfo> candidateTables, BatchModel batchModel,
                          XmlPreviewModel xmlModel, Map<String, String> initialParamValues, List<PerfWarning> perfWarnings,
                          List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
-                         Map<String, ParamHint> namedParamHints, String stackDigest, boolean hasDollarRawSegments) {
+                         Map<String, ParamHint> namedParamHints, String stackDigest, boolean hasDollarRawSegments,
+                         List<String> placeholderParamNames, Set<String> duplicateParamNames) {
         this.sql = sql;
         this.compactSql = compactSql;
         this.unresolvedParams = unresolvedParams;
@@ -126,6 +164,8 @@ public final class PreviewResult {
         this.namedParamHints = namedParamHints != null ? namedParamHints : Map.of();
         this.stackDigest = stackDigest;
         this.hasDollarRawSegments = hasDollarRawSegments;
+        this.placeholderParamNames = placeholderParamNames != null ? placeholderParamNames : List.of();
+        this.duplicateParamNames = duplicateParamNames != null ? duplicateParamNames : Set.of();
     }
 
     public PreviewResult(String sql, String compactSql,
@@ -237,6 +277,14 @@ public final class PreviewResult {
         return hasDollarRawSegments;
     }
 
+    public List<String> getPlaceholderParamNames() {
+        return placeholderParamNames;
+    }
+
+    public Set<String> getDuplicateParamNames() {
+        return duplicateParamNames;
+    }
+
     public PreviewResult copy(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                               WrapperType wrapperType, String tableName, String warning, List<String> columns,
                               Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
@@ -247,7 +295,7 @@ public final class PreviewResult {
         return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints,
-                stackDigest, hasDollarRawSegments);
+                stackDigest, hasDollarRawSegments, placeholderParamNames, duplicateParamNames);
     }
 
     public PreviewResult copy(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
@@ -260,7 +308,7 @@ public final class PreviewResult {
         return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints,
-                stackDigest, hasDollarRawSegments);
+                stackDigest, hasDollarRawSegments, placeholderParamNames, duplicateParamNames);
     }
 
     @Override
@@ -294,7 +342,9 @@ public final class PreviewResult {
                 && Objects.equals(pagesColumns, that.pagesColumns)
                 && Objects.equals(namedParamHints, that.namedParamHints)
                 && Objects.equals(stackDigest, that.stackDigest)
-                && hasDollarRawSegments == that.hasDollarRawSegments;
+                && hasDollarRawSegments == that.hasDollarRawSegments
+                && Objects.equals(placeholderParamNames, that.placeholderParamNames)
+                && Objects.equals(duplicateParamNames, that.duplicateParamNames);
     }
 
     @Override
@@ -302,7 +352,7 @@ public final class PreviewResult {
         return Objects.hash(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints,
-                stackDigest, hasDollarRawSegments);
+                stackDigest, hasDollarRawSegments, placeholderParamNames, duplicateParamNames);
     }
 
     @Override
@@ -315,6 +365,8 @@ public final class PreviewResult {
                 + ", initialParamValues=" + initialParamValues + ", perfWarnings=" + perfWarnings + ", fillClauses="
                 + fillClauses + ", previousSql=" + previousSql + ", pagesColumns=" + pagesColumns
                 + ", namedParamHints=" + namedParamHints + ", stackDigest=" + stackDigest
-                + ", hasDollarRawSegments=" + hasDollarRawSegments + ")";
+                + ", hasDollarRawSegments=" + hasDollarRawSegments
+                + ", placeholderParamNames=" + placeholderParamNames
+                + ", duplicateParamNames=" + duplicateParamNames + ")";
     }
 }

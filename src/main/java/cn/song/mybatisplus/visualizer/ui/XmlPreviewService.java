@@ -229,7 +229,9 @@ public final class XmlPreviewService {
                 // 成功替换为模拟值后文本里已无 `${}` 痕迹）
                 Map.of(),
                 null,
-                model.hasDollarRawSegments()
+                model.hasDollarRawSegments(),
+                List.of(),
+                Set.of()
         );
     }
 

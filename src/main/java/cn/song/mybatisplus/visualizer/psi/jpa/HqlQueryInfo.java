@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.psi.jpa;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiMethod;
 import java.util.List;
+import java.util.Set;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -18,6 +19,9 @@ import org.jetbrains.annotations.Nullable;
  * @param method          HQL 所在 PsiMethod
  * @param isNativeQuery   是否为原生 SQL（createNativeQuery）
  * @param createQueryMethodName createQuery/createNamedQuery/createNativeQuery 方法名
+ * @param duplicateParamNames T-JpaParamOrder F5 数据面：同名命名参数多次 setParameter 的参数名集合
+ *                            （JPA 覆盖语义，运行时以最后一次为准）。parameters 已去重保首现序，
+ *                            本集合供面板给「写重」轻提示。空集 = 无重复。
  */
 public final class HqlQueryInfo {
     /** HQL 所在方法名。 */
@@ -38,8 +42,18 @@ public final class HqlQueryInfo {
     private final boolean nativeQuery;
     /** createQuery/createNamedQuery/createNativeQuery 方法名。 */
     private final @NotNull String createQueryMethodName;
+    /**
+     * T-JpaParamOrder F5 数据面：同名命名参数多次 setParameter 的参数名集合
+     * （JPA 覆盖语义，运行时以最后一次为准）。parameters 已去重保首现序，
+     * 本集合供面板给「写重」轻提示。空集 = 无重复。
+     */
+    private final @NotNull Set<String> duplicateParamNames;
 
     public HqlQueryInfo(@NotNull String methodName, @NotNull String hql, boolean isLiteralHql, @Nullable PsiClass entityClass, @Nullable String entityClassName, @NotNull List<HqlParameter> parameters, @NotNull PsiMethod method, boolean isNativeQuery, @NotNull String createQueryMethodName) {
+        this(methodName, hql, isLiteralHql, entityClass, entityClassName, parameters, method, isNativeQuery, createQueryMethodName, Set.of());
+    }
+
+    public HqlQueryInfo(@NotNull String methodName, @NotNull String hql, boolean isLiteralHql, @Nullable PsiClass entityClass, @Nullable String entityClassName, @NotNull List<HqlParameter> parameters, @NotNull PsiMethod method, boolean isNativeQuery, @NotNull String createQueryMethodName, @NotNull Set<String> duplicateParamNames) {
         this.methodName = methodName;
         this.hql = hql;
         this.literalHql = isLiteralHql;
@@ -49,6 +63,7 @@ public final class HqlQueryInfo {
         this.method = method;
         this.nativeQuery = isNativeQuery;
         this.createQueryMethodName = createQueryMethodName;
+        this.duplicateParamNames = duplicateParamNames;
     }
 
     public @NotNull String getMethodName() { return methodName; }
@@ -67,22 +82,24 @@ public final class HqlQueryInfo {
     public boolean isNativeQuery() { return nativeQuery; }
     public @NotNull String getCreateQueryMethodName() { return createQueryMethodName; }
     public @NotNull String createQueryMethodName() { return createQueryMethodName; }
+    public @NotNull Set<String> getDuplicateParamNames() { return duplicateParamNames; }
+    public @NotNull Set<String> duplicateParamNames() { return duplicateParamNames; }
 
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
         if (!(o instanceof HqlQueryInfo)) return false;
         HqlQueryInfo that = (HqlQueryInfo) o;
-        return java.util.Objects.equals(this.methodName, that.methodName) && java.util.Objects.equals(this.hql, that.hql) && java.util.Objects.equals(this.literalHql, that.literalHql) && java.util.Objects.equals(this.entityClass, that.entityClass) && java.util.Objects.equals(this.entityClassName, that.entityClassName) && java.util.Objects.equals(this.parameters, that.parameters) && java.util.Objects.equals(this.method, that.method) && java.util.Objects.equals(this.nativeQuery, that.nativeQuery) && java.util.Objects.equals(this.createQueryMethodName, that.createQueryMethodName);
+        return java.util.Objects.equals(this.methodName, that.methodName) && java.util.Objects.equals(this.hql, that.hql) && java.util.Objects.equals(this.literalHql, that.literalHql) && java.util.Objects.equals(this.entityClass, that.entityClass) && java.util.Objects.equals(this.entityClassName, that.entityClassName) && java.util.Objects.equals(this.parameters, that.parameters) && java.util.Objects.equals(this.method, that.method) && java.util.Objects.equals(this.nativeQuery, that.nativeQuery) && java.util.Objects.equals(this.createQueryMethodName, that.createQueryMethodName) && java.util.Objects.equals(this.duplicateParamNames, that.duplicateParamNames);
     }
 
     @Override
     public int hashCode() {
-        return java.util.Objects.hash(methodName, hql, literalHql, entityClass, entityClassName, parameters, method, nativeQuery, createQueryMethodName);
+        return java.util.Objects.hash(methodName, hql, literalHql, entityClass, entityClassName, parameters, method, nativeQuery, createQueryMethodName, duplicateParamNames);
     }
 
     @Override
     public String toString() {
-        return "HqlQueryInfo[" + "methodName=" + methodName + ", " + "hql=" + hql + ", " + "isLiteralHql=" + literalHql + ", " + "entityClass=" + entityClass + ", " + "entityClassName=" + entityClassName + ", " + "parameters=" + parameters + ", " + "method=" + method + ", " + "isNativeQuery=" + nativeQuery + ", " + "createQueryMethodName=" + createQueryMethodName + "]";
+        return "HqlQueryInfo[" + "methodName=" + methodName + ", " + "hql=" + hql + ", " + "isLiteralHql=" + literalHql + ", " + "entityClass=" + entityClass + ", " + "entityClassName=" + entityClassName + ", " + "parameters=" + parameters + ", " + "method=" + method + ", " + "isNativeQuery=" + nativeQuery + ", " + "createQueryMethodName=" + createQueryMethodName + ", " + "duplicateParamNames=" + duplicateParamNames + "]";
     }
 }

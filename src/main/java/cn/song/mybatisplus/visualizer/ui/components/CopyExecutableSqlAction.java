@@ -61,7 +61,8 @@ public final class CopyExecutableSqlAction {
         }
         // 复制时剥离 SQL 注释（与 copySql 对齐）
         String sql = SqlCommentStripper.strip(raw);
-        List<String> sources = panel.unresolvedParams();
+        // T-JpaParamOrder F3：JPA 占位符名序优先（按名回填），与面板渲染同口径
+        List<String> sources = panel.backfillSources();
         Map<String, String> paramValues = panel.paramValuesSnapshot();
 
         String executableSql;
