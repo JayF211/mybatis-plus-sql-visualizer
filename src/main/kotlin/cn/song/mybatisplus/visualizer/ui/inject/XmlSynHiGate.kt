@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui.inject
 
+import cn.song.mybatisplus.visualizer.util.FatalErrors
 import com.intellij.lang.Language
 import com.intellij.lang.injection.MultiHostInjector
 import com.intellij.lang.injection.MultiHostRegistrar
@@ -66,6 +67,7 @@ object XmlSynHiGate {
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (t: Throwable) {
+        if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
         true
     }
 
@@ -96,6 +98,7 @@ object XmlSynHiGate {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (t: Throwable) {
+                if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
                 continue
             }
             if (started) return true
@@ -143,6 +146,7 @@ object XmlSynHiGate {
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (t: Throwable) {
+            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
             true
         }
     }
