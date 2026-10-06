@@ -61,9 +61,9 @@ class StatementWeaveWiringGuardTest {
     }
 
     @Test
-    fun test接线守卫_回调四件套在场() {
+    fun test接线守卫_回调五件套在场() {
         val src = stripComments(agentSrc("hook/SqlHookCallbacks.java"))
-        listOf("onStatementEnter", "onExecuteExit", "onAddBatchExit", "onStatementPrepare")
+        listOf("onStatementEnter", "onExecuteExit", "onAddBatchExit", "onClearBatchExit", "onStatementPrepare")
             .forEach { key ->
                 assertTrue(
                     "SqlHookCallbacks 应声明回调 $key",
@@ -73,6 +73,25 @@ class StatementWeaveWiringGuardTest {
         assertTrue(
             "onConnection 应记账最近 URL（归属链兜底源）",
             src.contains("UrlResolver.noteConnectUrl"),
+        )
+    }
+
+    @Test
+    fun test接线守卫_F74批串消费复位与clearBatch清账() {
+        val callbacks = stripComments(agentSrc("hook/SqlHookCallbacks.java"))
+        assertTrue(
+            "onExecuteExit 必须 executeBatch 消费批串后复位（F74，摘掉=残串跨批次串包+内存无界，必红）",
+            callbacks.contains("ctx.batch.setLength(0)"),
+        )
+        val weaver = stripComments(agentSrc("StatementWeaver.java"))
+        assertTrue(
+            "StatementWeaver 必须登记 clearBatch 织入面（F74，摘掉=宿主清批后残串串进下一批事件，必红）",
+            weaver.contains("\"clearBatch\""),
+        )
+        val registry = stripComments(agentSrc("hook/StatementRegistry.java"))
+        assertTrue(
+            "StatementRegistry 必须提供 clearBatchOf 清账缝（onClearBatchExit 的落点）",
+            registry.contains("clearBatchOf"),
         )
     }
 

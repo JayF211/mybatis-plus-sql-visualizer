@@ -37,6 +37,7 @@ public final class StatementWeaver implements Opcodes {
     private static final String EXIT_SIG =
             "(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;JLjava/lang/Object;Ljava/lang/Throwable;)V";
     private static final String ADD_BATCH_SIG = "(Ljava/lang/Object;Ljava/lang/String;)V";
+    private static final String CLEAR_BATCH_SIG = "(Ljava/lang/Object;)V";
     private static final String PREPARE_SIG = "(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/Object;)V";
 
     private static final String STR_DESC = "(Ljava/lang/String;";
@@ -51,6 +52,8 @@ public final class StatementWeaver implements Opcodes {
         BATCH,
         /** addBatch(String)——登记表批串累积（statement 面）。 */
         ADD_BATCH,
+        /** clearBatch()——登记表批串清账（statement 面，F74：不登记则清批前残串串进下一事件）。 */
+        CLEAR_BATCH,
         /** prepareStatement(String)/prepareCall(String) 出口——登记「PS 实例 → SQL + URL」。 */
         PREPARE,
     }
@@ -69,7 +72,8 @@ public final class StatementWeaver implements Opcodes {
     }
 
     static {
-        final Kind[] statementFace = {Kind.EXEC_PARAM, Kind.EXEC_CTX, Kind.BATCH, Kind.ADD_BATCH};
+        final Kind[] statementFace =
+                {Kind.EXEC_PARAM, Kind.EXEC_CTX, Kind.BATCH, Kind.ADD_BATCH, Kind.CLEAR_BATCH};
         putSpec(statementFace,
                 "com.mysql.cj.jdbc.StatementImpl",
                 "com.mysql.cj.jdbc.ClientPreparedStatement",
@@ -160,6 +164,8 @@ public final class StatementWeaver implements Opcodes {
                 return in(name, BATCH_NAMES) && desc.startsWith("()");
             case ADD_BATCH:
                 return "addBatch".equals(name) && desc.equals("(Ljava/lang/String;)V");
+            case CLEAR_BATCH:
+                return "clearBatch".equals(name) && desc.equals("()V");
             case PREPARE:
                 return ("prepareStatement".equals(name) || "prepareCall".equals(name))
                         && desc.startsWith(STR_DESC)
@@ -181,7 +187,7 @@ public final class StatementWeaver implements Opcodes {
 
     /**
      * EXEC_PARAM/EXEC_CTX/BATCH：方法头插入口（token=nanoTime，0=短路），每个 ARETURN/ATHROW
-     * 前插出口；ADD_BATCH/PREPARE：只在 RETURN/ARETURN 前插出口（无计时无 token）。
+     * 前插出口；ADD_BATCH/CLEAR_BATCH/PREPARE：只在 RETURN/ARETURN 前插出口（无计时无 token）。
      * 新槽：token 2 槽 + 出口暂存 1 槽（ARETURN 结果与 ATHROW 异常不同路径可共用）。
      */
     /**
@@ -217,6 +223,12 @@ public final class StatementWeaver implements Opcodes {
                 l.add(new VarInsnNode(ALOAD, 0));
                 l.add(new VarInsnNode(ALOAD, 1));
                 l.add(new MethodInsnNode(INVOKESTATIC, CALLBACK_CLASS, "onAddBatchExit", ADD_BATCH_SIG, false));
+                mn.instructions.insertBefore(insn, l);
+                inserted++;
+            } else if (kind == Kind.CLEAR_BATCH && op == RETURN) {
+                final InsnList l = new InsnList();
+                l.add(new VarInsnNode(ALOAD, 0));
+                l.add(new MethodInsnNode(INVOKESTATIC, CALLBACK_CLASS, "onClearBatchExit", CLEAR_BATCH_SIG, false));
                 mn.instructions.insertBefore(insn, l);
                 inserted++;
             } else if (kind == Kind.PREPARE && op == ARETURN) {

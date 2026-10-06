@@ -81,7 +81,8 @@ public final class SqlHookCallbacks {
 
     /**
      * execute 族**出口**（每个 ARETURN/ATHROW/IRETURN/LRETURN 前统一切入，EXEC 与 BATCH 共用
-     * 本签名——织入侧 BATCH 的 sql 槽传 null，批 SQL 由本回调按 op 名从登记表取；failure 非空 =
+     * 本签名——织入侧 BATCH 的 sql 槽传 null，批 SQL 由本回调按 op 名从登记表取并**读后即复位**
+     * （F74：executeBatch 消费即清，对齐驱动批缓冲 JDBC 语义）；failure 非空 =
      * 异常路径，事件记 errorText 后原样重抛由织入侧完成）。SQL 解析：带参形态取 sqlParam；
      * 无参 PS 形态与 executeBatch 族取 [StatementRegistry]（attach 前 prepare 的 PS 无登记 =
      * 盲区，跳过不上报 + 计数，计划 §三 S3）。URL 归属链见 [UrlResolver]（S4）。
@@ -102,6 +103,10 @@ public final class SqlHookCallbacks {
                 }
                 if (isBatchOp(op) && ctx.batch.length() > 0) {
                     sql = ctx.batch.toString();
+                    // F74：executeBatch 消费即复位——JDBC 语义驱动侧批缓冲在 executeBatch 完成后清空，
+                    // 登记批串同口径（成功与异常出口同走此处，异常路径读串在先、复位紧随）；
+                    // 不复位则残串跨批次累积：内存/组装耗时双无界，且下一批事件携带上一批残串。
+                    ctx.batch.setLength(0);
                 } else {
                     sql = ctx.sql;
                 }
@@ -134,6 +139,23 @@ public final class SqlHookCallbacks {
                 ctx.batch.append(";\n");
             }
             ctx.batch.append(sql);
+        } catch (Throwable t) {
+            // 采集红线：自吞
+        }
+    }
+
+    /**
+     * clearBatch() 出口：清登记批串（F74：宿主清批而登记不清，清批前残串会串进下一批事件）。
+     * 代理层活跃时跳过——批串本来就只在织入通道累积（onAddBatchExit 同款门禁），无账可清；
+     * 无登记直接跳过，不为清账惰性建登记（batchCtxOf 的建账语义只属于 addBatch）。
+     * 签名被 StatementWeaver 字节码硬编码，改动两侧同步。
+     */
+    public static void onClearBatchExit(Object stmt) {
+        try {
+            if (AgentState.isDisabled() || WeaveGate.isProxyActive()) {
+                return;
+            }
+            StatementRegistry.clearBatchOf(stmt);
         } catch (Throwable t) {
             // 采集红线：自吞
         }

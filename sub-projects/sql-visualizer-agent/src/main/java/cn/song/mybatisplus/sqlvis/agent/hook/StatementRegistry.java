@@ -24,7 +24,12 @@ public final class StatementRegistry {
     public static final class Ctx {
         public final String sql;
         public final String url;
-        /** 批处理累积（statement 面 addBatch(String) 织入出口追加；batch execute 读后即组装）。 */
+        /**
+         * 批处理累积（statement 面 addBatch(String) 织入出口追加）。
+         * 生命周期对齐驱动批缓冲的 JDBC 语义（F74）：executeBatch 消费即复位（onExecuteExit 读后
+         * setLength(0)）、clearBatch() 织入出口清账（clearBatchOf）——因此规模天然有界＝宿主单个
+         * 批周期内的 addBatch 总量，与驱动自身批缓冲同寿，不另设截断上限（截断会静默篡改事件内容）。
+         */
         public final StringBuilder batch = new StringBuilder();
 
         Ctx(String sql, String url) {
@@ -76,6 +81,19 @@ public final class StatementRegistry {
                 REGISTRY.put(statement, ctx);
             }
             return ctx;
+        }
+    }
+
+    /** statement 面 clearBatch 出口：清批串（有登记才清——清账不建账，无登记即无事可清）。 */
+    public static void clearBatchOf(Object statement) {
+        if (statement == null) {
+            return;
+        }
+        synchronized (REGISTRY) {
+            final Ctx ctx = REGISTRY.get(statement);
+            if (ctx != null) {
+                ctx.batch.setLength(0);
+            }
         }
     }
 

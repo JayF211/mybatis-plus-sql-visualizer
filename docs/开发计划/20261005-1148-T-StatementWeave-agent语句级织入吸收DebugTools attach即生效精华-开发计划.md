@@ -136,3 +136,18 @@ IDE 侧既有地基：`AgentEventAdapter` 事件消费、`AgentUrlRegistry`/`Jdb
 - 全量门禁（testShards/agent 子项目全量）按三档分层另派只读收口代理。
 - 性能对照（织入钩子每条 execute 的固定开销）随下轮性能报告批（§四.6）。
 - 更多驱动语句类登记随真库验证轮扩面（§六）。
+
+## 七A、F74 合并前置修复（20261006 合并评审轮）
+
+性能二十三轮审计 F74 定案「合并前必改」，随本轮合并命令一并实施：登记批串 `executeBatch` 消费后不复位 + `clearBatch()` 未织入——同一条 Statement 批串跨批次只增不清（内存/组装耗时双无界 + 下一批事件携带上一批残串）。修复三件：
+
+1. **消费即复位**：`onExecuteExit` 批串读后 `setLength(0)`（成功与异常出口同口径，对齐 JDBC 驱动批缓冲语义）。
+2. **clearBatch 面登记**：`StatementWeaver.Kind.CLEAR_BATCH`（`clearBatch()V`，RETURN 单点插桩）+ 回调 `onClearBatchExit`（停采/代理门禁同款双闸；有登记才清不建账，清账语义 `StatementRegistry.clearBatchOf`）。
+3. **规模边界定案**：复位+清账后批串天然有界＝宿主单个批周期内 addBatch 总量，与驱动自身批缓冲同寿，**不另设截断上限**（截断会静默篡改事件内容，比无界更糟）。
+
+反向验证两读数（摘修复三刀＝删复位行 / 摘 statementFace 的 CLEAR_BATCH / 摘 `matches()` case；注意 e2e 走测试缝自传形态面，摘 SPECS 登记杀不到 e2e——行为红必须摘 `matches()`）：
+
+- **红**：e2e 10 例 2 红（`批处理_executeBatch消费即复位_跨批次残串不得串包` + `clearBatch织入_清账后executeBatch零残串`）+ 主仓守卫 `test接线守卫_F74批串消费复位与clearBatch清账` 红。
+- **绿**：恢复后 agent e2e **10/0** + 主仓守卫 **7/0**（守卫四件套升级五件套）。
+
+过程坑留档：agent 子项目被根项目 `test` 任务依赖且 `failOnNoMatchingTests=false`——根项目带 `--tests` 过滤器跑守卫时 `:sql-visualizer-agent:test` 会以空匹配重跑并清空结果目录，e2e XML 随后跑被清非假绿；绿读数须在 e2e 单跑后立即取 XML。

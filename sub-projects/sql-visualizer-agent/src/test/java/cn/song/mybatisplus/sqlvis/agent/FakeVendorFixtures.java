@@ -465,6 +465,9 @@ public class FakeVendorFixtures {
         public void addBatch(String sql) {
         }
 
+        public void clearBatch() {
+        }
+
         public int[] executeBatch() {
             return new int[]{1, 1};
         }

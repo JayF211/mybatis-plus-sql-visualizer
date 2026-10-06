@@ -33,7 +33,8 @@ public class StatementWeaveEndToEndTest {
     private static final String FIXTURE_PREFIX = "cn.song.mybatisplus.sqlvis.agent.FakeVendorFixtures";
     private static final StatementWeaver.Kind[] STATEMENT_FACE =
             {StatementWeaver.Kind.EXEC_PARAM, StatementWeaver.Kind.EXEC_CTX,
-                    StatementWeaver.Kind.BATCH, StatementWeaver.Kind.ADD_BATCH};
+                    StatementWeaver.Kind.BATCH, StatementWeaver.Kind.ADD_BATCH,
+                    StatementWeaver.Kind.CLEAR_BATCH};
     private static final StatementWeaver.Kind[] PS_FACE =
             {StatementWeaver.Kind.EXEC_CTX, StatementWeaver.Kind.BATCH};
     private static final StatementWeaver.Kind[] PREPARE_FACE = {StatementWeaver.Kind.PREPARE};
@@ -108,6 +109,33 @@ public class StatementWeaveEndToEndTest {
         assertNotNull("executeBatch 须产出事件", event);
         assertEquals("INSERT INTO a VALUES (1);\nINSERT INTO b VALUES (2)", event.sql);
         assertEquals("批影响行数求和", Long.valueOf(2L), event.updateCount);
+    }
+
+    @Test
+    public void 批处理_executeBatch消费即复位_跨批次残串不得串包() throws Exception {
+        Object stmt = newInstance("VendorStmt");
+        invokeVoid(stmt, "addBatch", "INSERT INTO a VALUES (1)");
+        stmt.getClass().getMethod("executeBatch").invoke(stmt);
+        assertNotNull("第一批须产出事件", queue().poll());
+        invokeVoid(stmt, "addBatch", "INSERT INTO b VALUES (2)");
+        stmt.getClass().getMethod("executeBatch").invoke(stmt);
+        SqlEvent second = queue().poll();
+        assertNotNull("第二批须产出事件", second);
+        assertEquals("executeBatch 消费后必须复位批串（F74），第二事件不得携带第一批残串",
+                "INSERT INTO b VALUES (2)", second.sql);
+    }
+
+    @Test
+    public void clearBatch织入_清账后executeBatch零残串() throws Exception {
+        Object stmt = newInstance("VendorStmt");
+        invokeVoid(stmt, "addBatch", "INSERT INTO stale VALUES (0)");
+        stmt.getClass().getMethod("clearBatch").invoke(stmt);
+        invokeVoid(stmt, "addBatch", "INSERT INTO fresh VALUES (1)");
+        stmt.getClass().getMethod("executeBatch").invoke(stmt);
+        SqlEvent event = queue().poll();
+        assertNotNull("clearBatch 后新批仍须产出事件", event);
+        assertEquals("clearBatch 必须织入清账（F74），事件不得携带清批前残串",
+                "INSERT INTO fresh VALUES (1)", event.sql);
     }
 
     // ---------- prepare 面 + PS 面：登记表形态 ----------
