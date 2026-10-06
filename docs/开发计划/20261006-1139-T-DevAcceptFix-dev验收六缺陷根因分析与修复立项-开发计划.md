@@ -164,3 +164,24 @@ combo.addActionListener(:3763) → switchToScheme(:3884)
 主控尾轮定向读数：**107/0 全绿**（ParamSchemes / BindState / PaginationSim / PluginSettingsPersistence / inject.* / PlatformSignatureCrossVersion，`BUILD SUCCESSFUL`）。
 
 残余（非本轮债，登记即可）：V84/V85 的 selfdev-framework-demo 真机 attach 启动复验、V91 指示行新位置截图走查、XmlSynHi 用户真机着色实测——三者同属**下轮 runIde 沙盒走查批**；V86 已由红绿对照裁决（走脆弱点 a 修）；V87/V88 由子代理 B 的 jar 实证与探针改造落地（V88 的用户 mapper 形态实测同上批）；V89~V90 按推荐案执行（B 案默认关 / 宿主级探测 / 两语句各自收尾）。
+
+### 七A、权威门禁（首轮收口）
+
+- `testShards`（5 片，单路）：**6622 例 / 2 失败 / 9 skip**（shard1 1473/0、shard2 1098/0/8skip、shard3 1363/1、shard4 1150/0、shard5 1389/0、testExternal 40/1/1skip）。skip 全为环境性（Database 插件不在测试 classpath 2、未开 `-PmpvDockerTests` 5、未提供 `-Dmpvs.dialect.jdbcUrl` 1、T-MarketCompatProxy 无产物目录 1；`docker info` 实测 daemon 未启动）。
+- `:sql-visualizer-agent:test`：**109/0** ✓（与实施车道读数一致）。
+- `verifyGate`：IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63 三目标**全 Compatible** ✓（仅 deprecated/experimental/removal 用法计数告警）。
+- 两处红与处置（`237f770`）：
+  1. `BannedApiSourceScanTest`——`XmlSynHiGate` 三处 `catch (t: Throwable)` 未判 fatal 且未登记豁免（**本批 ④ 引入**；定向 107 例不含该源码扫描守卫，首轮全量才暴露）→ 按 T-FP-02 两段式基线补 `if (FatalErrors.isFatal(t)) throw t`；三处均为探针 fail-safe 站点，fatal 不得被降级成静默让位。
+  2. `HelpDialogTest`——`SqlLogPanel.toolbarGroup` 期望 6 项实为 7 项（T-SqlLogPerf `1f92f80` 追加 `scrollToEndAction` 时漏改断言，**非本批引入**）→ 同步期望与注释，无行为改动。
+- 修复落 `src/main` → 首轮读数作废，全量门禁与 verifyGate 已复跑（读数见 §七B）。
+
+### 七B、权威门禁（复跑，`237f770`，零红）
+
+- `testShards`（5 片，单路）：`BUILD SUCCESSFUL in 4m 38s`，**6513 例 / 0 失败 / 0 错误 / 9 skip**（shard1 1257/0、shard2 1338/0/2skip、shard3 1349/0、shard4 1338/0/6skip、shard5 1191/0、testExternal 40/0/1skip）；573 个计划类全部有结果 XML（parity 过），逐 testcase 扫描 failure/error = 0。9 处 skip 全为环境性 `AssumptionViolatedException`（Docker 测试未启用 6、未提供 `-Dmpvs.dialect.jdbcUrl` 1、Database 插件不在测试 classpath 2；`docker info` 实测 daemon 未启动）。
+- `:sql-visualizer-agent:test`：**109/0/0/0**（22 个测试类）✓。
+- `verifyGate`：IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63 三目标**全 Compatible** ✓（4/25/94、5/31/92、7/87/92，仅 deprecated/experimental/removal 计数）。
+- 上轮两处红回归确认（本轮新鲜 XML）：`BannedApiSourceScanTest` 29/0/0/0、`HelpDialogTest` 3/0/0/0 ✓。
+- 读数差异说明：首轮 6622 含 agent 109 计入总量，复跑 6513 = 五片 + testExternal（agent 单列）——同口径对齐后逐片总量一致；分片配比两轮不同属时长均衡器行为，非回归。
+- 参照项（非 blocker，登记即可）：shard3 254.9s vs 片均值 197.6s（+29%，临界片失衡，权重画像过期嫌疑）——建议后续 clean 轮跑 `dev-support/weight-refresh.ps1` 刷新分片权重画像。
+
+**收口结论**：dev@`237f770` 权威门禁全绿，六缺陷修复批可交付；残余真机走查三项（demo attach 启动／指示行位置截图／用户环境 mapper 着色）随下轮 runIde 批。
