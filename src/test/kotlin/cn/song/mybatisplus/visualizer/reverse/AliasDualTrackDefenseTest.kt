@@ -80,12 +80,14 @@ class AliasDualTrackDefenseTest {
     }
 
     @Test
-    fun `路径3b_函数列_放弃select生成_别名零泄漏`() {
+    fun `路径3b_函数列_回落字符串select_别名保留`() {
+        // T-SqlToJavaPromote G5：聚合列不再放弃——回落字符串 select("MAX(age) AS maxAge")（lambda 形态亦可，
+        // 聚合列不可 lambda 引用）。别名作为 SQL 串内 AS 保留，不产生 selectAs。
         val result = SqlReverseParser.parse("SELECT MAX(age) AS maxAge FROM personnel")
-        assertNull(result.selectColumns)
+        assertEquals(listOf(SelectColumn("MAX(age)", "maxAge")), result.selectColumns)
         val code = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.LAMBDA)
-        assertFalse("函数列的别名不得泄漏进生成代码", code.contains("maxAge"))
-        assertFalse("放弃 select 生成后不得残留列调用", code.contains(".select("))
+        assertTrue("聚合列回落字符串 select 且保留 AS 别名", code.contains("select(\"MAX(age) AS maxAge\")"))
+        assertFalse("聚合列不可 lambda 引用，不得产出 selectAs", code.contains("selectAs"))
     }
 
     @Test

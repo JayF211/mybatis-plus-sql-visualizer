@@ -102,10 +102,10 @@ class ReverseRoundTripGateTest {
     fun `基线分布_四档计数`() {
         val counts = ReverseRoundTripCorpus.counts()
         val expected = mapOf(
-            RoundTripExpectation.ROUND_TRIP to 38,
-            RoundTripExpectation.PARSE_OK to 10,
+            RoundTripExpectation.ROUND_TRIP to 45,
+            RoundTripExpectation.PARSE_OK to 7,
             RoundTripExpectation.RAW_DEGRADE to 3,
-            RoundTripExpectation.PARSE_ERROR to 19,
+            RoundTripExpectation.PARSE_ERROR to 15,
         )
         assertEquals("语料档位分布（M1 基线，修复升档时同步更新）", expected, counts)
     }

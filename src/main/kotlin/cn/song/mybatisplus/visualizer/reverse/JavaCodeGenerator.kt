@@ -148,14 +148,23 @@ object JavaCodeGenerator {
                 }
                 renderJoins(result, entity).forEach { append("\n    .").append(it) }
                 conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
+                renderGroupBy(result, entity).forEach { append("\n    .").append(it) }
+                result.having?.let { append("\n    .").append(renderHaving(it, entity)) }
                 renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
                 // 分页调用形态（invocation 存在）由 page 参数承载，不再生成 last("LIMIT...")
                 if (result.limit != null && invocation == null) {
-                    append("\n    .last(\"").append(javaEscape(renderLimit(result.limit))).append("\")")
+                    append("\n    .last(\"").append(javaEscape(renderLimitTail(result.limit, result.forUpdate))).append("\")")
+                } else if (result.forUpdate && result.limit == null) {
+                    append("\n    .last(\"FOR UPDATE\")")
                 }
             } else {
                 if (selectColumns != null && selectColumns.isNotEmpty()) {
-                    if (selectColumns.any { it.alias != null }) {
+                    if (result.distinct) {
+                        // T-SqlToJavaPromote G3：MP 无 selectDistinct——DISTINCT 用字符串单串 select("DISTINCT a, b")
+                        append("\n    .select(")
+                            .append(javaString("DISTINCT " + selectColumns.joinToString(", ") { renderSelectRaw(it) }))
+                            .append(")")
+                    } else if (selectColumns.any { it.alias != null }) {
                         // 含 AS 别名的列无法并入单个 .select(...)，逐列渲染 .select/.selectAs（T-M46）
                         selectColumns.forEach {
                             append("\n    .").append(renderSelectCall(it, entity, selectAsVoClass, rawMode))
@@ -167,10 +176,14 @@ object JavaCodeGenerator {
                     }
                 }
                 conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
+                renderGroupBy(result, entity).forEach { append("\n    .").append(it) }
+                result.having?.let { append("\n    .").append(renderHaving(it, entity)) }
                 renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
                 // 分页调用形态（invocation 存在）由 page 参数承载，不再生成 last("LIMIT...")
                 if (result.limit != null && invocation == null) {
-                    append("\n    .last(\"").append(javaEscape(renderLimit(result.limit))).append("\")")
+                    append("\n    .last(\"").append(javaEscape(renderLimitTail(result.limit, result.forUpdate))).append("\")")
+                } else if (result.forUpdate && result.limit == null) {
+                    append("\n    .last(\"FOR UPDATE\")")
                 }
             }
         }
@@ -526,7 +539,8 @@ object JavaCodeGenerator {
                     val value = row.getOrNull(colIndex)
                     append(if (i == 0) "new $entityName()" else "\n    ")
                     append(".set").append(field.replaceFirstChar { it.uppercase() }).append("(")
-                        .append(value?.let { javaValue(it) } ?: "null")
+                        // T-SqlToJavaPromote G6：INSERT NULL 建模为 Literal("NULL") → 生成 Java null
+                        .append(if (value is SqlValue.Literal && value.raw == "NULL") "null" else value?.let { javaValue(it) } ?: "null")
                         .append(")")
                 }
             }
@@ -869,8 +883,10 @@ object JavaCodeGenerator {
      *   非别名 `.select(Entity::getId)`，带 AS 别名且选中 VO → `.selectAs(Sub::getX, VO::getY)`
      *   对齐正向 selectAs 的 VO 字段；未选 VO → `.selectAs(Sub::getX, "alias")`。 */
     private fun renderSelectCall(sel: SelectColumn, entity: EntityTarget?, voClass: String?, rawMode: Boolean): String {
-        if (rawMode) {
-            // MPJQueryWrapper 原生形态：列取原始表达式字符串（保留反引号等 SQL 形态）
+        // 聚合/函数列（COUNT(*) 等含 `(`，T-SqlToJavaPromote G5）与 MPJQueryWrapper 字符串联接：
+        // 不可 lambda 引用——统一回落 select("expr [AS alias]") 字符串（QueryWrapper.select(String...) 合法）
+        val isAggregate = sel.expr.contains('(')
+        if (rawMode || isAggregate) {
             val col = sel.expr
             return if (sel.alias != null) "select(${javaString("$col AS ${sel.alias}")})" else "select(${javaString(col)})"
         }
@@ -1054,6 +1070,42 @@ object JavaCodeGenerator {
         val count = (limit.count as? SqlValue.Literal)?.raw ?: "?"
         return if (offset != null) "LIMIT $offset, $count" else "LIMIT $count"
     }
+
+    /** LIMIT 尾段（T-SqlToJavaPromote G4：FOR UPDATE 与 LIMIT 并存时合并单 last——MP last 只保留末位）。 */
+    private fun renderLimitTail(limit: cn.song.mybatisplus.visualizer.model.LimitClause, forUpdate: Boolean): String =
+        renderLimit(limit) + if (forUpdate) " FOR UPDATE" else ""
+
+    /** SELECT 列原文（含 AS 别名）——DISTINCT 单串 select 用。 */
+    private fun renderSelectRaw(sel: SelectColumn): String =
+        if (sel.alias != null) "${sel.expr} AS ${sel.alias}" else sel.expr
+
+    /** GROUP BY 渲染（T-SqlToJavaPromote G1）：列引用走 renderColumnRef（lambda 映射/字符串回落）。 */
+    private fun renderGroupBy(result: SqlReverseResult, entity: EntityTarget?): List<String> {
+        if (result.groupBy.isEmpty()) return emptyList()
+        val cols = result.groupBy.map { renderColumnRef(it.columnName, entity, it.tableAlias) }
+        return listOf("groupBy(${cols.joinToString(", ")})")
+    }
+
+    /** HAVING 渲染（T-SqlToJavaPromote G2）：聚合表达式经 Raw 降级后原样进 having(String, Object...) 首参。 */
+    private fun renderHaving(h: Condition, entity: EntityTarget?): String =
+        "having(${javaString(renderHavingText(h))})"
+
+    /** HAVING 条件 → SQL 片段文本（值内嵌；参数化升级在 G7）。 */
+    private fun renderHavingText(h: Condition): String = when (h) {
+        is Condition.Raw -> h.sqlText
+        is Condition.Simple -> "${h.column.columnName} ${h.op} ${havingValue(h.value)}"
+        is Condition.Unary -> "${h.column.columnName} ${h.op}"
+        is Condition.In ->
+            "${h.column.columnName} ${if (h.negated) "NOT IN" else "IN"} (${h.values.joinToString(", ") { havingValue(it) }})"
+        is Condition.Between ->
+            "${h.column.columnName} ${if (h.negated) "NOT BETWEEN" else "BETWEEN"} ${havingValue(h.lo)} AND ${havingValue(h.hi)}"
+        is Condition.Like -> "${h.column.columnName} ${if (h.negated) "NOT LIKE" else "LIKE"} ${havingValue(h.pattern)}"
+        is Condition.ColumnComparison -> "${h.left.columnName} = ${h.right.columnName}"
+        is Condition.Group -> h.children.joinToString(" AND ") { renderHavingText(it) }
+    }
+
+    /** HAVING 值：字面量原样；占位符 `?`。 */
+    private fun havingValue(v: SqlValue): String = (v as? SqlValue.Literal)?.raw ?: "?"
 
     // ------------------------------------------------------------------
     // 文本工具

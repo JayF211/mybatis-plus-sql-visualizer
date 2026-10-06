@@ -69,7 +69,7 @@ object SqlReverseParser {
 
     /** SELECT 主体：列清单 + FROM 表 + 子句序列（T-M37：含 JOIN 解析）。 */
     private fun parseSelectBody(cursor: Cursor): SqlReverseResult {
-        val selectColumns = parseSelectColumns(cursor)
+        val (selectColumns, distinct) = parseSelectColumns(cursor)
         if (!cursor.isKeyword(cursor.current, "FROM")) {
             throw SqlReverseException(cursor.current?.offset ?: 0, KEY_PARSE, "缺少 FROM 子句")
         }
@@ -84,7 +84,8 @@ object SqlReverseParser {
             tableAlias = consumeOptionalAlias(cursor)
             name
         }
-        val (conditions, orderBy, limit, warnings, joins) = parseTailClauses(cursor, allowJoin = true)
+        val (conditions, orderBy, limit, warnings, joins, groupBy, having, forUpdate) =
+            parseTailClauses(cursor, allowJoin = true)
         return SqlReverseResult(
             tableName = tableName,
             selectColumns = selectColumns,
@@ -94,6 +95,10 @@ object SqlReverseParser {
             warnings = warnings,
             joins = joins,
             tableAlias = tableAlias,
+            distinct = distinct,
+            groupBy = groupBy,
+            having = having,
+            forUpdate = forUpdate,
         )
     }
 
@@ -198,8 +203,9 @@ object SqlReverseParser {
             expectSymbol(cursor, "(")
             val values = mutableListOf<SqlValue>()
             while (true) {
-                val value = parseValue(cursor)
-                    ?: throw SqlReverseException(cursor.previousOffset(), KEY_PARSE, "INSERT 值不支持 NULL")
+                // T-SqlToJavaPromote G6：NULL 字面量（parseValue 返回 null）建模为 Literal("NULL")
+                // ——Java 生成 null、SQL 重渲染 NULL；不再报错
+                val value = parseValue(cursor) ?: SqlValue.Literal("NULL")
                 values.add(value)
                 if (cursor.isSymbol(cursor.current, ",")) {
                     cursor.advance()
@@ -278,6 +284,9 @@ object SqlReverseParser {
         var orderBy = emptyList<OrderByItem>()
         var limit: LimitClause? = null
         val joins = mutableListOf<ReverseJoin>()
+        var groupBy = emptyList<ColumnRef>()
+        var having: Condition? = null
+        var forUpdate = false
         while (true) {
             val t = cursor.current ?: break
             when {
@@ -289,6 +298,15 @@ object SqlReverseParser {
                     cursor.advance()
                     expectKeyword(cursor, "BY")
                     orderBy = parseOrderBy(cursor)
+                }
+                cursor.isKeyword(t, "GROUP") -> {
+                    cursor.advance()
+                    expectKeyword(cursor, "BY")
+                    groupBy = parseGroupBy(cursor)
+                }
+                cursor.isKeyword(t, "HAVING") -> {
+                    cursor.advance()
+                    having = parseHaving(cursor, warnings)
                 }
                 cursor.isKeyword(t, "LIMIT") -> {
                     cursor.advance()
@@ -303,10 +321,17 @@ object SqlReverseParser {
                     limit = parseFetchFirst(cursor)
                 }
                 allowJoin && isJoinStart(cursor) -> joins.add(parseJoin(cursor, warnings))
-                cursor.isKeyword(t, "GROUP") -> unsupported(cursor, "GROUP BY")
-                cursor.isKeyword(t, "HAVING") -> unsupported(cursor, "HAVING")
+                cursor.isKeyword(t, "FOR") -> {
+                    // FOR UPDATE（MySQL/PostgreSQL 行锁）；FOR 后非 UPDATE → 不支持
+                    if (cursor.isKeyword(cursor.peek(), "UPDATE")) {
+                        cursor.advance()
+                        cursor.advance()
+                        forUpdate = true
+                    } else {
+                        unsupported(cursor, "FOR 子句")
+                    }
+                }
                 cursor.isKeyword(t, "UNION") -> unsupported(cursor, "UNION")
-                cursor.isKeyword(t, "FOR") -> unsupported(cursor, "FOR UPDATE")
                 cursor.isKeyword(t, "JOIN") || cursor.isKeyword(t, "LEFT") || cursor.isKeyword(t, "RIGHT") ||
                     cursor.isKeyword(t, "INNER") || cursor.isKeyword(t, "FULL") || cursor.isKeyword(t, "CROSS") ->
                     unsupported(cursor, "JOIN")
@@ -322,7 +347,7 @@ object SqlReverseParser {
                 )
             }
         }
-        return TailClauses(conditions, orderBy, limit, warnings, joins)
+        return TailClauses(conditions, orderBy, limit, warnings, joins, groupBy, having, forUpdate)
     }
 
     /** 尾子句解析产物。 */
@@ -332,7 +357,36 @@ object SqlReverseParser {
         val limit: LimitClause?,
         val warnings: List<String>,
         val joins: List<ReverseJoin> = emptyList(),
+        val groupBy: List<ColumnRef> = emptyList(),
+        val having: Condition? = null,
+        val forUpdate: Boolean = false,
     )
+
+    /** GROUP BY 列清单：`列[, 列...]`（点分/反引号同列引用）。 */
+    private fun parseGroupBy(cursor: Cursor): List<ColumnRef> {
+        val columns = mutableListOf<ColumnRef>()
+        while (true) {
+            columns.add(parseColumnRef(cursor))
+            if (cursor.isSymbol(cursor.current, ",")) {
+                cursor.advance()
+                continue
+            }
+            break
+        }
+        return columns
+    }
+
+    /**
+     * HAVING 条件（T-SqlToJavaPromote G2）：单条件直取；多条件包 [Condition.Group](AND)。
+     * 聚合表达式（`COUNT(*) > 1`）经 [parseCondition] 的 KEY_UNSUPPORTED 降级为 [Condition.Raw]（记 warning）。
+     */
+    private fun parseHaving(cursor: Cursor, warnings: MutableList<String>): Condition {
+        val conditions = parseConditionList(cursor, warnings)
+        if (conditions.isEmpty()) {
+            throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "HAVING 后缺少条件")
+        }
+        return if (conditions.size == 1) conditions[0] else Condition.Group(Connector.AND, conditions)
+    }
 
     // ------------------------------------------------------------------
     // JOIN 解析（T-M37）
@@ -438,15 +492,17 @@ object SqlReverseParser {
     /**
      * 解析 SELECT 与 FROM 之间的列清单。
      *
-     * 仅收集「简单列」（标识符 / 点分 / 反引号，可带 AS 别名）；出现函数调用
-     * （`COUNT(...)` 等）或 `*` 时整体放弃（返回 null——生成器不生成 select() 调用）。
-     * 复杂表达式整体跳过（平衡括号消费至逗号/FROM）。
+     * 收集「简单列」（标识符 / 点分 / 反引号，可带 AS 别名）与「函数/聚合列」
+     * （T-SqlToJavaPromote G5：`COUNT(*) AS cnt` 等收集原文，不再放弃）；`*` 或裸括号
+     * 表达式时整体放弃（返回 null——生成器不生成 select() 调用，MP 全列语义）。
      * T-M37：保留原文（含表别名前缀与反引号）——多表列归属由生成器拆分（renderSelectRef）。
      * T-M46：捕获 AS 别名（SelectColumn.alias）——生成 selectAs。
+     * 返回 (列清单, DISTINCT)（T-SqlToJavaPromote G3：DISTINCT 建模为 distinct=true，不放弃列）。
      */
-    private fun parseSelectColumns(cursor: Cursor): List<SelectColumn>? {
+    private fun parseSelectColumns(cursor: Cursor): Pair<List<SelectColumn>?, Boolean> {
         val columns = mutableListOf<SelectColumn>()
         var anyComplex = false
+        var distinct = false
         while (true) {
             val t = cursor.current ?: break
             when {
@@ -461,15 +517,17 @@ object SqlReverseParser {
                     continue
                 }
                 t.type == TokenType.WORD -> {
-                    // DISTINCT：不收集为列，标记复杂（select 生成放弃）
+                    // DISTINCT：建模 distinct=true，继续收集列（T-SqlToJavaPromote G3）
                     if (cursor.isKeyword(t, "DISTINCT")) {
-                        anyComplex = true
+                        distinct = true
                         cursor.advance()
                         continue
                     }
                     if (isFunctionCall(cursor)) {
-                        anyComplex = true
-                        skipExpression(cursor)
+                        // 函数/聚合列：收集原文（含平衡括号）+ 可选 AS 别名（T-SqlToJavaPromote G5）
+                        val expr = collectFunctionExpr(cursor)
+                        val alias = consumeSelectAlias(cursor)
+                        columns.add(SelectColumn(expr = expr, alias = alias))
                         continue
                     }
                     val expr = consumeQualified(cursor)
@@ -484,13 +542,34 @@ object SqlReverseParser {
                 else -> break
             }
         }
-        return if (anyComplex) null else columns
+        return if (anyComplex) Pair(null, distinct) else Pair(columns, distinct)
     }
 
     /** 当前 WORD 后紧跟 `(` → 函数调用。 */
     private fun isFunctionCall(cursor: Cursor): Boolean {
         val next = cursor.peek()
         return next != null && next.type == TokenType.SYMBOL && next.text == "("
+    }
+
+    /**
+     * 收集函数列原文：函数名 + 平衡括号内容（`COUNT(*)` / `DATE_FORMAT(create_time, '%Y-%m')`）。
+     * 消费到顶层 `)` 结束；返回源文本（不含 AS 别名）。
+     */
+    private fun collectFunctionExpr(cursor: Cursor): String {
+        val start = cursor.current?.offset ?: return ""
+        cursor.advance() // 函数名
+        var depth = 0
+        while (true) {
+            val t = cursor.advance() ?: break
+            if (t.type == TokenType.SYMBOL && t.text == "(") depth++
+            if (t.type == TokenType.SYMBOL && t.text == ")") {
+                depth--
+                if (depth == 0) break
+            }
+        }
+        val last = cursor.tokens.getOrNull(cursor.pos - 1)
+        val end = if (last != null) last.offset + last.text.length else cursor.source.length
+        return cursor.source.substring(start, end)
     }
 
     /** 消费 `AS 别名` 或直接别名（`a AS x` / `a x`；别名是普通 WORD），返回别名（无别名返回 null）。 */
