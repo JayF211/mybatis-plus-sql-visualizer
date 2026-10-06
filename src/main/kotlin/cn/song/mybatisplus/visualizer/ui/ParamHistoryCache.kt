@@ -363,7 +363,9 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
         if (activeSchemeByKey.isEmpty()) return ""
         val sb = StringBuilder("{")
         var first = true
-        for ((k, v) in activeSchemeByKey.entries) {
+        // 键排序后遍历（对齐 F50 口径）：CHM 遍历序为哈希序，不排序会使持久化 JSON 序漂移
+        for (k in activeSchemeByKey.keys.sorted()) {
+            val v = activeSchemeByKey[k] ?: continue
             if (!first) sb.append(",")
             first = false
             sb.append("\"").append(escapeJson(k)).append("\":\"").append(escapeJson(v)).append("\"")
