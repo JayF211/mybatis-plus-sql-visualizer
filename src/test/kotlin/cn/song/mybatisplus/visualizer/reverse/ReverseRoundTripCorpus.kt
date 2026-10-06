@@ -112,9 +112,9 @@ object ReverseRoundTripCorpus {
         RoundTripCorpusCase("g4_select_for_update", "SELECT id FROM member WHERE id = 1 FOR UPDATE", RoundTripExpectation.PARSE_OK,
             assertResult = { r -> assert(r.forUpdate) { "FOR UPDATE 应建模为 forUpdate=true" } }),
         RoundTripCorpusCase("g8_select_union",
-            "SELECT id FROM member WHERE a = 1 UNION SELECT id FROM member WHERE a = 2", RoundTripExpectation.PARSE_ERROR),
+            "SELECT id FROM member WHERE a = 1 UNION (SELECT id FROM member WHERE a = 2)", RoundTripExpectation.ROUND_TRIP),
         RoundTripCorpusCase("g8_select_union_all",
-            "SELECT id FROM member WHERE a = 1 UNION ALL SELECT id FROM member WHERE a = 2", RoundTripExpectation.PARSE_ERROR),
+            "SELECT id FROM member WHERE a = 1 UNION ALL (SELECT id FROM member WHERE a = 2)", RoundTripExpectation.ROUND_TRIP),
         RoundTripCorpusCase("g5_select_agg_count", "SELECT COUNT(*) AS cnt FROM member", RoundTripExpectation.ROUND_TRIP),
         RoundTripCorpusCase("g5_select_agg_func",
             "SELECT MAX(price) AS max_price, MIN(price) AS min_price FROM member", RoundTripExpectation.ROUND_TRIP),
@@ -131,16 +131,16 @@ object ReverseRoundTripCorpus {
         // ------------------------------------------------------------------
         // 方言宽容 G10（基线=现状档位，M3 升档）
         // ------------------------------------------------------------------
-        RoundTripCorpusCase("g10_double_quoted", "SELECT \"id\" FROM \"member\" WHERE \"status\" = 1", RoundTripExpectation.PARSE_ERROR),
-        RoundTripCorpusCase("g10_backslash_escape", "SELECT id FROM member WHERE name = 'a\\'b'", RoundTripExpectation.PARSE_ERROR),
-        RoundTripCorpusCase("g10_hex_literal", "SELECT id FROM member WHERE status = 0x1F", RoundTripExpectation.PARSE_ERROR),
+        RoundTripCorpusCase("g10_double_quoted", "SELECT \"id\" FROM \"member\" WHERE \"status\" = 1", RoundTripExpectation.ROUND_TRIP),
+        RoundTripCorpusCase("g10_backslash_escape", "SELECT id FROM member WHERE name = 'a\\'b'", RoundTripExpectation.ROUND_TRIP),
+        RoundTripCorpusCase("g10_hex_literal", "SELECT id FROM member WHERE status = 0x1F", RoundTripExpectation.ROUND_TRIP),
         RoundTripCorpusCase("g10_date_literal",
-            "SELECT id FROM member WHERE create_time = DATE '2024-01-01'", RoundTripExpectation.PARSE_ERROR),
+            "SELECT id FROM member WHERE create_time = DATE '2024-01-01'", RoundTripExpectation.ROUND_TRIP),
         RoundTripCorpusCase("g10_timestamp_literal",
-            "SELECT id FROM member WHERE create_time = TIMESTAMP '2024-01-01 10:00:00'", RoundTripExpectation.PARSE_ERROR),
-        RoundTripCorpusCase("g10_arithmetic", "SELECT id FROM member WHERE price * qty > 100", RoundTripExpectation.PARSE_ERROR),
-        RoundTripCorpusCase("g10_nullsafe_eq", "SELECT id FROM member WHERE a <=> b", RoundTripExpectation.PARSE_ERROR),
-        RoundTripCorpusCase("g10_ilike", "SELECT id FROM member WHERE name ILIKE '%abc%'", RoundTripExpectation.PARSE_ERROR),
+            "SELECT id FROM member WHERE create_time = TIMESTAMP '2024-01-01 10:00:00'", RoundTripExpectation.ROUND_TRIP),
+        RoundTripCorpusCase("g10_arithmetic", "SELECT id FROM member WHERE price * qty > 100", RoundTripExpectation.RAW_DEGRADE),
+        RoundTripCorpusCase("g10_nullsafe_eq", "SELECT id FROM member WHERE a <=> b", RoundTripExpectation.RAW_DEGRADE),
+        RoundTripCorpusCase("g10_ilike", "SELECT id FROM member WHERE name ILIKE '%abc%'", RoundTripExpectation.RAW_DEGRADE),
 
         // ------------------------------------------------------------------
         // JOIN 矩阵（T-M37）

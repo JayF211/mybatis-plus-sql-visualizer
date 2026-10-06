@@ -770,6 +770,11 @@ object JavaCodeGenerator {
             sb.append("// 注意：SQL 含参数占位符 ?，无法恢复实际参数，已生成 \"?\" 占位，请替换为实际参数\n")
         }
         result.warnings.forEach { sb.append("// 注意：$it\n") }
+        if (result.unions.isNotEmpty()) {
+            // T-SqlToJavaPromote G8：MP core 无 union() 方法、MPJ 签名本地不可得——降级为原文注释提示
+            sb.append("// 注意：UNION 子句需 MyBatis-Plus-Join 的 union() API 或原生 SQL，请手动处理：\n")
+            result.unions.forEach { sb.append("//   ").append(it.keyword).append(" ").append(it.sql).append("\n") }
+        }
     }
 
     /** 结果中是否存在 `?` 占位符（WHERE/SET/INSERT/LIMIT 任一位置）。 */
@@ -971,7 +976,16 @@ object JavaCodeGenerator {
             "$method(${renderColumnRef(condition.column.columnName, entity, condition.column.tableAlias)}, ${javaValue(condition.pattern)})"
         }
 
-        is Condition.Raw -> "apply(\"${javaEscape(condition.sqlText)}\")"
+        is Condition.Raw -> {
+            // T-SqlToJavaPromote G7：可识别「表达式 比较符 字面量」形态 → 参数化 apply("... = {0}", 值)；
+            // 无法识别 → 整段字符串 apply("...") 透传
+            val (template, values) = parameterizeRaw(condition.sqlText)
+            if (values.isEmpty()) {
+                "apply(${javaString(condition.sqlText)})"
+            } else {
+                "apply(${javaString(template)}, ${values.joinToString(", ") { javaValue(it) }})"
+            }
+        }
 
         is Condition.Group -> renderGroup(condition, entity)
 
@@ -1033,6 +1047,30 @@ object JavaCodeGenerator {
                 value.raw
             }
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 参数化 apply（T-SqlToJavaPromote G7）
+    // ------------------------------------------------------------------
+
+    /** `表达式 比较符 字面量` 形态识别正则（右值：SQL 字符串或数字）。 */
+    private val RAW_PARAM_REGEX = Regex("^(.*?)\\s*(=|!=|<>|>=|<=|>|<)\\s*('(?:[^']|'')*'|-?\\d+(?:\\.\\d+)?)$")
+
+    /**
+     * Raw 条件参数化：`DATE_FORMAT(create_time, '%Y') = '2024'` → ("DATE_FORMAT(create_time, '%Y') = {0}", ['2024'])。
+     * 不可识别形态返回 (原文, 空)——调用方回落整段字符串 apply。
+     */
+    private fun parameterizeRaw(sql: String): Pair<String, List<SqlValue>> {
+        val m = RAW_PARAM_REGEX.matchEntire(sql) ?: return sql to emptyList()
+        val expr = m.groupValues[1].trim()
+        val op = m.groupValues[2]
+        val literal = m.groupValues[3]
+        val value = if (literal.startsWith("'")) {
+            SqlValue.Literal(literal, literal.substring(1, literal.length - 1).replace("''", "'"))
+        } else {
+            SqlValue.Literal(literal)
+        }
+        return "$expr $op {0}" to listOf(value)
     }
 
     // ------------------------------------------------------------------

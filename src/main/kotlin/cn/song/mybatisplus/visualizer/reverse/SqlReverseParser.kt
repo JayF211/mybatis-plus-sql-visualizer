@@ -84,7 +84,7 @@ object SqlReverseParser {
             tableAlias = consumeOptionalAlias(cursor)
             name
         }
-        val (conditions, orderBy, limit, warnings, joins, groupBy, having, forUpdate) =
+        val (conditions, orderBy, limit, warnings, joins, groupBy, having, forUpdate, unions) =
             parseTailClauses(cursor, allowJoin = true)
         return SqlReverseResult(
             tableName = tableName,
@@ -99,6 +99,7 @@ object SqlReverseParser {
             groupBy = groupBy,
             having = having,
             forUpdate = forUpdate,
+            unions = unions,
         )
     }
 
@@ -287,6 +288,7 @@ object SqlReverseParser {
         var groupBy = emptyList<ColumnRef>()
         var having: Condition? = null
         var forUpdate = false
+        val unions = mutableListOf<ReverseUnion>()
         while (true) {
             val t = cursor.current ?: break
             when {
@@ -331,7 +333,18 @@ object SqlReverseParser {
                         unsupported(cursor, "FOR 子句")
                     }
                 }
-                cursor.isKeyword(t, "UNION") -> unsupported(cursor, "UNION")
+                cursor.isKeyword(t, "UNION") -> {
+                    // T-SqlToJavaPromote G8：UNION [ALL] 子查询——收集 keyword + 子查询原文
+                    // （MP core 无 union() 方法、MPJ 签名本地不可得 → 模型层原文承载，Java 生成层降级注释）
+                    cursor.advance()
+                    val all = if (cursor.isKeyword(cursor.current, "ALL")) {
+                        cursor.advance()
+                        true
+                    } else {
+                        false
+                    }
+                    unions.add(ReverseUnion(keyword = if (all) "UNION ALL" else "UNION", sql = collectUnionSubquery(cursor)))
+                }
                 cursor.isKeyword(t, "JOIN") || cursor.isKeyword(t, "LEFT") || cursor.isKeyword(t, "RIGHT") ||
                     cursor.isKeyword(t, "INNER") || cursor.isKeyword(t, "FULL") || cursor.isKeyword(t, "CROSS") ->
                     unsupported(cursor, "JOIN")
@@ -347,7 +360,7 @@ object SqlReverseParser {
                 )
             }
         }
-        return TailClauses(conditions, orderBy, limit, warnings, joins, groupBy, having, forUpdate)
+        return TailClauses(conditions, orderBy, limit, warnings, joins, groupBy, having, forUpdate, unions)
     }
 
     /** 尾子句解析产物。 */
@@ -360,7 +373,25 @@ object SqlReverseParser {
         val groupBy: List<ColumnRef> = emptyList(),
         val having: Condition? = null,
         val forUpdate: Boolean = false,
+        val unions: List<ReverseUnion> = emptyList(),
     )
+
+    /** UNION 后子查询原文收集：推进到下一个 UNION 或语句尾，取原文；首尾括号剥除（渲染 `UNION (子查询)` 单层括号）。 */
+    private fun collectUnionSubquery(cursor: Cursor): String {
+        val start = cursor.current?.offset
+            ?: throw SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "UNION 后缺少子查询")
+        while (cursor.current != null && !cursor.isKeyword(cursor.current, "UNION")) {
+            cursor.advance()
+        }
+        val last = cursor.tokens.getOrNull(cursor.pos - 1)
+        val end = if (last != null) last.offset + last.text.length else start
+        val raw = cursor.source.substring(start, end).trim()
+        return if (raw.startsWith("(") && raw.endsWith(")")) {
+            raw.substring(1, raw.length - 1).trim()
+        } else {
+            raw
+        }
+    }
 
     /** GROUP BY 列清单：`列[, 列...]`（点分/反引号同列引用）。 */
     private fun parseGroupBy(cursor: Cursor): List<ColumnRef> {
@@ -853,6 +884,11 @@ object SqlReverseParser {
                 when (cursor.current?.text) {
                     "=" -> {
                         cursor.advance()
+                        if (cursor.isSymbol(cursor.current, ">")) {
+                            // T-SqlToJavaPromote G10：`<=>` NULL-safe 等值——MP 无对应方法 → 降级 Raw
+                            cursor.advance()
+                            unsupported(cursor, "<=> 空安全比较")
+                        }
                         parseBinary(cursor, column, "<=")
                     }
                     ">" -> {
@@ -908,11 +944,9 @@ object SqlReverseParser {
             // 列名后紧跟 `(` → 函数表达式（DATE_FORMAT(...) 等，降级 apply 透传）
             t.type == TokenType.SYMBOL && t.text == "(" ->
                 unsupported(cursor, "函数表达式 ${column.columnName}(...)")
-            else -> throw SqlReverseException(
-                t.offset,
-                KEY_PARSE,
-                "无法识别的条件操作符：${t.text}",
-            )
+            // T-SqlToJavaPromote G10：列名后无法识别的操作符（算术表达式 `price*qty`、ILIKE 等）
+            // → 抛 KEY_UNSUPPORTED 走降级 Raw 透传（「任何条件都不挡路」原则）
+            else -> unsupported(cursor, "条件操作符 ${t.text}")
         }
     }
 
@@ -995,7 +1029,9 @@ object SqlReverseParser {
         if (sqlOp == "=") {
             val next = cursor.current
             if (next != null && next.type == TokenType.WORD && !cursor.isKeyword(next, "TRUE") &&
-                !cursor.isKeyword(next, "FALSE") && !cursor.isKeyword(next, "NULL")
+                !cursor.isKeyword(next, "FALSE") && !cursor.isKeyword(next, "NULL") &&
+                // T-SqlToJavaPromote G10：DATE/TIMESTAMP 类型字面量（后随字符串）排除出列对列判定
+                !cursor.isKeyword(next, "DATE") && !cursor.isKeyword(next, "TIMESTAMP")
             ) {
                 // 右值为函数调用（后跟 `(`）→ 非列对列，走值解析（降级 Raw 透传）
                 val after = cursor.peek()
@@ -1157,6 +1193,18 @@ object SqlReverseParser {
                 "NULL" -> {
                     cursor.advance()
                     null
+                }
+                "DATE", "TIMESTAMP" -> {
+                    // ANSI 类型字面量（T-SqlToJavaPromote G10）：DATE '2024-01-01' / TIMESTAMP '...'
+                    // raw 保留前缀（往返渲染一致）；后续须是字符串字面量
+                    val next = cursor.peek()
+                    if (next == null || next.type != TokenType.STRING) {
+                        throw SqlReverseException(t.offset, KEY_UNSUPPORTED, "类型字面量 ${t.text} 后缺少字符串")
+                    }
+                    val prefix = t.text.uppercase()
+                    cursor.advance()
+                    cursor.advance()
+                    SqlValue.Literal(raw = "$prefix ${next.text}", unquoted = decodeString(next.text))
                 }
                 else -> throw SqlReverseException(
                     t.offset,
