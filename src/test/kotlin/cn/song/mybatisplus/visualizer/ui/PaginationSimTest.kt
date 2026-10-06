@@ -2,6 +2,8 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.sql.interceptor.PaginationSimulator
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.util.Disposer
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiLocalVariable
@@ -183,6 +185,53 @@ class PaginationSimTest : BasePlatformTestCase() {
             """.trimIndent(),
         )
         myFixture.addFileToProject("com/example/UserMapper.xml", USER_MAPPER_XML)
+    }
+
+    /**
+     * T-DevAcceptFix ③（20261006 验收）：面板渲染的分页段——主 SQL 与 COUNT 语句各自以 `;` 收尾。
+     * 缺分号形态：原 appendCountSection 主 SQL 尾直拼注释头，复制到控制台执行两条语句粘连。
+     *
+     * 两段断言：raw 形态（formatSql 关，确定性逐字）钉死分号位置；格式化形态下分号不得被格式化
+     * 吞掉（容忍空白差异的形态断言）——用户复制走的是哪一种形态都必须带分号。
+     */
+    fun testDevAcceptFix03_分页渲染段两条语句各自分号收尾() {
+        configureXmlMapperWithPageParam()
+        val result = XmlPreviewService.preview(USER_MAPPER_XML, "selectPageUsers", project)
+        assertNotNull("前置：应产出 COUNT 包裹", result!!.countSql)
+        val settings = PluginSettings.getInstance()
+        val oldFormat = runCatching { settings.state.formatSql }.getOrDefault(true)
+        val panel = SqlPreviewPanel(project)
+        Disposer.register(testRootDisposable, panel)
+        try {
+            // ① raw 形态：主 SQL 尾分号 + 注释头 + COUNT 语句尾分号（逐字）
+            runCatching { settings.state.formatSql = false }
+            panel.showResult(result)
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            val raw = panel.lastRenderedSqlForTest()
+            assertNotNull("面板应产出渲染文本", raw)
+            val header = MpSqlVisualizerBundle.message("panel.pagination.count.section")
+            assertTrue(
+                "主 SQL 应以分号收尾再接 COUNT 段（分号缺失验收缺陷），实际渲染=${raw!!}",
+                raw!!.contains(";\n\n-- $header\n"),
+            )
+            assertTrue("COUNT 语句尾应补分号", raw.trimEnd().endsWith("TOTAL;"))
+
+            // ② 格式化形态：分号不得被格式化吞掉（放宽空白）
+            runCatching { settings.state.formatSql = true }
+            panel.renderSqlForTest()
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            val formatted = panel.lastRenderedSqlForTest()
+            assertNotNull(formatted)
+            assertTrue(
+                "格式化后主 SQL 与 COUNT 注释头之间仍须有分号，实际渲染=${formatted!!}",
+                Regex(";\\s*--\\s*" + Regex.escape(header)).containsMatchIn(formatted),
+            )
+        } finally {
+            runCatching { settings.state.formatSql = oldFormat }
+            // 面板清场后再释放（组件不在容器，removeNotify 不触发，须先 clear 走 releaseEditor）
+            runCatching { panel.clear() }
+            runCatching { Disposer.dispose(panel) }
+        }
     }
 
     fun testXmlStatementWithMapperPageParamAppendsLimitAndCount() {

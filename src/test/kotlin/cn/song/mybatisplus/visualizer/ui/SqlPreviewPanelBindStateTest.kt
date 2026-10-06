@@ -10,7 +10,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
 
 /**
  * O-95 T-PreviewEdtGuard S3：预览面板绑定数据源常驻指示行测试。
@@ -109,17 +108,49 @@ class SqlPreviewPanelBindStateTest : BasePlatformTestCase() {
         )
     }
 
-    fun test指示行位于预设行之下() {
+    /**
+     * T-DevAcceptFix ①（20261006 验收）：指示行迁顶栏——「更多」按钮（工具栏 EAST 末位）正下方
+     * 右对齐常驻薄行，与右侧内嵌控制台头部数据源显示相邻；不再挂参数区预设行之下。
+     */
+    fun test指示行迁顶栏更多按钮下方() {
         val p = openPanel("id")
-        val fold = p.presetFoldForTest()
-        assertNotNull("带参语料应建预设折叠件", fold)
-        val components = p.paramPanelComponentsForTest()
-        val foldIdx = components.indexOfFirst { it === fold }
         val label = p.bindStateLabelForTest()
-        assertNotNull(label)
-        val bindIdx = components.indexOfFirst { it === label!!.parent }
-        assertTrue("指示行行容器应在参数区内", bindIdx >= 0)
-        assertTrue("指示行必须在预设行之下（D2=A 版式定案：组件序=BoxLayout 视觉序，fold=$foldIdx bind=$bindIdx）", bindIdx > foldIdx)
+        assertNotNull("面板应建绑定指示行标签（常驻行，init 构建）", label)
+        val row = label!!.parent
+        assertNotNull("指示行应有行容器", row)
+        // ① 迁出参数区：不得再列入参数区组件序（原「预设行之下」位置废止）
+        assertFalse(
+            "指示行不得再挂在参数区内（T-DevAcceptFix ① 迁顶栏）",
+            p.paramPanelComponentsForTest().any { it === row },
+        )
+        // ② 与工具栏同挂北区宿主，位置=工具栏行（NORTH）之下的 CENTER 位
+        val northHost = p.toolbarForTest().parent.parent
+        assertSame("指示行应与工具栏同挂北区宿主", northHost, row.parent)
+        val layout = northHost.layout as java.awt.BorderLayout
+        assertSame("工具栏应挂 NORTH", p.toolbarForTest().parent, layout.getLayoutComponent(java.awt.BorderLayout.NORTH))
+        assertSame(
+            "指示行应挂北区宿主 CENTER（「更多」按钮所在工具栏行正下方）",
+            row,
+            layout.getLayoutComponent(java.awt.BorderLayout.CENTER),
+        )
+        // ③ 右对齐：与工具栏右缘（更多按钮一侧）对齐
+        assertEquals(
+            "指示行应右对齐（更多按钮正下方）",
+            java.awt.FlowLayout.RIGHT,
+            (row.layout as java.awt.FlowLayout).alignment,
+        )
+    }
+
+    /** T-DevAcceptFix ①：常驻语义——无参数预览（参数区走「无参数」早退分支）指示行仍在场。 */
+    fun test无参数预览指示行仍常驻() {
+        val p = openPanel() // 无参语料：unresolvedParams 空 → 参数区早退
+        val label = p.bindStateLabelForTest()
+        assertNotNull("无参数预览也应有常驻指示行（迁顶栏后不再依赖参数区建行）", label)
+        assertEquals(
+            "未绑定应显示未绑定文案",
+            MpSqlVisualizerBundle.message("panel.bindstate.unbound"),
+            label!!.text,
+        )
     }
 
     // ------------------------------------------------------------------

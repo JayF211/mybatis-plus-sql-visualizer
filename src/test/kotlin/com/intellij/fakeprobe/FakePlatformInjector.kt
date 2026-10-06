@@ -8,9 +8,9 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLanguageInjectionHost
 
 /**
- * T-XmlSynHi D68 探针测试专用假注入器：包名以 `com.intellij.` 开头 = 「平台系」包前缀过滤
- * **命中组**。只供 [cn.song.mybatisplus.visualizer.ui.inject.XmlSynHiGatePlatformProbeTest] 经
- * `XmlSynHiGate.platformInjectorsWouldInject` 缝直注清单，不注册任何 EP。
+ * T-XmlSynHi D68 探针测试专用假注入器：包名以 `com.intellij.` 开头 = 「平台系」组（per-host 探测
+ * 询问题材之一）。只供 [cn.song.mybatisplus.visualizer.ui.inject.XmlSynHiGatePlatformProbeTest] 经
+ * `XmlSynHiGate.foreignInjectorsWouldInject` 缝直注清单，不注册任何 EP。
  */
 class FakePlatformInjector(
     private val fedTypes: List<Class<out PsiElement>>,

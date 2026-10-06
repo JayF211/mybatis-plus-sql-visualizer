@@ -8,9 +8,10 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiLanguageInjectionHost
 
 /**
- * T-XmlSynHi D68 探针测试专用假注入器：包名非 JetBrains 系白名单前缀 = 「非平台」排除组。
- * 只供 [cn.song.mybatisplus.visualizer.ui.inject.XmlSynHiGatePlatformProbeTest] 经
- * `XmlSynHiGate.platformInjectorsWouldInject` 缝直注清单，不注册任何 EP。
+ * T-XmlSynHi D68 / T-DevAcceptFix ④ 探针测试专用假注入器：包名属「未知三方」——20261006 验收后
+ * per-host 探测域=除自身族外**全部** EP 在册项（不再按包名前缀白名单收窄），本夹具即该组的
+ * 同权命中证据。只供 [cn.song.mybatisplus.visualizer.ui.inject.XmlSynHiGatePlatformProbeTest] 经
+ * `XmlSynHiGate.foreignInjectorsWouldInject` 缝直注清单，不注册任何 EP。
  */
 class FakeUnknownInjector(
     private val fedTypes: List<Class<out PsiElement>>,

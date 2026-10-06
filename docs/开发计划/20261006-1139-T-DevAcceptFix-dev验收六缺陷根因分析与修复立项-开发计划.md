@@ -143,6 +143,24 @@ combo.addActionListener(:3763) → switchToScheme(:3884)
 - MP 拦截器模拟其余两件（R48 MetaObjectHandler 等）不在本批。
 - attach 时序竞态、EXECUTION_TOPIC 订阅竞态等既有登记项不在本批。
 
-## 七、实施记录（回填占位）
+## 七、实施记录（2026-10-06 当轮，三车道并行）
 
-（实施开始后由实施车道回填本节；主仓副本只读。）
+基线：dev 工作树 @ `caa0e48`（本计划落库笔 `136b39f`）。车道=主控（①②③⑤ + ④ 尾改）＋子代理 A（⑥，agent 子项目）＋子代理 B（④ 平台线，inject 包）。
+
+| 缺陷 | 实现要点 | 提交 | 读数 |
+|---|---|---|---|
+| ⑥ P0 织入器 | 两织入器改 `COMPUTE_MAXS`-only ＋ `ZeroLoadClassWriter`（`getCommonSuperClass` 零加载兜底）＋ EXEC 族织入方法的原帧 locals 补 LONG 槽（`EXPAND_FRAMES` 读入 + `patchFramesWithTokenSlot`） | `bc75d8b`（子代理 A） | 反向验证：未修复态首织触发 12 类加载（`-verbose:class` 三重实证 + 断言红）→ 修复态增量 0；agent 子项目 **109/0** 全绿（基线实为 104 例 + 新 5 例） |
+| ④ XmlSynHi | 平台线 per-host 化（EP 枚举 + 喂入契约预筛 + stub registrar 探测，子代理 B）；**探测域扩至全部 EP 注入器（除自身族）、单注入器异常跳过续问、三方批发让位线摘除**（主控尾改，用户真机真让位源即三方线） | `c07e282`（子代理 B）+ 主控尾改笔 | inject 包定向 51 例全绿（含三形态缝/喂入预筛/自身族排除/异常跳过续问新例）；`PlatformSignatureCrossVersionTest` 243/253/262 三平台核验过 |
+| ① 预设折叠＋指示行 | 缺省折叠（`presetSectionCollapsed=true`）；指示行从参数区迁 `northHost` CENTER（工具栏 NORTH 之下右对齐常驻薄行） | 主控笔 | O-88 四例按「展开态被捕获」反转改写；BindState 位置断言改北区宿主 CENTER + `FlowLayout.RIGHT` + 无参数常驻新例 |
+| ② EXPLAIN 默认关 | `explainStructuredRender` 默认 `false`（D67 采 B 案）＋双语设置文案标注实验特性 | 主控笔 | 持久化用例改：出厂默认 false + 显式 true 往返保留 |
+| ③ 分页分号 | `appendCountSection` 主 SQL 与 COUNT 语句各自 `;` 收尾（已带分号幂等） | 主控笔 | 面板渲染两点断言：raw 逐字 `;\n\n-- 头\n` + 尾 `TOTAL;`；格式化态放宽空白仍须有分号（首轮红：格式化形态吞掉逐字串，已按双形态断言修正） |
+| ⑤ 预设切换回写 | 输入框挂 `PROP_FIELD_SOURCE` 锚点，`syncParamFieldText` 按锚点显式映射；删 `currentParamFieldIndex` 插入序对位死码 | 主控笔 | **红读数**：退回插入序对位 → 跨方案键序漂移用例 `ComparisonFailure`（ParamSchemesTest:380，值写进别家输入框）；**绿读数**：还原后定向全绿 |
+
+计划前提被推翻两处（实施中修正，登记在案）：
+
+1. **「COMPUTE_MAXS-only 下原 StackMapTable 全透传」——被回归部分证伪**：出口直线插桩确实不触帧，但 EXEC 族**头插 token(long) 槽**存活于原方法全部分支帧点，原帧不含该槽 → 首轮全套 7 例 `VerifyError: Bad local variable type`（StatementWeaveEndToEndTest 实锤）。对策：`StatementWeaver` 以 `EXPAND_FRAMES` 读入并给织入成功 timed 方法的每帧 locals 尾部补一个 LONG（写出仍零类加载）。
+2. **「平台 `SqlLanguageInjector` 类在场即让位是用户环境真让位源」——被实证证伪**：该类在 243 构建发行物（599 jar）与用户真机 IU-262.10968.63（1809 jar）全量扫描**均不存在**（该让位线是死代码）；现行平台 SQL 注入器（`SqlTypeBasedInjector` 两代）喂入类型全为 SQL PSI，mapper XML 宿主平台从不着色。用户真机真让位源是三方 MyBatisCodeHelperPro（安装且启用）——而在位≠覆盖（关键字仍无色），故两条线同批并入宿主级探测。
+
+主控尾轮定向读数：**107/0 全绿**（ParamSchemes / BindState / PaginationSim / PluginSettingsPersistence / inject.* / PlatformSignatureCrossVersion，`BUILD SUCCESSFUL`）。
+
+残余（非本轮债，登记即可）：V84/V85 的 selfdev-framework-demo 真机 attach 启动复验、V91 指示行新位置截图走查、XmlSynHi 用户真机着色实测——三者同属**下轮 runIde 沙盒走查批**；V86 已由红绿对照裁决（走脆弱点 a 修）；V87/V88 由子代理 B 的 jar 实证与探针改造落地（V88 的用户 mapper 形态实测同上批）；V89~V90 按推荐案执行（B 案默认关 / 宿主级探测 / 两语句各自收尾）。

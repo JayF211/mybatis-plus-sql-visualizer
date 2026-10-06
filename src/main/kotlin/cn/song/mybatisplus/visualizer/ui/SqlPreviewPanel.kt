@@ -566,9 +566,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         // T-PreviewUx-Pack #2：诚实降级横幅（面板内嵌非模态提示，不算弹窗）——渲染警示 /
         // T-PreviewExecDs 降级链层级提示统一收口（触发即显示、恢复即隐藏，不占高度）
+        // T-DevAcceptFix ①（20261006 验收）：绑定指示行迁出参数区——挂「更多」按钮（工具栏 EAST
+        // 末位）正下方右对齐常驻薄行，与右侧内嵌控制台头部数据源显示相邻；init 一次构建常驻，
+        // 不随参数区重建（常驻语义不再依赖参数区是否建行），refreshBindStateRow 单点刷新链不变。
         val northHost = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             isOpaque = false
             add(topRow, BorderLayout.NORTH)
+            add(buildBindStateRow(), BorderLayout.CENTER)
             add(degradationBanner, BorderLayout.SOUTH)
         }
         add(northHost, BorderLayout.NORTH)
@@ -3129,13 +3133,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      *
      * 在主 SQL（含 fill 段）之后以注释头并列渲染 COUNT 包裹 SQL（对齐捕获侧 MP_PAGINATION_COUNT
      * 独立条目口径——运行时 COUNT 是分页查询之外的独立语句）。无 COUNT 产出时原样返回。
+     *
+     * T-DevAcceptFix ③（20261006 验收）：两条语句各自以 `;` 收尾——原实现主 SQL 尾直拼注释头，
+     * 复制到控制台执行时分页语句与 COUNT 语句粘连（用户实验收实测）；已带分号不重复追加。
      */
     private fun appendCountSection(sql: String): String {
         val result = current ?: return sql
         val countSql = result.countSql ?: return sql
-        return StringBuilder(sql)
+        val terminatedMain = sql.trimEnd().let { if (it.endsWith(";")) it else "$it;" }
+        val terminatedCount = countSql.trimEnd().let { if (it.endsWith(";")) it else "$it;" }
+        return StringBuilder(terminatedMain)
             .append("\n\n-- ").append(MpSqlVisualizerBundle.message("panel.pagination.count.section")).append("\n")
-            .append(countSql)
+            .append(terminatedCount)
             .append("\n")
             .toString()
     }
@@ -3654,8 +3663,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             (xmlModelForSchemeRow.conditionViews.isNotEmpty() || xmlModelForSchemeRow.forEachViews.isNotEmpty())
 
         if (views.isEmpty() && result.unresolvedParams.isEmpty() && batchModel == null && !xmlHasControls) {
-            // O-95 S3：无参数早退同样保留绑定指示行（常驻语义——用户此时最需要看到「有没有绑定」）
-            paramPanel.add(buildBindStateRow())
+            // T-DevAcceptFix ①：绑定指示行已迁顶部常驻行——无参数早退不再重复建行
             paramPanel.add(JBLabel(MpSqlVisualizerBundle.message("panel.param.none")).apply {
                 border = JBUI.Borders.empty(6, 8)
             })
@@ -3666,10 +3674,6 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
         // R22 T-04：方案行（设计定稿位置——首个早退之后、batchModel 分支之前）
         paramPanel.add(buildSchemeRow())
-        // O-95 T-PreviewEdtGuard S3：绑定数据源常驻指示行（预设行之下，灰字文本行——D2=A，
-        // 不自创图形形态；绑定态=R33 结构化视图头部同源数据 boundConsoleDataSource，
-        // 未绑定=R33 回退通知同源文案族）
-        paramPanel.add(buildBindStateRow())
 
         // T-M23-04：批量列级勾选（toggle 列：复选框 + 值输入框，勾选决定列是否进入 SQL；
         // fixed 列：仅值输入框，恒参与）——与动态条件区互斥（批量预览无 conditionViews）
@@ -3748,8 +3752,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 下拉项为原始方案名（默认方案 = 空串内部名），显示名经 bundle 本地化
      * （默认方案显示名与用户命名可撞名，故渲染器映射而非直接用显示名作条目）。
      * O-88：整行收进平台标准折叠件 [HideableTitledPanel]，标题复用 `panel.scheme.label`，
-     * 缺省展开；折叠时内容区 setVisible(false) 不占竖向空间。折叠态存静态字段
-     * （[presetSectionCollapsed]，跨预览重建且跨面板实例保留、不持久化）。
+     * 缺省折叠（20261006 T-DevAcceptFix 验收反馈：预设低频，默认不占竖向空间）；折叠时内容区
+     * setVisible(false) 不占竖向空间。折叠态存静态字段（[presetSectionCollapsed]，
+     * 跨预览重建且跨面板实例保留、不持久化）。
      */
     private fun buildSchemeRow(): JComponent {
         // O-88：懒惰捕获——上一份折叠件实例若被用户点标题折叠过，先回写静态字段再重建
@@ -3804,7 +3809,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     // ------------------------------------------------------------------
-    // O-95 T-PreviewEdtGuard S3：绑定数据源常驻指示行（预设行之下，灰字文本行）
+    // O-95 T-PreviewEdtGuard S3：绑定数据源常驻指示行
+    //（T-DevAcceptFix ①：迁顶栏「更多」按钮下方右对齐常驻行，原参数区预设行之下位置废止）
     // ------------------------------------------------------------------
 
     /**
@@ -3852,6 +3858,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /**
      * S3 指示行（灰字文本行，D2=A 定案——轻量形态禁自创图形）：contextHelp 灰字与同面板
      * 既有灰字形态一致（degradation 提示行同款 UIUtil.getContextHelpForeground）。
+     *
+     * T-DevAcceptFix ①（20261006 验收）：容器改**顶栏「更多」按钮下方右对齐**常驻薄行
+     * （FlowLayout.RIGHT，右缘边距与工具栏 8px 对齐）——与右侧内嵌控制台头部数据源显示相邻，
+     * 不再挂在参数区预设行之下；init 一次构建，刷新仍走 [refreshBindStateRow] 单点收口。
      */
     private fun buildBindStateRow(): JComponent {
         val label = JBLabel(bindStateText()).apply {
@@ -3859,7 +3869,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             foreground = UIUtil.getContextHelpForeground()
         }
         bindStateLabel = label
-        return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 2)).apply {
+        return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 8, 2)).apply {
             name = BIND_STATE_ROW_NAME
             add(label)
             border = JBUI.Borders.empty(0, 8, 2, 8)
@@ -3963,6 +3973,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val field = JBTextField(8).apply {
             toolTipText = "#${col.source}"
             text = paramValues[col.source] ?: ""
+            putClientProperty(PROP_FIELD_SOURCE, col.source) // T-DevAcceptFix ⑤：召回回写的 source 锚点
             document.addDocumentListener(object : DocumentListener {
                 override fun insertUpdate(e: DocumentEvent?) = onParamChanged(col.source, this@apply.text)
                 override fun removeUpdate(e: DocumentEvent?) = onParamChanged(col.source, this@apply.text)
@@ -4114,6 +4125,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** 动态条件值输入框：值变更联动勾选态与 SQL 重渲染（按 source 绑定，多值条件每个来源一个输入框）。 */
     private fun conditionValueField(view: ConditionView, source: String): JBTextField = JBTextField(8).apply {        toolTipText = "#$source"
         text = paramValues[source] ?: ""
+        putClientProperty(PROP_FIELD_SOURCE, source) // T-DevAcceptFix ⑤：召回回写的 source 锚点
         document.addDocumentListener(object : DocumentListener {
             override fun insertUpdate(e: DocumentEvent?) = onConditionValueChanged(view, source, this@apply.text)
             override fun removeUpdate(e: DocumentEvent?) = onConditionValueChanged(view, source, this@apply.text)
@@ -4325,6 +4337,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-HibDualCapture：8 列放不下 16 字符日期值（视口滚到尾部被当成「值截断」），下限放宽到 16 列
         val field = JBTextField(16).apply {
             text = paramValues[source] ?: ""
+            putClientProperty(PROP_FIELD_SOURCE, source) // T-DevAcceptFix ⑤：召回回写的 source 锚点
             emptyText.text = paramEmptyText(source, kind)
             // 长值超框宽时光标钉回首字符，视口停在头部；完整值以 tooltip 兜底
             if (text.isNotEmpty()) caretPosition = 0
@@ -4592,24 +4605,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** P-05：同步参数输入框文本（导入回填时更新 UI 显示）。 */
     private fun syncParamFieldText(source: String, value: String) {
-        val idx = currentParamFieldIndex(source)
-        if (idx >= 0) {
-            paramFields.getOrNull(idx)?.text = value
-        }
-    }
-
-    /** P-05：按 source 查找 paramFields 索引（与 paramValues 按 source 绑定顺序一致）。 */
-    private fun currentParamFieldIndex(source: String): Int {
-        // paramFields 按 buildParamRow/buildBatchColumnRow/buildXmlForEachRow 追加顺序排列，
-        // 与 unresolvedParams + 条件值来源的顺序一致；但 source 可能出现在多个场景，
-        // 此处按 paramValues 键顺序定位（与输入框构建顺序一致）
-        // T-Perf-23：单趟遍历计数（原 toList+indexOf 每次 O(C) 拷贝 + 线性查找）
-        var index = 0
-        for (key in paramValues.keys) {
-            if (key == source) return index
-            index++
-        }
-        return -1
+        // T-DevAcceptFix ⑤（20261006 验收）：按 source 锚点显式映射——原实现以 paramValues 插入序
+        // 对位 paramFields 行序（currentParamFieldIndex），方案切换后 map 重填序=另一方案快照保存序，
+        // 与其后的面板行构建序漂移时回写错位（值写进别家输入框）。锚点挂在输入框 clientProperty 上，
+        // 与任何遍历序解耦。反向验证读数：退回插入序对位，跨方案键序漂移用例即 ComparisonFailure 红。
+        paramFields.firstOrNull { it.getClientProperty(PROP_FIELD_SOURCE) == source }?.text = value
     }
 
     /**
@@ -5509,6 +5509,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         return null
     }
+    /**
+     * 按 source 锚点取可见输入框（T-DevAcceptFix ⑤：召回回写用，禁插入序对位——见 [syncParamFieldText]）。
+     */
+    internal fun paramFieldForSourceForTest(source: String): JBTextField? =
+        paramFields.firstOrNull { it.getClientProperty(PROP_FIELD_SOURCE) == source }
+
     /** R22 T-04 测试缝：程序化切换方案（等价下拉用户切换：清态→switchScheme→召回→渲染）。 */
     internal fun switchSchemeForTest(name: String) = switchToScheme(name)
     /** R22 T-04 测试缝：对话框回调链（同步下拉 + 激活变更整面重召回）。 */
@@ -5519,19 +5525,20 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
 
         /**
-         * O-88：预设分区是否处于折叠态（缺省展开=false；重建时由当前折叠件实例懒惰回写，见 [buildSchemeRow]）。
+         * O-88：预设分区是否处于折叠态（缺省折叠=true——20261006 T-DevAcceptFix 验收反馈定案，
+         * 预设是低频操作不应默认展开占竖向空间；重建时由当前折叠件实例懒惰回写，见 [buildSchemeRow]）。
          * 静态而非实例：gutter 换语句=关旧弹窗、开新面板实例，实例字段在新实例归零丢折叠态（真机走查实证）；
          * 跨面板实例保留、不持久化（无 PropertiesComponent/磁盘写入）。@Volatile：读写入口可能非 EDT，可见性保守处理。
          */
         @Volatile
-        private var presetSectionCollapsed = false
+        private var presetSectionCollapsed = true
 
         /** O-88 测试缝：折叠态静态字段读（跨实例保留用例断言用）。 */
         internal fun presetCollapsedForTest(): Boolean = presetSectionCollapsed
 
         /** O-88 测试缝：折叠态静态字段复位（setUp 调用，防静态态跨用例/跨测试类串扰）。 */
         internal fun resetPresetCollapsedForTest() {
-            presetSectionCollapsed = false
+            presetSectionCollapsed = true
         }
 
         /** R22 T-04：方案行 panel.name 锚点——方案行也是「含 JBLabel 的 JBPanel」且插在 paramPanel
@@ -5550,6 +5557,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
         /** R22 T-02：勾选框 client property 锚点（快照枚举 + 召回视觉同步）。 */
         private const val PROP_TOGGLE_ID = "mpsv.toggleId"
+
+        /**
+         * T-DevAcceptFix ⑤（20261006 验收）：参数输入框的 source 锚点——召回回写按锚点显式映射
+         * （[syncParamFieldText]），禁以 paramValues 插入序对位 paramFields 行序（方案切换后
+         * 快照键序与面板构建序可漂移 → 回写错位）。
+         */
+        private const val PROP_FIELD_SOURCE = "mpsv.paramSource"
         private const val PROP_FOREACH_NULL = "mpsv.forEachNull"
 
         /** F-45：列信息标签页标题。 */

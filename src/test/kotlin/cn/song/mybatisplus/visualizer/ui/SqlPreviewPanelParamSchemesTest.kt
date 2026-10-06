@@ -251,15 +251,16 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
 
     // ==== O-88：预设行折叠件（平台标准 HideableTitledPanel） ====
 
-    /** O-88 ①：缺省展开——折叠件在场、isExpanded=true、锚点方案行可见且挂在折叠件内容区。 */
-    fun testO88_预设折叠件缺省展开() {
+    /** O-88 ①：缺省折叠——折叠件在场、isExpanded=false、锚点方案行在内容区但不可见。
+     *  T-DevAcceptFix ①（20261006 验收）：缺省由展开翻折叠（预设低频，默认不占竖向空间）。 */
+    fun testO88_预设折叠件缺省折叠() {
         val p = openPanel()
         val fold = p.presetFoldForTest()
         assertNotNull("参数区应有预设折叠件（O-88）", fold)
-        assertTrue("缺省应展开", fold!!.isExpanded)
+        assertFalse("缺省应折叠（20261006 验收定案）", fold!!.isExpanded)
         val row = p.schemeRowForTest()
-        assertNotNull("折叠内容里应有 SCHEME_ROW_NAME 锚点行", row)
-        assertTrue("展开态下方案行可见", row!!.isVisible)
+        assertNotNull("折叠内容区仍应含 SCHEME_ROW_NAME 锚点行", row)
+        assertFalse("折叠态下方案行不可见", row!!.isVisible)
         assertSame(
             "方案行应挂在折叠件内容区（非 paramPanel 直插）",
             fold,
@@ -267,20 +268,20 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         )
     }
 
-    /** O-88 ②：折叠后内容区收起（平台件源码语义：off() 将 content setVisible(false)，不占竖向空间）。 */
-    fun testO88_折叠后内容区收起() {
+    /** O-88 ②：展开后内容区显示（平台件源码语义：setOn(true) 内容 setVisible(true)）。 */
+    fun testO88_展开后方案行可见() {
         val p = openPanel()
         val fold = p.presetFoldForTest()!!
-        fold.setOn(false)
-        assertFalse("isExpanded 应为 false", fold.isExpanded)
-        assertFalse("方案行应不可见（内容区收起）", p.schemeRowForTest()!!.isVisible)
+        fold.setOn(true)
+        assertTrue("isExpanded 应为 true", fold.isExpanded)
+        assertTrue("展开态下方案行应可见", p.schemeRowForTest()!!.isVisible)
     }
 
-    /** O-88 ③：折叠态跨预览重建保留——折叠后同一面板重新 showResult，重建的折叠件仍收起（不持久化）。 */
-    fun testO88_折叠态跨预览重建保留() {
+    /** O-88 ③：展开态跨预览重建保留——展开后同一面板重新 showResult，重建的折叠件仍展开（不持久化）。 */
+    fun testO88_展开态跨预览重建保留() {
         val p = openPanel()
         val oldFold = p.presetFoldForTest()!!
-        oldFold.setOn(false)
+        oldFold.setOn(true)
 
         // 切换语句语义：同一面板重新 showResult → rebuildLeftPanel → paramPanel.removeAll + 方案行重建
         p.showResult(buildProbePreviewResult())
@@ -289,23 +290,24 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         val newFold = p.presetFoldForTest()
         assertNotNull("重建后应有新的折叠件", newFold)
         assertNotSame("参数区重建应重建出新的折叠件实例", oldFold, newFold)
-        assertFalse("重建后折叠态应保留（静态字段）", newFold!!.isExpanded)
-        assertFalse("重建后方案行仍收起", p.schemeRowForTest()!!.isVisible)
+        assertTrue("重建后展开态应保留（静态字段）", newFold!!.isExpanded)
+        assertTrue("重建后方案行可见", p.schemeRowForTest()!!.isVisible)
     }
 
     /**
-     * O-88 ④：折叠态跨面板实例保留——真机走查实证：gutter 换语句走「关旧弹窗、开新面板实例」，
+     * O-88 ④：展开态跨面板实例保留——真机走查实证：gutter 换语句走「关旧弹窗、开新面板实例」，
      * 折叠态为实例字段时新实例归零丢失；静态化后新实例初始应继承折叠态（仍不持久化，非 PropertiesComponent）。
      *
      * 复验修复（dispose 链捕获）：真机「收起→取消→换语句」走 DialogWrapper.dispose→Disposer 级联
-     * 释放面板，全程无 buildSchemeRow 调用——懒惰捕获不触发。本用例走真序列：折叠后**不经重建**
-     * 直接 dispose 释放 A，断言静态字段在 dispose 时被捕获，再开实例 B 验初始折叠。
+     * 释放面板，全程无 buildSchemeRow 调用——懒惰捕获不触发。本用例走真序列：展开后**不经重建**
+     * 直接 dispose 释放 A，断言静态字段在 dispose 时被捕获（T-DevAcceptFix ① 后缺省=折叠，
+     * 故本用例改以「展开态被捕获」验证同一机制），再开实例 B 验初始展开。
      */
-    fun testO88_折叠态跨面板实例保留() {
-        // 实例 A：折叠（测试缝 setOn(false)，等价用户点标题），不触发任何参数区重建
+    fun testO88_展开态跨面板实例保留() {
+        // 实例 A：展开（测试缝 setOn(true)，等价用户点标题），不触发任何参数区重建
         val a = openPanel()
-        a.presetFoldForTest()!!.setOn(false)
-        assertFalse("懒惰捕获未触发（无重建路径），dispose 前静态字段应为展开", SqlPreviewPanel.presetCollapsedForTest())
+        a.presetFoldForTest()!!.setOn(true)
+        assertTrue("懒惰捕获未触发（无重建路径），dispose 前静态字段应为缺省折叠", SqlPreviewPanel.presetCollapsedForTest())
 
         // 直接 dispose 释放 A（不经重建）——面板挂在宿主 disposable 树上，关闭路径级联走 panel.dispose()
         // （clear() 先走 releaseEditor——测试里组件不在容器、removeNotify 不会触发，直接 dispose 会漏编辑器；
@@ -313,7 +315,7 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         a.clear()
         Disposer.dispose(a)
         panel = null
-        assertTrue("dispose 释放 A 后静态字段应被捕获为折叠（dispose 链捕获）", SqlPreviewPanel.presetCollapsedForTest())
+        assertFalse("dispose 释放 A 后静态字段应被捕获为展开（dispose 链捕获）", SqlPreviewPanel.presetCollapsedForTest())
 
         // 模拟 gutter 换语句：开新面板实例 B
         val b = SqlPreviewPanel(project)
@@ -322,21 +324,61 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         b.showResult(buildProbePreviewResult())
         com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
 
-        assertFalse("新实例 B 初始应继承折叠态（跨实例保留）", b.presetFoldForTest()!!.isExpanded)
-        assertFalse("B 的方案行应收起", b.schemeRowForTest()!!.isVisible)
-        assertTrue("静态字段仍是折叠（B 未被重置）", SqlPreviewPanel.presetCollapsedForTest())
+        assertTrue("新实例 B 初始应继承展开态（跨实例保留）", b.presetFoldForTest()!!.isExpanded)
+        assertTrue("B 的方案行应可见", b.schemeRowForTest()!!.isVisible)
+        assertFalse("静态字段仍是展开（B 未被重置）", SqlPreviewPanel.presetCollapsedForTest())
     }
 
     /**
-     * O-88 ④b（保留）：懒惰捕获路径——折叠后同实例触发重建（刷新/换语句不清弹窗的路径），
-     * buildSchemeRow 开头懒惰回写静态字段，重建出的折叠件仍收起。
+     * O-88 ④b（保留）：懒惰捕获路径——展开后同实例触发重建（刷新/换语句不清弹窗的路径），
+     * buildSchemeRow 开头懒惰回写静态字段，重建出的折叠件仍展开。
      */
-    fun testO88_折叠态懒惰捕获经重建回写() {
+    fun testO88_展开态懒惰捕获经重建回写() {
         val a = openPanel()
-        a.presetFoldForTest()!!.setOn(false)
+        a.presetFoldForTest()!!.setOn(true)
         a.showResult(buildProbePreviewResult())
         com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
-        assertFalse("A 重建后应仍折叠（懒惰捕获回写静态字段）", a.presetFoldForTest()!!.isExpanded)
-        assertTrue("静态字段应已被 A 回写为折叠", SqlPreviewPanel.presetCollapsedForTest())
+        assertTrue("A 重建后应仍展开（懒惰捕获回写静态字段）", a.presetFoldForTest()!!.isExpanded)
+        assertFalse("静态字段应已被 A 回写为展开", SqlPreviewPanel.presetCollapsedForTest())
+    }
+
+    // ==== T-DevAcceptFix ⑤：方案切换参数回写（source 锚点显式映射，禁插入序对位） ====
+
+    /** 普通参数语料（无 xml/batch 模型 → 走参数行主链；paramFields 行序 = unresolvedParams 序）。 */
+    private fun buildPlainParamsResult(params: List<String>): PreviewResult = PreviewResult(
+        sql = "SELECT * FROM t_order WHERE alpha = ? AND beta = ? AND gamma = ?",
+        compactSql = "SELECT * FROM t_order WHERE alpha = ? AND beta = ? AND gamma = ?",
+        unresolvedParams = params,
+        paramTable = ParameterReplacer.buildParamTable(params),
+        wrapperType = null,
+        tableName = null,
+        xmlModel = null,
+    )
+
+    /**
+     * T-DevAcceptFix ⑤ 红复现（20261006 验收缺陷「切换预设时下方参数没有变化」的错位形态）：
+     * 方案快照键序与面板行构建序不一致时，切换方案后各参数输入框必须各归其位。
+     *
+     * 原实现以 `paramValues` 插入序对位 `paramFields` 行序（currentParamFieldIndex）——方案切换后
+     * map 重填顺序=另一方案快照的保存顺序，与本面板行构建序漂移时回写错位（值写进别家输入框）。
+     * 本用例刻意构造「快照键序 ≠ 行构建序」：修复前必红（alpha 框拿到 gamma 的值），修复后绿。
+     */
+    fun testDevAcceptFix05_跨方案快照键序漂移时参数回写各归其位() {
+        val p = SqlPreviewPanel(project)
+        panel = p
+        Disposer.register(testRootDisposable, p)
+        p.showResult(buildPlainParamsResult(listOf("alpha", "beta", "gamma")))
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+
+        val cache = p.paramHistoryCacheForTest()
+        val key = p.historyCacheKeyForTest()!!
+        // 方案甲快照键序刻意与行构建序（alpha→beta→gamma）不同：gamma 打头
+        cache.saveAsScheme("方案甲", key, linkedMapOf("gamma" to "G", "alpha" to "A", "beta" to "B"))
+
+        p.switchSchemeForTest("方案甲")
+
+        assertEquals("alpha 框应显示方案甲中 alpha 的值", "A", p.paramFieldForSourceForTest("alpha")?.text)
+        assertEquals("beta 框应显示方案甲中 beta 的值", "B", p.paramFieldForSourceForTest("beta")?.text)
+        assertEquals("gamma 框应显示方案甲中 gamma 的值", "G", p.paramFieldForSourceForTest("gamma")?.text)
     }
 }
