@@ -88,7 +88,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** T-SqlLogPerf：二级列表滚动宿主（构造期装配 adjustment 监听驱动滚动追加）。 */
     private lateinit var sqlScrollPane: JBScrollPane
 
-    // ---------- O-90：同模板计数徽章与聚焦 ----------
+    // ---------- O-90：同结构（结构相同，疑似 N+1）计数徽章与聚焦 ----------
+    // 注：内部标识沿用 template* 命名；**面向用户**的文案自 T-DevAcceptFix2 ⑪ 起为「同结构 N 条 /
+    // 只看同结构」（原「×N 同模板」与插件既有功能「SQL 快捷模板」撞名且 ×N 易被读成倍数）。
 
     /** O-90：当前文件全量条目的同模板计数（徽章渲染与右键聚焦动作共用；applySqlSearch 重建）。 */
     private var templateCounts: Map<String, Int> = emptyMap()
@@ -899,6 +901,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private inner class FocusTemplateAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.focusTemplate")
+            // T-DevAcceptFix2 ⑪（20261006 第三轮走查）：菜单项带判定口径说明（与日志页同源文案）
+            e.presentation.description = MpSqlVisualizerBundle.message("log.panel.focusTemplate.desc")
             e.presentation.isEnabled = (templateCounts[entry.structureKey] ?: 0) >= TEMPLATE_BADGE_MIN_COUNT
         }
 

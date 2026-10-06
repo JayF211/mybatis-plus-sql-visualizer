@@ -2111,15 +2111,17 @@ class SqlLogPanel(
     }
 
     /**
-     * O-90：按模板聚焦——右键带「×N 同模板」徽章的条目产生模板页签（structureKey 精确匹配，
-     * 过滤出该模板全部条目；与 04 请求聚焦同一交互形态：条目驱动的聚焦过滤器，页签可关闭恢复）。
-     * 准入 = 计数达 [TEMPLATE_BADGE_MIN_COUNT]（徽章在场才可点）；同模板重复创建幂等
+     * O-90：按结构聚焦——右键带「同结构 N 条」徽章的条目产生结构页签（structureKey 精确匹配，
+     * 过滤出该结构全部条目；与 04 请求聚焦同一交互形态：条目驱动的聚焦过滤器，页签可关闭恢复）。
+     * 准入 = 计数达 [TEMPLATE_BADGE_MIN_COUNT]（徽章在场才可点）；同结构重复创建幂等
      * （[addTemplateTab] 按 structureKey 判重）。徽章本体为展示性（与去重徽章先例一致——
-     * 列表片段非交互组件），聚焦入口落在本动作。
+     * 列表片段非交互组件），聚焦入口落在本动作；T-DevAcceptFix2 ⑪ 起菜单项带 description
+     * 说明判定口径（「字面量不同也算」——用户实测里 `IN ('a')` 与 `IN ('b')` 计同一结构）。
      */
     private inner class FocusTemplateAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.focusTemplate")
+            e.presentation.description = MpSqlVisualizerBundle.message("log.panel.focusTemplate.desc")
             e.presentation.isEnabled = (templateCounts[entry.structureKey] ?: 0) >= TEMPLATE_BADGE_MIN_COUNT
         }
 
