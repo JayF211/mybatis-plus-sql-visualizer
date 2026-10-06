@@ -3810,10 +3810,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /**
      * 集合命名启发式（T-PT-02，zMyBatis ParameterInputDialog 同款）：参数名以 `s` 结尾
      * （排除 status/address 等单数词）或含 list/ids/array/collection → 按数组提示。
+     * O-111 追加（用户 demo 实测 locationStatus 误配集合占位）：排除词改**后缀匹配**——
+     * 复合驼峰词（locationStatus/orderStatus/userAddress）以单数词结尾同样不是集合。
      */
     private fun looksLikeCollectionName(source: String): Boolean {
         val name = source.substringAfterLast('.').lowercase()
-        if (name in COLLECTION_NAME_EXCEPTIONS) return false
+        if (name in COLLECTION_NAME_EXCEPTIONS || COLLECTION_NAME_EXCEPTIONS.any { name.endsWith(it) }) {
+            return false
+        }
         if (name.contains("list") || name.contains("ids") || name.contains("array") || name.contains("collection")) {
             return true
         }

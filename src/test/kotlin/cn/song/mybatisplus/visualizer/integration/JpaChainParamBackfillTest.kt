@@ -193,6 +193,103 @@ class JpaChainParamBackfillTest : BasePlatformTestCase() {
         )
     }
 
+    /**
+     * V83 真机复验对账用例（20261006 用户 demo 测试反馈追查）：截图场景精确复刻——
+     * 宿主方法带 warehouseId 形参、HQL 含 join/order by、只输入 locationStatus=3。
+     * 修复版预期：status 位渲染 '3'（引号在，hints 与按名 sources 平行），其余保持 `?`。
+     */
+    fun testDemoRepro_locationStatusInputRendersQuotedAtStatusPosition() {
+        myFixture.configureByText(
+            "JpaParamOrderReproController.java",
+            """
+            public class JpaParamOrderReproController {
+                private javax.persistence.EntityManager entityManager;
+
+                private WmsLocation occupyEmptyTcLocation(Long warehouseId) {
+                    if (warehouseId == null) {
+                        throw new IllegalArgumentException("拣货作业单仓库不能为空");
+                    }
+                    java.util.List<Long> candidateIds = this.entityManager.createQuery(
+                            "select location.id from WmsLocation location "
+                                + "join WmsZone zone on zone.id = location.zoneId "
+                                + "where location.warehouseId = :warehouseId "
+                                + "and location.status = :locationStatus "
+                                + "and zone.code = :zoneCode "
+                                + "and location.fullDegree = :emptyFullDegree "
+                                + "and location.agvPositionType = :positionType "
+                                + "order by location.putawaySequence asc, location.id asc",
+                            Long.class)
+                        .setParameter("warehouseId", warehouseId)
+                        .setParameter("locationStatus", "E")
+                        .setParameter("zoneCode", "KQ13")
+                        .setParameter("locationStatus", "E")
+                        .setParameter("emptyFullDegree", 0)
+                        .setParameter("positionType", WmsLocationAGVPositionType.TC)
+                        .getResultList();
+                    return null;
+                }
+                interface EntityManager { Query createQuery(String ql, Class resultClass); }
+                interface Query {
+                    Query setParameter(String name, Object value);
+                    java.util.List getResultList();
+                }
+                enum WmsLocationAGVPositionType { TC }
+                @Entity
+                @Table(name = "wms_location")
+                class WmsLocation {
+                    @Id Long id;
+                    @Column(name = "warehouse_id") Long warehouseId;
+                    @Column(name = "status") String status;
+                    @Column(name = "zone_id") Long zoneId;
+                    @Column(name = "full_degree") Integer fullDegree;
+                    @Column(name = "agv_position_type") String agvPositionType;
+                    @Column(name = "putaway_sequence") Integer putawaySequence;
+                }
+                @Entity
+                @Table(name = "wms_zone")
+                class WmsZone {
+                    @Id Long id;
+                    @Column(name = "code") String code;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = service.previewHql(findMethodCall("createQuery"))
+        assertNotNull(result)
+        assertEquals(
+            "占位符名序应为 HQL 首现序",
+            listOf("warehouseId", "locationStatus", "zoneCode", "emptyFullDegree", "positionType"),
+            result!!.placeholderParamNames,
+        )
+        assertEquals(
+            "locationStatus 位（index 1）的引号提示应为 true（非宿主参数）",
+            true,
+            result.paramHints.getOrNull(1)?.quote,
+        )
+        // 模拟面板播种 + 仅输入 locationStatus=3（用户截图操作）
+        val values = mapOf(
+            "warehouseId" to "",
+            "locationStatus" to "3",
+            "zoneCode" to "",
+            "emptyFullDegree" to "",
+            "positionType" to "",
+        )
+        val executable = ParameterReplacer.buildExecutableSql(
+            result.sql, result.placeholderParamNames, values, result.paramHints,
+        )
+        assertTrue(
+            "status 位应渲染带引号的 '3'（实际：${executable.lines().firstOrNull { it.contains("status") }}）",
+            executable.contains("location.status = '3'"),
+        )
+        assertTrue(
+            "未填写的 warehouse_id 应保持 ?（实际全文：$executable）",
+            executable.contains("location.warehouse_id = ?"),
+        )
+        // V83 对账：demo 完整形态（含 join/order by）下其余条件同样逐位正确
+        assertTrue("zone_code 未填应保持 ?", executable.contains("zone.code = ?"))
+        assertTrue("agv_position_type 未填应保持 ?", executable.contains("location.agv_position_type = ?"))
+    }
+
     /** 非链式分语句写法（PSI 平铺文档序）：现状即正确，修复须保持。 */
     fun testStatementStyle_backfillStaysCorrect() {
         myFixture.configureByText(
