@@ -226,27 +226,74 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         assertEquals("边界 foreach 权威值应还原", listOf("8", "9"), p.forEachValuesForTest()["statusList"])
     }
 
-    /** 防串桶（面板层）：flushHistoryToCache 必须以「取快照时刻」的激活方案落库——
-     *  在命名方案下取快照后（模拟池化线程延迟写回前）切走，写回不得串进默认方案。 */
-    fun testT04_防串桶_快照随捕获方案落库() {
+    /**
+     * T-DevAcceptFix2 ⑦（20261006 第三轮走查，用户实测复现的形态）：
+     * 「输入 zhangsan → 另存『zhangsan』 → 改参数为 lisi → 另存『lisi』 → 切回『zhangsan』」
+     * 应还原 zhangsan 自身的快照。
+     *
+     * 修复前必红：自动保存按「当前激活预设」归桶 ⇒ 第 3 步的编辑就地覆写了 zhangsan 预设
+     * （切回仍显示 lisi）。现语义＝命名预设为**快照**，编辑只写工作区（默认桶）。
+     */
+    fun testDevAcceptFix2_另存快照语义_切回预设还原自身值() {
+        val p = SqlPreviewPanel(project)
+        panel = p
+        Disposer.register(testRootDisposable, p)
+        p.showResult(buildPlainParamsResult(listOf("alpha")))
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        val cache = p.paramHistoryCacheForTest()
+        val key = p.historyCacheKeyForTest()!!
+
+        // 1) 输入 zhangsan → 另存「zhangsan」
+        p.paramFieldForSourceForTest("alpha")!!.text = "zhangsan"
+        p.flushHistoryForTest()
+        cache.saveAsScheme("zhangsan", key, p.buildHistorySnapshotForTest())
+        p.onSchemesChangedForTest()
+
+        // 2) 改参数为 lisi → 另存「lisi」
+        p.paramFieldForSourceForTest("alpha")!!.text = "lisi"
+        p.flushHistoryForTest()
+        cache.saveAsScheme("lisi", key, p.buildHistorySnapshotForTest())
+        p.onSchemesChangedForTest()
+
+        // 3) 切回「zhangsan」→ 应还原 zhangsan（修复前此处显示 lisi）
+        p.switchSchemeForTest("zhangsan")
+        assertEquals(
+            "切回预设应还原其自身快照（命名预设＝快照，编辑不就地改写）",
+            "zhangsan",
+            p.paramFieldForSourceForTest("alpha")?.text,
+        )
+        // 4) 再切「lisi」→ 应还原 lisi
+        p.switchSchemeForTest("lisi")
+        assertEquals("另一预设应各自还原自身快照", "lisi", p.paramFieldForSourceForTest("alpha")?.text)
+    }
+
+    /** T-DevAcceptFix2 ⑦：自动保存恒写**默认（工作区）桶**——命名预设不被编辑改写（快照语义）。 */
+    fun testDevAcceptFix2_自动保存只写工作区不就地改写命名预设() {
         val p = openPanel()
         val cache = p.paramHistoryCacheForTest()
         val key = p.historyCacheKeyForTest()!!
-        // 默认方案先落一份基准快照
+        // 工作区基准
         p.setForEachValuesForTest("statusList", listOf("1"))
         p.applyXmlForEachValuesForTest("statusList", "1")
         p.flushHistoryForTest()
-        val defaultSnapshot = cache.recall(key)!!
-        // 激活命名方案，取快照（flushForTest 内部捕获激活名），随后立刻切回默认
+        // 另存「边界流」（快照值 8）
         cache.saveAsScheme("边界流", key, mapOf("id" to "9", "__fev__:statusList" to "8"))
         p.onSchemesChangedForTest()
+        // 「边界流」激活态下继续编辑 + 自动保存 → 只更新工作区
         p.setForEachValuesForTest("statusList", listOf("5"))
         p.applyXmlForEachValuesForTest("statusList", "5")
-        p.flushHistoryForTest() // 捕获方案 = 边界流
+        p.flushHistoryForTest()
+        assertEquals(
+            "命名预设不得被编辑就地改写（快照语义）",
+            "8",
+            cache.recallFromScheme("边界流", key)!!["__fev__:statusList"],
+        )
         p.switchSchemeForTest(ParamHistoryCache.DEFAULT_SCHEME)
-        // 写回已完成：默认方案快照必须仍是默认流（未被边界流的延迟写回覆盖）
-        assertEquals("默认方案快照不得被命名方案的写回串写", defaultSnapshot, cache.recall(key))
-        assertEquals("边界流快照应含其捕获的值", "5", cache.recallFromScheme("边界流", key)!!["__fev__:statusList"])
+        assertEquals(
+            "编辑应落工作区（默认桶）",
+            "5",
+            cache.recall(key)!!["__fev__:statusList"],
+        )
     }
 
     // ==== O-88：预设行折叠件（平台标准 HideableTitledPanel） ====

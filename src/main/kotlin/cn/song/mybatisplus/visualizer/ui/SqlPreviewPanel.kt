@@ -4801,19 +4801,25 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** P-05：Timer 动作——实际写回缓存（由 historyAlarm 调度）。
      * T-Perf-24：序列化/持久化写挪 pooled 线程（EDT 只做取值快照）。
      * R22 T-04 防串桶：取快照（EDT）与写回（pooled 线程）之间用户可能切换方案——
-     * 快照时捕获激活方案名随行落库（saveForScheme），不再依赖写回时刻的激活态。 */
+     * 快照时捕获方案名随行落库（saveForScheme），不再依赖写回时刻的激活态。
+     *
+     * T-DevAcceptFix2 ⑦（20261006 第三轮走查，用户实测复现）：自动保存**恒写默认（工作区）桶**。
+     * 原实现按「当前激活预设」归桶——用户流程「输入 zhangsan → 另存为『zhangsan』 → 改参数为 lisi」
+     * 中，第 2 步后激活指针指向 zhangsan 预设，第 3 步的编辑经本例 500ms 防抖直接**就地覆写该预设**
+     * （schemes["zhangsan"][key] 变成 lisi），于是「切回 zhangsan 预设仍显示 lisi」。
+     * 现语义：**命名预设＝快照**，只经「另存为/管理预设」显式写入；参数编辑只更新工作区（默认桶），
+     * 切预设时按目标预设快照召回。防串桶目标（异步写回不落到别的桶）由「恒默认」天然满足。
+     */
     private fun flushHistoryToCache() {
         val key = historyCacheKey() ?: return
         val snapshot = buildHistorySnapshot()
-        // T-DevAcceptFix2 ①：方案名按**当前键**取（预设已按方法隔离）——取回落值视图会写错桶
-        val scheme = paramHistoryCache.activeSchemeFor(key)
         // headless 单测：同步执行保持既有测试语义
         if (ApplicationManager.getApplication().isUnitTestMode) {
-            paramHistoryCache.saveForScheme(scheme, key, snapshot)
+            paramHistoryCache.saveForScheme(ParamHistoryCache.DEFAULT_SCHEME, key, snapshot)
             return
         }
         ApplicationManager.getApplication().executeOnPooledThread {
-            paramHistoryCache.saveForScheme(scheme, key, snapshot)
+            paramHistoryCache.saveForScheme(ParamHistoryCache.DEFAULT_SCHEME, key, snapshot)
         }
     }
 
