@@ -391,7 +391,12 @@ object HqlQueryLocator {
             val entityArg = args[1]
             if (entityArg is com.intellij.psi.PsiClassObjectAccessExpression) {
                 val psiClass = (entityArg.operand.type as? com.intellij.psi.PsiClassType)?.resolve()
-                return psiClass to (psiClass?.name ?: (entityArg.operand.type as? com.intellij.psi.PsiClassType)?.className)
+                if (psiClass != null && JpaMetadataReader.entityNameOf(psiClass) != null) {
+                    return psiClass to (psiClass.name ?: (entityArg.operand.type as? com.intellij.psi.PsiClassType)?.className)
+                }
+                // T-JpaParamOrder F4：createQuery(hql, X.class) 的第二参是**结果类型**而非查询实体
+                // （JPA 规范 resultClass 语义）——非 JPA 实体（Long/Tuple/DTO 投影）不再按实体解析
+                // （用户实测「表： long」根因），回落下方语句头实体名提取路径解析真表
             }
         }
 

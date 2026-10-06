@@ -152,6 +152,45 @@ class JpaChainParamBackfillTest : BasePlatformTestCase() {
         assertTrue("status 应取 status 的值 'E'", executable.contains("l.status = 'E'"))
     }
 
+    /**
+     * F4 先红锚：createQuery(hql, X.class) 的第二参是结果类型而非实体——用户截图场景
+     * `createQuery(hql, Long.class)` 面板「表：」误显 long；应回落 HQL 实体名解析出真表。
+     */
+    fun testResultTypeClass_notTreatedAsEntity() {
+        myFixture.configureByText(
+            "WmsLocationDao.java",
+            """
+            public class WmsLocationDao {
+                public java.util.List<Long> occupy(EntityManager em, Long warehouseId) {
+                    java.util.List<Long> ids = em.createQuery(
+                            "select l.id from WmsLocation l where l.warehouseId = :warehouseId", Long.class)
+                        .setParameter("warehouseId", warehouseId)
+                        .getResultList();
+                    return ids;
+                }
+                interface EntityManager { Query createQuery(String ql, Class resultClass); }
+                interface Query {
+                    Query setParameter(String name, Object value);
+                    java.util.List getResultList();
+                }
+                @Entity
+                @Table(name = "wms_location")
+                class WmsLocation {
+                    @Id Long id;
+                    Long warehouseId;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = service.previewHql(findMethodCall("createQuery"))
+        assertNotNull(result)
+        assertEquals(
+            "结果类型 Long.class 不应被当实体解析（F4）",
+            "wms_location",
+            result!!.tableName,
+        )
+    }
+
     /** 非链式分语句写法（PSI 平铺文档序）：现状即正确，修复须保持。 */
     fun testStatementStyle_backfillStaysCorrect() {
         myFixture.configureByText(
