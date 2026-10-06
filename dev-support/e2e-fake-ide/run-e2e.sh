@@ -129,11 +129,16 @@ echo "[4/6] 启动 demo 应用（javaagent 注入）"
   echo "repo_git_head=$(cd "$REPO_ROOT" && git rev-parse HEAD)"
 } > "$META"
 
+# T-ReleasePerf7 R0（20261007）：钉死 mysql profile——demo target/classes 的 application.yml
+# 是 mvn 资源过滤产物（@profiles.active@），demo 工程被其他轮以 -Dprofiles.active=dm 重编后
+# e2e 静默吃到 dm（达梦驱动被织入改写 VerifyError，应用起不来）。命令行 arg 优先级最高，
+# 不受 demo 构建态污染；README 前置本就写明 MySQL mpj_demo。
 MSYS2_ARG_CONV_EXCL='*' java \
   "-javaagent:$(winpath "$AGENT_JAR")=port=$PROBE_PORT;logLevel=$LOGLEVEL" \
   -Dfile.encoding=UTF-8 \
   -cp "$APP_CP" \
   cn.song.mpjdemo.MybatisPlusJoinDemoApplication \
+  --spring.profiles.active=mysql \
   > "$APP_LOG" 2>&1 &
 APP_PID=$!
 echo "      应用已启动（pid=$APP_PID），日志：$APP_LOG"
