@@ -32,7 +32,11 @@ class CaptureDiagnosticsTest {
         enhanced: String? = null,
         dropped: Long = 0L,
         shortCircuited: Long = 0L,
-    ) = CaptureDiagnostics(capturing, waiting, entries, consoles, lines, enhanced, dropped, shortCircuited)
+        suppressed: Long = 0L,
+    ) = CaptureDiagnostics(
+        capturing, waiting, entries, consoles, lines, enhanced, dropped, shortCircuited,
+        agentEventsReceived = 0L, suppressed = suppressed,
+    )
 
     @Test
     fun test未捕捉或无诊断必要时返回null() {
@@ -106,10 +110,24 @@ class CaptureDiagnosticsTest {
         val onlyDropped = captureDiagnosticsText(diag(lines = 5L, dropped = 2L))!!
         assertTrue("仅丢弃非零：应显示丢弃：$onlyDropped", onlyDropped.contains("重放守卫已丢弃 2 行"))
         assertTrue("仅丢弃非零：不得出现 EP 计数：$onlyDropped", !onlyDropped.contains("EP 通道"))
+        assertTrue("仅丢弃非零：不得出现屏蔽计数：$onlyDropped", !onlyDropped.contains("屏蔽规则命中"))
 
         val onlyShort = captureDiagnosticsText(diag(lines = 5L, shortCircuited = 3L))!!
         assertTrue("仅短路非零：应显示短路：$onlyShort", onlyShort.contains("EP 通道已短路 3 行"))
         assertTrue("仅短路非零：不得出现丢弃计数：$onlyShort", !onlyShort.contains("重放守卫"))
+    }
+
+    /**
+     * T-DevAcceptFix2 ⑩（20261006 第三轮走查）：屏蔽规则命中必须可见——用户现场「已挂载、
+     * 已收事件 8 条、列表 0 条」无任何提示，事后才查明是自建**结构匹配**规则按设计拦下；
+     * 计数与重放/EP 同口径（> 0 才显示，零值不添噪）。
+     */
+    @Test
+    fun test屏蔽规则命中计数可见且零值不显示() {
+        val text = captureDiagnosticsText(diag(lines = 30L, suppressed = 8L))!!
+        assertTrue("屏蔽命中非零应显示：$text", text.contains("屏蔽规则命中 8 条"))
+        val zero = captureDiagnosticsText(diag(lines = 30L))!!
+        assertTrue("零命中不得出现屏蔽计数：$zero", !zero.contains("屏蔽规则命中"))
     }
 
     @Test

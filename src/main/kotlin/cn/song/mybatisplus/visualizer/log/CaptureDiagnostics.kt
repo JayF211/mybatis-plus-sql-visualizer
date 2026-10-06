@@ -41,6 +41,14 @@ internal data class CaptureDiagnostics(
      * N>0 说明到了但被去重/屏蔽/展示链吃掉（要查消费侧）。口径 = 收到即计数（含后续被丢弃的）。
      */
     val agentEventsReceived: Long = 0L,
+    /**
+     * T-DevAcceptFix2 ⑩（20261006 第三轮走查）：**屏蔽规则命中次数**（应用级累计，规则面板同源计数）。
+     *
+     * 立项动因＝用户现场「增强捕获已挂载、已收事件 8 条、列表 0 条」却无任何提示——事后查明是用户
+     * 自建的**结构匹配**屏蔽规则按设计拦下了那些 SQL（入队前丢弃，设计内行为），可面板一个字没说，
+     * 只能靠翻配置文件才判得出来。与重放/EP 两个计数同口径：**> 0 才显示**（零值不添噪）。
+     */
+    val suppressed: Long = 0L,
 )
 
 /**
@@ -61,6 +69,8 @@ internal fun captureDiagnosticsText(d: CaptureDiagnostics): String? {
     val dropped = buildList {
         if (d.replayDropped > 0L) add(MpSqlVisualizerBundle.message("log.diag.replayDropped", d.replayDropped))
         if (d.epShortCircuited > 0L) add(MpSqlVisualizerBundle.message("log.diag.epShortCircuit", d.epShortCircuited))
+        // T-DevAcceptFix2 ⑩：屏蔽规则命中——用户自建规则的拦截是设计内行为，但必须可见
+        if (d.suppressed > 0L) add(MpSqlVisualizerBundle.message("log.diag.suppressed", d.suppressed))
     }
     // T-AgentDiagWrap T-04：语义行按「读的人下一步要干什么」切——
     // 第一行「在捕捉吗 + 增强通道通不通」，第二行「控制台通道通不通 + 行被谁吃了」，

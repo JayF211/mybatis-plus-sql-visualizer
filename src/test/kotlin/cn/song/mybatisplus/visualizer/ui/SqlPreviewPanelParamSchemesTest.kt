@@ -227,6 +227,28 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
     }
 
     /**
+     * T-DevAcceptFix2 ⑧（20261006 第三轮走查，用户反馈「清除按钮失效」）：
+     * XML 预览下「清除」须真正清空参数输入——旧实现只遍历 `previewModel.conditionViews`，
+     * 而 XML 的条件在 `xmlModel`、其 `#{}` 参数落在「参数/foreach」分区 ⇒ 旧代码点按钮毫无反应
+     * （本用例在旧实现下必红：foreach 权威值字段不会被清）。
+     */
+    fun testDevAcceptFix2_XML预览清除按钮清空参数输入() {
+        val p = openPanel()
+        assertNotNull("清除按钮应存在", p.clearButtonForTest())
+        p.setForEachValuesForTest("statusList", listOf("1", "2"))
+        p.applyXmlForEachValuesForTest("statusList", "1,2")
+        assertEquals("前置：foreach 权威值字段已填", "1,2", p.forEachValueFieldTextForTest("statusList"))
+
+        p.clearButtonForTest()!!.doClick()
+
+        assertEquals("清除后 foreach 权威值字段应清空", "", p.forEachValueFieldTextForTest("statusList"))
+        assertTrue(
+            "清除后 foreach 权威 map 应清空（不再展开条目）",
+            p.forEachValuesForTest()["statusList"].isNullOrEmpty(),
+        )
+    }
+
+    /**
      * T-DevAcceptFix2 ⑦（20261006 第三轮走查，用户实测复现的形态）：
      * 「输入 zhangsan → 另存『zhangsan』 → 改参数为 lisi → 另存『lisi』 → 切回『zhangsan』」
      * 应还原 zhangsan 自身的快照。

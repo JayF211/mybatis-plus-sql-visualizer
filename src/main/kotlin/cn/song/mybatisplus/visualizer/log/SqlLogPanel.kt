@@ -1342,6 +1342,12 @@ class SqlLogPanel(
                     epShortCircuited = manager.consoleBridge.epActiveShortCircuitCount.get(),
                     // T-DevAcceptFix2 ⑤：增强通道已收事件数（恒显示）——「事件到没到」的唯一判别量
                     agentEventsReceived = cn.song.mybatisplus.visualizer.log.agent.AgentEventAdapter.receivedEvents(),
+                    // T-DevAcceptFix2 ⑩：屏蔽规则命中次数（应用级累计，与规则面板同源计数）——
+                    // 「事件到了却 0 条」时最容易被忽略的一条吃行通道（用户自建规则，设计内但必须可见）
+                    suppressed = runCatching {
+                        val mgr = SqlSuppressRuleManager.getInstance()
+                        mgr.rules.sumOf { it.id.let { id -> mgr.hitCount(id) } }.toLong()
+                    }.getOrDefault(0L),
                 ),
             )
         } else {

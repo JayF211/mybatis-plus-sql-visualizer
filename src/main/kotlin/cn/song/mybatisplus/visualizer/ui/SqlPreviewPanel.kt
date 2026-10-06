@@ -2136,8 +2136,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         rehostListener = null
     }
 
+    /**
+     * 面板按钮字体（T-DevAcceptFix2 ⑨）：整数磅值派生的 UI 字体。**勿改回非整数**（旧 `10.5f`
+     * 经 Java2D 非整数度量路径渲染，字形发糊——用户对照工具栏按钮实测）；工具栏与小按钮同源取值。
+     */
+    private fun buttonFont() = font.deriveFont(11f)
+
     private fun smallButton(text: String, action: () -> Unit): JButton = JButton(text).apply {
-        font = font.deriveFont(11f)
+        font = buttonFont()
         addActionListener { action() }
     }
 
@@ -4051,9 +4057,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         )
     }
 
-    /** 左栏分区内的紧凑按钮（比工具栏按钮更小，避免挤压复选框行）。 */
+    /** 左栏分区内的紧凑按钮（比工具栏按钮更小，避免挤压复选框行）。
+     *  T-DevAcceptFix2 ⑨（20261006 第三轮走查，用户对照工具栏按钮反馈「文字有些糊」）：
+     *  字体改由 [buttonFont] 统一取——原 `deriveFont(10.5f)` 是**非整数磅值**，Java2D 走非整数
+     *  度量/次像素 hinting 路径，字形边缘发虚；工具栏按钮（11f）则清晰。现与工具栏同源同值。 */
     private fun compactButton(text: String, action: () -> Unit): JButton = JButton(text).apply {
-        font = font.deriveFont(10.5f)
+        font = buttonFont()
         margin = JBUI.insets(0, 6, 0, 6)
         addActionListener { action() }
     }
@@ -4139,13 +4148,25 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** 清除按钮：清空动态条件分区所有参数值（不影响勾选态）。 */
     private fun clearConditionValues() {
-        val views = current?.previewModel?.conditionViews.orEmpty()
-        views.forEach { view ->
-            view.valueSources.ifEmpty { listOfNotNull(view.valueSource) }.forEach { source ->
-                paramValues[source] = ""
-                syncParamFieldText(source, "")
-            }
+        // T-DevAcceptFix2 ⑧（20261006 第三轮走查，用户反馈「清除按钮失效」）：原实现只清
+        // `previewModel.conditionViews` 的条件值字段——XML 预览**没有条件值字段**（XML 条件行只有
+        // 复选框），其 `#{}` 参数落在「参数 / foreach」分区 ⇒ 在 XML/注解预览下这条路径
+        // **无可清对象**（点按钮毫无反应）。现按「清空本预览全部参数输入」语义覆盖：
+        // 模型预览的条件值来源 + 普通参数 + foreach 权威值。
+        // 边界：批量列由批量分区自己的清除负责；勾选态不在此动（那是「全不选」的职责）；
+        // `__frch_` 展开项随 foreach 权威值一并清（与参数行构建的过滤口径一致）。
+        val conditionSources = current?.previewModel?.conditionViews.orEmpty()
+            .flatMap { view -> view.valueSources.ifEmpty { listOfNotNull(view.valueSource) } }
+        val ordinarySources = current?.unresolvedParams.orEmpty()
+            .distinct()
+            .filter { !it.startsWith("__frch_") }
+        (conditionSources + ordinarySources).forEach { source ->
+            paramValues[source] = ""
+            syncParamFieldText(source, "")
         }
+        // foreach 权威值（可见字段文本）；监听链同步权威 map，权威 map 再显式清一遍兜底
+        xmlForEachValueFields.forEach { it.second.text = "" }
+        xmlForEachValues.clear()
         renderSql()
         saveToHistory()
     }
