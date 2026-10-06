@@ -2399,7 +2399,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 // 旧文本路径（无可勾选动态条件，如批量操作）
                 val base = if (compactMode) result.compactSql else result.sql
                 // JDBC 命名参数按名回填（先），再对残留 `?` 按序回填
-                showSql(backfillParamsBySource(applyNamedParams(base), result.unresolvedParams, result.paramHints))
+                // T-JpaParamOrder F3：JPA 占位符名序非空时按名回填（同名占位复用同值，
+                // 与 setParameter 书写顺序解耦）；hints 在服务端已与该 sources 序平行
+                val sources = result.placeholderParamNames.ifEmpty { result.unresolvedParams }
+                showSql(backfillParamsBySource(applyNamedParams(base), sources, result.paramHints))
             }
         }
         // T-SelToggle：勾选态一切变更均以 renderSql 收尾——切换按钮文案在此单点同步
@@ -4664,6 +4667,15 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** O-4：当前预览的未解析参数来源列表（与 SQL 中 `?` 按出现顺序对应）。 */
     fun unresolvedParams(): List<String> = current?.unresolvedParams ?: emptyList()
+
+    /**
+     * T-JpaParamOrder F3：复制可执行 SQL 的回填 sources——JPA 占位符名序非空时优先
+     * （按名回填口径），否则回落 [unresolvedParams]，与面板渲染（renderSql else 分支）同口径。
+     */
+    fun backfillSources(): List<String> {
+        val cur = current ?: return emptyList()
+        return cur.placeholderParamNames.ifEmpty { cur.unresolvedParams }
+    }
 
     /** O-4：当前参数值快照（source → 用户输入值）。 */
     fun paramValuesSnapshot(): Map<String, String> = paramValues.toMap()

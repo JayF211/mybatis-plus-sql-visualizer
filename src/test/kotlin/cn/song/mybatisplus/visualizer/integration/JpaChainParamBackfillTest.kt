@@ -102,6 +102,56 @@ class JpaChainParamBackfillTest : BasePlatformTestCase() {
         )
     }
 
+    /**
+     * F3 先红锚：setParameter 书写顺序与 HQL `:name` 出现序不同。
+     * F1 后收集序=书写序=[status, warehouseId]，HQL 占位序=[warehouseId, status]——
+     * 位置配对把 warehouse_id 配到 status 的值（错位红）；F3 按名回填后与书写顺序解耦（绿）。
+     */
+    fun testOutOfOrderSetParameter_valuesStillLandRight() {
+        myFixture.configureByText(
+            "WmsLocationDao.java",
+            """
+            public class WmsLocationDao {
+                public java.util.List<Long> occupy(EntityManager em, Long warehouseId) {
+                    java.util.List<Long> ids = em.createQuery(
+                            "select l.id from WmsLocation l where l.warehouseId = :warehouseId and l.status = :status")
+                        .setParameter("status", "E")
+                        .setParameter("warehouseId", warehouseId)
+                        .getResultList();
+                    return ids;
+                }
+                interface EntityManager { Query createQuery(String ql); }
+                interface Query {
+                    Query setParameter(String name, Object value);
+                    java.util.List getResultList();
+                }
+                @Entity
+                @Table(name = "wms_location")
+                class WmsLocation {
+                    @Id Long id;
+                    Long warehouseId;
+                    String status;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = service.previewHql(findMethodCall("createQuery"))
+        assertNotNull(result)
+        assertEquals(
+            "HQL 占位符名序应透出且与书写顺序解耦（F3）",
+            listOf("warehouseId", "status"),
+            result!!.placeholderParamNames,
+        )
+        val values = mapOf("warehouseId" to "1", "status" to "E")
+        val sources = (result!!.placeholderParamNames.ifEmpty { result.unresolvedParams })
+        val executable = ParameterReplacer.buildExecutableSql(result.sql, sources, values, result.paramHints)
+        assertTrue(
+            "乱序 set 下 warehouse_id 仍应取 warehouseId 的值（实际渲染：${executable.lines().firstOrNull { it.contains("warehouse_id") }}）",
+            executable.contains("warehouse_id = 1"),
+        )
+        assertTrue("status 应取 status 的值 'E'", executable.contains("l.status = 'E'"))
+    }
+
     /** 非链式分语句写法（PSI 平铺文档序）：现状即正确，修复须保持。 */
     fun testStatementStyle_backfillStaysCorrect() {
         myFixture.configureByText(
