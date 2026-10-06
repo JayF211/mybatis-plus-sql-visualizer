@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.placeholderPositions
@@ -152,7 +153,19 @@ private fun LogSqlEntry.toPreviewResultInternal(
     }
     // 字面量恢复只接「零占位符」分支（裸 SQL / ${} / 上游日志已内联值）；数量不匹配
     // （残留 `?`）维持现状警告，不做两套占位符的混合恢复
-    if (literalRecovery && countPlaceholders(rawSql) == 0) {
+    //
+    // T-DdlLogPreview S1（20261006 第三轮走查，用户实测 DDL 误伤）：**语句类型门禁**——
+    // 字面量恢复的前提是「这些字面量是有值可编辑的参数」，只对 QUERY/DML 成立。DDL
+    // （CREATE/ALTER/DROP/TRUNCATE）的字符串是**注释/默认值**：`CREATE TABLE t (id BIGINT
+    // COMMENT '主键', …)` 曾被恢复出 param1..paramN（值＝注释文本），更严重的是恢复命中时
+    // `sql/compactSql` 用**占位符化后的文本**（`COMMENT ?`）——该 SQL 语法不合法，预览看着
+    // 怪、执行必报错，用户改参数行等于在改注释。UNKNOWN（判不出类型）同样不猜，fail-closed。
+    // 分类器复用 execute/SqlTypeClassifier（QUERY/DML/DDL/UNKNOWN），不自写关键字表。
+    val statementType = runCatching { SqlTypeClassifier.classify(rawSql) }
+        .getOrDefault(SqlTypeClassifier.SqlType.UNKNOWN)
+    val literalRecoverable = statementType == SqlTypeClassifier.SqlType.QUERY ||
+        statementType == SqlTypeClassifier.SqlType.DML
+    if (literalRecovery && literalRecoverable && countPlaceholders(rawSql) == 0) {
         recoverLiteralParams(rawSql)?.let { recovery ->
             if (verifyLiteralRoundTrip(rawSql, recovery)) {
                 return PreviewResult(

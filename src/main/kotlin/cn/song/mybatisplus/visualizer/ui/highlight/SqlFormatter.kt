@@ -25,6 +25,22 @@ object SqlFormatter {
         "LEFT", "RIGHT", "INNER", "FULL", "CROSS",
     )
 
+    /**
+     * DDL 首关键字（T-DdlLogPreview S2，20261006 第三轮走查）。
+     *
+     * 立项动因：`NEW_LINE_KEYWORDS` 只覆盖 DML 子句，DDL（CREATE/ALTER/DROP/TRUNCATE）**一个换行点
+     * 都没有** ⇒ 用户点「格式化」看不到任何变化（实测 `CREATE TABLE …` 仍单行）。现按首关键字分派：
+     * DDL 走下面两条规则（定义列表「`(` 换行缩进 4 + 顶层逗号逐列换行 + 闭括号对齐起始行」，
+     * ALTER 的顶层逗号亦换行）——**DML 路径与既有语料输出逐字节不变**（规则全部由本集合门控）。
+     */
+    private val DDL_LEAD_KEYWORDS = setOf("CREATE", "ALTER", "DROP", "TRUNCATE", "RENAME")
+
+    /** DDL 定义列表缩进（`(` 后与列定义逐行缩进量）。 */
+    private const val DDL_LIST_INDENT = 4
+
+    /** DDL 域内 `(` 前**保留空格**的关键字（惯例形态；其余关键字/标识符后的括号贴紧＝类型尺寸）。 */
+    private val DDL_PAREN_SPACED_KEYWORDS = setOf("KEY", "REFERENCES", "CHECK", "IN", "EXISTS", "USING", "VALUES")
+
     /** 紧跟 JOIN 的修饰关键字（`LEFT JOIN` 保持同行）。 */
     private val JOIN_QUALIFIERS = setOf("LEFT", "RIGHT", "INNER", "FULL", "CROSS")
 
@@ -46,6 +62,8 @@ object SqlFormatter {
         var pendingSpace = false
         var atLineStart = true
         var prevText = ""
+        // T-DdlLogPreview S2：DDL 域内判定「类型尺寸括号」（`VARCHAR(64)` 贴紧标识符）需前一 token 类型
+        var prevType: IElementType? = null
         // T-M27.4 缩进模型：lineIndent = 当前行缩进；parenIndents = 括号起始行缩进栈
         // （子查询内容缩进 = 起始行 + 4；闭括号对齐起始行）；parenNewlined = 括号内已换行
         var lineIndent = 0
@@ -71,6 +89,13 @@ object SqlFormatter {
 
         /** 子查询内新行缩进（起始行 + 4；顶层 0）。 */
         fun subIndent(): Int = if (depth > 0) parenIndents.last() + 4 else 0
+
+        // T-DdlLogPreview S2：DDL 分派（首关键字判定；注释/空白已由 lex 剔除）
+        val ddlLead = tokens.firstOrNull { it.first != SqlTokenTypes.COMMENT }
+            ?.takeIf { it.first == SqlTokenTypes.KEYWORD }
+            ?.second?.uppercase()
+            ?.takeIf { it in DDL_LEAD_KEYWORDS }
+        val ddlStatement = ddlLead != null
 
         for ((type, text) in tokens) {
             val upper = text.uppercase()
@@ -124,17 +149,37 @@ object SqlFormatter {
 
                 // 左括号：运算符关键字后留空格（IN (）、函数名后不留（COUNT(）；记录起始行缩进
                 type == SqlTokenTypes.PAREN && text == "(" -> {
-                    if (prevText.uppercase() !in FUNCTION_NAMES) flushSpace()
+                    // T-DdlLogPreview S2：DDL 定义列表内的**类型尺寸括号**贴紧左侧 token
+                    // （`VARCHAR(64)`/`DECIMAL(10,2)` 不得被插空格——注意类型名多为 KEYWORD token；
+                    // 而 `PRIMARY KEY (`id`)`／`CHECK (…)`／`REFERENCES` 按惯例留空格）
+                    val ddlTightParen = ddlStatement && depth >= 1 && (
+                        prevType == SqlTokenTypes.IDENTIFIER ||
+                            (prevType == SqlTokenTypes.KEYWORD &&
+                                prevText.uppercase() !in DDL_PAREN_SPACED_KEYWORDS)
+                        )
+                    if (!ddlTightParen && prevText.uppercase() !in FUNCTION_NAMES) flushSpace()
                     sb.append('(')
                     depth++
                     parenIndents.addLast(lineIndent)
                     parenNewlined = false
                     pendingSpace = false
                     atLineStart = false
+                    // T-DdlLogPreview S2：DDL 定义列表开括号 → 换行缩进（列定义逐行；
+                    // parenNewlined 由 newline 置位 ⇒ 闭括号按既有机制对齐起始行）
+                    if (ddlStatement && depth == 1) {
+                        newline(DDL_LIST_INDENT)
+                    }
                 }
                 // 右括号：子查询闭括号（括号内已换行）→ 换行对齐起始行；否则同行
                 type == SqlTokenTypes.PAREN && text == ")" -> {
-                    if (parenNewlined && depth > 0) newline(parenIndents.last())
+                    // T-DdlLogPreview S2：DDL 定义列表的**外层闭括号恒独立成行**——列表内嵌套括号
+                    // （`PRIMARY KEY (`id`)`）会把 parenNewlined 复位，靠既有判据会让 `)` 与表尾选项
+                    // 粘在最后一条列定义行尾（实测形态），故 DDL 域内按 depth==1 显式断行
+                    if (depth == 1 && ddlStatement && !atLineStart) {
+                        newline(parenIndents.last())
+                    } else if (parenNewlined && depth > 0) {
+                        newline(parenIndents.last())
+                    }
                     sb.append(')')
                     depth--
                     if (parenIndents.isNotEmpty()) parenIndents.removeLast()
@@ -149,7 +194,13 @@ object SqlFormatter {
                 type == SqlTokenTypes.OPERATOR && text == "," -> {
                     if (sb.isNotEmpty() && sb.last() == ' ') sb.deleteCharAt(sb.length - 1)
                     sb.append(',')
-                    if (depth == 0 && (currentClause == "SELECT" || currentClause == "SET") && !atLineStart) {
+                    if (ddlStatement && !atLineStart &&
+                        (depth == 1 || (depth == 0 && ddlLead == "ALTER"))
+                    ) {
+                        // T-DdlLogPreview S2：DDL 定义列表（depth 1）逐列换行；ALTER 顶层动作（depth 0）
+                        // 同样逐条换行——嵌套小括号（VARCHAR(64)/PRIMARY KEY (`id`)）不受影响
+                        newline(DDL_LIST_INDENT)
+                    } else if (depth == 0 && (currentClause == "SELECT" || currentClause == "SET") && !atLineStart) {
                         newline(4)
                     } else {
                         pendingSpace = true
@@ -190,6 +241,7 @@ object SqlFormatter {
                 }
             }
             prevText = text
+            prevType = type
         }
         return sb.toString().trim()
     }
@@ -215,6 +267,8 @@ object SqlFormatter {
         var pendingSpace = false
         var atLineStart = true
         var prevText = ""
+        // T-DdlLogPreview S2：DDL 域内判定「类型尺寸括号」（`VARCHAR(64)` 贴紧标识符）需前一 token 类型
+        var prevType: IElementType? = null
         var currentClause = ""
         var depth = 0  // 括号嵌套深度（括号内不换行 — 子查询同行）
         // SELECT/SET 列清单中刚经过逗号 → 下一个标识符前不空格（逗号紧贴列名）

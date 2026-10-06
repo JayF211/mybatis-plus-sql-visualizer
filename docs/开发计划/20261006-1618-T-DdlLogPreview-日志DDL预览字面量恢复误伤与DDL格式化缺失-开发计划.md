@@ -97,6 +97,13 @@ CREATE TABLE `biz_project_plan` ( `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '�
 - `INSERT … VALUES ('字符串')` 的字面量恢复取舍（V101 登记，另议）。
 - 参数预设 / 增强捕获 / 徽章文案等本轮已收口项不动。
 
-## 七、实施记录（回填占位）
+## 七、实施记录（2026-10-06 当轮，主控直做；用户令「格式化零变化给轻提示——按你的推荐实施」）
 
-（实施开始后回填本工作树副本；主仓副本只读。）
+- **S1 字面量恢复加语句类型门禁**：`LogEntryPreviewRecognizer.toPreviewResultInternal` 恢复分支前加 `SqlTypeClassifier.classify(rawSql)` 判定，白名单 `QUERY`/`DML`（`DDL`/`UNKNOWN` fail-closed 不恢复）。
+  **红读数**：门禁放开 → 新增用例 `DDL 不产字面量参数且预览 SQL 保留原文` 必红——`AssertionError: DDL 不得产生参数行（列注释不是参数）：[param1, param2]`（即用户现场形态）；收口后绿。对照用例 `DML 字面量恢复行为不变` 钉住白名单只拦 DDL/UNKNOWN。
+- **S2 格式化器 DDL 分派**：`SqlFormatter` 新增 `DDL_LEAD_KEYWORDS`（CREATE/ALTER/DROP/TRUNCATE/RENAME）门控——定义列表 `(` 后换行缩进 4、顶层逗号逐列换行、外层 `)` 恒独立成行且表尾选项随行、类型尺寸括号贴紧、`ALTER` 顶层动作逐行；新增 `DDL_PAREN_SPACED_KEYWORDS`（KEY/REFERENCES/CHECK/IN/EXISTS/USING/VALUES）收口「括号前留空格」的惯例形态。
+  实现中实测抓到并收口两个额外形态：①**`VARCHAR` 是 KEYWORD token 而非标识符**（贴括号判据须含关键字分支，实测输出 `VARCHAR (64)` 暴露）；②**列表内嵌套括号会复位 `parenNewlined`** ⇒ 既有判据会把表尾选项粘在最后一条列定义行尾（DDL 域内按 `depth == 1` 显式断行）。
+  **红线守住**：新增 `testDmlUnaffectedByDdlBranch` 逐字断言 DML 排版不变；`SqlFormatterTest`/`SqlFormatterUpdateNewColumnsTest` 全量回归绿。
+- **S3 零变化轻提示（D76=A）**：`SqlPreviewPanel.formatSql()` 记渲染前文本，渲染后一致即发 INFORMATION 轻提示；新键 `panel.format.alreadyFormatted`（中英）——「已是最可读形态，格式化后无变化（单行语句或本就没有换行点的语句）」；与既有轻提示同规格（`NOTIFICATION_GROUP_ID` + 非模态），单测环境静默。
+- **定向读数**：`SqlFormatterTest` / `SqlFormatterUpdateNewColumnsTest` / `LogEntryPreviewRecognizerTest` / `LiteralParamRecoveryTest` / `InLiteralRecoveryRegressionTest` / `BundleParityGuardTest` 合 **119 例 BUILD SUCCESSFUL**（首轮两例红为断言口径与既有形态不符，已按实测订正：`if` 属 FUNCTION_NAMES 不小写；外层 `)` 断行）。
+- **待验证前提落地**：V99 已核（`literalParamRecovery`/`formatSql` 默认均 true）；V100 随 S1 消除（DDL 不再产占位符 SQL）；V101 按白名单口径收口（`INSERT … VALUES ('x')` 维持既有恢复，未改）；V102 由红绿对照证（分类器对两条 DDL 判 `DDL`）；**V98（预览标识符引号观感）仍待真机核对**——落盘原文为反引号，实施未触碰引号链路。

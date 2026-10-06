@@ -206,6 +206,40 @@ class LogEntryPreviewRecognizerTest {
     }
 
     // ------------------------------------------------------------------
+    // T-DdlLogPreview S1（20261006 第三轮走查）：DDL 字面量恢复门禁
+    // ------------------------------------------------------------------
+
+    /**
+     * DDL 的字符串是**列注释/默认值**，不是可编辑参数——门禁后不得产生参数行，且预览 SQL 必须
+     * 保留原文（占位符化会让 DDL 语法不合法：用户实测 `CREATE TABLE … COMMENT '主键'` 曾被恢复出
+     * param1..param10，执行必报错）。反向验证：摘掉 `LogEntryPreviewRecognizer` 的语句类型门禁即红。
+     */
+    @Test
+    fun `DDL 不产字面量参数且预览 SQL 保留原文`() {
+        val ddl = entry(
+            rawSql = "CREATE TABLE `biz_project_plan` ( `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键', " +
+                "`plan_id` VARCHAR(64) NOT NULL COMMENT '计划编号' ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            params = emptyList(),
+        ).toPreviewResult(formatSql = false, literalRecovery = true)
+        assertTrue("DDL 不得产生参数行（列注释不是参数）：${ddl.unresolvedParams}", ddl.unresolvedParams.isEmpty())
+        assertTrue("预览 SQL 必须保留注释原文（可执行性）", ddl.sql.contains("COMMENT '主键'"))
+        assertFalse("预览 SQL 不得被占位符化（COMMENT ? 语法不合法）", ddl.sql.contains("COMMENT ?"))
+
+        val drop = entry(rawSql = "DROP TABLE IF EXISTS `biz_project_member`", params = emptyList())
+            .toPreviewResult(formatSql = false, literalRecovery = true)
+        assertTrue("DROP 同样不产参数行", drop.unresolvedParams.isEmpty())
+    }
+
+    /** 对照：DML/QUERY 的字面量恢复**行为不变**（门禁只拦 DDL/UNKNOWN）。 */
+    @Test
+    fun `DML 字面量恢复行为不变`() {
+        val select = entry(rawSql = "SELECT * FROM t WHERE name = 'abc'", params = emptyList())
+            .toPreviewResult(formatSql = false, literalRecovery = true)
+        assertEquals("查询的字面量仍恢复为参数", listOf("param1"), select.unresolvedParams)
+        assertEquals(mapOf("param1" to "abc"), select.initialParamValues)
+    }
+
+    // ------------------------------------------------------------------
     // T-ListParamCollect：命名参数条目的集合值预填
     // ------------------------------------------------------------------
 

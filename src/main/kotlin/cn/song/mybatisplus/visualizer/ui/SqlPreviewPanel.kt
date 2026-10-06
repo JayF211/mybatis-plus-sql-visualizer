@@ -2807,7 +2807,32 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 变更后保持）；不再需要直接改文档，故改走状态路径。
      */
     fun formatSql() {
+        val before = lastRenderedSql
         setDisplayMode(PreviewDisplayMode.FORMAT)
+        notifyIfFormatUnchanged(before)
+    }
+
+    /**
+     * T-DdlLogPreview S3（20261006 第三轮走查，D76 用户裁决「可以给」）：格式化后文本**零变化**时
+     * 给一条轻提示。
+     *
+     * 立项动因：`DROP TABLE IF EXISTS x ;` 这类**本就单行**（无换行点）的语句点「格式化」看不到任何
+     * 变化，用户读成「格式化坏了」——实测即由此报障。判据 = 渲染文本前后一致（[lastRenderedSql]
+     * 是渲染管线唯一产物，含格式化结果）；同文本往返说明「已是最可读形态」，明确告知即可。
+     * 与既有轻提示同规格：[NOTIFICATION_GROUP_ID] + INFORMATION，非模态；单测环境静默（不产生通知）。
+     */
+    private fun notifyIfFormatUnchanged(before: String?) {
+        val after = lastRenderedSql
+        if (before == null || after == null || before != after) return
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("panel.format"),
+                MpSqlVisualizerBundle.message("panel.format.alreadyFormatted"),
+                NotificationType.INFORMATION,
+            ).notify(project)
+        }
     }
 
     /** 关键字换行格式化：子句顶格换行、同行内容压一行（[SqlFormatter.formatClauseLine]）。 */
