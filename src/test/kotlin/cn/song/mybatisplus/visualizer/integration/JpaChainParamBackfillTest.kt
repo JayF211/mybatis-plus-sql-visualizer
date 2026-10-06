@@ -77,6 +77,8 @@ class JpaChainParamBackfillTest : BasePlatformTestCase() {
             listOf("warehouseId", "locationStatus", "zoneCode", "emptyFullDegree", "positionType"),
             result!!.unresolvedParams,
         )
+        // F5 数据面：写重参数名透传面板（UI 灰字提示行随 V83 真机走查复验）
+        assertEquals(setOf("locationStatus"), result.duplicateParamNames)
 
         // 模拟面板播种（同名共享一个值槽位）+ 同源机制回填
         val values = mapOf(

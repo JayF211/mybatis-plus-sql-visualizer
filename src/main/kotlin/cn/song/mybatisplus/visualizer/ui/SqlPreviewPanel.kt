@@ -3390,6 +3390,21 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             if (views.isNotEmpty()) paramPanel.add(sectionHeaderRow(MpSqlVisualizerBundle.message("panel.param.section")))
             ordinarySources.forEach { paramPanel.add(buildParamRow(it, labelWidth)) }
         }
+        // T-JpaParamOrder F5：同名参数多次 setParameter 轻提示（JPA 覆盖语义，运行时以最后一次
+        // 为准）——帮用户发现自身代码的写重；灰字注记行，不发通知、不弹窗
+        if (result.duplicateParamNames.isNotEmpty()) {
+            paramPanel.add(
+                JBLabel(
+                    MpSqlVisualizerBundle.message(
+                        "panel.param.duplicate.note",
+                        result.duplicateParamNames.sorted().joinToString(", "),
+                    ),
+                ).apply {
+                    foreground = JBColor.GRAY
+                    border = JBUI.Borders.empty(0, 8, 2, 8)
+                },
+            )
+        }
         paramPanel.revalidate()
         paramPanel.repaint()
     }
