@@ -143,6 +143,10 @@
   .tagline { font-size: 17px; font-weight: 600; color: #1a6fd4; margin: 0 0 10px; }
   body.dark .tagline { color: #79c0ff; }
   .hl li { margin-bottom: 6px; }
+  .demo { display: block; max-width: 100%; margin: 16px auto; border: 1px solid #e8e8e8; border-radius: 8px; }
+  body.dark .demo { border-color: #444; }
+  .demo-caption { color: #666; font-size: 13px; text-align: center; margin: -8px 0 20px; }
+  body.dark .demo-caption { color: #999; }
 </style>
 </head>
 <body>
@@ -169,6 +173,8 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
   <div style="font-size:16px;font-weight:700;">别的插件给你文本，我们给你可执行的 SQL。</div>
   <div style="font-size:13px;color:#555;margin-top:4px;">编码期静态预览（Wrapper / XML / 注解 / JPA / HQL，无需运行代码）+ 运行期日志还原 + EXPLAIN 执行计划对照，达梦 / 人大金仓 / OceanBase / openGauss 等 11 种数据库方言</div>
 </div>
+
+<img class="demo" src="https://sql-visualizer.jvtools.cn/demo/wrapper-preview.gif" alt="Wrapper 链静态预览演示" loading="lazy">
 
 <!-- ========== FEATURE MATRIX ========== -->
 <h2 id="features">Feature Matrix / 功能对照表</h2>
@@ -286,6 +292,8 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
   </tbody>
 </table>
 
+<img class="demo" src="https://sql-visualizer.jvtools.cn/demo/sql-log.gif" alt="SQL 日志捕获与还原演示" loading="lazy">
+
 <h3>反向转换与其他</h3>
 <table>
   <thead>
@@ -326,6 +334,9 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
     </tr>
   </tbody>
 </table>
+
+<img class="demo" src="https://sql-visualizer.jvtools.cn/demo/mcp-agent.gif" alt="AI agent 经 MCP 直接调用插件工具" loading="lazy">
+<p class="demo-caption">AI agent（Codex）经 MCP 直接调用插件工具——调用与结果在 IDE 内留痕</p>
 
 <hr/>
 

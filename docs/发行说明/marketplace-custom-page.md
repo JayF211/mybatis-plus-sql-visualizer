@@ -24,6 +24,8 @@
 
 图例：![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) 近期新增 · ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg) 需要 IDEA Ultimate + Database 插件
 
+![Wrapper 链静态预览演示](https://sql-visualizer.jvtools.cn/demo/wrapper-preview.gif)
+
 ## Feature Matrix / 功能对照表
 
 ### SQL 预览
@@ -55,6 +57,8 @@
 | 历史与源码定位 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 侧边栏「SQL 历史」tab / 双击条目 | 历史自动保存、两级导航；精确跳到触发 SQL 的源码行 |
 | 去重 / 过滤 | 工具栏 | SQL 类型多选筛选；`Ctrl+F` 搜索；去重 `⨉N` 徽章即时显示 |
 
+![SQL 日志捕获与还原演示](https://sql-visualizer.jvtools.cn/demo/sql-log.gif)
+
 ### 反向转换与其他
 
 | 功能 | 说明 |
@@ -67,6 +71,10 @@
 | 一键回滚 SQL ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 预览面板「更多」菜单对 INSERT 推导逆向 DELETE 一键复制；UPDATE / DELETE 走快照查询粘贴回填的人工恢复路径 |
 | 检查更新 | 设置页一键检查更新，热替换即时生效免重启；支持 Gitee 抢先体验通道 |
 | 分享 | 预览弹窗「分享」按钮：Markdown 表格 / 纯 SQL / Java 代码 / 链接 |
+
+![AI agent 经 MCP 直接调用插件工具](https://sql-visualizer.jvtools.cn/demo/mcp-agent.gif)
+
+*AI agent（Codex）经 MCP 直接调用插件工具——调用与结果在 IDE 内留痕*
 
 ## FAQ / 常见问题
 
