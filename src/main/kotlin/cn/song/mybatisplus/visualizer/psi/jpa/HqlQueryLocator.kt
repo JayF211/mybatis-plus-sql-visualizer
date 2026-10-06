@@ -35,6 +35,12 @@ data class HqlQueryInfo(
     val method: PsiMethod,
     val isNativeQuery: Boolean = false,
     val createQueryMethodName: String = "",
+    /**
+     * T-JpaParamOrder F5 数据面：同名命名参数多次 setParameter 的参数名集合
+     * （JPA 覆盖语义，运行时以最后一次为准）。[parameters] 已去重保首现序，
+     * 本集合供面板给「写重」轻提示。空集 = 无重复。
+     */
+    val duplicateParamNames: Set<String> = emptySet(),
 )
 
 /**
@@ -91,6 +97,13 @@ object HqlQueryLocator {
         "setString", "setInteger", "setLong", "setDouble",
         "setFloat", "setBoolean", "setByte", "setShort", "setCharacter",
     )
+
+    /** F2 去重键：位置参数键前缀（与命名参数名隔离，防命名参数恰为纯数字形态时撞键）。 */
+    private const val POSITIONAL_DEDUPE_PREFIX = "\u0000pos:"
+
+    /** F2 去重键：命名参数按名；位置参数按索引（带前缀隔离）。 */
+    private fun HqlParameter.dedupeKey(): String =
+        if (isPositional) POSITIONAL_DEDUPE_PREFIX + paramName else paramName
 
     /**
      * 从光标位置定位 HQL 查询调用链。
@@ -215,9 +228,19 @@ object HqlQueryLocator {
         findAssignedVariable(call)?.let { queryVars += it }
 
         // 第二遍：收集参数设置
-        val parameters = mutableListOf<HqlParameter>()
+        val collected = mutableListOf<HqlParameter>()
         if (queryVars.isNotEmpty()) {
-            val calls = allCalls ?: PsiTreeUtil.collectElementsOfType(method.body, PsiMethodCallExpression::class.java)
+            // T-JpaParamOrder F1：链式写法 `em.createQuery(...).setParameter(a).setParameter(b)`
+            // 的 PSI 是嵌套结构——越靠链尾的调用越在外层，collectElementsOfType 前序遍历先外后内，
+            // 收集序=书写序的逆序（用户实测参数面板行序倒挂的根因，先红读数见
+            // HqlQueryLocatorChainOrderTest）。按参数表偏移升序归位=文档序=书写序；
+            // 非链式分语句写法本就文档序，排序幂等。
+            // 排序键须用 argumentList（各层调用独有部分）：PsiMethodCallExpression.textOffset
+            // 含 receiver 链，链式下所有层级同值（=链起点 em 的偏移），按它排=没排（先红后绿
+            // 中间轮实测：读数仍逆序，前提 B 原假设被证伪后换键）。
+            val calls = (allCalls
+                ?: PsiTreeUtil.collectElementsOfType(method.body, PsiMethodCallExpression::class.java))
+                .sortedBy { it.argumentList.textOffset }
             for (paramCall in calls) {
                 val paramMethodName = paramCall.methodExpression.referenceName ?: continue
                 if (paramMethodName !in SET_PARAM_METHODS) continue
@@ -230,10 +253,19 @@ object HqlQueryLocator {
                     else -> null
                 } ?: continue
                 if (qualifierVar in queryVars) {
-                    extractParameter(paramCall, paramMethodName)?.let { parameters += it }
+                    extractParameter(paramCall, paramMethodName)?.let { collected += it }
                 }
             }
         }
+        // T-JpaParamOrder F2：同名命名参数多次 set 为覆盖语义（值槽位按名共享），去重保首现序
+        // ——不去重会把 unresolvedParams 撑到多于 SQL `?` 数，渲染期位置配对整体错切
+        // （用户截图场景 6 set/5 占位、尾参被丢弃）。位置参数按索引天然唯一，
+        // 去重键加前缀隔离，防命名参数恰为纯数字形态时撞键。
+        val duplicateParamNames = collected.groupBy { it.dedupeKey() }
+            .filterValues { it.size > 1 }
+            .keys.map { it.removePrefix(POSITIONAL_DEDUPE_PREFIX) }
+            .toSet()
+        val parameters = collected.distinctBy { it.dedupeKey() }
 
         val createQueryMethodName = call.methodExpression.referenceName ?: ""
         // T-J12：createSQLQuery（Hibernate3）与 createNativeQuery 同为 native SQL 语义
@@ -249,6 +281,7 @@ object HqlQueryLocator {
             method = method,
             isNativeQuery = isNativeQuery,
             createQueryMethodName = createQueryMethodName,
+            duplicateParamNames = duplicateParamNames,
         )
     }
 
@@ -358,7 +391,12 @@ object HqlQueryLocator {
             val entityArg = args[1]
             if (entityArg is com.intellij.psi.PsiClassObjectAccessExpression) {
                 val psiClass = (entityArg.operand.type as? com.intellij.psi.PsiClassType)?.resolve()
-                return psiClass to (psiClass?.name ?: (entityArg.operand.type as? com.intellij.psi.PsiClassType)?.className)
+                if (psiClass != null && JpaMetadataReader.entityNameOf(psiClass) != null) {
+                    return psiClass to (psiClass.name ?: (entityArg.operand.type as? com.intellij.psi.PsiClassType)?.className)
+                }
+                // T-JpaParamOrder F4：createQuery(hql, X.class) 的第二参是**结果类型**而非查询实体
+                // （JPA 规范 resultClass 语义）——非 JPA 实体（Long/Tuple/DTO 投影）不再按实体解析
+                // （用户实测「表： long」根因），回落下方语句头实体名提取路径解析真表
             }
         }
 
