@@ -74,11 +74,14 @@ object SqlReverseParser {
             throw SqlReverseException(cursor.current?.offset ?: 0, KEY_PARSE, "缺少 FROM 子句")
         }
         cursor.advance()
+        val tableAlias: String?
         val tableName = if (cursor.current?.type == TokenType.SYMBOL && cursor.current?.text == "(") {
+            // FROM 子查询：别名已并入 tableName 文本（parseSubqueryTable 返回含别名的整段），此处无独立别名
+            tableAlias = null
             parseSubqueryTable(cursor).first
         } else {
             val name = parseTableName(cursor)
-            consumeOptionalAlias(cursor)
+            tableAlias = consumeOptionalAlias(cursor)
             name
         }
         val (conditions, orderBy, limit, warnings, joins) = parseTailClauses(cursor, allowJoin = true)
@@ -90,13 +93,14 @@ object SqlReverseParser {
             limit = limit,
             warnings = warnings,
             joins = joins,
+            tableAlias = tableAlias,
         )
     }
 
     /** UPDATE 主体：表 + SET 赋值 + 子句序列（T-M36.7）。 */
     private fun parseUpdateBody(cursor: Cursor): SqlReverseResult {
         val tableName = parseTableName(cursor)
-        consumeOptionalAlias(cursor)
+        val tableAlias = consumeOptionalAlias(cursor)
         if (!cursor.isKeyword(cursor.current, "SET")) {
             throw SqlReverseException(cursor.current?.offset ?: 0, KEY_PARSE, "UPDATE 缺少 SET 子句")
         }
@@ -111,6 +115,7 @@ object SqlReverseParser {
             warnings = warnings,
             kind = ReverseStatementKind.UPDATE,
             sets = sets,
+            tableAlias = tableAlias,
         )
     }
 
@@ -143,7 +148,7 @@ object SqlReverseParser {
         }
         cursor.advance()
         val tableName = parseTableName(cursor)
-        consumeOptionalAlias(cursor)
+        val tableAlias = consumeOptionalAlias(cursor)
         // 联表删除：DELETE 的尾子句放开 JOIN（UPDATE 的 JOIN 保持报错不变）
         val (conditions, orderBy, limit, warnings, joins) = parseTailClauses(cursor, allowJoin = true)
         return SqlReverseResult(
@@ -155,6 +160,7 @@ object SqlReverseParser {
             joins = joins,
             kind = ReverseStatementKind.DELETE,
             deleteTargets = deleteTargets,
+            tableAlias = tableAlias,
         )
     }
 
@@ -632,9 +638,10 @@ object SqlReverseParser {
         return Triple(parseTableName(cursor), consumeJoinAlias(cursor), null)
     }
 
-    /** 可选表别名：`FROM user u`——u 非子句关键字时视为别名消费（T-M36.7：SET/INTO 亦为边界）。 */
-    private fun consumeOptionalAlias(cursor: Cursor) {
-        val t = cursor.current ?: return
+    /** 可选表别名：`FROM user u`——u 非子句关键字时视为别名消费（T-M36.7：SET/INTO 亦为边界）；
+     * 返回别名（无别名返回 null）。T-SqlToJavaPromote M1：返回值供主表别名建模。 */
+    private fun consumeOptionalAlias(cursor: Cursor): String? {
+        val t = cursor.current ?: return null
         if (t.type == TokenType.WORD && !cursor.isKeyword(t, "WHERE") && !cursor.isKeyword(t, "GROUP") &&
             !cursor.isKeyword(t, "ORDER") && !cursor.isKeyword(t, "LIMIT") && !cursor.isKeyword(t, "HAVING") &&
             !cursor.isKeyword(t, "UNION") && !cursor.isKeyword(t, "JOIN") && !cursor.isKeyword(t, "FOR") &&
@@ -645,7 +652,9 @@ object SqlReverseParser {
             !cursor.isKeyword(t, "FULL") && !cursor.isKeyword(t, "CROSS")
         ) {
             cursor.advance()
+            return t.text.trim('`')
         }
+        return null
     }
 
     // ------------------------------------------------------------------
@@ -1297,8 +1306,9 @@ object SqlReverseParser {
     }
 }
 
-/** 解析结果（T-M36.7 起支持增删改查；T-M37 支持多表 JOIN）：语句类型 + 表名 / select 列 / 条件 / 排序 / 分页 /
- * 插入多行值（insertValues 行 × 列）/ 多表删除目标（deleteTargets）。 */
+/** 解析结果（T-M36.7 起支持增删改查；T-M37 支持多表 JOIN；T-SqlToJavaPromote M1 补齐正向对称字段）：
+ * 语句类型 + 表名 / select 列 / 条件 / 排序 / 分页 / 插入多行值（insertValues 行 × 列）/
+ * 多表删除目标（deleteTargets）/ 主表别名（tableAlias）/ distinct / groupBy / having / unions / forUpdate。 */
 data class SqlReverseResult(
     val tableName: String,
     val selectColumns: List<SelectColumn>? = null,
@@ -1314,6 +1324,25 @@ data class SqlReverseResult(
     val joins: List<ReverseJoin> = emptyList(),
     /** DELETE 多表删除目标（别名/表名清单，剥反引号；空 = 单表删除）。 */
     val deleteTargets: List<String> = emptyList(),
+    /** 主表别名（T-SqlToJavaPromote M1：SELECT/UPDATE/DELETE 的 consumeOptionalAlias 产物；无别名 null）。 */
+    val tableAlias: String? = null,
+    /** SELECT DISTINCT（M1 建模空实现，M2 填充解析）。 */
+    val distinct: Boolean = false,
+    /** GROUP BY 列（M1 建模空实现，M2 填充解析）。 */
+    val groupBy: List<ColumnRef> = emptyList(),
+    /** HAVING 条件（M1 建模空实现，M2 填充解析）。 */
+    val having: Condition? = null,
+    /** UNION / UNION ALL 子查询（M1 建模空实现，M2 填充解析）。 */
+    val unions: List<ReverseUnion> = emptyList(),
+    /** FOR UPDATE 尾缀（M1 建模空实现，M2 填充解析）。 */
+    val forUpdate: Boolean = false,
+)
+
+/** UNION / UNION ALL 子查询（T-SqlToJavaPromote M1）：keyword 为 UNION 或 UNION ALL，sql 为子查询原文。
+ * 与正向模型 [cn.song.mybatisplus.visualizer.model.UnionClause] 对称——桥接直转。 */
+data class ReverseUnion(
+    val keyword: String,
+    val sql: String,
 )
 
 /** SELECT 列项（T-M46 保留列别名）：`expr` 列原文（含表别名前缀与反引号），`alias` 可选 AS 别名。 */
