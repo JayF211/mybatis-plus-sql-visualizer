@@ -290,6 +290,82 @@ class JpaChainParamBackfillTest : BasePlatformTestCase() {
         assertTrue("agv_position_type 未填应保持 ?", executable.contains("location.agv_position_type = ?"))
     }
 
+    /**
+     * F6（20261006 用户追问「为什么这些常量没有回显」）：setParameter 静态常量值应自动
+     * 预填参数框——字符串/数字字面量与枚举常量可静态求值，变量引用保持空待填。
+     */
+    fun testStaticLiterals_prefilledIntoParamFields() {
+        myFixture.configureByText(
+            "WmsLocationDao.java",
+            """
+            public class WmsLocationDao {
+                public java.util.List<Long> occupy(EntityManager em, Long warehouseId) {
+                    java.util.List<Long> ids = em.createQuery(
+                            "select l.id from WmsLocation l where l.warehouseId = :warehouseId "
+                                + "and l.status = :locationStatus and l.zoneCode = :zoneCode "
+                                + "and l.fullDegree = :emptyFullDegree "
+                                + "and l.agvPositionType = :positionType")
+                        .setParameter("warehouseId", warehouseId)
+                        .setParameter("locationStatus", "E")
+                        .setParameter("zoneCode", "KQ13")
+                        .setParameter("locationStatus", "E")
+                        .setParameter("emptyFullDegree", 0)
+                        .setParameter("positionType", WmsLocationAGVPositionType.TC)
+                        .getResultList();
+                    return ids;
+                }
+                interface EntityManager { Query createQuery(String ql); }
+                interface Query {
+                    Query setParameter(String name, Object value);
+                    java.util.List getResultList();
+                }
+                enum WmsLocationAGVPositionType { TC }
+                @Entity
+                @Table(name = "wms_location")
+                class WmsLocation {
+                    @Id Long id;
+                    @Column(name = "warehouse_id") Long warehouseId;
+                    @Column(name = "status") String status;
+                    @Column(name = "zone_code") String zoneCode;
+                    @Column(name = "full_degree") Integer fullDegree;
+                    @Column(name = "agv_position_type") String agvPositionType;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = service.previewHql(findMethodCall("createQuery"))
+        assertNotNull(result)
+        assertEquals(
+            "字面量与枚举常量应自动预填（变量 warehouseId 不求值、不入表）",
+            mapOf(
+                "locationStatus" to "E",
+                "zoneCode" to "KQ13",
+                "emptyFullDegree" to "0",
+                "positionType" to "TC",
+            ),
+            result!!.initialParamValues,
+        )
+        // 面板播种口径（SqlPreviewPanel.showResult：initialParamValues 优先）后渲染逐位应出常量值
+        val values = linkMapOf(
+            "warehouseId" to "",
+            "locationStatus" to (result.initialParamValues["locationStatus"] ?: ""),
+            "zoneCode" to (result.initialParamValues["zoneCode"] ?: ""),
+            "emptyFullDegree" to (result.initialParamValues["emptyFullDegree"] ?: ""),
+            "positionType" to (result.initialParamValues["positionType"] ?: ""),
+        )
+        val executable = ParameterReplacer.buildExecutableSql(
+            result.sql, result.placeholderParamNames, values, result.paramHints,
+        )
+        assertTrue("status 应为 'E'（实际全文：$executable）", executable.contains("l.status = 'E'"))
+        assertTrue("zone_code 应为 'KQ13'", executable.contains("l.zone_code = 'KQ13'"))
+        assertTrue("full_degree 应为 '0'", executable.contains("l.full_degree = '0'"))
+        assertTrue("agv_position_type 应为 'TC'", executable.contains("l.agv_position_type = 'TC'"))
+        assertTrue("变量参数 warehouse_id 保持 ?", executable.contains("l.warehouse_id = ?"))
+    }
+
+    private fun linkMapOf(vararg pairs: Pair<String, String>): Map<String, String> =
+        LinkedHashMap<String, String>().apply { pairs.forEach { put(it.first, it.second) } }
+
     /** 非链式分语句写法（PSI 平铺文档序）：现状即正确，修复须保持。 */
     fun testStatementStyle_backfillStaysCorrect() {
         myFixture.configureByText(

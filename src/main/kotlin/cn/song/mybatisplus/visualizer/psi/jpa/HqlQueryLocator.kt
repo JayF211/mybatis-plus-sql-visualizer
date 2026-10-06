@@ -265,7 +265,11 @@ object HqlQueryLocator {
             .filterValues { it.size > 1 }
             .keys.map { it.removePrefix(POSITIONAL_DEDUPE_PREFIX) }
             .toSet()
+        // T-JpaParamOrder F6：同名参数值取末次（运行时覆盖语义）——参数框初值预填与代码事实
+        // 对齐，与 F5 提示「以最后一次为准」同口径（位置参数按键隔离，不受影响）
+        val lastValueByName = collected.associate { it.dedupeKey() to it.valueExpr }
         val parameters = collected.distinctBy { it.dedupeKey() }
+            .map { it.copy(valueExpr = lastValueByName[it.dedupeKey()] ?: it.valueExpr) }
 
         val createQueryMethodName = call.methodExpression.referenceName ?: ""
         // T-J12：createSQLQuery（Hibernate3）与 createNativeQuery 同为 native SQL 语义

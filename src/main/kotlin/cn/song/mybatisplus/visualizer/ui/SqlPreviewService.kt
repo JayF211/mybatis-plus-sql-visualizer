@@ -786,6 +786,52 @@ class SqlPreviewService(private val project: Project) {
     private fun usableNamedPlaceholderSources(sql: String, namedParamNames: List<String>): List<String>? =
         namedParamNames.takeIf { it.isNotEmpty() && it.size == sql.count { ch -> ch == '?' } }
 
+    // T-JpaParamOrder F6：静态值字面量形态（数字含 Java 类型后缀 / 枚举常量引用）
+    private val NUMERIC_LITERAL = Regex("-?\\d+(\\.\\d+)?[LlFfDd]?")
+    private val ENUM_CONSTANT_REF = Regex("[A-Za-z_$][A-Za-z0-9_$.]*\\.[A-Z][A-Z0-9_]*")
+
+    /**
+     * T-JpaParamOrder F6：setParameter 静态值求值——参数框初值自动回显。
+     *
+     * 用户追问「为什么这些常量没有回显」（20261006）：`setParameter("locationStatus", "E")`
+     * 这类字面量/枚举常量可静态求值，此前面板一律留空、渲染全 `?`，与代码事实不符。
+     *
+     * 识别面（保守，宁缺勿错）：
+     *  - 字符串字面量 `"E"` → E（去引号 + 简单反转义）
+     *  - 数字字面量 `0` / `1L` / `0.5f` → 去 Java 类型后缀
+     *  - 布尔字面量 `true` / `false`
+     *  - 枚举常量引用 `Enum.CONST`（取末段；`@Enumerated(STRING)` 运行期绑定值即该名）
+     * 变量引用 / 方法调用 / 任意表达式 → null（保持空待填，用户手动输入）
+     */
+    private fun staticParamValue(valueExpr: String): String? {
+        val expr = valueExpr.trim()
+        if (expr.isEmpty()) return null
+        // 注意：单字符字面量（数字 `0`）合法——长度守卫只挡空串，勿写成 length < 2
+        if (expr.startsWith("\"") && expr.endsWith("\"") && expr.length >= 2) {
+            return expr.substring(1, expr.length - 1)
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+        }
+        if (NUMERIC_LITERAL.matches(expr)) {
+            return expr.trimEnd('L', 'l', 'F', 'f', 'D', 'd')
+        }
+        if (expr == "true" || expr == "false") return expr
+        if (ENUM_CONSTANT_REF.matches(expr)) return expr.substringAfterLast('.')
+        return null
+    }
+
+    /** T-JpaParamOrder F6：setParameter 追踪列表 → 参数框初值表（仅静态可求值项入表）。 */
+    private fun staticParamValues(
+        parameters: List<cn.song.mybatisplus.visualizer.psi.jpa.HqlParameter>,
+    ): Map<String, String> {
+        val map = LinkedHashMap<String, String>()
+        parameters.forEach { p ->
+            if (p.isPositional) return@forEach
+            staticParamValue(p.valueExpr)?.let { map[p.paramName] = it }
+        }
+        return map
+    }
+
     /**
      * 提取 JPQL/@Query 方法的参数名。
      * 优先 @Param 注解值（@Param("foo") → "foo"），无注解时用方法参数名。
@@ -932,6 +978,8 @@ class SqlPreviewService(private val project: Project) {
             dialectOverride = dialect,
             placeholderParamNames = result.placeholderParamNames,
             duplicateParamNames = info.duplicateParamNames,
+            // T-JpaParamOrder F6：字面量/枚举常量自动预填参数框（变量引用不入表，保持待填）
+            initialParamValues = staticParamValues(info.parameters),
         )
     }
 
@@ -966,6 +1014,8 @@ class SqlPreviewService(private val project: Project) {
             tableName = tableName,
             placeholderParamNames = usableNamedSources.orEmpty(),
             duplicateParamNames = info.duplicateParamNames,
+            // T-JpaParamOrder F6：native 链同样预填静态常量
+            initialParamValues = staticParamValues(info.parameters),
         )
     }
 
@@ -1074,6 +1124,8 @@ class SqlPreviewService(private val project: Project) {
             method = info.method,
             inClauseParams = result.inClauseParams,
             placeholderParamNames = result.placeholderParamNames,
+            // T-JpaParamOrder F6：自定义 DAO 链同样预填静态常量
+            initialParamValues = staticParamValues(info.parameters),
         )
     }
 
@@ -1262,6 +1314,7 @@ class SqlPreviewService(private val project: Project) {
         dialectOverride: Dialect? = null,
         placeholderParamNames: List<String> = emptyList(),
         duplicateParamNames: Set<String> = emptySet(),
+        initialParamValues: Map<String, String> = emptyMap(),
     ): PreviewResult {
         // T-PS5-03：方言由调用入口透传（未传则本地求一次）——见 applyJpaMethodEnhancements 同款说明
         val dialect = dialectOverride ?: currentDialect()
@@ -1297,6 +1350,7 @@ class SqlPreviewService(private val project: Project) {
             previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, dialect, formatSql(), views),
             placeholderParamNames = usableNamedSources,
             duplicateParamNames = duplicateParamNames,
+            initialParamValues = initialParamValues,
         )
     }
 
