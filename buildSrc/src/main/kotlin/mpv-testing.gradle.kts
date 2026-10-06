@@ -678,11 +678,13 @@ intellijPlatformTesting {
         }
         shardPlanClasses = discoveredTestClasses.joinToString("\n")
         shardPlanHashes = shardAssignment.joinToString("|") { it.hashCode().toUInt().toString(16) }
-        // T-ReleasePerf7 N1（20261007）：分片叶子时间性错峰延迟（毫秒，缺省 0=关，浮动作不变）。
-        // verifyGate 侧同款开关=mpv-verification 的 gateStaggerMs。块内声明+doFirst 只捕获局部
-        // Long（脚本顶层 val 经 doFirst lambda 引用=持有脚本对象引用，配置缓存不可序列化——
-        // S2 round2 实测 5 problems storing 后挪位，T-ReleasePerf-05 同款坑）。
-        val testStaggerMs = providers.gradleProperty("testStaggerMs").orNull?.toLongOrNull() ?: 0L
+        // T-ReleasePerf7 N1（20261007）：分片叶子时间性错峰延迟。缺省逻辑与 verifyGate 侧同款
+        //（mpv-verification gateStaggerMs）：releaseGate 编排内自动 285000ms，日常 testShards 0。
+        // 块内声明+doFirst 只捕获局部 Long（脚本顶层 val 经 doFirst lambda 引用=持有脚本对象引用，
+        // 配置缓存不可序列化——S2 round2 实测 5 problems storing 后挪位，T-ReleasePerf-05 同款坑）。
+        val invokedTaskNamesForStagger = gradle.startParameter.taskNames
+        val testStaggerMs = providers.gradleProperty("testStaggerMs").orNull?.toLongOrNull()
+            ?: if (invokedTaskNamesForStagger.contains("releaseGate")) 285_000L else 0L
         for (i in 1..testShardCount) {
             val idx = i - 1
             register("testShard$i") {

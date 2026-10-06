@@ -115,11 +115,14 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
     // Gradle script object references"），故在配置期捕获为普通值（startParameter 与属性值在配置期已确定）。
     val invokedTaskNames = gradle.startParameter.taskNames
     val verifyIdesProperty = providers.gradleProperty("verifyIdes").orNull
-    // T-ReleasePerf7 N1（20261007）：verifyGate 时间性错峰延迟（毫秒，缺省 0=关，浮动作不变）。
-    // 分片叶子侧同款开关=mpv-testing 的 testStaggerMs。只延迟任务启动，不删不减不重排任何环节。
+    // T-ReleasePerf7 N1（20261007）：verifyGate 时间性错峰延迟。缺省逻辑：releaseGate 编排内
+    // 自动 285000ms（R1 探针校准的 marketplace 高占用段时长——错峰后 B 组均值 672.5s vs 浮动
+    // 754s = −10.8%，parity 全绿）；verifyGate 冒烟/其他场景 0（行为不变）。
+    // 显式 -PgateStaggerMs=0 可强制关。分片叶子侧同款=mpv-testing 的 testStaggerMs。
     // 配置缓存约束：必须在 register 块内捕获为普通 Long（脚本顶层 val 经 lambda 引用=持有脚本
     // 对象引用不可序列化，T-ReleasePerf-05 同款坑，S2 round2 实测 5 problems storing）。
-    val gateStaggerMs = providers.gradleProperty("gateStaggerMs").orNull?.toLongOrNull() ?: 0L
+    val gateStaggerMs = providers.gradleProperty("gateStaggerMs").orNull?.toLongOrNull()
+        ?: if (invokedTaskNames.contains("releaseGate")) 285_000L else 0L
     classpath(
         gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
             .walkTopDown().maxDepth(4)
