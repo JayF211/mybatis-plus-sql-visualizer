@@ -1990,6 +1990,10 @@ internal class AgentSession(
                         return
                     }
                     val entry = AgentEventAdapter.toEntry(event)
+                    // T-DevAcceptFix2 ⑤（20261006 第二轮验收）：事件到达打点——收到即计数
+                    //（含后续被去重/屏蔽/展示链丢弃的）。面板零产出时据此分流「事件到没到」：
+                    // N=0 → 查 agent 侧（织入/门禁/传输）；N>0 → 查消费侧。
+                    AgentEventAdapter.markReceived()
                     // T-AgentDialectLoop / T-AgentLogTime：接管期间控制台嗅探暂存的「日志行原始时间」
                     // 按 [logTimeKey]（占位符版 SQL 指纹）取回，参数值序列作次级判别（[stampLogTime]）。
                     // 未命中回落捕获时间（= execute 开始时刻，与日志行只差毫秒级）并留痕 [logTimeMiss]。

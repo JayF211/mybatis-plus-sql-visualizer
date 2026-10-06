@@ -47,8 +47,19 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
      */
     private val schemeOrder = java.util.concurrent.CopyOnWriteArrayList<String>()
 
-    /** R22 T-04：当前激活方案（面板下拉切换；随持久化落盘；空串 = 默认方案）。 */
-    private var activeScheme: String = DEFAULT_SCHEME
+    /**
+     * T-DevAcceptFix2 ①（20261006 第二轮验收）：激活方案**按缓存键（=方法/SQL）记录**。
+     *
+     * 原实现为全局单值——预设名清单与激活指针全局共享，用户实测「所有的方法都是一套预设」。
+     * 现：本表按缓存键记激活名（键=方法/SQL，与快照同分桶）；
+     * [legacyActiveScheme] 承接旧持久化字段 `paramActiveScheme`（全局单值）作为
+     * **未记录键的回落值**，且仅在「该名字在当前键下确有条目」时才生效（否则回落默认方案）
+     * ——迁移安全（V92）。
+     */
+    private val activeSchemeByKey = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /** 旧全局单值激活方案（持久化兼容 + 未记录键的回落；语义见 [activeSchemeFor]）。 */
+    private var legacyActiveScheme: String = DEFAULT_SCHEME
 
     init {
         // 从持久化恢复（IDE 重启后加载历史）
@@ -87,7 +98,7 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
      * @param params 参数映射（source → value）
      */
     fun save(key: String, params: Map<String, String>) {
-        saveForScheme(activeScheme, key, params)
+        saveForScheme(activeSchemeFor(key), key, params)
     }
 
     /**
@@ -112,7 +123,8 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
      * @return 历史参数映射，未命中返回 null
      */
     fun recall(key: String): Map<String, String>? {
-        val entries = if (activeScheme == DEFAULT_SCHEME) cache else schemes[activeScheme] ?: return null
+        val active = activeSchemeFor(key)
+        val entries = if (active == DEFAULT_SCHEME) cache else schemes[active] ?: return null
         return entries[key]?.also {
             // 访问后LinkedHashMap自动更新顺序（accessOrder=true），无需手动处理
             enforceMaxSize(entries)
@@ -124,51 +136,97 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
         cache.clear()
         schemes.clear()
         schemeOrder.clear()
-        activeScheme = DEFAULT_SCHEME
+        activeSchemeByKey.clear()
+        legacyActiveScheme = DEFAULT_SCHEME
         persistToStorage()
     }
 
     // ---------------- R22 T-04：命名方案 API（D2 定案——旧数据自动成为默认方案） ----------------
 
     /**
-     * 命名方案清单（默认方案除外，创建序）。
+     * 命名方案清单（默认方案除外，创建序）——**全量**名单（序列化遍历用）。
      * F50：创建序由 [schemeOrder] 承载；CHM 直查键拼接在尾部（极窄竞态窗内「已建桶未入序」
      * 的条目不丢），distinct 去重。
      */
     fun schemeNames(): List<String> = (schemeOrder + schemes.keys).distinct()
 
-    /** 当前激活方案名（[DEFAULT_SCHEME] = 默认方案）。 */
-    fun activeSchemeName(): String = activeScheme
+    /**
+     * T-DevAcceptFix2 ①：**指定缓存键（=方法/SQL）可见**的命名方案清单（创建序）——
+     * UI（面板下拉/管理对话框）只列「在本方法下确有条目」的预设，达成「每个方法一套预设、互不干扰」。
+     * key 为 null/空（无预览上下文）→ 空表（只有默认方案）。
+     */
+    fun schemeNamesFor(key: String?): List<String> {
+        if (key.isNullOrEmpty()) return emptyList()
+        return (schemeOrder + schemes.keys).distinct().filter { schemes[it]?.containsKey(key) == true }
+    }
+
+    /**
+     * T-DevAcceptFix2 ①：指定缓存键的激活方案名。取值链：按键记录 → 旧全局值回落 → 默认方案；
+     * 回落值仅在「该名字在该键下确有条目」时生效（否则默认方案）——迁移安全（V92）。
+     * key 为 null/空 → 默认方案。
+     */
+    fun activeSchemeFor(key: String?): String {
+        if (key.isNullOrEmpty()) return DEFAULT_SCHEME
+        val stored = activeSchemeByKey[key] ?: legacyActiveScheme
+        if (stored == DEFAULT_SCHEME) return DEFAULT_SCHEME
+        return if (schemes[stored]?.containsKey(key) == true) stored else DEFAULT_SCHEME
+    }
 
     /** 是否存在指定命名方案。 */
     fun hasScheme(name: String): Boolean = schemes.containsKey(name)
 
     /**
-     * 切换激活方案（面板下拉驱动）。未知方案名忽略（防脏态）；同名幂等不重复落盘。
+     * 旧全局激活方案名（**回落值视图**，数据模型层测试用）——T-DevAcceptFix2 ① 起 UI 一律走
+     * [activeSchemeFor]（按键）。本视图返回 [legacyActiveScheme]（每次切换/另存都会同步更新，
+     * 语义＝「最近一次激活的方案名」）。生产侧调用点已全部迁移，禁在新代码中使用。
+     */
+    internal fun activeSchemeName(): String = legacyActiveScheme
+
+    /**
+     * 单参切换（**无键上下文**，数据模型层测试用）——只更新回落值，不建按键记录。
+     * 生产侧（面板/对话框）一律走两参形态。
+     */
+    internal fun switchScheme(name: String) {
+        switchScheme(name, null)
+    }
+
+    /**
+     * 切换指定缓存键的激活方案（面板下拉驱动）。未知方案名忽略（防脏态）；同名幂等不重复落盘。
      *
      * F49（T-PerfQuick5）：切换**只写激活指针**（[persistActiveSchemePointer]），不再走
      * [persistToStorage] 全量序列化——方案内容未变，重序列化全部命名方案 + 无条件重写
      * legacy 字段属纯写放大，且发生在 EDT 同步路径（性能十七轮 §5.3）。
+     * T-DevAcceptFix2 ①：指针按键记录（key 空 = 无预览上下文，仅更新回落值不建记录）。
      */
-    fun switchScheme(name: String) {
+    fun switchScheme(name: String, key: String?) {
         if (name != DEFAULT_SCHEME && !schemes.containsKey(name)) return
-        if (activeScheme == name) return
-        activeScheme = name
+        if (key.isNullOrEmpty()) {
+            legacyActiveScheme = name
+            persistActiveSchemePointer()
+            return
+        }
+        if (activeSchemeByKey[key] == name && legacyActiveScheme == name) return
+        activeSchemeByKey[key] = name
+        legacyActiveScheme = name
         persistActiveSchemePointer()
     }
 
     /**
-     * 另存为命名方案：把 [params] 作为 [key] 的快照写入 [name]（已存在同键则覆盖），
-     * 并切换激活到该方案。默认方案名/空名/空快照返回 [SchemeOpResult.INVALID]（调用方
-     * 此前静默守卫的显式化——对话框在更早的输入环节已拦，行为不变）；新建方案个数达
+     * 另存为命名方案：把 [params] 作为 [key] 的快照写入 [name]（该键下已存在同名条目则覆盖），
+     * 并把该键激活切到 [name]。默认方案名/空名/空快照返回 [SchemeOpResult.INVALID]（调用方
+     * 此前静默守卫的显式化——对话框在更早的输入环节已拦，行为不变）；方案名个数达
      * [MAX_SCHEME_COUNT] 上限返回 [SchemeOpResult.LIMIT_REACHED]（F49）。
+     *
+     * T-DevAcceptFix2 ①：查重口径从「名字全局唯一」改为「**该键下**是否已有同名条目」——
+     * 同名预设可在不同方法下各自存在、各存各值（D71 推荐案；重命名/删除维持名字级）。
      */
     fun saveAsScheme(name: String, key: String, params: Map<String, String>): SchemeOpResult {
         if (name.isBlank() || name == DEFAULT_SCHEME || params.isEmpty()) return SchemeOpResult.INVALID
         if (!schemes.containsKey(name) && schemes.size >= MAX_SCHEME_COUNT) return SchemeOpResult.LIMIT_REACHED
         entriesForScheme(name)[key] = params
         enforceMaxSize(schemes.getValue(name))
-        activeScheme = name
+        activeSchemeByKey[key] = name
+        legacyActiveScheme = name
         persistToStorage()
         return SchemeOpResult.OK
     }
@@ -198,17 +256,23 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
             schemeOrder.removeAt(idx)
             schemeOrder.add(idx, newName)
         }
-        if (activeScheme == oldName) activeScheme = newName
+        // T-DevAcceptFix2 ①：重命名维持**名字级**（D71 定案）——按键指针与回落值随迁
+        activeSchemeByKey.entries.removeIf { it.value == oldName }
+        activeSchemeByKey.keys.toList().forEach { k ->
+            if (schemes.getValue(newName).containsKey(k)) activeSchemeByKey[k] = newName
+        }
+        if (legacyActiveScheme == oldName) legacyActiveScheme = newName
         persistToStorage()
         return SchemeOpResult.OK
     }
 
-    /** 删除方案（激活方案被删时归位默认方案）。 */
+    /** 删除方案（激活方案被删时归位默认方案）。T-DevAcceptFix2 ①：按键指针与回落值同步摘除。 */
     fun deleteScheme(name: String): SchemeOpResult {
         if (name == DEFAULT_SCHEME) return SchemeOpResult.DEFAULT_PROTECTED
         if (schemes.remove(name) == null) return SchemeOpResult.NOT_FOUND
         schemeOrder.remove(name)
-        if (activeScheme == name) activeScheme = DEFAULT_SCHEME
+        activeSchemeByKey.entries.removeIf { it.value == name }
+        if (legacyActiveScheme == name) legacyActiveScheme = DEFAULT_SCHEME
         persistToStorage()
         return SchemeOpResult.OK
     }
@@ -216,8 +280,8 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
     /** 当前缓存条目数（默认方案；测试断言用）。 */
     internal fun size(): Int = cache.size
 
-    /** 是否包含指定键（激活方案；测试断言用，触发 LRU 顺序更新）。 */
-    internal fun containsKey(key: String): Boolean = entriesForScheme(activeScheme).containsKey(key)
+    /** 是否包含指定键（该键的激活方案；测试断言用，触发 LRU 顺序更新）。 */
+    internal fun containsKey(key: String): Boolean = entriesForScheme(activeSchemeFor(key)).containsKey(key)
 
     /** R22 T-04：指定方案的条目视图（默认方案 = [cache]；命名方案惰性建，同 LRU 语义）。
      * F50：CHM 原子建桶（computeIfAbsent，原 getOrPut 非原子），建桶同时补创建序（幂等）。 */
@@ -247,17 +311,20 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
     private fun persistToStorage() {
         persistProbe?.invoke()
         val schemesJson = serializeSchemesToJson()
-        val active = activeScheme
+        val active = legacyActiveScheme
+        val activeByKey = serializeActiveByKey()
         val written = runCatching {
             val state = PluginSettings.getInstance().state
             state.paramSchemesJson = schemesJson
             state.paramActiveScheme = active
+            state.paramActiveSchemeByKey = activeByKey
         }.isSuccess
         if (!written) {
             // 测试环境（无 IDE 服务）：回落静态存储，保证持久化往返可测
             synchronized(fallbackStorage) {
                 fallbackStorage[SCHEMES_STORAGE_KEY] = schemesJson
                 fallbackStorage[ACTIVE_SCHEME_STORAGE_KEY] = active
+                fallbackStorage[ACTIVE_BY_KEY_STORAGE_KEY] = activeByKey
             }
         }
         // 旧字段保持既有语义：默认方案快照继续写 paramHistoryJson（旧版构建可读，存量零迁移的另一面）
@@ -273,13 +340,49 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
      * 全量重序列化（内容未变，重写属 EDT 同步路径上的纯写放大）。
      */
     private fun persistActiveSchemePointer() {
-        val active = activeScheme
+        val active = legacyActiveScheme
+        val activeByKey = serializeActiveByKey()
         val written = runCatching {
-            PluginSettings.getInstance().state.paramActiveScheme = active
+            val state = PluginSettings.getInstance().state
+            state.paramActiveScheme = active
+            state.paramActiveSchemeByKey = activeByKey
         }.isSuccess
         if (!written) {
-            synchronized(fallbackStorage) { fallbackStorage[ACTIVE_SCHEME_STORAGE_KEY] = active }
+            synchronized(fallbackStorage) {
+                fallbackStorage[ACTIVE_SCHEME_STORAGE_KEY] = active
+                fallbackStorage[ACTIVE_BY_KEY_STORAGE_KEY] = activeByKey
+            }
         }
+    }
+
+    /**
+     * T-DevAcceptFix2 ①：按键激活指针序列化（`{"缓存键":"方案名", ...}`，最小 JSON 形态；
+     * 复用 [escapeJson]/[unescapeJson] 与 [splitTopLevelEntries] 切分工具）。
+     */
+    private fun serializeActiveByKey(): String {
+        if (activeSchemeByKey.isEmpty()) return ""
+        val sb = StringBuilder("{")
+        var first = true
+        for ((k, v) in activeSchemeByKey.entries) {
+            if (!first) sb.append(",")
+            first = false
+            sb.append("\"").append(escapeJson(k)).append("\":\"").append(escapeJson(v)).append("\"")
+        }
+        sb.append("}")
+        return sb.toString()
+    }
+
+    /** T-DevAcceptFix2 ①：按键激活指针反序列化（损坏/空 → 空表，不崩溃）。 */
+    private fun deserializeActiveByKey(json: String): Map<String, String> {
+        val trimmed = json.trim()
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return emptyMap()
+        val result = linkedMapOf<String, String>()
+        for ((k, v) in splitTopLevelEntries(trimmed.substring(1, trimmed.length - 1))) {
+            val key = unescapeJson(k)
+            val name = unescapeJson(v.removeSurrounding("\""))
+            if (key.isNotEmpty() && name.isNotEmpty()) result[key] = name
+        }
+        return result
     }
 
     /** 从持久化恢复内存缓存（IDE 环境）；测试环境回落静态存储。
@@ -306,7 +409,14 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
         }
         var active = readPersisted(ACTIVE_SCHEME_STORAGE_KEY) { PluginSettings.getInstance().state.paramActiveScheme }
         if (active != DEFAULT_SCHEME && !schemes.containsKey(active)) active = DEFAULT_SCHEME
-        activeScheme = active
+        legacyActiveScheme = active
+        // T-DevAcceptFix2 ①：按键激活指针恢复（旧字段已作为回落值装载，未记录键自动回落它）
+        val byKeyJson = readPersisted(ACTIVE_BY_KEY_STORAGE_KEY) { PluginSettings.getInstance().state.paramActiveSchemeByKey }
+        if (byKeyJson.isNotBlank()) {
+            runCatching {
+                deserializeActiveByKey(byKeyJson).forEach { (k, v) -> activeSchemeByKey[k] = v }
+            }
+        }
         // 全方案统一执行上限（含 D2 迁入的默认方案）
         enforceMaxSize(cache)
         schemes.values.forEach { enforceMaxSize(it) }
@@ -571,6 +681,9 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
 
         /** R22 T-04：激活方案持久化 key（IDE：PluginSettings.State.paramActiveScheme；测试：静态存储 key）。 */
         private const val ACTIVE_SCHEME_STORAGE_KEY = "paramActiveScheme"
+
+        /** T-DevAcceptFix2 ①：按键激活指针的测试环境静态存储键（IDE 环境走 PluginSettings 同名字段）。 */
+        private const val ACTIVE_BY_KEY_STORAGE_KEY = "paramActiveSchemeByKey"
 
         /** 持久化 key（IDE 环境：PluginSettings.State.paramHistoryJson 字段；测试环境：静态存储 key）。 */
         private const val STORAGE_KEY = "paramHistory"

@@ -33,6 +33,14 @@ internal data class CaptureDiagnostics(
     val replayDropped: Long,
     /** EP 通道短路行数（T-RA-03；0 = 无短路，不显示）。 */
     val epShortCircuited: Long,
+    /**
+     * T-DevAcceptFix2 ⑤（20261006 第二轮验收）：**增强通道已收事件数**（agent 事件到达并适配的累计）。
+     *
+     * 与上面两个计数不同，本字段**恒显示**（不设「非零才显示」）——它是「事件到没到」的唯一判别量：
+     * 用户现场「增强捕获已挂载但产出 0 条」时，N=0 说明事件压根没到（要查 agent 侧织入/门禁），
+     * N>0 说明到了但被去重/屏蔽/展示链吃掉（要查消费侧）。口径 = 收到即计数（含后续被丢弃的）。
+     */
+    val agentEventsReceived: Long = 0L,
 )
 
 /**
@@ -44,7 +52,8 @@ internal fun captureDiagnosticsText(d: CaptureDiagnostics): String? {
     val enhanced = if (d.enhancedStatus == null) {
         MpSqlVisualizerBundle.message("log.diag.enhancedOff")
     } else {
-        MpSqlVisualizerBundle.message("log.diag.enhanced", d.enhancedStatus)
+        // T-DevAcceptFix2 ⑤：增强通道状态后恒挂「已收事件 N 条」——判「事件到没到」的唯一判别量
+        MpSqlVisualizerBundle.message("log.diag.enhancedWithEvents", d.enhancedStatus, d.agentEventsReceived)
     }
     val console = MpSqlVisualizerBundle.message("log.diag.console", d.consolesAttached, d.linesSeen)
     // T-RA-03：丢弃/短路计数只在非零时挂尾——零值是常态，常态不该给诊断行添噪；

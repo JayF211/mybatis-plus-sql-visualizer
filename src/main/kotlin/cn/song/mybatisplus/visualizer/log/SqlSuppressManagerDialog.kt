@@ -69,6 +69,18 @@ class SqlSuppressManagerDialog(
 
     private val ruleManager = SqlSuppressRuleManager.getInstance()
 
+    /**
+     * 时间格式化（ThreadLocal 复用；照 LogTimestampParser 范式）。
+     *
+     * **声明位置是契约**（T-DevAcceptFix2 ③，20261006 验收 NPE 修复）：本字段必须声明在 [init] 块
+     * **之前**——`init { … refreshRuleList(select = null) }` 在构造期就触发列表渲染，渲染器回调
+     * [createdAtText] 读本字段。Kotlin 属性按声明序初始化，声明在后 = 构造期读取时为 null
+     * （引用类型默认值，编译期不报错）→ 规则数 ≥1 时每次打开对话框必 NPE。
+     */
+    private val createdAtFormat = ThreadLocal.withInitial {
+        SimpleDateFormat("yyyy-MM-dd HH:mm")
+    }
+
     private val listModel = CollectionListModel<SqlSuppressRule>()
     private val ruleList = JBList<SqlSuppressRule>(listModel)
 
@@ -408,11 +420,8 @@ class SqlSuppressManagerDialog(
 
     /** createdAt 展示片段（yyyy-MM-dd HH:mm）。F22（T-PerfSweep9）：SDF ThreadLocal 缓存化
      *  （照 LogTimestampParser 范式；此前每行每次重绘新建一个实例，分配面与 PS7-04 缓存化方向相逆）。
-     *  复用实例输出与逐次新建逐字节一致（format 不读旧状态）。 */
-    private val createdAtFormat = ThreadLocal.withInitial {
-        SimpleDateFormat("yyyy-MM-dd HH:mm")
-    }
-
+     *  复用实例输出与逐次新建逐字节一致（format 不读旧状态）。
+     *  T-DevAcceptFix2 ③：字段本体已上移至类首（构造期渲染回调要读，声明序即契约，见该处注释）。 */
     private fun createdAtText(rule: SqlSuppressRule): String =
         createdAtFormat.get().format(Date(rule.createdAt))
 

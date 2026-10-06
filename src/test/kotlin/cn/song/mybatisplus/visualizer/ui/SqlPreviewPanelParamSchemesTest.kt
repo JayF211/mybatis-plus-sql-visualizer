@@ -344,16 +344,71 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
 
     // ==== T-DevAcceptFix ⑤：方案切换参数回写（source 锚点显式映射，禁插入序对位） ====
 
-    /** 普通参数语料（无 xml/batch 模型 → 走参数行主链；paramFields 行序 = unresolvedParams 序）。 */
-    private fun buildPlainParamsResult(params: List<String>): PreviewResult = PreviewResult(
-        sql = "SELECT * FROM t_order WHERE alpha = ? AND beta = ? AND gamma = ?",
-        compactSql = "SELECT * FROM t_order WHERE alpha = ? AND beta = ? AND gamma = ?",
+    /** 普通参数语料（无 xml/batch 模型 → 走参数行主链；paramFields 行序 = unresolvedParams 序）。
+     *  [sql] 可指定不同语句文本以模拟「不同方法」（缓存键 = SQL 指纹 → 预设按方法隔离的判别面）。 */
+    private fun buildPlainParamsResult(
+        params: List<String>,
+        sql: String = "SELECT * FROM t_order WHERE alpha = ? AND beta = ? AND gamma = ?",
+    ): PreviewResult = PreviewResult(
+        sql = sql,
+        compactSql = sql,
         unresolvedParams = params,
         paramTable = ParameterReplacer.buildParamTable(params),
         wrapperType = null,
         tableName = null,
         xmlModel = null,
     )
+
+    /**
+     * T-DevAcceptFix2 ①（20261006 第二轮验收，用户反馈「应该是每个方法单独的预设互相隔离」）：
+     * 预设按方法/SQL 隔离——A 方法的预设不出现在 B 方法的下拉里；同名预设可跨方法各自存值互不串；
+     * 切回 A 恢复其自己的名单与激活态。
+     */
+    fun testDevAcceptFix2_预设按方法隔离_同名跨方法各自存值() {
+        val p = SqlPreviewPanel(project)
+        panel = p
+        Disposer.register(testRootDisposable, p)
+        val sqlA = "SELECT * FROM t_order WHERE alpha = ? AND beta = ? -- method A"
+        val sqlB = "SELECT * FROM t_customer WHERE alpha = ? AND beta = ? -- method B"
+
+        p.showResult(buildPlainParamsResult(listOf("alpha", "beta"), sqlA))
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        val cache = p.paramHistoryCacheForTest()
+        val keyA = p.historyCacheKeyForTest()!!
+        cache.saveAsScheme("生产参数", keyA, linkedMapOf("alpha" to "A1"))
+        p.onSchemesChangedForTest()
+        assertEquals("A 方法应激活自己刚存的预设", "生产参数", p.schemeComboForTest()!!.selectedItem)
+        assertEquals("A 方法下拉 = 默认 + 自己的预设", 2, p.schemeComboForTest()!!.itemCount)
+
+        // 切到 B 方法（不同语句 → 不同缓存键）
+        p.showResult(buildPlainParamsResult(listOf("alpha", "beta"), sqlB))
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        val keyB = p.historyCacheKeyForTest()!!
+        assertFalse("两个方法应是不同缓存键（键=SQL 指纹）", keyA == keyB)
+        assertEquals("B 方法不应看到 A 的预设（按方法隔离）", 1, p.schemeComboForTest()!!.itemCount)
+        assertEquals(
+            "B 方法无自己的预设时激活态应回落默认",
+            ParamHistoryCache.DEFAULT_SCHEME,
+            p.schemeComboForTest()!!.selectedItem,
+        )
+
+        // B 方法下同名另存：不得因 A 已有同名而拒绝（查重口径=按键）
+        assertEquals(
+            "同名预设应可在 B 方法独立新建",
+            ParamHistoryCache.SchemeOpResult.OK,
+            cache.saveAsScheme("生产参数", keyB, linkedMapOf("alpha" to "B1")),
+        )
+        p.onSchemesChangedForTest()
+        assertEquals("B 方法同名预设应可见并激活", "生产参数", p.schemeComboForTest()!!.selectedItem)
+        assertEquals("A 键下值不受 B 影响", "A1", cache.recallFromScheme("生产参数", keyA)!!["alpha"])
+        assertEquals("B 键下是自己的值", "B1", cache.recallFromScheme("生产参数", keyB)!!["alpha"])
+
+        // 切回 A：名单与激活态各归其位
+        p.showResult(buildPlainParamsResult(listOf("alpha", "beta"), sqlA))
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        assertEquals("切回 A 应恢复其自己的激活预设", "生产参数", p.schemeComboForTest()!!.selectedItem)
+        assertEquals("切回 A 名单仍只含自己的预设", 2, p.schemeComboForTest()!!.itemCount)
+    }
 
     /**
      * T-DevAcceptFix ⑤ 红复现（20261006 验收缺陷「切换预设时下方参数没有变化」的错位形态）：

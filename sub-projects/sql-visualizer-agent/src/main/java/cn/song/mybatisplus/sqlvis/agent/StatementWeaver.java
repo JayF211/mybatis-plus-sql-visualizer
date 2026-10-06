@@ -314,9 +314,10 @@ public final class StatementWeaver implements Opcodes {
             insn = next;
         }
         if (inserted > 0) {
+            // tokenSlot 在方法顶部已算好（= 原 maxLocals）；此处只按新布局重算 maxLocals
             mn.maxLocals = retSlot + 2; // token 2 槽 + 暂存 2 槽（long 返回占 2）
             if (timed) {
-                patchFramesWithTokenSlot(mn);
+                patchFramesWithTokenSlot(mn, tokenSlot);
             }
             return true;
         }
@@ -326,16 +327,37 @@ public final class StatementWeaver implements Opcodes {
     /**
      * timed 面头插 token(long) 槽在原方法全部分支帧点存活，原 StackMapTable 帧不含该槽
      * （校验器按帧断言为 top，lload 读 long 即 VerifyError）——给织入成功方法的每个
-     * FrameNode 的 local 数组尾部追加一个 LONG。info 计数语义下 long 占一元素，token 槽
-     * 恰起于原 maxLocals（= 原 info 数末尾，与 long/double 形参个数无关），且自方法头
-     * （LSTORE token）至任一出口恒为已赋值，对所有帧点一致成立。出口暂存槽（retSlot）
-     * 只在最后一个帧点与返回指令之间瞬态使用，不进帧、无需补。
+     * FrameNode 的 local 数组**按槽数补齐到 token 槽位后追加一个 LONG**。
+     *
+     * <p><b>勘误（T-DevAcceptFix2，20261006 第二轮验收本机复现）</b>：原实现直接
+     * {@code local.add(LONG)}，其前提「token 槽恰起于原 info 数末尾」**是错的**——原帧 locals
+     * 的 info 数可**小于** maxLocals（javac 不使用的尾部槽位在帧里不出现，语义即隐式 top）。
+     * 实证：mysql-connector 8.0.28 {@code com.mysql.cj.jdbc.StatementImpl.execute(String,String[])}
+     * 的 {@code stack=3, locals=4, args_size=3}，原帧 locals 只有 3 项（slot 3 未用）→ 追加 LONG 后
+     * 帧声称 long 落在 slot 3-4，而头插 {@code LSTORE} 用 tokenSlot=4（写 slot 4-5）→ 恰错位一槽，
+     * 首次加载被织类即 {@code VerifyError: Stack map does not match the one at exception handler}，
+     * 宿主一建 Statement 就崩（真机现象＝开启增强捕获后应用起不来、0 事件）。
+     *
+     * <p>正确形态：按槽数（long/double 占 2，其余占 1）补齐 TOP 到 tokenSlot 再追加 LONG——
+     * 与头插 {@code LSTORE tokenSlot} 的写入位置逐槽对齐。出口暂存槽（retSlot）只在最后一个帧点与
+     * 返回指令之间瞬态使用，不进帧、无需补。
      */
-    private static void patchFramesWithTokenSlot(MethodNode mn) {
+    private static void patchFramesWithTokenSlot(MethodNode mn, int tokenSlot) {
         AbstractInsnNode insn = mn.instructions.getFirst();
         while (insn != null) {
-            if (insn instanceof FrameNode && ((FrameNode) insn).local != null) {
-                ((FrameNode) insn).local.add(Opcodes.LONG);
+            if (insn instanceof FrameNode) {
+                final java.util.List<Object> local = ((FrameNode) insn).local;
+                if (local != null) {
+                    int slots = 0;
+                    for (Object entry : local) {
+                        slots += (entry == Opcodes.LONG || entry == Opcodes.DOUBLE) ? 2 : 1;
+                    }
+                    while (slots < tokenSlot) {
+                        local.add(Opcodes.TOP);
+                        slots++;
+                    }
+                    local.add(Opcodes.LONG);
+                }
             }
             insn = insn.getNext();
         }

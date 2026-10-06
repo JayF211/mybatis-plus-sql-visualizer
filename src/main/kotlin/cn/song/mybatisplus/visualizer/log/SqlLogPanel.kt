@@ -1340,6 +1340,8 @@ class SqlLogPanel(
                     // 它们是面板唯一可见的证据（此前生产侧零读取，故障被伪装成「控制台没输出」）。
                     replayDropped = manager.consoleBridge.replayDropCount,
                     epShortCircuited = manager.consoleBridge.epActiveShortCircuitCount.get(),
+                    // T-DevAcceptFix2 ⑤：增强通道已收事件数（恒显示）——「事件到没到」的唯一判别量
+                    agentEventsReceived = cn.song.mybatisplus.visualizer.log.agent.AgentEventAdapter.receivedEvents(),
                 ),
             )
         } else {

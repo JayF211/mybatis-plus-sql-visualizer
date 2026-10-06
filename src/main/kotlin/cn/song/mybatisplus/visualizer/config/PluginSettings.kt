@@ -391,8 +391,16 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var paramSchemesJson: String = "",
 
-        /** R22 T-04：激活方案名（空串 = 默认方案；面板下拉切换后随持久化落盘）。 */
+        /** R22 T-04：激活方案名（空串 = 默认方案；面板下拉切换后随持久化落盘）。
+         *  T-DevAcceptFix2 ①：预设已按方法/SQL 隔离，本字段降级为「未记录键的回落值」（迁移兼容）。 */
         var paramActiveScheme: String = "",
+
+        /**
+         * T-DevAcceptFix2 ①（20261006 第二轮验收）：**按键激活指针** `{"缓存键":"方案名", ...}`
+         * ——预设按方法/SQL 隔离（每个方法各自记住自己激活的预设；快照本就按缓存键分桶）。
+         * 空字符串 = 无按键记录（回落 [paramActiveScheme]）。
+         */
+        var paramActiveSchemeByKey: String = "",
 
         // ---------- Hibernate/JPA 日志捕获 ----------
 

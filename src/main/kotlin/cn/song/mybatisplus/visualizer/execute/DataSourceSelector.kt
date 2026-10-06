@@ -3817,6 +3817,9 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                 }
             }
         }
+        // T-DevAcceptFix2 ④：记录写入快照（内容 + 时间戳）——差量快路径在无 document 时据此判等，
+        // 取代原先的 EDT 读盘（平台 SlowOperations 断言来源）
+        lastWrittenExecContent[vf.path] = ExecWrittenSnapshot(text, vf.timeStamp)
     }
 
     /** BGT 派 EDT document 写的有界等待预算（毫秒）——DialectPreMapping 同款取值；EDT 病态冻结时超时放行走守卫降级。 */
@@ -4299,9 +4302,26 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
         if (doc != null) {
             doc.text == sql
         } else {
-            vf.inputStream.readBytes().toString(Charsets.UTF_8) == sql
+            // T-DevAcceptFix2 ④（20261006 第二轮验收）：无 document 时**禁读盘**——原实现回落
+            // vf.inputStream.readBytes()，命中平台「EDT 禁慢操作」断言（EXPLAIN 直送默认路径实测：
+            // 点执行计划 → createTempPsiFile → 本函数，全程 EDT）。改读「最近写入内容 + 写入时
+            // VFS 时间戳」内存标记：时间戳不一致（外部改盘/他进程写）即不采信，返回 false 走正常
+            // 写入路径——宁可多写一次，绝不在 EDT 读盘（线程归位定例；allowSlowOperations 逃生舱禁）。
+            val snap = lastWrittenExecContent[vf.path]
+            snap != null && snap.timeStamp == vf.timeStamp && snap.content == sql
         }
     }.getOrDefault(false)
+
+    /** T-DevAcceptFix2 ④：最近一次经本类写入 exec 临时文件的内容快照（内容 + 写入时 VFS 时间戳）。 */
+    internal data class ExecWrittenSnapshot(val content: String, val timeStamp: Long)
+
+    /**
+     * T-DevAcceptFix2 ④：写入标记表（key = VFS 路径）。写点唯一=本类的 exec 文件写入路径
+     * （[writeVfTextViaDocument]）；读点=差量快路径（[execFileContentMatches]，仅在无 document 时）。
+     * 时间戳校验使「外部改盘」自动失效标记（不会误判「已一致」而跳过必要写入）。
+     */
+    internal val lastWrittenExecContent =
+        java.util.concurrent.ConcurrentHashMap<String, ExecWrittenSnapshot>()
 
     /**
      * T-PreviewFast P3：exec 文件是否**正被编辑器打开**（= 有人正在看这份内容）——预热据此决定

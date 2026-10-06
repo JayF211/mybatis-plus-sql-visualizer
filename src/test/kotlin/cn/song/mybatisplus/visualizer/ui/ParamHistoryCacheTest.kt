@@ -220,10 +220,10 @@ class ParamHistoryCacheTest {
         cache.saveAsScheme("边界流", key, boundary)
         assertEquals("另存应切换激活方案", "边界流", cache.activeSchemeName())
         assertEquals("激活方案召回边界流快照", boundary, cache.recall(key))
-        // 切走再切回：默认方案快照逐字节还原
-        cache.switchScheme(ParamHistoryCache.DEFAULT_SCHEME)
+        // 切走再切回：默认方案快照逐字节还原（T-DevAcceptFix2 ①：切换按**键**——键=本条语句）
+        cache.switchScheme(ParamHistoryCache.DEFAULT_SCHEME, key)
         assertEquals("切回默认方案快照逐字节还原", normal, cache.recall(key))
-        cache.switchScheme("边界流")
+        cache.switchScheme("边界流", key)
         assertEquals("再切回命名方案快照逐字节还原", boundary, cache.recall(key))
         cache.clear()
     }
@@ -235,10 +235,10 @@ class ParamHistoryCacheTest {
         cache.clear()
         val key = cache.computeKey("t_user", "SELECT * FROM t_user WHERE id = ?")!!
         cache.save(key, mapOf("id" to "1"))
-        cache.switchScheme(ParamHistoryCache.DEFAULT_SCHEME) // saveAsScheme 会切激活，显式回默认再存
+        cache.switchScheme(ParamHistoryCache.DEFAULT_SCHEME, key) // saveAsScheme 会切激活，显式回默认再存
         cache.saveAsScheme("边界流", key, mapOf("id" to "2"))
         assertEquals(mapOf("id" to "2"), cache.recallFromScheme("边界流", key))
-        cache.switchScheme(ParamHistoryCache.DEFAULT_SCHEME)
+        cache.switchScheme(ParamHistoryCache.DEFAULT_SCHEME, key)
         assertEquals("默认方案快照不被另存覆盖", mapOf("id" to "1"), cache.recall(key))
         assertEquals("命名方案条目数", 1, cache.schemeEntryCount("边界流"))
         cache.clear()

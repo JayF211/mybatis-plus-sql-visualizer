@@ -170,8 +170,11 @@ class ParamSchemeManagerDialog(
                     SimpleTextAttributes.GRAYED_SMALL_ATTRIBUTES,
                 )
             } else {
+                // T-DevAcceptFix2 ①：条目摘要改为**当前方法**口径（预设已按方法/SQL 隔离，
+                // 全局缓存键数对当前方法无意义；本键下 1 = 已存、0 = 未存）
+                val here = if (currentKey()?.let { cache.recallFromScheme(value, it) } != null) "1" else "0"
                 nameLine.append(
-                    "  ·  " + MpSqlVisualizerBundle.message("panel.scheme.dialog.entry", cache.schemeEntryCount(value).toString()),
+                    "  ·  " + MpSqlVisualizerBundle.message("panel.scheme.dialog.entry", here),
                     SimpleTextAttributes.GRAYED_SMALL_ATTRIBUTES,
                 )
             }
@@ -181,18 +184,23 @@ class ParamSchemeManagerDialog(
 
     // ---------- 方案操作 ----------
 
-    /** 列表模型按 cache 当前方案重建（默认方案恒首位）；[select] 非 null 时选中。 */
+    /** T-DevAcceptFix2 ①：当前预览的缓存键（对话框不自持状态——经 [snapshotProvider] 取）；
+     *  null = 无预览上下文（名单只列默认方案）。 */
+    private fun currentKey(): String? = runCatching { snapshotProvider()?.first }.getOrNull()
+
+    /** 列表模型按 cache 当前方案重建（默认方案恒首位）；[select] 非 null 时选中。
+     *  T-DevAcceptFix2 ①：名单与选中项均按**当前方法键**取（每个方法只列自己的预设）。 */
     private fun refreshSchemeList(select: String?) {
         val names = schemeNamesWithDefault()
         listModel.replaceAll(names)
-        val target = select ?: cache.activeSchemeName()
+        val target = select ?: cache.activeSchemeFor(currentKey())
         if (names.contains(target)) schemeList.setSelectedValue(target, false) else schemeList.clearSelection()
         statusLabel.text = if (names.size == 1) MpSqlVisualizerBundle.message("panel.scheme.dialog.empty") else ""
         syncActionButtons()
     }
 
     private fun schemeNamesWithDefault(): List<String> =
-        listOf(ParamHistoryCache.DEFAULT_SCHEME) + cache.schemeNames()
+        listOf(ParamHistoryCache.DEFAULT_SCHEME) + cache.schemeNamesFor(currentKey())
 
     /** 重命名/删除按钮可用性：默认方案（或未选中）禁用——与 DEFAULT_PROTECTED 数据面语义双保险。 */
     private fun syncActionButtons() {

@@ -3768,7 +3768,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         combo.addActionListener {
             if (schemeSyncingCombo) return@addActionListener
             val raw = combo.selectedItem as? String ?: return@addActionListener
-            if (raw != paramHistoryCache.activeSchemeName()) switchToScheme(raw)
+            if (raw != paramHistoryCache.activeSchemeFor(historyCacheKey())) switchToScheme(raw)
         }
         syncSchemeCombo()
         val manageButton = compactButton(MpSqlVisualizerBundle.message("panel.scheme.manage")) {
@@ -3791,16 +3791,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         ).also { presetFold = it }
     }
 
-    /** R22 T-04：按 cache 当前态重建下拉模型与选中项（程序化填充，抑制切换语义）。 */
+    /** R22 T-04：按 cache 当前态重建下拉模型与选中项（程序化填充，抑制切换语义）。
+     *  T-DevAcceptFix2 ①（20261006 第二轮验收）：名单与选中项均**按当前方法/SQL 键**取——
+     *  每个方法只列自己的预设（`schemeNamesFor(key)`），激活态取该键的指针（`activeSchemeFor(key)`）。 */
     private fun syncSchemeCombo() {
         val combo = schemeCombo ?: return
         schemeSyncingCombo = true
         try {
+            val key = historyCacheKey()
             val model = DefaultComboBoxModel<String>()
             model.addElement(ParamHistoryCache.DEFAULT_SCHEME)
-            paramHistoryCache.schemeNames().forEach { model.addElement(it) }
+            paramHistoryCache.schemeNamesFor(key).forEach { model.addElement(it) }
             combo.model = model
-            val active = paramHistoryCache.activeSchemeName()
+            val active = paramHistoryCache.activeSchemeFor(key)
             combo.selectedItem = active
             lastShownActiveScheme = active
         } finally {
@@ -3893,7 +3896,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      */
     private fun switchToScheme(name: String) {
         clearParamStateForSchemeSwitch()
-        paramHistoryCache.switchScheme(name)
+        val key = historyCacheKey()
+        if (key != null) paramHistoryCache.switchScheme(name, key)
         lastShownActiveScheme = name
         recallFromHistory()
         renderSql()
@@ -3943,7 +3947,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
     /** R22 T-04：对话框回调——同步下拉；激活方案被对话框变更（另存为自动切换）时整面重召回。 */
     private fun onSchemesChangedFromDialog() {
-        val active = paramHistoryCache.activeSchemeName()
+        val active = paramHistoryCache.activeSchemeFor(historyCacheKey())
         val activeChanged = active != lastShownActiveScheme
         syncSchemeCombo()
         if (activeChanged) switchToScheme(active)
@@ -4801,7 +4805,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun flushHistoryToCache() {
         val key = historyCacheKey() ?: return
         val snapshot = buildHistorySnapshot()
-        val scheme = paramHistoryCache.activeSchemeName()
+        // T-DevAcceptFix2 ①：方案名按**当前键**取（预设已按方法隔离）——取回落值视图会写错桶
+        val scheme = paramHistoryCache.activeSchemeFor(key)
         // headless 单测：同步执行保持既有测试语义
         if (ApplicationManager.getApplication().isUnitTestMode) {
             paramHistoryCache.saveForScheme(scheme, key, snapshot)

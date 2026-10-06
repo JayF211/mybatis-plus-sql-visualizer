@@ -57,7 +57,7 @@ class ParamSchemeManagerDialogTest : BasePlatformTestCase() {
     }
 
     fun testT04_列表形态_默认方案恒首位() {
-        cache.saveAsScheme("边界流", "k", mapOf("id" to "1"))
+        cache.saveAsScheme("边界流", "stmt-key", mapOf("id" to "1"))
         val d = openDialog()
         assertEquals("列表 = 默认方案 + 命名方案", 2, d.schemeCountForTest())
         assertEquals("首位应为默认方案（空串内部名）", ParamHistoryCache.DEFAULT_SCHEME, d.schemeNameAtForTest(0))
@@ -67,7 +67,7 @@ class ParamSchemeManagerDialogTest : BasePlatformTestCase() {
     }
 
     fun testT04_默认方案保护_改名删除禁用与状态行() {
-        cache.saveAsScheme("边界流", "k", mapOf("id" to "1"))
+        cache.saveAsScheme("边界流", "stmt-key", mapOf("id" to "1"))
         val d = openDialog()
         d.selectSchemeForTest(ParamHistoryCache.DEFAULT_SCHEME) // 初始选中激活方案，显式切到默认方案
         // 首位 = 默认方案：重命名/删除按钮禁用（数据面 DEFAULT_PROTECTED 之外的 UI 层双保险）
@@ -90,7 +90,7 @@ class ParamSchemeManagerDialogTest : BasePlatformTestCase() {
     }
 
     fun testT04_另存为_重名与空名与无快照() {
-        cache.saveAsScheme("边界流", "k", mapOf("id" to "1"))
+        cache.saveAsScheme("边界流", "stmt-key", mapOf("id" to "1"))
         val d = openDialog()
         assertFalse("重名另存应拒绝", d.saveAsForTest("边界流"))
         assertEquals("状态行应提示重名", bundle("panel.scheme.dialog.duplicate"), d.statusTextForTest())
@@ -120,7 +120,7 @@ class ParamSchemeManagerDialogTest : BasePlatformTestCase() {
     }
 
     fun testT04_重命名_成功与重名拒绝() {
-        cache.saveAsScheme("A", "k", mapOf("id" to "1"))
+        cache.saveAsScheme("A", "stmt-key", mapOf("id" to "1"))
         val d = openDialog()
         d.selectSchemeForTest("A")
         assertTrue("重命名应成功", d.renameForTest("A2"))
@@ -134,9 +134,9 @@ class ParamSchemeManagerDialogTest : BasePlatformTestCase() {
     }
 
     fun testT04_删除_确认后移除且回调() {
-        cache.saveAsScheme("A", "k", mapOf("id" to "1"))
+        cache.saveAsScheme("A", "stmt-key", mapOf("id" to "1"))
         cache.switchScheme(ParamHistoryCache.DEFAULT_SCHEME)
-        cache.saveAsScheme("B", "k", mapOf("id" to "2"))
+        cache.saveAsScheme("B", "stmt-key", mapOf("id" to "2"))
         val d = openDialog()
         d.selectSchemeForTest("B")
         assertTrue("删除应成功", d.deleteForTest())

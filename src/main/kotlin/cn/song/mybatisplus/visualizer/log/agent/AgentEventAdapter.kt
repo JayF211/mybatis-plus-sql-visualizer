@@ -12,6 +12,23 @@ import cn.song.mybatisplus.visualizer.log.SqlSource
  */
 object AgentEventAdapter {
 
+    /**
+     * T-DevAcceptFix2 ⑤（20261006 第二轮验收）：**已收事件计数**——agent 事件到达并进入适配链的累计。
+     *
+     * 口径：**收到即计数**（含后续被去重/屏蔽/展示链丢弃的）——它回答的是「事件到没到」，
+     * 不是「展示了多少」。面板零产出时：N=0 → 查 agent 侧（织入/门禁/传输）；N>0 → 查消费侧。
+     * 此前两条通道在停采态不打点、收事件也不打点，导致现场无法分流（沙盒日志实证）。
+     */
+    private val receivedCount = java.util.concurrent.atomic.AtomicLong()
+
+    /** 事件到达打点（[AgentManager] 适配前调用）。 */
+    internal fun markReceived() {
+        receivedCount.incrementAndGet()
+    }
+
+    /** 已收事件数（诊断行取数；测试可读）。 */
+    fun receivedEvents(): Long = receivedCount.get()
+
     fun toEntry(event: AgentEvent): LogSqlEntry {
         val params = event.params
             .sortedBy { it.first }

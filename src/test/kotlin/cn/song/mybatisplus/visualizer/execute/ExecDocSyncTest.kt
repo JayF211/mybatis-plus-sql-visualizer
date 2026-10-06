@@ -125,12 +125,28 @@ class ExecDocSyncTest : BasePlatformTestCase() {
 
     // ======================== T-PreviewFast：差量快路径（P1）与判据（P3） ========================
 
-    /** P1 判据表驱动：内容一致（document 源 / vf 源）→ true；不一致 → false。 */
+    /**
+     * P1 判据表驱动：内容一致 → true；不一致 → false。
+     * T-DevAcceptFix2 ④（20261006 第二轮验收）：**无 document 时不再读 vf 内容**（EDT 禁 VFS 慢操作），
+     * 改判「本进程最近写入内容 + 写入时 VFS 时间戳」内存标记——标记缺失/时间戳不符即 false。
+     */
     fun testExecFileContentMatchesTableDriven() {
         writeIo("SELECT 1")
         val vf = refreshVf()!!
-        assertTrue("无 document 时读 vf 内容：一致 → true", DataSourceSelector.execFileContentMatches(project, vf, "SELECT 1"))
-        assertFalse("无 document 时读 vf 内容：不一致 → false", DataSourceSelector.execFileContentMatches(project, vf, "SELECT 2"))
+        assertFalse(
+            "无 document 且无写入标记（外部写入/新进程）→ false（宁可多写一次，不读盘）",
+            DataSourceSelector.execFileContentMatches(project, vf, "SELECT 1"),
+        )
+        // 经生产写入路径打标记（内容 + 时间戳）
+        DataSourceSelector.writeVfTextViaDocument(project, vf, "SELECT 1")
+        assertTrue(
+            "无 document 但写入标记命中（内容 + 时间戳一致）→ true",
+            DataSourceSelector.execFileContentMatches(project, vf, "SELECT 1"),
+        )
+        assertFalse(
+            "无 document 且标记内容不同 → false",
+            DataSourceSelector.execFileContentMatches(project, vf, "SELECT 2"),
+        )
 
         FileDocumentManager.getInstance().getDocument(vf)
         assertTrue("有 document 时以 document 文本为准：一致 → true", DataSourceSelector.execFileContentMatches(project, vf, "SELECT 1"))
