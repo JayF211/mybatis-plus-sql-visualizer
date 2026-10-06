@@ -85,6 +85,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private var currentFile: HistoryFileEntry? = null
     private var currentEntries: List<LogSqlEntry> = emptyList()
 
+    /** T-SqlLogPerf：二级列表滚动宿主（构造期装配 adjustment 监听驱动滚动追加）。 */
+    private lateinit var sqlScrollPane: JBScrollPane
+
     // ---------- O-90：同模板计数徽章与聚焦 ----------
 
     /** O-90：当前文件全量条目的同模板计数（徽章渲染与右键聚焦动作共用；applySqlSearch 重建）。 */
@@ -299,7 +302,10 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
                 if (e.isPopupTrigger) showSqlContextMenu(e)
             }
         })
-        cards.add(JBScrollPane(sqlList), CARD_SQL)
+        // T-SqlLogPerf：二级列表滚动追加——滚动条逼近底部时续写下一批（fillSqlList 只写首屏）
+        sqlScrollPane = JBScrollPane(sqlList)
+        sqlScrollPane.verticalScrollBar.addAdjustmentListener { maybeAppendOnScroll() }
+        cards.add(sqlScrollPane, CARD_SQL)
         add(cards, BorderLayout.CENTER)
     }
 
@@ -307,6 +313,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private fun showFileList() {
         currentFile = null
+        currentFileStamp = null
         currentEntries = emptyList()
         sqlClickPreview.hide() // 返回一级时若二级预览弹窗还开着，一并关掉
         refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = false）
@@ -339,6 +346,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
                 ApplicationManager.getApplication().invokeLater {
                     if (gen != bgGeneration || project.isDisposed) return@invokeLater
                     currentEntries = entries
+                    // T-SqlLogPerf：记录加载完成时的文件快照——refresh() 据此免掉未变文件的全量重读
+                    currentFileStamp = fileEntry.file.lastModified() to fileEntry.file.length()
                     applySqlSearch()
                     LOG.info("HistorySqlLogPanel.showFileContent: ${fileEntry.file.name} 共 ${entries.size} 条 SQL")
                 }
@@ -362,6 +371,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.sql")
         cardLayout.show(cards, CARD_SQL)
         currentEntries = SqlLogFileReader.readFromFile(fileEntry.file)
+        currentFileStamp = fileEntry.file.lastModified() to fileEntry.file.length()
         applySqlSearch()
     }
 
@@ -383,6 +393,11 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      * T-Perf-05：目录扫描 + countInFile / readFromFile 全部移入 [Task.Backgroundable]
      * （100MB 自动保存文件的逐行扫描在 EDT 直跑必然长冻结）；EDT 只做结果应用。
      * 代际守卫：新一轮刷新/加载启动后，旧后台任务的 apply 自动作废。
+     *
+     * T-SqlLogPerf（20261006-1020 计划 P1）：浏览态刷新不再**无条件**全量重读当前文件——
+     * 仅当 (lastModified, length) 与加载完成时快照 [currentFileStamp] 不一致（自动保存确有追加）
+     * 才重读；未变则后台只做目录扫描 + countInFile（有缓存）。日常 IDE 实测 19MB/8708 条文件
+     * 一次浏览窗口内被 refresh + showFileContent 全量解析约 3 遍（15~16.6s），此处消除 refresh 侧的重复成本。
      */
     fun refresh() {
         val gen = ++bgGeneration
@@ -390,10 +405,15 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         object : Task.Backgroundable(project, MpSqlVisualizerBundle.message("log.history.scan.progress"), true) {
             override fun run(indicator: com.intellij.openapi.progress.ProgressIndicator) {
                 val scanned = scanHistoryFiles(getHistoryDir())
-                val keepReload = keepFile?.takeIf { it.exists() }?.let { SqlLogFileReader.readFromFile(it) }
+                val keepReload = keepFile?.takeIf { it.exists() }?.let { f ->
+                    val stamp = f.lastModified() to f.length()
+                    // currentFileStamp 为 EDT 写的 Swing 字段，此处读只做「是否变化」启发判定：
+                    // 竞态最坏结果是多读一次文件，无正确性风险（读到 null 视为变化 → 重读，行为同旧版）
+                    if (stamp == currentFileStamp) null else SqlReload(f, SqlLogFileReader.readFromFile(f), stamp)
+                }
                 ApplicationManager.getApplication().invokeLater {
                     if (gen != bgGeneration || project.isDisposed) return@invokeLater
-                    applyRefresh(scanned, keepReload)
+                    applyRefresh(scanned, keepFile, keepReload)
                 }
             }
         }.queue()
@@ -403,7 +423,10 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     internal fun refreshForTest() {
         ++bgGeneration // 作废在途后台 apply（构造期 refresh() 的后台扫描可能尚未完成）
         val keepFile = currentFile?.file
-        applyRefresh(scanHistoryFiles(getHistoryDir()), keepFile?.takeIf { it.exists() }?.let { SqlLogFileReader.readFromFile(it) })
+        val keepReload = keepFile?.takeIf { it.exists() }?.let {
+            SqlReload(it, SqlLogFileReader.readFromFile(it), it.lastModified() to it.length())
+        }
+        applyRefresh(scanHistoryFiles(getHistoryDir()), keepFile, keepReload)
     }
 
     /** 目录扫描 + 条目计数（纯 IO，后台执行）。 */
@@ -417,19 +440,27 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         return files.map { file -> HistoryFileEntry(file, SqlLogFileReader.countInFile(file)) }
     }
 
+    /** T-SqlLogPerf：浏览文件重载结果包（条目 + 读取完成时的 (lastModified, length) 快照）。 */
+    private data class SqlReload(val file: File, val entries: List<LogSqlEntry>, val stamp: Pair<Long, Long>)
+
     /** 应用扫描结果（EDT；仅刷新/加载代际最新者执行）。 */
-    private fun applyRefresh(scanned: List<HistoryFileEntry>, keepReload: List<LogSqlEntry>?) {
+    private fun applyRefresh(scanned: List<HistoryFileEntry>, keepFile: File?, keepReload: SqlReload?) {
         allFiles = scanned
         LOG.info("HistorySqlLogPanel.refresh: 扫描到 ${allFiles.size} 个历史文件")
 
-        // 保持二级视图：当前文件仍存在则重载内容
-        if (keepReload != null) {
-            currentEntries = keepReload
-            applySqlSearch()
+        // 保持二级视图：当前文件仍存在则保留二级
+        if (keepFile != null && keepFile.exists()) {
+            // 仅文件真有变化（快照不一致）才替换解析结果；未变时 currentEntries/滚动位置原样保留
+            if (keepReload != null) {
+                currentEntries = keepReload.entries
+                currentFileStamp = keepReload.stamp
+                applySqlSearch()
+            }
             return
         }
         // 否则回一级（默认展示文件列表）
         currentFile = null
+        currentFileStamp = null
         currentEntries = emptyList()
         templateFocusKey = null // O-90：回一级清除同模板聚焦（chip 同步隐）
         refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = false）
@@ -558,36 +589,78 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     }
 
     /**
-     * T-SqlHistoryFull：列表分批填充（复用实时面板 applyFullRebuild 范式）——列表模型全量同步
-     * 填充在条目千百级时产生上千次模型变更事件 + 布局失效，是历史打开卡顿主源。
-     * 改为：ignoreRepaint 批量抑制布局 + 首屏 30 条立即写入 + 剩余每 30 条 invokeLater 追加；
-     * gen 代际守卫——新一轮 fillSqlList（重新加载/搜索/刷新）启动即终止旧分块链，杜绝幽灵/重复条目。
+     * T-SqlHistoryFull → T-SqlLogPerf 演进（20261006-1020 计划 P3/P4）：二级列表**滚动追加**填充。
+     *
+     * 旧版：首屏 30 条立即写入 + 剩余每 30 条 invokeLater 链式追加——8708 条文件排 290 个 EDT 脉冲，
+     * 无论用户看多少都全量进模型。改为：首屏 30 条立即写入，其余挂 [pendingEntries]，用户滚动
+     * 逼近列表底部（[maybeAppendOnScroll]）时才续写下一批（每批 [REFRESH_CHUNK_SIZE] 条，
+     * 滚动条 max 变更会再触发 adjustment 事件自然节流）——大文件只付出「用户真正浏览到」的成本。
+     * gen 代际守卫保留：新一轮 fillSqlList（重新加载/搜索/刷新）启动即作废旧待写队列。
      */
     private fun fillSqlList(entries: List<LogSqlEntry>) {
         val gen = ++bgGeneration
-        sqlList.ignoreRepaint = true
-        sqlListModel.clear()
-        if (entries.isNotEmpty()) {
-            sqlListModel.addAll(entries.take(REFRESH_FIRST_BATCH_SIZE))
-        }
-        sqlList.ignoreRepaint = false
-        sqlList.revalidate()
-        sqlList.repaint()
-
-        if (entries.size > REFRESH_FIRST_BATCH_SIZE) {
-            val iterator = entries.drop(REFRESH_FIRST_BATCH_SIZE).iterator()
-            fun appendNext() {
-                if (gen != bgGeneration || project.isDisposed) return // 新一轮已启动，旧链终止
-                val chunk = mutableListOf<LogSqlEntry>()
-                repeat(REFRESH_CHUNK_SIZE) { if (iterator.hasNext()) chunk.add(iterator.next()) }
-                sqlListModel.addAll(chunk)
-                if (iterator.hasNext()) {
-                    ApplicationManager.getApplication().invokeLater { appendNext() }
-                }
+        pendingEntries = emptyList()
+        pendingAppendIndex = 0
+        pendingAppendGen = gen
+        LogPerfProbe.measure("History.fillSqlList", { "${entries.size} 条" }) {
+            sqlList.ignoreRepaint = true
+            sqlListModel.clear()
+            if (entries.isNotEmpty()) {
+                sqlListModel.addAll(entries.take(REFRESH_FIRST_BATCH_SIZE))
             }
-            ApplicationManager.getApplication().invokeLater { appendNext() }
+            sqlList.ignoreRepaint = false
+            sqlList.revalidate()
+            sqlList.repaint()
         }
+        if (entries.size > REFRESH_FIRST_BATCH_SIZE) {
+            pendingEntries = entries
+            pendingAppendIndex = REFRESH_FIRST_BATCH_SIZE
+        }
+        maybeAppendOnScroll()
     }
+
+    /** 滚动追加触发窗口：视口底沿距列表底沿小于该像素即续写下一批（约半屏，提前装载避免跟随感断裂）。 */
+    private val APPEND_TRIGGER_PIXELS = 480
+
+    /** 滚动逼近底部时续写待写条目（adjustment 事件 + fillSqlList 尾部各调一次；一次最多一批，靠滚动条 max 变更再触发）。 */
+    private fun maybeAppendOnScroll() {
+        if (!sqlList.isShowing) return // 未显示（headless/隐藏卡）不自动续写——测试经 [appendPendingForTest] 驱动
+        appendPendingIfNearBottom()
+    }
+
+    /** 测试缝：headless 下无真实滚动事件，直接驱动滚动追加（与 adjustment 监听同一实现路径）。 */
+    internal fun appendPendingForTest() {
+        appendPendingIfNearBottom()
+    }
+
+    private fun appendPendingIfNearBottom() {
+        if (pendingAppendIndex >= pendingEntries.size) return
+        val bar = sqlScrollPane?.verticalScrollBar
+        if (bar != null) {
+            val distance = bar.maximum - (bar.value + bar.visibleAmount)
+            if (distance > APPEND_TRIGGER_PIXELS) return
+        }
+        if (pendingAppendGen != bgGeneration || project.isDisposed) {
+            pendingEntries = emptyList()
+            return
+        }
+        val end = minOf(pendingEntries.size, pendingAppendIndex + REFRESH_CHUNK_SIZE)
+        sqlListModel.addAll(pendingEntries.subList(pendingAppendIndex, end))
+        pendingAppendIndex = end
+        if (pendingAppendIndex >= pendingEntries.size) pendingEntries = emptyList()
+    }
+
+    /** 滚动追加待写队列（fillSqlList 写完首屏后的剩余条目；追加完毕置空）。 */
+    private var pendingEntries: List<LogSqlEntry> = emptyList()
+
+    /** 待写队列下一位游标（避免每批 drop() 拷贝余量）。 */
+    private var pendingAppendIndex: Int = 0
+
+    /** 待写队列所属代际（滚动回调校验，旧代际队列作废）。 */
+    private var pendingAppendGen: Int = 0
+
+    /** T-SqlLogPerf：当前浏览文件加载完成时的 (lastModified, length) 快照——refresh() 据此判定文件是否变化。 */
+    private var currentFileStamp: Pair<Long, Long>? = null
 
     private fun getHistoryDir(): String {
         val basePath = project.basePath ?: return ""
