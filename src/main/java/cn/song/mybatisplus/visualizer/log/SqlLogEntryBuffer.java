@@ -63,8 +63,43 @@ public class SqlLogEntryBuffer {
     /** 暂停态。 */
     private volatile boolean paused;
 
-    /** 去重开关（默认开——用户实测后要求默认勾选，T-M31.13）。 */
+    /** 去重开关（默认开——用户实测后要求默认勾选，T-M31.13）。
+     *  T-SqlLogPerf P6：从 false 翻 true 时全量重建 [dedupeIndex]——关闭期间入队不走索引维护，
+     *  重开必须补账，否则新窗口内的重复漏判（等价性红线，见 isDuplicate 注释）。 */
     private volatile boolean dedupeEnabled = true;
+
+    /**
+     * T-SqlLogPerf P6（20261006-1020 计划）：dedupeKey → 队内**最近**时间戳索引——isDuplicate
+     * 从锁内 O(n) 全表扫描（65 条/秒压测下每条线性扫 200 条 + 三通道写线程与 EDT snapshot 抢锁）
+     * 降为 O(1) 查表。窗口判定取每键最大时间戳与旧 firstOrNull 全扫逐字等价：
+     * 「存在同键条目使 now-timestamp &lt; 窗口」⟺ 最大时间戳落窗口内。
+     *
+     * <p>维护面（全部须在 {@code synchronized(entries)} 内）：入队 upsert / 头部淘汰回扫 / dedupeExisting
+     * 与 dedupeEnabled 翻 true 全量重建 / clear 清空 / removeEntry 单键重算。dedupeEnabled=false
+     * 期间不维护（不触 dedupeKey lazy——T-PerfSweep9 同款口径），重开时补账。
+     */
+    private final HashMap<String, Long> dedupeIndex = new HashMap<>();
+
+    private void rebuildDedupeIndexLocked() {
+        dedupeIndex.clear();
+        for (LogSqlEntry e : entries) {
+            Long latest = dedupeIndex.get(e.dedupeKey());
+            if (latest == null || e.timestamp() > latest) {
+                dedupeIndex.put(e.dedupeKey(), e.timestamp());
+            }
+        }
+    }
+
+    /** {@code entries.lastOrNull { it.dedupeKey == k }} 的等价实现（自队尾向队首扫描取第一个同键条目）。 */
+    private LogSqlEntry lastEntryWithKey(String k) {
+        for (java.util.Iterator<LogSqlEntry> dit = entries.descendingIterator(); dit.hasNext(); ) {
+            LogSqlEntry e = dit.next();
+            if (e.dedupeKey().equals(k)) {
+                return e;
+            }
+        }
+        return null;
+    }
 
     /**
      * 去重丢弃计数（T-Perf-19：键 = restoredSql 指纹 sqlFingerprint，非 SQL 原文——
@@ -161,8 +196,18 @@ public class SqlLogEntryBuffer {
         return dedupeEnabled;
     }
 
+    /**
+     * 去重开关 setter（Kotlin 自定义 setter 的等价翻译）：从 false 翻 true 时全量重建索引
+     * （关闭期间入队不走索引维护，重开必须补账）。
+     */
     public void setDedupeEnabled(boolean dedupeEnabled) {
+        boolean changed = dedupeEnabled != this.dedupeEnabled;
         this.dedupeEnabled = dedupeEnabled;
+        if (changed && dedupeEnabled) {
+            synchronized (entries) {
+                rebuildDedupeIndexLocked();
+            }
+        }
     }
 
     public long getDedupeWindowMs() {
@@ -317,8 +362,32 @@ public class SqlLogEntryBuffer {
                 LogSqlEntry added = addNumbered(entry);
                 storedEntry[0] = added;
                 entries.addLast(added);
+                if (dedupeEnabled) {
+                    // T-SqlLogPerf P6：索引 upsert（dedupeKey lazy 首触与旧版 isDuplicate 同价，
+                    // 仅去重开启时支付）
+                    String k = added.dedupeKey();
+                    Long latest = dedupeIndex.get(k);
+                    if (latest == null || added.timestamp() > latest) {
+                        dedupeIndex.put(k, added.timestamp());
+                    }
+                }
                 while (entries.size() > maxEntries) {
-                    evictedEntries.add(entries.removeFirst());
+                    LogSqlEntry evicted = entries.removeFirst();
+                    if (dedupeEnabled) {
+                        // T-SqlLogPerf P6：淘汰回扫——索引存的是「最近」时间戳，仅当被淘汰者恰为
+                        // 该键最新时才需要重算（队内同键余条 = 超窗重复入队形态，低频）
+                        String k = evicted.dedupeKey();
+                        Long idxLatest = dedupeIndex.get(k);
+                        if (idxLatest != null && idxLatest.longValue() == evicted.timestamp()) {
+                            LogSqlEntry stillThere = lastEntryWithKey(k);
+                            if (stillThere != null) {
+                                dedupeIndex.put(k, stillThere.timestamp());
+                            } else {
+                                dedupeIndex.remove(k);
+                            }
+                        }
+                    }
+                    evictedEntries.add(evicted);
                     evictedSinceDrain.incrementAndGet(); // T-Perf-03：头部淘汰计数（面板增量刷新）
                 }
             }
@@ -393,6 +462,9 @@ public class SqlLogEntryBuffer {
             if (removed[0] > 0) {
                 entries.clear();
                 entries.addAll(keep);
+                if (dedupeEnabled) {
+                    rebuildDedupeIndexLocked(); // T-SqlLogPerf P6：裁剪后索引随队重建
+                }
             }
         }
         if (removed[0] > 0) {
@@ -511,15 +583,15 @@ public class SqlLogEntryBuffer {
      * 去重判定（T-Perf-06：必须在 synchronized(entries) 内调用——无锁遍历 ArrayDeque 会与清空/删除并发 CME）。
      * T-LogDedupeMpMark：按 LogSqlEntry.dedupeKey（空白规范化指纹）比较——JdbcTemplate 双路日志副本仅差
      * 首尾空白，原文精确相等永不命中；预计算指纹串比较也快于全文 ==。
+     * T-SqlLogPerf P6：O(n) 全表扫改 dedupeIndex O(1) 查表——「存在同键条目使 now-timestamp &lt; 窗口」
+     * ⟺ 该键最近时间戳落窗口内（最大时间戳是窗口判定的唯一有效候选，逐字等价）。
      */
     private boolean isDuplicate(LogSqlEntry entry) {
-        long now = entry.timestamp();
-        for (LogSqlEntry it : entries) {
-            if (it.dedupeKey().equals(entry.dedupeKey()) && now - it.timestamp() < dedupeWindowMs) {
-                return true;
-            }
+        Long latest = dedupeIndex.get(entry.dedupeKey());
+        if (latest == null) {
+            return false;
         }
-        return false;
+        return entry.timestamp() - latest < dedupeWindowMs;
     }
 
     /** 最早在前的快照（正序）。 */
@@ -555,6 +627,7 @@ public class SqlLogEntryBuffer {
     public void clear() {
         synchronized (entries) {
             entries.clear();
+            dedupeIndex.clear(); // T-SqlLogPerf P6：索引随队清空
         }
         resetDedupeCounts();
         sequenceCounter.set(0);
@@ -611,7 +684,17 @@ public class SqlLogEntryBuffer {
      */
     public void removeEntry(LogSqlEntry entry) {
         synchronized (entries) {
-            entries.removeIf(it -> it == entry);
+            boolean removed = entries.removeIf(it -> it == entry);
+            // T-SqlLogPerf P6：单条删除仅重算该键（用户右键低频，O(n) 一次可接受）
+            if (removed && dedupeEnabled) {
+                String k = entry.dedupeKey();
+                LogSqlEntry stillThere = lastEntryWithKey(k);
+                if (stillThere != null) {
+                    dedupeIndex.put(k, stillThere.timestamp());
+                } else {
+                    dedupeIndex.remove(k);
+                }
+            }
         }
         notifyChanged();
     }

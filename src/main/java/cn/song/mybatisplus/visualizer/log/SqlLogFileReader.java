@@ -96,11 +96,16 @@ public final class SqlLogFileReader {
         }
         // T-SqlHistoryFull：整读 file.readText() → 流式逐行（单文件滚动阈值 100MB，整读内存峰值可达文件体量；
         // 逐行消费只在解析块内累积当前块，峰值≈单条 SQL）。解析结果与整读路径完全一致。
-        try (java.io.BufferedReader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
-            return parseContent(reader.lines());
-        } catch (Exception e) {
-            return List.of();
-        }
+        // T-SqlLogPerf：历史文件加载是 20261006 实测延迟大头嫌疑（8708 条/19MB 计 15~16.6s），阈值打点归因。
+        return LogPerfProbe.measure("SqlLogFileReader.readFromFile",
+                () -> file.getName() + " " + file.length() + "B",
+                () -> {
+                    try (java.io.BufferedReader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
+                        return parseContent(reader.lines());
+                    } catch (Exception e) {
+                        return List.of();
+                    }
+                });
     }
 
     /**
@@ -159,25 +164,34 @@ public final class SqlLogFileReader {
      */
     public List<LogSqlEntry> parseContent(java.util.stream.Stream<String> lines) {
         List<LogSqlEntry> entries = new ArrayList<>();
-        List<String> currentLines = new ArrayList<>();
+        // T-SqlLogPerf（20261006-1020 计划 P2）：块累积不再走 joinToString → lines() → joinToString
+        // 三份全量拷贝——头部行与正文行分开持有，parseBlockLines 直收行序列，单块只剩
+        // 组装 restoredSql 那一次必要拷贝。判定逻辑与逐字语义与旧双拷贝版完全一致（round-trip 测试钉）。
+        String header = null;
+        List<String> bodyLines = new ArrayList<>();
         for (java.util.Iterator<String> it = lines.iterator(); it.hasNext(); ) {
             String line = it.next();
+            // 检测新版头部（兼容 2/3 个 `-`：-- source 或 --- source）
+            // 此处不能用 startsWith 严格判别「-- source」——旧版 F-43 的「-- 2026-08-31 ...」也会匹配，
+            // 故先看是否为新版结构（含 "source:" 与 "time:" 关键字）——具体交由正则捕获 timestamp/format ，
+            // parseBlockLines 中先 NEW 后 OLD 顺序尝试，任一正则匹配即可。
             String trimmed = line.stripLeading();
             if (trimmed.startsWith("--") && trimmed.contains("source:") && trimmed.contains("time:")) {
-                flushBlock(currentLines, entries);
-                currentLines.clear();
-                currentLines.add(line);
-            } else if (line.startsWith("-- ") && !line.contains("source:") && !line.startsWith(PD_PREFIX)) {
-                // 检测旧版头部（F-43：`-- yyyy-MM-dd HH:mm:ss`）；`-- pd: ` 是参数持久化行非头部，
-                // 不排除会被当作旧头部把条目劈成两块（T-HistParam）
-                flushBlock(currentLines, entries);
-                currentLines.clear();
-                currentLines.add(line);
-            } else {
-                currentLines.add(line);
+                flushBlock(header, bodyLines, entries);
+                header = line;
+            }
+            // 检测旧版头部（F-43：`-- yyyy-MM-dd HH:mm:ss`）；`-- pd: ` 是参数持久化行非头部，
+            // 不排除会被当作旧头部把条目劈成两块（T-HistParam）
+            else if (line.startsWith("-- ") && !line.contains("source:") && !line.startsWith(PD_PREFIX)) {
+                flushBlock(header, bodyLines, entries);
+                header = line;
+            }
+            // 非头部行（SQL 正文或空行）
+            else if (header != null) {
+                bodyLines.add(line);
             }
         }
-        flushBlock(currentLines, entries);
+        flushBlock(header, bodyLines, entries);
         // T-LogHistoryRowNo：按文件内解析顺序注入序号（防御：已有序号的条目不覆盖）
         List<LogSqlEntry> numbered = new ArrayList<>(entries.size());
         for (int i = 0; i < entries.size(); i++) {
@@ -187,29 +201,20 @@ public final class SqlLogFileReader {
         return numbered;
     }
 
-    private void flushBlock(List<String> currentLines, List<LogSqlEntry> out) {
-        if (currentLines.isEmpty()) {
+    private void flushBlock(String header, List<String> bodyLines, List<LogSqlEntry> out) {
+        if (header == null) {
             return;
         }
-        String block = String.join("\n", currentLines);
-        LogSqlEntry e = parseBlock(block);
+        LogSqlEntry e = parseBlockLines(header, bodyLines);
         if (e != null) {
             out.add(e);
         }
+        bodyLines.clear();
     }
 
-    private LogSqlEntry parseBlock(String block) {
-        List<String> lines = block.lines().toList();
-        if (lines.isEmpty()) {
-            return null;
-        }
-        String header = lines.get(0);
-        // T-HistParam F2：v2 头部下探测参数持久化行（`-- pd: <base64> --`），解码失败按普通
-        // 正文注释行降级（SQL 多一行注释无害）；解码成功则 rawSql 与 params 从载荷还原。
-        // T-McpAuditTrail T-MAT-03 读端回填：载荷扩展键 `s`（来源）同源还原——写入侧已把
-        // [SqlSource.MCP] 落进 pd 载荷，读端不回填则重启后来源退化为 UNKNOWN（历史页徽标消失）。
-        // 两条头部分支（新版/旧版 F-43）都要回填：头部形态与 pd 行是否在场互相独立。
-        List<String> contentLines = lines.subList(1, lines.size());
+    private LogSqlEntry parseBlockLines(String header, List<String> contentLines) {
+        // T-SqlLogPerf（20261006-1020 计划 P2）：直收 parseContent 的行序列——旧 parseBlock(block)
+        // 的 block.lines() 再切分已随单遍化移除；头部行/正文行由调用方分开传入，语义逐字一致。
         List<String> bodyLines = contentLines;
         String rawSqlOverride = null;
         List<LogSqlParam> params = List.of();

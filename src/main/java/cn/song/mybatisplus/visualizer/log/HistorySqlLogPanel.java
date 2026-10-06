@@ -24,6 +24,7 @@ import com.intellij.ui.ListSpeedSearch;
 import com.intellij.ui.components.JBList;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.ui.SearchTextField;
+import kotlin.Pair;
 import org.jetbrains.annotations.NotNull;
 
 import java.awt.BorderLayout;
@@ -75,6 +76,9 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     private final SqlClickPreview sqlClickPreview;
     private HistoryFileEntry currentFile = null;
     private List<LogSqlEntry> currentEntries = List.of();
+
+    /** T-SqlLogPerf：二级列表滚动宿主（构造期装配 adjustment 监听驱动滚动追加）。 */
+    private JBScrollPane sqlScrollPane = null;
 
     // ---------- T-Perf-05：后台任务代际 + 搜索防抖 ----------
 
@@ -324,7 +328,10 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
                 }
             }
         });
-        cards.add(new JBScrollPane(sqlList), CARD_SQL);
+        // T-SqlLogPerf：二级列表滚动追加——滚动条逼近底部时续写下一批（fillSqlList 只写首屏）
+        sqlScrollPane = new JBScrollPane(sqlList);
+        sqlScrollPane.getVerticalScrollBar().addAdjustmentListener(e -> maybeAppendOnScroll());
+        cards.add(sqlScrollPane, CARD_SQL);
         add(cards, BorderLayout.CENTER);
     }
 
@@ -340,6 +347,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
     private void showFileList() {
         currentFile = null;
+        currentFileStamp = null;
         currentEntries = List.of();
         sqlClickPreview.hide(); // 返回一级时若二级预览弹窗还开着，一并关掉
         refreshNavToolbar(); // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = false）
@@ -373,6 +381,8 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
                         return;
                     }
                     currentEntries = entries;
+                    // T-SqlLogPerf：记录加载完成时的文件快照——refresh() 据此免掉未变文件的全量重读
+                    currentFileStamp = new Pair<>(fileEntry.file().lastModified(), fileEntry.file().length());
                     applySqlSearch();
                     LOG.info("HistorySqlLogPanel.showFileContent: " + fileEntry.file().getName()
                             + " 共 " + entries.size() + " 条 SQL");
@@ -395,6 +405,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         searchField.getTextEditor().getEmptyText().setText(MpSqlVisualizerBundle.message("log.history.search.sql"));
         cardLayout.show(cards, CARD_SQL);
         currentEntries = SqlLogFileReader.INSTANCE.readFromFile(fileEntry.file());
+        currentFileStamp = new Pair<>(fileEntry.file().lastModified(), fileEntry.file().length());
         applySqlSearch();
     }
 
@@ -416,6 +427,11 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
      * T-Perf-05：目录扫描 + countInFile / readFromFile 全部移入 {@link Task.Backgroundable}
      * （100MB 自动保存文件的逐行扫描在 EDT 直跑必然长冻结）；EDT 只做结果应用。
      * 代际守卫：新一轮刷新/加载启动后，旧后台任务的 apply 自动作废。
+     *
+     * <p>T-SqlLogPerf（20261006-1020 计划 P1）：浏览态刷新不再<b>无条件</b>全量重读当前文件——
+     * 仅当 (lastModified, length) 与加载完成时快照 [currentFileStamp] 不一致（自动保存确有追加）
+     * 才重读；未变则后台只做目录扫描 + countInFile（有缓存）。日常 IDE 实测 19MB/8708 条文件
+     * 一次浏览窗口内被 refresh + showFileContent 全量解析约 3 遍（15~16.6s），此处消除 refresh 侧的重复成本。
      */
     public void refresh() {
         final int gen = ++bgGeneration;
@@ -424,14 +440,22 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
             @Override
             public void run(com.intellij.openapi.progress.ProgressIndicator indicator) {
                 final List<HistoryFileEntry> scanned = scanHistoryFiles(getHistoryDir());
-                final List<LogSqlEntry> keepReload = keepFile != null && keepFile.exists()
-                        ? SqlLogFileReader.INSTANCE.readFromFile(keepFile)
-                        : null;
+                final SqlReload keepReload;
+                if (keepFile != null && keepFile.exists()) {
+                    Pair<Long, Long> stamp = new Pair<>(keepFile.lastModified(), keepFile.length());
+                    // currentFileStamp 为 EDT 写的 Swing 字段，此处读只做「是否变化」启发判定：
+                    // 竞态最坏结果是多读一次文件，无正确性风险（读到 null 视为变化 → 重读，行为同旧版）
+                    keepReload = stamp.equals(currentFileStamp)
+                            ? null
+                            : new SqlReload(keepFile, SqlLogFileReader.INSTANCE.readFromFile(keepFile), stamp);
+                } else {
+                    keepReload = null;
+                }
                 ApplicationManager.getApplication().invokeLater(() -> {
                     if (gen != bgGeneration || project.isDisposed()) {
                         return;
                     }
-                    applyRefresh(scanned, keepReload);
+                    applyRefresh(scanned, keepFile, keepReload);
                 });
             }
         }.queue();
@@ -441,8 +465,12 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     void refreshForTest() {
         bgGeneration++; // 作废在途后台 apply（构造期 refresh() 的后台扫描可能尚未完成）
         File keepFile = currentFile != null ? currentFile.file() : null;
-        applyRefresh(scanHistoryFiles(getHistoryDir()),
-                keepFile != null && keepFile.exists() ? SqlLogFileReader.INSTANCE.readFromFile(keepFile) : null);
+        SqlReload keepReload = null;
+        if (keepFile != null && keepFile.exists()) {
+            keepReload = new SqlReload(keepFile, SqlLogFileReader.INSTANCE.readFromFile(keepFile),
+                    new Pair<>(keepFile.lastModified(), keepFile.length()));
+        }
+        applyRefresh(scanHistoryFiles(getHistoryDir()), keepFile, keepReload);
     }
 
     /** 目录扫描 + 条目计数（纯 IO，后台执行）。 */
@@ -463,19 +491,37 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         return result;
     }
 
+    /** T-SqlLogPerf：浏览文件重载结果包（条目 + 读取完成时的 (lastModified, length) 快照）。 */
+    private static final class SqlReload {
+        final File file;
+        final List<LogSqlEntry> entries;
+        final Pair<Long, Long> stamp;
+
+        SqlReload(File file, List<LogSqlEntry> entries, Pair<Long, Long> stamp) {
+            this.file = file;
+            this.entries = entries;
+            this.stamp = stamp;
+        }
+    }
+
     /** 应用扫描结果（EDT；仅刷新/加载代际最新者执行）。 */
-    private void applyRefresh(List<HistoryFileEntry> scanned, List<LogSqlEntry> keepReload) {
+    private void applyRefresh(List<HistoryFileEntry> scanned, File keepFile, SqlReload keepReload) {
         allFiles = scanned;
         LOG.info("HistorySqlLogPanel.refresh: 扫描到 " + allFiles.size() + " 个历史文件");
 
-        // 保持二级视图：当前文件仍存在则重载内容
-        if (keepReload != null) {
-            currentEntries = keepReload;
-            applySqlSearch();
+        // 保持二级视图：当前文件仍存在则保留二级
+        if (keepFile != null && keepFile.exists()) {
+            // 仅文件真有变化（快照不一致）才替换解析结果；未变时 currentEntries/滚动位置原样保留
+            if (keepReload != null) {
+                currentEntries = keepReload.entries;
+                currentFileStamp = keepReload.stamp;
+                applySqlSearch();
+            }
             return;
         }
         // 否则回一级（默认展示文件列表）
         currentFile = null;
+        currentFileStamp = null;
         currentEntries = List.of();
         refreshNavToolbar(); // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = false）
         searchField.getTextEditor().getEmptyText().setText(MpSqlVisualizerBundle.message("log.history.search.files"));
@@ -550,44 +596,91 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     }
 
     /**
-     * T-SqlHistoryFull：列表分批填充（复用实时面板 applyFullRebuild 范式）——列表模型全量同步
-     * 填充在条目千百级时产生上千次模型变更事件 + 布局失效，是历史打开卡顿主源。
-     * 改为：ignoreRepaint 批量抑制布局 + 首屏 30 条立即写入 + 剩余每 30 条 invokeLater 追加；
-     * gen 代际守卫——新一轮 fillSqlList（重新加载/搜索/刷新）启动即终止旧分块链，杜绝幽灵/重复条目。
+     * T-SqlHistoryFull → T-SqlLogPerf 演进（20261006-1020 计划 P3/P4）：二级列表**滚动追加**填充。
+     *
+     * <p>旧版：首屏 30 条立即写入 + 剩余每 30 条 invokeLater 链式追加——8708 条文件排 290 个 EDT 脉冲，
+     * 无论用户看多少都全量进模型。改为：首屏 30 条立即写入，其余挂 [pendingEntries]，用户滚动
+     * 逼近列表底部（[maybeAppendOnScroll]）时才续写下一批（每批 [REFRESH_CHUNK_SIZE] 条，
+     * 滚动条 max 变更会再触发 adjustment 事件自然节流）——大文件只付出「用户真正浏览到」的成本。
+     * gen 代际守卫保留：新一轮 fillSqlList（重新加载/搜索/刷新）启动即作废旧待写队列。
      */
     private void fillSqlList(List<LogSqlEntry> entries) {
         final int gen = ++bgGeneration;
-        sqlList.setIgnoreRepaint(true);
-        sqlListModel.clear();
-        if (!entries.isEmpty()) {
-            // 批量写入（master `sqlListModel.addAll(entries.take(N))`）——**必须整批一次 addAll**：
-            // 逐条 addElement 会为每行各发一次模型变更事件 + 布局失效，正是 T-LogListFreeze 要消除的
-            // 历史打开卡顿主源（T-SyncK2JMaster115 由 HistorySqlLogPanelNavigationTest 的分块轮数断言抓出）。
-            sqlListModel.addAll(entries.subList(0, Math.min(REFRESH_FIRST_BATCH_SIZE, entries.size())));
-        }
-        sqlList.setIgnoreRepaint(false);
-        sqlList.revalidate();
-        sqlList.repaint();
+        pendingEntries = List.of();
+        pendingAppendIndex = 0;
+        pendingAppendGen = gen;
+        LogPerfProbe.measure("History.fillSqlList", () -> entries.size() + " 条", () -> {
+            sqlList.setIgnoreRepaint(true);
+            sqlListModel.clear();
+            if (!entries.isEmpty()) {
+                // 批量写入（master `sqlListModel.addAll(entries.take(N))`）——**必须整批一次 addAll**：
+                // 逐条 addElement 会为每行各发一次模型变更事件 + 布局失效，正是 T-LogListFreeze 要消除的
+                // 历史打开卡顿主源（T-SyncK2JMaster115 由 HistorySqlLogPanelNavigationTest 的分块轮数断言抓出）。
+                sqlListModel.addAll(entries.subList(0, Math.min(REFRESH_FIRST_BATCH_SIZE, entries.size())));
+            }
+            sqlList.setIgnoreRepaint(false);
+            sqlList.revalidate();
+            sqlList.repaint();
+            return null;
+        });
 
         if (entries.size() > REFRESH_FIRST_BATCH_SIZE) {
-            java.util.Iterator<LogSqlEntry> iterator =
-                    entries.subList(REFRESH_FIRST_BATCH_SIZE, entries.size()).iterator();
-            Runnable[] appendNext = new Runnable[1];
-            appendNext[0] = () -> {
-                if (gen != bgGeneration || project.isDisposed()) return; // 新一轮已启动，旧链终止
-                List<LogSqlEntry> chunk = new ArrayList<>();
-                for (int i = 0; i < REFRESH_CHUNK_SIZE && iterator.hasNext(); i++) {
-                    chunk.add(iterator.next());
-                }
-                // 整批一次写入（同首屏批的理由：每批一次模型变更 = 每批一次 EDT 脉冲）
-                sqlListModel.addAll(chunk);
-                if (iterator.hasNext()) {
-                    ApplicationManager.getApplication().invokeLater(appendNext[0]);
-                }
-            };
-            ApplicationManager.getApplication().invokeLater(appendNext[0]);
+            pendingEntries = entries;
+            pendingAppendIndex = REFRESH_FIRST_BATCH_SIZE;
+        }
+        maybeAppendOnScroll();
+    }
+
+    /** 滚动追加触发窗口：视口底沿距列表底沿小于该像素即续写下一批（约半屏，提前装载避免跟随感断裂）。 */
+    private static final int APPEND_TRIGGER_PIXELS = 480;
+
+    /** 滚动逼近底部时续写待写条目（adjustment 事件 + fillSqlList 尾部各调一次；一次最多一批，靠滚动条 max 变更再触发）。 */
+    private void maybeAppendOnScroll() {
+        if (!sqlList.isShowing()) {
+            return; // 未显示（headless/隐藏卡）不自动续写——测试经 [appendPendingForTest] 驱动
+        }
+        appendPendingIfNearBottom();
+    }
+
+    /** 测试缝（master 为 internal 可见性）：headless 下无真实滚动事件，直接驱动滚动追加（与 adjustment 监听同一实现路径）。 */
+    public void appendPendingForTest() {
+        appendPendingIfNearBottom();
+    }
+
+    private void appendPendingIfNearBottom() {
+        if (pendingAppendIndex >= pendingEntries.size()) {
+            return;
+        }
+        javax.swing.JScrollBar bar = sqlScrollPane != null ? sqlScrollPane.getVerticalScrollBar() : null;
+        if (bar != null) {
+            int distance = bar.getMaximum() - (bar.getValue() + bar.getVisibleAmount());
+            if (distance > APPEND_TRIGGER_PIXELS) {
+                return;
+            }
+        }
+        if (pendingAppendGen != bgGeneration || project.isDisposed()) {
+            pendingEntries = List.of();
+            return;
+        }
+        int end = Math.min(pendingEntries.size(), pendingAppendIndex + REFRESH_CHUNK_SIZE);
+        sqlListModel.addAll(pendingEntries.subList(pendingAppendIndex, end));
+        pendingAppendIndex = end;
+        if (pendingAppendIndex >= pendingEntries.size()) {
+            pendingEntries = List.of();
         }
     }
+
+    /** 滚动追加待写队列（fillSqlList 写完首屏后的剩余条目；追加完毕置空）。 */
+    private List<LogSqlEntry> pendingEntries = List.of();
+
+    /** 待写队列下一位游标（避免每批 drop() 拷贝余量）。 */
+    private int pendingAppendIndex = 0;
+
+    /** 待写队列所属代际（滚动回调校验，旧代际队列作废）。 */
+    private int pendingAppendGen = 0;
+
+    /** T-SqlLogPerf：当前浏览文件加载完成时的 (lastModified, length) 快照——refresh() 据此判定文件是否变化。 */
+    private Pair<Long, Long> currentFileStamp = null;
 
     private static boolean containsIgnoreCase(String text, String lowerQ) {
         return text != null && text.toLowerCase(Locale.ENGLISH).contains(lowerQ);
