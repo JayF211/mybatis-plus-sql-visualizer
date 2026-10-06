@@ -66,11 +66,22 @@ public final class AgentMain {
         installed = true;
     }
 
-    /** 对已加载的驱动类执行 retransform（agentmain 门禁：SQL 事件须在应用已运行后到达）。 */
+    /**
+     * 对已加载的驱动类执行 retransform（agentmain 门禁：SQL 事件须在应用已运行后到达）。
+     *
+     * T-StatementWeave S5：扩展为**三面**——驱动 connect 面（原有）+ 语句 execute 面 + prepare
+     * 登记面。语句面是「attach 即生效」的直接落点：钩子挂在 execute 族方法体上，retransform 后
+     * **存量**语句对象的下一次执行即带钩子，与连接/语句对象的创建时间无关（池化老连接由此覆盖——
+     * connect 面做不到：包装只发生在连接创建时，存量连接不可回溯）。
+     */
     private static void retransformLoadedDrivers(Instrumentation inst) {
         Class<?>[] loaded = inst.getAllLoadedClasses();
         for (Class<?> c : loaded) {
-            if (DriverRegistry.isWeavable(c.getName()) && inst.isModifiableClass(c)) {
+            final String name = c.getName();
+            final boolean weavable = DriverRegistry.isWeavable(name)
+                    || DriverRegistry.isStatementWeavable(name)
+                    || DriverRegistry.isPrepareWeavable(name);
+            if (weavable && inst.isModifiableClass(c)) {
                 try {
                     inst.retransformClasses(c);
                 } catch (Throwable t) {

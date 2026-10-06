@@ -42,6 +42,8 @@ public final class SqlHookCallbacks {
      */
     public static Object onConnection(Object rawConnection, String url) {
         try {
+            // T-StatementWeave S4：connect 钩子记最近 URL——语句面归属链的粗粒度兜底源
+            UrlResolver.noteConnectUrl(url);
             if (rawConnection == null) {
                 return rawConnection;
             }
@@ -56,6 +58,129 @@ public final class SqlHookCallbacks {
         } catch (Throwable t) {
             // 采集红线：catch(Throwable) 自吞——失败返回原连接；但必须可观测（T-AgentProxyCL）
             return dropToRaw("wrapConnection 抛异常", t, rawConnection);
+        }
+    }
+
+    // ---------- T-StatementWeave：语句面/prepare 面织入回调（签名被 StatementWeaver 字节码硬编码，改动两侧同步） ----------
+
+    /**
+     * execute 族**入口**（织入在方法头）：返回计时起点 token（nanoTime），0 = 短路
+     * （停采 volatile 短路 / 代理层门禁——双通道去重红线，见 [WeaveGate]）。出口 token==0 直返。
+     * 织入侧零分支：一切判定收在本回调，异常自吞返回 0。
+     */
+    public static long onStatementEnter(Object stmt) {
+        try {
+            if (stmt == null || AgentState.isDisabled() || WeaveGate.isProxyActive()) {
+                return 0L;
+            }
+            return System.nanoTime();
+        } catch (Throwable t) {
+            return 0L;
+        }
+    }
+
+    /**
+     * execute 族**出口**（每个 ARETURN/ATHROW/IRETURN/LRETURN 前统一切入，EXEC 与 BATCH 共用
+     * 本签名——织入侧 BATCH 的 sql 槽传 null，批 SQL 由本回调按 op 名从登记表取并**读后即复位**
+     * （F74：executeBatch 消费即清，对齐驱动批缓冲 JDBC 语义）；failure 非空 =
+     * 异常路径，事件记 errorText 后原样重抛由织入侧完成）。SQL 解析：带参形态取 sqlParam；
+     * 无参 PS 形态与 executeBatch 族取 [StatementRegistry]（attach 前 prepare 的 PS 无登记 =
+     * 盲区，跳过不上报 + 计数，计划 §三 S3）。URL 归属链见 [UrlResolver]（S4）。
+     * 签名被 StatementWeaver 字节码硬编码，改动两侧同步。
+     */
+    public static void onExecuteExit(Object stmt, String sqlParam, String op, long token,
+                                     Object result, Throwable failure) {
+        try {
+            if (token == 0L || stmt == null) {
+                return;
+            }
+            String sql = sqlParam;
+            String url = null;
+            if (sql == null || sql.isEmpty()) {
+                final StatementRegistry.Ctx ctx = StatementRegistry.getOrCountUnresolved(stmt);
+                if (ctx == null) {
+                    return; // 盲区：attach 前 prepare 的 PS
+                }
+                if (isBatchOp(op) && ctx.batch.length() > 0) {
+                    sql = ctx.batch.toString();
+                    // F74：executeBatch 消费即复位——JDBC 语义驱动侧批缓冲在 executeBatch 完成后清空，
+                    // 登记批串同口径（成功与异常出口同走此处，异常路径读串在先、复位紧随）；
+                    // 不复位则残串跨批次累积：内存/组装耗时双无界，且下一批事件携带上一批残串。
+                    ctx.batch.setLength(0);
+                } else {
+                    sql = ctx.sql;
+                }
+                url = ctx.url;
+                if (sql == null || sql.isEmpty()) {
+                    return; // 登记在但无 SQL 可言（防御性跳过）
+                }
+            }
+            if (url == null) {
+                url = resolveUrl(stmt);
+            }
+            WovenEvents.emit(stmt, op, sql, result, failure, token, url);
+        } catch (Throwable t) {
+            // 采集红线：出口回调自吞，宿主 execute 语义不受影响
+        }
+    }
+
+    private static boolean isBatchOp(String op) {
+        return "executeBatch".equals(op) || "executeLargeBatch".equals(op);
+    }
+
+    /** addBatch(String) 出口：批串累积进登记表（代理层活跃时跳过——代理层自己累积，防双份）。 */
+    public static void onAddBatchExit(Object stmt, String sql) {
+        try {
+            if (AgentState.isDisabled() || WeaveGate.isProxyActive() || sql == null || sql.isEmpty()) {
+                return;
+            }
+            final StatementRegistry.Ctx ctx = StatementRegistry.batchCtxOf(stmt);
+            if (ctx.batch.length() > 0) {
+                ctx.batch.append(";\n");
+            }
+            ctx.batch.append(sql);
+        } catch (Throwable t) {
+            // 采集红线：自吞
+        }
+    }
+
+    /**
+     * clearBatch() 出口：清登记批串（F74：宿主清批而登记不清，清批前残串会串进下一批事件）。
+     * 代理层活跃时跳过——批串本来就只在织入通道累积（onAddBatchExit 同款门禁），无账可清；
+     * 无登记直接跳过，不为清账惰性建登记（batchCtxOf 的建账语义只属于 addBatch）。
+     * 签名被 StatementWeaver 字节码硬编码，改动两侧同步。
+     */
+    public static void onClearBatchExit(Object stmt) {
+        try {
+            if (AgentState.isDisabled() || WeaveGate.isProxyActive()) {
+                return;
+            }
+            StatementRegistry.clearBatchOf(stmt);
+        } catch (Throwable t) {
+            // 采集红线：自吞
+        }
+    }
+
+    /** prepareStatement/prepareCall 出口：登记「PS 实例 → SQL + URL」（幂等覆盖）。 */
+    public static void onStatementPrepare(Object ps, String sql, Object connection) {
+        try {
+            if (ps == null || sql == null || sql.isEmpty()) {
+                return;
+            }
+            StatementRegistry.register(ps, sql, UrlResolver.resolve(connection));
+        } catch (Throwable t) {
+            // 采集红线：自吞
+        }
+    }
+
+    /** 归属链（S4）：stmt.getConnection() 反射 → 驱动 getURL → 最近 connect URL 兜底。 */
+    private static String resolveUrl(Object stmt) {
+        try {
+            final Object conn = stmt.getClass().getMethod("getConnection").invoke(stmt);
+            final String u = UrlResolver.resolve(conn);
+            return u != null ? u : UrlResolver.lastConnectUrl();
+        } catch (Throwable t) {
+            return UrlResolver.lastConnectUrl();
         }
     }
 
