@@ -44,9 +44,38 @@ class SqlLogEntryBuffer(
     var paused: Boolean = false
         internal set
 
-    /** 去重开关（默认开——用户实测后要求默认勾选，T-M31.13）。 */
+    /** 去重开关（默认开——用户实测后要求默认勾选，T-M31.13）。
+     *  T-SqlLogPerf P6：从 false 翻 true 时全量重建 [dedupeIndex]——关闭期间入队不走索引维护，
+     *  重开必须补账，否则新窗口内的重复漏判（等价性红线，见 isDuplicate 注释）。 */
     @Volatile
     var dedupeEnabled: Boolean = true
+        set(value) {
+            val changed = value != field
+            field = value
+            if (changed && value) {
+                synchronized(entries) { rebuildDedupeIndexLocked() }
+            }
+        }
+
+    /**
+     * T-SqlLogPerf P6（20261006-1020 计划）：dedupeKey → 队内**最近**时间戳索引——isDuplicate
+     * 从锁内 O(n) 全表扫描（65 条/秒压测下每条线性扫 200 条 + 三通道写线程与 EDT snapshot 抢锁）
+     * 降为 O(1) 查表。窗口判定取每键最大时间戳与旧 firstOrNull 全扫逐字等价：
+     * 「存在同键条目使 now-timestamp < 窗口」⟺ 最大时间戳落窗口内。
+     *
+     * 维护面（全部须在 `synchronized(entries)` 内）：入队 upsert / 头部淘汰回扫 / dedupeExisting
+     * 与 dedupeEnabled 翻 true 全量重建 / clear 清空 / removeEntry 单键重算。dedupeEnabled=false
+     * 期间不维护（不触 dedupeKey lazy——T-PerfSweep9 同款口径），重开时补账。
+     */
+    private val dedupeIndex = HashMap<String, Long>()
+
+    private fun rebuildDedupeIndexLocked() {
+        dedupeIndex.clear()
+        for (e in entries) {
+            val latest = dedupeIndex[e.dedupeKey]
+            if (latest == null || e.timestamp > latest) dedupeIndex[e.dedupeKey] = e.timestamp
+        }
+    }
 
     /**
      * 去重丢弃计数（T-Perf-19：键 = restoredSql 指纹 [sqlFingerprint]，非 SQL 原文——
@@ -181,8 +210,25 @@ class SqlLogEntryBuffer(
                 val added = addNumbered(entry)
                 storedEntry = added
                 entries.addLast(added)
+                if (dedupeEnabled) {
+                    // T-SqlLogPerf P6：索引 upsert（dedupeKey lazy 首触与旧版 isDuplicate 同价，
+                    // 仅去重开启时支付）
+                    val k = added.dedupeKey
+                    val latest = dedupeIndex[k]
+                    if (latest == null || added.timestamp > latest) dedupeIndex[k] = added.timestamp
+                }
                 while (entries.size > maxEntries) {
-                    evictedEntries.add(entries.removeFirst())
+                    val evicted = entries.removeFirst()
+                    if (dedupeEnabled) {
+                        // T-SqlLogPerf P6：淘汰回扫——索引存的是「最近」时间戳，仅当被淘汰者恰为
+                        // 该键最新时才需要重算（队内同键余条 = 超窗重复入队形态，低频）
+                        val k = evicted.dedupeKey
+                        if (dedupeIndex[k] == evicted.timestamp) {
+                            val stillThere = entries.lastOrNull { it.dedupeKey == k }
+                            if (stillThere != null) dedupeIndex[k] = stillThere.timestamp else dedupeIndex.remove(k)
+                        }
+                    }
+                    evictedEntries.add(evicted)
                     evictedSinceDrain.incrementAndGet() // T-Perf-03：头部淘汰计数（面板增量刷新）
                 }
             }
@@ -235,6 +281,7 @@ class SqlLogEntryBuffer(
             if (removed > 0) {
                 entries.clear()
                 entries.addAll(keep)
+                if (dedupeEnabled) rebuildDedupeIndexLocked() // T-SqlLogPerf P6：裁剪后索引随队重建
             }
         }
         if (removed > 0) {
@@ -262,10 +309,12 @@ class SqlLogEntryBuffer(
 
     /** 去重判定（T-Perf-06：**必须在 `synchronized(entries)` 内调用**——无锁遍历 ArrayDeque 会与清空/删除并发 CME）。
      * T-LogDedupeMpMark：按 [LogSqlEntry.dedupeKey]（空白规范化指纹）比较——JdbcTemplate 双路日志副本仅差
-     * 首尾空白，原文精确相等永不命中；预计算指纹串比较也快于全文 ==。 */
+     * 首尾空白，原文精确相等永不命中；预计算指纹串比较也快于全文 ==。
+     * T-SqlLogPerf P6：O(n) 全表扫改 [dedupeIndex] O(1) 查表——「存在同键条目使 now-timestamp < 窗口」
+     * ⟺ 该键最近时间戳落窗口内（最大时间戳是窗口判定的唯一有效候选，逐字等价）。 */
     private fun isDuplicate(entry: LogSqlEntry): Boolean {
-        val now = entry.timestamp
-        return entries.firstOrNull { it.dedupeKey == entry.dedupeKey && now - it.timestamp < dedupeWindowMs } != null
+        val latest = dedupeIndex[entry.dedupeKey] ?: return false
+        return entry.timestamp - latest < dedupeWindowMs
     }
 
     /** 最早在前的快照（正序）。 */
@@ -289,7 +338,10 @@ class SqlLogEntryBuffer(
      * T-LogRowNumber：捕获序号一并归零——清空后下一条从 #1 起计数）。
      */
     fun clear() {
-        synchronized(entries) { entries.clear() }
+        synchronized(entries) {
+            entries.clear()
+            dedupeIndex.clear() // T-SqlLogPerf P6：索引随队清空
+        }
         resetDedupeCounts()
         sequenceCounter.set(0)
         pendingContentNotify.set(0) // 面板即将全量重建，悬挂的节流余量作废
@@ -332,7 +384,15 @@ class SqlLogEntryBuffer(
      * 序号字段参与 equals，外部构造/改造过的等值条目不应误删列表中的真身。
      */
     fun removeEntry(entry: LogSqlEntry) {
-        synchronized(entries) { entries.removeAll { it === entry } }
+        synchronized(entries) {
+            val removed = entries.removeAll { it === entry }
+            // T-SqlLogPerf P6：单条删除仅重算该键（用户右键低频，O(n) 一次可接受）
+            if (removed && dedupeEnabled) {
+                val k = entry.dedupeKey
+                val stillThere = entries.lastOrNull { it.dedupeKey == k }
+                if (stillThere != null) dedupeIndex[k] = stillThere.timestamp else dedupeIndex.remove(k)
+            }
+        }
         notifyChanged()
     }
 
