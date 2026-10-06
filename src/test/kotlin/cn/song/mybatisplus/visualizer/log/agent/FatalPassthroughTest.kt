@@ -11,6 +11,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.PipedInputStream
+import java.io.PipedOutputStream
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -200,9 +201,19 @@ class FatalPassthroughTest : BasePlatformTestCase() {
     /**
      * 假 socket：输入流为**阻塞**管道（会话读线程停在 `readInt`，不干扰断言）、
      * 输出流按 [onWrite] 抛错；覆写 `setSoTimeout` 避开未连接 socket 的 SocketException。
+     *
+     * T-DevAcceptFix2 门禁修复（20261006 收口批，测试侧；非本轮产品改动）：原实现只建
+     * `PipedInputStream()` 而**从未连接对端** `PipedOutputStream`——`read()` 立即抛
+     * `IOException("Pipe not connected")`，会话读线程随即 `alive=false` + `onStateChange()`
+     * 异步回调，与断言竞态（收口实测：本类整套跑偶发红、单独跑 3/3 常绿，system-err 可见
+     * `Pipe not connected` 栈）。现补上对端并持引用（防被 GC 致 write end dead），
+     * 读线程真正停在 `readInt` 上——与注释声明的语义一致，竞态根除。
      */
     private class FakeSocket(private val onWrite: () -> Unit) : Socket() {
         private val blockingInput = PipedInputStream()
+
+        @Suppress("unused") // 持引用：无对端的 PipedInputStream 读即抛「Pipe not connected」
+        private val keepAliveOutput = PipedOutputStream(blockingInput)
 
         override fun getInputStream(): InputStream = blockingInput
 
