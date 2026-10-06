@@ -82,6 +82,11 @@ class HqlQueryLocatorChainOrderTest : BasePlatformTestCase() {
             listOf("warehouseId", "locationStatus", "zoneCode", "emptyFullDegree", "positionType"),
             info!!.parameters.map { it.paramName },
         )
+        assertEquals(
+            "写重参数名应登记进 duplicateParamNames（F5 面板提示数据面）",
+            setOf("locationStatus"),
+            info.duplicateParamNames,
+        )
     }
 
     fun testStatementStyle_parameterOrderStaysDocumentOrder() {
