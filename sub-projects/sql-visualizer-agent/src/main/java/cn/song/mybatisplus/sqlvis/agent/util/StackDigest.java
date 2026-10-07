@@ -10,9 +10,10 @@ import java.util.List;
  * 「pkg.Class#method:line」单串（← 连接，栈顶在左），供 IDE 详情面板往上追踪。
  *
  * <p>预算（T-StackHoverUi 用户可配）：总帧数 B=[AgentState#getStackMaxFrames]（默认 24，
- * 钳位 [12,64]）。链长 ≤B 时全链保留（原行为）；链长 &gt;B 时**两端采样**——栈顶取 B-8 帧
- * （引擎/门面侧），栈底固定保留 8 帧（业务/Controller 侧；20261007 用户实测：JdbcTemplate
- * 深封装链下旧 16 帧顶格预算在 spring-jdbc 内部耗尽，够不着 controller），中段以标记段
+ * 钳位 [12,64]）。**栈底锚点先跳过尾部基础设施帧**（线程容器/线程池/JDK，见
+ * {@link #isInfraFrame}——用户真机实测：Tomcat 尾巴会把栈底 8 帧占满、Controller 被挤进省略段），
+ * 锚定最深业务帧后：深度 ≤B 全链保留（原行为）；&gt;B 两端采样——栈顶取 B-8 帧
+ * （引擎/门面侧），栈底取最深业务帧起向上 8 帧（业务/Controller 侧），中段以标记段
  * {@code <…中间省略 N 帧…>} 连接（IDE 侧解析器对无 {@code #} 的段天然跳过，弹层兼容）。
  *
  * <p>总长硬顶 MAX_LEN=max(2000, B×96)：两端形态下超长**先缩栈顶**再出标记（栈底业务帧
@@ -61,22 +62,52 @@ public final class StackDigest {
         }
         final int budget = clamp(maxFrames);
         final long maxLen = Math.max(2000L, (long) budget * 96L);
-        if (frames.size() <= budget) {
-            return join(frames, 0, frames.size(), maxLen);
+        // 栈底锚点先跳过尾部基础设施帧（T-StackHoverUi 用户真机二轮反馈：线程池/Tomcat 尾巴
+        // 会把栈底 8 帧占满，Controller 在被省略的中段）——锚定最深业务帧后再判预算
+        int lastBusiness = frames.size() - 1;
+        while (lastBusiness >= 0 && isInfraFrame(frames.get(lastBusiness))) {
+            lastBusiness--;
+        }
+        if (lastBusiness < 0) {
+            // 全 infra 极端形态兜底：退回字面两端
+            lastBusiness = frames.size() - 1;
+        }
+        final int depth = lastBusiness + 1;
+        if (depth <= budget) {
+            return join(frames, 0, depth, maxLen);
         }
         // 两端采样：栈顶 + 中段标记 + 栈底；超长先缩栈顶（缩掉的顶帧计入省略数），业务帧永不因长度被截
-        int topCount = Math.max(1, budget - BOTTOM_RESERVED);
+        final int topCount = Math.max(1, budget - BOTTOM_RESERVED);
+        // 栈底取「最深业务帧起向上」的 BOTTOM_RESERVED 帧（可能含业务链中段夹带的反射/代理帧——
+        // 属业务路径上下文，保留）；被跳过的尾部 infra 帧不占省略计数（纯噪音不出现在快照里）
+        final int bStart = Math.max(topCount, lastBusiness - (BOTTOM_RESERVED - 1));
         String top = join(frames, 0, topCount, Long.MAX_VALUE);
-        String bottom = join(frames, frames.size() - BOTTOM_RESERVED, BOTTOM_RESERVED, Long.MAX_VALUE);
-        int elided = frames.size() - topCount - BOTTOM_RESERVED;
+        String bottom = join(frames, bStart, lastBusiness - bStart + 1, Long.MAX_VALUE);
+        int elided = bStart - topCount;
         String marker = elisionMarker(elided);
-        while (topCount > 1 && top.length() + marker.length() + bottom.length() > maxLen) {
-            topCount--;
+        int curTop = topCount;
+        while (curTop > 1 && top.length() + marker.length() + bottom.length() > maxLen) {
+            curTop--;
             elided++;
-            top = join(frames, 0, topCount, Long.MAX_VALUE);
+            top = join(frames, 0, curTop, Long.MAX_VALUE);
             marker = elisionMarker(elided);
         }
         return top + "<-" + marker + "<-" + bottom;
+    }
+
+    /**
+     * 尾部基础设施帧判定（只用于栈底锚点，不改栈顶）——线程容器/线程池/JDK 内部的「尾巴」帧：
+     * 用户链实测尾部 8 帧=Thread/ThreadPoolExecutor/NioEndpoint/coyote，业务帧在其上方被挤进省略段。
+     * 前缀清单刻意只收容器与 JDK：spring 业务链帧（虽也常见）属于上下文信息不跳——跳了会把
+     * Controller 与 Service 之间的 AOP/代理链拆断。
+     */
+    private static boolean isInfraFrame(StackTraceElement f) {
+        final String cn = f.getClassName();
+        return cn.startsWith("java.") || cn.startsWith("javax.") || cn.startsWith("sun.")
+                || cn.startsWith("com.sun.") || cn.startsWith("jdk.")
+                || cn.startsWith("org.apache.tomcat.") || cn.startsWith("org.apache.catalina.")
+                || cn.startsWith("org.apache.coyote.") || cn.startsWith("org.apache.juli.")
+                || cn.startsWith("org.eclipse.jetty.") || cn.startsWith("io.undertow.");
     }
 
     /** 中段省略标记段（无 {@code #}，IDE 侧解析器按不可解析段跳过）。 */

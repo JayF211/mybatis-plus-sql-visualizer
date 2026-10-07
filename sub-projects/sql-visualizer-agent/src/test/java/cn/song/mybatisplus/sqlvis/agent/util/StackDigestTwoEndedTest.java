@@ -135,4 +135,59 @@ public class StackDigestTwoEndedTest {
         assertNull(StackDigest.build(null, 24));
         assertNull(StackDigest.build(new StackTraceElement[0], 24));
     }
+
+    // ---------- T-StackHoverUi 二轮：栈底锚点跳过尾部基础设施帧 ----------
+
+    /** 用户真机链形态：20 个业务帧 + Tomcat/线程池尾巴 6 帧。 */
+    private StackTraceElement[] chainWithTomcatTail(int business, int infraTail) {
+        StackTraceElement[] s = new StackTraceElement[business + infraTail];
+        for (int i = 0; i < business; i++) {
+            s[i] = f("com.test.C" + i, "m" + i, i);
+        }
+        String[] infra = {
+            "org.apache.coyote.AbstractProcessorLight", "org.apache.coyote.AbstractProtocol$ConnectionHandler",
+            "org.apache.tomcat.util.net.NioEndpoint$SocketProcessor", "org.apache.tomcat.util.threads.ThreadPoolExecutor",
+            "java.lang.Thread", "java.util.concurrent.ThreadPoolExecutor",
+        };
+        for (int i = 0; i < infraTail; i++) {
+            s[business + i] = f(infra[i % infra.length], "run", 100 + i);
+        }
+        return s;
+    }
+
+    @Test
+    public void 跳过尾部基础设施_业务深度在预算内_全链保留且无容器帧() {
+        // 20 业务帧（预算 24）+ 6 帧 Tomcat 尾巴：字面链长 26 > 24，但业务深度 20 ≤ 24
+        String d = StackDigest.build(chainWithTomcatTail(20, 6), 24);
+        assertFalse("业务深度在预算内不出标记", d.contains("中间省略"));
+        assertFalse("容器尾巴不得出现在快照", d.contains("tomcat") || d.contains("java.lang.Thread"));
+        assertTrue("栈底=最深业务帧", d.endsWith("com.test.C19#m19:19"));
+        assertEquals(20, d.split("<-").length);
+    }
+
+    @Test
+    public void 跳过尾部基础设施_超预算_栈底锚定最深业务帧() {
+        // 30 业务帧（预算 24，栈顶 16）+ 6 帧 Tomcat 尾巴：
+        // 栈底 = 最深业务帧 C29 起向上 8 帧（C22..C29），省略 = C16..C21 共 6 帧
+        String d = StackDigest.build(chainWithTomcatTail(30, 6), 24);
+        String[] segs = d.split("<-");
+        assertEquals(25, segs.length);
+        assertEquals("com.test.C15#m15:15", segs[15]);
+        assertEquals("<…中间省略 6 帧…>", segs[16]);
+        assertEquals("栈底首帧", "com.test.C22#m22:22", segs[17]);
+        assertEquals("栈底=最深业务帧（Controller 位）", "com.test.C29#m29:29", segs[24]);
+        assertFalse("容器帧不进快照", d.contains("tomcat"));
+    }
+
+    @Test
+    public void 全基础设施链_兜底退回字面两端() {
+        StackTraceElement[] s = new StackTraceElement[20];
+        for (int i = 0; i < 20; i++) {
+            s[i] = f("java.util.X" + i, "run", i);
+        }
+        String d = StackDigest.build(s, 12);
+        // 全 infra：lastBusiness 兜底回末帧，字面两端（栈顶 4 + 标记 + 栈底 8）
+        assertEquals(13, d.split("<-").length);
+        assertTrue(d.endsWith("java.util.X19#run:19"));
+    }
 }
