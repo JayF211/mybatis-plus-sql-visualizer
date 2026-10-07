@@ -437,4 +437,105 @@ class ParamHistoryCacheTest {
         cache2.clear()
         cache1.clear()
     }
+
+    // ------------------------------------------------------------------
+    // F54（D31 道 B，性能十八轮）：默认方案桶跨线程同步——桶外粗锁
+    // ------------------------------------------------------------------
+
+    /**
+     * F54 并发锤击正确性测试（V43 残余待证的主证）：pooled 写回形态（[saveForScheme]/
+     * [saveAsScheme]——put+淘汰+全量持久化含默认桶遍历）与 EDT 读形态（[recall]＝
+     * accessOrder 读即回写 LRU 序、[schemeNamesFor]/[activeSchemeFor]）读写交错——
+     * 断言全程零异常（CME/结构损坏）＋各桶容量恒 ≤ maxSize（粗锁下淘汰不失守）。
+     *
+     * 反向验证锚点：摘掉桶外粗锁（synchronized 块改回直调）本测试必红——无同步的
+     * accessOrder LinkedHashMap 在「put/遍历（持久化序列化）」与「读回写」并发下抛 CME。
+     */
+    @Test
+    fun `F54_并发锤击_结构完整与容量上限`() {
+        val cache = ParamHistoryCache(maxSize = 8)
+        cache.clear()
+        val errors = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
+        val threads = listOf(
+            // pooled 写回形态：默认桶 put + enforceMaxSize + 全量持久化（遍历默认桶与全部命名桶）
+            Thread {
+                repeat(400) { i ->
+                    runCatching {
+                        cache.saveForScheme(ParamHistoryCache.DEFAULT_SCHEME, "tbl:${i % 16}", mapOf("id" to "$i"))
+                    }.onFailure(errors::add)
+                }
+            },
+            // EDT 读形态：recall（accessOrder 读即回写 LRU 序）+ 淘汰
+            Thread {
+                repeat(2000) { i ->
+                    runCatching { cache.recall("tbl:${i % 16}") }.onFailure(errors::add)
+                }
+            },
+            // 命名桶读写交错（saveAsScheme 全量序列化遍历全部桶 + recallFromScheme 读回写）
+            Thread {
+                repeat(200) { i ->
+                    runCatching {
+                        if (i % 2 == 0) cache.saveAsScheme("s${i % 3}", "sk${i % 8}", mapOf("v" to "$i"))
+                        else cache.recallFromScheme("s${i % 3}", "sk${i % 8}")
+                    }.onFailure(errors::add)
+                }
+            },
+            // UI 读形态：按键可见方案清单 + 按键激活方案（桶级 containsKey 探测）
+            Thread {
+                repeat(1000) { i ->
+                    runCatching {
+                        cache.schemeNamesFor("tbl:${i % 16}")
+                        cache.activeSchemeFor("tbl:${i % 16}")
+                    }.onFailure(errors::add)
+                }
+            },
+        )
+        threads.forEach { it.start() }
+        threads.forEach { it.join(30_000) }
+        assertTrue("并发窗口内不得抛异常（CME/结构损坏），实际 ${errors.size} 起：${errors.take(3)}", errors.isEmpty())
+        assertTrue("默认桶容量恒 ≤ maxSize", cache.size() <= 8)
+        (0 until 3).forEach { s ->
+            assertTrue("命名桶 s$s 容量恒 ≤ maxSize", cache.schemeEntryCount("s$s") <= 8)
+        }
+        cache.clear()
+    }
+
+    /**
+     * F54 LRU 淘汰序（读写交错下不漂移）：并发读线程持续 recall "tbl:a"（读即回写）期间
+     * 主线程依次写 a/b/c/d——淘汰必须精确按 accessOrder 语义走（并发刷新过的 a 存活、
+     * 未刷新的 b 被淘）。单写者＋固定刷新键设计使断言与读线程时序解耦（读线程只会把 a
+     * 推向 MRU，不改变结论）。
+     */
+    @Test
+    fun `F54_读写交错下LRU淘汰序_仍按最近访问`() {
+        val cache = ParamHistoryCache(maxSize = 3)
+        cache.clear()
+        val errors = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
+        val stop = java.util.concurrent.atomic.AtomicBoolean(false)
+        val readers = (0 until 2).map {
+            Thread {
+                while (!stop.get()) {
+                    runCatching { cache.recall("tbl:a") }.onFailure(errors::add)
+                }
+            }
+        }
+        readers.forEach { it.start() }
+        try {
+            cache.save("tbl:a", mapOf("v" to "a"))
+            cache.save("tbl:b", mapOf("v" to "b"))
+            cache.save("tbl:c", mapOf("v" to "c"))
+            // 并发读线程持续刷新 a（a → MRU）；插入第 4 条淘汰最久未访问的 b
+            cache.save("tbl:d", mapOf("v" to "d"))
+            assertTrue("并发窗口零异常：${errors.take(3)}", errors.isEmpty())
+            assertNull("未被刷新的 b 应被淘汰", cache.recall("tbl:b"))
+            assertNotNull("并发刷新过的 a 应存活", cache.recall("tbl:a"))
+            assertNotNull("c 应存活", cache.recall("tbl:c"))
+            assertNotNull("d 应存活", cache.recall("tbl:d"))
+        } finally {
+            stop.set(true)
+            readers.forEach { it.join(5000) }
+            assertTrue("读线程收尾零异常：${errors.take(3)}", errors.isEmpty())
+            cache.clear()
+        }
+    }
 }
