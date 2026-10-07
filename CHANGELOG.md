@@ -33,6 +33,11 @@
 
 - **帮助页 / Marketplace 自定义页文案精简**（`html/marketplace-custom-page.html`，用户令「文字内容多」优化）：功能矩阵 27 个「说明」单元格压缩到一行级——MCP 工具行由十工具逐名枚举＋理念句（约 200 字）收敛为能力面概述（渲染 SQL / 表结构 / EXPLAIN / 日志还原 / 回滚预案等 + agent 兼容与逐工具门控），增强捕获行剥离注入确认 / 24h 冷却细节（FAQ 第 8 条已承载），多租户 / 自动折叠 / 历史定位等长单元格同步瘦身；「为什么选它」要点去与矩阵重复的细则、标语盒三行合两行。全部功能名、New / Ultimate 标签、触发方式、FAQ 八条、快捷键与链接零删减，页面可见文字 5005 → 3973 字符（-21%）；`HelpUiTest` 仅断言资源可加载与非空（无文本断言），零影响。另新增 **Markdown 版 `docs/发行说明/marketplace-custom-page.md`**（整页复制进 Marketplace → Documentation 自定义页编辑器直接使用）——该编辑器仅渲染 Markdown（`<style>` / class / 内联 CSS / 纯 CSS 手风琴均被剥除），原 HTML 版保持不动、专供 IDE 内帮助按钮 JCEF 渲染；New / Ultimate 徽章以官网托管的同款配色 SVG 药丸图内联承载（`sql-visualizer.jvtools.cn/badges/tag-new.svg` / `tag-ultimate.svg`，Markdown 无 CSS 无法做药丸，图片徽章与 HTML 版观感一致），FAQ 由手风琴改为小节标题。发行流程文档（`docs/发行说明/Marketplace发布流程-说明文档.md`）§10.2 / §11 已同步登记自定义页更新步骤与「md + html 两版同步维护」约定，HTML 版头部加配套注释。两版各内联三张演示动图（Wrapper 静态预览 / SQL 日志 / MCP agent 调用），以官网 `/demo/*.gif` URL 引用——插件 zip 体积零变化，帮助页离线时动图不显示、页面其余内容照常（html 侧 lazy 加载 + 暗色边框适配）
 
+### Fixed
+
+- **调用类 MPJ 能力误报「无 MPJ 能力」**（真机实证：`DeviceInfoMapper extends MPJBaseMapper` 仍被误判）：「先贴 SQL 后选调用类」路径拿 stale 的能力判定（此前仅 SQL 解析链反查、选类回调不刷新）——现选类后后台重查 MPJ 能力与方法集再重生成。
+- **列名→字段映射驼峰归一 + 多候选实体静默取首明示**（真机实证：`role_id` 等列大列表回落字符串）：列名查询双向归一（snake_case↔camelCase，含 `@TableField` 显式驼峰列）；同表匹配到多个实体时静默取首个现于状态栏列出全部候选与已选项（如不符可开启「手动选择实体」切换）。
+
 ## [2026.10.6] - 2026-10-06
 
 > 预先整理于 2026-09-30，发行日 2026-10-06（版本号按「版本号即发行当日日期」规则预定）。范围核算基点＝**v2026.9.23 发行包的打包点 `1872464`**（用户已装 zip 所含内容），而非标签 `2026.9.23` 当前指向——该标签其后曾为源码包一致性两度前移，标签树里已含本版部分内容但发行包不含。

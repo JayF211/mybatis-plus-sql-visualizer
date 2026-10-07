@@ -63,13 +63,20 @@
 - 反馈分类：`feedback.category.sql-to-java` 中英双包统一箭头写法（`4efc369`，与页签/菜单「发送到 SQL → Java 转换」命名一致）；
 - 帮助页 html/md 与 plugin.xml：grep 实测零功能 Beta 表述。
 
-### 4.3 真机走查清单（runIde 沙盒 + demo 项目，随 D41 窗口执行）
+### 4.3 真机走查发现缺陷与闭环（20261007 用户真机两例，`ab0d8fb` 修复）
+
+1. **调用类 MPJ 能力 stale 误报**（T-FixMpjStale）：`DeviceInfoMapper extends MPJBaseMapper<DeviceInfoEntity>` 明确具备 MPJ 能力，面板仍报「调用类无 MPJ 能力」——根因=选类回调只重生成、`callerMpj` 仅在 SQL 解析链反查，「先贴 SQL 后选调用类」路径拿 stale `false`。修复=选类回调改后台反查（`invocationHasMpj`/`invocationMethods`）→EDT 回填→重生成；面板测试两处随异步化适配轮询。
+2. **列名→字段映射回落大列表**（T-FixCamelMap）：`role_id`/`email` 等大列表回落字符串列名——两因复合：①`resolveColumn` 列名查询无驼峰归一（`role_id` 查 `roleId` 键 miss，`@TableField` 显式驼峰列真机仍会回落）→双向归一（原样/snake/camel 三变体）；②**多候选实体静默取首**（同表多实体如 User/UserDO 静默取到字段子集实体，用户误判为映射缺陷）→状态栏新键 `entityAmbiguous` 明示全部候选与已选项并指路「手动选择实体」。demo 仓实测仅 `User` 无 `UserDO`，截图 2 错配来源待真机复测确认。
+3. 闭环验证：定向六类（生成器 111 例/转换器/往返门禁/面板 55/UI 4/动作 2）BUILD SUCCESSFUL；驼峰归一双先红后绿测试入库。
+
+### 4.4 真机走查清单（runIde 沙盒 + demo 项目，随 D41 窗口执行）
 
 1. 工具窗四页签观感：「SQL → Java」无 Beta 后缀（en/zh 双语各验一次）；
 2. 面板输入本计划新增形态 SQL（GROUP BY+HAVING 聚合 / DISTINCT / 聚合列 / INSERT NULL / UNION / 双引号标识符各一）→ 生成代码展示（注释头含 UNION 降级提示、聚合列回落字符串 select）；
 3. 编辑器选中 SQL → 右键「发送到 SQL → Java 转换」入口同链路；
 4. 多候选实体弹窗（SqlSelectionDialog）/调用上下文（Service/Mapper+VO）与新能力组合（GROUP BY 在 MPJ 形态的 lambda 列）；
-5. 设置页「默认 Wrapper 形态」五选项 × 新能力 SQL 的往返观感。
+5. 设置页「默认 Wrapper 形态」五选项 × 新能力 SQL 的往返观感；
+6. **§4.3 两修复回归**：DeviceInfoMapper 选类后 JOIN 生成 MPJLambdaWrapper 不再误报；`role_id` 多候选场景状态栏明示候选清单。
 
 ## §五 行为变化登记（CHANGELOG 已同步）
 

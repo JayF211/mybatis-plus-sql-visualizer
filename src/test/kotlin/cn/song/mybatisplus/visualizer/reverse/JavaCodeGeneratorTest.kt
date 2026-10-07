@@ -291,6 +291,40 @@ class JavaCodeGeneratorTest {
     }
 
     @Test
+    fun `列名驼峰下划线归一_snake列查camel键`() {
+        // T-FixCamelMap：实体列名键为驼峰（如 @TableField("roleId") 显式形态）而 SQL 列为 snake（role_id）
+        // → 归一命中生成 lambda，不再回落字符串列名
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "role_id"), "=", SqlValue.Literal("1")),
+            ),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(className = "User", columnToField = mapOf("roleId" to "roleId"))
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertTrue(code, code.contains(".eq(User::getRoleId, 1)"))
+        assertTrue(code, !code.contains("\"role_id\""))
+    }
+
+    @Test
+    fun `列名驼峰下划线归一_camel列查snake键`() {
+        // T-FixCamelMap 反向：SQL 列为驼峰（roleId）而实体列名键为 snake（role_id，默认命名策略形态）
+        // → 归一命中，不再回落字符串
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "roleId"), "=", SqlValue.Literal("1")),
+            ),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(className = "User", columnToField = mapOf("role_id" to "roleId"))
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertTrue(code, code.contains(".eq(User::getRoleId, 1)"))
+        assertTrue(code, !code.contains("\"roleId\""))
+    }
+
+    @Test
     fun `lambda模式_组内列同样映射`() {
         val result = SqlReverseResult(
             tableName = "user",

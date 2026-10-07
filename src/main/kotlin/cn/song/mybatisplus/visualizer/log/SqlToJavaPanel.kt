@@ -151,7 +151,11 @@ class SqlToJavaPanel(
         project,
         MpSqlVisualizerBundle.message("reverse.panel.callerHint"),
     ) {
-        if (cacheResult != null) regenerateWithNewFormat()
+        // T-FixMpjStale：调用类变更 → 先后台反查 MPJ 能力/方法集，回填后再重生成——
+        // 此前 callerMpj 仅在 SQL 解析链（convert）反查，「先贴 SQL 后选调用类」路径拿
+        // stale callerMpj=false 恒报「无 MPJ 能力」（真机实证：DeviceInfoMapper extends
+        // MPJBaseMapper 仍误报）
+        refreshCallerCapabilityThenRegenerate()
     }
 
     /** T-M36.7：返回 VO 类名选择（非必选，仅 SELECT 生效——MPJ selectVoList/listVo）。 */
@@ -1098,6 +1102,37 @@ class SqlToJavaPanel(
         }
 
     /**
+     * T-FixMpjStale：调用类变更 → 后台 ReadAction 反查 MPJ 能力与方法集（与 convert 解析链
+     * 的 ：813 反查同源 [SqlToJavaConverter.invocationHasMpj]/[invocationMethods]），回填
+     * callerMpj/callerMethods 后再重生成。反查是 PSI 索引访问（须 BGT ReadAction——EDT 慢操作
+     * 断言），完成后 EDT 派发重生成；特殊值 this/baseMapper 恒 MPJ 能力（与反查同语义，同步分支）。
+     */
+    private fun refreshCallerCapabilityThenRegenerate() {
+        val caller = callerField.text.trim()
+        if (caller.isEmpty() || caller == "this" || caller == "baseMapper") {
+            callerMpj = caller.isNotEmpty()
+            callerMethods = emptySet()
+            if (cacheResult != null) regenerateWithNewFormat()
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val pair = try {
+                ReadAction.compute<Pair<Boolean, Set<String>>, Throwable> {
+                    SqlToJavaConverter.invocationHasMpj(project, caller) to
+                        SqlToJavaConverter.invocationMethods(project, caller)
+                }
+            } catch (t: Throwable) {
+                false to emptySet<String>()
+            }
+            ApplicationManager.getApplication().invokeLater {
+                callerMpj = pair.first
+                callerMethods = pair.second
+                if (cacheResult != null) regenerateWithNewFormat()
+            }
+        }
+    }
+
+    /**
      * 结果区写文本（WriteCommandAction——平台线程检查强制 write action）。
      *
      * T-TS-03：写体统一过 [DocWriteContext] 闸门。`WriteCommandAction` 只声明「这是一次命令式写」，
@@ -1175,13 +1210,18 @@ class SqlToJavaPanel(
                 if (!manualEntitySelectionEnabled()) {
                     val code = generateCodeOrReport(result, candidates[0], format, subEntities) ?: return
                     setResultText(code)
-                    status(
-                        joinStatus(
-                            result,
-                            MpSqlVisualizerBundle.message("reverse.panel.status.entity", candidates[0].psiClass.name ?: ""),
-                        ),
-                        error = false,
-                    )
+                    // T-FixEntityAmbiguity：多候选静默取首须明示——真机实证同表多实体（User/UserDO）
+                    // 静默取到字段子集实体，用户只见「回落字符串列名」大列表误判为映射缺陷
+                    val msg = if (candidates.size > 1) {
+                        val names = candidates.mapNotNull { it.psiClass.name }.joinToString("、")
+                        MpSqlVisualizerBundle.message(
+                            "reverse.panel.status.entityAmbiguous",
+                            result.tableName, names, candidates[0].psiClass.name ?: "",
+                        )
+                    } else {
+                        MpSqlVisualizerBundle.message("reverse.panel.status.entity", candidates[0].psiClass.name ?: "")
+                    }
+                    status(joinStatus(result, msg), error = false)
                     return
                 }
                 // T-M44 审计兜底：候选 PSI 读取（name/containingFile）须在 ReadAction 内（EDT 同步）
