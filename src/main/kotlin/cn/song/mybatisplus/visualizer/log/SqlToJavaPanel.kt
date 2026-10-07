@@ -47,7 +47,7 @@ import com.intellij.psi.PsiClassOwner
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiModifier
 import com.intellij.ui.components.JBLabel
-import com.intellij.ui.components.JBTextField
+import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.JBColor
 import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.IconScaler
@@ -776,13 +776,17 @@ class SqlToJavaPanel(
     }
 
     /**
-     * T-MapResultVo v3：返回类型字段——**纯输入框 + 选类按钮**（与 [ClassPickerField] 同款观感，
-     * 见「调用类」行）。v2 的可编辑组合框仍带下拉箭头与预置项列表（固定枚举追不上真实形态的
-     * 老问题换个壳复现，用户真机三轮反馈「不应该是点击下拉这种的」）——本版彻底去掉下拉：
-     * 文本自由键入任意返回声明（`UserVo`、`List<HashMap<String, Object>>`、`List<Object>` 均可），
-     * 占位灰字说明「留空=自动（有实体推断实体/VO、无实体推断 Map 列表）」；
-     * 选类按钮走 Goto Class 弹窗（选中后写入输入框）。生成器按声明形态派生调用族
-     * （含 Map→Maps 族、含 Object→Objs 族、其余按类名走 VO 语义）。
+     * T-MapResultVo v4：返回类型字段——**照抄 [ClassPickerField]（「调用类」行）的交互与观感**。
+     *
+     * 用户真机四轮反馈定稿：①v2 可编辑组合框带下拉箭头＋固定预置项（枚举追不上真实形态换壳复现）
+     * → v3 去下拉改纯输入框；②v3 的占位走 `JTextField.placeholderText` 客户属性，**本仓该做法
+     * 不渲染**（全仓唯一一处，真机实测空框无灰字）→ v4 改为与「调用类」完全同款：
+     * 手绘圆角输入框底 + 灰字 [JBLabel] 占位（[UIUtil.getInactiveTextColor]，空值态）＋
+     * 右侧「…」按钮（空值=弹选择、有值=✕ 清除）＋**点击字段任意位置弹选择器**。
+     *
+     * 选择器（用户四轮反馈后定稿的形态）：平台弹出列表——「自动（留空；实体/VO 推断）」
+     * /「List<Map<String, Object>>」/「List<Object>」/「选择类…（Goto Class）」。
+     * 生成器按声明形态派生调用族（含 Map→Maps 族、含 Object→Objs 族、其余按类名走 VO 语义）。
      */
     internal inner class ReturnTypeField(
         private val projectRef: Project,
@@ -790,16 +794,11 @@ class SqlToJavaPanel(
         private val onChanged: () -> Unit = {},
     ) : JPanel(BorderLayout()) {
 
-        private val typeInput = JBTextField().apply {
-            toolTipText = placeholder
-            // 空值占位灰字（JTextField.placeholderText 客户属性，JBR 支持）——与 ClassPickerField 占位观感对齐
-            putClientProperty("JTextField.placeholderText", placeholder)
-            // 编辑提交（失焦）触发重生成；回车由 JTextField ActionListener 覆盖
-            addFocusListener(object : java.awt.event.FocusAdapter() {
-                override fun focusLost(e: java.awt.event.FocusEvent?) = onChanged()
-            })
-            addActionListener { onChanged() }
-        }
+        private var currentText = ""
+        private var pickedIcon: Icon? = null
+
+        private val iconLabel = JBLabel()
+        private val textLabel = JBLabel(" ")
 
         private val pickButton = JButton(PICKER_ELLIPSIS_ICON).apply {
             isBorderPainted = false
@@ -812,7 +811,8 @@ class SqlToJavaPanel(
             minimumSize = Dimension(12, 12)
             maximumSize = Dimension(12, 12)
             toolTipText = MpSqlVisualizerBundle.message("reverse.panel.pickClass")
-            addActionListener { pickClass() }
+            // 空值=弹选择器（与「调用类」同款入口）；有值=清除
+            addActionListener { if (currentText.isEmpty()) showChooser() else clearValue() }
         }
 
         /** 按钮宿主：FlowLayout 垂直居中（BorderLayout.EAST 会拉伸子组件高度，需宿主隔离）——
@@ -827,37 +827,131 @@ class SqlToJavaPanel(
             isOpaque = false
             preferredSize = Dimension(1, JBUI.scale(24))
             minimumSize = Dimension(1, JBUI.scale(24))
-            add(typeInput, BorderLayout.CENTER)
+            iconLabel.border = JBUI.Borders.empty(0, 5, 0, 0)
+            textLabel.border = JBUI.Borders.empty(0, 4, 0, 0)
+            add(iconLabel, BorderLayout.WEST)
+            add(textLabel, BorderLayout.CENTER)
             add(actionButtonHost, BorderLayout.EAST)
+            // 点击字段任意位置弹选择器（子组件铺满后父面板收不到冒泡——监听挂到每个子组件 + 手型光标）；
+            // 子组件点击在 EDT 惰性绑定（子组件在下方才创建，此处 init 已全部就位）
+            listOf(iconLabel, textLabel, this).forEach { attachClick(it) }
+            refresh()
+        }
+
+        /**
+         * 输入框观感：圆角底色 + 主题边框色（对齐 IDEA TextField；只读无焦点态）——
+         * 与 [ClassPickerField] 逐行同源，保证「调用类」「返回类型」两行观感一致。
+         */
+        override fun paintComponent(g: Graphics) {
+            val g2 = g.create() as Graphics2D
+            try {
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                g2.color = UIUtil.getTextFieldBackground()
+                g2.fillRoundRect(0, 0, width - 1, height - 1, PICKER_CORNER, PICKER_CORNER)
+                g2.color = JBColor.namedColor("Component.borderColor", JBColor.border())
+                g2.drawRoundRect(0, 0, width - 1, height - 1, PICKER_CORNER, PICKER_CORNER)
+            } finally {
+                g2.dispose()
+            }
         }
 
         /** 对外文本（生成器读取返回声明；测试直接赋值不触发变更回调——对齐 ClassPickerField 语义）。 */
         var text: String
-            get() = typeInput.text ?: ""
+            get() = currentText
             set(value) {
-                typeInput.text = value
+                currentText = value
+                refresh()
             }
 
-        /** 测试缝：占位灰字（空值提示可见性）。 */
-        internal fun placeholderTextForTest(): Any? =
-            typeInput.getClientProperty("JTextField.placeholderText")
+        /** 测试缝：显示层文案（空值态=占位灰字，有值态=声明文本）。 */
+        internal fun placeholderTextForTest(): Any? = textLabel.text
 
         /** 测试缝：选类按钮（可见性/可点性断言）。 */
         internal fun pickButtonForTest(): JButton = pickButton
 
-        /** 测试访问器：编辑器组件（占位/文本行为断言）。 */
-        internal fun editorComponentForTest(): java.awt.Component = typeInput
+        /** 测试访问器：显示层标签（灰字占位/取值文案断言；v4 不再有输入框组件）。 */
+        internal fun editorComponentForTest(): java.awt.Component = textLabel
 
-        /** 选类（Goto Class 弹窗，裸模型——返回类型字段无 this/baseMapper 调用类特殊项）；选中写回输入框。 */
+        /** 子组件点击统一入口：单次点击弹选择器 + 手型光标（按钮自身消费事件，不重复触发）。 */
+        private fun attachClick(component: JComponent) {
+            component.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            component.addMouseListener(object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) {
+                    if (e.button == MouseEvent.BUTTON1 && e.clickCount == 1) showChooser()
+                }
+            })
+        }
+
+        /** 清除选中值（✕ 按钮触发）。 */
+        private fun clearValue() {
+            currentText = ""
+            pickedIcon = null
+            toolTipText = null
+            refresh()
+            onChanged()
+        }
+
+        /**
+         * 选择器：平台弹出列表（与「调用类」点击即弹同款交互）——自动（留空）/Map 列表 /Objs 列表
+         * /选择类…（Goto Class）。Map 两种声明是 T-MapResultVo 的唯一 UI 入口，与类选择并列呈现。
+         */
+        private fun showChooser() {
+            val autoLabel = MpSqlVisualizerBundle.message("reverse.panel.resultType.auto")
+            val pickLabel = MpSqlVisualizerBundle.message("reverse.panel.pickClass")
+            val entries = listOf(autoLabel, MAP_LIST_DECL, OBJECT_LIST_DECL, pickLabel)
+            JBPopupFactory.getInstance()
+                .createPopupChooserBuilder(entries)
+                .setItemChosenCallback { chosen: String ->
+                    when (chosen) {
+                        autoLabel -> setValue("", null)
+                        MAP_LIST_DECL, OBJECT_LIST_DECL -> setValue(chosen, null)
+                        pickLabel -> pickClass()
+                    }
+                }
+                .createPopup()
+                .showUnderneathOf(this)
+        }
+
+        /** 选中写入（裸声明文本）或清除（空串）。 */
+        private fun setValue(value: String, icon: Icon?) {
+            currentText = value
+            pickedIcon = icon
+            refresh()
+            onChanged()
+        }
+
+        /** 按状态刷新显示：空值 → 占位灰字 + ⋯ 浏览；有值 → 图标 + 声明文本 + ✕ 清除。 */
+        private fun refresh() {
+            if (currentText.isEmpty()) {
+                iconLabel.icon = null
+                textLabel.text = placeholder
+                textLabel.foreground = UIUtil.getInactiveTextColor()
+                textLabel.toolTipText = placeholder
+                pickButton.icon = PICKER_ELLIPSIS_ICON
+                pickButton.toolTipText = MpSqlVisualizerBundle.message("reverse.panel.pickClass")
+            } else {
+                iconLabel.icon = pickedIcon
+                textLabel.text = currentText
+                textLabel.foreground = UIUtil.getLabelForeground()
+                textLabel.toolTipText = null
+                pickButton.icon = PICKER_CANCEL_ICON
+                pickButton.toolTipText = MpSqlVisualizerBundle.message("reverse.panel.clearClass")
+            }
+        }
+
+        /** 选类（Goto Class 弹窗，裸模型——返回类型字段无 this/baseMapper 调用类特殊项）；选中写回。 */
         private fun pickClass() {
             val model = GotoClassModel2(projectRef)
             val popup = ChooseByNamePopup.createPopup(projectRef, model, null)
             popup.invoke(object : ChooseByNamePopupComponent.Callback() {
                 override fun elementChosen(element: Any?) {
                     val cls = element as? PsiClass ?: return
-                    val name = ReadAction.compute<String?, Throwable> { cls.name } ?: return
-                    typeInput.text = name
-                    onChanged()
+                    // 类名与图标一次 ReadAction 取出（262 PSI 硬抛；与 ClassPickerField 同款）
+                    val picked = ReadAction.compute<Pair<String, Icon?>?, Throwable> {
+                        val name = cls.name ?: return@compute null
+                        Pair(name, cls.getIcon(0))
+                    } ?: return
+                    setValue(picked.first, picked.second)
                 }
 
                 override fun onClose() {}
@@ -1561,6 +1655,10 @@ class SqlToJavaPanel(
         private const val PICKER_CORNER = 10
 
         /** 类选择字段按钮图标（12px 缩放——AllIcons 原生 16px 偏大，用户反馈）。 */
+        /** T-MapResultVo v4：返回类型选择器的 Map/Objs 预置声明（生成器按含 Map/含 Object 派生族）。 */
+        private const val MAP_LIST_DECL = "List<Map<String, Object>>"
+        private const val OBJECT_LIST_DECL = "List<Object>"
+
         private val PICKER_ELLIPSIS_ICON: Icon = IconScaler.scale(AllIcons.General.Ellipsis, 12f / 16f)
         private val PICKER_CANCEL_ICON: Icon = IconScaler.scale(AllIcons.Actions.Cancel, 12f / 16f)
     }

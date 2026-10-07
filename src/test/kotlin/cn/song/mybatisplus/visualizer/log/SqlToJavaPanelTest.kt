@@ -1059,13 +1059,27 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
     }
 
     /**
-     * T-MapResultVo v3 修复（用户真机三轮反馈「不应该是点击下拉这种的」）：返回类型字段须为
-     * **纯输入框**（与「调用类」同款形态）——不得再是带下拉箭头与预置项列表的组合框
-     * （v2 的可编辑组合框把「固定枚举追不上真实形态」的老问题换个壳复现）。
+     * T-MapResultVo v4 修复（用户真机四轮反馈「应默认显示灰色字体在里面，和调用类一样」）：
+     * 返回类型字段与「调用类」**同款形态**——灰字占位由 [JBLabel] 承担（空值态显示 voHint 全文、
+     * 前景为 inactive 灰）；不再是组合框（v2）也不依赖 `JTextField.placeholderText`
+     * 客户属性（v3 该做法在本仓不渲染，真机实测空框无灰字）。
      */
-    fun testResultTypeFieldNoDropdown() {
-        val editor = panel.voFieldForTest().editorComponentForTest()
-        assertTrue("返回类型字段应为纯输入框: ${editor.javaClass.name}", editor is javax.swing.JTextField)
-        assertFalse("不得为组合框（无下拉）", editor is javax.swing.JComboBox<*>)
+    fun testResultTypeFieldSameAsCallerFieldPlaceholderStyle() {
+        val field = panel.voFieldForTest()
+        val display = field.editorComponentForTest()
+        assertTrue("显示层应为标签（JBLabel，与调用类同款）: ${display.javaClass.name}", display is javax.swing.JLabel)
+        assertFalse("不得为组合框（无下拉）", display is javax.swing.JComboBox<*>)
+        // 空值态：显示层文案 = 占位全文，且为灰字（inactive 前景）
+        field.text = ""
+        val shown = field.placeholderTextForTest()?.toString() ?: ""
+        assertTrue("空值态应显示返回类型占位全文: $shown", shown.contains("返回类型"))
+        assertEquals(
+            "空值态应为灰字（与调用类占位同色）",
+            com.intellij.util.ui.UIUtil.getInactiveTextColor(),
+            (display as javax.swing.JLabel).foreground,
+        )
+        // 有值态：显示层切到声明文本
+        field.text = "List<Map<String, Object>>"
+        assertEquals("List<Map<String, Object>>", field.placeholderTextForTest()?.toString())
     }
 }
