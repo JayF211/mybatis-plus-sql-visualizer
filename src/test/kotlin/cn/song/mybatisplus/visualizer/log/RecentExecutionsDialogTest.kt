@@ -257,7 +257,7 @@ class RecentExecutionsDialogTest : BasePlatformTestCase() {
         try {
             assertNull(
                 "前置：测试环境应无面板注册的送页签通道",
-                project.getService(SqlLogManager::class.java).onOpenEntryInTab,
+                sqlLogManagerIfCreated(project)?.onOpenEntryInTab,
             )
             val send = dialog.menuActionsForTest()[2]
             send.actionPerformed(AnActionEvent.createFromAnAction(send, null, "test", DataContext.EMPTY_CONTEXT))

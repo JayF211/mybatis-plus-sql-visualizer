@@ -413,9 +413,13 @@ class RecentExecutionsDialog(
     /**
      * 送条目到工具窗页签：通道由 [SqlLogPanel] 注册（工具窗未创建即未注册）——
      * 未就绪时状态行轻提示降级，不静默（对齐跳转侧「不静默」约定）。
+     *
+     * 取管理器走**只读入口** [sqlLogManagerIfCreated]（T-ST-02b2 定论：读路径不得发起服务创建，
+     * 否则可能因 temporarily-disposed 窗口把服务在本 JVM 内永久毒化；由
+     * `SqlLogManagerLookupGuardTest` 扫描守卫锁定）。
      */
     private fun sendEntryToTab(entry: LogSqlEntry, tab: LogEntryTab) {
-        val open = project.getService(SqlLogManager::class.java).onOpenEntryInTab
+        val open = sqlLogManagerIfCreated(project)?.onOpenEntryInTab
         if (open == null) {
             statusLabel.text = MpSqlVisualizerBundle.message("log.recent.dialog.menuPanelNotReady")
             return
