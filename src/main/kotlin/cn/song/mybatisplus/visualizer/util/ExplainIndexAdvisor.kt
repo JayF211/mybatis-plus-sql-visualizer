@@ -120,8 +120,8 @@ object ExplainIndexAdvisor {
         for (row in rows) {
             for (cell in row) {
                 // PG 文本树：`Seq Scan on big_table  (cost=… rows=…)`
-                val m = Regex("""Seq Scan on (\w+)""").find(cell) ?: continue
-                val rowsN = Regex("""rows=(\d+)""").find(cell)?.groupValues?.get(1)?.toLongOrNull()
+                val m = SEQ_SCAN_ON.find(cell) ?: continue
+                val rowsN = PLAN_TEXT_ROWS.find(cell)?.groupValues?.get(1)?.toLongOrNull()
                 if (rowsN == null || rowsN >= ROWS_THRESHOLD) {
                     out += Hint(
                         rule = "SEQ_SCAN",
@@ -247,4 +247,10 @@ object ExplainIndexAdvisor {
 
     /** 估算行数（`Actual Rows` 仅 EXPLAIN ANALYZE 出现——本插件不产 analyze，容忍读取不改变口径）。 */
     private val JSON_PLAN_ROWS = Regex(""""(?:Plan Rows|Actual Rows)"\s*:\s*(\d+)""")
+
+    /** F59（T-PerfSweep18）：文本树形态——`Seq Scan on <table>`（原 advisePlanText 函数体内现场 Regex，提 object 单例；internal＝同一 Pattern 实例断言观察缝）。 */
+    internal val SEQ_SCAN_ON = Regex("""Seq Scan on (\w+)""")
+
+    /** F59（T-PerfSweep18）：文本树形态——`rows=N` 估算行数（同上提单例）。 */
+    internal val PLAN_TEXT_ROWS = Regex("""rows=(\d+)""")
 }
