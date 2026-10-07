@@ -173,10 +173,24 @@ public final class SqlHookCallbacks {
         }
     }
 
-    /** 归属链（S4）：stmt.getConnection() 反射 → 驱动 getURL → 最近 connect URL 兜底。 */
+    /**
+     * 归属链（S4）：stmt.getConnection() 反射 → 驱动 getURL → 最近 connect URL 兜底。
+     * F75（T-PerfSweep23）：getConnection 的 Method 按语句类缓存（CHM，对齐同分支
+     * UrlResolver.GET_URL_METHODS 同款）——原每条 SQL 一次 getMethod 反射查找，
+     * 池化高并发下归属链每 SQL 重复付；解析失败不缓存（外层 catch 落兜底 URL）。
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<Class<?>, java.lang.reflect.Method> GET_CONNECTION_METHODS =
+            new java.util.concurrent.ConcurrentHashMap<Class<?>, java.lang.reflect.Method>();
+
     private static String resolveUrl(Object stmt) {
         try {
-            final Object conn = stmt.getClass().getMethod("getConnection").invoke(stmt);
+            final Class<?> clazz = stmt.getClass();
+            java.lang.reflect.Method m = GET_CONNECTION_METHODS.get(clazz);
+            if (m == null) {
+                m = clazz.getMethod("getConnection");
+                GET_CONNECTION_METHODS.put(clazz, m);
+            }
+            final Object conn = m.invoke(stmt);
             final String u = UrlResolver.resolve(conn);
             return u != null ? u : UrlResolver.lastConnectUrl();
         } catch (Throwable t) {
