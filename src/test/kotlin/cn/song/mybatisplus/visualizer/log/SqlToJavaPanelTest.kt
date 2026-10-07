@@ -27,10 +27,14 @@ import javax.swing.ListCellRenderer
  * 异步路径（AUTO 形态后台查找实体）用轮询等待（UIUtil.dispatchAllInvocationEvents +
  * 超时兜底）；QUERY 形态为同步路径（直测）。
  *
- * 覆盖边界说明（T-M37 P1）：
+ * 覆盖边界说明（T-M37 P1；T-FixEntityAmbiguity 收窄）：
  *  - 副表多候选弹 [SqlSelectionDialog] 的 UI 交互在 Light 下无法真实弹出（无实体 → 候选恒空），
  *    面板级仅覆盖候选为空 → 回落路径；多候选逻辑（findSubEntityCandidates 候选列表/别名键）在
- *    converter 层直测（本项目测试工程无实体类，候选列表恒为空——弹窗分支属纯 UI 分发，靠代码走查）。
+ *    converter 层直测（本项目测试工程无实体类，候选列表恒为空）。
+ *  - 主表多候选「开关关闭静默取首 + 状态栏明示候选」（T-FixEntityAmbiguity）已补面板级测试
+ *    （testMultipleCandidatesManualOffShowsAmbiguousStatus）——Light 索引不可用无法真实实体夹具
+ *    （M27 实证，见 EntityClassFinderHeavyTest 头注），经 [SqlToJavaPanel.renderForTest] 缝注入
+ *    双 mock 候选直调 render；开关开启的弹窗分支仍属纯 UI 分发，靠代码走查 + 真机走查兜底。
  */
 class SqlToJavaPanelTest : BasePlatformTestCase() {
 
@@ -310,14 +314,14 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         )
     }
 
-    /** 构造轻量 EntityCandidate（Proxy PsiClass 仅 name 有值；判定逻辑不触 PSI）。 */
+    /** 构造轻量 EntityCandidate（Proxy PsiClass 仅 getName 有值；Kotlin `.name` 编译为 getName()）。 */
     private fun mockCandidate(className: String): SqlToJavaConverter.EntityCandidate =
         SqlToJavaConverter.EntityCandidate(
             psiClass = java.lang.reflect.Proxy.newProxyInstance(
                 com.intellij.psi.PsiClass::class.java.classLoader,
                 arrayOf(com.intellij.psi.PsiClass::class.java),
             ) { _, method, _ ->
-                if (method.name == "name") className else null
+                if (method.name == "getName" || method.name == "name") className else null
             } as com.intellij.psi.PsiClass,
             tableInfo = cn.song.mybatisplus.visualizer.model.TableInfo(
                 entityClassName = className,
@@ -325,6 +329,34 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
                 columns = emptyList(),
             ),
         )
+
+    // ------------------------------------------------------------------
+    // T-FixEntityAmbiguity：多候选静默取首的状态栏明示（面板级补测——销掉「靠代码走查」缺口）
+    // ------------------------------------------------------------------
+
+    fun testMultipleCandidatesManualOffShowsAmbiguousStatus() {
+        // 真实实体夹具在 Light 索引不可用（M27 实证，见 EntityClassFinderHeavyTest 头注）——
+        // 经 renderForTest 缝直调注入同表双候选。开关关闭 → 不弹窗静默取首生成，但状态栏须
+        // 明示全部候选与已选项（ab0d8fb 修复：此前静默取首被真机误判为「映射缺陷」）
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseManualEntitySelection
+        state.reverseManualEntitySelection = false
+        try {
+            val result = SqlToJavaConverter.parse("SELECT id, name FROM user WHERE name = '张三'")
+            val candidates = listOf(mockCandidate("User"), mockCandidate("UserEntity"))
+            panel.renderForTest(result, candidates, cn.song.mybatisplus.visualizer.reverse.ReverseWrapperFormat.QUERY)
+            val status = panel.statusForTest()
+            assertTrue(status, status.contains("匹配到多个实体"))
+            assertTrue(status, status.contains("User、UserEntity"))
+            assertTrue(status, status.contains("已选 User"))
+            // 取首生成 = 字段子集实体的字符串列名回落形态（真机误判「映射缺陷」的来源样貌）
+            val code = panel.resultTextForTest()
+            assertTrue(code, code.contains("new QueryWrapper<User>()"))
+            assertTrue(code, code.contains(".eq(\"name\", \"张三\")"))
+        } finally {
+            state.reverseManualEntitySelection = original
+        }
+    }
 
     // ------------------------------------------------------------------
     // 形态下拉（T-M36.6）

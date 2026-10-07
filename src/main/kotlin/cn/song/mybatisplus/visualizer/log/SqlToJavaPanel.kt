@@ -1411,6 +1411,17 @@ class SqlToJavaPanel(
     /** 测试访问器：触发转换（走完整流程，含异步实体查找路径）。 */
     internal fun convertForTest() = convert()
 
+    /**
+     * T-FixEntityAmbiguity 测试缝：直调多候选分发 [render]（private，且多候选分支仅存在于
+     * BGT 查找后的 EDT 回调——Light 索引不可用无法真实实体夹具，见 M27 实证登记）。
+     * 只做转发，不改变生产语义——供「开关关闭静默取首 + 状态栏明示候选」分支的面板级断言使用。
+     */
+    internal fun renderForTest(
+        result: SqlReverseResult,
+        candidates: List<SqlToJavaConverter.EntityCandidate>,
+        format: ReverseWrapperFormat,
+    ) = render(result, candidates, format)
+
     /** 测试访问器：结果区文本。 */
     internal fun resultTextForTest(): String = resultEditor.document.text
 
