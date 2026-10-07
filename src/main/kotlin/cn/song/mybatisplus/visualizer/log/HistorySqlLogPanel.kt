@@ -1017,8 +1017,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         private const val CARD_FILES = "files"
         private const val CARD_SQL = "sql"
 
-        // T-RecentExecMenu O-119：轻提示通知组常量随跳转原语收口 [LogEntryJumpOps] 退役
-        // （本页唯一使用者是原跳转通知，现经 ops.showToast 走共享组 id）。
+        // T-RecentExecMenu O-119：跳转通知改经 [LogEntryJumpOps] 共享组；本常量保留给
+        // R4 历史/日志导出 done/failed 两条通知（dev 批次 9 交付，master 未见故曾随退役删除）。
+        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
 
         /** T-Perf-05：搜索输入防抖窗口（毫秒）。 */
         private const val SEARCH_DEBOUNCE_MS = 200
