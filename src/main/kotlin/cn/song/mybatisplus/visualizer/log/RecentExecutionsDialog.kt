@@ -4,6 +4,14 @@ import cn.song.mybatisplus.visualizer.ui.EditorWhitespaceSettings
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
+import com.intellij.icons.AllIcons
+import com.intellij.notification.NotificationAction
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
@@ -40,9 +48,15 @@ import javax.swing.border.EmptyBorder
  * 两行形态、类型色条、耗时/来源角标与「SQL 日志」页完全一致（D86/D87 用户拍板：恒弹对话框
  * 含空态、编辑器内容=restoredSql）。
  *
- * 右侧编辑器三件（D88=A 用户拍板）：**默认格式化显示**（[SqlFormatter.format]，与预览
- * 「格式化还原 SQL」同源口径）+「查看原文 / 格式化」切换（`showFormatted`，不持久化）+
- * 「复制」（[UiTextClipboard]，复制当前显示文本）。
+ * 右侧编辑器三件（D88=A → D91 用户改定）：**恒为格式化显示**（[SqlFormatter.format]，与预览
+ * 「格式化还原 SQL」同源口径；「查看原文」切换已按用户令删除）+「格式化」图标按钮（幂等重排 +
+ * 格式化降级后的手动重试）+「复制」（[UiTextClipboard]，复制当前显示文本）——两枚按钮取日志转 SQL
+ * 结果区同款图标（`AllIcons.Actions.ReformatCode` / `AllIcons.Actions.Copy`）。
+ *
+ * 列表右键菜单六件（T-RecentExecMenu O-119，形制对齐日志页）：复制时间戳 / 屏蔽此 SQL /
+ * 发送到 SQL → Java / 发送到日志转 SQL / 跳转到 Java / 跳转到 Mapper XML——动作不自建，
+ * 一律走共享件（[LogEntryJumpOps] / [batchCopyTimestamps] / [SqlSuppressRuleManager] /
+ * [SqlLogManager.onOpenEntryInTab] 送页签通道）。
  *
  * 线程约定：构造与 show() 必须在 EDT（gutter 侧既有 invokeLater 保证）；条目匹配留在调用方
  * 池化线程（[EntrySourceMatcher.match] 纯函数），本对话框零 PSI、零 IO。
@@ -72,22 +86,27 @@ class RecentExecutionsDialog(
 
     private val statusLabel = JBLabel().apply { foreground = UIUtil.getInactiveTextColor() }
 
-    /** D88=A：格式化显示开关（默认开；**不持久化**——每次打开对话框都是格式化态）。 */
-    private var showFormatted = true
+    /** 弹框内可变视图（抑制成功后移除行用；构造期快照的本地副本，不回查日志缓冲）。 */
+    private val currentEntries = mutableListOf<LogSqlEntry>()
 
     /**
-     * 「查看原文 / 格式化」切换按钮：标签语义=点击后到达的形态。
-     * 形制照抄 SqlSuppressManagerDialog.structureButton——纯 JButton + 标签随状态改写
-     * （不走 DialogWrapperAction：动作名刷新时机不可控，JButton.setText 才是可控路径）。
+     * 「格式化」按钮（D91）：**图标形态**照抄日志转 SQL 结果区的格式动作（`AllIcons.Actions.ReformatCode`
+     * 图标 + 悬停文案；实现在 `LogToSqlPanel.ToggleFormatAction`，此处取同款图标与 tooltip 形态，
+     * 但语义为「重新格式化」——显示恒为格式化态，此按钮是幂等重排 + 格式化降级后的手动重试）。
      */
-    private val formatToggle = JButton().apply {
+    private val reformatButton = JButton(AllIcons.Actions.ReformatCode).apply {
         isFocusable = false
-        addActionListener { toggleFormatDisplay() }
+        toolTipText = MpSqlVisualizerBundle.message("log.recent.dialog.format")
+        addActionListener { updateEditorFromSelection() }
     }
 
-    /** 「复制」按钮：复制当前编辑器显示文本（格式化态复制格式化版）；走 [UiTextClipboard] 统一收口通道。 */
-    private val copyButton = JButton(MpSqlVisualizerBundle.message("log.recent.dialog.copy")).apply {
+    /**
+     * 「复制」按钮（D91）：图标同日志转 SQL 结果区复制动作（`AllIcons.Actions.Copy`）；
+     * 复制**当前显示文本**（格式化版），走 [UiTextClipboard] 统一收口通道。
+     */
+    private val copyButton = JButton(AllIcons.Actions.Copy).apply {
         isFocusable = false
+        toolTipText = MpSqlVisualizerBundle.message("log.recent.dialog.copy")
         addActionListener { copyCurrentSql() }
     }
 
@@ -117,20 +136,28 @@ class RecentExecutionsDialog(
             updateEditorFromSelection()
             syncSelectionScopedControls()
         }
-        // 双击 = 打开预览（与主按钮同路径）
+        // 双击 = 打开预览（与主按钮同路径）；右键 = 条目动作菜单（T-RecentExecMenu，形制同日志页）
         entryList.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 if (e.clickCount == 2) doOKAction()
+            }
+
+            override fun mousePressed(e: MouseEvent) {
+                if (e.isPopupTrigger) showContextMenu(e)
+            }
+
+            override fun mouseReleased(e: MouseEvent) {
+                if (e.isPopupTrigger) showContextMenu(e)
             }
         })
 
         val leftPanel = JBScrollPane(entryList)
 
         val rightPanel = JPanel(BorderLayout()).apply {
-            // 编辑器按钮行（D88=A）：格式化切换 + 复制——作用于右侧显示文本，放编辑器正上方
+            // 编辑器按钮行（D91）：格式化 + 复制，两枚均为图标按钮（图标/形态对齐日志转 SQL 结果区）
             add(JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
                 isOpaque = false
-                add(formatToggle)
+                add(reformatButton)
                 add(copyButton)
             }, BorderLayout.NORTH)
             add(createEditorPane(), BorderLayout.CENTER)
@@ -180,8 +207,8 @@ class RecentExecutionsDialog(
     }
 
     /**
-     * 选中条目 → 只读编辑器换文（D88=A 默认格式化显示；「查看原文」态 = restoredSql 原文；
-     * runWriteAction 直写不重建 editor）。
+     * 选中条目 → 只读编辑器换文（D91：恒为格式化显示，「查看原文」已按用户令退役；
+     * runWriteAction 直写不重建 editor）。空选中 → 清空。
      */
     private fun updateEditorFromSelection() {
         val ed = editor ?: return
@@ -192,25 +219,16 @@ class RecentExecutionsDialog(
     }
 
     /**
-     * 条目 → 编辑器显示文本：默认格式化（与预览「格式化还原 SQL」同源 [SqlFormatter.format]，
+     * 条目 → 编辑器显示文本：格式化（与预览「格式化还原 SQL」同源 [SqlFormatter.format]，
      * 含语句结束符——口径对齐预览侧 `formatIfNeeded(withTerminator(restoredSql))`）；
-     * 格式化异常按容错优先降级原文，不抛、不空屏。
+     * 格式化异常按容错优先降级原文，不抛、不空屏（此时可用「格式化」按钮手动重试）。
      */
-    private fun displayTextFor(entry: LogSqlEntry): String {
-        if (!showFormatted) return entry.restoredSql
-        return runCatching { SqlFormatter.format(withTerminator(entry.restoredSql)) }
+    private fun displayTextFor(entry: LogSqlEntry): String =
+        runCatching { SqlFormatter.format(withTerminator(entry.restoredSql)) }
             .getOrDefault(entry.restoredSql)
-    }
-
-    /** 切换「格式化 / 原文」显示：标签语义=点击后到达的形态（当前格式化 → 「查看原文」，反之 → 「格式化」）。 */
-    private fun toggleFormatDisplay() {
-        showFormatted = !showFormatted
-        updateEditorFromSelection()
-        syncSelectionScopedControls()
-    }
 
     /**
-     * 复制当前编辑器显示文本（格式化态即复制格式化版）。
+     * 复制当前编辑器显示文本（格式化版）。
      * 通道=[UiTextClipboard]（T-UiNative 收口：进 IDE 复制历史）；反馈复用通用键
      * `dialog.copy.done`（SqlSuppressManagerDialog 状态行承载操作反馈同款）。
      */
@@ -223,30 +241,225 @@ class RecentExecutionsDialog(
 
     /** 列表装载 + 首条默认选中 + 状态行（空态文案/共 N 条）+ 选中态联动控件同步。 */
     private fun refreshEntries(entries: List<LogSqlEntry>) {
-        listModel.replaceAll(entries)
-        val first = entries.firstOrNull()
+        currentEntries.clear()
+        currentEntries.addAll(entries)
+        listModel.replaceAll(currentEntries)
+        val first = currentEntries.firstOrNull()
         if (first != null) entryList.setSelectedValue(first, false)
-        statusLabel.text = if (entries.isEmpty()) {
-            // D86=A 空态复用 gutter 菜单既有「未找到」文案，不造重复键
+        syncStatusText()
+        syncSelectionScopedControls()
+    }
+
+    /** 状态行：空态复用 gutter 菜单既有「未找到」文案（不造重复键）；否则「共 N 条」。 */
+    private fun syncStatusText() {
+        statusLabel.text = if (currentEntries.isEmpty()) {
             MpSqlVisualizerBundle.message("gutter.popup.recent.empty")
         } else {
-            MpSqlVisualizerBundle.message("log.recent.dialog.count", entries.size.toString())
+            MpSqlVisualizerBundle.message("log.recent.dialog.count", currentEntries.size.toString())
         }
+    }
+
+    /**
+     * T-RecentExecMenu（D92=A）：抑制成功后**即刻从弹框列表移除该行**——与日志页「存量行立即消失」
+     * 的最强反馈一致，避免「balloon 说已屏蔽、行还杵在那」。只动弹框本地视图，不回查日志缓冲。
+     */
+    private fun removeEntryRow(entry: LogSqlEntry) {
+        val index = currentEntries.indexOf(entry)
+        if (index < 0) return
+        currentEntries.removeAt(index)
+        listModel.replaceAll(currentEntries)
+        if (currentEntries.isEmpty()) {
+            entryList.clearSelection()
+            updateEditorFromSelection()
+        } else {
+            // 保持视点：选中原位置（末尾则左移一条）
+            entryList.selectedIndex = minOf(index, currentEntries.size - 1)
+        }
+        syncStatusText()
         syncSelectionScopedControls()
     }
 
     /**
-     * 选中态联动：主按钮「打开预览」/切换「查看原文·格式化」/「复制」的可用态与标签。
+     * 选中态联动：主按钮「打开预览」/「格式化」/「复制」的可用态。
      * 空态（无选中）三者全禁用——双击/回车同样无动作。
      */
     private fun syncSelectionScopedControls() {
         val hasSelection = entryList.selectedValue != null
         okAction.isEnabled = hasSelection
-        formatToggle.text = MpSqlVisualizerBundle.message(
-            if (showFormatted) "log.recent.dialog.showOriginal" else "log.recent.dialog.format",
-        )
-        formatToggle.isEnabled = hasSelection
+        reformatButton.isEnabled = hasSelection
         copyButton.isEnabled = hasSelection
+    }
+
+    // ---------- T-RecentExecMenu O-119：列表右键菜单（六件，形制对齐日志页） ----------
+
+    /**
+     * 右键菜单：复制时间戳 / 屏蔽此 SQL / 发送到 SQL → Java / 发送到日志转 SQL /
+     * 跳转到 Java / 跳转到 Mapper XML。
+     *
+     * 明确不做（与日志页的差异是刻意的）：**删除**（弹框是浏览视图，删的是全局日志缓冲条目，
+     * 属越权副作用）、**方法级聚焦**（弹框锚点本身就是那个方法的位置）、**按请求聚焦**（跳走页签）、
+     * **复制 SQL**（编辑器上方按钮已有，且口径更好：所见即复制）。
+     */
+    private fun showContextMenu(e: MouseEvent) {
+        val index = entryList.locationToIndex(e.point)
+        if (index < 0) return
+        entryList.selectedIndex = index
+        val entry = entryList.model.getElementAt(index)
+        val popup = ActionManager.getInstance().createActionPopupMenu(POPUP_ID, buildMenuGroup(entry))
+        // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成属性——显式调 setter
+        popup.setTargetComponent(entryList)
+        popup.component.show(entryList, e.x, e.y)
+    }
+
+    /** 菜单动作组（[showContextMenu] 与测试访问器共用，单一来源）。 */
+    private fun buildMenuGroup(entry: LogSqlEntry): DefaultActionGroup = DefaultActionGroup(
+        CopyTimestampAction(entry),
+        SuppressSqlAction(entry),
+        SendToSqlToJavaAction(entry),
+        SendToLogToSqlAction(entry),
+        JumpToJavaAction(entry),
+        JumpToMapperXmlAction(entry),
+    )
+
+    /** 复制该条目的时间戳片段（与日志页同源 [batchCopyTimestamps]；显示开关关闭时无片段 → 置灰）。 */
+    private inner class CopyTimestampAction(private val entry: LogSqlEntry) : AnAction() {
+        private val clip = batchCopyTimestamps(listOf(entry))
+
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.copyTimestamp")
+            e.presentation.isEnabled = clip.isNotEmpty()
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            if (clip.isNotEmpty()) UiTextClipboard.copy(clip)
+        }
+    }
+
+    /**
+     * 屏蔽此 SQL：规则入库（[SqlSuppressRuleManager] 公开 API）→ 从弹框列表移除该行（D92=A）→
+     * balloon 反馈附「管理屏蔽规则…」直达（与日志页 `log.suppress.*` 文案/通知组同源）。
+     */
+    private inner class SuppressSqlAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("log.suppress.action")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            when (SqlSuppressRuleManager.getInstance().addRule(entry.restoredSql)) {
+                SqlSuppressRuleManager.AddResult.ADDED -> {
+                    removeEntryRow(entry)
+                    showSuppressBalloon(1)
+                }
+                // 已存在：幂等——行照旧移除（该 SQL 已在屏蔽态，弹框不应再展示它）
+                SqlSuppressRuleManager.AddResult.DUPLICATE -> removeEntryRow(entry)
+                SqlSuppressRuleManager.AddResult.LIMIT_REACHED ->
+                    showSuppressLimitBalloon()
+            }
+        }
+    }
+
+    /** 发送到 SQL → Java（第三页签）：经 [SqlLogManager.onOpenEntryInTab] 通道（面板私有字段不可直达）。 */
+    private inner class SendToSqlToJavaAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.sendToReverse")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            sendEntryToTab(entry, LogEntryTab.SQL_TO_JAVA)
+        }
+    }
+
+    /** 发送到日志转 SQL（第二页签）。 */
+    private inner class SendToLogToSqlAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("logToSql.sendTo")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            sendEntryToTab(entry, LogEntryTab.LOG_TO_SQL)
+        }
+    }
+
+    /** 跳转到 Java 调用方（T-M55-01 双目标之一；实时页口径——与日志页同文案同反馈）。 */
+    private inner class JumpToJavaAction(private val entry: LogSqlEntry) : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.jumpToJava")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            LogEntryJumpOps.jumpToSourceRealtime(project, entry)
+        }
+    }
+
+    /**
+     * 跳转到 mapper XML 语句节点：mapperStatement 非空且定位成功才显示
+     * （update 内解析一次并存引用，actionPerformed 复用——与日志页单次右键一次索引查询同款）。
+     */
+    private inner class JumpToMapperXmlAction(private val entry: LogSqlEntry) : AnAction() {
+        private var resolved: LogEntryJumpOps.XmlTarget? = null
+
+        override fun update(e: AnActionEvent) {
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.jumpToXml")
+            resolved = LogEntryJumpOps.resolveXml(project, entry)
+            e.presentation.isEnabledAndVisible = resolved != null
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            val target = resolved ?: LogEntryJumpOps.resolveXml(project, entry) ?: return
+            LogEntryJumpOps.navigate(project, target.virtualFile, target.line)
+        }
+    }
+
+    /**
+     * 送条目到工具窗页签：通道由 [SqlLogPanel] 注册（工具窗未创建即未注册）——
+     * 未就绪时状态行轻提示降级，不静默（对齐跳转侧「不静默」约定）。
+     */
+    private fun sendEntryToTab(entry: LogSqlEntry, tab: LogEntryTab) {
+        val open = project.getService(SqlLogManager::class.java).onOpenEntryInTab
+        if (open == null) {
+            statusLabel.text = MpSqlVisualizerBundle.message("log.recent.dialog.menuPanelNotReady")
+            return
+        }
+        open(entry, tab)
+    }
+
+    /** 屏蔽成功 balloon（与日志页 `showSuppressBalloon` 同通知组同文案；附管理直达）。 */
+    private fun showSuppressBalloon(addedCount: Int) {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            val notification = NotificationGroupManager.getInstance()
+                .getNotificationGroup(SUPPRESS_NOTIFICATION_GROUP_ID)
+                .createNotification(
+                    MpSqlVisualizerBundle.message("log.suppress.added.title"),
+                    MpSqlVisualizerBundle.message("log.suppress.added.body", addedCount.toString()),
+                    NotificationType.INFORMATION,
+                )
+            notification.addAction(
+                NotificationAction.createSimple(MpSqlVisualizerBundle.message("log.suppress.manage")) {
+                    notification.expire()
+                    SqlSuppressManagerDialog(project).show()
+                },
+            )
+            notification.notify(project)
+        }
+    }
+
+    /** 屏蔽规则达上限 balloon（D6：拒新增不淘汰）。 */
+    private fun showSuppressLimitBalloon() {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            NotificationGroupManager.getInstance()
+                .getNotificationGroup(SUPPRESS_NOTIFICATION_GROUP_ID)
+                .createNotification(
+                    MpSqlVisualizerBundle.message("log.suppress.added.title"),
+                    MpSqlVisualizerBundle.message(
+                        "log.suppress.limit",
+                        SqlSuppressRuleManager.MAX_RULES.toString(),
+                    ),
+                    NotificationType.WARNING,
+                )
+                .notify(project)
+        }
     }
 
     /**
@@ -298,20 +511,38 @@ class RecentExecutionsDialog(
     /** 测试访问器：触发主按钮动作（含「不关闭」契约断言的前半段）。 */
     internal fun triggerOpenPreviewForTest() = doOKAction()
 
-    /** 测试访问器：切换「格式化 / 原文」。 */
-    internal fun triggerToggleFormatForTest() = toggleFormatDisplay()
+    /** 测试访问器：「格式化」图标动作（D91 幂等重排）。 */
+    internal fun triggerReformatForTest() = reformatButton.doClick()
 
-    /** 测试访问器：切换按钮当前标签（形态语义断言）。 */
-    internal fun formatToggleLabelForTest(): String = formatToggle.text
+    /** 测试访问器：「格式化」按钮可用态。 */
+    internal fun reformatEnabledForTest(): Boolean = reformatButton.isEnabled
 
-    /** 测试访问器：切换按钮可用态。 */
-    internal fun formatToggleEnabledForTest(): Boolean = formatToggle.isEnabled
+    /** 测试访问器：「格式化」按钮 tooltip（图标按钮的可见文案载体）。 */
+    internal fun reformatTooltipForTest(): String? = reformatButton.toolTipText
+
+    /** 测试访问器：「格式化」按钮图标（与日志转 SQL 结果区同源断言用）。 */
+    internal fun reformatIconForTest(): javax.swing.Icon? = reformatButton.icon
 
     /** 测试访问器：触发复制。 */
     internal fun triggerCopyForTest() = copyCurrentSql()
 
     /** 测试访问器：复制按钮可用态。 */
     internal fun copyEnabledForTest(): Boolean = copyButton.isEnabled
+
+    /** 测试访问器：复制按钮图标是否与日志转 SQL 结果区复制动作同源（`AllIcons.Actions.Copy`）。 */
+    internal fun copyIconForTest(): javax.swing.Icon? = copyButton.icon
+
+    /**
+     * 测试访问器：右键菜单动作清单（按当前选中条目构建；headless 断言在场/文案/置灰，
+     * 用 `AnActionEvent.createFromAnAction(...)` 驱动 update——仓内既有测试同法）。
+     */
+    internal fun menuActionsForTest(): List<AnAction> {
+        val entry = entryList.selectedValue ?: return emptyList()
+        return buildMenuGroup(entry).getChildren(null).toList()
+    }
+
+    /** 测试访问器：屏蔽规则经理（断言规则确实入库）。 */
+    internal fun suppressRuleCountForTest(): Int = SqlSuppressRuleManager.getInstance().rules.size
 
     companion object {
         const val DIALOG_WIDTH = 760
@@ -326,5 +557,11 @@ class RecentExecutionsDialog(
 
         /** 左右分栏比（列表侧信息密度高于规则名列表，较屏蔽规则对话框 0.38 放宽）。 */
         const val SPLIT_PROPORTION = 0.45f
+
+        /** 列表右键 ActionPopupMenu 的 place（与日志页 `mpvs.log.list` 分开，两个菜单各自独立）。 */
+        const val POPUP_ID = "mpvs.recent.exec.list"
+
+        /** 屏蔽反馈通知组（plugin.xml 已注册；与日志页 `SUPPRESS_NOTIFICATION_GROUP_ID` 同组同文案）。 */
+        const val SUPPRESS_NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.logsuppress"
     }
 }
