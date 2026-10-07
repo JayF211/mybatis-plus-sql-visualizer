@@ -1,12 +1,22 @@
 ---
 name: project-exists-bugfix
 description: 用户实测 SQL 预览缺 exists 条件——根因是 WrapperLocator 链终结点误判（exists
-  条件方法与链终结点双语义撞名）；修复方案已出待用户确认实施
+  条件方法与链终结点双语义撞名）；2026-10-07 由 T-ExistsChainTerminal 修复（7c1b079）
 metadata:
   node_type: memory
   type: project
   originSessionId: sess_118762b3-2149-41cd-a759-80202715ee25
 ---
+
+**状态勘正（2026-10-07）**：本档此前记为「修复方案已出待用户确认实施」，但长期未实施——**现已修复**，
+提交 `7c1b079`（分支 `t-exists-chain-terminal`），计划
+`docs/开发计划/20261007-1639-T-ExistsChainTerminal-工厂链带参exists误判为终结点-开发计划.md`。
+落地即本文档 §修复方案 的原文方案（按实参个数判），并抽为单一来源 `isExistsConditionCall`
+供终结点筛选与 `initializerIsWrapperChainWithoutTerminal` 共用；金样矩阵补 S91~S95，
+反向验证（守卫改恒 false → 96 例 4 失败、红点精确落四个新例）在案。
+**新证据**：`var w = Wrappers.<T>lambdaQuery()...exists(sql)` 声明形态同样丢条件（此前被同一名单拒为
+wrapper 变量）；单参 `exists(String)` 在 MP classic（3.5.7/3.5.15/3.5.17）与 MPJ 1.5.6 均不存在，
+MP 侧必须带布尔首参。Kotlin 侧 `KtWrapperDetector` 同一名单问题按 D94=A 登记不现修。
 
 2026-08-14 用户实测缺陷（M25 后、632 测试基线）：`taskRecordService.page(page, Wrappers.<T>lambdaQuery().like(...).exists(flag, "SELECT ... {0}", v).eq(...).orderByDesc(...))` 形态的预览 SQL 缺 `EXISTS (...)` 条件。用户安装的旧构建表现：纯 SELECT 缺条件。
 
