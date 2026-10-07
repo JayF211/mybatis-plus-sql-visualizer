@@ -936,8 +936,10 @@ class SqlToJavaPanel(
 
         private fun autoLabelOf(): String = MpSqlVisualizerBundle.message("reverse.panel.resultType.auto")
 
-        /** 固定候选（三项，均以字符串元素承载——与调用类 this/baseMapper 的元素形态一致）。 */
-        private fun specialNames(): List<String> = listOf(autoLabelOf(), MAP_LIST_DECL, OBJECT_LIST_DECL)
+        /** 固定候选（四项，均以字符串元素承载——与调用类 this/baseMapper 的元素形态一致；
+         *  Map 两形态（列表/分页）并列，Objs 无分页重载故不提供 Page<Object>——MP core 3.5.17 javap 实证）。 */
+        private fun specialNames(): List<String> =
+            listOf(autoLabelOf(), MAP_LIST_DECL, PAGE_MAP_LIST_DECL, OBJECT_LIST_DECL)
 
         /**
          * 「选择类」弹框模型：委托 [GotoClassModel2]，在候选名列表最前**前插**返回类型固定项
@@ -1742,6 +1744,10 @@ class SqlToJavaPanel(
         /** 类选择字段按钮图标（12px 缩放——AllIcons 原生 16px 偏大，用户反馈）。 */
         /** T-MapResultVo v4：返回类型选择器的 Map/Objs 预置声明（生成器按含 Map/含 Object 派生族）。 */
         private const val MAP_LIST_DECL = "List<Map<String, Object>>"
+        /** T-MapResultVo v6：Maps 分页声明——SQL 含 LIMIT 时前缀=Page<Map<String, Object>>、
+         *  方法 selectMapsPage/listMapsPage/selectJoinMapsPage（MP core 3.5.17 + MPJ 1.5.8 javap 实证；
+         *  v5 去自由输入后此形态从 UI 不可达，本项补回）。 */
+        private const val PAGE_MAP_LIST_DECL = "Page<Map<String, Object>>"
         private const val OBJECT_LIST_DECL = "List<Object>"
 
         private val PICKER_ELLIPSIS_ICON: Icon = IconScaler.scale(AllIcons.General.Ellipsis, 12f / 16f)

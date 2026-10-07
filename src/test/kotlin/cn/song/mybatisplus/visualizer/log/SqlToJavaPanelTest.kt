@@ -1093,20 +1093,23 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         val model = panel.returnTypeModelForTest()
         val auto = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
             .message("reverse.panel.resultType.auto")
-        // 前插顺序：自动 → List<Map<String, Object>> → List<Object> → 项目类候选
+        // 前插顺序：自动 → List<Map<String, Object>> → Page<Map<String, Object>> → List<Object> → 项目类候选
         val names = model.getNames(false).toList()
         assertEquals(
-            "三个固定候选应前插在类候选之前",
-            listOf(auto, "List<Map<String, Object>>", "List<Object>"),
-            names.take(3),
+            "四个固定候选应前插在类候选之前（Map 列表/分页并列，Objs 无分页重载不提供 Page<Object>）",
+            listOf(auto, "List<Map<String, Object>>", "Page<Map<String, Object>>", "List<Object>"),
+            names.take(4),
         )
-        assertTrue("固定候选之后应接项目类候选: ${names.size}", names.size >= 3)
+        assertTrue("固定候选之后应接项目类候选: ${names.size}", names.size >= 4)
         // 固定项直出（元素名/全限定名 = 字符串本身，不触 PSI）；按名取元素返回自身
         assertEquals(auto, model.getFullName(auto))
         assertEquals("List<Object>", model.getElementName("List<Object>"))
         val elements = model.getElementsByName("List<Map<String, Object>>", false, "")
         assertEquals(1, elements.size)
         assertEquals("List<Map<String, Object>>", elements[0])
+        val pageElements = model.getElementsByName("Page<Map<String, Object>>", false, "")
+        assertEquals(1, pageElements.size)
+        assertEquals("Page<Map<String, Object>>", pageElements[0])
     }
 
     /** T-MapResultVo v5：弹框选中映射——固定项（自动=清空 / Map 声明=直写）＋类元素（简单名）。 */
@@ -1118,6 +1121,10 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         panel.applyReturnTypeChosenForTest("List<Map<String, Object>>")
         assertEquals("List<Map<String, Object>>", field.text)
         assertNotNull("声明形态选中后应带类图标（用户反馈缺失点）", field.valueIconForTest())
+        // T-MapResultVo v6：Maps 分页声明（生成器按含 Map 归 Maps 族，SQL 含 LIMIT 时前缀=Page<Map>）
+        panel.applyReturnTypeChosenForTest("Page<Map<String, Object>>")
+        assertEquals("Page<Map<String, Object>>", field.text)
+        assertNotNull("Page<Map<String, Object>> 选中后应有类图标", field.valueIconForTest())
         panel.applyReturnTypeChosenForTest("List<Object>")
         assertEquals("List<Object>", field.text)
         assertNotNull("List<Object> 选中后同样应有图标", field.valueIconForTest())
