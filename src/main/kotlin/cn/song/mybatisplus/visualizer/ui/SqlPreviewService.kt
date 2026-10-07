@@ -763,8 +763,73 @@ class SqlPreviewService(private val project: Project) {
      * 将原生 SQL 中的命名参数 :paramName 转换为 ? 占位符。
      * 示例：`:keyword` → `?`，`CONCAT('%', :keyword, '%')` → `CONCAT('%', ?, '%')`
      */
+    // T-JpaParamOrder F3：正则提常量——[extractNativeParamNames] 与替换共用同一 pattern，
+    // 保证名序与替换产物 `?` 序一致
+    private val NATIVE_NAMED_PARAM = Regex("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)")
+
     private fun convertNativeSqlParameters(nativeSql: String): String {
-        return nativeSql.replace(Regex("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)"), "?")
+        return nativeSql.replace(NATIVE_NAMED_PARAM, "?")
+    }
+
+    /**
+     * T-JpaParamOrder F3：原生 SQL 命名参数名序（首现序，与 [convertNativeSqlParameters]
+     * 替换出的 `?` 一一对应）。位置参数 `?N` 不在内。
+     */
+    private fun extractNativeParamNames(nativeSql: String): List<String> =
+        NATIVE_NAMED_PARAM.findAll(nativeSql).map { it.groupValues[1] }.toList()
+
+    /**
+     * T-JpaParamOrder F3：全部 `?` 均来自命名参数替换时返回名序（供按名回填），否则 null
+     * 维持按序回填。位置参数混入时名序数量与 `?` 不齐，按名会把无名的 `?` 配空值——
+     * 保守回退既有语义。`?` 计数用朴素 count（判定用途，非替换位点）。
+     */
+    private fun usableNamedPlaceholderSources(sql: String, namedParamNames: List<String>): List<String>? =
+        namedParamNames.takeIf { it.isNotEmpty() && it.size == sql.count { ch -> ch == '?' } }
+
+    // T-JpaParamOrder F6：静态值字面量形态（数字含 Java 类型后缀 / 枚举常量引用）
+    private val NUMERIC_LITERAL = Regex("-?\\d+(\\.\\d+)?[LlFfDd]?")
+    private val ENUM_CONSTANT_REF = Regex("[A-Za-z_$][A-Za-z0-9_$.]*\\.[A-Z][A-Z0-9_]*")
+
+    /**
+     * T-JpaParamOrder F6：setParameter 静态值求值——参数框初值自动回显。
+     *
+     * 用户追问「为什么这些常量没有回显」（20261006）：`setParameter("locationStatus", "E")`
+     * 这类字面量/枚举常量可静态求值，此前面板一律留空、渲染全 `?`，与代码事实不符。
+     *
+     * 识别面（保守，宁缺勿错）：
+     *  - 字符串字面量 `"E"` → E（去引号 + 简单反转义）
+     *  - 数字字面量 `0` / `1L` / `0.5f` → 去 Java 类型后缀
+     *  - 布尔字面量 `true` / `false`
+     *  - 枚举常量引用 `Enum.CONST`（取末段；`@Enumerated(STRING)` 运行期绑定值即该名）
+     * 变量引用 / 方法调用 / 任意表达式 → null（保持空待填，用户手动输入）
+     */
+    private fun staticParamValue(valueExpr: String): String? {
+        val expr = valueExpr.trim()
+        if (expr.isEmpty()) return null
+        // 注意：单字符字面量（数字 `0`）合法——长度守卫只挡空串，勿写成 length < 2
+        if (expr.startsWith("\"") && expr.endsWith("\"") && expr.length >= 2) {
+            return expr.substring(1, expr.length - 1)
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+        }
+        if (NUMERIC_LITERAL.matches(expr)) {
+            return expr.trimEnd('L', 'l', 'F', 'f', 'D', 'd')
+        }
+        if (expr == "true" || expr == "false") return expr
+        if (ENUM_CONSTANT_REF.matches(expr)) return expr.substringAfterLast('.')
+        return null
+    }
+
+    /** T-JpaParamOrder F6：setParameter 追踪列表 → 参数框初值表（仅静态可求值项入表）。 */
+    private fun staticParamValues(
+        parameters: List<cn.song.mybatisplus.visualizer.psi.jpa.HqlParameter>,
+    ): Map<String, String> {
+        val map = LinkedHashMap<String, String>()
+        parameters.forEach { p ->
+            if (p.isPositional) return@forEach
+            staticParamValue(p.valueExpr)?.let { map[p.paramName] = it }
+        }
+        return map
     }
 
     /**
@@ -911,6 +976,10 @@ class SqlPreviewService(private val project: Project) {
             method = info.method,
             inClauseParams = result.inClauseParams,
             dialectOverride = dialect,
+            placeholderParamNames = result.placeholderParamNames,
+            duplicateParamNames = info.duplicateParamNames,
+            // T-JpaParamOrder F6：字面量/枚举常量自动预填参数框（变量引用不入表，保持待填）
+            initialParamValues = staticParamValues(info.parameters),
         )
     }
 
@@ -933,14 +1002,20 @@ class SqlPreviewService(private val project: Project) {
         val extraParams = JpaQueryEnhancer.evaluatePageSort(info.method, null, dialect, null)
             ?.extraParamNames ?: emptyList()
         val allParamNames = paramNames + extraParams
+        // T-JpaParamOrder F3：native 命名参数名序透传（全部 `?` 来自 :name 替换时启用按名回填）
+        val usableNamedSources = usableNamedPlaceholderSources(enhancedSql, extractNativeParamNames(info.hql))
         return PreviewResult(
             sql = enhancedSql,
             compactSql = enhancedSql.replace(Regex("\\s+"), " ").trim(),
             unresolvedParams = allParamNames,
             paramTable = ParameterReplacer.buildParamTable(allParamNames),
-            paramHints = allParamNames.map { ParamHint(quote = !isNumericParam(info.method, it)) },
+            paramHints = (usableNamedSources ?: allParamNames).map { ParamHint(quote = !isNumericParam(info.method, it)) },
             wrapperType = null,
             tableName = tableName,
+            placeholderParamNames = usableNamedSources.orEmpty(),
+            duplicateParamNames = info.duplicateParamNames,
+            // T-JpaParamOrder F6：native 链同样预填静态常量
+            initialParamValues = staticParamValues(info.parameters),
         )
     }
 
@@ -1048,6 +1123,9 @@ class SqlPreviewService(private val project: Project) {
             paramNames = paramNames,
             method = info.method,
             inClauseParams = result.inClauseParams,
+            placeholderParamNames = result.placeholderParamNames,
+            // T-JpaParamOrder F6：自定义 DAO 链同样预填静态常量
+            initialParamValues = staticParamValues(info.parameters),
         )
     }
 
@@ -1076,14 +1154,17 @@ class SqlPreviewService(private val project: Project) {
             HbmXmlMapping.QueryKind.NATIVE -> {
                 val sql = convertNativeSqlParameters(query.queryText)
                 val enhancedSql = applyJpaMethodEnhancements(hostMethod, sql, null, native = true)
+                // T-JpaParamOrder F3：native 命名参数名序透传（与 previewNativeSql 同款判定）
+                val usableNamedSources = usableNamedPlaceholderSources(enhancedSql, extractNativeParamNames(query.queryText))
                 PreviewResult(
                     sql = enhancedSql,
                     compactSql = enhancedSql.replace(Regex("\\s+"), " ").trim(),
                     unresolvedParams = paramNames,
                     paramTable = ParameterReplacer.buildParamTable(paramNames),
-                    paramHints = paramNames.map { ParamHint(quote = true) },
+                    paramHints = (usableNamedSources ?: paramNames).map { ParamHint(quote = true) },
                     wrapperType = null,
                     tableName = null,
+                    placeholderParamNames = usableNamedSources.orEmpty(),
                 )
             }
             HbmXmlMapping.QueryKind.HQL -> {
@@ -1104,6 +1185,7 @@ class SqlPreviewService(private val project: Project) {
                     method = hostMethod,
                     inClauseParams = result.inClauseParams,
                     dialectOverride = dialect,
+                    placeholderParamNames = result.placeholderParamNames,
                 )
             }
         }
@@ -1230,16 +1312,25 @@ class SqlPreviewService(private val project: Project) {
         method: PsiMethod?,
         inClauseParams: Set<String> = emptySet(),
         dialectOverride: Dialect? = null,
+        placeholderParamNames: List<String> = emptyList(),
+        duplicateParamNames: Set<String> = emptySet(),
+        initialParamValues: Map<String, String> = emptyMap(),
     ): PreviewResult {
         // T-PS5-03：方言由调用入口透传（未传则本地求一次）——见 applyJpaMethodEnhancements 同款说明
         val dialect = dialectOverride ?: currentDialect()
         val views = collectConditionViews(statement)
+        // T-JpaParamOrder F3：占位符名序可用性判定——convertedSql 可能是增强后形态（LIMIT 等），
+        // 但增强不增删 `?`；全部 `?` 均来自命名参数时启用按名回填，否则置空维持按序
+        val usableNamedSources = usableNamedPlaceholderSources(convertedSql, placeholderParamNames).orEmpty()
+        // T-JpaParamOrder F3：回填提示与「渲染实际用的 sources」平行——按名回填启用时随名序，
+        // 否则随面板行序（paramNames），保证 backfillParamsBySource 的第 i 位提示对第 i 位来源
+        val backfillSources = usableNamedSources.ifEmpty { paramNames }
         // 参数回填提示：根据方法签名参数类型判定是否需要引号
         // - IN 子句参数：数值类型不加引号，字符串加引号
         // - 非 IN 参数：数值类型不加引号，字符串加引号（quote=true）
         // - 无法判定类型时默认加引号（保守策略）
-        val paramHints = if (paramNames.isNotEmpty()) {
-            paramNames.map { name ->
+        val paramHints = if (backfillSources.isNotEmpty()) {
+            backfillSources.map { name ->
                 val inList = name in inClauseParams
                 val isNumeric = isNumericParam(method, name)
                 // 数值类型不加引号，其他类型（String/Date 等）加引号
@@ -1257,6 +1348,9 @@ class SqlPreviewService(private val project: Project) {
             warning = buildJpaWarning(statement),
             columns = (statement.table as? TableInfo)?.allColumnNames ?: emptyList(),
             previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, dialect, formatSql(), views),
+            placeholderParamNames = usableNamedSources,
+            duplicateParamNames = duplicateParamNames,
+            initialParamValues = initialParamValues,
         )
     }
 

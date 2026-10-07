@@ -66,7 +66,10 @@ object SqlLogFileReader {
         if (!file.exists()) return emptyList()
         // T-SqlHistoryFull：整读 file.readText() → 流式逐行（单文件滚动阈值 100MB，整读内存峰值可达文件体量；
         // 逐行消费只在解析块内累积当前块，峰值≈单条 SQL）。解析结果与整读路径完全一致。
-        return file.bufferedReader().useLines { lines -> parseContent(lines) }
+        // T-SqlLogPerf：历史文件加载是 20261006 实测延迟大头嫌疑（8708 条/19MB 计 15~16.6s），阈值打点归因。
+        return LogPerfProbe.measure("SqlLogFileReader.readFromFile", { "${file.name} ${file.length()}B" }) {
+            file.bufferedReader().useLines { lines -> parseContent(lines) }
+        }
     }
 
     /**
@@ -127,34 +130,38 @@ object SqlLogFileReader {
      */
     fun parseContent(lines: Sequence<String>): List<LogSqlEntry> {
         val entries = mutableListOf<LogSqlEntry>()
-        val currentLines = mutableListOf<String>()
+        // T-SqlLogPerf（20261006-1020 计划 P2）：块累积不再走 joinToString → lines() → joinToString
+        // 三份全量拷贝——头部行与正文行分开持有，parseBlockLines 直收行序列，单块只剩
+        // 组装 restoredSql 那一次必要拷贝。判定逻辑与逐字语义与旧双拷贝版完全一致（round-trip 测试钉）。
+        var header: String? = null
+        val bodyLines = mutableListOf<String>()
 
         fun flushBlock() {
-            if (currentLines.isEmpty()) return
-            val block = currentLines.joinToString("\n")
-            parseBlock(block)?.let { entries.add(it) }
-            currentLines.clear()
+            val h = header ?: return
+            parseBlockLines(h, bodyLines)?.let { entries.add(it) }
+            header = null
+            bodyLines.clear()
         }
 
         for (line in lines) {
             // 检测新版头部（兼容 2/3 个 `-`：-- source 或 --- source）
             // 此处不能用 startsWith 严格判别「-- source」——旧版 F-43 的「-- 2026-08-31 ...」也会匹配，
             // 故先看是否为新版结构（含 "source:" 与 "time:" 关键字）——具体交由正则捕获 timestamp/format ，
-            // parseBlock 中先 NEW 后 OLD 顺序尝试，任一正则匹配即可。
+            // parseBlockLines 中先 NEW 后 OLD 顺序尝试，任一正则匹配即可。
             val trimmed = line.trimStart()
             if (trimmed.startsWith("--") && trimmed.contains("source:") && trimmed.contains("time:")) {
                 flushBlock()
-                currentLines.add(line)
+                header = line
             }
             // 检测旧版头部（F-43：`-- yyyy-MM-dd HH:mm:ss`）；`-- pd: ` 是参数持久化行非头部，
             // 不排除会被当作旧头部把条目劈成两块（T-HistParam）
             else if (line.startsWith("-- ") && !line.contains("source:") && !line.startsWith(PD_PREFIX)) {
                 flushBlock()
-                currentLines.add(line)
+                header = line
             }
             // 非头部行（SQL 正文或空行）
-            else {
-                currentLines.add(line)
+            else if (header != null) {
+                bodyLines.add(line)
             }
         }
         flushBlock()
@@ -164,16 +171,9 @@ object SqlLogFileReader {
         }
     }
 
-    private fun parseBlock(block: String): LogSqlEntry? {
-        val lines = block.lines()
-        if (lines.isEmpty()) return null
-        val header = lines.first()
-        // T-HistParam F2：v2 头部下探测参数持久化行（`-- pd: <base64> --`），解码失败按普通
-        // 正文注释行降级（SQL 多一行注释无害）；解码成功则 rawSql 与 params 从载荷还原。
-        // T-McpAuditTrail T-MAT-03 读端回填：载荷扩展键 `s`（来源）同源还原——写入侧已把
-        // [SqlSource.MCP] 落进 pd 载荷，读端不回填则重启后来源退化为 UNKNOWN（历史页徽标消失）。
-        // 两条头部分支（新版/旧版 F-43）都要回填：头部形态与 pd 行是否在场互相独立。
-        val contentLines = lines.drop(1)
+    private fun parseBlockLines(header: String, contentLines: List<String>): LogSqlEntry? {
+        // T-SqlLogPerf（20261006-1020 计划 P2）：直收 parseContent 的行序列——旧 parseBlock(block)
+        // 的 block.lines() 再切分已随单遍化移除；头部行/正文行由调用方分开传入，语义逐字一致。
         var bodyLines = contentLines
         var rawSqlOverride: String? = null
         var params: List<LogSqlParam> = emptyList()

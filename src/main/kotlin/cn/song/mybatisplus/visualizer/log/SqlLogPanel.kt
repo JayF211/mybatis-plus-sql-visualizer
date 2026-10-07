@@ -474,6 +474,34 @@ class SqlLogPanel(
         addActionListener { showSortPopup() }
     }
 
+    /**
+     * T-SqlLogPerf（20261006-1020 计划 + 用户点名）：「滚动到底部」动作 + 尾部跟随。
+     *
+     * 背景：log 包原没有任何滚动控制——并发灌入时新条目只进模型、视口原地不动，用户体感
+     * 「监听加载有延迟」。本动作一键跳列表底并恢复跟随；跟随态下新条目到达自动贴底，
+     * 用户向上滚动阅读即自动停跟随（滚回底部/点动作恢复），与 IDE 控制台「滚动到底」习惯一致。
+     * 形态走左侧动作图标组（AnAction）而非右侧控制组 JButton——控制组最坏宽有预算锁
+     * （SqlLogPanelLayoutTest 防「又往控制组加控件」），图标组窄了由平台溢出承接。
+     */
+    internal val scrollToEndAction: AnAction = ScrollToEndAction()
+
+    /** 尾部跟随开关（EDT 读写：滚动监听 / 刷新尾部 / 动作点击）。默认开——日志语义以「最新」为锚点。 */
+    private var autoFollowTail = true
+
+    /** 跟随判定松量（px）：视口底沿距列表底沿小于该值视为「在底部」。 */
+    private val tailFollowSlackPx = 48
+
+    /** 滚动事件归因基线（区分程序性追加与用户滚动；见 buildListPane 的 adjustment 监听）。 */
+    private var lastScrollMax = 0
+    private var lastScrollValue = 0
+
+    /** 跳列表底；follow=true 同时恢复跟随态。 */
+    private fun scrollToBottom(follow: Boolean) {
+        if (follow) autoFollowTail = true
+        if (listModel.isEmpty) return
+        list.ensureIndexIsVisible(listModel.size() - 1)
+    }
+
     // ---------- T-ListMode：SQL 显示模式（T-DisplayModeToSettings：入口迁设置页「列表显示」，两列表共享一键） ----------
 
     /** 搜索条（默认隐藏，Ctrl+F/⌘F 唤起；实时过滤 restoredSql 与摘要）。 */
@@ -585,6 +613,7 @@ class SqlLogPanel(
         ManageSuppressAction(), // T-SqlSuppress：屏蔽管理（设置旁，D1 主入口 + D7 漏斗图标）
         ShowSearchAction(), // 搜索在帮助左侧（用户指定排序）
         HelpAction(),
+        scrollToEndAction, // T-SqlLogPerf：滚动到底部（尾部跟随；追加在用户指定排序之后）
     )
 
     // ---------- T-Perf-15：manager 监听器命名引用（init 注册 / dispose 注销） ----------
@@ -1139,6 +1168,22 @@ class SqlLogPanel(
         }
     }
 
+    /**
+     * T-SqlLogPerf：「滚动到底部」动作（跳列表底 + 恢复尾部跟随）。
+     * 图标复用 [AllIcons.General.ArrowDown]（本文件 SQL类型/排序按钮同款下箭头，向下语义一致）。
+     */
+    private inner class ScrollToEndAction : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.General.ArrowDown
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.scrollBottom")
+            e.presentation.description = MpSqlVisualizerBundle.message("log.panel.scrollBottom.tip")
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            scrollToBottom(follow = true)
+        }
+    }
+
     private inner class SettingsAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.General.Settings
@@ -1368,7 +1413,20 @@ class SqlLogPanel(
                 if (e.isPopupTrigger) showContextMenu(e)
             }
         })
-        return JBScrollPane(list)
+        // T-SqlLogPerf：尾部跟随的用户意图归因——滚动条事件里「程序性追加」（max 增大且 value 未动，
+        // 新条目进模型所致）不改跟随态；其余变化按「是否在底部」判定：滚离底部=停跟随，滚回底部=恢复。
+        val scrollPane = JBScrollPane(list)
+        scrollPane.verticalScrollBar.addAdjustmentListener { e ->
+            val bar = e.adjustable
+            val grew = bar.maximum > lastScrollMax
+            val value = bar.value
+            val valueUnmoved = value == lastScrollValue
+            lastScrollMax = bar.maximum
+            lastScrollValue = value
+            if (grew && valueUnmoved) return@addAdjustmentListener // 新条目进模型的程序性增长，非用户滚动
+            autoFollowTail = bar.maximum - (value + bar.visibleAmount) <= tailFollowSlackPx
+        }
+        return scrollPane
     }
 
     /**
@@ -1413,7 +1471,13 @@ class SqlLogPanel(
      */
     private fun refreshList() {
         val gen = ++refreshGeneration
-        val snapshot = manager.entries.snapshot()
+        // T-SqlLogPerf P5（20261006-1020 计划）：上一轮全量重建链未走完就来了新刷新时，增量差分会被
+        // 「model.size != lastRendered.size」拒绝 → 每次刷新都重启重建链，风暴期列表永远停在首屏 30 条
+        // （用户体感「监听加载有延迟」的实态）。进差分前同步补完剩余批次，让差分基线对齐。
+        flushRebuildChainSync()
+        val snapshot = LogPerfProbe.measure("LogPanel.refreshList.snapshot", { "size=${manager.entries.size()}" }) {
+            manager.entries.snapshot()
+        }
         // T-CaptureTruth T-CT-03：条目变化同步诊断行（有条目即还原默认空态文案并停表）
         syncDiagnostics()
 
@@ -1435,8 +1499,13 @@ class SqlLogPanel(
         val newVisible = applySort(searched)
         val evicted = manager.entries.drainEvictedCount()
 
+        val modelSizeBefore = listModel.size()
         if (!applyIncremental(newVisible, evicted)) {
             applyFullRebuild(newVisible, gen)
+        }
+        // T-SqlLogPerf：尾部跟随——仅当列表真的长高（新条目追加）才贴底；搜索/过滤收窄不打扰浏览位置
+        if (autoFollowTail && listModel.size() > modelSizeBefore) {
+            list.ensureIndexIsVisible(listModel.size() - 1)
         }
 
         // 聚焦隐藏计数提示（聚焦层单独度量：输入 filtered → 输出 focused）
@@ -1488,9 +1557,12 @@ class SqlLogPanel(
      *
      * T-Perf-03 追加链 generation 守卫（自 dev 移植）：新 refreshList 启动后旧链在新 chunk 写入前检测代际
      * 并终止——杜绝旧快照剩余条目继续追加造成的幽灵/重复条目。
+     * T-SqlLogPerf P5：剩余批次游标提为字段 [rebuildRemaining]——refreshList 进差分前经
+     * [flushRebuildChainSync] 同步补完在途链（旧实现链被新刷新抢占后只能整体重启，见 flushRebuildChainSync 注释）。
      */
     private fun applyFullRebuild(sorted: List<LogSqlEntry>, gen: Long) {
         lastRendered = sorted
+        rebuildRemaining = null
         // T-LogListFreeze-01：批量抑制布局 + T-LogListFreeze-03：分批 EDT 写入
         list.ignoreRepaint = true
         listModel.clear()
@@ -1504,20 +1576,47 @@ class SqlLogPanel(
         list.repaint()
 
         // T-LogListFreeze-03：剩余批次通过 invokeLater 异步追加（每批一次 EDT 脉冲，避免长冻结）
-        if (sorted.size > REFRESH_FIRST_BATCH_SIZE) {
-            val remaining = sorted.drop(REFRESH_FIRST_BATCH_SIZE)
-            val iterator = remaining.iterator()
-            fun appendNext() {
-                if (gen != refreshGeneration) return // 新一轮刷新已启动，旧链终止（T-Perf-03 代际守卫）
-                val chunk = mutableListOf<LogSqlEntry>()
-                repeat(REFRESH_CHUNK_SIZE) { if (iterator.hasNext()) chunk.add(iterator.next()) }
-                listModel.addAll(chunk)
-                if (iterator.hasNext()) {
-                    ApplicationManager.getApplication().invokeLater { appendNext() }
-                }
-            }
-            ApplicationManager.getApplication().invokeLater { appendNext() }
+        rebuildRemaining = if (sorted.size > REFRESH_FIRST_BATCH_SIZE) {
+            sorted.drop(REFRESH_FIRST_BATCH_SIZE).iterator()
+        } else {
+            null
         }
+        if (rebuildRemaining != null) {
+            ApplicationManager.getApplication().invokeLater { appendRebuildChunk() }
+        }
+    }
+
+    /** T-SqlLogPerf P5：在途全量重建链的剩余游标（null = 无在途链）。 */
+    private var rebuildRemaining: Iterator<LogSqlEntry>? = null
+
+    /** 追加一批（REFRESH_CHUNK_SIZE 条）；写完仍有余量则排下一拍。 */
+    private fun appendRebuildChunk() {
+        val remaining = rebuildRemaining ?: return
+        val chunk = mutableListOf<LogSqlEntry>()
+        repeat(REFRESH_CHUNK_SIZE) { if (remaining.hasNext()) chunk.add(remaining.next()) }
+        listModel.addAll(chunk)
+        rebuildRemaining = if (remaining.hasNext()) remaining else null
+        if (rebuildRemaining != null) {
+            ApplicationManager.getApplication().invokeLater { appendRebuildChunk() }
+        }
+    }
+
+    /**
+     * T-SqlLogPerf P5（20261006-1020 计划）：同步补完在途全量重建链。
+     *
+     * 旧形态：重建链在途时 `listModel.size != lastRendered.size`，增量差分必被拒绝 → 风暴期
+     * 每 200ms 的新刷新都重启重建链，链永远走不完，列表停在首屏 30 条且反复 clear/addAll 白耗 EDT。
+     * 补完后 model 与 lastRendered 对齐，后续刷新走增量差分。
+     */
+    private fun flushRebuildChainSync() {
+        val remaining = rebuildRemaining ?: return
+        rebuildRemaining = null
+        list.ignoreRepaint = true
+        val rest = remaining.asSequence().toList()
+        if (rest.isNotEmpty()) listModel.addAll(rest)
+        list.ignoreRepaint = false
+        list.revalidate()
+        list.repaint()
     }
 
     /** 按当前排序模式排序条目。 */

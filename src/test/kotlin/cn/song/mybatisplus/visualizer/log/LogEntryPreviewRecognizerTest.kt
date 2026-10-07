@@ -248,4 +248,54 @@ class LogEntryPreviewRecognizerTest {
         assertTrue(recognized.recognized)
         assertEquals(mapOf("param1" to "1"), recognized.initialValues)
     }
+
+    // ------------------------------------------------------------------
+    // T-StackHoverUi：调用栈快照三分支同权透传
+    // （识别/字面量恢复两分支此前丢快照——带参数条目 meta 行摘要与悬停弹层不可达）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `识别分支_透传调用栈快照`() {
+        val result = LogSqlEntry(
+            rawSql = "SELECT * FROM t WHERE a = ?",
+            restoredSql = "SELECT * FROM t WHERE a = ?",
+            params = listOf(LogSqlParam("1", "Long")),
+            stackDigest = "com.a.B#m:1<-com.c.D#n:2",
+        ).toPreviewResult(formatSql = false, literalRecovery = false)
+        assertEquals("com.a.B#m:1<-com.c.D#n:2", result.stackDigest)
+    }
+
+    @Test
+    fun `字面量恢复分支_透传调用栈快照`() {
+        val sql = "SELECT * FROM tableA WHERE (\"id\" = '3251') ;"
+        val result = LogSqlEntry(
+            rawSql = sql,
+            restoredSql = sql,
+            params = emptyList(),
+            stackDigest = "com.a.B#m:3",
+        ).toPreviewResult(formatSql = false, literalRecovery = true)
+        assertEquals("com.a.B#m:3", result.stackDigest)
+    }
+
+    @Test
+    fun `兜底分支_保留调用栈快照`() {
+        // 占位符 2 != 参数数 1 → 识别失败，且占位符非零不走字面量恢复 → 兜底分支（既有行为钉）
+        val result = LogSqlEntry(
+            rawSql = "SELECT * FROM t WHERE a = ? AND b = ?",
+            restoredSql = "SELECT * FROM t WHERE a = ? AND b = ?",
+            params = listOf(LogSqlParam("1", "Long")),
+            stackDigest = "com.a.B#m:4",
+        ).toPreviewResult(formatSql = false, literalRecovery = false)
+        assertEquals("com.a.B#m:4", result.stackDigest)
+    }
+
+    @Test
+    fun `无快照条目_三分支不凭空造快照`() {
+        val recognized = LogSqlEntry(
+            rawSql = "SELECT * FROM t WHERE a = ?",
+            restoredSql = "SELECT * FROM t WHERE a = ?",
+            params = listOf(LogSqlParam("1", "Long")),
+        ).toPreviewResult(formatSql = false, literalRecovery = false)
+        assertNull("无快照仍为 null（控制台/桥通道条目不冒称）", recognized.stackDigest)
+    }
 }

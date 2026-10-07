@@ -60,11 +60,15 @@ object HqlConverter {
      * @param sql        转换后的 SQL 字符串（命名参数已替换为 ?）
      * @param statement  语句模型（SelectStatement / UpdateStatement / DeleteStatement）
      * @param inClauseParams 使用 IN 子句的参数名集合
+     * @param placeholderParamNames T-JpaParamOrder F3：HQL 命名参数名序（首现序，与替换后
+     *         SQL 中 `?` 一一对应）；位置参数 `?N` 不在内。调用方据此做按名回填——
+     *         仅当 SQL 全部 `?` 均来自命名参数时可用（位置参数混入时数量不齐）。
      */
     data class Result(
         val sql: String,
         val statement: SqlStatement,
         val inClauseParams: Set<String> = emptySet(),
+        val placeholderParamNames: List<String> = emptyList(),
     )
 
     /**
@@ -117,6 +121,9 @@ object HqlConverter {
         val inClauseParams = findInClauseParams(hql)
 
         // 1. 替换命名参数 :param → ?
+        // T-JpaParamOrder F3：替换前用同一正则收集名序（findAll 顺序=首现序=替换后 `?` 序），
+        // 供渲染期按名回填；`::` 双冒号由正则负向断言排除，与替换语义一致
+        val placeholderParamNames = HQL_NAMED_PARAM_TO_Q.findAll(hql).map { it.groupValues[1] }.toList()
         var sql = replaceNamedParameters(hql)
 
         // 2. 替换位置参数 ?1 → ?
@@ -176,6 +183,7 @@ object HqlConverter {
                     conditions = parsedDelete?.conditions ?: emptyList(),
                 ),
                 inClauseParams = inClauseParams,
+                placeholderParamNames = placeholderParamNames,
             )
         }
 
@@ -192,6 +200,7 @@ object HqlConverter {
                         tableAlias = parsed.tableAlias,
                     ),
                     inClauseParams = inClauseParams,
+                    placeholderParamNames = placeholderParamNames,
                 )
             }
             // 头部结构异常（非法 HQL）→ 维持历史 SelectStatement 透传，不抛异常
@@ -204,6 +213,7 @@ object HqlConverter {
                 comment = advancedConstructComment(sql) ?: inheritanceBoundaryComment(table),
             ),
             inClauseParams = inClauseParams,
+            placeholderParamNames = placeholderParamNames,
         )
     }
 

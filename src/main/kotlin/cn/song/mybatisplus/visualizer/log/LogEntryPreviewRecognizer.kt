@@ -141,6 +141,9 @@ private fun LogSqlEntry.toPreviewResultInternal(
         return PreviewResult(
             sql = formatIfNeeded(withTerminator(recognized.sql), formatSql),
             compactSql = withTerminator(recognized.compactSql),
+            // T-StackHoverUi：识别分支与兜底分支同权携带调用栈快照——带参数条目（占位符==参数数的
+            // 主路径）此前在此丢快照，meta 行摘要与悬停弹层对最常见的带参数条目不可达
+            stackDigest = stackDigest,
             unresolvedParams = recognized.unresolvedParams,
             paramTable = null,
             wrapperType = null,
@@ -158,6 +161,8 @@ private fun LogSqlEntry.toPreviewResultInternal(
                 return PreviewResult(
                     sql = formatIfNeeded(withTerminator(recovery.placeholderSql), formatSql),
                     compactSql = withTerminator(recovery.placeholderSql),
+                    // T-StackHoverUi：同上，字面量恢复分支同权携带快照
+                    stackDigest = stackDigest,
                     unresolvedParams = recovery.unresolvedParams,
                     paramTable = null,
                     wrapperType = null,
