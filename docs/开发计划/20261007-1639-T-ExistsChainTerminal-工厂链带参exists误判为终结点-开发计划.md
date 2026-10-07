@@ -230,6 +230,7 @@ if (expr.methodExpression.referenceName in chainTerminalMethodNames && !isExists
 | 反向验证（`isExistsConditionCall` 改恒 false，带 `RED PROBE` 注记） | 矩阵 96 例 | **4 失败**，红点精确落 S91/S93/S94/S95；S92（notExists）保绿 → 判别力定向，非整片炸 |
 | 还原后定向回归 | 七类 | **261/0**：矩阵 96、`WrapperAnchorDetectorTest` 41、`WrapperAnchorDetectorNegativeTest` 5、`WrapperLocatorTest` 31、`ConsumerMethodsCoverageTest` 33、`SqlPreviewServiceTest` 49、`XbatisConverterTest` 6 |
 | testFast 冒烟 | 266 类 | **3406/0/6 跳过**（2m05s） |
+| **归并 master 后权威全量**（`testShards`，树 = master `716acf2` 同树 `3fe3aef`） | 5 片 + testExternal | **SHARD TOTAL 6257 / 0 失败 / 0 错误 / 9 跳过**（1295/1274/1272/1106/1270 + 40；parity 544 计划类全集均有结果 XML；3m44s。跑时 Docker 未运行，与既有 9 跳过基线一致） |
 
 `RED PROBE` 注记已还原，`grep -rn "RED PROBE" src/` 零命中；两个临时探针文件（`TmpExistsProbeTest` /
 `TmpVarProbeTest`）已删，`git status` 无未跟踪残留。
@@ -253,7 +254,12 @@ if (expr.methodExpression.referenceName in chainTerminalMethodNames && !isExists
 
 ### 9.4 遗留
 
-- **V120 真机走查**（交用户）：demo 工程写 A 形态裸工厂链（`exists` 带参 + 后续 `eq`/`orderByDesc`）
-  确认预览为普通 SELECT 且条件在位；变量 / 分步 / `new` 三种写法无回归。
-- **分支归并**：本任务在 `t-exists-chain-terminal` 分支实施，未动 master 上的既有在途文件；
-  归并 master 待用户明令（本仓定例：dev→master 与分支归并均须明令）。
+- **V120 真机走查**（交用户）：demo 工程 `mybatis-plus-demo` 的
+  `WrapperFactoryCoverageServiceImpl#listByBareFactoryChainExists`（端点
+  `GET /config/factory/bareChainExists?username=admin`，demo 仓 `38e6361`）——四种写法应产出同一份 SQL，
+  逐形态比对预览；变量 / 分步 / `new` 三种写法无回归。
+- ~~分支归并~~ **已办**：`t-exists-chain-terminal` 以 `--no-ff` 并入 master（`716acf2`，用户令），
+  改动面与 master 侧 T-MapResultVo v5 三笔零重叠；分支、远端分支、工作树（`-existsct`）均已清除，
+  合并后权威全量读数见 §9.2 末行。
+- **本任务唯一未验证面**：真机（沙盒/用户 IDE）走查未做——headless 金样矩阵已覆盖四形态与反向验证，
+  真机只差「预览面板实际渲染」这一层观感确认。
