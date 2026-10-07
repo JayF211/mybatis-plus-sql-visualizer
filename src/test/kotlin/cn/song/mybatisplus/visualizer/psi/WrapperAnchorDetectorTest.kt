@@ -897,12 +897,17 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
     }
 
     /**
-     * 整体不变量：用户真实 MPJ 工厂链形态——全文件恰好 1 个锚点（wrapper 变量声明）。
+     * 整体不变量：用户真实 MPJ 工厂链形态——wrapper 链本身恰好 1 个锚点（wrapper 变量声明），
+     * **MPJ Maps 终止调用按 T-MapResultVo S4「批量直调登记」独立承载**（与经典 MP
+     * `mapper.selectList(wrapper)` / `selectMaps(wrapper)` 同族：声明行与调用行各一锚点，
+     * 长年行为；`ee090f7` 把 selectJoinMaps/selectJoinMapsPage 注册进批量注册表后
+     * 三个 Maps 形态用例由此转红，20261007 复核判定为契约更新而非回归）。
      *
      * T-Mxx（用户实测回归）：`wrapper = JoinWrappers.lambda(...).selectAll(...).leftJoin(...)` 曾出现双图标——
      * 链上 selectAll 撞批量注册表（场景 D），initializerHeadIsWrapper 回溯停在 qualifier 引用返回 false
-     * 未去重。逐个方法名断言（lambda 去重）无法暴露此问题；本用例扫描全文件叶子断言锚点集合
-     * 恰好 = {wrapper}，任何多余锚点（selectAll/lambda/leftJoin 等）都会失败。
+     * 未去重。逐个方法名断言（lambda 去重）无法暴露此问题；本用例扫描全文件叶子断言锚点集合，
+     * **链内方法（selectAll/lambda/leftJoin 等）任何多余锚点都会失败**（不变量所在）；
+     * 终止调用（Maps 族）的独立锚点已按上述口径计入期望集合。
      */
     fun testMpjFactoryChainWholeFileSingleAnchorRightAlias() {
         configure(
@@ -926,7 +931,11 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
             }
             """.trimIndent(),
         )
-        assertEquals("MPJ 工厂链全文件应恰好 1 个锚点", setOf("wrapper"), collectedAnchors())
+        assertEquals(
+            "MPJ 工厂链（链内单锚点）＋ Maps 终止调用独立锚点",
+            setOf("wrapper", "selectJoinMaps"),
+            collectedAnchors(),
+        )
     }
 
     fun testMpjFactoryChainWholeFileSingleAnchorJoinExt() {
@@ -957,7 +966,11 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
             }
             """.trimIndent(),
         )
-        assertEquals("joinExtAndSubTable 形态应恰好 1 个锚点", setOf("wrapper"), collectedAnchors())
+        assertEquals(
+            "MPJ 链内单锚点＋ Maps 终止调用独立锚点",
+            setOf("wrapper", "selectJoinMaps"),
+            collectedAnchors(),
+        )
     }
 
     fun testMpjFactoryChainWholeFileSingleAnchorFromPage() {
@@ -987,7 +1000,11 @@ class WrapperAnchorDetectorTest : BasePlatformTestCase() {
             }
             """.trimIndent(),
         )
-        assertEquals("joinFromAndPage 形态应恰好 1 个锚点", setOf("wrapper"), collectedAnchors())
+        assertEquals(
+            "MPJ 链内单锚点＋ Maps 分页终止调用独立锚点",
+            setOf("wrapper", "selectJoinMapsPage"),
+            collectedAnchors(),
+        )
     }
 
     fun testMpjFactoryChainWholeFileSingleAnchorOneAndCount() {
