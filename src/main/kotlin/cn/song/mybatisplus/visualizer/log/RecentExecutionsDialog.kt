@@ -1,7 +1,9 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.ui.EditorWhitespaceSettings
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
@@ -18,8 +20,10 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import java.awt.Dimension
+import java.awt.FlowLayout
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.ListSelectionModel
@@ -35,6 +39,10 @@ import javax.swing.border.EmptyBorder
  * 左侧列表直接复用日志面板条目渲染器 [LogEntryListCellRenderer]（同包 internal 直用）——
  * 两行形态、类型色条、耗时/来源角标与「SQL 日志」页完全一致（D86/D87 用户拍板：恒弹对话框
  * 含空态、编辑器内容=restoredSql）。
+ *
+ * 右侧编辑器三件（D88=A 用户拍板）：**默认格式化显示**（[SqlFormatter.format]，与预览
+ * 「格式化还原 SQL」同源口径）+「查看原文 / 格式化」切换（`showFormatted`，不持久化）+
+ * 「复制」（[UiTextClipboard]，复制当前显示文本）。
  *
  * 线程约定：构造与 show() 必须在 EDT（gutter 侧既有 invokeLater 保证）；条目匹配留在调用方
  * 池化线程（[EntrySourceMatcher.match] 纯函数），本对话框零 PSI、零 IO。
@@ -64,6 +72,25 @@ class RecentExecutionsDialog(
 
     private val statusLabel = JBLabel().apply { foreground = UIUtil.getInactiveTextColor() }
 
+    /** D88=A：格式化显示开关（默认开；**不持久化**——每次打开对话框都是格式化态）。 */
+    private var showFormatted = true
+
+    /**
+     * 「查看原文 / 格式化」切换按钮：标签语义=点击后到达的形态。
+     * 形制照抄 SqlSuppressManagerDialog.structureButton——纯 JButton + 标签随状态改写
+     * （不走 DialogWrapperAction：动作名刷新时机不可控，JButton.setText 才是可控路径）。
+     */
+    private val formatToggle = JButton().apply {
+        isFocusable = false
+        addActionListener { toggleFormatDisplay() }
+    }
+
+    /** 「复制」按钮：复制当前编辑器显示文本（格式化态复制格式化版）；走 [UiTextClipboard] 统一收口通道。 */
+    private val copyButton = JButton(MpSqlVisualizerBundle.message("log.recent.dialog.copy")).apply {
+        isFocusable = false
+        addActionListener { copyCurrentSql() }
+    }
+
     init {
         title = if (anchorLabel.isNullOrBlank()) {
             MpSqlVisualizerBundle.message("log.recent.dialog.title")
@@ -88,7 +115,7 @@ class RecentExecutionsDialog(
         entryList.addListSelectionListener { event ->
             if (event.valueIsAdjusting) return@addListSelectionListener
             updateEditorFromSelection()
-            syncOpenPreviewEnabled()
+            syncSelectionScopedControls()
         }
         // 双击 = 打开预览（与主按钮同路径）
         entryList.addMouseListener(object : MouseAdapter() {
@@ -100,6 +127,12 @@ class RecentExecutionsDialog(
         val leftPanel = JBScrollPane(entryList)
 
         val rightPanel = JPanel(BorderLayout()).apply {
+            // 编辑器按钮行（D88=A）：格式化切换 + 复制——作用于右侧显示文本，放编辑器正上方
+            add(JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+                isOpaque = false
+                add(formatToggle)
+                add(copyButton)
+            }, BorderLayout.NORTH)
             add(createEditorPane(), BorderLayout.CENTER)
         }
 
@@ -146,16 +179,49 @@ class RecentExecutionsDialog(
         return created.component
     }
 
-    /** 选中条目 → 只读编辑器换文（restoredSql，D87=A；runWriteAction 直写不重建 editor）。 */
+    /**
+     * 选中条目 → 只读编辑器换文（D88=A 默认格式化显示；「查看原文」态 = restoredSql 原文；
+     * runWriteAction 直写不重建 editor）。
+     */
     private fun updateEditorFromSelection() {
         val ed = editor ?: return
-        val text = entryList.selectedValue?.restoredSql ?: ""
+        val text = entryList.selectedValue?.let { displayTextFor(it) } ?: ""
         ApplicationManager.getApplication().runWriteAction {
             if (ed.document.text != text) ed.document.setText(text)
         }
     }
 
-    /** 列表装载 + 首条默认选中 + 状态行（空态文案/共 N 条）+ 主按钮可用态同步。 */
+    /**
+     * 条目 → 编辑器显示文本：默认格式化（与预览「格式化还原 SQL」同源 [SqlFormatter.format]，
+     * 含语句结束符——口径对齐预览侧 `formatIfNeeded(withTerminator(restoredSql))`）；
+     * 格式化异常按容错优先降级原文，不抛、不空屏。
+     */
+    private fun displayTextFor(entry: LogSqlEntry): String {
+        if (!showFormatted) return entry.restoredSql
+        return runCatching { SqlFormatter.format(withTerminator(entry.restoredSql)) }
+            .getOrDefault(entry.restoredSql)
+    }
+
+    /** 切换「格式化 / 原文」显示：标签语义=点击后到达的形态（当前格式化 → 「查看原文」，反之 → 「格式化」）。 */
+    private fun toggleFormatDisplay() {
+        showFormatted = !showFormatted
+        updateEditorFromSelection()
+        syncSelectionScopedControls()
+    }
+
+    /**
+     * 复制当前编辑器显示文本（格式化态即复制格式化版）。
+     * 通道=[UiTextClipboard]（T-UiNative 收口：进 IDE 复制历史）；反馈复用通用键
+     * `dialog.copy.done`（SqlSuppressManagerDialog 状态行承载操作反馈同款）。
+     */
+    private fun copyCurrentSql() {
+        val text = editor?.document?.text ?: return
+        if (text.isEmpty()) return
+        UiTextClipboard.copy(text)
+        statusLabel.text = MpSqlVisualizerBundle.message("dialog.copy.done")
+    }
+
+    /** 列表装载 + 首条默认选中 + 状态行（空态文案/共 N 条）+ 选中态联动控件同步。 */
     private fun refreshEntries(entries: List<LogSqlEntry>) {
         listModel.replaceAll(entries)
         val first = entries.firstOrNull()
@@ -166,12 +232,21 @@ class RecentExecutionsDialog(
         } else {
             MpSqlVisualizerBundle.message("log.recent.dialog.count", entries.size.toString())
         }
-        syncOpenPreviewEnabled()
+        syncSelectionScopedControls()
     }
 
-    /** 主按钮可用态 = 有选中（空态时禁用，双击/回车同样无动作）。 */
-    private fun syncOpenPreviewEnabled() {
-        okAction.isEnabled = entryList.selectedValue != null
+    /**
+     * 选中态联动：主按钮「打开预览」/切换「查看原文·格式化」/「复制」的可用态与标签。
+     * 空态（无选中）三者全禁用——双击/回车同样无动作。
+     */
+    private fun syncSelectionScopedControls() {
+        val hasSelection = entryList.selectedValue != null
+        okAction.isEnabled = hasSelection
+        formatToggle.text = MpSqlVisualizerBundle.message(
+            if (showFormatted) "log.recent.dialog.showOriginal" else "log.recent.dialog.format",
+        )
+        formatToggle.isEnabled = hasSelection
+        copyButton.isEnabled = hasSelection
     }
 
     /**
@@ -222,6 +297,21 @@ class RecentExecutionsDialog(
 
     /** 测试访问器：触发主按钮动作（含「不关闭」契约断言的前半段）。 */
     internal fun triggerOpenPreviewForTest() = doOKAction()
+
+    /** 测试访问器：切换「格式化 / 原文」。 */
+    internal fun triggerToggleFormatForTest() = toggleFormatDisplay()
+
+    /** 测试访问器：切换按钮当前标签（形态语义断言）。 */
+    internal fun formatToggleLabelForTest(): String = formatToggle.text
+
+    /** 测试访问器：切换按钮可用态。 */
+    internal fun formatToggleEnabledForTest(): Boolean = formatToggle.isEnabled
+
+    /** 测试访问器：触发复制。 */
+    internal fun triggerCopyForTest() = copyCurrentSql()
+
+    /** 测试访问器：复制按钮可用态。 */
+    internal fun copyEnabledForTest(): Boolean = copyButton.isEnabled
 
     companion object {
         const val DIALOG_WIDTH = 760
