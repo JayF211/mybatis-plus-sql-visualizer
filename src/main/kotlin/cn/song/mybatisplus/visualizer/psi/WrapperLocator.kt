@@ -367,7 +367,8 @@ object WrapperLocator {
     private fun initializerIsWrapperChainWithoutTerminal(init: PsiElement?): Boolean {
         var expr: PsiElement? = init ?: return false
         while (expr is PsiMethodCallExpression) {
-            if (expr.methodExpression.referenceName in chainTerminalMethodNames) return false
+            // T-ExistsChainTerminal：带参 exists 是条件方法（非终结点），不得据此拒收 wrapper 变量
+            if (expr.methodExpression.referenceName in chainTerminalMethodNames && !isExistsConditionCall(expr)) return false
             expr = expr.methodExpression.qualifierExpression
         }
         return wrapperTypeFromInitializerChain(init) != null
@@ -597,7 +598,11 @@ object WrapperLocator {
                 clearedCalls += call
             }
         }
-        val terminal = clearedCalls.lastOrNull { it.methodExpression.referenceName in chainTerminalMethodNames }
+        // T-ExistsChainTerminal：终结点判定排除「带参 exists」——它是条件方法而非终结点。裸工厂链直接作
+        // service 实参时链内无真终结点，旧判定会选中带参 exists → 条件丢失 + 整链误包 SELECT EXISTS
+        val terminal = clearedCalls.lastOrNull {
+            it.methodExpression.referenceName in chainTerminalMethodNames && !isExistsConditionCall(it)
+        }
         val nonTerminalCalls = if (terminal != null) clearedCalls.filterNot { it === terminal } else clearedCalls
         val terminalName = terminal?.methodExpression?.referenceName
         // XB（M44）：DeleteChain 条件链转 DELETE 语义（无 set 调用，终结点 execute 已入终结名单剔除）
@@ -1410,6 +1415,21 @@ object WrapperLocator {
     /** T-M29-02：链式分页终结点（`service.lambdaQuery()...page(Page)`）。 */
     private const val PAGE_TERMINAL = "page"
     private const val CLEAR_METHOD = "clear"
+
+    /**
+     * exists 双语义守卫（T-ExistsChainTerminal）：`exists` 在 MP 里同时是**条件方法**与**链终结点**——
+     * `AbstractWrapper.exists(boolean, String, Object...)` 是条件（Q14-①，javap 实证 3.5.7/3.5.15/3.5.17 均只有带参形态），
+     * `ChainQuery.exists()` 无参才是终结点（Q14-③）。二者落在链尾时结构完全同形，**只能按实参个数区分**。
+     *
+     * 带参形态被当终结点会同时错两处（裸工厂链直接作 service 实参、链内无真终结点时暴露）：
+     * ①该调用被剔除 → `EXISTS (...)` 条件整条丢失；②`existsConsumed` 置位 → 整链被误包成 `SELECT EXISTS (...)`。
+     *
+     * 单一来源：终结点筛选（[buildChainFromFactory]）与 wrapper 变量接受门
+     * （[initializerIsWrapperChainWithoutTerminal]）共用，避免同一语义两处各判一遍。
+     */
+    private fun isExistsConditionCall(call: PsiMethodCallExpression): Boolean =
+        call.methodExpression.referenceName == EXISTS_TERMINAL &&
+            call.argumentList.expressions.isNotEmpty()
 
     /** 删除类消费方法：wrapper 作为实参传入时，即使类型为查询类也应转 DELETE（MP 惯用删除写法；
      *  deleteJoin 为 MPJ 官方联表删除，M15 增补）。 */
