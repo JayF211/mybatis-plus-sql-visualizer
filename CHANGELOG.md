@@ -12,7 +12,7 @@
 
 ### Fixed
 
-- **工厂链裸实参下带参 `exists` 被误判为链终结点，`EXISTS` 子查询条件整条丢失（T-ExistsChainTerminal）**：`exists` 在 MP 里同时是**条件方法**（`AbstractWrapper.exists(boolean, String, Object...)`）与**链终结点**（`ChainQuery.exists()` 无参），PSI 定位层的终结点判定只按方法名匹配，二者又落在链尾时结构完全同形。于是 `service.list(Wrappers.<T>lambdaQuery().eq(...).exists("SELECT 1 FROM ..."))` 这类**裸工厂链直接作方法实参**（链内无 one/list/count/page 等真终结点）会把带参 `exists` 当终结点剔除——子查询条件从预览 SQL 里整条消失，且整条查询被误包成 `SELECT EXISTS (...)`，复制到数据库工具执行语义完全不同。现按实参个数区分（javap 实证 3.5.7/3.5.15/3.5.17 的 core 侧只有带参形态、extension 的 `ChainQuery.exists()` 才无参）：无参 `exists()` 仍是链终结点，带参一律作条件解析（布尔前缀照旧剥离为动态条件开关）；同一判据以 `isExistsConditionCall` 单点收口，供终结点筛选与 wrapper 变量接受门共用。`var w = Wrappers.<T>lambdaQuery()...exists(sql)` 声明形态同属此修复面（此前被同一名单拒为 wrapper 变量）。变量/分步/`new` 三种写法与 `notExists` 本就不受影响，各有回归用例钉住
+- **工厂链裸实参下带参 `exists` 被误判为链终结点，`EXISTS` 子查询条件整条丢失（T-ExistsChainTerminal）**：`exists` 在 MP 里同时是**条件方法**（`Join.exists(String, Object...) / Join.exists(boolean, String, Object...)`）与**链终结点**（`ChainQuery.exists()` 无参），PSI 定位层的终结点判定只按方法名匹配，二者又落在链尾时结构完全同形。于是 `service.list(Wrappers.<T>lambdaQuery().eq(...).exists("SELECT 1 FROM ..."))` 这类**裸工厂链直接作方法实参**（链内无 one/list/count/page 等真终结点）会把带参 `exists` 当终结点剔除——子查询条件从预览 SQL 里整条消失，且整条查询被误包成 `SELECT EXISTS (...)`，复制到数据库工具执行语义完全不同。现按实参个数区分（javap 实证 3.5.7/3.5.15/3.5.17 的 core 侧只有带参形态、extension 的 `ChainQuery.exists()` 才无参）：无参 `exists()` 仍是链终结点，带参一律作条件解析（布尔前缀照旧剥离为动态条件开关）；同一判据以 `isExistsConditionCall` 单点收口，供终结点筛选与 wrapper 变量接受门共用。`var w = Wrappers.<T>lambdaQuery()...exists(sql)` 声明形态同属此修复面（此前被同一名单拒为 wrapper 变量）。变量/分步/`new` 三种写法与 `notExists` 本就不受影响，各有回归用例钉住
 
 ## [2026.10.7] - 2026-10-07
 

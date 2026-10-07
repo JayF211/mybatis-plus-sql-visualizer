@@ -219,7 +219,7 @@ if (expr.methodExpression.referenceName in chainTerminalMethodNames && !isExists
 | --- | --- | --- |
 | §六-1「无参=终结点」的 API 权威性 | ✅ **成立** | javap 实证：`mybatis-plus-core` 3.5.7/3.5.15/3.5.17 的 `AbstractWrapper` 只有 `exists(boolean,String,Object...)`；`mybatis-plus-extension` 3.5.17 的 `ChainQuery` 为 `public boolean exists()`（无参）。判据可安全按实参个数 |
 | §六-2 `initializerIsWrapperChainWithoutTerminal` 是否需同步改 | ✅ **需要**（实测证实） | `var w = Wrappers.<Device>lambdaQuery().eq(..).exists(sql)` 修复前产出 `SELECT EXISTS (SELECT ... WHERE status = 1)`——条件丢失，与 A 形态同签名 |
-| §六-4 单参 `exists(String)` 的出处 | ⚠️ **不存在** | MP classic 三版 + MPJ 1.5.6 均无该重载。故 FR-0012 那行代码按原样编译不过；仓内 S18/S22 属「形状契约」而非可编译形态，已加注记 |
+| §六-4 单参 `exists(String)` 的出处 | ✅ **存在**（首轮结论「不存在」系看漏继承，已勘正） | core 的 `Join` 接口声明 `exists(String, Object...)`（零值变参即单参调用；`AbstractWrapper implements Join`），MPJ 自有的 `Join` 接口同款。首轮只 javap 了 `AbstractWrapper` **自身声明**、未看父接口 → 误判为「不存在」。**修复不受影响**：判据仍是实参个数（core 侧无任何无参 `exists`，无参只在 extension 的 `ChainQuery`） |
 
 ### 9.2 读数（先红 → 后绿 → 反向验证）
 
@@ -242,9 +242,14 @@ if (expr.methodExpression.referenceName in chainTerminalMethodNames && !isExists
    首版写成单行致 S92 假红。按 formatter 规则修正，**未用实际输出回填**（矩阵回归能力的红线）。
 3. **D93 选项 B 的必要性被实测证实**：`var` 形态（前提 2）与 A 形态是同一判据的两个消费点，
    单点收口后两处同时转正；若只改 `:600`，`var` 形态会经工厂路径「碰巧」恢复，但 `:370` 仍留错误判据。
-4. **顺带发现（不属本任务，已登记）**：①单参 `exists(String)` 非 MP/MPJ 可编译形态（见 9.1）；
-   ②Kotlin 侧 `KtWrapperDetector` 同一名单问题按 D94=A 不现修；③README 宣称「Java 与 Kotlin 文件均支持」
-   与 Kotlin 路径 MVP 现状（table 恒 null）存在口径差，建议单独登记。
+4. **顺带发现（不属本任务，已登记）**：①Kotlin 侧 `KtWrapperDetector` 同一名单问题按 D94=A 不现修；
+   ②README 宣称「Java 与 Kotlin 文件均支持」与 Kotlin 路径 MVP 现状（table 恒 null）存在口径差，建议单独登记。
+5. **自身勘误（javap 只看声明不看继承）**：首轮核实前提 4 时只 javap 了 `AbstractWrapper` 自身声明的方法，
+   据此得出「单参 `exists(String)` 在 MP classic 与 MPJ 均不存在、FR-0012 那行代码编译不过」——**结论错误**。
+   补查父接口后：core 的 `Join` 声明 `exists(String, Object...)`、MPJ 自有 `Join` 同款，单参形态**真实可编译**
+   （demo 工程 `mybatis-plus-demo` 里早就有该写法且能编译，是最直接的旁证）。
+   教训：`javap` 默认只列**本类声明**，判定「某 API 有无某重载」必须把继承链上的接口一并扫（或直接扫 jar 内全部类）。
+   已勘正：本表 §9.1 前提 4 行、金样矩阵 S18/S94 注记、变更记录总册条目、归档档。**修复本身不受影响**。
 
 ### 9.4 遗留
 

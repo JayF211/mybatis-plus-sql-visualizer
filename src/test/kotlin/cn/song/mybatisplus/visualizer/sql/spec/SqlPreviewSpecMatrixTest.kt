@@ -180,10 +180,10 @@ class SqlPreviewSpecMatrixTest : BasePlatformTestCase() {
     }
 
     fun `test S18 exists 子查询`() {
-        // 形态契约注记（T-ExistsChainTerminal 实施时核实）：单参 `exists(String)` 并非 MP 可编译形态——
-        // javap 实证 core 3.5.7/3.5.15/3.5.17 的 AbstractWrapper 只有 exists(boolean, String, Object...)，
-        // MPJ 1.5.6 亦无补充。本用例钉的是「EXISTS (子查询) 渲染契约」（插件按实参形状解析，不看签名），
-        // 真实可编译形态见 S94（三参）。
+        // 形态契约注记（T-ExistsChainTerminal 实施时核实）：单参 `exists(String)` 是 MP **真实可编译**形态——
+        // core 的 `Join` 接口声明 `exists(String, Object...)`（零值变参即单参调用，AbstractWrapper implements Join），
+        // MPJ 自有的 Join 接口同款；**无参** `exists()` 只存在于 extension 的 `ChainQuery`（链终结点）。
+        // 本用例钉的是「EXISTS (子查询) 渲染契约」；三参带布尔前缀形态见 S94。
         spec(
             "S18",
             queryChain("LambdaQueryWrapper<Device> w = new LambdaQueryWrapper<Device>().exists(\"SELECT 1 FROM station WHERE station.id = device.id\");"),
@@ -1467,7 +1467,8 @@ class SqlPreviewSpecMatrixTest : BasePlatformTestCase() {
     }
 
     fun `test S94 工厂链裸实参 带参 exists 三参形态（布尔前缀 + {0} 绑定）`() {
-        // MP 官方 core 侧只有 exists(boolean, String, Object...)（3.5.17 javap 实证）；
+        // MP 的 Join 接口两种形态并存：exists(String, Object...)（零值变参＝单参，见 S18）与
+        // exists(boolean, String, Object...)（带布尔前缀，本用例）；两者都是**条件方法**，非链终结点。
         // 布尔前缀剥离为动态条件 toggle，{0} 替换为字面值。
         spec(
             "S94",

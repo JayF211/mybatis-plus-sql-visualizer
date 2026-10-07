@@ -15,8 +15,10 @@ metadata:
 供终结点筛选与 `initializerIsWrapperChainWithoutTerminal` 共用；金样矩阵补 S91~S95，
 反向验证（守卫改恒 false → 96 例 4 失败、红点精确落四个新例）在案。
 **新证据**：`var w = Wrappers.<T>lambdaQuery()...exists(sql)` 声明形态同样丢条件（此前被同一名单拒为
-wrapper 变量）；单参 `exists(String)` 在 MP classic（3.5.7/3.5.15/3.5.17）与 MPJ 1.5.6 均不存在，
-MP 侧必须带布尔首参。Kotlin 侧 `KtWrapperDetector` 同一名单问题按 D94=A 登记不现修。
+wrapper 变量）；`exists` 的 API 归属＝core 的 `Join` 接口 `exists(String, Object...)`（零值变参即单参）与
+`exists(boolean, String, Object...)`（MPJ 自有 Join 同款），**无参** `exists()` 只在 extension 的 `ChainQuery`
+（链终结点）——首轮只 javap `AbstractWrapper` 自身声明漏看继承，一度误判单参形态不存在，已勘正。
+Kotlin 侧 `KtWrapperDetector` 同一名单问题按 D94=A 登记不现修。
 
 2026-08-14 用户实测缺陷（M25 后、632 测试基线）：`taskRecordService.page(page, Wrappers.<T>lambdaQuery().like(...).exists(flag, "SELECT ... {0}", v).eq(...).orderByDesc(...))` 形态的预览 SQL 缺 `EXISTS (...)` 条件。用户安装的旧构建表现：纯 SELECT 缺条件。
 
