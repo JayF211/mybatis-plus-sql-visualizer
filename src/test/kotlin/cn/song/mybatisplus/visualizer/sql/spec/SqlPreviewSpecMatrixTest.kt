@@ -43,6 +43,27 @@ class SqlPreviewSpecMatrixTest : BasePlatformTestCase() {
         }
     """
 
+    /**
+     * 工厂链场景模板（T-ExistsChainTerminal）：链起点为 `Wrappers` 静态工厂，且**裸作 service 实参**
+     * （链内无 one/list/count/page 等真终结点）——该形态下终结点判定只能按方法名，是 exists 双语义撞名的暴露面。
+     */
+    private fun factoryChain(body: String): String = """
+        import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+        import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+
+        public class Demo {
+            public void query() {
+                $body
+            }
+
+            static class DeviceService {
+                public java.util.List<Device> list(Object w) { return null; }
+            }
+
+            $entity
+        }
+    """
+
     private fun previewResult(code: String): PreviewResult? {
         myFixture.configureByText("Demo.java", code.trimIndent())
         val anchor = PsiTreeUtil.findChildOfType(myFixture.file, PsiMethodCallExpression::class.java)
@@ -159,6 +180,10 @@ class SqlPreviewSpecMatrixTest : BasePlatformTestCase() {
     }
 
     fun `test S18 exists 子查询`() {
+        // 形态契约注记（T-ExistsChainTerminal 实施时核实）：单参 `exists(String)` 并非 MP 可编译形态——
+        // javap 实证 core 3.5.7/3.5.15/3.5.17 的 AbstractWrapper 只有 exists(boolean, String, Object...)，
+        // MPJ 1.5.6 亦无补充。本用例钉的是「EXISTS (子查询) 渲染契约」（插件按实参形状解析，不看签名），
+        // 真实可编译形态见 S94（三参）。
         spec(
             "S18",
             queryChain("LambdaQueryWrapper<Device> w = new LambdaQueryWrapper<Device>().exists(\"SELECT 1 FROM station WHERE station.id = device.id\");"),
@@ -1375,6 +1400,107 @@ class SqlPreviewSpecMatrixTest : BasePlatformTestCase() {
             SELECT id, station_name, status, created_at
             FROM device
             WHERE station_name = 'O''Brien'
+            """,
+        )
+    }
+
+    // ========== 第九批：exists 双语义撞名——工厂链裸实参（T-ExistsChainTerminal） ==========
+    // 背景：exists 在 MP 里同时是「条件方法」与「链终结点」。裸工厂链直接作 service 实参时链内无真终结点，
+    // 旧实现按方法名 lastOrNull 选中带参 exists 当终结点 → 条件被剔除 + 整链误包 SELECT EXISTS。
+    // 判据只能按实参个数：无参 = 终结点（Q14-③，见 SqlPreviewServiceTest#testServiceLambdaQueryChainExistsRendersExists）。
+
+    fun `test S91 工厂链裸实参 带参 exists 作条件`() {
+        spec(
+            "S91",
+            factoryChain(
+                "java.util.List<Device> list = deviceService.list(" +
+                    "Wrappers.<Device>lambdaQuery().eq(Device::getStatus, 1)" +
+                    ".exists(\"SELECT 1 FROM station WHERE station.id = device.id\"));",
+            ),
+            """
+            SELECT id, station_name, status, created_at
+            FROM device
+            WHERE status = 1
+                AND EXISTS (SELECT 1 FROM station WHERE station.id = device.id)
+            """,
+        )
+    }
+
+    fun `test S92 工厂链裸实参 notExists 作条件（不对称钉桩）`() {
+        // notExists 不在 chainTerminalMethodNames 里，本就不触发误判——此例钉住「不对称是有意为之」，
+        // 防后人顺手把 notExists 也塞进终结点名单。
+        spec(
+            "S92",
+            factoryChain(
+                "java.util.List<Device> list = deviceService.list(" +
+                    "Wrappers.<Device>lambdaQuery().eq(Device::getStatus, 1)" +
+                    ".notExists(\"SELECT 1 FROM station WHERE station.id = device.id\"));",
+            ),
+            """
+            SELECT id, station_name, status, created_at
+            FROM device
+            WHERE status = 1
+                AND NOT EXISTS (SELECT 1 FROM station WHERE station.id = device.id)
+            """,
+        )
+    }
+
+    fun `test S93 工厂链裸实参 带参 exists 后接条件`() {
+        // 用户真实形态变体：exists 在中段而非链尾（T-M25.2 用户代码即 like→exists→eq→orderByDesc）。
+        // 中段 exists 更早暴露误判——旧实现把它当终结点后，其后的 eq 仍会入链，产出「少一个 EXISTS」的 SQL。
+        spec(
+            "S93",
+            factoryChain(
+                "java.util.List<Device> list = deviceService.list(" +
+                    "Wrappers.<Device>lambdaQuery().eq(Device::getStatus, 1)" +
+                    ".exists(\"SELECT 1 FROM station WHERE station.id = device.id\")" +
+                    ".eq(Device::getStationName, \"s1\"));",
+            ),
+            """
+            SELECT id, station_name, status, created_at
+            FROM device
+            WHERE status = 1
+                AND EXISTS (SELECT 1 FROM station WHERE station.id = device.id)
+                AND station_name = 's1'
+            """,
+        )
+    }
+
+    fun `test S94 工厂链裸实参 带参 exists 三参形态（布尔前缀 + {0} 绑定）`() {
+        // MP 官方 core 侧只有 exists(boolean, String, Object...)（3.5.17 javap 实证）；
+        // 布尔前缀剥离为动态条件 toggle，{0} 替换为字面值。
+        spec(
+            "S94",
+            factoryChain(
+                "java.util.List<Device> list = deviceService.list(" +
+                    "Wrappers.<Device>lambdaQuery().eq(Device::getStatus, 1)" +
+                    ".exists(true, \"SELECT 1 FROM station WHERE station.id = {0}\", 1001L));",
+            ),
+            """
+            SELECT id, station_name, status, created_at
+            FROM device
+            WHERE status = 1
+                AND EXISTS (SELECT 1 FROM station WHERE station.id = 1001)
+            """,
+        )
+    }
+
+    fun `test S95 var 声明 + 工厂链含带参 exists`() {
+        // 前提 2 实测（计划 §六）：`var` 形态走 initializerIsWrapperChainWithoutTerminal 接受门，
+        // 带参 exists 被当终结点即被拒为 wrapper 变量 → 落到工厂路径 → 同一缺陷（条件丢失 + 误包）。
+        // 故该门与 buildChainFromFactory 共用同一判定函数（D93=B）。
+        spec(
+            "S95",
+            factoryChain(
+                "var w = Wrappers.<Device>lambdaQuery().eq(Device::getStatus, 1)" +
+                    ".exists(\"SELECT 1 FROM station WHERE station.id = device.id\");" +
+                    "java.util.List<Device> list = deviceService.list(w);",
+            ),
+            """
+            SELECT id, station_name, status, created_at
+            FROM device
+            WHERE status = 1
+                AND EXISTS (SELECT 1 FROM station WHERE station.id = device.id)
             """,
         )
     }
