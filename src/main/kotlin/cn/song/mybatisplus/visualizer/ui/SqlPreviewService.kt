@@ -5,8 +5,10 @@ import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
 import cn.song.mybatisplus.visualizer.converter.ConverterRegistry
 import cn.song.mybatisplus.visualizer.history.SqlHistoryEntry
 import cn.song.mybatisplus.visualizer.history.SqlHistoryManager
+import cn.song.mybatisplus.visualizer.log.LogSqlEntry
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
 import cn.song.mybatisplus.visualizer.log.sqlLogManagerIfCreated
+import cn.song.mybatisplus.visualizer.log.structureFingerprint
 import cn.song.mybatisplus.visualizer.sql.interceptor.DataPermissionPlaceholder
 import cn.song.mybatisplus.visualizer.sql.interceptor.DynamicTableNameProcessor
 import cn.song.mybatisplus.visualizer.sql.interceptor.PaginationSimulator
@@ -2155,12 +2157,12 @@ class SqlPreviewService(private val project: Project) {
                     text.substring(0, offset.coerceAtMost(text.length)).count { it == '\n' } + 1
                 } ?: 0
             }
-            // 尝试从最近日志条目补全耗时（SQL 指纹匹配）
+            // 尝试从最近日志条目补全耗时（SQL 指纹匹配；R54 两级化——exact 优先＋结构指纹兜底）
             // T-ST-02b2：读路径经 sqlLogManagerIfCreated（永不发起创建）；取不到即不做耗时补全（等同未命中）
-            val executionTimeMs = sqlLogManagerIfCreated(anchor.project)?.entries?.snapshot()
-                .orEmpty()
-                .firstOrNull { it.restoredSql == result.sql }
-                ?.executionTimeMs
+            val executionTimeMs = backfillExecutionTimeMs(
+                sqlLogManagerIfCreated(anchor.project)?.entries?.snapshot().orEmpty(),
+                result.sql,
+            )
             manager.add(
                 SqlHistoryEntry(
                     sql = result.sql,
@@ -2177,6 +2179,29 @@ class SqlPreviewService(private val project: Project) {
 
     companion object {
         private val LOG = Logger.getInstance(SqlPreviewService::class.java)
+
+        /**
+         * R54（O-108）：历史耗时回填匹配键两级化——exact 命中优先（原全文精确匹配，现行为
+         * 零回退），未命中（或命中条目无耗时值）改比 [LogSqlEntry.structureKey]
+         * （[structureFingerprint]：字面量/数字参数化，`?` 占位与实值归一同 token——V81①
+         * 判实在案）取同键**中位数**兜底（V81③：同模板循环 N 次时首条可能是冷启动离群值，
+         * 中位数取样代表性优于 firstOrNull；无耗时的同键条目不参与取样）。
+         * O-108 根因：10.6 起预览默认空参填 `?`，全文匹配对实值日志必失配——耗时列默认
+         * 配置恒空。
+         */
+        internal fun backfillExecutionTimeMs(entries: List<LogSqlEntry>, previewSql: String): Long? {
+            entries.firstOrNull { it.restoredSql == previewSql }?.executionTimeMs?.let { return it }
+            val key = structureFingerprint(previewSql)
+            val durations = ArrayList<Long>()
+            for (e in entries) {
+                val duration = e.executionTimeMs ?: continue
+                if (e.structureKey == key) durations.add(duration)
+            }
+            if (durations.isEmpty()) return null
+            durations.sort()
+            val n = durations.size
+            return if (n % 2 == 1) durations[n / 2] else (durations[n / 2 - 1] + durations[n / 2]) / 2L
+        }
 
         /**
          * T-PreviewFast P7：最近一次预览请求的起始时刻（点击/快捷键入口记时）。三段耗时的锚点：
