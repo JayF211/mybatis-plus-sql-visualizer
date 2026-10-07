@@ -26,7 +26,7 @@
 
 - **SQL → Java 反向转换能力扩展（T-SqlToJavaPromote）**：`GROUP BY` 建模 `.groupBy(...)`；`HAVING` 建模 `.having("...")`（聚合表达式原样透传）；`SELECT DISTINCT` 建模 `.select("DISTINCT ...")`；`FOR UPDATE` 建模 `.last("FOR UPDATE")`（与 LIMIT 并存合并单 last）；聚合/函数列（`COUNT(*) AS cnt`、`MAX(price)` 等）收集原文回落 `.select("expr AS alias")`（此前整体放弃致往返语义丢失）；`INSERT ... NULL` 值建模生成 Java `null`（此前报错）；`UNION / UNION ALL` 子查询解析（SQL 层往返经渲染还原，Java 生成层因 MP core 无 union() 方法降级为原文注释提示）；条件值参数化——`DATE_FORMAT(...) = '2024'` 形态生成 `apply("... = {0}", "2024")`（值/表达式分离）。
 - **SQL → Java 方言宽容**：双引号标识符（`"member"`）、`0x` 十六进制字面量、反斜杠字符串转义（`'a\'b'`）、`DATE / TIMESTAMP '...'` ANSI 类型字面量；算术表达式 / `<=>` 空安全比较 / `ILIKE` 等无法静态映射的形态一律降级 `apply()` 透传（「任何条件都不挡路」）。
-- **SQL → Java Map 响应形态（T-MapResultVo）**：`selectJoinMaps(wrapper)` / 分页 `selectJoinMapsPage(page, wrapper)`（JOIN，MPJ）与 `selectMaps`/`listMaps`（单表）族——返回 `List<Map<String, Object>>`（1.5.8 javap 实证，Maps 族不带 Class 参数）；面板新增「返回形态」下拉（自动/实体列表/Map 列表，会话级）；VO 在 Map 场景转 select 列别名驱动（`selectAs(实体::getX, Vo::getY)`，Map key=别名）；正向识别 `selectJoinMaps` 调用与分页 Page 实参；MCP `sqlv_reverse_sql` 加可选 `maps`+`mapperVariable` 参数（默认不传零回归）。
+- **SQL → Java 返回类型自由输入（T-MapResultVo）**：「返回类型」字段（原「返回 VO」）改为可编辑组合框——自由键入任意返回声明（`List<Map<String, Object>>` / `List<HashMap<...>>` / `List<Object>` / VO 类名），一个控件承载全部返回形态语义；生成器按声明派生调用族：含 Map → `selectJoinMaps(wrapper)`/分页 `selectJoinMapsPage(page, wrapper)`（JOIN，MPJ）/`selectMaps`·`listMaps`（单表）族；含 Object → `selectObjs`/`listObjs` 族（单表；JOIN 场景无 `selectJoinObjs` 报错指路）；类名 → VO 语义（`selectJoinList(Vo.class, wrapper)` + `selectAs` 别名驱动）。Maps/Objs 族不带 Class 参数（1.5.8/MP 3.5.17 javap 实证）；正向识别 `selectJoinMaps` 调用与分页 Page 实参；MCP `sqlv_reverse_sql` 加可选 `maps`+`mapperVariable` 参数（默认不传零回归）。
 
 ### Changed
 
