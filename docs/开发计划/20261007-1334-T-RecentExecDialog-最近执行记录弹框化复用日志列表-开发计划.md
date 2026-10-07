@@ -159,3 +159,19 @@ T-SqlSuppress O-69 交付、经 O-80 拖拽缩放走查定型的成熟形态，�
 **按钮形态定案（对 §3.1 的实现细化）**：走 DialogWrapper 惯用 OK/Cancel 双钮——`setOKButtonText`「打开预览」+ `doOKAction()` 覆写不调 super（开预览后对话框在场）；Enter=打开预览、Esc=关闭为平台默认行为，零自挂监听。
 
 **遗留**：V118 真机走查（§六.4 清单：右键→弹框→选中切换/双击预览/拖拽缩放/尺寸记忆/空命中/与日志页视觉比对）；`EntrySourceMatcher.MAX_RESULTS=20` 上限真机观察（§七.3）。
+
+### 二段：右侧编辑器默认格式化 + 切换原文 + 复制（D88=A，用户真机走查提点）
+
+真机截图反馈：右侧编辑器单行 SQL 挤成软换行长条，可读性差。用户提点「自动格式化+格式化按钮+复制按钮」，拍板 D88=A（本对话框恒默认格式化开，与预览页全局 `logFormatSql` 设置解耦；切换状态不持久化）。
+
+| 项 | 落法 | 复用件（同源，不另起炉灶） |
+| --- | --- | --- |
+| 默认格式化 | 编辑器装载 = `SqlFormatter.format(withTerminator(restoredSql))`；格式化异常按容错优先降级原文 | `SqlFormatter`（预览 `formatIfNeeded` 同一函数）+ `withTerminator`（log 包 internal，与预览口径逐字一致） |
+| 切换原文/格式化 | 纯 `JButton` 标签随状态改写（「查看原文」↔「格式化」）= 点击后到达的形态；原文态精确 = `restoredSql` | 形制照抄 `SqlSuppressManagerDialog.structureButton`（不走 DialogWrapperAction：动作名刷新时机不可控） |
+| 复制 | 复制**当前编辑器显示文本**（格式化态即格式化版）；反馈写状态行 | `UiTextClipboard`（T-UiNative 收口：进 IDE 复制历史）+ 通用键 `dialog.copy.done` |
+| 空态 | 三控件（打开预览/切换/复制）统一禁用 | 既有 `syncSelectionScopedControls` 联动点 |
+
+- 提交：master `ae59bea`（主分支直改，用户令「在主分支实施」；显式路径暂存，未碰并行会话在改的 `JavaCodeGenerator.kt`）。
+- 读数：**定向 10 例 0 失败**（7 例原用例 + 新 3 例：默认格式化判别性形态断言/切换精确回原文再切回/复制取当前显示文本）。
+- 环境事故（一次，已闭环）：首次跑测试时测试 JVM 原生内存分配失败——`os::commit_memory failed ... 页面文件太小 (DOS error/errno=1455)`，executor 非零退出且无断言报告。根因=**用户 runIde 沙盒 IDE（master 树）+ demo 应用 + 捕获 agent 同时在跑**，commit 水位 71.2/74.7GB、free 仅 3.5GB（R16 定例的用户真机在跑变体）。处置：不杀任何进程（用户真机会话），改用降足迹参数 `-PtestHeapSize=384m -PtestTieredStop=true -PtestCiCount=2 -PtestGcThreads=2` 重试即绿（27s）。事故产物 `hs_err_pid14876.log` 已清（另两个 `hs_err_pid19280/replay_pid19280` 属并行会话，未动）。
+- 遗留：V118 走查清单追加两项——格式化默认态视觉、切换/复制手感。
