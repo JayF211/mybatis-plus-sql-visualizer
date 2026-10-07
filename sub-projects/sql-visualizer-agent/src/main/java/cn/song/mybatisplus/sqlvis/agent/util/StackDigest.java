@@ -96,10 +96,13 @@ public final class StackDigest {
     }
 
     /**
-     * 尾部基础设施帧判定（只用于栈底锚点，不改栈顶）——线程容器/线程池/JDK 内部的「尾巴」帧：
-     * 用户链实测尾部 8 帧=Thread/ThreadPoolExecutor/NioEndpoint/coyote，业务帧在其上方被挤进省略段。
-     * 前缀清单刻意只收容器与 JDK：spring 业务链帧（虽也常见）属于上下文信息不跳——跳了会把
-     * Controller 与 Service 之间的 AOP/代理链拆断。
+     * 尾部基础设施帧判定（只用于栈底锚点，不改栈顶）——线程容器/线程池/JDK/Servlet 过滤器链的
+     * 「尾巴」帧。用户链两轮实测：①尾部 8 帧=Thread/ThreadPoolExecutor/NioEndpoint/coyote；
+     * ②线程池跳过后锚点又落到 spring 过滤器链（ApplicationFilterChain/OncePerRequestFilter），
+     * Controller 仍在省略段。名单收容器/JDK/Servlet 管道与 spring web（filter+servlet MVC 链）+
+     * spring boot（devtools 重启线程等）：这些在栈尾永远是管道；**spring 业务中间件不收**
+     * （aop/tx/context——业务栈中段的 AOP/代理链属于上下文，跳了会把 Controller 与 Service 拆断；
+     * 栈尾方向 com.sun.proxy 的 JDK 代理帧由既有 com.sun. 前缀覆盖，恰好穿透 AOP 壳锚到业务类）。
      */
     private static boolean isInfraFrame(StackTraceElement f) {
         final String cn = f.getClassName();
@@ -107,7 +110,9 @@ public final class StackDigest {
                 || cn.startsWith("com.sun.") || cn.startsWith("jdk.")
                 || cn.startsWith("org.apache.tomcat.") || cn.startsWith("org.apache.catalina.")
                 || cn.startsWith("org.apache.coyote.") || cn.startsWith("org.apache.juli.")
-                || cn.startsWith("org.eclipse.jetty.") || cn.startsWith("io.undertow.");
+                || cn.startsWith("org.eclipse.jetty.") || cn.startsWith("io.undertow.")
+                || cn.startsWith("org.springframework.web.")
+                || cn.startsWith("org.springframework.boot.");
     }
 
     /** 中段省略标记段（无 {@code #}，IDE 侧解析器按不可解析段跳过）。 */

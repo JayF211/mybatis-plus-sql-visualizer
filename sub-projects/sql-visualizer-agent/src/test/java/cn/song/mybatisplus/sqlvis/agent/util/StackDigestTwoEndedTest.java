@@ -190,4 +190,44 @@ public class StackDigestTwoEndedTest {
         assertEquals(13, d.split("<-").length);
         assertTrue(d.endsWith("java.util.X19#run:19"));
     }
+
+    @Test
+    public void spring过滤器尾巴_穿透到最深业务帧() {
+        // 用户真机二轮链形态：业务帧之后是 catalina 过滤器链与 spring web 过滤器（8 帧尾巴）
+        StackTraceElement[] s = new StackTraceElement[38];
+        for (int i = 0; i < 30; i++) {
+            s[i] = f("com.test.C" + i, "m" + i, i);
+        }
+        String[] filterTail = {
+            "org.apache.catalina.core.ApplicationFilterChain", "org.apache.catalina.core.ApplicationFilterChain",
+            "org.springframework.web.filter.FormContentFilter", "org.springframework.web.filter.OncePerRequestFilter",
+            "org.apache.catalina.core.ApplicationFilterChain", "org.apache.catalina.core.ApplicationFilterChain",
+            "org.springframework.web.filter.CharacterEncodingFilter", "org.springframework.web.filter.OncePerRequestFilter",
+        };
+        for (int i = 0; i < filterTail.length; i++) {
+            s[30 + i] = f(filterTail[i], "doFilter", 200 + i);
+        }
+        String d = StackDigest.build(s, 24);
+        // 业务深度 30 > 预算 24：栈顶 16（C0..C15）+ 标记（C16..C21 共 6）+ 栈底 C22..C29
+        assertFalse("过滤器链不得出现在快照", d.contains("FilterChain") || d.contains("Filter"));
+        assertTrue("栈底=最深业务帧", d.endsWith("com.test.C29#m29:29"));
+        assertEquals("<…中间省略 6 帧…>", d.split("<-")[16]);
+        assertEquals(25, d.split("<-").length);
+    }
+
+    @Test
+    public void springMVC与devtools尾帧_同被穿透() {
+        // DispatcherServlet/框架 servlet/devtools 重启线程都在 org.springframework.web./boot. 前缀内
+        StackTraceElement[] s = new StackTraceElement[26];
+        for (int i = 0; i < 24; i++) {
+            s[i] = f("com.test.C" + i, "m" + i, i);
+        }
+        s[24] = f("org.springframework.web.servlet.DispatcherServlet", "doDispatch", 1);
+        s[25] = f("org.springframework.boot.devtools.restart.RestartLauncher", "run", 2);
+        String d = StackDigest.build(s, 24);
+        // 业务深度 24 ≤ 预算：全链保留（MVC/devtools 尾帧被跳过不占预算）
+        assertFalse(d.contains("中间省略"));
+        assertFalse(d.contains("DispatcherServlet") || d.contains("RestartLauncher"));
+        assertTrue(d.endsWith("com.test.C23#m23:23"));
+    }
 }
