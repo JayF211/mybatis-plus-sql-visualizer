@@ -847,15 +847,37 @@ object JavaCodeGenerator {
      */
     private fun resolveColumn(columnName: String, entity: EntityTarget?, alias: String?): Pair<String, String>? {
         val target = if (alias != null) entity?.subEntities?.get(alias) ?: entity else entity
-        val field = target?.columnToField?.get(columnName)
-        if (field != null && target != null) return target.className to field
+        // T-FixCamelMap：列名查询双向归一（原样 / snake_case / camelCase）——SQL 列与实体列名
+        // 形态差异（`role_id` ↔ `roleId`，含 @TableField 显式驼峰列）不再回落字符串
+        if (target != null) {
+            for (key in columnKeyVariants(columnName)) {
+                val field = target.columnToField[key]
+                if (field != null) return target.className to field
+            }
+        }
         if (alias == null || entity?.subEntities?.containsKey(alias) == false) {
-            entity?.subEntities?.values?.filter { it.columnToField.containsKey(columnName) }?.singleOrNull()?.let {
-                return it.className to it.columnToField[columnName]!!
+            entity?.subEntities?.values?.filter { sub ->
+                columnKeyVariants(columnName).any { sub.columnToField.containsKey(it) }
+            }?.singleOrNull()?.let { sub ->
+                val key = columnKeyVariants(columnName).first { sub.columnToField.containsKey(it) }
+                return sub.className to sub.columnToField[key]!!
             }
         }
         return null
     }
+
+    /** 列名查询变体（T-FixCamelMap）：原样 / snake_case / camelCase 去重。 */
+    private fun columnKeyVariants(name: String): List<String> {
+        val snake = cn.song.mybatisplus.visualizer.util.NamingStrategy.toSnakeCase(name)
+        return listOf(name, snake, snakeToCamel(name)).distinct()
+    }
+
+    /** snake_case → camelCase（`role_id` → `roleId`）；无下划线原样返回。 */
+    private fun snakeToCamel(name: String): String =
+        if ('_' !in name) name
+        else name.split('_').filter { it.isNotEmpty() }
+            .mapIndexed { i, seg -> if (i == 0) seg else seg.replaceFirstChar { it.uppercaseChar() } }
+            .joinToString("")
 
     /** 列引用渲染（T-M37 列归属）：lambda 模式且列有字段映射 → `Entity::getField`；
      * 未映射 → 字符串列名（多表带别名前缀 `"t1.city"`）。 */
