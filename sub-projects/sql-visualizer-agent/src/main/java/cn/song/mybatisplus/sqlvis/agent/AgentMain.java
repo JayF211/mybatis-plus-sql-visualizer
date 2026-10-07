@@ -57,6 +57,8 @@ public final class AgentMain {
         }
 
         AgentState.setLogLevel(args.getLogLevel());
+        // T-StackHoverUi：attach/premain 参数即初始化调用栈快照帧数预算（运行期可经 CONFIG 帧热更新）
+        AgentState.setStackMaxFrames(args.getStackMaxFrames());
         // transformer 一律 canRetransform=true：premain 路径新加载驱动直接织入；
         // agentmain 路径对已加载驱动 retransform（只改方法体，不增删成员——ConnectWeaver 合规）
         inst.addTransformer(new SqlHookTransformer(), true);
