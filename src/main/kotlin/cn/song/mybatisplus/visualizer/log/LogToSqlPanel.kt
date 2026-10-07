@@ -153,16 +153,17 @@ class LogToSqlPanel(
      * O-92：从剪贴板读取日志文本填入输入区——「新增 UI 交互须照抄既有同类实现」定例：
      * 同族工具栏动作形态（update 设图标/文案 + actionPerformed 直调面板方法，同
      * [ConvertAction] / [CopyAction]）；填入即转照抄 [loadFromEntry]（列表「发送到日志转 SQL」
-     * 的既有同语义链路）。「有内容才启用」在 update 内探测剪贴板（同平台粘贴动作惯例；
-     * 工具窗工具栏刷新频度低，探测成本可忽略），剪贴板空点击给状态行轻提示（不弹窗，
-     * 弹窗克制红线）。图标 MenuPaste：243 基线 AllIcons$Actions javap 204 字段核实
+     * 的既有同语义链路）。F64（T-PerfSweep18，修法修正＝删 update 探针而非缓存）：
+     * 原「有内容才启用」在 update 内探测剪贴板＝每次工具栏刷新都 EDT 读剪贴板——
+     * 按钮改为常 enabled，剪贴板空点击走 O-92 既有状态行轻提示（[readFromClipboard]
+     * 空文本分支，零写入零弹窗），零 EDT 读剪贴板、少一个缓存失效面。
+     * 图标 MenuPaste：243 基线 AllIcons$Actions javap 204 字段核实
      * **无 Paste 字段**（MenuPaste/Menu_paste 在），自家动作同族取用防 NoSuchFieldError。
      */
     private inner class ReadClipboardAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.Actions.MenuPaste
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.panel.readClipboard")
-            e.presentation.isEnabled = !UiTextClipboard.readText().isNullOrBlank()
         }
 
         override fun actionPerformed(e: AnActionEvent) {
@@ -583,6 +584,9 @@ class LogToSqlPanel(
 
     /** O-92：等价点击「从剪贴板读取」。 */
     internal fun readClipboardForTest() = readFromClipboard()
+
+    /** F64：剪贴板动作本体（update 常 enabled 断言用，测试观察缝）。 */
+    internal fun readClipboardActionForTest() = readClipboardAction as AnAction
 
     internal fun toggleFormatForTest() {
         formatToggled = !formatToggled

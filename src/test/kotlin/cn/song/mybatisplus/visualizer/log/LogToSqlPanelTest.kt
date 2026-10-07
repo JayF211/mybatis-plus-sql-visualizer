@@ -312,4 +312,25 @@ class LogToSqlPanelTest : BasePlatformTestCase() {
         assertEquals("剪贴板空不得改写输入区", "", panel.inputTextForTest())
         assertEquals("剪贴板空不得改写结果区", "", panel.resultTextForTest())
     }
+
+    // ---------- F64（T-PerfSweep18）：删 update 探针——按钮常 enabled、零 EDT 读剪贴板 ----------
+
+    /**
+     * 反向验证锚：修复前 update 内 `isEnabled = !UiTextClipboard.readText().isNullOrBlank()`
+     * 对空白剪贴板置灰 → 本用例红；修复后 update 只设图标/文案，enabled 维持默认 true，
+     * 空剪贴板的轻提示改由点击路径（readFromClipboard）承接（上一用例已覆盖）。
+     */
+    fun testF64剪贴板按钮常enabled_空剪贴板不置灰() {
+        cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy("   ")
+        val action = panel.readClipboardActionForTest()
+        val event = com.intellij.openapi.actionSystem.AnActionEvent.createFromAnAction(
+            action,
+            null,
+            com.intellij.openapi.actionSystem.ActionPlaces.TOOLBAR,
+            com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT,
+        )
+        action.update(event)
+        assertTrue("F64：update 不得探测剪贴板，按钮须常 enabled", event.presentation.isEnabled)
+        assertTrue("图标/文案照设（O-92 形态不变）", event.presentation.text.isNotEmpty())
+    }
 }
