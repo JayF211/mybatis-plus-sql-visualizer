@@ -158,3 +158,27 @@
 5. §3.5 按钮图标化 + 删「查看原文」链路与键。
 6. 定向测试（新例）+ 反向验证两次读数 + testFast 冒烟（带降足迹参数）。
 7. 达标即提交（共享件重构与弹框功能可分两笔）+ push master；CHANGELOG 与本文实施记录回写（含读数、实施偏差）；V119 走查清单交用户。
+
+## 十、实施记录（20261007 当日收口）
+
+| 步 | 提交 | 内容 |
+| --- | --- | --- |
+| S1 | `6432d4c` | 跳转原语收口 `LogEntryJumpOps`（resolveSource/resolveXml/navigate/showToast/showMissingSourceGuide）+ 两面板改委托；历史页顺带清死引用。**闸门**：6 类 41 例 0 失败 |
+| S2 | `0540eec` | `LogEntryTab` 枚举 + `SqlLogManager.onOpenEntryInTab` 通道 + 面板 init 注册/dispose 同一性注销 + `openEntryInTab` 单一落点（原两 Send 动作改委托）+ `jumpToSourceRealtime` 收口（实时页整体策略，弹框同文案同反馈）+ 守卫白名单登记 |
+| S3/S4 | `0f82892` | 弹框右键菜单六件 + D92=A 抑制后行移除 + 两枚按钮图标化（`ReformatCode`/`Copy`）+ 删「查看原文」链路与键 |
+| S5 | `3aac70b` | 守卫红线修复：送页签取管理器改只读入口 `sqlLogManagerIfCreated`（`SqlLogManagerLookupGuardTest` 抓出直接 `getService` 违规） |
+
+**读数**：定向批 **234 例 233 过**——弹框 15/0、日志面板族（RendererUi 33/DedupeToggle 6/Filter 24/FocusTab 4/Layout 10/LiveJump 10/RequestFocus 3/SortAndSlowQuery 7/TypePopup 6/XmlJump 4）、LogToSqlPanelTest 19/0、SqlToJavaPanelTest 58/0、HistorySqlLogPanelJumpToSourceTest 6/0；**testFast 3406 例 0 失败**（S5 后复跑）。
+
+**唯一失败＝并行会话既有红（非本改动）**：`BannedApiSourceScanTest.catch_Throwable块必须判fatal或登记豁免` 报 `SqlToJavaPanel.kt` 豁免站点 `expected:<1> but was:<2>`。定性依据：①失败信息只点名 `SqlToJavaPanel.kt`；②本任务 8 个改动文件与该文件零交集（`git status` 该文件干净）；③`git log -1 -- SqlToJavaPanel.kt` = 并行会话已提交笔 `6fecb79`（T-MapResultVo v2 修复，新增 `catch (t: Throwable)` ≒ 977/1239 两处）。**未动其文件**，留给其作者按守卫要求补判定或重登记。
+
+**反向验证（守卫纪律）**：临时把「复制时间戳」的置灰条件改成恒可用（`RED PROBE` 注记）→ 门禁用例必红（15/0 → **15/1**，红点精确落在 `test复制时间戳动作_受显示开关门禁`）；探针已还原并 grep 复查零残留。
+
+**实施偏差与发现（四处）**：
+
+1. **计划 §七 前提 4 被证伪（跳转两函数不同体）**：实测 `SqlLogPanel.jumpToSource` 与 `HistorySqlLogPanel.jumpToSource` **策略不同**（实时页 `MissingSource` 走轻通知、历史页并入 `NoSource` 走引导弹窗；toast 键 `log.panel.*` vs `log.history.*`），并非逐字同体。处置：共享件只收口逐字相同的原语 + 实时页整体策略（两个使用方：日志页与弹框），历史页策略原样保留——避免「提取取一侧丢另一侧」。
+2. **构造期序坑（本仓第四次触发，已避开）**：`openEntryInTabCallback` 首版写在 `init` 之后，而 init 内即读它完成注册——按仓内既有的「监听器命名引用声明于 init 前统一区块」惯例前移并加注。
+3. **测试门禁的构建期语义**：`CopyTimestampAction` 的 clip 与日志页同款「构建菜单时取值」，故门禁用例须在每次取动作前设置开关（首版断言旧动作导致假红，已改为现取现断言）。
+4. **两道项目守卫在本轮各抓出真问题（守卫有效性的正面证据）**：①`BannedApiSourceScanTest` 跳转族读权限规则命中新文件 `LogEntryJumpOps.kt` → 按规则登记 EDT 白名单并注明依据；②`SqlLogManagerLookupGuardTest`（在 testFast 快桶里）命中弹框直接 `project.getService(SqlLogManager)` → 改走只读入口 `sqlLogManagerIfCreated`（T-ST-02b2 定论：读路径发起创建会在 temporarily-disposed 窗口把服务永久毒化）。两条都不是「补个白名单了事」，后者是真实语义修正。
+
+**遗留**：V119 真机走查（六件菜单逐项 + 两枚图标按钮观感与日志转 SQL 对齐 + 「查看原文」确已消失 + 工具窗未创建时送页签提示）；计划 §七 前提 1（「日志转 SQL 下方两个按钮」指认为结果区头两枚 `Copy`/`ReformatCode`）待真机一眼确认，若指认为后两枚（执行/清空）则换图标。
