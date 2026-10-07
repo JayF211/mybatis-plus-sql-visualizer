@@ -678,6 +678,13 @@ intellijPlatformTesting {
         }
         shardPlanClasses = discoveredTestClasses.joinToString("\n")
         shardPlanHashes = shardAssignment.joinToString("|") { it.hashCode().toUInt().toString(16) }
+        // T-ReleasePerf7 N1（20261007）：分片叶子时间性错峰延迟。缺省逻辑与 verifyGate 侧同款
+        //（mpv-verification gateStaggerMs）：releaseGate 编排内自动 285000ms，日常 testShards 0。
+        // 块内声明+doFirst 只捕获局部 Long（脚本顶层 val 经 doFirst lambda 引用=持有脚本对象引用，
+        // 配置缓存不可序列化——S2 round2 实测 5 problems storing 后挪位，T-ReleasePerf-05 同款坑）。
+        val invokedTaskNamesForStagger = gradle.startParameter.taskNames
+        val testStaggerMs = providers.gradleProperty("testStaggerMs").orNull?.toLongOrNull()
+            ?: if (invokedTaskNamesForStagger.contains("releaseGate")) 285_000L else 0L
         for (i in 1..testShardCount) {
             val idx = i - 1
             register("testShard$i") {
@@ -711,6 +718,15 @@ intellijPlatformTesting {
                         val dir = File(root, "build/test-results/testShard$i")
                         dir.mkdirs()
                         File(dir, ".round-start").writeText(System.currentTimeMillis().toString())
+                        // T-ReleasePerf7 N1（20261007）：时间性错峰开关（默认 0=关，浮动作不变）。
+                        // R1 warm 探针实证 verifyMarketplace 前段高占用（START 后 ~285s CPU 141~199%），
+                        // 之后 ~7 分钟低占用（在线等待窗，多分钟 <40%）；分片窗 208s 现状与高占用段
+                        // 完全重叠 = 双向争用（market +86~165s、分片 +22~43s）。本开关把分片真实
+                        // 起点推后 N 毫秒嵌入低占用段。仅延迟启动，不删不减不重排任何任务语义。
+                        if (testStaggerMs > 0) {
+                            logger.lifecycle("testShard$i stagger ${testStaggerMs}ms")
+                            Thread.sleep(testStaggerMs)
+                        }
                         logger.lifecycle("testShard$i START ${System.currentTimeMillis()}")
                     }
                     doLast { logger.lifecycle("testShard$i END ${System.currentTimeMillis()}") }
