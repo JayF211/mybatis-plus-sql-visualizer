@@ -47,7 +47,6 @@ import com.intellij.psi.PsiClassOwner
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiModifier
 import com.intellij.ui.components.JBLabel
-import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.JBColor
 import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.IconScaler
@@ -812,7 +811,7 @@ class SqlToJavaPanel(
             maximumSize = Dimension(12, 12)
             toolTipText = MpSqlVisualizerBundle.message("reverse.panel.pickClass")
             // 空值=弹选择器（与「调用类」同款入口）；有值=清除
-            addActionListener { if (currentText.isEmpty()) showChooser() else clearValue() }
+            addActionListener { if (currentText.isEmpty()) openPicker() else clearValue() }
         }
 
         /** 按钮宿主：FlowLayout 垂直居中（BorderLayout.EAST 会拉伸子组件高度，需宿主隔离）——
@@ -877,7 +876,7 @@ class SqlToJavaPanel(
             component.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             component.addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
-                    if (e.button == MouseEvent.BUTTON1 && e.clickCount == 1) showChooser()
+                    if (e.button == MouseEvent.BUTTON1 && e.clickCount == 1) openPicker()
                 }
             })
         }
@@ -892,24 +891,112 @@ class SqlToJavaPanel(
         }
 
         /**
-         * 选择器：平台弹出列表（与「调用类」点击即弹同款交互）——自动（留空）/Map 列表 /Objs 列表
-         * /选择类…（Goto Class）。Map 两种声明是 T-MapResultVo 的唯一 UI 入口，与类选择并列呈现。
+         * 选择器：**直接进「选择类」弹框**（与「调用类」点击即弹逐字同款交互）——Map/Objs 声明与
+         * 「自动（留空）」作为**固定候选前插**在候选列表最前（[ReturnTypeByNameModel]，
+         * 与调用类的 this/baseMapper 同款机制），不再是「先弹四项小列表再进类搜索」两层交互。
          */
-        private fun showChooser() {
-            val autoLabel = MpSqlVisualizerBundle.message("reverse.panel.resultType.auto")
-            val pickLabel = MpSqlVisualizerBundle.message("reverse.panel.pickClass")
-            val entries = listOf(autoLabel, MAP_LIST_DECL, OBJECT_LIST_DECL, pickLabel)
-            JBPopupFactory.getInstance()
-                .createPopupChooserBuilder(entries)
-                .setItemChosenCallback { chosen: String ->
-                    when (chosen) {
-                        autoLabel -> setValue("", null)
-                        MAP_LIST_DECL, OBJECT_LIST_DECL -> setValue(chosen, null)
-                        pickLabel -> pickClass()
-                    }
+        private fun openPicker() {
+            val popup = ChooseByNamePopup.createPopup(projectRef, typeModel, null)
+            popup.invoke(object : ChooseByNamePopupComponent.Callback() {
+                override fun elementChosen(element: Any?) = applyChosen(element)
+
+                override fun onClose() {}
+            }, ModalityState.current(), false)
+        }
+
+        /**
+         * 选中结果映射（弹框回调与测试共用）：固定项（自动/两条 Map 声明，字符串元素）直写；
+         * 类元素取简单名 + 图标（PSI 读取包 ReadAction——262 断言硬抛，与 ClassPickerField 同款）。
+         */
+        internal fun applyChosen(element: Any?) {
+            when (element) {
+                null -> Unit
+                is String ->
+                    if (element == autoLabelOf()) setValue("", null) else setValue(element, null)
+                is PsiClass -> {
+                    val picked = ReadAction.compute<Pair<String, Icon?>?, Throwable> {
+                        val name = element.name ?: return@compute null
+                        Pair(name, element.getIcon(0))
+                    } ?: return
+                    setValue(picked.first, picked.second)
                 }
-                .createPopup()
-                .showUnderneathOf(this)
+            }
+        }
+
+        /** 返回类型「选择类」弹框模型（T-MapResultVo v5）：固定候选前插，与调用类 this/baseMapper 同款。 */
+        internal val typeModel: ChooseByNameModel = ReturnTypeByNameModel()
+
+        private fun autoLabelOf(): String = MpSqlVisualizerBundle.message("reverse.panel.resultType.auto")
+
+        /** 固定候选（三项，均以字符串元素承载——与调用类 this/baseMapper 的元素形态一致）。 */
+        private fun specialNames(): List<String> = listOf(autoLabelOf(), MAP_LIST_DECL, OBJECT_LIST_DECL)
+
+        /**
+         * 「选择类」弹框模型：委托 [GotoClassModel2]，在候选名列表最前**前插**返回类型固定项
+         * （自动（留空）/`List<Map<String, Object>>`/`List<Object>`）——与 [CallerClassByNameModel]
+         * 的 this/baseMapper 完全同款机制（字符串元素、元素名/全限定名直出、独立渲染器 + 字段图标），
+         * 用户真机五轮反馈「为什么这两个不能出现在选择类的弹框里，类似当时的 this」。
+         */
+        internal inner class ReturnTypeByNameModel : ChooseByNameModel {
+            private val delegate = GotoClassModel2(projectRef)
+            private val delegateRenderer = delegate.getListCellRenderer() as ListCellRenderer<Any>
+
+            private val specialRenderer = object : DefaultListCellRenderer() {
+                override fun getListCellRendererComponent(
+                    list: JList<*>?,
+                    value: Any?,
+                    index: Int,
+                    isSelected: Boolean,
+                    cellHasFocus: Boolean,
+                ): Component {
+                    val c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus) as JComponent
+                    (c as? JLabel)?.icon = AllIcons.Nodes.Field
+                    // 「自动（留空）」项 tooltip 复用返回类型占位说明（Map/Objs 两项文本自明，不附 tooltip）
+                    if (value == autoLabelOf()) (c as? JLabel)?.toolTipText = placeholder
+                    return c
+                }
+            }
+
+            override fun getNames(checkBoxState: Boolean): Array<String> =
+                specialNames().toTypedArray() + delegate.getNames(checkBoxState)
+
+            override fun getElementsByName(name: String, checkBoxState: Boolean, pattern: String): Array<Any> =
+                if (name in specialNames()) arrayOf<Any>(name) else delegate.getElementsByName(name, checkBoxState, pattern)
+
+            /** 固定项元素名 = 字符串本身（委托实现按 NavigationItem 强转）；类元素委托（PSI 包 ReadAction）。 */
+            override fun getElementName(element: Any): String =
+                (element as? String) ?: ReadAction.compute<String?, Throwable> {
+                    delegate.getElementName(element)
+                } ?: element.toString()
+
+            /** 固定项全限定名 = 字符串本身；类元素委托（同上 ReadAction，262 stub 断言实证）。 */
+            override fun getFullName(element: Any): String? =
+                (element as? String) ?: ReadAction.compute<String?, Throwable> { delegate.getFullName(element) }
+
+            override fun getListCellRenderer(): ListCellRenderer<*> = object : ListCellRenderer<Any> {
+                override fun getListCellRendererComponent(
+                    list: JList<out Any>?,
+                    value: Any?,
+                    index: Int,
+                    isSelected: Boolean,
+                    cellHasFocus: Boolean,
+                ): Component = if (value is String) {
+                    specialRenderer.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                } else {
+                    delegateRenderer.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                }
+            }
+
+            override fun getPromptText(): String = delegate.getPromptText() ?: ""
+            override fun getCheckBoxName(): String? = delegate.getCheckBoxName()
+            override fun getNotInMessage(): String = delegate.getNotInMessage() ?: ""
+            override fun getNotFoundMessage(): String = delegate.getNotFoundMessage() ?: ""
+            override fun loadInitialCheckBoxState(): Boolean = delegate.loadInitialCheckBoxState()
+            override fun saveInitialCheckBoxState(state: Boolean) = delegate.saveInitialCheckBoxState(state)
+            override fun getSeparators(): Array<String> = delegate.getSeparators()
+            override fun getHelpId(): String = delegate.getHelpId() ?: ""
+            override fun willOpenEditor(): Boolean = delegate.willOpenEditor()
+            override fun useMiddleMatching(): Boolean = delegate.useMiddleMatching()
         }
 
         /** 选中写入（裸声明文本）或清除（空串）。 */
@@ -939,24 +1026,6 @@ class SqlToJavaPanel(
             }
         }
 
-        /** 选类（Goto Class 弹窗，裸模型——返回类型字段无 this/baseMapper 调用类特殊项）；选中写回。 */
-        private fun pickClass() {
-            val model = GotoClassModel2(projectRef)
-            val popup = ChooseByNamePopup.createPopup(projectRef, model, null)
-            popup.invoke(object : ChooseByNamePopupComponent.Callback() {
-                override fun elementChosen(element: Any?) {
-                    val cls = element as? PsiClass ?: return
-                    // 类名与图标一次 ReadAction 取出（262 PSI 硬抛；与 ClassPickerField 同款）
-                    val picked = ReadAction.compute<Pair<String, Icon?>?, Throwable> {
-                        val name = cls.name ?: return@compute null
-                        Pair(name, cls.getIcon(0))
-                    } ?: return
-                    setValue(picked.first, picked.second)
-                }
-
-                override fun onClose() {}
-            }, ModalityState.current(), false)
-        }
     }
 
     // ------------------------------------------------------------------
@@ -1526,6 +1595,12 @@ class SqlToJavaPanel(
 
     /** T-M44 增量测试缝：选择器模型（ChooseByNameModel 接口——getFullName/getElementName 的 ReadAction 委托行为测试）。 */
     internal fun callerModelForTest(): ChooseByNameModel = callerField.callerModel
+
+    /** T-MapResultVo v5 测试缝：返回类型「选择类」弹框模型（固定候选前插断言）。 */
+    internal fun returnTypeModelForTest(): ChooseByNameModel = voField.typeModel
+
+    /** T-MapResultVo v5 测试缝：选中映射（字符串固定项/类元素 → 返回声明文本）。 */
+    internal fun applyReturnTypeChosenForTest(element: Any?) = voField.applyChosen(element)
 
     /** T-CallerPicker 测试缝：设置当前编辑器打开的类（供 this/baseMapper tooltip 上下文测试）。 */
     internal fun setCurrentEditorClassForTest(cls: PsiClass?) {

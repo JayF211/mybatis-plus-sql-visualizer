@@ -1082,4 +1082,50 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         field.text = "List<Map<String, Object>>"
         assertEquals("List<Map<String, Object>>", field.placeholderTextForTest()?.toString())
     }
+
+    /**
+     * T-MapResultVo v5 修复（用户真机五轮反馈「为什么 List<Map<String, Object>> / List<Object>
+     * 不能出现在选择类的这个弹框里，类似当时的 this」）：返回类型弹框直接复用「选择类」弹框，
+     * 三个固定候选（自动（留空）/两条 Map 声明）**前插在候选列表最前**——与调用类
+     * [CallerClassByNameModel] 的 this/baseMapper 同款机制，不再有中间那层四项小列表。
+     */
+    fun testReturnTypeModelSpecialItemsPrepended() {
+        val model = panel.returnTypeModelForTest()
+        val auto = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+            .message("reverse.panel.resultType.auto")
+        // 前插顺序：自动 → List<Map<String, Object>> → List<Object> → 项目类候选
+        val names = model.getNames(false).toList()
+        assertEquals(
+            "三个固定候选应前插在类候选之前",
+            listOf(auto, "List<Map<String, Object>>", "List<Object>"),
+            names.take(3),
+        )
+        assertTrue("固定候选之后应接项目类候选: ${names.size}", names.size >= 3)
+        // 固定项直出（元素名/全限定名 = 字符串本身，不触 PSI）；按名取元素返回自身
+        assertEquals(auto, model.getFullName(auto))
+        assertEquals("List<Object>", model.getElementName("List<Object>"))
+        val elements = model.getElementsByName("List<Map<String, Object>>", false, "")
+        assertEquals(1, elements.size)
+        assertEquals("List<Map<String, Object>>", elements[0])
+    }
+
+    /** T-MapResultVo v5：弹框选中映射——固定项（自动=清空 / Map 声明=直写）＋类元素（简单名）。 */
+    fun testReturnTypeChosenMapping() {
+        val field = panel.voFieldForTest()
+        val auto = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+            .message("reverse.panel.resultType.auto")
+
+        panel.applyReturnTypeChosenForTest("List<Map<String, Object>>")
+        assertEquals("List<Map<String, Object>>", field.text)
+        panel.applyReturnTypeChosenForTest("List<Object>")
+        assertEquals("List<Object>", field.text)
+        panel.applyReturnTypeChosenForTest(auto)
+        assertEquals("自动项应清空为留空（实体/VO 推断）", "", field.text)
+        // 类元素：取简单类名写回
+        panel.applyReturnTypeChosenForTest(psiClassFixture())
+        assertEquals("UserService", field.text)
+        // null 元素（未选中）不动字段
+        panel.applyReturnTypeChosenForTest(null)
+        assertEquals("UserService", field.text)
+    }
 }
