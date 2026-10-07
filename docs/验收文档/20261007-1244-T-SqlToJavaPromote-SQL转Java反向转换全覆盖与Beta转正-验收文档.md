@@ -57,6 +57,8 @@
 
 全量门禁同批绿（含 `config.PluginSettingsPanelBindingTest` 对设置页 sqlToJava 快捷键标签的 binding 断言、`HelpUiTest` 资源加载断言）——bundle 两行 value 改动（去 Beta）零 key 变化，资源链零回归。
 
+**覆盖边界声明**：以上 61 例全部运行于 Light fixture 环境（测试工程无实体类、无 MPJ 依赖、无真实项目索引）——对「真实项目索引反查」（MPJ 能力判定/方法集反查）、同表多候选实体分发、跨形态列名（@TableField 显式驼峰列）三类真实数据面**零覆盖**；该面由 §4.3/§4.4 真机走查兜底（4.3 两缺陷即从此现形）。
+
 ### 4.2 文案面实测（master `3c19aa6`）
 
 - 页签：`MpSqlVisualizerBundle.properties:526` / `_zh.properties:507` 均为 `SQL → Java`（`(Beta)` 已去，grep 实测）；
