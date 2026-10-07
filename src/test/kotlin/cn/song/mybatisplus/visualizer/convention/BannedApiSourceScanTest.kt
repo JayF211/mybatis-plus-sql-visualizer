@@ -1103,6 +1103,12 @@ class BannedApiSourceScanTest {
         // 主链**写成能力探测——属借豁免放走真该收口的站点。已收口（判 fatal + 非 fatal 补 WARN 留痕），
         // 故从豁免表移入本表。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt",
+        // T-RecentExecMenu（20261007，本轮修复并行会话新增站点时的顺带收口）：`log/SqlToJavaPanel.kt`
+        // 原登记 1 处（后台候选收集失败返回空），并行会话 T-MapResultVo v2 又加了一处同形 PSI 读降级
+        // （重算调用类 MPJ 能力/方法集）→ 登记数与实际 2 处不符、守卫转红。按本工程方向**整段收口**
+        // 而非改登记数：两处均补 `FatalErrors.isFatal(t) throw t`（非 fatal 仍降级，语义不变），
+        // 文件随之从豁免表移入本表——此后任一站点退回无判定即红（自动保鲜，无需维护站点数）。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlToJavaPanel.kt",
     )
 
     /**
@@ -1159,9 +1165,6 @@ class BannedApiSourceScanTest {
         // 1 处：安全闸门 fail-closed——调用点注释即依据。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpSelectGuard.kt" to
             CatchExemption(1, "安全闸门 fail-closed：解析器对恶意构造输入可能抛 Error，必须接住并拒绝"),
-        // 1 处：后台候选收集失败返回空。
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlToJavaPanel.kt" to
-            CatchExemption(1, "后台候选收集失败返回空（面板提示无候选）"),
         // 1 处：反射探测返回 false。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogManager.kt" to
             CatchExemption(1, "反射能力探测失败返回 false"),
@@ -1182,8 +1185,8 @@ class BannedApiSourceScanTest {
      */
     /**
      * 未收口点的**行号清单**（T-FatalPassthrough 实施时实测；守卫不校验行号，仅作人工核对与
-     * 计划 §八 登记的出处）。共 **43 处 / 17 文件**（T-FP-02b 起 `ui/SqlPreviewService.kt:2100`
-     * 已收口移入已落地表）：
+     * 计划 §八 登记的出处）。共 **42 处 / 16 文件**（T-FP-02b 起 `ui/SqlPreviewService.kt:2100`
+     * 已收口移入已落地表；20261007 `log/SqlToJavaPanel.kt` 两站点收口后同此）：
      *
      * ```
      * log/SqlLogConsoleBridge.kt                                     12 处：151 167 208 410 561 570 595 642 656 664 678 695
@@ -1198,16 +1201,17 @@ class BannedApiSourceScanTest {
      * ui/SqlInputEditor.kt                                            1 处：160
      * psource/JdbcTemplateSqlPreviewService.kt                        1 处：105
      * mcp/McpSelectGuard.kt                                           1 处：69
-     * log/SqlToJavaPanel.kt                                           1 处：818
      * log/SqlLogManager.kt                                            1 处：275
      * actions/GenerateCrudSqlFromEntityAction.kt                      1 处：61
      * actions/GenerateCrudSqlFromDbTableAction.kt                     1 处：50
      * actions/ConvertSqlToJavaAction.kt                               1 处：93
      * ```
      *
-     * 已落地（**31 处 / 4 文件**）：`execute/DataSourceSelector.kt` 13、`log/agent/AgentManager.kt` 10、
-     * `log/RunConfigurationProcessListener.kt` 7、`ui/SqlPreviewService.kt` 1（T-FP-02b 收口）——
-     * 合计 74 处（`grep -rn "catch (.*: Throwable)"` 口径）。
+     * 已落地（**33 处 / 5 文件**）：`execute/DataSourceSelector.kt` 13、`log/agent/AgentManager.kt` 10、
+     * `log/RunConfigurationProcessListener.kt` 7、`ui/SqlPreviewService.kt` 1（T-FP-02b 收口）、
+     * `log/SqlToJavaPanel.kt` 2（20261007 收口；该文件此前**登记 1 处、实际 2 处**，故上表登记口径
+     * 的 42 与已落地 33 之和为 75，比历史「合计 74」多 1——差额即那次漏登）——
+     * 合计 75 处（`grep -rn "catch (.*: Throwable)"` 口径）。
      * 另有 `log/SourceInterceptorTemplates.kt:99` 的 `catch (Throwable t)` 位于**注入 agent 的 Java
      * 源码模板字符串**里，不是 Kotlin 站点（[maskNonCode] 涂白，`TFP03自证_…` 已钉住该边界）。
      *
@@ -1238,7 +1242,7 @@ class BannedApiSourceScanTest {
         // ThreadDeath）被 catch (…: Throwable) 吞成一条 warn 后，崩溃现场只剩一行日志、流程带病
         // 继续（第八轮报告 §7.2 Z-21）。本规则要求每个 `catch (…: Throwable)` 块**要么**判 fatal
         // （形态 A：块内 `FatalErrors.isFatal(`，见 util/FatalErrors.kt），**要么**登记豁免理由。
-        // 未收口的 43 处（17 文件）豁免见 [throwableCatchExemptions]；已落地的 31 处（4 文件）见
+        // 未收口的 42 处（16 文件）豁免见 [throwableCatchExemptions]；已落地的 33 处（5 文件）见
         // [landedFatalPassthroughFiles]，其中任何一处退回无判定即红。
         val sources = rawMainSources()
         val offenders = fatalPassthroughOffenders(sources)

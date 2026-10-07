@@ -48,6 +48,7 @@ import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiModifier
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.JBColor
+import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.IconScaler
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.util.ui.JBUI
@@ -935,6 +936,8 @@ class SqlToJavaPanel(
                     Triple(candidates, subCandidates, callerMpj to callerMethods)
                 }
             } catch (t: Throwable) {
+                // T-FP-03 收口：JVM 级 fatal 透传（PSI 读失败才降级为「无候选」）
+                if (FatalErrors.isFatal(t)) throw t
                 Triple(emptyList<SqlToJavaConverter.EntityCandidate>(), emptyMap(), false to emptySet())
             }
             ApplicationManager.getApplication().invokeLater {
@@ -1237,6 +1240,8 @@ class SqlToJavaPanel(
                         SqlToJavaConverter.invocationMethods(project, caller)
                 }
             } catch (t: Throwable) {
+                // T-FP-03 收口：JVM 级 fatal 透传（PSI 读失败才降级为「无 MPJ 能力/无方法集」）
+                if (FatalErrors.isFatal(t)) throw t
                 false to emptySet<String>()
             }
             ApplicationManager.getApplication().invokeLater {
