@@ -75,15 +75,50 @@ class UpdateSectionTest : BasePlatformTestCase() {
     }
 
     fun testRenderCheckFailure() {
-        section.renderCheck(CheckResult.Failure("network unavailable"))
+        section.renderCheck(
+            CheckResult.Failure(cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.FailureKind.NETWORK, "network unavailable"),
+        )
         assertEquals(UpdateSection.State.Failed, section.state)
         assertEquals(
-            MpSqlVisualizerBundle.message("settings.update.checkFailed", "network unavailable"),
+            MpSqlVisualizerBundle.message("settings.update.fail.network", "network unavailable"),
             section.statusLabel.text,
         )
         // 失败后可重试
         assertTrue(section.checkButton.isEnabled)
         assertFalse(section.installButton.isVisible)
+    }
+
+    // ---------- R62（T-LaneB，V121.3）：三态渲染——404 态给 Marketplace+Gitee 兜底链接 ----------
+
+    fun testRenderChannelMissing_404态_兜底链接可见() {
+        section.renderCheck(
+            CheckResult.Failure(cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.FailureKind.CHANNEL_MISSING, "HTTP 404"),
+        )
+        assertEquals(UpdateSection.State.Failed, section.state)
+        assertEquals(
+            MpSqlVisualizerBundle.message("settings.update.fail.channel404", "HTTP 404"),
+            section.statusLabel.text,
+        )
+        assertTrue("404 态兜底链接行应可见", section.fallbackLinksContainer.isVisible)
+        assertTrue(section.checkButton.isEnabled)
+    }
+
+    fun testRenderNetworkFailure_兜底链接不可见() {
+        section.renderCheck(
+            CheckResult.Failure(cn.song.mybatisplus.visualizer.update.PluginUpdateRunner.FailureKind.NETWORK, "connect timed out"),
+        )
+        assertEquals(UpdateSection.State.Failed, section.state)
+        assertTrue(section.statusLabel.text.isNotEmpty())
+        assertFalse("网络态不给兜底链接", section.fallbackLinksContainer.isVisible)
+    }
+
+    fun testRenderUpToDate_三态之已最新() {
+        section.renderCheck(CheckResult.UpToDate)
+        assertEquals(
+            MpSqlVisualizerBundle.message("settings.update.upToDate"),
+            section.statusLabel.text,
+        )
+        assertFalse(section.fallbackLinksContainer.isVisible)
     }
 
     fun testRenderInstalled() {
