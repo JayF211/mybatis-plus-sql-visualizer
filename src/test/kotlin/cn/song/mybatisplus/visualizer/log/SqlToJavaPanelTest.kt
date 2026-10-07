@@ -992,4 +992,48 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         )
         return PsiTreeUtil.findChildOfType(myFixture.file, PsiClass::class.java)!!
     }
+
+    // ------------------------------------------------------------------
+    // T-MapResultVo：返回形态下拉联动（Map 列表 → Maps 族调用行）
+    // ------------------------------------------------------------------
+
+    fun testResultKindMapsGeneratesSelectJoinMapsCall() {
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseWrapperFormat
+        try {
+            state.reverseWrapperFormat = PluginSettings.REVERSE_QUERY
+            panel.refreshFormatFromSettings()
+            panel.inputEditorForTest().setSql(
+                "SELECT t.id, t1.city FROM user t LEFT JOIN address t1 ON t1.user_id = t.id WHERE t.status = 1",
+            )
+            panel.convertForTest()
+            awaitResult()
+            // 选调用类（QUERY 形态有调用行 Maps 才有载体）——T-FixMpjStale 起选类异步反查，等回填完成
+            panel.callerFieldForTest().pickForTest("DeviceInfoMapper", "demo.DeviceInfoMapper")
+            awaitContains("DeviceInfoMapper")
+            // Light 反查恒 false（无 MPJ 索引）——注入 MPJ 能力后 join 场景才放行 MPJ 形态
+            panel.setCallerMpjForTest(true)
+            // 切「Map 列表」形态 → 调用行走 Maps 族（QUERY 形态 join → MPJQueryWrapper + selectJoinMaps）
+            @Suppress("UNCHECKED_CAST")
+            val combo = panel.resultKindComboForTest() as javax.swing.JComboBox<Any>
+            val mapsItem = (0 until combo.itemCount).map { combo.getItemAt(it) }
+                .firstOrNull { it?.toString()?.contains("Map") == true }
+            assertNotNull("返回形态下拉应含 Map 列表选项", mapsItem)
+            combo.selectedItem = mapsItem
+            val result = awaitContains("selectJoinMaps")
+            assertTrue(result, result.contains("selectJoinMaps(wrapper)"))
+            assertTrue(result, result.contains("List<Map<String, Object>>"))
+            // 切回「自动」→ 零回归（回到实体形态调用/纯表达式）
+            val autoItem = (0 until combo.itemCount).map { combo.getItemAt(it) }
+                .firstOrNull { it?.toString()?.contains("自动") == true || it?.toString()?.contains("auto") == true }
+            if (autoItem != null) {
+                combo.selectedItem = autoItem
+                val restored = awaitContains("new MPJQueryWrapper")
+                assertTrue(restored, !restored.contains("selectJoinMaps"))
+                assertTrue(restored, restored.contains("DeviceInfoMapper"))
+            }
+        } finally {
+            state.reverseWrapperFormat = original
+        }
+    }
 }

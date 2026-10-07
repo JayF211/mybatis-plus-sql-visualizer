@@ -53,6 +53,10 @@ object JavaCodeGenerator {
          * 方法选择先查集合（真实存在的 API），缺失时沿 join 回退链（如 selectPage → selectJoinPage）；
          * 空集 = 特殊值 this/baseMapper 或类不可解析 → 保守用普通方法。 */
         val methods: Set<String> = emptySet(),
+        /** T-MapResultVo：Map 响应形态（`selectJoinMaps`/`selectMaps`/`listMaps` 族）——
+         * 返回 `List<Map<String, Object>>`（分页 `Page<Map<String, Object>>`）；Maps 族**不带 Class 参数**
+         * （1.5.8 javap 实证），VO 角色转为驱动 select 列别名（selectAs 第二参）。 */
+        val mapsResult: Boolean = false,
     )
 
     /** T-M44：按调用类真实方法集选择调用方法——优先链中第一个真实存在的方法；
@@ -609,20 +613,28 @@ object JavaCodeGenerator {
         // VO 查询依赖 MPJ 能力（调用类继承链实证）；无 MPJ → 回落实体查询并注释提示
         val vo = voRequested?.takeIf { invocation.mpj }
         val voUnsupported = voRequested != null && vo == null
-        val generic = vo ?: entityName
         val paged = result.limit != null
+        val join = result.joins.isNotEmpty()
+        // T-MapResultVo：Map 响应形态（签名 1.5.8 javap 实证）——
+        //  join → JoinMapper/JoinService `selectJoinMaps(wrapper)` / 分页 `selectJoinMapsPage(page, wrapper)`（不带 Class）；
+        //  单表 Mapper → `selectMaps(wrapper)` / 分页 `selectMaps(page, wrapper)`（MP 同名重载）；
+        //  单表 Service → `listMaps(wrapper)` / 分页 `listMaps(page, wrapper)`（IService）。
+        // VO 在 Maps 场景不进签名（转 select 列别名驱动）→ Class 参数恒不加。
+        val maps = invocation.mapsResult
         // T-M44：方法选择按调用类真实方法集（prefer 回退链）——部分 MPJ 依赖的 MPJBaseMapper
         // 无 BaseMapper 的 selectPage/selectList 等普通方法，缺失时回落 JoinMapper/JoinService 的
         // selectJoin 族（join 方法需 Class 参数，args 按方法形态构建）；特殊值/类不可解析 → 普通方法
-        val method = if (isMapper(invocation)) {
-            when {
+        val method = when {
+            maps && join -> if (paged) "selectJoinMapsPage" else "selectJoinMaps"
+            maps && isMapper(invocation) -> if (paged) "selectMaps" else invocation.prefer("selectMaps", "selectJoinMaps")
+            maps -> if (paged) "listMaps" else invocation.prefer("listMaps", "selectMaps")
+            isMapper(invocation) -> when {
                 paged && vo != null -> "selectJoinPage"
                 paged -> invocation.prefer("selectPage", "selectJoinPage")
                 vo != null -> "selectJoinList"
                 else -> invocation.prefer("selectList", "selectJoinList")
             }
-        } else {
-            when {
+            else -> when {
                 paged && vo != null -> "selectJoinListPage"
                 paged -> invocation.prefer("page", "selectJoinListPage")
                 vo != null -> "selectJoinList"
@@ -630,13 +642,16 @@ object JavaCodeGenerator {
             }
         }
         // 参数顺序（1.5.6 实证）：普通 `(wrapper)`；分页 `(page, wrapper)`；
-        // VO/join 方法 `(page?, Class, wrapper)`——回退到 selectJoin 族时 Class 参数用 VO 或实体
+        // VO/join 方法 `(page?, Class, wrapper)`——回退到 selectJoin 族时 Class 参数用 VO 或实体；
+        // Maps 族不带 Class（selectJoinMaps 同为 selectJoin 前缀但签名无 Class——1.5.8 javap 实证）
         val pageArg = if (paged) renderPageArg(result.limit!!) else ""
+        val classArg = !maps && (vo != null || (method.startsWith("selectJoin") && !method.contains("Maps")))
         val args = buildString {
             if (paged) append(pageArg).append(", ")
-            if (vo != null || method.startsWith("selectJoin")) append("${vo ?: entityName}.class, ")
+            if (classArg) append("${vo ?: entityName}.class, ")
             append("wrapper")
         }
+        val generic = if (maps) "Map<String, Object>" else vo ?: entityName
         val prefix = if (paged) "Page<$generic> page = " else "List<$generic> list = "
         val call = "$prefix${callerVar(invocation)}.$method($args);"
         // 说明注释独立成行（T-M45：行尾注释 → 行注释——整行语义清晰，复制剥离注释时行结构稳定）

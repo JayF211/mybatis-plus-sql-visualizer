@@ -166,6 +166,28 @@ class SqlToJavaPanel(
         if (cacheResult != null) regenerateWithNewFormat()
     }
 
+    /** T-MapResultVo：返回形态下拉（自动/实体列表/Map 列表）——会话级不持久化（Maps 低频场景；
+     *  「自动」「实体列表」行为等价于现状，Map 列表生成 selectJoinMaps/selectMaps/listMaps 族）。 */
+    private val resultKindCombo = JComboBox<ResultKindOption>().apply {
+        model = DefaultComboBoxModel(resultKindOptions())
+        addActionListener {
+            if (cacheResult != null) regenerateWithNewFormat()
+        }
+    }
+
+    private data class ResultKindOption(val key: String, val label: String) {
+        override fun toString(): String = label
+    }
+
+    private fun resultKindOptions(): Array<ResultKindOption> = arrayOf(
+        ResultKindOption("auto", MpSqlVisualizerBundle.message("reverse.panel.resultKind.auto")),
+        ResultKindOption("entity", MpSqlVisualizerBundle.message("reverse.panel.resultKind.entity")),
+        ResultKindOption("maps", MpSqlVisualizerBundle.message("reverse.panel.resultKind.maps")),
+    )
+
+    private fun mapsResultSelected(): Boolean =
+        (resultKindCombo.selectedItem as? ResultKindOption)?.key == "maps"
+
     /** 设置 → 下拉同步期间的抑制标志（refreshFormatFromSettings 不触发重生成）。 */
     private var suppressFormatSync = false
 
@@ -268,6 +290,11 @@ class SqlToJavaPanel(
         add(callerField, c)
         c.gridx = 1
         add(voField, c)
+        // T-MapResultVo：返回形态（自动/实体列表/Map 列表）——会话级不持久化（Maps 低频场景）
+        c.gridy = 2
+        c.gridx = 0
+        c.gridwidth = 2
+        add(resultKindCombo, c)
     }
 
     private fun buildResultToolbar(): JPanel {
@@ -1174,9 +1201,9 @@ class SqlToJavaPanel(
         if (caller.isEmpty()) {
             // T-M50：仅选 VO（无调用类）→ VO 用于 selectAs 字段引用（Vo::getXxx），不生成调用行。
             // mpj = true 放开 JOIN/VO 判定（selectAs VO 引用不依赖调用类 MPJ 能力）
-            return JavaCodeGenerator.InvocationTarget(callerClass = "", voClass = vo, mpj = true)
+            return JavaCodeGenerator.InvocationTarget(callerClass = "", voClass = vo, mpj = true, mapsResult = mapsResultSelected())
         }
-        return JavaCodeGenerator.InvocationTarget(caller, vo, mpj = callerMpj, methods = callerMethods)
+        return JavaCodeGenerator.InvocationTarget(caller, vo, mpj = callerMpj, methods = callerMethods, mapsResult = mapsResultSelected())
     }
 
     /** 结果分发：0 候选回落 QueryWrapper；1 候选直接生成；多候选选择后生成。 */
@@ -1321,6 +1348,9 @@ class SqlToJavaPanel(
 
     /** 测试访问器：形态下拉组件（布局断言——选项行 GridBag 拉伸）。 */
     internal fun formatComboForTest(): JComboBox<*> = formatCombo
+
+    /** T-MapResultVo 测试缝：返回形态下拉。 */
+    internal fun resultKindComboForTest(): JComboBox<*> = resultKindCombo
 
     /** 测试访问器：模拟用户下拉选择（触发写穿 + 重生成完整链路）。 */
     internal fun selectFormatForTest(persisted: String) {

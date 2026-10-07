@@ -104,6 +104,9 @@ object BatchOperationConverter {
         "selectMaps" to Operation.SELECT,
         "selectObjs" to Operation.SELECT,
         "selectCount" to Operation.SELECT,
+        // T-MapResultVo：MPJ Map 响应族（JoinMapper.selectJoinMaps/selectJoinMapsPage，1.5.8 javap 实证）
+        "selectJoinMaps" to Operation.SELECT,
+        "selectJoinMapsPage" to Operation.SELECT,
     )
 
     /** T-M20-07：Map 等值条件操作方法名（独立 builder，不并入主键等值/IN 分支）。 */

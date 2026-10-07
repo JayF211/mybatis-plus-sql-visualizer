@@ -1420,7 +1420,7 @@ object WrapperLocator {
      * `IService.page(Page, wrapper)` / `BaseMapper.selectPage(Page, wrapper)` / MPJ `selectJoinPage` /
      * `Db.page(Page, wrapper)`（链式 `lambdaQuery()...page(...)` 终结点由 [PAGE_TERMINAL] 单独识别）。
      */
-    internal val pageConsumerMethodNames: Set<String> = setOf("page", "selectPage", "selectJoinPage")
+    internal val pageConsumerMethodNames: Set<String> = setOf("page", "selectPage", "selectJoinPage", "selectJoinMapsPage")
 
     /**
      * 计数类消费方法：wrapper 作为实参传入时，查询类 wrapper 转 `SELECT COUNT(*) FROM ...`。
