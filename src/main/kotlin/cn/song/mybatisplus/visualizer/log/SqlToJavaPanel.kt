@@ -793,6 +793,31 @@ class SqlToJavaPanel(
             addItem("List<Map<String, Object>>")
             addItem("List<Object>")
             toolTipText = placeholder
+            // 空值占位灰字（JTextField.placeholderText 客户属性，JBR 支持）——与 ClassPickerField 占位观感对齐
+            (editor.editorComponent as? javax.swing.JTextField)?.let { tf ->
+                tf.putClientProperty("JTextField.placeholderText", placeholder)
+                // 编辑提交（失焦）触发重生成——回车由 combo ActionListener 覆盖
+                tf.addFocusListener(object : java.awt.event.FocusAdapter() {
+                    override fun focusLost(e: java.awt.event.FocusEvent?) = onChanged()
+                })
+            }
+            // 下拉列表内空项显示「自动」短文案（列表项不承载长占位）
+            renderer = object : DefaultListCellRenderer() {
+                override fun getListCellRendererComponent(
+                    list: JList<*>?,
+                    value: Any?,
+                    index: Int,
+                    isSelected: Boolean,
+                    cellHasFocus: Boolean,
+                ): Component {
+                    val c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                    if ((value as? String).isNullOrEmpty()) {
+                        (c as? JLabel)?.text = MpSqlVisualizerBundle.message("reverse.panel.resultType.auto")
+                        (c as? JLabel)?.foreground = UIUtil.getInactiveTextColor()
+                    }
+                    return c
+                }
+            }
             addActionListener { onChanged() }
         }
 
@@ -803,10 +828,19 @@ class SqlToJavaPanel(
             margin = JBUI.emptyInsets()
             border = JBUI.Borders.empty()
             iconTextGap = 0
-            preferredSize = Dimension(16, 16)
-            minimumSize = Dimension(16, 16)
+            preferredSize = Dimension(12, 12)
+            minimumSize = Dimension(12, 12)
+            maximumSize = Dimension(12, 12)
             toolTipText = MpSqlVisualizerBundle.message("reverse.panel.pickClass")
             addActionListener { pickClass() }
+        }
+
+        /** 按钮宿主：FlowLayout 垂直居中（BorderLayout.EAST 会拉伸子组件高度，需宿主隔离）——
+         *  与 [ClassPickerField] 同款形态（观感一致，用户实测⋯须可见可点）。 */
+        private val actionButtonHost = JPanel(FlowLayout(FlowLayout.CENTER, 0, 4)).apply {
+            isOpaque = false
+            border = JBUI.Borders.empty(0, JBUI.scale(2), 0, JBUI.scale(4))
+            add(pickButton)
         }
 
         init {
@@ -814,13 +848,7 @@ class SqlToJavaPanel(
             preferredSize = Dimension(1, JBUI.scale(24))
             minimumSize = Dimension(1, JBUI.scale(24))
             add(combo, BorderLayout.CENTER)
-            add(pickButton, BorderLayout.EAST)
-            // 编辑框失焦提交（回车由 combo ActionListener 覆盖）——与既有「改动即重生成」交互一致
-            (combo.editor.editorComponent as? javax.swing.JTextField)?.addFocusListener(
-                object : java.awt.event.FocusAdapter() {
-                    override fun focusLost(e: java.awt.event.FocusEvent?) = onChanged()
-                },
-            )
+            add(actionButtonHost, BorderLayout.EAST)
         }
 
         /** 对外文本（生成器读取返回声明；测试直接赋值不触发变更回调——对齐 ClassPickerField 语义）。 */
@@ -829,6 +857,16 @@ class SqlToJavaPanel(
             set(value) {
                 combo.editor.item = value
             }
+
+        /** 测试缝：占位灰字（空值提示可见性）。 */
+        internal fun placeholderTextForTest(): Any? =
+            (combo.editor.editorComponent as? javax.swing.JTextField)?.getClientProperty("JTextField.placeholderText")
+
+        /** 测试缝：选类按钮（可见性/可点性断言）。 */
+        internal fun pickButtonForTest(): JButton = pickButton
+
+        /** 测试访问器：编辑器组件（占位/文本行为断言）。 */
+        internal fun editorComponentForTest(): java.awt.Component = combo.editor.editorComponent
 
         /** 选类（Goto Class 弹窗，裸模型——返回类型字段无 this/baseMapper 调用类特殊项）；选中写回编辑框。 */
         private fun pickClass() {

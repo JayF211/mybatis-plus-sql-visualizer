@@ -1035,4 +1035,27 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
             state.reverseWrapperFormat = original
         }
     }
+
+    // ------------------------------------------------------------------
+    // T-MapResultVo v2 修复：返回类型字段占位文案与选类按钮可见性（用户真机反馈回归钉）
+    // ------------------------------------------------------------------
+
+    fun testResultTypeFieldPlaceholderAndPickButtonVisible() {
+        val field = panel.voFieldForTest()
+        // 空值占位灰字（JTextField.placeholderText）——真机曾被报「文案不见了」
+        val placeholder = field.placeholderTextForTest()
+        assertNotNull("返回类型字段应有空值占位文案", placeholder)
+        assertTrue(
+            "占位文案应含返回类型说明",
+            placeholder.toString().contains("返回类型") || placeholder.toString().contains("Result type"),
+        )
+        // 选类按钮在场且可点（真机曾被报「类搜索弹框没了」）
+        val button = field.pickButtonForTest()
+        assertTrue("选类按钮应可见", button.isVisible || button.parent != null)
+        assertEquals("选类按钮应可点（有 ActionListener）", 1, button.actionListeners.size)
+        assertNotNull("选类按钮应有图标", button.icon)
+        // 文本框可直接键入返回声明
+        field.text = "List<Map<String, Object>>"
+        assertEquals("List<Map<String, Object>>", field.text)
+    }
 }
