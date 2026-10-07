@@ -133,41 +133,92 @@ object SqlLogFileReader {
         // T-SqlLogPerf（20261006-1020 计划 P2）：块累积不再走 joinToString → lines() → joinToString
         // 三份全量拷贝——头部行与正文行分开持有，parseBlockLines 直收行序列，单块只剩
         // 组装 restoredSql 那一次必要拷贝。判定逻辑与逐字语义与旧双拷贝版完全一致（round-trip 测试钉）。
-        var header: String? = null
-        val bodyLines = mutableListOf<String>()
-
-        fun flushBlock() {
-            val h = header ?: return
-            parseBlockLines(h, bodyLines)?.let { entries.add(it) }
-            header = null
-            bodyLines.clear()
-        }
-
+        val scanner = EntryBlockScanner()
         for (line in lines) {
+            scanner.offer(line)?.let { entries.add(it) }
+        }
+        scanner.finish()?.let { entries.add(it) }
+        // T-LogHistoryRowNo：按文件内解析顺序注入序号（防御：已有序号的条目不覆盖）
+        return entries.mapIndexed { index, entry ->
+            if (entry.sequenceNumber == 0L) entry.copy(sequenceNumber = (index + 1).toLong()) else entry
+        }
+    }
+
+    /**
+     * V47（D31 道 A 硬前置，F55 三合一）：**逐条迭代器**——回调形，[action] 返回 false 即停止
+     * 读取（扫描封顶/提前收束），文件随迭代及时关闭（use 语义，中途停止不漏句柄）。
+     *
+     * 核实结论（20261007 实施期）：本 Reader 原有接口面**无条目粒度的流式消费口**——
+     * [parseContent] 虽收行序列（T-SqlHistoryFull 的行流），但仍把全部条目物化成 List 返回，
+     * 调用方无法边读边滤/按条目封顶。本接口补齐该缺口：与 [parseContent] 共用同一
+     * [EntryBlockScanner] 状态机（单遍化、逐字节同语义，round-trip 测试钉），条目序号
+     * 按产出顺序注入（与 parseContent 的 mapIndexed 序号一致）。旧接口全部原样保留。
+     */
+    fun forEachEntry(file: File, action: (LogSqlEntry) -> Boolean) {
+        if (!file.exists()) return
+        // T-SqlLogPerf：与 readFromFile 同款阈值打点（风暴期归因，常态零噪音）
+        LogPerfProbe.measure("SqlLogFileReader.forEachEntry", { "${file.name} ${file.length()}B" }) {
+            file.bufferedReader().useLines { lines ->
+                val scanner = EntryBlockScanner()
+                var seq = 0L
+                for (line in lines) {
+                    val entry = scanner.offer(line) ?: continue
+                    seq++
+                    val numbered = if (entry.sequenceNumber == 0L) entry.copy(sequenceNumber = seq) else entry
+                    if (!action(numbered)) return@useLines
+                }
+                scanner.finish()?.let { entry ->
+                    seq++
+                    val numbered = if (entry.sequenceNumber == 0L) entry.copy(sequenceNumber = seq) else entry
+                    action(numbered)
+                }
+            }
+        }
+    }
+
+    /**
+     * 共享块切分状态机（parseContent 与 forEachEntry 单一实现源）：逐行喂入，头部行
+     * 开新块并吐出上一块的解析结果（无上一块/头部不合规解析失败返回 null）。
+     * 头部判定与 [countInFile] 的计数判据保持一致（含 `source:` 与 `time:` 的新版头部、
+     * `-- 日期` 的旧版头部、排除 `-- pd: ` 参数持久化行）。
+     */
+    private class EntryBlockScanner {
+        private var header: String? = null
+        private val bodyLines = mutableListOf<String>()
+
+        /** 喂一行；若该行开启新块则返回上一块解析结果（无上一块或解析失败返回 null）。 */
+        fun offer(line: String): LogSqlEntry? {
             // 检测新版头部（兼容 2/3 个 `-`：-- source 或 --- source）
             // 此处不能用 startsWith 严格判别「-- source」——旧版 F-43 的「-- 2026-08-31 ...」也会匹配，
             // 故先看是否为新版结构（含 "source:" 与 "time:" 关键字）——具体交由正则捕获 timestamp/format ，
             // parseBlockLines 中先 NEW 后 OLD 顺序尝试，任一正则匹配即可。
             val trimmed = line.trimStart()
             if (trimmed.startsWith("--") && trimmed.contains("source:") && trimmed.contains("time:")) {
-                flushBlock()
+                val done = flush()
                 header = line
+                return done
             }
             // 检测旧版头部（F-43：`-- yyyy-MM-dd HH:mm:ss`）；`-- pd: ` 是参数持久化行非头部，
             // 不排除会被当作旧头部把条目劈成两块（T-HistParam）
-            else if (line.startsWith("-- ") && !line.contains("source:") && !line.startsWith(PD_PREFIX)) {
-                flushBlock()
+            if (line.startsWith("-- ") && !line.contains("source:") && !line.startsWith(PD_PREFIX)) {
+                val done = flush()
                 header = line
+                return done
             }
             // 非头部行（SQL 正文或空行）
-            else if (header != null) {
-                bodyLines.add(line)
-            }
+            if (header != null) bodyLines.add(line)
+            return null
         }
-        flushBlock()
-        // T-LogHistoryRowNo：按文件内解析顺序注入序号（防御：已有序号的条目不覆盖）
-        return entries.mapIndexed { index, entry ->
-            if (entry.sequenceNumber == 0L) entry.copy(sequenceNumber = (index + 1).toLong()) else entry
+
+        /** 收尾：吐出最后一个未闭合块（无块/解析失败返回 null）。 */
+        fun finish(): LogSqlEntry? = flush()
+
+        private fun flush(): LogSqlEntry? {
+            val h = header ?: return null
+            val entry = parseBlockLines(h, bodyLines)
+            header = null
+            bodyLines.clear()
+            return entry
         }
     }
 

@@ -430,4 +430,63 @@ class SqlLogFileReaderTest {
         assertTrue("计数缝必须可用（冷线程首次解析应记录到 formatter 构造），实际 ${deltas[0]}", deltas[0] >= 1)
         assertEquals("同格式第二次解析必须命中缓存（不新建 formatter），实际计数 +${deltas[1]}", 0, deltas[1])
     }
+
+    // ------------------------------------------------------------------
+    // V47（D31 道 A 硬前置）：forEachEntry 逐条迭代器
+    // ------------------------------------------------------------------
+
+    /** V47：逐条迭代与 readFromFile 全量解析逐条等价（含 sequenceNumber 注入序）。 */
+    @Test
+    fun `forEachEntry 与 readFromFile 逐条等价_含序号`() {
+        val dir = Files.createTempDirectory("v47-equiv-").toFile()
+        dir.deleteOnExit()
+        val content = """
+            --- source: A.java:1 | time: 1ms | 2026-08-25 10:00:00.000 ---
+            SELECT 1
+
+            -- 2026-08-25 09:00:00
+            SELECT 2
+
+            --- source: B.java:2 | time: 2ms | 2026-08-25 10:00:01.000 ---
+            SELECT 3
+
+        """.trimIndent()
+        val file = File(dir, "mixed.sql")
+        file.writeText(content)
+        val streamed = mutableListOf<LogSqlEntry>()
+        SqlLogFileReader.forEachEntry(file) { streamed.add(it); true }
+        val bulk = SqlLogFileReader.readFromFile(file)
+        assertEquals("条目数一致", bulk.size, streamed.size)
+        assertEquals("逐条等价（含序号）——共享同一状态机的单一实现源", bulk, streamed)
+    }
+
+    /** V47：回调返回 false 即停止（条目粒度早停），且文件句柄随停随闭（Windows 删除即探针）。 */
+    @Test
+    fun `forEachEntry 早停即闭_不再消费后续条目`() {
+        val dir = Files.createTempDirectory("v47-stop-").toFile()
+        dir.deleteOnExit()
+        val content = buildString {
+            repeat(5) { i ->
+                append("--- source: A.java:").append(i + 1).append(" | time: 1ms | 2026-08-25 10:00:0").append(i).append(".000 ---\n")
+                append("SELECT ").append(i + 1).append("\n\n")
+            }
+        }
+        val file = File(dir, "five.sql")
+        file.writeText(content)
+        var seen = 0
+        SqlLogFileReader.forEachEntry(file) {
+            seen++
+            seen < 2 // 第 2 条后返回 false → 停
+        }
+        assertEquals("早停后不再消费后续条目", 2, seen)
+        assertTrue("中途停止也须关闭文件句柄（Windows 上未闭句柄删除必败）", file.delete())
+    }
+
+    /** V47：文件不存在零回调（与 readFromFile 的 exists 守卫语义一致）。 */
+    @Test
+    fun `forEachEntry 文件不存在零回调`() {
+        var seen = 0
+        SqlLogFileReader.forEachEntry(File("no-such-v47-file.sql")) { seen++; true }
+        assertEquals(0, seen)
+    }
 }
