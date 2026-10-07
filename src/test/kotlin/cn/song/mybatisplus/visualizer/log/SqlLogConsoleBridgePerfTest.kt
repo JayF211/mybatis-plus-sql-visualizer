@@ -124,4 +124,29 @@ class SqlLogConsoleBridgePerfTest {
         val m2 = SqlLogConsoleBridge.cachedMethod(String::class.java, "length")
         assertEquals("正缓存应命中同一 Method", m1, m2)
     }
+
+    // ---------- F57（T-PerfSweep18）：methodCache 容量上限——超限整体代际失效 ----------
+
+    /**
+     * 键空间无界防护：灌入超过 METHOD_CACHE_MAX 条互异键（负缓存条目同样占位），
+     * 缓存必须整体代际失效回落到有界，且失效后查询语义不变（重付一次 getMethod 仍返回正确 Method）。
+     * 反向验证锚：摘掉 cachedMethod 内的容量清空分支后，70 条互异键全数滞留 → 本测试红。
+     */
+    @Test
+    fun `F57_容量上限_超限整体代际失效`() {
+        // 预热一条正缓存（稍后验证失效后语义不变）
+        val warm = SqlLogConsoleBridge.cachedMethod(String::class.java, "trim")
+        assertTrue("预热条目应解析成功", warm != null)
+        for (i in 0 until 70) {
+            // 互异键：同类不同方法名（负缓存路径同样写入条目）
+            SqlLogConsoleBridge.cachedMethod(ConsoleStub::class.java, "f57No$i")
+        }
+        assertTrue(
+            "超限后代际失效，缓存必须回落到有界（实际 ${SqlLogConsoleBridge.methodCacheSize()}）",
+            SqlLogConsoleBridge.methodCacheSize() <= 64,
+        )
+        // 失效不破坏语义：清空后重查同一方法仍返回等价 Method
+        val again = SqlLogConsoleBridge.cachedMethod(String::class.java, "trim")
+        assertEquals("代际失效后重查应仍解析同一 Method", warm, again)
+    }
 }

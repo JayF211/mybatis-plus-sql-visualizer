@@ -694,6 +694,12 @@ open class SqlLogConsoleBridge(
          */
         private val methodCache = java.util.concurrent.ConcurrentHashMap<String, java.util.Optional<java.lang.reflect.Method>>()
 
+        /** F57（T-PerfSweep18）：methodCache 容量上限——键含 ClassLoader 身份，多 run 配置/动态卸载场景键空间无界，照 DESCRIPTOR_CACHE_MAX 先例超限整体代际失效（重付一次 getMethod 换有界）。 */
+        private const val METHOD_CACHE_MAX = 64
+
+        /** F57：测试观察缝——代际失效行为断言用（生产代码勿调用）。 */
+        internal fun methodCacheSize(): Int = methodCache.size
+
         /** F50：记忆化键（纯函数可测）——类名 + ClassLoader 身份 + 方法名三元组。 */
         internal fun methodCacheKey(className: String, loader: ClassLoader?, name: String): String =
             "${className}@${System.identityHashCode(loader)}#$name"
@@ -707,6 +713,8 @@ open class SqlLogConsoleBridge(
                 null
             }
             methodCache[key] = java.util.Optional.ofNullable(method)
+            // F57：超限整体代际失效（与 descriptorConsoleCache 同范式——清后本条目不回填，下次查询重付一次 getMethod）
+            if (methodCache.size > METHOD_CACHE_MAX) methodCache.clear()
             return method
         }
 
