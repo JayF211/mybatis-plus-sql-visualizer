@@ -4,7 +4,7 @@
 > **分支**：dev（当前 HEAD `a6570ce`）
 > **状态**：立项调研——**仅调研与方案设计，不实施**（用户明确「先不要实施」）
 > **优先级**：P2（消灭日志捕捉链路唯一的常驻开销——反射桥 + 轮询兜底；非功能缺陷，不阻塞当前功能）
-> **来源**：T-PerfBatch 计划 §4.3 的 P2 调研项。MyBatisCodeHelper-Pro 用稳定的 `consoleFilterProvider` 扩展点注册 Filter（plugin.xml `<consoleFilterProvider implementation="com.ccnode.codegenerator.P.c"/>`，P/c.java 反编译：`getDefaultFilters` 返回 `Filter[]{ new P.b(project) }`），运行期零挂载负担、零轮询、零组件树遍历。本项目当前用反射桥 + 轮询兜底（T-M31-03），每拍仍有 `hasMainConsole`（descriptor 反射 + `isProcessAlive` 进程存活反射）+ `findConsoleView` 递归组件树遍历。本计划评估把 EP 作为主通道、反射桥降级为兜底的双轨方案。
+> **来源**：T-PerfBatch 计划 §4.3 的 P2 调研项。MyBatisCodeHelper-Pro 用稳定的 `consoleFilterProvider` 扩展点注册 Filter（plugin.xml 声明该 EP，实现类由 `getDefaultFilters` 返回单个过滤器实例），运行期零挂载负担、零轮询、零组件树遍历。本项目当前用反射桥 + 轮询兜底（T-M31-03），每拍仍有 `hasMainConsole`（descriptor 反射 + `isProcessAlive` 进程存活反射）+ `findConsoleView` 递归组件树遍历。本计划评估把 EP 作为主通道、反射桥降级为兜底的双轨方案。
 
 ---
 
@@ -38,7 +38,7 @@
 
 1. **jar 反编译**：`com.intellij.execution.filters.ConsoleFilterProvider` 与 `Filter.applyFilter(String line, int entireLength)` 在 243/253/262 三发行版的存在与签名（app-client.jar / platform 模块）。目标：确认 `getDefaultFilters` 返回值形态、`Filter.Result`/`Filter.HyperlinkInfo` 是否被裁剪。
 2. **MD 交叉核实**：`ConsoleFilterProvider` 是否 `DumbAware`、是否需要 `Project` 上下文、能否在 provider 内获取 `RunContentDescriptor`（用于区分运行控制台 vs 数据库控制台）。
-3. **现有插件参考**：MBCHP-Pro（已反编译，P/c.java 只有 13 行）是最简参考实现；batslog 开源仓库（plugin.xml 自述 "Sql log from batslog"）可查 `ConsoleLogParser`/`ConsoleFilterProvider` 的完整体。
+3. **现有插件参考**：MBCHP-Pro 的 EP 实现是最简参考（单类单过滤器）；batslog 开源仓库（plugin.xml 自述 "Sql log from batslog"）可查 `ConsoleLogParser`/`ConsoleFilterProvider` 的完整体。
 
 ### 2.2 双轨架构设计要点
 
@@ -58,7 +58,7 @@
 ### 2.4 产出物（本轮调研 + 计划，不含生产代码）
 
 - 本计划文档（§一至§四的能力评估 + 双轨设计 + 风险核验清单）；
-- 一个「EP 契约核验笔记」（jar 反编译签名 + MD 结论 + batslog 参考，附在本计划 §附录或独立文档）；
+- 一个「EP 契约核验笔记」（平台 EP 签名核验 + MD 结论 + batslog 参考，附在本计划 §附录或独立文档）；
 - 明确「实施前必须过的真机门禁」（§2.3 第 1 条）——作为后续实施计划的起手条件。
 
 ---
@@ -70,7 +70,7 @@ T-PerfBatch 计划把「consoleFilterProvider EP 双轨」列为 P2 调研，结
 ## 四、不实施声明与范围
 
 - **本轮不做**：不注册 plugin.xml EP、不写 `ConsoleFilterProvider` 实现、不改 `SqlLogConsoleBridge`、不跑真机。
-- **本轮要做**：完成 §2.1 平台契约核验（反编译 + MD + batslog 参考）、§2.2 双轨设计定稿、§2.3 风险核验清单，并回填本计划的「调研结论」章节。
+- **本轮要做**：完成 §2.1 平台契约核验（EP 签名 + MD + batslog 参考）、§2.2 双轨设计定稿、§2.3 风险核验清单，并回填本计划的「调研结论」章节。
 - **产出落位**：本计划文档留在 `docs/开发计划/`；契约核验结论直接写入本文档，不另建文件（避免碎片化）。
 
 ## 五、实施记录（2026-09-09）
@@ -86,4 +86,4 @@ T-PerfBatch 计划把「consoleFilterProvider EP 双轨」列为 P2 调研，结
 - T-PerfBatch（改动点一）：捕获线程 → buffer 通知的**EDT 调度节流**，前置「监听器分层」重构；
 - 本计划（EP 双轨）：消灭**挂载/轮询阶段**的常驻 EDT 负担，前置「真机门禁」验证 EP 契约。
 
-（后续调研回填：三发行版 EP 反编译签名结论、MD 结论、batslog 参考要点、双轨设计是否调整、真机门禁最终清单。）
+（后续调研回填：三发行版 EP 签名核验结论、MD 结论、batslog 参考要点、双轨设计是否调整、真机门禁最终清单。）

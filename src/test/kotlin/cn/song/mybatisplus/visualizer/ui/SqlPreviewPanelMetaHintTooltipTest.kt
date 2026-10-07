@@ -14,12 +14,15 @@ import org.junit.Assert.assertTrue
  * T-SourceJumpFunnel P6 回归守护：参数导入「空剪贴板」行内提示态**不得丢掉 meta 行 tooltip**。
  *
  * 缺陷形态：`showImportResult` 的空剪贴板分支旧写法 `metaLabel.toolTipText = hint` 把
- * [SqlPreviewPanel.updateMeta] 组装的 meta tooltip **整个覆写**掉了——而该 tooltip 是「悬停见完整
- * 调用链」（§3.3 验收项后半句）的唯一载体（可见 meta 行受 F3 宽度预算截断），于是提示态一挂起，
- * 悬停就只剩提示本身，完整链丢失；且提示文案本就在可见行上全文可见，覆写并未换来任何信息。
+ * [SqlPreviewPanel.updateMeta] 组装的 meta tooltip **整个覆写**掉了——提示态一挂起，悬停就只剩
+ * 提示本身、基线丢失；且提示文案本就在可见行上全文可见，覆写并未换来任何信息。
  *
  * 修复：提示态 tooltip 由「覆写」改「拼接」（提示首行 + `updateMeta` 缓存的基线 metaTooltipBase），
  * 基线取自缓存字段而非当前 tooltip，故重复触发幂等（不叠加自身）。
+ *
+ * **T-StackHoverUi 契约换代（20261007）**：完整调用链的悬停载体从 tooltip 换成调试器 Frames
+ * 风格悬停弹层（[StackFrameHover]），tooltip 基线只含 meta/警示/perf——本文件原「tooltip 保留
+ * 完整调用链」断言同步翻转为「tooltip 不含栈文本」；拼接/幂等/toast/P10 机制断言原样保留。
  *
  * 可测性：该提示是**纯行内状态更新**（不弹任何窗），故已从 `showImportResult` 的「测试模式跳过弹窗」
  * 闸门之前分离出来（闸门只为避开 Messages/TestDialog 拦截器），本用例据此可在 headless 下驱动。
@@ -50,14 +53,15 @@ class SqlPreviewPanelMetaHintTooltipTest : BasePlatformTestCase() {
         return sb.substring(0, 200)
     }
 
-    fun test空剪贴板提示_可见行显提示且tooltip保留完整调用链() {
+    fun test空剪贴板提示_可见行显提示且tooltip保留基线() {
         val panel = SqlPreviewPanel(project)
         try {
             val digest = chain()
             panel.showResult(makeResult(digest))
             waitForEdt()
             val baseTooltip = panel.metaTooltipForTest() ?: ""
-            assertTrue("前提：预览态 tooltip 已含完整调用链", baseTooltip.contains(digest))
+            // T-StackHoverUi：基线只含 meta/警示/perf，不含栈文本
+            assertFalse("前提（换代后）：预览态 tooltip 不含完整调用链", baseTooltip.contains(digest))
 
             // 空参数导入 = 空剪贴板提示路径（importParams(emptyMap())）
             panel.importParamsForTest(emptyMap())
@@ -66,9 +70,9 @@ class SqlPreviewPanelMetaHintTooltipTest : BasePlatformTestCase() {
             assertEquals("可见 meta 行应切到行内提示", "⚠ ${hint()}", panel.metaLabelForTest())
             val tooltip = panel.metaTooltipForTest() ?: ""
             assertTrue("提示态 tooltip 首行应为提示本身", tooltip.startsWith(hint()))
-            assertTrue("提示态 tooltip 不得丢掉完整调用链（P6 回归点）", tooltip.contains(digest))
-            assertTrue("提示态 tooltip 不得丢掉调用栈节点文案", tooltip.contains(stackLabel()))
-            // 拼接而非覆写：原基线全文完整保留在其后
+            assertFalse("提示态 tooltip 不得出现调用栈文本（完整链归悬停弹层）", tooltip.contains(digest))
+            assertFalse("提示态 tooltip 不得出现调用栈节点文案", tooltip.contains(stackLabel()))
+            // 拼接而非覆写：基线完整保留在其后（幂等拼接的实质断言）
             assertTrue("提示态 tooltip 应保留 updateMeta 的完整基线", tooltip.endsWith(baseTooltip))
         } finally {
             panel.clear()
@@ -106,7 +110,8 @@ class SqlPreviewPanelMetaHintTooltipTest : BasePlatformTestCase() {
             val tooltip = panel.metaTooltipForTest() ?: ""
             assertFalse("toast 语义：下次 updateMeta 覆盖提示态（可见行同步回纯 meta）", panel.metaLabelForTest().contains(hint()))
             assertFalse("toast 语义：下次 updateMeta 覆盖提示态（tooltip 同步回纯 meta）", tooltip.contains(hint()))
-            assertTrue("恢复后 tooltip 仍含完整调用链", tooltip.contains(chain()))
+            // T-StackHoverUi：恢复后 tooltip 仍不含栈文本（完整链在悬停弹层）
+            assertFalse("恢复后 tooltip 不得含完整调用链", tooltip.contains(chain()))
         } finally {
             panel.clear()
         }
@@ -139,10 +144,8 @@ class SqlPreviewPanelMetaHintTooltipTest : BasePlatformTestCase() {
             val visible = panel.metaLabelForTest()
             assertTrue("重算后提示必须仍在可见行内（P10 回归点）: $visible", visible.contains(hint()))
             assertFalse("不得被 meta 主体覆盖回来: $visible", visible.contains("LAMBDA_QUERY"))
-            assertTrue(
-                "tooltip 仍保留完整调用链",
-                (panel.metaTooltipForTest() ?: "").contains(chain()),
-            )
+            val tooltip = panel.metaTooltipForTest() ?: ""
+            assertTrue("提示态 tooltip 必须仍在（P10：重算不覆写提示拼接）", tooltip.startsWith(hint()))
         } finally {
             panel.clear()
         }

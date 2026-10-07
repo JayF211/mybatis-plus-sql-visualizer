@@ -36,6 +36,8 @@
             <li><b>CRUD SQL in one step</b>: right-click an entity class or database table to generate INSERT / UPDATE / SELECT / DELETE</li>
             <li><b>Rollback SQL in one click</b>: derive the reverse DELETE for an INSERT preview with identity-column wrapping for SQL Server and DM; snapshot-assisted recovery for UPDATE / DELETE</li>
             <li><b>MCP tools for AI agents</b>: 10 deterministic read-oriented tools (render, check, explain, rollback plan, CRUD, reverse SQL and more) registered with the platform MCP Server, per-tool gating in settings (IDEA 2025.2+)</li>
+            <li><b>Call stack hover</b>: hover over the call stack in the preview panel to see a debugger-style popup with structured frames, configurable frame count, and precise jump-to-source</li>
+            <li><b>Recent executions</b>: browse recent SQL executions in a dialog with the same list renderer as the SQL log panel, right-click menu, and jump-to-source</li>
             <li>One keystroke away: gutter icon / context menu / <code>Alt+Shift+Q</code></li>
         </ul>
         <p>Feature matrix &amp; docs: <a href="https://sql-visualizer.jvtools.cn">sql-visualizer.jvtools.cn</a> · Screenshots on the <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">Marketplace page</a></p>
@@ -55,6 +57,8 @@
             <li><b>CRUD SQL 一步直出</b>：实体类 / 数据库表右键生成 INSERT / UPDATE / SELECT / DELETE</li>
             <li><b>一键回滚 SQL</b>：对预览的 INSERT 推导逆向 DELETE，SQL Server / 达梦自增列自动包装；UPDATE / DELETE 走快照回填恢复</li>
             <li><b>MCP 工具面向 AI agent</b>：11 个确定性只读工具接入平台 MCP Server（渲染 / 核查 / 执行计划 / 回滚预案 / CRUD / 反向转换等），设置页逐项门控（IDEA 2025.2+）</li>
+            <li><b>调用栈悬停</b>：预览面板调用栈区域悬停弹出调试器风格弹层，结构化解析帧、帧数可配置、精确跳转源码</li>
+            <li><b>最近执行记录</b>：弹框浏览最近 SQL 执行记录，复用日志列表渲染器，右键菜单与跳转源码</li>
             <li>触发零门槛：代码左侧 gutter 图标 / 右键菜单 / <code>Alt+Shift+Q</code></li>
         </ul>
         <p>功能矩阵与文档：<a href="https://sql-visualizer.jvtools.cn">sql-visualizer.jvtools.cn</a> · 截图见 <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">Marketplace 页面</a></p>

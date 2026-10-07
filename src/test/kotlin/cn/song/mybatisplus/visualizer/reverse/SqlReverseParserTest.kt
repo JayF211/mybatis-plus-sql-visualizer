@@ -38,10 +38,17 @@ class SqlReverseParserTest {
     }
 
     @Test
-    fun `函数列_整体放弃select生成`() {
-        assertNull(SqlReverseParser.parse("SELECT COUNT(*) FROM user").selectColumns)
-        assertNull(SqlReverseParser.parse("SELECT id, COUNT(*) FROM user").selectColumns)
-        assertNull(SqlReverseParser.parse("SELECT MAX(age) AS maxAge FROM user").selectColumns)
+    fun `函数列_收集原文不放弃`() {
+        // T-SqlToJavaPromote G5：聚合/函数列收集原文（含 AS 别名），不再整体放弃 select 生成
+        assertEquals(listOf(SelectColumn("COUNT(*)")), SqlReverseParser.parse("SELECT COUNT(*) FROM user").selectColumns)
+        assertEquals(
+            listOf(SelectColumn("id"), SelectColumn("COUNT(*)")),
+            SqlReverseParser.parse("SELECT id, COUNT(*) FROM user").selectColumns,
+        )
+        assertEquals(
+            listOf(SelectColumn("MAX(age)", "maxAge")),
+            SqlReverseParser.parse("SELECT MAX(age) AS maxAge FROM user").selectColumns,
+        )
     }
 
     @Test
@@ -404,9 +411,11 @@ class SqlReverseParserTest {
     }
 
     @Test
-    fun `DISTINCT_不收集为列`() {
+    fun `DISTINCT_建模且收集列`() {
+        // T-SqlToJavaPromote G3：DISTINCT 建模 distinct=true，列正常收集（不再放弃 select 生成）
         val result = SqlReverseParser.parse("SELECT DISTINCT id, name FROM t WHERE a = 1")
-        assertNull(result.selectColumns)
+        assertTrue(result.distinct)
+        assertEquals(listOf(SelectColumn("id"), SelectColumn("name")), result.selectColumns)
     }
 
     // ------------------------------------------------------------------
@@ -603,9 +612,13 @@ class SqlReverseParserTest {
     }
 
     @Test
-    fun `GROUP BY与HAVING_报错`() {
-        assertThrows { SqlReverseParser.parse("SELECT * FROM t GROUP BY a") }
-        assertThrows { SqlReverseParser.parse("SELECT * FROM t HAVING a > 1") }
+    fun `GROUP BY与HAVING_建模`() {
+        // T-SqlToJavaPromote G1/G2：不再报错——GROUP BY 建模 groupBy 列表；HAVING 聚合表达式降级 Raw
+        val g = SqlReverseParser.parse("SELECT * FROM t GROUP BY a, b")
+        assertEquals(listOf("a", "b"), g.groupBy.map { it.columnName })
+        val h = SqlReverseParser.parse("SELECT * FROM t GROUP BY a HAVING COUNT(*) > 1")
+        assertEquals(listOf("a"), h.groupBy.map { it.columnName })
+        assertEquals("COUNT(*) > 1", (h.having as Condition.Raw).sqlText)
     }
 
     @Test

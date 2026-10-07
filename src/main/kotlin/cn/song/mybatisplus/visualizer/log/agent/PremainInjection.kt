@@ -53,12 +53,14 @@ internal object PremainInjection {
     }
 
     /**
-     * `-javaagent` VM 选项：`-javaagent:<jar 绝对路径>=port=<n>;logLevel=warn`。
+     * `-javaagent` VM 选项：`-javaagent:<jar 绝对路径>=port=<n>;logLevel=warn;stackFrames=<n>`。
      *
-     * args 段直接复用 [AgentProtocol.agentArgs]（AgentProtocol.kt:31），与 agent 侧
+     * args 段直接复用 [AgentProtocol.agentArgs]（AgentProtocol.kt:62），与 agent 侧
      * `AgentArgs.parse`（AgentArgs.java:20-55）的 `k=v` 分号契约逐字对齐——两侧任一侧改动
      * 都会被 `AgentProtocolSyncTest` 的常量对齐守卫拦下。
+     * T-StackHoverUi：[stackMaxFrames] 由调用方传设置值（本类保持纯函数不依赖 config 包；
+     * 缺省 24 与 PluginSettings 缺省同值）。
      */
-    fun vmOption(jarPath: String, port: Int): String =
-        "-javaagent:$jarPath=${AgentProtocol.agentArgs(port)}"
+    fun vmOption(jarPath: String, port: Int, stackMaxFrames: Int = 24): String =
+        "-javaagent:$jarPath=${AgentProtocol.agentArgs(port, stackMaxFrames = stackMaxFrames)}"
 }

@@ -291,6 +291,40 @@ class JavaCodeGeneratorTest {
     }
 
     @Test
+    fun `列名驼峰下划线归一_snake列查camel键`() {
+        // T-FixCamelMap：实体列名键为驼峰（如 @TableField("roleId") 显式形态）而 SQL 列为 snake（role_id）
+        // → 归一命中生成 lambda，不再回落字符串列名
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "role_id"), "=", SqlValue.Literal("1")),
+            ),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(className = "User", columnToField = mapOf("roleId" to "roleId"))
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertTrue(code, code.contains(".eq(User::getRoleId, 1)"))
+        assertTrue(code, !code.contains("\"role_id\""))
+    }
+
+    @Test
+    fun `列名驼峰下划线归一_camel列查snake键`() {
+        // T-FixCamelMap 反向：SQL 列为驼峰（roleId）而实体列名键为 snake（role_id，默认命名策略形态）
+        // → 归一命中，不再回落字符串
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            conditions = listOf(
+                Condition.Simple(ColumnRef(columnName = "roleId"), "=", SqlValue.Literal("1")),
+            ),
+        )
+        val entity = JavaCodeGenerator.EntityTarget(className = "User", columnToField = mapOf("role_id" to "roleId"))
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertTrue(code, code.contains(".eq(User::getRoleId, 1)"))
+        assertTrue(code, !code.contains("\"roleId\""))
+    }
+
+    @Test
     fun `lambda模式_组内列同样映射`() {
         val result = SqlReverseResult(
             tableName = "user",
@@ -2266,5 +2300,178 @@ class JavaCodeGeneratorTest {
         assertTrue("应生成 4 参 leftJoin", code.contains("leftJoin(StationInfoEntity.class,"))
         assertTrue("应包含 stationName ext", code.contains("ext.eq(StationInfoEntity::getStationName,"))
         assertTrue("应包含 merchantId ext", code.contains("ext.ge(StationInfoEntity::getMerchantId,"))
+    }
+
+    // ------------------------------------------------------------------
+    // T-MapResultVo：Map 响应形态（selectJoinMaps/selectMaps/listMaps 族）
+    // ------------------------------------------------------------------
+
+    private fun mapJoinResult() = SqlReverseResult(
+        tableName = "car_device_info",
+        selectColumns = null,
+        joins = listOf(
+            ReverseJoin(
+                type = cn.song.mybatisplus.visualizer.model.JoinType.LEFT,
+                tableName = "station_info",
+                alias = "t1",
+                onConditions = listOf(
+                    Condition.ColumnComparison(ColumnRef("t1", "id"), ColumnRef("t", "station_id")),
+                ),
+                rawOn = "t1.id = t.station_id",
+            ),
+        ),
+        conditions = listOf(Condition.Simple(ColumnRef("t", "id"), "=", SqlValue.Literal("1"))),
+    )
+
+    @Test
+    fun `Map响应_join生成selectJoinMaps_无Class参数`() {
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "DeviceInfoEntity",
+            columnToField = mapOf("id" to "id", "station_id" to "stationId"),
+            subEntities = mapOf("t1" to JavaCodeGenerator.EntityTarget(className = "StationInfoEntity", columnToField = mapOf("id" to "id"))),
+        )
+        val code = JavaCodeGenerator.generate(
+            mapJoinResult(), entity, GeneratedWrapper.MPJ_LAMBDA,
+            JavaCodeGenerator.InvocationTarget(callerClass = "DeviceInfoMapper", mpj = true, mapsResult = true),
+        )
+        assertTrue(code, code.contains("List<Map<String, Object>> list = deviceInfoMapper.selectJoinMaps(wrapper);"))
+        // Maps 族不带 Class 参数（1.5.8 javap 实证）
+        assertTrue(code, !code.contains(".class, wrapper)"))
+    }
+
+    @Test
+    fun `Map响应_分页生成selectJoinMapsPage`() {
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "DeviceInfoEntity",
+            columnToField = mapOf("id" to "id"),
+            subEntities = mapOf("t1" to JavaCodeGenerator.EntityTarget(className = "StationInfoEntity", columnToField = mapOf("id" to "id"))),
+        )
+        val result = mapJoinResult().copy(
+            limit = LimitClause(count = SqlValue.Literal("10")),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, entity, GeneratedWrapper.MPJ_LAMBDA,
+            JavaCodeGenerator.InvocationTarget(callerClass = "DeviceInfoMapper", mpj = true, mapsResult = true),
+        )
+        assertTrue(code, code.contains("Page<Map<String, Object>> page = deviceInfoMapper.selectJoinMapsPage(new Page<>(1, 10), wrapper);"))
+    }
+
+    @Test
+    fun `Map响应_单表Mapper回落selectMaps`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "status"), "=", SqlValue.Literal("1"))),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget(callerClass = "UserMapper", mpj = false, mapsResult = true),
+        )
+        assertTrue(code, code.contains("List<Map<String, Object>> list = userMapper.selectMaps(wrapper);"))
+    }
+
+    @Test
+    fun `Map响应_VO驱动select列别名_不进调用行Class`() {
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "DeviceInfoEntity",
+            columnToField = mapOf("id" to "id", "station_id" to "stationId"),
+            subEntities = mapOf("t1" to JavaCodeGenerator.EntityTarget(className = "StationInfoEntity", columnToField = mapOf("id" to "id", "station_name" to "stationName"))),
+        )
+        // VO 驱动 selectAs 列别名（Map key）需显式列+AS 别名（SelectColumn.alias 作 VO 属性名，T-M47 语义）
+        val result = mapJoinResult().copy(
+            selectColumns = listOf(
+                SelectColumn("t.id", "id"),
+                SelectColumn("t1.station_name", "stationName"),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, entity, GeneratedWrapper.MPJ_LAMBDA,
+            JavaCodeGenerator.InvocationTarget(callerClass = "DeviceInfoMapper", voClass = "DeviceInfoVo", mpj = true, mapsResult = true),
+        )
+        assertTrue(code, code.contains("selectAs(DeviceInfoEntity::getId, DeviceInfoVo::getId)"))
+        assertTrue(code, code.contains("selectAs(StationInfoEntity::getStationName, DeviceInfoVo::getStationName)"))
+        assertTrue(code, code.contains("selectJoinMaps(wrapper);"))
+        assertTrue(code, !code.contains("DeviceInfoVo.class"))
+    }
+
+    // ------------------------------------------------------------------
+    // T-MapResultVo v2：返回类型声明派生（自由键入形态）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `返回类型_HashMap声明_归Maps族且前缀按方法真实返回类型`() {
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "DeviceInfoEntity",
+            columnToField = mapOf("id" to "id"),
+            subEntities = mapOf("t1" to JavaCodeGenerator.EntityTarget(className = "StationInfoEntity", columnToField = mapOf("id" to "id"))),
+        )
+        val code = JavaCodeGenerator.generate(
+            mapJoinResult(), entity, GeneratedWrapper.MPJ_LAMBDA,
+            JavaCodeGenerator.InvocationTarget(
+                callerClass = "DeviceInfoMapper", mpj = true,
+                resultTypeText = "List<HashMap<String, Object>>",
+            ),
+        )
+        // 动态泛型（HashMap）归 Maps 族；声明前缀按方法真实返回类型（List<Map<..>>——编译正确形态）
+        assertTrue(code, code.contains("selectJoinMaps(wrapper);"))
+        assertTrue(code, code.contains("List<Map<String, Object>> list ="))
+        assertTrue(code, !code.contains("HashMap"))
+    }
+
+    @Test
+    fun `返回类型_Object声明单表_生成selectObjs`() {
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = null,
+            conditions = listOf(Condition.Simple(ColumnRef(columnName = "status"), "=", SqlValue.Literal("1"))),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, null, GeneratedWrapper.QUERY,
+            JavaCodeGenerator.InvocationTarget(callerClass = "UserMapper", resultTypeText = "List<Object>"),
+        )
+        assertTrue(code, code.contains("List<Object> list = userMapper.selectObjs(wrapper);"))
+    }
+
+    @Test
+    fun `返回类型_Object声明JOIN场景_报错指路`() {
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "DeviceInfoEntity",
+            columnToField = mapOf("id" to "id"),
+            subEntities = mapOf("t1" to JavaCodeGenerator.EntityTarget(className = "StationInfoEntity", columnToField = mapOf("id" to "id"))),
+        )
+        val ex = try {
+            JavaCodeGenerator.generate(
+                mapJoinResult(), entity, GeneratedWrapper.MPJ_LAMBDA,
+                JavaCodeGenerator.InvocationTarget(
+                    callerClass = "DeviceInfoMapper", mpj = true, resultTypeText = "List<Object>",
+                ),
+            )
+            throw AssertionError("expected SqlReverseException")
+        } catch (e: cn.song.mybatisplus.visualizer.reverse.SqlReverseException) {
+            e
+        }
+        assertTrue(ex.detail, ex.detail.contains("selectJoinObjs"))
+        assertTrue(ex.detail, ex.detail.contains("Map"))
+    }
+
+    @Test
+    fun `返回类型_类名文本_走VO语义含Class参数与别名`() {
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "DeviceInfoEntity",
+            columnToField = mapOf("id" to "id", "station_id" to "stationId"),
+            subEntities = mapOf("t1" to JavaCodeGenerator.EntityTarget(className = "StationInfoEntity", columnToField = mapOf("id" to "id", "station_name" to "stationName"))),
+        )
+        val result = mapJoinResult().copy(
+            selectColumns = listOf(SelectColumn("t1.station_name", "stationName")),
+        )
+        val code = JavaCodeGenerator.generate(
+            result, entity, GeneratedWrapper.MPJ_LAMBDA,
+            JavaCodeGenerator.InvocationTarget(
+                callerClass = "DeviceInfoMapper", mpj = true, resultTypeText = "DeviceInfoVo",
+            ),
+        )
+        assertTrue(code, code.contains("selectJoinList(DeviceInfoVo.class, wrapper);"))
+        assertTrue(code, code.contains("List<DeviceInfoVo> list ="))
+        assertTrue(code, code.contains("selectAs(StationInfoEntity::getStationName, DeviceInfoVo::getStationName)"))
     }
 }

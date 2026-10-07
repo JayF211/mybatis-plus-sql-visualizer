@@ -51,15 +51,22 @@ internal class SqlTokenizer {
                     tokens.add(Token(TokenType.STRING, text, i))
                     i = end
                 }
-                c == '`' -> {
-                    val end = sql.indexOf('`', i + 1)
-                    if (end < 0) throw SqlReverseException(i, SqlReverseParser.KEY_PARSE, "未闭合的反引号标识符")
+                c == '`' || c == '"' -> {
+                    // 反引号/双引号包裹的标识符（T-SqlToJavaPromote G10：双引号标识符方言宽容，标准 SQL/SQL Server）
+                    val end = sql.indexOf(c, i + 1)
+                    if (end < 0) throw SqlReverseException(i, SqlReverseParser.KEY_PARSE, "未闭合的 $c 标识符")
                     tokens.add(Token(TokenType.WORD, sql.substring(i, end + 1), i))
                     i = end + 1
                 }
                 c.isDigit() || (c == '.' && i + 1 < sql.length && sql[i + 1].isDigit()) -> {
                     var j = i + 1
-                    while (j < sql.length && (sql[j].isDigit() || sql[j] == '.')) j++
+                    // 十六进制字面量（0x1F，T-SqlToJavaPromote G10）：0 后跟 x 时按十六进制扫描
+                    if (c == '0' && j < sql.length && (sql[j] == 'x' || sql[j] == 'X')) {
+                        j++
+                        while (j < sql.length && (sql[j].isDigit() || sql[j] in 'a'..'f' || sql[j] in 'A'..'F')) j++
+                    } else {
+                        while (j < sql.length && (sql[j].isDigit() || sql[j] == '.')) j++
+                    }
                     tokens.add(Token(TokenType.NUMBER, sql.substring(i, j), i))
                     i = j
                 }
@@ -96,12 +103,17 @@ internal class SqlTokenizer {
     }
 
     /**
-     * 读取配对引号包裹的内容（SQL 双写转义 `''`）；返回 (结束索引, 含引号原文)。
-     * 未闭合返回 (-1, "")。
+     * 读取配对引号包裹的内容（SQL 双写转义 `''` + 反斜杠转义 `\'`，T-SqlToJavaPromote G10）；
+     * 返回 (结束索引, 含引号原文)。未闭合返回 (-1, "")。
      */
     private fun readQuoted(sql: String, start: Int, quote: Char): Pair<Int, String> {
         var j = start + 1
         while (j < sql.length) {
+            if (sql[j] == '\\' && j + 1 < sql.length) {
+                // 反斜杠转义（MySQL `\'` / `\\`）：跳过下一个字符
+                j += 2
+                continue
+            }
             if (sql[j] == quote) {
                 if (j + 1 < sql.length && sql[j + 1] == quote) {
                     j += 2

@@ -159,10 +159,18 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
             }
         }
 
-        /** 反查该锚点最近的日志执行记录并弹二级列表（匹配在后台：PSI 读包 ReadAction + 快照校验）。 */
+        /**
+         * 反查该锚点最近的日志执行记录并弹浏览对话框（T-RecentExecDialog O-118 换代：原二级
+         * ListPopup 只有一行摘要，改弹 [cn.song.mybatisplus.visualizer.log.RecentExecutionsDialog]
+         * 复用日志列表渲染器 + 只读高亮编辑器）。D86=A：空命中也弹（对话框状态行显示空态文案，
+         * 原轻通知分支随换代删除）。
+         *
+         * 链路不变：EDT 侧捕获锚点快照（文件 + textRange + 文档 modificationStamp）；
+         * 后台读取前由 [validatedRecentAnchor] 校验，失效即按「无记录」降级（不跳到错位置）；
+         * 匹配留池化线程（[cn.song.mybatisplus.visualizer.log.EntrySourceMatcher.match] 纯函数）。
+         */
         private fun showRecentEntriesPopup(project: Project, elt: PsiElement) {
-            // T-PCP-02：EDT 侧捕获锚点快照（文件 + textRange + 文档 modificationStamp）；
-            // 后台读取前由 [validatedRecentAnchor] 校验，失效即按「无记录」降级（不跳到错位置）
+            // T-PCP-02：EDT 侧捕获锚点快照；后台读取前校验（见上）
             val snapshot = PsiSnapshot.capture(elt)
             com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
                 val anchor = runCatching {
@@ -178,46 +186,13 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
                 )
                 com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
                     if (project.isDisposed) return@invokeLater
-                    if (matched.isEmpty()) {
-                        // T-UiNative T-UN-02：无记录提示改轻通知（原模态弹窗——纯告知无需打断）；
-                        // 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）
-                        if (!com.intellij.openapi.application.ApplicationManager.getApplication().isUnitTestMode) {
-                            runCatching {
-                                com.intellij.notification.Notification(
-                                    NOTIFICATION_GROUP_ID,
-                                    MpSqlVisualizerBundle.message("gutter.popup.recent"),
-                                    MpSqlVisualizerBundle.message("gutter.popup.recent.empty"),
-                                    com.intellij.notification.NotificationType.INFORMATION,
-                                ).notify(project)
-                            }
-                        }
-                        return@invokeLater
+                    // 锚点展示片段「文件名:行号」（标题参数；anchor=null = 快照失效，标题不带锚点）
+                    val anchorLabel = anchor?.let { (path, line) ->
+                        val name = path.substringAfterLast('/')
+                        if (line > 0) "$name:$line" else name
                     }
-                    val entryStep = object : com.intellij.openapi.ui.popup.util.BaseListPopupStep<cn.song.mybatisplus.visualizer.log.LogSqlEntry>(
-                        MpSqlVisualizerBundle.message("gutter.popup.recent"),
-                        matched,
-                    ) {
-                        override fun getTextFor(value: cn.song.mybatisplus.visualizer.log.LogSqlEntry): String =
-                            value.summary
-
-                        override fun onChosen(
-                            selectedValue: cn.song.mybatisplus.visualizer.log.LogSqlEntry?,
-                            finalChoice: Boolean,
-                        ): com.intellij.openapi.ui.popup.PopupStep<*>? {
-                            // 仅 finalChoice=true 时执行；避免悬停预览分支误触发 NPE。
-                            if (!finalChoice) return null
-                            // 20260907-1500：open 会同步 show SqlPreviewDialog，须挂 doFinalStep
-                            //（popup 选中路径内同步弹 dialog 触发平台焦点告警，与生成测试资产同根因）。
-                            selectedValue?.let {
-                                return doFinalStep {
-                                    cn.song.mybatisplus.visualizer.log.LogEntryPreviewOpener.open(project, it)
-                                }
-                            }
-                            return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE
-                        }
-                    }
-                    val popup = com.intellij.openapi.ui.popup.JBPopupFactory.getInstance().createListPopup(entryStep)
-                    popup.showInFocusCenter()
+                    // 非模态对话框（构造+show 须 EDT——本 invokeLater 保证）
+                    cn.song.mybatisplus.visualizer.log.RecentExecutionsDialog(project, matched, anchorLabel).show()
                 }
             }
         }
@@ -242,8 +217,7 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
         private val SQL_PREVIEW_ICON: Icon =
             IconLoader.getIcon("/icons/sqlGutter.svg", SqlGutterLineMarkerProvider::class.java)
 
-        /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
-        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+        // 「最近执行记录」轻提示通知组已随 T-RecentExecDialog 弹框化退役（空态改对话框状态行）。
     }
 }
 

@@ -2,6 +2,26 @@
 
 # SQL Visualizer Changelog
 
+## [2026.10.9] - 2026-10-09
+
+### Added
+
+- **预览面板调用栈悬停调试器风格弹层（T-StackHoverUi）**：预览面板的调用栈区域悬停时弹出调试器风格弹层——结构化解析调用栈帧（`StackDigestFrames`），跳过尾部基础设施帧（Tomcat/线程池尾巴），锚定最深业务帧（Controller→Service 链）；帧数可配置（设置页「调用栈快照帧数」+ agent 侧双通道下发，默认 24 帧，范围 [12,64]）；尾部穿透补 spring web/boot 前缀；验收阻塞修复（日志预览识别/字面量恢复分支丢调用栈快照）
+- **SQL → Java 反向转换能力扩展（T-SqlToJavaPromote）**：`GROUP BY` 建模 `.groupBy(...)`；`HAVING` 建模 `.having("...")`（聚合表达式原样透传）；`SELECT DISTINCT` 建模 `.select("DISTINCT ...")`；`FOR UPDATE` 建模 `.last("FOR UPDATE")`（与 LIMIT 并存合并单 last）；聚合/函数列（`COUNT(*) AS cnt`、`MAX(price)` 等）收集原文回落 `.select("expr AS alias")`（此前整体放弃致往返语义丢失）；`INSERT ... NULL` 值建模生成 Java `null`（此前报错）；`UNION / UNION ALL` 子查询解析（SQL 层往返经渲染还原，Java 生成层因 MP core 无 union() 方法降级为原文注释提示）；条件值参数化——`DATE_FORMAT(...) = '2024'` 形态生成 `apply("... = {0}", "2024")`（值/表达式分离）。
+- **SQL → Java 方言宽容**：双引号标识符（`"member"`）、`0x` 十六进制字面量、反斜杠字符串转义（`'a\'b'`）、`DATE / TIMESTAMP '...'` ANSI 类型字面量；算术表达式 / `<=>` 空安全比较 / `ILIKE` 等无法静态映射的形态一律降级 `apply()` 透传（「任何条件都不挡路」）。
+- **SQL → Java 返回类型自由输入（T-MapResultVo）**：「返回类型」字段（原「返回 VO」）改为可编辑组合框——自由键入任意返回声明（`List<Map<String, Object>>` / `List<HashMap<...>>` / `List<Object>` / VO 类名），一个控件承载全部返回形态语义；生成器按声明派生调用族：含 Map → `selectJoinMaps(wrapper)`/分页 `selectJoinMapsPage(page, wrapper)`（JOIN，MPJ）/`selectMaps`·`listMaps`（单表）族；含 Object → `selectObjs`/`listObjs` 族（单表；JOIN 场景无 `selectJoinObjs` 报错指路）；类名 → VO 语义（`selectJoinList(Vo.class, wrapper)` + `selectAs` 别名驱动）。Maps/Objs 族不带 Class 参数（1.5.8/MP 3.5.17 javap 实证）；正向识别 `selectJoinMaps` 调用与分页 Page 实参；MCP `sqlv_reverse_sql` 加可选 `maps`+`mapperVariable` 参数（默认不传零回归）。返回类型选择器补 Maps 分页声明 `Page<Map<String, Object>>`；返回类型声明项补类图标；返回类型固定候选并入「选择类」弹框前插；返回类型字段改照「调用类」同款形态（灰字占位标签＋点击弹选择）；返回类型字段去下拉（纯输入框＋选类按钮）。
+
+### Changed
+
+- **「最近执行记录」弹框化（T-RecentExecDialog）**：gutter 图标右键菜单「最近执行记录」由二级列表换代为浏览对话框——左侧列表直接复用 SQL 日志面板的条目渲染器（两行形态/类型色条/耗时与来源角标与日志页完全一致），右侧只读高亮编辑器展示参数还原后的可执行 SQL，选中切换/双击打开预览（预览后对话框保持在场，便于连续对比多条）；交互对齐「SQL 屏蔽规则管理」对话框（非模态/可拖拽/尺寸位置记忆）。空命中也弹对话框（状态行显示空态文案，原一闪而过的轻通知退役）；右键菜单、锚点快照校验与后台匹配链路不变
+- **「最近执行记录」右侧编辑器恒为格式化 SQL（D91，取代 D88 的「切换原文」）**：编辑器显示只剩格式化一种形态（与预览「格式化还原 SQL」同源 formatter，主子句各占一行），长 SQL 不再挤成软换行长条；「查看原文」切换已按用户要求移除；编辑器上方两枚按钮改为**图标按钮**（图标取「日志转 SQL」结果区同款：格式化 `ReformatCode`、复制 `Copy`，文案走悬停），格式化按钮=幂等重排（格式化降级原文后可手动重试），复制取当前显示文本（经平台复制通道进 IDE 复制历史）
+- **「最近执行记录」弹框列表右键菜单（T-RecentExecMenu）**：与 SQL 日志页右键同源六件——复制时间戳（受「显示时间戳」开关门禁，关闭时置灰）、屏蔽此 SQL（规则入库后该行即刻从弹框移除，气泡附「管理屏蔽规则…」直达）、发送到 SQL → Java、发送到日志转 SQL（工具窗口未创建时状态行提示）、跳转到 Java、跳转到 Mapper XML（定位不到即隐藏）；**不含**删除（弹框是浏览视图，不越权改全局日志缓冲）、方法级聚焦（锚点本身就是那个方法）、按请求聚焦、复制 SQL（按钮已有）。跳转/屏蔽/复制/送页签一律走日志页同一套实现（新增 `LogEntryJumpOps` 共享跳转原语，顺带消除实时页与历史页既有的一份重复实现）
+
+### Fixed
+
+- **SqlToJavaPanel 两处 Throwable 捕获补 fatal 透传**：`SqlToJavaPanel` 两处 `catch (Throwable)` 未透传 `Error` 子类，守卫由红转绿（整段收口）
+- **工厂链裸实参下带参 `exists` 被误判为链终结点，`EXISTS` 子查询条件整条丢失（T-ExistsChainTerminal）**：`exists` 在 MP 里同时是**条件方法**（`Join.exists(String, Object...) / Join.exists(boolean, String, Object...)`）与**链终结点**（`ChainQuery.exists()` 无参），PSI 定位层的终结点判定只按方法名匹配，二者又落在链尾时结构完全同形。于是 `service.list(Wrappers.<T>lambdaQuery().eq(...).exists("SELECT 1 FROM ..."))` 这类**裸工厂链直接作方法实参**（链内无 one/list/count/page 等真终结点）会把带参 `exists` 当终结点剔除——子查询条件从预览 SQL 里整条消失，且整条查询被误包成 `SELECT EXISTS (...)`，复制到数据库工具执行语义完全不同。现按实参个数区分（javap 实证 3.5.7/3.5.15/3.5.17 的 core 侧只有带参形态、extension 的 `ChainQuery.exists()` 才无参）：无参 `exists()` 仍是链终结点，带参一律作条件解析（布尔前缀照旧剥离为动态条件开关）；同一判据以 `isExistsConditionCall` 单点收口，供终结点筛选与 wrapper 变量接受门共用。`var w = Wrappers.<T>lambdaQuery()...exists(sql)` 声明形态同属此修复面（此前被同一名单拒为 wrapper 变量）。变量/分步/`new` 三种写法与 `notExists` 本就不受影响，各有回归用例钉住
+
 ## [2026.10.7] - 2026-10-07
 
 ### Added
@@ -15,13 +35,21 @@
 - **参数占位启发式复合词误报修复（O-111 用户 demo 实测跟进）**：`locationStatus` 这类复合词此前被参数占位启发式误配为集合占位，现不再误配
 - **并发大量 SQL 日志下监听与历史加载性能修缮（T-SqlLogPerf，20261006-1020 开发计划）**：日常 IDE 实测并发压测约 65 条/秒持续灌入、8708 条/19MB 历史文件加载 15~16.6s（超线性劣化）后的五处修复——①历史二级列表改**滚动追加**（首屏 30 条 + 滚动逼近底部才续写；原 invokeLater 链对 8708 条排 290 个 EDT 脉冲全量排空，无论看多少全部进模型）；②历史页浏览态 refresh 不再每次**全量重读当前文件**（(lastModified,length) 快照判定，未变直接复用已解析条目——实测同一浏览窗口 19MB 被解析 3 遍）；③历史解析**单遍化**（每块 joinToString→lines()→joinToString 三份拷贝砍到一份，解析语义逐字一致）；④去重判定锁内 O(n) 全表扫描改 dedupeKey→最近时间戳 **O(1) 索引**（并发下三通道写线程与 EDT snapshot 抢锁的大头；入队/淘汰/裁剪/开关/清空/删单六维护面等价性守卫钉死，摘修复必红）；⑤实时列表全量重建链**防抢占**——风暴期 200ms 一次的新刷新此前反复重启重建链致列表卡首屏 30 条，现进差分前同步补完在途链。另热路径新增阈值触发耗时探针（idea.log 检索 `[T-SqlLogPerf]`，单次 >100ms 才打，常态零噪音）供真机对账。agent 接管期桥侧嗅探最小化一项经复核被 T-AgentLogTime 既有定案（日志时间无条件采集）推翻，维持不动
 
+### Added
+
+- **SQL → Java 反向转换能力扩展（T-SqlToJavaPromote）**：`GROUP BY` 建模 `.groupBy(...)`；`HAVING` 建模 `.having("...")`（聚合表达式原样透传）；`SELECT DISTINCT` 建模 `.select("DISTINCT ...")`；`FOR UPDATE` 建模 `.last("FOR UPDATE")`（与 LIMIT 并存合并单 last）；聚合/函数列（`COUNT(*) AS cnt`、`MAX(price)` 等）收集原文回落 `.select("expr AS alias")`（此前整体放弃致往返语义丢失）；`INSERT ... NULL` 值建模生成 Java `null`（此前报错）；`UNION / UNION ALL` 子查询解析（SQL 层往返经渲染还原，Java 生成层因 MP core 无 union() 方法降级为原文注释提示）；条件值参数化——`DATE_FORMAT(...) = '2024'` 形态生成 `apply("... = {0}", "2024")`（值/表达式分离）。
+- **SQL → Java 方言宽容**：双引号标识符（`"member"`）、`0x` 十六进制字面量、反斜杠字符串转义（`'a\'b'`）、`DATE / TIMESTAMP '...'` ANSI 类型字面量；算术表达式 / `<=>` 空安全比较 / `ILIKE` 等无法静态映射的形态一律降级 `apply()` 透传（「任何条件都不挡路」）。
+- **SQL → Java 返回类型自由输入（T-MapResultVo）**：「返回类型」字段（原「返回 VO」）改为可编辑组合框——自由键入任意返回声明（`List<Map<String, Object>>` / `List<HashMap<...>>` / `List<Object>` / VO 类名），一个控件承载全部返回形态语义；生成器按声明派生调用族：含 Map → `selectJoinMaps(wrapper)`/分页 `selectJoinMapsPage(page, wrapper)`（JOIN，MPJ）/`selectMaps`·`listMaps`（单表）族；含 Object → `selectObjs`/`listObjs` 族（单表；JOIN 场景无 `selectJoinObjs` 报错指路）；类名 → VO 语义（`selectJoinList(Vo.class, wrapper)` + `selectAs` 别名驱动）。Maps/Objs 族不带 Class 参数（1.5.8/MP 3.5.17 javap 实证）；正向识别 `selectJoinMaps` 调用与分页 Page 实参；MCP `sqlv_reverse_sql` 加可选 `maps`+`mapperVariable` 参数（默认不传零回归）。
+
 ### Changed
+
+- **SQL → Java 反向转换转正（去 Beta）**：工具窗页签「SQL → Java (Beta)」→「SQL → Java」；覆盖四语句型 + 分组/聚合/联合/方言宽容，全语料往返门禁（52 条 ROUND_TRIP + 13 条降级/结构断言）在册。
+- **聚合/函数列语义修复**：`SELECT COUNT(*) AS cnt` 等此前被整体放弃（生成的代码再渲染变全列查询、COUNT 语义丢失），现收集原文生成 `select("COUNT(*) AS cnt")`。
 
 - **帮助页 / Marketplace 自定义页文案精简**（`html/marketplace-custom-page.html`，用户令「文字内容多」优化）：功能矩阵 27 个「说明」单元格压缩到一行级——MCP 工具行由十工具逐名枚举＋理念句（约 200 字）收敛为能力面概述（渲染 SQL / 表结构 / EXPLAIN / 日志还原 / 回滚预案等 + agent 兼容与逐工具门控），增强捕获行剥离注入确认 / 24h 冷却细节（FAQ 第 8 条已承载），多租户 / 自动折叠 / 历史定位等长单元格同步瘦身；「为什么选它」要点去与矩阵重复的细则、标语盒三行合两行。全部功能名、New / Ultimate 标签、触发方式、FAQ 八条、快捷键与链接零删减，页面可见文字 5005 → 3973 字符（-21%）；`HelpUiTest` 仅断言资源可加载与非空（无文本断言），零影响。另新增 **Markdown 版 `docs/发行说明/marketplace-custom-page.md`**（整页复制进 Marketplace → Documentation 自定义页编辑器直接使用）——该编辑器仅渲染 Markdown（`<style>` / class / 内联 CSS / 纯 CSS 手风琴均被剥除），原 HTML 版保持不动、专供 IDE 内帮助按钮 JCEF 渲染；New / Ultimate 徽章以官网托管的同款配色 SVG 药丸图内联承载（`sql-visualizer.jvtools.cn/badges/tag-new.svg` / `tag-ultimate.svg`，Markdown 无 CSS 无法做药丸，图片徽章与 HTML 版观感一致），FAQ 由手风琴改为小节标题。发行流程文档（`docs/发行说明/Marketplace发布流程-说明文档.md`）§10.2 / §11 已同步登记自定义页更新步骤与「md + html 两版同步维护」约定，HTML 版头部加配套注释。两版各内联三张演示动图（Wrapper 静态预览 / SQL 日志 / MCP agent 调用），以官网 `/demo/*.gif` URL 引用——插件 zip 体积零变化，帮助页离线时动图不显示、页面其余内容照常（html 侧 lazy 加载 + 暗色边框适配）
 
 ### Added
 
-- **日志列表「滚动到底部」+ 尾部跟随（T-SqlLogPerf）**：SQL 日志工具栏新增「滚动到底部」动作——一键跳列表底并恢复跟随；跟随态下新 SQL 到达自动贴底，向上滚动阅读即自动停跟随（滚回底部/点动作恢复，IDE 控制台同款习惯）。此前 log 包无任何滚动控制，并发灌入时新条目只进模型、视口原地不动（用户体感「监听加载有延迟」的主形态）
 - **预览参数预设（R22 T-04）**：参数区新增「预设」行——当前填好的参数可**另存为预设**，下拉一键切换（参数值/OGNL 勾选态/foreach 权威值随预设整组还原），「管理预设…」对话框支持另存为/重命名/删除（默认预设受保护，删除带知情确认）；历史自动记录在「默认预设」下照常工作，旧数据零迁移自动成为默认预设。**命名预设＝快照语义**（20261006 第三轮走查定案）：日常编辑只更新工作区（默认预设），命名预设只在「另存为/管理预设」时被写入——编辑不会就地改写已有预设；**预设按语句隔离**（下拉只列本条语句的预设，同名预设可在不同语句下各自存值；重命名/删除作用于同名预设的全部语句）。**预设行可折叠收起**（平台折叠标题件，**缺省折叠**——20261006 验收定案：预设属低频操作，默认不占竖向空间；折叠状态跨语句/跨弹窗保留，重启复位）
 - **SQL 高亮分组开关（R2）**：设置页可按语句来源分组控制 gutter SQL 图标显隐——mapper XML / 注解 SQL（@Select 族）/ JPA·HQL 族 / JdbcTemplate 字符串 / 通用 XML 内嵌兜底 / Wrapper 链及其它，默认全开（现行为不变）
 - **历史条目钉住与正则检索（R15/R16）**：历史 SQL 条目可钉住防淘汰；二级搜索支持 `regex:` 前缀正则匹配（SQL/摘要/源文件三目标，非法正则回退子串）
@@ -61,7 +89,6 @@
 - **增强捕获致宿主启动崩溃首轮修复（T-DevAcceptFix ⑥，P0；其帧补丁部分已被上条二次修复推翻，留档）**：用户实测 Spring Boot 项目（JDK 8 / mysql-connector 8.0.28 / Hikari）开启增强捕获后**启动即崩**——`LinkageError: attempted duplicate class definition`，炸点 `com.mysql.cj.jdbc.ConnectionImpl`（启动期首个取连接）。根因：连接/语句织入器用 `ClassWriter.COMPUTE_FRAMES` 重算原方法体栈图帧，ASM 计算类型公共父类时按 `Class.forName` 加载类型——而织入回调正运行在**被织类自身 defineClass 进行中**，同线程重入 `loadClass` 时 `findLoadedClass` 看不到进行中定义 → 二次 defineClass → JVM 判重复定义。修复三段：①两织入器改仅 `COMPUTE_MAXS`（注入块为零分支直线：无新帧合并点，原栈图帧内容无需重算）；②EXEC 族头插的 token 槽（long）存活于原方法全部分支帧点，`StatementWeaver` 改以 `EXPAND_FRAMES` 读入并给织入成功者的每帧 locals 尾部补一个 LONG（首轮全套 7 例 `VerifyError: Bad local variable type` 实锤此项必要）；③新增 `ZeroLoadClassWriter` 覆写 `getCommonSuperClass` 为零类加载保守实现（防未来重挂 COMPUTE_FRAMES 复发）。反向验证读数成对：未修复态单个驱动类首织触发 12 个类的加载（`-verbose:class` 三重实证 + 断言红）；修复态织入期类加载增量 0、被织类预载/后载双向守卫过。agent 子项目 109/0 全绿（含 F74 批串语义回归）。attach/premain 协同、织入名单、回调签名零改动；真机 attach 复验随下轮 runIde 走查批
 - **mapper XML 高亮在 Ultimate/三方插件环境零着色修复（T-DevAcceptFix ④）**：用户实测 mapper XML 语句文本关键字完全无色。根因是两条让位线共用同一被证伪前提「在位=覆盖」——①「平台 `SqlLanguageInjector` 类在场即让位」：该类在 243 构建发行物（599 jar）与用户真机 IU-262.10968.63（1809 jar）全量扫描**均不存在**（现行平台 SQL 注入器喂入类型全为 SQL PSI，mapper XML 宿主平台从不着色）——该让位线是死代码；②「三方 MyBatisCodeHelperPro 安装且启用即让位」：用户真机 MCH-Pro 启用中而关键字仍无色（在位≠覆盖）。两条线同批废止，改**宿主级探测**：枚举 `com.intellij.multiHostInjector` EP 的在册注入器（除本插件自身族）按喂入契约预筛后以 stub registrar 试调，**真 startInjecting 才让位**；单个注入器试探异常跳过续问（不让坏注入器把插件一起拖成零着色），EP 枚举整体异常仍保守让位；per-host 结论不缓存。新增反射入口已登记 `PlatformSignatureCrossVersionTest`（243/253/262 三平台核验过）。定向 51 例全绿（含三形态缝/喂入预筛/自身族排除/异常跳过续问新例）；用户真机着色效果随下轮 runIde 走查批实测
 - **预览面板四项验收修缮（T-DevAcceptFix ①②③⑤）**：①**预设区缺省折叠**（翻转 O-88 静态态缺省值；跨语句/跨弹窗保留语义不变）；②**绑定数据源指示行迁出参数区**——原挂「预设行之下」，现为顶栏「更多」按钮下方右对齐常驻薄行（与右侧内嵌控制台数据源显示相邻；init 一次构建，常驻语义不再依赖参数区建行，无参数预览同样可见）；③**分页预览两条语句补分号**——原 `appendCountSection` 主 SQL 尾直拼注释头，复制到控制台执行时 LIMIT 语句与 COUNT 语句粘连，现主 SQL 与 COUNT 语句各自 `;` 收尾（已带分号不重复追加）；④**预设切换参数回写错位修复**——原实现以 `paramValues` 插入序对位输入框行序，方案切换后 map 重填顺序=另一预设快照保存序，与面板行构建序漂移时值写进别家输入框；现输入框挂 source 锚点按锚点显式映射，新增红复现用例（刻意构造乱序快照，修复前必红/修复后绿）
-- **并发大量 SQL 日志下监听与历史加载性能修缮（T-SqlLogPerf，20261006-1020 开发计划）**：日常 IDE 实测并发压测约 65 条/秒持续灌入、8708 条/19MB 历史文件加载 15~16.6s（超线性劣化）后的五处修复——①历史二级列表改**滚动追加**（首屏 30 条 + 滚动逼近底部才续写；原 invokeLater 链对 8708 条排 290 个 EDT 脉冲全量排空，无论看多少全部进模型）；②历史页浏览态 refresh 不再每次**全量重读当前文件**（(lastModified,length) 快照判定，未变直接复用已解析条目——实测同一浏览窗口 19MB 被解析 3 遍）；③历史解析**单遍化**（每块 joinToString→lines()→joinToString 三份拷贝砍到一份，解析语义逐字一致）；④去重判定锁内 O(n) 全表扫描改 dedupeKey→最近时间戳 **O(1) 索引**（并发下三通道写线程与 EDT snapshot 抢锁的大头；入队/淘汰/裁剪/开关/清空/删单六维护面等价性守卫钉死，摘修复必红）；⑤实时列表全量重建链**防抢占**——风暴期 200ms 一次的新刷新此前反复重启重建链致列表卡首屏 30 条，现进差分前同步补完在途链。另热路径新增阈值触发耗时探针（idea.log 检索 `[T-SqlLogPerf]`，单次 >100ms 才打，常态零噪音）供真机对账。agent 接管期桥侧嗅探最小化一项经复核被 T-AgentLogTime 既有定案（日志时间无条件采集）推翻，维持不动
 - **agent 语句级织入批串只增不清修复（T-StatementWeave F74，合并前置）**：性能二十三轮审计 F74——登记表批串 `executeBatch` 消费后不复位 + `clearBatch()` 未织入，同一条 Statement 的批串跨批次只增不清（内存/组装耗时双无界，且下一批事件携带上一批残串）。现 `executeBatch` 读后即复位（对齐 JDBC 驱动批缓冲语义，成功与异常出口同口径），`clearBatch()` 织入出口清账（`CLEAR_BATCH` 织入面 + `onClearBatchExit` 回调，有登记才清不建账）；批串规模因此天然有界＝宿主单个批周期内的 addBatch 总量，与驱动自身批缓冲同寿，不另设截断上限（截断会静默篡改事件内容）。端到端两例钉死（跨批次残串不得串包 / clearBatch 后零残串），接线守卫升级五件套并补 F74 摘除必红判据。
 - **agent 语句级织入，attach 兜底「即挂即捕获」（T-StatementWeave，S6 转正）**：吸收 DebugTools 类工具「项目启动后贴附立即可用」的织入点模型——此前 agent 只织驱动 `connect`（连接创建时包装），attach 兜底对池化场景启动期已建好的存量连接结构性零捕获（retransform 改方法体不能回溯已存在的连接对象）。现新增语句面织入：钩子挂在驱动语句实现类的 execute 族方法体（入口+出口双插桩，精确耗时/影响行数/异常原样重抛与代理层语义对齐），attach 时对已加载语句类 retransform——**存量对象的下一次执行即带钩子**，与连接/语句的创建时间无关；`prepareStatement` 出口同步登记「PS 实例 → SQL + URL」弱映射（PS 被 GC 即清账），覆盖 attach 后新建的 PreparedStatement。已知边界如实登记：attach 前已 prepare 且未再执行的 PS 拿不到 SQL（跳过不上报 + 计数可观测，字段反射兜底列二期）；织入通道无 setXxx 拦截，存量连接语句的绑定参数一期为空（事件带裸 `?` 占位）。双通道互斥门（代理层 invoke 原始方法期间织入通道短路）保证同一条 SQL 不重复产出。能力边界通知口径同步升级：「已挂载，此后执行的 SQL 即时可见（含挂载前已存在的连接）」。登记面：mysql-connector-j 8.x/5.x 与 h2 2.x 原生语句实现类（javap 实证），织不上安全降级不炸宿主；更多驱动随真库验证轮扩面。反向验证：摘语句面 retransform → 接线守卫红；agent 子项目 101/0 绿（含 8 个端到端新例）+ 主仓定向 31/0 绿。真机 attach 时序判别（先建池再挂载、存量连接可见）随下轮 runIde 沙盒走查批。
 
@@ -69,6 +96,11 @@
 - **日期/时间类型参数还原改 ANSI 类型字面量（R3）**：日志还原链对带日期族类型标注（Timestamp/Date/LocalDate/LocalDateTime 等）的参数此前渲染裸单引号字符串——在 Oracle 上对日期/时间戳列的隐式转换恒失败（ORA-01861/01843，与同类产品同款缺陷）。现按类型标注渲染 ANSI 类型字面量 `DATE '…'` / `TIMESTAMP '…'`（ISO 'T' 分隔符归一为空格、缺秒补 `:00`、值文本不匹配日期形态时回落引号；`LocalTime`/带时区值/无类型标注维持原行为）。该字面量形态经 Oracle 11g/23、达梦 DM8、金仓、MySQL 5.7/8.4、PostgreSQL、openGauss 真库逐格实测通用，无需方言分支
 - **性能修缮五件（F47~F51，批次 9 快件批）**：①语法高亮注入器喂入税消解——开启高亮后每个 XML 元素每次高亮 pass 的一次服务查找改为快照直读（实测 85→14ns/元素，喂入位查找 3002→0）；②mapper 解析器的编程式注册挂应用级 Disposer 宿主——插件动态卸载时容器级联摘除，不再被注册表钉住（附跨版本护栏与运行时对照测试）；③参数预设切换只写激活指针不再全量序列化＋方案数上限 20；④两处并发缓存修缮——参数方案顶层结构改并发安全容器（修掉并发建桶可致真损坏的潜伏缺陷）、控制台桥方法缓存负缓存此前因 null 值被吞从未生效（改 Optional 承载）并补 ClassLoader 身份键；⑤XML 内嵌 SQL 行标记两道闸并一（每元素查找 2→1，语义逐值等价）。
 - **原生 MyBatis（非 Spring Boot）项目拦截器自动注入补完（R24）**：设置页「注入」对 mybatis-config.xml 工程此前只给手动指引（全仓仅有的 2 处生产 TODO）——现自动检测配置文件 `<plugins>` 装配同一拦截器（无 config/多处 config/结构不符一律不注入维持引导，fail-closed）；「全场景闭环」叙事无星号。
+
+### Fixed
+
+- **调用类 MPJ 能力误报「无 MPJ 能力」**（真机实证：`DeviceInfoMapper extends MPJBaseMapper` 仍被误判）：「先贴 SQL 后选调用类」路径拿 stale 的能力判定（此前仅 SQL 解析链反查、选类回调不刷新）——现选类后后台重查 MPJ 能力与方法集再重生成。
+- **列名→字段映射驼峰归一 + 多候选实体静默取首明示**（真机实证：`role_id` 等列大列表回落字符串）：列名查询双向归一（snake_case↔camelCase，含 `@TableField` 显式驼峰列）；同表匹配到多个实体时静默取首个现于状态栏列出全部候选与已选项（如不符可开启「手动选择实体」切换）。
 
 ## [2026.10.6] - 2026-10-06
 
@@ -584,7 +616,7 @@
 - **自研 DAO 字符串 SQL**：新增 `StringSqlMethodGutterLineMarkerProviderTest`（177 行）；`JdbcTemplateMethodDetectorTest` / `JdbcTemplateSqlLocatorTest` / `WrapperAnchorDetectorTest` / `WrapperCacheTest` / `GutterIconDedupTest` 补例
 - **设置页缓存**：新增 `PluginCacheManagerCoverageTest`（5——快路径恒 0 B 复现 / 全口径非零 / 慢路径对照 / 清除归零 / 清除不实例化服务）
 - **自动监听联动**：新增 `SectionConfigurableAutoCaptureLinkageTest`（5——关→开清 suppressed / 联动不抛 / 保持开不清零 / 保持关不清零 / 开→关不清零）；`SqlLogManagerBehaviorTest` 增 T23~T28（进程级入口幂等 / 手动停止后再 Run 自动重启 / 被动不 armed / 降级 armed 防回归）
-- **竞品调研留档**：MyBatisCodeHelper-Pro 3.5.9 反编译对照（135 类）——其 SQL 日志仅支持 `Preparing:/Parameters:` 成对格式、用户多行样本同样不捕获；可取精华（consoleFilterProvider 稳定 EP / 尾部公共后缀降噪 / 批量写 UI）列 P2 调研，不做代码变更
+- **竞品能力对照留档**：MyBatisCodeHelper-Pro 3.5.9——其 SQL 日志仅支持 `Preparing:/Parameters:` 成对格式、用户多行样本同样不捕获；可借鉴点（consoleFilterProvider 稳定 EP / 尾部公共后缀降噪 / 批量写 UI）列 P2 调研，不做代码变更
 
 ## [2026.9.4] - 2026-09-04
 

@@ -396,6 +396,26 @@ final class SenderLoop implements Runnable {
         } else {
             StackLocator.setExtraBizJarPrefixes(new String[0]);
         }
+        // T-StackHoverUi：调用栈快照总帧数（"stackFrames":<整数>）。缺省键=**保持现值**——帧数是
+        // 用户显式配置，与名单「缺省键=清空」的语义不同；IDE 侧恒带该键（无空格冒号形态），
+        // 非数字/越界值由 AgentState.setStackMaxFrames 钳位兜底。
+        if (payload.contains("\"stackFrames\"")) {
+            final int keyAt = payload.indexOf("\"stackFrames\":");
+            if (keyAt >= 0) {
+                int from = keyAt + "\"stackFrames\":".length();
+                int to = from;
+                while (to < payload.length() && payload.charAt(to) >= '0' && payload.charAt(to) <= '9') {
+                    to++;
+                }
+                if (to > from) {
+                    try {
+                        AgentState.setStackMaxFrames(Integer.parseInt(payload.substring(from, to)));
+                    } catch (NumberFormatException ignore) {
+                        // 非法值保持现值（钳位入口亦兜底）
+                    }
+                }
+            }
+        }
         AgentState.markConfigApplied();
         // T-02：CONFIG 应用成功回执（取值取**应用后**的生效态，含本次生效的前缀条数）
         return configAckBody();

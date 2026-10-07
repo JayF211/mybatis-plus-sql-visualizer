@@ -84,6 +84,32 @@ class SqlToJavaConverterTest {
         assertTrue(SqlToJavaConverter.errorLine("SELECT * FROM t WHERE a = 'abc", ex.offset) >= 1)
     }
 
+    // ------------------------------------------------------------------
+    // T-SqlToJavaPromote M3：G7 参数化 apply / G8 UNION 降级注释
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `G7_函数条件_参数化apply_值与表达式分离`() {
+        val result = SqlToJavaConverter.parse("SELECT * FROM t WHERE DATE_FORMAT(create_time, '%Y') = '2024'")
+        val code = SqlToJavaConverter.generateCode(result, null, ReverseWrapperFormat.QUERY)
+        assertTrue(
+            code,
+            code.contains("apply(\"DATE_FORMAT(create_time, '%Y') = {0}\", \"2024\")"),
+        )
+    }
+
+    @Test
+    fun `G8_UNION_生成降级注释_不产不存在的union方法`() {
+        val result = SqlToJavaConverter.parse("SELECT id FROM t WHERE a = 1 UNION (SELECT id FROM t WHERE a = 2)")
+        assertEquals(1, result.unions.size)
+        assertEquals("UNION", result.unions[0].keyword)
+        val code = SqlToJavaConverter.generateCode(result, null, ReverseWrapperFormat.QUERY)
+        assertTrue(code, code.contains("UNION 子句需"))
+        assertTrue(code, code.contains("UNION SELECT id FROM t WHERE a = 2"))
+        // MP core 无 union() 方法——不得生成 union 调用
+        assertTrue(code, !code.contains(".union("))
+    }
+
     private fun candidate(className: String) = SqlToJavaConverter.EntityCandidate(
         psiClass = mockClass(className),
         tableInfo = cn.song.mybatisplus.visualizer.model.TableInfo(
