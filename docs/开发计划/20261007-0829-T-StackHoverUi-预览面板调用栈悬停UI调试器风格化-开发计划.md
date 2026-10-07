@@ -49,11 +49,13 @@
 
 ## §四 待验证前提（派工先证伪）
 
-1. **MouseChecker 触发语义**：`setCancelOnMouseOutCallback` 的 `check(MouseEvent)` 是鼠标移出弹层即触发还是移出触发组件即触发，sources 里语义不清——实施时先做最小真机实验再写判定（目标行为：弹层内移动鼠标不关，离开「弹层＋meta 行」区域才关）。
-2. **tooltip 接管互斥**：案 A 在役后 stackDigest 非空时 `toolTipText` 置 null，ToolTipManager 不再参与；需真机确认置 null 后无残留 tooltip 闪现（若 ToolTipManager 已缓存旧文本）。
-3. **HTML 转义完备**：案 C/M1 的 HTML tooltip 对帧串字段逐段转义；`$`、`<`、`>` 在 UI 树与 parser 测试里都要有样本（快照串经反编译类名与 lambda 会出现富符号形态）。
-4. **无栈路径零回归**：`stackDigest == null`（桥通道、旧历史条目、Wrapper/JPA/日志还原链）走原 tooltip 文案，meta 可见行与 P5 预算算法逐字不动。
-5. **弹层互斥**：`setBelongsToGlobalPopupStack` 默认 true 应已与平台其他 popup 互斥，真机确认与横幅/执行计划弹层不叠。
+实施后状态跟踪：
+
+1. **MouseChecker 触发语义**——已规避不再依赖：实施改用 `javax.swing.Timer` 单发防抖（悬停 400ms/移出宽限 300ms）＋ `MouseInfo` **实时指针**位置判定（事件坐标是越界瞬间旧值不可靠），`setCancelOnMouseOutCallback` 引用为零；ESC/点击外部/其他弹层由平台 popup 栈兜底。
+2. **tooltip 接管互斥**——形态变体：tooltip 未置 null 而是只含 meta/警示/perf（栈文本从来不在其中，无内容叠加）。时序上弹层 400ms 先于 tooltip 500ms 出现、光标随即进入弹层窗口使 label 触发 mouseExited，tooltip 理论上不再出现；**重复悬停时 ToolTipManager 的短重显延迟是否造成两浮层闪现叠加，转 V116 真机判定**——若见叠加，修复=栈非空时 `toolTipText` 置 null（一行，与计划原文一致），修复后复跑受影响分片。与计划「置 null」的偏差及理由（meta/警示/perf 的悬停兜底）记 §七。
+3. **HTML 转义完备**——已消解：C 案 HTML tooltip 不落地（M1/M2 同批，拍板注记），弹层走 SimpleColoredComponent 分片渲染无 HTML 通道，无转义面。
+4. **无栈路径零回归**——定向绿：`stackDigest == null` 时 tooltip 与可见行逐字同旧（MetaHintTooltipTest 4 例+StackDigestTest 13 例覆盖）；P5 预算算法零改动。
+5. **弹层互斥**——`setBelongsToGlobalPopupStack` 默认 true 依赖平台默认互斥，未显式设置；V116 真机走查与横幅/执行计划弹层并存场景确认。
 
 ## §五 编号台账
 
@@ -70,4 +72,14 @@
 ## §七 实施记录
 
 - 20261007 08:29 主控立项：现状两缺陷定位完毕（`SqlPreviewPanel.kt` tooltip 组装链）、参照物 API 面 243 sources.jar 逐签名核验完毕、计划落库待拍板，未动任何代码。
-- 20261007 拍板：**D84=按推荐（M1 止血＋M2 弹层为主形态）；D85=按推荐（点击帧跳源码纳入本期）**；**实施分支=主分支 master 直接实施**（§六分支条目作废；k2j 移植债条目维持）。实施注记：M1/M2 同会话同批交付、无中间观察窗，C 案 HTML tooltip 不再单独落地（留档），M1 收窄为「解析器＋tooltip 去栈去重」，最终 UX=M2 弹层全权承接悬停（stackDigest 非空时 tooltip 不再含栈文本）。
+- 20261007 拍板：**D84=按推荐（M1 止血＋M2 弹层为主形态）；D85=按推荐（点击帧跳源码纳入本期）**；**实施分支=主分支 master 直接实施**（§六分支条目作废；k2j 移植债条目维持）。实施注记：M1/M2 同会话同批交付、无中间观察窗，C 案 HTML tooltip 不再单独落地（留档），M1 收窄为「解析器＋tooltip 去栈去重」，最终 UX=M2 弹层全权承接悬停。
+- 20261007 实施落地（master 三笔：`178114a` 解析器+单测 / `084dc11` 弹层+接线+契约测试 / `97e116f` 本册）：
+  - 新文件 `StackDigestFrames.kt`（解析器）＋`StackFrameHover.kt`（悬停弹层控制器）；`SqlPreviewPanel` 接线（stackHover 字段、init 注册 attach、updateMeta 喂入、清空复位）；bundle 双语两键；测试三处（新增 StackDigestFramesTest 11 例、StackDigestTest 契约翻转 13 例、MetaHintTooltipTest 栈断言翻转 4 例）。
+  - **与计划偏差一处**：§三 D84 原文「A 在役后 stackDigest 非空时 toolTipText 置 null」——实施保留 tooltip＝meta/警示/perf 基线（悬停兜底信息可见性；栈文本本就不在其中），叠加风险转 V116 真机判定，见 §四.2。
+  - 定向验证：compileTestKotlin 绿（首跑暴露缺 `javax.swing.JList` 导入一处，即修即绿）；定向三类 11+13+4=28 例 0 失败（XML 报告实读计数）。
+  - 实施中 API 核验补强：Alarm 类改 `javax.swing.Timer`（仓内 historyAlarm 同款惯用法，少引新 API 面）；ActionLink 构造器、ColoredListCellRenderer.customizeCellRenderer、JBPopupListener.onClosed、RelativePoint(Component,Point) 均经 243 sources.jar/编译门核验。
+  - k2j 移植债：新增两 Kotlin 文件随 T-SyncK2JMaster 下一轮同步登记。
+- 20261007 收口门禁：
+  - **首轮作废（环境事故，非代码红）**：testShards 09:05 启动后 51 分钟无产出——整机提交配额被打满（崩溃时刻物理内存余 577M、页面文件余 7M，commit 顶到 ~76/74.7GB 上限；本机基线常量占用偏高＋本构建自身 5 分片叠加），4 条 OOM：shard1 worker JVM native 分配失败崩溃（hs_err_pid75216.log）、shard3 AttachGateTest 的 8GB 堆子 JVM 起不来（93 例 1 失败）、shard2/4/5 三 JVM 在 OOM 后僵住零产出。处置=TaskStop＋清自家 launcher/分片 JVM/gradle+Kotlin daemon（释放约 7GB，commit 回落 66→59GB，余量 15.7GB），**未动任何代码**。
+  - **重跑绿**：testShards **6204/0/0/9**（shard1 1176/6skip、shard2 1098、shard3 1596〔AttachGateTest 本次过，坐实前轮純环境〕、shard4 1172/2skip、shard5 1122；testExternal 40/0/1skip；9 skip=docker 离线常态），parity 对账过（542 类全出 XML），墙钟 3m48s（daemon 冷启含内）。
+  - verifyGate（新平台 API 面=大改动线）：**三目标全 Compatible**（IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63，2m11s）——deprecated/experimental 计数为既有基线噪音，无 incompatible。
