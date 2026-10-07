@@ -230,6 +230,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 脱敏开关（默认开）：对疑似敏感形态打码，agent 采集层执行。 */
     private val enhancedDesensitizeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize"))
 
+    /** T-StackHoverUi：调用栈快照总帧数（agent 两端采样预算；CONFIG 帧热下发）。 */
+    private val stackMaxFramesField = JBTextField(6)
+
     /** 增强捕获状态行：已挂载 pid=x / 未授权注入 / 已回落控制台捕获（T-CaptureTruth T-CT-01 五态）。 */
     private val enhancedStatusLabel = JBLabel(" ")
 
@@ -1029,6 +1032,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     }
                 })
                 addRow(p, g, "", enhancedDesensitizeCheck.apply { text = MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize") })
+                // T-StackHoverUi：调用栈快照总帧数（栈顶 B-8 帧＋栈底固定 8 帧；CONFIG 帧热下发 agent）
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames"), stackMaxFramesField.apply {
+                    toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames.tip")
+                })
                 addRow(p, g, "", enhancedStatusLabel)
                 // T-CaptureTruth T-CT-02：重新授权入口（仅未授权态可见，文本随语言重建刷新）
                 addRow(p, g, "", enhancedReauthButton.apply {
@@ -1615,6 +1622,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
             || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
             || enhancedDesensitizeCheck.isSelected != s.enhancedCaptureDesensitize
+            || stackMaxFramesField.text.trim().toIntOrNull() != s.enhancedCaptureStackMaxFrames
             || frameSkipPrefixesField.text.trim() != s.sourceFrameSkipPrefixes.trim()
             || bizJarPrefixesField.text.trim() != s.sourceFrameBizJarPrefixes.trim()
             || logHibernateEnabledCheck.isSelected != s.logHibernateEnabled
@@ -1726,6 +1734,13 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             s.enhancedCaptureEnabled = enhancedCaptureCheck.isSelected
             s.enhancedCaptureDesensitize = enhancedDesensitizeCheck.isSelected
+            // T-StackHoverUi：非法输入回缺省，越界钳位 [12,64]（agent 侧 setStackMaxFrames 同口径兜底）
+            s.enhancedCaptureStackMaxFrames = (stackMaxFramesField.text.trim().toIntOrNull()
+                ?: PluginSettings.DEFAULT_ENHANCED_CAPTURE_STACK_MAX_FRAMES)
+                .coerceIn(
+                    PluginSettings.MIN_ENHANCED_CAPTURE_STACK_MAX_FRAMES,
+                    PluginSettings.MAX_ENHANCED_CAPTURE_STACK_MAX_FRAMES,
+                )
             // T-SourceJumpFunnel P1-3：前缀规范化（逐行 trim、去空行）写回；下发走 SETTINGS_CHANGE_TOPIC
             s.sourceFrameSkipPrefixes = frameSkipPrefixesField.text.lines()
                 .map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
@@ -1894,6 +1909,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled
             enhancedDesensitizeCheck.isSelected = s.enhancedCaptureDesensitize
+            stackMaxFramesField.text = s.enhancedCaptureStackMaxFrames.toString()
             frameSkipPrefixesField.text = s.sourceFrameSkipPrefixes
             bizJarPrefixesField.text = s.sourceFrameBizJarPrefixes
             logHibernateEnabledCheck.isSelected = s.logHibernateEnabled

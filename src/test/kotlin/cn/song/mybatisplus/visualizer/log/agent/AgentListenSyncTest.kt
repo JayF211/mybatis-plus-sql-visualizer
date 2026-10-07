@@ -74,7 +74,8 @@ class AgentListenSyncTest : BasePlatformTestCase() {
             val body1 = String(ByteArray(len1).also { input.readFully(it) }, Charsets.UTF_8)
             assertEquals(AgentProtocol.CMD_CONFIG, cmd1)
             assertTrue("disabled=true 应入帧体: $body1", body1.contains("\"disabled\":true"))
-            assertEquals(AgentProtocol.configBody(disabled = true, desensitize = false), body1)
+            // T-StackHoverUi：sendConfig 实际走五参 configBody（列尾恒带 stackFrames，帧数取设置值缺省 24）
+            assertEquals(AgentProtocol.configBody(disabled = true, desensitize = false, emptyList(), emptyList(), 24), body1)
 
             session.sendConfig(disabled = false, desensitize = true)
             val len2 = input.readInt()

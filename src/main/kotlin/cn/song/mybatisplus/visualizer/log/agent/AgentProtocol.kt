@@ -58,8 +58,14 @@ object AgentProtocol {
      */
     const val ONLINE_WINDOW_MS = HEARTBEAT_INTERVAL_MS * 3
 
-    /** loadAgent 参数串（§4.3 k=v 契约，agent 侧 AgentArgs.parse 对应）。 */
-    fun agentArgs(port: Int, logLevel: String = "warn"): String = "port=$port;logLevel=$logLevel"
+    /**
+     * loadAgent 参数串（§4.3 k=v 契约，agent 侧 AgentArgs.parse 对应）。
+     * T-StackHoverUi：追加 `stackFrames`（调用栈快照总帧数；旧 agent 的 AgentArgs.parse 容忍未知键）。
+     * 缺省 24 与 PluginSettings.DEFAULT_ENHANCED_CAPTURE_STACK_MAX_FRAMES 同值
+     * （协议层不反向依赖 config 包；生产调用方一律显式传设置值）。
+     */
+    fun agentArgs(port: Int, logLevel: String = "warn", stackMaxFrames: Int = 24): String =
+        "port=$port;logLevel=$logLevel;stackFrames=$stackMaxFrames"
 
     /** CONFIG 帧 body：禁用/脱敏开关（agent 侧极简 contains 解析对应——键序固定）。 */
     fun configBody(disabled: Boolean, desensitize: Boolean): String =
@@ -74,16 +80,25 @@ object AgentProtocol {
     fun configBody(disabled: Boolean, desensitize: Boolean, skipPrefixes: List<String>): String =
         configBody(disabled, desensitize, skipPrefixes, emptyList())
 
+    /** 无 [stackMaxFrames] 的四参形态保留兼容（帧数取协议缺省 24）；生产走五参重载。 */
+    fun configBody(
+        disabled: Boolean,
+        desensitize: Boolean,
+        skipPrefixes: List<String>,
+        bizJarPrefixes: List<String>,
+    ): String = configBody(disabled, desensitize, skipPrefixes, bizJarPrefixes, stackMaxFrames = 24)
+
     /**
-     * T-ToolSiteBizFrame：CONFIG 帧再追加 JAR 业务帧反向名单
-     * （`"bizJarPrefixes":["a.","b."]`；空列表省略键，旧 agent contains 解析天然忽略未知键）。
-     * 语义与 skipPrefixes 相反（名单内包名的帧即使来自 JAR 也按业务帧对待），键彼此独立。
+     * T-StackHoverUi：CONFIG 帧再追加调用栈快照总帧数（`"stackFrames":<int>`，恒带键无空格——
+     * agent 侧 SenderLoop 按 `"stackFrames":` 定位后扫数字；缺省键=保持现值）。旧 agent contains
+     * 解析天然忽略未知键；CONFIG 回执（CMD_CONFIG_ACK）形态不动——帧数无需生效回执。
      */
     fun configBody(
         disabled: Boolean,
         desensitize: Boolean,
         skipPrefixes: List<String>,
         bizJarPrefixes: List<String>,
+        stackMaxFrames: Int,
     ): String {
         val clean = skipPrefixes.map { it.trim() }.filter { it.isNotEmpty() }
         val cleanBiz = bizJarPrefixes.map { it.trim() }.filter { it.isNotEmpty() }
@@ -98,6 +113,7 @@ object AgentProtocol {
         if (cleanBiz.isNotEmpty()) {
             parts += "\"bizJarPrefixes\":[" + cleanBiz.joinToString(",") { escapeArrayItem(it) } + "]"
         }
+        parts += "\"stackFrames\":$stackMaxFrames"
         return parts.joinToString(",", "{", "}")
     }
 

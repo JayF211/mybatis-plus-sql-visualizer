@@ -134,4 +134,16 @@ class StackDigestFramesTest {
         assertEquals("a.A", frames[0].fqcn)
         assertEquals(1, frames[0].line)
     }
+
+    @Test
+    fun test两端采样省略标记段_解析跳过() {
+        // T-StackHoverUi A 案：agent 中段省略标记（无 #）按不可解析段跳过，弹层只出帧
+        val frames = StackDigestFrames.parse(
+            "com.a.F1#m1:1<-com.a.F2#m2:2<-<…中间省略 37 帧…><-com.biz.Controller#list:42",
+        )
+        assertEquals(3, frames.size)
+        assertEquals("com.a.F2", frames[1].fqcn)
+        assertEquals("com.biz.Controller", frames[2].fqcn)
+        assertEquals(42, frames[2].line)
+    }
 }

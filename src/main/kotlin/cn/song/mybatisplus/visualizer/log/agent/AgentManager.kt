@@ -887,7 +887,14 @@ class AgentManager(private val project: Project) : Disposable {
             try {
                 vm = VirtualMachine.attach(pid.toString())
                 try {
-                    vm.loadAgent(jar.absolutePath, AgentProtocol.agentArgs(port))
+                    // T-StackHoverUi：随 attach 下发调用栈快照帧数预算（运行期可经 CONFIG 帧热更新）
+                    vm.loadAgent(
+                        jar.absolutePath,
+                        AgentProtocol.agentArgs(
+                            port,
+                            stackMaxFrames = PluginSettings.getInstance().state.enhancedCaptureStackMaxFrames,
+                        ),
+                    )
                 } catch (e: com.sun.tools.attach.AgentLoadException) {
                     // JDK8 二次挂载抛 AgentLoadException: 0——agent 可能已在目标 JVM 内，继续握手
                     LOG.warn("loadAgent AgentLoadException(${e.message})——按可能已挂载继续握手")
@@ -939,7 +946,12 @@ class AgentManager(private val project: Project) : Disposable {
         return when (val decision = PremainInjection.decide(true, true, jar != null, port)) {
             is PremainInjection.Decision.Inject -> {
                 LOG.info("premain 注入：端口 ${decision.port} 已前置协商（agent 回连前不阻塞用户 Run）")
-                PremainInjection.vmOption(jar!!.absolutePath, decision.port)
+                // T-StackHoverUi：-javaagent 选项随带调用栈快照帧数预算（premain 场景无 attach 二次下发）
+                PremainInjection.vmOption(
+                    jar!!.absolutePath,
+                    decision.port,
+                    PluginSettings.getInstance().state.enhancedCaptureStackMaxFrames,
+                )
             }
             is PremainInjection.Decision.Skip -> {
                 LOG.warn("premain 注入跳过：${decision.reason}——回落 attach/桥（零劣化）")
@@ -2059,7 +2071,10 @@ internal class AgentSession(
             // T-ToolSiteBizFrame：随 CONFIG 附带 JAR 业务帧反向名单（语义与跳过前缀相反，热下发）
             val bizPrefixes = PluginSettings.getInstance().state.sourceFrameBizJarPrefixes
                 .lineSequence().filter { it.isNotBlank() }.toList()
-            val body = AgentProtocol.configBody(disabled, desensitize, prefixes, bizPrefixes).toByteArray(Charsets.UTF_8)
+            // T-StackHoverUi：随 CONFIG 热下发调用栈快照帧数预算（设置改动即生效，无需重附 agent）
+            val stackMaxFrames = PluginSettings.getInstance().state.enhancedCaptureStackMaxFrames
+            val body = AgentProtocol.configBody(disabled, desensitize, prefixes, bizPrefixes, stackMaxFrames)
+                .toByteArray(Charsets.UTF_8)
             synchronized(output) {
                 output.writeInt(body.size)
                 output.write(AgentProtocol.CMD_CONFIG)
