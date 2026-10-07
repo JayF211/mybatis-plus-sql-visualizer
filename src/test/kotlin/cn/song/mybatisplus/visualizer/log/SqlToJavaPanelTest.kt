@@ -1048,8 +1048,7 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         assertTrue(
             "占位文案应含返回类型说明",
             placeholder.toString().contains("返回类型") || placeholder.toString().contains("Result type"),
-        )
-        // 选类按钮在场且可点（真机曾被报「类搜索弹框没了」）
+        )        // 选类按钮在场且可点（真机曾被报「类搜索弹框没了」）
         val button = field.pickButtonForTest()
         assertTrue("选类按钮应可见", button.isVisible || button.parent != null)
         assertEquals("选类按钮应可点（有 ActionListener）", 1, button.actionListeners.size)
@@ -1057,5 +1056,16 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         // 文本框可直接键入返回声明
         field.text = "List<Map<String, Object>>"
         assertEquals("List<Map<String, Object>>", field.text)
+    }
+
+    /**
+     * T-MapResultVo v3 修复（用户真机三轮反馈「不应该是点击下拉这种的」）：返回类型字段须为
+     * **纯输入框**（与「调用类」同款形态）——不得再是带下拉箭头与预置项列表的组合框
+     * （v2 的可编辑组合框把「固定枚举追不上真实形态」的老问题换个壳复现）。
+     */
+    fun testResultTypeFieldNoDropdown() {
+        val editor = panel.voFieldForTest().editorComponentForTest()
+        assertTrue("返回类型字段应为纯输入框: ${editor.javaClass.name}", editor is javax.swing.JTextField)
+        assertFalse("不得为组合框（无下拉）", editor is javax.swing.JComboBox<*>)
     }
 }

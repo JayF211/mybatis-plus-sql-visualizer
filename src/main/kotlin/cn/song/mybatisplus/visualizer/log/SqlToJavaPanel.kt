@@ -47,6 +47,7 @@ import com.intellij.psi.PsiClassOwner
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiModifier
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBTextField
 import com.intellij.ui.JBColor
 import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.IconScaler
@@ -775,12 +776,13 @@ class SqlToJavaPanel(
     }
 
     /**
-     * T-MapResultVo v2：返回类型字段——可编辑组合框（自由键入任意返回声明）+ 选类按钮（Goto Class）。
-     *
-     * 与 [ClassPickerField] 的差异：文本**可编辑**（支持任意返回声明的自由键入，如
-     * `List<HashMap<String, Object>>`、`List<Object>`、自定义类名），预置常用声明项；
-     * 选类按钮走同一 Goto Class 弹窗（选中后写入编辑框）。空值 = 自动（现状实体/VO 推断）。
-     * 生成器按声明形态派生调用族（含 Map→Maps 族、含 Object→Objs 族、其余按类名走 VO 语义）。
+     * T-MapResultVo v3：返回类型字段——**纯输入框 + 选类按钮**（与 [ClassPickerField] 同款观感，
+     * 见「调用类」行）。v2 的可编辑组合框仍带下拉箭头与预置项列表（固定枚举追不上真实形态的
+     * 老问题换个壳复现，用户真机三轮反馈「不应该是点击下拉这种的」）——本版彻底去掉下拉：
+     * 文本自由键入任意返回声明（`UserVo`、`List<HashMap<String, Object>>`、`List<Object>` 均可），
+     * 占位灰字说明「留空=自动（有实体推断实体/VO、无实体推断 Map 列表）」；
+     * 选类按钮走 Goto Class 弹窗（选中后写入输入框）。生成器按声明形态派生调用族
+     * （含 Map→Maps 族、含 Object→Objs 族、其余按类名走 VO 语义）。
      */
     internal inner class ReturnTypeField(
         private val projectRef: Project,
@@ -788,37 +790,14 @@ class SqlToJavaPanel(
         private val onChanged: () -> Unit = {},
     ) : JPanel(BorderLayout()) {
 
-        private val combo = JComboBox<String>().apply {
-            isEditable = true
-            addItem("")
-            addItem("List<Map<String, Object>>")
-            addItem("List<Object>")
+        private val typeInput = JBTextField().apply {
             toolTipText = placeholder
             // 空值占位灰字（JTextField.placeholderText 客户属性，JBR 支持）——与 ClassPickerField 占位观感对齐
-            (editor.editorComponent as? javax.swing.JTextField)?.let { tf ->
-                tf.putClientProperty("JTextField.placeholderText", placeholder)
-                // 编辑提交（失焦）触发重生成——回车由 combo ActionListener 覆盖
-                tf.addFocusListener(object : java.awt.event.FocusAdapter() {
-                    override fun focusLost(e: java.awt.event.FocusEvent?) = onChanged()
-                })
-            }
-            // 下拉列表内空项显示「自动」短文案（列表项不承载长占位）
-            renderer = object : DefaultListCellRenderer() {
-                override fun getListCellRendererComponent(
-                    list: JList<*>?,
-                    value: Any?,
-                    index: Int,
-                    isSelected: Boolean,
-                    cellHasFocus: Boolean,
-                ): Component {
-                    val c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
-                    if ((value as? String).isNullOrEmpty()) {
-                        (c as? JLabel)?.text = MpSqlVisualizerBundle.message("reverse.panel.resultType.auto")
-                        (c as? JLabel)?.foreground = UIUtil.getInactiveTextColor()
-                    }
-                    return c
-                }
-            }
+            putClientProperty("JTextField.placeholderText", placeholder)
+            // 编辑提交（失焦）触发重生成；回车由 JTextField ActionListener 覆盖
+            addFocusListener(object : java.awt.event.FocusAdapter() {
+                override fun focusLost(e: java.awt.event.FocusEvent?) = onChanged()
+            })
             addActionListener { onChanged() }
         }
 
@@ -848,28 +827,28 @@ class SqlToJavaPanel(
             isOpaque = false
             preferredSize = Dimension(1, JBUI.scale(24))
             minimumSize = Dimension(1, JBUI.scale(24))
-            add(combo, BorderLayout.CENTER)
+            add(typeInput, BorderLayout.CENTER)
             add(actionButtonHost, BorderLayout.EAST)
         }
 
         /** 对外文本（生成器读取返回声明；测试直接赋值不触发变更回调——对齐 ClassPickerField 语义）。 */
         var text: String
-            get() = (combo.editor.item as? String) ?: ""
+            get() = typeInput.text ?: ""
             set(value) {
-                combo.editor.item = value
+                typeInput.text = value
             }
 
         /** 测试缝：占位灰字（空值提示可见性）。 */
         internal fun placeholderTextForTest(): Any? =
-            (combo.editor.editorComponent as? javax.swing.JTextField)?.getClientProperty("JTextField.placeholderText")
+            typeInput.getClientProperty("JTextField.placeholderText")
 
         /** 测试缝：选类按钮（可见性/可点性断言）。 */
         internal fun pickButtonForTest(): JButton = pickButton
 
         /** 测试访问器：编辑器组件（占位/文本行为断言）。 */
-        internal fun editorComponentForTest(): java.awt.Component = combo.editor.editorComponent
+        internal fun editorComponentForTest(): java.awt.Component = typeInput
 
-        /** 选类（Goto Class 弹窗，裸模型——返回类型字段无 this/baseMapper 调用类特殊项）；选中写回编辑框。 */
+        /** 选类（Goto Class 弹窗，裸模型——返回类型字段无 this/baseMapper 调用类特殊项）；选中写回输入框。 */
         private fun pickClass() {
             val model = GotoClassModel2(projectRef)
             val popup = ChooseByNamePopup.createPopup(projectRef, model, null)
@@ -877,7 +856,7 @@ class SqlToJavaPanel(
                 override fun elementChosen(element: Any?) {
                     val cls = element as? PsiClass ?: return
                     val name = ReadAction.compute<String?, Throwable> { cls.name } ?: return
-                    combo.editor.item = name
+                    typeInput.text = name
                     onChanged()
                 }
 
