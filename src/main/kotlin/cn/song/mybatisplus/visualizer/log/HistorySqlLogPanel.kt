@@ -315,6 +315,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         currentFile = null
         currentFileStamp = null
         currentEntries = emptyList()
+        pendingEntries = emptyList() // F85（T-PerfSweep24）：返回一级清挂起批次（有 showing 守卫不误消费，清掉免滞留）
         sqlClickPreview.hide() // 返回一级时若二级预览弹窗还开着，一并关掉
         refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = false）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
