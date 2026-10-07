@@ -273,19 +273,42 @@ object WrapperAnchorDetector {
         return false
     }
 
-    /** 获取元素所在行文本（O(1) 按偏移量计算）。 */
+    /**
+     * 获取元素所在行文本。
+     *
+     * F71（T-PerfSweep22）：改 Document 行定位 + TextRange 一次取——原实现每 leaf 双向
+     * 逐字符扫行界（同一行 N 个 leaf 付 N 次全行扫描 + `file.text` 整取），Document 的
+     * 行号→行界是常量级索引，`getText(TextRange)` 只拷一次行文本。
+     * Document 取不到（无项目/已 dispose）回退原字符扫描路径，语义不变。
+     */
     private fun getLineText(element: PsiElement): String? {
         val file = element.containingFile ?: return null
-        val text = file.text ?: return null
         val offset = element.textRange.startOffset
-        if (offset < 0 || offset >= text.length) return null
+        val document = runCatching {
+            com.intellij.psi.PsiDocumentManager.getInstance(file.project).getDocument(file)
+        }.getOrNull()
+        if (document != null && offset in 0..document.textLength) {
+            return runCatching {
+                val line = document.getLineNumber(offset)
+                document.getText(
+                    com.intellij.openapi.util.TextRange(
+                        document.getLineStartOffset(line),
+                        document.getLineEndOffset(line),
+                    ),
+                )
+            }.getOrNull() ?: legacyScanLineText(file, offset)
+        }
+        return legacyScanLineText(file, offset)
+    }
 
-        // 找到行首和行尾
+    /** F71：原路径回退（Document 不可用时；逐字符扫行界）。 */
+    private fun legacyScanLineText(file: com.intellij.psi.PsiFile, offset: Int): String? {
+        val text = file.text ?: return null
+        if (offset < 0 || offset >= text.length) return null
         var lineStart = offset
         while (lineStart > 0 && text[lineStart - 1] != '\n') lineStart--
         var lineEnd = offset
         while (lineEnd < text.length && text[lineEnd] != '\n') lineEnd++
-
         return text.substring(lineStart, lineEnd)
     }
 

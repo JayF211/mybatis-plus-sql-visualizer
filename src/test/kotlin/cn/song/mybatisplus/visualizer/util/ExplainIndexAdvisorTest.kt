@@ -238,4 +238,26 @@ class ExplainIndexAdvisorTest {
         // FORMAT=TREE 变体等非预期列名——不猜（空输出）
         assertTrue(ExplainIndexAdvisor.advise("MySQL", listOf("EXPLAIN"), rows = listOf(listOf("foo"))).isEmpty())
     }
+
+    // ---------- F59（T-PerfSweep18）：文本树 Regex 提 object 单例 ----------
+
+    /**
+     * 同一 Pattern 实例断言：object 属性只在初始化时求值一次，两次读引用同一实例；
+     * pattern 文本与原函数体内现场字面量逐字一致（提常量零语义漂移）。
+     * 红绿判别由 convention.InFunctionRegexSourceScanTest 承担（回退即函数体 Regex 复现）。
+     */
+    @Test
+    fun `F59_Pattern单例_object属性同实例且pattern文本不变`() {
+        val first = ExplainIndexAdvisor.SEQ_SCAN_ON
+        assertTrue("object 属性两次读必须同一实例", first === ExplainIndexAdvisor.SEQ_SCAN_ON)
+        assertTrue("object 属性两次读必须同一实例", ExplainIndexAdvisor.PLAN_TEXT_ROWS === ExplainIndexAdvisor.PLAN_TEXT_ROWS)
+        assertEquals("Seq Scan on (\\w+)", first.pattern)
+        assertEquals("rows=(\\d+)", ExplainIndexAdvisor.PLAN_TEXT_ROWS.pattern)
+        // 行为锚：文本树解析仍命中（Seq Scan + 估算行数超阈）
+        val pgRows = listOf(listOf("Seq Scan on big_table  (cost=0.00..1.01 rows=99999 width=4)"))
+        val hints = ExplainIndexAdvisor.advise("postgresql", listOf("QUERY PLAN"), pgRows)
+        assertEquals(1, hints.size)
+        assertEquals("SEQ_SCAN", hints[0].rule)
+        assertEquals("big_table", hints[0].target)
+    }
 }

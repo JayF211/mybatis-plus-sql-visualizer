@@ -120,6 +120,14 @@ internal const val REFRESH_FIRST_BATCH_SIZE = 30
 internal const val REFRESH_CHUNK_SIZE = 30
 
 /**
+ * F80（T-PerfSweep24）：flushRebuildChainSync 单拍同步补完封顶——默认设置（logMaxCount=200）
+ * 在途余量 ≤170 全量补完（行为不变）；用户调大 logMaxCount 至数千时，超出部分不再单拍
+ * 同步写数千条模型（EDT 冻结随 logMaxCount 线性放大），改由 appendRebuildChunk 逐拍链推进、
+ * 本拍刷新挂起链尾补跑。
+ */
+internal const val FLUSH_SYNC_MAX = 512
+
+/**
  * 日志条目列表（T-M42）：覆写 JBList.itemToText——内置 Ctrl+C 复制默认返回 cellRenderer
  * 渲染文本（HTML 源码，用户实测缺陷），覆写后复制输出纯 SQL（多选逐条换行拼接、
  * CopyPasteManager 写入、Ctrl+C 快捷键注册均由 JBList 既有链路复用）。
@@ -1469,7 +1477,9 @@ class SqlLogPanel(
         // T-SqlLogPerf P5（20261006-1020 计划）：上一轮全量重建链未走完就来了新刷新时，增量差分会被
         // 「model.size != lastRendered.size」拒绝 → 每次刷新都重启重建链，风暴期列表永远停在首屏 30 条
         // （用户体感「监听加载有延迟」的实态）。进差分前同步补完剩余批次，让差分基线对齐。
-        flushRebuildChainSync()
+        // F80（T-PerfSweep24）：超大余量时补完让路（false＝本拍刷新挂起，链尾补跑）——单拍同步写
+        // 量不再随 logMaxCount 线性放大。
+        if (!flushRebuildChainSync()) return
         val snapshot = LogPerfProbe.measure("LogPanel.refreshList.snapshot", { "size=${manager.entries.size()}" }) {
             manager.entries.snapshot()
         }
@@ -1589,6 +1599,9 @@ class SqlLogPanel(
     /** T-SqlLogPerf P5：在途全量重建链的剩余游标（null = 无在途链）。 */
     private var rebuildRemaining: Iterator<LogSqlEntry>? = null
 
+    /** F80：链后补跑挂起标志（超大余量让路本拍刷新，链排空即补跑一次）。 */
+    private var pendingRefreshAfterChain = false
+
     /** 追加一批（REFRESH_CHUNK_SIZE 条）；写完仍有余量则排下一拍。 */
     private fun appendRebuildChunk() {
         val remaining = rebuildRemaining ?: return
@@ -1598,6 +1611,10 @@ class SqlLogPanel(
         rebuildRemaining = if (remaining.hasNext()) remaining else null
         if (rebuildRemaining != null) {
             ApplicationManager.getApplication().invokeLater { appendRebuildChunk() }
+        } else if (pendingRefreshAfterChain) {
+            // F80：链排空——补跑挂起的刷新（风暴期多次挂起合并为一次补跑）
+            pendingRefreshAfterChain = false
+            ApplicationManager.getApplication().invokeLater { refreshList() }
         }
     }
 
@@ -1607,16 +1624,28 @@ class SqlLogPanel(
      * 旧形态：重建链在途时 `listModel.size != lastRendered.size`，增量差分必被拒绝 → 风暴期
      * 每 200ms 的新刷新都重启重建链，链永远走不完，列表停在首屏 30 条且反复 clear/addAll 白耗 EDT。
      * 补完后 model 与 lastRendered 对齐，后续刷新走增量差分。
+     *
+     * F80（T-PerfSweep24）补完保留分批：余量 ≤ [FLUSH_SYNC_MAX]（默认设置 ≤170）照旧单拍同步
+     * 补完——默认行为逐字不变；余量超大（用户 logMaxCount 数千）不再单拍同步写数千条
+     * （EDT 冻结随 logMaxCount 线性放大），本拍刷新让路（返回 false 挂起），在途链沿用
+     * appendRebuildChunk 逐拍语义推进（每拍 30 条 EDT 脉冲），链排空补跑挂起刷新——
+     * 风暴期新刷新不再反复 clear+重启链，列表从首屏 30 条起逐拍长满。
      */
-    private fun flushRebuildChainSync() {
-        val remaining = rebuildRemaining ?: return
+    private fun flushRebuildChainSync(): Boolean {
+        val remaining = rebuildRemaining ?: return true
+        val rest = remaining.asSequence().toList()
+        if (rest.size > FLUSH_SYNC_MAX) {
+            // 超大余量：让路——链保持推进（rebuildRemaining 不动），本拍刷新挂起
+            pendingRefreshAfterChain = true
+            return false
+        }
         rebuildRemaining = null
         list.ignoreRepaint = true
-        val rest = remaining.asSequence().toList()
         if (rest.isNotEmpty()) listModel.addAll(rest)
         list.ignoreRepaint = false
         list.revalidate()
         list.repaint()
+        return true
     }
 
     /** 按当前排序模式排序条目。 */
@@ -2124,6 +2153,8 @@ class SqlLogPanel(
     override fun dispose() {
         // T-Perf-24：停止搜索防抖 Timer（防晚到 apply 触碰已销毁面板）
         searchDebounceTimer.stop()
+        // F80：撤链后补跑挂起标志（防 dispose 后晚到 invokeLater 触碰已销毁面板）
+        pendingRefreshAfterChain = false
         // T-CaptureTruth T-CT-03：停止诊断定时器（同上，防晚到 syncDiagnostics 触碰已销毁列表）
         diagnosticsTimer?.stop()
         diagnosticsTimer = null

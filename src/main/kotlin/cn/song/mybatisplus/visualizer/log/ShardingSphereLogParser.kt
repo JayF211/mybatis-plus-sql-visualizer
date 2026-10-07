@@ -48,6 +48,13 @@ class ShardingSphereLogParser(
         /** Actual 段折叠缓冲（关键字后原文逐行）。 */
         val actualLines = mutableListOf<String>()
 
+        /**
+         * F66（T-PerfSweep18）：[actualLines] join 后的总字符数（含 `\n` 分隔符）的累积计数器——
+         * 追加前置判长不再全缓冲 joinToString 重建整串（每 Actual 行 O(已累积) → O(1)）。
+         * 与 closeBucketPending 的 `joinToString("\n")` 结果恒等（追加时同步加分隔符）。
+         */
+        var actualJoinedLength = 0
+
         /** 参数（取首个带 `Parameters:` 段的 Actual 行）。 */
         val pendingParams = mutableListOf<LogSqlParam>()
     }
@@ -69,15 +76,27 @@ class ShardingSphereLogParser(
         feedInto(router.bucketFor(line), line)
     }
 
+    /**
+     * F58（T-PerfSweep18 压轴）：喂入一行＋**已提取**的线程 token（热路径每行一次下传，
+     * 语义与 [feed] 自提逐字等价；token=null 走 fail-open 回退）。
+     */
+    fun feed(line: String, threadToken: String?) {
+        feedInto(router.bucketForToken(threadToken), line)
+    }
+
     private fun feedInto(bucket: Bucket, line: String) {
         // 1. Actual SQL 行 → 折叠附注（PENDING 态才有上下文；IDLE 态丢弃）
         val actualSegment = extractAfterKeyword(line, ACTUAL_SQL_PREFIX)
         if (actualSegment != null) {
             val logic = bucket.logicSql ?: return // 未配对 Actual 丢弃（等待态配对先例同口径）
+            // F66：判长走累积计数器（等价于 joinToString("\n").length，免去整串重建）
             if (logic.isNotEmpty() && bucket.actualLines.size < MAX_ACTUAL_LINES &&
-                bucket.actualLines.joinToString("\n").length < maxParseLength
+                bucket.actualJoinedLength < maxParseLength
             ) {
-                bucket.actualLines += actualSegment.take(maxParseLength)
+                val segment = actualSegment.take(maxParseLength)
+                if (bucket.actualLines.isNotEmpty()) bucket.actualJoinedLength++ // 行间分隔符
+                bucket.actualJoinedLength += segment.length
+                bucket.actualLines += segment
                 if (bucket.pendingParams.isEmpty()) {
                     bucket.pendingParams += extractParams(actualSegment)
                 }
@@ -139,6 +158,7 @@ class ShardingSphereLogParser(
         val actual = bucket.actualLines.joinToString("\n")
         val params = bucket.pendingParams.toList()
         bucket.actualLines.clear()
+        bucket.actualJoinedLength = 0
         bucket.pendingParams.clear()
         if (logic.isBlank()) return null
         val entry = LogSqlEntry(

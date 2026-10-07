@@ -381,7 +381,7 @@ class SqlPreviewService(private val project: Project) {
             if (specPreview != null) {
                 val result = PreviewResult(
                     sql = specPreview.sql,
-                    compactSql = specPreview.sql.replace(Regex("\\s+"), " ").trim(),
+                    compactSql = specPreview.sql.replace(SQL_WHITESPACE_RUN, " ").trim(),
                     unresolvedParams = specPreview.paramSources,
                     paramTable = ParameterReplacer.buildParamTable(specPreview.paramSources),
                     paramHints = specPreview.paramHints,
@@ -397,7 +397,7 @@ class SqlPreviewService(private val project: Project) {
             if (examplePreview != null) {
                 val result = PreviewResult(
                     sql = examplePreview.sql,
-                    compactSql = examplePreview.sql.replace(Regex("\\s+"), " ").trim(),
+                    compactSql = examplePreview.sql.replace(SQL_WHITESPACE_RUN, " ").trim(),
                     unresolvedParams = examplePreview.paramSources,
                     paramTable = ParameterReplacer.buildParamTable(examplePreview.paramSources),
                     paramHints = examplePreview.paramHints,
@@ -475,7 +475,7 @@ class SqlPreviewService(private val project: Project) {
         if (eq != null) {
             return PreviewResult(
                 sql = eq.sql,
-                compactSql = eq.sql.replace(Regex("\\s+"), " ").trim(),
+                compactSql = eq.sql.replace(SQL_WHITESPACE_RUN, " ").trim(),
                 unresolvedParams = eq.paramSources,
                 paramTable = ParameterReplacer.buildParamTable(eq.paramSources),
                 paramHints = eq.paramHints,
@@ -490,7 +490,7 @@ class SqlPreviewService(private val project: Project) {
         if (mds != null) {
             return PreviewResult(
                 sql = mds.sql,
-                compactSql = mds.sql.replace(Regex("\\s+"), " ").trim(),
+                compactSql = mds.sql.replace(SQL_WHITESPACE_RUN, " ").trim(),
                 unresolvedParams = mds.paramSources,
                 paramTable = ParameterReplacer.buildParamTable(mds.paramSources),
                 paramHints = mds.paramHints,
@@ -504,7 +504,7 @@ class SqlPreviewService(private val project: Project) {
         if (qd != null) {
             return PreviewResult(
                 sql = qd.sql,
-                compactSql = qd.sql.replace(Regex("\\s+"), " ").trim(),
+                compactSql = qd.sql.replace(SQL_WHITESPACE_RUN, " ").trim(),
                 unresolvedParams = qd.paramSources,
                 paramTable = ParameterReplacer.buildParamTable(qd.paramSources),
                 paramHints = qd.paramHints,
@@ -633,7 +633,7 @@ class SqlPreviewService(private val project: Project) {
                 notes += pageSort.notes
                 pageSort.limit?.let { limit ->
                     if (limitAppliedInModel ||
-                        JpaQueryEnhancer.containsTopLevelClause(enhanced, Regex("(?i)\\b(LIMIT|OFFSET|FETCH)\\b"))
+                        JpaQueryEnhancer.containsTopLevelClause(enhanced, LIMIT_OFFSET_FETCH_CLAUSE)
                     ) {
                         if (!limitAppliedInModel) {
                             notes += "查询内已含分页子句，方法分页参数以查询内为准（预览不重复追加）"
@@ -643,7 +643,7 @@ class SqlPreviewService(private val project: Project) {
                     }
                 }
                 if (pageSort.orderBy.isNotEmpty()) {
-                    if (JpaQueryEnhancer.containsTopLevelClause(enhanced, Regex("(?i)\\bORDER\\s+BY\\b"))) {
+                    if (JpaQueryEnhancer.containsTopLevelClause(enhanced, ORDER_BY_CLAUSE)) {
                         notes += "查询内已含 ORDER BY，Sort 参数运行时与其合并"
                     } else {
                         enhanced += "\nORDER BY " + pageSort.orderBy.joinToString(", ") {
@@ -686,8 +686,7 @@ class SqlPreviewService(private val project: Project) {
      * `FROM t_user u` → `u`；无别名/别名是 SQL 关键字 → 表名本名。
      */
     private fun detectMainAlias(sql: String, table: TableInfo): String = runCatching {
-        val regex = Regex("(?i)\\bFROM\\s+[`\"(]*([\\w.]+)[`\"]*)\\s+([a-zA-Z_][\\w$]*)")
-        val match = regex.find(sql)
+        val match = FROM_TABLE_ALIAS.find(sql)
         val alias = match?.groupValues?.get(2)
         if (alias == null || SQL_CLAUSE_KEYWORDS.any { alias.equals(it, ignoreCase = true) }) {
             table.tableName
@@ -735,7 +734,7 @@ class SqlPreviewService(private val project: Project) {
             return PreviewResult(
                 sql = enhancedSql,
                 // 无增强时保持旧字节级行为（convertedSql 原样），有增强时压缩多行空白
-                compactSql = if (enhancedSql == convertedSql) convertedSql else enhancedSql.replace(Regex("\\s+"), " ").trim(),
+                compactSql = if (enhancedSql == convertedSql) convertedSql else enhancedSql.replace(SQL_WHITESPACE_RUN, " ").trim(),
                 unresolvedParams = allParamNames,
                 paramTable = ParameterReplacer.buildParamTable(allParamNames),
                 paramHints = hints,
@@ -793,6 +792,31 @@ class SqlPreviewService(private val project: Project) {
     // T-JpaParamOrder F6：静态值字面量形态（数字含 Java 类型后缀 / 枚举常量引用）
     private val NUMERIC_LITERAL = Regex("-?\\d+(\\.\\d+)?[LlFfDd]?")
     private val ENUM_CONSTANT_REF = Regex("[A-Za-z_$][A-Za-z0-9_$.]*\\.[A-Z][A-Z0-9_]*")
+
+    // T-PerfSweep24 F84：函数体内现场 Regex 提常量（本文件 18 处收敛；含 :1289 命名参数
+    // 与既有 NATIVE_NAMED_PARAM 同 pattern 直接收编复用）。同型守卫＝convention.InFunctionRegexSourceScanTest。
+    /** 预览 SQL 折叠空白（compactSql 构建处共用，12 处）。 */
+    private val SQL_WHITESPACE_RUN = Regex("\\s+")
+
+    /** JPA 查询内顶层分页子句探测（LIMIT/OFFSET/FETCH）。 */
+    private val LIMIT_OFFSET_FETCH_CLAUSE = Regex("(?i)\\b(LIMIT|OFFSET|FETCH)\\b")
+
+    /** JPA 查询内顶层 ORDER BY 探测。 */
+    private val ORDER_BY_CLAUSE = Regex("(?i)\\bORDER\\s+BY\\b")
+
+    /**
+     * 主表别名探测：`FROM t_user u`（detectMainAlias 用）。
+     * F84 附带修正：原函数体内字面量带一个多余的 `)`（unbalanced paren——PatternSyntaxException
+     * 被 detectMainAlias 的 runCatching 长期吞掉，别名探测实际一直走表名兜底）；提常量后构造期
+     * 即爆出，顺手摘除多余括号恢复 KDoc 声明的探测语义。
+     */
+    private val FROM_TABLE_ALIAS = Regex("(?i)\\bFROM\\s+[`\"(]*([\\w.]+)[`\"]*\\s+([a-zA-Z_][\\w$]*)")
+
+    /** HQL 位置参数 `?N`（extractParamNamesFromHql 用）。 */
+    private val POSITIONAL_PARAM_INDEX = Regex("\\?(\\d+)")
+
+    /** 集合元素类型提取：`Collection<X>`/`List<X>`/`Set<X>`（参数数字面量判定用）。 */
+    private val GENERIC_COLLECTION_TYPE = Regex("""(?:Collection|List|Set)<(.+)>""")
 
     /**
      * T-JpaParamOrder F6：setParameter 静态值求值——参数框初值自动回显。
@@ -1010,7 +1034,7 @@ class SqlPreviewService(private val project: Project) {
         val usableNamedSources = usableNamedPlaceholderSources(enhancedSql, extractNativeParamNames(info.hql))
         return PreviewResult(
             sql = enhancedSql,
-            compactSql = enhancedSql.replace(Regex("\\s+"), " ").trim(),
+            compactSql = enhancedSql.replace(SQL_WHITESPACE_RUN, " ").trim(),
             unresolvedParams = allParamNames,
             paramTable = ParameterReplacer.buildParamTable(allParamNames),
             paramHints = (usableNamedSources ?: allParamNames).map { ParamHint(quote = !isNumericParam(info.method, it)) },
@@ -1162,7 +1186,7 @@ class SqlPreviewService(private val project: Project) {
                 val usableNamedSources = usableNamedPlaceholderSources(enhancedSql, extractNativeParamNames(query.queryText))
                 PreviewResult(
                     sql = enhancedSql,
-                    compactSql = enhancedSql.replace(Regex("\\s+"), " ").trim(),
+                    compactSql = enhancedSql.replace(SQL_WHITESPACE_RUN, " ").trim(),
                     unresolvedParams = paramNames,
                     paramTable = ParameterReplacer.buildParamTable(paramNames),
                     paramHints = (usableNamedSources ?: paramNames).map { ParamHint(quote = true) },
@@ -1219,7 +1243,7 @@ class SqlPreviewService(private val project: Project) {
         val preview = SpecificationQueryConverter.convert(call, effectiveReplaceParams()) ?: return null
         val result = PreviewResult(
             sql = preview.sql,
-            compactSql = preview.sql.replace(Regex("\\s+"), " ").trim(),
+            compactSql = preview.sql.replace(SQL_WHITESPACE_RUN, " ").trim(),
             unresolvedParams = preview.paramSources,
             paramTable = ParameterReplacer.buildParamTable(preview.paramSources),
             paramHints = preview.paramHints,
@@ -1243,7 +1267,7 @@ class SqlPreviewService(private val project: Project) {
         val preview = QueryByExampleConverter.convert(call, effectiveReplaceParams()) ?: return null
         val result = PreviewResult(
             sql = preview.sql,
-            compactSql = preview.sql.replace(Regex("\\s+"), " ").trim(),
+            compactSql = preview.sql.replace(SQL_WHITESPACE_RUN, " ").trim(),
             unresolvedParams = preview.paramSources,
             paramTable = ParameterReplacer.buildParamTable(preview.paramSources),
             paramHints = preview.paramHints,
@@ -1271,7 +1295,7 @@ class SqlPreviewService(private val project: Project) {
         }
         val result = PreviewResult(
             sql = sql,
-            compactSql = sql.replace(Regex("\\s+"), " ").trim(),
+            compactSql = sql.replace(SQL_WHITESPACE_RUN, " ").trim(),
             unresolvedParams = emptyList(),
             paramTable = null,
             wrapperType = null,
@@ -1286,9 +1310,9 @@ class SqlPreviewService(private val project: Project) {
      * 支持命名参数（:paramName）和位置参数（?1 → param1, ?2 → param2）。
      */
     private fun extractParamNamesFromHql(hql: String): List<String> {
-        val namedParams = Regex("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)").findAll(hql)
+        val namedParams = NATIVE_NAMED_PARAM.findAll(hql)
             .map { it.groupValues[1] }.toList()
-        val positionalParams = Regex("\\?(\\d+)").findAll(hql)
+        val positionalParams = POSITIONAL_PARAM_INDEX.findAll(hql)
             .map { "param${it.groupValues[1]}" }.toList()
         return (namedParams + positionalParams).distinct()
     }
@@ -1343,7 +1367,7 @@ class SqlPreviewService(private val project: Project) {
         } else emptyList()
         return PreviewResult(
             sql = convertedSql,
-            compactSql = convertedSql.replace(Regex("\\s+"), " ").trim(),
+            compactSql = convertedSql.replace(SQL_WHITESPACE_RUN, " ").trim(),
             unresolvedParams = paramNames,
             paramTable = ParameterReplacer.buildParamTable(paramNames),
             paramHints = paramHints,
@@ -1373,8 +1397,7 @@ class SqlPreviewService(private val project: Project) {
             type is com.intellij.psi.PsiClassType -> {
                 val className = type.canonicalText
                 // 常见集合类型：Collection<X>, List<X>, Set<X>
-                val genericPattern = Regex("""(?:Collection|List|Set)<(.+)>""")
-                val match = genericPattern.find(className)
+                val match = GENERIC_COLLECTION_TYPE.find(className)
                 if (match != null) match.groupValues[1] else className
             }
             type is com.intellij.psi.PsiArrayType -> type.componentType.canonicalText

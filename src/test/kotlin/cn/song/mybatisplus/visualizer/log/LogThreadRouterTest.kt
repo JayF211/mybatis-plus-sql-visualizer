@@ -117,4 +117,35 @@ class LogThreadRouterTest {
         assertEquals(false, looksLikeLogLine("42(Long), abc(String)", "Preparing:", "Parameters:"))
         assertEquals(false, looksLikeLogLine("", "Preparing:"))
     }
+
+    // ---------- F58（T-PerfSweep18 压轴）：token 每行提一次下传 ----------
+
+    /**
+     * bucketForToken（预提 token 路由）与 bucketFor（行内自提）逐行等价：
+     * 同一 router 上同序喂同一批行，每行先走 bucketFor 记住结果桶、再「重放」预提 token
+     * 走 bucketForToken——同 token/同 null 必须命中同一桶实例。
+     * 这是「每行提一次下传四解析器」重构的等价性锚——喂行方一次提取经 bucketForToken
+     * 下传后，分桶行为与各解析器自提时逐字一致。
+     */
+    @Test
+    fun `F58_bucketForToken与bucketFor逐行等价`() {
+        val lines = listOf(
+            "2026-09-15 13:47:17.843 [TID: AE51C] [http-nio-8088-exec-4] DEBUG c.Foo - Preparing: x",
+            "2026-08-21 10:00:00.124 TRACE [main] o.h.h.i.QueryTranslatorImpl : select",
+            "business log without any marker",
+            "2026-09-16 10:00:00.000 DEBUG x [12345] y",
+        )
+        val r = router()
+        for (line in lines) {
+            val viaLine = r.bucketFor(line)
+            val token = LogThreadRouter.threadTokenOf(line)
+            assertSame(
+                "预提 token 路由须与行内自提同桶：$line",
+                viaLine,
+                r.bucketForToken(token),
+            )
+        }
+        // token=null 的 fail-open 回退：稳定落共享桶
+        assertSame(r.bucketForToken(null), r.bucketForToken(null))
+    }
 }

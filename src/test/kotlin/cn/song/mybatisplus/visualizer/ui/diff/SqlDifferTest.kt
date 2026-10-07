@@ -131,4 +131,58 @@ class SqlDifferTest {
             DiffType.values().map { it.name }.toSet(),
         )
     }
+
+    // ---------- F61（T-PerfSweep18）：LCS 行数上限护栏——超限降级逐行并排 ----------
+
+    /**
+     * 阈值边界双面：同形态输入（前置插入 1 行）在阈值内走 LCS 全局对齐（2 条目）、
+     * 超限走逐行并排（整体移位致每行错位都出对）。
+     * 反向验证锚：摘掉 computeDiff 的降级分支后，「超限降级」用例会以 LCS 对齐产出
+     * 2 条目（而非 2*行数）→ 断言 2002 红。
+     */
+    @Test
+    fun `F61_阈值边界_恰1000行走LCS全局对齐`() {
+        val old = (1..1000).joinToString("\n") { "line_$it" }
+        val new = ("line_prepended\n$old").split("\n").take(1000).joinToString("\n")
+        assertEquals(1000, new.split("\n").size)
+        val diff = SqlDiffer.computeDiff(old, new)
+        // LCS：前置 1 行插入 + 尾行删除 = 2 条目
+        assertEquals("阈值内须全局对齐（2 条目）", 2, diff.size)
+        assertEquals(DiffType.INSERT, diff.first().type)
+        assertEquals("line_prepended", diff.first().newLine)
+        assertEquals(DiffType.DELETE, diff.last().type)
+        assertEquals("line_1000", diff.last().oldLine)
+    }
+
+    @Test
+    fun `F61_超限降级_逐行并排不再付平方DP`() {
+        val old = (1..1001).joinToString("\n") { "line_$it" }
+        val new = "line_prepended\n" + (1..1000).joinToString("\n") { "line_$it" }
+        assertEquals(1001, new.split("\n").size)
+        val start = System.currentTimeMillis()
+        val diff = SqlDiffer.computeDiff(old, new)
+        val elapsed = System.currentTimeMillis() - start
+        // 逐行并排：前插致整体移位、1001 行全错位 → 1001 DELETE + 1001 INSERT = 2002 条目
+        assertEquals("超限须逐行并排（2002 条目）", 2002, diff.size)
+        assertEquals(1001, diff.count { it.type == DiffType.DELETE })
+        assertEquals(1001, diff.count { it.type == DiffType.INSERT })
+        assertTrue("降级路径应远快于 1001² DP（实际 ${elapsed}ms）", elapsed < 100)
+        // 行号形态仍符合契约：首对 DELETE 旧行号 1、INSERT 新行号 1
+        assertEquals(1, diff.first { it.type == DiffType.DELETE }.oldLineNumber)
+        assertEquals(1, diff.first { it.type == DiffType.INSERT }.newLineNumber)
+    }
+
+    /** 降级路径同位相等行不产出条目（与主路径「仅返回非 EQUAL」口径一致）。 */
+    @Test
+    fun `F61_降级路径_同位相等行跳过_条目形态契约不变`() {
+        val old = (1..1001).joinToString("\n") { "line_$it" }
+        val new = (1..1000).joinToString("\n") { "line_$it" } + "\nline_tail_new"
+        val diff = SqlDiffer.computeDiff(old, new)
+        // 同位 line_1..line_1000 全等不产出；仅尾行改写 → 1 DELETE + 1 INSERT
+        assertEquals(2, diff.size)
+        assertEquals("line_1001", diff.first { it.type == DiffType.DELETE }.oldLine)
+        assertEquals("line_tail_new", diff.first { it.type == DiffType.INSERT }.newLine)
+        assertEquals(1001, diff.first { it.type == DiffType.DELETE }.oldLineNumber)
+        assertEquals(1001, diff.first { it.type == DiffType.INSERT }.newLineNumber)
+    }
 }

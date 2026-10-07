@@ -79,8 +79,18 @@ internal class LogThreadRouter<B : Any>(
     }
 
     /** 按行路由到对应桶。 */
-    fun bucketFor(line: String): B {
-        val token = threadTokenOf(line)
+    fun bucketFor(line: String): B = bucketForToken(threadTokenOf(line))
+
+    /**
+     * 按已提取的线程 token 路由到对应桶。
+     *
+     * F58（T-PerfSweep18 压轴）：控制台桥的逐行热路径把同一行喂最多四个解析器，原先每个解析器
+     * 各自 `bucketFor(line)` → [threadTokenOf] 重提同一 token（同一行最多算 4 次：双 substring
+     * 窗口 + 级别锚正则 + 方括号段扫描）。现喂行方（processConsoleLine / 嗅探路径 / 批量转换面板 /
+     * MCP 渲染工具）**每行提一次**下传全部解析器，经本口路由——[bucketFor] 保留为单解析器
+     * 调用方（既有测试等）的兼容薄壳；token=null 的 fail-open 回退语义逐字不变。
+     */
+    fun bucketForToken(token: String?): B {
         if (token != null) {
             buckets[token]?.let { recent = it; return touch(it) }
             if (buckets.size >= maxBuckets) evictIdle()

@@ -210,4 +210,47 @@ class ShardingSphereLogParserTest {
             ).isEmpty(),
         )
     }
+
+    // ---------- F66（T-PerfSweep18）：判长走累积长度计数器（行为等价件） ----------
+
+    /**
+     * maxParseLength 边界等价锚：Actual 折叠判长与旧「joinToString 整串长度」口径一致——
+     * 追加前按已累积长度（含 `\n` 分隔符）判界，越界行不再折叠。
+     * F66 为纯性能件（每 Actual 行 O(已累积)→O(1)），无行为判别面：本用例与全类复跑
+     * 即「行为等价＋既有守卫」读数；反向摘除计数器回退 joinToString 判长，本用例仍绿（等价即设计目标）。
+     */
+    @Test
+    fun `F66_判长计数器_边界口径与joinToString等价`() {
+        // 段长 19/20：第 1 行累积 19（<40 收）；第 2 行追加前累积 19（<40）→ 收后 40；第 3 行追加前 40 ≥40 → 拒收
+        // （夹具统一短前缀——Logic/Actual 同为 `[main]` 短前缀形态，threadTokenOf 两边都提得 token、同桶配对；
+        //  长日期前缀会把 `[main]` 推出 35 字符窗口、Logic 行提不到 token 落 fallback 桶致跨桶失配）
+        val parser = ShardingSphereLogParser(maxParseLength = 40)
+        parser.feed("[INFO] 17:00:00.000 [main] s - Logic SQL: SELECT 1")
+        parser.feed("[INFO] 17:00:00.001 [main] s - Actual SQL: 0123456789012345678")
+        parser.feed("[INFO] 17:00:00.002 [main] s - Actual SQL: abcdefghijabcdefghij")
+        parser.feed("[INFO] 17:00:00.003 [main] s - Actual SQL: rejected-line-!!")
+        parser.closePending()
+        val entries = parser.takeEntries()
+        assertEquals(1, entries.size)
+        val lines = entries[0].actualSql!!.split("\n")
+        assertEquals("边界口径等价：恰收前两行（第三行追加前累积 40≥40 拒收）", 2, lines.size)
+        assertEquals("0123456789012345678", lines[0])
+        assertEquals("abcdefghijabcdefghij", lines[1])
+    }
+
+    /** 闭合后计数器复位：跨语句第二条的 Actual 折叠重新起算（不复用上一条的累积值）。 */
+    @Test
+    fun `F66_计数器闭合复位_下一条语句重新起算`() {
+        val parser = ShardingSphereLogParser(maxParseLength = 40)
+        parser.feed("[INFO] 17:00:00.000 [main] s - Logic SQL: SELECT 1")
+        parser.feed("[INFO] 17:00:00.001 [main] s - Actual SQL: 0123456789012345678")
+        parser.feed("[INFO] 17:00:00.002 [main] s - Actual SQL: abcdefghijabcdefghij")
+        // 下一条 Logic 闭合上一条并开启新收集
+        parser.feed("[INFO] 17:00:00.010 [main] s - Logic SQL: SELECT 2")
+        parser.feed("[INFO] 17:00:00.011 [main] s - Actual SQL: fresh-line-ok")
+        parser.closePending()
+        val entries = parser.takeEntries()
+        assertEquals(2, entries.size)
+        assertEquals("fresh-line-ok", entries[1].actualSql)
+    }
 }

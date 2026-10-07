@@ -11,6 +11,7 @@ import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -71,6 +72,26 @@ class PaginationSimTest : BasePlatformTestCase() {
         val state = PluginSettings.getInstance().state
         state.dialectAuto = false
         state.dialect = name
+    }
+
+    // ------------------------------------------------------------------
+    // F60（T-PerfSweep18）：LIMIT 探测 Regex 提 object 单例
+    // ------------------------------------------------------------------
+
+    /**
+     * 同一 Pattern 实例断言：object 属性只在初始化时求值一次，两次读引用同一实例；
+     * pattern 文本与原函数体内现场字面量逐字一致；行为锚＝V13c 保守口径不变
+     * （已含 LIMIT 不重复追加，大小写不敏感）。
+     */
+    fun testF60Pattern单例object属性同实例且行为不变() {
+        val first = PaginationSimulator.LIMIT_CLAUSE
+        assertTrue("object 属性两次读必须同一实例", first === PaginationSimulator.LIMIT_CLAUSE)
+        assertEquals("(?i)\\bLIMIT\\b", first.pattern)
+        // 行为锚（V13c）：已含 LIMIT（任意大小写）判 true，未含判 false
+        assertTrue(PaginationSimulator.hasExistingLimit("select * from t limit 10"))
+        assertTrue(PaginationSimulator.hasExistingLimit("SELECT 1 LIMIT 1"))
+        assertFalse(PaginationSimulator.hasExistingLimit("select * from t_limited_user"))
+        assertFalse(PaginationSimulator.hasExistingLimit("select 1"))
     }
 
     // ------------------------------------------------------------------

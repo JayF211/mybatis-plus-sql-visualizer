@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.log.HibernateLogParser
 import cn.song.mybatisplus.visualizer.log.JdbcTemplateLogParser
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry
+import cn.song.mybatisplus.visualizer.log.LogThreadRouter
 import cn.song.mybatisplus.visualizer.log.MyBatisLogParser
 import cn.song.mybatisplus.visualizer.log.ShardingSphereLogParser
 import com.intellij.mcpserver.annotations.McpDescription
@@ -151,10 +152,12 @@ open class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
                 maxParseLength = defaults.maxParseLength,
             )
             logText.lineSequence().forEach { line ->
-                myBatis.feed(line)
-                hibernate.feed(line)
-                jdbc.feed(line)
-                if (defaults.shardingEnabled) sharding.feed(line)
+                // F58（T-PerfSweep18 压轴）：同一行喂四解析器——线程 token 每行只提一次下传
+                val threadToken = LogThreadRouter.threadTokenOf(line)
+                myBatis.feed(line, threadToken)
+                hibernate.feed(line, threadToken)
+                jdbc.feed(line, threadToken)
+                if (defaults.shardingEnabled) sharding.feed(line, threadToken)
             }
             myBatis.closePending()
             hibernate.closePending()
