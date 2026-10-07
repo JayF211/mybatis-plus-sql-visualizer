@@ -13,6 +13,16 @@ package cn.song.mybatisplus.visualizer.ui.diff
 object SqlDiffer {
 
     /**
+     * F61（T-PerfSweep18）：LCS 行数上限护栏——千行级阈值。
+     *
+     * DP 表成本 O(M*N)（时间与 int 表内存都随行数平方膨胀）：千行级内是类 KDoc 既有
+     * 性能红线覆盖区（<1000 行 <100ms）；超限输入（外部粘入的超大 SQL/全文对比）走
+     * [sideBySideDiff] 逐行并排降级——按下标对齐、同位相等记 EQUAL、否则 DELETE+INSERT
+     * 成对，不做全局对齐。**computeDiff(old, new) → List<DiffEntry> 契约不变**
+     * （R31「恰两条可用」历史对比入口与 DiffEntry 形态照旧消费）。
+     */
+    internal val LCS_LINE_LIMIT = 1000
+    /**
      * 差异类型。
      *
      * 刻意不设 CHANGE（行被修改）：差异类型的唯一消费形态是按类型分派的渲染，而 O-4 的自研
@@ -47,10 +57,30 @@ object SqlDiffer {
     fun computeDiff(oldSql: String?, newSql: String): List<DiffEntry> {
         val oldLines = if (oldSql.isNullOrEmpty()) emptyList() else oldSql.split("\n")
         val newLines = if (newSql.isEmpty()) emptyList() else newSql.split("\n")
+        // F61：超限降级逐行并排（契约不变，仅内部算法切换）
+        if (oldLines.size > LCS_LINE_LIMIT || newLines.size > LCS_LINE_LIMIT) {
+            return sideBySideDiff(oldLines, newLines)
+        }
         // LCS 动态规划表
         val lcs = computeLCS(oldLines, newLines)
         // 回溯构造差异序列（仅返回非 EQUAL 条目，减少下游处理负担）
         return backtrack(lcs, oldLines, newLines).filter { it.type != DiffType.EQUAL }
+    }
+
+    /**
+     * F61：降级路径——逐行并排（同下标相等跳过，否则 DELETE+INSERT 成对；单侧越界只出存在侧）。
+     * 与主路径同口径：EQUAL 不产出（下游只消费差异条目）。
+     */
+    private fun sideBySideDiff(old: List<String>, new: List<String>): List<DiffEntry> {
+        val result = mutableListOf<DiffEntry>()
+        for (idx in 0 until maxOf(old.size, new.size)) {
+            val o = old.getOrNull(idx)
+            val n = new.getOrNull(idx)
+            if (o != null && n != null && o == n) continue
+            if (o != null) result.add(DiffEntry(DiffType.DELETE, idx + 1, null, o, null))
+            if (n != null) result.add(DiffEntry(DiffType.INSERT, null, idx + 1, null, n))
+        }
+        return result
     }
 
     /** 计算 LCS 长度表（动态规划）。 */
