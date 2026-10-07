@@ -1,7 +1,7 @@
 {
-  "version": "2026.10.6",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.6/mybatis-plus-sql-visualizer-2026.10.6.zip",
-  "changeNotes": "@Embedded 嵌入值对象识别补全，JPA 点路径覆写、Spring Data 形态与 prefix、MP 混合注解实体展平\nSQL 日志屏蔽，右键一键屏蔽保活心跳类 SQL，管理对话框支持结构匹配与拖拽缩放\n新增 OceanBase 与 openGauss 方言，方言扩至 11 种，执行计划与连接串推断同步支持\n通用 XML 内嵌 SQL 识别，自研框架自定义标签内的 SQL 与 HQL 可直接预览\nXML 预览 List 参数按签名拆分多值渲染\n空参数填充策略三态化，默认保留 ? 占位提示，可切换 NULL 与空字符串\n注入无法识别项目类型时改引导开启增强捕获\n无别名 HQL 裸属性与嵌入段限定符位列名映射修复\n嵌入段驼峰路径在派生查询中的伪列修复\nforeach 集合元素值渲染修复，数值元素不再误加引号、所填值不再丢失\nXML 预览无 Wrapper 参数语句误报红色警示修复\n控制台通道在仅有语句行的工程零产出修复\npremain 注入范围收窄，不再落入 Gradle 测试与 IDE 任务的 fork 进程\nT-SQL 控制流批次切分误合并修复\n回滚产物含 identity 包装时静态检查误报与默认执行不完整修复\nMCP 只读闸门误杀同名标量函数修复，SQL Server 方括号语句不再整类拒绝\nSQL Server 方括号语句在性能建议与批量合并链不再静默降级\nagent 通道慢拨号不再被误判为正常掉线",
-  "publishDate": "2026-10-06",
+  "version": "2026.10.7",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.7/mybatis-plus-sql-visualizer-2026.10.7.zip",
+  "changeNotes": "JPA 链式 setParameter 参数预览错位修复，参数按名回填与书写顺序解耦\n参数字面量与枚举常量自动预填参数框\nSQL 日志工具栏新增滚动到底部动作与尾部跟随\n并发 SQL 日志监听与历史加载性能优化\n参数占位启发式复合词误报修复\n帮助页与 Marketplace 自定义页文案精简",
+  "publishDate": "2026-10-07",
   "sinceBuild": "243"
 }

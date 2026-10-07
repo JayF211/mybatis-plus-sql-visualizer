@@ -306,6 +306,7 @@ flowchart TD
 | 审核状态确认 | 登录作者后台（<https://plugins.jetbrains.com/author/me>）→ My Plugins → 版本列表 | 核对 Pending 更新的版本号与上传内容：预期内的新版本核对 changeNotes 后等审核放行；误传/过期/内容不明的包后台撤回（撤回不可逆，处置前对版本列表截图留档） |
 | 自更新清单 | `./gradlew writeUpdateManifest` → 人工补 changeNotes | 生成 `update/update.json`；changeNotes 末尾补一行 ≤60 字 Marketplace 评分引导（中性措辞，如「好用的话，欢迎到 Marketplace 页评分留言（搜 SQL Visualizer）」，无激励、无模板评语） |
 | Gitee Release | 网页创建 Release，附同名 zip | 自更新 downloadUrl 指向这里 |
+| Marketplace 自定义页 | 复制 `docs/发行说明/marketplace-custom-page.md` 全文（去掉首行维护者注释）→ 插件后台 Documentation 标签粘贴保存 | 该编辑器**仅渲染 Markdown**（HTML / style / CSS 被剥除）；功能文案变更时必须与 `src/main/resources/html/marketplace-custom-page.html`（IDE 内「帮助」按钮 JCEF 渲染版，完整样式）**两版同步更新，不能只改其一**；New / Ultimate 徽章为官网托管 SVG（`sql-visualizer.jvtools.cn/badges/tag-*.svg`），与 HTML 版药丸同款配色 |
 | 双推 | `scripts/push-all.sh` | 源码链接保持最新 |
 
 > ⚠️ 两渠道版本号必须一致（update.json version = Marketplace 版本），否则用户侧会出现「检查更新有新版但市场无」的困惑。
@@ -366,8 +367,9 @@ flowchart TD
 □ 8. Marketplace 表单：Apache-2.0 + 源码链接（GitHub）+ tags + 截图
 □ 9. 沙盒 runIde 冒烟：zip 安装后功能正常
 □ 10.（可选）签名配置后：signPlugin + verifyPluginSignature
-□ 11. **上传新版后在 Marketplace 后台确认 listing 显示名已同步为 SQL Visualizer，页面 slug URL 不变**
-□ 12. **上传新版后在 Marketplace 后台确认审核状态（Pending 清零或结论留档）**
+□ 11. **Marketplace 自定义页已更新**：Documentation 标签粘贴 `docs/发行说明/marketplace-custom-page.md` 全文（去首行维护者注释），Preview 确认后保存；功能文案有变时确认与 `src/main/resources/html/marketplace-custom-page.html` 两版同步
+□ 12. **上传新版后在 Marketplace 后台确认 listing 显示名已同步为 SQL Visualizer，页面 slug URL 不变**
+□ 13. **上传新版后在 Marketplace 后台确认审核状态（Pending 清零或结论留档）**
 ```
 
 ---

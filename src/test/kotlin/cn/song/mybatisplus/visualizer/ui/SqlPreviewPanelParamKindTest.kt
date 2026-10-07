@@ -52,6 +52,7 @@ class SqlPreviewPanelParamKindTest : BasePlatformTestCase() {
               AND id IN (#{ids}) AND status = #{status}
               AND name = #{userIds} AND addr = #{address}
               AND ext = #{params}
+              AND loc = #{locationStatus} AND ord = #{orderStatus}
           </select>
         </mapper>
     """.trimIndent()
@@ -114,6 +115,18 @@ class SqlPreviewPanelParamKindTest : BasePlatformTestCase() {
         )
         // address：以 s 结尾但在单数词排除表内 → 无提示（宁缺勿错）
         assertEquals("UNKNOWN 单数词无提示", "", p.paramEmptyTextForTest(5))
+        // O-111 追加（用户 demo 实测）：复合驼峰词以单数词结尾 → 无提示
+        // （改前排除表只做全名匹配，locationStatus 被误配集合占位 [1, 2, 3]）
+        assertEquals(
+            "UNKNOWN 复合词 locationStatus 无提示",
+            "",
+            p.paramEmptyTextForTest(7),
+        )
+        assertEquals(
+            "UNKNOWN 复合词 orderStatus 无提示",
+            "",
+            p.paramEmptyTextForTest(8),
+        )
     }
 
     // ------------------------------------------------------------------

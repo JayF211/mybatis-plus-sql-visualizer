@@ -49,7 +49,8 @@ class CopyExecutableSqlAction(private val project: Project?) {
         }
         // 复制时剥离 SQL 注释（与 copySql 对齐）
         val sql = SqlCommentStripper.strip(raw)
-        val sources = panel.unresolvedParams()
+        // T-JpaParamOrder F3：JPA 占位符名序优先（按名回填），与面板渲染同口径
+        val sources = panel.backfillSources()
         val paramValues = panel.paramValuesSnapshot()
 
         val executableSql = if (sources.isEmpty()) {

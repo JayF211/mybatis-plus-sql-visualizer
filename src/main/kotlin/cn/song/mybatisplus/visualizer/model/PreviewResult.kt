@@ -82,4 +82,16 @@ data class PreviewResult(
      * null = 无分页 COUNT（未分页 / count·exists 消费 / searchCount=false / 开关关闭）。
      */
     val countSql: String? = null,
+    /**
+     * T-JpaParamOrder F3：JPA 命名参数占位符名序（HQL `:name` 首现序，与转换后 SQL 中 `?` 一一对应）。
+     * 非空时渲染/复制按名回填（同名占位复用同值，JPA 命名参数语义），与 setParameter 书写顺序解耦；
+     * 空表 = 维持按序回填（既有语义）。仅当全部 `?` 均来自命名参数替换时才置非空（位置参数混入时
+     * 数量不齐，服务端置空回退按序），由 [cn.song.mybatisplus.visualizer.ui.SqlPreviewService] 出口保证。
+     */
+    val placeholderParamNames: List<String> = emptyList(),
+    /**
+     * T-JpaParamOrder F5：同名命名参数多次 setParameter 的参数名集合（JPA 覆盖语义，运行时以
+     * 最后一次为准）。面板据此给「写重」轻提示；空集 = 无重复。
+     */
+    val duplicateParamNames: Set<String> = emptySet(),
 )
