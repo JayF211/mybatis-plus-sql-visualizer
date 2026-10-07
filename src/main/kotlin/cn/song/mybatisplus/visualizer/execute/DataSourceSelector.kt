@@ -230,14 +230,7 @@ object DataSourceSelector {
     fun rememberedDataSourceName(project: Project): String? {
         val memory = lastUsedRunner(project)
         if (memory.dataSourceId.isNullOrBlank() && memory.displayName.isNullOrBlank()) return null
-        val (registeredNames, nameById) = rememberedLookupForTest?.invoke(project) ?: run {
-            DataSourceSettings.getAllDataSources(project).map { DataSourceSettings.getName(it) } to
-                { id: String ->
-                    runCatching {
-                        DataSourceSettings.getDataSourceById(project, id)?.let { DataSourceSettings.getName(it) }
-                    }.getOrNull()
-                }
-        }
+        val (registeredNames, nameById) = rememberedLookupForTest?.invoke(project) ?: rememberedRoster(project)
         return resolveRememberedDataSourceName(memory, registeredNames, nameById)
     }
 
@@ -249,6 +242,29 @@ object DataSourceSelector {
     ): String? =
         resolveLastUsedRunnerIndex(memory, registeredNames, dataSourceNameById)
             .index?.let { registeredNames.getOrNull(it) }
+
+    /**
+     * F68a（T-PerfSweep20）：在籍数据源名单按 project 弱缓存——指示行取名链每次刷新
+     * 不再现场建表（原每次 getAllDataSources 反射枚举+逐名 getName 反射）。
+     * WeakHashMap 弱键随 project 关闭释放；名单陈旧窗口＝数据源增删后到下次进程内
+     * 首次重建——只影响展示回退路径的「未绑定/旧名」判定，绑定优先级最高的活控制台
+     * 取名（[boundConsoleDataSourceName]）不走本表。测试缝（[rememberedLookupForTest]）
+     * 优先于本缓存，headless 用例不受影响。
+     */
+    private val rememberedRosters =
+        java.util.WeakHashMap<Project, Pair<List<String>, (String) -> String?>>()
+
+    private fun rememberedRoster(project: Project): Pair<List<String>, (String) -> String?> =
+        synchronized(rememberedRosters) {
+            rememberedRosters.getOrPut(project) {
+                DataSourceSettings.getAllDataSources(project).map { DataSourceSettings.getName(it) } to
+                    { id: String ->
+                        runCatching {
+                            DataSourceSettings.getDataSourceById(project, id)?.let { DataSourceSettings.getName(it) }
+                        }.getOrNull()
+                    }
+            }
+        }
 
     /** O-96 测试辅助：headless 直写 last-used 记忆双键（生产写入口 [rememberRunner] 为 private）。 */
     internal fun plantLastUsedMemoryForTest(project: Project, id: String?, name: String?) {

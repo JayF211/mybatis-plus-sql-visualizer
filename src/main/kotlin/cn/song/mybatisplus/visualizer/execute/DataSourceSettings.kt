@@ -70,11 +70,11 @@ class DataSourceSettings : PersistentStateComponent<DataSourceSettings.State> {
          */
         fun getAllDataSources(project: Project): List<Any> {
             return runCatching {
-                val storageClass = Class.forName(DS_STORAGE_CLASS)
-                val getStorageMethod = storageClass.getMethod("getStorage", Project::class.java)
-                val storage = getStorageMethod.invoke(null, project) ?: return emptyList()
-                val getDataSourcesMethod = storageClass.getMethod("getDataSources")
-                val dataSources = getDataSourcesMethod.invoke(storage) as? List<*> ?: return emptyList()
+                val storageClass = cachedClass(DS_STORAGE_CLASS) ?: return emptyList()
+                val storage = cachedMethod(storageClass, "getStorage", Project::class.java)
+                    ?.invoke(null, project) ?: return emptyList()
+                val dataSources = cachedMethod(storageClass, "getDataSources")
+                    ?.invoke(storage) as? List<*> ?: return emptyList()
                 dataSources.filterNotNull()
             }.getOrDefault(emptyList())
         }
@@ -84,11 +84,10 @@ class DataSourceSettings : PersistentStateComponent<DataSourceSettings.State> {
          */
         fun getDataSourceById(project: Project, id: String): Any? {
             return runCatching {
-                val storageClass = Class.forName(DS_STORAGE_CLASS)
-                val getStorageMethod = storageClass.getMethod("getStorage", Project::class.java)
-                val storage = getStorageMethod.invoke(null, project) ?: return null
-                val getByIdMethod = storageClass.getMethod("getDataSourceById", String::class.java)
-                getByIdMethod.invoke(storage, id)
+                val storageClass = cachedClass(DS_STORAGE_CLASS) ?: return null
+                val storage = cachedMethod(storageClass, "getStorage", Project::class.java)
+                    ?.invoke(null, project) ?: return null
+                cachedMethod(storageClass, "getDataSourceById", String::class.java)?.invoke(storage, id)
             }.getOrNull()
         }
 
@@ -105,8 +104,9 @@ class DataSourceSettings : PersistentStateComponent<DataSourceSettings.State> {
          */
         fun getName(ds: Any): String {
             return runCatching {
-                val getNameMethod = Class.forName(LOCAL_DS_CLASS).getMethod("getName")
-                getNameMethod.invoke(ds) as? String ?: "Unknown"
+                cachedClass(LOCAL_DS_CLASS)?.let { cls ->
+                    cachedMethod(cls, "getName")?.invoke(ds) as? String
+                } ?: "Unknown"
             }.getOrDefault("Unknown")
         }
 
@@ -115,8 +115,9 @@ class DataSourceSettings : PersistentStateComponent<DataSourceSettings.State> {
          */
         fun getUniqueId(ds: Any): String? {
             return runCatching {
-                val getUniqueIdMethod = Class.forName(LOCAL_DS_CLASS).getMethod("getUniqueId")
-                getUniqueIdMethod.invoke(ds) as? String
+                cachedClass(LOCAL_DS_CLASS)?.let { cls ->
+                    cachedMethod(cls, "getUniqueId")?.invoke(ds) as? String
+                }
             }.getOrNull()
         }
 
@@ -125,9 +126,33 @@ class DataSourceSettings : PersistentStateComponent<DataSourceSettings.State> {
          */
         fun getIcon(ds: Any): javax.swing.Icon? {
             return runCatching {
-                val getIconMethod = Class.forName(LOCAL_DS_CLASS).getMethod("getIcon")
-                getIconMethod.invoke(ds) as? javax.swing.Icon
+                cachedClass(LOCAL_DS_CLASS)?.let { cls ->
+                    cachedMethod(cls, "getIcon")?.invoke(ds) as? javax.swing.Icon
+                }
             }.getOrNull()
+        }
+
+        // ---------- F68a（T-PerfSweep20）：反射 Class/Method 记忆化 ----------
+        //
+        // 比照 SqlLogConsoleBridge.methodCache 范式（:695）：预览绑定指示行取名链每次刷新
+        // 现场 forName+getMethod 建表，Community/无 Database 插件下 forName 恒抛更要逐次付——
+        // 收敛为首次付；负缓存用 Optional（CHM 禁 null），键含类名防跨类撞键。
+
+        private val classCache = java.util.concurrent.ConcurrentHashMap<String, java.util.Optional<Class<*>>>()
+
+        private val methodCache =
+            java.util.concurrent.ConcurrentHashMap<String, java.util.Optional<java.lang.reflect.Method>>()
+
+        private fun cachedClass(fqcn: String): Class<*>? =
+            classCache.getOrPut(fqcn) {
+                java.util.Optional.ofNullable(runCatching { Class.forName(fqcn) }.getOrNull())
+            }.orElse(null)
+
+        private fun cachedMethod(clazz: Class<*>, name: String, vararg paramTypes: Class<*>): java.lang.reflect.Method? {
+            val key = "${clazz.name}#$name(${paramTypes.joinToString(",") { it.name }})"
+            return methodCache.getOrPut(key) {
+                java.util.Optional.ofNullable(runCatching { clazz.getMethod(name, *paramTypes) }.getOrNull())
+            }.orElse(null)
         }
     }
 }
