@@ -87,4 +87,27 @@ object LogEntryJumpOps {
     fun showMissingSourceGuide(project: Project) {
         SourceCaptureGuide.showMissingSourceDialog(project)
     }
+
+    /**
+     * **实时页口径**的整体跳转（S1 后由 [SqlLogPanel] 右键与弹框右键共用——两处同文案同反馈，
+     * 不收进共享件就会各写一份）：精确位置 → 打开定位；`NoSource`/`NotFound` → 轻通知
+     * （键 `log.panel.jumpToSource.*`）；`MissingSource` → 源码捕获引导。
+     *
+     * 历史页口径**不同**（`MissingSource` 并入引导、`NotFound` 用 `log.history.*` 键），
+     * 故不并入本函数——策略差异是既成事实，共享件只收口相同的部分。
+     */
+    fun jumpToSourceRealtime(project: Project, entry: LogSqlEntry) {
+        when (val target = resolveSource(project, entry)) {
+            is SourceTarget.Precise -> navigate(project, target.virtualFile, target.line)
+            SourceTarget.NoSource ->
+                showToast(project, "log.panel.jumpToSource", MpSqlVisualizerBundle.message("log.panel.jumpToSource.noSource"))
+            is SourceTarget.NotFound ->
+                showToast(
+                    project,
+                    "log.panel.jumpToSource",
+                    MpSqlVisualizerBundle.message("log.panel.jumpToSource.notFound", target.sourceFile),
+                )
+            SourceTarget.MissingSource -> showMissingSourceGuide(project)
+        }
+    }
 }

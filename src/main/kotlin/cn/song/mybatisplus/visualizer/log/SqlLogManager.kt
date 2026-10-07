@@ -170,6 +170,15 @@ class SqlLogManager(private val project: Project) : Disposable {
 
     private val autoShowBufferListener = { maybeAutoShow() }
 
+    /**
+     * T-RecentExecMenu O-119：面板外「把条目送进工具窗页签」通道（弹框右键「发送到 SQL → Java /
+     * 日志转 SQL」用）。两块页签面板（`sqlToJavaPanel` / `logToSqlPanel`）是 [SqlLogPanel] 的私有
+     * 字段，面板外不可达——回调形态照抄 [onAutoShowRequest]（面板 init 注册、dispose 注销；
+     * 未注册 = 工具窗未创建，调用方按「未就绪」轻提示降级，不静默）。
+     */
+    @Volatile
+    internal var onOpenEntryInTab: ((LogSqlEntry, LogEntryTab) -> Unit)? = null
+
     init {
         // T-SqlSuppress：初始同步一次屏蔽键集 + 订阅规则变更（dispose 注销）；
         // 命中计数归账同挂专用出口（被拦条目不触发其他任何回调）。
@@ -641,8 +650,19 @@ class SqlLogManager(private val project: Project) : Disposable {
     }
 }
 
-/** 解析器配置（桥创建 parser 用；纯数据）。 */
-data class ParserConfig(
+/**
+ * T-RecentExecMenu O-119：可承接日志条目的工具窗页签（[SqlLogManager.onOpenEntryInTab] 的目标）。
+ * 面板外调用方只表达「送到哪个页签」，页面切换与装载细节留在 [SqlLogPanel]。
+ */
+enum class LogEntryTab {
+    /** 日志转 SQL（第二页签）：条目渲染回日志文本并转换。 */
+    LOG_TO_SQL,
+
+    /** SQL → Java（第三页签）：还原 SQL 写入输入区。 */
+    SQL_TO_JAVA,
+}
+
+/** 解析器配置（桥创建 parser 用；纯数据）。 */data class ParserConfig(
     // MyBatis 解析器配置
     val sqlPrefix: String,
     val paramPrefix: String,

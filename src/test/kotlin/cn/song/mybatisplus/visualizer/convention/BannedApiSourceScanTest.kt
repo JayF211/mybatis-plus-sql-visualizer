@@ -1696,6 +1696,9 @@ class BannedApiSourceScanTest {
         // EDT 右键跳转（平台菜单回调在 EDT）
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogPanel.kt",
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/HistorySqlLogPanel.kt",
+        // T-RecentExecMenu O-119：跳转原语共享件——三个调用方（实时页右键、历史页右键、弹框右键菜单）
+        // 全是平台菜单/按钮回调（EDT）；本文件只做转接与导航，不自开线程。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogEntryJumpOps.kt",
     )
 
     /** 跳转族调用点缺读权限的违规文件（无 `ReadAction` 且不在白名单）。 */

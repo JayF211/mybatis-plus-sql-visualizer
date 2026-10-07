@@ -433,6 +433,11 @@ class SqlLogPanel(
     private var lastRendered: List<LogSqlEntry> = emptyList()
 
     // T-Perf-15：manager 监听器命名引用（uiRefreshListener/capturingUiListener）声明于 init 前统一区块。
+    //
+    // T-RecentExecMenu O-119：送页签通道回调的**稳定引用**（init 注册 / dispose 同一性注销用）——
+    // 必须声明在 init 之前：init 块内会读它完成注册，声明在后会读到未初始化值（本仓构造期序坑第三次）。
+    private val openEntryInTabCallback: (LogSqlEntry, LogEntryTab) -> Unit =
+        { entry, tab -> openEntryInTab(entry, tab) }
 
     // ---------- O-1 日志窗口差异化：慢查询计数器 + 耗时着色 ----------
 
@@ -668,6 +673,9 @@ class SqlLogPanel(
         // 避免 IDE 退出时 ObjectTree 报 Memory leak detected
         Disposer.register(this, logToSqlPanel)
         Disposer.register(this, sqlToJavaPanel)
+
+        // T-RecentExecMenu O-119：面板外「送条目到页签」通道注册（弹框右键用；dispose 注销）
+        manager.onOpenEntryInTab = openEntryInTabCallback
 
         // 标签 1：SQL 日志（工具栏行 + 搜索条 + 条目列表）
         val logPanel = JPanel(BorderLayout())
@@ -1744,20 +1752,11 @@ class SqlLogPanel(
     /**
      * F-44-6：日志 ↔ 源码关联跳转。
      * 仅依赖捕获位置精确跳转；无位置时弹框引导开启源码捕获（T-JumpCapture）。
-     * T-RecentExecMenu O-119：解析/导航/通知原语走 [LogEntryJumpOps]（本页策略：NoSource/NotFound
-     * 轻通知、MissingSource 引导弹窗——与历史页策略不同体，各自保留）。
+     * T-RecentExecMenu O-119：**整体策略**收口 [LogEntryJumpOps.jumpToSourceRealtime]
+     * （与弹框右键共用同一实现与文案，避免第四份策略复制）。
      */
     private fun jumpToSource(entry: LogSqlEntry) {
-        when (val target = LogEntryJumpOps.resolveSource(project, entry)) {
-            is LogEntryJumpOps.SourceTarget.Precise ->
-                LogEntryJumpOps.navigate(project, target.virtualFile, target.line)
-            LogEntryJumpOps.SourceTarget.NoSource ->
-                showJumpToast(MpSqlVisualizerBundle.message("log.panel.jumpToSource.noSource"))
-            is LogEntryJumpOps.SourceTarget.NotFound ->
-                showJumpToast(MpSqlVisualizerBundle.message("log.panel.jumpToSource.notFound", target.sourceFile))
-            LogEntryJumpOps.SourceTarget.MissingSource ->
-                LogEntryJumpOps.showMissingSourceGuide(project)
-        }
+        LogEntryJumpOps.jumpToSourceRealtime(project, entry)
     }
 
     /**
@@ -1942,27 +1941,25 @@ class SqlLogPanel(
         }
     }
 
-    /** 发送到 SQL → Java 转换（第三 tab）。 */
+    /** 发送到 SQL → Java 转换（第三 tab）。T-RecentExecMenu O-119：落点收口 [openEntryInTab]（弹框右键同用）。 */
     private inner class SendToSqlToJavaAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.sendToReverse")
         }
 
         override fun actionPerformed(e: AnActionEvent) {
-            sqlToJavaPanel.setInputSql(entry.restoredSql)
-            tabs.selectedComponent = sqlToJavaPanel
+            openEntryInTab(entry, LogEntryTab.SQL_TO_JAVA)
         }
     }
 
-    /** 发送到日志转 SQL（第二 tab）。 */
+    /** 发送到日志转 SQL（第二 tab）。T-RecentExecMenu O-119：落点收口 [openEntryInTab]（弹框右键同用）。 */
     private inner class SendToLogToSqlAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.sendTo")
         }
 
         override fun actionPerformed(e: AnActionEvent) {
-            logToSqlPanel.loadFromEntry(entry)
-            tabs.selectedComponent = logToSqlPanel
+            openEntryInTab(entry, LogEntryTab.LOG_TO_SQL)
         }
     }
 
@@ -2049,9 +2046,28 @@ class SqlLogPanel(
         // T-Perf-15：注销 manager 监听器（防面板销毁后仍被回调——每条新 SQL invokeLater 调已销毁面板）
         manager.removeUiListener(uiRefreshListener)
         manager.removeCapturingListener(capturingUiListener)
+        // T-RecentExecMenu O-119：注销送页签通道（同一性判定——防误清他人注册）
+        if (manager.onOpenEntryInTab === openEntryInTabCallback) manager.onOpenEntryInTab = null
         clickPreview.dispose()
         logToSqlPanel.dispose()
         sqlToJavaPanel.dispose()
+    }
+
+    /**
+     * T-RecentExecMenu O-119：面板外请求（弹框右键「发送到…」）把条目送进对应页签并选中——
+     * 与右键 [SendToSqlToJavaAction] / [SendToLogToSqlAction] 同体（三处共用本方法，单一实现）。
+     */
+    private fun openEntryInTab(entry: LogSqlEntry, tab: LogEntryTab) {
+        when (tab) {
+            LogEntryTab.LOG_TO_SQL -> {
+                logToSqlPanel.loadFromEntry(entry)
+                tabs.selectedComponent = logToSqlPanel
+            }
+            LogEntryTab.SQL_TO_JAVA -> {
+                sqlToJavaPanel.setInputSql(entry.restoredSql)
+                tabs.selectedComponent = sqlToJavaPanel
+            }
+        }
     }
 
     // ---------- WrapLayout（工具栏行自动换行） ----------
