@@ -56,6 +56,9 @@ class RecentExecutionsDialog(
     private val listModel = CollectionListModel<LogSqlEntry>()
     private val entryList = JBList<LogSqlEntry>(listModel)
 
+    /** 日志面板条目渲染器（复用点；字段持有供测试钉断言——JBList getter 平台侧会包 ExpandedItemListCellRendererWrapper 壳）。 */
+    private val entryRenderer = LogEntryListCellRenderer()
+
     /** 只读高亮编辑器；null 仅在 dispose 之后（SqlSuppressManagerDialog 同生命周期约定）。 */
     private var editor: Editor? = null
 
@@ -80,7 +83,7 @@ class RecentExecutionsDialog(
     override fun getDimensionServiceKey(): String = DIMENSION_SERVICE_KEY
 
     override fun createCenterPanel(): JComponent {
-        entryList.cellRenderer = LogEntryListCellRenderer()
+        entryList.cellRenderer = entryRenderer
         entryList.selectionMode = ListSelectionModel.SINGLE_SELECTION
         entryList.addListSelectionListener { event ->
             if (event.valueIsAdjusting) return@addListSelectionListener
@@ -197,8 +200,8 @@ class RecentExecutionsDialog(
     /** 测试访问器：当前列表条目数。 */
     internal fun entryCountForTest(): Int = listModel.size
 
-    /** 测试访问器：列表渲染器（复用钉断言用）。 */
-    internal fun cellRendererForTest(): Any? = entryList.cellRenderer
+    /** 测试访问器：列表渲染器（复用钉断言用；返回对话框自持字段，非 JBList 包装壳）。 */
+    internal fun cellRendererForTest(): Any? = entryRenderer
 
     /** 测试访问器：当前编辑器文本。 */
     internal fun editorTextForTest(): String = editor?.document?.text ?: ""

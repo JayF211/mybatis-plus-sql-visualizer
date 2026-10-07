@@ -125,9 +125,10 @@ class RecentExecutionsDialogTest : BasePlatformTestCase() {
     fun test列表渲染器为LogEntryListCellRenderer复用() {
         val dialog = newDialog(listOf(entry("SELECT 1")))
         try {
+            val renderer = dialog.cellRendererForTest()
             assertTrue(
-                "列表应复用日志面板条目渲染器（同两行形态/类型色条/角标）",
-                dialog.cellRendererForTest() is LogEntryListCellRenderer,
+                "列表应复用日志面板条目渲染器（同两行形态/类型色条/角标；实际=${renderer?.javaClass?.name}）",
+                renderer is LogEntryListCellRenderer,
             )
         } finally {
             dialog.doDispose()
