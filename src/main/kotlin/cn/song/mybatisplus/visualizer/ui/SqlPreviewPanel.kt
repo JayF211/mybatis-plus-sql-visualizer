@@ -1144,8 +1144,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val target = saved.file
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
+                // R60（T-LaneB D96）：可移植导出同脱敏口径（displayMaskEnabled，投影级）
                 cn.song.mybatisplus.visualizer.log.SqlExportService
-                    .exportToFile(target, cn.song.mybatisplus.visualizer.log.SqlExportService.formatPortable(rows, format))
+                    .exportToFile(
+                        target,
+                        cn.song.mybatisplus.visualizer.log.SqlExportService.formatPortable(
+                            rows,
+                            format,
+                            cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.displayMaskEnabled,
+                        ),
+                    )
             }.onSuccess {
                 com.intellij.notification.NotificationGroupManager.getInstance()
                     .getNotificationGroup(NOTIFICATION_GROUP_ID)

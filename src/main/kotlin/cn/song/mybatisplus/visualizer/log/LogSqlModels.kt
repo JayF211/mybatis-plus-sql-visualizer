@@ -194,6 +194,12 @@ data class LogSqlEntry(
     /** 缓存对应的显示模式——读取处按当前模式比对，模式变更自动失效（无需显式清缓存）。 */
     var cachedListLineFragmentsMode: SqlListDisplayMode? = null
 
+    /**
+     * 缓存对应的脱敏态（R60 T-LaneB D96）：读取处按当前 displayMaskEnabled 比对——脱敏开关
+     * 翻转后旧缓存（打码/未打码形态）自动失效重渲染，防脏缓存（V112.3 附带发现）。
+     */
+    var cachedListLineFragmentsMasked: Boolean = false
+
     companion object {
         private const val MAX_SUMMARY_LENGTH = 160
     }
