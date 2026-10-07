@@ -158,35 +158,16 @@ class SqlToJavaPanel(
         refreshCallerCapabilityThenRegenerate()
     }
 
-    /** T-M36.7：返回 VO 类名选择（非必选，仅 SELECT 生效——MPJ selectVoList/listVo）。 */
-    private val voField = ClassPickerField(
+    /** T-MapResultVo v2：返回类型字段——可编辑组合框（自由键入任意返回声明）+ 选类按钮（Goto Class）。
+     *  预置常用声明（`List<Map<String, Object>>` / `List<Object>`）亦可键入 HashMap/自定义类等形态；
+     *  生成器按声明形态派生调用族（含 Map→Maps 族、含 Object→Objs 族、其余按类名走 VO 语义）。
+     *  空值 = 自动（现状实体/VO 推断）。 */
+    private val voField = ReturnTypeField(
         project,
         MpSqlVisualizerBundle.message("reverse.panel.voHint"),
     ) {
         if (cacheResult != null) regenerateWithNewFormat()
     }
-
-    /** T-MapResultVo：返回形态下拉（自动/实体列表/Map 列表）——会话级不持久化（Maps 低频场景；
-     *  「自动」「实体列表」行为等价于现状，Map 列表生成 selectJoinMaps/selectMaps/listMaps 族）。 */
-    private val resultKindCombo = JComboBox<ResultKindOption>().apply {
-        model = DefaultComboBoxModel(resultKindOptions())
-        addActionListener {
-            if (cacheResult != null) regenerateWithNewFormat()
-        }
-    }
-
-    private data class ResultKindOption(val key: String, val label: String) {
-        override fun toString(): String = label
-    }
-
-    private fun resultKindOptions(): Array<ResultKindOption> = arrayOf(
-        ResultKindOption("auto", MpSqlVisualizerBundle.message("reverse.panel.resultKind.auto")),
-        ResultKindOption("entity", MpSqlVisualizerBundle.message("reverse.panel.resultKind.entity")),
-        ResultKindOption("maps", MpSqlVisualizerBundle.message("reverse.panel.resultKind.maps")),
-    )
-
-    private fun mapsResultSelected(): Boolean =
-        (resultKindCombo.selectedItem as? ResultKindOption)?.key == "maps"
 
     /** 设置 → 下拉同步期间的抑制标志（refreshFormatFromSettings 不触发重生成）。 */
     private var suppressFormatSync = false
@@ -290,11 +271,6 @@ class SqlToJavaPanel(
         add(callerField, c)
         c.gridx = 1
         add(voField, c)
-        // T-MapResultVo：返回形态（自动/实体列表/Map 列表）——会话级不持久化（Maps 低频场景）
-        c.gridy = 2
-        c.gridx = 0
-        c.gridwidth = 2
-        add(resultKindCombo, c)
     }
 
     private fun buildResultToolbar(): JPanel {
@@ -797,6 +773,80 @@ class SqlToJavaPanel(
         internal fun textTooltipForTest(): String? = textLabel.toolTipText
     }
 
+    /**
+     * T-MapResultVo v2：返回类型字段——可编辑组合框（自由键入任意返回声明）+ 选类按钮（Goto Class）。
+     *
+     * 与 [ClassPickerField] 的差异：文本**可编辑**（支持任意返回声明的自由键入，如
+     * `List<HashMap<String, Object>>`、`List<Object>`、自定义类名），预置常用声明项；
+     * 选类按钮走同一 Goto Class 弹窗（选中后写入编辑框）。空值 = 自动（现状实体/VO 推断）。
+     * 生成器按声明形态派生调用族（含 Map→Maps 族、含 Object→Objs 族、其余按类名走 VO 语义）。
+     */
+    internal inner class ReturnTypeField(
+        private val projectRef: Project,
+        private val placeholder: String,
+        private val onChanged: () -> Unit = {},
+    ) : JPanel(BorderLayout()) {
+
+        private val combo = JComboBox<String>().apply {
+            isEditable = true
+            addItem("")
+            addItem("List<Map<String, Object>>")
+            addItem("List<Object>")
+            toolTipText = placeholder
+            addActionListener { onChanged() }
+        }
+
+        private val pickButton = JButton(PICKER_ELLIPSIS_ICON).apply {
+            isBorderPainted = false
+            isContentAreaFilled = false
+            isFocusPainted = false
+            margin = JBUI.emptyInsets()
+            border = JBUI.Borders.empty()
+            iconTextGap = 0
+            preferredSize = Dimension(16, 16)
+            minimumSize = Dimension(16, 16)
+            toolTipText = MpSqlVisualizerBundle.message("reverse.panel.pickClass")
+            addActionListener { pickClass() }
+        }
+
+        init {
+            isOpaque = false
+            preferredSize = Dimension(1, JBUI.scale(24))
+            minimumSize = Dimension(1, JBUI.scale(24))
+            add(combo, BorderLayout.CENTER)
+            add(pickButton, BorderLayout.EAST)
+            // 编辑框失焦提交（回车由 combo ActionListener 覆盖）——与既有「改动即重生成」交互一致
+            (combo.editor.editorComponent as? javax.swing.JTextField)?.addFocusListener(
+                object : java.awt.event.FocusAdapter() {
+                    override fun focusLost(e: java.awt.event.FocusEvent?) = onChanged()
+                },
+            )
+        }
+
+        /** 对外文本（生成器读取返回声明；测试直接赋值不触发变更回调——对齐 ClassPickerField 语义）。 */
+        var text: String
+            get() = (combo.editor.item as? String) ?: ""
+            set(value) {
+                combo.editor.item = value
+            }
+
+        /** 选类（Goto Class 弹窗，裸模型——返回类型字段无 this/baseMapper 调用类特殊项）；选中写回编辑框。 */
+        private fun pickClass() {
+            val model = GotoClassModel2(projectRef)
+            val popup = ChooseByNamePopup.createPopup(projectRef, model, null)
+            popup.invoke(object : ChooseByNamePopupComponent.Callback() {
+                override fun elementChosen(element: Any?) {
+                    val cls = element as? PsiClass ?: return
+                    val name = ReadAction.compute<String?, Throwable> { cls.name } ?: return
+                    combo.editor.item = name
+                    onChanged()
+                }
+
+                override fun onClose() {}
+            }, ModalityState.current(), false)
+        }
+    }
+
     // ------------------------------------------------------------------
     // 转换流程
     // ------------------------------------------------------------------
@@ -1201,9 +1251,9 @@ class SqlToJavaPanel(
         if (caller.isEmpty()) {
             // T-M50：仅选 VO（无调用类）→ VO 用于 selectAs 字段引用（Vo::getXxx），不生成调用行。
             // mpj = true 放开 JOIN/VO 判定（selectAs VO 引用不依赖调用类 MPJ 能力）
-            return JavaCodeGenerator.InvocationTarget(callerClass = "", voClass = vo, mpj = true, mapsResult = mapsResultSelected())
+            return JavaCodeGenerator.InvocationTarget(callerClass = "", mpj = true, resultTypeText = vo)
         }
-        return JavaCodeGenerator.InvocationTarget(caller, vo, mpj = callerMpj, methods = callerMethods, mapsResult = mapsResultSelected())
+        return JavaCodeGenerator.InvocationTarget(caller, mpj = callerMpj, methods = callerMethods, resultTypeText = vo)
     }
 
     /** 结果分发：0 候选回落 QueryWrapper；1 候选直接生成；多候选选择后生成。 */
@@ -1349,8 +1399,6 @@ class SqlToJavaPanel(
     /** 测试访问器：形态下拉组件（布局断言——选项行 GridBag 拉伸）。 */
     internal fun formatComboForTest(): JComboBox<*> = formatCombo
 
-    /** T-MapResultVo 测试缝：返回形态下拉。 */
-    internal fun resultKindComboForTest(): JComboBox<*> = resultKindCombo
 
     /** 测试访问器：模拟用户下拉选择（触发写穿 + 重生成完整链路）。 */
     internal fun selectFormatForTest(persisted: String) {
@@ -1389,7 +1437,7 @@ class SqlToJavaPanel(
     internal fun pickerActionButtonForTest(): JButton = callerField.actionButtonForTest()
 
     /** 测试访问器：返回 VO 选择字段。 */
-    internal fun voFieldForTest(): ClassPickerField = voField
+    internal fun voFieldForTest(): ReturnTypeField = voField
 
     /** 状态行（错误红字 / 提示主题色）。 */
     private fun status(message: String, error: Boolean) {

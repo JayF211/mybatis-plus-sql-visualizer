@@ -57,6 +57,11 @@ object JavaCodeGenerator {
          * 返回 `List<Map<String, Object>>`（分页 `Page<Map<String, Object>>`）；Maps 族**不带 Class 参数**
          * （1.5.8 javap 实证），VO 角色转为驱动 select 列别名（selectAs 第二参）。 */
         val mapsResult: Boolean = false,
+        /** T-MapResultVo v2：返回类型声明原文（面板可编辑输入，如 `List<Map<String, Object>>` /
+         * `List<HashMap<String, Object>>` / `List<Object>` / 类名）——按声明形态派生调用族：
+         * 含 Map → [mapsResult] 等效；含 Object → selectObjs/listObjs 族（单表，MPJ 无 selectJoinObjs）；
+         * 其他 → 按类名走 voClass（TYPED 档）。与 voClass/mapsResult 并存时 resultTypeText 优先。 */
+        val resultTypeText: String? = null,
     )
 
     /** T-M44：按调用类真实方法集选择调用方法——优先链中第一个真实存在的方法；
@@ -104,14 +109,19 @@ object JavaCodeGenerator {
         val sb = StringBuilder()
         appendHeader(sb, result, entity, wrapperKind, invocation)
         val isJoin = result.joins.isNotEmpty()
+        // T-MapResultVo v2：返回类型声明原文的 TYPED 档（非 Map/Object 族 → 按类名走 VO 语义；
+        // voClass 优先保留既有 API 兼容）
+        val voTyped = invocation?.let { inv ->
+            inv.voClass ?: inv.resultTypeText?.trim()
+                ?.takeIf { it.isNotEmpty() && !it.contains("Map") && !it.contains("Object") }
+        }
         // VO 查询（selectJoinList 族）参数类型为 MPJBaseJoin——须调用类具备 MPJ 能力（继承链实证）
         // 且 wrapper 强制 MPJ 形态；调用类无 MPJ 时 VO 回落实体查询（selectInvocation 内注释提示）
-        val voQuery = invocation != null && invocation.mpj &&
-            invocation.voClass != null &&
-            invocation.voClass != (entity?.className ?: entityClassName(result.tableName))
+        val voQuery = invocation != null && invocation.mpj && voTyped != null &&
+            voTyped != (entity?.className ?: entityClassName(result.tableName))
         // T-M47：选中 VO 且为真实 VO 查询时，selectAs 第二参用 VO 属性方法引用（Vo::getXxx）——
         // 对齐正向 selectAs(列, Vo::getXxx)；否则字符串别名
-        val selectAsVoClass = if (voQuery) invocation?.voClass else null
+        val selectAsVoClass = if (voQuery) voTyped else null
         // 多表 JOIN 依赖 MPJ wrapper 库类——调用类已选定且无 MPJ 能力时无法生成可编译代码，明确报错
         if (isJoin && invocation != null && !invocation.mpj) {
             throw SqlReverseException(
@@ -609,18 +619,33 @@ object JavaCodeGenerator {
         invocation: InvocationTarget,
     ): String {
         val entityName = entity?.className ?: entityClassName(result.tableName)
-        val voRequested = invocation.voClass?.takeIf { it != entityName }
+        // T-MapResultVo v2：返回类型声明原文派生调用族（面板可编辑输入）——
+        //  含 Map → Maps 族（[mapsResult] 等效，声明 HashMap 等亦归此档，前缀按方法真实返回类型渲染）；
+        //  含 Object → Objs 族（单表 selectObjs/listObjs，MPJ 无 selectJoinObjs）；
+        //  其他文本 → 按类名走 voClass（TYPED 档，项目索引可解析 → lambda/别名驱动，不可解析按字面生成+注释）。
+        val rtText = invocation.resultTypeText?.trim()?.takeIf { it.isNotEmpty() }
+        val maps = invocation.mapsResult || rtText?.contains("Map") == true
+        val objs = !maps && rtText?.contains("Object") == true
+        val typedRequested = if (maps || objs) null else (invocation.voClass ?: rtText)
+        val voRequested = typedRequested?.takeIf { it != entityName }
         // VO 查询依赖 MPJ 能力（调用类继承链实证）；无 MPJ → 回落实体查询并注释提示
         val vo = voRequested?.takeIf { invocation.mpj }
         val voUnsupported = voRequested != null && vo == null
         val paged = result.limit != null
         val join = result.joins.isNotEmpty()
+        // Objs 族无分页重载（BaseMapper.selectObjs javap 实证）——分页需求转注释提示
+        if (objs && join) {
+            throw SqlReverseException(
+                0,
+                SqlReverseParser.KEY_UNSUPPORTED,
+                "JOIN 场景不支持 Object 单列响应（MPJ 无 selectJoinObjs）——可用 Map 列表（List<Map<String, Object>>）或实体列表替代",
+            )
+        }
         // T-MapResultVo：Map 响应形态（签名 1.5.8 javap 实证）——
         //  join → JoinMapper/JoinService `selectJoinMaps(wrapper)` / 分页 `selectJoinMapsPage(page, wrapper)`（不带 Class）；
         //  单表 Mapper → `selectMaps(wrapper)` / 分页 `selectMaps(page, wrapper)`（MP 同名重载）；
         //  单表 Service → `listMaps(wrapper)` / 分页 `listMaps(page, wrapper)`（IService）。
         // VO 在 Maps 场景不进签名（转 select 列别名驱动）→ Class 参数恒不加。
-        val maps = invocation.mapsResult
         // T-M44：方法选择按调用类真实方法集（prefer 回退链）——部分 MPJ 依赖的 MPJBaseMapper
         // 无 BaseMapper 的 selectPage/selectList 等普通方法，缺失时回落 JoinMapper/JoinService 的
         // selectJoin 族（join 方法需 Class 参数，args 按方法形态构建）；特殊值/类不可解析 → 普通方法
@@ -628,6 +653,8 @@ object JavaCodeGenerator {
             maps && join -> if (paged) "selectJoinMapsPage" else "selectJoinMaps"
             maps && isMapper(invocation) -> if (paged) "selectMaps" else invocation.prefer("selectMaps", "selectJoinMaps")
             maps -> if (paged) "listMaps" else invocation.prefer("listMaps", "selectMaps")
+            objs && isMapper(invocation) -> "selectObjs"
+            objs -> invocation.prefer("listObjs", "selectObjs")
             isMapper(invocation) -> when {
                 paged && vo != null -> "selectJoinPage"
                 paged -> invocation.prefer("selectPage", "selectJoinPage")
@@ -643,22 +670,31 @@ object JavaCodeGenerator {
         }
         // 参数顺序（1.5.6 实证）：普通 `(wrapper)`；分页 `(page, wrapper)`；
         // VO/join 方法 `(page?, Class, wrapper)`——回退到 selectJoin 族时 Class 参数用 VO 或实体；
-        // Maps 族不带 Class（selectJoinMaps 同为 selectJoin 前缀但签名无 Class——1.5.8 javap 实证）
-        val pageArg = if (paged) renderPageArg(result.limit!!) else ""
-        val classArg = !maps && (vo != null || (method.startsWith("selectJoin") && !method.contains("Maps")))
+        // Maps/Objs 族不带 Class（selectJoinMaps 同为 selectJoin 前缀但签名无 Class——1.5.8 javap 实证）
+        val usePageArg = paged && !objs
+        val pageArg = if (usePageArg) renderPageArg(result.limit!!) else ""
+        val classArg = !maps && !objs && (vo != null || (method.startsWith("selectJoin") && !method.contains("Maps")))
         val args = buildString {
-            if (paged) append(pageArg).append(", ")
+            if (usePageArg) append(pageArg).append(", ")
             if (classArg) append("${vo ?: entityName}.class, ")
             append("wrapper")
         }
-        val generic = if (maps) "Map<String, Object>" else vo ?: entityName
-        val prefix = if (paged) "Page<$generic> page = " else "List<$generic> list = "
+        val generic = when {
+            maps -> "Map<String, Object>"
+            objs -> "Object"
+            else -> vo ?: entityName
+        }
+        val prefix = if (usePageArg) "Page<$generic> page = " else "List<$generic> list = "
         val call = "$prefix${callerVar(invocation)}.$method($args);"
         // 说明注释独立成行（T-M45：行尾注释 → 行注释——整行语义清晰，复制剥离注释时行结构稳定）
         val comments = buildString {
             if (voUnsupported) append("// 调用类无 MyBatis-Plus-Join（MPJ）能力，VO 查询不可用，已回落实体查询\n")
             if (vo != null) append("// VO 查询需 MyBatis-Plus-Join（MPJ）依赖\n")
-            if (paged) append("// 分页 current/size 已占位，请替换为实际参数\n")
+            if (paged && !usePageArg) append("// selectObjs 无分页重载——请在 wrapper 内分页（last(\"LIMIT ...\")）或改用实体/Map 列表\n")
+            if (paged && usePageArg) append("// 分页 current/size 已占位，请替换为实际参数\n")
+            if (voRequested != null && vo != null && rtText != null) {
+                append("// 返回类型按声明 $rtText 生成（调用类无该类时请核对类名）\n")
+            }
         }
         return comments + call
     }

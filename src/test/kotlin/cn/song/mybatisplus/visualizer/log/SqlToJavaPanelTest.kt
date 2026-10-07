@@ -997,7 +997,7 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
     // T-MapResultVo：返回形态下拉联动（Map 列表 → Maps 族调用行）
     // ------------------------------------------------------------------
 
-    fun testResultKindMapsGeneratesSelectJoinMapsCall() {
+    fun testResultTypeMapsDeclarationGeneratesSelectJoinMapsCall() {
         val state = PluginSettings.getInstance().state
         val original = state.reverseWrapperFormat
         try {
@@ -1013,25 +1013,24 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
             awaitContains("DeviceInfoMapper")
             // Light 反查恒 false（无 MPJ 索引）——注入 MPJ 能力后 join 场景才放行 MPJ 形态
             panel.setCallerMpjForTest(true)
-            // 切「Map 列表」形态 → 调用行走 Maps 族（QUERY 形态 join → MPJQueryWrapper + selectJoinMaps）
-            @Suppress("UNCHECKED_CAST")
-            val combo = panel.resultKindComboForTest() as javax.swing.JComboBox<Any>
-            val mapsItem = (0 until combo.itemCount).map { combo.getItemAt(it) }
-                .firstOrNull { it?.toString()?.contains("Map") == true }
-            assertNotNull("返回形态下拉应含 Map 列表选项", mapsItem)
-            combo.selectedItem = mapsItem
+            // T-MapResultVo v2：返回类型字段自由输入 Map 声明 → 重转换走 Maps 族
+            panel.voFieldForTest().text = "List<Map<String, Object>>"
+            panel.convertForTest()
             val result = awaitContains("selectJoinMaps")
             assertTrue(result, result.contains("selectJoinMaps(wrapper)"))
             assertTrue(result, result.contains("List<Map<String, Object>>"))
-            // 切回「自动」→ 零回归（回到实体形态调用/纯表达式）
-            val autoItem = (0 until combo.itemCount).map { combo.getItemAt(it) }
-                .firstOrNull { it?.toString()?.contains("自动") == true || it?.toString()?.contains("auto") == true }
-            if (autoItem != null) {
-                combo.selectedItem = autoItem
-                val restored = awaitContains("new MPJQueryWrapper")
-                assertTrue(restored, !restored.contains("selectJoinMaps"))
-                assertTrue(restored, restored.contains("DeviceInfoMapper"))
-            }
+            // 键入 HashMap 形态（动态泛型）→ 仍归 Maps 族且前缀按方法真实返回类型渲染
+            panel.voFieldForTest().text = "List<HashMap<String, Object>>"
+            panel.convertForTest()
+            val hashMapResult = awaitContains("selectJoinMaps")
+            assertTrue(hashMapResult, hashMapResult.contains("List<Map<String, Object>>"))
+            assertTrue(hashMapResult, !hashMapResult.contains("HashMap"))
+            // 清空返回类型 → 回到实体形态（零回归）
+            panel.voFieldForTest().text = ""
+            panel.convertForTest()
+            val restored = awaitContains("new MPJQueryWrapper")
+            assertTrue(restored, !restored.contains("selectJoinMaps"))
+            assertTrue(restored, restored.contains("DeviceInfoMapper"))
         } finally {
             state.reverseWrapperFormat = original
         }
