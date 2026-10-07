@@ -43,15 +43,43 @@
 4. **全量门禁**：实施期 shard1~5 + testExternal 分片全绿（合计 6186 例；docker 三态按惯例 skip）。**合并后首全量 `6218/0/0/9`（543 类 parity，3m16s）已由 T-StackHoverUi 统一门禁复跑通过**（`3c19aa6` 登记在读）——含本功能合并后的最终态，权威读数以此为准。
 5. **过程环境波折（均环境性、留痕）**：并行会话 t-sqllogperf 期间共享 gradle daemon 两次意外消失；testExternal IU-253 目标 JVM 页面文件 OOM（errno=1455，内存回落后自愈）；FatalPassthroughTest 全量并发 flaky（单跑绿自证非回归）；残留 Test Executor 锁沙盒（taskkill 清理后复跑通过）。
 
-## §四 行为变化登记（CHANGELOG 已同步）
+## §四 UI 验收
+
+本任务 UI 面改动范围：工具窗页签文案（去 Beta）与生成代码内容（新能力产物）——面板构建/交互/渲染逻辑零改动，UI 验收=自动化 UI 回归读数 + 文案面实测 + 真机走查清单（待执行，见 §六 遗留）。
+
+### 4.1 自动化 UI 测试读数（master `3c19aa6` 时点复跑，61 例全绿）
+
+| 测试类 | 例数 | 覆盖面 |
+|---|---|---|
+| `log.SqlToJavaPanelTest` | 55 | 面板转换逻辑+批量拆分/错误隔离+页签文案断言（`log.tab.sqlToJava` 非 blank，key 在场=去 Beta 后资源加载正常）+实体多候选自动推断判定（uniqueMain/singleSub 等 5 形态） |
+| `log.SqlToJavaPanelUiTest` | 4 | **真实面板构建**：①面板构建出输入/结果编辑器、空态提示、生成形态下拉（不崩、下拉有可选项）②粘贴 SQL 转换→生成 QueryWrapper 且格式化渲染含换行 ③ClassPicker 弹窗选取类后渲染图标与类名 ④非空标签与下拉有正首选尺寸 |
+| `actions.ConvertSqlToJavaActionTest` | 2 | 编辑器选中 SQL → 动作入口（splitStatements/parseBatch 链） |
+
+全量门禁同批绿（含 `config.PluginSettingsPanelBindingTest` 对设置页 sqlToJava 快捷键标签的 binding 断言、`HelpUiTest` 资源加载断言）——bundle 两行 value 改动（去 Beta）零 key 变化，资源链零回归。
+
+### 4.2 文案面实测（master `3c19aa6`）
+
+- 页签：`MpSqlVisualizerBundle.properties:526` / `_zh.properties:507` 均为 `SQL → Java`（`(Beta)` 已去，grep 实测）；
+- 反馈分类：`feedback.category.sql-to-java` 中英双包统一箭头写法（`4efc369`，与页签/菜单「发送到 SQL → Java 转换」命名一致）；
+- 帮助页 html/md 与 plugin.xml：grep 实测零功能 Beta 表述。
+
+### 4.3 真机走查清单（runIde 沙盒 + demo 项目，随 D41 窗口执行）
+
+1. 工具窗四页签观感：「SQL → Java」无 Beta 后缀（en/zh 双语各验一次）；
+2. 面板输入本计划新增形态 SQL（GROUP BY+HAVING 聚合 / DISTINCT / 聚合列 / INSERT NULL / UNION / 双引号标识符各一）→ 生成代码展示（注释头含 UNION 降级提示、聚合列回落字符串 select）；
+3. 编辑器选中 SQL → 右键「发送到 SQL → Java 转换」入口同链路；
+4. 多候选实体弹窗（SqlSelectionDialog）/调用上下文（Service/Mapper+VO）与新能力组合（GROUP BY 在 MPJ 形态的 lambda 列）；
+5. 设置页「默认 Wrapper 形态」五选项 × 新能力 SQL 的往返观感。
+
+## §五 行为变化登记（CHANGELOG 已同步）
 
 1. **聚合/函数列语义修复**（G5）：`SELECT COUNT(*) AS cnt` 等此前 select 生成整体放弃（往返变全列查询、聚合语义丢失），现收集原文生成 `select("COUNT(*) AS cnt")`——CHANGELOG [Unreleased] Changed 已登记。
 2. **页签去 Beta**：`log.tab.sqlToJava` en/zh 两行 `SQL → Java (Beta)`→`SQL → Java`；反馈分类文案箭头统一（`4efc369`）。
 3. **4 处既有断言更新**（M2 轮先红后绿）：函数列收集（原 assertNull→收集原文）、DISTINCT 建模（原不收集→distinct=true+收集）、GROUP BY/HAVING 建模（原报错→建模断言）、聚合列回落字符串 select（原别名零泄漏→回落字符串断言）。
 
-## §五 遗留项
+## §六 遗留项
 
-1. **runIde 真机走查**（demo 项目「Java 转 SQL 再 SQL 转 Java」真实链路 5~8 条）：实施期环境页面文件 OOM 波折后未启动沙盒，登记随 **D41 统一真机窗口**执行；测试层已覆盖 SQL 往返+生成层完整性，真机走查为 PSI 链路端到端增强验证。
+1. **runIde 真机走查**（demo 项目「Java 转 SQL 再 SQL 转 Java」真实链路 5~8 条，清单见 §4.3）：实施期环境页面文件 OOM 波折后未启动沙盒，登记随 **D41 统一真机窗口**执行；测试层已覆盖 SQL 往返+生成层完整性+UI 自动化 61 例，真机走查为 PSI 链路端到端增强验证。
 2. **G8 UNION Java 生成层**：现为降级注释提示；MPJ jar 可得（本地缓存或依赖入库）后可升级真 `union()` 生成——前置=MPJ 签名 javap 实证。
 3. **G9 UPDATE JOIN**：维持报错；MPJ updateJoin 签名可实证后可评估放开。
 4. **MCP `sqlv_reverse_sql` 工具描述**：当时 grep 无「支持范围」表述未动；后续如需随新能力更新文案可随批次搭车。
