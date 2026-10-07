@@ -554,7 +554,7 @@
 - **自研 DAO 字符串 SQL**：新增 `StringSqlMethodGutterLineMarkerProviderTest`（177 行）；`JdbcTemplateMethodDetectorTest` / `JdbcTemplateSqlLocatorTest` / `WrapperAnchorDetectorTest` / `WrapperCacheTest` / `GutterIconDedupTest` 补例
 - **设置页缓存**：新增 `PluginCacheManagerCoverageTest`（5——快路径恒 0 B 复现 / 全口径非零 / 慢路径对照 / 清除归零 / 清除不实例化服务）
 - **自动监听联动**：新增 `SectionConfigurableAutoCaptureLinkageTest`（5——关→开清 suppressed / 联动不抛 / 保持开不清零 / 保持关不清零 / 开→关不清零）；`SqlLogManagerBehaviorTest` 增 T23~T28（进程级入口幂等 / 手动停止后再 Run 自动重启 / 被动不 armed / 降级 armed 防回归）
-- **竞品调研留档**：MyBatisCodeHelper-Pro 3.5.9 反编译对照（135 类）——其 SQL 日志仅支持 `Preparing:/Parameters:` 成对格式、用户多行样本同样不捕获；可取精华（consoleFilterProvider 稳定 EP / 尾部公共后缀降噪 / 批量写 UI）列 P2 调研，不做代码变更
+- **竞品能力对照留档**：MyBatisCodeHelper-Pro 3.5.9——其 SQL 日志仅支持 `Preparing:/Parameters:` 成对格式、用户多行样本同样不捕获；可借鉴点（consoleFilterProvider 稳定 EP / 尾部公共后缀降噪 / 批量写 UI）列 P2 调研，不做代码变更
 
 ## [2026.9.4] - 2026-09-04
 

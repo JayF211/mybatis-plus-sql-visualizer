@@ -88,3 +88,8 @@ gitee-token.*
 
 # task-queue 本地运行产物（journal/开关/归档），不进 git
 .tasks/
+
+### 内部资料库（独立私有仓 sql-visualizer-internal-docs 的嵌套工作副本） ###
+# 竞品逆向分析等不宜公开的内容；本地可读，父仓不跟踪。
+# 注意：git clean -x 会连此目录一并删除，清理时勿带 -x。
+docs/内部/
