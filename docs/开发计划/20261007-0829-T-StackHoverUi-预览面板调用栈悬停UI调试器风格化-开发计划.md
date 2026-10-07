@@ -63,10 +63,10 @@
 
 ## §六 分支与纪律
 
-- 实施基于 dev 拉独立工作树，分支扁平名 `t-stackhoverui`；master 与在途支（rp7、t-sqltojava-promote）零交集。
-- 新增 Kotlin 文件将产生 k2j 移植债，随 T-SyncK2JMaster 下一轮同步登记。
-- 采集链（agent 子项目）零改动；`PreviewResult` 构造签名零改动（弹层只吃 `stackDigest` 字符串，不新传字段——避免再碰多参构造与 k2j 互操作面）。
-- 验证三档分层：定向单测实施者自跑；全量门禁单派只读收口代理；本任务不动 build.gradle.kts/plugin.xml/新平台 EP，够不上构建校验大改动线。
+- ~~实施基于 dev 拉独立工作树~~（拍板改 master 直接实施，见 §七）；t-sqltojava-promote 在途支已按用户令并入 master 并清除（`7d7b8cd`），三支三树=master/dev/k2j。
+- 新增 Kotlin 文件将产生 k2j 移植债，随 T-SyncK2JMaster 下一轮同步登记（本轮新增 StackDigestFrames/StackFrameHover 两件＋LogEntryPreviewRecognizer/AgentProtocol 等改动面）。
+- ~~采集链（agent 子项目）零改动~~——V116-A 案（20261007 用户拍板）已动 agent 侧五件（StackDigest 两端采样/AgentState/AgentArgs/AgentMain/SenderLoop），agent jar 随 buildPlugin 重打包，**已 attach 的旧 agent 须重附或重启应用才获得两端采样**（帧数热下发只对含 SenderLoop 新解析的 agent 生效）。
+- 验证三档分层：定向单测实施者自跑；全量门禁单路收口；V116-A 动了 agent 协议面（CONFIG body 追加键），走大改动线（verifyGate 视用户指示另行安排）。
 - 计划 §七实施记录回写实施工作树内的本册副本，主仓副本只读。
 
 ## §七 实施记录
@@ -83,4 +83,9 @@
   - **首轮作废（环境事故，非代码红）**：testShards 09:05 启动后 51 分钟无产出——整机提交配额被打满（崩溃时刻物理内存余 577M、页面文件余 7M，commit 顶到 ~76/74.7GB 上限；本机基线常量占用偏高＋本构建自身 5 分片叠加），4 条 OOM：shard1 worker JVM native 分配失败崩溃（hs_err_pid75216.log）、shard3 AttachGateTest 的 8GB 堆子 JVM 起不来（93 例 1 失败）、shard2/4/5 三 JVM 在 OOM 后僵住零产出。处置=TaskStop＋清自家 launcher/分片 JVM/gradle+Kotlin daemon（释放约 7GB，commit 回落 66→59GB，余量 15.7GB），**未动任何代码**。
   - **重跑绿**：testShards **6204/0/0/9**（shard1 1176/6skip、shard2 1098、shard3 1596〔AttachGateTest 本次过，坐实前轮純环境〕、shard4 1172/2skip、shard5 1122；testExternal 40/0/1skip；9 skip=docker 离线常态），parity 对账过（542 类全出 XML），墙钟 3m48s（daemon 冷启含内）。
   - verifyGate（新平台 API 面=大改动线）：**三目标全 Compatible**（IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63，2m11s）——deprecated/experimental 计数为既有基线噪音，无 incompatible。
-- 20261007 用户验收受阻与修复（`eb14ce4`）：用户在主分支沙盒（MPV-Build 10:30:33，确认含新代码）测带参数条目仍无调用栈。根因＝**master 既有缺口，非本轮回归**——`toPreviewResultInternal` 三返回分支只有兜底分支带 `stackDigest`，「占位符数==参数数」识别分支（出 `#paramN` 参数卡的主路径）与字面量恢复分支把快照丢了；零参数条目（兜底分支）才有摘要，与用户「早上 COUNT(*) 看得到、下午带参条目看不到」观察吻合。修复=两处补传 `stackDigest`；测试四例（识别/字面量恢复/兜底三分支透传＋无快照不凭空造）。定向 20+11+13+4=48 例全绿；testShards 复跑 **6208/0/0/9**（parity 过，4m08s）；verifyGate 按用户指示本轮不跑（修复未引入新平台 API 面，前轮三目标 Compatible 覆盖同一 API 面）；安装包重烤 `build/distributions/mybatis-plus-sql-visualizer-2026.10.7.zip`（10:41，含修复）。遗留不变：V116 真机走查。
+- 20261007 用户验收受阻与修复（`eb14ce4`）：用户在主分支沙盒（MPV-Build 10:30:33，确认含新代码）测带参数条目仍无调用栈。根因＝**master 既有缺口，非本轮回归**——`toPreviewResultInternal` 三返回分支只有兜底分支带 `stackDigest`，「占位符数==参数数」识别分支（出 `#paramN` 参数卡的主路径）与字面量恢复分支把快照丢了；零参数条目（兜底分支）才有摘要，与用户「早上 COUNT(*) 看得到、下午带参条目看不到」观察吻合。修复=两处补传 `stackDigest`；测试四例（识别/字面量恢复/兜底三分支透传＋无快照不凭空造）。定向 20+11+13+4=48 例全绿；testShards 复跑 **6208/0/0/9**（parity 过，4m08s）；verifyGate 按用户指示本轮不跑（修复未引入新平台 API 面，前轮三目标 Compatible 覆盖同一 API 面）；安装包重烤 `build/distributions/mybatis-plus-sql-visualizer-2026.10.7.zip`（10:41，含修复）。
+- 20261007 真机走查首批反馈与两项跟进（用户带参条目走查通过）：
+  - **跳库类触发平台反编译法律框（无害）**：点击 `JdbcTemplate$1` 库帧首次跳转，IDEA 反编译器弹「JetBrains Decompiler」法律声明模态框，其间平台 `DynamicPluginsFrameStateListener.applicationActivated` 的 VFS 刷新撞 write-unsafe 断言报 `Throwable`——平台侧一次性噪音，声明点一次接受后不再现；插件侧 `OpenFileDescriptor.navigate` 与日志面板跳转同链。
+  - **V116-A 案立项并当日交付（用户拍板「按推荐 A＋帧数可配置」）**：controller 缺失根因＝agent 旧 16 帧顶格预算自栈顶取帧，JdbcTemplate 深封装链在 spring-jdbc 内部耗尽够不着栈底业务帧。改版：预算 B=`AgentState.stackMaxFrames`（默认 24，钳 [12,64]），≤B 全链（原行为），>B 两端采样=栈顶 B-8＋中段省略标记段（无 `#`，IDE 解析器天然跳过）＋栈底固定 8 帧；超长先缩栈顶、业务帧永不因长度被截。配置双通道=attach/premain 参数 `stackFrames=k`＋CONFIG 帧 `"stackFrames":k` 热下发（**设置页新整数行「调用栈快照帧数（12~64）」，改动保存即生效无需重附**）。落两笔 `e02030a`（agent 五件+单测 8 例）/`1f834ab`（IDE 协议/设置/面板/bundle+测试四处同步）；定向 agent 17/0＋IDE 协议 parser 全绿。
+  - **合并 T-SqlToJavaPromote（用户令）**：`7d7b8cd` 真合并并入 master（分支侧 8 笔=M1~M5+实施记录+同步 master+页签改名；bundle 双侧追加自动并、两侧符号在场验证过），master 已 push origin；**t-sqltojava-promote 分支（本地+远端）与工作树已清除**（worktree remove 撞长路径坑按定例 rm -rf+prune 收尾），三支三树恢复 master/dev/k2j。
+- 20261007 统一收口门禁（合并后 master）：首轮被 `SourceJumpFunnelTest` 旧十六帧契约用例拦下（T-StackHoverUi 改版前的预算断言，行为变化未同步用例）——用例换代双断言（预算内全链＋超预算两端采样段数有界）`e3cc949`，agent test 全任务复跑绿；第二轮 shard4/5 成片 `NoSuchMethodError: State.copy$default`＋注入注册表断言红＝回归清单第 0 条已知形态（本任务给 `PluginSettings.State` 加了带默认参字段，分片残留旧编译测试类），定例处置 `compileTestKotlin --rerun-tasks` 后消解。**终态：testShards 6218/0/0/9**（543 类 parity 对账过，3m16s，docker 离线 9 skip）。门禁前置 daemon 清理一次（commit 64→60GB，R16 预防）。buildPlugin 重烤安装包（agent jar 含两端采样新形态）。
