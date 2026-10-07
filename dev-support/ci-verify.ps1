@@ -1,8 +1,9 @@
 ﻿# =============================================================================
-# ci-verify.ps1 —— 每周自动 verifyPlugin 兼容性巡检包装脚本（T-CiVerifyPromise / O-5）
+# ci-verify.ps1 —— 每周自动 verifyFull（权威门禁 verifyGate 三目标）兼容性巡检包装脚本（T-CiVerifyPromise / O-5）
 #
 # 流程：拉 dev 最新（非 git 仓库 / git 不可用 / 无网络 / 非 dev 分支时容错跳过）
-#       → 调 verify-full.ps1（verifyPlugin 三目标 243/253/262，约 14 分钟）
+#       → 调 verify-full.ps1（verifyFull = verifyGate 三目标 243/253/262，约 3.5 分钟；T-RC-02 改挂权威门禁，
+#         verifyPlugin 已降级为报告生成器不承担门禁）
 #       → 时间戳日志落 dev-support/verify-logs/verify-<时间戳>.log
 #       → 失败额外写 dev-support/verify-logs/LAST-FAILED.txt（成功自动清除）
 #       → 日志轮转仅保留最近 8 份
@@ -17,7 +18,7 @@
 #   $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
 #   Register-ScheduledTask -TaskName "MPSqlVisualizer-WeeklyVerify" `
 #       -Action $action -Trigger $trigger -Settings $settings `
-#       -Description "每周三 03:00 自动 verifyPlugin 三目标（243/253/262）兼容性巡检；关机错过调度开机补跑；失败留痕 dev-support/verify-logs/LAST-FAILED.txt" -Force
+#       -Description "每周三 03:00 自动 verifyFull 三目标（243/253/262，权威门禁 verifyGate）兼容性巡检；关机错过调度开机补跑；失败留痕 dev-support/verify-logs/LAST-FAILED.txt" -Force
 #
 # 注册后核对：
 #   Get-ScheduledTask -TaskName "MPSqlVisualizer-WeeklyVerify" | Get-ScheduledTaskInfo
@@ -66,7 +67,7 @@ if (-not $branch) {
 # ---- 2. 调 verify-full.ps1（子进程调用隔离其内部 exit；输出同步落控制台与日志） ----
 # verify-full.ps1 内部以相对路径 ./gradlew 调构建，而计划任务默认工作目录是 System32，
 # 必须先切到仓库根（Push-Location 兜底，不依赖注册命令的 WorkingDirectory）。
-Write-Log "开始 verifyPlugin 全量三目标校验（IU-2024.3.7.1 / 2025.3.5 / 2026.2.1，约 14 分钟）..."
+Write-Log "开始 verifyFull 全量三目标校验（IU-2024.3.7.1 / 2025.3.5 / 2026.2.1，权威门禁 verifyGate，约 3.5 分钟）..."
 Push-Location $repoRoot
 try {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "verify-full.ps1") 2>&1 |
@@ -78,9 +79,9 @@ try {
 
 # ---- 3. 结果标记：失败写 LAST-FAILED.txt，成功清除旧标记 ----
 if ($exitCode -ne 0) {
-    Write-Log "FAIL verifyPlugin 校验失败（exit=$exitCode）"
+    Write-Log "FAIL verifyFull 校验失败（exit=$exitCode）"
     @(
-        "verifyPlugin 巡检失败",
+        "verifyFull 巡检失败",
         "时间：$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
         "退出码：$exitCode",
         "日志：$logFile"
@@ -88,7 +89,7 @@ if ($exitCode -ne 0) {
     Write-Log "失败标记已写入：$failedMarker"
 } else {
     Remove-Item -Path $failedMarker -Force -ErrorAction SilentlyContinue
-    Write-Log "OK verifyPlugin 校验通过（三目标 Compatible，0 COMPATIBILITY_PROBLEMS），无失败标记"
+    Write-Log "OK verifyFull 校验通过（三目标 Compatible，0 COMPATIBILITY_PROBLEMS），无失败标记"
 }
 
 # ---- 4. 日志轮转：仅保留最近 8 份 verify-*.log（不动 LAST-FAILED.txt） ----
