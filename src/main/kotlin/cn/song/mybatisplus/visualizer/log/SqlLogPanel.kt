@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 // T-UiCoord F2：下拉按钮文本截尾省略复用 meta 行的同款纯函数（避免第二份省略实现）
 import cn.song.mybatisplus.visualizer.ui.clipTailToWidth
 import com.intellij.util.ui.JBUI
+import cn.song.mybatisplus.visualizer.util.DisplayMasker
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
@@ -376,7 +377,12 @@ class SqlLogPanel(
     /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
      *  T-ListPreviewCopy：预览文本经 clickPreviewSql——设置「预览时格式化还原 SQL」开启（默认）时多行格式化显示。 */
     private val clickPreview = SqlClickPreview(project, list) {
-        i -> clickPreviewSql(list.model.getElementAt(i).restoredSql, PluginSettings.getInstance().state.logFormatSql)
+        i -> clickPreviewSql(
+            list.model.getElementAt(i).restoredSql,
+            PluginSettings.getInstance().state.logFormatSql,
+            // R60（T-LaneB D96）：预览浮层链脱敏（展示层文本级，数据层不动）
+            PluginSettings.getInstance().state.displayMaskEnabled,
+        )
     }
     private val tabs = JBTabbedPane()
     /** T-M38：日志转 SQL 转换 tab（粘贴日志 → 批量还原可执行 SQL；原「SQL 预览」被动展示改造）。 */
@@ -1850,7 +1856,11 @@ class SqlLogPanel(
         val target = saved.file
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
-                SqlExportService.exportToFile(target, SqlExportService.format(rows, format))
+                // R60（T-LaneB D96）：导出链脱敏——展示开关开时导出文本同步打码（投影级，行集不动）
+                SqlExportService.exportToFile(
+                    target,
+                    SqlExportService.format(rows, format, PluginSettings.getInstance().state.displayMaskEnabled),
+                )
             }.onSuccess {
                 com.intellij.notification.NotificationGroupManager.getInstance()
                     .getNotificationGroup(NOTIFICATION_GROUP_ID)
@@ -2636,19 +2646,25 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
     /**
      * SQL 行片段（T-ListMode 模式分流）：SINGLE_LINE 直渲染不缓存（固定行高 + 主题切换实时生效）；
      * 多行模式走条目级缓存（键含模式自动失效）——可变行高布局逐条测量免重复分词。
+     *
+     * R60（T-LaneB D96）：日志列表链脱敏——displayMaskEnabled 开时**展示文本**先经
+     * [DisplayMasker.maskDisplay] 打码（数据层 entry 不动）；缓存键**加脱敏位**——设置翻转后
+     * 旧缓存（打码/未打码形态）自动失效重渲染（V112.3 回执的附带发现，防脏缓存）。
      */
     private fun sqlLineFragmentsFor(entry: LogSqlEntry): List<List<SqlTextFragment>> {
-        val sql = withTerminator(entry.summary)
+        val maskOn = PluginSettings.getInstance().state.displayMaskEnabled
+        val sql = withTerminator(DisplayMasker.maskDisplay(entry.summary, maskOn))
         val mode = PluginSettings.getInstance().sqlListDisplayMode()
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             return listOf(SqlListFragmentRenderer.renderFragments(sql))
         }
         entry.cachedListLineFragments
-            ?.takeIf { entry.cachedListLineFragmentsMode == mode }
+            ?.takeIf { entry.cachedListLineFragmentsMode == mode && entry.cachedListLineFragmentsMasked == maskOn }
             ?.let { return it }
         return SqlListFragmentRenderer.renderLineFragments(sql, mode).also {
             entry.cachedListLineFragments = it
             entry.cachedListLineFragmentsMode = mode
+            entry.cachedListLineFragmentsMasked = maskOn
         }
     }
 }

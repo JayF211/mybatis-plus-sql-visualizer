@@ -39,6 +39,9 @@ class McpConfigurable : Configurable {
     /** 总开关复选框（apply 时写 state.mcpToolsEnabled）。 */
     private var masterCheckBox: JBCheckBox? = null
 
+    /** R60（T-LaneB D96）：MCP 输出脱敏复选框（apply 时写 state.mcpMaskEnabled；默认关）。 */
+    private var maskLiteralsCheckBox: JBCheckBox? = null
+
     /** 工具级复选框（工具名 → 勾选态=启用；apply 时反向写 mcpDisabledTools）。 */
     private val toolCheckBoxes = LinkedHashMap<String, JBCheckBox>()
 
@@ -114,10 +117,21 @@ class McpConfigurable : Configurable {
         }
         this.masterCheckBox = masterCheckBox
 
+        // R60（T-LaneB D96）：MCP 输出脱敏（sqlv_render_logs 还原语句打码；默认关——脱敏降低
+        // AI 诊断价值，承审计册口径，工具描述已声明）
+        val maskLiteralsCheckBox = JBCheckBox(
+            MpSqlVisualizerBundle.message("settings.mcp.maskLiterals"),
+            state?.mcpMaskEnabled ?: false,
+        ).apply {
+            toolTipText = MpSqlVisualizerBundle.message("settings.mcp.maskLiterals.desc")
+        }
+        this.maskLiteralsCheckBox = maskLiteralsCheckBox
+
         val builder = FormBuilder.createFormBuilder()
             .addComponent(banner)
             .addComponent(jumpRow)
             .addComponent(masterCheckBox)
+            .addComponent(maskLiteralsCheckBox)
         McpToolGate.TOOL_NAMES.forEach { toolName ->
             // 复选框只表达「工具级未禁用」，与总开关正交（否则 master off 时复选框全不勾，
             // apply 会把全部工具误写进禁用清单）
@@ -213,15 +227,17 @@ class McpConfigurable : Configurable {
     override fun isModified(): Boolean {
         val state = runCatching { PluginSettings.getInstance().state }.getOrNull() ?: return false
         val masterDirty = (masterCheckBox?.isSelected ?: state.mcpToolsEnabled) != state.mcpToolsEnabled
+        val maskDirty = (maskLiteralsCheckBox?.isSelected ?: state.mcpMaskEnabled) != state.mcpMaskEnabled
         val toolsDirty = McpToolGate.TOOL_NAMES.any { toolName ->
             (toolCheckBoxes[toolName]?.isSelected ?: isToolListedInState(state, toolName)) != isToolListedInState(state, toolName)
         }
-        return masterDirty || toolsDirty
+        return masterDirty || maskDirty || toolsDirty
     }
 
     override fun apply() {
         val state = PluginSettings.getInstance().state
         state.mcpToolsEnabled = masterCheckBox?.isSelected ?: true
+        state.mcpMaskEnabled = maskLiteralsCheckBox?.isSelected ?: false
         state.mcpDisabledTools = McpToolGate.TOOL_NAMES
             .filter { toolCheckBoxes[it]?.isSelected == false }
             .toMutableList()
@@ -230,6 +246,7 @@ class McpConfigurable : Configurable {
     override fun reset() {
         val state = runCatching { PluginSettings.getInstance().state }.getOrNull() ?: return
         masterCheckBox?.isSelected = state.mcpToolsEnabled
+        maskLiteralsCheckBox?.isSelected = state.mcpMaskEnabled
         McpToolGate.TOOL_NAMES.forEach { toolName ->
             toolCheckBoxes[toolName]?.isSelected = isToolListedInState(state, toolName)
         }
@@ -239,6 +256,7 @@ class McpConfigurable : Configurable {
     override fun disposeUIResources() {
         panel = null
         masterCheckBox = null
+        maskLiteralsCheckBox = null
         toggleAllButton = null
         bannerHeadline = null
         bannerGateLine = null

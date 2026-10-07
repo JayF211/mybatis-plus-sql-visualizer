@@ -510,4 +510,31 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         assertFalse("普通条目不应有行数片段", ok.contains("rows)"))
         assertFalse("普通条目不应有报错片段", ok.contains("⛔"))
     }
+
+    // ---------- R60（T-LaneB D96）：日志列表链脱敏（判别断言两态，走真实渲染器链路） ----------
+
+    fun test列表脱敏开_渲染文本打码() {
+        val state = PluginSettings.getInstance().state
+        val saved = state.displayMaskEnabled
+        try {
+            state.displayMaskEnabled = true
+            val sqlText = joinedText(render(entry("SELECT * FROM t WHERE phone = '13812345678'")).sqlLine)
+            assertTrue("脱敏开应打码: $sqlText", sqlText.contains("***"))
+            assertFalse("原文手机号不得出现: $sqlText", sqlText.contains("13812345678"))
+        } finally {
+            state.displayMaskEnabled = saved
+        }
+    }
+
+    fun test列表脱敏关_原文渲染() {
+        val state = PluginSettings.getInstance().state
+        val saved = state.displayMaskEnabled
+        try {
+            state.displayMaskEnabled = false
+            val sqlText = joinedText(render(entry("SELECT * FROM t WHERE phone = '13812345678'")).sqlLine)
+            assertTrue("脱敏关原文渲染: $sqlText", sqlText.contains("13812345678"))
+        } finally {
+            state.displayMaskEnabled = saved
+        }
+    }
 }

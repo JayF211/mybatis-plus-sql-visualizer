@@ -1045,7 +1045,23 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         MpSqlVisualizerBundle.message("panel.compare") to { showSqlDiff() },
         MpSqlVisualizerBundle.message("panel.share") to { showShareDialog() },
         MpSqlVisualizerBundle.message("panel.portableExport") to { exportPortableSql() },
+        // R37（T-LaneB D95）：安全 AI 上下文交递——脱敏参数化块进剪贴板（未接 MCP 用户的安全出口）
+        MpSqlVisualizerBundle.message("panel.aiContext") to { copyAsAiContext() },
     )
+
+    /**
+     * R37：当前 SQL 组装为脱敏 AI 上下文块并复制到剪贴板。
+     *
+     * [AiContextExport.build] 敏感字面量参数化（`?` + 参数表恒 `***`，原值不出方法）；
+     * 方言取当前预览模型（XML/Wrapper/模型三源都带 dialect；缺失省略方言行）。
+     */
+    private fun copyAsAiContext() {
+        val sql = currentEditorSql() ?: return
+        val dialect = current?.previewModel?.dialect?.name
+        val result = cn.song.mybatisplus.visualizer.util.AiContextExport.build(sql, dialect)
+        cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy(result.block)
+        showDiffToast(MpSqlVisualizerBundle.message("panel.aiContext.copied", result.maskedCount))
+    }
 
     /**
      * F2：弹出「更多」折叠菜单（锚定按钮下方；JBPopupFactory + BaseListPopupStep 路线为本项目
@@ -1144,8 +1160,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         val target = saved.file
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
+                // R60（T-LaneB D96）：可移植导出同脱敏口径（displayMaskEnabled，投影级）
                 cn.song.mybatisplus.visualizer.log.SqlExportService
-                    .exportToFile(target, cn.song.mybatisplus.visualizer.log.SqlExportService.formatPortable(rows, format))
+                    .exportToFile(
+                        target,
+                        cn.song.mybatisplus.visualizer.log.SqlExportService.formatPortable(
+                            rows,
+                            format,
+                            cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.displayMaskEnabled,
+                        ),
+                    )
             }.onSuccess {
                 com.intellij.notification.NotificationGroupManager.getInstance()
                     .getNotificationGroup(NOTIFICATION_GROUP_ID)

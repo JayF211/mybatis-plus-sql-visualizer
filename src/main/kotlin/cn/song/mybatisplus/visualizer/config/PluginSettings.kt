@@ -569,6 +569,21 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var enhancedCaptureDesensitize: Boolean = false,
 
         /**
+         * R60（T-LaneB D96）：展示/导出链脱敏开关（**默认关**——不改变既有用户观感）。
+         * true 时日志列表 / 单击预览浮层 / 导出文件三类**展示层文本**经 DisplayMasker 双条件打码
+         * （规则对齐采集侧 Desensitizer）；数据层（条目/参数预设/历史文件）不动。与采集侧
+         * [enhancedCaptureDesensitize] 解耦——采集开关管「数据怎么进来」，本开关管「文本怎么出去」。
+         */
+        var displayMaskEnabled: Boolean = false,
+
+        /**
+         * R60（T-LaneB D96/D97）：MCP 输出面脱敏开关（sqlv_render_logs 还原语句打码；
+         * **默认关**——脱敏降低 AI 诊断价值，承审计册口径「默认不脱并在工具描述里声明」）。
+         * 与 [displayMaskEnabled] 分离：MCP 消费方是 agent（可另选口径），UI 展示面是本机用户。
+         */
+        var mcpMaskEnabled: Boolean = false,
+
+        /**
          * T-StackHoverUi：调用栈快照总帧数（用户可配，面板侧钳位 [12,64]，默认 24）。agent 侧
          * StackDigest 两端采样——栈顶取 B-8 帧（引擎/门面侧）、栈底固定保留 8 帧（业务/Controller
          * 侧，JdbcTemplate 深封装链下旧 16 帧顶格预算够不着 controller）。随 attach 参数与

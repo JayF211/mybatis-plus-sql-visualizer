@@ -187,8 +187,9 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // R12 T-PaginationSim：分页拦截器模拟开关（paginationSimCheck）+1 后为 39；
             // R10 T-ShardingSphereCompat：ShardingSphere 双段日志捕获开关（logShardingSphereEnabledCheck）+1 后为 40；
             // R33 T-ExplainStructured：EXPLAIN 结构化渲染开关（explainStructuredCheck）+1 后为 41；
+            // R60 T-LaneB D96：展示/导出链脱敏开关（displayMaskCheck）+1 后为 42；
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
-            assertEquals("复选框总数应为 41", 41, texts.size)
+            assertEquals("复选框总数应为 42", 42, texts.size)
         } finally {
             settings.state.language = old
         }

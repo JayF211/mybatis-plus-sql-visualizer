@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.diff.SqlDiffer
+import cn.song.mybatisplus.visualizer.util.DisplayMasker
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
@@ -78,7 +79,12 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
      *  T-ListPreviewCopy：预览文本经 clickPreviewSql——设置「预览时格式化还原 SQL」开启（默认）时多行格式化显示。 */
     private val sqlClickPreview = SqlClickPreview(project, sqlList) {
-        i -> clickPreviewSql(sqlList.model.getElementAt(i).restoredSql, PluginSettings.getInstance().state.logFormatSql)
+        i -> clickPreviewSql(
+            sqlList.model.getElementAt(i).restoredSql,
+            PluginSettings.getInstance().state.logFormatSql,
+            // R60（T-LaneB D96）：预览浮层链脱敏（展示层文本级，数据层不动）
+            PluginSettings.getInstance().state.displayMaskEnabled,
+        )
     }
     private var currentFile: HistoryFileEntry? = null
     private var currentEntries: List<LogSqlEntry> = emptyList()
@@ -814,7 +820,10 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         val target = saved.file
         com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
-                SqlExportService.exportToFile(target, SqlExportService.format(rows, format))
+                SqlExportService.exportToFile(
+                    target,
+                    SqlExportService.format(rows, format, PluginSettings.getInstance().state.displayMaskEnabled),
+                )
             }.onSuccess {
                 com.intellij.notification.NotificationGroupManager.getInstance()
                     .getNotificationGroup(NOTIFICATION_GROUP_ID)
@@ -1237,17 +1246,20 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
      * 历史条目为每次加载新建的实例，缓存随条目生命周期天然失效。
      */
     private fun sqlLineFragmentsFor(entry: LogSqlEntry): List<List<SqlTextFragment>> {
-        val sql = withTerminator(entry.summary)
+        // R60（T-LaneB D96）：历史列表链脱敏——展示文本打码（entry 数据层不动）；缓存键加脱敏位防脏缓存
+        val maskOn = PluginSettings.getInstance().state.displayMaskEnabled
+        val sql = withTerminator(DisplayMasker.maskDisplay(entry.summary, maskOn))
         val mode = PluginSettings.getInstance().sqlListDisplayMode()
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             return listOf(SqlListFragmentRenderer.renderFragments(sql))
         }
         entry.cachedListLineFragments
-            ?.takeIf { entry.cachedListLineFragmentsMode == mode }
+            ?.takeIf { entry.cachedListLineFragmentsMode == mode && entry.cachedListLineFragmentsMasked == maskOn }
             ?.let { return it }
         return SqlListFragmentRenderer.renderLineFragments(sql, mode).also {
             entry.cachedListLineFragments = it
             entry.cachedListLineFragmentsMode = mode
+            entry.cachedListLineFragmentsMasked = maskOn
         }
     }
 }

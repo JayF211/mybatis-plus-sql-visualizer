@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -60,5 +61,54 @@ class SqlExportServiceTest {
     @Test
     fun testCsv_空行集_仅表头() {
         assertEquals("time,source,duration_ms,sql\n", SqlExportService.format(emptyList(), SqlExportFormat.CSV))
+    }
+
+    // ---------- R60（T-LaneB D96）：导出链脱敏（判别断言——开→脱敏/关→原文） ----------
+
+    private val sensitiveRow = SqlExportRow(
+        time = "t1",
+        sql = "SELECT id FROM user WHERE phone = '13812345678' AND password = 'p@ss' AND name = 'tom'",
+        source = "",
+        durationMs = null,
+    )
+
+    @Test
+    fun testCsv_脱敏开_敏感字面量打码() {
+        val out = SqlExportService.format(listOf(sensitiveRow), SqlExportFormat.CSV, mask = true)
+        assertTrue("手机号应打码", out.contains("phone = '***'"))
+        assertTrue("密码应打码", out.contains("password = '***'"))
+        assertFalse("原文手机号不得出现", out.contains("13812345678"))
+        assertFalse("原密码不得出现", out.contains("p@ss"))
+        assertTrue("非敏感值保留", out.contains("name = 'tom'"))
+    }
+
+    @Test
+    fun testCsv_脱敏关_原文逐字保留() {
+        val out = SqlExportService.format(listOf(sensitiveRow), SqlExportFormat.CSV, mask = false)
+        assertTrue(out.contains("phone = '13812345678'"))
+        assertTrue(out.contains("password = 'p@ss'"))
+    }
+
+    @Test
+    fun testTxt_脱敏开_保形不破坏注释头() {
+        val out = SqlExportService.format(listOf(sensitiveRow), SqlExportFormat.TXT, mask = true)
+        assertTrue(out.contains("-- === SQL #1 ==="))
+        assertTrue(out.contains("'***'"))
+        assertFalse(out.contains("13812345678"))
+    }
+
+    @Test
+    fun testPortable_脱敏开_TSV同口径() {
+        val row = PortableSqlRow(
+            dialect = "MySQL",
+            kind = PortableSqlKind.CRUD,
+            upsert = "no",
+            sql = "SELECT 1 FROM t WHERE mobile = 13812345678",
+        )
+        val masked = SqlExportService.formatPortable(listOf(row), SqlExportFormat.TSV, mask = true)
+        assertTrue(masked.contains("mobile = ***"))
+        assertFalse(masked.contains("13812345678"))
+        val plain = SqlExportService.formatPortable(listOf(row), SqlExportFormat.TSV, mask = false)
+        assertTrue(plain.contains("mobile = 13812345678"))
     }
 }
