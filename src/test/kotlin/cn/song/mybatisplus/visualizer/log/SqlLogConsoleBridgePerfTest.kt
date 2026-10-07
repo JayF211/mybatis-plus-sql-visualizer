@@ -149,4 +149,41 @@ class SqlLogConsoleBridgePerfTest {
         val again = SqlLogConsoleBridge.cachedMethod(String::class.java, "trim")
         assertEquals("代际失效后重查应仍解析同一 Method", warm, again)
     }
+
+    // ---------- F58（T-PerfSweep18 压轴）：token 每行提一次下传四解析器 ----------
+
+    /**
+     * 桥路径（processConsoleLine＝token 提一次下传的落点）双线程交错各归各桶：
+     * exec-9 与 exec-2 的 Preparing/Parameters 交错到达，参数必须各配各的语句。
+     * 反向验证锚：token 下传被破坏（恒传 null）时，Parameters 行按「收集态桶优先」
+     * 路由会挂错语句（exec-2 的参数闭合 exec-9 的语句）→ 参数配对断言红。
+     */
+    @Test
+    fun `F58_token下传_桥路径双线程交错参数各归各语句`() {
+        val ctx = newCtx(hibernateEnabled = false)
+        assertTrue(
+            processConsoleLine(
+                "2026-09-16 14:34:59.938 DEBUG 36516 [exec-9] UserMapper.selectPage [] - ==>  Preparing: SELECT id FROM user WHERE id = ?",
+                ctx, null, {},
+            ).isEmpty(),
+        )
+        assertTrue(
+            processConsoleLine(
+                "2026-09-16 14:34:59.939 DEBUG 36516 [exec-2] UserMapper.selectPage_mpCount [] - ==>  Preparing: SELECT name FROM user WHERE id = ?",
+                ctx, null, {},
+            ).isEmpty(),
+        )
+        val exec2Entry = processConsoleLine(
+            "2026-09-16 14:34:59.940 DEBUG 36516 [exec-2] UserMapper.selectPage_mpCount [] - ==> Parameters: 20(Long)",
+            ctx, null, {},
+        )
+        val exec9Entry = processConsoleLine(
+            "2026-09-16 14:34:59.941 DEBUG 36516 [exec-9] UserMapper.selectPage [] - ==> Parameters: 10(Long)",
+            ctx, null, {},
+        )
+        assertEquals("exec-2 参数行闭合 exec-2 语句", 1, exec2Entry.size)
+        assertEquals("SELECT name FROM user WHERE id = 20", exec2Entry[0].restoredSql)
+        assertEquals("exec-9 参数行闭合 exec-9 语句", 1, exec9Entry.size)
+        assertEquals("SELECT id FROM user WHERE id = 10", exec9Entry[0].restoredSql)
+    }
 }

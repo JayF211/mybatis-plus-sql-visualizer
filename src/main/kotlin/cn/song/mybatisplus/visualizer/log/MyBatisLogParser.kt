@@ -70,6 +70,15 @@ class MyBatisLogParser(
         feedInto(router.bucketFor(line), line)
     }
 
+    /**
+     * F58（T-PerfSweep18 压轴）：喂入一行＋**已提取**的线程 token——同一行喂多解析器的热路径
+     * （控制台桥）每行只提一次 token 下传，免重复 [LogThreadRouter.threadTokenOf]。
+     * token=null 即「提取不到」的 fail-open 回退语义，与 [feed] 内部自提逐字等价。
+     */
+    fun feed(line: String, threadToken: String?) {
+        feedInto(router.bucketForToken(threadToken), line)
+    }
+
     private fun feedInto(bucket: Bucket, line: String) {
         // 分支 1：Preparing 行（有 SQL 同行）
         val sql = extractAfterKeyword(line, sqlPrefix)

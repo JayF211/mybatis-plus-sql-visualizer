@@ -412,10 +412,12 @@ class LogToSqlPanel(
         parsers: LogParsers,
     ): ConversionOutput {
         text.lineSequence().forEach { line ->
-            parsers.myBatis.feed(line)
-            parsers.hibernate.feed(line)
-            parsers.jdbc.feed(line)
-            if (parsers.shardingEnabled) parsers.sharding.feed(line)
+            // F58（T-PerfSweep18 压轴）：同一行喂四解析器——线程 token 每行只提一次下传
+            val threadToken = LogThreadRouter.threadTokenOf(line)
+            parsers.myBatis.feed(line, threadToken)
+            parsers.hibernate.feed(line, threadToken)
+            parsers.jdbc.feed(line, threadToken)
+            if (parsers.shardingEnabled) parsers.sharding.feed(line, threadToken)
         }
         parsers.myBatis.closePending()
         parsers.hibernate.closePending()

@@ -80,8 +80,16 @@ class JdbcTemplateLogParser(
 
     /** 喂入一行控制台输出（任意线程，内部按线程 token 路由到对应桶——解析器实例按 console 隔离）。 */
     fun feed(line: String) {
+        feed(line, LogThreadRouter.threadTokenOf(line))
+    }
+
+    /**
+     * F58（T-PerfSweep18 压轴）：喂入一行＋**已提取**的线程 token（热路径每行一次下传，
+     * 语义与 [feed] 自提逐字等价；token=null 走 fail-open 回退）。
+     */
+    fun feed(line: String, threadToken: String?) {
         if (!enabled) return
-        val bucket = router.bucketFor(line)
+        val bucket = router.bucketForToken(threadToken)
         // 多行收集态：语句跨行累积中（T-JdbcMultiline）
         if (bucket.collecting) {
             if (looksLikeStatementBoundary(line)) {
