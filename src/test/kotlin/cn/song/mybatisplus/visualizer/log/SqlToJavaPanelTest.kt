@@ -1117,13 +1117,17 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
 
         panel.applyReturnTypeChosenForTest("List<Map<String, Object>>")
         assertEquals("List<Map<String, Object>>", field.text)
+        assertNotNull("声明形态选中后应带类图标（用户反馈缺失点）", field.valueIconForTest())
         panel.applyReturnTypeChosenForTest("List<Object>")
         assertEquals("List<Object>", field.text)
+        assertNotNull("List<Object> 选中后同样应有图标", field.valueIconForTest())
         panel.applyReturnTypeChosenForTest(auto)
         assertEquals("自动项应清空为留空（实体/VO 推断）", "", field.text)
-        // 类元素：取简单类名写回
+        assertNull("自动（空值）态不应有图标", field.valueIconForTest())
+        // 类元素：取简单类名写回（图标来自 PsiClass.getIcon）
         panel.applyReturnTypeChosenForTest(psiClassFixture())
         assertEquals("UserService", field.text)
+        assertNotNull("类元素选中后应有类图标", field.valueIconForTest())
         // null 元素（未选中）不动字段
         panel.applyReturnTypeChosenForTest(null)
         assertEquals("UserService", field.text)

@@ -871,6 +871,9 @@ class SqlToJavaPanel(
         /** 测试访问器：显示层标签（灰字占位/取值文案断言；v4 不再有输入框组件）。 */
         internal fun editorComponentForTest(): java.awt.Component = textLabel
 
+        /** 测试缝：取值态左侧图标（声明形态/类的图标断言——用户真机反馈「选中后没有类图标」）。 */
+        internal fun valueIconForTest(): Icon? = pickedIcon
+
         /** 子组件点击统一入口：单次点击弹选择器 + 手型光标（按钮自身消费事件，不重复触发）。 */
         private fun attachClick(component: JComponent) {
             component.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
@@ -912,7 +915,12 @@ class SqlToJavaPanel(
             when (element) {
                 null -> Unit
                 is String ->
-                    if (element == autoLabelOf()) setValue("", null) else setValue(element, null)
+                    if (element == autoLabelOf()) {
+                        setValue("", null)
+                    } else {
+                        // 声明形态（Map/Objs 列表）带类图标——用户真机反馈「选中后没有类图标」
+                        setValue(element, AllIcons.Nodes.Class)
+                    }
                 is PsiClass -> {
                     val picked = ReadAction.compute<Pair<String, Icon?>?, Throwable> {
                         val name = element.name ?: return@compute null
@@ -950,9 +958,11 @@ class SqlToJavaPanel(
                     cellHasFocus: Boolean,
                 ): Component {
                     val c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus) as JComponent
-                    (c as? JLabel)?.icon = AllIcons.Nodes.Field
+                    // 声明形态（Map/Objs 列表）用类图标（与选中后字段侧图标一致）；「自动」用模式项图标
+                    val label = c as? JLabel
+                    label?.icon = if (value == autoLabelOf()) AllIcons.Nodes.Field else AllIcons.Nodes.Class
                     // 「自动（留空）」项 tooltip 复用返回类型占位说明（Map/Objs 两项文本自明，不附 tooltip）
-                    if (value == autoLabelOf()) (c as? JLabel)?.toolTipText = placeholder
+                    if (value == autoLabelOf()) label?.toolTipText = placeholder
                     return c
                 }
             }
