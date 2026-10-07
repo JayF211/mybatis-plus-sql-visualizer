@@ -55,6 +55,24 @@ object XmlSynHiGate {
         { project, host -> defaultForeignInjectionProbe(project, host) }
 
     /**
+     * F79 刀二（T-PerfSweep24）：per-host 探针结论 stamped memo——喂入面上探针是唯一重操作
+     * （EP 枚举 O(1) 之后的逐注入器试探链，成本三方决定不可控），结论按「宿主弱身份＋含文件
+     * PSI 修改戳＋在册注入器清单实例」缓存：
+     *  - **失效对齐 PSI 生命周期**：已提交文档修改 → [PsiFile.getModificationStamp] 变化 →
+     *    该文件全部宿主结论重探；宿主被重解析换对象 → WeakHashMap 弱键消亡、新宿主首问重探
+     *    ——无陈旧结论跨修改残留；
+     *  - 注入器集合变化（插件启停等 EP 缓存换代）→ [getExtensions][com.intellij.openapi.extensions.ExtensionPointName.getExtensions]
+     *    返回的清单实例换代 → 全量重探——取清单实例当代际戳（读本身 O(1) 平台缓存），不直引
+     *    `PluginManagerCore`（该组 API 2025.3~2026.2 有包迁移，仓内 PluginVersion 同因规避）；
+     *  - 探针异常的 fail-safe 让位**不入缓存**（瞬时故障不得跨修改残留，恢复后下一问重探）；
+     *  - 同步 WeakHashMap——高亮 pass 并发（PreviewReceiverResolver.classifyCache 同款惯用形）。
+     */
+    private class ProbeMemo(val psiStamp: Long, val injectorList: List<MultiHostInjector>, val yields: Boolean)
+
+    private val foreignProbeMemo: MutableMap<PsiElement, ProbeMemo> =
+        java.util.Collections.synchronizedMap(java.util.WeakHashMap<PsiElement, ProbeMemo>())
+
+    /**
      * 默认探针：EP 枚举（项目级）+ [foreignInjectorsWouldInject]。EP 访问/解析任何异常 →
      * 让位（fail-safe，D68 口径：整体探测不了时回到保守让位）；[ProcessCanceledException]/
      * [CancellationException] 照平台契约原样上抛（吞掉会破坏取消协议）。
@@ -81,9 +99,10 @@ object XmlSynHiGate {
      *     不让一个坏/怪注入器把本插件一起拖成零着色——「坏注入器⇒零着色」正是本次验收缺陷的
      *     原始形态；反方向的双写叠色风险由「真 startInjecting 才让位」的精确判定本身兜住）。
      *
-     * per-host 结论**不缓存**（PSI 随重解析失效）；注入器清单每问每取（EP 内部有平台级缓存，
-     * 取列表本身 O(1) 级）。性能注：喂入契约预筛使 SQL 系注入器（喂入类型全为 SQL PSI）对
-     * XML 宿主零试探成本，XML 宿主面典型只剩自身族包名过滤 + 类型 isInstance。
+     * per-host 结论经 [foreignProbeMemo] stamped memo 缓存（F79 刀二；探测主体本身仍每问每跑）；
+     * 注入器清单每问每取（EP 内部有平台级缓存，取列表本身 O(1) 级，取回实例兼作 memo 的集合
+     * 代际戳）。性能注：喂入契约预筛使 SQL 系注入器（喂入类型全为 SQL PSI）对 XML 宿主零
+     * 试探成本，XML 宿主面典型只剩自身族包名过滤 + 类型 isInstance。
      */
     internal fun foreignInjectorsWouldInject(injectors: List<MultiHostInjector>, host: PsiElement): Boolean {
         for (inj in injectors) {
@@ -133,13 +152,34 @@ object XmlSynHiGate {
     /** 共通线让位判定（D2/D3 共用；不含 per-host 线——喂入税基准/缓存语义等 host 无关口径沿用此形）。 */
     fun shouldYield(project: Project?): Boolean = !xmlSynHiEnabled()
 
-    /** per-host 让位判定（D68）：共通线之外叠加「其他注入器会对该宿主注入」探测。探针任何异常 →
-     *  让位（fail-safe，D68 口径：探测不了时回到保守让位）；[ProcessCanceledException]/
-     *  [CancellationException] 照平台契约原样上抛（吞掉会破坏取消协议）。catch 挂缝调用点——
-     *  测试缝替身炸掉同样兜住（默认实现内的 catch 是纵深第二层）。 */
+    /**
+     * per-host 让位判定（D68）：共通线之外叠加「其他注入器会对该宿主注入」探测；F79 刀二起
+     * 探测结论经 [foreignProbeMemo] stamped memo 缓存（键=宿主弱身份，戳=含文件 PSI 修改戳＋
+     * 在册注入器清单实例）。探针任何异常 → 让位（fail-safe，D68 口径）且**不入缓存**；
+     * [ProcessCanceledException]/[CancellationException] 照平台契约原样上抛（吞掉会破坏取消
+     * 协议）。catch 挂缝调用点——测试缝替身炸掉同样兜住（默认实现内的 catch 是纵深第二层）。
+     */
     fun shouldYield(project: Project?, host: PsiElement): Boolean {
         if (shouldYield(project)) return true
-        return try {
+        val file = host.containingFile
+        if (file == null) return probeFailSafe(project, host)
+        val psiStamp = file.modificationStamp
+        val proj = project ?: host.project
+        // 代际戳＝在册注入器清单实例（O(1) 平台缓存读）；EP 读取异常退回无缓存路径（其内
+        // fail-safe 让位，与旧语义一致——读取不了时回到保守让位）
+        val injectorList = try {
+            MultiHostInjector.MULTIHOST_INJECTOR_EP_NAME.getExtensions(proj)
+        } catch (cancelled: ProcessCanceledException) {
+            throw cancelled
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (t: Throwable) {
+            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
+            return probeFailSafe(project, host)
+        }
+        foreignProbeMemo[host]?.takeIf { it.psiStamp == psiStamp && it.injectorList === injectorList }
+            ?.let { return it.yields }
+        val fresh = try {
             foreignInjectionProbe(project, host)
         } catch (cancelled: ProcessCanceledException) {
             throw cancelled
@@ -147,8 +187,22 @@ object XmlSynHiGate {
             throw cancelled
         } catch (t: Throwable) {
             if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
-            true
+            return true // fail-safe 让位；**不入缓存**——探针异常是瞬时态，恢复后下一问须重探
         }
+        foreignProbeMemo[host] = ProbeMemo(psiStamp, injectorList, fresh)
+        return fresh
+    }
+
+    /** 无含文件宿主路径：fail-safe 单问（无缓存语义）。 */
+    private fun probeFailSafe(project: Project?, host: PsiElement): Boolean = try {
+        foreignInjectionProbe(project, host)
+    } catch (cancelled: ProcessCanceledException) {
+        throw cancelled
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (t: Throwable) {
+        if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
+        true
     }
 
     /**

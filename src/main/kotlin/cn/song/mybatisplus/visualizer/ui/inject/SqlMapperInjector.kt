@@ -34,12 +34,16 @@ import com.intellij.psi.xml.XmlText
 class SqlMapperInjector : MultiHostInjector, com.intellij.openapi.project.DumbAware {
 
     override fun getLanguagesToInject(registrar: MultiHostRegistrar, context: PsiElement) {
-        // D68 重排：先 host 类型分发（O(1) instanceof），再问 per-host 让位门——平台让位线从
-        // 「SqlLanguageInjector 类在场」一票否决改为「平台会对该宿主注入」探测（该类 243/262
-        // 发行物均不存在，且用户真机实证平台并不给 mapper XML 语句文本着色，详见 XmlSynHiGate）。
+        // D68 + F79 刀一（T-PerfSweep24）：先 host 类型分发（O(1) instanceof），再走全部**本地**
+        // 廉价守卫（mapper 判定/属性白名单/长度熔断/区间），per-host 让位门最后问——平台让位线
+        // 从「SqlLanguageInjector 类在场」一票否决改为「平台会对该宿主注入」探测（D68，该类
+        // 243/262 发行物均不存在，详见 XmlSynHiGate），但探测是喂入面上唯一的重操作；F79 起
+        // 谓词前置重排，非 mapper XML / 非白名单属性 / 空区间宿主每 pass 不再白付全链探针。
+        // 重排语义等价（§四前提①逐 case 对账）：守卫与探针互不写对方消费的状态，注入判定是
+        // 纯 AND——守卫拒绝（零注入）与探针异常→让位（同为零注入）结果一致，交换不影响任何
+        // case 的注入结果，唯一差异＝探针咨询次数（被拒宿主从每问一次降为零）。
         val host = context as? PsiLanguageInjectionHost ?: return
         if (context !is XmlText && context !is XmlAttributeValue) return
-        if (XmlSynHiGate.shouldYield(context.project, host)) return
         val rangeInsideHost: TextRange = when (context) {
             // D2 语句文本：直属文本经语句文本守卫（祖先链 mapper + 长度熔断），段内去首尾空白
             is XmlText -> {
@@ -61,6 +65,7 @@ class SqlMapperInjector : MultiHostInjector, com.intellij.openapi.project.DumbAw
             }
             else -> return
         }
+        if (XmlSynHiGate.shouldYield(context.project, host)) return
         ensureParserDefinitionRegistered()
         registrar.startInjecting(SqlMapperLanguage)
         registrar.addPlace(null, null, host, rangeInsideHost)
