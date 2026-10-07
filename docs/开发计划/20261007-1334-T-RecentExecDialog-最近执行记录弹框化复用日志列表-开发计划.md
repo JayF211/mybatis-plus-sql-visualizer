@@ -103,12 +103,11 @@ T-SqlSuppress O-69 交付、经 O-80 拖拽缩放走查定型的成熟形态，�
 | `log.recent.dialog.title` | 最近执行记录（%s） | Recent Executions (%s) |
 | `log.recent.dialog.openPreview` | 打开预览 | Open Preview |
 | `log.recent.dialog.close` | 关闭 | Close |
-| `log.recent.dialog.count` | 共 %s 条 | %s entries |
-| `log.recent.dialog.empty` | 未找到该代码位置的捕获记录。 | No captured executions found for this code location. |
-| `log.recent.dialog.noneSelected` | 请先选择一条记录 | Select an entry first |
+| `log.recent.dialog.count` | 共 {0} 条 | {0} entries |
 
-- `gutter.popup.recent` / `gutter.popup.recent.empty` **保留**（前者是右键菜单项文案；后者 D86 选 B 时仍用）。
-- 标题锚点参数传「文件名:行号」（`UserService.kt:48` 形态），null 时用无参键。
+- `gutter.popup.recent` / `gutter.popup.recent.empty` **保留**（前者是右键菜单项文案；后者 D86=A 后改由对话框空态直接复用，**不新增** `log.recent.dialog.empty` 重复键——实施定案）。
+- `log.recent.dialog.noneSelected` **实施时删**：主按钮空态禁用已承载该语义，零产出文案键按枚举死常量守卫精神不留。
+- 标题锚点参数传「文件名:行号」（`UserService.kt:48` 形态，MessageFormat `{0}` 占位），null 时用无参键。
 
 ## 六、测试与验证
 
