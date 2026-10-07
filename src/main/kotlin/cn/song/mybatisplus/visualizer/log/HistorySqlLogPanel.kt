@@ -16,8 +16,6 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
-import com.intellij.notification.Notification
-import com.intellij.notification.NotificationType
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
@@ -684,25 +682,26 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      * 解析跳转目标（与 [jumpToSource] 共用；测试驱动直接断言分支，不触发弹窗）。
      * T-SourceJumpFunnel P0-5：判定收敛到 [EntryJumpResolver]（与实时面板同一实现）——
      * 主位置不在工程内（自研框架汇聚门面帧）时按候选栈序回退，本面板此前无此能力。
+     * T-RecentExecMenu O-119：转接原语收口 [LogEntryJumpOps]（三处共用）；**本页策略**=
+     * `MissingSource` 并入 `NoSource`（走引导弹窗，与实时页的轻通知不同体，各自保留）。
      */
     internal fun resolveJumpTarget(entry: LogSqlEntry): HistoryJumpTarget =
-        when (val target = EntryJumpResolver.resolve(project, entry)) {
-            is EntryJumpResolver.JumpTarget.Precise ->
+        when (val target = LogEntryJumpOps.resolveSource(project, entry)) {
+            is LogEntryJumpOps.SourceTarget.Precise ->
                 HistoryJumpTarget.Navigate(target.virtualFile, target.line)
-            EntryJumpResolver.JumpTarget.NoSource -> HistoryJumpTarget.NoSource
-            is EntryJumpResolver.JumpTarget.NotFound -> HistoryJumpTarget.NotFound(target.sourceFile)
-            EntryJumpResolver.JumpTarget.MissingSource -> HistoryJumpTarget.NoSource
+            LogEntryJumpOps.SourceTarget.NoSource -> HistoryJumpTarget.NoSource
+            LogEntryJumpOps.SourceTarget.MissingSource -> HistoryJumpTarget.NoSource
+            is LogEntryJumpOps.SourceTarget.NotFound -> HistoryJumpTarget.NotFound(target.sourceFile)
         }
 
     /**
      * T-M55-01：XML 目标解析——与日志页 [SqlLogPanel.resolveEntryXmlJump] 同语义。
      * mapperStatement 非空且 [MapperXmlLocator] 定位成功才返回；否则 null（回退 Java，不劣化）。
+     * T-RecentExecMenu O-119：解析原语收口 [LogEntryJumpOps.resolveXml]。
      */
-    internal fun resolveXmlJumpTarget(entry: LogSqlEntry): HistoryJumpTarget.MapperXml? {
-        val statementId = entry.mapperStatement?.takeIf { it.isNotBlank() } ?: return null
-        val location = MapperXmlLocator.locate(project, statementId) ?: return null
-        return HistoryJumpTarget.MapperXml(location.virtualFile, location.line)
-    }
+    internal fun resolveXmlJumpTarget(entry: LogSqlEntry): HistoryJumpTarget.MapperXml? =
+        LogEntryJumpOps.resolveXml(project, entry)
+            ?.let { HistoryJumpTarget.MapperXml(it.virtualFile, it.line) }
 
     /**
      * 跳转到产生该 SQL 的源码位置（测试驱动；等价右键「跳转到源码」）。
@@ -714,33 +713,27 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      * 跳转到产生该 SQL 的源码位置。
      * 通过 sourceFile + sourceLine 直接定位（F-44 新格式）；
      * T-JumpCapture：无捕获位置时弹框引导开启源码捕获拦截器。
+     * T-RecentExecMenu O-119：解析/导航/通知原语走 [LogEntryJumpOps]（本页策略保持原样：
+     * NoSource/MissingSource 引导弹窗、NotFound 轻通知，标题键为本页口径 `log.history.*`）。
      */
     private fun jumpToSource(entry: LogSqlEntry) {
-        when (val target = resolveJumpTarget(entry)) {
-            is HistoryJumpTarget.NoSource -> {
-                // 缺源码位置（旧版 F-43 条目 / 未启用拦截器捕获）：引导开启源码捕获（T-JumpCapture）
-                SourceCaptureGuide.showMissingSourceDialog(project)
-            }
-            is HistoryJumpTarget.NotFound -> {
+        when (val target = LogEntryJumpOps.resolveSource(project, entry)) {
+            // 缺源码位置（旧版 F-43 条目 / 未启用拦截器捕获）：引导开启源码捕获（T-JumpCapture）
+            LogEntryJumpOps.SourceTarget.NoSource,
+            LogEntryJumpOps.SourceTarget.MissingSource,
+            -> LogEntryJumpOps.showMissingSourceGuide(project)
+
+            is LogEntryJumpOps.SourceTarget.NotFound -> {
                 // 文件不存在时提示（项目结构可能已变化）；T-UiNative T-UN-02：改轻通知（原模态弹窗）
-                // 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）
-                if (!ApplicationManager.getApplication().isUnitTestMode) {
-                    runCatching {
-                        Notification(
-                            NOTIFICATION_GROUP_ID,
-                            MpSqlVisualizerBundle.message("log.history.jumpToSource"),
-                            MpSqlVisualizerBundle.message("log.history.jumpToSource.notFound", target.sourceFile),
-                            NotificationType.INFORMATION,
-                        ).notify(project)
-                    }
-                }
+                LogEntryJumpOps.showToast(
+                    project,
+                    "log.history.jumpToSource",
+                    MpSqlVisualizerBundle.message("log.history.jumpToSource.notFound", target.sourceFile),
+                )
             }
-            is HistoryJumpTarget.Navigate -> {
-                OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
-            }
-            // resolveJumpTarget 不产出该分支（XML 目标走 resolveXmlJumpTarget/JumpToMapperXmlAction）；防御性导航
-            is HistoryJumpTarget.MapperXml -> {
-                OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
+
+            is LogEntryJumpOps.SourceTarget.Precise -> {
+                LogEntryJumpOps.navigate(project, target.virtualFile, target.line)
             }
         }
     }
@@ -756,8 +749,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         private const val CARD_FILES = "files"
         private const val CARD_SQL = "sql"
 
-        /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
-        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+        // T-RecentExecMenu O-119：轻提示通知组常量随跳转原语收口 [LogEntryJumpOps] 退役
+        // （本页唯一使用者是原跳转通知，现经 ops.showToast 走共享组 id）。
 
         /** T-Perf-05：搜索输入防抖窗口（毫秒）。 */
         private const val SEARCH_DEBOUNCE_MS = 200

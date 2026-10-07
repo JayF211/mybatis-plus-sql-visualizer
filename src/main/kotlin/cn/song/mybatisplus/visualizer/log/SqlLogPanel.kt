@@ -1717,26 +1717,26 @@ class SqlLogPanel(
     /**
      * 统一解析跳转目标：仅依赖捕获位置，不做任何启发式定位。
      * T-SourceJumpFunnel P0-5：判定逻辑收敛到 [EntryJumpResolver]（实时/历史两面板共用同一实现，
-     * 历史面板由此获得候选回退能力），本函数只做类型转接。
+     * 历史面板由此获得候选回退能力）；T-RecentExecMenu O-119：转接原语收口到 [LogEntryJumpOps]
+     * （实时/历史/弹框三方共用），本函数只做类型转接（类型保持不动——既有测试按其断言分支）。
      */
     internal fun resolveEntryJump(entry: LogSqlEntry): LogJumpTarget =
-        when (val target = EntryJumpResolver.resolve(project, entry)) {
-            is EntryJumpResolver.JumpTarget.Precise -> LogJumpTarget.Precise(target.virtualFile, target.line)
-            EntryJumpResolver.JumpTarget.NoSource -> LogJumpTarget.NoSource
-            is EntryJumpResolver.JumpTarget.NotFound -> LogJumpTarget.NotFound(target.sourceFile)
-            EntryJumpResolver.JumpTarget.MissingSource -> LogJumpTarget.MissingSource
+        when (val target = LogEntryJumpOps.resolveSource(project, entry)) {
+            is LogEntryJumpOps.SourceTarget.Precise -> LogJumpTarget.Precise(target.virtualFile, target.line)
+            LogEntryJumpOps.SourceTarget.NoSource -> LogJumpTarget.NoSource
+            is LogEntryJumpOps.SourceTarget.NotFound -> LogJumpTarget.NotFound(target.sourceFile)
+            LogEntryJumpOps.SourceTarget.MissingSource -> LogJumpTarget.MissingSource
         }
 
     /**
      * T-M55-01：XML 目标解析——mapperStatement 非空且 [MapperXmlLocator] 定位成功时返回
      * [LogJumpTarget.MapperXml]；statementId 缺失 / MP 内置语句 XML 不存在 / 多模块定位失败
      * 一律返回 null（调用方回退 Java 跳转，不劣化）。定位自带 ReadAction，EDT 直调安全。
+     * T-RecentExecMenu O-119：解析原语收口 [LogEntryJumpOps.resolveXml]。
      */
-    internal fun resolveEntryXmlJump(entry: LogSqlEntry): LogJumpTarget.MapperXml? {
-        val statementId = entry.mapperStatement?.takeIf { it.isNotBlank() } ?: return null
-        val location = MapperXmlLocator.locate(project, statementId) ?: return null
-        return LogJumpTarget.MapperXml(location.virtualFile, location.line)
-    }
+    internal fun resolveEntryXmlJump(entry: LogSqlEntry): LogJumpTarget.MapperXml? =
+        LogEntryJumpOps.resolveXml(project, entry)
+            ?.let { LogJumpTarget.MapperXml(it.virtualFile, it.line) }
 
     /** 等价右键「跳转到源码」（供 UI 测试断言精确跳转分支，避 headless 弹窗）。 */
     internal fun jumpToSourceForTest(entry: LogSqlEntry) = jumpToSource(entry)
@@ -1744,37 +1744,29 @@ class SqlLogPanel(
     /**
      * F-44-6：日志 ↔ 源码关联跳转。
      * 仅依赖捕获位置精确跳转；无位置时弹框引导开启源码捕获（T-JumpCapture）。
+     * T-RecentExecMenu O-119：解析/导航/通知原语走 [LogEntryJumpOps]（本页策略：NoSource/NotFound
+     * 轻通知、MissingSource 引导弹窗——与历史页策略不同体，各自保留）。
      */
     private fun jumpToSource(entry: LogSqlEntry) {
-        when (val target = resolveEntryJump(entry)) {
-            is LogJumpTarget.Precise ->
-                OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
-            // resolveEntryJump 不产出该分支（XML 目标走 resolveEntryXmlJump/JumpToMapperXmlAction）；防御性导航
-            is LogJumpTarget.MapperXml ->
-                OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
-            is LogJumpTarget.NoSource ->
+        when (val target = LogEntryJumpOps.resolveSource(project, entry)) {
+            is LogEntryJumpOps.SourceTarget.Precise ->
+                LogEntryJumpOps.navigate(project, target.virtualFile, target.line)
+            LogEntryJumpOps.SourceTarget.NoSource ->
                 showJumpToast(MpSqlVisualizerBundle.message("log.panel.jumpToSource.noSource"))
-            is LogJumpTarget.NotFound ->
+            is LogEntryJumpOps.SourceTarget.NotFound ->
                 showJumpToast(MpSqlVisualizerBundle.message("log.panel.jumpToSource.notFound", target.sourceFile))
-            is LogJumpTarget.MissingSource ->
-                SourceCaptureGuide.showMissingSourceDialog(project)
+            LogEntryJumpOps.SourceTarget.MissingSource ->
+                LogEntryJumpOps.showMissingSourceGuide(project)
         }
     }
 
     /**
      * T-UiNative T-UN-02：跳转无源码提示改轻通知（原模态弹窗——纯告知无需打断）。
-     * 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）。
+     * T-RecentExecMenu O-119：实现收口 [LogEntryJumpOps.showToast]（标题键留本页口径）；
+     * 见 [FocusCallerMethodAction] 同用本薄封装。
      */
     private fun showJumpToast(content: String) {
-        if (ApplicationManager.getApplication().isUnitTestMode) return
-        runCatching {
-            Notification(
-                NOTIFICATION_GROUP_ID,
-                MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
-                content,
-                NotificationType.INFORMATION,
-            ).notify(project)
-        }
+        LogEntryJumpOps.showToast(project, "log.panel.jumpToSource", content)
     }
 
     /** 更新工具栏慢查询计数徽章（O-1 Phase C）。 */
