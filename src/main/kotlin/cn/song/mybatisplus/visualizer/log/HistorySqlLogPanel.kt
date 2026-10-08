@@ -46,8 +46,11 @@ import javax.swing.JPanel
 import javax.swing.SwingConstants
 
 /**
- * 历史 SQL 面板（F-44-3 两级导航）：读取 .idea/sql-visualizer/sql-history/ 文件展示
+ * 历史 SQL 面板（F-44-3 两级导航）：读取自动保存目录中的历史文件展示
  * （F-44-4：目录随插件更名，旧名 mybatis-plus-sql-visualizer 不再读取）。
+ *
+ * <p>目录解析与写端同源（[SqlLogAutoSaver.resolveHistoryDir]）——设置页「保存目录」填了自定义路径时，
+ * 历史页读的就是同一个目录（T-HistoryTabAlways 前读端只认默认 .idea 路径，自定义目录下写的文件看不到）。
  *
  * <p>展示层级（用户要求）：
  * <ol>
@@ -150,6 +153,19 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     }
 
     /**
+     * 设置变更处理（topic 监听入口，T-HistoryTabAlways）：解析出的历史目录与上次扫描所用不同时
+     * 直接重扫（用户在设置页改了「保存目录」，不重扫就还得手动点刷新），未变时只重算显示模式并重绘
+     * （原 [onDisplayModeChanged] 行为）。
+     */
+    internal fun onSettingsChanged() {
+        if (historyDirChangedSinceLastScan()) refresh() else onDisplayModeChanged()
+    }
+
+    /** T-HistoryTabAlways：解析出的历史目录是否与上次扫描所用不同（设置页改了「保存目录」）。
+     *  测试直接断言本判据——[refresh] 是后台任务，headless 下到点不可控。 */
+    internal fun historyDirChangedSinceLastScan(): Boolean = getHistoryDir() != lastScannedDir
+
+    /**
      * 行高随显示模式分流（T-ListMode × T-LogListFreeze-04 权衡，与日志 tab [SqlLogPanel.applyListCellHeight] 同款）：
      * SINGLE_LINE 固定行高走 O(1) 布局快路径；KEYWORD_WRAP/FORMATTED 可变行高（条目行数不等），
      * 多行片段有条目级缓存，逐条测量只剩轻量组件布局。
@@ -229,7 +245,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             cn.song.mybatisplus.visualizer.config.SettingsChangeListener {
                 // write-safe: UI-only（纯 Swing/只读，无文档写）
                 ApplicationManager.getApplication().invokeLater(
-                    { onDisplayModeChanged() },
+                    { onSettingsChanged() },
                     com.intellij.openapi.application.ModalityState.any(),
                 )
             },
@@ -369,6 +385,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      * 一次浏览窗口内被 refresh + showFileContent 全量解析约 3 遍（15~16.6s），此处消除 refresh 侧的重复成本。
      */
     fun refresh() {
+        // T-HistoryTabAlways：记录本次扫描所用目录（EDT 侧纯字段写），供设置变更时判定要不要重扫
+        lastScannedDir = getHistoryDir()
         val gen = ++bgGeneration
         val keepFile = currentFile?.file
         object : Task.Backgroundable(project, MpSqlVisualizerBundle.message("log.history.scan.progress"), true) {
@@ -391,11 +409,13 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 测试缝：同步刷新（生产路径 refresh() 已后台化；headless 测试需要确定性）。 */
     internal fun refreshForTest() {
         ++bgGeneration // 作废在途后台 apply（构造期 refresh() 的后台扫描可能尚未完成）
+        val dir = getHistoryDir()
+        lastScannedDir = dir
         val keepFile = currentFile?.file
         val keepReload = keepFile?.takeIf { it.exists() }?.let {
             SqlReload(it, SqlLogFileReader.readFromFile(it), it.lastModified() to it.length())
         }
-        applyRefresh(scanHistoryFiles(getHistoryDir()), keepFile, keepReload)
+        applyRefresh(scanHistoryFiles(dir), keepFile, keepReload)
     }
 
     /** 目录扫描 + 条目计数（纯 IO，后台执行）。 */
@@ -556,10 +576,12 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** T-SqlLogPerf：当前浏览文件加载完成时的 (lastModified, length) 快照——refresh() 据此判定文件是否变化。 */
     private var currentFileStamp: Pair<Long, Long>? = null
 
-    private fun getHistoryDir(): String {
-        val basePath = project.basePath ?: return ""
-        return "$basePath${File.separator}.idea${File.separator}${SqlLogAutoSaver.DATA_DIR_NAME}${File.separator}sql-history"
-    }
+    /** T-HistoryTabAlways：上次扫描所用目录——设置变更时据此判定是否需要重扫（保存目录被改过）。 */
+    private var lastScannedDir: String = ""
+
+    /** 历史 SQL 目录：与写端同源解析（自定义保存目录优先；无项目根回落 user.home）。 */
+    private fun getHistoryDir(): String =
+        SqlLogAutoSaver.resolveHistoryDir(PluginSettings.getInstance().state.logAutoSavePath, project.basePath)
 
     private fun openPreview(entry: LogSqlEntry) {
         SqlPreviewService.showResult(project, buildPreviewResult(entry))

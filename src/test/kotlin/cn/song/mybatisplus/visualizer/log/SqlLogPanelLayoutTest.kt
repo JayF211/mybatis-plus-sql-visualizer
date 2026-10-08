@@ -354,30 +354,91 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         }
     }
 
-    fun test切换历史Tab_历史面板正常装配() {
+    /** 清理默认历史目录（本类各用例共享同一临时项目目录，方法间残留不清——JUnit3 执行序非声明序）。 */
+    private fun cleanHistoryDir() {
+        historyDir().deleteRecursively()
+    }
+
+    private fun historyDir() = java.io.File(
+        project.basePath + java.io.File.separator + ".idea" +
+            java.io.File.separator + SqlLogAutoSaver.DATA_DIR_NAME +
+            java.io.File.separator + "sql-history",
+    )
+
+    /**
+     * T-HistoryTabAlways：历史 tab 常驻——未开自动保存、`.idea` 里也没有历史文件的干净项目里
+     * 同样存在（此前由 `logAutoSaveEnabled || hasHistoryFiles()` 决定，此态无入口）。
+     *
+     * 判据取**等值**（历史 tab 在场 + tab 总数恰 4）：旧用例的 `tabCount >= 3` 对门禁无判别力
+     * （关态 3、开态 4，两态皆过）——反向验证时把门禁改回去，本用例必须变红。
+     */
+    fun test历史Tab常驻_未开自动保存且无历史文件也存在() {
+        cleanHistoryDir()
+        val settings = PluginSettings.getInstance()
+        val prevAutoSave = settings.state.logAutoSaveEnabled
+        settings.state.logAutoSaveEnabled = false
         val panel = SqlLogPanel(project, manager)
         try {
             waitForEdt()
-            // 写入一个历史文件 → 构造时即显示历史 tab；否则模拟设置开启
-            val dir = java.io.File(
-                project.basePath + java.io.File.separator + ".idea" +
-                    java.io.File.separator + SqlLogAutoSaver.DATA_DIR_NAME +
-                    java.io.File.separator + "sql-history",
+            val tabs = panel.tabsForTest
+            assertEquals("四个 tab：SQL 日志 / 日志转 SQL / SQL→Java / SQL 历史", 4, tabs.tabCount)
+            assertTrue(
+                "历史 tab 应恒定存在（未开自动保存、无历史文件）",
+                tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history")) >= 0,
             )
-            dir.mkdirs()
-            java.io.File(dir, "sql-history-2026-08-31.sql").writeText(
-                "-- source: A.java:1 | time: 1ms | 2026-08-31 17:30:00.000 --\nSELECT 1\n\n",
-            )
-            // 重新构建面板以纳入历史 tab（构造期基于 .idea 文件判断）
-            panel.dispose()
-            val panel2 = SqlLogPanel(project, manager)
-            waitForEdt()
-            // 切到历史 tab 不抛异常（兼容：历史面板正确装配进 JBTabbedPane）
-            val tabCount = (panel2.getComponent(0) as? javax.swing.JTabbedPane)?.tabCount ?: -1
-            assertTrue("含历史/转换等 tab，tab 数应 ≥ 3", tabCount >= 3)
-            panel2.dispose()
         } finally {
             panel.dispose()
+            settings.state.logAutoSaveEnabled = prevAutoSave
+        }
+    }
+
+    /** 历史 tab 正常装配：切到该 tab 不抛异常，且挂的是历史面板（兼容性回归）。 */
+    fun test切换历史Tab_历史面板正常装配() {
+        cleanHistoryDir()
+        val panel = SqlLogPanel(project, manager)
+        try {
+            waitForEdt()
+            val tabs = panel.tabsForTest
+            val index = tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history"))
+            assertTrue("历史 tab 应在场", index >= 0)
+            tabs.selectedIndex = index
+            waitForEdt()
+            assertTrue("切到历史 tab 后选中的应是历史面板", tabs.selectedComponent is HistorySqlLogPanel)
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    /**
+     * T-HistoryTabAlways：设置变更（把自动保存关掉）不再摘除历史 tab——旧实现的运行期门禁会移除它。
+     *
+     * 构造期先**开着**自动保存（旧实现在此态也会挂载 tab），再关掉并广播：这样红/绿差异只可能来自
+     * 「设置变更后摘不摘 tab」这一条分支，而不是构造期门禁（两条门禁的判别点各自独立）。
+     */
+    fun test设置变更_关闭自动保存后历史Tab不消失() {
+        cleanHistoryDir()
+        val settings = PluginSettings.getInstance()
+        val prevAutoSave = settings.state.logAutoSaveEnabled
+        settings.state.logAutoSaveEnabled = true
+        val panel = SqlLogPanel(project, manager)
+        try {
+            waitForEdt()
+            val tabs = panel.tabsForTest
+            val index = tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history"))
+            assertTrue("前提：自动保存开启时历史 tab 在场", index >= 0)
+            settings.state.logAutoSaveEnabled = false
+            // 等价设置页 apply 后的广播（监听器经 invokeLater 处理）
+            project.messageBus.syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC).settingsChanged()
+            waitForEdt()
+            assertEquals(
+                "关闭自动保存后历史 tab 不得被移除（旧实现此处会摘掉它）",
+                index,
+                tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history")),
+            )
+            assertEquals("tab 总数不应变化", 4, tabs.tabCount)
+        } finally {
+            panel.dispose()
+            settings.state.logAutoSaveEnabled = prevAutoSave
         }
     }
 }
