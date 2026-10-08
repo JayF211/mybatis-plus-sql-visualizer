@@ -205,7 +205,7 @@ val submission = runCatching {
 
 把本计划里「推断而非实测」的部分显式列出，实施者先证伪再动手：
 
-1. **发行 jar 与仓库同源**：目前用「栈行号 321/337/665 三处逐一对齐 + `git diff 2026.10.9 HEAD -- feedback/` 为空」判定，**未**解 jar 或 `javap -l` 逐行比对。风险低，但若要写进变更记录当结论，实施时顺手解一次 jar 校对。
+1. **发行 jar 与仓库同源**：目前用「栈行号 321/337/665 三处逐一对齐 + `git diff 2026.10.9 HEAD -- feedback/` 为空」判定，**未**解 jar 或 `javap -l` 逐行比对。风险低，但若要写进变更记录当结论，实施时顺手解一次 jar 校对。→ **【已实测，2026-10-08】**：解已装 jar 后 `javap -p -l -c` 反汇编，产物 line 665/667 处即裸 `Container.getComponent(int)`，结论成立（读数见 §八 产物级核验）。
 2. **「单条必崩」是静态推演**：由 `applyBatchItemsToFields` 早退 + `selectedBatchItemsFor` 裸索引直接判定，**未**在沙盒里重放（平台冻结不容易按需复现）。实施时用 S3 用例正反两向直接证实（比真机复现更硬）；真机复验改用「任意单条插件错误上报」路径替代。
 3. **入口链路**：本计划只坐实了「对话框已弹出、提交即崩」这一半；「冻结通知 → `errorHandler` EP → 本对话框」这半沿用既有结论（`IdeErrorReportSubmitter` 头注释：「Freeze 事件已被归属插件（真机截图实证），同通道可达」），本轮截图与预填内容（类名 `Freeze` + 冻结消息）与之一致，未另跑链路验证。
 4. **Java 端口不崩**：静态读码判定（守卫在 810-817），**未**跑端口测试或真机。S4 搬用例后即自动坐实。
@@ -230,4 +230,36 @@ val submission = runCatching {
 
 ## 八、实施记录
 
-（待实施后回填：提交笔号、两向读数、门禁读数、真机截图与日志检索结果）
+**落点**：分支 `t-errreport-submitnoop`，独立工作树 `mybatis-plus-sql-visualizer-errdlg`（自 master `b5e2df2` 切出，2026-10-08）；依据＝用户「从主分支新建分支和工作树 实施」。
+
+**提交**：
+1. `2fdaa9f` `docs(plan): …` —— 本计划落库（计划笔，233 行）。
+2. `e5c4000` `fix: T-ErrReportSubmitNoOp …` —— S1 + S2 + S3 + 文档同步（7 文件 +96/−6）。
+
+**与计划的一致性**：S1/S2/S3 均按计划落地，无方案变更。S1 未触碰 T-FeedbackBatch2 的「单条不出分节」契约，只把容器访问改带界；语义核对＝单条收集为空集 → `BatchSubmitter.submit(submission, emptyList())` 正是其头注释表第一行的「1 条 = 原样单帖」路径，主表单「附带异常堆栈」照常上传（用户现场勾了堆栈，行为不变）。S2 复用 `finishSubmitting(Failure)` 既有状态机（按钮回「提交」可再点、红字原因、复制按钮出现、窗不关），未新增状态分支。S3 两条用例按计划新增，既有三条用例零改动。
+
+**读数（两向）**：
+
+| 轮次 | 命令 | 读数 |
+|---|---|---|
+| 定向（修复态） | `./gradlew test --tests "cn.song.mybatisplus.visualizer.feedback.*"` | **124 / 0 / 0 / 0**（8 类 4m24s；`ErrorReportDialogLayoutTest` 26 → 28 例，两条新用例在 XML 中实名可查） |
+| 反向（临时还原裸索引，标 `RED PROBE`） | `./gradlew test --tests "…ErrorReportDialogLayoutTest"` | **28 例 2 失败**（BUILD FAILED 17s）：两条均为 `java.lang.ArrayIndexOutOfBoundsException: No such child: 0`，与生产日志异常**逐字同形**；红点恰落新增两条用例，其余 26 例保绿＝判别力定向而非整片炸 |
+| 恢复（守卫装回） | 同上 | **28 / 0 / 0 / 0**（BUILD SUCCESSFUL 18s）；`git diff` 复核约定：`RED PROBE` 残留 0 处，生产 diff 只有两行守卫 + 组装段兜底 + `LOG` + 注释 |
+| 冒烟 | `./gradlew testFast` | **3406 / 0 / 0 / 6**（266 类，BUILD SUCCESSFUL 52s）；`> Task :testFast` 无 UP-TO-DATE 标记、结果 XML mtime 与运行同刻 ⇒ 真跑非缓存回读（T-ClickPreviewCopyRestore 登记过的「testFast 首跑 UP-TO-DATE 假绿」形态已核） |
+
+> 口径提醒：`./gradlew test … | tail -n` 的退出码取自 `tail` 而非 gradle，反向轮 `exit code 0` 是管道假绿（PIPESTATUS 定例在册）——判定一律读 `BUILD FAILED/SUCCESSFUL` 与结果 XML 计数，本轮反向轮的"红"即由此确认。
+
+**产物级核验（把 §五「待验证前提 1」由推断升级为实测）**：解用户日用 IDE 已装的 `mybatis-plus-sql-visualizer-2026.10.9.jar`，`javap -p -l -c` 反汇编 `ErrorReportDialog$Companion.selectedBatchItemsFor`：
+
+```
+line 665 → offset 97  →  99: invokevirtual #531  // Method java/awt/Container.getComponent:(I)
+line 667 → offset 238 → 241: invokevirtual #531  // Method java/awt/Container.getComponent:(I)
+```
+
+即**发行产物里这两处就是裸 `getComponent`**，与用户机日志的 `ErrorReportDialog.kt:665` 同源，可排除构建漂移或历史版本解释（`git diff 2026.10.9 HEAD -- …/feedback/` 为空是源码侧旁证，本行是产物侧直证）。
+
+**未做 / 待办（如实）**：
+- **真机 sandbox 走查未做**：单条插件错误 → 报告 → 提交的端到端按钮状态机推进、以及沙盒 `idea.log` 零 `No such child: 0` 检索，本机沙盒 GUI 自动化不可用（CUA 对 243/262 IDE 窗口点击按键不落地，与 T-ClickPreviewCopyRestore 二轮同因），留用户真机或改 pyautogui 路线（`mpsv_walk.py`）。headless 侧已用「生产同形异常 + 状态行纯函数」覆盖判据，但**按钮真按下去的链路**只能由真机证。
+- **K2J 端口同步登记**：生产码无需移植（端口 `ErrorReportDialog.java:810-817` 自 `cd04ddc` 起已带 `getComponentCount()` 守卫），下次 T-SyncK2J 同步轮按「master 已等价、仅需搬本笔两条用例」处理，勿重复改写。
+- **合 master 与补丁发行**：本分支未合 master（用户明令的分界线）；缺陷已随 `2026.9.18-beta.2` 起全部发行版外发，是否发补丁版由用户拍板（见 §七.4）。
+
