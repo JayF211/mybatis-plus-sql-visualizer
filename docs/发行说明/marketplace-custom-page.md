@@ -43,6 +43,7 @@
 | 执行计划 EXPLAIN ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg)![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 弹窗内「执行计划」按钮 | 按方言提交原生控制台，真实计划与静态性能标注同屏对照 |
 | 执行 SQL ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg) | 弹窗内「执行」按钮 | 原生 Database 控制台内嵌，数据源 / Tx / 会话工具栏全保留 |
 | JOIN 关系图 | 弹窗内「JOIN 图」tab | IDEA 原生 Diagrams 渲染（Community 降级自绘）；PNG / SVG 导出 |
+| 调用栈悬停 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 悬停预览面板调用栈区域 | 调试器风格弹层，结构化解析帧、跳过尾部基础设施帧、锚定最深业务帧；帧数可配置（默认 24，范围 12~64） |
 
 ### SQL 日志
 
@@ -56,6 +57,7 @@
 | 多选批量复制 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | Ctrl / Shift 多选后右键 | 一次复制全部选中 SQL，分号收尾换行拼接 |
 | 历史与源码定位 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 侧边栏「SQL 历史」tab / 双击条目 | 历史自动保存、两级导航；精确跳到触发 SQL 的源码行 |
 | 去重 / 过滤 | 工具栏 | SQL 类型多选筛选；`Ctrl+F` 搜索；去重 `⨉N` 徽章即时显示 |
+| 最近执行记录 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | gutter 图标右键菜单 | 弹框浏览最近 SQL 执行记录，复用日志列表渲染器；右键菜单六件（复制时间戳/屏蔽/送页签/跳转源码）；支持 Ctrl / Shift 多选与批量复制；右侧编辑器默认格式化 SQL、可临时改动后复制 |
 
 ![SQL 日志捕获与还原演示](https://sql-visualizer.jvtools.cn/demo/sql-log.gif)
 
@@ -64,7 +66,7 @@
 | 功能 | 说明 |
 |------|------|
 | CRUD SQL 生成 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 实体类 / 项目视图实体节点 / Database 工具窗表节点右键一步生成 INSERT / UPDATE / SELECT / DELETE；列勾选、乐观锁与逻辑删除自动适配 |
-| SQL → Java（`Alt+Shift+J` / 右键） | QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 四形态；SELECT / UPDATE / DELETE / INSERT / 多表 JOIN；生成代码可直接编译 |
+| SQL → Java（`Alt+Shift+J` / 右键） | QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 四形态；SELECT / UPDATE / DELETE / INSERT / 多表 JOIN；GROUP BY / HAVING / DISTINCT / FOR UPDATE / UNION 子句；聚合/函数列原文回落；方言宽容（双引号标识符/十六进制/ANSI 类型字面量）；返回类型自由输入（Map/Objs/VO 类名）；生成代码可直接编译 |
 | SQL 代码补全 | 预览面板与 mapper XML / 注解 SQL 内 `Ctrl+Space`：表名、列名、`#{}` 参数名、XML 动态标签 |
 | 逻辑删除注入 | 实体含 `@TableLogic` 时自动追加 `AND deleted = 值`（值可配，默认 0） |
 | MCP 工具（AI agent）![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 内置 MCP Server 十个只读工具（IDEA 2025.2+）：渲染 SQL / 表结构 / EXPLAIN / 日志还原 / 回滚预案等；Claude Code / Cursor / AI Assistant 可直接调用，设置页逐工具门控 |
