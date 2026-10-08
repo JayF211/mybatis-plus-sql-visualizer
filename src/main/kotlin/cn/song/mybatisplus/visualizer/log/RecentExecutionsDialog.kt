@@ -353,11 +353,14 @@ class RecentExecutionsDialog(
         popup.component.show(entryList, e.x, e.y)
     }
 
-    /** 菜单动作组（[showContextMenu] 与测试访问器共用，单一来源）；[selectedEntries] 供批量项（复制时间戳）。 */
-    private fun buildMenuGroup(
+    /**
+     * 菜单动作清单（[buildMenuGroup] 与测试访问器共用，单一来源）；[selectedEntries] 供批量项（复制时间戳）。
+     * 返回顺序即菜单顺序——仓内测试按索引断言，勿重排。
+     */
+    private fun menuActions(
         entry: LogSqlEntry,
         selectedEntries: List<LogSqlEntry> = listOf(entry),
-    ): DefaultActionGroup = DefaultActionGroup(
+    ): List<AnAction> = listOf(
         CopyTimestampAction(selectedEntries),
         SuppressSqlAction(entry),
         SendToSqlToJavaAction(entry),
@@ -365,6 +368,15 @@ class RecentExecutionsDialog(
         JumpToJavaAction(entry),
         JumpToMapperXmlAction(entry),
     )
+
+    /**
+     * 菜单动作组（[showContextMenu] 用）。取动作清单请直接调 [menuActions]——`DefaultActionGroup`
+     * 唯一的子项访问器 `getChildren(AnActionEvent)` 是 override-only API，调用会被 verifyGate 判违规。
+     */
+    private fun buildMenuGroup(
+        entry: LogSqlEntry,
+        selectedEntries: List<LogSqlEntry> = listOf(entry),
+    ): DefaultActionGroup = DefaultActionGroup(*menuActions(entry, selectedEntries).toTypedArray())
 
     /** 复制选中条目的时间戳片段（与日志页同源 [batchCopyTimestamps]；多选批量、文案带条数；显示开关关闭时无片段 → 置灰）。 */
     private inner class CopyTimestampAction(private val entries: List<LogSqlEntry>) : AnAction() {
@@ -605,14 +617,14 @@ class RecentExecutionsDialog(
      */
     internal fun menuActionsForTest(): List<AnAction> {
         val entry = entryList.selectedValue ?: return emptyList()
-        return buildMenuGroup(entry).getChildren(null).toList()
+        return menuActions(entry)
     }
 
     /** 测试访问器：按**当前多选集合**构建菜单（T-RecentMulti：批量项文案断言用）。 */
     internal fun menuActionsForSelectionForTest(): List<AnAction> {
         val lead = entryList.leadSelectionIndex
         val entry = if (lead >= 0) listModel.getElementAt(lead) else entryList.selectedValue ?: return emptyList()
-        return buildMenuGroup(entry, entryList.selectedValuesList).getChildren(null).toList()
+        return menuActions(entry, entryList.selectedValuesList)
     }
 
     /** 测试访问器：屏蔽规则经理（断言规则确实入库）。 */
