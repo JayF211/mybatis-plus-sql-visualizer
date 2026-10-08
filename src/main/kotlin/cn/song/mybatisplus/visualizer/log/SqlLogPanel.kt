@@ -1405,8 +1405,9 @@ class SqlLogPanel(
         list.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
+                // T-ClickPreviewCopyRestore：修饰键一并转发——Ctrl/Shift 单击（多选第一击）不排程预览
                 if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
-                    clickPreview.onClick(e.clickCount, e.point)
+                    clickPreview.onClick(e.clickCount, e.point, e.modifiersEx)
                 }
                 if (e.clickCount >= 2) {
                     list.selectedValue?.let { openPreview(it) }

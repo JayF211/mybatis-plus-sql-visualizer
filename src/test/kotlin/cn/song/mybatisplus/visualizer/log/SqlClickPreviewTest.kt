@@ -3,9 +3,12 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.actionSystem.IdeActions
+import com.intellij.openapi.actionSystem.impl.SimpleDataContext
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.editor.actionSystem.EditorActionManager
 import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter
 import com.intellij.psi.TokenType
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -18,6 +21,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.awt.Point
+import java.awt.event.MouseEvent
 import javax.swing.DefaultListModel
 import javax.swing.JButton
 
@@ -268,6 +272,128 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         } finally {
             // 挂起定时器 300ms 后会在 EDT 真弹带编辑器的预览浮窗——测试内必须停表，防编辑器泄漏
             cp.dispose()
+        }
+    }
+
+    // ---------- T-ClickPreviewCopyRestore：修饰键守卫（多选第一击）+ 编辑器 Ctrl+C 复制全文 ----------
+
+    /** 模拟快捷键分派：直调当前注册的 copy handler（keymap Ctrl+C / Ctrl+Insert 绑定同一 action 入口）。 */
+    private fun dispatchEditorCopy(editor: Editor) {
+        // 243 action 管线拒绝裸匿名 DataContext（Utils.reportUnexpectedDataContextKind），
+        // 上下文必须是 DataManager/CustomizedDataContext/SimpleDataContext 之一——用 SimpleDataContext 空上下文
+        val context = SimpleDataContext.getSimpleContext(emptyMap<String, Any>(), null)
+        EditorActionManager.getInstance()
+            .getActionHandler(IdeActions.ACTION_EDITOR_COPY)
+            .execute(editor, null, context)
+    }
+
+    fun test修饰键判定纯函数只认CtrlShift() {
+        assertTrue(isMultiSelectIntent(MouseEvent.CTRL_DOWN_MASK))
+        assertTrue(isMultiSelectIntent(MouseEvent.SHIFT_DOWN_MASK))
+        // 真实转发携带 BUTTON1（左键正按下）：Ctrl+左键组合必须识别，纯左键/Alt 不得误报
+        assertTrue(isMultiSelectIntent(MouseEvent.CTRL_DOWN_MASK or MouseEvent.BUTTON1_DOWN_MASK))
+        assertFalse(isMultiSelectIntent(0))
+        assertFalse(isMultiSelectIntent(MouseEvent.BUTTON1_DOWN_MASK))
+        assertFalse(isMultiSelectIntent(MouseEvent.ALT_DOWN_MASK))
+    }
+
+    fun testCtrl修饰键单击不排程预览_多选第一击即守卫() {
+        val list = fixedList("SELECT 1;", "SELECT 2;", "SELECT 3;")
+        val cp = SqlClickPreview(project, list) { i -> withTerminator(list.model.getElementAt(i).restoredSql) }
+        try {
+            // 多选第一击：无修饰键单击会排程，Ctrl/Shift 单击一律不排程（真实转发含 BUTTON1 位）
+            cp.onClick(1, Point(5, 10), MouseEvent.CTRL_DOWN_MASK or MouseEvent.BUTTON1_DOWN_MASK)
+            assertFalse("Ctrl 单击（多选第一击）不应排程预览", cp.isScheduled)
+            assertNull("Ctrl 单击不应弹窗", cp.currentPopup)
+
+            cp.onClick(1, Point(5, 30), MouseEvent.SHIFT_DOWN_MASK or MouseEvent.BUTTON1_DOWN_MASK)
+            assertFalse("Shift 单击（范围选择）不应排程预览", cp.isScheduled)
+
+            // 已有单选时 Ctrl 单击（toggle 到第二行）同样不排程——抢焦点只发生在这一击
+            list.selectedIndex = 0
+            cp.onClick(1, Point(5, 30), MouseEvent.CTRL_DOWN_MASK or MouseEvent.BUTTON1_DOWN_MASK)
+            assertFalse("已有单选时 Ctrl 单击仍不应排程", cp.isScheduled)
+
+            cp.onClick(1, Point(5, 10))
+            assertTrue("无修饰键单击仍应排程预览（对照）", cp.isScheduled)
+        } finally {
+            cp.dispose()
+        }
+    }
+
+    fun test带修饰键单击停掉已排程的预览() {
+        val list = fixedList("SELECT 1;", "SELECT 2;")
+        val cp = SqlClickPreview(project, list) { i -> withTerminator(list.model.getElementAt(i).restoredSql) }
+        try {
+            cp.onClick(1, Point(5, 10)) // 无修饰键单击：排程
+            assertTrue(cp.isScheduled)
+            cp.onClick(1, Point(5, 30), MouseEvent.CTRL_DOWN_MASK or MouseEvent.BUTTON1_DOWN_MASK) // 随即 Ctrl 单击另一行
+            assertFalse("带修饰键单击应停掉已排程预览并关旧", cp.isScheduled)
+            assertNull(cp.currentPopup)
+        } finally {
+            cp.dispose()
+        }
+    }
+
+    fun test编辑器CtrlC无选中复制全文() {
+        var copied: String? = null
+        val content = SqlClickPreview.buildContent(
+            project,
+            "SELECT 1;",
+            copyText = { copied = it },
+            close = {},
+        )
+        try {
+            // 复制前先抓按钮引用：flashCopied 会把 tooltip 短暂换成「已复制」，复制后按 tooltip 查找必落空
+            val copyButton = findButtons(content.component)
+                .first { it.toolTipText == MpSqlVisualizerBundle.message("log.preview.copy") }
+            dispatchEditorCopy(content.editor)
+            assertEquals("浮层编辑器 Ctrl+C 无选中应复制全文（与头部按钮同源）", "SELECT 1;", copied)
+            assertEquals(
+                "Ctrl+C 复制后按钮图标应换对号（与按钮复制同反馈）",
+                AllIcons.Actions.Checked,
+                copyButton.icon,
+            )
+        } finally {
+            releaseEditor(content.editor)
+        }
+    }
+
+    fun test编辑器CtrlC复制用户编辑后的全文() {
+        var copied: String? = null
+        val content = SqlClickPreview.buildContent(
+            project,
+            "SELECT 1;",
+            copyText = { copied = it },
+            close = {},
+        )
+        try {
+            WriteCommandAction.runWriteCommandAction(project) {
+                content.editor.document.setText("SELECT edited_price FROM user;")
+            }
+            dispatchEditorCopy(content.editor)
+            assertEquals("Ctrl+C 应取编辑后文本（与按钮复制同源）", "SELECT edited_price FROM user;", copied)
+        } finally {
+            releaseEditor(content.editor)
+        }
+    }
+
+    fun test编辑器CtrlC有选中时交原生复制不全文覆盖() {
+        var copied: String? = null
+        val content = SqlClickPreview.buildContent(
+            project,
+            "SELECT * FROM user WHERE id = 1;",
+            copyText = { copied = it },
+            close = {},
+        )
+        try {
+            WriteCommandAction.runWriteCommandAction(project) {
+                content.editor.selectionModel.setSelection(0, 6) // 选中 "SELECT"
+            }
+            dispatchEditorCopy(content.editor)
+            assertNull("有选中时不应走全文复制回调（交编辑器原生复制选中片段）", copied)
+        } finally {
+            releaseEditor(content.editor)
         }
     }
 
