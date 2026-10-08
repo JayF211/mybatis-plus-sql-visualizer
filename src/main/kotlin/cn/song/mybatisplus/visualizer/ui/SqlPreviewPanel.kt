@@ -1056,6 +1056,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         MpSqlVisualizerBundle.message("panel.compare") to { showSqlDiff() },
         MpSqlVisualizerBundle.message("panel.share") to { showShareDialog() },
         MpSqlVisualizerBundle.message("panel.portableExport") to { exportPortableSql() },
+        // R36：回放脚本导出（参数已填回的可执行 .sql；沿用 O-91 同款入口与写盘/通知链）
+        MpSqlVisualizerBundle.message("panel.replayExport") to { exportReplayScript() },
         // R37（T-LaneB D95）：安全 AI 上下文交递——脱敏参数化块进剪贴板（未接 MCP 用户的安全出口）
         MpSqlVisualizerBundle.message("panel.aiContext") to { copyAsAiContext() },
     )
@@ -1186,6 +1188,60 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     .getNotificationGroup(NOTIFICATION_GROUP_ID)
                     .createNotification(
                         MpSqlVisualizerBundle.message("log.history.export.done", rows.size, target.absolutePath),
+                        com.intellij.notification.NotificationType.INFORMATION,
+                    ).notify(project)
+            }.onFailure {
+                com.intellij.notification.NotificationGroupManager.getInstance()
+                    .getNotificationGroup(NOTIFICATION_GROUP_ID)
+                    .createNotification(
+                        MpSqlVisualizerBundle.message("log.history.export.failed", it.message ?: ""),
+                        com.intellij.notification.NotificationType.ERROR,
+                    ).notify(project)
+            }
+        }
+    }
+
+    /**
+     * R36（V46 定案）：回放脚本导出——当前预览（或经历史 recall 回落的）SQL（参数已填回）导出为
+     * **可直接执行的单个 `.sql`**，方言适配取当前方言（语句本体已是生成链渲染产物，不改写），
+     * 事务包裹可选（勾选则 `<方言显式事务开始语句>; … COMMIT;`；方言无该语句时选项禁用并说明）。
+     *
+     * 与 O-91 [exportPortableSql] 的关系：入口/写盘/通知三处**照抄同款**（仓纪律「新增 UI 交互
+     * 须照抄既有同类」），产物形态不同——O-91 是 CSV/TSV/TXT 行集，本件是单个 `.sql`。
+     * 脱敏同 R60 口径（`displayMaskEnabled`，投影级）：开启时脚本字面量打码并在注释头标 `masked`。
+     */
+    internal fun exportReplayScript() {
+        val sql = currentEditorSql()?.takeIf { it.isNotBlank() } ?: return
+        val dialect = current?.previewModel?.dialect ?: MySqlDialect
+        val options = ReplayExportDialog(project, dialect.name, dialect.transactionBegin)
+        if (!options.showAndGet()) return
+        val mask = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.displayMaskEnabled
+        val plan = cn.song.mybatisplus.visualizer.log.ReplayScriptExport
+            .plan(sql, dialect, options.wrapTransaction) ?: return
+        val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
+            MpSqlVisualizerBundle.message("replay.export.title"),
+            "SQL",
+            cn.song.mybatisplus.visualizer.log.ReplayScriptExport.EXT,
+        )
+        val dialog = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance()
+            .createSaveFileDialog(descriptor, project)
+        val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, "replay.sql") ?: return
+        val target = saved.file
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching {
+                cn.song.mybatisplus.visualizer.log.SqlExportService.exportToFile(
+                    target,
+                    cn.song.mybatisplus.visualizer.log.ReplayScriptExport.render(
+                        plan,
+                        mask,
+                        cn.song.mybatisplus.visualizer.log.SqlExportService.formatTime(System.currentTimeMillis()),
+                    ),
+                )
+            }.onSuccess {
+                com.intellij.notification.NotificationGroupManager.getInstance()
+                    .getNotificationGroup(NOTIFICATION_GROUP_ID)
+                    .createNotification(
+                        MpSqlVisualizerBundle.message("log.history.export.done", plan.statements.size, target.absolutePath),
                         com.intellij.notification.NotificationType.INFORMATION,
                     ).notify(project)
             }.onFailure {

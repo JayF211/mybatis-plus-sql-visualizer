@@ -223,6 +223,30 @@ interface Dialect {
      * （与分页子句的方言渲染策略一致）。
      */
     val supportsDeleteLimit: Boolean get() = false
+
+    /**
+     * R36（V46 证伪①）：**显式事务开始语句**（回放脚本的事务包裹用；不含结尾分号）。
+     *
+     * 语义：非 null = 本方言有「显式开启事务」的语句，回放脚本可用 `<本值>;`（前）+
+     * `COMMIT;`（后）包裹；null = **本方言无显式事务开始语句**——事务随首条 DML 隐式开启，
+     * 中途回退须由客户端持有同一连接/会话执行 ROLLBACK（脚本层无从表达）。此时回放脚本
+     * **诚实省略**包裹，UI 禁用该选项并说明原因（不产出 `.sql` 里必然语法错误的伪包裹）。
+     *
+     * 边界与证据（三档，逐档标级别；核对先例照 O-9 闸门边界）：
+     *  - **本机真引擎实测**（`H2 2.3.232` 六模式 REGULAR/MySQL/MariaDB/PostgreSQL/Oracle/
+     *    MSSQLServer + `SQLite 3.50.3`）：两引擎均取 `BEGIN`，且**语义成立**——`BEGIN` + INSERT +
+     *    `ROLLBACK` → 行不存在；同形 `COMMIT` → 行存在；对照「不开显式事务时 ROLLBACK 对自动
+     *    提交行无效」。两引擎的 `START TRANSACTION` 均为语法错误（H2 报 expected
+     *    SAVEPOINT/SCRIPT/SHUTDOWN），故不取。
+     *  - **官方文法（族/兼容面推定）**：MySQL/MariaDB 与 OceanBase（D1=A 只接 MySQL 模式）取
+     *    `START TRANSACTION`；PostgreSQL 族取 `BEGIN`（官方 `BEGIN [WORK|TRANSACTION]`），
+     *    KingBase / openGauss 随族取 `BEGIN`；SQL Server 取 `BEGIN TRANSACTION`（`BEGIN TRAN` 缩写）。
+     *  - **判无（保守禁用）**：Oracle——`BEGIN` 在 Oracle 是 PL/SQL 块起始，SQL Reference 无
+     *    `BEGIN [TRANSACTION]` 语句形态；DM（达梦）默认 Oracle 兼容模式同形。两款均无本机引擎
+     *    （DBX MCP 拒事务语句、Docker 未启）→ 依据「宁可少包，不可产出语法错误脚本」判无，
+     *    真机核对后增量。
+     */
+    val transactionBegin: String? get() = null
 }
 
 /**
@@ -366,6 +390,9 @@ private fun Dialect.renderPgStyleUpsert(
 object MySqlDialect : Dialect {
     override val name: String = "MySQL"
 
+    /** R36：MySQL 官方 `START TRANSACTION`（`BEGIN` 亦可，取无歧义的长形态；见 [transactionBegin]）。 */
+    override val transactionBegin: String = "START TRANSACTION"
+
     override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
 
     override val supportsDeleteLimit: Boolean = true
@@ -391,6 +418,9 @@ object MySqlDialect : Dialect {
  */
 object PostgreSQLDialect : Dialect {
     override val name: String = "PostgreSQL"
+
+    /** R36：PG 官方 `BEGIN [WORK|TRANSACTION]`（见 [transactionBegin]）。 */
+    override val transactionBegin: String = "BEGIN"
 
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
@@ -425,6 +455,13 @@ object PostgreSQLDialect : Dialect {
 object OracleDialect : Dialect {
     override val name: String = "Oracle"
 
+    /**
+     * R36 判无（**显式声明**，非遗漏）：`BEGIN` 在 Oracle 是 PL/SQL 块起始而非事务语句，
+     * SQL Reference 无 `BEGIN [TRANSACTION]` 形态——脚本里写 `BEGIN;` 必语法错误，
+     * 故回放脚本不包裹、UI 禁用该选项（[transactionBegin] 三档证据见接口 KDoc）。
+     */
+    override val transactionBegin: String? = null
+
     override fun renderLimit(limit: LimitClause): String = if (limit.offset != null) {
         "OFFSET ${renderLimitValue(limit.offset)} ROWS FETCH NEXT ${renderLimitValue(limit.count)} ROWS ONLY"
     } else {
@@ -457,6 +494,9 @@ object OracleDialect : Dialect {
  */
 object SqlServerDialect : Dialect {
     override val name: String = "SQL Server"
+
+    /** R36：T-SQL 官方 `BEGIN TRANSACTION`（缩写 `BEGIN TRAN`；见 [transactionBegin]）。 */
+    override val transactionBegin: String = "BEGIN TRANSACTION"
 
     override fun renderLimit(limit: LimitClause): String =
         "OFFSET ${renderLimitValue(limit.offset ?: SqlValue.Literal("0"))} ROWS FETCH NEXT ${renderLimitValue(limit.count)} ROWS ONLY"
@@ -523,6 +563,9 @@ private fun Dialect.identityInsertWrapper(
 object H2Dialect : Dialect {
     override val name: String = "H2"
 
+    /** R36：H2 2.3.232 六模式（含 MySQL/PG/Oracle/MSSQLServer 兼容模式）引擎实测取 `BEGIN`。 */
+    override val transactionBegin: String = "BEGIN"
+
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
@@ -561,6 +604,9 @@ object H2Dialect : Dialect {
 object SqliteDialect : Dialect {
     override val name: String = "SQLite"
 
+    /** R36：SQLite 3.50.3 引擎实测取 `BEGIN`（`START TRANSACTION` 语法错误）。 */
+    override val transactionBegin: String = "BEGIN"
+
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
@@ -586,6 +632,9 @@ object SqliteDialect : Dialect {
  */
 object MariaDbDialect : Dialect {
     override val name: String = "MariaDB"
+
+    /** R36：MariaDB 同 MySQL 官方 `START TRANSACTION`（见 [transactionBegin]）。 */
+    override val transactionBegin: String = "START TRANSACTION"
 
     override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
 
@@ -617,6 +666,13 @@ object MariaDbDialect : Dialect {
  */
 object DmDialect : Dialect {
     override val name: String = "DM（达梦）"
+
+    /**
+     * R36 判无（**显式声明**，保守）：DM 默认 Oracle 兼容模式，`BEGIN` 为块起始；
+     * 本机无 DM 引擎（DBX MCP 拒事务语句、Docker 未启）不可实测 → 依据「宁可少包，
+     * 不可产出语法错误脚本」判无，真机核对后增量（见 [transactionBegin]）。
+     */
+    override val transactionBegin: String? = null
 
     override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
 
@@ -662,6 +718,9 @@ object DmDialect : Dialect {
 object KingBaseDialect : Dialect {
     override val name: String = "KingBase（人大金仓）"
 
+    /** R36：金仓 PG 族兼容，取 PG 形态 `BEGIN`（文档级/族推定，见 [transactionBegin]）。 */
+    override val transactionBegin: String = "BEGIN"
+
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
@@ -706,6 +765,9 @@ object KingBaseDialect : Dialect {
 object OceanBaseDialect : Dialect {
     override val name: String = "OceanBase"
 
+    /** R36：OceanBase 只接 MySQL 模式（D1=A），取 MySQL 形态 `START TRANSACTION`（文档级，见 [transactionBegin]）。 */
+    override val transactionBegin: String = "START TRANSACTION"
+
     override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
 
     override val supportsDeleteLimit: Boolean = true
@@ -748,6 +810,9 @@ object OceanBaseDialect : Dialect {
  */
 object OpenGaussDialect : Dialect {
     override val name: String = "openGauss"
+
+    /** R36：openGauss 取 PG 形态 `BEGIN`（族推定；本方言 upsert 曾反族，真机核对后增量，见 [transactionBegin]）。 */
+    override val transactionBegin: String = "BEGIN"
 
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
