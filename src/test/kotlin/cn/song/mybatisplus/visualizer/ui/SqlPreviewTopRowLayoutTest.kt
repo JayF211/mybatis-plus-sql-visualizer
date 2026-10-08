@@ -163,13 +163,16 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
                 assertFalse("低频按钮 $key($folded) 不应直显", folded in directTexts)
             }
             assertEquals(
-                "「更多」菜单应恰为 回滚 SQL/导入参数/差异对比/分享/导出可移植 SQL 五项且顺序稳定（T-UiCoord F1 起回滚 SQL 居首；O-91 增第五项）",
+                "「更多」菜单应恰为 回滚 SQL/导入参数/差异对比/分享/导出可移植 SQL/AI 上下文/DML 影响面 七项且顺序稳定" +
+                    "（T-UiCoord F1 起回滚 SQL 居首；O-91 增导出可移植 SQL；R37 增 AI 上下文；R42 增 DML 影响面）",
                 listOf(
                     MpSqlVisualizerBundle.message("panel.rollbackSql"),
                     MpSqlVisualizerBundle.message("panel.param.import"),
                     MpSqlVisualizerBundle.message("panel.compare"),
                     MpSqlVisualizerBundle.message("panel.share"),
                     MpSqlVisualizerBundle.message("panel.portableExport"),
+                    MpSqlVisualizerBundle.message("panel.aiContext"),
+                    MpSqlVisualizerBundle.message("panel.dmlImpact"),
                 ),
                 panel.moreActionsForTest(),
             )

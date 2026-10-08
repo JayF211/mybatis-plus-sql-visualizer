@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.share.ui
 
 import cn.song.mybatisplus.visualizer.share.SqlShareManager
+import cn.song.mybatisplus.visualizer.share.format.DiagnosticReportFormatter
 import cn.song.mybatisplus.visualizer.share.format.HtmlReportFormatter
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -26,11 +27,13 @@ import javax.swing.JRadioButton
 /**
  * 分享选项对话框（F-8）。
  *
- * 提供四种分享方式：
+ * 提供六种分享方式：
  *  - 复制为 Markdown 代码块
  *  - 复制为 Markdown 表格
  *  - 复制为可执行 SQL
  *  - 导出 HTML 报告文件
+ *  - R50：复制诊断报告（Markdown，五段聚合：SQL+参数/perf/EXPLAIN 建议/无界写/回滚预案）
+ *  - R50：导出诊断报告（HTML）
  *
  * 用户可填写来源位置（文件名:行号），附到分享内容中。
  */
@@ -44,6 +47,9 @@ class ShareDialog(
     private val tableRadio = JRadioButton(MpSqlVisualizerBundle.message("share.dialog.markdownTable"))
     private val executableRadio = JRadioButton(MpSqlVisualizerBundle.message("share.dialog.executableSql"))
     private val htmlRadio = JRadioButton(MpSqlVisualizerBundle.message("share.dialog.html"))
+    // R50：诊断报告两档（Markdown 走剪贴板 / HTML 走文件——与既有分享两通道同形）
+    private val diagnosticRadio = JRadioButton(MpSqlVisualizerBundle.message("share.dialog.diagnostic"))
+    private val diagnosticHtmlRadio = JRadioButton(MpSqlVisualizerBundle.message("share.dialog.diagnosticHtml"))
 
     private val shareManager = SqlShareManager(project)
 
@@ -86,14 +92,18 @@ class ShareDialog(
             add(tableRadio)
             add(executableRadio)
             add(htmlRadio)
+            add(diagnosticRadio)
+            add(diagnosticHtmlRadio)
         }
         markdownRadio.isSelected = true
 
-        val optionsPanel = JBPanel<JBPanel<*>>(GridLayout(4, 1, 0, 4)).apply {
+        val optionsPanel = JBPanel<JBPanel<*>>(GridLayout(6, 1, 0, 4)).apply {
             add(markdownRadio)
             add(tableRadio)
             add(executableRadio)
             add(htmlRadio)
+            add(diagnosticRadio)
+            add(diagnosticHtmlRadio)
             border = JBUI.Borders.emptyBottom(10)
         }
         root.add(optionsPanel)
@@ -119,8 +129,47 @@ class ShareDialog(
             tableRadio.isSelected -> shareManager.copyAsMarkdownTable(panel, source)
             executableRadio.isSelected -> shareManager.copyExecutableSql(panel, source)
             htmlRadio.isSelected -> exportHtmlReport()
+            diagnosticRadio.isSelected -> copyDiagnosticReport(source)
+            diagnosticHtmlRadio.isSelected -> exportDiagnosticHtml(source)
         }
         super.doOKAction()
+    }
+
+    /** R50：诊断报告输入（各诊断段由纯分析器聚合，IDE 侧只取 SQL/参数/方言/来源）。 */
+    private fun diagnosticInput(source: String?): DiagnosticReportFormatter.Input? {
+        val sql = panel.editorDocumentText()?.takeIf { it.isNotBlank() } ?: return null
+        return DiagnosticReportFormatter.buildInput(
+            sql = sql,
+            dialectName = panel.currentDialect(),
+            sources = panel.unresolvedParams(),
+            paramValues = panel.paramValuesSnapshot(),
+            tableName = panel.currentTableName(),
+            source = source,
+        )
+    }
+
+    /** R50：复制诊断报告（Markdown）到剪贴板。 */
+    private fun copyDiagnosticReport(source: String?) {
+        val input = diagnosticInput(source) ?: return
+        cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy(DiagnosticReportFormatter.format(input))
+    }
+
+    /** R50：导出诊断报告（HTML 文件，复用既有 HTML 落盘链）。 */
+    private fun exportDiagnosticHtml(source: String?) {
+        val input = diagnosticInput(source) ?: return
+        val html = DiagnosticReportFormatter.formatHtml(input)
+        val descriptor = FileSaverDescriptor(
+            MpSqlVisualizerBundle.message("share.dialog.diagnosticHtml"),
+            "Save diagnostic report",
+            "html",
+        )
+        val dialog: FileSaverDialog = FileChooserFactory.getInstance().createSaveFileDialog(descriptor, project)
+        val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, "sql-diagnostic-report.html")
+        if (saved != null) {
+            val file = saved.file
+            shareManager.saveHtmlReport(html, file.absolutePath)
+            BrowserUtil.open(file.toURI().toString())
+        }
     }
 
     /** 导出 HTML 报告（复用 [HtmlReportFormatter]）。 */
