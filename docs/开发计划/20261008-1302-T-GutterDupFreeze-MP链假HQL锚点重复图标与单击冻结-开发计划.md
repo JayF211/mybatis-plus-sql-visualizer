@@ -194,4 +194,52 @@ else -> expression.text to false     // ← 把「整条链的源码文本」当
 
 ## 八、实施记录
 
-（待实施后回填。）
+**实施日期**：2026-10-08；分支 `t-gutterdupfreeze`（工作树 `mybatis-plus-sql-visualizer-gdf`）；实施提交 `99d2f36`（计划落库 `dd0bd26`）。
+
+### 8.1 改动落点（7 文件）
+
+| 落点 | 改动 |
+|---|---|
+| `psi/jpa/CustomDaoHqlLocator.kt:372-386` | `matchesHqlContent` 增首参「字符串承载式」门控（复用 `PreviewReceiverResolver.isStringLikeFirstArg`，与 HIBERNATE_TEMPLATE 家族同口径） |
+| `psi/jpa/CustomDaoHqlLocator.kt:427-437` | 拼接分支「全无字面量部分」由 `expression.text to false` 改 `null to false` |
+| `psi/jpa/CustomDaoHqlLocator.kt:446-452` | `else` 兜底由 `expression.text to false` 改 `null to false`（「整链源码当 HQL」的最终落点） |
+| `psi/WrapperAnchorDetector.kt:132-139` | 场景 D 增 `hasWrapperArgument` 让位（紧跟既有 `hasStringLikeArg` 让位之后） |
+| `psi/WrapperAnchorDetector.kt:205-231` | 新增 `hasWrapperArgument`：链实参走零 resolve 的 `initializerHeadIsWrapper`；变量实参先看声明/推断类型，类型不可得才 `resolve` 兜底 |
+| `psi/jpa/EntityAliasSweep.kt`（新增） | 有界扫描对象：上限 5000 + 每 64 个短名一次 `ProgressManager.checkCanceled` + 命中即止；判定逻辑与 PSI 取数解耦（可纯用例驱动） |
+| `ui/SqlPreviewService.kt:1967-2016` | `findClassByEntityName`：索引构建期（dumb）按未命中降级且**不写负缓存**；慢路径改调 `EntityAliasSweep`，触顶同样不写负缓存 |
+| 测试 | `DemoRecognitionTest` +83 行（真实 demo 文件断言）、`GutterIconDedupTest` +79 行（两个合成用例 + 按 provider 集计数的重载）、`EntityAliasSweepTest` 新增 4 例 |
+
+### 8.2 定向读数
+
+`./gradlew test`（六类过滤）→ **50 用例 / 0 失败 / 0 错误**：`DemoRecognitionTest` 3、`GutterIconDedupTest` 16、`EntityAliasSweepTest` 4、`CustomDaoHqlLocatorTest` 19、`CustomDaoHqlGutterLineMarkerProviderTest` 7、`GutterProvidersNegativeTest` 1（XML 时间戳 `2026-10-08T05:30Z`＝13:30 本地，实证真跑，非 up-to-date）。
+
+过程记录两处非产品缺陷：①首轮**测试期望写错**——把方法体内 `lambdaQuery` 调用数写成 3，实为 4（变量声明形态那条也在 `PsiReferenceExpression` 父级下），改断言为分布 `[0,1,1,1]`（变量声明那条按既有去重规则让位给变量名锚点）；②**编译红一处**——`PsiShortNamesCache.getClassesByName` 返回 `Array`，`EntityAliasSweep.lookup` 签名随之为 `Array<PsiClass>`。
+
+冒烟（改动触达所有 wrapper 锚点的 daemon 热路径与实体解析链，仅跑 gutter 类不够）：`./gradlew testFast --rerun` → **3406 用例 / 0 失败 / 0 错误（266 套件）**，XML 时间戳区间 `2026-10-08T05:36:54Z`~`05:37:30Z`＝13:36~13:37 本地；`--rerun` 强制真跑，避开「任务 UP-TO-DATE 未执行」的假绿形态。
+
+### 8.3 反向验证（三轮，各自摘守卫 → 必红；标记行与读数同批落日志，读数自我说明）
+
+| 轮次 | 摘除内容（日志标记） | 结果 | 失败消息 |
+|---|---|---|---|
+| R1 | `CustomDaoHqlLocator.kt` 还原为修复前版本（`T-GutterDupFreeze` 命中 0、`isStringLikeFirstArg` 1） | 42 例 / **2 红** | demo 用例与合成「链实参」用例均 `selectList(...) 处应 0 图标 expected:<0> but was:<1>`；**变量实参用例保绿**（该形态只依赖 S2） |
+| R2 | `WrapperAnchorDetector.kt` 还原为修复前版本（`hasWrapperArgument` 0） | 38 例 / **3 红** | demo 用例 + 链实参 + 变量实参三例同款 `expected:<0> but was:<1>`（R1 里保绿那例此轮转红＝两轮互证归属） |
+| R3 | `EntityAliasSweep` 上限判定临时改 `scanned >= Int.MAX_VALUE`（不可触顶） | 23 例 / **1 红** | `testTruncatesAtLimit`：`触顶回调应报告已扫数＝上限 expected:<100> but was:<-1>`；同批 19 条定位器用例保绿（无连坐） |
+
+三轮每轮跑前有还原/改写标记行，跑后 `git checkout HEAD -- <文件>` 恢复；末次核对 `git status` 干净、工作树与提交逐字节一致（即产出 50/0 读数的那棵树）。
+
+诚实边界：R1/R2 的红由用例内**首条**断言触发，同一用例里其余断言（`selectPage` 0 枚、`exists/notExists` 0 枚、链根分布 `[0,1,1,1]`、方法体总数 4）只被绿跑覆盖「成立」，其「判别力」未逐条反向。
+
+### 8.4 实施偏差（相对计划）
+
+1. **计划 §S3 的「名字形态门控」未做**：`t_order` 是合法 Java 标识符形态，形态门控会误伤合法的 `@Entity(name = "t_order")` snake_case 别名（拿功能损失换不来必要收益）→ 改由「dumb 期降级 + 上限 + 取消检查」三件承担。
+2. **S3.2 两个候选中选 dumb 降级**，且降级点由 `previewAsync` 收进 `findClassByEntityName` 内部——爆炸半径更小，与索引无关的预览路径不受影响；`previewAsync` 的 `ReadAction.compute` → 可取消读（`nonBlocking`）**未做**，挂 R70（需 243/262 API 核验 + 全预览入口回归）。
+3. **新增 `EntityAliasSweep` 可测试抽离**（计划未点名，为反向验证服务）；重构后命中路径直接返回扫描中命中的 `PsiClass`，原实现是再按 `qualifiedName` 二次 `getClassesByName`——语义等价。
+4. **上限取 5000（计划草案写 1500）+ 触顶不写负缓存**（计划原文是「照常缓存负结果」）：常规工程类短名在千级，上限功能上等于不设限，只钉住病态/超大工程的最坏代价；触顶是「没查到」而非「确认不存在」，写负缓存会让大工程里的合法别名被一次性截断后永久失效。
+
+### 8.5 遗留与未闭合项
+
+- **R70 三件**：①以 `@Entity(name=)` 注解值专用索引替代全项目短名扫描；②预览弹窗改「先弹后填」，把长任务从点击路径上摘下来；③`psi/EntityClassFinder.kt:94-115 scanAllClassesByTableName` 是**同类第二条无上限全项目短名扫描**（在预览反查表名链上；有缓存与 VO/DTO 快筛，但同样无界、无 dumb 判定）——本轮按计划范围未改，建议随 R70 一并处置。
+- **待验证前提 #1/#2（需真机复验）**：EDT 那次读请求的发起方（第三方 CoolRequest 的鼠标移动监听在 EDT 取读权限）与本插件长读锁之间的因果序；以及用户所报空白窗的归属（平台 `NiceOverlay` vs 上一次点击残留的对话框）。本轮回填不作结论。
+- **待验证前提 #3 风险归零**：第二枚图标（批量锚点）的点击产物是否漏 WHERE——S2 后该锚点不再产生，入口不可达。
+- **待验证前提 #4**：`t_order` 的实际提取值经静态判定（`HqlEntityNameExtractor.FROM_ENTITY` 带 `IGNORE_CASE`，可匹配小写首字母）＝`t_order`；S1 后该输入不再进入该路径，故未补独立单测。
+- **未跑**：全量门禁（`testShards`）与构建校验（`buildPlugin`/`verifyGate`）——按测试三档分层由统一收口执行；本任务触达 `src/main` 但未动构建脚本、`plugin.xml`、依赖版本。
