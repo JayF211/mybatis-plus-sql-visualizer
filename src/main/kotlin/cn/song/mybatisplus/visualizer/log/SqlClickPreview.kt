@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlHighlightColors
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
+import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.icons.AllIcons
@@ -334,27 +335,14 @@ internal class SqlClickPreview(
             editor.putUserData(COPY_ACTION_KEY, copyAll)
             installCopyHandler()
 
-            // ---- 二轮修复（真机反馈一修复被证伪后定位）：Swing 层 Ctrl+C 绑定 ----
-            // 平台 Ctrl+C（keymap `$Copy`）经 DataContext 取 COPY_PROVIDER，而编辑器组件
-            // （EditorComponentImpl.uiDataSnapshot，243 源码核验）只提供 EDITOR/CARET、不提供
-            // COPY_PROVIDER——真机上该 action 在编辑器里不可用，事件落回 Swing 绑定；编辑器组件
-            // 是 JTextComponent，自带的无选中 copy 是 no-op，于是「浮层里按 Ctrl+C 毫无反应」。
-            // 这里在焦点组件自身（WHEN_FOCUSED）覆盖 Ctrl+C / Ctrl+Insert：无选中复制全文、
-            // 有选中只复制选区（保留改字段值后复制片段）；与 keymap 路径共用同一意图，两条路归一。
-            val shortcutCopyKey = "mpsv.clickPreview.copy"
-            editor.component.actionMap.put(shortcutCopyKey, object : javax.swing.AbstractAction() {
-                override fun actionPerformed(e: java.awt.event.ActionEvent?) {
-                    val text = if (editor.selectionModel.hasSelection()) {
-                        editor.selectionModel.selectedText ?: ""
-                    } else {
-                        editor.document.text
-                    }
-                    copyText(text)
-                    cn.song.mybatisplus.visualizer.ui.flashCopied(copyButton)
-                }
-            })
-            editor.component.inputMap.put(javax.swing.KeyStroke.getKeyStroke("control C"), shortcutCopyKey)
-            editor.component.inputMap.put(javax.swing.KeyStroke.getKeyStroke("control INSERT"), shortcutCopyKey)
+            // T-SqlCopyShortcuts O-122（原二轮内联实现收敛到共享件）：Swing 层 Ctrl+C / Ctrl+Insert
+            // 接管——无选中复制全文、有选中只复制选区（保留改字段值后复制片段），与头部按钮同反馈；
+            // 为什么必须挂在这一层、为什么不是 keymap 侧，见 EditorCopyShortcuts 的 KDoc。
+            EditorCopyShortcuts.install(
+                editor,
+                copyText,
+                onCopied = { cn.song.mybatisplus.visualizer.ui.flashCopied(copyButton) },
+            )
             val header = JPanel(FlowLayout(FlowLayout.RIGHT, 2, 0)).apply {
                 isOpaque = false
                 border = BorderFactory.createEmptyBorder(2, 4, 2, 4)

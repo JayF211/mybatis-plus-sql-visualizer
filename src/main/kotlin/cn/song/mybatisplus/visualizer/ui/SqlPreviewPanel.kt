@@ -32,6 +32,7 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.ui.inlay.PreviewInlayScope
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
+import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
@@ -2993,6 +2994,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         )
         editorHolder.revalidate()
         editorHolder.repaint()
+        // T-SqlCopyShortcuts O-122：无选中 Ctrl+C 复制全文、有选中只复制片段
+        //（层位与理由见 EditorCopyShortcuts 的 KDoc；本处此前无任何键盘复制绑定）
+        EditorCopyShortcuts.install(created, UiTextClipboard::copy)
         editor = created
         bindAutoPopup(created)
         // T-AutoFold F4-a：createEditor 支链（含内存文档降级，同一函数收口）——新编辑器按初始内容应用

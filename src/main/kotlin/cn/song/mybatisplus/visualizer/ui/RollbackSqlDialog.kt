@@ -3,7 +3,9 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore
 import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
+import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.project.Project
@@ -132,6 +134,9 @@ class RollbackSqlDialog(
         // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）。
         // 本编辑器此前零外观设置（只读回滚 SQL），故是唯一不落在 EditorEx.apply 块内的接线点。
         EditorWhitespaceSettings.applyTo(created)
+        // T-SqlCopyShortcuts O-122：无选中 Ctrl+C 复制全文、有选中只复制片段
+        //（层位与理由见 EditorCopyShortcuts 的 KDoc；本处此前无任何键盘复制绑定）
+        EditorCopyShortcuts.install(created, UiTextClipboard::copy)
         editor = created
         // 编辑器随弹窗 disposable 树级联释放（Disposer 树铁律）
         Disposer.register(disposable) { releaseEditor() }
@@ -378,6 +383,9 @@ class RollbackSqlDialog(
     internal fun bannerTextForTest(): String = bannerLabel.text
     internal fun warningsTextForTest(): String = warningLabel.text
     internal fun sqlTextForTest(): String = editor?.document?.text ?: ""
+
+    /** 测试访问器：编辑器实例（T-SqlCopyShortcuts：键盘复制接线断言用）。 */
+    internal fun editorForTest(): com.intellij.openapi.editor.Editor? = editor
     internal fun pasteAreaForTest(): JBTextArea = pasteArea
     internal fun pkFieldForTest(): JBTextField = pkField
     internal fun executeActionForTest(): Action = executeAction

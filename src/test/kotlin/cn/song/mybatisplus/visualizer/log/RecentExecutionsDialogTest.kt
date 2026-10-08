@@ -15,6 +15,9 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.StringSelection
+import java.awt.event.ActionEvent
+import javax.swing.KeyStroke
 
 /**
  * 「最近执行记录」浏览对话框测试（T-RecentExecDialog O-118 / T-RecentExecMenu O-119）：
@@ -372,4 +375,45 @@ class RecentExecutionsDialogTest : BasePlatformTestCase() {
             dialog.doDispose()
         }
     }
+
+    // ---------- T-SqlCopyShortcuts：键盘复制接线 ----------
+
+    /** 编辑器（右侧只读高亮）无选中按 Ctrl+C 应复制整条显示 SQL——此前该处无任何键盘复制绑定。 */
+    fun test编辑器CtrlC无选中复制整条显示SQL() {
+        val dialog = newDialog(listOf(entry(multiClauseSql)))
+        try {
+            val editor = dialog.editorForTest()
+            assertNotNull("编辑器应在场", editor)
+            val comp = editor!!.component
+            CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
+            val actionKey = comp.inputMap.get(KeyStroke.getKeyStroke("control C"))
+            assertNotEquals("应覆盖 JTextComponent 默认 copy 绑定（共享件接线）", "copy", actionKey)
+            comp.actionMap.get(actionKey)
+                .actionPerformed(ActionEvent(comp, ActionEvent.ACTION_PERFORMED, actionKey.toString()))
+            val clip: String? = CopyPasteManager.getInstance().getContents(DataFlavor.stringFlavor)
+            assertEquals("Ctrl+C 应复制整条显示 SQL", dialog.editorTextForTest(), clip)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    /** 列表 Ctrl+C 应得纯 SQL——此前 itemToText 未覆写，复制出的是渲染文本。
+     *  注：本列表是**单选**（createCenterPanel 设 SINGLE_SELECTION），故断言单条语义。 */
+    fun test列表CtrlC复制选中条目纯SQL() {
+        val dialog = newDialog(listOf(entry("SELECT 1"), entry("SELECT 2")))
+        try {
+            val list = dialog.entryListForTest()
+            list.selectedIndex = 1
+            CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
+            val actionKey = list.inputMap.get(KeyStroke.getKeyStroke("control C"))
+            assertNotNull("列表 Ctrl+C 绑定应由平台 LAF 提供", actionKey)
+            list.actionMap.get(actionKey)
+                .actionPerformed(ActionEvent(list, ActionEvent.ACTION_PERFORMED, actionKey.toString()))
+            val clip: String? = CopyPasteManager.getInstance().getContents(DataFlavor.stringFlavor)
+            assertEquals("Ctrl+C 应复制选中条目的纯 SQL（带结尾分号）", "SELECT 2;", clip)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
 }

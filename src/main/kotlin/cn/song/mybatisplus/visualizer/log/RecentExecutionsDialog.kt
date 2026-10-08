@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.ui.EditorWhitespaceSettings
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
+import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.icons.AllIcons
@@ -76,7 +77,7 @@ class RecentExecutionsDialog(
 ) : DialogWrapper(project, false, DialogWrapper.IdeModalityType.MODELESS) {
 
     private val listModel = CollectionListModel<LogSqlEntry>()
-    private val entryList = JBList<LogSqlEntry>(listModel)
+    private val entryList = SqlEntryList(listModel)
 
     /** 日志面板条目渲染器（复用点；字段持有供测试钉断言——JBList getter 平台侧会包 ExpandedItemListCellRendererWrapper 壳）。 */
     private val entryRenderer = LogEntryListCellRenderer()
@@ -203,6 +204,13 @@ class RecentExecutionsDialog(
             setViewer(true)
         }
         editor = created
+        // T-SqlCopyShortcuts：无选中 Ctrl+C 复制整个 SQL、有选中只复制片段（与复制按钮同反馈）。
+        // 本类此前只有按钮路径——编辑器上按 Ctrl+C 因平台取不到 COPY_PROVIDER 而落回 Swing 无选中 no-op。
+        EditorCopyShortcuts.install(
+            created,
+            UiTextClipboard::copy,
+            onCopied = { cn.song.mybatisplus.visualizer.ui.flashCopied(copyButton) },
+        )
         return created.component
     }
 
@@ -497,6 +505,12 @@ class RecentExecutionsDialog(
 
     /** 测试访问器：当前编辑器文本。 */
     internal fun editorTextForTest(): String = editor?.document?.text ?: ""
+
+    /** 测试访问器：编辑器实例（T-SqlCopyShortcuts：键盘复制接线断言用）。 */
+    internal fun editorForTest(): com.intellij.openapi.editor.Editor? = editor
+
+    /** 测试访问器：条目列表实例（T-SqlCopyShortcuts：列表复制接线断言用）。 */
+    internal fun entryListForTest(): javax.swing.JList<*> = entryList
 
     /** 测试访问器：状态行文本。 */
     internal fun statusTextForTest(): String = statusLabel.text

@@ -450,10 +450,9 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         try {
             val comp = content.editor.component
             val actionKey = comp.inputMap.get(javax.swing.KeyStroke.getKeyStroke("control C")) as String
-            assertEquals("Ctrl+C 应指向本插件的复制动作（覆盖 JTextComponent 默认 copy）",
-                "mpsv.clickPreview.copy", actionKey)
-            assertEquals("Ctrl+Insert 应同绑",
-                "mpsv.clickPreview.copy",
+            assertNotEquals("Ctrl+C 应覆盖 JTextComponent 默认 copy 绑定", "copy", actionKey)
+            assertEquals("Ctrl+Insert 应与 Ctrl+C 同绑",
+                actionKey,
                 comp.inputMap.get(javax.swing.KeyStroke.getKeyStroke("control INSERT")))
             CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
             comp.actionMap.get(actionKey)

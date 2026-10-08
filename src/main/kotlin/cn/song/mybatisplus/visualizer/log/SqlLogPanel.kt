@@ -12,6 +12,7 @@ import cn.song.mybatisplus.visualizer.ui.clipTailToWidth
 import com.intellij.util.ui.JBUI
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
+import cn.song.mybatisplus.visualizer.util.TextCopyList
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
@@ -131,8 +132,9 @@ internal const val REFRESH_CHUNK_SIZE = 30
  * 只负责 ActionMap 侧。二轮曾在此补绑 InputMap，验证发现冗余（摘除后绑定仍在）已回退——列表 Ctrl+C
  * 本就可达，用户「点击后复制失效」的断点在单击预览浮层抢焦点，修复见 [SqlClickPreview] 的 Swing 层绑定。
  */
-internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : JBList<LogSqlEntry>(model) {
-    override fun itemToText(index: Int, element: LogSqlEntry): String = textFor(element)
+internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : TextCopyList<LogSqlEntry>(model) {
+    /** Ctrl+C 复制文本（T-SqlCopyShortcuts：委派给共享基类；多选逐行拼接由平台既有 copy 动作完成）。 */
+    override fun copyTextFor(element: LogSqlEntry): String = textFor(element)
 
     /** 速度搜索与 Ctrl+C 复制共用的条目文本。 */
     internal fun textFor(element: LogSqlEntry): String = withTerminator(element.restoredSql)
