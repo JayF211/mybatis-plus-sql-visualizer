@@ -180,6 +180,35 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
         return entries.filter { it.sql.lowercase().contains(q) || it.compactSql.lowercase().contains(q) }
     }
 
+    // ---------- R51：参数快照回写（O-105 余半·主体） ----------
+
+    /**
+     * R51：把参数快照回写到**最新一条**满足 [match] 的条目（[entries] 已按时间倒序——
+     * firstOrNull 即新者权威，同一 SQL 多次预览只更新最近一条，旧条目保留各自时点的快照）。
+     *
+     * 调用方＝面板参数编辑防抖落库链（flushHistoryToCache）：recordHistory 早于参数输入
+     * （预览产物先落历史、参数后填），快照只能在编辑发生时补进。匹配谓词由调用方给定
+     * （缓存键 = tableName/SQL 指纹，见 ParamHistoryCache.computeKey——manager 不依赖 ui 包）。
+     *
+     * @return 是否命中并更新（未命中不抛——面板链路静默容错）
+     */
+    fun updateNewestParamSnapshot(match: (SqlHistoryEntry) -> Boolean, snapshot: Map<String, String>): Boolean {
+        if (snapshot.isEmpty()) return false
+        val entry = entries.firstOrNull(match) ?: return false
+        entry.paramSnapshot.clear()
+        entry.paramSnapshot.putAll(snapshot)
+        return true
+    }
+
+    /**
+     * R51：按匹配谓词取**最新一条**条目的参数快照（recall 链在 ParamHistoryCache 未命中时的
+     * 回落源；快照为空的条目不参与——无快照的历史回落无意义）。
+     */
+    fun newestParamSnapshot(match: (SqlHistoryEntry) -> Boolean): Map<String, String>? {
+        val entry = entries.firstOrNull { match(it) && it.paramSnapshot.isNotEmpty() } ?: return null
+        return entry.paramSnapshot
+    }
+
     // ---------- 删除 / 清空 ----------
 
     /** 按 id 删除条目。 */

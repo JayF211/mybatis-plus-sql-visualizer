@@ -32,6 +32,20 @@ data class SqlHistoryEntry(
     var executionTimeMs: Long? = null,
     /** R15（W3 历史工作流包）：钉住——非收藏分区裁剪跳过钉住条目（防翻找丢失）；上限由 manager 把关。 */
     var pinned: Boolean = false,
+    /**
+     * R51（O-105 余半·主体）：参数快照（键值对，格式＝SqlPreviewPanel.buildHistorySnapshot——
+     * 普通参数 source→值 + R22 特殊键 `__chk__`/`__fnull__`/`__fev__`）。
+     *
+     * 生命周期：recordHistory 早于面板参数区构建（预览产物先落历史、参数后填），故初始恒空；
+     * 面板参数编辑防抖落库（flushHistoryToCache）时按缓存键回写**最新匹配条目**。recall 链
+     * （recallFromHistory）在 ParamHistoryCache 未命中（LRU 淘汰/清缓存）时按同一缓存键回落
+     * 本快照回填参数面板——「历史条目→面板参数态」桥。
+     *
+     * 持久化（V75 实测在案）：XmlSerializer 对 LinkedHashMap 往返逐值兼容
+     * （V75ParamSnapshotSerializerProbeTest ①a）；旧历史文件无本字段 → 缺省空 Map 不炸（②a）。
+     * 用 LinkedHashMap 而非 Set 系（同 [tags] 注释口径，Set 不稳）。
+     */
+    var paramSnapshot: LinkedHashMap<String, String> = LinkedHashMap(),
 ) {
     /** 分配唯一 id（仅当当前为空白时）。 */
     fun ensureId() {
