@@ -50,6 +50,16 @@ object WrapperAnchorDetector {
     private val BATCH_CHAIN_COLLISION_NAMES: Set<String> = setOf("selectAll")
 
     /**
+     * 批量注册表里的 **MPJ Maps 终止调用**族（T-MapResultVo `ee090f7` 登记）——
+     * `deviceInfoMapper.selectJoinMaps(wrapper)` / `selectJoinMapsPage(wrapper)`。
+     * **不参与 S2 让位**：按 T-MapResultVo 契约（20261007 复核判为「契约更新而非回归」），
+     * 这类终止调用在调用行独立承载锚点（wrapper 声明行与调用行各一枚，长年行为）。
+     * T-GutterDupFreeze 的 S2 收窄为「消费调用（selectList/selectPage 等）让位」，
+     * 不覆盖本族——否则 `WrapperAnchorDetectorTest` 三个 Maps 形态不变量用例转红。
+     */
+    private val MAPS_TERMINAL_NAMES: Set<String> = setOf("selectJoinMaps", "selectJoinMapsPage")
+
+    /**
      * 元素是否为 Wrapper 锚点；是则返回作为 gutter marker 的叶子元素（即元素自身），否则 null。
      *
      * @param element Line marker 快速路径传入的单个叶子元素（可空：调用方 PSI 接口可能返回 null）
@@ -135,7 +145,9 @@ object WrapperAnchorDetector {
                 // 于是 selectList 这个 leaf 在链锚点之外再挂一枚批量图标（用户截图 190/211/214 行各 2 枚）。
                 // 这类调用的语句承载在**实参链**上：锚点由场景 B/C（链根/变量声明行）承载，
                 // 批量族只负责集合/实体/id/Map/无参形态（`selectList(null)` 等无 wrapper 实参者仍照常亮）。
-                if (hasWrapperArgument(call)) return null
+                // **例外＝MPJ Maps 终止调用族**（[MAPS_TERMINAL_NAMES]）：T-MapResultVo 登记时判定
+                // 「调用行独立承载锚点」属契约（20261007 复核），让位会破其三个不变量用例，故豁免。
+                if (ref.referenceName !in MAPS_TERMINAL_NAMES && hasWrapperArgument(call)) return null
                 // T-M23.11 分步形态（`MPJLambdaWrapper w = new ...; w.selectAll(...)`）：qualifier 是变量引用，
                 // 语法级回溯不到链首——仅对「与链方法撞名的批量方法」（目前仅 selectAll，新增撞名时扩展）做一次
                 // 变量 resolve（局部变量作用域内查找，微秒级；普通标识符负例仍零 resolve，红线语义不变）；

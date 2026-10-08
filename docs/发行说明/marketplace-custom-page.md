@@ -55,7 +55,7 @@
 | 类型颜色标记 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 列表自动生效 / 设置页配置 | 按语句类型着色：左侧色条或整行淡背景，四色可自定义 |
 | 显示模式 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 工具栏下拉 | 单行 / 关键字换行 / 格式化，跨会话保留 |
 | 多选批量复制 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | Ctrl / Shift 多选后右键 | 一次复制全部选中 SQL，分号收尾换行拼接 |
-| 历史与源码定位 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 侧边栏「SQL 历史」tab / 双击条目 | 历史自动保存、两级导航；精确跳到触发 SQL 的源码行 |
+| 历史与源码定位 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 侧边栏「SQL 历史」tab / 双击条目 | 历史标签页常驻，未开启自动保存也可进入；历史自动保存、两级导航；保存目录可自定义且读写同源；精确跳到触发 SQL 的源码行 |
 | 去重 / 过滤 | 工具栏 | SQL 类型多选筛选；`Ctrl+F` 搜索；去重 `⨉N` 徽章即时显示 |
 | 最近执行记录 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | gutter 图标右键菜单 | 弹框浏览最近 SQL 执行记录，复用日志列表渲染器；右键菜单六件（复制时间戳/屏蔽/送页签/跳转源码）；支持 Ctrl / Shift 多选与批量复制；右侧编辑器默认格式化 SQL、可临时改动后复制 |
 
