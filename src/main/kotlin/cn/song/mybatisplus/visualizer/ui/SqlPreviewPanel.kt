@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.history.SqlHistoryEntry
+import cn.song.mybatisplus.visualizer.history.SqlHistoryManager
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper
 import cn.song.mybatisplus.visualizer.execute.DocWriteContext
 import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier
@@ -3914,6 +3916,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      */
     internal var bindStateNameProvider: (() -> String?)? = null
 
+    /**
+     * R51（O-105 余半）测试缝：recall 回落源——ParamHistoryCache 未命中时按缓存键取历史
+     * 参数快照（null = 单测态默认禁用真服务；生产走 [SqlHistoryManager.newestParamSnapshot]，
+     * 接线由源码扫描守卫钉住）。循 [bindStateNameProvider] 同款 provider 惯例。
+     */
+    internal var historySnapshotFallbackSource: ((String) -> Map<String, String>?)? = null
+
+    /** R51 测试缝：参数快照回写 sink——flush 链同步进历史条目的落点观察（null = 单测态禁用真服务）。 */
+    internal var historySnapshotSink: ((String, Map<String, String>) -> Unit)? = null
+
     private fun boundDataSourceNameForDisplay(): String? =
         bindStateNameProvider?.invoke()
             ?: runCatching {
@@ -4825,7 +4837,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      */
     internal fun recallFromHistory() {
         val key = historyCacheKey() ?: return
-        val history = paramHistoryCache.recall(key) ?: return
+        val history = paramHistoryCache.recall(key) ?: historySnapshotFallback(key) ?: return
         if (history.isEmpty()) return
         var applied = 0
         var stateRestored = false
@@ -4861,6 +4873,43 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (stateRestored) syncToggleChecksFromState()
         if (applied > 0 || stateRestored) {
             renderSql()
+        }
+    }
+
+    /**
+     * R51（O-105 余半·主体）：参数快照回落——ParamHistoryCache 未命中（LRU 淘汰 / 清缓存 /
+     * 命名方案桶不含本键）时，按同一缓存键从 [SqlHistoryManager] 最新历史条目的
+     * [SqlHistoryEntry.paramSnapshot] 回落。缓存 50 条 LRU 对历史 200 条，「历史条目→面板
+     * 参数态」的桥（十五轮 R51 定义）；快照格式与缓存同源（[buildHistorySnapshot]），
+     * 下游应用逻辑（普通值 + `__chk__`/`__fnull__`/`__fev__`）零分叉。
+     *
+     * 单测态默认禁用真服务（SqlHistoryManager 为 APP 级服务，跨用例残留会串扰既有
+     * recall 断言）——测试经 [historySnapshotFallbackSource] 注入替代源；生产链走真服务
+     * （接线由 ExplainPanelWiringGuard 同款源码扫描守卫钉住，防测试缝默认化成死代码）。
+     */
+    private fun historySnapshotFallback(key: String): Map<String, String>? {
+        historySnapshotFallbackSource?.let { return it(key) }
+        if (ApplicationManager.getApplication().isUnitTestMode) return null
+        return runCatching {
+            SqlHistoryManager.getInstance().newestParamSnapshot { entrySnapshotKey(it) == key }
+        }.getOrNull()
+    }
+
+    /** R51：历史条目 → 缓存键（与 [historyCacheKey] 同口径——tableName 空串与 null 同走
+     *  `sql:` 指纹路径，recordHistory 落表 `result.tableName ?: ""`，故空串回 null 复算一致）。 */
+    private fun entrySnapshotKey(entry: SqlHistoryEntry): String? =
+        paramHistoryCache.computeKey(entry.tableName.ifEmpty { null }, entry.sql)
+
+    /** R51：参数快照回写——面板参数编辑防抖落库时同步进最新匹配历史条目（会话内闭环：
+     *  编辑→flush→历史条目快照；单测态走 [historySnapshotSink] seam，真服务同上禁用）。 */
+    private fun updateHistoryEntrySnapshot(key: String, snapshot: Map<String, String>) {
+        historySnapshotSink?.invoke(key, snapshot)
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            SqlHistoryManager.getInstance().updateNewestParamSnapshot(
+                { entrySnapshotKey(it) == key },
+                snapshot,
+            )
         }
     }
 
@@ -4922,6 +4971,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private fun flushHistoryToCache() {
         val key = historyCacheKey() ?: return
         val snapshot = buildHistorySnapshot()
+        // R51（O-105 余半）：参数快照随 flush 链同步回写最新匹配历史条目（recordHistory 早于
+        // 参数输入，快照只能在此补进；历史条目因此携带当次预览实际使用的参数）
+        updateHistoryEntrySnapshot(key, snapshot)
         // headless 单测：同步执行保持既有测试语义
         if (ApplicationManager.getApplication().isUnitTestMode) {
             paramHistoryCache.saveForScheme(ParamHistoryCache.DEFAULT_SCHEME, key, snapshot)
