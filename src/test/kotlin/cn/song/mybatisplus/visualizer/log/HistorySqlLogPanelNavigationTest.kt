@@ -585,4 +585,38 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             customDir.deleteRecursively()
         }
     }
+
+    /* 20261008 dev-bak 验收（缺陷 #5）：历史页二级列表「同结构 N 条」徽章不渲染——真机面板级计数
+     * 正确（右键「只看同结构」可用、chip 显示「同结构 12 条」），但徽章静默消失。徽章渲染数据源是
+     * HistoryCellRenderer.templateCounts（applySqlSearch 负责与面板计数同步），此守卫钉两层：
+     * 渲染器快照与面板一致 + 达阈值条目确实产出徽章片段。 */
+    fun testO90同模板徽章_渲染器计数快照与片段在场() {
+        writeHistoryFile(
+            "sql-history-2026-09-02.sql",
+            f44FileContent(
+                listOf(
+                    Triple("SELECT * FROM t_user WHERE id = 1", "UserMapper.java:10", 3L),
+                    Triple("SELECT * FROM t_user WHERE id = 2", "UserMapper.java:11", 3L),
+                    Triple("SELECT * FROM t_user WHERE id = 3", "UserMapper.java:12", 3L),
+                ),
+            ),
+        )
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+        try {
+            panel.openFileForTest(panel.fileListEntries.single())
+            assertEquals("前置：3 条同模板", 1, panel.templateCountsForTest.size)
+            val renderer = panel.sqlCellRendererForTest
+            assertEquals(
+                "渲染器计数快照应与面板级计数一致（徽章渲染数据源）",
+                panel.templateCountsForTest,
+                renderer.templateCounts,
+            )
+            val entry = panel.sqlListEntries.first()
+            val fragment = formatTemplateCountFragment(entry, renderer.templateCounts, isSelected = false)
+            assertNotNull("达阈值条目应产出徽章片段", fragment)
+            assertTrue("片段应含计数", fragment!!.first.contains("3"))
+        } finally {
+            panel.dispose()
+        }
+    }
 }

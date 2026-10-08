@@ -128,6 +128,7 @@ object XmlPreviewService {
             paramTable = ParameterReplacer.buildParamTable(result.unresolvedParams + extraSources),
             paramHints = result.paramHints + extraSources.map { ParamHint(quote = false) },
             countSql = countSql,
+            paginationLimitLine = limitLine,
         )
     }.getOrDefault(result)
 

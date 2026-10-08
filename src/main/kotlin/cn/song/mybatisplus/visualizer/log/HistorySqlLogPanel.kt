@@ -75,6 +75,14 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     // ---------- 二级：SQL 列表（复用 SqlEntryList——Ctrl+C 复制纯 SQL 链路） ----------
     private val sqlListModel = DefaultListModel<LogSqlEntry>()
     private val sqlList = SqlEntryList(sqlListModel)
+
+    /**
+     * 二级列表渲染器（面板直持引用）。**勿经 [sqlList.cellRenderer] 取回**：平台
+     * ExpandedItemListCellRendererWrapper 会包装列表渲染器（speed search 展开态），getter 拿到的是
+     * wrapper——20261008 验收缺陷 #5 即「as? HistoryCellRenderer」静默失败致同模板徽章计数永不更新
+     * （面板级计数正确、右键聚焦可用，唯独徽章不渲染）。回填一律走本字段。
+     */
+    private val sqlCellRenderer = HistoryCellRenderer()
     /** 二级速度搜索是否已安装。构造于 CardLayout 隐藏卡时安装不生效（真机 key 流不达、焦点不在），
      *  故延后到 [showFileContent]/[loadFileContentSync] 切卡可见后安装（T-UiNative T-UN-05）。 */
     private var sqlSpeedSearchInstalled = false
@@ -167,6 +175,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     /** 二级列表实例（测试断言 getCellBounds 行高与渲染 preferred 一致——布局缓存失效防回归用）。 */
     internal val sqlListForTest: javax.swing.JList<*> get() = sqlList
+
+    /** 测试缝：面板直持的二级渲染器（勿走 sqlList.cellRenderer——平台 wrapper 包装，见字段 KDoc）。 */
+    internal val sqlCellRendererForTest: HistoryCellRenderer get() = sqlCellRenderer
 
     /** 显示模式变更处理（topic 监听与测试共用）：行高随模式重设 + 二级可见时全量重建。
      *  多行片段缓存按条目内模式键自动失效（无需显式清）。日志面板同款处理经 topic 对齐。
@@ -299,7 +310,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
         // 二级：SQL 列表
         sqlList.emptyText.text = MpSqlVisualizerBundle.message("log.history.entries.empty")
-        sqlList.cellRenderer = HistoryCellRenderer()
+        sqlList.cellRenderer = sqlCellRenderer
         applySqlListCellHeight()
         sqlList.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
@@ -544,7 +555,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         // O-90：同模板计数随文件内容重建（**全量条目**聚合——徽章计数不随搜索/聚焦波动）；
         // 渲染器与右键聚焦动作共用同一快照
         templateCounts = structureKeyCounts(currentEntries)
-        (sqlList.cellRenderer as? HistoryCellRenderer)?.templateCounts = templateCounts
+        sqlCellRenderer.templateCounts = templateCounts
         val q = searchField.text.trim()
         // R16（检索强化增量）：`regex:` 前缀启用正则匹配（作用 SQL/摘要/源文件三目标）——
         // 非法正则 fail-closed 回退子串匹配（不产生空结果假象）。
@@ -826,7 +837,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         }
         val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
             MpSqlVisualizerBundle.message("log.history.export"),
-            "SQL (${format.ext.toUpperCase(Locale.ROOT)})",
+            "SQL (${format.ext.uppercase(Locale.ROOT)})",
             format.ext,
         )
         val dialog = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance()

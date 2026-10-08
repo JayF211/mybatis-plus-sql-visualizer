@@ -19,6 +19,7 @@ import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.PlaceholderCardinality
 import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
+import cn.song.mybatisplus.visualizer.sql.interceptor.PaginationSimulator
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog
 import cn.song.mybatisplus.visualizer.ui.components.CopyExecutableSqlAction
 import cn.song.mybatisplus.visualizer.ui.diagram.DiagramPanel
@@ -2657,8 +2658,18 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     }
 
     /** 按当前压缩/多行模式 + 动态条件启用集合 + 参数回填重渲染 SQL 编辑器。 */
-    private fun renderSql() {
-        // T-WSC-01：写安全自愈闸——renderSql 是面板全部文档写入的唯一上游（showSql 三条分支
+    /**
+     * R12 T-PaginationSim：模型级重渲染后把分页 LIMIT 行带回主 SQL 尾部。
+     *
+     * 面板勾选/参数变更走 XmlPreviewModel.renderSql / SqlGenerator 重建——模型层 SQL 是分页后处理
+     * **之前**的形态（服务端 applyPaginationShared 只作用于整条 PreviewResult），LIMIT 行会在此丢失
+     * （20261008 dev-bak 验收实测：分页参数行与 COUNT 段都在、主 SQL 尾部无 LIMIT）。服务端把 LIMIT
+     * 行存进 [PreviewResult.paginationLimitLine]，此处原样带回；主 SQL 已含 LIMIT（手写语句）时跳过。
+     */
+    private fun withPaginationLimitLine(baseSql: String): String =
+        appendPaginationLimitLine(baseSql, current?.paginationLimitLine)
+
+    private fun renderSql() {        // T-WSC-01：写安全自愈闸——renderSql 是面板全部文档写入的唯一上游（showSql 三条分支
         // 都写文档：nativeDoc / 自建 editor / createEditor），而写入合法性取决于「这次 EDT 活动
         // 是否 write-safe」（见 DocWriteContext KDoc）。非 write-safe（如 invokeLater(any) 排出的
         // 活动、Timer 拍）时重投递到 nonModal 的下一拍；renderSql 幂等重算，不会写出过期文本
@@ -2694,7 +2705,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 rendered.bindValues.forEach { (name, value) ->
                     if (paramValues[name].isNullOrEmpty()) paramValues[name] = value
                 }
-                val base = rendered.sql
+                val base = withPaginationLimitLine(rendered.sql)
                 val sql = if (compactMode) base.replace(WHITESPACE_REGEX, " ").trim() else base
                 val sources = rendered.mappings.map { it.property }
                 // T-M29.5：参数回填引号按 mapper 方法参数 Java 类型判定（XmlParamTypeResolver 注入
@@ -2722,7 +2733,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     enabledConditionIds = enabledIds.toSet(),
                 )
                 // JDBC 命名参数按名回填（先），再对残留 `?` 按序回填
-                showSql(backfillParamsBySource(applyNamedParams(generated.sql), generated.unresolvedParams, generated.paramHints))
+                showSql(backfillParamsBySource(applyNamedParams(withPaginationLimitLine(generated.sql)), generated.unresolvedParams, generated.paramHints))
             }
             else -> {
                 // 旧文本路径（无可勾选动态条件，如批量操作）
@@ -5926,4 +5937,19 @@ internal fun metaLineWithinBudget(
     val remain = budget - widthOf(head)
     if (remain < META_DIGEST_MIN_PX) return ellipsizeMiddle(head, widthOf, budget)
     return head + clipTailToWidth(digest, widthOf, remain)
+}
+
+/**
+ * R12 T-PaginationSim：模型级重渲染后的分页 LIMIT 行回带（20261008 dev-bak 验收缺陷 #1）。
+ *
+ * 面板勾选/参数变更走 XmlPreviewModel.renderSql / SqlGenerator 重建——模型层 SQL 是分页后处理
+ * **之前**的形态（服务端 applyPaginationShared 只作用于整条 PreviewResult），LIMIT 行会在此丢失
+ * （真机实测：分页参数行与 COUNT 段都在、主 SQL 尾部无 LIMIT）。服务端把 LIMIT 行存进
+ * [cn.song.mybatisplus.visualizer.model.PreviewResult.paginationLimitLine]，面板重渲染时用本函数
+ * 原样带回。baseSql 已含 LIMIT（手写语句）或 limitLine 为 null 时原样返回。
+ */
+internal fun appendPaginationLimitLine(baseSql: String, limitLine: String?): String {
+    if (limitLine == null) return baseSql
+    if (PaginationSimulator.hasExistingLimit(baseSql)) return baseSql
+    return baseSql.trimEnd() + "\n" + limitLine
 }

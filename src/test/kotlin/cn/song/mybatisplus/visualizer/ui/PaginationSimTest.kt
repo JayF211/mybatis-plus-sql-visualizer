@@ -242,6 +242,11 @@ class PaginationSimTest : BasePlatformTestCase() {
             result.sql.contains("LIMIT ?, ?"),
         )
         assertEquals(
+            "LIMIT 行存入 paginationLimitLine（面板模型级重渲染回带用，20261008 验收缺陷 #1）",
+            "LIMIT ?, ?",
+            result.paginationLimitLine,
+        )
+        assertEquals(
             "LIMIT 占位参数登记（offset 公式 + size）",
             listOf("name", "(page.current - 1) * page.size", "page.size"),
             result.unresolvedParams,
@@ -579,5 +584,23 @@ class PaginationSimTest : BasePlatformTestCase() {
             val result = newService().preview(anchor())
             assertEquals("$dialectName LIMIT 形态", expected, result!!.compactSql)
         }
+    }
+
+    fun test面板重渲染回带_LIMIT行拼接与手写LIMIT守卫() {
+        val base = "SELECT id, name FROM t_user WHERE name = ?"
+
+        // 回带：模型级 SQL + 服务端存下的 LIMIT 行 → 尾部拼接
+        assertEquals(
+            "无手写 LIMIT 时应回带服务端 LIMIT 行",
+            base + "\nLIMIT ?, ?",
+            appendPaginationLimitLine(base, "LIMIT ?, ?"),
+        )
+
+        // 守卫 A：baseSql 已含 LIMIT（手写语句）不重复追加（V13c 保守口径）
+        val withLimit = base + " LIMIT 0, 20"
+        assertEquals("已含手写 LIMIT 不重复追加", withLimit, appendPaginationLimitLine(withLimit, "LIMIT ?, ?"))
+
+        // 守卫 B：无分页（limitLine=null）原样返回
+        assertEquals("无分页原样返回", base, appendPaginationLimitLine(base, null))
     }
 }

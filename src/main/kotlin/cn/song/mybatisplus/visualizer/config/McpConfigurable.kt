@@ -137,6 +137,15 @@ class McpConfigurable : Configurable {
         )
         syncToggleAllLabel()
 
+        // 20261008 dev-bak 验收（缺陷 #2）：横幅按 R20 落地页「零监听器」定例构建后不再更新——
+        // 勾掉工具 / 关总开关乃至 Apply，横幅在同会话内恒显构建时快照（重开整个设置对话框才刷新）。
+        // 验收文档 3.21 预期「横幅切到部分禁用/总开关关闭态」。门控复选框是页内唯一写入方，
+        // 对它们挂 ActionListener 即时重算门控行（读复选框现状而非持久化 state，三态口径与
+        // [bannerGateHint] 同源；headline 的就绪文案保持静态——工具注册数不随开关变化）。
+        val bannerRefresher = java.lang.Runnable { refreshBannerGateLine() }
+        masterCheckBox?.addActionListener { bannerRefresher.run() }
+        toolCheckBoxes.values.forEach { it.addActionListener { bannerRefresher.run() } }
+
         return JPanel(BorderLayout()).apply {
             border = JBUI.Borders.empty(8, 10)
             add(builder.addComponentFillVertically(JPanel(), 0).panel, BorderLayout.NORTH)
@@ -163,6 +172,21 @@ class McpConfigurable : Configurable {
             } else {
                 MpSqlVisualizerBundle.message("settings.mcp.banner.someDisabled", disabledCount.toString())
             }
+        }
+    }
+
+    /**
+     * 20261008 验收缺陷 #2 修复：横幅门控行按复选框**现状**即时重算（总开关关 > 工具级有禁用 >
+     * 全启用，与 [bannerGateHint] 三态同源——数据源从持久化 state 换成页内复选框）。
+     */
+    private fun refreshBannerGateLine() {
+        val gate = bannerGateLine ?: return
+        val masterOn = masterCheckBox?.isSelected != false
+        val disabledCount = toolCheckBoxes.values.count { !it.isSelected }
+        gate.text = when {
+            !masterOn -> MpSqlVisualizerBundle.message("settings.mcp.banner.masterOff")
+            disabledCount == 0 -> MpSqlVisualizerBundle.message("settings.mcp.banner.allEnabled")
+            else -> MpSqlVisualizerBundle.message("settings.mcp.banner.someDisabled", disabledCount.toString())
         }
     }
 

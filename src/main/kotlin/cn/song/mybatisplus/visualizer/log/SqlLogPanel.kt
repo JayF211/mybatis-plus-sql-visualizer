@@ -1302,16 +1302,42 @@ class SqlLogPanel(
      */
     private var lastEmptyText: String? = null
 
+    /** 当前空态是否带「增强捕获」链接（诊断行不带——常规空态专属，见 [applyEmptyTextWithEnhancedLink]）。 */
+    private var emptyTextLinkEnabled: Boolean = false
+
     /** 写入空态文案（纯文本入口，渲染层在此做折行）。 */
     private fun applyEmptyText(plain: String) {
         lastEmptyText = plain
+        emptyTextLinkEnabled = false
+        renderEmptyText()
+    }
+
+    /**
+     * 写入空态文案 + 尾部可点「增强捕获」链接（20261008 验收缺陷 #3：第三径原为纯文本不可点，
+     * 与验收文档 3.22「点该引导走到增强捕获的开启流程」不符）。仅常规空态用；诊断行不加链接。
+     */
+    private fun applyEmptyTextWithEnhancedLink() {
+        lastEmptyText = MpSqlVisualizerBundle.message("log.panel.empty")
+        emptyTextLinkEnabled = true
         renderEmptyText()
     }
 
     /** 按当前列表可用宽度重排并逐视觉行写入（EDT）。 */
     private fun renderEmptyText() {
         val plain = lastEmptyText ?: return
-        applyEmptyTextLines(list.emptyText, plain, emptyTextWidthPx()) { s -> list.getFontMetrics(list.font).stringWidth(s) }
+        val status = list.emptyText
+        status.clear()
+        applyEmptyTextLines(status, plain, emptyTextWidthPx()) { s -> list.getFontMetrics(list.font).stringWidth(s) }
+        if (emptyTextLinkEnabled) {
+            // 链接短语紧随主文案（bundle 文案以「→」收尾）；写法与源码位置捕获引导同款
+            // （ShowSettingsUtil + SqlLogConfigurable，[SqlLogPanel.focusSourceCaptureGroup] 同路）。
+            status.appendSecondaryText(
+                MpSqlVisualizerBundle.message("log.panel.empty.link"),
+                com.intellij.ui.SimpleTextAttributes.LINK_ATTRIBUTES,
+            ) {
+                ShowSettingsUtil.getInstance().showSettingsDialog(project, SqlLogConfigurable::class.java)
+            }
+        }
     }
 
     /** 空态文案可用宽度：列表宽度扣掉自身内边距与左右余量；尚未布局（首帧 / 隐藏卡）时给兜底值。 */
@@ -1366,7 +1392,7 @@ class SqlLogPanel(
         } else {
             null
         }
-        applyEmptyText(text ?: MpSqlVisualizerBundle.message("log.panel.empty"))
+        if (text != null) applyEmptyText(text) else applyEmptyTextWithEnhancedLink()
         if (active) {
             if (diagnosticsTimer == null) {
                 diagnosticsTimer = javax.swing.Timer(DIAGNOSTICS_TICK_MS) { syncDiagnostics() }
@@ -1381,7 +1407,7 @@ class SqlLogPanel(
     // ---------- 条目列表 ----------
 
     private fun buildListPane(): JBScrollPane {
-        applyEmptyText(MpSqlVisualizerBundle.message("log.panel.empty"))
+        applyEmptyTextWithEnhancedLink()
         // T-AgentDiagWrap T-04：列表宽度变化即重排空态文案——否则用户拉窄/拉宽工具窗后，
         // 文案还按旧宽度折行（窄窗下会重新长出被裁掉的尾巴，等于修复只在首帧生效）。
         list.addComponentListener(object : ComponentAdapter() {
