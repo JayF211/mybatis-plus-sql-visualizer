@@ -129,6 +129,22 @@ internal abstract class TextCopyList<E>(model: ListModel<E>) : JBList<E>(model) 
 3. 测试脚本经 JSON→shell→python 三层转义，字符串里的 `\n` 被逐层吃掉成真换行 —— 用 `chr(92)` 构造字面量规避（新增通用坑，见记忆）。
 4. **`SqlSelectionDialog`（多 SQL 候选选择弹窗）未纳入**：接入需新增「候选正文」构造参数 + 12 处调用方同步，成本远高于收益（该弹窗用途是「选一个」，复制需求弱）→ 登记 **R68**，等用户点名（届时用 `copyTextOf: (T) -> String` 收口）。
 
+## 八、追加需求：「最近执行记录」支持多选（T-RecentMulti，用户令）
+
+用户令「「最近执行记录」也支持下多选」——语义**照抄 SQL 日志页**（本仓 UI 惯例：同交互照抄既有同类实现）：
+
+| 交互 | 多选语义 |
+|---|---|
+| 选择 | `MULTIPLE_INTERVAL_SELECTION`（Ctrl/Shift 多选） |
+| Ctrl+C | 逐行拼接纯 SQL（`SqlEntryList.itemToText` 已具备，多选自动生效） |
+| 编辑器显示 | 按行序逐条格式化后换行拼接——与 Ctrl+C 产物同源（**所见即复制**）；单选逐字节不变 |
+| 状态行 | 多选显示「已选 N 条」（新键 `log.recent.dialog.selected`，zh/en 双语）；单选/空态沿用原文案 |
+| 打开预览 | 取 **lead**（最后交互行）——与「我点的那条」意图一致；单选等价原 `selectedValue` |
+| 右键菜单 | 命中行已在多选内 → 保留多选（`resolveContextMenuSelection`）；「复制时间戳」走批量（`batchCopyTimestamps` + `copyMenuText` 带条数）；其余动作仍单条（与日志页一致） |
+| 复制/格式化按钮 | 作用于编辑器当前文本（多选即拼接文本） |
+
+**读数**：`RecentExecutionsDialogTest` 20 例全绿（新增 4 条：多选批量复制、编辑器拼接+状态行含收回单选回落、打开预览取 lead、复制时间戳带条数）；**反向验证**把 `selectionMode` 改回单选 → **20 例恰 3 红**（批量复制 / 拼接+状态行 / 菜单条数），并按反向口暴露一处**测试自省**：lead 用例在单选模式下也通过（无判别力）→ 补「前提：多选确实生效（选中数==2）」断言后固化；`testFast --rerun` 3406/0/0。
+
 ## 七、验收标准（回填）
 
 - 7 处编辑器：无选中 Ctrl+C / Ctrl+Insert 复制全文、有选中只复制片段 —— 共享件 6 例 + 5 处接入类各 1 例断言在册；按钮/菜单路径零改动。

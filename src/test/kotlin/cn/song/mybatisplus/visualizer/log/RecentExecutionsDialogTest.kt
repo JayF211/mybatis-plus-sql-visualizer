@@ -398,19 +398,80 @@ class RecentExecutionsDialogTest : BasePlatformTestCase() {
     }
 
     /** 列表 Ctrl+C 应得纯 SQL——此前 itemToText 未覆写，复制出的是渲染文本。
-     *  注：本列表是**单选**（createCenterPanel 设 SINGLE_SELECTION），故断言单条语义。 */
-    fun test列表CtrlC复制选中条目纯SQL() {
+     *  T-RecentMulti：本列表已支持多选，多选批量＝逐行拼接（与日志页同语义）。 */
+    fun test列表CtrlC多选批量复制纯SQL() {
         val dialog = newDialog(listOf(entry("SELECT 1"), entry("SELECT 2")))
         try {
             val list = dialog.entryListForTest()
-            list.selectedIndex = 1
+            dialog.selectIndicesForTest(intArrayOf(0, 1))
             CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
             val actionKey = list.inputMap.get(KeyStroke.getKeyStroke("control C"))
             assertNotNull("列表 Ctrl+C 绑定应由平台 LAF 提供", actionKey)
             list.actionMap.get(actionKey)
                 .actionPerformed(ActionEvent(list, ActionEvent.ACTION_PERFORMED, actionKey.toString()))
             val clip: String? = CopyPasteManager.getInstance().getContents(DataFlavor.stringFlavor)
-            assertEquals("Ctrl+C 应复制选中条目的纯 SQL（带结尾分号）", "SELECT 2;", clip)
+            assertEquals("多选 Ctrl+C 应逐行拼接纯 SQL（带结尾分号）", "SELECT 1;\nSELECT 2;", clip)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+
+    /** T-RecentMulti：多选时编辑器按行序拼接显示（与 Ctrl+C 产物同源），状态行显示已选条数。 */
+    fun test多选_编辑器拼接显示_状态行已选条数() {
+        val dialog = newDialog(listOf(entry("SELECT id FROM tab_a"), entry("SELECT name FROM tab_b")))
+        try {
+            dialog.selectIndicesForTest(intArrayOf(0, 1))
+            val text = dialog.editorTextForTest()
+            assertTrue("多选拼接应含换行", text.contains("\n"))
+            assertTrue("应包含第一条内容", text.contains("tab_a"))
+            assertTrue("应包含第二条内容", text.contains("tab_b"))
+            assertEquals(
+                "状态行应显示已选条数",
+                MpSqlVisualizerBundle.message("log.recent.dialog.selected", "2"),
+                dialog.statusTextForTest(),
+            )
+            // 收敛回单选 → 状态行回落到计数文案
+            dialog.selectIndexForTest(0)
+            assertEquals(
+                MpSqlVisualizerBundle.message("log.recent.dialog.count", "2"),
+                dialog.statusTextForTest(),
+            )
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+
+    /** T-RecentMulti：多选下「打开预览」取 lead（最后交互行），而非最小索引的第一条。 */
+    fun test多选_打开预览取lead选中行() {
+        val entries = listOf(entry("SELECT 1"), entry("SELECT 2"))
+        val opened = mutableListOf<LogSqlEntry>()
+        val dialog = newDialog(entries, onOpen = { opened.add(it) })
+        try {
+            dialog.selectIndicesForTest(intArrayOf(0, 1))
+            assertEquals("前提：多选模式确实生效（单选模式下本用例无判别力）",
+                2, dialog.entryListForTest().selectedIndices.size)
+            dialog.triggerOpenPreviewForTest()
+            assertEquals("多选下应打开 lead（末行）那条，而非最小索引的第一条",
+                listOf(entries[1]), opened)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    /** T-RecentMulti：多选下「复制时间戳」走批量语义（文案带条数，与日志页同源 copyMenuText）。 */
+    fun test多选_复制时间戳菜单带条数() {
+        val dialog = newDialog(listOf(entry(multiClauseSql), entry(multiClauseSql)))
+        try {
+            dialog.selectIndicesForTest(intArrayOf(0, 1))
+            val copyTimestamp = dialog.menuActionsForSelectionForTest().first()
+            val event = drive(copyTimestamp)
+            assertEquals(
+                "多选下复制时间戳文案应带条数",
+                MpSqlVisualizerBundle.message("log.panel.copyTimestampSelected", "2"),
+                event.presentation.text,
+            )
         } finally {
             dialog.doDispose()
         }

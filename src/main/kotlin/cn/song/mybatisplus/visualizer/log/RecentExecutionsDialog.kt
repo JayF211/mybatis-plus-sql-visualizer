@@ -45,6 +45,11 @@ import javax.swing.border.EmptyBorder
  * `com.intellij.openapi.ui.Splitter` 左右分栏 + 右侧只读高亮编辑器（dispose 释放走 ParamImportDialog
  * 成熟路径）；差异点：只读浏览、无增删清，主按钮「打开预览」开启后**不关闭**本对话框（连续对比多条）。
  *
+ * T-RecentMulti（用户令）：列表支持**多选**——语义照抄 SQL 日志页：Ctrl/Shift 多选、Ctrl+C 批量复制
+ * （`SqlEntryList.itemToText` 逐行拼接）、右键命中行已在多选内则保留多选（[resolveContextMenuSelection]）、
+ * 多选时编辑器按行序拼接显示（与复制产物同源）、状态行「已选 N 条」、主按钮打开 lead（最后交互行）。
+ * 单选路径行为逐字节不变。
+ *
  * 左侧列表直接复用日志面板条目渲染器 [LogEntryListCellRenderer]（同包 internal 直用）——
  * 两行形态、类型色条、耗时/来源角标与「SQL 日志」页完全一致（D86/D87 用户拍板：恒弹对话框
  * 含空态、编辑器内容=restoredSql）。
@@ -131,11 +136,15 @@ class RecentExecutionsDialog(
 
     override fun createCenterPanel(): JComponent {
         entryList.cellRenderer = entryRenderer
-        entryList.selectionMode = ListSelectionModel.SINGLE_SELECTION
+        // T-RecentMulti（用户令：本弹框也支持多选）：选择语义照抄 SQL 日志页——Ctrl/Shift 多选、
+        // Ctrl+C 批量复制（走 SqlEntryList 的 itemToText 逐行拼接）、右键命中行已在多选内则保留多选。
+        // 单选路径行为逐字节不变（编辑器显示单条、状态行计数、按钮动作对象同为该条）。
+        entryList.selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
         entryList.addListSelectionListener { event ->
             if (event.valueIsAdjusting) return@addListSelectionListener
             updateEditorFromSelection()
             syncSelectionScopedControls()
+            syncStatusText()
         }
         // 双击 = 打开预览（与主按钮同路径）；右键 = 条目动作菜单（T-RecentExecMenu，形制同日志页）
         entryList.addMouseListener(object : MouseAdapter() {
@@ -216,11 +225,15 @@ class RecentExecutionsDialog(
 
     /**
      * 选中条目 → 只读编辑器换文（D91：恒为格式化显示，「查看原文」已按用户令退役；
-     * runWriteAction 直写不重建 editor）。空选中 → 清空。
+     * runWriteAction 直写不重建 editor）。
+     *
+     * T-RecentMulti：多选时按行序逐条格式化后换行拼接（与 Ctrl+C 复制产物同源——「所见即复制」）；
+     * 单选时与改造前逐字节一致；空选中 → 清空。
      */
     private fun updateEditorFromSelection() {
         val ed = editor ?: return
-        val text = entryList.selectedValue?.let { displayTextFor(it) } ?: ""
+        val selected = entryList.selectedValuesList
+        val text = selected.joinToString("\n") { displayTextFor(it) }
         ApplicationManager.getApplication().runWriteAction {
             if (ed.document.text != text) ed.document.setText(text)
         }
@@ -258,12 +271,19 @@ class RecentExecutionsDialog(
         syncSelectionScopedControls()
     }
 
-    /** 状态行：空态复用 gutter 菜单既有「未找到」文案（不造重复键）；否则「共 N 条」。 */
+    /**
+     * 状态行：空态复用 gutter 菜单既有「未找到」文案（不造重复键）；多选显示「已选 N 条」；
+     * 否则「共 N 条」（T-RecentMulti 新增多选态）。
+     */
     private fun syncStatusText() {
-        statusLabel.text = if (currentEntries.isEmpty()) {
-            MpSqlVisualizerBundle.message("gutter.popup.recent.empty")
-        } else {
-            MpSqlVisualizerBundle.message("log.recent.dialog.count", currentEntries.size.toString())
+        val selectedCount = entryList.selectedIndices.size
+        statusLabel.text = when {
+            currentEntries.isEmpty() ->
+                MpSqlVisualizerBundle.message("gutter.popup.recent.empty")
+            selectedCount > 1 ->
+                MpSqlVisualizerBundle.message("log.recent.dialog.selected", selectedCount.toString())
+            else ->
+                MpSqlVisualizerBundle.message("log.recent.dialog.count", currentEntries.size.toString())
         }
     }
 
@@ -311,17 +331,25 @@ class RecentExecutionsDialog(
     private fun showContextMenu(e: MouseEvent) {
         val index = entryList.locationToIndex(e.point)
         if (index < 0) return
-        entryList.selectedIndex = index
+        // T-RecentMulti：命中行已在多选集合内 → 保留原多选（复制项=批量）；否则收敛为该行
+        //（与日志页 resolveContextMenuSelection 同一语义）
+        entryList.selectedIndices = resolveContextMenuSelection(entryList.selectedIndices, index)
         val entry = entryList.model.getElementAt(index)
-        val popup = ActionManager.getInstance().createActionPopupMenu(POPUP_ID, buildMenuGroup(entry))
+        val popup = ActionManager.getInstance().createActionPopupMenu(
+            POPUP_ID,
+            buildMenuGroup(entry, entryList.selectedValuesList),
+        )
         // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成属性——显式调 setter
         popup.setTargetComponent(entryList)
         popup.component.show(entryList, e.x, e.y)
     }
 
-    /** 菜单动作组（[showContextMenu] 与测试访问器共用，单一来源）。 */
-    private fun buildMenuGroup(entry: LogSqlEntry): DefaultActionGroup = DefaultActionGroup(
-        CopyTimestampAction(entry),
+    /** 菜单动作组（[showContextMenu] 与测试访问器共用，单一来源）；[selectedEntries] 供批量项（复制时间戳）。 */
+    private fun buildMenuGroup(
+        entry: LogSqlEntry,
+        selectedEntries: List<LogSqlEntry> = listOf(entry),
+    ): DefaultActionGroup = DefaultActionGroup(
+        CopyTimestampAction(selectedEntries),
         SuppressSqlAction(entry),
         SendToSqlToJavaAction(entry),
         SendToLogToSqlAction(entry),
@@ -329,12 +357,13 @@ class RecentExecutionsDialog(
         JumpToMapperXmlAction(entry),
     )
 
-    /** 复制该条目的时间戳片段（与日志页同源 [batchCopyTimestamps]；显示开关关闭时无片段 → 置灰）。 */
-    private inner class CopyTimestampAction(private val entry: LogSqlEntry) : AnAction() {
-        private val clip = batchCopyTimestamps(listOf(entry))
+    /** 复制选中条目的时间戳片段（与日志页同源 [batchCopyTimestamps]；多选批量、文案带条数；显示开关关闭时无片段 → 置灰）。 */
+    private inner class CopyTimestampAction(private val entries: List<LogSqlEntry>) : AnAction() {
+        private val clip = batchCopyTimestamps(entries)
 
         override fun update(e: AnActionEvent) {
-            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.copyTimestamp")
+            e.presentation.text =
+                copyMenuText("log.panel.copyTimestamp", "log.panel.copyTimestampSelected", entries.size)
             e.presentation.isEnabled = clip.isNotEmpty()
         }
 
@@ -475,11 +504,17 @@ class RecentExecutionsDialog(
     }
 
     /**
-     * 主按钮/回车/双击：打开选中条目预览后**不关闭**本对话框（浏览对比场景）。
+     * 主按钮/回车/双击：打开预览后**不关闭**本对话框（浏览对比场景）。
+     * T-RecentMulti：多选下取 **lead**（最后交互行）——与「我点的那条」意图一致；单选等价于原 selectedValue。
      * 无选中直接返回（okAction 已禁用，防御直达调用）。
      */
     override fun doOKAction() {
-        val selected = entryList.selectedValue ?: return
+        val lead = entryList.leadSelectionIndex
+        val selected = if (lead >= 0) {
+            listModel.getElementAt(lead)
+        } else {
+            entryList.selectedValue ?: return
+        }
         onOpenPreview(selected)
     }
 
@@ -520,6 +555,11 @@ class RecentExecutionsDialog(
         entryList.selectedIndex = index
     }
 
+    /** 测试访问器：多选（T-RecentMulti）。 */
+    internal fun selectIndicesForTest(indices: IntArray) {
+        entryList.selectedIndices = indices
+    }
+
     /** 测试访问器：当前选中条目。 */
     internal fun selectedEntryForTest(): LogSqlEntry? = entryList.selectedValue
 
@@ -557,6 +597,13 @@ class RecentExecutionsDialog(
     internal fun menuActionsForTest(): List<AnAction> {
         val entry = entryList.selectedValue ?: return emptyList()
         return buildMenuGroup(entry).getChildren(null).toList()
+    }
+
+    /** 测试访问器：按**当前多选集合**构建菜单（T-RecentMulti：批量项文案断言用）。 */
+    internal fun menuActionsForSelectionForTest(): List<AnAction> {
+        val lead = entryList.leadSelectionIndex
+        val entry = if (lead >= 0) listModel.getElementAt(lead) else entryList.selectedValue ?: return emptyList()
+        return buildMenuGroup(entry, entryList.selectedValuesList).getChildren(null).toList()
     }
 
     /** 测试访问器：屏蔽规则经理（断言规则确实入库）。 */
