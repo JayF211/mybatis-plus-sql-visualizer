@@ -1066,7 +1066,67 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         MpSqlVisualizerBundle.message("panel.replayExport") to { exportReplayScript() },
         // R37（T-LaneB D95）：安全 AI 上下文交递——脱敏参数化块进剪贴板（未接 MCP 用户的安全出口）
         MpSqlVisualizerBundle.message("panel.aiContext") to { copyAsAiContext() },
+        // R42（阶段二合并批）：DML 影响面预演——UPDATE/DELETE 执行前的只读 COUNT 试算
+        MpSqlVisualizerBundle.message("panel.dmlImpact") to { estimateDmlImpact() },
     )
+
+    /**
+     * R42：DML 影响面预演。
+     *
+     * 把当前 UPDATE/DELETE 的 WHERE 谓词改写为等价只读 `COUNT(*)` 试算语句（改写边界与
+     * 成本防护见 [cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator]），经**既有执行链**
+     * （[SqlExecutor.execute]，isQuery=true 免二次确认）提交，行数在结果区原生呈现。
+     * 不适用形态（JOIN/多表/无 WHERE/多语句）走轻通知如实说明原因，不执行。
+     */
+    internal fun estimateDmlImpact() {
+        val proj = project ?: return
+        val sql = currentEditorSql() ?: return
+        val dialect = current?.previewModel?.dialect ?: MySqlDialect
+        when (val plan = cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.plan(sql, dialect)) {
+            is cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.Plan.NotApplicable -> {
+                notifyDmlImpact(
+                    proj,
+                    MpSqlVisualizerBundle.message("dml.impact.notApplicable.title"),
+                    MpSqlVisualizerBundle.message(plan.reasonKey),
+                )
+            }
+
+            is cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.Plan.Applicable -> {
+                val probe = plan.probe
+                val capLine = if (probe.rowCap != null) {
+                    MpSqlVisualizerBundle.message("dml.impact.probe.capped", probe.rowCap)
+                } else {
+                    MpSqlVisualizerBundle.message("dml.impact.probe.uncapped")
+                }
+                notifyDmlImpact(
+                    proj,
+                    MpSqlVisualizerBundle.message("dml.impact.probe.title"),
+                    MpSqlVisualizerBundle.message(
+                        "dml.impact.probe.body",
+                        probe.probeSql,
+                        probe.targetTable,
+                        capLine,
+                    ),
+                )
+                resultPanel.showLoading()
+                SqlExecutor.execute(
+                    proj, probe.probeSql, null, true,
+                    onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
+                    onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
+                    onError = { errorMsg -> resultPanel.showError(errorMsg) },
+                    onErrorRich = { info -> showErrorRichWithLocate(info) },
+                )
+            }
+        }
+    }
+
+    /** R42：影响面预演的轻通知（非模态；单测模式不弹）。 */
+    private fun notifyDmlImpact(proj: Project, title: String, body: String) {
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            Notification(NOTIFICATION_GROUP_ID, title, body, NotificationType.INFORMATION).notify(proj)
+        }
+    }
 
     /**
      * R37：当前 SQL 组装为脱敏 AI 上下文块并复制到剪贴板。
@@ -1308,7 +1368,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             val keyword = SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
             val confirm = Messages.showYesNoDialog(
                 proj,
-                cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(sql, keyword),
+                cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(
+                    sql,
+                    keyword,
+                    current?.previewModel?.dialect,
+                ),
                 MpSqlVisualizerBundle.message("execute.confirm.dml"),
                 Messages.getWarningIcon(),
             )
@@ -1518,15 +1582,30 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
         // 1. SQL 类型分类 → 非查询语句二次确认
         val isQuery = SqlTypeClassifier.isQuery(sql)
+        // R46：执行前 Schema 校验（只读已预热元数据缓存——未绑定数据源/未预热自动跳过不阻塞）
+        val schemaIssues = when (
+            val outcome = cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.check(proj, sql)
+        ) {
+            is cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.Outcome.Checked -> outcome.issues
+            else -> emptyList()
+        }
         if (!isQuery) {
             val keyword = SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
             val confirm = Messages.showYesNoDialog(
                 proj,
-                cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(sql, keyword),
+                cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(
+                    sql,
+                    keyword,
+                    current?.previewModel?.dialect,
+                    cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.renderLines(schemaIssues),
+                ),
                 MpSqlVisualizerBundle.message("execute.confirm.dml"),
                 Messages.getWarningIcon(),
             )
             if (confirm != Messages.YES) return
+        } else {
+            // 查询链无二次确认弹窗——未识别对象走轻通知（非模态、不阻断；与 R52 确认链互补）
+            notifySchemaIssues(proj, schemaIssues)
         }
         // T-InjectionGate T-IG-02：`${}` raw 拼接段确认门（DML 分类判定之后追加——预览产物里的
         // raw 段带的是模拟值，执行前须用户确认值真实性；NO 直接中止，不落快照不执行）
@@ -1595,6 +1674,26 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             },
             onErrorRich = { info -> showErrorRichWithLocate(info) },
         )
+    }
+
+    /**
+     * R46：查询链的未识别对象轻通知（非模态、不阻断执行——与 DML 确认弹窗同源同文案）。
+     * 无发现或单测模式不弹（弹窗/通知克制红线；真机才提示）。
+     */
+    private fun notifySchemaIssues(
+        proj: Project,
+        issues: List<cn.song.mybatisplus.visualizer.sql.schema.SchemaValidator.Issue>,
+    ) {
+        val body = cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.renderNotification(issues) ?: return
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("schema.check.notification.title"),
+                body,
+                NotificationType.WARNING,
+            ).notify(proj)
+        }
     }
 
     /**
@@ -1736,6 +1835,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         if (!confirmUnknownParams(proj)) return
         // T-PSG-04（N-33）：对账非阻断标注与 executeSql 同址同款（EXPLAIN 也是执行旁路）
         warnOnPlaceholderMismatch()
+        // R46：EXPLAIN 是执行旁路，同样过 Schema 校验（未识别对象走轻通知，不阻断）
+        when (val outcome = cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.check(proj, sql)) {
+            is cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.Outcome.Checked ->
+                notifySchemaIssues(proj, outcome.issues)
+
+            else -> Unit
+        }
         // R33：面板 EXPLAIN 双通道分派（结构化渲染为增量——判定/执行/渲染任一环不成立都
         // fail-closed 回退直送通道，双通道并存不替换既有行为，见 submitExplainOrStructured）
         // 代际先递增（所有路径）——作废前一次提交的在途结构化回调
@@ -5248,8 +5354,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         metaLineDigest = stackInline
         metaLineText = metaLineHead + metaLineDigest
         metaPerfSegments = buildPerfSegments(result)
+        // R52：方言能力矩阵进 meta 悬停（呈现层——O-106 双触点之一；可见行不动以保 F3 宽度预算）
         metaTooltipBase = meta + warningLine +
-            metaPerfSegments.joinToString("；") { it.text }
+            metaPerfSegments.joinToString("；") { it.text } + dialectCapabilityTooltipSection(result)
         metaLabel.toolTipText = metaTooltipBase
         stackHover.updateDigest(result.stackDigest)
         metaLabel.foreground = if (currentWarning != null) {
@@ -5285,6 +5392,23 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // F3：复制错误按钮显隐改变工具栏理想宽，预算随显隐重算（lastMetaBudget 复位后应用）
         lastMetaBudget = -1
         applyMetaTruncation()
+    }
+
+    /**
+     * R52：当前方言能力矩阵的 meta 悬停段（呈现层触点一）。
+     *
+     * 悬停而非可见行：meta 可见行受 F3 宽度预算中段省略（[applyMetaTruncation]），把四行矩阵
+     * 塞进可见行会挤掉表名/调用栈摘要——矩阵信息密度高、按需查看即可，故落 tooltip（同仓
+     * 惯例：完整信息进悬停、可见行留摘要）。方言取预览结果自带的 `previewModel.dialect`
+     * （与渲染/EXPLAIN 同源），无预览模型时返回空串（不加段落）。
+     */
+    private fun dialectCapabilityTooltipSection(result: PreviewResult): String {
+        val dialect = result.previewModel?.dialect ?: return ""
+        return "\n\n" + MpSqlVisualizerBundle.message(
+            "panel.meta.dialectCapabilities",
+            dialect.name,
+            cn.song.mybatisplus.visualizer.sql.DialectCapabilities.summaryText(dialect),
+        )
     }
 
     /**

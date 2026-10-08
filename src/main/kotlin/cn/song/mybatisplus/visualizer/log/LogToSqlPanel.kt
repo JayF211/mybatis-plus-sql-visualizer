@@ -295,7 +295,12 @@ class LogToSqlPanel(
             val keyword = cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
             val confirm = com.intellij.openapi.ui.Messages.showYesNoDialog(
                 project,
-                cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(sql, keyword),
+                cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(
+                    sql,
+                    keyword,
+                    // R52：日志还原链无预览会话方言，取当前生效方言（与渲染/执行链同源函数）
+                    cn.song.mybatisplus.visualizer.sql.DialectRegistry.effective(project),
+                ),
                 MpSqlVisualizerBundle.message("execute.confirm.dml"),
                 com.intellij.openapi.ui.Messages.getWarningIcon(),
             )

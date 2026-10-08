@@ -158,13 +158,13 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
             // 模式切换按钮文案随 compactMode 二态（压缩/多行），任一在场即视为直显
             val modeTexts = listOf("panel.mode.singleline", "panel.mode.multiline").map { MpSqlVisualizerBundle.message(it) }
             assertTrue("模式切换按钮应直显（压缩或多行任一文案）", modeTexts.any { it in directTexts })
-            for (key in listOf("panel.param.import", "panel.compare", "panel.share", "panel.rollbackSql", "panel.portableExport", "panel.replayExport", "panel.aiContext")) {
+            for (key in listOf("panel.param.import", "panel.compare", "panel.share", "panel.rollbackSql", "panel.portableExport", "panel.replayExport", "panel.aiContext", "panel.dmlImpact")) {
                 val folded = MpSqlVisualizerBundle.message(key)
                 assertFalse("低频按钮 $key($folded) 不应直显", folded in directTexts)
             }
             assertEquals(
-                "「更多」菜单应恰为 回滚 SQL/导入参数/差异对比/分享/导出可移植 SQL/导出回放脚本/复制为 AI 上下文 七项且顺序稳定" +
-                    "（T-UiCoord F1 起回滚 SQL 居首；O-91 增导出可移植 SQL；R36 增导出回放脚本；R37 增复制为 AI 上下文）",
+                "「更多」菜单应恰为 回滚 SQL/导入参数/差异对比/分享/导出可移植 SQL/导出回放脚本/复制为 AI 上下文/DML 影响面 八项且顺序稳定" +
+                    "（T-UiCoord F1 起回滚 SQL 居首；O-91 增导出可移植 SQL；R36 增导出回放脚本；R37 增复制为 AI 上下文；R42 增 DML 影响面）",
                 listOf(
                     MpSqlVisualizerBundle.message("panel.rollbackSql"),
                     MpSqlVisualizerBundle.message("panel.param.import"),
@@ -173,6 +173,7 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
                     MpSqlVisualizerBundle.message("panel.portableExport"),
                     MpSqlVisualizerBundle.message("panel.replayExport"),
                     MpSqlVisualizerBundle.message("panel.aiContext"),
+                    MpSqlVisualizerBundle.message("panel.dmlImpact"),
                 ),
                 panel.moreActionsForTest(),
             )

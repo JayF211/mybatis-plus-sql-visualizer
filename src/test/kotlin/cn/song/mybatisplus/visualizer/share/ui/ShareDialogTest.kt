@@ -12,7 +12,8 @@ import javax.swing.JRadioButton
 /**
  * 分享对话框构造与默认态测试（F-44 续 · 补用例大波次）：
  * 此前 0 测试。仅验证**构造即可靠成型**的部分（不触发 doOKAction，避免触及剪贴板/文件选择器/浏览器）：
- *   - 4 个分享选项（Markdown / Markdown 表格 / 可执行 SQL / HTML）且默认仅选中 Markdown
+ *   - 6 个分享选项（Markdown / Markdown 表格 / 可执行 SQL / HTML / R50 诊断报告 Markdown / R50 诊断报告 HTML）
+ *     且默认仅选中 Markdown
  *   - 来源输入框（JBTextField）存在
  *   - 首选焦点组件为来源输入框
  * 构造用最小 SqlPreviewPanel（并 dispose 释放内部编辑器，防 teardown 报未释放）。
@@ -25,14 +26,14 @@ class ShareDialogTest : BasePlatformTestCase() {
         return list
     }
 
-    fun test构造_四个分享选项且默认选中Markdown() {
+    fun test构造_六个分享选项且默认选中Markdown() {
         val panel = SqlPreviewPanel(myFixture.project)
         try {
             val dialog = ShareDialog(myFixture.project, panel)
             // DialogWrapper 的 rootPane/contentPane 仅在 show() 时构建，headless 下用测试缝取中心面板
             val pane = dialog.centerPanelForTest()
             val radios = allComponents(pane).filterIsInstance<JRadioButton>()
-            assertEquals("应有 4 个分享选项", 4, radios.size)
+            assertEquals("应有 6 个分享选项", 6, radios.size)
             val selected = radios.filter { it.isSelected }
             assertEquals("默认应仅选中 1 个", 1, selected.size)
             val markdownText = MpSqlVisualizerBundle.message("share.dialog.markdown")
