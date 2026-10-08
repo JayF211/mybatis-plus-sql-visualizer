@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.config
 
+import cn.song.mybatisplus.visualizer.mcp.McpToolGate
+import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -12,6 +14,10 @@ import org.junit.Test
  *    编程注册——全局平台陷阱清单）；
  *  - `<action` 缺 `class=`：整个插件无法加载（bug-fixes/project-plugin-xml-kotlin-optional.md）；
  *  - description 内嵌外链 `<img`：Marketplace 302 防盗链全部图挂（pitfalls/pitfall-gitee-hotlink-302.md）；
+ *  - T-PluginDescReshape（2026-10-08）新增描述结构四条：`<hr/>` 与 HTML 注释被 Marketplace 剥离
+ *    （实测 tag 2026.10.7 本地有 hr、线上同版本 hr=0，中英两段粘连）、首 40 字符须英文摘要
+ *    （预览卡文案位，官方 best-practices 硬要求）、数字与行为声明对账（11 方言 / 10 工具 /
+ *    Alt+Shift+Q / since-build 版本标签）、双语同构且中文在前；
  *  - `projectConfigurable` 与父级同名套娃（bug-fixes/project-settings-no-nested-configurable.md）；
  *    T-SettingsTruth P4 起项目级设置页合法注册（parentId=tools 顶层），守卫收窄为
  *    「不得挂应用级 configurable 之下 + id 不与 applicationConfigurable 重复」；
@@ -75,6 +81,106 @@ class PluginXmlStructureGuardTest {
             val desc = xml.substringAfter("<description", "").substringBefore("</description>")
             assertHolds("$name description 内嵌 <img>（Marketplace 302 防盗链图全挂，用文字+链接）", !desc.contains("<img"))
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 描述结构守卫（T-PluginDescReshape）：平台剥离面 / 预览卡摘要 / 声明对账 / 双语同构
+    // ------------------------------------------------------------------
+
+    /**
+     * 描述不得含 `<hr/>` 与 HTML 注释——**实测 Marketplace 两者都会剥离**：
+     * 本地 tag `2026.10.7` 的 plugin.xml 描述里含 `<hr/>`，而 Marketplace API
+     * （`GET /api/plugins/33633`）返回的同版本描述里 `<hr` 出现 0 次、注释同样消失，
+     * 结果中英两段直接首尾粘连。分隔改用 `<h3>` 分节标题（线上实测保留）。
+     *
+     * 断言取自**未剥注释**的原始资源：本类 [strippedXmls] 会先剥注释，用它会把这
+     * 条规则变成恒真（空绿），故单列 [rawDescription]。
+     */
+    @Test
+    fun `描述不得含hr分隔线与HTML注释`() {
+        val desc = rawDescription()
+        assertHolds(
+            "描述含 <hr/>（Marketplace 剥离 → 中英两段粘连；分隔请用 <h3> 分节标题）",
+            !desc.contains("<hr"),
+        )
+        assertHolds(
+            "描述含 HTML 注释（Marketplace 同样剥离，写了也不会显示）",
+            !desc.contains("<!--"),
+        )
+    }
+
+    /**
+     * 描述首 40 字符须是英文短摘要：Marketplace 用前 40 字符做预览卡文案且**不可单独修改**
+     * （官方 best-practices-for-listing「Tips and Tricks」原文），故顶部摘要行必须由英文承载。
+     */
+    @Test
+    fun `描述首40字符须为英文摘要`() {
+        val plain = rawDescription().replace(Regex("<[^>]*>"), "").trim()
+        val head = plain.take(40)
+        assertHolds(
+            "描述首 40 字符须为英文可打印字符（预览卡文案位），实际：$head",
+            head.length == 40 && head.all { it.code in 0x20..0x7E },
+        )
+    }
+
+    /**
+     * 描述里的数字与行为类声明跟代码对账：方言数、MCP 工具数、默认键位、最低支持版本。
+     * 四项都是「代码一改、描述静默过期」的高危面（加方言 / 加工具 / 换键位 / 抬 since-build）。
+     */
+    @Test
+    fun `描述声明与代码对账`() {
+        val desc = rawDescription()
+        val pluginXml = strippedXmls().first { it.first == "plugin.xml" }.second
+
+        val dialects = DialectRegistry.dialects.size
+        assertDeclaredNumber(desc, Regex("""(\d+)\s+database dialects"""), dialects, "英文段数据库方言数")
+        assertDeclaredNumber(desc, Regex("""(\d+)\s*种数据库方言"""), dialects, "中文段数据库方言数")
+
+        val tools = McpToolGate.TOOL_NAMES.size
+        assertDeclaredNumber(desc, Regex("""(\d+)\s+deterministic"""), tools, "英文段 MCP 工具数")
+        assertDeclaredNumber(desc, Regex("""(\d+)\s*个确定性"""), tools, "中文段 MCP 工具数")
+
+        // 键位：描述宣传的快捷键须与 ConvertToSql 注册的默认键一致（换键位时描述会红）
+        val convertBlock = actionBlock(pluginXml, "cn.song.mybatisplus.visualizer.ConvertToSql")
+        val keystroke = Regex("""first-keystroke\s*=\s*"([^"]+)"""").find(convertBlock)?.groupValues?.get(1)
+        if (keystroke != null) {
+            val label = keystroke.split(" ").joinToString("+") { part -> part.replaceFirstChar { it.uppercase() } }
+            assertHolds("描述须使用 ConvertToSql 的默认键位 $label（当前描述未见）", desc.contains(label))
+        } else {
+            assertHolds("ConvertToSql 已无默认键位，描述不得再宣传 Alt+Shift+Q", !desc.contains("Alt+Shift+Q"))
+        }
+
+        // 最低支持版本：since-build 前缀 → 版本号标签，二者必须同源（抬版本而描述不跟着改会红）
+        val sinceBuild = Regex("""since-build\s*=\s*"(\d+)"""").find(pluginXml)?.groupValues?.get(1)
+        val versionLabel = mapOf(
+            "243" to "2024.3", "251" to "2025.1", "252" to "2025.2", "253" to "2025.3",
+            "261" to "2026.1", "262" to "2026.2",
+        )[sinceBuild]
+        assertHolds("plugin.xml 未声明可解析的 since-build（对账表须补该构建号）", versionLabel != null)
+        assertHolds("描述须写明最低支持版本 $versionLabel（since-build=$sinceBuild）", desc.contains(versionLabel!!))
+    }
+
+    /**
+     * 双语同构 + 中文在上：`<h3>中文</h3>` 与 `<h3>English</h3>` 两节都须在，
+     * 中文节在前（用户 2026-10-08 定案），且两侧 `<li>` 条数相等（防只改一侧的静默漂移）。
+     */
+    @Test
+    fun `描述双语同构且中文在前`() {
+        val desc = rawDescription()
+        val zhMark = "<h3>中文</h3>"
+        val enMark = "<h3>English</h3>"
+        val zhIndex = desc.indexOf(zhMark)
+        val enIndex = desc.indexOf(enMark)
+        assertHolds("描述须有 $zhMark 分节", zhIndex >= 0)
+        assertHolds("描述须有 $enMark 分节", enIndex >= 0)
+        assertHolds("中文节须在英文节之上（T-PluginDescReshape 结构定案）", zhIndex in 0 until enIndex)
+
+        val zhItems = desc.substring(zhIndex, enIndex).split("<li>").size - 1
+        val enItems = desc.substring(enIndex).split("<li>").size - 1
+        assertHolds(
+            "中英条目数须相等且非零（防单边改一条）：中文 $zhItems / 英文 $enItems",
+            zhItems > 0 && zhItems == enItems,
+        )
     }
 
     @Test
@@ -356,6 +462,32 @@ class PluginXmlStructureGuardTest {
 
         assertTrue("未注册的动作 id 不得被判存在", !actionBlockExists(withShortcut, "NOPE"))
         assertTrue("未注册的动作 id 不得被判带键位", !actionBlockHasKeyboardShortcut(withShortcut, "NOPE"))
+    }
+
+    /**
+     * 描述段原文（含 CDATA 包裹），取自**未剥注释**的原始资源——hr/注释两条规则要看得见它们。
+     * 注意 classpath 上这份 plugin.xml 是构建期重写过的版本（注入 change-notes），
+     * 但描述 CDATA 与注释均逐字保留（20261008 实测 build/resources/main 副本 desc 含 hr）。
+     */
+    private fun rawDescription(): String {
+        val raw = javaClass.classLoader.getResourceAsStream("META-INF/plugin.xml")
+            ?.use { it.readBytes().toString(Charsets.UTF_8) }
+            ?: error("资源缺失: META-INF/plugin.xml")
+        return raw.substringAfter("<description", "").substringBefore("</description>")
+    }
+
+    /** 描述里的数字声明与代码计数对账：匹配不到 / 数字不等都判红（缺声明即为漂移面）。 */
+    private fun assertDeclaredNumber(desc: String, pattern: Regex, expected: Int, label: String) {
+        val matched = pattern.find(desc)?.groupValues?.get(1)
+        assertHolds("$label：描述未声明（模式 ${pattern.pattern}），代码实际 $expected", matched != null)
+        assertHolds("$label：描述声明 $matched，代码实际 $expected", matched == expected.toString())
+    }
+
+    /** 取动作块文本（自闭合动作返回空串）：描述对账里读取默认键位用。 */
+    private fun actionBlock(xml: String, actionId: String): String {
+        val tag = Regex("""<action\b[^>]*\bid\s*=\s*"$actionId"[^>]*?(/)?>""").find(xml) ?: return ""
+        if (tag.groupValues[1] == "/") return ""
+        return xml.substring(tag.range.last + 1).substringBefore("</action>")
     }
 
     /**
