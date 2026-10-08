@@ -502,9 +502,14 @@ class ParamHistoryCacheTest {
 
     /**
      * F54 LRU 淘汰序（读写交错下不漂移）：并发读线程持续 recall "tbl:a"（读即回写）期间
-     * 主线程依次写 a/b/c/d——淘汰必须精确按 accessOrder 语义走（并发刷新过的 a 存活、
-     * 未刷新的 b 被淘）。单写者＋固定刷新键设计使断言与读线程时序解耦（读线程只会把 a
-     * 推向 MRU，不改变结论）。
+     * 主线程依次写 a/b/c/d——淘汰必须精确按 accessOrder 语义走（被刷新过的 a 存活、未刷新的 b 被淘）。
+     *
+     * 确定化两处（2026-10-08 收口门禁抓出 flake：6 次执行 3 红，报「未被刷新的 b 应被淘汰
+     * expected null, but was:<{v=b}>」）：
+     *  ① **启动栅栏**——先等读线程真在跑，否则可能零并发通过（用例形同虚设）；
+     *  ② **主线程显式刷新 a**——「读线程恰在插入 d 之前刷到 a」是调度巧合（它可能一次都没跑到），
+     *     原用例却把结论建在这个巧合上。现由主线程触碰一次 a 把其推为 MRU（recall 命中即回写入序），
+     *     读线程此后只会把 a 推得更新、不可能让 b/c/d 变新，故淘汰结论与读线程时序无关。
      */
     @Test
     fun `F54_读写交错下LRU淘汰序_仍按最近访问`() {
@@ -512,8 +517,10 @@ class ParamHistoryCacheTest {
         cache.clear()
         val errors = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
         val stop = java.util.concurrent.atomic.AtomicBoolean(false)
+        val started = java.util.concurrent.CountDownLatch(2)
         val readers = (0 until 2).map {
             Thread {
+                started.countDown()
                 while (!stop.get()) {
                     runCatching { cache.recall("tbl:a") }.onFailure(errors::add)
                 }
@@ -521,14 +528,17 @@ class ParamHistoryCacheTest {
         }
         readers.forEach { it.start() }
         try {
+            assertTrue("读线程应已启动（防零并发通过）", started.await(5, java.util.concurrent.TimeUnit.SECONDS))
             cache.save("tbl:a", mapOf("v" to "a"))
             cache.save("tbl:b", mapOf("v" to "b"))
             cache.save("tbl:c", mapOf("v" to "c"))
-            // 并发读线程持续刷新 a（a → MRU）；插入第 4 条淘汰最久未访问的 b
+            // 确定化：主线程显式刷新 a（recall 命中即回写 accessOrder）→ 序变为 b,c,a
+            cache.recall("tbl:a")
+            // 插入第 4 条淘汰最久未访问者：a 已被刷新 → LRU 恒为 b
             cache.save("tbl:d", mapOf("v" to "d"))
             assertTrue("并发窗口零异常：${errors.take(3)}", errors.isEmpty())
             assertNull("未被刷新的 b 应被淘汰", cache.recall("tbl:b"))
-            assertNotNull("并发刷新过的 a 应存活", cache.recall("tbl:a"))
+            assertNotNull("刷新过的 a 应存活", cache.recall("tbl:a"))
             assertNotNull("c 应存活", cache.recall("tbl:c"))
             assertNotNull("d 应存活", cache.recall("tbl:d"))
         } finally {

@@ -94,8 +94,9 @@ class SettingsTruthTest {
         // T-M56Phase2-Premain（合流后 +1）：premain 回连建会话成功亦广播一次状态行（启动即捕获生效）
         // T-FirstUsePremainConsent S1：同意流三态落盘收进 confirmEnhancedCapture 单点，单点内
         // 1 处广播覆盖三态（新分支自动纳入，比逐分支三处更不易漏），总数 9 → 7
+        // R53（+1）：setUserPaused 切换用户暂停态后广播一次状态行（状态栏据此即时反映暂停），总数 7 → 8
         val count = Regex("publishStatusChanged\\(\\)").findAll(src).count()
-        assertTrue("publishStatusChanged 应有 7 处（定义 1 + 调用 6，实际 $count）", count == 7)
+        assertTrue("publishStatusChanged 应有 8 处（定义 1 + 调用 7，实际 $count）", count == 8)
         // 三态广播必须收口在确认落盘单点体内（三态语义运行期覆盖见 AgentConsentFlowTest / AgentPremainConsentTest）
         assertTrue(
             "confirmEnhancedCapture 单点体内应广播状态变更",
