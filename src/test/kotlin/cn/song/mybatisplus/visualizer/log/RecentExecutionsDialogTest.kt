@@ -477,4 +477,70 @@ class RecentExecutionsDialogTest : BasePlatformTestCase() {
         }
     }
 
+
+    // ---------- T-RecentEditable：可编辑 / 折叠（与单击预览浮窗同源口径）的测试夹具 ----------
+
+    private fun withAutoFold(enabled: Boolean, block: () -> Unit) {
+        val state = PluginSettings.getInstance().state
+        val oldEnabled = state.autoFoldEnabled
+        val oldThreshold = state.autoFoldFieldThreshold
+        try {
+            state.autoFoldEnabled = enabled
+            state.autoFoldFieldThreshold = 3
+            block()
+        } finally {
+            state.autoFoldEnabled = oldEnabled
+            state.autoFoldFieldThreshold = oldThreshold
+        }
+    }
+
+    private fun ownFoldRegions(editor: com.intellij.openapi.editor.Editor) =
+        editor.foldingModel.allFoldRegions.filter { it.placeholderText.startsWith("…") }
+
+
+    /** T-RecentEditable（用户令）：右侧编辑器可编辑——与「SQL 日志单击列表弹出的预览浮窗」同效果。 */
+    fun test编辑器可编辑_非viewer态() {
+        val dialog = newDialog(listOf(entry(multiClauseSql)))
+        try {
+            val editor = dialog.editorForTest()
+            assertNotNull("编辑器应在场", editor)
+            assertFalse("编辑器应为可编辑态（原 setViewer(true) 已按用户令去掉）", editor!!.isViewer)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    /** T-RecentEditable：临时改字段值后复制取**改后文本**（与预览浮窗「编辑后复制」同契约）。 */
+    fun test编辑器编辑后复制取改后文本() {
+        val dialog = newDialog(listOf(entry("SELECT price FROM t")))
+        try {
+            val editor = dialog.editorForTest()!!
+            com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+                editor.document.setText("SELECT edited_price FROM t;")
+            }
+            CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
+            dialog.triggerCopyForTest()
+            val clip: String? = CopyPasteManager.getInstance().getContents(DataFlavor.stringFlavor)
+            assertEquals("复制应取编辑后文本（含改动）", "SELECT edited_price FROM t;", clip)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    /** T-RecentEditable：程序性折叠跟随设置（与预览浮窗 [SqlClickPreview] 同源 SqlAutoFolding）。 */
+    fun test开启自动折叠后编辑器出现收起区域() {
+        withAutoFold(enabled = true) {
+            val dialog = newDialog(listOf(entry("SELECT a1,\n    a2,\n    a3,\n    a4\nFROM t")))
+            try {
+                val editor = dialog.editorForTest()
+                assertNotNull("编辑器应在场", editor)
+                val regions = ownFoldRegions(editor!!)
+                assertEquals("开启态应有一个折叠区域", 1, regions.size)
+                assertFalse("区域应收起", regions[0].isExpanded)
+            } finally {
+                dialog.doDispose()
+            }
+        }
+    }
+
 }

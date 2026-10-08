@@ -42,8 +42,9 @@ import javax.swing.border.EmptyBorder
  * 「最近执行记录」浏览对话框（T-RecentExecDialog O-118）：gutter 右键菜单二级 ListPopup 的换代形态。
  *
  * 交互对齐 [SqlSuppressManagerDialog]（同包成熟范式）：非模态 + 可拖拽 + DimensionService 尺寸记忆 +
- * `com.intellij.openapi.ui.Splitter` 左右分栏 + 右侧只读高亮编辑器（dispose 释放走 ParamImportDialog
- * 成熟路径）；差异点：只读浏览、无增删清，主按钮「打开预览」开启后**不关闭**本对话框（连续对比多条）。
+ * `com.intellij.openapi.ui.Splitter` 左右分栏 + 右侧高亮编辑器（**T-RecentEditable 起可编辑**，与单击预览
+ * 浮窗同效果：可临时改字段值再复制；dispose 释放走 ParamImportDialog 成熟路径）；差异点：浏览视图、无增删清，
+ * 主按钮「打开预览」开启后**不关闭**本对话框（连续对比多条）。
  *
  * T-RecentMulti（用户令）：列表支持**多选**——语义照抄 SQL 日志页：Ctrl/Shift 多选、Ctrl+C 批量复制
  * （`SqlEntryList.itemToText` 逐行拼接）、右键命中行已在多选内则保留多选（[resolveContextMenuSelection]）、
@@ -87,7 +88,7 @@ class RecentExecutionsDialog(
     /** 日志面板条目渲染器（复用点；字段持有供测试钉断言——JBList getter 平台侧会包 ExpandedItemListCellRendererWrapper 壳）。 */
     private val entryRenderer = LogEntryListCellRenderer()
 
-    /** 只读高亮编辑器；null 仅在 dispose 之后（SqlSuppressManagerDialog 同生命周期约定）。 */
+    /** 高亮编辑器（T-RecentEditable 起可编辑）；null 仅在 dispose 之后（SqlSuppressManagerDialog 同生命周期约定）。 */
     private var editor: Editor? = null
 
     private val statusLabel = JBLabel().apply { foreground = UIUtil.getInactiveTextColor() }
@@ -188,7 +189,7 @@ class RecentExecutionsDialog(
     }
 
     /**
-     * 创建只读高亮编辑器（写法照抄 SqlSuppressManagerDialog.createEditorPane：
+     * 创建高亮编辑器（写法照抄 SqlSuppressManagerDialog.createEditorPane；T-RecentEditable 起可编辑：
      * LexerEditorHighlighter + 日志列表同款 token→配色映射，不依赖 Database 插件；行号开、软换行）。
      */
     private fun createEditorPane(): JComponent {
@@ -210,7 +211,10 @@ class RecentExecutionsDialog(
                 setUseSoftWraps(true)
             }
             EditorWhitespaceSettings.applyTo(this)
-            setViewer(true)
+            // T-RecentEditable（用户令）：编辑器改**可编辑**，与「SQL 日志单击列表弹出的预览浮窗」同效果
+            //（原为 setViewer(true) 只读）。可临时改字段值再复制——复制按钮与 Ctrl+C 都取当前文档文本；
+            // 改动随「切换条目 / 点格式化」重新加载而被覆盖（语义同预览浮窗：换条目 = 换内容）。
+            // 行号保持开启：本弹框是常驻浏览面板（预览浮窗是临时浮层，采紧凑外观不留 gutter）。
         }
         editor = created
         // T-SqlCopyShortcuts：无选中 Ctrl+C 复制整个 SQL、有选中只复制片段（与复制按钮同反馈）。
@@ -224,7 +228,7 @@ class RecentExecutionsDialog(
     }
 
     /**
-     * 选中条目 → 只读编辑器换文（D91：恒为格式化显示，「查看原文」已按用户令退役；
+     * 选中条目 → 编辑器换文（D91：恒为格式化显示，「查看原文」已按用户令退役；T-RecentEditable：编辑器可编辑，
      * runWriteAction 直写不重建 editor）。
      *
      * T-RecentMulti：多选时按行序逐条格式化后换行拼接（与 Ctrl+C 复制产物同源——「所见即复制」）；
@@ -235,7 +239,12 @@ class RecentExecutionsDialog(
         val selected = entryList.selectedValuesList
         val text = selected.joinToString("\n") { displayTextFor(it) }
         ApplicationManager.getApplication().runWriteAction {
-            if (ed.document.text != text) ed.document.setText(text)
+            if (ed.document.text != text) {
+                ed.document.setText(text)
+                // T-RecentEditable：内容变了就按设置重算程序性折叠（预览浮窗构建时同源调用；
+                // 本面板内容随选中变化，故每次换文后重算——关闭态由 applyTo 内部清除，零外观变更）
+                cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(ed, text)
+            }
         }
     }
 
