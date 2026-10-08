@@ -955,6 +955,13 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "手动模式语义不变对照/saveOrUpdate 批量预览 upsert+反引号不受残值污染）；" +
                     "私有 leakStaleManualDialect 为污染动作夹具非判定函数",
             ),
+            // ---- T-PerfSweep24 F84 新增守卫补登记（2026-10-08 收口门禁红抓出：整体脱离自证覆盖率扫描面） ----
+            GuardEntry(
+                "convention/InFunctionRegexSourceScanTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（受守卫文件零函数体现场 Regex 构造 + 判定器自证两用例）；" +
+                    "repoRoot/stripComments/guardedFiles 为夹具（F59/F60/F84 提常量的源码形态守卫）",
+            ),
             // ---- 本元守卫自身 ----
             GuardEntry(
                 "convention/GuardSelfTestCoverageMetaGuardTest.kt",
