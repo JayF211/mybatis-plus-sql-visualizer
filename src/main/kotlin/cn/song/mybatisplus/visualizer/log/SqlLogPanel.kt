@@ -124,6 +124,12 @@ internal const val REFRESH_CHUNK_SIZE = 30
  * 渲染文本（HTML 源码，用户实测缺陷），覆写后复制输出纯 SQL（多选逐条换行拼接、
  * CopyPasteManager 写入、Ctrl+C 快捷键注册均由 JBList 既有链路复用）。
  * open：internal 类默认 final，测试子类经公开包装访问 protected itemToText。
+ *
+ * T-ClickPreviewCopyRestore 二轮（20261008）勘正：上句「Ctrl+C 快捷键注册」经实证**来自平台 LAF**
+ * （`List.focusInputMap` 已含 `control C → copy`，headless 实测 `inputMap.get` 直接命中，
+ * 早先据 `InputMap.keys()==null` 判「无绑定」是懒加载 InputMap 的假象）；`JBList.installDefaultCopyAction`
+ * 只负责 ActionMap 侧。二轮曾在此补绑 InputMap，验证发现冗余（摘除后绑定仍在）已回退——列表 Ctrl+C
+ * 本就可达，用户「点击后复制失效」的断点在单击预览浮层抢焦点，修复见 [SqlClickPreview] 的 Swing 层绑定。
  */
 internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : JBList<LogSqlEntry>(model) {
     override fun itemToText(index: Int, element: LogSqlEntry): String = textFor(element)

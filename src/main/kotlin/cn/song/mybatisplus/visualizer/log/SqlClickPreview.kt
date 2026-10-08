@@ -325,14 +325,36 @@ internal class SqlClickPreview(
             }
             // T-ClickPreviewCopyRestore：头部按钮与编辑器 Ctrl+C handler 共用同一复制动作
             //（取编辑后当前文本 + 图标换对号反馈），两条入口产物与反馈一致
-            val copyCurrent = {
+            val copyAll = {
                 copyText(editor.document.text) // 复制当前内容（含用户编辑后文本）
                 cn.song.mybatisplus.visualizer.ui.flashCopied(copyButton) // 复制成功反馈：复制图标换对号，短暂后恢复
             }
-            copyButton.addActionListener { copyCurrent() }
+            copyButton.addActionListener { copyAll() }
             editor.putUserData(PREVIEW_EDITOR_KEY, true)
-            editor.putUserData(COPY_ACTION_KEY, copyCurrent)
+            editor.putUserData(COPY_ACTION_KEY, copyAll)
             installCopyHandler()
+
+            // ---- 二轮修复（真机反馈一修复被证伪后定位）：Swing 层 Ctrl+C 绑定 ----
+            // 平台 Ctrl+C（keymap `$Copy`）经 DataContext 取 COPY_PROVIDER，而编辑器组件
+            // （EditorComponentImpl.uiDataSnapshot，243 源码核验）只提供 EDITOR/CARET、不提供
+            // COPY_PROVIDER——真机上该 action 在编辑器里不可用，事件落回 Swing 绑定；编辑器组件
+            // 是 JTextComponent，自带的无选中 copy 是 no-op，于是「浮层里按 Ctrl+C 毫无反应」。
+            // 这里在焦点组件自身（WHEN_FOCUSED）覆盖 Ctrl+C / Ctrl+Insert：无选中复制全文、
+            // 有选中只复制选区（保留改字段值后复制片段）；与 keymap 路径共用同一意图，两条路归一。
+            val shortcutCopyKey = "mpsv.clickPreview.copy"
+            editor.component.actionMap.put(shortcutCopyKey, object : javax.swing.AbstractAction() {
+                override fun actionPerformed(e: java.awt.event.ActionEvent?) {
+                    val text = if (editor.selectionModel.hasSelection()) {
+                        editor.selectionModel.selectedText ?: ""
+                    } else {
+                        editor.document.text
+                    }
+                    copyText(text)
+                    cn.song.mybatisplus.visualizer.ui.flashCopied(copyButton)
+                }
+            })
+            editor.component.inputMap.put(javax.swing.KeyStroke.getKeyStroke("control C"), shortcutCopyKey)
+            editor.component.inputMap.put(javax.swing.KeyStroke.getKeyStroke("control INSERT"), shortcutCopyKey)
             val header = JPanel(FlowLayout(FlowLayout.RIGHT, 2, 0)).apply {
                 isOpaque = false
                 border = BorderFactory.createEmptyBorder(2, 4, 2, 4)

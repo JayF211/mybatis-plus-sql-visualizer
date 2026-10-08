@@ -146,4 +146,29 @@
 2. **测试驱动两坑**（headless 新登记）：①243 action 管线拒绝裸匿名 DataContext（`Utils.reportUnexpectedDataContextKind` 硬抛 PluginException，HTML 报告指路三选一），须用 `SimpleDataContext`；②`flashCopied` 会把按钮 tooltip 短暂换「已复制」（1500ms），复制后按 tooltip 找按钮必落空——断言用按钮引用须在复制动作**之前**抓取。
 3. **testFast UP-TO-DATE 假绿规避**：`testFast` 无 `outputs.upToDateWhen { false }`（testExternal 有），本轮首跑 24 任务 up-to-date 未执行任何测试——`--rerun` 强制真跑后读数方为有效（终态读数见上表 testFast 行）。
 
+## 八、二轮实施记录（真机反馈「问题没有解决」后重定位）
+
+**触发**：一轮修复随 master 合并（`d332744`）后用户复测仍报「复制不成功」。
+
+**证据链（三处实测 + 一处源码核验）**：
+
+1. **构建核对**：沙盒插件 jar（`mybatis-plus-sql-visualizer-2026.10.9.jar`，09:27:10 构建）解包实测含 `installCopyHandler` / `isEnabledForCaret` / `isMultiSelectIntent` —— 用户跑的确含一轮修复；用户日常 IDE 装的是 2026.10.7 旧版（无修复），两环境在 09:26~09:30 均有 SQL 日志活动。
+2. **headless 复现**：新增「平台真实调用点」用例（`EditorEx.copyProvider.performCopy(ctx)` + 真实 `UiTextClipboard` 注入）在修复下**绿**（剪贴板得全文）→ 一轮修复在「provider 被调用」这条链上有效。
+3. **但真实按键未必走那条链**（本轮真根因）：`$Copy`（keymap Ctrl+C 绑定，`$default.xml` 实测只有 `$Copy`）先经 DataContext 取 `PlatformDataKeys.COPY_PROVIDER`；而 `EditorComponentImpl.uiDataSnapshot`（243 源码核验）**只提供 `CommonDataKeys.EDITOR`/`CARET`，不提供 COPY_PROVIDER**（`PlatformDataKeys`/`CopyProvider` 命中 0），`EditorImpl.MyEditable.performCopy` 只在有人拿到编辑器的 provider 时才会被调 —— **provider 拿不到时 `$Copy` 不可用，事件落回 Swing 绑定**；编辑器组件是 JTextComponent，**自带的无选中 copy 是 no-op** → 用户现象「浮层里按 Ctrl+C 毫无反应」。一轮的 `EditorCopy` handler 修复挂在这条真机不会走到的链上（headless 直调才「绿」＝假绿形态）。
+4. **列表侧勘正**：`JBList.installDefaultCopyAction` 只装 ActionMap["copy"]（`doCopyToClipboardAction` = 选中条目逐条 `itemToText` 换行拼接）；Ctrl+C 的**按键绑定来自平台 LAF**（`List.focusInputMap`，headless 实测 `inputMap.get(control C)` 直接命中 "copy"）。早先据 `InputMap.keys()==null` 判「无绑定」是懒加载 InputMap 的假象；二轮曾据此补绑，反向验证发现摘除后绑定仍在＝冗余，**已回退**（类注释同步勘正）。结论：列表 Ctrl+C 本就可达，断点在浮层抢焦点后焦点组件（编辑器）的 Swing 层。
+
+**修复（二轮）**：
+- `SqlClickPreview.buildContent`：在**焦点组件自身（WHEN_FOCUSED）**覆盖 Ctrl+C / Ctrl+Insert 绑定（`editor.component.inputMap.put` + 同名 ActionMap）——无选中复制全文、有选中只复制选区（保留改字段值后复制片段），与头部按钮同反馈（对号）；与一轮的 `installCopyHandler`（keymap 路径）共用同一复制意图，**两条路径归一**，不再依赖对平台内部分派路径的判断。
+- `SqlEntryList`：冗余补绑回退，注释勘正为「绑定来自平台 LAF」。
+
+**读数**：
+
+| 轮次 | 命令 | 读数 |
+|---|---|---|
+| 定向（二轮终态） | `test --tests SqlClickPreviewTest` | **26/0 全绿**（原 22 + provider 直调 1 + Swing 绑定 3），BUILD SUCCESSFUL 1m18s |
+| 反向验证 | 摘除两处 Swing InputMap 绑定 | **2 红**＝test编辑器CtrlC绑定覆盖默认copy_无选中复制全文 + test编辑器CtrlC有选中只复制选区；**列表用例未红** → 证明平台 LAF 本就提供列表绑定（二轮补绑冗余，据此回退） |
+| testFast（二轮终态） | `testFast --rerun` | **3406/0/0**（报告时间戳 10:00:21 实证真跑，非 UP-TO-DATE 空转） |
+
+**二轮未覆盖（交真机）**：沙盒 GUI 自动化在本机不可用（CUA 对该 IDE 窗口的点击/按键不落地：坐标基准为屏幕像素但合成事件未被应用接收，a11y 树仅窗口级），故「浮层抢焦点后的真实按键落点」由用户在沙盒/真机复验（S4 三点）。
+
 **V123 沙盒回验**：待用户（或 runIde 窗口期）按计划 §三 S4 三点走查。

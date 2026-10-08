@@ -4,7 +4,12 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.IdeActions
+import com.intellij.ide.DataManager
 import com.intellij.openapi.actionSystem.impl.SimpleDataContext
+import com.intellij.openapi.editor.ex.EditorEx
+import com.intellij.openapi.ide.CopyPasteManager
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
+import java.awt.datatransfer.StringSelection
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
@@ -395,6 +400,119 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         } finally {
             releaseEditor(content.editor)
         }
+    }
+
+    /**
+     * 真实复制链路的**平台调用点**（T-ClickPreviewCopyRestore 二轮）：keymap Ctrl+C 绑 `$Copy`
+     * （IdeActions.ACTION_COPY），该 action 从 DataContext 取 `COPY_PROVIDER` 后调
+     * `provider.performCopy(ctx)` —— 编辑器的 provider 即 `EditorEx.copyProvider`
+     * （243 源码核验：`EditorImpl.MyEditable.performCopy` → `executeAction(EditorCopy)`）。
+     * 本用例走这一调用点、并注入生产的真实复制实现（`UiTextClipboard.copy`），
+     * 与「直调 handler、注入空回调」的用例相比更贴近用户按键路径。
+     *
+     * headless 边界：`DataManager.getDataContext(component)` 在无 UI 挂载时取不到 EDITOR/
+     * COPY_PROVIDER（实测均为 null），`$Copy.actionPerformed` 那条外部路径无法在 headless 复现
+     * ——真实按键行为由 GUI 走查覆盖（计划 §三 S4）。
+     */
+    fun test编辑器provider直调_无选中_剪贴板得全文() {
+        val content = SqlClickPreview.buildContent(
+            project,
+            "SELECT 1;",
+            copyText = { UiTextClipboard.copy(it) }, // 生产实现：弹窗路径注入的就是它
+            close = {},
+        )
+        try {
+            CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
+            val context = DataManager.getInstance().getDataContext(content.editor.component)
+            val provider = (content.editor as EditorEx).copyProvider
+            assertTrue("编辑器应提供复制能力", provider.isCopyEnabled(context))
+            provider.performCopy(context)
+            val clip: String? =
+                CopyPasteManager.getInstance().getContents(java.awt.datatransfer.DataFlavor.stringFlavor)
+            assertEquals("无选中时经编辑器 provider 复制应得整条 SQL", "SELECT 1;", clip)
+        } finally {
+            releaseEditor(content.editor)
+        }
+    }
+
+    /**
+     * 二轮修复（真机反馈后）：**Swing 绑定层**的 Ctrl+C —— 编辑器组件（JTextComponent）自带
+     * 的 copy 对无选中是 no-op，而平台 `$Copy` 在编辑器里因取不到 COPY_PROVIDER 不可用，
+     * 事件最终落回这一层。断言的正是真实按键解析的落点（InputMap → ActionMap）。
+     */
+    fun test编辑器CtrlC绑定覆盖默认copy_无选中复制全文() {
+        val content = SqlClickPreview.buildContent(
+            project,
+            "SELECT 1;",
+            copyText = { UiTextClipboard.copy(it) },
+            close = {},
+        )
+        try {
+            val comp = content.editor.component
+            val actionKey = comp.inputMap.get(javax.swing.KeyStroke.getKeyStroke("control C")) as String
+            assertEquals("Ctrl+C 应指向本插件的复制动作（覆盖 JTextComponent 默认 copy）",
+                "mpsv.clickPreview.copy", actionKey)
+            assertEquals("Ctrl+Insert 应同绑",
+                "mpsv.clickPreview.copy",
+                comp.inputMap.get(javax.swing.KeyStroke.getKeyStroke("control INSERT")))
+            CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
+            comp.actionMap.get(actionKey)
+                .actionPerformed(java.awt.event.ActionEvent(comp, java.awt.event.ActionEvent.ACTION_PERFORMED, actionKey))
+            val clip: String? = CopyPasteManager.getInstance().getContents(java.awt.datatransfer.DataFlavor.stringFlavor)
+            assertEquals("无选中按 Ctrl+C 应复制全文", "SELECT 1;", clip)
+        } finally {
+            releaseEditor(content.editor)
+        }
+    }
+
+    fun test编辑器CtrlC有选中只复制选区() {
+        val content = SqlClickPreview.buildContent(
+            project,
+            "SELECT * FROM user WHERE id = 1;",
+            copyText = { UiTextClipboard.copy(it) },
+            close = {},
+        )
+        try {
+            WriteCommandAction.runWriteCommandAction(project) {
+                content.editor.selectionModel.setSelection(0, 6) // "SELECT"
+            }
+            val comp = content.editor.component
+            val actionKey = comp.inputMap.get(javax.swing.KeyStroke.getKeyStroke("control C")) as String
+            CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
+            comp.actionMap.get(actionKey)
+                .actionPerformed(java.awt.event.ActionEvent(comp, java.awt.event.ActionEvent.ACTION_PERFORMED, actionKey))
+            val clip: String? = CopyPasteManager.getInstance().getContents(java.awt.datatransfer.DataFlavor.stringFlavor)
+            assertEquals("有选中按 Ctrl+C 应只复制选区片段", "SELECT", clip)
+        } finally {
+            releaseEditor(content.editor)
+        }
+    }
+
+    /**
+     * 列表侧契约钉子：Ctrl+C 绑定**来自平台 LAF**（`List.focusInputMap`），触发后走 JBList 既有
+     * copy 语义（ActionMap["copy"] → `doCopyToClipboardAction` → 选中条目逐条 `itemToText` 换行拼接）。
+     * 钉住「列表 Ctrl+C 复制纯 SQL」这条用户依赖的既有行为，**不是**二轮修复新增（二轮曾在此加绑定，
+     * 反向验证发现摘除后绑定仍在＝冗余，已回退）。
+     */
+    fun test列表CtrlC绑定在场_多选批量复制纯SQL() {
+        val model = DefaultListModel<LogSqlEntry>()
+        model.addElement(entry("SELECT 1;"))
+        model.addElement(entry("SELECT 2;"))
+        val list = SqlEntryList(model)
+        list.fixedCellHeight = 20
+        list.setSize(200, 100)
+        list.selectedIndices = intArrayOf(0, 1)
+        assertEquals("列表 Ctrl+C 应绑定到平台既有 copy 动作",
+            "copy",
+            list.inputMap.get(javax.swing.KeyStroke.getKeyStroke("control C")))
+        assertEquals("列表 Ctrl+Insert 应同绑",
+            "copy",
+            list.inputMap.get(javax.swing.KeyStroke.getKeyStroke("control INSERT")))
+        CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
+        list.actionMap.get("copy")
+            .actionPerformed(java.awt.event.ActionEvent(list, java.awt.event.ActionEvent.ACTION_PERFORMED, "copy"))
+        val clip: String? = CopyPasteManager.getInstance().getContents(java.awt.datatransfer.DataFlavor.stringFlavor)
+        assertEquals("多选列表 Ctrl+C 应复制逐行拼接的纯 SQL", "SELECT 1;\nSELECT 2;", clip)
     }
 
     fun testClickPreviewSql关闭格式化为原文加分号() {
