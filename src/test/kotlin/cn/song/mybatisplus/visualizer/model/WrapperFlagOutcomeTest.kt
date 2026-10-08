@@ -12,7 +12,8 @@ import org.junit.Test
  *  - 识别率：flagSource 四档（null / "true" / "false" / 运行时占位符）的派生结果；
  *  - 缺省 true 文案：字面量 true → 「恒真」、字面量 false → 「恒假」、
  *    运行时占位符（MP condition 缺省 true）→ 「恒真·缺省」——把「缺省当求值」的误导风险显式分开；
- *  - 边界：null 一律不标注（非布尔重载 / EasyQuery 字面量 true 折叠成 null 不可区分，宁可漏标不误标）。
+ *  - 边界：null 一律不标注（非布尔重载单一语义——R49 收口后 EasyQuery 侧字面量 true 已携带
+ *    "true" 不再折叠成 null，两条解析链口径一致，对照钉见 EasyQueryConverterTest）。
  *
  * bundle 在无平台服务环境下兜底中文（见 [cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle] KDoc），
  * 断言用中文特征串；文案键缺失时 message() 返回 key 本身，断言即失败。

@@ -692,14 +692,22 @@ object EasyQueryConverter {
         return (expr.type as? PsiClassType)?.resolve()
     }
 
-    /** 布尔前缀标志解析（true/false 字面量或运行时布尔占位）。 */
+    /**
+     * 布尔前缀标志解析（true/false 字面量或运行时布尔占位）。
+     *
+     * R49 口径统一：字面量 true 与 false 一样携带源码文本（`"true"`/`"false"`）——null 保留给
+     * 「非布尔重载」（见 [cn.song.mybatisplus.visualizer.model.ConditionToggle.flagSource] 契约）。
+     * 此前 true 被折叠成 null，与 QueryWrapperParser 侧（`QueryWrapperParserTest` 钉 `flagSource=="true"`）
+     * 不一致，且使同一用户表达式在两条解析链上标注不同（R49 Wrapper 布尔条件探镜据此显示）。
+     * `enabled` 语义不变（字面量 true 仍默认勾选）。
+     */
     private data class Flag(val source: String?, val enabled: Boolean)
 
     private fun ParseCtx.flagOf(expr: com.intellij.psi.PsiExpression): Flag? {
         val value = ExpressionEvaluator.evaluate(expr)
         return when (value) {
             is SqlValue.Literal -> when (value.unquoted) {
-                "true" -> Flag(null, true)
+                "true" -> Flag("true", true)
                 "false" -> Flag("false", false)
                 else -> null
             }
@@ -712,7 +720,7 @@ object EasyQueryConverter {
         val value = arg.asValue() ?: return null
         return when (value) {
             is SqlValue.Literal -> when (value.unquoted) {
-                "true" -> Flag(null, true)
+                "true" -> Flag("true", true)
                 "false" -> Flag("false", false)
                 else -> null
             }

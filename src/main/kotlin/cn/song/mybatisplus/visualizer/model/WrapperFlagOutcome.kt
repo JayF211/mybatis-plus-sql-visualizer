@@ -18,12 +18,12 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
  *    - `QueryWrapperParser.stripGroupFlag`（and/or/nested/not/func 组方法）——同上；
  *    - `QueryWrapperParser.parseRawTemplate`（apply/exists 布尔前缀）——同上，另有非值实参
  *      `hasFlag=true, flagSource=null` 的窄边界；
- *    - `EasyQueryConverter.toggleOf`（[Flag]）——**语义不同**：字面量 true 折叠成 `null`（
- *      `Flag(null, true)`，`EasyQueryConverter.kt:702`），只保留下 false 与运行时表达式
- *      （`:703`/`:706` 实测）。
- *    → 结论：`flagSource` 语义在生产者间**不一致**；本探镜只标注「可证明是布尔重载」的形态
- *    （`"true"/"false"` 与运行时占位符），`null` 一律不标注——宁可漏标 EasyQuery 字面量 true
- *    （它与「无布尔重载条件」在 `ConditionToggle` 上不可区分），也不把非布尔条件误标。
+ *    - `EasyQueryConverter.toggleOf`（[Flag]）——**本件收口前语义不同**：字面量 true 曾被折叠成
+ *      `null`（原 `Flag(null, true)`，`EasyQueryConverter.kt` 两处 flag 解析点），只保住 false 与
+ *      运行时表达式。**R49 收口已统一**：字面量 true 现与 false 一样携带源码文本
+ *      （`Flag("true", true)`），null 归位「非布尔重载」单一语义——故本探镜对 EasyQuery 字面量
+ *      true 同样标注「恒真」，四条生产者口径一致。
+ *    → 准则：`flagSource` 非 null ＝ 可证明是布尔重载（标注），null ＝ 不标注（不猜）。
  * 2. **布尔重载识别率**：解析期经 [cn.song.mybatisplus.visualizer.psi.ExpressionEvaluator]（`asValue`）
  *    已求值——字面量 true/false、可追踪变量（`boolean f = true; eq(f, …)` → `"true"`）、
  *    运行时表达式（占位符）三档全覆盖；字符串字面量（`eq("col", …)`）正确排除。

@@ -2,6 +2,10 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.converter.EasyQueryConverter
+import cn.song.mybatisplus.visualizer.model.Condition
+import cn.song.mybatisplus.visualizer.model.ConditionToggle
+import cn.song.mybatisplus.visualizer.model.WrapperFlagOutcome
+import cn.song.mybatisplus.visualizer.model.wrapperFlagOutcome
 import cn.song.mybatisplus.visualizer.psi.WrapperAnchorDetector
 import com.intellij.psi.PsiIdentifier
 import com.intellij.psi.PsiMethodCallExpression
@@ -136,6 +140,51 @@ class EasyQueryConverterTest : BasePlatformTestCase() {
             result!!.sql,
         )
     }
+
+    fun testR49字面量true的flagSource与Wrapper侧同口径() {
+        // R49 收口：EasyQuery 侧字面量 true 必须与 false 一样携带源码文本（此前被折叠成 null），
+        // 与 QueryWrapperParser 侧既有约定（QueryWrapperParserTest 钉 flagSource=="true"）一致——
+        // 否则同一条用户表达式在两条解析链上标注不同（R49 探镜不标注 vs 标注「恒真」）。
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            public class Demo {
+                private EasyEntityQuery easyEntityQuery;
+
+                public java.util.List<Topic> demo() {
+                    return easyEntityQuery.queryable(Topic.class)
+                        .where(true, o -> o.id().eq("123"))
+                        .toList();
+                }
+            }
+
+            class EasyEntityQuery {}
+
+            $topicEntity
+            """.trimIndent(),
+        )
+        val preview = EasyQueryConverter.convert(call("queryable"))
+        assertNotNull(preview)
+        val toggles = collectToggles(preview!!.statement!!.conditions)
+        val literalTrue = toggles.filter { it.flagSource == "true" }
+        assertEquals(
+            "字面量 true 应恰好产出一个 flagSource=\"true\" 的 toggle（与 Wrapper 侧同口径）：$toggles",
+            1,
+            literalTrue.size,
+        )
+        assertEquals(
+            "字面量 true 的 toggle 应被 R49 标注为「恒真」",
+            WrapperFlagOutcome.ALWAYS_TRUE,
+            wrapperFlagOutcome(literalTrue.single().flagSource),
+        )
+    }
+
+    /** 递归收集条件树上的 toggle（Group 下钻）。 */
+    private fun collectToggles(conditions: List<Condition>): List<ConditionToggle> =
+        conditions.flatMap { c ->
+            (c.toggle?.let { listOf(it) } ?: emptyList()) +
+                if (c is Condition.Group) collectToggles(c.children) else emptyList()
+        }
 
     fun testEq7RangeFamilyMappedToBetweenAndOpenInterval() {
         // EQ7：rangeClosed → BETWEEN；rangeOpen → 开区间 AND 组（col > ? AND col < ?）
