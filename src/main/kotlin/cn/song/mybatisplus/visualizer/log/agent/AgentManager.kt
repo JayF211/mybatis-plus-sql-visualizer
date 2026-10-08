@@ -171,6 +171,42 @@ class AgentManager(private val project: Project) : Disposable {
     var online: Boolean = false
         private set
 
+    /**
+     * R53（V80③ 最简口径）：用户暂停增强捕获——**暂停只停 agent 通道、控制台通道照常**。
+     *
+     * 语义三要点：
+     *  - 暂停≠关闭：连接/心跳/CONFIG ACK 链一概不动（[AgentSession] 照常收发帧），只在**入队点**
+     *    丢弃 EVENT（[AgentSession.pausedProvider]），恢复后 agent 通道照常产出；
+     *  - 桥不封：暂停期间 [SqlCaptureGate.paused] 强制为 false——控制台桥恢复解析兜底，
+     *    双通道不并存（agent 侧已丢），列表不出现重复条目；
+     *  - 三态不冲突（V80③ 排查结论）：与拒绝冷却无关（冷却只作用于确认弹窗频率），
+     *    与总开关正交——[shutdownAll]（关开关）与「关闭→再开启」上升沿（SETTINGS_CHANGE）均复位，
+     *    不残留「暂停中但开关已关」的悬空态。
+     *
+     * EDT 写（暂停动作/设置监听）、读线程读（intake 闸门 provider）、monitor 读（桥闸门），@Volatile 足够。
+     */
+    @Volatile
+    var userPaused: Boolean = false
+        private set
+
+    /**
+     * R53：切换用户暂停态（工具窗暂停/恢复入口调用）。状态变化即重算桥闸门
+     * （暂停 → 桥立即恢复，不等 5s 巡检拍）并广播（设置页状态行同步）。
+     */
+    fun setUserPaused(paused: Boolean) {
+        if (userPaused == paused) return
+        userPaused = paused
+        LOG.info("增强捕获用户暂停切换：$paused（暂停只停 agent 通道，控制台通道照常；连接与 CONFIG 链不动）")
+        updateOnline()
+        publishStatusChanged()
+    }
+
+    /**
+     * R53：健康会话 pid 列表（工具窗状态栏取数，无锁只读——同 [statusSummary] 口径）。
+     * internal 为同模块守护测试缝（[sweepOffline] 同款）。
+     */
+    internal fun healthyPids(): List<Long> = sessions.filter { isSessionHealthy(it) }.map { it.pid }
+
     /** 会话表。internal 为同模块守护测试缝（T-PS4-03 sweepOffline 清表断言）；生产链路勿直接读写。 */
     internal val sessions = CopyOnWriteArrayList<AgentSession>()
 
@@ -289,7 +325,9 @@ class AgentManager(private val project: Project) : Disposable {
                 // 仅此边沿重置，其余设置变更不动冷却，防改无关设置白涮 24h 冷却窗）
                 if (state.enhancedCaptureEnabled && !lastKnownEnabled) {
                     state.enhancedCaptureRejectedAtMs = 0L
-                    LOG.info("设置变更：增强捕获重新开启——拒绝冷却已重置")
+                    // R53（V80③）：关闭→再开启的上升沿复位用户暂停——不残留「暂停中但开关重开」的悬空态
+                    userPaused = false
+                    LOG.info("设置变更：增强捕获重新开启——拒绝冷却已重置，用户暂停已复位")
                     // T-FirstUsePremainConsent R2-C：确认前置到「开启」时刻。Round1 把确认挂在
                     // updateJavaParameters 窗口，沙盒实测（idea.log 11:06:54）该窗口在后台线程跑、
                     // EDT 闸门恒跳过 → 首轮仍静默。开启那一刻在设置页/引导链上下文天然是 EDT——
@@ -846,6 +884,8 @@ class AgentManager(private val project: Project) : Disposable {
             scheduleConfigAckCheck = ::scheduleConfigAckCheck,
             // 追加 P-5：回执到达 → 重算桥闸门（在线态不变时也要刷，故不走「仅变化才广播」的路径）
             onCaptureConfirmationChanged = ::onCaptureConfirmationChanged,
+            // R53：用户暂停闸门（暂停只停 agent 通道——事件在入队点丢弃，连接/回执链不动）
+            pausedProvider = { userPaused },
         )
     }
 
@@ -1157,6 +1197,8 @@ class AgentManager(private val project: Project) : Disposable {
                 scheduleConfigAckCheck = ::scheduleConfigAckCheck,
                 // 追加 P-5：premain 会话同 attach 链——回执驱动桥闸门
                 onCaptureConfirmationChanged = ::onCaptureConfirmationChanged,
+                // R53：premain 会话同 attach 链——用户暂停闸门
+                pausedProvider = { userPaused },
             )
             sessions.add(session)
             if (pid > 0L) attachedPids[pid] = clockMs()
@@ -1277,7 +1319,9 @@ class AgentManager(private val project: Project) : Disposable {
         // 且零产出没有任何可见信号）。收窄后：确认在采集才让桥让位（不引入双通道重复产出——
         // T-M56-02 闸门的本意保留），未确认/确认停采则桥照常解析兜底。
         // 「捕获关」时桥本就不产条目（Filter 的 isCapturing 守卫不挂载），故本处不必再判 capturing。
-        SqlCaptureGate.paused.set(online && captureConfirmedActive())
+        // R53：用户暂停（userPaused）时强制不封桥——暂停只停 agent 通道（事件在入队点丢弃），
+        // 控制台通道照常解析兜底，两通道不并存（agent 侧已丢，无重复条目）。
+        SqlCaptureGate.paused.set(online && captureConfirmedActive() && !userPaused)
         // T-AgentDialectLoop：回落/关闭时清空日志时间相关器，防跨运行陈旧匹配
         if (!online) LogTimeCorrelator.clear()
     }
@@ -1437,6 +1481,8 @@ class AgentManager(private val project: Project) : Disposable {
 
     /** 关闭开关：CONFIG 下发停采集（禁用不卸载语义）→ 会话关闭 → 桥回落。 */
     fun shutdownAll() {
+        // R53（V80③）：关开关即复位用户暂停——暂停只对「增强开着」有意义，总开关关后不留悬空态
+        userPaused = false
         sessions.forEach { it.sendConfig(disabled = true) }
         sessions.forEach { it.close() }
         sessions.clear()
@@ -1764,6 +1810,12 @@ internal class AgentSession(
      * `AgentManager.captureConfirmedActive`）。
      */
     private val onCaptureConfirmationChanged: () -> Unit = {},
+    /**
+     * R53：用户暂停闸门（默认 false = 不暂停）。生产由 [AgentManager] 注入 `{ userPaused }`——
+     * 暂停只停 agent 通道（EVENT 在入队点丢弃），连接/心跳/CONFIG ACK 链不动（暂停≠关闭）。
+     * internal 可注入为同模块守护测试缝（照 [listenActiveProvider] 先例）。
+     */
+    internal var pausedProvider: () -> Boolean = { false },
 ) {
 
     private val LOG = Logger.getInstance(AgentSession::class.java)
@@ -1784,6 +1836,13 @@ internal class AgentSession(
      * 单调递增——它是「控制通道可能失效」的量化证据（应用侧仍在采集投递），不只丢弃了事。
      */
     internal val intakeDropped = AtomicLong()
+
+    /**
+     * R53：用户暂停态丢弃计数（暂停期间投递的 EVENT 条数）。单调递增——「暂停中」不是「通道断了」：
+     * 计数在涨 = agent 通道仍活着、只是被用户停掉展示；结合 [AgentEventAdapter.receivedEvents]
+     * （两者同帧同增）可区分「暂停拦截」与「通道失效」。
+     */
+    internal val pausedDropped = AtomicLong()
 
     /** T-AgentConfigChannel T-03：入队闸门判据（可注入测试缝；默认读 [SqlLogManager.capturing]）。 */
     internal var listenActiveProvider: () -> Boolean = {
@@ -2006,6 +2065,19 @@ internal class AgentSession(
                     //（含后续被去重/屏蔽/展示链丢弃的）。面板零产出时据此分流「事件到没到」：
                     // N=0 → 查 agent 侧（织入/门禁/传输）；N>0 → 查消费侧。
                     AgentEventAdapter.markReceived()
+                    // R53：用户暂停闸门（在收到计数**之后**——暂停中「已收事件 N」照常增长，
+                    // 状态栏据此显示「暂停中且通道活着」而非「通道断了」）。只丢入列表，
+                    // 连接/心跳/CONFIG ACK 链一概不动（暂停≠关闭，V80② 自洽）。
+                    if (pausedProvider()) {
+                        val n = pausedDropped.incrementAndGet()
+                        if (n == 1L || n % AgentManager.INTAKE_DROP_WARN_STEP == 0L) {
+                            LOG.info(
+                                "增强通道在用户暂停态收到 $n 条事件——丢弃不入队（暂停只停 agent 通道，" +
+                                    "控制台通道照常；恢复即续采）",
+                            )
+                        }
+                        return
+                    }
                     // T-AgentDialectLoop / T-AgentLogTime：接管期间控制台嗅探暂存的「日志行原始时间」
                     // 按 [logTimeKey]（占位符版 SQL 指纹）取回，参数值序列作次级判别（[stampLogTime]）。
                     // 未命中回落捕获时间（= execute 开始时刻，与日志行只差毫秒级）并留痕 [logTimeMiss]。
