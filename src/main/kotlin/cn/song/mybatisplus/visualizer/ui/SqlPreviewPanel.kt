@@ -13,7 +13,9 @@ import cn.song.mybatisplus.visualizer.model.FillClause
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SelectStatement
+import cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter
 import cn.song.mybatisplus.visualizer.sql.ExplainGate
+import cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat
 import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
@@ -356,6 +358,13 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 慢计划绝不覆盖用户已经看到的新预览/新提交（与 DataSourceSelector 的 swapGeneration 同思路）。
      */
     private var explainStructuredGeneration = 0
+
+    /**
+     * R61（V113②）：会话级上一次结构化 EXPLAIN 结果（跨次对比基线）。
+     * 生命周期＝会话级（面板实例存活期）——不持久化、不跨会话；同 SQL 多次执行时滚动更新，
+     * 不同 SQL 各自独立基线（按 SQL 指纹键控）。
+     */
+    private var lastStructuredExplain: Pair<String, McpExplainFormatter.RawResult>? = null
 
     /**
      * M36.5.39-A2：持久包装容器——console 组件统一嵌入此容器、容器整体挂入 editorHolder。
@@ -1754,6 +1763,12 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                                 dialect.name, outcome.raw.headers, outcome.raw.rows,
                             )
                         }.getOrDefault(emptyList())
+                        // R61（V113②）：跨次对比——同 SQL 指纹的上一次结构化结果作基线，
+                        // 计算 diff 传入视图；随后滚动更新基线（会话级，不持久化）
+                        val planDiff = lastStructuredExplain?.let { (prevKey, prevRaw) ->
+                            if (prevKey == explainSql) ExplainPlanDiff.diff(prevRaw, outcome.raw, outFormat) else null
+                        }
+                        lastStructuredExplain = explainSql to outcome.raw
                         embedExplainView(
                             ExplainPlanResultView(
                                 dialectName = dialect.name,
@@ -1763,6 +1778,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                                 format = outFormat,
                                 hints = hints,
                                 onBackToConsole = { submitExplainDirect(proj, explainSql) },
+                                diff = planDiff,
                             ),
                         )
                         resultPanel.showIdle()

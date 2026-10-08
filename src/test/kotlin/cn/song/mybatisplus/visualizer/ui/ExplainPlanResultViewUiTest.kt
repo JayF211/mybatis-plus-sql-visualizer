@@ -7,6 +7,7 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
 /**
@@ -121,5 +122,68 @@ class ExplainPlanResultViewUiTest : BasePlatformTestCase() {
         assertNotNull(header)
         assertTrue("头部应含方言", header!!.contains("MariaDB"))
         assertTrue("头部应含数据源名", header.contains("prod@10.0.0.3"))
+    }
+
+    // ==== R61：跨次对比条（照抄索引建议条形态——null 不占位、有内容才可见） ====
+
+    fun testR61_无基线无对比条() {
+        val view = ExplainPlanResultView(
+            dialectName = "MySQL",
+            dataSourceName = null,
+            elapsedMs = 1L,
+            raw = McpExplainFormatter.RawResult(mysqlHeaders, mysqlRows),
+            format = ExplainOutputFormat.TABLE,
+        )
+        assertNull("无 diff 参数不应有对比条", view.compareTextForTest())
+    }
+
+    fun testR61_对比条渲染增量与增删行() {
+        val diff = ExplainPlanDiff.PlanDiff(
+            changed = listOf(
+                ExplainPlanDiff.NodeChange(
+                    matchKey = "id=1 table=tb_user#0",
+                    label = "id=1 table=tb_user (rows=99500)",
+                    rowsDelta = ExplainPlanDiff.MetricDelta(99500L, 500L),
+                    costDelta = null,
+                    fieldChanges = listOf(ExplainPlanDiff.FieldChange("type", "ALL", "ref")),
+                ),
+            ),
+            added = listOf("id=1 table=tb_order (rows=10)"),
+            removed = emptyList(),
+        )
+        val view = ExplainPlanResultView(
+            dialectName = "MySQL",
+            dataSourceName = null,
+            elapsedMs = 1L,
+            raw = McpExplainFormatter.RawResult(mysqlHeaders, mysqlRows),
+            format = ExplainOutputFormat.TABLE,
+            diff = diff,
+        )
+        val text = view.compareTextForTest()
+        assertNotNull("有 diff 应有对比条", text)
+        assertTrue("应含节点标签", text!!.contains("id=1 table=tb_user"))
+        assertTrue("应含行数增量（旧值）", text.contains("99500"))
+        assertTrue("应含行数增量（新值）", text.contains("500"))
+        assertTrue("应含字段变化", text.contains("type"))
+        assertTrue("应含新增行", text.contains("tb_order"))
+        // 渲染行清单本体（bundle 文案 + Locale.ROOT 数字格式）
+        val lines = view.renderCompareLines(diff)
+        assertEquals(2, lines.size)
+        assertTrue(lines[0].contains("99500"))
+        assertTrue(lines[1].contains("tb_order"))
+    }
+
+    fun testR61_计划等价对比条显式告知() {
+        val view = ExplainPlanResultView(
+            dialectName = "MySQL",
+            dataSourceName = null,
+            elapsedMs = 1L,
+            raw = McpExplainFormatter.RawResult(mysqlHeaders, mysqlRows),
+            format = ExplainOutputFormat.TABLE,
+            diff = ExplainPlanDiff.PlanDiff(emptyList(), emptyList(), emptyList()),
+        )
+        val text = view.compareTextForTest()
+        assertNotNull("等价 diff 也应有对比条（显式无变化）", text)
+        assertTrue(text!!.contains("unchanged") || text.contains("无变化"))
     }
 }

@@ -73,6 +73,28 @@ class ExplainPanelWiringGuardTest {
         )
     }
 
+    /**
+     * R61 接线钉：跨次对比必须真的在结构化 onPlan 链上——基线存储（lastStructuredExplain）+
+     * 对比计算（ExplainPlanDiff.diff）+ 基线滚动更新 + 视图入参（diff = planDiff）四件齐全；
+     * 摘掉任一件对比条即静默消失（无编译期保护的 wiring 面，同 hasUnfilledParams 教训）。
+     */
+    @Test
+    fun `R61_跨次对比接线在位`() {
+        val source = sqlPreviewPanelSource()
+        assertTrue(
+            "结构化 onPlan 必须计算跨次 diff（否则对比逻辑成死代码）",
+            source.contains("ExplainPlanDiff.diff("),
+        )
+        assertTrue(
+            "会话级基线必须滚动更新（否则永远比第一次）",
+            source.contains("lastStructuredExplain = explainSql to outcome"),
+        )
+        assertTrue(
+            "diff 必须经构造参数进结构化视图（否则对比条永不出现）",
+            source.contains("diff = planDiff"),
+        )
+    }
+
     private fun sqlPreviewPanelSource(): String =
         File(repoRoot(), "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt").readText()
 
