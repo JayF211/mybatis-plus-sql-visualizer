@@ -112,6 +112,37 @@ class AgentAttachChainTest : BasePlatformTestCase() {
         assertFalse(manager.online)
     }
 
+    /* 20261008 验收偏差 #6 修复（D120，拍板 A）：设置变更上升沿扫描在跑进程补挂 attach。 */
+
+    /**
+     * 行为守卫：扫描入口在 headless 平台可用且空/不可用描述符下安全（反射链整体不抛，返回 ≥0）。
+     * 真机「对已在跑应用开增强捕获 → 存量连接下一次执行即被捕获」由沙盒 3.27 复验，本用例钉住
+     * 反射链的可调用性与 fail-safe 语义（getAllDescriptors 不可用 → INFO 降级返回 0）。
+     */
+    fun test在跑进程扫描_反射链可调用且空态安全() {
+        val attached = cn.song.mybatisplus.visualizer.log.RunConfigurationProcessListener
+            .scanAndAttachRunningProcesses(project, logTag = "test-rescan")
+        assertTrue("无在跑进程时应安全返回 0（或平台不可用降级 0），实得 $attached", attached >= 0)
+    }
+
+    /**
+     * 接线守卫（源码级，防重构摘线）：上升沿分支必须调用 scanAndAttachRunningProcesses——
+     * 摘掉该调用则「对在跑应用开开关即挂载」静默失效（偏差 #6 的原始形态），本用例必红。
+     */
+    fun test设置变更上升沿接线_在跑进程补挂调用在场() {
+        val src = java.io.File(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt",
+        ).readText()
+        assertTrue("上升沿扫描入口调用应在场", "scanAndAttachRunningProcesses" in src)
+        assertTrue("调用应带 settings-rescan 场景标签", "settings-rescan" in src)
+        // 接线位置：必须位于「增强重新开启」上升沿分支内（拒绝冷却重置之后）
+        val edge = src.indexOf("增强捕获重新开启——拒绝冷却已重置")
+        val call = src.indexOf("scanAndAttachRunningProcesses")
+        assertTrue("上升沿分支应在场", edge >= 0)
+        assertTrue("扫描调用应接线在上升沿分支下游（edge=$edge, call=$call）", call > edge)
+        assertTrue("拒绝注入的用户不应触发扫描（守卫 consentedNow）", "consentedNow" in src)
+    }
+
     /** 反射缝假 ProcessHandler：可控暴露 getNativePid（同既有测试惯例）。 */
     private class FakeProcessHandler(private val nativePid: Long?) {
         fun getNativePid(): Long? = nativePid

@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.config.EnhancedCaptureConsent
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry
 import cn.song.mybatisplus.visualizer.log.LogTimeCorrelator
+import cn.song.mybatisplus.visualizer.log.RunConfigurationProcessListener
 import cn.song.mybatisplus.visualizer.log.SqlCaptureGate
 import cn.song.mybatisplus.visualizer.log.sqlLogManagerIfCreated
 import cn.song.mybatisplus.visualizer.log.sqlLogManagerOrNull
@@ -296,13 +297,30 @@ class AgentManager(private val project: Project) : Disposable {
                     // 在此同步弹一次确认，授权持久化先于任何 Run，之后每轮启动即带 premain。
                     // O-66 引导链「置位+发布+requestReauthorization」会连发两次请求：requestConsentOnce
                     // 的去重窗吸收第二次，只弹一个框。
+                    var consentedNow = true
                     if (needsReauthorization() && premainConsentGate()) {
                         when (requestConsentOnce()) {
                             EnhancedCaptureConsent.ACCEPTED ->
                                 LOG.info("设置变更上升沿确认：用户同意注入——后续 Run 即可 premain（启动即捕获）")
-                            EnhancedCaptureConsent.REJECTED ->
+                            EnhancedCaptureConsent.REJECTED -> {
                                 LOG.info("设置变更上升沿确认：用户拒绝注入——进冷却（Run 链不再重复弹）")
+                                consentedNow = false
+                            }
                             else -> Unit
+                        }
+                    }
+                    // 20261008 验收偏差 #6 修复（D120，拍板 A）：上升沿扫描本工程在跑 JVM 进程主动
+                    // attach——此前 attach 只挂进程启动钩子，对已在跑的应用开开关无任何入口挂载
+                    // （真机实测仅记本行日志，进程零挂载），验收文档 3.27「无需重启应用」不可达。
+                    // 已确认（或本次刚同意）才扫；用户拒绝注入则不扫（弹窗克制红线）。后台线程执行，
+                    // attachedPids 幂等表防重复挂载；反射失败内部只 WARN 不影响设置链。
+                    if (consentedNow) {
+                        executor.execute {
+                            val attached = RunConfigurationProcessListener
+                                .scanAndAttachRunningProcesses(project, logTag = "settings-rescan")
+                            if (attached > 0) {
+                                LOG.info("设置变更上升沿：在跑进程补挂 $attached 个——存量连接下一次执行即被捕获")
+                            }
                         }
                     }
                 }

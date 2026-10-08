@@ -82,10 +82,14 @@ public class SqlVisualizerNativePlugin implements Interceptor {
                     delegate.beforeUpdate(executor, ms, args.length > 1 ? args[1] : null);
                 } else {
                     BoundSql boundSql = args.length > 5 && args[5] instanceof BoundSql ? (BoundSql) args[5] : null;
+                    // 20261008 验收（3.25 真机编译）：rowBounds/resultHandler 参数显式类型化——裸三元
+                    // `args[N] : null` 依赖 javac 目标类型推断，JDK8 判为 Object 无法转具体形参类型
+                    // （原生 mybatis-config.xml 工程编译失败，RowBounds 与 ResultHandler 两处先后报）；
+                    // 显式 instanceof+cast 让类型明确，8/17/21 全可编译。
                     delegate.beforeQuery(executor, ms,
                             args.length > 1 ? args[1] : null,
-                            args.length > 2 ? args[2] : null,
-                            args.length > 3 ? args[3] : null,
+                            args.length > 2 && args[2] instanceof RowBounds ? (RowBounds) args[2] : null,
+                            args.length > 3 && args[3] instanceof ResultHandler ? (ResultHandler) args[3] : null,
                             boundSql);
                 }
             }
