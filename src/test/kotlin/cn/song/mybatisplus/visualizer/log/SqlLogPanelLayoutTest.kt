@@ -69,6 +69,42 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         }
     }
 
+    /**
+     * R53：双通道状态栏 + 暂停/恢复入口在场——工具窗状态可见化交付的结构守卫。
+     * 状态栏两段标签构建即存在；捕捉中刷新一拍后两段均有文案（取数只读内存态，headless 可跑）。
+     * 非捕捉态整条隐藏：只清两段文案会留下分隔符「｜」与一条空白高度。
+     */
+    fun testR53_双通道状态栏与暂停动作在场() {
+        val panel = SqlLogPanel(project, manager)
+        try {
+            waitForEdt()
+            assertTrue(
+                "工具栏组应含增强暂停/恢复动作（R53 暂停入口）",
+                panel.toolbarGroup.childActionsOrStubs.contains(panel.agentPauseAction),
+            )
+            val (console, agent) = panel.statusBarLabelsForTest()
+            assertNotNull("状态栏控制台通道段应存在", console)
+            assertNotNull("状态栏增强通道段应存在", agent)
+            assertNotNull("状态栏宿主面板应存在", panel.statusBarForTest())
+            // 非捕捉态：整条隐藏（构建期即非捕捉，默认就应隐藏）
+            assertFalse("非捕捉态状态栏应整条隐藏", panel.statusBarForTest()!!.isVisible)
+
+            manager.setCapturingForTest(true)
+            manager.entries.paused = false
+            panel.syncStatusBarForTest()
+            assertTrue("捕捉中状态栏应显示", panel.statusBarForTest()!!.isVisible)
+            assertTrue("捕捉中控制台通道段应有文案：${console?.text}", !console!!.text.isNullOrEmpty())
+            assertTrue("捕捉中增强通道段应有文案：${agent?.text}", !agent!!.text.isNullOrEmpty())
+
+            // 停捕捉后回到隐藏态（不留空带）
+            manager.setCapturingForTest(false)
+            panel.syncStatusBarForTest()
+            assertFalse("停捕捉后状态栏应重新整条隐藏", panel.statusBarForTest()!!.isVisible)
+        } finally {
+            panel.dispose()
+        }
+    }
+
     fun test注入耗时信息_排序方式选择器保持可见() {
         val panel = SqlLogPanel(project, manager)
         try {

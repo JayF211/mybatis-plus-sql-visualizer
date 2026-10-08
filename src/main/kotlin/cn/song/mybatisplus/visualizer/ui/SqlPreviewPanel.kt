@@ -14,6 +14,9 @@ import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SelectStatement
 import cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter
+import cn.song.mybatisplus.visualizer.model.wrapperFlagOutcome
+import cn.song.mybatisplus.visualizer.model.wrapperFlagOutcomeText
+import cn.song.mybatisplus.visualizer.model.wrapperFlagOutcomeTooltip
 import cn.song.mybatisplus.visualizer.sql.ExplainGate
 import cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat
 import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator
@@ -216,6 +219,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     private val xmlConditionOutcomeLabels = mutableMapOf<String, JBLabel>()
     private var autoPopupDisposable: Disposable? = null
     private val conditionValueFields = mutableListOf<JBTextField>()
+    // R49：Wrapper 布尔条件探镜——条件行尾的求值结果标注（按条件行下标与 conditionCheckBoxes 对齐，
+    // 仅 buildConditionRow 产出；该行不可标注时为 null 占位，下标不跳位）
+    private val conditionOutcomeLabels = mutableListOf<JBLabel?>()
     // T-M23-04：批量列级勾选复选框（INSERT/UPDATE/UPSERT 参数列，与动态条件复选框互斥——批量预览无 conditionViews）
     private val batchCheckBoxes = mutableListOf<JCheckBox>()
     // T-M26.3：全选/全不选按钮回挂分区标题行右侧（IDEA 组操作惯例，T-M23.2 原生形态；
@@ -3100,6 +3106,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         conditionCheckBoxes.clear()
         xmlConditionOutcomeLabels.clear()
         conditionValueFields.clear()
+        conditionOutcomeLabels.clear()
         batchCheckBoxes.clear()
         xmlForEachNullBoxes.clear()
         xmlForEachValueFields.clear()
@@ -3796,6 +3803,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         conditionCheckBoxes.clear()
         xmlConditionOutcomeLabels.clear()
         conditionValueFields.clear()
+        conditionOutcomeLabels.clear()
         batchCheckBoxes.clear()
         xmlForEachNullBoxes.clear()
         xmlForEachValueFields.clear()
@@ -4280,7 +4288,24 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
     /** 动态条件行：复选框（勾选开关）+（有值来源时）值输入框（M19.5：between 等多值条件每个 source 一个输入框）。 */
     private fun buildConditionRow(view: ConditionView): JBPanel<JBPanel<*>> {
         val rawLabel = view.label
-        val displayLabel = checkBoxText(rawLabel)
+        // R49：Wrapper 布尔条件探镜——布尔首参求值结果标注（恒真/恒假/恒真·缺省），纯只读探针、
+        // 渲染行为零变更。flagSource 为 null（非布尔重载/无标志）不标注；outcome 静态（flag 不随
+        // 勾选/参数变化），构建期定稿即可（照 R30 的「行尾淡色标注」形态）。
+        // 先建标注再算复选框文案：**标注宽度必须从复选框标签的截断预算里扣掉**——否则整行比原来
+        // 宽出一截，窄视口下会把「动态条件」分区标题行右侧的全选/全不选按钮顶出视口
+        //（`SqlPreviewPanelTest.testSelectAllButtonsOnConditionSectionHeader` 实测抓出，500px 分栏下转红）。
+        val outcomeLabel = view.flagSource?.let { flag ->
+            wrapperFlagOutcome(flag)?.let { outcome ->
+                JBLabel(wrapperFlagOutcomeText(outcome)).apply {
+                    foreground = UIUtil.getContextHelpForeground()
+                    toolTipText = wrapperFlagOutcomeTooltip(flag, outcome)
+                }
+            }
+        }
+        val displayLabel = checkBoxText(
+            rawLabel,
+            (checkBoxMaxWidth() - (outcomeLabel?.preferredSize?.width ?: 0)).coerceAtLeast(MIN_CHECKBOX_TEXT_WIDTH),
+        )
         val checkBox = JCheckBox(displayLabel, view.id in enabledIds).apply {
             // T-M26.3：标签被截断时 tooltip 展示表达式原文（否则保留 flagSource 提示）
             toolTipText = if (displayLabel != rawLabel) rawLabel else conditionTooltip(view)
@@ -4291,6 +4316,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             }
         }
         conditionCheckBoxes += checkBox
+        // 不可标注时补 null 占位——本表按 **条件行下标** 与 [conditionCheckBoxes] 对齐，
+        // 「跳着加」会让下标错位到别的条件上（前置无标志条件把后面的标注整段前移）。
+        conditionOutcomeLabels.add(outcomeLabel)
         return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
             add(checkBox)
             // M19.5：多值条件（between 等）每个 source 一个输入框；valueSources 为空时回退单值（旧路径兼容）
@@ -4300,6 +4328,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 paramFields += field
                 conditionValueFields += field
             }
+            outcomeLabel?.let { add(it) }
             border = JBUI.Borders.empty(0, 8, 2, 8)
         }
     }
@@ -5657,6 +5686,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         paramWarnLabels.getOrNull(index)?.takeIf { it.isVisible }?.toolTipText
     internal fun conditionCheckboxForTest(index: Int): JCheckBox? = conditionCheckBoxes.getOrNull(index)
     internal fun conditionValueFieldForTest(index: Int): JBTextField? = conditionValueFields.getOrNull(index)
+    /**
+     * R49 测试缝：第 index 个 Wrapper 条件行尾的求值结果标注（按**条件行下标**与
+     * [conditionCheckboxForTest] 对齐；该行不可标注时为 null，下标不跳位）。
+     */
+    internal fun conditionOutcomeLabelForTest(index: Int): JBLabel? = conditionOutcomeLabels.getOrNull(index)
     /** T-M23-04：第 index 个批量列级勾选复选框（toggle 列按 BatchModel 顺序）。 */
     internal fun batchCheckboxForTest(index: Int): JCheckBox? = batchCheckBoxes.getOrNull(index)
 
@@ -5816,6 +5850,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 
         /** R22 T-02：勾选框 client property 锚点（快照枚举 + 召回视觉同步）。 */
         private const val PROP_TOGGLE_ID = "mpsv.toggleId"
+
+        /** R49：条件复选框标签截断预算下限（px）——行尾探镜标注按宽度扣减后仍保底可读（同 [checkBoxMaxWidth] 下限）。 */
+        private const val MIN_CHECKBOX_TEXT_WIDTH = 100
 
         /**
          * T-DevAcceptFix ⑤（20261006 验收）：参数输入框的 source 锚点——召回回写按锚点显式映射

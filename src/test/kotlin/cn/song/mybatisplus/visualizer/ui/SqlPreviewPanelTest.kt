@@ -716,6 +716,78 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
+    /**
+     * R49：Wrapper 布尔条件探镜——条件行尾求值结果标注（恒真/恒假/恒真·缺省；flagSource=null 不标注）。
+     * 纯只读探针：不参与 SQL 渲染（行尾标注不影响正文），只追加淡色标签。
+     */
+    fun testR49_Wrapper布尔条件行尾标注() {
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            dynamicResult(
+                conditions = listOf(
+                    Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
+                        toggle = ConditionToggle("c0", "true", true, "id = 1")),
+                    Condition.Simple(ColumnRef(columnName = "station_id"), "=", SqlValue.Literal("2"),
+                        toggle = ConditionToggle("c1", "false", false, "station_id = 2")),
+                    Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Literal("3"),
+                        toggle = ConditionToggle("c2", "StringUtils.isNotBlank(name)", true, "name = 3")),
+                    Condition.Simple(ColumnRef(columnName = "type"), "=", SqlValue.Literal("4"),
+                        toggle = ConditionToggle("c3", null, true, "type = 4")),
+                ),
+                views = listOf(
+                    ConditionView("c0", "id = 1", "true", true, null),
+                    ConditionView("c1", "station_id = 2", "false", false, null),
+                    ConditionView("c2", "name = 3", "StringUtils.isNotBlank(name)", true, null),
+                    ConditionView("c3", "type = 4", null, true, null),
+                ),
+            ),
+        )
+        assertEquals("字面量 true → 恒真", "恒真", panel.conditionOutcomeLabelForTest(0)!!.text)
+        assertEquals("字面量 false → 恒假", "恒假", panel.conditionOutcomeLabelForTest(1)!!.text)
+        assertEquals("运行时占位符（缺省 true）→ 恒真·缺省", "恒真·缺省", panel.conditionOutcomeLabelForTest(2)!!.text)
+        assertTrue(
+            "恒真·缺省 tooltip 应带出标志原文",
+            panel.conditionOutcomeLabelForTest(2)!!.toolTipText.contains("StringUtils.isNotBlank(name)"),
+        )
+        assertNull("flagSource=null（非布尔重载）不得标注", panel.conditionOutcomeLabelForTest(3))
+        panel.clear()
+    }
+
+    /**
+     * R49 边界：**无标志条件在前**时下标不得错位——标注表按条件行下标对齐，
+     * 不可标注的行补 null 占位（初版跳着追加，前置无标志行会把后面标注整段前移：
+     * 该形态下 index 1 会读到 c2 的「恒真·缺省」）。
+     */
+    fun testR49_前置无标志条件_标注下标不错位() {
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            dynamicResult(
+                conditions = listOf(
+                    Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
+                        toggle = ConditionToggle("c0", null, true, "id = 1")),
+                    Condition.Simple(ColumnRef(columnName = "station_id"), "=", SqlValue.Literal("2"),
+                        toggle = ConditionToggle("c1", "false", false, "station_id = 2")),
+                ),
+                views = listOf(
+                    ConditionView("c0", "id = 1", null, true, null),
+                    ConditionView("c1", "station_id = 2", "false", false, null),
+                ),
+            ),
+        )
+        assertNull("第 0 行无标志 → 下标 0 必须是 null（不得被第 1 行的标注前移占位）", panel.conditionOutcomeLabelForTest(0))
+        assertEquals(
+            "第 1 行的恒假标注必须仍在下标 1（与 conditionCheckboxForTest 同序）",
+            "恒假",
+            panel.conditionOutcomeLabelForTest(1)!!.text,
+        )
+        assertEquals(
+            "下标 1 同时是第 1 行的复选框（同序前提）",
+            "station_id = 2",
+            panel.conditionCheckboxForTest(1)!!.text,
+        )
+        panel.clear()
+    }
+
     fun testSelectAllNoneTogglesAllConditions() {
         // 全选/全不选（M13.1）：c0 默认勾选、c1 默认不勾选 → 全选两者都在、全不选两者都移除
         val panel = SqlPreviewPanel(project)
