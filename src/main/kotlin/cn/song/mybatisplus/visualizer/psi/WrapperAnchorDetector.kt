@@ -32,6 +32,9 @@ import com.intellij.psi.util.PsiTreeUtil
  *    （qualifier 文本为 `Wrappers`，语法级匹配，不 resolve）。
  *  - 去重：A/C 的表达式若同时是某 Wrapper 变量的初始化表达式（同行声明 + 构造/工厂），
  *    只标变量声明（它是调用链的根），避免同行双图标。
+ *  - 让位：D（批量族）的调用若**实参是 Wrapper 链/变量**（`userMapper.selectList(wrapper)`），
+ *    语句承载在实参链上、锚点由 B/C 承载，本场景让位（T-GutterDupFreeze，避免「查询调用」
+ *    被当批量操作再挂一枚）。
  */
 object WrapperAnchorDetector {
 
@@ -126,6 +129,13 @@ object WrapperAnchorDetector {
                 // JdbcTemplateSqlGutterLineMarkerProvider（批量转换器只认 Wrapper/集合实参，
                 // 字符串 SQL 形态点击必失败；让位后字符串 SQL 路径接管，避免同行双图标）
                 if (PreviewReceiverResolver.hasStringLikeArg(call)) return null
+                // T-GutterDupFreeze（S2，20261008 用户实测）：**实参是 Wrapper（链或变量）→ 让位**。
+                // 形态＝`userMapper.selectList(Wrappers.<User>lambdaQuery(...)...)` / `selectList(variableWrapper)`：
+                // 链首是 mapper 变量（非 wrapper 构造/工厂），上一条 `initializerHeadIsWrapper(call)` 拦不住，
+                // 于是 selectList 这个 leaf 在链锚点之外再挂一枚批量图标（用户截图 190/211/214 行各 2 枚）。
+                // 这类调用的语句承载在**实参链**上：锚点由场景 B/C（链根/变量声明行）承载，
+                // 批量族只负责集合/实体/id/Map/无参形态（`selectList(null)` 等无 wrapper 实参者仍照常亮）。
+                if (hasWrapperArgument(call)) return null
                 // T-M23.11 分步形态（`MPJLambdaWrapper w = new ...; w.selectAll(...)`）：qualifier 是变量引用，
                 // 语法级回溯不到链首——仅对「与链方法撞名的批量方法」（目前仅 selectAll，新增撞名时扩展）做一次
                 // 变量 resolve（局部变量作用域内查找，微秒级；普通标识符负例仍零 resolve，红线语义不变）；
@@ -191,6 +201,35 @@ object WrapperAnchorDetector {
             else -> false
         }
     }
+
+    /**
+     * T-GutterDupFreeze（S2）：调用实参中是否存在 Wrapper（调用链或 wrapper 变量）。
+     *
+     * 用于批量族锚点（场景 D）让位：`userMapper.selectList(Wrappers.<User>lambdaQuery(...)...)`、
+     * `userMapper.selectList(variableWrapper)` 这类调用的 SQL 承载在**实参链**上——链锚点由
+     * 场景 B（变量声明）/C（工厂方法名）承载，批量锚点让位，避免同一语句双图标。
+     * 批量族本意覆盖集合/实体/id/Map/无参形态（`selectList(null)` 无 wrapper 实参，照常亮）。
+     *
+     * 判定成本：链实参走纯语法回溯（[initializerHeadIsWrapper]，零 resolve）；变量实参先看声明/推断类型
+     * （[WrapperLocator.detectWrapperType]，类名文本匹配），类型不可得时才做一次变量 resolve——
+     * 与 [BATCH_CHAIN_COLLISION_NAMES] 的 selectAll 判定同款微秒级文档化例外。调用方已先按批量注册表
+     * 方法名过滤，本判定只作用于约 28 个批量方法名上的调用，不构成 daemon 热路径开销。
+     */
+    private fun hasWrapperArgument(call: PsiMethodCallExpression): Boolean =
+        call.argumentList.expressions.any { arg ->
+            when (arg) {
+                is PsiMethodCallExpression -> initializerHeadIsWrapper(arg)
+                is PsiReferenceExpression -> {
+                    if (WrapperLocator.detectWrapperType(arg.type) != null) {
+                        true
+                    } else {
+                        (runCatching { arg.resolve() }.getOrNull() as? PsiVariable)
+                            ?.let { WrapperLocator.isWrapperVariable(it) } == true
+                    }
+                }
+                else -> false
+            }
+        }
 
     /**
      * 判定表达式（new 构造或工厂调用）是否位于某 **Wrapper 变量**的初始化表达式内。
