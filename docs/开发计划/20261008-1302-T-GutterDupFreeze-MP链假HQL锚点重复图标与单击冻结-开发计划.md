@@ -243,3 +243,10 @@ else -> expression.text to false     // ← 把「整条链的源码文本」当
 - **待验证前提 #3 风险归零**：第二枚图标（批量锚点）的点击产物是否漏 WHERE——S2 后该锚点不再产生，入口不可达。
 - **待验证前提 #4**：`t_order` 的实际提取值经静态判定（`HqlEntityNameExtractor.FROM_ENTITY` 带 `IGNORE_CASE`，可匹配小写首字母）＝`t_order`；S1 后该输入不再进入该路径，故未补独立单测。
 - **未跑**：全量门禁（`testShards`）与构建校验（`buildPlugin`/`verifyGate`）——按测试三档分层由统一收口执行；本任务触达 `src/main` 但未动构建脚本、`plugin.xml`、依赖版本。
+
+### 8.6 合入落账（2026-10-08，用户明令「合并到主分支并清理新建的分支和工作树」）
+
+1. **先并回 master**（功能分支先并 master 再跑测试的定例）：`git merge master` → 冲突仅 `docs/MEMORY.md` 与 `docs/变更记录.md` 的同表顶部插入，按仓内 union 解保留双方行并按时间倒序归位（`T-ErrReportSubmitNoOp` 13:15 → 本任务 13:02 → `T-HistoryTabAlways` 12:56），消除标记后核验三行均以表格收尾符结束、长度正常；`src/main` 无冲突（落点与另两笔任务不相交）。合并提交 `e3bf1c8`，相对 master 的改动面恰为本任务 11 文件（无夹带）。
+2. **合并后态复跑**：定向六类 **50/0**（13:45）、`testFast --rerun` **3409/0/0**（266 套件；比分支态 3406 多 3 例＝并回的 master 增量测试），两次退出码均 0。
+3. **合入 master**：主工作树内三重守卫（在 master / 工作树干净 / `merge-base --is-ancestor` 成立）后 `git merge --ff-only t-gutterdupfreeze` → master `7977794` → **`e3bf1c8`**，落地态即已测态；`git push origin master` 远端同步（远端此前停在 `b5e2df2`，本次一并推上并回的两笔任务提交）。
+4. **清理**：本地/远端 `t-gutterdupfreeze` 分支与工作树 `mybatis-plus-sql-visualizer-gdf` 一并删除；并行登记注销。
