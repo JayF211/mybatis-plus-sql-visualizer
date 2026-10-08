@@ -1997,6 +1997,11 @@ class SqlPreviewService(private val project: Project) {
      * 扫描结果（实体名 → 全限定名）缓存于 Project userData，以
      * PsiModificationTracker.modificationCount 失效（照抄 EntityClassFinder 的
      * @TableName 反查同款缓存惯例；未命中也入缓存防重复全量扫描）。
+     *
+     * T-GutterDupFreeze（S3，20261008 冻结事故）：慢路径原为**无上限全项目扫描**，且不判索引就绪；
+     * 误判输入（链源码里抓到的表名 `t_order`）在索引构建期实测 70 秒、读锁全程不放。现两道护栏：
+     *  1. 索引构建期（dumb）直接按未命中降级，**不写负缓存**（索引就绪后重试仍可命中）；
+     *  2. 扫描改有界（上限 + 取消检查），收口 [cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep]。
      */
     private fun findClassByEntityName(
         project: com.intellij.openapi.project.Project,
@@ -2004,6 +2009,13 @@ class SqlPreviewService(private val project: Project) {
         scope: com.intellij.psi.search.GlobalSearchScope,
     ): PsiClass? {
         if (entityName.isBlank()) return null
+        // T-GutterDupFreeze（S3 护栏一）：索引构建期不做索引反查——此时 StubIndex 查询会等索引扫描
+        // 推进（转储实证：FileBasedIndexImpl.ensureUpToDate ← UnindexedFilesScanner 扫描中），
+        // 在不可取消的读动作里表现为长时间持读锁。降级为未命中，且不过缓存（见 KDoc）。
+        if (runCatching { com.intellij.openapi.project.DumbService.isDumb(project) }.getOrDefault(false)) {
+            LOG.info("[T-GutterDupFreeze] 索引构建中，跳过实体别名反查：$entityName")
+            return null
+        }
         val current = com.intellij.psi.util.PsiModificationTracker.getInstance(project).modificationCount
         val existing = project.getUserData(ENTITY_NAME_CACHE_KEY)
         val cache = if (existing != null && existing.count == current) existing
@@ -2021,25 +2033,22 @@ class SqlPreviewService(private val project: Project) {
         // 已知未命中（空串哨兵值）快速返回
         if (cache.names.containsKey(key)) return null
 
-        // 慢路径：全量扫项目类短名，匹配 @Entity(name=...) 注解值（jakarta/javax/短名三轨）
-        var matchedQName: String? = null
+        // 慢路径：扫项目类短名匹配 @Entity(name=...) 注解值（jakarta/javax/短名三轨）——
+        // T-GutterDupFreeze（S3 护栏二）：上限 + 取消检查 + 命中即止，收口 EntityAliasSweep
         val namesCache = com.intellij.psi.search.PsiShortNamesCache.getInstance(project)
-        for (shortName in namesCache.getAllClassNames()) {
-            for (clazz in namesCache.getClassesByName(shortName, scope)) {
-                if (clazz.isInterface || clazz.isEnum || clazz.isAnnotationType) continue
-                val alias = JpaMetadataReader.entityNameOf(clazz) ?: continue
-                if (alias.equals(entityName, ignoreCase = true)) {
-                    matchedQName = clazz.qualifiedName
-                    break
-                }
-            }
-            if (matchedQName != null) break
-        }
-        cache.names[key] = matchedQName ?: ""
-        if (matchedQName == null) return null
-        val shortName = matchedQName.substringAfterLast('.')
-        return namesCache.getClassesByName(shortName, scope)
-            .firstOrNull { it.qualifiedName == matchedQName }
+        var truncated = false
+        val matched = cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep.findAliasOwner(
+            aliasName = entityName,
+            names = namesCache.getAllClassNames().asSequence(),
+            lookup = { shortName -> namesCache.getClassesByName(shortName, scope) },
+            onTruncated = { scanned ->
+                truncated = true
+                LOG.info("[T-GutterDupFreeze] 实体别名反查触顶（已扫 $scanned 个短名），按未命中降级：$entityName")
+            },
+        )
+        // 触顶＝「没查到」而非「确认不存在」：不写负缓存，避免大工程里合法别名被一次性截断后永久记成未命中
+        if (!truncated) cache.names[key] = matched?.qualifiedName ?: ""
+        return matched
     }
 
     /** 实体别名反查缓存条目：modificationCount + 实体名→全限定名（空串=已知未命中）。 */

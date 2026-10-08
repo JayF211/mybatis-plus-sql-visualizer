@@ -568,6 +568,14 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var enhancedCaptureDesensitize: Boolean = false,
 
+        /**
+         * T-StackHoverUi：调用栈快照总帧数（用户可配，面板侧钳位 [12,64]，默认 24）。agent 侧
+         * StackDigest 两端采样——栈顶取 B-8 帧（引擎/门面侧）、栈底固定保留 8 帧（业务/Controller
+         * 侧，JdbcTemplate 深封装链下旧 16 帧顶格预算够不着 controller）。随 attach 参数与
+         * CONFIG 帧（sendConfig 热下发）双通道到达 agent，设置改动无需重附。
+         */
+        var enhancedCaptureStackMaxFrames: Int = DEFAULT_ENHANCED_CAPTURE_STACK_MAX_FRAMES,
+
         // ---------- T-UxOnboard T-UX-01 首用锚点引导 ----------
 
         /**
@@ -676,6 +684,11 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         const val DEFAULT_LOG_DEDUPE_WINDOW_MS = 60000L
         const val DEFAULT_LOG_MAX_PARSE_LENGTH = 20000
         const val DEFAULT_LOG_MAX_COUNT = 200
+
+        /** 调用栈快照总帧数缺省（T-StackHoverUi）：栈顶 B-8 帧＋栈底固定 8 帧；agent 侧钳位 [12,64]。 */
+        const val DEFAULT_ENHANCED_CAPTURE_STACK_MAX_FRAMES = 24
+        const val MIN_ENHANCED_CAPTURE_STACK_MAX_FRAMES = 12
+        const val MAX_ENHANCED_CAPTURE_STACK_MAX_FRAMES = 64
 
         /** 自动保存历史 SQL 默认文件名模板（F-43）。 */
         const val DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN = "sql-history-\$yyyy-MM-dd\$.sql"

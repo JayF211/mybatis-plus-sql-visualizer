@@ -17,8 +17,6 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
-import com.intellij.notification.Notification
-import com.intellij.notification.NotificationType
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
@@ -49,8 +47,11 @@ import javax.swing.JPanel
 import javax.swing.SwingConstants
 
 /**
- * 历史 SQL 面板（F-44-3 两级导航）：读取 .idea/sql-visualizer/sql-history/ 文件展示
+ * 历史 SQL 面板（F-44-3 两级导航）：读取自动保存目录中的历史文件展示
  * （F-44-4：目录随插件更名，旧名 mybatis-plus-sql-visualizer 不再读取）。
+ *
+ * <p>目录解析与写端同源（[SqlLogAutoSaver.resolveHistoryDir]）——设置页「保存目录」填了自定义路径时，
+ * 历史页读的就是同一个目录（T-HistoryTabAlways 前读端只认默认 .idea 路径，自定义目录下写的文件看不到）。
  *
  * <p>展示层级（用户要求）：
  * <ol>
@@ -180,6 +181,19 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     }
 
     /**
+     * 设置变更处理（topic 监听入口，T-HistoryTabAlways）：解析出的历史目录与上次扫描所用不同时
+     * 直接重扫（用户在设置页改了「保存目录」，不重扫就还得手动点刷新），未变时只重算显示模式并重绘
+     * （原 [onDisplayModeChanged] 行为）。
+     */
+    internal fun onSettingsChanged() {
+        if (historyDirChangedSinceLastScan()) refresh() else onDisplayModeChanged()
+    }
+
+    /** T-HistoryTabAlways：解析出的历史目录是否与上次扫描所用不同（设置页改了「保存目录」）。
+     *  测试直接断言本判据——[refresh] 是后台任务，headless 下到点不可控。 */
+    internal fun historyDirChangedSinceLastScan(): Boolean = getHistoryDir() != lastScannedDir
+
+    /**
      * 行高随显示模式分流（T-ListMode × T-LogListFreeze-04 权衡，与日志 tab [SqlLogPanel.applyListCellHeight] 同款）：
      * SINGLE_LINE 固定行高走 O(1) 布局快路径；KEYWORD_WRAP/FORMATTED 可变行高（条目行数不等），
      * 多行片段有条目级缓存，逐条测量只剩轻量组件布局。
@@ -261,7 +275,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             cn.song.mybatisplus.visualizer.config.SettingsChangeListener {
                 // write-safe: UI-only（纯 Swing/只读，无文档写）
                 ApplicationManager.getApplication().invokeLater(
-                    { onDisplayModeChanged() },
+                    { onSettingsChanged() },
                     com.intellij.openapi.application.ModalityState.any(),
                 )
             },
@@ -290,8 +304,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         sqlList.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
+                // T-ClickPreviewCopyRestore：修饰键一并转发——Ctrl/Shift 单击（多选第一击）不排程预览
                 if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
-                    sqlClickPreview.onClick(e.clickCount, e.point)
+                    sqlClickPreview.onClick(e.clickCount, e.point, e.modifiersEx)
                 }
                 if (e.clickCount >= 2) {
                     sqlList.selectedValue?.let { openPreview(it) }
@@ -402,6 +417,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      * 一次浏览窗口内被 refresh + showFileContent 全量解析约 3 遍（15~16.6s），此处消除 refresh 侧的重复成本。
      */
     fun refresh() {
+        // T-HistoryTabAlways：记录本次扫描所用目录（EDT 侧纯字段写），供设置变更时判定要不要重扫
+        lastScannedDir = getHistoryDir()
         val gen = ++bgGeneration
         val keepFile = currentFile?.file
         object : Task.Backgroundable(project, MpSqlVisualizerBundle.message("log.history.scan.progress"), true) {
@@ -424,11 +441,13 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 测试缝：同步刷新（生产路径 refresh() 已后台化；headless 测试需要确定性）。 */
     internal fun refreshForTest() {
         ++bgGeneration // 作废在途后台 apply（构造期 refresh() 的后台扫描可能尚未完成）
+        val dir = getHistoryDir()
+        lastScannedDir = dir
         val keepFile = currentFile?.file
         val keepReload = keepFile?.takeIf { it.exists() }?.let {
             SqlReload(it, SqlLogFileReader.readFromFile(it), it.lastModified() to it.length())
         }
-        applyRefresh(scanHistoryFiles(getHistoryDir()), keepFile, keepReload)
+        applyRefresh(scanHistoryFiles(dir), keepFile, keepReload)
     }
 
     /** 目录扫描 + 条目计数（纯 IO，后台执行）。 */
@@ -664,10 +683,12 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** T-SqlLogPerf：当前浏览文件加载完成时的 (lastModified, length) 快照——refresh() 据此判定文件是否变化。 */
     private var currentFileStamp: Pair<Long, Long>? = null
 
-    private fun getHistoryDir(): String {
-        val basePath = project.basePath ?: return ""
-        return "$basePath${File.separator}.idea${File.separator}${SqlLogAutoSaver.DATA_DIR_NAME}${File.separator}sql-history"
-    }
+    /** T-HistoryTabAlways：上次扫描所用目录——设置变更时据此判定是否需要重扫（保存目录被改过）。 */
+    private var lastScannedDir: String = ""
+
+    /** 历史 SQL 目录：与写端同源解析（自定义保存目录优先；无项目根回落 user.home）。 */
+    private fun getHistoryDir(): String =
+        SqlLogAutoSaver.resolveHistoryDir(PluginSettings.getInstance().state.logAutoSavePath, project.basePath)
 
     private fun openPreview(entry: LogSqlEntry) {
         SqlPreviewService.showResult(project, buildPreviewResult(entry))
@@ -952,25 +973,26 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      * 解析跳转目标（与 [jumpToSource] 共用；测试驱动直接断言分支，不触发弹窗）。
      * T-SourceJumpFunnel P0-5：判定收敛到 [EntryJumpResolver]（与实时面板同一实现）——
      * 主位置不在工程内（自研框架汇聚门面帧）时按候选栈序回退，本面板此前无此能力。
+     * T-RecentExecMenu O-119：转接原语收口 [LogEntryJumpOps]（三处共用）；**本页策略**=
+     * `MissingSource` 并入 `NoSource`（走引导弹窗，与实时页的轻通知不同体，各自保留）。
      */
     internal fun resolveJumpTarget(entry: LogSqlEntry): HistoryJumpTarget =
-        when (val target = EntryJumpResolver.resolve(project, entry)) {
-            is EntryJumpResolver.JumpTarget.Precise ->
+        when (val target = LogEntryJumpOps.resolveSource(project, entry)) {
+            is LogEntryJumpOps.SourceTarget.Precise ->
                 HistoryJumpTarget.Navigate(target.virtualFile, target.line)
-            EntryJumpResolver.JumpTarget.NoSource -> HistoryJumpTarget.NoSource
-            is EntryJumpResolver.JumpTarget.NotFound -> HistoryJumpTarget.NotFound(target.sourceFile)
-            EntryJumpResolver.JumpTarget.MissingSource -> HistoryJumpTarget.NoSource
+            LogEntryJumpOps.SourceTarget.NoSource -> HistoryJumpTarget.NoSource
+            LogEntryJumpOps.SourceTarget.MissingSource -> HistoryJumpTarget.NoSource
+            is LogEntryJumpOps.SourceTarget.NotFound -> HistoryJumpTarget.NotFound(target.sourceFile)
         }
 
     /**
      * T-M55-01：XML 目标解析——与日志页 [SqlLogPanel.resolveEntryXmlJump] 同语义。
      * mapperStatement 非空且 [MapperXmlLocator] 定位成功才返回；否则 null（回退 Java，不劣化）。
+     * T-RecentExecMenu O-119：解析原语收口 [LogEntryJumpOps.resolveXml]。
      */
-    internal fun resolveXmlJumpTarget(entry: LogSqlEntry): HistoryJumpTarget.MapperXml? {
-        val statementId = entry.mapperStatement?.takeIf { it.isNotBlank() } ?: return null
-        val location = MapperXmlLocator.locate(project, statementId) ?: return null
-        return HistoryJumpTarget.MapperXml(location.virtualFile, location.line)
-    }
+    internal fun resolveXmlJumpTarget(entry: LogSqlEntry): HistoryJumpTarget.MapperXml? =
+        LogEntryJumpOps.resolveXml(project, entry)
+            ?.let { HistoryJumpTarget.MapperXml(it.virtualFile, it.line) }
 
     /**
      * 跳转到产生该 SQL 的源码位置（测试驱动；等价右键「跳转到源码」）。
@@ -982,33 +1004,27 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      * 跳转到产生该 SQL 的源码位置。
      * 通过 sourceFile + sourceLine 直接定位（F-44 新格式）；
      * T-JumpCapture：无捕获位置时弹框引导开启源码捕获拦截器。
+     * T-RecentExecMenu O-119：解析/导航/通知原语走 [LogEntryJumpOps]（本页策略保持原样：
+     * NoSource/MissingSource 引导弹窗、NotFound 轻通知，标题键为本页口径 `log.history.*`）。
      */
     private fun jumpToSource(entry: LogSqlEntry) {
-        when (val target = resolveJumpTarget(entry)) {
-            is HistoryJumpTarget.NoSource -> {
-                // 缺源码位置（旧版 F-43 条目 / 未启用拦截器捕获）：引导开启源码捕获（T-JumpCapture）
-                SourceCaptureGuide.showMissingSourceDialog(project)
-            }
-            is HistoryJumpTarget.NotFound -> {
+        when (val target = LogEntryJumpOps.resolveSource(project, entry)) {
+            // 缺源码位置（旧版 F-43 条目 / 未启用拦截器捕获）：引导开启源码捕获（T-JumpCapture）
+            LogEntryJumpOps.SourceTarget.NoSource,
+            LogEntryJumpOps.SourceTarget.MissingSource,
+            -> LogEntryJumpOps.showMissingSourceGuide(project)
+
+            is LogEntryJumpOps.SourceTarget.NotFound -> {
                 // 文件不存在时提示（项目结构可能已变化）；T-UiNative T-UN-02：改轻通知（原模态弹窗）
-                // 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）
-                if (!ApplicationManager.getApplication().isUnitTestMode) {
-                    runCatching {
-                        Notification(
-                            NOTIFICATION_GROUP_ID,
-                            MpSqlVisualizerBundle.message("log.history.jumpToSource"),
-                            MpSqlVisualizerBundle.message("log.history.jumpToSource.notFound", target.sourceFile),
-                            NotificationType.INFORMATION,
-                        ).notify(project)
-                    }
-                }
+                LogEntryJumpOps.showToast(
+                    project,
+                    "log.history.jumpToSource",
+                    MpSqlVisualizerBundle.message("log.history.jumpToSource.notFound", target.sourceFile),
+                )
             }
-            is HistoryJumpTarget.Navigate -> {
-                OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
-            }
-            // resolveJumpTarget 不产出该分支（XML 目标走 resolveXmlJumpTarget/JumpToMapperXmlAction）；防御性导航
-            is HistoryJumpTarget.MapperXml -> {
-                OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
+
+            is LogEntryJumpOps.SourceTarget.Precise -> {
+                LogEntryJumpOps.navigate(project, target.virtualFile, target.line)
             }
         }
     }
@@ -1024,7 +1040,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         private const val CARD_FILES = "files"
         private const val CARD_SQL = "sql"
 
-        /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
+        // T-RecentExecMenu O-119：跳转通知改经 [LogEntryJumpOps] 共享组；本常量保留给
+        // R4 历史/日志导出 done/failed 两条通知（dev 批次 9 交付，master 未见故曾随退役删除）。
         private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
 
         /** T-Perf-05：搜索输入防抖窗口（毫秒）。 */

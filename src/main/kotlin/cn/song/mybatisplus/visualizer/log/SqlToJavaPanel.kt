@@ -48,6 +48,7 @@ import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiModifier
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.JBColor
+import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.IconScaler
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.util.ui.JBUI
@@ -151,11 +152,18 @@ class SqlToJavaPanel(
         project,
         MpSqlVisualizerBundle.message("reverse.panel.callerHint"),
     ) {
-        if (cacheResult != null) regenerateWithNewFormat()
+        // T-FixMpjStale：调用类变更 → 先后台反查 MPJ 能力/方法集，回填后再重生成——
+        // 此前 callerMpj 仅在 SQL 解析链（convert）反查，「先贴 SQL 后选调用类」路径拿
+        // stale callerMpj=false 恒报「无 MPJ 能力」（真机实证：DeviceInfoMapper extends
+        // MPJBaseMapper 仍误报）
+        refreshCallerCapabilityThenRegenerate()
     }
 
-    /** T-M36.7：返回 VO 类名选择（非必选，仅 SELECT 生效——MPJ selectVoList/listVo）。 */
-    private val voField = ClassPickerField(
+    /** T-MapResultVo v2：返回类型字段——可编辑组合框（自由键入任意返回声明）+ 选类按钮（Goto Class）。
+     *  预置常用声明（`List<Map<String, Object>>` / `List<Object>`）亦可键入 HashMap/自定义类等形态；
+     *  生成器按声明形态派生调用族（含 Map→Maps 族、含 Object→Objs 族、其余按类名走 VO 语义）。
+     *  空值 = 自动（现状实体/VO 推断）。 */
+    private val voField = ReturnTypeField(
         project,
         MpSqlVisualizerBundle.message("reverse.panel.voHint"),
     ) {
@@ -766,6 +774,272 @@ class SqlToJavaPanel(
         internal fun textTooltipForTest(): String? = textLabel.toolTipText
     }
 
+    /**
+     * T-MapResultVo v4：返回类型字段——**照抄 [ClassPickerField]（「调用类」行）的交互与观感**。
+     *
+     * 用户真机四轮反馈定稿：①v2 可编辑组合框带下拉箭头＋固定预置项（枚举追不上真实形态换壳复现）
+     * → v3 去下拉改纯输入框；②v3 的占位走 `JTextField.placeholderText` 客户属性，**本仓该做法
+     * 不渲染**（全仓唯一一处，真机实测空框无灰字）→ v4 改为与「调用类」完全同款：
+     * 手绘圆角输入框底 + 灰字 [JBLabel] 占位（[UIUtil.getInactiveTextColor]，空值态）＋
+     * 右侧「…」按钮（空值=弹选择、有值=✕ 清除）＋**点击字段任意位置弹选择器**。
+     *
+     * 选择器（用户四轮反馈后定稿的形态）：平台弹出列表——「自动（留空；实体/VO 推断）」
+     * /「List<Map<String, Object>>」/「List<Object>」/「选择类…（Goto Class）」。
+     * 生成器按声明形态派生调用族（含 Map→Maps 族、含 Object→Objs 族、其余按类名走 VO 语义）。
+     */
+    internal inner class ReturnTypeField(
+        private val projectRef: Project,
+        private val placeholder: String,
+        private val onChanged: () -> Unit = {},
+    ) : JPanel(BorderLayout()) {
+
+        private var currentText = ""
+        private var pickedIcon: Icon? = null
+
+        private val iconLabel = JBLabel()
+        private val textLabel = JBLabel(" ")
+
+        private val pickButton = JButton(PICKER_ELLIPSIS_ICON).apply {
+            isBorderPainted = false
+            isContentAreaFilled = false
+            isFocusPainted = false
+            margin = JBUI.emptyInsets()
+            border = JBUI.Borders.empty()
+            iconTextGap = 0
+            preferredSize = Dimension(12, 12)
+            minimumSize = Dimension(12, 12)
+            maximumSize = Dimension(12, 12)
+            toolTipText = MpSqlVisualizerBundle.message("reverse.panel.pickClass")
+            // 空值=弹选择器（与「调用类」同款入口）；有值=清除
+            addActionListener { if (currentText.isEmpty()) openPicker() else clearValue() }
+        }
+
+        /** 按钮宿主：FlowLayout 垂直居中（BorderLayout.EAST 会拉伸子组件高度，需宿主隔离）——
+         *  与 [ClassPickerField] 同款形态（观感一致，用户实测⋯须可见可点）。 */
+        private val actionButtonHost = JPanel(FlowLayout(FlowLayout.CENTER, 0, 4)).apply {
+            isOpaque = false
+            border = JBUI.Borders.empty(0, JBUI.scale(2), 0, JBUI.scale(4))
+            add(pickButton)
+        }
+
+        init {
+            isOpaque = false
+            preferredSize = Dimension(1, JBUI.scale(24))
+            minimumSize = Dimension(1, JBUI.scale(24))
+            iconLabel.border = JBUI.Borders.empty(0, 5, 0, 0)
+            textLabel.border = JBUI.Borders.empty(0, 4, 0, 0)
+            add(iconLabel, BorderLayout.WEST)
+            add(textLabel, BorderLayout.CENTER)
+            add(actionButtonHost, BorderLayout.EAST)
+            // 点击字段任意位置弹选择器（子组件铺满后父面板收不到冒泡——监听挂到每个子组件 + 手型光标）；
+            // 子组件点击在 EDT 惰性绑定（子组件在下方才创建，此处 init 已全部就位）
+            listOf(iconLabel, textLabel, this).forEach { attachClick(it) }
+            refresh()
+        }
+
+        /**
+         * 输入框观感：圆角底色 + 主题边框色（对齐 IDEA TextField；只读无焦点态）——
+         * 与 [ClassPickerField] 逐行同源，保证「调用类」「返回类型」两行观感一致。
+         */
+        override fun paintComponent(g: Graphics) {
+            val g2 = g.create() as Graphics2D
+            try {
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                g2.color = UIUtil.getTextFieldBackground()
+                g2.fillRoundRect(0, 0, width - 1, height - 1, PICKER_CORNER, PICKER_CORNER)
+                g2.color = JBColor.namedColor("Component.borderColor", JBColor.border())
+                g2.drawRoundRect(0, 0, width - 1, height - 1, PICKER_CORNER, PICKER_CORNER)
+            } finally {
+                g2.dispose()
+            }
+        }
+
+        /** 对外文本（生成器读取返回声明；测试直接赋值不触发变更回调——对齐 ClassPickerField 语义）。 */
+        var text: String
+            get() = currentText
+            set(value) {
+                currentText = value
+                refresh()
+            }
+
+        /** 测试缝：显示层文案（空值态=占位灰字，有值态=声明文本）。 */
+        internal fun placeholderTextForTest(): Any? = textLabel.text
+
+        /** 测试缝：选类按钮（可见性/可点性断言）。 */
+        internal fun pickButtonForTest(): JButton = pickButton
+
+        /** 测试访问器：显示层标签（灰字占位/取值文案断言；v4 不再有输入框组件）。 */
+        internal fun editorComponentForTest(): java.awt.Component = textLabel
+
+        /** 测试缝：取值态左侧图标（声明形态/类的图标断言——用户真机反馈「选中后没有类图标」）。 */
+        internal fun valueIconForTest(): Icon? = pickedIcon
+
+        /** 子组件点击统一入口：单次点击弹选择器 + 手型光标（按钮自身消费事件，不重复触发）。 */
+        private fun attachClick(component: JComponent) {
+            component.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            component.addMouseListener(object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) {
+                    if (e.button == MouseEvent.BUTTON1 && e.clickCount == 1) openPicker()
+                }
+            })
+        }
+
+        /** 清除选中值（✕ 按钮触发）。 */
+        private fun clearValue() {
+            currentText = ""
+            pickedIcon = null
+            toolTipText = null
+            refresh()
+            onChanged()
+        }
+
+        /**
+         * 选择器：**直接进「选择类」弹框**（与「调用类」点击即弹逐字同款交互）——Map/Objs 声明与
+         * 「自动（留空）」作为**固定候选前插**在候选列表最前（[ReturnTypeByNameModel]，
+         * 与调用类的 this/baseMapper 同款机制），不再是「先弹四项小列表再进类搜索」两层交互。
+         */
+        private fun openPicker() {
+            val popup = ChooseByNamePopup.createPopup(projectRef, typeModel, null)
+            popup.invoke(object : ChooseByNamePopupComponent.Callback() {
+                override fun elementChosen(element: Any?) = applyChosen(element)
+
+                override fun onClose() {}
+            }, ModalityState.current(), false)
+        }
+
+        /**
+         * 选中结果映射（弹框回调与测试共用）：固定项（自动/两条 Map 声明，字符串元素）直写；
+         * 类元素取简单名 + 图标（PSI 读取包 ReadAction——262 断言硬抛，与 ClassPickerField 同款）。
+         */
+        internal fun applyChosen(element: Any?) {
+            when (element) {
+                null -> Unit
+                is String ->
+                    if (element == autoLabelOf()) {
+                        setValue("", null)
+                    } else {
+                        // 声明形态（Map/Objs 列表）带类图标——用户真机反馈「选中后没有类图标」
+                        setValue(element, AllIcons.Nodes.Class)
+                    }
+                is PsiClass -> {
+                    val picked = ReadAction.compute<Pair<String, Icon?>?, Throwable> {
+                        val name = element.name ?: return@compute null
+                        Pair(name, element.getIcon(0))
+                    } ?: return
+                    setValue(picked.first, picked.second)
+                }
+            }
+        }
+
+        /** 返回类型「选择类」弹框模型（T-MapResultVo v5）：固定候选前插，与调用类 this/baseMapper 同款。 */
+        internal val typeModel: ChooseByNameModel = ReturnTypeByNameModel()
+
+        private fun autoLabelOf(): String = MpSqlVisualizerBundle.message("reverse.panel.resultType.auto")
+
+        /** 固定候选（四项，均以字符串元素承载——与调用类 this/baseMapper 的元素形态一致；
+         *  Map 两形态（列表/分页）并列，Objs 无分页重载故不提供 Page<Object>——MP core 3.5.17 javap 实证）。 */
+        private fun specialNames(): List<String> =
+            listOf(autoLabelOf(), MAP_LIST_DECL, PAGE_MAP_LIST_DECL, OBJECT_LIST_DECL)
+
+        /**
+         * 「选择类」弹框模型：委托 [GotoClassModel2]，在候选名列表最前**前插**返回类型固定项
+         * （自动（留空）/`List<Map<String, Object>>`/`List<Object>`）——与 [CallerClassByNameModel]
+         * 的 this/baseMapper 完全同款机制（字符串元素、元素名/全限定名直出、独立渲染器 + 字段图标），
+         * 用户真机五轮反馈「为什么这两个不能出现在选择类的弹框里，类似当时的 this」。
+         */
+        internal inner class ReturnTypeByNameModel : ChooseByNameModel {
+            private val delegate = GotoClassModel2(projectRef)
+            private val delegateRenderer = delegate.getListCellRenderer() as ListCellRenderer<Any>
+
+            private val specialRenderer = object : DefaultListCellRenderer() {
+                override fun getListCellRendererComponent(
+                    list: JList<*>?,
+                    value: Any?,
+                    index: Int,
+                    isSelected: Boolean,
+                    cellHasFocus: Boolean,
+                ): Component {
+                    val c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus) as JComponent
+                    // 声明形态（Map/Objs 列表）用类图标（与选中后字段侧图标一致）；「自动」用模式项图标
+                    val label = c as? JLabel
+                    label?.icon = if (value == autoLabelOf()) AllIcons.Nodes.Field else AllIcons.Nodes.Class
+                    // 「自动（留空）」项 tooltip 复用返回类型占位说明（Map/Objs 两项文本自明，不附 tooltip）
+                    if (value == autoLabelOf()) label?.toolTipText = placeholder
+                    return c
+                }
+            }
+
+            override fun getNames(checkBoxState: Boolean): Array<String> =
+                specialNames().toTypedArray() + delegate.getNames(checkBoxState)
+
+            override fun getElementsByName(name: String, checkBoxState: Boolean, pattern: String): Array<Any> =
+                if (name in specialNames()) arrayOf<Any>(name) else delegate.getElementsByName(name, checkBoxState, pattern)
+
+            /** 固定项元素名 = 字符串本身（委托实现按 NavigationItem 强转）；类元素委托（PSI 包 ReadAction）。 */
+            override fun getElementName(element: Any): String =
+                (element as? String) ?: ReadAction.compute<String?, Throwable> {
+                    delegate.getElementName(element)
+                } ?: element.toString()
+
+            /** 固定项全限定名 = 字符串本身；类元素委托（同上 ReadAction，262 stub 断言实证）。 */
+            override fun getFullName(element: Any): String? =
+                (element as? String) ?: ReadAction.compute<String?, Throwable> { delegate.getFullName(element) }
+
+            override fun getListCellRenderer(): ListCellRenderer<*> = object : ListCellRenderer<Any> {
+                override fun getListCellRendererComponent(
+                    list: JList<out Any>?,
+                    value: Any?,
+                    index: Int,
+                    isSelected: Boolean,
+                    cellHasFocus: Boolean,
+                ): Component = if (value is String) {
+                    specialRenderer.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                } else {
+                    delegateRenderer.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                }
+            }
+
+            override fun getPromptText(): String = delegate.getPromptText() ?: ""
+            override fun getCheckBoxName(): String? = delegate.getCheckBoxName()
+            override fun getNotInMessage(): String = delegate.getNotInMessage() ?: ""
+            override fun getNotFoundMessage(): String = delegate.getNotFoundMessage() ?: ""
+            override fun loadInitialCheckBoxState(): Boolean = delegate.loadInitialCheckBoxState()
+            override fun saveInitialCheckBoxState(state: Boolean) = delegate.saveInitialCheckBoxState(state)
+            override fun getSeparators(): Array<String> = delegate.getSeparators()
+            override fun getHelpId(): String = delegate.getHelpId() ?: ""
+            override fun willOpenEditor(): Boolean = delegate.willOpenEditor()
+            override fun useMiddleMatching(): Boolean = delegate.useMiddleMatching()
+        }
+
+        /** 选中写入（裸声明文本）或清除（空串）。 */
+        private fun setValue(value: String, icon: Icon?) {
+            currentText = value
+            pickedIcon = icon
+            refresh()
+            onChanged()
+        }
+
+        /** 按状态刷新显示：空值 → 占位灰字 + ⋯ 浏览；有值 → 图标 + 声明文本 + ✕ 清除。 */
+        private fun refresh() {
+            if (currentText.isEmpty()) {
+                iconLabel.icon = null
+                textLabel.text = placeholder
+                textLabel.foreground = UIUtil.getInactiveTextColor()
+                textLabel.toolTipText = placeholder
+                pickButton.icon = PICKER_ELLIPSIS_ICON
+                pickButton.toolTipText = MpSqlVisualizerBundle.message("reverse.panel.pickClass")
+            } else {
+                iconLabel.icon = pickedIcon
+                textLabel.text = currentText
+                textLabel.foreground = UIUtil.getLabelForeground()
+                textLabel.toolTipText = null
+                pickButton.icon = PICKER_CANCEL_ICON
+                pickButton.toolTipText = MpSqlVisualizerBundle.message("reverse.panel.clearClass")
+            }
+        }
+
+    }
+
     // ------------------------------------------------------------------
     // 转换流程
     // ------------------------------------------------------------------
@@ -816,6 +1090,8 @@ class SqlToJavaPanel(
                     Triple(candidates, subCandidates, callerMpj to callerMethods)
                 }
             } catch (t: Throwable) {
+                // T-FP-03 收口：JVM 级 fatal 透传（PSI 读失败才降级为「无候选」）
+                if (FatalErrors.isFatal(t)) throw t
                 Triple(emptyList<SqlToJavaConverter.EntityCandidate>(), emptyMap(), false to emptySet())
             }
             ApplicationManager.getApplication().invokeLater {
@@ -1098,6 +1374,39 @@ class SqlToJavaPanel(
         }
 
     /**
+     * T-FixMpjStale：调用类变更 → 后台 ReadAction 反查 MPJ 能力与方法集（与 convert 解析链
+     * 的 ：813 反查同源 [SqlToJavaConverter.invocationHasMpj]/[invocationMethods]），回填
+     * callerMpj/callerMethods 后再重生成。反查是 PSI 索引访问（须 BGT ReadAction——EDT 慢操作
+     * 断言），完成后 EDT 派发重生成；特殊值 this/baseMapper 恒 MPJ 能力（与反查同语义，同步分支）。
+     */
+    private fun refreshCallerCapabilityThenRegenerate() {
+        val caller = callerField.text.trim()
+        if (caller.isEmpty() || caller == "this" || caller == "baseMapper") {
+            callerMpj = caller.isNotEmpty()
+            callerMethods = emptySet()
+            if (cacheResult != null) regenerateWithNewFormat()
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val pair = try {
+                ReadAction.compute<Pair<Boolean, Set<String>>, Throwable> {
+                    SqlToJavaConverter.invocationHasMpj(project, caller) to
+                        SqlToJavaConverter.invocationMethods(project, caller)
+                }
+            } catch (t: Throwable) {
+                // T-FP-03 收口：JVM 级 fatal 透传（PSI 读失败才降级为「无 MPJ 能力/无方法集」）
+                if (FatalErrors.isFatal(t)) throw t
+                false to emptySet<String>()
+            }
+            ApplicationManager.getApplication().invokeLater {
+                callerMpj = pair.first
+                callerMethods = pair.second
+                if (cacheResult != null) regenerateWithNewFormat()
+            }
+        }
+    }
+
+    /**
      * 结果区写文本（WriteCommandAction——平台线程检查强制 write action）。
      *
      * T-TS-03：写体统一过 [DocWriteContext] 闸门。`WriteCommandAction` 只声明「这是一次命令式写」，
@@ -1139,9 +1448,9 @@ class SqlToJavaPanel(
         if (caller.isEmpty()) {
             // T-M50：仅选 VO（无调用类）→ VO 用于 selectAs 字段引用（Vo::getXxx），不生成调用行。
             // mpj = true 放开 JOIN/VO 判定（selectAs VO 引用不依赖调用类 MPJ 能力）
-            return JavaCodeGenerator.InvocationTarget(callerClass = "", voClass = vo, mpj = true)
+            return JavaCodeGenerator.InvocationTarget(callerClass = "", mpj = true, resultTypeText = vo)
         }
-        return JavaCodeGenerator.InvocationTarget(caller, vo, mpj = callerMpj, methods = callerMethods)
+        return JavaCodeGenerator.InvocationTarget(caller, mpj = callerMpj, methods = callerMethods, resultTypeText = vo)
     }
 
     /** 结果分发：0 候选回落 QueryWrapper；1 候选直接生成；多候选选择后生成。 */
@@ -1175,13 +1484,18 @@ class SqlToJavaPanel(
                 if (!manualEntitySelectionEnabled()) {
                     val code = generateCodeOrReport(result, candidates[0], format, subEntities) ?: return
                     setResultText(code)
-                    status(
-                        joinStatus(
-                            result,
-                            MpSqlVisualizerBundle.message("reverse.panel.status.entity", candidates[0].psiClass.name ?: ""),
-                        ),
-                        error = false,
-                    )
+                    // T-FixEntityAmbiguity：多候选静默取首须明示——真机实证同表多实体（User/UserDO）
+                    // 静默取到字段子集实体，用户只见「回落字符串列名」大列表误判为映射缺陷
+                    val msg = if (candidates.size > 1) {
+                        val names = candidates.mapNotNull { it.psiClass.name }.joinToString("、")
+                        MpSqlVisualizerBundle.message(
+                            "reverse.panel.status.entityAmbiguous",
+                            result.tableName, names, candidates[0].psiClass.name ?: "",
+                        )
+                    } else {
+                        MpSqlVisualizerBundle.message("reverse.panel.status.entity", candidates[0].psiClass.name ?: "")
+                    }
+                    status(joinStatus(result, msg), error = false)
                     return
                 }
                 // T-M44 审计兜底：候选 PSI 读取（name/containingFile）须在 ReadAction 内（EDT 同步）
@@ -1282,6 +1596,7 @@ class SqlToJavaPanel(
     /** 测试访问器：形态下拉组件（布局断言——选项行 GridBag 拉伸）。 */
     internal fun formatComboForTest(): JComboBox<*> = formatCombo
 
+
     /** 测试访问器：模拟用户下拉选择（触发写穿 + 重生成完整链路）。 */
     internal fun selectFormatForTest(persisted: String) {
         formatCombo.selectedItem = formatOptions().first { it.persisted == persisted }
@@ -1292,6 +1607,12 @@ class SqlToJavaPanel(
 
     /** T-M44 增量测试缝：选择器模型（ChooseByNameModel 接口——getFullName/getElementName 的 ReadAction 委托行为测试）。 */
     internal fun callerModelForTest(): ChooseByNameModel = callerField.callerModel
+
+    /** T-MapResultVo v5 测试缝：返回类型「选择类」弹框模型（固定候选前插断言）。 */
+    internal fun returnTypeModelForTest(): ChooseByNameModel = voField.typeModel
+
+    /** T-MapResultVo v5 测试缝：选中映射（字符串固定项/类元素 → 返回声明文本）。 */
+    internal fun applyReturnTypeChosenForTest(element: Any?) = voField.applyChosen(element)
 
     /** T-CallerPicker 测试缝：设置当前编辑器打开的类（供 this/baseMapper tooltip 上下文测试）。 */
     internal fun setCurrentEditorClassForTest(cls: PsiClass?) {
@@ -1319,7 +1640,7 @@ class SqlToJavaPanel(
     internal fun pickerActionButtonForTest(): JButton = callerField.actionButtonForTest()
 
     /** 测试访问器：返回 VO 选择字段。 */
-    internal fun voFieldForTest(): ClassPickerField = voField
+    internal fun voFieldForTest(): ReturnTypeField = voField
 
     /** 状态行（错误红字 / 提示主题色）。 */
     private fun status(message: String, error: Boolean) {
@@ -1371,6 +1692,17 @@ class SqlToJavaPanel(
     /** 测试访问器：触发转换（走完整流程，含异步实体查找路径）。 */
     internal fun convertForTest() = convert()
 
+    /**
+     * T-FixEntityAmbiguity 测试缝：直调多候选分发 [render]（private，且多候选分支仅存在于
+     * BGT 查找后的 EDT 回调——Light 索引不可用无法真实实体夹具，见 M27 实证登记）。
+     * 只做转发，不改变生产语义——供「开关关闭静默取首 + 状态栏明示候选」分支的面板级断言使用。
+     */
+    internal fun renderForTest(
+        result: SqlReverseResult,
+        candidates: List<SqlToJavaConverter.EntityCandidate>,
+        format: ReverseWrapperFormat,
+    ) = render(result, candidates, format)
+
     /** 测试访问器：结果区文本。 */
     internal fun resultTextForTest(): String = resultEditor.document.text
 
@@ -1410,6 +1742,14 @@ class SqlToJavaPanel(
         private const val PICKER_CORNER = 10
 
         /** 类选择字段按钮图标（12px 缩放——AllIcons 原生 16px 偏大，用户反馈）。 */
+        /** T-MapResultVo v4：返回类型选择器的 Map/Objs 预置声明（生成器按含 Map/含 Object 派生族）。 */
+        private const val MAP_LIST_DECL = "List<Map<String, Object>>"
+        /** T-MapResultVo v6：Maps 分页声明——SQL 含 LIMIT 时前缀=Page<Map<String, Object>>、
+         *  方法 selectMapsPage/listMapsPage/selectJoinMapsPage（MP core 3.5.17 + MPJ 1.5.8 javap 实证；
+         *  v5 去自由输入后此形态从 UI 不可达，本项补回）。 */
+        private const val PAGE_MAP_LIST_DECL = "Page<Map<String, Object>>"
+        private const val OBJECT_LIST_DECL = "List<Object>"
+
         private val PICKER_ELLIPSIS_ICON: Icon = IconScaler.scale(AllIcons.General.Ellipsis, 12f / 16f)
         private val PICKER_CANCEL_ICON: Icon = IconScaler.scale(AllIcons.Actions.Cancel, 12f / 16f)
     }

@@ -8,6 +8,13 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import com.intellij.openapi.ide.CopyPasteManager
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.StringSelection
+import java.awt.event.ActionEvent
+import javax.swing.KeyStroke
 
 /**
  * 回滚视图组装测试（T-RollbackSql F3/P2-F5）：评级横幅分层、编辑器内容、底部动作
@@ -207,4 +214,25 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
             dialog.doDispose()
         }
     }
+
+    // ---------- T-SqlCopyShortcuts：键盘复制接线（只读编辑器同样要能 Ctrl+C） ----------
+
+    fun test编辑器CtrlC无选中复制回滚SQL() {
+        val dialog = newDialog(completeInsertResult(), "INSERT")
+        try {
+            val editor = dialog.editorForTest()
+            assertNotNull("编辑器应在场", editor)
+            val comp = editor!!.component
+            CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
+            val actionKey = comp.inputMap.get(KeyStroke.getKeyStroke("control C"))
+            assertNotEquals("应覆盖 JTextComponent 默认 copy 绑定（共享件接线）", "copy", actionKey)
+            comp.actionMap.get(actionKey)
+                .actionPerformed(ActionEvent(comp, ActionEvent.ACTION_PERFORMED, actionKey.toString()))
+            val clip: String? = CopyPasteManager.getInstance().getContents(DataFlavor.stringFlavor)
+            assertEquals("只读编辑器无选中 Ctrl+C 应复制整条回滚 SQL", dialog.sqlTextForTest(), clip)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
 }

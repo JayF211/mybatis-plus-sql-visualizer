@@ -12,6 +12,7 @@ import cn.song.mybatisplus.visualizer.ui.clipTailToWidth
 import com.intellij.util.ui.JBUI
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
+import cn.song.mybatisplus.visualizer.util.TextCopyList
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
@@ -124,9 +125,16 @@ internal const val REFRESH_CHUNK_SIZE = 30
  * 渲染文本（HTML 源码，用户实测缺陷），覆写后复制输出纯 SQL（多选逐条换行拼接、
  * CopyPasteManager 写入、Ctrl+C 快捷键注册均由 JBList 既有链路复用）。
  * open：internal 类默认 final，测试子类经公开包装访问 protected itemToText。
+ *
+ * T-ClickPreviewCopyRestore 二轮（20261008）勘正：上句「Ctrl+C 快捷键注册」经实证**来自平台 LAF**
+ * （`List.focusInputMap` 已含 `control C → copy`，headless 实测 `inputMap.get` 直接命中，
+ * 早先据 `InputMap.keys()==null` 判「无绑定」是懒加载 InputMap 的假象）；`JBList.installDefaultCopyAction`
+ * 只负责 ActionMap 侧。二轮曾在此补绑 InputMap，验证发现冗余（摘除后绑定仍在）已回退——列表 Ctrl+C
+ * 本就可达，用户「点击后复制失效」的断点在单击预览浮层抢焦点，修复见 [SqlClickPreview] 的 Swing 层绑定。
  */
-internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : JBList<LogSqlEntry>(model) {
-    override fun itemToText(index: Int, element: LogSqlEntry): String = textFor(element)
+internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : TextCopyList<LogSqlEntry>(model) {
+    /** Ctrl+C 复制文本（T-SqlCopyShortcuts：委派给共享基类；多选逐行拼接由平台既有 copy 动作完成）。 */
+    override fun copyTextFor(element: LogSqlEntry): String = textFor(element)
 
     /** 速度搜索与 Ctrl+C 复制共用的条目文本。 */
     internal fun textFor(element: LogSqlEntry): String = withTerminator(element.restoredSql)
@@ -375,9 +383,11 @@ class SqlLogPanel(
     private val logToSqlPanel = LogToSqlPanel(project)
     /** T-M36.4：SQL → Java 转换 tab（粘贴 SQL → 格式化/补全 → 转换 → 可编辑 Java 高亮结果区）。 */
     private val sqlToJavaPanel = SqlToJavaPanel(project)
-    /** F-44：历史 SQL tab（读取 .idea 目录中的自动保存文件，支持源码定位）。仅 logAutoSaveEnabled 时创建。 */
+    /** F-44：历史 SQL tab（读取自动保存目录中的历史文件，支持源码定位）。
+     *  T-HistoryTabAlways：**常驻**——不再由 logAutoSaveEnabled 或「.idea 里已存在历史文件」决定
+     *  （未开启自动保存的新用户此前看不到入口）；无数据时面板显示空态并指路设置页。 */
     private val historyPanel: HistorySqlLogPanel by lazy { HistorySqlLogPanel(project) }
-    /** F-44：历史 tab 在 JBTabbedPane 中的索引（-1 表示未添加）。 */
+    /** F-44：历史 tab 在 JBTabbedPane 中的索引（-1 表示未添加；常驻后恒为末位）。 */
     private var historyTabIndex = -1
     private val dedupeCheckBox = JCheckBox(MpSqlVisualizerBundle.message("log.panel.dedupe")).apply {
         isSelected = manager.entries.dedupeEnabled
@@ -436,6 +446,11 @@ class SqlLogPanel(
     private var lastRendered: List<LogSqlEntry> = emptyList()
 
     // T-Perf-15：manager 监听器命名引用（uiRefreshListener/capturingUiListener）声明于 init 前统一区块。
+    //
+    // T-RecentExecMenu O-119：送页签通道回调的**稳定引用**（init 注册 / dispose 同一性注销用）——
+    // 必须声明在 init 之前：init 块内会读它完成注册，声明在后会读到未初始化值（本仓构造期序坑第三次）。
+    private val openEntryInTabCallback: (LogSqlEntry, LogEntryTab) -> Unit =
+        { entry, tab -> openEntryInTab(entry, tab) }
 
     // ---------- O-1 日志窗口差异化：慢查询计数器 + 耗时着色 ----------
 
@@ -672,6 +687,9 @@ class SqlLogPanel(
         Disposer.register(this, logToSqlPanel)
         Disposer.register(this, sqlToJavaPanel)
 
+        // T-RecentExecMenu O-119：面板外「送条目到页签」通道注册（弹框右键用；dispose 注销）
+        manager.onOpenEntryInTab = openEntryInTabCallback
+
         // 标签 1：SQL 日志（工具栏行 + 搜索条 + 条目列表）
         val logPanel = JPanel(BorderLayout())
         logPanel.add(buildTopPanel(), BorderLayout.NORTH)
@@ -681,9 +699,10 @@ class SqlLogPanel(
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logs"), logPanel)
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logToSql"), logToSqlPanel)
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.sqlToJava"), sqlToJavaPanel)
-        // R19（T-PerfSweep 批次 2）：历史 tab 常驻——原 F-44 条件挂载（自动保存开或有历史文件）
-        // 让新用户结构性不知道历史功能存在（logAutoSaveEnabled 默认 false）；文件列表空态已带
-        // 「开启自动保存」引导文案，tab 常驻即引导闭环。F-44 的移除分支随 R19 废除。
+        // R19（T-PerfSweep 批次 2）+ T-HistoryTabAlways：历史 tab 常驻——原 F-44 条件挂载
+        // （「开启自动保存 或 .idea 中已有历史文件」）让未开启自动保存的干净项目没有入口，
+        // 关掉设置页开关还会把已挂载的 tab 摘掉；文件列表空态已带「开启自动保存」引导文案，
+        // tab 常驻即引导闭环，F-44 的移除分支随之废除、设置变更不再参与显隐。
         addHistoryTab()
         add(tabs, BorderLayout.CENTER)
 
@@ -698,10 +717,9 @@ class SqlLogPanel(
             }
         }
 
-        // F-44 历史 tab 显隐跟随设置（设置页修改后即时生效，无需切 tab）
+        // 设置变更后列表重排重绘（T-HistoryTabAlways 起历史 tab 无显隐逻辑，恒在）
         val settingsListener = SettingsChangeListener {
             ApplicationManager.getApplication().invokeLater {
-                updateHistoryTabVisibility()
                 // T-LogListFreeze-04：片段渲染直读设置态（时间戳/耗时显示/慢查询阈值）——设置变更后
                 // 走 refreshList 重排重绘即生效（SINGLE_LINE 直渲染；多行模式片段缓存按模式键自动失效）
                 // T-ListMode：显示模式入口已迁设置页（T-DisplayModeToSettings）——设置页 apply 广播后
@@ -1083,8 +1101,11 @@ class SqlLogPanel(
     private var historyPanelRegistered = false
 
     /**
-     * 添加历史 tab（T-Perf-17：Disposer 注册防重入守卫——构造期与设置页循环开关都会走到；
-     * 重复注册在 2026.x 平台报 "Object must not be registered twice" 错误弹窗）。
+     * 添加历史 tab（T-HistoryTabAlways 后为构造期唯一调用点）。
+     *
+     * T-Perf-17：Disposer 注册与防重入守卫保留——历史面板必须登记进本面板的 Disposer 树
+     * （否则工具窗关闭时面板连同渲染器/防抖 Timer 不释放）；守卫在将来出现重复挂载路径时仍生效
+     * （重复注册在 2026.x 平台报 "Object must not be registered twice" 错误弹窗）。
      */
     private fun addHistoryTab() {
         if (!historyPanelRegistered) {
@@ -1095,16 +1116,8 @@ class SqlLogPanel(
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), historyPanel)
     }
 
-    /**
-     * R19（T-PerfSweep 批次 2）：历史 tab 常驻后的幂等确保——tab 已挂即零操作。
-     * 原 F-44 的「无自动保存且无历史数据时移除 tab」分支废除（结构性隐藏让新用户
-     * 不知道历史功能存在；空态文案已带开启引导），调用点（设置变更监听）保留。
-     */
-    private fun updateHistoryTabVisibility() {
-        if (historyTabIndex < 0) {
-            addHistoryTab() // 幂等：Disposer 防重入守卫在 addHistoryTab 内
-        }
-    }
+    /** 测试访问器：主 tab 容器（历史 tab 常驻断言用；T-HistoryTabAlways 起 tab 恒在，无显隐路径）。 */
+    internal val tabsForTest: javax.swing.JTabbedPane get() = tabs
 
     /** 工具栏引用（capturing 变化时经平台更新机制刷新动作 presentation，T-UN-11）。 */
     private var _toolbarRef: ActionToolbar? = null
@@ -1384,8 +1397,9 @@ class SqlLogPanel(
         list.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
+                // T-ClickPreviewCopyRestore：修饰键一并转发——Ctrl/Shift 单击（多选第一击）不排程预览
                 if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
-                    clickPreview.onClick(e.clickCount, e.point)
+                    clickPreview.onClick(e.clickCount, e.point, e.modifiersEx)
                 }
                 if (e.clickCount >= 2) {
                     list.selectedValue?.let { openPreview(it) }
@@ -1709,26 +1723,26 @@ class SqlLogPanel(
     /**
      * 统一解析跳转目标：仅依赖捕获位置，不做任何启发式定位。
      * T-SourceJumpFunnel P0-5：判定逻辑收敛到 [EntryJumpResolver]（实时/历史两面板共用同一实现，
-     * 历史面板由此获得候选回退能力），本函数只做类型转接。
+     * 历史面板由此获得候选回退能力）；T-RecentExecMenu O-119：转接原语收口到 [LogEntryJumpOps]
+     * （实时/历史/弹框三方共用），本函数只做类型转接（类型保持不动——既有测试按其断言分支）。
      */
     internal fun resolveEntryJump(entry: LogSqlEntry): LogJumpTarget =
-        when (val target = EntryJumpResolver.resolve(project, entry)) {
-            is EntryJumpResolver.JumpTarget.Precise -> LogJumpTarget.Precise(target.virtualFile, target.line)
-            EntryJumpResolver.JumpTarget.NoSource -> LogJumpTarget.NoSource
-            is EntryJumpResolver.JumpTarget.NotFound -> LogJumpTarget.NotFound(target.sourceFile)
-            EntryJumpResolver.JumpTarget.MissingSource -> LogJumpTarget.MissingSource
+        when (val target = LogEntryJumpOps.resolveSource(project, entry)) {
+            is LogEntryJumpOps.SourceTarget.Precise -> LogJumpTarget.Precise(target.virtualFile, target.line)
+            LogEntryJumpOps.SourceTarget.NoSource -> LogJumpTarget.NoSource
+            is LogEntryJumpOps.SourceTarget.NotFound -> LogJumpTarget.NotFound(target.sourceFile)
+            LogEntryJumpOps.SourceTarget.MissingSource -> LogJumpTarget.MissingSource
         }
 
     /**
      * T-M55-01：XML 目标解析——mapperStatement 非空且 [MapperXmlLocator] 定位成功时返回
      * [LogJumpTarget.MapperXml]；statementId 缺失 / MP 内置语句 XML 不存在 / 多模块定位失败
      * 一律返回 null（调用方回退 Java 跳转，不劣化）。定位自带 ReadAction，EDT 直调安全。
+     * T-RecentExecMenu O-119：解析原语收口 [LogEntryJumpOps.resolveXml]。
      */
-    internal fun resolveEntryXmlJump(entry: LogSqlEntry): LogJumpTarget.MapperXml? {
-        val statementId = entry.mapperStatement?.takeIf { it.isNotBlank() } ?: return null
-        val location = MapperXmlLocator.locate(project, statementId) ?: return null
-        return LogJumpTarget.MapperXml(location.virtualFile, location.line)
-    }
+    internal fun resolveEntryXmlJump(entry: LogSqlEntry): LogJumpTarget.MapperXml? =
+        LogEntryJumpOps.resolveXml(project, entry)
+            ?.let { LogJumpTarget.MapperXml(it.virtualFile, it.line) }
 
     /** 等价右键「跳转到源码」（供 UI 测试断言精确跳转分支，避 headless 弹窗）。 */
     internal fun jumpToSourceForTest(entry: LogSqlEntry) = jumpToSource(entry)
@@ -1736,37 +1750,20 @@ class SqlLogPanel(
     /**
      * F-44-6：日志 ↔ 源码关联跳转。
      * 仅依赖捕获位置精确跳转；无位置时弹框引导开启源码捕获（T-JumpCapture）。
+     * T-RecentExecMenu O-119：**整体策略**收口 [LogEntryJumpOps.jumpToSourceRealtime]
+     * （与弹框右键共用同一实现与文案，避免第四份策略复制）。
      */
     private fun jumpToSource(entry: LogSqlEntry) {
-        when (val target = resolveEntryJump(entry)) {
-            is LogJumpTarget.Precise ->
-                OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
-            // resolveEntryJump 不产出该分支（XML 目标走 resolveEntryXmlJump/JumpToMapperXmlAction）；防御性导航
-            is LogJumpTarget.MapperXml ->
-                OpenFileDescriptor(project, target.virtualFile, target.line, 0).navigate(true)
-            is LogJumpTarget.NoSource ->
-                showJumpToast(MpSqlVisualizerBundle.message("log.panel.jumpToSource.noSource"))
-            is LogJumpTarget.NotFound ->
-                showJumpToast(MpSqlVisualizerBundle.message("log.panel.jumpToSource.notFound", target.sourceFile))
-            is LogJumpTarget.MissingSource ->
-                SourceCaptureGuide.showMissingSourceDialog(project)
-        }
+        LogEntryJumpOps.jumpToSourceRealtime(project, entry)
     }
 
     /**
      * T-UiNative T-UN-02：跳转无源码提示改轻通知（原模态弹窗——纯告知无需打断）。
-     * 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）。
+     * T-RecentExecMenu O-119：实现收口 [LogEntryJumpOps.showToast]（标题键留本页口径）；
+     * 见 [FocusCallerMethodAction] 同用本薄封装。
      */
     private fun showJumpToast(content: String) {
-        if (ApplicationManager.getApplication().isUnitTestMode) return
-        runCatching {
-            Notification(
-                NOTIFICATION_GROUP_ID,
-                MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
-                content,
-                NotificationType.INFORMATION,
-            ).notify(project)
-        }
+        LogEntryJumpOps.showToast(project, "log.panel.jumpToSource", content)
     }
 
     /** 更新工具栏慢查询计数徽章（O-1 Phase C）。 */
@@ -2013,27 +2010,25 @@ class SqlLogPanel(
         }
     }
 
-    /** 发送到 SQL → Java 转换（第三 tab）。 */
+    /** 发送到 SQL → Java 转换（第三 tab）。T-RecentExecMenu O-119：落点收口 [openEntryInTab]（弹框右键同用）。 */
     private inner class SendToSqlToJavaAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.sendToReverse")
         }
 
         override fun actionPerformed(e: AnActionEvent) {
-            sqlToJavaPanel.setInputSql(entry.restoredSql)
-            tabs.selectedComponent = sqlToJavaPanel
+            openEntryInTab(entry, LogEntryTab.SQL_TO_JAVA)
         }
     }
 
-    /** 发送到日志转 SQL（第二 tab）。 */
+    /** 发送到日志转 SQL（第二 tab）。T-RecentExecMenu O-119：落点收口 [openEntryInTab]（弹框右键同用）。 */
     private inner class SendToLogToSqlAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.sendTo")
         }
 
         override fun actionPerformed(e: AnActionEvent) {
-            logToSqlPanel.loadFromEntry(entry)
-            tabs.selectedComponent = logToSqlPanel
+            openEntryInTab(entry, LogEntryTab.LOG_TO_SQL)
         }
     }
 
@@ -2141,9 +2136,28 @@ class SqlLogPanel(
         // T-Perf-15：注销 manager 监听器（防面板销毁后仍被回调——每条新 SQL invokeLater 调已销毁面板）
         manager.removeUiListener(uiRefreshListener)
         manager.removeCapturingListener(capturingUiListener)
+        // T-RecentExecMenu O-119：注销送页签通道（同一性判定——防误清他人注册）
+        if (manager.onOpenEntryInTab === openEntryInTabCallback) manager.onOpenEntryInTab = null
         clickPreview.dispose()
         logToSqlPanel.dispose()
         sqlToJavaPanel.dispose()
+    }
+
+    /**
+     * T-RecentExecMenu O-119：面板外请求（弹框右键「发送到…」）把条目送进对应页签并选中——
+     * 与右键 [SendToSqlToJavaAction] / [SendToLogToSqlAction] 同体（三处共用本方法，单一实现）。
+     */
+    private fun openEntryInTab(entry: LogSqlEntry, tab: LogEntryTab) {
+        when (tab) {
+            LogEntryTab.LOG_TO_SQL -> {
+                logToSqlPanel.loadFromEntry(entry)
+                tabs.selectedComponent = logToSqlPanel
+            }
+            LogEntryTab.SQL_TO_JAVA -> {
+                sqlToJavaPanel.setInputSql(entry.restoredSql)
+                tabs.selectedComponent = sqlToJavaPanel
+            }
+        }
     }
 
     // ---------- WrapLayout（工具栏行自动换行） ----------

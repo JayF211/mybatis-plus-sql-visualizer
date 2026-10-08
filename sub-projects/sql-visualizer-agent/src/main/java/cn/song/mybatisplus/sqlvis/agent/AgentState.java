@@ -24,6 +24,14 @@ public final class AgentState {
     private static volatile String logLevel = "warn";
 
     /**
+     * 调用栈快照总帧数预算（T-StackHoverUi 用户可配）：StackDigest 两端采样用——栈顶取 B-8 帧
+     * （引擎侧）、栈底固定保留 8 帧（业务/Controller 侧）。默认 24，写入即钳位 [12,64]
+     * （与 StackDigest.clamp 同口径，读侧再钳一次兜底）。随 attach 参数（stackFrames=k）
+     * 与 CONFIG 帧（"stackFrames":k）双通道下发。
+     */
+    private static volatile int stackMaxFrames = 24;
+
+    /**
      * 已成功应用的 CONFIG 帧数（T-AgentConfigChannel T-02 可观测性）：0 = 控制通道从未通过。
      * 排障时「IDE 说下发了、应用侧说没收到」这类争议，读这个计数即可判定（无需行为反推）。
      */
@@ -72,6 +80,15 @@ public final class AgentState {
 
     public static String getLogLevel() {
         return logLevel;
+    }
+
+    public static int getStackMaxFrames() {
+        return stackMaxFrames;
+    }
+
+    public static void setStackMaxFrames(int value) {
+        // 钳位与 StackDigest.clamp 同口径（配置入口先行归一，读侧再钳一次兜底）
+        stackMaxFrames = Math.max(12, Math.min(64, value));
     }
 
     /** SenderLoop 放弃某端口时调用（复核 minor㉚）：计数 + 记下最后放弃的端口，供排障与测试观测。 */

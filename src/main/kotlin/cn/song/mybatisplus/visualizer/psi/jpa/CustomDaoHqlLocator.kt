@@ -366,10 +366,20 @@ object CustomDaoHqlLocator {
      *
      * 检查第一个字符串参数是否匹配 HQL 语法模式（SELECT...FROM / UPDATE...SET / DELETE...FROM / FROM Entity）。
      *
+     * T-GutterDupFreeze（S1）：**首参必须是字符串承载式**（String 字面量 / `+` 拼接 / 解析为
+     * String 的变量引用 / `xx.toString()`），先于内容正则判定。此前无此门控，非字符串表达式
+     * （典型＝wrapper 调用链）会被 [extractArgumentText] 兜底成**整条链的源码文本**，
+     * 链内嵌的 SQL 串（`.exists("select 1 from t_order ...")` / `.apply` / `.inSql` / `.last`）
+     * 令 `SELECT...FROM` 正则命中——纯 MyBatis-Plus 的 `userMapper.selectList(<wrapper 链>)`
+     * 因此被误认成自定义 DAO HQL 调用，凭空亮出预览图标（20261008 用户真机实证）。
+     * 与 HIBERNATE_TEMPLATE 家族同款门控（[PreviewReceiverResolver.isStringLikeFirstArg]），
+     * 属既有口径对齐而非常规收紧。
+     *
      * @param call 目标方法调用
      * @return 字符串参数是否匹配 HQL 内容模式
      */
     private fun matchesHqlContent(call: PsiMethodCallExpression): Boolean {
+        if (!PreviewReceiverResolver.isStringLikeFirstArg(call)) return false
         val firstArg = call.argumentList.expressions.firstOrNull() ?: return false
         val text = extractArgumentText(firstArg) ?: return false
         return HQL_CONTENT_PATTERNS.any { pattern -> pattern.containsMatchIn(text) }
@@ -417,7 +427,9 @@ object CustomDaoHqlLocator {
                 if (parts.isNotEmpty()) {
                     parts.joinToString("") to true
                 } else {
-                    expression.text to false
+                    // T-GutterDupFreeze（S1）：全无字面量部分（`a + b` 形态）静态不可求值 →
+                    // 不得回退成表达式源码文本充当 HQL（源码文本不是 SQL）
+                    null to false
                 }
             }
             is PsiReferenceExpression -> {
@@ -434,7 +446,11 @@ object CustomDaoHqlLocator {
                     expression.referenceName to false
                 }
             }
-            else -> expression.text to false
+            // T-GutterDupFreeze（S1）：兜底分支原为 `expression.text to false`——把**任意表达式的
+            // 源码文本**当字符串返回，是「wrapper 链源码被当成 HQL」这一误判的最终落点（链、new、
+            // toString() 调用等都会走到这里）。改为「无法静态取得字符串」= 不是 HQL 承载：
+            // 上游 matchesHqlContent 因 hql 为空判否、locateFromCall 亦不产出 info。
+            else -> null to false
         }
     }
 

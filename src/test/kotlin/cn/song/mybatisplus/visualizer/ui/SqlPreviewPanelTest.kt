@@ -47,6 +47,11 @@ import javax.swing.JButton
 import javax.swing.SwingUtilities
 import cn.song.mybatisplus.visualizer.testutil.FakeClipboardManager
 import cn.song.mybatisplus.visualizer.testutil.installFakeClipboard
+import com.intellij.openapi.ide.CopyPasteManager
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.StringSelection
+import java.awt.event.ActionEvent
+import javax.swing.KeyStroke
 
 /**
  * SqlPreviewPanel 行为测试（M8/M9）：编辑器视图 + 单行多行切换 + 生命周期 + 参数回填。
@@ -1850,4 +1855,25 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             panel.dispose()
         }
     }
+
+    /** T-SqlCopyShortcuts：预览面板 SQL 编辑器（双击预览主入口）无选中 Ctrl+C 应复制整条 SQL。 */
+    fun test编辑器CtrlC无选中复制整条SQL() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            panel.showResult(result())
+            val editor = panel.editorForTest()
+            assertNotNull("编辑器应在场", editor)
+            val comp = editor!!.component
+            CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
+            val actionKey = comp.inputMap.get(KeyStroke.getKeyStroke("control C"))
+            assertNotEquals("应覆盖 JTextComponent 默认 copy 绑定（共享件接线）", "copy", actionKey)
+            comp.actionMap.get(actionKey)
+                .actionPerformed(ActionEvent(comp, ActionEvent.ACTION_PERFORMED, actionKey.toString()))
+            val clip: String? = CopyPasteManager.getInstance().getContents(DataFlavor.stringFlavor)
+            assertEquals("Ctrl+C 应复制整条预览 SQL", editor.document.text, clip)
+        } finally {
+            panel.clear()
+        }
+    }
+
 }

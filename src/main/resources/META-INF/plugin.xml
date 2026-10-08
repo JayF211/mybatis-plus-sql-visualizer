@@ -21,44 +21,49 @@
     <!-- 插件厂商（发布前请替换为真实信息） -->
     <vendor url="https://gitee.com/SongRenShuo">SongRenShuo</vendor>
 
-    <!-- 插件描述（Marketplace 展示，支持 HTML；必须以拉丁字符开头且 ≥40 字符；双语：英文在上、中文在下，M16） -->
+    <!-- 插件描述（Marketplace 与 IDE Plugins 页同源，支持基础 HTML；T-PluginDescReshape 结构定案）：
+         ① 顶部英文摘要一行为预览卡首 40 字符硬约束而设（Marketplace 取描述前 40 字符做卡片文案，不可单独修改）；
+         ② 中文内容整体位于英文正文之上（用户 2026-10-08 定案，参考件 MyBatisCodeHelperPro 同形）；
+         ③ 不使用 <hr/> 与 HTML 注释——Marketplace 会剥离（实测：本地 tag 2026.10.7 含 hr，线上同版本描述 hr=0）；
+         ④ 禁用 <img>（外链图 302 防盗链），截图走 Marketplace Media 区；
+         ⑤ 数字类声明（11 方言 / 10 工具 / Alt+Shift+Q / 2024.3）由 PluginXmlStructureGuardTest 与代码对账。
+         HTML 片段下同。 -->
     <description><![CDATA[
-        <p><b>See the exact SQL your code will run — before the server starts.</b> SQL Visualizer turns MyBatis-Plus Wrapper chains, XML mappers, annotation SQL, JPA/Hibernate queries and JdbcTemplate string SQL into readable, executable SQL with real parameter values, right inside IntelliJ IDEA.</p>
-        <p>Compatible with every IntelliJ platform release since 2024.3 — including the full 2025.1–2025.3 line — continuously adapted.</p>
-        <h3>Highlights</h3>
+        <p><b>See the exact SQL your code will run.</b> Renders MyBatis-Plus, JPA and JdbcTemplate queries into executable SQL with real parameter values, before the server starts.</p>
+        <p><b>服务未启，SQL 先知</b>——在 IntelliJ IDEA 内把 MyBatis-Plus、JPA、JdbcTemplate 查询还原为可执行 SQL，参数自动回填。</p>
+        <p><a href="https://sql-visualizer.jvtools.cn">中文文档</a> · <a href="https://sql-visualizer.jvtools.cn/en/">English Docs</a> · <a href="https://sql-visualizer.jvtools.cn/about/feedback">需求池 / Feedback</a> · <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">Screenshots</a></p>
+
+        <h3>中文</h3>
         <ul>
-            <li><b>All SQL sources covered</b>: Lambda / Query / Update / Delete Wrappers &amp; service chains, MPJ join wrappers, mapper XML dynamic tags (if / foreach / choose ...), <code>@Select</code> annotation SQL, Spring Data <code>findByXxx</code>, CriteriaQuery, HQL / <code>@Query</code>, JdbcTemplate &amp; custom-DAO string SQL</li>
-            <li><b>Real parameters, one click</b>: <code>?</code> placeholders replaced with actual values (LIKE auto-wildcard, type-aware quoting); OGNL condition checkboxes; auto formatting for 11 database dialects</li>
-            <li><b>Live SQL log capture</b>: restores executable SQL from MyBatis / Hibernate / JdbcTemplate console logs, with de-dup, filtering, per-statement color marks and precise jump-to-source</li>
-            <li><b>Enhanced capture, on by default</b>: a lightweight agent attached to the running app reports every statement with its target database, exact duration and affected row count — no log format required</li>
-            <li><b>SQL → Java</b>: convert any SQL back into compilable QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper code (CRUD &amp; joins)</li>
-            <li><b>JOIN diagram &amp; execution</b>: native IDE ER diagram with PNG / SVG export; execute SQL and one-click EXPLAIN plans in an embedded native Database console (Ultimate)</li>
-            <li><b>CRUD SQL in one step</b>: right-click an entity class or database table to generate INSERT / UPDATE / SELECT / DELETE</li>
-            <li><b>Rollback SQL in one click</b>: derive the reverse DELETE for an INSERT preview with identity-column wrapping for SQL Server and DM; snapshot-assisted recovery for UPDATE / DELETE</li>
-            <li><b>MCP tools for AI agents</b>: 10 deterministic read-oriented tools (render, check, explain, rollback plan, CRUD, reverse SQL and more) registered with the platform MCP Server, per-tool gating in settings (IDEA 2025.2+)</li>
-            <li>One keystroke away: gutter icon / context menu / <code>Alt+Shift+Q</code></li>
-        </ul>
-        <p>Feature matrix &amp; docs: <a href="https://sql-visualizer.jvtools.cn">sql-visualizer.jvtools.cn</a> · Screenshots on the <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">Marketplace page</a></p>
-        <!-- M18.1 问题反馈入口：跳转官网需求池（链接为白名单基础 HTML，IDE 与 Marketplace 均支持） -->
-        <p>Found an issue? Please report it at the <a href="https://sql-visualizer.jvtools.cn/about/feedback">Feedback Pool</a>.</p>
-        <hr/>
-        <p><b>服务未启，SQL 先知</b>——SQL Visualizer 在 IntelliJ IDEA 内将 MyBatis-Plus Wrapper 链、XML mapper、注解 SQL、JPA/Hibernate 查询与 JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自动回填。</p>
-        <p>支持 IDEA 2024.3 起全部版本（含 2025.1–2025.3 与 2026.x），持续适配。</p>
-        <h3>核心能力</h3>
-        <ul>
-            <li><b>SQL 来源全覆盖</b>：Lambda / Query / Update / Delete Wrapper 及服务链、MPJ 联表、mapper XML 动态标签（if / foreach / choose 等）、<code>@Select</code> 注解 SQL、Spring Data 派生查询、CriteriaQuery、HQL / <code>@Query</code>、JdbcTemplate 与自研 DAO 字符串 SQL</li>
-            <li><b>真实参数一键回填</b>：<code>?</code> 占位符替换为实际值（LIKE 自动拼百分号、按字段类型加引号）；OGNL 条件勾选模拟；11 种数据库方言自动格式化</li>
-            <li><b>控制台 SQL 日志实时捕获</b>：支持 MyBatis / Hibernate / JdbcTemplate 三种日志格式，去重过滤、按语句类型着色标记、精确跳转源码</li>
-            <li><b>增强捕获（默认开启）</b>：向运行中的应用进程挂载轻量 agent 直接采集真实执行，不依赖日志格式，附目标库、毫秒级耗时与影响行数</li>
-            <li><b>SQL 反向转 Java</b>：一键生成可直接编译的 QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 代码（增删改查与多表 JOIN）</li>
-            <li><b>JOIN 关系图与执行</b>：IDE 原生 ER 图渲染（PNG / SVG 导出）；内嵌原生 Database 控制台直接执行 SQL 与一键执行计划 EXPLAIN（Ultimate）</li>
+            <li><b>编码期预览 · SQL 来源全覆盖</b>：Lambda / Query / Update / Delete Wrapper 及服务链、MPJ 联表、mapper XML 动态标签（if / foreach / choose）、<code>@Select</code> 注解 SQL、Spring Data 派生查询、Specification / CriteriaQuery、HQL / <code>@Query</code>、JdbcTemplate / 自研 DAO 字符串 SQL、Querydsl / EasyQuery / Xbatis / MDS，Java 与 Kotlin 通用；mapper XML、注解与 Wrapper 链内补全表名、列名与 <code>#{}</code> 参数</li>
+            <li><b>真实参数一键回填</b>：<code>?</code> 替换为实际值（LIKE 自动拼百分号、按字段类型加引号），命名参数 <code>:name</code> 按名回填；OGNL 条件勾选；逻辑删除 / 乐观锁 / 多租户 / 数据权限按 MyBatis-Plus 拦截器语义还原；11 种数据库方言自动格式化</li>
+            <li><b>运行期捕获 · 控制台 SQL 日志</b>：MyBatis / Hibernate / JdbcTemplate 三族日志还原为可执行 SQL，按线程分桶、去重过滤、着色标记、精确跳转源码；保活刷屏一键屏蔽，历史 SQL 自动落盘</li>
+            <li><b>增强捕获（默认开启，首次使用一次性确认）</b>：向运行中的应用挂载轻量 agent 采集真实执行，不依赖日志格式，附目标库、毫秒级耗时与影响行数</li>
+            <li><b>生成与转换 · SQL 反向转 Java</b>：一键生成可直接编译的 QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 代码（增删改查与多表 JOIN）</li>
             <li><b>CRUD SQL 一步直出</b>：实体类 / 数据库表右键生成 INSERT / UPDATE / SELECT / DELETE</li>
-            <li><b>一键回滚 SQL</b>：对预览的 INSERT 推导逆向 DELETE，SQL Server / 达梦自增列自动包装；UPDATE / DELETE 走快照回填恢复</li>
-            <li><b>MCP 工具面向 AI agent</b>：11 个确定性只读工具接入平台 MCP Server（渲染 / 核查 / 执行计划 / 回滚预案 / CRUD / 反向转换等），设置页逐项门控（IDEA 2025.2+）</li>
-            <li>触发零门槛：代码左侧 gutter 图标 / 右键菜单 / <code>Alt+Shift+Q</code></li>
+            <li><b>一键回滚 SQL</b>：对预览的 INSERT 推导逆向 DELETE（SQL Server / 达梦自增列自动包装）；UPDATE / DELETE 支持快照回填恢复</li>
+            <li><b>执行与分析 · 执行 SQL 与执行计划</b>：内嵌原生 Database 控制台执行，一键 EXPLAIN 按方言提交，JOIN 关系图支持 PNG / SVG 导出；执行前有 <code>${}</code> 注入确认、无界写清单与超时护栏（需 Ultimate，社区版自动降级）</li>
+            <li><b>调用栈悬停与最近执行记录</b>：调用栈悬停弹出调试器风格弹层（帧数可配置、跳转源码）；最近执行记录弹框浏览并跳转源码</li>
+            <li><b>面向 AI · MCP 工具</b>：接入平台 MCP Server（近版 IDE 内置），<code>sqlv_*</code> 11 个确定性只读工具覆盖渲染 / 日志还原 / 核查 / 执行计划 / 回滚预案 / CRUD / 反向转换等，设置页逐项门控</li>
         </ul>
-        <p>功能矩阵与文档：<a href="https://sql-visualizer.jvtools.cn">sql-visualizer.jvtools.cn</a> · 截图见 <a href="https://plugins.jetbrains.com/plugin/33633-sql-visualizer">Marketplace 页面</a></p>
-        <p>遇到问题？请到<a href="https://sql-visualizer.jvtools.cn/about/feedback">官网需求池</a>提交反馈。</p>
+        <p>触发方式：代码左侧 gutter 图标 / 右键菜单 / <code>Alt+Shift+Q</code>。</p>
+        <p>要求：IntelliJ IDEA 2024.3 及之后全部版本（基线 2026.x）；执行 SQL、EXPLAIN 与原生 JOIN 图需 Ultimate；MCP 工具需平台 MCP Server。</p>
+
+        <h3>English</h3>
+        <ul>
+            <li><b>Preview &middot; all SQL sources covered</b>: Wrapper chains (Lambda / Query / Update / Delete, service chains, MPJ joins), mapper XML dynamic tags (if / foreach / choose), <code>@Select</code> annotation SQL, Spring Data derived queries, Specification / CriteriaQuery, HQL / <code>@Query</code>, JdbcTemplate / custom-DAO string SQL, Querydsl / EasyQuery / Xbatis / MDS &mdash; Java and Kotlin; completion for table / column names and <code>#{}</code> parameters in mapper XML, annotations and Wrapper chains</li>
+            <li><b>Real parameters</b>: <code>?</code> replaced with actual values (LIKE auto-wildcard, type-aware quoting), named parameters <code>:name</code>; OGNL condition checkboxes; logic-delete / optimistic-lock / multi-tenant / data-permission replay as MyBatis-Plus interceptors would; formatting for 11 database dialects</li>
+            <li><b>Runtime capture &middot; live SQL log</b>: MyBatis / Hibernate / JdbcTemplate logs restored to executable SQL, bucketed by thread, de-dup / filtering, color marks per statement, jump-to-source; one-click suppression for keep-alive noise; history archiving</li>
+            <li><b>Enhanced capture (on by default, one-time confirmation)</b>: an agent attached to the running app reports every statement with target database, exact duration and affected rows, no log format required</li>
+            <li><b>Generate &middot; SQL to Java</b>: convert any SQL back into compilable QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper code (CRUD and joins)</li>
+            <li><b>CRUD SQL in one step</b>: right-click an entity class or database table to generate INSERT / UPDATE / SELECT / DELETE</li>
+            <li><b>Rollback SQL in one click</b>: derive the reverse DELETE for an INSERT preview (identity-column wrapping for SQL Server and DM); snapshot recovery for UPDATE / DELETE</li>
+            <li><b>Analyze &middot; execution and EXPLAIN</b>: run SQL in the embedded native Database console, one-click EXPLAIN, JOIN diagram with PNG / SVG export; <code>${}</code> injection confirmation, unbounded-write findings and a timeout guard (Ultimate; Community degrades gracefully)</li>
+            <li><b>Call stack hover and recent executions</b>: debugger-style stack popup (configurable frame count, jump-to-source) and a recent-executions dialog</li>
+            <li><b>AI agents &middot; MCP tools</b>: 11 deterministic read-only <code>sqlv_*</code> tools on the platform MCP Server (render, log restore, checks, EXPLAIN, rollback plan, CRUD, reverse SQL), per-tool gating in settings</li>
+        </ul>
+        <p>Trigger: gutter icon / context menu / <code>Alt+Shift+Q</code> (rebindable).</p>
+        <p>Requirements: IntelliJ IDEA 2024.3+ (baseline 2026.x); Execute SQL, EXPLAIN and the native JOIN diagram need Ultimate; MCP tools need the platform MCP Server.</p>
         ]]></description>
 
     <!-- 插件变更说明由 build.gradle.kts patchPluginXml.changeNotes 注入（M18.2）——

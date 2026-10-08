@@ -53,6 +53,15 @@ object JavaCodeGenerator {
          * 方法选择先查集合（真实存在的 API），缺失时沿 join 回退链（如 selectPage → selectJoinPage）；
          * 空集 = 特殊值 this/baseMapper 或类不可解析 → 保守用普通方法。 */
         val methods: Set<String> = emptySet(),
+        /** T-MapResultVo：Map 响应形态（`selectJoinMaps`/`selectMaps`/`listMaps` 族）——
+         * 返回 `List<Map<String, Object>>`（分页 `Page<Map<String, Object>>`）；Maps 族**不带 Class 参数**
+         * （1.5.8 javap 实证），VO 角色转为驱动 select 列别名（selectAs 第二参）。 */
+        val mapsResult: Boolean = false,
+        /** T-MapResultVo v2：返回类型声明原文（面板可编辑输入，如 `List<Map<String, Object>>` /
+         * `List<HashMap<String, Object>>` / `List<Object>` / 类名）——按声明形态派生调用族：
+         * 含 Map → [mapsResult] 等效；含 Object → selectObjs/listObjs 族（单表，MPJ 无 selectJoinObjs）；
+         * 其他 → 按类名走 voClass（TYPED 档）。与 voClass/mapsResult 并存时 resultTypeText 优先。 */
+        val resultTypeText: String? = null,
     )
 
     /** T-M44：按调用类真实方法集选择调用方法——优先链中第一个真实存在的方法；
@@ -100,14 +109,19 @@ object JavaCodeGenerator {
         val sb = StringBuilder()
         appendHeader(sb, result, entity, wrapperKind, invocation)
         val isJoin = result.joins.isNotEmpty()
+        // T-MapResultVo v2：返回类型声明原文的 TYPED 档（非 Map/Object 族 → 按类名走 VO 语义；
+        // voClass 优先保留既有 API 兼容）
+        val voTyped = invocation?.let { inv ->
+            inv.voClass ?: inv.resultTypeText?.trim()
+                ?.takeIf { it.isNotEmpty() && !it.contains("Map") && !it.contains("Object") }
+        }
         // VO 查询（selectJoinList 族）参数类型为 MPJBaseJoin——须调用类具备 MPJ 能力（继承链实证）
         // 且 wrapper 强制 MPJ 形态；调用类无 MPJ 时 VO 回落实体查询（selectInvocation 内注释提示）
-        val voQuery = invocation != null && invocation.mpj &&
-            invocation.voClass != null &&
-            invocation.voClass != (entity?.className ?: entityClassName(result.tableName))
+        val voQuery = invocation != null && invocation.mpj && voTyped != null &&
+            voTyped != (entity?.className ?: entityClassName(result.tableName))
         // T-M47：选中 VO 且为真实 VO 查询时，selectAs 第二参用 VO 属性方法引用（Vo::getXxx）——
         // 对齐正向 selectAs(列, Vo::getXxx)；否则字符串别名
-        val selectAsVoClass = if (voQuery) invocation?.voClass else null
+        val selectAsVoClass = if (voQuery) voTyped else null
         // 多表 JOIN 依赖 MPJ wrapper 库类——调用类已选定且无 MPJ 能力时无法生成可编译代码，明确报错
         if (isJoin && invocation != null && !invocation.mpj) {
             throw SqlReverseException(
@@ -148,14 +162,23 @@ object JavaCodeGenerator {
                 }
                 renderJoins(result, entity).forEach { append("\n    .").append(it) }
                 conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
+                renderGroupBy(result, entity).forEach { append("\n    .").append(it) }
+                result.having?.let { append("\n    .").append(renderHaving(it, entity)) }
                 renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
                 // 分页调用形态（invocation 存在）由 page 参数承载，不再生成 last("LIMIT...")
                 if (result.limit != null && invocation == null) {
-                    append("\n    .last(\"").append(javaEscape(renderLimit(result.limit))).append("\")")
+                    append("\n    .last(\"").append(javaEscape(renderLimitTail(result.limit, result.forUpdate))).append("\")")
+                } else if (result.forUpdate && result.limit == null) {
+                    append("\n    .last(\"FOR UPDATE\")")
                 }
             } else {
                 if (selectColumns != null && selectColumns.isNotEmpty()) {
-                    if (selectColumns.any { it.alias != null }) {
+                    if (result.distinct) {
+                        // T-SqlToJavaPromote G3：MP 无 selectDistinct——DISTINCT 用字符串单串 select("DISTINCT a, b")
+                        append("\n    .select(")
+                            .append(javaString("DISTINCT " + selectColumns.joinToString(", ") { renderSelectRaw(it) }))
+                            .append(")")
+                    } else if (selectColumns.any { it.alias != null }) {
                         // 含 AS 别名的列无法并入单个 .select(...)，逐列渲染 .select/.selectAs（T-M46）
                         selectColumns.forEach {
                             append("\n    .").append(renderSelectCall(it, entity, selectAsVoClass, rawMode))
@@ -167,10 +190,14 @@ object JavaCodeGenerator {
                     }
                 }
                 conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
+                renderGroupBy(result, entity).forEach { append("\n    .").append(it) }
+                result.having?.let { append("\n    .").append(renderHaving(it, entity)) }
                 renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
                 // 分页调用形态（invocation 存在）由 page 参数承载，不再生成 last("LIMIT...")
                 if (result.limit != null && invocation == null) {
-                    append("\n    .last(\"").append(javaEscape(renderLimit(result.limit))).append("\")")
+                    append("\n    .last(\"").append(javaEscape(renderLimitTail(result.limit, result.forUpdate))).append("\")")
+                } else if (result.forUpdate && result.limit == null) {
+                    append("\n    .last(\"FOR UPDATE\")")
                 }
             }
         }
@@ -526,7 +553,8 @@ object JavaCodeGenerator {
                     val value = row.getOrNull(colIndex)
                     append(if (i == 0) "new $entityName()" else "\n    ")
                     append(".set").append(field.replaceFirstChar { it.uppercase() }).append("(")
-                        .append(value?.let { javaValue(it) } ?: "null")
+                        // T-SqlToJavaPromote G6：INSERT NULL 建模为 Literal("NULL") → 生成 Java null
+                        .append(if (value is SqlValue.Literal && value.raw == "NULL") "null" else value?.let { javaValue(it) } ?: "null")
                         .append(")")
                 }
             }
@@ -591,24 +619,49 @@ object JavaCodeGenerator {
         invocation: InvocationTarget,
     ): String {
         val entityName = entity?.className ?: entityClassName(result.tableName)
-        val voRequested = invocation.voClass?.takeIf { it != entityName }
+        // T-MapResultVo v2：返回类型声明原文派生调用族（面板可编辑输入）——
+        //  含 Map → Maps 族（[mapsResult] 等效，声明 HashMap 等亦归此档，前缀按方法真实返回类型渲染）；
+        //  含 Object → Objs 族（单表 selectObjs/listObjs，MPJ 无 selectJoinObjs）；
+        //  其他文本 → 按类名走 voClass（TYPED 档，项目索引可解析 → lambda/别名驱动，不可解析按字面生成+注释）。
+        val rtText = invocation.resultTypeText?.trim()?.takeIf { it.isNotEmpty() }
+        val maps = invocation.mapsResult || rtText?.contains("Map") == true
+        val objs = !maps && rtText?.contains("Object") == true
+        val typedRequested = if (maps || objs) null else (invocation.voClass ?: rtText)
+        val voRequested = typedRequested?.takeIf { it != entityName }
         // VO 查询依赖 MPJ 能力（调用类继承链实证）；无 MPJ → 回落实体查询并注释提示
         val vo = voRequested?.takeIf { invocation.mpj }
         val voUnsupported = voRequested != null && vo == null
-        val generic = vo ?: entityName
         val paged = result.limit != null
+        val join = result.joins.isNotEmpty()
+        // Objs 族无分页重载（BaseMapper.selectObjs javap 实证）——分页需求转注释提示
+        if (objs && join) {
+            throw SqlReverseException(
+                0,
+                SqlReverseParser.KEY_UNSUPPORTED,
+                "JOIN 场景不支持 Object 单列响应（MPJ 无 selectJoinObjs）——可用 Map 列表（List<Map<String, Object>>）或实体列表替代",
+            )
+        }
+        // T-MapResultVo：Map 响应形态（签名 1.5.8 javap 实证）——
+        //  join → JoinMapper/JoinService `selectJoinMaps(wrapper)` / 分页 `selectJoinMapsPage(page, wrapper)`（不带 Class）；
+        //  单表 Mapper → `selectMaps(wrapper)` / 分页 `selectMaps(page, wrapper)`（MP 同名重载）；
+        //  单表 Service → `listMaps(wrapper)` / 分页 `listMaps(page, wrapper)`（IService）。
+        // VO 在 Maps 场景不进签名（转 select 列别名驱动）→ Class 参数恒不加。
         // T-M44：方法选择按调用类真实方法集（prefer 回退链）——部分 MPJ 依赖的 MPJBaseMapper
         // 无 BaseMapper 的 selectPage/selectList 等普通方法，缺失时回落 JoinMapper/JoinService 的
         // selectJoin 族（join 方法需 Class 参数，args 按方法形态构建）；特殊值/类不可解析 → 普通方法
-        val method = if (isMapper(invocation)) {
-            when {
+        val method = when {
+            maps && join -> if (paged) "selectJoinMapsPage" else "selectJoinMaps"
+            maps && isMapper(invocation) -> if (paged) "selectMaps" else invocation.prefer("selectMaps", "selectJoinMaps")
+            maps -> if (paged) "listMaps" else invocation.prefer("listMaps", "selectMaps")
+            objs && isMapper(invocation) -> "selectObjs"
+            objs -> invocation.prefer("listObjs", "selectObjs")
+            isMapper(invocation) -> when {
                 paged && vo != null -> "selectJoinPage"
                 paged -> invocation.prefer("selectPage", "selectJoinPage")
                 vo != null -> "selectJoinList"
                 else -> invocation.prefer("selectList", "selectJoinList")
             }
-        } else {
-            when {
+            else -> when {
                 paged && vo != null -> "selectJoinListPage"
                 paged -> invocation.prefer("page", "selectJoinListPage")
                 vo != null -> "selectJoinList"
@@ -616,20 +669,32 @@ object JavaCodeGenerator {
             }
         }
         // 参数顺序（1.5.6 实证）：普通 `(wrapper)`；分页 `(page, wrapper)`；
-        // VO/join 方法 `(page?, Class, wrapper)`——回退到 selectJoin 族时 Class 参数用 VO 或实体
-        val pageArg = if (paged) renderPageArg(result.limit!!) else ""
+        // VO/join 方法 `(page?, Class, wrapper)`——回退到 selectJoin 族时 Class 参数用 VO 或实体；
+        // Maps/Objs 族不带 Class（selectJoinMaps 同为 selectJoin 前缀但签名无 Class——1.5.8 javap 实证）
+        val usePageArg = paged && !objs
+        val pageArg = if (usePageArg) renderPageArg(result.limit!!) else ""
+        val classArg = !maps && !objs && (vo != null || (method.startsWith("selectJoin") && !method.contains("Maps")))
         val args = buildString {
-            if (paged) append(pageArg).append(", ")
-            if (vo != null || method.startsWith("selectJoin")) append("${vo ?: entityName}.class, ")
+            if (usePageArg) append(pageArg).append(", ")
+            if (classArg) append("${vo ?: entityName}.class, ")
             append("wrapper")
         }
-        val prefix = if (paged) "Page<$generic> page = " else "List<$generic> list = "
+        val generic = when {
+            maps -> "Map<String, Object>"
+            objs -> "Object"
+            else -> vo ?: entityName
+        }
+        val prefix = if (usePageArg) "Page<$generic> page = " else "List<$generic> list = "
         val call = "$prefix${callerVar(invocation)}.$method($args);"
         // 说明注释独立成行（T-M45：行尾注释 → 行注释——整行语义清晰，复制剥离注释时行结构稳定）
         val comments = buildString {
             if (voUnsupported) append("// 调用类无 MyBatis-Plus-Join（MPJ）能力，VO 查询不可用，已回落实体查询\n")
             if (vo != null) append("// VO 查询需 MyBatis-Plus-Join（MPJ）依赖\n")
-            if (paged) append("// 分页 current/size 已占位，请替换为实际参数\n")
+            if (paged && !usePageArg) append("// selectObjs 无分页重载——请在 wrapper 内分页（last(\"LIMIT ...\")）或改用实体/Map 列表\n")
+            if (paged && usePageArg) append("// 分页 current/size 已占位，请替换为实际参数\n")
+            if (voRequested != null && vo != null && rtText != null) {
+                append("// 返回类型按声明 $rtText 生成（调用类无该类时请核对类名）\n")
+            }
         }
         return comments + call
     }
@@ -756,6 +821,11 @@ object JavaCodeGenerator {
             sb.append("// 注意：SQL 含参数占位符 ?，无法恢复实际参数，已生成 \"?\" 占位，请替换为实际参数\n")
         }
         result.warnings.forEach { sb.append("// 注意：$it\n") }
+        if (result.unions.isNotEmpty()) {
+            // T-SqlToJavaPromote G8：MP core 无 union() 方法、MPJ 签名本地不可得——降级为原文注释提示
+            sb.append("// 注意：UNION 子句需 MyBatis-Plus-Join 的 union() API 或原生 SQL，请手动处理：\n")
+            result.unions.forEach { sb.append("//   ").append(it.keyword).append(" ").append(it.sql).append("\n") }
+        }
     }
 
     /** 结果中是否存在 `?` 占位符（WHERE/SET/INSERT/LIMIT 任一位置）。 */
@@ -828,15 +898,37 @@ object JavaCodeGenerator {
      */
     private fun resolveColumn(columnName: String, entity: EntityTarget?, alias: String?): Pair<String, String>? {
         val target = if (alias != null) entity?.subEntities?.get(alias) ?: entity else entity
-        val field = target?.columnToField?.get(columnName)
-        if (field != null && target != null) return target.className to field
+        // T-FixCamelMap：列名查询双向归一（原样 / snake_case / camelCase）——SQL 列与实体列名
+        // 形态差异（`role_id` ↔ `roleId`，含 @TableField 显式驼峰列）不再回落字符串
+        if (target != null) {
+            for (key in columnKeyVariants(columnName)) {
+                val field = target.columnToField[key]
+                if (field != null) return target.className to field
+            }
+        }
         if (alias == null || entity?.subEntities?.containsKey(alias) == false) {
-            entity?.subEntities?.values?.filter { it.columnToField.containsKey(columnName) }?.singleOrNull()?.let {
-                return it.className to it.columnToField[columnName]!!
+            entity?.subEntities?.values?.filter { sub ->
+                columnKeyVariants(columnName).any { sub.columnToField.containsKey(it) }
+            }?.singleOrNull()?.let { sub ->
+                val key = columnKeyVariants(columnName).first { sub.columnToField.containsKey(it) }
+                return sub.className to sub.columnToField[key]!!
             }
         }
         return null
     }
+
+    /** 列名查询变体（T-FixCamelMap）：原样 / snake_case / camelCase 去重。 */
+    private fun columnKeyVariants(name: String): List<String> {
+        val snake = cn.song.mybatisplus.visualizer.util.NamingStrategy.toSnakeCase(name)
+        return listOf(name, snake, snakeToCamel(name)).distinct()
+    }
+
+    /** snake_case → camelCase（`role_id` → `roleId`）；无下划线原样返回。 */
+    private fun snakeToCamel(name: String): String =
+        if ('_' !in name) name
+        else name.split('_').filter { it.isNotEmpty() }
+            .mapIndexed { i, seg -> if (i == 0) seg else seg.replaceFirstChar { it.uppercaseChar() } }
+            .joinToString("")
 
     /** 列引用渲染（T-M37 列归属）：lambda 模式且列有字段映射 → `Entity::getField`；
      * 未映射 → 字符串列名（多表带别名前缀 `"t1.city"`）。 */
@@ -869,8 +961,10 @@ object JavaCodeGenerator {
      *   非别名 `.select(Entity::getId)`，带 AS 别名且选中 VO → `.selectAs(Sub::getX, VO::getY)`
      *   对齐正向 selectAs 的 VO 字段；未选 VO → `.selectAs(Sub::getX, "alias")`。 */
     private fun renderSelectCall(sel: SelectColumn, entity: EntityTarget?, voClass: String?, rawMode: Boolean): String {
-        if (rawMode) {
-            // MPJQueryWrapper 原生形态：列取原始表达式字符串（保留反引号等 SQL 形态）
+        // 聚合/函数列（COUNT(*) 等含 `(`，T-SqlToJavaPromote G5）与 MPJQueryWrapper 字符串联接：
+        // 不可 lambda 引用——统一回落 select("expr [AS alias]") 字符串（QueryWrapper.select(String...) 合法）
+        val isAggregate = sel.expr.contains('(')
+        if (rawMode || isAggregate) {
             val col = sel.expr
             return if (sel.alias != null) "select(${javaString("$col AS ${sel.alias}")})" else "select(${javaString(col)})"
         }
@@ -955,7 +1049,16 @@ object JavaCodeGenerator {
             "$method(${renderColumnRef(condition.column.columnName, entity, condition.column.tableAlias)}, ${javaValue(condition.pattern)})"
         }
 
-        is Condition.Raw -> "apply(\"${javaEscape(condition.sqlText)}\")"
+        is Condition.Raw -> {
+            // T-SqlToJavaPromote G7：可识别「表达式 比较符 字面量」形态 → 参数化 apply("... = {0}", 值)；
+            // 无法识别 → 整段字符串 apply("...") 透传
+            val (template, values) = parameterizeRaw(condition.sqlText)
+            if (values.isEmpty()) {
+                "apply(${javaString(condition.sqlText)})"
+            } else {
+                "apply(${javaString(template)}, ${values.joinToString(", ") { javaValue(it) }})"
+            }
+        }
 
         is Condition.Group -> renderGroup(condition, entity)
 
@@ -1020,6 +1123,30 @@ object JavaCodeGenerator {
     }
 
     // ------------------------------------------------------------------
+    // 参数化 apply（T-SqlToJavaPromote G7）
+    // ------------------------------------------------------------------
+
+    /** `表达式 比较符 字面量` 形态识别正则（右值：SQL 字符串或数字）。 */
+    private val RAW_PARAM_REGEX = Regex("^(.*?)\\s*(=|!=|<>|>=|<=|>|<)\\s*('(?:[^']|'')*'|-?\\d+(?:\\.\\d+)?)$")
+
+    /**
+     * Raw 条件参数化：`DATE_FORMAT(create_time, '%Y') = '2024'` → ("DATE_FORMAT(create_time, '%Y') = {0}", ['2024'])。
+     * 不可识别形态返回 (原文, 空)——调用方回落整段字符串 apply。
+     */
+    private fun parameterizeRaw(sql: String): Pair<String, List<SqlValue>> {
+        val m = RAW_PARAM_REGEX.matchEntire(sql) ?: return sql to emptyList()
+        val expr = m.groupValues[1].trim()
+        val op = m.groupValues[2]
+        val literal = m.groupValues[3]
+        val value = if (literal.startsWith("'")) {
+            SqlValue.Literal(literal, literal.substring(1, literal.length - 1).replace("''", "'"))
+        } else {
+            SqlValue.Literal(literal)
+        }
+        return "$expr $op {0}" to listOf(value)
+    }
+
+    // ------------------------------------------------------------------
     // ORDER BY / LIMIT
     // ------------------------------------------------------------------
 
@@ -1054,6 +1181,42 @@ object JavaCodeGenerator {
         val count = (limit.count as? SqlValue.Literal)?.raw ?: "?"
         return if (offset != null) "LIMIT $offset, $count" else "LIMIT $count"
     }
+
+    /** LIMIT 尾段（T-SqlToJavaPromote G4：FOR UPDATE 与 LIMIT 并存时合并单 last——MP last 只保留末位）。 */
+    private fun renderLimitTail(limit: cn.song.mybatisplus.visualizer.model.LimitClause, forUpdate: Boolean): String =
+        renderLimit(limit) + if (forUpdate) " FOR UPDATE" else ""
+
+    /** SELECT 列原文（含 AS 别名）——DISTINCT 单串 select 用。 */
+    private fun renderSelectRaw(sel: SelectColumn): String =
+        if (sel.alias != null) "${sel.expr} AS ${sel.alias}" else sel.expr
+
+    /** GROUP BY 渲染（T-SqlToJavaPromote G1）：列引用走 renderColumnRef（lambda 映射/字符串回落）。 */
+    private fun renderGroupBy(result: SqlReverseResult, entity: EntityTarget?): List<String> {
+        if (result.groupBy.isEmpty()) return emptyList()
+        val cols = result.groupBy.map { renderColumnRef(it.columnName, entity, it.tableAlias) }
+        return listOf("groupBy(${cols.joinToString(", ")})")
+    }
+
+    /** HAVING 渲染（T-SqlToJavaPromote G2）：聚合表达式经 Raw 降级后原样进 having(String, Object...) 首参。 */
+    private fun renderHaving(h: Condition, entity: EntityTarget?): String =
+        "having(${javaString(renderHavingText(h))})"
+
+    /** HAVING 条件 → SQL 片段文本（值内嵌；参数化升级在 G7）。 */
+    private fun renderHavingText(h: Condition): String = when (h) {
+        is Condition.Raw -> h.sqlText
+        is Condition.Simple -> "${h.column.columnName} ${h.op} ${havingValue(h.value)}"
+        is Condition.Unary -> "${h.column.columnName} ${h.op}"
+        is Condition.In ->
+            "${h.column.columnName} ${if (h.negated) "NOT IN" else "IN"} (${h.values.joinToString(", ") { havingValue(it) }})"
+        is Condition.Between ->
+            "${h.column.columnName} ${if (h.negated) "NOT BETWEEN" else "BETWEEN"} ${havingValue(h.lo)} AND ${havingValue(h.hi)}"
+        is Condition.Like -> "${h.column.columnName} ${if (h.negated) "NOT LIKE" else "LIKE"} ${havingValue(h.pattern)}"
+        is Condition.ColumnComparison -> "${h.left.columnName} = ${h.right.columnName}"
+        is Condition.Group -> h.children.joinToString(" AND ") { renderHavingText(it) }
+    }
+
+    /** HAVING 值：字面量原样；占位符 `?`。 */
+    private fun havingValue(v: SqlValue): String = (v as? SqlValue.Literal)?.raw ?: "?"
 
     // ------------------------------------------------------------------
     // 文本工具

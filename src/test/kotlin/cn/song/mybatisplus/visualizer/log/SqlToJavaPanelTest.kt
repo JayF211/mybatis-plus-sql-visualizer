@@ -27,10 +27,14 @@ import javax.swing.ListCellRenderer
  * 异步路径（AUTO 形态后台查找实体）用轮询等待（UIUtil.dispatchAllInvocationEvents +
  * 超时兜底）；QUERY 形态为同步路径（直测）。
  *
- * 覆盖边界说明（T-M37 P1）：
+ * 覆盖边界说明（T-M37 P1；T-FixEntityAmbiguity 收窄）：
  *  - 副表多候选弹 [SqlSelectionDialog] 的 UI 交互在 Light 下无法真实弹出（无实体 → 候选恒空），
  *    面板级仅覆盖候选为空 → 回落路径；多候选逻辑（findSubEntityCandidates 候选列表/别名键）在
- *    converter 层直测（本项目测试工程无实体类，候选列表恒为空——弹窗分支属纯 UI 分发，靠代码走查）。
+ *    converter 层直测（本项目测试工程无实体类，候选列表恒为空）。
+ *  - 主表多候选「开关关闭静默取首 + 状态栏明示候选」（T-FixEntityAmbiguity）已补面板级测试
+ *    （testMultipleCandidatesManualOffShowsAmbiguousStatus）——Light 索引不可用无法真实实体夹具
+ *    （M27 实证，见 EntityClassFinderHeavyTest 头注），经 [SqlToJavaPanel.renderForTest] 缝注入
+ *    双 mock 候选直调 render；开关开启的弹窗分支仍属纯 UI 分发，靠代码走查 + 真机走查兜底。
  */
 class SqlToJavaPanelTest : BasePlatformTestCase() {
 
@@ -209,7 +213,9 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
             val fallback = awaitResult()
             assertTrue(fallback, fallback.contains("new MPJQueryWrapper<>"))
             // 选中无 MPJ 能力的调用类（Light 环境无 MPJ 索引，callerMpj=false）→ 重渲染触发业务拒绝
+            // ——T-FixMpjStale 起重生成异步化，轮询等状态行错误提示
             panel.callerFieldForTest().pickForTest("UserService", "com.demo.UserService")
+            awaitStatusContains("无 MPJ 能力")
             assertTrue(panel.statusForTest(), panel.statusForTest().contains("暂不支持的 SQL 结构"))
             assertTrue(panel.statusForTest(), panel.statusForTest().contains("无 MPJ 能力"))
             // 结果区保留上次成功内容，未被错误分支改写
@@ -308,14 +314,14 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
         )
     }
 
-    /** 构造轻量 EntityCandidate（Proxy PsiClass 仅 name 有值；判定逻辑不触 PSI）。 */
+    /** 构造轻量 EntityCandidate（Proxy PsiClass 仅 getName 有值；Kotlin `.name` 编译为 getName()）。 */
     private fun mockCandidate(className: String): SqlToJavaConverter.EntityCandidate =
         SqlToJavaConverter.EntityCandidate(
             psiClass = java.lang.reflect.Proxy.newProxyInstance(
                 com.intellij.psi.PsiClass::class.java.classLoader,
                 arrayOf(com.intellij.psi.PsiClass::class.java),
             ) { _, method, _ ->
-                if (method.name == "name") className else null
+                if (method.name == "getName" || method.name == "name") className else null
             } as com.intellij.psi.PsiClass,
             tableInfo = cn.song.mybatisplus.visualizer.model.TableInfo(
                 entityClassName = className,
@@ -323,6 +329,34 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
                 columns = emptyList(),
             ),
         )
+
+    // ------------------------------------------------------------------
+    // T-FixEntityAmbiguity：多候选静默取首的状态栏明示（面板级补测——销掉「靠代码走查」缺口）
+    // ------------------------------------------------------------------
+
+    fun testMultipleCandidatesManualOffShowsAmbiguousStatus() {
+        // 真实实体夹具在 Light 索引不可用（M27 实证，见 EntityClassFinderHeavyTest 头注）——
+        // 经 renderForTest 缝直调注入同表双候选。开关关闭 → 不弹窗静默取首生成，但状态栏须
+        // 明示全部候选与已选项（ab0d8fb 修复：此前静默取首被真机误判为「映射缺陷」）
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseManualEntitySelection
+        state.reverseManualEntitySelection = false
+        try {
+            val result = SqlToJavaConverter.parse("SELECT id, name FROM user WHERE name = '张三'")
+            val candidates = listOf(mockCandidate("User"), mockCandidate("UserEntity"))
+            panel.renderForTest(result, candidates, cn.song.mybatisplus.visualizer.reverse.ReverseWrapperFormat.QUERY)
+            val status = panel.statusForTest()
+            assertTrue(status, status.contains("匹配到多个实体"))
+            assertTrue(status, status.contains("User、UserEntity"))
+            assertTrue(status, status.contains("已选 User"))
+            // 取首生成 = 字段子集实体的字符串列名回落形态（真机误判「映射缺陷」的来源样貌）
+            val code = panel.resultTextForTest()
+            assertTrue(code, code.contains("new QueryWrapper<User>()"))
+            assertTrue(code, code.contains(".eq(\"name\", \"张三\")"))
+        } finally {
+            state.reverseManualEntitySelection = original
+        }
+    }
 
     // ------------------------------------------------------------------
     // 形态下拉（T-M36.6）
@@ -478,10 +512,10 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
             panel.inputEditorForTest().setSql("SELECT id, name FROM user WHERE name = '张三'")
             panel.convertForTest()
             assertTrue(panel.resultTextForTest().contains("new QueryWrapper"))
-            // 选中调用类 → 自动重新生成（已有转换结果时；含调用语句）
+            // 选中调用类 → 自动重新生成（已有转换结果时；含调用语句）——T-FixMpjStale 起为
+            // 后台反查 MPJ 能力后异步重生成，轮询等目标片段
             panel.callerFieldForTest().pickForTest("UserService", "com.demo.UserService")
-            val result = panel.resultTextForTest()
-            assertTrue(result, result.contains("userService.list"))
+            val result = awaitContains("userService.list")
             // 清除 → 回到纯表达式
             panel.callerFieldForTest().clearForTest()
             val plain = panel.resultTextForTest()
@@ -957,5 +991,152 @@ class SqlToJavaPanelTest : BasePlatformTestCase() {
             "package demo; public class $simpleName extends $superDecl {}",
         )
         return PsiTreeUtil.findChildOfType(myFixture.file, PsiClass::class.java)!!
+    }
+
+    // ------------------------------------------------------------------
+    // T-MapResultVo：返回形态下拉联动（Map 列表 → Maps 族调用行）
+    // ------------------------------------------------------------------
+
+    fun testResultTypeMapsDeclarationGeneratesSelectJoinMapsCall() {
+        val state = PluginSettings.getInstance().state
+        val original = state.reverseWrapperFormat
+        try {
+            state.reverseWrapperFormat = PluginSettings.REVERSE_QUERY
+            panel.refreshFormatFromSettings()
+            panel.inputEditorForTest().setSql(
+                "SELECT t.id, t1.city FROM user t LEFT JOIN address t1 ON t1.user_id = t.id WHERE t.status = 1",
+            )
+            panel.convertForTest()
+            awaitResult()
+            // 选调用类（QUERY 形态有调用行 Maps 才有载体）——T-FixMpjStale 起选类异步反查，等回填完成
+            panel.callerFieldForTest().pickForTest("DeviceInfoMapper", "demo.DeviceInfoMapper")
+            awaitContains("DeviceInfoMapper")
+            // Light 反查恒 false（无 MPJ 索引）——注入 MPJ 能力后 join 场景才放行 MPJ 形态
+            panel.setCallerMpjForTest(true)
+            // T-MapResultVo v2：返回类型字段自由输入 Map 声明 → 重转换走 Maps 族
+            panel.voFieldForTest().text = "List<Map<String, Object>>"
+            panel.convertForTest()
+            val result = awaitContains("selectJoinMaps")
+            assertTrue(result, result.contains("selectJoinMaps(wrapper)"))
+            assertTrue(result, result.contains("List<Map<String, Object>>"))
+            // 键入 HashMap 形态（动态泛型）→ 仍归 Maps 族且前缀按方法真实返回类型渲染
+            panel.voFieldForTest().text = "List<HashMap<String, Object>>"
+            panel.convertForTest()
+            val hashMapResult = awaitContains("selectJoinMaps")
+            assertTrue(hashMapResult, hashMapResult.contains("List<Map<String, Object>>"))
+            assertTrue(hashMapResult, !hashMapResult.contains("HashMap"))
+            // 清空返回类型 → 回到实体形态（零回归）
+            panel.voFieldForTest().text = ""
+            panel.convertForTest()
+            val restored = awaitContains("new MPJQueryWrapper")
+            assertTrue(restored, !restored.contains("selectJoinMaps"))
+            assertTrue(restored, restored.contains("DeviceInfoMapper"))
+        } finally {
+            state.reverseWrapperFormat = original
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // T-MapResultVo v2 修复：返回类型字段占位文案与选类按钮可见性（用户真机反馈回归钉）
+    // ------------------------------------------------------------------
+
+    fun testResultTypeFieldPlaceholderAndPickButtonVisible() {
+        val field = panel.voFieldForTest()
+        // 空值占位灰字（JTextField.placeholderText）——真机曾被报「文案不见了」
+        val placeholder = field.placeholderTextForTest()
+        assertNotNull("返回类型字段应有空值占位文案", placeholder)
+        assertTrue(
+            "占位文案应含返回类型说明",
+            placeholder.toString().contains("返回类型") || placeholder.toString().contains("Result type"),
+        )        // 选类按钮在场且可点（真机曾被报「类搜索弹框没了」）
+        val button = field.pickButtonForTest()
+        assertTrue("选类按钮应可见", button.isVisible || button.parent != null)
+        assertEquals("选类按钮应可点（有 ActionListener）", 1, button.actionListeners.size)
+        assertNotNull("选类按钮应有图标", button.icon)
+        // 文本框可直接键入返回声明
+        field.text = "List<Map<String, Object>>"
+        assertEquals("List<Map<String, Object>>", field.text)
+    }
+
+    /**
+     * T-MapResultVo v4 修复（用户真机四轮反馈「应默认显示灰色字体在里面，和调用类一样」）：
+     * 返回类型字段与「调用类」**同款形态**——灰字占位由 [JBLabel] 承担（空值态显示 voHint 全文、
+     * 前景为 inactive 灰）；不再是组合框（v2）也不依赖 `JTextField.placeholderText`
+     * 客户属性（v3 该做法在本仓不渲染，真机实测空框无灰字）。
+     */
+    fun testResultTypeFieldSameAsCallerFieldPlaceholderStyle() {
+        val field = panel.voFieldForTest()
+        val display = field.editorComponentForTest()
+        assertTrue("显示层应为标签（JBLabel，与调用类同款）: ${display.javaClass.name}", display is javax.swing.JLabel)
+        assertFalse("不得为组合框（无下拉）", display is javax.swing.JComboBox<*>)
+        // 空值态：显示层文案 = 占位全文，且为灰字（inactive 前景）
+        field.text = ""
+        val shown = field.placeholderTextForTest()?.toString() ?: ""
+        assertTrue("空值态应显示返回类型占位全文: $shown", shown.contains("返回类型"))
+        assertEquals(
+            "空值态应为灰字（与调用类占位同色）",
+            com.intellij.util.ui.UIUtil.getInactiveTextColor(),
+            (display as javax.swing.JLabel).foreground,
+        )
+        // 有值态：显示层切到声明文本
+        field.text = "List<Map<String, Object>>"
+        assertEquals("List<Map<String, Object>>", field.placeholderTextForTest()?.toString())
+    }
+
+    /**
+     * T-MapResultVo v5 修复（用户真机五轮反馈「为什么 List<Map<String, Object>> / List<Object>
+     * 不能出现在选择类的这个弹框里，类似当时的 this」）：返回类型弹框直接复用「选择类」弹框，
+     * 三个固定候选（自动（留空）/两条 Map 声明）**前插在候选列表最前**——与调用类
+     * [CallerClassByNameModel] 的 this/baseMapper 同款机制，不再有中间那层四项小列表。
+     */
+    fun testReturnTypeModelSpecialItemsPrepended() {
+        val model = panel.returnTypeModelForTest()
+        val auto = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+            .message("reverse.panel.resultType.auto")
+        // 前插顺序：自动 → List<Map<String, Object>> → Page<Map<String, Object>> → List<Object> → 项目类候选
+        val names = model.getNames(false).toList()
+        assertEquals(
+            "四个固定候选应前插在类候选之前（Map 列表/分页并列，Objs 无分页重载不提供 Page<Object>）",
+            listOf(auto, "List<Map<String, Object>>", "Page<Map<String, Object>>", "List<Object>"),
+            names.take(4),
+        )
+        assertTrue("固定候选之后应接项目类候选: ${names.size}", names.size >= 4)
+        // 固定项直出（元素名/全限定名 = 字符串本身，不触 PSI）；按名取元素返回自身
+        assertEquals(auto, model.getFullName(auto))
+        assertEquals("List<Object>", model.getElementName("List<Object>"))
+        val elements = model.getElementsByName("List<Map<String, Object>>", false, "")
+        assertEquals(1, elements.size)
+        assertEquals("List<Map<String, Object>>", elements[0])
+        val pageElements = model.getElementsByName("Page<Map<String, Object>>", false, "")
+        assertEquals(1, pageElements.size)
+        assertEquals("Page<Map<String, Object>>", pageElements[0])
+    }
+
+    /** T-MapResultVo v5：弹框选中映射——固定项（自动=清空 / Map 声明=直写）＋类元素（简单名）。 */
+    fun testReturnTypeChosenMapping() {
+        val field = panel.voFieldForTest()
+        val auto = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+            .message("reverse.panel.resultType.auto")
+
+        panel.applyReturnTypeChosenForTest("List<Map<String, Object>>")
+        assertEquals("List<Map<String, Object>>", field.text)
+        assertNotNull("声明形态选中后应带类图标（用户反馈缺失点）", field.valueIconForTest())
+        // T-MapResultVo v6：Maps 分页声明（生成器按含 Map 归 Maps 族，SQL 含 LIMIT 时前缀=Page<Map>）
+        panel.applyReturnTypeChosenForTest("Page<Map<String, Object>>")
+        assertEquals("Page<Map<String, Object>>", field.text)
+        assertNotNull("Page<Map<String, Object>> 选中后应有类图标", field.valueIconForTest())
+        panel.applyReturnTypeChosenForTest("List<Object>")
+        assertEquals("List<Object>", field.text)
+        assertNotNull("List<Object> 选中后同样应有图标", field.valueIconForTest())
+        panel.applyReturnTypeChosenForTest(auto)
+        assertEquals("自动项应清空为留空（实体/VO 推断）", "", field.text)
+        assertNull("自动（空值）态不应有图标", field.valueIconForTest())
+        // 类元素：取简单类名写回（图标来自 PsiClass.getIcon）
+        panel.applyReturnTypeChosenForTest(psiClassFixture())
+        assertEquals("UserService", field.text)
+        assertNotNull("类元素选中后应有类图标", field.valueIconForTest())
+        // null 元素（未选中）不动字段
+        panel.applyReturnTypeChosenForTest(null)
+        assertEquals("UserService", field.text)
     }
 }

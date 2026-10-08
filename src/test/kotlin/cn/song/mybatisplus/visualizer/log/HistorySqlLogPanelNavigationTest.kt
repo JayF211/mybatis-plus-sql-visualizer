@@ -530,4 +530,59 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             panel.dispose()
         }
     }
+
+    /**
+     * T-HistoryTabAlways：设置页「保存目录」为自定义路径时，历史页读的就是该目录。
+     * 修复前读端只认默认 `.idea/sql-visualizer/sql-history`——自动保存写进自定义目录的文件
+     * 在历史页里根本看不到（写端认自定义目录、读端不认）。
+     */
+    fun test自定义保存目录_历史页读取该目录() {
+        val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
+        val savedPath = settings.state.logAutoSavePath
+        val customDir = File(project.basePath!!, "custom-history-dir").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        try {
+            settings.state.logAutoSavePath = customDir.absolutePath
+            File(customDir, "sql-history-2026-09-20.sql").writeText(
+                f44FileContent(listOf(Triple("SELECT custom_dir", "A.java:1", 1L))),
+            )
+            val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+            try {
+                assertEquals(
+                    "自定义保存目录下的历史文件应在历史页可见",
+                    listOf("sql-history-2026-09-20.sql"),
+                    panel.fileListEntries.map { it.displayName },
+                )
+            } finally {
+                panel.dispose()
+            }
+        } finally {
+            settings.state.logAutoSavePath = savedPath
+            customDir.deleteRecursively()
+        }
+    }
+
+    /** T-HistoryTabAlways：保存目录被改过 → 设置广播需触发重扫；未变 → 只重绘不重扫。 */
+    fun test保存目录变更判据_改过才重扫() {
+        val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
+        val savedPath = settings.state.logAutoSavePath
+        val customDir = File(project.basePath!!, "custom-history-dir-2").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+        try {
+            assertFalse("目录未变时不应重扫", panel.historyDirChangedSinceLastScan())
+            settings.state.logAutoSavePath = customDir.absolutePath
+            assertTrue("保存目录改过后应判定需重扫", panel.historyDirChangedSinceLastScan())
+            panel.refreshForTest()
+            assertFalse("重扫后判据复位", panel.historyDirChangedSinceLastScan())
+        } finally {
+            settings.state.logAutoSavePath = savedPath
+            panel.dispose()
+            customDir.deleteRecursively()
+        }
+    }
 }

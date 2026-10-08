@@ -4,7 +4,7 @@
 > **分支**：master（当前 HEAD `4340ade`）
 > **优先级**：P1（性能是红线——日志捕捉链路是插件唯一常驻开销来源，用户在日志洪峰下会直接感受到）
 > **预估工时**：4~6h（含全量回归；runIde 真机洪峰压测人工跟进）
-> **来源**：用户明确指示「吸收他的批量异步写 UI 精华，和其他性能相关优势」「性能问题是红线」。反编译产物基于 IDEA 2026.2 主安装 MyBatisCodeHelper-Pro 3.5.9+2321（`%TEMP%\mbchp\src2`，135 类，fernflower/JBR25 反编译），性能相关类集中在 `com.ccnode.codegenerator.P.b`（Filter+batch processor）与 `cn.com.pism.batslog.e/f/g`（UI/格式化）。
+> **来源**：用户明确指示「吸收他的批量异步写 UI 精华，和其他性能相关优势」「性能问题是红线」。对照对象为 IDEA 2026.2 在售的 MyBatisCodeHelper-Pro 3.5.9+2321，其性能相关实现集中在批量过滤器（Filter + batch processor）与日志 UI/格式化两条链。
 
 ---
 
@@ -20,7 +20,7 @@
 
 ---
 
-## 二、MyBatisCodeHelper-Pro 性能实现反编译精读
+## 二、MyBatisCodeHelper-Pro 性能实现对照精读
 
 ### 2.1 批量异步写 UI（核心精华，`P.b`）
 

@@ -370,6 +370,52 @@ class ErrorReportDialogLayoutTest {
         assertEquals(0, selected.size)
     }
 
+    // ---------- T-ErrReportSubmitNoOp：单条上报的容器越界回归 ----------
+
+    /**
+     * 真机 P0 钉：单条事件不出分节 ⇒ `batchList` 是 0 组件的空容器，而收集仍会执行——
+     * 裸索引 `getComponent(0)` 抛 `ArrayIndexOutOfBoundsException: No such child: 0`，
+     * 从 doOKAction 外溢到 EDT，用户看到的就是「点提交没反应」。
+     * 语义期望：收集为空集（走 BatchSubmitter 的「1 条 = 原样单帖」路径），头部堆栈开关仍回写。
+     */
+    @Test
+    fun `单条条目_空批次容器收集不抛异常且返回空集`() {
+        val items = listOf(item(0))
+        val selected = ErrorReportDialog.selectedBatchItemsFor(
+            items,
+            headAttachStack = true,
+            batchList = javax.swing.JPanel(), // 单条不出分节 ⇒ 生产里就是 0 组件容器
+        )
+        assertEquals("单条（无分节）收集为空集 → 原样单帖", 0, selected.size)
+        assertTrue("头部堆栈开关仍按主表单回写", items[0].attachStack)
+    }
+
+    /**
+     * 堵「分支未交叉」的假绿形态：旧用例里「单条」只测渲染、「收集」只用 3 条（容器非空）、
+     * 「空」那条传的是空条目（被 firstOrNull 提前挡掉，根本没碰容器）。这里把
+     * 条目数 × 容器组件数全交叉，任一组越界即红。
+     */
+    @Test
+    fun `批次容器与条目数任意组合收集均不抛异常`() {
+        for (itemCount in 0..3) {
+            for (boxCount in 0..3) {
+                val items = List(itemCount) { item(it) }
+                val container = javax.swing.JPanel().apply {
+                    repeat(boxCount) {
+                        add(javax.swing.JCheckBox().apply { isSelected = true })
+                    }
+                }
+                val selected = ErrorReportDialog.selectedBatchItemsFor(items, true, container)
+                // 全勾容器下：选中集 = 「下标落在组件范围内」的条目
+                assertEquals(
+                    "items=$itemCount boxes=$boxCount 应恰好选中 min(条目, 组件) 条",
+                    minOf(itemCount, boxCount),
+                    selected.size,
+                )
+            }
+        }
+    }
+
     // ---------- T-ErrorReportRedact：预填分级（默认脱敏 + 勾选回填旧形态） ----------
 
     private val prefillStack = """

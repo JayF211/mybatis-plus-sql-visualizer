@@ -2,7 +2,9 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.ui.EditorWhitespaceSettings
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
+import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
@@ -286,6 +288,9 @@ class SqlSuppressManagerDialog(
         // setViewer 在 EditorEx（243 javap 实证：Editor 只有 isViewer() 读、EditorEx 才有 setViewer(boolean) 写——
         // Kotlin `created.isViewer = true` 对 Editor 静态类型报 val 不可赋值）；非 EditorEx 实现则只读不可切（防御）
         (created as? EditorEx)?.setViewer(true)
+        // T-SqlCopyShortcuts O-122：无选中 Ctrl+C 复制全文、有选中只复制片段
+        //（层位与理由见 EditorCopyShortcuts 的 KDoc；本处此前无任何键盘复制绑定）
+        EditorCopyShortcuts.install(created, UiTextClipboard::copy)
         editor = created
         return created.component
     }

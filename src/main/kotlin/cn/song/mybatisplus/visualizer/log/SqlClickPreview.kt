@@ -3,10 +3,17 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlHighlightColors
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
+import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.actionSystem.DataContext
+import com.intellij.openapi.actionSystem.IdeActions
+import com.intellij.openapi.editor.Caret
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.editor.actionSystem.EditorActionHandler
+import com.intellij.openapi.editor.actionSystem.EditorActionManager
+import com.intellij.openapi.util.Key
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.ex.EditorEx
@@ -40,7 +47,16 @@ internal fun clickPreviewSql(sql: String, formatSql: Boolean): String =
     if (formatSql) SqlFormatter.format(withTerminator(sql)) else withTerminator(sql)
 
 /**
- * 单击 SQL 预览（T-ClickPreview）：主日志列表 / 历史 tab 二级列表 / F-7 历史窗列表共用。
+ * 修饰键是否表达列表多选意图（T-ClickPreviewCopyRestore）：Ctrl/Shift 单击是选择的开始或扩展，
+ * 修饰键在**第一击**就可判定——不必等 `selectedIndices.size > 1`（那要等第二击才满足），
+ * 第一击就弹预览抢焦点正是批量复制被打断的根因。纯函数，onClick 守卫与测试共用。
+ */
+internal fun isMultiSelectIntent(modifiersEx: Int): Boolean =
+    modifiersEx and (java.awt.event.MouseEvent.CTRL_DOWN_MASK or java.awt.event.MouseEvent.SHIFT_DOWN_MASK) != 0
+
+/**
+ * 单击 SQL 预览（T-ClickPreview）：主日志列表 / 历史 tab 二级列表共用（两列表均为 SqlEntryList，
+ * Ctrl+C 纯 SQL 链路同源；初版接线的 F-7 历史窗列表已不存在——20261008 grep 实测仅两处实例化）。
  *
  * 背景：列表条目多时悬停 tooltip（renderer toolTipText = 完整 SQL）逐行弹出/销毁、
  * 连动可变行高重排，滑过 N 行成本 × N 叠加成冻结。改为「单击出预览、双击开完整弹窗」，
@@ -54,9 +70,14 @@ internal fun clickPreviewSql(sql: String, formatSql: Boolean): String =
  * - 双击：停定时器 + 关旧预览（随后面板自行 openPreview 走完整弹窗）。
  * - 多选进行中（Ctrl/Shift/拖框 ≥2 行）单击：不排程、已弹出的关闭（T-ListPreviewCopy 用户反馈：
  *   同时选择多个 SQL 时不要再出现单击预览）；[show] 到点时兜底复查，封 300ms 延迟窗内补选竞态。
+ * - 带 Ctrl/Shift 修饰键单击（含多选**第一击**）：一律不排程、已弹出的关闭（T-ClickPreviewCopyRestore
+ *   O-121 用户反馈：单击弹预览抢走列表焦点后 Ctrl+C 落在编辑器且无选中=no-op，复制失效；
+ *   ≥2 行判定要等第二击，守卫必须前移到修饰键本身）——多选全程焦点不离列表，批量 Ctrl+C 恢复。
  *
  * 弹窗形态：头部复制/关闭图标按钮 + **SQL 高亮可编辑编辑器**（三轮用户要求：高亮展示 +
- * 可临时改字段值再复制）。高亮走 [SqlListSyntaxHighlighter]（SqlLexer 分词 +
+ * 可临时改字段值再复制）。复制双入口（T-ClickPreviewCopyRestore）：头部按钮与编辑器内
+ * Ctrl+C/Ctrl+Insert 共用同一动作——无选中复制全文、有选中放行编辑器原生复制选中片段，
+ * 见 [installCopyHandler]。高亮走 [SqlListSyntaxHighlighter]（SqlLexer 分词 +
  * SqlHighlightColors 配色键，与日志列表条目**共用同一 token→配色映射**——四轮用户反馈：
  * 预览高亮须与列表同色；无 PSI、不依赖 Database 插件）。
  * 弹出即聚焦内容（setRequestFocus(true)，四轮修复：false 时编辑器拿不到键盘焦点，
@@ -85,16 +106,22 @@ internal class SqlClickPreview(
         addActionListener { show() }
     }
 
-    /** 列表单击处理：命中行才排程预览；空白区立即收表关预览；双击停表关旧预览；多选进行中不排程。 */
-    fun onClick(clickCount: Int, clickPoint: Point) {
+    /**
+     * 列表单击处理：命中行才排程预览；空白区立即收表关预览；双击停表关旧预览；
+     * 多选进行中或带 Ctrl/Shift 修饰键（多选第一击，T-ClickPreviewCopyRestore）不排程。
+     */
+    fun onClick(clickCount: Int, clickPoint: Point, modifiersEx: Int = 0) {
         if (clickCount >= 2) {
             timer.stop()
             hide()
             return
         }
         // T-ListPreviewCopy：多选（Ctrl/Shift/拖框 ≥2 行）时单击不再排程预览——多选操作被
-        // 逐行弹出的单行预览干扰；与空白区同语义：停表并关旧
-        if (list.selectedIndices.size > 1) {
+        // 逐行弹出的单行预览干扰；与空白区同语义：停表并关旧。
+        // T-ClickPreviewCopyRestore：守卫前移到修饰键本身——≥2 行判定要等第二击才满足，
+        // Ctrl/Shift 的第一击仍会弹预览抢走列表焦点（setRequestFocus(true)），后续多选
+        // 节奏被打断、Ctrl+C 批量复制不可达；修饰键在第一击即可判定，全程零干扰。
+        if (list.selectedIndices.size > 1 || isMultiSelectIntent(modifiersEx)) {
             timer.stop()
             hide()
             return
@@ -196,6 +223,57 @@ internal class SqlClickPreview(
         private const val PREFERRED_HEIGHT = 320
 
         /**
+         * 标记浮层预览编辑器（T-ClickPreviewCopyRestore）：copy handler 据此区分
+         * 「本插件的预览编辑器」与「IDE 其余一切编辑器」——只对前者接管无选中 Ctrl+C 语义。
+         */
+        private val PREVIEW_EDITOR_KEY = Key.create<Boolean>("mpsv.clickPreview.editor")
+
+        /** 浮层编辑器上挂的复制动作（头部按钮与 Ctrl+C handler 共用同一实例，含对号反馈）。 */
+        private val COPY_ACTION_KEY = Key.create<() -> Unit>("mpsv.clickPreview.copyAction")
+
+        /** 原生 copy handler 安装只做一次（编辑器实例可多次创建，Key 挂实例天然隔离）。 */
+        private val COPY_HANDLER_LOCK = Any()
+        private var copyHandlerInstalled = false
+
+        /**
+         * 接管 ACTION_EDITOR_COPY 的**无选中**分支（T-ClickPreviewCopyRestore）：
+         * 浮层编辑器无选区时 Ctrl+C 复制全文（编辑后文本，与头部按钮同源）——
+         * 平台编辑器 copy 按选区工作、无选中是 no-op，用户「点开浮层直接 Ctrl+C」因此什么都没发生；
+         * 有选区不接管（放行原生：只复制选中片段，保留「临时改字段值后复制片段」能力）；
+         * 非浮层编辑器一律委托原生 handler，IDE 全局语义零变化。keymap 里 Ctrl+C 与 Ctrl+Insert
+         * 都绑 $Copy，替换 handler 一处两键同生效。全局替换以 companion 惰性单次 + 委托兜底保证安全
+         * （测试进程内同样生效，直调 handler 即可断言）。
+         */
+        internal fun installCopyHandler() {
+            synchronized(COPY_HANDLER_LOCK) {
+                if (copyHandlerInstalled) return
+                val manager = EditorActionManager.getInstance()
+                val origin = manager.getActionHandler(IdeActions.ACTION_EDITOR_COPY)
+                manager.setActionHandler(
+                    IdeActions.ACTION_EDITOR_COPY,
+                    object : EditorActionHandler() {
+                        override fun doExecute(editor: Editor, caret: Caret?, dataContext: DataContext?) {
+                            if (editor.getUserData(PREVIEW_EDITOR_KEY) == true &&
+                                !editor.selectionModel.hasSelection()
+                            ) {
+                                editor.getUserData(COPY_ACTION_KEY)?.invoke()
+                                return
+                            }
+                            origin.execute(editor, caret, dataContext)
+                        }
+
+                        override fun isEnabledForCaret(editor: Editor, caret: Caret, dataContext: DataContext?): Boolean =
+                            editor.getUserData(PREVIEW_EDITOR_KEY) == true ||
+                                // 三参 isEnabled 是 final 分派器（243 源码核验：caret 非 null 即转发 origin 的
+                                // isEnabledForCaret）——委托它保持 origin 完整的可用性判定语义
+                                origin.isEnabled(editor, caret, dataContext)
+                    },
+                )
+                copyHandlerInstalled = true
+            }
+        }
+
+        /**
          * 构建预览内容：头部「复制 | 关闭」图标按钮 + SQL 高亮可编辑编辑器。
          * 高亮 = [SqlListSyntaxHighlighter]（SqlLexer 分词 + [SqlHighlightColors] 配色键，
          * 与日志列表条目共用同一映射——四轮用户反馈：预览高亮须与列表同色，直接复用；
@@ -240,16 +318,31 @@ internal class SqlClickPreview(
             val copyButton = JButton(AllIcons.Actions.Copy).apply {
                 toolTipText = MpSqlVisualizerBundle.message("log.preview.copy")
                 isFocusable = false
-                addActionListener {
-                    copyText(editor.document.text) // 复制当前内容（含用户编辑后文本）
-                    cn.song.mybatisplus.visualizer.ui.flashCopied(this) // 复制成功反馈：复制图标换对号，短暂后恢复
-                }
             }
             val closeButton = JButton(AllIcons.Actions.Close).apply {
                 toolTipText = MpSqlVisualizerBundle.message("log.preview.close")
                 isFocusable = false
                 addActionListener { close() }
             }
+            // T-ClickPreviewCopyRestore：头部按钮与编辑器 Ctrl+C handler 共用同一复制动作
+            //（取编辑后当前文本 + 图标换对号反馈），两条入口产物与反馈一致
+            val copyAll = {
+                copyText(editor.document.text) // 复制当前内容（含用户编辑后文本）
+                cn.song.mybatisplus.visualizer.ui.flashCopied(copyButton) // 复制成功反馈：复制图标换对号，短暂后恢复
+            }
+            copyButton.addActionListener { copyAll() }
+            editor.putUserData(PREVIEW_EDITOR_KEY, true)
+            editor.putUserData(COPY_ACTION_KEY, copyAll)
+            installCopyHandler()
+
+            // T-SqlCopyShortcuts O-122（原二轮内联实现收敛到共享件）：Swing 层 Ctrl+C / Ctrl+Insert
+            // 接管——无选中复制全文、有选中只复制选区（保留改字段值后复制片段），与头部按钮同反馈；
+            // 为什么必须挂在这一层、为什么不是 keymap 侧，见 EditorCopyShortcuts 的 KDoc。
+            EditorCopyShortcuts.install(
+                editor,
+                copyText,
+                onCopied = { cn.song.mybatisplus.visualizer.ui.flashCopied(copyButton) },
+            )
             val header = JPanel(FlowLayout(FlowLayout.RIGHT, 2, 0)).apply {
                 isOpaque = false
                 border = BorderFactory.createEmptyBorder(2, 4, 2, 4)

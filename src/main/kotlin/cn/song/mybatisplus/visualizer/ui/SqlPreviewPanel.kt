@@ -32,6 +32,7 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.ui.inlay.PreviewInlayScope
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
+import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
@@ -154,8 +155,19 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 行内提示态（参数导入空剪贴板）需要临时改写可见行与 tooltip，但 tooltip 是「悬停见完整调用链」
      * 的唯一载体（§3.3 后半句），不能被提示覆写丢掉——故提示态按「提示 + 换行 + 基线」拼接，
      * 本字段是拼接的基线来源（也保证提示重复触发时幂等，不会叠加自身）。
+     *
+     * T-StackHoverUi 起栈文本移出 tooltip（见 [stackHover]）：本基线只含 meta/警示/perf，
+     * 「完整调用链」改由悬停弹层承接。
      */
     private var metaTooltipBase: String = ""
+
+    /**
+     * T-StackHoverUi：调用栈悬停弹层控制器（调试器 Frames 风格，D84 拍板 A 案）。
+     *
+     * 栈文本在悬停面的唯一载体——旧实现把截断摘要+全文重复拼进 tooltip、超长单行折成文本墙；
+     * 声明序在 init 块之前（构造期 NPE 固定检查项：init 内 attach/register 均读本字段）。
+     */
+    private val stackHover = StackFrameHover(project)
 
     /** F3：perf 建议分段（可见文本 + HTML 颜色值），截断时按预算丢尾段。 */
     private data class MetaPerfSegment(val text: String, val color: String)
@@ -581,6 +593,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             override fun componentResized(e: java.awt.event.ComponentEvent) = applyMetaTruncation()
             override fun componentShown(e: java.awt.event.ComponentEvent) = applyMetaTruncation()
         })
+
+        // T-StackHoverUi：调用栈悬停弹层（调试器 Frames 风格）——meta 行悬停承接完整调用链，
+        // 弹层生命周期随面板 Disposer 树级联释放（弹窗关闭即清）
+        Disposer.register(this, stackHover)
+        stackHover.attach(metaLabel)
 
         // 中部左右分栏：参数输入 | SQL 编辑器/原生控制台
         // T-M26.3：按钮回挂分区标题行右侧（conditionSectionHeader/batchSectionHeader），
@@ -3015,6 +3032,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-SourceJumpFunnel P6：tooltip 基线同步复位（行内提示态据此拼接，不复用上一份预览的残留）
         metaTooltipBase = ""
         metaLabel.toolTipText = null
+        // T-StackHoverUi：调用栈悬停弹层随清空复位（旧弹层即关，下次预览按新数据重弹）
+        stackHover.updateDigest(null)
         // F-1：清除图集 + 恢复纯 SQL 视图（整图卸载含虚拟外键回收）
         removeDiagramTab()
         unloadJoinDiagram()
@@ -3346,6 +3365,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         )
         editorHolder.revalidate()
         editorHolder.repaint()
+        // T-SqlCopyShortcuts O-122：无选中 Ctrl+C 复制全文、有选中只复制片段
+        //（层位与理由见 EditorCopyShortcuts 的 KDoc；本处此前无任何键盘复制绑定）
+        EditorCopyShortcuts.install(created, UiTextClipboard::copy)
         editor = created
         bindAutoPopup(created)
         // T-AutoFold F4-a：createEditor 支链（含内存文档降级，同一函数收口）——新编辑器按初始内容应用
@@ -4737,10 +4759,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 不弹模态框（toast 语义：下次 [updateMeta] 覆盖）。
      *
      * T-SourceJumpFunnel P6 修复：提示态 tooltip 由「覆写」改「拼接」——[updateMeta] 写入的
-     * [metaTooltipBase] 是「悬停见完整调用链」的唯一载体（meta 行可见文本受 F3 宽度预算截断），
-     * 旧写法 `metaLabel.toolTipText = hint` 使提示态悬停只剩提示本身、完整链丢失；而提示文案本就在
-     * 可见行上全文可见，覆写并未换来任何信息。拼接以提示为首行（与可见行一致），基线随其后；
-     * 基线取自缓存字段而非当前 tooltip，故重复触发幂等（不会把自身叠加进去）。
+     * [metaTooltipBase]（T-StackHoverUi 起只含 meta/警示/perf，完整调用链在悬停弹层）不能被提示
+     * 覆写丢掉——故提示态按「提示 + 换行 + 基线」拼接，
+     * 本字段是拼接的基线来源（也保证提示重复触发时幂等，不会叠加自身）。
      *
      * P10 修复（2026-09-20 真机走查发现）：提示此前**只写** `metaLabel.text`，不进 [metaLineHead] /
      * [metaLineText]。而 `errorCopyButton.isVisible = true` 会改变工具栏理想宽 → topRow 重排 →
@@ -5036,25 +5057,28 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         currentWarning = xmlWarning ?: result.warning
         val warningLine = currentWarning?.let { "   ⚠ $it" } ?: ""
-        // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示，悬停 tooltip 全文）。
-        // 文案组装抽为纯函数 [buildStackDigestMetaText]（同文件顶层，行为逐字不变）——§3.3 验收项
-        // 单测直断截断长度/截断标记/全文节点，无需真机目视。
-        val stackText = buildStackDigestMetaText(result.stackDigest)
+        // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示；T-StackHoverUi 起
+        // 完整链归悬停弹层）。
+        // 文案组装抽为纯函数 [buildStackDigestInlineLine]（同文件顶层）——§3.3 验收项
+        // 单测直断截断长度/截断标记，无需真机目视。
+        val stackInline = buildStackDigestInlineLine(result.stackDigest)
         // T-SqlPerf：性能建议文案单独一行（HTML 换行）。
         // T-PreviewTopOverlap F3：原文分段缓存，label 文本按宽度预算重拼（applyMetaTruncation）
-        // T-SourceJumpFunnel P5 修复：调用栈摘要（stackText.inlineLine）并入**可见行**——此前只进
-        // tooltipText，验收项前半句「meta 行显示调用栈」在可见行上落空（真机走查第 1 步看不到）。
-        // 该行受 F3 宽度预算约束，故按**主体 / 摘要**两段缓存（见 metaLineHead / metaLineDigest）：
-        // 预算不足时先截摘要、主体仅在自身超预算时才中段省略（复核 20260920 修正——把摘要直接拼进
-        // 单段文本会让 F3 的中段省略在窄窗下连主体一起挤掉，只剩「…」+ 栈底帧，优先级倒挂）。
-        // 完整调用链仍恒在悬停 tooltip 内（tooltip 不受预算影响）。
+        // T-SourceJumpFunnel P5 修复：调用栈摘要并入**可见行**——验收项前半句「meta 行显示调用栈」
+        // 在可见行上成立。该行受 F3 宽度预算约束，故按**主体 / 摘要**两段缓存（见 metaLineHead /
+        // metaLineDigest）：预算不足时先截摘要、主体仅在自身超预算时才中段省略（复核 20260920 修正
+        // ——把摘要直接拼进单段文本会让 F3 的中段省略在窄窗下连主体一起挤掉，只剩「…」+ 栈底帧，
+        // 优先级倒挂）。
+        // T-StackHoverUi：完整调用链不再进 tooltip（旧实现把截断摘要+全文重复拼进 tooltip，
+        // 超长单行折成文本墙）——改由 [stackHover] 悬停弹层承接（调试器 Frames 风格）。
         metaLineHead = meta + warningLine
-        metaLineDigest = stackText.inlineLine
+        metaLineDigest = stackInline
         metaLineText = metaLineHead + metaLineDigest
         metaPerfSegments = buildPerfSegments(result)
-        metaTooltipBase = meta + warningLine + stackText.inlineLine + stackText.tooltipTail +
+        metaTooltipBase = meta + warningLine +
             metaPerfSegments.joinToString("；") { it.text }
         metaLabel.toolTipText = metaTooltipBase
+        stackHover.updateDigest(result.stackDigest)
         metaLabel.foreground = if (currentWarning != null) {
             // T-DarkTheme：IDE 标准错误前景命名色（亮暗主题自适应；暗色下非亮红不刺眼）
             JBColor.namedColor("ErrorForeground", JBColor.RED)
@@ -5429,6 +5453,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * 悬停内容契约（真实悬停动作本身不在自动化范围）。
      */
     internal fun metaTooltipForTest(): String? = metaLabel.toolTipText
+
+    /** T-StackHoverUi：当前喂给悬停弹层的栈快照（接线断言用——tooltip 不再承载栈文本）。 */
+    internal fun stackDigestForTest(): String? = stackHover.currentDigestForTest()
     /** T-M25.3：错误复制按钮（可见性断言用）。 */
     internal fun errorCopyButtonForTest(): JButton? = errorCopyButton
 
@@ -5808,14 +5835,6 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
 // T-SourceJumpFunnel P2-2（§3.3 验收项单测抽取）：调用栈快照文案组装
 // ------------------------------------------------------------------
 
-/**
- * 调用栈快照的两段文案产物（纯数据，无组件依赖）。
- *
- * @property inlineLine meta 提示行内联摘要（`   调用栈: <摘要>`，超长截断；无快照时为空串）
- * @property tooltipTail 悬停 tooltip 追加的全文节点（`\n调用栈: <完整链>`；无快照时为空串）
- */
-internal data class StackDigestMetaText(val inlineLine: String, val tooltipTail: String)
-
 /** 调用栈摘要字符上限：超过即截断到该长度并追加 [STACK_DIGEST_ELLIPSIS]。 */
 internal const val STACK_DIGEST_MAX_CHARS = 120
 
@@ -5823,15 +5842,15 @@ internal const val STACK_DIGEST_MAX_CHARS = 120
 internal const val STACK_DIGEST_ELLIPSIS = "…"
 
 /**
- * T-SourceJumpFunnel P2-2：把调用栈快照 [digest] 组装成「meta 行内联摘要（截断展示）」与
- * 「tooltip 全文节点（完整链不截断）」两段文案；[digest] 为 null 时两段均为空串。
+ * T-SourceJumpFunnel P2-2：把调用栈快照 [digest] 组装成 meta 行内联摘要（截断展示）；
+ * [digest] 为 null 时空串。
  *
- * 由 [SqlPreviewPanel.updateMeta] 调用（内联摘要进 tooltipText 首行，全文节点换行追加其后）。
- * 抽出为顶层 internal 纯函数仅为让 §3.3 验收项（截断长度/截断标记/全文节点）可直接单测断言，
- * 组装表达式与原内联实现逐字一致，不改任何展示行为。
+ * T-StackHoverUi 改造：原「两段文案」（内联摘要 + tooltip 全文节点）收窄为单段——完整链不再进
+ * tooltip（旧实现截断摘要+全文重复拼接、超长单行折成文本墙），改由 [StackFrameHover] 悬停弹层
+ * 承接。抽出为顶层 internal 纯函数仅为让 §3.3 验收项（截断长度/截断标记）可直接单测断言。
  */
-internal fun buildStackDigestMetaText(digest: String?): StackDigestMetaText {
-    if (digest == null) return StackDigestMetaText(inlineLine = "", tooltipTail = "")
+internal fun buildStackDigestInlineLine(digest: String?): String {
+    if (digest == null) return ""
     val label = MpSqlVisualizerBundle.message("panel.meta.stackDigest")
     val summary =
         if (digest.length > STACK_DIGEST_MAX_CHARS) {
@@ -5839,10 +5858,7 @@ internal fun buildStackDigestMetaText(digest: String?): StackDigestMetaText {
         } else {
             digest
         }
-    return StackDigestMetaText(
-        inlineLine = "   " + label + " " + summary,
-        tooltipTail = "\n" + label + " " + digest,
-    )
+    return "   " + label + " " + summary
 }
 
 // ------------------------------------------------------------------
@@ -5871,7 +5887,7 @@ internal fun ellipsizeMiddle(text: String, widthOf: (String) -> Int, maxWidth: I
 }
 
 /**
- * 尾部截断（保留头部）——用于调用栈摘要：摘要**栈顶在左**（[buildStackDigestMetaText] 的摘要自栈顶
+ * 尾部截断（保留头部）——用于调用栈摘要：摘要**栈顶在左**（[buildStackDigestInlineLine] 的摘要自栈顶
  * 起截），尾部是信息量最低的栈底帧，故超宽时截尾，而非 [ellipsizeMiddle] 的中段省略。
  */
 internal fun clipTailToWidth(text: String, widthOf: (String) -> Int, maxWidth: Int): String {

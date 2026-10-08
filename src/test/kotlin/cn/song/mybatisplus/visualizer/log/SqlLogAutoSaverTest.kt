@@ -488,4 +488,32 @@ class SqlLogAutoSaverTest {
             listOf("init.sql", "log-2026-09-15.sql"), File(customDir).listFiles()!!.map { it.name }.sorted())
         saver.close()
     }
+
+    // ---------- T-HistoryTabAlways：目录解析（读端与写端同源） ----------
+
+    /** 自定义保存目录优先，且去首尾空白。 */
+    @Test
+    fun `目录解析_自定义目录优先并去空白`() {
+        assertEquals(
+            "自定义目录应原样生效（仅去首尾空白）",
+            "/tmp/custom-history",
+            SqlLogAutoSaver.resolveHistoryDir("  /tmp/custom-history  ", "/proj"),
+        )
+    }
+
+    /** 未填自定义目录 → 项目根下 .idea/sql-visualizer/sql-history。 */
+    @Test
+    fun `目录解析_默认落项目根idea子目录`() {
+        val expected = "/proj" + File.separator + ".idea" + File.separator +
+            "sql-visualizer" + File.separator + "sql-history"
+        assertEquals(expected, SqlLogAutoSaver.resolveHistoryDir("", "/proj"))
+    }
+
+    /** 无项目根（Default Project 等非文件型项目）→ 回落 user.home 下的同一相对路径（与写端一致）。 */
+    @Test
+    fun `目录解析_无项目根回落user_home`() {
+        val expected = System.getProperty("user.home") + File.separator + ".idea" + File.separator +
+            "sql-visualizer" + File.separator + "sql-history"
+        assertEquals(expected, SqlLogAutoSaver.resolveHistoryDir("", null))
+    }
 }

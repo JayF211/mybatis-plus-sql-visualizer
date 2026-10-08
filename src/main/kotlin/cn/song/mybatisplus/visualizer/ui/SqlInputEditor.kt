@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContributor
 import com.intellij.codeInsight.completion.CodeCompletionHandlerBase
@@ -76,6 +78,9 @@ class SqlInputEditor(
                 ?: EditorFactory.getInstance().createDocument(sql)
             EditorFactory.getInstance().createEditor(doc, project, sqlFileType, false)
         }
+        // T-SqlCopyShortcuts O-122：无选中 Ctrl+C 复制全文、有选中只复制片段
+        //（层位与理由见 EditorCopyShortcuts 的 KDoc；本处此前无任何键盘复制绑定）
+        EditorCopyShortcuts.install(created, UiTextClipboard::copy)
         (created as EditorEx).apply {
             settings.isLineNumbersShown = true
             settings.isFoldingOutlineShown = true
