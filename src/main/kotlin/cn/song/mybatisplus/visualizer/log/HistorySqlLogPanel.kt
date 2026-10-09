@@ -803,7 +803,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         com.intellij.diff.DiffManager.getInstance().showDiff(project, request)
     }
 
-    // ---------- R4（W3 历史工作流包）：二级 SQL 导出（CSV/TSV/TXT，后台写盘） ----------
+    // ---------- R4（W3 历史工作流包）：二级 SQL 导出（CSV/TSV/TXT/SQL，后台写盘） ----------
 
     private inner class ExportSqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
         override fun update(e: AnActionEvent) {
@@ -816,7 +816,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         }
     }
 
-    /** R4：导出选中/全部条目——格式三选（CSV/TSV/TXT）→ 文件保存对话框 → 后台写盘 → 通知。
+    /** R4：导出选中/全部条目——格式四选（CSV/TSV/TXT/SQL，默认 SQL）→ 文件保存对话框 → 后台写盘 → 通知。
      *  照 ShareDialog 的 FileSaverDialog 惯例（仓内既有形态）。 */
     internal fun exportEntries(entries: List<LogSqlEntry>) {
         if (entries.isEmpty()) return
@@ -842,7 +842,14 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         )
         val dialog = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance()
             .createSaveFileDialog(descriptor, project)
-        val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, "sql-history.${format.ext}")
+        // T-ExportSqlFormat（用户拍板 20261009）：SQL 格式默认名 sql-export-<yyyyMMdd-HHmmss>.sql
+        // （时间戳防同日覆盖、不占 sql-history 名族）；CSV/TSV/TXT 保持原名随 ext。
+        val defaultName = if (format == SqlExportFormat.SQL) {
+            SqlExportService.defaultSqlExportFileName()
+        } else {
+            "sql-history.${format.ext}"
+        }
+        val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, defaultName)
             ?: return
         val target = saved.file
         com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
@@ -866,22 +873,25 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         }
     }
 
-    /** R4：导出格式三选（取消返回 null）。选项文本用格式名（CSV/TSV/TXT 无需翻译）。 */
+    /** R4：导出格式四选（取消返回 null）。选项文本用格式名（CSV/TSV/TXT/SQL 无需翻译）；
+     *  默认选中 SQL（T-ExportSqlFormat 用户拍板 20261009；P3：showChooseDialog 返回所选下标、取消 -1）。 */
     private fun chooseExportFormat(): SqlExportFormat? {
-        val names = arrayOf("CSV", "TSV", "TXT")
+        val names = arrayOf("CSV", "TSV", "TXT", "SQL")
         val idx = com.intellij.openapi.ui.Messages.showChooseDialog(
             project,
             MpSqlVisualizerBundle.message("log.history.export.choose"),
             MpSqlVisualizerBundle.message("log.history.export"),
             com.intellij.icons.AllIcons.Actions.EditSource,
             names,
-            names[0],
+            names[3],
         )
         if (idx < 0) return null
         return when (idx) {
             0 -> SqlExportFormat.CSV
             1 -> SqlExportFormat.TSV
-            else -> SqlExportFormat.TXT
+            2 -> SqlExportFormat.TXT
+            3 -> SqlExportFormat.SQL
+            else -> null
         }
     }
 
