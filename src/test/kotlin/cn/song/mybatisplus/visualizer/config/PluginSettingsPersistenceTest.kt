@@ -147,6 +147,11 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
                 "zh 下 R33 EXPLAIN 结构化渲染开关应为中文文案: $zhTexts",
                 zhTexts.any { it.contains("结构化渲染 EXPLAIN") },
             )
+            // T-CountSimToggle：分页 COUNT 子开关文案正反两面（zh 侧）
+            assertTrue(
+                "zh 下 T-CountSimToggle 分页 COUNT 子开关应为中文文案: $zhTexts",
+                zhTexts.any { it.contains("附分页 COUNT 查询预览") },
+            )
             // 模拟用户选择 English（写穿）→ 重建表单（invokeLater 在测试环境不保证执行，直接调用）
             panel.selectLanguage("en")
             panel.rebuild()
@@ -163,6 +168,11 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             assertTrue(
                 "rebuild 后 R33 EXPLAIN 结构化渲染开关应刷新为英文文案: $texts",
                 texts.any { it.contains("Structured EXPLAIN") },
+            )
+            // T-CountSimToggle：分页 COUNT 子开关文案（en 侧）
+            assertTrue(
+                "rebuild 后 T-CountSimToggle 分页 COUNT 子开关应刷新为英文文案: $texts",
+                texts.any { it.contains("Attach pagination COUNT query preview") },
             )
             // M28：更新分区新增「启动时自动检查更新」开关（默认开）——复选框总数 4 → 5；
             // T-M31.14 SQL 日志组 +5；手动选择实体类开关 +1（T-M38+）；关闭工具窗口停止监听 +1；
@@ -187,8 +197,9 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // R12 T-PaginationSim：分页拦截器模拟开关（paginationSimCheck）+1 后为 39；
             // R10 T-ShardingSphereCompat：ShardingSphere 双段日志捕获开关（logShardingSphereEnabledCheck）+1 后为 40；
             // R33 T-ExplainStructured：EXPLAIN 结构化渲染开关（explainStructuredCheck）+1 后为 41；
+            // T-CountSimToggle：分页 COUNT 子开关（paginationCountCheck）+1 后为 42；
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
-            assertEquals("复选框总数应为 41", 41, texts.size)
+            assertEquals("复选框总数应为 42", 42, texts.size)
         } finally {
             settings.state.language = old
         }

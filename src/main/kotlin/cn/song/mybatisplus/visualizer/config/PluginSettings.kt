@@ -485,6 +485,14 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var paginationSimEnabled: Boolean = true,
 
         /**
+         * 分页 COUNT 查询预览子开关（T-CountSimToggle，D129）：分页拦截器模拟产出中的 COUNT 包裹
+         * 预览（`SELECT COUNT(*) FROM (原SQL) TOTAL`）独立控制——关=分页模拟只追加 LIMIT，
+         * 不再生成 COUNT 语句。**仅在 [paginationSimEnabled] 开启时生效（父开关优先）**：
+         * 父开关关闭时 LIMIT 与 COUNT 全无，本项不生效。默认 true 保持既有行为（老用户零感知）。
+         */
+        var paginationCountEnabled: Boolean = true,
+
+        /**
          * R33：EXPLAIN 结构化渲染开关（面板执行计划按钮的双通道增量，核实报告 V41 定案的
          * 自建执行链路线）——开=MySQL 家族表格行/PG 家族 JSON 计划在面板内结构化渲染＋索引
          * 建议条；其余方言（TEXT/XML 不硬解析）与判定/执行/渲染任一失败路径一律 fail-closed

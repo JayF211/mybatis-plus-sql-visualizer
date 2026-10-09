@@ -97,4 +97,61 @@ PaginationInnerInterceptor 不执行 COUNT，反编译实证）——但该语�
 
 ## 七、实施记录
 
-（空——实施启动后回填）
+2026-10-09 实施（工作树 countsimtoggle，分支 t-countsimtoggle，基线 b4fe6f9）。S1~S6 全部落地，无方案级偏差。
+
+### 待验证前提证伪结论（§六 P1~P4）
+
+- **P1 成立**：`applyPaginationShared` 内部确无总开关判定（XmlPreviewService.kt 原只看
+  `pageParamName == null` / SELECT / hasExistingLimit）；调用方两处核实——XML 路径
+  `XmlPreviewService.applyPagination`（`paginationSimEnabled()` 闸门在 :93）、注解路径
+  `AnnotationSqlPreviewService.buildResult`（`paginationSimEnabled()` 三元在 :253）。
+  子开关加在函数内 countSql 求值处即同时覆盖两路径，pageParamName 语义不变（LIMIT 照旧），
+  调用方零改动。
+- **P2 成立**：`PreviewResult.countSql` 消费面唯一——`SqlPreviewPanel.appendCountSection`
+  （消费点 :3206，唯一调用点 `showSql` :3086）；RollbackSqlGenerator.kt 里的 `countSql`
+  是回滚链本地变量（countCheckSql 语义），与本字段无关。「导出可移植 SQL」
+  （`exportPortableSql` :1131）与「复制」（`copySql` :2906）均取编辑器文本
+  （`currentEditorSql()` / document.text），COUNT 段唯一入口是 appendCountSection 写编辑器——
+  生产端把关后编辑器无 COUNT 段，复制/导出自然无残留，确认无独立拼接点。
+- **P3 成立**：默认 true 等价现状，定向首轮 PaginationSimTest 既有用例零失败（见下读数）。
+- **P4 成立 + 一处预期内测试维护**：`ProjectPluginSettings.State` 是独立 data class
+  （不含 paginationSim 字段），其往返测试拷贝显式字段清单——零影响；
+  `PluginSettingsPersistenceTest` 的 before 快照只比对显式字段清单——新增字段无破坏形态；
+  XmlSerializer 对持久化缺失字段回落默认 true。但 `testLanguageWriteThroughRefreshesCheckboxTexts`
+  钉死设置页复选框总数 41，新增子复选框触发守卫红（首轮读数），按同步先例 ccd0f74 更新
+  41→42 并补 T-CountSimToggle 双语文案正反两面断言（zh「附分页 COUNT 查询预览」/
+  en「Attach pagination COUNT query preview」）——非产品缺陷，测试维护点。
+
+### 读数
+
+- **反向验证（两刀同轮，两用例路径独立互不污染）**：摘 S2 闸门（注释
+  `paginationCountSql` 内子开关判定）→ `testCountSubSwitchOffKeepsLimitDropsCountOnWrapperChain`
+  红（PaginationSimTest.kt:554 AssertionFailedError）；摘 S3 闸门（`applyPaginationShared`
+  内 `if (true || paginationCountEnabled())`）→ `testCountSubSwitchOffKeepsLimitDropsCountOnSharedPath`
+  红（:571）。读数＝`2 tests completed, 2 failed`。两刀还原（grep RED PROBE 清零）后复跑回绿。
+- **绿轮（定向 6 类）**：PaginationSimTest 22（19 存量 + 3 新增）、
+  PluginSettingsPersistenceTest 16、ProjectPluginSettingsTest 7、BundleParityGuardTest 5、
+  SettingsRealityGuardTest 4、BundlePlaceholderArityTest 4——**合计 58 例 0 失败 0 错误**
+  （`BUILD SUCCESSFUL`）。首轮（守卫修正前）为 45 例 1 失败，唯一失败即上述复选框计数守卫。
+- gradle 全程登记 `t-countsimtoggle`（沙盒 countsimtoggle-default，build.gradle.kts 临时
+  sandboxContainer 用后已还原、未入库）；未跑全量、未 clean、未 --stop。
+
+### 实施偏差
+
+1. S5 计划写「+2 用例」，实落 **3 个测试方法**——计划括号本身要求「Wrapper 链与
+   applyPaginationShared 各一 + 父关子开」，3 方法是两场景的完整落地（子开关关 Wrapper 链、
+   子开关关共享路径、父关子开双路径断言）。
+2. 额外动了一处测试：`PluginSettingsPersistenceTest` 复选框计数守卫 41→42 + 双语断言
+   （P4 证伪过程中发现的同步义务，非计划明示步骤）。
+3. 定向回归在计划三类之外加了 3 个守卫类（BundleParityGuardTest / SettingsRealityGuardTest /
+   BundlePlaceholderArityTest）——本任务动了 bundle 键与设置页，这三个守卫正护该面，读数全绿。
+
+### 真机走查清单（留档，未实施）
+
+1. 设置页：「模拟分页拦截器」与「附分页 COUNT 查询预览」父子开关往返勾选、Apply/重开持久化、
+   zh/en 双语文案跟随。
+2. 预览面板：子开关关后 Wrapper 链/XML/注解三路径预览只剩 LIMIT 行，COUNT 段注释头与
+   第二条语句消失；面板「模型级重渲染回带 LIMIT 行」不受子开关影响（paginationLimitLine 仍在）。
+3. 复制/导出可移植 SQL：子开关关后产物无 COUNT 残留（两链路取编辑器文本，随编辑器自然消失）。
+4. 官网功能页「分页模拟」描述与 CHANGELOG、设置页 tip 三处口径核对——官网功能页不在本仓，
+   **待主控处理**。
