@@ -26,6 +26,7 @@ import java.io.EOFException
 import java.io.File
 import java.io.IOException
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
@@ -187,6 +188,18 @@ class AgentManager(private val project: Project) : Disposable {
 
     /** 幂等表：pid → attach 时间戳（同一 pid 不二次 attach）。internal 为同模块守护测试缝（T-PS4-03）。 */
     internal val attachedPids = ConcurrentHashMap<Long, Long>()
+
+    /**
+     * T-PremainReattach P4：attach 装载进程的回连端口登记表（pid → [attachAndOffer] 供端口）。
+     *
+     * attach 链的 ServerSocket 是一次性的（accept 一次即随 `use{}` 关闭），agent 侧 SenderLoop
+     * 之后重连的是这个已死端口——关开关再重开时 loadAgent 注不进去（agentmain 不重入），进程从此
+     * 永久回落桥。本表在 attach 握手成功时登记端口，重开上升沿命中即**原端口 re-bind** 起 accept
+     * 循环接住 SenderLoop 回连（D2 形态；re-bind 用 SO_REUSEADDR 容忍旧连接 TIME_WAIT）。恢复成功
+     * 后该进程成为 claimed 通道（[premainChannels] 表内），后续关开走 premain 同一套暂停/恢复语义。
+     * internal 为同模块测试缝（生产链路勿直接读写）。
+     */
+    internal val attachPorts = ConcurrentHashMap<Long, Int>()
 
     /**
      * 惰性挂载去抖（T-PS4-03 落地）：pid → 上次排队时刻——同 pid 在 [attachDebounceMs] 窗口内
@@ -738,6 +751,11 @@ class AgentManager(private val project: Project) : Disposable {
         if (resumePausedPremainChannelIfHit(pid)) {
             return
         }
+        // T-PremainReattach P4：attach 装载进程关再开——原端口 re-bind 恢复（D2 形态），命中即跳过
+        // loadAgent；无登记或 re-bind 失败照旧回落下方 loadAgent 路径。
+        if (resumeAttachPortIfHit(pid)) {
+            return
+        }
         val now = clockMs()
         val lastQueued = pendingPids[pid]
         if (lastQueued != null && now - lastQueued < attachDebounceMs) {
@@ -940,7 +958,11 @@ class AgentManager(private val project: Project) : Disposable {
                     }
                 }
                 return try {
-                    server.accept()
+                    val accepted = server.accept()
+                    // T-PremainReattach P4：握手成功 = agent 的 SenderLoop 认下了这个端口（之后
+                    // 断线重连也拨它）——登记 pid→端口供关再开时原端口 re-bind 恢复（见 [attachPorts]）
+                    attachPorts[pid] = port
+                    accepted
                 } catch (e: SocketTimeoutException) {
                     LOG.warn("accept 超时：agent 未在 10s 内连接（pid=$pid）——回落桥")
                     null
@@ -1442,6 +1464,8 @@ class AgentManager(private val project: Project) : Disposable {
         premainChannels.toList()
             .filter { it.paused && isChannelExpired(it) }
             .forEach { closePremainChannel(it) }
+        // T-PremainReattach P4：attach 端口登记表顺带清死 pid 条目（表规模有界；活 pid 条目保留）
+        attachPorts.entries.removeIf { e -> !isProcessAlive(e.key) }
     }
 
     private fun isEnhancedActive(): Boolean = isEnhancedEnabled() && isEnhancedConfirmed()
@@ -1549,6 +1573,40 @@ class AgentManager(private val project: Project) : Disposable {
     internal fun resumePausedPremainChannelIfHit(pid: Long): Boolean {
         val channel = findPausedPremainChannel(pid) ?: return false
         return resumePremainChannel(channel)
+    }
+
+    /**
+     * T-PremainReattach P4（D2 形态）：attach 装载进程的关再开恢复。pid 命中 [attachPorts] 时在
+     * **原端口 re-bind** 起 accept 循环（SO_REUSEADDR 容忍旧连接 TIME_WAIT），接住 agent 侧
+     * SenderLoop 对原端口的无限回连——重开上升沿 loadAgent 注不进去（agentmain 不重入），这是
+     * 唯一恢复路径。恢复成功后按 claimed 通道入 [premainChannels]（后续关开自动走 premain 同一套
+     * 暂停/恢复语义）。返回 false = 无登记或 re-bind 失败（端口被 ephemeral 复用等），失效登记
+     * 条目随之清除，调用方回落既有 loadAgent 路径（零劣化）。
+     */
+    internal fun resumeAttachPortIfHit(pid: Long): Boolean {
+        val port = attachPorts.remove(pid) ?: return false
+        val server = try {
+            ServerSocket().apply {
+                reuseAddress = true
+                bind(InetSocketAddress(InetAddress.getLoopbackAddress(), port))
+            }
+        } catch (t: Throwable) {
+            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
+            LOG.warn("attach 恢复：端口 $port re-bind 失败（pid=$pid，端口可能已被占用）——清除登记回落 attach/桥", t)
+            return false
+        }
+        val channel = PremainChannel(port, server, clockMs())
+        channel.claimed = true
+        channel.claimedAtMs = clockMs()
+        channel.pid = pid
+        premainChannels.add(channel)
+        registerChannelDisposable(channel)
+        val acceptThread = Thread({ acceptPremain(channel) }, "mps-agent-premain-$port-ra")
+            .apply { isDaemon = true }
+        channel.acceptThread = acceptThread
+        acceptThread.start()
+        LOG.info("attach 恢复：端口 $port re-bind 完成（pid=$pid）——等 agent 回连重建会话，跳过 loadAgent")
+        return true
     }
 
     /**

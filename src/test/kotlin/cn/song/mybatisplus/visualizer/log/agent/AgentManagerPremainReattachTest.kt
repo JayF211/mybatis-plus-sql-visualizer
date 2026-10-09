@@ -8,6 +8,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.net.InetAddress
+import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
 
@@ -288,6 +290,102 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
         assertTrue(manager.premainChannels.isEmpty())
         manager.shutdownAll()
         assertFalse("暂停通道清空后巡检应复位（T-PS6-08 语义不回退）", manager.monitorStartedForTest())
+    }
+
+    // ---------- P4：attach 装载进程的关再开恢复（D2 形态：原端口 re-bind） ----------
+
+    /**
+     * 反向验证锚点：摘除 doAttachAsync 的 resumeAttachPortIfHit 钩子（或恢复函数本体）本用例必红。
+     * attach 链的回连端口是一次性 ServerSocket，关闭后 agent 的 SenderLoop 对它无限回连——唯一
+     * 恢复路径是原端口 re-bind 起 accept 循环接住回连（loadAgent 注不进去：agentmain 不重入）。
+     */
+    fun testP4_attach装载关再开_原端口rebind接住回连重建会话() {
+        enableAndConfirm()
+        // 取一个空闲端口再放掉（listen-only 无连接，关闭即干净释放、无 TIME_WAIT）——
+        // 模拟「attach 一次性 ServerSocket 已死、agent 的 SenderLoop 仍认它」的现场形态
+        val deadAttachPort = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).let { s ->
+            val p = s.localPort
+            s.close()
+            p
+        }
+        manager.attachPorts[selfPid] = deadAttachPort
+
+        assertTrue("P4 恢复应命中登记表", manager.resumeAttachPortIfHit(selfPid))
+        assertTrue("恢复成功后登记条目应被消费", manager.attachPorts.isEmpty())
+        assertEquals(1, manager.premainChannels.size)
+        val channel = manager.premainChannels[0]
+        assertEquals("恢复通道应复用原端口", deadAttachPort, channel.port)
+        assertTrue("恢复通道应等价 claimed（后续关开走暂停/恢复语义）", channel.claimed)
+        assertEquals(selfPid, channel.pid)
+
+        // 模拟 agent 的 SenderLoop 对原端口回连（重开后下一拍拨号即中）
+        val redial = Socket("127.0.0.1", deadAttachPort)
+        writeFrame(redial, AgentProtocol.CMD_HELLO, """{"pid":$selfPid}""")
+        awaitTrue("P4：re-bind 后 agent 回连未重建会话") { manager.sessions.size == 1 }
+        awaitTrue("P4：重建会话后在线态未恢复") { manager.online }
+        assertEquals(selfPid, manager.sessions[0].pid)
+        assertTrue(manager.attachedPids.containsKey(selfPid))
+
+        // 统一性：恢复后的通道就是 claimed 通道——关再开第二循环走 premain 暂停/恢复路径
+        manager.shutdownAll()
+        assertTrue("恢复通道关闭期应转暂停（监听保留）", channel.paused)
+        enableAndConfirm()
+        assertTrue("第二循环应命中暂停表 resume", manager.resumePausedPremainChannelIfHit(selfPid))
+        val redial2 = Socket("127.0.0.1", deadAttachPort)
+        writeFrame(redial2, AgentProtocol.CMD_HELLO, """{"pid":$selfPid}""")
+        awaitTrue("P4：第二循环未重建会话") { manager.sessions.size == 1 }
+        redial.close()
+        redial2.close()
+    }
+
+    /** 反向验证锚点：摘除 doAttachAsync 的 P4 钩子（resumeAttachPortIfHit 调用）本用例必红。 */
+    fun testP4_onProcessAppeared命中attach登记_resume且不进attach排队() {
+        enableAndConfirm()
+        val port = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).let { s ->
+            val p = s.localPort
+            s.close()
+            p
+        }
+        manager.attachPorts[selfPid] = port
+
+        manager.onProcessAppeared(FakeProcessHandler(selfPid))
+
+        assertFalse("P4 命中不得进入 attach 排队", manager.pendingPids.containsKey(selfPid))
+        assertEquals("onProcessAppeared 应触发原端口 re-bind 恢复", 1, manager.premainChannels.size)
+        assertEquals(port, manager.premainChannels[0].port)
+        assertTrue(manager.premainChannels[0].claimed)
+    }
+
+    fun testP4_端口被占rebind失败_清除登记回落attach路径() {
+        val occupier = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        try {
+            val deadPid = 999_999_999L
+            manager.attachPorts[deadPid] = occupier.localPort
+            val before = manager.premainChannels.size
+
+            assertFalse("端口被占时恢复应失败", manager.resumeAttachPortIfHit(deadPid))
+            assertTrue("失败后应清除失效登记（不得残留）", manager.attachPorts.isEmpty())
+            assertEquals("失败不得产生通道", before, manager.premainChannels.size)
+            // 无登记的 pid 直接未命中
+            assertFalse(manager.resumeAttachPortIfHit(deadPid))
+        } finally {
+            occupier.close()
+        }
+    }
+
+    fun testP4_巡检清死pid的attach端口登记() {
+        val freePort = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).let { s ->
+            val p = s.localPort
+            s.close()
+            p
+        }
+        manager.attachPorts[999_999_999L] = freePort
+        manager.attachPorts[selfPid] = freePort + 1
+
+        manager.sweepOffline()
+
+        assertFalse("死 pid 的登记应被巡检清除", manager.attachPorts.containsKey(999_999_999L))
+        assertTrue("活 pid 的登记应保留", manager.attachPorts.containsKey(selfPid))
     }
 
     // ---------- 辅助 ----------
