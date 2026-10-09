@@ -175,6 +175,16 @@ class AgentManager(private val project: Project) : Disposable {
     /** 会话表。internal 为同模块守护测试缝（T-PS4-03 sweepOffline 清表断言）；生产链路勿直接读写。 */
     internal val sessions = CopyOnWriteArrayList<AgentSession>()
 
+    /**
+     * T-PremainReattach：premain 会话提交段与关开关清表段的互斥锁。覆盖两段临界区——
+     * [onPremainConnected] 的「提交门禁 + sessions.add + 幂等表登记」与 [shutdownAll] 的
+     * 「会话关闭/清表 + 暂停分流」。没有它，首次会话构建（毫秒级）与关开关并发时，会话可能在
+     * 清表**之后**才 add 进表（复活态：用户已关增强却仍在线采，关闭语义静默失效）。
+     * 锁内无阻塞 I/O（socket 读写都在锁外；暂停分流的哑元自连是 loopback 亚毫秒级连接）；
+     * sweepOffline 的死会话摘除不与此竞争（摘除面是已死会话，与新提交的健康会话不相交），不入锁。
+     */
+    private val sessionCommitLock = Any()
+
     /** 幂等表：pid → attach 时间戳（同一 pid 不二次 attach）。internal 为同模块守护测试缝（T-PS4-03）。 */
     internal val attachedPids = ConcurrentHashMap<Long, Long>()
 
@@ -722,6 +732,12 @@ class AgentManager(private val project: Project) : Disposable {
             LOG.warn("onProcessAppeared: resolvePid 失败（handler=${processHandler?.javaClass?.name}）——跳过挂载")
             return
         }
+        // T-PremainReattach S2：pid 命中暂停通道 → resume 重建会话并跳过 loadAgent。settings-rescan
+        // （重开增强上升沿补挂）与进程启动钩子两条路径都经本入口，单点收口防双路径漏；返回 false
+        // （无命中，或暂停期间通道已被运行结束/dispose 关闭）则照旧回落下方 loadAgent 路径。
+        if (resumePausedPremainChannelIfHit(pid)) {
+            return
+        }
         val now = clockMs()
         val lastQueued = pendingPids[pid]
         if (lastQueued != null && now - lastQueued < attachDebounceMs) {
@@ -1085,8 +1101,10 @@ class AgentManager(private val project: Project) : Disposable {
      */
     private fun acceptPremain(channel: PremainChannel) {
         try {
-            channel.server.soTimeout = PREMAIN_ACCEPT_TIMEOUT_MS.toInt()
-            while (!channel.closed) {
+            // resume 重建的循环（已 claimed）走短超时周期拍（复核过期信号），与首次等待的 120s 长超时区分
+            channel.server.soTimeout =
+                (if (channel.claimed) PREMAIN_IDLE_TICK_MS else PREMAIN_ACCEPT_TIMEOUT_MS).toInt()
+            while (!channel.closed && !channel.paused) {
                 val socket = try {
                     channel.server.accept()
                 } catch (e: SocketTimeoutException) {
@@ -1101,6 +1119,14 @@ class AgentManager(private val project: Project) : Disposable {
                     if (isChannelExpired(channel)) return
                     continue
                 }
+                if (channel.paused || channel.closed) {
+                    // T-PremainReattach S3：暂停唤醒哑元连接 / 暂停竞态期到达的连接——丢弃后退出循环，
+                    // **监听 socket 保留**：agent 的重连此后在内核 backlog 停泊（不被 accept 即不计入
+                    // agent 侧「连上即被关」计数，PORT_ABANDONED 阈值不可能被暂停期累计到），
+                    // resume 后第一个 accept 即取回停泊连接。
+                    runCatching { socket.close() }
+                    return
+                }
                 val firstConnect = !channel.claimed
                 channel.claimed = true
                 if (firstConnect) {
@@ -1109,7 +1135,7 @@ class AgentManager(private val project: Project) : Disposable {
                     channel.server.soTimeout = PREMAIN_IDLE_TICK_MS.toInt()
                 }
                 val round = ++channel.acceptCount
-                val pid = onPremainConnected(socket)
+                val pid = onPremainConnected(channel, socket)
                 if (pid > 0L) channel.pid = pid
                 if (round >= MAX_PREMAIN_RECONNECTS) {
                     LOG.warn(
@@ -1128,7 +1154,10 @@ class AgentManager(private val project: Project) : Disposable {
                 )
             }
         } finally {
-            closePremainChannel(channel)
+            // T-PremainReattach S1：暂停退出（paused 且未 closed）不收口——socket 与通道都保留，
+            // 等 resume 重建 accept 循环；其余退出路径照旧收口。暂停中被关闭的竞态（onRunEnded /
+            // dispose）也照旧收口（closeChannel 与本路径都幂等）。
+            if (channel.closed || !channel.paused) closePremainChannel(channel)
         }
     }
 
@@ -1143,7 +1172,7 @@ class AgentManager(private val project: Project) : Disposable {
      * T-AgentReconnect T-03：该判据对**重连**天然放行——旧会话已被 [sweepOffline] 摘除（alive=false），
      * 故重连不再被判据挡下，语义与「同 pid 已有活动会话时丢弃重复连接」并存不变。
      */
-    private fun onPremainConnected(socket: Socket): Long {
+    private fun onPremainConnected(channel: PremainChannel, socket: Socket): Long {
         try {
             if (!isEnhancedActive()) {
                 LOG.info("premain 回连到达但增强捕获已关闭/未确认——丢弃连接")
@@ -1151,17 +1180,16 @@ class AgentManager(private val project: Project) : Disposable {
                 return 0L
             }
             val pid = readHelloPid(socket)
+            // T-PremainReattach：pid 读到即尽早登记（会话构建链里还有 CONFIG 下发/巡检懒启/广播等
+            // 毫秒级步骤）——关开关分流（pauseOrClosePremainChannels）与 resume 查表都按 pid 判，
+            // 登记晚于「会话已建立」会造成关开关恰落窗口内、通道被误关而非暂停的竞态。
+            if (pid > 0L) channel.pid = pid
             // T-PerfSweep6 T-PS6-06：去重判据由 `alive` 收紧为 [isSessionHealthy]（socket 未断**且**
             // 心跳窗口内有过帧）。`alive` 只表示 socket 未断——半死会话（应用侧停摆、连接还在）会
             // 把同 pid 的**真重连**挡下一次，而挡下的这一次恰恰是「应用重启/卡死恢复」场景里最需要的
             // 那一次；半死会话随后仍会被 [sweepOffline] 摘除，等于白挡。
             // 不会误放行「刚建会话的立即重复连接」：新会话 lastSeen 在建会话时初始化为当前时刻
             //（见 AgentSession 构造），窗口内必判健康。
-            if (pid > 0L && sessions.any { isSessionHealthy(it) && it.pid == pid }) {
-                LOG.info("premain 回连 pid=$pid 已有活动会话——丢弃重复连接（幂等）")
-                runCatching { socket.close() }
-                return pid
-            }
             // T-ReachAudit T-RA-01 合流补位：会话时间源须与管理器同源注入（[createSession] 同款）——
             // 缺省真实时钟时，假时钟驱动的心跳窗口判定两侧不同源（manager 算出的「已过期」被真实
             // 时间戳的 lastSeen 抵消），premain 通道建立的半死会话不会被巡检摘除，封口在此复活
@@ -1176,8 +1204,24 @@ class AgentManager(private val project: Project) : Disposable {
                 // 追加 P-5：premain 会话同 attach 链——回执驱动桥闸门
                 onCaptureConfirmationChanged = ::onCaptureConfirmationChanged,
             )
-            sessions.add(session)
-            if (pid > 0L) attachedPids[pid] = clockMs()
+            // T-PremainReattach：提交段入锁（与 shutdownAll 清表+暂停分流互斥）——门禁复核放最前：
+            // 关开关与首次会话构建并发时，不得把会话登记进已清空的会话表（复活态：用户已关增强
+            // 却仍在线采，关闭语义静默失效）。门禁与登记在同一临界区，清表+置暂停也在同一临界区，
+            // 交错只剩「先提交后被清」与「先暂停后被门禁拦下」两种，复活态不可能。
+            synchronized(sessionCommitLock) {
+                if (channel.paused || channel.closed) {
+                    LOG.info("premain 回连处理完成前通道已暂停/关闭——丢弃连接（关开关竞态）")
+                    runCatching { socket.close() }
+                    return 0L
+                }
+                if (pid > 0L && sessions.any { isSessionHealthy(it) && it.pid == pid }) {
+                    LOG.info("premain 回连 pid=$pid 已有活动会话——丢弃重复连接（幂等）")
+                    runCatching { socket.close() }
+                    return pid
+                }
+                sessions.add(session)
+                if (pid > 0L) attachedPids[pid] = clockMs()
+            }
             // B1 同款：新 agent 默认 disabled=false，须按当前监听状态立即校正
             // （T-06：只保证「已下发」，生效以 CMD_CONFIG_ACK 为准）
             val active = isListenActive()
@@ -1391,6 +1435,13 @@ class AgentManager(private val project: Project) : Disposable {
             // T-SettingsTruth P2：掉线摘除 → 状态行「连接中断，已回落控制台捕获」
             publishStatusChanged()
         }
+        // T-PremainReattach S4：暂停通道巡检——pid 消亡 / 兜底 TTL 到期即关闭（resume 已无意义）。
+        // 「未认领超时」判据天然豁免（暂停通道必已 claimed）；shutdownAll 分流后巡检因暂停通道
+        // 驻留而保持运行（见 shutdownAll），进程被外部杀掉（无运行结束信号）时由本扫兜底回收，
+        // 不让 resume 撞上死进程空转，也不让通道规模随「开→关」次数增长。
+        premainChannels.toList()
+            .filter { it.paused && isChannelExpired(it) }
+            .forEach { closePremainChannel(it) }
     }
 
     private fun isEnhancedActive(): Boolean = isEnhancedEnabled() && isEnhancedConfirmed()
@@ -1418,12 +1469,86 @@ class AgentManager(private val project: Project) : Disposable {
     }
 
     /**
-     * 关闭全部待回连/服役中的通道（运行结束 [onRunEnded] / 关开关 [shutdownAll] / 项目 dispose 共用）。
+     * 关闭全部待回连/服役中的通道（运行结束 [onRunEnded] / 项目 dispose 共用；关开关 [shutdownAll]
+     * 改走 [pauseOrClosePremainChannels] 分流）。
      * 快照遍历——[closePremainChannel] 会改通道表。
      */
     private fun closePremainChannels() {
         premainChannels.toList().forEach { closePremainChannel(it) }
         premainChannels.clear()
+    }
+
+    /**
+     * T-PremainReattach S1：关开关时的通道分流（[shutdownAll] 专用）。判据：claimed 且 pid 已知且
+     * 未过期 → [pausePremainChannel] 暂停；其余照旧 [closePremainChannel] 关闭。
+     *
+     * pid 未知的 claimed 通道也关闭（相比「claimed 一律暂停」收窄暂停面）：resume 查表按 pid 命中，
+     * pid=0 永远无法被 resume（进程扫描拿不到 pid=0），保留监听只会驻留到兜底 TTL。
+     */
+    private fun pauseOrClosePremainChannels() {
+        var paused = 0
+        premainChannels.toList().forEach { channel ->
+            if (channel.claimed && channel.pid > 0L && !isChannelExpired(channel)) {
+                pausePremainChannel(channel)
+                paused++
+            } else {
+                closePremainChannel(channel)
+            }
+        }
+        if (paused > 0) {
+            LOG.info(
+                "shutdownAll: $paused 个 premain 通道转暂停待重连（监听保留；重开增强后 resume 重建会话，" +
+                    "不再重走 loadAgent）",
+            )
+        }
+    }
+
+    /**
+     * 通道转暂停待重连：置位 + 哑元自连唤醒阻塞中的 accept（accept 收到连接即复核 paused 退出循环，
+     * 监听 socket 保留）。哑元自连是必须的：claimed 通道的 accept 拍长 [PREMAIN_IDLE_TICK_MS]=30s，
+     * 靠超时自醒的话，这 30s 里 agent 的重连仍会被 accept 后按「增强已关闭」丢弃（agent 侧
+     * 「连上即被关」计数，SenderLoop [MAX_FAST_DROPS]=10 次即放弃端口）——唤醒窗压到毫秒级，
+     * 至多损失 1 次计数，远低于放弃阈值。
+     */
+    private fun pausePremainChannel(channel: PremainChannel) {
+        channel.paused = true
+        runCatching { Socket("127.0.0.1", channel.port).close() }
+        channel.acceptThread?.interrupt()
+        LOG.info("premain 通道 ${channel.port} 转暂停待重连（pid=${channel.pid}，监听保留）")
+    }
+
+    /**
+     * T-PremainReattach S2：恢复暂停通道（重开增强的上升沿，pid 命中暂停表时由 [doAttachAsync]
+     * 调用，settings-rescan 与进程启动钩子两条路径同经该入口，单点收口）。重建 accept 循环：
+     * 内核 backlog 里的停泊连接被立即 accept → HELLO 已在缓冲区 → 会话秒级重建（agent 侧
+     * SenderLoop 全程无感知，无需重连竞速）。幂等：已在役（未暂停）重复触发零动作；返回 false =
+     * 通道已不可恢复（暂停期间被运行结束/dispose 关闭），调用方回落既有 loadAgent 路径。
+     */
+    private fun resumePremainChannel(channel: PremainChannel): Boolean {
+        if (channel.closed || !channel.paused) return false
+        channel.paused = false
+        val acceptThread = Thread({ acceptPremain(channel) }, "mps-agent-premain-${channel.port}-r")
+            .apply { isDaemon = true }
+        channel.acceptThread = acceptThread
+        acceptThread.start()
+        LOG.info(
+            "premain 通道 ${channel.port} 恢复：重建 accept 循环等 agent 停泊/重连（pid=${channel.pid}）" +
+                "——跳过 loadAgent（agentmain 不重入，重复挂载必失败）",
+        )
+        return true
+    }
+
+    /** pid 命中的暂停通道（[resumePausedPremainChannelIfHit] 判据；internal 为同模块测试缝）。 */
+    internal fun findPausedPremainChannel(pid: Long): PremainChannel? =
+        premainChannels.firstOrNull { it.paused && !it.closed && it.pid == pid }
+
+    /**
+     * T-PremainReattach S2 的收口入口：pid 命中暂停通道即 [resumePremainChannel] 恢复并返回 true
+     * （调用方跳过 loadAgent）。internal 为同模块测试缝（测试直连，绕开 attach 兜底链的真实挂载）。
+     */
+    internal fun resumePausedPremainChannelIfHit(pid: Long): Boolean {
+        val channel = findPausedPremainChannel(pid) ?: return false
+        return resumePremainChannel(channel)
     }
 
     /**
@@ -1456,17 +1581,26 @@ class AgentManager(private val project: Project) : Disposable {
     /** 关闭开关：CONFIG 下发停采集（禁用不卸载语义）→ 会话关闭 → 桥回落。 */
     fun shutdownAll() {
         sessions.forEach { it.sendConfig(disabled = true) }
-        sessions.forEach { it.close() }
-        sessions.clear()
-        attachedPids.clear()
-        // T-PS4-03：关闭开关同时清排队去抖表——关后不应残留排队记忆（3s 窗内的重复启动照常重判）
-        pendingPids.clear()
-        // T-M56Phase2-Premain：待回连通道一并关掉（关后即便 agent 回连也会被 isEnhancedActive 挡下，
-        // 此处提前关是防 socket 挂到超时才回收）
-        closePremainChannels()
+        // T-PremainReattach：清表 + 暂停分流与 premain 会话提交段互斥（[sessionCommitLock]），
+        // 堵「清表后新会话才 add 进表」的复活态竞态。sendConfig 在锁外（socket 写，逐会话幂等）。
+        synchronized(sessionCommitLock) {
+            sessions.forEach { it.close() }
+            sessions.clear()
+            attachedPids.clear()
+            // T-PS4-03：关闭开关同时清排队去抖表——关后不应残留排队记忆（3s 窗内的重复启动照常重判）
+            pendingPids.clear()
+            // T-M56Phase2-Premain：待回连通道一并关掉（关后即便 agent 回连也会被 isEnhancedActive 挡下，
+            // 此处提前关是防 socket 挂到超时才回收）。
+            // T-PremainReattach S1 改为分流：claimed 且目标进程仍活的通道转「暂停待重连」（监听保留，
+            // 重开增强后 resume 重建会话——不再重走注定失败的 loadAgent：agentmain 不重入、新端口送不进
+            // 去，真机 08:10 时间线实证）；未认领 / pid 未知 / 已过期（进程消亡 / TTL）照旧关闭。
+            pauseOrClosePremainChannels()
+        }
         // T-PerfSweep6 T-PS6-08（发现 8）：巡检一并复位——关开关后 5s 空转线程不再驻留到项目 dispose
-        // （取消任务而非关执行器，见 stopMonitor 注释；再开启时 ensureMonitorStarted 照常重排）
-        stopMonitor()
+        // （取消任务而非关执行器，见 stopMonitor 注释；再开启时 ensureMonitorStarted 照常重排）。
+        // T-PremainReattach S4 例外：有暂停通道驻留时巡检保持运行（5s 扫 pid 消亡 / 兜底 TTL，
+        // 到期关闭；进程被外部杀掉无运行结束信号时由本扫兜底），resume 重建会话后照常维持。
+        if (premainChannels.any { it.paused }) ensureMonitorStarted() else stopMonitor()
         updateOnline()
         // T-PS5-04：会话全清 → 推断 URL 清条目（方言推断回落数据源 URL）
         onSessionLifecycleChanged()
@@ -1730,6 +1864,16 @@ internal class PremainChannel(
     /** 通道是否已关闭（accept 循环退出判据）。 */
     @Volatile
     var closed: Boolean = false
+
+    /**
+     * T-PremainReattach S1：暂停待重连态（关开关 [AgentManager.shutdownAll] 对 claimed 通道的分流语义）。
+     * 暂停 = accept 循环退出、**监听 socket 保留**——agent 侧 SenderLoop 重连在内核 backlog 停泊
+     * （不被 accept 也就不计入 agent 侧「连上即被关」的 [放弃端口计数]，暂停期可任意长），重开后
+     * [AgentManager.resumePremainChannel] 重建 accept 循环，第一个停泊连接即被取回重建会话，
+     * 跳过注定失败的 loadAgent（agentmain 不重入，新端口送不进去）。
+     */
+    @Volatile
+    var paused: Boolean = false
 
     /** 关闭通道（幂等）：置位 + 关监听 socket——阻塞中的 accept 立即抛 SocketException 退出。 */
     fun closeChannel() {
