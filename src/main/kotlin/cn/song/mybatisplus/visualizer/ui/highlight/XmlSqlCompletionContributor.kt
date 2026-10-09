@@ -12,6 +12,7 @@ import com.intellij.codeInsight.completion.CompletionType
 import com.intellij.injected.editor.DocumentWindow
 import com.intellij.injected.editor.VirtualFileWindow
 import com.intellij.lang.injection.InjectedLanguageManager
+import com.intellij.openapi.project.DumbAware
 import com.intellij.patterns.PlatformPatterns
 import com.intellij.psi.PsiElement
 import com.intellij.psi.util.PsiTreeUtil
@@ -60,8 +61,17 @@ import com.intellij.util.ProcessingContext
  *  - 属性值内非 test/collection 属性（如 `include refid=""`）不产出补全（无合理候选，不落入 SQL）。
  *
  * 注册见 plugin.xml `<completion.contributor language="XML" .../>`（主控统一注册，本类不声明扩展）。
+ *
+ * **实现 [DumbAware]（T-XmlCmpl2 补齐）**：平台派发链 `CompletionContributor.forParameters` →
+ * `forLanguageHonorDumbness` → `DumbService.filterByDumbAwareness` **在 dumb 态丢弃一切非
+ * DumbAware 贡献器**（243 app-client.jar 源码实证）——本类原缺该接口，故索引期（数据库方言 push、
+ * DbSrc 变更、项目初扫等 dumb 窗口）按补全**整体零响应**；与同包同解析链的
+ * [AnnotationSqlCompletionContributor] 及 [cn.song.mybatisplus.visualizer.ui.completion.WrapperCompletionContributor]
+ * 两兄弟贡献器的既有口径不一致。补齐后 dumb 态照常被咨询：语法门控/动态标签/属性/关键字全可用，
+ * 上下文解析（实体索引）失败由入口 runCatching + 平台 `DumbModeAccessType.RELIABLE_DATA_ONLY`
+ * 兜底降级为「只补关键字」，不给索引访问引入硬抛。
  */
-class XmlSqlCompletionContributor : CompletionContributor() {
+class XmlSqlCompletionContributor : CompletionContributor(), DumbAware {
 
     init {
         extend(
