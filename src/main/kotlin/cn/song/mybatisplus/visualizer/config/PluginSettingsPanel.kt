@@ -590,6 +590,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private val slowQueryThresholdField = JBTextField(12)
     private val logShowDurationCheck = JBCheckBox()
 
+    // T-DataSourceBadgeMode：数据源角标显示完整上下文（默认关＝仅显示数据库类型）
+    private val dataSourceBadgeDetailCheck = JBCheckBox()
+
     // ---------- T-CrudColor：SQL 列表 CRUD 类型颜色标记 ----------
     /** 标记形态下拉（色条 / 整行淡背景 / 关闭）。 */
     private val crudColorStyleCombo = ComboBox<CrudColorStyleOption>()
@@ -954,6 +957,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 addRow(p, g, "", logShowDurationCheck.apply {
                     text = MpSqlVisualizerBundle.message("settings.log.showDuration")
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.showDuration.tip")
+                })
+                // T-DataSourceBadgeMode：数据源角标显示粒度（默认仅数据库类型，打开后带连接事实）
+                addRow(p, g, "", dataSourceBadgeDetailCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.log.dataSourceBadgeDetail")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.dataSourceBadgeDetail.tip")
                 })
             }
 
@@ -1705,6 +1713,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logTimePrefixField.text.trim() != s.logTimePrefix
             || slowQueryThresholdField.text.trim().toLongOrNull() != s.slowQueryThresholdMs
             || logShowDurationCheck.isSelected != s.showDurationInLogList
+            || dataSourceBadgeDetailCheck.isSelected != s.dataSourceBadgeDetail
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
             || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
             || enhancedDesensitizeCheck.isSelected != s.enhancedCaptureDesensitize
@@ -1829,6 +1838,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.slowQueryThresholdMs = slowQueryThresholdField.text.trim().toLongOrNull()
                 ?: PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS
             s.showDurationInLogList = logShowDurationCheck.isSelected
+            s.dataSourceBadgeDetail = dataSourceBadgeDetailCheck.isSelected
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             s.enhancedCaptureEnabled = enhancedCaptureCheck.isSelected
             s.enhancedCaptureDesensitize = enhancedDesensitizeCheck.isSelected
@@ -2024,6 +2034,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logTimePrefixField.text = s.logTimePrefix
             slowQueryThresholdField.text = s.slowQueryThresholdMs.toString()
             logShowDurationCheck.isSelected = s.showDurationInLogList
+            dataSourceBadgeDetailCheck.isSelected = s.dataSourceBadgeDetail
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled
             enhancedDesensitizeCheck.isSelected = s.enhancedCaptureDesensitize
