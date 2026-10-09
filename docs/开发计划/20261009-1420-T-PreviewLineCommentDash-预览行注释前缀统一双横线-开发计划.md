@@ -65,4 +65,54 @@
 
 ## 六、实施记录
 
-（空——实施启动后回填）
+实施：t-linedash 工作树（基线 a1d32be），2026-10-09，提交 d672855（实现 + 单测 + CHANGELOG）。
+
+### P1~P4 证伪结论（javap 双版本，全部证实，无一被推翻）
+
+- **P1 证实**：`EditorActionManager.setActionHandler(String, EditorActionHandler): EditorActionHandler`
+  （返回值=原 handler）在 243（`lib/app-client.jar`）与 262（`lib/intellij.platform.ide.jar`）签名一致；
+  `EditorActionHandler.execute(Editor, Caret, DataContext)` 为 `public final void`（不可覆写、可直调做链式委托），
+  可覆写钩子 = `protected doExecute(Editor, Caret?, DataContext?)`（caret/dataContext @Nullable）与
+  `protected isEnabledForCaret(Editor, Caret, DataContext)`（三参 @NotNull），双版本一致——Kotlin override
+  可空性照此落签名。
+- **P2 证实**：`IdeActions.ACTION_COMMENT_LINE = "CommentByLineComment"` 双版本常量池一致
+  （243 `app-client.jar` / 262 `intellij.platform.ide.core.jar`，javap -constants 读数）。
+- **P3 证实**：`MysqlCommenter` 类名 `com.intellij.sql.dialects.mysql.MysqlCommenter` 双版本一致
+  （243 `plugins/DatabaseTools/lib/database-plugin.jar`；262 `plugins/DatabaseTools/lib/modules/intellij.database.dialects.mysqlbase.jar`；
+  仅父类包名迁移：243 `com.intellij.sql.psi.impl.support.SqlCommenter` → 262
+  `com.intellij.database.sql.common.core.psi.impl.support.SqlCommenter`）；两版本常量
+  `SHARP_LINE_PREFIX = "# "` / `SHARP_LINE_PREFIX_NO_SPACE = "#"` 在场——`#` 根因实锤。
+- **P4 证实**：块注释均 `/* */`——两版本 `MysqlCommenter` 的带参 `getBlockCommentPrefix(int, Document, Holder)`
+  属 SelfManagingCommenter 面；无参 `getBlockCommentPrefix()` 在其基类 `SqlCommenter`，javap -c 字节码
+  `ldc "/*"`、`getBlockCommentSuffix()` `ldc "*/"` 双版本一致 → D137「块注释不接管」前提成立。
+
+### S1~S5 实施情况
+
+- **S1 完成**：新增 `util/EditorCommentShortcuts.kt`——`install` 打标（userData Key
+  `mpsv.editor.lineCommentDash`，重复打标幂等）+ `setActionHandler(ACTION_COMMENT_LINE, DashLineCommentHandler)`；
+  handler 对未打标编辑器直通原 handler（`originalHandler.execute(...)`，零行为差异），打标编辑器走
+  `toggleLineComments`：受影响行集=选区触及行/光标行（多光标各算各的、自底向上套用），整段同态切换
+  （全已注释→剥；否则补 `-- `，已注释行幂等跳过），`--`/`#` 双认剥除只吞前缀后**一个**空格，
+  WriteCommandAction 一步撤销（命令名走 bundle 新键 `preview.lineComment.commandName` 双语）；
+  `uninstall` 引用计数归零恢复原 handler。测试缝照 EditorCopyShortcuts：纯逻辑 `toggleLines` 与
+  `DashLineCommentHandler` 均 internal（单测免平台 action 分发）。
+- **S2 完成**：`SqlPreviewPanel.kt` 打标两处——`assemblePreviewEditor`（自建编辑器）+
+  `onNativeEditorReady`（控制台编辑器，换装先对旧编辑器减计数）；减计数四路——
+  `disposeCurrentEditorOnly`（自建编辑器唯一释放收口）、`detachConsole`、`clear`、`dispose`，全部幂等。
+- **S3 编码完成 / 执行待门禁后补跑**：`EditorCommentShortcutsTest` 13 例（纯逻辑 5 + 全局注册表链路 8），
+  驱动方式 = `getActionHandler` 解析后直调（与 keymap 取用路径同源）；未打标直通用例以 RecordingHandler
+  mock 前一 handler 断言被调。**compileKotlin + compileTestKotlin 已绿**（首轮报
+  `:81:81 Unresolved reference 'originalHandler'`——`installedHandler` 字段类型从 `EditorActionHandler`
+  收窄为 `DashLineCommentHandler` 后过）；执行轮撞主控 t-batchmerge 合并态门禁（登记表两次 check 均在跑），
+  按并行纪律不抢跑不轮询，**定向测试读数待门禁后补跑**。
+- **S4 待门禁后补跑**：反向验证路径已内建——`test打标编辑器_无选区注释光标行插双横线` 等用例从全局
+  注册表解析 handler；补跑时临时注释 `assemblePreviewEditor`/`onNativeEditorReady` 两处打标（或 install 内
+  `setActionHandler` 一处）→ 用例落到平台原 handler、`-- ` 断言必红 → 还原绿，贴两次读数。
+- **S5 完成**：CHANGELOG `[Unreleased]` 加 Fixed 一行。
+
+### 验证读数
+
+- 编译：`./gradlew compileKotlin compileTestKotlin`（in-process 策略，避开与门禁共抢 Kotlin daemon）——绿。
+- 定向测试 `--tests "cn.song.mybatisplus.visualizer.util.EditorCommentShortcutsTest"`：**待门禁后补跑**（读数回填此处）。
+- S4 反向验证：**待门禁后补跑**（读数回填此处）。
+- runIde 沙盒走查（绑定 PG → Ctrl+/ 插 `--` → 执行成功 → 再按取消；控制台编辑器同验）：留走查，未跑。
