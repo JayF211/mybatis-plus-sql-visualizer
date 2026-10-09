@@ -213,7 +213,7 @@ internal fun filterBySuppress(entries: List<LogSqlEntry>, suppressKeys: Set<Stri
 }
 
 /**
- * 搜索过滤（纯逻辑，可独立单测）：查询词忽略大小写 contains，匹配还原 SQL 与摘要
+ * 搜索过滤（纯逻辑，可独立单测）：查询词 contains，匹配还原 SQL 与摘要
  * （摘要含参数值的还原 SQL 前缀；参数值是常见检索目标）；空白查询透传全部。
  *
  * T-LogSearchRowTime 扩展：
@@ -222,20 +222,24 @@ internal fun filterBySuppress(entries: List<LogSqlEntry>, suppressKeys: Set<Stri
  * - 时间——对显示片段（[timestampDisplayText]，含方括号与设置格式，所见即所搜）contains；
  *   显示开关关闭时片段为 null，时间分支天然不参与
  * [timestampTextOf] 可注入（测试绕开设置读取），默认取当前设置下的真实显示片段。
+ *
+ * T-HistorySearchToggles：[matchCase] 大小写敏感开关（默认 false=忽略大小写，与历史面板/
+ * MCP 链三链语义统一；默认值保既有测试零改动）。行号精确匹配不受开关影响。
  */
 internal fun filterBySearch(
     entries: List<LogSqlEntry>,
     query: String,
+    matchCase: Boolean = false,
     timestampTextOf: (LogSqlEntry) -> String? = ::timestampDisplayText,
 ): List<LogSqlEntry> {
     val q = query.trim()
     if (q.isEmpty()) return entries
     val rowNumber = q.removePrefix("#").toLongOrNull()?.takeIf { it > 0 }
     return entries.filter {
-        it.restoredSql.contains(q, ignoreCase = true)
-            || it.summary.contains(q, ignoreCase = true)
+        it.restoredSql.contains(q, ignoreCase = !matchCase)
+            || it.summary.contains(q, ignoreCase = !matchCase)
             || (rowNumber != null && it.sequenceNumber == rowNumber)
-            || timestampTextOf(it)?.contains(q, ignoreCase = true) == true
+            || timestampTextOf(it)?.contains(q, ignoreCase = !matchCase) == true
     }
 }
 
@@ -524,6 +528,41 @@ class SqlLogPanel(
 
     /** 搜索条（默认隐藏，Ctrl+F/⌘F 唤起；实时过滤 restoredSql 与摘要）。 */
     private val searchField = buildSearchField()
+
+    // ---------- T-HistorySearchToggles：日志页 MatchCase 单开关（会话级，默认关=忽略大小写） ----------
+
+    /** 当前大小写敏感态（日志页无正则，仅此一旗——D133 拍板 F：日志面板只加 MatchCase）。 */
+    private var logMatchCase = false
+
+    /** MatchCase 开关按钮（AllIcons.Actions.MatchCase，与历史页/IDE Find 同图标同语义；随搜索条显隐）。 */
+    private val matchCaseToggle = JToggleButton(AllIcons.Actions.MatchCase).apply {
+        isFocusable = false
+        toolTipText = MpSqlVisualizerBundle.message("log.search.matchCase.tip")
+        addActionListener {
+            logMatchCase = isSelected
+            refreshList()
+        }
+    }
+
+    /**
+     * 搜索条宿主（CENTER 搜索框 + EAST MatchCase 开关）：显隐作用于宿主（开关随条同隐同显）；
+     * 搜索框自身 isVisible 与宿主保持同步——既有布局测试断言「搜索条默认隐藏」落在字段上，契约不变。
+     */
+    private val searchBar = JPanel(BorderLayout()).apply {
+        isOpaque = false
+        isVisible = false
+        add(searchField, BorderLayout.CENTER)
+        add(
+            JPanel(FlowLayout(FlowLayout.LEFT, 2, 0)).apply {
+                isOpaque = false
+                add(matchCaseToggle)
+            },
+            BorderLayout.EAST,
+        )
+    }
+
+    /** 测试断言/驱动：MatchCase 开关按钮（等价用户点击 = isSelected 翻转后自动刷新列表）。 */
+    internal val matchCaseToggleForTest: JToggleButton get() = matchCaseToggle
 
     // ---------- 测试访问器（headless 测试断言用） ----------
 
@@ -823,7 +862,8 @@ class SqlLogPanel(
         val top = JPanel(BorderLayout())
         top.add(buildToolbar(), BorderLayout.NORTH)
         top.add(focusTabBar, BorderLayout.CENTER)
-        top.add(searchField, BorderLayout.SOUTH)
+        // T-HistorySearchToggles：挂搜索条宿主（搜索框 + MatchCase 开关），显隐契约不变
+        top.add(searchBar, BorderLayout.SOUTH)
         return top
     }
 
@@ -918,19 +958,22 @@ class SqlLogPanel(
     }
 
     private fun showSearch() {
-        if (!searchField.isVisible) {
+        if (!searchBar.isVisible) {
             searchField.isVisible = true
-            searchField.parent?.revalidate()
-            searchField.parent?.repaint()
+            searchBar.isVisible = true
+            searchBar.parent?.revalidate()
+            searchBar.parent?.repaint()
         }
         searchField.requestFocus()
     }
 
     private fun hideSearch() {
         searchField.text = "" // 非空时触发 DocumentListener 清过滤并刷新
+        searchBar.isVisible = false
+        // 与宿主同步隐（恢复初始态——布局测试断言「搜索条默认隐藏」落在字段上）
         searchField.isVisible = false
-        searchField.parent?.revalidate()
-        searchField.parent?.repaint()
+        searchBar.parent?.revalidate()
+        searchBar.parent?.repaint()
         list.requestFocusInWindow()
     }
 
@@ -946,6 +989,9 @@ class SqlLogPanel(
         searchText = searchField.text
         refreshList()
     }
+
+    /** 测试驱动：立即应用搜索框文本（headless 下防抖 Swing Timer 到点不可控），等价生产防抖回调。 */
+    internal fun applySearchTextForTest() = applySearchText()
 
     // ---------- SQL类型多选弹窗 ----------
 
@@ -1489,7 +1535,7 @@ class SqlLogPanel(
      * 1. [filterBySuppress]：按屏蔽规则指纹集滤存量（T-SqlSuppress O-69；管线最前——空集零成本）
      * 2. [filterByType]：按 [activeFilter] 筛选（全选 = 全部，含 OTHER）
      * 3. [filterByFocus]：按 [activeFocus] 聚焦（M56 T-M56-00 基础设施；null = 透传）
-     * 4. [filterBySearch]：按 [searchText] 搜索（大小写不敏感）
+     * 4. [filterBySearch]：按 [searchText] 搜索（默认忽略大小写；T-HistorySearchToggles 起随 MatchCase 开关）
      * 5. [applySort]：按 [sortMode] 排序（降序耗时）
      * 6. 差分渲染：T-Perf-03 增量刷新——流式追加免全量重建；无法增量时回退分批全量重建
      *
@@ -1527,7 +1573,8 @@ class SqlLogPanel(
         )
         // T-M55-03/04：动态聚焦页签层（页签=过滤器，多开并集；离散增删走 FullRebuild，差分零改动）
         val focused = filterByFocusTabs(filtered, focusTabs)
-        val searched = filterBySearch(focused, searchText)
+        // T-HistorySearchToggles：搜索旗随 MatchCase 开关（默认关=忽略大小写，与现状一致）
+        val searched = filterBySearch(focused, searchText, matchCase = logMatchCase)
         val newVisible = applySort(searched)
         val evicted = manager.entries.drainEvictedCount()
 

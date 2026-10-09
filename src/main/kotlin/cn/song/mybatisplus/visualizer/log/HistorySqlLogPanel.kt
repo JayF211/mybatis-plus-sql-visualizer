@@ -45,6 +45,7 @@ import javax.swing.DefaultListModel
 import javax.swing.JComboBox
 import javax.swing.JPanel
 import javax.swing.SwingConstants
+import javax.swing.JToggleButton
 
 /**
  * 历史 SQL 面板（F-44-3 两级导航）：读取自动保存目录中的历史文件展示
@@ -134,6 +135,57 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         javax.swing.Timer(SEARCH_DEBOUNCE_MS) { applySearch() }.apply { isRepeats = false }
 
     private val searchField = SearchTextField()
+
+    // ---------- T-HistorySearchToggles：检索正则/大小写开关（会话级，默认均关；对齐 IDE 原生查找） ----------
+
+    /** 正则开关（默认关=与现状子串语义一致；`regex:` 前缀独立生效，不受开关影响）。 */
+    private var regexEnabled = false
+
+    /** 大小写敏感开关（默认关=忽略大小写；与日志页 filterBySearch、MCP 链三链语义统一）。 */
+    private var matchCaseEnabled = false
+
+    /** 正则编译 memo（键 = 源串 + matchCase 旗，见 [HistoryRegexMemo]）。 */
+    private val regexMemo = HistoryRegexMemo()
+
+    /** 正则开关按钮（AllIcons.Actions.Regex，与 IDE Find 同图标同语义；243 平台存在性已核——P1）。 */
+    private val regexToggle = JToggleButton(AllIcons.Actions.Regex).apply {
+        isFocusable = false
+        toolTipText = MpSqlVisualizerBundle.message("log.history.search.regex.tip")
+        addActionListener {
+            regexEnabled = isSelected
+            applySearch()
+        }
+    }
+
+    /** 大小写开关按钮（AllIcons.Actions.MatchCase；tooltip 写明文件名检索同样生效、正则跟随）。 */
+    private val matchCaseToggle = JToggleButton(AllIcons.Actions.MatchCase).apply {
+        isFocusable = false
+        toolTipText = MpSqlVisualizerBundle.message("log.history.search.matchCase.tip")
+        addActionListener {
+            matchCaseEnabled = isSelected
+            applySearch()
+        }
+    }
+
+    /** 搜索框宿主（CENTER 搜索框 + EAST 两枚开关）：BorderLayout 结构上单行，窄宽无折行可能。 */
+    private val searchBar = JPanel(BorderLayout()).apply {
+        isOpaque = false
+        add(searchField, BorderLayout.CENTER)
+        add(
+            JPanel(FlowLayout(FlowLayout.LEFT, 2, 0)).apply {
+                isOpaque = false
+                add(regexToggle)
+                add(matchCaseToggle)
+            },
+            BorderLayout.EAST,
+        )
+    }
+
+    /** 测试断言/驱动：正则开关按钮（等价用户点击 = isSelected 翻转后自动应用过滤）。 */
+    internal val regexToggleForTest: JToggleButton get() = regexToggle
+
+    /** 测试断言/驱动：大小写开关按钮。 */
+    internal val matchCaseToggleForTest: JToggleButton get() = matchCaseToggle
 
     // ---------- T-UiNative T-UN-10：顶部导航动作（原手摆 28×28「仿平台按钮」JButton 平移） ----------
 
@@ -273,7 +325,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             override fun removeUpdate(e: javax.swing.event.DocumentEvent) = scheduleSearch()
             override fun changedUpdate(e: javax.swing.event.DocumentEvent) = scheduleSearch()
         })
-        toolbar.add(searchField)
+        // T-HistorySearchToggles：搜索框外包宿主容器（CENTER 搜索框 + EAST 正则/大小写两枚开关）
+        toolbar.add(searchBar)
         // O-90：同模板聚焦提示 chip（聚焦时显示；点击清除）
         toolbar.add(templateFilterChip)
         add(toolbar, BorderLayout.NORTH)
@@ -512,79 +565,39 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         if (currentFile != null) applySqlSearch() else applyFileSearch()
     }
 
-    /** 一级：按文件名过滤。 */
+    /**
+     * 一级：按文件名过滤。T-HistorySearchToggles：matchCase 开关生效（默认关=忽略大小写）；
+     * regex 开关**不参与**（文件名正则价值低，tooltip 已写明两级语义差）。
+     */
     private fun applyFileSearch() {
-        val query = searchField.text.trim().lowercase()
+        val query = searchField.text.trim()
         fileListModel.clear()
         val filtered = if (query.isEmpty()) {
             allFiles
         } else {
-            allFiles.filter { it.displayName.lowercase().contains(query) }
+            allFiles.filter { it.displayName.contains(query, ignoreCase = !matchCaseEnabled) }
         }
         filtered.forEach { fileListModel.addElement(it) }
     }
-
-/**
-     * 二级：按 SQL 内容 / 行号 / 时间 / 源文件过滤（T-LogSearchRowTime 与日志页 filterBySearch
-     * 同款语义：行号 `#5`/`5` 精确 equals、时间按显示片段 contains（所见即所搜，开关关闭不参与）；
-     * 源文件为历史页特有检索目标，保留独立分支。
-     */
-    /**
-     * F41（T-PerfSweep16）：正则检索 pattern 双字段 memo——源串与上次相同即复用 [lastRegex]，
-     * 不同才重编。调用面 = [applySqlSearch] 的 `regex:` 分支（搜索防抖 200ms Timer 每次应用都走到，
-     * 此前每次现场 `Regex(…)` 编译）。面板单实例且调用全部发生在 EDT（Swing Timer 回调），
-     * 实例字段无需并发容器。非法正则 fail-closed 回退子串匹配语义保持：编译失败时把**失败源串**
-     * 一并 memo（[lastRegex] 置 null）——同坏串反复 apply 不再重复抛编译异常，换串即重试，
-     * 匹配行为与逐次重编完全一致（Regex 实例的 containsMatchIn 无状态，复用安全）。
-     */
-    private fun resolveSearchPattern(source: String): Regex? {
-        if (source == lastRegexSource) return lastRegex
-        val compiled = runCatching { Regex(source) }.getOrNull()
-        lastRegexSource = source
-        lastRegex = compiled
-        return compiled
-    }
-
-    /** F41：上次 memo 的正则源串（null = 尚无 memo，首次必重编）。 */
-    private var lastRegexSource: String? = null
-
-    /** F41：与 [lastRegexSource] 配对的编译结果（非法源串配 null，走回退路径）。 */
-    private var lastRegex: Regex? = null
 
     private fun applySqlSearch() {
         // O-90：同模板计数随文件内容重建（**全量条目**聚合——徽章计数不随搜索/聚焦波动）；
         // 渲染器与右键聚焦动作共用同一快照
         templateCounts = structureKeyCounts(currentEntries)
         sqlCellRenderer.templateCounts = templateCounts
-        val q = searchField.text.trim()
-        // R16（检索强化增量）：`regex:` 前缀启用正则匹配（作用 SQL/摘要/源文件三目标）——
-        // 非法正则 fail-closed 回退子串匹配（不产生空结果假象）。
-        // F41（T-PerfSweep16）：pattern 经 [resolveSearchPattern] 双字段 memo，同源串不再每次重编。
-        if (q.startsWith("regex:")) {
-            val pattern = resolveSearchPattern(q.removePrefix("regex:"))
-            if (pattern != null) {
-                showSqlEntries(currentEntries.filter { entry ->
-                    pattern.containsMatchIn(entry.restoredSql) ||
-                        pattern.containsMatchIn(entry.summary) ||
-                        entry.sourceFile?.let { pattern.containsMatchIn(it) } == true
-                })
-                return
-            }
-            // 非法正则：回退普通子串匹配（继续走下方通用路径）
-        }
-        val filtered = if (q.isEmpty()) {
-            currentEntries
-        } else {
-            val rowNumber = q.removePrefix("#").toLongOrNull()
-            currentEntries.filter { entry ->
-                entry.restoredSql.contains(q, ignoreCase = true) ||
-                    entry.summary.contains(q, ignoreCase = true) ||
-                    (rowNumber != null && entry.sequenceNumber == rowNumber) ||
-                    timestampDisplayText(entry)?.contains(q, ignoreCase = true) == true ||
-                    entry.sourceFile?.contains(q, ignoreCase = true) == true
-            }
-        }
-        showSqlEntries(filtered)
+        // T-HistorySearchToggles：查询解析与过滤抽为顶层纯函数 [filterHistoryEntries]（可独立单测，
+        // 形态照日志页 filterBySearch 先例）；memo 实例面板持有，防抖 200ms 反复 apply 复用编译结果。
+        // 正则生效条件 = 开关或 `regex:` 前缀（前缀是已发行能力，验收 3.11 不回归）；编译旗随
+        // matchCase；非法正则 fail-closed 回退子串保持；行号 `#N` 精确匹配不受开关影响。
+        showSqlEntries(
+            filterHistoryEntries(
+                currentEntries,
+                searchField.text.trim(),
+                regexEnabled = regexEnabled,
+                matchCase = matchCaseEnabled,
+                memo = regexMemo,
+            ),
+        )
     }
 
     /**
@@ -1063,6 +1076,84 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
         /** T-SqlHistoryFull：二级列表分批填充——每块 invokeLater 追加条数（防 EDT 长冻结）。 */
         private const val REFRESH_CHUNK_SIZE = 30
+    }
+}
+
+// ---------- T-HistorySearchToggles：历史检索「查询 → 过滤」纯逻辑（applySqlSearch 抽缝，可独立单测） ----------
+
+/** `regex:` 前缀（R16 已发行能力）：正则开关关闭时同样触发正则匹配（或语义，前缀在场先剥）。 */
+internal const val HISTORY_REGEX_PREFIX = "regex:"
+
+/**
+ * 正则编译 memo（F41 双字段 memo 的 T-HistorySearchToggles 扩展）。
+ *
+ * **键 = 源串 + matchCase 旗二元组**——只按源串判等会在切开关后复用错误编译结果
+ * （例：`user` 以 IGNORE_CASE 编译后切到敏感态仍复用 → 大写目标命中不了，S3 最易埋点）。
+ * 非法源串同样整键 memo（[compiled] 配 null），同坏串同旗反复 apply 不再重复抛编译异常，
+ * 换串或换旗即重试，匹配行为与逐次重编完全一致（Regex 的 containsMatchIn 无状态，复用安全）。
+ * 面板单实例且调用全部发生在 EDT（Swing Timer 回调），可变字段无需并发容器。
+ */
+internal class HistoryRegexMemo {
+    var source: String? = null
+
+    /** 与 [source] 配对的编译大小写旗（ memo 键的另一半）。 */
+    var matchCase: Boolean = false
+
+    /** 编译结果（非法源串配 null，调用方走子串回退路径）。 */
+    var compiled: Regex? = null
+}
+
+/** 按 [memo] 取编译结果：同源串**同旗**复用，否则（重）编译；非法源串 memo 失败供下次复用。 */
+internal fun resolveHistoryRegex(source: String, matchCase: Boolean, memo: HistoryRegexMemo): Regex? {
+    if (source == memo.source && matchCase == memo.matchCase) return memo.compiled
+    val compiled = runCatching {
+        if (matchCase) Regex(source) else Regex(source, RegexOption.IGNORE_CASE)
+    }.getOrNull()
+    memo.source = source
+    memo.matchCase = matchCase
+    memo.compiled = compiled
+    return compiled
+}
+
+/**
+ * 历史二级检索过滤（纯逻辑，形态照日志页 [filterBySearch] 先例）：
+ *
+ * - **正则**：生效条件 = 开启正则开关**或** `regex:` 前缀（前缀在场先剥、不参与匹配）；
+ *   命中三维 restoredSql/summary/sourceFile（R16 现状，时间不参与）；编译旗随 matchCase
+ *   （行为变更声明：正则路径从恒敏感改为随开关，默认关=忽略大小写，见计划 §三）；
+ * - **非法正则**：fail-closed 回退普通子串匹配（回退查询为原始 query 全文含前缀，与现状逐字一致）；
+ * - **子串**：匹配 restoredSql/summary/时间显示片段/sourceFile，大小写统一由 matchCase 控制
+ *   （默认关=忽略大小写）；行号 `#N`/`N` 精确 equals [LogSqlEntry.sequenceNumber]，不受开关影响；
+ * - 空查询透传全部。[timestampTextOf] 可注入（测试绕开设置读取），默认取当前设置下的真实显示片段。
+ */
+internal fun filterHistoryEntries(
+    entries: List<LogSqlEntry>,
+    query: String,
+    regexEnabled: Boolean = false,
+    matchCase: Boolean = false,
+    memo: HistoryRegexMemo = HistoryRegexMemo(),
+    timestampTextOf: (LogSqlEntry) -> String? = ::timestampDisplayText,
+): List<LogSqlEntry> {
+    val q = query.trim()
+    if (q.isEmpty()) return entries
+    if (regexEnabled || q.startsWith(HISTORY_REGEX_PREFIX)) {
+        val pattern = resolveHistoryRegex(q.removePrefix(HISTORY_REGEX_PREFIX), matchCase, memo)
+        if (pattern != null) {
+            return entries.filter { entry ->
+                pattern.containsMatchIn(entry.restoredSql) ||
+                    pattern.containsMatchIn(entry.summary) ||
+                    entry.sourceFile?.let { pattern.containsMatchIn(it) } == true
+            }
+        }
+        // 非法正则：回退普通子串匹配（继续走下方通用路径）
+    }
+    val rowNumber = q.removePrefix("#").toLongOrNull()
+    return entries.filter { entry ->
+        entry.restoredSql.contains(q, ignoreCase = !matchCase) ||
+            entry.summary.contains(q, ignoreCase = !matchCase) ||
+            (rowNumber != null && entry.sequenceNumber == rowNumber) ||
+            timestampTextOf(entry)?.contains(q, ignoreCase = !matchCase) == true ||
+            entry.sourceFile?.contains(q, ignoreCase = !matchCase) == true
     }
 }
 
