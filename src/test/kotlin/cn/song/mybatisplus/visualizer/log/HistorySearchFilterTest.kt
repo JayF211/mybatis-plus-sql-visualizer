@@ -167,11 +167,11 @@ class HistorySearchFilterTest : BasePlatformTestCase() {
             assertEquals(2, panel.sqlListEntries.size)
 
             // 点 MatchCase：子串变敏感，只剩小写条目
-            panel.matchCaseToggleForTest.doClick()
+            panel.matchCaseToggleForTest = !panel.matchCaseToggleForTest
             assertEquals(listOf("select 1"), panel.sqlListEntries.map { it.restoredSql })
 
             // 点 Regex：正则开关接线生效——pattern "WHERE id = 1$" 命中第一条（子串语义下无命中）
-            panel.regexToggleForTest.doClick()
+            panel.regexToggleForTest = !panel.regexToggleForTest
             panel.setSearchForTest("WHERE id = 1$")
             assertEquals(listOf("SELECT * FROM USER WHERE id = 1"), panel.sqlListEntries.map { it.restoredSql })
         } finally {
@@ -188,7 +188,7 @@ class HistorySearchFilterTest : BasePlatformTestCase() {
             // 一级：matchCase 生效、regex 不参与——"SQL-HISTORY" 关态命中（忽略大小写）、开态不命中
             panel.setSearchForTest("SQL-HISTORY")
             assertEquals(1, panel.fileListEntries.size)
-            panel.matchCaseToggleForTest.doClick()
+            panel.matchCaseToggleForTest = !panel.matchCaseToggleForTest
             assertEquals(0, panel.fileListEntries.size)
         } finally {
             panel.dispose()

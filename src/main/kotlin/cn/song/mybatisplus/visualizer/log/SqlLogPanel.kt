@@ -14,6 +14,7 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.TextCopyList
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
+import cn.song.mybatisplus.visualizer.ui.search.NativeSearchTextField
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.util.Disposer
@@ -527,42 +528,36 @@ class SqlLogPanel(
     // ---------- T-ListMode：SQL 显示模式（T-DisplayModeToSettings：入口迁设置页「列表显示」，两列表共享一键） ----------
 
     /** 搜索条（默认隐藏，Ctrl+F/⌘F 唤起；实时过滤 restoredSql 与摘要）。 */
-    private val searchField = buildSearchField()
+    // ---------- T-SearchToggleNativeLook（O-137）：搜索条迁平台原生 SearchTextArea ----------
+    //
+    // MatchCase 单开关走原生钮（内嵌搜索框右侧，与 Ctrl+F 同形态）；正则钮不内嵌（D133 拍板：
+    // 日志页无正则）。旗改从 NativeSearchTextField.findModel.isCaseSensitive 读，过滤语义零变化。
+    // 显隐契约保持在宿主 searchBar 上（isVisible 由 showSearch/hideSearch 控制）。
 
-    // ---------- T-HistorySearchToggles：日志页 MatchCase 单开关（会话级，默认关=忽略大小写） ----------
+    private val nativeSearch = NativeSearchTextField(
+        placeholderText = MpSqlVisualizerBundle.message("log.search.emptyText"),
+        showRegex = false,
+    )
 
-    /** 当前大小写敏感态（日志页无正则，仅此一旗——D133 拍板 F：日志面板只加 MatchCase）。 */
-    private var logMatchCase = false
+    private val searchField = nativeSearch
 
-    /** MatchCase 开关按钮（AllIcons.Actions.MatchCase，与历史页/IDE Find 同图标同语义；随搜索条显隐）。 */
-    private val matchCaseToggle = JToggleButton(AllIcons.Actions.MatchCase).apply {
-        isFocusable = false
-        toolTipText = MpSqlVisualizerBundle.message("log.search.matchCase.tip")
-        addActionListener {
-            logMatchCase = isSelected
-            refreshList()
-        }
-    }
+    /** 当前大小写敏感态（原生钮状态落点）。 */
+    private val logMatchCase: Boolean get() = nativeSearch.isMatchCase()
 
-    /**
-     * 搜索条宿主（CENTER 搜索框 + EAST MatchCase 开关）：显隐作用于宿主（开关随条同隐同显）；
-     * 搜索框自身 isVisible 与宿主保持同步——既有布局测试断言「搜索条默认隐藏」落在字段上，契约不变。
-     */
+    /** 搜索条宿主（原生 SearchTextArea 自带内嵌开关；显隐由 showSearch/hideSearch 控制）。 */
     private val searchBar = JPanel(BorderLayout()).apply {
         isOpaque = false
         isVisible = false
-        add(searchField, BorderLayout.CENTER)
-        add(
-            JPanel(FlowLayout(FlowLayout.LEFT, 2, 0)).apply {
-                isOpaque = false
-                add(matchCaseToggle)
-            },
-            BorderLayout.EAST,
-        )
+        add(nativeSearch.searchTextArea, BorderLayout.CENTER)
     }
 
-    /** 测试断言/驱动：MatchCase 开关按钮（等价用户点击 = isSelected 翻转后自动刷新列表）。 */
-    internal val matchCaseToggleForTest: JToggleButton get() = matchCaseToggle
+    /** 测试断言/驱动：MatchCase 旗（等价用户点击 = 置 FindModel.isCaseSensitive 后自动刷新列表）。 */
+    internal var matchCaseToggleForTest: Boolean
+        get() = logMatchCase
+        set(value) {
+            nativeSearch.findModel.isCaseSensitive = value
+            refreshList()
+        }
 
     // ---------- 测试访问器（headless 测试断言用） ----------
 
@@ -642,7 +637,14 @@ class SqlLogPanel(
     }
 
     /** 搜索条（测试断言显隐/文本）。 */
-    internal val searchFieldForTest: SearchTextField get() = searchField
+    internal val searchFieldForTest: cn.song.mybatisplus.visualizer.ui.search.NativeSearchTextField get() = searchField
+
+    /** 布局测试契约：搜索条可见性（旧断言落在 searchField.isVisible 上，迁到宿主 searchBar）。 */
+    internal var searchFieldVisibleForTest: Boolean
+        get() = searchBar.isVisible
+        set(value) {
+            searchBar.isVisible = value
+        }
 
     /** 单击预览控制器（T-ClickPreview 测试断言：排程/取消/弹窗残留）。 */
     internal val clickPreviewForTest: SqlClickPreview get() = clickPreview
@@ -916,28 +918,6 @@ class SqlLogPanel(
         return row
     }
 
-    /** 搜索条（默认隐藏；Ctrl+F/⌘F 经 ShowSearchAction 唤起）。 */
-    private fun buildSearchField(): SearchTextField {
-        val field = SearchTextField(false) // 不启用历史弹窗
-        field.isVisible = false
-        field.getTextEditor().emptyText.text = MpSqlVisualizerBundle.message("log.search.emptyText")
-        field.addDocumentListener(object : DocumentListener {
-            override fun insertUpdate(e: DocumentEvent) = onSearchTextChanged()
-            override fun removeUpdate(e: DocumentEvent) = onSearchTextChanged()
-            override fun changedUpdate(e: DocumentEvent) = onSearchTextChanged()
-        })
-        // Esc 收起：文本非空时平台已注册 ACTION_CLEAR_TEXT（SearchTextField.addNotify）先清空，
-        // 故仅空文本时走到这里 → 收起搜索条（满足「非空先清空，已空再收起」两段式）
-        field.addKeyboardListener(object : KeyAdapter() {
-            override fun keyPressed(e: KeyEvent) {
-                if (e.keyCode == KeyEvent.VK_ESCAPE && field.text.isEmpty()) {
-                    hideSearch()
-                    e.consume()
-                }
-            }
-        })
-        return field
-    }
 
     /** Ctrl+F/⌘F 唤起搜索条（快捷键经 CommonShortcuts.getFind() 平台 keymap 自适应 mac/win）。 */
     private inner class ShowSearchAction : AnAction() {
@@ -959,19 +939,16 @@ class SqlLogPanel(
 
     private fun showSearch() {
         if (!searchBar.isVisible) {
-            searchField.isVisible = true
             searchBar.isVisible = true
             searchBar.parent?.revalidate()
             searchBar.parent?.repaint()
         }
-        searchField.requestFocus()
+        searchField.searchTextArea.requestFocus()
     }
 
     private fun hideSearch() {
         searchField.text = "" // 非空时触发 DocumentListener 清过滤并刷新
         searchBar.isVisible = false
-        // 与宿主同步隐（恢复初始态——布局测试断言「搜索条默认隐藏」落在字段上）
-        searchField.isVisible = false
         searchBar.parent?.revalidate()
         searchBar.parent?.repaint()
         list.requestFocusInWindow()

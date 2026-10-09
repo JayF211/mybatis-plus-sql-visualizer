@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.ui.diff.SqlDiffer
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
+import cn.song.mybatisplus.visualizer.ui.search.NativeSearchTextField
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
@@ -134,59 +135,44 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private val searchDebounceTimer =
         javax.swing.Timer(SEARCH_DEBOUNCE_MS) { applySearch() }.apply { isRepeats = false }
 
-    private val searchField = SearchTextField()
+    // ---------- T-SearchToggleNativeLook（O-137）：搜索框+开关迁移到平台原生形态 ----------
+    //
+    // SearchTextArea（Find in Files/Ctrl+F 同款）内嵌原生 ToggleMatchCase/ToggleRegex；
+    // 两旗改从 NativeSearchTextField.findModel 读取（FindModel.isRegularExpressions/isCaseSensitive），
+    // 过滤语义/memo 键/regex: 前缀完全不变。原生 Toggle 无独立 click 监听——测试缝直接置 FindModel 旗，
+    // 生产路径由原生钮自己改旗。
 
-    // ---------- T-HistorySearchToggles：检索正则/大小写开关（会话级，默认均关；对齐 IDE 原生查找） ----------
+    private val nativeSearch = NativeSearchTextField(placeholderText = null, showRegex = true)
 
-    /** 正则开关（默认关=与现状子串语义一致；`regex:` 前缀独立生效，不受开关影响）。 */
-    private var regexEnabled = false
+    private val searchField = nativeSearch
 
-    /** 大小写敏感开关（默认关=忽略大小写；与日志页 filterBySearch、MCP 链三链语义统一）。 */
-    private var matchCaseEnabled = false
+    /** 大小写敏感开关（原生钮状态落点；默认关=忽略大小写，三链语义统一）。 */
+    private val matchCaseEnabled: Boolean get() = nativeSearch.isMatchCase()
+
+    /** 正则开关（原生钮状态落点；默认关=子串语义；regex: 前缀独立生效）。 */
+    private val regexEnabled: Boolean get() = nativeSearch.isRegex()
 
     /** 正则编译 memo（键 = 源串 + matchCase 旗，见 [HistoryRegexMemo]）。 */
     private val regexMemo = HistoryRegexMemo()
 
-    /** 正则开关按钮（AllIcons.Actions.Regex，与 IDE Find 同图标同语义；243 平台存在性已核——P1）。 */
-    private val regexToggle = JToggleButton(AllIcons.Actions.Regex).apply {
-        isFocusable = false
-        toolTipText = MpSqlVisualizerBundle.message("log.history.search.regex.tip")
-        addActionListener {
-            regexEnabled = isSelected
+    /** 搜索框宿主：原生 SearchTextArea 自带内嵌开关，直接占满一行。 */
+    private val searchBar = nativeSearch.searchTextArea
+
+    /** 测试断言/驱动：正则旗（等价用户点击 = 置 FindModel.isRegularExpressions 后应用过滤）。 */
+    internal var regexToggleForTest: Boolean
+        get() = regexEnabled
+        set(value) {
+            nativeSearch.findModel.isRegularExpressions = value
             applySearch()
         }
-    }
 
-    /** 大小写开关按钮（AllIcons.Actions.MatchCase；tooltip 写明文件名检索同样生效、正则跟随）。 */
-    private val matchCaseToggle = JToggleButton(AllIcons.Actions.MatchCase).apply {
-        isFocusable = false
-        toolTipText = MpSqlVisualizerBundle.message("log.history.search.matchCase.tip")
-        addActionListener {
-            matchCaseEnabled = isSelected
+    /** 测试断言/驱动：大小写旗。 */
+    internal var matchCaseToggleForTest: Boolean
+        get() = matchCaseEnabled
+        set(value) {
+            nativeSearch.findModel.isCaseSensitive = value
             applySearch()
         }
-    }
-
-    /** 搜索框宿主（CENTER 搜索框 + EAST 两枚开关）：BorderLayout 结构上单行，窄宽无折行可能。 */
-    private val searchBar = JPanel(BorderLayout()).apply {
-        isOpaque = false
-        add(searchField, BorderLayout.CENTER)
-        add(
-            JPanel(FlowLayout(FlowLayout.LEFT, 2, 0)).apply {
-                isOpaque = false
-                add(regexToggle)
-                add(matchCaseToggle)
-            },
-            BorderLayout.EAST,
-        )
-    }
-
-    /** 测试断言/驱动：正则开关按钮（等价用户点击 = isSelected 翻转后自动应用过滤）。 */
-    internal val regexToggleForTest: JToggleButton get() = regexToggle
-
-    /** 测试断言/驱动：大小写开关按钮。 */
-    internal val matchCaseToggleForTest: JToggleButton get() = matchCaseToggle
-
     // ---------- T-UiNative T-UN-10：顶部导航动作（原手摆 28×28「仿平台按钮」JButton 平移） ----------
 
     /** 导航工具栏引用（层级切换后即时刷新 Back 可见性；T-UN-10）。 */

@@ -30,9 +30,14 @@
 
 ## 四、待验证前提（实施者先证伪再动手）
 
-- **P1**：243 平台 `com.intellij.find.SearchTextArea` 的可见性/构造与状态读写（读 243 源码 jar：`SearchTextArea`、`EditorSearchSession`、`FindPopupPanel` 的用法；确认是否 internal 及其依赖面）。
+- **P1 ✅ 已证伪/证实（20261009 深夜 javap 反汇编 243 app-client.jar）**：
+  - `SearchTextArea` 是公开类（非 internal），构造器 `SearchTextArea(JTextArea, boolean multiline)`——可包我们自己的 JTextArea 直接实例化；
+  - 原生开关钮本质是 `editorHeaderActions.ToggleRegex / ToggleMatchCase`（`CheckboxAction`，图标含 Regex/RegexHovered/RegexSelected 三态 + tooltip + 正则帮助链接），它们从 `AnActionEvent.getData(SearchSession.KEY)` 取会话，抽象契约只有 `isSelected(SearchSession)/setSelected(SearchSession,Boolean)`，底层落到 `FindModel.isRegularExpressions / isCaseSensitive`；
+  - **接入路径**：`SearchTextArea.setExtraActions(AnAction...)`（返回 List）就是为内嵌按钮准备的入口；我们只需实现一个极小 `SearchSession`（持自有 `FindModel`，`getComponent()` 返回 null/占位）放进 DataContext，Toggle 动作即可原生驱动；
+  - 或者更彻底：直接用 `SearchReplaceComponent.Builder.buildFor(project, component, searchSession)`（243 同 API，FindPopupPanel/EditorSearchSession 同款），原生框+原生钮一步到位；
+  - 结论：**S1 成立**，243 可独立实例化、状态可经 FindModel 读写。
 - **P2**：SearchTextArea 的 regex/matchCase 态可程序化读写（供既有过滤链与单测驱动）。
-- **P3**：三版本一致性——243/253/262 的该 API 面相同（verifyGate 三目标 + 必要时反射探测）。
+- **P3（缩小后）**：243 已反汇编证实；253/262 只需 verifyGate 编译通过 + 沙盒冒烟（API 面极小：`SearchTextArea(JTextArea,boolean)`、`setExtraActions(AnAction...)`、`ToggleRegex/ToggleMatchCase(FindModel)`，均为稳定 find 包 API）。
 - **P4**：日志页（SqlLogPanel）搜索条与历史页结构不同，两处改造互不影响、过滤链回归为零。
 - **P5**：`.*`/`Cc` 的既有定向测试（T-HistorySearchToggles 交付的用例）在样式改造后仍可驱动（测试缝 `regexToggleForTest` 等需同步迁移）。
 
@@ -51,3 +56,35 @@
 ## 七、运行读数
 
 （实施时回填：定向测试读数、反向验证读数、真机观感截图对照）
+
+## 八、实施记录（20261009 深夜，主控亲跑）
+
+### 平台反汇编（P1 证实，243 app-client.jar）
+
+- `com.intellij.find.SearchTextArea`：公开类（非 internal），构造 `SearchTextArea(JTextArea, boolean multiline)`——可包我们自己的 JTextArea 直接实例化。
+- 原生开关钮本质 = `editorHeaderActions.ToggleRegex / ToggleMatchCase`（CheckboxAction；Regex 含 Regex/RegexHovered/RegexSelected 三态图标 + tooltip + 正则帮助链接），从 `AnActionEvent.getData(SearchSession.KEY)` 取会话，抽象契约只有 `isSelected(SearchSession)` / `setSelected(SearchSession, Boolean)`，底层落到 `FindModel.isRegularExpressions / isCaseSensitive`。
+- 内嵌入口 = `SearchTextArea.setExtraActions(AnAction...)`（返回 List，供 icons panel 布局）。
+- 平台自己（EditorSearchSession）的用法 = `SearchReplaceComponent.Builder.buildFor(project, component, session)` → `addPrimarySearchActions(ToggleMatchCase, ToggleWholeWordsOnly, ToggleRegex)` → `build`；FindPopupPanel 直接 `new SearchTextArea(JTextArea, false)`。
+- 结论：**S1 成立**，243 可独立实例化、状态经 FindModel 读写。
+
+### 实施
+
+- 新增 `ui/search/NativeSearchTextField.kt`：自有 `FindModel`（不与 IDE 全局 Find 串线）+ 极小 `SearchSession` 实现（getFindModel/getComponent 最小契约）+ `SearchTextArea(JTextArea, false)` + `setExtraActions(ToggleMatchCase, ToggleRegex)`（顺序对齐原生 Ctrl+F）；暴露 `getTextField()`（挂 DocumentListener）与 `getFindModel()`（读两旗）。
+- `HistorySqlLogPanel`：搜索框迁 NativeSearchTextField；regex/matchCase 两旗改从 `getFindModel()` 读，DocumentListener 喂既有 `HistoryRegexMemo`（键=源串+matchCase）与文件/条目过滤；`regexToggleForTest`/`matchCaseToggleForTest` 测试缝改代理 FindModel 旗（断言零语义变化）。
+- `SqlLogPanel`：同样迁移；matchCase 单旗从 FindModel 读（不传 ToggleRegex ⇒ 原生不显示正则钮，D2 保持「日志页无正则」拍板）。
+- 删除两个 `JToggleButton` 与其边框/悬停处理（原生钮接管形态）。
+
+### 读数
+
+- 定向：T-HistorySearchToggles 既有用例迁移后全绿（regex 两态/Cc 两态/`regex:` 前缀或语义）。
+- 反向验证：摘除 SearchSession 装配（DataContext 不供 KEY）⇒ 开关钮失效/不出现（红），还原复绿。
+- testFast（--rerun-tasks 强制全跑）：46/0/0/0（HistorySearchFilterTest + SqlLogPanelFilterTest +
+  NativeSearchTextFieldProviderContractTest 三类；其余 up-to-date 见构建产物）。verifyGate 见下。
+- 迁移中补发现：SqlLogPanelLayoutTest 的「搜索条默认隐藏」断言落在 searchField.isVisible 上，
+  随可见性契约迁到宿主 searchBar（searchFieldVisibleForTest），断言语义不变。
+- 真机（runIde 243 沙盒）：两处搜索框观感=原生 Ctrl+F，regex/Cc 两态行为截图对照在册。
+
+### 遗留
+
+- 原生组件的多行/历史弹层能力未启用（withMultilineEnabled、ShowSearchHistory 不接）。
+- 若 253/262 出现 API 漂移，fallback=类内部换 S2 复刻（对外接口不变）。

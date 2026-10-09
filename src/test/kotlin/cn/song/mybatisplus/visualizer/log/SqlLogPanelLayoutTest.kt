@@ -62,7 +62,7 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
 
             // 默认可见性：排序方式选择器恒可见（默认时间升序）；搜索条默认隐藏；慢查询徽章隐藏
             assertEquals("排序方式选择器应恒可见", true, panel.sortButtonForTest.isVisible)
-            assertEquals("搜索条默认隐藏", false, panel.searchFieldForTest.isVisible)
+            assertEquals("搜索条默认隐藏", false, panel.searchFieldVisibleForTest)
             assertEquals("默认无慢查询，计数徽章应隐藏/为空", false, panel.slowQueryLabelForTest?.isVisible ?: false)
         } finally {
             panel.dispose()

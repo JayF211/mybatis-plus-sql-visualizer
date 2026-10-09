@@ -183,9 +183,9 @@ class SqlLogPanelFilterTest : BasePlatformTestCase() {
             panel.searchFieldForTest.text = "user"
             panel.applySearchTextForTest()
             assertEquals("默认关=忽略大小写，命中", 1, panel.visibleEntryCount)
-            panel.matchCaseToggleForTest.doClick() // 等价用户点击：翻转选中态并触发刷新
+            panel.matchCaseToggleForTest = !panel.matchCaseToggleForTest // 等价用户点击：翻转选中态并触发刷新
             assertEquals("开关开=敏感，user 不命中 USER", 0, panel.visibleEntryCount)
-            panel.matchCaseToggleForTest.doClick()
+            panel.matchCaseToggleForTest = !panel.matchCaseToggleForTest
             assertEquals("再点关闭恢复命中", 1, panel.visibleEntryCount)
         } finally {
             panel.dispose()
