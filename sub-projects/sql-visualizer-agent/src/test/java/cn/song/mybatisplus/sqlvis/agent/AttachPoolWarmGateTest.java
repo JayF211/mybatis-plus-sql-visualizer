@@ -13,20 +13,20 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * T-AttachPoolWarm：真机复现级端到端（MySQL 8 + 存量池连接复用）——harness 照抄
  * {@code AttachGateTest}（子 JVM + loopback server + loadAgent + 读 CMD 帧），换真实 MySQL 驱动，
- * 分四模式逐一判「attach 后事件是否到达」。这是 {@code StatementWeaveEndToEndTest} 明确留档的
- * 「先建池再 retransform 的真机时序」判别用例（单测 JVM 拿不到 Instrumentation）：
+ * 分模式逐一判「attach 后事件是否到达」。这是 {@code StatementWeaveEndToEndTest} 明确留档的
+ * 「先建池再 retransform 的真机时序」判别用例（单测 JVM 拿不到 Instrumentation）。
  *
+ * <p>第一轮（A/B/C/D/D2/D3，裸 DriverManager 连接）六模式全绿——含用户主场景（attach 前建连接、
+ * attach 后同连接新建 PS）。第二轮补四格，逼近用户现场其余差异：
  * <ul>
- *   <li><b>C</b>（对照，预期通）：attach 后**新建**连接执行 SQL——确认 MySQL 名单/harness 无误。</li>
- *   <li><b>A</b>（主场景）：attach 前建好一条连接并执行一次查询（warm=存量池物理连接），attach 后
- *       在**同一条连接**上每条新 PS → executeQuery()（MyBatis + Hikari 复用形态）。</li>
- *   <li><b>B</b>：attach 前 prepareStatement 拿到 PS 并执行一次，attach 后复用**同一 PS 对象**——
- *       一期盲区（attach 前 prepare 无登记）实测。</li>
- *   <li><b>D</b>：语义同 A，叠加第三方 -javaagent（CoolRequest）——观察 retransform 是否被拖红。</li>
+ *   <li><b>A2</b>：HikariCP 4.0.3 真实池（Javassist 代理 HikariProxyConnection/PreparedStatement）+ 预热两条物理连接；</li>
+ *   <li><b>B2</b>：A2 语义搬到 JDK8 目标 JVM；</li>
+ *   <li><b>A3</b>：驱动换代 mysql-connector-java 8.0.28（Spring Boot 2.6.3 依赖管理版）；</li>
+ *   <li><b>A4</b>：Debug 模式（-agentlib:jdwp）。</li>
  * </ul>
  *
  * 每条模式把子进程 stdout/stderr 落盘到 {@code build/attachpool-out/<mode>.log}（redirectOutput），
- * 并原文摘出 {@code [SqlVisAgent] attach retransform:} 行与可能的首条事件行。
+ * 并原文摘出 {@code [SqlVisAgent] attach retransform:} 行与可能的首条事件/盲区行。
  *
  * 环境：MySQL localhost:3306（root/root，库 mpj_demo）。不可达时整类 Assume 跳过（不伪造读数）。
  */
@@ -36,6 +36,12 @@ public class AttachPoolWarmGateTest {
     private static final String JDBC_URL = "jdbc:mysql://localhost:3306/mpj_demo";
     private static final String DB_USER = "root";
     private static final String DB_PASS = "root";
+
+    /** 用户现场 JDK8（目标 JVM；attach 客户端仍为工具链 JDK）。 */
+    private static final String JDK8_JAVA_HOME = "D:/HuanJing/Java/jdk1.8.0_181";
+    /** Spring Boot 2.6.3 依赖管理版 MySQL 驱动（与 8.0.33 同挂子进程 classpath，按名各取）。 */
+    private static final String MYSQL_JAR_8028 = "mysql-connector-java-8.0.28.jar";
+    private static final String MYSQL_JAR_8033 = "mysql-connector-j-8.0.33.jar";
 
     /** CoolRequest agent jar（runIde 沙盒装、疑似被注入应用 JVM）——模式 D 用。 */
     private static final Path COOL_REQUEST_AGENT =
@@ -55,7 +61,7 @@ public class AttachPoolWarmGateTest {
         }
     }
 
-    // ---------- 四模式 ----------
+    // ---------- 第一轮（裸连接） ----------
 
     @org.junit.Test
     public void 模式C_对照_attach后新建连接_事件到达() throws Exception {
@@ -69,16 +75,13 @@ public class AttachPoolWarmGateTest {
     public void 模式A_主场景_存量连接上新建PS_事件到达() throws Exception {
         RunResult r = runMode("A", "attachpool_a", new ArrayList<String>(), WAIT_SECONDS * 1000L);
         report("A", r);
-        org.junit.Assert.assertTrue("模式A（主场景，存量池连接复用）应收到事件——"
-                + "attach 前建好连接、attach 后同连接新建 PS executeQuery\n" + r.asBlock(), r.eventReceived);
+        org.junit.Assert.assertTrue("模式A（主场景，存量池连接复用）应收到事件\n" + r.asBlock(), r.eventReceived);
     }
 
     @org.junit.Test
     public void 模式B_attach前prepare的PS复用_一期盲区表现() throws Exception {
         RunResult r = runMode("B", "attachpool_b", new ArrayList<String>(), 15_000L, null);
         report("B", r);
-        // 已知盲区：attach 前 prepare 的 PS 无登记 → 零事件且跳过计数（unresolvedCount 递增）。
-        // 此处只记录实测形态，不断言零事件（若某天二期兜底落地，事件出现即代表能力扩张）。
         org.junit.Assert.assertNotNull("模式B 必须产出 attach retransform 行", r.attachRetransformLine);
         org.junit.Assert.assertNotNull("模式B 必须命中盲区取证行（宿主侧「钩子在跑、SQL 取不到」证据）",
                 r.blindSpotLine);
@@ -92,16 +95,10 @@ public class AttachPoolWarmGateTest {
         jvmArgs.add("-javaagent:" + COOL_REQUEST_AGENT.toString());
         RunResult r = runMode("D", "attachpool_d", jvmArgs, WAIT_SECONDS * 1000L, null);
         report("D", r);
-        // 不断言必通——本模式的目的就是把「加了 CoolRequest 是否零事件」实测出来（读数进报告）。
         org.junit.Assert.assertNotNull("模式D 必须产出 attach retransform 行（或子进程早期死亡，见日志）",
                 r.attachRetransformLine);
     }
 
-    /**
-     * D2（更贴真机）：CoolRequest 先经 {@code VirtualMachine.loadAgent} 挂到**在跑进程**（= 用户现场
-     * 「沙盒 IDE 里装了 CoolRequest、已注入应用 JVM」），随后我们的 agent 再挂——检验第三方 transformer
-     * 先注册是否拖红我们的 retransform。语义同模式 A（存量连接 + 新 PS）。
-     */
     @org.junit.Test
     public void 模式D2_CoolRequest先attach在跑进程_再挂本agent() throws Exception {
         org.junit.Assume.assumeTrue("CoolRequest agent jar 不在位，模式 D2 跳过",
@@ -112,11 +109,6 @@ public class AttachPoolWarmGateTest {
         org.junit.Assert.assertNotNull("模式D2 必须产出 attach retransform 行", r.attachRetransformLine);
     }
 
-    /**
-     * D3（真机注入入口）：CoolRequest 的原生 hook agent 经 {@code VirtualMachine.loadAgentPath}
-     * 挂到在跑进程（= 沙盒 IDE 里 CoolRequest 对应用 JVM 的真实注入方式；jar 的 Agent-Class 无
-     * {@code agentmain}，D2 已实证标准 jar attach 走不通）。随后我们的 agent 再挂。
-     */
     @org.junit.Test(timeout = 120_000L)
     public void 模式D3_CoolRequest原生dll_attach在跑进程_再挂本agent() throws Exception {
         org.junit.Assume.assumeTrue("CoolRequest hook dll 不在位，模式 D3 跳过",
@@ -126,6 +118,55 @@ public class AttachPoolWarmGateTest {
         report("D3", r);
         org.junit.Assert.assertNotNull("模式D3 必须产出 attach retransform 行（或子进程早期死亡，见日志）",
                 r.attachRetransformLine);
+    }
+
+    // ---------- 第二轮四格（逼近用户现场） ----------
+
+    /** A2（最高优先）：HikariCP 真实池 + 存量物理连接 —— Javassist 代理族形态。 */
+    @org.junit.Test
+    public void 模式A2_Hikari真实池_存量物理连接复用() throws Exception {
+        org.junit.Assume.assumeTrue("MySQL 不可达，A2 跳过（环境受限未验证）", mysqlReachable());
+        RunResult r = runMode("H", "attachpool_h", new ArrayList<String>(), WAIT_SECONDS * 1000L,
+                null, false, defaultJavaBin(), MYSQL_JAR_8033);
+        report("A2", r);
+        org.junit.Assert.assertTrue("模式A2（Hikari 真实池 + 存量物理连接）应收到事件——"
+                + "这是最可能解释用户现场的一格\n" + r.asBlock(), r.eventReceived);
+    }
+
+    /** B2：A2 语义原样搬到 JDK8 目标 JVM（JDK8 目标门禁此前 Assume-可跳过）。 */
+    @org.junit.Test
+    public void 模式B2_JDK8目标_Hikari池存量连接复用() throws Exception {
+        org.junit.Assume.assumeTrue("MySQL 不可达，B2 跳过（环境受限未验证）", mysqlReachable());
+        org.junit.Assume.assumeTrue("JDK8 不在位，B2 跳过", jdk8JavaBin() != null);
+        RunResult r = runMode("H", "attachpool_h", new ArrayList<String>(), WAIT_SECONDS * 1000L,
+                null, false, jdk8JavaBin(), MYSQL_JAR_8028);
+        report("B2", r);
+        org.junit.Assert.assertTrue("模式B2（JDK8 目标 + Hikari 池存量连接）应收到事件\n" + r.asBlock(),
+                r.eventReceived);
+    }
+
+    /** A3：驱动换代 mysql-connector-java 8.0.28（Spring Boot 2.6.3 版），A2 语义不变。 */
+    @org.junit.Test
+    public void 模式A3_驱动换代8028_Hikari池存量连接复用() throws Exception {
+        org.junit.Assume.assumeTrue("MySQL 不可达，A3 跳过（环境受限未验证）", mysqlReachable());
+        RunResult r = runMode("H", "attachpool_h", new ArrayList<String>(), WAIT_SECONDS * 1000L,
+                null, false, defaultJavaBin(), MYSQL_JAR_8028);
+        report("A3", r);
+        org.junit.Assert.assertTrue("模式A3（mysql-connector-java 8.0.28 + Hikari 池）应收到事件\n"
+                + r.asBlock(), r.eventReceived);
+    }
+
+    /** A4：Debug 模式（-agentlib:jdwp），A2 语义不变。 */
+    @org.junit.Test
+    public void 模式A4_Debug模式jdwp_Hikari池存量连接复用() throws Exception {
+        org.junit.Assume.assumeTrue("MySQL 不可达，A4 跳过（环境受限未验证）", mysqlReachable());
+        List<String> jvmArgs = new ArrayList<String>();
+        jvmArgs.add("-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5006");
+        RunResult r = runMode("H", "attachpool_h", jvmArgs, WAIT_SECONDS * 1000L,
+                null, false, defaultJavaBin(), MYSQL_JAR_8033);
+        report("A4", r);
+        org.junit.Assert.assertTrue("模式A4（Debug 模式 + Hikari 池存量连接）应收到事件\n" + r.asBlock(),
+                r.eventReceived);
     }
 
     // ---------- 核心运行 ----------
@@ -142,19 +183,29 @@ public class AttachPoolWarmGateTest {
 
     private RunResult runMode(String mode, String keyword, List<String> extraJvmArgs, long waitMs,
                               Path preAttachFile, boolean preAttachAsPath) throws Exception {
-        final String javaBin = Paths.get(System.getProperty("java.home"), "bin", "java.exe").toFile().exists()
-                ? Paths.get(System.getProperty("java.home"), "bin", "java.exe").toString()
-                : Paths.get(System.getProperty("java.home"), "bin", "java").toString();
+        return runMode(mode, keyword, extraJvmArgs, waitMs, preAttachFile, preAttachAsPath,
+                defaultJavaBin(), null);
+    }
+
+    private RunResult runMode(String mode, String keyword, List<String> extraJvmArgs, long waitMs,
+                              Path preAttachFile, boolean preAttachAsPath,
+                              String javaBinOverride, String mysqlJarName) throws Exception {
+        final String javaBin = javaBinOverride != null ? javaBinOverride : defaultJavaBin();
         final File agentJar = locateAgentJar();
-        final Path mysqlJar = locateMysqlJar();
-        final String childClasses = Paths.get("build", "classes", "java", "childapp").toAbsolutePath().toString();
+        final String childClasses = Paths.get("build", "classes", "java", "childapp")
+                .toAbsolutePath().toString();
+        // Hikari 模式（H）：子进程 classpath 取显式 pool classpath（Hikari+javassist+slf4j+指定驱动）；
+        // 其余模式维持第一轮行为（测试 classpath 里扫出的 mysql-connector-j 8.0.33 + childapp）
+        final String childClasspath = "H".equals(mode)
+                ? buildPoolClasspath(mysqlJarName)
+                : locateMysqlJar().toAbsolutePath() + File.pathSeparator + childClasses;
 
         // 1) loopback server（IDE 角色）
         java.net.ServerSocket server =
                 new java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress());
         server.setSoTimeout(WAIT_SECONDS * 1000);
 
-        // 2) 子 JVM：classpath = mysql + childapp 源集（刻意不含 agent 类）
+        // 2) 子 JVM
         final Path outDir = Paths.get("build", "attachpool-out");
         Files.createDirectories(outDir);
         final Path childLog = outDir.resolve("mode-" + mode + ".log");
@@ -163,7 +214,7 @@ public class AttachPoolWarmGateTest {
         cmd.addAll(extraJvmArgs);
         cmd.add("-Dfile.encoding=UTF-8");
         cmd.add("-cp");
-        cmd.add(mysqlJar.toAbsolutePath() + File.pathSeparator + childClasses);
+        cmd.add(childClasspath);
         cmd.add("cn.song.mybatisplus.sqlvis.agent.ChildPoolApp");
         cmd.add(mode);
         cmd.add(JDBC_URL);
@@ -174,9 +225,10 @@ public class AttachPoolWarmGateTest {
         pb.redirectOutput(childLog.toFile());
         child = pb.start();
 
-        // 2.5) 等子 JVM 报 READY <pid>（warm 资源已在位 = 存量连接/PS 已建）
+        // 2.5) 等子 JVM 报 READY <pid>（warm 资源已在位 = 存量连接/PS/池已建）
         String pidLine = waitForLine(childLog, "READY ");
-        org.junit.Assert.assertNotNull("子 JVM 未就绪（mode=" + mode + "）:\n" + tail(childLog), pidLine);
+        org.junit.Assert.assertNotNull("子 JVM 未就绪（mode=" + mode + ", java=" + javaBin + "）:\n"
+                + tail(childLog), pidLine);
         final long pid = Long.parseLong(pidLine.split(" ")[1].trim());
 
         // 3) attach + loadAgent（可选：先挂第三方 agent 到在跑进程，模拟 CoolRequest 已注入）
@@ -199,7 +251,6 @@ public class AttachPoolWarmGateTest {
         try {
             vm.loadAgent(agentJar.getAbsolutePath(), "port=" + server.getLocalPort() + ";logLevel=info");
         } catch (com.sun.tools.attach.AgentLoadException e) {
-            // 已知形态 AgentLoadException("0")：以握手为准，继续
             if (!"0".equals(e.getMessage())) {
                 org.junit.Assert.fail("loadAgent 失败且非已知形态: " + e);
             }
@@ -224,9 +275,10 @@ public class AttachPoolWarmGateTest {
         r.helloCount = hellos.size();
         r.attachRetransformLine = lineContaining(childLog, "[SqlVisAgent] attach retransform:");
         r.firstFireLine = lineContaining(childLog, "[SqlVisAgent] 织入通道首条事件已产出");
-        r.watchdogLine = lineContaining(childLog, "未收到任何 CONFIG");
         r.blindSpotLine = lineContaining(childLog, "织入通道登记盲区");
+        r.watchdogLine = lineContaining(childLog, "未收到任何 CONFIG");
         r.preAttachResult = preAttachResult;
+        r.warmLine = lineContaining(childLog, "WARM-");
         r.childLogPath = childLog.toAbsolutePath().toString();
         r.childTail = tail(childLog, 30);
 
@@ -247,9 +299,10 @@ public class AttachPoolWarmGateTest {
         int helloCount;
         String attachRetransformLine;
         String firstFireLine;
-        String watchdogLine;
         String blindSpotLine;
+        String watchdogLine;
         String preAttachResult;
+        String warmLine;
         String childLogPath;
         String childTail;
 
@@ -258,6 +311,7 @@ public class AttachPoolWarmGateTest {
             sb.append("\n===== ATTACH-POOL MODE ").append(mode).append(" =====\n");
             sb.append("eventReceived=").append(eventReceived).append('\n');
             sb.append("helloCount=").append(helloCount).append('\n');
+            sb.append("warm=").append(warmLine).append('\n');
             sb.append("eventSample=").append(eventSample).append('\n');
             sb.append("attachRetransform=").append(attachRetransformLine).append('\n');
             sb.append("firstFire=").append(firstFireLine).append('\n');
@@ -277,6 +331,18 @@ public class AttachPoolWarmGateTest {
     }
 
     // ---------- 辅助 ----------
+
+    private static String defaultJavaBin() {
+        Path exe = Paths.get(System.getProperty("java.home"), "bin", "java.exe");
+        return exe.toFile().exists() ? exe.toString()
+                : Paths.get(System.getProperty("java.home"), "bin", "java").toString();
+    }
+
+    /** 用户现场 JDK8 的 java 可执行；不在位返回 null（调用方 Assume 跳过）。 */
+    private static String jdk8JavaBin() {
+        Path exe = Paths.get(JDK8_JAVA_HOME, "bin", "java.exe");
+        return exe.toFile().exists() ? exe.toString() : null;
+    }
 
     private static void sendConfig(java.net.Socket session, boolean disabled) throws Exception {
         OutputStream out = session.getOutputStream();
@@ -384,9 +450,8 @@ public class AttachPoolWarmGateTest {
 
     /**
      * 子进程 stdout 按 UTF-8 读（子进程以 -Dfile.encoding=UTF-8 启动）——**不能用 ISO_8859_1**：
-     * 中文取证行（织入通道首条/登记盲区）按 ISO_8859_1 解码成 mojibake，contains 恒不命中
-     * （实证：附件日志里行在场，测试侧搜索却为 null）。用 byte→String 解码（畸形字节替换，
-     * 不抛 MalformedInputException）。
+     * 中文取证行（织入通道首条/登记盲区）按 ISO_8859_1 解码成 mojibake，contains 恒不命中。
+     * 用 byte→String 解码（畸形字节替换，不抛 MalformedInputException）。
      */
     private static List<String> readLinesUtf8(Path log) throws Exception {
         String all = new String(Files.readAllBytes(log), StandardCharsets.UTF_8);
@@ -395,6 +460,42 @@ public class AttachPoolWarmGateTest {
             out.add(s);
         }
         return out;
+    }
+
+    /**
+     * Hikari 子进程 classpath：从 {@code sqlvis.attachPoolChild} 配置取 HikariCP/javassist/slf4j/
+     * 两个 MySQL 驱动；按文件名只挑一个 MySQL 驱动（A2 用 8.0.33、A3/B2 用 8.0.28），再挂 childapp classes。
+     */
+    private static String buildPoolClasspath(String mysqlJarName) {
+        final String prop = System.getProperty("sqlvis.attachPoolChild", "");
+        if (prop.isEmpty()) {
+            throw new AssertionError("sqlvis.attachPoolChild 未注入（build.gradle.kts 的 systemProperty）");
+        }
+        final String childClasses = Paths.get("build", "classes", "java", "childapp")
+                .toAbsolutePath().toString();
+        List<String> libs = new ArrayList<String>();
+        String chosenMysql = null;
+        for (String j : prop.split(File.pathSeparator)) {
+            if (j == null || j.isEmpty()) {
+                continue;
+            }
+            final String fn = Paths.get(j).getFileName().toString();
+            if (fn.toLowerCase().contains("mysql-connector")) {
+                if (mysqlJarName != null && fn.equalsIgnoreCase(mysqlJarName)) {
+                    chosenMysql = j;
+                }
+                continue;
+            }
+            libs.add(j);
+        }
+        if (chosenMysql == null) {
+            throw new AssertionError("指定 MySQL 驱动不在 attachPoolChild: " + mysqlJarName);
+        }
+        List<String> all = new ArrayList<String>();
+        all.add(chosenMysql);
+        all.addAll(libs);
+        all.add(childClasses);
+        return String.join(File.pathSeparator, all);
     }
 
     private static File locateAgentJar() {

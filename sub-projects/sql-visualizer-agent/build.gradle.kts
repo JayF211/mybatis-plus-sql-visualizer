@@ -29,6 +29,8 @@ dependencies {
     "childappImplementation"("com.h2database:h2:2.3.232")
     // T-AttachPoolWarm：真机复现（MySQL 8 + 存量池连接复用）子进程驱动——子 JVM classpath 须挂真 jar
     "childappImplementation"("com.mysql:mysql-connector-j:8.0.33")
+    // 四格 A2：HikariCP 4.0.3（Spring Boot 2.6.3 管理版）——child 侧 HikariDataSource 真实池
+    "childappImplementation"("com.zaxxer:HikariCP:4.0.3")
 }
 
 // reloc 源集（构建期工具：fat jar 打包 + ASM 自 relocate）
@@ -46,6 +48,13 @@ val asmFat by configurations.creating {
 }
 
 val h2jdk8 by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+
+// T-AttachPoolWarm 四格：Hikari/驱动换代子进程的**显式** classpath（HikariCP 4.0.3 = Spring Boot
+// 2.6.3 管理版；其运行时需 javassist + slf4j-api；带两个 MySQL 驱动版本供 A2/A3 按文件名各取一）。
+val attachPoolChild by configurations.creating {
     isCanBeConsumed = false
     isCanBeResolved = true
 }
@@ -73,6 +82,19 @@ dependencies {
     // JDK8 目标门禁专用：H2 1.4.200（2.x 是 Java 11 字节码，JDK8 加载不了）——
     // 以独立配置解析出 jar 绝对路径，经系统属性下发给测试
     "h2jdk8"("com.h2database:h2:1.4.200")
+    // 四格 A2/A3：Hikari 子进程 classpath——排除 micrometer（JDBC 路径无关，避免拉一串监控依赖）
+    // 与 MySQL 驱动的 X DevAPI 依赖（protobuf/oci，JDBC 路径不加载，本机 .m2 亦无）；
+    // javassist 被 Hikari 4.0.3 要 3.27.0-GA（本机 .m2 无），下方 force 到在位版本。
+    // 两个 MySQL 驱动版本同挂，测试侧按文件名各取一（A2 8.0.33 / A3·B2 8.0.28）。
+    add("attachPoolChild", "com.zaxxer:HikariCP:4.0.3") { exclude(group = "io.micrometer") }
+    add("attachPoolChild", "com.mysql:mysql-connector-j:8.0.33") {
+        exclude(group = "com.google.protobuf")
+        exclude(group = "com.oracle.oci.sdk")
+    }
+    add("attachPoolChild", "mysql:mysql-connector-java:8.0.28") {
+        exclude(group = "com.google.protobuf")
+        exclude(group = "com.oracle.oci.sdk")
+    }
     // 织入产物校验测试需要 ASM 明文命名空间（仅测试 classpath）
     testImplementation("org.ow2.asm:asm:$asmVersion")
     testImplementation("org.ow2.asm:asm-commons:$asmVersion")
@@ -86,6 +108,15 @@ dependencies {
     testImplementation("org.postgresql:postgresql:42.7.1")
     testImplementation("com.microsoft.sqlserver:mssql-jdbc:12.4.2.jre11")
     testImplementation("com.oracle.database.jdbc:ojdbc11:23.3.0.23.09")
+}
+
+// 四格：Hikari 子进程 classpath 版本钉到本机 .m2 在位版本（Hikari 4.0.3 自身要 javassist 3.27.0-GA，
+// 本机无；3.25.0-GA 与 slf4j 1.7.36 均在位、且为 Java 8 字节码——JDK8 目标格同样可加载）。
+configurations.named("attachPoolChild") {
+    resolutionStrategy.force(
+        "org.javassist:javassist:3.25.0-GA",
+        "org.slf4j:slf4j-api:1.7.36",
+    )
 }
 
 tasks.withType<JavaCompile>().configureEach {
@@ -107,6 +138,8 @@ tasks.test {
     dependsOn(agentFatJar)
     dependsOn(tasks.named("childappClasses"))
     systemProperty("sqlvis.h2jdk8", h2jdk8.singleFile.absolutePath)
+    // 四格：Hikari 子进程 classpath（HikariCP + javassist + slf4j + 两版 MySQL 驱动）整串下发
+    systemProperty("sqlvis.attachPoolChild", attachPoolChild.asPath)
     // ZeroLoadClassWriterWeaveTest 以 findLoadedClass 反射探查夹具预载态（织入零加载判别的
     // 鉴别力前提）——JDK17 模块封装默认拒开 java.lang，测试 JVM 显式放开（仅测试进程，
     // 不影响 agent 产物）。

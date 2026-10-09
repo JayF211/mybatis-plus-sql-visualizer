@@ -6,6 +6,9 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
 
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+
 /**
  * T-AttachPoolWarm 真机复现的「用户应用」子进程（MySQL 8）：模拟「应用已在跑、连接池里已有存量
  * 物理连接」的 attach 时序——warm 步骤在 attach 之前完成，随后在同一批 JDBC 对象上持续执行 SQL，
@@ -41,6 +44,7 @@ public class ChildPoolApp {
 
         Connection warmConn = null;
         PreparedStatement warmPs = null;
+        HikariDataSource hikari = null;
 
         // ---------- warm 步骤（attach 之前：模拟应用已跑过请求、池里已有物理连接/PS） ----------
         if ("A".equals(mode) || "D".equals(mode) || "D2".equals(mode) || "D3".equals(mode)) {
@@ -71,6 +75,31 @@ public class ChildPoolApp {
                 rs.next();
             }
             System.out.println("WARM-C: warm conn opened+closed");
+        } else if ("H".equals(mode)) {
+            // 四格 A2：HikariCP 真实池（Spring Boot 默认池形态）。attach 之前建池并预热到两条物理连接
+            // 都已建立——attach 后 getConnection() 复用的正是这批存量物理连接（HikariProxyConnection
+            // 委托到已加载的 ConnectionImpl/ClientPreparedStatement）。
+            final HikariConfig cfg = new HikariConfig();
+            cfg.setJdbcUrl(url);
+            cfg.setUsername(user);
+            cfg.setPassword(pass);
+            cfg.setMaximumPoolSize(2);
+            cfg.setMinimumIdle(2);
+            cfg.setPoolName("attachpool-h");
+            cfg.setConnectionTimeout(5000);
+            hikari = new HikariDataSource(cfg);
+            final Connection c1 = hikari.getConnection();
+            final Connection c2 = hikari.getConnection(); // 同时持有 → 强制第二条物理连接建立
+            try (Statement st = c1.createStatement(); ResultSet rs = st.executeQuery("SELECT 1 AS warm_h1")) {
+                rs.next();
+            }
+            try (Statement st = c2.createStatement(); ResultSet rs = st.executeQuery("SELECT 1 AS warm_h2")) {
+                rs.next();
+            }
+            c1.close();
+            c2.close();
+            System.out.println("WARM-H: hikari max=2 min=2 warmed (2 physical conns established) pxClass="
+                    + hikari.getConnection().getClass().getName());
         } else {
             System.out.println("UNKNOWN-MODE " + mode + "（按 C 处理）");
         }
@@ -94,6 +123,13 @@ public class ChildPoolApp {
                 } else if ("C".equals(mode)) {
                     // 每条 SQL 新建连接（对照）
                     try (Connection c = DriverManager.getConnection(url, user, pass);
+                         PreparedStatement ps = c.prepareStatement(sql);
+                         ResultSet rs = ps.executeQuery()) {
+                        rs.next();
+                    }
+                } else if ("H".equals(mode)) {
+                    // 四格 A2/A3/A4/B2：Hikari 池借连接 → 新建 PS → executeQuery → 归还
+                    try (Connection c = hikari.getConnection();
                          PreparedStatement ps = c.prepareStatement(sql);
                          ResultSet rs = ps.executeQuery()) {
                         rs.next();
