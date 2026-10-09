@@ -1,28 +1,28 @@
 package cn.song.mybatisplus.visualizer.ui.search
 
 import com.intellij.find.FindModel
+import com.intellij.find.SearchReplaceComponent
 import com.intellij.find.SearchSession
-import com.intellij.find.SearchTextArea
 import com.intellij.find.editorHeaderActions.ToggleMatchCase
 import com.intellij.find.editorHeaderActions.ToggleRegex
-import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.DataProvider
-import com.intellij.openapi.actionSystem.DataKey
-import javax.swing.JTextArea
 import com.intellij.ui.components.JBTextArea
 
 /**
- * 原生 IDEA 搜索框形态的文本搜索组件（T-SearchToggleNativeLook O-137）。
+ * 原生 IDEA 搜索框形态的文本搜索组件（T-SearchToggleNativeLook O-137；框体修正轮）。
  *
- * 用平台 [SearchTextArea]（Find in Files / Ctrl+F 同款：内嵌无边框图标切换钮、原生 hover/选中态、
- * 圆角框）包插件自己的 [JTextArea]，并把平台原生开关动作 [ToggleMatchCase]/[ToggleRegex]
- * 经 [SearchTextArea.setExtraActions] 内嵌。
+ * 首版用 [com.intellij.find.SearchTextArea] 裸组件，真机发现两处缺陷（用户 20261010 指出）：
+ * ①SearchTextArea 自绘的是 PseudoSeparatorBorder（新 UI 下只有一条淡分隔线，无框体）——
+ * 　IDEA Ctrl+F 的圆角框来自外层 [SearchReplaceComponent] 的包装；②点图标区焦点不进输入区。
  *
- * 原生开关动作从 `AnActionEvent.getData(SearchSession.KEY)` 取会话（按钮 data context 走
- * 组件树 `DataProvider`），故本组件实现 [DataProvider] 应答 `SearchSession.KEY`——会话为极小
- * 委托，旗落在自有 [FindModel]（不与 IDE 全局 Find 设置串线）：
- * - [isMatchCase] ⇔ `FindModel.isCaseSensitive`
- * - [isRegex] ⇔ `FindModel.isRegularExpressions`
+ * 修正：改走平台 `SearchReplaceComponent.Builder.buildFor(...)` 全套——原生框体/边距/焦点处理
+ * 一步到位（EditorSearchSession 同款装配）；`withShowOnlySearchPanel()` 去掉 replace 行；
+ * 开关钮经 `addSearchFieldActions(ToggleMatchCase[, ToggleRegex])` 内嵌。
+ *
+ * 会话仍为极小 [MinSearchSession]（自有 [FindModel]，不与 IDE 全局 Find 串线）；
+ * SearchReplaceComponent 自身实现 DataProvider 应答 SearchSession.KEY，故原生钮可用，
+ * 本类兜底自答同键（两处同源，无歧义）。
  *
  * 语义约定（T-HistorySearchToggles 拍板保持不变）：
  * - regex/matchCase 两旗由调用方从 [findModel] 读取喂给各自过滤链；
@@ -40,50 +40,62 @@ class NativeSearchTextField(
         isRegularExpressions = false
     }
 
-    private val textArea: com.intellij.ui.components.JBTextArea =
-        com.intellij.ui.components.JBTextArea().apply {
-            lineWrap = multiline
-            if (placeholderText != null) {
-                emptyText.text = placeholderText
-            }
-        }
-
     private val searchSession: SearchSession = MinSearchSession(findModel)
 
-    val searchTextArea: SearchTextArea = SearchTextArea(textArea, multiline)
+    /** 原生全套组件：框体/边框/焦点/开关钮都由平台提供。 */
+    val component: SearchReplaceComponent = SearchReplaceComponent.buildFor(
+        null as com.intellij.openapi.project.Project?,
+        javax.swing.JPanel(),
+        searchSession,
+    )
+        .addSearchFieldActions(
+            ToggleMatchCase(),
+            if (showRegex) ToggleRegex() else DoNothingAction(),
+        )
+        .withShowOnlySearchPanel()
+        .withMultilineEnabled(multiline)
+        .build()
+
+    private val textComponent: JBTextArea =
+        requireNotNull(component.getSearchTextComponent() as? JBTextArea) {
+            "SearchReplaceComponent search text component is not a JBTextArea (platform change?)"
+        }
 
     init {
-        val actions: List<com.intellij.openapi.actionSystem.AnAction> = buildList {
-            add(ToggleMatchCase())
-            if (showRegex) add(ToggleRegex())
+        if (placeholderText != null) {
+            textComponent.emptyText.text = placeholderText
         }
-        searchTextArea.setExtraActions(*actions.toTypedArray())
     }
 
-    fun getTextField(): com.intellij.ui.components.JBTextArea = textArea
+    fun getTextField(): JBTextArea = textComponent
 
     // ---------- SearchTextField 兼容面（迁移既有调用点零改动） ----------
 
-    /** 历史页调用点用 `searchField.textEditor.emptyText/minimumSize`——JBTextArea 自带 emptyText。 */
-    val textEditor: com.intellij.ui.components.JBTextArea get() = textArea
+    /** 历史页调用点用 `searchField.textEditor.emptyText/minimumSize`。 */
+    val textEditor: JBTextArea get() = textComponent
 
     /** 兼容 `SearchTextField.text` 读写。 */
     var text: String
-        get() = textArea.getText()
+        get() = component.getSearchTextComponent().text
         set(value) {
-            textArea.setText(value)
+            component.getSearchTextComponent().text = value
         }
 
-    /** 兼容 `SearchTextField.addDocumentListener`（内部文本组件委托）。 */
+    /** 兼容 `SearchTextField.addDocumentListener`（document 委托）。 */
     fun addDocumentListener(listener: javax.swing.event.DocumentListener) {
-        textArea.document.addDocumentListener(listener)
+        component.getSearchTextComponent().document.addDocumentListener(listener)
     }
 
     fun isMatchCase(): Boolean = findModel.isCaseSensitive
 
     fun isRegex(): Boolean = findModel.isRegularExpressions
 
-    /** 原生开关钮经 DataManager 沿组件树取 `SearchSession.KEY`。 */
+    /** 原生开关钮经 DataManager 沿组件树取 `SearchSession.KEY`（SearchReplaceComponent 已应答；兜底自答）。 */
     override fun getData(dataId: String): Any? =
         if (SearchSession.KEY.`is`(dataId)) searchSession else null
+}
+
+/** 占位空动作（showRegex=false 时占住数组槽位；无行为——平台对空 presentation 的钮跳过渲染）。 */
+private class DoNothingAction : AnAction() {
+    override fun actionPerformed(e: com.intellij.openapi.actionSystem.AnActionEvent) = Unit
 }

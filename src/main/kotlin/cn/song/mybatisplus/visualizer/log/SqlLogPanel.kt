@@ -548,7 +548,7 @@ class SqlLogPanel(
     private val searchBar = JPanel(BorderLayout()).apply {
         isOpaque = false
         isVisible = false
-        add(nativeSearch.searchTextArea, BorderLayout.CENTER)
+        add(nativeSearch.component, BorderLayout.CENTER)
     }
 
     /** 测试断言/驱动：MatchCase 旗（等价用户点击 = 置 FindModel.isCaseSensitive 后自动刷新列表）。 */
@@ -943,7 +943,7 @@ class SqlLogPanel(
             searchBar.parent?.revalidate()
             searchBar.parent?.repaint()
         }
-        searchField.searchTextArea.requestFocus()
+        nativeSearch.component.requestFocusInWindow()
     }
 
     private fun hideSearch() {

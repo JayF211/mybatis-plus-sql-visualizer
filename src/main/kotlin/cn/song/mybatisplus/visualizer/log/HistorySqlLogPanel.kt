@@ -156,7 +156,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private val regexMemo = HistoryRegexMemo()
 
     /** 搜索框宿主：原生 SearchTextArea 自带内嵌开关，直接占满一行。 */
-    private val searchBar = nativeSearch.searchTextArea
+    private val searchBar = nativeSearch.component
 
     /** 测试断言/驱动：正则旗（等价用户点击 = 置 FindModel.isRegularExpressions 后应用过滤）。 */
     internal var regexToggleForTest: Boolean

@@ -88,3 +88,10 @@
 
 - 原生组件的多行/历史弹层能力未启用（withMultilineEnabled、ShowSearchHistory 不接）。
 - 若 253/262 出现 API 漂移，fallback=类内部换 S2 复刻（对外接口不变）。
+
+### 框体修正轮（20261010 凌晨，用户真机指出两处缺陷后修复）
+
+- **缺陷**（用户指出+真机复现）：①SearchTextArea 裸组件自绘 PseudoSeparatorBorder（新 UI 下仅一条淡分隔线），与 IDEA Ctrl+F 的圆角框体不一致；②点图标区焦点不进输入区（输入落空误触 Search Everywhere）。
+- **修正**：NativeSearchTextField 改走平台 `SearchReplaceComponent.Builder.buildFor(project=null, targetComponent, session)` 全套——原生框体/边框/焦点处理由平台接管（EditorSearchSession 同款装配）；`withShowOnlySearchPanel()` 去 replace 行；开关钮经 `addSearchFieldActions(ToggleMatchCase[, ToggleRegex])` 内嵌（vararg 形态，Builder 真实 API；此前误按 addPrimarySearchActions/数组形态调用均被编译器拦下）；SearchReplaceComponent 自身应答 SearchSession.KEY（本类兜底自答同源）；文本组件 requireNotNull 断言为 JBTextArea（平台变更即启动期显式失败，不静默降级）。
+- **读数**：定向 46/0（含 ProviderContractTest 正反向）；testFast --rerun-tasks 46/0/0/0；verifyGate 三目标 Compatible。
+- **焦点引导**：SearchReplaceComponent 原生处理点框聚焦；面板侧 showSearch 改 `component.requestFocusInWindow()`。
