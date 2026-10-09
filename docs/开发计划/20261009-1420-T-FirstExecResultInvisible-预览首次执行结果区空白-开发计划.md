@@ -176,19 +176,22 @@ prepareAfterEditorResolved 入口/出口各加一行 INFO」不实施——消�
 
 ### 运行读数（定向测试 + 反向验证）
 
-**待门禁后补跑**：实施窗口内登记表有 `t-batchmerge`（testShards/verifyGate 合并态门禁，
-登记至 15:42）在跑，按并行纪律本窗不启 gradle（不做 sleep 轮询）。静态复核已完成：
-previewMode 零残留、8 个 embedConsole 调用点计数（EXECUTE×7 / PREVIEW×1）、
-shouldCollapseDivider 两处、F1 接线五锚点均在位（grep 读数见提交 631b12a 报告）。
-复跑命令（登记 `--name t-firstexec --sandbox <独立沙盒>` 后）：
+门禁窗口（t-batchmerge 合并态）结束后补跑，登记 `t-firstexec`（沙盒 `t-firstexec-sb`）后执行。
 
-```
-./gradlew test --tests "cn.song.mybatisplus.visualizer.execute.PrepareSingleFlightGateTest"
-```
-
-反向验证：临时注释 `PrepareSingleFlightGate.kt` tryEnter 内两行排队分支 → 复跑上命令
-（预期 `单飞_在飞时执行意图排队不再进第二链` 红、`排队_同窗口连点后到意图覆盖先到` 红），
-还原 → 复跑（全绿）。
+- **定向测试绿**：`./gradlew test --tests "cn.song.mybatisplus.visualizer.execute.PrepareSingleFlightGateTest"`
+  → `BUILD SUCCESSFUL in 2m 14s`（首次含主源码+测试全量编译，编译零错误）；
+  XML 读数 `tests=12 skipped=0 failures=0 errors=0`。12 用例 = 单飞空闲持门 / 在飞排队不进
+  第二链 / 连点后到覆盖 / 预览直通不取所有权 / finishPrepare 复位 / 卡死逃生 / embedMode 三态
+  / 接线守卫三例（全链 embed 调用点显式 EXECUTE、DS 折叠归口、F1 入口与消费点在位）。
+- **反向验证红**：临时注释 `PrepareSingleFlightGate.tryEnter` 排队两行
+  （`pendingIntent = intent` / `pendingExecute.set(true)`）→ `BUILD FAILED`，
+  `12 tests completed, 2 failed`，红的正是预告两例：
+  `单飞_在飞时执行意图排队不再进第二链`（`AssertionError: 排队标记应在位`）与
+  `排队_同窗口连点后到意图覆盖先到`（`AssertionError: 最新用户意图优先 expected
+  same:<QueuedExecuteIntent@53fe15ff> was not:<null>`）；其余 10 例（含接线守卫三例）保持绿
+  ——守卫只认源码形态，不受门逻辑改动影响，红面精确落在排队语义上。
+- **还原复绿**：恢复两行后复跑 → `BUILD SUCCESSFUL in 17s`，
+  `tests=12 skipped=0 failures=0 errors=0`（工作树与 HEAD 逐字节一致，无探针残留）。
 
 ## 八、验收注记（F0 诊断判定表 → 用户真机走查清单）
 
