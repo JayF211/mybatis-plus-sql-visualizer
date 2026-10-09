@@ -196,3 +196,9 @@ IDE 侧既有地基：`AgentEventAdapter` 事件消费、`AgentUrlRegistry`/`Jdb
 **四格矩阵（T-AttachPoolWarm，同工作树先行）**：HikariCP 4.0.3 真实池（预热 2 物理连接）/ JDK8 目标 / mysql-connector-java 8.0.28 / Debug(-agentlib:jdwp) 四格全绿（事件到达，`HikariProxyConnection` 代理族下织入面照常触发），排除 MySQL 池/JDK/驱动版本/Debug 维度。
 
 **真机复测口径（用户执行）**：达梦应用跑着（`profiles.active=dm`）→ 勾开增强捕获 → 应用控制台应出现 `[SqlVisAgent] attach retransform: matched=4 wove=3 …` 且随后 `[SqlVisAgent] 织入通道首条事件已产出`；触发 SQL → 面板出条目。
+
+**真机复验结果（主控亲跑，2026-10-09 晚，243 沙盒）**：✅ 通过，两路都出条目。
+- attach 路线（与用户报障同形）：沙盒预置 `enhancedCaptureEnabled=false` → IDE Run 起 dm profile 应用（pid=30952；控制台实证 `HikariProxyConnection@… wrapping dm.jdbc.driver.DmdbConnection@…`）→ 控制台桥先出条目 #1（18:20:01）→ 设置页勾「增强捕获」并 Apply → 上升沿 attach（18:25:56，`AgentLoadException(0)` + `CONFIG 已生效 disabled=false`）→ 同端点再请求 → 面板 #2「[18:26:11] 26ms」（agent 通道条目，带毫秒耗时=桥给不出的字段）。宿主侧 `[SqlVisAgent] attach retransform: matched=6 wove=6 unmodifiable=0 failed=0` 与 `织入通道首条事件已产出 op=execute`；IDE 侧 `增强通道首条事件已到达并进入消费链（pid=30952）`（修复前该行恒缺）。
+- premain 路线（增强开着启动）：`premain 会话建立：pid=35260（启动即捕获）` → 面板 #3「[18:34:15] 11ms [DM（达梦）]」。
+- 截图存 `F:/code/Java/Gitee/SongRenShuo/mpsv-walk/`：`ide-21-attach.png`（安装读数行）、`ide-23-list.png`（面板三条目）、`ide-34-crop.png`（补全候选）。
+- 收工核对：8082 closed、无残留 java/fsnotifier、demo 仓与 dev-bak 工作树零改动。
