@@ -71,6 +71,16 @@ dependencies {
     // 织入产物校验测试需要 ASM 明文命名空间（仅测试 classpath）
     testImplementation("org.ow2.asm:asm:$asmVersion")
     testImplementation("org.ow2.asm:asm-commons:$asmVersion")
+
+    // T-PgWeave：语句面/prepare 面登记名单的驱动夹具——真实驱动类字节进**测试 classpath**（生产
+    // 依赖图不变），供 StatementWeaverVendorCoverageTest 直读 class 字节织入 + JVM 校验（supertype
+    // 可解析才能 define）。版本对齐根 catalog/驱动实测：postgresql 42.7.x / mssql-jdbc 12.x /
+    // ojdbc 23.x。织入形态与版本无关——守卫钉形态不锁版本，漂移按「织不上降级」契约。
+    // 达梦（DmJdbcDriver18）未登记：addBatch 出口 chop_frame 触发织入器帧-局部变量局限（见
+    // StatementWeaver 类注释），故不进测试 classpath。
+    testImplementation("org.postgresql:postgresql:42.7.1")
+    testImplementation("com.microsoft.sqlserver:mssql-jdbc:12.4.2.jre11")
+    testImplementation("com.oracle.database.jdbc:ojdbc11:23.3.0.23.09")
 }
 
 tasks.withType<JavaCompile>().configureEach {

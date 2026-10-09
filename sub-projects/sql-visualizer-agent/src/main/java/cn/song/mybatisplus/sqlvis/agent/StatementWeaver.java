@@ -89,6 +89,28 @@ public final class StatementWeaver implements Opcodes {
         }
     }
 
+    /**
+     * 名单单一真相（DriverRegistry 两面谓词委托 [specOf]）。条目均经 javap 实测方法名+描述符 + **真实
+     * 驱动类字节织入 + JVM 校验**（{@code StatementWeaverVendorCoverageTest}）才登记（版本以证据注记为准）：
+     * <ul>
+     *   <li>mysql-connector-j 8.0.33 / h2 2.3.232（首轮，计划 §二）；</li>
+     *   <li>postgresql 42.7.x（T-PgWeave，2026-10-09）：attach（agentmain）路径主因——存量池
+     *       连接无法回溯 connect 包装，语句面无 PG 类可 retransform 即零事件；</li>
+     *   <li>ojdbc 23.x、mssql-jdbc 12.x（同批 javap 评估 + 字节级校验通过后登记）。</li>
+     * </ul>
+     * 未登记（形态不相符 / 字节级校验不过 / 无法实证）：
+     * <ul>
+     *   <li>各驱动的 pooled/代理包装族；PreparedStatement 无参 addBatch()（仅 ADD_BATCH 认
+     *       {@code (Ljava/lang/String;)V}）；</li>
+     *   <li>无自有 execute 族的 Callable 子类（SQL Server {@code SQLServerCallableStatement}）不单列——
+     *       其 execute 族继承自已登记的 PreparedStatement 基类，基类织入即覆盖；</li>
+     *   <li><b>达梦（DmJdbcDriver18 8.1.3）整族未登记</b>：{@code DmdbStatement.addBatch(String)} 出口
+     *       为 {@code chop_frame(2)}（编译器认定该点局部已死），而 ADD_BATCH 出口块须读 {@code this}/首参，
+     *       现织入形态把出口块插在帧后 → {@code VerifyError: Bad local variable type}（字节级探针实证）。
+     *       形态本身与 mysql/h2 同款，堵点属织入器**帧-局部变量协同**的既有局限（出口块若插在帧前又
+     *       会在分支目标处缺帧、h2 探针实证），须待出口锚点/帧重写方案立项，本轮如实不登记（不猜写）。</li>
+     * </ul>
+     */
     static {
         final Kind[] statementFace =
                 {Kind.EXEC_PARAM, Kind.EXEC_CTX, Kind.BATCH, Kind.ADD_BATCH, Kind.CLEAR_BATCH};
@@ -101,12 +123,30 @@ public final class StatementWeaver implements Opcodes {
                 "com.mysql.jdbc.ServerPreparedStatement",
                 "org.h2.jdbc.JdbcStatement",
                 "org.h2.jdbc.JdbcPreparedStatement",
-                "org.h2.jdbc.JdbcCallableStatement");
+                "org.h2.jdbc.JdbcCallableStatement",
+                // PostgreSQL / openGauss 兼容（openGauss 2.x 走 PG 驱动）——PgPreparedStatement
+                // 继承 PgStatement、PgCallableStatement 继承 PgPreparedStatement（javap 实测）
+                "org.postgresql.jdbc.PgStatement",
+                "org.postgresql.jdbc.PgPreparedStatement",
+                "org.postgresql.jdbc.PgCallableStatement",
+                // Oracle thin（OracleStatement 带参执行族 + 批处理；PS/Callable 各自覆盖无参 execute 族）
+                "oracle.jdbc.driver.OracleStatement",
+                "oracle.jdbc.driver.OraclePreparedStatement",
+                "oracle.jdbc.driver.OracleCallableStatement",
+                // SQL Server（SQLServerPreparedStatement 覆盖无参族并桥接带参族；
+                // SQLServerCallableStatement 无自有 execute 族——继承 SQLServerPreparedStatement 即覆盖，不单列）
+                "com.microsoft.sqlserver.jdbc.SQLServerStatement",
+                "com.microsoft.sqlserver.jdbc.SQLServerPreparedStatement");
         final Kind[] prepareFace = {Kind.PREPARE};
         putSpec(prepareFace,
                 "com.mysql.cj.jdbc.ConnectionImpl",
                 "com.mysql.jdbc.ConnectionImpl",
-                "org.h2.jdbc.JdbcConnection");
+                "org.h2.jdbc.JdbcConnection",
+                // PG 连接（prepareStatement/prepareCall 出口登记 PS 实例 → SQL）
+                "org.postgresql.jdbc.PgConnection",
+                // Oracle 连接基类（T4CConnection 继承其 prepareStatement/prepareCall，包私有亦可 retransform）
+                "oracle.jdbc.driver.PhysicalConnection",
+                "com.microsoft.sqlserver.jdbc.SQLServerConnection");
     }
 
     private StatementWeaver() {
