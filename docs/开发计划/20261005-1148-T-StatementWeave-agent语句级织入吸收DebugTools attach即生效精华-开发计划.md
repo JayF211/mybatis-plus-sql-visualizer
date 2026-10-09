@@ -151,3 +151,23 @@ IDE 侧既有地基：`AgentEventAdapter` 事件消费、`AgentUrlRegistry`/`Jdb
 - **绿**：恢复后 agent e2e **10/0** + 主仓守卫 **7/0**（守卫四件套升级五件套）。
 
 过程坑留档：agent 子项目被根项目 `test` 任务依赖且 `failOnNoMatchingTests=false`——根项目带 `--tests` 过滤器跑守卫时 `:sql-visualizer-agent:test` 会以空匹配重跑并清空结果目录，e2e XML 随后跑被清非假绿；绿读数须在 e2e 单跑后立即取 XML。
+
+## 七B、PG attach 零事件修复（T-PgWeave，2026-10-09，工作树 mybatis-plus-sql-visualizer-pgweave @ t-pgweave）
+
+用户真机复现「对运行中 PostgreSQL 应用 attach 增强捕获 → 面板零条目」。沙盒 idea.log 证据链：settings-rescan 补挂 pid → loadAgent（AgentLoadException(0) 良性）→ 会话建立 → CONFIG ACK disabled=false（应用确认在采）→ 接管沿去重索引重置 → 28 秒内零事件（P2 观测行「增强通道首条事件已到达」全日志 0 次＝事件从未到达 IDE，与去重窗无关）。
+
+**根因＝§六首条遗留落地**：语句面/prepare 面名单只覆盖 MySQL 与 H2。attach（agentmain）路径下存量池连接无法回溯 connect 包装，语句面无 PG 类可 retransform → 零事件；premain 路径不受影响（连接建立时被包装走代理面），故此前 PG 能捕获、掩盖了该缺陷。
+
+**修复（§六首条扩面）**：
+
+- 语句面新增 postgresql `PgStatement`/`PgPreparedStatement`/`PgCallableStatement`（继承链 PgCallableStatement → PgPreparedStatement → PgStatement）；prepare 面新增 `PgConnection`。javap 实测 42.7.8/42.7.10：execute 族 / executeBatch / executeLargeBatch / addBatch(String) / clearBatch 与 prepareStatement(String…) / prepareCall(String…) 描述符与 `Kind` 形态假设一致。
+- 同批评估后一并登记 Oracle（`OracleStatement`/`OraclePreparedStatement`/`OracleCallableStatement`；prepare 面取包私有基类 `oracle.jdbc.driver.PhysicalConnection`，T4CConnection 继承其方法）、SQL Server（`SQLServerStatement`/`SQLServerPreparedStatement`；`SQLServerConnection`）。
+- **未登记（如实）**：达梦——javap 形态全中，但字节级探针暴露**织入器帧-局部变量既有局限**：`DmdbStatement.addBatch(String)` 出口 `chop_frame(2)` 丢弃局部变量，ADD_BATCH 出口块读 this/首参落在帧后即 `VerifyError: Bad local variable type`；把出口块移到帧前又会在分支目标处缺帧（h2 `JdbcStatement` 探针实证）。须待出口锚点/帧重写方案，本轮不猜写。各驱动 pooled/代理包装族、PS 无参 `addBatch()` 同未登记。
+
+**验证**：
+
+- 新增 `StatementWeaverVendorCoverageTest`（7 例）：谓词层（登记类命中正确一面且两面不相交）+ 字节层（真实驱动类字节织入 changed + 子优先 loader 定义并初始化触发 JVM 栈图校验）+ 校验器判别力自证（撒谎的 StackMapTable 必被拒）。踩坑留档：① 隔离 loader 定义会被**包私有父类**跨 loader 拒（`IllegalAccessError: cannot access its superclass`）→ 对被织类厂商包前缀 child-first，使父类与被织类落同一 runtime package；② `resolveClass` 在 JDK17 HotSpot **不触发**栈图校验（负向用例假绿实测）→ 必须 `Class.forName(..., true, loader)` 初始化（链接含校验）。
+- **绿读数**：agent 定向 **25/0**（VendorCoverage 7 + FramePatchVerify 3 + StatementWeaveEndToEnd 10 + ZeroLoadClassWriter 5）。
+- **反向验证（摘登记必红）**：摘 SPECS 的 `org.postgresql.jdbc.PgStatement` → VendorCoverage **4 例红**（谓词层 2 + 字节层 1 + 单一真相 1）；恢复即绿。
+
+**真机复测口径（用户执行）**：PG 应用跑着 → 勾开增强捕获 → 触发 SQL → 面板应出条目（含语句面路径）。
