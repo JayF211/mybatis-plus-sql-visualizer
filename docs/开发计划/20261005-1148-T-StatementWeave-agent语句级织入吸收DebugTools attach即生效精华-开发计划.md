@@ -171,3 +171,28 @@ IDE 侧既有地基：`AgentEventAdapter` 事件消费、`AgentUrlRegistry`/`Jdb
 - **反向验证（摘登记必红）**：摘 SPECS 的 `org.postgresql.jdbc.PgStatement` → VendorCoverage **4 例红**（谓词层 2 + 字节层 1 + 单一真相 1）；恢复即绿。
 
 **真机复测口径（用户执行）**：PG 应用跑着 → 勾开增强捕获 → 触发 SQL → 面板应出条目（含语句面路径）。
+
+## 七C、达梦（DM8）语句面织入（T-DmWeave，2026-10-09，工作树 mybatis-plus-sql-visualizer-attachpool @ t-attachpool）
+
+**用户 P0 真因（现场侧钉死）**：`mybatis-plus-join-demo` 编译产物 `target/classes/application.yml` 的 `spring.profiles.active: dm`（Maven 勾了 dm profile），实际跑达梦 DM8（`jdbc:dm://114.66.55.245:20096?schema=MPJ_DEMO`，driver `dm.jdbc.driver.DmDriver`），非 MySQL/PG。`DriverRegistry` 连接面登记了 `dm.jdbc.driver.DmDriver`，但 `StatementWeaver.SPECS` 语句面/prepare 面**一个达梦类都没有** —— attach 到在跑的达梦应用时 connect 面无法回溯存量池连接、语句面无类可 retransform ⇒ matched=0、零钩子、零事件；控制台桥与厂商无关，故关增强即恢复。
+
+**本地复现（红）**：新增 childapp `ChildPoolApp` DM 模式（JDK8 目标，warm 建连接并跑一次，attach 后同连接新建 PS executeQuery）。摘除达梦登记时读数：`attach retransform: matched=1 wove=0 unmodifiable=0 failed=1 [dm.jdbc.driver.DmDriver=VerifyError]`，子进程 100 轮零事件（`eventReceived=false`）。**注意 matched=1 已含一处此前未知缺陷**：connect 面 `DmDriver.connect` 出口织入产物在 JVM 校验即失败（见下）。
+
+**javap 定型（DmJdbcDriver18 8.1.3.140）**：`DmdbStatement` 自带 `execute(String)/executeQuery(String)/executeUpdate(String)/executeLargeUpdate(String)`（EXEC_PARAM）、`executeBatch()/executeLargeBatch()`（BATCH）、`addBatch(String)`、`clearBatch()`（另有同名字段 `public boolean clearBatch;`，但方法 `clearBatch()V` 也在）；`DmdbPreparedStatement extends DmdbStatement` 自带无参 `execute()/executeQuery()/executeUpdate()/executeLargeUpdate()/executeBatch()/executeLargeBatch()`（EXEC_CTX/BATCH）；`DmdbCallableStatement` 无自有 execute 族（继承 DmdbPreparedStatement）；`DmdbConnection` 自带 `prepareStatement(String…)/prepareCall(String…)`（PREPARE）。该族 `extends dm.jdbc.filter.Filterable`；实测 `getConnection()` 返回裸 `DmdbConnection`、`prepareStatement` 返回裸 `DmdbPreparedStatement`（非过滤包装态），故挂在 public 方法上即可触发。
+
+**字节级探针（关键）**：旧织入形态下，达梦**所有** timed 出口方法均 `VerifyError: Bad local variable type`（`DmdbStatement.execute(String) @85 aload_0`、`DmdbPreparedStatement.execute() @71`、`addBatch(String)`/`clearBatch()` 等）——达梦 javac 在出口处对已死局部发 `chop_frame`，出口帧 `locals[0/1]=top`，而旧出口块读原局部 `this`/首参。仅 `DmdbConnection`（prepare 面）通过校验。
+
+**修复（织入器改造 + 按面登记）**：
+- `StatementWeaver.weaveMethod`：timed 面改为**入口捕获、出口读自有槽**——方法头把 `this`（EXEC_PARAM 再加首参 SQL）存入超出原 `maxLocals` 的新槽，出口块读自有槽（不再读原局部）；`patchFrames` 按槽位追加 token(long)/本类类型/String。对既有厂商语义等价（`this`/首参同对象），字节形态变化，全套既有 weaver 用例复跑零回归。
+- 登记面（`SPECS`）：`DmdbStatement`/`DmdbPreparedStatement` = {EXEC_PARAM, EXEC_CTX, BATCH}；`DmdbConnection` = {PREPARE}；`DmdbCallableStatement` 不单列（无自有 execute 族）。**未登记（如实）**：达梦 `ADD_BATCH`/`CLEAR_BATCH` 面出口非 timed（仍读原局部），同 chop_frame 根因仍 VerifyError，本轮不猜写。
+
+**验证**：
+- **绿读数（真库 E2E，JDK8 目标）**：`attach retransform: matched=4 wove=3 unmodifiable=0 failed=1 [dm.jdbc.driver.DmDriver=VerifyError]`，首条事件 `op=executeQuery sqlHead=SELECT 1 AS attachpool_dm registryUnresolved=0`，事件 `sd` 栈含 `dm.jdbc.driver.DmdbPreparedStatement#executeQuery`。
+- **反向验证（摘登记必红，贴两次读数）**：摘达梦登记 → 上列红读数；恢复 → 上列绿读数。
+- **厂商对齐守卫反向验证**：摘达梦登记 → 守卫红，报文 `dm.jdbc.driver.DmDriver 的连接面已登记，但厂商前缀 dm. 在 StatementWeaver.SPECS 无语句面/prepare 面条目…`；恢复即绿。
+
+**遗留（如实）**：达梦 connect 面 `DmDriver.connect` 出口织入命中同一 chop_frame（attach retransform 行残留 `failed=1 [dm.jdbc.driver.DmDriver=VerifyError]`）。存量连接场景已由语句面/prepare 面覆盖、事件到达，故本轮未改 `ConnectWeaver`；新建达梦连接不走代理面，但其语句面仍经织入通道产事件。后续若要 connect 面覆盖，按同款「入口捕获、出口读自有槽」改造 `ConnectWeaver`（需 `EXPAND_FRAMES` + 帧补丁）。
+
+**四格矩阵（T-AttachPoolWarm，同工作树先行）**：HikariCP 4.0.3 真实池（预热 2 物理连接）/ JDK8 目标 / mysql-connector-java 8.0.28 / Debug(-agentlib:jdwp) 四格全绿（事件到达，`HikariProxyConnection` 代理族下织入面照常触发），排除 MySQL 池/JDK/驱动版本/Debug 维度。
+
+**真机复测口径（用户执行）**：达梦应用跑着（`profiles.active=dm`）→ 勾开增强捕获 → 应用控制台应出现 `[SqlVisAgent] attach retransform: matched=4 wove=3 …` 且随后 `[SqlVisAgent] 织入通道首条事件已产出`；触发 SQL → 面板出条目。

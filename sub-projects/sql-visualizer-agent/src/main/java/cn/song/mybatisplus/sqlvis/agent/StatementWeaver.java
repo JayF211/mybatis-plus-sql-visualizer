@@ -104,11 +104,12 @@ public final class StatementWeaver implements Opcodes {
      *       {@code (Ljava/lang/String;)V}）；</li>
      *   <li>无自有 execute 族的 Callable 子类（SQL Server {@code SQLServerCallableStatement}）不单列——
      *       其 execute 族继承自已登记的 PreparedStatement 基类，基类织入即覆盖；</li>
-     *   <li><b>达梦（DmJdbcDriver18 8.1.3）整族未登记</b>：{@code DmdbStatement.addBatch(String)} 出口
-     *       为 {@code chop_frame(2)}（编译器认定该点局部已死），而 ADD_BATCH 出口块须读 {@code this}/首参，
-     *       现织入形态把出口块插在帧后 → {@code VerifyError: Bad local variable type}（字节级探针实证）。
-     *       形态本身与 mysql/h2 同款，堵点属织入器**帧-局部变量协同**的既有局限（出口块若插在帧前又
-     *       会在分支目标处缺帧、h2 探针实证），须待出口锚点/帧重写方案立项，本轮如实不登记（不猜写）。</li>
+     *   <li><b>达梦（DmJdbcDriver18 8.1.3.140）的 ADD_BATCH / CLEAR_BATCH 面不登记</b>：该两出口非
+     *       timed（无入口捕获），出口块须读原局部，而达梦 javac 在该点发 {@code chop_frame}
+     *       （{@code DmdbStatement.addBatch(String)} chop_frame(2)、{@code clearBatch()} chop_frame(1)），
+     *       旧形态 → {@code VerifyError: Bad local variable type}（字节级探针实证）。timed 面
+     *       （EXEC_PARAM/EXEC_CTX/BATCH）经 T-DmWeave「入口捕获 this/首参 → 出口读自有槽」改造后已登记
+     *       并过 JVM 校验（达梦为本轮用户 P0 根因面）。</li>
      * </ul>
      */
     static {
@@ -137,6 +138,18 @@ public final class StatementWeaver implements Opcodes {
                 // SQLServerCallableStatement 无自有 execute 族——继承 SQLServerPreparedStatement 即覆盖，不单列）
                 "com.microsoft.sqlserver.jdbc.SQLServerStatement",
                 "com.microsoft.sqlserver.jdbc.SQLServerPreparedStatement");
+        // 达梦 DM8（DmJdbcDriver18 8.1.3.140）——用户 P0 根因面（2026-10-09 T-DmWeave）：
+        // 该族出口处 javac 对已死局部发 chop_frame，旧织入形态（出口读原局部）字节级 VerifyError；
+        // T-DmWeave 改为「入口捕获 this/首参 → 出口读自有槽」后，**timed 面**（EXEC_PARAM/EXEC_CTX/
+        // BATCH）可通过 JVM 校验并落钩。ADD_BATCH/CLEAR_BATCH 出口非 timed（仍读原局部）在达梦上
+        // 仍是 VerifyError（DmdbStatement.addBatch(String) chop_frame(2)、clearBatch() chop_frame(1)
+        // 字节探针实证），故**不登记**——达梦批处理事件一期不采（MyBatis 主路径走 PS，无影响）。
+        // DmdbStatement（纯语句）/ DmdbPreparedStatement（PS 自有 execute 族）用同一 timed 面；
+        // DmdbCallableStatement 无自有 execute 族（继承 DmdbPreparedStatement），不单列。
+        final Kind[] dmTimedFace = {Kind.EXEC_PARAM, Kind.EXEC_CTX, Kind.BATCH};
+        putSpec(dmTimedFace,
+                "dm.jdbc.driver.DmdbStatement",
+                "dm.jdbc.driver.DmdbPreparedStatement");
         final Kind[] prepareFace = {Kind.PREPARE};
         putSpec(prepareFace,
                 "com.mysql.cj.jdbc.ConnectionImpl",
@@ -146,7 +159,9 @@ public final class StatementWeaver implements Opcodes {
                 "org.postgresql.jdbc.PgConnection",
                 // Oracle 连接基类（T4CConnection 继承其 prepareStatement/prepareCall，包私有亦可 retransform）
                 "oracle.jdbc.driver.PhysicalConnection",
-                "com.microsoft.sqlserver.jdbc.SQLServerConnection");
+                "com.microsoft.sqlserver.jdbc.SQLServerConnection",
+                // 达梦连接（prepareStatement/prepareCall 出口登记 PS→SQL；该类字节探针通过校验）
+                "dm.jdbc.driver.DmdbConnection");
     }
 
     private StatementWeaver() {
@@ -155,6 +170,11 @@ public final class StatementWeaver implements Opcodes {
     /** 类名（点分）→ 织入形态 spec（单一真相：DriverRegistry 两面谓词委托本表判定）。 */
     static Kind[] specOf(String dottedClassName) {
         return SPECS.get(dottedClassName);
+    }
+
+    /** SPECS 已登记类名快照（仅供厂商对齐守卫遍历；生产路径不使用）。 */
+    static java.util.Set<String> specClassNames() {
+        return SPECS.keySet();
     }
 
     public static byte[] weave(ClassLoader definingLoader, String dottedClassName, byte[] classfileBuffer) {
@@ -193,7 +213,7 @@ public final class StatementWeaver implements Opcodes {
             if (kind == null) {
                 continue;
             }
-            if (weaveMethod(mn, kind)) {
+            if (weaveMethod(mn, kind, node.name)) {
                 changed = true;
             }
         }
@@ -260,17 +280,30 @@ public final class StatementWeaver implements Opcodes {
         return op == IRETURN || op == LRETURN || op == ARETURN || op == ATHROW;
     }
 
-    private static boolean weaveMethod(MethodNode mn, Kind kind) {
+    private static boolean weaveMethod(MethodNode mn, Kind kind, String ownerInternal) {
         final boolean timed = kind == Kind.EXEC_PARAM || kind == Kind.EXEC_CTX || kind == Kind.BATCH;
-        final int tokenSlot = mn.maxLocals;
-        final int retSlot = tokenSlot + 2; // 出口暂存（结果/异常共用；引用与基本类型不同路径不冲突）
+        // T-DmWeave（2026-10-09）：timed 面在**方法入口**把 this（EXEC_PARAM 再加首参 SQL）捕获进
+        // 自有槽，出口一律读**自有槽**——不再读原方法局部。动因：达梦等驱动 javac 在出口处对已死局部
+        // 发 chop_frame（栈图该帧 locals[0/1]=top），旧形态直接 ALOAD 0/1 触发
+        // VerifyError: Bad local variable type（本机 DmdbStatement.execute(String)/DmdbPreparedStatement.execute()
+        // 字节探针实证）。自有槽在入口即赋值、此后不被覆盖，帧补丁按类型声明后对所有出口路径成立。
+        final int tokenSlot = mn.maxLocals;                 // long（计时起点）
+        final int thisSlot = tokenSlot + 2;                 // 引用（本类类型）
+        final int sqlSlot = (kind == Kind.EXEC_PARAM) ? thisSlot + 1 : -1; // 引用（String，首参）
+        final int retSlot = (sqlSlot >= 0 ? sqlSlot : thisSlot) + 1;       // 出口暂存 2 槽
         int inserted = 0;
 
         if (timed) {
             final InsnList head = new InsnList();
             head.add(new VarInsnNode(ALOAD, 0));
+            head.add(new VarInsnNode(ASTORE, thisSlot));
+            head.add(new VarInsnNode(ALOAD, 0));
             head.add(new MethodInsnNode(INVOKESTATIC, CALLBACK_CLASS, "onStatementEnter", ENTER_SIG, false));
             head.add(new VarInsnNode(LSTORE, tokenSlot));
+            if (kind == Kind.EXEC_PARAM) {
+                head.add(new VarInsnNode(ALOAD, 1));
+                head.add(new VarInsnNode(ASTORE, sqlSlot));
+            }
             mn.instructions.insertBefore(mn.instructions.getFirst(), head);
         }
 
@@ -314,9 +347,9 @@ public final class StatementWeaver implements Opcodes {
                 }
                 // 2) 回调参数：stmt, sql, op, token, result, failure（BATCH 的 sql 槽传 null，
                 //    批 SQL 由回调按 op 名从登记表批串/preparedSql 取——出口块保持单一签名）
-                l.add(new VarInsnNode(ALOAD, 0));
+                l.add(new VarInsnNode(ALOAD, timed ? thisSlot : 0)); // stmt：timed 读入口捕获槽
                 if (kind == Kind.EXEC_PARAM) {
-                    l.add(new VarInsnNode(ALOAD, 1)); // sql = 首参
+                    l.add(new VarInsnNode(ALOAD, sqlSlot)); // sql = 入口捕获的首参
                 } else {
                     l.add(new InsnNode(ACONST_NULL)); // EXEC_CTX/BATCH：SQL 走登记表
                 }
@@ -354,10 +387,10 @@ public final class StatementWeaver implements Opcodes {
             insn = next;
         }
         if (inserted > 0) {
-            // tokenSlot 在方法顶部已算好（= 原 maxLocals）；此处只按新布局重算 maxLocals
-            mn.maxLocals = retSlot + 2; // token 2 槽 + 暂存 2 槽（long 返回占 2）
+            // 槽布局在方法顶部已算好；此处按新布局重算 maxLocals（token 2 + this 1 + sql 0/1 + 暂存 2）
+            mn.maxLocals = retSlot + 2;
             if (timed) {
-                patchFramesWithTokenSlot(mn, tokenSlot);
+                patchFrames(mn, tokenSlot, thisSlot, sqlSlot, ownerInternal);
             }
             return true;
         }
@@ -382,7 +415,17 @@ public final class StatementWeaver implements Opcodes {
      * 与头插 {@code LSTORE tokenSlot} 的写入位置逐槽对齐。出口暂存槽（retSlot）只在最后一个帧点与
      * 返回指令之间瞬态使用，不进帧、无需补。
      */
-    private static void patchFramesWithTokenSlot(MethodNode mn, int tokenSlot) {
+    /**
+     * timed 方法专属：把每个栈图帧的 local 数组补齐并追加**入口捕获槽**（token LONG + this 引用 +
+     * 可选 sql String），使帧声明与入口写入的自有槽逐槽对齐。
+     *
+     * <p>历史勘误（T-DevAcceptFix2，20260606）仍在位：原帧 info 数可小于 maxLocals，须按槽数补齐 TOP。
+     * <p>T-DmWeave 扩展：除 token（LONG）外，this（本类类型）与 EXEC_PARAM 的 sql（String）也在入口
+     * 捕获——原方法局部在出口帧可能被 chop_frame 判死（达梦实测），出口读自有槽即不受影响；自有槽在
+     * 入口无条件赋值、分支后不被覆盖，故对所有帧点声明其类型恒成立。
+     */
+    private static void patchFrames(MethodNode mn, int tokenSlot, int thisSlot, int sqlSlot,
+                                    String ownerInternal) {
         AbstractInsnNode insn = mn.instructions.getFirst();
         while (insn != null) {
             if (insn instanceof FrameNode) {
@@ -397,6 +440,21 @@ public final class StatementWeaver implements Opcodes {
                         slots++;
                     }
                     local.add(Opcodes.LONG);
+                    slots += 2;
+                    while (slots < thisSlot) {
+                        local.add(Opcodes.TOP);
+                        slots++;
+                    }
+                    local.add(ownerInternal);
+                    slots++;
+                    if (sqlSlot >= 0) {
+                        while (slots < sqlSlot) {
+                            local.add(Opcodes.TOP);
+                            slots++;
+                        }
+                        local.add("java/lang/String");
+                        slots++;
+                    }
                 }
             }
             insn = insn.getNext();
