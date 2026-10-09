@@ -132,6 +132,66 @@ class SqlLogPanelFilterTest : BasePlatformTestCase() {
         assertEquals(listOf("SELECT * FROM user"), searched.map { it.restoredSql })
     }
 
+    // ---------- T-HistorySearchToggles：MatchCase 大小写开关（filterBySearch matchCase 参数） ----------
+
+    fun testSearchMatchCaseOnIsCaseSensitive() {
+        val entries = listOf(entryOfType(StatementType.SELECT, "SELECT * FROM user"))
+        // 开（敏感）：小写查询不命中大写 SQL；关（默认）：忽略大小写照旧
+        assertEquals(0, filterBySearch(entries, "select", matchCase = true).size)
+        assertEquals(1, filterBySearch(entries, "select", matchCase = false).size)
+        assertEquals(1, filterBySearch(entries, "select").size) // 默认参数 = 忽略大小写
+    }
+
+    fun testSearchMatchCaseRowNumberUnaffected() {
+        // 行号 `#N` 精确 equals 不受大小写旗影响（数字无大小写，契约锁死）
+        val entry = LogSqlEntry(
+            rawSql = "SELECT 1",
+            restoredSql = "SELECT 1",
+            params = emptyList(),
+            timestamp = 0L,
+            sequenceNumber = 5L,
+        )
+        assertEquals(1, filterBySearch(listOf(entry), "#5", matchCase = true).size)
+    }
+
+    fun testSearchMatchCaseTimestampTarget() {
+        val entries = listOf(entryOfType(StatementType.SELECT, "SELECT 1"))
+        // 时间目标同样随旗：数字文本本无大小写，用字母月区格式锁语义（注入时间片段绕开设置）
+        assertEquals(
+            1,
+            filterBySearch(entries, "Jan-02", matchCase = true, timestampTextOf = { "[2026-Jan-02 10:30:00]" }).size,
+        )
+        assertEquals(
+            0,
+            filterBySearch(entries, "JAN-02", matchCase = true, timestampTextOf = { "[2026-Jan-02 10:30:00]" }).size,
+        )
+        assertEquals(
+            1,
+            filterBySearch(entries, "JAN-02", matchCase = false, timestampTextOf = { "[2026-Jan-02 10:30:00]" }).size,
+        )
+    }
+
+    /**
+     * 面板接线（开关 → refreshList → filterBySearch(matchCase)）：toggle 点击即生效；
+     * headless 下防抖 Timer 不可控，搜索文本经 [SqlLogPanel.applySearchTextForTest] 同步应用。
+     */
+    fun testMatchCaseToggleDrivesPanelFiltering() {
+        val panel = SqlLogPanel(project, manager)
+        try {
+            manager.entries.addEntry(entryOfType(StatementType.SELECT, "SELECT * FROM USER", ts = 0L))
+            pumpEdt()
+            panel.searchFieldForTest.text = "user"
+            panel.applySearchTextForTest()
+            assertEquals("默认关=忽略大小写，命中", 1, panel.visibleEntryCount)
+            panel.matchCaseToggleForTest.doClick() // 等价用户点击：翻转选中态并触发刷新
+            assertEquals("开关开=敏感，user 不命中 USER", 0, panel.visibleEntryCount)
+            panel.matchCaseToggleForTest.doClick()
+            assertEquals("再点关闭恢复命中", 1, panel.visibleEntryCount)
+        } finally {
+            panel.dispose()
+        }
+    }
+
     // ---------- 耗时排序（委托 LogDurationParser） ----------
 
     fun testDurationSortHiddenWithoutDurationInfo() {

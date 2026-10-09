@@ -99,4 +99,46 @@ Regex 不上（日志面板无正则基础，避免改动面翻倍；历史/日�
 
 ## 八、实施记录
 
-（空——实施启动后回填）
+实施：20261009，工作树 `mybatis-plus-sql-visualizer-histsearch`（分支 `t-histsearchtoggles`，
+基线 dev-bak 2593a54）。S1~S8 全部落地，无方案偏差；两处实现细节补充如下：
+
+- **P5 补充**：`searchField.isVisible` 与宿主 `searchBar` 保持同步翻转（showSearch/hideSearch
+  双写）——既有 `SqlLogPanelLayoutTest` 断言「搜索条默认隐藏」落在字段上，只动 wrapper 会让该
+  断言失真；Esc 两段式收起契约逐字未动。
+- **S6 补充**：历史检索纯函数缝定为 `filterHistoryEntries`（含 trim，形态照 `filterBySearch`）+
+  `resolveHistoryRegex`/`HistoryRegexMemo`（memo 键 = 源串 + matchCase 旗二元组），
+  顶层函数落在 `HistorySqlLogPanel.kt`；回退子串查询 = 原始 query 全文（含 `regex:` 前缀），
+  与改造前逐字一致。另补两个面板接线测试（toggle doClick → 过滤生效，两级各一）。
+
+### P1~P5 证伪结论
+
+- **P1 ✅ 成立（图标可用，无需自建）**：243 基准 API 与运行期资源双核实——
+  2024.3.7.1 sources jar `AllIcons.java`：`Actions.MatchCase`(:107)/`Actions.Regex`(:174)
+  均在 `Actions` 内部类；二进制 `ideaIU-2024.3.7.1-win/lib/app-client.jar` 实含
+  `actions/matchCase.svg`、`actions/regex.svg`、`expui/inline/matchCase.svg`、
+  `expui/inline/regex.svg`（及 Selected 变体）。
+- **P2 ✅ 按计划口径接受**：`RegexOption.IGNORE_CASE` 的 containsMatchIn 与子串
+  `ignoreCase=true` 用户感知一致（ASCII 语义相同）；unicode 折叠边界不造例（计划既定）。
+- **P3 ✅ 结构性安全，真机确认留验收**：开关挂 `BorderLayout.EAST`（不折行布局），
+  与搜索框（CENTER）同容器后再进原 FlowLayout 工具栏行，结构上无折行可能；
+  460px 走查按计划归验收文档 3.11 复测。
+- **P4 ✅ 实证通过**：`filterBySearch` 加 `matchCase: Boolean = false` 后既有用例零改动全绿
+  （`SqlLogPanelFilterTest` 28 例 = 既有 24 + 新增 matchCase 组 4，0 失败）。
+- **P5 ✅ 成立**：见上「实现细节补充」；`SqlLogPanelLayoutTest` 全量保绿（搜索条默认隐藏
+  断言原样通过）。
+
+### 验证读数
+
+- 定向（首次全量）：`./gradlew test --tests SqlLogPanelFilterTest --tests HistorySearchFilterTest`
+  → **BUILD SUCCESSFUL**，`SqlLogPanelFilterTest` 28/0/0，`HistorySearchFilterTest` 16/0/0
+  （新增历史检索测试类 16 例：正则 6 / 子串 4 / memo 3 / 面板接线 2 / 空查询 1）。
+- **反向验证两刀（S7，贴读数后均已还原，探针已清零）**：
+  - 刀① 删 `filterHistoryEntries` 的「开关**或**前缀」条件前缀分支 →
+    `HistorySearchFilterTest` **16 例 1 红**：恰 `test正则经前缀触发_开关关闭时照旧`
+    （`expected:<[SELECT * FROM user WHERE id = 1]> but was:<[]>`），其余 15 绿；
+  - 刀② `resolveHistoryRegex` memo 键退回单字段（`source == memo.source` 即复用）→
+    **恰 2 红**：`testmemo换旗重编_过滤结果随旗翻转`（`expected:<0> but was:<1>`——
+    复用 IGNORE_CASE 旧编译结果误命中，正是 S3 所防的存量隐患形态）+
+    `testresolve换旗必重编_同键复用`，其余 14 绿。
+  - 还原后复跑两类 → BUILD SUCCESSFUL（28/0/0 + 16/0/0）。
+- 临时沙盒 `histsearch-sb`（build.gradle.kts 并行隔离块）用后已还原，未随提交入库。
