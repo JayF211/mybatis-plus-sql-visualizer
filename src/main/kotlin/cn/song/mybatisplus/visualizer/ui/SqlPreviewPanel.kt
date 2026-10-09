@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper
+import cn.song.mybatisplus.visualizer.execute.ConsoleEmbedMode
 import cn.song.mybatisplus.visualizer.execute.DocWriteContext
 import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor
@@ -1232,7 +1233,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 if (SqlExecutor.isPrepared() && !consoleAttachedToMe()) {
                     SqlExecutor.execute(
                         proj, sql, null, isQuery,
-                        onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
+                        onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE) },
                         onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
                         onError = { errorMsg -> resultPanel.showError(errorMsg) },
             onErrorRich = { info -> showErrorRichWithLocate(info) },
@@ -1250,7 +1251,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             }
             val executed = SqlExecutor.executePrepared(
                 proj,
-                onResultsReady = { fullConsole -> embedConsole(fullConsole) },
+                onResultsReady = { fullConsole -> embedConsole(fullConsole, embedMode = ConsoleEmbedMode.EXECUTE) },
                 onError = { errorMsg -> resultPanel.showError(errorMsg) },
             onErrorRich = { info -> showErrorRichWithLocate(info) },
                 wholeScriptExec = wholeScriptExec,
@@ -1259,7 +1260,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         SqlExecutor.execute(
             proj, sql, null, isQuery,
-            onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
+            onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE) },
             onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
             onError = { errorMsg -> resultPanel.showError(errorMsg) },
             onErrorRich = { info -> showErrorRichWithLocate(info) },
@@ -1464,7 +1465,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     // 共享控制台并经 onConsole 重嵌本面板），避免打在别人的控制台上
                     SqlExecutor.execute(
                         proj, sql, null, isQuery,
-                        onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
+                        onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE) },
                         onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
                         onError = { errorMsg ->
                             resultPanel.showError(errorMsg)
@@ -1483,7 +1484,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             val executed = SqlExecutor.executePrepared(
                 proj,
                 // M36.5.2：执行触发成功后换入完整控制台（结果区执行后才出现）
-                onResultsReady = { fullConsole -> embedConsole(fullConsole) },
+                onResultsReady = { fullConsole -> embedConsole(fullConsole, embedMode = ConsoleEmbedMode.EXECUTE) },
                 onError = { errorMsg ->
                     resultPanel.showError(errorMsg)
                 },
@@ -1493,7 +1494,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         SqlExecutor.execute(
             proj, sql, null, isQuery,
-            onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
+            onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE) },
             onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
             // M36.3：错误回调——执行链任何环节失败时从「执行中」状态恢复并显示错误
             onError = { errorMsg ->
@@ -1658,7 +1659,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         resultPanel.showLoading()
         SqlExecutor.execute(
             proj, explainSql, null, true,
-            onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
+            onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE) },
             onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
             onError = { errorMsg ->
                 resultPanel.showError(errorMsg)
@@ -1888,7 +1889,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // 嵌入后 showEmpty 清空；执行路径走 onResultsReady（成功）清 / onError（失败）显示，
             // 与本预览回调互不影响。
             onConsole = { consoleComponent ->
-                embedConsole(consoleComponent)
+                // T-FirstExecResultInvisible F3：预览准备链显式 PREVIEW——旧形态传默认值
+                //（布尔 false=execute 语义）靠 DS 侧折叠兜底，语义拧置归口 embedMode 后显式化
+                embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.PREVIEW)
                 resultPanel.showEmpty()
                 // T-PreviewFast P7：请求→控制台可见（第三段锚点，用户感知的「预览快不快」）
                 runCatching {
@@ -1930,11 +1933,16 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
      * editorHolder 显示链不断裂。
      * M36.5.39-A3：组件被 DBN 完全释放（parent==null）后由 hierarchy 监听自动重挂，不等轮询。
      */
-    private fun embedConsole(consoleComponent: JComponent, previewMode: Boolean = false) {
+    /**
+     * T-FirstExecResultInvisible F3：入参显式化——旧 `previewMode: Boolean` 一个布尔兼「预览」
+     * 与「全链执行」两语义，全链执行换入也传 true 导致执行组件被折叠（首执行结果区空白的
+     * 布局侧共犯）。归口 [ConsoleEmbedMode]：EXECUTE 恒展开，PREVIEW 仅结果区无内容时折叠。
+     */
+    private fun embedConsole(consoleComponent: JComponent, embedMode: ConsoleEmbedMode = ConsoleEmbedMode.EXECUTE) {
         val id = System.identityHashCode(consoleComponent)
         val prev = lastConsoleEmbeddedId
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
-            .info("[M36] embedConsole identity: id=$id, prevEmbedded=$prev, sameAsPrev=${prev == id}, sameInstance=${consoleComponent === embeddedConsole}, previewMode=$previewMode")
+            .info("[M36] embedConsole identity: id=$id, prevEmbedded=$prev, sameAsPrev=${prev == id}, sameInstance=${consoleComponent === embeddedConsole}, embedMode=$embedMode")
         // O-96fix2：控制台**挂载即刷新**绑定指示行。S3 的刷新通道原本只收口在 renderSql 尾部，
         // 但「执行 SQL」路径（SqlExecutor.execute/executePrepared 的 onConsole → 本方法）挂载后
         // 不重渲染（控制台文档已是执行 SQL，重渲染反而冲掉）——指示行停留在挂载前的记忆态
@@ -1959,9 +1967,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // M36.5.49：用 showIdle() 而非 showEmpty()——只清 loading/成功态，**保留错误态**，
             // 避免执行失败后 showError 被后续 results refreshed 的同实例回调覆盖（"一闪而过"）。
             resultPanel.showIdle()
-            // M36.5.77：execute 路径（previewMode=false）即使同实例也要确保 divider 展开——
-            // preview 时折叠为 1.0；execute 后必须恢复 0.6 显示结果区。
-            if (!previewMode && consoleComponent is javax.swing.JSplitPane) {
+            // M36.5.77：execute 路径（embedMode=EXECUTE）即使同实例也要确保 divider 展开——
+            // preview 时折叠为 1.0；execute 后必须恢复 0.6 显示结果区。F3 归口：PREVIEW 不触碰
+            //（DS 侧折叠点带内容守卫，面板侧不叠加判断避免两侧漂移）。
+            if (embedMode == ConsoleEmbedMode.EXECUTE && consoleComponent is javax.swing.JSplitPane) {
                 // write-safe: UI-only（纯 Swing/只读，无文档写）
                 ApplicationManager.getApplication().invokeLater({
                     if (consoleComponent.height > 0) {
@@ -1995,9 +2004,14 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // write-safe: UI-only（纯 Swing/只读，无文档写）
             ApplicationManager.getApplication().invokeLater({
                 if (sp.height > 0) {
-                    // M36.5.77：预览（previewMode=true）折叠底部（divider=1.0），隐藏无内容的
-                    // Console output 空框；execute 路径展开底部（divider=0.6）。
-                    sp.setDividerLocation(if (previewMode) 1.0 else 0.6)
+                    // M36.5.77：预览折叠底部（divider=1.0）隐藏无内容的 Console output 空框；
+                    // execute 路径展开底部（divider=0.6）。
+                    // T-FirstExecResultInvisible F3：折叠归口 embedMode——EXECUTE 恒展开；
+                    // PREVIEW 仅结果区无内容才折叠（竞态窗口内已有结果不吞）。
+                    val collapse = embedMode.shouldCollapseDivider(
+                        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.currentResultAreaHasContent(),
+                    )
+                    sp.setDividerLocation(if (collapse) 1.0 else 0.6)
                     sp.revalidate()
                     sp.repaint()
                 }
@@ -2013,7 +2027,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                     // 分隔落点随构造时序漂移（用户三张截图实证：塌缩/截断/窄条三种形态）
                     if (sp.height < 200) return
                     // M36.5.77：preview 路径维持折叠（divider=1.0），execute 路径首触强制 0.6
-                    sp.setDividerLocation(if (previewMode) 1.0 else 0.6)
+                    // T-FirstExecResultInvisible F3：同上归口 embedMode（触发时重探内容）
+                    val collapse = embedMode.shouldCollapseDivider(
+                        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.currentResultAreaHasContent(),
+                    )
+                    sp.setDividerLocation(if (collapse) 1.0 else 0.6)
                     sp.removeComponentListener(this)
                 }
             })

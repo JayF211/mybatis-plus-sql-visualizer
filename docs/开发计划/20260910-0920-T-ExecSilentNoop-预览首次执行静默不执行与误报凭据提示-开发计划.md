@@ -163,6 +163,8 @@ F1a + F2 已落地，改动面：
 
 **关键取舍**：静默出口有三条（statements 空 / isValid 假 / isStatement 过滤后空集），日志无法区分，故兜底只在 `freshModelDemoted`（准备窗口不稳的直接信号）时强制走 `executeQueries`；非 demoted 仍走 native 链，静默出口交给提交后的回执判定可见化，留待 runIde 沙盒复现后精修（§五 1/4）。
 
+**关联计划注记（2026-10-09，T-FirstExecResultInvisible 分支 t-firstexec 已实施）**：用户报障「预览首次点执行结果区空白、二击正常」与本计划症状同族——其调查把「双准备链竞态 → 执行链提交被准备链代际递增取消」定为主嫌（H1），属本计划静默出口的一个**触发面**（提交被取消 → 8s 无 Tab → 误报凭据/超时提示）。该触发面已由其 F1（准备链单飞 + 执行意图排队）结构性消除；本计划 §3.3 F3（数据源可见性）/ §3.4 F4（执行范围）不被覆盖、仍开放；其 F0 判定表 H3 行（`native query SUBMITTED` + 40 拍无 Tab）仍指向本计划 §五 F3/F4 续作。复验本计划场景时顺带走查其 §八五场景清单（两计划共用 §3.5 形态）。
+
 ## 五、风险与开放问题
 
 1. **兜底调用会不会丢 DBN 语义**：native 链在 `lambda$15` 里除了 `executeQueries` 还做了 `saveAllDocuments`、`dbSrcSearchPath`、`ensureSearchPath`、`beforeExecuteQueries`。我们直接调 `executeQueries` 会少做后两项，需要评估或按需补齐（searchPath 缺失会让未限定表名解析不到）。
