@@ -1455,6 +1455,8 @@ class SqlPreviewService(private val project: Project) {
      *
      * 产出条件（全部满足）：
      *  - 设置开关 [PluginSettings.State.paginationSimEnabled]（默认开）；
+     *  - 子开关 [PluginSettings.State.paginationCountEnabled]（T-CountSimToggle，默认开；
+     *    关=只追加 LIMIT 不产 COUNT，父开关优先）；
      *  - 语句为 SELECT 且已应用分页 LIMIT（`mapper.selectList(page, w)` 等分页消费产物）；
      *  - 非 count/exists 消费（其本身即计数语义，不再包裹——对齐 T-M29-02/03 分页消费排除口径）；
      *  - Page.searchCount != false（D3=A；MP 运行时 searchCount=false 不执行 COUNT，反编译实证）。
@@ -1464,6 +1466,7 @@ class SqlPreviewService(private val project: Project) {
         statement: SqlStatement,
     ): String? {
         if (settings?.state?.paginationSimEnabled == false) return null
+        if (settings?.state?.paginationCountEnabled == false) return null
         if (chain.countConsumed || chain.existsConsumed) return null
         if (!chain.pageSearchCount) return null
         val select = statement as? SelectStatement ?: return null

@@ -104,6 +104,8 @@ object XmlPreviewService {
      *    形参运行时值静态不可得 → `LIMIT ?, ?` 占位，参数来源标注 IPage 访问器公式）；
      *  - 同产出 COUNT 包裹附第二条语句（`SELECT COUNT(*) FROM (原SQL) TOTAL`，MP 3.5.17
      *    getOriginalCountSql 逐字节形态，包裹体**不含** LIMIT——运行时 COUNT 先于 LIMIT 执行）；
+     *    受 COUNT 子开关 [paginationCountEnabled] 独立控制（T-CountSimToggle，D129：关=只追加
+     *    LIMIT 不产 COUNT；总开关在调用方判定，父开关优先）；
      *  - 语句已含 LIMIT（用户手写，V13c 边界）→ 不重复追加、不产 COUNT（预览保守口径，偏离
      *    MP 运行时「字面拼接」的偏离已登记）；
      *  - 非 SELECT（INSERT/UPDATE/DELETE）不分页（对齐 T-M29-03「仅 SELECT 生效」口径）。
@@ -119,7 +121,11 @@ object XmlPreviewService {
         if (PaginationSimulator.hasExistingLimit(result.sql)) return@runCatching result
         val limitClause = PaginationSimulator.placeholderLimitClause(pageParamName)
         val limitLine = DialectRegistry.effective(project = project).renderLimit(limitClause)
-        val countSql = PaginationSimulator.wrapCountSql(result.sql.replace(WHITESPACE_REGEX, " ").trim())
+        val countSql = if (paginationCountEnabled()) {
+            PaginationSimulator.wrapCountSql(result.sql.replace(WHITESPACE_REGEX, " ").trim())
+        } else {
+            null
+        }
         val extraSources = PaginationSimulator.placeholderParamSources(pageParamName)
         result.copy(
             sql = result.sql.trimEnd() + "\n" + limitLine,
@@ -135,6 +141,10 @@ object XmlPreviewService {
     /** 分页模拟开关（测试环境未注册设置服务时按默认开）。 */
     internal fun paginationSimEnabled(): Boolean =
         runCatching { PluginSettings.getInstance().state.paginationSimEnabled }.getOrDefault(true)
+
+    /** 分页 COUNT 子开关（T-CountSimToggle；测试环境未注册设置服务时按默认开，父开关优先在调用方判定）。 */
+    internal fun paginationCountEnabled(): Boolean =
+        runCatching { PluginSettings.getInstance().state.paginationCountEnabled }.getOrDefault(true)
 
     /**
      * T-M26-B：MP 占位展开——扫描 `${变量.customSqlSegment/sqlSelect/sqlSet}`，
