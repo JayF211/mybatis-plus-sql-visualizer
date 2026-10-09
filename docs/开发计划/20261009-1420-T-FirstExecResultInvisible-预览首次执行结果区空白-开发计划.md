@@ -138,12 +138,12 @@ D138=F1+F3 无条件双笔；D139=F2 条件笔（F0 判定 H2 成立才实施，
 预览直通不取所有权 / finishPrepare 复位 / 卡死逃生 / embedMode 折叠判定三态（纯逻辑）+
 接线守卫（源码扫描照 ErrorPositionWiringGuardTest 先例：8 个 embedConsole 调用点模式显式、
 DS 两处折叠归口 shouldCollapseDivider、F1 入口与消费点在位）。
-读数：【待补——见文末「运行读数」】
 
 ### 反向验证（S4）
 
-【待补——临时注释 `PrepareSingleFlightGate.tryEnter` 排队分支 →
-`单飞_在飞时执行意图排队不再进第二链` 预期红；还原 → 预期绿。读数见文末】
+临时注释 `PrepareSingleFlightGate.tryEnter` 的排队分支（`pendingIntent = intent` +
+`pendingExecute.set(true)` 两行）→ `单飞_在飞时执行意图排队不再进第二链` 预期红（consume
+返回 null）；还原 → 预期绿。接线守卫用例不受影响（守卫只扫源码形态）。
 
 ### F0 判定结论（S5）
 
@@ -176,7 +176,19 @@ prepareAfterEditorResolved 入口/出口各加一行 INFO」不实施——消�
 
 ### 运行读数（定向测试 + 反向验证）
 
-【占位——门禁冲突时标注「待门禁后补跑」】
+**待门禁后补跑**：实施窗口内登记表有 `t-batchmerge`（testShards/verifyGate 合并态门禁，
+登记至 15:42）在跑，按并行纪律本窗不启 gradle（不做 sleep 轮询）。静态复核已完成：
+previewMode 零残留、8 个 embedConsole 调用点计数（EXECUTE×7 / PREVIEW×1）、
+shouldCollapseDivider 两处、F1 接线五锚点均在位（grep 读数见提交 631b12a 报告）。
+复跑命令（登记 `--name t-firstexec --sandbox <独立沙盒>` 后）：
+
+```
+./gradlew test --tests "cn.song.mybatisplus.visualizer.execute.PrepareSingleFlightGateTest"
+```
+
+反向验证：临时注释 `PrepareSingleFlightGate.kt` tryEnter 内两行排队分支 → 复跑上命令
+（预期 `单飞_在飞时执行意图排队不再进第二链` 红、`排队_同窗口连点后到意图覆盖先到` 红），
+还原 → 复跑（全绿）。
 
 ## 八、验收注记（F0 诊断判定表 → 用户真机走查清单）
 
