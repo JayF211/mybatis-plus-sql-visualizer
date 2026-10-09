@@ -27,6 +27,8 @@ sourceSets {
 }
 dependencies {
     "childappImplementation"("com.h2database:h2:2.3.232")
+    // T-AttachPoolWarm：真机复现（MySQL 8 + 存量池连接复用）子进程驱动——子 JVM classpath 须挂真 jar
+    "childappImplementation"("com.mysql:mysql-connector-j:8.0.33")
 }
 
 // reloc 源集（构建期工具：fat jar 打包 + ASM 自 relocate）
@@ -64,6 +66,9 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // attach 门禁测试的「用户应用」驱动：H2（与根项目方言验证同版本）
     testImplementation("com.h2database:h2:2.3.232")
+    // T-AttachPoolWarm：真机复现（MySQL 8 + 存量池连接复用）——测试 classpath 提供真 driver jar，
+    // 供子 JVM 拼 classpath（locateMysqlJar 从 java.class.path 提取）与模式断言
+    testImplementation("com.mysql:mysql-connector-j:8.0.33")
 
     // JDK8 目标门禁专用：H2 1.4.200（2.x 是 Java 11 字节码，JDK8 加载不了）——
     // 以独立配置解析出 jar 绝对路径，经系统属性下发给测试

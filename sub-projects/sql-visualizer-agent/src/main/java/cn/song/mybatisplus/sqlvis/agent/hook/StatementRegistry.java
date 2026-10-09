@@ -3,6 +3,7 @@ package cn.song.mybatisplus.sqlvis.agent.hook;
 import java.util.Collections;
 import java.util.Map;
 import java.util.WeakHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -44,6 +45,17 @@ public final class StatementRegistry {
     /** attach 前 prepare、映射无登记的 PS 执行次数（盲区可观测口径）。 */
     private static final AtomicLong UNRESOLVED = new AtomicLong();
 
+    /**
+     * T-AttachPoolWarm（2026-10-09）：盲区**首条**取证打点——只打一次，后续零噪音。
+     *
+     * <p>现场复盘：{@link #unresolvedCount()} 此前只有「织入通道首条事件已产出」这一条出口
+     * （[WovenEvents] 的 FIRST_FIRE 行会带 registryUnresolved）——**一旦整场都是盲区（一次事件都
+     * 不产），该计数就完全无出口**，宿主应用侧读不到「钩子其实在跑、只是 SQL 取不到」。真机
+     * 「存量连接零事件」恰是这种形态。本行把盲区次数与 PS 实现类名打到宿主 stderr，与
+     * 「attach retransform」行配对即可判定：matched/wove>0 且出现本行 = 织入在位但 PS 无登记。
+     */
+    private static final AtomicBoolean UNRESOLVED_WARNED_ONCE = new AtomicBoolean();
+
     private StatementRegistry() {
     }
 
@@ -67,7 +79,15 @@ public final class StatementRegistry {
     public static Ctx getOrCountUnresolved(Object statement) {
         final Ctx ctx = get(statement);
         if (ctx == null) {
-            UNRESOLVED.incrementAndGet();
+            final long n = UNRESOLVED.incrementAndGet();
+            // 首条盲区取证（仅一次；见 UNRESOLVED_WARNED_ONCE 注释）——「钩子在跑但 SQL 取不到」
+            // 的宿主侧唯一出口，与 WovenEvents 首条事件行同款取舍（一次告警防宿主日志刷屏）。
+            if (UNRESOLVED_WARNED_ONCE.compareAndSet(false, true)) {
+                System.err.println("[SqlVisAgent] 织入通道登记盲区：无登记 PS 执行被跳过（SQL 不可得）"
+                        + " psClass=" + (statement == null ? "null" : statement.getClass().getName())
+                        + " unresolvedCount=" + n
+                        + " —— 一期已知盲区（attach 之前 prepare 的 PS 无 SQL 归属；仅此一条告警）");
+            }
         }
         return ctx;
     }
@@ -108,5 +128,6 @@ public final class StatementRegistry {
             REGISTRY.clear();
         }
         UNRESOLVED.set(0L);
+        UNRESOLVED_WARNED_ONCE.set(false);
     }
 }
