@@ -2266,6 +2266,13 @@ internal class AgentSession(
                     //（含后续被去重/屏蔽/展示链丢弃的）。面板零产出时据此分流「事件到没到」：
                     // N=0 → 查 agent 侧（织入/门禁/传输）；N>0 → 查消费侧。
                     AgentEventAdapter.markReceived()
+                    // T-AttachZeroEvent（2026-10-09 现场复盘）：receivedCount 此前零出口——「计数在涨」
+                    // 与「面板零产出」并存时无法判「事件没到」还是「消费链丢了」。首条到达打一行 INFO
+                    //（与宿主侧 WovenEvents 首条 stderr 行配对），三分故障域：宿主无首条=agent 侧；
+                    // 宿主有、IDE 无=传输；两侧都有而面板空=消费链（去重/屏蔽/过滤/暂停）。
+                    if (AgentEventAdapter.receivedEvents() == 1L) {
+                        LOG.info("增强通道首条事件已到达并进入消费链（pid=$pid）——若面板仍零产出，查消费链（去重窗口/屏蔽/过滤），不再疑 agent 侧")
+                    }
                     // T-AgentDialectLoop / T-AgentLogTime：接管期间控制台嗅探暂存的「日志行原始时间」
                     // 按 [logTimeKey]（占位符版 SQL 指纹）取回，参数值序列作次级判别（[stampLogTime]）。
                     // 未命中回落捕获时间（= execute 开始时刻，与日志行只差毫秒级）并留痕 [logTimeMiss]。
