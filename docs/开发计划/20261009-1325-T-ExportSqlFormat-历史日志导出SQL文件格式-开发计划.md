@@ -82,4 +82,29 @@ TXT 格式的「`-- === SQL #N ===` 注释头 + SQL + 空行」装配（formatTx
 
 ## 八、实施记录
 
-（空——实施启动后回填）
+（2026-10-09 回填；实施于分支 `t-exportsqlformat` 独立工作树，S1~S6 全做完）
+
+### 待验证前提证伪结论（P1~P4 全证实，无一被推翻）
+
+- **P1 ✅**：以项目实际解析的 kotlin-stdlib **1.9.22** jar 字节码复核（非凭记忆）——`javap -c kotlin.io.FilesKt__FileReadWriteKt`：`writeText$default` 在 charset 缺省时 `getstatic kotlin/text/Charsets.UTF_8`。默认 UTF-8 且无 BOM，既有 `exportToFile` 零改动即合规。
+- **P2 ✅**：代码级复核 `LogSqlRestorer.restore`（LogSqlRestorer.kt:34-39）——`if (paramIdx >= params.size) break` 后 `sb.append(sql, prev, sql.length)` 把占位符之后的剩余 SQL 原样追加，`?` 保留；与 KDoc :21 声明一致。导出文件出现 `?` 属预期（验收文案口径）。
+- **P3 ✅**：243 平台源码实证（`ideaIC-243.28141.41-sources.jar`）：`Messages.showChooseDialog` → `MessagesServiceImpl.showChooseDialog:231-245` → `ChooseDialog.getSelectedIndex()`（ChooseDialog.java:136-141）＝exitCode 0 时返回下拉所选**下标**（N 项即 0..N-1，第四项=3），非 OK（取消/关窗）一律 -1。运行语义与现分支同构，`idx < 0` 挡板原样有效。
+- **P4 ✅（附口径补强）**：`HistorySearchService.search(dir):113-118` 只认 `.sql` 扩展名（大小写不敏感）——读回污染仅发生在用户手动把导出文件存进自动保存目录时，证实。补强一处口径：`SqlLogAutoSaver` 保留上限清理按**名族**过滤（:145「非匹配 .sql 不计数、不参与删除候选」），`sql-export-*` 即便被手动放进该目录也不会被清理；但历史页**读回是扩展名制**、不看文件名——「防清理」成立，「防读回」仅靠用户不手动存入，与拍板方案认知一致。
+
+### 读数（定向 `--tests cn.song.mybatisplus.visualizer.log.SqlExportServiceTest`）
+
+- 新增 6 例后首跑 **11 例 1 红**：测试自身行数断言算错（结尾 `\n\n` 产生两个尾随空元素，`expected:<5> but was:<6>`）——修测试非修产品；复跑 **11/0/0/0 全绿**（BUILD SUCCESSFUL 16s）。
+- **反向验证（S5）**：临时把 `format()` 的 SQL 分支指回 `formatTxt`（REVERSE-PROBE 标记）→ **恰 4 红**：`testSql_单条无分号_文件头计数与补分号`（:73）/`testSql_注释头字段与TXT同构`（:102）/`testSql_空行集_仅文件头`（:114）/`testSql_多条序号连续`（:125），读数 `tests="11" failures="4" errors="0"`；`testSql_带分号不重复` 探针下保绿（TXT 形态本就不产双分号——该用例判别的是「补分号」契约，如实登记非全量判别）；还原后复跑 **11/0/0/0**，探针残留 grep 0。
+- 首轮 **编译红**（偏差①的现场证据）：`compileKotlin FAILED`——`SqlExportService.kt:162:87 'when' expression must be exhaustive. Add the 'SQL' branch or an 'else' branch`（formatPortable）。
+
+### 实施偏差（如实登记）
+
+1. **`formatPortable`（O-91 可移植导出）被枚举扩员波及**：计划盘点只覆盖 `format()` 的分发，漏了同枚举分发的 `formatPortable`——加 `SQL` 后该 `when` 不再穷尽，编译红。处置＝按 §三边界（可移植通道不提供 SQL 选项、不合并互不替代）加**显式防御分支** `SQL -> error("formatPortable: SQL format is not offered …")`：UI 侧 SqlPreviewPanel 自带三选对话框（SqlPreviewPanel.kt:1182-1184）永远产不出 SQL，分支不可达；显式失败防未来误接入时静默伪装成 TXT。
+2. **注释头提取共用**：formatTxt/formatSql 的逐条注释头（`-- === SQL #N ===` + time/source/duration 行）抽成私有 `appendSqlCommentHeader` 单源；分号真源直接复用同包顶层 `withTerminator`（SqlLogPanel.kt:91-92）——零下沉零复制。
+3. 默认保存名收成服务层 helper `SqlExportService.defaultSqlExportFileName()`（`sql-export-<yyyyMMdd-HHmmss>.sql`，`Locale.ROOT`），两面板 SQL 格式时调用；CSV/TSV/TXT 保持 `sql-history./sql-log.${ext}` 原名随 ext。
+4. 过程事故（当场修复）：用 sed 改 properties 时剥掉了全文件 CRLF，立即 `git checkout` 还原后改用编辑工具重做（改后 `file` 报 with CRLF、SqlExportService.kt 新旧行 CR 数=行数 193/193 实证无损）。
+
+### 其他
+
+- bundle：en:1136 / zh:1140 `log.export.visible` 双语加 `/SQL`；新增键 **0** 个（计划预估 0~1 命中下界）。
+- 真机走查（§六）留验收：历史面板搜索收窄后右键导出选 SQL → 数据库客户端直执；日志面板同构；通知含条数与路径；参数缺失条目 `?` 的验收提示口径见 P2。
