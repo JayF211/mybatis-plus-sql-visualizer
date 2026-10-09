@@ -40,14 +40,20 @@ public class ChildPoolApp {
         final String pass = args.length > 3 ? args[3] : DEFAULT_PASS;
         final String sql = "SELECT 1 AS attachpool_" + mode.toLowerCase();
 
-        Class.forName("com.mysql.cj.jdbc.Driver");
+        // 达梦（DM）模式：驱动名不同，其余语义同 A（warm 建连接、attach 后同连接新建 PS）
+        if ("DM".equals(mode)) {
+            Class.forName("dm.jdbc.driver.DmDriver");
+        } else {
+            Class.forName("com.mysql.cj.jdbc.Driver");
+        }
 
         Connection warmConn = null;
         PreparedStatement warmPs = null;
         HikariDataSource hikari = null;
 
         // ---------- warm 步骤（attach 之前：模拟应用已跑过请求、池里已有物理连接/PS） ----------
-        if ("A".equals(mode) || "D".equals(mode) || "D2".equals(mode) || "D3".equals(mode)) {
+        if ("A".equals(mode) || "D".equals(mode) || "D2".equals(mode) || "D3".equals(mode)
+                || "DM".equals(mode)) {
             warmConn = DriverManager.getConnection(url, user, pass);
             // statement 面：createStatement 执行（加载 StatementImpl）
             try (Statement st = warmConn.createStatement();

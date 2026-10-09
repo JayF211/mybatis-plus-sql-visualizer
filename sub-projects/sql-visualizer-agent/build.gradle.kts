@@ -95,6 +95,8 @@ dependencies {
         exclude(group = "com.google.protobuf")
         exclude(group = "com.oracle.oci.sdk")
     }
+    // 达梦语句面 E2E：DM 驱动进子进程 classpath（demo pom 声明版 8.1.3.140）
+    "attachPoolChild"("com.dameng:DmJdbcDriver18:8.1.3.140")
     // 织入产物校验测试需要 ASM 明文命名空间（仅测试 classpath）
     testImplementation("org.ow2.asm:asm:$asmVersion")
     testImplementation("org.ow2.asm:asm-commons:$asmVersion")
@@ -108,6 +110,9 @@ dependencies {
     testImplementation("org.postgresql:postgresql:42.7.1")
     testImplementation("com.microsoft.sqlserver:mssql-jdbc:12.4.2.jre11")
     testImplementation("com.oracle.database.jdbc:ojdbc11:23.3.0.23.09")
+    // T-DmWeave：达梦语句面/prepare 面登记（本机 demo 声明版 DmJdbcDriver18 8.1.3.140）——
+    // 真实驱动类字节进**测试 classpath**，供覆盖率守卫做字节层织入 + JVM 校验探针。
+    testImplementation("com.dameng:DmJdbcDriver18:8.1.3.140")
 }
 
 // 四格：Hikari 子进程 classpath 版本钉到本机 .m2 在位版本（Hikari 4.0.3 自身要 javassist 3.27.0-GA，

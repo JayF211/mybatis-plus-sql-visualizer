@@ -37,6 +37,11 @@ public class AttachPoolWarmGateTest {
     private static final String DB_USER = "root";
     private static final String DB_PASS = "root";
 
+    /** 达梦（用户现场 application-dm.yml）——DM 模式子进程连它。 */
+    private static final String DM_URL = "jdbc:dm://114.66.55.245:20096?schema=MPJ_DEMO";
+    private static final String DM_USER = "MPJ_DEMO";
+    private static final String DM_PASS = "Mpj_demo_2026";
+
     /** 用户现场 JDK8（目标 JVM；attach 客户端仍为工具链 JDK）。 */
     private static final String JDK8_JAVA_HOME = "D:/HuanJing/Java/jdk1.8.0_181";
     /** Spring Boot 2.6.3 依赖管理版 MySQL 驱动（与 8.0.33 同挂子进程 classpath，按名各取）。 */
@@ -169,6 +174,23 @@ public class AttachPoolWarmGateTest {
                 r.eventReceived);
     }
 
+    /**
+     * DM（用户 P0 复现）：达梦应用——JDK8 目标 + 存量 DM 连接（attach 前建好并跑一次），attach 后
+     * 同连接新建 PS 执行。修复前预期零事件、matched=0（达梦语句面/prepare 面未登记）；登记后应到达。
+     * DM 服务器不可达时 Assume 跳过（不伪造读数）。
+     */
+    @org.junit.Test
+    public void 模式DM_达梦存量连接复用_attach事件到达() throws Exception {
+        org.junit.Assume.assumeTrue("DM 服务器 114.66.55.245:20096 不可达，DM 格跳过", dmReachable());
+        org.junit.Assume.assumeTrue("JDK8 不在位，DM 格跳过", jdk8JavaBin() != null);
+        // 用户现场应用很可能跑在 JDK8 上（本机默认 java=JDK8）——DM 格按 JDK8 目标跑
+        RunResult r = runMode("DM", "attachpool_dm", new ArrayList<String>(), WAIT_SECONDS * 1000L,
+                null, false, jdk8JavaBin(), null);
+        report("DM", r);
+        org.junit.Assert.assertTrue("模式DM（达梦存量连接复用）应收到事件——用户 P0 的本地复现判据\n"
+                + r.asBlock(), r.eventReceived);
+    }
+
     // ---------- 核心运行 ----------
 
     private RunResult runMode(String mode, String keyword, List<String> extraJvmArgs, long waitMs)
@@ -196,7 +218,7 @@ public class AttachPoolWarmGateTest {
                 .toAbsolutePath().toString();
         // Hikari 模式（H）：子进程 classpath 取显式 pool classpath（Hikari+javassist+slf4j+指定驱动）；
         // 其余模式维持第一轮行为（测试 classpath 里扫出的 mysql-connector-j 8.0.33 + childapp）
-        final String childClasspath = "H".equals(mode)
+        final String childClasspath = ("H".equals(mode) || "DM".equals(mode))
                 ? buildPoolClasspath(mysqlJarName)
                 : locateMysqlJar().toAbsolutePath() + File.pathSeparator + childClasses;
 
@@ -217,9 +239,9 @@ public class AttachPoolWarmGateTest {
         cmd.add(childClasspath);
         cmd.add("cn.song.mybatisplus.sqlvis.agent.ChildPoolApp");
         cmd.add(mode);
-        cmd.add(JDBC_URL);
-        cmd.add(DB_USER);
-        cmd.add(DB_PASS);
+        cmd.add("DM".equals(mode) ? DM_URL : JDBC_URL);
+        cmd.add("DM".equals(mode) ? DM_USER : DB_USER);
+        cmd.add("DM".equals(mode) ? DM_PASS : DB_PASS);
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
         pb.redirectOutput(childLog.toFile());
@@ -488,11 +510,13 @@ public class AttachPoolWarmGateTest {
             }
             libs.add(j);
         }
-        if (chosenMysql == null) {
+        if (chosenMysql == null && mysqlJarName != null) {
             throw new AssertionError("指定 MySQL 驱动不在 attachPoolChild: " + mysqlJarName);
         }
         List<String> all = new ArrayList<String>();
-        all.add(chosenMysql);
+        if (chosenMysql != null) {
+            all.add(chosenMysql);
+        }
         all.addAll(libs);
         all.add(childClasses);
         return String.join(File.pathSeparator, all);
@@ -522,6 +546,16 @@ public class AttachPoolWarmGateTest {
     static boolean mysqlReachable() {
         try (java.net.Socket s = new java.net.Socket()) {
             s.connect(new java.net.InetSocketAddress("127.0.0.1", 3306), 1000);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 用户现场达梦库探活（demo application-dm.yml 的 URL host:port）。 */
+    static boolean dmReachable() {
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.connect(new java.net.InetSocketAddress("114.66.55.245", 20096), 2000);
             return true;
         } catch (Exception e) {
             return false;

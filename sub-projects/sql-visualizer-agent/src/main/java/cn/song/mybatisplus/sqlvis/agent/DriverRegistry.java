@@ -77,6 +77,14 @@ public final class DriverRegistry {
         return false;
     }
 
+    /**
+     * 已登记驱动类名快照（仅供测试守卫遍历「连接面已登记但语句面/prepare 面漏登记」的厂商缺口；
+     * 生产路径不使用）。返回自身为不可变集合，无泄漏面。
+     */
+    static java.util.Set<String> driverClassNames() {
+        return DRIVER_CLASSES;
+    }
+
     private DriverRegistry() {
     }
 }

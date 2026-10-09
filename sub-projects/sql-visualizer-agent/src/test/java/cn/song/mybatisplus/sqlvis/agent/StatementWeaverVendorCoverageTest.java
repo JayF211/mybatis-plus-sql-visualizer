@@ -27,8 +27,8 @@ import static org.junit.Assert.fail;
  * <p>两层判别：
  * <ol>
  *   <li><b>谓词层</b>（环境无关）：每个登记类必须命中正确的一面谓词、且不在另一面——名单与
- *       {@link DriverRegistry} 分工一致（mysql 5/8、h2、PG、Oracle、SQL Server；达梦经字节层探针
- *       暴露织入器帧-局部变量局限后未登记，见 {@link StatementWeaver} 类注释）。</li>
+ *       {@link DriverRegistry} 分工一致（mysql 5/8、h2、PG、Oracle、SQL Server、达梦 timed 面；
+ *       达梦 ADD_BATCH/CLEAR_BATCH 面因 chop_frame 未登记，见 {@link StatementWeaver} 类注释）。</li>
  *   <li><b>字节层</b>（需驱动 jar 在测试 classpath）：直读真实驱动类字节 → {@code weaveSpec}
  *       → 断言 changed → 子优先隔离子 loader 定义 + 初始化（链接期 JVM 栈图校验）。mysql-connector
  *       不在 agent 测试 classpath，只走谓词层。</li>
@@ -67,8 +67,10 @@ public class StatementWeaverVendorCoverageTest {
             // SQL Server（mssql-jdbc 12.x）
             "com.microsoft.sqlserver.jdbc.SQLServerStatement",
             "com.microsoft.sqlserver.jdbc.SQLServerPreparedStatement",
-            // 达梦不登记：DmdbStatement.addBatch 出口 chop_frame(2)，出口块读 this/首参被帧判死
-            // → VerifyError（本类初版字节级探针实证）。须待出口锚点/帧重写方案，见 StatementWeaver 类注释。
+            // 达梦 DM8（DmJdbcDriver18 8.1.3.140）——timed 面（入口捕获改造后过校验）；ADD_BATCH/
+            // CLEAR_BATCH 出口非 timed 读原局部会被 chop_frame 判死，未登记（见 StatementWeaver 类注释）
+            "dm.jdbc.driver.DmdbStatement",
+            "dm.jdbc.driver.DmdbPreparedStatement",
     };
 
     /** prepare 面登记名（prepareStatement/prepareCall 出口登记 PS→SQL）。 */
@@ -79,6 +81,8 @@ public class StatementWeaverVendorCoverageTest {
             "org.postgresql.jdbc.PgConnection",
             "oracle.jdbc.driver.PhysicalConnection",
             "com.microsoft.sqlserver.jdbc.SQLServerConnection",
+            // 达梦连接（prepare 面；该类字节探针通过校验）
+            "dm.jdbc.driver.DmdbConnection",
     };
 
     /** 字节层排除（agent 测试 classpath 无其 jar）。 */
@@ -126,6 +130,62 @@ public class StatementWeaverVendorCoverageTest {
         }
     }
 
+    // ---------- 厂商对齐守卫（防「连接面登记了、语句面/prepare 面漏登记」的静默缺口复发） ----------
+
+    /**
+     * 已知不覆盖的厂商（连接面已登记，但语句面/prepare 面未登记）——显式认领 + 原因，缺项即红。
+     * 新增厂商只有两条路：补齐三面，或在此登记不覆盖原因。
+     */
+    private static final java.util.Map<String, String> VENDOR_NOT_COVERED =
+            new java.util.LinkedHashMap<String, String>();
+
+    static {
+        VENDOR_NOT_COVERED.put("org.mariadb.",
+                "MariaDB 未纳入测试矩阵（无本机 jar / 未实证语句面形态）；如需支持请补语句面/prepare 面");
+        VENDOR_NOT_COVERED.put("org.opengauss.",
+                "openGauss 2.x 走 PG 驱动（已由 org.postgresql. 覆盖）；3.x 自带驱动未实证");
+        VENDOR_NOT_COVERED.put("org.hsqldb.", "未纳入测试矩阵（无本机 jar）");
+        VENDOR_NOT_COVERED.put("org.sqlite.", "未纳入测试矩阵（无本机 jar）");
+        VENDOR_NOT_COVERED.put("com.gbasedbt.", "国产库，本机无 jar 未实证");
+        VENDOR_NOT_COVERED.put("com.kingbase8.", "国产库，本机无 jar 未实证");
+    }
+
+    /**
+     * T-DmWeave 防复发守卫：{@link DriverRegistry} 连接面已登记的每个厂商，**要么**在
+     * {@link StatementWeaver#SPECS} 有语句面/prepare 面条目，**要么**在 {@link #VENDOR_NOT_COVERED}
+     * 显式认领不覆盖原因。动因：达梦 connect 面登记在册、语句面/prepare 面一个类都没有，attach 到
+     * 运行中的达梦应用时 matched=0、零事件——这类「看着支持、实际不出」的静默缺口从此由本守卫拦下。
+     */
+    @Test
+    public void 厂商对齐守卫_连接面已登记厂商必须有语句或prepare面条目() {
+        for (String driverClass : DriverRegistry.driverClassNames()) {
+            final String vendor = vendorKey(driverClass);
+            if (VENDOR_NOT_COVERED.containsKey(vendor)) {
+                continue; // 显式认领不覆盖
+            }
+            boolean covered = false;
+            for (String specClass : StatementWeaver.specClassNames()) {
+                if (specClass.startsWith(vendor)) {
+                    covered = true;
+                    break;
+                }
+            }
+            assertTrue(driverClass + " 的连接面已登记，但厂商前缀 " + vendor
+                    + " 在 StatementWeaver.SPECS 无语句面/prepare 面条目——这是「看着支持、attach 后"
+                    + "一条不出」的静默缺口来源。请补齐语句面/prepare 面，或在 VENDOR_NOT_COVERED"
+                    + " 显式登记不覆盖原因。", covered);
+        }
+    }
+
+    /** 驱动类 → 厂商前缀（org.x/com.x 取两段，其余取一段：oracle. / dm. 等）。 */
+    private static String vendorKey(String driverClass) {
+        final String[] p = driverClass.split("\\.");
+        if ("org".equals(p[0]) || "com".equals(p[0])) {
+            return p[0] + "." + p[1] + ".";
+        }
+        return p[0] + ".";
+    }
+
     // ---------- 字节层（真实驱动类字节 → 织入 → JVM 链接期校验） ----------
 
     @Test
@@ -155,6 +215,19 @@ public class StatementWeaverVendorCoverageTest {
         assertWovenAndVerifiable("org.postgresql.jdbc.PgPreparedStatement");
         assertWovenAndVerifiable("org.postgresql.jdbc.PgCallableStatement");
         assertWovenAndVerifiable("org.postgresql.jdbc.PgConnection");
+    }
+
+    /**
+     * 达梦主因面直证（T-DmWeave，用户 P0）：DmdbStatement/DmdbPreparedStatement 的 timed 面
+     * （入口捕获 this/首参）+ DmdbConnection 的 prepare 面，在**真实达梦字节**上必须 changed 且过
+     * JVM 链接期校验——这是「attach 到达梦应用零事件」修复的字节级安全闸（探针曾实证旧形态
+     * VerifyError，此处锁死修复后不再回退）。
+     */
+    @Test
+    public void DM主因面_timed面与prepare面均真实织入() throws Exception {
+        assertWovenAndVerifiable("dm.jdbc.driver.DmdbStatement");
+        assertWovenAndVerifiable("dm.jdbc.driver.DmdbPreparedStatement");
+        assertWovenAndVerifiable("dm.jdbc.driver.DmdbConnection");
     }
 
     // ---------- 校验器判别力自证（防「loader 未触发校验」假绿） ----------
