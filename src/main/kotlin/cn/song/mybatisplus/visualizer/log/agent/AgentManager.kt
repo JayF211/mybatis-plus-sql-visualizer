@@ -1034,7 +1034,9 @@ class AgentManager(private val project: Project) : Disposable {
             return null
         }
         val server = try {
-            ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+            // backlog 4：暂停期 backlog 需容纳 agent 停泊重连（drainPremainBacklog 保证暂停交接时
+            // 已清空，此处为长暂停期「停泊连接死亡+重拨」等罕见多连接形态留余量；Windows 下为 hint）
+            ServerSocket(0, 4, InetAddress.getLoopbackAddress())
         } catch (t: Throwable) {
             if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
             LOG.warn("openPremainChannel: 端口前置协商失败——本次不注入（回落 attach/桥）", t)
@@ -1179,7 +1181,40 @@ class AgentManager(private val project: Project) : Disposable {
             // T-PremainReattach S1：暂停退出（paused 且未 closed）不收口——socket 与通道都保留，
             // 等 resume 重建 accept 循环；其余退出路径照旧收口。暂停中被关闭的竞态（onRunEnded /
             // dispose）也照旧收口（closeChannel 与本路径都幂等）。
-            if (channel.closed || !channel.paused) closePremainChannel(channel)
+            if (channel.closed || !channel.paused) {
+                closePremainChannel(channel)
+            } else {
+                // 暂停退出先清空内核 backlog（哑元唤醒连接 / 暂停竞态期到达的连接——close 即弃；
+                // agent 侧至多累计 1~2 次「连上即被关」，远低于 PORT_ABANDONED 阈值）。 backlog 不清，
+                // 滞留的死连接会占满 backlog 槽位（cap=4）令暂停期 agent 重连被拒、resume 后第一个
+                // accept 吃到哑元产生 pid=0 闪断会话。清空后 resume 的第一个 accept 必是 agent 真连接。
+                drainPremainBacklog(channel)
+            }
+        }
+    }
+
+    /**
+     * 清空暂停通道的内核 backlog（[acceptPremain] 暂停退出路径专用）：短超时循环 accept+close 直到
+     * 无 pending。仅 accept 线程自身在退出前调用（无并发竞争者）；通道此刻已被 closeChannel 竞态
+     * 关闭时 accept 抛 SocketException，静默结束。100ms 窗口内 agent 真回连到达也会被弃（计入
+     * agent 侧快速断开一次，可接受）。
+     */
+    private fun drainPremainBacklog(channel: PremainChannel) {
+        runCatching {
+            channel.server.soTimeout = 100
+            // **时间有界**（500ms 封顶）：本清理只服务「暂停交接时清空 backlog」，绝不服务暂停期——
+            // 若在暂停期常驻 accept+close，agent 的每次重连都会被弃（「连上即被关」计满即
+            // PORT_ABANDONED，resume 永久失效）。超时（无 pending）/closed/paused 被翻回（resume
+            // 已接手，共享 soTimeout 字段不得再纠缠）任一即退出；resume 侧 join 本线程后才起新循环。
+            val deadlineMs = System.currentTimeMillis() + 500
+            while (!channel.closed && channel.paused && System.currentTimeMillis() < deadlineMs) {
+                val socket = try {
+                    channel.server.accept()
+                } catch (e: SocketTimeoutException) {
+                    break
+                }
+                runCatching { socket.close() }
+            }
         }
     }
 
@@ -1551,6 +1586,11 @@ class AgentManager(private val project: Project) : Disposable {
     private fun resumePremainChannel(channel: PremainChannel): Boolean {
         if (channel.closed || !channel.paused) return false
         channel.paused = false
+        // 等旧 accept 线程彻底退出（含暂停退出的 backlog 清理）再起新循环——两个线程并发 accept
+        // 会互抢停泊连接（旧线程的 drain 可能把 agent 真回连 accept 后弃掉）且 soTimeout 字段互踩。
+        // 无界 join 是安全的：旧线程全部退出路径有界（drain 100ms 拍 / 读 HELLO 5s / accept tick
+        // 30s，且 drain 见 paused=false 即停），最长数秒；典型为 0（哑元唤醒路径毫秒级退出）。
+        channel.acceptThread?.let { thread -> runCatching { thread.join() } }
         val acceptThread = Thread({ acceptPremain(channel) }, "mps-agent-premain-${channel.port}-r")
             .apply { isDaemon = true }
         channel.acceptThread = acceptThread

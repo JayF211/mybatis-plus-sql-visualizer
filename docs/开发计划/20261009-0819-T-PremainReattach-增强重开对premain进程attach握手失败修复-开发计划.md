@@ -2,7 +2,7 @@
 
 > **来源**：3.27 验收（§八）UI 端到端交真机复验后，用户真机（dev-bak 243 沙盒）复验反馈「应用跑着 → 设置勾开增强捕获」没生效。
 > **日志证据**：dev-bak 243 沙盒 idea.log 2026-10-09 08:07~08:10 完整时间线（本文 §二逐条引用）。
-> **生成日**：2026-10-09；写完停下等确认；**2026-10-09 用户令实施，D1 口径实施完毕**（实施记录见 §九）。
+> **生成日**：2026-10-09；写完停下等确认；**2026-10-09 用户令实施，D1+P4 口径实施完毕**（实施记录见 §九）。
 
 ## 一、背景与现象
 
@@ -113,7 +113,18 @@
   - 摘 `doAttachAsync` resume 入口 → **1/12 红**，恰为 `onProcessAppeared` 收口用例（直连入口用例不受钩子摘除影响，符合分层——它钉的是 resume 机制本体）。
 - **全量门禁**：testShards（243 平台，5 片，单路）读数见验收文档 §8.4 追记。
 
+### P4 追加实施（20261009 用户令「P4 也修」，D128/V151）
+
+- **方案落定（D128）**：计划 D2 形态——attach 握手成功即登记 `pid→端口`（`attachPorts` 表，[attachAndOffer] accept 成功处登记）；重开上升沿 `doAttachAsync` 命中即**原端口 re-bind**（`SO_REUSEADDR` 容忍旧连接 TIME_WAIT）起 accept 循环接住 agent 的 SenderLoop 对原端口的无限回连，跳过 loadAgent。re-bind 失败（端口被 ephemeral 复用等）清除失效登记回落既有 loadAgent 路径（零劣化）。
+- **统一性红利**：恢复成功后按 claimed 通道入 `premainChannels` 表——该进程后续关开自动走 premain 同一套暂停/恢复语义，P4 无需自己的暂停机制（守卫用例钉住第二循环走暂停路径）。
+- **表规模有界**：恢复成功消费条目 + `sweepOffline` 顺带清死 pid 条目。
+- **实施中全量门禁抖出两道竞态（随 D128 一并修复，生产隐患同源）**：
+  ① **backlog=1 哑元滞留**——暂停的哑元自连唤醒存在两支交错：accept 线程若在循环条件处退出（未消费哑元），哑元连接滞留 backlog 占满唯一槽位（`ServerSocket(0, 1, …)`），此后 agent 重连全部被 Windows 拒绝（单跑恒走「消费哑元」支故未暴露，门禁时序命中另一支）。修复=暂停退出由 accept 线程在 finally 里 `drainPremainBacklog`（短超时循环 accept+close 清空 pending；同时消灭「resume 后第一个 accept 吃到哑元产生 pid=0 闪断会话」的生产隐患）+ backlog 1→4。
+  ② **drain 与 resume 并发互抢**——drain 的 100ms 窗口内若 resume 起新 accept 线程，旧 drain 可能把 agent 真回连 accept 后弃掉（写端报「连接已被中止」）。修复=`resumePremainChannel` 起新循环前 `join(1s)` 等旧线程（含其 drain）退出。修复后守卫 `--rerun-tasks` 连跑 3 遍全绿。
+- **守卫（V151）**：`AgentManagerPremainReattachTest` +4=**16/0/0/0**（re-bind 接住回连重建会话、第二循环走暂停路径、端口被占回落、巡检清死 pid、onProcessAppeared 收口）；反向验证第三刀：摘 doAttachAsync P4 钩子恰收口用例 **1 红**（直连层用例钉机制本体，分层与 S2 反向同款）。回归：`AgentManagerPremainTest` 15/0、`AgentAttachChainTest` 7/0。
+- 全量门禁读数见验收文档 §8.4 追记。
+
 ### 遗留
 
 - 沙盒端到端（复现用户序列：Run premain → 关增强 → 再勾开 → 日志应见「恢复：重建 accept 循环」而非 AgentLoadException/accept 超时，面板产出带库角标条目）——随 3.27 UI 端到端一并交用户真机复验（新构建需重装）。
-- P4 attach 场景（attach 装载进程关再开不恢复）登记后续候选。
+- ~~P4 attach 场景（attach 装载进程关再开不恢复）登记后续候选~~（20261009 用户令「P4 也修」已实施，见上节 D128/V151）。
