@@ -281,6 +281,15 @@
              XML 动态标签与 OGNL 属性（守卫 O(1) 语法判定，实体解析仅补全触发时执行） -->
         <completion.contributor language="XML"
                                 implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.XmlSqlCompletionContributor"/>
+        <!-- T-XmlCmplDispatch：MpSqlMapper 注入片段内的补全派发入口（与上条同实现类双语言注册）。
+             243 平台实证（app-client.jar javap）：CompletionContributor.forParameters 按
+             position 所在文件光标偏移处的语言派发；SqlMapperInjector 注入开启（默认）时 mapper
+             语句文本/OGNL 属性值位于 MpSqlMapper 注入片段内，仅注册 XML 的话本贡献器在这些位
+             永不被咨询——表/列/#{} /OGNL/关键字补全全灭（dev-bak 沙盒 3.19「列名补全未验」
+             失效根因）。动态标签 `<` 位与属性名位因 `<` 终结文本宿主落在注入区间外，仍走 XML
+             派发。注入形态坐标由贡献器内宿主还原接（注入文件 DocumentWindow 优先）。 -->
+        <completion.contributor language="MpSqlMapper"
+                                implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.XmlSqlCompletionContributor"/>
         <completion.contributor language="JAVA"
                                 implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.AnnotationSqlCompletionContributor"/>
 

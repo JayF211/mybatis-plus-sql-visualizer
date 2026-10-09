@@ -10,6 +10,7 @@ import com.intellij.codeInsight.completion.CompletionProvider
 import com.intellij.codeInsight.completion.CompletionResultSet
 import com.intellij.codeInsight.completion.CompletionType
 import com.intellij.injected.editor.DocumentWindow
+import com.intellij.injected.editor.VirtualFileWindow
 import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.patterns.PlatformPatterns
 import com.intellij.psi.PsiElement
@@ -45,9 +46,13 @@ import com.intellij.util.ProcessingContext
  * `result.prefixMatcher.prefixMatches(lookupString)` 过滤（参数/标签同理按项名匹配）。
  *
  * 设计决策：
- *  - **注入片段 caret 宿主还原**（T-PerfSweep16 修复）：mapper XML 注入活代码化（F37）后，光标
- *    落注入片段内时 position/offset 可能是注入侧坐标——入口先按 ParamBraceTypedHandler 宿主
- *    三件套范式还原到宿主元素+宿主偏移再走原解析链；真机平台建参已按宿主坐标，还原为 no-op；
+ *  - **双语言注册 + 注入片段 caret 宿主还原**（T-PerfSweep16 修复 + T-XmlCmplDispatch 二轮修正）：
+ *    243 平台按 position 所在文件光标偏移处的语言派发贡献器（CompletionContributor.forParameters，
+ *    javap 实证）——注入开启（默认）时语句文本/OGNL 属性值位于 [cn.song.mybatisplus.visualizer.ui.inject.SqlMapperLanguage]
+ *    注入片段内，故本类以 language="XML" 与 language="MpSqlMapper" 双 EP 注册（plugin.xml），
+ *    分别接住宿主形态与注入形态；注入形态下 position/offset 已被 toInjectedIfAny 换成注入侧
+ *    坐标，入口先从注入文件自身 DocumentWindow 还原宿主坐标再走原解析链（三形态详见入口注释——
+ *    旧「仅取 editor.document 的 window」形态在生产链拿不到映射：getTopLevelEditor 已解包）；
  *  - 语句文本取 `statementTag.textRange` 内**原文**（含子标签原文），光标偏移用
  *    `parameters.offset`（真实光标，比 position 起点精确——光标位于词中时 position.startOffset 会少算已输入部分）；
  *  - 动态标签/属性名位置判定基于语句文本而非 position 所在文本节点（对 XmlToken/文本节点/补全
@@ -68,11 +73,19 @@ class XmlSqlCompletionContributor : CompletionContributor() {
                     context: ProcessingContext,
                     result: CompletionResultSet,
                 ) {
-                    // 宿主还原（T-PerfSweep16 修复：mapper XML 注入活代码化后，光标落在本插件注入片段内时
-                    // position/offset 是注入侧坐标——夹具里平台开编辑器甚至把 file 路由成注入 PsiFile）。
-                    // 照 ParamBraceTypedHandler 的宿主三件套范式还原到宿主元素+宿主偏移再走原解析链。
-                    // 真机注入补全主路径平台已按宿主坐标建参（CompletionInitializationUtil 走 getHostOffsets），
-                    // 此还原对真机为 no-op，仅接住注入侧坐标形态。
+                    // 宿主还原（T-PerfSweep16 修复 + T-XmlCmplDispatch 二轮修正）：mapper XML 注入活代码化
+                    // （T-PerfSweep16 F37）后，光标落在本插件注入片段内时 243 平台按 **MpSqlMapper 语言**
+                    // 派发本贡献器（CompletionContributor.forParameters → position 所在文件光标偏移处语言，
+                    // javap 实证），且 position/offset 已被 toInjectedIfAny 换成注入侧坐标。
+                    // 宿主偏移还原按三形态取（优先级降序）：
+                    //  ① 注入文件自身的 DocumentWindow——**生产形态**：CodeCompletionHandlerBase 建参前
+                    //     已 toInjectedIfAny（offset=注入侧）而 editor 经 invokeCompletionWithTracing 的
+                    //     getTopLevelEditor 解包为宿主编辑器（文档非 window）——243 app-client.jar 字节码
+                    //     实证；旧取法（②）在此形态拿不到映射、注入偏移直接当宿主偏移用 → 沙盒补全全灭
+                    //     第二层根因；
+                    //  ② editor.document 的 window 形态——fixture 形态（EditorTestFixture.getCompletionEditor
+                    //     包 EditorWindow），T-PerfSweep16 原实现恰在此形态验证（fixture 绿真机断即两形态差）；
+                    //  ③ 都拿不到 → 原样（宿主形态 no-op：position/offset 本就是宿主坐标）。
                     val injectedFile = parameters.position.containingFile
                     val injectionHost = injectedFile
                         ?.let { InjectedLanguageManager.getInstance(it.project).getInjectionHost(it) }
@@ -80,8 +93,10 @@ class XmlSqlCompletionContributor : CompletionContributor() {
                     val position: PsiElement
                     val offset: Int
                     if (hostFile != null && hostFile.textLength > 0) {
-                        val hostOffset = (parameters.editor.document as? DocumentWindow)
-                            ?.injectedToHost(parameters.offset) ?: parameters.offset
+                        val hostOffset = (injectedFile.virtualFile as? VirtualFileWindow)?.documentWindow
+                            ?.injectedToHost(parameters.offset)
+                            ?: (parameters.editor.document as? DocumentWindow)?.injectedToHost(parameters.offset)
+                            ?: parameters.offset
                         position = hostFile.findElementAt(hostOffset.coerceIn(0, hostFile.textLength - 1)) ?: return
                         offset = hostOffset.coerceIn(0, hostFile.textLength)
                     } else {
