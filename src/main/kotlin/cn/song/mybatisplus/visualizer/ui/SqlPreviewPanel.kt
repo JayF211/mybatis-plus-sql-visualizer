@@ -33,6 +33,7 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.ui.inlay.PreviewInlayScope
 import cn.song.mybatisplus.visualizer.util.CaseFormatUtil
+import cn.song.mybatisplus.visualizer.util.EditorCommentShortcuts
 import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
@@ -1843,7 +1844,11 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         // T-AutoFold F5：登记控制台编辑器引用（折叠应用目标）；就绪即按当前文档内容应用一次
         //（prepareConsole 链可能已同步 SQL 进文档，早于下一次 showSql）
+        // T-PreviewLineCommentDash O-134/D136：exec 文件同样被 DialectPreMapping 映射 MySQL（Ctrl+/ 产 `#`），
+        // 控制台编辑器一并打标接管；换装先把旧编辑器减计数（install/uninstall 各自幂等）
+        nativeConsoleEditor?.takeIf { it !== consoleEditor }?.let(EditorCommentShortcuts::uninstall)
         nativeConsoleEditor = consoleEditor
+        EditorCommentShortcuts.install(consoleEditor)
         cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(
             consoleEditor,
             consoleEditor.document.text,
@@ -2149,6 +2154,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         }
         // T-AutoFold F5：控制台组件摘除即清编辑器引用（防 EditorFactory 泄漏；新组件就绪时经
         // onNativeEditorReady 重新登记）
+        // T-PreviewLineCommentDash O-134：摘除先减计数（install 的对称端点之一）
+        nativeConsoleEditor?.let(EditorCommentShortcuts::uninstall)
         nativeConsoleEditor = null
         embeddedConsole = null
         rehostListener = null
@@ -3058,6 +3065,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // M36.4：重置原生编辑器文档引用
         nativeEditorDoc = null
         // T-AutoFold F5：控制台编辑器引用随清空复位
+        // T-PreviewLineCommentDash O-134：复位先减计数（detachConsole 已覆盖常规路径，此处兜底直清分支）
+        nativeConsoleEditor?.let(EditorCommentShortcuts::uninstall)
         nativeConsoleEditor = null
         // M36.5：释放已准备控制台引用（下次预览重新准备）
         SqlExecutor.clearPrepared()
@@ -3379,6 +3388,10 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // T-SqlCopyShortcuts O-122：无选中 Ctrl+C 复制全文、有选中只复制片段
         //（层位与理由见 EditorCopyShortcuts 的 KDoc；本处此前无任何键盘复制绑定）
         EditorCopyShortcuts.install(created, UiTextClipboard::copy)
+        // T-PreviewLineCommentDash O-134/D136：预览文件被 DialectPreMapping 强制映射 MySQL 方言，
+        // 平台 Ctrl+/ 取 MysqlCommenter 的 `#` 前缀，PG 执行报 42601——打标接管行注释统一插 `--`
+        //（`#` 残留行同样可剥；块注释不接管=D137。机制与卸载对称见 EditorCommentShortcuts KDoc）
+        EditorCommentShortcuts.install(created)
         editor = created
         bindAutoPopup(created)
         // T-AutoFold F4-a：createEditor 支链（含内存文档降级，同一函数收口）——新编辑器按初始内容应用
@@ -3626,6 +3639,9 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             // 也不再有 listener 字段需要置 null——T-RA-02 删除）
             autoPopupDisposable?.let { d -> Disposer.dispose(d) }
             autoPopupDisposable = null
+            // T-PreviewLineCommentDash O-134：行注释接管的减计数端点（与 assemblePreviewEditor 的
+            // install 对称；引用归零即换回平台原动作。幂等，未打标零动作）
+            EditorCommentShortcuts.uninstall(it)
             EditorFactory.getInstance().releaseEditor(it)
             editor = null
         }
@@ -5253,6 +5269,8 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
         // 本面板的监听不得残活抢组件）；embedConsole 对 null 安全
         runCatching { detachConsole() }
         // T-AutoFold F5：面板废弃——控制台编辑器引用一并清空（防 EditorFactory 泄漏告警）
+        // T-PreviewLineCommentDash O-134：面板销毁减计数（detachConsole 已覆盖常规路径，此处兜底直清分支）
+        nativeConsoleEditor?.let(EditorCommentShortcuts::uninstall)
         nativeConsoleEditor = null
         // T-M36.6-03：面板销毁——晚到的预热线程产物作废（预热线程自查后删除临时文件）
         previewDisposed = true
