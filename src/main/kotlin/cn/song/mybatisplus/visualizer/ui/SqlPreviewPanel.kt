@@ -3640,7 +3640,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
             autoPopupDisposable?.let { d -> Disposer.dispose(d) }
             autoPopupDisposable = null
             // T-PreviewLineCommentDash O-134：行注释接管的减计数端点（与 assemblePreviewEditor 的
-            // install 对称；引用归零即恢复原 handler。幂等，未打标零动作）
+            // install 对称；引用归零即换回平台原动作。幂等，未打标零动作）
             EditorCommentShortcuts.uninstall(it)
             EditorFactory.getInstance().releaseEditor(it)
             editor = null
