@@ -79,4 +79,59 @@
 
 ## 七、实施记录
 
-（空——实施启动后回填）
+（2026-10-09 实施回填，工作树 t-badgemode 基线 3535835）
+
+### 待验证前提证伪结论（P1~P4）
+
+- **P1 成立（附一处补充登记）**：`" · "`（U+00B7 单空格包裹）形态唯一产自 `JdbcUrlDialects.kt:74`
+  （`"$dialect · $fact"`，唯一出口 `AgentEventAdapter.kt:59` → `databaseName`）；全仓其余 ` · `
+  均为无关语义（CrudSqlPreviewFlow 摘要行 / LogToSqlPanel 状态行 / ExplainPlanResultView HTML
+  头 / SqlSuppressManagerDialog 双空格形态），`substringBefore(" · ")` 切分安全。补充登记：
+  `McpToolsetSupport.kt:283` 经 `mcpHistoryEntry(dataSourceName)` 注入的是 IDE 数据源**显示名**
+  （用户自由命名）——若用户把数据源命名为含 ` · ` 的串，OFF 态会切到首段；与计划已登记
+  「无分隔符串原样保留」同族（自由文本面），风险可忽略。
+- **P2 成立（有直读先例）**：同一函数族 `formatDurationFragment`（SqlLogPanel.kt:2412，直读
+  `state.slowQueryThresholdMs`）与 `formatTimestampFragment`（直读 `state.logTimestampFormat`）
+  均在每 cell 渲染路径直读设置。照抄直读形态，零缓存零监听。
+- **P3 成立**：调用点恰好两处——`SqlLogPanel.kt:2595`（日志页 LogEntryListCellRenderer）与
+  `HistorySqlLogPanel.kt:1231`（历史页 HistoryCellRenderer），均走同一 internal 顶层函数；
+  门控一处即覆盖两页（`McpToolsetSupport.kt:11` 仅 import 供 KDoc 引用，非调用）。
+- **P4 成立**：`SqlLogAutoSaver.kt:354` 写 ` | db: $it`（全量原文）、`SqlLogFileReader.kt:217`
+  自由文本读回 `databaseName`——历史读回条目仍是全量串，显示门控对其同样生效
+  （守卫用例 `test数据源角标_历史读回条目随开关切换` 锁定）。
+
+### S1~S5 落点
+
+- **S1** `PluginSettings.kt` State 增 `dataSourceBadgeDetail: Boolean = false`（随 O-1
+  showDurationInLogList 组声明，KDoc 注明默认克制口径与显示侧门控语义）。
+- **S2** `SqlLogPanel.kt formatDatabaseFragment` 门控：OFF 切 `substringBefore(" · ")`、
+  ON 全量、null 恒 null；KDoc 记分隔符唯一产源与边界语义。
+- **S3** `PluginSettingsPanel.kt` 五处同步（字段声明 / addRow / isModifiedSqlLog / apply /
+  reset）+ bundle 双语键 `settings.log.dataSourceBadgeDetail(.tip)`；复选框台账 41→42。
+- **S4** `SqlLogPanelRendererUiTest` 增 5 用例（OFF 切方言段 / ON 全量 / 无分隔符原样 /
+  null 恒 null / 历史读回随开关切换）；`PluginSettingsPersistenceTest` 增持久化往返用例 +
+  zh/en 文案正反断言 + 计数守卫 42。
+- **S5** 本节回填 + CHANGELOG（Unreleased/Changed 一行）+ 验收文档 3.13 标注。
+
+### 读数
+
+- **定向首跑（门控在场）**：`SqlLogPanelRendererUiTest` tests=41 failures=0 errors=0 +
+  `PluginSettingsPersistenceTest` tests=17 failures=0 errors=0，全绿。
+- **反向验证（RED PROBE 摘 S2 门控 → 只复跑渲染类）**：`SqlLogPanelRendererUiTest`
+  41 tests completed, **2 failed**——恰好两个 OFF 态判别用例红：
+  `test数据源角标_默认关仅渲染方言段`（`expected:<[MySQL[]] > but was:<[MySQL[ · jpa_demo@localhost:3…`）、
+  `test数据源角标_历史读回条目随开关切换`（`expected:<[DM（达梦）[]] > but was:<[DM（达梦）[ · localhost:5236]] >`）；
+  ON / 无分隔符边界 / null 用例不受摘除影响（判别面正确，守卫非空绿）。
+- **还原门控复跑**：两定向类恢复全绿（41/41 + 17/17）。
+
+### 偏差登记
+
+- 任务指令所称「paginationCount 子复选框先例」属 T-CountSimToggle（仅立项 b4fe6f9，未实施，
+  本基线不存在该形态）；实际照本树既有 `paginationSimCheck` / `logShowDurationCheck` 同款形态，
+  同步点全数落位（声明/addRow/isModified/apply/reset 共五处，指令的「四处」未含字段声明）。
+- `ProjectPluginSettingsTest` 零改动：`ProjectPluginSettings.State` 只承载 SQL 生成语义覆盖项，
+  UI 显示类开关（耗时显示 / 列表模式 / CRUD 色 / 角标）一贯不进项目级，本字段同口径。
+- `SettingsIO` 零改动：导出面是 State 子集（23 键），UI 显示偏好与 language 同类不入导出面，
+  「以现值为底合并」语义对新字段天然兼容。
+- 真机走查（默认态 `[MySQL]` / 打开后全量 / 历史即时切换 / MCP db 过滤不受影响）留验收，
+  与 §五口径一致。
