@@ -1823,7 +1823,7 @@ class SqlLogPanel(
         }
     }
 
-    /** R4 导出：格式三选 → 文件保存 → 后台写盘 → 通知（行集=lastRendered 快照）。 */
+    /** R4 导出：格式四选（CSV/TSV/TXT/SQL，默认 SQL）→ 文件保存 → 后台写盘 → 通知（行集=lastRendered 快照）。 */
     internal fun exportVisibleEntries() {
         val rows = lastRendered.map {
             val source = buildString {
@@ -1848,7 +1848,14 @@ class SqlLogPanel(
         )
         val dialog = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance()
             .createSaveFileDialog(descriptor, project)
-        val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, "sql-log.${format.ext}")
+        // T-ExportSqlFormat（用户拍板 20261009）：SQL 格式默认名 sql-export-<yyyyMMdd-HHmmss>.sql
+        // （时间戳防同日覆盖、不占 sql-history 名族）；CSV/TSV/TXT 保持原名随 ext。
+        val defaultName = if (format == SqlExportFormat.SQL) {
+            SqlExportService.defaultSqlExportFileName()
+        } else {
+            "sql-log.${format.ext}"
+        }
+        val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, defaultName)
             ?: return
         val target = saved.file
         ApplicationManager.getApplication().executeOnPooledThread {
@@ -1872,22 +1879,25 @@ class SqlLogPanel(
         }
     }
 
-    /** R4：导出格式三选（取消返回 null）。 */
+    /** R4：导出格式四选（取消返回 null）。默认选中 SQL（T-ExportSqlFormat 用户拍板 20261009；
+     *  P3：showChooseDialog 返回所选下标、取消 -1）。 */
     private fun chooseExportFormat(): SqlExportFormat? {
-        val names = arrayOf("CSV", "TSV", "TXT")
+        val names = arrayOf("CSV", "TSV", "TXT", "SQL")
         val idx = com.intellij.openapi.ui.Messages.showChooseDialog(
             project,
             MpSqlVisualizerBundle.message("log.history.export.choose"),
             MpSqlVisualizerBundle.message("log.export.visible"),
             com.intellij.openapi.ui.Messages.getQuestionIcon(),
             names,
-            names[0],
+            names[3],
         )
         if (idx < 0) return null
         return when (idx) {
             0 -> SqlExportFormat.CSV
             1 -> SqlExportFormat.TSV
-            else -> SqlExportFormat.TXT
+            2 -> SqlExportFormat.TXT
+            3 -> SqlExportFormat.SQL
+            else -> null
         }
     }
 
@@ -1923,7 +1933,7 @@ class SqlLogPanel(
         group.add(FocusRequestAction(entry))
         // O-90：按模板聚焦（「×N 同模板」徽章达阈值才可用；过滤出该模板全部条目）
         group.add(FocusTemplateAction(entry))
-        // R4（W3 历史工作流包）：导出当前可见行集（与面板过滤/搜索一致；CSV/TSV/TXT，后台写盘）
+        // R4（W3 历史工作流包）：导出当前可见行集（与面板过滤/搜索一致；CSV/TSV/TXT/SQL，后台写盘）
         group.add(ExportVisibleAction())
         val popup = ActionManager.getInstance().createActionPopupMenu("mpvs.log.list", group)
         // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
