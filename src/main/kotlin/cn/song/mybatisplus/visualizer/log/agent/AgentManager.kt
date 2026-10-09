@@ -1396,7 +1396,30 @@ class AgentManager(private val project: Project) : Disposable {
         // 且零产出没有任何可见信号）。收窄后：确认在采集才让桥让位（不引入双通道重复产出——
         // T-M56-02 闸门的本意保留），未确认/确认停采则桥照常解析兜底。
         // 「捕获关」时桥本就不产条目（Filter 的 isCapturing 守卫不挂载），故本处不必再判 capturing。
-        SqlCaptureGate.paused.set(online && captureConfirmedActive())
+        val gateNow = online && captureConfirmedActive()
+        val gateWas = SqlCaptureGate.paused.getAndSet(gateNow)
+        // T-AttachZeroEvent P3（2026-10-09 现场复盘）：通道纪元——接管沿（false→true，桥让位、
+        // agent 接管）重置**本项目**缓冲的去重索引。dedupeKey 跨通道统一（AgentEventAdapter 契约）
+        // 的目的是折叠接管/回落重叠期的双通道双报；桥一旦封停，重叠窗语义即结束——接管前桥纪元的
+        // 索引不得再吞 agent 纪元的首批事件（现场：接管前 60s 内桥刚捕过同端点，接管后同 SQL 的
+        // agent 事件全落窗口内被当重复丢弃，面板零新条目、「attach 即生效」看似失效）。
+        // 放 AgentManager 侧而非 SqlCaptureGate 对象内：闸门是进程级单例、缓冲是项目级——上升沿由
+        // 本项目的会话确认引发，重置只该落本项目缓冲；闸门对象保持哑标志位（「桥链路本身零改动」）。
+        if (gateNow && !gateWas) {
+            sqlLogManagerIfCreated(project)?.entries?.resetDedupeIndexOnChannelHandoff()
+            LOG.info("增强捕获接管沿（桥让位）：去重索引按通道纪元重置——桥纪元旧索引不再吞 agent 首批事件")
+        }
+        // 回落沿（true→false）**不**重置，三条理由：
+        // ① 语义不对称——上升沿吞的是 agent 纪元的「首批证据」（用户开增强跑同端点验证，吞掉即
+        //    「attach 即生效」零正向证明，12:54 现场根因）；回落沿即使吞，吞的是桥回归后的首条，
+        //    面板上同 key 的 agent 纪元行还在，且「同 SQL 60s 内重复折叠」在回落期（桥为唯一产出方）
+        //    正是去重的本职语义；
+        // ② 抖动源在回落侧——configAckDisabled 每次 CONFIG 下发即清回「待确认」（本类 captureConfirmedActive
+        //    KDoc 自述），下发→回执窗口内被周期 sweep 的本方法撞上时闸门会瞬时 true→false→true；
+        //    回落沿若也重置，一次设置变更连带降/升两次纪元重置，去重窗口在设置变更附近反复失效。
+        //    上升沿要求 ACK 在手、是稳态，无此抖动；
+        // ③ 主控候选②语义边界即「桥一旦封停，重叠窗语义结束」——回落是重叠窗的重启，不在其内。
+        //    真机若出现回落侧同症状（回落首条被 agent 纪元残索引吞），补一行对称调用即可（方法本身边沿无关）。
         // T-AgentDialectLoop：回落/关闭时清空日志时间相关器，防跨运行陈旧匹配
         if (!online) LogTimeCorrelator.clear()
     }

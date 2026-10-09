@@ -104,6 +104,37 @@ class SqlLogEntryBufferDedupeIndexTest {
         assertTrue("now-latest == window（60s）不小于窗口 → 不丢", b.addEntry(entry(sql, 60_000)))
     }
 
+    // ---------- T-AttachZeroEvent P3：通道纪元重置面（2026-10-09 现场复盘） ----------
+
+    /**
+     * 接管沿重置面：桥纪元旧索引不得吞 agent 纪元首批同键事件。
+     * 12:54 现场：接管前 60s 内桥刚捕过同端点，接管后同 SQL 的 agent 事件全落窗口内被当重复
+     * 丢弃（面板零新条目、「attach 即生效」看似失效）——resetDedupeIndexOnChannelHandoff 后必须收。
+     * 反向验证锚点：摘掉方法体的 dedupeIndex.clear()（或摘掉 AgentManager.updateOnline 的接线）
+     * 本用例必红。
+     */
+    @Test
+    fun `通道纪元重置_接管沿后同键旧索引不吞首批`() {
+        val b = SqlLogEntryBuffer(maxEntries = 10)
+        val sql = "SELECT * FROM handoff WHERE id = 1"
+        assertTrue("桥纪元：接管前同键条目在队", b.addEntry(entry(sql, 0)))
+        b.resetDedupeIndexOnChannelHandoff() // 接管沿（SqlCaptureGate.paused false→true，生产由 updateOnline 接线）
+        assertTrue("接管沿后同键首批事件不得被旧索引吞（5s << 60s 窗口）", b.addEntry(entry(sql, 5_000)))
+    }
+
+    /** 同面守卫之二：agent↔agent 短窗重复仍被折——重置只豁免纪元切换那一瞬，不豁免新纪元内部。 */
+    @Test
+    fun `通道纪元重置后_新纪元内部短窗重复仍折叠`() {
+        val b = SqlLogEntryBuffer(maxEntries = 10)
+        val sql = "SELECT * FROM handoff2 WHERE id = 1"
+        assertTrue(b.addEntry(entry(sql, 0))) // 桥纪元
+        b.resetDedupeIndexOnChannelHandoff()
+        assertTrue(b.addEntry(entry(sql, 5_000))) // agent 纪元首批（纪元豁免）
+        assertFalse("agent 纪元内部短窗重复照常折叠", b.addEntry(entry(sql, 8_000)))
+        assertEquals("折叠计数照常累加", 1, b.dedupeCount(sql))
+        assertEquals("条目不被重置波及（清索引不清条目）", 2, b.snapshot().size)
+    }
+
     private fun entry(sql: String, ts: Long) = LogSqlEntry(
         rawSql = sql,
         restoredSql = sql,
