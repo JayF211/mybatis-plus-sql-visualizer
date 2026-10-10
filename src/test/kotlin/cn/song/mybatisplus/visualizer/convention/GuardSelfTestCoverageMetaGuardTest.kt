@@ -847,6 +847,11 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "断言直接内联在 @Test；effectiveRenderer/allLists/withSingleLineMode 为夹具",
             ),
             GuardEntry(
+                "log/SqlLogPanelSearchWiringGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（T-SearchToggleNativeLook 搜索框 DocumentListener 接线守卫）；repoRoot 为夹具",
+            ),
+            GuardEntry(
                 "log/agent/AgentUrlDecoupleGuardTest.kt",
                 emptyList(),
                 "断言直接内联在 @Test；source(:38) 为夹具",
