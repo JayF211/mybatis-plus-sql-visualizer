@@ -142,7 +142,11 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     // 过滤语义/memo 键/regex: 前缀完全不变。原生 Toggle 无独立 click 监听——测试缝直接置 FindModel 旗，
     // 生产路径由原生钮自己改旗。
 
-    private val nativeSearch = NativeSearchTextField(placeholderText = null, showRegex = true)
+    private val nativeSearch = NativeSearchTextField(
+        placeholderText = null,
+        showRegex = true,
+        project = project,
+    )
 
     private val searchField = nativeSearch
 
@@ -548,6 +552,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     }
 
     private fun applySearch() {
+        // T-LogToSqlHint 批：过滤真正应用（防抖后单点）喂本组件搜索历史（平台历史钮已接管为自有实现）
+        nativeSearch.recordSearchQuery(searchField.text)
         if (currentFile != null) applySqlSearch() else applyFileSearch()
     }
 

@@ -3,14 +3,25 @@ package cn.song.mybatisplus.visualizer.ui.search
 import com.intellij.find.FindModel
 import com.intellij.find.SearchReplaceComponent
 import com.intellij.find.SearchSession
+import com.intellij.find.editorHeaderActions.Utils
 import com.intellij.find.editorHeaderActions.ToggleMatchCase
 import com.intellij.find.editorHeaderActions.ToggleRegex
+import com.intellij.icons.AllIcons
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DataProvider
+import com.intellij.openapi.actionSystem.impl.ActionButton
+import com.intellij.openapi.project.DumbAware
+import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBTextArea
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
+import java.awt.Component
+import java.awt.Dimension
 import javax.swing.JComponent
+import javax.swing.JList
 
 /**
  * 原生 IDEA 搜索框形态的文本搜索组件（T-SearchToggleNativeLook O-137）。
@@ -27,6 +38,14 @@ import javax.swing.JComponent
  * 自定义组件路径才显示，而 setExtraActions 的嵌入钮是 ActionButton（只画图标），
  * 文本标签在框内是死路——框内嵌入面留给开关钮，读数贴框放右。
  *
+ * 搜索历史（T-LogToSqlHint 同批用户反馈「搜索历史好像是假的」）：平台历史钮数据源=IDE 全局
+ * Find 历史（`FindInProjectSettings.getRecentFindStrings()`，与本项目无关的串线词+空串杂质）。
+ * 处置：①`withAddSearchResultsToGlobalSearch(false)` 止住本组件搜索词写进全局 Find 历史；
+ * ②[project] 传真（null 时平台 `removeNotify→addTextToRecent` 对 `FindInProjectSettings.getInstance(null)`
+ * 必 NPE）；③**接管历史钮**——组件树里找到平台 ShowHistoryAction 的钮并在原位换成本组件的
+ * 「最近搜索」（[recentSearches] 会话级，[recordSearchQuery] 由宿主面板在过滤真正应用时喂词，
+ * 空词不记），找不到平台钮则不装（降级=无历史钮，不影响其余能力）。
+ *
  * 会话仍为极小 [MinSearchSession]（自有 [FindModel]，不与 IDE 全局 Find 串线）；
  * SearchReplaceComponent 自身实现 DataProvider 应答 SearchSession.KEY，故原生钮可用，
  * 本类兜底自答同键（两处同源，无歧义）。
@@ -40,6 +59,7 @@ class NativeSearchTextField(
     placeholderText: String?,
     showRegex: Boolean,
     multiline: Boolean = false,
+    private val project: Project? = null,
 ) : DataProvider {
 
     val findModel: FindModel = FindModel().apply {
@@ -51,12 +71,13 @@ class NativeSearchTextField(
 
     /** 原生全套组件：框体/边框/焦点/开关钮都由平台装配。 */
     val component: SearchReplaceComponent = SearchReplaceComponent.buildFor(
-        null as com.intellij.openapi.project.Project?,
+        project,
         javax.swing.JPanel(),
         searchSession,
     )
         .addExtraSearchActions(ToggleMatchCase())
         .apply { if (showRegex) addExtraSearchActions(ToggleRegex()) }
+        .withAddSearchResultsToGlobalSearch(false)
         .withShowOnlySearchPanel()
         .withMultilineEnabled(multiline)
         .build()
@@ -78,10 +99,14 @@ class NativeSearchTextField(
         .addToCenter(component)
         .addToRight(statusLabel)
 
+    /** 会话级最近搜索词（最新在后；去重移位；空词不记）。 */
+    private val recentSearches = ArrayDeque<String>()
+
     init {
         if (placeholderText != null) {
             textComponent.emptyText.text = placeholderText
         }
+        installOwnHistoryButton()
     }
 
     fun getTextField(): JBTextArea = textComponent
@@ -117,7 +142,91 @@ class NativeSearchTextField(
         statusLabel.isVisible = text.isNotEmpty()
     }
 
+    /**
+     * 宿主面板在过滤真正应用（防抖后）时喂词：非空去重移到队尾，容量 [MAX_HISTORY] 淘汰最旧。
+     * 与平台历史（全局 Find 历史）完全隔离。
+     */
+    fun recordSearchQuery(query: String) {
+        val q = query.trim()
+        if (q.isEmpty()) return
+        recentSearches.remove(q)
+        recentSearches.addLast(q)
+        while (recentSearches.size > MAX_HISTORY) recentSearches.removeFirst()
+    }
+
+    internal fun recentSearchesForTest(): List<String> = recentSearches.toList()
+
     /** 原生开关钮经 DataManager 沿组件树取 `SearchSession.KEY`（SearchReplaceComponent 已应答；兜底自答）。 */
     override fun getData(dataId: String): Any? =
         if (SearchSession.KEY.`is`(dataId)) searchSession else null
+
+    // ---------- 搜索历史接管（T-LogToSqlHint 批） ----------
+
+    /**
+     * 把平台历史钮（数据源=全局 Find 历史）原位换成本组件「最近搜索」钮。
+     * 平台钮是 SearchTextArea 内部装配的 ActionButton（action 为内部类 ShowHistoryAction），
+     * 类名匹配定位，找不到时静默跳过（平台结构变化只损失历史钮，不伤其余）。
+     */
+    private fun installOwnHistoryButton() {
+        val platformButton = findPlatformHistoryButton(component) ?: return
+        val parent = platformButton.parent as? JComponent ?: return
+        val index = parent.getComponentZOrder(platformButton)
+        if (index < 0) return
+        parent.remove(platformButton)
+
+        val ownAction = object : AnAction(
+            "最近搜索", "本组件最近使用过的搜索词", AllIcons.Actions.SearchWithHistory,
+        ), DumbAware {
+            override fun actionPerformed(e: AnActionEvent) = showHistoryPopup()
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = recentSearches.isNotEmpty()
+            }
+        }
+        val button = ActionButton(
+            ownAction, null, "NativeSearchTextFieldHistory",
+            Dimension(MAX_HISTORY_BUTTON_SIZE, MAX_HISTORY_BUTTON_SIZE),
+        )
+        button.isOpaque = false
+        button.toolTipText = "最近搜索"
+        // 点击由 AnAction 系统驱动（ActionButton 非 AbstractButton，无 addActionListener）
+        parent.add(button, index)
+        parent.revalidate()
+        parent.repaint()
+    }
+
+    private fun findPlatformHistoryButton(root: Component): Component? {
+        val action = runCatching {
+            (root as? ActionButton)?.action
+        }.getOrNull()
+        if (action != null && action.javaClass.simpleName == "ShowHistoryAction") return root
+        val children = (root as? java.awt.Container)?.components ?: return null
+        for (child in children) {
+            findPlatformHistoryButton(child)?.let { return it }
+        }
+        return null
+    }
+
+    private fun showHistoryPopup() {
+        if (recentSearches.isEmpty()) return
+        val list = JBList(recentSearches.toList().asReversed())
+        list.cellRenderer = SimpleHistoryRenderer()
+        Utils.showCompletionPopup(component, list, null, textComponent, null)
+    }
+
+    /** 历史条目渲染：与普通文本项区分（原生 popup 同款简洁形态）。 */
+    private class SimpleHistoryRenderer : javax.swing.DefaultListCellRenderer() {
+        override fun getListCellRendererComponent(
+            list: JList<*>, value: Any?, index: Int, selected: Boolean, focused: Boolean,
+        ): Component = super.getListCellRendererComponent(list, value, index, selected, focused).apply {
+            (this as? JComponent)?.border = JBUI.Borders.empty(2, 8)
+        }
+    }
+
+    companion object {
+        /** 会话级历史容量。 */
+        const val MAX_HISTORY = 20
+
+        /** 接管历史钮的尺寸（对齐平台按钮默认最小边）。 */
+        private const val MAX_HISTORY_BUTTON_SIZE = 32
+    }
 }

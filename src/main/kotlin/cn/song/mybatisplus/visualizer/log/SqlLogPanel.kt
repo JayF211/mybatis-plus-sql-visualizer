@@ -555,6 +555,7 @@ class SqlLogPanel(
     private val nativeSearch = NativeSearchTextField(
         placeholderText = MpSqlVisualizerBundle.message("log.search.emptyText"),
         showRegex = true,
+        project = project,
     )
 
     private val searchField = nativeSearch
@@ -996,6 +997,8 @@ class SqlLogPanel(
 
     private fun applySearchText() {
         searchText = searchField.text
+        // T-LogToSqlHint 批：喂本组件搜索历史（平台历史钮已接管为自有实现）
+        nativeSearch.recordSearchQuery(searchText)
         refreshList()
     }
 
