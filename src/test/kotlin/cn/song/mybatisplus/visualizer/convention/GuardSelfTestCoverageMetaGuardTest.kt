@@ -639,6 +639,15 @@ class GuardSelfTestCoverageMetaGuardTest {
          * （判据 6）；已登记类里的类级 Boolean 判定函数也必须逐条登记（判据 7）。
          */
         val GUARD_CLASSES = listOf(
+            GuardEntry(
+                "log/EmptyTextLinkApiGuardTest.kt",
+                emptyList(),
+                "空态链接 API 守卫（T-SettingsFocusFromLink 二修）：判定内核内联于用例——行级扫描 " +
+                    "src/main/kotlin 全量 .kt，剥行首 `//`/`*`/`/*` 注释行后断言无 " +
+                    "appendSecondaryText 实际调用（平台该 API 固定写 row=1 会叠印空态链接）。" +
+                    "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=探针（临时插入真调用）必红已实测于实施轮。",
+            ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
                 "convention/BannedApiSourceScanTest.kt",

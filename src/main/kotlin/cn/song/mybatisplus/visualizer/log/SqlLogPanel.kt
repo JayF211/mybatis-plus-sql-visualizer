@@ -1389,35 +1389,22 @@ class SqlLogPanel(
         status.clear()
         applyEmptyTextLines(status, plain, emptyTextWidthPx()) { s -> list.getFontMetrics(list.font).stringWidth(s) }
         if (emptyTextLinkEnabled) {
-            // T-SettingsFocusFromLink：引导链接行（三链接独立成行——正文 wrap 链零改动）：
-            // 页签（面板内切 tab）/ 设置页（打开插件设置页不聚焦行）/ 增强捕获（打开并定位高亮该设置行）。
-            val linkAttrs = com.intellij.ui.SimpleTextAttributes.LINK_ATTRIBUTES
-            status.appendSecondaryText(
-                MpSqlVisualizerBundle.message("log.panel.empty.link.logToSql"),
-                linkAttrs,
-            ) {
-                // 面板内 JTabbedPane 切页签（既有 openEntryInTab 同路）
-                tabs.selectedComponent = logToSqlPanel
-            }
-            status.appendText(EMPTY_LINK_SEPARATOR)
-            status.appendSecondaryText(
-                MpSqlVisualizerBundle.message("log.panel.empty.link.settings"),
-                linkAttrs,
-            ) {
-                cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable
-                    .openSqlLogSettingsFocused(project, null)
-            }
-            status.appendText(EMPTY_LINK_SEPARATOR)
-            status.appendSecondaryText(
-                MpSqlVisualizerBundle.message("log.panel.empty.link"),
-                linkAttrs,
-            ) {
-                // 定位并高亮「增强捕获」设置行（空态文案里「参数实参与精确耗时…在设置页开启」即指此行）
-                cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable.openSqlLogSettingsFocused(
-                    project,
-                    MpSqlVisualizerBundle.message("settings.enhancedCapture"),
-                )
-            }
+            // T-SettingsFocusFromLink：引导链接（**单一整体入口**——用户定「一个整体，点击都跳到目标位置」：
+            // 不再拆页签/设置页/增强捕获三个去向的分链），点击打开主设置页并定位高亮「增强捕获」设置行
+            // （空态文案里「参数实参与精确耗时…在设置页开启 →」所指）。经 appendLinkRow 单点——
+            // 平台 appendSecondaryText 固定写第二行的坑见该函数 KDoc。
+            appendLinkRow(
+                status,
+                listOf(
+                    MpSqlVisualizerBundle.message("log.panel.empty.link") to
+                        java.awt.event.ActionListener {
+                            cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable.openSqlLogSettingsFocused(
+                                project,
+                                MpSqlVisualizerBundle.message("settings.enhancedCapture"),
+                            )
+                        },
+                ),
+            )
         }
     }
 

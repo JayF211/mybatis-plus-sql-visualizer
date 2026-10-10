@@ -542,15 +542,18 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         }
         val autoSaveEnabled = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.logAutoSaveEnabled
         if (shouldShowAutoSaveHistoryLink(autoSaveEnabled, allFiles.size)) {
-            status.appendSecondaryText(
-                MpSqlVisualizerBundle.message("log.history.empty.link.autoSave"),
-                com.intellij.ui.SimpleTextAttributes.LINK_ATTRIBUTES,
-            ) {
-                cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable.openSqlLogSettingsFocused(
-                    project,
-                    MpSqlVisualizerBundle.message("settings.log.autoSave"),
-                )
-            }
+            appendLinkRow(
+                status,
+                listOf(
+                    MpSqlVisualizerBundle.message("log.history.empty.link.autoSave") to
+                        java.awt.event.ActionListener {
+                            cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable.openSqlLogSettingsFocused(
+                                project,
+                                MpSqlVisualizerBundle.message("settings.log.autoSave"),
+                            )
+                        },
+                ),
+            )
         }
     }
 

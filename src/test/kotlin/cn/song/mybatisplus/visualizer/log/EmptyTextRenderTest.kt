@@ -101,7 +101,7 @@ class EmptyTextRenderTest {
         val zhLine = Regex("^log\\.panel\\.empty=(.*)$", RegexOption.MULTILINE).find(zhBundle)!!.groupValues[1]
         val enLine = Regex("^log\\.panel\\.empty=(.*)$", RegexOption.MULTILINE).find(enBundle)!!.groupValues[1]
         // 20261008 验收缺陷 #3 后形态：第三径由主文案内嵌短语升级为独立可点链接键
-        // （log.panel.empty 以「→」收尾，log.panel.empty.link 承载「增强捕获」，点击直达设置页）——
+        // （log.panel.empty 以「→」收尾，log.panel.empty.link 承载「打开设置（定位到增强捕获）」，点击直达设置页并定位高亮增强捕获行）——
         // 判据 = 主文案 + 链接键合起来三径齐全，且链接键非空（丢键则第三径既不可见也不可点）。
         val zhLink = Regex("^log\\.panel\\.empty\\.link=(.*)$", RegexOption.MULTILINE).find(zhBundle)!!.groupValues[1].trim()
         val enLink = Regex("^log\\.panel\\.empty\\.link=(.*)$", RegexOption.MULTILINE).find(enBundle)!!.groupValues[1].trim()

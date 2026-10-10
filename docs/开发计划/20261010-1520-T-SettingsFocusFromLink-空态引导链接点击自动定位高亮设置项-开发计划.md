@@ -88,6 +88,21 @@
 
 （实施回填：定向用例、testFast、真机截图）
 
+
+### 三修（20261010 深夜，用户真机两轮反馈）
+
+1. **链接叠印**（第一轮反馈「蓝色字体错位、贴在一起」）：根因=**平台 `StatusText.appendSecondaryText`
+   内部固定写 row=1**（第二行/副列语义，243 源码 `appendText(true, 1, …)`）——多行空态文案下
+   追加链接叠印进第二行中段；单链接历史实现显正常纯属「文案恰好两行、row 1 恰为末行」的巧合。
+   修复=抽单点 `appendLinkRow`（`appendLine("")` 起新行 + `appendText` 追加），两面板改走它；
+   加**源码守卫** `EmptyTextLinkApiGuardTest`（行级剥注释后禁 `appendSecondaryText` 实际调用防复发）。
+2. **分链改单链接**（第二轮反馈「三个跳转三个地方，正常应该是一个整体，点击都跳转到目标位置」）：
+   废弃「页签/设置页/增强捕获」三分链（D150b 勘误），收敛为**单一链接**——文案
+   `log.panel.empty.link`=「打开设置（定位到增强捕获）」（en: Open Settings (jump to Enhanced
+   capture)），点击统一 `openSqlLogSettingsFocused(project, settings.enhancedCapture)`；
+   删除 `.logToSql`/`.settings` 两细分键。正文保持原样（「日志转 SQL」「设置页」为纯文本）。
+   历史页单链接（「自动保存历史 SQL」）形态不变。
+
 ## 八、实施记录（20261010 傍晚，主分支工作树）
 
 ### 实施
