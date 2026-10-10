@@ -5,14 +5,14 @@
 
 **服务未启，SQL 先知**
 
-在 IntelliJ IDEA 内将 MyBatis-Plus Wrapper 链、XML mapper、注解 SQL、JPA/Hibernate 查询与 JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自动回填；控制台日志一键还原，SQL 一键反向转 Java。
+在 IntelliJ IDEA 内将 MyBatis-Plus Wrapper 链、XML mapper、注解 SQL、JPA/Hibernate 查询与 JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自动回填；跑起来后真实参数与耗时自动捕获（慢查询标红、静态性能建议），一键跳回源码；SQL 一键反向转 Java。
 
 ## 为什么选它
 
 - **SQL 来源全覆盖**：Wrapper 链与服务链、MPJ 联表、XML 动态标签、`@Select` 注解 SQL、Spring Data 派生查询、HQL / `@Query`、JdbcTemplate 与自研 DAO 字符串 SQL
 - **真实参数一键回填**：`?` 占位符替换为实际值，LIKE 自动拼百分号、按字段类型加引号
-- **控制台 SQL 日志实时捕获**：MyBatis / Hibernate / JdbcTemplate 三种格式，精确跳转源码
-- **增强捕获默认开启**：挂载轻量 agent 直接采集真实执行，不依赖日志格式
+- **运行期捕获（默认开启）**：挂载轻量 agent 直接采集真实执行，不依赖日志格式——真实参数、毫秒级耗时、影响行数、执行报错与真实源码位置；慢查询标红并给出静态性能建议，调用栈悬停弹层可逐帧跳转
+- **控制台日志（回落通道）**：MyBatis / Hibernate / JdbcTemplate 三种格式自动还原，按线程分桶，精确跳转源码
 - **SQL 反向转 Java**：一键生成可直接编译的四种 Wrapper 形态代码
 - **JOIN 关系图与执行**：IDE 原生 ER 图渲染（PNG / SVG 导出）；内嵌原生 Database 控制台直接执行 SQL ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg)
 - **CRUD SQL 一步直出**：实体类 / 数据库表右键生成，乐观锁与逻辑删除自动适配
@@ -20,7 +20,7 @@
 
 > **别的插件给你文本，我们给你可执行的 SQL。**
 >
-> 编码期静态预览（Wrapper / XML / 注解 / JPA / HQL，无需运行代码）+ 运行期日志还原 + EXPLAIN 执行计划对照，达梦 / 人大金仓 / OceanBase / openGauss 等 11 种数据库方言
+> 编码期静态预览（Wrapper / XML / 注解 / JPA / HQL，无需运行代码）+ 运行期捕获真实参数与耗时 + EXPLAIN 执行计划对照，达梦 / 人大金仓 / OceanBase / openGauss 等 11 种数据库方言
 
 图例：![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) 近期新增 · ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg) 需要 IDEA Ultimate + Database 插件
 
