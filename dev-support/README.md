@@ -44,6 +44,16 @@
 | `sleep-audit.py` | 固定 `sleep` 审计（扫 `src/test` 里的睡眠等待） |
 | `replay-r0-packing.py` | 重放 R0 冷启分片装配，恢复分片包含顺序 |
 
+## 重构辅助（巨型文件拆分，T-M53-II）
+
+两个脚本都按「**逐字符搬运 + 对账**」工作：搬运前后做非空行多重集比对，丢一行即拒绝写盘，
+被搬代码不做任何语义改动。用法与语义见脚本头部 KDoc。
+
+| 文件 | 用途 |
+|---|---|
+| `split-kotlin-test.py` | 拆测试类：按连续区间/主题把方法与顶层声明搬到新的独立测试类（新类自动沿用原父类型）；子命令 `--inspect` / `--apply` / `--list-toplevel` / `--extract-toplevel` |
+| `extract-kotlin-members.py` | 拆生产单类巨文件：把类的内聚成员抽为**同包扩展函数**（`internal fun Cls.foo()`）——方法体一字不改、原类内调用点自动落到同包扩展；自动放宽被触及的 `private` 为 `internal`、按引用裁剪新文件 import、补齐 companion 与嵌套类型导入 |
+
 ## 性能与资源采样
 
 | 文件 | 用途 |
