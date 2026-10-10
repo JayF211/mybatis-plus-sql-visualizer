@@ -185,7 +185,7 @@ LambdaQueryWrapper<DeviceInfoEntity> wrapper = new LambdaQueryWrapper<DeviceInfo
 SELECT id, station_id, share_scheme_id
 FROM device_info_entity
 WHERE id = 1001
-    AND share_scheme_id IS NOT NULL
+    AND station_id IS NOT NULL
 ```
 
 ```java
