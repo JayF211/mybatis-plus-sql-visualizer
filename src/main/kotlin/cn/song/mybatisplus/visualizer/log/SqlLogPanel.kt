@@ -226,15 +226,32 @@ internal fun filterBySuppress(entries: List<LogSqlEntry>, suppressKeys: Set<Stri
  *
  * T-HistorySearchToggles：[matchCase] 大小写敏感开关（默认 false=忽略大小写，与历史面板/
  * MCP 链三链语义统一；默认值保既有测试零改动）。行号精确匹配不受开关影响。
+ *
+ * T-SearchToggleNativeLook（20261010 用户令日志页补正则钮，D133「日志页无正则」拍板翻案）：
+ * [regexEnabled] 正则开关生效条件 = 开启开关**或** `regex:` 前缀（[HISTORY_REGEX_PREFIX]，
+ * 与历史页同语义）；正则路径命中 restoredSql/summary 两维（行号/时间不参与，对齐历史页）；
+ * 编译旗随 [matchCase]；非法正则 fail-closed 回退普通子串（回退查询为原始 query 全文含前缀）。
+ * [memo] 传面板持有的 [HistoryRegexMemo] 实例防抖重复编译；纯函数缺省各建临时实例零复用。
  */
 internal fun filterBySearch(
     entries: List<LogSqlEntry>,
     query: String,
     matchCase: Boolean = false,
+    regexEnabled: Boolean = false,
+    memo: HistoryRegexMemo = HistoryRegexMemo(),
     timestampTextOf: (LogSqlEntry) -> String? = ::timestampDisplayText,
 ): List<LogSqlEntry> {
     val q = query.trim()
     if (q.isEmpty()) return entries
+    if (regexEnabled || q.startsWith(HISTORY_REGEX_PREFIX)) {
+        val pattern = resolveHistoryRegex(q.removePrefix(HISTORY_REGEX_PREFIX), matchCase, memo)
+        if (pattern != null) {
+            return entries.filter { entry ->
+                pattern.containsMatchIn(entry.restoredSql) || pattern.containsMatchIn(entry.summary)
+            }
+        }
+        // 非法正则：回退普通子串匹配（继续走下方通用路径）
+    }
     val rowNumber = q.removePrefix("#").toLongOrNull()?.takeIf { it > 0 }
     return entries.filter {
         it.restoredSql.contains(q, ignoreCase = !matchCase)
@@ -530,13 +547,14 @@ class SqlLogPanel(
     /** 搜索条（默认隐藏，Ctrl+F/⌘F 唤起；实时过滤 restoredSql 与摘要）。 */
     // ---------- T-SearchToggleNativeLook（O-137）：搜索条迁平台原生 SearchTextArea ----------
     //
-    // MatchCase 单开关走原生钮（内嵌搜索框右侧，与 Ctrl+F 同形态）；正则钮不内嵌（D133 拍板：
-    // 日志页无正则）。旗改从 NativeSearchTextField.findModel.isCaseSensitive 读，过滤语义零变化。
+    // MatchCase/Regex 双开关走原生钮（内嵌搜索框右侧，与 Ctrl+F 同形态）。20261010 用户令日志页
+    // 补正则钮（D133「日志页无正则」拍板翻案）——正则语义与历史页同链：开关或 `regex:` 前缀、
+    // 非法正则 fail-closed 回退子串。旗改从 NativeSearchTextField.findModel 读，过滤语义零变化。
     // 显隐契约保持在宿主 searchBar 上（isVisible 由 showSearch/hideSearch 控制）。
 
     private val nativeSearch = NativeSearchTextField(
         placeholderText = MpSqlVisualizerBundle.message("log.search.emptyText"),
-        showRegex = false,
+        showRegex = true,
     )
 
     private val searchField = nativeSearch
@@ -544,11 +562,17 @@ class SqlLogPanel(
     /** 当前大小写敏感态（原生钮状态落点）。 */
     private val logMatchCase: Boolean get() = nativeSearch.isMatchCase()
 
+    /** 当前正则态（原生钮状态落点；`regex:` 前缀独立生效）。 */
+    private val logRegex: Boolean get() = nativeSearch.isRegex()
+
+    /** 正则编译 memo（防抖 200ms 反复 apply 复用编译结果，键=源串+matchCase 旗）。 */
+    private val regexMemo = HistoryRegexMemo()
+
     /** 搜索条宿主（原生 SearchTextArea 自带内嵌开关；显隐由 showSearch/hideSearch 控制）。 */
     private val searchBar = JPanel(BorderLayout()).apply {
         isOpaque = false
         isVisible = false
-        add(nativeSearch.component, BorderLayout.CENTER)
+        add(nativeSearch.row, BorderLayout.CENTER)
     }
 
     /** 测试断言/驱动：MatchCase 旗（等价用户点击 = 置 FindModel.isCaseSensitive 后自动刷新列表）。 */
@@ -556,6 +580,14 @@ class SqlLogPanel(
         get() = logMatchCase
         set(value) {
             nativeSearch.findModel.isCaseSensitive = value
+            refreshList()
+        }
+
+    /** 测试断言/驱动：Regex 旗（等价用户点击 = 置 FindModel.isRegularExpressions 后自动刷新列表）。 */
+    internal var regexToggleForTest: Boolean
+        get() = logRegex
+        set(value) {
+            nativeSearch.findModel.isRegularExpressions = value
             refreshList()
         }
 
@@ -1551,7 +1583,8 @@ class SqlLogPanel(
         // T-M55-03/04：动态聚焦页签层（页签=过滤器，多开并集；离散增删走 FullRebuild，差分零改动）
         val focused = filterByFocusTabs(filtered, focusTabs)
         // T-HistorySearchToggles：搜索旗随 MatchCase 开关（默认关=忽略大小写，与现状一致）
-        val searched = filterBySearch(focused, searchText, matchCase = logMatchCase)
+        // T-SearchToggleNativeLook：正则旗随 Regex 钮（20261010 用户令日志页补正则，语义与历史页同链）
+        val searched = filterBySearch(focused, searchText, matchCase = logMatchCase, regexEnabled = logRegex, memo = regexMemo)
         val newVisible = applySort(searched)
         val evicted = manager.entries.drainEvictedCount()
 

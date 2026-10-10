@@ -1,6 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui.search
 
-import junit.framework.TestCase
+import com.intellij.testFramework.fixtures.BasePlatformTestCase
 
 /**
  * T-SearchToggleNativeLook 反向验证（摘除修复必红）：
@@ -9,8 +9,11 @@ import junit.framework.TestCase
  * 用户无法翻旗）。两个用例互为反向：
  * - 正向：默认实现应答 KEY 且返回本组件的会话（旗读写同源）；
  * - 反向（摘除修复形态）：getData 恒 null ⇒ 契约破坏（此形态在真实 UI 中即开关钮不可用）。
+ *
+ * 基类用平台测试件：NativeSearchTextField 构造链经 ActionManager（DefaultActionGroup.addAll），
+ * 纯 headless TestCase 无 Application 必炸（20261010 对照实验实证）。
  */
-class NativeSearchTextFieldProviderContractTest : TestCase() {
+class NativeSearchTextFieldProviderContractTest : BasePlatformTestCase() {
 
     fun test默认实现应答SearchSessionKey且旗同源() {
         val field = NativeSearchTextField(placeholderText = null, showRegex = true)
