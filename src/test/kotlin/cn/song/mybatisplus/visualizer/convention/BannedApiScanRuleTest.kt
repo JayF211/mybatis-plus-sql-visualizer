@@ -619,9 +619,16 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         // 7 处：后台收集候选（链头/注解/XML tag）失败返回空列表 → EDT 提示「未找到候选」。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.kt" to
             CatchExemption(7, "后台候选收集失败返回空列表，用户侧看到「未找到候选」提示（非长驻链路）"),
-        // 5 处：JOIN 图渲染/后台富化失败回落「无图 / 未富化模型」。
+        // 4 处：JOIN 图渲染/后台富化失败回落「无图 / 未富化模型」。
+        // T-M53-II（2026-10-10）：原 5 处中的 `bindAutoPopup` 补全站点随组合式重构搬进
+        // SqlPreviewPanelEditorLifecycle.kt（下面单列 1 处），本文件余 4 处（updateDiagramTab /
+        // showJoinDiagram / clearNativeDiagram 链）。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt" to
-            CatchExemption(5, "JOIN 图渲染/富化失败回落无图或未富化模型（已 warn 留痕 + 显式摘转圈）"),
+            CatchExemption(4, "JOIN 图渲染/富化失败回落无图或未富化模型（已 warn 留痕 + 显式摘转圈）"),
+        // 1 处：补全弹窗异常不影响输入（同 `ui/SqlInputEditor.kt` 族）——T-M53-II D2-5 随
+        // `bindAutoPopup` 搬出（原属 SqlPreviewPanel.kt 的 5 处之一，站点数与语义均未变）。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelEditorLifecycle.kt" to
+            CatchExemption(1, "补全弹窗异常不影响输入（失败下次输入重试）——同 SqlInputEditor 族"),
         // 3 处：原生 Database 插件图表可选能力探测。
         "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/diagram/nativefw/db/NativeDatabaseDiagramSupport.kt" to
             CatchExemption(3, "原生 Database 图表可选能力探测，失败回落自建 A 路径（零劣化）"),
@@ -669,13 +676,15 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
      */
     /**
      * 未收口点的**行号清单**（T-FatalPassthrough 实施时实测；守卫不校验行号，仅作人工核对与
-     * 计划 §八 登记的出处）。共 **42 处 / 16 文件**（T-FP-02b 起 `ui/SqlPreviewService.kt:2100`
-     * 已收口移入已落地表；20261007 `log/SqlToJavaPanel.kt` 两站点收口后同此）：
+     * 计划 §八 登记的出处）。共 **42 处 / 17 文件**（T-FP-02b 起 `ui/SqlPreviewService.kt:2100`
+     * 已收口移入已落地表；20261007 `log/SqlToJavaPanel.kt` 两站点收口后同此；T-M53-II D2-5 起
+     * `ui/SqlPreviewPanel.kt` 的 5 处拆为 4 + `SqlPreviewPanelEditorLifecycle.kt` 1，站点总数不变）：
      *
      * ```
      * log/SqlLogConsoleBridge.kt                                     12 处：151 167 208 410 561 570 595 642 656 664 678 695
      * actions/ConvertToSqlAction.kt                                   7 处：119 339 383 431 485 554 593
-     * ui/SqlPreviewPanel.kt                                           5 处：1498 1517 1528 1547 2566
+     * ui/SqlPreviewPanel.kt                                           4 处：updateDiagramTab/showJoinDiagram/clearNativeDiagram 链
+     * ui/SqlPreviewPanelEditorLifecycle.kt                            1 处：bindAutoPopup
      * ui/diagram/nativefw/db/NativeDatabaseDiagramSupport.kt          3 处：102 122 224
      * ui/diagram/nativefw/NativeJoinDiagramSupport.kt                 3 处：52 115 126
      * log/SqlLogPanel.kt                                              2 处：1139 1155

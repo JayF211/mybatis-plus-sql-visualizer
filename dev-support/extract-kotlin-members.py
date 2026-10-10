@@ -174,7 +174,22 @@ def apply(path, cls, idxs, new_file, doc):
     for r in sorted(picked, key=lambda x: -x['lo']):
         del lines[r['lo']:r['hi']]
     last_imp = max(i for i, l in enumerate(lines) if l.startswith('import '))
-    head = lines[:last_imp + 1]
+    # 头 = package 行 + **被搬代码真正引用到的** import。为什么按引用裁剪：原文件是全仓最大的面板
+    # （130+ import），整块照抄会让每个拆出的文件背上上百条无用 import（拆分反而把信噪比拉低）。
+    moved_text = '\n'.join(ext)
+    head = [l for l in lines[:last_imp + 1] if l.startswith('package')] + ['']
+    for l in lines[:last_imp + 1]:
+        if not l.startswith('import '):
+            continue
+        m = re.match(r'import\s+([\w.]+)(?:\s+as\s+(\w+))?', l)
+        if not m:
+            continue
+        if m.group(1).endswith('.*'):
+            head.append(l)
+            continue
+        simple = m.group(2) or m.group(1).rsplit('.', 1)[-1]
+        if re.search(r'\b' + re.escape(simple) + r'\b', moved_text):
+            head.append(l)
     tail_text = (['', f'// T-M53-II（2026-10-10）：以下为 {cls} 的「{doc}」内聚成员，',
                   '// 以同包扩展函数形式搬出——方法体逐字符搬运，被触及的私有成员已按需放宽为 internal。', ''] + ext)
     while tail_text and tail_text[-1].strip() == '':
