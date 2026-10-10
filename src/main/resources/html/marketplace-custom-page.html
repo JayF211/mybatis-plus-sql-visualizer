@@ -226,9 +226,24 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
       <td>超长列清单 / VALUES / SET 折叠为「... N columns」，点击展开</td>
     </tr>
     <tr>
+      <td>mapper XML 语法高亮 <span class="tag tag-new">New</span></td>
+      <td>自动生效</td>
+      <td>mapper XML 语句内 SQL 关键字 / 字符串 / 注释着色，<code>#{}</code> / <code>${}</code> 参数占位底色，<code>test</code> / <code>value</code> 属性表达式着色；<code>#</code> / <code>$</code> 敲键自动闭合 <code>{}</code>，resultMap <code>column</code> 补全列名</td>
+    </tr>
+    <tr>
+      <td>参数预设 <span class="tag tag-new">New</span></td>
+      <td>面板参数区「预设」行</td>
+      <td>参数整组另存 / 切换 / 管理（含 OGNL 勾选态与 foreach 权威值）；按语句隔离、快照语义；预设行可折叠</td>
+    </tr>
+    <tr>
+      <td>分页拦截器模拟 <span class="tag tag-new">New</span></td>
+      <td>设置页开关（默认开）</td>
+      <td>带 <code>IPage</code> 形参的查询按方言追 LIMIT 并并列产出 COUNT 包裹语句；LIMIT 与 COUNT 可分别控制</td>
+    </tr>
+    <tr>
       <td>执行计划 EXPLAIN <span class="tag tag-ultimate">Ultimate</span><span class="tag tag-new">New</span></td>
       <td>弹窗内「执行计划」按钮</td>
-      <td>按方言提交原生控制台，真实计划与静态性能标注同屏对照</td>
+      <td>按方言提交原生控制台，真实计划与静态性能标注同屏对照；覆盖 11 种方言（含 Oracle / SQL Server 模板），可选结构化渲染（表格 / 可折叠树 + 索引建议）</td>
     </tr>
     <tr>
       <td>执行 SQL <span class="tag tag-ultimate">Ultimate</span></td>
@@ -287,7 +302,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
     <tr>
       <td>历史与源码定位 <span class="tag tag-new">New</span></td>
       <td>侧边栏「SQL 历史」tab / 双击条目</td>
-      <td>历史标签页常驻，未开启自动保存也可进入；历史自动保存、两级导航；保存目录可自定义且读写同源；精确跳到触发 SQL 的源码行</td>
+      <td>历史标签页常驻，未开启自动保存也可进入；历史自动保存、两级导航；保存目录可自定义且读写同源；条目可钉住、支持正则检索与大小写开关、导出 CSV / TSV / 纯文本 / 可执行 SQL 脚本、两条历史版本对比；精确跳到触发 SQL 的源码行</td>
     </tr>
     <tr>
       <td>去重 / 过滤</td>
@@ -328,7 +343,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
     </tr>
     <tr>
       <td>MCP 工具（AI agent）<span class="tag tag-new">New</span></td>
-      <td>内置 MCP Server 十个只读工具（IDEA 2025.2+）：渲染 SQL / 表结构 / EXPLAIN / 日志还原 / 回滚预案等；Claude Code / Cursor / AI Assistant 可直接调用，设置页逐工具门控</td>
+      <td>内置 MCP Server 十一个只读工具（IDEA 2025.2+）：渲染 SQL / 表结构 / EXPLAIN / 日志还原 / 历史检索 / 回滚预案等；Claude Code / Cursor / AI Assistant 可直接调用，设置页逐工具门控</td>
     </tr>
     <tr>
       <td>一键回滚 SQL <span class="tag tag-new">New</span></td>
