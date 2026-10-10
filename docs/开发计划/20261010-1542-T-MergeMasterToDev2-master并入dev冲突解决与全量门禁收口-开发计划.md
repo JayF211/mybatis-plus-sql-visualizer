@@ -49,6 +49,15 @@ master 独有 91 笔=v2026.10.9 发行+批9 走查修复（CountSimToggle/Export
 5. **复选框计数 44 是推断**：以 PluginSettingsPersistenceTest 实跑读数为准，若自动合并区还有其他开关增员则按实际值修断言并逐条注释来源。
 6. **dev 无新 EP/新反射入口**：dev 独有 62 笔均为既有面板行为扩展，无 plugin.xml EP 变更；由 SettingsTruthTest/PlatformSignatureCrossVersionTest 兜底。
 
+### 前提核验结果（20261010 实施时回填）
+
+1. `entries.size()`：**成立**——`SqlLogEntryBuffer.size()` 在场，`syncDiagnostics` 保留 dev 的 O(1) 判定（前提成立，无需改用 master 的 `snapshot().isEmpty()`）。
+2. R53 字段链：**成立**——`pausedProvider`/`pausedDropped`/`userPaused`/`statusBarPanel`/`syncCaptureStatusBar` 全部在场。
+3. 搜索条无残留旧引用：**部分证伪**——`searchField` 无重复声明（master 侧 `= nativeSearch` 唯一），但发现 master 侧接线缺失（见 6.2，已补回）。原前提只预设「重复声明/类型不符」，实际形态是「接线丢失」，靠 `onSearchTextChanged` 孤儿 + 未用导入 + `hideSearch` 注释三处证据钉死。
+4. SqlExportFormat 枚举：**成立**——合并树含 SQL 成员，`formatPortable` 的 SQL→error 防御分支与 dev 的 mask 参数共存，编译门通过。
+5. 复选框计数 44：**待定向测试实测**（PluginSettingsPersistenceTest）。
+6. dev 无新 EP：**成立**——plugin.xml 取 master 版后无 EP 丢失（三目标 verifyGate 待跑）。
+
 ## 四、实施步骤
 
 0. `parallel_tasks.py check`（已做：无活跃任务）→ `register --name t-mergemastertodev2 --sandbox mpsv-mmgd2`。
@@ -70,4 +79,56 @@ master 独有 91 笔=v2026.10.9 发行+批9 走查修复（CountSimToggle/Export
 
 ## 六、实施记录
 
-（随实施回填：裁决实录/编译门读数/全量读数/verifyGate 读数/修复笔清单）
+### 6.1 合并与冲突裁决（20261010-1550 起）
+
+- 计划提交：`cef7a82`（本文件，随批转 CRLF）。
+- `git merge master`：与预演完全一致，10 文件真冲突（CHANGELOG / docs 变更记录 / SqlClickPreview / SqlExportService / SqlLogPanel / AgentManager / plugin.xml / 三个测试文件），其余约 300 双侧改动文件自动合并。
+- 逐文件裁决实录见合并提交信息（union 双保留 + 三处语义合并：SqlExportService 四格式+mask、SqlLogPanel 状态栏+空态链接+搜索条、AgentManager 暂停位+通道纪元；plugin.xml 取 master 重写版）。
+- 变更记录重排细节：首次 sed 按输入行序输出成「dev 行在上」，已二次调换为 master 10-10/10-09/10-08 行在上（最新在上），492 行零残留标记。
+- CHANGELOG 归位：dev 侧 12 Added + 3 Fixed 与 master 侧 1 Added + 3 Changed + 5 Fixed 按 Added/Changed/Fixed 三节归位；第二处 hunk 取 master（[2026.10.7] 不另起 Fixed 小标题）；第一块尾部标记漏删一处已补删。
+- 未用导入清理：SqlLogPanel 弃 dev `buildSearchField` 后 `SearchTextField`/`KeyAdapter`/`KeyEvent`/`DocumentEvent`/`DocumentListener` 五个导入成未用，删除（后因 6.2 补接线，后两个导入已按需恢复）。
+
+### 6.2 合并缝发现与处置：日志页搜索接线丢失（master 侧存量缺陷）
+
+master 的 `T-SearchToggleNativeLook`（`67b167f`）把日志页搜索框迁到平台原生 `SearchTextArea` 时**丢了 DocumentListener 接线**：master 侧 `onSearchTextChanged()`/`searchDebounceTimer` 成为零调用孤儿、`javax.swing.event.DocumentEvent/DocumentListener` 两个导入未用、`hideSearch()` 仍写着「非空时触发 DocumentListener 清过滤并刷新」的注释。dev 侧原接线在 `buildSearchField` 的 DocumentListener 上，本次合并弃该函数后接线一并消失 ⇒ 若不补回，日志页「键入即过滤」「隐藏搜索条即清过滤」两条真实路径失效（测试钩子 `applySearchTextForTest` 直调内部入口，覆盖不到真实键入分派，故 master 自身门禁未暴露）。
+
+处置：在 `SqlLogPanel` 的 `searchField` 声明后补 `init` 接线（`nativeSearch.addDocumentListener`，用 `NativeSearchTextField` 专为兼容暴露的委托 API），并恢复两个导入。属「合并保住 dev 行为」范畴，非新增功能。
+
+### 6.3 编译门（含一次假绿更正）
+
+- **⚠️ 假绿更正**：前两次编译门用 `./gradlew ... 2>&1 | tail -40` 取值，管道退出码取 tail 的 0，实际 gradle 已 FAILED——在册「tail 管道假绿」坑三度复现（PIPESTATUS 定例）。后续一律改为「重定向到文件 + `$?`」取值。
+- 真实读数（重定向取值）：`./gradlew classes testClasses :sql-visualizer-agent:classes` → 首轮 FAILED（3 处编译错误），修复后 GRADLE_EXIT=0 / BUILD SUCCESSFUL（2m5s）。
+- 首轮暴露并修复的两处编译错误（提交见 §6.5）：
+  1. `SqlExportService.formatPortable`——合并编辑把 `SQL -> error(...)` 防御分支落在 `when` 闭合括号外（dev 侧 `}` 被 git 当作公共上下文），闭合括号移到 SQL 分支后。
+  2. `SqlPreviewPanel:1118`——`embedConsole(..., previewMode = true)` 撞 631b12a 的 `embedMode` 归口（该笔漏迁 R42 probe 调用点）⇒ **dev 自身 tip 即编译不过**（631b12a 晚于 dev 最后一次门禁 e9228ca）。按既有映射（执行点一律 EXECUTE）改为 `embedMode = ConsoleEmbedMode.EXECUTE`。
+
+### 6.5 提交链与收口待办
+
+提交链（dev）：`cef7a82`（本计划）→ `07576e7`（合并提交，10 文件冲突裁决）→ `39c5496`（日志页搜索接线补回）→ `4ff2181`（两处编译错误修复）→ `5ad8911`（PrepareSingleFlightGateTest 守卫计数 5→6 同步）→ `e0b68fc`（二次合并：master `3e531d1` v2026.10.13 发行同步并入）。
+
+收口待办：①变更记录行（拟稿见下，读数待填）；②本计划 §6.4 读数回填；③`parallel_tasks.py done --name t-mergemastertodev2`。
+
+**master 侧同缺陷修复（用户令，2026-10-10）**：派子代理在 master worktree 用 `git cherry-pick -n 39c5496` 零冲突落地（master 侧两 import 本就在，3-way 识别为已应用未重复；仅新增 init 块 13 行），提交 `0eeb57a`；编译门 exit 0 + 定向 6 类 97 例 0 失败（`SqlLogPanelFilterTest`/`SqlLogPanelLayoutTest`/`SqlLogPanelRendererUiTest`/`NativeSearchTextFieldStructureTest`/`NativeSearchTextFieldProviderContractTest`/`EmptyTextRenderTest`）；未 push（master ahead 4）。主控已独立核验产物：`0eeb57a` 的 init 块与 dev `39c5496` 逐字相同。
+
+变更记录行拟稿（读数回填后落地）：
+
+```
+| 2026-10-10 | **T-MergeMasterToDev2：master 91 笔并入 dev（用户令）**：merge-tree 预演 10 文件真冲突，逐文件裁决（CHANGELOG/变更记录 union 双保留；SqlExportService 合并为「master 四格式 + dev mask 参数」；SqlLogPanel 保留 dev R53 状态栏 + 取 master 原生搜索条/空态链接；AgentManager 合并 dev 暂停位与 master 通道纪元；plugin.xml 取 master 重写版；三测试文件双保留）。合并缝两处实修：①master `T-SearchToggleNativeLook`（67b167f）迁原生 SearchTextArea 时丢失日志页搜索框 DocumentListener 接线（`onSearchTextChanged`/`searchDebounceTimer` 零调用孤儿 + 两导入未用 + `hideSearch` 注释仍指望监听器），dev 侧接线原在 `buildSearchField` 上、合并弃该函数后一并消失 ⇒ 补 `init` 接线（`39c5496`）；②dev 自身 tip 编译不过——`631b12a` 的 `embedMode` 归口漏迁 R42 DML 影响面预演 probe 调用点（`previewMode = true` 撞只收 `embedMode` 的函数），按既有映射改 `ConsoleEmbedMode.EXECUTE`（`4ff2181`）。读数：编译门 GRADLE_EXIT=0（前两轮系 tail 管道假绿，已更正）/ 定向 17 类 / testShards / agent / verifyGate 三目标（待回填）。 |
+```
+
+
+### 6.4 全量门禁
+
+- 资源前提：并行登记表实测存在另一会话 `T-Release1013`（master 树跑 `releaseGate`，含全量 testShards）——按 R15「两份全量门禁互斥」定例，本轮 testShards 待其结束再单路启动，期间先跑合并面定向测试。
+- **定向第一批（17 类，重定向取值）**：236 例完成 / 34 失败——**全部为 `java.lang.NoSuchMethodError`**（`PluginSettings$State.<init>` / `SqlLogPanelKt.filterBySearch` / `PreviewResult.<init>` 三处构造签名不匹配），在册「第 0 条」陈旧测试类假失败（`:testClasses UP-TO-DATE`：主源 ABI 变了、测试类未随重编译）⇒ 处置 `compileTestKotlin --rerun-tasks`（COMPILE_EXIT=0，2m13s）。
+- **定向第二批（24 类，重定向取值）**：`build/test-results/test/*.xml` 聚合 **tests=311 / failures=0 / errors=0 / skipped=0**（TEST_EXIT=0，1m7s）。覆盖：`PluginSettingsPersistenceTest`（**复选框 44 断言成立**，即 41 基数 + displayMask + paginationCount + badgeDetail）、`SqlExportServiceTest`（四格式 + mask 合并）、`SqlLogPanelRendererUiTest`、`SqlLogPanelFilterTest` + `NativeSearchTextField*Test`（搜索接线补回不破坏既有）、`PrepareSingleFlightGateTest`（embedMode 守卫 5→6 同步后绿）、`ExecuteSqlErrorHandlingTest`/`ConsoleHostTest`/`DmlImpactEstimatorTest`/`ExplainPlanResultViewUiTest`/`PluginUpdateRunnerTest`/`UpdateCheckDiagnosisTest`/`HelpDialogTest`/`GuardSelfTestCoverageMetaGuardTest` 等。
+- **agent 子项目**：`:sql-visualizer-agent:test` → **30 类 / 157 例 / 0 失败 / 0 错误 / 0 跳过**（BUILD SUCCESSFUL，1m26s）。
+- **环境受限登记**：Docker Desktop 未运行（0 进程，npipe 不存在），`mpvs.docker.tests.enabled` 缺省 false ⇒ 容器方言类测试按设计不跑，本轮不构成容器侧验证（按「环境受限未验证」口径登记，不冒充通过）。
+- 全量 testShards（诊断轮，基线 `5ad8911`）：分片 1/3/4/5 全绿，**TOTAL 6919 例 / 3 失败 / 0 错误 / 8 跳过**（testShard2 三处红）。三处逐一定性：
+  1. `DataSourceJdbcSmokeTest::testAllDemoDataSourcesReachable` + `::testExecuteValidationSqlOnEachSource`——环境门控形态问题：该文件合并后取的是 dev 版（`assumeTrue`），而平台 runner 把 `AssumptionViolatedException` 记为 **failure 红任务**；demo 的 `dataSources.xml` 现含达梦源 `mpj_dm@114.66.55.245`（驱动不在主测试 classpath，`DmJdbcDriver18` 只挂在 agent 子项目）⇒ 逐源 assumption 违规被记红。
+  2. `EmptyTextRenderTest::test空态起步引导三径齐全`——中英 bundle 空态链接键大小写：合并版为 dev 的 `Enhanced capture`（小写），测试契约（两侧同文）断言 `Enhanced Capture`。
+- **根因共性（重要）**：两处都不是本次冲突裁决的错误，而是**合并基线过旧**——master 在任务执行期间由发行会话推进出 `3e531d1`（release: v2026.10.13 发行八处同步），该笔正是修这两处的提交（`DataSourceJdbcSmokeTest` 改「显式绿跳 + 逐源驱动过滤」；bundle 空态链接键定为 `Enhanced Capture`，同批还记有「空态引导英文链接文案大小写回归修复」条目）。master 侧同环境分片读数 6716/0/0/8 全绿可作对照。
+- **处置＝二次合并**（`e0b68fc`，仅 CHANGELOG 一处冲突）：把 `3e531d1` 与 `80a6345` 并入 dev，直接带入 master 对这两处的修复（不做手工搬运）。CHANGELOG 裁决＝整取 master 策展版（`[Unreleased]` 收编为 `[2026.10.13]` 发行段，dev 细粒度条目被聚合进对应条目）+ dev 独有 15 条放回 `[Unreleased]`（未发行语义）。
+- 全量 testShards（权威轮，基线 `e0b68fc`）：**6919 例 / 0 失败 / 0 错误 / 8 跳过**（分片 1: 1468/0/0/0；2: 1348/0/0/0；3: 1484/0/0/6；4: 1275/0/0/2；5: 1344/0/0/0；COMPILE_EXIT=0、SHARDS_EXIT=0）。诊断轮的三处红全部消除，且无新增红。
+- verifyGate 三目标（基线 `e0b68fc`，产物 `mybatis-plus-sql-visualizer-2026.10.13.zip`）：**三目标全部 Compatible**——IU-243.28141.41（5 待移除/25 弃用/95 实验 API）、IU-253.33514.17（6/34/93）、IU-262.10968.63（8/94/93）；VERIFY_EXIT=0，BUILD SUCCESSFUL in 2m19s。唯一告警为 `LightEditCompatible` 实验 API 引用（既有形态，非本次引入）。
+
