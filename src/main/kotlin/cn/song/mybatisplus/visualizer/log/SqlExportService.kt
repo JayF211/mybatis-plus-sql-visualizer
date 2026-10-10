@@ -180,11 +180,11 @@ object SqlExportService {
                 v.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
             }
             SqlExportFormat.TXT -> formatPortableTxt(effective)
+            // T-ExportSqlFormat 枚举扩员波及此 when：可移植导出是 O-91 独立通道（预览面板自己的
+            // 三选对话框，不提供 SQL 选项），与历史/日志导出的 SQL 格式不合并互不替代（计划 §三
+            // 边界写死防顺手统一）——UI 不可能传入 SQL，防御性显式失败而非静默伪装成 TXT。
+            SqlExportFormat.SQL -> error("formatPortable: SQL format is not offered (O-91 portable export keeps CSV/TSV/TXT)")
         }
-        // T-ExportSqlFormat 枚举扩员波及此 when：可移植导出是 O-91 独立通道（预览面板自己的
-        // 三选对话框，不提供 SQL 选项），与历史/日志导出的 SQL 格式不合并互不替代（计划 §三
-        // 边界写死防顺手统一）——UI 不可能传入 SQL，防御性显式失败而非静默伪装成 TXT。
-        SqlExportFormat.SQL -> error("formatPortable: SQL format is not offered (O-91 portable export keeps CSV/TSV/TXT)")
     }
 
     private fun formatPortableFlat(rows: List<PortableSqlRow>, sep: String, escape: (String) -> String): String {

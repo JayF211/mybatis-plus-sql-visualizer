@@ -1115,7 +1115,7 @@ class SqlPreviewPanel(private val project: Project? = null) : JBPanel<SqlPreview
                 resultPanel.showLoading()
                 SqlExecutor.execute(
                     proj, probe.probeSql, null, true,
-                    onConsole = { consoleComponent -> embedConsole(consoleComponent, previewMode = true) },
+                    onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE) },
                     onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
                     onError = { errorMsg -> resultPanel.showError(errorMsg) },
                     onErrorRich = { info -> showErrorRichWithLocate(info) },
