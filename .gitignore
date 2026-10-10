@@ -86,6 +86,7 @@ verification-*/
 # 父目录被排除则无法再包含子文件，故必须用 .local/* 而非 .local/）。
 .local/*
 !.local/README.md
+!.local/local.env.example
 gitee-token.*
 *.token
 .secrets/

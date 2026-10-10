@@ -18,6 +18,13 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 
+# 可选的本机覆盖（T-LocalEnvOverride 2026-10-10）：MPSV_DEMO_ROOT / MPSV_MVN 等键见
+# .local/local.env.example。
+if [ -f "$REPO_ROOT/.local/local.env" ]; then
+  # shellcheck disable=SC1091
+  . "$REPO_ROOT/.local/local.env"
+fi
+
 # MSYS 路径（/f/code/...）Java 进程认不出来（会被当成相对路径）——凡是要交给 java 的路径
 # 一律先转成 Windows 形式；cygpath 缺失时原样返回（纯 Windows shell 下本来就是对的形式）。
 winpath() {
@@ -44,8 +51,20 @@ if ! command -v javac >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
 fi
 
 AGENT_JAR="${AGENT_JAR:-$REPO_ROOT/sub-projects/sql-visualizer-agent/build/dist/mps-sql-agent.jar}"
-DEMO_DIR="${DEMO_DIR:-F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-demo/mybatis-plus-join-demo}"
-MVN="${MVN:-/d/HuanJing/Maven/maven-mvnd-1.0.3/mvn/bin/mvn}"
+
+# demo 工程与 Maven 不再写死本机路径（T-LocalEnvOverride 2026-10-10）：
+# DEMO_DIR 优先显式传入，其次由 MPSV_DEMO_ROOT 派生（demo 根下的 join 演示子工程）；
+# MVN 优先显式传入，其次 MPSV_MVN，最后 PATH 上的 mvnd / mvn。缺一则报错退出。
+DEMO_DIR="${DEMO_DIR:-${MPSV_DEMO_ROOT:+$MPSV_DEMO_ROOT/mybatis-plus-join-demo}}"
+if [ -z "$DEMO_DIR" ]; then
+  echo "缺少 DEMO_DIR：请设 MPSV_DEMO_ROOT（见 .local/local.env.example），或直接 DEMO_DIR=<join demo 路径>。" >&2
+  exit 3
+fi
+MVN="${MVN:-${MPSV_MVN:-$(command -v mvnd 2>/dev/null || command -v mvn 2>/dev/null || true)}}"
+if [ -z "$MVN" ]; then
+  echo "缺少 MVN：请设 MPSV_MVN（见 .local/local.env.example），或把 mvnd / mvn 放进 PATH。" >&2
+  exit 3
+fi
 PROBE_PORT="${PROBE_PORT:-53999}"
 APP_PORT="${APP_PORT:-8082}"
 LOGLEVEL="${LOGLEVEL:-info}"

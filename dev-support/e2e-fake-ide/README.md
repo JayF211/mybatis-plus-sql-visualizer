@@ -24,18 +24,17 @@
 手动运行（排障用，等价）：
 
 ```bash
-# 前置：agent jar 已构建（缺则按下行构建）
-cd F:/code/Java/Gitee/SongRenShuo/mpsv-agent-residuals
+# 前置：agent jar 已构建（在仓库根执行）
 ./gradlew :sql-visualizer-agent:agentFatJar -Pkotlin.compiler.execution.strategy=in-process
 
-# 跑端到端（探针 + 应用 + 断言）
+# 跑端到端（探针 + 应用 + 断言）；demo 工程位置见下（MPSV_DEMO_ROOT）
 bash dev-support/e2e-fake-ide/run-e2e.sh
 ```
 
 退出码 `0` = 全部断言通过；非 0 = 有断言失败（详见 `evidence/probe.log` 的 `SUMMARY` 段）。
 
 **前置条件**：本机 MySQL `127.0.0.1:3306`（`root/root`，库 `mpj_demo`，表 `car_device_info` / `station_info` / `user` / `user_address` / `area` 有数据）；
-demo 工程在 `F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-demo/mybatis-plus-join-demo`；
+demo 工程位置由环境变量 `MPSV_DEMO_ROOT` 提供（其下的 `mybatis-plus-join-demo`，键名见 `.local/local.env.example`），不再写死本机路径（2026-10-10 T-LocalEnvOverride）；
 `~/.m2` 已有 demo 依赖（离线跑）。
 
 ## 可复跑读数（P-6 取证：2026-09-22 R7 纳门禁时连跑三轮）

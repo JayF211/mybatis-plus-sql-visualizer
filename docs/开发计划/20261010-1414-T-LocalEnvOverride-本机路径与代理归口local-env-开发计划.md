@@ -86,9 +86,32 @@ MPSV_PROXY_PORT=7890
 - [ ] `git check-attr eol -- .local/local.env.example` 返回 `lf`；加载后 `$MPSV_PROXY_PORT` 等值无尾随 `\r`（D7/P6）。
 - [ ] `run-verifier.sh` 改造前后三 IDE check-plugin 读数一致（真跑一次对照）。
 
-## 七、实施记录
+## 七、实施记录（2026-10-10 实施）
 
-（待实施后回填）
+**改动文件**
+
+| 文件 | 操作 |
+|---|---|
+| `.local/local.env.example` | 新增（入库模板，键位 MPSV_*） |
+| `.local/README.md` | 补 `local.env` 一行说明 |
+| `.gitignore` | 增 `!.local/local.env.example`（模板也要入库） |
+| `.gitattributes` | 增 `*.env text eol=lf` 与 `*.env.example text eol=lf`（D7） |
+| `dev-support/run-verifier.sh` | 重写：source `local.env` → 环境变量 → 动态发现；PLUGIN_DIR 由脚本位置推导；缺失项可读报错 |
+| `dev-support/mcp-test/mpsv-mcp-test.mjs` | `demoRoot` 改读 `process.env.MPSV_DEMO_ROOT`，缺省报错 |
+| `dev-support/e2e-fake-ide/run-e2e.sh` | source `local.env`；`DEMO_DIR` 由 `MPSV_DEMO_ROOT` 派生、`MVN` 由 `MPSV_MVN`/PATH 兜底，缺省报错（顺带清掉同样写死的 Maven 本机路径） |
+| `dev-support/e2e-fake-ide/README.md`、`dev-support/sandbox-preset/README.md` | 示例路径改占位/说明 |
+
+**验证读数**
+
+- `bash -n` 两个脚本均通过；六项前置（verifier jar / 三 IDE / java / verify-target）逐项解析 OK
+- `run-verifier.sh` **实跑**：日志进入「Scheduled verifications (3)」并开始检查（IU-243/253/262），证明发现链与调用链端到端成立
+- `git check-attr` 对 `.local/local.env` 与 `.env.example` 均返回 `text: set / eol: lf`（D7 生效）
+- `git check-ignore` → `.env.example` 未被忽略（可入库）；`git ls-files --others` 列到它
+- 全仓 scanned `dev-support/` 仅剩两类本机路径：`evidence/` 与 `tmp-capturerepro/` 的**历史取证日志**（按计划不改）
+
+**顺带发现（重要）**：原 `run-verifier.sh` 写死的 `verifier-cli/1.409/<hash>` 路径**早已失效**——本机 gradle 缓存里该版本已不存在（现为 1.410）。即旧脚本在本次改造前就跑不通，动态发现把它一并修好了。
+
+**未做**：`.local/local.env`（真实本机覆盖）未创建——按设计是可选文件，不入库。
 
 ## 附：不属本任务
 
