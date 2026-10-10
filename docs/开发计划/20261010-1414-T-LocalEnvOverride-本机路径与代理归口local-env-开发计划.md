@@ -113,6 +113,8 @@ MPSV_PROXY_PORT=7890
 
 **未做**：`.local/local.env`（真实本机覆盖）未创建——按设计是可选文件，不入库。
 
+**顺带修复（2026-10-10 实跑暴露）**：verifier 把报告写到**当前工作目录**下的 `verification-<时间戳>/`——脚本在仓库根执行时会在根目录留下一个（实测已产生并清理）。已在脚本内改为在已 gitignore 的 `dev-support/verify-logs/` 下执行（`-jar` 与插件目录均为绝对路径，切 CWD 安全）；实测重跑确认报告落到 `dev-support/verify-logs/verification-<时间戳>/`，根目录保持 0 个 `verification-*`。
+
 ## 附：不属本任务
 
 - `dev-support/e2e-fake-ide/evidence/run-meta.txt`、`dev-support/tmp-capturerepro/*.log`、`record/perf/*.log` 里的本机路径是**历史取证日志**（记录当时事实），不改写、不清理（`tmp-capturerepro` 的处置另见 T-DevSupportTidy）。

@@ -81,6 +81,14 @@ if [ -n "$MPSV_PROXY_HOST" ] && [ -n "$MPSV_PROXY_PORT" ]; then
                 -Dhttps.proxyHost="$MPSV_PROXY_HOST" -Dhttps.proxyPort="$MPSV_PROXY_PORT")
 fi
 
-"$JAVA" ${PROXY_ARGS[@]+"${PROXY_ARGS[@]}"} \
-  -jar "$VERIFIER" check-plugin "$PLUGIN_DIR" "$IDE_243" "$IDE_253" "$IDE_262"
+# 报告落点：verifier 把报告写到「当前工作目录」下的 verification-<时间戳>/——直接在仓库根跑
+# 会持续污染根目录（T-LocalEnvOverride 2026-10-10 实测产生一个）。改为在已 gitignore 的
+# dev-support/verify-logs/ 下执行（-jar 与插件目录都是绝对路径，切 CWD 安全）。
+REPORT_DIR="$PROJECT_DIR/dev-support/verify-logs"
+mkdir -p "$REPORT_DIR"
+(
+  cd "$REPORT_DIR" || exit 1
+  "$JAVA" ${PROXY_ARGS[@]+"${PROXY_ARGS[@]}"} \
+    -jar "$VERIFIER" check-plugin "$PLUGIN_DIR" "$IDE_243" "$IDE_253" "$IDE_262"
+)
 echo "EXIT_CODE=$?"
