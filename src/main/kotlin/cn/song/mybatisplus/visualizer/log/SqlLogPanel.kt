@@ -560,6 +560,19 @@ class SqlLogPanel(
 
     private val searchField = nativeSearch
 
+    init {
+        // 搜索框文本变更 → 防抖应用。T-SearchToggleNativeLook 迁平台原生 SearchTextArea 时漏接线：
+        // 本仓 dev 侧接线原在 buildSearchField 的 DocumentListener 上，master 原生结构只剩
+        // onSearchTextChanged / searchDebounceTimer 两个孤儿与 hideSearch 里「非空时触发
+        // DocumentListener 清过滤并刷新」的注释（测试钩子 applySearchTextForTest 直调内部入口，
+        // 覆盖不到真实键入分派，故未暴露）。本处补回接线，恢复「键入即过滤」「隐藏搜索条即清过滤」。
+        nativeSearch.addDocumentListener(object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent) = onSearchTextChanged()
+            override fun removeUpdate(e: DocumentEvent) = onSearchTextChanged()
+            override fun changedUpdate(e: DocumentEvent) = onSearchTextChanged()
+        })
+    }
+
     /** 当前大小写敏感态（原生钮状态落点）。 */
     private val logMatchCase: Boolean get() = nativeSearch.isMatchCase()
 
