@@ -147,9 +147,11 @@ class PrepareSingleFlightGateTest {
     @Test
     fun `接线_全链执行embed调用点全部显式EXECUTE`() {
         val panel = sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt")
-        // 五条全链执行链（executeSql 两处 / executeAdhocSql 两处 / EXPLAIN 直送一处）
+        // 六条全链执行链（executeSql 两处 / executeAdhocSql 两处 / EXPLAIN 直送一处 /
+        // R42 DML 影响面预演 probe 一处——631b12a 的 embedMode 归口漏迁该点，T-MergeMasterToDev2
+        // 合并时按同一映射补齐为 EXECUTE）
         assertEquals(
-            5,
+            6,
             "embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE)".let { needle -> panel.split(needle).size - 1 },
         )
         // executePrepared 的 onResultsReady 两处（executeSql + executeAdhocSql）
