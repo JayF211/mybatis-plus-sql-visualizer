@@ -2,7 +2,6 @@ package cn.song.mybatisplus.visualizer.execute
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 import java.sql.DriverManager
@@ -15,7 +14,9 @@ import javax.xml.parsers.DocumentBuilderFactory
  * DriverManager 验证数据库连通性。读取 demo 项目 `.idea/dataSources.xml` 的连接信息，
  * 加载驱动后执行一条验证 SQL，确认：驱动可加载 → 连接可达 → SQL 可执行。
  *
- * 环境门控：本地 MySQL 不可达时 assumeTrue skip(不 fail)。
+ * 环境门控＝「显式绿跳」：平台 runner 把 AssumptionViolatedException 记为 failure 红任务
+ *（DbConsoleIntegrationTest T-ExecDocGate 同款定论），故 demo 无数据源、或数据源驱动不在测试
+ * classpath 时 println + return；驱动可加载的数据源连不上仍 fail（本地 MySQL 需在跑）。
  *
  * 多方言扩展：后续可在 demo dataSources.xml 增加 PG/Oracle/DM/KingBase 数据源，
  * 本测试自动遍历全部数据源逐一验证(对齐 P-立项-05 七家族真机验证通道)。
@@ -92,16 +93,23 @@ class DataSourceJdbcSmokeTest : BasePlatformTestCase() {
     @Test
     fun testAllDemoDataSourcesReachable() {
         val sources = readAllDataSources()
-        assumeTrue("demo 项目 dataSources.xml 未找到任何数据源(路径: ${demoProjectDir.absolutePath})", sources.isNotEmpty())
-
-        // 驱动加载门控：驱动不在测试 classpath 时 skip
-        for (cfg in sources) {
-            assumeTrue("驱动 ${cfg.driverClass} 未加载(数据源 ${cfg.name})", runCatching { Class.forName(cfg.driverClass) }.isSuccess)
+        // 环境门控＝「显式绿跳」：平台 runner 把 AssumptionViolatedException 记为 failure 红任务
+        //（DbConsoleIntegrationTest T-ExecDocGate 同款定论），故环境不满足时 println + return。
+        if (sources.isEmpty()) {
+            println("[DS-SMOKE] SKIP: demo 项目 dataSources.xml 未找到任何数据源(路径: ${demoProjectDir.absolutePath})")
+            return
         }
 
-        // 逐一验证连通性
+        // 驱动不在测试 classpath 的数据源逐源跳过（demo 可含 DM / PG 等未作为 testImplementation 引入的源）
+        val verifiable = sources.filter { runCatching { Class.forName(it.driverClass) }.isSuccess }
+        if (verifiable.isEmpty()) {
+            println("[DS-SMOKE] SKIP: demo 数据源驱动均不在测试 classpath")
+            return
+        }
+
+        // 逐一验证连通性（仅对驱动可加载的数据源断言）
         val failures = mutableListOf<String>()
-        for (cfg in sources) {
+        for (cfg in verifiable) {
             val ok = isReachable(cfg)
             if (!ok) failures += "${cfg.name}(${cfg.url})"
         }
@@ -111,10 +119,22 @@ class DataSourceJdbcSmokeTest : BasePlatformTestCase() {
     @Test
     fun testExecuteValidationSqlOnEachSource() {
         val sources = readAllDataSources()
-        assumeTrue("demo 项目 dataSources.xml 未找到任何数据源", sources.isNotEmpty())
+        if (sources.isEmpty()) {
+            println("[DS-SMOKE] SKIP: demo 项目 dataSources.xml 未找到任何数据源")
+            return
+        }
+
+        // 与 testAllDemoDataSourcesReachable 同口径的环境门控：驱动不在测试 classpath 的数据源
+        // 逐源跳过（demo 可含 DM / PG 等未作为 testImplementation 引入的数据源，本测试只依赖
+        // mysql-connector-j）；可验证集为空时整测绿跳而非 fail。
+        val verifiable = sources.filter { runCatching { Class.forName(it.driverClass) }.isSuccess }
+        if (verifiable.isEmpty()) {
+            println("[DS-SMOKE] SKIP: demo 数据源驱动均不在测试 classpath，无可验证数据源")
+            return
+        }
 
         val failures = mutableListOf<String>()
-        for (cfg in sources) {
+        for (cfg in verifiable) {
             val ok = runCatching {
                 Class.forName(cfg.driverClass)
                 DriverManager.getConnection(cfg.url, cfg.user, cfg.password).use { conn ->
