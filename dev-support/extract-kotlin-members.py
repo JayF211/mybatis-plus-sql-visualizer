@@ -28,15 +28,64 @@ def read(path):
     return text.split(nl), nl, text.endswith(nl)
 
 
-def class_span(lines, cls):
-    ci = next(i for i, l in enumerate(lines) if re.match(r'^[\w ]*class ' + re.escape(cls) + r'\b', l))
-    cs = next(i for i in range(ci, len(lines)) if '{' in lines[i])
+def _aware_delta(text):
+    """字符串/注释感知的花括号净差（Kotlin 简版词法：行注释、块注释、三引号串、
+    普通串（含 `${...}` 内的花括号一并视作串体，两侧同进同出故不影响净差）、字符字面量）。"""
+    n = len(text)
+    esc = chr(92)
     d = 0
-    for i in range(cs, len(lines)):
-        d += lines[i].count('{') - lines[i].count('}')
-        if d == 0:
-            return cs, i
-    raise SystemExit('类体未闭合')
+    i = 0
+    while i < n:
+        c = text[i]
+        if c == '/' and i + 1 < n and text[i + 1] == '/':
+            j = text.find('\n', i)
+            i = n if j < 0 else j
+            continue
+        if c == '/' and i + 1 < n and text[i + 1] == '*':
+            j = text.find('*/', i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        if text.startswith('"""', i):
+            j = text.find('"""', i + 3)
+            i = n if j < 0 else j + 3
+            continue
+        if c == '"' or c == "'":
+            j = i + 1
+            while j < n:
+                if text[j] == esc:
+                    j += 2
+                    continue
+                if text[j] == c or text[j] == '\n':
+                    break
+                j += 1
+            i = j + 1
+            continue
+        if c == '{':
+            d += 1
+        elif c == '}':
+            d -= 1
+        i += 1
+    return d
+
+
+def _top_level_close(lines, cs):
+    """类体结束 = `cs` 之后第一条**顶格** `}`（Kotlin 顶层 class/object 的闭合括号）。
+
+    为什么不用朴素花括号计数：字符串模板 `${}`、KDoc 正文里的 `${}`、原始字符串里的花括号
+    都会让计数偏移（`SqlPreviewPanel.kt` 朴素净差 = +1 ⇒ 误报「类体未闭合」）。
+    类体内所有真实括号都有缩进，故「顶格 }」是可靠判据；本仓顶层文件均满足该形态。
+    """
+    for i in range(cs + 1, len(lines)):
+        if lines[i].rstrip() == '}':
+            return i
+    raise SystemExit('类体未闭合（未找到顶格 }）')
+
+
+def class_span(lines, cls):
+    ci = next(i for i, l in enumerate(lines)
+              if re.match(r'^[\w ]*(?:class|object)\s+' + re.escape(cls) + r'\b', l))
+    cs = next(i for i in range(ci, len(lines)) if '{' in lines[i])
+    return cs, _top_level_close(lines, cs)
 
 
 def members(lines, cs, ce):
@@ -77,6 +126,15 @@ def apply(path, cls, idxs, new_file, doc):
     cs, ce = class_span(lines, cls)
     rows = {r['k']: r for r in members(lines, cs, ce)}
     picked = [rows[i] for i in idxs]
+    # 安全闸（红线：拆分不得影响既有功能）——整个类体与被搬走的每个成员块都必须括号自洽，
+    # 否则说明边界切在了成员中间（方法体被截断/悬空注解），直接拒绝而不是产出破损文件。
+    cls_delta = _aware_delta('\n'.join(lines[cs:ce + 1]))
+    if cls_delta != 0:
+        raise SystemExit(f'类体括号不自洽（净差 {cls_delta}）——拒绝拆分，先人工核对边界')
+    for r in picked:
+        bd = _aware_delta('\n'.join(lines[r['lo']:r['hi']]))
+        if bd != 0:
+            raise SystemExit(f"成员 {r['name']}（第 {r['line']} 行）块内括号净差 {bd}——拒绝拆分")
     body_text = '\n'.join('\n'.join(lines[r['lo']:r['hi']]) for r in picked)
     # 原类私有成员里，被搬走代码引用到的 → 放宽为 internal
     priv = []

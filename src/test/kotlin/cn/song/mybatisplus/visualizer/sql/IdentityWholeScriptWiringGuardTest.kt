@@ -131,22 +131,33 @@ class IdentityWholeScriptWiringGuardTest {
 
     @Test
     fun `DataSourceSelector每个executeOnConsole调用都传wholeScriptExec`() {
-        val text = mainKt("cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt")
+        // T-M53-II（2026-10-10）：组合式重构把 `executeOnConsole` 的定义点与调用点分散到三个同包
+        // 文件（定义在 *Console.kt；调用点在 *DataSourceSelector.kt / *Console.kt / *Results.kt）。
+        // 读取面必须覆盖全集——只读单文件会在某个文件恰好无调用点时静默漏掉转发点（真接线漏照绿）。
+        val files = listOf(
+            "cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt",
+            "cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsole.kt",
+            "cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt",
+        )
         val offenders = mutableListOf<String>()
         var checked = 0
-        var idx = text.indexOf("executeOnConsole(")
-        while (idx >= 0) {
-            val before = text.substring(maxOf(0, idx - 30), idx)
-            if (!before.contains("fun ")) { // 定义点（private fun executeOnConsole(）不计
-                val open = text.indexOf('(', idx)
-                val span = argSpan(text, open)
-                checked++
-                val exempted = exempt["DataSourceSelector.kt"]?.any { span.contains(it) } == true
-                if (!exempted && !span.contains("wholeScriptExec")) {
-                    offenders += span.take(120)
+        files.forEach { rel ->
+            val text = mainKt(rel)
+            val name = rel.substringAfterLast('/')
+            var idx = text.indexOf("executeOnConsole(")
+            while (idx >= 0) {
+                val before = text.substring(maxOf(0, idx - 30), idx)
+                if (!before.contains("fun ")) { // 定义点（`internal fun DataSourceSelector.executeOnConsole(`）不计
+                    val open = text.indexOf('(', idx)
+                    val span = argSpan(text, open)
+                    checked++
+                    val exempted = exempt[name]?.any { span.contains(it) } == true
+                    if (!exempted && !span.contains("wholeScriptExec")) {
+                        offenders += "$name: " + span.take(120)
+                    }
                 }
+                idx = text.indexOf("executeOnConsole(", idx + 1)
             }
-            idx = text.indexOf("executeOnConsole(", idx + 1)
         }
         assertTrue("executeOnConsole 应至少有 3 个调用点（实查 $checked）", checked >= 3)
         assertTrue(

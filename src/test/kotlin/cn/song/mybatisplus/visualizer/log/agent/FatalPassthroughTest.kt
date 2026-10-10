@@ -1,6 +1,9 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
 import cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+// T-M53-II：`writeConsoleOutput` 已搬为 execute 包内的同包扩展函数（原 DataSourceSelector 成员），
+// 跨包调用点需显式导入。
+import cn.song.mybatisplus.visualizer.execute.writeConsoleOutput
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

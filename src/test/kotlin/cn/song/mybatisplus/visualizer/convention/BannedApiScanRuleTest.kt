@@ -576,7 +576,11 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
      * 且每处 `catch (…: Throwable)` 都必须带判定。
      */
     internal val landedFatalPassthroughFiles = setOf(
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt",
+        // T-M53-II（2026-10-10）：原 `execute/DataSourceSelector.kt` 的 13 处已落地站点随组合式重构
+        // 分布到同包两个协作文件（`*Console.kt` 2 处 + `*Results.kt` 11 处，合计仍是 13）；
+        // 本表按「站点真正所在文件」登记，站点全部带 fatal 判定由下面 `sites.all { … }` 逐个保鲜。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsole.kt",
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt",
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt",
         "src/main/kotlin/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.kt",
         // T-FP-02b（独立复核条件项）：原豁免理由「可选能力探测失败返回 null（预览主链降级）」把**预览
@@ -687,7 +691,9 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
      * actions/ConvertSqlToJavaAction.kt                               1 处：93
      * ```
      *
-     * 已落地（**33 处 / 5 文件**）：`execute/DataSourceSelector.kt` 13、`log/agent/AgentManager.kt` 10、
+     * 已落地（**33 处 / 6 文件**）：`execute/DataSourceSelectorConsole.kt` 2 +
+     * `execute/DataSourceSelectorResults.kt` 11（原同属 `execute/DataSourceSelector.kt` 的 13 处，
+     * T-M53-II 组合式重构把它们分到两个协作文件——合计不变）、`log/agent/AgentManager.kt` 10、
      * `log/RunConfigurationProcessListener.kt` 7、`ui/SqlPreviewService.kt` 1（T-FP-02b 收口）、
      * `log/SqlToJavaPanel.kt` 2（20261007 收口；该文件此前**登记 1 处、实际 2 处**，故上表登记口径
      * 的 42 与已落地 33 之和为 75，比历史「合计 74」多 1——差额即那次漏登）——
@@ -697,10 +703,10 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
      *
      * **同族抵消面（runCatching 接住已透传的 fatal）**：本守卫只扫 `catch (…: Throwable)` 块，看不见
      * 「块内 `throw` 被同一函数的外层 `runCatching {}.onFailure/getOrElse` 接住」的抵消——T-FP-02b
-     * （独立复核阻断 1/2）已把**写集内**的抵消点逐个放行：`execute/DataSourceSelector.kt`
-     * `writeConsoleOutput` 外层（`:796`，包住 `:763`/`:779` 两处捕获块）、`prewarmExecTempFile`
-     * 缓存命中刷新（`:3813`）、`prewarmExecTempFileInner` 写盘（`:3874`）、`log/agent/AgentManager.kt`
-     * `resolvePid` 外层（`:877`），以及预热链唯一调用方 `ui/SqlPreviewService.kt` 的
+     * （独立复核阻断 1/2）已把**写集内**的抵消点逐个放行：`execute/DataSourceSelectorResults.kt`
+     * `writeConsoleOutput` 外层（包住同文件内两处捕获块）、同文件 `prewarmExecTempFile`
+     * 缓存命中刷新、`prewarmExecTempFileInner` 写盘、`log/agent/AgentManager.kt`
+     * `resolvePid` 外层，以及预热链唯一调用方 `ui/SqlPreviewService.kt` 的
      * `runCatching { prewarmExecTempFile(...) }`（`:2121`）。写集外仍存在的同类抵消面（如
      * `executeOnConsole` 的外层 `runCatching`，其内层抛点实际在 `executeOnPooledThread`/`invokeLater`
      * lambda 内、运行时不经该 runCatching）见计划 §九。
@@ -748,8 +754,10 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
 
         // 反射解包锚点（原生执行链）：Method.invoke 把目标异常（含 Error）包进
         // InvocationTargetException（普通异常），只判外层会漏判——须对解包后的 cause 判定。
+        // T-M53-II：`executeOnConsole`（含该反射捕获块）已随组合式重构搬到 *Console.kt；
+        // 读取面须指向站点真正所在处，否则断言退化为扫空文件（`isNotEmpty` 红）。
         val nativeRunChain = maskNonCode(
-            sources.first { it.first.endsWith("execute/DataSourceSelector.kt") }.second,
+            sources.first { it.first.endsWith("execute/DataSourceSelectorConsole.kt") }.second,
         )
         val unwrapSites = throwableCatchSites(nativeRunChain).filter { it.body.contains("InvocationTargetException") }
         assertTrue("原生执行链的反射捕获块应存在（含 InvocationTargetException 解包）", unwrapSites.isNotEmpty())

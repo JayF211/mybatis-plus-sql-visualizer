@@ -6,6 +6,9 @@ import cn.song.mybatisplus.visualizer.execute.ConsoleEmbedMode
 import cn.song.mybatisplus.visualizer.execute.DocWriteContext
 import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor
+// T-M53-II：`installOutputHistoryFillLayout` 已搬为 execute 包内的同包扩展函数（原 DataSourceSelector 成员），
+// 跨包调用点需显式导入。
+import cn.song.mybatisplus.visualizer.execute.installOutputHistoryFillLayout
 import cn.song.mybatisplus.visualizer.model.BatchColumn
 import cn.song.mybatisplus.visualizer.model.ConditionView
 import cn.song.mybatisplus.visualizer.model.FillClause

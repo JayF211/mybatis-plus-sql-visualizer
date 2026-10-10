@@ -144,6 +144,16 @@ class PrepareSingleFlightGateTest {
     private fun sourceOf(relativePath: String): String =
         File(repoRoot(), relativePath).readText()
 
+    /** T-M53-II（2026-10-10）：组合式重构后 DataSourceSelector 的成员分散到同包三个文件，
+     * 形态类断言必须按**全集**读取（只读主文件会因成员搬走而假红，或漏掉真实违规而假绿）。 */
+    private fun selectorUnion(): String = listOf(
+        "DataSourceSelector.kt",
+        "DataSourceSelectorConsole.kt",
+        "DataSourceSelectorResults.kt",
+    ).joinToString("\n") {
+        sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/execute/$it")
+    }
+
     @Test
     fun `接线_全链执行embed调用点全部显式EXECUTE`() {
         val panel = sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt")
@@ -169,8 +179,8 @@ class PrepareSingleFlightGateTest {
 
     @Test
     fun `接线_DS侧折叠点归口shouldCollapseDivider`() {
-        val selector = sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt")
-        // prepareAfterEditorResolved + reuseSharedConsole 两处折叠判定
+        val selector = selectorUnion()
+        // prepareAfterEditorResolved（Console 侧）+ reuseSharedConsole（Results 侧）两处折叠判定
         assertEquals(
             2,
             selector.split("shouldCollapseDivider(").size - 1,
@@ -179,7 +189,7 @@ class PrepareSingleFlightGateTest {
 
     @Test
     fun `接线_F1单飞入口与消费点在位`() {
-        val selector = sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt")
+        val selector = selectorUnion()
         // 入口单飞判定（先于共享复用）+ QUEUE_ONLY 只排队 callback(true)
         assertTrue(selector.contains("prepareGate.tryEnter(executeAfterPrepare, queuedIntent)"))
         assertTrue(selector.contains("PrepareGateDecision.QUEUE_ONLY ->"))
