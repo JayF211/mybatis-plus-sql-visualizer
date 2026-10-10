@@ -17,10 +17,11 @@ import argparse
 import collections
 import re
 
+_MODS = (r'(private|internal|protected|public|open|abstract|sealed|data|enum|annotation|'
+         r'inner|override|lateinit|const|external|suspend|inline|tailrec|operator|infix|vararg|value|'
+         r'companion)')
 DECL_RE = re.compile(
-    r'^ {4}(@|fun |private fun |internal fun |protected fun |public fun |override fun |'
-    r'private val |private var |internal val |internal var |protected val |protected var |'
-    r'val |var |lateinit |companion |private lateinit |internal lateinit |object )'
+    r'^ {4}(@|(' + _MODS + r'\s+)*(class|object|interface|fun|val|var|typealias)\b)'
 )
 COMMENT_ONLY = re.compile(r'^\s*(//|/\*|\*|\*/)')
 
