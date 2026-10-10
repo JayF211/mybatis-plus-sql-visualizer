@@ -98,12 +98,12 @@ import javax.swing.event.DocumentListener
  * - Ctrl+F/⌘F 搜索：默认隐藏的搜索条，快捷键唤起实时过滤（Esc 清空后再按收起）
  */
 class SqlLogPanel(
-    private val project: Project,
-    private val manager: SqlLogManager,
+    internal val project: Project,
+    internal val manager: SqlLogManager,
 ) : JPanel(BorderLayout()), Disposable {
 
     private val listModel = DefaultListModel<LogSqlEntry>()
-    private val list = SqlEntryList(listModel)
+    internal val list = SqlEntryList(listModel)
     /** 列表条目单元格渲染器（internal 供 UI 测试直接渲染、断言 HTML 输出）。 */
     private lateinit var entryCellRenderer: LogEntryListCellRenderer
     /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
@@ -176,7 +176,7 @@ class SqlLogPanel(
     private var refreshGeneration = 0L
 
     /** 上一轮渲染的可见列表（同一性差分基线；由 applyIncremental/applyFullRebuild 与 listModel 保持同步）。 */
-    private var lastRendered: List<LogSqlEntry> = emptyList()
+    internal var lastRendered: List<LogSqlEntry> = emptyList()
 
     // T-Perf-15：manager 监听器命名引用（uiRefreshListener/capturingUiListener）声明于 init 前统一区块。
     //
@@ -677,7 +677,7 @@ class SqlLogPanel(
 
 
     /** Ctrl+F/⌘F 唤起搜索条（快捷键经 CommonShortcuts.getFind() 平台 keymap 自适应 mac/win）。 */
-    private inner class ShowSearchAction : AnAction() {
+    internal inner class ShowSearchAction : AnAction() {
         init {
             registerCustomShortcutSet(CommonShortcuts.getFind(), list)
         }
@@ -908,7 +908,7 @@ class SqlLogPanel(
      * 捕捉开关（T-UiNative T-UN-11：挂工具窗标题栏，经 [captureToggleAction] 暴露）。
      * 图标/文案在 update 按 manager.capturing 态输出（平台更新机制驱动，不再反射强改按钮）。
      */
-    private inner class CaptureAction : AnAction() {
+    internal inner class CaptureAction : AnAction() {
         override fun update(e: AnActionEvent) {
             if (manager.capturing) {
                 e.presentation.icon = AllIcons.Actions.Suspend
@@ -931,7 +931,7 @@ class SqlLogPanel(
         }
     }
 
-    private inner class ClearAction : AnAction() {
+    internal inner class ClearAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.Actions.GC
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.clear")
@@ -946,7 +946,7 @@ class SqlLogPanel(
      * T-SqlLogPerf：「滚动到底部」动作（跳列表底 + 恢复尾部跟随）。
      * 图标复用 [AllIcons.General.ArrowDown]（本文件 SQL类型/排序按钮同款下箭头，向下语义一致）。
      */
-    private inner class ScrollToEndAction : AnAction() {
+    internal inner class ScrollToEndAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.General.ArrowDown
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.scrollBottom")
@@ -958,7 +958,7 @@ class SqlLogPanel(
         }
     }
 
-    private inner class SettingsAction : AnAction() {
+    internal inner class SettingsAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.General.Settings
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.settings")
@@ -976,7 +976,7 @@ class SqlLogPanel(
      * `AllIcons.General.Filter`——262 jar 实渲染比对后用户选定，全栏无漏斗形不撞车）。
      * 打开与右键「管理屏蔽规则…」同一非模态对话框。
      */
-    private inner class ManageSuppressAction : AnAction() {
+    internal inner class ManageSuppressAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.General.Filter
             e.presentation.text = MpSqlVisualizerBundle.message("log.suppress.manage")
@@ -1003,7 +1003,7 @@ class SqlLogPanel(
      *  - 本地 HTML（loadHTML）→ 样式完整、秒开、零依赖 ✓（定稿）。
      *  样式保证：marketplace-custom-page.html 为纯内联 <style>，无 link/script/img/url()，
      *  不发起任何外部请求，不存在资源加载失败导致缺样式。 */
-    private inner class HelpAction : AnAction() {
+    internal inner class HelpAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.Actions.Help
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.help")
@@ -1611,134 +1611,14 @@ class SqlLogPanel(
     }
 
     /** R4（W3 历史工作流包）：导出当前可见行集（lastRendered=面板过滤/搜索/排序后的实际可见集）。 */
-    private inner class ExportVisibleAction : AnAction(MpSqlVisualizerBundle.message("log.export.visible")) {
+    internal inner class ExportVisibleAction : AnAction(MpSqlVisualizerBundle.message("log.export.visible")) {
         override fun actionPerformed(e: AnActionEvent) {
             exportVisibleEntries()
         }
     }
 
     /** R4 导出：格式四选（CSV/TSV/TXT/SQL，默认 SQL）→ 文件保存 → 后台写盘 → 通知（行集=lastRendered 快照）。 */
-    internal fun exportVisibleEntries() {
-        val rows = lastRendered.map {
-            val source = buildString {
-                if (!it.sourceFile.isNullOrBlank()) {
-                    append(it.sourceFile)
-                    if (it.sourceLine > 0) append(":").append(it.sourceLine)
-                }
-            }
-            SqlExportRow(
-                time = SqlExportService.formatTime(it.timestamp),
-                sql = it.restoredSql,
-                source = source,
-                durationMs = it.executionTimeMs,
-            )
-        }
-        if (rows.isEmpty()) return
-        val format = chooseExportFormat() ?: return
-        val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
-            MpSqlVisualizerBundle.message("log.export.visible"),
-            "SQL (${format.ext.uppercase()})",
-            format.ext,
-        )
-        val dialog = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance()
-            .createSaveFileDialog(descriptor, project)
-        // T-ExportSqlFormat（用户拍板 20261009）：SQL 格式默认名 sql-export-<yyyyMMdd-HHmmss>.sql
-        // （时间戳防同日覆盖、不占 sql-history 名族）；CSV/TSV/TXT 保持原名随 ext。
-        val defaultName = if (format == SqlExportFormat.SQL) {
-            SqlExportService.defaultSqlExportFileName()
-        } else {
-            "sql-log.${format.ext}"
-        }
-        val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, defaultName)
-            ?: return
-        val target = saved.file
-        ApplicationManager.getApplication().executeOnPooledThread {
-            runCatching {
-                SqlExportService.exportToFile(target, SqlExportService.format(rows, format))
-            }.onSuccess {
-                com.intellij.notification.NotificationGroupManager.getInstance()
-                    .getNotificationGroup(NOTIFICATION_GROUP_ID)
-                    .createNotification(
-                        MpSqlVisualizerBundle.message("log.history.export.done", rows.size, target.absolutePath),
-                        com.intellij.notification.NotificationType.INFORMATION,
-                    ).notify(project)
-            }.onFailure {
-                com.intellij.notification.NotificationGroupManager.getInstance()
-                    .getNotificationGroup(NOTIFICATION_GROUP_ID)
-                    .createNotification(
-                        MpSqlVisualizerBundle.message("log.history.export.failed", it.message ?: ""),
-                        com.intellij.notification.NotificationType.ERROR,
-                    ).notify(project)
-            }
-        }
-    }
-
-    /** R4：导出格式四选（取消返回 null）。默认选中 SQL（T-ExportSqlFormat 用户拍板 20261009；
-     *  P3：showChooseDialog 返回所选下标、取消 -1）。 */
-    private fun chooseExportFormat(): SqlExportFormat? {
-        val names = arrayOf("CSV", "TSV", "TXT", "SQL")
-        val idx = com.intellij.openapi.ui.Messages.showChooseDialog(
-            project,
-            MpSqlVisualizerBundle.message("log.history.export.choose"),
-            MpSqlVisualizerBundle.message("log.export.visible"),
-            com.intellij.openapi.ui.Messages.getQuestionIcon(),
-            names,
-            names[3],
-        )
-        if (idx < 0) return null
-        return when (idx) {
-            0 -> SqlExportFormat.CSV
-            1 -> SqlExportFormat.TSV
-            2 -> SqlExportFormat.TXT
-            3 -> SqlExportFormat.SQL
-            else -> null
-        }
-    }
-
-    private fun showContextMenu(e: MouseEvent) {
-        val index = list.locationToIndex(e.point)
-        if (index < 0) return
-        // T-ListPreviewCopy：命中行已在多选内 → 保留多选（复制项=批量复制多条）；否则收敛为该行。
-        // 删除/发送/跳转等其余菜单项恒作用于被右键的行
-        list.selectedIndices = resolveContextMenuSelection(list.selectedIndices, index)
-        val entry = list.model.getElementAt(index)
-        val selectedEntries = list.selectedIndices.map { list.model.getElementAt(it) }
-        // T-UiNative P1a：JPopupMenu+JMenuItem → 平台 DefaultActionGroup+AnAction（ActionPopupMenu 承载）
-        val group = DefaultActionGroup()
-        group.add(CopySqlAction(selectedEntries))
-        // T-LogSearchRowTime：复制时间戳（所见即所复制的纯时间文本，无方括号）；
-        // 显示开关关闭时无片段可复制 → 菜单项置灰（置灰逻辑在 CopyTimestampAction.update）
-        val timestampClip = batchCopyTimestamps(selectedEntries)
-        group.add(CopyTimestampAction(selectedEntries, timestampClip))
-        group.add(DeleteSqlAction(entry))
-        // T-SqlSuppress（O-69）：屏蔽此 SQL（多选按不同指纹各成一条规则，已存在跳过）——
-        // 置「删除」之后（计划定稿位），balloon 反馈带管理直达
-        group.add(SuppressSqlAction(selectedEntries))
-        // T-M37 P1：发送到 SQL → Java 转换（第三 tab）——还原 SQL 写入输入区并切换选中该 tab
-        group.add(SendToSqlToJavaAction(entry))
-        // T-M38：发送到日志转 SQL（第二 tab）——条目渲染回日志文本并立即转换
-        group.add(SendToLogToSqlAction(entry))
-        // O-1：日志 ↔ 源码关联跳转（Phase A）；T-M55-01：拆「跳转到 Java」「跳转到 XML」双目标
-        group.add(JumpToSourceAction(entry))
-        group.add(JumpToMapperXmlAction(entry))
-        // T-M55-03：方法级聚焦（sourceFile 非空时可用；解析失败 toast 提示，无静默吞没）
-        group.add(FocusCallerMethodAction(entry))
-        // T-M55-04：按请求聚焦（requestTag 非空时可用；页签 K 有界防高基数爆列表）
-        group.add(FocusRequestAction(entry))
-        // O-90：按模板聚焦（「×N 同模板」徽章达阈值才可用；过滤出该模板全部条目）
-        group.add(FocusTemplateAction(entry))
-        // R4（W3 历史工作流包）：导出当前可见行集（与面板过滤/搜索一致；CSV/TSV/TXT/SQL，后台写盘）
-        group.add(ExportVisibleAction())
-        val popup = ActionManager.getInstance().createActionPopupMenu("mpvs.log.list", group)
-        // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
-        popup.setTargetComponent(list)
-        popup.component.show(list, e.x, e.y)
-    }
-
-    // ---------- T-UiNative P1a：列表右键菜单动作（原 JMenuItem 语义平移，update 设文案/灰置，actionPerformed 平移原监听体） ----------
-
-    /** 复制 SQL：多选批量逐行拼接（[batchCopySql]），单选复制该行。 */
-    private inner class CopySqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
+    internal inner class CopySqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = copyMenuText("log.panel.copy", "log.panel.copySelected", entries.size)
         }
@@ -1749,7 +1629,7 @@ class SqlLogPanel(
     }
 
     /** 复制时间戳：显示开关关闭时无片段可复制 → update 置灰。 */
-    private inner class CopyTimestampAction(private val entries: List<LogSqlEntry>, private val clip: String) : AnAction() {
+    internal inner class CopyTimestampAction(private val entries: List<LogSqlEntry>, private val clip: String) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = copyMenuText("log.panel.copyTimestamp", "log.panel.copyTimestampSelected", entries.size)
             e.presentation.isEnabled = clip.isNotEmpty()
@@ -1763,7 +1643,7 @@ class SqlLogPanel(
     }
 
     /** 删除被右键的条目。 */
-    private inner class DeleteSqlAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class DeleteSqlAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.delete")
         }
@@ -1779,7 +1659,7 @@ class SqlLogPanel(
      * 动作链：规则入库（监听器同步更新缓冲键集）→ refreshList（存量心跳行立即消失，D4 最强反馈）
      * → balloon 反馈附「管理屏蔽规则…」直达对话框（D4 中层）。
      */
-    private inner class SuppressSqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
+    internal inner class SuppressSqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
         override fun update(e: AnActionEvent) {
             val count = entries.distinctBy { it.dedupeKey }.size
             e.presentation.text = if (count > 1) {
@@ -1802,46 +1682,7 @@ class SqlLogPanel(
      * T-SqlSuppress：屏蔽成功 balloon（D5 定案独立通知组 logsuppress）。
      * 附「管理屏蔽规则…」动作直达对话框；测试模式跳过（对齐 [showJumpToast] 约定）。
      */
-    private fun showSuppressBalloon(addedCount: Int) {
-        if (ApplicationManager.getApplication().isUnitTestMode) return
-        runCatching {
-            val notification = NotificationGroupManager.getInstance()
-                .getNotificationGroup(SUPPRESS_NOTIFICATION_GROUP_ID)
-                .createNotification(
-                    MpSqlVisualizerBundle.message("log.suppress.added.title"),
-                    MpSqlVisualizerBundle.message("log.suppress.added.body", addedCount.toString()),
-                    NotificationType.INFORMATION,
-                )
-            notification.addAction(
-                NotificationAction.createSimple(MpSqlVisualizerBundle.message("log.suppress.manage")) {
-                    notification.expire()
-                    SqlSuppressManagerDialog(project).show()
-                },
-            )
-            notification.notify(project)
-        }
-    }
-
-    /** T-SqlSuppress：达上限提示 balloon（D6：拒新增不淘汰，文案引导先删不用的规则）。 */
-    private fun showSuppressLimitBalloon() {
-        if (ApplicationManager.getApplication().isUnitTestMode) return
-        runCatching {
-            NotificationGroupManager.getInstance()
-                .getNotificationGroup(SUPPRESS_NOTIFICATION_GROUP_ID)
-                .createNotification(
-                    MpSqlVisualizerBundle.message("log.suppress.added.title"),
-                    MpSqlVisualizerBundle.message(
-                        "log.suppress.limit",
-                        SqlSuppressRuleManager.MAX_RULES.toString(),
-                    ),
-                    NotificationType.WARNING,
-                )
-                .notify(project)
-        }
-    }
-
-    /** 发送到 SQL → Java 转换（第三 tab）。T-RecentExecMenu O-119：落点收口 [openEntryInTab]（弹框右键同用）。 */
-    private inner class SendToSqlToJavaAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class SendToSqlToJavaAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.sendToReverse")
         }
@@ -1852,7 +1693,7 @@ class SqlLogPanel(
     }
 
     /** 发送到日志转 SQL（第二 tab）。T-RecentExecMenu O-119：落点收口 [openEntryInTab]（弹框右键同用）。 */
-    private inner class SendToLogToSqlAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class SendToLogToSqlAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.sendTo")
         }
@@ -1863,7 +1704,7 @@ class SqlLogPanel(
     }
 
     /** 跳转到 Java 调用方（T-M55-01：与「跳转到 XML」拆分为双目标；无位置→引导捕获弹窗，无提示/文件丢失→toast）。 */
-    private inner class JumpToSourceAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class JumpToSourceAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.jumpToJava")
         }
@@ -1878,7 +1719,7 @@ class SqlLogPanel(
      * （update 内解析一次并存引用，actionPerformed 复用，单次右键只做一次索引查询）；
      * 定位失败（XML 不存在/多模块未命中）不显示，原有「跳转到 Java」承担回退，不劣化。
      */
-    private inner class JumpToMapperXmlAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class JumpToMapperXmlAction(private val entry: LogSqlEntry) : AnAction() {
         private var resolved: LogJumpTarget.MapperXml? = null
 
         override fun update(e: AnActionEvent) {
@@ -1899,7 +1740,7 @@ class SqlLogPanel(
      * 点击时解析方法行号区间并加入聚焦页签栏（解析失败 toast，不静默）。
      * Ultra 的编辑器行槽 ⚡ 入口首批不做（记录为可选增强）。
      */
-    private inner class FocusCallerMethodAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class FocusCallerMethodAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.focusCallerMethod")
             // MP 分页 COUNT 标记无用户调用点；其余 sourceFile 非空即可用（解析成败在 action 时点判定）
@@ -1924,7 +1765,7 @@ class SqlLogPanel(
      * （与 03 方法聚焦同策略）。「最近 K 个请求标签下拉」的独立入口不另做——右键任意
      * 同标签条目等价可达，计划内「或」二选一取轻。
      */
-    private inner class FocusRequestAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class FocusRequestAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.focusRequest")
             e.presentation.isEnabled = !entry.requestTag.isNullOrBlank()
@@ -1943,7 +1784,7 @@ class SqlLogPanel(
      * 列表片段非交互组件），聚焦入口落在本动作；T-DevAcceptFix2 ⑪ 起菜单项带 description
      * 说明判定口径（「字面量不同也算」——用户实测里 `IN ('a')` 与 `IN ('b')` 计同一结构）。
      */
-    private inner class FocusTemplateAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class FocusTemplateAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.focusTemplate")
             e.presentation.description = MpSqlVisualizerBundle.message("log.panel.focusTemplate.desc")
@@ -1977,7 +1818,7 @@ class SqlLogPanel(
      * T-RecentExecMenu O-119：面板外请求（弹框右键「发送到…」）把条目送进对应页签并选中——
      * 与右键 [SendToSqlToJavaAction] / [SendToLogToSqlAction] 同体（三处共用本方法，单一实现）。
      */
-    private fun openEntryInTab(entry: LogSqlEntry, tab: LogEntryTab) {
+    internal fun openEntryInTab(entry: LogSqlEntry, tab: LogEntryTab) {
         when (tab) {
             LogEntryTab.LOG_TO_SQL -> {
                 logToSqlPanel.loadFromEntry(entry)
@@ -2052,9 +1893,9 @@ class SqlLogPanel(
         private val LOG = Logger.getInstance(SqlLogPanel::class.java)
         private const val TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar"
         /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
-        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+        internal const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
         /** T-SqlSuppress（O-69/D5）：屏蔽规则 balloon 通知组（plugin.xml 独立注册）。 */
-        private const val SUPPRESS_NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.logsuppress"
+        internal const val SUPPRESS_NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.logsuppress"
         /** T-Perf-24（自 dev 移植）：搜索输入防抖窗口（毫秒）。 */
         private const val SEARCH_DEBOUNCE_MS = 200
 
@@ -2096,4 +1937,5 @@ class SqlLogPanel(
 }
 
 // =================== 文件级：列表渲染辅助（internal 渲染器与 SqlLogPanel 共用） ===================
+
 
