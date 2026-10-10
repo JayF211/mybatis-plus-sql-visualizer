@@ -19,7 +19,6 @@ import com.intellij.ui.components.JBTextArea
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.Component
-import java.awt.Dimension
 import javax.swing.JComponent
 import javax.swing.JList
 
@@ -177,14 +176,14 @@ class NativeSearchTextField(
         val ownAction = object : AnAction(
             "最近搜索", "本组件最近使用过的搜索词", AllIcons.Actions.SearchWithHistory,
         ), DumbAware {
+            // 不覆写 update 设 isEnabled=false——ActionButton 的 update 时机不可控，会呈现常灰；
+            // 空历史时 actionPerformed → showHistoryPopup 直接 return（静默），钮保持可点观感。
             override fun actionPerformed(e: AnActionEvent) = showHistoryPopup()
-            override fun update(e: AnActionEvent) {
-                e.presentation.isEnabled = recentSearches.isNotEmpty()
-            }
         }
+        // 尺寸对齐平台内嵌钮基线（自定尺寸会撑高搜索行——用户实测「搜索框变得太高」）
         val button = ActionButton(
             ownAction, null, "NativeSearchTextFieldHistory",
-            Dimension(MAX_HISTORY_BUTTON_SIZE, MAX_HISTORY_BUTTON_SIZE),
+            com.intellij.openapi.actionSystem.ActionToolbar.DEFAULT_MINIMUM_BUTTON_SIZE,
         )
         button.isOpaque = false
         button.toolTipText = "最近搜索"
@@ -226,7 +225,5 @@ class NativeSearchTextField(
         /** 会话级历史容量。 */
         const val MAX_HISTORY = 20
 
-        /** 接管历史钮的尺寸（对齐平台按钮默认最小边）。 */
-        private const val MAX_HISTORY_BUTTON_SIZE = 32
     }
 }

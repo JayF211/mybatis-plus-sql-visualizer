@@ -290,6 +290,18 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         applySearch()
     }
 
+    /** 读取搜索框当前文本（测试断言：进条目卡应被清空）。 */
+    internal fun searchTextForTest(): String = searchField.text
+
+    /**
+     * 进条目卡前搜索框复位（生产异步路径与测试同步路径共用单源，防两处漂移）：
+     * 用户定（20261010）文件级搜索词不带入条目级——清空触发防抖重过滤（空查询=全量条目）；
+     * 历史记录在文件级应用时已入账，不受清空影响。
+     */
+    private fun clearSearchForEntryLevel() {
+        searchField.text = ""
+    }
+
     /** 二级 SQL 列表单击预览控制器（T-ClickPreview 测试断言）。 */
     internal val sqlClickPreviewForTest: SqlClickPreview get() = sqlClickPreview
 
@@ -409,6 +421,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         cardLayout.show(cards, CARD_SQL)
         // T-Perf-05：立即清空旧文件内容（大文件后台读取期间不残留旧文件条目，防误操作）
         currentEntries = emptyList()
+        clearSearchForEntryLevel()
         applySqlSearch()
         val gen = ++bgGeneration
         object : Task.Backgroundable(project, MpSqlVisualizerBundle.message("log.history.load.progress"), true) {
@@ -441,6 +454,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = true）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.sql")
         cardLayout.show(cards, CARD_SQL)
+        clearSearchForEntryLevel()
         currentEntries = SqlLogFileReader.readFromFile(fileEntry.file)
         currentFileStamp = fileEntry.file.lastModified() to fileEntry.file.length()
         applySqlSearch()

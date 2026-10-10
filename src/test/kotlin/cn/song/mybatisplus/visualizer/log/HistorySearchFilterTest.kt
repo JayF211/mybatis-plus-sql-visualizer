@@ -179,6 +179,22 @@ class HistorySearchFilterTest : BasePlatformTestCase() {
         }
     }
 
+    fun test进条目卡清空搜索框且条目回全量() {
+        // 用户定（20261010）：文件级搜索词不带入条目级——点进文件后搜索框应清空、条目全量
+        writeHistoryFile("sql-history-clear.sql", listOf("SELECT 1", "SELECT 2"))
+        val panel = HistorySqlLogPanel(project)
+        panel.refreshForTest()
+        try {
+            panel.setSearchForTest("clear")
+            assertEquals(listOf("sql-history-clear.sql"), panel.fileListEntries.map { it.displayName })
+            panel.openFileForTest(panel.fileListEntries.single())
+            assertEquals("进条目卡应清空搜索框", "", panel.searchTextForTest())
+            assertEquals("条目应为全量（文件级搜索词未带入）", 2, panel.sqlListEntries.size)
+        } finally {
+            panel.dispose()
+        }
+    }
+
     fun test面板开关驱动一级文件名检索() {
         writeHistoryFile("sql-history-case.sql", listOf("SELECT 1"))
         val panel = HistorySqlLogPanel(project)

@@ -89,17 +89,28 @@ class LogToSqlPanel(
     private var formatToggled = true
 
     init {
-        // 上：日志输入区（工具栏 + 编辑器 + 下方灰字提示）
+        // 上：日志输入区（工具栏 + 灰字提示 + 编辑器——位置对齐 SqlToJavaPanel：
+        // 提示在工具栏下方、编辑器上方，两面板统一）
         val inputPanel = JPanel(BorderLayout())
-        inputPanel.add(buildInputToolbar(), BorderLayout.NORTH)
+        inputPanel.add(
+            JPanel(BorderLayout()).apply {
+                add(buildInputToolbar(), BorderLayout.NORTH)
+                add(inputHintLabel, BorderLayout.SOUTH)
+            },
+            BorderLayout.NORTH,
+        )
         inputPanel.add(inputEditor.component, BorderLayout.CENTER)
-        inputPanel.add(inputHintLabel, BorderLayout.SOUTH)
 
-        // 下：SQL 结果区（工具栏 + 编辑器 + 下方灰字提示）
+        // 下：SQL 结果区（工具栏 + 灰字提示 + 编辑器，同构）
         val resultPanel = JPanel(BorderLayout())
-        resultPanel.add(buildResultToolbar(), BorderLayout.NORTH)
+        resultPanel.add(
+            JPanel(BorderLayout()).apply {
+                add(buildResultToolbar(), BorderLayout.NORTH)
+                add(resultHintLabel, BorderLayout.SOUTH)
+            },
+            BorderLayout.NORTH,
+        )
         resultPanel.add(resultEditor.component, BorderLayout.CENTER)
-        resultPanel.add(resultHintLabel, BorderLayout.SOUTH)
 
         val splitter = Splitter(true, 0.5f).apply {
             firstComponent = inputPanel
