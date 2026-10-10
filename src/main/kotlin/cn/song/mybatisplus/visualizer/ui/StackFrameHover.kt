@@ -88,6 +88,14 @@ internal class StackFrameHover(private val project: Project?) : Disposable {
                 hoverTimer.restart()
             }
 
+            // 锚点跟随悬停落点：mouseEntered 只给边缘穿越点（自下而上进入＝行底），弹层锚定位置随
+            // 进入方向漂移；移动中持续更新才保证「锚在哪弹在哪」
+            override fun mouseMoved(e: MouseEvent) {
+                if (digest == null) return
+                if (popup != null && popup?.isDisposed == false) return
+                pendingAnchor = e.point
+            }
+
             override fun mouseExited(e: MouseEvent) {
                 hoverTimer.stop()
                 if (popup != null && popup?.isDisposed == false) hideTimer.restart()
@@ -144,6 +152,10 @@ internal class StackFrameHover(private val project: Project?) : Disposable {
         val list = JBList(frames).apply {
             selectionMode = ListSelectionModel.SINGLE_SELECTION
             selectedIndex = 0
+            // 视口按全量帧数放开：JList 默认 visibleRowCount=8 会把链尾业务帧折叠进滚动区，
+            // 「弹层默认锚定最深的业务帧、一眼看到 Controller → Service 的调用路径」落空；
+            // 上限对齐栈帧预算钳位（64），超出才回退滚动
+            visibleRowCount = frames.size.coerceAtMost(MAX_VISIBLE_ROWS)
         }
         val fm = list.getFontMetrics(list.font)
         var maxRow = 0
@@ -294,5 +306,8 @@ internal class StackFrameHover(private val project: Project?) : Disposable {
         /** 测宽加成：行内边距 + 竖向滚动条余量。 */
         private const val POPUP_WIDTH_PADDING = 24
         private const val ROOT_WIDTH_PADDING = 8
+
+        /** 弹层视口最大可见行数：对齐 agent 栈帧预算钳位上限（StackDigest 12~64）。 */
+        private const val MAX_VISIBLE_ROWS = 64
     }
 }
