@@ -172,7 +172,10 @@ class SettingsRealityGuardTest {
 
     @Test
     fun `面板每个可编辑控件在apply与reset函数体中各出现`() {
-        val panelSrc = mainFile("src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt").readText()
+        // T-M53-II D2：面板的分区构建（含控件装配）已逐字符搬出到 PluginSettingsPanelSections.kt，
+        // 「摆而不绑」断言须在两个文件合起来的面板源码上跑，判据不变。
+        val panelSrc = mainFile("src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt").readText() +
+            mainFile("src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanelSections.kt").readText()
         // 行尾归一：工作树检出受 core.autocrlf 影响为 CRLF，而 Java 正则 `.` 不匹配 `\r`、
         // 全匹配（matches）与 `l == "    }"` 会双双失配（20260918 合并到 master 后实证）。
         val lines = panelSrc.split('\n').map { it.trimEnd('\r') }
@@ -180,7 +183,9 @@ class SettingsRealityGuardTest {
         // 控件字段：private val xxx = ComboBox<...>( / JBCheckBox( / ColorPanel( / ...
         val widgetTypes = setOf("JBCheckBox", "JBTextField", "JBTextArea", "JComboBox", "ComboBox", "ColorPanel", "JBLabel", "JButton")
         val fields = lines.mapNotNull { l ->
-            val m = Regex("""\s*private val (\w+)\s*=\s*(?:([\w.]+)\??<|([\w.]+)\()""").find(l) ?: return@mapNotNull null
+            // T-M53-II D2：控件字段的可见性在按族拆分时由 private 放宽为 internal（其装配代码
+            // 已搬为同包扩展函数），判据不变，故正则同时接受两种修饰符。
+            val m = Regex("""\s*(?:private|internal) val (\w+)\s*=\s*(?:([\w.]+)\??<|([\w.]+)\()""").find(l) ?: return@mapNotNull null
             val base = ((m.groupValues[2].ifEmpty { m.groupValues[3] }).substringAfterLast('.')).substringBefore('<')
             if (base in widgetTypes) m.groupValues[1] else null
         }
