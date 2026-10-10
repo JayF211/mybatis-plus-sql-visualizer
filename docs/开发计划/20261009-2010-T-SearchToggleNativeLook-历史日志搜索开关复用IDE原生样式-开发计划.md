@@ -123,6 +123,16 @@ gradle 缓存 `ideaIC-243.28141.41-sources.jar` 内 `SearchReplaceComponent.java
 - 定向 62/0（`ui.search` 全包 + HistorySearchFilterTest + SqlLogPanelFilterTest + SqlLogPanelLayoutTest）。
 - 反向验证：临时换回 `addPrimarySearchActions` ⇒ 恰 2 红（两个嵌入列表用例；计数标签用例不涉挂位仍绿——判别面精确），改回复绿，`RED-PROBE` 注释 grep=0。
 
+#### 附：UserMapper.xml「140 块有色 160 块无色」现象诊断（20261010 午后，环境差异非本插件缺陷）
+
+用户真机报同一 mapper 内 140 块（selectUserWithOrdersXml）有 SQL 着色+补全、160 块（selectUserPageXml，含 `<include refid="Base_Column_List"/>`）全无。三层实证：
+
+1. **本插件注入链无 include 降级**：新增平价守卫 `XmlMapperInjectorIncludeParityTest`（真平台 enumerate 断言同 mapper 内含/不含 include 的语句文本注入位等价，绿；`e3f2bbd`）。守卫链（设置/per-host 让位/mapper 祖先/长度熔断）均不含 include/resultMap 维度。
+2. **发行版（master=v2026.10.9）没有注入着色器**：git ls-tree 实测 `SqlMapperInjector`/`XmlSynHiGate` 仅存在于 dev-bak（T-XmlSynHi 未回流 master）。用户真机装 10.9 ⇒ 其 140 块的色与补全来自 **MyBatisCodeHelperPro**（真机在装；20261006 D68 调查记录在案）——160 块它没给是它自身对该块的处理（include/`Base_ResultMap` 引用），与本插件无关。
+3. **dev-bak 构建沙盒实证两块等价**（v5-01~03 截图）：140/160 两块关键字橙、`#{}` 参数粉、数字青——注入着色全部生效；补全链按注入语言派发，同等平价。
+
+结论：非缺陷，零码改动（守卫测试除外）。共存提示：dev-bak 构建与 MCH-Pro 同装时，per-host 让位会把它覆盖的块让给它（防叠色），它不覆盖的块由本插件上色。
+
 #### 本轮遗留
 
 - 日志页 `refreshList` 异步分批的命中计数未接（历史页文件/条目两链已接）；真机复验见下。
