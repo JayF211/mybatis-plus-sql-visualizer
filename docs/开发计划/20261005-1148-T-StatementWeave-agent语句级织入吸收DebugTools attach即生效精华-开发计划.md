@@ -151,3 +151,54 @@ IDE 侧既有地基：`AgentEventAdapter` 事件消费、`AgentUrlRegistry`/`Jdb
 - **绿**：恢复后 agent e2e **10/0** + 主仓守卫 **7/0**（守卫四件套升级五件套）。
 
 过程坑留档：agent 子项目被根项目 `test` 任务依赖且 `failOnNoMatchingTests=false`——根项目带 `--tests` 过滤器跑守卫时 `:sql-visualizer-agent:test` 会以空匹配重跑并清空结果目录，e2e XML 随后跑被清非假绿；绿读数须在 e2e 单跑后立即取 XML。
+
+## 七B、PG attach 零事件修复（T-PgWeave，2026-10-09，工作树 mybatis-plus-sql-visualizer-pgweave @ t-pgweave）
+
+用户真机复现「对运行中 PostgreSQL 应用 attach 增强捕获 → 面板零条目」。沙盒 idea.log 证据链：settings-rescan 补挂 pid → loadAgent（AgentLoadException(0) 良性）→ 会话建立 → CONFIG ACK disabled=false（应用确认在采）→ 接管沿去重索引重置 → 28 秒内零事件（P2 观测行「增强通道首条事件已到达」全日志 0 次＝事件从未到达 IDE，与去重窗无关）。
+
+**根因＝§六首条遗留落地**：语句面/prepare 面名单只覆盖 MySQL 与 H2。attach（agentmain）路径下存量池连接无法回溯 connect 包装，语句面无 PG 类可 retransform → 零事件；premain 路径不受影响（连接建立时被包装走代理面），故此前 PG 能捕获、掩盖了该缺陷。
+
+**修复（§六首条扩面）**：
+
+- 语句面新增 postgresql `PgStatement`/`PgPreparedStatement`/`PgCallableStatement`（继承链 PgCallableStatement → PgPreparedStatement → PgStatement）；prepare 面新增 `PgConnection`。javap 实测 42.7.8/42.7.10：execute 族 / executeBatch / executeLargeBatch / addBatch(String) / clearBatch 与 prepareStatement(String…) / prepareCall(String…) 描述符与 `Kind` 形态假设一致。
+- 同批评估后一并登记 Oracle（`OracleStatement`/`OraclePreparedStatement`/`OracleCallableStatement`；prepare 面取包私有基类 `oracle.jdbc.driver.PhysicalConnection`，T4CConnection 继承其方法）、SQL Server（`SQLServerStatement`/`SQLServerPreparedStatement`；`SQLServerConnection`）。
+- **未登记（如实）**：达梦——javap 形态全中，但字节级探针暴露**织入器帧-局部变量既有局限**：`DmdbStatement.addBatch(String)` 出口 `chop_frame(2)` 丢弃局部变量，ADD_BATCH 出口块读 this/首参落在帧后即 `VerifyError: Bad local variable type`；把出口块移到帧前又会在分支目标处缺帧（h2 `JdbcStatement` 探针实证）。须待出口锚点/帧重写方案，本轮不猜写。各驱动 pooled/代理包装族、PS 无参 `addBatch()` 同未登记。
+
+**验证**：
+
+- 新增 `StatementWeaverVendorCoverageTest`（7 例）：谓词层（登记类命中正确一面且两面不相交）+ 字节层（真实驱动类字节织入 changed + 子优先 loader 定义并初始化触发 JVM 栈图校验）+ 校验器判别力自证（撒谎的 StackMapTable 必被拒）。踩坑留档：① 隔离 loader 定义会被**包私有父类**跨 loader 拒（`IllegalAccessError: cannot access its superclass`）→ 对被织类厂商包前缀 child-first，使父类与被织类落同一 runtime package；② `resolveClass` 在 JDK17 HotSpot **不触发**栈图校验（负向用例假绿实测）→ 必须 `Class.forName(..., true, loader)` 初始化（链接含校验）。
+- **绿读数**：agent 定向 **25/0**（VendorCoverage 7 + FramePatchVerify 3 + StatementWeaveEndToEnd 10 + ZeroLoadClassWriter 5）。
+- **反向验证（摘登记必红）**：摘 SPECS 的 `org.postgresql.jdbc.PgStatement` → VendorCoverage **4 例红**（谓词层 2 + 字节层 1 + 单一真相 1）；恢复即绿。
+
+**真机复测口径（用户执行）**：PG 应用跑着 → 勾开增强捕获 → 触发 SQL → 面板应出条目（含语句面路径）。
+
+## 七C、达梦（DM8）语句面织入（T-DmWeave，2026-10-09，工作树 mybatis-plus-sql-visualizer-attachpool @ t-attachpool）
+
+**用户 P0 真因（现场侧钉死）**：`mybatis-plus-join-demo` 编译产物 `target/classes/application.yml` 的 `spring.profiles.active: dm`（Maven 勾了 dm profile），实际跑达梦 DM8（`jdbc:dm://114.66.55.245:20096?schema=MPJ_DEMO`，driver `dm.jdbc.driver.DmDriver`），非 MySQL/PG。`DriverRegistry` 连接面登记了 `dm.jdbc.driver.DmDriver`，但 `StatementWeaver.SPECS` 语句面/prepare 面**一个达梦类都没有** —— attach 到在跑的达梦应用时 connect 面无法回溯存量池连接、语句面无类可 retransform ⇒ matched=0、零钩子、零事件；控制台桥与厂商无关，故关增强即恢复。
+
+**本地复现（红）**：新增 childapp `ChildPoolApp` DM 模式（JDK8 目标，warm 建连接并跑一次，attach 后同连接新建 PS executeQuery）。摘除达梦登记时读数：`attach retransform: matched=1 wove=0 unmodifiable=0 failed=1 [dm.jdbc.driver.DmDriver=VerifyError]`，子进程 100 轮零事件（`eventReceived=false`）。**注意 matched=1 已含一处此前未知缺陷**：connect 面 `DmDriver.connect` 出口织入产物在 JVM 校验即失败（见下）。
+
+**javap 定型（DmJdbcDriver18 8.1.3.140）**：`DmdbStatement` 自带 `execute(String)/executeQuery(String)/executeUpdate(String)/executeLargeUpdate(String)`（EXEC_PARAM）、`executeBatch()/executeLargeBatch()`（BATCH）、`addBatch(String)`、`clearBatch()`（另有同名字段 `public boolean clearBatch;`，但方法 `clearBatch()V` 也在）；`DmdbPreparedStatement extends DmdbStatement` 自带无参 `execute()/executeQuery()/executeUpdate()/executeLargeUpdate()/executeBatch()/executeLargeBatch()`（EXEC_CTX/BATCH）；`DmdbCallableStatement` 无自有 execute 族（继承 DmdbPreparedStatement）；`DmdbConnection` 自带 `prepareStatement(String…)/prepareCall(String…)`（PREPARE）。该族 `extends dm.jdbc.filter.Filterable`；实测 `getConnection()` 返回裸 `DmdbConnection`、`prepareStatement` 返回裸 `DmdbPreparedStatement`（非过滤包装态），故挂在 public 方法上即可触发。
+
+**字节级探针（关键）**：旧织入形态下，达梦**所有** timed 出口方法均 `VerifyError: Bad local variable type`（`DmdbStatement.execute(String) @85 aload_0`、`DmdbPreparedStatement.execute() @71`、`addBatch(String)`/`clearBatch()` 等）——达梦 javac 在出口处对已死局部发 `chop_frame`，出口帧 `locals[0/1]=top`，而旧出口块读原局部 `this`/首参。仅 `DmdbConnection`（prepare 面）通过校验。
+
+**修复（织入器改造 + 按面登记）**：
+- `StatementWeaver.weaveMethod`：timed 面改为**入口捕获、出口读自有槽**——方法头把 `this`（EXEC_PARAM 再加首参 SQL）存入超出原 `maxLocals` 的新槽，出口块读自有槽（不再读原局部）；`patchFrames` 按槽位追加 token(long)/本类类型/String。对既有厂商语义等价（`this`/首参同对象），字节形态变化，全套既有 weaver 用例复跑零回归。
+- 登记面（`SPECS`）：`DmdbStatement`/`DmdbPreparedStatement` = {EXEC_PARAM, EXEC_CTX, BATCH}；`DmdbConnection` = {PREPARE}；`DmdbCallableStatement` 不单列（无自有 execute 族）。**未登记（如实）**：达梦 `ADD_BATCH`/`CLEAR_BATCH` 面出口非 timed（仍读原局部），同 chop_frame 根因仍 VerifyError，本轮不猜写。
+
+**验证**：
+- **绿读数（真库 E2E，JDK8 目标）**：`attach retransform: matched=4 wove=3 unmodifiable=0 failed=1 [dm.jdbc.driver.DmDriver=VerifyError]`，首条事件 `op=executeQuery sqlHead=SELECT 1 AS attachpool_dm registryUnresolved=0`，事件 `sd` 栈含 `dm.jdbc.driver.DmdbPreparedStatement#executeQuery`。
+- **反向验证（摘登记必红，贴两次读数）**：摘达梦登记 → 上列红读数；恢复 → 上列绿读数。
+- **厂商对齐守卫反向验证**：摘达梦登记 → 守卫红，报文 `dm.jdbc.driver.DmDriver 的连接面已登记，但厂商前缀 dm. 在 StatementWeaver.SPECS 无语句面/prepare 面条目…`；恢复即绿。
+
+**遗留（如实）**：达梦 connect 面 `DmDriver.connect` 出口织入命中同一 chop_frame（attach retransform 行残留 `failed=1 [dm.jdbc.driver.DmDriver=VerifyError]`）。存量连接场景已由语句面/prepare 面覆盖、事件到达，故本轮未改 `ConnectWeaver`；新建达梦连接不走代理面，但其语句面仍经织入通道产事件。后续若要 connect 面覆盖，按同款「入口捕获、出口读自有槽」改造 `ConnectWeaver`（需 `EXPAND_FRAMES` + 帧补丁）。
+
+**四格矩阵（T-AttachPoolWarm，同工作树先行）**：HikariCP 4.0.3 真实池（预热 2 物理连接）/ JDK8 目标 / mysql-connector-java 8.0.28 / Debug(-agentlib:jdwp) 四格全绿（事件到达，`HikariProxyConnection` 代理族下织入面照常触发），排除 MySQL 池/JDK/驱动版本/Debug 维度。
+
+**真机复测口径（用户执行）**：达梦应用跑着（`profiles.active=dm`）→ 勾开增强捕获 → 应用控制台应出现 `[SqlVisAgent] attach retransform: matched=4 wove=3 …` 且随后 `[SqlVisAgent] 织入通道首条事件已产出`；触发 SQL → 面板出条目。
+
+**真机复验结果（主控亲跑，2026-10-09 晚，243 沙盒）**：✅ 通过，两路都出条目。
+- attach 路线（与用户报障同形）：沙盒预置 `enhancedCaptureEnabled=false` → IDE Run 起 dm profile 应用（pid=30952；控制台实证 `HikariProxyConnection@… wrapping dm.jdbc.driver.DmdbConnection@…`）→ 控制台桥先出条目 #1（18:20:01）→ 设置页勾「增强捕获」并 Apply → 上升沿 attach（18:25:56，`AgentLoadException(0)` + `CONFIG 已生效 disabled=false`）→ 同端点再请求 → 面板 #2「[18:26:11] 26ms」（agent 通道条目，带毫秒耗时=桥给不出的字段）。宿主侧 `[SqlVisAgent] attach retransform: matched=6 wove=6 unmodifiable=0 failed=0` 与 `织入通道首条事件已产出 op=execute`；IDE 侧 `增强通道首条事件已到达并进入消费链（pid=30952）`（修复前该行恒缺）。
+- premain 路线（增强开着启动）：`premain 会话建立：pid=35260（启动即捕获）` → 面板 #3「[18:34:15] 11ms [DM（达梦）]」。
+- 截图存 `F:/code/Java/Gitee/SongRenShuo/mpsv-walk/`：`ide-21-attach.png`（安装读数行）、`ide-23-list.png`（面板三条目）、`ide-34-crop.png`（补全候选）。
+- 收工核对：8082 closed、无残留 java/fsnotifier、demo 仓与 dev-bak 工作树零改动。

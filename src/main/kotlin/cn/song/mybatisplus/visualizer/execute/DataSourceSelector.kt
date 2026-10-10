@@ -151,6 +151,13 @@ object DataSourceSelector {
     private var executionGeneration = 0
 
     /**
+     * T-FirstExecResultInvisible F1：准备链单飞 + 执行意图排队门——打开预览的准备链未落地时
+     * 点执行不再建第二条临时文件/会话/控制台链（H1 双准备链竞态的结构性消除），排队意图由
+     * 完成准备的门持有链按 executePrepared 口径消费。纯逻辑见 [PrepareSingleFlightGate]。
+     */
+    private val prepareGate = PrepareSingleFlightGate()
+
+    /**
      * M36.5.44：结果换入代际——每次**真实提交**递增（executeOnConsole 的 afterSubmitted 前），
      * 作废上一个执行遗留的 refreshResultsComponent Timer。跨执行竞态根因：SQL1 执行后起
      * refresh Timer A，SQL2 执行后起 Timer B；若 SQL1 的结果组件重建晚于 SQL2 换入，Timer A
@@ -398,6 +405,26 @@ object DataSourceSelector {
             return
         }
 
+        // T-FirstExecResultInvisible F1：准备链单飞 + 执行意图排队——打开预览的准备链（远程 PG
+        // 会话需数秒）未落地时点执行，旧代码在下方无任何去重，会再建第二条临时文件/会话/控制台；
+        // 两条链的 executionGeneration++ 与提交/取消判定交错 → 提交被取消或结果组件被换掉
+        //（结果区空白、二击正常的 H1 根因）。单飞判定先于共享复用：冷启时 sharedConsole 尚未
+        // 落地，复用必不命中，单飞是唯一闸门。
+        val queuedIntent = if (executeAfterPrepare) {
+            QueuedExecuteIntent(onConsole, onEditor, onError, onErrorRich, wholeScriptExec)
+        } else null
+        var ownsGate = false
+        when (prepareGate.tryEnter(executeAfterPrepare, queuedIntent)) {
+            PrepareGateDecision.QUEUE_ONLY -> {
+                LOG.info("[M36][T-FirstExec F1] prepare chain in flight: execute intent queued, no second session/console chain")
+                callback?.invoke(true)
+                return
+            }
+            PrepareGateDecision.PROCEED -> ownsGate = true
+            PrepareGateDecision.PASS_THROUGH ->
+                LOG.info("[M36][T-FirstExec F1] prepare chain in flight: preview prepare passes through (no gate ownership)")
+        }
+
         // T-MysqlGStrip T-MG-02：提交链总口——SQL 文本进入 exec 文件/控制台文档之前剥离 MySQL CLI
         // 的 `\G` 后缀（DBX #35）。此点数据源尚未选定（runner 弹窗在下方），方言不可得 → 按计划
         // §三 定案默认剥离（`\G` 非任何方言合法语法，剥离无害）。剥后文本写入 exec 文件，
@@ -407,7 +434,12 @@ object DataSourceSelector {
         // M36.5.5：共享控制台命中（last-used 数据源一致且控制台仍有效）→ 直接复用——
         // 不同步 session/连接/临时文件/方言映射，规避"第二个会话连接永不发起"挂死（见字段注释）。
         // 显式执行路径同样复用（结果落在已嵌入面板）；用户切换数据源走弹窗 → 新建并替换共享缓存。
-        if (reuseSharedConsole(project, submitSql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich, wholeScriptExec)) return
+        if (reuseSharedConsole(project, submitSql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich, wholeScriptExec)) {
+            // T-FirstExecResultInvisible F1：复用路径同步收敛（不建链、不经 prepareAfterEditorResolved）
+            // ——门持有链就地终结复位；PASS_THROUGH 预览链不动门。
+            if (ownsGate) prepareGate.finishPrepare()
+            return
+        }
 
         // 临时文件 + VF + PsiFile：Runner 上下文 + 控制台挂载点（VF 须保持引用）
         val temp = createTempPsiFile(project, submitSql)
@@ -416,6 +448,8 @@ object DataSourceSelector {
             // 用户真机曾只见笼统英文 "Failed to create temporary SQL file"，无从归因
             LOG.warn("[M36] createTempPsiFile failed (reason=${lastTempFileFailure}), abort")
             onError?.invoke(MpSqlVisualizerBundle.message("execute.tempFile.failed", lastTempFileFailure ?: "unknown"))
+            // T-FirstExecResultInvisible F1：链就此终结，复位单飞位（否则后续执行被永久排队）
+            if (ownsGate) prepareGate.finishPrepare()
             callback?.invoke(false)
             return
         }
@@ -425,7 +459,7 @@ object DataSourceSelector {
         var chosenRunnerName: String? = null
         val sessionConsumer = com.intellij.util.Consumer<Any> { session ->
             LOG.info("[M36] session created: ${session?.javaClass?.name}, attaching console (execute=$executeAfterPrepare, ds=$chosenRunnerName)")
-            prepareInConsole(project, session, vf, executeAfterPrepare, chosenRunnerName, onConsole, onEditor, onError, onErrorRich, wholeScriptExec)
+            prepareInConsole(project, session, vf, executeAfterPrepare, chosenRunnerName, onConsole, onEditor, onError, onErrorRich, wholeScriptExec, ownsPrepareGate = ownsGate)
         }
 
         val runners = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer)
@@ -464,6 +498,8 @@ object DataSourceSelector {
                 if (executeAfterPrepare) openDatabaseToolWindow(project)
                 // M36.3：无数据源时通知 UI 从「执行中」恢复
                 onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.empty"))
+                // T-FirstExecResultInvisible F1：链就此终结，复位单飞位（否则后续执行被永久排队）
+                if (ownsGate) prepareGate.finishPrepare()
                 callback?.invoke(false)
             }
             runners.size == 1 && shouldBeChosenIfAlone(runners.first()) -> {
@@ -482,6 +518,8 @@ object DataSourceSelector {
                     }
                     if (runner != null) chosenRunnerName = getRunnerName(runner)
                     callback?.invoke(runner != null)
+                    // T-FirstExecResultInvisible F1：用户取消弹窗 = 链就此终结，复位单飞位
+                    if (runner == null && ownsGate) prepareGate.finishPrepare()
                     // 弹窗中用户刚做了主动选择，失败仍需模态引导（silent=false）
                     if (runner != null) runRunner(project, runner, onError = onError)
                 }
@@ -609,14 +647,19 @@ object DataSourceSelector {
         onConsole?.invoke(full)
         // M36.5.55：预览（execute=false）复用 console 时也把结果区（bottom）折叠——divider 压到
         // 接近底部，bottom（DBN Output/Tx 结果区占位）收起不显示，满足"未执行不显示结果面板"。
+        // T-FirstExecResultInvisible F3：折叠归口 embedMode——仅 PREVIEW 且结果区无内容才折叠
+        //（上方清空失败/竞态下已有内容则保持展开，不吞用户可见的结果）。
         if (!executeAfterPrepare) {
             (full as? javax.swing.JSplitPane)?.let { sp ->
-                // write-safe: UI-only（纯 Swing/只读，无文档写）
-                ApplicationManager.getApplication().invokeLater({
-                    sp.setDividerLocation(1.0)
-                    sp.revalidate()
-                    sp.repaint()
-                }, com.intellij.openapi.application.ModalityState.any())
+                val collapse = ConsoleEmbedMode.PREVIEW.shouldCollapseDivider(resultAreaHasContent(sharedUi))
+                if (collapse) {
+                    // write-safe: UI-only（纯 Swing/只读，无文档写）
+                    ApplicationManager.getApplication().invokeLater({
+                        sp.setDividerLocation(1.0)
+                        sp.revalidate()
+                        sp.repaint()
+                    }, com.intellij.openapi.application.ModalityState.any())
+                }
             }
         }
         // M36.5.6：接管结果换入回调——后续任意路径执行产生新结果内容时换入本面板；
@@ -1560,6 +1603,7 @@ object DataSourceSelector {
         onError: ((String) -> Unit)?,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
         wholeScriptExec: Boolean = false,
+        ownsPrepareGate: Boolean = false,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         runCatching {
@@ -1633,12 +1677,15 @@ object DataSourceSelector {
                     ApplicationManager.getApplication().invokeLater({
                         onError?.invoke(consoleEditorUnavailableMessage("sync"))
                     }, com.intellij.openapi.application.ModalityState.any())
+                    // T-FirstExecResultInvisible F1：链就此终结（未到消费点）——门持有链复位 +
+                    // 排队执行意图回落错误回调（原子位操作任意线程可调）
+                    abortPrepareGate(ownsPrepareGate, consoleEditorUnavailableMessage("sync"), LOG)
                     return
                 }
                 val ed = editor
                 // M36.2：编辑器就绪回调（调用方注入插件补全上下文，与原生补全叠加）
                 onEditor?.invoke(ed)
-                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, ed, onErrorRich, wholeScriptExec)
+                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, ed, onErrorRich, wholeScriptExec, ownsPrepareGate)
             } else {
                 ApplicationManager.getApplication().executeOnPooledThread {
                     var editor: com.intellij.openapi.editor.Editor? = null
@@ -1657,11 +1704,14 @@ object DataSourceSelector {
                         if (resolved != null) {
                             onEditor?.invoke(resolved)
                             runCatching {
-                                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, resolved, onErrorRich, wholeScriptExec)
+                                prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, resolved, onErrorRich, wholeScriptExec, ownsPrepareGate)
                             }.onFailure { e ->
                                 LOG.warn("[M36] prepareInConsole(editor async wait) FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
                                 val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
                                 onError?.invoke(cause.message ?: cause.toString())
+                                // T-FirstExecResultInvisible F1：准备链在此终结（未到消费点）——
+                                // 门持有链复位 + 排队执行意图回落错误回调
+                                abortPrepareGate(ownsPrepareGate, cause.message ?: cause.toString(), LOG)
                             }
                         } else {
                             // T-TS-09：原为「无 else」——EDT 调用方（测试/面板准备链的常态）轮询 400ms
@@ -1670,6 +1720,8 @@ object DataSourceSelector {
                             // 基线 idea.log `[M36] editor=null (async wait)` 实证）。只补通知，不改语义。
                             LOG.warn("[M36] console editor unavailable after 400ms wait (async path), abort prepare")
                             onError?.invoke(consoleEditorUnavailableMessage("async"))
+                            // T-FirstExecResultInvisible F1：同上——链终结复位 + 意图回落
+                            abortPrepareGate(ownsPrepareGate, consoleEditorUnavailableMessage("async"), LOG)
                         }
                     }, com.intellij.openapi.application.ModalityState.nonModal())
                 }
@@ -1680,17 +1732,36 @@ object DataSourceSelector {
             val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
             // T-PreviewExecDs-03 F3：console 被清扫 dispose 的处置（prepare 链后段撞上时同款
             // 特判，见 prepareAfterEditorResolved onFailure）
-            if (cause is com.intellij.util.IncorrectOperationException &&
+            val failureMsg: String = if (cause is com.intellij.util.IncorrectOperationException &&
                 cause.message?.contains("already been disposed") == true
             ) {
                 LOG.warn("[M36] console disposed during prepareInConsole (swept), clear caches for retry: ${cause.message?.take(120)}")
                 clearPrepared()
                 dropSharedConsole()
-                onError?.invoke(MpSqlVisualizerBundle.message("execute.console.disposed"))
+                MpSqlVisualizerBundle.message("execute.console.disposed")
             } else {
-                onError?.invoke(cause.message ?: cause.toString())
+                cause.message ?: cause.toString()
             }
+            onError?.invoke(failureMsg)
+            // T-FirstExecResultInvisible F1：准备链在此终结（未到消费点）——门持有链复位 +
+            // 排队执行意图回落错误回调
+            abortPrepareGate(ownsPrepareGate, failureMsg, LOG)
         }
+    }
+
+    /**
+     * T-FirstExecResultInvisible F1：准备链在到达消费点（[prepareAfterEditorResolved] 的排队
+     * 意图消费）之前终结时的兜底——门持有链复位单飞位 + 已排队执行意图回落意图自身 onError
+     * （意图所属面板在 executeSql 里已 showLoading 并拿到 callback(true)，静默丢弃会让状态条
+     * 恒「执行中」）。PASS_THROUGH 预览链不得调用（不持有门、也无属于它的排队意图）。
+     */
+    private fun abortPrepareGate(ownsGate: Boolean, failureMessage: String?, LOG: com.intellij.openapi.diagnostic.Logger) {
+        if (!ownsGate) return
+        prepareGate.consumePendingExecute()?.let { queued ->
+            LOG.warn("[M36][T-FirstExec F1] prepare chain aborted with queued execute intent - surface failure to intent onError")
+            queued.onError?.invoke(failureMessage ?: MpSqlVisualizerBundle.message("execute.tempFile.failed", "prepare aborted"))
+        }
+        prepareGate.finishPrepare()
     }
 
     /**
@@ -1710,8 +1781,13 @@ object DataSourceSelector {
         editor: com.intellij.openapi.editor.Editor,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
         wholeScriptExec: Boolean = false,
+        ownsPrepareGate: Boolean = false,
     ) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+        // T-FirstExecResultInvisible F1：排队执行意图在本链完成准备时消费（下方缓存落地后）。
+        // 意图消费后、执行落地前撞上失败 → onFailure 兜底回落意图 onError（面板已 showLoading）。
+        var queuedIntent: QueuedExecuteIntent? = null
+        var queuedExecuted = false
         runCatching {
             val consoleClass = Class.forName(CONSOLE_CLASS)
 
@@ -1753,7 +1829,12 @@ object DataSourceSelector {
                 Class.forName("com.intellij.database.settings.DatabaseSettings")
                     .getMethod("getDefaultExecOption").invoke(null)
             }.getOrNull() ?: execOptionClass.getDeclaredConstructor().newInstance()
-            if (scriptModel == null) return
+            if (scriptModel == null) {
+                // T-FirstExecResultInvisible F1：链就此静默终结（历史形态，未到排队消费点）——
+                // 门持有链复位，否则后续执行被永久排队
+                if (ownsPrepareGate) prepareGate.finishPrepare()
+                return
+            }
 
             // M36.5.24：▶ 灰/无绿色边框根因修复——statementsRange=(0,0)（探针实证）。
             // 根因链（javap 实证）：DBN 原生 ▶ isEnabled 依赖
@@ -1819,6 +1900,18 @@ object DataSourceSelector {
             preparedScriptModel = effectiveScriptModel
             preparedExecOption = execOption
 
+            // T-FirstExecResultInvisible F1：排队执行意图消费点——准备完成即取走（一次性）。
+            // executeNow = 本链显式执行（selectAndExecute 全链）或排队意图就位；后者按
+            // executePrepared 口径执行（见下方消费块）。仅门持有链可消费——PASS_THROUGH
+            // 预览链消费会把别人的执行意图打在自己的 SQL 上。
+            if (ownsPrepareGate) {
+                queuedIntent = prepareGate.consumePendingExecute()
+                if (queuedIntent != null) {
+                    LOG.info("[M36][T-FirstExec F1] queued execute intent consumed after prepare (executeAfterPrepare=$executeAfterPrepare)")
+                }
+            }
+            val executeNow = executeAfterPrepare || queuedIntent != null
+
             // 4. 拼合原生控制台 UI：顶部块（工具栏+编辑器）/ 结果区——默认展示只嵌顶部块（M36.5.2）
             val logView = runCatching {
                 consoleClass.getMethod("getView").invoke(console)
@@ -1858,7 +1951,17 @@ object DataSourceSelector {
                     }
             }
             LOG.info("[M36] resultComponent=$resultComponent, editorComponent=$editorComponentRaw")
-            if (editorComponentRaw == null) return
+            if (editorComponentRaw == null) {
+                // T-FirstExecResultInvisible F1：此处已过排队意图消费点——链就此静默终结（历史
+                // 形态）时意图若未执行须回落 onError（面板已 showLoading），并复位单飞位
+                val qi = queuedIntent
+                if (qi != null && !queuedExecuted) {
+                    LOG.warn("[M36][T-FirstExec F1] editor component unavailable, queued execute intent surfaced as error")
+                    qi.onError?.invoke(consoleEditorUnavailableMessage("editorComponent"))
+                }
+                if (ownsPrepareGate) prepareGate.finishPrepare()
+                return
+            }
 
             // 4.3.1 M36.5.4：编辑器块补 DataProvider——原生头部工具栏动作（▶执行等）经
             // JdbcConsole.findConsole(event) 解析控制台，仅两条路：PlatformCoreDataKeys.FILE_EDITOR
@@ -2057,27 +2160,39 @@ object DataSourceSelector {
             // M36.5.55：预览（尚未执行）时把结果区（bottom）折叠——divider 压到接近底部，
             // bottom（DBN Output/Tx 结果区占位）收起不显示，满足"未执行不显示结果面板"。
             // 执行时 realignSplitDivider 展开 60%。用 invokeLater 等组件布局后再设 divider。
-            if (!executeAfterPrepare) {
+            // T-FirstExecResultInvisible F3：折叠归口 embedMode——仅 PREVIEW 且结果区无内容才折叠
+            //（本链要执行（executeNow）恒不折叠；有内容不吞用户可见的结果）。
+            if (!executeNow) {
                 (component as? javax.swing.JSplitPane)?.let { sp ->
-                    // write-safe: UI-only（纯 Swing/只读，无文档写）
-                    ApplicationManager.getApplication().invokeLater({
-                        sp.setDividerLocation(1.0)
-                        sp.revalidate()
-                        sp.repaint()
-                    }, com.intellij.openapi.application.ModalityState.any())
+                    val collapse = ConsoleEmbedMode.PREVIEW.shouldCollapseDivider(resultAreaHasContent(ui))
+                    if (collapse) {
+                        // write-safe: UI-only（纯 Swing/只读，无文档写）
+                        ApplicationManager.getApplication().invokeLater({
+                            sp.setDividerLocation(1.0)
+                            sp.revalidate()
+                            sp.repaint()
+                        }, com.intellij.openapi.application.ModalityState.any())
+                    }
                 }
             }
 
             // 5. 可选立即执行（selectAndExecute 全链语义；结果区已随完整 UI 内嵌，onResultsReady=null）
-            if (executeAfterPrepare) {
+            // T-FirstExecResultInvisible F1：排队执行意图消费——按 executePrepared 口径调
+            // executeOnConsole（onResultsReady 齐：提交后完整 UI 换入 + 面板 EXECUTE 内嵌展开）；
+            // onError/onErrorRich/wholeScriptExec 用意图自身回调（面板 showLoading 的解除与错误
+            // 投递归意图，不借预览链的静默 onError——否则排队执行失败即静默卡死）。
+            if (executeNow) {
+                queuedIntent?.let { qi -> qi.onEditor?.invoke(editor) }
                 // 2026-09-23 真机走查补：此处原**漏传** onErrorRich（默认 null）⇒ 这条路径上的错误
                 // 投递收口只能回退旧通道，定位按钮永不出现。本函数签名里一直有该参数，只是没往下传
                 // ——「实现有、接线漏」的又一例（同族见 ErrorPositionWiringGuardTest 的转发断言）。
                 executeOnConsole(
                     project, console, editor, effectiveScriptModel, execOption, ui,
-                    onResultsReady = null, onError = onError, onErrorRich = onErrorRich,
-                    wholeScriptExec = wholeScriptExec,
+                    onResultsReady = queuedIntent?.onConsole,
+                    onError = queuedIntent?.onError ?: onError, onErrorRich = queuedIntent?.onErrorRich ?: onErrorRich,
+                    wholeScriptExec = queuedIntent?.wholeScriptExec ?: wholeScriptExec,
                 )
+                if (queuedIntent != null) queuedExecuted = true
             }
         }.onFailure { e ->
             LOG.warn("[M36] prepareInConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
@@ -2086,17 +2201,29 @@ object DataSourceSelector {
             // T-PreviewExecDs-03 F3：console 已被 getActiveConsoles 清扫（Disposer.register 撞
             // 已 dispose 父节点抛 IncorrectOperationException）→ 清单例缓存（否则下轮执行复用
             // dead 缓存继续失败）+ 可读文案，不再透平台异常长串。
-            if (cause is com.intellij.util.IncorrectOperationException &&
+            val failureMsg: String = if (cause is com.intellij.util.IncorrectOperationException &&
                 cause.message?.contains("already been disposed") == true
             ) {
                 LOG.warn("[M36] console disposed during prepare (swept by getActiveConsoles), clear caches for retry: ${cause.message?.take(120)}")
                 clearPrepared()
                 dropSharedConsole()
-                onError?.invoke(MpSqlVisualizerBundle.message("execute.console.disposed"))
+                MpSqlVisualizerBundle.message("execute.console.disposed")
             } else {
-                onError?.invoke(cause.message ?: cause.toString())
+                cause.message ?: cause.toString()
+            }
+            onError?.invoke(failureMsg)
+            // T-FirstExecResultInvisible F1：排队意图已消费但执行未落地即失败 → 回落意图自身
+            // onError（面板已 showLoading，静默丢失会让状态条恒「执行中」）
+            val qi = queuedIntent
+            if (qi != null && !queuedExecuted) {
+                LOG.warn("[M36][T-FirstExec F1] queued execute intent dropped by prepare failure, surface to intent onError")
+                qi.onError?.invoke(failureMsg)
             }
         }
+
+        // T-FirstExecResultInvisible F1：单飞位复位（成功/失败同尽；排队意图的消费与回落都在
+        // 上方完成）——仅门持有链；PASS_THROUGH 预览链不得触碰别人的门。
+        if (ownsPrepareGate) prepareGate.finishPrepare()
     }
 
     /**
@@ -3198,6 +3325,24 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
             ui.javaClass.getMethod("getContents").invoke(ui) as? Array<com.intellij.ui.content.Content>
         }.getOrNull() ?: return emptyList()
         return all.filter { !isOutputContent(it) }
+    }
+
+    /**
+     * T-FirstExecResultInvisible F3：RunnerLayoutUi 结果区是否有真实内容（排除 Output 输出页）。
+     * 反射失败降级为「无内容」（与 [resultContents] 同口径）——降级只影响折叠判定（PREVIEW
+     * 多折一次），不触碰执行链。
+     */
+    internal fun resultAreaHasContent(ui: Any?): Boolean =
+        runCatching { resultContents(ui).isNotEmpty() }.getOrDefault(false)
+
+    /**
+     * T-FirstExecResultInvisible F3：面板侧 [ConsoleEmbedMode.shouldCollapseDivider] 折叠判定用的
+     * 结果区内容探测——共享/已备 RunnerLayoutUi 二者取一（面板不持有 ui 引用，归口本选择器探测，
+     * 与 DS 侧两处折叠点用同一判据，避免两侧判定漂移）。
+     */
+    internal fun currentResultAreaHasContent(): Boolean {
+        val ui = sharedUi ?: preparedUi ?: return false
+        return resultAreaHasContent(ui)
     }
 
     private fun isOutputContent(c: com.intellij.ui.content.Content): Boolean =

@@ -24,6 +24,7 @@ import org.junit.Assert.assertTrue
  *  - T-02 COUNT 包裹预览（缺口 B，D1=A 第二条目 + D2=A 基础形态）：`SELECT COUNT(*) FROM (原SQL) TOTAL`
  *    （MP 3.5.17 SqlParserUtils.getOriginalCountSql 逐字节形态，反编译实证）；
  *  - D3=A：Page.searchCount=false（`new Page<>(1,10,false)`）跳过 COUNT 产出；
+ *  - T-CountSimToggle（D129）：COUNT 子开关关 → LIMIT 在而 COUNT 无；父开关关子开关开 → 全无（父优先）；
  *  - 边界：count/exists 消费不产 COUNT（复用 T-M29-02/03 口径）、last("LIMIT n") 与分页并存以分页为准
  *    （单 LIMIT）、XML 手写 LIMIT 不重复追加（V13c 保守口径）、方言矩阵 LIMIT 形态。
  */
@@ -55,6 +56,7 @@ class PaginationSimTest : BasePlatformTestCase() {
         // 5 例方言/引用 ComparisonFailure 随装箱顺序间歇爆发）。
         PluginSettings.getInstance().state.dialect = PluginSettings.DEFAULT_DIALECT
         PluginSettings.getInstance().state.paginationSimEnabled = true
+        PluginSettings.getInstance().state.paginationCountEnabled = true
         super.tearDown()
     }
 
@@ -261,6 +263,11 @@ class PaginationSimTest : BasePlatformTestCase() {
         assertTrue(
             "mapper 方法带 Page 形参 → 语句预览应追加分页 LIMIT：${result.sql}",
             result.sql.contains("LIMIT ?, ?"),
+        )
+        assertEquals(
+            "LIMIT 行存入 paginationLimitLine（面板模型级重渲染回带用，20261008 验收缺陷 #1）",
+            "LIMIT ?, ?",
+            result.paginationLimitLine,
         )
         assertEquals(
             "LIMIT 占位参数登记（offset 公式 + size）",
@@ -540,6 +547,85 @@ class PaginationSimTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
+    // T-CountSimToggle（D129）：COUNT 子开关与 LIMIT 解耦
+    // ------------------------------------------------------------------
+
+    fun testCountSubSwitchOffKeepsLimitDropsCountOnWrapperChain() {
+        // 子开关关（父开）：Wrapper 链 LIMIT 照旧追加、COUNT 包裹不再产出
+        PluginSettings.getInstance().state.paginationCountEnabled = false
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1001L);
+                    service.page(new Page<>(2, 10), w);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull(result)
+        assertTrue("子开关关 LIMIT 仍追加：${result!!.compactSql}", result.compactSql.endsWith("LIMIT 10, 10"))
+        assertNull("子开关关不产 COUNT 包裹", result.countSql)
+    }
+
+    fun testCountSubSwitchOffKeepsLimitDropsCountOnSharedPath() {
+        // 子开关关（父开）：applyPaginationShared（XML/注解共享）LIMIT 行照旧、countSql=null
+        PluginSettings.getInstance().state.paginationCountEnabled = false
+        configureXmlMapperWithPageParam()
+        val result = XmlPreviewService.preview(USER_MAPPER_XML, "selectPageUsers", project)
+        assertTrue(
+            "子开关关 LIMIT 行仍追加：${result.sql}",
+            result.sql.contains("LIMIT ?, ?"),
+        )
+        assertEquals(
+            "LIMIT 行存入 paginationLimitLine（面板模型级重渲染回带不受子开关影响）",
+            "LIMIT ?, ?",
+            result.paginationLimitLine,
+        )
+        assertNull("子开关关不产 COUNT 包裹", result.countSql)
+    }
+
+    fun testParentSwitchOffOverridesCountSubSwitchOn() {
+        // 父关子开：父开关优先，LIMIT 与 COUNT 全无（子开关不「复活」任何产出）
+        PluginSettings.getInstance().state.paginationSimEnabled = false
+        PluginSettings.getInstance().state.paginationCountEnabled = true
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
+            public class Demo {
+                public void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1001L);
+                    service.page(new Page<>(2, 10), w);
+                }
+
+                static class DeviceInfoEntity { private Long id; }
+            }
+            """.trimIndent(),
+        )
+        val wrapperResult = newService().preview(anchor())
+        assertNotNull(wrapperResult)
+        assertNull("父开关优先：Wrapper 链不产 COUNT", wrapperResult!!.countSql)
+
+        configureXmlMapperWithPageParam()
+        val xmlResult = XmlPreviewService.preview(USER_MAPPER_XML, "selectPageUsers", project)
+        assertTrue(
+            "父开关优先：XML 路径不追加 LIMIT：${xmlResult.sql}",
+            !xmlResult.sql.contains("LIMIT"),
+        )
+        assertNull("父开关优先：XML 路径不产 COUNT", xmlResult.countSql)
+    }
+
+    // ------------------------------------------------------------------
     // 边界（验收 §三.2）与方言矩阵（验收 §三.4）
     // ------------------------------------------------------------------
 
@@ -600,5 +686,23 @@ class PaginationSimTest : BasePlatformTestCase() {
             val result = newService().preview(anchor())
             assertEquals("$dialectName LIMIT 形态", expected, result!!.compactSql)
         }
+    }
+
+    fun test面板重渲染回带_LIMIT行拼接与手写LIMIT守卫() {
+        val base = "SELECT id, name FROM t_user WHERE name = ?"
+
+        // 回带：模型级 SQL + 服务端存下的 LIMIT 行 → 尾部拼接
+        assertEquals(
+            "无手写 LIMIT 时应回带服务端 LIMIT 行",
+            base + "\nLIMIT ?, ?",
+            appendPaginationLimitLine(base, "LIMIT ?, ?"),
+        )
+
+        // 守卫 A：baseSql 已含 LIMIT（手写语句）不重复追加（V13c 保守口径）
+        val withLimit = base + " LIMIT 0, 20"
+        assertEquals("已含手写 LIMIT 不重复追加", withLimit, appendPaginationLimitLine(withLimit, "LIMIT ?, ?"))
+
+        // 守卫 B：无分页（limitLine=null）原样返回
+        assertEquals("无分页原样返回", base, appendPaginationLimitLine(base, null))
     }
 }

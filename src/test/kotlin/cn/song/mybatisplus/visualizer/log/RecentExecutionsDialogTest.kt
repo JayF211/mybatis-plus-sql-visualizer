@@ -15,6 +15,9 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.StringSelection
+import java.awt.event.ActionEvent
+import javax.swing.KeyStroke
 
 /**
  * 「最近执行记录」浏览对话框测试（T-RecentExecDialog O-118 / T-RecentExecMenu O-119）：
@@ -372,4 +375,172 @@ class RecentExecutionsDialogTest : BasePlatformTestCase() {
             dialog.doDispose()
         }
     }
+
+    // ---------- T-SqlCopyShortcuts：键盘复制接线 ----------
+
+    /** 编辑器（右侧只读高亮）无选中按 Ctrl+C 应复制整条显示 SQL——此前该处无任何键盘复制绑定。 */
+    fun test编辑器CtrlC无选中复制整条显示SQL() {
+        val dialog = newDialog(listOf(entry(multiClauseSql)))
+        try {
+            val editor = dialog.editorForTest()
+            assertNotNull("编辑器应在场", editor)
+            val comp = editor!!.component
+            CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
+            val actionKey = comp.inputMap.get(KeyStroke.getKeyStroke("control C"))
+            assertNotEquals("应覆盖 JTextComponent 默认 copy 绑定（共享件接线）", "copy", actionKey)
+            comp.actionMap.get(actionKey)
+                .actionPerformed(ActionEvent(comp, ActionEvent.ACTION_PERFORMED, actionKey.toString()))
+            val clip: String? = CopyPasteManager.getInstance().getContents(DataFlavor.stringFlavor)
+            assertEquals("Ctrl+C 应复制整条显示 SQL", dialog.editorTextForTest(), clip)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    /** 列表 Ctrl+C 应得纯 SQL——此前 itemToText 未覆写，复制出的是渲染文本。
+     *  T-RecentMulti：本列表已支持多选，多选批量＝逐行拼接（与日志页同语义）。 */
+    fun test列表CtrlC多选批量复制纯SQL() {
+        val dialog = newDialog(listOf(entry("SELECT 1"), entry("SELECT 2")))
+        try {
+            val list = dialog.entryListForTest()
+            dialog.selectIndicesForTest(intArrayOf(0, 1))
+            CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
+            val actionKey = list.inputMap.get(KeyStroke.getKeyStroke("control C"))
+            assertNotNull("列表 Ctrl+C 绑定应由平台 LAF 提供", actionKey)
+            list.actionMap.get(actionKey)
+                .actionPerformed(ActionEvent(list, ActionEvent.ACTION_PERFORMED, actionKey.toString()))
+            val clip: String? = CopyPasteManager.getInstance().getContents(DataFlavor.stringFlavor)
+            assertEquals("多选 Ctrl+C 应逐行拼接纯 SQL（带结尾分号）", "SELECT 1;\nSELECT 2;", clip)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+
+    /** T-RecentMulti：多选时编辑器按行序拼接显示（与 Ctrl+C 产物同源），状态行显示已选条数。 */
+    fun test多选_编辑器拼接显示_状态行已选条数() {
+        val dialog = newDialog(listOf(entry("SELECT id FROM tab_a"), entry("SELECT name FROM tab_b")))
+        try {
+            dialog.selectIndicesForTest(intArrayOf(0, 1))
+            val text = dialog.editorTextForTest()
+            assertTrue("多选拼接应含换行", text.contains("\n"))
+            assertTrue("应包含第一条内容", text.contains("tab_a"))
+            assertTrue("应包含第二条内容", text.contains("tab_b"))
+            assertEquals(
+                "状态行应显示已选条数",
+                MpSqlVisualizerBundle.message("log.recent.dialog.selected", "2"),
+                dialog.statusTextForTest(),
+            )
+            // 收敛回单选 → 状态行回落到计数文案
+            dialog.selectIndexForTest(0)
+            assertEquals(
+                MpSqlVisualizerBundle.message("log.recent.dialog.count", "2"),
+                dialog.statusTextForTest(),
+            )
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+
+    /** T-RecentMulti：多选下「打开预览」取 lead（最后交互行），而非最小索引的第一条。 */
+    fun test多选_打开预览取lead选中行() {
+        val entries = listOf(entry("SELECT 1"), entry("SELECT 2"))
+        val opened = mutableListOf<LogSqlEntry>()
+        val dialog = newDialog(entries, onOpen = { opened.add(it) })
+        try {
+            dialog.selectIndicesForTest(intArrayOf(0, 1))
+            assertEquals("前提：多选模式确实生效（单选模式下本用例无判别力）",
+                2, dialog.entryListForTest().selectedIndices.size)
+            dialog.triggerOpenPreviewForTest()
+            assertEquals("多选下应打开 lead（末行）那条，而非最小索引的第一条",
+                listOf(entries[1]), opened)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    /** T-RecentMulti：多选下「复制时间戳」走批量语义（文案带条数，与日志页同源 copyMenuText）。 */
+    fun test多选_复制时间戳菜单带条数() {
+        val dialog = newDialog(listOf(entry(multiClauseSql), entry(multiClauseSql)))
+        try {
+            dialog.selectIndicesForTest(intArrayOf(0, 1))
+            val copyTimestamp = dialog.menuActionsForSelectionForTest().first()
+            val event = drive(copyTimestamp)
+            assertEquals(
+                "多选下复制时间戳文案应带条数",
+                MpSqlVisualizerBundle.message("log.panel.copyTimestampSelected", "2"),
+                event.presentation.text,
+            )
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+
+    // ---------- T-RecentEditable：可编辑 / 折叠（与单击预览浮窗同源口径）的测试夹具 ----------
+
+    private fun withAutoFold(enabled: Boolean, block: () -> Unit) {
+        val state = PluginSettings.getInstance().state
+        val oldEnabled = state.autoFoldEnabled
+        val oldThreshold = state.autoFoldFieldThreshold
+        try {
+            state.autoFoldEnabled = enabled
+            state.autoFoldFieldThreshold = 3
+            block()
+        } finally {
+            state.autoFoldEnabled = oldEnabled
+            state.autoFoldFieldThreshold = oldThreshold
+        }
+    }
+
+    private fun ownFoldRegions(editor: com.intellij.openapi.editor.Editor) =
+        editor.foldingModel.allFoldRegions.filter { it.placeholderText.startsWith("…") }
+
+
+    /** T-RecentEditable（用户令）：右侧编辑器可编辑——与「SQL 日志单击列表弹出的预览浮窗」同效果。 */
+    fun test编辑器可编辑_非viewer态() {
+        val dialog = newDialog(listOf(entry(multiClauseSql)))
+        try {
+            val editor = dialog.editorForTest()
+            assertNotNull("编辑器应在场", editor)
+            assertFalse("编辑器应为可编辑态（原 setViewer(true) 已按用户令去掉）", editor!!.isViewer)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    /** T-RecentEditable：临时改字段值后复制取**改后文本**（与预览浮窗「编辑后复制」同契约）。 */
+    fun test编辑器编辑后复制取改后文本() {
+        val dialog = newDialog(listOf(entry("SELECT price FROM t")))
+        try {
+            val editor = dialog.editorForTest()!!
+            com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+                editor.document.setText("SELECT edited_price FROM t;")
+            }
+            CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
+            dialog.triggerCopyForTest()
+            val clip: String? = CopyPasteManager.getInstance().getContents(DataFlavor.stringFlavor)
+            assertEquals("复制应取编辑后文本（含改动）", "SELECT edited_price FROM t;", clip)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    /** T-RecentEditable：程序性折叠跟随设置（与预览浮窗 [SqlClickPreview] 同源 SqlAutoFolding）。 */
+    fun test开启自动折叠后编辑器出现收起区域() {
+        withAutoFold(enabled = true) {
+            val dialog = newDialog(listOf(entry("SELECT a1,\n    a2,\n    a3,\n    a4\nFROM t")))
+            try {
+                val editor = dialog.editorForTest()
+                assertNotNull("编辑器应在场", editor)
+                val regions = ownFoldRegions(editor!!)
+                assertEquals("开启态应有一个折叠区域", 1, regions.size)
+                assertFalse("区域应收起", regions[0].isExpanded)
+            } finally {
+                dialog.doDispose()
+            }
+        }
+    }
+
 }

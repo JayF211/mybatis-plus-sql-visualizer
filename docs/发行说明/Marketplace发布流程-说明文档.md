@@ -51,7 +51,7 @@ flowchart LR
 |---|---|---|---|
 | `<id>` | `cn.song.mybatisplus.visualizer.mybatis-plus-sql-visualizer` | 唯一 FQN，发布后不可改 | ✅ |
 | `<name>` | SQL Visualizer | 建议 ≤20 字符、不含 "Plugin"/"Support" 等后缀词、无版本号 | ✅（14 字符，符合 ≤20 建议；2026-08-28 起由旧名更名，插件 ID 不变） |
-| `<description>` | 英文开头 ≥40 字符 + 中文段落 | Marketplace 预览卡取描述**前 40 字符（须英文摘要）** | ✅（英文在前） |
+| `<description>` | 顶部英文摘要行（首 40 字符为完整短句）+ 中文正文在上、英文正文在下（T-PluginDescReshape，2026-10-08） | Marketplace 预览卡取描述**前 40 字符（须英文摘要）**；中英两段间**不得用 `<hr/>`/HTML 注释**（会被剥离，见 8.1） | ✅（守卫 `PluginXmlStructureGuardTest` 四条规则钉住） |
 | `<vendor url>` | https://gitee.com/SongRenShuo | 公网可达 | ✅ |
 | `<idea-version since-build>` | 243 | 兼容列表由此推导 | ✅ |
 | 图标 | `META-INF/pluginIcon.svg` | 图标须在插件包内；不要用默认模板/占位 logo | ⚠️ 见 2.2 待办 |
@@ -241,6 +241,27 @@ intellijPlatform {
 - **图标**：自动取自插件包内图标；页面图标可单独上传更高质量的；
 - **截图**：推荐 1200×760，展示预览弹窗、动态条件面板、日志工具窗口实际效果（禁止默认主题截图、误导性图片）；
 - **Additional Information**：可加 Gitee 仓库链接、官网需求池（https://sql-visualizer.jvtools.cn/about/feedback）等，**外链必须公网可达**。
+
+### 8.1 描述（description）的同步通道与时序（T-PluginDescReshape 实测登记）
+
+**页面描述与包内描述是两份数据，别搞反时序**：
+
+- 默认取包内 `plugin.xml <description>`；在插件页编辑过描述后，平台会把它**单独保存**，并让你二选一：
+  「**始终使用页面描述**」或「**页面描述用到下次上传为止**」。只有前者会让包内描述永久失效——本仓要的是后者（页面临时、包内权威），选错会让下次发版的新描述上不去。
+- 实测口径（2026-10-08，插件 33633）：最新已上架版本 `2026.10.7`，其页面描述与 10.7 包内描述**逐字同源**（`preserveUIEdits=false`）⇒ 现状是「随上传生效」模式；**只改 `plugin.xml` 不会立刻改线上页面**，要等下一次版本上传。
+- 因此流程上：描述改动与版本号变更一起走 Step ⑤ 上传；若要在不发行版本的前提下修线上文案，才走页面编辑通道，并在选择模式时挑「用到下次上传为止」。
+
+**平台会剥离的内容（本地写了也不显示）**：
+
+| 写法 | 平台行为 | 依据 |
+|---|---|---|
+| `<hr/>` | 剥离（中英两段直接粘连） | tag `2026.10.7` 本地描述含 hr、Marketplace API 返回的同版本描述 `hr` 出现 0 次 |
+| HTML 注释 `<!-- -->` | 剥离 | 同上一行实测（描述里的注释在 API 返回文本中不存在） |
+| 外链图片 `<img>` | 302 防盗链导致图全挂（官方也建议截图走 Media 区） | `pitfalls/pitfall-gitee-hotlink-302.md` + 既有守卫 |
+
+保留并在售实测可见的标签：`p` / `b` / `h3` / `ul` / `li` / `code` / `a`（`&middot;`、`&mdash;` 这类实体按 HTML 正常渲染）。
+
+**结构约定**（守卫 `PluginXmlStructureGuardTest` 四条规则钉住，改描述前先看它们）：首 40 字符英文短句、中文节 `<h3>中文</h3>` 在英文节 `<h3>English</h3>` 之上、两侧 `<li>` 条数相等、描述里的数字与行为声明（方言数 / MCP 工具数 / 默认键位 / since-build 版本标签）与代码对账。
 
 ---
 

@@ -83,7 +83,7 @@ public class StatementWeaverFramePatchVerifyTest {
         assertWovenDefinable("org.h2.jdbc.JdbcConnection", PREPARE_FACE);
     }
 
-    /** 帧槽位对齐直证：织入后每个帧点的 locals 槽数 == tokenSlot + 2，且末元素为 LONG。 */
+    /** 帧槽位对齐直证：织入后每个帧点的 locals 槽数 == token(2)+this(1)+sql(1) 相对原 maxLocals 对齐。 */
     @Test
     public void 帧locals槽位与token槽对齐() {
         final byte[] original = synthTrailingSlotClass("cn/song/mybatisplus/sqlvis/agent/it/AlignProbe");
@@ -94,9 +94,10 @@ public class StatementWeaverFramePatchVerifyTest {
     // ---------- 断言与工具 ----------
 
     /**
-     * 帧 locals 槽位对齐断言（与头插 {@code LSTORE tokenSlot} 的写入位置逐槽对齐）：
-     * tokenSlot = 原 maxLocals（夹具=4，帧原列 2 项）→ 补 TOP 至 4 槽后追加 LONG，
-     * 故末元素 LONG 的起始槽位必须是 4，总槽数 6（long 占 2）。
+     * 帧 locals 槽位对齐断言（与入口写入的捕获槽逐槽对齐）。T-DmWeave 后 EXEC_PARAM 槽布局：
+     * tokenSlot = 原 maxLocals（夹具=4）→ LONG 占 4-5；thisSlot=6（本类类型）；sqlSlot=7（String）。
+     * 帧原列 2 项 → 补 TOP 至 4 槽后依次追加 LONG / 本类类型 / String，故总槽数 8、末元素 String、
+     * 次末元素为本类 internal name、LONG 恰一次且起于槽 4。
      */
     private static void assertFrameTokenSlotAligned(byte[] woven, String methodName, String desc) {
         final ClassNode node = new ClassNode();
@@ -114,9 +115,24 @@ public class StatementWeaverFramePatchVerifyTest {
                 }
                 final List<Object> local = ((FrameNode) insn).local;
                 assertNotNull("帧应带 locals 信息（本夹具为 F_FULL 形态）", local);
-                final int[] slots = countSlots(local);
-                assertEquals("帧 locals 槽数应为 token 槽位 + long 占位（4 + 2）", 6, slots[0]);
-                assertEquals("末元素必须是被补入的 LONG", Opcodes.LONG, local.get(local.size() - 1));
+                assertEquals("帧 locals 槽数应为 token4+LONG2+this1+sql1 = 8",
+                        8, countSlots(local)[0]);
+                assertEquals("末元素应为入口捕获的 sql（String）",
+                        "java/lang/String", local.get(local.size() - 1));
+                assertEquals("次末元素应为入口捕获的 this（本类类型）",
+                        node.name, local.get(local.size() - 2));
+                int slotIdx = 0;
+                int longAt = -1;
+                int longCount = 0;
+                for (Object entry : local) {
+                    if (entry == Opcodes.LONG) {
+                        longAt = slotIdx;
+                        longCount++;
+                    }
+                    slotIdx += (entry == Opcodes.LONG || entry == Opcodes.DOUBLE) ? 2 : 1;
+                }
+                assertEquals("LONG（token）应恰出现一次", 1, longCount);
+                assertEquals("LONG 起始槽位应为原 maxLocals（夹具=4）", 4, longAt);
                 sawFrame = true;
             }
         }

@@ -73,18 +73,43 @@ class LogToSqlPanel(
     private val inputPlaceholder: String = MpSqlVisualizerBundle.message("log.panel.hint.input")
     private val resultPlaceholder: String = MpSqlVisualizerBundle.message("log.panel.hint.result")
 
+    // T-LogToSqlHint（20261010 用户优化点）：两区下方恒显灰字提示（对齐 SqlToJavaPanel 形态——
+    // 编辑器原生 placeholder 仅聚焦时可见，未聚焦空态观感为「无提示」）
+    private val inputHintLabel = JBLabel(MpSqlVisualizerBundle.message("log.panel.hint.input")).apply {
+        foreground = com.intellij.util.ui.UIUtil.getInactiveTextColor()
+        border = com.intellij.util.ui.JBUI.Borders.empty(2, 6, 2, 6)
+    }
+
+    private val resultHintLabel = JBLabel(MpSqlVisualizerBundle.message("log.panel.hint.result")).apply {
+        foreground = com.intellij.util.ui.UIUtil.getInactiveTextColor()
+        border = com.intellij.util.ui.JBUI.Borders.empty(2, 6, 2, 6)
+    }
+
     /** 输出格式切换态：true=多行格式化（默认，用户确认）；false=日志原样压缩。 */
     private var formatToggled = true
 
     init {
-        // 上：日志输入区（工具栏 + 编辑器——空文档由编辑器原生 placeholder 显示引导文案）
+        // 上：日志输入区（工具栏 + 灰字提示 + 编辑器——位置对齐 SqlToJavaPanel：
+        // 提示在工具栏下方、编辑器上方，两面板统一）
         val inputPanel = JPanel(BorderLayout())
-        inputPanel.add(buildInputToolbar(), BorderLayout.NORTH)
+        inputPanel.add(
+            JPanel(BorderLayout()).apply {
+                add(buildInputToolbar(), BorderLayout.NORTH)
+                add(inputHintLabel, BorderLayout.SOUTH)
+            },
+            BorderLayout.NORTH,
+        )
         inputPanel.add(inputEditor.component, BorderLayout.CENTER)
 
-        // 下：SQL 结果区（工具栏 + 编辑器）
+        // 下：SQL 结果区（工具栏 + 灰字提示 + 编辑器，同构）
         val resultPanel = JPanel(BorderLayout())
-        resultPanel.add(buildResultToolbar(), BorderLayout.NORTH)
+        resultPanel.add(
+            JPanel(BorderLayout()).apply {
+                add(buildResultToolbar(), BorderLayout.NORTH)
+                add(resultHintLabel, BorderLayout.SOUTH)
+            },
+            BorderLayout.NORTH,
+        )
         resultPanel.add(resultEditor.component, BorderLayout.CENTER)
 
         val splitter = Splitter(true, 0.5f).apply {
@@ -99,6 +124,23 @@ class LogToSqlPanel(
         southHost.add(degradationBanner, BorderLayout.NORTH)
         southHost.add(statusLabel, BorderLayout.SOUTH)
         add(southHost, BorderLayout.SOUTH)
+
+        // 灰字提示随各自内容显隐（空文档显示、有内容隐藏；两区独立监听不互串；
+        // 243 平台 DocumentListener 已 Kotlin 化——Kotlin 接口无 SAM，用 object 表达式）
+        val inputSync = object : com.intellij.openapi.editor.event.DocumentListener {
+            override fun documentChanged(event: com.intellij.openapi.editor.event.DocumentEvent) {
+                inputHintLabel.isVisible = event.document.text.isBlank()
+            }
+        }
+        val resultSync = object : com.intellij.openapi.editor.event.DocumentListener {
+            override fun documentChanged(event: com.intellij.openapi.editor.event.DocumentEvent) {
+                resultHintLabel.isVisible = event.document.text.isBlank()
+            }
+        }
+        inputEditor.document.addDocumentListener(inputSync)
+        resultEditor.document.addDocumentListener(resultSync)
+        inputHintLabel.isVisible = inputEditor.document.text.isBlank()
+        resultHintLabel.isVisible = resultEditor.document.text.isBlank()
     }
 
     // ------------------------------------------------------------------

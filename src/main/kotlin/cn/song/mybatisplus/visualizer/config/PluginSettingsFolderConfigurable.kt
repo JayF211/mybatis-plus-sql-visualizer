@@ -55,6 +55,7 @@ class PluginSettingsFolderConfigurable : Configurable {
 
     override fun createComponent(): JComponent {
         rebuildList("")
+        schedulePendingFocus()
 
         list.cellRenderer = SearchItemRenderer()
         list.selectionMode = ListSelectionModel.SINGLE_SELECTION
@@ -166,6 +167,22 @@ class PluginSettingsFolderConfigurable : Configurable {
      * 按 id 查时 `ConfigurableWrapper.getId()` 对声明了 id 的 EP 直接返回 `myEp.id`（不实例化），
      * 只有目标页会被创建。
      */
+    /**
+     * 消费外部预置的待定位目标（T-SettingsFocusFromLink）：页面构建后双跳 invokeLater——
+     * 确保设置对话框已完成装配、`Settings.KEY` 经 searchField DataContext 可达（P1 前提）。
+     * 未置目标 → 零成本（双跳前先查，避免无谓调度）；消费即清（防重复定位）。
+     */
+    private fun schedulePendingFocus() {
+        if (pendingFocus == null) return
+        javax.swing.SwingUtilities.invokeLater {
+            javax.swing.SwingUtilities.invokeLater {
+                val pending = consumePendingFocus() ?: return@invokeLater
+                SUB_PAGES.firstOrNull { it.ref.id == pending.pageId }
+                    ?.let { navigateToPage(it.ref, pending.hint) }
+            }
+        }
+    }
+
     private fun navigateToPage(ref: SubPageRef, focusHint: String? = null) {
         val settings = currentSettings() ?: run {
             // 未在已打开的设置对话框内，回退为打开设置对话框（平台只有按类定位的公开重载）
@@ -453,6 +470,39 @@ class PluginSettingsFolderConfigurable : Configurable {
         private const val ID_PREVIEW = "cn.song.mybatisplus.visualizer.settings.preview"
         private const val ID_TABLE_MAPPING = "cn.song.mybatisplus.visualizer.settings.tableMapping"
         private const val ID_SQL_LOG = "cn.song.mybatisplus.visualizer.settings.sqlLog"
+
+        /**
+         * 外部（面板空态/引导链接，T-SettingsFocusFromLink）预置的待定位目标。
+         *
+         * 链接从**对话框外**发起——拿不到本 Configurable 实例（`navigateToPage` 需要 Settings/实例），
+         * 故单槽预置、本页 `createComponent` 后消费一次。后到覆盖（点击是显式用户动作，无需排队）。
+         */
+        @Volatile
+        private var pendingFocus: PendingFocus? = null
+
+        /** 待定位目标（页 id + hint；hint=null 只切页不聚焦行）。 */
+        internal data class PendingFocus(val pageId: String, val hint: String?)
+
+        /**
+         * 打开插件主设置页并定位到 SQL 日志页（hint=null 只切页）。
+         * 面板引导链接统一入口——定位高亮复用既有 `navigateToPage → focusTarget`（滚动+黄闪+橙框）。
+         */
+        fun openSqlLogSettingsFocused(project: com.intellij.openapi.project.Project, hint: String?) {
+            pendingFocus = PendingFocus(ID_SQL_LOG, hint)
+            ShowSettingsUtil.getInstance()
+                .showSettingsDialog(project, PluginSettingsFolderConfigurable::class.java)
+        }
+
+        /** 消费待定位目标（取走即清；生产调度与测试缝单源共用，防两处漂移）。 */
+        internal fun consumePendingFocus(): PendingFocus? {
+            val p = pendingFocus
+            pendingFocus = null
+            return p
+        }
+
+        internal fun requestFocusOnOpenForTest(pageId: String, hint: String?) {
+            pendingFocus = PendingFocus(pageId, hint)
+        }
         private const val ID_SHORTCUTS = "cn.song.mybatisplus.visualizer.settings.shortcuts"
         private const val ID_MCP = "cn.song.mybatisplus.visualizer.settings.mcp"
         private const val ID_ABOUT = "cn.song.mybatisplus.visualizer.settings.about"

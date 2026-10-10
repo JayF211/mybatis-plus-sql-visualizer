@@ -348,6 +348,19 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var showDurationInLogList: Boolean = true,
 
+        /**
+         * 数据源角标显示完整上下文（T-DataSourceBadgeMode O-133，**默认关**＝仅显示数据库类型）。
+         * false 时日志/历史两页的目标库角标只取「方言显示名」段（如 `[MySQL]`）；true 时显示
+         * 全量「方言 · 连接事实」（如 `[MySQL · jpa_demo@localhost:3306]`）。
+         *
+         * **默认克制的口径**：角标生产链（agent 捕获→落盘→历史读回→MCP 检索）恒写全量串，
+         * 本开关只做**显示侧门控**（唯一消费点 formatDatabaseFragment）——切换即时生效（含已
+         * 读回的历史条目），落盘与检索语义零变化，后开开关不丢任何信息。
+         * 边界：无 ` · ` 分隔符的串（方言解析失败仅存连接事实 / MCP 数据源自定义名）关闭态
+         * 原样保留——辨不出方言时保留最后上下文优于显示空白。
+         */
+        var dataSourceBadgeDetail: Boolean = false,
+
         // ---------- T-CrudColor：SQL 列表 CRUD 类型颜色标记 ----------
         /**
          * CRUD 颜色标记形态：`bar`=左侧色条（默认）/ `background`=整行淡背景（选中态走描边）/
@@ -483,6 +496,14 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          * MP 运行时 Page 默认 searchCount=true 恒执行 COUNT，反编译实证）。
          */
         var paginationSimEnabled: Boolean = true,
+
+        /**
+         * 分页 COUNT 查询预览子开关（T-CountSimToggle，D129）：分页拦截器模拟产出中的 COUNT 包裹
+         * 预览（`SELECT COUNT(*) FROM (原SQL) TOTAL`）独立控制——关=分页模拟只追加 LIMIT，
+         * 不再生成 COUNT 语句。**仅在 [paginationSimEnabled] 开启时生效（父开关优先）**：
+         * 父开关关闭时 LIMIT 与 COUNT 全无，本项不生效。默认 true 保持既有行为（老用户零感知）。
+         */
+        var paginationCountEnabled: Boolean = true,
 
         /**
          * R33：EXPLAIN 结构化渲染开关（面板执行计划按钮的双通道增量，核实报告 V41 定案的

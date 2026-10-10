@@ -83,6 +83,13 @@ data class PreviewResult(
      */
     val countSql: String? = null,
     /**
+     * R12 T-PaginationSim：分页 LIMIT 行（`LIMIT ?, ?` 等方言形态，[cn.song.mybatisplus.visualizer.sql.Dialect.renderLimit]
+     * 渲染产物）。面板勾选/参数变更走模型级重渲染（XmlPreviewModel.renderSql / SqlGenerator）时模型层
+     * SQL 不含分页后处理，面板据此把 LIMIT 行带回主 SQL 尾部——服务端 sql/compactSql 已含该行，此字段
+     * 仅供面板重渲染路径复用。null = 无分页 LIMIT（未分页 / count·exists 消费 / 已含手写 LIMIT / 开关关闭）。
+     */
+    val paginationLimitLine: String? = null,
+    /**
      * T-JpaParamOrder F3：JPA 命名参数占位符名序（HQL `:name` 首现序，与转换后 SQL 中 `?` 一一对应）。
      * 非空时渲染/复制按名回填（同名占位复用同值，JPA 命名参数语义），与 setParameter 书写顺序解耦；
      * 空表 = 维持按序回填（既有语义）。仅当全部 `?` 均来自命名参数替换时才置非空（位置参数混入时

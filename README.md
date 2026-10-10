@@ -2,7 +2,7 @@
 
 > **服务未启，SQL 先知**
 
-MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试利器——IntelliJ IDEA 插件：Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），SQL 日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。支持 IDEA 2024.3 及以上版本，[功能矩阵与在线文档](https://sql-visualizer.jvtools.cn)见官网。
+MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试利器——IntelliJ IDEA 插件：写代码时就看见最终 SQL（Wrapper 链、XML/注解/HQL 动态 SQL，含 MPJ 联表 JOIN）；跑起来后真实参数与耗时自动捕获，慢查询标红、EXPLAIN 看计划、一键跳回源码；SQL 也能反向转成 Java 代码。不启服务、不翻日志、不手拼参数。支持 IDEA 2024.3 及以上版本，[功能矩阵与在线文档](https://sql-visualizer.jvtools.cn)见官网。
 > **别的插件给你文本，我们给你可执行的 SQL。**
 > 支持 IntelliJ IDEA 2024.3~2026.x 全版本（含 2025.1–2025.3）。
 > 四条理由：Wrapper 链静态生成 SQL 预览（无需运行代码，市场上唯一）；JPA/Hibernate 全家桶支持（派生查询 / JPQL / Criteria / HQL / NamedQuery / Specification / QBE）；预览即可一键执行验证（内嵌 IDEA 原生数据库控制台）；支持达梦/人大金仓/OceanBase/openGauss 等 11 种数据库方言（含信创场景）。
@@ -11,9 +11,9 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **编码期（写代码时，静态预览）**：Wrapper 链（Lambda / Query / Update / Delete / MPJ 联表 / 服务链）、XML 动态 SQL（if/foreach/OGNL，自研框架自定义标签内嵌 SQL 兜底识别）、注解 SQL、JPA 派生方法 / JPQL / Criteria、HQL —— gutter 图标一键预览最终 SQL（含逻辑删除、乐观锁、多租户拦截器模拟渲染），并支持 SQL 反向转 Java 代码、实体类 / 数据库表右键生成 CRUD SQL。
 
-**运行期（跑起来后，动态还原）**：控制台 SQL 日志自动捕获，`?` 占位符参数填充为可执行 SQL（MyBatis / Hibernate / JdbcTemplate 三族日志，并发多线程交错按线程分桶还原）；字节码增强捕获为默认通道，无需应用开启 SQL 日志，即得真实参数、执行耗时、影响行数与真实源码位置；日志条目与源码双向跳转（自研框架、JAR 形态业务工具库的调用自动定位到业务代码行），保活心跳类刷屏 SQL 一键屏蔽，历史 SQL 全量落盘与两级导航。
+**运行期（跑起来后，动态捕获）**：字节码增强捕获为默认通道——无需应用开启 SQL 日志，即得真实参数、执行耗时、影响行数与执行报错，慢查询标红并给出静态性能建议；日志条目与源码双向跳转（自研框架、JAR 形态业务工具库的调用自动定位到业务代码行），预览面板的调用栈可悬停展开、逐帧跳转；控制台日志（MyBatis / Hibernate / JdbcTemplate 三族，并发多线程交错按线程分桶还原）作为不改工程的回落通道；保活心跳类刷屏 SQL 一键屏蔽，历史 SQL 全量落盘与两级导航。
 
-**验证（随时）**：预览结果内嵌原生数据库控制台一键执行，EXPLAIN 执行计划（9 种方言，8 种真机 / 引擎实证、OceanBase 文档级验证），SQL 性能规则引擎与静态标注对照，JOIN 关系图可视化；执行前有 `${}` 注入确认与无界写发现清单两道闸、执行超时护栏兜底，UPDATE / DELETE 预览可一键生成回滚 SQL。
+**验证（随时）**：预览结果内嵌原生数据库控制台一键执行，EXPLAIN 执行计划覆盖 11 种方言（9 种真机 / 引擎级实证、OceanBase 文档级验证、SQL Server 按官方文法落地待真机），SQL 性能规则引擎与静态标注对照，JOIN 关系图可视化；执行前有 `${}` 注入确认与无界写发现清单两道闸、执行超时护栏兜底，UPDATE / DELETE 预览可一键生成回滚 SQL。
 
 本插件原名为 MyBatis-Plus SQL Visualizer，现更名 SQL Visualizer——仍全面支持 MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate，插件 ID 与升级链路不变。
 

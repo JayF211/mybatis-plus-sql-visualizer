@@ -494,6 +494,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 分页拦截器模拟开关（R12 T-PaginationSim）：COUNT 包裹预览第二语句产出（默认开）。 */
     private val paginationSimCheck = JBCheckBox()
 
+    /** 分页 COUNT 查询预览子开关（T-CountSimToggle）：仅控制 COUNT 产出、不影响 LIMIT（父开关优先，默认开）。 */
+    private val paginationCountCheck = JBCheckBox()
+
     /** JDBC 模板 SQL 字符串预览开关：queryForList/update 等方法的字符串 SQL 实参显示预览图标。 */
     private val jdbcSqlPreviewCheck = JBCheckBox()
 
@@ -589,6 +592,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private val logTimePrefixField = JBTextField(12)
     private val slowQueryThresholdField = JBTextField(12)
     private val logShowDurationCheck = JBCheckBox()
+
+    // T-DataSourceBadgeMode：数据源角标显示完整上下文（默认关＝仅显示数据库类型）
+    private val dataSourceBadgeDetailCheck = JBCheckBox()
 
     // ---------- T-CrudColor：SQL 列表 CRUD 类型颜色标记 ----------
     /** 标记形态下拉（色条 / 整行淡背景 / 关闭）。 */
@@ -803,6 +809,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
                     text = MpSqlVisualizerBundle.message("settings.paginationSim")
                     toolTipText = MpSqlVisualizerBundle.message("settings.paginationSim.tip")
                 })
+                addRow(p, g, "", paginationCountCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.paginationCount")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.paginationCount.tip")
+                })
                 addRow(p, g, "", jdbcSqlPreviewCheck.apply {
                     text = MpSqlVisualizerBundle.message("settings.preview.jdbc")
                     toolTipText = MpSqlVisualizerBundle.message("settings.preview.jdbc.tip")
@@ -950,6 +960,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
                 addRow(p, g, "", logShowDurationCheck.apply {
                     text = MpSqlVisualizerBundle.message("settings.log.showDuration")
                     toolTipText = MpSqlVisualizerBundle.message("settings.log.showDuration.tip")
+                })
+                // T-DataSourceBadgeMode：数据源角标显示粒度（默认仅数据库类型，打开后带连接事实）
+                addRow(p, g, "", dataSourceBadgeDetailCheck.apply {
+                    text = MpSqlVisualizerBundle.message("settings.log.dataSourceBadgeDetail")
+                    toolTipText = MpSqlVisualizerBundle.message("settings.log.dataSourceBadgeDetail.tip")
                 })
             }
 
@@ -1670,6 +1685,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || dataPermissionHintCheck.isSelected != s.dataPermissionHint
             || dataPermissionMockConditionField.text.trim() != s.dataPermissionMockCondition
             || paginationSimCheck.isSelected != s.paginationSimEnabled
+            || paginationCountCheck.isSelected != s.paginationCountEnabled
             || jdbcSqlPreviewCheck.isSelected != s.jdbcSqlPreviewEnabled
             || explainStructuredCheck.isSelected != s.explainStructuredRender
             || executionTimeoutField.text.trim().toIntOrNull() != s.executionTimeoutSeconds
@@ -1705,6 +1721,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || logTimePrefixField.text.trim() != s.logTimePrefix
             || slowQueryThresholdField.text.trim().toLongOrNull() != s.slowQueryThresholdMs
             || logShowDurationCheck.isSelected != s.showDurationInLogList
+            || dataSourceBadgeDetailCheck.isSelected != s.dataSourceBadgeDetail
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
             || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
             || enhancedDesensitizeCheck.isSelected != s.enhancedCaptureDesensitize
@@ -1792,6 +1809,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.dataPermissionHint = dataPermissionHintCheck.isSelected
             s.dataPermissionMockCondition = dataPermissionMockConditionField.text.trim()
             s.paginationSimEnabled = paginationSimCheck.isSelected
+            s.paginationCountEnabled = paginationCountCheck.isSelected
             s.jdbcSqlPreviewEnabled = jdbcSqlPreviewCheck.isSelected
             s.explainStructuredRender = explainStructuredCheck.isSelected
             s.executionTimeoutSeconds = executionTimeoutField.text.trim().toIntOrNull()
@@ -1829,6 +1847,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.slowQueryThresholdMs = slowQueryThresholdField.text.trim().toLongOrNull()
                 ?: PluginSettings.DEFAULT_SLOW_QUERY_THRESHOLD_MS
             s.showDurationInLogList = logShowDurationCheck.isSelected
+            s.dataSourceBadgeDetail = dataSourceBadgeDetailCheck.isSelected
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             s.enhancedCaptureEnabled = enhancedCaptureCheck.isSelected
             s.enhancedCaptureDesensitize = enhancedDesensitizeCheck.isSelected
@@ -1955,6 +1974,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             dataPermissionHintCheck.isSelected = s.dataPermissionHint
             dataPermissionMockConditionField.text = s.dataPermissionMockCondition
             paginationSimCheck.isSelected = s.paginationSimEnabled
+            paginationCountCheck.isSelected = s.paginationCountEnabled
             jdbcSqlPreviewCheck.isSelected = s.jdbcSqlPreviewEnabled
             explainStructuredCheck.isSelected = s.explainStructuredRender
             executionTimeoutField.text = s.executionTimeoutSeconds.toString()
@@ -2024,6 +2044,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             logTimePrefixField.text = s.logTimePrefix
             slowQueryThresholdField.text = s.slowQueryThresholdMs.toString()
             logShowDurationCheck.isSelected = s.showDurationInLogList
+            dataSourceBadgeDetailCheck.isSelected = s.dataSourceBadgeDetail
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled
             enhancedDesensitizeCheck.isSelected = s.enhancedCaptureDesensitize

@@ -19,15 +19,37 @@
 - **Wrapper 布尔条件求值探镜（R49）**：Wrapper 条件行尾标注布尔首参求值三态——字面量 true「恒真」／false「恒假」／运行时占位符「恒真·缺省」（缺省 true 与求值 true 分开，防「缺省当求值」误读）；纯只读探针，渲染零变更
 - **阶段二合并批六件**：**R45** EXPLAIN 执行计划体检（rows 估算独立规则＋体检规则清单）／**R48** MetaObjectHandler 自动填充仿真（`@TableField(fill=…)` 经 CRUD 生成链贯通到角标数据面；填充列默认勾选态不变）／**R52** 方言能力矩阵＋执行前自检（矩阵读 `Dialect` 接口真值防伪能力，确认弹窗按缺口追加发现行）／**R46** 执行前 Schema 校验（未识别列＋did-you-mean；表存在性不可零成本判定故只校验已预热表列，fail-open 不误报）／**R42** DML 影响面预演（UPDATE/DELETE 执行前只读 COUNT 试算，MCP 写护栏联动）／**R50** 一键诊断报告（五段：SQL+参数/性能规则/EXPLAIN 建议/无界写/回滚预案＋方言能力，Markdown 复制与自包含 HTML 导出）
 
+- **历史检索正则/大小写开关（T-HistorySearchToggles）**：历史面板搜索框旁新增 Regex / Aa 两枚开关（与 IDE 原生查找同图标同语义，会话级、默认均关）——Regex 开启后整串按正则匹配（`regex:` 前缀保留，或语义不回归），Aa 开启后区分大小写（默认关=忽略大小写）；日志页 Ctrl+F 搜索条同步新增单枚 Aa 开关（随搜索条显隐）；历史一级文件名检索随 Aa 开关（正则不参与），行号 `#N` 精确匹配不受影响。行为变更声明：正则路径从恒大小写敏感改为随开关（默认忽略大小写，与子串路径/日志页/MCP 链三链拉齐）；顺带修掉正则编译 memo 键不含大小写旗的存量隐患（切开关后复用错编译结果）
+
+### Changed
+
+- **描述与文案口径统一：运行期以增强捕获为主、控制台为回落**（配套文档站首页描述改版）：`plugin.xml` 描述把原先并排的两条（「运行期捕获 · 控制台 SQL 日志」＋「增强捕获」）合并为一条「**运行期捕获（默认开启）**」，补入慢查询标红与静态性能建议、调用栈悬停弹层逐帧跳转，控制台三族日志降为「不改工程的回落通道」（中英同段同改；数字类声明未动，结构守卫对账面不变）；README 顶部一句话简介改为「写代码时就看见最终 SQL……跑起来后真实参数与耗时自动捕获，慢查询标红、EXPLAIN 看计划、一键跳回源码……不启服务、不翻日志、不手拼参数」，「运行期」段落同步改为增强捕获前置；Marketplace 自定义页**两版同步**（`src/main/resources/html/marketplace-custom-page.html` 供 IDE 帮助按钮 JCEF 渲染、`docs/发行说明/marketplace-custom-page.md` 供后台粘贴）——「为什么选它」的增强捕获条前置为「运行期捕获（默认开启）」、控制台降为「控制台日志（回落通道）」，标语盒「运行期日志还原」改「运行期捕获真实参数与耗时」。**md 版需在 Marketplace 后台重新粘贴**（两版唯一权威在本仓，见发布流程 §10.2/§11）。
+- **README 的 EXPLAIN 方言计数勘正**：原文「EXPLAIN 执行计划（9 种方言，8 种真机 / 引擎实证、OceanBase 文档级验证）」为过期读数——`ExplainSupport` 实为 **11 条**（新增 Oracle 真机实证 Free 23 / XE 11g、SQL Server 按 Microsoft Learn 文法落地·真机待验），改为「覆盖 11 种方言（9 种真机 / 引擎级实证、OceanBase 文档级验证、SQL Server 按官方文法落地待真机）」。文档站 `wrapper-preview` 与 `faq` 中英原写「Oracle / SQL Server 暂不支持 EXPLAIN」同步勘正（该表述自两方言接入后即失真）。
+
+- **数据源上下文角标默认仅显示数据库类型（T-DataSourceBadgeMode）**：SQL 日志/历史两页的目标库角标此前恒显全量「方言 · 库名@host:port」，条目元信息行信息密度偏高。现默认仅显示数据库类型（如 `[MySQL]`）；设置页「SQL 日志 → 数据源角标显示完整上下文（库名@主机:端口）」打开后恢复全量形态。门控做在显示侧——生产/落盘/历史读回/MCP 检索链零改动，开关即时生效（含已读回的历史条目），后开开关不丢任何信息；方言解析失败仅存连接事实的条目关闭态原样保留
+
 ### Fixed
 
 - **EasyQuery 侧布尔标志语义与 Wrapper 侧统一（R49 收口）**：`eq(true, …)` 这类字面量 true 此前在 EasyQuery 解析链被折叠成「无标志」（`flagSource=null`），而同一条表达式在 QueryWrapper 链携带 `"true"`——两条链渲染与标注不一致（R49 探镜在 EasyQuery 侧不标注）。现两侧统一为携带源码文本，`null` 归还「非布尔重载」单一语义
 - **「更多」菜单契约守卫同步（R36/R37/R42 增项）**：预览顶栏菜单契约断言从五项补齐为八项（回滚 SQL/导入参数/差异对比/分享/导出可移植 SQL/导出回放脚本/复制为 AI 上下文/DML 影响面），并把新增项一并纳入「不得直显」的折叠断言
 - **源码守卫元登记（F84 配套）**：新增的「函数体内现场 Regex」源码守卫补进守卫元登记表（此前整体脱离自证覆盖率扫描面）
+- **增强捕获对运行中的达梦（DM8）应用 attach 后零事件（T-DmWeave）**：用户现场应用（mybatis-plus-join-demo）实际跑 dm profile（`spring.profiles.active: dm` → `jdbc:dm://…`，driver `dm.jdbc.driver.DmDriver`），开启增强捕获后面板持续零条目。根因同 PG 一族但多一层：`StatementWeaver.SPECS` 语句面/prepare 面**完全没有达梦类**（connect 面虽登记 `DmDriver`，attach 路径下存量池连接无法回溯 connect 包装），retransform 名单命中 0、无钩子可落。补登时又暴露织入器一处硬约束：达梦 javac 在出口处对已死局部发 `chop_frame`（`DmdbStatement.execute(String)`、`DmdbPreparedStatement.execute()`、`addBatch(String)`、`clearBatch()` 的出口帧 `locals[0/1]=top`），旧织入形态（出口块读原局部 `this`/首参）字节级 `VerifyError: Bad local variable type`——即使登记也登不上。现改造定时面织入为**入口捕获、出口读自有槽**：方法头把 `this`（EXEC_PARAM 再加首参 SQL）存进超出原 maxLocals 的新槽，出口块一律读自有槽，栈图帧补丁按槽位追加 token(long)/本类类型/String；由此达梦 `DmdbStatement`/`DmdbPreparedStatement` 的 timed 面（EXEC_PARAM/EXEC_CTX/BATCH）与 `DmdbConnection` 的 prepare 面（PREPARE）通过 JVM 校验并落钩，`attach retransform` 由 `matched=1 wove=0 failed=1 [dm.jdbc.driver.DmDriver=VerifyError]` 变为 `matched=4 wove=3`，真库 E2E 事件到达（`sqlHead=SELECT 1 AS attachpool_dm`，`registryUnresolved=0`）。达梦 `ADD_BATCH`/`CLEAR_BATCH` 面出口非 timed（仍读原局部）本轮不登记（同 chop_frame 根因）；达梦 connect 面 `DmDriver.connect` 出口命中同一 chop_frame（残留 `failed=1 [DmDriver=VerifyError]`），因存量连接场景已由语句面/prepare 面覆盖，本轮未改 ConnectWeaver、如实留痕。同批加固：语句面/prepare 面字节级回归守卫扩达梦三面 + 新增**厂商对齐守卫**（连接面已登记的每个厂商，要么在 SPECS 有语句面/prepare 面条目，要么在显式「已知不覆盖」白名单带原因），把「看着支持、attach 后一条不出」的静默缺口钉成红灯
 
+- **增强捕获对运行中的 PostgreSQL 应用 attach 后零条目（T-PgWeave）**：对已在跑的 PG 应用挂载增强捕获后，面板持续零条目（去重窗远未到、事件从未到达 IDE）。根因是语句级织入的登记名单（`StatementWeaver.SPECS`）只覆盖 MySQL 与 H2——attach（agentmain）路径下连接池的存量连接无法回溯 connect 包装（connect 面只包新建连接），语句面又没有 PG 实现类可 retransform，钩子无处落地即零事件（premain 路径因连接建立时已被包装、走代理面，此前 PG 能捕获，掩盖了该缺陷）。现按 javap 实测 + 真实驱动类字节织入/JVM 校验批量扩面：PostgreSQL 语句面 `PgStatement`/`PgPreparedStatement`/`PgCallableStatement` + prepare 面 `PgConnection`（openGauss 2.x 走 PG 驱动同享）；同批评估后一并登记 Oracle（`oracle.jdbc.driver.OracleStatement`/`OraclePreparedStatement`/`OracleCallableStatement`，prepare 面 `PhysicalConnection`）与 SQL Server（`SQLServerStatement`/`SQLServerPreparedStatement`，prepare 面 `SQLServerConnection`）。新增驱动类字节级回归守卫（登记谓词命中 + 织入 changed + 产物过 JVM 校验，含非法帧负向自证）钉住形态，mysql/h2 原用例零漂移。达梦经同一探针暴露织入器帧-局部变量既有局限（出口 `chop_frame` 与出口块读局部变量冲突，VerifyError），本轮如实不登记；该局限已由后续 T-DmWeave 以「入口捕获、出口读自有槽」改造解决并登记达梦 timed/prepare 面
+
+- **预览首次点「执行 SQL」结果区空白、二击正常（T-FirstExecResultInvisible）**：打开预览的准备链（远程数据源需数秒）未落地时点执行，旧代码会再建第二条临时文件/会话/控制台链，两条链的执行代际递增与提交/取消判定交错——提交被取消或结果组件被预览链换掉并折叠，用户见「无 loading 无报错下方空白」。现准备链单飞：在飞时执行意图只排队（不再建第二链），准备完成即按 executePrepared 口径自动消费执行（onResultsReady 齐、错误回调归执行意图自身，排队执行失败不再静默卡死）；另把控制台内嵌的折叠语义从 previewMode 布尔归口为显式 embedMode（EXECUTE 恒展开，PREVIEW 仅结果区无内容时折叠）——旧形态全链执行的换入也带 previewMode=true 被折叠，是同一空白现象的布局侧共犯。单飞位悬挂超 60s 自动接管自愈，执行按钮不会因历史挂死族永久排队
+
+- **个别增强捕获条目源码位置显示 `[<generated>]`（T-SrcGenFrame）**：增强捕获下经 Spring 代理调用 MyBatis-Plus `ServiceImpl` 继承方法（`list`/`getOne`/`saveBatch` 等，真实方法体所在类被框架前缀跳过）时，栈上最深非框架帧是 CGLIB 增强类帧（`$$EnhancerBySpringCGLIB$$` 族）——其 SourceFile 属性是 Enhancer 字节码硬编码的 `<generated>`（spring-core javap 实证）、行号恒 -1，而类名前缀即业务包名、codeSource 随宿主类落业务目录，agent 侧 `StackLocator` 的 L1 来源判据与上顶收敛都把它当业务帧选中，面板遂渲染 `[<generated>]`（真机实证：同批条目直调 mapper 接口的拿到真实业务行、经代理调 Service 继承方法的全部中招）。现主位置选择（L1/上顶收敛/判定缓存命中深帧探测/候选列）一律要求真实源文件，生成类帧让位给池中真实业务帧（=触发本次调用的调用方行）；仅池内无任何真实源文件帧（调度器直发/框架回调等真无主形态）时安全网原样采用，`[<generated>]` 保留作真无主信号
+
+- **预览编辑器行注释前缀统一为 `--` 双横线（T-PreviewLineCommentDash）**：预览/控制台编辑器内 Ctrl+/ 此前插入 `#` 前缀——预览文件被方言预映射强制为 MySQL 方言，平台注释动作经 commenter 链取到 MySQL 的 `#`，对 PostgreSQL 执行报 `[42601] syntax error`。现对预览自建编辑器与原生控制台编辑器接管行注释快捷键：插入一律 `-- `、再按一次剥除，修复前残留的 `#` 行同样可剥（缩进保留、多行选区整段切换、一步撤销）；未打标编辑器直通平台原行为零变化，块注释 Ctrl+Shift+/ 不接管（MySQL/PG 语义本就一致）
 ## [2026.10.9] - 2026-10-09
 
 ### Added
+
+- **SQL 历史标签页常驻（T-HistoryTabAlways）**：历史标签页此前是条件页签——只有「开启自动保存」或默认历史目录下已有 `.sql` 文件时才挂载，且设置变更时会**把已挂载的页签摘掉**，于是未开启自动保存的干净项目里用户根本看不到历史入口。现双门禁整体拆除、构造期无条件挂载，空态沿用既有文案、零新增 UI；顺带修一处既有缺陷：历史文件的读端只认默认 `.idea` 目录，用户改过「保存目录」后写进去的历史文件在历史页里看不到——现目录解析单点化、读写同源，且保存目录变更即触发重扫
+
+- **「最近执行记录」右侧面板可编辑（T-RecentEditable）**：与「SQL 日志单击列表弹出的预览浮窗」同效果——右侧 SQL 面板改为可编辑，可临时改字段值再复制（复制按钮与 Ctrl+C 都取改动后的文本）；自动折叠跟随设置。行号保持开启、内容恒为格式化（原拍板口径不变）
+- **「最近执行记录」支持多选（T-RecentMulti）**：与 SQL 日志页同一套语义——Ctrl/Shift 多选、Ctrl+C 批量复制（逐行拼接纯 SQL）、多选时右侧编辑器按行序拼接显示（所见即复制）、状态行显示「已选 N 条」；「打开预览」取最后交互行，右键「复制时间戳」在多选下批量复制。单选行为不变
 
 - **预览面板调用栈悬停调试器风格弹层（T-StackHoverUi）**：预览面板的调用栈区域悬停时弹出调试器风格弹层——结构化解析调用栈帧（`StackDigestFrames`），跳过尾部基础设施帧（Tomcat/线程池尾巴），锚定最深业务帧（Controller→Service 链）；帧数可配置（设置页「调用栈快照帧数」+ agent 侧双通道下发，默认 24 帧，范围 [12,64]）；尾部穿透补 spring web/boot 前缀；验收阻塞修复（日志预览识别/字面量恢复分支丢调用栈快照）
 - **SQL → Java 反向转换能力扩展（T-SqlToJavaPromote）**：`GROUP BY` 建模 `.groupBy(...)`；`HAVING` 建模 `.having("...")`（聚合表达式原样透传）；`SELECT DISTINCT` 建模 `.select("DISTINCT ...")`；`FOR UPDATE` 建模 `.last("FOR UPDATE")`（与 LIMIT 并存合并单 last）；聚合/函数列（`COUNT(*) AS cnt`、`MAX(price)` 等）收集原文回落 `.select("expr AS alias")`（此前整体放弃致往返语义丢失）；`INSERT ... NULL` 值建模生成 Java `null`（此前报错）；`UNION / UNION ALL` 子查询解析（SQL 层往返经渲染还原，Java 生成层因 MP core 无 union() 方法降级为原文注释提示）；条件值参数化——`DATE_FORMAT(...) = '2024'` 形态生成 `apply("... = {0}", "2024")`（值/表达式分离）。
@@ -36,11 +58,17 @@
 
 ### Changed
 
-- **「最近执行记录」弹框化（T-RecentExecDialog）**：gutter 图标右键菜单「最近执行记录」由二级列表换代为浏览对话框——左侧列表直接复用 SQL 日志面板的条目渲染器（两行形态/类型色条/耗时与来源角标与日志页完全一致），右侧只读高亮编辑器展示参数还原后的可执行 SQL，选中切换/双击打开预览（预览后对话框保持在场，便于连续对比多条）；交互对齐「SQL 屏蔽规则管理」对话框（非模态/可拖拽/尺寸位置记忆）。空命中也弹对话框（状态行显示空态文案，原一闪而过的轻通知退役）；右键菜单、锚点快照校验与后台匹配链路不变
+- **「最近执行记录」弹框化（T-RecentExecDialog）**：gutter 图标右键菜单「最近执行记录」由二级列表换代为浏览对话框——左侧列表直接复用 SQL 日志面板的条目渲染器（两行形态/类型色条/耗时与来源角标与日志页完全一致），右侧高亮编辑器展示参数还原后的可执行 SQL（后由 T-RecentEditable 由只读改为可编辑），选中切换/双击打开预览（预览后对话框保持在场，便于连续对比多条）；交互对齐「SQL 屏蔽规则管理」对话框（非模态/可拖拽/尺寸位置记忆）。空命中也弹对话框（状态行显示空态文案，原一闪而过的轻通知退役）；右键菜单、锚点快照校验与后台匹配链路不变
 - **「最近执行记录」右侧编辑器恒为格式化 SQL（D91，取代 D88 的「切换原文」）**：编辑器显示只剩格式化一种形态（与预览「格式化还原 SQL」同源 formatter，主子句各占一行），长 SQL 不再挤成软换行长条；「查看原文」切换已按用户要求移除；编辑器上方两枚按钮改为**图标按钮**（图标取「日志转 SQL」结果区同款：格式化 `ReformatCode`、复制 `Copy`，文案走悬停），格式化按钮=幂等重排（格式化降级原文后可手动重试），复制取当前显示文本（经平台复制通道进 IDE 复制历史）
 - **「最近执行记录」弹框列表右键菜单（T-RecentExecMenu）**：与 SQL 日志页右键同源六件——复制时间戳（受「显示时间戳」开关门禁，关闭时置灰）、屏蔽此 SQL（规则入库后该行即刻从弹框移除，气泡附「管理屏蔽规则…」直达）、发送到 SQL → Java、发送到日志转 SQL（工具窗口未创建时状态行提示）、跳转到 Java、跳转到 Mapper XML（定位不到即隐藏）；**不含**删除（弹框是浏览视图，不越权改全局日志缓冲）、方法级聚焦（锚点本身就是那个方法）、按请求聚焦、复制 SQL（按钮已有）。跳转/屏蔽/复制/送页签一律走日志页同一套实现（新增 `LogEntryJumpOps` 共享跳转原语，顺带消除实时页与历史页既有的一份重复实现）
 
 ### Fixed
+
+- **SQL 复制快捷键按界面统一（T-SqlCopyShortcuts）**：此前只有单击预览浮层的 Ctrl+C 能复制，其余带 SQL 编辑器的界面（主预览面板、最近执行记录、屏蔽规则、回滚 SQL、SQL → Java 输入区、参数导入）以及「最近执行记录」的列表都无法用键盘复制——编辑器上按 Ctrl+C 走不到平台的复制动作、列表复制出的是渲染文本。现按同一套语义统一接线：编辑器内**无选中复制全文、圈选后只复制片段**（Ctrl+C 与 Ctrl+Insert 同义键）；「最近执行记录」列表的 Ctrl+C 改为复制纯 SQL（与 SQL 日志列表一致）。各界面原有的复制按钮/菜单不变
+- **SQL 日志单击预览浮层 Ctrl+C 复制失效修复（T-ClickPreviewCopyRestore）**：单击 SQL 条目弹出预览浮层后按 Ctrl+C 复制不到 SQL、多选批量复制也被浮层打断。根因两条：①浮层为「弹出即可编辑」抢走键盘焦点（既有拍板，不回退）；②焦点落到浮层编辑器后，平台的复制动作在编辑器上取不到复制能力提供者，按键事件最终落回编辑器的默认复制——而无选中时它是空操作，于是「按了 Ctrl+C 毫无反应」（列表自身的复制链路本身正常，只是焦点已不在列表）。修复：带 Ctrl/Shift 修饰键的单击从第一击起不再弹预览（多选全程焦点不离列表，批量复制恢复）；浮层内 Ctrl+C / Ctrl+Insert 改为在编辑器自身的按键绑定层接管——无选中复制整条 SQL（与头部复制按钮同源同反馈），圈选片段时只复制片段；其余编辑器不受影响
+
+- **单条错误上报「提交」没反应（T-ErrReportSubmitNoOp）**：从 IDE 的错误/冻结通知进入「报告到需求池」对话框后点「提交」，按钮不转「提交中…」、状态行空白、窗也不关——收集批次条目时对空容器做了裸索引（单条事件按设计不出批次分节，容器里没有复选框），抛出的越界异常被点击处理器外层吞掉，只在 IDE 日志里留一条 SEVERE（缺陷自 2026-09-15 起存在于此后的全部发行版）。现在容器访问全部带界，并且请求组装环节整体纳入兜底：万一组装失败，原因会显示在对话框状态行里（可原地改内容重试或转浏览器填写），不再「点了没反应」
+- **重复的 SQL 预览图标与点击后弹框卡住（T-GutterDupFreeze）**：MP 链上出现假 HQL 锚点，同一行挂两枚预览图标，点开后弹框卡住关不掉。根因两条：①链内嵌 `.exists("select 1 from ...")` 令整条 wrapper 链源码被兜底当作 HQL 文本、被 `SELECT ... FROM` 正则命中（缺「首参须是字符串」门控）；②批量注册路径与链首 mapper 变量两条收录路径在同一行各挂一枚。修复：补字符串首参门控、源码文本兜底改空、批量注册路径让位；并把「按实体名找类」的全项目短名扫描改为索引构建期降级 + 有界扫描（上限 5000、可取消、命中即止），消除点击时持读锁连续 70 秒把 EDT 卡住、覆盖层窗口关不掉的机制
 
 - **SqlToJavaPanel 两处 Throwable 捕获补 fatal 透传**：`SqlToJavaPanel` 两处 `catch (Throwable)` 未透传 `Error` 子类，守卫由红转绿（整段收口）
 - **工厂链裸实参下带参 `exists` 被误判为链终结点，`EXISTS` 子查询条件整条丢失（T-ExistsChainTerminal）**：`exists` 在 MP 里同时是**条件方法**（`Join.exists(String, Object...) / Join.exists(boolean, String, Object...)`）与**链终结点**（`ChainQuery.exists()` 无参），PSI 定位层的终结点判定只按方法名匹配，二者又落在链尾时结构完全同形。于是 `service.list(Wrappers.<T>lambdaQuery().eq(...).exists("SELECT 1 FROM ..."))` 这类**裸工厂链直接作方法实参**（链内无 one/list/count/page 等真终结点）会把带参 `exists` 当终结点剔除——子查询条件从预览 SQL 里整条消失，且整条查询被误包成 `SELECT EXISTS (...)`，复制到数据库工具执行语义完全不同。现按实参个数区分（javap 实证 3.5.7/3.5.15/3.5.17 的 core 侧只有带参形态、extension 的 `ChainQuery.exists()` 才无参）：无参 `exists()` 仍是链终结点，带参一律作条件解析（布尔前缀照旧剥离为动态条件开关）；同一判据以 `isExistsConditionCall` 单点收口，供终结点筛选与 wrapper 变量接受门共用。`var w = Wrappers.<T>lambdaQuery()...exists(sql)` 声明形态同属此修复面（此前被同一名单拒为 wrapper 变量）。变量/分步/`new` 三种写法与 `notExists` 本就不受影响，各有回归用例钉住
@@ -119,9 +147,6 @@
 - **日期/时间类型参数还原改 ANSI 类型字面量（R3）**：日志还原链对带日期族类型标注（Timestamp/Date/LocalDate/LocalDateTime 等）的参数此前渲染裸单引号字符串——在 Oracle 上对日期/时间戳列的隐式转换恒失败（ORA-01861/01843，与同类产品同款缺陷）。现按类型标注渲染 ANSI 类型字面量 `DATE '…'` / `TIMESTAMP '…'`（ISO 'T' 分隔符归一为空格、缺秒补 `:00`、值文本不匹配日期形态时回落引号；`LocalTime`/带时区值/无类型标注维持原行为）。该字面量形态经 Oracle 11g/23、达梦 DM8、金仓、MySQL 5.7/8.4、PostgreSQL、openGauss 真库逐格实测通用，无需方言分支
 - **性能修缮五件（F47~F51，批次 9 快件批）**：①语法高亮注入器喂入税消解——开启高亮后每个 XML 元素每次高亮 pass 的一次服务查找改为快照直读（实测 85→14ns/元素，喂入位查找 3002→0）；②mapper 解析器的编程式注册挂应用级 Disposer 宿主——插件动态卸载时容器级联摘除，不再被注册表钉住（附跨版本护栏与运行时对照测试）；③参数预设切换只写激活指针不再全量序列化＋方案数上限 20；④两处并发缓存修缮——参数方案顶层结构改并发安全容器（修掉并发建桶可致真损坏的潜伏缺陷）、控制台桥方法缓存负缓存此前因 null 值被吞从未生效（改 Optional 承载）并补 ClassLoader 身份键；⑤XML 内嵌 SQL 行标记两道闸并一（每元素查找 2→1，语义逐值等价）。
 - **原生 MyBatis（非 Spring Boot）项目拦截器自动注入补完（R24）**：设置页「注入」对 mybatis-config.xml 工程此前只给手动指引（全仓仅有的 2 处生产 TODO）——现自动检测配置文件 `<plugins>` 装配同一拦截器（无 config/多处 config/结构不符一律不注入维持引导，fail-closed）；「全场景闭环」叙事无星号。
-
-### Fixed
-
 - **调用类 MPJ 能力误报「无 MPJ 能力」**（真机实证：`DeviceInfoMapper extends MPJBaseMapper` 仍被误判）：「先贴 SQL 后选调用类」路径拿 stale 的能力判定（此前仅 SQL 解析链反查、选类回调不刷新）——现选类后后台重查 MPJ 能力与方法集再重生成。
 - **列名→字段映射驼峰归一 + 多候选实体静默取首明示**（真机实证：`role_id` 等列大列表回落字符串）：列名查询双向归一（snake_case↔camelCase，含 `@TableField` 显式驼峰列）；同表匹配到多个实体时静默取首个现于状态栏列出全部候选与已选项（如不符可开启「手动选择实体」切换）。
 

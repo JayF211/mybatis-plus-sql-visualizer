@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.SafeBrowser
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.ValidationInfo
 import com.intellij.ui.components.JBLabel
@@ -82,6 +83,15 @@ import javax.swing.JTextField
  * - 完整堆栈附件同步改为**默认不勾**：附件首行就是 `异常类: message`，默认勾选等于绕开脱敏；
  * - 批次条目清单里的逐条消息随同一开关去留（[composeSubmission]）。
  * 用户手工改过的标题/描述不被勾选切换覆盖（只回填仍等于上次预填写入值的字段）。
+ *
+ * T-ErrReportSubmitNoOp（2026-10-08 真机 P0）——**单条上报点「提交」无反应**：
+ * 单条事件不出批次分节（T-FeedbackBatch2）⇒ [ReportFormFields.batchList] 0 组件，而
+ * [selectedBatchItemsFor] 仍裸索引 `getComponent(0)` ⇒ `ArrayIndexOutOfBoundsException`
+ * 从 [doOKAction] 外溢到 EDT，平台只记 SEVERE 日志、用户零反馈、按钮状态不变。
+ * 两处一并修：
+ * - [selectedBatchItemsFor] 容器访问改 [java.awt.Container.getComponents] + `getOrNull`（带界）；
+ * - [doOKAction] 组装段整体纳入 `runCatching`，异常落状态行（[finishSubmitting] 失败态）+ LOG.warn，
+ *   补上 T-FeedbackErr「失败必须可见」在组装段的漏网处。
  */
 class ErrorReportDialog(
     /** 错误形态预填；null = 手动形态。 */
@@ -316,10 +326,27 @@ class ErrorReportDialog(
             return
         }
         if (isSubmitting) return
-        val submission = composeSubmission(
-            FeedbackApi.Submission(collectRequest(), collectStackAttachment()),
-            selectedBatchItems(),
-        )
+        // T-ErrReportSubmitNoOp：组装段整体纳入兜底——任一步抛错都必须落到状态行，不许再出现
+        // 「点了没反应」（真机：容器越界异常外溢到 EDT，平台只记 SEVERE 日志，用户零反馈）
+        val submission = runCatching {
+            composeSubmission(
+                FeedbackApi.Submission(collectRequest(), collectStackAttachment()),
+                selectedBatchItems(),
+            )
+        }.getOrElse { error ->
+            LOG.warn("报告提交前置组装失败", error)
+            finishSubmitting(
+                FeedbackApi.SubmissionOutcome(
+                    FeedbackApi.SubmitResult.Failure(
+                        MpSqlVisualizerBundle.message(
+                            "error.report.dialog.status.assembleFailed",
+                            error.javaClass.simpleName,
+                        ),
+                    ),
+                ),
+            )
+            return
+        }
         beginSubmitting()
         // T-FeedbackErr：不再 super.doOKAction()（那会先关窗）——结果由提交结束回调决定：
         // 成功才关窗，失败留窗可改可重试
@@ -410,6 +437,9 @@ class ErrorReportDialog(
     }
 
     companion object {
+        /** 组装期异常落 idea.log 的通道（T-ErrReportSubmitNoOp：状态行给用户、日志给排障）。 */
+        private val LOG = Logger.getInstance(ErrorReportDialog::class.java)
+
         /** 与需求池 Categories 一致（sql-visualizer-admin constants.ts 顺序）。 */
         internal val CATEGORIES = arrayOf(
             ErrorReportComposer.CATEGORY_WRAPPER,
@@ -650,6 +680,12 @@ class ErrorReportDialog(
          * 按勾选收集参与提交的批次条目（纯函数，T-FeedbackBatch2）：
          * 头部条目（主预填那条）的堆栈开关以主表单「附带异常堆栈」为准——回写条目状态并
          * 同步分节里被禁用的头部复选框显示；其余条目按各自复选框。无条目返回空集。
+         *
+         * T-ErrReportSubmitNoOp：[batchList] 的组件数**不必**等于 [all] 的条目数——单条上报
+         * 按设计不出分节（[applyBatchItemsToFields] 早退），容器此时是 0 组件的空容器，
+         * 索引访问必须带界（真机 `ArrayIndexOutOfBoundsException: No such child: 0` 根因；
+         * `as?` 判的是类型不是下标，救不了裸索引）。单条因此收集为空集，落到
+         * [BatchSubmitter] 文档化的「1 条 = 原样单帖」路径，主表单的堆栈勾选照常生效。
          */
         internal fun selectedBatchItemsFor(
             all: List<BatchSubmitter.BatchItem>,
@@ -662,9 +698,9 @@ class ErrorReportDialog(
             // T-ErrorReportRedact：消息开关对全批条目统一生效（勾选态是对话框级的一个开关，
             // 不做逐条细分），收集时回写到每个条目供补发路径复用
             all.forEach { it.includeMessage = includeMessages }
-            (batchList.getComponent(0) as? JCheckBox)?.isSelected = headAttachStack
+            (batchList.components.getOrNull(0) as? JCheckBox)?.isSelected = headAttachStack
             return all.filterIndexed { index, _ ->
-                (batchList.getComponent(index) as? JCheckBox)?.isSelected ?: false
+                (batchList.components.getOrNull(index) as? JCheckBox)?.isSelected ?: false
             }
         }
 

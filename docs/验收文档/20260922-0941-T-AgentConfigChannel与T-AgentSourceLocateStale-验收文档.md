@@ -80,6 +80,7 @@ curl http://localhost:8082/mpj/device/extSub
 - **两侧定位器的跳过规则仍是两份实现**（未合并为共享常量），只加了跨侧同步守卫与差异登记；同一执行若两侧取栈时机不同仍可能给出不同位置，已在 KDoc 明示（计划 §八 D3）。
 - **看门狗取值**：`sqlvis.agent.configWatchdogMs` 默认 15000ms，行为＝超时未见 CONFIG 则应用侧自停 + 一次性 WARN（计划 §八 D2 按此定案，可改）。
 - **不属于本次交付、勿重复验收**：控制台桥 / EP 双轨链路、MCP 工具链、预览与执行链路、回滚与快照、SQL 历史。
+- **后续精化（T-SrcGenFrame，2026-10-09）**：上表 #6 的机制再进一步——CGLIB 增强类帧（`$$EnhancerBySpringCGLIB$$` 族，SourceFile 恒为 `<generated>`、类名前缀即业务包名）不再当选主位置：经 Spring 代理调 MP `ServiceImpl` 继承方法时位置回退到池中真实业务帧（调用方行）；`[<generated>]` 标注保留给池内无任何真实源文件帧的真无主形态。见 `StackLocator` 类注 T-SrcGenFrame 段与 `StackLocatorSrcGenFrameTest`。
 
 ## 5. 回归基线
 

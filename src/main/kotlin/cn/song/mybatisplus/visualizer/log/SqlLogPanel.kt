@@ -14,7 +14,9 @@ import com.intellij.util.ui.UIUtil
 import cn.song.mybatisplus.visualizer.util.DisplayMasker
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
+import cn.song.mybatisplus.visualizer.util.TextCopyList
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
+import cn.song.mybatisplus.visualizer.ui.search.NativeSearchTextField
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.util.Disposer
@@ -38,7 +40,6 @@ import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.ui.SearchTextField
 import com.intellij.ui.SimpleColoredComponent
 import com.intellij.ui.speedSearch.SpeedSearchUtil
 import com.intellij.ui.SimpleTextAttributes
@@ -59,8 +60,6 @@ import java.awt.Insets
 import java.awt.Point
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
-import java.awt.event.KeyAdapter
-import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.text.SimpleDateFormat
@@ -85,8 +84,6 @@ import javax.swing.ListModel
 import javax.swing.SwingConstants
 import javax.swing.border.Border
 import javax.swing.border.EmptyBorder
-import javax.swing.event.DocumentEvent
-import javax.swing.event.DocumentListener
 
 /** SQL 末尾分号结束符（显示层统一追加；已以 `;` 结尾或空串不重复；T-M42 提为顶层，openPreview/右键复制/列表复制共用）。 */
 internal fun withTerminator(sql: String): String =
@@ -134,9 +131,16 @@ internal const val FLUSH_SYNC_MAX = 512
  * 渲染文本（HTML 源码，用户实测缺陷），覆写后复制输出纯 SQL（多选逐条换行拼接、
  * CopyPasteManager 写入、Ctrl+C 快捷键注册均由 JBList 既有链路复用）。
  * open：internal 类默认 final，测试子类经公开包装访问 protected itemToText。
+ *
+ * T-ClickPreviewCopyRestore 二轮（20261008）勘正：上句「Ctrl+C 快捷键注册」经实证**来自平台 LAF**
+ * （`List.focusInputMap` 已含 `control C → copy`，headless 实测 `inputMap.get` 直接命中，
+ * 早先据 `InputMap.keys()==null` 判「无绑定」是懒加载 InputMap 的假象）；`JBList.installDefaultCopyAction`
+ * 只负责 ActionMap 侧。二轮曾在此补绑 InputMap，验证发现冗余（摘除后绑定仍在）已回退——列表 Ctrl+C
+ * 本就可达，用户「点击后复制失效」的断点在单击预览浮层抢焦点，修复见 [SqlClickPreview] 的 Swing 层绑定。
  */
-internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : JBList<LogSqlEntry>(model) {
-    override fun itemToText(index: Int, element: LogSqlEntry): String = textFor(element)
+internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : TextCopyList<LogSqlEntry>(model) {
+    /** Ctrl+C 复制文本（T-SqlCopyShortcuts：委派给共享基类；多选逐行拼接由平台既有 copy 动作完成）。 */
+    override fun copyTextFor(element: LogSqlEntry): String = textFor(element)
 
     /** 速度搜索与 Ctrl+C 复制共用的条目文本。 */
     internal fun textFor(element: LogSqlEntry): String = withTerminator(element.restoredSql)
@@ -215,7 +219,7 @@ internal fun filterBySuppress(entries: List<LogSqlEntry>, suppressKeys: Set<Stri
 }
 
 /**
- * 搜索过滤（纯逻辑，可独立单测）：查询词忽略大小写 contains，匹配还原 SQL 与摘要
+ * 搜索过滤（纯逻辑，可独立单测）：查询词 contains，匹配还原 SQL 与摘要
  * （摘要含参数值的还原 SQL 前缀；参数值是常见检索目标）；空白查询透传全部。
  *
  * T-LogSearchRowTime 扩展：
@@ -224,20 +228,41 @@ internal fun filterBySuppress(entries: List<LogSqlEntry>, suppressKeys: Set<Stri
  * - 时间——对显示片段（[timestampDisplayText]，含方括号与设置格式，所见即所搜）contains；
  *   显示开关关闭时片段为 null，时间分支天然不参与
  * [timestampTextOf] 可注入（测试绕开设置读取），默认取当前设置下的真实显示片段。
+ *
+ * T-HistorySearchToggles：[matchCase] 大小写敏感开关（默认 false=忽略大小写，与历史面板/
+ * MCP 链三链语义统一；默认值保既有测试零改动）。行号精确匹配不受开关影响。
+ *
+ * T-SearchToggleNativeLook（20261010 用户令日志页补正则钮，D133「日志页无正则」拍板翻案）：
+ * [regexEnabled] 正则开关生效条件 = 开启开关**或** `regex:` 前缀（[HISTORY_REGEX_PREFIX]，
+ * 与历史页同语义）；正则路径命中 restoredSql/summary 两维（行号/时间不参与，对齐历史页）；
+ * 编译旗随 [matchCase]；非法正则 fail-closed 回退普通子串（回退查询为原始 query 全文含前缀）。
+ * [memo] 传面板持有的 [HistoryRegexMemo] 实例防抖重复编译；纯函数缺省各建临时实例零复用。
  */
 internal fun filterBySearch(
     entries: List<LogSqlEntry>,
     query: String,
+    matchCase: Boolean = false,
+    regexEnabled: Boolean = false,
+    memo: HistoryRegexMemo = HistoryRegexMemo(),
     timestampTextOf: (LogSqlEntry) -> String? = ::timestampDisplayText,
 ): List<LogSqlEntry> {
     val q = query.trim()
     if (q.isEmpty()) return entries
+    if (regexEnabled || q.startsWith(HISTORY_REGEX_PREFIX)) {
+        val pattern = resolveHistoryRegex(q.removePrefix(HISTORY_REGEX_PREFIX), matchCase, memo)
+        if (pattern != null) {
+            return entries.filter { entry ->
+                pattern.containsMatchIn(entry.restoredSql) || pattern.containsMatchIn(entry.summary)
+            }
+        }
+        // 非法正则：回退普通子串匹配（继续走下方通用路径）
+    }
     val rowNumber = q.removePrefix("#").toLongOrNull()?.takeIf { it > 0 }
     return entries.filter {
-        it.restoredSql.contains(q, ignoreCase = true)
-            || it.summary.contains(q, ignoreCase = true)
+        it.restoredSql.contains(q, ignoreCase = !matchCase)
+            || it.summary.contains(q, ignoreCase = !matchCase)
             || (rowNumber != null && it.sequenceNumber == rowNumber)
-            || timestampTextOf(it)?.contains(q, ignoreCase = true) == true
+            || timestampTextOf(it)?.contains(q, ignoreCase = !matchCase) == true
     }
 }
 
@@ -390,9 +415,11 @@ class SqlLogPanel(
     private val logToSqlPanel = LogToSqlPanel(project)
     /** T-M36.4：SQL → Java 转换 tab（粘贴 SQL → 格式化/补全 → 转换 → 可编辑 Java 高亮结果区）。 */
     private val sqlToJavaPanel = SqlToJavaPanel(project)
-    /** F-44：历史 SQL tab（读取 .idea 目录中的自动保存文件，支持源码定位）。仅 logAutoSaveEnabled 时创建。 */
+    /** F-44：历史 SQL tab（读取自动保存目录中的历史文件，支持源码定位）。
+     *  T-HistoryTabAlways：**常驻**——不再由 logAutoSaveEnabled 或「.idea 里已存在历史文件」决定
+     *  （未开启自动保存的新用户此前看不到入口）；无数据时面板显示空态并指路设置页。 */
     private val historyPanel: HistorySqlLogPanel by lazy { HistorySqlLogPanel(project) }
-    /** F-44：历史 tab 在 JBTabbedPane 中的索引（-1 表示未添加）。 */
+    /** F-44：历史 tab 在 JBTabbedPane 中的索引（-1 表示未添加；常驻后恒为末位）。 */
     private var historyTabIndex = -1
     private val dedupeCheckBox = JCheckBox(MpSqlVisualizerBundle.message("log.panel.dedupe")).apply {
         isSelected = manager.entries.dedupeEnabled
@@ -528,7 +555,52 @@ class SqlLogPanel(
     // ---------- T-ListMode：SQL 显示模式（T-DisplayModeToSettings：入口迁设置页「列表显示」，两列表共享一键） ----------
 
     /** 搜索条（默认隐藏，Ctrl+F/⌘F 唤起；实时过滤 restoredSql 与摘要）。 */
-    private val searchField = buildSearchField()
+    // ---------- T-SearchToggleNativeLook（O-137）：搜索条迁平台原生 SearchTextArea ----------
+    //
+    // MatchCase/Regex 双开关走原生钮（内嵌搜索框右侧，与 Ctrl+F 同形态）。20261010 用户令日志页
+    // 补正则钮（D133「日志页无正则」拍板翻案）——正则语义与历史页同链：开关或 `regex:` 前缀、
+    // 非法正则 fail-closed 回退子串。旗改从 NativeSearchTextField.findModel 读，过滤语义零变化。
+    // 显隐契约保持在宿主 searchBar 上（isVisible 由 showSearch/hideSearch 控制）。
+
+    private val nativeSearch = NativeSearchTextField(
+        placeholderText = MpSqlVisualizerBundle.message("log.search.emptyText"),
+        showRegex = true,
+        project = project,
+    )
+
+    private val searchField = nativeSearch
+
+    /** 当前大小写敏感态（原生钮状态落点）。 */
+    private val logMatchCase: Boolean get() = nativeSearch.isMatchCase()
+
+    /** 当前正则态（原生钮状态落点；`regex:` 前缀独立生效）。 */
+    private val logRegex: Boolean get() = nativeSearch.isRegex()
+
+    /** 正则编译 memo（防抖 200ms 反复 apply 复用编译结果，键=源串+matchCase 旗）。 */
+    private val regexMemo = HistoryRegexMemo()
+
+    /** 搜索条宿主（原生 SearchTextArea 自带内嵌开关；显隐由 showSearch/hideSearch 控制）。 */
+    private val searchBar = JPanel(BorderLayout()).apply {
+        isOpaque = false
+        isVisible = false
+        add(nativeSearch.row, BorderLayout.CENTER)
+    }
+
+    /** 测试断言/驱动：MatchCase 旗（等价用户点击 = 置 FindModel.isCaseSensitive 后自动刷新列表）。 */
+    internal var matchCaseToggleForTest: Boolean
+        get() = logMatchCase
+        set(value) {
+            nativeSearch.findModel.isCaseSensitive = value
+            refreshList()
+        }
+
+    /** 测试断言/驱动：Regex 旗（等价用户点击 = 置 FindModel.isRegularExpressions 后自动刷新列表）。 */
+    internal var regexToggleForTest: Boolean
+        get() = logRegex
+        set(value) {
+            nativeSearch.findModel.isRegularExpressions = value
+            refreshList()
+        }
 
     // ---------- 测试访问器（headless 测试断言用） ----------
 
@@ -608,7 +680,14 @@ class SqlLogPanel(
     }
 
     /** 搜索条（测试断言显隐/文本）。 */
-    internal val searchFieldForTest: SearchTextField get() = searchField
+    internal val searchFieldForTest: cn.song.mybatisplus.visualizer.ui.search.NativeSearchTextField get() = searchField
+
+    /** 布局测试契约：搜索条可见性（旧断言落在 searchField.isVisible 上，迁到宿主 searchBar）。 */
+    internal var searchFieldVisibleForTest: Boolean
+        get() = searchBar.isVisible
+        set(value) {
+            searchBar.isVisible = value
+        }
 
     /** 单击预览控制器（T-ClickPreview 测试断言：排程/取消/弹窗残留）。 */
     internal val clickPreviewForTest: SqlClickPreview get() = clickPreview
@@ -728,9 +807,10 @@ class SqlLogPanel(
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logs"), logPanel)
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logToSql"), logToSqlPanel)
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.sqlToJava"), sqlToJavaPanel)
-        // R19（T-PerfSweep 批次 2）：历史 tab 常驻——原 F-44 条件挂载（自动保存开或有历史文件）
-        // 让新用户结构性不知道历史功能存在（logAutoSaveEnabled 默认 false）；文件列表空态已带
-        // 「开启自动保存」引导文案，tab 常驻即引导闭环。F-44 的移除分支随 R19 废除。
+        // R19（T-PerfSweep 批次 2）+ T-HistoryTabAlways：历史 tab 常驻——原 F-44 条件挂载
+        // （「开启自动保存 或 .idea 中已有历史文件」）让未开启自动保存的干净项目没有入口，
+        // 关掉设置页开关还会把已挂载的 tab 摘掉；文件列表空态已带「开启自动保存」引导文案，
+        // tab 常驻即引导闭环，F-44 的移除分支随之废除、设置变更不再参与显隐。
         addHistoryTab()
         add(tabs, BorderLayout.CENTER)
 
@@ -745,10 +825,9 @@ class SqlLogPanel(
             }
         }
 
-        // F-44 历史 tab 显隐跟随设置（设置页修改后即时生效，无需切 tab）
+        // 设置变更后列表重排重绘（T-HistoryTabAlways 起历史 tab 无显隐逻辑，恒在）
         val settingsListener = SettingsChangeListener {
             ApplicationManager.getApplication().invokeLater {
-                updateHistoryTabVisibility()
                 // T-LogListFreeze-04：片段渲染直读设置态（时间戳/耗时显示/慢查询阈值）——设置变更后
                 // 走 refreshList 重排重绘即生效（SINGLE_LINE 直渲染；多行模式片段缓存按模式键自动失效）
                 // T-ListMode：显示模式入口已迁设置页（T-DisplayModeToSettings）——设置页 apply 广播后
@@ -852,7 +931,8 @@ class SqlLogPanel(
         val top = JPanel(BorderLayout())
         top.add(buildToolbar(), BorderLayout.NORTH)
         top.add(focusTabBar, BorderLayout.CENTER)
-        top.add(searchField, BorderLayout.SOUTH)
+        // T-HistorySearchToggles：挂搜索条宿主（搜索框 + MatchCase 开关），显隐契约不变
+        top.add(searchBar, BorderLayout.SOUTH)
         return top
     }
 
@@ -926,29 +1006,6 @@ class SqlLogPanel(
         }
     }
 
-    /** 搜索条（默认隐藏；Ctrl+F/⌘F 经 ShowSearchAction 唤起）。 */
-    private fun buildSearchField(): SearchTextField {
-        val field = SearchTextField(false) // 不启用历史弹窗
-        field.isVisible = false
-        field.getTextEditor().emptyText.text = MpSqlVisualizerBundle.message("log.search.emptyText")
-        field.addDocumentListener(object : DocumentListener {
-            override fun insertUpdate(e: DocumentEvent) = onSearchTextChanged()
-            override fun removeUpdate(e: DocumentEvent) = onSearchTextChanged()
-            override fun changedUpdate(e: DocumentEvent) = onSearchTextChanged()
-        })
-        // Esc 收起：文本非空时平台已注册 ACTION_CLEAR_TEXT（SearchTextField.addNotify）先清空，
-        // 故仅空文本时走到这里 → 收起搜索条（满足「非空先清空，已空再收起」两段式）
-        field.addKeyboardListener(object : KeyAdapter() {
-            override fun keyPressed(e: KeyEvent) {
-                if (e.keyCode == KeyEvent.VK_ESCAPE && field.text.isEmpty()) {
-                    hideSearch()
-                    e.consume()
-                }
-            }
-        })
-        return field
-    }
-
     /** Ctrl+F/⌘F 唤起搜索条（快捷键经 CommonShortcuts.getFind() 平台 keymap 自适应 mac/win）。 */
     private inner class ShowSearchAction : AnAction() {
         init {
@@ -968,19 +1025,19 @@ class SqlLogPanel(
     }
 
     private fun showSearch() {
-        if (!searchField.isVisible) {
-            searchField.isVisible = true
-            searchField.parent?.revalidate()
-            searchField.parent?.repaint()
+        if (!searchBar.isVisible) {
+            searchBar.isVisible = true
+            searchBar.parent?.revalidate()
+            searchBar.parent?.repaint()
         }
-        searchField.requestFocus()
+        nativeSearch.component.requestFocusInWindow()
     }
 
     private fun hideSearch() {
         searchField.text = "" // 非空时触发 DocumentListener 清过滤并刷新
-        searchField.isVisible = false
-        searchField.parent?.revalidate()
-        searchField.parent?.repaint()
+        searchBar.isVisible = false
+        searchBar.parent?.revalidate()
+        searchBar.parent?.repaint()
         list.requestFocusInWindow()
     }
 
@@ -994,8 +1051,13 @@ class SqlLogPanel(
 
     private fun applySearchText() {
         searchText = searchField.text
+        // T-LogToSqlHint 批：喂本组件搜索历史（平台历史钮已接管为自有实现）
+        nativeSearch.recordSearchQuery(searchText)
         refreshList()
     }
+
+    /** 测试驱动：立即应用搜索框文本（headless 下防抖 Swing Timer 到点不可控），等价生产防抖回调。 */
+    internal fun applySearchTextForTest() = applySearchText()
 
     // ---------- SQL类型多选弹窗 ----------
 
@@ -1151,8 +1213,11 @@ class SqlLogPanel(
     private var historyPanelRegistered = false
 
     /**
-     * 添加历史 tab（T-Perf-17：Disposer 注册防重入守卫——构造期与设置页循环开关都会走到；
-     * 重复注册在 2026.x 平台报 "Object must not be registered twice" 错误弹窗）。
+     * 添加历史 tab（T-HistoryTabAlways 后为构造期唯一调用点）。
+     *
+     * T-Perf-17：Disposer 注册与防重入守卫保留——历史面板必须登记进本面板的 Disposer 树
+     * （否则工具窗关闭时面板连同渲染器/防抖 Timer 不释放）；守卫在将来出现重复挂载路径时仍生效
+     * （重复注册在 2026.x 平台报 "Object must not be registered twice" 错误弹窗）。
      */
     private fun addHistoryTab() {
         if (!historyPanelRegistered) {
@@ -1163,16 +1228,8 @@ class SqlLogPanel(
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), historyPanel)
     }
 
-    /**
-     * R19（T-PerfSweep 批次 2）：历史 tab 常驻后的幂等确保——tab 已挂即零操作。
-     * 原 F-44 的「无自动保存且无历史数据时移除 tab」分支废除（结构性隐藏让新用户
-     * 不知道历史功能存在；空态文案已带开启引导），调用点（设置变更监听）保留。
-     */
-    private fun updateHistoryTabVisibility() {
-        if (historyTabIndex < 0) {
-            addHistoryTab() // 幂等：Disposer 防重入守卫在 addHistoryTab 内
-        }
-    }
+    /** 测试访问器：主 tab 容器（历史 tab 常驻断言用；T-HistoryTabAlways 起 tab 恒在，无显隐路径）。 */
+    internal val tabsForTest: javax.swing.JTabbedPane get() = tabs
 
     /** 工具栏引用（capturing 变化时经平台更新机制刷新动作 presentation，T-UN-11）。 */
     private var _toolbarRef: ActionToolbar? = null
@@ -1266,7 +1323,9 @@ class SqlLogPanel(
         }
 
         override fun actionPerformed(e: AnActionEvent) {
-            ShowSettingsUtil.getInstance().showSettingsDialog(project, SqlLogConfigurable::class.java)
+            // T-SettingsFocusFromLink：统一走主设置页入口（hint=null 只切到 SQL 日志页不聚焦行）
+            cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable
+                .openSqlLogSettingsFocused(project, null)
         }
     }
 
@@ -1385,16 +1444,50 @@ class SqlLogPanel(
      */
     private var lastEmptyText: String? = null
 
+    /** 当前空态是否带「增强捕获」链接（诊断行不带——常规空态专属，见 [applyEmptyTextWithEnhancedLink]）。 */
+    private var emptyTextLinkEnabled: Boolean = false
+
     /** 写入空态文案（纯文本入口，渲染层在此做折行）。 */
     private fun applyEmptyText(plain: String) {
         lastEmptyText = plain
+        emptyTextLinkEnabled = false
+        renderEmptyText()
+    }
+
+    /**
+     * 写入空态文案 + 尾部可点「增强捕获」链接（20261008 验收缺陷 #3：第三径原为纯文本不可点，
+     * 与验收文档 3.22「点该引导走到增强捕获的开启流程」不符）。仅常规空态用；诊断行不加链接。
+     */
+    private fun applyEmptyTextWithEnhancedLink() {
+        lastEmptyText = MpSqlVisualizerBundle.message("log.panel.empty")
+        emptyTextLinkEnabled = true
         renderEmptyText()
     }
 
     /** 按当前列表可用宽度重排并逐视觉行写入（EDT）。 */
     private fun renderEmptyText() {
         val plain = lastEmptyText ?: return
-        applyEmptyTextLines(list.emptyText, plain, emptyTextWidthPx()) { s -> list.getFontMetrics(list.font).stringWidth(s) }
+        val status = list.emptyText
+        status.clear()
+        applyEmptyTextLines(status, plain, emptyTextWidthPx()) { s -> list.getFontMetrics(list.font).stringWidth(s) }
+        if (emptyTextLinkEnabled) {
+            // T-SettingsFocusFromLink：引导链接（**单一整体入口**——用户定「一个整体，点击都跳到目标位置」：
+            // 不再拆页签/设置页/增强捕获三个去向的分链），点击打开主设置页并定位高亮「增强捕获」设置行
+            // （空态文案里「参数实参与精确耗时…在设置页开启 →」所指）。经 appendLinkRow 单点——
+            // 平台 appendSecondaryText 固定写第二行的坑见该函数 KDoc。
+            appendLinkRow(
+                status,
+                listOf(
+                    MpSqlVisualizerBundle.message("log.panel.empty.link") to
+                        java.awt.event.ActionListener {
+                            cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable.openSqlLogSettingsFocused(
+                                project,
+                                MpSqlVisualizerBundle.message("settings.enhancedCapture"),
+                            )
+                        },
+                ),
+            )
+        }
     }
 
     /** 空态文案可用宽度：列表宽度扣掉自身内边距与左右余量；尚未布局（首帧 / 隐藏卡）时给兜底值。 */
@@ -1466,7 +1559,7 @@ class SqlLogPanel(
         } else {
             null
         }
-        applyEmptyText(text ?: MpSqlVisualizerBundle.message("log.panel.empty"))
+        if (text != null) applyEmptyText(text) else applyEmptyTextWithEnhancedLink()
         // R53：定时器捕捉期间常跑（状态栏持续刷新）；非捕捉态停表清栏
         if (manager.capturing) {
             if (diagnosticsTimer == null) {
@@ -1526,7 +1619,7 @@ class SqlLogPanel(
     // ---------- 条目列表 ----------
 
     private fun buildListPane(): JBScrollPane {
-        applyEmptyText(MpSqlVisualizerBundle.message("log.panel.empty"))
+        applyEmptyTextWithEnhancedLink()
         // T-AgentDiagWrap T-04：列表宽度变化即重排空态文案——否则用户拉窄/拉宽工具窗后，
         // 文案还按旧宽度折行（窄窗下会重新长出被裁掉的尾巴，等于修复只在首帧生效）。
         list.addComponentListener(object : ComponentAdapter() {
@@ -1542,8 +1635,9 @@ class SqlLogPanel(
         list.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
+                // T-ClickPreviewCopyRestore：修饰键一并转发——Ctrl/Shift 单击（多选第一击）不排程预览
                 if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
-                    clickPreview.onClick(e.clickCount, e.point)
+                    clickPreview.onClick(e.clickCount, e.point, e.modifiersEx)
                 }
                 if (e.clickCount >= 2) {
                     list.selectedValue?.let { openPreview(it) }
@@ -1607,7 +1701,7 @@ class SqlLogPanel(
      * 1. [filterBySuppress]：按屏蔽规则指纹集滤存量（T-SqlSuppress O-69；管线最前——空集零成本）
      * 2. [filterByType]：按 [activeFilter] 筛选（全选 = 全部，含 OTHER）
      * 3. [filterByFocus]：按 [activeFocus] 聚焦（M56 T-M56-00 基础设施；null = 透传）
-     * 4. [filterBySearch]：按 [searchText] 搜索（大小写不敏感）
+     * 4. [filterBySearch]：按 [searchText] 搜索（默认忽略大小写；T-HistorySearchToggles 起随 MatchCase 开关）
      * 5. [applySort]：按 [sortMode] 排序（降序耗时）
      * 6. 差分渲染：T-Perf-03 增量刷新——流式追加免全量重建；无法增量时回退分批全量重建
      *
@@ -1647,7 +1741,9 @@ class SqlLogPanel(
         )
         // T-M55-03/04：动态聚焦页签层（页签=过滤器，多开并集；离散增删走 FullRebuild，差分零改动）
         val focused = filterByFocusTabs(filtered, focusTabs)
-        val searched = filterBySearch(focused, searchText)
+        // T-HistorySearchToggles：搜索旗随 MatchCase 开关（默认关=忽略大小写，与现状一致）
+        // T-SearchToggleNativeLook：正则旗随 Regex 钮（20261010 用户令日志页补正则，语义与历史页同链）
+        val searched = filterBySearch(focused, searchText, matchCase = logMatchCase, regexEnabled = logRegex, memo = regexMemo)
         val newVisible = applySort(searched)
         val evicted = manager.entries.drainEvictedCount()
 
@@ -1962,7 +2058,7 @@ class SqlLogPanel(
         }
     }
 
-    /** R4 导出：格式三选 → 文件保存 → 后台写盘 → 通知（行集=lastRendered 快照）。 */
+    /** R4 导出：格式四选（CSV/TSV/TXT/SQL，默认 SQL）→ 文件保存 → 后台写盘 → 通知（行集=lastRendered 快照）。 */
     internal fun exportVisibleEntries() {
         val rows = lastRendered.map {
             val source = buildString {
@@ -1987,7 +2083,14 @@ class SqlLogPanel(
         )
         val dialog = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance()
             .createSaveFileDialog(descriptor, project)
-        val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, "sql-log.${format.ext}")
+        // T-ExportSqlFormat（用户拍板 20261009）：SQL 格式默认名 sql-export-<yyyyMMdd-HHmmss>.sql
+        // （时间戳防同日覆盖、不占 sql-history 名族）；CSV/TSV/TXT 保持原名随 ext。
+        val defaultName = if (format == SqlExportFormat.SQL) {
+            SqlExportService.defaultSqlExportFileName()
+        } else {
+            "sql-log.${format.ext}"
+        }
+        val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, defaultName)
             ?: return
         val target = saved.file
         ApplicationManager.getApplication().executeOnPooledThread {
@@ -2015,22 +2118,25 @@ class SqlLogPanel(
         }
     }
 
-    /** R4：导出格式三选（取消返回 null）。 */
+    /** R4：导出格式四选（取消返回 null）。默认选中 SQL（T-ExportSqlFormat 用户拍板 20261009；
+     *  P3：showChooseDialog 返回所选下标、取消 -1）。 */
     private fun chooseExportFormat(): SqlExportFormat? {
-        val names = arrayOf("CSV", "TSV", "TXT")
+        val names = arrayOf("CSV", "TSV", "TXT", "SQL")
         val idx = com.intellij.openapi.ui.Messages.showChooseDialog(
             project,
             MpSqlVisualizerBundle.message("log.history.export.choose"),
             MpSqlVisualizerBundle.message("log.export.visible"),
             com.intellij.openapi.ui.Messages.getQuestionIcon(),
             names,
-            names[0],
+            names[3],
         )
         if (idx < 0) return null
         return when (idx) {
             0 -> SqlExportFormat.CSV
             1 -> SqlExportFormat.TSV
-            else -> SqlExportFormat.TXT
+            2 -> SqlExportFormat.TXT
+            3 -> SqlExportFormat.SQL
+            else -> null
         }
     }
 
@@ -2066,7 +2172,7 @@ class SqlLogPanel(
         group.add(FocusRequestAction(entry))
         // O-90：按模板聚焦（「×N 同模板」徽章达阈值才可用；过滤出该模板全部条目）
         group.add(FocusTemplateAction(entry))
-        // R4（W3 历史工作流包）：导出当前可见行集（与面板过滤/搜索一致；CSV/TSV/TXT，后台写盘）
+        // R4（W3 历史工作流包）：导出当前可见行集（与面板过滤/搜索一致；CSV/TSV/TXT/SQL，后台写盘）
         group.add(ExportVisibleAction())
         val popup = ActionManager.getInstance().createActionPopupMenu("mpvs.log.list", group)
         // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
@@ -2589,9 +2695,19 @@ internal fun formatTemplateCountFragment(
         SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
 }
 
-/** T-AgentDialectLoop：目标库角标（agent 通道由连接 URL 推断）；未知返回 null 不显示。 */
+/**
+ * T-AgentDialectLoop：目标库角标（agent 通道由连接 URL 推断）；未知返回 null 不显示。
+ *
+ * T-DataSourceBadgeMode（O-133，D135 显示侧门控）：默认仅显示数据库类型——` · ` 分隔符唯一产自
+ * [cn.song.mybatisplus.visualizer.log.agent.JdbcUrlDialects.badgeName]，OFF 态切其前段即纯方言段
+ * （落盘/历史读回/MCP 检索链仍消费全量串，后开开关不丢信息，切换即时生效）；
+ * ON 态原样全量（`[MySQL · jpa_demo@localhost:3306]`）。无 ` · ` 分隔符的串（方言解析失败仅存
+ * 连接事实）OFF 态原样保留——辨不出方言时保留最后上下文优于显示空白。null 恒 null 不显示。
+ * 热路径直读设置沿 [formatDurationFragment] 先例（每 cell 一次服务查找，V38 基准同量级）。
+ */
 internal fun formatDatabaseFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
-    val db = entry.databaseName ?: return null
+    val full = entry.databaseName ?: return null
+    val db = if (PluginSettings.getInstance().state.dataSourceBadgeDetail) full else full.substringBefore(" · ")
     val color = if (isSelected) Color(0xFFFFFF) else Color(0x00695C)
     return "[$db] " to SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
 }

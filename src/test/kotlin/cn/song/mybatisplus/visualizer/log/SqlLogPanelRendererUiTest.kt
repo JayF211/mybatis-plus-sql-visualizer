@@ -537,4 +537,74 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             state.displayMaskEnabled = saved
         }
     }
+
+    // ---------- T-DataSourceBadgeMode：数据源角标默认仅显示数据库类型（显示侧门控） ----------
+
+    /** 构造带目标库的 agent 条目（badgeName 全量形态：方言 · 连接事实）。 */
+    private fun dbEntry(db: String?): LogSqlEntry =
+        entry("SELECT 1").copy(source = SqlSource.AGENT, databaseName = db)
+
+    /** 在给定开关值下执行断言（收尾原样恢复）。 */
+    private fun withBadgeDetail(enabled: Boolean, block: () -> Unit) {
+        val s = PluginSettings.getInstance().state
+        val saved = s.dataSourceBadgeDetail
+        try {
+            s.dataSourceBadgeDetail = enabled
+            block()
+        } finally {
+            s.dataSourceBadgeDetail = saved
+        }
+    }
+
+    fun test数据源角标_默认关仅渲染方言段() {
+        // OFF（默认）：badgeName 全量串「MySQL · jpa_demo@localhost:3306」只显方言段（D135 显示侧门控）
+        withBadgeDetail(enabled = false) {
+            val full = "MySQL · jpa_demo@localhost:3306"
+            assertEquals("OFF 态片段应切出纯方言段", "[MySQL] ", formatDatabaseFragment(dbEntry(full), false)!!.first)
+            val meta = joinedText(render(dbEntry(full)).metaLine)
+            assertTrue("元信息行应含方言角标: $meta", meta.contains("[MySQL] "))
+            assertFalse("元信息行不应含连接事实: $meta", meta.contains("jpa_demo"))
+        }
+    }
+
+    fun test数据源角标_开启后渲染全量上下文() {
+        withBadgeDetail(enabled = true) {
+            val full = "MySQL · jpa_demo@localhost:3306"
+            assertEquals("ON 态片段应原样全量", "[$full] ", formatDatabaseFragment(dbEntry(full), false)!!.first)
+            val meta = joinedText(render(dbEntry(full)).metaLine)
+            assertTrue("元信息行应含完整上下文: $meta", meta.contains("[$full] "))
+        }
+    }
+
+    fun test数据源角标_无分隔符串关闭态原样保留() {
+        // 已知边界：方言解析失败仅存连接事实（无 · 分隔符）→ OFF 态原样保留最后上下文
+        withBadgeDetail(enabled = false) {
+            assertEquals(
+                "无 · 串 OFF 态应原样保留",
+                "[localhost:5236] ",
+                formatDatabaseFragment(dbEntry("localhost:5236"), false)!!.first,
+            )
+        }
+    }
+
+    fun test数据源角标_未知库名恒不显示() {
+        // null databaseName 恒 null 不显示（既有语义不变；渲染器级 null 用例见 test目标库角标_未知库名不显示）
+        withBadgeDetail(enabled = false) {
+            assertNull(formatDatabaseFragment(dbEntry(null), false))
+        }
+        withBadgeDetail(enabled = true) {
+            assertNull("ON 态同样恒 null", formatDatabaseFragment(dbEntry(null), true))
+        }
+    }
+
+    fun test数据源角标_历史读回条目随开关切换() {
+        // P4 口径：历史读回条目的 databaseName 为自由文本全量串，显示门控对它同样生效
+        val readBack = dbEntry("DM（达梦） · localhost:5236")
+        withBadgeDetail(enabled = false) {
+            assertEquals("[DM（达梦）] ", formatDatabaseFragment(readBack, false)!!.first)
+        }
+        withBadgeDetail(enabled = true) {
+            assertEquals("[DM（达梦） · localhost:5236] ", formatDatabaseFragment(readBack, false)!!.first)
+        }
+    }
 }

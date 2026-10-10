@@ -114,10 +114,12 @@ class AnnotationSqlCompletionContributor : CompletionContributor(), DumbAware {
                         else -> {
                             // <script>/XML 标签等长剥离（偏移量 1:1，offset 无需换算）
                             val text = stripXmlTags(raw)
+                            // T-XmlCmpl3 二段：过滤按任一 lookup string（附加串 `别名.列名`
+                            // 命中已敲的 `o.user_i`，插入用主串裸列名——防别名重复）
                             runCatching { SourceSqlCompleter.sqlCompletions(text, caretInRaw, sourceContext) }
                                 .getOrElse { emptyList() }
                                 .forEach { item ->
-                                    if (prefix.prefixMatches(item.lookupString)) {
+                                    if (item.allLookupStrings.any { prefix.prefixMatches(it) }) {
                                         result.addElement(item)
                                     }
                                 }

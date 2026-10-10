@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.util.DisplayMasker
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
+import cn.song.mybatisplus.visualizer.ui.search.NativeSearchTextField
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
@@ -46,10 +47,14 @@ import javax.swing.DefaultListModel
 import javax.swing.JComboBox
 import javax.swing.JPanel
 import javax.swing.SwingConstants
+import javax.swing.JToggleButton
 
 /**
- * 历史 SQL 面板（F-44-3 两级导航）：读取 .idea/sql-visualizer/sql-history/ 文件展示
+ * 历史 SQL 面板（F-44-3 两级导航）：读取自动保存目录中的历史文件展示
  * （F-44-4：目录随插件更名，旧名 mybatis-plus-sql-visualizer 不再读取）。
+ *
+ * <p>目录解析与写端同源（[SqlLogAutoSaver.resolveHistoryDir]）——设置页「保存目录」填了自定义路径时，
+ * 历史页读的就是同一个目录（T-HistoryTabAlways 前读端只认默认 .idea 路径，自定义目录下写的文件看不到）。
  *
  * <p>展示层级（用户要求）：
  * <ol>
@@ -73,6 +78,14 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     // ---------- 二级：SQL 列表（复用 SqlEntryList——Ctrl+C 复制纯 SQL 链路） ----------
     private val sqlListModel = DefaultListModel<LogSqlEntry>()
     private val sqlList = SqlEntryList(sqlListModel)
+
+    /**
+     * 二级列表渲染器（面板直持引用）。**勿经 [sqlList.cellRenderer] 取回**：平台
+     * ExpandedItemListCellRendererWrapper 会包装列表渲染器（speed search 展开态），getter 拿到的是
+     * wrapper——20261008 验收缺陷 #5 即「as? HistoryCellRenderer」静默失败致同模板徽章计数永不更新
+     * （面板级计数正确、右键聚焦可用，唯独徽章不渲染）。回填一律走本字段。
+     */
+    private val sqlCellRenderer = HistoryCellRenderer()
     /** 二级速度搜索是否已安装。构造于 CardLayout 隐藏卡时安装不生效（真机 key 流不达、焦点不在），
      *  故延后到 [showFileContent]/[loadFileContentSync] 切卡可见后安装（T-UiNative T-UN-05）。 */
     private var sqlSpeedSearchInstalled = false
@@ -128,8 +141,48 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private val searchDebounceTimer =
         javax.swing.Timer(SEARCH_DEBOUNCE_MS) { applySearch() }.apply { isRepeats = false }
 
-    private val searchField = SearchTextField()
+    // ---------- T-SearchToggleNativeLook（O-137）：搜索框+开关迁移到平台原生形态 ----------
+    //
+    // SearchTextArea（Find in Files/Ctrl+F 同款）内嵌原生 ToggleMatchCase/ToggleRegex；
+    // 两旗改从 NativeSearchTextField.findModel 读取（FindModel.isRegularExpressions/isCaseSensitive），
+    // 过滤语义/memo 键/regex: 前缀完全不变。原生 Toggle 无独立 click 监听——测试缝直接置 FindModel 旗，
+    // 生产路径由原生钮自己改旗。
 
+    private val nativeSearch = NativeSearchTextField(
+        placeholderText = null,
+        showRegex = true,
+        project = project,
+    )
+
+    private val searchField = nativeSearch
+
+    /** 大小写敏感开关（原生钮状态落点；默认关=忽略大小写，三链语义统一）。 */
+    private val matchCaseEnabled: Boolean get() = nativeSearch.isMatchCase()
+
+    /** 正则开关（原生钮状态落点；默认关=子串语义；regex: 前缀独立生效）。 */
+    private val regexEnabled: Boolean get() = nativeSearch.isRegex()
+
+    /** 正则编译 memo（键 = 源串 + matchCase 旗，见 [HistoryRegexMemo]）。 */
+    private val regexMemo = HistoryRegexMemo()
+
+    /** 搜索框宿主：原生 SearchTextArea 自带内嵌开关+右侧读数，直接占满一行。 */
+    private val searchBar = nativeSearch.row
+
+    /** 测试断言/驱动：正则旗（等价用户点击 = 置 FindModel.isRegularExpressions 后应用过滤）。 */
+    internal var regexToggleForTest: Boolean
+        get() = regexEnabled
+        set(value) {
+            nativeSearch.findModel.isRegularExpressions = value
+            applySearch()
+        }
+
+    /** 测试断言/驱动：大小写旗。 */
+    internal var matchCaseToggleForTest: Boolean
+        get() = matchCaseEnabled
+        set(value) {
+            nativeSearch.findModel.isCaseSensitive = value
+            applySearch()
+        }
     // ---------- T-UiNative T-UN-10：顶部导航动作（原手摆 28×28「仿平台按钮」JButton 平移） ----------
 
     /** 导航工具栏引用（层级切换后即时刷新 Back 可见性；T-UN-10）。 */
@@ -171,6 +224,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 二级列表实例（测试断言 getCellBounds 行高与渲染 preferred 一致——布局缓存失效防回归用）。 */
     internal val sqlListForTest: javax.swing.JList<*> get() = sqlList
 
+    /** 测试缝：面板直持的二级渲染器（勿走 sqlList.cellRenderer——平台 wrapper 包装，见字段 KDoc）。 */
+    internal val sqlCellRendererForTest: HistoryCellRenderer get() = sqlCellRenderer
+
     /** 显示模式变更处理（topic 监听与测试共用）：行高随模式重设 + 二级可见时全量重建。
      *  多行片段缓存按条目内模式键自动失效（无需显式清）。日志面板同款处理经 topic 对齐。
      *  T-MergeFollowup-03（复查二轮）：BasicListUI 的 cellHeights 布局缓存不归 Swing layout 管
@@ -182,6 +238,19 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         sqlList.updateUI()
         if (currentFile != null) applySqlSearch()
     }
+
+    /**
+     * 设置变更处理（topic 监听入口，T-HistoryTabAlways）：解析出的历史目录与上次扫描所用不同时
+     * 直接重扫（用户在设置页改了「保存目录」，不重扫就还得手动点刷新），未变时只重算显示模式并重绘
+     * （原 [onDisplayModeChanged] 行为）。
+     */
+    internal fun onSettingsChanged() {
+        if (historyDirChangedSinceLastScan()) refresh() else onDisplayModeChanged()
+    }
+
+    /** T-HistoryTabAlways：解析出的历史目录是否与上次扫描所用不同（设置页改了「保存目录」）。
+     *  测试直接断言本判据——[refresh] 是后台任务，headless 下到点不可控。 */
+    internal fun historyDirChangedSinceLastScan(): Boolean = getHistoryDir() != lastScannedDir
 
     /**
      * 行高随显示模式分流（T-ListMode × T-LogListFreeze-04 权衡，与日志 tab [SqlLogPanel.applyListCellHeight] 同款）：
@@ -227,6 +296,18 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         applySearch()
     }
 
+    /** 读取搜索框当前文本（测试断言：进条目卡应被清空）。 */
+    internal fun searchTextForTest(): String = searchField.text
+
+    /**
+     * 进条目卡前搜索框复位（生产异步路径与测试同步路径共用单源，防两处漂移）：
+     * 用户定（20261010）文件级搜索词不带入条目级——清空触发防抖重过滤（空查询=全量条目）；
+     * 历史记录在文件级应用时已入账，不受清空影响。
+     */
+    private fun clearSearchForEntryLevel() {
+        searchField.text = ""
+    }
+
     /** 二级 SQL 列表单击预览控制器（T-ClickPreview 测试断言）。 */
     internal val sqlClickPreviewForTest: SqlClickPreview get() = sqlClickPreview
 
@@ -252,7 +333,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             override fun removeUpdate(e: javax.swing.event.DocumentEvent) = scheduleSearch()
             override fun changedUpdate(e: javax.swing.event.DocumentEvent) = scheduleSearch()
         })
-        toolbar.add(searchField)
+        // T-HistorySearchToggles：搜索框外包宿主容器（CENTER 搜索框 + EAST 正则/大小写两枚开关）
+        toolbar.add(searchBar)
         // O-90：同模板聚焦提示 chip（聚焦时显示；点击清除）
         toolbar.add(templateFilterChip)
         add(toolbar, BorderLayout.NORTH)
@@ -265,14 +347,14 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             cn.song.mybatisplus.visualizer.config.SettingsChangeListener {
                 // write-safe: UI-only（纯 Swing/只读，无文档写）
                 ApplicationManager.getApplication().invokeLater(
-                    { onDisplayModeChanged() },
+                    { onSettingsChanged() },
                     com.intellij.openapi.application.ModalityState.any(),
                 )
             },
         )
 
         // 一级：文件列表
-        fileList.emptyText.text = MpSqlVisualizerBundle.message("log.history.files.empty")
+        updateFilesEmptyText()
         fileList.cellRenderer = HistoryFileCellRenderer()
         // T-LogListFreeze-04：固定行高（单行恒定高）——JList 布局走 O(1) 快路径，不再逐条调渲染器测量
         fileList.fixedCellHeight = fileList.cellRenderer
@@ -289,13 +371,14 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
         // 二级：SQL 列表
         sqlList.emptyText.text = MpSqlVisualizerBundle.message("log.history.entries.empty")
-        sqlList.cellRenderer = HistoryCellRenderer()
+        sqlList.cellRenderer = sqlCellRenderer
         applySqlListCellHeight()
         sqlList.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
+                // T-ClickPreviewCopyRestore：修饰键一并转发——Ctrl/Shift 单击（多选第一击）不排程预览
                 if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
-                    sqlClickPreview.onClick(e.clickCount, e.point)
+                    sqlClickPreview.onClick(e.clickCount, e.point, e.modifiersEx)
                 }
                 if (e.clickCount >= 2) {
                     sqlList.selectedValue?.let { openPreview(it) }
@@ -345,6 +428,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         cardLayout.show(cards, CARD_SQL)
         // T-Perf-05：立即清空旧文件内容（大文件后台读取期间不残留旧文件条目，防误操作）
         currentEntries = emptyList()
+        clearSearchForEntryLevel()
         applySqlSearch()
         val gen = ++bgGeneration
         object : Task.Backgroundable(project, MpSqlVisualizerBundle.message("log.history.load.progress"), true) {
@@ -377,6 +461,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = true）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.sql")
         cardLayout.show(cards, CARD_SQL)
+        clearSearchForEntryLevel()
         currentEntries = SqlLogFileReader.readFromFile(fileEntry.file)
         currentFileStamp = fileEntry.file.lastModified() to fileEntry.file.length()
         applySqlSearch()
@@ -407,6 +492,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      * 一次浏览窗口内被 refresh + showFileContent 全量解析约 3 遍（15~16.6s），此处消除 refresh 侧的重复成本。
      */
     fun refresh() {
+        // T-HistoryTabAlways：记录本次扫描所用目录（EDT 侧纯字段写），供设置变更时判定要不要重扫
+        lastScannedDir = getHistoryDir()
         val gen = ++bgGeneration
         val keepFile = currentFile?.file
         object : Task.Backgroundable(project, MpSqlVisualizerBundle.message("log.history.scan.progress"), true) {
@@ -429,11 +516,13 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 测试缝：同步刷新（生产路径 refresh() 已后台化；headless 测试需要确定性）。 */
     internal fun refreshForTest() {
         ++bgGeneration // 作废在途后台 apply（构造期 refresh() 的后台扫描可能尚未完成）
+        val dir = getHistoryDir()
+        lastScannedDir = dir
         val keepFile = currentFile?.file
         val keepReload = keepFile?.takeIf { it.exists() }?.let {
             SqlReload(it, SqlLogFileReader.readFromFile(it), it.lastModified() to it.length())
         }
-        applyRefresh(scanHistoryFiles(getHistoryDir()), keepFile, keepReload)
+        applyRefresh(scanHistoryFiles(dir), keepFile, keepReload)
     }
 
     /** 目录扫描 + 条目计数（纯 IO，后台执行）。 */
@@ -447,6 +536,34 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         return files.map { file -> HistoryFileEntry(file, SqlLogFileReader.countInFile(file)) }
     }
 
+    /**
+     * 一级列表空态渲染（T-SettingsFocusFromLink）：文案按行 appendLine（StatusText 不解析换行转义），
+     * 「未开启自动保存 且 无历史文件」时追加「自动保存历史 SQL」蓝字链接（点击打开设置并定位高亮
+     * 「自动保存历史 SQL」设置行）；其余态仅纯文案。刷新点=init 与 [applyRefresh]（扫描落地）。
+     */
+    private fun updateFilesEmptyText() {
+        val status = fileList.emptyText
+        status.clear()
+        MpSqlVisualizerBundle.message("log.history.files.empty").split("\n").forEach { line ->
+            status.appendLine(line)
+        }
+        val autoSaveEnabled = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.logAutoSaveEnabled
+        if (shouldShowAutoSaveHistoryLink(autoSaveEnabled, allFiles.size)) {
+            appendLinkRow(
+                status,
+                listOf(
+                    MpSqlVisualizerBundle.message("log.history.empty.link.autoSave") to
+                        java.awt.event.ActionListener {
+                            cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable.openSqlLogSettingsFocused(
+                                project,
+                                MpSqlVisualizerBundle.message("settings.log.autoSave"),
+                            )
+                        },
+                ),
+            )
+        }
+    }
+
     /** T-SqlLogPerf：浏览文件重载结果包（条目 + 读取完成时的 (lastModified, length) 快照）。 */
     private data class SqlReload(val file: File, val entries: List<LogSqlEntry>, val stamp: Pair<Long, Long>)
 
@@ -454,6 +571,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private fun applyRefresh(scanned: List<HistoryFileEntry>, keepFile: File?, keepReload: SqlReload?) {
         allFiles = scanned
         LOG.info("HistorySqlLogPanel.refresh: 扫描到 ${allFiles.size} 个历史文件")
+        // T-SettingsFocusFromLink：空态条件链接随扫描结果刷新（未开自动保存且无文件时露出）
+        updateFilesEmptyText()
 
         // 保持二级视图：当前文件仍存在则保留二级
         if (keepFile != null && keepFile.exists()) {
@@ -484,82 +603,52 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     }
 
     private fun applySearch() {
+        // T-LogToSqlHint 批：过滤真正应用（防抖后单点）喂本组件搜索历史（平台历史钮已接管为自有实现）
+        nativeSearch.recordSearchQuery(searchField.text)
         if (currentFile != null) applySqlSearch() else applyFileSearch()
     }
 
-    /** 一级：按文件名过滤。 */
+    /**
+     * 一级：按文件名过滤。T-HistorySearchToggles：matchCase 开关生效（默认关=忽略大小写）；
+     * regex 开关**不参与**（文件名正则价值低，tooltip 已写明两级语义差）。
+     */
     private fun applyFileSearch() {
-        val query = searchField.text.trim().lowercase()
+        val query = searchField.text.trim()
         fileListModel.clear()
         val filtered = if (query.isEmpty()) {
             allFiles
         } else {
-            allFiles.filter { it.displayName.lowercase().contains(query) }
+            allFiles.filter { it.displayName.contains(query, ignoreCase = !matchCaseEnabled) }
         }
-        filtered.forEach { fileListModel.addElement(it) }
+        filtered.forEach { fileListModel.addElement(it) } 
+        // T-SearchToggleNativeLook：原生状态区读数（对齐 IDEA 搜索条「N results」位）
+        nativeSearch.setStatusText(
+            if (query.isEmpty()) "" else MpSqlVisualizerBundle.message("log.history.search.results", filtered.size),
+        )
     }
-
-/**
-     * 二级：按 SQL 内容 / 行号 / 时间 / 源文件过滤（T-LogSearchRowTime 与日志页 filterBySearch
-     * 同款语义：行号 `#5`/`5` 精确 equals、时间按显示片段 contains（所见即所搜，开关关闭不参与）；
-     * 源文件为历史页特有检索目标，保留独立分支。
-     */
-    /**
-     * F41（T-PerfSweep16）：正则检索 pattern 双字段 memo——源串与上次相同即复用 [lastRegex]，
-     * 不同才重编。调用面 = [applySqlSearch] 的 `regex:` 分支（搜索防抖 200ms Timer 每次应用都走到，
-     * 此前每次现场 `Regex(…)` 编译）。面板单实例且调用全部发生在 EDT（Swing Timer 回调），
-     * 实例字段无需并发容器。非法正则 fail-closed 回退子串匹配语义保持：编译失败时把**失败源串**
-     * 一并 memo（[lastRegex] 置 null）——同坏串反复 apply 不再重复抛编译异常，换串即重试，
-     * 匹配行为与逐次重编完全一致（Regex 实例的 containsMatchIn 无状态，复用安全）。
-     */
-    private fun resolveSearchPattern(source: String): Regex? {
-        if (source == lastRegexSource) return lastRegex
-        val compiled = runCatching { Regex(source) }.getOrNull()
-        lastRegexSource = source
-        lastRegex = compiled
-        return compiled
-    }
-
-    /** F41：上次 memo 的正则源串（null = 尚无 memo，首次必重编）。 */
-    private var lastRegexSource: String? = null
-
-    /** F41：与 [lastRegexSource] 配对的编译结果（非法源串配 null，走回退路径）。 */
-    private var lastRegex: Regex? = null
 
     private fun applySqlSearch() {
         // O-90：同模板计数随文件内容重建（**全量条目**聚合——徽章计数不随搜索/聚焦波动）；
         // 渲染器与右键聚焦动作共用同一快照
         templateCounts = structureKeyCounts(currentEntries)
-        (sqlList.cellRenderer as? HistoryCellRenderer)?.templateCounts = templateCounts
-        val q = searchField.text.trim()
-        // R16（检索强化增量）：`regex:` 前缀启用正则匹配（作用 SQL/摘要/源文件三目标）——
-        // 非法正则 fail-closed 回退子串匹配（不产生空结果假象）。
-        // F41（T-PerfSweep16）：pattern 经 [resolveSearchPattern] 双字段 memo，同源串不再每次重编。
-        if (q.startsWith("regex:")) {
-            val pattern = resolveSearchPattern(q.removePrefix("regex:"))
-            if (pattern != null) {
-                showSqlEntries(currentEntries.filter { entry ->
-                    pattern.containsMatchIn(entry.restoredSql) ||
-                        pattern.containsMatchIn(entry.summary) ||
-                        entry.sourceFile?.let { pattern.containsMatchIn(it) } == true
-                })
-                return
-            }
-            // 非法正则：回退普通子串匹配（继续走下方通用路径）
-        }
-        val filtered = if (q.isEmpty()) {
-            currentEntries
-        } else {
-            val rowNumber = q.removePrefix("#").toLongOrNull()
-            currentEntries.filter { entry ->
-                entry.restoredSql.contains(q, ignoreCase = true) ||
-                    entry.summary.contains(q, ignoreCase = true) ||
-                    (rowNumber != null && entry.sequenceNumber == rowNumber) ||
-                    timestampDisplayText(entry)?.contains(q, ignoreCase = true) == true ||
-                    entry.sourceFile?.contains(q, ignoreCase = true) == true
-            }
-        }
-        showSqlEntries(filtered)
+        sqlCellRenderer.templateCounts = templateCounts
+        // T-HistorySearchToggles：查询解析与过滤抽为顶层纯函数 [filterHistoryEntries]（可独立单测，
+        // 形态照日志页 filterBySearch 先例）；memo 实例面板持有，防抖 200ms 反复 apply 复用编译结果。
+        // 正则生效条件 = 开关或 `regex:` 前缀（前缀是已发行能力，验收 3.11 不回归）；编译旗随
+        // matchCase；非法正则 fail-closed 回退子串保持；行号 `#N` 精确匹配不受开关影响。
+        val filteredEntries =
+            filterHistoryEntries(
+                currentEntries,
+                searchField.text.trim(),
+                regexEnabled = regexEnabled,
+                matchCase = matchCaseEnabled,
+                memo = regexMemo,
+            )
+        // T-SearchToggleNativeLook：原生状态区读数（对齐 IDEA 搜索条「N results」位）
+        nativeSearch.setStatusText(
+            if (searchField.text.trim().isEmpty()) "" else MpSqlVisualizerBundle.message("log.history.search.results", filteredEntries.size),
+        )
+        showSqlEntries(filteredEntries)
     }
 
     /**
@@ -669,10 +758,12 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** T-SqlLogPerf：当前浏览文件加载完成时的 (lastModified, length) 快照——refresh() 据此判定文件是否变化。 */
     private var currentFileStamp: Pair<Long, Long>? = null
 
-    private fun getHistoryDir(): String {
-        val basePath = project.basePath ?: return ""
-        return "$basePath${File.separator}.idea${File.separator}${SqlLogAutoSaver.DATA_DIR_NAME}${File.separator}sql-history"
-    }
+    /** T-HistoryTabAlways：上次扫描所用目录——设置变更时据此判定是否需要重扫（保存目录被改过）。 */
+    private var lastScannedDir: String = ""
+
+    /** 历史 SQL 目录：与写端同源解析（自定义保存目录优先；无项目根回落 user.home）。 */
+    private fun getHistoryDir(): String =
+        SqlLogAutoSaver.resolveHistoryDir(PluginSettings.getInstance().state.logAutoSavePath, project.basePath)
 
     private fun openPreview(entry: LogSqlEntry) {
         SqlPreviewService.showResult(project, buildPreviewResult(entry))
@@ -776,7 +867,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         com.intellij.diff.DiffManager.getInstance().showDiff(project, request)
     }
 
-    // ---------- R4（W3 历史工作流包）：二级 SQL 导出（CSV/TSV/TXT，后台写盘） ----------
+    // ---------- R4（W3 历史工作流包）：二级 SQL 导出（CSV/TSV/TXT/SQL，后台写盘） ----------
 
     private inner class ExportSqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
         override fun update(e: AnActionEvent) {
@@ -789,7 +880,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         }
     }
 
-    /** R4：导出选中/全部条目——格式三选（CSV/TSV/TXT）→ 文件保存对话框 → 后台写盘 → 通知。
+    /** R4：导出选中/全部条目——格式四选（CSV/TSV/TXT/SQL，默认 SQL）→ 文件保存对话框 → 后台写盘 → 通知。
      *  照 ShareDialog 的 FileSaverDialog 惯例（仓内既有形态）。 */
     internal fun exportEntries(entries: List<LogSqlEntry>) {
         if (entries.isEmpty()) return
@@ -810,12 +901,19 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         }
         val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
             MpSqlVisualizerBundle.message("log.history.export"),
-            "SQL (${format.ext.toUpperCase(Locale.ROOT)})",
+            "SQL (${format.ext.uppercase(Locale.ROOT)})",
             format.ext,
         )
         val dialog = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance()
             .createSaveFileDialog(descriptor, project)
-        val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, "sql-history.${format.ext}")
+        // T-ExportSqlFormat（用户拍板 20261009）：SQL 格式默认名 sql-export-<yyyyMMdd-HHmmss>.sql
+        // （时间戳防同日覆盖、不占 sql-history 名族）；CSV/TSV/TXT 保持原名随 ext。
+        val defaultName = if (format == SqlExportFormat.SQL) {
+            SqlExportService.defaultSqlExportFileName()
+        } else {
+            "sql-history.${format.ext}"
+        }
+        val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, defaultName)
             ?: return
         val target = saved.file
         com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
@@ -842,22 +940,25 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         }
     }
 
-    /** R4：导出格式三选（取消返回 null）。选项文本用格式名（CSV/TSV/TXT 无需翻译）。 */
+    /** R4：导出格式四选（取消返回 null）。选项文本用格式名（CSV/TSV/TXT/SQL 无需翻译）；
+     *  默认选中 SQL（T-ExportSqlFormat 用户拍板 20261009；P3：showChooseDialog 返回所选下标、取消 -1）。 */
     private fun chooseExportFormat(): SqlExportFormat? {
-        val names = arrayOf("CSV", "TSV", "TXT")
+        val names = arrayOf("CSV", "TSV", "TXT", "SQL")
         val idx = com.intellij.openapi.ui.Messages.showChooseDialog(
             project,
             MpSqlVisualizerBundle.message("log.history.export.choose"),
             MpSqlVisualizerBundle.message("log.history.export"),
             com.intellij.icons.AllIcons.Actions.EditSource,
             names,
-            names[0],
+            names[3],
         )
         if (idx < 0) return null
         return when (idx) {
             0 -> SqlExportFormat.CSV
             1 -> SqlExportFormat.TSV
-            else -> SqlExportFormat.TXT
+            2 -> SqlExportFormat.TXT
+            3 -> SqlExportFormat.SQL
+            else -> null
         }
     }
 
@@ -1039,6 +1140,84 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
         /** T-SqlHistoryFull：二级列表分批填充——每块 invokeLater 追加条数（防 EDT 长冻结）。 */
         private const val REFRESH_CHUNK_SIZE = 30
+    }
+}
+
+// ---------- T-HistorySearchToggles：历史检索「查询 → 过滤」纯逻辑（applySqlSearch 抽缝，可独立单测） ----------
+
+/** `regex:` 前缀（R16 已发行能力）：正则开关关闭时同样触发正则匹配（或语义，前缀在场先剥）。 */
+internal const val HISTORY_REGEX_PREFIX = "regex:"
+
+/**
+ * 正则编译 memo（F41 双字段 memo 的 T-HistorySearchToggles 扩展）。
+ *
+ * **键 = 源串 + matchCase 旗二元组**——只按源串判等会在切开关后复用错误编译结果
+ * （例：`user` 以 IGNORE_CASE 编译后切到敏感态仍复用 → 大写目标命中不了，S3 最易埋点）。
+ * 非法源串同样整键 memo（[compiled] 配 null），同坏串同旗反复 apply 不再重复抛编译异常，
+ * 换串或换旗即重试，匹配行为与逐次重编完全一致（Regex 的 containsMatchIn 无状态，复用安全）。
+ * 面板单实例且调用全部发生在 EDT（Swing Timer 回调），可变字段无需并发容器。
+ */
+internal class HistoryRegexMemo {
+    var source: String? = null
+
+    /** 与 [source] 配对的编译大小写旗（ memo 键的另一半）。 */
+    var matchCase: Boolean = false
+
+    /** 编译结果（非法源串配 null，调用方走子串回退路径）。 */
+    var compiled: Regex? = null
+}
+
+/** 按 [memo] 取编译结果：同源串**同旗**复用，否则（重）编译；非法源串 memo 失败供下次复用。 */
+internal fun resolveHistoryRegex(source: String, matchCase: Boolean, memo: HistoryRegexMemo): Regex? {
+    if (source == memo.source && matchCase == memo.matchCase) return memo.compiled
+    val compiled = runCatching {
+        if (matchCase) Regex(source) else Regex(source, RegexOption.IGNORE_CASE)
+    }.getOrNull()
+    memo.source = source
+    memo.matchCase = matchCase
+    memo.compiled = compiled
+    return compiled
+}
+
+/**
+ * 历史二级检索过滤（纯逻辑，形态照日志页 [filterBySearch] 先例）：
+ *
+ * - **正则**：生效条件 = 开启正则开关**或** `regex:` 前缀（前缀在场先剥、不参与匹配）；
+ *   命中三维 restoredSql/summary/sourceFile（R16 现状，时间不参与）；编译旗随 matchCase
+ *   （行为变更声明：正则路径从恒敏感改为随开关，默认关=忽略大小写，见计划 §三）；
+ * - **非法正则**：fail-closed 回退普通子串匹配（回退查询为原始 query 全文含前缀，与现状逐字一致）；
+ * - **子串**：匹配 restoredSql/summary/时间显示片段/sourceFile，大小写统一由 matchCase 控制
+ *   （默认关=忽略大小写）；行号 `#N`/`N` 精确 equals [LogSqlEntry.sequenceNumber]，不受开关影响；
+ * - 空查询透传全部。[timestampTextOf] 可注入（测试绕开设置读取），默认取当前设置下的真实显示片段。
+ */
+internal fun filterHistoryEntries(
+    entries: List<LogSqlEntry>,
+    query: String,
+    regexEnabled: Boolean = false,
+    matchCase: Boolean = false,
+    memo: HistoryRegexMemo = HistoryRegexMemo(),
+    timestampTextOf: (LogSqlEntry) -> String? = ::timestampDisplayText,
+): List<LogSqlEntry> {
+    val q = query.trim()
+    if (q.isEmpty()) return entries
+    if (regexEnabled || q.startsWith(HISTORY_REGEX_PREFIX)) {
+        val pattern = resolveHistoryRegex(q.removePrefix(HISTORY_REGEX_PREFIX), matchCase, memo)
+        if (pattern != null) {
+            return entries.filter { entry ->
+                pattern.containsMatchIn(entry.restoredSql) ||
+                    pattern.containsMatchIn(entry.summary) ||
+                    entry.sourceFile?.let { pattern.containsMatchIn(it) } == true
+            }
+        }
+        // 非法正则：回退普通子串匹配（继续走下方通用路径）
+    }
+    val rowNumber = q.removePrefix("#").toLongOrNull()
+    return entries.filter { entry ->
+        entry.restoredSql.contains(q, ignoreCase = !matchCase) ||
+            entry.summary.contains(q, ignoreCase = !matchCase) ||
+            (rowNumber != null && entry.sequenceNumber == rowNumber) ||
+            timestampTextOf(entry)?.contains(q, ignoreCase = !matchCase) == true ||
+            entry.sourceFile?.contains(q, ignoreCase = !matchCase) == true
     }
 }
 
@@ -1307,3 +1486,10 @@ internal fun historyDiffDialogTitle(verdict: HistoryDiffVerdict): String {
         "$base — ${MpSqlVisualizerBundle.message("log.history.compare.diffLines", verdict.diffCount)}"
     }
 }
+
+/**
+ * 历史页空态「自动保存历史 SQL」链接的显示条件（T-SettingsFocusFromLink，纯函数便于单测）：
+ * 仅当用户**未开启自动保存**且**没有任何历史文件**时露出（用户诉求语义）。
+ */
+internal fun shouldShowAutoSaveHistoryLink(autoSaveEnabled: Boolean, fileCount: Int): Boolean =
+    !autoSaveEnabled && fileCount == 0

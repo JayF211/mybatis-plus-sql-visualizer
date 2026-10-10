@@ -166,7 +166,8 @@ class AnnotationSqlCompletionContributorTest : BasePlatformTestCase() {
             }
             """,
         )
-        assertLookupContains(items, "u.id")
+        // T-XmlCmpl3 二段：主串裸列名（附加串 别名.列名 由工厂直测钉住）
+        assertLookupContains(items, "id")
     }
 
     // ------------------------------------------------------------------

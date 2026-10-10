@@ -99,6 +99,28 @@ internal const val EMPTY_TEXT_FALLBACK_WIDTH_PX = 400
 /** 折行时左右各留的余量：空态文案居中，贴边会让人以为还有下文。 */
 internal const val EMPTY_TEXT_EDGE_PADDING_PX = 12
 
+/** 空态引导链接之间的分隔（T-SettingsFocusFromLink）。 */
+internal const val EMPTY_LINK_SEPARATOR = "　·　"
+
+/**
+ * 空态引导链接行渲染（T-SettingsFocusFromLink，**唯一入口**）。
+ *
+ * 必须「`appendLine("")` 起新行 + `appendText` 追加」——平台 `StatusText.appendSecondaryText`
+ * 内部固定写 **row=1**（第二行/副列语义：243 源码 `appendText(true, 1, …)`）：多行空态文案下
+ * 用它追加链接会把链接叠印进第二行中段（20261010 真机实证「三个链接贴在一起」）；单链接历史
+ * 实现显正常只因文案恰好两行、row 1 恰为末行。复发由源码守卫 `EmptyTextLinkApiGuardTest` 拦截。
+ */
+internal fun appendLinkRow(
+    status: com.intellij.util.ui.StatusText,
+    links: List<Pair<String, java.awt.event.ActionListener>>,
+) {
+    status.appendLine("")
+    links.forEachIndexed { index, (text, listener) ->
+        if (index > 0) status.appendText(EMPTY_LINK_SEPARATOR)
+        status.appendText(text, com.intellij.ui.SimpleTextAttributes.LINK_ATTRIBUTES, listener)
+    }
+}
+
 /**
  * 空态文案折行（纯函数，零平台依赖）：把「语义行（`\n` 分隔）」按像素宽度软折成「视觉行」列表。
  *

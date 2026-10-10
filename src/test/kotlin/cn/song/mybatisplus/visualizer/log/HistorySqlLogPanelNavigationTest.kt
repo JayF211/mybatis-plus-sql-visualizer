@@ -530,4 +530,93 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
             panel.dispose()
         }
     }
+
+    /**
+     * T-HistoryTabAlways：设置页「保存目录」为自定义路径时，历史页读的就是该目录。
+     * 修复前读端只认默认 `.idea/sql-visualizer/sql-history`——自动保存写进自定义目录的文件
+     * 在历史页里根本看不到（写端认自定义目录、读端不认）。
+     */
+    fun test自定义保存目录_历史页读取该目录() {
+        val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
+        val savedPath = settings.state.logAutoSavePath
+        val customDir = File(project.basePath!!, "custom-history-dir").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        try {
+            settings.state.logAutoSavePath = customDir.absolutePath
+            File(customDir, "sql-history-2026-09-20.sql").writeText(
+                f44FileContent(listOf(Triple("SELECT custom_dir", "A.java:1", 1L))),
+            )
+            val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+            try {
+                assertEquals(
+                    "自定义保存目录下的历史文件应在历史页可见",
+                    listOf("sql-history-2026-09-20.sql"),
+                    panel.fileListEntries.map { it.displayName },
+                )
+            } finally {
+                panel.dispose()
+            }
+        } finally {
+            settings.state.logAutoSavePath = savedPath
+            customDir.deleteRecursively()
+        }
+    }
+
+    /** T-HistoryTabAlways：保存目录被改过 → 设置广播需触发重扫；未变 → 只重绘不重扫。 */
+    fun test保存目录变更判据_改过才重扫() {
+        val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
+        val savedPath = settings.state.logAutoSavePath
+        val customDir = File(project.basePath!!, "custom-history-dir-2").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+        try {
+            assertFalse("目录未变时不应重扫", panel.historyDirChangedSinceLastScan())
+            settings.state.logAutoSavePath = customDir.absolutePath
+            assertTrue("保存目录改过后应判定需重扫", panel.historyDirChangedSinceLastScan())
+            panel.refreshForTest()
+            assertFalse("重扫后判据复位", panel.historyDirChangedSinceLastScan())
+        } finally {
+            settings.state.logAutoSavePath = savedPath
+            panel.dispose()
+            customDir.deleteRecursively()
+        }
+    }
+
+    /* 20261008 dev-bak 验收（缺陷 #5）：历史页二级列表「同结构 N 条」徽章不渲染——真机面板级计数
+     * 正确（右键「只看同结构」可用、chip 显示「同结构 12 条」），但徽章静默消失。徽章渲染数据源是
+     * HistoryCellRenderer.templateCounts（applySqlSearch 负责与面板计数同步），此守卫钉两层：
+     * 渲染器快照与面板一致 + 达阈值条目确实产出徽章片段。 */
+    fun testO90同模板徽章_渲染器计数快照与片段在场() {
+        writeHistoryFile(
+            "sql-history-2026-09-02.sql",
+            f44FileContent(
+                listOf(
+                    Triple("SELECT * FROM t_user WHERE id = 1", "UserMapper.java:10", 3L),
+                    Triple("SELECT * FROM t_user WHERE id = 2", "UserMapper.java:11", 3L),
+                    Triple("SELECT * FROM t_user WHERE id = 3", "UserMapper.java:12", 3L),
+                ),
+            ),
+        )
+        val panel = HistorySqlLogPanel(project); panel.refreshForTest()
+        try {
+            panel.openFileForTest(panel.fileListEntries.single())
+            assertEquals("前置：3 条同模板", 1, panel.templateCountsForTest.size)
+            val renderer = panel.sqlCellRendererForTest
+            assertEquals(
+                "渲染器计数快照应与面板级计数一致（徽章渲染数据源）",
+                panel.templateCountsForTest,
+                renderer.templateCounts,
+            )
+            val entry = panel.sqlListEntries.first()
+            val fragment = formatTemplateCountFragment(entry, renderer.templateCounts, isSelected = false)
+            assertNotNull("达阈值条目应产出徽章片段", fragment)
+            assertTrue("片段应含计数", fragment!!.first.contains("3"))
+        } finally {
+            panel.dispose()
+        }
+    }
 }

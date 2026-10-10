@@ -47,6 +47,10 @@ object RunConfigurationProcessListener {
     private val platformClassLoader: ClassLoader =
         Project::class.java.classLoader
 
+    /** 最近一次 scanAndAttach 的补发数（诊断缝；单线程调用面，无需并发容器）。 */
+    @Volatile
+    private var lastScanAttachedCount: Int = 0
+
     /**
      * T-LogRowNumber：判定一次 processStarted 是否「主业务 Java 应用」启动。
      * 243 反编译实证 processStarted 签名为 `(String executorId, ExecutionEnvironment env, ProcessHandler)`，
@@ -74,74 +78,94 @@ object RunConfigurationProcessListener {
      * HTTP 客户端 handler 不在该继承链，天然排除）。残余口径（登记）：首启窗口的测试 fork JVM
      * 会被视为候选——弹确认有三态+冷却兜底，可接受。
      *
-     * **诊断性红线（R3）**：每个描述符的跳过原因记 debug、汇总结果记 INFO——「补扫没命中」
-     * 必须可观测，禁止再出现「结构性空转零日志」形态。
-     *
-     * 全链反射（execution 域 API 不在编译 classpath，同 [isModuleBasedLaunch] 口径）；
-     * 任何异常只记 WARN 降级不抛（补扫是补位路径，绝不能影响项目打开）。
+     * 20261008 起扫描与补挂实现收敛在 [scanAndAttachRunningProcesses]（设置变更上升沿复用同一入口），
+     * 本函数退化为 backfill 场景包装。
      */
     private fun backfillRunningProcesses(project: Project) {
+        scanAndAttachRunningProcesses(project, logTag = "backfill")
+    }
+
+    /**
+     * 20261008 验收偏差 #6 修复（D120，拍板 A「补能力」）：扫描本工程在跑的 JVM 进程并逐个补发
+     * onProcessAppeared。此前 attach 只挂 EXECUTION_TOPIC 进程启动钩子（processStarted），用户对
+     * **已在跑**的应用开启增强捕获开关时无任何入口挂载（真机实测 idea.log 仅记「拒绝冷却已重置」，
+     * 进程零挂载）——验收文档 3.27「attach 后无需重启应用」不可达。现由 AgentManager 设置变更
+     * 上升沿（增强重新开启且已确认/刚同意）调用本方法扫描补挂；attachedPids 幂等表兜底防重复挂载。
+     *
+     * 扫描判据与诊断红线沿用 backfill（R3）：JVM 进程 = BaseOSProcessHandler 系实例（HTTP 客户端
+     * handler 不在该继承链，天然排除）；每个描述符跳过原因记 debug、汇总记 INFO（logTag 区分场景）。
+     * 全链反射（execution 域 API 不在编译 classpath）+ 异常只 WARN 不抛（补位路径，绝不影响调用方）。
+     *
+     * @return 补发挂载的进程数（反射链整体失败时 0——失败已记 WARN）。
+     */
+    internal fun scanAndAttachRunningProcesses(project: Project, logTag: String): Int {
         runCatching {
-            val rcmClass = Class.forName(
-                "com.intellij.execution.ui.RunContentManager",
-                true,
-                platformClassLoader,
-            )
-            val rcm = rcmClass.getMethod("getInstance", Project::class.java).invoke(null, project)
-            val raw = runCatching { rcmClass.getMethod("getAllDescriptors").invoke(rcm) }.getOrNull()
-            val descriptors = when (raw) {
-                is Array<*> -> raw
-                is Collection<*> -> raw.toTypedArray()
-                else -> null
-            } ?: run {
-                LOG.info("backfill: getAllDescriptors 不可用——跳过补扫（project=${project.name}）")
-                return
-            }
-            var noHandler = 0
-            var dead = 0
-            var nonJvm = 0
-            var backfilled = 0
-            val jvmHandlerClass = runCatching {
-                Class.forName("com.intellij.execution.process.BaseOSProcessHandler", true, platformClassLoader)
-            }.getOrNull()
-            for (descriptor in descriptors) {
-                val d = descriptor ?: continue
-                val handler = runCatching {
-                    d.javaClass.getMethod("getProcessHandler").invoke(d)
-                }.getOrNull()
-                if (handler == null) {
-                    noHandler++
-                    LOG.debug("backfill: 描述符 ${d.javaClass.name} 无 processHandler——跳过")
-                    continue
-                }
-                val alive = runCatching {
-                    val terminated = handler.javaClass.getMethod("isProcessTerminated").invoke(handler) as? Boolean
-                    val terminating = handler.javaClass.getMethod("isProcessTerminating").invoke(handler) as? Boolean
-                    terminated == false && terminating == false
-                }.getOrNull()
-                if (alive != true) {
-                    dead++
-                    LOG.debug("backfill: 描述符 ${d.javaClass.name} 进程已结束/正在结束——跳过")
-                    continue
-                }
-                val isJvm = jvmHandlerClass != null && jvmHandlerClass.isInstance(handler)
-                if (!isJvm) {
-                    nonJvm++
-                    LOG.debug("backfill: 描述符 ${d.javaClass.name} handler 非 JVM 进程（${handler.javaClass.name}）——跳过")
-                    continue
-                }
-                backfilled++
-                LOG.info("backfill: 发现订阅前已在跑的 JVM 进程（${handler.javaClass.name}）——补发 onProcessAppeared")
-                project.getService(AgentManager::class.java).onProcessAppeared(handler, isMainConfigLaunch = true)
-            }
-            LOG.info(
-                "backfill: 订阅后补扫完成——描述符 ${descriptors.size} 个，补发 $backfilled" +
-                    "（无handler $noHandler / 已结束 $dead / 非JVM $nonJvm，project=${project.name}）",
-            )
+            doScanAndAttach(project, logTag)
         }.onFailure { t ->
             if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
-            LOG.warn("backfill: 订阅后在跑进程补扫失败（补位路径，不影响项目打开）", t)
+            LOG.warn("$logTag: 在跑进程补扫失败（补位路径，不影响调用方）", t)
         }
+        return lastScanAttachedCount
+    }
+
+    private fun doScanAndAttach(project: Project, logTag: String) {
+        val rcmClass = Class.forName(
+            "com.intellij.execution.ui.RunContentManager",
+            true,
+            platformClassLoader,
+        )
+        val rcm = rcmClass.getMethod("getInstance", Project::class.java).invoke(null, project)
+        val raw = runCatching { rcmClass.getMethod("getAllDescriptors").invoke(rcm) }.getOrNull()
+        val descriptors = when (raw) {
+            is Array<*> -> raw
+            is Collection<*> -> raw.toTypedArray()
+            else -> null
+        } ?: run {
+            LOG.info("$logTag: getAllDescriptors 不可用——跳过补扫（project=${project.name}）")
+            return
+        }
+        var noHandler = 0
+        var dead = 0
+        var nonJvm = 0
+        var backfilled = 0
+        val jvmHandlerClass = runCatching {
+            Class.forName("com.intellij.execution.process.BaseOSProcessHandler", true, platformClassLoader)
+        }.getOrNull()
+        for (descriptor in descriptors) {
+            val d = descriptor ?: continue
+            val handler = runCatching {
+                d.javaClass.getMethod("getProcessHandler").invoke(d)
+            }.getOrNull()
+            if (handler == null) {
+                noHandler++
+                LOG.debug("$logTag: 描述符 ${d.javaClass.name} 无 processHandler——跳过")
+                continue
+            }
+            val alive = runCatching {
+                val terminated = handler.javaClass.getMethod("isProcessTerminated").invoke(handler) as? Boolean
+                val terminating = handler.javaClass.getMethod("isProcessTerminating").invoke(handler) as? Boolean
+                terminated == false && terminating == false
+            }.getOrNull()
+            if (alive != true) {
+                dead++
+                LOG.debug("$logTag: 描述符 ${d.javaClass.name} 进程已结束/正在结束——跳过")
+                continue
+            }
+            val isJvm = jvmHandlerClass != null && jvmHandlerClass.isInstance(handler)
+            if (!isJvm) {
+                nonJvm++
+                LOG.debug("$logTag: 描述符 ${d.javaClass.name} handler 非 JVM 进程（${handler.javaClass.name}）——跳过")
+                continue
+            }
+            backfilled++
+            LOG.info("$logTag: 发现已在跑的 JVM 进程（${handler.javaClass.name}）——补发 onProcessAppeared")
+            project.getService(AgentManager::class.java).onProcessAppeared(handler, isMainConfigLaunch = true)
+        }
+        LOG.info(
+            "$logTag: 在跑进程扫描完成——描述符 ${descriptors.size} 个，补发 $backfilled" +
+                "（无handler $noHandler / 已结束 $dead / 非JVM $nonJvm，project=${project.name}）",
+        )
+        lastScanAttachedCount = backfilled
     }
 
     /** 纯判定（测试缝）：profile 是否模块型主配置；反射失败保守按主进程处理（宁清零勿永不归零）。 */    private fun isModuleBasedProfile(profile: Any): Boolean = try {

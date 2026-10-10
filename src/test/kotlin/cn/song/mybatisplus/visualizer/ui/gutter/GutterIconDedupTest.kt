@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui.gutter
 
+import com.intellij.codeInsight.daemon.LineMarkerProvider
 import com.intellij.psi.PsiIdentifier
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -31,10 +32,18 @@ class GutterIconDedupTest : BasePlatformTestCase() {
     )
 
     /** 方法调用名 leaf（父级为 PsiReferenceExpression，排除方法声明名）上方法调用类 provider 产生的图标总数。 */
-    private fun iconCountAt(methodName: String): Int {
+    private fun iconCountAt(methodName: String): Int = iconCountAt(methodName, providers)
+
+    /**
+     * 同上，但按调用方给定的 provider 集合计数。
+     *
+     * T-GutterDupFreeze：链根锚点由 [SqlGutterLineMarkerProvider] 产生，而本类默认 provider 集不含它
+     * （默认集是「方法名锚点类」），故新增按集合计数的重载，不改默认集以免影响既有 14 条断言。
+     */
+    private fun iconCountAt(methodName: String, providerList: List<LineMarkerProvider>): Int {
         val leaf = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiIdentifier::class.java)
             .first { it.text == methodName && it.parent is com.intellij.psi.PsiReferenceExpression }
-        return providers.count { it.getLineMarkerInfo(leaf) != null }
+        return providerList.count { it.getLineMarkerInfo(leaf) != null }
     }
 
     /** 方法定义名 leaf（父级为 PsiMethod）上 [StringSqlMethodGutterLineMarkerProvider] 产生的图标数。 */
@@ -267,5 +276,71 @@ class GutterIconDedupTest : BasePlatformTestCase() {
         """.trimIndent())
         assertEquals("beanCruder.selectList(Class, sql, ...) 调用行应恰 1 图标（Jdbc provider）",
             1, iconCountAt("selectList"))
+    }
+
+    /** T-GutterDupFreeze：链根锚点（[SqlGutterLineMarkerProvider] 场景 B/C）+ 假 HQL 锚点（[CustomDaoHqlGutterLineMarkerProvider]）。 */
+    private val chainProviders = listOf(
+        SqlGutterLineMarkerProvider(),
+        CustomDaoHqlGutterLineMarkerProvider(),
+    )
+
+    fun testMapperSelectListWithWrapperChain_noIconOnCall() {
+        // T-GutterDupFreeze（S1+S2，20261008 用户真机）：MP 工厂链直作 mapper 方法实参。
+        // 修复前：链内嵌 exists 子查询串 → 内容启发把链源码当 HQL（CustomDaoHql 假图标）
+        //       + selectList 在批量注册表 → 场景 D 再挂一枚 = 同一行 2 枚；现应为 0/1。
+        myFixture.configureByText("Service.java", """
+            class User {}
+            class W {
+                W exists(String sql);
+                W eq(Object column, Object value);
+            }
+            class Wrappers { static W lambdaQuery(Class<?> entityClass); }
+            interface UserMapper { Object selectList(Object wrapper); }
+            class MyService {
+                UserMapper userMapper;
+                Object run(String username) {
+                    return userMapper.selectList(Wrappers.lambdaQuery(User.class)
+                            .exists("select 1 from t_order o where o.user_id = user.id")
+                            .eq(null, username));
+                }
+            }
+        """.trimIndent())
+        assertEquals(
+            "selectList(<wrapper 链>) 调用行应 0 图标（批量锚点让位 + 内容启发不得认链源码）",
+            0, iconCountAt("selectList", chainProviders),
+        )
+        assertEquals(
+            "链根 Wrappers.lambdaQuery 应恰 1 图标（场景 C）",
+            1, iconCountAt("lambdaQuery", chainProviders),
+        )
+    }
+
+    fun testMapperSelectListWithWrapperVariable_noIconOnCall() {
+        // T-GutterDupFreeze（S2 变量实参分支）：`selectList(variableWrapper)` 的语句承载在实参链上，
+        // 锚点由变量声明行（场景 B）承载，批量锚点让位。
+        myFixture.configureByText("Service.java", """
+            class User {}
+            class LambdaQueryWrapper<T> { LambdaQueryWrapper<T> eq(Object column, Object value); }
+            class Wrappers { static <T> LambdaQueryWrapper<T> lambdaQuery(Class<T> entityClass); }
+            interface UserMapper { Object selectList(Object wrapper); }
+            class MyService {
+                UserMapper userMapper;
+                Object run(String username) {
+                    LambdaQueryWrapper<User> variableWrapper =
+                            Wrappers.lambdaQuery(User.class).eq(null, username);
+                    return userMapper.selectList(variableWrapper);
+                }
+            }
+        """.trimIndent())
+        assertEquals(
+            "selectList(wrapper 变量) 调用行应 0 图标（批量锚点让位）",
+            0, iconCountAt("selectList", chainProviders),
+        )
+        val declared = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiIdentifier::class.java)
+            .first { it.text == "variableWrapper" && it.parent is com.intellij.psi.PsiVariable }
+        assertEquals(
+            "变量声明行应恰 1 图标（场景 B）",
+            1, chainProviders.count { it.getLineMarkerInfo(declared) != null },
+        )
     }
 }

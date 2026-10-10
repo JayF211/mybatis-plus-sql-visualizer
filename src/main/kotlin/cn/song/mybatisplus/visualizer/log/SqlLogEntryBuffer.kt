@@ -78,6 +78,23 @@ class SqlLogEntryBuffer(
     }
 
     /**
+     * T-AttachZeroEvent P3（2026-10-09 现场复盘）：**通道纪元重置**——增强捕获接管沿（桥让位、
+     * agent 接管，`SqlCaptureGate.paused` false→true）由 [AgentManager.updateOnline] 调用。
+     *
+     * 为什么重置：dedupeKey 跨通道统一（agent 与桥同 SQL 产出同指纹，AgentEventAdapter 契约），
+     * 目的是折叠接管/回落**重叠期**的双通道双报；桥一旦封停，重叠窗语义即结束——接管前桥纪元的
+     * 索引不得再吞 agent 纪元的首批同键事件。现场：接管前 60s 内桥刚捕过同端点，接管后同 SQL 的
+     * agent 事件全部落窗口内被当重复丢弃，面板零新条目、「attach 即生效」看似失效。
+     *
+     * 只清索引，**不清条目、不清 ⨉N 徽章计数**（历史留痕）；此后 agent↔agent 短窗重复照常折叠
+     * （索引由新纪元条目在入队 upsert 面重建）。O(1)（清 map），entries 锁内执行。
+     * 回落沿（true→false）**不**调用本方法——理由见 [AgentManager.updateOnline] 尾注。
+     */
+    fun resetDedupeIndexOnChannelHandoff() {
+        synchronized(entries) { dedupeIndex.clear() }
+    }
+
+    /**
      * 去重丢弃计数（T-Perf-19：键 = restoredSql 指纹 [sqlFingerprint]，非 SQL 原文——
      * 原文键在条目淘汰后文本永久驻留，长会话可达数十 MB）：去重开启期间每丢弃
      * 一条相同 SQL 计数 +1，供列表「⨉N」徽章展示该 SQL 被去掉过几次。

@@ -101,7 +101,11 @@ object SourceCaptureGuide {
         when (resolveChoice(rc, branch)) {
             GuideChoice.EnableEnhanced -> enableEnhancedCapture(project)
             GuideChoice.OpenSettings ->
-                ShowSettingsUtil.getInstance().showSettingsDialog(project, SqlLogConfigurable::class.java)
+                // T-SettingsFocusFromLink：打开主设置页并定位高亮到源码捕获行的设置项
+                cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable.openSqlLogSettingsFocused(
+                    project,
+                    MpSqlVisualizerBundle.message("settings.log.autoInjectInterceptor"),
+                )
             GuideChoice.InjectNow -> runInjection(project)
             GuideChoice.Cancel -> Unit
         }
