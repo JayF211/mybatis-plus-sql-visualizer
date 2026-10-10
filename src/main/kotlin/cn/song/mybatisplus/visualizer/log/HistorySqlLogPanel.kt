@@ -348,7 +348,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         )
 
         // 一级：文件列表
-        fileList.emptyText.text = MpSqlVisualizerBundle.message("log.history.files.empty")
+        updateFilesEmptyText()
         fileList.cellRenderer = HistoryFileCellRenderer()
         // T-LogListFreeze-04：固定行高（单行恒定高）——JList 布局走 O(1) 快路径，不再逐条调渲染器测量
         fileList.fixedCellHeight = fileList.cellRenderer
@@ -529,6 +529,31 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         return files.map { file -> HistoryFileEntry(file, SqlLogFileReader.countInFile(file)) }
     }
 
+    /**
+     * 一级列表空态渲染（T-SettingsFocusFromLink）：文案按行 appendLine（StatusText 不解析换行转义），
+     * 「未开启自动保存 且 无历史文件」时追加「自动保存历史 SQL」蓝字链接（点击打开设置并定位高亮
+     * 「自动保存历史 SQL」设置行）；其余态仅纯文案。刷新点=init 与 [applyRefresh]（扫描落地）。
+     */
+    private fun updateFilesEmptyText() {
+        val status = fileList.emptyText
+        status.clear()
+        MpSqlVisualizerBundle.message("log.history.files.empty").split("\n").forEach { line ->
+            status.appendLine(line)
+        }
+        val autoSaveEnabled = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.logAutoSaveEnabled
+        if (shouldShowAutoSaveHistoryLink(autoSaveEnabled, allFiles.size)) {
+            status.appendSecondaryText(
+                MpSqlVisualizerBundle.message("log.history.empty.link.autoSave"),
+                com.intellij.ui.SimpleTextAttributes.LINK_ATTRIBUTES,
+            ) {
+                cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable.openSqlLogSettingsFocused(
+                    project,
+                    MpSqlVisualizerBundle.message("settings.log.autoSave"),
+                )
+            }
+        }
+    }
+
     /** T-SqlLogPerf：浏览文件重载结果包（条目 + 读取完成时的 (lastModified, length) 快照）。 */
     private data class SqlReload(val file: File, val entries: List<LogSqlEntry>, val stamp: Pair<Long, Long>)
 
@@ -536,6 +561,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private fun applyRefresh(scanned: List<HistoryFileEntry>, keepFile: File?, keepReload: SqlReload?) {
         allFiles = scanned
         LOG.info("HistorySqlLogPanel.refresh: 扫描到 ${allFiles.size} 个历史文件")
+        // T-SettingsFocusFromLink：空态条件链接随扫描结果刷新（未开自动保存且无文件时露出）
+        updateFilesEmptyText()
 
         // 保持二级视图：当前文件仍存在则保留二级
         if (keepFile != null && keepFile.exists()) {
@@ -1443,3 +1470,10 @@ internal fun historyDiffDialogTitle(verdict: HistoryDiffVerdict): String {
         "$base — ${MpSqlVisualizerBundle.message("log.history.compare.diffLines", verdict.diffCount)}"
     }
 }
+
+/**
+ * 历史页空态「自动保存历史 SQL」链接的显示条件（T-SettingsFocusFromLink，纯函数便于单测）：
+ * 仅当用户**未开启自动保存**且**没有任何历史文件**时露出（用户诉求语义）。
+ */
+internal fun shouldShowAutoSaveHistoryLink(autoSaveEnabled: Boolean, fileCount: Int): Boolean =
+    !autoSaveEnabled && fileCount == 0

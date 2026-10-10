@@ -30,6 +30,10 @@ import javax.swing.ListModel
  */
 class PluginSettingsFolderConfigurableTest : BasePlatformTestCase() {
 
+    private companion object {
+        const val ID_SQL_LOG_FOR_TEST = "cn.song.mybatisplus.visualizer.settings.sqlLog"
+    }
+
     private fun all(c: java.awt.Component): List<java.awt.Component> {
         val list = mutableListOf(c)
         if (c is java.awt.Container) c.components.forEach { list.addAll(all(it)) }
@@ -249,6 +253,40 @@ class PluginSettingsFolderConfigurableTest : BasePlatformTestCase() {
             "N5-PROBE KotlinScriptingSettingsConfigurable 在夹具树里=${kotlinScripting != null}，" +
                 "EP id=${kotlinScripting?.extensionPoint?.id}",
         )
+    }
+
+    // ------------------------------------------------------------------
+    // T-SettingsFocusFromLink：待定位目标 + hint 定位哨兵
+    // ------------------------------------------------------------------
+
+    fun test待定位目标置与消费_消费即清() {
+        PluginSettingsFolderConfigurable.requestFocusOnOpenForTest(ID_SQL_LOG_FOR_TEST, "hint-x")
+        val got = PluginSettingsFolderConfigurable.consumePendingFocus()
+        assertNotNull("置入后应可消费", got)
+        assertEquals(ID_SQL_LOG_FOR_TEST, got!!.pageId)
+        assertEquals("hint-x", got.hint)
+        assertNull("消费即清（防重复定位）", PluginSettingsFolderConfigurable.consumePendingFocus())
+    }
+
+    /**
+     * P2 哨兵（防「跳了但不亮」）：三处引导链接的 hint 必须能在 **SQL 日志页真实面板**中定位到控件。
+     * hint 一律取 bundle 当前语言完整值（与设置行渲染同源）——硬编码中文在英文环境下必然定位失败。
+     */
+    fun test三处链接hint在SQL日志页可定位() {
+        val root = SqlLogConfigurable().createComponent()
+        assertNotNull("SQL 日志设置页应可创建面板", root)
+        val folder = PluginSettingsFolderConfigurable()
+        for (key in listOf(
+            "settings.enhancedCapture",
+            "settings.log.autoInjectInterceptor",
+            "settings.log.autoSave",
+        )) {
+            val hint = MpSqlVisualizerBundle.message(key)
+            assertNotNull(
+                "hint「$hint」（键 $key）应能定位到设置控件（否则用户点链接「跳了但不亮」）",
+                folder.findHighlightTargetForTest(root, hint),
+            )
+        }
     }
 
     private fun epClassName(wrapper: ConfigurableWrapper): String {

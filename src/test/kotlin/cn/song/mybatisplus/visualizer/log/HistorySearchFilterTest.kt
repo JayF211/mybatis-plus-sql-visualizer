@@ -179,6 +179,13 @@ class HistorySearchFilterTest : BasePlatformTestCase() {
         }
     }
 
+    fun test历史页空态链接显示条件() {
+        // T-SettingsFocusFromLink：仅「未开启自动保存 且 无历史文件」时露出
+        org.junit.Assert.assertTrue(shouldShowAutoSaveHistoryLink(autoSaveEnabled = false, fileCount = 0))
+        org.junit.Assert.assertFalse("已开自动保存不显示", shouldShowAutoSaveHistoryLink(true, 0))
+        org.junit.Assert.assertFalse("有历史文件不显示", shouldShowAutoSaveHistoryLink(false, 3))
+    }
+
     fun test进条目卡清空搜索框且条目回全量() {
         // 用户定（20261010）：文件级搜索词不带入条目级——点进文件后搜索框应清空、条目全量
         writeHistoryFile("sql-history-clear.sql", listOf("SELECT 1", "SELECT 2"))

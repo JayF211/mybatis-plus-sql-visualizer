@@ -1241,7 +1241,9 @@ class SqlLogPanel(
         }
 
         override fun actionPerformed(e: AnActionEvent) {
-            ShowSettingsUtil.getInstance().showSettingsDialog(project, SqlLogConfigurable::class.java)
+            // T-SettingsFocusFromLink：统一走主设置页入口（hint=null 只切到 SQL 日志页不聚焦行）
+            cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable
+                .openSqlLogSettingsFocused(project, null)
         }
     }
 
@@ -1387,13 +1389,34 @@ class SqlLogPanel(
         status.clear()
         applyEmptyTextLines(status, plain, emptyTextWidthPx()) { s -> list.getFontMetrics(list.font).stringWidth(s) }
         if (emptyTextLinkEnabled) {
-            // 链接短语紧随主文案（bundle 文案以「→」收尾）；写法与源码位置捕获引导同款
-            // （ShowSettingsUtil + SqlLogConfigurable，[SqlLogPanel.focusSourceCaptureGroup] 同路）。
+            // T-SettingsFocusFromLink：引导链接行（三链接独立成行——正文 wrap 链零改动）：
+            // 页签（面板内切 tab）/ 设置页（打开插件设置页不聚焦行）/ 增强捕获（打开并定位高亮该设置行）。
+            val linkAttrs = com.intellij.ui.SimpleTextAttributes.LINK_ATTRIBUTES
+            status.appendSecondaryText(
+                MpSqlVisualizerBundle.message("log.panel.empty.link.logToSql"),
+                linkAttrs,
+            ) {
+                // 面板内 JTabbedPane 切页签（既有 openEntryInTab 同路）
+                tabs.selectedComponent = logToSqlPanel
+            }
+            status.appendText(EMPTY_LINK_SEPARATOR)
+            status.appendSecondaryText(
+                MpSqlVisualizerBundle.message("log.panel.empty.link.settings"),
+                linkAttrs,
+            ) {
+                cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable
+                    .openSqlLogSettingsFocused(project, null)
+            }
+            status.appendText(EMPTY_LINK_SEPARATOR)
             status.appendSecondaryText(
                 MpSqlVisualizerBundle.message("log.panel.empty.link"),
-                com.intellij.ui.SimpleTextAttributes.LINK_ATTRIBUTES,
+                linkAttrs,
             ) {
-                ShowSettingsUtil.getInstance().showSettingsDialog(project, SqlLogConfigurable::class.java)
+                // 定位并高亮「增强捕获」设置行（空态文案里「参数实参与精确耗时…在设置页开启」即指此行）
+                cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable.openSqlLogSettingsFocused(
+                    project,
+                    MpSqlVisualizerBundle.message("settings.enhancedCapture"),
+                )
             }
         }
     }

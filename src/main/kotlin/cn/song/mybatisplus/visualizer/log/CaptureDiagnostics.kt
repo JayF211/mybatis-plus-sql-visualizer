@@ -99,6 +99,9 @@ internal const val EMPTY_TEXT_FALLBACK_WIDTH_PX = 400
 /** 折行时左右各留的余量：空态文案居中，贴边会让人以为还有下文。 */
 internal const val EMPTY_TEXT_EDGE_PADDING_PX = 12
 
+/** 空态引导链接之间的分隔（T-SettingsFocusFromLink）。 */
+internal const val EMPTY_LINK_SEPARATOR = "　·　"
+
 /**
  * 空态文案折行（纯函数，零平台依赖）：把「语义行（`\n` 分隔）」按像素宽度软折成「视觉行」列表。
  *
