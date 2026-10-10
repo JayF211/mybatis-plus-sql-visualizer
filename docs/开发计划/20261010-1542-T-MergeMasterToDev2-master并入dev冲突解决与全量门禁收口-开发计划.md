@@ -132,3 +132,13 @@ master 的 `T-SearchToggleNativeLook`（`67b167f`）把日志页搜索框迁到�
 - 全量 testShards（权威轮，基线 `e0b68fc`）：**6919 例 / 0 失败 / 0 错误 / 8 跳过**（分片 1: 1468/0/0/0；2: 1348/0/0/0；3: 1484/0/0/6；4: 1275/0/0/2；5: 1344/0/0/0；COMPILE_EXIT=0、SHARDS_EXIT=0）。诊断轮的三处红全部消除，且无新增红。
 - verifyGate 三目标（基线 `e0b68fc`，产物 `mybatis-plus-sql-visualizer-2026.10.13.zip`）：**三目标全部 Compatible**——IU-243.28141.41（5 待移除/25 弃用/95 实验 API）、IU-253.33514.17（6/34/93）、IU-262.10968.63（8/94/93）；VERIFY_EXIT=0，BUILD SUCCESSFUL in 2m19s。唯一告警为 `LightEditCompatible` 实验 API 引用（既有形态，非本次引入）。
 
+### 6.6 后续两件（2026-10-10 用户令）
+
+1. **搜索接线守卫**（dev `86281b8`）：新增 `log/SqlLogPanelSearchWiringGuardTest`——源码扫描断言 ①`nativeSearch.addDocumentListener(` 在场、②`insertUpdate/removeUpdate/changedUpdate` 三回调都落 `onSearchTextChanged()`、③防空绿（`onSearchTextChanged` 出现 ≥4 次）、④防抖入口与 `searchDebounceTimer` 仍在；并按元守卫要求登记进 `GuardSelfTestCoverageMetaGuardTest.GUARD_CLASSES`。反向验证三段实测：基线绿（GREEN1_EXIT=0）→ 删掉接线 init 块（`addDocumentListener` 计数 0）→ **`SqlLogPanelSearchWiringGuardTest > 日志页搜索框文本变更必须接到防抖搜索链 FAILED`、RED_EXIT=1**（日志无 `^e:` 编译错误行）→ `git checkout --` 还原（计数 1）→ 复绿（GREEN2_EXIT=0）；基线与还原两轮元守卫同绿。
+2. **行尾一次性根治**（dev `10cb031`）：新增 `.gitattributes`（`* text=auto eol=crlf`、`*.sh`/`*.bash text eol=lf`、常见二进制 binary）+ `LICENSE` 重规范化（本次唯一内容变化）+ 工作树 113 个 LF/mixed 归一为 CRLF。终态：`w/mixed` 归零、`w/lf` 只剩 5 个 `.sh`（符合 `eol=lf`）、`i/crlf` 归零。配方与三个陷阱（`checkout-index` 对等值文件跳过不写、`i/-text` 文件勿转、中文路径勿经 shell）落项目记忆 `project-line-ending-policy`。
+3. 两项改动后权威 testShards（基线 `10cb031`）：**6989 例 / 0 失败 / 0 错误 / 8 跳过**（分片 1: 1468/0/0/0；2: 1348/0/0/0；3: 1484/0/0/6；4: 1275/0/0/2；5: 1414/0/0/0）。verifyGate 无需复跑（本次仅新增测试源与 `.gitattributes`，插件二进制未变）。master 侧同步（cherry-pick 两笔 + master 工作树行尾归一）：待回填。
+
+### 6.7 附带根治：Git Bash 中文乱码（2026-10-10 用户令）
+
+根因实测：**Windows 控制台代码页 936（GBK）**，而 Git Bash 与各工具输出 UTF-8 字节 → 消费端按 GBK 解码即乱码（文件无损，已用 `git hash-object --path` 比对证明）。处置三层：①git 显示层全局项 `core.quotepath=false` + `i18n.logOutputEncoding/commitEncoding=utf-8` + `gui.encoding=utf-8`（CJK 路径不再被转义——此前 `git add <中文路径>` 失败与 `checkout-index` 匹配不上的元凶）；②终端层新建 `~/.bashrc`（`chcp.com 65001`）+ `~/.bash_profile`（source .bashrc；两文件此前均不存在，删除即回退）；③输出侧纪律（中文验证走计数/哈希/Read 工具，不走 stdout 肉眼；`grep` 对含非 UTF-8 字节的日志要加 `-a`，否则静默返回空）。配方落项目记忆 `git-bash-cjk-mojibake-fix`。
+
