@@ -14,12 +14,18 @@ package cn.song.mybatisplus.visualizer.sql
  */
 
 /**
- * 把 XML 标签替换为**等长空格**（T-M27-01）：
+ * 把 XML 标签替换为**等长**占位（T-M27-01；T-XmlCmpl3 语义替身修正，20261010）：
  *  - 逐字符扫描：`<` 到下一个 `>` 的区间（含属性、自闭合、结束标签、注释 `<!-- -->`、
- *    CDATA `<![CDATA[`）整体换空格，标签间文本内容原样保留（含 `#{}` / `${}` 占位符）；
+ *    CDATA `<![CDATA[`）整体占位，标签间文本内容原样保留（含 `#{}` / `${}` 占位符）；
  *  - 输出与输入**等长**（1:1 偏移量映射，供其他分析按原文本偏移量定位）；
+ *  - **动态控制流开标签 `<where>`/`<set>` 换等长的关键字替身 `WHERE`/`SET`（不足补空格）**——
+ *    纯空白占位会把 WHERE/SET 从文本中抹掉，两处连锁误判（用户真机实证，160 块 where 内
+ *    裸列补全零候选）：①[detectClause] 把光标位置误判 TABLE（FROM 成最后可见关键字→
+ *    列名分支整体跳过）；②[parseTableAliases] 的表清单吞掉 WHERE 终止词，把 where 内
+ *    第一个裸词（如 `deleted`）误判为 FROM 表的别名（候选被 `别名.` 前缀污染）；
+ *  - 闭合标签与其余标签（if/include/trim/foreach/choose/bind 等无子句关键字语义）照旧空白；
  *  - 依据：XML 文本中 `<` 必须转义（`&lt;`），故 `<` 只会出现在标签起始，算法成立；
- *    未闭合的标签残段同样换空格（保持等长）。
+ *    未闭合的标签残段同样占位（保持等长）。
  */
 fun stripXmlTags(text: String): String {
     val sb = StringBuilder(text.length)
@@ -30,7 +36,15 @@ fun stripXmlTags(text: String): String {
             while (j < text.length && text[j] != '>') j++
             // 含 `>`；未闭合时替换到文本末尾
             val end = if (j < text.length) j + 1 else j
-            for (k in i until end) sb.append(' ')
+            val keyword = clauseKeywordOf(text, i, end)
+            if (keyword != null) {
+                // 前导空格与左侧词分隔（防 `user<where>` 剥成 `userWHERE` 粘连词），尾部补空格保等长
+                sb.append(' ')
+                sb.append(keyword)
+                repeat(end - i - keyword.length - 1) { sb.append(' ') }
+            } else {
+                for (k in i until end) sb.append(' ')
+            }
             i = end
         } else {
             sb.append(text[i])
@@ -38,6 +52,24 @@ fun stripXmlTags(text: String): String {
         }
     }
     return sb.toString()
+}
+
+/**
+ * 开标签 `<where>`/`<set>`（含带属性形态，大小写不敏感）→ 大写关键字替身（调用方补空格保等长）；
+ * 闭合标签、注释/CDATA/声明、其余标签 → null（纯空白占位）。
+ */
+private fun clauseKeywordOf(text: String, start: Int, end: Int): String? {
+    if (start + 1 >= end) return null
+    val second = text[start + 1]
+    if (second == '/' || second == '!' || second == '?') return null
+    if (!second.isLetter()) return null
+    var j = start + 1
+    while (j < end && (text[j].isLetterOrDigit() || text[j] == '_' || text[j] == '-')) j++
+    return when (text.substring(start + 1, j).lowercase()) {
+        "where" -> "WHERE"
+        "set" -> "SET"
+        else -> null
+    }
 }
 
 /**
