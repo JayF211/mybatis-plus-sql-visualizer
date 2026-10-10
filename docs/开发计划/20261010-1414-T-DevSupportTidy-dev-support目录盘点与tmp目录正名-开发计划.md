@@ -25,6 +25,8 @@
 
 核心差距：**没有 `dev-support/README.md` 索引**，新会话/新协作者面对 30+ 文件无从下手；`tmp-capturerepro` 的名字会让人误以为可以随手删。
 
+> 2026-10-10 旁证与边界：同日 `3ef0c0a`（外层工作区清理）删掉的是**仓库外** `F:/code/Java/Gitee/SongRenShuo/` 下的两个失败证据目录（`shard3-fail-evidence/`、`tperf10-failure-evidence/`），**与 `dev-support/` 内的 `evidence/` 无关**——本计划「保留 dev-support 内取证日志」的决定不受其影响；同日 `3e531d1`（v2026.10.13 发行）对 `dev-support/e2e-fake-ide/evidence/*.log` 只做了行尾归一，内容与目录结构不变。
+
 ## 二、目标
 
 1. `tmp-capturerepro/` 正名（去掉误导性的 `tmp`），保留其可复用装置与取证日志。

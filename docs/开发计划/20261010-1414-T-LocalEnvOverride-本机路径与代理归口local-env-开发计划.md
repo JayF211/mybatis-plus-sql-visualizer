@@ -55,6 +55,7 @@ MPSV_PROXY_PORT=7890
 - **D4（代理键的取舍）**：代理地址进 `local.env`；**默认值仍保留 `127.0.0.1:7890`**（本机现状），但在 `local.env` 里可置空以关闭代理。
 - **D5（不改 `run-ide-local-manifest.sh`）**：它已相对化，无改动。
 - **D6（不动 `.run/*.xml`）**：运行配置用 `$PROJECT_DIR$` 宏，已是 IDE 侧相对路径，不属本任务。
+- **D7（`.env` 必须钉 LF，2026-10-10 补）**：仓库已于 `49f0f74` 落 `.gitattributes`（`* text=auto eol=crlf` ＋ `*.sh`/`*.bash text eol=lf`），**但 `.env` 未覆盖**。`local.env` 由 bash `.` 加载，若检出为 CRLF，每个赋值尾部会带 `\r`（值污染——端口会变成 `7890\r`、路径会变成 `...\r`，且报错信息难以定位）。须在 `.gitattributes` 补 `*.env text eol=lf`（同时覆盖 `local.env` 与入库的 `local.env.example`）。
 
 ## 四、待验证前提
 
@@ -63,10 +64,11 @@ MPSV_PROXY_PORT=7890
 - **P3**：`.mjs` 脚本的 env 传递路径成立——确认调用方式（谁起 node），据以决定是「读 `process.env`」还是「node 内解析 `.local/local.env` 文件」。
 - **P4**：`run-verifier.sh` 改造后**实际能跑通一次 verifier**（改造不得只做静态替换，须真跑一次三 IDE check-plugin，读数与改造前一致）。
 - **P5**：`.local/local.env` 未创建时脚本行为——须走「动态发现」分支正常跑通，而不是报错。
+- **P6（2026-10-10 补）**：`.gitattributes` 的 `*.env text eol=lf` 生效性——实施后 `git check-attr eol -- .local/local.env.example` 应返回 `lf`；并实测 `set -a; . .local/local.env; set +a; printf '%s' "$MPSV_PROXY_PORT"` 无尾随 `\r`。
 
 ## 五、实施步骤
 
-1. 建 `.local/local.env.example`（**入库**，作模板；真实 `local.env` 被忽略）——含 §三 键位与注释。
+1. 建 `.local/local.env.example`（**入库**，作模板；真实 `local.env` 被忽略）——含 §三 键位与注释；并在 `.gitattributes` 补 `*.env text eol=lf`（D7）。
 2. 改 `dev-support/run-verifier.sh`：顶部加载 `local.env`（存在才 source）；`PLUGIN_DIR` 改由脚本位置推导；`VERIFIER`/`IDE_243`/`IDE_253` 改动态发现（照 `IDE_262` 形态）；`JAVA` 改 `MPSV_JAVA` → `$JAVA_HOME/bin/java` → `java`；代理改 `MPSV_PROXY_*`。
 3. 改 `dev-support/mcp-test/mpsv-mcp-test.mjs`：`demoRoot` 改读 `process.env.MPSV_DEMO_ROOT`，缺省给可读报错。
 4. 改 `dev-support/e2e-fake-ide/run-e2e.sh`：`DEMO_DIR` 默认值去掉本机字面量，改由 `local.env`/`MPSV_DEMO_ROOT` 提供，缺失时报错。
@@ -81,6 +83,7 @@ MPSV_PROXY_PORT=7890
 - [ ] 建 `local.env` 覆盖 `MPSV_PROXY_PORT` 后，脚本实际带上新端口（可用 `bash -x` 或临时 echo 核验）。
 - [ ] `node dev-support/mcp-test/mpsv-mcp-test.mjs`（或等价调用）在设 `MPSV_DEMO_ROOT` 后能找到 demo 工程。
 - [ ] `.local/local.env` 与 `.local/local.env.example` 的忽略状态正确（前者忽略、后者入库）——依赖 T-RepoLayout 的 `.local/*` + `!.local/README.md` 规则；**须同步加 `!.local/local.env.example`**（否则模板也被忽略）。
+- [ ] `git check-attr eol -- .local/local.env.example` 返回 `lf`；加载后 `$MPSV_PROXY_PORT` 等值无尾随 `\r`（D7/P6）。
 - [ ] `run-verifier.sh` 改造前后三 IDE check-plugin 读数一致（真跑一次对照）。
 
 ## 七、实施记录
