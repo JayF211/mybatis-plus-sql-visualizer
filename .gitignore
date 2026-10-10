@@ -74,6 +74,9 @@ out/
 ### 演示 GIF 录制（record/ 只入库可复用脚本，中间产物不进仓库）###
 record/perf/
 record/**/__pycache__/
+# Python 字节码缓存：dev-support 下的编排脚本（拆文件/权重刷新等）本地 import 即生成
+dev-support/**/__pycache__/
+**/__pycache__/
 
 ### Plugin Verifier（校验产物，不进仓库） ###
 dev-support/verify-target/

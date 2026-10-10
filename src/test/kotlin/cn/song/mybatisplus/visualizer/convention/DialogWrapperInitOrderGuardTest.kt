@@ -157,6 +157,15 @@ class DialogWrapperInitOrderGuardTest {
         return i
     }
 
+    /** init 块（下标 [idx]）的归属类名：向上找最近一条**顶格**类/对象声明（T-M53-II 跨文件解析用）。 */
+    private fun ownerClassAt(lines: List<String>, dep: IntArray, idx: Int): String? {
+        for (i in idx - 1 downTo 0) {
+            if (dep[i] != 0) continue
+            CLASS_DEF.find(lines[i])?.takeIf { it.range.first == 0 }?.let { return it.groupValues[1] }
+        }
+        return null
+    }
+
     private data class Hit(
         val file: String,
         val line: Int,
@@ -182,6 +191,26 @@ class DialogWrapperInitOrderGuardTest {
         val violations = mutableListOf<Hit>()
         var initBlocks = 0
         var classesWithBodies = 0
+
+        /**
+         * T-M53-II（2026-10-10）：同包扩展方法体索引 —— 组合式重构把 `SqlPreviewPanel.toolbar()`
+         * 这类构造期被 init 块调用的方法体搬到了同包协作文件。若不跨文件解析，「构造期先写后读」
+         * 这条豁免路径就对真实形态失明（判据形同只认单文件老布局），且 init 块会因 `bodies` 为空
+         * 被整体跳过——扫描面漏站点正是本仓反复点名的一类假绿。
+         * 键 = (接收者类名, 函数名)，与 init 块归属类名 + init 内被调用名配对使用。
+         */
+        val extBodies = mutableMapOf<Pair<String, String>, String>()
+        sources.forEach { (_, raw) ->
+            val ls = stripStrings(raw).split('\n')
+            val dp = depths(ls)
+            ls.forEachIndexed { fi, l ->
+                val m = EXT_FUN_DEF.find(l) ?: return@forEachIndexed
+                if (m.range.first != 0) return@forEachIndexed
+                val owner = m.groupValues[1].substringAfterLast('.')
+                extBodies.putIfAbsent(owner to m.groupValues[2], blockEnd(ls, dp, fi).let { ls.subList(fi, it).joinToString("\n") })
+            }
+        }
+
         sources.forEach { (file, raw) ->
             val lines = stripStrings(raw).split('\n')
             val dep = depths(lines)
@@ -215,6 +244,15 @@ class DialogWrapperInitOrderGuardTest {
                     val fm = FUN_DEF.find(lines[fi]) ?: return@forEachIndexed
                     if (fm.range.first == 0 && fm.groupValues[2] in invoked && dep[fi] >= d) {
                         bodies[fm.groupValues[2]] = lines.subList(fi, blockEnd(lines, dep, fi)).joinToString("\n")
+                    }
+                }
+                // 补上「构造期被调用、但方法体在同包协作文件里」的扩展方法体（T-M53-II）：
+                // 只在 init 块确被调用、且接收者就是本 init 块的归属类时才并入，避免同名误并。
+                // 必须在下面的 isEmpty 判定**之前**——否则「构造期调用的方法体全在兄弟文件」的
+                // 类会被整体跳过（正是本轮要修的那类漏站点）。
+                ownerClassAt(lines, dep, idx)?.let { owner ->
+                    invoked.filter { it !in bodies }.forEach { name ->
+                        extBodies[owner to name]?.let { bodies[name] = it }
                     }
                 }
                 if (bodies.isEmpty()) return@forEachIndexed
@@ -447,6 +485,19 @@ class DialogWrapperInitOrderGuardTest {
             "^( *)(?:(?:private|internal|protected|public|open|override|suspend|inline|tailrec" +
                 "|operator|abstract)\\s+)*fun\\s+(?:<[^>]+>\\s+)?(\\w+)\\s*\\("
         )
+
+        /**
+         * 顶格**扩展函数**定义（`fun <接收者>.<名>(`）——T-M53-II 组合式重构后，类的成员方法体
+         * 可能被搬到同包协作文件里（如 `SqlPreviewPanel.toolbar()`）。
+         * 收 group[1]=接收者（取最后一段）、group[2]=函数名。
+         */
+        val EXT_FUN_DEF = Regex(
+            "^(?:(?:private|internal|protected|public|open|override|suspend|inline|tailrec" +
+                "|operator|abstract)\\s+)*fun\\s+([\\w.]+)\\.(\\w+)\\s*\\("
+        )
+
+        /** 顶格类/对象声明（用于给 init 块找归属类名，进而解析兄弟文件的扩展方法体）。 */
+        val CLASS_DEF = Regex("^[\\w ]*\\b(?:class|object|interface)\\s+(\\w+)")
         val INVOKED = Regex("(?:[\\w.]+\\s*\\.\\s*)?(\\w+)\\s*\\(")
         val PLAIN_WRITE = Regex("[A-Za-z_]\\w*\\s*=(?!=)")
 

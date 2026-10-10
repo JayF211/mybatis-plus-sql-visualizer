@@ -149,9 +149,10 @@ class BannedApiSourceScanTest : BannedApiScanSupport() {
         //   对话框本体非模态 MODELESS，仅此一处确认弹窗，20260924 收口门禁守卫命中后按红线加白）。
         val whitelist = setOf(
             "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SourceCaptureGuide.kt",
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt",
             // T-M53-II D2-5：面板的 6 个模态调用点（执行前 YesNo 确认、导出格式三选、
             // 回滚 SQL info）随执行链逐字符搬出到 SqlPreviewPanelExecution.kt——场景依据同下。
+            // 主文件 `ui/SqlPreviewPanel.kt` 已无模态调用点，故本表不再为它加白（避免白名单
+            // 条目变成「顺手弹个窗」的隐性许可）。
             "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.kt",

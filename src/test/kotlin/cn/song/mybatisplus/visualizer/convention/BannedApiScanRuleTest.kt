@@ -620,10 +620,10 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.kt" to
             CatchExemption(7, "后台候选收集失败返回空列表，用户侧看到「未找到候选」提示（非长驻链路）"),
         // 4 处：JOIN 图渲染/后台富化失败回落「无图 / 未富化模型」。
-        // T-M53-II（2026-10-10）：原 5 处中的 `bindAutoPopup` 补全站点随组合式重构搬进
-        // SqlPreviewPanelEditorLifecycle.kt（下面单列 1 处），本文件余 4 处（updateDiagramTab /
-        // showJoinDiagram / clearNativeDiagram 链）。
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt" to
+        // T-M53-II（2026-10-10）：原 5 处中的 `bindAutoPopup` 补全站点搬进 SqlPreviewPanelEditorLifecycle.kt
+        // （下面单列 1 处）；余 4 处（updateDiagramTab / showJoinDiagram / clearNativeDiagram 链）
+        // 随「结果区/图表 Tab」整块搬进 SqlPreviewPanelResultView.kt——本表按站点真正所在文件登记。
+        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelResultView.kt" to
             CatchExemption(4, "JOIN 图渲染/富化失败回落无图或未富化模型（已 warn 留痕 + 显式摘转圈）"),
         // 1 处：补全弹窗异常不影响输入（同 `ui/SqlInputEditor.kt` 族）——T-M53-II D2-5 随
         // `bindAutoPopup` 搬出（原属 SqlPreviewPanel.kt 的 5 处之一，站点数与语义均未变）。
