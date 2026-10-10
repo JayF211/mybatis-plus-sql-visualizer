@@ -90,6 +90,14 @@ class NativeSearchTextField(
 
     fun isRegex(): Boolean = findModel.isRegularExpressions
 
+    /**
+     * 原生状态区读数（对齐 IDEA 搜索条的「N results」位置）：过滤完成后由调用方写入命中数。
+     * SearchReplaceComponent 的 status 区域自带原生配色（未命中时红底等），本类只透传文本。
+     */
+    fun setStatusText(text: String) {
+        component.setStatusText(text)
+    }
+
     /** 原生开关钮经 DataManager 沿组件树取 `SearchSession.KEY`（SearchReplaceComponent 已应答；兜底自答）。 */
     override fun getData(dataId: String): Any? =
         if (SearchSession.KEY.`is`(dataId)) searchSession else null

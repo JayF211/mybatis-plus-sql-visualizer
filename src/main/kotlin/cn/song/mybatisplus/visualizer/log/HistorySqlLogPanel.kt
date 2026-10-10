@@ -563,7 +563,11 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         } else {
             allFiles.filter { it.displayName.contains(query, ignoreCase = !matchCaseEnabled) }
         }
-        filtered.forEach { fileListModel.addElement(it) }
+        filtered.forEach { fileListModel.addElement(it) } 
+        // T-SearchToggleNativeLook：原生状态区读数（对齐 IDEA 搜索条「N results」位）
+        nativeSearch.setStatusText(
+            if (query.isEmpty()) "" else MpSqlVisualizerBundle.message("log.history.search.results", filtered.size),
+        )
     }
 
     private fun applySqlSearch() {
@@ -575,15 +579,19 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         // 形态照日志页 filterBySearch 先例）；memo 实例面板持有，防抖 200ms 反复 apply 复用编译结果。
         // 正则生效条件 = 开关或 `regex:` 前缀（前缀是已发行能力，验收 3.11 不回归）；编译旗随
         // matchCase；非法正则 fail-closed 回退子串保持；行号 `#N` 精确匹配不受开关影响。
-        showSqlEntries(
+        val filteredEntries =
             filterHistoryEntries(
                 currentEntries,
                 searchField.text.trim(),
                 regexEnabled = regexEnabled,
                 matchCase = matchCaseEnabled,
                 memo = regexMemo,
-            ),
+            )
+        // T-SearchToggleNativeLook：原生状态区读数（对齐 IDEA 搜索条「N results」位）
+        nativeSearch.setStatusText(
+            if (searchField.text.trim().isEmpty()) "" else MpSqlVisualizerBundle.message("log.history.search.results", filteredEntries.size),
         )
+        showSqlEntries(filteredEntries)
     }
 
     /**
