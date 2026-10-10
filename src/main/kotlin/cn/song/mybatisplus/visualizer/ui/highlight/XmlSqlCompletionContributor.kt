@@ -166,11 +166,13 @@ class XmlSqlCompletionContributor : CompletionContributor(), DumbAware {
                     }
 
                     // d. SQL 补全：语句文本等长剥离标签 → 纯文本分析 → prefixMatches 过滤
+                    // T-XmlCmpl3 二段：过滤按**任一 lookup string**（prefixedColumn 的附加串
+                    // `别名.列名` 命中已敲的 `o.user_i`，而插入用主串裸列名——防别名重复）
                     val stripped = stripXmlTags(statementText)
                     val sqlContext = resolveContext(statementTag)
                     SourceSqlCompleter.sqlCompletions(stripped, caretInStatement, sqlContext)
                         .forEach { item ->
-                            if (prefix.prefixMatches(item.lookupString)) result.addElement(item)
+                            if (item.allLookupStrings.any { prefix.prefixMatches(it) }) result.addElement(item)
                         }
                 }
             },
