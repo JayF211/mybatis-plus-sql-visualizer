@@ -18,7 +18,8 @@ import com.intellij.ui.components.JBTextArea
  *
  * 修正：改走平台 `SearchReplaceComponent.Builder.buildFor(...)` 全套——原生框体/边距/焦点处理
  * 一步到位（EditorSearchSession 同款装配）；`withShowOnlySearchPanel()` 去掉 replace 行；
- * 开关钮经 `addSearchFieldActions(ToggleMatchCase[, ToggleRegex])` 内嵌。
+ * 开关钮经 `addPrimarySearchActions(ToggleMatchCase[, ToggleRegex])` 内嵌（框内主位——
+ * 首版误挂 addSearchFieldActions 致钮不显示，用户真机指出）。
  *
  * 会话仍为极小 [MinSearchSession]（自有 [FindModel]，不与 IDE 全局 Find 串线）；
  * SearchReplaceComponent 自身实现 DataProvider 应答 SearchSession.KEY，故原生钮可用，
@@ -48,7 +49,7 @@ class NativeSearchTextField(
         javax.swing.JPanel(),
         searchSession,
     )
-        .addSearchFieldActions(
+        .addPrimarySearchActions(
             ToggleMatchCase(),
             if (showRegex) ToggleRegex() else DoNothingAction(),
         )
