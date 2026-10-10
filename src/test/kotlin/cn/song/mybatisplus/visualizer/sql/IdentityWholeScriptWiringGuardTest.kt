@@ -107,14 +107,16 @@ class IdentityWholeScriptWiringGuardTest {
 
     @Test
     fun `executeAdhocSql体内每个SqlExecutor调用都传wholeScriptExec`() {
-        val body = mainKt("cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt")
-        val fnStart = body.indexOf("internal fun executeAdhocSql(")
+        // T-M53-II D2-5：`executeAdhocSql` 随执行链组合式重构搬到同包 SqlPreviewPanelExecution.kt
+        // （扩展函数形态），读取面须指向站点真正所在文件，否则 `未找到 executeAdhocSql` 直接红。
+        val body = mainKt("cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt")
+        val fnStart = body.indexOf("internal fun SqlPreviewPanel.executeAdhocSql(")
         assertTrue("未找到 executeAdhocSql", fnStart >= 0)
         val fn = body.substring(fnStart)
         val offenders = mutableListOf<String>()
         var checked = 0
         for (call in listOf("SqlExecutor.execute(", "SqlExecutor.executePrepared(")) {
-            for (span in callsWithin(fn, "internal fun executeAdhocSql(", call)) {
+            for (span in callsWithin(fn, "fun SqlPreviewPanel.executeAdhocSql(", call)) {
                 checked++
                 val exempted = exempt["SqlPreviewPanel.kt"]?.any { span.contains(it) } == true
                 if (!exempted && !span.contains("wholeScriptExec")) {
@@ -168,11 +170,11 @@ class IdentityWholeScriptWiringGuardTest {
 
     @Test
     fun `executeAdhocSql确实计算了identity识别特征`() {
-        val fn = mainKt("cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt")
-        val fnStart = fn.indexOf("internal fun executeAdhocSql(")
+        val fn = mainKt("cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt")
+        val fnStart = fn.indexOf("internal fun SqlPreviewPanel.executeAdhocSql(")
         assertTrue(
             "executeAdhocSql 必须用 IdentityInsertStatements 判定旗标（识别特征=含 SET IDENTITY_INSERT 语句）",
-            callsWithin(fn.substring(fnStart), "internal fun executeAdhocSql(", "IdentityInsertStatements.containsStatement(")
+            callsWithin(fn.substring(fnStart), "fun SqlPreviewPanel.executeAdhocSql(", "IdentityInsertStatements.containsStatement(")
                 .isNotEmpty(),
         )
     }

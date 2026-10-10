@@ -154,9 +154,25 @@ class PrepareSingleFlightGateTest {
         sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/execute/$it")
     }
 
+    /** T-M53-II D2-5：嵌入调用点随执行链搬到同包协作文件，读取面取面板全体源文件并集。 */
+    private fun panelUnion(): String {
+        val dir = java.io.File(
+            java.io.File(System.getProperty("user.dir")).absoluteFile.let { d ->
+                var x: java.io.File? = d
+                while (x != null && !java.io.File(x, "src/main/kotlin").isDirectory) x = x.parentFile
+                x ?: error("未定位到仓库根")
+            },
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui",
+        )
+        return dir.listFiles().orEmpty()
+            .filter { it.isFile && it.name.startsWith("SqlPreviewPanel") && it.extension == "kt" }
+            .sortedBy { it.name }
+            .joinToString("\n") { it.readText() }
+    }
+
     @Test
     fun `接线_全链执行embed调用点全部显式EXECUTE`() {
-        val panel = sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt")
+        val panel = panelUnion()
         // 五条全链执行链（executeSql 两处 / executeAdhocSql 两处 / EXPLAIN 直送一处）
         assertEquals(
             5,

@@ -150,6 +150,9 @@ class BannedApiSourceScanTest : BannedApiScanSupport() {
         val whitelist = setOf(
             "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SourceCaptureGuide.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt",
+            // T-M53-II D2-5：面板的 6 个模态调用点（执行前 YesNo 确认、导出格式三选、
+            // 回滚 SQL info）随执行链逐字符搬出到 SqlPreviewPanelExecution.kt——场景依据同下。
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/config/McpConfigurable.kt",
