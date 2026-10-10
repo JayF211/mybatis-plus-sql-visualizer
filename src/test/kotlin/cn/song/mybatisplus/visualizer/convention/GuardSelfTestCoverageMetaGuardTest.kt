@@ -226,6 +226,19 @@ class GuardSelfTestCoverageMetaGuardTest {
     private fun indentOf(line: String): Int = line.length - line.trimStart().length
 
     /** 文件名闭包：含 `Guard` 或以 `SourceScanTest` 结尾（指南守卫族全清单的机器可读口径）。 */
+    // ===== 跨文件解析面（T-M53-II 登记模型扩展）=====
+    // via 调用边**先本文件、再注册面全集**解析（判定内核与其调用用例允许分处两文件）；同名函数以本文件为准，
+    // 避免各守卫共有的 scan/stripComments 张冠李戴；边仍须真实存在（改名/删除照旧报红）。
+    // **语料刻意不跨文件解析**：实测同名函数会把 A 文件的用法算到 B 文件头上（误报），故「自证语料与判定内核
+    // 同文件」是硬约束——这正是 BannedApiSourceScanTest 必须按规则族拆分的依据。
+    private val allRegisteredDecls: List<FnDecl> by lazy {
+        GUARD_CLASSES.flatMap { fnDecls(sourceOf(it.path)) }
+    }
+
+    private val allRegisteredByName: Map<String, FnDecl> by lazy {
+        allRegisteredDecls.associateBy { it.name }
+    }
+
     private fun isGuardFile(fileName: String): Boolean {
         val base = fileName.removeSuffix(".kt")
         return "Guard" in base || base.endsWith("SourceScanTest")
@@ -300,8 +313,9 @@ class GuardSelfTestCoverageMetaGuardTest {
     fun `豁免必须机器可校验_转发调用边与调用点真实存在`() {
         val problems = mutableListOf<String>()
         GUARD_CLASSES.forEach { entry ->
-            val decls = fnDecls(sourceOf(entry.path))
-            val byName = decls.associateBy { it.name }
+            val ownByName = fnDecls(sourceOf(entry.path)).associateBy { it.name }
+            // T-M53-II：先本文件、再注册面全集（口径见 allRegisteredByName）。
+            val byName = allRegisteredByName
             entry.decisionFns.filter { it.exempt != null }.forEach { fn ->
                 if (fn.via.isEmpty()) {
                     problems += "${entry.path} :: ${fn.name} 豁免只有散文理由（无 via 调用边）——" +
@@ -309,7 +323,7 @@ class GuardSelfTestCoverageMetaGuardTest {
                     return@forEach
                 }
                 fn.via.forEach { caller ->
-                    val target = byName[caller]
+                    val target = ownByName[caller] ?: allRegisteredByName[caller]
                     if (target == null) {
                         problems += "${entry.path} :: ${fn.name} 的 via 指向本类不存在的函数 '$caller'（改名/删除后豁免静默空转）"
                     } else if (!references(target.body, fn.name)) {
@@ -650,7 +664,7 @@ class GuardSelfTestCoverageMetaGuardTest {
             ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
-                "convention/BannedApiSourceScanTest.kt",
+                "convention/BannedApiScanSupport.kt",
                 listOf(
                     DecisionFn(
                         "assertNoHits",
@@ -663,6 +677,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                             "剪贴板写入只允许收口与白名单直用",
                         ),
                     ),
+                ),
+                "T-M53-II 拆出的扫描支撑基类：判定面只剩断言助手 assertNoHits（豁免；via 指向三个调用用例，用例在同批拆出的测试类中，经注册面全集解析）。",
+            ),
+            GuardEntry(
+                "convention/BannedApiSourceScanTest.kt",
+                listOf(
+                ),
+                "T-M53-II 拆出的「禁用 API 与结构锚点」测试类：断言内联在用例里，无独立判定内核，故 decisionFns 留空。",
+            ),
+            GuardEntry(
+                "convention/BannedApiScanRuleTest.kt",
+                listOf(
                     DecisionFn(
                         "invokeLaterSites",
                         FnKind.SITES,
@@ -686,8 +712,14 @@ class GuardSelfTestCoverageMetaGuardTest {
                     DecisionFn("fatalPassthroughOffenders", FnKind.VIOLATIONS),
                     DecisionFn("pooledThreadSites", FnKind.SITES),
                     DecisionFn("psiCaptureOffenders", FnKind.VIOLATIONS),
-                    // 独立复核㉗：此前的「真缺口」豁免（无合成样本）已由 `TEDTRC自证_…` 关闭，豁免条目删除。
                     DecisionFn("edtReadContractOffenders", FnKind.VIOLATIONS),
+                    DecisionFn("anyModalityInUpdatePackageOffenders", FnKind.VIOLATIONS),
+                ),
+                "T-M53-II 拆出的四族规则类（写安全·模态 / catch(Throwable) 致命 / 池化线程读 PSI / 跳转族读权限）：判定内核与其自证用例同文件。",
+            ),
+            GuardEntry(
+                "convention/BannedApiScanServiceStateTest.kt",
+                listOf(
                     DecisionFn("initEntrySites", FnKind.SITES),
                     DecisionFn(
                         "serviceWriteHits",
@@ -696,8 +728,6 @@ class GuardSelfTestCoverageMetaGuardTest {
                         via = listOf("projectServiceStateOffenders"),
                     ),
                     DecisionFn("projectServiceStateOffenders", FnKind.VIOLATIONS),
-                    // ---- 2026-09-22 合并 master 后补登记（master 侧 O-56 批次扩 BannedApiSourceScanTest 时新增） ----
-                    DecisionFn("anyModalityInUpdatePackageOffenders", FnKind.VIOLATIONS),
                     DecisionFn(
                         "entrySites",
                         FnKind.SITES,
@@ -708,9 +738,9 @@ class GuardSelfTestCoverageMetaGuardTest {
                     DecisionFn("teardownEntrySites", FnKind.SITES),
                     DecisionFn("teardownServiceLookupOffenders", FnKind.VIOLATIONS),
                 ),
-                "本仓判定内核最集中的守卫类；自证语料为 `update包any模态守卫自证_…` / `尾随lambda写文档守卫自证_…` / " +
-                    "`TFS06自证_…` / `TFP03自证_…` / `TPCP04自证_…` / `R2自证_…` / `TST02d自证_…` / `TEDTRC自证_…`",
+                "T-M53-II 拆出的项目服务状态规则族：判定内核与其自证用例同文件。",
             ),
+
             GuardEntry(
                 "convention/DialogWrapperInitOrderGuardTest.kt",
                 listOf(
