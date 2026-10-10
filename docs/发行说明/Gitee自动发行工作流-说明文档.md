@@ -132,7 +132,7 @@ description / 市场页定位是纯能力陈列，不承担「最近更新」播
 > python dev-support/gitee-release.py --version 2026.10.9 --delete-only
 > ```
 >
-> 前置：`gitee-token.json` 在仓库根、`buildPlugin` 已产 zip、远端标签 `{version}` 已 push。
+> 前置：`gitee-token.json` 在 `.local/`（机器本地目录，2026-10-10 起由仓库根迁入）、`buildPlugin` 已产 zip、远端标签 `{version}` 已 push。
 > `--replace` 按 `GET /releases/tags/{tag}` 查旧版后 `DELETE` 再重建（Gitee 无编辑接口，换附件
 > 只能删了重建；同名附件下载 URL 不变）；`--delete-only` 只删发行版、**不动远端标签**——删标签
 > 才连坐删发行版，所以换附件时**不要**去删标签。建版流程里的附件 sha256 比对只告警（同名附件
@@ -140,9 +140,9 @@ description / 市场页定位是纯能力陈列，不承担「最近更新」播
 > 下方为端点级明细与坑位（脚本已规避，排障时对照）。
 
 鉴权一律 `access_token` 参数（Personal Access Token，需 projects 权限）。
-令牌存仓库根 `gitee-token.json`（字段 `gitee_personal_access_token`/`owner`/`repo`；已进 .gitignore，
+令牌存 `.local/gitee-token.json`（机器本地目录 `.local/`，整目录 gitignore、仅 README 白名单入库；2026-10-10 起由仓库根迁入，字段 `gitee_personal_access_token`/`owner`/`repo`；
 严禁提交/外传），脚本读取：
-`TOKEN = json.load(open('gitee-token.json', encoding='utf-8'))['gitee_personal_access_token']`。
+`TOKEN = json.load(open('.local/gitee-token.json', encoding='utf-8'))['gitee_personal_access_token']`。
 以下 `{owner}/{repo}` = `songrenshuo/mybatis-plus-sql-visualizer`。
 
 ### 1. 建发行版
@@ -231,7 +231,7 @@ GET https://gitee.com/api/v5/repos/{owner}/{repo}/releases/{id}
 ```python
 import json, os, urllib.request, urllib.parse
 
-TOKEN = json.load(open('gitee-token.json', encoding='utf-8'))['gitee_personal_access_token']
+TOKEN = json.load(open('.local/gitee-token.json', encoding='utf-8'))['gitee_personal_access_token']
 BASE = 'https://gitee.com/api/v5/repos/songrenshuo/mybatis-plus-sql-visualizer/releases'
 
 # 1) 建发行版（body 参数名！）

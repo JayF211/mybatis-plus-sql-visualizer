@@ -81,7 +81,11 @@ dev-support/verify-logs/
 verification-*/
 *.hprof
 
-### 本地凭据（严禁提交） ###
+### 机器本地文件（凭据/令牌/本机路径覆盖，严禁提交） ###
+# .local/ 收拢机器本地文件；整目录忽略，仅放行说明用 README（git 规则：
+# 父目录被排除则无法再包含子文件，故必须用 .local/* 而非 .local/）。
+.local/*
+!.local/README.md
 gitee-token.*
 *.token
 .secrets/

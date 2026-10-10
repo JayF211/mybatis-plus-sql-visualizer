@@ -24,7 +24,8 @@ Gitee 自动发行脚本（可复用）
      GET /releases/tags/{tag}，实测受支持）
 
 依赖:
-  - 仓库根 gitee-token.json（字段: gitee_personal_access_token / owner / repo；已 gitignore）
+  - .local/gitee-token.json（字段: gitee_personal_access_token / owner / repo；已 gitignore。
+    2026-10-10 起由仓库根迁入 .local/，本脚本保留根目录旧路径作回退）
   - build/distributions/mybatis-plus-sql-visualizer-{version}.zip 已构建（buildPlugin）
   - 远端标签 {version} 已 push（否则建发行版 400）
 """
@@ -42,7 +43,19 @@ REPO_ROOT = os.path.dirname(SCRIPT_DIR)
 
 
 def load_config():
-    token_path = os.path.join(REPO_ROOT, "gitee-token.json")
+    # 2026-10-10 迁移：令牌优先读 .local/gitee-token.json，回退仓库根旧路径（已迁移的
+    # 机器与未迁移的机器都能跑）。
+    candidates = [
+        os.path.join(REPO_ROOT, ".local", "gitee-token.json"),
+        os.path.join(REPO_ROOT, "gitee-token.json"),
+    ]
+    token_path = next((p for p in candidates if os.path.exists(p)), None)
+    if token_path is None:
+        raise SystemExit(
+            "找不到令牌文件。请创建以下任一路径：\n  - "
+            + "\n  - ".join(candidates)
+            + "\n内容示例：{\"gitee_personal_access_token\": \"...\", \"owner\": \"...\", \"repo\": \"...\"}"
+        )
     with open(token_path, encoding="utf-8") as f:
         cfg = json.load(f)
     return (
