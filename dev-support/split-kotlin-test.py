@@ -118,6 +118,14 @@ def kdoc_start(lines, ci):
     return ci
 
 
+def supertype_of(lines, ci):
+    """类声明里类名之后、`{` 之前的部分（如 ` : BasePlatformTestCase()`）。
+    新类必须沿用父类型——JUnit3 的 BasePlatformTestCase 子类丢了它就连 myFixture/project 都不可见。"""
+    m = re.match(r'^\s*(internal\s+)?(class|object)\s+[A-Za-z_]\w*\s*(.*?)\s*\{\s*$',
+                 lines[ci])
+    return m.group(3) if m else ''
+
+
 def inspect(path):
     lines, nl, tr, ci, ce, decls, blocks = struct(path)
     print(f'file={path}  ({len(lines)} 行, nl={"CRLF" if nl == chr(13)+chr(10) else "LF"})')
@@ -141,7 +149,7 @@ def apply_split(path, new_file, new_class, move, dup, doc):
 
     new_lines = list(lines[:kdoc_start(lines, ci)]) + ['/**', f' * {doc}',
                                                        ' * （T-M53-II 2026-10-10：逐字符原样搬运，零逻辑改动。）', ' */',
-                                                       f'class {new_class} {{']
+                                                       f'class {new_class}{supertype_of(lines, ci)} {{']
     for b in moved + dupd:
         new_lines += b
     while new_lines and new_lines[-1].strip() == '':
