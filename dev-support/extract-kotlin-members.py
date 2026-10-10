@@ -68,6 +68,22 @@ def _aware_delta(text):
     return d
 
 
+def companion_member_names(lines, cs, ce):
+    """类体内 `companion object` 声明的成员名（属性/函数；含 `const val`）。
+
+    companion 与其成员都是「缩进 > 0 的行」，故按缩进找 companion 声明行，再扫到类体结束即可——
+    本仓 companion 恒为类体最后一块（`}` 顶格收尾），无需精确配对。
+    """
+    start = next((i for i in range(cs, ce) if re.match(r'^ +companion object\b', lines[i])), None)
+    if start is None:
+        return []
+    names = []
+    for i in range(start, ce):
+        for m in re.finditer(r'\b(?:const\s+val|val|var|fun)\s+([A-Za-z_]\w*)', lines[i]):
+            names.append(m.group(1))
+    return names
+
+
 def _top_level_close(lines, cs):
     """类体结束 = `cs` 之后第一条**顶格** `}`（Kotlin 顶层 class/object 的闭合括号）。
 
@@ -136,6 +152,8 @@ def apply(path, cls, idxs, new_file, doc):
         if bd != 0:
             raise SystemExit(f"成员 {r['name']}（第 {r['line']} 行）块内括号净差 {bd}——拒绝拆分")
     body_text = '\n'.join('\n'.join(lines[r['lo']:r['hi']]) for r in picked)
+    # companion 成员名必须先取（后面会从 lines 里删掉被搬成员，ce 会越过新长度）
+    comp_names = companion_member_names(lines, cs, ce)
     # 原类私有成员里，被搬走代码引用到的 → 放宽为 internal
     priv = []
     for r in members(lines, cs, ce):
@@ -190,6 +208,15 @@ def apply(path, cls, idxs, new_file, doc):
         simple = m.group(2) or m.group(1).rsplit('.', 1)[-1]
         if re.search(r'\b' + re.escape(simple) + r'\b', moved_text):
             head.append(l)
+    # companion 成员：Kotlin 规则下扩展函数**看不见**接收者类的 companion，被搬代码里引用到谁
+    # 就得显式 `import <pkg>.<cls>.Companion.<名>`（否则一串 Unresolved reference，人工补易漏）。
+    pkg = next((l.split()[1] for l in lines[:last_imp + 1] if l.startswith('package ')), '')
+    imported = {l.split()[-1] for l in head if l.startswith('import ')}
+    for name in comp_names:
+        if name in imported:
+            continue
+        if re.search(r'\b' + re.escape(name) + r'\b', moved_text):
+            head.append(f'import {pkg}.{cls}.Companion.{name}')
     tail_text = (['', f'// T-M53-II（2026-10-10）：以下为 {cls} 的「{doc}」内聚成员，',
                   '// 以同包扩展函数形式搬出——方法体逐字符搬运，被触及的私有成员已按需放宽为 internal。', ''] + ext)
     while tail_text and tail_text[-1].strip() == '':
