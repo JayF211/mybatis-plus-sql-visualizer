@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""A9 参数回填/动态条件勾选（wrapper-params.gif）20261011：
-预览弹窗已开（prep：Alt+Shift+Q 在 38 行 eq 链上唤起）→
-勾掉 username 条件（WHERE 少一条件）→ username 参数框键入 'tom'（条件回来并替换实值）
-→ status 框填 1 → 短停收尾。
-标定（20261011 屏幕坐标，弹窗 @ (100,148)）：username 复选框 (367,540)；
-username 输入框 (599,541)；status 输入框 (599,606)。
-坑：输入用 gifkit.paste 绕 IME；对话框首击可能被吞（连点两次无害——复选框是 toggle，两次=原态）。
+"""A9 参数回填/动态条件勾选（wrapper-params.gif）20261011 终版：
+前置：预览弹窗已开（点 37 行行内 + Alt+Shift+Q）、username 已取消勾选（status/age 保留）。
+流程：勾回 username（WHERE 回来 username = ?）→ username 参数框键入 'tom'
+→ SQL 里 ? 替换为 'tom' → status 参数框填 1 → WHERE status = 1。
+标定（20261011 屏幕坐标，弹窗 @ (100,275) 附近）：username 复选框 (411,410)；
+username 输入框 (578,410)；status 输入框 (578,475)。
+坑：弹窗内复选框热区即图标中心（新会话健康态）；输入用 gifkit.paste 绕 IME。
 """
 import sys
 import time
@@ -15,13 +15,12 @@ from gifkit import Recorder
 REGION = (277, 25, 1370, 984)
 OUT = "perf/a9_params.mp4"
 
-CHK_USER = (367, 540)
-IN_USER = (599, 541)
-IN_STATUS = (599, 606)
+CHK_USER = (411, 410)
+IN_USER = (578, 410)
+IN_STATUS = (578, 475)
 
 
 def main():
-    import ctypes
     import pyautogui
     pyautogui.FAILSAFE = False
     pyautogui.PAUSE = 0
@@ -31,21 +30,21 @@ def main():
     r.start()
     time.sleep(0.4)
 
-    # 1. 勾掉 username 条件
+    # 1. 勾回 username → WHERE 回来一个条件
     pyautogui.click(*CHK_USER)
-    time.sleep(1.4)
-
-    # 2. 填 username 参数（'tom'）
-    pyautogui.click(*IN_USER)
-    time.sleep(0.4)
-    gifkit.paste("'tom'")
     time.sleep(1.6)
 
-    # 3. 填 status 参数（1）
-    pyautogui.click(*IN_STATUS)
-    time.sleep(0.4)
-    gifkit.paste("1")
+    # 2. username 参数框填 'tom' → ? 替换为实值
+    pyautogui.click(*IN_USER)
+    time.sleep(0.5)
+    gifkit.paste("'tom'")
     time.sleep(1.8)
+
+    # 3. status 参数框填 1
+    pyautogui.click(*IN_STATUS)
+    time.sleep(0.5)
+    gifkit.paste("1")
+    time.sleep(2.0)
 
     print("frames:", r.stop())
 
