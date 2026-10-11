@@ -943,7 +943,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
      */
     private String clipToDropdownBudget(String text, JComponent target) {
         FontMetrics metrics = target.getFontMetrics(target.getFont());
-        return SqlPreviewPanelTextKt.clipTailToWidth(text, metrics::stringWidth, JBUI.scale(DROPDOWN_TEXT_BUDGET_PX));
+        return cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelTextKt.clipTailToWidth(text, metrics::stringWidth, JBUI.scale(DROPDOWN_TEXT_BUDGET_PX));
     }
 
     // ---------- 工具栏动作 ----------
@@ -1902,7 +1902,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
             for (LogSqlEntry it : distinct.values()) {
                 sqls.add(it.restoredSql());
             }
-            Pair<Integer, Boolean> result = ruleManager.addRules(sqls); // F21：单次 republish
+            kotlin.Pair<Integer, Boolean> result = ruleManager.addRules(sqls); // F21：单次 republish
             refreshList(); // addRule 的监听器已同步更新缓冲键集——存量行立即消失
             if (result.getFirst() > 0) {
                 SqlLogPanelActionsKt.showSuppressBalloon(SqlLogPanel.this, result.getFirst());

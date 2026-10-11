@@ -193,8 +193,7 @@ public final class XmlSynHiGate {
      * 导入均汇入，PluginSettingsPanel.apply 末尾恒 loadState(s.copy())）；快照默认 true 同
      * State 默认值，测试环境无服务时语义不变。</p>
      */
-    @Volatile
-    private static boolean xmlSynHiEnabledSnapshot = true;
+    private static volatile boolean xmlSynHiEnabledSnapshot = true;
 
     /** 快照刷新（PluginSettings.loadState 唯一漏斗调用；测试经 loadState 走同一路径）。 */
     public static void refreshXmlSynHiEnabledSnapshot(boolean enabled) {

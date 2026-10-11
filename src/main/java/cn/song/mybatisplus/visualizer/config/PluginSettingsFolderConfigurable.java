@@ -603,8 +603,7 @@ public class PluginSettingsFolderConfigurable implements Configurable {
      * Settings/实例），故单槽预置、本页 {@code createComponent} 后消费一次。后到覆盖
      * （点击是显式用户动作，无需排队）。</p>
      */
-    @Volatile
-    private static PendingFocus pendingFocus = null;
+    private static volatile PendingFocus pendingFocus = null;
 
     /** 待定位目标（页 id + hint；hint=null 只切页不聚焦行）。 */
     public record PendingFocus(String pageId, String hint) {

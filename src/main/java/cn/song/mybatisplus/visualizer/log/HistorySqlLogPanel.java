@@ -500,7 +500,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         // 仍不生效的兜底；标记防重复装——平台 installOn 重复挂载同一列表不幂等）
         if (!sqlSpeedSearchInstalled) {
             sqlSpeedSearchInstalled = true;
-            ListSpeedSearch.installOn(sqlList, entry -> LogEntryFilteringKt.withTerminator(entry.restoredSql()));
+            ListSpeedSearch.installOn(sqlList, entry -> SqlLogPanelKt.withTerminator(entry.restoredSql()));
         }
         refreshNavToolbar(); // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = true）
         searchField.getTextEditor().getEmptyText().setText(MpSqlVisualizerBundle.message("log.history.search.sql"));
@@ -537,7 +537,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         // 此同步路径 headless 下 CardLayout 不见真机 showing，marker 判定可能不触发，故统一补装）
         if (!sqlSpeedSearchInstalled) {
             sqlSpeedSearchInstalled = true;
-            ListSpeedSearch.installOn(sqlList, entry -> LogEntryFilteringKt.withTerminator(entry.restoredSql()));
+            ListSpeedSearch.installOn(sqlList, entry -> SqlLogPanelKt.withTerminator(entry.restoredSql()));
         }
         refreshNavToolbar(); // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = true）
         searchField.getTextEditor().getEmptyText().setText(MpSqlVisualizerBundle.message("log.history.search.sql"));
@@ -943,7 +943,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         // T-ListPreviewCopy：与日志 tab 同款选中收敛——命中行已在多选内保留（复制项=批量复制多条），
         // 否则收敛为该行；跳转等其余菜单项恒作用于被右键的行
         sqlList.setSelectedIndices(
-                LogEntryFilteringKt.resolveContextMenuSelection(sqlList.getSelectedIndices(), idx));
+                SqlLogPanelKt.resolveContextMenuSelection(sqlList.getSelectedIndices(), idx));
         LogSqlEntry entry = sqlListModel.getElementAt(idx);
         List<LogSqlEntry> selectedEntries = new ArrayList<>();
         for (int i : sqlList.getSelectedIndices()) {
@@ -967,7 +967,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         group.add(new CopySqlAction(selectedEntries));
         // T-LogSearchRowTime：复制时间戳（与日志页同款——纯时间文本无方括号；显示关闭时置灰，
         // 置灰逻辑在 CopyTimestampAction.update）
-        String timestampClip = LogEntryFilteringKt.batchCopyTimestamps(selectedEntries);
+        String timestampClip = SqlLogPanelKt.batchCopyTimestamps(selectedEntries);
         group.add(new CopyTimestampAction(selectedEntries, timestampClip));
         group.add(new JumpToSourceAction(entry));
         // T-M55-01：拆「跳转到 XML」双目标（与日志页同套）
@@ -1166,13 +1166,13 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         @Override
         public void update(AnActionEvent e) {
             e.getPresentation().setIcon(AllIcons.Actions.Copy);
-            e.getPresentation().setText(LogEntryFilteringKt.copyMenuText(
+            e.getPresentation().setText(SqlLogPanelKt.copyMenuText(
                     "log.history.copy", "log.history.copySelected", entries.size()));
         }
 
         @Override
         public void actionPerformed(AnActionEvent e) {
-            UiTextClipboard.copy(LogEntryFilteringKt.batchCopySql(entries));
+            UiTextClipboard.copy(SqlLogPanelKt.batchCopySql(entries));
         }
     }
 
@@ -1188,7 +1188,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         @Override
         public void update(AnActionEvent e) {
             e.getPresentation().setIcon(AllIcons.Actions.Copy);
-            e.getPresentation().setText(LogEntryFilteringKt.copyMenuText(
+            e.getPresentation().setText(SqlLogPanelKt.copyMenuText(
                     "log.history.copyTimestamp", "log.history.copyTimestampSelected", entries.size()));
             e.getPresentation().setEnabled(!clip.isEmpty());
         }

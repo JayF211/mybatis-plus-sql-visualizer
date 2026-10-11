@@ -23,18 +23,18 @@ public final class AcpTransportEpRegistrar {
 
     private static final AtomicBoolean registered = new AtomicBoolean(false);
 
-    /** 4a（T-PerfSweep8）：SSE 常量缓存——KDoc 既有承诺「首次 getTransport 时解析并缓存」，
+    /* 4a（T-PerfSweep8）：SSE 常量缓存——KDoc 既有承诺「首次 getTransport 时解析并缓存」，
      *  实现此前每次调用重跑 Class.forName+getField（MCP 会话清单刷新级频率）。按计划口径：
      *  首次解析成功缓存（getField 返回 static final 枚举常量，每类加载器单实例）；解析失败
      *  <b>不缓存、维持 throw 路径</b>（与原实现语义一致）；getFullId 的 Method 保留现查
      *  （上游两条发行线 agentId 运行时类可能不同，单槽复杂度不值当）。 */
-    @Volatile private static Object cachedSse = null;
-    @Volatile private static boolean sseResolved = false;
+    private static volatile Object cachedSse = null;
+    private static volatile boolean sseResolved = false;
 
     /** 4a 测试缝（internal）：SSE 解析函数可注入计数实现驱动先红后绿；生产=真反射。 */
-    @Volatile public static Supplier<Object> sseResolver = () -> {
+    public static volatile Supplier<Object> sseResolver = () -> {
         try {
-            return Class.forName(TRANSPORT_ENUM_FQN).getField("SSE").get(null);
+            return Class.forName(TRANSPORT_ENUM_FQN_).getField("SSE").get(null);
         } catch (Throwable t) {
             // Kotlin 函数类型 () -> Any? 不声明受检异常；Java Supplier.get() 亦不认受检异常，
             // 故反射异常经 sneakyThrow 原样透传（InvocationHandler.invoke 声明 throws Throwable，
@@ -74,7 +74,7 @@ public final class AcpTransportEpRegistrar {
     public static final String CLAUDE_ACP_ID = "acp.registry.claude-acp";
 
     private static final String PROVIDER_IFACE_FQN = "com.intellij.ml.llm.agents.acp.client.AcpIdeaMcpTransportProvider";
-    private static final String TRANSPORT_ENUM_FQN = "com.intellij.ml.llm.agents.acp.client.AcpIdeaMcpTransport";
+    private static final String TRANSPORT_ENUM_FQN_ = "com.intellij.ml.llm.agents.acp.client.AcpIdeaMcpTransport";
     private static final String EP_NAME = "com.intellij.ml.llm.agents.acp.ideaMcpTransportProvider";
 
     public static void registerOnce() {

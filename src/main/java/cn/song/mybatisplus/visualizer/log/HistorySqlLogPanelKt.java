@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.ui.diff.SqlDiffer;
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -100,7 +101,7 @@ public final class HistorySqlLogPanelKt {
         for (LogSqlEntry entry : entries) {
             String ts = timestampTextOf != null
                     ? timestampTextOf.apply(entry)
-                    : LogEntryFilteringKt.timestampDisplayText(entry);
+                    : SqlLogPanelKt.timestampDisplayText(entry);
             boolean match = contains(entry.restoredSql(), q, !matchCase)
                     || contains(entry.summary(), q, !matchCase)
                     || (rowNumber != null && entry.sequenceNumber() == rowNumber)

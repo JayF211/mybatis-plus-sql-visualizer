@@ -106,7 +106,7 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
         // T-UN-09：选中描边退役后，三种样式的选中行统一走平台选中填充 → 前景按选中态取
         // selectionForeground（与日志页 LogEntryListCellRenderer 同款）
         boolean useSelectionFill = isSelected;
-        LogEntryRenderingKt.applyCrudColorMark(this, colorBar, normalBorder, tint, isSelected, list);
+        SqlLogPanelKt.applyCrudColorMark(this, colorBar, normalBorder, tint, isSelected, list);
 
         Color fg = useSelectionFill
                 ? (list != null && list.getSelectionForeground() != null ? list.getSelectionForeground() : JBColor.foreground())
@@ -136,28 +136,28 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
             }
             // T-JdbcThreadBucket F3 + 日志时间：跟随设置（对齐日志页 formatTimestampFragment），
             // 含非法 pattern 回退默认、显示开关与时间来源（日志时间/捕获时间）语义
-            kotlin.Pair<String, SimpleTextAttributes> ts = LogEntryRenderingKt.formatTimestampFragment(entry);
+            kotlin.Pair<String, SimpleTextAttributes> ts = SqlLogPanelKt.formatTimestampFragment(entry);
             if (ts != null) {
                 metaLine.append(ts.getFirst(), ts.getSecond());
             }
             kotlin.Pair<String, SimpleTextAttributes> dur =
-                    LogEntryRenderingKt.formatDurationFragment(entry.executionTimeMs(), useSelectionFill);
+                    SqlLogPanelKt.formatDurationFragment(entry.executionTimeMs(), useSelectionFill);
             metaLine.append(dur.getFirst(), dur.getSecond());
             // T-AgentDialectLoop：目标库角标（与日志页同款落点：时间/耗时后、来源前）
             kotlin.Pair<String, SimpleTextAttributes> db =
-                    LogEntryRenderingKt.formatDatabaseFragment(entry, useSelectionFill);
+                    SqlLogPanelKt.formatDatabaseFragment(entry, useSelectionFill);
             if (db != null) {
                 metaLine.append(db.getFirst(), db.getSecond());
             }
             // T-McpAuditTrail T-MAT-05：MCP 徽标（与日志页同款落点与协议；非 MCP 返回 null 不显示）
             kotlin.Pair<String, SimpleTextAttributes> mcp =
-                    LogEntryRenderingKt.formatMcpFragment(entry, useSelectionFill);
+                    SqlLogPanelKt.formatMcpFragment(entry, useSelectionFill);
             if (mcp != null) {
                 metaLine.append(mcp.getFirst(), mcp.getSecond());
             }
             // O-90：同模板 ×N 徽章（与日志页同款同落点；计数=当前文件全量条目聚合）
             kotlin.Pair<String, SimpleTextAttributes> tpl =
-                    LogEntryRenderingKt.formatTemplateCountFragment(entry, templateCounts, useSelectionFill);
+                    SqlLogPanelKt.formatTemplateCountFragment(entry, templateCounts, useSelectionFill);
             if (tpl != null) {
                 metaLine.append(tpl.getFirst(), tpl.getSecond());
             }
@@ -205,7 +205,7 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
      * 历史条目为每次加载新建的实例，缓存随条目生命周期天然失效。
      */
     private List<List<SqlTextFragment>> sqlLineFragmentsFor(LogSqlEntry entry) {
-        String sql = LogEntryFilteringKt.withTerminator(entry.summary());
+        String sql = SqlLogPanelKt.withTerminator(entry.summary());
         SqlListDisplayMode mode = PluginSettings.getInstance().sqlListDisplayMode();
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             List<List<SqlTextFragment>> single = new ArrayList<>();

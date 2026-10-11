@@ -311,7 +311,7 @@ public final class StackFrameHover implements Disposable {
                     - fm.stringWidth(lineSuffix) - POPUP_WIDTH_PADDING;
             ToIntFunction<String> widthOf = s -> fm.stringWidth(s);
             String classText = classBudget > 0
-                    ? SqlPreviewPanelKt.ellipsizeMiddle(value.fqcn(), widthOf, classBudget)
+                    ? SqlPreviewPanelTextKt.ellipsizeMiddle(value.fqcn(), widthOf, classBudget)
                     : value.fqcn();
             append(classText, SimpleTextAttributes.GRAY_ATTRIBUTES);
             if (!lineSuffix.isEmpty()) append(lineSuffix, SimpleTextAttributes.GRAY_ATTRIBUTES);

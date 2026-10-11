@@ -88,7 +88,7 @@ public class SqlPreviewDialog extends DialogWrapper {
                 new DialogWrapperAction(MpSqlVisualizerBundle.message("panel.copySql")) {
                     @Override
                     protected void doAction(java.awt.event.ActionEvent actionEvent) {
-                        panel.copySql();
+                        SqlPreviewPanelSqlViewKt.copySql(panel);
                     }
                 },
                 getCancelAction()

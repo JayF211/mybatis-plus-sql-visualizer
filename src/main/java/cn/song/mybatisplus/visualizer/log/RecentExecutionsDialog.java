@@ -56,7 +56,7 @@ import java.util.function.Consumer;
  * 主按钮「打开预览」开启后<b>不关闭</b>本对话框（连续对比多条）。
  *
  * <p>T-RecentMulti（用户令）：列表支持<b>多选</b>——语义照抄 SQL 日志页：Ctrl/Shift 多选、Ctrl+C 批量复制
- * （{@code SqlEntryList.itemToText} 逐行拼接）、右键命中行已在多选内则保留多选（{@link LogEntryFilteringKt#resolveContextMenuSelection}）、
+ * （{@code SqlEntryList.itemToText} 逐行拼接）、右键命中行已在多选内则保留多选（{@link SqlLogPanelKt#resolveContextMenuSelection}）、
  * 多选时编辑器按行序拼接显示（与复制产物同源）、状态行「已选 N 条」、主按钮打开 lead（最后交互行）。
  * 单选路径行为逐字节不变。
  *
@@ -71,7 +71,7 @@ import java.util.function.Consumer;
  *
  * <p>列表右键菜单六件（T-RecentExecMenu O-119，形制对齐日志页）：复制时间戳 / 屏蔽此 SQL /
  * 发送到 SQL → Java / 发送到日志转 SQL / 跳转到 Java / 跳转到 Mapper XML——动作不自建，
- * 一律走共享件（{@link LogEntryJumpOps} / {@link LogEntryFilteringKt#batchCopyTimestamps} / {@link SqlSuppressRuleManager} /
+ * 一律走共享件（{@link LogEntryJumpOps} / {@link SqlLogPanelKt#batchCopyTimestamps} / {@link SqlSuppressRuleManager} /
  * {@link SqlLogManager#onOpenEntryInTab} 送页签通道）。
  *
  * <p>线程约定：构造与 show() 必须在 EDT（gutter 侧既有 invokeLater 保证）；条目匹配留在调用方
@@ -246,7 +246,7 @@ public class RecentExecutionsDialog extends DialogWrapper {
         EditorCopyShortcuts.install(
                 created,
                 UiTextClipboard::copy,
-                () -> cn.song.mybatisplus.visualizer.ui.CopyFeedbackKt.flashCopied(copyButton));
+                () -> cn.song.mybatisplus.visualizer.ui.CopyFeedback.flashCopied(copyButton));
         return created.getComponent();
     }
 
@@ -416,7 +416,7 @@ public class RecentExecutionsDialog extends DialogWrapper {
         return new DefaultActionGroup(menuActions(entry, selectedEntries).toArray(new AnAction[0]));
     }
 
-    /** 复制选中条目的时间戳片段（与日志页同源 {@link LogEntryFilteringKt#batchCopyTimestamps}；多选批量、文案带条数；显示开关关闭时无片段 → 置灰）。 */
+    /** 复制选中条目的时间戳片段（与日志页同源 {@link SqlLogPanelKt#batchCopyTimestamps}；多选批量、文案带条数；显示开关关闭时无片段 → 置灰）。 */
     private class CopyTimestampAction extends AnAction {
         private final List<LogSqlEntry> entries;
         private final String clip;
