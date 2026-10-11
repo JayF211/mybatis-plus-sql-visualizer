@@ -59,7 +59,7 @@ class ExecDocSyncTest : BasePlatformTestCase() {
         assertNotNull("document 应已加载", doc)
         assertEquals("SELECT 1", doc!!.text)
 
-        DataSourceSelector.projectExecFile(project, "SELECT 2")
+        DataSourceSelectorResultsKt.projectExecFile(project, "SELECT 2")
 
         assertEquals("T-EC-01：落盘不依赖 IDE 自动保存——写后磁盘立即是新 SQL", "SELECT 2", diskText())
         assertEquals("document 同步为新 SQL", "SELECT 2", doc.text)
@@ -88,7 +88,7 @@ class ExecDocSyncTest : BasePlatformTestCase() {
         refreshVf() // vf 在 VFS（= 存在 document 可能），不预加载 document —— 正是真机超时那一刻的形态
         DataSourceSelector.execWriteActionFailureInjection = true
         try {
-            val f = DataSourceSelector.projectExecFile(project, "SELECT 2")
+            val f = DataSourceSelectorResultsKt.projectExecFile(project, "SELECT 2")
             assertNotNull("应返回文件路径（调用方需要 ioFile 做 refresh/映射）", f)
             assertEquals(
                 "T-ExecDocSync3：裸写必须被跳过——磁盘保持旧值（宁旧一拍，由后续 console doc 同步链收敛）",
@@ -107,7 +107,7 @@ class ExecDocSyncTest : BasePlatformTestCase() {
         FileDocumentManager.getInstance().getDocument(vf!!)
         DataSourceSelector.execWriteActionFailureInjection = true
         try {
-            val f = DataSourceSelector.projectExecFile(project, "SELECT 2")
+            val f = DataSourceSelectorResultsKt.projectExecFile(project, "SELECT 2")
             assertNotNull(f)
             assertEquals("有 document 时不得裸写（旧守卫语义保留，只是不再抛异常）", "SELECT 1", diskText())
         } finally {
@@ -118,7 +118,7 @@ class ExecDocSyncTest : BasePlatformTestCase() {
     /** 首次创建（VFS 无条目）→ 裸写仍合法（无 vf 可挂 document，无冲突面）。 */
     fun testRawWriteStillUsedWhenVfMissing() {
         assertFalse("前置：文件应不存在", execFile.exists())
-        val f = DataSourceSelector.projectExecFile(project, "SELECT 1")
+        val f = DataSourceSelectorResultsKt.projectExecFile(project, "SELECT 1")
         assertNotNull(f)
         assertEquals("VFS 无条目时裸写创建（首次）", "SELECT 1", diskText())
     }
@@ -164,7 +164,7 @@ class ExecDocSyncTest : BasePlatformTestCase() {
         assertNotNull(doc)
         DataSourceSelector.execWriteActionFailureInjection = true
         try {
-            val f = DataSourceSelector.projectExecFile(project, "SELECT 1")
+            val f = DataSourceSelectorResultsKt.projectExecFile(project, "SELECT 1")
             assertNotNull("快路径应正常返回文件路径", f)
             assertEquals("内容一致：磁盘不动", "SELECT 1", diskText())
             assertFalse("内容一致：文档不得被标脏", FileDocumentManager.getInstance().isDocumentUnsaved(doc!!))
@@ -188,7 +188,7 @@ class ExecDocSyncTest : BasePlatformTestCase() {
     fun testFreshFileRawWriteThenVfsVisibleAndSyncNoop() {
         assertFalse("前置：文件应不存在", execFile.exists())
 
-        val f = DataSourceSelector.projectExecFile(project, "SELECT 1")
+        val f = DataSourceSelectorResultsKt.projectExecFile(project, "SELECT 1")
         assertNotNull(f)
         assertTrue("裸写应已创建文件", f!!.exists())
 
@@ -229,7 +229,7 @@ class ExecDocSyncTest : BasePlatformTestCase() {
             Thread {
                 repeat(4) {
                     try {
-                        DataSourceSelector.projectExecFile(project, payload)
+                        DataSourceSelectorResultsKt.projectExecFile(project, payload)
                     } catch (t: Throwable) {
                         errors.add(t)
                     }
@@ -254,7 +254,7 @@ class ExecDocSyncTest : BasePlatformTestCase() {
      * 闸门判「不可写」：派发出去的那一拍**不得**自行写文档，而要转 nonModal 投递并把控制权**立即**
      * 交还调用方——调用方按 T-ExecDocSync3 记 "raw write SKIPPED"、不裸写，内容由延后那一拍收敛。
      *
-     * 线程形态照生产：工作线程裸调 [DataSourceSelector.projectExecFile]（BGT 派发 + 2s 有界等待），
+     * 线程形态照生产：工作线程裸调 [DataSourceSelectorResultsKt.projectExecFile]（BGT 派发 + 2s 有界等待），
      * 测试 EDT 泵事件队列替它执行那一拍。两条判据各自钉死一个语义：
      *  - `deferredCount` 递增 = 闸门拦下了同步写、改投递（**改前此断言必红**：写体会在排到的那一拍里
      *    直接执行，计数不动）；
@@ -327,7 +327,7 @@ class ExecDocSyncTest : BasePlatformTestCase() {
         DocWriteContext.writeAllowedProbe = { false }
         try {
             val before = DocWriteContext.deferredCount.get()
-            val ok = DataSourceSelector.dispatchDocWriteOnEdt(project, vf, "SELECT 2")
+            val ok = DataSourceSelectorResultsKt.dispatchDocWriteOnEdt(project, vf, "SELECT 2")
 
             assertFalse("不可写：应立即交还 false（不白等）", ok)
             assertEquals("不可写：应转 nonModal 投递一拍", before + 1, DocWriteContext.deferredCount.get())
@@ -351,7 +351,7 @@ class ExecDocSyncTest : BasePlatformTestCase() {
         DocWriteContext.writeAllowedProbe = { true }
         try {
             val before = DocWriteContext.deferredCount.get()
-            val ok = DataSourceSelector.dispatchDocWriteOnEdt(project, vf, "SELECT 2")
+            val ok = DataSourceSelectorResultsKt.dispatchDocWriteOnEdt(project, vf, "SELECT 2")
 
             assertTrue("可写：应就地写并返回 true", ok)
             assertEquals("可写：磁盘应立即是新 SQL", "SELECT 2", diskText())
@@ -364,14 +364,14 @@ class ExecDocSyncTest : BasePlatformTestCase() {
     // ======================== 辅助 ========================
 
     /**
-     * 工作线程裸调 [DataSourceSelector.projectExecFile]（生产 BGT 预热/提交链同形态——正是
-     * [DataSourceSelector.dispatchDocWriteOnEdt] 两段式派发的唯一触发面），测试 EDT（= 测试线程，
+     * 工作线程裸调 [DataSourceSelectorResultsKt.projectExecFile]（生产 BGT 预热/提交链同形态——正是
+     * [DataSourceSelectorResultsKt.dispatchDocWriteOnEdt] 两段式派发的唯一触发面），测试 EDT（= 测试线程，
      * `BasePlatformTestCase.runInDispatchThread()==true`）循环泵事件队列替它执行派发出去的那一拍。
      * 返回 (耗时ms, 返回值)；耗时含工作线程全链时长，故可判「有没有白等有界预算」。
      */
     private fun projectExecFileOnBackgroundPumpingEdt(sql: String): Pair<Long, java.io.File?> {
         val holder = java.util.concurrent.atomic.AtomicReference<java.io.File?>()
-        val worker = Thread { holder.set(DataSourceSelector.projectExecFile(project, sql)) }
+        val worker = Thread { holder.set(DataSourceSelectorResultsKt.projectExecFile(project, sql)) }
         val start = System.currentTimeMillis()
         worker.start()
         while (worker.isAlive && System.currentTimeMillis() - start < 10_000) {

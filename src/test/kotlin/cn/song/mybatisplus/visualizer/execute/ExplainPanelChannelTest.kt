@@ -25,26 +25,16 @@ class ExplainPanelChannelTest {
     @Test
     fun `准入_开关开_TABLE格式_插件在场_有数据源`() {
         assertEquals(
-            ExplainPanelChannel.Decision.Structured,
-            ExplainPanelChannel.decide(
-                enabled = true,
-                format = ExplainOutputFormat.TABLE,
-                databaseAvailable = true,
-                hasBoundDataSource = true,
-            ),
+            ExplainPanelChannel.Decision.Structured.INSTANCE,
+            ExplainPanelChannel.decide(true, ExplainOutputFormat.TABLE, true, true),
         )
     }
 
     @Test
     fun `准入_开关开_JSON格式_插件在场_有数据源`() {
         assertEquals(
-            ExplainPanelChannel.Decision.Structured,
-            ExplainPanelChannel.decide(
-                enabled = true,
-                format = ExplainOutputFormat.JSON,
-                databaseAvailable = true,
-                hasBoundDataSource = true,
-            ),
+            ExplainPanelChannel.Decision.Structured.INSTANCE,
+            ExplainPanelChannel.decide(true, ExplainOutputFormat.JSON, true, true),
         )
     }
 
@@ -55,13 +45,8 @@ class ExplainPanelChannelTest {
     @Test
     fun `直送_开关关`() {
         assertEquals(
-            ExplainPanelChannel.Decision.DirectSilent,
-            ExplainPanelChannel.decide(
-                enabled = false,
-                format = ExplainOutputFormat.TABLE,
-                databaseAvailable = true,
-                hasBoundDataSource = true,
-            ),
+            ExplainPanelChannel.Decision.DirectSilent.INSTANCE,
+            ExplainPanelChannel.decide(false, ExplainOutputFormat.TABLE, true, true),
         )
     }
 
@@ -69,7 +54,7 @@ class ExplainPanelChannelTest {
     fun `直送_TEXT格式不硬解析`() {
         // DM/H2/SQLite/Oracle（含 R23 二段式）一律维持直送通道——红线：勿硬解析
         assertEquals(
-            ExplainPanelChannel.Decision.DirectSilent,
+            ExplainPanelChannel.Decision.DirectSilent.INSTANCE,
             ExplainPanelChannel.decide(true, ExplainOutputFormat.TEXT, true, true),
         )
     }
@@ -78,7 +63,7 @@ class ExplainPanelChannelTest {
     fun `直送_XML格式不硬解析`() {
         // SQL Server Showplan XML 是附加结果集（R23 channelNote 口径），维持直送
         assertEquals(
-            ExplainPanelChannel.Decision.DirectSilent,
+            ExplainPanelChannel.Decision.DirectSilent.INSTANCE,
             ExplainPanelChannel.decide(true, ExplainOutputFormat.XML, true, true),
         )
     }
@@ -86,7 +71,7 @@ class ExplainPanelChannelTest {
     @Test
     fun `直送_格式未知`() {
         assertEquals(
-            ExplainPanelChannel.Decision.DirectSilent,
+            ExplainPanelChannel.Decision.DirectSilent.INSTANCE,
             ExplainPanelChannel.decide(true, null, true, true),
         )
     }
@@ -118,7 +103,7 @@ class ExplainPanelChannelTest {
         assertEquals(
             ExplainPanelChannel.FallbackReason.NO_DATABASE_PLUGIN,
             (ExplainPanelChannel.decide(true, ExplainOutputFormat.TABLE, false, false)
-                as ExplainPanelChannel.Decision.DirectFallback).reason,
+                as ExplainPanelChannel.Decision.DirectFallback).reason(),
         )
     }
 
@@ -132,27 +117,15 @@ class ExplainPanelChannelTest {
         // = 字面 `?` 送 JDBC 语法错（真机 SQLException: You have an error in your SQL syntax）
         assertEquals(
             ExplainPanelChannel.Decision.DirectFallback(ExplainPanelChannel.FallbackReason.UNFILLED_PARAMS),
-            ExplainPanelChannel.decide(
-                enabled = true,
-                format = ExplainOutputFormat.TABLE,
-                databaseAvailable = true,
-                hasBoundDataSource = true,
-                hasUnfilledParams = true,
-            ),
+            ExplainPanelChannel.decide(true, ExplainOutputFormat.TABLE, true, true, true),
         )
     }
 
     @Test
     fun `参数已回填则结构化准入不受影响`() {
         assertEquals(
-            ExplainPanelChannel.Decision.Structured,
-            ExplainPanelChannel.decide(
-                enabled = true,
-                format = ExplainOutputFormat.TABLE,
-                databaseAvailable = true,
-                hasBoundDataSource = true,
-                hasUnfilledParams = false,
-            ),
+            ExplainPanelChannel.Decision.Structured.INSTANCE,
+            ExplainPanelChannel.decide(true, ExplainOutputFormat.TABLE, true, true, false),
         )
     }
 
@@ -161,13 +134,7 @@ class ExplainPanelChannelTest {
         // 环境缺项（插件/数据源）是更基础的根因——先修环境再谈参数，提示措辞按此序
         assertEquals(
             ExplainPanelChannel.FallbackReason.NO_DATA_SOURCE,
-            (ExplainPanelChannel.decide(
-                enabled = true,
-                format = ExplainOutputFormat.JSON,
-                databaseAvailable = true,
-                hasBoundDataSource = false,
-                hasUnfilledParams = true,
-            ) as ExplainPanelChannel.Decision.DirectFallback).reason,
+            (ExplainPanelChannel.decide(true, ExplainOutputFormat.JSON, true, false, true) as ExplainPanelChannel.Decision.DirectFallback).reason(),
         )
     }
 }

@@ -8,8 +8,8 @@ import cn.song.mybatisplus.visualizer.log.SqlToJavaPanel
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel
 // T-M53-II D2-5：`showResult`/`clear` 已搬为 ui 包内的同包扩展函数（原 SqlPreviewPanel 成员），
 // 跨包调用点需显式导入。
-import cn.song.mybatisplus.visualizer.ui.clear
-import cn.song.mybatisplus.visualizer.ui.showResult
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelSqlViewKt
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelResultViewKt
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
@@ -104,7 +104,7 @@ class DocWriteContextTest : BasePlatformTestCase() {
     private fun newRenderedPanel(): SqlPreviewPanel {
         val stmt = CrudSqlGenerator.generate(crudSpec()).first { it.kind == CrudKind.SELECT_ALL }
         val panel = SqlPreviewPanel(project)
-        panel.showResult(stmt.result)
+        SqlPreviewPanelResultViewKt.showResult(panel, stmt.result)
         return panel
     }
 
@@ -140,7 +140,7 @@ class DocWriteContextTest : BasePlatformTestCase() {
             assertTrue("投递的渲染应把 SQL 写进文档", doc.text.contains("SELECT"))
         } finally {
             DocWriteContext.writeAllowedProbe = null
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }
@@ -157,7 +157,7 @@ class DocWriteContextTest : BasePlatformTestCase() {
             assertTrue(panel.editorForTest()?.document?.text?.contains("SELECT") == true)
         } finally {
             DocWriteContext.writeAllowedProbe = null
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }
