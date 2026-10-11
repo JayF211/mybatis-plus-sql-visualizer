@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
 import cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+import cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -11,6 +12,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.PipedInputStream
+import java.io.PipedOutputStream
 import java.lang.reflect.InvocationTargetException
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicInteger
@@ -35,8 +37,9 @@ import java.util.concurrent.atomic.AtomicInteger
  *    [cn.song.mybatisplus.visualizer.execute.DataSourceSelector.execFileContentMatches] 先例）。
  *
  * k2j 适配：Java 侧构造器/方法无默认参数与具名实参——`AgentSession` 第 4 参改传 `Runnable`
- * （`stateChangeCounter` 直接返回 `Runnable`）、`sendConfig(false, false)`、
- * `writeConsoleOutput(console, text, isError)` 显式补 `isError = false`。
+ * （`stateChangeCounter` 直接返回 `Runnable`）、`sendConfig(false, false)`；
+ * `writeConsoleOutput` 经 T-M53-II 搬为 execute 包顶层扩展（k2j 静态门面
+ * [DataSourceSelectorResultsKt]），调用点已改门面限定并取 `isError` 缺省重载（等价 master 具名缺省）。
  */
 class FatalPassthroughTest : BasePlatformTestCase() {
 
@@ -113,7 +116,7 @@ class FatalPassthroughTest : BasePlatformTestCase() {
     fun test控制台输出_反射包装的fatal须解包后透传() {
         val soe = realStackOverflow()
         val thrown = try {
-            DataSourceSelector.writeConsoleOutput(FakeConsole(FakeConsoleView { throw soe }), "boom", false)
+            DataSourceSelectorResultsKt.writeConsoleOutput(FakeConsole(FakeConsoleView { throw soe }), "boom")
             null
         } catch (t: Throwable) {
             t
@@ -125,10 +128,9 @@ class FatalPassthroughTest : BasePlatformTestCase() {
     fun test控制台输出_文档读取的链接错误须透传() {
         val ncdfe = NoClassDefFoundError("cn/song/mybatisplus/visualizer/agent/EventBus")
         val thrown = try {
-            DataSourceSelector.writeConsoleOutput(
+            DataSourceSelectorResultsKt.writeConsoleOutput(
                 FakeConsole(FakeConsoleView { FakeHistoryViewer(proxyDocument { throw ncdfe }) }),
                 "boom",
-                false,
             )
             null
         } catch (t: Throwable) {
@@ -140,10 +142,9 @@ class FatalPassthroughTest : BasePlatformTestCase() {
     /** 非 fatal 回归：普通异常仍走既有降级（只记 INFO、不抛、返回值/调用方行为不变）。 */
     fun test控制台输出_普通异常仍只记日志不抛() {
         val thrown = try {
-            DataSourceSelector.writeConsoleOutput(
+            DataSourceSelectorResultsKt.writeConsoleOutput(
                 FakeConsole(FakeConsoleView { throw IOException("no console view") }),
                 "boom",
-                false,
             )
             null
         } catch (t: Throwable) {
@@ -270,9 +271,19 @@ class FatalPassthroughTest : BasePlatformTestCase() {
     /**
      * 假 socket：输入流为**阻塞**管道（会话读线程停在 `readInt`，不干扰断言）、
      * 输出流按 [onWrite] 抛错；覆写 `setSoTimeout` 避开未连接 socket 的 SocketException。
+     *
+     * T-DevAcceptFix2 门禁修复（20261006 收口批，测试侧；非本轮产品改动）：原实现只建
+     * `PipedInputStream()` 而**从未连接对端** `PipedOutputStream`——`read()` 立即抛
+     * `IOException("Pipe not connected")`，会话读线程随即 `alive=false` + `onStateChange()`
+     * 异步回调，与断言竞态（收口实测：本类整套跑偶发红、单独跑 3/3 常绿，system-err 可见
+     * `Pipe not connected` 栈）。现补上对端并持引用（防被 GC 致 write end dead），
+     * 读线程真正停在 `readInt` 上——与注释声明的语义一致，竞态根除。
      */
     private class FakeSocket(private val onWrite: () -> Unit) : Socket() {
         private val blockingInput = PipedInputStream()
+
+        @Suppress("unused") // 持引用：无对端的 PipedInputStream 读即抛「Pipe not connected」
+        private val keepAliveOutput = PipedOutputStream(blockingInput)
 
         override fun getInputStream(): InputStream = blockingInput
 

@@ -264,20 +264,36 @@ class AgentPremainConsentTest : BasePlatformTestCase() {
             "补扫主配置判据应为 JVM 进程判定（BaseOSProcessHandler 系）",
             src.contains("BaseOSProcessHandler"),
         )
-        // 限定补扫函数体：getRunProfile 在 ExecutionEnvironment（事件链）上合法存在
-        // （本文件 :65 反射调用），禁令只针对 descriptor 探测（243 RunContentDescriptor 无此方法）
+        // 限定补扫函数体：getRunProfile 在 ExecutionEnvironment（事件链）上合法存在，
+        // 禁令只针对 descriptor 探测（243 RunContentDescriptor 无此方法，结构性空转）。
+        // 20261008：扫描实现从 backfillRunningProcesses 收敛到 scanAndAttachRunningProcesses/
+        // doScanAndAttach（设置变更上升沿共用），切片取 doScanAndAttach 真身并一并覆盖 backfill 包装。
         // k2j 适配：函数声明为 Java 形态 private static void
         val bfStart = src.indexOf("private static void backfillRunningProcesses")
         assertTrue("守卫前置：backfill 函数应在场", bfStart >= 0)
         val nextMember = src.indexOf("private ", bfStart + 10)
         val bf = src.substring(bfStart, if (nextMember > bfStart) nextMember else src.length)
+        val scanStart = src.indexOf("private static void doScanAndAttach")
+        assertTrue("守卫前置：doScanAndAttach 扫描体应在场", scanStart >= 0)
+        val scanEnd = src.indexOf("    public ", scanStart + 10)
+        val scanBody = src.substring(scanStart, if (scanEnd > scanStart) scanEnd else src.length)
         assertFalse(
             "backfill 不得再用 getRunProfile 探测（243 RunContentDescriptor 无此方法，结构性空转）",
             bf.contains("getRunProfile"),
         )
+        assertFalse(
+            "扫描体不得再用 getRunProfile 探测",
+            scanBody.contains("getRunProfile"),
+        )
+        // R3 诊断红线（20261008 措辞随收敛调整，判别力不变：无命中也必须输出汇总）：
+        // 汇总行带 logTag 场景前缀与补发计数（k2j 适配：Java 侧为字符串拼接形态）。
         assertTrue(
             "补扫必须有无命中也输出的汇总诊断日志",
-            src.contains("backfill: 订阅后补扫完成"),
+            src.contains(": 在跑进程扫描完成——描述符 ") && src.contains(" 个，补发 "),
+        )
+        assertTrue(
+            "backfill 场景应以 backfill 标签走同一扫描入口（诊断可区分场景）",
+            src.contains("scanAndAttachRunningProcesses(project, \"backfill\")"),
         )
     }
 
