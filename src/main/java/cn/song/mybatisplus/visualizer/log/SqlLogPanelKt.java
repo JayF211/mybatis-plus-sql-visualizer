@@ -212,6 +212,73 @@ public final class SqlLogPanelKt {
         return filterBySearch(entries, query, SqlLogPanelKt::timestampDisplayText);
     }
 
+    /**
+     * T-HistorySearchToggles / T-SearchToggleNativeLook：带 MatchCase/Regex 开关与正则编译 memo 的搜索过滤
+     * （形态照日志页/历史页同链，master LogEntryFiltering.filterBySearch 的 Java 承载）。
+     *
+     * <ul>
+     *   <li><b>正则</b>：生效条件 = 开启正则开关<b>或</b> {@code regex:} 前缀（前缀在场先剥、不参与匹配）；
+     *       命中 restoredSql/summary；编译旗随 matchCase；非法正则 fail-closed 回退普通子串匹配；</li>
+     *   <li><b>子串</b>：匹配 restoredSql/summary/时间显示片段，大小写统一由 matchCase 控制；
+     *       行号 {@code #N}/{@code N} 精确 equals sequenceNumber，不受开关影响；</li>
+     *   <li>空查询透传全部。</li>
+     * </ul>
+     */
+    public static List<LogSqlEntry> filterBySearch(List<LogSqlEntry> entries, String query,
+            boolean matchCase, boolean regexEnabled, HistoryRegexMemo memo) {
+        String q = query.trim();
+        if (q.isEmpty()) {
+            return entries;
+        }
+        if (regexEnabled || q.startsWith(HistorySqlLogPanelKt.HISTORY_REGEX_PREFIX)) {
+            kotlin.text.Regex pattern = HistorySqlLogPanelKt.resolveHistoryRegex(
+                    q.substring(HistorySqlLogPanelKt.HISTORY_REGEX_PREFIX.length()), matchCase, memo);
+            if (pattern != null) {
+                List<LogSqlEntry> result = new ArrayList<>();
+                for (LogSqlEntry entry : entries) {
+                    if (pattern.containsMatchIn(entry.restoredSql()) || pattern.containsMatchIn(entry.summary())) {
+                        result.add(entry);
+                    }
+                }
+                return result;
+            }
+            // 非法正则：回退普通子串匹配（继续走下方通用路径）
+        }
+        Long rowNumber = null;
+        String rowRaw = q.startsWith("#") ? q.substring(1) : q;
+        try {
+            long parsed = Long.parseLong(rowRaw);
+            if (parsed > 0) {
+                rowNumber = parsed;
+            }
+        } catch (NumberFormatException ignored) {
+            // 非纯数字查询 → 行号维度不参与
+        }
+        List<LogSqlEntry> result = new ArrayList<>();
+        for (LogSqlEntry it : entries) {
+            String ts = timestampDisplayText(it);
+            boolean match = contains(it.restoredSql(), q, !matchCase)
+                    || contains(it.summary(), q, !matchCase)
+                    || (rowNumber != null && it.sequenceNumber() == rowNumber)
+                    || (ts != null && contains(ts, q, !matchCase));
+            if (match) {
+                result.add(it);
+            }
+        }
+        return result;
+    }
+
+    /** 子串包含（ignoreCase 控制大小写；master `String.contains(q, ignoreCase = ...)` 的 Java 承载）。 */
+    private static boolean contains(String text, String q, boolean ignoreCase) {
+        if (text == null) {
+            return false;
+        }
+        if (ignoreCase) {
+            return text.toLowerCase(Locale.ROOT).contains(q.toLowerCase(Locale.ROOT));
+        }
+        return text.contains(q);
+    }
+
     private static boolean containsIgnoreCase(String text, String q) {
         return text != null && text.toLowerCase(Locale.ROOT).contains(q.toLowerCase(Locale.ROOT));
     }

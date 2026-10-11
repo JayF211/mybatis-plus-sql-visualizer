@@ -99,11 +99,11 @@ import java.util.stream.Collectors;
  */
 public class SqlLogPanel extends JPanel implements Disposable {
 
-    private final Project project;
-    private final SqlLogManager manager;
+    public final Project project;
+    public final SqlLogManager manager;
 
     private final DefaultListModel<LogSqlEntry> listModel = new DefaultListModel<>();
-    private final SqlEntryList list = new SqlEntryList(listModel);
+    public final SqlEntryList list = new SqlEntryList(listModel);
     /** 列表条目单元格渲染器（internal 供 UI 测试直接渲染、断言 HTML 输出）。 */
     private LogEntryListCellRenderer entryCellRenderer;
     /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
@@ -178,8 +178,53 @@ public class SqlLogPanel extends JPanel implements Disposable {
         list.ensureIndexIsVisible(listModel.size() - 1);
     }
 
+    // ---------- T-SearchToggleNativeLook（O-137）：搜索条迁平台原生 SearchTextArea ----------
+    //
+    // MatchCase/Regex 双开关走原生钮（内嵌搜索框右侧，与 Ctrl+F 同形态）。20261010 用户令日志页
+    // 补正则钮（D133「日志页无正则」拍板翻案）——正则语义与历史页同链：开关或 `regex:` 前缀、
+    // 非法正则 fail-closed 回退子串。旗改从 NativeSearchTextField.findModel 读，过滤语义零变化。
+    // 显隐契约保持在宿主 searchBar 上（isVisible 由 showSearch/hideSearch 控制）。
+
+    private final cn.song.mybatisplus.visualizer.ui.search.NativeSearchTextField nativeSearch;
+
     /** 搜索条（默认隐藏，Ctrl+F/⌘F 唤起；实时过滤 restoredSql 与摘要）。 */
-    private final SearchTextField searchField;
+    private final cn.song.mybatisplus.visualizer.ui.search.NativeSearchTextField searchField;
+
+    /** 正则编译 memo（防抖 200ms 反复 apply 复用编译结果，键=源串+matchCase 旗）。 */
+    private final HistoryRegexMemo regexMemo;
+
+    /** 搜索条宿主（原生 SearchTextArea 自带内嵌开关；显隐由 showSearch/hideSearch 控制）。 */
+    private final JPanel searchBar;
+
+    /** 当前大小写敏感态（原生钮状态落点）。 */
+    private boolean logMatchCase() {
+        return nativeSearch.isMatchCase();
+    }
+
+    /** 当前正则态（原生钮状态落点；`regex:` 前缀独立生效）。 */
+    private boolean logRegex() {
+        return nativeSearch.isRegex();
+    }
+
+    /** 测试断言/驱动：MatchCase 旗（等价用户点击 = 置 FindModel.isCaseSensitive 后自动刷新列表）。 */
+    public boolean getMatchCaseToggleForTest() {
+        return logMatchCase();
+    }
+
+    public void setMatchCaseToggleForTest(boolean value) {
+        nativeSearch.getFindModel().setCaseSensitive(value);
+        refreshList();
+    }
+
+    /** 测试断言/驱动：Regex 旗（等价用户点击 = 置 FindModel.isRegularExpressions 后自动刷新列表）。 */
+    public boolean getRegexToggleForTest() {
+        return logRegex();
+    }
+
+    public void setRegexToggleForTest(boolean value) {
+        nativeSearch.getFindModel().setRegularExpressions(value);
+        refreshList();
+    }
 
     // ---------- 过滤/排序状态 ----------
 
@@ -201,13 +246,23 @@ public class SqlLogPanel extends JPanel implements Disposable {
     /** 去重丢弃计数快照（refreshList 后更新；cellRenderer 渲染 ⨉N 徽章用）。 */
     private Map<String, Integer> dedupeCounts = Map.of();
 
+    /** O-90：同模板计数快照（refreshList 后更新；cellRenderer 徽章与右键聚焦动作共用）。 */
+    private Map<String, Integer> templateCounts = Map.of();
+
     // ---------- T-Perf-03（自 dev 移植）：增量刷新状态 ----------
 
     /** 刷新代际：新 refreshList 启动时 +1，旧分批追加链检测到代际过期即终止。 */
     private long refreshGeneration = 0L;
 
     /** 上一轮渲染的可见列表（同一性差分基线；由 applyIncremental/applyFullRebuild 与 listModel 保持同步）。 */
-    private List<LogSqlEntry> lastRendered = List.of();
+    public List<LogSqlEntry> lastRendered = List.of();
+
+    // T-Perf-15：manager 监听器命名引用（uiRefreshListener/capturingUiListener）声明于 init 前统一区块。
+    //
+    // T-RecentExecMenu O-119：送页签通道回调的**稳定引用**（init 注册 / dispose 同一性注销用）——
+    // 必须声明在 init 之前：init 块内会读它完成注册，声明在后会读到未初始化值（本仓构造期序坑第三次）。
+    private final java.util.function.BiConsumer<LogSqlEntry, LogEntryTab> openEntryInTabCallback =
+            (entry, tab) -> openEntryInTab(entry, tab);
 
     // ---------- T-Perf-15（自 dev 移植）：manager 监听器命名引用（init 注册 / dispose 注销） ----------
 
@@ -502,7 +557,37 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
         this.logToSqlPanel = new LogToSqlPanel(project);
         this.sqlToJavaPanel = new SqlToJavaPanel(project);
-        this.searchField = buildSearchField();
+        this.nativeSearch = new cn.song.mybatisplus.visualizer.ui.search.NativeSearchTextField(
+                MpSqlVisualizerBundle.message("log.search.emptyText"),
+                true,
+                project);
+        this.searchField = this.nativeSearch;
+        this.regexMemo = new HistoryRegexMemo();
+        this.searchBar = new JPanel(new BorderLayout());
+        this.searchBar.setOpaque(false);
+        this.searchBar.setVisible(false);
+        this.searchBar.add(nativeSearch.getRow(), BorderLayout.CENTER);
+        // 搜索框文本变更 → 防抖应用。T-SearchToggleNativeLook 迁平台原生 SearchTextArea 时漏接线：
+        // 本仓 dev 侧接线原在 buildSearchField 的 DocumentListener 上，master 原生结构只剩
+        // onSearchTextChanged / searchDebounceTimer 两个孤儿与 hideSearch 里「非空时触发
+        // DocumentListener 清过滤并刷新」的注释（测试钩子 applySearchTextForTest 直调内部入口，
+        // 覆盖不到真实键入分派，故未暴露）。本处补回接线，恢复「键入即过滤」「隐藏搜索条即清过滤」。
+        nativeSearch.addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                onSearchTextChanged();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                onSearchTextChanged();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                onSearchTextChanged();
+            }
+        });
         this.searchDebounceTimer = new javax.swing.Timer(SEARCH_DEBOUNCE_MS, e -> applySearchText());
         this.searchDebounceTimer.setRepeats(false);
         // T-ListPreviewCopy：预览文本经 clickPreviewSql——设置「预览时格式化还原 SQL」开启（默认）时多行格式化显示
@@ -530,6 +615,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
         Disposer.register(this, logToSqlPanel);
         Disposer.register(this, sqlToJavaPanel);
 
+        // T-RecentExecMenu O-119：面板外「送条目到页签」通道注册（弹框右键用；dispose 注销）
+        manager.onOpenEntryInTab = openEntryInTabCallback;
+
         // 标签 1：SQL 日志（工具栏行 + 搜索条 + 条目列表）
         JPanel logPanel = new JPanel(new BorderLayout());
         logPanel.add(buildTopPanel(), BorderLayout.NORTH);
@@ -539,10 +627,11 @@ public class SqlLogPanel extends JPanel implements Disposable {
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logs"), logPanel);
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logToSql"), logToSqlPanel);
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.sqlToJava"), sqlToJavaPanel);
-        // F-44：开启自动保存、或 .idea 中已有历史文件时显示历史 tab
-        if (PluginSettings.getInstance().getState().getLogAutoSaveEnabled() || hasHistoryFiles()) {
-            addHistoryTab();
-        }
+        // R19（T-PerfSweep 批次 2）+ T-HistoryTabAlways：历史 tab 常驻——原 F-44 条件挂载
+        // （「开启自动保存 或 .idea 中已有历史文件」）让未开启自动保存的干净项目没有入口，
+        // 关掉设置页开关还会把已挂载的 tab 摘掉；文件列表空态已带「开启自动保存」引导文案，
+        // tab 常驻即引导闭环，F-44 的移除分支随之废除、设置变更不再参与显隐。
+        addHistoryTab();
         add(tabs, BorderLayout.CENTER);
 
         // T-M36.6：tab 重选时刷新形态下拉（设置页修改后切回即同步；不触发重生成）
@@ -556,9 +645,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
             }
         });
 
-        // F-44 历史 tab 显隐跟随设置（设置页修改后即时生效，无需切 tab）
+        // 设置变更后列表重排重绘（T-HistoryTabAlways 起历史 tab 无显隐逻辑，恒在）
         SettingsChangeListener settingsListener = () -> ApplicationManager.getApplication().invokeLater(() -> {
-            updateHistoryTabVisibility();
             // T-LogListFreeze-04：片段渲染直读设置态（时间戳/耗时显示/慢查询阈值）——设置变更后
             // 走 refreshList 重排重绘即生效（SINGLE_LINE 直渲染；多行模式片段缓存按模式键自动失效）
             // T-ListMode：显示模式入口已迁设置页（T-DisplayModeToSettings）——设置页 apply 广播后
@@ -643,6 +731,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
             if (!next.contains(tab)) {
                 next.add(tab);
             }
+        } else if (tab instanceof FocusTab.Template template) {
+            next = FocusTab.addTemplateTab(focusTabs, template.structureKey(), template.count());
         } else {
             next = new ArrayList<>(focusTabs);
         }
@@ -707,7 +797,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
         JPanel top = new JPanel(new BorderLayout());
         top.add(buildToolbar(), BorderLayout.NORTH);
         top.add(focusTabBar, BorderLayout.CENTER);
-        top.add(searchField, BorderLayout.SOUTH);
+        // T-HistorySearchToggles：挂搜索条宿主（搜索框 + MatchCase 开关），显隐契约不变
+        top.add(searchBar, BorderLayout.SOUTH);
         return top;
     }
 
@@ -757,43 +848,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
         return row;
     }
 
-    /** 搜索条（默认隐藏；Ctrl+F/⌘F 经 ShowSearchAction 唤起）。 */
-    private SearchTextField buildSearchField() {
-        SearchTextField field = new SearchTextField(false); // 不启用历史弹窗
-        field.setVisible(false);
-        field.getTextEditor().getEmptyText().setText(MpSqlVisualizerBundle.message("log.search.emptyText"));
-        field.getTextEditor().getDocument().addDocumentListener(new DocumentListener() {
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                onSearchTextChanged();
-            }
-
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                onSearchTextChanged();
-            }
-
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                onSearchTextChanged();
-            }
-        });
-        // Esc 收起：文本非空时平台已注册 ACTION_CLEAR_TEXT（SearchTextField.addNotify）先清空，
-        // 故仅空文本时走到这里 → 收起搜索条（满足「非空先清空，已空再收起」两段式）
-        field.addKeyboardListener(new KeyAdapter() {
-            @Override
-            public void keyPressed(KeyEvent e) {
-                if (e.getKeyCode() == KeyEvent.VK_ESCAPE && field.getText().isEmpty()) {
-                    hideSearch();
-                    e.consume();
-                }
-            }
-        });
-        return field;
-    }
-
     /** Ctrl+F/⌘F 唤起搜索条（快捷键经 CommonShortcuts.getFind() 平台 keymap 自适应 mac/win）。 */
-    private class ShowSearchAction extends AnAction {
+    public class ShowSearchAction extends AnAction {
         ShowSearchAction() {
             registerCustomShortcutSet(CommonShortcuts.getFind(), list);
         }
@@ -813,22 +869,22 @@ public class SqlLogPanel extends JPanel implements Disposable {
     }
 
     private void showSearch() {
-        if (!searchField.isVisible()) {
-            searchField.setVisible(true);
-            if (searchField.getParent() != null) {
-                searchField.getParent().revalidate();
-                searchField.getParent().repaint();
+        if (!searchBar.isVisible()) {
+            searchBar.setVisible(true);
+            if (searchBar.getParent() != null) {
+                searchBar.getParent().revalidate();
+                searchBar.getParent().repaint();
             }
         }
-        searchField.requestFocus();
+        nativeSearch.getComponent().requestFocusInWindow();
     }
 
     private void hideSearch() {
         searchField.setText(""); // 非空时触发 DocumentListener 清过滤并刷新
-        searchField.setVisible(false);
-        if (searchField.getParent() != null) {
-            searchField.getParent().revalidate();
-            searchField.getParent().repaint();
+        searchBar.setVisible(false);
+        if (searchBar.getParent() != null) {
+            searchBar.getParent().revalidate();
+            searchBar.getParent().repaint();
         }
         list.requestFocusInWindow();
     }
@@ -840,7 +896,14 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
     private void applySearchText() {
         searchText = searchField.getText();
+        // T-LogToSqlHint 批：喂本组件搜索历史（平台历史钮已接管为自有实现）
+        nativeSearch.recordSearchQuery(searchText);
         refreshList();
+    }
+
+    /** 测试驱动：立即应用搜索框文本（headless 下防抖 Swing Timer 到点不可控），等价生产防抖回调。 */
+    public void applySearchTextForTest() {
+        applySearchText();
     }
 
     // ---------- SQL类型多选弹窗 ----------
@@ -885,46 +948,15 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
     // ---------- 工具栏动作 ----------
 
-    /**
-     * F-44：根据 logAutoSaveEnabled 设置 + 历史数据存在与否同步历史 tab 的显隐。
-     * 开启自动保存时显示；关闭后若 .idea 中仍有历史文件，也保留 tab（只读查看已有数据）。
-     * 仅当无自动保存且无历史数据时才移除 tab。
-     */
-    private void updateHistoryTabVisibility() {
-        boolean enabled;
-        try {
-            enabled = PluginSettings.getInstance().getState().getLogAutoSaveEnabled();
-        } catch (Throwable t) {
-            enabled = false;
-        }
-        boolean hasHistoryData = enabled || hasHistoryFiles();
-        if (hasHistoryData && historyTabIndex < 0) {
-            // 添加历史 tab（T-Perf-17：Disposer 注册带防重入守卫）
-            addHistoryTab();
-        } else if (!hasHistoryData && historyTabIndex >= 0) {
-            // 移除历史 tab（避免选中正在移除的 tab）
-            if (tabs.getSelectedIndex() == historyTabIndex) {
-                tabs.setSelectedIndex(0);
-            }
-            tabs.removeTabAt(historyTabIndex);
-            historyTabIndex = -1;
-            // T-Perf-17：tab 移除时从 Disposer 树摘除——否则下次重新添加时重复注册，
-            // 2026.x 平台报 "Object must not be registered twice" 错误弹窗。
-            // 243 平台 Disposer 无 unregister（javap 实证），dispose(historyPanel) 即摘除并执行
-            // 其轻量 dispose（仅停防抖 Timer，面板组件可复用）；dispose 后重新 register 合法。
-            if (historyPanelRegistered) {
-                Disposer.dispose(getHistoryPanel());
-                historyPanelRegistered = false;
-            }
-        }
-    }
-
     /** T-Perf-17：historyPanel 当前是否已注册到 Disposer 树（防重复注册守卫标志）。 */
     private boolean historyPanelRegistered = false;
 
     /**
-     * 添加历史 tab（T-Perf-17：Disposer 注册防重入守卫——构造期与设置页循环开关都会走到；
-     * 重复注册在 2026.x 平台报 "Object must not be registered twice" 错误弹窗）。
+     * 添加历史 tab（T-HistoryTabAlways 后为构造期唯一调用点）。
+     *
+     * <p>T-Perf-17：Disposer 注册与防重入守卫保留——历史面板必须登记进本面板的 Disposer 树
+     * （否则工具窗关闭时面板连同渲染器/防抖 Timer 不释放）；守卫在将来出现重复挂载路径时仍生效
+     * （重复注册在 2026.x 平台报 "Object must not be registered twice" 错误弹窗）。
      */
     private void addHistoryTab() {
         if (!historyPanelRegistered) {
@@ -935,19 +967,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
         tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), getHistoryPanel());
     }
 
-    /** F-44：检查 .idea 目录中是否存在历史 SQL 文件（F-44-4：目录名随插件更名，旧名不再读取）。 */
-    private boolean hasHistoryFiles() {
-        String basePath = project.getBasePath();
-        if (basePath == null) {
-            return false;
-        }
-        File dir = new File(basePath + File.separator + ".idea" + File.separator
-                + SqlLogAutoSaver.DATA_DIR_NAME + File.separator + "sql-history");
-        if (!dir.isDirectory()) {
-            return false;
-        }
-        File[] files = dir.listFiles(f -> f.getName().endsWith(".sql"));
-        return files != null && files.length > 0;
+    /** 测试访问器：主 tab 容器（历史 tab 常驻断言用；T-HistoryTabAlways 起 tab 恒在，无显隐路径）。 */
+    public javax.swing.JTabbedPane tabsForTest() {
+        return tabs;
     }
 
     /**
@@ -966,7 +988,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * 捕捉开关（T-CaptureBack：回迁面板工具栏首位；仍经 captureToggleAction 暴露供标题栏兼容）。
      * 图标/文案在 update 按 manager.capturing 态输出（平台更新机制驱动，不再反射强改按钮）。
      */
-    private class CaptureAction extends AnAction {
+    public class CaptureAction extends AnAction {
         @Override
         public void update(AnActionEvent e) {
             if (manager.isCapturing()) {
@@ -992,7 +1014,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
         }
     }
 
-    private class ClearAction extends AnAction {
+    public class ClearAction extends AnAction {
         @Override
         public void update(AnActionEvent e) {
             e.getPresentation().setIcon(AllIcons.Actions.GC);
@@ -1009,7 +1031,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * T-SqlLogPerf：「滚动到底部」动作（跳列表底 + 恢复尾部跟随）。
      * 图标复用 {@link AllIcons.General.ArrowDown}（本文件 SQL类型/排序按钮同款下箭头，向下语义一致）。
      */
-    private class ScrollToEndAction extends AnAction {
+    public class ScrollToEndAction extends AnAction {
         @Override
         public void update(AnActionEvent e) {
             e.getPresentation().setIcon(AllIcons.General.ArrowDown);
@@ -1023,7 +1045,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
         }
     }
 
-    private class SettingsAction extends AnAction {
+    public class SettingsAction extends AnAction {
         @Override
         public void update(AnActionEvent e) {
             e.getPresentation().setIcon(AllIcons.General.Settings);
@@ -1032,7 +1054,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
         @Override
         public void actionPerformed(AnActionEvent e) {
-            ShowSettingsUtil.getInstance().showSettingsDialog(project, SqlLogConfigurable.class);
+            // T-SettingsFocusFromLink：统一走主设置页入口（hint=null 只切到 SQL 日志页不聚焦行）
+            cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable
+                    .openSqlLogSettingsFocused(project, null);
         }
     }
 
@@ -1041,7 +1065,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * {@code AllIcons.General.Filter}——262 jar 实渲染比对后用户选定，全栏无漏斗形不撞车）。
      * 打开与右键「管理屏蔽规则…」同一非模态对话框。
      */
-    private class ManageSuppressAction extends AnAction {
+    public class ManageSuppressAction extends AnAction {
         @Override
         public void update(AnActionEvent e) {
             e.getPresentation().setIcon(AllIcons.General.Filter);
@@ -1057,7 +1081,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
     /**
      * T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 内嵌浏览器打开本地 HTML 帮助文档。
      */
-    private class HelpAction extends AnAction {
+    public class HelpAction extends AnAction {
         @Override
         public void update(AnActionEvent e) {
             e.getPresentation().setIcon(AllIcons.Actions.Help);
@@ -1142,9 +1166,23 @@ public class SqlLogPanel extends JPanel implements Disposable {
      */
     private String lastEmptyText = null;
 
+    /** 当前空态是否带「增强捕获」链接（诊断行不带——常规空态专属，见 {@link #applyEmptyTextWithEnhancedLink}）。 */
+    private boolean emptyTextLinkEnabled = false;
+
     /** 写入空态文案（纯文本入口，渲染层在此做折行）。 */
     private void applyEmptyText(String plain) {
         lastEmptyText = plain;
+        emptyTextLinkEnabled = false;
+        renderEmptyText();
+    }
+
+    /**
+     * 写入空态文案 + 尾部可点「增强捕获」链接（20261008 验收缺陷 #3：第三径原为纯文本不可点，
+     * 与验收文档 3.22「点该引导走到增强捕获的开启流程」不符）。仅常规空态用；诊断行不加链接。
+     */
+    private void applyEmptyTextWithEnhancedLink() {
+        lastEmptyText = MpSqlVisualizerBundle.message("log.panel.empty");
+        emptyTextLinkEnabled = true;
         renderEmptyText();
     }
 
@@ -1154,8 +1192,24 @@ public class SqlLogPanel extends JPanel implements Disposable {
         if (plain == null) {
             return;
         }
-        SqlLogPanelKt.applyEmptyTextLines(list.getEmptyText(), plain, emptyTextWidthPx(),
+        com.intellij.util.ui.StatusText status = list.getEmptyText();
+        status.clear();
+        SqlLogPanelKt.applyEmptyTextLines(status, plain, emptyTextWidthPx(),
                 s -> list.getFontMetrics(list.getFont()).stringWidth(s));
+        if (emptyTextLinkEnabled) {
+            // T-SettingsFocusFromLink：引导链接（**单一整体入口**——用户定「一个整体，点击都跳到目标位置」：
+            // 不再拆页签/设置页/增强捕获三个去向的分链），点击打开主设置页并定位高亮「增强捕获」设置行
+            // （空态文案里「参数实参与精确耗时…在设置页开启 →」所指）。经 appendLinkRow 单点——
+            // 平台 appendSecondaryText 固定写第二行的坑见该函数 KDoc。
+            CaptureDiagnostics.appendLinkRow(
+                    status,
+                    List.of(new kotlin.Pair<>(
+                            MpSqlVisualizerBundle.message("log.panel.empty.link"),
+                            (java.awt.event.ActionListener) e ->
+                                    cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable.openSqlLogSettingsFocused(
+                                            project,
+                                            MpSqlVisualizerBundle.message("settings.enhancedCapture")))));
+        }
     }
 
     /** 空态文案可用宽度：列表宽度扣掉自身内边距与左右余量；尚未布局（首帧 / 隐藏卡）时给兜底值。 */
@@ -1181,6 +1235,17 @@ public class SqlLogPanel extends JPanel implements Disposable {
             } catch (Throwable ignored) {
                 enhancedStatus = null; // runCatching 等价
             }
+            long suppressed;
+            try {
+                SqlSuppressRuleManager mgr = SqlSuppressRuleManager.getInstance();
+                long sum = 0L;
+                for (SqlSuppressRule rule : mgr.getRules()) {
+                    sum += mgr.hitCount(rule.getId());
+                }
+                suppressed = sum;
+            } catch (Throwable ignored) {
+                suppressed = 0L;
+            }
             text = CaptureDiagnostics.captureDiagnosticsText(new CaptureDiagnostics(
                     true,
                     manager.isWaitingForConsole(),
@@ -1191,11 +1256,20 @@ public class SqlLogPanel extends JPanel implements Disposable {
                     // T-RA-03：两个「行去哪了」计数——守卫误丢行 / EP 短路后条目未落到本面板时，
                     // 它们是面板唯一可见的证据（此前生产侧零读取，故障被伪装成「控制台没输出」）。
                     manager.getConsoleBridge().getReplayDropCount(),
-                    manager.getConsoleBridge().epActiveShortCircuitCount.get()));
+                    manager.getConsoleBridge().epActiveShortCircuitCount.get(),
+                    // T-DevAcceptFix2 ⑤：增强通道已收事件数（恒显示）——「事件到没到」的唯一判别量
+                    cn.song.mybatisplus.visualizer.log.agent.AgentEventAdapter.receivedEvents(),
+                    // T-DevAcceptFix2 ⑩：屏蔽规则命中次数（应用级累计，与规则面板同源计数）——
+                    // 「事件到了却 0 条」时最容易被忽略的一条吃行通道（用户自建规则，设计内但必须可见）
+                    suppressed));
         } else {
             text = null;
         }
-        applyEmptyText(text != null ? text : MpSqlVisualizerBundle.message("log.panel.empty"));
+        if (text != null) {
+            applyEmptyText(text);
+        } else {
+            applyEmptyTextWithEnhancedLink();
+        }
         if (active) {
             if (diagnosticsTimer == null) {
                 diagnosticsTimer = new javax.swing.Timer(DIAGNOSTICS_TICK_MS, e -> syncDiagnostics());
@@ -1213,7 +1287,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
     // ---------- 条目列表 ----------
 
     private JBScrollPane buildListPane() {
-        applyEmptyText(MpSqlVisualizerBundle.message("log.panel.empty"));
+        applyEmptyTextWithEnhancedLink();
         // T-AgentDiagWrap T-04：列表宽度变化即重排空态文案——否则用户拉窄/拉宽工具窗后，
         // 文案还按旧宽度折行（窄窗下会重新长出被裁掉的尾巴，等于修复只在首帧生效）。
         list.addComponentListener(new ComponentAdapter() {
@@ -1233,8 +1307,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
             @Override
             public void mouseClicked(MouseEvent e) {
                 // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
+                // T-ClickPreviewCopyRestore：修饰键一并转发——Ctrl/Shift 单击（多选第一击）不排程预览
                 if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
-                    clickPreview.onClick(e.getClickCount(), e.getPoint());
+                    clickPreview.onClick(e.getClickCount(), e.getPoint(), e.getModifiersEx());
                 }
                 if (e.getClickCount() >= 2) {
                     LogSqlEntry selected = list.getSelectedValue();
@@ -1247,14 +1322,14 @@ public class SqlLogPanel extends JPanel implements Disposable {
             @Override
             public void mousePressed(MouseEvent e) {
                 if (e.isPopupTrigger()) {
-                    showContextMenu(e);
+                    SqlLogPanelActionsKt.showContextMenu(SqlLogPanel.this, e);
                 }
             }
 
             @Override
             public void mouseReleased(MouseEvent e) {
                 if (e.isPopupTrigger()) {
-                    showContextMenu(e);
+                    SqlLogPanelActionsKt.showContextMenu(SqlLogPanel.this, e);
                 }
             }
         });
@@ -1333,6 +1408,11 @@ public class SqlLogPanel extends JPanel implements Disposable {
         dedupeCounts = manager.getEntries().dedupeCountsSnapshot();
         entryCellRenderer.dedupeCounts = dedupeCounts;
 
+        // O-90：同模板计数快照（**全量条目**聚合——徽章计数不随当前过滤/搜索波动；
+        // snapshot 本就为过滤链物化，structureKey 惰性缓存后单遍 O(N)）
+        templateCounts = LogSqlModelsKt.structureKeyCounts(snapshot);
+        entryCellRenderer.templateCounts = templateCounts;
+
         // T-SqlSuppress：屏蔽存量过滤插管线最前（与类型过滤同级；键集经 SqlLogManager 订阅同步）
         List<LogSqlEntry> filtered = SqlLogPanelKt.filterByFocus(
                 SqlLogPanelKt.filterByType(
@@ -1341,7 +1421,10 @@ public class SqlLogPanel extends JPanel implements Disposable {
                 activeFocus);
         // T-M55-03/04：动态聚焦页签层（页签=过滤器，多开并集；离散增删走 FullRebuild，差分零改动）
         List<LogSqlEntry> focused = FocusTab.filterByFocusTabs(filtered, focusTabs);
-        List<LogSqlEntry> searched = SqlLogPanelKt.filterBySearch(focused, searchText);
+        // T-HistorySearchToggles：搜索旗随 MatchCase 开关（默认关=忽略大小写，与现状一致）
+        // T-SearchToggleNativeLook：正则旗随 Regex 钮（20261010 用户令日志页补正则，语义与历史页同链）
+        List<LogSqlEntry> searched = SqlLogPanelKt.filterBySearch(
+                focused, searchText, logMatchCase(), logRegex(), regexMemo);
         List<LogSqlEntry> newVisible = applySort(searched);
         int evicted = manager.getEntries().drainEvictedCount();
 
@@ -1623,17 +1706,18 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * 无位置 → LjtMissingSource（引导开启源码捕获，SourceCaptureGuide）。
      * 原「按表名搜索 Wrapper」回退已整体移除：同表名 ≠ 同调用点，命中即误导。
      * T-SourceJumpFunnel P0-5：判定逻辑收敛到 {@link EntryJumpResolver}（实时/历史两面板共用同一实现，
-     * 历史面板由此获得候选回退能力），本函数只做类型转接。
+     * 历史面板由此获得候选回退能力）；T-RecentExecMenu O-119：转接原语收口到 {@link LogEntryJumpOps}
+     * （实时/历史/弹框三方共用），本函数只做类型转接（类型保持不动——既有测试按其断言分支）。
      */
     public LogJumpTarget resolveEntryJump(LogSqlEntry entry) {
-        EntryJumpResolver.JumpTarget target = EntryJumpResolver.resolve(project, entry);
-        if (target instanceof EntryJumpResolver.JumpTarget.Precise precise) {
+        LogEntryJumpOps.SourceTarget target = LogEntryJumpOps.resolveSource(project, entry);
+        if (target instanceof LogEntryJumpOps.SourceTarget.Precise precise) {
             return new LjtPrecise(precise.virtualFile(), precise.line());
         }
-        if (target == EntryJumpResolver.JumpTarget.NoSource.INSTANCE) {
+        if (target == LogEntryJumpOps.SourceTarget.NoSource.INSTANCE) {
             return LjtNoSource.INSTANCE;
         }
-        if (target instanceof EntryJumpResolver.JumpTarget.NotFound notFound) {
+        if (target instanceof LogEntryJumpOps.SourceTarget.NotFound notFound) {
             return new LjtNotFound(notFound.sourceFile());
         }
         return LjtMissingSource.INSTANCE;
@@ -1643,17 +1727,14 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * T-M55-01：XML 目标解析——mapperStatement 非空且 {@link MapperXmlLocator} 定位成功时返回
      * LjtMapperXml；statementId 缺失 / MP 内置语句 XML 不存在 / 多模块定位失败
      * 一律返回 null（调用方回退 Java 跳转，不劣化）。定位自带 ReadAction，EDT 直调安全。
+     * T-RecentExecMenu O-119：解析原语收口 {@link LogEntryJumpOps#resolveXml}。
      */
     LjtMapperXml resolveEntryXmlJump(LogSqlEntry entry) {
-        String statementId = entry.mapperStatement();
-        if (statementId == null || statementId.isBlank()) {
+        LogEntryJumpOps.XmlTarget target = LogEntryJumpOps.resolveXml(project, entry);
+        if (target == null) {
             return null;
         }
-        MapperXmlLocator.Location location = MapperXmlLocator.locate(project, statementId);
-        if (location == null) {
-            return null;
-        }
-        return new LjtMapperXml(location.virtualFile(), location.line());
+        return new LjtMapperXml(target.virtualFile(), target.line());
     }
 
     /** 等价右键「跳转到源码」（供 UI 测试断言精确跳转分支，避 headless 弹窗）。 */
@@ -1664,40 +1745,20 @@ public class SqlLogPanel extends JPanel implements Disposable {
     /**
      * F-44-6：日志 ↔ 源码关联跳转。
      * 仅依赖捕获位置精确跳转；无位置时弹框引导开启源码捕获（T-JumpCapture）。
+     * T-RecentExecMenu O-119：<b>整体策略</b>收口 {@link LogEntryJumpOps#jumpToSourceRealtime}
+     * （与弹框右键共用同一实现与文案，避免第四份策略复制）。
      */
     private void jumpToSource(LogSqlEntry entry) {
-        LogJumpTarget target = resolveEntryJump(entry);
-        if (target instanceof LjtPrecise p) {
-            new OpenFileDescriptor(project, p.getVirtualFile(), p.getLine(), 0).navigate(true);
-        } else if (target instanceof LjtMapperXml mx) {
-            // resolveEntryJump 不产出该分支（XML 目标走 resolveEntryXmlJump/JumpToMapperXmlAction）；防御性导航
-            new OpenFileDescriptor(project, mx.getVirtualFile(), mx.getLine(), 0).navigate(true);
-        } else if (target instanceof LjtNoSource) {
-            showJumpToast(MpSqlVisualizerBundle.message("log.panel.jumpToSource.noSource"));
-        } else if (target instanceof LjtNotFound nf) {
-            showJumpToast(MpSqlVisualizerBundle.message("log.panel.jumpToSource.notFound", nf.getSourceFile()));
-        } else if (target instanceof LjtMissingSource) {
-            SourceCaptureGuide.showMissingSourceDialog(project);
-        }
+        LogEntryJumpOps.jumpToSourceRealtime(project, entry);
     }
 
     /**
      * T-UiNative T-UN-02：跳转无源码提示改轻通知（原模态弹窗——纯告知无需打断）。
-     * 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）。
+     * T-RecentExecMenu O-119：实现收口 {@link LogEntryJumpOps#showToast}（标题键留本页口径）；
+     * 见 {@link FocusCallerMethodAction} 同用本薄封装。
      */
     private void showJumpToast(String content) {
-        if (ApplicationManager.getApplication().isUnitTestMode()) {
-            return;
-        }
-        try {
-            new Notification(
-                    NOTIFICATION_GROUP_ID,
-                    MpSqlVisualizerBundle.message("log.panel.jumpToSource"),
-                    content,
-                    NotificationType.INFORMATION).notify(project);
-        } catch (Throwable ignored) {
-            // 通知失败不影响主流程
-        }
+        LogEntryJumpOps.showToast(project, "log.panel.jumpToSource", content);
     }
 
     /** 更新工具栏慢查询计数徽章（O-1 Phase C）。 */
@@ -1725,52 +1786,22 @@ public class SqlLogPanel extends JPanel implements Disposable {
                 entry, state.getLogFormatSql(), state.getLiteralParamRecovery()), null);
     }
 
-    private void showContextMenu(MouseEvent e) {
-        int index = list.locationToIndex(e.getPoint());
-        if (index < 0) {
-            return;
+    /** R4（W3 历史工作流包）：导出当前可见行集（lastRendered=面板过滤/搜索/排序后的实际可见集）。 */
+    public class ExportVisibleAction extends AnAction {
+        ExportVisibleAction() {
+            super(MpSqlVisualizerBundle.message("log.export.visible"));
         }
-        // T-ListPreviewCopy：命中行已在多选内 → 保留多选（复制项=批量复制多条）；否则收敛为该行。
-        // 删除/发送/跳转等其余菜单项恒作用于被右键的行
-        list.setSelectedIndices(SqlLogPanelKt.resolveContextMenuSelection(list.getSelectedIndices(), index));
-        LogSqlEntry entry = listModel.getElementAt(index);
-        List<LogSqlEntry> selectedEntries = new ArrayList<>();
-        for (int i : list.getSelectedIndices()) {
-            selectedEntries.add(listModel.getElementAt(i));
+
+        @Override
+        public void actionPerformed(AnActionEvent e) {
+            SqlLogPanelActionsKt.exportVisibleEntries(SqlLogPanel.this);
         }
-        // T-UiNative P1a：JPopupMenu+JMenuItem → 平台 DefaultActionGroup+AnAction（ActionPopupMenu 承载）
-        DefaultActionGroup group = new DefaultActionGroup();
-        group.add(new CopySqlAction(selectedEntries));
-        // T-LogSearchRowTime：复制时间戳（所见即所复制的纯时间文本，无方括号）；
-        // 显示开关关闭时无片段可复制 → 菜单项置灰（置灰逻辑在 CopyTimestampAction.update）
-        String timestampClip = SqlLogPanelKt.batchCopyTimestamps(selectedEntries);
-        group.add(new CopyTimestampAction(selectedEntries, timestampClip));
-        group.add(new DeleteSqlAction(entry));
-        // T-SqlSuppress（O-69）：屏蔽此 SQL（多选按不同指纹各成一条规则，已存在跳过）——
-        // 置「删除」之后（计划定稿位），balloon 反馈带管理直达
-        group.add(new SuppressSqlAction(selectedEntries));
-        // T-M37 P1：发送到 SQL → Java 转换（第三 tab）——还原 SQL 写入输入区并切换选中该 tab
-        group.add(new SendToSqlToJavaAction(entry));
-        // T-M38：发送到日志转 SQL（第二 tab）——条目渲染回日志文本并立即转换
-        group.add(new SendToLogToSqlAction(entry));
-        // O-1：日志 ↔ 源码关联跳转（Phase A）；T-M55-01：拆「跳转到 Java」「跳转到 XML」双目标
-        group.add(new JumpToSourceAction(entry));
-        group.add(new JumpToMapperXmlAction(entry));
-        // T-M55-03：方法级聚焦（sourceFile 非空时可用；解析失败 toast 提示，无静默吞没）
-        group.add(new FocusCallerMethodAction(entry));
-        // T-M55-04：按请求聚焦（requestTag 非空时可用；页签 K 有界防高基数爆列表）
-        group.add(new FocusRequestAction(entry));
-        com.intellij.openapi.actionSystem.ActionPopupMenu popup =
-                ActionManager.getInstance().createActionPopupMenu("mpvs.log.list", group);
-        // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
-        popup.setTargetComponent(list);
-        popup.getComponent().show(list, e.getX(), e.getY());
     }
 
     // ---------- T-UiNative P1a：列表右键菜单动作（原 JMenuItem 语义平移，update 设文案/灰置，actionPerformed 平移原监听体） ----------
 
     /** 复制 SQL：多选批量逐行拼接（batchCopySql），单选复制该行。 */
-    private class CopySqlAction extends AnAction {
+    public class CopySqlAction extends AnAction {
         private final List<LogSqlEntry> entries;
 
         CopySqlAction(List<LogSqlEntry> entries) {
@@ -1790,7 +1821,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
     }
 
     /** 复制时间戳：显示开关关闭时无片段可复制 → update 置灰。 */
-    private class CopyTimestampAction extends AnAction {
+    public class CopyTimestampAction extends AnAction {
         private final List<LogSqlEntry> entries;
         private final String clip;
 
@@ -1815,7 +1846,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
     }
 
     /** 删除被右键的条目。 */
-    private class DeleteSqlAction extends AnAction {
+    public class DeleteSqlAction extends AnAction {
         private final LogSqlEntry entry;
 
         DeleteSqlAction(LogSqlEntry entry) {
@@ -1839,7 +1870,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * 动作链：规则入库（监听器同步更新缓冲键集）→ refreshList（存量心跳行立即消失，D4 最强反馈）
      * → balloon 反馈附「管理屏蔽规则…」直达对话框（D4 中层）。
      */
-    private class SuppressSqlAction extends AnAction {
+    public class SuppressSqlAction extends AnAction {
         private final List<LogSqlEntry> entries;
 
         SuppressSqlAction(List<LogSqlEntry> entries) {
@@ -1862,80 +1893,28 @@ public class SqlLogPanel extends JPanel implements Disposable {
         @Override
         public void actionPerformed(AnActionEvent e) {
             SqlSuppressRuleManager ruleManager = SqlSuppressRuleManager.getInstance();
-            int[] added = {0};
-            boolean[] limitReached = {false};
-            // Kotlin entries.distinctBy { it.dedupeKey }.forEach（不同指纹各一条，空白变体同指纹只建一条）
+            // Kotlin entries.distinctBy { it.dedupeKey }.map { it.restoredSql }
             Map<String, LogSqlEntry> distinct = new LinkedHashMap<>();
             for (LogSqlEntry it : entries) {
                 distinct.putIfAbsent(it.dedupeKey(), it);
             }
-            for (LogSqlEntry entry : distinct.values()) {
-                SqlSuppressRuleManager.AddResult result = ruleManager.addRule(entry.restoredSql());
-                if (result == SqlSuppressRuleManager.AddResult.ADDED) {
-                    added[0]++;
-                } else if (result == SqlSuppressRuleManager.AddResult.LIMIT_REACHED) {
-                    limitReached[0] = true;
-                }
-                // DUPLICATE：已存在——幂等跳过
+            List<String> sqls = new ArrayList<>();
+            for (LogSqlEntry it : distinct.values()) {
+                sqls.add(it.restoredSql());
             }
+            Pair<Integer, Boolean> result = ruleManager.addRules(sqls); // F21：单次 republish
             refreshList(); // addRule 的监听器已同步更新缓冲键集——存量行立即消失
-            if (added[0] > 0) {
-                showSuppressBalloon(added[0]);
+            if (result.getFirst() > 0) {
+                SqlLogPanelActionsKt.showSuppressBalloon(SqlLogPanel.this, result.getFirst());
             }
-            if (limitReached[0]) {
-                showSuppressLimitBalloon();
+            if (result.getSecond()) {
+                SqlLogPanelActionsKt.showSuppressLimitBalloon(SqlLogPanel.this);
             }
-        }
-    }
-
-    /**
-     * T-SqlSuppress：屏蔽成功 balloon（D5 定案独立通知组 logsuppress）。
-     * 附「管理屏蔽规则…」动作直达对话框；测试模式跳过（对齐 showJumpToast 约定）。
-     */
-    private void showSuppressBalloon(int addedCount) {
-        if (ApplicationManager.getApplication().isUnitTestMode()) {
-            return;
-        }
-        try {
-            Notification notification = NotificationGroupManager.getInstance()
-                    .getNotificationGroup(SUPPRESS_NOTIFICATION_GROUP_ID)
-                    .createNotification(
-                            MpSqlVisualizerBundle.message("log.suppress.added.title"),
-                            MpSqlVisualizerBundle.message("log.suppress.added.body", Integer.toString(addedCount)),
-                            NotificationType.INFORMATION);
-            notification.addAction(
-                    NotificationAction.createSimple(MpSqlVisualizerBundle.message("log.suppress.manage"), () -> {
-                        notification.expire();
-                        new SqlSuppressManagerDialog(project).show();
-                    }));
-            notification.notify(project);
-        } catch (Throwable ignored) {
-            // runCatching 语义：通知通道异常不阻塞主链（headless/裁剪发行环境）
-        }
-    }
-
-    /** T-SqlSuppress：达上限提示 balloon（D6：拒新增不淘汰，文案引导先删不用的规则）。 */
-    private void showSuppressLimitBalloon() {
-        if (ApplicationManager.getApplication().isUnitTestMode()) {
-            return;
-        }
-        try {
-            NotificationGroupManager.getInstance()
-                    .getNotificationGroup(SUPPRESS_NOTIFICATION_GROUP_ID)
-                    .createNotification(
-                            MpSqlVisualizerBundle.message("log.suppress.added.title"),
-                            MpSqlVisualizerBundle.message(
-                                    "log.suppress.limit",
-                                    String.valueOf(SqlSuppressRuleManager.MAX_RULES)),
-                            NotificationType.WARNING)
-                    .notify(project);
-        } catch (Throwable ignored) {
-            // runCatching 语义：通知通道异常不阻塞主链（headless/裁剪发行环境）
         }
     }
 
     /** 发送到 SQL → Java 转换（第三 tab）。 */
-    private class SendToSqlToJavaAction extends AnAction {
+    public class SendToSqlToJavaAction extends AnAction {
         private final LogSqlEntry entry;
 
         SendToSqlToJavaAction(LogSqlEntry entry) {
@@ -1949,13 +1928,12 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
         @Override
         public void actionPerformed(AnActionEvent e) {
-            sqlToJavaPanel.setInputSql(entry.restoredSql());
-            tabs.setSelectedComponent(sqlToJavaPanel);
+            openEntryInTab(entry, LogEntryTab.SQL_TO_JAVA);
         }
     }
 
-    /** 发送到日志转 SQL（第二 tab）。 */
-    private class SendToLogToSqlAction extends AnAction {
+    /** 发送到日志转 SQL（第二 tab）。T-RecentExecMenu O-119：落点收口 openEntryInTab（弹框右键同用）。 */
+    public class SendToLogToSqlAction extends AnAction {
         private final LogSqlEntry entry;
 
         SendToLogToSqlAction(LogSqlEntry entry) {
@@ -1969,13 +1947,12 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
         @Override
         public void actionPerformed(AnActionEvent e) {
-            logToSqlPanel.loadFromEntry(entry);
-            tabs.setSelectedComponent(logToSqlPanel);
+            openEntryInTab(entry, LogEntryTab.LOG_TO_SQL);
         }
     }
 
     /** 跳转到 Java 调用方（T-M55-01：与「跳转到 XML」拆分为双目标；无位置→引导捕获弹窗，无提示/文件丢失→toast）。 */
-    private class JumpToSourceAction extends AnAction {
+    public class JumpToSourceAction extends AnAction {
         private final LogSqlEntry entry;
 
         JumpToSourceAction(LogSqlEntry entry) {
@@ -1998,7 +1975,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * （update 内解析一次并存引用，actionPerformed 复用，单次右键只做一次索引查询）；
      * 定位失败（XML 不存在/多模块未命中）不显示，原有「跳转到 Java」承担回退，不劣化。
      */
-    private class JumpToMapperXmlAction extends AnAction {
+    public class JumpToMapperXmlAction extends AnAction {
         private final LogSqlEntry entry;
         private LjtMapperXml resolved;
 
@@ -2029,7 +2006,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * 点击时解析方法行号区间并加入聚焦页签栏（解析失败 toast，不静默）。
      * Ultra 的编辑器行槽 ⚡ 入口首批不做（记录为可选增强）。
      */
-    private class FocusCallerMethodAction extends AnAction {
+    public class FocusCallerMethodAction extends AnAction {
         private final LogSqlEntry entry;
 
         FocusCallerMethodAction(LogSqlEntry entry) {
@@ -2062,7 +2039,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * （与 03 方法聚焦同策略）。「最近 K 个请求标签下拉」的独立入口不另做——右键任意
      * 同标签条目等价可达，计划内「或」二选一取轻。
      */
-    private class FocusRequestAction extends AnAction {
+    public class FocusRequestAction extends AnAction {
         private final LogSqlEntry entry;
 
         FocusRequestAction(LogSqlEntry entry) {
@@ -2084,6 +2061,39 @@ public class SqlLogPanel extends JPanel implements Disposable {
         }
     }
 
+    /**
+     * O-90：按结构聚焦——右键带「同结构 N 条」徽章的条目产生结构页签（structureKey 精确匹配，
+     * 过滤出该结构全部条目；与 04 请求聚焦同一交互形态：条目驱动的聚焦过滤器，页签可关闭恢复）。
+     * 准入 = 计数达 {@link LogSqlModelsKt#TEMPLATE_BADGE_MIN_COUNT}（徽章在场才可点）；同结构重复创建幂等
+     * （{@link FocusTab#addTemplateTab} 按 structureKey 判重）。徽章本体为展示性（与去重徽章先例一致——
+     * 列表片段非交互组件），聚焦入口落在本动作；T-DevAcceptFix2 ⑪ 起菜单项带 description
+     * 说明判定口径（「字面量不同也算」——用户实测里 {@code IN ('a')} 与 {@code IN ('b')} 计同一结构）。
+     */
+    public class FocusTemplateAction extends AnAction {
+        private final LogSqlEntry entry;
+
+        FocusTemplateAction(LogSqlEntry entry) {
+            this.entry = entry;
+        }
+
+        @Override
+        public void update(AnActionEvent e) {
+            e.getPresentation().setText(MpSqlVisualizerBundle.message("log.panel.focusTemplate"));
+            e.getPresentation().setDescription(MpSqlVisualizerBundle.message("log.panel.focusTemplate.desc"));
+            Integer n = templateCounts.get(entry.structureKey());
+            e.getPresentation().setEnabled(n != null && n >= LogSqlModelsKt.TEMPLATE_BADGE_MIN_COUNT);
+        }
+
+        @Override
+        public void actionPerformed(AnActionEvent e) {
+            Integer n = templateCounts.get(entry.structureKey());
+            if (n == null) return;
+            if (n >= LogSqlModelsKt.TEMPLATE_BADGE_MIN_COUNT) {
+                addFocusTab(new FocusTab.Template(entry.structureKey(), n));
+            }
+        }
+    }
+
     /** 面板销毁：释放单击预览弹窗与日志转 SQL / SQL→Java 面板编辑器（manager 生命周期由项目 @Service 管理）。 */
     @Override
     public void dispose() {
@@ -2097,9 +2107,27 @@ public class SqlLogPanel extends JPanel implements Disposable {
         // T-Perf-15：注销 manager 监听器（防面板销毁后仍被回调——每条新 SQL invokeLater 调已销毁面板）
         manager.removeUiListener(uiRefreshListener);
         manager.removeCapturingListener(capturingUiListener);
+        // T-RecentExecMenu O-119：注销送页签通道（同一性判定——防误清他人注册）
+        if (manager.onOpenEntryInTab == openEntryInTabCallback) {
+            manager.onOpenEntryInTab = null;
+        }
         clickPreview.dispose();
         logToSqlPanel.dispose();
         sqlToJavaPanel.dispose();
+    }
+
+    /**
+     * T-RecentExecMenu O-119：面板外请求（弹框右键「发送到…」）把条目送进对应页签并选中——
+     * 与右键 {@link SendToSqlToJavaAction} / {@link SendToLogToSqlAction} 同体（三处共用本方法，单一实现）。
+     */
+    public void openEntryInTab(LogSqlEntry entry, LogEntryTab tab) {
+        if (tab == LogEntryTab.LOG_TO_SQL) {
+            logToSqlPanel.loadFromEntry(entry);
+            tabs.setSelectedComponent(logToSqlPanel);
+        } else if (tab == LogEntryTab.SQL_TO_JAVA) {
+            sqlToJavaPanel.setInputSql(entry.restoredSql());
+            tabs.setSelectedComponent(sqlToJavaPanel);
+        }
     }
 
     // ---------- 测试访问器（headless 测试断言用） ----------
@@ -2227,8 +2255,17 @@ public class SqlLogPanel extends JPanel implements Disposable {
     }
 
     /** 搜索条（测试断言显隐/文本）。 */
-    public SearchTextField getSearchFieldForTest() {
+    public cn.song.mybatisplus.visualizer.ui.search.NativeSearchTextField getSearchFieldForTest() {
         return searchField;
+    }
+
+    /** 布局测试契约：搜索条可见性（旧断言落在 searchField.isVisible 上，迁到宿主 searchBar）。 */
+    public boolean getSearchFieldVisibleForTest() {
+        return searchBar.isVisible();
+    }
+
+    public void setSearchFieldVisibleForTest(boolean value) {
+        searchBar.setVisible(value);
     }
 
     /** 单击预览控制器（T-ClickPreview 测试断言：排程/取消/弹窗残留）。 */
@@ -2244,9 +2281,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
     private static final Logger LOG = Logger.getInstance(SqlLogPanel.class);
     private static final String TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar";
     /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
-    private static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
+    public static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
     /** T-SqlSuppress（O-69/D5）：屏蔽规则 balloon 通知组（plugin.xml 独立注册）。 */
-    private static final String SUPPRESS_NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.logsuppress";
+    public static final String SUPPRESS_NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.logsuppress";
     public static final String DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss";
     /** T-M39：帮助文档 URL（降级系统浏览器打开）。
      *  2026-08-31 改为自建站点 jvtools.cn（可自主接入国内 CDN；

@@ -61,6 +61,10 @@ public class LogToSqlPanel extends JPanel implements Disposable {
     private final Project project;
     private final Editor inputEditor;
     private final Editor resultEditor;
+
+    /** O-92：「从剪贴板读取」动作（输入工具栏成员引用，测试驱动/断言用）。 */
+    private final ReadClipboardAction readClipboardAction;
+
     private final JBLabel statusLabel;
 
     // T-PreviewUx-Pack #2：诚实降级横幅（面板内嵌非模态提示，不算弹窗）——还原失败/参数缺失
@@ -75,6 +79,11 @@ public class LogToSqlPanel extends JPanel implements Disposable {
      */
     private final String inputPlaceholder = MpSqlVisualizerBundle.message("log.panel.hint.input");
     private final String resultPlaceholder = MpSqlVisualizerBundle.message("log.panel.hint.result");
+
+    // T-LogToSqlHint（20261010 用户优化点）：两区下方恒显灰字提示（对齐 SqlToJavaPanel 形态——
+    // 编辑器原生 placeholder 仅聚焦时可见，未聚焦空态观感为「无提示」）
+    private final JBLabel inputHintLabel;
+    private final JBLabel resultHintLabel;
 
     /** 输出格式切换态：true=多行格式化（默认，用户确认）；false=日志原样压缩。 */
     private boolean formatToggled = true;
@@ -91,15 +100,29 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         this.statusLabel.setBorder(JBUI.Borders.empty(2, 6, 2, 6));
         this.inputEditor = createInputEditor();
         this.resultEditor = createResultEditor();
+        this.readClipboardAction = new ReadClipboardAction();
+        this.inputHintLabel = new JBLabel(MpSqlVisualizerBundle.message("log.panel.hint.input"));
+        this.inputHintLabel.setForeground(com.intellij.util.ui.UIUtil.getInactiveTextColor());
+        this.inputHintLabel.setBorder(JBUI.Borders.empty(2, 6, 2, 6));
+        this.resultHintLabel = new JBLabel(MpSqlVisualizerBundle.message("log.panel.hint.result"));
+        this.resultHintLabel.setForeground(com.intellij.util.ui.UIUtil.getInactiveTextColor());
+        this.resultHintLabel.setBorder(JBUI.Borders.empty(2, 6, 2, 6));
 
-        // 上：日志输入区（工具栏 + 编辑器——空文档由编辑器原生 placeholder 显示引导文案）
+        // 上：日志输入区（工具栏 + 灰字提示 + 编辑器——位置对齐 SqlToJavaPanel：
+        // 提示在工具栏下方、编辑器上方，两面板统一）
         JPanel inputPanel = new JPanel(new BorderLayout());
-        inputPanel.add(buildInputToolbar(), BorderLayout.NORTH);
+        JPanel inputNorth = new JPanel(new BorderLayout());
+        inputNorth.add(buildInputToolbar(), BorderLayout.NORTH);
+        inputNorth.add(inputHintLabel, BorderLayout.SOUTH);
+        inputPanel.add(inputNorth, BorderLayout.NORTH);
         inputPanel.add(inputEditor.getComponent(), BorderLayout.CENTER);
 
-        // 下：SQL 结果区（工具栏 + 编辑器）
+        // 下：SQL 结果区（工具栏 + 灰字提示 + 编辑器，同构）
         JPanel resultPanel = new JPanel(new BorderLayout());
-        resultPanel.add(buildResultToolbar(), BorderLayout.NORTH);
+        JPanel resultNorth = new JPanel(new BorderLayout());
+        resultNorth.add(buildResultToolbar(), BorderLayout.NORTH);
+        resultNorth.add(resultHintLabel, BorderLayout.SOUTH);
+        resultPanel.add(resultNorth, BorderLayout.NORTH);
         resultPanel.add(resultEditor.getComponent(), BorderLayout.CENTER);
 
         Splitter splitter = new Splitter(true, 0.5f);
@@ -113,6 +136,27 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         southHost.add(degradationBanner, BorderLayout.NORTH);
         southHost.add(statusLabel, BorderLayout.SOUTH);
         add(southHost, BorderLayout.SOUTH);
+
+        // 灰字提示随各自内容显隐（空文档显示、有内容隐藏；两区独立监听不互串；
+        // 243 平台 DocumentListener 已 Kotlin 化——Kotlin 接口无 SAM，Java 侧用匿名类）
+        com.intellij.openapi.editor.event.DocumentListener inputSync =
+                new com.intellij.openapi.editor.event.DocumentListener() {
+                    @Override
+                    public void documentChanged(com.intellij.openapi.editor.event.DocumentEvent event) {
+                        inputHintLabel.setVisible(event.getDocument().getText().isBlank());
+                    }
+                };
+        com.intellij.openapi.editor.event.DocumentListener resultSync =
+                new com.intellij.openapi.editor.event.DocumentListener() {
+                    @Override
+                    public void documentChanged(com.intellij.openapi.editor.event.DocumentEvent event) {
+                        resultHintLabel.setVisible(event.getDocument().getText().isBlank());
+                    }
+                };
+        inputEditor.getDocument().addDocumentListener(inputSync);
+        resultEditor.getDocument().addDocumentListener(resultSync);
+        inputHintLabel.setVisible(inputEditor.getDocument().getText().isBlank());
+        resultHintLabel.setVisible(resultEditor.getDocument().getText().isBlank());
     }
 
     // ------------------------------------------------------------------
@@ -120,7 +164,13 @@ public class LogToSqlPanel extends JPanel implements Disposable {
     // ------------------------------------------------------------------
 
     private JPanel buildInputToolbar() {
-        DefaultActionGroup group = new DefaultActionGroup(new ConvertAction(), new ClearInputAction());
+        DefaultActionGroup group = new DefaultActionGroup(
+                new ConvertAction(),
+                // O-92（批次9 波次2，用户定案「剪贴板按钮先行」）：粘贴还原入口低门槛化——
+                // V32 实证唯一入口=本 tab 手动 Ctrl+V，DBX #167「贴文本得 SQL」默认期待下降为
+                // 一次点击；编辑器右键/意图入口留后续批次评估（不在本件扩面）。
+                readClipboardAction,
+                new ClearInputAction());
         com.intellij.openapi.actionSystem.ActionToolbar toolbar = ActionManager.getInstance()
                 .createActionToolbar(TOOLBAR_ID_INPUT, group, true);
         toolbar.setTargetComponent(this);
@@ -152,6 +202,30 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         @Override
         public void actionPerformed(AnActionEvent e) {
             convert();
+        }
+    }
+
+    /**
+     * O-92：从剪贴板读取日志文本填入输入区——「新增 UI 交互须照抄既有同类实现」定例：
+     * 同族工具栏动作形态（update 设图标/文案 + actionPerformed 直调面板方法，同
+     * {@link ConvertAction} / {@link CopyAction}）；填入即转照抄 {@link #loadFromEntry}（列表「发送到日志转 SQL」
+     * 的既有同语义链路）。「有内容才启用」在 update 内探测剪贴板（同平台粘贴动作惯例；
+     * 工具窗工具栏刷新频度低，探测成本可忽略），剪贴板空点击给状态行轻提示（不弹窗，
+     * 弹窗克制红线）。图标 MenuPaste：243 基线 AllIcons$Actions javap 204 字段核实
+     * <b>无 Paste 字段</b>（MenuPaste/Menu_paste 在），自家动作同族取用防 NoSuchFieldError。
+     */
+    private class ReadClipboardAction extends AnAction {
+        @Override
+        public void update(AnActionEvent e) {
+            e.getPresentation().setIcon(AllIcons.Actions.MenuPaste);
+            e.getPresentation().setText(MpSqlVisualizerBundle.message("logToSql.panel.readClipboard"));
+            String clip = UiTextClipboard.readText();
+            e.getPresentation().setEnabled(clip != null && !clip.isBlank());
+        }
+
+        @Override
+        public void actionPerformed(AnActionEvent e) {
+            readFromClipboard();
         }
     }
 
@@ -310,6 +384,20 @@ public class LogToSqlPanel extends JPanel implements Disposable {
     // ------------------------------------------------------------------
 
     /**
+     * O-92：剪贴板 → 输入区（EDT）。有文本：填入即转（{@link #loadFromEntry} 同款链路，小输入同步
+     * 转换、大输入走 {@link #convert} 既有的后台分频路径）；剪贴板空：状态行轻提示，零写入零弹窗。
+     */
+    private void readFromClipboard() {
+        String text = UiTextClipboard.readText();
+        if (text == null || text.isBlank()) {
+            status(MpSqlVisualizerBundle.message("logToSql.clipboard.empty"), false);
+            return;
+        }
+        setDocumentText(inputEditor, text);
+        convert();
+    }
+
+    /**
      * 逐行解析输入日志 → 批量还原（每组 withTerminator + 格式化/压缩切换）→ 写结果区。
      *
      * 三解析器并列：MyBatis + Hibernate + JdbcTemplate 同时喂行，各自识别匹配的格式，结果合并输出。
@@ -326,7 +414,7 @@ public class LogToSqlPanel extends JPanel implements Disposable {
             return;
         }
         // 前缀/混合/截断与自动捕获同源（每次转换即时读取，改设置立即生效）
-        Parsers parsers = buildParsers();
+        LogParsers parsers = buildParsers();
         int lineCount = 0;
         for (int i = 0; i < text.length(); i++) {
             if (text.charAt(i) == '\n') {
@@ -360,20 +448,22 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         }.queue();
     }
 
-    /** 三解析器装配（转换配置每次转换即时读取）。 */
-    private Parsers buildParsers() {
+    /** 四解析器装配（转换配置每次转换即时读取；R10 增第四格式 ShardingSphere 双段日志）。 */
+    private LogParsers buildParsers() {
         PluginSettings.State state = PluginSettings.getInstance().getState();
-        return new Parsers(
+        return new LogParsers(
                 new MyBatisLogParser(new LogSqlRestorer(),
                         state.getLogSqlPrefix(), state.getLogParamPrefix(), state.getLogMixedPrefix(), state.getLogMaxParseLength()),
                 new HibernateLogParser(new LogSqlRestorer(),
                         state.getLogHibernateSqlPrefix(), state.getLogHibernateParamPrefix(), state.getLogMixedPrefix(),
                         state.getLogMaxParseLength(), true),
-                new JdbcTemplateLogParser(new LogSqlRestorer(), state.getLogJdbcEnabled(), state.getLogMaxParseLength()));
+                new JdbcTemplateLogParser(new LogSqlRestorer(), state.getLogJdbcEnabled(), state.getLogMaxParseLength()),
+                new ShardingSphereLogParser(new LogSqlRestorer(), state.getLogMaxParseLength()),
+                state.getLogShardingSphereEnabled());
     }
 
-    /** 纯计算：逐行喂三解析器 + 逐条还原/格式化（后台线程安全——不触碰 Swing）。 */
-    private ConversionOutput computeConversion(String text, Parsers parsers) {
+    /** 纯计算：逐行喂四解析器 + 逐条还原/格式化（后台线程安全——不触碰 Swing）。 */
+    private ConversionOutput computeConversion(String text, LogParsers parsers) {
         MyBatisLogParser myBatisParser = parsers.myBatis();
         HibernateLogParser hibernateParser = parsers.hibernate();
         JdbcTemplateLogParser jdbcParser = parsers.jdbc();
@@ -381,14 +471,19 @@ public class LogToSqlPanel extends JPanel implements Disposable {
             myBatisParser.feed(line);
             hibernateParser.feed(line);
             jdbcParser.feed(line);
+            if (parsers.shardingEnabled()) {
+                parsers.sharding().feed(line);
+            }
         }
         myBatisParser.closePending();
         hibernateParser.closePending();
         jdbcParser.closePending();
+        parsers.sharding().closePending();
         List<LogSqlEntry> entries = new ArrayList<>();
         entries.addAll(myBatisParser.takeEntries());
         entries.addAll(hibernateParser.takeEntries());
         entries.addAll(jdbcParser.takeEntries());
+        entries.addAll(parsers.sharding().takeEntries());
         if (entries.isEmpty()) {
             return new ConversionOutput(null, 0, 0);
         }
@@ -457,8 +552,18 @@ public class LogToSqlPanel extends JPanel implements Disposable {
     private record ConversionOutput(String text, int entriesCount, int unresolved) {
     }
 
-    /** 三解析器三元组（Kotlin Triple 的 Java 承载）。 */
-    private record Parsers(MyBatisLogParser myBatis, HibernateLogParser hibernate, JdbcTemplateLogParser jdbc) {
+    /** 四解析器装配载体（Kotlin 多值类 LogParsers 的 Java 承载）。 */
+    private record LogParsers(
+            /// MyBatis 解析器
+            MyBatisLogParser myBatis,
+            /// Hibernate 解析器
+            HibernateLogParser hibernate,
+            /// JdbcTemplate 解析器
+            JdbcTemplateLogParser jdbc,
+            /// ShardingSphere 双段日志解析器（R10 第四格式）
+            ShardingSphereLogParser sharding,
+            /// ShardingSphere 喂行开关（与自动捕获同源读取设置）
+            boolean shardingEnabled) {
     }
 
     /** T-M38：列表「发送到日志转 SQL」落点——条目渲染回日志文本填入输入区并立即转换。 */
@@ -559,6 +664,16 @@ public class LogToSqlPanel extends JPanel implements Disposable {
 
     void convertForTest() {
         convert();
+    }
+
+    /** O-92：输入区当前文本（剪贴板填入断言用）。 */
+    String inputTextForTest() {
+        return inputEditor.getDocument().getText();
+    }
+
+    /** O-92：等价点击「从剪贴板读取」。 */
+    void readClipboardForTest() {
+        readFromClipboard();
     }
 
     void toggleFormatForTest() {
