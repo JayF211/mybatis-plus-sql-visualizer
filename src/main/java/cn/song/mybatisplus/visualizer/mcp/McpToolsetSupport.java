@@ -44,7 +44,10 @@ import java.util.concurrent.atomic.AtomicLong;
  *    MAX_CELL_CHARS）；notices 节无条数预算（驱动会话通道天然有界，个案个位数）；</li>
  *  <li>sqlv_perf_advice：建议 ≤30 条（MAX_FINDINGS，超限 SEVERITY 等级序先裁低级）+ 单条文案
  *    200 字符（MAX_ADVICE_CHARS，对齐 schema 200 口径）（常量在 SqlVisualizerPerfAdviceTool）；</li>
- *  <li>其余七工具：输出规模由输入决定天然有界（渲染=源码规模、logs=日志条数、crud/reverse/
+ *  <li>sqlv_history_search（R14）：返回条 ≤20 默认 / 硬上限 100（maxResults 钳制）、单条 SQL 预览
+ *    8 行 / 600 字符、扫描封顶 200_000 条（常量在 HistorySearchService：DEFAULT_MAX_RESULTS /
+ *    HARD_MAX_RESULTS / MAX_PREVIEW_LINES / MAX_PREVIEW_CHARS）；范围默认当日（D1=A）防全量倾泻；</li>
+ *  <li>其余六工具：输出规模由输入决定天然有界（渲染=源码规模、logs=日志条数、crud/reverse/
  *    rollback=单实体单语句），不设额外预算。</li>
  * </ul>
  *
@@ -163,7 +166,7 @@ public abstract class McpToolsetSupport {
     private static final String LEGACY_ARGS_SUMMARY = "ok";
 
     /** 审计上下文旁路（T-McpDynamicToolset 零跨挂起点引用结构，见 {@link #audit} 头注）：key=token。 */
-    private static final ConcurrentHashMap<Long, AuditContext> AUDIT_CTX = new ConcurrentHashMap<>();
+    public static final ConcurrentHashMap<Long, AuditContext> AUDIT_CTX = new ConcurrentHashMap<>();
 
     /** 审计 token 发号器。 */
     private static final AtomicLong AUDIT_SEQ = new AtomicLong();
@@ -181,10 +184,17 @@ public abstract class McpToolsetSupport {
      * 失败记账＋预期错误转译；其余异常原样返回（平台记 Internal error）。
      * （master AuditGate.onFailure 的同步等价体：AUDIT_CTX 取回移除，仅 SqlvExpectedToolException
      * 走 EXPECTED_ERROR 记账＋{@link McpExpectedBridge#wrapExpected} 反射转译。）
+     *
+     * <p>O-86（DBX #116 对照）：中断/取消（CancellationException）也落审计（status=INTERRUPTED）——
+     * 此前该分支直接透传，被取消的请求在 [MCP-AUDIT] 流里无痕（审计纵深缺口）。</p>
      */
     private static Throwable onFailure(long token, Throwable e) {
         AuditContext ctx = AUDIT_CTX.remove(token);
         if (ctx == null) {
+            return e;
+        }
+        if (e instanceof java.util.concurrent.CancellationException) {
+            McpAuditLog.call(ctx.tool, ctx.argsSummary, "INTERRUPTED", System.currentTimeMillis() - ctx.started);
             return e;
         }
         if (!(e instanceof SqlvExpectedToolException)) {
@@ -201,13 +211,44 @@ public abstract class McpToolsetSupport {
         return McpExpectedBridge.wrapExpected((SqlvExpectedToolException) e);
     }
 
-    /** 审计上下文（tool/argsSummary/started 打包，入 {@link #AUDIT_CTX}、成败记账时取回移除）。 */
-    private static final class AuditContext {
-        private final String tool;
-        private final String argsSummary;
-        private final long started;
+    /**
+     * 审计闸门（master {@code internal class AuditGate} 的 Java 承载，O-86 起 internal→public）：
+     * master 形态实现 {@code Continuation<String>} 并在 {@code resumeWith} 里做挂起路径记账；
+     * Java 侧无挂起帧（见类头移植注记），挂起包装退化为同步形态——本类保留为 API/测试面，
+     * {@link #onSuccess}/{@link #onFailure} 委托同一静态记账逻辑（{@link #auditOk}/{@link #onFailure}）。
+     */
+    public static final class AuditGate {
+        private final long token;
+        private final kotlin.coroutines.Continuation<String> completion;
 
-        private AuditContext(String tool, String argsSummary, long started) {
+        public AuditGate(long token, kotlin.coroutines.Continuation<String> completion) {
+            this.token = token;
+            this.completion = completion;
+        }
+
+        /** master {@code override val context = completion.context} 的等价读取。 */
+        public kotlin.coroutines.CoroutineContext getContext() {
+            return completion.getContext();
+        }
+
+        /** 同步成功记账（返回值走 audit 的 outcome 透传，不经 completion）。 */
+        public void onSuccess(String value) {
+            auditOk(token);
+        }
+
+        /** 失败记账＋预期错误转译；其余异常原样返回（平台记 Internal error）。 */
+        public Throwable onFailure(Throwable e) {
+            return McpToolsetSupport.onFailure(token, e);
+        }
+    }
+
+    /** 审计上下文（tool/argsSummary/started 打包，入 {@link #AUDIT_CTX}、成败记账时取回移除）。 */
+    public static final class AuditContext {
+        public final String tool;
+        public final String argsSummary;
+        public final long started;
+
+        public AuditContext(String tool, String argsSummary, long started) {
             this.tool = tool;
             this.argsSummary = argsSummary;
             this.started = started;

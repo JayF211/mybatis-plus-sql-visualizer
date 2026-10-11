@@ -60,7 +60,13 @@ public final class McpToolsetDynamicRegistrar {
 
     private static final AtomicBoolean registered = new AtomicBoolean(false);
 
-    /** 十工具类清单（McpToolGate.TOOL_NAMES 一一对应，守卫测试对账单一事实）。 */
+    /** F29（D1=A）：已成功 define 的壳类缓存（FQN→Class）——define 不可撤销，重试复用免撞同 FQN LinkageError。 */
+    public static final java.util.Map<String, Class<?>> definedShells = new java.util.LinkedHashMap<>();
+
+    /** F29（D1=A）：已注册到 mcpToolset EP 的壳 FQN——重试防重复注册。 */
+    public static final java.util.Set<String> epRegistered = new java.util.LinkedHashSet<>();
+
+    /** 十一工具类清单（R14 T-HistorySearch 增至十一；McpToolGate.TOOL_NAMES 一一对应，守卫测试对账单一事实）。 */
     private static final List<Class<?>> TOOL_CLASSES = List.of(
         SqlVisualizerRenderSqlTool.class,
         SqlVisualizerSchemaContextTool.class,
@@ -71,11 +77,15 @@ public final class McpToolsetDynamicRegistrar {
         SqlVisualizerPerfAdviceTool.class,
         SqlVisualizerCrudSqlTool.class,
         SqlVisualizerReverseSqlTool.class,
-        SqlVisualizerMapperCheckTool.class
+        SqlVisualizerMapperCheckTool.class,
+        SqlVisualizerHistorySearchTool.class
     );
 
-    /** 探测＋全量注册；已注册或探测失败（无 mcpServer 新形态）时零操作。 */
-    public static void registerOnce() {
+    /** 探测＋全量注册；已注册或探测失败（无 mcpServer 新形态）时零操作。
+     *  F29（D1=A 按工具粒度记账）：{@link #definedShells} 缓存已 define 壳类（define 不可逆——
+     *  部分失败重试撞同 FQN LinkageError 的根治）、{@link #epRegistered} 记账已注册到 EP 的 FQN
+     *  （防重试重复注册）；{@code synchronized} 封 check-then-act 竞态。 */
+    public static synchronized void registerOnce() {
         if (registered.get()) {
             return;
         }
@@ -93,12 +103,29 @@ public final class McpToolsetDynamicRegistrar {
             LOG.info("T-McpDynamicToolset: " + TOOL_CLASSES.size()
                 + " toolsets registered onto mcpToolset EP (dynamic shell form)");
         } catch (Throwable t) {
-            // registered 不置位：下个项目启动重试（动态 EP 未就绪等瞬态失败可自愈）
+            // registered 不置位：下个项目启动重试（动态 EP 未就绪等瞬态失败可自愈）——
+            // 已 define/已注册的 FQN 由两本台账跳过，重试只补未完成项
             LOG.warn("T-McpDynamicToolset: mcpToolset EP 注册失败（MCP 工具不可用，其余功能不受影响）", t);
         }
     }
 
     private static void registerToolset(Class<?> toolClass, Class<?> toolsetIface) throws ReflectiveOperationException {
+        // simpleName 与业务类一致（T-McpToolNaming 分组名=simpleName），gen 子包隔离 FQN
+        registerToolset(toolClass, toolsetIface,
+            "cn.song.mybatisplus.visualizer.mcp.gen." + toolClass.getSimpleName());
+    }
+
+    /** F29 测试触点：显式 shellName 驱动 define/台账路径（EP 注册在平台无 EP 的测试环境会失败，由调用方 runCatching）。 */
+    public static void registerToolsetForTest(Class<?> toolClass, Class<?> toolsetIface, String shellName) {
+        try {
+            registerToolset(toolClass, toolsetIface, shellName);
+        } catch (ReflectiveOperationException e) {
+            throw McpToolsetSupport.<RuntimeException>sneakyThrow(e);
+        }
+    }
+
+    private static void registerToolset(Class<?> toolClass, Class<?> toolsetIface, String shellName)
+        throws ReflectiveOperationException {
         boolean hasNoArgCtor = false;
         for (Constructor<?> candidate : toolClass.getConstructors()) {
             if (candidate.getParameterTypes().length == 0) {
@@ -110,12 +137,18 @@ public final class McpToolsetDynamicRegistrar {
             // Kotlin require(...) { message }
             throw new IllegalArgumentException("toolset 类必须有无参构造（壳生成依赖）：" + toolClass.getName());
         }
-        // simpleName 与业务类一致（T-McpToolNaming 分组名=simpleName），gen 子包隔离 FQN
-        String shellName = "cn.song.mybatisplus.visualizer.mcp.gen." + toolClass.getSimpleName();
-        Class<?> shellClass = ShellClassLoader.INSTANCE.define(shellName, shellBytes(toolClass, toolsetIface, shellName));
+        if (epRegistered.contains(shellName)) {
+            return; // F29：EP 已注册，重试跳过（防重复注册）
+        }
+        Class<?> shellClass = definedShells.get(shellName);
+        if (shellClass == null) {
+            shellClass = ShellClassLoader.INSTANCE.define(shellName, shellBytes(toolClass, toolsetIface, shellName));
+            definedShells.put(shellName, shellClass);
+        }
         Object instance = shellClass.getDeclaredConstructor().newInstance();
         ExtensionPointName<Object> ep = ExtensionPointName.create(TOOLSET_EP_NAME);
         ep.getPoint(null).registerExtension(instance);
+        epRegistered.add(shellName);
         LOG.info("T-McpDynamicToolset: registered " + shellClass.getSimpleName()
             + " (gen shell of " + toolClass.getName() + ")");
     }

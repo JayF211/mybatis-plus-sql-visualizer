@@ -169,6 +169,16 @@ public final class McpDbExecutor {
      * <p>T-McpAuditTrail（T-MAT-01）：{@code onExecuted} 为执行链唯一出口钩子——成功与失败<b>两条路径</b>
      * 都回调一次（失败回调后异常原样冒泡）。钩子是旁路：自身抛异常只记日志，绝不连坐执行结果
      * 或吞掉失败（审计不得成为门控）。null（默认）时零行为差异——既有调用点逐字节不变。</p>
+     *
+     * <p>R23（Oracle/SQL Server EXPLAIN 接入）：{@code channelNote} 非 null 时走 <b>execute() 多结果宽容
+     * 通道</b>——{@code executeQuery(String)} 只接受「首结果即 ResultSet」的语句，而 Oracle 的
+     * {@code EXPLAIN PLAN FOR}（首结果为 update count、无行返回）与 SQL Server 的 {@code SET STATISTICS XML
+     * ON; …} 批（前导 SET 产生 update count）都会让它直接抛错。宽容通道按 JDBC 结果游走协议
+     * （execute → updateCount → getMoreResults，有界）取<b>首个</b> ResultSet；一个 ResultSet 都
+     * 拿不到时返回空行列（诚实降级）。{@code channelNote} 追加在驱动 notices 之后的 notices 节——
+     * 二段式/附加结果集方言的计划「为什么不在上面的行里」的说明由
+     * {@code cn.song.mybatisplus.visualizer.sql.ExplainSupport} 表单源持有。null（默认）走既有
+     * executeQuery 通道，<b>行为逐字节不变</b>（其余 9 家方言与其他调用点的防回归面）。</p>
      */
     public static McpExplainFormatter.RawResult executeQuery(
         Project project,
@@ -176,12 +186,13 @@ public final class McpDbExecutor {
         String sql,
         int maxRows,
         int timeoutSeconds,
-        Consumer<ExecutedOutcome> onExecuted
+        Consumer<ExecutedOutcome> onExecuted,
+        String channelNote
     ) throws Exception {
         long started = System.currentTimeMillis();
         try {
             McpExplainFormatter.RawResult result =
-                executeQueryInternal(project, dataSource, sql, maxRows, timeoutSeconds);
+                executeQueryInternal(project, dataSource, sql, maxRows, timeoutSeconds, channelNote);
             notifyExecuted(onExecuted, sql, System.currentTimeMillis() - started, null, dataSource);
             return result;
         } catch (Throwable e) {
@@ -202,7 +213,19 @@ public final class McpDbExecutor {
         }
     }
 
-    /** Kotlin 默认参数等价重载：onExecuted 缺省 null（未接线的调用点零开销）。 */
+    /** Kotlin 默认参数等价重载：channelNote 缺省 null（既有 executeQuery 通道）。 */
+    public static McpExplainFormatter.RawResult executeQuery(
+        Project project,
+        Object dataSource,
+        String sql,
+        int maxRows,
+        int timeoutSeconds,
+        Consumer<ExecutedOutcome> onExecuted
+    ) throws Exception {
+        return executeQuery(project, dataSource, sql, maxRows, timeoutSeconds, onExecuted, null);
+    }
+
+    /** Kotlin 默认参数等价重载：onExecuted/channelNote 缺省 null（未接线的调用点零开销）。 */
     public static McpExplainFormatter.RawResult executeQuery(
         Project project,
         Object dataSource,
@@ -210,7 +233,7 @@ public final class McpDbExecutor {
         int maxRows,
         int timeoutSeconds
     ) throws Exception {
-        return executeQuery(project, dataSource, sql, maxRows, timeoutSeconds, null);
+        return executeQuery(project, dataSource, sql, maxRows, timeoutSeconds, null, null);
     }
 
     /**
@@ -274,7 +297,8 @@ public final class McpDbExecutor {
         Object dataSource,
         String sql,
         int maxRows,
-        int timeoutSeconds
+        int timeoutSeconds,
+        String channelNote
     ) throws Exception {
         int rowBudget = McpDbExecutorKt.channelRowBudget(maxRows);
         Object manager = Class.forName(DCM).getMethod("getInstance").invoke(null);
@@ -303,21 +327,29 @@ public final class McpDbExecutor {
                 // notices 不允许串扰进本次结果；返回值丢弃，只做清空。
                 McpDbExecutorKt.drainWarnings(surfaces);
                 try {
-                    Object resultSet;
-                    try {
-                        resultSet = Class.forName(REMOTE_STATEMENT).getMethod("executeQuery", String.class)
+                    // R23：channelNote 非 null（二段式/多结果集方言）走 execute() 宽容通道；
+                    // null（默认）保持 executeQuery 通道——既有 9 家方言与其他调用点逐字节不变
+                    McpExplainFormatter.RawResult raw;
+                    if (channelNote == null) {
+                        Object resultSet = Class.forName(REMOTE_STATEMENT).getMethod("executeQuery", String.class)
                             .invoke(statement, sql);
-                    } catch (InvocationTargetException e) {
-                        throw e;
+                        raw = collect(resultSet, rowBudget);
+                    } else {
+                        raw = executeStatementCollectFirst(statement, sql, rowBudget);
                     }
-                    McpExplainFormatter.RawResult raw = collect(resultSet, rowBudget);
                     // 执行成功才采集 notices；失败路径直接抛出（notices 无从产生=DBX「出错丢弃」口径）
                     List<String> notices = McpDbExecutorKt.drainWarnings(surfaces);
                     if (!notices.isEmpty()) {
                         LOG.info("McpDbExecutor: drained " + notices.size() + " driver notice(s)");
                     }
+                    // R23：通道说明固定排在驱动 notices 之后——「行里为什么没有计划」的说明总是收尾
+                    List<String> finalNotices = notices;
+                    if (channelNote != null) {
+                        finalNotices = new ArrayList<>(notices);
+                        finalNotices.add(channelNote);
+                    }
                     return new McpExplainFormatter.RawResult(
-                        raw.headers(), raw.rows(), raw.truncated(), notices);
+                        raw.headers(), raw.rows(), raw.truncated(), finalNotices);
                 } catch (InvocationTargetException e) {
                     // T-ExecTimeoutGuard：超时先收尾再报错——cancel 请求（RMI 镜像尽力而为）
                     // 后再冒泡带 timed out 标记的异常；cancel 失败不吞超时事实（如实措辞）
@@ -353,6 +385,44 @@ public final class McpDbExecutor {
             }
         }
     }
+
+    /**
+     * R23：execute() 多结果宽容通道——按 JDBC 结果游走协议取<b>首个</b> ResultSet。
+     *
+     * <p>协议（java.sql.Statement 契约，RemoteStatement 镜像 262 javap 同形实证）：
+     * {@code execute(sql)} 返回首结果是否为 ResultSet；false 时 {@code getUpdateCount()} 给出当前结果的
+     * update count（<b>-1 = 再无结果</b>）；{@code getMoreResults()} 前进到下一结果。前导 SET 语句
+     * （Oracle {@code EXPLAIN PLAN FOR} / SQL Server {@code SET STATISTICS XML ON}）产生 update count=0
+     * 的首结果——本函数跳过它们取到真正的查询行；一个 ResultSet 都没有（Oracle 计划只登记）
+     * 返回空行列。游走<b>有界</b>（[MAX_RESULT_HOPS]）——驱动 getMoreResults 失灵时不挂死。</p>
+     */
+    private static McpExplainFormatter.RawResult executeStatementCollectFirst(Object statement, String sql, int maxRows)
+        throws Exception {
+        Class<?> stmtClass = Class.forName(REMOTE_STATEMENT);
+        Method execute = stmtClass.getMethod("execute", String.class);
+        Method getResultSet = stmtClass.getMethod("getResultSet");
+        Method getMoreResults = stmtClass.getMethod("getMoreResults");
+        Method getUpdateCount = stmtClass.getMethod("getUpdateCount");
+        Object rs = ((Boolean) execute.invoke(statement, sql)) ? getResultSet.invoke(statement) : null;
+        int hops = 0;
+        while (rs == null && hops < MAX_RESULT_HOPS) {
+            hops++;
+            if (((Integer) getUpdateCount.invoke(statement)) == -1) {
+                break;
+            }
+            if ((Boolean) getMoreResults.invoke(statement)) {
+                rs = getResultSet.invoke(statement);
+            }
+        }
+        LOG.info("McpDbExecutor: execute-channel first-result walk done (hops=" + hops
+            + ", resultSet=" + (rs != null) + ")");
+        return rs != null
+            ? collect(rs, maxRows)
+            : new McpExplainFormatter.RawResult(List.of(), List.of(), false);
+    }
+
+    /** execute() 宽容通道的结果游走上限（防驱动失灵挂死；正常批 ≤3~4 个结果，余量充足）。 */
+    private static final int MAX_RESULT_HOPS = 32;
 
     /**
      * warnings 采集面（语句级先、连接级后，执行前 drain 与执行后采集共用同一组 Method 查找）。

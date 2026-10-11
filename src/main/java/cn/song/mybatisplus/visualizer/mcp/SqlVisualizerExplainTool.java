@@ -180,7 +180,12 @@ public class SqlVisualizerExplainTool extends McpToolsetSupport {
                     outcome.dataSourceName(),
                     outcome.elapsedMs(),
                     outcome.errorText()
-                )
+                ),
+                // R23：二段式/多结果集方言（Oracle/SQL Server）的通道说明——随执行结果以
+                // notices 节透出（「行里为什么没有计划」的诚实降级）；null（其余 9 家）零追加
+                cn.song.mybatisplus.visualizer.sql.ExplainSupport.entryFor(target.dialectName) != null
+                    ? cn.song.mybatisplus.visualizer.sql.ExplainSupport.entryFor(target.dialectName).channelNote()
+                    : null
             );
         } catch (Throwable e) {
             // T-ErrorLocate T-EL-04：驱动错误消息携带位置信号（PG `Position: N` / `at line N`）时

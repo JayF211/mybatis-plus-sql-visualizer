@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.log.HibernateLogParser;
 import cn.song.mybatisplus.visualizer.log.JdbcTemplateLogParser;
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry;
 import cn.song.mybatisplus.visualizer.log.MyBatisLogParser;
+import cn.song.mybatisplus.visualizer.log.ShardingSphereLogParser;
 import com.intellij.mcpserver.annotations.McpDescription;
 import com.intellij.mcpserver.annotations.McpTool;
 import com.intellij.mcpserver.annotations.McpToolHintValue;
@@ -16,12 +17,14 @@ import java.util.List;
 
 /**
  * sqlv_render_logs 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：MyBatis / Hibernate /
- * JdbcTemplate 日志文本 → 可执行 SQL。
+ * JdbcTemplate / ShardingSphere 日志文本 → 可执行 SQL。
  *
- * 复用 IDE「日志 → SQL」面板同款三解析器链（feed → closePending → takeEntries，
+ * 复用 IDE「日志 → SQL」面板同款解析器链（feed → closePending → takeEntries，
  * `LogToSqlPanel.computeConversion` 同构、纯计算不触 Swing）；条目直接消费
  * `LogSqlEntry.restoredSql`。前缀参数缺省读插件设置（与面板同源单点），工具参数可逐项覆盖
  * （null/空串 = 不覆盖，遵循设置）。逻辑分层同 {@link SqlVisualizerCheckSqlTool}：{@link #renderLogs} 纯函数可测。
+ *
+ * R10：第四格式 = ShardingSphere 双段日志（Logic SQL / Actual SQL，骨架按公开文档形态）。
  *
  * 移植注记：平台以 kotlin-reflect 识别工具方法并同步调用（见 McpToolsetSupport 类头移植注记）；
  * logText 必传，前缀覆盖参数的 Kotlin 默认值改为调用方必传空串语义等价（空串=不覆盖）。
@@ -47,18 +50,21 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
         /** JdbcTemplate 通道启用。 */
         boolean jdbcEnabled,
         /** 单次解析的最大文本长度。 */
-        int maxParseLength
+        int maxParseLength,
+        /** R10：ShardingSphere 双段日志解析开关（D3=A 默认开）。 */
+        boolean shardingEnabled
     ) {
         /** Kotlin 默认参数等价重载（与插件设置内置默认一致）。 */
         public LogPrefixDefaults() {
-            this("Preparing:", "Parameters:", true, "Hibernate:", "binding parameter", true, 20_000);
+            this("Preparing:", "Parameters:", true, "Hibernate:", "binding parameter", true, 20_000, true);
         }
     }
 
-    @McpTool(name = "sqlv_render_logs", title = "Restore MyBatis/Hibernate/JdbcTemplate logs into executable SQL")
+    @McpTool(name = "sqlv_render_logs", title = "Restore MyBatis/Hibernate/JdbcTemplate/ShardingSphere logs into executable SQL")
     @McpDescription(
         description = "Restore executable SQL from application log text (MyBatis 'Preparing:'/'Parameters:' pairs, "
-            + "Hibernate 'Hibernate:' SQL with 'binding parameter' lines, or Spring JdbcTemplate debug lines). "
+            + "Hibernate 'Hibernate:' SQL with 'binding parameter' lines, Spring JdbcTemplate debug lines, "
+            + "or ShardingSphere 5.x sql-show 'Logic SQL:'/'Actual SQL:' dual segments). "
             + "Pass the raw multi-line log text as 'logText'. Prefix overrides (sqlPrefix/paramPrefix/"
             + "hibernateSqlPrefix/hibernateParamPrefix) and 'mixedPrefixMatching' are optional and default to "
             + "the plugin's log-capture settings. Each restored statement is prefixed with a '-- SQL #N' "
@@ -120,7 +126,8 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
                     state.getLogHibernateSqlPrefix(),
                     state.getLogHibernateParamPrefix(),
                     state.getLogJdbcEnabled(),
-                    state.getLogMaxParseLength()
+                    state.getLogMaxParseLength(),
+                    state.getLogShardingSphereEnabled()
                 );
             } catch (Throwable ignored) {
                 effectiveDefaults = new LogPrefixDefaults();
@@ -162,8 +169,9 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
     }
 
     /**
-     * 纯函数核心（普通 JUnit 直测）：装配三解析器 → 逐行喂 → 合并条目。
+     * 纯函数核心（普通 JUnit 直测）：装配四解析器 → 逐行喂 → 合并条目。
      * 覆盖参数空串/null 回落 defaults；解析器装配与 `LogToSqlPanel.buildParsers` 同参同构。
+     * R10：第四格式 = ShardingSphere 双段日志（Logic SQL / Actual SQL，骨架按公开文档形态）。
      */
     public static List<LogSqlEntry> renderLogEntries(
         String logText,
@@ -190,17 +198,25 @@ public class SqlVisualizerRenderLogsTool extends McpToolsetSupport {
             defaults.jdbcEnabled(),
             defaults.maxParseLength()
         );
+        ShardingSphereLogParser sharding = new ShardingSphereLogParser(
+            defaults.maxParseLength()
+        );
         logText.lines().forEach(line -> {
             myBatis.feed(line);
             hibernate.feed(line);
             jdbc.feed(line);
+            if (defaults.shardingEnabled()) {
+                sharding.feed(line);
+            }
         });
         myBatis.closePending();
         hibernate.closePending();
         jdbc.closePending();
+        sharding.closePending();
         List<LogSqlEntry> out = new ArrayList<>(myBatis.takeEntries());
         out.addAll(hibernate.takeEntries());
         out.addAll(jdbc.takeEntries());
+        out.addAll(sharding.takeEntries());
         return out;
     }
 }

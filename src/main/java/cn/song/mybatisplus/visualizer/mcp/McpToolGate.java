@@ -17,8 +17,9 @@ import java.util.List;
  *   <li><b>外部会话清单路径</b>：{@code McpServerService.getMcpToolsFiltered} = 基座清单 +
  *       {@code McpToolFilterProvider} EP 过滤层 + 平台设置页偏好——该链<b>不经过</b>
  *       {@code isEnabled}。故 O-68 新增 SqlVisualizerToolGateFilterProvider 注册
- *       {@code com.intellij.mcpServer.mcpToolFilterProvider}（注册链见 {@link McpGateFilterRegistrar}
- *       / {@link McpGateFilterEpBridge}），以 {@link #shouldHideFromExternalToolsList}
+ *       {@code com.intellij.mcpServer.mcpToolFilterProvider}（经 McpGateFilterRegistrar 程序化注册——
+ *       mcp-filter-optional.xml 已删除；253 线本地 idea-2025.3.5 mcpserver.jar 实测无此 EP，
+ *       注册代码以平台 mcpServer 类可达性门控），以 {@link #shouldHideFromExternalToolsList}
  *       在过滤层动态隐藏自家工具。</li>
  * </ol>
  *
@@ -38,7 +39,7 @@ public final class McpToolGate {
     /** 自家工具名前缀（命名硬约定 T-McpToolNaming 同源；O-68 过滤谓词按此识别自家工具）。 */
     public static final String TOOL_NAME_PREFIX = "sqlv_";
 
-    /** 全部注册工具名（mcp-optional.xml 的 10 个 toolset 一一对应；设置页 UI 与守卫测试共用单一清单）。 */
+    /** 全部注册工具名（与 McpToolsetDynamicRegistrar.TOOL_CLASSES 一一对应，守卫测试对账单一清单；R14 起十一工具）。 */
     public static final List<String> TOOL_NAMES = List.of(
         "sqlv_render_sql",
         "sqlv_schema_context",
@@ -49,7 +50,8 @@ public final class McpToolGate {
         "sqlv_perf_advice",
         "sqlv_crud_sql",
         "sqlv_reverse_sql",
-        "sqlv_mapper_check"
+        "sqlv_mapper_check",
+        "sqlv_history_search"
     );
 
     /** 工具是否对平台可见：总开关开 且 不在工具级禁用清单（大小写不敏感比对）。 */
