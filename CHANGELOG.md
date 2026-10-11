@@ -7,6 +7,8 @@
 ### Fixed
 - 调用栈悬停弹层视口按全量帧数放开（JList 默认 8 行把链尾业务帧折叠进滚动区，「默认锚定最深业务帧、一眼看到 Controller → Service」落空）
 - 调用栈弹层锚点跟随悬停落点（原只在 mouseEntered 赋值边缘穿越点，弹层位置随进入方向漂移）
+- 实体选择弹窗（SQL→Java / CRUD 预览的「选择要预览的 SQL」）候选副标题改为完整限定类名——原先只显示文件名，不同包/模块的同名实体（如多模块工程的两处 User.java）无法区分
+- 「未在光标处找到可预览 SQL 源」提示文案动态化——旧文案只提 MyBatis-Plus Wrapper/IService，未覆盖插件现已支持的 mapper XML / 注解 SQL / MPJ / JPA / Hibernate / JdbcTemplate 等类型面，指引失真
 
 
 

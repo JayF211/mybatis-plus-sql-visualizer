@@ -244,8 +244,7 @@ public final class ConvertSqlToJavaAction extends AnAction {
             List<SqlSelectionDialog.Row> displayTexts = candidates.stream().map(c ->
                     SqlSelectionDialog.Row.of(
                             c.psiClass().getName() + "（表 " + c.tableInfo().getTableName() + "）",
-                            c.psiClass().getContainingFile() != null
-                                    ? c.psiClass().getContainingFile().getName() : ""
+                            cn.song.mybatisplus.visualizer.ui.SqlSelectionDialogKt.entityCandidateSubtitle(c.psiClass())
                     )
             ).collect(Collectors.toList());
             new SqlSelectionDialog<>(project, candidates, displayTexts, (SqlToJavaConverter.EntityCandidate selected) -> showCodeDialog(project, result, selected, format)).show();
