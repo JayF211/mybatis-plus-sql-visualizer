@@ -73,7 +73,25 @@ def goto_col(line, col, wait=1.0):
     比 goto_token 可靠：列号由源码文本算出，不受缩进/词长影响。
     """
     goto(line)
-    pyautogui.keyDown('home'); pyautogui.keyUp('home'); time.sleep(0.2)
+    # IntelliJ 的 Home 是「智能 Home」：第一下到首个非空白字符，第二下才到绝对行首。
+    # 不按两下的话列号基准会随缩进漂（8 空格缩进实测整体 +8 列）。
+    for _ in range(2):
+        pyautogui.keyDown('home'); pyautogui.keyUp('home'); time.sleep(0.12)
     for _ in range(max(0, col - 1)):
         pyautogui.keyDown('right'); pyautogui.keyUp('right')
+    time.sleep(wait)
+
+
+def close_preview(cancel_xy=(1485, 828), wait=1.4, body_xy=None):
+    """关预览浮窗：优先点「取消」按钮。
+
+    浮窗尺寸随内容变（带「参数列」面板的 INSERT 预览更宽），取消键位会漂；传 body_xy
+    则改为「点进浮窗体内 → Esc」——浮窗拿到焦点时 Esc 才关得掉（在编辑器里按 Esc 会去动
+    工具窗），这条实测更稳。
+    """
+    if body_xy:
+        pyautogui.click(*body_xy); time.sleep(0.4)
+        pyautogui.keyDown('esc'); pyautogui.keyUp('esc')
+    else:
+        pyautogui.click(*cancel_xy)
     time.sleep(wait)
