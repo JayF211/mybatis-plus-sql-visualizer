@@ -314,6 +314,12 @@ class DialogWrapperInitOrderGuardTest {
                         return skip
                     }
 
+                    // T-M53-II：门面静态方法体内联（无行号形态）——字段引用/读写判定与 process 同口径，
+                    // 仅作用于文本（门面体内 `p.field` 引用与裸引用同被词边界正则命中）。
+                    // k2j 适配：process 与 processText 相互递归，Kotlin 局部函数须先声明后引用，
+                    // 故先落 processText 引用槽（process 内经槽回调），函数本体在 process 之后赋值。
+                    var processTextRef: ((String, String, Int) -> Unit)? = null
+
                     fun process(a: Int, b: Int, caller: String, depth: Int, shadowed: Set<String>) {
                         if (depth > 3) return
                         val skip = nestedSkip(a, b) + lambdaBody
@@ -346,7 +352,7 @@ class DialogWrapperInitOrderGuardTest {
                                     val fb = ownerClass?.let { oc -> extBodies[oc to name] }
                                     if (fb != null) {
                                         visited += name
-                                        processText(fb, name, depth + 1)
+                                        processTextRef?.invoke(fb, name, depth + 1)
                                     }
                                 }
                             }
@@ -360,15 +366,15 @@ class DialogWrapperInitOrderGuardTest {
                         val bodyLines = bodyText.split('\n')
                         val bDep = depths(bodyLines)
                         val (bLambda, bPrefix) = lambdaLines(bodyLines, bDep)
-                        val skip = fun funNestSkip(): Set<Int> {
+                        val skip = run {
                             val st = mutableSetOf<Int>()
                             for (i in bodyLines.indices) {
                                 if (FUN_DEF.find(bodyLines[i])?.range?.first == 0) {
                                     (i until blockEnd(bodyLines, bDep, i)).forEach { st += it }
                                 }
                             }
-                            return st
-                        }()
+                            st
+                        }
                         for (i in bodyLines.indices) {
                             if (i in skip || i in bLambda) continue
                             val line = bPrefix[i]?.let { bodyLines[i].substring(0, it) } ?: bodyLines[i]
@@ -396,6 +402,8 @@ class DialogWrapperInitOrderGuardTest {
                             }
                         }
                     }
+
+                    processTextRef = ::processText
 
                     process(idx + 1, end, if (kind == "ctor") "ctor" else "init", 0, shadow0)
                     if (referenced.isEmpty()) return@forEach
@@ -719,7 +727,7 @@ class DialogWrapperInitOrderGuardTest {
          * 收 group[1]=方法名、group[2]=首参类型（宿主类名）。
          */
         val FACADE_STATIC_DEF = Regex(
-            "^ {4}(?:public\s+)?static\s+[\w.<>\[\],?\s]+\s+(\w+)\s*\(\s*(?:@\w+(?:\([^)]*\))?\s+)*(?:final\s+)?([A-Z]\w*)\s+\w+[,)]"
+            "^ {4}(?:public\\s+)?static\\s+[\\w<>\\[\\],?\\s]+\\s+(\\w+)\\s*\\(\\s*(?:@\\w+(?:\\([^)]*\\))?\\s+)*(?:final\\s+)?([A-Z]\\w*)\\s+\\w+[,)]"
         )
 
         val CALL = Regex("(?:[\\w.]+\\s*\\.\\s*)?(\\w+)\\s*\\(")

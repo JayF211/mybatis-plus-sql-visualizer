@@ -26,11 +26,11 @@ class EntityAliasSweepTest : BasePlatformTestCase() {
         }
         var truncatedAt = -1
         val result = EntityAliasSweep.findAliasOwner(
-            aliasName = "t_order",
-            names = names,
-            lookup = { emptyArray() },
-            limit = 100,
-            onTruncated = { truncatedAt = it },
+            "t_order",
+            names,
+            { emptyArray() },
+            100,
+            { truncatedAt = it },
         )
         assertNull("触顶应按未命中降级", result)
         assertEquals("触顶回调应报告已扫数＝上限", 100, truncatedAt)
@@ -46,9 +46,9 @@ class EntityAliasSweepTest : BasePlatformTestCase() {
             if (it == 3) "User" else "X$it"
         }
         val result = EntityAliasSweep.findAliasOwner(
-            aliasName = "t_order",
-            names = names,
-            lookup = { shortName -> if (shortName == "User") arrayOf(clazz) else emptyArray() },
+            "t_order",
+            names,
+            { shortName -> if (shortName == "User") arrayOf(clazz) else emptyArray() },
         )
         assertNotNull("应按 @Entity(name = ...) 命中实体类", result)
         assertEquals("User", result!!.qualifiedName)
@@ -59,9 +59,9 @@ class EntityAliasSweepTest : BasePlatformTestCase() {
     fun testNoAliasMatchReturnsNull() {
         val clazz = configureEntityClass("User.java", "User", null)
         val result = EntityAliasSweep.findAliasOwner(
-            aliasName = "t_order",
-            names = sequenceOf("User", "Other"),
-            lookup = { if (it == "User") arrayOf(clazz) else emptyArray() },
+            "t_order",
+            sequenceOf("User", "Other"),
+            { if (it == "User") arrayOf(clazz) else emptyArray() },
         )
         assertNull("无匹配别名应返回 null", result)
     }
@@ -70,9 +70,9 @@ class EntityAliasSweepTest : BasePlatformTestCase() {
     fun testAliasMatchIsCaseInsensitive() {
         val clazz = configureEntityClass("UserInfo.java", "UserInfo", "UserInfo")
         val result = EntityAliasSweep.findAliasOwner(
-            aliasName = "userinfo",
-            names = sequenceOf("UserInfo"),
-            lookup = { arrayOf(clazz) },
+            "userinfo",
+            sequenceOf("UserInfo"),
+            { arrayOf(clazz) },
         )
         assertNotNull("别名比较应忽略大小写", result)
     }

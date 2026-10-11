@@ -991,6 +991,7 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "Double release SEVERE）。断言为「行为结果」形态（先行释放后再走面板释放链不抛）" +
                     "而非违规点/站点集合，无 offenders/sites 判定内核——decisionFns 留空" +
                     "（修法提示口径：无判定内核时留空并写明依据）",
+            ),
             // ---- T-PerfSweep16 新增守卫补登记（2026-09-29 合并 dev 后收口门禁基线红，防整体脱离扫描面） ----
             GuardEntry(
                 "convention/SuppressKeysPairingGuardTest.kt",

@@ -213,26 +213,26 @@ class SqlTextAnalysisTest {
     @Test
     fun `stripXmlTags_where开标签换WHERE关键字替身且等长`() {
         val sql = "<select>select 1<where>deleted = 0</where></select>"
-        val stripped = stripXmlTags(sql)
+        val stripped = SqlTextAnalysis.stripXmlTags(sql)
         assertEquals("等长（偏移量 1:1 映射不变）", sql.length, stripped.length)
         assertTrue("where 开标签应产出 WHERE 替身", stripped.contains(" WHERE "))
         assertFalse("闭合标签应仍为空白", stripped.contains("WHERE>"))
         // 紧贴左侧词时替身自带前导空格，不得粘连（`user<where>` → `user WHERE` 而非 `userWHERE`）
-        val adjacent = stripXmlTags("from user<where>deleted = 0</where>")
+        val adjacent = SqlTextAnalysis.stripXmlTags("from user<where>deleted = 0</where>")
         assertFalse("替身不得与左侧词粘连", adjacent.contains("userWHERE"))
         // WHERE 恢复后，where 内位置判回列名位（修复前：FROM 成最后关键字 → 误判 TABLE）
         val caret = stripped.indexOf("deleted") + 4
-        assertEquals(SqlClause.COLUMN, detectClause(stripped, caret))
+        assertEquals(SqlClause.COLUMN, SqlTextAnalysis.detectClause(stripped, caret))
     }
 
     @Test
     fun `stripXmlTags_set开标签换SET替身_其余标签照旧空白`() {
         val sql = "<update>UPDATE t<set>name = #{n}</set></update>"
-        val stripped = stripXmlTags(sql)
+        val stripped = SqlTextAnalysis.stripXmlTags(sql)
         assertEquals("等长", sql.length, stripped.length)
         assertTrue(stripped.contains(" SET "))
         // include/if 无子句语义：不产关键字
-        val s2 = stripXmlTags("<select>x<include refid=\"c\"/>x<if test=\"a\">y</if></select>")
+        val s2 = SqlTextAnalysis.stripXmlTags("<select>x<include refid=\"c\"/>x<if test=\"a\">y</if></select>")
         assertEquals(s2.length, "<select>x<include refid=\"c\"/>x<if test=\"a\">y</if></select>".length)
         assertFalse("include 不应产关键字替身", s2.contains("INCLUDE"))
     }
@@ -241,10 +241,10 @@ class SqlTextAnalysisTest {
     fun `strip后where内裸列不再误判为FROM表别名`() {
         // 用户真机 160 块形态：from user + <where>deleted = 0 —— 修复前 WHERE 被剥空白，
         // 表清单吞掉终止词，把 where 内第一个裸词 deleted 误判为 user 的别名
-        val stripped = stripXmlTags(
+        val stripped = SqlTextAnalysis.stripXmlTags(
             "<select>select * from user<where>deleted = 0<if test='a'>and status = 1</if></where></select>",
         )
-        assertEquals(listOf(TableAlias("user", null)), parseTableAliases(stripped))
+        assertEquals(listOf(TableAlias("user", null)), SqlTextAnalysis.parseTableAliases(stripped))
     }
 
     @Test
@@ -252,16 +252,16 @@ class SqlTextAnalysisTest {
         // SourceSqlCompleter 层回归：where 内 dele 前缀应命中主表列 deleted（修复前子句误判
         // TABLE → 列名分支整体跳过 → No suggestions）
         val sql = "<select>select * from user<where>deleted = 0</where></select>"
-        val stripped = stripXmlTags(sql)
+        val stripped = SqlTextAnalysis.stripXmlTags(sql)
         val caret = stripped.indexOf("deleted") + 4
         val ctx = SourceSqlContext(
-            main = cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext(
-                tableName = "user",
-                columns = listOf("deleted", "username"),
-                tableAlias = null,
+            cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext(
+                "user",
+                listOf("deleted", "username"),
+                null,
             ),
-            candidates = listOf(tableInfo("user", listOf(col("deleted"), col("username")))),
-            paramNames = emptyList(),
+            listOf(tableInfo("user", listOf(col("deleted"), col("username")))),
+            emptyList(),
         )
         val names = SourceSqlCompleter.sqlCompletions(stripped, caret, ctx).map { it.lookupString }
         assertTrue("where 内裸列前缀应命中主表列 deleted：$names", names.contains("deleted"))
@@ -270,11 +270,11 @@ class SqlTextAnalysisTest {
     // ---------- 夹具 ----------
 
     private fun col(name: String) = cn.song.mybatisplus.visualizer.model.ColumnInfo(
-        fieldName = name, columnName = name,
+        name, name,
     )
 
     private fun tableInfo(name: String, columns: List<cn.song.mybatisplus.visualizer.model.ColumnInfo>) =
         cn.song.mybatisplus.visualizer.model.TableInfo(
-            entityClassName = "User", tableName = name, columns = columns,
+            "User", name, columns,
         )
 }
