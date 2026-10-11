@@ -14,13 +14,16 @@ package cn.song.mybatisplus.visualizer.sql;
  * <ul>
  *  <li>{@link #TABLE}：行列二维表（MySQL 家族 {@code EXPLAIN} 的原生表格行）；</li>
  *  <li>{@link #TEXT}：单列文本计划树/文本行（DM8 {@code #NSET2}、H2 {@code PLAN FOR}、SQLite
- *      {@code QUERY PLAN}）；</li>
- *  <li>{@link #JSON}：单列 JSON 文本（PG/KingBase {@code FORMAT JSON}）。</li>
+ *      {@code QUERY PLAN}、Oracle DBMS_XPLAN 文本树）；</li>
+ *  <li>{@link #JSON}：单列 JSON 文本（PG/KingBase {@code FORMAT JSON}）；</li>
+ *  <li>{@link #XML}：SQL Server {@code SET STATISTICS XML} 的 Showplan XML（R23 接入时补的
+ *      常量与表项——「接入时补一个常量」即本取值）。</li>
  * </ul>
  *
- * <p><b>不设占位值</b>：SQL Server 的 XML 计划形态（{@code SET SHOWPLAN_XML}）本插件未接入，
- * 故不预留 {@code XML} 常量——仓内守卫 {@code EnumReachabilityGuardTest} 判定「声明了却零产出」
- * 为死常量（消费者恒走不到），且接入时补一个常量与一条表项的成本远低于长期维护一个死分支。</p>
+ * <p><b>不设占位值</b>：此前 SQL Server 的 XML 计划形态（{@code SET SHOWPLAN_XML}）本插件未接入，
+ * 故未预留 {@code XML} 常量——仓内守卫 {@code EnumReachabilityGuardTest} 判定「声明了却零产出」
+ * 为死常量（消费者恒走不到），且接入时补一个常量与一条表项的成本远低于长期维护一个死分支。
+ * R23 起 SQL Server 真实接入（{@code SET STATISTICS XML ON/OFF}），{@code XML} 常量随之落地。</p>
  *
  * <p>移植注记：master 侧为 {@code ExplainSupport.kt} 内顶层 {@code enum class ExplainOutputFormat}；
  * Java 一个文件只能有一个 public 顶层类型，故按 k2j 既定惯例独立成件（同 {@link IdentifierCaseSource}）。</p>
@@ -29,4 +32,5 @@ public enum ExplainOutputFormat {
     TABLE,
     TEXT,
     JSON,
+    XML,
 }

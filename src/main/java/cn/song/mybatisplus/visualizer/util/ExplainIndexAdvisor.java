@@ -86,8 +86,12 @@ public final class ExplainIndexAdvisor {
             adviseJsonPlan(rows, out);
         } else if (format == ExplainOutputFormat.TEXT) {
             // 文本计划树（DM8 #NSET2 / H2 PLAN FOR / SQLite QUERY PLAN）——规则只覆盖 PG 文本树形态，
-            // 其余方言的文本形态不含该模式，天然零命中（不噪音）；将来新增文本规则在此扩展
+            // 其余方言的文本形态不含该模式，天然零命中（不噪音）；将来新增文本规则在此扩展。
+            // R23 Oracle 同为 TEXT 档：本插件通道不产出行（EXPLAIN PLAN FOR 只登记），空行天然零命中
             advisePlanText(rows, out);
+        } else if (format == ExplainOutputFormat.XML) {
+            // R23 SQL Server XML 档：Showplan XML 是附加结果集（本通道不采集），且 XML 计划
+            // 无行内固定可判定模式——不硬解析（勿硬解析红线），真实形态驱动的新规则在此扩展
         } else {
             // 不支持方言/未知方言静默降级——空清单与无命中同形
         }

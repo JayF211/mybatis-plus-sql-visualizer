@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -281,6 +282,23 @@ public class XmlPreviewModel {
                 staticFieldValues,
                 bindViews.stream().map(XmlBindView::name).collect(Collectors.toSet())
         );
+    }
+
+    /**
+     * R30 探镜：本轮渲染的条件求值结果（三态，键与 {@link #getConditionViews()} 的 id 同源——面板条件行
+     * 按 id 定位标注）。判定结果取 {@link RenderedXmlSql#conditionResults()}（只含被走到的条件），
+     * 缺席映射 {@link ConditionOutcome#UNEVALUATED}。
+     */
+    public Map<String, ConditionOutcome> conditionOutcomes(RenderedXmlSql rendered) {
+        Map<String, ConditionOutcome> result = new LinkedHashMap<>();
+        for (XmlConditionView view : conditionViews) {
+            Boolean recorded = rendered.conditionResults().get(view.id());
+            ConditionOutcome outcome = recorded == null
+                    ? ConditionOutcome.UNEVALUATED
+                    : (recorded ? ConditionOutcome.TRUE : ConditionOutcome.FALSE);
+            result.put(view.id(), outcome);
+        }
+        return result;
     }
 
     private Map<String, Object> mockBindings(XmlPreviewState state) {

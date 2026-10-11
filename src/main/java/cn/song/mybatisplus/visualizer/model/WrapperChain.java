@@ -33,10 +33,16 @@ public final class WrapperChain {
     private final boolean existsConsumed;
     private final boolean updateEntityConsumed;
     private final LimitClause pageLimit;
+    /**
+     * 分页 Page 实参的 searchCount 标志（R12 T-PaginationSim D3=A，MP 3.5.17 {@code Page()} 默认 true
+     * 反编译实证；{@code new Page<>(c, s, false)} → false 时 PaginationInnerInterceptor 不执行 COUNT
+     * → 预览不产出 COUNT 包裹；标志不可静态判定时保守取 true）。
+     */
+    private final boolean pageSearchCount;
 
     public WrapperChain(WrapperType wrapperType, String entityClass, List<WrapperCall> calls, String constructorAlias,
                         boolean deleteConsumed, boolean countConsumed, boolean existsConsumed,
-                        boolean updateEntityConsumed, LimitClause pageLimit) {
+                        boolean updateEntityConsumed, LimitClause pageLimit, boolean pageSearchCount) {
         this.wrapperType = wrapperType;
         this.entityClass = entityClass;
         this.calls = calls;
@@ -46,6 +52,15 @@ public final class WrapperChain {
         this.existsConsumed = existsConsumed;
         this.updateEntityConsumed = updateEntityConsumed;
         this.pageLimit = pageLimit;
+        this.pageSearchCount = pageSearchCount;
+    }
+
+    /** Kotlin 默认参数等价重载：pageSearchCount 缺省 true（MP Page 默认语义）。 */
+    public WrapperChain(WrapperType wrapperType, String entityClass, List<WrapperCall> calls, String constructorAlias,
+                        boolean deleteConsumed, boolean countConsumed, boolean existsConsumed,
+                        boolean updateEntityConsumed, LimitClause pageLimit) {
+        this(wrapperType, entityClass, calls, constructorAlias, deleteConsumed, countConsumed, existsConsumed,
+                updateEntityConsumed, pageLimit, true);
     }
 
     public WrapperChain(WrapperType wrapperType,
@@ -111,11 +126,20 @@ public final class WrapperChain {
         return pageLimit;
     }
 
+    /** R12 T-PaginationSim：分页 Page 实参的 searchCount 标志（false 时预览不产出 COUNT 包裹）。 */
+    public boolean isPageSearchCount() {
+        return pageSearchCount;
+    }
+
+    public boolean getPageSearchCount() {
+        return pageSearchCount;
+    }
+
     public WrapperChain copy(WrapperType wrapperType, String entityClass, List<WrapperCall> calls, String constructorAlias,
                              boolean deleteConsumed, boolean countConsumed, boolean existsConsumed,
                              boolean updateEntityConsumed, LimitClause pageLimit) {
         return new WrapperChain(wrapperType, entityClass, calls, constructorAlias, deleteConsumed, countConsumed,
-                existsConsumed, updateEntityConsumed, pageLimit);
+                existsConsumed, updateEntityConsumed, pageLimit, pageSearchCount);
     }
 
     @Override
@@ -131,6 +155,7 @@ public final class WrapperChain {
                 && countConsumed == that.countConsumed
                 && existsConsumed == that.existsConsumed
                 && updateEntityConsumed == that.updateEntityConsumed
+                && pageSearchCount == that.pageSearchCount
                 && Objects.equals(wrapperType, that.wrapperType)
                 && Objects.equals(entityClass, that.entityClass)
                 && Objects.equals(calls, that.calls)
@@ -141,7 +166,7 @@ public final class WrapperChain {
     @Override
     public int hashCode() {
         return Objects.hash(wrapperType, entityClass, calls, constructorAlias, deleteConsumed, countConsumed,
-                existsConsumed, updateEntityConsumed, pageLimit);
+                existsConsumed, updateEntityConsumed, pageLimit, pageSearchCount);
     }
 
     @Override
@@ -149,6 +174,6 @@ public final class WrapperChain {
         return "WrapperChain(wrapperType=" + wrapperType + ", entityClass=" + entityClass + ", calls=" + calls
                 + ", constructorAlias=" + constructorAlias + ", deleteConsumed=" + deleteConsumed + ", countConsumed="
                 + countConsumed + ", existsConsumed=" + existsConsumed + ", updateEntityConsumed=" + updateEntityConsumed
-                + ", pageLimit=" + pageLimit + ")";
+                + ", pageLimit=" + pageLimit + ", pageSearchCount=" + pageSearchCount + ")";
     }
 }

@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.xml;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -38,7 +39,14 @@ public class XmlSqlRenderer {
             }
         }
         Map.Entry<String, List<ParameterMapping>> pm = parseParameterMappings(context.getSql(), context.getErrors());
-        return new RenderedXmlSql(pm.getKey(), pm.getValue(), context.getErrors(), bindValues, context.getDollarSubstitutions());
+        // R30 探镜：条件判定结果随渲染产物出栈（只登记被走到的条件，见 DynamicContext.getConditionOutcomes）
+        return new RenderedXmlSql(
+                pm.getKey(),
+                pm.getValue(),
+                context.getErrors(),
+                bindValues,
+                context.getDollarSubstitutions(),
+                new LinkedHashMap<>(context.getConditionOutcomes()));
     }
 
     public RenderedXmlSql render(SqlNode node, Map<String, Object> bindings, Map<String, Boolean> conditionOverrides, Set<String> protectedNames, Map<String, Object> staticFieldValues) {

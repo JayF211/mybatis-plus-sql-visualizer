@@ -15,8 +15,8 @@ import java.util.Map;
  * 靠「没覆写」隐式表达不支持——「没写」与「故意不接」在代码上同形，新增方言时也无从判定
  * 该不该有 EXPLAIN。本表把两件事一次说清：</p>
  * <ol>
- *  <li><b>支持面</b>：{@code template == null} 即不接入（调用方降级提示），Oracle/SQL Server
- *      <b>显式在册</b>；</li>
+ *  <li><b>支持面</b>：{@code template == null} 即不接入（调用方降级提示）；R23 起 11/11 全接入
+ *      （Oracle/SQL Server 此前显式登记「不接入」，本轮改为带实证留账的真实接入）；</li>
  *  <li><b>输出格式</b>：{@link Entry#outputFormat()}，供建议器等消费方按形态选解析器。</li>
  * </ol>
  *
@@ -38,10 +38,15 @@ public final class ExplainSupport {
     /**
      * 单方言支持项。
      *
-     * @param dialectName  方言显示名（{@link Dialect#getName()}，表的键）
-     * @param template     包装模板（含 {@link #SQL_PLACEHOLDER}）；null = 本方言不接入 EXPLAIN
-     * @param outputFormat 计划输出格式；null 与 {@code template == null} 同时成立（不支持即无格式）
-     * @param evidence     支持形态的依据出处（真机实证来源 / 官方文法），随表留证便于复核
+     * @param dialectName   方言显示名（{@link Dialect#getName()}，表的键）
+     * @param template      包装模板（含 {@link #SQL_PLACEHOLDER}）；null = 本方言不接入 EXPLAIN
+     * @param outputFormat  计划输出格式；null 与 {@code template == null} 同时成立（不支持即无格式）
+     * @param evidence      支持形态的依据出处（真机实证来源 / 官方文法），随表留证便于复核
+     * @param postPlanQuery 二段式方言：计划另查语句（Oracle：{@code SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY)}）；
+     *                      null = 单语句通道即取到计划（默认）
+     * @param channelNote   MCP 单语句通道的诚实降级说明（英文——MCP 输出口径不进 bundle；随执行结果以
+     *                      notices 节透出）：仅计划不随本通道行返回的方言在册。null（默认）= 不追加，
+     *                      输出与无此字段时逐字节一致（防回归硬门禁的判据）
      */
     public record Entry(
             /** 方言显示名（表的键）。 */
@@ -51,8 +56,17 @@ public final class ExplainSupport {
             /** 计划输出格式；null 与 {@code template == null} 同时成立。 */
             ExplainOutputFormat outputFormat,
             /** 支持形态的依据出处。 */
-            String evidence
+            String evidence,
+            /** 二段式方言：计划另查语句；null = 单语句通道即取到计划。 */
+            String postPlanQuery,
+            /** MCP 单语句通道的诚实降级说明（英文）；null = 不追加。 */
+            String channelNote
     ) {
+        /** Kotlin 默认参数等价重载：postPlanQuery/channelNote 缺省 null（既有表项形态）。 */
+        public Entry(String dialectName, String template, ExplainOutputFormat outputFormat, String evidence) {
+            this(dialectName, template, outputFormat, evidence, null, null);
+        }
+
         /** 本方言是否接入 EXPLAIN。 */
         public boolean supported() {
             return template != null;
@@ -75,10 +89,20 @@ public final class ExplainSupport {
      *      无真机——环境受限未验证留账）；</li>
      *  <li>openGauss（T-DialectXcFamily）：{@code EXPLAIN (FORMAT JSON)}，JSON 档——openGauss 5.0.0
      *      <b>真机实证</b>（DBX 只读通道 2026-09-23：FORMAT JSON 返回单列 {@code QUERY PLAN} JSON 文本）；</li>
-     *  <li>Oracle（需两步链查 PLAN_TABLE）与 SQL Server（需会话级 {@code SET SHOWPLAN_XML}）
-     *      <b>不接入</b>——各有独立前置，非本任务范围。</li>
-     * </ul>
-     */
+ *  <li>Oracle（R23 接入）：{@code EXPLAIN PLAN FOR &lt;sql&gt;}，TEXT 档——<b>真机实证</b> Oracle Free 23 +
+ *      XE 11g（DBX 只读通道 2026-09-30）：单语句执行成功（0 行），计划登记进会话级 PLAN_TABLE
+ *      （PUBLIC 同义词 → SYS.PLAN_TABLE$，免建表；写入仅诊断行、随会话消散，无 DDL/DML）；
+ *      <b>跨连接不可见</b>（另一连接 {@code DBMS_XPLAN.DISPLAY} 返回 "cannot fetch last explain plan"），
+ *      而本插件两条链都是单语句通道（IDE 控制台一/script、MCP 一 execute）→ 二段式在插件内
+ *      不可达，走 {@link Entry#postPlanQuery()}/{@link Entry#channelNote()} 诚实降级：语句照发（登记真实发生），
+ *      计划行指引到数据库端同连接另查；</li>
+ *  <li>SQL Server（R23 接入）：{@code SET STATISTICS XML ON; &lt;sql&gt;; SET STATISTICS XML OFF}，XML 档——
+ *      文档实证 Microsoft Learn《SET STATISTICS XML》「need not be the only statement in a batch」
+ *      （SHOWPLAN_XML 才有批内独占限制，故不取）；计划 XML 是语句执行后的<b>附加结果集</b>，
+ *      MCP 单结果集通道返回的是查询行而非计划（{@link Entry#channelNote()} 澄清），IDE 控制台多结果
+ *      页签可见；<b>真机未验证</b>（DBX 在册无 sqlserver 实例），末尾 OFF 还原会话态防连接复用串扰。</li>
+ * </ul>
+ */
     private static final List<Entry> TABLE = List.of(
             new Entry("MySQL", "EXPLAIN " + SQL_PLACEHOLDER, ExplainOutputFormat.TABLE,
                     "真机实证 MySQL 5.7/8.4（DBX 通道 2026-09-02）"),
@@ -98,8 +122,26 @@ public final class ExplainSupport {
                     "文档实证 OB 官方 V4.x EXPLAIN 文法（缺省 TRADITIONAL 表格行）；真机留账（T-DialectXcFamily）"),
             new Entry("openGauss", "EXPLAIN (FORMAT JSON) " + SQL_PLACEHOLDER, ExplainOutputFormat.JSON,
                     "真机实证 openGauss 5.0.0（DBX 只读通道 2026-09-23，FORMAT JSON 单列 JSON 文本）"),
-            new Entry("Oracle", null, null, "不接入：需两步链查 PLAN_TABLE（另议）"),
-            new Entry("SQL Server", null, null, "不接入：需会话级 SET SHOWPLAN_XML（另议）"));
+            new Entry("Oracle",
+                    "EXPLAIN PLAN FOR " + SQL_PLACEHOLDER,
+                    ExplainOutputFormat.TEXT,
+                    "真机实证 Oracle Free 23 + XE 11g（DBX 通道 2026-09-30）：EXPLAIN PLAN FOR 单语句成功（0 行）；"
+                            + "计划入会话级 PLAN_TABLE（PUBLIC 同义词→SYS.PLAN_TABLE$ 免建表），跨连接不可见——"
+                            + "单语句通道拿不到计划行，postPlanQuery 指引数据库端同连接另查",
+                    "SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY)",
+                    "Oracle registers the plan into PLAN_TABLE and returns no rows; run SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY) "
+                            + "on the same session/connection to view the plan (plan rows are session-scoped, so a fresh connection "
+                            + "cannot read them)."),
+            new Entry("SQL Server",
+                    "SET STATISTICS XML ON; " + SQL_PLACEHOLDER + "; SET STATISTICS XML OFF",
+                    ExplainOutputFormat.XML,
+                    "文档实证 Microsoft Learn《SET STATISTICS XML》（need not be the only statement in a batch；"
+                            + "计划 XML 为执行后的附加结果集）；真机未验证（DBX 在册无 sqlserver 实例留账）——"
+                            + "MCP 单结果集通道返回查询行而非计划，channelNote 澄清；末尾 OFF 还原会话态",
+                    null,
+                    "SET STATISTICS XML ON returns the plan XML as an additional result set AFTER the query rows; "
+                            + "the rows above are the query result, not the plan - use the IDE database console to see the plan tab "
+                            + "(documented syntax; not verified against a live instance)."));
 
     /** 按方言显示名的查找索引（键小写——查找大小写不敏感）。 */
     private static final Map<String, Entry> BY_NAME = buildByName();

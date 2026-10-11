@@ -145,6 +145,9 @@ public final class BatchOperationConverter {
         map.put("selectMaps", Operation.SELECT);
         map.put("selectObjs", Operation.SELECT);
         map.put("selectCount", Operation.SELECT);
+        // T-MapResultVo：MPJ Map 响应族（JoinMapper.selectJoinMaps/selectJoinMapsPage，1.5.8 javap 实证）
+        map.put("selectJoinMaps", Operation.SELECT);
+        map.put("selectJoinMapsPage", Operation.SELECT);
         return map;
     }
 

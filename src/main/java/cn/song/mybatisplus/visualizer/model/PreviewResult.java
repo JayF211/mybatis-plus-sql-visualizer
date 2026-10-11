@@ -77,6 +77,20 @@ public final class PreviewResult {
      */
     private final boolean hasDollarRawSegments;
     /**
+     * R12 T-PaginationSim：分页 COUNT 包裹 SQL（D1=A 预览附第二条语句，面板在主 SQL 后并列渲染；
+     * D2=A 基础形态 {@code SELECT COUNT(*) FROM (原SQL) TOTAL}，MP 3.5.17 反编译逐字节形态）。
+     * null = 无分页 COUNT（未分页 / count·exists 消费 / searchCount=false / 开关关闭）。
+     */
+    private final String countSql;
+    /**
+     * R12 T-PaginationSim：分页 LIMIT 行（{@code LIMIT ?, ?} 等方言形态，
+     * {@link cn.song.mybatisplus.visualizer.sql.Dialect#renderLimit} 渲染产物）。面板勾选/参数变更走模型级
+     * 重渲染（XmlPreviewModel.renderSql / SqlGenerator）时模型层 SQL 不含分页后处理，面板据此把 LIMIT 行
+     * 带回主 SQL 尾部——服务端 sql/compactSql 已含该行，此字段仅供面板重渲染路径复用。
+     * null = 无分页 LIMIT（未分页 / count·exists 消费 / 已含手写 LIMIT / 开关关闭）。
+     */
+    private final String paginationLimitLine;
+    /**
      * T-JpaParamOrder F3：JPA 命名参数占位符名序（HQL {@code :name} 首现序，与转换后 SQL 中
      * {@code ?} 一一对应）。非空时渲染/复制按名回填（同名占位复用同值，JPA 命名参数语义），
      * 与 setParameter 书写顺序解耦；空表 = 维持按序回填（既有语义）。仅当全部 {@code ?}
@@ -99,7 +113,7 @@ public final class PreviewResult {
         this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, Map.of(), null, false,
-                List.of(), Set.of());
+                null, null, List.of(), Set.of());
     }
 
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
@@ -112,7 +126,7 @@ public final class PreviewResult {
         this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
-                namedParamHints, null, false, List.of(), Set.of());
+                namedParamHints, null, false, null, null, List.of(), Set.of());
     }
 
     /**
@@ -130,9 +144,14 @@ public final class PreviewResult {
         this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
-                namedParamHints, stackDigest, hasDollarRawSegments, List.of(), Set.of());
+                namedParamHints, stackDigest, hasDollarRawSegments, null, null, List.of(), Set.of());
     }
 
+    /**
+     * 规范构造器（27 参）：K2J 侧 {@code countSql}/{@code paginationLimitLine} 为 master 新增的带默认值
+     * 后置字段（Kotlin 默认参），历史 25 参形态在 Kotlin 调用方天然合法——Java 侧保留 25 参重载（见下）
+     * 委托本构造器、新两参取 null（与 master 默认值等价）。
+     */
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
                          Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
@@ -140,6 +159,7 @@ public final class PreviewResult {
                          XmlPreviewModel xmlModel, Map<String, String> initialParamValues, List<PerfWarning> perfWarnings,
                          List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
                          Map<String, ParamHint> namedParamHints, String stackDigest, boolean hasDollarRawSegments,
+                         String countSql, String paginationLimitLine,
                          List<String> placeholderParamNames, Set<String> duplicateParamNames) {
         this.sql = sql;
         this.compactSql = compactSql;
@@ -164,8 +184,26 @@ public final class PreviewResult {
         this.namedParamHints = namedParamHints != null ? namedParamHints : Map.of();
         this.stackDigest = stackDigest;
         this.hasDollarRawSegments = hasDollarRawSegments;
+        this.countSql = countSql;
+        this.paginationLimitLine = paginationLimitLine;
         this.placeholderParamNames = placeholderParamNames != null ? placeholderParamNames : List.of();
         this.duplicateParamNames = duplicateParamNames != null ? duplicateParamNames : Set.of();
+    }
+
+    /** K2J 互操作：master 新两参（countSql/paginationLimitLine）取默认 null 的历史 25 参形态。 */
+    public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
+                         WrapperType wrapperType, String tableName, String warning, List<String> columns,
+                         Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
+                         List<ParamHint> paramHints, List<TableInfo> candidateTables, BatchModel batchModel,
+                         XmlPreviewModel xmlModel, Map<String, String> initialParamValues, List<PerfWarning> perfWarnings,
+                         List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
+                         Map<String, ParamHint> namedParamHints, String stackDigest, boolean hasDollarRawSegments,
+                         List<String> placeholderParamNames, Set<String> duplicateParamNames) {
+        this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
+                columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, stackDigest, hasDollarRawSegments, null, null,
+                placeholderParamNames, duplicateParamNames);
     }
 
     public PreviewResult(String sql, String compactSql,
@@ -285,6 +323,16 @@ public final class PreviewResult {
         return duplicateParamNames;
     }
 
+    /** R12 T-PaginationSim：分页 COUNT 包裹 SQL（null = 无）。 */
+    public String getCountSql() {
+        return countSql;
+    }
+
+    /** R12 T-PaginationSim：分页 LIMIT 行（null = 无；面板重渲染路径复用）。 */
+    public String getPaginationLimitLine() {
+        return paginationLimitLine;
+    }
+
     public PreviewResult copy(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                               WrapperType wrapperType, String tableName, String warning, List<String> columns,
                               Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
@@ -295,7 +343,7 @@ public final class PreviewResult {
         return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints,
-                stackDigest, hasDollarRawSegments, placeholderParamNames, duplicateParamNames);
+                stackDigest, hasDollarRawSegments, countSql, paginationLimitLine, placeholderParamNames, duplicateParamNames);
     }
 
     public PreviewResult copy(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
@@ -308,7 +356,7 @@ public final class PreviewResult {
         return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints,
-                stackDigest, hasDollarRawSegments, placeholderParamNames, duplicateParamNames);
+                stackDigest, hasDollarRawSegments, countSql, paginationLimitLine, placeholderParamNames, duplicateParamNames);
     }
 
     @Override
@@ -343,6 +391,8 @@ public final class PreviewResult {
                 && Objects.equals(namedParamHints, that.namedParamHints)
                 && Objects.equals(stackDigest, that.stackDigest)
                 && hasDollarRawSegments == that.hasDollarRawSegments
+                && Objects.equals(countSql, that.countSql)
+                && Objects.equals(paginationLimitLine, that.paginationLimitLine)
                 && Objects.equals(placeholderParamNames, that.placeholderParamNames)
                 && Objects.equals(duplicateParamNames, that.duplicateParamNames);
     }
@@ -352,7 +402,7 @@ public final class PreviewResult {
         return Objects.hash(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints,
-                stackDigest, hasDollarRawSegments, placeholderParamNames, duplicateParamNames);
+                stackDigest, hasDollarRawSegments, countSql, paginationLimitLine, placeholderParamNames, duplicateParamNames);
     }
 
     @Override
@@ -366,6 +416,8 @@ public final class PreviewResult {
                 + fillClauses + ", previousSql=" + previousSql + ", pagesColumns=" + pagesColumns
                 + ", namedParamHints=" + namedParamHints + ", stackDigest=" + stackDigest
                 + ", hasDollarRawSegments=" + hasDollarRawSegments
+                + ", countSql=" + countSql
+                + ", paginationLimitLine=" + paginationLimitLine
                 + ", placeholderParamNames=" + placeholderParamNames
                 + ", duplicateParamNames=" + duplicateParamNames + ")";
     }

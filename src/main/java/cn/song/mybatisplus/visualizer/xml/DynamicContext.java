@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.xml;
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -55,6 +56,18 @@ public class DynamicContext {
     private final List<String> errors = new DedupErrorList();
 
     /**
+     * 条件求值结果登记（R30 探镜，只读观测——渲染语义零变更）：IfSqlNode 每次被走到（apply）
+     * 就登记 test 表达式原文 → 本轮判定真值；渲染中<b>未到达</b>的条件（假 if 体内层 / choose 短路后的
+     * 其余 when）不登记，模型侧据缺席映射「未求值」（见 {@link XmlPreviewModel#getConditionOutcomes}）。
+     *
+     * <p>同表达式多次求值（foreach 体内）按「任一次为真即真」合并（merge OR）——探针回答的是
+     * 「这一轮这条条件有没有放行内容进 SQL」。子上下文（Trim/Foreach 的过滤上下文）覆写
+     * {@link #getConditionOutcomes()} 转发 delegate（同 {@link #getErrors()} 的 T-FS-07 缺陷形态，
+     * 否则体内条件的判定结果被丢弃）。
+     */
+    private final Map<String, Boolean> conditionOutcomes = new LinkedHashMap<>();
+
+    /**
      * ${} 直替计数（T-DollarInjectMark）：TextSqlNode 每求值一个 ${} token 经
      * {@link #countDollarSubstitution()} 自增——引擎忠实口径（MyBatis 对字符串字面量内的 ${}
      * 同样直替，计数不排除）；转义 \${ 不经求值不计。渲染结束随
@@ -99,6 +112,23 @@ public class DynamicContext {
     /** ${} 直替计数（T-DollarInjectMark，Kotlin {@code protected set}：外部只读，经计数入口自增）。 */
     public int getDollarSubstitutions() {
         return dollarSubstitutions;
+    }
+
+    /**
+     * 条件求值结果（R30 探镜，只读观测）。
+     *
+     * <p>可覆写：嵌套子上下文（Foreach 的 Prefixed/Filtered、Trim 的 filtered）必须转发到 delegate
+     * 根上下文，否则体内条件的判定结果被丢弃（与 {@link #getErrors()} 同款转发缺陷形态）。
+     */
+    public Map<String, Boolean> getConditionOutcomes() {
+        return conditionOutcomes;
+    }
+
+    /** 条件判定登记入口：同表达式多次求值按 OR 合并（{@link #getConditionOutcomes()}）。 */
+    public void recordConditionOutcome(String test, boolean truth) {
+        // 经 getter 写入（而非私有字段直写）：子上下文覆写 getConditionOutcomes() 转发 delegate 时
+        // 判定结果才落到根上下文——对齐 Kotlin `open val conditionOutcomes` 的虚分派语义。
+        getConditionOutcomes().merge(test, truth, (previous, current) -> previous || current);
     }
 
     /** 直替计数入口：子类过滤上下文（Foreach 的 Prefixed/Filtered）转发到 delegate，计数落根上下文。 */

@@ -31,6 +31,8 @@ public final class IfSqlNode implements SqlNode {
     public boolean apply(DynamicContext context) {
         Boolean truth = context.conditionResult(test);
         boolean t = truth != null ? truth : evaluate(context);
+        // R30 探镜：登记本轮判定结果（只读观测，不改渲染语义——真值来源不受影响）
+        context.recordConditionOutcome(test, t);
         if (t) {
             contents.apply(context);
         }

@@ -241,6 +241,12 @@ public final class ForeachSqlNode implements SqlNode {
         public List<String> getErrors() {
             return delegate.getErrors();
         }
+
+        // R30 探镜：体内条件判定结果转发根上下文（同 errors 的转发缺陷形态，缺席即丢）
+        @Override
+        public Map<String, Boolean> getConditionOutcomes() {
+            return delegate.getConditionOutcomes();
+        }
     }
 
     /** #{item.x} / #{index.x} 重写上下文：把 token 内容开头的 item/index 名重写为 __frch_ 唯一名。 */
@@ -320,6 +326,12 @@ public final class ForeachSqlNode implements SqlNode {
         @Override
         public List<String> getErrors() {
             return delegate.getErrors();
+        }
+
+        // R30 探镜：逐级转发（本层 delegate 是 PrefixedContext，最终落根上下文）
+        @Override
+        public Map<String, Boolean> getConditionOutcomes() {
+            return delegate.getConditionOutcomes();
         }
     }
 }

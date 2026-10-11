@@ -50,6 +50,9 @@ public final class MpvsUiColors {
     /** 耗时五档——正常绿。亮 0x4CAF50 现值；暗 0x66BB6A 自配（Material green 400 提亮）。 */
     public static final JBColor DURATION_OK = JBColor.namedColor("mpvs.log.durationOk", 0x4CAF50, 0x66BB6A);
 
+    /** O-90：同模板（疑似 N+1）计数徽章——琥珀色与耗时偏慢同族（attention 不报警）。亮 0xE67E22；暗 0xF39C12。 */
+    public static final JBColor TEMPLATE_N1 = JBColor.namedColor("mpvs.log.templateN1", 0xE67E22, 0xF39C12);
+
     // ---------------- 历史 tab（log/HistorySqlLogPanel） ----------------
 
     /** 历史面板元信息灰。亮 0x9E9E9E 现值；暗 0x808080 自配（独立键便于与主列表分开覆写）。 */

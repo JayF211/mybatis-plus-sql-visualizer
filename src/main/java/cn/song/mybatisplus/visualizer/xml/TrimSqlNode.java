@@ -120,6 +120,12 @@ public non-sealed class TrimSqlNode implements SqlNode {
             return delegate.getErrors();
         }
 
+        // R30 探镜：体内条件判定结果转发根上下文（同 errors 的转发缺陷形态，缺席即丢）
+        @Override
+        public Map<String, Boolean> getConditionOutcomes() {
+            return delegate.getConditionOutcomes();
+        }
+
         void applyAll() {
             String sql = sqlBuffer.toString().trim();
             String upper = sql.toUpperCase(Locale.ENGLISH);
