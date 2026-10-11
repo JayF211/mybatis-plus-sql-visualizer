@@ -65,6 +65,9 @@ class SettingsTruthTest {
     fun testP2_状态行接线与五态键源码守卫() {
         // k2j 互操作：master 的 AgentManager.kt 单文件在这里拆为 AgentManager.java（类）+
         // AgentManagerKt.java（顶层函数 agentStatusText），接线断言读合并文本，等价同文件。
+        // T-M53-II（2026-10-10）master 侧同区把 AgentStatusSnapshot 等支撑类型搬出到
+        // AgentSessionSupport.kt——k2j 侧该类型落独立文件 AgentStatusSnapshot.java
+        // （存在性由编译期保证），读取面维持两文件并读不变。
         val src = mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManager.java") + "\n" +
             mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManagerKt.java")
         // statusSummary 只取数，文案交纯函数（纯函数五态语义由 AgentStatusTextTest 运行期覆盖）

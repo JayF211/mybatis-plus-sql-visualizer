@@ -247,6 +247,19 @@ class GuardSelfTestCoverageMetaGuardTest {
     private fun indentOf(line: String): Int = line.length - line.trimStart().length
 
     /** 文件名闭包：含 `Guard` 或以 `SourceScanTest` 结尾（指南守卫族全清单的机器可读口径）。 */
+    // ===== 跨文件解析面（T-M53-II 登记模型扩展）=====
+    // via 调用边**先本文件、再注册面全集**解析（判定内核与其调用用例允许分处两文件）；同名函数以本文件为准，
+    // 避免各守卫共有的 scan/stripComments 张冠李戴；边仍须真实存在（改名/删除照旧报红）。
+    // **语料刻意不跨文件解析**：实测同名函数会把 A 文件的用法算到 B 文件头上（误报），故「自证语料与判定内核
+    // 同文件」是硬约束——这正是 BannedApiSourceScanTest 必须按规则族拆分的依据。
+    private val allRegisteredDecls: List<FnDecl> by lazy {
+        GUARD_CLASSES.flatMap { fnDecls(sourceOf(it.path)) }
+    }
+
+    private val allRegisteredByName: Map<String, FnDecl> by lazy {
+        allRegisteredDecls.associateBy { it.name }
+    }
+
     private fun isGuardFile(fileName: String): Boolean {
         val base = fileName.removeSuffix(".kt")
         return "Guard" in base || base.endsWith("SourceScanTest")
@@ -321,8 +334,9 @@ class GuardSelfTestCoverageMetaGuardTest {
     fun `豁免必须机器可校验_转发调用边与调用点真实存在`() {
         val problems = mutableListOf<String>()
         GUARD_CLASSES.forEach { entry ->
-            val decls = fnDecls(sourceOf(entry.path))
-            val byName = decls.associateBy { it.name }
+            val ownByName = fnDecls(sourceOf(entry.path)).associateBy { it.name }
+            // T-M53-II：先本文件、再注册面全集（口径见 allRegisteredByName）。
+            val byName = allRegisteredByName
             entry.decisionFns.filter { it.exempt != null }.forEach { fn ->
                 if (fn.via.isEmpty()) {
                     problems += "${entry.path} :: ${fn.name} 豁免只有散文理由（无 via 调用边）——" +
@@ -330,7 +344,7 @@ class GuardSelfTestCoverageMetaGuardTest {
                     return@forEach
                 }
                 fn.via.forEach { caller ->
-                    val target = byName[caller]
+                    val target = ownByName[caller] ?: allRegisteredByName[caller]
                     if (target == null) {
                         problems += "${entry.path} :: ${fn.name} 的 via 指向本类不存在的函数 '$caller'（改名/删除后豁免静默空转）"
                     } else if (!references(target.body, fn.name)) {
@@ -661,9 +675,18 @@ class GuardSelfTestCoverageMetaGuardTest {
          * （判据 6）；已登记类里的类级 Boolean 判定函数也必须逐条登记（判据 7）。
          */
         val GUARD_CLASSES = listOf(
+            GuardEntry(
+                "log/EmptyTextLinkApiGuardTest.kt",
+                emptyList(),
+                "空态链接 API 守卫（T-SettingsFocusFromLink 二修）：判定内核内联于用例——行级扫描 " +
+                    "src/main/kotlin 全量 .kt，剥行首 `//`/`*`/`/*` 注释行后断言无 " +
+                    "appendSecondaryText 实际调用（平台该 API 固定写 row=1 会叠印空态链接）。" +
+                    "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=探针（临时插入真调用）必红已实测于实施轮。",
+            ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
-                "convention/BannedApiSourceScanTest.kt",
+                "convention/BannedApiScanSupport.kt",
                 listOf(
                     DecisionFn(
                         "assertNoHits",
@@ -677,6 +700,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                             "禁用IPGP发行版裁剪平台类",
                         ),
                     ),
+                ),
+                "T-M53-II 拆出的扫描支撑基类：判定面只剩断言助手 assertNoHits（豁免；via 指向三个调用用例，用例在同批拆出的测试类中，经注册面全集解析）。",
+            ),
+            GuardEntry(
+                "convention/BannedApiSourceScanTest.kt",
+                listOf(
+                ),
+                "T-M53-II 拆出的「禁用 API 与结构锚点」测试类：断言内联在用例里，无独立判定内核，故 decisionFns 留空。",
+            ),
+            GuardEntry(
+                "convention/BannedApiScanRuleTest.kt",
+                listOf(
                     DecisionFn(
                         "invokeLaterSites",
                         FnKind.SITES,
@@ -698,8 +733,14 @@ class GuardSelfTestCoverageMetaGuardTest {
                     DecisionFn("fatalPassthroughOffenders", FnKind.VIOLATIONS),
                     DecisionFn("pooledThreadSites", FnKind.SITES),
                     DecisionFn("psiCaptureOffenders", FnKind.VIOLATIONS),
-                    // 独立复核㉗：此前的「真缺口」豁免（无合成样本）已由 `TEDTRC自证_…` 关闭，豁免条目删除。
                     DecisionFn("edtReadContractOffenders", FnKind.VIOLATIONS),
+                    DecisionFn("anyModalityInUpdatePackageOffenders", FnKind.VIOLATIONS),
+                ),
+                "T-M53-II 拆出的四族规则类（写安全·模态 / catch(Throwable) 致命 / 池化线程读 PSI / 跳转族读权限）：判定内核与其自证用例同文件。",
+            ),
+            GuardEntry(
+                "convention/BannedApiScanServiceStateTest.kt",
+                listOf(
                     DecisionFn("initEntrySites", FnKind.SITES),
                     DecisionFn(
                         "serviceWriteHits",
@@ -708,8 +749,6 @@ class GuardSelfTestCoverageMetaGuardTest {
                         via = listOf("projectServiceStateOffenders"),
                     ),
                     DecisionFn("projectServiceStateOffenders", FnKind.VIOLATIONS),
-                    // ---- 2026-09-22 合并 master 后补登记（master 侧 O-56 批次扩 BannedApiSourceScanTest 时新增） ----
-                    DecisionFn("anyModalityInUpdatePackageOffenders", FnKind.VIOLATIONS),
                     DecisionFn(
                         "entrySites",
                         FnKind.SITES,
@@ -720,9 +759,9 @@ class GuardSelfTestCoverageMetaGuardTest {
                     DecisionFn("teardownEntrySites", FnKind.SITES),
                     DecisionFn("teardownServiceLookupOffenders", FnKind.VIOLATIONS),
                 ),
-                "本仓判定内核最集中的守卫类；自证语料为 `update包any模态守卫自证_…` / `尾随lambda写文档守卫自证_…` / " +
-                    "`TFS06自证_…` / `TFP03自证_…` / `TPCP04自证_…` / `R2自证_…` / `TST02d自证_…` / `TEDTRC自证_…`",
+                "T-M53-II 拆出的项目服务状态规则族：判定内核与其自证用例同文件。",
             ),
+
             GuardEntry(
                 "convention/DialogWrapperInitOrderGuardTest.kt",
                 listOf(DecisionFn("scan", FnKind.VIOLATIONS)),
@@ -771,6 +810,14 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "convention/BundlePlaceholderArityTest.kt",
                 listOf(DecisionFn("warningSites", FnKind.SITES)),
                 "手工扩展登记（文件名不含 Guard，靠命名兜底面发现）；扫描自检 :129 覆盖 warningSites",
+            ),
+            GuardEntry(
+                "ui/PreviewRenderSlowOpsGuardTest.kt",
+                listOf(DecisionFn("slowOpDirectCallHits", FnKind.VIOLATIONS)),
+                "T-PreviewEdtGuard S1：预览重渲染链宿主文件（SqlPreviewPanel/SqlAutoFolding）禁直调慢操作 " +
+                    "API 族（getSyntaxHighlighter/findFileByUrl/findFileByPath——2026-09-24 沙盒实栈：" +
+                    "SQL 方言映射 ensureStateLoaded→VFS findChild→FSRecords 慢操作门控）；" +
+                    "自证 `test自证_慢操作API族判定内核可判别`（三令牌逐一必中+干净源零误报）",
             ),
             // ---- 无判定内核的守卫类（断言直接内联在 @Test；登记以关闭文件名闭包） ----
             GuardEntry(
@@ -844,6 +891,11 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "断言直接内联在 @Test；effectiveRenderer/allLists/withSingleLineMode 为夹具",
             ),
             GuardEntry(
+                "log/SqlLogPanelSearchWiringGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（T-SearchToggleNativeLook 搜索框 DocumentListener 接线守卫）；repoRoot 为夹具",
+            ),
+            GuardEntry(
                 "log/agent/AgentUrlDecoupleGuardTest.kt",
                 listOf(
                     // 判据 7 补登记（2026-09-23）：类级 Boolean 返回函数必须逐条登记。
@@ -858,6 +910,12 @@ class GuardSelfTestCoverageMetaGuardTest {
                     ),
                 ),
                 "断言直接内联在 @Test；source(:38) 为夹具，containsMemberAccess(:51) 为匹配助手（经上面 via 用例调用）",
+            ),
+            GuardEntry(
+                "log/agent/StatementWeaveWiringGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（T-StatementWeave 接线源码守卫，跨仓直读 agent 子项目源码）；" +
+                    "agentSrc/stripComments 为夹具",
             ),
             GuardEntry(
                 "mcp/McpScopeSourceScanTest.kt",
@@ -933,6 +991,46 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "Double release SEVERE）。断言为「行为结果」形态（先行释放后再走面板释放链不抛）" +
                     "而非违规点/站点集合，无 offenders/sites 判定内核——decisionFns 留空" +
                     "（修法提示口径：无判定内核时留空并写明依据）",
+            // ---- T-PerfSweep16 新增守卫补登记（2026-09-29 合并 dev 后收口门禁基线红，防整体脱离扫描面） ----
+            GuardEntry(
+                "convention/SuppressKeysPairingGuardTest.kt",
+                listOf(
+                    // 裸条目：判定内核由本类 4 个 `守卫自证_` 合成样本用例直接引用（勿加描述=豁免）
+                    DecisionFn("unpairedSuppressKeyLines", FnKind.VIOLATIONS),
+                    DecisionFn(
+                        "isAssignmentTo",
+                        FnKind.HELPER,
+                        "赋值判别谓词（`token =` 形态，排除 `==` 比较与前缀粘连），是判定内核 unpairedSuppressKeyLines " +
+                            "与扫描面保鲜计数 countSuppressKeyAssignments 的共同输入；自证语料经该转发边到达",
+                        via = listOf("unpairedSuppressKeyLines"),
+                    ),
+                ),
+                "T-PerfSweep16 F44 suppressKeys 配对写源码守卫：扫描面保鲜计数与 stripComments/repoRoot/" +
+                    "readSqlLogManagerSource 为夹具",
+            ),
+            GuardEntry(
+                "ui/gutter/GutterProviderSingleLookupGuardTest.kt",
+                listOf(
+                    // 裸条目：判定内核由 `守卫自证_合成样本双读必报单读放行` 直接引用
+                    DecisionFn("fastPathLookupCount", FnKind.VIOLATIONS),
+                ),
+                "T-PerfSweep16 F36 gutter provider 单次查找守卫：providerFiles/extractBracedBody/countToken/" +
+                    "stripComments/repoRoot 为夹具",
+            ),
+            // ---- R33 EXPLAIN 结构化渲染接线守卫（2026-10-01 批次 9 门禁第一轮修复补登记） ----
+            GuardEntry(
+                "ui/ExplainPanelWiringGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（R33 接线四断言：ExplainPanelChannel.decide 可达/submitExplainDirect 直送链单函数收敛/" +
+                    "embedExplainView 结构化视图嵌入/ExplainIndexAdvisor.advise 面板侧建议接入）",
+            ),
+            // ---- O-93 全局手动方言残值泄漏守卫（2026-10-02 T-BatchTestLeak 补登记——漏登记由 R33 修复轮元守卫红抓出） ----
+            GuardEntry(
+                "sql/DialectStaleManualLeakGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（O-93 三断言：effective(project=null) auto 态忽略手动残值回退 MySQL/" +
+                    "手动模式语义不变对照/saveOrUpdate 批量预览 upsert+反引号不受残值污染）；" +
+                    "私有 leakStaleManualDialect 为污染动作夹具非判定函数",
             ),
             // ---- 本元守卫自身 ----
             GuardEntry(

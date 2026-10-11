@@ -59,6 +59,13 @@ import java.io.File
  *    在 Java 侧必写 `getSystemClipboard()`——原 `getSystemClipboard` 零容忍规则在 Java 侧首次可见
  *    `RollbackSqlDialog.java` 的同点位直写（master 同代码，仅因属性语法对旧 token 不可见）。
  *    该点位登记进白名单并留待收敛（见用例内注释），规则本身不撤。
+ *
+ * T-M53-II（2026-10-10，master 同轮拆类）：本文件在 master 侧拆为 BannedApiScanSupport（基类）/
+ * BannedApiSourceScanTest（禁用 API 与结构锚点）/ BannedApiScanRuleTest（四族规则）/
+ * BannedApiScanServiceStateTest（项目服务状态）四件。k2j 侧**不继承** BannedApiScanSupport——
+ * 基类的三棵树快照钉在 master 的 src/main/kotlin（.kt）根，k2j 生产树是 src/main/java（.java），
+ * 继承会把扫描面静默换成空集（假绿）；本文件维持单件自承载（k2j 专属的 fatal 两段式基线与
+ * .java 扫描口径在 master 拆分件中亦无对应物），登记面见 GuardSelfTestCoverageMetaGuardTest。
  */
 class BannedApiSourceScanTest {
 
@@ -225,20 +232,28 @@ class BannedApiSourceScanTest {
         // SqlSuppressManagerDialog（O-69）：清空全部规则前 YesNo 知情确认（破坏性、不可恢复；
         //   对话框本体非模态 MODELESS，仅此一处确认弹窗，20260924 收口门禁守卫命中后按红线加白）。
         //
-        // k2j 移植注（两处移植分歧，待收敛，非本守卫授权）：
-        //  - ConvertSqlToJavaAction.java / CrudSqlPreviewFlow.java 的兜底提示在 master 已由
-        //    T-UiNative T-UN-02 从模态弹窗改为平台 Notification（「纯告知无需打断」+ isUnitTestMode 短路），
-        //    Java 移植侧落回 `Messages.showInfoMessage` → 本守卫首次可见。**登记为待收敛项**：
-        //    收敛后须从本白名单删除（或由生产改回 Notification），勿让白名单腐烂成永久豁免。
+        // k2j 移植注（2026-10-11 收敛销账）：ConvertSqlToJavaAction.java / CrudSqlPreviewFlow.java 的
+        // 兜底提示已随 T-UiNative T-UN-02 收敛为平台 Notification（实测两文件零 Messages.show /
+        // JOptionPane 模态调用），原白名单两行删除——待收敛项清账，勿让白名单腐烂成永久豁免。
         val whitelist = setOf(
             "src/main/java/cn/song/mybatisplus/visualizer/log/SourceCaptureGuide.java",
-            "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.java",
+            // T-M53-II D2-5（master 同区）：面板的 6 个模态调用点（执行前 YesNo 确认、导出格式三选、
+            // 回滚 SQL info）随执行链搬到 SqlPreviewPanelExecutionKt.java（Java 门面形态）——
+            // 主文件 `ui/SqlPreviewPanel.java` 已无模态调用点，故本表不再为它加白。
+            "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecutionKt.java",
             "src/main/java/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.java",
             "src/main/java/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.java",
             "src/main/java/cn/song/mybatisplus/visualizer/config/McpConfigurable.java",
             "src/main/java/cn/song/mybatisplus/visualizer/log/SqlSuppressManagerDialog.java",
-            "src/main/java/cn/song/mybatisplus/visualizer/actions/ConvertSqlToJavaAction.java",
-            "src/main/java/cn/song/mybatisplus/visualizer/actions/CrudSqlPreviewFlow.java",
+            // R4（导出格式三选）：用户必须选择导出格式（CSV/TSV/TXT）才能继续——知情选择场景加白
+            "src/main/java/cn/song/mybatisplus/visualizer/log/HistorySqlLogPanel.java",
+            // T-M53-II D2：SqlLogPanel 的右键菜单（含模态弹窗调用点）已搬到该门面件
+            "src/main/java/cn/song/mybatisplus/visualizer/log/SqlLogPanelActionsKt.java",
+            // ParamSchemeManagerDialog（R22 T-04）：新建/重命名方案 showInputDialog（用户必须输入
+            //   方案名才能继续，与 R4 导出格式三选同类）+ 删除方案前 showYesNoDialog 知情确认
+            //   （破坏性、不可恢复，与 SqlSuppressManagerDialog 清空前确认同类）；对话框本体
+            //   非模态 MODELESS，20260929 收口门禁守卫命中后按红线加白。
+            "src/main/java/cn/song/mybatisplus/visualizer/ui/ParamSchemeManagerDialog.java",
         )
         val found = mainSources()
             .filter { (_, code) ->
@@ -1224,10 +1239,16 @@ class BannedApiSourceScanTest {
         // executeOnConsole 外层 / runRunner，原登记为未判定解包基线）+ 1 处守卫锚点**不可见**的
         // catch(Exception) 形态（executeQueries 兜底提交块，正则只匹配 catch(Throwable)，但
         // execute.invoke 反射链同源吞 Error），一并按 T-FP-02 定例补 `isFatal(cause)` 透传。
-        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to 22,
-        // 9 处：agent 采集/attach 链（accept 线程透传即线程终止，平台记录现场）；
-        // +1 = notifyAttachFallbackOnce 通知出口 fatal 透传（T-SyncK2JMaster29 随 master 增强捕获族移植）。
-        "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java" to 9,
+        // T-SyncK2JMaster482 C9a-1（2026-10-11）本轮重登记：生产翻译把 DataSourceSelector 拆为三件
+        // （Selector 主体 / ConsoleKt 控制台准备+执行链 / ResultsKt 结果面板链），fatal 透传站点随拆分
+        // 迁移——22 处自 Selector 主体迁出，按守卫口径（maskSource 后 `FatalErrors.isFatal(` 计数）实测：
+        // Selector 主体 1 + ConsoleKt 7 + ResultsKt 14 = 22（与拆分前总数守恒）。
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to 1,
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleKt.java" to 7,
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 14,
+        // 9→10 处（T-SyncK2JMaster482 C9a-1 本轮重登记）：agent 采集/attach 链随 482 轮
+        // AgentManager 主体同步（会话/探活/通知链翻译）净增 1 处 fatal 透传判定，实测口径计数 10。
+        "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java" to 10,
         // 3 处：agent 会话（读取/写入循环的 fatal 透传）。
         "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentSession.java" to 3,
         // 8 处：运行配置监听（T-FP-02 落地批）；
@@ -1283,8 +1304,14 @@ class BannedApiSourceScanTest {
      * 反射归一与逐描述符补发链+外层兜底）、`log/LogStartupCapture.java` +1（doExecute 顶部确认接线）。
      * 全部只降级不覆盖 fatal 面；其中 2 处已判 fatal（AgentManager/RunConfigurationProcessListener
      * 各 +1，见 [fatalPassthroughGuardedFiles] 注记），其余为未判定降级站点，按既定流程重新登记基线。
+     *
+     * **674 → 730（T-SyncK2JMaster482 C9a-1，2026-10-11，本轮重登记净增 +56）**：482 轮
+     * 生产翻译五波（log 捕获链/execute/mcp/SqlPreviewPanel 拆分/ui 第二批）把 master 侧
+     * `runCatching{}.getOrElse{}/onFailure{}` 形态落成 try/catch(Throwable)（671 个 .java 文件
+     * 实测口径 730 站点）；全部为降级语义（可选能力探测/候选收集/渲染回落/面板兜底），与
+     * master 同源，无一覆盖 fatal 面；按守卫既定流程重新登记基线。
      */
-    private val fatalCatchSiteTotalBaseline = 674
+    private val fatalCatchSiteTotalBaseline = 730
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线
@@ -1306,7 +1333,7 @@ class BannedApiSourceScanTest {
 
     /** 反射解包锚点所在文件（原生执行链）。 */
     private val fatalUnwrapAnchorFile =
-        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java"
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleKt.java"
 
     /** 某文件里 `FatalErrors.isFatal(` 的出现次数（跑在掩码文本上：注释/字符串里的字样不算）。 */
     private fun isFatalCallCount(path: String, raw: String): Int =

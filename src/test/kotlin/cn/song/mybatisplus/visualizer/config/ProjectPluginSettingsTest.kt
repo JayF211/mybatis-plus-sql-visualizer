@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.config
 
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
+import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.OracleDialect
 import cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect
 import com.intellij.openapi.components.service
@@ -250,13 +251,15 @@ class ProjectPluginSettingsTest : BasePlatformTestCase() {
                 DialectRegistry.INSTANCE.effective(project),
             )
 
-            // ⑥ 无项目上下文（psi 侧无参调用点的形态）：推断链不可用 → 回退全局手动值。
-            // 这是有意边界（见 DialectRegistry.effective KDoc），不是缺陷——钉住防回潮。
+            // ⑥ 无项目上下文（psi 侧无参调用点的形态）：推断链不可用 → auto 态回退 MySQL（不取全局手动值）。
+            // O-93 语义修订（dc2d703）：旧实现此处返回全局手动值，等于让手动残值劫持 auto 模式
+            // （实证=PaginationSimTest 泄漏 "Oracle" 致 SqlPreviewServiceBatchTest 5 例随装箱序间歇爆）；
+            // 现钉住新语义防回潮（与 DialectTest 的对照钉同口径）。手动模式（auto=false）仍取全局手动值（断言④已覆盖）。
             global.state.dialectAuto = true
             global.state.dialect = "Oracle"
             assertEquals(
-                "project=null 无探测上下文 → 全局手动值（不进入推断）",
-                OracleDialect.INSTANCE,
+                "project=null 无探测上下文 → auto 回退 MySQL（手动残值不参与，O-93 语义）",
+                MySqlDialect.INSTANCE,
                 DialectRegistry.INSTANCE.effective(null),
             )
         } finally {

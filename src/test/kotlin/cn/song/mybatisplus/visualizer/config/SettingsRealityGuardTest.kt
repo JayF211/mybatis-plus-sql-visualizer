@@ -182,7 +182,13 @@ class SettingsRealityGuardTest {
 
     @Test
     fun `面板每个可编辑控件在apply与reset函数体中各出现`() {
-        val panelSrc = mainFile("src/main/java/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.java").readText()
+        // T-M53-II D2：面板的分区构建（含控件装配）已逐字符搬出到 PluginSettingsPanelSections.kt，
+        // 「摆而不绑」断言须在两个文件合起来的面板源码上跑，判据不变。
+        // k2j 移植注：生产为 Java（PluginSettingsPanel.java + PluginSettingsPanelSections.java），
+        // master 的两文件并读语义照搬；Sections.java 仅承载 buildSections 静态方法（控件字段
+        // 仍留在 Panel.java），断言实测仍以 Panel.java 为主体、Sections.java 并读为防御。
+        val panelSrc = mainFile("src/main/java/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.java").readText() +
+            mainFile("src/main/java/cn/song/mybatisplus/visualizer/config/PluginSettingsPanelSections.java").readText()
         // 行尾归一：工作树检出受 core.autocrlf 影响为 CRLF，而 Java 正则 `.` 不匹配 `\r`、
         // 全匹配（matches）与 `l == "    }"` 会双双失配（20260918 合并到 master 后实证）。
         val lines = panelSrc.split('\n').map { it.trimEnd('\r') }
@@ -194,6 +200,9 @@ class SettingsRealityGuardTest {
         // 可见性由 private 放宽为 public（Kotlin internal → Java public），正则同时接受两种修饰符。
         val widgetTypes = setOf("JBCheckBox", "JBTextField", "JBTextArea", "JComboBox", "ComboBox", "ColorPanel", "JBLabel", "JButton")
         val fields = lines.mapNotNull { l ->
+            // T-M53-II D2：控件字段的可见性在按族拆分时由 private 放宽（Kotlin internal →
+            // Java public，装配代码搬为 PluginSettingsPanelSections 静态方法），判据不变，
+            // 故正则同时接受两种修饰符（Java 字段形态：类型在声明位、泛型随声明类型）。
             val m = Regex("""\s*(?:private|public)\s+(?:final\s+)?(?:static\s+)?([\w.]+)(?:<[^>]*>)?\s+(\w+)\s*=""")
                 .find(l) ?: return@mapNotNull null
             val base = m.groupValues[1].substringAfterLast('.')
@@ -326,9 +335,10 @@ class SettingsRealityGuardTest {
         //    StartupUpdateCheck.kt:159 另有 installFailed 直引；两键保留白名单。
         //  - settings.update.envNotSupported / settings.search.placeholder：P5 守卫首跑查获的存量幽灵键，
         //    已随 T-SettingsTruth 收尾删除双语两键（对齐 P3 filterBar 先例），不再豁免。
-        //  - settings.mcp.tool.desc.<tail> 十键（T-McpToolset2，dev 侧）：McpConfigurable.kt:112
+        //  - settings.mcp.tool.desc.<tail> 十一键（T-McpToolset2 十键 + R14 T-HistorySearch 增
+        //    historysearch 键）：McpConfigurable.kt:117
         //    「"settings.mcp.tool.desc." + toolName.removePrefix("sqlv_").replace("_", "")」动态拼，
-        //    尾段由工具名派生（sqlv_render_sql → rendersql），静态扫描不可判定；十键保留白名单。
+        //    尾段由工具名派生（sqlv_render_sql → rendersql），静态扫描不可判定；十一键保留白名单。
         val whitelist = setOf(
             "settings.update.checkFailed",
             "settings.update.installFailed",
@@ -342,6 +352,7 @@ class SettingsRealityGuardTest {
             "settings.mcp.tool.desc.crudsql",
             "settings.mcp.tool.desc.reversesql",
             "settings.mcp.tool.desc.mappercheck",
+            "settings.mcp.tool.desc.historysearch",
         )
         val texts = mainSources()
         val xmlText = mainFile("src/main/resources/META-INF/plugin.xml").readText()
