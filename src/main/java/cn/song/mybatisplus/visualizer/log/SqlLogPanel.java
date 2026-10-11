@@ -937,13 +937,13 @@ public class SqlLogPanel extends JPanel implements Disposable {
     }
 
     /**
-     * T-UiCoord F2：下拉按钮显示文本按预算截尾省略（复用 meta 行的 {@link SqlPreviewPanelKt#clipTailToWidth} 纯函数）。
+     * T-UiCoord F2：下拉按钮显示文本按预算截尾省略（复用 meta 行的 {@link SqlPreviewPanelTextKt#clipTailToWidth} 纯函数）。
      * 预算用 JBUI 缩放表达——文本宽度随缩放变化，写死像素会在高 DPI 下失效。
      * tooltip 恒全文，省略只发生在按钮显示层。
      */
     private String clipToDropdownBudget(String text, JComponent target) {
         FontMetrics metrics = target.getFontMetrics(target.getFont());
-        return SqlPreviewPanelKt.clipTailToWidth(text, metrics::stringWidth, JBUI.scale(DROPDOWN_TEXT_BUDGET_PX));
+        return SqlPreviewPanelTextKt.clipTailToWidth(text, metrics::stringWidth, JBUI.scale(DROPDOWN_TEXT_BUDGET_PX));
     }
 
     // ---------- 工具栏动作 ----------

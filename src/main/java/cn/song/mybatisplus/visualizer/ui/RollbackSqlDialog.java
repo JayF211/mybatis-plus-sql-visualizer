@@ -288,7 +288,7 @@ public class RollbackSqlDialog extends DialogWrapper {
     public void executeRollback() {
         String sql = String.join("\n", currentResult.statements());
         if (sql.isBlank()) return;
-        if (panel != null) panel.executeAdhocSql(sql, false, snapshotEntry);
+        if (panel != null) SqlPreviewPanelExecutionKt.executeAdhocSql(panel, sql, false, snapshotEntry);
         // F6 留痕：回滚已提交执行——快照条目置终态 + 横幅更新（执行结果反馈走面板 resultPanel）
         if (snapshotEntry != null && project != null) {
             RollbackSnapshotStore store = project.getService(RollbackSnapshotStore.class);
@@ -310,7 +310,7 @@ public class RollbackSqlDialog extends DialogWrapper {
     public void runSnapshotQuery() {
         String sql = currentResult.snapshotSelectSql();
         if (sql == null) return;
-        if (panel != null) panel.executeAdhocSql(sql);
+        if (panel != null) SqlPreviewPanelExecutionKt.executeAdhocSql(panel, sql);
     }
 
     /** 「生成回滚」：粘贴 TSV → 快照回填（按原语句类型分派）→ 刷新编辑器与横幅。 */

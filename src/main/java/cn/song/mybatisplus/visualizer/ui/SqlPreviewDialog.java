@@ -31,7 +31,7 @@ public class SqlPreviewDialog extends DialogWrapper {
         this.panel = new SqlPreviewPanel(project);
         setTitle(MpSqlVisualizerBundle.message("dialog.preview.title"));
         panel.setSourceLocation(sourceLocation);
-        panel.showResult(result);
+        SqlPreviewPanelResultViewKt.showResult(panel, result);
         Disposer.register(getDisposable(), panel);
         panel.onClosePanelRequested = this::dispose;
         panel.setMinimumSize(new Dimension(MIN_WIDTH, MIN_HEIGHT));
@@ -82,7 +82,7 @@ public class SqlPreviewDialog extends DialogWrapper {
                 new DialogWrapperAction(MpSqlVisualizerBundle.message("panel.executeSql")) {
                     @Override
                     protected void doAction(java.awt.event.ActionEvent actionEvent) {
-                        panel.executeSql();
+                        SqlPreviewPanelExecutionKt.executeSql(panel);
                     }
                 },
                 new DialogWrapperAction(MpSqlVisualizerBundle.message("panel.copySql")) {

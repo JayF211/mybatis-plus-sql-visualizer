@@ -189,6 +189,16 @@ public final class SqlPreviewPanelExecutionKt {
      * @param dmlConfirmed    DML 二次确认豁免（回滚弹窗「执行回滚」已过用户显式确认链）
      * @param rollbackOfEntry 本次执行本身是回滚语句时指向被回滚的原快照条目（F6 留痕链）
      */
+    /** Kotlin 默认参数等价重载：dmlConfirmed=false、rollbackOfEntry=null。 */
+    public static void executeAdhocSql(@NotNull SqlPreviewPanel p, @NotNull String sql) {
+        executeAdhocSql(p, sql, false, null);
+    }
+
+    /** Kotlin 默认参数等价重载：rollbackOfEntry=null。 */
+    public static void executeAdhocSql(@NotNull SqlPreviewPanel p, @NotNull String sql, boolean dmlConfirmed) {
+        executeAdhocSql(p, sql, dmlConfirmed, null);
+    }
+
     public static void executeAdhocSql(
             @NotNull SqlPreviewPanel p,
             @NotNull String sql,
