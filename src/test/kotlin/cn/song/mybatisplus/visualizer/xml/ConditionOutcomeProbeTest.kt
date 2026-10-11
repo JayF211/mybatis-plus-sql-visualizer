@@ -20,7 +20,7 @@ class ConditionOutcomeProbeTest {
     }
 
     private fun render(m: XmlPreviewModel, enabled: Set<String>): RenderedXmlSql = m.renderSql(
-        XmlPreviewState(enabledIds = enabled, forEachCounts = m.defaultState().forEachCounts),
+        XmlPreviewState(enabled, m.defaultState().forEachCounts, setOf(), mapOf()),
     )
 
     // ------------------------------------------------------------------

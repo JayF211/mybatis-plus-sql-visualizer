@@ -16,7 +16,7 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 class NativeSearchTextFieldProviderContractTest : BasePlatformTestCase() {
 
     fun test默认实现应答SearchSessionKey且旗同源() {
-        val field = NativeSearchTextField(placeholderText = null, showRegex = true)
+        val field = NativeSearchTextField(null, true)
         val got = field.getData(com.intellij.find.SearchSession.KEY.name)
         assertTrue("DataProvider 必须应答 SearchSession.KEY（否则原生开关钮禁用）", got != null)
         val session = got as com.intellij.find.SearchSession

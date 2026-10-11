@@ -31,7 +31,7 @@ class SqlMapperParserDefinitionRegistrationTest : BasePlatformTestCase() {
     @Test
     fun testF48_注册在位且登记簿有账() {
         SqlMapperParserDefinition.ensureRegistered()
-        assertNotNull("注入前注册在位（F37 语义保持）", LanguageParserDefinitions.INSTANCE.forLanguage(SqlMapperLanguage))
+        assertNotNull("注入前注册在位（F37 语义保持）", LanguageParserDefinitions.INSTANCE.forLanguage(SqlMapperLanguage.INSTANCE))
         val ids = BarrierRegistry.snapshot().map { it.id }
         assertTrue("登记簿须含 parser definition 条目", "sql-mapper-parser-definition" in ids)
         assertTrue("登记簿须含 SqlMapperLanguage 结构性条目", "sql-mapper-language" in ids)
@@ -45,9 +45,9 @@ class SqlMapperParserDefinitionRegistrationTest : BasePlatformTestCase() {
     @Test
     fun testF48_摘除路径运行时证据() {
         SqlMapperParserDefinition.ensureRegistered()
-        assertNotNull(LanguageParserDefinitions.INSTANCE.forLanguage(SqlMapperLanguage))
+        assertNotNull(LanguageParserDefinitions.INSTANCE.forLanguage(SqlMapperLanguage.INSTANCE))
         SqlMapperParserDefinition.unregisterForTest()
-        assertNull("显式摘除后注册表不再持有（V39 运行时证据）", LanguageParserDefinitions.INSTANCE.forLanguage(SqlMapperLanguage))
+        assertNull("显式摘除后注册表不再持有（V39 运行时证据）", LanguageParserDefinitions.INSTANCE.forLanguage(SqlMapperLanguage.INSTANCE))
         // 幂等：重复摘除不抛
         SqlMapperParserDefinition.unregisterForTest()
     }
@@ -60,22 +60,22 @@ class SqlMapperParserDefinitionRegistrationTest : BasePlatformTestCase() {
 
         // 反向对照（修复前形态）：裸注册，无摘除挂钩——dispose 无关 parent 后仍在（钉住形态）
         val pinned = SqlMapperParserDefinition()
-        registry.addExplicitExtension(SqlMapperLanguage, pinned)
+        registry.addExplicitExtension(SqlMapperLanguage.INSTANCE, pinned)
         val unrelated = Disposer.newDisposable()
         Disposer.dispose(unrelated)
         try {
-            assertNotNull("裸注册不被任何 parent dispose 摘除（修复前钉住形态）", registry.forLanguage(SqlMapperLanguage))
+            assertNotNull("裸注册不被任何 parent dispose 摘除（修复前钉住形态）", registry.forLanguage(SqlMapperLanguage.INSTANCE))
         } finally {
-            registry.removeExplicitExtension(SqlMapperLanguage, pinned)
+            registry.removeExplicitExtension(SqlMapperLanguage.INSTANCE, pinned)
         }
-        assertNull(registry.forLanguage(SqlMapperLanguage))
+        assertNull(registry.forLanguage(SqlMapperLanguage.INSTANCE))
 
         // 修复形态：三参挂靠——parent dispose 即摘（卸载时由插件应用级宿主承担 parent 角色）
         val parent = Disposer.newDisposable()
         val hooked = SqlMapperParserDefinition()
-        registry.addExplicitExtension(SqlMapperLanguage, hooked, parent)
-        assertNotNull("挂靠注册在位", registry.forLanguage(SqlMapperLanguage))
+        registry.addExplicitExtension(SqlMapperLanguage.INSTANCE, hooked, parent)
+        assertNotNull("挂靠注册在位", registry.forLanguage(SqlMapperLanguage.INSTANCE))
         Disposer.dispose(parent)
-        assertNull("parent dispose → 级联摘除（容器卸载同路径）", registry.forLanguage(SqlMapperLanguage))
+        assertNull("parent dispose → 级联摘除（容器卸载同路径）", registry.forLanguage(SqlMapperLanguage.INSTANCE))
     }
 }

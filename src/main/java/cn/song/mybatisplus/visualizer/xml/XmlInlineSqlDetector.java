@@ -126,9 +126,23 @@ public final class XmlInlineSqlDetector {
         }
     }
 
-    /** 首段非空文本的截断前缀（遍历直属文本段，剥 CDATA 包裹、跳过纯空白段；无 → null）。 */
+    /**
+     * gutter 快速路径合并开关（F19：一次设置服务查找取两布尔；master 语义锚点，
+     * F51 起生产路径不再调用，函数保留供既有测试使用）。
+     */
+    public static boolean gutterFastPathEnabled() {
+        try { // Kotlin runCatching.getOrDefault(true) 语义
+            PluginSettings.State s = PluginSettings.getInstance().getState();
+            return s.getXmlInlineSqlEnabled() && s.getShowGutterIcon();
+        } catch (Throwable ignored) {
+            return true;
+        }
+    }
+
+    /** 首段非空文本的截断前缀（遍历直属文本段，剥 CDATA 包裹、跳过纯空白段；无 → null）。
+     *  master 对应成员为 internal（Kotlin 同模块测试可访问），Java 侧按惯例放宽为 public。 */
     @Nullable
-    private static String firstNonBlankTextPrefix(@NotNull XmlTag tag) {
+    public static String firstNonBlankTextPrefix(@NotNull XmlTag tag) {
         for (PsiElement child : tag.getChildren()) {
             if (!(child instanceof XmlText text)) continue;
             String trimmed = XmlDirectText.unwrapCdata(text.getText()).trim();

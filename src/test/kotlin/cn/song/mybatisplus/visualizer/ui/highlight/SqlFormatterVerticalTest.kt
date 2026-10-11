@@ -468,7 +468,7 @@ class SqlFormatterVerticalTest {
               '123456'
             )
         """.trimIndent()
-        val disabled = SqlFormatter.formatVertical(input, annotatePairs = false)
+        val disabled = SqlFormatter.formatVertical(input, false)
         assertEquals("关闭标注应仅竖排：$disabled", expected, disabled)
         assertFalse("行尾不得残留对齐空格：$disabled", disabled.lines().any { it.endsWith(" ") })
         assertEquals("默认重载应等价显式 true", SqlFormatter.formatVertical(input), SqlFormatter.formatVertical(input, true))
@@ -491,7 +491,7 @@ class SqlFormatterVerticalTest {
               2
             )
         """.trimIndent()
-        assertEquals(expected, SqlFormatter.formatVertical(input, annotatePairs = false))
+        assertEquals(expected, SqlFormatter.formatVertical(input, false))
     }
 
     @Test
@@ -499,7 +499,7 @@ class SqlFormatterVerticalTest {
         // T-VPairAnno 边界（KDoc 幂等语义推论）：关闭后对已带标注文本再跑（仅直调可发生，
         // 面板恒从模型重建）——既有 `-- 列名` 按"用户行尾注释"规则归位保留而非剥离
         val annotated = SqlFormatter.formatVertical("insert into t (a, b) values (1, 2)")
-        val rerun = SqlFormatter.formatVertical(annotated, annotatePairs = false)
+        val rerun = SqlFormatter.formatVertical(annotated, false)
         assertEquals("既有标注应作为用户注释归位保留：$rerun", annotated, rerun)
     }
 

@@ -87,7 +87,7 @@ class SqlMapperInjectorWiringTest : BasePlatformTestCase() {
         var count = 0
         for (host in hosts) {
             manager.enumerateEx(host, file, false) { injectedPsi, places ->
-                if (injectedPsi.language == SqlMapperLanguage) count += places.size
+                if (injectedPsi.language == SqlMapperLanguage.INSTANCE) count += places.size
             }
         }
         return count
@@ -114,11 +114,11 @@ class SqlMapperInjectorWiringTest : BasePlatformTestCase() {
         val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
         val old = settings.state.xmlSynHiEnabled
         // F47 起闸门读快照（loadState 唯一刷新漏斗）——测试按生产契约经 loadState 切换
-        settings.loadState(settings.state.copy(xmlSynHiEnabled = false))
+        settings.loadState(settings.state.copy().apply { xmlSynHiEnabled = false })
         try {
             assertEquals("设置开关关闭 → shouldYield 让位 → 零注入位（反向验证）", 0, myLanguagePlaceCount(file))
         } finally {
-            settings.loadState(settings.state.copy(xmlSynHiEnabled = old))
+            settings.loadState(settings.state.copy().apply { xmlSynHiEnabled = old })
         }
     }
 

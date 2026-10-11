@@ -34,7 +34,7 @@ class EditorCopyShortcutsTest : BasePlatformTestCase() {
         try {
             val captured = mutableListOf<String>()
             var copiedFeedback = 0
-            EditorCopyShortcuts.install(ed, { captured.add(it) }, onCopied = { copiedFeedback++ })
+            EditorCopyShortcuts.install(ed, { captured.add(it) }, { copiedFeedback++ })
 
             val keyC = trigger(ed.component, "control C")
             val keyIns = trigger(ed.component, "control INSERT")
@@ -81,7 +81,7 @@ class EditorCopyShortcutsTest : BasePlatformTestCase() {
         val ed = editor("SELECT 2;")
         try {
             val captured = mutableListOf<String>()
-            EditorCopyShortcuts.install(ed, { captured.add(it) }, onCopied = null)
+            EditorCopyShortcuts.install(ed, { captured.add(it) }, null)
             trigger(ed.component, "control C")
             assertEquals(listOf("SELECT 2;"), captured)
         } finally {

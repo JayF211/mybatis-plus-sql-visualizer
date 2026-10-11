@@ -109,13 +109,13 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
         val old = settings.state.xmlSynHiEnabled
         var consulted = 0
         try {
-            settings.loadState(settings.state.copy(xmlSynHiEnabled = false))
+            settings.loadState(settings.state.copy().apply { xmlSynHiEnabled = false })
             withProbeSeam({ _, _ -> consulted++; true }) {
                 assertTrue(XmlSynHiGate.shouldYield(project, host))
             }
             assertEquals("开关关短路 → 探针零咨询", 0, consulted)
         } finally {
-            settings.loadState(settings.state.copy(xmlSynHiEnabled = old))
+            settings.loadState(settings.state.copy().apply { xmlSynHiEnabled = old })
         }
     }
 

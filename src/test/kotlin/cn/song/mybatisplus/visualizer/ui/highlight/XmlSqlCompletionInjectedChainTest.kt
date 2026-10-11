@@ -216,7 +216,7 @@ class XmlSqlCompletionInjectedChainTest : BasePlatformTestCase() {
     fun test_dumb态_FilterByDumbAwareness仍派发本贡献器() {
         DumbModeTestUtils.runInDumbModeSynchronously(project) {
             val consulted = CompletionContributor
-                .forLanguageHonorDumbness(SqlMapperLanguage, project)
+                .forLanguageHonorDumbness(SqlMapperLanguage.INSTANCE, project)
                 .any { it is XmlSqlCompletionContributor }
             assertTrue(
                 "dumb 态应仍派发 XmlSqlCompletionContributor（DumbAware 口径缺失时平台整链丢弃）",

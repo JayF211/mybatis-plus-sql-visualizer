@@ -21,7 +21,7 @@ import com.intellij.ui.components.JBLabel
 class NativeSearchTextFieldStructureTest : BasePlatformTestCase() {
 
     fun test嵌入列表含大小写与正则开关() {
-        val field = NativeSearchTextField(placeholderText = null, showRegex = true)
+        val field = NativeSearchTextField(null, true)
 
         val embedded = embeddedActions(field)
         val types = embedded.map { it.javaClass.simpleName }
@@ -32,7 +32,7 @@ class NativeSearchTextFieldStructureTest : BasePlatformTestCase() {
     fun test日志页形态_含大小写与正则开关() {
         // 组件级 showRegex=false 仍不挂 Regex（组件语义保持）；
         // SqlLogPanel 生产接线（showRegex=true + regexToggleForTest 缝）在 SqlLogPanelFilterTest 断言。
-        val field = NativeSearchTextField(placeholderText = null, showRegex = false)
+        val field = NativeSearchTextField(null, false)
 
         val embedded = embeddedActions(field)
         val types = embedded.map { it.javaClass.simpleName }
@@ -41,7 +41,7 @@ class NativeSearchTextFieldStructureTest : BasePlatformTestCase() {
     }
 
     fun test命中数读数_行内右侧标签_空文本隐藏() {
-        val field = NativeSearchTextField(placeholderText = null, showRegex = true)
+        val field = NativeSearchTextField(null, true)
         val label = statusLabelOf(field)
 
         assertFalse("初始应隐藏", label.isVisible)

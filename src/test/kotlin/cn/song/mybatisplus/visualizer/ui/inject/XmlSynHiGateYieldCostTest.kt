@@ -135,15 +135,15 @@ class XmlSynHiGateYieldCostTest : BasePlatformTestCase() {
         val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance()
         val old = settings.state.xmlSynHiEnabled
         try {
-            settings.loadState(settings.state.copy(xmlSynHiEnabled = false))
+            settings.loadState(settings.state.copy().apply { xmlSynHiEnabled = false })
             assertEquals("开关关 → 全族让位（快照已刷新）", true, XmlSynHiGate.shouldYield(project))
-            settings.loadState(settings.state.copy(xmlSynHiEnabled = true))
+            settings.loadState(settings.state.copy().apply { xmlSynHiEnabled = true })
             assertEquals(
                 "开关开（测试环境无平台注入器/无三方）→ 不让位（快照已刷新）",
                 false, XmlSynHiGate.shouldYield(project),
             )
         } finally {
-            settings.loadState(settings.state.copy(xmlSynHiEnabled = old))
+            settings.loadState(settings.state.copy().apply { xmlSynHiEnabled = old })
         }
     }
 }

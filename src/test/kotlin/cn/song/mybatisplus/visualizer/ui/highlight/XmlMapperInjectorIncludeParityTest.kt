@@ -102,13 +102,13 @@ class XmlMapperInjectorIncludeParityTest : BasePlatformTestCase() {
         for ((text, langs) in withInclude) {
             assertTrue(
                 "含 include 块的文本「$text」应注入 MpSqlMapper（与对照块平价，实际注入: $langs）",
-                langs.any { it == SqlMapperLanguage.id || it == "MpSqlMapper" },
+                langs.any { it == SqlMapperLanguage.INSTANCE.id || it == "MpSqlMapper" },
             )
         }
         for ((text, langs) in noInclude) {
             assertTrue(
                 "对照块文本「$text」应注入 MpSqlMapper（实际注入: $langs）",
-                langs.any { it == SqlMapperLanguage.id || it == "MpSqlMapper" },
+                langs.any { it == SqlMapperLanguage.INSTANCE.id || it == "MpSqlMapper" },
             )
         }
     }

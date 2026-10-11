@@ -172,7 +172,7 @@ class XmlSqlCompletionDispatchTest : BasePlatformTestCase() {
     fun test注入关闭_宿主XML形态补全_平台全链路产出候选() {
         val settings = PluginSettings.getInstance()
         val old = settings.state.xmlSynHiEnabled
-        settings.loadState(settings.state.copy(xmlSynHiEnabled = false))
+        settings.loadState(settings.state.copy().apply { xmlSynHiEnabled = false })
         try {
             val (file, caret) = openMapperWithCaret(mapperXml)
             assertInjectionAtCaret(file, caret, expected = false)
@@ -182,7 +182,7 @@ class XmlSqlCompletionDispatchTest : BasePlatformTestCase() {
                 strings.contains("DISTINCT"),
             )
         } finally {
-            settings.loadState(settings.state.copy(xmlSynHiEnabled = old))
+            settings.loadState(settings.state.copy().apply { xmlSynHiEnabled = old })
         }
     }
 
