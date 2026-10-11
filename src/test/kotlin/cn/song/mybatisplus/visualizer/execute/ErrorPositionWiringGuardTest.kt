@@ -31,7 +31,10 @@ class ErrorPositionWiringGuardTest {
      * 真实投递点全部显式传长度），非「接线漏」——按本守卫豁免惯例登记；桥形态一变即重新报违例。
      */
     private val exemptDeliveries = mapOf(
-        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to
+        // C11f-3：k2j 生产翻译把 deliverError（含 4 参缺省桥重载）随 master 的 Results.kt 拆分落
+        // DataSourceSelectorResultsKt.java（原登记在 DataSourceSelector.java——482 轮拆分后该文件已无
+        // deliverError 定义与桥体）；桥体内转发仍是缺省形态的机械转写，豁免理由不变。
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to
             "onErrorRich, onError, cause, message, null",
     )
 
@@ -53,11 +56,15 @@ class ErrorPositionWiringGuardTest {
      * （提交链三处 + 控制台历史三处）全部改走它，`buildInfo` 的直接调用在生产代码里只剩
      * `deliverError` 内部一处——扫描面若仍只认「提取调用」，这条守卫就退化成「只看一处」。
      * 故把投递调用一并纳入：**每个投递点都必须把被执行文本长度带进 `deliverError`**。
+     *
+     * C11f-3：k2j 生产为 Java 静态门面（`DataSourceSelectorResultsKt.deliverError(...)`）——
+     * 原负向后顾 `(?<![\w.])` 会把**限定调用**整族排除（ConsoleKt 三处投递点全部漏扫，
+     * deliveries 退化到只剩 ResultsKt 同文件裸调 3 处）。改允许任意限定前缀（同 forwardCallSite 口径）。
      */
-    private val deliveryCallSite = Regex("""(?<![\w.])deliverError\s*\(""")
+    private val deliveryCallSite = Regex("""((?:\w+\.)*deliverError)\s*\(""")
 
     /** 富通道转发点：`executeOnConsole(` 的每个调用都必须带 `onErrorRich`。 */
-    private val forwardCallSite = Regex("""(?<![\w.])executeOnConsole\s*\(""")
+    private val forwardCallSite = Regex("""(?<![\w.])((?:\w+\.)*executeOnConsole)\s*\(""")
 
     @Test
     fun `生产链位置提取调用都传了被执行文本长度`() {
@@ -122,7 +129,11 @@ class ErrorPositionWiringGuardTest {
                         continue
                     }
                     forwards++
-                    if (!args.contains("onErrorRich")) {
+                    // C11f-3：k2j 排队执行桥的转发实参是 `effectiveOnErrorRich` 局部变量
+                    // （Kotlin 具名实参 `onErrorRich = …` 翻译为位置实参承载，见
+                    // DataSourceSelectorConsoleKt 排队分支的 effective* 桥注释）——
+                    // 字面 substring 判据改按 `ErrorRich` 词根（同时覆盖 `onErrorRich` 直传形态）。
+                    if (!args.contains("ErrorRich")) {
                         offenders += "$rel:${lineOf(text, m.range.first)} executeOnConsole 未转发 onErrorRich" +
                             "——富通道在此断链，定位按钮永不出现"
                     }
