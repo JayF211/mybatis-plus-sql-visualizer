@@ -75,8 +75,11 @@ public final class HistorySqlLogPanelKt {
             return entries;
         }
         if (regexEnabled || q.startsWith(HISTORY_REGEX_PREFIX)) {
-            kotlin.text.Regex pattern = resolveHistoryRegex(
-                    q.substring(HISTORY_REGEX_PREFIX.length()), matchCase, memo);
+            // Kotlin removePrefix 语义：无前缀时原串返回（不得无条件 substring——短查询越界、
+            // 无前缀查询被切掉前 6 字符后按残串匹配，k2j 首轮 HistorySearchFilterTest 7 败根因）
+            String source = q.startsWith(HISTORY_REGEX_PREFIX)
+                    ? q.substring(HISTORY_REGEX_PREFIX.length()) : q;
+            kotlin.text.Regex pattern = resolveHistoryRegex(source, matchCase, memo);
             if (pattern != null) {
                 List<LogSqlEntry> result = new ArrayList<>();
                 for (LogSqlEntry entry : entries) {
