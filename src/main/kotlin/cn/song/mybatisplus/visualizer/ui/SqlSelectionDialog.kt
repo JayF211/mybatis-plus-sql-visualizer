@@ -152,12 +152,13 @@ class SqlSelectionDialog<T>(
 
 
 /**
- * 实体候选副标题：`包路径/文件名`——副标题只放文件名时，不同包/模块的同名实体
+ * 实体候选副标题：完整限定类名——副标题只放文件名时，不同包/模块的同名实体
  * （如多模块 demo 里两处 `User.java`）完全无法区分（20261011 录制实测）。
- * 非 Java 文件或包名为空时回退原文件名。
+ * qualifiedName 不可得时回退 `包路径/文件名`，再不行退文件名。
  */
 internal fun entityCandidateSubtitle(psiClass: PsiClass): String {
+    psiClass.qualifiedName?.takeIf { it.isNotBlank() }?.let { return it }
     val file = psiClass.containingFile ?: return ""
-    val pkg = (file as? PsiJavaFile)?.packageName?.takeIf { it.isNotBlank() }?.let { "$it/" } ?: ""
+    val pkg = (file as? PsiJavaFile)?.packageName?.takeIf { it.isNotBlank() }?.let { "$it." } ?: ""
     return pkg + file.name
 }
