@@ -95,7 +95,11 @@ public final class DialectRegistry {
         if (auto == null && settings != null) auto = settings.getDialectAuto();
         if (auto == null) auto = true;
         if (!auto) return byName(manualName);
-        if (project == null) return byName(manualName);
+        // O-93：无推断通道时 auto 回退 MySQL，手动残值不参与——旧形态此处返回 byName(manualName)，
+        // 等于让 auto 模式被手动残值劫持（曾设过手动方言又切回智能推断的环境会把残值泄漏给 psi
+        // 渲染链；PaginationSimTest 泄漏 "Oracle" 致 SqlPreviewServiceBatchTest 5 例间歇爆发实证）。
+        // auto=false 的手动语义不变（仍取手动值）。
+        if (project == null) return MySqlDialect.INSTANCE;
         // T-PS5-04：agentUrl 读轻量持有者（不再经 AgentManager.getInstance 触发项目级服务实例化
         // ——那是「预览一次即驻留 executor+monitor 双守护线程」的根因）；URL 由会话生命周期点回写，
         // 推断优先级语义（agent URL > 数据源 URL > null 回退）逐字不变。
