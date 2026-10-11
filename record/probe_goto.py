@@ -10,7 +10,7 @@ import mss
 import pyautogui
 
 LINE = sys.argv[1] if len(sys.argv) > 1 else "110"
-TAB = (412, 102)          # 编辑器页签 UserServiceImpl.java
+TAB = (int(sys.argv[3]), int(sys.argv[4])) if len(sys.argv) > 4 else (412, 102)  # 编辑器页签（默认 UserServiceImpl.java）
 OUT = sys.argv[2] if len(sys.argv) > 2 else "record/perf/pv1.png"
 
 pyautogui.FAILSAFE = False
