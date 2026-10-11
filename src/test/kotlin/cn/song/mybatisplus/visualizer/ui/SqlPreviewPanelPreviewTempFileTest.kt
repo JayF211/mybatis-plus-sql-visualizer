@@ -79,7 +79,7 @@ class SqlPreviewPanelPreviewTempFileTest : BasePlatformTestCase() {
 
     /** 驱动一次真实装配，返回编辑器文档落在的项目内临时文件（降级分支返回 null）。 */
     private fun assembleAndCaptureFile(panel: SqlPreviewPanel): File {
-        panel.showResult(result())
+        SqlPreviewPanelResultViewKt.showResult(panel, result())
         UIUtil.dispatchAllInvocationEvents()
         val doc = panel.editorForTest()?.document
         assertNotNull("应已创建预览编辑器", doc)
@@ -107,7 +107,7 @@ class SqlPreviewPanelPreviewTempFileTest : BasePlatformTestCase() {
                 Regex("^mpsql-preview-\\d+-\\d+\\.sql$").matches(f.name),
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -119,7 +119,7 @@ class SqlPreviewPanelPreviewTempFileTest : BasePlatformTestCase() {
             assertTrue("首次装配的临时文件应存在：${first.path}", first.isFile)
 
             // clear() = releaseEditor（回收本面板临时文件）+ 重新预热（新 await、新文件名）
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             awaitPrewarm(panel)
             val second = assembleAndCaptureFile(panel)
 
@@ -132,7 +132,7 @@ class SqlPreviewPanelPreviewTempFileTest : BasePlatformTestCase() {
             assertFalse("上一轮装配的临时文件应在 clear() 时被回收，实际仍在：${first.path}", first.exists())
             assertTrue("当前装配的临时文件应存在：${second.path}", second.isFile)
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -152,7 +152,7 @@ class SqlPreviewPanelPreviewTempFileTest : BasePlatformTestCase() {
             val baseline = previewDirTempFiles().size
             val seen = mutableListOf<File>()
             repeat(3) {
-                panel.clear()
+                SqlPreviewPanelSqlViewKt.clear(panel)
                 awaitPrewarm(panel)
                 val cur = assembleAndCaptureFile(panel)
                 // 本轮装配前，此前每一轮的文件都应已被回收（唯一名 + 面板生命周期删除）
@@ -169,7 +169,7 @@ class SqlPreviewPanelPreviewTempFileTest : BasePlatformTestCase() {
             )
             assertEquals("目录里留下的应是当前这一轮的临时文件", seen.last().path, after.singleOrNull()?.path ?: seen.last().path)
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -216,7 +216,7 @@ class SqlPreviewPanelPreviewTempFileTest : BasePlatformTestCase() {
                 SqlPreviewPanel.previewDialectMappingTarget(next!!),
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 }

@@ -198,8 +198,8 @@ class PaginationSimTest : BasePlatformTestCase() {
      */
     fun testDevAcceptFix03_分页渲染段两条语句各自分号收尾() {
         configureXmlMapperWithPageParam()
-        val result = XmlPreviewService.preview(USER_MAPPER_XML, "selectPageUsers", project)
-        assertNotNull("前置：应产出 COUNT 包裹", result!!.countSql)
+        val result = XmlPreviewService.INSTANCE.preview(USER_MAPPER_XML, "selectPageUsers", project)
+        assertNotNull("前置：应产出 COUNT 包裹", result!!.getCountSql())
         val settings = PluginSettings.getInstance()
         val oldFormat = runCatching { settings.state.formatSql }.getOrDefault(true)
         val panel = SqlPreviewPanel(project)
@@ -207,7 +207,7 @@ class PaginationSimTest : BasePlatformTestCase() {
         try {
             // ① raw 形态：主 SQL 尾分号 + 注释头 + COUNT 语句尾分号（逐字）
             runCatching { settings.state.formatSql = false }
-            panel.showResult(result)
+            SqlPreviewPanelResultViewKt.showResult(panel, result)
             com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
             val raw = panel.lastRenderedSqlForTest()
             assertNotNull("面板应产出渲染文本", raw)
@@ -231,14 +231,14 @@ class PaginationSimTest : BasePlatformTestCase() {
         } finally {
             runCatching { settings.state.formatSql = oldFormat }
             // 面板清场后再释放（组件不在容器，removeNotify 不触发，须先 clear 走 releaseEditor）
-            runCatching { panel.clear() }
+            runCatching { SqlPreviewPanelSqlViewKt.clear(panel) }
             runCatching { Disposer.dispose(panel) }
         }
     }
 
     fun testXmlStatementWithMapperPageParamAppendsLimitAndCount() {
         configureXmlMapperWithPageParam()
-        val result = XmlPreviewService.preview(USER_MAPPER_XML, "selectPageUsers", project)
+        val result = XmlPreviewService.INSTANCE.preview(USER_MAPPER_XML, "selectPageUsers", project)
         assertTrue(
             "mapper 方法带 Page 形参 → 语句预览应追加分页 LIMIT：${result.sql}",
             result.sql.contains("LIMIT ?, ?"),
@@ -246,7 +246,7 @@ class PaginationSimTest : BasePlatformTestCase() {
         assertEquals(
             "LIMIT 行存入 paginationLimitLine（面板模型级重渲染回带用，20261008 验收缺陷 #1）",
             "LIMIT ?, ?",
-            result.paginationLimitLine,
+            result.getPaginationLimitLine(),
         )
         assertEquals(
             "LIMIT 占位参数登记（offset 公式 + size）",
@@ -256,7 +256,7 @@ class PaginationSimTest : BasePlatformTestCase() {
         assertEquals(
             "分页 COUNT 包裹（MP 3.5.17 基础形态，包裹不含 LIMIT 的原语句）",
             "SELECT COUNT(*) FROM (SELECT id, name FROM t_user WHERE name = ?) TOTAL",
-            result.countSql,
+            result.getCountSql(),
         )
     }
 
@@ -278,9 +278,9 @@ class PaginationSimTest : BasePlatformTestCase() {
             </mapper>
         """.trimIndent()
         myFixture.addFileToProject("com/example/OrderMapper.xml", xmlText)
-        val result = XmlPreviewService.preview(xmlText, "selectOrders", project)
+        val result = XmlPreviewService.INSTANCE.preview(xmlText, "selectOrders", project)
         assertTrue("IPage 形参同样追加分页：${result.sql}", result.sql.contains("LIMIT ?, ?"))
-        assertNotNull("IPage 形参同样产出 COUNT 包裹", result.countSql)
+        assertNotNull("IPage 形参同样产出 COUNT 包裹", result.getCountSql())
     }
 
     fun testXmlStatementWithoutPageParamStaysUnlimited() {
@@ -301,13 +301,13 @@ class PaginationSimTest : BasePlatformTestCase() {
             </mapper>
         """.trimIndent()
         myFixture.addFileToProject("com/example/PlainMapper.xml", xmlText)
-        val result = XmlPreviewService.preview(xmlText, "selectUsers", project)
+        val result = XmlPreviewService.INSTANCE.preview(xmlText, "selectUsers", project)
         assertEquals(
             "无 Page 形参不追加分页",
             "SELECT id FROM t_user WHERE name = ?",
             result.sql.trim(),
         )
-        assertNull("无分页不产 COUNT 包裹", result.countSql)
+        assertNull("无分页不产 COUNT 包裹", result.getCountSql())
     }
 
     fun testXmlStatementWithHandWrittenLimitNotDuplicated() {
@@ -329,13 +329,13 @@ class PaginationSimTest : BasePlatformTestCase() {
             </mapper>
         """.trimIndent()
         myFixture.addFileToProject("com/example/LimitMapper.xml", xmlText)
-        val result = XmlPreviewService.preview(xmlText, "selectTop", project)
+        val result = XmlPreviewService.INSTANCE.preview(xmlText, "selectTop", project)
         assertEquals(
             "手写 LIMIT 不重复追加（LIMIT 恰好一次）",
             1,
             Regex("(?i)\\bLIMIT\\b").findAll(result.sql).count(),
         )
-        assertNull("手写 LIMIT 语句不产模拟 COUNT（预览按原语句语义）", result.countSql)
+        assertNull("手写 LIMIT 语句不产模拟 COUNT（预览按原语句语义）", result.getCountSql())
     }
 
     fun testXmlUpdateStatementWithPageParamNoLimit() {
@@ -356,9 +356,9 @@ class PaginationSimTest : BasePlatformTestCase() {
             </mapper>
         """.trimIndent()
         myFixture.addFileToProject("com/example/UpdMapper.xml", xmlText)
-        val result = XmlPreviewService.preview(xmlText, "touch", project)
+        val result = XmlPreviewService.INSTANCE.preview(xmlText, "touch", project)
         assertTrue("UPDATE 不追加分页：${result.sql}", !result.sql.contains("LIMIT"))
-        assertNull(result.countSql)
+        assertNull(result.getCountSql())
     }
 
     // ------------------------------------------------------------------
@@ -379,12 +379,12 @@ class PaginationSimTest : BasePlatformTestCase() {
         )
         val annotation = PsiTreeUtil.findChildOfType(myFixture.file, com.intellij.psi.PsiAnnotation::class.java)
         assertNotNull(annotation)
-        val result = AnnotationSqlPreviewService.preview(annotation!!, project)
+        val result = AnnotationSqlPreviewService.INSTANCE.preview(annotation!!, project)
         assertTrue("注解语句带 Page 形参应追加分页：${result.sql}", result.sql.contains("LIMIT ?, ?"))
         assertEquals(
             "注解路径同样产出 COUNT 包裹",
             "SELECT COUNT(*) FROM (SELECT id FROM t_user WHERE name = ?) TOTAL",
-            result.countSql,
+            result.getCountSql(),
         )
     }
 
@@ -424,7 +424,7 @@ class PaginationSimTest : BasePlatformTestCase() {
         assertEquals(
             "COUNT 包裹按 D1=A 附第二条目（D2=A 基础形态）",
             "SELECT COUNT(*) FROM (SELECT id FROM device_info_entity WHERE id = 1001) TOTAL",
-            result.countSql,
+            result.getCountSql(),
         )
     }
 
@@ -449,7 +449,7 @@ class PaginationSimTest : BasePlatformTestCase() {
         val result = newService().preview(anchor())
         assertNotNull(result)
         assertTrue("LIMIT 仍追加：${result!!.compactSql}", result.compactSql.endsWith("LIMIT 10, 10"))
-        assertNull("searchCount=false 不产 COUNT 包裹", result.countSql)
+        assertNull("searchCount=false 不产 COUNT 包裹", result.getCountSql())
     }
 
     fun testCountAndExistsConsumedProduceNoCountWrap() {
@@ -472,7 +472,7 @@ class PaginationSimTest : BasePlatformTestCase() {
         )
         val result = newService().preview(anchor())
         assertNotNull(result)
-        assertNull("count 消费不产分页 COUNT 包裹", result!!.countSql)
+        assertNull("count 消费不产分页 COUNT 包裹", result!!.getCountSql())
     }
 
     fun testSelectListWithPageProducesCountSql() {
@@ -496,7 +496,7 @@ class PaginationSimTest : BasePlatformTestCase() {
         val result = newService().preview(anchor())
         assertEquals(
             "SELECT COUNT(*) FROM (SELECT id FROM device_info_entity WHERE id = 1001) TOTAL",
-            result!!.countSql,
+            result!!.getCountSql(),
         )
     }
 
@@ -522,7 +522,7 @@ class PaginationSimTest : BasePlatformTestCase() {
         )
         val result = newService().preview(anchor())
         assertNotNull(result)
-        assertNull("开关关闭不产 COUNT 包裹", result!!.countSql)
+        assertNull("开关关闭不产 COUNT 包裹", result!!.getCountSql())
     }
 
     // ------------------------------------------------------------------
@@ -551,14 +551,14 @@ class PaginationSimTest : BasePlatformTestCase() {
         val result = newService().preview(anchor())
         assertNotNull(result)
         assertTrue("子开关关 LIMIT 仍追加：${result!!.compactSql}", result.compactSql.endsWith("LIMIT 10, 10"))
-        assertNull("子开关关不产 COUNT 包裹", result.countSql)
+        assertNull("子开关关不产 COUNT 包裹", result.getCountSql())
     }
 
     fun testCountSubSwitchOffKeepsLimitDropsCountOnSharedPath() {
         // 子开关关（父开）：applyPaginationShared（XML/注解共享）LIMIT 行照旧、countSql=null
         PluginSettings.getInstance().state.paginationCountEnabled = false
         configureXmlMapperWithPageParam()
-        val result = XmlPreviewService.preview(USER_MAPPER_XML, "selectPageUsers", project)
+        val result = XmlPreviewService.INSTANCE.preview(USER_MAPPER_XML, "selectPageUsers", project)
         assertTrue(
             "子开关关 LIMIT 行仍追加：${result.sql}",
             result.sql.contains("LIMIT ?, ?"),
@@ -566,9 +566,9 @@ class PaginationSimTest : BasePlatformTestCase() {
         assertEquals(
             "LIMIT 行存入 paginationLimitLine（面板模型级重渲染回带不受子开关影响）",
             "LIMIT ?, ?",
-            result.paginationLimitLine,
+            result.getPaginationLimitLine(),
         )
-        assertNull("子开关关不产 COUNT 包裹", result.countSql)
+        assertNull("子开关关不产 COUNT 包裹", result.getCountSql())
     }
 
     fun testParentSwitchOffOverridesCountSubSwitchOn() {
@@ -593,15 +593,15 @@ class PaginationSimTest : BasePlatformTestCase() {
         )
         val wrapperResult = newService().preview(anchor())
         assertNotNull(wrapperResult)
-        assertNull("父开关优先：Wrapper 链不产 COUNT", wrapperResult!!.countSql)
+        assertNull("父开关优先：Wrapper 链不产 COUNT", wrapperResult!!.getCountSql())
 
         configureXmlMapperWithPageParam()
-        val xmlResult = XmlPreviewService.preview(USER_MAPPER_XML, "selectPageUsers", project)
+        val xmlResult = XmlPreviewService.INSTANCE.preview(USER_MAPPER_XML, "selectPageUsers", project)
         assertTrue(
             "父开关优先：XML 路径不追加 LIMIT：${xmlResult.sql}",
             !xmlResult.sql.contains("LIMIT"),
         )
-        assertNull("父开关优先：XML 路径不产 COUNT", xmlResult.countSql)
+        assertNull("父开关优先：XML 路径不产 COUNT", xmlResult.getCountSql())
     }
 
     // ------------------------------------------------------------------
@@ -674,14 +674,14 @@ class PaginationSimTest : BasePlatformTestCase() {
         assertEquals(
             "无手写 LIMIT 时应回带服务端 LIMIT 行",
             base + "\nLIMIT ?, ?",
-            appendPaginationLimitLine(base, "LIMIT ?, ?"),
+            SqlPreviewPanelTextKt.appendPaginationLimitLine(base, "LIMIT ?, ?"),
         )
 
         // 守卫 A：baseSql 已含 LIMIT（手写语句）不重复追加（V13c 保守口径）
         val withLimit = base + " LIMIT 0, 20"
-        assertEquals("已含手写 LIMIT 不重复追加", withLimit, appendPaginationLimitLine(withLimit, "LIMIT ?, ?"))
+        assertEquals("已含手写 LIMIT 不重复追加", withLimit, SqlPreviewPanelTextKt.appendPaginationLimitLine(withLimit, "LIMIT ?, ?"))
 
         // 守卫 B：无分页（limitLine=null）原样返回
-        assertEquals("无分页原样返回", base, appendPaginationLimitLine(base, null))
+        assertEquals("无分页原样返回", base, SqlPreviewPanelTextKt.appendPaginationLimitLine(base, null))
     }
 }

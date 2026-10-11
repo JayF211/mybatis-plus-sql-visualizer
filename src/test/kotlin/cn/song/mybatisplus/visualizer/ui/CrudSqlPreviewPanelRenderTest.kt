@@ -28,12 +28,12 @@ class CrudSqlPreviewPanelRenderTest : BasePlatformTestCase() {
     private fun renderOnEdt(kind: CrudKind): SqlPreviewPanel {
         val stmt = CrudSqlGenerator.generate(spec()).first { it.kind == kind }
         val panel = SqlPreviewPanel(project)
-        panel.showResult(stmt.result)
+        SqlPreviewPanelResultViewKt.showResult(panel, stmt.result)
         return panel
     }
 
     private fun disposeQuietly(panel: SqlPreviewPanel) {
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
         panel.dispose()
     }
 
@@ -67,7 +67,7 @@ class CrudSqlPreviewPanelRenderTest : BasePlatformTestCase() {
     fun testInMemoryPreviewPsiAvailableAsFallback() {
         val panel = SqlPreviewPanel(project)
         try {
-            val psi = panel.createPreviewFileForTest(project, "SELECT 1 FROM user")
+            val psi = SqlPreviewPanelEditorLifecycleKt.createPreviewFileForTest(panel, project, "SELECT 1 FROM user")
             assertNotNull("内存 PSI 降级产物不应为 null", psi)
             assertTrue("内存 PSI 应含 SQL 文本", psi.text.contains("SELECT"))
         } finally {

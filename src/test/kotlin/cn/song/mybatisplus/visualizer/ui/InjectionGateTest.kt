@@ -37,7 +37,7 @@ class InjectionGateTest : BasePlatformTestCase() {
         // 面板内嵌 Editor 须先 clear 释放（headless 下无 removeNotify 兜底），否则 tearDown 报
         // "EditorImpl hasn't been released"（SqlPreviewPanelParamFieldTest 同款约定）
         panel?.let {
-            runCatching { it.clear() }
+            runCatching { SqlPreviewPanelSqlViewKt.clear(it) }
             runCatching { Disposer.dispose(it) }
         }
         panel = null
@@ -168,10 +168,10 @@ class InjectionGateTest : BasePlatformTestCase() {
     fun test含raw段执行_弹确认且NO中断() {
         interceptDialogs(Messages.NO)
         val p = newPanel()
-        p.showResult(xmlResult(dollarSelectMapper(), "s1"))
+        SqlPreviewPanelResultViewKt.showResult(p, xmlResult(dollarSelectMapper(), "s1"))
         assertEquals("前置：未执行时结果面板为空态", "EMPTY", panelState())
 
-        p.executeSql()
+        SqlPreviewPanelExecutionKt.executeSql(p)
 
         assertEquals("含 \${} 语句执行前应弹一次确认", 1, dialogMessages.size)
         assertEquals(
@@ -186,13 +186,13 @@ class InjectionGateTest : BasePlatformTestCase() {
     fun test含raw段执行_确认放行且本面板不再重复弹() {
         interceptDialogs(Messages.YES)
         val p = newPanel()
-        p.showResult(xmlResult(dollarSelectMapper(), "s1"))
+        SqlPreviewPanelResultViewKt.showResult(p, xmlResult(dollarSelectMapper(), "s1"))
 
-        p.executeSql()
+        SqlPreviewPanelExecutionKt.executeSql(p)
         assertEquals("首次执行应弹确认", 1, dialogMessages.size)
         assertProceeded("确认后放行")
 
-        p.executeSql()
+        SqlPreviewPanelExecutionKt.executeSql(p)
         assertEquals("会话级记忆：同面板再执行不重复弹", 1, dialogMessages.size)
         assertProceeded("二次执行照常放行")
     }
@@ -200,10 +200,10 @@ class InjectionGateTest : BasePlatformTestCase() {
     fun test含raw段执行_NO后再执行仍会弹() {
         interceptDialogs(Messages.NO, Messages.NO)
         val p = newPanel()
-        p.showResult(xmlResult(dollarSelectMapper(), "s1"))
+        SqlPreviewPanelResultViewKt.showResult(p, xmlResult(dollarSelectMapper(), "s1"))
 
-        p.executeSql()
-        p.executeSql()
+        SqlPreviewPanelExecutionKt.executeSql(p)
+        SqlPreviewPanelExecutionKt.executeSql(p)
 
         assertEquals("NO 不写会话记忆，再执行仍弹", 2, dialogMessages.size)
         assertEquals("两次都中止", "EMPTY", panelState())
@@ -212,9 +212,9 @@ class InjectionGateTest : BasePlatformTestCase() {
     fun test无raw段语句_零影响() {
         interceptDialogs(Messages.NO)
         val p = newPanel()
-        p.showResult(xmlResult(plainSelectMapper(), "s1"))
+        SqlPreviewPanelResultViewKt.showResult(p, xmlResult(plainSelectMapper(), "s1"))
 
-        p.executeSql()
+        SqlPreviewPanelExecutionKt.executeSql(p)
 
         assertEquals("无 raw 段不弹任何门", 0, dialogMessages.size)
         assertProceeded("行为逐字节不变（照常执行）")
@@ -223,9 +223,9 @@ class InjectionGateTest : BasePlatformTestCase() {
     fun test无raw段DML_仍只有DML二次确认() {
         interceptDialogs(Messages.YES)
         val p = newPanel()
-        p.showResult(plainResult("UPDATE t_biz SET a = 1 WHERE id = 1"))
+        SqlPreviewPanelResultViewKt.showResult(p, plainResult("UPDATE t_biz SET a = 1 WHERE id = 1"))
 
-        p.executeSql()
+        SqlPreviewPanelExecutionKt.executeSql(p)
 
         assertEquals("无 raw 段的 DML 只弹既有二次确认（闸门零新增弹窗）", 1, dialogMessages.size)
         assertFalse("DML 确认文案不含 raw 说明", dialogMessages[0].contains("\${}"))
@@ -235,9 +235,9 @@ class InjectionGateTest : BasePlatformTestCase() {
     fun testDML含raw段_闸门排在DML确认之后() {
         interceptDialogs(Messages.YES, Messages.NO)
         val p = newPanel()
-        p.showResult(xmlResult(dollarUpdateMapper(), "u1"))
+        SqlPreviewPanelResultViewKt.showResult(p, xmlResult(dollarUpdateMapper(), "u1"))
 
-        p.executeSql()
+        SqlPreviewPanelExecutionKt.executeSql(p)
 
         assertEquals("DML 确认 + \${} 确认各一次", 2, dialogMessages.size)
         assertTrue("第二道门才是 raw 说明：${dialogMessages[1]}", dialogMessages[1].contains("\${}"))
@@ -251,13 +251,13 @@ class InjectionGateTest : BasePlatformTestCase() {
     fun testEXPLAIN含raw段_同门控() {
         interceptDialogs(Messages.NO, Messages.YES)
         val p = newPanel()
-        p.showResult(xmlResult(dollarSelectMapper(), "s1"))
+        SqlPreviewPanelResultViewKt.showResult(p, xmlResult(dollarSelectMapper(), "s1"))
 
-        p.explainSql()
+        SqlPreviewPanelExecutionKt.explainSql(p)
         assertEquals("EXPLAIN 也真实执行，必须弹门", 1, dialogMessages.size)
         assertEquals("NO 中止（未进入执行）", "EMPTY", panelState())
 
-        p.explainSql()
+        SqlPreviewPanelExecutionKt.explainSql(p)
         assertEquals("EXPLAIN 确认框 NO 不写记忆，再点仍弹", 2, dialogMessages.size)
         assertProceeded("确认后放行")
     }
@@ -265,9 +265,9 @@ class InjectionGateTest : BasePlatformTestCase() {
     fun testEXPLAIN无raw段_不弹门() {
         interceptDialogs(Messages.NO)
         val p = newPanel()
-        p.showResult(xmlResult(plainSelectMapper(), "s1"))
+        SqlPreviewPanelResultViewKt.showResult(p, xmlResult(plainSelectMapper(), "s1"))
 
-        p.explainSql()
+        SqlPreviewPanelExecutionKt.explainSql(p)
 
         assertEquals("无 raw 段的 EXPLAIN 照旧免确认", 0, dialogMessages.size)
         assertProceeded("照常执行")
@@ -286,7 +286,7 @@ class InjectionGateTest : BasePlatformTestCase() {
 
     fun test复制产物_含raw段带标记注释() {
         val p = newPanel()
-        p.showResult(xmlResult(dollarSelectMapper(), "s1"))
+        SqlPreviewPanelResultViewKt.showResult(p, xmlResult(dollarSelectMapper(), "s1"))
         val editorSql = p.editorDocumentText()
         assertFalse("前置：编辑器已有 SQL 文本", editorSql.isNullOrBlank())
 
@@ -300,7 +300,7 @@ class InjectionGateTest : BasePlatformTestCase() {
 
     fun test复制产物_无raw段无标记() {
         val p = newPanel()
-        p.showResult(xmlResult(plainSelectMapper(), "s1"))
+        SqlPreviewPanelResultViewKt.showResult(p, xmlResult(plainSelectMapper(), "s1"))
 
         CopyExecutableSqlAction(project).execute(p)
 
@@ -325,7 +325,7 @@ class InjectionGateTest : BasePlatformTestCase() {
 
     fun test复制产物_占位符多于参数_头部如实标注() {
         val p = newPanel()
-        p.showResult(paramResult("SELECT * FROM t_biz WHERE a = ? AND b = ?", listOf("a")))
+        SqlPreviewPanelResultViewKt.showResult(p, paramResult("SELECT * FROM t_biz WHERE a = ? AND b = ?", listOf("a")))
 
         CopyExecutableSqlAction(project).execute(p)
 
@@ -338,7 +338,7 @@ class InjectionGateTest : BasePlatformTestCase() {
 
     fun test复制产物_位点数与参数条数相等_无标注() {
         val p = newPanel()
-        p.showResult(paramResult("SELECT * FROM t_biz WHERE a = ?", listOf("a")))
+        SqlPreviewPanelResultViewKt.showResult(p, paramResult("SELECT * FROM t_biz WHERE a = ?", listOf("a")))
 
         CopyExecutableSqlAction(project).execute(p)
 
@@ -350,7 +350,7 @@ class InjectionGateTest : BasePlatformTestCase() {
         // 面板已回填文本：已填参数的位置不再是 `?`，sources 仍是完整参数表——此向不等是常态，
         // 不应在产物里天天误报（T-PSG-04 有意的不对称口径）
         val p = newPanel()
-        p.showResult(paramResult("SELECT * FROM t_biz WHERE a = ? AND b = ?", listOf("a", "b")))
+        SqlPreviewPanelResultViewKt.showResult(p, paramResult("SELECT * FROM t_biz WHERE a = ? AND b = ?", listOf("a", "b")))
         p.paramFieldForTest(0)!!.text = "1"
 
         CopyExecutableSqlAction(project).execute(p)

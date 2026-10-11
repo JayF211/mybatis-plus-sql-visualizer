@@ -83,7 +83,7 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
     fun testBaselineZeroScansWholeText() {
         // 签名按 ERROR_SIGNATURES 连续子串匹配（"unknown column"），文本须真实含签名
         val seq = RecordingSeq("select id from t\nSQLException: Unknown column 'z' in 'field list'\ncheck the manual\n")
-        val err = DataSourceSelector.extractConsoleError(consoleOf(seq), LOG)
+        val err = DataSourceSelectorResultsKt.extractConsoleError(consoleOf(seq), LOG)
         assertTrue("baseline=0 应检出错误行", err != null && err.contains("Unknown column"))
         assertEquals("全文路径应物化整个序列一次", 1, seq.fullToStringCalls)
         assertEquals("baseline=0 不应走切片", 0, seq.sliceRanges.size)
@@ -98,7 +98,7 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
         val seq = RecordingSeq(oldPart + newPart)
         DataSourceSelector.consoleErrorBaseline = oldPart.length
 
-        val err = DataSourceSelector.extractConsoleError(consoleOf(seq), LOG)
+        val err = DataSourceSelectorResultsKt.extractConsoleError(consoleOf(seq), LOG)
 
         assertTrue("应检出本次执行的新错误", err != null && err.contains("Unknown column 'y'"))
         assertFalse("旧残留错误不得带入（M36.5.57 语义）", err?.contains("'x'") == true)
@@ -113,7 +113,7 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
         val text = "select id from t\nUnknown column 'x' in 'field list'\n"
         val seq = RecordingSeq(text)
         DataSourceSelector.consoleErrorBaseline = text.length
-        assertNull(DataSourceSelector.extractConsoleError(consoleOf(seq), LOG))
+        assertNull(DataSourceSelectorResultsKt.extractConsoleError(consoleOf(seq), LOG))
         assertEquals(0, seq.fullToStringCalls)
         assertEquals(0, seq.sliceRanges.size)
     }
@@ -123,7 +123,7 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
     fun testBaselineBeyondLengthReturnsNull() {
         val seq = RecordingSeq("select 1\n")
         DataSourceSelector.consoleErrorBaseline = 100
-        assertNull(DataSourceSelector.extractConsoleError(consoleOf(seq), LOG))
+        assertNull(DataSourceSelectorResultsKt.extractConsoleError(consoleOf(seq), LOG))
     }
 
     /** 新增段只有正常 SQL（无错误签名）：返 null——每拍早检不误报。 */
@@ -133,15 +133,15 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
         val newPart = "select 1\nfrom t where id = 1\n"
         val seq = RecordingSeq(oldPart + newPart)
         DataSourceSelector.consoleErrorBaseline = oldPart.length
-        assertNull(DataSourceSelector.extractConsoleError(consoleOf(seq), LOG))
+        assertNull(DataSourceSelectorResultsKt.extractConsoleError(consoleOf(seq), LOG))
         assertEquals("无错误时也只付切片成本", 0, seq.fullToStringCalls)
     }
 
     /** 反射链断链（非真 ConsoleView，如测试桩）：返 null 不抛。 */
     @Test
     fun testBrokenChainReturnsNull() {
-        assertNull(DataSourceSelector.extractConsoleError(FakeConsole(null), LOG))
-        assertNull(DataSourceSelector.extractConsoleError(null, LOG))
+        assertNull(DataSourceSelectorResultsKt.extractConsoleError(FakeConsole(null), LOG))
+        assertNull(DataSourceSelectorResultsKt.extractConsoleError(null, LOG))
     }
 
     // ==================== T-CEC-02：服务端错误判据覆盖（用户真机 P15） ====================
@@ -160,7 +160,7 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
 
     @Test
     fun testUserRealMachineMysqlSyntaxErrorDetected() {
-        val err = DataSourceSelector.extractConsoleError(consoleOf(RecordingSeq(USER_REAL_CASE)), LOG)
+        val err = DataSourceSelectorResultsKt.extractConsoleError(consoleOf(RecordingSeq(USER_REAL_CASE)), LOG)
         assertNotNull("MySQL 语法错必须命中（P15 真机漏检形态）", err)
         assertTrue("错误原文须在", err!!.contains("You have an error in your SQL syntax"))
         assertTrue("跨行报文的后继行须带上", err.contains("at line 5"))
@@ -178,7 +178,7 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
             "ORA-00942: table or view does not exist",
         )
         for (line in cases) {
-            val err = DataSourceSelector.extractConsoleError(consoleOf(RecordingSeq("select 1\n$line\n")), LOG)
+            val err = DataSourceSelectorResultsKt.extractConsoleError(consoleOf(RecordingSeq("select 1\n$line\n")), LOG)
             assertNotNull("应命中：$line", err)
             assertTrue("原文须保留：$line", err!!.contains(line.take(10)))
         }
@@ -188,14 +188,14 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
     @Test
     fun testBracketBearingSqlEchoNotReported() {
         val seq = RecordingSeq("select id from t where a in [1,2]\nselect 1 where b>1\n")
-        assertNull(DataSourceSelector.extractConsoleError(consoleOf(seq), LOG))
+        assertNull(DataSourceSelectorResultsKt.extractConsoleError(consoleOf(seq), LOG))
     }
 
     /** 反例：插件自己写进 Output 的回显行（writeConsoleOutput 的「执行失败: 」）不得被当成新错误。 */
     @Test
     fun testOwnFailureEchoNotReported() {
         val seq = RecordingSeq("执行失败: [42000][1064] You have an error in your SQL syntax\n")
-        assertNull(DataSourceSelector.extractConsoleError(consoleOf(seq), LOG))
+        assertNull(DataSourceSelectorResultsKt.extractConsoleError(consoleOf(seq), LOG))
     }
 
     /**
@@ -211,7 +211,7 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
         ).joinToString("\n")
         assertNull(
             "note 1003 行是 informational，不得当错误报红条",
-            DataSourceSelector.extractConsoleError(consoleOf(RecordingSeq(text)), LOG),
+            DataSourceSelectorResultsKt.extractConsoleError(consoleOf(RecordingSeq(text)), LOG),
         )
     }
 
@@ -222,7 +222,7 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
             "[2026-10-01 10:00:00] [HY000][1003] Note: /* select#1 */ select `id` from `user`",
             "[2026-10-01 10:00:01] [42000][1064] You have an error in your SQL syntax; check the manual",
         ).joinToString("\n")
-        val err = DataSourceSelector.extractConsoleError(consoleOf(RecordingSeq(text)), LOG)
+        val err = DataSourceSelectorResultsKt.extractConsoleError(consoleOf(RecordingSeq(text)), LOG)
         assertNotNull("真实语法错必须仍命中", err)
         assertTrue("错误原文须在", err!!.contains("You have an error in your SQL syntax"))
         assertFalse("note 行不得混入错误摘录", err.contains("1003"))
@@ -234,7 +234,7 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
         val seq = RecordingSeq("select 1\n[42S22][1003] Unknown column 'x' in 'field list'\n")
         assertNotNull(
             "非 HY000 的 1003 不在 note 排除面（排除不得吞掉结构性判据）",
-            DataSourceSelector.extractConsoleError(consoleOf(seq), LOG),
+            DataSourceSelectorResultsKt.extractConsoleError(consoleOf(seq), LOG),
         )
     }
 

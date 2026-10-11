@@ -43,7 +43,7 @@ class SqlPreviewPanelUiTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         try {
             val result = makeResult("SELECT id\nFROM tbl")
-            panel.showResult(result)
+            SqlPreviewPanelResultViewKt.showResult(panel, result)
             waitForEdt()
             assertEquals("showResult 应保存当前结果", result, panel.currentForTest())
             val editor = panel.editorForTest()
@@ -52,7 +52,7 @@ class SqlPreviewPanelUiTest : BasePlatformTestCase() {
             assertTrue("编辑器应渲染出 SELECT", text.contains("SELECT"))
             assertTrue("编辑器应渲染出 FROM tbl", text.contains("FROM tbl"))
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }
@@ -64,14 +64,14 @@ class SqlPreviewPanelUiTest : BasePlatformTestCase() {
             val cols = (1..400).joinToString(", ") { "col_$it" }
             val bigSql = "SELECT $cols\nFROM big_table WHERE id = 1"
             val result = makeResult(bigSql)
-            panel.showResult(result)
+            SqlPreviewPanelResultViewKt.showResult(panel, result)
             waitForEdt()
             val editorText = panel.editorForTest()?.document?.text ?: ""
             assertTrue("大结果应完整渲染进编辑器（含列 col_400）", editorText.contains("col_400"))
             assertTrue("大结果应含 FROM big_table", editorText.contains("FROM big_table"))
             assertEquals("current 应保存大结果", result, panel.currentForTest())
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }
@@ -87,7 +87,7 @@ class SqlPreviewPanelUiTest : BasePlatformTestCase() {
             val zero = targets.filter { it.preferredSize.width <= 0 || it.preferredSize.height <= 0 }
             assertEquals("非空标签与按钮应有正首选尺寸（无渲染塌缩）: ${zero.map { it::class.simpleName }}", 0, zero.size)
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }
@@ -120,7 +120,7 @@ class SqlPreviewPanelUiTest : BasePlatformTestCase() {
             assertNotNull("定位按钮组件应存在（仅隐藏）", btn)
             assertFalse("锚点不可解析时定位按钮不得可见", btn!!.isVisible)
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }
@@ -139,7 +139,7 @@ class SqlPreviewPanelUiTest : BasePlatformTestCase() {
             assertTrue("锚点可解析时定位按钮应可见", locateButton(panel)!!.isVisible)
         } finally {
             project.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor = null
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }
@@ -159,7 +159,7 @@ class SqlPreviewPanelUiTest : BasePlatformTestCase() {
             assertNull("源文件失效时定位动作应为 null", panel.errorLocateActionForTest())
         } finally {
             project.getService(SqlPreviewService::class.java).lastPreviewSourceAnchor = null
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }

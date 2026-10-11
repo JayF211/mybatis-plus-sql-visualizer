@@ -60,7 +60,7 @@ class ConsoleHostTest : BasePlatformTestCase() {
 
         // A3：释放后重挂条件成立（同一实例、尚未挂回）。hierarchy 监听可能已抢先调度重挂
         //（invokeLater 排队），故接受"显式重挂成功"或"已被监听重挂"两种结果。
-        val rehosted = panel.rehostConsoleForTest(console) || console.parent === host
+        val rehosted = SqlPreviewPanelExecutionKt.rehostConsoleForTest(panel, console) || console.parent === host
         assertTrue("console should be re-hosted after release", rehosted)
         assertSame("console should be back in host", host, console.parent)
     }
@@ -73,9 +73,9 @@ class ConsoleHostTest : BasePlatformTestCase() {
         panel.embedConsoleForTest(console)
 
         val foreign = JPanel()
-        assertFalse("foreign component must be refused", panel.rehostConsoleForTest(foreign))
+        assertFalse("foreign component must be refused", SqlPreviewPanelExecutionKt.rehostConsoleForTest(panel, foreign))
         assertNull(foreign.parent)
-        assertFalse("already-hosted console must not be re-processed", panel.rehostConsoleForTest(console))
+        assertFalse("already-hosted console must not be re-processed", SqlPreviewPanelExecutionKt.rehostConsoleForTest(panel, console))
         assertSame(panel.consoleHostForTest(), console.parent)
     }
 
@@ -120,7 +120,7 @@ class ConsoleHostTest : BasePlatformTestCase() {
         panel.embedConsoleForTest(console)
         val hostBefore = panel.consoleHostForTest()
 
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
         assertEquals("clear should empty host children", 0, panel.consoleHostForTest().componentCount)
         assertNull(panel.embeddedConsoleForTest())
 

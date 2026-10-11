@@ -49,29 +49,29 @@ class RollbackSqlPanelTest : BasePlatformTestCase() {
 
     fun testExecuteAdhocSqlRegistersSnapshotForUpdate() {
         val panel = newPanel()
-        panel.executeAdhocSql("UPDATE user SET name = 'x' WHERE id = 1", true)
+        SqlPreviewPanelExecutionKt.executeAdhocSql(panel, "UPDATE user SET name = 'x' WHERE id = 1", true)
         val entry = store().findBySql("UPDATE user SET name = 'x' WHERE id = 1")
         assertNotNull("UPDATE 执行前应登记快照条目", entry)
-        assertEquals("user", entry!!.targetTable)
-        assertEquals(listOf("name"), entry.setColumns)
-        assertEquals("SELECT * FROM user WHERE id = 1;", entry.snapshotSelectSql)
-        assertEquals(RollbackSnapshotStore.Status.REGISTERED, entry.status)
+        assertEquals("user", entry!!.targetTable())
+        assertEquals(listOf("name"), entry.setColumns())
+        assertEquals("SELECT * FROM user WHERE id = 1;", entry.snapshotSelectSql())
+        assertEquals(RollbackSnapshotStore.Status.REGISTERED, entry.status())
         panel.dispose()
     }
 
     fun testExecuteAdhocSqlRegistersSnapshotForDelete() {
         val panel = newPanel()
-        panel.executeAdhocSql("DELETE FROM log WHERE created < '2020-01-01'", true)
+        SqlPreviewPanelExecutionKt.executeAdhocSql(panel, "DELETE FROM log WHERE created < '2020-01-01'", true)
         val entry = store().findBySql("DELETE FROM log WHERE created < '2020-01-01'")
         assertNotNull("DELETE 执行前应登记快照条目", entry)
-        assertEquals("log", entry!!.targetTable)
-        assertTrue("DELETE 无 SET 列", entry.setColumns.isEmpty())
+        assertEquals("log", entry!!.targetTable())
+        assertTrue("DELETE 无 SET 列", entry.setColumns().isEmpty())
         panel.dispose()
     }
 
     fun testExecuteAdhocSqlSkipsRegistrationForQuery() {
         val panel = newPanel()
-        panel.executeAdhocSql("SELECT * FROM user WHERE id = 1")
+        SqlPreviewPanelExecutionKt.executeAdhocSql(panel, "SELECT * FROM user WHERE id = 1")
         assertEquals("查询类语句不登记快照", 0, store().size())
         panel.dispose()
     }
@@ -79,7 +79,7 @@ class RollbackSqlPanelTest : BasePlatformTestCase() {
     fun testExecuteAdhocSqlSkipsRegistrationForUnparsableDml() {
         val panel = newPanel()
         // MERGE 属 DML 关键字但无法解析出目标表——登记无意义，不应注册
-        panel.executeAdhocSql("MERGE INTO nothing", true)
+        SqlPreviewPanelExecutionKt.executeAdhocSql(panel, "MERGE INTO nothing", true)
         assertEquals("不可解析语句不登记快照", 0, store().size())
         panel.dispose()
     }
@@ -91,12 +91,12 @@ class RollbackSqlPanelTest : BasePlatformTestCase() {
             "SELECT * FROM user WHERE id = 1;", listOf("age"),
         )
         val rollbackSql = "UPDATE user SET age = 20 WHERE id = 1 AND age = 3"
-        panel.executeAdhocSql(rollbackSql, true, parent)
+        SqlPreviewPanelExecutionKt.executeAdhocSql(panel, rollbackSql, true, parent)
 
         val entry = store().findBySql(rollbackSql)
         assertNotNull("回滚语句（DML）也应登记", entry)
         assertEquals("回滚登记的 parentExecutionId 应指向被回滚的原执行（dbx rollback_of 语义）",
-            parent.executionId, entry!!.parentExecutionId)
+            parent.executionId(), entry!!.parentExecutionId())
         panel.dispose()
     }
 
@@ -104,7 +104,7 @@ class RollbackSqlPanelTest : BasePlatformTestCase() {
 
     fun testExecuteAdhocSqlFullChainFeedsResultPanel() {
         val panel = newPanel()
-        panel.executeAdhocSql("UPDATE user SET name = 'x' WHERE id = 1", true)
+        SqlPreviewPanelExecutionKt.executeAdhocSql(panel, "UPDATE user SET name = 'x' WHERE id = 1", true)
         // 测试 classpath 无 database jar：全链走 Community 静默降级，onError 回调置结果面板错误态
         assertTrue("结果面板应可见（执行反馈）", panel.resultPanelForTest().isVisible)
         panel.dispose()
@@ -117,7 +117,7 @@ class RollbackSqlPanelTest : BasePlatformTestCase() {
         assertTrue(panelA.consoleAttachedToMeForTest())
 
         val panelB = newPanel()
-        panelB.executeAdhocSql("UPDATE user SET name = 'x' WHERE id = 1", true)
+        SqlPreviewPanelExecutionKt.executeAdhocSql(panelB, "UPDATE user SET name = 'x' WHERE id = 1", true)
 
         // isPrepared 快路径在测试环境恒不可达（无 database 插件），全链分支不触碰他面控制台
         assertTrue("他人控制台不得被抢走", panelA.consoleAttachedToMeForTest())
@@ -129,7 +129,7 @@ class RollbackSqlPanelTest : BasePlatformTestCase() {
 
     fun testExecuteAdhocSqlIgnoresBlank() {
         val panel = newPanel()
-        panel.executeAdhocSql("   ")
+        SqlPreviewPanelExecutionKt.executeAdhocSql(panel, "   ")
         assertEquals(0, store().size())
         panel.dispose()
     }
@@ -172,7 +172,7 @@ class RollbackSqlPanelTest : BasePlatformTestCase() {
      * 随快照登记。
      *
      * 原断言 `testExecuteAdhocSqlRegistrationCarriesNoIdentityInfoYet` 把已知缺口写成了契约
-     * （`assertNull(entry.dialect)`）——而正是这个缺口让回滚侧 identity 包装在**生产链上永不触发**
+     * （`assertNull(entry.dialect())`）——而正是这个缺口让回滚侧 identity 包装在**生产链上永不触发**
      * （T-Round10 独立复核 blocker②，用户可感：SQL Server 上 DELETE 后粘贴快照生成回填 INSERT
      * 仍报 544）。T-IIR-01 接线后本用例反转：方言必须到位。
      *
@@ -181,18 +181,18 @@ class RollbackSqlPanelTest : BasePlatformTestCase() {
      */
     fun testExecuteAdhocSqlRegistrationCarriesDialectAfterO59TIIR01() {
         val panel = newPanel()
-        panel.executeAdhocSql("DELETE FROM log WHERE created < '2020-01-01'", true)
+        SqlPreviewPanelExecutionKt.executeAdhocSql(panel, "DELETE FROM log WHERE created < '2020-01-01'", true)
         val entry = store().findBySql("DELETE FROM log WHERE created < '2020-01-01'")!!
         assertNotNull(
             "生产登记点必须把当前生效方言随快照登记（否则回滚侧 identity 包装永不触发）",
-            entry.dialect,
+            entry.dialect(),
         )
         assertEquals(
             "方言应与 DialectRegistry.effective 同源（本用例为 light 工程默认值）",
             project.getService(SqlPreviewService::class.java).currentDialect().name,
-            entry.dialect!!.name,
+            entry.dialect()!!.name,
         )
-        assertTrue("T-IIR-02 未落地前 identity 列仍为空（表结构来源未接）", entry.identityColumns.isEmpty())
+        assertTrue("T-IIR-02 未落地前 identity 列仍为空（表结构来源未接）", entry.identityColumns().isEmpty())
         panel.dispose()
     }
 }

@@ -49,19 +49,19 @@ class SqlPreviewPanelPreparingPlaceholderTest : BasePlatformTestCase() {
     fun test等待期占位_显示后编辑区含提示文案() {
         val panel = SqlPreviewPanel(project)
         try {
-            panel.showPreparingPlaceholderForTest()
+            SqlPreviewPanelEditorLifecycleKt.showPreparingPlaceholderForTest(panel)
             waitForEdt()
             val texts = collectLabelTexts(panel.editorHolderForTest())
             assertTrue("编辑区应出现「准备中」占位，实得: $texts", texts.contains(preparingText()))
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
     fun test等待期占位_装配后被替换掉() {
         val panel = SqlPreviewPanel(project)
         try {
-            panel.showPreparingPlaceholderForTest()
+            SqlPreviewPanelEditorLifecycleKt.showPreparingPlaceholderForTest(panel)
             waitForEdt()
             assertTrue(
                 "前提：占位已显示",
@@ -69,14 +69,14 @@ class SqlPreviewPanelPreparingPlaceholderTest : BasePlatformTestCase() {
             )
 
             // 走真实装配收口（assemblePreviewEditor 的 editorHolder.removeAll() 即替换点）
-            panel.showResult(result())
+            SqlPreviewPanelResultViewKt.showResult(panel, result())
             waitForEdt()
 
             val texts = collectLabelTexts(panel.editorHolderForTest())
             assertFalse("装配后占位必须已被替换掉，实得: $texts", texts.contains(preparingText()))
             assertTrue("装配后编辑区应已有编辑器组件", panel.editorHolderForTest().componentCount > 0)
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 }

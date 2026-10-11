@@ -152,14 +152,14 @@ class EditorWhitespaceSettingsTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         try {
             state.editorShowWhitespaces = false
-            panel.showResult(previewResult())
+            SqlPreviewPanelResultViewKt.showResult(panel, previewResult())
             val offEditor = panel.editorForTest()
             assertNotNull("预览面板应挂载编辑器", offEditor)
             val offText = offEditor!!.document.text
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
 
             state.editorShowWhitespaces = true
-            panel.showResult(previewResult())
+            SqlPreviewPanelResultViewKt.showResult(panel, previewResult())
             val onEditor = panel.editorForTest()
             assertNotNull("clear 后二次 showResult 应重建编辑器", onEditor)
             assertTrue(
@@ -172,7 +172,7 @@ class EditorWhitespaceSettingsTest : BasePlatformTestCase() {
                 onEditor.document.text,
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             state.editorShowWhitespaces = old
         }
     }

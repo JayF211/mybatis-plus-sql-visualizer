@@ -49,8 +49,8 @@ class ParamSchemeManagerDialogTest : BasePlatformTestCase() {
         val d = ParamSchemeManagerDialog(
             project,
             cache,
-            snapshotProvider = { snapshotStub },
-            onSchemesChanged = { changedCount++ },
+            { snapshotStub },
+            { changedCount++ },
         )
         dialog = d
         return d

@@ -27,7 +27,7 @@ class SqlPreviewPanelEmptyHintTest : BasePlatformTestCase() {
                 hint != "panel.preview.emptyHint",
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 }

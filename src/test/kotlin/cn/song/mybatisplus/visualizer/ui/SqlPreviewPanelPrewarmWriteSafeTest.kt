@@ -146,11 +146,11 @@ class SqlPreviewPanelPrewarmWriteSafeTest : BasePlatformTestCase() {
                 val registered = await!!.scheduleOnce(
                     {
                         callbackRan = true
-                        panel.showResult(result())
+                        SqlPreviewPanelResultViewKt.showResult(panel, result())
                     },
                     {
                         callbackRan = true
-                        panel.showResult(result())
+                        SqlPreviewPanelResultViewKt.showResult(panel, result())
                     },
                 )
                 assertTrue("首次注册应生效（幂等门未被先前调用占位）", registered)
@@ -190,7 +190,7 @@ class SqlPreviewPanelPrewarmWriteSafeTest : BasePlatformTestCase() {
                 doc.text.contains("SELECT"),
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -272,7 +272,7 @@ class SqlPreviewPanelPrewarmWriteSafeTest : BasePlatformTestCase() {
                 rec.writeUnsafeHits().isEmpty(),
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 

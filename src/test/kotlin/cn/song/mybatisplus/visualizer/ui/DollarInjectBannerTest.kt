@@ -101,7 +101,7 @@ class DollarInjectBannerTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         val banner = panel.degradationBannerForTest()
         try {
-            panel.showResult(dollarXmlResult())
+            SqlPreviewPanelResultViewKt.showResult(panel, dollarXmlResult())
             val kind = banner.kindForTest()
             if (kind == DegradationBanner.Kind.DEGRADED) {
                 // headless 沙盒预览降级链常驻（内存 PSI 层也亮横幅）——DOLLAR_INJECT 让位属
@@ -115,7 +115,7 @@ class DollarInjectBannerTest : BasePlatformTestCase() {
             )
             assertTrue(banner.dismissVisibleForTest())
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -132,7 +132,7 @@ class DollarInjectBannerTest : BasePlatformTestCase() {
             val model = XmlPreviewModel.from(parsed.statements.single(), parsed.errors)
             val rendered = model.renderSql()
             assertEquals("前置：无 `\${}` 计数为 0", 0, rendered.dollarSubstitutions)
-            panel.showResult(
+            SqlPreviewPanelResultViewKt.showResult(panel, 
                 PreviewResult(
                     rendered.sql,
                     rendered.sql,
@@ -161,7 +161,7 @@ class DollarInjectBannerTest : BasePlatformTestCase() {
                 banner.kindForTest() != DegradationBanner.Kind.DOLLAR_INJECT,
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -169,14 +169,14 @@ class DollarInjectBannerTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         val banner = panel.degradationBannerForTest()
         try {
-            panel.showResult(dollarXmlResult(warning = "解析失败"))
+            SqlPreviewPanelResultViewKt.showResult(panel, dollarXmlResult(warning = "解析失败"))
             assertTrue(
                 "警示在场 → 直替信息提示让位（${banner.kindForTest()}）",
                 banner.kindForTest() == DegradationBanner.Kind.RENDER_WARNING ||
                     banner.kindForTest() == DegradationBanner.Kind.DEGRADED,
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -184,7 +184,7 @@ class DollarInjectBannerTest : BasePlatformTestCase() {
         val panel1 = SqlPreviewPanel(project)
         val panel2 = SqlPreviewPanel(project)
         try {
-            panel1.showResult(dollarXmlResult())
+            SqlPreviewPanelResultViewKt.showResult(panel1, dollarXmlResult())
             if (panel1.degradationBannerForTest().kindForTest() != DegradationBanner.Kind.DOLLAR_INJECT) {
                 // headless 降级链常驻 → 直替横幅未挂起，无 ✕ 可点；会话记忆门控在
                 // updateMeta 分支内，✕ 回调链路由组件级 test直替横幅_关闭回调触发 覆盖
@@ -193,18 +193,18 @@ class DollarInjectBannerTest : BasePlatformTestCase() {
             panel1.degradationBannerForTest().clickDismissForTest()
             assertFalse("✕ 后当前横幅隐藏", panel1.degradationBannerForTest().isVisible)
             // 会话级记忆：新面板同语句不再弹（companion 级，跨面板实例）
-            panel2.showResult(dollarXmlResult())
+            SqlPreviewPanelResultViewKt.showResult(panel2, dollarXmlResult())
             assertTrue(
                 "会话记忆生效 → 新面板不挂直替类别（${panel2.degradationBannerForTest().kindForTest()}）",
                 panel2.degradationBannerForTest().kindForTest() != DegradationBanner.Kind.DOLLAR_INJECT,
             )
             // 复位后恢复显示
             SqlPreviewPanel.resetDollarMarkForTest()
-            panel2.showResult(dollarXmlResult())
+            SqlPreviewPanelResultViewKt.showResult(panel2, dollarXmlResult())
             assertEquals(DegradationBanner.Kind.DOLLAR_INJECT, panel2.degradationBannerForTest().kindForTest())
         } finally {
-            panel1.clear()
-            panel2.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel1)
+            SqlPreviewPanelSqlViewKt.clear(panel2)
         }
     }
 }

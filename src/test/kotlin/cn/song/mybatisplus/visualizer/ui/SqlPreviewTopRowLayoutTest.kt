@@ -57,7 +57,7 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
     private fun newPanel() = SqlPreviewPanel(project).also {
         // T-PreviewFlash 语境下测试默认压缩关闭即可，与本测试无关，仅保持渲染确定性
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true }
-        it.showResult(
+        SqlPreviewPanelResultViewKt.showResult(it, 
             makeResult(
                 perfWarnings = listOf(
                     PerfWarning("order_by_without_limit", PerfSeverity.WARN, "perf.order_by_without_limit"),
@@ -92,7 +92,7 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
                 label.x + label.width <= toolbar.x + 1,
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }
@@ -104,7 +104,7 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
             val label = metaLabelOf(panel)
             assertTrue("窄宽下应有正尺寸", label.width > 0 && panel.toolbarForTest().width > 0)
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }
@@ -123,7 +123,7 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
             assertTrue("放不下的 perf 行应加省略号", text.contains("\u2026"))
             assertFalse("截断后不得再含完整 perf 文案", text.contains(fullPerfText()))
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }
@@ -137,7 +137,7 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
             assertTrue("宽幅应还原全文 perf 文案", text.contains(fullPerfText()))
             assertFalse("宽幅不应残留省略号", text.contains("\u2026"))
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }
@@ -149,7 +149,7 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
             val tooltip = panel.topRowForTest().let { metaLabelOf(panel).toolTipText ?: "" }
             assertTrue("tooltip 应含完整 perf 文案", tooltip.contains(fullPerfText()))
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }
@@ -185,7 +185,7 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
                 panel.moreActionsForTest(),
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }
@@ -193,14 +193,14 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
     fun test警示时复制错误按钮直显不折叠() {
         val panel = SqlPreviewPanel(project)
         try {
-            panel.showResult(makeResult(warning = "boom 解析失败"))
+            SqlPreviewPanelResultViewKt.showResult(panel, makeResult(warning = "boom 解析失败"))
             waitForEdt()
             val errorCopy = panel.errorCopyButtonForTest()
             assertNotNull("警示在场应有复制错误按钮", errorCopy)
             assertTrue("复制错误按钮应可见", errorCopy!!.isVisible)
             assertEquals("复制错误按钮应直挂工具栏（永不折叠）", panel.toolbarForTest(), errorCopy.parent)
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }
@@ -214,7 +214,7 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
             // 单测环境禁弹（项目惯例：DialogWrapper.show 留 runIde 真机），故仅验未命中路径。
             assertEquals(PopupStep.FINAL_CHOICE, step.onChosen("no-such-item", true))
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }
@@ -242,7 +242,7 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
             assertEquals("单选语义不变", PopupStep.FINAL_CHOICE, step.onChosen("only-item", true))
             assertFalse("动作不得在 onChosen 内同步执行（N4 回归点）", invoked)
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }

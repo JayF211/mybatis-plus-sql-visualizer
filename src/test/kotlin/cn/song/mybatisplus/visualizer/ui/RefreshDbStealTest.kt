@@ -103,7 +103,7 @@ class RefreshDbStealTest : BasePlatformTestCase() {
         host.remove(console)
         assertFalse(panel.consoleAttachedToMeForTest())
 
-        panel.rehostConsoleForTest(console)
+        SqlPreviewPanelExecutionKt.rehostConsoleForTest(panel, console)
 
         assertTrue("重挂后归属应恢复", panel.consoleAttachedToMeForTest())
     }
@@ -121,7 +121,7 @@ class RefreshDbStealTest : BasePlatformTestCase() {
         // 第一次释放：监听立即重挂路径（invokeLater 排队）；先泵 EDT 让 lastRehostAt 落定
         host.remove(console)
         waitForEdt()
-        panel.rehostConsoleForTest(console)
+        SqlPreviewPanelExecutionKt.rehostConsoleForTest(panel, console)
         assertTrue(panel.consoleAttachedToMeForTest())
 
         // 去抖窗口内（< REHOST_MIN_INTERVAL_MS）再次释放——旧实现静默 return（零日志黑洞），
@@ -176,8 +176,8 @@ class RefreshDbStealTest : BasePlatformTestCase() {
 
         // 清理：仿 SqlPreviewPanelUiTest 收尾惯例——clear 释放编辑器（防 EditorImpl 泄漏），
         // dispose 级联释放面板（rehost 监听随之移除）；first 已被单例化关闭，同样补 clear
-        runCatching { first.panelForTest()!!.clear() }
-        runCatching { second!!.panelForTest()!!.clear() }
+        runCatching { SqlPreviewPanelSqlViewKt.clear(first.panelForTest()!!) }
+        runCatching { SqlPreviewPanelSqlViewKt.clear(second!!.panelForTest()!!) }
         runCatching { second!!.doDispose() }
     }
 
@@ -191,7 +191,7 @@ class RefreshDbStealTest : BasePlatformTestCase() {
         waitForEdt()
 
         // 重复关闭不抛异常；面板 clear 收尾防编辑器泄漏
-        runCatching { dialog!!.panelForTest()!!.clear() }
+        runCatching { SqlPreviewPanelSqlViewKt.clear(dialog!!.panelForTest()!!) }
         runCatching { dialog!!.doDispose() }
         runCatching { dialog!!.doDispose() }
         assertTrue(dialog!!.isDisposed)

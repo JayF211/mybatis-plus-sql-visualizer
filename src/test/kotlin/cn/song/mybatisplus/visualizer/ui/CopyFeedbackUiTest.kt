@@ -124,8 +124,8 @@ class CopyFeedbackUiTest : BasePlatformTestCase() {
         // T-ClipboardIso：哨兵植入内存剪贴板（不再触碰系统剪贴板）
         clipboard.seedText(sentinel)
         val panel = SqlPreviewPanel(project)
-        panel.clear()
-        assertTrue("无警示时 copyError 应返回 false（不触发反馈）", !panel.copyError())
+        SqlPreviewPanelSqlViewKt.clear(panel)
+        assertTrue("无警示时 copyError 应返回 false（不触发反馈）", !SqlPreviewPanelResultViewKt.copyError(panel))
         assertEquals("无警示时不应动剪贴板（哨兵原样保留）", sentinel, clipboardText())
         panel.dispose()
     }
@@ -157,14 +157,14 @@ class CopyFeedbackUiTest : BasePlatformTestCase() {
             null,
             null,
         )
-        panel.showResult(result)
+        SqlPreviewPanelResultViewKt.showResult(panel, result)
         waitForEdt()
         try {
-            assertTrue("有警示时 copyError 应返回 true", panel.copyError())
+            assertTrue("有警示时 copyError 应返回 true", SqlPreviewPanelResultViewKt.copyError(panel))
             assertEquals("应复制完整警示文本", "UPDATE without WHERE", clipboardText())
             assertNotNull("警示态复制按钮应可见", panel.errorCopyButtonForTest()?.isVisible)
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }

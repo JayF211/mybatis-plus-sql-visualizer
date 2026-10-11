@@ -115,10 +115,10 @@ class SqlPreviewPanelPrewarmLateRecoverTest : BasePlatformTestCase() {
      */
     private fun degradePanel(panel: SqlPreviewPanel) {
         awaitPrewarmProduct(panel)
-        panel.showResult(result())
+        SqlPreviewPanelResultViewKt.showResult(panel, result())
         UIUtil.dispatchAllInvocationEvents()
         panel.releaseEditorForTest()
-        panel.showResult(result())
+        SqlPreviewPanelResultViewKt.showResult(panel, result())
         UIUtil.dispatchAllInvocationEvents()
         assertNull("降级文档不应挂在项目内临时文件上（前置）", editorDocumentFile(panel))
         assertNotNull("降级态应登记降级文档身份（换装判据的身份字段）", panel.degradedDocumentForTest())
@@ -167,8 +167,8 @@ class SqlPreviewPanelPrewarmLateRecoverTest : BasePlatformTestCase() {
             )
             assertNotNull("换装后 psiFile 应带真实 VFS 文件（内存 PSI 降级产物无 VFS 文件）", panel.psiFileForTest()?.virtualFile)
         } finally {
-            panel.clear()
-            donor.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
+            SqlPreviewPanelSqlViewKt.clear(donor)
         }
     }
 
@@ -199,8 +199,8 @@ class SqlPreviewPanelPrewarmLateRecoverTest : BasePlatformTestCase() {
             )
             assertNotNull("降级文档身份应保留（下次到达仍可换装）", panel.degradedDocumentForTest())
         } finally {
-            panel.clear()
-            donor.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
+            SqlPreviewPanelSqlViewKt.clear(donor)
         }
     }
 
@@ -220,7 +220,7 @@ class SqlPreviewPanelPrewarmLateRecoverTest : BasePlatformTestCase() {
         } finally {
             // dispose() 不释放编辑器，归还职责在面板侧（fixture tearDown 会断言「无未释放 Editor」）
             panel.releaseEditorForTest()
-            donor.clear()
+            SqlPreviewPanelSqlViewKt.clear(donor)
         }
     }
 
@@ -259,7 +259,7 @@ class SqlPreviewPanelPrewarmLateRecoverTest : BasePlatformTestCase() {
                 banner.kindForTest(),
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -288,7 +288,7 @@ class SqlPreviewPanelPrewarmLateRecoverTest : BasePlatformTestCase() {
                 panel.degradationBannerForTest().kindForTest(),
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 }

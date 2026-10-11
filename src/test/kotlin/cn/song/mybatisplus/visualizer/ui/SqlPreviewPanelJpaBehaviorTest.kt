@@ -22,7 +22,7 @@ class SqlPreviewPanelJpaBehaviorTest : BasePlatformTestCase() {
 
     override fun tearDown() {
         // 释放面板编辑器，避免测试框架检测到未释放的编辑器
-        panel?.clear()
+        panel?.let { SqlPreviewPanelSqlViewKt.clear(it) }
         panel = null
         super.tearDown()
     }
@@ -34,7 +34,7 @@ class SqlPreviewPanelJpaBehaviorTest : BasePlatformTestCase() {
         panel = p
         Disposer.register(testRootDisposable, p)
 
-        p.showResult(result)
+        SqlPreviewPanelResultViewKt.showResult(p, result)
 
         // 验证面板已初始化
         assertNotNull("面板应已初始化", p.currentForTest())
@@ -65,7 +65,7 @@ class SqlPreviewPanelJpaBehaviorTest : BasePlatformTestCase() {
         panel = p
         Disposer.register(testRootDisposable, p)
 
-        p.showResult(result)
+        SqlPreviewPanelResultViewKt.showResult(p, result)
 
         // 验证警告标签显示
         val metaText = p.metaLabelForTest()
@@ -79,7 +79,7 @@ class SqlPreviewPanelJpaBehaviorTest : BasePlatformTestCase() {
         panel = p
         Disposer.register(testRootDisposable, p)
 
-        p.showResult(result)
+        SqlPreviewPanelResultViewKt.showResult(p, result)
 
         // 验证当前结果
         val current = p.currentForTest()
@@ -105,7 +105,7 @@ class SqlPreviewPanelJpaBehaviorTest : BasePlatformTestCase() {
         panel = p
         Disposer.register(testRootDisposable, p)
 
-        p.showResult(result)
+        SqlPreviewPanelResultViewKt.showResult(p, result)
 
         // 验证有两个参数输入框
         val field0 = p.paramFieldForTest(0)

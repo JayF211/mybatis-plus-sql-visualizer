@@ -97,7 +97,7 @@ class SqlPreviewPanelPrewarmConsumeTest : BasePlatformTestCase() {
                 panel.prewarmedTempFileForTest(),
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -113,7 +113,7 @@ class SqlPreviewPanelPrewarmConsumeTest : BasePlatformTestCase() {
                 awaitPrewarmProduct(panel),
             )
 
-            panel.showResult(result())
+            SqlPreviewPanelResultViewKt.showResult(panel, result())
             UIUtil.dispatchAllInvocationEvents()
 
             val file = editorDocumentFile(panel)
@@ -134,7 +134,7 @@ class SqlPreviewPanelPrewarmConsumeTest : BasePlatformTestCase() {
             )
             assertNull("产物被消费后字段应置 null（一次性语义）", panel.prewarmedTempFileForTest())
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -149,7 +149,7 @@ class SqlPreviewPanelPrewarmConsumeTest : BasePlatformTestCase() {
                 "headless 下项目内预览文件应预热成功（失败=环境问题，不是本用例的通过条件）",
                 awaitPrewarmProduct(panel),
             )
-            panel.showResult(result())
+            SqlPreviewPanelResultViewKt.showResult(panel, result())
             UIUtil.dispatchAllInvocationEvents()
             assertNotNull("首次装配应走临时文件分支", editorDocumentFile(panel))
 
@@ -158,7 +158,7 @@ class SqlPreviewPanelPrewarmConsumeTest : BasePlatformTestCase() {
             panel.releaseEditorForTest()
             assertNull("释放后产物字段应保持 null", panel.prewarmedTempFileForTest())
 
-            panel.showResult(result())
+            SqlPreviewPanelResultViewKt.showResult(panel, result())
             UIUtil.dispatchAllInvocationEvents()
 
             assertNull(
@@ -167,7 +167,7 @@ class SqlPreviewPanelPrewarmConsumeTest : BasePlatformTestCase() {
             )
             assertNotNull("降级分支应保留内存 PSI 补全载体", panel.psiFileForTest())
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 }

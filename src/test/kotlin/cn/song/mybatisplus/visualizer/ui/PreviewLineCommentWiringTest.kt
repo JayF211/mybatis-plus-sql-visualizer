@@ -44,12 +44,14 @@ class PreviewLineCommentWiringTest : BasePlatformTestCase() {
     }
 
     private fun previewResult() = PreviewResult(
-        sql = "SELECT id, name\nFROM user\nWHERE age > 1",
-        compactSql = "SELECT id, name FROM user WHERE age > 1",
-        unresolvedParams = emptyList(),
-        paramTable = null,
-        wrapperType = null,
-        tableName = "user",
+        "SELECT id, name\nFROM user\nWHERE age > 1",
+        "SELECT id, name FROM user WHERE age > 1",
+        emptyList(),
+        null,
+        null,
+        "user",
+        null,
+        emptyList(),
     )
 
     private fun contextOf(ed: Editor): DataContext = object : DataContext {
@@ -66,7 +68,7 @@ class PreviewLineCommentWiringTest : BasePlatformTestCase() {
     fun test预览自建编辑器已打标_端到端插双横线且再按对称还原() {
         val panel = SqlPreviewPanel(project)
         try {
-            panel.showResult(previewResult())
+            SqlPreviewPanelResultViewKt.showResult(panel, previewResult())
             val ed = panel.editorForTest()
             assertNotNull("预览面板应挂载编辑器", ed)
             ed!!
@@ -98,17 +100,17 @@ class PreviewLineCommentWiringTest : BasePlatformTestCase() {
             triggerLineComment(ed)
             assertEquals("再按一次应逐字节还原", before, ed.document.text)
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
     fun test面板释放链摘除打标并复原原动作() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(previewResult())
+        SqlPreviewPanelResultViewKt.showResult(panel, previewResult())
         val ed = panel.editorForTest()
         assertNotNull("预览面板应挂载编辑器", ed)
         assertTrue("前置：面板编辑器应已打标", EditorCommentShortcuts.isMarked(ed!!))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
         // clear → releaseEditor → disposeCurrentEditorOnly → uninstall：计数归零须复原平台原动作
         assertSame(
             "面板 clear/释放后应复原平台原动作（引用计数未归零即泄漏接管）",

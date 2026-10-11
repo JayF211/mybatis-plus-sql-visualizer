@@ -179,10 +179,10 @@ class ParamImportDialogTest : BasePlatformTestCase() {
     fun test空提交_经对话框确定触发未识别参数行内提示() {
         val panel = SqlPreviewPanel(project)
         val dialog = ParamImportDialog(project) { input ->
-            panel.importParams(ParamImportParser.INSTANCE.parse(input))
+            SqlPreviewPanelParamPanelKt.importParams(panel, ParamImportParser.INSTANCE.parse(input))
         }
         try {
-            panel.showResult(
+            SqlPreviewPanelResultViewKt.showResult(panel, 
                 PreviewResult(
                     "SELECT id\nFROM user\nWHERE username = ?",
                     "SELECT id FROM user WHERE username = ?",
@@ -206,7 +206,7 @@ class ParamImportDialogTest : BasePlatformTestCase() {
             )
         } finally {
             dialog.dispose()
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 

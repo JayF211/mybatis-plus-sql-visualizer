@@ -82,7 +82,7 @@ class DegradationBannerTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         val banner = panel.degradationBannerForTest()
         try {
-            panel.showResult(result(null))
+            SqlPreviewPanelResultViewKt.showResult(panel, result(null))
             // headless 沙盒预热可能失败 → DEGRADED 横幅常驻（诚实降级语义正确）；
             // 本断言只约束「无警示时渲染警示类别不挂起」
             assertTrue(
@@ -91,7 +91,7 @@ class DegradationBannerTest : BasePlatformTestCase() {
             )
 
             val warningText = "⚠ 无 WHERE 条件，将删除全表数据！"
-            panel.showResult(result(warningText))
+            SqlPreviewPanelResultViewKt.showResult(panel, result(warningText))
             // 有警示：若当前是渲染警示 → 文案必须为三要素键值（降级态优先时 DEGRADED 亦可接受）
             if (banner.kindForTest() == DegradationBanner.Kind.RENDER_WARNING) {
                 assertEquals(
@@ -100,13 +100,13 @@ class DegradationBannerTest : BasePlatformTestCase() {
                 )
             }
 
-            panel.showResult(result(null))
+            SqlPreviewPanelResultViewKt.showResult(panel, result(null))
             assertTrue(
                 "警示恢复 null → 渲染警示类别应清除（${banner.kindForTest()}）",
                 banner.kindForTest() != DegradationBanner.Kind.RENDER_WARNING,
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 }

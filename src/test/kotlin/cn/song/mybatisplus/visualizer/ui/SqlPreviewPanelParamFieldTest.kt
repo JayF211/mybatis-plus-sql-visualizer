@@ -50,7 +50,7 @@ class SqlPreviewPanelParamFieldTest : BasePlatformTestCase() {
     fun testInitialLongValueCaretPinnedAndTooltipHasFullValue() {
         val panel = SqlPreviewPanel(project).also { this.panel = it }
         try {
-            panel.showResult(
+            SqlPreviewPanelResultViewKt.showResult(panel, 
                 result(mapOf("param1" to "WH01", "param2" to "2026-01-01T00:00")),
             )
             assertEquals("#param1 = WH01", panel.paramFieldTooltipForTest(0))
@@ -58,7 +58,7 @@ class SqlPreviewPanelParamFieldTest : BasePlatformTestCase() {
             assertEquals("光标应钉在首字符（视口停在值头部）", 0, panel.paramFieldCaretForTest(0))
             assertEquals(0, panel.paramFieldCaretForTest(1))
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }
@@ -67,10 +67,10 @@ class SqlPreviewPanelParamFieldTest : BasePlatformTestCase() {
     fun testEmptyValueTooltipHasNoValuePart() {
         val panel = SqlPreviewPanel(project).also { this.panel = it }
         try {
-            panel.showResult(result(mapOf("param1" to "WH01")))
+            SqlPreviewPanelResultViewKt.showResult(panel, result(mapOf("param1" to "WH01")))
             assertEquals("#param2", panel.paramFieldTooltipForTest(1))
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
             panel.dispose()
         }
     }

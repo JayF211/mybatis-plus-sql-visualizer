@@ -46,7 +46,7 @@ class SqlPreviewPanelDoubleReleaseGuardTest : BasePlatformTestCase() {
     fun testReleaseEditorSkipsAlreadyDisposedEditor() {
         val panel = SqlPreviewPanel(project)
         try {
-            panel.showResult(result())
+            SqlPreviewPanelResultViewKt.showResult(panel, result())
             val editor = panel.editorForTest()
             assertNotNull("前置：预览面板应已自建编辑器（无控制台挂载走 createEditor 分支）", editor)
             // 模拟双持有的第一次释放（另一面板/路径先行）
@@ -55,7 +55,7 @@ class SqlPreviewPanelDoubleReleaseGuardTest : BasePlatformTestCase() {
             // KW-1 守卫：已释放的编辑器再走面板释放链应幂等跳过（摘掉守卫必红）
             panel.releaseEditorForTest()
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 }
