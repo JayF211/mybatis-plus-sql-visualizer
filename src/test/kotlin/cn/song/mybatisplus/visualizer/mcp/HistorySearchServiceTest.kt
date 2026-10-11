@@ -46,12 +46,27 @@ class HistorySearchServiceTest {
         append("-- source: ").append(sourceFile ?: "unknown")
         append(" | time: 12ms | ").append(fmt(ts)).append(" --\n")
         if (withPd) {
+            // K2J 互操作：LogSqlEntry 为 Java record，具名实参改 19 参位置形态（sourceFile 第 9 位）。
             val carrier = cn.song.mybatisplus.visualizer.log.LogSqlEntry(
-                rawSql = sql,
-                restoredSql = sql,
-                params = listOf(cn.song.mybatisplus.visualizer.log.LogSqlParam("1", "Long")),
-                timestamp = ts,
-                sourceFile = sourceFile,
+                sql,
+                sql,
+                listOf(cn.song.mybatisplus.visualizer.log.LogSqlParam("1", "Long")),
+                ts,
+                null,
+                null,
+                null,
+                null,
+                sourceFile,
+                0,
+                java.util.Collections.emptyList<kotlin.Pair<String, Int>>(),
+                java.util.Collections.emptyList<String>(),
+                null,
+                0L,
+                null,
+                null,
+                null,
+                null,
+                null,
             )
             append("-- pd: ").append(cn.song.mybatisplus.visualizer.log.SqlLogParamCodec.encodeEntry(carrier)).append(" --\n")
         }
@@ -84,7 +99,7 @@ class HistorySearchServiceTest {
                 entryText(nowMs - 500, "SELECT * FROM t_order WHERE id = 2"),
             ),
         )
-        val r = search(dir(), HistorySearchService.Query(keyword = "t_user"))
+        val r = search(dir(), HistorySearchService.Query("t_user", null, null, null, null, false, HistorySearchService.DEFAULT_MAX_RESULTS))
         assertEquals(1, r.totalHits)
         assertTrue(r.hits[0].sqlPreview, r.hits[0].sqlPreview.contains("t_user"))
     }
@@ -92,8 +107,8 @@ class HistorySearchServiceTest {
     @Test
     fun test关键词大小写不敏感() {
         writeHistoryFile("h.sql", listOf(entryText(nowMs, "select * from T_USER")))
-        assertEquals(1, search(dir(), HistorySearchService.Query(keyword = "T_USER")).totalHits)
-        assertEquals(1, search(dir(), HistorySearchService.Query(keyword = "t_user")).totalHits)
+        assertEquals(1, search(dir(), HistorySearchService.Query("T_USER", null, null, null, null, false, HistorySearchService.DEFAULT_MAX_RESULTS)).totalHits)
+        assertEquals(1, search(dir(), HistorySearchService.Query("t_user", null, null, null, null, false, HistorySearchService.DEFAULT_MAX_RESULTS)).totalHits)
     }
 
     @Test
@@ -104,7 +119,7 @@ class HistorySearchServiceTest {
         )
         // mapperStatement 在 pd 载荷里，夹具不写 pd 行 → 这里只验证「SQL 文本命中」语义；
         // mapper 命中由带 pd 的条目覆盖（见 test带pd行条目不被劈开）。
-        assertEquals(1, search(dir(), HistorySearchService.Query(keyword = "t_user")).totalHits)
+        assertEquals(1, search(dir(), HistorySearchService.Query("t_user", null, null, null, null, false, HistorySearchService.DEFAULT_MAX_RESULTS)).totalHits)
     }
 
     // ------------------------------------------------------------------
@@ -120,7 +135,7 @@ class HistorySearchServiceTest {
                 entryText(nowMs - 500, "UPDATE t_user SET name = 'x'"),
             ),
         )
-        val r = search(dir(), HistorySearchService.Query(regex = "^select .+ from t_\\w+"))
+        val r = search(dir(), HistorySearchService.Query(null, "^select .+ from t_\\w+", null, null, null, false, HistorySearchService.DEFAULT_MAX_RESULTS))
         assertEquals(1, r.totalHits)
         assertTrue(r.hits[0].sqlPreview.contains("SELECT"))
     }
@@ -128,7 +143,7 @@ class HistorySearchServiceTest {
     @Test
     fun test非法正则_预期异常() {
         try {
-            search(dir(), HistorySearchService.Query(regex = "[unclosed"))
+            search(dir(), HistorySearchService.Query(null, "[unclosed", null, null, null, false, HistorySearchService.DEFAULT_MAX_RESULTS))
             org.junit.Assert.fail("非法正则应抛 InvalidQueryException")
         } catch (expected: HistorySearchService.InvalidQueryException) {
             assertTrue(expected.message!!.contains("regex"))
@@ -145,7 +160,7 @@ class HistorySearchServiceTest {
         val t2 = nowMs - 5_000
         val t3 = nowMs - 1_000
         writeHistoryFile("h.sql", listOf(entryText(t1, "SELECT 1"), entryText(t2, "SELECT 2"), entryText(t3, "SELECT 3")))
-        val r = search(dir(), HistorySearchService.Query(fromMs = t2, toMs = t2, allDates = true))
+        val r = search(dir(), HistorySearchService.Query(null, null, t2, t2, null, true, HistorySearchService.DEFAULT_MAX_RESULTS))
         assertEquals(1, r.totalHits)
         assertEquals("SELECT 2", r.hits[0].sqlPreview)
     }
@@ -153,7 +168,7 @@ class HistorySearchServiceTest {
     @Test
     fun test时间范围倒置_预期异常() {
         try {
-            search(dir(), HistorySearchService.Query(fromMs = nowMs, toMs = nowMs - 1000, allDates = true))
+            search(dir(), HistorySearchService.Query(null, null, nowMs, nowMs - 1000, null, true, HistorySearchService.DEFAULT_MAX_RESULTS))
             org.junit.Assert.fail("from > to 应抛 InvalidQueryException")
         } catch (expected: HistorySearchService.InvalidQueryException) {
         }
@@ -173,12 +188,12 @@ class HistorySearchServiceTest {
                 entryText(nowMs + 2, "SELECT * FROM t_log"),
             ),
         )
-        assertEquals(1, search(dir(), HistorySearchService.Query(sourceFile = "userservice")).totalHits)
-        assertEquals(1, search(dir(), HistorySearchService.Query(sourceFile = "UserService.java")).totalHits)
+        assertEquals(1, search(dir(), HistorySearchService.Query(null, null, null, null, "userservice", false, HistorySearchService.DEFAULT_MAX_RESULTS)).totalHits)
+        assertEquals(1, search(dir(), HistorySearchService.Query(null, null, null, null, "UserService.java", false, HistorySearchService.DEFAULT_MAX_RESULTS)).totalHits)
         // 子串语义：两个服务类都在 com/example 目录下
-        assertEquals(2, search(dir(), HistorySearchService.Query(sourceFile = "com/example")).totalHits)
+        assertEquals(2, search(dir(), HistorySearchService.Query(null, null, null, null, "com/example", false, HistorySearchService.DEFAULT_MAX_RESULTS)).totalHits)
         // 无来源文件的条目对来源文件过滤不命中（不等于「匹配任意」）
-        assertEquals(0, search(dir(), HistorySearchService.Query(sourceFile = "t_log")).totalHits)
+        assertEquals(0, search(dir(), HistorySearchService.Query(null, null, null, null, "t_log", false, HistorySearchService.DEFAULT_MAX_RESULTS)).totalHits)
     }
 
     // ------------------------------------------------------------------
@@ -195,7 +210,7 @@ class HistorySearchServiceTest {
                 entryText(nowMs - 100, "SELECT * FROM t_today"),
             ),
         )
-        val r = search(dir(), HistorySearchService.Query(keyword = "t_"))
+        val r = search(dir(), HistorySearchService.Query("t_", null, null, null, null, false, HistorySearchService.DEFAULT_MAX_RESULTS))
         assertEquals("默认范围应只含当日条目（D1=A）", 1, r.totalHits)
         assertTrue(r.hits[0].sqlPreview.contains("t_today"))
     }
@@ -210,7 +225,7 @@ class HistorySearchServiceTest {
                 entryText(nowMs - 100, "SELECT * FROM t_today"),
             ),
         )
-        assertEquals(2, search(dir(), HistorySearchService.Query(keyword = "t_", allDates = true)).totalHits)
+        assertEquals(2, search(dir(), HistorySearchService.Query("t_", null, null, null, null, true, HistorySearchService.DEFAULT_MAX_RESULTS)).totalHits)
     }
 
     @Test
@@ -218,7 +233,7 @@ class HistorySearchServiceTest {
         val yesterday = startOfToday(nowMs) - 86_400_000L
         writeHistoryFile("h.sql", listOf(entryText(yesterday, "SELECT * FROM t_yesterday")))
         // 未开 allDates 时，显式 fromMs 早于今日起点不得放宽默认范围（要跨天请 allDates=true）
-        assertEquals(0, search(dir(), HistorySearchService.Query(fromMs = yesterday - 1)).totalHits)
+        assertEquals(0, search(dir(), HistorySearchService.Query(null, null, yesterday - 1, null, null, false, HistorySearchService.DEFAULT_MAX_RESULTS)).totalHits)
     }
 
     // ------------------------------------------------------------------
@@ -237,7 +252,7 @@ class HistorySearchServiceTest {
                 entryText(nowMs - 500, "SELECT * FROM t_order WHERE id = 4"),
             ),
         )
-        val r = search(dir(), HistorySearchService.Query(keyword = "t_user", fromMs = nowMs - 2500, sourceFile = "userservice"))
+        val r = search(dir(), HistorySearchService.Query("t_user", null, nowMs - 2500, null, "userservice", false, HistorySearchService.DEFAULT_MAX_RESULTS))
         assertEquals(1, r.totalHits)
         assertTrue(r.hits[0].sqlPreview.contains("id = 2"))
     }
@@ -250,7 +265,7 @@ class HistorySearchServiceTest {
     fun test超限截断_返回摘要不倾泻() {
         val entries = (1..30).map { entryText(nowMs - it * 100, "SELECT $it") }
         writeHistoryFile("h.sql", entries)
-        val r = search(dir(), HistorySearchService.Query(maxResults = 5))
+        val r = search(dir(), HistorySearchService.Query(null, null, null, null, null, false, 5))
         assertEquals(30, r.totalHits)
         assertEquals(5, r.returned)
         assertTrue("超限应置 truncated", r.truncated)
@@ -261,8 +276,8 @@ class HistorySearchServiceTest {
     fun testmaxResults越界钳制不抛错() {
         val entries = (1..3).map { entryText(nowMs - it * 100, "SELECT $it") }
         writeHistoryFile("h.sql", entries)
-        assertEquals(1, search(dir(), HistorySearchService.Query(maxResults = 0)).returned)
-        assertEquals(3, search(dir(), HistorySearchService.Query(maxResults = 999_999)).returned)
+        assertEquals(1, search(dir(), HistorySearchService.Query(null, null, null, null, null, false, 0)).returned)
+        assertEquals(3, search(dir(), HistorySearchService.Query(null, null, null, null, null, false, 999_999)).returned)
     }
 
     @Test
@@ -275,7 +290,7 @@ class HistorySearchServiceTest {
                 entryText(nowMs - 2000, "SELECT 2"),
             ),
         )
-        val r = search(dir(), HistorySearchService.Query(keyword = "SELECT", allDates = true))
+        val r = search(dir(), HistorySearchService.Query("SELECT", null, null, null, null, true, HistorySearchService.DEFAULT_MAX_RESULTS))
         assertEquals(listOf("SELECT 3", "SELECT 2", "SELECT 1"), r.hits.map { it.sqlPreview })
     }
 
@@ -295,7 +310,7 @@ class HistorySearchServiceTest {
 
     @Test
     fun test空目录_零命中合法结果() {
-        val r = search(dir(), HistorySearchService.Query(keyword = "anything"))
+        val r = search(dir(), HistorySearchService.Query("anything", null, null, null, null, false, HistorySearchService.DEFAULT_MAX_RESULTS))
         assertEquals(0, r.totalHits)
         assertFalse(r.truncated)
         assertEquals(0, r.scannedFiles)
@@ -303,7 +318,7 @@ class HistorySearchServiceTest {
 
     @Test
     fun test目录不存在_零命中合法结果() {
-        val r = HistorySearchService.search(tmp.root.resolve("no-such-dir").absolutePath, HistorySearchService.Query(keyword = "x"), nowMs)
+        val r = HistorySearchService.search(tmp.root.resolve("no-such-dir").absolutePath, HistorySearchService.Query("x", null, null, null, null, false, HistorySearchService.DEFAULT_MAX_RESULTS), nowMs)
         assertEquals(0, r.totalHits)
     }
 
@@ -318,7 +333,7 @@ class HistorySearchServiceTest {
     fun test扫描计数器() {
         writeHistoryFile("a.sql", listOf(entryText(nowMs, "SELECT 1")))
         writeHistoryFile("b.sql", listOf(entryText(nowMs, "SELECT 2"), entryText(nowMs, "SELECT 3")))
-        val r = search(dir(), HistorySearchService.Query(keyword = "SELECT"))
+        val r = search(dir(), HistorySearchService.Query("SELECT", null, null, null, null, false, HistorySearchService.DEFAULT_MAX_RESULTS))
         assertEquals(2, r.scannedFiles)
         assertEquals(3, r.scannedEntries)
         assertFalse(r.scanTruncated)
@@ -328,7 +343,7 @@ class HistorySearchServiceTest {
     fun test非sql扩展名不参与扫描() {
         tmp.newFile("readme.txt").writeText("SELECT * FROM t_user")
         writeHistoryFile("h.sql", listOf(entryText(nowMs, "SELECT 1")))
-        val r = search(dir(), HistorySearchService.Query(keyword = "SELECT"))
+        val r = search(dir(), HistorySearchService.Query("SELECT", null, null, null, null, false, HistorySearchService.DEFAULT_MAX_RESULTS))
         assertEquals(1, r.scannedFiles)
         assertEquals(1, r.totalHits)
     }
@@ -339,7 +354,7 @@ class HistorySearchServiceTest {
             "sql-history-2026-09-30.sql",
             listOf(entryText(nowMs, "SELECT * FROM t_user", sourceFile = "src/UserService.java:42")),
         )
-        val h = search(dir(), HistorySearchService.Query(keyword = "t_user")).hits.single()
+        val h = search(dir(), HistorySearchService.Query("t_user", null, null, null, null, false, HistorySearchService.DEFAULT_MAX_RESULTS)).hits.single()
         // 通道标记落盘不存活（仅 MCP 落键）——读回 UNKNOWN 是真实语义，不是缺陷
         assertEquals("UNKNOWN", h.source)
         assertEquals("src/UserService.java", h.sourceFile)
@@ -357,7 +372,7 @@ class HistorySearchServiceTest {
                 entryText(nowMs, "SELECT * FROM t_user WHERE id = ?", withPd = true),
             ),
         )
-        val r = search(dir(), HistorySearchService.Query(keyword = "t_user"))
+        val r = search(dir(), HistorySearchService.Query("t_user", null, null, null, null, false, HistorySearchService.DEFAULT_MAX_RESULTS))
         assertEquals("pd 行不得把条目劈开或挤丢", 1, r.totalHits)
         val h = r.hits.single()
         assertTrue(h.sqlPreview.contains("t_user"))

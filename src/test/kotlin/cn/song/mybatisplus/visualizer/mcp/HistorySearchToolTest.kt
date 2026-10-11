@@ -19,10 +19,11 @@ class HistorySearchToolTest {
 
     @Test
     fun test零命中_合法结果带指引() {
+        // K2J 互操作：Result 为 Java record，具名实参改 8 参位置形态。
         val r = HistorySearchService.Result(
-            totalHits = 0, returned = 0, truncated = false,
-            scannedFiles = 2, scannedEntries = 5, scanTruncated = false,
-            scopeStartMs = null, hits = emptyList(),
+            0, 0, false,
+            2, 5, false,
+            null, emptyList(),
         )
         val text = tool.formatResult(r)
         assertTrue(text.contains("No history entries matched"))
@@ -32,21 +33,21 @@ class HistorySearchToolTest {
     @Test
     fun test命中输出_计数与条目摘要行() {
         val hit = HistorySearchService.Hit(
-            timestamp = 1_759_190_400_000,
-            sqlPreview = "SELECT * FROM t_user WHERE id = 1",
-            source = "UNKNOWN",
-            sourceFile = "src/UserService.java",
-            sourceLine = 42,
-            executionTimeMs = 12,
-            databaseName = "MySQL",
-            mapperStatement = null,
-            errorText = null,
-            historyFile = "sql-history-2026-09-30.sql",
+            1_759_190_400_000L,
+            "SELECT * FROM t_user WHERE id = 1",
+            "UNKNOWN",
+            "src/UserService.java",
+            42,
+            12L,
+            "MySQL",
+            null,
+            null,
+            "sql-history-2026-09-30.sql",
         )
         val r = HistorySearchService.Result(
-            totalHits = 7, returned = 1, truncated = true,
-            scannedFiles = 3, scannedEntries = 100, scanTruncated = false,
-            scopeStartMs = null, hits = listOf(hit),
+            7, 1, true,
+            3, 100, false,
+            null, listOf(hit),
         )
         val text = tool.formatResult(r)
         assertTrue("应含总命中计数", text.contains("Found 7 match(es)"))
@@ -64,9 +65,9 @@ class HistorySearchToolTest {
     @Test
     fun test扫描截断_输出警示() {
         val r = HistorySearchService.Result(
-            totalHits = 1, returned = 1, truncated = false,
-            scannedFiles = 3, scannedEntries = 5, scanTruncated = true,
-            scopeStartMs = null, hits = emptyList(),
+            1, 1, false,
+            3, 5, true,
+            null, emptyList(),
         )
         // totalHits=1 但 hits 空是非法组合？不——本测试只验证 scanTruncated 警示分支，hits 留空简化夹具
         val text = tool.formatResult(r)
@@ -80,7 +81,7 @@ class HistorySearchToolTest {
     @Test
     fun test非法正则_转译INVALID_ARGUMENT预期错误() {
         val error = runCatching {
-            tool.searchHistory("/no-such-dir", HistorySearchService.Query(regex = "[unclosed"))
+            tool.searchHistory("/no-such-dir", HistorySearchService.Query(null, "[unclosed", null, null, null, false, HistorySearchService.DEFAULT_MAX_RESULTS))
         }.exceptionOrNull()
         assertTrue("应抛 SqlvExpectedToolException", error is SqlvExpectedToolException)
         assertTrue(
@@ -92,7 +93,7 @@ class HistorySearchToolTest {
     @Test
     fun test时间范围倒置_转译INVALID_ARGUMENT预期错误() {
         val error = runCatching {
-            tool.searchHistory("/no-such-dir", HistorySearchService.Query(fromMs = 100, toMs = 50, allDates = true))
+            tool.searchHistory("/no-such-dir", HistorySearchService.Query(null, null, 100L, 50L, null, true, HistorySearchService.DEFAULT_MAX_RESULTS))
         }.exceptionOrNull()
         assertTrue(error is SqlvExpectedToolException)
         assertTrue((error as SqlvExpectedToolException).message!!.contains(McpToolErrors.INVALID_ARGUMENT))
@@ -100,7 +101,7 @@ class HistorySearchToolTest {
 
     @Test
     fun test合法查询_目录不存在零命中不报错() {
-        val r = tool.searchHistory("/no-such-dir", HistorySearchService.Query(keyword = "x"))
+        val r = tool.searchHistory("/no-such-dir", HistorySearchService.Query("x", null, null, null, null, false, HistorySearchService.DEFAULT_MAX_RESULTS))
         assertEquals(0, r.totalHits)
     }
 
@@ -110,7 +111,7 @@ class HistorySearchToolTest {
 
     @Test
     fun test审计摘要_含真实过滤条件形态() {
-        val s = historySearchArgsSummary("user", "select\\s.+", 100L, 200L, "UserService", allDates = true)
+        val s = SqlVisualizerHistorySearchToolKt.historySearchArgsSummary("user", "select\\s.+", 100L, 200L, "UserService", true)
         assertTrue("应含 keyword 段：$s", s.contains("keyword=user"))
         assertTrue("应含 regex 段：$s", s.contains("regex=select\\s.+"))
         assertTrue("应含 fromMs 段：$s", s.contains("fromMs=100"))
@@ -118,7 +119,7 @@ class HistorySearchToolTest {
         assertTrue("应含 sourceFile 段：$s", s.contains("sourceFile=UserService"))
         assertTrue("应含 allDates 段：$s", s.contains("allDates=true"))
         // null 值显式落 "null"（summarize 口径），不留空值歧义
-        val s2 = historySearchArgsSummary("", "", null, null, "", allDates = false)
+        val s2 = SqlVisualizerHistorySearchToolKt.historySearchArgsSummary("", "", null, null, "", false)
         assertTrue("空过滤条件的 null 段应为字面 null：$s2", s2.contains("fromMs=null"))
     }
 }

@@ -27,18 +27,19 @@ class PrepareSingleFlightGateTest {
     // 第一组：F1 单飞 + 排队
     // ------------------------------------------------------------------
 
+    // K2J 互操作：QueuedExecuteIntent 为 Java record，具名实参改 5 参位置形态。
     private fun intent(tag: String = "i") = QueuedExecuteIntent(
-        onConsole = null,
-        onEditor = null,
-        onError = { msg -> "[$tag] $msg" },
-        onErrorRich = null,
-        wholeScriptExec = false,
+        null,
+        null,
+        { msg -> "[$tag] $msg" },
+        null,
+        false,
     )
 
     @Test
     fun `单飞_空闲时链持有门`() {
         val gate = PrepareSingleFlightGate()
-        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(executeAfterPrepare = false, nowMs = 0))
+        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(false, null, 0))
         gate.finishPrepare()
         assertTrue("复位后门应空闲", !gate.prepareInFlight.get())
     }
@@ -46,10 +47,10 @@ class PrepareSingleFlightGateTest {
     @Test
     fun `单飞_在飞时执行意图排队不再进第二链`() {
         val gate = PrepareSingleFlightGate()
-        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(executeAfterPrepare = false, nowMs = 0))
+        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(false, null, 0))
         // 准备链（预览）在飞期间用户点「执行 SQL」→ 只排队，不建第二条临时文件/会话/控制台
         val queued = intent("exec")
-        val decision = gate.tryEnter(executeAfterPrepare = true, intent = queued, nowMs = 10)
+        val decision = gate.tryEnter(true, queued, 10)
         assertEquals(PrepareGateDecision.QUEUE_ONLY, decision)
         assertTrue("排队标记应在位", gate.pendingExecute.get())
         // 完成准备时消费：拿到的是排队时那个意图，且一次性
@@ -61,20 +62,20 @@ class PrepareSingleFlightGateTest {
     @Test
     fun `排队_同窗口连点后到意图覆盖先到`() {
         val gate = PrepareSingleFlightGate()
-        gate.tryEnter(executeAfterPrepare = false, nowMs = 0)
-        gate.tryEnter(executeAfterPrepare = true, intent = intent("first"), nowMs = 10)
+        gate.tryEnter(false, null, 0)
+        gate.tryEnter(true, intent("first"), 10)
         val second = intent("second")
-        assertEquals(PrepareGateDecision.QUEUE_ONLY, gate.tryEnter(executeAfterPrepare = true, intent = second, nowMs = 20))
+        assertEquals(PrepareGateDecision.QUEUE_ONLY, gate.tryEnter(true, second, 20))
         assertSame("最新用户意图优先", second, gate.consumePendingExecute())
     }
 
     @Test
     fun `预览在飞时直通不排队不取所有权`() {
         val gate = PrepareSingleFlightGate()
-        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(executeAfterPrepare = false, nowMs = 0))
+        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(false, null, 0))
         // 另一条预览准备到达：PASS_THROUGH——不拦截（拦截会丢切换预览条目的 SQL 同步）、
         // 不取所有权、不置排队
-        assertEquals(PrepareGateDecision.PASS_THROUGH, gate.tryEnter(executeAfterPrepare = false, nowMs = 10))
+        assertEquals(PrepareGateDecision.PASS_THROUGH, gate.tryEnter(false, null, 10))
         assertFalse(gate.pendingExecute.get())
         assertNull(gate.consumePendingExecute())
         // 直通链不得动门：finishPrepare 只归持有链（此处模拟持有链仍在飞）
@@ -84,26 +85,26 @@ class PrepareSingleFlightGateTest {
     @Test
     fun `finishPrepare_复位后新链可重新持有`() {
         val gate = PrepareSingleFlightGate()
-        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(executeAfterPrepare = true, nowMs = 0))
+        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(true, null, 0))
         gate.finishPrepare()
-        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(executeAfterPrepare = true, intent = intent("next"), nowMs = 10))
+        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(true, intent("next"), 10))
     }
 
     @Test
     fun `卡死逃生_悬挂超窗后放行新链并清陈旧排队`() {
         val gate = PrepareSingleFlightGate()
-        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(executeAfterPrepare = false, nowMs = 0))
-        gate.tryEnter(executeAfterPrepare = true, intent = intent("stale"), nowMs = 10)
+        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(false, null, 0))
+        gate.tryEnter(true, intent("stale"), 10)
         // 门持有链消亡未复位（runner 失败无 session 回调族）——窗口过后新执行链接管自愈
         val takeover = intent("fresh")
         assertEquals(
             PrepareGateDecision.PROCEED,
-            gate.tryEnter(executeAfterPrepare = true, intent = takeover, nowMs = PrepareSingleFlightGate.STUCK_ESCAPE_MS + 1),
+            gate.tryEnter(true, takeover, PrepareSingleFlightGate.STUCK_ESCAPE_MS + 1),
         )
         assertNull("陈旧排队意图应被清空（旧链已死，消费无意义）", gate.consumePendingExecute())
         // 接管后终结复位照常
         gate.finishPrepare()
-        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(executeAfterPrepare = false, nowMs = PrepareSingleFlightGate.STUCK_ESCAPE_MS + 2))
+        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(false, null, PrepareSingleFlightGate.STUCK_ESCAPE_MS + 2))
     }
 
     // ------------------------------------------------------------------
@@ -112,19 +113,19 @@ class PrepareSingleFlightGateTest {
 
     @Test
     fun `embedMode_EXECUTE_恒展开`() {
-        assertFalse(ConsoleEmbedMode.EXECUTE.shouldCollapseDivider(resultAreaHasContent = false))
-        assertFalse(ConsoleEmbedMode.EXECUTE.shouldCollapseDivider(resultAreaHasContent = true))
+        assertFalse(ConsoleEmbedMode.EXECUTE.shouldCollapseDivider(false))
+        assertFalse(ConsoleEmbedMode.EXECUTE.shouldCollapseDivider(true))
     }
 
     @Test
     fun `embedMode_PREVIEW_无内容折叠`() {
-        assertTrue(ConsoleEmbedMode.PREVIEW.shouldCollapseDivider(resultAreaHasContent = false))
+        assertTrue(ConsoleEmbedMode.PREVIEW.shouldCollapseDivider(false))
     }
 
     @Test
     fun `embedMode_PREVIEW_有内容不折叠`() {
         // 竞态窗口（执行中快速切换预览条目）内结果已就位 → 不吞用户可见的结果
-        assertFalse(ConsoleEmbedMode.PREVIEW.shouldCollapseDivider(resultAreaHasContent = true))
+        assertFalse(ConsoleEmbedMode.PREVIEW.shouldCollapseDivider(true))
     }
 
     // ------------------------------------------------------------------
