@@ -155,7 +155,7 @@ public class HibernateLogParserTest {
                 "Hibernate: select * from users where created_at > ?",
                 "binding parameter [1] as [TIMESTAMP] - [2025-01-01 12:00:00.0]");
         assertEquals(1, entries.size());
-        assertEquals("select * from users where created_at > '2025-01-01 12:00:00.0'", entries.get(0).restoredSql());
+        assertEquals("select * from users where created_at > TIMESTAMP '2025-01-01 12:00:00.0'", entries.get(0).restoredSql());
     }
 
     @Test
@@ -545,7 +545,7 @@ public class HibernateLogParserTest {
                 "binding parameter [4] as [BIGINT] - [1]");
         assertEquals(1, entries.size());
         assertEquals(
-                "insert into audit_log (action, user_id, created_at, id) values ('LOGIN', 42, '2025-08-21 10:00:00.0', 1)",
+                "insert into audit_log (action, user_id, created_at, id) values ('LOGIN', 42, TIMESTAMP '2025-08-21 10:00:00.0', 1)",
                 entries.get(0).restoredSql());
     }
 
@@ -560,7 +560,7 @@ public class HibernateLogParserTest {
                 "binding parameter [4] as [BIGINT] - [1]");
         assertEquals(1, entries.size());
         assertEquals(
-                "update users set name='Alice', email=NULL, last_login='2025-08-21 10:00:00.0' where id=1",
+                "update users set name='Alice', email=NULL, last_login=TIMESTAMP '2025-08-21 10:00:00.0' where id=1",
                 entries.get(0).restoredSql());
     }
 

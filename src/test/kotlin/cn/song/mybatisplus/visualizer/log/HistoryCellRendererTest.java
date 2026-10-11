@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import static cn.song.mybatisplus.visualizer.config.PluginSettings.LOG_TIMESTAMP_SOURCE_CAPTURE;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.ui.SimpleColoredComponent;
@@ -16,6 +17,7 @@ import javax.swing.JList;
 import java.io.File;
 import java.nio.file.Files;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 历史面板两级导航渲染器 UI 测试（F-44-3 渲染健壮性；T-LogListFreeze-04 迁移到片段通道）：
@@ -56,6 +58,10 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
         return sb.toString();
     }
 
+    private static LogSqlEntry sqlEntry(String sql) {
+        return sqlEntry(sql, null, 0, null);
+    }
+
     private static LogSqlEntry sqlEntry(String sql, String sourceFile, int sourceLine, Long ms) {
         return new LogSqlEntry(sql, sql, List.<LogSqlParam>of(), 1_700_000_000_000L, sourceFile, sourceLine, ms);
     }
@@ -87,6 +93,25 @@ public class HistoryCellRendererTest extends BasePlatformTestCase {
         state.setLogListSqlDisplayMode(savedDisplayMode != null
                 ? savedDisplayMode : PluginSettings.DEFAULT_LOG_LIST_DISPLAY_MODE);
         super.tearDown();
+    }
+
+    // ---------- O-90：同模板 ×N 徽章 ----------
+
+    @Test
+    public void test二级条目_同模板徽章达阈值渲染() throws Exception {
+        String sql = "SELECT * FROM hist_orders WHERE uid = 7";
+        sqlRenderer.templateCounts = Map.of(LogSqlModelsKt.structureFingerprint(sql), 3);
+        String meta = joinedText(renderSql(sqlEntry(sql, null, 0, null)).metaLine);
+        assertTrue("达阈值应渲染同模板徽章",
+                meta.contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)));
+        sqlRenderer.templateCounts = Map.of(LogSqlModelsKt.structureFingerprint(sql), 2);
+        assertFalse("未达阈值不渲染",
+                joinedText(renderSql(sqlEntry(sql, null, 0, null)).metaLine)
+                        .contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 2)));
+        sqlRenderer.templateCounts = Map.of();
+        assertFalse("无计数不渲染",
+                joinedText(renderSql(sqlEntry(sql, null, 0, null)).metaLine)
+                        .contains(MpSqlVisualizerBundle.message("log.panel.templateBadge", 3)));
     }
 
     @Test

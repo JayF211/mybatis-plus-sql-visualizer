@@ -292,4 +292,30 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
             assertTrue("转换产出后结果区应有折叠区域", regions > 0);
         });
     }
+
+    // ---------- O-92：从剪贴板读取（粘贴还原低门槛入口，剪贴板按钮先行） ----------
+
+    @Test
+    public void test从剪贴板读取_填入输入区并立即转换() throws Exception {
+        String logText = "==>  Preparing: SELECT * FROM user WHERE id = ?
+" +
+            "==> Parameters: 1(Long)";
+        cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy(logText);
+        panel.readClipboardForTest();
+        assertEquals("剪贴板文本应原样填入输入区", logText, panel.inputTextForTest());
+        String result = panel.resultTextForTest();
+        assertTrue("填入后应立即转换出 SQL（loadFromEntry 同款填入即转链路）：" + result, result.contains("id = 1"));
+    }
+
+    @Test
+    public void test从剪贴板读取_空剪贴板轻提示且零写入() throws Exception {
+        cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy("   ");
+        panel.readClipboardForTest();
+        assertEquals(
+            "剪贴板空应给状态行轻提示（非红字错误路径）",
+            MpSqlVisualizerBundle.message("logToSql.clipboard.empty"),
+            panel.statusForTest());
+        assertEquals("剪贴板空不得改写输入区", "", panel.inputTextForTest());
+        assertEquals("剪贴板空不得改写结果区", "", panel.resultTextForTest());
+    }
 }

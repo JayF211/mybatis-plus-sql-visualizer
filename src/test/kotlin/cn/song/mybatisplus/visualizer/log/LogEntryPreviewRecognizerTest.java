@@ -239,4 +239,84 @@ public class LogEntryPreviewRecognizerTest {
         assertTrue(recognized.recognized());
         assertEquals(Map.of("param1", "1"), recognized.initialValues());
     }
+
+    // ------------------------------------------------------------------
+    // T-DdlLogPreview S1（20261006 第三轮走查）：DDL 字面量恢复门禁
+    // ------------------------------------------------------------------
+
+    /**
+     * DDL 的字符串是列注释/默认值，不是可编辑参数——门禁后不得产生参数行，且预览 SQL 必须
+     * 保留原文（占位符化会让 DDL 语法不合法：用户实测 `CREATE TABLE … COMMENT '主键'` 曾被恢复出
+     * param1..param10，执行必报错）。反向验证：摘掉 `LogEntryPreviewRecognizer` 的语句类型门禁即红。
+     */
+    @Test
+    public void DDL_不产字面量参数且预览SQL保留原文() throws Exception {
+        String ddl = "CREATE TABLE `biz_project_plan` ( `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键', " +
+                "`plan_id` VARCHAR(64) NOT NULL COMMENT '计划编号' ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+        PreviewResult r = LogEntryPreviewRecognizerKt.toPreviewResult(
+                entry(ddl, List.of()), false, true);
+        assertTrue("DDL 不得产生参数行（列注释不是参数）：" + r.getUnresolvedParams(), r.getUnresolvedParams().isEmpty());
+        assertTrue("预览 SQL 必须保留注释原文（可执行性）", r.getSql().contains("COMMENT '主键'"));
+        assertFalse("预览 SQL 不得被占位符化（COMMENT ? 语法不合法）", r.getSql().contains("COMMENT ?"));
+
+        PreviewResult drop = LogEntryPreviewRecognizerKt.toPreviewResult(
+                entry("DROP TABLE IF EXISTS `biz_project_member`", List.of()), false, true);
+        assertTrue("DROP 同样不产参数行", drop.unresolvedParams().isEmpty());
+    }
+
+    /** 对照：DML/QUERY 的字面量恢复行为不变（门禁只拦 DDL/UNKNOWN）。 */
+    @Test
+    public void DML_字面量恢复行为不变() throws Exception {
+        PreviewResult select = LogEntryPreviewRecognizerKt.toPreviewResult(
+                entry("SELECT * FROM t WHERE name = 'abc'", List.of()), false, true);
+        assertEquals("查询的字面量仍恢复为参数", List.of("param1"), select.getUnresolvedParams());
+        assertEquals(Map.of("param1", "abc"), select.getInitialParamValues());
+    }
+
+    // ------------------------------------------------------------------
+    // T-StackHoverUi：调用栈快照三分支同权透传
+    // （识别/字面量恢复两分支此前丢快照——带参数条目 meta 行摘要与悬停弹层不可达）
+    // ------------------------------------------------------------------
+
+    @Test
+    public void 识别分支_透传调用栈快照() throws Exception {
+        PreviewResult result = LogEntryPreviewRecognizerKt.toPreviewResult(new LogSqlEntry(
+                "SELECT * FROM t WHERE a = ?",
+                "SELECT * FROM t WHERE a = ?",
+                List.of(new LogSqlParam("1", "Long")),
+                System.currentTimeMillis(), null, null, SqlSource.UNKNOWN, null,
+                null, 0, List.of(), List.of(),
+                "com.a.B#m:1<-com.c.D#n:2", 0L, null, null, null, null, null), false, false);
+        assertEquals("com.a.B#m:1<-com.c.D#n:2", result.getStackDigest());
+    }
+
+    @Test
+    public void 字面量恢复分支_透传调用栈快照() throws Exception {
+        String sql = "SELECT * FROM tableA WHERE (\"id\" = '3251') ;";
+        PreviewResult result = LogEntryPreviewRecognizerKt.toPreviewResult(new LogSqlEntry(
+                sql, sql, List.of(),
+                System.currentTimeMillis(), null, null, SqlSource.UNKNOWN, null,
+                null, 0, List.of(), List.of(),
+                "com.a.B#m:3", 0L, null, null, null, null, null), false, true);
+        assertEquals("com.a.B#m:3", result.getStackDigest());
+    }
+
+    @Test
+    public void 兜底分支_保留调用栈快照() throws Exception {
+        // 占位符 2 != 参数数 1 → 识别失败，且占位符非零不走字面量恢复 → 兜底分支（既有行为钉）
+        PreviewResult result = LogEntryPreviewRecognizerKt.toPreviewResult(new LogSqlEntry(
+                "SELECT * FROM t WHERE a = ? AND b = ?",
+                "SELECT * FROM t WHERE a = ? AND b = ?",
+                List.of(new LogSqlParam("1", "Long")),
+                System.currentTimeMillis(), null, null, SqlSource.UNKNOWN, null,
+                null, 0, List.of(), List.of(),
+                "com.a.B#m:4", 0L, null, null, null, null, null), false, false);
+        assertEquals("com.a.B#m:4", result.getStackDigest());
+    }
+
+    @Test
+    public void 无快照条目_三分支不凭空造快照() throws Exception {
+        PreviewResult recognized = LogEntryPreviewRecognizerKt.toPreviewResult(entry("SELECT * FROM t WHERE a = ?", List.of(new LogSqlParam("1", "Long"))), false, false);
+        assertNull("无快照仍为 null（控制台/桥通道条目不冒称）", recognized.getStackDigest());
+    }
 }
