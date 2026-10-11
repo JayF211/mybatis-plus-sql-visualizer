@@ -40,6 +40,17 @@ public class JpqlGutterLineMarkerProvider implements LineMarkerProvider {
     @Override
     @Nullable
     public LineMarkerInfo<PsiElement> getLineMarkerInfo(@NotNull PsiElement element) {
+        // F36（T-PerfSweep16）：组显隐门前置——组关时 isDerivedQuery/hasQueryAnnotation 重活
+        // 零触达（原门在重活判定之后，组关省不掉重活）；单次取 state，总闸与组显隐共用
+        // （原双路径每到达元素 3 次 app 级查找收敛为 1 次）
+        PluginSettings.State gutterState;
+        try {
+            gutterState = PluginSettings.getInstance().getState();
+        } catch (Throwable e) { // Kotlin runCatching.getOrNull() 语义
+            gutterState = null;
+        }
+        if (gutterState != null && !gutterState.getShowGutterIcon()) return null;
+        if (!GutterGroups.enabledFor(getClass(), gutterState)) return null; // R2 分组显隐
         // LineMarker 必须注册在 leaf 元素：注解的 `@` token
         if (!(element instanceof PsiJavaToken)) return null;
         PsiJavaToken token = (PsiJavaToken) element;
@@ -64,7 +75,6 @@ public class JpqlGutterLineMarkerProvider implements LineMarkerProvider {
         // 注意：isDerivedQuery 必须在 hasQueryAnnotation 之前检查——某些方法可能同时满足两者。
         if (DerivedMethodLocator.isDerivedQuery(method)) return null;
         if (!JpqlQueryLocator.hasQueryAnnotation(method)) return null;
-        if (!gutterEnabled()) return null;
         return new LineMarkerInfo<PsiElement>(
                 element,
                 element.getTextRange(),
@@ -74,14 +84,6 @@ public class JpqlGutterLineMarkerProvider implements LineMarkerProvider {
                 GutterIconRenderer.Alignment.CENTER,
                 () -> MpSqlVisualizerBundle.message("gutter.jpql.accessible.name")
         );
-    }
-
-    private boolean gutterEnabled() {
-        try {
-            return PluginSettings.getInstance().getState().getShowGutterIcon();
-        } catch (Throwable t) {
-            return true;
-        }
     }
 
     private static final class JpqlGutterNavigationHandler implements GutterIconNavigationHandler<PsiElement> {

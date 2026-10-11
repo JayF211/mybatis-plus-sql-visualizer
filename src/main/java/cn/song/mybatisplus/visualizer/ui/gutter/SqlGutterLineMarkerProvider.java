@@ -11,8 +11,6 @@ import com.intellij.codeInsight.daemon.GutterIconNavigationHandler;
 import com.intellij.codeInsight.daemon.LineMarkerInfo;
 import com.intellij.codeInsight.daemon.LineMarkerInfo.LineMarkerGutterIconRenderer;
 import com.intellij.codeInsight.daemon.LineMarkerProvider;
-import com.intellij.notification.Notification;
-import com.intellij.notification.NotificationType;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.editor.markup.GutterIconRenderer;
@@ -54,8 +52,17 @@ public class SqlGutterLineMarkerProvider implements LineMarkerProvider {
     @Override
     @Nullable
     public LineMarkerInfo<PsiElement> getLineMarkerInfo(@NotNull PsiElement element) {
-        // T-Perf-23：开关判断前置——用户关闭图标后不再对每个 leaf 跑锚点判定
-        if (!gutterEnabled()) return null;
+        // T-Perf-23：开关判断前置——用户关闭图标后不再对每个 leaf 跑锚点判定。
+        // F36（T-PerfSweep16）：单次取 state，总闸与组显隐共用（原 gutterEnabled + enabledFor
+        // 双路径每到达元素 3 次 app 级查找收敛为 1 次）
+        PluginSettings.State gutterState;
+        try {
+            gutterState = PluginSettings.getInstance().getState();
+        } catch (Throwable e) { // Kotlin runCatching.getOrNull() 语义
+            gutterState = null;
+        }
+        if (gutterState != null && !gutterState.getShowGutterIcon()) return null;
+        if (!GutterGroups.enabledFor(getClass(), gutterState)) return null; // R2 分组显隐
         PsiElement anchor = WrapperAnchorDetector.anchorElement(element);
         if (anchor == null) return null;
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用。
@@ -81,15 +88,6 @@ public class SqlGutterLineMarkerProvider implements LineMarkerProvider {
                 };
             }
         };
-    }
-
-    /** 读取 gutter 图标开关（测试环境 service 未注册时按默认 true 处理）。 */
-    private boolean gutterEnabled() {
-        try {
-            return PluginSettings.getInstance().getState().getShowGutterIcon();
-        } catch (Throwable t) {
-            return true;
-        }
     }
 
     /**
@@ -196,68 +194,46 @@ public class SqlGutterLineMarkerProvider implements LineMarkerProvider {
                     });
         }
 
-        /** 反查该锚点最近的日志执行记录并弹二级列表（匹配在后台：PSI 读包 ReadAction + 快照校验）。 */
+        /**
+         * 反查该锚点最近的日志执行记录并弹浏览对话框（T-RecentExecDialog O-118 换代：原二级
+         * ListPopup 只有一行摘要，改弹 {@link cn.song.mybatisplus.visualizer.log.RecentExecutionsDialog}
+         * 复用日志列表渲染器 + 只读高亮编辑器）。D86=A：空命中也弹（对话框状态行显示空态文案，
+         * 原轻通知分支随换代删除）。
+         *
+         * <p>链路不变：EDT 侧捕获锚点快照（文件 + textRange + 文档 modificationStamp）；
+         * 后台读取前由 {@code validatedRecentAnchor} 校验，失效即按「无记录」降级（不跳到错位置）；
+         * 匹配留池化线程（{@link cn.song.mybatisplus.visualizer.log.EntrySourceMatcher#match} 纯函数）。
+         */
         private void showRecentEntriesPopup(Project project, PsiElement elt) {
-            // T-PCP-02：EDT 侧捕获锚点快照（文件 + textRange + 文档 modificationStamp）；
-            // 后台读取前由 validatedRecentAnchor 校验，失效即按「无记录」降级（不跳到错位置）
+            // T-PCP-02：EDT 侧捕获锚点快照；后台读取前校验（见上）
             PsiSnapshot snapshot = PsiSnapshot.capture(elt);
             com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread(() -> {
-                kotlin.Pair<String, Integer> anchor;
+                kotlin.Pair<String, Integer> anchorOrNull;
                 try {
-                    anchor = com.intellij.openapi.application.ReadAction.compute(
+                    anchorOrNull = com.intellij.openapi.application.ReadAction.compute(
                             () -> SqlGutterLineMarkerProviderKt.validatedRecentAnchor(
                                     project.getBasePath(), snapshot));
                 } catch (Throwable t) {
-                    anchor = null;
+                    anchorOrNull = null;
                 }
-                String anchorPath = anchor != null ? anchor.getFirst() : null;
-                int anchorLine = anchor != null ? anchor.getSecond() : 0;
+                final kotlin.Pair<String, Integer> anchor = anchorOrNull;
                 SqlLogManager manager = project.getService(SqlLogManager.class);
                 java.util.List<LogSqlEntry> matched = cn.song.mybatisplus.visualizer.log.EntrySourceMatcher.match(
-                        manager.getEntries().snapshot(), anchorPath, anchorLine);
+                        manager.getEntries().snapshot(),
+                        anchor != null ? anchor.getFirst() : null,
+                        anchor != null ? anchor.getSecond() : 0);
                 com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater(() -> {
                     if (project.isDisposed()) return;
-                    if (matched.isEmpty()) {
-                        // T-UiNative T-UN-02：无记录提示改轻通知（原模态弹窗——纯告知无需打断）；
-                        // 测试模式跳过（对齐 CopyExecutableSqlAction.showToast 约定）
-                        if (!com.intellij.openapi.application.ApplicationManager.getApplication().isUnitTestMode()) {
-                            try {
-                                new Notification(
-                                        NOTIFICATION_GROUP_ID,
-                                        MpSqlVisualizerBundle.message("gutter.popup.recent"),
-                                        MpSqlVisualizerBundle.message("gutter.popup.recent.empty"),
-                                        NotificationType.INFORMATION).notify(project);
-                            } catch (Throwable ignored) {
-                                // 通知组缺失等异常路径静默跳过
-                            }
-                        }
-                        return;
+                    // 锚点展示片段「文件名:行号」（标题参数；anchor=null = 快照失效，标题不带锚点）
+                    String anchorLabel = null;
+                    if (anchor != null) {
+                        String path = anchor.getFirst();
+                        int line = anchor.getSecond();
+                        String name = path.substring(path.lastIndexOf('/') + 1);
+                        anchorLabel = line > 0 ? name + ":" + line : name;
                     }
-                    com.intellij.openapi.ui.popup.util.BaseListPopupStep<LogSqlEntry> entryStep =
-                            new com.intellij.openapi.ui.popup.util.BaseListPopupStep<LogSqlEntry>(
-                                    MpSqlVisualizerBundle.message("gutter.popup.recent"), matched) {
-                                @Override
-                                public String getTextFor(LogSqlEntry value) {
-                                    return value.summary();
-                                }
-
-                                @Override
-                                public com.intellij.openapi.ui.popup.PopupStep<?> onChosen(
-                                        LogSqlEntry selectedValue, boolean finalChoice) {
-                                    // 仅 finalChoice=true 时执行；避免悬停预览分支误触发 NPE。
-                                    if (!finalChoice) return null;
-                                    // 20260907-1500：open 会同步 show SqlPreviewDialog，须挂 doFinalStep
-                                    //（popup 选中路径内同步弹 dialog 触发平台焦点告警，与生成测试资产同根因）。
-                                    if (selectedValue != null) {
-                                        return doFinalStep(() ->
-                                                cn.song.mybatisplus.visualizer.log.LogEntryPreviewOpener.open(project, selectedValue));
-                                    }
-                                    return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE;
-                                }
-                            };
-                    com.intellij.openapi.ui.popup.JBPopup popup =
-                            com.intellij.openapi.ui.popup.JBPopupFactory.getInstance().createListPopup(entryStep);
-                    popup.showInFocusCenter();
+                    // 非模态对话框（构造+show 须 EDT——本 invokeLater 保证）
+                    new cn.song.mybatisplus.visualizer.log.RecentExecutionsDialog(project, matched, anchorLabel).show();
                 });
             });
         }
@@ -290,6 +266,5 @@ public class SqlGutterLineMarkerProvider implements LineMarkerProvider {
     private static final Icon SQL_PREVIEW_ICON =
             IconLoader.getIcon("/icons/sqlGutter.svg", SqlGutterLineMarkerProvider.class);
 
-    /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
-    private static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
+    // 「最近执行记录」轻提示通知组已随 T-RecentExecDialog 弹框化退役（空态改对话框状态行）。
 }

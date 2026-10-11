@@ -47,6 +47,17 @@ public class NamedQueryGutterLineMarkerProvider implements LineMarkerProvider {
 
     @Override
     public @Nullable LineMarkerInfo<?> getLineMarkerInfo(@NotNull PsiElement element) {
+        // F36（T-PerfSweep16）：组显隐门前置——组关时 NamedQueryLocator.locate 重活零触达
+        // （原门在重活判定之后，组关省不掉重活）；单次取 state，总闸与组显隐共用
+        // （原双路径每到达元素 3 次 app 级查找收敛为 1 次）
+        PluginSettings.State gutterState;
+        try {
+            gutterState = PluginSettings.getInstance().getState();
+        } catch (Throwable e) { // Kotlin runCatching.getOrNull() 语义
+            gutterState = null;
+        }
+        if (gutterState != null && !gutterState.getShowGutterIcon()) return null;
+        if (!GutterGroups.enabledFor(getClass(), gutterState)) return null; // R2 分组显隐
         // LineMarker 必须注册在 leaf 元素：注解的 `@` token
         if (!(element instanceof PsiJavaToken)) return null;
         PsiJavaToken token = (PsiJavaToken) element;
@@ -71,7 +82,6 @@ public class NamedQueryGutterLineMarkerProvider implements LineMarkerProvider {
             }
         }
         if (!found) return null;
-        if (!gutterEnabled()) return null;
         return new LineMarkerInfo<PsiElement>(
                 element,
                 element.getTextRange(),
@@ -80,14 +90,6 @@ public class NamedQueryGutterLineMarkerProvider implements LineMarkerProvider {
                 NamedQueryGutterNavigationHandler.INSTANCE,
                 GutterIconRenderer.Alignment.CENTER,
                 () -> MpSqlVisualizerBundle.message("gutter.namedQuery.accessible.name"));
-    }
-
-    private boolean gutterEnabled() {
-        try {
-            return PluginSettings.getInstance().getState().getShowGutterIcon();
-        } catch (Throwable t) {
-            return true;
-        }
     }
 
     private enum NamedQueryGutterNavigationHandler implements GutterIconNavigationHandler<PsiElement> {

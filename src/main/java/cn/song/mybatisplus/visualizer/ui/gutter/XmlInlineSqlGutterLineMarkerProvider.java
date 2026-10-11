@@ -50,8 +50,22 @@ public class XmlInlineSqlGutterLineMarkerProvider implements LineMarkerProvider 
         if (token.getTokenType() != XmlTokenType.XML_NAME) return null;
         XmlTag tag = token.getParent() instanceof XmlTag ? (XmlTag) token.getParent() : null;
         if (tag == null) return null;
-        if (!XmlInlineSqlDetector.detectionEnabled()) return null;
-        if (!gutterEnabled()) return null;
+        // F51（T-PerfQuick5）：F19 快路径（xmlInlineSqlEnabled+总闸）与 R2 分组显隐并闸——
+        // 方法头单次取 state 后传 (Class, State?) 重载，每到达元素 app 级服务查找 2→1
+        // （原形态：gutterFastPathEnabled 内 1 次 + enabledFor(Class, Boolean) 包装内 1 次）。
+        // 语义逐值等价：state 不可读承接两道闸原 runCatching 兜底（全放行）；可读时合取式
+        // xmlInlineSqlEnabled && showGutterIcon && 组开关 与原两道闸串联逐值相同
+        // （GutterGroupsTest testF51_合成对照 真值表在案）。
+        PluginSettings.State gutterState;
+        try {
+            gutterState = PluginSettings.getInstance().getState();
+        } catch (Throwable e) { // Kotlin runCatching.getOrNull() 语义
+            gutterState = null;
+        }
+        if (gutterState != null && (!gutterState.getXmlInlineSqlEnabled() || !gutterState.getShowGutterIcon())) {
+            return null;
+        }
+        if (!GutterGroups.enabledFor(getClass(), gutterState)) return null; // R2 分组显隐
         if (!XmlInlineSqlDetector.isSqlCarrierTag(tag)) return null;
         // 七参构造器（2020.3+）：末参 accessibleNameProvider 供屏幕阅读器使用
         return new LineMarkerInfo<PsiElement>(
@@ -63,15 +77,6 @@ public class XmlInlineSqlGutterLineMarkerProvider implements LineMarkerProvider 
                 GutterIconRenderer.Alignment.CENTER,
                 () -> MpSqlVisualizerBundle.message("gutter.xmlInlineSql.accessible.name")
         );
-    }
-
-    /** 读取 gutter 图标开关（测试环境 service 未注册时按默认 true 处理）。 */
-    private boolean gutterEnabled() {
-        try { // Kotlin runCatching.getOrDefault(true) 语义
-            return PluginSettings.getInstance().getState().getShowGutterIcon();
-        } catch (Throwable ignored) {
-            return true;
-        }
     }
 
     /** 点击处理：后台解析 + 渲染（HQL 转换失败回退原文直显），结果走统一展示入口。 */

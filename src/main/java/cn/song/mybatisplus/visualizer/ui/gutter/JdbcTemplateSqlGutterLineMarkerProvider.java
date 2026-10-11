@@ -83,8 +83,19 @@ public class JdbcTemplateSqlGutterLineMarkerProvider implements LineMarkerProvid
         // 杜绝 `execute(callback)` / MP select 族（Wrapper 实参）误标
         if (!PreviewReceiverResolver.hasStringLikeArg(grandParent)) return null;
 
-        // 开关关闭时不显示
-        if (!gutterEnabled()) return null;
+        // 开关关闭时不显示。F36（T-PerfSweep16）：单次取 state——本 provider 在总闸之外还受
+        // jdbcSqlPreviewEnabled 约束（原 gutterEnabled 语义等价保留：失败回退按 true），总闸/组显隐/
+        // JDBC 预览开关共用这一次读取（原双路径每到达元素 3 次 app 级查找收敛为 1 次）
+        PluginSettings.State gutterState;
+        try {
+            gutterState = PluginSettings.getInstance().getState();
+        } catch (Throwable e) { // Kotlin runCatching.getOrNull() 语义
+            gutterState = null;
+        }
+        if (gutterState != null && (!gutterState.getShowGutterIcon() || !gutterState.getJdbcSqlPreviewEnabled())) {
+            return null;
+        }
+        if (!GutterGroups.enabledFor(getClass(), gutterState)) return null; // R2 分组显隐
 
         return new LineMarkerInfo<PsiElement>(
                 element,
@@ -94,16 +105,6 @@ public class JdbcTemplateSqlGutterLineMarkerProvider implements LineMarkerProvid
                 JdbcTemplateGutterNavigationHandler.INSTANCE,
                 GutterIconRenderer.Alignment.CENTER,
                 () -> MpSqlVisualizerBundle.message("gutter.jdbcTemplate.accessible.name"));
-    }
-
-    /** 读取 gutter 图标开关 + JDBC 预览开关（测试环境 service 未注册时按默认 true 处理）。 */
-    private boolean gutterEnabled() {
-        try {
-            PluginSettings.State state = PluginSettings.getInstance().getState();
-            return state.getShowGutterIcon() && state.getJdbcSqlPreviewEnabled();
-        } catch (Throwable t) {
-            return true;
-        }
     }
 
     /**

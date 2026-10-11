@@ -63,7 +63,16 @@ public class HqlGutterLineMarkerProvider implements LineMarkerProvider {
         if (!STANDARD_JPA_QUERY_METHODS.contains(element.getText())) return null; // T-Perf-23：Set 提常量
         // 【关键过滤】确保第一个参数是字符串字面量（HQL/JPQL/SQL），排除 cb.createQuery(Class)
         if (!hasStringFirstArgument(grandParent)) return null;
-        if (!gutterEnabled()) return null;
+        // F36（T-PerfSweep16）：单次取 state，总闸与组显隐共用（原 gutterEnabled + enabledFor
+        // 双路径每到达元素 3 次 app 级查找收敛为 1 次）
+        PluginSettings.State gutterState;
+        try {
+            gutterState = PluginSettings.getInstance().getState();
+        } catch (Throwable e) { // Kotlin runCatching.getOrNull() 语义
+            gutterState = null;
+        }
+        if (gutterState != null && !gutterState.getShowGutterIcon()) return null;
+        if (!GutterGroups.enabledFor(getClass(), gutterState)) return null; // R2 分组显隐
         // 复用 HqlQueryLocator.locate 非 null 判定（精确匹配该调用）
         if (HqlQueryLocator.locate(grandParent) == null) return null;
         return new LineMarkerInfo<PsiElement>(
@@ -104,14 +113,6 @@ public class HqlGutterLineMarkerProvider implements LineMarkerProvider {
             return false;
         }
         return false; // Class 字面量等
-    }
-
-    private boolean gutterEnabled() {
-        try {
-            return PluginSettings.getInstance().getState().getShowGutterIcon();
-        } catch (Throwable t) {
-            return true;
-        }
     }
 
     private static final class HqlGutterNavigationHandler implements GutterIconNavigationHandler<PsiElement> {

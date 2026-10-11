@@ -68,6 +68,17 @@ public class StringSqlMethodGutterLineMarkerProvider implements LineMarkerProvid
 
     @Override
     public @Nullable LineMarkerInfo<?> getLineMarkerInfo(@NotNull PsiElement element) {
+        // F36（T-PerfSweep16）：组显隐门前置——组关时 hasStringSqlCall 方法体扫描重活零触达
+        // （原门在重活判定之后，组关省不掉重活）；单次取 state，总闸与组显隐共用
+        // （原双路径每到达元素 3 次 app 级查找收敛为 1 次）
+        PluginSettings.State gutterState;
+        try {
+            gutterState = PluginSettings.getInstance().getState();
+        } catch (Throwable e) { // Kotlin runCatching.getOrNull() 语义
+            gutterState = null;
+        }
+        if (gutterState != null && !gutterState.getShowGutterIcon()) return null;
+        if (!GutterGroups.enabledFor(getClass(), gutterState)) return null; // R2 分组显隐
         // LineMarker 框架只传递 leaf 元素：锚点为方法定义名 PsiIdentifier
         if (!(element instanceof PsiIdentifier)) return null;
         if (!(element.getParent() instanceof PsiMethod)) return null;
@@ -77,7 +88,6 @@ public class StringSqlMethodGutterLineMarkerProvider implements LineMarkerProvid
         if (body == null) return null;
 
         if (!hasStringSqlCall(body)) return null;
-        if (!gutterEnabled()) return null;
 
         return new LineMarkerInfo<PsiElement>(
                 element,
@@ -115,15 +125,6 @@ public class StringSqlMethodGutterLineMarkerProvider implements LineMarkerProvid
             }
         }
         return false;
-    }
-
-    /** 读取 gutter 图标开关（测试环境 service 未注册时按默认 true 处理）。 */
-    private boolean gutterEnabled() {
-        try {
-            return PluginSettings.getInstance().getState().getShowGutterIcon();
-        } catch (Throwable t) {
-            return true;
-        }
     }
 
     /**

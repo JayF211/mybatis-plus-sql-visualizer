@@ -55,7 +55,16 @@ public class HbmNamedQueryGutterLineMarkerProvider implements LineMarkerProvider
         XmlTag parentTag = tag.getParentTag();
         if (parentTag == null || !"hibernate-mapping".equals(parentTag.getName())) return null;
         if (tag.getAttributeValue("name") == null) return null;
-        if (!gutterEnabled()) return null;
+        // F36（T-PerfSweep16）：单次取 state，总闸与组显隐共用（原 gutterEnabled + enabledFor
+        // 双路径每到达元素 3 次 app 级查找收敛为 1 次）
+        PluginSettings.State gutterState;
+        try {
+            gutterState = PluginSettings.getInstance().getState();
+        } catch (Throwable e) { // Kotlin runCatching.getOrNull() 语义
+            gutterState = null;
+        }
+        if (gutterState != null && !gutterState.getShowGutterIcon()) return null;
+        if (!GutterGroups.enabledFor(getClass(), gutterState)) return null; // R2 分组显隐
         return new LineMarkerInfo<PsiElement>(
                 element,
                 element.getTextRange(),
@@ -65,15 +74,6 @@ public class HbmNamedQueryGutterLineMarkerProvider implements LineMarkerProvider
                 GutterIconRenderer.Alignment.CENTER,
                 () -> MpSqlVisualizerBundle.message("gutter.hbmNamedQuery.accessible.name")
         );
-    }
-
-    /** 读取 gutter 图标开关（测试环境 service 未注册时按默认 true 处理）。 */
-    private static boolean gutterEnabled() {
-        try {
-            return PluginSettings.getInstance().getState().getShowGutterIcon();
-        } catch (Throwable t) {
-            return true;
-        }
     }
 
     /** 从 hbm 标签名推断查询种类（gutter 点击复用）。 */
