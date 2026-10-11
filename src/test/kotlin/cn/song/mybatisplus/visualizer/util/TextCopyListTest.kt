@@ -12,7 +12,7 @@ class TextCopyListTest : BasePlatformTestCase() {
 
     private class DemoList(model: DefaultListModel<Demo>) : TextCopyList<Demo>(model) {
         override fun copyTextFor(element: Demo): String? = element.text
-        fun itemToTextForTest(index: Int): String = itemToText(index, model.getElementAt(index))
+        fun itemToTextForTest(index: Int): String? = itemToText(index, model.getElementAt(index))
     }
 
     fun test复制文本委派给条目正文() {

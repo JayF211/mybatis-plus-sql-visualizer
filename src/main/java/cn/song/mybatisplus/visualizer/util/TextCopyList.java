@@ -24,10 +24,12 @@ public abstract class TextCopyList<E> extends JBList<E> {
     }
 
     /** 条目复制文本（Ctrl+C 逐行拼接的单元）；应返回可执行/可读的正文，而非渲染文本。 */
+    @org.jetbrains.annotations.Nullable
     protected abstract String copyTextFor(E element);
 
     @Override
     public final String itemToText(int index, E element) {
-        return copyTextFor(element);
+        final String text = copyTextFor(element); // 平台 itemToText 为 @Nullable，桥接保持非空契约
+        return text != null ? text : "";
     }
 }
