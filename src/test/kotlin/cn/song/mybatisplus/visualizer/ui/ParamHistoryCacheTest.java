@@ -260,23 +260,23 @@ public class ParamHistoryCacheTest {
         assertEquals(
             "默认方案不可重命名",
             ParamHistoryCache.SchemeOpResult.DEFAULT_PROTECTED,
-            cache.renameScheme(ParamHistoryCache.DEFAULT_SCHEME, "X"),
+            cache.renameScheme(ParamHistoryCache.DEFAULT_SCHEME, "X")
         );
         assertEquals(
             "默认方案不可删除",
             ParamHistoryCache.SchemeOpResult.DEFAULT_PROTECTED,
-            cache.deleteScheme(ParamHistoryCache.DEFAULT_SCHEME),
+            cache.deleteScheme(ParamHistoryCache.DEFAULT_SCHEME)
         );
         // 重名 / 未知
         assertEquals(
             "重命名到已存在名应拒绝",
             ParamHistoryCache.SchemeOpResult.DUPLICATE,
-            cache.renameScheme("A", "B"),
+            cache.renameScheme("A", "B")
         );
         assertEquals(
             "未知方案重命名 NOT_FOUND",
             ParamHistoryCache.SchemeOpResult.NOT_FOUND,
-            cache.renameScheme("NOPE", "X"),
+            cache.renameScheme("NOPE", "X")
         );
         // 重命名保序 + 激活指针随迁
         assertEquals(ParamHistoryCache.SchemeOpResult.OK, cache.renameScheme("A", "A2"));
@@ -346,7 +346,7 @@ public class ParamHistoryCacheTest {
             assertEquals(
                 "switch 不得走全量序列化（只写激活指针）：计数 " + afterSave + " → " + probeCount.get(),
                 afterSave,
-                probeCount.get(),
+                probeCount.get()
             );
             // 指针本身仍轻量落盘：新实例恢复激活态
             ParamHistoryCache cache2 = new ParamHistoryCache();
@@ -368,13 +368,13 @@ public class ParamHistoryCacheTest {
             assertEquals(
                 "第 " + (i + 1) + " 个方案应成功",
                 ParamHistoryCache.SchemeOpResult.OK,
-                cache.saveAsScheme("S" + i, key, Map.of("id", String.valueOf(i))),
+                cache.saveAsScheme("S" + i, key, Map.of("id", String.valueOf(i)))
             );
         }
         assertEquals(
             "达上限后新建另存应拒收",
             ParamHistoryCache.SchemeOpResult.LIMIT_REACHED,
-            cache.saveAsScheme("溢出方案", key, Map.of("id", "X")),
+            cache.saveAsScheme("溢出方案", key, Map.of("id", "X"))
         );
         assertFalse("被拒方案不应入库", cache.hasScheme("溢出方案"));
         assertEquals("方案个数不得超上限", ParamHistoryCache.MAX_SCHEME_COUNT, cache.schemeNames().size());
@@ -398,7 +398,7 @@ public class ParamHistoryCacheTest {
         field.setAccessible(true);
         assertTrue(
             "schemes 须为 ConcurrentHashMap（F50：后台 pooled 写回 vs EDT 读原裸 LinkedHashMap 无同步保护）",
-            java.util.concurrent.ConcurrentHashMap.class.isAssignableFrom(field.getType()),
+            java.util.concurrent.ConcurrentHashMap.class.isAssignableFrom(field.getType())
         );
     }
 

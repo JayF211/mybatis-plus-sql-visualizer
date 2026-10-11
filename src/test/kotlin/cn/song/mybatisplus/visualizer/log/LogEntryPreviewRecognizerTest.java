@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log;
 
+import cn.song.mybatisplus.visualizer.model.PreviewResult;
 import cn.song.mybatisplus.visualizer.sql.ParamHint;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -261,7 +262,7 @@ public class LogEntryPreviewRecognizerTest {
 
         PreviewResult drop = LogEntryPreviewRecognizerKt.toPreviewResult(
                 entry("DROP TABLE IF EXISTS `biz_project_member`", List.of()), false, true);
-        assertTrue("DROP 同样不产参数行", drop.unresolvedParams().isEmpty());
+        assertTrue("DROP 同样不产参数行", drop.getUnresolvedParams().isEmpty());
     }
 
     /** 对照：DML/QUERY 的字面量恢复行为不变（门禁只拦 DDL/UNKNOWN）。 */

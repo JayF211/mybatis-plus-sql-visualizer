@@ -59,7 +59,7 @@ public class SqlToJavaConverterTest {
         String code = SqlToJavaConverter.generateCode(result, null, ReverseWrapperFormat.QUERY, null, new java.util.HashMap<>());
         assertTrue(
             code,
-            code.contains("apply(\"DATE_FORMAT(create_time, '%Y') = {0}\", \"2024\")"),
+            code.contains("apply(\"DATE_FORMAT(create_time, '%Y') = {0}\", \"2024\")")
         );
     }
 

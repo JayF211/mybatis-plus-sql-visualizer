@@ -228,7 +228,7 @@ public class CriteriaQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void isNull_生成IS NULL条件() throws Exception {
+    public void isNull_生成IS_NULL条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -242,7 +242,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void isNotNull_生成IS NOT NULL条件() throws Exception {
+    public void isNotNull_生成IS_NOT_NULL条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -301,7 +301,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void notLike_生成NOT LIKE条件() throws Exception {
+    public void notLike_生成NOT_LIKE条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -339,7 +339,7 @@ public class CriteriaQueryConverterTest {
     }
 
     @Test
-    public void notIn_生成NOT IN条件() throws Exception {
+    public void notIn_生成NOT_IN条件() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),
@@ -507,7 +507,7 @@ public class CriteriaQueryConverterTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void join_生成LEFT JOIN子句() throws Exception {
+    public void join_生成LEFT_JOIN子句() throws Exception {
         CriteriaQueryModel model = model(
                 "UserEntity",
                 List.of(),

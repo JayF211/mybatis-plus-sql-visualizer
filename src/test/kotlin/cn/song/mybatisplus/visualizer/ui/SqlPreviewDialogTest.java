@@ -43,7 +43,7 @@ public class SqlPreviewDialogTest extends BasePlatformTestCase {
         }
         assertNotNull("dispose 调用后对话框仍可引用（回调链路不抛异常）", dialog);
         // 释放编辑器（面板生命周期约定，同 SqlPreviewPanelTest 的 clear 收尾）
-        dialog.panelForTest().clear();
+        SqlPreviewPanelSqlViewKt.clear(dialog.panelForTest());
     }
 
     public void testRowOfContentFidelityAndTruncation() throws Exception {

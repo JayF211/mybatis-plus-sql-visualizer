@@ -96,11 +96,11 @@ public class SqlReverseParserTest {
         assertEquals(List.of(new SelectColumn("COUNT(*)", null)), parse("SELECT COUNT(*) FROM user").selectColumns());
         assertEquals(
             List.of(new SelectColumn("id", null), new SelectColumn("COUNT(*)", null)),
-            parse("SELECT id, COUNT(*) FROM user").selectColumns(),
+            parse("SELECT id, COUNT(*) FROM user").selectColumns()
         );
         assertEquals(
             List.of(new SelectColumn("MAX(age)", "maxAge")),
-            parse("SELECT MAX(age) AS maxAge FROM user").selectColumns(),
+            parse("SELECT MAX(age) AS maxAge FROM user").selectColumns()
         );
     }
 

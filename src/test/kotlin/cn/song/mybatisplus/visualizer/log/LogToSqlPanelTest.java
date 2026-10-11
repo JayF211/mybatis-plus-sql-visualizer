@@ -103,7 +103,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
     @Test
     public void testDefaultMultiLineAndToggleToSingleLine() throws Exception {
         panel.setInputForTest("==>  Preparing: SELECT * FROM user WHERE id = ?\n==> Parameters: 1(Long)");
-        panel.convertForTest();
+panel.convertForTest();
         String multi = panel.resultTextForTest();
         assertTrue("默认多行格式化", multi.contains("\n"));
         assertTrue(multi, multi.contains("id = 1"));
@@ -297,8 +297,7 @@ public class LogToSqlPanelTest extends BasePlatformTestCase {
 
     @Test
     public void test从剪贴板读取_填入输入区并立即转换() throws Exception {
-        String logText = "==>  Preparing: SELECT * FROM user WHERE id = ?
-" +
+        String logText = "==>  Preparing: SELECT * FROM user WHERE id = ?\n" +
             "==> Parameters: 1(Long)";
         cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy(logText);
         panel.readClipboardForTest();
