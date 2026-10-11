@@ -1969,6 +1969,9 @@ class BannedApiSourceScanTest {
     private val jumpFamilyReadAllowedFiles = setOf(
         // 族本体：内部转发，读权限由调用方保证（现网调用方均在 EDT）
         "src/main/java/cn/song/mybatisplus/visualizer/log/EntryJumpResolver.java",
+        // O-119 跳转原语收口后的族本体（resolveJumpTarget/resolveXmlJumpTarget 静态承载；
+        // 调用点=SqlLogPanel/HistorySqlLogPanel/RecentExecutionsDialog 的 EDT 菜单回调链）
+        "src/main/java/cn/song/mybatisplus/visualizer/log/LogEntryJumpOps.java",
         // EDT 右键跳转（平台菜单回调在 EDT）
         "src/main/java/cn/song/mybatisplus/visualizer/log/SqlLogPanel.java",
         "src/main/java/cn/song/mybatisplus/visualizer/log/HistorySqlLogPanel.java",

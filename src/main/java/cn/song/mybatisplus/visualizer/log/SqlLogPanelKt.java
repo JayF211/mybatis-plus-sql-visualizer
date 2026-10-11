@@ -633,12 +633,24 @@ public final class SqlLogPanelKt {
                 new SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color));
     }
 
-    /** T-AgentDialectLoop：目标库角标（agent 通道由连接 URL 推断）；未知返回 null 不显示。 */
+    /**
+     * T-AgentDialectLoop：目标库角标（agent 通道由连接 URL 推断）；未知返回 null 不显示。
+     *
+     * <p>T-DataSourceBadgeMode（O-133，D135 显示侧门控）：默认仅显示数据库类型——{@code ·} 分隔符唯一产自
+     * {@link cn.song.mybatisplus.visualizer.log.agent.JdbcUrlDialects#badgeName}，OFF 态切其前段即纯方言段
+     * （落盘/历史读回/MCP 检索链仍消费全量串，后开开关不丢信息，切换即时生效）；
+     * ON 态原样全量（{@code [MySQL · jpa_demo@localhost:3306]}）。无 {@code ·} 分隔符的串（方言解析失败仅存
+     * 连接事实）OFF 态原样保留——辨不出方言时保留最后上下文优于显示空白。null 恒 null 不显示。
+     * 热路径直读设置沿 {@link #formatDurationFragment} 先例（每 cell 一次服务查找，V38 基准同量级）。
+     */
     public static kotlin.Pair<String, SimpleTextAttributes> formatDatabaseFragment(LogSqlEntry entry, boolean isSelected) {
-        String db = entry.databaseName();
-        if (db == null) {
+        String full = entry.databaseName();
+        if (full == null) {
             return null;
         }
+        String db = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().getState().getDataSourceBadgeDetail()
+                ? full
+                : full.contains(" · ") ? full.substring(0, full.indexOf(" · ")) : full;
         Color color = isSelected ? new Color(0xFFFFFF) : new Color(0x00695C);
         return new kotlin.Pair<>("[" + db + "] ", new SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color));
     }
