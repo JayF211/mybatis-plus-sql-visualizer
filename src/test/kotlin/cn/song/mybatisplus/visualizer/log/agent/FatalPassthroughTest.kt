@@ -200,11 +200,14 @@ class FatalPassthroughTest : BasePlatformTestCase() {
     private fun stateChangeCounter(counter: AtomicInteger): Runnable = Runnable { counter.incrementAndGet() }
 
     /**
-     * 反射调私有静态 [DataSourceSelector.runRunner]（Project, Object, boolean, Consumer）。
+     * 反射调 runRunner（Project, Object, boolean, Consumer）。
+     * k2j 适配：master 侧 runRunner 是 DataSourceSelectorResults.kt 顶层扩展
+     * （`internal fun DataSourceSelector.runRunner`），k2j 静态门面落
+     * [DataSourceSelectorResultsKt]（与 writeConsoleOutput 同门面）——反射目标为门面类。
      * `silent = true` 走「清 last-used 后返回」路径，不触发平台通知——判别只需 onError 回调面。
      */
     private fun invokeRunRunner(runner: Any, silent: Boolean, errors: MutableList<String>) {
-        val m = DataSourceSelector::class.java.getDeclaredMethod(
+        val m = DataSourceSelectorResultsKt::class.java.getDeclaredMethod(
             "runRunner",
             com.intellij.openapi.project.Project::class.java,
             Any::class.java,
