@@ -136,37 +136,39 @@ class PrepareSingleFlightGateTest {
     private fun repoRoot(): File {
         var dir: File? = File(System.getProperty("user.dir")).absoluteFile
         while (dir != null) {
-            if (File(dir, "src/main/kotlin").isDirectory) return dir
+            if (File(dir, "src/main/java").isDirectory) return dir
             dir = dir.parentFile
         }
-        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
+        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
     }
 
     private fun sourceOf(relativePath: String): String =
         File(repoRoot(), relativePath).readText()
 
     /** T-M53-II（2026-10-10）：组合式重构后 DataSourceSelector 的成员分散到同包三个文件，
-     * 形态类断言必须按**全集**读取（只读主文件会因成员搬走而假红，或漏掉真实违规而假绿）。 */
+     * 形态类断言必须按**全集**读取（只读主文件会因成员搬走而假红，或漏掉真实违规而假绿）。
+     * k2j 适配：生产树为 src/main/java 下的 .java 文件（master 侧为 .kt）。 */
     private fun selectorUnion(): String = listOf(
-        "DataSourceSelector.kt",
-        "DataSourceSelectorConsole.kt",
-        "DataSourceSelectorResults.kt",
+        "DataSourceSelector.java",
+        "DataSourceSelectorConsoleKt.java",
+        "DataSourceSelectorResultsKt.java",
     ).joinToString("\n") {
-        sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/execute/$it")
+        sourceOf("src/main/java/cn/song/mybatisplus/visualizer/execute/$it")
     }
 
-    /** T-M53-II D2-5：嵌入调用点随执行链搬到同包协作文件，读取面取面板全体源文件并集。 */
+    /** T-M53-II D2-5：嵌入调用点随执行链搬到同包协作文件，读取面取面板全体源文件并集。
+     * k2j 适配：src/main/java + .java 扩展名。 */
     private fun panelUnion(): String {
         val dir = java.io.File(
             java.io.File(System.getProperty("user.dir")).absoluteFile.let { d ->
                 var x: java.io.File? = d
-                while (x != null && !java.io.File(x, "src/main/kotlin").isDirectory) x = x.parentFile
+                while (x != null && !java.io.File(x, "src/main/java").isDirectory) x = x.parentFile
                 x ?: error("未定位到仓库根")
             },
-            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui",
+            "src/main/java/cn/song/mybatisplus/visualizer/ui",
         )
         return dir.listFiles().orEmpty()
-            .filter { it.isFile && it.name.startsWith("SqlPreviewPanel") && it.extension == "kt" }
+            .filter { it.isFile && it.name.startsWith("SqlPreviewPanel") && it.extension == "java" }
             .sortedBy { it.name }
             .joinToString("\n") { it.readText() }
     }
@@ -175,19 +177,21 @@ class PrepareSingleFlightGateTest {
     fun `接线_全链执行embed调用点全部显式EXECUTE`() {
         val panel = panelUnion()
         // 五条全链执行链（executeSql 两处 / executeAdhocSql 两处 / EXPLAIN 直送一处）
+        // k2j：Java lambda 形态 `consoleComponent -> embedConsole(p, consoleComponent, …EXECUTE)`
+        //（测试缝 2 参重载体内是 `;` 结尾的直调，不匹配本 needle——与 master 的具名实参口径对齐）
         assertEquals(
             5,
-            "embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE)".let { needle -> panel.split(needle).size - 1 },
+            "consoleComponent -> embedConsole(p, consoleComponent, ConsoleEmbedMode.EXECUTE)".let { needle -> panel.split(needle).size - 1 },
         )
         // executePrepared 的 onResultsReady 两处（executeSql + executeAdhocSql）
         assertEquals(
             2,
-            panel.split("embedConsole(fullConsole, embedMode = ConsoleEmbedMode.EXECUTE)").size - 1,
+            panel.split("fullConsole -> embedConsole(p, fullConsole, ConsoleEmbedMode.EXECUTE)").size - 1,
         )
         // 预览准备链唯一入口（prepareDefaultConsole onConsole）
         assertEquals(
             1,
-            panel.split("embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.PREVIEW)").size - 1,
+            panel.split("embedConsole(p, consoleComponent, ConsoleEmbedMode.PREVIEW)").size - 1,
         )
         // 旧布尔签名彻底退役（注释除外——源码形态扫描只认实参写法）
         assertFalse(panel.contains("embedConsole(consoleComponent, previewMode = true)"))
@@ -208,15 +212,17 @@ class PrepareSingleFlightGateTest {
     fun `接线_F1单飞入口与消费点在位`() {
         val selector = selectorUnion()
         // 入口单飞判定（先于共享复用）+ QUEUE_ONLY 只排队 callback(true)
+        // k2j：Java 无 when 表达式——QUEUE_ONLY 用 == 判定分支承载
         assertTrue(selector.contains("prepareGate.tryEnter(executeAfterPrepare, queuedIntent)"))
-        assertTrue(selector.contains("PrepareGateDecision.QUEUE_ONLY ->"))
+        assertTrue(selector.contains("PrepareGateDecision.QUEUE_ONLY"))
         // 消费点：完成准备后按 executePrepared 口径消费（onResultsReady=意图 onConsole）
+        // k2j：Java 无 ?. —— 消费后经 effectiveOnConsole 转发进 executeOnConsole
         assertTrue(selector.contains("queuedIntent = prepareGate.consumePendingExecute()"))
-        assertTrue(selector.contains("onResultsReady = queuedIntent?.onConsole"))
+        assertTrue(selector.contains("Consumer<JComponent> effectiveOnConsole = queuedIntent != null ? queuedIntent.onConsole() : null;"))
         // 单飞位复位兜底（成功/失败同尽）
         assertTrue(selector.contains("if (ownsPrepareGate) prepareGate.finishPrepare()"))
         // 卡死逃生在 tryEnter 内（门自愈，不在调用方）
-        val gate = sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/execute/PrepareSingleFlightGate.kt")
+        val gate = sourceOf("src/main/java/cn/song/mybatisplus/visualizer/execute/PrepareSingleFlightGate.java")
         assertTrue(gate.contains("STUCK_ESCAPE_MS"))
     }
 }

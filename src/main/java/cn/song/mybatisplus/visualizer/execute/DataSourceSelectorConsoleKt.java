@@ -393,10 +393,15 @@ public final class DataSourceSelectorConsoleKt {
                         ? queuedIntent.onError() : onError;
                 Consumer<ExecutionErrorInfo> effectiveOnErrorRich = (queuedIntent != null && queuedIntent.onErrorRich() != null)
                         ? queuedIntent.onErrorRich() : onErrorRich;
-                boolean effectiveWholeScript = queuedIntent != null ? queuedIntent.wholeScriptExec() : wholeScriptExec;
+                // wholeScriptExecEffective 即本调用点的 wholeScriptExec 转发值
+                // （master 形态：onResultsReady = queuedIntent?.onConsole …
+                //   wholeScriptExec = queuedIntent?.wholeScriptExec ?: wholeScriptExec；
+                // Java 无具名实参故以变量名承载，O-64 扫描守卫按 wholeScriptExec
+                // 令牌识别旗标转发点）
+                final boolean wholeScriptExecEffective = queuedIntent != null ? queuedIntent.wholeScriptExec() : wholeScriptExec;
                 executeOnConsole(
                         project, console, editor, effectiveScriptModel, execOption, ui,
-                        effectiveOnConsole, effectiveOnError, effectiveOnErrorRich, effectiveWholeScript);
+                        effectiveOnConsole, effectiveOnError, effectiveOnErrorRich, wholeScriptExecEffective);
                 if (queuedIntent != null) queuedExecuted = true;
             }
         } catch (Throwable e) {
