@@ -1302,7 +1302,7 @@ class SqlToJavaPanel(
                             candidates.map { c ->
                                 SqlSelectionDialog.Row.of(
                                     "${c.psiClass.name}（表 ${c.tableInfo.tableName}）",
-                                    c.psiClass.containingFile?.name ?: "",
+                                    entityCandidateSubtitle(c.psiClass),
                                 )
                             }
                         }
@@ -1503,7 +1503,7 @@ class SqlToJavaPanel(
                     candidates.map { c ->
                         SqlSelectionDialog.Row.of(
                             "${c.psiClass.name}（表 ${c.tableInfo.tableName}）",
-                            c.psiClass.containingFile?.name ?: "",
+                            entityCandidateSubtitle(c.psiClass),
                         )
                     }
                 }
