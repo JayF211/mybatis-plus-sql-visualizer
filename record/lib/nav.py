@@ -95,3 +95,26 @@ def close_preview(cancel_xy=(1485, 828), wait=1.4, body_xy=None):
     else:
         pyautogui.click(*cancel_xy)
     time.sleep(wait)
+
+
+def goto_text(text, wait=1.0):
+    """用 Ctrl+F 查找唯一片段把光标落到该 token 上。
+
+    比 goto_col 稳：不依赖行号，也不依赖对话框时序（`goto` 偶尔会落空——本轮实测
+    文件刚打开时 `goto_col(55,27)` 把光标留在了 34:6）。查找串必须是文件内唯一的。
+    """
+    pyautogui.hotkey('ctrl', 'f')
+    time.sleep(0.7)
+    pyautogui.hotkey('ctrl', 'a')
+    time.sleep(0.2)
+    force_en_us()
+    pyautogui.typewrite(text, interval=0.04)
+    time.sleep(0.8)
+    pyautogui.keyDown('return'); pyautogui.keyUp('return')
+    time.sleep(0.5)
+    pyautogui.keyDown('esc'); pyautogui.keyUp('esc')   # 关查找条，焦点回编辑器
+    time.sleep(0.3)
+    # 查找命中后片段是**选中**状态，而插件的预览会走「选中文本里找 SQL」那条路 → 失败（实测弹
+    # 「未在光标处找到可预览的 SQL 源」）。按一下 Left 把选中塌掉，光标落到命中片段起点＝token 上。
+    pyautogui.keyDown('left'); pyautogui.keyUp('left')
+    time.sleep(wait)
