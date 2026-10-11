@@ -17,6 +17,7 @@ import java.awt.Dimension;
 import java.awt.GridLayout;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 二级 SQL 列表单元格渲染器（F-44-2；T-LogListFreeze-04 弃 HTML 通道）：
@@ -29,6 +30,9 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
     /** 历史面板元信息灰（与原 HTML 通道 #9E9E9E 一致）。T-UN-13（T-UiNative）：改 namedColor，亮值不变。 */
     private static final SimpleTextAttributes HISTORY_META_GRAY =
             new SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.HISTORY_META_GRAY);
+
+    /** O-90：同模板计数快照（「×N 同模板」徽章渲染数据源；HistorySqlLogPanel.applySqlSearch 更新）。 */
+    public Map<String, Integer> templateCounts = Map.of();
 
     /** 元信息行（internal 供 UI 测试遍历片段断言）。 */
     public final SimpleColoredComponent metaLine = new SimpleColoredComponent();
@@ -102,7 +106,7 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
         // T-UN-09：选中描边退役后，三种样式的选中行统一走平台选中填充 → 前景按选中态取
         // selectionForeground（与日志页 LogEntryListCellRenderer 同款）
         boolean useSelectionFill = isSelected;
-        SqlLogPanelKt.applyCrudColorMark(this, colorBar, normalBorder, tint, isSelected, list);
+        LogEntryRenderingKt.applyCrudColorMark(this, colorBar, normalBorder, tint, isSelected, list);
 
         Color fg = useSelectionFill
                 ? (list != null && list.getSelectionForeground() != null ? list.getSelectionForeground() : JBColor.foreground())
@@ -132,24 +136,30 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
             }
             // T-JdbcThreadBucket F3 + 日志时间：跟随设置（对齐日志页 formatTimestampFragment），
             // 含非法 pattern 回退默认、显示开关与时间来源（日志时间/捕获时间）语义
-            kotlin.Pair<String, SimpleTextAttributes> ts = SqlLogPanelKt.formatTimestampFragment(entry);
+            kotlin.Pair<String, SimpleTextAttributes> ts = LogEntryRenderingKt.formatTimestampFragment(entry);
             if (ts != null) {
                 metaLine.append(ts.getFirst(), ts.getSecond());
             }
             kotlin.Pair<String, SimpleTextAttributes> dur =
-                    SqlLogPanelKt.formatDurationFragment(entry.executionTimeMs(), useSelectionFill);
+                    LogEntryRenderingKt.formatDurationFragment(entry.executionTimeMs(), useSelectionFill);
             metaLine.append(dur.getFirst(), dur.getSecond());
             // T-AgentDialectLoop：目标库角标（与日志页同款落点：时间/耗时后、来源前）
             kotlin.Pair<String, SimpleTextAttributes> db =
-                    SqlLogPanelKt.formatDatabaseFragment(entry, useSelectionFill);
+                    LogEntryRenderingKt.formatDatabaseFragment(entry, useSelectionFill);
             if (db != null) {
                 metaLine.append(db.getFirst(), db.getSecond());
             }
             // T-McpAuditTrail T-MAT-05：MCP 徽标（与日志页同款落点与协议；非 MCP 返回 null 不显示）
             kotlin.Pair<String, SimpleTextAttributes> mcp =
-                    SqlLogPanelKt.formatMcpFragment(entry, useSelectionFill);
+                    LogEntryRenderingKt.formatMcpFragment(entry, useSelectionFill);
             if (mcp != null) {
                 metaLine.append(mcp.getFirst(), mcp.getSecond());
+            }
+            // O-90：同模板 ×N 徽章（与日志页同款同落点；计数=当前文件全量条目聚合）
+            kotlin.Pair<String, SimpleTextAttributes> tpl =
+                    LogEntryRenderingKt.formatTemplateCountFragment(entry, templateCounts, useSelectionFill);
+            if (tpl != null) {
+                metaLine.append(tpl.getFirst(), tpl.getSecond());
             }
             metaLine.append("[" + source + "] ", HISTORY_META_GRAY);
             lineFragments = sqlLineFragmentsFor(entry);
@@ -195,7 +205,7 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
      * 历史条目为每次加载新建的实例，缓存随条目生命周期天然失效。
      */
     private List<List<SqlTextFragment>> sqlLineFragmentsFor(LogSqlEntry entry) {
-        String sql = SqlLogPanelKt.withTerminator(entry.summary());
+        String sql = LogEntryFilteringKt.withTerminator(entry.summary());
         SqlListDisplayMode mode = PluginSettings.getInstance().sqlListDisplayMode();
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             List<List<SqlTextFragment>> single = new ArrayList<>();
