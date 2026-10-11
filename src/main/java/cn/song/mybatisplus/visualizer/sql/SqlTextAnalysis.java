@@ -21,10 +21,18 @@ public final class SqlTextAnalysis {
     private SqlTextAnalysis() {}
 
     /**
-     * 把 XML 标签替换为<b>等长空格</b>（T-M27-01）：
-     *  - 逐字符扫描：{@code <} 到下一个 {@code >} 的区间整体换空格，标签间文本内容原样保留；
-     *  - 输出与输入<b>等长</b>（1:1 偏移量映射）；
-     *  - 未闭合的标签残段同样换空格（保持等长）。
+     * 把 XML 标签替换为<b>等长</b>占位（T-M27-01；T-XmlCmpl3 语义替身修正，20261010）：
+     *  - 逐字符扫描：{@code <} 到下一个 {@code >} 的区间（含属性、自闭合、结束标签、注释 {@code <!-- -->}、
+     *    CDATA {@code <![CDATA[}）整体占位，标签间文本内容原样保留（含 {@code #{}} / {@code ${}} 占位符）；
+     *  - 输出与输入<b>等长</b>（1:1 偏移量映射，供其他分析按原文本偏移量定位）；
+     *  - <b>动态控制流开标签 {@code <where>}/{@code <set>} 换等长的关键字替身 {@code WHERE}/{@code SET}（不足补空格）</b>——
+     *    纯空白占位会把 WHERE/SET 从文本中抹掉，两处连锁误判（用户真机实证，160 块 where 内
+     *    裸列补全零候选）：①{@link #detectClause} 把光标位置误判 TABLE（FROM 成最后可见关键字→
+     *    列名分支整体跳过）；②{@link #parseTableAliases} 的表清单吞掉 WHERE 终止词，把 where 内
+     *    第一个裸词（如 {@code deleted}）误判为 FROM 表的别名（候选被 {@code 别名.} 前缀污染）；
+     *  - 闭合标签与其余标签（if/include/trim/foreach/choose/bind 等无子句关键字语义）照旧空白；
+     *  - 依据：XML 文本中 {@code <} 必须转义（{@code &lt;}），故 {@code <} 只会出现在标签起始，算法成立；
+     *    未闭合的标签残段同样占位（保持等长）。
      */
     public static String stripXmlTags(String text) {
         StringBuilder sb = new StringBuilder(text.length());
@@ -33,8 +41,17 @@ public final class SqlTextAnalysis {
             if (text.charAt(i) == '<') {
                 int j = i + 1;
                 while (j < text.length() && text.charAt(j) != '>') j++;
+                // 含 `>`；未闭合时替换到文本末尾
                 int end = j < text.length() ? j + 1 : j;
-                for (int k = i; k < end; k++) sb.append(' ');
+                String keyword = clauseKeywordOf(text, i, end);
+                if (keyword != null) {
+                    // 前导空格与左侧词分隔（防 `user<where>` 剥成 `userWHERE` 粘连词），尾部补空格保等长
+                    sb.append(' ');
+                    sb.append(keyword);
+                    for (int k = 0; k < end - i - keyword.length() - 1; k++) sb.append(' ');
+                } else {
+                    for (int k = i; k < end; k++) sb.append(' ');
+                }
                 i = end;
             } else {
                 sb.append(text.charAt(i));
@@ -42,6 +59,27 @@ public final class SqlTextAnalysis {
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * 开标签 {@code <where>}/{@code <set>}（含带属性形态，大小写不敏感）→ 大写关键字替身（调用方补空格保等长）；
+     * 闭合标签、注释/CDATA/声明、其余标签 → null（纯空白占位）。
+     */
+    private static String clauseKeywordOf(String text, int start, int end) {
+        if (start + 1 >= end) return null;
+        char second = text.charAt(start + 1);
+        if (second == '/' || second == '!' || second == '?') return null;
+        if (!Character.isLetter(second)) return null;
+        int j = start + 1;
+        while (j < end && (Character.isLetterOrDigit(text.charAt(j)) || text.charAt(j) == '_' || text.charAt(j) == '-')) j++;
+        switch (text.substring(start + 1, j).toLowerCase(Locale.ROOT)) {
+            case "where":
+                return "WHERE";
+            case "set":
+                return "SET";
+            default:
+                return null;
+        }
     }
 
     /**

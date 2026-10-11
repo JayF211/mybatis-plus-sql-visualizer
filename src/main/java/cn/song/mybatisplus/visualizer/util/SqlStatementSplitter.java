@@ -3,6 +3,8 @@
 // 豁免武装 + T-STG-02 顶层 END 隐式语句边界（T-SQL 惯例 END 后分号可省）；T-PerfSweep7 T-PS7-01
 // END 分支单次取词（nextWordToken）替代 5 次同段扫描 + DECLARE 头前视合并（hasBlockBodyAhead）；
 // 测试缝 lookaheadProbeCount（Kotlin internal var → public 静态字段，Kotlin 测试直读属性语法）
+// T-SyncK2JMaster482 增量（b7246f2）：T-PerfSweep16 F45 取词去重——nextWord/nextWordToken 合并为
+// 单一核心（nextWord 原样返回、不计数；nextWordToken 降为计数薄包装），死代码 nextWordIs 移除
 package cn.song.mybatisplus.visualizer.util;
 
 import org.jetbrains.annotations.NotNull;
@@ -80,12 +82,62 @@ public final class SqlStatementSplitter {
     private static final Set<String> NON_BLOCK_BEGIN_TAILS =
             Set.of("TRAN", "TRANSACTION", "DISTRIBUTED", "DIALOG", "CONVERSATION");
 
-    /** {@code from} 之后首个词（跳过空白/注释，大小写不敏感）是否属于 {@link #NON_BLOCK_BEGIN_TAILS}。 */
+    /**
+     * {@code from} 之后首个词（跳过空白/注释，大小写不敏感）是否属于 {@link #NON_BLOCK_BEGIN_TAILS}。
+     * F23（T-PerfSweep9）：单趟取词进 Set 比对——原 {@code NON_BLOCK_BEGIN_TAILS.any { nextWordIs(...) }}
+     * 同段最多 5 次扫描（与 PS7-01 消灭的「同段重复扫描」同型）。
+     * F45（T-PerfSweep16）：取词收敛至 {@link #nextWord} 单一核心（与 nextWordToken 合并），
+     * 本路径不计入 {@link #lookaheadProbeCount}（诊断口径不变）。
+     */
     private static boolean isNonBlockBeginTail(@NotNull String sql, int from) {
+        String word = nextWord(sql, from);
+        if (word == null) return false;
         for (String tail : NON_BLOCK_BEGIN_TAILS) {
-            if (nextWordIs(sql, from, tail)) return true;
+            if (word.equalsIgnoreCase(tail)) return true;
         }
         return false;
+    }
+
+    /**
+     * 单趟取词核心（F45 合并：F23 的 nextWord 与 T-PS7-01 的 nextWordToken 两份同构遍历
+     * 收敛于此，唯一实现）：{@code from} 之后跳过空白与注释（行注释至换行、块注释至闭合）的
+     * 首个标识符词，大小写<b>原样</b>返回，无则 null。合并前两份遍历逐位一致（同跳过规则、
+     * 同词边界、同非标识符停机条件），唯一差异是旧 nextWord 额外做大写归一——其唯一
+     * 调用方 {@link #isNonBlockBeginTail} 本就 ignoreCase 比对，归一与否不影响结果，故统一为
+     * 原样返回（nextWordToken 的消费方各自 {@code .uppercase()}，亦不受影响）。
+     *
+     * <p><b>不累加 {@link #lookaheadProbeCount}</b>：T-PS7-01 诊断口径只统计 END 分支前视
+     * （由 {@link #nextWordToken} 包装层累加），BEGIN TRAN 判定（{@link #isNonBlockBeginTail}）不计入
+     * ——保原计数口径，合并前后计数逐位一致。
+     */
+    private static String nextWord(@NotNull String sql, int from) {
+        int i = from;
+        while (i < sql.length()) {
+            char c = sql.charAt(i);
+            Character next = i + 1 < sql.length() ? sql.charAt(i + 1) : null;
+            if (Character.isWhitespace(c)) {
+                i++;
+            } else if (c == '-' && next != null && next == '-') {
+                while (i < sql.length() && sql.charAt(i) != '\n') i++;
+            } else if (c == '/' && next != null && next == '*') {
+                i += 2;
+                while (i < sql.length()
+                        && !(sql.charAt(i) == '*' && i + 1 < sql.length() && sql.charAt(i + 1) == '/')) {
+                    i++;
+                }
+                i += 2;
+            } else if (isIdentifierChar(c)) {
+                StringBuilder sb = new StringBuilder();
+                while (i < sql.length() && isIdentifierChar(sql.charAt(i))) {
+                    sb.append(sql.charAt(i));
+                    i++;
+                }
+                return sb.toString();
+            } else {
+                return null;
+            }
+        }
+        return null;
     }
 
     /** 默认语句界符（MySQL 客户端 {@code DELIMITER} 指令可切换；无参数指令复位为此值）。 */
@@ -1111,41 +1163,6 @@ public final class SqlStatementSplitter {
     }
 
     /**
-     * 前视扫描（T-SSP-02）：{@code from} 之后跳过空白与注释的首个标识符词是否即 {@code word}
-     * （大小写不敏感）。用于识别 {@code END CASE} 双词终结形态——尾随 {@code CASE} 词不得再开新层，
-     * 否则 CASE 层数被补回、块尾 {@code END} 反被吞掉（过度吞并）。
-     */
-    private static boolean nextWordIs(@NotNull String sql, int from, @NotNull String word) {
-        int i = from;
-        while (i < sql.length()) {
-            char c = sql.charAt(i);
-            Character next = i + 1 < sql.length() ? sql.charAt(i + 1) : null;
-            if (Character.isWhitespace(c)) {
-                i++;
-            } else if (c == '-' && next != null && next == '-') {
-                while (i < sql.length() && sql.charAt(i) != '\n') i++;
-            } else if (c == '/' && next != null && next == '*') {
-                i += 2;
-                while (i < sql.length()
-                        && !(sql.charAt(i) == '*' && i + 1 < sql.length() && sql.charAt(i + 1) == '/')) {
-                    i++;
-                }
-                i += 2;
-            } else if (isIdentifierChar(c)) {
-                StringBuilder sb = new StringBuilder();
-                while (i < sql.length() && isIdentifierChar(sql.charAt(i))) {
-                    sb.append(sql.charAt(i));
-                    i++;
-                }
-                return sb.toString().equalsIgnoreCase(word);
-            } else {
-                return false;
-            }
-        }
-        return false;
-    }
-
-    /**
      * 前视扫描：{@code from} 之后是否存在词边界形态的目标词（字符串/注释感知，大小写不敏感）。
      * 保守判定——用于决定是否启用 BEGIN/END 块感知（识别不到配对 END 则按顶层切分原样）。
      */
@@ -1204,40 +1221,15 @@ public final class SqlStatementSplitter {
     }
 
     /**
-     * 单次取词（T-PS7-01）：{@code from} 之后跳过空白与注释的首个标识符词（大小写原样，无则 null）。
-     * 词法走查与 {@link #nextWordIs} 逐位一致（同一跳过规则、同一词边界），区别仅在不与目标词比对
-     * 而是返回词本身——END 分支的 CASE/IF/LOOP/WHILE/REPEAT 五个候选词一次取词后各自比对，
-     * 替代对同一段空白注释的 5 次重复扫描；计数缝 {@link #lookaheadProbeCount} 同步累加。
+     * 单次取词（T-PS7-01）：END 分支的 CASE/IF/LOOP/WHILE/REPEAT 五个候选词一次取词后
+     * 各自比对，替代对同一段空白注释的 5 次重复扫描——词法全权委托 {@link #nextWord} 单一核心
+     * （F45 合并后同文件仅此一份遍历实现；F23 交付的 nextWord 即本函数的同构去计数形态，
+     * 死代码 nextWordIs 一并移除）。本包装只承担计数缝语义：调用一次即 {@link #lookaheadProbeCount}
+     * 累加一次（含取词落空返回 null 的调用，与合并前一致）。
      */
     private static String nextWordToken(@NotNull String sql, int from) {
         lookaheadProbeCount++;
-        int i = from;
-        while (i < sql.length()) {
-            char c = sql.charAt(i);
-            Character next = i + 1 < sql.length() ? sql.charAt(i + 1) : null;
-            if (Character.isWhitespace(c)) {
-                i++;
-            } else if (c == '-' && next != null && next == '-') {
-                while (i < sql.length() && sql.charAt(i) != '\n') i++;
-            } else if (c == '/' && next != null && next == '*') {
-                i += 2;
-                while (i < sql.length()
-                        && !(sql.charAt(i) == '*' && i + 1 < sql.length() && sql.charAt(i + 1) == '/')) {
-                    i++;
-                }
-                i += 2;
-            } else if (isIdentifierChar(c)) {
-                StringBuilder sb = new StringBuilder();
-                while (i < sql.length() && isIdentifierChar(sql.charAt(i))) {
-                    sb.append(sql.charAt(i));
-                    i++;
-                }
-                return sb.toString();
-            } else {
-                return null;
-            }
-        }
-        return null;
+        return nextWord(sql, from);
     }
 
     /**
