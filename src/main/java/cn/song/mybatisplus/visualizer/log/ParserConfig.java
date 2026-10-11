@@ -14,13 +14,16 @@ public record ParserConfig(
         String hibernateParamPrefix,
         boolean hibernateEnabled,
         // JdbcTemplate 解析器配置（M47）
-        boolean jdbcEnabled
+        boolean jdbcEnabled,
+        // ShardingSphere 解析器配置（R10 T-ShardingSphereCompat；D3=A 默认开）
+        boolean shardingEnabled
 ) {
     /** MyBatis 专用构造（Hibernate 取默认值）。 */
     public ParserConfig(String sqlPrefix, String paramPrefix, boolean mixedPrefix, int maxParseLength) {
         this(sqlPrefix, paramPrefix, mixedPrefix, maxParseLength,
                 HibernateLogParser.DEFAULT_SQL_PREFIX,
                 HibernateLogParser.DEFAULT_PARAM_PREFIX,
+                true,
                 true,
                 true);
     }

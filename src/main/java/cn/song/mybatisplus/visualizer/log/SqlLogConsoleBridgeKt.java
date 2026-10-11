@@ -93,21 +93,29 @@ public final class SqlLogConsoleBridgeKt {
             // 块外普通行（含空行放行，容忍堆栈间空行）结束当前错误块
             ctx.pendingError = null;
         }
-        // 2) 喂行到三个解析器（各自忽略不匹配的行；配置快照随设置变更事件刷新，逐行零同步成本）
+        // 2) 喂行到四个解析器（各自忽略不匹配的行；配置快照随设置变更事件刷新，逐行零同步成本）
         ctx.myBatisParser.feed(line);
         if (ctx.hibernateEnabled()) {
             ctx.hibernateParser.feed(line);
         }
         ctx.jdbcParser.feed(line);
+        if (ctx.shardingEnabled) {
+            ctx.shardingParser.feed(line);
+        }
         // 2.5) T-ConsolePendingFlush：喂行后冲刷**已静默**桶的待产出条目。放在喂行之后是有意的——本行刚
         // 触达它自己的桶（活动时间刷新），该桶因此不会出现在冲刷名单里，本行所属语句的参数行不会被截断；
         // 被冲刷的只有「别的线程静默 ≥1s 的语句」（JdbcTemplate 无 TRACE 参数行 + 线程按请求新建时，
         // 那些语句永无同线程后继行）。冲刷出的条目与本次喂行产出的条目由下方同一次 takeEntries() 一并交出。
+        // R10：ShardingSphere 解析器同款接入（其条目只在下一条 Logic 行闭合，静默冲刷是低频访问的兜底）。
         ctx.jdbcParser.flushSettled();
+        if (ctx.shardingEnabled) {
+            ctx.shardingParser.flushSettled();
+        }
         List<LogSqlEntry> taken = new ArrayList<>();
         taken.addAll(ctx.myBatisParser.takeEntries());
         taken.addAll(ctx.hibernateParser.takeEntries());
         taken.addAll(ctx.jdbcParser.takeEntries());
+        taken.addAll(ctx.shardingParser.takeEntries());
         if (taken.isEmpty()) {
             return List.of();
         }
@@ -149,7 +157,9 @@ public final class SqlLogConsoleBridgeKt {
                     e.errorText(),
                     requestTag,
                     e.updateCount(),
-                    e.databaseName()));
+                    e.databaseName(),
+                    // master 为 e.copy(...)——未触及字段须原样携带（actualSql 同权透传）
+                    e.actualSql()));
         }
         if (ctx.pendingSource != null) {
             ctx.pendingSource = null;
@@ -170,10 +180,14 @@ public final class SqlLogConsoleBridgeKt {
             ctx.hibernateParser.feed(line);
         }
         ctx.jdbcParser.feed(line);
+        if (ctx.shardingEnabled) {
+            ctx.shardingParser.feed(line);
+        }
         List<LogSqlEntry> taken = new ArrayList<>();
         taken.addAll(ctx.myBatisParser.takeEntries());
         taken.addAll(ctx.hibernateParser.takeEntries());
         taken.addAll(ctx.jdbcParser.takeEntries());
+        taken.addAll(ctx.shardingParser.takeEntries());
         for (LogSqlEntry e : taken) {
             LogTimeCorrelator.put(
                     LogSqlModelsKt.logTimeKey(e),

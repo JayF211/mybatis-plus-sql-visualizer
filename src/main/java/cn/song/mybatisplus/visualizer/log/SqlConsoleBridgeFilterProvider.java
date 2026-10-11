@@ -64,8 +64,11 @@ public class SqlConsoleBridgeFilterProvider implements ConsoleFilterProvider {
                     new JdbcTemplateLogParser(
                             parserConfig().jdbcEnabled(),
                             parserConfig().maxParseLength()),
+                    new ShardingSphereLogParser(
+                            parserConfig().maxParseLength()),
                     EpLineFilter::parserConfig,
-                    parserConfig().hibernateEnabled());
+                    parserConfig().hibernateEnabled(),
+                    parserConfig().shardingEnabled());
         }
 
         private static ParserConfig parserConfig() {
@@ -78,7 +81,8 @@ public class SqlConsoleBridgeFilterProvider implements ConsoleFilterProvider {
                     state.getLogHibernateSqlPrefix(),
                     state.getLogHibernateParamPrefix(),
                     state.getLogHibernateEnabled(),
-                    state.getLogJdbcEnabled());
+                    state.getLogJdbcEnabled(),
+                    state.getLogShardingSphereEnabled());
         }
 
         @Override

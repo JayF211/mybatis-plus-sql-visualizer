@@ -12,10 +12,18 @@ final class BridgeLineContext {
     final MyBatisLogParser myBatisParser;
     final HibernateLogParser hibernateParser;
     final JdbcTemplateLogParser jdbcParser;
+    /**
+     * ShardingSphere 第四解析器（R10 T-ShardingSphereCompat，循三解析器并列先例）。
+     * 默认值只为既有测试构造点零改动（8 处直构 BridgeLineContext 的用例不传即得新实例）；
+     * 生产两处（EP EpLineFilter / 桥 attachFilter）<b>显式传入</b>。
+     */
+    final ShardingSphereLogParser shardingParser;
     final Supplier<ParserConfig> configProvider;
     SourceMarkerData pendingSource;
     /** Hibernate 喂行开关（快照同步自 ParserConfig.hibernateEnabled）。 */
     boolean hibernateEnabled;
+    /** ShardingSphere 喂行开关（快照同步自 ParserConfig.shardingEnabled；R10 D3=A 默认开）。 */
+    boolean shardingEnabled;
 
     /**
      * T-M55-02：正在聚合的执行报错文本块（错误行起，堆栈/`###` 续行追加；null = 块外）。
@@ -48,18 +56,33 @@ final class BridgeLineContext {
      */
     final java.util.concurrent.atomic.AtomicLong replayDropCount = new java.util.concurrent.atomic.AtomicLong();
 
+    /** 默认构造形态（shardingParser 取新实例、shardingEnabled 取默认 true）——对齐 Kotlin 默认参数。 */
     BridgeLineContext(MyBatisLogParser myBatisParser, HibernateLogParser hibernateParser,
                       JdbcTemplateLogParser jdbcParser, Supplier<ParserConfig> configProvider,
                       boolean hibernateEnabled) {
+        this(myBatisParser, hibernateParser, jdbcParser, new ShardingSphereLogParser(),
+                configProvider, hibernateEnabled, true);
+    }
+
+    /** 全参构造（生产两处显式传入 shardingParser/shardingEnabled）。 */
+    BridgeLineContext(MyBatisLogParser myBatisParser, HibernateLogParser hibernateParser,
+                      JdbcTemplateLogParser jdbcParser, ShardingSphereLogParser shardingParser,
+                      Supplier<ParserConfig> configProvider, boolean hibernateEnabled, boolean shardingEnabled) {
         this.myBatisParser = myBatisParser;
         this.hibernateParser = hibernateParser;
         this.jdbcParser = jdbcParser;
+        this.shardingParser = shardingParser;
         this.configProvider = configProvider;
         this.pendingSource = null;
         this.hibernateEnabled = hibernateEnabled;
+        this.shardingEnabled = shardingEnabled;
     }
 
     boolean hibernateEnabled() {
         return hibernateEnabled;
+    }
+
+    boolean shardingEnabled() {
+        return shardingEnabled;
     }
 }

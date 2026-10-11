@@ -2,15 +2,22 @@ package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter;
+import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
 import com.intellij.icons.AllIcons;
+import com.intellij.openapi.actionSystem.DataContext;
+import com.intellij.openapi.actionSystem.IdeActions;
+import com.intellij.openapi.editor.Caret;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.EditorFactory;
+import com.intellij.openapi.editor.actionSystem.EditorActionHandler;
+import com.intellij.openapi.editor.actionSystem.EditorActionManager;
 import com.intellij.openapi.editor.colors.EditorColorsManager;
 import com.intellij.openapi.editor.ex.EditorEx;
 import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.util.Key;
 import com.intellij.openapi.ui.popup.JBPopup;
 import com.intellij.openapi.ui.popup.JBPopupFactory;
 import com.intellij.openapi.ui.popup.JBPopupListener;
@@ -43,9 +50,14 @@ import javax.swing.Timer;
  * - 双击：停定时器 + 关旧预览（随后面板自行 openPreview 走完整弹窗）。
  * - 多选进行中（Ctrl/Shift/拖框 ≥2 行）单击：不排程、已弹出的关闭（T-ListPreviewCopy 用户反馈：
  *   同时选择多个 SQL 时不要再出现单击预览）；{@link #show} 到点时兜底复查，封 300ms 延迟窗内补选竞态。
+ * - 带 Ctrl/Shift 修饰键单击（含多选<b>第一击</b>）：一律不排程、已弹出的关闭（T-ClickPreviewCopyRestore
+ *   O-121 用户反馈：单击弹预览抢走列表焦点后 Ctrl+C 落在编辑器且无选中=no-op，复制失效；
+ *   ≥2 行判定要等第二击，守卫必须前移到修饰键本身）——多选全程焦点不离列表，批量 Ctrl+C 恢复。
  *
  * 弹窗形态：头部复制/关闭图标按钮 + SQL 高亮可编辑编辑器（三轮用户要求：高亮展示 +
- * 可临时改字段值再复制）。高亮走 {@link SqlListSyntaxHighlighter}（SqlLexer 分词 +
+ * 可临时改字段值再复制）。复制双入口（T-ClickPreviewCopyRestore）：头部按钮与编辑器内
+ * Ctrl+C/Ctrl+Insert 共用同一动作——无选中复制全文、有选中放行编辑器原生复制选中片段，
+ * 见 {@link #installCopyHandler}。高亮走 {@link SqlListSyntaxHighlighter}（SqlLexer 分词 +
  * SqlHighlightColors 配色键，与日志列表条目共用同一 token→配色映射——四轮用户反馈：
  * 预览高亮须与列表同色；无 PSI、不依赖 Database 插件）。
  * 弹出即聚焦内容（setRequestFocus(true)，四轮修复：false 时编辑器拿不到键盘焦点，
@@ -66,6 +78,16 @@ public class SqlClickPreview {
      */
     static String clickPreviewSql(String sql, boolean formatSql) {
         return formatSql ? SqlFormatter.format(SqlLogPanelKt.withTerminator(sql)) : SqlLogPanelKt.withTerminator(sql);
+    }
+
+    /**
+     * 修饰键是否表达列表多选意图（T-ClickPreviewCopyRestore）：Ctrl/Shift 单击是选择的开始或扩展，
+     * 修饰键在<b>第一击</b>就可判定——不必等 {@code selectedIndices.size > 1}（那要等第二击才满足），
+     * 第一击就弹预览抢焦点正是批量复制被打断的根因。纯函数，onClick 守卫与测试共用。
+     */
+    static boolean isMultiSelectIntent(int modifiersEx) {
+        return (modifiersEx & (java.awt.event.MouseEvent.CTRL_DOWN_MASK
+                | java.awt.event.MouseEvent.SHIFT_DOWN_MASK)) != 0;
     }
 
     private final Project project;
@@ -90,16 +112,27 @@ public class SqlClickPreview {
         this.timer.addActionListener(e -> show());
     }
 
-    /** 列表单击处理：命中行才排程预览；空白区立即收表关预览；双击停表关旧预览；多选进行中不排程。 */
+    /** 单击处理（无修饰键形态——Kotlin 默认参数 modifiersEx = 0 的 Java 重载等价）。 */
     public void onClick(int clickCount, Point clickPoint) {
+        onClick(clickCount, clickPoint, 0);
+    }
+
+    /**
+     * 列表单击处理：命中行才排程预览；空白区立即收表关预览；双击停表关旧预览；
+     * 多选进行中或带 Ctrl/Shift 修饰键（多选第一击，T-ClickPreviewCopyRestore）不排程。
+     */
+    public void onClick(int clickCount, Point clickPoint, int modifiersEx) {
         if (clickCount >= 2) {
             timer.stop();
             hide();
             return;
         }
         // T-ListPreviewCopy：多选（Ctrl/Shift/拖框 ≥2 行）时单击不再排程预览——多选操作被
-        // 逐行弹出的单行预览干扰；与空白区同语义：停表并关旧
-        if (list.getSelectedIndices().length > 1) {
+        // 逐行弹出的单行预览干扰；与空白区同语义：停表并关旧。
+        // T-ClickPreviewCopyRestore：守卫前移到修饰键本身——≥2 行判定要等第二击才满足，
+        // Ctrl/Shift 的第一击仍会弹预览抢走列表焦点（setRequestFocus(true)），后续多选
+        // 节奏被打断、Ctrl+C 批量复制不可达；修饰键在第一击即可判定，全程零干扰。
+        if (list.getSelectedIndices().length > 1 || isMultiSelectIntent(modifiersEx)) {
             timer.stop();
             hide();
             return;
@@ -208,6 +241,57 @@ public class SqlClickPreview {
     private static final int PREFERRED_HEIGHT = 320;
 
     /**
+     * 标记浮层预览编辑器（T-ClickPreviewCopyRestore）：copy handler 据此区分
+     * 「本插件的预览编辑器」与「IDE 其余一切编辑器」——只对前者接管无选中 Ctrl+C 语义。
+     */
+    private static final Key<Boolean> PREVIEW_EDITOR_KEY = Key.create("mpsv.clickPreview.editor");
+
+    /** 浮层编辑器上挂的复制动作（头部按钮与 Ctrl+C handler 共用同一实例，含对号反馈）。 */
+    private static final Key<Runnable> COPY_ACTION_KEY = Key.create("mpsv.clickPreview.copyAction");
+
+    /** 原生 copy handler 安装只做一次（编辑器实例可多次创建，Key 挂实例天然隔离）。 */
+    private static final Object COPY_HANDLER_LOCK = new Object();
+    private static boolean copyHandlerInstalled = false;
+
+    /**
+     * 接管 ACTION_EDITOR_COPY 的<b>无选中</b>分支（T-ClickPreviewCopyRestore）：
+     * 浮层编辑器无选区时 Ctrl+C 复制全文（编辑后文本，与头部按钮同源）——
+     * 平台编辑器 copy 按选区工作、无选中是 no-op，用户「点开浮层直接 Ctrl+C」因此什么都没发生；
+     * 有选区不接管（放行原生：只复制选中片段，保留「临时改字段值后复制片段」能力）；
+     * 非浮层编辑器一律委托原生 handler，IDE 全局语义零变化。keymap 里 Ctrl+C 与 Ctrl+Insert
+     * 都绑 $Copy，替换 handler 一处两键同生效。全局替换以静态惰性单次 + 委托兜底保证安全
+     * （测试进程内同样生效，直调 handler 即可断言）。
+     */
+    static void installCopyHandler() {
+        synchronized (COPY_HANDLER_LOCK) {
+            if (copyHandlerInstalled) return;
+            EditorActionManager manager = EditorActionManager.getInstance();
+            EditorActionHandler origin = manager.getActionHandler(IdeActions.ACTION_EDITOR_COPY);
+            manager.setActionHandler(IdeActions.ACTION_EDITOR_COPY, new EditorActionHandler() {
+                @Override
+                protected void doExecute(Editor editor, Caret caret, DataContext dataContext) {
+                    if (Boolean.TRUE.equals(editor.getUserData(PREVIEW_EDITOR_KEY))
+                            && !editor.getSelectionModel().hasSelection()) {
+                        Runnable action = editor.getUserData(COPY_ACTION_KEY);
+                        if (action != null) action.run();
+                        return;
+                    }
+                    origin.execute(editor, caret, dataContext);
+                }
+
+                @Override
+                protected boolean isEnabledForCaret(Editor editor, Caret caret, DataContext dataContext) {
+                    return Boolean.TRUE.equals(editor.getUserData(PREVIEW_EDITOR_KEY))
+                            // 三参 isEnabled 是 final 分派器（243 源码核验：caret 非 null 即转发 origin 的
+                            // isEnabledForCaret）——委托它保持 origin 完整的可用性判定语义
+                            || origin.isEnabled(editor, caret, dataContext);
+                }
+            });
+            copyHandlerInstalled = true;
+        }
+    }
+
+    /**
      * 构建预览内容：头部「复制 | 关闭」图标按钮 + SQL 高亮可编辑编辑器。
      * 高亮 = SqlListSyntaxHighlighter（SqlLexer 分词 + SqlHighlightColors 配色键，
      * 与日志列表条目共用同一映射——四轮用户反馈：预览高亮须与列表同色，直接复用；
@@ -250,14 +334,28 @@ public class SqlClickPreview {
         JButton copyButton = new JButton(AllIcons.Actions.Copy);
         copyButton.setToolTipText(MpSqlVisualizerBundle.message("log.preview.copy"));
         copyButton.setFocusable(false);
-        copyButton.addActionListener(e -> {
-            copyText.accept(editor.getDocument().getText()); // 复制当前内容（含用户编辑后文本）
-            cn.song.mybatisplus.visualizer.ui.CopyFeedback.flashCopied(copyButton); // 复制成功反馈：复制图标换对号，短暂后恢复
-        });
         JButton closeButton = new JButton(AllIcons.Actions.Close);
         closeButton.setToolTipText(MpSqlVisualizerBundle.message("log.preview.close"));
         closeButton.setFocusable(false);
         closeButton.addActionListener(e -> close.run());
+        // T-ClickPreviewCopyRestore：头部按钮与编辑器 Ctrl+C handler 共用同一复制动作
+        //（取编辑后当前文本 + 图标换对号反馈），两条入口产物与反馈一致
+        Runnable copyAll = () -> {
+            copyText.accept(editor.getDocument().getText()); // 复制当前内容（含用户编辑后文本）
+            cn.song.mybatisplus.visualizer.ui.CopyFeedback.flashCopied(copyButton); // 复制成功反馈：复制图标换对号，短暂后恢复
+        };
+        copyButton.addActionListener(e -> copyAll.run());
+        editor.putUserData(PREVIEW_EDITOR_KEY, true);
+        editor.putUserData(COPY_ACTION_KEY, copyAll);
+        installCopyHandler();
+
+        // T-SqlCopyShortcuts O-122（原二轮内联实现收敛到共享件）：Swing 层 Ctrl+C / Ctrl+Insert
+        // 接管——无选中复制全文、有选中只复制选区（保留改字段值后复制片段），与头部按钮同反馈；
+        // 为什么必须挂在这一层、为什么不是 keymap 侧，见 EditorCopyShortcuts 的 KDoc。
+        EditorCopyShortcuts.install(
+                editor,
+                copyText,
+                () -> cn.song.mybatisplus.visualizer.ui.CopyFeedback.flashCopied(copyButton));
         JPanel header = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
         header.setOpaque(false);
         header.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4));

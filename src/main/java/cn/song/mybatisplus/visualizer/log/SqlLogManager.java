@@ -20,6 +20,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.BiConsumer;
 
 import kotlin.Pair;
 
@@ -63,8 +64,17 @@ public final class SqlLogManager implements Disposable {
      */
     private final Runnable suppressRuleListener = () -> {
         buffer.setSuppressKeys(suppressRuleManager.getSuppressedKeys());
+        buffer.setHasStructureKeys(suppressRuleManager.getSuppressedKeysContainStructure());
         notifyUi();
     };
+
+    /**
+     * T-RecentExecMenu O-119：面板外「把条目送进工具窗页签」通道（弹框右键「发送到 SQL → Java /
+     * 日志转 SQL」用）。两块页签面板（{@code sqlToJavaPanel} / {@code logToSqlPanel}）是 {@link SqlLogPanel} 的私有
+     * 字段，面板外不可达——回调形态照抄 {@link #onAutoShowRequest}（面板 init 注册、dispose 注销；
+     * 未注册 = 工具窗未创建，调用方按「未就绪」轻提示降级，不静默）。
+     */
+    volatile BiConsumer<LogSqlEntry, LogEntryTab> onOpenEntryInTab = null;
 
     private final Project project;
 
@@ -162,6 +172,7 @@ public final class SqlLogManager implements Disposable {
         // T-SqlSuppress：初始同步一次屏蔽键集 + 订阅规则变更（dispose 注销）；
         // 命中计数归账同挂专用出口（被拦条目不触发其他任何回调）。
         buffer.setSuppressKeys(suppressRuleManager.getSuppressedKeys());
+        buffer.setHasStructureKeys(suppressRuleManager.getSuppressedKeysContainStructure());
         suppressRuleManager.addListener(suppressRuleListener);
         buffer.setOnSuppressedHit(suppressRuleManager::recordHit);
         this.bridge.onConsoleRemoved = this::onConsoleRemoved;
@@ -627,7 +638,8 @@ public final class SqlLogManager implements Disposable {
                 state.getLogHibernateSqlPrefix(),
                 state.getLogHibernateParamPrefix(),
                 state.getLogHibernateEnabled(),
-                state.getLogJdbcEnabled());
+                state.getLogJdbcEnabled(),
+                state.getLogShardingSphereEnabled());
     }
 
     /** 面板销毁/项目关闭时移除挂载（capturing 同步重置——状态机闭环）。 */
@@ -656,6 +668,7 @@ public final class SqlLogManager implements Disposable {
         suppressRuleManager.removeListener(suppressRuleListener);
         buffer.setOnSuppressedHit(null);
         buffer.setSuppressKeys(java.util.Set.of());
+        buffer.setHasStructureKeys(false);
         buffer.setOnEntryAccepted(null);
         buffer.setOnEntryStored(null);
         buffer.setOnDedupeCountsChanged(null);

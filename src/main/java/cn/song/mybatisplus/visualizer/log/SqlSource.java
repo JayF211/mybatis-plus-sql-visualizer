@@ -10,6 +10,12 @@ public enum SqlSource {
     HIBERNATE,
     /** Spring JdbcTemplate 控制台日志（Executing prepared SQL statement [SQL] / Setting SQL statement parameter value: ... 格式）。 */
     JDBC,
+    /**
+     * ShardingSphere 双段日志（R10 T-ShardingSphereCompat，5.x sql-show 形态）：
+     * {@code Logic SQL:} 主条目 + {@code Actual SQL:} 折叠附注（{@link LogSqlEntry#actualSql()}）。
+     * 骨架按公开文档形态实现，真实语料未采样（V36）——行为细节见解析器 TODO。
+     */
+    SHARDINGSPHERE,
     /** agent 字节码通道（M56 增强捕获）：应用 JVM 内 JDBC 执行点 hook 直取的结构化事件。 */
     AGENT,
     /**

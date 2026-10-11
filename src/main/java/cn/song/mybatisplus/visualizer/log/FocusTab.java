@@ -1,6 +1,8 @@
 // T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/log/FocusTab.kt 移植
 package cn.song.mybatisplus.visualizer.log;
 
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -57,6 +59,23 @@ public sealed interface FocusTab {
         }
     }
 
+    /**
+     * O-90：同模板聚焦（{@link LogSqlEntry#structureKey()} 精确匹配——字面量参数化后的同形状 SQL 全部可见）。
+     * {@code count} 为创建时点的计数快照，只用于页签文案（计数随捕获增长不回写页签）；相等性按
+     * structureKey 判重（{@link #addTemplateTab}），count 不参与判重。
+     */
+    record Template(
+        /** 结构指纹（字面量/数字参数化后的同形状键）。 */
+        String structureKey,
+        /** 创建时点的计数快照（仅文案用，不参与判重）。 */
+        int count
+    ) implements FocusTab {
+        @Override
+        public String label() {
+            return MpSqlVisualizerBundle.message("log.panel.templateBadge", count);
+        }
+    }
+
     /** 请求聚焦页签上限（K 有界——长压测会话 requestTag 高基数，防页签栏爆列表）。 */
     int FOCUS_REQUEST_TAB_MAX = 8;
 
@@ -69,6 +88,9 @@ public sealed interface FocusTab {
         }
         if (tab instanceof Request request) {
             return entry.requestTag() != null && entry.requestTag().equals(request.requestTag());
+        }
+        if (tab instanceof Template template) {
+            return entry.structureKey().equals(template.structureKey());
         }
         return false;
     }
@@ -120,6 +142,21 @@ public sealed interface FocusTab {
             : next;
         List<FocusTab> result = new ArrayList<>(others);
         result.addAll(trimmed);
+        return result;
+    }
+
+    /**
+     * O-90：新增模板页签的准入（纯函数）：按 structureKey 判重（count 快照不同不算新页签），
+     * 返回收缩后的<b>新</b>列表（调用方 clear+addAll 回写，不得别名回写——与 {@link #addRequestTab} 同纪律）。
+     */
+    static List<FocusTab> addTemplateTab(List<FocusTab> tabs, String structureKey, int count) {
+        for (FocusTab tab : tabs) {
+            if (tab instanceof Template template && template.structureKey().equals(structureKey)) {
+                return new ArrayList<>(tabs);
+            }
+        }
+        List<FocusTab> result = new ArrayList<>(tabs);
+        result.add(new Template(structureKey, count));
         return result;
     }
 }

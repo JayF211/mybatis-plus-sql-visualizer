@@ -102,6 +102,25 @@ public class SqlLogEntryBuffer {
     }
 
     /**
+     * T-AttachZeroEvent P3（2026-10-09 现场复盘）：<b>通道纪元重置</b>——增强捕获接管沿（桥让位、
+     * agent 接管，{@code SqlCaptureGate.paused} false→true）由 {@code AgentManager.updateOnline} 调用。
+     *
+     * <p>为什么重置：dedupeKey 跨通道统一（agent 与桥同 SQL 产出同指纹，AgentEventAdapter 契约），
+     * 目的是折叠接管/回落<b>重叠期</b>的双通道双报；桥一旦封停，重叠窗语义即结束——接管前桥纪元的
+     * 索引不得再吞 agent 纪元的首批同键事件。现场：接管前 60s 内桥刚捕过同端点，接管后同 SQL 的
+     * agent 事件全部落窗口内被当重复丢弃，面板零新条目、「attach 即生效」看似失效。
+     *
+     * <p>只清索引，<b>不清条目、不清 ⨉N 徽章计数</b>（历史留痕）；此后 agent↔agent 短窗重复照常折叠
+     * （索引由新纪元条目在入队 upsert 面重建）。O(1)（清 map），entries 锁内执行。
+     * 回落沿（true→false）<b>不</b>调用本方法——理由见 {@code AgentManager.updateOnline} 尾注。
+     */
+    public void resetDedupeIndexOnChannelHandoff() {
+        synchronized (entries) {
+            dedupeIndex.clear();
+        }
+    }
+
+    /**
      * 去重丢弃计数（T-Perf-19：键 = restoredSql 指纹 sqlFingerprint，非 SQL 原文——
      * 原文键在条目淘汰后文本永久驻留，长会话可达数十 MB）：去重开启期间每丢弃
      * 一条相同 SQL 计数 +1，供列表「⨉N」徽章展示该 SQL 被去掉过几次。
@@ -127,6 +146,10 @@ public class SqlLogEntryBuffer {
      * 入队回调）。空集时短路零成本（不触 {@code entry.dedupeKey()} 的惰性计算——无规则的常态）。
      */
     private volatile Set<String> suppressKeys = Set.of();
+
+    /** F20（T-PerfSweep9）：键集中是否存在结构口径键——与 {@link #suppressKeys} 同点写入（SqlLogManager
+     *  订阅者同步刷写），false 时结构键第二查找整体跳过（structureKey lazy 不触达）。 */
+    private volatile boolean hasStructureKeys = false;
 
     /**
      * T-SqlSuppress：屏蔽闸门命中回调（参数 = 命中指纹键）——{@link SqlSuppressRuleManager#recordHit}
@@ -234,6 +257,14 @@ public class SqlLogEntryBuffer {
         this.suppressKeys = suppressKeys;
     }
 
+    public boolean getHasStructureKeys() {
+        return hasStructureKeys;
+    }
+
+    public void setHasStructureKeys(boolean hasStructureKeys) {
+        this.hasStructureKeys = hasStructureKeys;
+    }
+
     public Consumer<String> getOnSuppressedHit() {
         return onSuppressedHit;
     }
@@ -336,11 +367,14 @@ public class SqlLogEntryBuffer {
         // 【反向验证探针锚点】注释掉下面 if 块 = 摘除屏蔽闸门，SqlLogEntryBufferTest 屏蔽用例必红。
         // T-SqlSuppressUx 二段：精确键（默认口径规则）或结构键（手动开启结构匹配的规则）任一命中即拦；
         // 命中键回传 recordHit 归账到对应规则。空集短路下 structureKey 的惰性亦不被触达。
+        // F20（T-PerfSweep9）：结构键独立门控——键集里无任何结构口径键（SqlSuppressRuleManager 的
+        // 「(结构)」后缀约定）时跳过第二查找，避免「全部精确口径规则」形态每条捕获白付一次
+        // structureKey lazy（O(n) 字面量参数化扫描 + StringBuilder 分配）。
         if (!suppressKeys.isEmpty()) {
             String hitKey = null;
             if (suppressKeys.contains(entry.suppressKey())) {
                 hitKey = entry.suppressKey();
-            } else if (suppressKeys.contains(entry.structureKey())) {
+            } else if (hasStructureKeys && suppressKeys.contains(entry.structureKey())) {
                 hitKey = entry.structureKey();
             }
             if (hitKey != null) {

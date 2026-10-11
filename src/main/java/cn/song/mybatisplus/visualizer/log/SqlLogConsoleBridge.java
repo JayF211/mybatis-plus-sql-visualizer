@@ -439,6 +439,8 @@ public class SqlLogConsoleBridge {
         ctx.jdbcParser.setEnabled(cfg.jdbcEnabled());
         ctx.jdbcParser.setMaxParseLength(cfg.maxParseLength());
         ctx.hibernateEnabled = cfg.hibernateEnabled();
+        ctx.shardingParser.setMaxParseLength(cfg.maxParseLength());
+        ctx.shardingEnabled = cfg.shardingEnabled();
     }
 
     /** T-PS4-02：internal 测试缝——两时序单路化测试直接对桩控制台挂载桥 filter（scanAll 需真实组件树）。 */
@@ -469,8 +471,10 @@ public class SqlLogConsoleBridge {
                         new HibernateLogParser(new LogSqlRestorer(), cfg0.hibernateSqlPrefix(), cfg0.hibernateParamPrefix(),
                                 cfg0.mixedPrefix(), cfg0.maxParseLength(), true),
                         new JdbcTemplateLogParser(new LogSqlRestorer(), cfg0.jdbcEnabled(), cfg0.maxParseLength()),
+                        new ShardingSphereLogParser(cfg0.maxParseLength()),
                         parserConfig,
-                        cfg0.hibernateEnabled());
+                        cfg0.hibernateEnabled(),
+                        cfg0.shardingEnabled());
                 consoleContexts.put(console, ctx);
                 // T-PreviewFlash：反射缓存 console.getEditor()（ConsoleView.getEditor 为 public）。
                 // 取不到则守卫降级停用（editor 为 null → decide 恒 Process＝现状语义），绝不阻塞捕获。
@@ -592,6 +596,15 @@ public class SqlLogConsoleBridge {
                 for (LogSqlEntry entry : ctx.jdbcParser.takeEntries()) {
                     if (buffer.addEntry(entry)) {
                         produced++;
+                    }
+                }
+                // R10：ShardingSphere 同款静默兜底（条目只在下一条 Logic 行闭合，最后一语句无后继行）
+                if (ctx.shardingEnabled) {
+                    ctx.shardingParser.flushSettled(nowMs);
+                    for (LogSqlEntry entry : ctx.shardingParser.takeEntries()) {
+                        if (buffer.addEntry(entry)) {
+                            produced++;
+                        }
                     }
                 }
             }
@@ -830,18 +843,29 @@ public class SqlLogConsoleBridge {
         return false;
     }
 
-    /** T-LogPerf-02：反射 Method 缓存（热路径每拍轮询不再重复 getMethod 查找；找不到也缓存 null）。 */
-    private static final java.util.concurrent.ConcurrentHashMap<String, java.lang.reflect.Method> methodCache =
+    /**
+     * T-LogPerf-02：反射 Method 缓存（热路径每拍轮询不再重复 getMethod 查找；找不到也缓存）。
+     *
+     * <p>F50（T-PerfQuick5）两处修正：
+     *  - <b>值改 {@link java.util.Optional}</b>——CHM 禁 null：原值类型 {@code Method} 在负缓存路径
+     *    {@code methodCache[key] = null} 运行时 NPE（被 descriptorsOf/componentOf 的
+     *    catch(Throwable) 吞掉——负缓存从未生效，每拍重付 getMethod+NPE 构造成本）；
+     *  - <b>键含 ClassLoader 身份</b>——同签名类名跨 classloader（平台与插件遮蔽同名类/
+     *    动态卸载后的新 loader）不是同一个类，裸类名记忆化会跨 loader 撞键。
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.Optional<java.lang.reflect.Method>> methodCache =
             new java.util.concurrent.ConcurrentHashMap<>();
 
-    private static java.lang.reflect.Method cachedMethod(Class<?> clazz, String name) {
-        String key = clazz.getName() + "#" + name;
-        java.lang.reflect.Method cached = methodCache.get(key);
+    /** F50：记忆化键（纯函数可测）——类名 + ClassLoader 身份 + 方法名三元组。 */
+    public static String methodCacheKey(String className, ClassLoader loader, String name) {
+        return className + "@" + System.identityHashCode(loader) + "#" + name;
+    }
+
+    public static java.lang.reflect.Method cachedMethod(Class<?> clazz, String name) {
+        String key = methodCacheKey(clazz.getName(), clazz.getClassLoader(), name);
+        java.util.Optional<java.lang.reflect.Method> cached = methodCache.get(key);
         if (cached != null) {
-            return cached;
-        }
-        if (methodCache.containsKey(key)) {
-            return null; // 已缓存的 null
+            return cached.orElse(null);
         }
         java.lang.reflect.Method m;
         try {
@@ -849,7 +873,7 @@ public class SqlLogConsoleBridge {
         } catch (Throwable t) {
             m = null;
         }
-        methodCache.put(key, m);
+        methodCache.put(key, java.util.Optional.ofNullable(m));
         return m;
     }
 

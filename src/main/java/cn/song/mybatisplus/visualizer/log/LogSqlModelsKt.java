@@ -183,4 +183,23 @@ public final class LogSqlModelsKt {
         Long logTime = LogTimeCorrelator.take(logTimeKey(entry), logTimeParamSignature(entry.params()));
         return logTime != null ? entry.withLogTimestamp(logTime) : null;
     }
+
+    /**
+     * O-90：同模板计数聚合（structureKey → 条数）——N+1 <b>捕获后聚类标记</b>的计数数据源
+     * （与 Hibernate Debugger 的运行期实时检测差异化：对已捕获条目离线聚合，零运行时开销，
+     * 不做实时 profiler——红线）。
+     * 判别口径 = {@link #structureFingerprint}（字面量参数化后同形状同键）：参数值不同的同模板 SQL 计入
+     * 同键；IN 元素个数 / 表名 / 列名不同的异形互不计入。条目侧 structureKey 为 lazy 体属性
+     * （每条只算一次，空集短路），本聚合 O(N) 单遍。
+     */
+    public static java.util.Map<String, Integer> structureKeyCounts(java.util.List<LogSqlEntry> entries) {
+        java.util.Map<String, Integer> counts = new java.util.LinkedHashMap<>();
+        for (LogSqlEntry e : entries) {
+            counts.merge(e.structureKey(), 1, Integer::sum);
+        }
+        return counts;
+    }
+
+    /** O-90：同模板徽章显示阈值（≥N 显示「×N 同模板」；常量起步不做设置项——缩范围定案）。 */
+    public static final int TEMPLATE_BADGE_MIN_COUNT = 3;
 }

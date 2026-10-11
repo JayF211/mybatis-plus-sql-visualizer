@@ -55,6 +55,8 @@ public final class SqlLogParamCodec {
     private static final String CANDS_FIELD = "cd";
     private static final String CAND_CLASSES_FIELD = "cc";
     private static final String STACK_DIGEST_FIELD = "sd";
+    /** R10 T-ShardingSphereCompat：Actual SQL 折叠附注（仅非默认落键；旧 payload 无此键 → null）。 */
+    private static final String ACTUAL_SQL_FIELD = "a";
 
     private static final Gson GSON = new Gson();
 
@@ -85,11 +87,13 @@ public final class SqlLogParamCodec {
              * T-McpAuditTrail T-MAT-03：来源（当前仅 {@link SqlSource#MCP} 落键）；旧 payload / 非 MCP 条目为 null。
              * 读端把它回填进 {@link LogSqlEntry#source()}，不填则沿用默认 {@link SqlSource#UNKNOWN}。
              */
-            SqlSource source) {
+            SqlSource source,
+            /** R10 T-ShardingSphereCompat：Actual SQL 折叠附注；旧 payload 为 null。 */
+            String actualSql) {
 
         /** 无扩展字段形态（Kotlin data class 默认参数等价）。 */
         public DecodedPayload(String rawSql, List<LogSqlParam> params) {
-            this(rawSql, params, null, null, null, null, List.of(), List.of(), null, null);
+            this(rawSql, params, null, null, null, null, List.of(), List.of(), null, null, null);
         }
     }
 
@@ -146,9 +150,13 @@ public final class SqlLogParamCodec {
         if (entry.stackDigest() != null) {
             obj.addProperty(STACK_DIGEST_FIELD, entry.stackDigest());
         }
+        if (entry.actualSql() != null) {
+            obj.addProperty(ACTUAL_SQL_FIELD, entry.actualSql());
+        }
         // T-McpAuditTrail T-MAT-03：来源标记——仅 MCP 落键（本任务范围：其余来源的读回口径
         // 维持 UNKNOWN 不变，不做未立项的行为扩张）。枚举名而非序号：新增常量不使旧文件失效。
-        if (entry.source() == SqlSource.MCP) {
+        // R10：SHARDINGSPHERE 同样落键——控制台解析产出的来源若无键，历史读回退化为 UNKNOWN。
+        if (entry.source() == SqlSource.MCP || entry.source() == SqlSource.SHARDINGSPHERE) {
             obj.addProperty(SOURCE_FIELD, entry.source().name());
         }
         return Base64.getEncoder().encodeToString(GSON.toJson(obj).getBytes(StandardCharsets.UTF_8));
@@ -224,7 +232,8 @@ public final class SqlLogParamCodec {
                     stringField(json, STACK_DIGEST_FIELD),
                     // T-McpAuditTrail T-MAT-03：来源键缺失/值非本版本枚举名 → null（旧文件与旧版写入端天然兼容，
                     // 不认识的值只丢来源标记，绝不丢弃整条——与其余扩展键同款容错口径）
-                    sourceField(json, SOURCE_FIELD));
+                    sourceField(json, SOURCE_FIELD),
+                    stringField(json, ACTUAL_SQL_FIELD));
         } catch (Exception e) {
             return null;
         }

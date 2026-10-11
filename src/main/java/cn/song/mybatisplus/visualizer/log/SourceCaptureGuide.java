@@ -2,11 +2,9 @@ package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.config.EnhancedCaptureConsent;
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
-import cn.song.mybatisplus.visualizer.config.SqlLogConfigurable;
 import cn.song.mybatisplus.visualizer.log.agent.AgentManager;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.openapi.application.ApplicationManager;
-import com.intellij.openapi.options.ShowSettingsUtil;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
 
@@ -126,7 +124,10 @@ public final class SourceCaptureGuide {
         if (choice == GuideChoice.EnableEnhanced) {
             enableEnhancedCapture(project);
         } else if (choice == GuideChoice.OpenSettings) {
-            ShowSettingsUtil.getInstance().showSettingsDialog(project, SqlLogConfigurable.class);
+            // T-SettingsFocusFromLink：打开主设置页并定位高亮到源码捕获行的设置项
+            cn.song.mybatisplus.visualizer.config.PluginSettingsFolderConfigurable.openSqlLogSettingsFocused(
+                    project,
+                    MpSqlVisualizerBundle.message("settings.log.autoInjectInterceptor"));
         } else if (choice == GuideChoice.InjectNow) {
             runInjection(project);
         }

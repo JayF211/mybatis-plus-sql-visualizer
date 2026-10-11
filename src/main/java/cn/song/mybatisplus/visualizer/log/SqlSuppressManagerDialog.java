@@ -3,7 +3,9 @@ package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.ui.EditorWhitespaceSettings;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter;
+import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.editor.Document;
@@ -76,6 +78,17 @@ public class SqlSuppressManagerDialog extends DialogWrapper {
     private final Project project;
 
     private final SqlSuppressRuleManager ruleManager = SqlSuppressRuleManager.getInstance();
+
+    /**
+     * 时间格式化（ThreadLocal 复用；照 LogTimestampParser 范式）。
+     *
+     * <p><b>声明位置是契约</b>（T-DevAcceptFix2 ③，20261006 验收 NPE 修复）：本字段必须声明在 {@link #init()} 块
+     * <b>之前</b>——{@code init { … refreshRuleList(select = null) }} 在构造期就触发列表渲染，渲染器回调
+     * {@link #createdAtText} 读本字段。Kotlin 属性按声明序初始化，声明在后 = 构造期读取时为 null
+     * （引用类型默认值，编译期不报错）→ 规则数 ≥1 时每次打开对话框必 NPE。
+     */
+    private final ThreadLocal<SimpleDateFormat> createdAtFormat = ThreadLocal.withInitial(
+            () -> new SimpleDateFormat("yyyy-MM-dd HH:mm"));
 
     private final CollectionListModel<SqlSuppressRule> listModel = new CollectionListModel<>();
     private final JBList<SqlSuppressRule> ruleList = new JBList<>(listModel);
@@ -280,6 +293,9 @@ public class SqlSuppressManagerDialog extends DialogWrapper {
         if (created instanceof EditorEx) {
             ((EditorEx) created).setViewer(true);
         }
+        // T-SqlCopyShortcuts O-122：无选中 Ctrl+C 复制全文、有选中只复制片段
+        //（层位与理由见 EditorCopyShortcuts 的 KDoc；本处此前无任何键盘复制绑定）
+        EditorCopyShortcuts.install(created, UiTextClipboard::copy);
         editor = created;
         return created.getComponent();
     }
@@ -463,9 +479,12 @@ public class SqlSuppressManagerDialog extends DialogWrapper {
         refreshRuleList(null);
     }
 
-    /** createdAt 展示片段（yyyy-MM-dd HH:mm；EDT 渲染专用，SimpleDateFormat 线程约束不适用）。 */
+    /** createdAt 展示片段（yyyy-MM-dd HH:mm）。F22（T-PerfSweep9）：SDF ThreadLocal 缓存化
+     *  （照 LogTimestampParser 范式；此前每行每次重绘新建一个实例，分配面与 PS7-04 缓存化方向相逆）。
+     *  复用实例输出与逐次新建逐字节一致（format 不读旧状态）。
+     *  T-DevAcceptFix2 ③：字段本体已上移至类首（构造期渲染回调要读，声明序即契约，见该处注释）。 */
     private String createdAtText(SqlSuppressRule rule) {
-        return new SimpleDateFormat("yyyy-MM-dd HH:mm").format(new Date(rule.getCreatedAt()));
+        return createdAtFormat.get().format(new Date(rule.getCreatedAt()));
     }
 
     /** 只挂「关闭」（F5：关闭即生效，无确定/应用缓存层）。 */

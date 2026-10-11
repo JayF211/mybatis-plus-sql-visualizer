@@ -12,6 +12,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -20,6 +21,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import kotlin.Pair;
 
 /**
  * SQL 屏蔽规则管理器（O-69 T-SqlSuppress）：心跳类 SQL（如 {@code SELECT 1}）的「不再捕获」规则——
@@ -85,6 +88,11 @@ public final class SqlSuppressRuleManager implements PersistentStateComponent<Sq
      */
     private volatile Set<String> suppressedKeys = Set.of();
 
+    /** F20（T-PerfSweep9）：键集中是否含结构口径键（任一规则 structureMatch 开启）——与
+     *  {@link #suppressedKeys} 同批重建发布；SqlLogEntryBuffer 据此跳过结构键第二查找
+     *  （全部精确口径形态下 structureKey lazy 不触达）。 */
+    private volatile boolean suppressedKeysContainStructure = false;
+
     /** 指纹 → 规则 id 索引（与 {@link #suppressedKeys} 同批重建发布；命中计数按 id 归账）。 */
     private volatile Map<String, String> keyIndex = Map.of();
 
@@ -108,6 +116,11 @@ public final class SqlSuppressRuleManager implements PersistentStateComponent<Sq
     @NotNull
     public Set<String> getSuppressedKeys() {
         return suppressedKeys;
+    }
+
+    /** F20（T-PerfSweep9）：运行时匹配集是否含结构口径键（{@link SqlLogManager} 订阅者同步刷入缓冲）。 */
+    public boolean getSuppressedKeysContainStructure() {
+        return suppressedKeysContainStructure;
     }
 
     /** 指定指纹是否被屏蔽（面板存量过滤与测试复用；与闸门同判据）。 */
@@ -165,6 +178,48 @@ public final class SqlSuppressRuleManager implements PersistentStateComponent<Sq
         }
         republish();
         return AddResult.ADDED;
+    }
+
+    /**
+     * F21（T-PerfSweep9）：批量新增——单次 synchronized + <b>单次 republish</b>（多选屏蔽 N 条
+     * 逐条 addRule 会付 N 次 EDT 键集重建 + 监听器遍历）。语义与 N 次 {@link #addRule} 等价：
+     * 空白/重复跳过、上限先到先得拒新增（先到按入参序）。返回 (新增数, 是否有规则被上限拒)。
+     */
+    @NotNull
+    public Pair<Integer, Boolean> addRules(@NotNull Collection<String> sampleSqls) {
+        int added = 0;
+        boolean limitReached = false;
+        synchronized (rulesLock) {
+            for (String sampleSql : sampleSqls) {
+                String normalized = LogSqlModelsKt.normalizeSqlWhitespace(sampleSql);
+                if (normalized.isEmpty()) {
+                    continue;
+                }
+                boolean duplicate = false;
+                for (SqlSuppressRule it : state.getRules()) {
+                    if (it.getPattern().equals(normalized)) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (duplicate) {
+                    continue;
+                }
+                if (state.getRules().size() >= MAX_RULES) {
+                    limitReached = true;
+                    continue;
+                }
+                SqlSuppressRule rule = new SqlSuppressRule(
+                        "", normalized, sampleSql.trim(), System.currentTimeMillis(), false);
+                rule.ensureId();
+                state.getRules().add(rule);
+                added++;
+            }
+        }
+        if (added > 0) {
+            republish();
+        }
+        return new Pair<>(added, limitReached);
     }
 
     /** 按 id 删除单条规则；确有删除时发布通知。 */
@@ -264,6 +319,7 @@ public final class SqlSuppressRuleManager implements PersistentStateComponent<Sq
         List<SqlSuppressRule> current = getRules();
         Set<String> keys = new HashSet<>(current.size() * 2);
         Map<String, String> index = new HashMap<>(current.size() * 2);
+        boolean containStructure = false;
         for (SqlSuppressRule rule : current) {
             // T-SqlSuppressUx：精确口径（去重口径 + 尾分号剥离）与条目侧 LogSqlEntry.suppressKey
             // 同函数；结构匹配开启的规则改用结构指纹（字面量/数字参数化），与
@@ -273,8 +329,12 @@ public final class SqlSuppressRuleManager implements PersistentStateComponent<Sq
                     : LogSqlModelsKt.suppressFingerprint(rule.getPattern());
             keys.add(key);
             index.put(key, rule.getId());
+            if (rule.isStructureMatch()) {
+                containStructure = true;
+            }
         }
         suppressedKeys = keys;
+        suppressedKeysContainStructure = containStructure;
         keyIndex = index;
         for (Runnable it : listeners) {
             it.run();

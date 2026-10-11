@@ -326,7 +326,7 @@ public class SqlLogAutoSaver {
     public synchronized void configure(String customPath, String pattern, String projectBasePath, int maxFiles) {
         // T-PS4-13：configure 链调用线程常为 EDT（设置变更）——限批同步排水防长批磁盘写阻塞
         close(configureDrainLimit);
-        saveDir = resolveDir(customPath, projectBasePath);
+        saveDir = resolveHistoryDir(customPath, projectBasePath);
         fileNamePattern = pattern.isBlank() ? PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN : pattern;
         this.maxFiles = maxFiles;
         // T-PS4-10：按当前模板重建本插件名族匹配正则；节流基准复位（重配后首个写批即刻获得裁剪机会）
@@ -334,17 +334,6 @@ public class SqlLogAutoSaver {
         lastPruneAtMs = -1L;
         currentResolvedName = "";
         currentIndex = 1;
-    }
-
-    /** 解析最终保存目录。 */
-    private String resolveDir(String customPath, String projectBasePath) {
-        if (!customPath.isBlank()) {
-            return customPath.trim();
-        }
-        if (projectBasePath != null) {
-            return projectBasePath + File.separator + DATA_DIR_NAME + File.separator + "sql-history";
-        }
-        return System.getProperty("user.home") + File.separator + DATA_DIR_NAME + File.separator + "sql-history";
     }
 
     /**
@@ -471,11 +460,14 @@ public class SqlLogAutoSaver {
             // T-McpAuditTrail T-MAT-03：**source == MCP 必须入条件**——一条无参数、无占位符、
             // 无 mapperStatement 的 MCP SELECT（explain 的常态）若不带本条件就不会写出 pd 行，
             // 来源标记随之丢失（历史读回退化为 UNKNOWN，MCP 徽标消失）——这正是本任务的存在意义。
+            // R10：actualSql 附注与 SHARDINGSPHERE 来源同款入条件（无参 Logic SELECT 的 Actual
+            // 对照与来源标记若不落 pd 行，历史读回即丢）。
             if (!entry.params().isEmpty() || LogEntryPreviewRecognizerKt.countPlaceholders(entry.rawSql()) > 0
                     || entry.mapperStatement() != null || entry.errorText() != null
                     || entry.requestTag() != null || entry.updateCount() != null
                     || !entry.sourceCandidates().isEmpty() || entry.stackDigest() != null
-                    || entry.source() == SqlSource.MCP) {
+                    || entry.actualSql() != null
+                    || entry.source() == SqlSource.MCP || entry.source() == SqlSource.SHARDINGSPHERE) {
                 w.write("-- pd: " + SqlLogParamCodec.encodeEntry(entry) + " --\n");
             }
             w.write(SqlLogPanelKt.withTerminator(entry.restoredSql()));
@@ -582,11 +574,30 @@ public class SqlLogAutoSaver {
 
     /**
      * 项目内插件数据根目录名（F-44-4）：随插件更名「SQL Visualizer」由旧名
-     * `mybatis-plus-sql-visualizer` 改为 `sql-visualizer`，**不考虑向前兼容**。
+     * `mybatis-plus-sql-visualizer` 改为 `sql-visualizer`，**不考虑向前兼容**
+     * （旧 `.idea/mybatis-plus-sql-visualizer/` 数据不再读取，历史 SQL 与新捕获从新目录起算）。
+     * 其他模块（HistorySqlLogPanel / DataSourceSelector / SqlPreviewPanel）统一引用本常量。
      */
     public static final String DATA_DIR_NAME = "sql-visualizer";
 
     private static final String DEFAULT_DIR = DATA_DIR_NAME + File.separator + "sql-history";
+
+    /**
+     * 解析历史 SQL 目录（写端 {@link #configure} 与读端 HistorySqlLogPanel 的<b>唯一来源</b>）：
+     * 自定义目录非空则优先（去首尾空白）；否则 {@code <项目根>/.idea/sql-visualizer/sql-history}；
+     * 无项目根（Default Project 等非文件型项目）回落 {@code user.home} 下的同一相对路径。
+     *
+     * <p>T-HistoryTabAlways：此前读端自己拼一份同形路径且只认默认目录——用户把「保存目录」改成
+     * 自定义路径后，自动保存写进去的历史文件在历史页里看不到（读写两端各拼一份、只有写端认自定义
+     * 目录）。收口到本函数后两端恒同源。
+     */
+    public static String resolveHistoryDir(String customPath, String projectBasePath) {
+        if (customPath != null && !customPath.isBlank()) {
+            return customPath.trim();
+        }
+        String base = projectBasePath != null ? projectBasePath : System.getProperty("user.home");
+        return base + File.separator + ".idea" + File.separator + DEFAULT_DIR;
+    }
 
     /** 匹配 $变量$ 占位符。 */
     private static final Pattern PLACEHOLDER_REGEX = Pattern.compile("\\$([^$]+)\\$");

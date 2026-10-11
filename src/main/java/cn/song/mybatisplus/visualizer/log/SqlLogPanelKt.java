@@ -609,6 +609,30 @@ public final class SqlLogPanelKt {
 
     /** M56 T-M56-02：增强捕获角标已按用户要求移除（增强为默认通道，逐行标来源属噪音）。 */
 
+    /**
+     * O-90：同模板计数徽章（N+1 捕获后聚类标记）——counts[structureKey] 达
+     * {@link LogSqlModelsKt#TEMPLATE_BADGE_MIN_COUNT} 才显示「×N 同模板」，与去重 ⨉N 徽章相邻同落点（元信息行尾）。
+     * 计数由调用方传面板全量条目的 {@link LogSqlModelsKt#structureKeyCounts} 聚合快照（徽章计数不随当前过滤波动）；
+     * 无计数/未达阈值返回 null 不显示。文案走双语 bundle（log.panel.templateBadge）；着色
+     * {@link MpvsUiColors#TEMPLATE_N1}（选中白同规）。
+     */
+    public static kotlin.Pair<String, SimpleTextAttributes> formatTemplateCountFragment(
+            LogSqlEntry entry,
+            Map<String, Integer> counts,
+            boolean isSelected) {
+        Integer n = counts.get(entry.structureKey());
+        if (n == null) {
+            return null;
+        }
+        if (n < LogSqlModelsKt.TEMPLATE_BADGE_MIN_COUNT) {
+            return null;
+        }
+        Color color = isSelected ? new Color(0xFFFFFF) : MpvsUiColors.TEMPLATE_N1;
+        return new kotlin.Pair<>(
+                MpSqlVisualizerBundle.message("log.panel.templateBadge", n) + " ",
+                new SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color));
+    }
+
     /** T-AgentDialectLoop：目标库角标（agent 通道由连接 URL 推断）；未知返回 null 不显示。 */
     public static kotlin.Pair<String, SimpleTextAttributes> formatDatabaseFragment(LogSqlEntry entry, boolean isSelected) {
         String db = entry.databaseName();

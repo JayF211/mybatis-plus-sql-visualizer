@@ -46,8 +46,32 @@ public record CaptureDiagnostics(
     /** 重放守卫丢弃行数（T-RA-03；0 = 无丢弃，不显示）。 */
     long replayDropped,
     /** EP 通道短路行数（T-RA-03；0 = 无短路，不显示）。 */
-    long epShortCircuited
+    long epShortCircuited,
+    /**
+     * T-DevAcceptFix2 ⑤（20261006 第二轮验收）：<b>增强通道已收事件数</b>（agent 事件到达并适配的累计）。
+     *
+     * <p>与上面两个计数不同，本字段<b>恒显示</b>（不设「非零才显示」）——它是「事件到没到」的唯一判别量：
+     * 用户现场「增强捕获已挂载但产出 0 条」时，N=0 说明事件压根没到（要查 agent 侧织入/门禁），
+     * N&gt;0 说明到了但被去重/屏蔽/展示链吃掉（要查消费侧）。口径 = 收到即计数（含后续被丢弃的）。
+     */
+    long agentEventsReceived,
+    /**
+     * T-DevAcceptFix2 ⑩（20261006 第三轮走查）：<b>屏蔽规则命中次数</b>（应用级累计，规则面板同源计数）。
+     *
+     * <p>立项动因＝用户现场「增强捕获已挂载、已收事件 8 条、列表 0 条」却无任何提示——事后查明是用户
+     * 自建的<b>结构匹配</b>屏蔽规则按设计拦下了那些 SQL（入队前丢弃，设计内行为），可面板一个字没说，
+     * 只能靠翻配置文件才判得出来。与重放/EP 两个计数同口径：<b>&gt; 0 才显示</b>（零值不添噪）。
+     */
+    long suppressed
 ) {
+
+    /** K2J 互操作：master 侧后两参为带默认值 0L 的后置字段（Kotlin 默认参）——保留历史 8 参同形重载。 */
+    public CaptureDiagnostics(boolean capturing, boolean waitingForConsole, int entryCount,
+                              int consolesAttached, long linesSeen, String enhancedStatus,
+                              long replayDropped, long epShortCircuited) {
+        this(capturing, waitingForConsole, entryCount, consolesAttached, linesSeen, enhancedStatus,
+                replayDropped, epShortCircuited, 0L, 0L);
+    }
 
     /**
      * 诊断行文案；不需要诊断时返回 null（未捕捉 / 已有条目——空态文案由面板还原为默认）。
@@ -58,7 +82,8 @@ public record CaptureDiagnostics(
         String head = MpSqlVisualizerBundle.message("log.diag.capturing");
         String enhanced = d.enhancedStatus == null
             ? MpSqlVisualizerBundle.message("log.diag.enhancedOff")
-            : MpSqlVisualizerBundle.message("log.diag.enhanced", d.enhancedStatus);
+            // T-DevAcceptFix2 ⑤：增强通道状态后恒挂「已收事件 N 条」——判「事件到没到」的唯一判别量
+            : MpSqlVisualizerBundle.message("log.diag.enhancedWithEvents", d.enhancedStatus, d.agentEventsReceived);
         String console = MpSqlVisualizerBundle.message("log.diag.console", d.consolesAttached, d.linesSeen);
         // T-RA-03：丢弃/短路计数只在非零时挂尾——零值是常态，常态不该给诊断行添噪；
         // 非零则意味着「桥看到过行却没产出」，是排障时最先要看的两条线索。
@@ -68,6 +93,10 @@ public record CaptureDiagnostics(
         }
         if (d.epShortCircuited > 0L) {
             dropped.add(MpSqlVisualizerBundle.message("log.diag.epShortCircuit", d.epShortCircuited));
+        }
+        // T-DevAcceptFix2 ⑩：屏蔽规则命中——用户自建规则的拦截是设计内行为，但必须可见
+        if (d.suppressed > 0L) {
+            dropped.add(MpSqlVisualizerBundle.message("log.diag.suppressed", d.suppressed));
         }
         List<String> parts = new ArrayList<>(List.of(head, enhanced, console));
         parts.addAll(dropped);
@@ -98,6 +127,30 @@ public record CaptureDiagnostics(
 
     /** 折行时左右各留的余量：空态文案居中，贴边会让人以为还有下文。 */
     public static final int EMPTY_TEXT_EDGE_PADDING_PX = 12;
+
+    /** 空态引导链接之间的分隔（T-SettingsFocusFromLink）。 */
+    public static final String EMPTY_LINK_SEPARATOR = "　·　";
+
+    /**
+     * 空态引导链接行渲染（T-SettingsFocusFromLink，<b>唯一入口</b>）。
+     *
+     * <p>必须「{@code appendLine("")} 起新行 + {@code appendText} 追加」——平台 {@code StatusText.appendSecondaryText}
+     * 内部固定写 <b>row=1</b>（第二行/副列语义：243 源码 {@code appendText(true, 1, …)}）：多行空态文案下
+     * 用它追加链接会把链接叠印进第二行中段（20261010 真机实证「三个链接贴在一起」）；单链接历史
+     * 实现显正常只因文案恰好两行、row 1 恰为末行。复发由源码守卫 {@code EmptyTextLinkApiGuardTest} 拦截。
+     */
+    public static void appendLinkRow(
+            com.intellij.util.ui.StatusText status,
+            List<kotlin.Pair<String, java.awt.event.ActionListener>> links) {
+        status.appendLine("");
+        for (int index = 0; index < links.size(); index++) {
+            kotlin.Pair<String, java.awt.event.ActionListener> link = links.get(index);
+            if (index > 0) {
+                status.appendText(EMPTY_LINK_SEPARATOR);
+            }
+            status.appendText(link.getFirst(), com.intellij.ui.SimpleTextAttributes.LINK_ATTRIBUTES, link.getSecond());
+        }
+    }
 
     /**
      * 空态文案折行（纯函数，零平台依赖）：把「语义行（{@code \n} 分隔）」按像素宽度软折成「视觉行」列表。

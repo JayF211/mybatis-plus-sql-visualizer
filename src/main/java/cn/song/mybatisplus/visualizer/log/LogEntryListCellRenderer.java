@@ -29,6 +29,9 @@ public class LogEntryListCellRenderer extends JPanel implements javax.swing.List
     /** 去重丢弃计数快照（徽章渲染数据源；由 SqlLogPanel.refreshList 更新）。 */
     public Map<String, Integer> dedupeCounts = Map.of();
 
+    /** O-90：同模板计数快照（「×N 同模板」徽章渲染数据源；refreshList 随 dedupeCounts 一并更新）。 */
+    public Map<String, Integer> templateCounts = Map.of();
+
     /** 元信息行（internal 供 UI 测试遍历片段断言文本与着色）。 */
     public final SimpleColoredComponent metaLine = new SimpleColoredComponent();
 
@@ -160,6 +163,12 @@ public class LogEntryListCellRenderer extends JPanel implements javax.swing.List
             Integer cnt = dedupeCounts.get(entry.dedupeKey());
             if (cnt != null && cnt > 0) {
                 metaLine.append("⨉" + cnt + " ", SqlLogPanelKt.LIST_META_GRAY);
+            }
+            // O-90：同模板 ×N 徽章（去重徽章后相邻；≥TEMPLATE_BADGE_MIN_COUNT 才显示）
+            kotlin.Pair<String, SimpleTextAttributes> tmpl =
+                    SqlLogPanelKt.formatTemplateCountFragment(entry, templateCounts, isSelected);
+            if (tmpl != null) {
+                metaLine.append(tmpl.getFirst(), tmpl.getSecond());
             }
             lineFragments = sqlLineFragmentsFor(entry);
         }

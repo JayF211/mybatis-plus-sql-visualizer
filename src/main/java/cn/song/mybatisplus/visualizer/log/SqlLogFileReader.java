@@ -274,7 +274,8 @@ public final class SqlLogFileReader {
                     decodedExt != null ? decodedExt.errorText() : null,
                     decodedExt != null ? decodedExt.requestTag() : null,
                     decodedExt != null ? decodedExt.updateCount() : null,
-                    databaseName);
+                    databaseName,
+                    decodedExt != null ? decodedExt.actualSql() : null);
         }
 
         Matcher m2 = OLD_HEADER_REGEX.matcher(header);

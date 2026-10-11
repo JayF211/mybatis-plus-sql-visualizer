@@ -84,11 +84,22 @@ public record LogSqlEntry(
      */
     Long updateCount,
     /**
-     * 目标数据库显示名（T-AgentDialectLoop：agent 通道由连接 URL 子协议映射，
-     * 如 "MySQL" / "DM（达梦）"）；null 表示未知（桥通道 / 旧版 agent / 畸形 URL）。
-     * 展示性字段，不入去重指纹。
+     * 目标数据库标注（T-AgentDialectLoop 起，R32 弱形态升级：agent 通道由连接 URL 解析——
+     * 方言显示名 · url 解析连接事实，如 "MySQL · jpa_demo@localhost:3306"、"DM（达梦） · localhost:5236"；
+     * 只有方言可辨或只有连接事实可解析时输出其一）。解析与凭据剔除在
+     * {@code cn.song.mybatisplus.visualizer.log.agent.JdbcUrlDialects.badgeName}（user/password 参数、
+     * Oracle thin 登录前缀解析期剔除，凭据串绝不入本字段）。
+     * null 表示未知（桥通道 / 旧版 agent / 畸形 URL）。展示性字段，不入去重指纹；
+     * 自动存档/读回按自由文本回环（SqlLogAutoSaver/SqlLogFileReader，格式无关）。
      */
-    String databaseName
+    String databaseName,
+    /**
+     * Actual SQL 折叠附注（R10 T-ShardingSphereCompat，D1=A）：{@link SqlSource#SHARDINGSPHERE}
+     * 条目的 {@code Actual SQL:} 段原文（多分片逐行、换行连接）；其余来源恒 null。
+     * Logic 主条目 + Actual 折叠的模型承载——面板对照渲染（折叠态样式）等真实语料（V36）。
+     * 展示性字段：随 pd 载荷键 {@code a} 落盘（仅非默认落键），不入去重指纹。
+     */
+    String actualSql
 ) {
     /** 摘要最大长度。 */
     private static final int MAX_SUMMARY_LENGTH = 160;
@@ -224,25 +235,41 @@ public record LogSqlEntry(
         return structureKey();
     }
 
+    /**
+     * K2J 互操作：master 侧 {@code actualSql} 为带默认值的后置字段（Kotlin 默认参），历史 19 参
+     * 位置构造形态（三解析器/桥通道等 Java 调用方）天然合法——Java 侧保留同形重载，
+     * 新参取默认 null（与 20 参规范构造器同为 null 归一语义）。
+     */
+    public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params, long timestamp,
+                       Long logTimestamp, String summary, SqlSource source, Long executionTimeMs,
+                       String sourceFile, int sourceLine, List<kotlin.Pair<String, Integer>> sourceCandidates,
+                       List<String> candidateClasses, String stackDigest, long sequenceNumber,
+                       String mapperStatement, String errorText, String requestTag, Long updateCount,
+                       String databaseName) {
+        this(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source, executionTimeMs,
+            sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, null);
+    }
+
     /** 仅原始/还原 SQL + 参数（其余取默认）。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params) {
         this(rawSql, restoredSql, params, System.currentTimeMillis(), null,
             computeSummary(restoredSql), SqlSource.UNKNOWN, null, null, 0, List.of(), List.of(), null, 0L,
-            null, null, null, null, null);
+            null, null, null, null, null, null);
     }
 
     /** 含显式时间戳。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params, long timestamp) {
         this(rawSql, restoredSql, params, timestamp, null,
             computeSummary(restoredSql), SqlSource.UNKNOWN, null, null, 0, List.of(), List.of(), null, 0L,
-            null, null, null, null, null);
+            null, null, null, null, null, null);
     }
 
     /** 含来源。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params, SqlSource source) {
         this(rawSql, restoredSql, params, System.currentTimeMillis(), null,
             computeSummary(restoredSql), source, null, null, 0, List.of(), List.of(), null, 0L,
-            null, null, null, null, null);
+            null, null, null, null, null, null);
     }
 
     /** 含时间戳 + 源码位置 + 耗时（历史文件反解析）。 */
@@ -250,28 +277,28 @@ public record LogSqlEntry(
                        long timestamp, String sourceFile, int sourceLine, Long executionTimeMs) {
         this(rawSql, restoredSql, params, timestamp, null,
             computeSummary(restoredSql), SqlSource.UNKNOWN, executionTimeMs, sourceFile, sourceLine, List.of(), List.of(), null, 0L,
-            null, null, null, null, null);
+            null, null, null, null, null, null);
     }
 
     /** T-LogRowNumber：以本条为原型返回带指定捕获序号的副本（Kotlin data class copy(sequenceNumber=…) 的 Java 等价）。 */
     public LogSqlEntry withSequenceNumber(long newSequenceNumber) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source,
             executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, newSequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName);
+            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql);
     }
 
     /** T-AgentLogTime：以本条为原型返回带日志原始时间的副本（copy(logTimestamp=…) 的 Java 等价）。 */
     public LogSqlEntry withLogTimestamp(Long newLogTimestamp) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, newLogTimestamp, summary, source,
             executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName);
+            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql);
     }
 
     /** T-M55-02：以本条为原型返回带执行报错的副本（copy(errorText=…) 的 Java 等价；缓冲错误反向绑定用）。 */
     public LogSqlEntry withErrorText(String newErrorText) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source,
             executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
-            mapperStatement, newErrorText, requestTag, updateCount, databaseName);
+            mapperStatement, newErrorText, requestTag, updateCount, databaseName, actualSql);
     }
 
     /** 智能截断摘要（包内可见：解析器/桥通道按 Kotlin data class 默认参数语义构造条目时复用同一口径）。 */

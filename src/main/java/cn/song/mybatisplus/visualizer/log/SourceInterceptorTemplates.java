@@ -17,7 +17,102 @@ public final class SourceInterceptorTemplates {
     /** 配置类文件名。 */
     public static final String CONFIG_FILE_NAME = "SqlVisualizerConfig.java";
 
+    /** 原生 MyBatis 包装插件类文件名（R24；与 {@link MyBatisNativeWiring#NATIVE_PLUGIN_FILE_NAME} 同源）。 */
+    public static final String NATIVE_PLUGIN_FILE_NAME = MyBatisNativeWiring.NATIVE_PLUGIN_FILE_NAME;
+
     private SourceInterceptorTemplates() {
+    }
+
+    /**
+     * 生成原生 MyBatis 包装插件类代码（R24）：{@code <plugin>} 注册的硬前提是实现
+     * org.apache.ibatis.plugin.Interceptor——拦截器本体（InnerInterceptor）不满足，
+     * 由本薄包装按无参构造实例化并分发。装配点写入 mybatis-config.xml（MyBatisNativeWiring）。
+     */
+    public static String generateNativePluginClass(String basePackage) {
+        return """
+package __BASE__.config;
+
+import org.apache.ibatis.cache.CacheKey;
+import org.apache.ibatis.executor.Executor;
+import org.apache.ibatis.mapping.BoundSql;
+import org.apache.ibatis.mapping.MappedStatement;
+import org.apache.ibatis.plugin.Interceptor;
+import org.apache.ibatis.plugin.Intercepts;
+import org.apache.ibatis.plugin.Invocation;
+import org.apache.ibatis.plugin.Plugin;
+import org.apache.ibatis.plugin.Signature;
+import org.apache.ibatis.session.ResultHandler;
+import org.apache.ibatis.session.RowBounds;
+
+import java.util.Collections;
+import java.util.Properties;
+
+/**
+ * SQL Visualizer 原生 MyBatis 注册插件（自动生成）。
+ *
+ * MyBatis 解析 mybatis-config.xml 的 &lt;plugins&gt; 时按**无参构造**实例化 &lt;plugin interceptor="..."&gt;
+ * 指向的类（必须是 org.apache.ibatis.plugin.Interceptor），由本类持有并分发到
+ * {@link SqlSourceInterceptor}（InnerInterceptor 本体，与 Spring Boot 注入共用同一份捕获逻辑）。
+ *
+ * 自动生成于 SQL Visualizer 插件，可安全删除（删除后实时日志不再携带源码位置）。
+ */
+@Intercepts({
+    @Signature(type = Executor.class, method = "query",
+        args = {MappedStatement.class, Object.class, RowBounds.class, ResultHandler.class}),
+    @Signature(type = Executor.class, method = "query",
+        args = {MappedStatement.class, Object.class, RowBounds.class, ResultHandler.class,
+                CacheKey.class, BoundSql.class}),
+    @Signature(type = Executor.class, method = "update",
+        args = {MappedStatement.class, Object.class}),
+})
+public class SqlVisualizerNativePlugin implements Interceptor {
+
+    private final SqlSourceInterceptor delegate;
+
+    public SqlVisualizerNativePlugin() {
+        // 第二参数把本包装类自己也登记进自跳帧表：intercept 帧在调用栈上且落在 appPackages 内，
+        // 不登记的话 locateSource 会把包装器自己当成用户调用点上报（标记行指到本文件）。
+        this.delegate = new SqlSourceInterceptor(Collections.singleton("__BASE__."), getClass().getName());
+    }
+
+    /** 标记行捕获失败绝不影响业务执行（整体 try/catch 兜底）。 */
+    public Object intercept(Invocation invocation) throws Throwable {
+        try {
+            Object[] args = invocation.getArgs();
+            if (args.length > 0 && args[0] instanceof MappedStatement) {
+                MappedStatement ms = (MappedStatement) args[0];
+                Executor executor = (Executor) invocation.getTarget();
+                if ("update".equals(invocation.getMethod().getName())) {
+                    delegate.beforeUpdate(executor, ms, args.length > 1 ? args[1] : null);
+                } else {
+                    BoundSql boundSql = args.length > 5 && args[5] instanceof BoundSql ? (BoundSql) args[5] : null;
+                    // 20261008 验收（3.25 真机编译）：rowBounds/resultHandler 参数显式类型化——裸三元
+                    // `args[N] : null` 依赖 javac 目标类型推断，JDK8 判为 Object 无法转具体形参类型
+                    // （原生 mybatis-config.xml 工程编译失败，RowBounds 与 ResultHandler 两处先后报）；
+                    // 显式 instanceof+cast 让类型明确，8/17/21 全可编译。
+                    delegate.beforeQuery(executor, ms,
+                            args.length > 1 ? args[1] : null,
+                            args.length > 2 && args[2] instanceof RowBounds ? (RowBounds) args[2] : null,
+                            args.length > 3 && args[3] instanceof ResultHandler ? (ResultHandler) args[3] : null,
+                            boundSql);
+                }
+            }
+        } catch (Throwable t) {
+            // 捕获逻辑自身的异常静默吞掉——标记行是旁路观测，不能打断业务查询
+        }
+        return invocation.proceed();
+    }
+
+    /** 不加 @Override：兼容旧版 MyBatis 接口无 default 方法的形态（与拦截器本体同一姿态）。 */
+    public Object plugin(Object target) {
+        return Plugin.wrap(target, this);
+    }
+
+    public void setProperties(Properties properties) {
+        // 无可配置项
+    }
+}
+""".replace("__BASE__", basePackage);
     }
 
     /** 生成拦截器类代码。 */
@@ -50,8 +145,21 @@ public class SqlSourceInterceptor implements InnerInterceptor {
 
     private final Set<String> appPackages;
 
+    /** R24：额外自跳帧类名（原生 MyBatis 包装器把自己的类名传进来，intercept 帧不被当成调用点）。 */
+    private final Set<String> selfClassNames;
+
     public SqlSourceInterceptor(Set<String> appPackages) {
+        this(appPackages, new String[0]);
+    }
+
+    /**
+     * extraSelfClassNames：外层包装类的类名（原生 MyBatis 场景，SqlVisualizerNativePlugin
+     * 构造委托时传 getClass().getName()）。包装器的 intercept 帧在调用栈上且落在 appPackages
+     * 内——不登记进自跳帧表的话，locateSource 会把包装器自己当成用户调用点上报。
+     */
+    public SqlSourceInterceptor(Set<String> appPackages, String... extraSelfClassNames) {
         this.appPackages = appPackages;
+        this.selfClassNames = new java.util.HashSet<>(java.util.Arrays.asList(extraSelfClassNames));
     }
 
     /**
@@ -130,7 +238,11 @@ public class SqlSourceInterceptor implements InnerInterceptor {
      * （历史缺陷：包名常量与运行类分叉时拦截器自身帧被当成调用点上报）。
      */
     private boolean isSelf(String cn) {
-        return cn.equals(getClass().getName());
+        if (cn.equals(getClass().getName())) return true;
+        for (String self : selfClassNames) {
+            if (cn.equals(self)) return true;
+        }
+        return false;
     }
 
     /** 取 str 中 delimiter 最后一次出现之前的子串（兼容 Java 8+，无 Kotlin 扩展方法）。 */
