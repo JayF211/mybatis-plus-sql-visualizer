@@ -86,6 +86,14 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
     /** lambda 抽非 test 前缀私有工厂：关闭时给 box 记一条。 */
     private fun closeFlagging(box: MutableList<Boolean>): Runnable = Runnable { box.add(true) }
 
+    /** lambda 抽非 test 前缀私有工厂：把复制文本录入 nullable box（直录断言用）。 */
+    private fun captureInto(box: kotlin.jvm.internal.Ref.ObjectRef<String>): java.util.function.Consumer<String> =
+        java.util.function.Consumer { box.element = it }
+
+    /** lambda 抽非 test 前缀私有工厂：生产实现 UiTextClipboard.copy 的注入点。 */
+    private fun uiCopy(): java.util.function.Consumer<String> =
+        java.util.function.Consumer { UiTextClipboard.copy(it) }
+
     // ---------- 弹窗构建：SQL 高亮编辑器 + 可编辑 + 复制/关闭按钮 ----------
 
     fun test预览内容为可编辑SQL编辑器_文本等于还原SQL_带复制关闭按钮() {
@@ -326,19 +334,19 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
     }
 
     fun test编辑器CtrlC无选中复制全文() {
-        var copied: String? = null
+        val copied = kotlin.jvm.internal.Ref.ObjectRef<String>()
         val content = SqlClickPreview.buildContent(
             project,
             "SELECT 1;",
-            { copied = it },
-            {},
+            captureInto(copied),
+            noopClose(),
         )
         try {
             // 复制前先抓按钮引用：flashCopied 会把 tooltip 短暂换成「已复制」，复制后按 tooltip 查找必落空
             val copyButton = findButtons(content.component)
                 .first { it.toolTipText == MpSqlVisualizerBundle.message("log.preview.copy") }
             dispatchEditorCopy(content.editor)
-            assertEquals("浮层编辑器 Ctrl+C 无选中应复制全文（与头部按钮同源）", "SELECT 1;", copied)
+            assertEquals("浮层编辑器 Ctrl+C 无选中应复制全文（与头部按钮同源）", "SELECT 1;", copied.element)
             assertEquals(
                 "Ctrl+C 复制后按钮图标应换对号（与按钮复制同反馈）",
                 AllIcons.Actions.Checked,
@@ -350,38 +358,38 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
     }
 
     fun test编辑器CtrlC复制用户编辑后的全文() {
-        var copied: String? = null
+        val copied = kotlin.jvm.internal.Ref.ObjectRef<String>()
         val content = SqlClickPreview.buildContent(
             project,
             "SELECT 1;",
-            { copied = it },
-            {},
+            captureInto(copied),
+            noopClose(),
         )
         try {
             WriteCommandAction.runWriteCommandAction(project) {
                 content.editor.document.setText("SELECT edited_price FROM user;")
             }
             dispatchEditorCopy(content.editor)
-            assertEquals("Ctrl+C 应取编辑后文本（与按钮复制同源）", "SELECT edited_price FROM user;", copied)
+            assertEquals("Ctrl+C 应取编辑后文本（与按钮复制同源）", "SELECT edited_price FROM user;", copied.element)
         } finally {
             releaseEditor(content.editor)
         }
     }
 
     fun test编辑器CtrlC有选中时交原生复制不全文覆盖() {
-        var copied: String? = null
+        val copied = kotlin.jvm.internal.Ref.ObjectRef<String>()
         val content = SqlClickPreview.buildContent(
             project,
             "SELECT * FROM user WHERE id = 1;",
-            { copied = it },
-            {},
+            captureInto(copied),
+            noopClose(),
         )
         try {
             WriteCommandAction.runWriteCommandAction(project) {
                 content.editor.selectionModel.setSelection(0, 6) // 选中 "SELECT"
             }
             dispatchEditorCopy(content.editor)
-            assertNull("有选中时不应走全文复制回调（交编辑器原生复制选中片段）", copied)
+            assertNull("有选中时不应走全文复制回调（交编辑器原生复制选中片段）", copied.element)
         } finally {
             releaseEditor(content.editor)
         }
@@ -403,8 +411,8 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         val content = SqlClickPreview.buildContent(
             project,
             "SELECT 1;",
-            { UiTextClipboard.copy(it) }, // 生产实现：弹窗路径注入的就是它
-            {},
+            uiCopy(), // 生产实现：弹窗路径注入的就是它
+            noopClose(),
         )
         try {
             CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
@@ -429,8 +437,8 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         val content = SqlClickPreview.buildContent(
             project,
             "SELECT 1;",
-            { UiTextClipboard.copy(it) },
-            {},
+            uiCopy(),
+            noopClose(),
         )
         try {
             val comp = content.editor.component
@@ -453,8 +461,8 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         val content = SqlClickPreview.buildContent(
             project,
             "SELECT * FROM user WHERE id = 1;",
-            { UiTextClipboard.copy(it) },
-            {},
+            uiCopy(),
+            noopClose(),
         )
         try {
             WriteCommandAction.runWriteCommandAction(project) {
