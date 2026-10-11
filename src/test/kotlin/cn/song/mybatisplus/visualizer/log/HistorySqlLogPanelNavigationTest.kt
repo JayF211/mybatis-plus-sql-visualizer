@@ -624,7 +624,7 @@ class HistorySqlLogPanelNavigationTest : BasePlatformTestCase() {
                 renderer.templateCounts,
             )
             val entry = panel.sqlListEntries.first()
-            val fragment = formatTemplateCountFragment(entry, renderer.templateCounts, isSelected = false)
+            val fragment = SqlLogPanelKt.formatTemplateCountFragment(entry, renderer.templateCounts, false)
             assertNotNull("达阈值条目应产出徽章片段", fragment)
             assertTrue("片段应含计数", fragment!!.first.contains("3"))
         } finally {

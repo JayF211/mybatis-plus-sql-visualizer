@@ -99,7 +99,7 @@ public sealed interface FocusTab {
      * 聚焦页签过滤（纯逻辑，可独立单测；插在既有 filterByFocus 与 filterBySearch 之间的再一层）：
      * 无页签 = 透传；有页签 = 命中任一页签的条目保留（并集），其余隐藏。
      */
-    static List<LogSqlEntry> filterByFocusTabs(List<LogSqlEntry> entries, List<FocusTab> tabs) {
+    public static List<LogSqlEntry> filterByFocusTabs(List<LogSqlEntry> entries, List<FocusTab> tabs) {
         if (tabs.isEmpty()) return entries;
         List<LogSqlEntry> kept = new ArrayList<>();
         for (LogSqlEntry entry : entries) {
@@ -149,7 +149,7 @@ public sealed interface FocusTab {
      * O-90：新增模板页签的准入（纯函数）：按 structureKey 判重（count 快照不同不算新页签），
      * 返回收缩后的<b>新</b>列表（调用方 clear+addAll 回写，不得别名回写——与 {@link #addRequestTab} 同纪律）。
      */
-    static List<FocusTab> addTemplateTab(List<FocusTab> tabs, String structureKey, int count) {
+    public static List<FocusTab> addTemplateTab(List<FocusTab> tabs, String structureKey, int count) {
         for (FocusTab tab : tabs) {
             if (tab instanceof Template template && template.structureKey().equals(structureKey)) {
                 return new ArrayList<>(tabs);

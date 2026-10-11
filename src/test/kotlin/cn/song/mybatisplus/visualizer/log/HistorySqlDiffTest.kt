@@ -17,12 +17,7 @@ import org.junit.Assert.assertTrue
  */
 class HistorySqlDiffTest : BasePlatformTestCase() {
 
-    private fun entry(sql: String, ts: Long) = LogSqlEntry(
-        rawSql = sql,
-        restoredSql = sql,
-        params = emptyList(),
-        timestamp = ts,
-    )
+    private fun entry(sql: String, ts: Long) = LogSqlEntry(sql, sql, emptyList(), ts)
 
     // ------------------------------------------------------------------
     // 接线：右键菜单含「对比选中两条」，两条可用、其他数量灰置
@@ -75,7 +70,7 @@ class HistorySqlDiffTest : BasePlatformTestCase() {
     fun test结构等价_仅参数不同_逐行差异仍被SqlDiffer统计() {
         val old = entry("SELECT * FROM user WHERE id = 1", 1000L)
         val new = entry("SELECT * FROM user WHERE id = 2", 2000L)
-        val verdict = historyDiffVerdict(old, new)
+        val verdict = HistorySqlLogPanelKt.historyDiffVerdict(old, new)
         // 字面量参数化后同形状 → 结构等价（UI 据此提示「结构等价，仅参数不同」）
         assertTrue("同结构指纹应判等价", verdict.structurallyEquivalent)
         assertEquals(old.structureKey, new.structureKey)
@@ -88,7 +83,7 @@ class HistorySqlDiffTest : BasePlatformTestCase() {
     fun test结构不同_标识符变更_不等价() {
         val old = entry("SELECT * FROM user WHERE id = 1", 1000L)
         val new = entry("SELECT * FROM user_profile WHERE id = 1", 2000L)
-        val verdict = historyDiffVerdict(old, new)
+        val verdict = HistorySqlLogPanelKt.historyDiffVerdict(old, new)
         assertFalse("表名变更（标识符不参数化）应判结构不等价", verdict.structurallyEquivalent)
         assertEquals(old.structureKey != new.structureKey, true)
     }
@@ -97,16 +92,16 @@ class HistorySqlDiffTest : BasePlatformTestCase() {
         val older = entry("SELECT 1", 1000L)
         val newer = entry("SELECT 2", 2000L)
         // 入参顺序无所谓——结论按时间戳升序排列（旧在左）
-        val verdict = historyDiffVerdict(newer, older)
+        val verdict = HistorySqlLogPanelKt.historyDiffVerdict(newer, older)
         assertEquals(older.restoredSql, verdict.oldSql)
         assertEquals(newer.restoredSql, verdict.newSql)
     }
 
     fun test对话框标题_等价与差异两种文案() {
-        val equivalent = HistoryDiffVerdict(structurallyEquivalent = true, diffCount = 2, deleteCount = 1, insertCount = 1, oldSql = "a", newSql = "b")
-        val differing = HistoryDiffVerdict(structurallyEquivalent = false, diffCount = 3, deleteCount = 2, insertCount = 1, oldSql = "a", newSql = "c")
-        val t1 = historyDiffDialogTitle(equivalent)
-        val t2 = historyDiffDialogTitle(differing)
+        val equivalent = HistoryDiffVerdict(true, 2, 1, 1, "a", "b")
+        val differing = HistoryDiffVerdict(false, 3, 2, 1, "a", "c")
+        val t1 = HistorySqlLogPanelKt.historyDiffDialogTitle(equivalent)
+        val t2 = HistorySqlLogPanelKt.historyDiffDialogTitle(differing)
         assertTrue("等价标题应含「仅参数不同」提示：$t1", t1.contains("仅参数不同"))
         assertTrue("差异标题应含差异行数：$t2", t2.contains("3"))
         assertFalse("两种标题不应相同", t1 == t2)

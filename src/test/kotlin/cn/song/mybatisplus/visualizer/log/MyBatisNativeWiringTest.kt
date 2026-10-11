@@ -17,7 +17,7 @@ class MyBatisNativeWiringTest {
     fun `决策_无config_不注入`() {
         assertEquals(
             MyBatisNativeWiring.Decision.NO_CONFIG,
-            MyBatisNativeWiring.decide(configCount = 0, rootTagName = null, alreadyRegistered = false),
+            MyBatisNativeWiring.decide(0, null, false),
         )
     }
 
@@ -25,7 +25,7 @@ class MyBatisNativeWiringTest {
     fun `决策_config多处_不注入`() {
         assertEquals(
             MyBatisNativeWiring.Decision.AMBIGUOUS_CONFIG,
-            MyBatisNativeWiring.decide(configCount = 2, rootTagName = "configuration", alreadyRegistered = false),
+            MyBatisNativeWiring.decide(2, "configuration", false),
         )
     }
 
@@ -33,12 +33,12 @@ class MyBatisNativeWiringTest {
     fun `决策_根标签非configuration_不注入`() {
         assertEquals(
             MyBatisNativeWiring.Decision.NOT_MYBATIS_CONFIG,
-            MyBatisNativeWiring.decide(configCount = 1, rootTagName = "beans", alreadyRegistered = false),
+            MyBatisNativeWiring.decide(1, "beans", false),
         )
         assertEquals(
             "无根标签（解析不出根）同样拒绝",
             MyBatisNativeWiring.Decision.NOT_MYBATIS_CONFIG,
-            MyBatisNativeWiring.decide(configCount = 1, rootTagName = null, alreadyRegistered = false),
+            MyBatisNativeWiring.decide(1, null, false),
         )
     }
 
@@ -46,7 +46,7 @@ class MyBatisNativeWiringTest {
     fun `决策_已注册_幂等跳过`() {
         assertEquals(
             MyBatisNativeWiring.Decision.ALREADY_REGISTERED,
-            MyBatisNativeWiring.decide(configCount = 1, rootTagName = "configuration", alreadyRegistered = true),
+            MyBatisNativeWiring.decide(1, "configuration", true),
         )
     }
 
@@ -54,7 +54,7 @@ class MyBatisNativeWiringTest {
     fun `决策_唯一config且根合法且未注册_放行`() {
         assertEquals(
             MyBatisNativeWiring.Decision.INJECT,
-            MyBatisNativeWiring.decide(configCount = 1, rootTagName = "configuration", alreadyRegistered = false),
+            MyBatisNativeWiring.decide(1, "configuration", false),
         )
     }
 

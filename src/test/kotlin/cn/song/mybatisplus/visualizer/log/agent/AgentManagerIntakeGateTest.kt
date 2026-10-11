@@ -473,13 +473,13 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
     fun test接管沿_项目缓冲去重索引按通道纪元重置() {
         val manager = freshManager()
         val logManager = logManager()
-        logManager.entries.paused = false
-        logManager.entries.dedupeEnabled = true
+        logManager.entries.setPaused(false)
+        logManager.entries.setDedupeEnabled(true)
         val sql = "select handoff_epoch_same_key"
         val bridgeEraTs = System.currentTimeMillis()
         assertTrue(
             "前置：桥纪元同键条目在队（接管前桥捕过同端点）",
-            logManager.entries.addEntry(LogSqlEntry(rawSql = sql, restoredSql = sql, params = emptyList(), timestamp = bridgeEraTs)),
+            logManager.entries.addEntry(LogSqlEntry(sql, sql, emptyList(), bridgeEraTs)),
         )
 
         val session = newSession(7605L, manager)
@@ -489,7 +489,7 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
 
         assertTrue(
             "接管沿后同键 agent 事件（60s 窗口内）不得被桥纪元旧索引吞",
-            logManager.entries.addEntry(LogSqlEntry(rawSql = sql, restoredSql = sql, params = emptyList(), timestamp = System.currentTimeMillis())),
+            logManager.entries.addEntry(LogSqlEntry(sql, sql, emptyList(), System.currentTimeMillis())),
         )
     }
 }

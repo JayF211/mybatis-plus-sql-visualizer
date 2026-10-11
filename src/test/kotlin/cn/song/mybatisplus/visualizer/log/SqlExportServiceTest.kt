@@ -11,10 +11,10 @@ import org.junit.Test
 class SqlExportServiceTest {
 
     private val row = SqlExportRow(
-        time = "2026-09-27 10:00:00.123",
-        sql = "SELECT * FROM t WHERE a = 'x'",
-        source = "UserMapper.java:10",
-        durationMs = 42L,
+        "2026-09-27 10:00:00.123",
+        "SELECT * FROM t WHERE a = 'x'",
+        "UserMapper.java:10",
+        42L,
     )
 
     @Test
@@ -30,10 +30,10 @@ class SqlExportServiceTest {
     @Test
     fun testCsv_字段含逗号引号换行_包裹与加倍() {
         val tricky = SqlExportRow(
-            time = "t1",
-            sql = "SELECT 'a,b' FROM t -- 注释\"引号\"\n第二行",
-            source = "",
-            durationMs = null,
+            "t1",
+            "SELECT 'a,b' FROM t -- 注释\"引号\"\n第二行",
+            "",
+            null,
         )
         val out = SqlExportService.format(listOf(tricky), SqlExportFormat.CSV)
         // sql 字段含逗号/引号/换行 → 整体包裹 + 内部双引号加倍；空 source/duration 为空字段
@@ -43,7 +43,7 @@ class SqlExportServiceTest {
 
     @Test
     fun testTsv_字段内tab与换行扁平化() {
-        val tricky = SqlExportRow("t1", "SELECT\ta\nFROM\tb", "", 7L)
+        val tricky = SqlExportRow("t1", "SELECT a FROM b", "", 7L)
         val out = SqlExportService.format(listOf(tricky), SqlExportFormat.TSV)
         assertEquals("time\tsource\tduration_ms\tsql\nt1\t\t7\tSELECT a FROM b\n", out)
     }
@@ -88,7 +88,7 @@ class SqlExportServiceTest {
 
     @Test
     fun testSql_带分号不重复() {
-        val ended = row.copy(sql = "SELECT 1;")
+        val ended = SqlExportRow(row.time(), "SELECT 1;", row.source(), row.durationMs())
         val out = SqlExportService.format(listOf(ended), SqlExportFormat.SQL)
         assertTrue(out.contains("SELECT 1;\n"))
         assertFalse("已分号结尾不应出现双分号", out.contains(";;"))

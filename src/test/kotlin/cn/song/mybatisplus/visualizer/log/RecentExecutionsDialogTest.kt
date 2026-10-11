@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.log.SqlLogManagerLookupKt
+import cn.song.mybatisplus.visualizer.log.SqlSource
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
@@ -55,12 +57,9 @@ class RecentExecutionsDialogTest : BasePlatformTestCase() {
     }
 
     private fun entry(sql: String, restored: String = sql) = LogSqlEntry(
-        rawSql = sql,
-        restoredSql = restored,
-        params = emptyList(),
-        timestamp = 1_700_000_000_000L,
-        sourceFile = "src/main/java/A.java",
-        sourceLine = 42,
+        sql, restored, emptyList(), 1_700_000_000_000L, null, null, SqlSource.UNKNOWN,
+        null, "src/main/java/A.java", 42, emptyList(), emptyList(), null, 0L,
+        null, null, null, null, null, null,
     )
 
     private fun newDialog(
@@ -68,10 +67,10 @@ class RecentExecutionsDialogTest : BasePlatformTestCase() {
         anchorLabel: String? = null,
         onOpen: ((LogSqlEntry) -> Unit)? = null,
     ) = RecentExecutionsDialog(
-        project = project,
-        entries = entries,
-        anchorLabel = anchorLabel,
-        onOpenPreview = onOpen ?: {},
+        project,
+        entries,
+        anchorLabel,
+        onOpen ?: {},
     )
 
     /** 驱动动作 update 并返回事件（断言 presentation 文案/可用/可见）。 */
@@ -260,7 +259,7 @@ class RecentExecutionsDialogTest : BasePlatformTestCase() {
         try {
             assertNull(
                 "前置：测试环境应无面板注册的送页签通道",
-                sqlLogManagerIfCreated(project)?.onOpenEntryInTab,
+                SqlLogManagerLookupKt.sqlLogManagerIfCreated(project)?.onOpenEntryInTab,
             )
             val send = dialog.menuActionsForTest()[2]
             send.actionPerformed(AnActionEvent.createFromAnAction(send, null, "test", DataContext.EMPTY_CONTEXT))

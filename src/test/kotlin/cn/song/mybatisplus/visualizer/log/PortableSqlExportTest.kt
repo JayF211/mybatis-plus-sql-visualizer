@@ -27,7 +27,7 @@ class PortableSqlExportTest {
     fun testUpsert标注_MySQL后缀形态suffix() {
         val sql = "INSERT INTO `user` (`id`, `name`) VALUES (?, ?)\n" +
             "ON DUPLICATE KEY UPDATE `name` = VALUES(`name`)"
-        val form = PortableSqlExport.upsertFormOf(MySqlDialect, sql, model = null)
+        val form = PortableSqlExport.upsertFormOf(MySqlDialect.INSTANCE, sql, null)
         assertEquals(PortableSqlExport.UPSERT_SUFFIX, form)
     }
 
@@ -35,29 +35,24 @@ class PortableSqlExportTest {
     fun testUpsert标注_PG后缀形态suffix() {
         val sql = "INSERT INTO \"user\" (id, name) VALUES (?, ?)\n" +
             "ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name"
-        val form = PortableSqlExport.upsertFormOf(PostgreSQLDialect, sql, model = null)
+        val form = PortableSqlExport.upsertFormOf(PostgreSQLDialect.INSTANCE, sql, null)
         assertEquals(PortableSqlExport.UPSERT_SUFFIX, form)
     }
 
     @Test
     fun testUpsert标注_H2整语句形态statement() {
         val sql = "MERGE INTO \"user\" (id, name) KEY (id) VALUES (?, ?)"
-        val form = PortableSqlExport.upsertFormOf(H2Dialect, sql, model = null)
+        val form = PortableSqlExport.upsertFormOf(H2Dialect.INSTANCE, sql, null)
         assertEquals(PortableSqlExport.UPSERT_STATEMENT, form)
     }
 
     @Test
     fun testUpsert标注_Oracle无原生形态降级insert() {
         // UPSERT 模型 + 方言链两形态均 null（Oracle）→ 降级纯 INSERT，标注 insert
-        val model = BatchModel(
-            kind = BatchKind.UPSERT,
-            tableName = "user",
-            toggleColumns = listOf(BatchColumn("id", "id", quote = null, checked = true)),
-            conflictColumn = "id",
-            dialect = OracleDialect,
-        )
+        val model = BatchModel(BatchKind.UPSERT, "user",
+            listOf(BatchColumn("id", "id", null, true)), java.util.List.of(), null, "id", OracleDialect.INSTANCE)
         val sql = model.renderSql(setOf("id"))
-        val form = PortableSqlExport.upsertFormOf(OracleDialect, sql, model = model)
+        val form = PortableSqlExport.upsertFormOf(OracleDialect.INSTANCE, sql, model)
         assertEquals(PortableSqlExport.UPSERT_DEGRADED, form)
         assertTrue("Oracle 降级产物应为纯 INSERT：$sql", sql.trimStart().uppercase().startsWith("INSERT"))
     }
@@ -65,22 +60,17 @@ class PortableSqlExportTest {
     @Test
     fun testUpsert标注_原生链但文本纯INSERT为新记录路径no() {
         // MySQL（后缀能力在）+ UPSERT 模型 + 文本无冲突子句（主键未勾选的新记录路径）→ no（非降级）
-        val model = BatchModel(
-            kind = BatchKind.UPSERT,
-            tableName = "user",
-            toggleColumns = listOf(BatchColumn("id", "id", quote = null, checked = true)),
-            conflictColumn = "id",
-            dialect = MySqlDialect,
-        )
-        val sql = model.renderSql(activeColumns = emptySet())
-        val form = PortableSqlExport.upsertFormOf(MySqlDialect, sql, model = model)
+        val model = BatchModel(BatchKind.UPSERT, "user",
+            listOf(BatchColumn("id", "id", null, true)), java.util.List.of(), null, "id", MySqlDialect.INSTANCE)
+        val sql = model.renderSql(emptySet())
+        val form = PortableSqlExport.upsertFormOf(MySqlDialect.INSTANCE, sql, model)
         assertEquals(PortableSqlExport.UPSERT_NONE, form)
     }
 
     @Test
     fun testUpsert标注_非Upsert语句no() {
-        assertEquals(PortableSqlExport.UPSERT_NONE, PortableSqlExport.upsertFormOf(MySqlDialect, "SELECT * FROM t", model = null))
-        assertEquals(PortableSqlExport.UPSERT_NONE, PortableSqlExport.upsertFormOf(MySqlDialect, "UPDATE t SET a = ? WHERE id = ?", model = null))
+        assertEquals(PortableSqlExport.UPSERT_NONE, PortableSqlExport.upsertFormOf(MySqlDialect.INSTANCE, "SELECT * FROM t", null))
+        assertEquals(PortableSqlExport.UPSERT_NONE, PortableSqlExport.upsertFormOf(MySqlDialect.INSTANCE, "UPDATE t SET a = ? WHERE id = ?", null))
     }
 
     // ---------- 导出串联（CRUD 行 + 回滚链产物行） ----------
@@ -88,7 +78,7 @@ class PortableSqlExportTest {
     @Test
     fun test串联_普通INSERT产出CRUD与ROLLBACK两行() {
         val sql = "INSERT INTO user (id, name) VALUES (?, ?)"
-        val rows = PortableSqlExport.collectRows(sql, MySqlDialect, model = null)
+        val rows = PortableSqlExport.collectRows(sql, MySqlDialect.INSTANCE, null)
         assertEquals(2, rows.size)
         val crud = rows[0]
         assertEquals(PortableSqlKind.CRUD, crud.kind)
@@ -105,7 +95,7 @@ class PortableSqlExportTest {
     fun test串联_UPSERT回滚链诚实拒绝只出CRUD行() {
         // MySQL ON DUPLICATE KEY UPDATE：回滚链显式拒绝（rollback.unable.upsert）→ 导出面不造回滚行
         val sql = "INSERT INTO user (id, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name)"
-        val rows = PortableSqlExport.collectRows(sql, MySqlDialect, model = null)
+        val rows = PortableSqlExport.collectRows(sql, MySqlDialect.INSTANCE, null)
         assertEquals(1, rows.size)
         assertEquals(PortableSqlKind.CRUD, rows[0].kind)
         assertEquals(PortableSqlExport.UPSERT_SUFFIX, rows[0].upsert)
@@ -113,7 +103,7 @@ class PortableSqlExportTest {
 
     @Test
     fun test串联_SELECT无回滚行() {
-        val rows = PortableSqlExport.collectRows("SELECT * FROM user WHERE id = ?", MySqlDialect, model = null)
+        val rows = PortableSqlExport.collectRows("SELECT * FROM user WHERE id = ?", MySqlDialect.INSTANCE, null)
         assertEquals(1, rows.size)
         assertEquals(PortableSqlKind.CRUD, rows[0].kind)
     }

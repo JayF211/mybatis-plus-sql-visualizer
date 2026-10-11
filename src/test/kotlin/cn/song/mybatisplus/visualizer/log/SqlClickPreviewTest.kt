@@ -278,18 +278,18 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
     }
 
     fun test修饰键判定纯函数只认CtrlShift() {
-        assertTrue(isMultiSelectIntent(MouseEvent.CTRL_DOWN_MASK))
-        assertTrue(isMultiSelectIntent(MouseEvent.SHIFT_DOWN_MASK))
+        assertTrue(SqlClickPreview.isMultiSelectIntent(MouseEvent.CTRL_DOWN_MASK))
+        assertTrue(SqlClickPreview.isMultiSelectIntent(MouseEvent.SHIFT_DOWN_MASK))
         // 真实转发携带 BUTTON1（左键正按下）：Ctrl+左键组合必须识别，纯左键/Alt 不得误报
-        assertTrue(isMultiSelectIntent(MouseEvent.CTRL_DOWN_MASK or MouseEvent.BUTTON1_DOWN_MASK))
-        assertFalse(isMultiSelectIntent(0))
-        assertFalse(isMultiSelectIntent(MouseEvent.BUTTON1_DOWN_MASK))
-        assertFalse(isMultiSelectIntent(MouseEvent.ALT_DOWN_MASK))
+        assertTrue(SqlClickPreview.isMultiSelectIntent(MouseEvent.CTRL_DOWN_MASK or MouseEvent.BUTTON1_DOWN_MASK))
+        assertFalse(SqlClickPreview.isMultiSelectIntent(0))
+        assertFalse(SqlClickPreview.isMultiSelectIntent(MouseEvent.BUTTON1_DOWN_MASK))
+        assertFalse(SqlClickPreview.isMultiSelectIntent(MouseEvent.ALT_DOWN_MASK))
     }
 
     fun testCtrl修饰键单击不排程预览_多选第一击即守卫() {
         val list = fixedList("SELECT 1;", "SELECT 2;", "SELECT 3;")
-        val cp = SqlClickPreview(project, list) { i -> withTerminator(list.model.getElementAt(i).restoredSql) }
+        val cp = SqlClickPreview(project, list) { i -> SqlLogPanelKt.withTerminator(list.model.getElementAt(i).restoredSql) }
         try {
             // 多选第一击：无修饰键单击会排程，Ctrl/Shift 单击一律不排程（真实转发含 BUTTON1 位）
             cp.onClick(1, Point(5, 10), MouseEvent.CTRL_DOWN_MASK or MouseEvent.BUTTON1_DOWN_MASK)
@@ -313,7 +313,7 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
 
     fun test带修饰键单击停掉已排程的预览() {
         val list = fixedList("SELECT 1;", "SELECT 2;")
-        val cp = SqlClickPreview(project, list) { i -> withTerminator(list.model.getElementAt(i).restoredSql) }
+        val cp = SqlClickPreview(project, list) { i -> SqlLogPanelKt.withTerminator(list.model.getElementAt(i).restoredSql) }
         try {
             cp.onClick(1, Point(5, 10)) // 无修饰键单击：排程
             assertTrue(cp.isScheduled)
@@ -330,8 +330,8 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         val content = SqlClickPreview.buildContent(
             project,
             "SELECT 1;",
-            copyText = { copied = it },
-            close = {},
+            { copied = it },
+            {},
         )
         try {
             // 复制前先抓按钮引用：flashCopied 会把 tooltip 短暂换成「已复制」，复制后按 tooltip 查找必落空
@@ -354,8 +354,8 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         val content = SqlClickPreview.buildContent(
             project,
             "SELECT 1;",
-            copyText = { copied = it },
-            close = {},
+            { copied = it },
+            {},
         )
         try {
             WriteCommandAction.runWriteCommandAction(project) {
@@ -373,8 +373,8 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         val content = SqlClickPreview.buildContent(
             project,
             "SELECT * FROM user WHERE id = 1;",
-            copyText = { copied = it },
-            close = {},
+            { copied = it },
+            {},
         )
         try {
             WriteCommandAction.runWriteCommandAction(project) {
@@ -403,8 +403,8 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         val content = SqlClickPreview.buildContent(
             project,
             "SELECT 1;",
-            copyText = { UiTextClipboard.copy(it) }, // 生产实现：弹窗路径注入的就是它
-            close = {},
+            { UiTextClipboard.copy(it) }, // 生产实现：弹窗路径注入的就是它
+            {},
         )
         try {
             CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
@@ -429,8 +429,8 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         val content = SqlClickPreview.buildContent(
             project,
             "SELECT 1;",
-            copyText = { UiTextClipboard.copy(it) },
-            close = {},
+            { UiTextClipboard.copy(it) },
+            {},
         )
         try {
             val comp = content.editor.component
@@ -453,8 +453,8 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         val content = SqlClickPreview.buildContent(
             project,
             "SELECT * FROM user WHERE id = 1;",
-            copyText = { UiTextClipboard.copy(it) },
-            close = {},
+            { UiTextClipboard.copy(it) },
+            {},
         )
         try {
             WriteCommandAction.runWriteCommandAction(project) {

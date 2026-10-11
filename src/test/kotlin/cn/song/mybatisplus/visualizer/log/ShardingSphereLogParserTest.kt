@@ -65,7 +65,7 @@ class ShardingSphereLogParserTest {
         parser.closePending()
         val entries = parser.takeEntries()
         assertEquals(1, entries.size)
-        val actual = entries[0].actualSql!!
+        val actual = entries[0].actualSql()!!
         assertEquals(2, actual.lineSequence().count())
         assertTrue(actual.contains("ds_0 ::: SELECT * FROM t_user_0"))
         assertTrue(actual.contains("ds_1 ::: SELECT * FROM t_user_1"))
@@ -84,7 +84,7 @@ class ShardingSphereLogParserTest {
         val entries = parser.takeEntries()
         assertEquals(1, entries.size)
         assertTrue(entries[0].params.isEmpty())
-        assertEquals(entries[0].rawSql, entries[0].restoredSql)
+        assertEquals(entries[0].rawSql(), entries[0].restoredSql)
         assertEquals("ds_0 ::: SELECT * FROM t_user_0", entries[0].actualSql)
     }
 
@@ -99,7 +99,7 @@ class ShardingSphereLogParserTest {
         )
         var entries = parser.takeEntries()
         assertEquals("下一条 Logic SQL 闭合上一条（上一条先出）", 1, entries.size)
-        assertEquals("SELECT * FROM t_user WHERE id = ?", entries[0].rawSql)
+        assertEquals("SELECT * FROM t_user WHERE id = ?", entries[0].rawSql())
         parser.feed(
             "[INFO] 2026-09-30 17:00:00.011 [main] org.apache.shardingsphere.infra.script - " +
                 "Actual SQL: ds_0 ::: UPDATE t_user_0 SET name = ? WHERE id = ? ::: Parameters: [abc, 1]",
@@ -107,7 +107,7 @@ class ShardingSphereLogParserTest {
         parser.closePending()
         entries = parser.takeEntries()
         assertEquals(1, entries.size)
-        assertEquals("UPDATE t_user SET name = ? WHERE id = ?", entries[0].rawSql)
+        assertEquals("UPDATE t_user SET name = ? WHERE id = ?", entries[0].rawSql())
         assertEquals("字符串值无类型标注按启发式加引号", "UPDATE t_user SET name = 'abc' WHERE id = 1", entries[0].restoredSql)
     }
 
@@ -132,12 +132,12 @@ class ShardingSphereLogParserTest {
 
     @Test
     fun `静默冲刷闭合待产出条目`() {
-        val parser = ShardingSphereLogParser(clock = { 0L })
+        val parser = ShardingSphereLogParser(null, 20000, 1000L, { 0L })
         parser.feed(logicLine)
         parser.feed(actualLine)
         assertTrue(parser.takeEntries().isEmpty())
         // 静默阈值 1s 后冲刷
-        val produced = parser.flushSettled(nowMs = 2_000L)
+        val produced = parser.flushSettled(2_000L)
         assertEquals(1, produced)
         assertEquals(1, parser.takeEntries().size)
     }
@@ -147,35 +147,26 @@ class ShardingSphereLogParserTest {
     private fun newCtx(): BridgeLineContext {
         val cfg = ParserConfig("Preparing:", "Parameters:", true, 20000)
         return BridgeLineContext(
-            myBatisParser = MyBatisLogParser(
-                sqlPrefix = cfg.sqlPrefix,
-                paramPrefix = cfg.paramPrefix,
-                mixedPrefix = cfg.mixedPrefix,
-                maxParseLength = cfg.maxParseLength,
-            ),
-            hibernateParser = HibernateLogParser(
-                sqlPrefix = cfg.hibernateSqlPrefix,
-                paramPrefix = cfg.hibernateParamPrefix,
-                mixedPrefix = cfg.mixedPrefix,
-                maxParseLength = cfg.maxParseLength,
-            ),
-            jdbcParser = JdbcTemplateLogParser(enabled = cfg.jdbcEnabled, maxParseLength = cfg.maxParseLength),
-            shardingParser = ShardingSphereLogParser(),
-            configProvider = { cfg },
-            shardingEnabled = cfg.shardingEnabled,
+            MyBatisLogParser(cfg.sqlPrefix(), cfg.paramPrefix(), cfg.mixedPrefix(), cfg.maxParseLength()),
+            HibernateLogParser(cfg.hibernateSqlPrefix(), cfg.hibernateParamPrefix(), cfg.mixedPrefix(), cfg.maxParseLength()),
+            JdbcTemplateLogParser(cfg.jdbcEnabled(), cfg.maxParseLength()),
+            ShardingSphereLogParser(),
+            { cfg },
+            cfg.hibernateEnabled(),
+            cfg.shardingEnabled(),
         )
     }
 
     @Test
     fun `注册链_processConsoleLine产出ShardingSphere条目`() {
         val ctx = newCtx()
-        assertTrue(processConsoleLine(logicLine, ctx, null, {}).isEmpty())
+        assertTrue(SqlLogConsoleBridgeKt.processConsoleLine(logicLine, ctx, null, {}).isEmpty())
         assertTrue(
             "Actual 行只折叠不产出",
-            processConsoleLine(actualLine, ctx, null, {}).isEmpty(),
+            SqlLogConsoleBridgeKt.processConsoleLine(actualLine, ctx, null, {}).isEmpty(),
         )
         // 下一条 ShardingSphere Logic 行触发上一条闭合并随本行产出
-        val entries = processConsoleLine(
+        val entries = SqlLogConsoleBridgeKt.processConsoleLine(
             "[INFO] 2026-09-30 17:00:00.100 [main] org.apache.shardingsphere.infra.script - " +
                 "Logic SQL: SELECT * FROM t_order WHERE id = ?",
             ctx,
@@ -183,25 +174,27 @@ class ShardingSphereLogParserTest {
             {},
         )
         assertEquals(1, entries.size)
-        assertEquals(SqlSource.SHARDINGSPHERE, entries[0].source)
-        assertEquals("SELECT * FROM t_user WHERE id = ?", entries[0].rawSql)
-        assertTrue("Actual 附注随条目透传", entries[0].actualSql!!.contains("ds_0"))
+        assertEquals(SqlSource.SHARDINGSPHERE, entries[0].source())
+        assertEquals("SELECT * FROM t_user WHERE id = ?", entries[0].rawSql())
+        assertTrue("Actual 附注随条目透传", entries[0].actualSql()!!.contains("ds_0"))
     }
 
     @Test
     fun `注册链_开关关闭零产出`() {
-        val cfg = ParserConfig("Preparing:", "Parameters:", true, 20000, shardingEnabled = false)
+        val cfg = ParserConfig("Preparing:", "Parameters:", true, 20000,
+            HibernateLogParser.DEFAULT_SQL_PREFIX, HibernateLogParser.DEFAULT_PARAM_PREFIX, true, true, false)
         val ctx = BridgeLineContext(
-            myBatisParser = MyBatisLogParser(),
-            hibernateParser = HibernateLogParser(),
-            jdbcParser = JdbcTemplateLogParser(enabled = true),
-            shardingParser = ShardingSphereLogParser(),
-            configProvider = { cfg },
-            shardingEnabled = cfg.shardingEnabled,
+            MyBatisLogParser(),
+            HibernateLogParser(),
+            JdbcTemplateLogParser(true, 20000),
+            ShardingSphereLogParser(),
+            { cfg },
+            true,
+            cfg.shardingEnabled(),
         )
-        assertTrue(processConsoleLine(logicLine, ctx, null, {}).isEmpty())
+        assertTrue(SqlLogConsoleBridgeKt.processConsoleLine(logicLine, ctx, null, {}).isEmpty())
         assertTrue(
-            processConsoleLine(
+            SqlLogConsoleBridgeKt.processConsoleLine(
                 "[INFO] 2026-09-30 17:00:00.100 [main] org.apache.shardingsphere.infra.script - " +
                     "Logic SQL: SELECT 1",
                 ctx,

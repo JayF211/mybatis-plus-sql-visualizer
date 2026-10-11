@@ -132,7 +132,7 @@ class PluginXmlStructureGuardTest {
         val desc = rawDescription()
         val pluginXml = strippedXmls().first { it.first == "plugin.xml" }.second
 
-        val dialects = DialectRegistry.dialects.size
+        val dialects = DialectRegistry.INSTANCE.dialects.size
         assertDeclaredNumber(desc, Regex("""(\d+)\s+database dialects"""), dialects, "英文段数据库方言数")
         assertDeclaredNumber(desc, Regex("""(\d+)\s*种数据库方言"""), dialects, "中文段数据库方言数")
 

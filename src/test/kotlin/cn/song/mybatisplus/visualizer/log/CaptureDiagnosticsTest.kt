@@ -37,7 +37,7 @@ class CaptureDiagnosticsTest {
         suppressed: Long = 0L,
     ) = CaptureDiagnostics(
         capturing, waiting, entries, consoles, lines, enhanced, dropped, shortCircuited,
-        agentEventsReceived = 0L, suppressed = suppressed,
+        0L, suppressed,
     )
 
     @Test
@@ -126,9 +126,9 @@ class CaptureDiagnosticsTest {
      */
     @Test
     fun test屏蔽规则命中计数可见且零值不显示() {
-        val text = captureDiagnosticsText(diag(lines = 30L, suppressed = 8L))!!
+        val text = CaptureDiagnostics.captureDiagnosticsText(diag(lines = 30L, suppressed = 8L))!!
         assertTrue("屏蔽命中非零应显示：$text", text.contains("屏蔽规则命中 8 条"))
-        val zero = captureDiagnosticsText(diag(lines = 30L))!!
+        val zero = CaptureDiagnostics.captureDiagnosticsText(diag(lines = 30L))!!
         assertTrue("零命中不得出现屏蔽计数：$zero", !zero.contains("屏蔽规则命中"))
     }
 
