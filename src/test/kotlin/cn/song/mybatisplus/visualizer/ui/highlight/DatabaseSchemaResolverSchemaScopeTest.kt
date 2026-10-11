@@ -63,7 +63,12 @@ class DatabaseSchemaResolverSchemaScopeTest {
     // ---------- 假模型（只保留 P7 判定用到的四件事：名字 / 注释 / 祖先链 / 列） ----------
 
     private class FakeNs(val nsName: String, val up: Any? = null)
-    private class FakeTable(val tableName: String, val columns: List<String>, val up: Any? = null)
+    private class FakeTable(
+        val tableName: String,
+        val columns: List<String>,
+        val up: Any? = null,
+        val tableComment: String? = null,
+    )
     private class FakeColumn(val columnName: String, val columnComment: String?)
 
     private val accessors = DasAccessors(
@@ -77,7 +82,13 @@ class DatabaseSchemaResolverSchemaScopeTest {
                 else -> null
             }
         },
-        comment = { (it as? FakeColumn)?.columnComment },
+        comment = {
+            when (it) {
+                is FakeTable -> it.tableComment
+                is FakeColumn -> it.columnComment
+                else -> null
+            }
+        },
         children = { (it as? FakeTable)?.columns?.map { c -> FakeColumn(c, "注释_$c") } },
         parent = {
             when (it) {
@@ -90,9 +101,38 @@ class DatabaseSchemaResolverSchemaScopeTest {
         notNull = { true },
     )
 
+    /** 零 COMMENT 的来源（真机 jpa_demo.user：9 列都有类型串、注释全空）。 */
+    private val noCommentAccessors = DasAccessors(
+        isTable = { it is FakeTable },
+        isColumn = { it is FakeColumn },
+        name = {
+            when (it) {
+                is FakeTable -> it.tableName
+                is FakeColumn -> it.columnName
+                is FakeNs -> it.nsName
+                else -> null
+            }
+        },
+        comment = { null },
+        children = { (it as? FakeTable)?.columns?.map { c -> FakeColumn(c, null) } },
+        parent = {
+            when (it) {
+                is FakeTable -> it.up
+                is FakeNs -> it.up
+                else -> null
+            }
+        },
+        typeSpec = { "int(11)" },
+        notNull = { true },
+    )
+
     /** 库节点 → 模式节点 → 表（祖先链含库名，与 DBN 的 Database → Schema → Table 同形）。 */
-    private fun tableIn(database: String?, tableName: String, columns: List<String>): FakeTable =
-        FakeTable(tableName, columns, FakeNs("public", database?.let { FakeNs(it) }))
+    private fun tableIn(
+        database: String?,
+        tableName: String,
+        columns: List<String>,
+        tableComment: String? = null,
+    ): FakeTable = FakeTable(tableName, columns, FakeNs("public", database?.let { FakeNs(it) }), tableComment)
 
     /** 注入遍历替身并返回调用计数（计数 = 真实扫描次数，负缓存语义落在它上面）。 */
     private fun stubTraversal(vararg elements: Any?): () -> Int {
@@ -453,5 +493,158 @@ class DatabaseSchemaResolverSchemaScopeTest {
             "orderid",
             ColumnNameCalibrator.calibrate(orderTable, meta2.columns.keys).columns[0].columnName,
         )
+    }
+
+    // ---------- T-Dgm-StmtScope：整图批量取数的「句内来源一致性」 ----------
+    //
+    // 真机 A10（2026-10-11 沙盒实测）：同一句 `"user"` + user_address + area，本地 MySQL 的
+    // jpa_demo 里也有一张 `user`（9 列、**零 COMMENT**，注册序在 mpj_demo 之前）——
+    // 逐表单表解析把主表喂成 jpa_demo.user：列注释空白、类型串/库里独有列都来自那张表；
+    // 而同一句的 JOIN 表只有 mpj_demo 有、解析正确 → 图上「主表无注释、副表有注释」。
+    // 下面前两组用例的判据 = 主表必须与副表落在同一来源（真机缺陷即可反向验证：去掉投票即变红）。
+
+    /** 按数据源分支的遍历替身（跨库同名表要求两个来源的模型不同——单模型替身给不出该形态）。 */
+    private fun stubTraversalPerSource(byDs: (Any) -> Pair<List<FakeTable>, DasAccessors>) {
+        DatabaseSchemaResolver.traversalForTest = { ds ->
+            val (elements, acc) = byDs(ds)
+            ModelTraversal(elements, acc)
+        }
+    }
+
+    /** 真机形态：注册序在前、零 COMMENT 的源（jpa_demo）；另一个 = mpj_demo（表/列注释齐全）。 */
+    private fun stubJpaThenMpj(
+        jpaTables: Map<String, List<String>>,
+        mpjTables: Map<String, List<String>>,
+    ): Pair<Any, Any> {
+        val jpa = Any()
+        val mpj = Any()
+        DatabaseSchemaResolver.dataSourceDatabaseForTest = { ds -> if (ds === jpa) "jpa_demo" else "mpj_demo" }
+        stubTraversalPerSource { ds ->
+            when {
+                ds === jpa -> jpaTables.map { (t, cols) -> tableIn("jpa_demo", t, cols) } to noCommentAccessors
+                ds === mpj ->
+                    mpjTables.map { (t, cols) -> tableIn("mpj_demo", t, cols, "库注释_$t") } to accessors
+                else -> emptyList<FakeTable>() to accessors
+            }
+        }
+        return jpa to mpj
+    }
+
+    @Test
+    fun `主表与副表取同一来源——跨库同名表不再把主表喂成另一张表`() {
+        val (jpa, mpj) = stubJpaThenMpj(
+            jpaTables = mapOf("user" to listOf("id", "username", "email")),
+            mpjTables = mapOf(
+                "user" to listOf("id", "name", "age", "sex", "head_img"),
+                "user_address" to listOf("id", "user_id", "tel"),
+                "area" to listOf("id", "province", "city"),
+            ),
+        )
+
+        val metas = DatabaseSchemaResolver.resolveBatchFromSources(
+            listOf("\"user\"", "user_address", "area"),
+            listOf(jpa, mpj),
+        )
+
+        assertEquals(
+            "键按传入原样返回（含引用符），调用方按模型表名回查",
+            setOf("\"user\"", "user_address", "area"),
+            metas.keys,
+        )
+        val main = metas.getValue("\"user\"")
+        assertEquals(
+            "主表改判给持有本句 3 张表的来源（mpj_demo）：列注释来自 DB（本次缺陷的判据）",
+            "注释_name",
+            main.columns.getValue("name").comment,
+        )
+        assertEquals("表头注释同样来自该来源（DB COMMENT 优先）", "库注释_user", main.comment)
+        assertFalse(
+            "注册序在前、零 COMMENT 的那张同名表（jpa_demo.user）不得再参与主表富化",
+            main.columns.containsKey("username"),
+        )
+        assertEquals("同句副表同口径", "注释_tel", metas.getValue("user_address").columns.getValue("tel").comment)
+        assertEquals("同句副表同口径（第二张）", "注释_province", metas.getValue("area").columns.getValue("province").comment)
+    }
+
+    @Test
+    fun `单表批量与逐表单表解析同口径——注册序首个命中`() {
+        val (jpa, mpj) = stubJpaThenMpj(
+            jpaTables = mapOf("user" to listOf("id", "username", "email")),
+            mpjTables = mapOf("user" to listOf("id", "name", "age", "sex", "head_img")),
+        )
+
+        val metas = DatabaseSchemaResolver.resolveBatchFromSources(listOf("user"), listOf(jpa, mpj))
+
+        assertEquals(
+            "单表批量无从投票消歧 → 与 tableMeta 逐字一致：注册序首个命中",
+            setOf("id", "username", "email"),
+            metas.getValue("user").columns.keys,
+        )
+    }
+
+    @Test
+    fun `主来源没有的表保留原来源——跨库联接逐表回落`() {
+        val (jpa, mpj) = stubJpaThenMpj(
+            jpaTables = mapOf(
+                "user" to listOf("id", "username", "email"),
+                "jpa_log" to listOf("id", "log_no"),
+            ),
+            mpjTables = mapOf(
+                "user" to listOf("id", "name", "age", "sex", "head_img"),
+                "user_address" to listOf("id", "user_id", "tel"),
+            ),
+        )
+
+        val metas = DatabaseSchemaResolver.resolveBatchFromSources(
+            listOf("user", "user_address", "jpa_log"),
+            listOf(jpa, mpj),
+        )
+
+        assertEquals(
+            "主来源（mpj_demo）没有的表保留阶段 1 的来源（跨库联接不被一刀切掉）",
+            setOf("id", "log_no"),
+            metas.getValue("jpa_log").columns.keys,
+        )
+        assertEquals(
+            "同句多数表仍在主来源",
+            "注释_user_id",
+            metas.getValue("user_address").columns.getValue("user_id").comment,
+        )
+    }
+
+    @Test
+    fun `未解析到的表也有条目——调用方据此保留实体推断值`() {
+        val (jpa, mpj) = stubJpaThenMpj(
+            jpaTables = mapOf("user" to listOf("id", "username", "email")),
+            mpjTables = mapOf(
+                "user" to listOf("id", "name", "age", "sex", "head_img"),
+                "area" to listOf("id", "province", "city"),
+            ),
+        )
+
+        val metas = DatabaseSchemaResolver.resolveBatchFromSources(
+            listOf("user", "ghost_table", "area"),
+            listOf(jpa, mpj),
+        )
+
+        assertTrue("未解析到的键也在（值 = 空 TableMeta）", metas.containsKey("ghost_table"))
+        assertNull(metas.getValue("ghost_table").comment)
+        assertTrue(metas.getValue("ghost_table").columns.isEmpty())
+    }
+
+    @Test
+    fun `句内主来源投票_同票取注册序在前者_无持有返回null`() {
+        assertEquals(
+            "同票（各持 2 张）→ 取注册序在前者",
+            0,
+            DatabaseSchemaResolver.pickStatementSource(listOf(0, 0, 1, 1)),
+        )
+        assertEquals(
+            "持有数多者胜",
+            1,
+            DatabaseSchemaResolver.pickStatementSource(listOf(-1, 1, 1, 0)),
+        )
+        assertNull("无来源持有任何表 → null", DatabaseSchemaResolver.pickStatementSource(listOf(-1, -1)))
+        assertNull("空批次 → null", DatabaseSchemaResolver.pickStatementSource(emptyList()))
     }
 }

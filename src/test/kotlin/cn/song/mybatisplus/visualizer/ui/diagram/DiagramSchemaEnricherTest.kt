@@ -195,4 +195,75 @@ class DiagramSchemaEnricherTest {
         assertEquals("超上限时不追加，实体列原样", 49, enriched.entities[0].columns.size)
         assertFalse("库独有列未混入", enriched.entities[0].columns.any { it.name.startsWith("extra_") })
     }
+
+    // ---- T-Dgm-StmtScope：整图批量取数的接线（真机 A10：主表表名带引用符 + 同句 JOIN 表） ----
+
+    @Test
+    fun statementBatchFillsMainAndJoinColumnsViaRawTableName() {
+        // 真机形态：`@TableName("\"user\"")` → 模型主表名带引号；批量取数按该原始名回查、逐实体落地
+        val model = DiagramModel(
+            entities = listOf(
+                EntityNode(
+                    alias = "t", tableName = "\"user\"",
+                    columns = listOf(
+                        ColumnEntry("id", "INT", isPk = true),
+                        ColumnEntry("name", "VARCHAR", isPk = false),
+                        ColumnEntry("head_img", "VARCHAR", isPk = false),
+                    ),
+                    isMain = true,
+                    tableComment = "用户表(User)实体（MPJ 主表）",
+                ),
+                EntityNode(
+                    alias = "addr", tableName = "user_address",
+                    columns = listOf(ColumnEntry("tel", "VARCHAR", isPk = false)),
+                    isMain = false,
+                    joinType = JoinType.LEFT,
+                ),
+            ),
+            relationships = listOf(RelationshipLine("t", "addr", JoinType.LEFT, "addr.user_id = t.id")),
+        )
+        DiagramSchemaEnricher.statementMetaForTest = { _, names ->
+            assertEquals(
+                "接线：批量取数的键 = 模型里的原始表名（含引用符，与实体 @TableName 同源）",
+                listOf("\"user\"", "user_address"),
+                names,
+            )
+            names.associateWith { name ->
+                if (name == "\"user\"") {
+                    DatabaseSchemaResolver.TableMeta(
+                        "用户表",
+                        mapOf(
+                            "id" to DatabaseSchemaResolver.ColumnMeta("主键", "int(11)"),
+                            "name" to DatabaseSchemaResolver.ColumnMeta("姓名", "varchar(64)"),
+                            "head_img" to DatabaseSchemaResolver.ColumnMeta("头像", "varchar(255)"),
+                        ),
+                    )
+                } else {
+                    DatabaseSchemaResolver.TableMeta(
+                        "用户地址表",
+                        mapOf("tel" to DatabaseSchemaResolver.ColumnMeta("电话", "varchar(32)")),
+                    )
+                }
+            }
+        }
+        try {
+            val enriched = DiagramSchemaEnricher.enrich(stubProject(), model)
+            val main = enriched.entities[0]
+            assertEquals(
+                "主表列拿到 DB COMMENT（实体没写注释时的兜底路，本次缺陷的判据）",
+                "姓名",
+                main.columns.first { it.name == "name" }.comment,
+            )
+            assertEquals("类型串同时升级为 DB 真实值", "varchar(64)", main.columns.first { it.name == "name" }.type)
+            assertEquals("表头注释 DB 优先（覆盖实体类注释）", "用户表", main.tableComment)
+            assertEquals(
+                "主表列集合 = 该表真实列（跨库同名表的独有列不再被当「实体未映射列」追加）",
+                listOf("id", "name", "head_img"),
+                main.columns.map { it.name },
+            )
+            assertEquals("同句副表同口径", "电话", enriched.entities[1].columns.single().comment)
+        } finally {
+            DiagramSchemaEnricher.statementMetaForTest = null
+        }
+    }
 }
