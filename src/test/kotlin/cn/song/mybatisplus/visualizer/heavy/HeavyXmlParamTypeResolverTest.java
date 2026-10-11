@@ -437,7 +437,7 @@ public class HeavyXmlParamTypeResolverTest extends HeavyPlatformTestCase {
         PreviewResult result = XmlPreviewService.INSTANCE.preview(xml, "statistics", getProject());
         assertNotNull("应产出预览结果", result);
         SqlPreviewPanel panel = new SqlPreviewPanel(getProject());
-        panel.showResult(result);
+        cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelResultViewKt.showResult(panel, result);
         List<JBTextField> fields = new ArrayList<>();
         for (int i = 0; i < 30; i++) {
             JBTextField f = invokeParamField(panel, i);
@@ -464,7 +464,7 @@ public class HeavyXmlParamTypeResolverTest extends HeavyPlatformTestCase {
         assertTrue("LocalDate 字段应引号：" + sql, sql.contains("t.settlement_period >= '2025'"));
         assertTrue("Integer 字段应裸渲染：" + sql, sql.contains("t.dic_credit_status = 2"));
         assertFalse("Integer 字段不应带引号：" + sql, sql.contains("t.dic_credit_status = '2'"));
-        panel.clear();
+        cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelSqlViewKt.clear(panel);
     }
 
     // ------------------------------------------------------------------
