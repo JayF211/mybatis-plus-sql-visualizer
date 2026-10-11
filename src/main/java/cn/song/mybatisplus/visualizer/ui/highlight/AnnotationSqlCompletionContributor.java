@@ -118,7 +118,9 @@ public class AnnotationSqlCompletionContributor extends CompletionContributor im
                 try {
                     List<LookupElementBuilder> items = SourceSqlCompleter.sqlCompletions(text, caretInRaw, sourceContext);
                     for (LookupElementBuilder item : items) {
-                        if (prefix.prefixMatches(item.getLookupString())) {
+                        // T-XmlCmpl3 二段：过滤按**任一 lookup string**（附加串 `别名.列名`
+                        // 命中已敲的 `o.user_i`，插入用主串裸列名——防别名重复）
+                        if (item.getAllLookupStrings().stream().anyMatch(prefix::prefixMatches)) {
                             result.addElement(item);
                         }
                     }

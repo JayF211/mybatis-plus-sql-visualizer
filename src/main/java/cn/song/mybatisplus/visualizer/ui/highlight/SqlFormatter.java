@@ -36,6 +36,24 @@ public final class SqlFormatter {
             "LEFT", "RIGHT", "INNER", "FULL", "CROSS"
     ));
 
+    /**
+     * DDL 首关键字（T-DdlLogPreview S2，20261006 第三轮走查）。
+     *
+     * <p>立项动因：{@code NEW_LINE_KEYWORDS} 只覆盖 DML 子句，DDL（CREATE/ALTER/DROP/TRUNCATE）**一个换行点
+     * 都没有** ⇒ 用户点「格式化」看不到任何变化（实测 {@code CREATE TABLE …} 仍单行）。现按首关键字分派：
+     * DDL 走下面两条规则（定义列表「{@code (} 换行缩进 4 + 顶层逗号逐列换行 + 闭括号对齐起始行」，
+     * ALTER 的顶层逗号亦换行）——<b>DML 路径与既有语料输出逐字节不变</b>（规则全部由本集合门控）。
+     */
+    private static final Set<String> DDL_LEAD_KEYWORDS = Set.copyOf(Arrays.asList(
+            "CREATE", "ALTER", "DROP", "TRUNCATE", "RENAME"));
+
+    /** DDL 定义列表缩进（{@code (} 后与列定义逐行缩进量）。 */
+    private static final int DDL_LIST_INDENT = 4;
+
+    /** DDL 域内 {@code (} 前**保留空格**的关键字（惯例形态；其余关键字/标识符后的括号贴紧＝类型尺寸）。 */
+    private static final Set<String> DDL_PAREN_SPACED_KEYWORDS = Set.copyOf(Arrays.asList(
+            "KEY", "REFERENCES", "CHECK", "IN", "EXISTS", "USING", "VALUES"));
+
     /** 紧跟 JOIN 的修饰关键字（`LEFT JOIN` 保持同行）。 */
     private static final Set<String> JOIN_QUALIFIERS = Set.copyOf(Arrays.asList("LEFT", "RIGHT", "INNER", "FULL", "CROSS"));
 
@@ -56,6 +74,18 @@ public final class SqlFormatter {
         }
         StringBuilder sb = new StringBuilder(sql.length() + 64);
         FmtState st = new FmtState(sb);
+        // T-DdlLogPreview S2：DDL 分派（首关键字判定；注释/空白已由 lex 剔除）
+        String ddlLead = null;
+        for (Pair<IElementType, String> token : tokens) {
+            if (token.getFirst() != SqlTokenTypes.COMMENT) {
+                if (token.getFirst() == SqlTokenTypes.KEYWORD
+                        && DDL_LEAD_KEYWORDS.contains(token.getSecond().toUpperCase())) {
+                    ddlLead = token.getSecond().toUpperCase();
+                }
+                break;
+            }
+        }
+        boolean ddlStatement = ddlLead != null;
         for (Pair<IElementType, String> entry : tokens) {
             IElementType type = entry.getFirst();
             String text = entry.getSecond();
@@ -105,7 +135,14 @@ public final class SqlFormatter {
                 st.pendingSpace = true;
                 st.atLineStart = false;
             } else if (type == SqlTokenTypes.PAREN && text.equals("(")) {
-                if (!FUNCTION_NAMES.contains(st.prevText.toUpperCase())) {
+                // T-DdlLogPreview S2：DDL 定义列表内的**类型尺寸括号**贴紧左侧 token
+                // （`VARCHAR(64)`/`DECIMAL(10,2)` 不得被插空格——注意类型名多为 KEYWORD token；
+                // 而 `PRIMARY KEY (`id`)`／`CHECK (…)`／`REFERENCES` 按惯例留空格）
+                boolean ddlTightParen = ddlStatement && st.depth >= 1 && (
+                        st.prevType == SqlTokenTypes.IDENTIFIER
+                                || (st.prevType == SqlTokenTypes.KEYWORD
+                                && !DDL_PAREN_SPACED_KEYWORDS.contains(st.prevText.toUpperCase())));
+                if (!ddlTightParen && !FUNCTION_NAMES.contains(st.prevText.toUpperCase())) {
                     st.flushSpace();
                 }
                 sb.append('(');
@@ -114,8 +151,18 @@ public final class SqlFormatter {
                 st.parenNewlined = false;
                 st.pendingSpace = false;
                 st.atLineStart = false;
+                // T-DdlLogPreview S2：DDL 定义列表开括号 → 换行缩进（列定义逐行；
+                // parenNewlined 由 newline 置位 ⇒ 闭括号按既有机制对齐起始行）
+                if (ddlStatement && st.depth == 1) {
+                    st.newline(DDL_LIST_INDENT);
+                }
             } else if (type == SqlTokenTypes.PAREN && text.equals(")")) {
-                if (st.parenNewlined && st.depth > 0) {
+                // T-DdlLogPreview S2：DDL 定义列表的**外层闭括号恒独立成行**——列表内嵌套括号
+                // （`PRIMARY KEY (`id`)`）会把 parenNewlined 复位，靠既有判据会让 `)` 与表尾选项
+                // 粘在最后一条列定义行尾（实测形态），故 DDL 域内按 depth==1 显式断行
+                if (st.depth == 1 && ddlStatement && !st.atLineStart) {
+                    st.newline(st.parenIndents.peekLast());
+                } else if (st.parenNewlined && st.depth > 0) {
                     st.newline(st.parenIndents.peekLast());
                 }
                 sb.append(')');
@@ -131,7 +178,12 @@ public final class SqlFormatter {
                     sb.deleteCharAt(sb.length() - 1);
                 }
                 sb.append(',');
-                if (st.depth == 0 && (st.currentClause.equals("SELECT") || st.currentClause.equals("SET")) && !st.atLineStart) {
+                if (ddlStatement && !st.atLineStart
+                        && (st.depth == 1 || (st.depth == 0 && "ALTER".equals(ddlLead)))) {
+                    // T-DdlLogPreview S2：DDL 定义列表（depth 1）逐列换行；ALTER 顶层动作（depth 0）
+                    // 同样逐条换行——嵌套小括号（VARCHAR(64)/PRIMARY KEY (`id`)）不受影响
+                    st.newline(DDL_LIST_INDENT);
+                } else if (st.depth == 0 && (st.currentClause.equals("SELECT") || st.currentClause.equals("SET")) && !st.atLineStart) {
                     st.newline(4);
                 } else {
                     st.pendingSpace = true;
@@ -161,6 +213,7 @@ public final class SqlFormatter {
                 st.atLineStart = false;
             }
             st.prevText = text;
+            st.prevType = type;
         }
         return sb.toString().trim();
     }
@@ -277,6 +330,7 @@ public final class SqlFormatter {
                 st.atLineStart = false;
             }
             st.prevText = text;
+            st.prevType = type;
         }
         return sb.toString().trim();
     }
@@ -1055,6 +1109,8 @@ public final class SqlFormatter {
         boolean pendingSpace = false;
         boolean atLineStart = true;
         String prevText = "";
+        // T-DdlLogPreview S2：DDL 域内判定「类型尺寸括号」（`VARCHAR(64)` 贴紧标识符）需前一 token 类型
+        IElementType prevType = null;
         int lineIndent = 0;
         final ArrayDeque<Integer> parenIndents = new ArrayDeque<>();
         boolean parenNewlined = false;
@@ -1097,6 +1153,8 @@ public final class SqlFormatter {
         boolean pendingSpace = false;
         boolean atLineStart = true;
         String prevText = "";
+        // T-DdlLogPreview S2：DDL 域内判定「类型尺寸括号」需前一 token 类型（本方法暂不使用，口径同 format）
+        IElementType prevType = null;
         String currentClause = "";
         int depth = 0;
         boolean pendingComma = false;

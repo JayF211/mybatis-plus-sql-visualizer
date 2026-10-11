@@ -146,7 +146,7 @@ public final class SourceSqlCompleter {
     /** 光标前进行中的词（补全前缀）；无进行中的词 → 空串（"无前缀"语义，触发关键字去重过滤）。 */
     private static final Pattern PREFIX_AT_CARET = Pattern.compile("[\\w$]*$");
 
-    /** 光标左侧最近 `别名.` 片段（必须紧贴光标，如 `SELECT u.<caret>`）。 */
+    /** 光标左侧最近 {@code 别名.} 片段（必须紧贴光标，如 {@code SELECT u.<caret>}）；dropLast(1) 得别名。 */
     private static final Pattern ALIAS_PREFIX_AT_CARET = Pattern.compile("[\\w$]+\\.$");
 
     private SourceSqlCompleter() {
