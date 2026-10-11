@@ -54,23 +54,36 @@ public final class JavaCodeGenerator {
     /**
      * 调用上下文（T-M36.7）。
      *
-     * @param callerClass 调用类（Service 或 Mapper 类名；特殊值 this/baseMapper）
-     * @param voClass     可选返回 VO 类名（仅 SELECT 生效）
-     * @param mpj         调用类是否具备 MPJ 能力（继承链实证）
-     * @param methods     调用类继承链方法名集合（T-M44）
+     * @param callerClass    调用类（Service 或 Mapper 类名；特殊值 this/baseMapper）
+     * @param voClass        可选返回 VO 类名（仅 SELECT 生效）
+     * @param mpj            调用类是否具备 MPJ 能力（继承链实证）
+     * @param methods        调用类继承链方法名集合（T-M44）
+     * @param mapsResult     T-MapResultVo：Map 响应形态（`selectJoinMaps`/`selectMaps`/`listMaps` 族）——
+     *                       返回 `List<Map<String, Object>>`（分页 `Page<Map<String, Object>>`）；Maps 族<b>不带 Class 参数</b>
+     *                       （1.5.8 javap 实证），VO 角色转为驱动 select 列别名（selectAs 第二参）。
+     * @param resultTypeText T-MapResultVo v2：返回类型声明原文（面板可编辑输入，如 `List<Map<String, Object>>` /
+     *                       `List<HashMap<String, Object>>` / `List<Object>` / 类名）——按声明形态派生调用族：
+     *                       含 Map → {@code mapsResult} 等效；含 Object → selectObjs/listObjs 族（单表，MPJ 无 selectJoinObjs）；
+     *                       其他 → 按类名走 voClass（TYPED 档）。与 voClass/mapsResult 并存时 resultTypeText 优先。
      */
     public record InvocationTarget(
             String callerClass,
             String voClass,
             boolean mpj,
-            Set<String> methods
+            Set<String> methods,
+            boolean mapsResult,
+            String resultTypeText
     ) {
+        public InvocationTarget(String callerClass, String voClass, boolean mpj, Set<String> methods) {
+            this(callerClass, voClass, mpj, methods, false, null);
+        }
+
         public InvocationTarget(String callerClass, String voClass, boolean mpj) {
-            this(callerClass, voClass, mpj, Set.of());
+            this(callerClass, voClass, mpj, Set.of(), false, null);
         }
 
         public InvocationTarget(String callerClass) {
-            this(callerClass, null, false, Set.of());
+            this(callerClass, null, false, Set.of(), false, null);
         }
     }
 
@@ -119,9 +132,24 @@ public final class JavaCodeGenerator {
         StringBuilder sb = new StringBuilder();
         appendHeader(sb, result, entity, wrapperKind, invocation);
         boolean isJoin = !result.joins().isEmpty();
-        boolean voQuery = invocation != null && invocation.mpj() && invocation.voClass() != null
-                && !invocation.voClass().equals(entity != null ? entity.className() : entityClassName(result.tableName()));
-        String selectAsVoClass = voQuery ? invocation.voClass() : null;
+        // T-MapResultVo v2：返回类型声明原文的 TYPED 档（非 Map/Object 族 → 按类名走 VO 语义；
+        // voClass 优先保留既有 API 兼容）
+        String voTyped = null;
+        if (invocation != null) {
+            if (invocation.voClass() != null) {
+                voTyped = invocation.voClass();
+            } else if (invocation.resultTypeText() != null) {
+                String rt = invocation.resultTypeText().trim();
+                if (!rt.isEmpty() && !rt.contains("Map") && !rt.contains("Object")) voTyped = rt;
+            }
+        }
+        // VO 查询（selectJoinList 族）参数类型为 MPJBaseJoin——须调用类具备 MPJ 能力（继承链实证）
+        // 且 wrapper 强制 MPJ 形态；调用类无 MPJ 时 VO 回落实体查询（selectInvocation 内注释提示）
+        boolean voQuery = invocation != null && invocation.mpj() && voTyped != null
+                && !voTyped.equals(entity != null ? entity.className() : entityClassName(result.tableName()));
+        // T-M47：选中 VO 且为真实 VO 查询时，selectAs 第二参用 VO 属性方法引用（Vo::getXxx）——
+        // 对齐正向 selectAs(列, Vo::getXxx)；否则字符串别名
+        String selectAsVoClass = voQuery ? voTyped : null;
         if (isJoin && invocation != null && !invocation.mpj()) {
             throw new SqlReverseException(0, SqlReverseParser.KEY_UNSUPPORTED,
                     "多表 JOIN 需要 MyBatis-Plus-Join（MPJ）依赖，但调用类 " + invocation.callerClass() + " 无 MPJ 能力");
@@ -152,13 +180,25 @@ public final class JavaCodeGenerator {
             }
             for (String j : renderJoins(result, entity)) chain.append("\n    .").append(j);
             for (Condition c : conditions) chain.append("\n    .").append(renderCondition(c, entity));
+            for (String g : renderGroupBy(result, entity)) chain.append("\n    .").append(g);
+            if (result.having() != null) chain.append("\n    .").append(renderHaving(result.having(), entity));
             for (String o : renderOrderBy(result, entity)) chain.append("\n    .").append(o);
+            // 分页调用形态（invocation 存在）由 page 参数承载，不再生成 last("LIMIT...")
             if (result.limit() != null && invocation == null) {
-                chain.append("\n    .last(\"").append(javaEscape(renderLimit(result.limit()))).append("\")");
+                chain.append("\n    .last(\"").append(javaEscape(renderLimitTail(result.limit(), result.forUpdate()))).append("\")");
+            } else if (result.forUpdate() && result.limit() == null) {
+                chain.append("\n    .last(\"FOR UPDATE\")");
             }
         } else {
             if (selectColumns != null && !selectColumns.isEmpty()) {
-                if (selectColumns.stream().anyMatch(it -> it.alias() != null)) {
+                if (result.distinct()) {
+                    // T-SqlToJavaPromote G3：MP 无 selectDistinct——DISTINCT 用字符串单串 select("DISTINCT a, b")
+                    chain.append("\n    .select(")
+                            .append(javaString("DISTINCT " + selectColumns.stream()
+                                    .map(JavaCodeGenerator::renderSelectRaw).collect(Collectors.joining(", "))))
+                            .append(")");
+                } else if (selectColumns.stream().anyMatch(it -> it.alias() != null)) {
+                    // 含 AS 别名的列无法并入单个 .select(...)，逐列渲染 .select/.selectAs（T-M46）
                     for (SelectColumn it : selectColumns) {
                         chain.append("\n    .").append(renderSelectCall(it, entity, selectAsVoClass, rawMode));
                     }
@@ -169,9 +209,14 @@ public final class JavaCodeGenerator {
                 }
             }
             for (Condition c : conditions) chain.append("\n    .").append(renderCondition(c, entity));
+            for (String g : renderGroupBy(result, entity)) chain.append("\n    .").append(g);
+            if (result.having() != null) chain.append("\n    .").append(renderHaving(result.having(), entity));
             for (String o : renderOrderBy(result, entity)) chain.append("\n    .").append(o);
+            // 分页调用形态（invocation 存在）由 page 参数承载，不再生成 last("LIMIT...")
             if (result.limit() != null && invocation == null) {
-                chain.append("\n    .last(\"").append(javaEscape(renderLimit(result.limit()))).append("\")");
+                chain.append("\n    .last(\"").append(javaEscape(renderLimitTail(result.limit(), result.forUpdate()))).append("\")");
+            } else if (result.forUpdate() && result.limit() == null) {
+                chain.append("\n    .last(\"FOR UPDATE\")");
             }
         }
         String wrapperClass = wrapperClassFor(QUERY_WRAPPER_CLASSES, entity, effectiveKind);
@@ -542,14 +587,49 @@ public final class JavaCodeGenerator {
             InvocationTarget invocation
     ) {
         String entityName = entity != null ? entity.className() : entityClassName(result.tableName());
-        String voRequested = (invocation.voClass() != null && !invocation.voClass().equals(entityName))
-                ? invocation.voClass() : null;
+        // T-MapResultVo v2：返回类型声明原文派生调用族（面板可编辑输入）——
+        //  含 Map → Maps 族（mapsResult 等效，声明 HashMap 等亦归此档，前缀按方法真实返回类型渲染）；
+        //  含 Object → Objs 族（单表 selectObjs/listObjs，MPJ 无 selectJoinObjs）；
+        //  其他文本 → 按类名走 voClass（TYPED 档，项目索引可解析 → lambda/别名驱动，不可解析按字面生成+注释）。
+        String rtText = invocation.resultTypeText() != null ? invocation.resultTypeText().trim() : null;
+        if (rtText != null && rtText.isEmpty()) rtText = null;
+        boolean maps = invocation.mapsResult() || (rtText != null && rtText.contains("Map"));
+        boolean objs = !maps && rtText != null && rtText.contains("Object");
+        String typedRequested = (maps || objs) ? null : (invocation.voClass() != null ? invocation.voClass() : rtText);
+        String voRequested = typedRequested != null && !typedRequested.equals(entityName) ? typedRequested : null;
+        // VO 查询依赖 MPJ 能力（调用类继承链实证）；无 MPJ → 回落实体查询并注释提示
         String vo = (voRequested != null && invocation.mpj()) ? voRequested : null;
         boolean voUnsupported = voRequested != null && vo == null;
-        String generic = vo != null ? vo : entityName;
         boolean paged = result.limit() != null;
+        boolean join = !result.joins().isEmpty();
+        // Objs 族无分页重载（BaseMapper.selectObjs javap 实证）——分页需求转注释提示
+        if (objs && join) {
+            throw new SqlReverseException(
+                    0,
+                    SqlReverseParser.KEY_UNSUPPORTED,
+                    "JOIN 场景不支持 Object 单列响应（MPJ 无 selectJoinObjs）——可用 Map 列表（List<Map<String, Object>>）或实体列表替代"
+            );
+        }
+        // T-MapResultVo：Map 响应形态（签名 1.5.8 javap 实证）——
+        //  join → JoinMapper/JoinService `selectJoinMaps(wrapper)` / 分页 `selectJoinMapsPage(page, wrapper)`（不带 Class）；
+        //  单表 Mapper → `selectMaps(wrapper)` / 分页 `selectMaps(page, wrapper)`（MP 同名重载）；
+        //  单表 Service → `listMaps(wrapper)` / 分页 `listMaps(page, wrapper)`（IService）。
+        // VO 在 Maps 场景不进签名（转 select 列别名驱动）→ Class 参数恒不加。
+        // T-M44：方法选择按调用类真实方法集（prefer 回退链）——部分 MPJ 依赖的 MPJBaseMapper
+        // 无 BaseMapper 的 selectPage/selectList 等普通方法，缺失时回落 JoinMapper/JoinService 的
+        // selectJoin 族（join 方法需 Class 参数，args 按方法形态构建）；特殊值/类不可解析 → 普通方法
         String method;
-        if (isMapper(invocation)) {
+        if (maps && join) {
+            method = paged ? "selectJoinMapsPage" : "selectJoinMaps";
+        } else if (maps && isMapper(invocation)) {
+            method = paged ? "selectMaps" : prefer(invocation, "selectMaps", "selectJoinMaps");
+        } else if (maps) {
+            method = paged ? "listMaps" : prefer(invocation, "listMaps", "selectMaps");
+        } else if (objs && isMapper(invocation)) {
+            method = "selectObjs";
+        } else if (objs) {
+            method = prefer(invocation, "listObjs", "selectObjs");
+        } else if (isMapper(invocation)) {
             if (paged && vo != null) method = "selectJoinPage";
             else if (paged) method = prefer(invocation, "selectPage", "selectJoinPage");
             else if (vo != null) method = "selectJoinList";
@@ -560,19 +640,31 @@ public final class JavaCodeGenerator {
             else if (vo != null) method = "selectJoinList";
             else method = prefer(invocation, "list", "selectJoinList");
         }
-        String pageArg = paged ? renderPageArg(result.limit()) : "";
+        // 参数顺序（1.5.6 实证）：普通 `(wrapper)`；分页 `(page, wrapper)`；
+        // VO/join 方法 `(page?, Class, wrapper)`——回退到 selectJoin 族时 Class 参数用 VO 或实体；
+        // Maps/Objs 族不带 Class（selectJoinMaps 同为 selectJoin 前缀但签名无 Class——1.5.8 javap 实证）
+        boolean usePageArg = paged && !objs;
+        String pageArg = usePageArg ? renderPageArg(result.limit()) : "";
+        boolean classArg = !maps && !objs && (vo != null || (method.startsWith("selectJoin") && !method.contains("Maps")));
         StringBuilder args = new StringBuilder();
-        if (paged) args.append(pageArg).append(", ");
-        if (vo != null || method.startsWith("selectJoin")) {
-            args.append((vo != null ? vo : entityName)).append(".class, ");
-        }
+        if (usePageArg) args.append(pageArg).append(", ");
+        if (classArg) args.append((vo != null ? vo : entityName)).append(".class, ");
         args.append("wrapper");
-        String prefix = paged ? "Page<" + generic + "> page = " : "List<" + generic + "> list = ";
+        String generic;
+        if (maps) generic = "Map<String, Object>";
+        else if (objs) generic = "Object";
+        else generic = vo != null ? vo : entityName;
+        String prefix = usePageArg ? "Page<" + generic + "> page = " : "List<" + generic + "> list = ";
         String call = prefix + callerVar(invocation) + "." + method + "(" + args + ");";
+        // 说明注释独立成行（T-M45：行尾注释 → 行注释——整行语义清晰，复制剥离注释时行结构稳定）
         StringBuilder comments = new StringBuilder();
         if (voUnsupported) comments.append("// 调用类无 MyBatis-Plus-Join（MPJ）能力，VO 查询不可用，已回落实体查询\n");
         if (vo != null) comments.append("// VO 查询需 MyBatis-Plus-Join（MPJ）依赖\n");
-        if (paged) comments.append("// 分页 current/size 已占位，请替换为实际参数\n");
+        if (paged && !usePageArg) comments.append("// selectObjs 无分页重载——请在 wrapper 内分页（last(\"LIMIT ...\")）或改用实体/Map 列表\n");
+        if (paged && usePageArg) comments.append("// 分页 current/size 已占位，请替换为实际参数\n");
+        if (voRequested != null && vo != null && rtText != null) {
+            comments.append("// 返回类型按声明 ").append(rtText).append(" 生成（调用类无该类时请核对类名）\n");
+        }
         return comments + call;
     }
 
@@ -692,6 +784,13 @@ public final class JavaCodeGenerator {
             sb.append("// 注意：SQL 含参数占位符 ?，无法恢复实际参数，已生成 \"?\" 占位，请替换为实际参数\n");
         }
         for (String w : result.warnings()) sb.append("// 注意：").append(w).append("\n");
+        if (!result.unions().isEmpty()) {
+            // T-SqlToJavaPromote G8：MP core 无 union() 方法、MPJ 签名本地不可得——降级为原文注释提示
+            sb.append("// 注意：UNION 子句需 MyBatis-Plus-Join 的 union() API 或原生 SQL，请手动处理：\n");
+            for (ReverseUnion u : result.unions()) {
+                sb.append("//   ").append(u.keyword()).append(" ").append(u.sql()).append("\n");
+            }
+        }
     }
 
     /** 结果中是否存在 `?` 占位符。 */
@@ -774,19 +873,51 @@ public final class JavaCodeGenerator {
             EntityTarget sub = entity.subEntities().get(alias);
             if (sub != null) target = sub;
         }
-        String field = target != null && target.columnToField() != null ? target.columnToField().get(columnName) : null;
-        if (field != null && target != null) return new Pair<>(target.className(), field);
+        // T-FixCamelMap：列名查询双向归一（原样 / snake_case / camelCase）——SQL 列与实体列名
+        // 形态差异（`role_id` ↔ `roleId`，含 @TableField 显式驼峰列）不再回落字符串
+        if (target != null && target.columnToField() != null) {
+            for (String key : columnKeyVariants(columnName)) {
+                String field = target.columnToField().get(key);
+                if (field != null) return new Pair<>(target.className(), field);
+            }
+        }
         if (alias == null || (entity != null && !entity.subEntities().containsKey(alias))) {
             if (entity != null) {
                 List<EntityTarget> matches = entity.subEntities().values().stream()
-                        .filter(e -> e.columnToField().containsKey(columnName)).toList();
+                        .filter(sub -> columnKeyVariants(columnName).stream().anyMatch(sub.columnToField()::containsKey))
+                        .toList();
                 if (matches.size() == 1) {
                     EntityTarget m = matches.get(0);
-                    return new Pair<>(m.className(), m.columnToField().get(columnName));
+                    String key = columnKeyVariants(columnName).stream()
+                            .filter(m.columnToField()::containsKey).findFirst().orElse(null);
+                    return new Pair<>(m.className(), m.columnToField().get(key));
                 }
             }
         }
         return null;
+    }
+
+    /** 列名查询变体（T-FixCamelMap）：原样 / snake_case / camelCase 去重。 */
+    private static List<String> columnKeyVariants(String name) {
+        String snake = cn.song.mybatisplus.visualizer.util.NamingStrategy.INSTANCE.toSnakeCase(name);
+        List<String> variants = new ArrayList<>();
+        variants.add(name);
+        variants.add(snake);
+        variants.add(snakeToCamel(name));
+        return variants.stream().distinct().toList();
+    }
+
+    /** snake_case → camelCase（`role_id` → `roleId`）；无下划线原样返回。 */
+    private static String snakeToCamel(String name) {
+        if (name.indexOf('_') < 0) return name;
+        StringBuilder sb = new StringBuilder();
+        boolean first = true;
+        for (String seg : name.split("_")) {
+            if (seg.isEmpty()) continue;
+            sb.append(first ? seg : capitalize(seg));
+            first = false;
+        }
+        return sb.toString();
     }
 
     /** 列引用渲染。 */
@@ -817,7 +948,10 @@ public final class JavaCodeGenerator {
 
     /** SELECT 列整条调用。 */
     private static String renderSelectCall(SelectColumn sel, EntityTarget entity, String voClass, boolean rawMode) {
-        if (rawMode) {
+        // 聚合/函数列（COUNT(*) 等含 `(`，T-SqlToJavaPromote G5）与 MPJQueryWrapper 字符串联接：
+        // 不可 lambda 引用——统一回落 select("expr [AS alias]") 字符串（QueryWrapper.select(String...) 合法）
+        boolean isAggregate = sel.expr().indexOf('(') >= 0;
+        if (rawMode || isAggregate) {
             String col = sel.expr();
             return sel.alias() != null ? "select(" + javaString(col + " AS " + sel.alias()) + ")" : "select(" + javaString(col) + ")";
         }
@@ -899,7 +1033,17 @@ public final class JavaCodeGenerator {
             return method + "(" + renderColumnRef(l.getColumn().getColumnName(), entity, l.getColumn().getTableAlias())
                     + ", " + javaValue(l.getPattern()) + ")";
         }
-        if (condition instanceof Condition.Raw r) return "apply(\"" + javaEscape(r.getSqlText()) + "\")";
+        if (condition instanceof Condition.Raw r) {
+            // T-SqlToJavaPromote G7：可识别「表达式 比较符 字面量」形态 → 参数化 apply("... = {0}", 值)；
+            // 无法识别 → 整段字符串 apply("...") 透传
+            Pair<String, List<SqlValue>> parameterized = parameterizeRaw(r.getSqlText());
+            List<SqlValue> values = parameterized.getSecond();
+            if (values.isEmpty()) {
+                return "apply(" + javaString(r.getSqlText()) + ")";
+            }
+            String joined = values.stream().map(JavaCodeGenerator::javaValue).collect(Collectors.joining(", "));
+            return "apply(" + javaString(parameterized.getFirst()) + ", " + joined + ")";
+        }
         if (condition instanceof Condition.Group g) return renderGroup(g, entity);
         if (condition instanceof Condition.ColumnComparison cc) {
             return "apply(\"" + javaEscape(cc.getLeft().getColumnName()) + " = " + cc.getRight().getColumnName() + "\")";
@@ -957,6 +1101,33 @@ public final class JavaCodeGenerator {
     }
 
     // ------------------------------------------------------------------
+    // 参数化 apply（T-SqlToJavaPromote G7）
+    // ------------------------------------------------------------------
+
+    /** `表达式 比较符 字面量` 形态识别正则（右值：SQL 字符串或数字）。 */
+    private static final java.util.regex.Pattern RAW_PARAM_REGEX = java.util.regex.Pattern.compile(
+            "^(.*?)\\s*(=|!=|<>|>=|<=|>|<)\\s*('(?:[^']|'')*'|-?\\d+(?:\\.\\d+)?)$");
+
+    /**
+     * Raw 条件参数化：`DATE_FORMAT(create_time, '%Y') = '2024'` → ("DATE_FORMAT(create_time, '%Y') = {0}", ['2024'])。
+     * 不可识别形态返回 (原文, 空)——调用方回落整段字符串 apply。
+     */
+    private static Pair<String, List<SqlValue>> parameterizeRaw(String sql) {
+        java.util.regex.Matcher m = RAW_PARAM_REGEX.matcher(sql);
+        if (!m.matches()) return new Pair<>(sql, List.of());
+        String expr = m.group(1).trim();
+        String op = m.group(2);
+        String literal = m.group(3);
+        SqlValue value;
+        if (literal.startsWith("'")) {
+            value = new SqlValue.Literal(literal, literal.substring(1, literal.length() - 1).replace("''", "'"));
+        } else {
+            value = new SqlValue.Literal(literal);
+        }
+        return new Pair<>(expr + " " + op + " {0}", List.of(value));
+    }
+
+    // ------------------------------------------------------------------
     // ORDER BY / LIMIT
     // ------------------------------------------------------------------
 
@@ -992,6 +1163,60 @@ public final class JavaCodeGenerator {
                 : (limit.getOffset() instanceof SqlValue.Literal lit ? lit.getRaw() : "?");
         String count = (limit.getCount() instanceof SqlValue.Literal lit) ? lit.getRaw() : "?";
         return offset != null ? "LIMIT " + offset + ", " + count : "LIMIT " + count;
+    }
+
+    /** LIMIT 尾段（T-SqlToJavaPromote G4：FOR UPDATE 与 LIMIT 并存时合并单 last——MP last 只保留末位）。 */
+    private static String renderLimitTail(LimitClause limit, boolean forUpdate) {
+        return renderLimit(limit) + (forUpdate ? " FOR UPDATE" : "");
+    }
+
+    /** SELECT 列原文（含 AS 别名）——DISTINCT 单串 select 用。 */
+    private static String renderSelectRaw(SelectColumn sel) {
+        return sel.alias() != null ? sel.expr() + " AS " + sel.alias() : sel.expr();
+    }
+
+    /** GROUP BY 渲染（T-SqlToJavaPromote G1）：列引用走 renderColumnRef（lambda 映射/字符串回落）。 */
+    private static List<String> renderGroupBy(SqlReverseResult result, EntityTarget entity) {
+        if (result.groupBy().isEmpty()) return List.of();
+        String cols = result.groupBy().stream()
+                .map(it -> renderColumnRef(it.getColumnName(), entity, it.getTableAlias()))
+                .collect(Collectors.joining(", "));
+        return List.of("groupBy(" + cols + ")");
+    }
+
+    /** HAVING 渲染（T-SqlToJavaPromote G2）：聚合表达式经 Raw 降级后原样进 having(String, Object...) 首参。 */
+    private static String renderHaving(Condition h, EntityTarget entity) {
+        return "having(" + javaString(renderHavingText(h)) + ")";
+    }
+
+    /** HAVING 条件 → SQL 片段文本（值内嵌；参数化升级在 G7）。 */
+    private static String renderHavingText(Condition h) {
+        if (h instanceof Condition.Raw r) return r.getSqlText();
+        if (h instanceof Condition.Simple s) return s.getColumn().getColumnName() + " " + s.getOp() + " " + havingValue(s.getValue());
+        if (h instanceof Condition.Unary u) return u.getColumn().getColumnName() + " " + u.getOp();
+        if (h instanceof Condition.In in) {
+            return in.getColumn().getColumnName() + " " + (in.getNegated() ? "NOT IN" : "IN") + " ("
+                    + in.getValues().stream().map(JavaCodeGenerator::havingValue).collect(Collectors.joining(", ")) + ")";
+        }
+        if (h instanceof Condition.Between b) {
+            return b.getColumn().getColumnName() + " " + (b.getNegated() ? "NOT BETWEEN" : "BETWEEN") + " "
+                    + havingValue(b.getLo()) + " AND " + havingValue(b.getHi());
+        }
+        if (h instanceof Condition.Like l) {
+            return l.getColumn().getColumnName() + " " + (l.getNegated() ? "NOT LIKE" : "LIKE") + " " + havingValue(l.getPattern());
+        }
+        if (h instanceof Condition.ColumnComparison cc) {
+            return cc.getLeft().getColumnName() + " = " + cc.getRight().getColumnName();
+        }
+        if (h instanceof Condition.Group g) {
+            return g.getChildren().stream().map(JavaCodeGenerator::renderHavingText).collect(Collectors.joining(" AND "));
+        }
+        return "";
+    }
+
+    /** HAVING 值：字面量原样；占位符 `?`。 */
+    private static String havingValue(SqlValue v) {
+        return (v instanceof SqlValue.Literal lit) ? lit.getRaw() : "?";
     }
 
     // ------------------------------------------------------------------
@@ -1062,8 +1287,10 @@ public final class JavaCodeGenerator {
             SqlValue value = colIndex < row.size() ? row.get(colIndex) : null;
             if (i == 0) sb.append("new ").append(entityName).append("()");
             else sb.append("\n    ");
-            sb.append(".set").append(capitalize(fieldBase)).append("(")
-                    .append(value != null ? javaValue(value) : "null").append(")");
+            // T-SqlToJavaPromote G6：INSERT NULL 建模为 Literal("NULL") → 生成 Java null
+            String rendered = (value instanceof SqlValue.Literal lit && "NULL".equals(lit.getRaw()))
+                    ? "null" : (value != null ? javaValue(value) : "null");
+            sb.append(".set").append(capitalize(fieldBase)).append("(").append(rendered).append(")");
         }
         return sb.toString();
     }

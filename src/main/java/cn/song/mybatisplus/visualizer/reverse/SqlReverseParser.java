@@ -61,30 +61,36 @@ public final class SqlReverseParser {
         );
     }
 
-    /** SELECT 主体：列清单 + FROM 表 + 子句序列。 */
+    /** SELECT 主体：列清单 + FROM 表 + 子句序列（T-M37：含 JOIN 解析）。 */
     private SqlReverseResult parseSelectBody(Cursor cursor) {
-        List<SelectColumn> selectColumns = parseSelectColumns(cursor);
+        Pair<List<SelectColumn>, Boolean> selectParsed = parseSelectColumns(cursor);
+        List<SelectColumn> selectColumns = selectParsed.first();
+        boolean distinct = selectParsed.second();
         if (!cursor.isKeyword(cursor.current(), "FROM")) {
             throw new SqlReverseException(cursor.current() != null ? cursor.current().offset() : 0, KEY_PARSE, "缺少 FROM 子句");
         }
         cursor.advance();
+        String tableAlias;
         String tableName;
         if (cursor.current() != null && cursor.current().type() == TokenType.SYMBOL && "(".equals(cursor.current().text())) {
+            // FROM 子查询：别名已并入 tableName 文本（parseSubqueryTable 返回含别名的整段），此处无独立别名
+            tableAlias = null;
             tableName = parseSubqueryTable(cursor).first;
         } else {
             String name = parseTableName(cursor);
-            consumeOptionalAlias(cursor);
+            tableAlias = consumeOptionalAlias(cursor);
             tableName = name;
         }
         TailClauses tail = parseTailClauses(cursor, true);
         return new SqlReverseResult(tableName, selectColumns, tail.conditions(), tail.orderBy(), tail.limit(),
-                tail.warnings(), ReverseStatementKind.SELECT, List.of(), List.of(), List.of(), tail.joins(), List.of());
+                tail.warnings(), ReverseStatementKind.SELECT, List.of(), List.of(), List.of(), tail.joins(), List.of(),
+                tableAlias, distinct, tail.groupBy(), tail.having(), tail.unions(), tail.forUpdate());
     }
 
-    /** UPDATE 主体：表 + SET 赋值 + 子句序列。 */
+    /** UPDATE 主体：表 + SET 赋值 + 子句序列（T-M36.7）。 */
     private SqlReverseResult parseUpdateBody(Cursor cursor) {
         String tableName = parseTableName(cursor);
-        consumeOptionalAlias(cursor);
+        String tableAlias = consumeOptionalAlias(cursor);
         if (!cursor.isKeyword(cursor.current(), "SET")) {
             throw new SqlReverseException(cursor.current() != null ? cursor.current().offset() : 0, KEY_PARSE, "UPDATE 缺少 SET 子句");
         }
@@ -92,10 +98,15 @@ public final class SqlReverseParser {
         List<ReverseSet> sets = parseSets(cursor);
         TailClauses tail = parseTailClauses(cursor);
         return new SqlReverseResult(tableName, null, tail.conditions(), tail.orderBy(), tail.limit(),
-                tail.warnings(), ReverseStatementKind.UPDATE, sets, List.of(), List.of(), List.of(), List.of());
+                tail.warnings(), ReverseStatementKind.UPDATE, sets, List.of(), List.of(), List.of(), List.of(),
+                tableAlias, false, List.of(), null, List.of(), false);
     }
 
-    /** DELETE 主体（含多表删除）。 */
+    /**
+     * DELETE 主体（T-M36.7 + 多表删除）：
+     * `DELETE FROM 表 [WHERE ...]`（无目标清单，单表，现状不变）或
+     * `DELETE t, t1 FROM 表 [别名] [JOIN 链] [WHERE ...]`（目标清单 → deleteTargets，联表删除）。
+     */
     private SqlReverseResult parseDeleteBody(Cursor cursor) {
         List<String> deleteTargets = new ArrayList<>();
         if (!cursor.isKeyword(cursor.current(), "FROM")) {
@@ -119,10 +130,12 @@ public final class SqlReverseParser {
         }
         cursor.advance();
         String tableName = parseTableName(cursor);
-        consumeOptionalAlias(cursor);
+        String tableAlias = consumeOptionalAlias(cursor);
+        // 联表删除：DELETE 的尾子句放开 JOIN（UPDATE 的 JOIN 保持报错不变）
         TailClauses tail = parseTailClauses(cursor, true);
         return new SqlReverseResult(tableName, null, tail.conditions(), tail.orderBy(), tail.limit(),
-                tail.warnings(), ReverseStatementKind.DELETE, List.of(), List.of(), List.of(), tail.joins(), deleteTargets);
+                tail.warnings(), ReverseStatementKind.DELETE, List.of(), List.of(), List.of(), tail.joins(), deleteTargets,
+                tableAlias, false, List.of(), null, List.of(), false);
     }
 
     /** INSERT 主体：INTO 表 (列清单) VALUES (值清单)。 */
@@ -153,13 +166,16 @@ public final class SqlReverseParser {
             throw new SqlReverseException(cursor.current() != null ? cursor.current().offset() : 0, KEY_PARSE, "INSERT 缺少 VALUES");
         }
         cursor.advance();
+        // VALUES 多行：`(v1, v2), (v3, v4)`——每行独立值列表；行内列数须与列清单一致，不齐报 KEY_PARSE
         List<List<SqlValue>> rows = new ArrayList<>();
         while (true) {
             expectSymbol(cursor, "(");
             List<SqlValue> values = new ArrayList<>();
             while (true) {
+                // T-SqlToJavaPromote G6：NULL 字面量（parseValue 返回 null）建模为 Literal("NULL")
+                // ——Java 生成 null、SQL 重渲染 NULL；不再报错
                 SqlValue value = parseValue(cursor);
-                if (value == null) throw new SqlReverseException(cursor.previousOffset(), KEY_PARSE, "INSERT 值不支持 NULL");
+                if (value == null) value = new SqlValue.Literal("NULL");
                 values.add(value);
                 if (cursor.isSymbol(cursor.current(), ",")) {
                     cursor.advance();
@@ -179,7 +195,8 @@ public final class SqlReverseParser {
             break;
         }
         return new SqlReverseResult(tableName, null, List.of(), List.of(), null, List.of(),
-                ReverseStatementKind.INSERT, List.of(), columns, rows, List.of(), List.of());
+                ReverseStatementKind.INSERT, List.of(), columns, rows, List.of(), List.of(),
+                null, false, List.of(), null, List.of(), false);
     }
 
     /** SET 赋值清单。 */
@@ -223,12 +240,20 @@ public final class SqlReverseParser {
         return parseTailClauses(cursor, false);
     }
 
+    /**
+     * 尾子句序列（SELECT/UPDATE/DELETE 共用）：WHERE / ORDER BY / LIMIT 及不支持子句报错。
+     * T-M37：allowJoin=true（SELECT）时解析 JOIN 链；DELETE 多表删除同样放开（UPDATE 保持报错）。
+     */
     private TailClauses parseTailClauses(Cursor cursor, boolean allowJoin) {
         List<String> warnings = new ArrayList<>();
         List<Condition> conditions = List.of();
         List<OrderByItem> orderBy = List.of();
         LimitClause limit = null;
         List<ReverseJoin> joins = new ArrayList<>();
+        List<ColumnRef> groupBy = List.of();
+        Condition having = null;
+        boolean forUpdate = false;
+        List<ReverseUnion> unions = new ArrayList<>();
         while (true) {
             Token t = cursor.current();
             if (t == null) break;
@@ -239,6 +264,13 @@ public final class SqlReverseParser {
                 cursor.advance();
                 expectKeyword(cursor, "BY");
                 orderBy = parseOrderBy(cursor);
+            } else if (cursor.isKeyword(t, "GROUP")) {
+                cursor.advance();
+                expectKeyword(cursor, "BY");
+                groupBy = parseGroupBy(cursor);
+            } else if (cursor.isKeyword(t, "HAVING")) {
+                cursor.advance();
+                having = parseHaving(cursor, warnings);
             } else if (cursor.isKeyword(t, "LIMIT")) {
                 cursor.advance();
                 limit = parseLimit(cursor);
@@ -250,14 +282,22 @@ public final class SqlReverseParser {
                 limit = parseFetchFirst(cursor);
             } else if (allowJoin && isJoinStart(cursor)) {
                 joins.add(parseJoin(cursor, warnings));
-            } else if (cursor.isKeyword(t, "GROUP")) {
-                unsupported(cursor, "GROUP BY");
-            } else if (cursor.isKeyword(t, "HAVING")) {
-                unsupported(cursor, "HAVING");
-            } else if (cursor.isKeyword(t, "UNION")) {
-                unsupported(cursor, "UNION");
             } else if (cursor.isKeyword(t, "FOR")) {
-                unsupported(cursor, "FOR UPDATE");
+                // FOR UPDATE（MySQL/PostgreSQL 行锁）；FOR 后非 UPDATE → 不支持
+                if (cursor.isKeyword(cursor.peek(), "UPDATE")) {
+                    cursor.advance();
+                    cursor.advance();
+                    forUpdate = true;
+                } else {
+                    unsupported(cursor, "FOR 子句");
+                }
+            } else if (cursor.isKeyword(t, "UNION")) {
+                // T-SqlToJavaPromote G8：UNION [ALL] 子查询——收集 keyword + 子查询原文
+                // （MP core 无 union() 方法、MPJ 签名本地不可得 → 模型层原文承载，Java 生成层降级注释）
+                cursor.advance();
+                boolean all = cursor.isKeyword(cursor.current(), "ALL");
+                if (all) cursor.advance();
+                unions.add(new ReverseUnion(all ? "UNION ALL" : "UNION", collectUnionSubquery(cursor)));
             } else if (cursor.isKeyword(t, "JOIN") || cursor.isKeyword(t, "LEFT") || cursor.isKeyword(t, "RIGHT")
                     || cursor.isKeyword(t, "INNER") || cursor.isKeyword(t, "FULL") || cursor.isKeyword(t, "CROSS")) {
                 unsupported(cursor, "JOIN");
@@ -269,7 +309,7 @@ public final class SqlReverseParser {
                 throw new SqlReverseException(t.offset(), KEY_PARSE, "无法识别的子句：" + t.text());
             }
         }
-        return new TailClauses(conditions, orderBy, limit, warnings, joins);
+        return new TailClauses(conditions, orderBy, limit, warnings, joins, groupBy, having, forUpdate, unions);
     }
 
     /** 尾子句解析产物。 */
@@ -278,8 +318,55 @@ public final class SqlReverseParser {
             List<OrderByItem> orderBy,
             LimitClause limit,
             List<String> warnings,
-            List<ReverseJoin> joins
+            List<ReverseJoin> joins,
+            List<ColumnRef> groupBy,
+            Condition having,
+            boolean forUpdate,
+            List<ReverseUnion> unions
     ) {
+    }
+
+    /** UNION 后子查询原文收集：推进到下一个 UNION 或语句尾，取原文；首尾括号剥除（渲染 `UNION (子查询)` 单层括号）。 */
+    private String collectUnionSubquery(Cursor cursor) {
+        Token cur = cursor.current();
+        if (cur == null) throw new SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "UNION 后缺少子查询");
+        int start = cur.offset();
+        while (cursor.current() != null && !cursor.isKeyword(cursor.current(), "UNION")) {
+            cursor.advance();
+        }
+        Token last = getOrNull(cursor.tokens, cursor.pos - 1);
+        int end = last != null ? last.offset() + last.text().length() : start;
+        String raw = cursor.source.substring(start, end).trim();
+        if (raw.startsWith("(") && raw.endsWith(")")) {
+            return raw.substring(1, raw.length() - 1).trim();
+        }
+        return raw;
+    }
+
+    /** GROUP BY 列清单：`列[, 列...]`（点分/反引号同列引用）。 */
+    private List<ColumnRef> parseGroupBy(Cursor cursor) {
+        List<ColumnRef> columns = new ArrayList<>();
+        while (true) {
+            columns.add(parseColumnRef(cursor));
+            if (cursor.isSymbol(cursor.current(), ",")) {
+                cursor.advance();
+                continue;
+            }
+            break;
+        }
+        return columns;
+    }
+
+    /**
+     * HAVING 条件（T-SqlToJavaPromote G2）：单条件直取；多条件包 {@link Condition.Group}(AND)。
+     * 聚合表达式（`COUNT(*) > 1`）经 {@link #parseCondition} 的 KEY_UNSUPPORTED 降级为 {@link Condition.Raw}（记 warning）。
+     */
+    private Condition parseHaving(Cursor cursor, List<String> warnings) {
+        List<Condition> conditions = parseConditionList(cursor, warnings);
+        if (conditions.isEmpty()) {
+            throw new SqlReverseException(cursor.offsetAtEnd(), KEY_PARSE, "HAVING 后缺少条件");
+        }
+        return conditions.size() == 1 ? conditions.get(0) : new Condition.Group(Connector.AND, conditions, null, false);
     }
 
     /** JOIN 起始判定。 */
@@ -379,10 +466,20 @@ public final class SqlReverseParser {
         return conditions;
     }
 
-    /** SELECT 列清单。 */
-    private List<SelectColumn> parseSelectColumns(Cursor cursor) {
+    /**
+     * 解析 SELECT 与 FROM 之间的列清单。
+     *
+     * 收集「简单列」（标识符 / 点分 / 反引号，可带 AS 别名）与「函数/聚合列」
+     * （T-SqlToJavaPromote G5：`COUNT(*) AS cnt` 等收集原文，不再放弃）；`*` 或裸括号
+     * 表达式时整体放弃（返回 null——生成器不生成 select() 调用，MP 全列语义）。
+     * T-M37：保留原文（含表别名前缀与反引号）——多表列归属由生成器拆分（renderSelectRef）。
+     * T-M46：捕获 AS 别名（SelectColumn.alias）——生成 selectAs。
+     * 返回 (列清单, DISTINCT)（T-SqlToJavaPromote G3：DISTINCT 建模为 distinct=true，不放弃列）。
+     */
+    private Pair<List<SelectColumn>, Boolean> parseSelectColumns(Cursor cursor) {
         List<SelectColumn> columns = new ArrayList<>();
         boolean anyComplex = false;
+        boolean distinct = false;
         while (true) {
             Token t = cursor.current();
             if (t == null) break;
@@ -397,33 +494,61 @@ public final class SqlReverseParser {
                 continue;
             }
             if (t.type() == TokenType.WORD) {
+                // DISTINCT：建模 distinct=true，继续收集列（T-SqlToJavaPromote G3）
                 if (cursor.isKeyword(t, "DISTINCT")) {
-                    anyComplex = true;
+                    distinct = true;
                     cursor.advance();
                     continue;
                 }
                 if (isFunctionCall(cursor)) {
-                    anyComplex = true;
-                    skipExpression(cursor);
+                    // 函数/聚合列：收集原文（含平衡括号）+ 可选 AS 别名（T-SqlToJavaPromote G5）
+                    String expr = collectFunctionExpr(cursor);
+                    String alias = consumeSelectAlias(cursor);
+                    columns.add(new SelectColumn(expr, alias));
                     continue;
                 }
                 String expr = consumeQualified(cursor);
                 String alias = consumeSelectAlias(cursor);
                 columns.add(new SelectColumn(expr, alias));
             } else if (t.type() == TokenType.SYMBOL && "(".equals(t.text())) {
+                // 裸括号表达式（少见）→ 放弃 select 生成，整体跳过
                 anyComplex = true;
                 skipBalanced(cursor);
             } else {
                 break;
             }
         }
-        return anyComplex ? null : columns;
+        return new Pair<>(anyComplex ? null : columns, distinct);
     }
 
     /** 当前 WORD 后紧跟 `(` → 函数调用。 */
     private boolean isFunctionCall(Cursor cursor) {
         Token next = cursor.peek();
         return next != null && next.type() == TokenType.SYMBOL && "(".equals(next.text());
+    }
+
+    /**
+     * 收集函数列原文：函数名 + 平衡括号内容（`COUNT(*)` / `DATE_FORMAT(create_time, '%Y-%m')`）。
+     * 消费到顶层 `)` 结束；返回源文本（不含 AS 别名）。
+     */
+    private String collectFunctionExpr(Cursor cursor) {
+        Token startToken = cursor.current();
+        if (startToken == null) return "";
+        int start = startToken.offset();
+        cursor.advance(); // 函数名
+        int depth = 0;
+        while (true) {
+            Token t = cursor.advance();
+            if (t == null) break;
+            if (t.type() == TokenType.SYMBOL && "(".equals(t.text())) depth++;
+            if (t.type() == TokenType.SYMBOL && ")".equals(t.text())) {
+                depth--;
+                if (depth == 0) break;
+            }
+        }
+        Token last = getOrNull(cursor.tokens, cursor.pos - 1);
+        int end = last != null ? last.offset() + last.text().length() : cursor.source.length();
+        return cursor.source.substring(start, end);
     }
 
     /** 消费 `AS 别名` 或直接别名。 */
@@ -532,19 +657,23 @@ public final class SqlReverseParser {
         }
     }
 
-    /** 可选表别名。 */
-    private void consumeOptionalAlias(Cursor cursor) {
+    /** 可选表别名：`FROM user u`——u 非子句关键字时视为别名消费（T-M36.7：SET/INTO 亦为边界）；
+     * 返回别名（无别名返回 null）。T-SqlToJavaPromote M1：返回值供主表别名建模。 */
+    private String consumeOptionalAlias(Cursor cursor) {
         Token t = cursor.current();
-        if (t == null) return;
+        if (t == null) return null;
         if (t.type() == TokenType.WORD && !cursor.isKeyword(t, "WHERE") && !cursor.isKeyword(t, "GROUP") &&
                 !cursor.isKeyword(t, "ORDER") && !cursor.isKeyword(t, "LIMIT") && !cursor.isKeyword(t, "HAVING") &&
                 !cursor.isKeyword(t, "UNION") && !cursor.isKeyword(t, "JOIN") && !cursor.isKeyword(t, "FOR") &&
                 !cursor.isKeyword(t, "SET") && !cursor.isKeyword(t, "INTO") &&
+                // T-M43：分页关键字不当作表别名（`FROM t OFFSET 5 ROWS...` 的 OFFSET 是分页子句）
                 !cursor.isKeyword(t, "OFFSET") && !cursor.isKeyword(t, "FETCH") &&
                 !cursor.isKeyword(t, "LEFT") && !cursor.isKeyword(t, "RIGHT") && !cursor.isKeyword(t, "INNER") &&
                 !cursor.isKeyword(t, "FULL") && !cursor.isKeyword(t, "CROSS")) {
             cursor.advance();
+            return stripBackticks(t.text());
         }
+        return null;
     }
 
     /** 条件序列（顶层按 OR 分段）。 */
@@ -639,7 +768,15 @@ public final class SqlReverseParser {
         if (t.type() == TokenType.SYMBOL && "<".equals(t.text())) {
             cursor.advance();
             String nt = cursor.current() != null ? cursor.current().text() : null;
-            if ("=".equals(nt)) { cursor.advance(); return parseBinary(cursor, column, "<="); }
+            if ("=".equals(nt)) {
+                cursor.advance();
+                if (cursor.isSymbol(cursor.current(), ">")) {
+                    // T-SqlToJavaPromote G10：`<=>` NULL-safe 等值——MP 无对应方法 → 降级 Raw
+                    cursor.advance();
+                    unsupported(cursor, "<=> 空安全比较");
+                }
+                return parseBinary(cursor, column, "<=");
+            }
             if (">".equals(nt)) { cursor.advance(); return parseBinary(cursor, column, "<>"); }
             return parseBinary(cursor, column, "<");
         }
@@ -678,7 +815,9 @@ public final class SqlReverseParser {
         if (t.type() == TokenType.SYMBOL && "(".equals(t.text())) {
             unsupported(cursor, "函数表达式 " + column.getColumnName() + "(...)");
         }
-        throw new SqlReverseException(t.offset(), KEY_PARSE, "无法识别的条件操作符：" + t.text());
+        // T-SqlToJavaPromote G10：列名后无法识别的操作符（算术表达式 `price*qty`、ILIKE 等）
+        // → 抛 KEY_UNSUPPORTED 走降级 Raw 透传（「任何条件都不挡路」原则）
+        return unsupported(cursor, "条件操作符 " + t.text());
     }
 
     /**
@@ -744,7 +883,9 @@ public final class SqlReverseParser {
         if ("=".equals(sqlOp)) {
             Token next = cursor.current();
             if (next != null && next.type() == TokenType.WORD && !cursor.isKeyword(next, "TRUE") &&
-                    !cursor.isKeyword(next, "FALSE") && !cursor.isKeyword(next, "NULL")) {
+                    !cursor.isKeyword(next, "FALSE") && !cursor.isKeyword(next, "NULL") &&
+                    // T-SqlToJavaPromote G10：DATE/TIMESTAMP 类型字面量（后随字符串）排除出列对列判定
+                    !cursor.isKeyword(next, "DATE") && !cursor.isKeyword(next, "TIMESTAMP")) {
                 Token after = cursor.peek();
                 boolean isFunction = after != null && after.type() == TokenType.SYMBOL && "(".equals(after.text());
                 if (!isFunction) {
@@ -883,6 +1024,18 @@ public final class SqlReverseParser {
                 if ("NULL".equals(up)) {
                     cursor.advance();
                     yield null;
+                }
+                if ("DATE".equals(up) || "TIMESTAMP".equals(up)) {
+                    // ANSI 类型字面量（T-SqlToJavaPromote G10）：DATE '2024-01-01' / TIMESTAMP '...'
+                    // raw 保留前缀（往返渲染一致）；后续须是字符串字面量
+                    Token next = cursor.peek();
+                    if (next == null || next.type() != TokenType.STRING) {
+                        throw new SqlReverseException(t.offset(), KEY_UNSUPPORTED, "类型字面量 " + t.text() + " 后缺少字符串");
+                    }
+                    String prefix = t.text().toUpperCase();
+                    cursor.advance();
+                    cursor.advance();
+                    yield new SqlValue.Literal(prefix + " " + next.text(), decodeString(next.text()));
                 }
                 throw new SqlReverseException(t.offset(), KEY_UNSUPPORTED, "标识符值 " + t.text() + "（列对列比较/函数表达式暂不支持）");
             }

@@ -55,16 +55,25 @@ public final class SqlTokenizer {
                 }
                 tokens.add(new Token(TokenType.STRING, r.getSecond(), i));
                 i = r.getFirst();
-            } else if (c == '`') {
-                int end = sql.indexOf('`', i + 1);
+            } else if (c == '`' || c == '"') {
+                // 反引号/双引号包裹的标识符（T-SqlToJavaPromote G10：双引号标识符方言宽容，标准 SQL/SQL Server）
+                int end = sql.indexOf(c, i + 1);
                 if (end < 0) {
-                    throw new SqlReverseException(i, SqlReverseParser.KEY_PARSE, "未闭合的反引号标识符");
+                    throw new SqlReverseException(i, SqlReverseParser.KEY_PARSE, "未闭合的 " + c + " 标识符");
                 }
                 tokens.add(new Token(TokenType.WORD, sql.substring(i, end + 1), i));
                 i = end + 1;
             } else if (Character.isDigit(c) || (c == '.' && i + 1 < sql.length() && Character.isDigit(sql.charAt(i + 1)))) {
                 int j = i + 1;
-                while (j < sql.length() && (Character.isDigit(sql.charAt(j)) || sql.charAt(j) == '.')) j++;
+                // 十六进制字面量（0x1F，T-SqlToJavaPromote G10）：0 后跟 x 时按十六进制扫描
+                if (c == '0' && j < sql.length() && (sql.charAt(j) == 'x' || sql.charAt(j) == 'X')) {
+                    j++;
+                    while (j < sql.length() && (Character.isDigit(sql.charAt(j))
+                            || (sql.charAt(j) >= 'a' && sql.charAt(j) <= 'f')
+                            || (sql.charAt(j) >= 'A' && sql.charAt(j) <= 'F'))) j++;
+                } else {
+                    while (j < sql.length() && (Character.isDigit(sql.charAt(j)) || sql.charAt(j) == '.')) j++;
+                }
                 tokens.add(new Token(TokenType.NUMBER, sql.substring(i, j), i));
                 i = j;
             } else if (Character.isLetterOrDigit(c) || c == '_') {
@@ -97,10 +106,18 @@ public final class SqlTokenizer {
         return end < 0 ? sql.length() : end + 2;
     }
 
-    /** 读取配对引号包裹内容（SQL 双写转义 `''`）；返回 (结束索引, 含引号原文)；未闭合返回 (-1, "")。 */
+    /**
+     * 读取配对引号包裹内容（SQL 双写转义 `''` + 反斜杠转义 `\'`，T-SqlToJavaPromote G10）；
+     * 返回 (结束索引, 含引号原文)；未闭合返回 (-1, "")。
+     */
     private static Pair<Integer, String> readQuoted(String sql, int start, char quote) {
         int j = start + 1;
         while (j < sql.length()) {
+            if (sql.charAt(j) == '\\' && j + 1 < sql.length()) {
+                // 反斜杠转义（MySQL `\'` / `\\`）：跳过下一个字符
+                j += 2;
+                continue;
+            }
             if (sql.charAt(j) == quote) {
                 if (j + 1 < sql.length() && sql.charAt(j + 1) == quote) {
                     j += 2;

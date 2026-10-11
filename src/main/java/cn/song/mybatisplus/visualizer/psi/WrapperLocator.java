@@ -427,7 +427,9 @@ public final class WrapperLocator {
         while (expr instanceof PsiMethodCallExpression) {
             PsiMethodCallExpression call = (PsiMethodCallExpression) expr;
             String referenceName = call.getMethodExpression().getReferenceName();
-            if (referenceName != null && CHAIN_TERMINAL_METHOD_NAMES.contains(referenceName)) return false;
+            // T-ExistsChainTerminal：带参 exists 是条件方法（非终结点），不得据此拒收 wrapper 变量
+            if (referenceName != null && CHAIN_TERMINAL_METHOD_NAMES.contains(referenceName)
+                    && !isExistsConditionCall(call)) return false;
             expr = call.getMethodExpression().getQualifierExpression();
         }
         return wrapperTypeFromInitializerChain(init) != null;
@@ -558,13 +560,15 @@ public final class WrapperLocator {
             && EXISTS_CONSUMER.equals(consuming.getMethodExpression().getReferenceName());
         boolean updateEntityConsumed = isEntityUpdateConsumer(newExpr);
         // T-M29-02/03：分页消费（`service.page(page, new W()...)`）——Page 实参解析为 LIMIT 子句
-        LimitClause pageLimit = consuming != null
+        // R12 T-PaginationSim：连同 searchCount 标志一并解析（D3=A）
+        PageArg pageArg = consuming != null
             && PAGE_CONSUMER_METHOD_NAMES.contains(consuming.getMethodExpression().getReferenceName())
-            ? parsePageLimit(consuming) : null;
+            ? parsePageArg(consuming) : null;
 
         WrapperChain chain = new WrapperChain(wrapperType, resolvedEntity != null ? resolvedEntity.getName() : null,
             wrapperCalls, constructorAlias, deleteConsumed, countConsumed, existsConsumed,
-            updateEntityConsumed, pageLimit);
+            updateEntityConsumed, pageArg != null ? pageArg.limit : null,
+            pageArg != null ? pageArg.searchCount : true);
         return new LocatedWrapper(chain, table, resolvedEntity != null ? resolvedEntity.getContainingFile() : null);
     }
 
@@ -674,9 +678,14 @@ public final class WrapperLocator {
             }
         }
         PsiMethodCallExpression terminal = null;
+        // T-ExistsChainTerminal：终结点判定排除「带参 exists」——它是条件方法而非终结点。裸工厂链直接作
+        // service 实参时链内无真终结点，旧判定会选中带参 exists → 条件丢失 + 整链误包 SELECT EXISTS
         for (int i = clearedCalls.size() - 1; i >= 0; i--) {
-            if (CHAIN_TERMINAL_METHOD_NAMES.contains(clearedCalls.get(i).getMethodExpression().getReferenceName())) {
-                terminal = clearedCalls.get(i);
+            PsiMethodCallExpression candidate = clearedCalls.get(i);
+            String candidateName = candidate.getMethodExpression().getReferenceName();
+            if (candidateName != null && CHAIN_TERMINAL_METHOD_NAMES.contains(candidateName)
+                    && !isExistsConditionCall(candidate)) {
+                terminal = candidate;
                 break;
             }
         }
@@ -693,7 +702,8 @@ public final class WrapperLocator {
         boolean chainUpdateEntity = UPDATE_TERMINAL.equals(terminalName)
             && terminal != null && terminal.getArgumentList().getExpressions().length > 0;
         // T-M29-02/03：链式分页终结点（`service.lambdaQuery()...page(new Page<>(...))`）——Page 实参解析为 LIMIT
-        LimitClause chainPageLimit = PAGE_TERMINAL.equals(terminalName) ? parsePageLimit(terminal) : null;
+        // R12 T-PaginationSim：连同 searchCount 标志一并解析（D3=A）
+        PageArg chainPageArg = PAGE_TERMINAL.equals(terminalName) ? parsePageArg(terminal) : null;
 
         List<WrapperCall> wrapperCalls = new ArrayList<>();
         for (PsiMethodCallExpression call : nonTerminalCalls) {
@@ -711,16 +721,19 @@ public final class WrapperLocator {
             || (consuming != null && EXISTS_CONSUMER.equals(consuming.getMethodExpression().getReferenceName()));
         boolean updateEntityConsumed = isEntityUpdateConsumer(factoryCall) || chainUpdateEntity;
         // T-M29-02/03：分页消费（链式终结点 page / `service.page(page, Wrappers.lambdaQuery()...)` 实参形态）
-        LimitClause pageLimit = chainPageLimit;
-        if (pageLimit == null && consuming != null
+        // R12 T-PaginationSim：链式终结点优先，实参形态次之；searchCount 取命中形态的解析值
+        PageArg pageArg = chainPageArg;
+        if (pageArg == null && consuming != null
             && PAGE_CONSUMER_METHOD_NAMES.contains(consuming.getMethodExpression().getReferenceName())) {
-            pageLimit = parsePageLimit(consuming);
+            pageArg = parsePageArg(consuming);
         }
+        LimitClause pageLimit = pageArg != null ? pageArg.limit : null;
 
         String entityName = table != null && table.getEntityClassName() != null
             ? table.getEntityClassName() : (entityClass != null ? entityClass.getName() : null);
         WrapperChain chain = new WrapperChain(wrapperType, entityName, wrapperCalls, null,
-            deleteConsumed, countConsumed, existsConsumed, updateEntityConsumed, pageLimit);
+            deleteConsumed, countConsumed, existsConsumed, updateEntityConsumed, pageLimit,
+            pageArg != null ? pageArg.searchCount : true);
 
         // O-8（缺陷 B）：字符串服务链实体解析失败标记（preview 侧显式降级，不再静默 null）——
         // 仅服务链形态（接收者非静态工厂类：Wrappers/ChainWrappers/MPJ/Db 解析为 PsiClass 排除，
@@ -1138,7 +1151,9 @@ public final class WrapperLocator {
         boolean existsConsumed = false;
         boolean updateEntityConsumed = false;
         // T-M29-02/03：分页消费（`service.page(new Page<>(...), wrapper)`）→ Page 实参解析的 LIMIT 子句
+        // R12 T-PaginationSim：连同 searchCount 标志一并解析（D3=A，默认 true 对齐 MP Page 默认）
         LimitClause pageLimit = null;
+        boolean pageSearchCount = true;
 
         // 1. 初始化表达式中的链式调用；若链首为工厂方法调用（baseJoinWrapper()），展开其方法体内的 wrapper 链（P03）；
         //    Wrappers 静态工厂调用（Wrappers.<T>lambdaQuery()）不是 Wrapper 操作，从链中剔除
@@ -1164,7 +1179,13 @@ public final class WrapperLocator {
             // T-M29-02：分页消费（`service.page(page, wrapper)` / `mapper.selectPage(page, wrapper)`）
             if (pageLimit == null) {
                 PsiMethodCallExpression pageCall = pageConsumingCall(refExpression);
-                if (pageCall != null) pageLimit = parsePageLimit(pageCall);
+                if (pageCall != null) {
+                    PageArg arg = parsePageArg(pageCall);
+                    if (arg != null) {
+                        pageLimit = arg.limit;
+                        pageSearchCount = arg.searchCount;
+                    }
+                }
             }
             // w 引用的 PSI 结构：w.eq(...) 中 w 引用 → methodExpression(eq 引用) → PsiMethodCallExpression
             // 向上遍历找最近的调用表达式
@@ -1248,7 +1269,7 @@ public final class WrapperLocator {
         WrapperChain chain = new WrapperChain(wrapperType,
             info.entityClass != null ? info.entityClass.getName() : null,
             wrapperCalls, constructorAlias, deleteConsumed, countConsumed, existsConsumed,
-            updateEntityConsumed, pageLimit);
+            updateEntityConsumed, pageLimit, pageSearchCount);
         return new LocatedWrapper(chain, table, null);
     }
 
@@ -1387,6 +1408,19 @@ public final class WrapperLocator {
      * </ul>
      */
     private static LimitClause parsePageLimit(PsiMethodCallExpression call) {
+        PageArg arg = parsePageArg(call);
+        return arg != null ? arg.limit : null;
+    }
+
+    /**
+     * R12 T-PaginationSim：解析分页消费调用的 Page 实参全量（LIMIT 子句 + searchCount 标志）。
+     *
+     * <p>searchCount 判定（D3=A）：Page 构造器第 3/4 参的布尔字面量（MP 3.5.17 反编译实证构造器全集
+     * {@code (long,long)} / {@code (long,long,long)} / {@code (long,long,boolean)} / {@code (long,long,long,boolean)}，
+     * boolean 位于下标 2 或 3）；布尔字面量缺失（无此参 / 变量实参静态不可判）→ 保守 true
+     * （对齐 MP {@code Page()} 默认 searchCount=true，宁多勿少）。</p>
+     */
+    private static PageArg parsePageArg(PsiMethodCallExpression call) {
         PsiNewExpression pageExpr = null;
         for (PsiExpression arg : call.getArgumentList().getExpressions()) {
             pageExpr = resolvePageNewExpression(arg);
@@ -1412,7 +1446,21 @@ public final class WrapperLocator {
         } else {
             offset = pageOffsetPlaceholder(current, size);
         }
-        return new LimitClause(offset, size);
+        boolean searchCount = true;
+        for (int i = 2; i < args.length; i++) {
+            if (args[i] instanceof PsiLiteralExpression) {
+                Object value = ((PsiLiteralExpression) args[i]).getValue();
+                if (value instanceof Boolean) {
+                    searchCount = (Boolean) value;
+                    break;
+                }
+            }
+        }
+        return new PageArg(new LimitClause(offset, size), searchCount);
+    }
+
+    /** Page 实参解析产物（R12 T-PaginationSim）：LIMIT 子句 + searchCount 标志（见 {@link #parsePageArg}）。 */
+    private record PageArg(LimitClause limit, boolean searchCount) {
     }
 
     private static Long asLong(String text) {
@@ -1693,6 +1741,22 @@ public final class WrapperLocator {
     private static final String PAGE_TERMINAL = "page";
     private static final String CLEAR_METHOD = "clear";
 
+    /**
+     * exists 双语义守卫（T-ExistsChainTerminal）：`exists` 在 MP 里同时是**条件方法**与**链终结点**——
+     * `AbstractWrapper.exists(boolean, String, Object...)` 是条件（Q14-①，javap 实证 3.5.7/3.5.15/3.5.17 均只有带参形态），
+     * `ChainQuery.exists()` 无参才是终结点（Q14-③）。二者落在链尾时结构完全同形，**只能按实参个数区分**。
+     *
+     * <p>带参形态被当终结点会同时错两处（裸工厂链直接作 service 实参、链内无真终结点时暴露）：
+     * ①该调用被剔除 → `EXISTS (...)` 条件整条丢失；②`existsConsumed` 置位 → 整链被误包成 `SELECT EXISTS (...)`。</p>
+     *
+     * <p>单一来源：终结点筛选（{@link #buildChainFromFactory}）与 wrapper 变量接受门
+     * （{@link #initializerIsWrapperChainWithoutTerminal}）共用，避免同一语义两处各判一遍。</p>
+     */
+    private static boolean isExistsConditionCall(PsiMethodCallExpression call) {
+        return EXISTS_TERMINAL.equals(call.getMethodExpression().getReferenceName())
+            && call.getArgumentList().getExpressions().length > 0;
+    }
+
     /** 删除类消费方法：wrapper 作为实参传入时，即使类型为查询类也应转 DELETE（MP 惯用删除写法；
      *  deleteJoin 为 MPJ 官方联表删除，M15 增补）。原 Kotlin internal `deleteConsumerMethodNames`。 */
     public static final Set<String> DELETE_CONSUMER_METHOD_NAMES = Set.of("remove", "delete", "deleteJoin");
@@ -1701,9 +1765,14 @@ public final class WrapperLocator {
      * T-M29-02：分页类消费方法——wrapper 作为实参传入时查询转分页渲染（LIMIT 子句）：
      * `IService.page(Page, wrapper)` / `BaseMapper.selectPage(Page, wrapper)` / MPJ `selectJoinPage` /
      * `Db.page(Page, wrapper)`（链式 `lambdaQuery()...page(...)` 终结点由 {@link #PAGE_TERMINAL} 单独识别）。
-     * 原 Kotlin internal `pageConsumerMethodNames`。
+     *
+     * <p>R12 T-PaginationSim：补注册 BaseMapper 3.5.17 的 IPage 重载族（本地 jar 反编译实证全集 =
+     * selectList(IPage,Wrapper) / selectMaps(IPage,Wrapper) / selectPage / selectMapsPage，
+     * <b>无 selectObjs(IPage,...) 重载故不收</b>）——`mapper.selectList(page, w)` 此前按无分页
+     * SELECT 渲染（LIMIT 缺失）。原 Kotlin internal `pageConsumerMethodNames`。</p>
      */
-    public static final Set<String> PAGE_CONSUMER_METHOD_NAMES = Set.of("page", "selectPage", "selectJoinPage");
+    public static final Set<String> PAGE_CONSUMER_METHOD_NAMES =
+        Set.of("page", "selectPage", "selectJoinPage", "selectJoinMapsPage", "selectList", "selectMaps", "selectMapsPage");
 
     /**
      * 计数类消费方法：wrapper 作为实参传入时，查询类 wrapper 转 `SELECT COUNT(*) FROM ...`。
