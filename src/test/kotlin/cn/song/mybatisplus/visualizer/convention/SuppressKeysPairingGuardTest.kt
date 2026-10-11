@@ -29,9 +29,13 @@ class SuppressKeysPairingGuardTest {
     /** 配对窗口：赋值行自身 + 紧随行数（任务口径「同行或紧随 1~3 行内」）。 */
     private val pairingWindowLines = 3
 
-    /** 赋值判别：`token =`（排除 `==` 比较；标识符边界排除 `suppressedKeys` 等前缀粘连）。 */
+    /**
+     * 赋值判别：Kotlin `token =`（排除 `==` 比较；标识符边界排除 `suppressedKeys` 等前缀粘连）
+     * 或 Java setter 调用 `set<Token>(`（k2j：SqlLogManager.java 的写点形态 `buffer.setSuppressKeys(…)`）。
+     */
     private fun isAssignmentTo(token: String, line: String): Boolean =
-        Regex("""(?<![A-Za-z0-9_])$token\s*=(?!=)""").containsMatchIn(line)
+        Regex("""(?<![A-Za-z0-9_])$token\s*=(?!=)""").containsMatchIn(line) ||
+            Regex("""(?<![A-Za-z0-9_])set${token.replaceFirstChar { it.uppercaseChar() }}\s*\(""").containsMatchIn(line)
 
     /**
      * 扫描单文件源码（剥注释后逐行），返回未配对 `suppressKeys =` 赋值的行号清单（1-based）。
@@ -72,14 +76,16 @@ class SuppressKeysPairingGuardTest {
             .joinToString("\n") { it.substringBefore("//") }
 
     private fun readSqlLogManagerSource(): String {
-        val file = repoRoot().resolve("src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogManager.kt")
+        // k2j：master 的 src/main/kotlin/.../SqlLogManager.kt 翻译为 src/main/java/.../SqlLogManager.java
+        // （扫描对象同名异后缀，赋值写点形态 = setSuppressKeys/setHasStructureKeys）
+        val file = repoRoot().resolve("src/main/java/cn/song/mybatisplus/visualizer/log/SqlLogManager.java")
         assertTrue(
             "扫描对象缺失：$file 不存在——SqlLogManager 被改名/搬移后本守卫即失去对象，" +
                 "更新扫描路径而非删除守卫",
             file.isFile,
         )
         return runCatching { file.readText() }.getOrElse {
-            throw AssertionError("SqlLogManager.kt 读取失败（IO/编码）：${it.message}", it)
+            throw AssertionError("SqlLogManager.java 读取失败（IO/编码）：${it.message}", it)
         }
     }
 
@@ -92,15 +98,15 @@ class SuppressKeysPairingGuardTest {
         val source = readSqlLogManagerSource()
         val sites = countSuppressKeyAssignments(source)
         assertTrue(
-            "扫描面保鲜失败：SqlLogManager.kt 中一处 suppressKeys = 赋值都没找到（提交时 3 处）——" +
+            "扫描面保鲜失败：SqlLogManager.java 中一处 suppressKeys 赋值都没找到（提交时 3 处）——" +
                 "写点形态改名会让本守卫静默架空成恒 0 空绿，须同步更新扫描令牌而非删守卫",
             sites >= 1,
         )
         val offenders = unpairedSuppressKeyLines(source)
         assertTrue(
-            "SqlLogManager.kt 存在未配对刷写 hasStructureKeys 的 suppressKeys 赋值（行号 $offenders）。" +
-                "F20 手工不变量：每处 buffer.suppressKeys = … 须同行或紧随 $pairingWindowLines 行内配对 " +
-                "buffer.hasStructureKeys = …（同步口径用 suppressRuleManager.suppressedKeysContainStructure，" +
+            "SqlLogManager.java 存在未配对刷写 hasStructureKeys 的 suppressKeys 赋值（行号 $offenders）。" +
+                "F20 手工不变量：每处 buffer.setSuppressKeys(…) 须同行或紧随 $pairingWindowLines 行内配对 " +
+                "buffer.setHasStructureKeys(…)（同步口径用 suppressRuleManager.getSuppressedKeysContainStructure()，" +
                 "清零兜底用 false），漏配对会让结构口径键静默退化为「不查 structureKey」",
             offenders.isEmpty(),
         )
