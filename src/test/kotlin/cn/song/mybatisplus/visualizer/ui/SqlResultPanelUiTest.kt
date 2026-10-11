@@ -1,6 +1,9 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+// T-M53-II：`deliverError` 已搬为 execute 包内的同包扩展函数（原 DataSourceSelector 成员），
+// 跨包调用点需显式导入（下面仍按全限定名书写接收者）。
+import cn.song.mybatisplus.visualizer.execute.deliverError
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.UIUtil

@@ -28,6 +28,8 @@ class SqlPreviewPanelForeachValuesTest : BasePlatformTestCase() {
 
     override fun setUp() {
         super.setUp()
+        // O-97 治理（T-TestPerf15）：进态恢复出厂默认，截断跨类全局设置态泄漏
+        cn.song.mybatisplus.visualizer.testutil.PluginSettingsTestSupport.resetToFactoryDefaults()
         runCatching { PluginSettings.getInstance().state.formatSql = false }
         oldEmptyParamFill = runCatching { PluginSettings.getInstance().state.emptyParamFill }
             .getOrDefault(PluginSettings.DEFAULT_EMPTY_PARAM_FILL)

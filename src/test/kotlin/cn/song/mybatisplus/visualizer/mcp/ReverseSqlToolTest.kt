@@ -33,4 +33,31 @@ class ReverseSqlToolTest {
         val error = runCatching { SqlVisualizerReverseSqlTool().reverseSql("  ") }.exceptionOrNull()
         assertTrue(error is SqlvExpectedToolException)
     }
+
+    // ------------------------------------------------------------------
+    // T-MapResultVo：maps=true + mapperVariable → Map 响应形态调用行
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `Map响应_join生成selectJoinMaps调用行`() {
+        val sql = "SELECT t.id, t1.name FROM t_user t LEFT JOIN t_addr t1 ON t1.id = t.addr_id WHERE t.id = 1"
+        val output = SqlVisualizerReverseSqlTool().reverseSql(sql, maps = true, mapperVariable = "deviceInfoMapper")
+        assertTrue(output, output.contains("List<Map<String, Object>> list = deviceInfoMapper.selectJoinMaps(wrapper);"))
+        assertTrue(output, !output.contains(".class, wrapper)"))
+    }
+
+    @Test
+    fun `Map响应_单表生成selectMaps_分页同名重载`() {
+        val sql = "SELECT id, name FROM t_user WHERE status = 1 LIMIT 10"
+        val output = SqlVisualizerReverseSqlTool().reverseSql(sql, maps = true, mapperVariable = "userMapper")
+        assertTrue(output, output.contains("Page<Map<String, Object>> page = userMapper.selectMaps(new Page<>(1, 10), wrapper);"))
+    }
+
+    @Test
+    fun `Map响应_缺mapperVariable_回落纯表达式零回归`() {
+        val sql = "SELECT id FROM t_user WHERE id = 1"
+        val output = SqlVisualizerReverseSqlTool().reverseSql(sql, maps = true)
+        assertTrue(output, !output.contains("selectJoinMaps"))
+        assertTrue(output, output.contains("QueryWrapper"))
+    }
 }

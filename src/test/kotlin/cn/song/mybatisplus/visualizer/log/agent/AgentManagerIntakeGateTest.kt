@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
+import cn.song.mybatisplus.visualizer.log.LogSqlEntry
 import cn.song.mybatisplus.visualizer.log.SqlCaptureGate
 import cn.song.mybatisplus.visualizer.log.SqlLogFileReader
 import cn.song.mybatisplus.visualizer.log.SqlLogManager
@@ -459,6 +460,37 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
 
         assertFalse("会话摘除 → 确认态随会话表消失，桥回落", manager.captureConfirmedActive())
         assertFalse("会话摘除后桥不得保持封着", SqlCaptureGate.paused.get())
+    }
+
+    // ---------- ④ T-AttachZeroEvent P3：接管沿的通道纪元重置（2026-10-09 现场复盘） ----------
+
+    /**
+     * 12:54 现场：接管前 60s 内控制台桥刚捕过同端点 → 接管沿后同 SQL 的 agent 事件全部落
+     * 去重窗口内被当重复丢弃 → 面板零新条目、「attach 即生效」看似失效。守卫：接管沿（桥让位）
+     * 必须重置**本项目**缓冲的去重索引——同键 agent 事件（窗口内）照常入队。
+     * 反向验证锚点：摘掉 [AgentManager.updateOnline] 的 resetDedupeIndexOnChannelHandoff 接线本用例必红。
+     */
+    fun test接管沿_项目缓冲去重索引按通道纪元重置() {
+        val manager = freshManager()
+        val logManager = logManager()
+        logManager.entries.paused = false
+        logManager.entries.dedupeEnabled = true
+        val sql = "select handoff_epoch_same_key"
+        val bridgeEraTs = System.currentTimeMillis()
+        assertTrue(
+            "前置：桥纪元同键条目在队（接管前桥捕过同端点）",
+            logManager.entries.addEntry(LogSqlEntry(rawSql = sql, restoredSql = sql, params = emptyList(), timestamp = bridgeEraTs)),
+        )
+
+        val session = newSession(7605L, manager)
+        manager.sessions.add(session)
+        writeFrame(7605L, AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(false, true, 0, 0))
+        awaitTrue("确认在采集后桥应让位（接管沿）") { SqlCaptureGate.paused.get() }
+
+        assertTrue(
+            "接管沿后同键 agent 事件（60s 窗口内）不得被桥纪元旧索引吞",
+            logManager.entries.addEntry(LogSqlEntry(rawSql = sql, restoredSql = sql, params = emptyList(), timestamp = System.currentTimeMillis())),
+        )
     }
 }
 

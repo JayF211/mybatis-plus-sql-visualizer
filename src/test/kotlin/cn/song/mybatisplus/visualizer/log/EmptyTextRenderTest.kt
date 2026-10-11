@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import com.intellij.util.ui.StatusText
 import java.awt.Font
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -75,5 +76,41 @@ class EmptyTextRenderTest {
         val status = bareStatusText()
         SqlLogPanelKt.applyEmptyTextLines(status, "", 400, stubMeasure)
         assertTrue("空文案不得抛异常，也不得留下裸换行", paintedLineCount(status) <= 1)
+    }
+
+    // ---------------- P1-4 摩擦 #1：空面板起步引导内容守卫 ----------------
+
+    /** 从仓内任一工作目录向上定位仓库根（仿 SettingsRealityGuardTest 的 repoRoot 惯例）。 */
+    private fun repoFile(rel: String): File {
+        var dir: File? = File(System.getProperty("user.dir")!!)
+        repeat(5) {
+            val candidate = File(dir, rel)
+            if (candidate.exists()) return candidate
+            dir = dir!!.parentFile
+        }
+        error("repo file not found: $rel (cwd=${System.getProperty("user.dir")})")
+    }
+
+    @Test
+    fun test空态起步引导三径齐全() {
+        // P1-4 摩擦 #1：空面板起步引导必须三径同段——自动捕捉 / 手动粘贴 / 增强捕获发现径
+        //（增强捕获是插件「运行即采集」的头条通道，空态只提两径时新用户无从得知其存在；
+        //  引导不弹窗，弹窗克制红线不动 EnhancedCaptureConfirmDialog）。摘掉任一径本用例转红。
+        val zhBundle = repoFile("src/main/resources/messages/MpSqlVisualizerBundle_zh.properties").readText()
+        val enBundle = repoFile("src/main/resources/messages/MpSqlVisualizerBundle.properties").readText()
+        val zhLine = Regex("^log\\.panel\\.empty=(.*)$", RegexOption.MULTILINE).find(zhBundle)!!.groupValues[1]
+        val enLine = Regex("^log\\.panel\\.empty=(.*)$", RegexOption.MULTILINE).find(enBundle)!!.groupValues[1]
+        // 20261008 验收缺陷 #3 后形态：第三径由主文案内嵌短语升级为独立可点链接键
+        // （log.panel.empty 以「→」收尾，log.panel.empty.link 承载「打开设置（定位到增强捕获）」，点击直达设置页并定位高亮增强捕获行）——
+        // 判据 = 主文案 + 链接键合起来三径齐全，且链接键非空（丢键则第三径既不可见也不可点）。
+        val zhLink = Regex("^log\\.panel\\.empty\\.link=(.*)$", RegexOption.MULTILINE).find(zhBundle)!!.groupValues[1].trim()
+        val enLink = Regex("^log\\.panel\\.empty\\.link=(.*)$", RegexOption.MULTILINE).find(enBundle)!!.groupValues[1].trim()
+        assertTrue("zh 引导缺「捕捉」自动捕获径：$zhLine", zhLine.contains("捕捉"))
+        assertTrue("zh 引导缺「日志转 SQL」粘贴径：$zhLine", zhLine.contains("日志转 SQL"))
+        assertTrue("zh 主文案应以「→」收尾（链接短语紧随其后）：$zhLine", zhLine.trimEnd().endsWith("→"))
+        assertTrue("zh 引导缺「增强捕获」发现径（P1-4 补第三径，摘掉即红）：link=$zhLink", zhLink.contains("增强捕获"))
+        assertTrue("en 引导缺 Capture 自动径：$enLine", enLine.contains("Capture"))
+        assertTrue("en 引导缺 paste 粘贴径：$enLine", enLine.contains("paste"))
+        assertTrue("en 引导缺 Enhanced Capture 发现径：link=$enLink", enLink.contains("Enhanced Capture"))
     }
 }

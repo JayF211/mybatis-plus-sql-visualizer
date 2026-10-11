@@ -81,10 +81,14 @@ class PremainInjectionTest {
     @Test
     fun vm选项形态与agent侧args契约逐字对齐() {
         val option = PremainInjection.vmOption("C:/tmp/mpsv-agent/mps-sql-agent-123.jar", 53210)
-        assertEquals("-javaagent:C:/tmp/mpsv-agent/mps-sql-agent-123.jar=port=53210;logLevel=warn", option)
+        assertEquals("-javaagent:C:/tmp/mpsv-agent/mps-sql-agent-123.jar=port=53210;logLevel=warn;stackFrames=24", option)
         // args 段即 AgentProtocol.agentArgs 产物（agent 侧 AgentArgs.parse 的 k=v 分号契约）
         assertEquals(AgentProtocol.agentArgs(53210), option.substringAfter("="))
         // 端口可被注入侧原样取回（AgentManager 之外的调用方/测试的取端口口径）
         assertEquals(53210, Regex("port=(\\d+)").find(option)!!.groupValues[1].toInt())
+        // T-StackHoverUi：帧数预算随选项下发（显式传参透传，缺省 24 与 PluginSettings 缺省同值）
+        assertEquals(30, Regex("stackFrames=(\\d+)").find(
+            PremainInjection.vmOption("C:/tmp/mpsv-agent/mps-sql-agent-123.jar", 53210, 30),
+        )!!.groupValues[1].toInt())
     }
 }

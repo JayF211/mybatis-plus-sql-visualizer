@@ -6,6 +6,10 @@ import cn.song.mybatisplus.visualizer.generator.CrudSqlGenerator
 import cn.song.mybatisplus.visualizer.generator.CrudTableSpec
 import cn.song.mybatisplus.visualizer.log.SqlToJavaPanel
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel
+// T-M53-II D2-5：`showResult`/`clear` 已搬为 ui 包内的同包扩展函数（原 SqlPreviewPanel 成员），
+// 跨包调用点需显式导入。
+import cn.song.mybatisplus.visualizer.ui.clear
+import cn.song.mybatisplus.visualizer.ui.showResult
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil

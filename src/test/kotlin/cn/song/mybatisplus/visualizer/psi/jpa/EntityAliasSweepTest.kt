@@ -1,0 +1,96 @@
+package cn.song.mybatisplus.visualizer.psi.jpa
+
+import com.intellij.psi.PsiClass
+import com.intellij.psi.PsiJavaFile
+import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+
+/**
+ * T-GutterDupFreeze（S3）：实体别名反查的**有界扫描**守卫用例。
+ *
+ * 事故背景（20261008 用户真机冻结 70 秒）：`findClassByEntityName` 的慢路径原为无上限全项目短名扫描，
+ * 误判输入（链源码里抓到的表名 `t_order`）必然扫完整个项目。本用例钉住「超限即停」这条判别行为——
+ * 摘掉 [EntityAliasSweep] 里的上限判定，[testTruncatesAtLimit] 的拉取计数必红（见计划 §S3 反向验证）。
+ */
+class EntityAliasSweepTest : BasePlatformTestCase() {
+
+    /** 触顶即停：10000 个短名 + 上限 100 → 至多拉取 101 个即按未命中降级，不扫完整个项目。 */
+    fun testTruncatesAtLimit() {
+        var pulled = 0
+        val names = (1..10_000).asSequence().map {
+            pulled++
+            "N$it"
+        }
+        var truncatedAt = -1
+        val result = EntityAliasSweep.findAliasOwner(
+            aliasName = "t_order",
+            names = names,
+            lookup = { emptyArray() },
+            limit = 100,
+            onTruncated = { truncatedAt = it },
+        )
+        assertNull("触顶应按未命中降级", result)
+        assertEquals("触顶回调应报告已扫数＝上限", 100, truncatedAt)
+        assertTrue("不得继续拉取短名（实际拉取 $pulled）", pulled <= 101)
+    }
+
+    /** 命中即止：别名命中后不再继续遍历（原实现同样 break，本用例锁住重构后行为不变）。 */
+    fun testStopsAtHit() {
+        val clazz = configureEntityClass("User.java", "User", "t_order")
+        var pulled = 0
+        val names = (1..1_000).asSequence().map {
+            pulled++
+            if (it == 3) "User" else "X$it"
+        }
+        val result = EntityAliasSweep.findAliasOwner(
+            aliasName = "t_order",
+            names = names,
+            lookup = { shortName -> if (shortName == "User") arrayOf(clazz) else emptyArray() },
+        )
+        assertNotNull("应按 @Entity(name = ...) 命中实体类", result)
+        assertEquals("User", result!!.qualifiedName)
+        assertTrue("命中后应即停（实际拉取 $pulled）", pulled <= 5)
+    }
+
+    /** 未命中：别名不等则不返回（含大小写不敏感比较的反向确认）。 */
+    fun testNoAliasMatchReturnsNull() {
+        val clazz = configureEntityClass("User.java", "User", null)
+        val result = EntityAliasSweep.findAliasOwner(
+            aliasName = "t_order",
+            names = sequenceOf("User", "Other"),
+            lookup = { if (it == "User") arrayOf(clazz) else emptyArray() },
+        )
+        assertNull("无匹配别名应返回 null", result)
+    }
+
+    /** 大小写不敏感：`@Entity(name = "UserInfo")` 对 `from userinfo` 应命中。 */
+    fun testAliasMatchIsCaseInsensitive() {
+        val clazz = configureEntityClass("UserInfo.java", "UserInfo", "UserInfo")
+        val result = EntityAliasSweep.findAliasOwner(
+            aliasName = "userinfo",
+            names = sequenceOf("UserInfo"),
+            lookup = { arrayOf(clazz) },
+        )
+        assertNotNull("别名比较应忽略大小写", result)
+    }
+
+    /**
+     * 在测试夹具里造一个类；[alias] 非空时标注 `@Entity(name = alias)`。
+     * 注解写全限定名：`JpaMetadataReader.findFlex` 有短名文本兜底，无需把 JPA 库挂上 classpath
+     * （同 `JpaEntityResolverTest.testEntityNameAlias` 的口径）。
+     */
+    private fun configureEntityClass(fileName: String, className: String, alias: String?): PsiClass {
+        val annotation = alias?.let { "@jakarta.persistence.Entity(name = \"$it\")" } ?: ""
+        myFixture.configureByText(
+            fileName,
+            """
+            $annotation
+            class $className {}
+            """.trimIndent(),
+        )
+        return (myFixture.file as PsiJavaFile).classes.first()
+    }
+}

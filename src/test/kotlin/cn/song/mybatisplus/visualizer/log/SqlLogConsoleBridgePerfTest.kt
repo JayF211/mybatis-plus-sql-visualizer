@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -90,5 +91,41 @@ class SqlLogConsoleBridgePerfTest {
         val entries = SqlLogConsoleBridgeKt.processConsoleLine("==>  Parameters: 1(Long)", ctx, null) {}
         assertEquals(1, entries.size)
         assertEquals("SELECT * FROM user WHERE id = 1", entries.first().rawSql())
+    }
+
+    // ---------- F50（T-PerfQuick5）：反射 Method 缓存——CHM 禁 null 用 Optional + 键含 ClassLoader 身份 ----------
+
+    /** 键含 ClassLoader 身份：同类名不同 loader 键必不同（跨 loader 撞键即键设计失效）；同 loader 键稳定（命中前提）。 */
+    @Test
+    fun `F50_记忆化键_含ClassLoader身份`() {
+        val l1 = object : ClassLoader() {}
+        val l2 = object : ClassLoader() {}
+        assertTrue(
+            "同签名类名跨 ClassLoader 的键必须不同",
+            SqlLogConsoleBridge.methodCacheKey("com.example.Foo", l1, "getAllDescriptors") !=
+                SqlLogConsoleBridge.methodCacheKey("com.example.Foo", l2, "getAllDescriptors"),
+        )
+        assertEquals(
+            "同 loader 同类名同方法的键必须稳定",
+            SqlLogConsoleBridge.methodCacheKey("com.example.Foo", l1, "getAllDescriptors"),
+            SqlLogConsoleBridge.methodCacheKey("com.example.Foo", l1, "getAllDescriptors"),
+        )
+    }
+
+    /**
+     * 负缓存干净命中：缺失方法返回 null 且二次查询不抛。
+     * 反向验证锚：修复前 `methodCache[key] = null` 对 CHM 是运行时 NPE（T-LogPerf-02 的
+     * 「找不到也缓存 null」从未生效）——回退即本测试红。
+     */
+    @Test
+    fun `F50_负缓存_干净命中不抛`() {
+        val miss1 = SqlLogConsoleBridge.cachedMethod(ConsoleStub::class.java, "noSuchMethodForSure")
+        assertNull("缺失方法应返回 null", miss1)
+        val miss2 = SqlLogConsoleBridge.cachedMethod(ConsoleStub::class.java, "noSuchMethodForSure")
+        assertNull("负缓存二次查询仍应干净返回 null", miss2)
+        // 正路径：记忆化命中同一 Method
+        val m1 = SqlLogConsoleBridge.cachedMethod(String::class.java, "length")
+        val m2 = SqlLogConsoleBridge.cachedMethod(String::class.java, "length")
+        assertEquals("正缓存应命中同一 Method", m1, m2)
     }
 }

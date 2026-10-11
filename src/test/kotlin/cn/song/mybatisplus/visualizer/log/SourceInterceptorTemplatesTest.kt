@@ -56,6 +56,32 @@ class SourceInterceptorTemplatesTest {
     }
 
     @Test
+    fun `原生包装类模板_RowBounds与ResultHandler显式类型化可编译`() {
+        // 20261008 验收（3.25 真机编译）：原生包装类（mybatis-config.xml <plugin> 注册物）
+        // 的 beforeQuery 转发里，rowBounds/resultHandler 裸三元 `args[N] : null` 依赖 javac
+        // 目标类型推断，JDK8 判 Object 无法转具体形参类型（RowBounds 与 ResultHandler 两处
+        // 先后报错）→ 注入用户项目编译失败。显式 instanceof+cast 让类型明确，8/17/21 全可编译。
+        // 摘掉任一形态即红。
+        val code = SourceInterceptorTemplates.generateNativePluginClass("cn.song.nativedemo")
+        assertTrue("应实现 org.apache.ibatis.plugin.Interceptor", code.contains("implements Interceptor"))
+        assertTrue("应持有 InnerInterceptor 委托", code.contains("InnerInterceptor"))
+        assertTrue(
+            "rowBounds 转发应显式类型化（javac8 可编译，防回退裸三元）",
+            code.contains("args.length > 2 && args[2] instanceof RowBounds ? (RowBounds) args[2] : null"),
+        )
+        assertTrue(
+            "resultHandler 转发应显式类型化（javac8 可编译，防回退裸三元）",
+            code.contains("args.length > 3 && args[3] instanceof ResultHandler ? (ResultHandler) args[3] : null"),
+        )
+        assertFalse(
+            "不得回退到裸三元（javac8 判 Object 无法转具体形参类型）",
+            code.contains("args.length > 2 ? args[2] : null") || code.contains("args.length > 3 ? args[3] : null"),
+        )
+        assertTrue("应导入 RowBounds", code.contains("import org.apache.ibatis.session.RowBounds;"))
+        assertTrue("应导入 ResultHandler", code.contains("import org.apache.ibatis.session.ResultHandler;"))
+    }
+
+    @Test
     fun `docs手工示例含同款自位跳过`() {
         // 计划 §五-1：docs 示例（手工配置路线）与注入模板同款缺陷——不跳过拦截器自身帧时，
         // 拦截器注册在业务包内位置会打成本文件行。源码扫描断言同 BannedApiSourceScanTest 路线。

@@ -161,6 +161,14 @@ class XmlSqlCompletionContributorTest : BasePlatformTestCase() {
         assertTrue("WHERE 后应补主表列 name：$strings", strings.contains("name"))
     }
 
+    fun testPrefixedColumnMainStringBareAndAttachedAliased() {
+        // T-XmlCmpl3 二段工厂契约：主 lookupString=裸列名（插入只替换点后 token，防 o.o.user_id），
+        // 附加 lookupString=别名.列名（平台按任一 lookup string 匹配已敲的 o.user_i）
+        val item = SourceSqlSuggestionFactory.prefixedColumn("o", "user_id", null)
+        assertEquals("主串应为裸列名（插入串）", "user_id", item.lookupString)
+        assertEquals("allLookupStrings 应含主串与别名.列名", setOf("user_id", "o.user_id"), item.allLookupStrings)
+    }
+
     // ------------------------------------------------------------------
     // 4. 主表别名前缀（prefixedColumn）
     // ------------------------------------------------------------------
@@ -189,9 +197,10 @@ class XmlSqlCompletionContributorTest : BasePlatformTestCase() {
                 """,
             ),
         )
-        assertTrue("别名前缀应补 u.id：$strings", strings.contains("u.id"))
-        assertTrue("别名前缀应补 u.name：$strings", strings.contains("u.name"))
-        assertFalse("别名前缀模式下不产出无前缀列：$strings", strings.contains("id"))
+        // T-XmlCmpl3 二段：主 lookupString=裸列名（插入用，防别名重复）；附加串=别名.列名
+        // （fixture.lookupElementStrings 只回主串，附加串由下方工厂直测钉住）
+        assertTrue("别名前缀应补 id（插入串）：$strings", strings.contains("id"))
+        assertTrue("别名前缀应补 name：$strings", strings.contains("name"))
     }
 
     // ------------------------------------------------------------------
@@ -344,8 +353,8 @@ class XmlSqlCompletionContributorTest : BasePlatformTestCase() {
                 """,
             ),
         )
-        assertTrue("逗号多表 a 别名应补 a.id：$strings", strings.contains("a.id"))
-        assertFalse("逗号多表：命中 a 前缀时只出 a 的列，b.id 不应出现：$strings", strings.contains("b.id"))
+        // T-XmlCmpl3 二段：主 lookupString=裸列名（b.id 形态已不存在，别名区分由附加串+平台过滤承担）
+        assertTrue("逗号多表 a 别名应补 a 的列 id：$strings", strings.contains("id"))
     }
 
     fun test12UnknownAliasPrefixDegradesToMainColumns() {
@@ -399,8 +408,7 @@ class XmlSqlCompletionContributorTest : BasePlatformTestCase() {
                 """,
             ),
         )
-        assertTrue("ON 右侧 d 别名应补 d.id：$strings", strings.contains("d.id"))
-        assertFalse("ON 场景命中 d 前缀时只出 d 的列，u.id 不应出现：$strings", strings.contains("u.id"))
+        assertTrue("ON 右侧 d 别名应补 d 的列 id：$strings", strings.contains("id"))
     }
 
     // ------------------------------------------------------------------

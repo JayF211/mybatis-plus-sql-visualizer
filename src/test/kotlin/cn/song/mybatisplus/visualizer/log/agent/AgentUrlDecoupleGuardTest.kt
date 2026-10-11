@@ -94,11 +94,12 @@ class AgentUrlDecoupleGuardTest {
         val scheduleIdx = manager.indexOf("scheduleWithFixedDelay")
         val ensureIdx = manager.indexOf("public void ensureMonitorStarted")
         assertTrue("排定点必须落在 ensureMonitorStarted 内", ensureIdx in 0 until scheduleIdx)
-        // 懒启的调用点：两条会话建立链（attach / premain）各一次
+        // 懒启的调用点：两条会话建立链（attach / premain）各一次 + 关开关分流（T-PremainReattach S4：
+        // 暂停通道驻留时保持巡检，暂停通道清空后仍走 stopMonitor 复位——排定红线不受影响）
         assertTrue("attach 链建立会话后应懒启巡检", manager.contains("ensureMonitorStarted()"))
         assertEquals(
-            "ensureMonitorStarted 定义 1 + 调用 2（attach/premain）",
-            3,
+            "ensureMonitorStarted 定义 1 + 调用 3（attach/premain/shutdownAll 暂停通道驻留保巡检）",
+            4,
             Regex("ensureMonitorStarted\\(\\)").findAll(manager).count(),
         )
         // 推断 URL 回写点：会话建立/URL 捕获/摘除/关闭/销毁

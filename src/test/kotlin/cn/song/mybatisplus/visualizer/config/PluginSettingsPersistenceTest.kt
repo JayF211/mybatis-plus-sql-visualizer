@@ -12,6 +12,12 @@ import org.junit.Assert.assertTrue
  */
 class PluginSettingsPersistenceTest : BasePlatformTestCase() {
 
+    override fun setUp() {
+        super.setUp()
+        // O-97 治理（T-TestPerf15）：进态恢复出厂默认，截断跨类全局设置态泄漏
+        cn.song.mybatisplus.visualizer.testutil.PluginSettingsTestSupport.resetToFactoryDefaults()
+    }
+
     fun testStateRoundTripKeepsLanguage() {
         // 模拟 IDE 持久化：修改 state → getState（保存快照）→ loadState（重启加载）→ language 保留 en
         val settings = PluginSettings.getInstance()
@@ -136,6 +142,21 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
                 "zh 下 O-58 列名数据源校正开关应为中文文案: $zhTexts",
                 zhTexts.any { it.contains("按数据源校正列名") },
             )
+            // R33 T-ExplainStructured：EXPLAIN 结构化渲染开关文案正反两面（zh 侧）
+            assertTrue(
+                "zh 下 R33 EXPLAIN 结构化渲染开关应为中文文案: $zhTexts",
+                zhTexts.any { it.contains("结构化渲染 EXPLAIN") },
+            )
+            // T-CountSimToggle：分页 COUNT 子开关文案正反两面（zh 侧）
+            assertTrue(
+                "zh 下 T-CountSimToggle 分页 COUNT 子开关应为中文文案: $zhTexts",
+                zhTexts.any { it.contains("附分页 COUNT 查询预览") },
+            )
+            // T-DataSourceBadgeMode：数据源角标完整上下文开关文案正反两面（zh 侧，先 zh 后 en 防断言方向写反）
+            assertTrue(
+                "zh 下 T-DataSourceBadgeMode 数据源角标开关应为中文文案: $zhTexts",
+                zhTexts.any { it.contains("数据源角标显示完整上下文") },
+            )
             // 模拟用户选择 English（写穿）→ 重建表单（invokeLater 在测试环境不保证执行，直接调用）
             panel.selectLanguage("en")
             panel.rebuild()
@@ -147,6 +168,21 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             assertTrue(
                 "rebuild 后 O-58 列名数据源校正开关应刷新为英文文案: $texts",
                 texts.any { it.contains("Calibrate column names") },
+            )
+            // R33 T-ExplainStructured：EXPLAIN 结构化渲染开关文案（en 侧）
+            assertTrue(
+                "rebuild 后 R33 EXPLAIN 结构化渲染开关应刷新为英文文案: $texts",
+                texts.any { it.contains("Structured EXPLAIN") },
+            )
+            // T-CountSimToggle：分页 COUNT 子开关文案（en 侧）
+            assertTrue(
+                "rebuild 后 T-CountSimToggle 分页 COUNT 子开关应刷新为英文文案: $texts",
+                texts.any { it.contains("Attach pagination COUNT query preview") },
+            )
+            // T-DataSourceBadgeMode：数据源角标完整上下文开关文案（en 侧）
+            assertTrue(
+                "rebuild 后 T-DataSourceBadgeMode 数据源角标开关应刷新为英文文案: $texts",
+                texts.any { it.contains("full data source context") },
             )
             // M28：更新分区新增「启动时自动检查更新」开关（默认开）——复选框总数 4 → 5；
             // T-M31.14 SQL 日志组 +5；手动选择实体类开关 +1（T-M38+）；关闭工具窗口停止监听 +1；
@@ -166,7 +202,15 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // T-PreviewWhitespaceToggle O-44a：空白符可视化开关 +1（界面节，默认关＝不设置该属性）
             // O-58：列名数据源校正开关 +1（表名映射节）
             // O-72 T-XmlInlineSql：通用 XML 内嵌 SQL 检测开关 +1（界面节）
-            assertEquals("复选框总数应为 31", 31, texts.size)
+            // R2 W3 历史工作流：gutter 六分组开关 +6（mapperXml/annotation/jpaHql/jdbc/inlineFallback/other）
+            // T-PerfSweep16 F46（40ee1fd）：新增「mapper XML 语法高亮」开关（xmlSynHiCheck）+1 后为 38；
+            // R12 T-PaginationSim：分页拦截器模拟开关（paginationSimCheck）+1 后为 39；
+            // R10 T-ShardingSphereCompat：ShardingSphere 双段日志捕获开关（logShardingSphereEnabledCheck）+1 后为 40；
+            // R33 T-ExplainStructured：EXPLAIN 结构化渲染开关（explainStructuredCheck）+1 后为 41；
+            // T-CountSimToggle：分页 COUNT 子开关（paginationCountCheck）+1 后为 42；
+            // T-DataSourceBadgeMode：数据源角标完整上下文开关（dataSourceBadgeDetailCheck）+1 后为 43；
+            // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
+            assertEquals("复选框总数应为 43", 43, texts.size)
         } finally {
             settings.state.language = old
         }
@@ -204,6 +248,42 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             assertTrue("清空后应为出厂默认 true", settings.state.columnCalibrationEnabled)
             settings.loadState(saved)                         // 模拟重启重载
             assertFalse("往返后 columnCalibrationEnabled 应保持 false", settings.state.columnCalibrationEnabled)
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testStateRoundTripKeepsExplainStructuredRender() {
+        // R33 T-ExplainStructured：EXPLAIN 结构化渲染开关随 State 持久化往返保留（O-58 同款契约）；
+        // T-DevAcceptFix ②（20261006 验收，D67 采 B 案）：默认关——EXPLAIN 默认走原生控制台；
+        // 结构化通道保留一版（显式开启的值随 State 往返保留）。
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.explainStructuredRender = true
+            val saved = settings.getState().copy()          // 模拟落盘快照
+            settings.loadState(PluginSettings.State())        // 清成出厂默认（false）
+            assertFalse("清空后应为出厂默认 false（20261006 验收定案）", settings.state.explainStructuredRender)
+            settings.loadState(saved)                         // 模拟重启重载
+            assertTrue("往返后显式开启值应保持 true", settings.state.explainStructuredRender)
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testStateRoundTripKeepsDataSourceBadgeDetail() {
+        // T-DataSourceBadgeMode（O-133）：数据源角标完整上下文开关随 State 持久化往返保留（O-58 同款契约）；
+        // 默认关＝仅显示数据库类型（用户 2026-10-09 需求定案），显式开启的值随 State 往返保留。
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            assertFalse("出厂默认应为关（仅显示数据库类型）", PluginSettings.State().dataSourceBadgeDetail)
+            settings.state.dataSourceBadgeDetail = true
+            val saved = settings.getState().copy()          // 模拟落盘快照
+            settings.loadState(PluginSettings.State())        // 清成出厂默认（false）
+            assertFalse("清空后应为出厂默认 false", settings.state.dataSourceBadgeDetail)
+            settings.loadState(saved)                         // 模拟重启重载
+            assertTrue("往返后显式开启值应保持 true", settings.state.dataSourceBadgeDetail)
         } finally {
             settings.loadState(snapshot)
         }

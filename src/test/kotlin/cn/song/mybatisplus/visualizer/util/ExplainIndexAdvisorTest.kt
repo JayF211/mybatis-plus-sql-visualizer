@@ -178,9 +178,42 @@ class ExplainIndexAdvisorTest {
         )
         // DM（达梦）在册且接入（TEXT 档），但表格式行不含文本树模式 → 零命中（不噪音、不猜）
         assertTrue(ExplainIndexAdvisor.advise(dmDialectName, mysqlHeaders, rows).isEmpty())
-        // Oracle 在册但**有意不接入**（两步链另议）→ 静默降级
+        // R23 后 Oracle 已接入（TEXT 档）：MySQL 表格式行塞给它同样零命中——
+        // 本插件通道对 Oracle 不产出计划行（EXPLAIN PLAN FOR 只登记不返回），勿硬解析
         assertTrue(ExplainIndexAdvisor.advise("Oracle", mysqlHeaders, rows).isEmpty())
         assertTrue("未知方言静默降级", ExplainIndexAdvisor.advise("no-such-dialect", mysqlHeaders, rows).isEmpty())
+    }
+
+    // ---------- R23：Oracle/SQL Server 接入后的分派边界 ----------
+
+    /**
+     * R23：Oracle TEXT 档，本插件通道不产出行（EXPLAIN PLAN FOR 只登记）→ 空行零命中不噪音。
+     */
+    @Test
+    fun testOracle_TEXT档空行零命中() {
+        assertEquals(
+            "Oracle 必须以表键路由到 TEXT 档",
+            ExplainOutputFormat.TEXT,
+            ExplainSupport.formatFor("Oracle"),
+        )
+        assertTrue(ExplainIndexAdvisor.advise("Oracle", emptyList(), emptyList()).isEmpty())
+    }
+
+    /**
+     * R23：SQL Server XML 档**不硬解析**（勿硬解析红线）——即使把 PG JSON 形态的行喂进来，
+     * 也不得按 JSON/文本树规则产出建议；SQL Server 的计划 XML 是附加结果集，本通道不采集。
+     */
+    @Test
+    fun testSQLServer_XML档不硬解析() {
+        assertEquals(
+            "SQL Server 必须以表键路由到 XML 档",
+            ExplainOutputFormat.XML,
+            ExplainSupport.formatFor("SQL Server"),
+        )
+        val pgJsonRow = listOf(listOf("""[{"Plan":{"Node Type":"Seq Scan","Relation Name":"big_table","Plan Rows":999999}}]"""))
+        assertTrue(ExplainIndexAdvisor.advise("SQL Server", listOf("XML Showplan"), pgJsonRow).isEmpty())
+        // 文本树形态同样不猜
+        assertTrue(ExplainIndexAdvisor.advise("SQL Server", listOf("StmtText"), listOf(listOf("Seq Scan on big_table (rows=999999)"))).isEmpty())
     }
 
     /** 分派改读格式后，MySQL 家族仍走表格式、PG 家族仍走 JSON——方言名大小写不敏感。 */

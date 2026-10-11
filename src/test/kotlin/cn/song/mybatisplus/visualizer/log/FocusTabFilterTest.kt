@@ -132,4 +132,61 @@ class FocusTabFilterTest {
         assertEquals("最新在末尾", "r-new", tags.last())
         assertTrue("method 页签不受挤占", trimmed.first() is FocusTab.Method)
     }
+
+    // ---------- O-90：同模板计数聚合与模板页签 ----------
+
+    @Test
+    fun `同模板计数聚合_字面量参数化同形状同键`() {
+        val same1 = entry("SELECT * FROM t_user WHERE id = 1")
+        val same2 = entry("SELECT * FROM t_user WHERE id = 2")
+        val same3 = entry("SELECT * FROM t_user WHERE id = 'abc'")
+        val inArity = entry("SELECT * FROM t_user WHERE id IN (1, 2)") // IN 元素个数不同 = 异形
+        val otherTable = entry("SELECT * FROM t_order WHERE id = 1") // 表名不同 = 异形
+        assertEquals("判别前提：三条同模板共键", same1.structureKey, same2.structureKey)
+        assertEquals("判别前提：字符串字面量同样折叠", same1.structureKey, same3.structureKey)
+        val counts = structureKeyCounts(listOf(same1, same2, same3, inArity, otherTable))
+        assertEquals("同模板 3 条计同键", 3, counts[same1.structureKey])
+        assertEquals("IN 元素个数不同不计入", 1, counts[inArity.structureKey])
+        assertEquals("表名不同不计入", 1, counts[otherTable.structureKey])
+        assertEquals("键组数 = 3", 3, counts.size)
+    }
+
+    @Test
+    fun `同模板计数聚合_空集与单条`() {
+        assertTrue("空集零成本", structureKeyCounts(emptyList()).isEmpty())
+        val one = entry("SELECT 1")
+        assertEquals(1, structureKeyCounts(listOf(one))[one.structureKey])
+    }
+
+    @Test
+    fun `模板页签_structureKey精确匹配_异形隔离`() {
+        val a1 = entry("SELECT * FROM t_user WHERE id = 1")
+        val a2 = entry("SELECT * FROM t_user WHERE id = 2")
+        val b = entry("SELECT * FROM t_order WHERE id = 1")
+        val tab = FocusTab.Template(a1.structureKey, 2)
+        assertEquals(
+            "仅同模板条目可见（参数值不同的同形状全保留）",
+            listOf(a1, a2),
+            filterByFocusTabs(listOf(a1, b, a2), listOf(tab)),
+        )
+    }
+
+    @Test
+    fun `模板页签判重_按structureKey不按count快照`() {
+        val existing = listOf(FocusTab.Template("k-1", 3))
+        assertEquals("同键不同计数快照不新增", existing, addTemplateTab(existing, "k-1", 5))
+        assertEquals("异键新增", 2, addTemplateTab(existing, "k-2", 4).size)
+    }
+
+    @Test
+    fun `模板页签与请求页签叠加_并集语义`() {
+        val t1 = entry("SELECT * FROM t_user WHERE id = 1")
+        val t2 = entry("SELECT * FROM t_user WHERE id = 2")
+        val req = entry("SELECT 1", requestTag = "GET /api/order")
+        val focused = filterByFocusTabs(
+            listOf(t1, t2, req),
+            listOf(FocusTab.Template(t1.structureKey, 2), FocusTab.Request("GET /api/order")),
+        )
+        assertEquals("模板条目与请求条目并集可见", listOf(t1, t2, req), focused)
+    }
 }

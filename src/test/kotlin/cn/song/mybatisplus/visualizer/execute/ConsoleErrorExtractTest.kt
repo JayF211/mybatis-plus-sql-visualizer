@@ -198,6 +198,46 @@ class ConsoleErrorExtractTest : BasePlatformTestCase() {
         assertNull(DataSourceSelector.extractConsoleError(consoleOf(seq), LOG))
     }
 
+    /**
+     * R33 真机走查修复（反向）：EXPLAIN 附随的 SHOW WARNINGS note 行（`[HY000][1003]`，
+     * 含重写查询）不是执行失败——修复前该行被 SQLSTATE 前缀判据命中，直送通道执行成功出了
+     * 结果、底部红条却报「执行失败: HY000[1003] …」（真机实证）。
+     */
+    @Test
+    fun testExplainShowWarningsNote1003NotReported() {
+        val text = listOf(
+            "mpj_demo> EXPLAIN SELECT id FROM user WHERE username = 'x'",
+            "[2026-10-01 10:00:00] [HY000][1003] Note: /* select#1 */ select `id` from `user` where `username` = 'x'",
+        ).joinToString("\n")
+        assertNull(
+            "note 1003 行是 informational，不得当错误报红条",
+            DataSourceSelector.extractConsoleError(consoleOf(RecordingSeq(text)), LOG),
+        )
+    }
+
+    /** 正例（关键）：note 1003 之后紧跟真实语法错——真实失败仍须检出，排除不得扩大化。 */
+    @Test
+    fun testNote1003ThenRealErrorStillDetected() {
+        val text = listOf(
+            "[2026-10-01 10:00:00] [HY000][1003] Note: /* select#1 */ select `id` from `user`",
+            "[2026-10-01 10:00:01] [42000][1064] You have an error in your SQL syntax; check the manual",
+        ).joinToString("\n")
+        val err = DataSourceSelector.extractConsoleError(consoleOf(RecordingSeq(text)), LOG)
+        assertNotNull("真实语法错必须仍命中", err)
+        assertTrue("错误原文须在", err!!.contains("You have an error in your SQL syntax"))
+        assertFalse("note 行不得混入错误摘录", err.contains("1003"))
+    }
+
+    /** 边界：note 排除只认 HY000+1003 组合——其余 SQLSTATE 组合的 1003 号照旧按判据走。 */
+    @Test
+    fun testNonHy000Code1003StillTreatedAsError() {
+        val seq = RecordingSeq("select 1\n[42S22][1003] Unknown column 'x' in 'field list'\n")
+        assertNotNull(
+            "非 HY000 的 1003 不在 note 排除面（排除不得吞掉结构性判据）",
+            DataSourceSelector.extractConsoleError(consoleOf(seq), LOG),
+        )
+    }
+
     // ==================== T-CEC-03：兜底呈现（判据认不出时的残余） ====================
 
     /** 正常执行的新增文本形态：SQL 回显（首行带提示符）+ 完成回显。 */
