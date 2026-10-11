@@ -90,9 +90,11 @@ public class ParamBraceTypedHandler extends TypedHandlerDelegate {
             return Result.CONTINUE;
         }
 
+        // Kotlin lambda 捕获 var 无碍，Java 捕获须 effectively final——落 final 快照再进写命令
+        final int insertOffset = offset;
         com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project, () -> {
-            hostEditor.getDocument().insertString(offset, c + "{}");
-            hostEditor.getCaretModel().moveToOffset(offset + 1);
+            hostEditor.getDocument().insertString(insertOffset, c + "{}");
+            hostEditor.getCaretModel().moveToOffset(insertOffset + 1);
         });
         return Result.STOP;
     }

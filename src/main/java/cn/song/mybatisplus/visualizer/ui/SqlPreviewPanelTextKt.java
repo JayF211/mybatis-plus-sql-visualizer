@@ -121,6 +121,6 @@ public final class SqlPreviewPanelTextKt {
     public static String appendPaginationLimitLine(String baseSql, @Nullable String limitLine) {
         if (limitLine == null) return baseSql;
         if (PaginationSimulator.hasExistingLimit(baseSql)) return baseSql;
-        return baseSql.trimEnd() + "\n" + limitLine;
+        return baseSql.stripTrailing() + "\n" + limitLine;
     }
 }

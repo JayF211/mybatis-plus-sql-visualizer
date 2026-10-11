@@ -130,7 +130,7 @@ public final class SqlPreviewPanelExecutionKt {
                         MpSqlVisualizerBundle.message("panel.portableExport"),
                         "SQL (" + format.getExt().toUpperCase(java.util.Locale.ROOT) + ")",
                         format.getExt());
-        com.intellij.openapi.fileChooser.FileChooserFactory.FileSaverDialog dialog =
+        com.intellij.openapi.fileChooser.FileSaverDialog dialog =
                 com.intellij.openapi.fileChooser.FileChooserFactory.getInstance()
                         .createSaveFileDialog(descriptor, p.project);
         com.intellij.openapi.vfs.VirtualFileWrapper saved =

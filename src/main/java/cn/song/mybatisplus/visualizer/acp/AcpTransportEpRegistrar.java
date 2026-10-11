@@ -23,6 +23,12 @@ public final class AcpTransportEpRegistrar {
 
     private static final AtomicBoolean registered = new AtomicBoolean(false);
 
+    // 常量前置声明：sseResolver 的 lambda 属静态初始化，Java 非法前向引用要求被引常量先声明
+    // （Kotlin object 无此限制——顶层常量声明顺序不影响初始化期可引用性）。
+    private static final String PROVIDER_IFACE_FQN = "com.intellij.ml.llm.agents.acp.client.AcpIdeaMcpTransportProvider";
+    private static final String TRANSPORT_ENUM_FQN_ = "com.intellij.ml.llm.agents.acp.client.AcpIdeaMcpTransport";
+    private static final String EP_NAME = "com.intellij.ml.llm.agents.acp.ideaMcpTransportProvider";
+
     /* 4a（T-PerfSweep8）：SSE 常量缓存——KDoc 既有承诺「首次 getTransport 时解析并缓存」，
      *  实现此前每次调用重跑 Class.forName+getField（MCP 会话清单刷新级频率）。按计划口径：
      *  首次解析成功缓存（getField 返回 static final 枚举常量，每类加载器单实例）；解析失败
@@ -72,10 +78,6 @@ public final class AcpTransportEpRegistrar {
      * 少一个桩类型即少一处版本漂移面，而该常量的取值已由上述两处实证钉死。</p>
      */
     public static final String CLAUDE_ACP_ID = "acp.registry.claude-acp";
-
-    private static final String PROVIDER_IFACE_FQN = "com.intellij.ml.llm.agents.acp.client.AcpIdeaMcpTransportProvider";
-    private static final String TRANSPORT_ENUM_FQN_ = "com.intellij.ml.llm.agents.acp.client.AcpIdeaMcpTransport";
-    private static final String EP_NAME = "com.intellij.ml.llm.agents.acp.ideaMcpTransportProvider";
 
     public static void registerOnce() {
         if (registered.get()) return;

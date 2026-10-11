@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.converter.EasyQueryConverter;
 import cn.song.mybatisplus.visualizer.converter.MdsConverter;
 import cn.song.mybatisplus.visualizer.converter.QuerydslConverter;
 import cn.song.mybatisplus.visualizer.converter.jpa.JpaQueryEnhancer;
+import cn.song.mybatisplus.visualizer.model.ColumnInfo;
 import cn.song.mybatisplus.visualizer.model.ColumnRef;
 import cn.song.mybatisplus.visualizer.model.Condition;
 import cn.song.mybatisplus.visualizer.model.ConditionView;

@@ -225,7 +225,7 @@ public class SqlPreviewPanel extends JBPanel<SqlPreviewPanel> implements Disposa
 
     private static String resolvePreviewTempFileOwner() {
         try {
-            return ProcessHandle.current().pid().toString();
+            return Long.toString(ProcessHandle.current().pid());
         } catch (Throwable t) {
             return "0";
         }

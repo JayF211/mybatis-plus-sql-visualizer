@@ -1348,30 +1348,12 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
             return;
         }
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
-            Triple<List<SqlToJavaConverter.EntityCandidate>,
+            // Kotlin val payload = try {...} catch {...} 的 Java 等价——单次赋值须 genuinely final
+            // 才能被下方 EDT lambda 捕获，故把 try/catch 折进辅助方法一次求值（语义不变：fatal 透传、
+            // 失败降级「无候选」）。
+            final Triple<List<SqlToJavaConverter.EntityCandidate>,
                     Map<String, List<SqlToJavaConverter.EntityCandidate>>,
-                    Pair<Boolean, Set<String>>> payload;
-            try {
-                payload = ReadAction.compute(() -> {
-                    List<SqlToJavaConverter.EntityCandidate> candidates =
-                            SqlToJavaConverter.INSTANCE.findCandidates(project, result.tableName());
-                    // T-M37 P1：副表**全部**候选（alias → 列表；零/无别名 → 空），EDT 层按 joins 顺序分发
-                    Map<String, List<SqlToJavaConverter.EntityCandidate>> subCandidates =
-                            SqlToJavaConverter.INSTANCE.findSubEntityCandidates(project, result.joins());
-                    // 调用类 MPJ 能力（继承链实证）——VO 查询/多表生成据此选合法方法
-                    boolean callerMpjLocal = SqlToJavaConverter.INSTANCE.invocationHasMpj(project, callerField.getText());
-                    // T-M44：调用类真实方法集（继承链）——生成器按真实 API 选择调用方法（selectPage 缺失回落 selectJoinPage 族）
-                    Set<String> callerMethodsLocal = SqlToJavaConverter.INSTANCE.invocationMethods(project, callerField.getText());
-                    return new Triple<>(candidates, subCandidates, new Pair<>(callerMpjLocal, callerMethodsLocal));
-                });
-            } catch (Throwable t) {
-                // T-FP-03 收口：JVM 级 fatal 透传（PSI 读失败才降级为「无候选」）
-                if (FatalErrors.isFatal(t)) throw t;
-                payload = new Triple<>(
-                        Collections.<SqlToJavaConverter.EntityCandidate>emptyList(),
-                        Collections.<String, List<SqlToJavaConverter.EntityCandidate>>emptyMap(),
-                        new Pair<>(false, Collections.<String>emptySet()));
-            }
+                    Pair<Boolean, Set<String>>> payload = resolveReversePayload(project, result);
             ApplicationManager.getApplication().invokeLater(() -> {
                 cacheCandidates = payload.getFirst();
                 callerMpj = payload.getThird().getFirst();
@@ -1416,6 +1398,38 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                 });
             });
         });
+    }
+
+    /**
+     * Kotlin 侧 {@code val payload = try {...} catch {...}} 的 Java 承载（原内联 try/catch 折出）：
+     * BGT 单次 ReadAction 收集主/副表候选与调用类能力（MPJ/方法集），PSI 读失败降级「无候选」，
+     * JVM 级 fatal 原样透传（T-FP-03 收口语义不变）。
+     */
+    private Triple<List<SqlToJavaConverter.EntityCandidate>,
+            Map<String, List<SqlToJavaConverter.EntityCandidate>>,
+            Pair<Boolean, Set<String>>> resolveReversePayload(
+            Project project, SqlReverseResult result) {
+        try {
+            return ReadAction.compute(() -> {
+                List<SqlToJavaConverter.EntityCandidate> candidates =
+                        SqlToJavaConverter.INSTANCE.findCandidates(project, result.tableName());
+                // T-M37 P1：副表**全部**候选（alias → 列表；零/无别名 → 空），EDT 层按 joins 顺序分发
+                Map<String, List<SqlToJavaConverter.EntityCandidate>> subCandidates =
+                        SqlToJavaConverter.INSTANCE.findSubEntityCandidates(project, result.joins());
+                // 调用类 MPJ 能力（继承链实证）——VO 查询/多表生成据此选合法方法
+                boolean callerMpjLocal = SqlToJavaConverter.INSTANCE.invocationHasMpj(project, callerField.getText());
+                // T-M44：调用类真实方法集（继承链）——生成器按真实 API 选择调用方法（selectPage 缺失回落 selectJoinPage 族）
+                Set<String> callerMethodsLocal = SqlToJavaConverter.INSTANCE.invocationMethods(project, callerField.getText());
+                return new Triple<>(candidates, subCandidates, new Pair<>(callerMpjLocal, callerMethodsLocal));
+            });
+        } catch (Throwable t) {
+            // T-FP-03 收口：JVM 级 fatal 透传（PSI 读失败才降级为「无候选」）
+            if (FatalErrors.isFatal(t)) throw t;
+            return new Triple<>(
+                    Collections.<SqlToJavaConverter.EntityCandidate>emptyList(),
+                    Collections.<String, List<SqlToJavaConverter.EntityCandidate>>emptyMap(),
+                    new Pair<>(false, Collections.<String>emptySet()));
+        }
     }
 
     /**

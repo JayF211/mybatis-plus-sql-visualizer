@@ -393,7 +393,7 @@ public class ParamSchemeManagerDialog extends DialogWrapper implements Disposabl
     /** 只挂「关闭」（照 SqlSuppressManagerDialog：关闭即生效，无确定/应用缓存层）。 */
     @Override
     protected Action[] createActions() {
-        return new Action[]{cancelAction};
+        return new Action[]{getCancelAction()};
     }
 
     /**

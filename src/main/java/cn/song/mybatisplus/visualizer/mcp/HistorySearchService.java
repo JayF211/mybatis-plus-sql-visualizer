@@ -199,7 +199,7 @@ public final class HistorySearchService {
         }
         return search(
             perFile, query, nowMs,
-            files.size,
+            files.size(),
             scannedEntries,
             scanTruncated
         );

@@ -21,6 +21,7 @@ import com.intellij.lang.injection.InjectedLanguageManager;
 import com.intellij.openapi.project.DumbAware;
 import com.intellij.patterns.PlatformPatterns;
 import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiLanguageInjectionHost;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.xml.XmlAttribute;
@@ -101,6 +102,8 @@ public class XmlSqlCompletionContributor extends CompletionContributor implement
                 //     包 EditorWindow），T-PerfSweep16 原实现恰在此形态验证（fixture 绿真机断即两形态差）；
                 //  ③ 都拿不到 → 原样（宿主形态 no-op：position/offset 本就是宿主坐标）。
                 PsiElement injectedFile = parameters.getPosition().getContainingFile();
+                // getVirtualFile 声明在 PsiFile 接口（PsiElement 无此方法）——containingFile 恒 PsiFile，cast 取用
+                PsiFile injectedPsiFile = (PsiFile) injectedFile;
                 PsiLanguageInjectionHost injectionHost = null;
                 if (injectedFile != null) {
                     injectionHost = InjectedLanguageManager.getInstance(injectedFile.getProject())
@@ -111,8 +114,8 @@ public class XmlSqlCompletionContributor extends CompletionContributor implement
                 int offset;
                 if (hostPsiFile != null && hostPsiFile.getTextLength() > 0) {
                     Integer hostOffset = null;
-                    if (injectedFile.getVirtualFile() instanceof VirtualFileWindow) {
-                        hostOffset = ((VirtualFileWindow) injectedFile.getVirtualFile()).getDocumentWindow()
+                    if (injectedPsiFile.getVirtualFile() instanceof VirtualFileWindow) {
+                        hostOffset = ((VirtualFileWindow) injectedPsiFile.getVirtualFile()).getDocumentWindow()
                                 .injectedToHost(parameters.getOffset());
                     }
                     if (hostOffset == null && parameters.getEditor().getDocument() instanceof DocumentWindow) {

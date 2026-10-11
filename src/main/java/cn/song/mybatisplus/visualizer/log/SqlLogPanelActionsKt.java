@@ -62,7 +62,7 @@ public final class SqlLogPanelActionsKt {
         String defaultName = format == SqlExportFormat.SQL
                 ? SqlExportService.defaultSqlExportFileName()
                 : "sql-log." + format.getExt();
-        VirtualFileWrapper saved = dialog.save(null, defaultName);
+        VirtualFileWrapper saved = dialog.save((com.intellij.openapi.vfs.VirtualFile) null, defaultName);
         if (saved == null) return;
         File target = saved.getFile();
         ApplicationManager.getApplication().executeOnPooledThread(() -> {

@@ -488,12 +488,7 @@ public final class SqlPreviewPanelEditorLifecycleKt {
         p.editorHolder.removeAll();
         // T-M27.1：编辑器组件链补 DataProvider——外层包装 DataProvider 提供 EDITOR
         final Editor createdForData = created;
-        JBPanel<JBPanel<?>> wrapper = new JBPanel<JBPanel<?>>(new BorderLayout()) {
-            @Override
-            public Object getData(@NotNull String dataId) {
-                return CommonDataKeys.EDITOR.is(dataId) ? createdForData : null;
-            }
-        };
+        JBPanel<JBPanel<?>> wrapper = new EditorDataProviderPanel(createdForData);
         wrapper.add(created.getComponent(), BorderLayout.CENTER);
         p.editorHolder.add(wrapper, BorderLayout.CENTER);
         p.editorHolder.revalidate();
@@ -695,12 +690,20 @@ public final class SqlPreviewPanelEditorLifecycleKt {
     @NotNull
     public static PsiFile createPreviewFileForTest(@NotNull SqlPreviewPanel p, @NotNull Project proj,
                                                    @NotNull String sql) {
-        return ReadAction.compute(
-                (com.intellij.openapi.util.ThrowableComputable<PsiFile, Throwable>) () -> {
-                    FileType fileType = FileTypeManager.getInstance().getStdFileType("SQL");
-                    return PsiFileFactory.getInstance(proj)
-                            .createFileFromText("preview.sql", fileType, sql);
-                });
+        // ThrowableComputable<PsiFile, Throwable> 的 compute 声明抛 Throwable——该方法实际只做
+        // PsiFileFactory 纯内存创建（不产受检异常），照原 Kotlin 形态在此 sneaky 透传即可。
+        try {
+            return ReadAction.compute(
+                    (com.intellij.openapi.util.ThrowableComputable<PsiFile, Throwable>) () -> {
+                        FileType fileType = FileTypeManager.getInstance().getStdFileType("SQL");
+                        return PsiFileFactory.getInstance(proj)
+                                .createFileFromText("preview.sql", fileType, sql);
+                    });
+        } catch (RuntimeException | java.lang.Error e) {
+            throw e;
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
     }
 
     /**
@@ -873,6 +876,29 @@ public final class SqlPreviewPanelEditorLifecycleKt {
                 } catch (Throwable ignored) {
                 }
             }
+        }
+    }
+
+    /**
+     * T-M27.1：编辑器组件链补 DataProvider——2025.3 平台编辑器内部改为 UiCompatibleDataProvider
+     * （仅新 UI 兼容查询路径生效），传统 DataManager.getDataContext 沿父链只认 DataProvider 接口，
+     * 不实现则编辑器无补全（断言 editor != null 静默失败）。master 为匿名 object 表达式
+     * {@code object : JBPanel<JBPanel<*>>(BorderLayout()), DataProvider}——Java 匿名类无法声明
+     * implements 子句，故落命名静态内部类承载（语义等价：BorderLayout 布局 + EDITOR 数据应答）。
+     */
+    private static final class EditorDataProviderPanel extends JBPanel<JBPanel<?>>
+            implements com.intellij.openapi.actionSystem.DataProvider {
+
+        private final Editor editor;
+
+        private EditorDataProviderPanel(Editor editor) {
+            super(new BorderLayout());
+            this.editor = editor;
+        }
+
+        @Override
+        public Object getData(@NotNull String dataId) {
+            return CommonDataKeys.EDITOR.is(dataId) ? editor : null;
         }
     }
 }
