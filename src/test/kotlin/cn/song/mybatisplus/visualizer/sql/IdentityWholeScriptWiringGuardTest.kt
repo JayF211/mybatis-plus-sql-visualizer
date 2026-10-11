@@ -107,16 +107,19 @@ class IdentityWholeScriptWiringGuardTest {
 
     @Test
     fun `executeAdhocSql体内每个SqlExecutor调用都传wholeScriptExec`() {
-        val body = mainSrc("cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.java")
-        val fnStart = body.indexOf("void executeAdhocSql(String sql, boolean dmlConfirmed,")
-        assertTrue("未找到 executeAdhocSql", fnStart >= 0)
-        val fn = body.substring(fnStart)
+        // T-M53-II D2-5：`executeAdhocSql` 随执行链组合式重构搬到同包门面类
+        // SqlPreviewPanelExecutionKt（k2j：静态方法、receiver 首参），读取面须指向站点真正所在文件，
+        // 否则 `未找到 executeAdhocSql` 直接红。1/2/3 参重载链都委托 4 参真身——lastIndexOf 取真身切片。
+        val body = mainSrc("cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecutionKt.java")
+        val realStart = body.lastIndexOf("public static void executeAdhocSql(")
+        assertTrue("未找到 executeAdhocSql", realStart >= 0)
+        val fn = body.substring(realStart)
         val offenders = mutableListOf<String>()
         var checked = 0
         for (call in listOf("SqlExecutor.execute(", "SqlExecutor.executePrepared(")) {
-            for (span in callsWithin(fn, "void executeAdhocSql(String sql, boolean dmlConfirmed,", call)) {
+            for (span in callsWithin(fn, "public static void executeAdhocSql(", call)) {
                 checked++
-                val exempted = exempt["SqlPreviewPanel.java"]?.any { span.contains(it) } == true
+                val exempted = exempt["SqlPreviewPanelExecutionKt.java"]?.any { span.contains(it) } == true
                 if (!exempted && !span.contains("wholeScriptExec")) {
                     offenders += span.take(120)
                 }
@@ -131,22 +134,34 @@ class IdentityWholeScriptWiringGuardTest {
 
     @Test
     fun `DataSourceSelector每个executeOnConsole调用都传wholeScriptExec`() {
-        val text = mainSrc("cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java")
+        // T-M53-II（2026-10-10）：组合式重构把 `executeOnConsole` 的定义点与调用点分散到三个同包
+        // 门面文件（定义在 DataSourceSelectorConsoleKt；调用点在 DataSourceSelector /
+        // DataSourceSelectorConsoleKt / DataSourceSelectorResultsKt）——k2j：Java 门面静态形态。
+        // 读取面必须覆盖全集——只读单文件会在某个文件恰好无调用点时静默漏掉转发点（真接线漏照绿）。
+        val files = listOf(
+            "cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java",
+            "cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleKt.java",
+            "cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java",
+        )
         val offenders = mutableListOf<String>()
         var checked = 0
-        var idx = text.indexOf("executeOnConsole(")
-        while (idx >= 0) {
-            val before = text.substring(maxOf(0, idx - 30), idx)
-            if (!before.contains("void ")) { // 定义点（private static void executeOnConsole(）不计
-                val open = text.indexOf('(', idx)
-                val span = argSpan(text, open)
-                checked++
-                val exempted = exempt["DataSourceSelector.java"]?.any { span.contains(it) } == true
-                if (!exempted && !span.contains("wholeScriptExec")) {
-                    offenders += span.take(120)
+        files.forEach { rel ->
+            val text = mainSrc(rel)
+            val name = rel.substringAfterLast('/')
+            var idx = text.indexOf("executeOnConsole(")
+            while (idx >= 0) {
+                val before = text.substring(maxOf(0, idx - 30), idx)
+                if (!before.contains("public static void executeOnConsole(")) { // 定义点不计
+                    val open = text.indexOf('(', idx)
+                    val span = argSpan(text, open)
+                    checked++
+                    val exempted = exempt[name]?.any { span.contains(it) } == true
+                    if (!exempted && !span.contains("wholeScriptExec")) {
+                        offenders += "$name: " + span.take(120)
+                    }
                 }
+                idx = text.indexOf("executeOnConsole(", idx + 1)
             }
-            idx = text.indexOf("executeOnConsole(", idx + 1)
         }
         assertTrue("executeOnConsole 应至少有 3 个调用点（实查 $checked）", checked >= 3)
         assertTrue(
@@ -157,11 +172,12 @@ class IdentityWholeScriptWiringGuardTest {
 
     @Test
     fun `executeAdhocSql确实计算了identity识别特征`() {
-        val fn = mainSrc("cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.java")
-        val fnStart = fn.indexOf("void executeAdhocSql(String sql, boolean dmlConfirmed,")
+        // k2j：executeAdhocSql 落 SqlPreviewPanelExecutionKt 门面（lastIndexOf 取 4 参真身，同上切片口径）
+        val fn = mainSrc("cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecutionKt.java")
+        val realStart = fn.lastIndexOf("public static void executeAdhocSql(")
         assertTrue(
             "executeAdhocSql 必须用 IdentityInsertStatements 判定旗标（识别特征=含 SET IDENTITY_INSERT 语句）",
-            callsWithin(fn.substring(fnStart), "void executeAdhocSql(String sql, boolean dmlConfirmed,", "IdentityInsertStatements.containsStatement(")
+            callsWithin(fn.substring(realStart), "public static void executeAdhocSql(", "IdentityInsertStatements.containsStatement(")
                 .isNotEmpty(),
         )
     }

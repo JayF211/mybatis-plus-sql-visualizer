@@ -49,6 +49,32 @@ public class SqlToJavaConverterTest {
         assertTrue(code, code.contains(".eq(\"name\", \"张三\")"));
     }
 
+    // ------------------------------------------------------------------
+    // T-SqlToJavaPromote M3：G7 参数化 apply / G8 UNION 降级注释（master 新增用例 Java 承载）
+    // ------------------------------------------------------------------
+
+    @Test
+    public void G7_函数条件_参数化apply_值与表达式分离() throws Exception {
+        SqlReverseResult result = SqlToJavaConverter.parse("SELECT * FROM t WHERE DATE_FORMAT(create_time, '%Y') = '2024'");
+        String code = SqlToJavaConverter.generateCode(result, null, ReverseWrapperFormat.QUERY, null, new java.util.HashMap<>());
+        assertTrue(
+            code,
+            code.contains("apply(\"DATE_FORMAT(create_time, '%Y') = {0}\", \"2024\")"),
+        );
+    }
+
+    @Test
+    public void G8_UNION_生成降级注释_不产不存在的union方法() throws Exception {
+        SqlReverseResult result = SqlToJavaConverter.parse("SELECT id FROM t WHERE a = 1 UNION (SELECT id FROM t WHERE a = 2)");
+        assertEquals(1, result.unions().size());
+        assertEquals("UNION", result.unions().get(0).keyword());
+        String code = SqlToJavaConverter.generateCode(result, null, ReverseWrapperFormat.QUERY, null, new java.util.HashMap<>());
+        assertTrue(code, code.contains("UNION 子句需"));
+        assertTrue(code, code.contains("UNION SELECT id FROM t WHERE a = 2"));
+        // MP core 无 union() 方法——不得生成 union 调用
+        assertTrue(code, !code.contains(".union("));
+    }
+
     @Test
     public void 有候选_AUTO形态生成Lambda() throws Exception {
         String code = SqlToJavaConverter.generateCode(RESULT, candidate("User"), ReverseWrapperFormat.AUTO, null, new java.util.HashMap<>());

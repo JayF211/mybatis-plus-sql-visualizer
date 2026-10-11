@@ -90,10 +90,18 @@ public class SqlReverseParserTest {
     }
 
     @Test
-    public void 函数列_整体放弃select生成() throws Exception {
-        assertNull(parse("SELECT COUNT(*) FROM user").selectColumns());
-        assertNull(parse("SELECT id, COUNT(*) FROM user").selectColumns());
-        assertNull(parse("SELECT MAX(age) AS maxAge FROM user").selectColumns());
+    public void 函数列_收集原文不放弃() throws Exception {
+        // T-SqlToJavaPromote G5：聚合/函数列收集原文（含 AS 别名），不再整体放弃 select 生成
+        // （master 侧同名用例的 Java 承载；旧「整体放弃」断言已随语义升级改写）
+        assertEquals(List.of(new SelectColumn("COUNT(*)", null)), parse("SELECT COUNT(*) FROM user").selectColumns());
+        assertEquals(
+            List.of(new SelectColumn("id", null), new SelectColumn("COUNT(*)", null)),
+            parse("SELECT id, COUNT(*) FROM user").selectColumns(),
+        );
+        assertEquals(
+            List.of(new SelectColumn("MAX(age)", "maxAge")),
+            parse("SELECT MAX(age) AS maxAge FROM user").selectColumns(),
+        );
     }
 
     @Test
@@ -434,9 +442,12 @@ public class SqlReverseParserTest {
     }
 
     @Test
-    public void DISTINCT_不收集为列() throws Exception {
+    public void DISTINCT_建模且收集列() throws Exception {
+        // T-SqlToJavaPromote G3：DISTINCT 建模 distinct=true，列正常收集（不再放弃 select 生成）
+        // （master 侧「DISTINCT_不收集为列」的语义升级 Java 承载）
         SqlReverseResult result = parse("SELECT DISTINCT id, name FROM t WHERE a = 1");
-        assertNull(result.selectColumns());
+        assertTrue(result.distinct());
+        assertEquals(List.of(new SelectColumn("id", null), new SelectColumn("name", null)), result.selectColumns());
     }
 
     // ------------------------------------------------------------------
@@ -621,9 +632,20 @@ public class SqlReverseParserTest {
     }
 
     @Test
-    public void GROUPBY与HAVING_报错() throws Exception {
-        assertThrows(() -> parse("SELECT * FROM t GROUP BY a"));
-        assertThrows(() -> parse("SELECT * FROM t HAVING a > 1"));
+    public void GROUPBY与HAVING_建模() throws Exception {
+        // T-SqlToJavaPromote G1/G2：不再报错——GROUP BY 建模 groupBy 列表；HAVING 聚合表达式降级 Raw
+        // （master 侧「GROUP BY与HAVING_报错」的语义升级 Java 承载）
+        SqlReverseResult g = parse("SELECT * FROM t GROUP BY a, b");
+        assertEquals(List.of("a", "b"), columnNames(g.groupBy()));
+        SqlReverseResult h = parse("SELECT * FROM t GROUP BY a HAVING COUNT(*) > 1");
+        assertEquals(List.of("a"), columnNames(h.groupBy()));
+        assertEquals("COUNT(*) > 1", ((Condition.Raw) h.having()).getSqlText());
+    }
+
+    private static List<String> columnNames(List<ColumnRef> cols) {
+        List<String> out = new ArrayList<>();
+        for (ColumnRef c : cols) out.add(c.getColumnName());
+        return out;
     }
 
     @Test

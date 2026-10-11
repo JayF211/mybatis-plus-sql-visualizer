@@ -12,8 +12,10 @@ import org.junit.Test
  * 支持矩阵（DBX 真机实证 2026-09-02；T-ExplainFirstNative 对齐 IDEA 原生形态）：
  * MySQL 5.7/8.4、MariaDB（EXPLAIN 表格行——原生 MysqlBaseRawPlanData 同款，FORMAT=JSON
  * 为自创形态无渲染器消费）、PostgreSQL 16（FORMAT JSON, VERBOSE）、KingbaseES V8
- * （FORMAT JSON）、DM8（原生 EXPLAIN）、H2（PLAN FOR）、SQLite（QUERY PLAN）；
- * Oracle（两步链）/ SQL Server（会话 SET）null 降级。
+ * （FORMAT JSON）、DM8（原生 EXPLAIN）、H2（PLAN FOR）、SQLite（QUERY PLAN）。
+ * R23（2026-09-30）接入：Oracle（EXPLAIN PLAN FOR——真机实证 PLAN_TABLE 单语句登记，
+ * 计划另查 DBMS_XPLAN.DISPLAY）、SQL Server（SET STATISTICS XML 批内前缀——官方文档级，
+ * 真机未验证留账）。
  *
  * T-ExplainChainHardening T-ECH-02（O-48）：形态字面量断言保留（渲染逐字节不变的回归网），
  * 另加「支持表 vs 逐方言实现一致」「表覆盖注册表全量」「格式取值自洽」三组守卫——
@@ -71,10 +73,55 @@ class DialectExplainTest {
         assertEquals("EXPLAIN (FORMAT JSON) $sample", OpenGaussDialect.INSTANCE.renderExplainStatement(sample))
     }
 
+    /**
+     * R23：Oracle 接入——`EXPLAIN PLAN FOR <sql>` 单语句登记进 PLAN_TABLE。
+     * 真机实证（DBX 通道 2026-09-30，Oracle Free 23 + XE 11g）：单语句执行成功（0 行）；
+     * 计划文本须经二段式 `SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY)` 另查（会话级，跨连接不可见）。
+     */
     @Test
-    fun `Oracle SQLServer 降级 null`() {
-        assertNull(OracleDialect.INSTANCE.renderExplainStatement(sample))
-        assertNull(SqlServerDialect.INSTANCE.renderExplainStatement(sample))
+    fun `Oracle 形态（真机实证 PLAN_TABLE 登记）`() {
+        assertEquals("EXPLAIN PLAN FOR $sample", OracleDialect.INSTANCE.renderExplainStatement(sample))
+    }
+
+    /**
+     * R23：SQL Server 接入——`SET STATISTICS XML ON; <sql>; SET STATISTICS XML OFF` 批内前缀。
+     * 官方文法（Microsoft Learn SET STATISTICS XML）：「need not be the only statement in a batch」，
+     * 计划 XML 为语句执行后的附加结果集；本插件无 SQL Server 真机（dbx 在册无实例），真机未验证留账。
+     */
+    @Test
+    fun `SQL Server 形态（文档实证 STATISTICS XML 批内前缀）`() {
+        assertEquals(
+            "SET STATISTICS XML ON; $sample; SET STATISTICS XML OFF",
+            SqlServerDialect.INSTANCE.renderExplainStatement(sample),
+        )
+    }
+
+    /**
+     * R23：二段式/多结果集方言的通道元数据——postPlanQuery（计划另查语句）与 channelNote
+     * （MCP 单语句通道的诚实降级说明）。其余 9 家必须两者皆空：channelNote 为 null 是
+     * 「MCP 输出逐字节与现状一致」防回归门禁的判据。
+     * （k2j 适配：ExplainSupport 为 Java 类，Entry 是 record——getEntries()/postPlanQuery()/channelNote() 访问器形态）
+     */
+    @Test
+    fun `Oracle SQLServer 二段式通道说明 其余九家无追加`() {
+        val oracle = ExplainSupport.entryFor("Oracle")!!
+        assertEquals("SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY)", oracle.postPlanQuery())
+        assertTrue("Oracle 必须有通道说明（诚实降级）", !oracle.channelNote().isNullOrEmpty())
+        val sqlServer = ExplainSupport.entryFor("SQL Server")!!
+        assertNull("SQL Server 无另查语句（计划 XML 为附加结果集，非另查）", sqlServer.postPlanQuery())
+        assertTrue("SQL Server 必须有通道说明（查询行非计划行的澄清）", !sqlServer.channelNote().isNullOrEmpty())
+        ExplainSupport.getEntries()
+            .filter { it.dialectName() != "Oracle" && it.dialectName() != "SQL Server" }
+            .forEach {
+                assertNull("${it.dialectName()} 不应有另查语句", it.postPlanQuery())
+                assertNull("${it.dialectName()} 不应有通道说明（输出零追加会被打破）", it.channelNote())
+            }
+    }
+
+    @Test
+    fun `未知方言降级 null（R23 后全量 11 家已接入，仅存未知键路径）`() {
+        assertNull(ExplainSupport.render("no-such-dialect", sample))
+        assertNull(ExplainSupport.render(null, sample))
     }
 
     @Test
@@ -117,10 +164,14 @@ class DialectExplainTest {
         )
     }
 
+    /** R23 后 Oracle 已接入：未包装文本正常包装，已包装文本（EXPLAIN PLAN FOR 开头）原样返回。 */
     @Test
-    fun `幂等-不支持方言未包装降级null 已包装原样`() {
-        assertNull(OracleDialect.INSTANCE.renderExplainStatementIdempotent(sample))
-        assertEquals("EXPLAIN $sample", OracleDialect.INSTANCE.renderExplainStatementIdempotent("EXPLAIN $sample"))
+    fun `幂等-Oracle 未包装正常包装 已包装原样`() {
+        assertEquals("EXPLAIN PLAN FOR $sample", OracleDialect.INSTANCE.renderExplainStatementIdempotent(sample))
+        assertEquals(
+            "EXPLAIN PLAN FOR $sample",
+            OracleDialect.INSTANCE.renderExplainStatementIdempotent("EXPLAIN PLAN FOR $sample"),
+        )
     }
 
     /**
@@ -202,6 +253,12 @@ class DialectExplainTest {
                 assertTrue(
                     "JSON 档模板应含 FORMAT JSON: ${e.dialectName} → ${e.template}",
                     e.template!!.contains("FORMAT JSON"),
+                )
+            }
+            if (e.outputFormat == ExplainOutputFormat.XML) {
+                assertTrue(
+                    "XML 档模板应含 STATISTICS XML: ${e.dialectName} → ${e.template}",
+                    e.template!!.contains("STATISTICS XML"),
                 )
             }
         }
