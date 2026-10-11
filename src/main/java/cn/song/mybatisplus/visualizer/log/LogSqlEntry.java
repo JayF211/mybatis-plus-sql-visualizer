@@ -105,6 +105,19 @@ public record LogSqlEntry(
     private static final int MAX_SUMMARY_LENGTH = 160;
 
     /**
+     * Kotlin data class 默认参语义还原：{@code summary} 在 master 侧是带默认值的构造参
+     * （{@code = run { …restoredSql… }}）——调用方传 {@code null}（Kotlin 侧省略该参经 Java 桥、
+     * 或 Java 侧 20 参规范构造器直传 null）时按 master 口径现算，而非携带 null 下渗到渲染链
+     * （{@code withTerminator(null)} NPE，k2j 首轮 testShards 46 败根因）。
+     * 显式传非 null 时原样保留（与 Kotlin「传了实参就用实参」一致）。
+     */
+    public LogSqlEntry {
+        if (summary == null) {
+            summary = computeSummary(restoredSql);
+        }
+    }
+
+    /**
      * T-CrudColor/T-ListMode 缓存侧表（Java record 无实例字段——Kotlin data class 体属性的
      * Java 等价承载）：键为条目（record 值相等语义），弱键随条目 GC。缓存内容（statementType、
      * 行片段）均由条目组件派生，值相等的条目共享缓存结果语义完全等价。
