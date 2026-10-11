@@ -20,62 +20,69 @@ import cn.song.mybatisplus.visualizer.model.UpdateStatement
  *
  * 桥接仅做字段搬运（反向模型与正向模型同源 Condition 家族，无需转换条件本身）；
  * 列原文（`t.id` / `` `t`.`id` ``）拆为 tableAlias + columnName。
+ * （T-SyncK2JMaster482 C9b-1：生产类已转 Java record，具名实参改位置实参、访问器改 Java 形态。）
  */
 fun SqlReverseResult.toSqlStatement(): SqlStatement = when (kind) {
     ReverseStatementKind.SELECT -> SelectStatement(
-        table = TableInfo(entityClassName = "", tableName = tableName, columns = emptyList()),
-        selectColumns = selectColumns?.map { columnRefOf(it.expr, it.alias) } ?: emptyList(),
-        tableAlias = tableAlias,
-        joins = joins.map { it.toJoinClause() },
-        distinct = distinct,
-        conditions = conditions,
-        groupBy = groupBy,
-        having = having,
-        orderBy = orderBy,
-        limit = limit,
-        unions = unions.map { UnionClause(keyword = it.keyword, sql = it.sql) },
+        TableInfo("", tableName, emptyList()),
+        selectColumns?.map { columnRefOf(it.expr(), it.alias()) } ?: emptyList(),
+        tableAlias,
+        joins.map { it.toJoinClause() },
+        distinct,
+        conditions,
+        groupBy,
+        having,
+        orderBy,
+        limit,
+        null,               // rawFirst
+        null,               // rawAround
+        null,               // comment
+        unions.map { UnionClause(it.keyword(), it.sql()) },
+        null,               // fromSubQuery
+        null,               // fillClauses
     )
     ReverseStatementKind.UPDATE -> UpdateStatement(
-        table = TableInfo(entityClassName = "", tableName = tableName, columns = emptyList()),
-        sets = sets.map { SetClause(column = ColumnRef(columnName = it.column), value = it.value, rawSql = it.rawSql) },
-        conditions = conditions,
-        tableAlias = tableAlias,
-        joins = joins.map { it.toJoinClause() },
+        TableInfo("", tableName, emptyList()),
+        sets.map { SetClause(ColumnRef(it.column()), it.value(), it.rawSql()) },
+        conditions,
+        null,               // rawTail
+        tableAlias,
+        joins.map { it.toJoinClause() },
     )
     ReverseStatementKind.DELETE -> DeleteStatement(
-        table = TableInfo(entityClassName = "", tableName = tableName, columns = emptyList()),
-        conditions = conditions,
-        deleteTargets = deleteTargets,
-        tableAlias = tableAlias,
-        joins = joins.map { it.toJoinClause() },
-        limit = limit,
+        TableInfo("", tableName, emptyList()),
+        conditions,
+        deleteTargets,
+        tableAlias,
+        joins.map { it.toJoinClause() },
+        limit,
     )
     ReverseStatementKind.INSERT -> throw IllegalStateException("INSERT 无正向模型，走 renderInsertSql")
 }
 
 private fun ReverseJoin.toJoinClause(): JoinClause = JoinClause(
-    type = type,
-    tableName = tableName,
-    alias = alias ?: "",
-    onConditions = onConditions,
+    type,
+    tableName,
+    alias ?: "",
+    onConditions,
 )
 
 /** 列原文（含表别名前缀/反引号）→ [ColumnRef]（拆 tableAlias + columnName，保留 AS 别名）。 */
 fun columnRefOf(expr: String, alias: String? = null): ColumnRef {
     val parts = expr.split('.').map { it.trim('`') }
     return if (parts.size > 1) {
-        ColumnRef(tableAlias = parts.dropLast(1).joinToString("."), columnName = parts.last(), alias = alias)
+        ColumnRef(parts.dropLast(1).joinToString("."), parts.last(), alias)
     } else {
-        ColumnRef(columnName = parts.first(), alias = alias)
+        ColumnRef(null, parts.first(), alias)
     }
 }
 
 /** INSERT 测试渲染器（无正向模型，往返门禁用）：反向 insertColumns/insertValues → INSERT 语句。 */
 fun renderInsertSql(result: SqlReverseResult): String = buildString {
-    append("INSERT INTO ").append(result.tableName)
-    append(" (").append(result.insertColumns.joinToString(", ")).append(")")
+    append("INSERT INTO ").append(result.tableName())
+    append(" (").append(result.insertColumns().joinToString(", ")).append(")")
     append(" VALUES ")
-    append(result.insertValues.joinToString(", ") { row ->
+    append(result.insertValues().joinToString(", ") { row ->
         "(" + row.joinToString(", ") { v ->
             when (v) {
                 is SqlValue.Literal -> v.raw
