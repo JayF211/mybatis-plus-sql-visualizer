@@ -239,7 +239,9 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
             String fallback = awaitResult();
             assertTrue(fallback, fallback.contains("new MPJQueryWrapper<>"));
             // 选中无 MPJ 能力的调用类（Light 环境无 MPJ 索引，callerMpj=false）→ 重渲染触发业务拒绝
+            // ——T-FixMpjStale 起重生成异步化，轮询等状态行错误提示
             panel.callerFieldForTest().pickForTest("UserService", "com.demo.UserService");
+            awaitStatusContains("无 MPJ 能力");
             assertTrue(panel.statusForTest(), panel.statusForTest().contains("暂不支持的 SQL 结构"));
             assertTrue(panel.statusForTest(), panel.statusForTest().contains("无 MPJ 能力"));
             // 结果区保留上次成功内容，未被错误分支改写
@@ -532,10 +534,10 @@ public class SqlToJavaPanelTest extends BasePlatformTestCase {
             panel.inputEditorForTest().setSql("SELECT id, name FROM user WHERE name = '张三'");
             panel.convertForTest();
             assertTrue(panel.resultTextForTest().contains("new QueryWrapper"));
-            // 选中调用类 → 自动重新生成（已有转换结果时；含调用语句）
+            // 选中调用类 → 自动重新生成（已有转换结果时；含调用语句）——T-FixMpjStale 起为
+            // 后台反查 MPJ 能力后异步重生成，轮询等目标片段
             panel.callerFieldForTest().pickForTest("UserService", "com.demo.UserService");
-            String result = panel.resultTextForTest();
-            assertTrue(result, result.contains("userService.list"));
+            String result = awaitContains("userService.list");
             // 清除 → 回到纯表达式
             panel.callerFieldForTest().clearForTest();
             String plain = panel.resultTextForTest();
