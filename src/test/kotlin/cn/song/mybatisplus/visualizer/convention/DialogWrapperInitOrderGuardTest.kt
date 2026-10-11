@@ -219,6 +219,25 @@ class DialogWrapperInitOrderGuardTest {
         var constructors = 0
         var scopesWithBodies = 0
 
+        /**
+         * T-M53-II（2026-10-10，master 侧同款机制）：同包协作文件方法体索引 —— 组合式重构把
+         * `SqlPreviewPanel.toolbar()` 这类构造期被构造器/初始化块调用的方法体搬到了同包协作文件。
+         * master 侧为 Kotlin 扩展函数形态（`fun SqlPreviewPanel.toolbar(`，EXT_FUN_DEF 索引），
+         * k2j 生产为 Java：方法体落同包门面类的**静态方法**（`static JBPanel toolbar(SqlPreviewPanel p)`），
+         * 故本索引键 = (首参类型, 方法名)，与归属类名 + 构造期内被调用名配对使用。
+         * 若不跨文件解析，「构造期先写后读」这条豁免路径就对拆分后形态失明（k2j 实测：
+         * toolbar 搬出门面后 modeButton 的先写后读豁免随 309 布局失效）。
+         */
+        val extBodies = mutableMapOf<Pair<String, String>, String>()
+        sources.forEach { (_, raw) ->
+            val ls = stripStrings(raw).split('\n')
+            val dp = depths(ls)
+            ls.forEachIndexed { fi, l ->
+                val fm = FACADE_STATIC_DEF.find(l) ?: return@forEachIndexed
+                extBodies.putIfAbsent(fm.groupValues[1] to fm.groupValues[2], blockEnd(ls, dp, fi).let { ls.subList(fi, it).joinToString("\n") })
+            }
+        }
+
         sources.forEach { (file, raw) ->
             val lines = stripStrings(raw).split('\n')
             val dep = depths(lines)
@@ -266,6 +285,10 @@ class DialogWrapperInitOrderGuardTest {
                     }
                 }
 
+                // T-M53-II（master 侧同区语义）：归属类名——构造期内被调用、方法体在同包门面类静态
+                // 方法的查找键（master 用 ownerClassAt 顶格回溯；k2j 类体扫描已按 classRanges 归属，
+                // 类名直接取自声明行）。供下方 CALL 内联段的门面方法体并读使用。
+                val ownerClass = CLASS_DEF.find(lines[cstart])?.groupValues?.get(1)
                 scopes.forEach { (idx, kind, shadow0) ->
                     if (kind == "init") initBlocks++ else constructors++
                     val end = blockEnd(lines, dep, idx)
@@ -317,6 +340,58 @@ class DialogWrapperInitOrderGuardTest {
                                     visited += name
                                     val (s, e, p) = methods.getValue(name)
                                     process(s, e, name, depth + 1, p)
+                                } else if (name !in visited) {
+                                    // T-M53-II：构造期被调用、方法体在同包门面类静态方法（master 侧为
+                                    // 同包扩展函数）——并入解析面，否则先写后读豁免对拆分后形态失明。
+                                    val fb = ownerClass?.let { oc -> extBodies[oc to name] }
+                                    if (fb != null) {
+                                        visited += name
+                                        processText(fb, name, depth + 1)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // T-M53-II：门面静态方法体内联（无行号形态）——字段引用/读写判定与 process 同口径，
+                    // 仅作用于文本（门面体内 `p.field` 引用与裸引用同被词边界正则命中）。
+                    fun processText(bodyText: String, caller: String, depth: Int) {
+                        if (depth > 3) return
+                        val bodyLines = bodyText.split('\n')
+                        val bDep = depths(bodyLines)
+                        val (bLambda, bPrefix) = lambdaLines(bodyLines, bDep)
+                        val skip = fun funNestSkip(): Set<Int> {
+                            val st = mutableSetOf<Int>()
+                            for (i in bodyLines.indices) {
+                                if (FUN_DEF.find(bodyLines[i])?.range?.first == 0) {
+                                    (i until blockEnd(bodyLines, bDep, i)).forEach { st += it }
+                                }
+                            }
+                            return st
+                        }()
+                        for (i in bodyLines.indices) {
+                            if (i in skip || i in bLambda) continue
+                            val line = bPrefix[i]?.let { bodyLines[i].substring(0, it) } ?: bodyLines[i]
+                            scopeFields.keys.forEach { n -> if (assign(n).containsMatchIn(line)) written += n }
+                            scopeFields.keys.forEach { n ->
+                                if (word(n).containsMatchIn(line)) {
+                                    referenced += n
+                                    if (n !in written) readBeforeWrite.getOrPut(n) { mutableListOf() }.add(caller)
+                                }
+                            }
+                            CALL.findAll(line).forEach { m ->
+                                val name2 = m.groupValues[1]
+                                if (name2 in JAVA_KEYWORDS || name2 == caller) return@forEach
+                                if (name2 in methods && name2 !in visited) {
+                                    visited += name2
+                                    val (s2, e2, p2) = methods.getValue(name2)
+                                    process(s2, e2, name2, depth + 1, p2)
+                                } else if (name2 !in visited) {
+                                    val fb2 = ownerClass?.let { oc -> extBodies[oc to name2] }
+                                    if (fb2 != null) {
+                                        visited += name2
+                                        processText(fb2, name2, depth + 1)
+                                    }
                                 }
                             }
                         }
@@ -635,6 +710,16 @@ class DialogWrapperInitOrderGuardTest {
         val FUN_DEF = Regex(
             "^( *)((?:(?:private|public|protected|static|final|abstract|synchronized|native|default" +
                 "|@\\w+(?:\\([^)]*\\))?)\\s+)*)([\\w.<>\\[\\],?]+)\\s+(\\w+)\\s*\\("
+        )
+
+        /**
+         * T-M53-II（master 侧 EXT_FUN_DEF 的 Java 对应物）：同包门面类**静态方法**定义
+         * （`static <Ret> <名>(<OwnerType> p, …)`，首参为宿主面板实例）——组合式重构后，类的成员
+         * 方法体可能被搬到同包协作文件的静态门面里（如 `SqlPreviewPanelResultViewKt.toolbar(p)`）。
+         * 收 group[1]=方法名、group[2]=首参类型（宿主类名）。
+         */
+        val FACADE_STATIC_DEF = Regex(
+            "^ {4}(?:public\s+)?static\s+[\w.<>\[\],?\s]+\s+(\w+)\s*\(\s*(?:@\w+(?:\([^)]*\))?\s+)*(?:final\s+)?([A-Z]\w*)\s+\w+[,)]"
         )
 
         val CALL = Regex("(?:[\\w.]+\\s*\\.\\s*)?(\\w+)\\s*\\(")
