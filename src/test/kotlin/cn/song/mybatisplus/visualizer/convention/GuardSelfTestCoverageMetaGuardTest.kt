@@ -706,8 +706,57 @@ class GuardSelfTestCoverageMetaGuardTest {
             GuardEntry(
                 "convention/BannedApiSourceScanTest.kt",
                 listOf(
+                    // C11f-3 补登记：k2j 三方合并把 master 侧按规则族拆出的判定函数全量并回本单文件
+                    // （k2j 侧自承载、不继承 BannedApiScanSupport，见该文件 k2j 移植注），命名兜底面
+                    // 随之命中全部判定形状函数——逐条登记（判据 7）。多数函数由本文件自证用例直接引用
+                    // （裸条目）；无独立合成样本的 5 件（assertNoHits/invokeLaterSites/
+                    // invokeLaterWriteOffenders/entrySites/serviceWriteHits）按其 master 侧同款豁免登记
+                    // （via 转发边机器可校验）。
+                    DecisionFn(
+                        "assertNoHits",
+                        FnKind.HELPER,
+                        "断言助手（返回 Unit），命名命中 *Hits 兜底形状；via 即调用它的两个禁用 API 用例",
+                        via = listOf("禁用ActionToolbar旧式刷新API与反射强改按钮hack", "禁用IPGP发行版裁剪平台类"),
+                    ),
+                    DecisionFn(
+                        "invokeLaterSites",
+                        FnKind.SITES,
+                        "站点提取器（invokeLater 调用点），被共享内核 invokeLaterWriteOffenders 调用；自证经该转发边到达",
+                        via = listOf("invokeLaterWriteOffenders"),
+                    ),
+                    DecisionFn(
+                        "invokeLaterWriteOffenders",
+                        FnKind.VIOLATIONS,
+                        "共享内核，被两个已自证的模态规则转发调用；自证经这两条边到达（无独立合成样本用例）",
+                        via = listOf("anyModalityWriteOffenders", "defaultModalityWriteOffenders"),
+                    ),
+                    DecisionFn("anyModalityWriteOffenders", FnKind.VIOLATIONS),
+                    DecisionFn("anyModalityInUpdatePackageOffenders", FnKind.VIOLATIONS),
+                    DecisionFn("defaultModalityWriteOffenders", FnKind.VIOLATIONS),
+                    DecisionFn("throwableCatchSites", FnKind.SITES),
+                    DecisionFn("fatalPassthroughOffenders", FnKind.VIOLATIONS),
+                    DecisionFn("pooledThreadSites", FnKind.SITES),
+                    DecisionFn("psiCaptureOffenders", FnKind.VIOLATIONS),
+                    DecisionFn("edtReadContractOffenders", FnKind.VIOLATIONS),
+                    DecisionFn(
+                        "entrySites",
+                        FnKind.SITES,
+                        "入口站点共享提取器，被 initEntrySites/teardownEntrySites 转发调用；自证经这两条边到达（无直接合成样本用例）",
+                        via = listOf("initEntrySites", "teardownEntrySites"),
+                    ),
+                    DecisionFn("initEntrySites", FnKind.SITES),
+                    DecisionFn("teardownEntrySites", FnKind.SITES),
+                    DecisionFn(
+                        "serviceWriteHits",
+                        FnKind.SITES,
+                        "站点提取器（项目服务写站点），被 projectServiceStateOffenders 调用；自证经该转发边到达",
+                        via = listOf("projectServiceStateOffenders"),
+                    ),
+                    DecisionFn("projectServiceStateOffenders", FnKind.VIOLATIONS),
+                    DecisionFn("teardownServiceLookupOffenders", FnKind.VIOLATIONS),
                 ),
-                "T-M53-II 拆出的「禁用 API 与结构锚点」测试类：断言内联在用例里，无独立判定内核，故 decisionFns 留空。",
+                "k2j 三方合并后的「禁用 API + 四族规则 + 服务状态」单文件（master 侧拆分件在 k2j 合并回一体，" +
+                    "见文件头 k2j 移植注）：断言与判定内核并存；上述判定函数由本文件内的自证用例（合成样本）直接覆盖。",
             ),
             GuardEntry(
                 "convention/BannedApiScanRuleTest.kt",
