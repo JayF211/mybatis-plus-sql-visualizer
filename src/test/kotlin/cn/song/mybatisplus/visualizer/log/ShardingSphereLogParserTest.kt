@@ -132,7 +132,9 @@ class ShardingSphereLogParserTest {
 
     @Test
     fun `静默冲刷闭合待产出条目`() {
-        val parser = ShardingSphereLogParser(null, 20000, 1000L, { 0L })
+        // master 语义 = clock 注入、restorer 取默认（Kotlin 默认参）；k2j 全参构造须显式
+        // 传 LogSqlRestorer()（传 null 会下渗 flushSettled → restore NPE）
+        val parser = ShardingSphereLogParser(LogSqlRestorer(), 20000, 1000L, { 0L })
         parser.feed(logicLine)
         parser.feed(actualLine)
         assertTrue(parser.takeEntries().isEmpty())
