@@ -33,10 +33,10 @@ class PreviewRenderSlowOpsGuardTest {
     private fun repoRoot(): File {
         var dir = File(System.getProperty("user.dir")).absoluteFile
         repeat(6) {
-            if (File(dir, "src/main/kotlin").isDirectory) return dir
+            if (File(dir, "src/main/java").isDirectory) return dir
             dir = dir.parentFile ?: return@repeat
         }
-        error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
+        error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: ${System.getProperty("user.dir")}")
     }
 
     /**
@@ -67,7 +67,7 @@ class PreviewRenderSlowOpsGuardTest {
     }
 
     private fun mainSource(rel: String): String =
-        maskComments(repoRoot().resolve("src/main/kotlin/cn/song/mybatisplus/visualizer/$rel").readText())
+        maskComments(repoRoot().resolve("src/main/java/cn/song/mybatisplus/visualizer/$rel").readText())
 
     @Test
     fun test重渲染链文件禁直接调慢操作API族() {
@@ -107,21 +107,23 @@ class PreviewRenderSlowOpsGuardTest {
 
     private companion object {
         /**
-         * 重渲染链宿主文件（相对 src/main/kotlin/cn/song/mybatisplus/visualizer/）。
+         * 重渲染链宿主文件（相对 src/main/java/cn/song/mybatisplus/visualizer/）。
          *
          * T-M53-II D2-5：面板巨文件被拆成同包协作文件集——判定面必须跟着铺开，否则链上的文件
          * 一旦不是扫描目标，「把慢操作 API 拷进面板即红」这条守卫就在那些文件里静默失效
          * （扫描面漏站点＝假绿）。故按**面板家族全集 + 折叠收口**登记；当前各文件命中均为 0。
+         *
+         * k2j 适配：生产树为 src/main/java 下的 .java 文件（master 侧为 .kt）。
          */
         val SCAN_FILES = listOf(
-            "ui/SqlPreviewPanel.kt",
-            "ui/SqlPreviewPanelSqlView.kt",
-            "ui/SqlPreviewPanelResultView.kt",
-            "ui/SqlPreviewPanelParamPanel.kt",
-            "ui/SqlPreviewPanelExecution.kt",
-            "ui/SqlPreviewPanelEditorLifecycle.kt",
-            "ui/SqlPreviewPanelText.kt",
-            "ui/highlight/SqlAutoFolding.kt",
+            "ui/SqlPreviewPanel.java",
+            "ui/SqlPreviewPanelSqlViewKt.java",
+            "ui/SqlPreviewPanelResultViewKt.java",
+            "ui/SqlPreviewPanelParamPanelKt.java",
+            "ui/SqlPreviewPanelExecutionKt.java",
+            "ui/SqlPreviewPanelEditorLifecycleKt.java",
+            "ui/SqlPreviewPanelTextKt.java",
+            "ui/highlight/SqlAutoFolding.java",
         )
     }
 }

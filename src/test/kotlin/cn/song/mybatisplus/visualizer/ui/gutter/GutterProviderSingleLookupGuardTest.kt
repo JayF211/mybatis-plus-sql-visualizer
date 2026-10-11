@@ -100,9 +100,9 @@ class GutterProviderSingleLookupGuardTest {
      */
     @Test
     fun `F51_xmlInline快路径_单次取state并闸守卫`() {
-        val file = File(File(repoRoot(), gutterDir), "XmlInlineSqlGutterLineMarkerProvider.kt")
-        assertTrue("守卫扫描面失效：XmlInlineSqlGutterLineMarkerProvider.kt 缺失", file.isFile)
-        val body = extractBracedBody(stripComments(file.readText()), "override fun getLineMarkerInfo")
+        val file = File(File(repoRoot(), gutterDir), "XmlInlineSqlGutterLineMarkerProvider.java")
+        assertTrue("守卫扫描面失效：XmlInlineSqlGutterLineMarkerProvider.java 缺失", file.isFile)
+        val body = extractBracedBody(stripComments(file.readText()), "getLineMarkerInfo(")
             ?: error("无法提取 XmlInline getLineMarkerInfo 方法体（签名形态漂移？）——守卫扫描面失效按红处理")
         val count = countToken(body)
         assertTrue(
@@ -154,26 +154,27 @@ class GutterProviderSingleLookupGuardTest {
     // 扫描面与提取器
     // ------------------------------------------------------------------
 
-    /** 被守卫的 14 个 provider（F51 起 XmlInlineSqlGutterLineMarkerProvider 收编，豁免撤销）。 */
+    /** 被守卫的 14 个 provider（F51 起 XmlInlineSqlGutterLineMarkerProvider 收编，豁免撤销）。
+     * k2j 适配：生产树为 src/main/java 下的 .java 文件（master 侧为 .kt）。 */
     private val providerFileNames = listOf(
-        "SqlGutterLineMarkerProvider.kt",
-        "AnnotationSqlGutterLineMarkerProvider.kt",
-        "XmlSqlGutterLineMarkerProvider.kt",
-        "PagesXmlGutterLineMarkerProvider.kt",
-        "HbmNamedQueryGutterLineMarkerProvider.kt",
-        "JpaGutterLineMarkerProvider.kt",
-        "JpqlGutterLineMarkerProvider.kt",
-        "CriteriaQueryGutterLineMarkerProvider.kt",
-        "HqlGutterLineMarkerProvider.kt",
-        "CustomDaoHqlGutterLineMarkerProvider.kt",
-        "JdbcTemplateSqlGutterLineMarkerProvider.kt",
-        "NamedQueryGutterLineMarkerProvider.kt",
-        "StringSqlMethodGutterLineMarkerProvider.kt",
-        "XmlInlineSqlGutterLineMarkerProvider.kt",
+        "SqlGutterLineMarkerProvider.java",
+        "AnnotationSqlGutterLineMarkerProvider.java",
+        "XmlSqlGutterLineMarkerProvider.java",
+        "PagesXmlGutterLineMarkerProvider.java",
+        "HbmNamedQueryGutterLineMarkerProvider.java",
+        "JpaGutterLineMarkerProvider.java",
+        "JpqlGutterLineMarkerProvider.java",
+        "CriteriaQueryGutterLineMarkerProvider.java",
+        "HqlGutterLineMarkerProvider.java",
+        "CustomDaoHqlGutterLineMarkerProvider.java",
+        "JdbcTemplateSqlGutterLineMarkerProvider.java",
+        "NamedQueryGutterLineMarkerProvider.java",
+        "StringSqlMethodGutterLineMarkerProvider.java",
+        "XmlInlineSqlGutterLineMarkerProvider.java",
     )
 
     private val gutterDir =
-        "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter"
+        "src/main/java/cn/song/mybatisplus/visualizer/ui/gutter"
 
     private fun providerFiles(): List<Pair<String, String>> {
         val root = repoRoot()
@@ -190,10 +191,15 @@ class GutterProviderSingleLookupGuardTest {
     /**
      * 快速路径 `PluginSettings.getInstance(` 计数：`getLineMarkerInfo` 体 + `gutterEnabled()`
      * 助手体（修复后助手删除 → 仅方法体计入）。方法体提取失败返回 null（调用方按红处理）。
+     *
+     * k2j 适配：生产侧为 .java——`getLineMarkerInfo` 签名形态为
+     * `public ... LineMarkerInfo<?> getLineMarkerInfo(`，`gutterEnabled` 助手已不存在
+     * （F36 收敛时内联进方法体），故助手提取恒 null 计 0；合成自证样本仍按 master Kotlin
+     * 形态喂入（提取器按 marker 后首个 `{` 配平花括号，语言无关）。
      */
     private fun fastPathLookupCount(source: String): Int? {
         val stripped = stripComments(source)
-        val markerBody = extractBracedBody(stripped, "override fun getLineMarkerInfo") ?: return null
+        val markerBody = extractBracedBody(stripped, "getLineMarkerInfo(") ?: return null
         val helperBody = extractBracedBody(stripped, "fun gutterEnabled(")
         return countToken(markerBody) + (helperBody?.let(::countToken) ?: 0)
     }
