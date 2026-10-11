@@ -37,6 +37,8 @@ parallel_tasks check/register
 
 ### 八处同步清单
 
+> 2026-09-30 起，发行动作的唯一权威清单为 [`T-ReleaseChecklist-发行检查清单.md`](T-ReleaseChecklist-发行检查清单.md)（N-28 / T-RC-01）；下表保留作素材，执行时以权威清单为准。
+
 | # | 文件 | 内容 |
 |---|------|------|
 | 1 | `docs/发行说明/{YYYYMMDD}-{HHMM}-{主题}-发行说明.md` | 新建，完整发行说明（新增/修复/测试/兼容性/安装/反馈）；全文同时作为 Gitee 发行版正文 |
@@ -78,6 +80,17 @@ description / 市场页定位是纯能力陈列，不承担「最近更新」播
   否则半成品混进 zip。
 - 标签名 = `gradle.properties` 版本号逐字（含 `-beta.N`），不带 `v` 前缀；
   `git tag {ver} && git push origin master && git push origin {ver}`。
+- **打包后先自检产物再建发行版**：`python dev-support/inspect-plugin-zip.py --version {ver}`
+  核内层主 jar 名带版本号、`plugin.xml` 的 `<version>`、`MANIFEST.MF` 的 `Version`、
+  `<change-notes>` 首个 `<h2>` 即本版且该块逐条扫「（ ） ：」零命中（任一不过退出码 1）。
+  需要证明「某修复确实进了产物」时，加 `--disasm {FQCN} --require-present {符号} --require-absent {符号}`
+  反汇编内层 jar 里的类做符号断言——比看提交自述可靠（2026-10-08 实证：靠它确认
+  `RecentExecutionsDialog` 已无 `getChildren` 调用）。
+- **发行后源码树又变了怎么办**（改了 `src/main`、或修了门禁报项）：已发的 zip 就不含新代码，
+  走重发——重打 zip → 新一笔发行提交 → **本地轻量 tag 前移**（`git tag -f {ver}`）＋
+  `git push -f origin {ver}` → `gitee-release.py … --replace`。**tag 前移不会删发行版**
+  （2026-09-24 与 2026-10-08 两度实证：force update 只是原地改指向，Gitee 仅在 ref 被删除时
+  才联动删发行版），改完记得回读 `target_commitish` 是否落到新提交。
   标签先推远端，Gitee API 建发行版时才能引用。
 
 ### 已发布段准入约定
@@ -107,18 +120,29 @@ description / 市场页定位是纯能力陈列，不承担「最近更新」播
 > 串成一条命令，动态内容全走参数：
 >
 > ```bash
+> # 首次发布
 > python dev-support/gitee-release.py --version 2026.10.6 \
 >     --notes docs/发行说明/20260930-2213-嵌入实体识别与SQL日志屏蔽-发行说明.md
 > # 内测通道：加 --prerelease，标题显式传「🎉 SQL Visualizer v{ver} 内测版」
+> # 重发（同 tag 已有发行版、源码树变了要换附件）：--replace 先删后重建
+> python dev-support/gitee-release.py --version 2026.10.9 --notes docs/发行说明/xxx.md --replace
+> # 只回读校验现有发行版（含附件 sha256 与本地 zip 逐字节比对）
+> python dev-support/gitee-release.py --version 2026.10.9 --verify-only
+> # 只删发行版（不动远端标签）
+> python dev-support/gitee-release.py --version 2026.10.9 --delete-only
 > ```
 >
-> 前置：`gitee-token.json` 在仓库根、`buildPlugin` 已产 zip、远端标签 `{version}` 已 push。
+> 前置：`gitee-token.json` 在 `.local/`（机器本地目录，2026-10-10 起由仓库根迁入）、`buildPlugin` 已产 zip、远端标签 `{version}` 已 push。
+> `--replace` 按 `GET /releases/tags/{tag}` 查旧版后 `DELETE` 再重建（Gitee 无编辑接口，换附件
+> 只能删了重建；同名附件下载 URL 不变）；`--delete-only` 只删发行版、**不动远端标签**——删标签
+> 才连坐删发行版，所以换附件时**不要**去删标签。建版流程里的附件 sha256 比对只告警（同名附件
+> 重传后 CDN 可能仍缓存旧包），发布后隔一会儿用 `--verify-only` 复查，那里不一致是硬失败。
 > 下方为端点级明细与坑位（脚本已规避，排障时对照）。
 
 鉴权一律 `access_token` 参数（Personal Access Token，需 projects 权限）。
-令牌存仓库根 `gitee-token.json`（字段 `gitee_personal_access_token`/`owner`/`repo`；已进 .gitignore，
+令牌存 `.local/gitee-token.json`（机器本地目录 `.local/`，整目录 gitignore、仅 README 白名单入库；2026-10-10 起由仓库根迁入，字段 `gitee_personal_access_token`/`owner`/`repo`；
 严禁提交/外传），脚本读取：
-`TOKEN = json.load(open('gitee-token.json', encoding='utf-8'))['gitee_personal_access_token']`。
+`TOKEN = json.load(open('.local/gitee-token.json', encoding='utf-8'))['gitee_personal_access_token']`。
 以下 `{owner}/{repo}` = `songrenshuo/mybatis-plus-sql-visualizer`。
 
 ### 1. 建发行版
@@ -170,6 +194,11 @@ GET https://gitee.com/api/v5/repos/{owner}/{repo}/releases/{id}
 是 Gitee 自带的，不算）；**附件 `browser_download_url` 与 `preview.update.json` 的
 `downloadUrl` 逐字一致**——这是自更新通道能否命中包体的唯一保证。
 
+**再加一层 sha256 对账（2026-10-08 起，脚本默认带）**：URL 串一致只证明「路径对」，
+证明不了「线上下发的就是本地这一份」——把线上附件下回来与 `build/distributions/` 同名 zip
+比 sha256 才算坐实（同名附件重传后尤其要看这里，CDN 可能仍在发旧包）。
+`gitee-release.py --verify-only` 就是这层检查，不一致退出码 1。
+
 ### 4. 发行版补建与列表排序（2026-09-12 补建 2026.9.11 实证）
 
 - **列表页排序 = 发行版创建时间倒序**（非标签名、非提交日期）。所以「补建的历史版本」
@@ -188,6 +217,8 @@ GET https://gitee.com/api/v5/repos/{owner}/{repo}/releases/{id}
 | 400 `{"messages":["body is missing"]}` | 描述参数用了 `description` → 改 `body` |
 | 404 `upload_files` / `assets` | 端点不存在 → 用 `attach_files` |
 | 405 `PUT /releases/{id}` | Gitee 不支持编辑发行版 → 删除重建 |
+| 同 tag 再建报 400「该标签已经存在发行版」 | 已有发行版 → `gitee-release.py … --replace`（先删后重建） |
+| 同名附件重传后线上仍是旧包 | CDN 缓存 → 稍后用 `--verify-only` 复查 sha256 |
 | 补建版本显示在列表下方 | 列表按创建时间倒序 → 见 §4 删除重建 |
 | 自更新收不到通知 | downloadUrl 与附件 URL 尾段不一致 |
 
@@ -200,7 +231,7 @@ GET https://gitee.com/api/v5/repos/{owner}/{repo}/releases/{id}
 ```python
 import json, os, urllib.request, urllib.parse
 
-TOKEN = json.load(open('gitee-token.json', encoding='utf-8'))['gitee_personal_access_token']
+TOKEN = json.load(open('.local/gitee-token.json', encoding='utf-8'))['gitee_personal_access_token']
 BASE = 'https://gitee.com/api/v5/repos/songrenshuo/mybatis-plus-sql-visualizer/releases'
 
 # 1) 建发行版（body 参数名！）

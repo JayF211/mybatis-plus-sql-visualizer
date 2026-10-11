@@ -511,7 +511,7 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 - **排查已排除的两条假设（如实记录，避免后来人重走）**：① 紧邻受害者之前的 `AgentHeartbeatWindowTest`（两两同 JVM 跑绿）；
   ② 前缀子集（6 个「文件内含 SqlLogManager 且无复原工具」的类 + `AgentHeartbeatWindowTest` + 受害类）同 JVM 跑绿
   → 真凶不在「文件字面含 SqlLogManager」的类里，很可能经**生产代码间接取服务**（如控制台 EP 链路 `SqlConsoleBridgeFilterProvider`），
-  该形态无法用文件级 grep 定位。证据 XML 已留存（`F:/code/Java/Gitee/SongRenShuo/shard3-fail-evidence/`）。
+  该形态无法用文件级 grep 定位。证据 XML 已留存（当时存 `F:/code/Java/Gitee/SongRenShuo/shard3-fail-evidence/`，该目录已于 2026-10-10 工作区清理时移除，需要时重跑该分片可复现）。
 - **性质**：**测试基建/生产守卫的既有潜伏缺口，非本轮产品代码缺陷**（隔离全绿 + 机制与改动无关）；
   根治方向＝按 T-StabilityTail 登记补齐「窗口内未受守卫的 `getService` 调用点」（该任务已登记 5 处），
   并给测试工具 `SqlLogManagerProjectState.capture/restore` 加 `project.isDisposed` 守卫（避免工具自身在窗口内发起创建）。

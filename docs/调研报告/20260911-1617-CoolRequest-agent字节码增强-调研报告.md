@@ -20,19 +20,7 @@ Cool Request 的 agent 定位与本插件**方向相同、路线相反**：它�
 
 `src/main/java/dev/coolrequest/idea/listener/CoolRequestRunConfigurationExtension.java:20-39`，经 `plugin.xml:140-141` 注册：
 
-```java
-public <T> void updateJavaParameters(T t, JavaParameters javaParameters, ...) {
-    if (t instanceof JarApplicationConfiguration) return;          // :22 跳过可执行 jar 启动器
-    ResourceDecompressor.getJavaLibDecompressor().decompressor();  // :23 先落盘 agent jar
-    vmParametersList.addNotEmptyProperty("cool.request.agent.path", CONFIG_AGENT_LIB_PATH); // :26
-    vmParametersList.addNotEmptyProperty("cool.request.port", String.valueOf(listenerPort)); // :27
-    vmParametersList.addNotEmptyProperty("cool.request.hook.sql", String.valueOf(enabledTrace)); // :28
-    if (enableDynamicRefresh) {                                    // :33
-        String agentParam = "-javaagent:" + CONFIG_AGENT_LIB_PATH; // :34
-        if (!vm.hasParameter(agentParam)) vm.add(agentParam);      // :36
-    }
-}
-```
+其 `updateJavaParameters` 在启动参数上做四件事（`CoolRequestRunConfigurationExtension.java:20-39`）：跳过可执行 jar 启动器（:22）、先调用 agent jar 落盘（:23）、注入三个 `cool.request.*` JVM 属性（agent 路径 :26 / 监听端口 :27 / SQL hook 开关 :28）、开启动态刷新时追加 `-javaagent:<agent 路径>` 并做「已有该参数则不重复加」的去重（:33-36）。
 
 `isApplicableFor`/`isEnabledFor` 恒返回 true（:62-71），即对用户**正常的 Run 和 Debug 都生效**，不是只对 runIde 沙盒。
 
@@ -136,17 +124,7 @@ v2（当前主用）`cool-request-agent-v2/src/main/java/dev/coolrequest/agent/A
 
 ### 4.2 relocate 全映射（agent 必须 shade 的直接证据）
 
-`cool-request-agent-v2/build.gradle:42-48`：
-
-```groovy
-tasks.shadowJar {
-    archiveFileName.set("cool-request-agent.jar")
-    mergeServiceFiles()
-    relocate("com.fasterxml.jackson", "dev.coolrequest.agent.lib.net.com.fasterxml.jackson")
-    relocate("net.bytebuddy", "dev.coolrequest.agent.lib.net.coolbytebuddy")
-    relocate("javassist", "dev.coolrequest.agent.lib.cooljavassist")
-}
-```
+`cool-request-agent-v2/build.gradle:42-48` 的 shadowJar 配置做三件事：固定产物名、`mergeServiceFiles()` 合并 `META-INF/services`（保 ByteBuddy/Javassist SPI 不丢）、把 jackson / bytebuddy / javassist 三套库全部 relocate 到 `dev.coolrequest.agent.lib.*` 私有命名空间。
 
 `mergeServiceFiles()` 合并 `META-INF/services`（保 ByteBuddy/Javassist SPI 不丢）。relocate 到私有命名空间的理由：agent 跑在**用户 JVM**，用户 Spring Boot 应用几乎必带 jackson（AOP 场景带 bytebuddy），不 relocate 会与用户已加载类冲突，且 `appendToSystemClassLoaderSearch`（`AgentBootstrap.java:29-38`）会让自己 jar 被父委派抢先解析到用户版本。
 

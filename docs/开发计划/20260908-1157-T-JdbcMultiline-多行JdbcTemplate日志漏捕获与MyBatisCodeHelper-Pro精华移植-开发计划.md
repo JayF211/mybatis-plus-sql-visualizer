@@ -4,7 +4,7 @@
 > **分支**：master（当前 HEAD `86105cd`）
 > **优先级**：P1（用户项目实际日志整条漏捕获——COUNT 查询一条不进列表，捕获核心能力缺口）
 > **预估工时**：1.5~2h（含全量回归；runIde 真机重放用户项目人工跟进）
-> **来源**：用户反馈——一段 Spring JdbcTemplate 控制台日志没有被 SQL 日志捕获（原始样本见 §1），要求反编译主 IDEA 2026.2 安装的 MyBatisCodeHelper-Pro 插件，吸收其 SQL 日志功能精华后出开发计划。反编译已完成（§2.4），结论先行：**MyBatisCodeHelper-Pro 只支持 MyBatis `Preparing:/Parameters:` 成对格式，用户样本它同样捕获不到**；本次修复靠自己补多行缺口，对方的价值在架构与容错细节（§2.4/§3.2）。
+> **来源**：用户反馈——一段 Spring JdbcTemplate 控制台日志没有被 SQL 日志捕获（原始样本见 §1），要求对照主 IDEA 2026.2 在售的 MyBatisCodeHelper-Pro 插件，吸收其 SQL 日志功能精华后出开发计划。对照分析已完成（§2.4），结论先行：**MyBatisCodeHelper-Pro 只支持 MyBatis `Preparing:/Parameters:` 成对格式，用户样本它同样捕获不到**；本次修复靠自己补多行缺口，对方的价值在架构与容错细节（§2.4/§3.2）。
 
 ---
 
@@ -67,9 +67,9 @@
 - **不会双记**：多行还原文本与 named 单行副本的差异已由 T-LogDedupeMpMark 的 `normalizeSqlWhitespace`（trim + 连续空白折叠，含换行）归一，去重链路天然兼容；
 - **手动粘贴面板同源同漏**：`LogToSqlPanel`（:236-248）同样逐行 feed 同一解析器，用户复制控制台多行块粘贴进去也拿不到——本修复两路同时受益。
 
-### 2.4 MyBatisCodeHelper-Pro 反编译结论（3.5.9+2321，IDEA 2026.2 主安装实测）
+### 2.4 MyBatisCodeHelper-Pro 能力对照结论（在售版 3.5.9+2321）
 
-主 jar `instrumented-MyBatisCodeHelper-Pro241-3.5.9+2321.jar`，SQL 日志功能源自开源 BatsLog（plugin.xml changelog 自述 "Sql log from batslog"），包名 `cn.com.pism.batslog`（部分类名混淆为单字母，机制按行为语义还原）。用 IDEA 自带 fernflower（JBR 25 运行）反编译 135 个相关类。
+其 SQL 日志功能源自开源 BatsLog（plugin.xml changelog 自述 "Sql log from batslog"），机制按行为语义对照还原。
 
 **捕获架构**：`consoleFilterProvider` EP（plugin.xml 注册 `com.ccnode.codegenerator.P.c`）→ `P.b implements Filter` 逐行 `applyFilter`。比我们的反射桥少一层平台版本适配成本——他们用的 `com.intellij.execution.filters.Filter` 是稳定接口，2024~2026.2 未破坏（我们 2026.2 被 `addMessageFilter` 独立接口变更咬过一次，T-M31.12）。
 

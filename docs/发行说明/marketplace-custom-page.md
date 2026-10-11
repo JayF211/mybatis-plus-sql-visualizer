@@ -5,14 +5,14 @@
 
 **服务未启，SQL 先知**
 
-在 IntelliJ IDEA 内将 MyBatis-Plus Wrapper 链、XML mapper、注解 SQL、JPA/Hibernate 查询与 JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自动回填；控制台日志一键还原，SQL 一键反向转 Java。
+在 IntelliJ IDEA 内将 MyBatis-Plus Wrapper 链、XML mapper、注解 SQL、JPA/Hibernate 查询与 JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自动回填；跑起来后真实参数与耗时自动捕获（慢查询标红、静态性能建议），一键跳回源码；SQL 一键反向转 Java。
 
 ## 为什么选它
 
 - **SQL 来源全覆盖**：Wrapper 链与服务链、MPJ 联表、XML 动态标签、`@Select` 注解 SQL、Spring Data 派生查询、HQL / `@Query`、JdbcTemplate 与自研 DAO 字符串 SQL
 - **真实参数一键回填**：`?` 占位符替换为实际值，LIKE 自动拼百分号、按字段类型加引号
-- **控制台 SQL 日志实时捕获**：MyBatis / Hibernate / JdbcTemplate 三种格式，精确跳转源码
-- **增强捕获默认开启**：挂载轻量 agent 直接采集真实执行，不依赖日志格式
+- **运行期捕获（默认开启）**：挂载轻量 agent 直接采集真实执行，不依赖日志格式——真实参数、毫秒级耗时、影响行数、执行报错与真实源码位置；慢查询标红并给出静态性能建议，调用栈悬停弹层可逐帧跳转
+- **控制台日志（回落通道）**：MyBatis / Hibernate / JdbcTemplate 三种格式自动还原，按线程分桶，精确跳转源码
 - **SQL 反向转 Java**：一键生成可直接编译的四种 Wrapper 形态代码
 - **JOIN 关系图与执行**：IDE 原生 ER 图渲染（PNG / SVG 导出）；内嵌原生 Database 控制台直接执行 SQL ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg)
 - **CRUD SQL 一步直出**：实体类 / 数据库表右键生成，乐观锁与逻辑删除自动适配
@@ -20,7 +20,7 @@
 
 > **别的插件给你文本，我们给你可执行的 SQL。**
 >
-> 编码期静态预览（Wrapper / XML / 注解 / JPA / HQL，无需运行代码）+ 运行期日志还原 + EXPLAIN 执行计划对照，达梦 / 人大金仓 / OceanBase / openGauss 等 11 种数据库方言
+> 编码期静态预览（Wrapper / XML / 注解 / JPA / HQL，无需运行代码）+ 运行期捕获真实参数与耗时 + EXPLAIN 执行计划对照，达梦 / 人大金仓 / OceanBase / openGauss 等 11 种数据库方言
 
 图例：![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) 近期新增 · ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg) 需要 IDEA Ultimate + Database 插件
 
@@ -40,9 +40,13 @@
 | SQL 格式化 | 弹窗内切换 | 多行缩进 / 单行；分页子句按 11 种方言渲染 |
 | 多租户 / 数据权限模拟 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 设置页配置 | 对齐 MP 多租户拦截器：自动注入 `AND tenant_id = ?`（列名 / 默认值可配）；数据权限可模拟 WHERE 片段 |
 | 字段列表自动折叠 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 设置页配置（默认关） | 超长列清单 / VALUES / SET 折叠为「... N columns」，点击展开 |
-| 执行计划 EXPLAIN ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg)![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 弹窗内「执行计划」按钮 | 按方言提交原生控制台，真实计划与静态性能标注同屏对照 |
+| mapper XML 语法高亮 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 自动生效 | mapper XML 语句内 SQL 关键字 / 字符串 / 注释着色，`#{}` / `${}` 参数占位底色，`test` / `value` 属性表达式着色；`#` / `$` 敲键自动闭合 `{}`，resultMap `column` 补全列名 |
+| 参数预设 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 面板参数区「预设」行 | 参数整组另存 / 切换 / 管理（含 OGNL 勾选态与 foreach 权威值）；按语句隔离、快照语义；预设行可折叠 |
+| 分页拦截器模拟 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 设置页开关（默认开） | 带 `IPage` 形参的查询按方言追 LIMIT 并并列产出 COUNT 包裹语句；LIMIT 与 COUNT 可分别控制 |
+| 执行计划 EXPLAIN ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg)![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 弹窗内「执行计划」按钮 | 按方言提交原生控制台，真实计划与静态性能标注同屏对照；覆盖 11 种方言（含 Oracle / SQL Server 模板），可选结构化渲染（表格 / 可折叠树 + 索引建议） |
 | 执行 SQL ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg) | 弹窗内「执行」按钮 | 原生 Database 控制台内嵌，数据源 / Tx / 会话工具栏全保留 |
 | JOIN 关系图 | 弹窗内「JOIN 图」tab | IDEA 原生 Diagrams 渲染（Community 降级自绘）；PNG / SVG 导出 |
+| 调用栈悬停 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 悬停预览面板调用栈区域 | 调试器风格弹层，结构化解析帧、跳过尾部基础设施帧、锚定最深业务帧；帧数可配置（默认 24，范围 12~64） |
 
 ### SQL 日志
 
@@ -54,8 +58,9 @@
 | 类型颜色标记 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 列表自动生效 / 设置页配置 | 按语句类型着色：左侧色条或整行淡背景，四色可自定义 |
 | 显示模式 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 工具栏下拉 | 单行 / 关键字换行 / 格式化，跨会话保留 |
 | 多选批量复制 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | Ctrl / Shift 多选后右键 | 一次复制全部选中 SQL，分号收尾换行拼接 |
-| 历史与源码定位 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 侧边栏「SQL 历史」tab / 双击条目 | 历史自动保存、两级导航；精确跳到触发 SQL 的源码行 |
+| 历史与源码定位 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 侧边栏「SQL 历史」tab / 双击条目 | 历史标签页常驻，未开启自动保存也可进入；历史自动保存、两级导航；保存目录可自定义且读写同源；条目可钉住、支持正则检索与大小写开关、导出 CSV / TSV / 纯文本 / 可执行 SQL 脚本、两条历史版本对比；精确跳到触发 SQL 的源码行 |
 | 去重 / 过滤 | 工具栏 | SQL 类型多选筛选；`Ctrl+F` 搜索；去重 `⨉N` 徽章即时显示 |
+| 最近执行记录 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | gutter 图标右键菜单 | 弹框浏览最近 SQL 执行记录，复用日志列表渲染器；右键菜单六件（复制时间戳/屏蔽/送页签/跳转源码）；支持 Ctrl / Shift 多选与批量复制；右侧编辑器默认格式化 SQL、可临时改动后复制 |
 
 ![SQL 日志捕获与还原演示](https://sql-visualizer.jvtools.cn/demo/sql-log.gif)
 
@@ -64,10 +69,10 @@
 | 功能 | 说明 |
 |------|------|
 | CRUD SQL 生成 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 实体类 / 项目视图实体节点 / Database 工具窗表节点右键一步生成 INSERT / UPDATE / SELECT / DELETE；列勾选、乐观锁与逻辑删除自动适配 |
-| SQL → Java（`Alt+Shift+J` / 右键） | QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 四形态；SELECT / UPDATE / DELETE / INSERT / 多表 JOIN；生成代码可直接编译 |
+| SQL → Java（`Alt+Shift+J` / 右键） | QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 四形态；SELECT / UPDATE / DELETE / INSERT / 多表 JOIN；GROUP BY / HAVING / DISTINCT / FOR UPDATE / UNION 子句；聚合/函数列原文回落；方言宽容（双引号标识符/十六进制/ANSI 类型字面量）；返回类型自由输入（Map/Objs/VO 类名）；生成代码可直接编译 |
 | SQL 代码补全 | 预览面板与 mapper XML / 注解 SQL 内 `Ctrl+Space`：表名、列名、`#{}` 参数名、XML 动态标签 |
 | 逻辑删除注入 | 实体含 `@TableLogic` 时自动追加 `AND deleted = 值`（值可配，默认 0） |
-| MCP 工具（AI agent）![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 内置 MCP Server 十个只读工具（IDEA 2025.2+）：渲染 SQL / 表结构 / EXPLAIN / 日志还原 / 回滚预案等；Claude Code / Cursor / AI Assistant 可直接调用，设置页逐工具门控 |
+| MCP 工具（AI agent）![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 内置 MCP Server 十一个只读工具（IDEA 2025.2+）：渲染 SQL / 表结构 / EXPLAIN / 日志还原 / 历史检索 / 回滚预案等；Claude Code / Cursor / AI Assistant 可直接调用，设置页逐工具门控 |
 | 一键回滚 SQL ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 预览面板「更多」菜单对 INSERT 推导逆向 DELETE 一键复制；UPDATE / DELETE 走快照查询粘贴回填的人工恢复路径 |
 | 检查更新 | 设置页一键检查更新，热替换即时生效免重启；支持 Gitee 抢先体验通道 |
 | 分享 | 预览弹窗「分享」按钮：Markdown 表格 / 纯 SQL / Java 代码 / 链接 |
