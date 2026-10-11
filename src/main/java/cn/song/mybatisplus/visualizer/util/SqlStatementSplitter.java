@@ -542,7 +542,8 @@ public final class SqlStatementSplitter {
                     sb.append(c);
                 }
                 i++;
-            } else if (c == '(') {
+                // O-76 T-SFP-01：全角括号（U+FF08，IME 误输）同栈计数（master 同款）
+            } else if (c == '(' || c == '（') {
                 // T-STG-02：隐式边界兑现——已完成块作为独立段产出（空段跳过），残余内容续算
                 if (topBlockJustClosed) {
                     topBlockJustClosed = false;
@@ -594,7 +595,8 @@ public final class SqlStatementSplitter {
                 parenDepth++;
                 sb.append(c);
                 i++;
-            } else if (c == ')') {
+                // O-76 T-SFP-01：全角括号（U+FF09）同栈计数（master 同款）
+            } else if (c == ')' || c == '）') {
                 // T-STG-02：隐式边界兑现——已完成块作为独立段产出（空段跳过），残余内容续算
                 if (topBlockJustClosed) {
                     topBlockJustClosed = false;
